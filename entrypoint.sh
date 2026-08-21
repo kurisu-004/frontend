@@ -39,6 +39,6 @@ envsubst '${NGINX_SERVER_NAME} ${NGINX_REDIRECT_TARGET} ${SSL_CRT_FILENAME} ${SS
     < "$NGINX_CONF" > "$NGINX_CONF.rendered"
 mv "$NGINX_CONF.rendered" "$NGINX_CONF"
 
-# 注意：不要在这里 exec nginx。nginx:1.27-alpine 镜像默认 entrypoint
+# 注意：不要在这里 exec nginx。nginx:1.30-alpine 镜像默认 entrypoint
 # /docker-entrypoint.sh 会先跑 /docker-entrypoint.d/*.sh，再 exec CMD
 # ["nginx", "-g", "daemon off;"]。我们在前置阶段处理完配置文件即可退出。

@@ -42,3 +42,7 @@ src/
 ## 后端联调
 
 `vite.config.js` 已配置 `/api` 代理到 `http://127.0.0.1:8000`（对应项目根目录的 FastAPI 后端）。
+
+## 已知安全风险提示
+
+依赖 `xlsx@0.18.5` 存在原型污染与 ReDoS 高危漏洞（npm audit 标记为 high），npm 官方仓库暂无修复版本（SheetJS 新版只通过自己的 CDN 分发，未发布到 npm）。本系统仅将 `xlsx` 用于**内部上传 Excel 的只读解析**（4 个 parser 工具函数 + 3 个视图统一收口，不执行公式/宏），攻击面可控。经评估决定保留该版本并承担风险；后续若迁移至 SheetJS CDN 版或替代库（如 exceljs），再行升级。

@@ -21,7 +21,21 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import * as ElIcons from '@element-plus/icons-vue'
+import {
+  House,
+  Box,
+  CircleCheck,
+  Tools,
+  Cpu,
+  OfficeBuilding,
+  Document,
+  Promotion,
+  User,
+  Key,
+  Platform,
+  DataAnalysis,
+  Connection,
+} from '@element-plus/icons-vue'
 import type { MenuNode } from '@/types/menu'
 
 // Vue 3 <script setup> 不会自动注册自身用于递归模板。
@@ -34,10 +48,29 @@ const hasChildren = computed(() => props.menu.children.length > 0)
 // 叶子节点：必须有 path 且没有 children。
 const isLeaf = computed(() => !!props.menu.path && !hasChildren.value)
 
-// 按名字查 Element-Plus 图标；查不到返回 undefined → 模板里 v-if 隐藏图标（不报错）。
+// 2026-08-21：图标命名空间 import * as ElIcons 会把全部 ~300 个图标拉进 bundle，
+// 改为显式地图（tree-shaking 只保留下列图标）。覆盖 router meta.icon 与后端菜单树
+// t_menu.icon 的全部取值；新增菜单图标时必须在此补充命名导入，否则侧栏该图标静默不显示。
+const ICON_MAP: Record<string, unknown> = {
+  House,
+  Box,
+  CircleCheck,
+  Tools,
+  Cpu,
+  OfficeBuilding,
+  Document,
+  Promotion,
+  User,
+  Key,
+  Platform,
+  DataAnalysis,
+  Connection,
+}
+
+// 按名字查图标；查不到返回 undefined → 模板里 v-if 隐藏图标（不报错）。
 const iconComp = computed(() => {
   const name = props.menu.icon
   if (!name) return undefined
-  return (ElIcons as Record<string, unknown>)[name] as never
+  return ICON_MAP[name] as never
 })
 </script>

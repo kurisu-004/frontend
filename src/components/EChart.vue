@@ -1,7 +1,7 @@
 <!--
   EChart.vue
 
-  ECharts 5 封装组件（基础设施层，仅负责挂载 + 同步生命周期）。
+  ECharts 6 封装组件（v5 主题；基础设施层，仅负责挂载 + 同步生命周期）。
   - 模块化注册（echarts/core + use），不引入全量 bundle；
   - prop.option 全量替换（notMerge=true）→ 切视图时不残留 series / dataset；
   - ResizeObserver 监听 root 容器，自动响应父级尺寸变化；
@@ -15,6 +15,9 @@
 </template>
 
 <script setup lang="ts">
+// 2026-08-21：echarts 6 默认主题变更（配色、legend 默认底部等）。注册 v5 旧主题
+// 并在 init 时指定，锁定现有视觉，避免历史图表出现 subtle 差异。
+import 'echarts/theme/v5'
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import {
@@ -81,7 +84,7 @@ function applyOption(c: ECharts, opt: EChartsCoreOption): void {
 }
 
 function initChart(el: HTMLDivElement): void {
-  const c = echarts.init(el, undefined, { renderer: 'canvas' })
+  const c = echarts.init(el, 'v5', { renderer: 'canvas' })
   chart.value = c
   if (props.option) applyOption(c, props.option)
   if (props.loading) c.showLoading()
