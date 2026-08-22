@@ -35,6 +35,14 @@ import {
   Platform,
   DataAnalysis,
   Connection,
+  // 2026-08-22：补全侧栏 6 个缺失图标（订单管理/新建零件/送货/
+  // 账号管理/设置/工序管理）。命名导入保持显式，tree-shaking 不退。
+  Tickets,
+  Plus,
+  Van,
+  Avatar,
+  Setting,
+  Operation,
 } from '@element-plus/icons-vue'
 import type { MenuNode } from '@/types/menu'
 
@@ -65,6 +73,16 @@ const ICON_MAP: Record<string, unknown> = {
   Platform,
   DataAnalysis,
   Connection,
+  // 2026-08-22：补全侧栏 6 个缺失图标，对应后端 t_menu.icon：
+  //   订单管理 → Tickets    新建零件 → Plus
+  //   送货     → Van        账号管理 → Avatar
+  //   设置     → Setting    工序管理 → Operation
+  Tickets,
+  Plus,
+  Van,
+  Avatar,
+  Setting,
+  Operation,
 }
 
 // 按名字查图标；查不到返回 undefined → 模板里 v-if 隐藏图标（不报错）。
