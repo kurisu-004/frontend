@@ -179,3 +179,75 @@ export interface DeliveryNotePickupScanOut {
   /** 2026-07-23 改：恒为空；前端不应据此覆盖本地状态。 */
   scanned_serials: string[]
 }
+
+// 2026-08-21 v2 扫码建单（设计文档 §3 D3 / §5 / §6.2）---------------------
+
+/** 设计文档 §3.2：送货单范围枚举。前端只展示，不参与业务校验。 */
+export type NoteScope = 'L1_WIDE' | 'GROUP' | 'LEAF'
+
+export const NOTE_SCOPE_LABEL: Record<NoteScope, string> = {
+  L1_WIDE: '按一级客户',
+  GROUP: '按装配件组',
+  LEAF: '按零件',
+}
+
+/** 设计文档 §5.7：扫码终端 outcome。ADDED=新入，ALREADY_PRESENT=幂等。 */
+export type ScanOutcome = 'ADDED' | 'ALREADY_PRESENT'
+
+/** 设计文档 §5.7.resolved：扫码命中后回传的识别结果。 */
+export interface ScanResolved {
+  /** 工单 id */
+  part_id: string
+  /** 批次 id（v2 批次化；入单键） */
+  batch_id: string
+  serial_no: string
+  drawing_no: string
+  name: string
+  /** 本次扫码最终落到的 note scope；多数情况 L1_WIDE 或 GROUP */
+  scope: NoteScope
+  /** resolved.scope = GROUP 时填：装配件父行 id */
+  assembly_id: string | null
+}
+
+/** 设计文档 §5.7.added_batches：本回合新入单 / 已存在的批次。 */
+export interface ScanAddedBatch {
+  batch_id: string
+  part_id: string
+  serial_no: string
+  drawing_no: string
+  name: string
+  quantity: number
+}
+
+/** 设计文档 §5.7.note：扫码返回的当前草稿摘要（与 DeliveryNoteOut 字段对齐 + scope_label）。 */
+export interface ScanNoteSummary {
+  id: string
+  delivery_note_no: string
+  /** note.customer_id 是 L1 root；与 parts.customer_id = L2 leaf 不同 */
+  customer_id: string
+  customer_name: string | null
+  parent_customer_name: string | null
+  customer_path: string | null
+  status: DeliveryNoteStatus
+  scope: NoteScope
+  /** 服务端已算好的人类可读 scope 名（前端直接展示） */
+  scope_label: string
+  part_count: number
+  delivery_date: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 设计文档 §5.7 扫码端点响应。 */
+export interface ScanDeliveryOut {
+  outcome: ScanOutcome
+  resolved: ScanResolved
+  note: ScanNoteSummary
+  added_batches: ScanAddedBatch[]
+  /** 服务端已拼好的中文提示；前端原样展示（含 21418 多行失败明细） */
+  message: string
+}
+
+export interface ScanDeliveryReq {
+  code: string
+}
