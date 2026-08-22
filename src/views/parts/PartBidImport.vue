@@ -53,10 +53,12 @@
             style="width: 180px"
           />
         </el-form-item>
-        <el-form-item label="应标 Excel">
+        <!-- 2026-08-22 a11y：加 name 给隐藏 file input；同时 :for="" 防止 el-form-item 误绑 -->
+        <el-form-item label="应标 Excel" :for="''">
           <el-upload
             :auto-upload="false"
             :show-file-list="false"
+            name="bid_excel"
             accept=".xlsx,.xls"
             :on-change="onExcelChange"
           >

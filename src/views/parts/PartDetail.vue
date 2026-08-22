@@ -451,11 +451,13 @@
       <!-- 配对上传对话框 -->
       <el-dialog v-model="pairUploadVisible" title="配对上载 G 代码 + CNC 设定单" width="500px" @close="onPairUploadClose">
         <el-form label-width="100px">
-          <el-form-item label="G 代码文件">
+          <!-- 2026-08-22 a11y：el-upload 内部隐藏 <input type="file"> 没 name，加 name；同时 :for="" 强制 el-form-item 不试图绑定 -->
+          <el-form-item label="G 代码文件" :for="''">
             <el-upload
               :auto-upload="false"
               :show-file-list="true"
               multiple
+              name="gcode_files"
               accept=".nc,.tap,.cnc,.mpf,.ngc"
               :file-list="pairGcodeFiles"
               :on-change="onPairGcodeChange"
@@ -464,11 +466,12 @@
               <el-button plain>选择 G 代码（可多个）</el-button>
             </el-upload>
           </el-form-item>
-          <el-form-item label="CNC 设定单">
+          <el-form-item label="CNC 设定单" :for="''">
             <el-upload
               :auto-upload="false"
               :show-file-list="true"
               :limit="1"
+              name="cnc_setup"
               accept=".pdf"
               :on-change="onPairSetupChange"
               :on-remove="() => { pairSetupFile = null }"
@@ -745,9 +748,11 @@
       @closed="onReceiveOutsourceDialogClosed"
     >
       <el-form label-width="110px">
-        <el-form-item label="目标生产货架" required>
+        <!-- 2026-08-22 a11y：单包 el-radio-group -->
+        <el-form-item label="目标生产货架" required :for="''">
           <el-radio-group
             v-model="receiveShelfId"
+            aria-label="目标生产货架"
             style="display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto;"
           >
             <el-radio
@@ -762,9 +767,11 @@
             <span v-if="receiveFilteredShelves.length === 0" class="muted">没有可用生产货架</span>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="下一道工序" required>
+        <!-- 2026-08-22 a11y：单包 el-radio-group -->
+        <el-form-item label="下一道工序" required :for="''">
           <el-radio-group
             v-model="receiveProcessId"
+            aria-label="下一道工序"
             style="display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto;"
           >
             <el-radio

@@ -351,12 +351,14 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- 2026-08-22 a11y：给 selection 列所在的 table 加 aria-label，让屏幕阅读器识别表格目的（选择列 row checkbox 自身 a11y 由 Element Plus 库层负责） -->
     <el-table
       ref="tableRef"
       v-loading="loading"
       :data="filteredRows"
       row-key="batch_id"
       :height="tableHeight"
+      aria-label="批次选择列表"
       empty-text="该一级客户下暂无可入单的批次（INSPECTION / READY_TO_SHIP）"
       :row-class-name="rowClass"
       @selection-change="onSelectionChange"

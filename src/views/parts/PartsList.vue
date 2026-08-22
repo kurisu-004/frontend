@@ -99,12 +99,14 @@
       </div>
     </el-card>
 
+    <!-- 2026-08-22 a11y：aria-label 通过 $attrs 透传到 el-table，给 selection 列所在的表 -->
     <ResponsiveList
       ref="partsListRef"
       :key="tableKey"
       :items="items"
       :loading="loading"
       :row-key="rowKey"
+      aria-label="零件列表"
       :empty-text="emptyText"
       :card-class="(row: PartListItem) => (row.is_urgent ? 'rl-card--urgent' : '')"
       stripe
@@ -1090,8 +1092,9 @@
       @closed="onDispatchClosed"
     >
       <el-form label-width="96px">
-        <el-form-item label="下发方式">
-          <el-radio-group v-model="dispatchMode">
+        <!-- 2026-08-22 a11y：单包 el-radio-group 触发 for= 指向非 labelable 元素警告 -->
+        <el-form-item label="下发方式" :for="''">
+          <el-radio-group v-model="dispatchMode" aria-label="下发方式">
             <el-radio value="direct">直接下到生产货架</el-radio>
             <el-radio value="cnc">发送至 CNC 编程</el-radio>
           </el-radio-group>
@@ -1172,8 +1175,9 @@
       destroy-on-close
     >
       <el-form label-width="96px">
-        <el-form-item label="下发方式">
-          <el-radio-group v-model="batchDispatchAction">
+        <!-- 2026-08-22 a11y：批量下发同样单包 radio-group -->
+        <el-form-item label="下发方式" :for="''">
+          <el-radio-group v-model="batchDispatchAction" aria-label="下发方式">
             <el-radio-button value="shelf">下生产货架</el-radio-button>
             <el-radio-button value="programming">发编程</el-radio-button>
           </el-radio-group>

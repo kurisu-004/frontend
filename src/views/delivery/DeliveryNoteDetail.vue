@@ -467,9 +467,11 @@ type DeliveryTreeNode = DeliveryNoteLineItem
             </div>
           </div>
         </template>
+        <!-- 2026-08-22 a11y：selection 列所在 table 加 aria-label -->
         <el-table
           :data="treeLineItems"
           row-key="id"
+          aria-label="送货单明细列表"
           :row-class-name="deliveryLineRowClassName"
           :tree-props="{ children: 'children', hasChildren: 'has_children' }"
           stripe

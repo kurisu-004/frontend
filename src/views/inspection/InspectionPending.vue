@@ -502,8 +502,8 @@
           </span>
         </el-form-item>
 
-        <el-form-item label="品检动作" required>
-          <el-radio-group v-model="scanInspectDecision">
+        <el-form-item label="品检动作" required v-bind:for="''">
+          <el-radio-group v-model="scanInspectDecision" aria-label="品检动作">
             <el-radio value="PASS">品检通过（PASS）</el-radio>
             <el-radio value="FAIL">打回生产架（FAIL）</el-radio>
           </el-radio-group>

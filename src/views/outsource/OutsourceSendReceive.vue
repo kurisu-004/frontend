@@ -1207,8 +1207,9 @@ watch(activeTab, async (t) => {
       @closed="onReceiveDialogClosed"
     >
       <el-form label-width="120px">
-        <el-form-item label="接收分支">
-          <el-radio-group v-model="receiveBranch">
+        <!-- 2026-08-22 a11y：单包 el-radio-group 触发 for= 指向非 labelable 元素警告 -->
+        <el-form-item label="接收分支" :for="''">
+          <el-radio-group v-model="receiveBranch" aria-label="接收分支">
             <el-radio value="production">进入生产货架</el-radio>
             <el-radio value="inspection">进入品检货架</el-radio>
           </el-radio-group>

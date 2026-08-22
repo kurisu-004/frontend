@@ -513,6 +513,7 @@
             </div>
           </div>
 
+          <!-- 2026-08-22 a11y：selection 列所在 table 加 aria-label -->
           <el-table
             ref="sourceTableRef"
             :data="sourceTree"
@@ -520,6 +521,7 @@
             :tree-props="{ children: 'children' }"
             default-expand-all
             border
+            aria-label="PDF 源文件列表"
             class="pdf-source-table"
             @selection-change="onSourceSelectionChange"
           >
