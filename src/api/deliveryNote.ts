@@ -17,8 +17,9 @@
 //   POST   /delivery-notes/{id}/pickup           - pickup
 //   POST   /delivery-notes/{id}/soft-delete      - softDelete
 //   GET    /delivery-notes/{id}/print            - printNote (Authorization header, StreamingResponse)
+//   POST   /v2/delivery-notes/scan               - scanDelivery (Rust v2 P3；baseURL /api/v2)
 
-import { api } from '@/api/http'
+import { api, apiV2 } from '@/api/http'
 import type {
   DeliveryNoteCandidatePart,
   DeliveryNoteDetailOut,
@@ -28,6 +29,7 @@ import type {
   DeliveryNoteSortDir,
   DeliveryNoteSortKey,
   DeliveryNoteStatus,
+  ScanDeliveryOut,
 } from '@/types/deliveryNote'
 
 export interface ListNotesParams {
@@ -337,5 +339,25 @@ function parseFilename(header: string | undefined): string | null {
   if (!header) return null
   const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header)
   return m ? decodeURIComponent(m[1].trim()) : null
+}
+
+/**
+ * v2 扫码建单（设计文档 §3 D3 + §5）：
+ *   POST /api/v2/delivery-notes/scan
+ *   body: { code: string }
+ *   → { outcome, resolved, note, added_batches, message }
+ *
+ * 后端按 D3 走「扫码 → 解析 L1 → classify → find-or-create DRAFT → 返回落点」。
+ * 前端不做 note picker / customer picker / 锁单模式——纯转发。
+ *
+ * 错误码（设计文档 §7）由后端信封 code 字段抛 ApiError，前端按 code 区分：
+ *   21417 BIZ_DELIVERY_SCAN_UNKNOWN_CODE         404 — 条码未命中
+ *   21418 BIZ_DELIVERY_ASSEMBLY_PARTS_NOT_READY 400 — 装配件整套未齐（含 per-child 明细）
+ *   21416 BIZ_DELIVERY_NOTE_SCOPE_MISMATCH      400 — 范围不匹配
+ *   21405 / 21406                                400 — 单条扫码失败
+ */
+export async function scanDelivery(code: string): Promise<ScanDeliveryOut> {
+  const resp = await apiV2.post<ScanDeliveryOut>('/delivery-notes/scan', { code })
+  return resp.data
 }
 

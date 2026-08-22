@@ -16,9 +16,15 @@
 //
 // 失败兜底：refresh 失败 → dispatchEvent('auth:logout')，由 main.ts 监听后
 // router.replace('/login')。session 失效的统一入口。
+//
+// 【2026-08-21 新增】apiV2（baseURL = `/api/v2`）与 api 共享同一组拦截器；
+// refreshPromise 等雪崩状态保持模块单例，v1 / v2 并发撞 40102 只触发一次
+// /auth/refresh。单端点的 v2 调用不该用 `api.post('/v2/...')`，会被 baseURL
+// 拼成 `/api/v1/v2/...`。
 
 import axios, {
   AxiosError,
+  type AxiosInstance,
   type AxiosResponse,
   type InternalAxiosRequestConfig,
 } from 'axios'
@@ -201,32 +207,49 @@ function maybeProactiveRefresh(): void {
   })
 }
 
-// ===== 请求拦截：挂 Authorization =====
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+// ===== 拦截器（具名，api / apiV2 复用） =====
+
+/** 请求拦截：挂 Authorization。 */
+function authRequestInterceptor(
+  config: InternalAxiosRequestConfig,
+): InternalAxiosRequestConfig {
   const token = readToken()
   if (token) {
     // 用 .set 避免某些 axios 版本对 headers 直接赋值的 readonly 警告。
     config.headers.set('Authorization', `Bearer ${token}`)
   }
   return config
-})
+}
 
-// ===== 响应拦截：解信封 + 自动刷新 =====
-api.interceptors.response.use(
-  (response: AxiosResponse) => {
-    const payload = response.data
-    if (isEnvelope(payload)) {
-      if (payload.code !== 0) {
-        throw new ApiError(payload.code, payload.message, response)
-      }
-      // 直接把 response.data 替换成解封后的 data，保持 `api.get<T>()` 的 .data 语义。
-      response.data = payload.data
+/**
+ * 响应拦截：解 `{code, message, data}` 信封 → 调用方拿到的是裸 data；
+ * 非标准响应（如文件 blob / 文本）原样返回。每次成功响应都触发
+ * maybeProactiveRefresh（剩余寿命 < 5min 后台 fire-and-forget 刷新）。
+ */
+function envelopeResponseInterceptor(response: AxiosResponse): AxiosResponse {
+  const payload = response.data
+  if (isEnvelope(payload)) {
+    if (payload.code !== 0) {
+      throw new ApiError(payload.code, payload.message, response)
     }
-    // 非标准响应（如文件 blob / 文本）原样返回
-    maybeProactiveRefresh()
-    return response
-  },
-  async (error: AxiosError) => {
+    // 直接把 response.data 替换成解封后的 data，保持 `api.get<T>()` 的 .data 语义。
+    response.data = payload.data
+  }
+  // 非标准响应（如文件 blob / 文本）原样返回
+  maybeProactiveRefresh()
+  return response
+}
+
+/**
+ * 错误拦截工厂：blob body 解析 → 40102 自动 refresh + 重试 → refresh 失败
+ * dispatch auth:logout。
+ *
+ * 用工厂 + 闭包持有 client，是为了让 api / apiV2 各自 `client.request(retryCfg)`
+ * 在自己实例上重试，不被另一实例的拦截器链干扰。refreshPromise 等雪崩状态
+ * 仍是模块单例，两实例并发撞 40102 只触发一次 /auth/refresh。
+ */
+function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
+  return async (error: AxiosError) => {
     // blob 响应的 error body 也是 Blob；isEnvelope(blob) 返回 false 会让
     // 401 自动刷新失效。先把 Blob body 读成文本再尝试 JSON parse。
     let payload: unknown = error.response?.data
@@ -263,13 +286,20 @@ api.interceptors.response.use(
         headers: { ...(cfg.headers ?? {}), Authorization: `Bearer ${fresh.token}` },
         _isRetryAfterRefresh: true,
       } as InternalAxiosRequestConfig & { _isRetryAfterRefresh?: boolean }
-      return await api.request(retryCfg)
+      // 用闭包持有的 client 重试——api 实例回到 api.request，apiV2 回到 apiV2.request
+      return await client.request(retryCfg)
     } catch (refreshErr) {
       // refresh 失败：触发全局登出事件，main.ts 监听后 router.replace('/login')
       window.dispatchEvent(new CustomEvent('auth:logout'))
       throw refreshErr
     }
-  },
+  }
+}
+
+api.interceptors.request.use(authRequestInterceptor)
+api.interceptors.response.use(
+  envelopeResponseInterceptor,
+  makeEnvelopeErrorInterceptor(api),
 )
 
 /** 业务异常：code !== 0 时抛出；调用方用 try/catch + (e as ApiError).code 取错误码。 */
@@ -289,3 +319,37 @@ export class ApiError extends Error {
     return this.code === 40101 || this.code === 40102 || this.code === 40103
   }
 }
+
+// ===== v2 客户端（共享拦截器） =====
+
+/**
+ * v2 API 客户端：baseURL = `/api/v2`，与 api（v1）共享 token / refresh / 信封逻辑。
+ *
+ * 何时新增实例：路由前缀按版本切分时（v3 = 再加一个 apiV3）。单端点的 v2
+ * 调用不该用 `api.post('/v2/...')`，会被 baseURL 拼成 `/api/v1/v2/...`。
+ */
+export const apiV2 = axios.create({
+  baseURL: '/api/v2',
+  timeout: 30_000,
+  // paramsSerializer 与 api 一致——重复定义避免引用 api.defaults 后被改时牵连
+  paramsSerializer: (params) => {
+    const parts: string[] = []
+    for (const key of Object.keys(params)) {
+      const val = params[key]
+      if (val === undefined || val === null) continue
+      if (Array.isArray(val)) {
+        for (const v of val) {
+          parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`)
+        }
+      } else {
+        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`)
+      }
+    }
+    return parts.join('&')
+  },
+})
+apiV2.interceptors.request.use(authRequestInterceptor)
+apiV2.interceptors.response.use(
+  envelopeResponseInterceptor,
+  makeEnvelopeErrorInterceptor(apiV2),
+)

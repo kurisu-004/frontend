@@ -15,7 +15,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Van } from '@element-plus/icons-vue'
+import { Van, Promotion } from '@element-plus/icons-vue'
 
 import {
   createNote as createNoteApi,
@@ -292,7 +292,11 @@ async function onSoftDelete(n: DeliveryNoteOut) {
               </el-form-item>
           </div>
           
-          <div>
+          <div class="delivery-list-actions">
+            <el-button v-if="hasManageNoteRole(role)" type="primary" @click="$router.push('/delivery-notes/scan')">
+              <el-icon><Promotion /></el-icon>
+              <span>扫码建单</span>
+            </el-button>
             <el-button v-if="hasManageNoteRole(role)" type="success" @click="openCreate">
               <el-icon><Van /></el-icon>
               新建草稿
@@ -509,5 +513,9 @@ async function onSoftDelete(n: DeliveryNoteOut) {
 .picker-summary {
   display: flex;
   align-items: center;
+}
+.delivery-list-actions {
+  display: inline-flex;
+  gap: 8px;
 }
 </style>

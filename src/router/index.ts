@@ -193,6 +193,23 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
+        // 2026-08-21 v2 扫码建单入口。
+        // 不暴露为独立菜单：通过「送货单」列表页顶部「扫码建单」按钮进入。
+        // 复用 delivery_notes_manage menuCode，与 list / detail 同一权限面。
+        path: 'delivery-notes/scan',
+        name: 'DeliveryNoteScan',
+        component: () => import('@/views/delivery/DeliveryNoteScan.vue'),
+        meta: {
+          title: '扫码建单',
+          menuCode: 'delivery_notes_manage',
+          breadcrumb: [
+            { label: '订单管理', path: '/parts' },
+            { label: '送货单', path: '/delivery-notes' },
+            { label: '扫码建单' },
+          ],
+        },
+      },
+      {
         path: 'assemblies/:id(\\d+)',
         name: 'AssemblyDetail',
         component: () => import('@/views/assemblies/AssemblyDetail.vue'),
