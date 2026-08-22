@@ -2,7 +2,7 @@
   <div class="login-page">
     <div class="login-card">
       <div class="card-header">
-        <el-icon :size="32" color="#4a8fd6"><Box /></el-icon>
+        <el-icon :size="32" style="color: var(--primary-lighter)"><Box /></el-icon>
         <h1>myERP</h1>
         <p>零件加工订单管理系统</p>
       </div>

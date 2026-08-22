@@ -55,7 +55,8 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 
 - `optimizeDeps.include` 显式列出重依赖（vue/axios/element-plus/xlsx 等）——防止 dev 模式进入 dep discovery 触发整页 full-reload，不要删。
 - SCSS：每个 `<style lang="scss">` 自动注入 `@use "@/styles/breakpoints" as *;`，组件内可直接 `@include from(...)/until(...)` 断点 mixin，无需手动 import。
-- Element Plus 按需加载靠 `unplugin-auto-import` + `unplugin-vue-components`（ElementPlusResolver），生成 `src/auto-imports.d.ts` / `src/components.d.ts`。但 `main.ts` 里仍然全量注册了 icons 并 `app.use(ElementPlus, {locale: zhCn})`。
+- Element Plus 按需加载靠 `unplugin-auto-import` + `unplugin-vue-components`（ElementPlusResolver），生成 `src/auto-imports.d.ts` / `src/components.d.ts`。两者都**只扫描 `<template>`**，自动注入对应 JS + CSS；`<script setup>` 里的程序式 API（`ElMessageBox` / `ElMessage` / `ElNotification` / `ElLoading`）resolver 看不到，相关 CSS 必须在 `src/main.ts` 手动 import（见那里 2026-08-22 那块注释）。
+- 中文 locale 下沉到 `src/App.vue` 的 `<el-config-provider :locale="zhCn">`；项目主题色（藏青 #1e4d8b）在 `src/styles/variables.scss` 的 `:root` 块里直接覆盖 EP 的 `--el-color-primary*` 系列 CSS 变量（2026-08-22 新增）—— EP 2.14.x 还没有 `theme` prop（见 EP 官方 Config Provider 文档），这是当前唯一可行的官方推荐方式。`src/styles/index.scss` 顶部**不再**用 `@forward` 改 EP 主题色（之前是死代码，无 `@use` 消费者，已删）。
 - 别名 `@` → `src`（vite + tsconfig paths 双侧配置）。
 
 ### pdfjs 单点配置（src/utils/pdfjs.ts）

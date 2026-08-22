@@ -97,7 +97,7 @@ function goHome(): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #0f1d3a 0%, #1e4d8b 100%);
+  background: linear-gradient(135deg, #0f1d3a 0%, var(--primary-color) 100%);
   padding: 24px;
 }
 

@@ -18,4 +18,19 @@
   --white: #ffffff;
   --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 2px 8px rgba(30, 77, 139, 0.08);
+
+  /* 2026-08-22 新增：覆盖 Element Plus 的 CSS 变量，把项目藏青 #1e4d8b 注入 EP 主题。
+     这是 EP 2.14.x 唯一可行的官方推荐做法（theming 文档）：
+     直接重定义 --el-color-primary* 系列，EP 所有用 var(--el-color-primary) 的组件
+     （按钮 / switch / checkbox / radio / tag / pagination / 弹窗按钮 / 排序激活 等）
+     都会自动跟随。无视 EP 版本 —— 只要 CSS 变量名稳定就有效。
+     修复了 commit 8468333 重构后 src/styles/index.scss 顶部 @forward 死代码
+     （无 @use 消费者）造成的"项目色不生效"问题。 */
+  --el-color-primary: #1e4d8b;
+  --el-color-primary-light-3: #4a8fd6;
+  --el-color-primary-light-5: #7eb0e3;
+  --el-color-primary-light-7: #b3d0ee;
+  --el-color-primary-light-8: #cce0f4;
+  --el-color-primary-light-9: #eaf2fb;
+  --el-color-primary-dark-2: #163b6e;
 }

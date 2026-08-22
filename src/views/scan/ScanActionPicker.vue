@@ -158,7 +158,7 @@ function rescanBadge(): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: linear-gradient(90deg, #142d54 0%, #1e4d8b 100%);
+  background: linear-gradient(90deg, #142d54 0%, var(--primary-color) 100%);
   color: #fff;
   padding: 12px 24px;
   height: 60px;

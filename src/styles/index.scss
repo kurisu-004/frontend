@@ -1,16 +1,7 @@
-@forward 'element-plus/theme-chalk/src/common/var.scss' with (
-  $colors: (
-    'primary': (
-      'base': #1e4d8b,
-      'light-3': #4a8fd6,
-      'light-5': #7eb0e3,
-      'light-7': #b3d0ee,
-      'light-8': #cce0f4,
-      'light-9': #eaf2fb,
-      'dark-2': #163b6e,
-    ),
-  )
-);
+// 2026-08-22 删除：之前顶部那段 @forward 'element-plus/theme-chalk/...'
+// 改 EP 主题色是死代码 —— 全仓 0 个文件 @use '@/styles/index.scss'，EP 编译
+// 时不会拿到这些覆盖值。替代方案见 src/styles/theme.ts，通过 App.vue 根级
+// <el-config-provider :theme> 把藏青 #1e4d8b 注入 EP 主题 token。
 
 @use 'variables' as *;
 

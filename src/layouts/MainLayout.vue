@@ -395,7 +395,7 @@ onMounted(async () => {
 :deep(.el-menu-item.is-active) {
   background-color: var(--sidebar-active-bg) !important;
   color: #fff !important;
-  border-left: 3px solid #4a8fd6;
+  border-left: 3px solid var(--primary-lighter);
 }
 
 :deep(.el-sub-menu .el-menu-item) {
