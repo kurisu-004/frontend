@@ -322,10 +322,12 @@ async function onConfirm(): Promise<void> {
         <el-radio-button value="merge">合并一套</el-radio-button>
       </el-radio-group>
     </div>
+    <!-- 2026-08-22 a11y：selection 列所在的 table 加 aria-label -->
     <el-table
       ref="previewTableRef"
       :data="rows"
       row-key="id"
+      aria-label="打印预览列表"
       stripe
       border
       height="500"

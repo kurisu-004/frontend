@@ -156,8 +156,9 @@
         <el-form-item label="启用">
           <el-switch v-model="form.is_active" />
         </el-form-item>
-        <el-form-item v-if="!editing" label="工序能力（创建时）">
-          <el-checkbox-group v-model="form.process_ids" class="process-check-group">
+        <!-- 2026-08-22 a11y：el-checkbox-group 根元素非 labelable -->
+        <el-form-item v-if="!editing" label="工序能力（创建时）" :for="''">
+          <el-checkbox-group v-model="form.process_ids" class="process-check-group" aria-label="工序能力">
             <el-checkbox
               v-for="p in outsourceProcesses"
               :key="p.id"
@@ -187,8 +188,9 @@
       @closed="onManageDialogClosed"
     >
       <el-form label-width="80px">
-        <el-form-item label="可执行外协工序">
-          <el-checkbox-group v-model="manageForm.process_ids" class="process-check-group">
+        <!-- 2026-08-22 a11y：el-checkbox-group 根元素非 labelable -->
+        <el-form-item label="可执行外协工序" :for="''">
+          <el-checkbox-group v-model="manageForm.process_ids" class="process-check-group" aria-label="可执行外协工序">
             <el-checkbox
               v-for="p in outsourceProcesses"
               :key="p.id"
