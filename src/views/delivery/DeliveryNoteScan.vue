@@ -1,26 +1,41 @@
 <script setup lang="ts">
-// DeliveryNoteScan — 扫码建单页面（v2，按设计文档 D3 自动路由 + 分组规则面板）
-// 2026-08-22 重构：扫码 + L1 客户下的「分组规则 CRUD」+ 水平排列的多草稿卡片视图。
+// DeliveryNoteScan — 扫码建单页面（v3；2026-08-23 重构）。
 //
-// 三段式（自上而下）：
-//   1. 分组规则面板：选 L1 + 该 L1 下的分组 CRUD + 未分组 L2 列表
-//   2. 扫码输入条：保留 1.5s 同码防抖 + inflight guard
-//   3. 草稿卡片列表：当前 L1 下所有 DRAFT，水平滚动，每张卡直接展示最近加入批次
+// 2026-08-23 调整（计划文件 §前端实现要点）：
+//   - 移除中间的「扫码输入」卡片 —— 纯靠扫码枪订阅，不再提供手动输入 UI。
+//   - 分组卡片改 flex 布局（每行最多 4 个，窄屏自适应 2 列）。
+//   - 草稿卡片 body 改为 el-table；同 serial_no 的多 batch 折叠为一行。
+//   - 草稿卡片 footer 加「打印标签」按钮；下载 XLSX 后用 localStorage 记录
+//     已打印的 batch id（usePrintedLabels 模块级 composable 单例），
+//     已打印的行在表格里以浅绿底渲染。
 //
-// 扫码路由由后端 classify 决定，前端只渲染——保留 v2 设计文档 §3 D3「纯转发」原则。
+// 仍保留：
+//   - useBarcodeScanner 扫码枪订阅 → handleScan → scanDelivery（后端 find-or-create）。
+//   - DeliveryGroupEditor dialog：分组 CRUD 面板。
+//   - applySuccess 同步刷新 draftDetails（扫码命中后立即把最新 line_items 拉回）。
 //
-// 复用：
-//   - useBarcodeScanner 单例订阅（onMounted 挂 / onBeforeUnmount 解）
-//   - listCustomers() 拉 L1/L2 全集过滤
-//   - listNotes() 拉当前 L1 的 DRAFT 草稿
-//   - ApiError 错误码分流（沿用原 applyError 的 21417/21418/21416/21405/21406/21419）
+// 设计要点：
+//   - draftDetails 按 note_id 存完整 line_items；foldBySerial 在前端做按
+//     serial_no 的合并展示（不破坏后端语义，只换渲染）。
+//   - selectedByNote / printingByNote 按 note_id 各自维护 —— el-table 的
+//     `@selection-change` 在每张表上独立挂回调；按钮的 disabled / loading
+//     也按 note 维度切换。
 
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+  type ComputedRef,
+} from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Promotion } from '@element-plus/icons-vue'
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import { listNotes, scanDelivery } from '@/api/deliveryNote'
+import { usePrintedLabels } from '@/composables/usePrintedLabels'
+import { getNote, listNotes, printNoteLabels, removeParts, scanDelivery, softDeleteNote } from '@/api/deliveryNote'
 import { listCustomers, type Customer } from '@/api/customer'
 import {
   createDeliveryGroup,
@@ -29,31 +44,34 @@ import {
   updateDeliveryGroup,
 } from '@/api/deliveryGroup'
 import { ApiError } from '@/api/http'
-import type { ScanDeliveryOut, ScanNoteSummary } from '@/types/deliveryNote'
+import { triggerBrowserDownload } from '@/utils/download'
+import type {
+  DeliveryNoteLineItem,
+  ScanDeliveryOut,
+  ScanNoteSummary,
+} from '@/types/deliveryNote'
 import type { DeliveryGroupListOut, DeliveryGroupOut } from '@/types/deliveryGroup'
 import DeliveryGroupEditor from '@/views/delivery/components/DeliveryGroupEditor.vue'
 
 const router = useRouter()
 
-// ============ 扫码输入态 ============
-const scanInput = ref('')
-const scanning = ref(false)
-/** 1.5s 同码防抖：双击 Enter / 扫码枪连扫容错（设计文档 §5 防抖策略） */
+// ============ 扫码防抖态 ============
+/** 1.5s 同码防抖：双击 Enter / 扫码枪连扫容错（设计文档 §5 防抖策略）。 */
 const lastScanCode = ref('')
 const lastScanAt = ref(0)
-/** 输入框 ref（手动聚焦） */
-const scanInputRef = ref<{ focus: () => void } | null>(null)
+/** 当前扫码 inflight 标记（handleScan 重入保护）。 */
+const scanning = ref(false)
 
 // ============ L1 / 客户全集 ============
-/** 当前选中的 L1 客户 id；切换时重拉 groups + drafts */
+/** 当前选中的 L1 客户 id；切换时重拉 groups + drafts。 */
 const l1CustomerId = ref('')
-/** 全量客户列表（listCustomers() 返回平铺） */
+/** 全量客户列表（listCustomers() 返回平铺）。 */
 const allCustomers = ref<Customer[]>([])
-/** 一级客户全集（parent_id === null） */
+/** 一级客户全集（parent_id === null）。 */
 const rootCustomers = computed<Customer[]>(() =>
   allCustomers.value.filter((c) => c.parent_id === null),
 )
-/** 当前 L1 下的 L2 客户全集（分组编辑器用） */
+/** 当前 L1 下的 L2 客户全集（分组编辑器用）。 */
 const allL2Customers = computed<Customer[]>(() => {
   if (!l1CustomerId.value) return []
   return allCustomers.value.filter((c) => c.parent_id === l1CustomerId.value)
@@ -62,26 +80,120 @@ const allL2Customers = computed<Customer[]>(() => {
 // ============ 分组态 ============
 const groups = ref<DeliveryGroupListOut>({ groups: [], ungrouped_customers: [] })
 const groupsLoading = ref(false)
-/** 编辑 dialog 状态：null=关闭；带 initial=编辑；initial=undefined=新建 */
+/** 编辑 dialog 状态：null=关闭；带 initial=编辑；initial=undefined=新建。 */
 const editorOpen = ref(false)
 const editingGroup = ref<DeliveryGroupOut | null>(null)
 
 // ============ 草稿态 ============
-/** 当前 L1 下所有 DRAFT 草稿（key = note_id） */
+/** 当前 L1 下所有 DRAFT 草稿（key = note_id）—— header 摘要。 */
 const drafts = ref<Record<string, ScanNoteSummary>>({})
+/** 每个草稿的完整 line_items（按 note_id 存），el-table 数据源。 */
+const draftDetails = reactive<Record<string, DeliveryNoteLineItem[]>>({})
 const draftsLoading = ref(false)
 const draftsCount = computed(() => Object.keys(drafts.value).length)
 
+/** 每张草稿卡片各自的勾选行（用于「打印标签」按钮）。 */
+const selectedByNote = reactive<Record<string, MergedDraftRow[]>>({})
+/** 每张草稿卡片各自的打印中 loading 态。 */
+const printingByNote = reactive<Record<string, boolean>>({})
+/** 每张草稿卡片各自的删除中 loading 态。 */
+const deletingByNote = reactive<Record<string, boolean>>({})
+
+/**
+ * 每张草稿卡片各自的 el-table 实例 ref；打印成功后显式调 clearSelection()
+ * 触发 EP 自身的 selection-change → onSelectionChange 顺势清空 selectedByNote，
+ * 避免依赖 markPrinted → folded computed 重算这条隐式链路。
+ */
+const tableRefs = new Map<string, { clearSelection: () => void }>()
+function setTableRef(noteId: string, el: any): void {
+  if (el) tableRefs.set(noteId, el as { clearSelection: () => void })
+  else tableRefs.delete(noteId)
+}
+
+// ============ 打印状态（localStorage 单例）==============
+const printedLabelStore = usePrintedLabels()
+
+// ============ 合并行模型 ============
+/** el-table 一行 = 同 serial_no 折叠后的若干 batch；serial 为 null 时按 id 各占一行。 */
+interface MergedDraftRow {
+  /** 同 serial_no 折叠后的代表 serial；为 null 时按各自一行（key = `__null_<id>`）。 */
+  serial_no: string | null
+  drawing_no: string
+  name: string
+  /** 折叠各 batch 之和。 */
+  quantity: number
+  /** 系统交期；同 serial 多 batch 取首个非空。 */
+  system_delivery_date: string | null
+  /** 折叠行背后的所有 batch id（用于 remove / print）。 */
+  batch_ids: string[]
+  /** 任一 batch 在 localStorage 里登记为已打印 = true；用于绿底渲染。 */
+  label_printed: boolean
+}
+
+// ============ 折叠函数 ============
+/**
+ * 同 serial_no 多 batch 折叠为一行（参考 PrintPreviewDialog.vue:91 foldSamePart，
+ * 但分组 key 从 part_id 换成 serial_no）。
+ *
+ * 规则：
+ *   - serial_no 为非 null：按 serial 字符串聚合；quantity 求和；system_delivery_date
+ *     取首个非空；label_printed = 任一 batch 已打印。
+ *   - serial_no 为 null：每个 batch 单独一行，key = `__null_<id>`。
+ */
+function foldBySerial(items: DeliveryNoteLineItem[]): MergedDraftRow[] {
+  const groups = new Map<string, MergedDraftRow>()
+  const order: string[] = []
+  for (const li of items) {
+    const key = li.serial_no ?? `__null_${li.id}`
+    const existing = groups.get(key)
+    const printed = printedLabelStore.isPrintedBatch(String(li.id))
+    if (existing) {
+      existing.quantity += li.quantity
+      existing.batch_ids.push(String(li.id))
+      if (!existing.label_printed && printed) existing.label_printed = true
+      if (!existing.system_delivery_date && li.system_delivery_date) {
+        existing.system_delivery_date = li.system_delivery_date
+      }
+    } else {
+      const row: MergedDraftRow = {
+        serial_no: li.serial_no,
+        drawing_no: li.drawing_no,
+        name: li.name,
+        quantity: li.quantity,
+        system_delivery_date: li.system_delivery_date,
+        batch_ids: [String(li.id)],
+        label_printed: printed,
+      }
+      groups.set(key, row)
+      order.push(key)
+    }
+  }
+  return order.map((k) => groups.get(k)!)
+}
+
+// ============ 折叠数据缓存（per-note computed；保 data 引用稳定）==============
+/**
+ * EP table 在 :data 引用变化时（store/index.mjs:27-37 的 setData 命中
+ * dataInstanceChanged）会自动 clearSelection()。原实现模板内联调用
+ * foldBySerial(...) → 每次重渲染都产生新数组 → 勾选立刻被清，与
+ * selectedByNote 写入触发的重渲染形成死循环。
+ *
+ * 按 note_id 缓存 computed：当 draftDetails[noteId] 与 printedLabelStore
+ * 均未变时复用同一引用，视图重渲染不再误清勾选；数据真正变化（扫码刷新 /
+ * markPrinted / 移除）时正常重算（引用变了 → EP 自动清勾选，符合直觉）。
+ */
+const foldedComputeds = new Map<string, ComputedRef<MergedDraftRow[]>>()
+function foldedRows(noteId: string): MergedDraftRow[] {
+  let c = foldedComputeds.get(noteId)
+  if (!c) {
+    c = computed(() => foldBySerial(draftDetails[noteId] ?? []))
+    foldedComputeds.set(noteId, c)
+  }
+  return c.value
+}
+
 const { onScan } = useBarcodeScanner()
 let unsubScan: (() => void) | null = null
-
-/** 浏览器基线兜底（与 PartBatchNew.vue makeUid 同款）。 */
-function nextId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return `id-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-}
 
 // ============ 数据加载 ============
 
@@ -110,17 +222,28 @@ async function reloadGroups(l1Id: string): Promise<void> {
   }
 }
 
-/** 拉当前 L1 下所有 DRAFT 草稿，按 id 索引。 */
+/**
+ * 拉当前 L1 下所有 DRAFT 草稿 + 各草稿的完整 line_items。
+ *
+ * 两步：
+ *   1) listNotes 拿 header（statuses=DRAFT, customer_id=l1, limit=200）；
+ *   2) 对每个 header 并发 getNote(d.id)，拿到完整 DeliveryNoteDetailOut.line_items。
+ *
+ * 任一 getNote 失败 → catch(()=null) 跳过；对应的草稿卡片展示空表（不阻断其他）。
+ */
 async function reloadDrafts(l1Id: string): Promise<void> {
   if (!l1Id) {
     drafts.value = {}
+    // 清空 draftDetails / selectedByNote / printingByNote / deletingByNote 残留 key。
+    for (const k of Object.keys(draftDetails)) delete draftDetails[k]
+    for (const k of Object.keys(selectedByNote)) delete selectedByNote[k]
+    for (const k of Object.keys(printingByNote)) delete printingByNote[k]
+    for (const k of Object.keys(deletingByNote)) delete deletingByNote[k]
+    foldedComputeds.clear()
     return
   }
   draftsLoading.value = true
   try {
-    // 后端 DeliveryNoteOut 已是 ScanNoteSummary 字段超集（除 scope / scope_label /
-    // recent_items 外）。本次重构只展示 recent_items / scope_label，因此 listNotes
-    // 返回的 DeliveryNoteOut 直接 cast 给 ScanNoteSummary 用（缺字段填空即可）。
     const resp = await listNotes({
       statuses: ['DRAFT'],
       customer_id: l1Id,
@@ -128,14 +251,57 @@ async function reloadDrafts(l1Id: string): Promise<void> {
     })
     const next: Record<string, ScanNoteSummary> = {}
     for (const n of resp.items) {
+      // DeliveryNoteOut ⊃ ScanNoteSummary 字段（除 scope/scope_label/recent_items 外）；
+      // 补齐这三个字段后直接当 ScanNoteSummary 用。
       next[n.id] = {
         ...n,
         scope: 'L1_WIDE',
         scope_label: '按一级客户',
         recent_items: [],
-      } as ScanNoteSummary
+      }
     }
     drafts.value = next
+
+    // 清掉旧 key（残留可能因 listNotes 限 200 不再返回）
+    for (const k of Object.keys(draftDetails)) {
+      if (!(k in next)) delete draftDetails[k]
+    }
+    for (const k of Object.keys(selectedByNote)) {
+      if (!(k in next)) delete selectedByNote[k]
+    }
+    for (const k of Object.keys(printingByNote)) {
+      if (!(k in next)) delete printingByNote[k]
+    }
+    for (const k of Object.keys(deletingByNote)) {
+      if (!(k in next)) delete deletingByNote[k]
+    }
+    // 同步清掉 foldedComputeds 里的 stale key（避免残留 computed 持有旧 draftDetails 引用）
+    for (const k of Array.from(foldedComputeds.keys())) {
+      if (!(k in next)) foldedComputeds.delete(k)
+    }
+
+    const items = resp.items
+    const detailResults = await Promise.all(
+      items.map((d) =>
+        getNote(d.id).catch((e) => {
+          // eslint-disable-next-line no-console
+          console.warn(`[scan] getNote(${d.id}) 失败`, e)
+          return null
+        }),
+      ),
+    )
+    for (let i = 0; i < items.length; i += 1) {
+      const header = items[i]
+      const detail = detailResults[i]
+      if (detail) {
+        draftDetails[header.id] = detail.line_items
+        // 同步乐观锁 version 到 drafts（listNotes 已含 version 字段，getNote 是更新源）
+        drafts.value[header.id] = { ...drafts.value[header.id], version: detail.version }
+      } else {
+        // 失败兜底：空数组，el-table 渲染空态
+        if (!(header.id in draftDetails)) draftDetails[header.id] = []
+      }
+    }
   } catch (e) {
     ElMessage.error((e as Error).message ?? '加载草稿列表失败')
   } finally {
@@ -143,21 +309,30 @@ async function reloadDrafts(l1Id: string): Promise<void> {
   }
 }
 
-// ============ 扫码主流程 ============
-
-/** 手动输入框回车 / 点按钮：拉出原值 → 清空 → 触发处理 */
-async function onSubmit(): Promise<void> {
-  const raw = scanInput.value
-  scanInput.value = ''
-  await handleScan(raw)
+/**
+ * 拉单个 note 的 line_items 并写回 draftDetails（扫码命中后立即刷新）。
+ * 失败 toast warning 但不阻塞主流程（applySuccess 已先 toast ADDED/ALREADY_PRESENT）。
+ */
+async function refreshDraftDetail(noteId: string): Promise<void> {
+  try {
+    const detail = await getNote(noteId)
+    draftDetails[noteId] = detail.line_items
+    // 同步乐观锁 version 到 drafts（getNote 返回的最新 version）
+    if (drafts.value[noteId]) {
+      drafts.value[noteId] = { ...drafts.value[noteId], version: detail.version }
+    }
+  } catch (e) {
+    ElMessage.warning(`刷新 ${noteId} 详情失败：${(e as Error).message ?? '未知错误'}`)
+  }
 }
 
+// ============ 扫码主流程 ============
+
 /**
- * 单次扫码处理全流程：
+ * 单次扫码处理全流程（v3 只来自扫码枪 onScan 回调）：
  *   1) trim + 长度校验
  *   2) inflight / 1.5s 同码 防抖
  *   3) await scanDelivery → applySuccess / applyError
- *   4) finally 强制重新聚焦输入框
  */
 async function handleScan(rawCode: string): Promise<void> {
   const code = rawCode.trim()
@@ -183,24 +358,25 @@ async function handleScan(rawCode: string): Promise<void> {
   scanning.value = true
   try {
     const out = await scanDelivery(code)
-    applySuccess(out)
+    await applySuccess(out)
   } catch (e) {
     applyError(code, e)
   } finally {
     scanning.value = false
     await nextTick()
-    scanInputRef.value?.focus()
   }
 }
 
-/** 成功：把 out.note 写入 drafts Map（按 id 替换为后端最新）；toast 成功/重复 */
-function applySuccess(out: ScanDeliveryOut): void {
-  // 用响应式赋值触发模板刷新（直接 drafts.value[id] = out.note 也行，但用 spread
-  // 显式重写整个对象更稳）。
+/** 成功：把 out.note 写入 drafts Map（按 id 替换为后端最新）；fire-and-forget 刷新 detail。 */
+async function applySuccess(out: ScanDeliveryOut): Promise<void> {
   drafts.value = {
     ...drafts.value,
     [out.note.id]: out.note,
   }
+  // 详情同步：失败仅 toast warning，不阻塞主流程的 success 提示。
+  void refreshDraftDetail(out.note.id).catch(() => {
+    /* 已在 refreshDraftDetail 内 toast；这里仅防止 unhandled promise */
+  })
   if (out.outcome === 'ADDED') {
     ElMessage.success(`已加入 ${out.resolved.serial_no} → ${out.note.delivery_note_no}`)
   } else {
@@ -209,16 +385,10 @@ function applySuccess(out: ScanDeliveryOut): void {
 }
 
 /**
- * 失败：按 ApiError.code 分流（设计文档 §7 错误码）
- *   21417 → 条码未命中
- *   21418 → 装配件整套未齐（含 per-child 明细）
- *   21416 → 范围不匹配
- *   21405 / 21406 → 单条扫码失败
- *   21419 → 其他扫码拒绝
- *   其他 → 网络错 / 5xx 等
- * 错误仅 toast，不动 drafts（事务回滚不会产生草稿）。
+ * 失败：按 ApiError.code 简单 toast 错误 message（沿用原 applyError）。
+ * 不动 drafts（事务回滚不会产生草稿）。
  */
-function applyError(code: string, e: unknown): void {
+function applyError(_code: string, e: unknown): void {
   let message = (e as Error)?.message ?? '扫码失败'
   if (e instanceof ApiError) {
     message = e.message || message
@@ -287,6 +457,125 @@ async function onDeleteGroup(g: DeliveryGroupOut): Promise<void> {
   }
 }
 
+// ============ 草稿卡片：行操作 ============
+
+/** el-table 行已打印绿底（与 DeliveryNoteDetail.vue row-urgent 样式对齐）。 */
+function rowClassName({ row }: { row: MergedDraftRow }): string {
+  return row.label_printed ? 'row-printed' : ''
+}
+
+function onSelectionChange(noteId: string, rows: MergedDraftRow[]): void {
+  selectedByNote[noteId] = rows
+}
+
+function hasSelection(noteId: string): boolean {
+  return (selectedByNote[noteId]?.length ?? 0) > 0
+}
+
+function getSelectionSize(noteId: string): number {
+  return selectedByNote[noteId]?.length ?? 0
+}
+
+/**
+ * 移除：按 MergedDraftRow.batch_ids 全量删除对应 batch；成功后本地剔除这些
+ * batch_id 触发的行，重新计算 foldBySerial；并 unmark localStorage 记录避免脏绿底。
+ *
+ * - 调用后端 removeParts 时取当前 d.version 作乐观锁。
+ * - 后端返回最新 DeliveryNoteDetailOut（接口约定），同步覆盖 draftDetails 与 drafts.version。
+ */
+async function onRemove(d: ScanNoteSummary, row: MergedDraftRow): Promise<void> {
+  const noteId = d.id
+  try {
+    const updated = await removeParts(noteId, {
+      batch_ids: row.batch_ids,
+      version: d.version,
+    })
+    draftDetails[noteId] = updated.line_items
+    drafts.value[noteId] = { ...drafts.value[noteId], version: updated.version }
+    printedLabelStore.unmark(noteId, row.batch_ids)
+    // 该表可能折叠行被剔除 → 清掉选中
+    if (selectedByNote[noteId]) {
+      selectedByNote[noteId] = selectedByNote[noteId].filter(
+        (r) => r.batch_ids.some((b) => row.batch_ids.includes(b)) === false,
+      )
+    }
+    ElMessage.success('已移除')
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '移除失败')
+  }
+}
+
+/**
+ * 打印标签：把 selectedByNote 展平为 line_item_ids → 调 printNoteLabels → 浏览器下载 →
+ * 写入 localStorage → 清空选中 → success toast。
+ */
+async function onPrintLabels(d: ScanNoteSummary): Promise<void> {
+  const noteId = d.id
+  const rows = selectedByNote[noteId] ?? []
+  if (rows.length === 0) return
+  const lineItemIds: string[] = []
+  for (const r of rows) lineItemIds.push(...r.batch_ids)
+  if (lineItemIds.length === 0) return
+
+  printingByNote[noteId] = true
+  try {
+    const { blob, filename } = await printNoteLabels(noteId, {
+      line_item_ids: lineItemIds,
+    })
+    triggerBrowserDownload(blob, filename)
+    printedLabelStore.markPrinted(noteId, lineItemIds)
+    // foldBySerial 在模板里每次访问都重算，store 是响应式 ref → isPrintedBatch
+    // 立刻返回新值 → 模板自动刷新绿底。
+    // 显式清掉 el-table 内部勾选态（emit selection-change([]) → onSelectionChange
+    // 顺势把 selectedByNote 置空；下一行 selectedByNote[noteId] = [] 为双保险）。
+    tableRefs.get(noteId)?.clearSelection()
+    selectedByNote[noteId] = []
+    ElMessage.success('已导出标签')
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '打印标签失败')
+  } finally {
+    printingByNote[noteId] = false
+  }
+}
+
+/**
+ * 删除草稿：二次确认 → 调 softDeleteNote → 本地清掉所有相关 ref + localStorage。
+ *
+ * - 取 d.version 作乐观锁（reloadDrafts 时同步过，与 detail.version 一致）；
+ * - printedLabelStore.unmark 全量清掉该 note 的所有 batch 记录，避免死 key。
+ * - 失败 toast，按钮恢复可点。
+ */
+async function onDeleteDraft(d: ScanNoteSummary): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除草稿 ${d.delivery_note_no}？关联零件会解除。`,
+      '删除草稿',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  const noteId = d.id
+  deletingByNote[noteId] = true
+  try {
+    await softDeleteNote(noteId, { version: d.version })
+    delete drafts.value[noteId]
+    delete draftDetails[noteId]
+    delete selectedByNote[noteId]
+    delete printingByNote[noteId]
+    delete deletingByNote[noteId]
+    foldedComputeds.delete(noteId)
+    tableRefs.delete(noteId)
+    // 清掉 localStorage 里该 note 的所有 batch 记录
+    printedLabelStore.unmark(noteId, Object.keys(printedLabelStore.store.value[noteId] ?? {}))
+    ElMessage.success('草稿已删除')
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '删除草稿失败')
+  } finally {
+    deletingByNote[noteId] = false
+  }
+}
+
 // ============ 卡片跳转 ============
 
 function gotoDetail(draft: ScanNoteSummary): void {
@@ -301,17 +590,11 @@ function gotoAllDrafts(): void {
   })
 }
 
-function onScanInputClear(): void {
-  scanInput.value = ''
-}
-
 // ============ 生命周期 ============
 
 onMounted(async () => {
   // 扫码枪订阅：每页独立挂载；卸载时退订避免劫持到其他页
   unsubScan = onScan((code) => { void handleScan(code) })
-  // 进入页后自动聚焦输入框，等 DOM 完成 nextTick 再 focus
-  void nextTick().then(() => scanInputRef.value?.focus())
   // 拉客户全集；如有 L1 初始值再立刻拉 groups + drafts（本次不做 URL 持久化）
   await loadAllCustomers()
 })
@@ -372,47 +655,57 @@ onBeforeUnmount(() => {
           :image-size="80"
         />
         <template v-else>
-          <div
-            v-for="g in groups.groups"
-            :key="g.id"
-            class="group-row"
-          >
-            <div class="group-row-main">
-              <span class="group-name">{{ g.name }}</span>
-              <div class="group-members">
-                <el-tag
-                  v-for="m in g.members"
-                  :key="m.customer_id"
-                  size="small"
-                  effect="plain"
-                  type="info"
-                >
-                  {{ m.customer_name }}
-                </el-tag>
-                <span v-if="g.members.length === 0" class="muted">（无成员）</span>
+          <div class="groups-grid">
+            <div
+              v-for="g in groups.groups"
+              :key="g.id"
+              class="group-row"
+            >
+              <div class="group-row-main">
+                <span class="group-name">{{ g.name }}</span>
+                <div class="group-members">
+                  <el-tag
+                    v-for="m in g.members"
+                    :key="m.customer_id"
+                    size="small"
+                    effect="plain"
+                    type="info"
+                  >
+                    {{ m.customer_name }}
+                  </el-tag>
+                  <span v-if="g.members.length === 0" class="muted">（无成员）</span>
+                </div>
+              </div>
+              <div class="group-row-actions">
+                <el-button link size="small" type="primary" @click="openEditGroup(g)">
+                  编辑
+                </el-button>
+                <el-button link size="small" type="danger" @click="onDeleteGroup(g)">
+                  删除
+                </el-button>
               </div>
             </div>
-            <div class="group-row-actions">
-              <el-button link size="small" type="primary" @click="openEditGroup(g)">
-                编辑
-              </el-button>
-              <el-button link size="small" type="danger" @click="onDeleteGroup(g)">
-                删除
-              </el-button>
-            </div>
-          </div>
 
-          <div v-if="groups.ungrouped_customers.length > 0" class="ungrouped-row">
-            <span class="group-name muted">未分组 L2</span>
-            <div class="group-members">
-              <el-tag
-                v-for="u in groups.ungrouped_customers"
-                :key="u.id"
-                size="small"
-                effect="plain"
-              >
-                {{ u.name }}
-              </el-tag>
+            <div
+              v-if="groups.ungrouped_customers.length > 0"
+              class="group-row ungrouped-row"
+            >
+              <div class="group-row-main">
+                <span class="group-name muted">未分组 L2</span>
+                <div class="group-members">
+                  <el-tag
+                    v-for="u in groups.ungrouped_customers"
+                    :key="u.id"
+                    size="small"
+                    effect="plain"
+                  >
+                    {{ u.name }}
+                  </el-tag>
+                </div>
+              </div>
+              <div class="group-row-actions">
+                <span class="muted small">{{ groups.ungrouped_customers.length }} 个</span>
+              </div>
             </div>
           </div>
         </template>
@@ -422,31 +715,6 @@ onBeforeUnmount(() => {
         description="先选一级客户，加载分组规则"
         :image-size="80"
       />
-    </el-card>
-
-    <!-- ========== 中间：扫码输入 ========== -->
-    <el-card shadow="never">
-      <template #header>
-        <span class="dn-scan-card-title">扫码</span>
-      </template>
-      <div class="scan-row">
-        <el-input
-          ref="scanInputRef"
-          v-model="scanInput"
-          placeholder="扫码或输入序列号（Enter 提交）"
-          clearable
-          style="width: 360px"
-          @keyup.enter="onSubmit"
-          @clear="onScanInputClear"
-        >
-          <template #prefix>
-            <el-icon><Promotion /></el-icon>
-          </template>
-        </el-input>
-        <el-button type="primary" :loading="scanning" @click="onSubmit">
-          提交扫码
-        </el-button>
-      </div>
     </el-card>
 
     <!-- ========== 底部：草稿卡片列表 ========== -->
@@ -465,10 +733,10 @@ onBeforeUnmount(() => {
 
       <el-empty
         v-if="draftsCount === 0"
-        description="暂无草稿 — 扫码开始建单"
+        description="暂无草稿 — 扫码枪扫码开始建单"
         :image-size="80"
       />
-      <div v-else class="drafts-track">
+      <div v-else class="drafts-grid">
         <el-card
           v-for="d in drafts"
           :key="d.id"
@@ -476,8 +744,8 @@ onBeforeUnmount(() => {
           class="draft-card"
         >
           <template #header>
-            <div class="draft-card-head">
-              <span class="draft-no">{{ d.delivery_note_no }}</span>
+            <div class="draft-card-head" @click="gotoDetail(d)">
+              <span class="draft-no draft-no-link">{{ d.delivery_note_no }}</span>
               <el-tag size="small" type="info" effect="plain">
                 {{ d.scope_label }}
               </el-tag>
@@ -485,30 +753,72 @@ onBeforeUnmount(() => {
           </template>
           <div class="draft-card-body">
             <div class="draft-customer">{{ d.customer_path || '—' }}</div>
-            <div
-              v-for="r in d.recent_items"
-              :key="r.batch_id"
-              class="recent-row scan-row-line"
+            <el-table
+              :ref="(el: any) => setTableRef(d.id, el)"
+              :data="foldedRows(d.id)"
+              :row-key="(row: MergedDraftRow) => row.batch_ids[0]"
+              :row-class-name="rowClassName"
+              height="240"
+              size="small"
+              empty-text="暂无加入批次 — 扫码加入"
+              @selection-change="(rows: MergedDraftRow[]) => onSelectionChange(d.id, rows)"
             >
-              <el-tooltip
-                placement="top"
-                :content="`${r.serial_no ?? '—'} · ${r.drawing_no} · ${r.name}${r.order_no ? ' · ' + r.order_no : ''}`"
-              >
-                <span class="recent-text">
-                  <span class="recent-serial">{{ r.serial_no ?? '—' }}</span>
-                  <span class="recent-name muted">{{ r.name }}</span>
-                  <span v-if="r.order_no" class="recent-order muted">{{ r.order_no }}</span>
-                </span>
-              </el-tooltip>
-            </div>
-            <div v-if="d.recent_items.length === 0" class="muted recent-empty">
-              暂无加入批次
-            </div>
+              <el-table-column type="selection" width="44" fixed />
+              <el-table-column label="序列号" min-width="100">
+                <template #default="{ row }">
+                  <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column
+                prop="name"
+                label="名称"
+                min-width="110"
+                show-overflow-tooltip
+              />
+              <el-table-column
+                prop="quantity"
+                label="数量"
+                width="60"
+                align="right"
+              />
+              <el-table-column label="系统交期" width="90" align="center">
+                <template #default="{ row }">
+                  {{ row.system_delivery_date || '—' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="" width="56" align="center">
+                <template #default="{ row }">
+                  <el-button link size="small" type="danger" @click="onRemove(d, row as MergedDraftRow)">
+                    移除
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
           </div>
           <template #footer>
-            <el-button link type="primary" @click="gotoDetail(d)">
-              {{ d.part_count }} 行 → 查看单据详情
-            </el-button>
+            <div class="draft-card-footer">
+              <el-button
+                type="danger"
+                plain
+                class="footer-btn"
+                :loading="deletingByNote[d.id]"
+                @click="onDeleteDraft(d)"
+              >
+                <el-icon><Delete /></el-icon>
+                删除草稿
+              </el-button>
+              <el-button
+                type="success"
+                plain
+                class="footer-btn"
+                :disabled="!hasSelection(d.id)"
+                :loading="printingByNote[d.id]"
+                @click="onPrintLabels(d)"
+              >
+                <el-icon><Printer /></el-icon>
+                打印标签{{ hasSelection(d.id) ? `（${getSelectionSize(d.id)}）` : '' }}
+              </el-button>
+            </div>
           </template>
         </el-card>
       </div>
@@ -556,6 +866,12 @@ onBeforeUnmount(() => {
   min-width: 64px;
 }
 
+/* 分组卡片：每行最多 4 个，窄屏自动 2 列 */
+.groups-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
 .group-row {
   display: flex;
   align-items: flex-start;
@@ -564,7 +880,8 @@ onBeforeUnmount(() => {
   background: var(--primary-bg, #eaf2fb);
   border: 1px solid #d9ecff;
   border-radius: 6px;
-  margin-bottom: 8px;
+  flex: 0 0 calc(25% - 9px);
+  box-sizing: border-box;
 }
 .group-row-main {
   display: flex;
@@ -577,6 +894,7 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+  align-items: center;
 }
 .group-name {
   font-weight: 600;
@@ -589,23 +907,17 @@ onBeforeUnmount(() => {
 }
 
 .ungrouped-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
-  border-top: 1px dashed var(--el-border-color-lighter);
+  background: var(--el-fill-color-light);
+  border-style: dashed;
+}
+.ungrouped-row .small {
+  font-size: 12px;
 }
 
-/* ============ 扫码输入条（沿用项目浅蓝条风格） ============ */
-.scan-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  padding: 10px 14px;
-  background: var(--primary-bg, #eaf2fb);
-  border: 1px solid #d9ecff;
-  border-radius: 6px;
+@media (max-width: 1200px) {
+  .group-row {
+    flex: 0 0 calc(50% - 6px);
+  }
 }
 
 /* ============ 草稿卡片列表 ============ */
@@ -621,28 +933,37 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   margin-bottom: 8px;
 }
-.drafts-track {
+/* 草稿卡片：每行 2 张，每张 50% 宽，避免横向滚动 + 表格完整可见。 */
+.drafts-grid {
   display: flex;
-  flex-direction: row;
+  flex-wrap: wrap;
   gap: 12px;
-  overflow-x: auto;
-  padding-bottom: 8px;
 }
 .draft-card {
-  min-width: 280px;
-  flex: 0 0 280px;
+  flex: 0 0 calc(50% - 6px);
+  box-sizing: border-box;
+  min-width: 0;
 }
 .draft-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  cursor: pointer;
 }
 .draft-no {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-weight: 700;
   font-size: 15px;
   color: var(--text-primary, #303133);
+}
+.draft-no-link {
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 120ms ease;
+}
+.draft-card-head:hover .draft-no-link {
+  text-decoration-color: var(--el-color-primary);
 }
 .draft-customer {
   font-size: 13px;
@@ -654,37 +975,25 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 4px;
 }
-.recent-row {
-  padding: 6px 10px;
-  background: var(--primary-bg, #eaf2fb);
-  border: 1px solid #d9ecff;
-  border-radius: 4px;
-}
-.scan-row-line {
-  /* 浅蓝条风格，与 .scan-row 同色系 */
-  display: block;
-}
-.recent-text {
+
+/* ============ 草稿卡片 footer：删除 + 打印 两个按钮等分居中 ============ */
+.draft-card-footer {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-  line-height: 1.4;
+  gap: 8px;
 }
-.recent-serial {
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-  font-weight: 600;
-  color: var(--text-primary, #303133);
+.footer-btn {
+  flex: 1;
 }
-.recent-name,
-.recent-order {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+:deep(.footer-btn .el-button__inner) {
+  justify-content: center;
 }
-.recent-empty {
-  font-size: 12px;
-  padding: 4px 0;
+
+/* ============ 已打印行绿底（与 DeliveryNoteDetail.vue row-urgent 风格对齐） ============ */
+:deep(.el-table__row.row-printed) > td.el-table__cell {
+  background-color: #e6f7e6 !important;
+}
+:deep(.el-table__row.row-printed:hover > td.el-table__cell) {
+  background-color: #d6efd6 !important;
 }
 
 .muted {

@@ -235,6 +235,10 @@ export interface ScanRecentItem {
 export interface ScanNoteSummary {
   id: string
   delivery_note_no: string
+  /** 乐观锁 version；后端 ScanDeliveryNoteSummaryDto 已返（hsh-erp-rust dto.rs:478），
+   *  前端早先漏声明，导致 removeParts 只能另开 noteVersions 旁路。
+   *  2026-08-23 补声明后，前端可直读 d.version。 */
+  version: number
   /** note.customer_id 是 L1 root；与 parts.customer_id = L2 leaf 不同 */
   customer_id: string
   customer_name: string | null
