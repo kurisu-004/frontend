@@ -118,12 +118,18 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions) {
   // （扫码场景），usePartBatchSelection 在 fetch 后需要 nextTick 恢复勾选。
   let beforeSearch: (() => void) | null = null
   let afterFetch: (() => void) | null = null
+  // 2026-08-23：resetAllFilters 用 —— PartsTable 注册一个调 el-table.clearFilter
+  // 的回调，让 query 能在不持有 tableRef 的情况下清掉原生筛选列的勾选态。
+  let clearNativeFilters: (() => void) | null = null
 
   function registerBeforeSearch(fn: () => void): void {
     beforeSearch = fn
   }
   function registerAfterFetch(fn: () => void): void {
     afterFetch = fn
+  }
+  function registerClearNativeFilters(fn: () => void): void {
+    clearNativeFilters = fn
   }
 
   // ============ 派生 ============
@@ -289,6 +295,38 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions) {
     void fetchList()
   }
 
+  // 2026-08-23：工具栏「重置筛选」一键清空 —— 与 onReset 的「半清空」相反：
+  // 清掉全部列筛选项（文本/日期/isNull/status/客户/下一道工序/所在位置/holder），
+  // 但保留 rowType / 排序 / 分页大小。原生筛选列（status / next_process）的
+  // el-table 内部勾选态通过 clearNativeFilters 回调清掉，EP 会 emit filter-change
+  // 让 onNativeFilterChange 把 search.statuses / isUrgent / nextProcessIds 同步清空。
+  function resetAllFilters(): void {
+    search.statuses = []
+    search.isUrgent = null
+    search.customerId = ''
+    search.drawingNo = ''
+    search.name = ''
+    search.orderNo = ''
+    search.orderNoIsNull = undefined
+    search.serialNo = ''
+    search.requestDateFrom = ''
+    search.requestDateTo = ''
+    search.plannedDeliveryDateFrom = ''
+    search.plannedDeliveryDateTo = ''
+    search.systemDeliveryDateFrom = ''
+    search.systemDeliveryDateTo = ''
+    search.systemDeliveryDateIsNull = undefined
+    search.nextProcessIds = []
+    search.locations = []
+    search.holderIds = []
+    // rowType / keyword 保留
+    page.value = 1
+    beforeSearch?.() // 清批量选择
+    clearNativeFilters?.()
+    snapshotPersist()
+    void fetchList()
+  }
+
   // ============ restoreState ============
   // 2026-08-22 拆分：onMounted 的恢复逻辑搬到这里，view 负责触发 fetchList 与 el-table sort()。
   // 优先级：URL ?status=PENDING 注入 > localStorage 恢复。
@@ -378,5 +416,7 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions) {
     snapshotPersist,
     registerBeforeSearch,
     registerAfterFetch,
+    registerClearNativeFilters,
+    resetAllFilters,
   }
 }

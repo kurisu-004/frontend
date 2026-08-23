@@ -13,6 +13,7 @@
 <template>
   <div ref="wrapEl" class="parts-table-wrap" :key="tableKey">
     <div class="parts-table-toolbar">
+      <el-button link @click="resetAllFilters">重置筛选</el-button>
       <ColumnVisibilityPopover
         :defs="columnDefs"
         :model-value="columnVisibility.currentMap"
@@ -356,7 +357,21 @@
         </template>
       </el-table-column>
 
-      <!-- 10. 单价 -->
+      <!-- 10. 已送数量（2026-08-23 从原位置 15 移到数量之后） -->
+      <el-table-column
+        v-if="columnVisibility.isVisible('delivered_quantity')"
+        prop="delivered_quantity"
+        label="已送数量"
+        min-width="100"
+        align="right"
+      >
+        <template #default="{ row }">
+          <span v-if="row.row_type === 'ASSEMBLY'" class="muted">—</span>
+          <span v-else>{{ row.delivered_quantity ?? 0 }}</span>
+        </template>
+      </el-table-column>
+
+      <!-- 11. 单价 -->
       <el-table-column
         v-if="canEdit && columnVisibility.isVisible('unit_price')"
         prop="unit_price"
@@ -542,21 +557,7 @@
         </template>
       </el-table-column>
 
-      <!-- 15. 已送数量 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('delivered_quantity')"
-        prop="delivered_quantity"
-        label="已送数量"
-        min-width="100"
-        align="right"
-      >
-        <template #default="{ row }">
-          <span v-if="row.row_type === 'ASSEMBLY'" class="muted">—</span>
-          <span v-else>{{ row.delivered_quantity ?? 0 }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 16. 加急 -->
+      <!-- 15. 加急（2026-08-23 原编号 16，因已送数量挪走而前移） -->
       <el-table-column
         v-if="columnVisibility.isVisible('is_urgent')"
         label="加急"
@@ -712,7 +713,7 @@
 // 列定义 / 行内编辑 / 批量选中 / 表头 popover 全通过 props.ctx.* 解构到顶层局部
 // 变量后进模板（Vue 模板只对顶层 ref 自动解包；嵌套 ref 不会自动解包）。
 
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import type { TableInstance } from 'element-plus'
 import { useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
@@ -805,6 +806,21 @@ const router = useRouter()
 // ============ 表格 ref（暴露给父组件）============
 const tableRef = ref<TableInstance | null>(null)
 defineExpose({ tableRef })
+
+// 2026-08-23：工具栏「重置筛选」按钮 —— 一键清空所有列筛选（文本/日期/status/客户/位置/holder）。
+// 把 el-table.clearFilter 注入 query composable，让 query.resetAllFilters 能不持有
+// tableRef 的情况下清掉原生筛选列（status / next_process）的内部勾选态。
+// EP clearFilter 会 emit filter-change，onNativeFilterChange 顺手把 search.* 同步清空。
+onMounted(() => {
+  query.registerClearNativeFilters(() => {
+    tableRef.value?.clearFilter(['status', 'next_process'])
+  })
+})
+
+// 工具栏按钮的简短转发，模板里直接 @click="resetAllFilters"
+const resetAllFilters = (): void => {
+  query.resetAllFilters()
+}
 
 // ============ 本地辅助函数 ============
 // 2026-07-30：树表 row-key（避免顶层与子件 id 冲突）
