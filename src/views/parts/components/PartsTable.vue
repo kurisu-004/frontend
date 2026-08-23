@@ -422,6 +422,7 @@
               unlink-panels
               clearable
               size="small"
+              :teleported="false"
               style="width: 100%"
             />
           </ColumnFilterPopover>
@@ -468,6 +469,7 @@
               unlink-panels
               clearable
               size="small"
+              :teleported="false"
               style="width: 100%"
             />
           </ColumnFilterPopover>
@@ -516,6 +518,7 @@
                 unlink-panels
                 clearable
                 size="small"
+                :teleported="false"
                 style="flex: 1"
               />
               <el-checkbox

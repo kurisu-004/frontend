@@ -128,9 +128,10 @@ const headerText = computed(() =>
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  width: 100%;
-  justify-content: center;
-  // 2026-07-31：激活态列标题同步变蓝加粗（与 cfp-icon.active 共享视觉信号）
+  // 2026-08-23：去掉 width: 100% 与 justify-content: center —— 这两项让 cfp-header 撑满整个 cell，
+  // 把 EP 渲染的 sort caret-wrapper 挤到下一行。改为按内容尺寸自然 inline，让 label+arrow 与
+  // EP 排序箭头一起排在同一行（与 EP 原生 sortable+filterable 列同效果）。
+  // 2026-07-31：激活态列标题同步变蓝加粗（图标 color 继承父级随之变蓝）
   &.is-active {
     color: var(--primary-color);
     font-weight: 600;
