@@ -33,7 +33,7 @@
     - reset       点「重置」时触发
 -->
 <template>
-  <span class="cfp-header" :class="{ 'is-active': active }">
+  <span class="cfp-header" :class="{ 'is-active': active }" @click.stop>
     <span>{{ headerText }}</span>
     <el-popover
       :width="width"
@@ -121,6 +121,18 @@ const headerText = computed(() =>
 </script>
 
 <style lang="scss" scoped>
+// 2026-08-23：让表头 .cell 变 flex 容器，把 EP 渲染的 sort caret-wrapper 排前、
+// 我们的 cfp-header（label + 触发箭头）排后 —— 与 EP 原生 sortable+filterable 列同效果
+// （label | ▲▼ | 箭头）。:deep 是因为 .cell/.caret-wrapper 是 EP 渲染的元素。
+:deep(.el-table .cell) {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+:deep(.el-table .cell > .caret-wrapper) {
+  order: 1;
+}
+
 // 2026-08-22：从 PartsList.vue 的 .header-cell 抽出，类名改为 .cfp-header
 // 激活态与 .cfp-icon.active / .cfp-icon.active::after 共享视觉信号
 // （蓝字加粗 + 蓝图标 + 右上角蓝点）
@@ -128,6 +140,7 @@ const headerText = computed(() =>
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  order: 2; // 2026-08-23：在 sort caret-wrapper 之后（详见上方 :deep 注释）
   // 2026-08-23：去掉 width: 100% 与 justify-content: center —— 这两项让 cfp-header 撑满整个 cell，
   // 把 EP 渲染的 sort caret-wrapper 挤到下一行。改为按内容尺寸自然 inline，让 label+arrow 与
   // EP 排序箭头一起排在同一行（与 EP 原生 sortable+filterable 列同效果）。
