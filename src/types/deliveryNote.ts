@@ -219,6 +219,18 @@ export interface ScanAddedBatch {
   quantity: number
 }
 
+/** 草稿卡片要展示的最近加入批次条目（后端 limit=8，按 id DESC）。 */
+export interface ScanRecentItem {
+  batch_id: string
+  part_id: string
+  /** 工单序列号；t_part.serial_no 在 DB 里 nullable → 序列化可能为 null。 */
+  serial_no: string | null
+  drawing_no: string
+  name: string
+  /** 工单订单号；nullable。 */
+  order_no: string | null
+}
+
 /** 设计文档 §5.7.note：扫码返回的当前草稿摘要（与 DeliveryNoteOut 字段对齐 + scope_label）。 */
 export interface ScanNoteSummary {
   id: string
@@ -236,6 +248,8 @@ export interface ScanNoteSummary {
   delivery_date: string | null
   created_at: string
   updated_at: string
+  /** 最近加入的批次行（max 8；后端在 scan 响应里直接返回）。 */
+  recent_items: ScanRecentItem[]
 }
 
 /** 设计文档 §5.7 扫码端点响应。 */

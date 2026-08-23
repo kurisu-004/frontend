@@ -1,53 +1,76 @@
 <script setup lang="ts">
-// DeliveryNoteScan — 扫码建单页面（v2，按设计文档 D3 自动路由）
-// 2026-08-21 v2 扫码建单：扫序列号 → 后端解析 L1 → find-or-create DRAFT → 返回落点。
-// 一次扫码只调一次 POST /api/v2/delivery-notes/scan，不在前端做 note picker / customer picker。
+// DeliveryNoteScan — 扫码建单页面（v2，按设计文档 D3 自动路由 + 分组规则面板）
+// 2026-08-22 重构：扫码 + L1 客户下的「分组规则 CRUD」+ 水平排列的多草稿卡片视图。
+//
+// 三段式（自上而下）：
+//   1. 分组规则面板：选 L1 + 该 L1 下的分组 CRUD + 未分组 L2 列表
+//   2. 扫码输入条：保留 1.5s 同码防抖 + inflight guard
+//   3. 草稿卡片列表：当前 L1 下所有 DRAFT，水平滚动，每张卡直接展示最近加入批次
+//
+// 扫码路由由后端 classify 决定，前端只渲染——保留 v2 设计文档 §3 D3「纯转发」原则。
 //
 // 复用：
-//   - useBarcodeScanner 单例（自带输入框焦点抑制；本页面订阅 onScan(onMounted 挂 / onBeforeUnmount 解）
-//   - .scan-row 样式抄 OutsourceSendReceive.vue 浅蓝条
-//   - ElMessage.success/warning/error 统一 toast（项目不用 ElNotification）
-//
-// el-* 组件靠 unplugin-vue-components 自动注册；本文件只需显式 import 业务依赖。
+//   - useBarcodeScanner 单例订阅（onMounted 挂 / onBeforeUnmount 解）
+//   - listCustomers() 拉 L1/L2 全集过滤
+//   - listNotes() 拉当前 L1 的 DRAFT 草稿
+//   - ApiError 错误码分流（沿用原 applyError 的 21417/21418/21416/21405/21406/21419）
 
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import { scanDelivery } from '@/api/deliveryNote'
+import { listNotes, scanDelivery } from '@/api/deliveryNote'
+import { listCustomers, type Customer } from '@/api/customer'
+import {
+  createDeliveryGroup,
+  listDeliveryGroups,
+  softDeleteDeliveryGroup,
+  updateDeliveryGroup,
+} from '@/api/deliveryGroup'
 import { ApiError } from '@/api/http'
 import type { ScanDeliveryOut, ScanNoteSummary } from '@/types/deliveryNote'
-
-/**
- * 日志条目 union：先 push pending 行（乐观插入），接口返回后再 splice 替换为终态。
- * 终态分五类：added / already / rejected / unknown / error — 与状态颜色一一对应。
- */
-type ScanLogEntry =
-  | { id: string; status: 'pending'; code: string; at: number }
-  | {
-      id: string
-      status: 'added' | 'already' | 'rejected' | 'unknown' | 'error'
-      code: string
-      serial_no: string | null
-      name: string | null
-      message: string
-      note_no: string | null
-      at: number
-    }
+import type { DeliveryGroupListOut, DeliveryGroupOut } from '@/types/deliveryGroup'
+import DeliveryGroupEditor from '@/views/delivery/components/DeliveryGroupEditor.vue'
 
 const router = useRouter()
+
+// ============ 扫码输入态 ============
 const scanInput = ref('')
 const scanning = ref(false)
 /** 1.5s 同码防抖：双击 Enter / 扫码枪连扫容错（设计文档 §5 防抖策略） */
 const lastScanCode = ref('')
 const lastScanAt = ref(0)
-/** 当前跟随后端的 DRAFT 草稿；切换 L1 / scope 时后端会路由到新草稿，前端卡片同步刷新 */
-const activeDraft = ref<ScanNoteSummary | null>(null)
-/** 扫码日志（新→旧），最多 100 条 */
-const log = ref<ScanLogEntry[]>([])
 /** 输入框 ref（手动聚焦） */
 const scanInputRef = ref<{ focus: () => void } | null>(null)
+
+// ============ L1 / 客户全集 ============
+/** 当前选中的 L1 客户 id；切换时重拉 groups + drafts */
+const l1CustomerId = ref('')
+/** 全量客户列表（listCustomers() 返回平铺） */
+const allCustomers = ref<Customer[]>([])
+/** 一级客户全集（parent_id === null） */
+const rootCustomers = computed<Customer[]>(() =>
+  allCustomers.value.filter((c) => c.parent_id === null),
+)
+/** 当前 L1 下的 L2 客户全集（分组编辑器用） */
+const allL2Customers = computed<Customer[]>(() => {
+  if (!l1CustomerId.value) return []
+  return allCustomers.value.filter((c) => c.parent_id === l1CustomerId.value)
+})
+
+// ============ 分组态 ============
+const groups = ref<DeliveryGroupListOut>({ groups: [], ungrouped_customers: [] })
+const groupsLoading = ref(false)
+/** 编辑 dialog 状态：null=关闭；带 initial=编辑；initial=undefined=新建 */
+const editorOpen = ref(false)
+const editingGroup = ref<DeliveryGroupOut | null>(null)
+
+// ============ 草稿态 ============
+/** 当前 L1 下所有 DRAFT 草稿（key = note_id） */
+const drafts = ref<Record<string, ScanNoteSummary>>({})
+const draftsLoading = ref(false)
+const draftsCount = computed(() => Object.keys(drafts.value).length)
 
 const { onScan } = useBarcodeScanner()
 let unsubScan: (() => void) | null = null
@@ -60,7 +83,67 @@ function nextId(): string {
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-// ============ 提交入口 ============
+// ============ 数据加载 ============
+
+/** 拉全量客户（onMounted 调一次即可）。 */
+async function loadAllCustomers(): Promise<void> {
+  try {
+    allCustomers.value = await listCustomers()
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '加载客户列表失败')
+  }
+}
+
+/** 拉当前 L1 下的分组 + 未分组 L2。 */
+async function reloadGroups(l1Id: string): Promise<void> {
+  if (!l1Id) {
+    groups.value = { groups: [], ungrouped_customers: [] }
+    return
+  }
+  groupsLoading.value = true
+  try {
+    groups.value = await listDeliveryGroups(l1Id)
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '加载分组规则失败')
+  } finally {
+    groupsLoading.value = false
+  }
+}
+
+/** 拉当前 L1 下所有 DRAFT 草稿，按 id 索引。 */
+async function reloadDrafts(l1Id: string): Promise<void> {
+  if (!l1Id) {
+    drafts.value = {}
+    return
+  }
+  draftsLoading.value = true
+  try {
+    // 后端 DeliveryNoteOut 已是 ScanNoteSummary 字段超集（除 scope / scope_label /
+    // recent_items 外）。本次重构只展示 recent_items / scope_label，因此 listNotes
+    // 返回的 DeliveryNoteOut 直接 cast 给 ScanNoteSummary 用（缺字段填空即可）。
+    const resp = await listNotes({
+      statuses: ['DRAFT'],
+      customer_id: l1Id,
+      limit: 200,
+    })
+    const next: Record<string, ScanNoteSummary> = {}
+    for (const n of resp.items) {
+      next[n.id] = {
+        ...n,
+        scope: 'L1_WIDE',
+        scope_label: '按一级客户',
+        recent_items: [],
+      } as ScanNoteSummary
+    }
+    drafts.value = next
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '加载草稿列表失败')
+  } finally {
+    draftsLoading.value = false
+  }
+}
+
+// ============ 扫码主流程 ============
 
 /** 手动输入框回车 / 点按钮：拉出原值 → 清空 → 触发处理 */
 async function onSubmit(): Promise<void> {
@@ -71,29 +154,16 @@ async function onSubmit(): Promise<void> {
 
 /**
  * 单次扫码处理全流程：
- *   1) trim + 长度校验（设计文档 §5 入参 1..=64）
+ *   1) trim + 长度校验
  *   2) inflight / 1.5s 同码 防抖
- *   3) 乐观插入 pending 日志
- *   4) await scanDelivery → applySuccess / applyError
- *   5) finally 强制重新聚焦输入框
+ *   3) await scanDelivery → applySuccess / applyError
+ *   4) finally 强制重新聚焦输入框
  */
 async function handleScan(rawCode: string): Promise<void> {
   const code = rawCode.trim()
 
   // 1) 客户端格式校验
   if (code.length < 1 || code.length > 64) {
-    const entry: ScanLogEntry = {
-      id: nextId(),
-      status: 'rejected',
-      code,
-      serial_no: null,
-      name: null,
-      message: '条码格式不正确',
-      note_no: null,
-      at: Date.now(),
-    }
-    log.value.unshift(entry)
-    trimLog()
     ElMessage.warning('条码格式不正确')
     return
   }
@@ -110,18 +180,12 @@ async function handleScan(rawCode: string): Promise<void> {
   lastScanCode.value = code
   lastScanAt.value = now
 
-  // 3) 乐观插入 pending 行
-  const pendingId = nextId()
-  const pending: ScanLogEntry = { id: pendingId, status: 'pending', code, at: Date.now() }
-  log.value.unshift(pending)
-  trimLog()
-
   scanning.value = true
   try {
     const out = await scanDelivery(code)
-    applySuccess(pendingId, out)
+    applySuccess(out)
   } catch (e) {
-    applyError(pendingId, code, e)
+    applyError(code, e)
   } finally {
     scanning.value = false
     await nextTick()
@@ -129,27 +193,14 @@ async function handleScan(rawCode: string): Promise<void> {
   }
 }
 
-// ============ 终态分支 ============
-
-/** 成功：splice pending → 替换 added / already；刷新顶部草稿卡；toast 成功/重复 */
-function applySuccess(pendingId: string, out: ScanDeliveryOut): void {
-  const entry: ScanLogEntry = {
-    id: pendingId,
-    status: out.outcome === 'ADDED' ? 'added' : 'already',
-    code: out.resolved.serial_no,
-    serial_no: out.resolved.serial_no,
-    name: out.resolved.name,
-    message: out.message,
-    note_no: out.note.delivery_note_no,
-    at: Date.now(),
+/** 成功：把 out.note 写入 drafts Map（按 id 替换为后端最新）；toast 成功/重复 */
+function applySuccess(out: ScanDeliveryOut): void {
+  // 用响应式赋值触发模板刷新（直接 drafts.value[id] = out.note 也行，但用 spread
+  // 显式重写整个对象更稳）。
+  drafts.value = {
+    ...drafts.value,
+    [out.note.id]: out.note,
   }
-  const idx = log.value.findIndex((l) => l.id === pendingId)
-  if (idx >= 0) log.value.splice(idx, 1, entry)
-  else log.value.unshift(entry)
-  trimLog()
-
-  // 切 L1 / scope 时后端会路由到新草稿；前端卡片跟随
-  activeDraft.value = out.note
   if (out.outcome === 'ADDED') {
     ElMessage.success(`已加入 ${out.resolved.serial_no} → ${out.note.delivery_note_no}`)
   } else {
@@ -159,89 +210,95 @@ function applySuccess(pendingId: string, out: ScanDeliveryOut): void {
 
 /**
  * 失败：按 ApiError.code 分流（设计文档 §7 错误码）
- *   21417 → unknown  (404 条码未命中)
- *   21418 / 21416 / 21405 / 21406 → rejected
- *   其他 → error（网络错 / 5xx 等）
- * 错误也写入日志——回溯时能看到所有尝试，不掩盖失败。
+ *   21417 → 条码未命中
+ *   21418 → 装配件整套未齐（含 per-child 明细）
+ *   21416 → 范围不匹配
+ *   21405 / 21406 → 单条扫码失败
+ *   21419 → 其他扫码拒绝
+ *   其他 → 网络错 / 5xx 等
+ * 错误仅 toast，不动 drafts（事务回滚不会产生草稿）。
  */
-function applyError(pendingId: string, code: string, e: unknown): void {
-  let status: 'unknown' | 'rejected' | 'error' = 'error'
+function applyError(code: string, e: unknown): void {
   let message = (e as Error)?.message ?? '扫码失败'
   if (e instanceof ApiError) {
-    switch (e.code) {
-      case 21417:
-        status = 'unknown'
-        break
-      case 21418: // 装配件整套未齐（含 per-child 明细）
-      case 21416: // 范围不匹配
-      case 21405: // parts status 不允许
-      case 21406: // 已在其他 active 单
-        status = 'rejected'
-        break
-      default:
-        status = 'error'
-    }
     message = e.message || message
   }
-  const entry: ScanLogEntry = {
-    id: pendingId,
-    status,
-    code,
-    serial_no: null,
-    name: null,
-    message,
-    note_no: null,
-    at: Date.now(),
-  }
-  const idx = log.value.findIndex((l) => l.id === pendingId)
-  if (idx >= 0) log.value.splice(idx, 1, entry)
-  else log.value.unshift(entry)
-  trimLog()
   ElMessage.error(message)
 }
 
-// ============ 辅助 ============
+// ============ 分组面板：CRUD ============
 
-/** 日志上限 100 条：超出按时间窗新→旧保留前 100 */
-function trimLog(): void {
-  if (log.value.length > 100) log.value = log.value.slice(0, 100)
+function openNewGroup(): void {
+  editingGroup.value = null
+  editorOpen.value = true
 }
 
-/** 取 status 字段单独入参：el-table 的 row 默认是 DefaultRow 联合宽松类型，不直接传整个 row */
-type ScanLogStatus = ScanLogEntry['status']
+function openEditGroup(g: DeliveryGroupOut): void {
+  editingGroup.value = g
+  editorOpen.value = true
+}
 
-function statusLabel(status: ScanLogStatus): string {
-  switch (status) {
-    case 'pending':  return '处理中'
-    case 'added':    return '已加入'
-    case 'already':  return '已存在'
-    case 'unknown':  return '条码未知'
-    case 'rejected': return '被拒绝'
-    case 'error':    return '错误'
+async function onGroupEditorSubmit(payload: {
+  name: string
+  member_customer_ids: string[]
+}): Promise<void> {
+  if (!l1CustomerId.value) return
+  const initial = editingGroup.value
+  try {
+    if (initial) {
+      await updateDeliveryGroup(initial.id, {
+        version: initial.version,
+        name: payload.name,
+        member_customer_ids: payload.member_customer_ids,
+      })
+      ElMessage.success('分组已更新')
+    } else {
+      await createDeliveryGroup({
+        customer_id: l1CustomerId.value,
+        name: payload.name,
+        member_customer_ids: payload.member_customer_ids,
+      })
+      ElMessage.success('分组已创建')
+    }
+    editorOpen.value = false
+    editingGroup.value = null
+    await reloadGroups(l1CustomerId.value)
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '保存分组失败')
   }
 }
 
-function statusTagType(status: ScanLogStatus): 'success' | 'info' | 'warning' | 'danger' {
-  switch (status) {
-    case 'added':    return 'success'
-    case 'already':  return 'info'
-    case 'pending':  return 'warning'
-    case 'unknown':
-    case 'rejected':
-    case 'error':    return 'danger'
+async function onDeleteGroup(g: DeliveryGroupOut): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除分组「${g.name}」？该分组下的 DRAFT 草稿将不再路由。`,
+      '删除分组',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await softDeleteDeliveryGroup(g.id, { version: g.version })
+    ElMessage.success('分组已删除')
+    await reloadGroups(l1CustomerId.value)
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '删除分组失败')
   }
 }
 
-function formatTime(at: number): string {
-  const d = new Date(at)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+// ============ 卡片跳转 ============
+
+function gotoDetail(draft: ScanNoteSummary): void {
+  void router.push(`/delivery-notes/${draft.id}`)
 }
 
-function openDetail(): void {
-  if (!activeDraft.value) return
-  void router.push(`/delivery-notes/${activeDraft.value.id}`)
+function gotoAllDrafts(): void {
+  if (!l1CustomerId.value) return
+  void router.push({
+    path: '/delivery-notes',
+    query: { statuses: 'DRAFT', customer_id: l1CustomerId.value },
+  })
 }
 
 function onScanInputClear(): void {
@@ -250,11 +307,20 @@ function onScanInputClear(): void {
 
 // ============ 生命周期 ============
 
-onMounted(() => {
+onMounted(async () => {
   // 扫码枪订阅：每页独立挂载；卸载时退订避免劫持到其他页
   unsubScan = onScan((code) => { void handleScan(code) })
   // 进入页后自动聚焦输入框，等 DOM 完成 nextTick 再 focus
   void nextTick().then(() => scanInputRef.value?.focus())
+  // 拉客户全集；如有 L1 初始值再立刻拉 groups + drafts（本次不做 URL 持久化）
+  await loadAllCustomers()
+})
+
+/** L1 切换 → 重拉分组 + 草稿 + 关掉打开中的 editor。 */
+watch(l1CustomerId, async (id) => {
+  editorOpen.value = false
+  editingGroup.value = null
+  await Promise.all([reloadGroups(id), reloadDrafts(id)])
 })
 
 onBeforeUnmount(() => {
@@ -265,36 +331,97 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page">
-    <!-- ========== 顶部：当前草稿 ========== -->
-    <el-card shadow="never">
+    <!-- ========== 顶部：分组规则面板 ========== -->
+    <el-card shadow="never" v-loading="groupsLoading">
       <template #header>
-        <span class="dn-scan-card-title">当前草稿</span>
+        <div class="card-header-row">
+          <span class="dn-scan-card-title">分组规则</span>
+          <el-button
+            type="primary"
+            link
+            :disabled="!l1CustomerId"
+            @click="openNewGroup"
+          >
+            + 新增分组
+          </el-button>
+        </div>
+      </template>
+
+      <div class="filter-row">
+        <span class="filter-label">一级客户</span>
+        <el-select
+          v-model="l1CustomerId"
+          placeholder="先选一级客户"
+          filterable
+          clearable
+          style="width: 280px"
+        >
+          <el-option
+            v-for="c in rootCustomers"
+            :key="c.id"
+            :label="c.name"
+            :value="c.id"
+          />
+        </el-select>
+      </div>
+
+      <template v-if="l1CustomerId">
+        <el-empty
+          v-if="groups.groups.length === 0 && groups.ungrouped_customers.length === 0"
+          description="该一级客户下还没有 L2 客户"
+          :image-size="80"
+        />
+        <template v-else>
+          <div
+            v-for="g in groups.groups"
+            :key="g.id"
+            class="group-row"
+          >
+            <div class="group-row-main">
+              <span class="group-name">{{ g.name }}</span>
+              <div class="group-members">
+                <el-tag
+                  v-for="m in g.members"
+                  :key="m.customer_id"
+                  size="small"
+                  effect="plain"
+                  type="info"
+                >
+                  {{ m.customer_name }}
+                </el-tag>
+                <span v-if="g.members.length === 0" class="muted">（无成员）</span>
+              </div>
+            </div>
+            <div class="group-row-actions">
+              <el-button link size="small" type="primary" @click="openEditGroup(g)">
+                编辑
+              </el-button>
+              <el-button link size="small" type="danger" @click="onDeleteGroup(g)">
+                删除
+              </el-button>
+            </div>
+          </div>
+
+          <div v-if="groups.ungrouped_customers.length > 0" class="ungrouped-row">
+            <span class="group-name muted">未分组 L2</span>
+            <div class="group-members">
+              <el-tag
+                v-for="u in groups.ungrouped_customers"
+                :key="u.id"
+                size="small"
+                effect="plain"
+              >
+                {{ u.name }}
+              </el-tag>
+            </div>
+          </div>
+        </template>
       </template>
       <el-empty
-        v-if="!activeDraft"
-        description="请扫码开始建单"
+        v-else
+        description="先选一级客户，加载分组规则"
         :image-size="80"
       />
-      <div v-else class="dn-scan-active">
-        <div class="row">
-          <span class="lbl">单号</span>
-          <span class="val">{{ activeDraft.delivery_note_no }}</span>
-          <el-tag size="small" type="info" effect="plain">
-            {{ activeDraft.scope_label }}
-          </el-tag>
-        </div>
-        <div class="row">
-          <span class="lbl">客户</span>
-          <span class="val">{{ activeDraft.customer_path || '—' }}</span>
-        </div>
-        <div class="row">
-          <span class="lbl">零件数</span>
-          <span class="val">{{ activeDraft.part_count }}</span>
-        </div>
-        <div class="actions">
-          <el-button link type="primary" @click="openDetail">查看单据详情</el-button>
-        </div>
-      </div>
     </el-card>
 
     <!-- ========== 中间：扫码输入 ========== -->
@@ -322,61 +449,80 @@ onBeforeUnmount(() => {
       </div>
     </el-card>
 
-    <!-- ========== 底部：扫码日志 ========== -->
-    <el-card shadow="never">
-      <template #header>
-        <div class="dn-scan-log-header">
-          <span class="dn-scan-card-title">扫码日志</span>
-          <el-button
-            v-if="log.length"
-            link
-            size="small"
-            @click="log = []"
-          >
-            清空日志
-          </el-button>
-        </div>
-      </template>
-      <el-table
-        :data="log"
-        stripe
-        size="small"
-        max-height="480"
-        empty-text="还没有扫码记录 — 扫码或手动输入序列号开始"
-      >
-        <el-table-column label="时间" width="170" align="center">
-          <template #default="{ row }">{{ formatTime(row.at) }}</template>
-        </el-table-column>
-        <el-table-column prop="code" label="条码" width="160" align="center" />
-        <el-table-column label="名称" min-width="140" align="center">
-          <template #default="{ row }">
-            <span :class="{ muted: !row.name }">{{ row.name ?? '—' }}</span>
+    <!-- ========== 底部：草稿卡片列表 ========== -->
+    <div class="drafts-section" v-loading="draftsLoading">
+      <div class="drafts-header">
+        <span class="dn-scan-card-title">当前草稿（{{ draftsCount }}）</span>
+        <el-button
+          v-if="draftsCount > 0"
+          link
+          type="primary"
+          @click="gotoAllDrafts"
+        >
+          查看全部 →
+        </el-button>
+      </div>
+
+      <el-empty
+        v-if="draftsCount === 0"
+        description="暂无草稿 — 扫码开始建单"
+        :image-size="80"
+      />
+      <div v-else class="drafts-track">
+        <el-card
+          v-for="d in drafts"
+          :key="d.id"
+          shadow="hover"
+          class="draft-card"
+        >
+          <template #header>
+            <div class="draft-card-head">
+              <span class="draft-no">{{ d.delivery_note_no }}</span>
+              <el-tag size="small" type="info" effect="plain">
+                {{ d.scope_label }}
+              </el-tag>
+            </div>
           </template>
-        </el-table-column>
-        <el-table-column label="结果" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag
-              :type="statusTagType((row as ScanLogEntry).status)"
-              effect="plain"
-              size="small"
+          <div class="draft-card-body">
+            <div class="draft-customer">{{ d.customer_path || '—' }}</div>
+            <div
+              v-for="r in d.recent_items"
+              :key="r.batch_id"
+              class="recent-row scan-row-line"
             >
-              {{ statusLabel((row as ScanLogEntry).status) }}
-            </el-tag>
+              <el-tooltip
+                placement="top"
+                :content="`${r.serial_no ?? '—'} · ${r.drawing_no} · ${r.name}${r.order_no ? ' · ' + r.order_no : ''}`"
+              >
+                <span class="recent-text">
+                  <span class="recent-serial">{{ r.serial_no ?? '—' }}</span>
+                  <span class="recent-name muted">{{ r.name }}</span>
+                  <span v-if="r.order_no" class="recent-order muted">{{ r.order_no }}</span>
+                </span>
+              </el-tooltip>
+            </div>
+            <div v-if="d.recent_items.length === 0" class="muted recent-empty">
+              暂无加入批次
+            </div>
+          </div>
+          <template #footer>
+            <el-button link type="primary" @click="gotoDetail(d)">
+              {{ d.part_count }} 行 → 查看单据详情
+            </el-button>
           </template>
-        </el-table-column>
-        <el-table-column label="落点单" width="160" align="center">
-          <template #default="{ row }">
-            <span :class="{ muted: !row.note_no }">{{ row.note_no ?? '—' }}</span>
-          </template>
-        </el-table-column>
-        <!-- 关键：21418 失败消息含 per-child 多行明细，必须保留换行（ElMessage 不渲染 \n 是已知坑） -->
-        <el-table-column label="消息" min-width="240">
-          <template #default="{ row }">
-            <div style="white-space: pre-line">{{ row.message ?? '' }}</div>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+        </el-card>
+      </div>
+    </div>
+
+    <!-- ========== 分组编辑器 dialog ========== -->
+    <DeliveryGroupEditor
+      v-if="editorOpen"
+      :l1-id="l1CustomerId"
+      :initial="editingGroup"
+      :all-l2-customers="allL2Customers"
+      @submit="onGroupEditorSubmit"
+      @cancel="editorOpen = false"
+    />
   </div>
 </template>
 
@@ -392,41 +538,65 @@ onBeforeUnmount(() => {
   color: var(--text-primary, #303133);
 }
 
-/* 顶部「当前草稿」非空态：lbl/val 对齐网格（与列表页详情卡视觉一致） */
-.dn-scan-active {
-  display: grid;
-  gap: 6px;
-}
-.dn-scan-active .row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.dn-scan-active .lbl {
-  color: var(--text-secondary, #909399);
-  min-width: 60px;
-}
-.dn-scan-active .val {
-  color: var(--text-primary, #303133);
-}
-.dn-scan-active .actions {
-  margin-top: 4px;
-}
-
-/* 预留：与脚本里 ElMessage.error 双轨提示的视觉样式 */
-.dn-scan-error {
-  color: var(--el-color-danger);
-  font-size: 13px;
-}
-
-/* 日志卡 header：标题左 + 清空按钮右 */
-.dn-scan-log-header {
+/* ============ 分组规则面板 ============ */
+.card-header-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-/* 扫码输入条：与 OutsourceSendReceive.vue 浅蓝条风格一致 #eaf2fb / #d9ecff */
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.filter-label {
+  color: var(--el-text-color-regular);
+  min-width: 64px;
+}
+
+.group-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--primary-bg, #eaf2fb);
+  border: 1px solid #d9ecff;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+.group-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.group-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.group-name {
+  font-weight: 600;
+  color: var(--text-primary, #303133);
+}
+.group-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ungrouped-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+/* ============ 扫码输入条（沿用项目浅蓝条风格） ============ */
 .scan-row {
   display: flex;
   flex-wrap: wrap;
@@ -438,7 +608,85 @@ onBeforeUnmount(() => {
   border-radius: 6px;
 }
 
-/* 日志中占位符 — em 虚化处理 */
+/* ============ 草稿卡片列表 ============ */
+.drafts-section {
+  background: #fff;
+  border-radius: 4px;
+  padding: 12px 16px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+.drafts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.drafts-track {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+.draft-card {
+  min-width: 280px;
+  flex: 0 0 280px;
+}
+.draft-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.draft-no {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text-primary, #303133);
+}
+.draft-customer {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  margin-bottom: 8px;
+}
+.draft-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.recent-row {
+  padding: 6px 10px;
+  background: var(--primary-bg, #eaf2fb);
+  border: 1px solid #d9ecff;
+  border-radius: 4px;
+}
+.scan-row-line {
+  /* 浅蓝条风格，与 .scan-row 同色系 */
+  display: block;
+}
+.recent-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.recent-serial {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-weight: 600;
+  color: var(--text-primary, #303133);
+}
+.recent-name,
+.recent-order {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.recent-empty {
+  font-size: 12px;
+  padding: 4px 0;
+}
+
 .muted {
   color: var(--el-text-color-secondary);
 }
