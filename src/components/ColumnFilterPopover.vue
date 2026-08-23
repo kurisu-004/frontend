@@ -45,9 +45,21 @@
       @show="emit('show')"
     >
       <template #reference>
-        <el-icon class="cfp-icon" :class="{ active }">
-          <Filter />
-        </el-icon>
+        <!--
+          2026-08-23 改：触发器对齐 EP 原生 .el-table__column-filter-trigger：
+          用 ArrowDown/ArrowUp 替代原先的 Filter 漏斗；激活态不再画蓝圆点，
+          整格 is-active 变 primary 色（图标 color 继承父级）。
+        -->
+        <button
+          type="button"
+          class="cfp-trigger el-table__column-filter-trigger"
+          :aria-label="visible ? '收起筛选' : '展开筛选'"
+        >
+          <el-icon>
+            <ArrowUp v-if="visible" />
+            <ArrowDown v-else />
+          </el-icon>
+        </button>
       </template>
       <div v-if="hint" class="cfp-hint">{{ hint }}</div>
       <slot />
@@ -61,7 +73,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Filter } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 
 type PopoverPlacement =
   | 'top'
@@ -125,26 +137,17 @@ const headerText = computed(() =>
   }
 }
 
-// 2026-08-22：从 PartsList.vue 的 .filter-icon 抽出，类名改为 .cfp-icon
-// 右上角 ::after 圆点用作「已激活筛选」第三重视觉信号
-.cfp-icon {
+// 2026-08-23：触发器对齐 EP 原生样式（ArrowDown/ArrowUp + .el-table__column-filter-trigger 全局 button 重置）。
+// 大部分 button reset + focus-visible 轮廓由 EP theme-chalk 的 .el-table__column-filter-trigger 全局规则提供，
+// scoped 这层只需保证图标 color 继承父级（激活态由 .cfp-header.is-active 把整格变 primary）。
+.cfp-trigger {
+  color: inherit;
   font-size: 14px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  position: relative; // 为 ::after 圆点做定位锚点
-  &.active {
-    color: var(--primary-color);
-  }
-  // 2026-07-31：激活态右上角加蓝圆点（与图标颜色、文字加粗三重信号）
-  &.active::after {
-    content: '';
-    position: absolute;
-    top: -2px;
-    right: -2px;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--primary-color);
+  line-height: 1;
+  vertical-align: middle;
+  // 防止 scoped 默认 [data-v-xxx] 选择器把 EP 全局 .el-table__column-filter-trigger 的 padding/margin reset 覆盖
+  :deep(.el-icon) {
+    color: inherit;
   }
 }
 
