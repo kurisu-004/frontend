@@ -9,6 +9,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     Barcode: typeof import('./components/Barcode.vue')['default']
     BeianFooter: typeof import('./components/BeianFooter.vue')['default']
+    ColumnFilterPopover: typeof import('./components/ColumnFilterPopover.vue')['default']
     ColumnVisibilityPopover: typeof import('./components/ColumnVisibilityPopover.vue')['default']
     EChart: typeof import('./components/EChart.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
