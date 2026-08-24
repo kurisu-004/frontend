@@ -7,6 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。从 `myERP/frontend` fork 出的独立仓库；全栈主仓在 `../myERP`（FastAPI 后端、docker-compose 编排都在那边）。
 
 > **2026-08-24 起后端服务迁移**：今后新开发的后端服务都在 `~/Code/hsh-erp-rust`（Rust + axum + sqlx），对应的 API 文档在 `~/Code/hsh-erp-rust/docs/api/`（业务 REST 统一 `/api/v2`，与历史 Python `/api/v1` 并行运行；老 `v1` 仅作为兼容兜底，新功能不再走 v1）。前端 `src/api/` 下既有 `api`（v1）也有 `apiV2`（v2）两个 axios 实例，新增接口统一用 `apiV2`；migration 进度见 `docs/api/index.md` 的「未上线域」表。
+>
+> **API 文档路径**：新开发后端服务的契约一律维护在 `~/Code/hsh-erp-rust/docs/api/`（按域切分：`auth.md` / `users.md` / `delivery-notes.md` / `delivery-groups.md` / `websocket.md` / `index.md` 通用约定）；今后任何需要查后端接口的环节直接 `Read` 对应文件，不要去翻 `src/modules/*` 源码。
 
 ## 常用命令
 

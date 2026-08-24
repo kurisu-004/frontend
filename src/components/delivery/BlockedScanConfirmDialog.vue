@@ -44,8 +44,16 @@ const emit = defineEmits<{
   (e: 'cancel'): void
 }>()
 
-const dlg = useDialogSize({ desktopWidth: 600 })
+const dlg = useDialogSize({ desktopWidth: 880 })
 const bulk = useBulkPassInspection()
+
+// 2026-08-24：标题只显示汇总，剥离 "失败明细：..." 之后的部分
+// （明细已在表格里，title 重复展示既冗余又触发水平滚动）
+const shortReason = computed(() => {
+  const r = props.reason ?? ''
+  const cut = r.split(/失败明细[:：]/)[0].trim()
+  return cut || r
+})
 
 // BlockedScanItem[] → BulkPassItem[]
 const items = computed<BulkPassItem[]>(() =>
@@ -99,7 +107,7 @@ async function onConfirm(): Promise<void> {
 <template>
   <el-dialog
     :model-value="modelValue"
-    :title="`未送检阻塞：${reason}`"
+    :title="`未送检阻塞：${shortReason}`"
     :width="dlg.width.value"
     :top="dlg.top.value"
     :fullscreen="dlg.fullscreen.value"
@@ -111,7 +119,7 @@ async function onConfirm(): Promise<void> {
     <el-alert
       type="warning"
       :closable="false"
-      title="下列零件尚未通过品检，确认后一键置送检状态并自动重加入单"
+      :title="`下列 ${failures.length} 项零件尚未通过品检，确认后一键置送检状态并自动重加入单`"
     />
     <el-table
       :data="failures"
