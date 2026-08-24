@@ -21,6 +21,7 @@ import {
   updateNote,
   type AddPartsItem,
 } from '@/api/deliveryNote'
+import { ApiError } from '@/api/http'  // 2026-08-23：submitNote 21403 BIZ_VERSION_CONFLICT 错误识别
 import {
   DELIVERY_NOTE_STATUS_LABEL,
   DELIVERY_NOTE_STATUS_TAG,
@@ -46,9 +47,14 @@ import {
 } from '@/utils/deliveryNotePermissions'
 import { useAuthSession } from '@/composables/useAuthSession'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'  // 2026-08-02
+import type {
+  BulkPassFailure,
+  BulkPassItem,
+} from '@/composables/useBulkPassInspection'  // 2026-08-23：批量品检确认弹窗入参类型
 import PartPickerDialog from '@/components/delivery/PartPickerDialog.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'  // 2026-08-02
 import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'  // 2026-08-02
+import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'  // 2026-08-23 未送检确认弹窗
 
 const route = useRoute()
 const router = useRouter()
@@ -108,12 +114,26 @@ async function onDeliveryDateChange(newDate: string | null) {
 // ============================================================
 // 状态机迁移操作
 // ============================================================
+// 2026-08-23：提交前若存在「未送检 / 阻塞」零件，强制走 BatchInspectionConfirmDialog
+// 一键过检后再走 submit 链路。submitDialogVisible 控制弹窗显隐。
+const submitDialogVisible = ref(false)
+
 async function onSubmit() {
   if (!note.value) return
+  // 2026-08-23：前置未送检检测；有任何非 INSPECTION / READY_TO_SHIP 件 → 走批量过检弹窗
+  if (uninspectedItems.value.length > 0) {
+    submitDialogVisible.value = true
+    return
+  }
   try {
     await ElMessageBox.confirm(
       `确认提交 ${note.value.delivery_note_no}？`,
-      '提交送货单', { type: 'warning' },
+      '提交送货单',
+      {
+        type: 'warning',
+        confirmButtonText: '提交',
+        cancelButtonText: '取消',
+      },
     )
   } catch { return }
   try {
@@ -121,8 +141,46 @@ async function onSubmit() {
     ElMessage.success('已提交')
     fetchDetail()
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '提交失败')
+    onSubmitError(e)
   }
+}
+
+/** BatchInspectionConfirmDialog 全部通过品检 → 继续 submitNote */
+async function onSubmitDialogPassSuccess(): Promise<void> {
+  if (!note.value) return
+  submitDialogVisible.value = false
+  // 通过品检后 note.version 可能已变；这里仍用本地缓存 version，
+  // 若与服务端不一致由后端返回 21403 BIZ_VERSION_CONFLICT → onSubmitError 接住
+  try {
+    await submitNote(note.value.id, { version: note.value.version })
+    ElMessage.success('已通过品检并提交')
+    fetchDetail()
+  } catch (e) {
+    onSubmitError(e)
+  }
+}
+
+/** BatchInspectionConfirmDialog 部分通过 → toast 提示失败明细，不关闭弹窗 */
+function onSubmitDialogPassPartial(
+  result: { passed: BulkPassItem[]; failed: BulkPassFailure[] },
+): void {
+  ElMessage.warning(
+    `部分通过：${result.passed.length} 项成功 / ${result.failed.length} 项失败，请手动处理失败项`,
+  )
+  // 保留弹窗让用户继续操作（不关闭）
+  fetchDetail()  // 刷新详情，把已通过的 status 同步过来
+}
+
+/** submitNote 统一错误处理：识别 21403 BIZ_VERSION_CONFLICT → 刷新详情；其它原样展示 */
+function onSubmitError(e: unknown): void {
+  const err = e as ApiError
+  // ApiError 已在 http.ts 信封拦截器中把 backend code 提到顶层 err.code，无需再翻 response.data
+  if (err?.code === 21403) {
+    ElMessage.warning('版本已过期，正在刷新...')
+    fetchDetail()
+    return
+  }
+  ElMessage.error(err?.message ?? '提交失败')
 }
 
 async function onRecall() {
@@ -211,6 +269,15 @@ const existingBatchIdsForPicker = computed(() => {
   if (!note.value) return []
   return note.value.line_items.map((it) => it.id)
 })
+
+// 2026-08-23：未送检 / 阻塞件列表（提交前的前置检测用）。
+// 后端允许入单的两个状态：INSPECTION（已送检 / 待贴标）与 READY_TO_SHIP（合格）；
+// 其它一律视为「未送检 / 阻塞」，提交前必须走批量过检弹窗。
+const uninspectedItems = computed<DeliveryNoteLineItem[]>(() =>
+  (note.value?.line_items ?? []).filter(
+    (li) => li.status !== 'INSPECTION' && li.status !== 'READY_TO_SHIP',
+  ),
+)
 
 // 2026-07-23 R2-C：line_items 状态列复用 PartsList 的标签映射
 function partStatusLabel(s: OrderStatus | string): string {
@@ -672,6 +739,19 @@ type DeliveryTreeNode = DeliveryNoteLineItem
       v-model="previewVisible"
       :note="note"
       :mode="previewMode"
+    />
+
+    <!-- 2026-08-23：未送检 / 阻塞确认对话框（提交前的前置弹窗）。
+         一键过检后由父组件继续调 submitNote。 -->
+    <BatchInspectionConfirmDialog
+      v-model="submitDialogVisible"
+      :uninspected-items="uninspectedItems"
+      :note-id="note?.id ?? ''"
+      :note-version="note?.version ?? 0"
+      source="submit"
+      @pass-success="onSubmitDialogPassSuccess"
+      @pass-partial="onSubmitDialogPassPartial"
+      @cancel="submitDialogVisible = false"
     />
   </div>
 </template>

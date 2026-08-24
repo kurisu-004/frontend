@@ -9,6 +9,16 @@
 //     已打印的 batch id（usePrintedLabels 模块级 composable 单例），
 //     已打印的行在表格里以浅绿底渲染。
 //
+// 2026-08-23 增量（L1 持久化 + 扫码阻塞确认 + footer 加打印送货单 / 提交草稿）：
+//   - l1CustomerId 持久化到 localStorage（useDeliveryScanState 单例）；
+//     切换 L1 由 setL1CustomerId 写入，再次进入页面 init 从 storage 恢复。
+//   - 21418 / 21405 错误分流到 BlockedScanConfirmDialog：列失败件 → 一键
+//     通过品检 → 重扫原 code；冲突类「on note DN-」按原 ElMessage.error 兜底。
+//   - footer 4 按钮等宽：删除草稿 / 打印送货单 / 打印标签 / 提交草稿；
+//     提交草稿先检查 line_items.status，未送检件触发 BatchInspectionConfirmDialog。
+//   - 21403 BIZ_VERSION_CONFLICT → 提示并刷新 detail 让 version 同步，
+//     与 DeliveryNoteDetail.vue:99 路径对齐。
+//
 // 仍保留：
 //   - useBarcodeScanner 扫码枪订阅 → handleScan → scanDelivery（后端 find-or-create）。
 //   - DeliveryGroupEditor dialog：分组 CRUD 面板。
@@ -35,7 +45,18 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
 import { usePrintedLabels } from '@/composables/usePrintedLabels'
-import { getNote, listNotes, printNoteLabels, removeParts, scanDelivery, softDeleteNote } from '@/api/deliveryNote'
+import { useDeliveryScanState } from '@/composables/useDeliveryScanState'
+import { useDeliveryNoteDetailCache } from '@/composables/useDeliveryNoteDetailCache'
+import {
+  batchGetNotes,
+  getNote,
+  listNotes,
+  printNoteLabels,
+  removeParts,
+  scanDelivery,
+  softDeleteNote,
+  submitNote,
+} from '@/api/deliveryNote'
 import { listCustomers, type Customer } from '@/api/customer'
 import {
   createDeliveryGroup,
@@ -44,14 +65,23 @@ import {
   updateDeliveryGroup,
 } from '@/api/deliveryGroup'
 import { ApiError } from '@/api/http'
+import { useAuthSession } from '@/composables/useAuthSession'
+import { canPrint } from '@/utils/deliveryNotePermissions'
 import { triggerBrowserDownload } from '@/utils/download'
 import type {
+  BlockedScanItem,
+  DeliveryNoteDetailOut,
   DeliveryNoteLineItem,
   ScanDeliveryOut,
   ScanNoteSummary,
 } from '@/types/deliveryNote'
+import { BLOCK_SCAN_CODES } from '@/types/deliveryNote'
 import type { DeliveryGroupListOut, DeliveryGroupOut } from '@/types/deliveryGroup'
+import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection'
 import DeliveryGroupEditor from '@/views/delivery/components/DeliveryGroupEditor.vue'
+import BlockedScanConfirmDialog from '@/components/delivery/BlockedScanConfirmDialog.vue'
+import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'
+import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'
 
 const router = useRouter()
 
@@ -63,8 +93,13 @@ const lastScanAt = ref(0)
 const scanning = ref(false)
 
 // ============ L1 / 客户全集 ============
-/** 当前选中的 L1 客户 id；切换时重拉 groups + drafts。 */
-const l1CustomerId = ref('')
+/**
+ * 当前选中的 L1 客户 id；持久化到 localStorage（useDeliveryScanState 单例）。
+ * 写用 setL1CustomerId；onMounted 由 init 从 storage 恢复。
+ */
+const scanState = useDeliveryScanState()
+/** 详情缓存（2026-08-24 接入）：同一 noteId 在一次会话内多次 getNote 复用同一结果。 */
+const detailCache = useDeliveryNoteDetailCache()
 /** 全量客户列表（listCustomers() 返回平铺）。 */
 const allCustomers = ref<Customer[]>([])
 /** 一级客户全集（parent_id === null）。 */
@@ -73,8 +108,8 @@ const rootCustomers = computed<Customer[]>(() =>
 )
 /** 当前 L1 下的 L2 客户全集（分组编辑器用）。 */
 const allL2Customers = computed<Customer[]>(() => {
-  if (!l1CustomerId.value) return []
-  return allCustomers.value.filter((c) => c.parent_id === l1CustomerId.value)
+  if (!scanState.l1CustomerId.value) return []
+  return allCustomers.value.filter((c) => c.parent_id === scanState.l1CustomerId.value)
 })
 
 // ============ 分组态 ============
@@ -98,6 +133,8 @@ const selectedByNote = reactive<Record<string, MergedDraftRow[]>>({})
 const printingByNote = reactive<Record<string, boolean>>({})
 /** 每张草稿卡片各自的删除中 loading 态。 */
 const deletingByNote = reactive<Record<string, boolean>>({})
+/** 每张草稿卡片各自的提交中 loading 态。 */
+const submittingByNote = reactive<Record<string, boolean>>({})
 
 /**
  * 每张草稿卡片各自的 el-table 实例 ref；打印成功后显式调 clearSelection()
@@ -113,6 +150,45 @@ function setTableRef(noteId: string, el: any): void {
 // ============ 打印状态（localStorage 单例）==============
 const printedLabelStore = usePrintedLabels()
 
+// ============ 账号权限（canPrint 用 RoleMapLike）==============
+/**
+ * CurrentUser.roles 是 string[]，deliveryNotePermissions.canPrint 接受
+ * RoleMapLike（boolean 字段）；把数组转成对象形式供按钮 disabled 用。
+ */
+const auth = useAuthSession()
+const roleMap = computed<{ MANAGER?: boolean; CLERK?: boolean; INSPECTOR?: boolean }>(() => {
+  const r = auth.user.value?.roles ?? []
+  return {
+    MANAGER: r.includes('MANAGER'),
+    CLERK: r.includes('CLERK'),
+    INSPECTOR: r.includes('INSPECTOR'),
+  }
+})
+
+// ============ 扫码阻塞弹窗（2026-08-23 增量）==============
+/** 弹窗显隐 + 阻塞失败件列表 + 缓存的原始 code（重扫用）。 */
+const blockedDialogVisible = ref(false)
+const blockedFailures = ref<BlockedScanItem[]>([])
+const blockedReason = ref('')
+const blockedOriginalCode = ref('')
+
+// ============ 打印送货单预览（2026-08-23 增量）==============
+/** preview 弹窗显隐 + 当前打开的 note（getNote 拉回）。 */
+const printNotePreviewVisible = ref(false)
+const printNoteTarget = ref<DeliveryNoteDetailOut | null>(null)
+const printNoteLoading = ref(false)
+
+// ============ 提交前未送检确认（2026-08-23 增量）==============
+/** 提交草稿前检测未送检件，触发 BatchInspectionConfirmDialog 一键通过品检后真正提交。 */
+const submitDialogVisible = ref(false)
+const submitTarget = ref<ScanNoteSummary | null>(null)
+const submitUninspected = ref<DeliveryNoteLineItem[]>([])
+
+/**
+ * 每张草稿卡片各自的 el-table 实例 ref；打印成功后显式调 clearSelection()
+ * 触发 EP 自身的 selection-change → onSelectionChange 顺势清空 selectedByNote，
+ * 避免依赖 markPrinted → folded computed 重算这条隐式链路。
+ */
 // ============ 合并行模型 ============
 /** el-table 一行 = 同 serial_no 折叠后的若干 batch；serial 为 null 时按 id 各占一行。 */
 interface MergedDraftRow {
@@ -251,6 +327,10 @@ async function reloadDrafts(l1Id: string): Promise<void> {
     })
     const next: Record<string, ScanNoteSummary> = {}
     for (const n of resp.items) {
+      // 防御性前端过滤：listNotes 已带 statuses=['DRAFT'] 查询参数，但若后端未
+      // 严格按 status 过滤，已提交件会跟着回来。本地再筛一次确保 UI 只显示草稿。
+      // 2026-08-23：用户报告退出页面再回到扫码建单后，已提交的草稿又出现。
+      if (n.status !== 'DRAFT') continue
       // DeliveryNoteOut ⊃ ScanNoteSummary 字段（除 scope/scope_label/recent_items 外）；
       // 补齐这三个字段后直接当 ScanNoteSummary 用。
       next[n.id] = {
@@ -281,15 +361,14 @@ async function reloadDrafts(l1Id: string): Promise<void> {
     }
 
     const items = resp.items
-    const detailResults = await Promise.all(
-      items.map((d) =>
-        getNote(d.id).catch((e) => {
-          // eslint-disable-next-line no-console
-          console.warn(`[scan] getNote(${d.id}) 失败`, e)
-          return null
-        }),
-      ),
-    )
+    // 2026-08-24：后端 PR3 上线 /batch-detail 后改用单次批量调用；detailCache
+    // 已缓存的 note 跳过远程请求，结果集按 items 入参顺序对齐。
+    const uncachedIds = items.filter((d) => !detailCache.peek(d.id)).map((d) => d.id)
+    if (uncachedIds.length > 0) {
+      const fetched = await batchGetNotes(uncachedIds)
+      for (const det of fetched) detailCache.put(det.id, det)
+    }
+    const detailResults = items.map((d) => detailCache.peek(d.id))
     for (let i = 0; i < items.length; i += 1) {
       const header = items[i]
       const detail = detailResults[i]
@@ -314,8 +393,11 @@ async function reloadDrafts(l1Id: string): Promise<void> {
  * 失败 toast warning 但不阻塞主流程（applySuccess 已先 toast ADDED/ALREADY_PRESENT）。
  */
 async function refreshDraftDetail(noteId: string): Promise<void> {
+  // 2026-08-24：强制 invalidate 后重拉，避免命中「旧缓存 + 新后端数据」的不一致窗口。
+  detailCache.invalidate(noteId)
   try {
-    const detail = await getNote(noteId)
+    const detail = await detailCache.get(noteId, getNote)
+    if (!detail) throw new Error('详情拉取失败')
     draftDetails[noteId] = detail.line_items
     // 同步乐观锁 version 到 drafts（getNote 返回的最新 version）
     if (drafts.value[noteId]) {
@@ -385,15 +467,96 @@ async function applySuccess(out: ScanDeliveryOut): Promise<void> {
 }
 
 /**
- * 失败：按 ApiError.code 简单 toast 错误 message（沿用原 applyError）。
- * 不动 drafts（事务回滚不会产生草稿）。
+ * 失败：按 ApiError.code 分流（2026-08-23 增量）。
+ *   - 21418 / 21405（扫码阻塞） → 弹 BlockedScanConfirmDialog 让用户一键通过品检。
+ *   - 其他错误 → 原 ElMessage.error 兜底（事务回滚不会产生草稿，不动 drafts）。
+ *
+ * 21418 / 21405 阻塞件失败原因包含两类：
+ *   - 「未送检 / 阻塞」类（status=XXX）：品检未通过，弹窗供一键置送检状态。
+ *   - 「on note DN-XXX」类：件已挂别的 active 单 —— 不应入此弹窗，按原 ElMessage 兜底。
  */
-function applyError(_code: string, e: unknown): void {
-  let message = (e as Error)?.message ?? '扫码失败'
-  if (e instanceof ApiError) {
-    message = e.message || message
+function applyError(code: string, e: unknown): void {
+  const apiErr = e as ApiError | null | undefined
+  if (
+    apiErr instanceof ApiError &&
+    (BLOCK_SCAN_CODES as readonly number[]).includes(apiErr.code)
+  ) {
+    // 21418 后端 body: { code, message, data: { failures } }；
+    // 错误拦截器保持 envelope 不解封（http.ts:232-234）；同时防御 root-level failures
+    const errBody = (apiErr.response as { data?: any } | undefined)?.data ?? null
+    let failures: BlockedScanItem[] | undefined = errBody?.data?.failures
+    if (!failures || failures.length === 0) {
+      const alt = errBody?.failures
+      if (Array.isArray(alt) && alt.length > 0) failures = alt
+    }
+    // 21405 散件无 failures → 从 message 解析
+    if (!failures || failures.length === 0) {
+      failures = parseBlockMessage(apiErr.message)
+    }
+
+    if (failures && failures.length > 0) {
+      // 过滤「on note DN-」冲突类（不是品检阻塞）
+      const uninspected = failures.filter((f) => !/^on note DN-/.test(f.reason))
+      if (uninspected.length === 0) {
+        ElMessage.error(apiErr.message ?? '扫码失败')
+        return
+      }
+      blockedFailures.value = uninspected
+      blockedReason.value = apiErr.message ?? ''
+      blockedOriginalCode.value = code
+      blockedDialogVisible.value = true
+      return
+    }
   }
-  ElMessage.error(message)
+  const fallback = (e as { message?: string } | null | undefined)?.message ?? '扫码失败'
+  ElMessage.error(fallback)
+}
+
+/**
+ * 从 21405 散件 message 解析单元素 BlockedScanItem[]。
+ *
+ * 后端典型 message：`"part 批次状态 IN_PROCESS, 不可入单"` 或
+ * `"part批次状态 X, 不可入单"`；serial_no 在 message 里没显式给（散件 message
+ * 只提状态），构造单元素用占位 serial_no='-' + name='扫码件' + reason 透传。
+ *
+ * 这是 best-effort：21405 阻塞弹窗本来价值有限（一键 passInspection 需要
+ * part_id，后端扩展后才完整可用）。后端扩展后可移除此 fallback。
+ */
+function parseBlockMessage(msg: string | undefined): BlockedScanItem[] {
+  if (!msg) return []
+  const statusMatch = msg.match(/status=(\w+)/) ?? msg.match(/批次状态\s*(\w+)/)
+  const status = statusMatch?.[1]
+  return [
+    {
+      serial_no: '-',
+      name: '扫码件',
+      status: status ?? undefined,
+      reason: msg,
+    },
+  ]
+}
+
+/**
+ * 弹窗：阻塞件一键通过品检成功 → 自动用原 code 重扫（再走一遍 scanDelivery）。
+ */
+async function onBlockedPassSuccess(): Promise<void> {
+  blockedDialogVisible.value = false
+  await handleScan(blockedOriginalCode.value)
+}
+
+/**
+ * 弹窗：部分通过品检 → 提示用户处理失败项后重新扫码；不主动重扫。
+ * 弹窗保留，由用户在弹窗内点取消关闭。
+ */
+function onBlockedPassPartial(result: { passed: BulkPassItem[]; failed: BulkPassFailure[] }): void {
+  ElMessage.warning(
+    `部分通过品检：${result.passed.length} 项成功 / ${result.failed.length} 项失败；` +
+    `请手动处理失败项后重新扫码`,
+  )
+}
+
+function onBlockedCancel(): void {
+  blockedDialogVisible.value = false
 }
 
 // ============ 分组面板：CRUD ============
@@ -412,7 +575,7 @@ async function onGroupEditorSubmit(payload: {
   name: string
   member_customer_ids: string[]
 }): Promise<void> {
-  if (!l1CustomerId.value) return
+  if (!scanState.l1CustomerId.value) return
   const initial = editingGroup.value
   try {
     if (initial) {
@@ -424,7 +587,7 @@ async function onGroupEditorSubmit(payload: {
       ElMessage.success('分组已更新')
     } else {
       await createDeliveryGroup({
-        customer_id: l1CustomerId.value,
+        customer_id: scanState.l1CustomerId.value,
         name: payload.name,
         member_customer_ids: payload.member_customer_ids,
       })
@@ -432,7 +595,7 @@ async function onGroupEditorSubmit(payload: {
     }
     editorOpen.value = false
     editingGroup.value = null
-    await reloadGroups(l1CustomerId.value)
+    await reloadGroups(scanState.l1CustomerId.value)
   } catch (e) {
     ElMessage.error((e as Error).message ?? '保存分组失败')
   }
@@ -451,7 +614,7 @@ async function onDeleteGroup(g: DeliveryGroupOut): Promise<void> {
   try {
     await softDeleteDeliveryGroup(g.id, { version: g.version })
     ElMessage.success('分组已删除')
-    await reloadGroups(l1CustomerId.value)
+    await reloadGroups(scanState.l1CustomerId.value)
   } catch (e) {
     ElMessage.error((e as Error).message ?? '删除分组失败')
   }
@@ -492,6 +655,8 @@ async function onRemove(d: ScanNoteSummary, row: MergedDraftRow): Promise<void> 
     })
     draftDetails[noteId] = updated.line_items
     drafts.value[noteId] = { ...drafts.value[noteId], version: updated.version }
+    // 2026-08-24：mutation 已返最新 detail → 直接 put 缓存，避免下次再 get 时多打一次后端
+    detailCache.put(noteId, updated)
     printedLabelStore.unmark(noteId, row.batch_ids)
     // 该表可能折叠行被剔除 → 清掉选中
     if (selectedByNote[noteId]) {
@@ -559,6 +724,8 @@ async function onDeleteDraft(d: ScanNoteSummary): Promise<void> {
   deletingByNote[noteId] = true
   try {
     await softDeleteNote(noteId, { version: d.version })
+    // 2026-08-24：note 已从后端软删 → 失效缓存，防止之后误打开（同一会话内 hash 复用场景）
+    detailCache.invalidate(noteId)
     delete drafts.value[noteId]
     delete draftDetails[noteId]
     delete selectedByNote[noteId]
@@ -576,6 +743,179 @@ async function onDeleteDraft(d: ScanNoteSummary): Promise<void> {
   }
 }
 
+// ============ 打印送货单 + 提交草稿（2026-08-23 增量 footer 按钮）==============
+
+/**
+ * 「打印送货单」按钮可用条件：复用 deliveryNotePermissions.canPrint
+ * （角色 + 至少 1 个零件）。
+ *
+ * ScanNoteSummary.part_count 是后端返的零件数（设计文档 §5.7.note）；
+ * 兜底用 recent_items.length（D2 兼容早先实现）。
+ */
+function canPrintNote(d: ScanNoteSummary): boolean {
+  const partCount = (d as { part_count?: number }).part_count ?? d.recent_items.length
+  return canPrint(roleMap.value, partCount)
+}
+
+/** 「提交草稿」按钮：状态 = DRAFT 才允许；其他状态（如 SUBMITTED）禁用。 */
+function canSubmitDraft(d: ScanNoteSummary): boolean {
+  return d.status === 'DRAFT'
+}
+
+/**
+ * 打开打印送货单预览：
+ *   - 先 getNote 拉 detail（full line_items），期间 printNoteTarget=null
+ *     且弹窗保持关闭（v-if 控制）
+ *   - 拿到 detail 后才打开弹窗；失败 toast 并保持关闭
+ *
+ * 注：PrintPreviewDialog 的 watch 只触发 inits / 加载在 modelValue/mergeMode
+ * 变化时；为避免「note=null 时打开空表格」，先关着、等数据好再开。
+ */
+async function openPrintNote(d: ScanNoteSummary): Promise<void> {
+  printNoteTarget.value = null
+  printNotePreviewVisible.value = false
+  printNoteLoading.value = true
+  try {
+    const detail = await detailCache.get(d.id, getNote)
+    if (!detail) throw new Error('详情拉取失败')
+    printNoteTarget.value = detail
+    printNotePreviewVisible.value = true
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '加载详情失败')
+  } finally {
+    printNoteLoading.value = false
+  }
+}
+
+/**
+ * 提交草稿：先 getNote 拉完整 detail 检查未送检件。
+ *   - 全 INSPECTION / READY_TO_SHIP → ElMessageBox.confirm 直接提交。
+ *   - 有未送检件 → 弹 BatchInspectionConfirmDialog，让用户一键通过品检后真正提交。
+ */
+async function onSubmitDraft(d: ScanNoteSummary): Promise<void> {
+  let detail: DeliveryNoteDetailOut
+  // 2026-08-24：进入提交流前 invalidate，避免拿到的 detail 是「之前会话」的 stale 副本。
+  detailCache.invalidate(d.id)
+  try {
+    const fetched = await detailCache.get(d.id, getNote)
+    if (!fetched) throw new Error('详情拉取失败')
+    detail = fetched
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '加载详情失败')
+    return
+  }
+  const uninspected = (detail.line_items ?? []).filter(
+    (li) => li.status !== 'INSPECTION' && li.status !== 'READY_TO_SHIP',
+  )
+  // 同步最新 version（避免 reloadDrafts 与此处 getNote 之间再次改动）
+  if (drafts.value[d.id]) {
+    drafts.value[d.id] = { ...drafts.value[d.id], version: detail.version }
+  }
+  if (uninspected.length > 0) {
+    submitTarget.value = { ...d, version: detail.version }
+    submitUninspected.value = uninspected
+    submitDialogVisible.value = true
+    return
+  }
+  await confirmAndSubmit({ ...d, version: detail.version })
+}
+
+async function confirmAndSubmit(d: ScanNoteSummary): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确认提交草稿 ${d.delivery_note_no}？`,
+      '提交草稿',
+      { type: 'warning', confirmButtonText: '提交', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  await doSubmit(d)
+}
+
+async function doSubmit(d: ScanNoteSummary): Promise<void> {
+  const noteId = d.id
+  submittingByNote[noteId] = true
+  try {
+    await submitNote(noteId, { version: d.version })
+    // 2026-08-24：note 已提交，缓存不应再保留 DRAFT 视图的 detail。
+    detailCache.invalidate(noteId)
+    // 本地清掉所有相关 ref + computed + table ref
+    delete drafts.value[noteId]
+    delete draftDetails[noteId]
+    delete selectedByNote[noteId]
+    delete printingByNote[noteId]
+    delete deletingByNote[noteId]
+    delete submittingByNote[noteId]
+    foldedComputeds.delete(noteId)
+    tableRefs.delete(noteId)
+    printedLabelStore.unmark(noteId, Object.keys(printedLabelStore.store.value[noteId] ?? {}))
+    ElMessage.success('已提交')
+  } catch (e) {
+    onSubmitDraftError(e)
+  } finally {
+    submittingByNote[noteId] = false
+  }
+}
+
+/**
+ * 提交失败处理：
+ *   - 21403 BIZ_VERSION_CONFLICT → 提示并刷新 detail 让 version 同步（与
+ *     DeliveryNoteDetail.vue:99 路径对齐）。
+ *   - 其他 → toast error。
+ */
+function onSubmitDraftError(e: unknown): void {
+  const err = e as { code?: number; message?: string; response?: { data?: { code?: number } } }
+  if (err?.code === 21403 || err?.response?.data?.code === 21403) {
+    ElMessage.warning('版本已过期，正在刷新...')
+    const target = submitTarget.value
+    if (target) {
+      void refreshDraftDetail(target.id).catch(() => { /* 已 toast */ })
+    }
+    return
+  }
+  ElMessage.error(err?.message ?? '提交失败')
+}
+
+/**
+ * BatchInspectionConfirmDialog 全部通过品检 → 关闭弹窗 → 真正提交。
+ * 注：dialog 内部已刷新过 line_items 状态（变成 INSPECTION）；我们这里需要
+ * 拉最新的 detail.version，因为 onSubmitDraft 拿到的 version 可能已变。
+ */
+async function onSubmitDialogPassSuccess(): Promise<void> {
+  submitDialogVisible.value = false
+  const d = submitTarget.value
+  if (!d) return
+  // 2026-08-24：passInspection 改变了 line_items 状态 → invalidate 后重拉最新 version。
+  detailCache.invalidate(d.id)
+  try {
+    const detail = await detailCache.get(d.id, getNote)
+    if (!detail) throw new Error('详情拉取失败')
+    await doSubmit({ ...d, version: detail.version })
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '加载详情失败')
+  }
+}
+
+/**
+ * BatchInspectionConfirmDialog 部分通过品检 → 提示用户已通过的已置送检状态，
+ * 失败项需手动处理后再次提交；保留弹窗让用户决定（重试 / 取消）。
+ * 这里只 toast + 刷新 draftDetails 让 UI 反映新状态。
+ */
+function onSubmitDialogPassPartial(result: { passed: BulkPassItem[]; failed: BulkPassFailure[] }): void {
+  ElMessage.warning(
+    `部分通过品检：${result.passed.length} 项成功 / ${result.failed.length} 项失败；` +
+    `已通过的已置送检状态，请处理失败项后再次提交`,
+  )
+  if (submitTarget.value) {
+    void refreshDraftDetail(submitTarget.value.id).catch(() => { /* 已 toast */ })
+  }
+}
+
+function onSubmitDialogCancel(): void {
+  submitDialogVisible.value = false
+}
+
 // ============ 卡片跳转 ============
 
 function gotoDetail(draft: ScanNoteSummary): void {
@@ -583,28 +923,42 @@ function gotoDetail(draft: ScanNoteSummary): void {
 }
 
 function gotoAllDrafts(): void {
-  if (!l1CustomerId.value) return
+  if (!scanState.l1CustomerId.value) return
   void router.push({
     path: '/delivery-notes',
-    query: { statuses: 'DRAFT', customer_id: l1CustomerId.value },
+    query: { statuses: 'DRAFT', customer_id: scanState.l1CustomerId.value },
   })
 }
 
 // ============ 生命周期 ============
 
 onMounted(async () => {
+  // L1 持久化恢复：单例扫描整个页面载入后从 localStorage 读回；只触发一次
+  scanState.init()
   // 扫码枪订阅：每页独立挂载；卸载时退订避免劫持到其他页
   unsubScan = onScan((code) => { void handleScan(code) })
-  // 拉客户全集；如有 L1 初始值再立刻拉 groups + drafts（本次不做 URL 持久化）
+  // 拉客户全集
   await loadAllCustomers()
 })
 
-/** L1 切换 → 重拉分组 + 草稿 + 关掉打开中的 editor。 */
-watch(l1CustomerId, async (id) => {
-  editorOpen.value = false
-  editingGroup.value = null
-  await Promise.all([reloadGroups(id), reloadDrafts(id)])
-})
+/**
+ * L1 变化（init 从 localStorage 恢复 / 用户切换 el-select）→ 重拉分组 + 草稿 + 关掉打开中的 editor。
+ *
+ * 用 immediate: true 处理「重入页面时 watch 不会 fire 已有值」的问题：
+ * useDeliveryScanState 是模块级单例，_l1CustomerId 在页面间共享。
+ * 重新进入页面时值已持久为「法拉电子」等，普通 watch 不会触发，
+ * 但 immediate 会在 setup 阶段 fire 一次，确保 reloadGroups + reloadDrafts 执行。
+ */
+watch(
+  scanState.l1CustomerId,
+  async (id) => {
+    if (!id) return
+    editorOpen.value = false
+    editingGroup.value = null
+    await Promise.all([reloadGroups(id), reloadDrafts(id)])
+  },
+  { immediate: true },
+)
 
 onBeforeUnmount(() => {
   unsubScan?.()
@@ -622,7 +976,7 @@ onBeforeUnmount(() => {
           <el-button
             type="primary"
             link
-            :disabled="!l1CustomerId"
+            :disabled="!scanState.l1CustomerId.value"
             @click="openNewGroup"
           >
             + 新增分组
@@ -633,11 +987,12 @@ onBeforeUnmount(() => {
       <div class="filter-row">
         <span class="filter-label">一级客户</span>
         <el-select
-          v-model="l1CustomerId"
+          :model-value="scanState.l1CustomerId.value"
           placeholder="先选一级客户"
           filterable
           clearable
           style="width: 280px"
+          @update:model-value="(v: string) => scanState.setL1CustomerId(v)"
         >
           <el-option
             v-for="c in rootCustomers"
@@ -648,7 +1003,7 @@ onBeforeUnmount(() => {
         </el-select>
       </div>
 
-      <template v-if="l1CustomerId">
+      <template v-if="scanState.l1CustomerId.value">
         <el-empty
           v-if="groups.groups.length === 0 && groups.ungrouped_customers.length === 0"
           description="该一级客户下还没有 L2 客户"
@@ -796,6 +1151,10 @@ onBeforeUnmount(() => {
             </el-table>
           </div>
           <template #footer>
+            <!--
+              2026-08-23：4 按钮等宽（footer-btn flex:1）。
+              删除草稿 / 打印送货单 / 打印标签 / 提交草稿。
+            -->
             <div class="draft-card-footer">
               <el-button
                 type="danger"
@@ -811,6 +1170,16 @@ onBeforeUnmount(() => {
                 type="success"
                 plain
                 class="footer-btn"
+                :disabled="!canPrintNote(d)"
+                @click="openPrintNote(d)"
+              >
+                <el-icon><Printer /></el-icon>
+                打印送货单
+              </el-button>
+              <el-button
+                type="success"
+                plain
+                class="footer-btn"
                 :disabled="!hasSelection(d.id)"
                 :loading="printingByNote[d.id]"
                 @click="onPrintLabels(d)"
@@ -818,16 +1187,61 @@ onBeforeUnmount(() => {
                 <el-icon><Printer /></el-icon>
                 打印标签{{ hasSelection(d.id) ? `（${getSelectionSize(d.id)}）` : '' }}
               </el-button>
+              <el-button
+                type="primary"
+                class="footer-btn"
+                :disabled="!canSubmitDraft(d)"
+                :loading="submittingByNote[d.id]"
+                @click="onSubmitDraft(d)"
+              >
+                提交草稿
+              </el-button>
             </div>
           </template>
         </el-card>
       </div>
     </div>
 
+    <!-- ========== 扫码阻塞确认对话框（2026-08-23） ========== -->
+    <BlockedScanConfirmDialog
+      v-model="blockedDialogVisible"
+      :failures="blockedFailures"
+      :reason="blockedReason"
+      :original-code="blockedOriginalCode"
+      @pass-success="onBlockedPassSuccess"
+      @pass-partial="onBlockedPassPartial"
+      @cancel="onBlockedCancel"
+    />
+
+    <!-- ========== 打印送货单预览（2026-08-23） ========== -->
+    <!--
+      v-if 保持：note=null 时（getNote 加载中）不渲染 dialog。openPrintNote
+      等 detail 拉回后再开 dialog，避免 PrintPreviewDialog 在 note=null 时
+      初始化空表格。
+    -->
+    <PrintPreviewDialog
+      v-if="printNotePreviewVisible && printNoteTarget"
+      v-model="printNotePreviewVisible"
+      :note="printNoteTarget"
+      mode="note"
+    />
+
+    <!-- ========== 提交前未送检确认（2026-08-23） ========== -->
+    <BatchInspectionConfirmDialog
+      v-model="submitDialogVisible"
+      :uninspected-items="submitUninspected"
+      :note-id="submitTarget?.id ?? ''"
+      :note-version="submitTarget?.version ?? 0"
+      source="submit"
+      @pass-success="onSubmitDialogPassSuccess"
+      @pass-partial="onSubmitDialogPassPartial"
+      @cancel="onSubmitDialogCancel"
+    />
+
     <!-- ========== 分组编辑器 dialog ========== -->
     <DeliveryGroupEditor
       v-if="editorOpen"
-      :l1-id="l1CustomerId"
+      :l1-id="scanState.l1CustomerId.value"
       :initial="editingGroup"
       :all-l2-customers="allL2Customers"
       @submit="onGroupEditorSubmit"

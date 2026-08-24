@@ -269,3 +269,45 @@ export interface ScanDeliveryOut {
 export interface ScanDeliveryReq {
   code: string
 }
+
+// ============ 扫码阻塞响应类型（2026-08-23 新增）==============
+/**
+ * 后端 21418 / 21405 错误响应的 data.failures[] 元素结构。
+ *
+ * 当前后端只填 serial_no / name / reason；part_id / batch_id / drawing_no / status
+ * 计划在 ~/Code/hsh-erp-rust/src/modules/delivery_note/dto.rs:523-529 的
+ * ScanFailureDto 扩展后才有。前端先以可选字段写，扩展前「一键通过品检」按钮
+ * 检测到 part_id 缺失时 disabled + tooltip 提示「需要后端扩展」。
+ */
+export interface BlockedScanItem {
+  /** 后端扩展后必有；扩展前 undefined。雪花 ID 用 string（与全仓约定一致，见 BulkPassItem.part_id）。 */
+  part_id?: string
+  /** 后端扩展后必有；扩展前 undefined。 */
+  batch_id?: string | null
+  /** serial_no 通常必有；21418 后端有，21405 message 解析也有。 */
+  serial_no: string
+  /** 后端扩展后才有；扩展前 undefined。 */
+  drawing_no?: string
+  /** 名称（必填，弹窗列表展示）。 */
+  name: string
+  /** 后端扩展后才有；扩展前从 reason 字符串解析（如 status=IN_PROCESS → 'IN_PROCESS'）。 */
+  status?: string
+  /**
+   * 兜底字段，可能取值：
+   * - `status=XXX` → 未送检 / 阻塞类
+   * - `on note DN-XXXX` → 已挂别的 active 单
+   */
+  reason: string
+}
+
+/**
+ * 触发「扫码阻塞确认弹窗」的错误 code 列表。
+ * - 21418 BIZ_DELIVERY_ASSEMBLY_PARTS_NOT_READY：装配件整套拒绝，带 data.failures[]
+ * - 21405 BIZ_DELIVERY_NOTE_PART_NOT_READY：散件拒绝，无 data，message 解析构造单元素
+ *
+ * 注意：21419 已被 BIZ_DELIVERY_NOTE_DRAFT_SCOPE_CONFLICT 占用，不在本列表。
+ */
+export const BLOCK_SCAN_CODES: readonly number[] = [21418, 21405] as const
+
+/** 触发「扫码阻塞确认弹窗」的 ApiError.code 取值类型。 */
+export type BlockScanCode = (typeof BLOCK_SCAN_CODES)[number]

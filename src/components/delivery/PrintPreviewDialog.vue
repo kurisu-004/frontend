@@ -155,6 +155,11 @@ watch(
       destroySortable()
     }
   },
+  // 2026-08-24 bugfix：扫码建单页用 v-if 挂载本组件，首次进入时 modelValue
+  // 已经是 true（无 false→true 的「变化」），watch 默认不立即触发会导致
+  // rows 永远是空数组。详情页始终挂载的调用方不受影响（mount 时 open=false
+  // 走 destroySortable() 分支为 no-op）。
+  { immediate: true },
 )
 
 watch(previewRows, async (next) => {

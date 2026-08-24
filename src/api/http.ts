@@ -31,6 +31,44 @@ import axios, {
 import { decodeJwt } from '@/utils/jwt'
 import { refreshTokens, type LoginResponse } from '@/api/auth'
 
+/**
+ * 这些 key 在数组形式下需要序列化为 CSV 单值字符串（?k=a,b,c）而非
+ * 重复 key 形式（?k=a&k=b&k=c）。v2 后端 Rust 期望 CSV 形式。
+ * 2026-08-24 新增，与 src/api/deliveryNote.ts 切 v2 同步。
+ */
+const ARRAY_AS_CSV_KEYS = new Set(['statuses'])
+
+/**
+ * 把 axios params 对象序列化为 query string。
+ * 白名单 key（statuses）数组 → CSV 单值；其它数组 → 重复 key 形式。
+ * 暴露给单测直接调用。
+ */
+// params 用 any：axios 自身 paramsSerializer 签名就是 (params: any) => string，
+// 这里抽出来做单测没必要收窄类型，避免 Array.isArray 后续分支里 val 没法窄化
+// 成 string 让 encodeURIComponent 报 TS2345。
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function serializeParams(params: any): string {
+  const parts: string[] = []
+  for (const key of Object.keys(params)) {
+    const val = params[key]
+    if (val === undefined || val === null) continue
+    if (Array.isArray(val) && ARRAY_AS_CSV_KEYS.has(key)) {
+      // 白名单 key（v2 后端期望 CSV 单值形式）
+      const csv = val.filter((v: unknown) => v !== '' && v != null).join(',')
+      if (csv.length > 0) {
+        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(csv)}`)
+      }
+    } else if (Array.isArray(val)) {
+      for (const v of val) {
+        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`)
+      }
+    } else {
+      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`)
+    }
+  }
+  return parts.join('&')
+}
+
 const STORAGE_KEY = 'auth_session'
 
 export const api = axios.create({
@@ -38,21 +76,7 @@ export const api = axios.create({
   // 不显式设 Content-Type：axios 会按 body 类型自动选 application/json / multipart/form-data。
   timeout: 30_000,
   // FastAPI 期望数组参数格式: ?statuses=A&statuses=B（无 [] 后缀）
-  paramsSerializer: (params) => {
-    const parts: string[] = []
-    for (const key of Object.keys(params)) {
-      const val = params[key]
-      if (val === undefined || val === null) continue
-      if (Array.isArray(val)) {
-        for (const v of val) {
-          parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`)
-        }
-      } else {
-        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`)
-      }
-    }
-    return parts.join('&')
-  },
+  paramsSerializer: serializeParams,
 })
 
 /**
@@ -65,21 +89,7 @@ export const api = axios.create({
 export const refreshClient = axios.create({
   baseURL: '/api/v1',
   timeout: 30_000,
-  paramsSerializer: (params) => {
-    const parts: string[] = []
-    for (const key of Object.keys(params)) {
-      const val = params[key]
-      if (val === undefined || val === null) continue
-      if (Array.isArray(val)) {
-        for (const v of val) {
-          parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`)
-        }
-      } else {
-        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`)
-      }
-    }
-    return parts.join('&')
-  },
+  paramsSerializer: serializeParams,
 })
 
 interface ApiEnvelope<T> {
@@ -332,21 +342,7 @@ export const apiV2 = axios.create({
   baseURL: '/api/v2',
   timeout: 30_000,
   // paramsSerializer 与 api 一致——重复定义避免引用 api.defaults 后被改时牵连
-  paramsSerializer: (params) => {
-    const parts: string[] = []
-    for (const key of Object.keys(params)) {
-      const val = params[key]
-      if (val === undefined || val === null) continue
-      if (Array.isArray(val)) {
-        for (const v of val) {
-          parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`)
-        }
-      } else {
-        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`)
-      }
-    }
-    return parts.join('&')
-  },
+  paramsSerializer: serializeParams,
 })
 apiV2.interceptors.request.use(authRequestInterceptor)
 apiV2.interceptors.response.use(

@@ -1,7 +1,8 @@
-// 送货单管理 API 封装（PR-G 2026-07-22 重写；2026-07-23 增强：候选零件/可编辑日期/打印）。
+// 送货单管理 API 封装（PR-G 2026-07-22 重写；2026-07-23 增强：候选零件/可编辑日期/打印；
+// 2026-08-24 切 v2：后端业务 REST 已迁 Rust，本文件全部走 apiV2）。
 // 全部雪花 ID 入参为 string（CLAUDE.md §3 JS Number 丢精度）。
 //
-// 端点清单（与 api/v1/delivery_note.py 对应）：
+// 端点清单（与 src/modules/delivery_note/handler.rs 对应，全部 baseURL /api/v2）：
 //   GET    /delivery-notes                       - listNotes
 //   GET    /delivery-notes/pickup-pending        - listPickupPending
 //   GET    /delivery-notes/candidate-parts       - listCandidateParts
@@ -16,10 +17,12 @@
 //   POST   /delivery-notes/{id}/pickup-scan      - pickupScan
 //   POST   /delivery-notes/{id}/pickup           - pickup
 //   POST   /delivery-notes/{id}/soft-delete      - softDelete
-//   GET    /delivery-notes/{id}/print            - printNote (Authorization header, StreamingResponse)
-//   POST   /v2/delivery-notes/scan               - scanDelivery (Rust v2 P3；baseURL /api/v2)
+//   POST   /delivery-notes/{id}/print            - printNote
+//   POST   /delivery-notes/{id}/print-labels     - printNoteLabels
+//   POST   /delivery-notes/scan                  - scanDelivery (Rust v2 P3)
+//   GET    /delivery-notes/batch-detail          - batchGetNotes (Rust v2 PR3; ids=1,2,3 逗号分隔)
 
-import { api, apiV2 } from '@/api/http'
+import { apiV2 } from '@/api/http'
 import type {
   DeliveryNoteCandidatePart,
   DeliveryNoteDetailOut,
@@ -32,6 +35,9 @@ import type {
   ScanDeliveryOut,
 } from '@/types/deliveryNote'
 
+// v2 后端 DeliveryNoteListQuery.statuses 是逗号分隔字符串；
+// src/api/http.ts 的 paramsSerializer 对 'statuses' 自动 join(',')，
+// 调用方保持传数组，无需手动拼字符串。
 export interface ListNotesParams {
   statuses?: DeliveryNoteStatus[]
   customer_id?: string
@@ -108,7 +114,7 @@ export async function listNotes(
   if (params.sort_dir) query.sort_dir = params.sort_dir
   if (params.limit !== undefined) query.limit = params.limit
   if (params.offset !== undefined) query.offset = params.offset
-  const resp = await api.get<DeliveryNoteListResponse>('/delivery-notes', {
+  const resp = await apiV2.get<DeliveryNoteListResponse>('/delivery-notes', {
     params: query,
   })
   return resp.data
@@ -118,7 +124,7 @@ export async function listNotes(
 export async function listPickupPending(
   customer_id?: string,
 ): Promise<DeliveryNoteOut[]> {
-  const resp = await api.get<{ items: DeliveryNoteOut[] }>(
+  const resp = await apiV2.get<{ items: DeliveryNoteOut[] }>(
     '/delivery-notes/pickup-pending',
     { params: customer_id ? { customer_id } : {} },
   )
@@ -129,21 +135,44 @@ export async function listPickupPending(
 export async function createNote(
   payload: CreateNotePayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await api.post<DeliveryNoteOut>('/delivery-notes', payload)
+  const resp = await apiV2.post<DeliveryNoteOut>('/delivery-notes', payload)
   return resp.data
 }
 
 // 4) detail
 export async function getNote(noteId: string): Promise<DeliveryNoteDetailOut> {
-  const resp = await api.get<DeliveryNoteDetailOut>(`/delivery-notes/${noteId}`)
+  const resp = await apiV2.get<DeliveryNoteDetailOut>(`/delivery-notes/${noteId}`)
   return resp.data
+}
+
+/** `GET /delivery-notes/batch-detail?ids=...` 响应载体（2026-08-24 后端 PR3 新增）。
+ *
+ * 后端 schema `BatchDeliveryDetailData { items: Vec<DeliveryNoteDetailOut> }`，
+ * 信封解封后前端拿到该结构。items 按入参 ids 顺序装配，缺失 id 静默跳过。
+ * 限制 1..=200 项，超出或非 i64 后端返回 400 / BIZ_INVALID_VALUE（20104）。
+ */
+export interface BatchDeliveryDetailData {
+  items: DeliveryNoteDetailOut[]
+}
+
+/**
+ * 按 ID 列表批量拉取送货单详情（含 line_items）。
+ * 推荐用于 N 张草稿详情加载——一次往返替代 N 个 getNote。
+ * 注意：后端按 ids 入参顺序返回；调用方需要按 id 自索引对齐到本地草稿。
+ */
+export async function batchGetNotes(ids: readonly string[]): Promise<DeliveryNoteDetailOut[]> {
+  if (ids.length === 0) return []
+  const resp = await apiV2.get<BatchDeliveryDetailData>('/delivery-notes/batch-detail', {
+    params: { ids: ids.join(',') },
+  })
+  return resp.data.items
 }
 
 // 5) events
 export async function listNoteEvents(
   noteId: string,
 ): Promise<DeliveryNoteEventOut[]> {
-  const resp = await api.get<DeliveryNoteEventOut[]>(
+  const resp = await apiV2.get<DeliveryNoteEventOut[]>(
     `/delivery-notes/${noteId}/events`,
   )
   return resp.data
@@ -154,7 +183,7 @@ export async function addParts(
   noteId: string,
   payload: AddPartsPayload,
 ): Promise<DeliveryNoteDetailOut> {
-  const resp = await api.post<DeliveryNoteDetailOut>(
+  const resp = await apiV2.post<DeliveryNoteDetailOut>(
     `/delivery-notes/${noteId}/add-parts`,
     payload,
   )
@@ -166,7 +195,7 @@ export async function removeParts(
   noteId: string,
   payload: RemovePartsPayload,
 ): Promise<DeliveryNoteDetailOut> {
-  const resp = await api.post<DeliveryNoteDetailOut>(
+  const resp = await apiV2.post<DeliveryNoteDetailOut>(
     `/delivery-notes/${noteId}/remove-parts`,
     payload,
   )
@@ -178,7 +207,7 @@ export async function submitNote(
   noteId: string,
   payload: VersionPayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await api.post<DeliveryNoteOut>(
+  const resp = await apiV2.post<DeliveryNoteOut>(
     `/delivery-notes/${noteId}/submit`,
     payload,
   )
@@ -190,7 +219,7 @@ export async function recallNote(
   noteId: string,
   payload: VersionPayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await api.post<DeliveryNoteOut>(
+  const resp = await apiV2.post<DeliveryNoteOut>(
     `/delivery-notes/${noteId}/recall`,
     payload,
   )
@@ -202,7 +231,7 @@ export async function pickupScan(
   noteId: string,
   payload: PickupScanPayload,
 ): Promise<DeliveryNotePickupScanOut> {
-  const resp = await api.post<DeliveryNotePickupScanOut>(
+  const resp = await apiV2.post<DeliveryNotePickupScanOut>(
     `/delivery-notes/${noteId}/pickup-scan`,
     payload,
   )
@@ -214,7 +243,7 @@ export async function pickup(
   noteId: string,
   payload: PickupPayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await api.post<DeliveryNoteOut>(
+  const resp = await apiV2.post<DeliveryNoteOut>(
     `/delivery-notes/${noteId}/pickup`,
     payload,
   )
@@ -226,7 +255,7 @@ export async function softDeleteNote(
   noteId: string,
   payload: VersionPayload,
 ): Promise<void> {
-  await api.post(`/delivery-notes/${noteId}/soft-delete`, payload)
+  await apiV2.post(`/delivery-notes/${noteId}/soft-delete`, payload)
 }
 
 // 2026-07-23 增强 ----------------------------------------------------------
@@ -235,7 +264,7 @@ export async function softDeleteNote(
 export async function listCandidateParts(
   customerId: string,
 ): Promise<DeliveryNoteCandidatePart[]> {
-  const resp = await api.get<{ items: DeliveryNoteCandidatePart[] }>(
+  const resp = await apiV2.get<{ items: DeliveryNoteCandidatePart[] }>(
     '/delivery-notes/candidate-parts',
     { params: { customer_id: customerId } },
   )
@@ -247,7 +276,7 @@ export async function updateNote(
   noteId: string,
   payload: UpdateNotePayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await api.post<DeliveryNoteOut>(
+  const resp = await apiV2.post<DeliveryNoteOut>(
     `/delivery-notes/${noteId}/update`,
     payload,
   )
@@ -257,7 +286,7 @@ export async function updateNote(
 /**
  * 程序化下载送货单 XLSX（Axios blob + onDownloadProgress）。
  *
- * - 走标准 `api` 拦截器：Authorization 头自动挂、40102 自动 refresh + 重试。
+ * - 走标准 `apiV2` 拦截器：Authorization 头自动挂、40102 自动 refresh + 重试。
  * - `onDownloadProgress` 通过 `Content-Length` 给出 total，前端据此算出百分比。
  * - 拿到完整 Blob 后再用 `URL.createObjectURL` + `<a download>` 触发浏览器保存。
  */
@@ -294,7 +323,7 @@ export async function printNote(
   onProgress?: (p: PrintNoteProgress) => void,
 ): Promise<PrintNoteResult> {
   // 2026-08-02 改 POST + body（携带 custom_order；GET 无法带 array body）
-  const resp = await api.post<Blob>(
+  const resp = await apiV2.post<Blob>(
     `/delivery-notes/${encodeURIComponent(noteId)}/print`,
     payload,
     {
@@ -318,7 +347,7 @@ export async function printNoteLabels(
   payload: PrintLabelsPayload = {},
   onProgress?: (p: PrintNoteProgress) => void,
 ): Promise<PrintNoteResult> {
-  const resp = await api.post<Blob>(
+  const resp = await apiV2.post<Blob>(
     `/delivery-notes/${encodeURIComponent(noteId)}/print-labels`,
     payload,
     {

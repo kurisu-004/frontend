@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。从 `myERP/frontend` fork 出的独立仓库；全栈主仓在 `../myERP`（FastAPI 后端、docker-compose 编排都在那边）。
 
+> **2026-08-24 起后端服务迁移**：今后新开发的后端服务都在 `~/Code/hsh-erp-rust`（Rust + axum + sqlx），对应的 API 文档在 `~/Code/hsh-erp-rust/docs/api/`（业务 REST 统一 `/api/v2`，与历史 Python `/api/v1` 并行运行；老 `v1` 仅作为兼容兜底，新功能不再走 v1）。前端 `src/api/` 下既有 `api`（v1）也有 `apiV2`（v2）两个 axios 实例，新增接口统一用 `apiV2`；migration 进度见 `docs/api/index.md` 的「未上线域」表。
+
 ## 常用命令
 
 ```bash
@@ -24,10 +26,10 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 
 ### 后端契约（api/ 层的一切由此派生）
 
-- 统一 axios 实例在 `src/api/http.ts`：baseURL `/api/v1`，响应是 `{code, message, data}` 信封——`code === 0` 时拦截器把 `response.data` 替换成裸 `data`；非 0 抛 `ApiError(code, message)`，调用方用 `(e as ApiError).code` 判断业务错误。
+- 统一 axios 实例在 `src/api/http.ts`：baseURL `/api/v1`（v1 兼容用），另有 `apiV2`（baseURL `/api/v2`）承载 Rust 主仓（`~/Code/hsh-erp-rust`）的所有业务 REST——新接口必须在 `apiV2` 上加。响应是 `{code, message, data}` 信封——`code === 0` 时拦截器把 `response.data` 替换成裸 `data`；非 0 抛 `ApiError(code, message)`，调用方用 `(e as ApiError).code` 判断业务错误。
 - 认证错误码：`40101`（未登录）/ `40102`（access 过期）/ `40103`（refresh 失效）。`40102` 会触发自动 refresh 并重试原请求（模块级 `refreshPromise` 防雪崩）；refresh 走无拦截器的 `refreshClient` 裸实例防递归。每次成功响应还会 proactive 检查 exp（剩余 <5min 后台刷新）。
 - session 失效的统一出口：`window.dispatchEvent('auth:logout')` → `main.ts` 监听后 `router.replace('/login')`。拦截器不直接依赖 vue-router。
-- 数组 query 参数序列化为 `?statuses=A&statuses=B`（无 `[]` 后缀），后端 FastAPI 期望这个格式。
+- 数组 query 参数默认序列化为 `?key=a&key=b` 重复形式（无 `[]` 后缀），与历史 FastAPI `/api/v1` 兼容；白名单 key（含 `statuses`）会自动序列化为 CSV 单值 `?statuses=A,B`，与 v2 后端期望对齐（见 `src/api/http.ts` 的 `ARRAY_AS_CSV_KEYS`）。
 - **雪花 ID 精度**：后端 ID 是雪花 ID，超过 2^53，前端必须当 string 处理（`Number()` 会丢精度）。见 `useAuthSession.activeShelfId()` 注释。
 
 ### 状态管理：模块级 composable 单例（不是 Pinia）

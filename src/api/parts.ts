@@ -1116,3 +1116,46 @@ export async function listInspectionBatches(params: {
   })
   return resp.data
 }
+
+// ============ 批量品检通过（2026-08-23 新增；2026-08-23 决策零后端批量端点）==============
+/**
+ * 并发批量调 passInspection；后端无批量端点，前端 worker pool 聚合结果。
+ *
+ * 与 composables/useBulkPassInspection.run 的区别：本函数是「无状态」版，
+ * 不维护 running / progress ref，适合在 store / 单次调用场景使用；
+ * composable 版本适合长生命周期 + UI 进度展示。
+ *
+ * 类型从 useBulkPassInspection 复用，避免重复定义。
+ */
+export async function bulkPassInspection(
+  items: import('@/composables/useBulkPassInspection').BulkPassItem[],
+  opts: { concurrency?: number } = {},
+): Promise<import('@/composables/useBulkPassInspection').BulkPassResult> {
+  const concurrency = Math.max(1, opts.concurrency ?? 4)
+  const passed: import('@/composables/useBulkPassInspection').BulkPassItem[] = []
+  const failed: import('@/composables/useBulkPassInspection').BulkPassFailure[] = []
+  const queue = [...items]
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (queue.length > 0) {
+      const item = queue.shift()!
+      try {
+        await passInspection(item.part_id, {
+          batch_id: item.batch_id,
+          quantity: item.quantity,
+        })
+        passed.push(item)
+      } catch (e) {
+        const err = e as { code?: number; message?: string }
+        failed.push({
+          item,
+          code: err?.code ?? 0,
+          message: err?.message ?? '未知错误',
+        })
+      }
+    }
+  })
+  await Promise.all(workers)
+
+  return { passed, failed }
+}
