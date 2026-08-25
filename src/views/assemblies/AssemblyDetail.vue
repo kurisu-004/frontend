@@ -486,13 +486,17 @@ import {
   ORDER_STATUS_TAG_TYPE,
   type OrderStatus,
 } from '@/types/parts'
-import { useAuthSession } from '@/composables/useAuthSession'
 import { useDialogSize } from '@/composables/useDialogSize'
 import ResponsiveList from '@/components/ResponsiveList.vue'
+// 2026-08-25 frontend-overall-refactor：
+// - 日期格式化统一到 utils/date（原本地函数把 ISO 字符串 .replace('T',' ').slice(0,19)，
+//   无时区转换；新函数走 toISOString，后端发本地时间字符串时会差 8h）。
+// - 权限改用 usePermissions（ProcessList.vue 同款），不再手写 hasRole + computed。
+import { formatDateTime } from '@/utils/date'
+import { usePermissions } from '@/composables/usePermissions'
 
 const route = useRoute()
 const router = useRouter()
-const { hasRole } = useAuthSession()
 
 // ============ 响应式 ============
 const descCol = 3
@@ -503,13 +507,11 @@ const confirmDlg = useDialogSize({ desktopWidth: 480 })
 const addChildDlg = useDialogSize({ desktopWidth: 480 })
 
 // 权限：取消 / 添加子件 / 上传 PDF = CLERK+；删除 = MANAGER-only。
-const canCancel = computed(
-  () => hasRole('CLERK') || hasRole('MANAGER'),
-)
-const canDelete = computed(() => hasRole('MANAGER'))
-const canEditContent = computed(
-  () => hasRole('CLERK') || hasRole('MANAGER'),
-)
+// 2026-08-25：改用 usePermissions（ProcessList.vue 同款）。
+const { isManager, isClerk } = usePermissions()
+const canCancel = computed(() => isManager.value || isClerk.value)
+const canDelete = computed(() => isManager.value)
+const canEditContent = computed(() => isManager.value || isClerk.value)
 
 const detail = ref<AssemblyDetail | null>(null)
 const loading = ref(false)
@@ -552,15 +554,6 @@ const canAddChild = computed(() => {
 
 function childRowClass({ row }: { row: { is_urgent: boolean } }): string {
   return row.is_urgent ? 'row-urgent' : ''
-}
-
-function formatDateTime(iso: string): string {
-  if (!iso) return '—'
-  try {
-    return iso.replace('T', ' ').slice(0, 19)
-  } catch {
-    return iso
-  }
 }
 
 // ===== 图纸卡片过滤 + 子件图号图号直接预览（2026-07-11 接入） =====

@@ -91,7 +91,7 @@
           label="创建时间" min-width="180" align="center"
         >
           <template #default="{ row }">
-            {{ formatDate(row.created_at) }}
+            {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
         <el-table-column label="操作" min-width="180" fixed="right" align="center">
@@ -163,6 +163,9 @@ import {
   updateApplicant,
 } from '@/api/applicant'
 import type { Applicant } from '@/types/applicant'
+// 2026-08-25 统一日期格式化：原本地 formatDate 输出 YYYY-MM-DD HH:mm:ss（无时区转换），
+// 改为 utils/date.formatDateTime（toISOString → UTC）。若后端发无 'Z' 的本地时间会相差 8h。
+import { formatDateTime } from '@/utils/date'
 
 // ============ 列可见性 ============
 // 「#」和「操作」列不放进 defs → 始终可见,且不出现在列设置弹窗
@@ -190,11 +193,6 @@ const rootOptions = computed(() =>
     .filter((c) => c.parent_id === null)
     .map((c) => ({ id: c.id, name: c.name })),
 )
-
-function formatDate(s: string): string {
-  if (!s) return ''
-  return s.replace('T', ' ').slice(0, 19)
-}
 
 async function fetchList(): Promise<void> {
   loading.value = true

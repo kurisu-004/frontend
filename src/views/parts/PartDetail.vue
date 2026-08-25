@@ -1130,9 +1130,14 @@ import {
   uploadPart3DModel,
   uploadPartCadFile,
 } from '@/api/assembly'
-import { useAuthSession } from '@/composables/useAuthSession'
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
 import { useDialogSize } from '@/composables/useDialogSize'
+// 2026-08-25 frontend-overall-refactor：
+// - 日期格式化统一到 utils/date（原本地函数把 ISO 字符串 slice，无时区转换；
+//   新函数走 toISOString，后端发本地时间字符串时会差 8h）。
+// - 权限改用 usePermissions（ProcessList.vue 同款），不再手写 hasRole + computed。
+import { formatDateTime } from '@/utils/date'
+import { usePermissions } from '@/composables/usePermissions'
 
 const route = useRoute()
 const router = useRouter()
@@ -1383,13 +1388,6 @@ function eventLabel(t: string): string {
 function eventTagType(t: string): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
   return PART_EVENT_TAG_TYPE[t as PartEventType] ?? 'info'
 }
-function formatDateTime(iso: string): string {
-  if (!iso) return ''
-  const [d, t] = iso.split('T')
-  if (!d) return iso
-  if (!t) return d
-  return `${d} ${t.slice(0, 5)}`
-}
 
 // ============ 拉取 ============
 async function fetchPart(): Promise<void> {
@@ -1601,10 +1599,8 @@ watch(
 )
 
 // ============ 角色权限（前端 UI 控制；后端有真权限校验兜底） ============
-const { hasRole } = useAuthSession()
-const isManager = computed(() => hasRole('MANAGER'))
-const isClerk = computed(() => hasRole('CLERK'))
-const isCnc = computed(() => hasRole('CNC_PROGRAMMER'))
+// 2026-08-25：改用 usePermissions（ProcessList.vue 同款），保留 isCnc 别名以最小化改动。
+const { isManager, isClerk, isInspector, isCncProgrammer: isCnc } = usePermissions()
 
 // 图纸 / 3D 模型：MANAGER + CLERK（文员日常操作）
 const canManageDrawings = computed(() => isManager.value || isClerk.value)
@@ -1625,7 +1621,6 @@ const canEditPart = computed(() => isManager.value || isClerk.value)
 const canViewQuotes = computed(() => isManager.value || isClerk.value)
 
 // 品检通过 / 打回：MANAGER + CLERK + INSPECTOR（与后端 _inspector_dep 一致）
-const isInspector = computed(() => hasRole('INSPECTOR'))
 const canInspect = computed(
   () => isManager.value || isClerk.value || isInspector.value,
 )
