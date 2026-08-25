@@ -1,5 +1,6 @@
 <!--
-  PartListShell.vue — 共用「过滤卡 + 列可见性 + 表格 + 分页 + 加急红底」壳（T14）
+  PartListShell.vue — 共用「过滤卡 + 列可见性 + 表格 + 分页 + 加急红底」壳（T14，
+  T14p5 修复 fetch 错误回传）
 
   复用对象：
     - InspectionPending.vue（src/views/inspection/）
@@ -18,6 +19,9 @@
       - useColumnVisibility 持有列可见性 map（listKey 维度持久化）
       - useListStatePersist 持久化 pageSize（key = `${listKey}_paged`，
                            与视图自管的 filter 持久化互不冲突）
+      - safeFetcher 包装 props.fetcher：catch 写 errorMsg ref 后返回空结果，
+                    成功清空 errorMsg；computed emptyText 优先渲染 errorMsg。
+                    「后端抛错」与「队列本就空」在 el-table 空态一目了然。
   - 列可见性 popover 按 T2 模板提到 .table-toolbar 顶层 div；
     el-pagination 走 <PagedTable> 子组件收口；
     加急红底 #fde2e2 通过 :deep(.row-urgent) 注入，rowClassName 由视图传。
@@ -47,7 +51,7 @@
       />
     </div>
 
-    <PagedTable :fetcher="fetcher" :default-page-size="defaultPageSize">
+    <PagedTable :fetcher="safeFetcher" :default-page-size="defaultPageSize">
       <template #default="{ items, loading }">
         <el-table
           :data="items"
@@ -71,6 +75,7 @@
 </template>
 
 <script setup lang="ts" generic="T extends { id: string | number }">
+import { computed, ref } from 'vue'
 import { RefreshLeft } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import PagedTable from '@/components/PagedTable.vue'
@@ -95,10 +100,29 @@ const props = withDefaults(defineProps<{
   rowClassName: () => '',
 })
 
+// 2026-08-25 T14p5：fetch 错误回传
+// 旧 monolith 视图在 computed emptyText 里渲染 fetch 错误，方便用户区分
+// 「队列空」与「后端挂了」。T14 PartListShell 静态 emptyText 把这个反馈丢了，
+// 这里在 shell 内包装 fetcher：catch → 写 errorMsg，success → 清空；
+// computed emptyText 优先用 errorMsg，否则用 prop。
+const errorMsg = ref<string | null>(null)
+const emptyText = computed(() => errorMsg.value ?? props.emptyText)
+
+async function safeFetcher(params: PageQueryParams): Promise<PageResult<T>> {
+  errorMsg.value = null
+  try {
+    return await props.fetcher(params)
+  } catch (e) {
+    errorMsg.value = (e as Error).message ?? '查询失败'
+    return { items: [], total: 0 }
+  }
+}
+
 // 列可见性（视图在 default slot 内通过 isVisible(key) 决定每列是否渲染）
 const columnVisibility = useColumnVisibility(props.columnDefs, { listKey: props.listKey })
 
-// 分页状态 + 拉取（闭包由视图 fetcher 提供，filter 状态由视图自管）
+// 分页状态 + 拉取（闭包由视图 fetcher 提供；safeFetcher 在 shell 里包一层 catch，
+// PagedTable / usePagedListQuery 看到的 fetcher 是吞了错的，loading 才能稳定落地）
 const {
   items,
   total,
@@ -106,7 +130,7 @@ const {
   pageSize,
   fetch,
   reset,
-} = usePagedListQuery<T>(props.fetcher)
+} = usePagedListQuery<T>(safeFetcher)
 
 // 持久化 pageSize（视图不再操心；与视图的 filter 持久化 key 互不冲突）
 const { restore: restorePageSize } = useListStatePersist(

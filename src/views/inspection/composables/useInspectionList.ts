@@ -1,14 +1,18 @@
 // composables/useInspectionList.ts
 //
-// InspectionPending 视图的列表状态 + fetcher（T14）。
+// InspectionPending 视图的列表状态 + fetcher（T14，T14p5 修正 fetch 错误回传）。
 //
-// 持有「业务状态」（search / plannedDateRange / autoRefresh / errorMsg）+ fetcher
-// + restoreFilter；分页状态（items / total / loading / pageSize）由
+// 持有「业务状态」（search / plannedDateRange / autoRefresh）+ fetcher +
+// restoreFilter；分页状态（items / total / loading / pageSize）由
 // <PartListShell> 内部 usePagedListQuery 持有，视图通过 listRef 拿到。
 //
 // 设计要点（2026-08-25）：
 // - fetcher 闭包 self.search / self.plannedDateRange，PartListShell 调用时只传
-//   { page, pageSize }；本地错误信息仍写到 errorMsg。
+//   { page, pageSize }。fetch 抛出后由 PartListShell.safeFetcher 捕获并写到
+//   内部 errorMsg ref，computed emptyText 显示给用户（T14p5）。
+// - 早期版本 try/catch 内吞了 e 再 return { items: [], total: 0 }，导致
+//   errorMsg 写给自己的 ref 但 shell 看不到，用户只能看到静态
+//   "当前无待品检零件"。T14p5 改为「让 fetch 抛出」，把错误回传交给 shell 收口。
 // - pageSize 持久化由 PartListShell 内部 useListStatePersist 收口（key =
 //   `inspection_pending_paged`，与本 composable 的 filter 持久化互不冲突）。
 // - 本 composable 仅持久化 search / autoRefresh（key =
@@ -30,9 +34,7 @@ export interface UseInspectionListReturn {
   plannedDateRange: Ref<[string, string] | null>
   /** 自动刷新开关（持久化）；timer 由视图自管 */
   autoRefresh: Ref<boolean>
-  /** fetcher 内部 try/catch 后的错误信息；PartListShell emptyText 暂时用静态文本 */
-  errorMsg: Ref<string | null>
-  /** 传给 <PartListShell :fetcher="fetcher"> */
+  /** 传给 <PartListShell :fetcher="fetcher">；fetch 失败抛错，由 shell.safeFetcher 接住 */
   fetcher: (params: PageQueryParams) => Promise<PageResult<PartItem>>
   /** onMounted 调用一次：从 localStorage 恢复 search / autoRefresh */
   restoreFilter: () => void
@@ -42,25 +44,19 @@ export function useInspectionList(): UseInspectionListReturn {
   const search = reactive({ keyword: '', serialNo: '' })
   const plannedDateRange = ref<[string, string] | null>(null)
   const autoRefresh = ref(false)
-  const errorMsg = ref<string | null>(null)
 
   async function fetcher(params: PageQueryParams): Promise<PageResult<PartItem>> {
-    errorMsg.value = null
-    try {
-      // 2026-07-29 批次级：行=批次（quantity 为批次量，操作回传 batch_id）
-      const resp = await listInspectionBatches({
-        keyword: search.keyword.trim() || undefined,
-        serial_no: search.serialNo.trim() || undefined,
-        planned_delivery_date_from: plannedDateRange.value?.[0],
-        planned_delivery_date_to: plannedDateRange.value?.[1],
-        limit: params.pageSize,
-        offset: (params.page - 1) * params.pageSize,
-      })
-      return { items: resp.items, total: resp.total }
-    } catch (e) {
-      errorMsg.value = (e as Error).message ?? '查询失败'
-      return { items: [], total: 0 }
-    }
+    // fetch 抛错 → PartListShell.safeFetcher 接住并写到内部 errorMsg，
+    // 用户在 el-table 空态能看到原始错误信息（区分「队列空」/「后端挂了」）。
+    const resp = await listInspectionBatches({
+      keyword: search.keyword.trim() || undefined,
+      serial_no: search.serialNo.trim() || undefined,
+      planned_delivery_date_from: plannedDateRange.value?.[0],
+      planned_delivery_date_to: plannedDateRange.value?.[1],
+      limit: params.pageSize,
+      offset: (params.page - 1) * params.pageSize,
+    })
+    return { items: resp.items, total: resp.total }
   }
 
   // 持久化 search / autoRefresh（pageSize 由 PartListShell 单独持久化）
@@ -85,7 +81,6 @@ export function useInspectionList(): UseInspectionListReturn {
     search,
     plannedDateRange,
     autoRefresh,
-    errorMsg,
     fetcher,
     restoreFilter,
   }
