@@ -53,19 +53,21 @@ a {
 
 /* ---- 响应式通用工具 ---- */
 
-/* 表单栅格：手机 1 列，sm 2 列，md 3 列，lg 4 列。替代静态 el-row/el-col :span */
+/* 表单栅格：手机 1 列，sm 2 列，md 3 列，lg 4 列。替代静态 el-row/el-col :span
+   2026-08-25：断点 mixin 基础设施已删（T1），此处直接用裸 @media，
+   临界值沿用 Element Plus 默认：sm 768px / md 992px / lg 1200px。 */
 .form-grid {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px 16px;
 
-  @include from(sm) {
+  @media (min-width: 768px) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  @include from(md) {
+  @media (min-width: 992px) {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  @include from(lg) {
+  @media (min-width: 1200px) {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
