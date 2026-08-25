@@ -231,6 +231,11 @@ async function onConfirm(): Promise<void> {
   if (!props.note) return
   loading.value = true
   try {
+    // 2026-08-24 bugfix：custom_order / line_item_ids 都必须覆盖 line_items[*].id
+    // 全部批次（后端 rep-id 校验 21113）。rows 经过 foldSamePart 折叠后每个 part 仅产
+    // 出代表 batch id，会漏掉同 part 多批次 / 装配件子件多批次——这里查全量必须用原始
+    // line_items，不能用折叠后的 flat。
+    const allItems = props.note.line_items
     let custom_order: string[]
     let mergeFlag = false
     let merge_quantities: Record<string, number> | undefined
@@ -238,37 +243,41 @@ async function onConfirm(): Promise<void> {
       // 合并模式：父行 → 组内 batch id 连续；散件行原样
       custom_order = []
       merge_quantities = {}
-      // 2026-08-07 bugfix：装配件子件被 _split 拆成多批时，未折叠的 line_items 会枚举到
-      // 非代表 batch id，触发后端 custom_order rep-id 校验 422。改用 foldSamePart 后，
-      // 每个 part 只产出一行（id = 代表 batch id），与后端 rep_by_part 一致。
-      const flat = foldSamePart(props.note.line_items)
       rows.value.forEach((r) => {
         if (isAsmRow(r)) {
           merge_quantities![r.assembly_id] = r.quantity
-          flat
+          allItems
             .filter((li) => li.assembly_id === r.assembly_id)
             .forEach((c) => custom_order.push(String(c.id)))
         } else {
-          custom_order.push(String((r as DeliveryNoteLineItem).id))
+          allItems
+            .filter((li) => li.part_id === (r as DeliveryNoteLineItem).part_id)
+            .forEach((c) => custom_order.push(String(c.id)))
         }
       })
       mergeFlag = true
     } else {
-      custom_order = rows.value.map((r) => String((r as DeliveryNoteLineItem).id))
+      custom_order = []
+      rows.value.forEach((r) => {
+        allItems
+          .filter((li) => li.part_id === (r as DeliveryNoteLineItem).part_id)
+          .forEach((c) => custom_order.push(String(c.id)))
+      })
     }
 
     if (isLabelMode.value) {
       // 2026-08-07：label 模式 → 展开勾选行成子件 batch id（与 custom_order 同一口径）
-      // 同上 bugfix：折叠后每个 asm 子件 part 仅 1 个代表 batch id。
-      const flat = foldSamePart(props.note.line_items)
+      // 2026-08-24：同上面 custom_order 一样改用 allItems，否则 line_item_ids 也漏批次。
       const line_item_ids: string[] = []
       selectedRows.value.forEach((r) => {
         if (isAsmRow(r)) {
-          flat
+          allItems
             .filter((li) => li.assembly_id === r.assembly_id)
             .forEach((c) => line_item_ids.push(String(c.id)))
         } else {
-          line_item_ids.push(String((r as DeliveryNoteLineItem).id))
+          allItems
+            .filter((li) => li.part_id === (r as DeliveryNoteLineItem).part_id)
+            .forEach((c) => line_item_ids.push(String(c.id)))
         }
       })
       const { blob, filename } = await printNoteLabels(props.note.id, {
