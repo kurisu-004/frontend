@@ -80,6 +80,7 @@ import type { DeliveryGroupListOut, DeliveryGroupOut } from '@/types/deliveryGro
 import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection'
 import DeliveryGroupEditor from '@/views/delivery/components/DeliveryGroupEditor.vue'
 import BlockedScanConfirmDialog from '@/components/delivery/BlockedScanConfirmDialog.vue'
+import BatchSubmitInspectionConfirmDialog from '@/components/delivery/BatchSubmitInspectionConfirmDialog.vue'
 import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'
 import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'
 
@@ -171,6 +172,13 @@ const blockedDialogVisible = ref(false)
 const blockedFailures = ref<BlockedScanItem[]>([])
 const blockedReason = ref('')
 const blockedOriginalCode = ref('')
+
+// 2026-08-25 新增：一键送检弹窗（status ∈ {PENDING, PROGRAMMING, IN_PROCESS} 时触发）
+// 与下方 submitDialogVisible（BatchInspectionConfirmDialog 用）命名区分。
+const submitInspectionDialogVisible = ref(false)
+const submitInspectionDialogFailures = ref<BlockedScanItem[]>([])
+const submitInspectionDialogReason = ref('')
+const submitInspectionDialogOriginalCode = ref('')
 
 // ============ 打印送货单预览（2026-08-23 增量）==============
 /** preview 弹窗显隐 + 当前打开的 note（getNote 拉回）。 */
@@ -501,10 +509,29 @@ function applyError(code: string, e: unknown): void {
         ElMessage.error(apiErr.message ?? '扫码失败')
         return
       }
-      blockedFailures.value = uninspected
-      blockedReason.value = apiErr.message ?? ''
-      blockedOriginalCode.value = code
-      blockedDialogVisible.value = true
+
+      // 2026-08-25：按 f.status 分流
+      // - 全部 INSPECTION → 走原 BlockedScanConfirmDialog（一键过检），保留旧行为
+      // - 任意件 status ∈ {PENDING, PROGRAMMING, IN_PROCESS} → 走新
+      //   BatchSubmitInspectionConfirmDialog（一键送检），该弹窗内含"已 INSPECTION
+      //   的也帮它过检"勾选可一并处理装配件混合状态
+      // - 含未识别 status（status 为空，如 21405 散件 message 解析的占位 item）：
+      //   保守起见走原 BlockedScanConfirmDialog，避免新弹窗误跳过
+      const STATUS_NEEDS_SUBMIT = new Set(['PENDING', 'PROGRAMMING', 'IN_PROCESS'])
+      const hasInspectable = uninspected.some(
+        (f) => f.status && STATUS_NEEDS_SUBMIT.has(f.status),
+      )
+      if (hasInspectable) {
+        submitInspectionDialogFailures.value = uninspected
+        submitInspectionDialogReason.value = apiErr.message ?? ''
+        submitInspectionDialogOriginalCode.value = code
+        submitInspectionDialogVisible.value = true
+      } else {
+        blockedFailures.value = uninspected
+        blockedReason.value = apiErr.message ?? ''
+        blockedOriginalCode.value = code
+        blockedDialogVisible.value = true
+      }
       return
     }
   }
@@ -557,6 +584,27 @@ function onBlockedPassPartial(result: { passed: BulkPassItem[]; failed: BulkPass
 
 function onBlockedCancel(): void {
   blockedDialogVisible.value = false
+}
+
+// ============ 一键送检弹窗回调（2026-08-25 新增）============
+// 送检成功 → 父组件自动用 originalCode 重扫（与 pass-success 行为对称）
+async function onSubmitInspectionDialogSuccess(): Promise<void> {
+  submitInspectionDialogVisible.value = false
+  await handleScan(submitInspectionDialogOriginalCode.value)
+}
+
+// 部分送检 → toast + 保留弹窗（由用户决定是否重试）
+function onSubmitInspectionDialogPartial(
+  result: { passed: unknown[]; failed: import('@/composables/useBulkScanInspect').BulkScanFailure[] },
+): void {
+  ElMessage.warning(
+    `部分送检：${result.passed.length} 项成功 / ${result.failed.length} 项失败；` +
+    `请手动处理失败项后重新扫码`,
+  )
+}
+
+function onSubmitInspectionDialogCancel(): void {
+  submitInspectionDialogVisible.value = false
 }
 
 // ============ 分组面板：CRUD ============
@@ -1211,6 +1259,21 @@ onBeforeUnmount(() => {
       @pass-success="onBlockedPassSuccess"
       @pass-partial="onBlockedPassPartial"
       @cancel="onBlockedCancel"
+    />
+
+    <!-- ========== 一键送检确认对话框（2026-08-25 新增；status ∈ {PENDING/PROGRAMMING/IN_PROCESS} 触发） ========== -->
+    <!--
+      与 BlockedScanConfirmDialog 形态对称：emit submit-success → 自动重扫 originalCode；
+      部分送检保留弹窗 + toast，不主动重扫。
+    -->
+    <BatchSubmitInspectionConfirmDialog
+      v-model="submitInspectionDialogVisible"
+      :failures="submitInspectionDialogFailures"
+      :reason="submitInspectionDialogReason"
+      :original-code="submitInspectionDialogOriginalCode"
+      @submit-success="onSubmitInspectionDialogSuccess"
+      @submit-partial="onSubmitInspectionDialogPartial"
+      @cancel="onSubmitInspectionDialogCancel"
     />
 
     <!-- ========== 打印送货单预览（2026-08-23） ========== -->

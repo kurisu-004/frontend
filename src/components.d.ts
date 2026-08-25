@@ -9,6 +9,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     Barcode: typeof import('./components/Barcode.vue')['default']
     BatchInspectionConfirmDialog: typeof import('./components/delivery/BatchInspectionConfirmDialog.vue')['default']
+    BatchSubmitInspectionConfirmDialog: typeof import('./components/delivery/BatchSubmitInspectionConfirmDialog.vue')['default']
     BeianFooter: typeof import('./components/BeianFooter.vue')['default']
     BlockedScanConfirmDialog: typeof import('./components/delivery/BlockedScanConfirmDialog.vue')['default']
     ColumnFilterPopover: typeof import('./components/ColumnFilterPopover.vue')['default']
