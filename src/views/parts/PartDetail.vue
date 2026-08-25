@@ -109,6 +109,7 @@
       :production-shelves="productionShelves"
       :processes="processes"
       :format-bytes="formatBytes"
+      :file-list="fileList"
       :on-download-cnc="onDownloadCnc"
       :on-delete-cnc="onDeleteCnc"
       @fetch="fetchCncPrograms"
@@ -429,6 +430,8 @@ const {
   cncSetupGroups, cncLoading,
   fetchCncPrograms, formatBytes, onDownloadCnc, onDeleteCnc,
   onPairUpload, onReleaseToShelf,
+  // 2026-08-25 T10p5：上传 staging 助手（含 ElMessage.warning 兜底），通过函数 prop 注入 PartCncCard。
+  fileList,
 } = cnc
 
 const {
@@ -625,8 +628,15 @@ async function onPassInspection() {
 }
 
 // ============ 拆 / 取消 批次（PartBatchMonitorCard 触发）============
-async function handleSplitBatch(batch: PartBatch, quantity: number) {
-  await onSplitBatch(batch, quantity)
+// 2026-08-25 T10p5：emit payload 改为 { batch, quantity, resolve }，
+// shell 等 API 完成再调 resolve，把 dialog 关闭时机下沉到 API 成功之后。
+async function handleSplitBatch(payload: {
+  batch: PartBatch
+  quantity: number
+  resolve: (ok: boolean) => void
+}) {
+  const result = await onSplitBatch(payload.batch, payload.quantity)
+  payload.resolve(result !== null)
   void fetchBatches()
 }
 async function handleCancelBatch(batch: PartBatch) {
@@ -641,21 +651,39 @@ async function handleCancelBatch(batch: PartBatch) {
 }
 
 // ============ 配对上传 / 下发（PartCncCard 触发）============
-async function handlePairUpload(gcodes: File[], setup: File) {
-  await onPairUpload(gcodes, setup)
+// 2026-08-25 T10p5：emit payload 改为 { gcodes, setup, resolve }，
+// shell 等 API 完成再调 resolve：成功才关 dialog + reset submitting。
+async function handlePairUpload(payload: {
+  gcodes: File[]
+  setup: File
+  resolve: (ok: boolean) => void
+}) {
+  const ok = await onPairUpload(payload.gcodes, payload.setup)
+  payload.resolve(ok)
 }
-async function handleRelease(shelfId: string, processId: string) {
-  const ok = await onReleaseToShelf(shelfId, processId)
+async function handleRelease(payload: {
+  shelfId: string
+  processId: string
+  resolve: (ok: boolean) => void
+}) {
+  const ok = await onReleaseToShelf(payload.shelfId, payload.processId)
   if (ok) {
     await fetchPart()
     void fetchEvents()
   }
+  payload.resolve(ok)
 }
 
 // ============ 报价新建（PartQuoteCard 触发）============
-async function handleCreateQuote(form: { outsource_company_id: string; process_id: string; price: string; note: string }) {
-  await onCreateQuote(form)
-  void fetchEvents()  // 同步刷新历史（QUOTE_CREATED 事件）
+// 2026-08-25 T10p5：emit payload 改为 { form, resolve }，
+// shell 等 API 完成再调 resolve：成功才关 dialog + reset submitting。
+async function handleCreateQuote(payload: {
+  form: { outsource_company_id: string; process_id: string; price: string; note: string }
+  resolve: (ok: boolean) => void
+}) {
+  const ok = await onCreateQuote(payload.form)
+  if (ok) void fetchEvents()  // 同步刷新历史（QUOTE_CREATED 事件）
+  payload.resolve(ok)
 }
 
 // ============ 切换 partId 时重置 ============

@@ -172,7 +172,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'fetch'): void
-  (e: 'create', form: QuoteCreateForm): void
+  // 2026-08-25 T10p5：dialog 关闭延迟到 API 成功之后（避免 API 失败但 dialog 已关）。
+  // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
+  (e: 'create', payload: { form: QuoteCreateForm; resolve: (ok: boolean) => void }): void
 }>()
 
 const router = useRouter()
@@ -236,12 +238,14 @@ async function onCreateConfirm() {
     return
   }
   createSubmitting.value = true
-  try {
-    emit('create', { ...createForm })
-    createVisible.value = false
-  } finally {
-    createSubmitting.value = false
-  }
+  // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
+  emit('create', {
+    form: { ...createForm },
+    resolve: (ok: boolean) => {
+      createSubmitting.value = false
+      if (ok) createVisible.value = false
+    },
+  })
 }
 
 function onViewQuoteDetail() {

@@ -168,7 +168,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'fetch'): void
-  (e: 'split', batch: PartBatch, quantity: number): void
+  // 2026-08-25 T10p5：dialog 关闭延迟到 API 成功之后。
+  // shell 调用 resolve(ok) → 本组件根据 ok 决定是否关 dialog + reset submitting。
+  (e: 'split', payload: { batch: PartBatch; quantity: number; resolve: (ok: boolean) => void }): void
   (e: 'cancel-batch', batch: PartBatch): void
 }>()
 
@@ -198,15 +200,18 @@ function onSplitDialogClosed(): void {
   splitQuantity.value = undefined
 }
 
-async function onSplitConfirm(): Promise<void> {
+function onSplitConfirm(): void {
   if (!splitSource.value || !splitQuantity.value) return
   splitSubmitting.value = true
-  try {
-    emit('split', splitSource.value, splitQuantity.value)
-    splitDialogVisible.value = false
-  } finally {
-    splitSubmitting.value = false
-  }
+  // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
+  emit('split', {
+    batch: splitSource.value,
+    quantity: splitQuantity.value,
+    resolve: (ok: boolean) => {
+      splitSubmitting.value = false
+      if (ok) splitDialogVisible.value = false
+    },
+  })
 }
 </script>
 

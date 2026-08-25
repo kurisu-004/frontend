@@ -35,6 +35,7 @@ import { getAssemblyForPart } from '@/api/assembly'
 import type { AssemblyDetail } from '@/types/assembly'
 import { failInspection, receiveFromOutsource } from '@/api/parts'
 import { usePermissions } from '@/composables/usePermissions'
+import { useConfirm } from '@/composables/useConfirm'
 import {
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TAG_TYPE,
@@ -79,6 +80,8 @@ export function usePartDetail(partId: Ref<string>) {
     isInspector,
     isCncProgrammer: isCnc,
   } = usePermissions()
+  // 2026-08-25 T10p5：品检通过属于不可撤销操作，先用 useConfirm 二次确认。
+  const { dangerous: confirmDangerous } = useConfirm()
 
   // ============ 权限 ============
   const canEditPart = computed(() => isManager.value || isClerk.value)
@@ -225,8 +228,16 @@ export function usePartDetail(partId: Ref<string>) {
   }
 
   // ============ 品检通过 ============
+  // 2026-08-25 T10p5：恢复 confirmDangerous 二次确认（拆分前 PartDetail.vue 的行为）。
+  // 提示用户「此操作不可撤销」后再调 passInspection API。
   async function onPassInspection(): Promise<boolean> {
     if (!part.value) return false
+    const ok = await confirmDangerous(
+      '品检通过',
+      '确认将此零件标记为品检通过？此操作不可撤销。',
+      { type: 'success', confirmText: '确认通过', cancelText: '取消' },
+    )
+    if (!ok) return false
     try {
       await passInspection(partId.value)
       ElMessage.success('品检通过')

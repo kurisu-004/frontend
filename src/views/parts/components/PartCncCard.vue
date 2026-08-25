@@ -220,14 +220,24 @@ const props = defineProps<{
   productionShelves: Shelf[]
   processes: Process[]
   formatBytes: (n: number) => string
+  // 2026-08-25 T10p5：上传文件 staging 助手，由 usePartCncGroups 注入；
+  // 失败扩展名时统一 ElMessage.warning 提示（修复前内联实现丢提示的回归）。
+  fileList: (
+    current: UploadFile[],
+    file: UploadFile,
+    accept: string,
+    matchExt?: boolean,
+  ) => UploadFile[]
   onDownloadCnc: (p: PartFileItem) => void
   onDeleteCnc: (id: string) => void
 }>()
 
 const emit = defineEmits<{
   (e: 'fetch'): void
-  (e: 'pair-upload', gcodes: File[], setup: File): void
-  (e: 'release', shelfId: string, processId: string): void
+  // 2026-08-25 T10p5：dialog 关闭延迟到 API 成功之后（避免 API 失败但 dialog 已关）。
+  // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
+  (e: 'pair-upload', payload: { gcodes: File[]; setup: File; resolve: (ok: boolean) => void }): void
+  (e: 'release', payload: { shelfId: string; processId: string; resolve: (ok: boolean) => void }): void
   (e: 'release-success'): void
 }>()
 
@@ -237,13 +247,14 @@ const pairGcodeFiles = ref<UploadFile[]>([])
 const pairSetupFile = ref<File | null>(null)
 const pairUploading = ref(false)
 
-function onPairGcodeChange(file: UploadFile): void {
-  // 按 uid 去重 + 扩展名校验
-  if (pairGcodeFiles.value.some((f) => f.uid === file.uid)) return
-  const name = (file.name || '').toLowerCase()
-  const exts = '.nc,.tap,.cnc,.mpf,.ngc'.replace(/\./g, '').split(',')
-  if (!exts.some((e) => name.endsWith('.' + e))) return
-  pairGcodeFiles.value = [...pairGcodeFiles.value, file]
+function onPairGcodeChange(file: UploadFile, _uploadFiles: UploadFile[]): void {
+  // 2026-08-25 T10p5：走 usePartCncGroups.fileList，失败扩展名时统一 ElMessage.warning 提示。
+  pairGcodeFiles.value = props.fileList(
+    pairGcodeFiles.value,
+    file,
+    '.nc,.tap,.cnc,.mpf,.ngc',
+    true,
+  )
 }
 function onPairGcodeRemove(file: UploadFile): void {
   pairGcodeFiles.value = pairGcodeFiles.value.filter((f) => f.uid !== file.uid)
@@ -262,21 +273,25 @@ function openPairUpload() {
   pairUploadVisible.value = true
 }
 
-async function onPairUploadConfirm(): Promise<void> {
+function onPairUploadConfirm(): void {
   const raws: File[] = []
   for (const f of pairGcodeFiles.value) {
     if (f.raw) raws.push(f.raw)
   }
   if (raws.length === 0 || !pairSetupFile.value) return
   pairUploading.value = true
-  try {
-    emit('pair-upload', raws, pairSetupFile.value)
-    // 父组件成功后会触发 fetch；本组件仅做 UI 重置
-    pairUploadVisible.value = false
-    onPairUploadClose()
-  } finally {
-    pairUploading.value = false
-  }
+  // shell 调 resolve(ok)：成功才关 dialog + 清空 files + reset submitting。
+  emit('pair-upload', {
+    gcodes: raws,
+    setup: pairSetupFile.value,
+    resolve: (ok: boolean) => {
+      pairUploading.value = false
+      if (ok) {
+        pairUploadVisible.value = false
+        onPairUploadClose()
+      }
+    },
+  })
 }
 
 // ============ 下发到 CNC 货架对话框（局部 UI 状态）============
@@ -311,16 +326,18 @@ function onReleaseClosed(): void {
   releaseNextProcessId.value = null
 }
 
-async function onReleaseConfirm(): Promise<void> {
+function onReleaseConfirm(): void {
   if (!releaseShelfId.value || !releaseNextProcessId.value) return
   releaseSubmitting.value = true
-  try {
-    emit('release', releaseShelfId.value, releaseNextProcessId.value)
-    // 父组件成功后会触发 fetch；本组件仅做 UI 重置
-    releaseVisible.value = false
-  } finally {
-    releaseSubmitting.value = false
-  }
+  // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
+  emit('release', {
+    shelfId: releaseShelfId.value,
+    processId: releaseNextProcessId.value,
+    resolve: (ok: boolean) => {
+      releaseSubmitting.value = false
+      if (ok) releaseVisible.value = false
+    },
+  })
 }
 
 onMounted(() => emit('fetch'))
