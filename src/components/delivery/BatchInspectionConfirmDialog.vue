@@ -1,11 +1,11 @@
 <!--
-  批量品检确认对话框（2026-08-23 新增）。
+  批量品检确认对话框（2026-08-23 新增；2026-08-25 切到 v2 批量端点）。
 
   用途：送货单详情页提交 / 扫码页二次确认 共用。
   父组件已过滤：status ∉ {INSPECTION, READY_TO_SHIP}。
   父组件拿到 pass-success 后接着调 submitNote(noteId, {version: noteVersion})。
 
-  与 BlockedScanConfirmDialog 共用 useBulkPassInspection；
+  与 BlockedScanConfirmDialog 共用 useBulkPassInspection（v2 batch 端点）；
   区别仅在：数据源 = DeliveryNoteLineItem，emit pass-success 后父组件
   接 submitNote，而不是用 originalCode 重扫。
 -->

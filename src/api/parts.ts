@@ -1,7 +1,7 @@
 // 后端零件 API 封装（走 @/api/http 统一 axios 客户端）。
 // 所有 ID 在前端是字符串（雪花 ID 经后端 IdStr 序列化）。
 
-import { api } from '@/api/http'
+import { api, apiV2 } from '@/api/http'
 import type { PartFileItem } from '@/types/part_file'
 import type {
   DirectOutsourceCandidateListResult,
@@ -1117,45 +1117,57 @@ export async function listInspectionBatches(params: {
   return resp.data
 }
 
-// ============ 批量品检通过（2026-08-23 新增；2026-08-23 决策零后端批量端点）==============
+// ============ 批量品检通过（2026-08-23 新增；2026-08-25 切到 v2 批量端点）==============
+
+/** v2 批量品检入参项（2026-08-25 接入）。
+ *
+ * 字段名 / 可选性与后端 `BatchPassItem` 对齐；`part_id` 必填，雪花 ID 字符串。 */
+export interface BatchPassItem {
+  /** 必填；雪花 ID 字符串（CLAUDE.md §3）。 */
+  part_id: string
+  /** 可选；目标批次 id（雪花 ID 字符串）。缺省 = 状态唯一批次解析。 */
+  batch_id?: string | null
+  /** 可选；部分数量。缺省 = 批次全量；小于批次量时后端会拆分。 */
+  quantity?: number | null
+}
+
+/** v2 批量品检 per-item 失败元素（2026-08-25 接入）。
+ *
+ * 与 `BulkPassFailure`（composable 层）是一对一映射；后端 `failed[]` 原样透传。 */
+export interface BatchPassFailureFE {
+  /** 雪花 ID 字符串；与请求 items[].part_id 一一对应。 */
+  part_id: string
+  /** 业务错误码（20101 NOT_FOUND / 20103 INVALID_TRANSITION / 20104 INVALID_VALUE）。 */
+  code: number
+  /** 后端 message 原样透传。 */
+  message: string
+}
+
+/** v2 `POST /parts/batch-pass-inspection` 响应 `data`。 */
+export interface BatchPassInspectionOutFE {
+  /** 成功通过的件（与 PartItem 同源；PartItem 在 part 域是大 DTO，包含 version/批次等）。 */
+  passed: PartItem[]
+  /** 部分失败的 per-item 明细；与请求 items 按 part_id 对齐。 */
+  failed: BatchPassFailureFE[]
+}
+
 /**
- * 并发批量调 passInspection；后端无批量端点，前端 worker pool 聚合结果。
+ * 批量通过品检（v2 端点）。
  *
- * 与 composables/useBulkPassInspection.run 的区别：本函数是「无状态」版，
- * 不维护 running / progress ref，适合在 store / 单次调用场景使用；
- * composable 版本适合长生命周期 + UI 进度展示。
+ * 后端 `POST /api/v2/parts/batch-pass-inspection`：1 次 round-trip 处理 N<=200 件；
+ * 整体成功 200 OK + 部分失败走 `data.failed[]`，与单件 `passInspection` 行为对齐。
  *
- * 类型从 useBulkPassInspection 复用，避免重复定义。
+ * 该端点是 `composables/useBulkPassInspection.run` 的单一后端入口；早前 worker pool
+ * 方案（9 次 round-trip）已下线，仅作为 `BulkPassItem[]` → 调用层契约保留 composable 抽象。
+ *
+ * @see ~/Code/hsh-erp-rust/docs/api/parts.md（待后端 agent 提交 docs 后同步）
  */
-export async function bulkPassInspection(
-  items: import('@/composables/useBulkPassInspection').BulkPassItem[],
-  opts: { concurrency?: number } = {},
-): Promise<import('@/composables/useBulkPassInspection').BulkPassResult> {
-  const concurrency = Math.max(1, opts.concurrency ?? 4)
-  const passed: import('@/composables/useBulkPassInspection').BulkPassItem[] = []
-  const failed: import('@/composables/useBulkPassInspection').BulkPassFailure[] = []
-  const queue = [...items]
-
-  const workers = Array.from({ length: concurrency }, async () => {
-    while (queue.length > 0) {
-      const item = queue.shift()!
-      try {
-        await passInspection(item.part_id, {
-          batch_id: item.batch_id,
-          quantity: item.quantity,
-        })
-        passed.push(item)
-      } catch (e) {
-        const err = e as { code?: number; message?: string }
-        failed.push({
-          item,
-          code: err?.code ?? 0,
-          message: err?.message ?? '未知错误',
-        })
-      }
-    }
-  })
-  await Promise.all(workers)
-
-  return { passed, failed }
+export async function batchPassInspection(
+  items: BatchPassItem[],
+): Promise<BatchPassInspectionOutFE> {
+  const resp = await apiV2.post<BatchPassInspectionOutFE>(
+    '/parts/batch-pass-inspection',
+    { items },
+  )
+  return resp.data
 }

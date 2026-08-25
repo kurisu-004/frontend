@@ -1,26 +1,34 @@
 // composables/useBulkPassInspection.ts
 //
-// 批量品检通过 composable（2026-08-23 新增）。
+// 批量品检通过 composable（2026-08-23 新增；2026-08-25 切到 v2 批量端点）。
 //
 // 用途：
 //   - 扫码建单页 / 送货单详情页的「批量通过品检」确认对话框共享本 composable。
-//   - 复用 src/api/parts.ts 的 passInspection（单件），前端并发 worker pool
-//     聚合结果。后端无批量端点时这是唯一可行路径。
+//   - 2026-08-25 起：单次调用 apiV2.batchPassInspection（POST /parts/batch-pass-inspection），
+//     不再前端 worker pool。1 次 round-trip，per-item 失败走响应 data.failed[]。
+//     后端无批量端点的 fallback 路径已下线（v2 端点是硬依赖）。
 //
 // 设计：
-//   - concurrency 默认 4（避免压垮后端）；调用方可传更高 / 更低。
+//   - 保留 BulkPassItem/BulkPassFailure/BulkPassResult 三个类型契约（弹窗依赖），
+//     不改字段含义。`label` 仅展示用，调 API 时被丢掉。
 //   - 部分失败语义：返回 { passed, failed }，由调用方决定是否继续后续动作
 //     （如部分通过 → 调 submitNote 仅包通过的；或保留 dialog 让用户重试）。
-//   - progress 字段供 UI 进度条使用。
+//   - progress 字段供 UI 进度条使用；v2 单次调用语义下 done 总是一次跳到 total，
+//     但保留字段供未来扩展（如流式返回 / 多批次拆分）。
 
 import { reactive, ref, type Ref } from 'vue'
 import { ApiError } from '@/api/http'
-import { passInspection } from '@/api/parts'
+import {
+  batchPassInspection,
+  type BatchPassFailureFE,
+  type BatchPassItem,
+  type BatchPassInspectionOutFE,
+} from '@/api/parts'
 
 export interface BulkPassItem {
-  /** 必填：passInspection 入参的 part id（雪花 ID 字符串；与 BatchActionPayload.batch_id 同源）。 */
+  /** 必填：batchPassInspection 入参的 part id（雪花 ID 字符串；与 BatchActionPayload.batch_id 同源）。 */
   part_id: string
-  /** 可选：passInspection 的 BatchActionPayload.batch_id（雪花 ID 字符串）。 */
+  /** 可选：batchPassInspection 的 batch_id（雪花 ID 字符串）。 */
   batch_id?: string | null
   /** 可选：部分通过数量；缺省 = 全量。 */
   quantity?: number | null
@@ -47,11 +55,63 @@ export interface BulkPassProgress {
 export interface UseBulkPassInspectionReturn {
   running: Ref<boolean>
   progress: BulkPassProgress
-  /** 跑一次批量；并发由内部 worker pool 控制。 */
+  /** 跑一次批量；v2 端点单次 round-trip，不控制并发。 */
   run: (
     items: BulkPassItem[],
     opts?: { concurrency?: number },
   ) => Promise<BulkPassResult>
+}
+
+/**
+ * 纯函数：`BulkPassItem[] → BatchPassItem[]`，剥掉展示用 `label`。
+ *
+ * 导出供单测（composables/useBulkPassInspection.spec.ts）覆盖；保持映射规则
+ * 集中在一处，弹窗侧只关心 UI 类型。
+ */
+export function toBatchPassItems(items: BulkPassItem[]): BatchPassItem[] {
+  return items.map((it) => ({
+    part_id: it.part_id,
+    batch_id: it.batch_id ?? undefined,
+    quantity: it.quantity ?? undefined,
+  }))
+}
+
+/**
+ * 纯函数：v2 端点响应 → composable 契约 BulkPassResult。
+ *
+ * 规则：
+ *   - `passed[]`：按请求 part_id 顺序回填原始 BulkPassItem（保留 label，方便
+ *     父组件 toast 时定位）；后端 passed 顺序与请求 items 顺序一致（service
+ *     层顺序处理），所以用 indexOf 重新对齐。
+ *   - `failed[]`：后端 failed 按 part_id 找到原始 item 包成 BulkPassFailure。
+ *
+ * 复杂度 O(N²)（indexOf 在 N≤200 时可忽略）；保持纯函数，不依赖 axios 实例。
+ */
+export function mapBatchResult(
+  requested: BulkPassItem[],
+  result: BatchPassInspectionOutFE,
+): BulkPassResult {
+  const passed: BulkPassItem[] = []
+  for (const part of result.passed) {
+    const idx = requested.findIndex((it) => it.part_id === part.id)
+    if (idx >= 0) {
+      passed.push(requested[idx])
+    } else {
+      // 理论上不会发生（后端不会凭空返回不在请求里的 part）；防御：构造一个
+      // 无 label 的最小 item，避免 UI 渲染 undefined。
+      passed.push({ part_id: part.id })
+    }
+  }
+  const failed: BulkPassFailure[] = result.failed.map((f: BatchPassFailureFE) => {
+    const original =
+      requested.find((it) => it.part_id === f.part_id) ?? { part_id: f.part_id }
+    return {
+      item: original,
+      code: f.code,
+      message: f.message,
+    }
+  })
+  return { passed, failed }
 }
 
 export function useBulkPassInspection(): UseBulkPassInspectionReturn {
@@ -60,42 +120,36 @@ export function useBulkPassInspection(): UseBulkPassInspectionReturn {
 
   async function run(
     items: BulkPassItem[],
-    opts: { concurrency?: number } = {},
+    _opts: { concurrency?: number } = {},
   ): Promise<BulkPassResult> {
-    const concurrency = Math.max(1, opts.concurrency ?? 4)
+    // concurrency 参数已无意义（v2 端点 N≤200 顺序处理）；保留入参兼容旧调用方。
+    void _opts
     running.value = true
     progress.total = items.length
     progress.done = 0
 
-    const passed: BulkPassItem[] = []
-    const failed: BulkPassFailure[] = []
-    const queue = [...items]
-
-    const workers = Array.from({ length: concurrency }, async () => {
-      while (queue.length > 0) {
-        const item = queue.shift()!
-        try {
-          await passInspection(item.part_id, {
-            batch_id: item.batch_id,
-            quantity: item.quantity,
-          })
-          passed.push(item)
-        } catch (e) {
-          const err = e as ApiError
-          failed.push({
-            item,
-            code: err?.code ?? 0,
-            message: err?.message ?? '未知错误',
-          })
-        } finally {
-          progress.done += 1
-        }
+    try {
+      const out = await batchPassInspection(toBatchPassItems(items))
+      // 单次 round-trip 语义：done 一次跳到 total。保留 progress 字段便于未来
+      // 扩展（如后端拆批/流式返回时回填分阶段进度）。
+      progress.done = items.length
+      return mapBatchResult(items, out)
+    } catch (e) {
+      // 端点级错误（VALIDATION_ERROR / FORBIDDEN 等）：把请求 items 全部标为
+      // 失败抛回，弹窗走 part-partial / 全失败兜底分支。
+      const err = e as ApiError
+      progress.done = items.length
+      return {
+        passed: [],
+        failed: items.map((item) => ({
+          item,
+          code: err?.code ?? 0,
+          message: err?.message ?? '未知错误',
+        })),
       }
-    })
-    await Promise.all(workers)
-
-    running.value = false
-    return { passed, failed }
+    } finally {
+      running.value = false
+    }
   }
 
   return { running, progress, run }

@@ -7,11 +7,14 @@
 //   - 调用方只关心"已成功的子集" / "失败的占位"。
 //
 // 与 useBulkPassInspection.ts 的区别：
-//   - useBulkPassInspection 关心"成功/失败分类 + progress 计数"，并发副作用语义；
-//   - usePooledDetail 只关心"拉数据"（幂等 GET），失败丢弃即可。
+//   - useBulkPassInspection 是 v2 批量端点（POST /parts/batch-pass-inspection）
+//     的 composable 包装，并发已下放到后端顺序处理；UI 关心「成功 / 失败分类」，
+//     不需要中间进度。2026-08-25 之前曾是前端 worker pool 方案（见 git log）。
+//   - usePooledDetail 只关心"拉数据"（幂等 GET），失败丢弃即可；不适合做
+//     副作用密集的写操作。
 //
-// 不抽 useBulkPassInspection：那边有 passed/failed 收集 + reactive progress，
-// 直接迁移会破坏 BatchInspectionConfirmDialog 的进度条语义。
+// 不抽 useBulkPassInspection 进 usePooledDetail：那边一次 round-trip 副作用
+// 与"独立 GET 失败可丢弃"语义完全不同，合并会破坏弹窗的错误聚合需求。
 
 export interface PooledOptions {
   /** 并发上限，默认 4。 */

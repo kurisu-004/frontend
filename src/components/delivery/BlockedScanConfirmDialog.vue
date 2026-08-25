@@ -1,14 +1,14 @@
 <!--
-  扫码阻塞确认对话框（2026-08-23 新增）。
+  扫码阻塞确认对话框（2026-08-23 新增；2026-08-25 切到 v2 批量端点）。
 
   用途：扫码建单页遇到 21418 / 21405 时弹出，列出阻塞件；
-  品检员一键确认后批量通过品检（useBulkPassInspection），
+  品检员一键确认后批量通过品检（useBulkPassInspection → v2 batch 端点），
   父组件拿到 pass-success 后自动用 originalCode 重扫。
 
   设计要点：
   - 父组件应已把 'on note DN-XXX' 冲突项剔除；本组件不再二次过滤。
   - 「一键通过品检」按钮在所有 failure 都带 part_id 时可用；
-    后端扩展前 failures[].part_id 可能缺失 → disabled + tooltip。
+    21405 散件 message 解析出的占位 item 没有 part_id → disabled + tooltip。
   - 部分通过：保留弹窗 + emit pass-partial，父组件 toast 即可，不自动重扫。
 -->
 <script setup lang="ts">
@@ -65,7 +65,10 @@ const items = computed<BulkPassItem[]>(() =>
   })),
 )
 
-// 「一键通过品检」可用条件：列表非空 + 每个 failure 都有 part_id
+// 「一键通过品检」可用条件：列表非空 + 每个 failure 都有 part_id。
+// 2026-08-25：后端已扩展 ScanFailureDto，21418 一律带 part_id；21405 散件
+// message 解析出的占位 item 没 part_id（payload 解析不出 part 级 ID）→
+// 这种场景下按钮 disabled，由用户手动走单件品检流程。
 const canBulkPass = computed(
   () =>
     props.failures.length > 0 &&
@@ -74,11 +77,9 @@ const canBulkPass = computed(
     ),
 )
 
-// 2026-08-23：后端 ScanFailureDto 扩展前 part_id 缺失时给 tooltip
+// 2026-08-25：tooltip 文案改为业务描述（21405 散件 part_id 缺失）
 const disabledTooltip = computed(() =>
-  canBulkPass.value
-    ? ''
-    : '需要后端在 failures 中暴露 part_id（~/Code/hsh-erp-rust ScanFailureDto 待扩展）',
+  canBulkPass.value ? '' : '存在缺少 part_id 的行（多为 21405 散件），请手动通过品检',
 )
 
 function onCancel(): void {
