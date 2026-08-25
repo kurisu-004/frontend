@@ -1,38 +1,28 @@
-import { computed, type ComputedRef } from 'vue'
-import { useBreakpoint } from './useBreakpoint'
+import type { Ref } from 'vue'
 
-export interface DialogSizeOpts {
-  /** 桌面首选宽度（px 数字或带单位字符串），默认 520 */
-  desktopWidth?: number | string
-  /** 手机(<sm)是否走全屏 el-dialog。默认 false（改用 92vw 宽 + 6vh top） */
+export interface DialogSizeOptions {
+  desktopWidth?: string | number
+  /** 已废弃：保留参数名以兼容调用方，但忽略值 */
   fullscreenOnMobile?: boolean
 }
 
-export interface DialogSizeReturn {
-  /** 绑定到 el-dialog :width */
-  width: ComputedRef<string>
-  /** 绑定到 el-dialog :top */
-  top: ComputedRef<string>
-  /** 绑定到 el-dialog :fullscreen */
-  fullscreen: ComputedRef<boolean>
+export interface DialogSizeResult {
+  width: string | number
+  top: string
+  fullscreen: false
 }
 
 /**
- * 统一的对话框尺寸策略：
- * - 桌面：固定宽度（desktopWidth），top 15vh（EP 默认）
- * - 手机(<sm)：fullscreenOnMobile=true 走全屏；否则 92vw 宽 + 6vh top，近全屏但保留边距
+ * 2026-08-25 重构：移除 mobile 适配后简化为静态桌面尺寸。
+ * 保留函数签名（含 fullscreenOnMobile 字段）以便调用方逐步迁移。
  */
-export function useDialogSize(opts: DialogSizeOpts = {}): DialogSizeReturn {
-  const { until } = useBreakpoint()
-  const isPhone = until('sm')
-  const desktop =
-    typeof opts.desktopWidth === 'number'
-      ? `${opts.desktopWidth}px`
-      : (opts.desktopWidth ?? '520px')
-
-  const fullscreen = computed(() => Boolean(opts.fullscreenOnMobile) && isPhone.value)
-  const width = computed(() => (isPhone.value ? '92vw' : desktop))
-  const top = computed(() => (isPhone.value ? '6vh' : '15vh'))
-
-  return { width, top, fullscreen }
+export function useDialogSize(
+  options: DialogSizeOptions | Ref<DialogSizeOptions> = {},
+): DialogSizeResult {
+  const opts = 'value' in options ? options.value : options
+  return {
+    width: opts.desktopWidth ?? '600px',
+    top: '15vh',
+    fullscreen: false,
+  }
 }
