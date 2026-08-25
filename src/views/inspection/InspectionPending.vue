@@ -5,18 +5,27 @@
   - 每行两个动作：「品检通过」「指定工序」
   - 指定工序 → 弹出 el-dialog 选择目标 PRODUCTION 货架（el-radio-group）
   - 加急行整行红底 #fde2e2（与 PartsList 同款）
+  - 2026-08-25 T14：filter 卡 + 列可见性 + 表格 + 分页 收口到 <PartListShell>；
+    列定义 / 操作列仍在本文件；状态 / fetcher 走 useInspectionList composable。
 -->
 <template>
   <div class="inspection-pending">
-    <el-card shadow="never" class="filter-card">
-      <div class="filter-row">
+    <PartListShell
+      ref="listRef"
+      :column-defs="columnDefs"
+      :fetcher="fetcher"
+      :list-key="'inspection_pending'"
+      empty-text="当前无待品检零件"
+      :row-class-name="rowClassName"
+    >
+      <template #filter>
         <el-input
           v-model="search.keyword"
           placeholder="图号 / 名称（前缀搜索）"
           clearable
           style="width: 260px"
-          @keyup.enter="onSearch"
-          @clear="onSearch"
+          @keyup.enter="onRefresh"
+          @clear="onRefresh"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
@@ -28,8 +37,8 @@
           placeholder="序列号"
           clearable
           style="width: 180px"
-          @keyup.enter="onSearch"
-          @clear="onSearch"
+          @keyup.enter="onRefresh"
+          @clear="onRefresh"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
@@ -46,155 +55,142 @@
           unlink-panels
           clearable
           style="width: 280px"
-          @change="onSearch"
+          @change="onRefresh"
         />
-
-        <el-button @click="onSearch">
-          <el-icon><RefreshLeft /></el-icon>
-          <span>刷新</span>
-        </el-button>
 
         <el-checkbox v-model="autoRefresh" @change="onAutoRefreshToggle">
           自动刷新（5min）
         </el-checkbox>
-
-        <span v-if="pagedRef?.total?.value && pagedRef.total.value > 0" class="total-hint">共 {{ pagedRef.total.value }} 条</span>
-        <el-tag v-else-if="!pagedRef?.loading?.value" type="info" effect="plain" size="small">
-          当前无待品检零件
-        </el-tag>
-      </div>
-    </el-card>
-
-    <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。
-         ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。
-         2026-08-25 (T7)：el-pagination 收口到 <PagedTable> -->
-    <div class="table-toolbar">
-      <ColumnVisibilityPopover
-        :defs="columnDefs"
-        :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-        @reset="columnVisibility.showAll"
-      />
-    </div>
-    <PagedTable ref="pagedRef" :fetcher="fetcher" :default-page-size="20">
-      <template #default="{ items, loading }">
-        <el-table
-          :data="items"
-          v-loading="loading"
-          row-key="id"
-          :empty-text="emptyText"
-          stripe
-          border
-          size="small"
-          :row-class-name="rowClassName"
-        >
-          <el-table-column
-            v-if="columnVisibility.isVisible('serial_no')"
-            prop="serial_no"
-            label="序列号"
-            min-width="110"
-            fixed="left"
-            show-overflow-tooltip align="center">
-            <template #default="{ row }">
-              <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column
-            v-if="columnVisibility.isVisible('drawing_no')"
-            prop="drawing_no"
-            label="图号"
-            min-width="130"
-            fixed="left"
-            show-overflow-tooltip align="center"/>
-
-          <el-table-column
-            v-if="columnVisibility.isVisible('name')"
-            prop="name"
-            label="名称"
-            min-width="200"
-            show-overflow-tooltip align="center">
-            <template #default="{ row }">
-              <router-link :to="`/parts/${row.id}`" class="name-link">
-                {{ row.name }}
-              </router-link>
-            </template>
-          </el-table-column>
-
-          <el-table-column
-            v-if="columnVisibility.isVisible('batch_label')"
-            label="批次" min-width="100" align="center"
-          >
-            <template #default="{ row }">
-              <span class="batch-label">{{ (row as RowState).batch_label || '—' }}</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column
-            v-if="columnVisibility.isVisible('quantity')"
-            prop="quantity" label="批次量" min-width="80" align="right" />
-
-          <el-table-column
-            v-if="columnVisibility.isVisible('planned_delivery_date')"
-            prop="planned_delivery_date"
-            label="计划交期"
-            min-width="120" align="center"/>
-
-          <el-table-column
-            v-if="columnVisibility.isVisible('system_delivery_date')"
-            prop="system_delivery_date"
-            label="系统交期"
-            min-width="120"
-            align="center"
-          >
-            <template #default="{ row }">
-              <span :class="{ muted: !row.system_delivery_date }">
-                {{ row.system_delivery_date || '—' }}
-              </span>
-            </template>
-          </el-table-column>
-
-          <el-table-column
-            v-if="columnVisibility.isVisible('customer')"
-            label="客户" min-width="180" show-overflow-tooltip align="center"
-          >
-            <template #default="{ row }">
-              <span v-if="row.customer_path">{{ row.customer_path }}</span>
-              <span v-else-if="row.customer_name" class="muted">{{ row.customer_name }}</span>
-              <span v-else class="muted">—</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column
-            v-if="columnVisibility.isVisible('shelf_code')"
-            label="品检货架" min-width="150" show-overflow-tooltip align="center"
-          >
-            <template #default="{ row }">
-              <span v-if="row.shelf_code">品检 {{ row.shelf_code }}</span>
-              <span v-else class="muted">—</span>
-            </template>
-          </el-table-column>
-
-          <el-table-column label="操作" min-width="220" fixed="right" align="center">
-            <template #default="{ row }">
-              <el-button
-                link
-                type="success"
-                size="small"
-                :loading="row._passing"
-                @click="onPass(row as RowState)"
-              >品检通过</el-button>
-              <el-button
-                link
-                type="warning"
-                size="small"
-                @click="openFailDialog(row as RowState)"
-              >指定工序</el-button>
-              <el-button link type="primary" size="small" @click="$router.push(`/parts/${row.id}`)">详情</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
       </template>
-    </PagedTable>
+
+      <template #default="{ isVisible }">
+        <el-table-column
+          v-if="isVisible('serial_no')"
+          prop="serial_no"
+          label="序列号"
+          min-width="110"
+          fixed="left"
+          show-overflow-tooltip
+          align="center"
+        >
+          <template #default="{ row }">
+            <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column
+          v-if="isVisible('drawing_no')"
+          prop="drawing_no"
+          label="图号"
+          min-width="130"
+          fixed="left"
+          show-overflow-tooltip
+          align="center"
+        />
+
+        <el-table-column
+          v-if="isVisible('name')"
+          prop="name"
+          label="名称"
+          min-width="200"
+          show-overflow-tooltip
+          align="center"
+        >
+          <template #default="{ row }">
+            <router-link :to="`/parts/${row.id}`" class="name-link">
+              {{ row.name }}
+            </router-link>
+          </template>
+        </el-table-column>
+
+        <el-table-column
+          v-if="isVisible('batch_label')"
+          label="批次"
+          min-width="100"
+          align="center"
+        >
+          <template #default="{ row }">
+            <span class="batch-label">{{ row.batch_label || '—' }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column
+          v-if="isVisible('quantity')"
+          prop="quantity"
+          label="批次量"
+          min-width="80"
+          align="right"
+        />
+
+        <el-table-column
+          v-if="isVisible('planned_delivery_date')"
+          prop="planned_delivery_date"
+          label="计划交期"
+          min-width="120"
+          align="center"
+        />
+
+        <el-table-column
+          v-if="isVisible('system_delivery_date')"
+          prop="system_delivery_date"
+          label="系统交期"
+          min-width="120"
+          align="center"
+        >
+          <template #default="{ row }">
+            <span :class="{ muted: !row.system_delivery_date }">
+              {{ row.system_delivery_date || '—' }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column
+          v-if="isVisible('customer')"
+          label="客户"
+          min-width="180"
+          show-overflow-tooltip
+          align="center"
+        >
+          <template #default="{ row }">
+            <span v-if="row.customer_path">{{ row.customer_path }}</span>
+            <span v-else-if="row.customer_name" class="muted">{{ row.customer_name }}</span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column
+          v-if="isVisible('shelf_code')"
+          label="品检货架"
+          min-width="150"
+          show-overflow-tooltip
+          align="center"
+        >
+          <template #default="{ row }">
+            <span v-if="row.shelf_code">品检 {{ row.shelf_code }}</span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" min-width="220" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="success"
+              size="small"
+              :loading="(row as RowState)._passing"
+              @click="onPass(row as RowState)"
+            >品检通过</el-button>
+            <el-button
+              link
+              type="warning"
+              size="small"
+              @click="openFailDialog(row as RowState)"
+            >指定工序</el-button>
+            <el-button link type="primary" size="small" @click="$router.push(`/parts/${row.id}`)">详情</el-button>
+          </template>
+        </el-table-column>
+      </template>
+    </PartListShell>
 
     <!-- 品检通过对话框（2026-07-29：带数量；部分通过后端先拆再过） -->
     <el-dialog
@@ -433,7 +429,7 @@
           </span>
         </el-form-item>
 
-        <el-form-item label="品检动作" required v-bind:for="''">
+        <el-form-item label="品检动作" required>
           <el-radio-group v-model="scanInspectDecision" aria-label="品检动作">
             <el-radio value="PASS">品检通过（PASS）</el-radio>
             <el-radio value="FAIL">打回生产架（FAIL）</el-radio>
@@ -538,12 +534,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { RefreshLeft, Search } from '@element-plus/icons-vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import PagedTable from '@/components/PagedTable.vue'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import { Search } from '@element-plus/icons-vue'
+import PartListShell from '@/components/PartListShell.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
@@ -554,7 +548,6 @@ import {
 import {
   failInspection,
   getPartBySerial,
-  listInspectionBatches,
   passInspection,
   scanInspect,
   type PartItem,
@@ -562,62 +555,57 @@ import {
 import { listShelves } from '@/api/shelves'
 import { listProcesses } from '@/api/process'
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
-import { useListStatePersist } from '@/composables/useListFilterPersist'
 import type { Shelf } from '@/types/shelf'
 import type { Process } from '@/types/process'
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue'
+import { useInspectionList } from './composables/useInspectionList'
 
 // ============ 状态 ============
 interface RowState extends PartItem {
   _passing?: boolean
 }
-// 2026-08-25 T7：items / total / loading / page 已迁到 <PagedTable>；view 保留 items 镜像（onInspectionScan 需遍历）
-const items = ref<RowState[]>([])
-const errorMsg = ref<string | null>(null)
-const pagedRef = ref()
-const pageSize = ref(20)
 
-const search = reactive({ keyword: '', serialNo: '' })
-const plannedDateRange = ref<[string, string] | null>(null)
+// ============ T14：列表状态（filter / fetcher）+ 列可见性 ============
+// 列可见性由 PartListShell 内部 useColumnVisibility 持有，default slot 用 isVisible(key) 控制。
+// 「操作」列不放进 defs → 始终可见。
+const columnDefs = [
+  { key: 'serial_no', label: '序列号' },
+  { key: 'drawing_no', label: '图号' },
+  { key: 'name', label: '名称' },
+  { key: 'batch_label', label: '批次' },
+  { key: 'quantity', label: '批次量' },
+  { key: 'planned_delivery_date', label: '计划交期' },
+  { key: 'system_delivery_date', label: '系统交期' },
+  { key: 'customer', label: '客户' },
+  { key: 'shelf_code', label: '品检货架' },
+] as const
 
-const emptyText = computed(() => errorMsg.value ?? '暂无待品检零件')
+const {
+  search,
+  plannedDateRange,
+  autoRefresh,
+  fetcher,
+  restoreFilter,
+} = useInspectionList()
 
-function rowClassName({ row }: { row: RowState }): string {
+// PartListShell 的 ref；扫码匹配遍历当前页 items 用 listRef.value.items.value。
+const listRef = ref()
+
+function rowClassName({ row }: { row: PartItem; rowIndex: number }): string {
   return row.is_urgent ? 'row-urgent' : ''
 }
 
-// PagedTable fetcher：分页从 params，过滤项从 view 闭包
-async function fetcher(params: { page: number; pageSize: number }) {
-  errorMsg.value = null
-  try {
-    // 2026-07-29 批次级：行=批次（quantity 为批次量，操作回传 batch_id）
-    const resp = await listInspectionBatches({
-      keyword: search.keyword.trim() || undefined,
-      serial_no: search.serialNo.trim() || undefined,
-      planned_delivery_date_from: plannedDateRange.value?.[0],
-      planned_delivery_date_to: plannedDateRange.value?.[1],
-      limit: params.pageSize,
-      offset: (params.page - 1) * params.pageSize,
-    })
-    return { items: resp.items, total: resp.total }
-  } catch (e) {
-    errorMsg.value = (e as Error).message ?? '查询失败'
-    return { items: [], total: 0 }
-  }
+// 「刷新」按钮 = 列表回到第 1 页再拉（PartListShell.onRefresh = reset()）
+async function onRefresh(): Promise<void> {
+  await listRef.value?.onRefresh()
 }
 
-// 其它地方仍调 fetchList() 触发刷新（包装 PagedTable.fetch）
+// 其它地方仍调 fetchList() 触发刷新（包装 listRef.fetch()，保持当前页码）
 async function fetchList(): Promise<void> {
-  await pagedRef.value?.fetch()
-}
-
-function onSearch(): void {
-  // 2026-08-25 T7：调 reset 把页码拨回 1
-  void pagedRef.value?.reset()
+  await listRef.value?.fetch()
 }
 
 // ============ 自动刷新 ============
-const autoRefresh = ref(false)
 let autoRefreshTimer: number | null = null
 
 function onAutoRefreshToggle(val: string | number | boolean): void {
@@ -631,28 +619,6 @@ function onAutoRefreshToggle(val: string | number | boolean): void {
     }, 300_000)
   }
 }
-
-// ============ 筛选状态持久化 ============
-const { restore: restoreInspectionFilter, clear: clearInspectionFilter } = useListStatePersist(
-  'inspection_pending',
-  { search, pageSize, autoRefresh },
-  { exclude: new Set(['page']) },
-)
-
-// ============ 列可见性 ============
-// 「操作」列不放进 defs → 始终可见
-const columnDefs = [
-  { key: 'serial_no', label: '序列号' },
-  { key: 'drawing_no', label: '图号' },
-  { key: 'name', label: '名称' },
-  { key: 'batch_label', label: '批次' },
-  { key: 'quantity', label: '批次量' },
-  { key: 'planned_delivery_date', label: '计划交期' },
-  { key: 'system_delivery_date', label: '系统交期' },
-  { key: 'customer', label: '客户' },
-  { key: 'shelf_code', label: '品检货架' },
-] as const
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'inspection_pending' })
 
 onBeforeUnmount(() => {
   if (autoRefreshTimer !== null) {
@@ -690,7 +656,7 @@ async function onInspectionScan(rawCode: string): Promise<void> {
   }
   // 快速路径：在当前已加载列表里按 serial_no || drawing_no 匹配（不限状态，按命中的状态分流）
   const matches = findAllByCode(
-    items.value as unknown as PartItem[],
+    (listRef.value?.items.value ?? []) as unknown as PartItem[],
     code,
   )
   if (matches.length === 0) {
@@ -1016,35 +982,12 @@ async function onFailConfirm(): Promise<void> {
 }
 
 onMounted(() => {
-  // 先尝试恢复 localStorage 中的搜索条件 / 分页大小 / 自动刷新
-  const persisted = restoreInspectionFilter() as
-    | { search?: Partial<typeof search>; pageSize?: number; autoRefresh?: boolean }
-    | null
-    | undefined
-  if (persisted) {
-    if (persisted.search) Object.assign(search, persisted.search)
-    if (typeof persisted.pageSize === 'number') {
-      pagedRef.value!.pageSize.value = persisted.pageSize
-    }
-    if (typeof persisted.autoRefresh === 'boolean') {
-      autoRefresh.value = persisted.autoRefresh
-      if (autoRefresh.value) {
-        // 重新挂载定时器
-        onAutoRefreshToggle(true)
-      }
-    }
+  // 先尝试恢复 localStorage 中的搜索条件 / 自动刷新（pageSize 由 PartListShell 自行恢复）
+  restoreFilter()
+  if (autoRefresh.value) {
+    // 重新挂载定时器
+    onAutoRefreshToggle(true)
   }
-  // 2026-08-25 T7：双向同步
-  //  - pageSize → view 本地 pageSize（持久化写盘）
-  //  - items → view 本地 items 镜像（onInspectionScan 遍历当前页码匹配扫码）
-  watch(
-    () => pagedRef.value?.pageSize?.value,
-    (s) => { if (typeof s === 'number') pageSize.value = s },
-  )
-  watch(
-    () => pagedRef.value?.items?.value,
-    (it) => { items.value = (it ?? []) as RowState[] },
-  )
   fetchList()
 })
 </script>
@@ -1052,36 +995,6 @@ onMounted(() => {
 <style lang="scss" scoped>
 .inspection-pending {
   padding: 0;
-}
-// 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层）
-.table-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 8px;
-}
-.filter-card {
-  margin-bottom: 12px;
-}
-.filter-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.total-hint {
-  margin-left: auto;
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-.sheet-wrapper {
-  background: #fff;
-  border-radius: 6px;
-  padding: 8px 0;
-}
-.pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
 }
 .name-link {
   color: var(--el-color-primary);
@@ -1092,12 +1005,6 @@ onMounted(() => {
 }
 .muted {
   color: var(--text-secondary);
-}
-:deep(.row-urgent) {
-  background: #fde2e2 !important;
-}
-:deep(.row-urgent td) {
-  background: #fde2e2 !important;
 }
 .fail-summary {
   background: #fdf6ec;
