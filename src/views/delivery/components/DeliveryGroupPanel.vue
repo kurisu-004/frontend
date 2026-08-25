@@ -22,7 +22,7 @@
     delete(group)     — 删除分组
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import type { Customer } from '@/api/customer'
 import type {
@@ -31,7 +31,7 @@ import type {
 } from '@/types/deliveryGroup'
 import DeliveryGroupEditor from './DeliveryGroupEditor.vue'
 
-defineProps<{
+const props = defineProps<{
   groups: DeliveryGroupListOut
   loading: boolean
   canCreate: boolean
@@ -52,6 +52,14 @@ const emit = defineEmits<{
 // ============ 编辑器 dialog 状态（panel 局部拥有）============
 const editorOpen = ref(false)
 const editingGroup = ref<DeliveryGroupOut | null>(null)
+
+// 2026-08-25 T11p5 修复：拆分前 DeliveryNoteScan.vue 顶层 watch(scanState.l1CustomerId) 会
+// 在 L1 切换时关闭编辑器并清空 editingGroup；拆到本组件后 shell 拿不到这两个 ref。
+// 这里补回同等的 watch：L1 变了 → 关闭编辑器 + 清 editingGroup。
+watch(() => props.l1Id, () => {
+  editorOpen.value = false
+  editingGroup.value = null
+})
 
 function openNewGroup(): void {
   editingGroup.value = null

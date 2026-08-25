@@ -307,6 +307,10 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
       // deletingByNote / tableRefs / foldedComputeds / localStorage 标记）
       opts.onDraftRemoved(noteId)
       ElMessage.success('已提交')
+      // 2026-08-25 T11p5 修复：success 路径提前 return，跳过 finally 的
+      // `submittingByNote[noteId] = false`——shell 的 onDraftRemoved 已经
+      // `delete submission.submittingByNote[noteId]`，再写回来会留下 orphan key。
+      return
     } catch (e) {
       onSubmitDraftError(e)
     } finally {
