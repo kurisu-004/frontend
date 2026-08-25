@@ -82,6 +82,7 @@ declare module 'vue' {
     FileListCard: typeof import('./components/FileListCard.vue')['default']
     HmiPickerCard: typeof import('./components/HmiPickerCard.vue')['default']
     NotificationBanner: typeof import('./components/NotificationBanner.vue')['default']
+    PagedTable: typeof import('./components/PagedTable.vue')['default']
     PartPickerDialog: typeof import('./components/delivery/PartPickerDialog.vue')['default']
     PdfViewer: typeof import('./components/PdfViewer.vue')['default']
     PrintPreviewDialog: typeof import('./components/delivery/PrintPreviewDialog.vue')['default']
