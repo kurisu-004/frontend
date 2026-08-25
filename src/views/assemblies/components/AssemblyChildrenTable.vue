@@ -3,7 +3,7 @@
 
   装配件「子件 / 上传 PDF」复合区域：
   - 上传总装 PDF 卡（仅当 canUploadTotalPdf 时显示）
-  - 子件表格卡（ResponsiveList 桌面表格 + 移动卡片）
+  - 子件表格卡（el-table；手机卡片视图 2026-08-25 mobile 清理已移除）
   - 「添加子件」对话框（含 form 状态 + form ref + 校验）
   - 「子件图号点击」全屏 PDF 预览对话框（含 Blob URL 生命周期）
 
@@ -65,16 +65,17 @@
       </div>
     </template>
 
-    <ResponsiveList
-      :items="children ?? []"
+    <el-table
+      :data="children ?? []"
       row-key="id"
-      empty-text="暂无子零件"
-      :card-class="(row: any) => (row.is_urgent ? 'rl-card--urgent' : '')"
       border
       stripe
       size="small"
       :row-class-name="childRowClass"
     >
+      <template #empty>
+        <el-empty description="暂无子零件" />
+      </template>
       <el-table-column type="index" label="#" width="50" />
       <el-table-column label="序列号" min-width="100" align="center">
         <template #default="{ row }">
@@ -133,54 +134,8 @@
         </template>
       </el-table-column>
 
-      <!-- 手机卡片 -->
-      <template #card="{ row }">
-        <div class="rl-card-head">
-          <span class="rl-card-title">
-            <el-link
-              v-if="childDrawingMap[row.id]"
-              type="primary"
-              @click="onChildDrawingClick(row, childDrawingMap[row.id]!)"
-            >
-              {{ row.drawing_no }}
-            </el-link>
-            <span v-else>{{ row.drawing_no }}</span>
-          </span>
-          <el-tag :type="partStatusTagType(row.status)" size="small">
-            {{ partStatusLabel(row.status) }}
-          </el-tag>
-        </div>
-        <div class="rl-card-sub">{{ row.name }}</div>
-        <div class="rl-kv">
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">序列号</span>
-            <span class="rl-kv__val">
-              <el-tag v-if="row.serial_no" type="success" size="small" effect="dark">
-                {{ row.serial_no }}
-              </el-tag>
-              <span v-else class="muted">未分配</span>
-            </span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">数量</span>
-            <span class="rl-kv__val">{{ row.quantity }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">计划交期</span>
-            <span class="rl-kv__val">{{ row.planned_delivery_date || '—' }}</span>
-          </div>
-          <div class="rl-kv__item rl-kv__item--full">
-            <span class="rl-kv__key">所在位置</span>
-            <span class="rl-kv__val">{{ row.current_holder_display || '—' }}</span>
-          </div>
-        </div>
-        <div class="rl-card-actions">
-          <el-button link type="primary" size="small" @click="goPartDetail(row.id)">
-            详情
-          </el-button>
-        </div>
-      </template>
-    </ResponsiveList>
+      <!-- 手机卡片视图已移除（2026-08-25 mobile 适配清理） -->
+    </el-table>
   </el-card>
 
   <!-- 子件图号直接预览 PDF（全屏） -->
@@ -256,7 +211,6 @@ import type { UploadFile, FormInstance } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Loading, Plus, Upload } from '@element-plus/icons-vue'
 
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import PdfViewer from '@/components/PdfViewer.vue'
 import { useDialogSize } from '@/composables/useDialogSize'
 import type { PartFileItem } from '@/types/part_file'

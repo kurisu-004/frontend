@@ -96,8 +96,8 @@
     <el-dialog
       v-model="showChangePwd"
       title="修改密码"
-      :width="pwdDlg.width.value"
-      :top="pwdDlg.top.value"
+      :width="pwdDlg.width"
+      :top="pwdDlg.top"
       @closed="resetPwdForm"
     >
       <el-form ref="pwdFormRef" :model="pwdForm" :rules="pwdRules" label-width="90px">

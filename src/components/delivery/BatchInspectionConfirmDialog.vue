@@ -106,9 +106,9 @@ async function onConfirm(): Promise<void> {
   <el-dialog
     :model-value="modelValue"
     :title="`品检确认：送货单 ${noteShortId}`"
-    :width="dlg.width.value"
-    :top="dlg.top.value"
-    :fullscreen="dlg.fullscreen.value"
+    :width="dlg.width"
+    :top="dlg.top"
+    :fullscreen="dlg.fullscreen"
     append-to-body
     :close-on-click-modal="false"
     destroy-on-close

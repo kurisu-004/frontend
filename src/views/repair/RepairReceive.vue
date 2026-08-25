@@ -6,7 +6,7 @@
  * - 「已送货」(DELIVERED)：操作栏点「返修」→ 弹一步式 dialog（含数量 + 工序 + 货架）
  * - 「返修中」(REPAIRING)：纯查询，无操作按钮
  *
- * 表格风格复用零件一览：ResponsiveList + 列显隐 + 排序 + 加急红底 + 客户 el-tree-select 筛选。
+ * 表格风格复用零件一览：el-table + 列显隐 + 排序 + 加急红底 + 客户 el-tree-select 筛选。
  *
  * 扫码：useBarcodeScanner 全局监听；命中已送货列表弹 dialog；未命中复用报工台 findPartBySerialAndPrompt。
  */
@@ -19,16 +19,13 @@ import {
   type PartItem,
 } from '@/api/parts'
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useCustomerTree } from '@/composables/useCustomerTree'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import RepairStartDialog from './RepairStartDialog.vue'
 
 const { onScan } = useBarcodeScanner()
-const { isMobile } = useBreakpoint()
 const { tree: customerTree } = useCustomerTree()
 
 type TabKey = 'delivered' | 'repairing'
@@ -291,26 +288,27 @@ const showActions = computed(() => columnVisibility.isVisible('actions'))
       </div>
     </el-card>
 
-    <ResponsiveList
-      :items="rows"
-      :loading="loading"
+    <div class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap"
+        @update:model-value="(v: Record<string, boolean>) => (columnVisibility.currentMap = v)"
+      />
+    </div>
+    <el-table
+      :data="rows"
       :row-key="(row: PartItem) => row.id"
-      :empty-text="
-        activeTab === 'delivered' ? '暂无已送货件' : '暂无返修中件'
-      "
-      :card-class="(row: PartItem) =>
-        row.is_urgent ? 'rl-card--urgent' : ''
-      "
+      v-loading="loading"
       stripe
       border
       size="small"
       :row-class-name="rowClassName"
     >
-      <template #toolbar>
-        <ColumnVisibilityPopover
-          :defs="columnDefs"
-          :model-value="columnVisibility.currentMap"
-          @update:model-value="(v: Record<string, boolean>) => (columnVisibility.currentMap = v)"
+      <template #empty>
+        <el-empty
+          :description="
+            activeTab === 'delivered' ? '暂无已送货件' : '暂无返修中件'
+          "
         />
       </template>
 
@@ -442,14 +440,8 @@ const showActions = computed(() => columnVisibility.isVisible('actions'))
         </template>
       </el-table-column>
 
-      <template #empty>
-        <el-empty
-          :description="
-            activeTab === 'delivered' ? '暂无已送货件' : '暂无返修中件'
-          "
-        />
-      </template>
-    </ResponsiveList>
+      <!-- 手机卡片视图已移除（2026-08-25 mobile 适配清理） -->
+    </el-table>
 
     <!-- 分页 -->
     <div class="pagination-row">
@@ -513,11 +505,12 @@ const showActions = computed(() => columnVisibility.isVisible('actions'))
   justify-content: flex-end;
   margin-top: 12px;
 }
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
 :deep(.row-urgent) {
   background: #fde2e2 !important;
-}
-:deep(.rl-card--urgent) {
-  border-color: #f89898 !important;
-  background: #fef0f0 !important;
 }
 </style>

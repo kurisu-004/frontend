@@ -102,8 +102,10 @@ export function useRowEditor<TRow extends { id: string }>(
   }
 
   /**
-   * 绑定到 `<ResponsiveList @row-dblclick="onRowDblClick">` 的处理器。
+   * 绑定到 `<el-table @row-dblclick="onRowDblClick">` 的处理器。
    * 双击未在编辑的行 → 进入编辑态；当前有别行在编辑 → 提示并拒绝（避免编辑冲突）。
+   *
+   * 2026-08-25 ResponsiveList 已删除（T1 mobile 清理），改为 el-table。
    */
   function onRowDblClick(row: TRow): void {
     if (!canEdit.value) return

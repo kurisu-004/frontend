@@ -2,13 +2,15 @@
   PartBatchManualTab.vue
 
   Tab 1「录入」内容：
-  - 待新增零件列表（ResponsiveList）
+  - 待新增零件列表（el-table）
   - 添加 / 编辑 Dialog
   - 只读预览 Dialog
   - 图纸预览 Dialog
 
   2026-08-25 拆分：原 PartBatchNew.vue 第 23-365 行整段挪到本组件，state + handler
   在父组件 usePartBatchManual() 里；本组件 props 全部由父组件 `v-bind` 摊开传入。
+
+  2026-08-25 mobile 适配清理：删除 ResponsiveList 包装，改为纯 el-table（手机卡片视图随 T1 一并撤掉）。
 -->
 
 <template>
@@ -42,19 +44,19 @@
     </div>
 
     <!-- 列表态 -->
-    <ResponsiveList
+    <el-table
       v-else
-      :items="staged"
+      :data="staged"
       row-key="uid"
-      empty-text="暂无待新增零件"
-      :card-class="(row) => (row.isUrgent ? 'rl-card--urgent' : '')"
       border
       stripe
       size="small"
       :row-class-name="rowClassName"
       @row-click="onRowPreview"
-      @card-click="onRowPreview"
     >
+      <template #empty>
+        <el-empty description="暂无待新增零件" />
+      </template>
       <el-table-column type="index" label="#" width="50" />
       <el-table-column label="图号" min-width="130" align="center">
         <template #default="{ row }">
@@ -90,40 +92,8 @@
         </template>
       </el-table-column>
 
-      <!-- 手机卡片 -->
-      <template #card="{ row }">
-        <div class="rl-card-head">
-          <span class="rl-card-title">{{ (row as StagedEntry).name }}</span>
-          <el-tag v-if="(row as StagedEntry).isUrgent" type="danger" size="small" effect="dark">加急</el-tag>
-        </div>
-        <div class="rl-card-sub">
-          图号 {{ (row as StagedEntry).drawingNo || '—' }}
-        </div>
-        <div class="rl-kv">
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">数量</span>
-            <span class="rl-kv__val">{{ (row as StagedEntry).quantity }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">计划交期</span>
-            <span class="rl-kv__val">{{ (row as StagedEntry).plannedDeliveryDate || '—' }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">申请人</span>
-            <span class="rl-kv__val">{{ (row as StagedEntry).applicantName || '—' }}</span>
-          </div>
-          <div class="rl-kv__item rl-kv__item--full">
-            <span class="rl-kv__key">客户</span>
-            <span class="rl-kv__val">{{ (row as StagedEntry).customerLabel || '—' }}</span>
-          </div>
-        </div>
-        <div class="rl-card-actions">
-          <el-button link type="primary" size="small" @click.stop="openDrawingPreview(row as StagedEntry)">图纸预览</el-button>
-          <el-button link type="primary" size="small" @click.stop="onRowPreview(row as StagedEntry)">查看</el-button>
-          <el-button link type="danger" size="small" @click.stop="onRemoveRow((row as StagedEntry).uid)">删除</el-button>
-        </div>
-      </template>
-    </ResponsiveList>
+      <!-- 手机卡片视图已移除（2026-08-25 mobile 适配清理） -->
+    </el-table>
 
     <div class="staging-footer">
       <el-button :disabled="staged.length === 0 || submitting" @click="onClearAll">
@@ -363,7 +333,6 @@ import { ref } from 'vue'
 import type { FormInstance, FormRules, UploadFile } from 'element-plus'
 import { DocumentAdd, Picture, Plus, Upload } from '@element-plus/icons-vue'
 import PdfViewer from '@/components/PdfViewer.vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import type { FormState, StagedEntry } from '../composables/usePartBatchManual'
 
 // 父组件 `v-bind="manual"` 摊开传入本组件需要的所有 props。

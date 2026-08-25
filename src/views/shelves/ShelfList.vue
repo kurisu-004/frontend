@@ -77,9 +77,9 @@
     <el-dialog
       v-model="showCreate"
       :title="editingShelf ? '编辑货架' : '新增货架'"
-      :width="shelfDlg.width.value"
-      :top="shelfDlg.top.value"
-      :fullscreen="shelfDlg.fullscreen.value"
+      :width="shelfDlg.width"
+      :top="shelfDlg.top"
+      :fullscreen="shelfDlg.fullscreen"
       @closed="resetForm"
     >
       <el-form ref="shelfFormRef" :model="shelfForm" :rules="shelfRules" label-width="80px">

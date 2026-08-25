@@ -106,9 +106,9 @@
     <el-dialog
       v-model="dialogVisible"
       :title="editing ? '编辑申请人' : '新增申请人'"
-      :width="applicantDlg.width.value"
-      :top="applicantDlg.top.value"
-      :fullscreen="applicantDlg.fullscreen.value"
+      :width="applicantDlg.width"
+      :top="applicantDlg.top"
+      :fullscreen="applicantDlg.fullscreen"
       :close-on-click-modal="false"
       @closed="onDialogClosed"
     >
