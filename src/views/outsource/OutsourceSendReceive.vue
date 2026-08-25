@@ -14,7 +14,6 @@ import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
@@ -779,24 +778,25 @@ watch(activeTab, async (t) => {
             <el-button @click="onSendableReset">重置</el-button>
             <span v-if="sendableTotal > 0" class="total-hint">共 {{ sendableTotal }} 条</span>
           </div>
-          <ResponsiveList
-            :items="sendableItems"
-            :loading="sendableLoading"
+          <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。
+               ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。-->
+          <div class="table-toolbar">
+            <ColumnVisibilityPopover
+              :defs="sendableColumnDefs"
+              :model-value="sendableColumnVisibility.currentMap" @update:model-value="sendableColumnVisibility.update"
+              @reset="sendableColumnVisibility.showAll"
+            />
+          </div>
+          <el-table
+            :data="sendableItems"
+            v-loading="sendableLoading"
             row-key="part_id"
             :empty-text="sendableError ?? '暂无符合条件的可发送零件'"
             :row-class-name="sendableRowClassName"
-            :card-class="(row) => row.is_urgent ? 'rl-card--urgent' : ''"
             stripe
             border
             size="small"
           >
-            <template #toolbar>
-              <ColumnVisibilityPopover
-                :defs="sendableColumnDefs"
-                :model-value="sendableColumnVisibility.currentMap" @update:model-value="sendableColumnVisibility.update"
-                @reset="sendableColumnVisibility.showAll"
-              />
-            </template>
             <el-table-column
               v-if="sendableColumnVisibility.isVisible('part_serial_no')"
               prop="part_serial_no" label="序列号" min-width="100" align="center"
@@ -900,69 +900,7 @@ watch(activeTab, async (t) => {
                 >发送</el-button>
               </template>
             </el-table-column>
-
-            <template #card="{ row }">
-              <div class="rl-card-head">
-                <span class="rl-card-title">{{ (row as SendableItem).part_name || '未命名零件' }}</span>
-                <el-tag v-if="(row as SendableItem).is_urgent" type="danger" size="small">加急</el-tag>
-                <el-tag v-if="(row as SendableItem).send_mode === 'DIRECT'" type="success" size="small">免审批</el-tag>
-                <el-tag v-else type="warning" size="small">已批报价</el-tag>
-                <el-tag v-if="(row as SendableItem).source_status === 'PENDING'" type="info" size="small">起始</el-tag>
-                <el-tag v-else type="primary" size="small">中间</el-tag>
-              </div>
-              <div class="rl-card-sub">
-                图号 {{ (row as SendableItem).part_drawing_no || '—' }} · 序列号 {{ (row as SendableItem).part_serial_no || '—' }}
-              </div>
-              <div class="rl-kv">
-                <div class="rl-kv__item">
-                  <span class="rl-kv__key">数量</span>
-                  <span class="rl-kv__val">{{ (row as SendableItem).quantity ?? '—' }}</span>
-                </div>
-                <div class="rl-kv__item">
-                  <span class="rl-kv__key">计划交期</span>
-                  <span class="rl-kv__val">{{ (row as SendableItem).planned_delivery_date || '—' }}</span>
-                </div>
-                <div class="rl-kv__item rl-kv__item--full">
-                  <span class="rl-kv__key">客户</span>
-                  <span class="rl-kv__val">{{ (row as SendableItem).customer_path || '—' }}</span>
-                </div>
-                <div class="rl-kv__item">
-                  <span class="rl-kv__key">下一道工序</span>
-                  <span class="rl-kv__val">{{ (row as SendableItem).next_process_name || '—' }}</span>
-                </div>
-                <div class="rl-kv__item">
-                  <span class="rl-kv__key">单价</span>
-                  <span class="rl-kv__val">{{ (row as SendableItem).send_mode === 'DIRECT' ? '—' : `${(row as ApprovedQuoteForSendItem).price} 元` }}</span>
-                </div>
-                <div class="rl-kv__item rl-kv__item--full">
-                  <span class="rl-kv__key">外协公司</span>
-                  <span class="rl-kv__val">
-                    <template v-if="(row as SendableItem).send_mode === 'DIRECT'">
-                      {{ (row as DirectOutsourceCandidateItem).company_options.map((c) => c.name).join(' / ') || '—' }}
-                    </template>
-                    <template v-else>
-                      {{ (row as ApprovedQuoteForSendItem).outsource_company_name || '—' }}
-                    </template>
-                  </span>
-                </div>
-              </div>
-              <div class="rl-card-actions">
-                <el-tooltip
-                  v-if="!canSend(row as SendableItem)"
-                  content="该零件当前状态 / 位置 / 工序不满足发送条件"
-                  placement="top"
-                >
-                  <span><el-button size="small" disabled>发送</el-button></span>
-                </el-tooltip>
-                <el-button
-                  v-else
-                  size="small"
-                  type="primary"
-                  @click="openSend(row as SendableItem)"
-                >发送</el-button>
-              </div>
-            </template>
-          </ResponsiveList>
+          </el-table>
           <div class="pagination">
             <el-pagination
               v-model:current-page="sendablePage"
@@ -1006,24 +944,24 @@ watch(activeTab, async (t) => {
             <el-button @click="onReceivingReset">重置</el-button>
             <span v-if="receivingTotal > 0" class="total-hint">共 {{ receivingTotal }} 条</span>
           </div>
-          <ResponsiveList
-            :items="receivingItems"
-            :loading="receivingLoading"
+          <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。-->
+          <div class="table-toolbar">
+            <ColumnVisibilityPopover
+              :defs="receivingColumnDefs"
+              :model-value="receivingColumnVisibility.currentMap" @update:model-value="receivingColumnVisibility.update"
+              @reset="receivingColumnVisibility.showAll"
+            />
+          </div>
+          <el-table
+            :data="receivingItems"
+            v-loading="receivingLoading"
             row-key="batch_id"
             :empty-text="receivingError ?? '暂无待接收的零件'"
             :row-class-name="receivingRowClassName"
-            :card-class="(row) => row.is_urgent ? 'rl-card--urgent' : ''"
             stripe
             border
             size="small"
           >
-            <template #toolbar>
-              <ColumnVisibilityPopover
-                :defs="receivingColumnDefs"
-                :model-value="receivingColumnVisibility.currentMap" @update:model-value="receivingColumnVisibility.update"
-                @reset="receivingColumnVisibility.showAll"
-              />
-            </template>
             <el-table-column
               v-if="receivingColumnVisibility.isVisible('serial_no')"
               prop="serial_no" label="序列号" min-width="100" align="center"
@@ -1077,47 +1015,7 @@ watch(activeTab, async (t) => {
                 >接收</el-button>
               </template>
             </el-table-column>
-
-            <template #card="{ row }">
-              <div class="rl-card-head">
-                <span class="rl-card-title">{{ (row as OutsourceInFlightItem).name }}</span>
-                <el-tag v-if="(row as OutsourceInFlightItem).is_urgent" type="danger" size="small">加急</el-tag>
-                <el-tag type="warning" size="small">外协中</el-tag>
-              </div>
-              <div class="rl-card-sub">
-                图号 {{ (row as OutsourceInFlightItem).drawing_no || '—' }} · 序列号 {{ (row as OutsourceInFlightItem).serial_no || '—' }}
-              </div>
-              <div class="rl-kv">
-                <div class="rl-kv__item">
-                  <span class="rl-kv__key">批次号</span>
-                  <span class="rl-kv__val">{{ (row as OutsourceInFlightItem).batch_no }}</span>
-                </div>
-                <div class="rl-kv__item">
-                  <span class="rl-kv__key">数量</span>
-                  <span class="rl-kv__val">{{ (row as OutsourceInFlightItem).quantity }}</span>
-                </div>
-                <div class="rl-kv__item rl-kv__item--full">
-                  <span class="rl-kv__key">外协公司</span>
-                  <span class="rl-kv__val">{{ (row as OutsourceInFlightItem).outsource_company_name || '—' }}</span>
-                </div>
-                <div class="rl-kv__item rl-kv__item--full">
-                  <span class="rl-kv__key">客户</span>
-                  <span class="rl-kv__val">{{ (row as OutsourceInFlightItem).customer_path || '—' }}</span>
-                </div>
-                <div class="rl-kv__item">
-                  <span class="rl-kv__key">发送时间</span>
-                  <span class="rl-kv__val">{{ (row as OutsourceInFlightItem).sent_at ? new Date((row as OutsourceInFlightItem).sent_at!).toLocaleString() : '—' }}</span>
-                </div>
-              </div>
-              <div class="rl-card-actions">
-                <el-button
-                  size="small"
-                  type="primary"
-                  @click="openReceive(row as OutsourceInFlightItem)"
-                >接收</el-button>
-              </div>
-            </template>
-          </ResponsiveList>
+          </el-table>
           <div class="pagination">
             <el-pagination
               v-model:current-page="receivingPage"
@@ -1263,6 +1161,12 @@ watch(activeTab, async (t) => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+// 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层）
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 .filter-row {
   display: flex;

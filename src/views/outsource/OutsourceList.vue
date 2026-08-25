@@ -26,21 +26,25 @@
     </el-card>
 
     <el-card shadow="never">
-      <ResponsiveList
-        :items="rows"
-        :loading="loading"
+      <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。
+           ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。-->
+      <div class="table-toolbar">
+        <ColumnVisibilityPopover
+          :defs="columnDefs"
+          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+          @reset="columnVisibility.showAll"
+        />
+      </div>
+      <el-table
+        :data="rows"
+        v-loading="loading"
         row-key="id"
-        empty-text="暂无外协公司"
         stripe
         border
         size="small"
       >
-        <template #toolbar>
-          <ColumnVisibilityPopover
-            :defs="columnDefs"
-            :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-            @reset="columnVisibility.showAll"
-          />
+        <template #empty>
+          <el-empty description="暂无外协公司" />
         </template>
         <el-table-column type="index" label="#" width="50" />
         <el-table-column
@@ -89,34 +93,7 @@
             <el-button link type="danger" size="small" @click="onDelete(row as OutsourceCompany)">删除</el-button>
           </template>
         </el-table-column>
-
-        <template #card="{ row }">
-          <div class="rl-card-head">
-            <span class="rl-card-title">{{ (row as OutsourceCompany).name }}</span>
-            <el-tag :type="(row as OutsourceCompany).is_active ? 'success' : 'info'" size="small">
-              {{ (row as OutsourceCompany).is_active ? '启用' : '停用' }}
-            </el-tag>
-          </div>
-          <div class="rl-card-sub">
-            {{ (row as OutsourceCompany).contact_name || '暂无联系人' }}
-          </div>
-          <div class="rl-kv">
-            <div class="rl-kv__item">
-              <span class="rl-kv__key">联系电话</span>
-              <span class="rl-kv__val">{{ (row as OutsourceCompany).contact_phone || '—' }}</span>
-            </div>
-            <div class="rl-kv__item rl-kv__item--full">
-              <span class="rl-kv__key">地址</span>
-              <span class="rl-kv__val">{{ (row as OutsourceCompany).address || '—' }}</span>
-            </div>
-          </div>
-          <div class="rl-card-actions">
-            <el-button link type="primary" size="small" @click="onEdit(row as OutsourceCompany)">编辑</el-button>
-            <el-button link type="warning" size="small" @click="onManageProcesses(row as OutsourceCompany)">维护工序</el-button>
-            <el-button link type="danger" size="small" @click="onDelete(row as OutsourceCompany)">删除</el-button>
-          </div>
-        </template>
-      </ResponsiveList>
+      </el-table>
       <div class="pagination">
         <el-pagination
           v-model:current-page="search.offset"
@@ -217,7 +194,6 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
@@ -467,6 +443,12 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .outsource-list { display: flex; flex-direction: column; gap: 12px; }
+// 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层）
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
 .pagination {
   display: flex;
   justify-content: flex-end;

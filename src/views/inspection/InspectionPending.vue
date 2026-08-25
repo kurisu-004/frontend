@@ -65,24 +65,25 @@
       </div>
     </el-card>
 
-    <ResponsiveList
-      :items="items"
-      :loading="loading"
+    <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。
+         ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。-->
+    <div class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+      />
+    </div>
+    <el-table
+      :data="items"
+      v-loading="loading"
       row-key="id"
       :empty-text="emptyText"
-      :card-class="(row) => (row.is_urgent ? 'rl-card--urgent' : '')"
       stripe
       border
       size="small"
       :row-class-name="rowClassName"
     >
-      <template #toolbar>
-        <ColumnVisibilityPopover
-          :defs="columnDefs"
-          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-          @reset="columnVisibility.showAll"
-        />
-      </template>
       <el-table-column
         v-if="columnVisibility.isVisible('serial_no')"
         prop="serial_no"
@@ -188,65 +189,7 @@
           <el-button link type="primary" size="small" @click="$router.push(`/parts/${row.id}`)">详情</el-button>
         </template>
       </el-table-column>
-
-      <!-- 手机卡片 -->
-      <template #card="{ row }">
-        <div class="rl-card-head">
-          <router-link :to="`/parts/${row.id}`" class="rl-card-title name-link">
-            {{ row.name }}
-          </router-link>
-        </div>
-        <div class="rl-card-sub">
-          图号 {{ row.drawing_no || '—' }} · 序列号 {{ row.serial_no || '—' }}
-        </div>
-        <div class="rl-kv">
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">批次</span>
-            <span class="rl-kv__val">{{ (row as RowState).batch_label || '—' }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">批次量</span>
-            <span class="rl-kv__val">{{ row.quantity }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">计划交期</span>
-            <span class="rl-kv__val">{{ row.planned_delivery_date || '—' }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">系统交期</span>
-            <span class="rl-kv__val">{{ row.system_delivery_date || '—' }}</span>
-          </div>
-          <div class="rl-kv__item rl-kv__item--full">
-            <span class="rl-kv__key">客户</span>
-            <span class="rl-kv__val">
-              {{ row.customer_path || row.customer_name || '—' }}
-            </span>
-          </div>
-          <div class="rl-kv__item rl-kv__item--full">
-            <span class="rl-kv__key">品检货架</span>
-            <span class="rl-kv__val">
-              {{ row.shelf_code ? `品检 ${row.shelf_code}` : '—' }}
-            </span>
-          </div>
-        </div>
-        <div class="rl-card-actions">
-          <el-button
-            link
-            type="success"
-            size="small"
-            :loading="row._passing"
-            @click="onPass(row as RowState)"
-          >品检通过</el-button>
-          <el-button
-            link
-            type="warning"
-            size="small"
-            @click="openFailDialog(row as RowState)"
-          >指定工序</el-button>
-          <el-button link type="primary" size="small" @click="$router.push(`/parts/${row.id}`)">详情</el-button>
-        </div>
-      </template>
-    </ResponsiveList>
+    </el-table>
 
     <div class="pagination">
       <el-pagination
@@ -608,7 +551,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshLeft, Search } from '@element-plus/icons-vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
@@ -1111,6 +1053,12 @@ onMounted(() => {
 <style lang="scss" scoped>
 .inspection-pending {
   padding: 0;
+}
+// 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层）
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 .filter-card {
   margin-bottom: 12px;

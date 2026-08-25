@@ -4,19 +4,23 @@
       <h2>账号管理</h2>
       <el-button type="primary" @click="showCreate = true">新增账号</el-button>
     </div>
-    <ResponsiveList
-      :items="items"
-      :loading="loading"
+    <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。
+         ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。-->
+    <div class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+      />
+    </div>
+    <el-table
+      :data="items"
+      v-loading="loading"
       row-key="id"
-      empty-text="暂无账号"
       stripe
     >
-      <template #toolbar>
-        <ColumnVisibilityPopover
-          :defs="columnDefs"
-          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-          @reset="columnVisibility.showAll"
-        />
+      <template #empty>
+        <el-empty description="暂无账号" />
       </template>
       <el-table-column
         v-if="columnVisibility.isVisible('username')"
@@ -57,43 +61,7 @@
           </el-popconfirm>
         </template>
       </el-table-column>
-
-      <template #card="{ row }">
-        <div class="rl-card-head">
-          <span class="rl-card-title">{{ (row as UserOut).username }}</span>
-          <el-tag :type="(row as UserOut).is_active ? 'success' : 'danger'" size="small">
-            {{ (row as UserOut).is_active ? '启用' : '停用' }}
-          </el-tag>
-        </div>
-        <div class="rl-card-sub">{{ (row as UserOut).full_name || '未填写姓名' }}</div>
-        <div class="rl-kv">
-          <div class="rl-kv__item rl-kv__item--full">
-            <span class="rl-kv__key">角色</span>
-            <span class="rl-kv__val role-tags">
-              <el-tag
-                v-for="r in (row as UserOut).roles"
-                :key="r.id"
-                size="small"
-                :type="r.scope_type ? 'warning' : 'primary'"
-              >
-                {{ r.role }}{{ r.shelf_code ? ` @${r.shelf_code}` : '' }}
-              </el-tag>
-              <span v-if="!(row as UserOut).roles.length" class="no-roles">无角色</span>
-            </span>
-          </div>
-        </div>
-        <div class="rl-card-actions">
-          <el-button link size="small" @click="openRoles(row)">角色</el-button>
-          <el-button link size="small" @click="editUser(row)">编辑</el-button>
-          <el-popconfirm title="确认重置为默认密码 changeme？" width="240" @confirm="doReset(String((row as UserOut).id))">
-            <template #reference><el-button link size="small" type="warning">重置密码</el-button></template>
-          </el-popconfirm>
-          <el-popconfirm v-if="(row as UserOut).is_active" title="确认停用？" @confirm="doDeactivate(String((row as UserOut).id))">
-            <template #reference><el-button link size="small" type="danger">停用</el-button></template>
-          </el-popconfirm>
-        </div>
-      </template>
-    </ResponsiveList>
+    </el-table>
     <div class="pagination">
       <el-pagination
         v-model:current-page="page"
@@ -189,7 +157,6 @@ import { listShelves } from '@/api/shelves'
 import type { UserOut, UserRoleOut } from '@/types/user'
 import type { Shelf } from '@/types/shelf'
 import { InfoFilled } from '@element-plus/icons-vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
@@ -359,6 +326,12 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; h2 { margin: 0; font-size: 18px; } }
+// 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层）
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
 .no-roles { color: #c0c4cc; font-size: 13px; }
 .pagination {
   display: flex;
