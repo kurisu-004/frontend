@@ -1,0 +1,236 @@
+<!--
+  DeliveryDraftCard.vue
+
+  2026-08-25 T11 从 DeliveryNoteScan.vue 抽出：单张草稿卡片（el-card）+ body el-table + footer 4 按钮。
+
+  设计要点：
+  - 纯受控展示：所有数据 / loading 态由 props 传入；所有 user action 通过 emit 回给 shell。
+  - el-table 实例 ref 在本组件内部声明（避免 T9 教训「template ref on readonly prop 静默失败」）。
+    通过 emit('set-table-ref', el) 把实例回传给 shell → useDeliveryDraftBoard.setTableRef。
+  - props.rows 是 shell 调 board.foldedRows(noteId) 拿到的 MergedDraftRow[] 引用；
+    board 内部按 noteId 缓存 computed，确保引用稳定（避免 EP 自动 clearSelection 误清勾选）。
+
+  props:
+    draft             — 当前草稿 header（ScanNoteSummary）
+    rows              — foldBySerial 后的行（el-table 数据源）
+    selectedRows      — 当前勾选行（由 board.selectedByNote[noteId] 透传）
+    selectionCount    — 当前勾选行数（用于打印标签按钮文案 "(n)"）
+    printing          — 打印标签 loading 态
+    deleting          — 删除草稿 loading 态
+    submitting        — 提交草稿 loading 态
+    canPrint          — 「打印送货单」按钮可用（角色 + ≥1 零件）
+    canSubmit         — 「提交草稿」按钮可用（status === 'DRAFT'）
+    rowClassName      — 行 className 函数（绿底渲染已打印行）
+
+  emits:
+    goto-detail         — 点 header 跳转详情
+    selection-change    — el-table 勾选变化
+    remove              — 移除某行
+    print-labels        — 打印标签
+    print-note          — 打开打印送货单预览
+    delete-draft        — 删除草稿
+    submit-draft        — 提交草稿
+    set-table-ref       — el-table 实例注册 / 反注册
+-->
+<script setup lang="ts">
+import { ref } from 'vue'
+import { Delete, Printer } from '@element-plus/icons-vue'
+import type { MergedDraftRow } from '../composables/useDeliveryDraftBoard'
+import type { ScanNoteSummary } from '@/types/deliveryNote'
+
+defineProps<{
+  draft: ScanNoteSummary
+  rows: MergedDraftRow[]
+  selectedRows: MergedDraftRow[]
+  selectionCount: number
+  printing: boolean
+  deleting: boolean
+  submitting: boolean
+  canPrint: boolean
+  canSubmit: boolean
+  rowClassName: (info: { row: MergedDraftRow }) => string
+}>()
+
+const emit = defineEmits<{
+  (e: 'goto-detail'): void
+  (e: 'selection-change', rows: MergedDraftRow[]): void
+  (e: 'remove', row: MergedDraftRow): void
+  (e: 'print-labels'): void
+  (e: 'print-note'): void
+  (e: 'delete-draft'): void
+  (e: 'submit-draft'): void
+  (e: 'set-table-ref', el: any): void
+}>()
+
+// el-table 实例本地声明；emit 上传给 shell（board.setTableRef 内部 Map 管理）。
+// T9 教训：template ref 不能写到 readonly prop 上（Vue 静默失败）。
+const tableEl = ref<any>(null)
+
+function handleTableRef(el: any): void {
+  tableEl.value = el
+  emit('set-table-ref', el)
+}
+</script>
+
+<template>
+  <el-card shadow="hover" class="draft-card">
+    <template #header>
+      <div class="draft-card-head" @click="emit('goto-detail')">
+        <span class="draft-no draft-no-link">{{ draft.delivery_note_no }}</span>
+        <el-tag size="small" type="info" effect="plain">
+          {{ draft.scope_label }}
+        </el-tag>
+      </div>
+    </template>
+    <div class="draft-card-body">
+      <div class="draft-customer">{{ draft.customer_path || '—' }}</div>
+      <el-table
+        :ref="handleTableRef"
+        :data="rows"
+        :row-key="(row: MergedDraftRow) => row.batch_ids[0]"
+        :row-class-name="rowClassName"
+        height="240"
+        size="small"
+        empty-text="暂无加入批次 — 扫码加入"
+        @selection-change="(rs: MergedDraftRow[]) => emit('selection-change', rs)"
+      >
+        <el-table-column type="selection" width="44" fixed />
+        <el-table-column label="序列号" min-width="100">
+          <template #default="{ row }">
+            <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="name"
+          label="名称"
+          min-width="110"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          prop="quantity"
+          label="数量"
+          width="60"
+          align="right"
+        />
+        <el-table-column label="系统交期" width="90" align="center">
+          <template #default="{ row }">
+            {{ row.system_delivery_date || '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="" width="56" align="center">
+          <template #default="{ row }">
+            <el-button
+              link
+              size="small"
+              type="danger"
+              @click="emit('remove', row as MergedDraftRow)"
+            >
+              移除
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+    <template #footer>
+      <!-- 4 按钮等宽：删除草稿 / 打印送货单 / 打印标签 / 提交草稿 -->
+      <div class="draft-card-footer">
+        <el-button
+          type="danger"
+          plain
+          class="footer-btn"
+          :loading="deleting"
+          @click="emit('delete-draft')"
+        >
+          <el-icon><Delete /></el-icon>
+          删除草稿
+        </el-button>
+        <el-button
+          type="success"
+          plain
+          class="footer-btn"
+          :disabled="!canPrint"
+          @click="emit('print-note')"
+        >
+          <el-icon><Printer /></el-icon>
+          打印送货单
+        </el-button>
+        <el-button
+          type="success"
+          plain
+          class="footer-btn"
+          :disabled="selectionCount === 0"
+          :loading="printing"
+          @click="emit('print-labels')"
+        >
+          <el-icon><Printer /></el-icon>
+          打印标签{{ selectionCount > 0 ? `（${selectionCount}）` : '' }}
+        </el-button>
+        <el-button
+          type="primary"
+          class="footer-btn"
+          :disabled="!canSubmit"
+          :loading="submitting"
+          @click="emit('submit-draft')"
+        >
+          提交草稿
+        </el-button>
+      </div>
+    </template>
+  </el-card>
+</template>
+
+<style lang="scss" scoped>
+.draft-card {
+  flex: 0 0 calc(50% - 6px);
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.draft-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+}
+.draft-no {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text-primary, #303133);
+}
+.draft-no-link {
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 120ms ease;
+}
+.draft-card-head:hover .draft-no-link {
+  text-decoration-color: var(--el-color-primary);
+}
+.draft-customer {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  margin-bottom: 8px;
+}
+.draft-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* footer：4 按钮等宽 */
+.draft-card-footer {
+  display: flex;
+  gap: 8px;
+}
+.footer-btn {
+  flex: 1;
+}
+:deep(.footer-btn .el-button__inner) {
+  justify-content: center;
+}
+
+.muted {
+  color: var(--el-text-color-secondary);
+}
+</style>
