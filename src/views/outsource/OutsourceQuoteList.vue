@@ -8,6 +8,7 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { Filter, RefreshLeft, Search } from '@element-plus/icons-vue'
 import PdfViewer from '@/components/PdfViewer.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import PagedTable from '@/components/PagedTable.vue'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -54,7 +55,6 @@ const route = useRoute()
 const createDlg = useDialogSize({ desktopWidth: 640 })
 const reviewDlg = useDialogSize({ desktopWidth: 480 })
 const previewDlg = useDialogSize({ desktopWidth: 900 })
-const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
 /** 按角色注入默认 statuses：
  *  - CLERK 默认 DRAFT（待他提交审核的）
@@ -133,19 +133,20 @@ function confirmCustomerFilter(): void {
 
 // ============================================================
 // 表格 / 排序
+// 2026-08-25 T7：page / pageSize / total / loading / items 已迁到 <PagedTable> 内部；
+// view 仍持有 items 镜像（actionColumnWidth 计算需要）+ errorMsg（empty 文本）
 // ============================================================
-const items = ref<OutsourceQuote[]>([])
-const total = ref(0)
-const loading = ref(false)
+const items = ref<OutsourceQuote[]>([])  // 镜像 PagedTable.items（仅用于 actionColumnWidth）
 const errorMsg = ref<string | null>(null)
-const page = ref(1)
+const pagedRef = ref()
+// pageSize 持久化镜像（同 UserList / OutsourceList 模式）
 const pageSize = ref(20)
 
 type SortKey = 'CREATED_AT' | 'PRICE' | 'REVIEWED_AT'
 const sortBy = ref<SortKey>('CREATED_AT')
 const sortDir = ref<'ASC' | 'DESC'>('DESC')
 
-// ============ 筛选状态持久化（2026-07-30 commit 4B）============
+// ============ 筛选状态持久化（2026-07-30 commit 4B；2026-08-25 T7：page 已迁出）============
 // 持久化 search / sortBy / sortDir / pageSize；page 不进快照。
 // 优先级：URL ?statuses=  >  restore 快照  >  角色默认（DRAFT / SUBMITTED）
 const { restore: restoreQuoteFilter } = useListStatePersist(
@@ -228,38 +229,42 @@ function quoteRowClassName({ row }: { row: OutsourceQuote }): string {
   return cls.join(' ')
 }
 
-function buildParams() {
+function buildParams(params: { page: number; pageSize: number }) {
   return {
     keyword: search.keyword.trim() || undefined,
     statuses: search.statuses.length > 0 ? [...search.statuses] : undefined,
     customer_id: search.customerId || undefined,
     sort_by: sortBy.value,
     sort_dir: sortDir.value,
-    limit: pageSize.value,
-    offset: (page.value - 1) * pageSize.value,
+    limit: params.pageSize,
+    offset: (params.page - 1) * params.pageSize,
+  }
+}
+
+// 2026-08-25 T7：fetcher 给 PagedTable 用；view 其它地方仍调 refresh() 触发刷新
+async function fetcher(params: { page: number; pageSize: number }) {
+  errorMsg.value = null
+  try {
+    const r = await listOutsourceQuotes(buildParams(params))
+    items.value = r.items  // 同步本地镜像（供 actionColumnWidth 等消费）
+    return { items: r.items, total: r.total }
+  } catch (e) {
+    const msg = (e as Error).message ?? '加载报价列表失败'
+    errorMsg.value = msg
+    items.value = []
+    ElMessage.error(msg)
+    throw e
   }
 }
 
 async function refresh(): Promise<void> {
-  loading.value = true
-  errorMsg.value = null
-  try {
-    const r = await listOutsourceQuotes(buildParams())
-    items.value = r.items
-    total.value = r.total
-  } catch (e) {
-    items.value = []
-    total.value = 0
-    errorMsg.value = (e as Error).message ?? '加载报价列表失败'
-    ElMessage.error(errorMsg.value)
-  } finally {
-    loading.value = false
-  }
+  // PagedTable 内部已经维护 items / loading / total；这里只把视图其它字段同步一下
+  await pagedRef.value?.fetch()
 }
 
 const onSearch = (): void => {
-  page.value = 1
-  void refresh()
+  // 2026-08-25 T7：onSearch 改成调 reset 把页码拨回 1
+  void pagedRef.value?.reset()
 }
 
 function onSortChange({
@@ -275,18 +280,11 @@ function onSortChange({
   void refresh()
 }
 
-function onPageSizeChange(size: number): void {
-  pageSize.value = size
-  page.value = 1
-  void refresh()
-}
-
 function onReset(): void {
   Object.assign(search, initialSearch())
   sortBy.value = 'CREATED_AT'
   sortDir.value = 'DESC'
-  page.value = 1
-  void refresh()
+  void pagedRef.value?.reset()
 }
 
 // ============================================================
@@ -410,13 +408,28 @@ onMounted(async () => {
   await loadLookups()
   // 先从 localStorage 恢复非 statuses 字段（keyword / customerId / sortBy / sortDir / pageSize）
   // —— 这些字段无 URL/角色默认优先级，直接 restore 即可。
-  const persisted = restoreQuoteFilter()
+  const persisted = restoreQuoteFilter() as
+    | { search?: Partial<SearchState>; sortBy?: string; sortDir?: string; pageSize?: number }
+    | null
+    | undefined
   if (persisted) {
-    if (persisted.search) Object.assign(search, persisted.search as Partial<SearchState>)
+    if (persisted.search) Object.assign(search, persisted.search)
     if (typeof persisted.sortBy === 'string') sortBy.value = persisted.sortBy as SortKey
     if (typeof persisted.sortDir === 'string') sortDir.value = persisted.sortDir as 'ASC' | 'DESC'
-    if (typeof persisted.pageSize === 'number') pageSize.value = persisted.pageSize as number
+    if (typeof persisted.pageSize === 'number') {
+      pagedRef.value!.pageSize.value = persisted.pageSize
+    }
   }
+  // 2026-08-25 T7：双向同步 PagedTable.pageSize → view 本地 pageSize（触发 persist 自动写盘）
+  watch(
+    () => pagedRef.value?.pageSize?.value,
+    (s) => { if (typeof s === 'number') pageSize.value = s },
+  )
+  // 2026-08-25 T7：items 镜像同步（actionColumnWidth 计算按钮数）
+  watch(
+    () => pagedRef.value?.items?.value,
+    (it) => { items.value = (it ?? []) as OutsourceQuote[] },
+  )
   // 决定 statuses 的优先级（独立处理）：
   //   1) URL ?statuses= 逗号分隔（如 ?statuses=DRAFT,SUBMITTED）—— 最高优先
   //   2) restore() 快照中的 statuses（用户上次手动选的；上一步已 Object.assign 进 search）
@@ -671,7 +684,7 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
           新建报价
         </el-button>
 
-        <span v-if="total > 0" class="total-hint">共 {{ total }} 条</span>
+        <span v-if="pagedRef?.total?.value && pagedRef.total.value > 0" class="total-hint">共 {{ pagedRef.total.value }} 条</span>
       </div>
     </el-card>
 
@@ -683,19 +696,22 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
           @reset="columnVisibility.showAll"
         />
       </div>
-      <el-table
-        :data="items"
-        v-loading="loading"
-        row-key="id"
-        :empty-text="emptyText"
-        stripe
-        border
-        size="small"
-        :default-sort="defaultSort"
-        :row-class-name="quoteRowClassName"
-        @sort-change="onSortChange"
-        @row-click="onRowClick"
-      >
+      <!-- 2026-08-25 (T7)：el-table + el-pagination 收口到 <PagedTable>；items / loading / total 从 slot scope 来 -->
+      <PagedTable ref="pagedRef" :fetcher="fetcher" :default-page-size="20">
+        <template #default="{ items, loading }">
+          <el-table
+            :data="items"
+            v-loading="loading"
+            row-key="id"
+            :empty-text="emptyText"
+            stripe
+            border
+            size="small"
+            :default-sort="defaultSort"
+            :row-class-name="quoteRowClassName"
+            @sort-change="onSortChange"
+            @row-click="onRowClick"
+          >
         <template #empty>
           <el-empty :description="emptyText" />
         </template>
@@ -912,22 +928,9 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
             >删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
-
-      <div class="pagination">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="[20, 50, 100]"
-          :total="total"
-          :layout="paginationLayout"
-          :pager-count="7"
-          background
-          size="small"
-          @current-change="refresh"
-          @size-change="onPageSizeChange"
-        />
-      </div>
+          </el-table>
+        </template>
+      </PagedTable>
     </el-card>
 
     <!-- 新建 DRAFT 报价 -->

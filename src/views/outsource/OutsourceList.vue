@@ -27,7 +27,8 @@
 
     <el-card shadow="never">
       <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。
-           ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。-->
+           ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。
+           2026-08-25 (T7)：el-pagination 收口到 <PagedTable>；原 `search.offset/limit` 已迁出 search，PagedTable 内部管 -->
       <div class="table-toolbar">
         <ColumnVisibilityPopover
           :defs="columnDefs"
@@ -35,77 +36,69 @@
           @reset="columnVisibility.showAll"
         />
       </div>
-      <el-table
-        :data="rows"
-        v-loading="loading"
-        row-key="id"
-        stripe
-        border
-        size="small"
-      >
-        <template #empty>
-          <el-empty description="暂无外协公司" />
+      <PagedTable ref="pagedRef" :fetcher="fetcher" :default-page-size="100" pagination-layout="total, sizes, prev, pager, next, jumper">
+        <template #default="{ items, loading }">
+          <el-table
+            :data="items"
+            v-loading="loading"
+            row-key="id"
+            stripe
+            border
+            size="small"
+          >
+            <template #empty>
+              <el-empty description="暂无外协公司" />
+            </template>
+            <el-table-column type="index" label="#" width="50" />
+            <el-table-column
+              v-if="columnVisibility.isVisible('name')"
+              prop="name" label="公司名" min-width="160" align="center"
+            />
+            <el-table-column
+              v-if="columnVisibility.isVisible('contact_name')"
+              prop="contact_name" label="联系人" min-width="100" align="center"
+            >
+              <template #default="{ row }">
+                {{ (row as OutsourceCompany).contact_name || '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-if="columnVisibility.isVisible('contact_phone')"
+              prop="contact_phone" label="联系电话" min-width="120" align="center"
+            >
+              <template #default="{ row }">
+                {{ (row as OutsourceCompany).contact_phone || '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-if="columnVisibility.isVisible('address')"
+              prop="address" label="地址" min-width="200" show-overflow-tooltip align="center"
+            >
+              <template #default="{ row }">
+                {{ (row as OutsourceCompany).address || '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-if="columnVisibility.isVisible('is_active')"
+              label="状态" min-width="80" align="center"
+            >
+              <template #default="{ row }">
+                <el-tag :type="(row as OutsourceCompany).is_active ? 'success' : 'info'" size="small">
+                  {{ (row as OutsourceCompany).is_active ? '启用' : '停用' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" min-width="280" fixed="right" align="center">
+              <template #default="{ row }">
+                <el-button link type="primary" size="small" @click="onEdit(row as OutsourceCompany)">编辑</el-button>
+                <el-button link type="warning" size="small" @click="onManageProcesses(row as OutsourceCompany)">维护工序</el-button>
+                <el-button link type="success" size="small" @click="onBilling(row as OutsourceCompany)">对账</el-button>
+                <el-button link type="danger" size="small" @click="onDelete(row as OutsourceCompany)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
         </template>
-        <el-table-column type="index" label="#" width="50" />
-        <el-table-column
-          v-if="columnVisibility.isVisible('name')"
-          prop="name" label="公司名" min-width="160" align="center"
-        />
-        <el-table-column
-          v-if="columnVisibility.isVisible('contact_name')"
-          prop="contact_name" label="联系人" min-width="100" align="center"
-        >
-          <template #default="{ row }">
-            {{ (row as OutsourceCompany).contact_name || '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-if="columnVisibility.isVisible('contact_phone')"
-          prop="contact_phone" label="联系电话" min-width="120" align="center"
-        >
-          <template #default="{ row }">
-            {{ (row as OutsourceCompany).contact_phone || '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-if="columnVisibility.isVisible('address')"
-          prop="address" label="地址" min-width="200" show-overflow-tooltip align="center"
-        >
-          <template #default="{ row }">
-            {{ (row as OutsourceCompany).address || '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-if="columnVisibility.isVisible('is_active')"
-          label="状态" min-width="80" align="center"
-        >
-          <template #default="{ row }">
-            <el-tag :type="(row as OutsourceCompany).is_active ? 'success' : 'info'" size="small">
-              {{ (row as OutsourceCompany).is_active ? '启用' : '停用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" min-width="280" fixed="right" align="center">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="onEdit(row as OutsourceCompany)">编辑</el-button>
-            <el-button link type="warning" size="small" @click="onManageProcesses(row as OutsourceCompany)">维护工序</el-button>
-            <el-button link type="success" size="small" @click="onBilling(row as OutsourceCompany)">对账</el-button>
-            <el-button link type="danger" size="small" @click="onDelete(row as OutsourceCompany)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <div class="pagination">
-        <el-pagination
-          v-model:current-page="search.offset"
-          v-model:page-size="search.limit"
-          :total="total"
-          :page-sizes="[50, 100, 200]"
-          :layout="paginationLayout"
-          :pager-count="7"
-          @size-change="fetchList"
-          @current-change="fetchList"
-        />
-      </div>
+      </PagedTable>
     </el-card>
 
     <!-- CRUD 对话框 -->
@@ -190,11 +183,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import PagedTable from '@/components/PagedTable.vue'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -212,24 +206,22 @@ import type { Process } from '@/types/process'
 
 const router = useRouter()
 const companyDlg = useDialogSize({ desktopWidth: 520 })
-const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
-const loading = ref(false)
 const saving = ref(false)
-const rows = ref<OutsourceCompany[]>([])
-const total = ref(0)
-const search = reactive<{ name_like: string; is_active: boolean | undefined; limit: number; offset: number }>({
+// 2026-08-25 T7：page/pageSize/total/loading/items 已迁到 <PagedTable> 内部；view 不再持有
+const pagedRef = ref()
+// search 只保留过滤项（不含分页）
+const search = reactive<{ name_like: string; is_active: boolean | undefined }>({
   name_like: '',
   is_active: undefined,
-  limit: 100,
-  offset: 1,
 })
+// pageSize 持久化镜像：和 UserList 同样的双向同步模式
+const pageSize = ref(100)
 
-// ============ 筛选状态持久化（2026-07-30 commit 4B）============
-// 持久化整个 search（含 limit/offset），restore 时强制把 offset 置 1（避免拉到不存在数据的页）
+// ============ 筛选状态持久化（2026-07-30 commit 4B；2026-08-25 T7：search 只含过滤项；pageSize 单独持久化）============
 const { restore: restoreOutsourceCompanyFilter } = useListStatePersist(
   'outsource_company_list',
-  { search },
+  { search, pageSize },
 )
 
 // ============ 列可见性 ============
@@ -269,22 +261,19 @@ const manageDialogVisible = ref(false)
 const managing = ref<OutsourceCompany | null>(null)
 const manageForm = reactive<{ process_ids: string[] }>({ process_ids: [] })
 
+// PagedTable fetcher：分页参数从 params 读；过滤项从 view 本地 search 闭包读
+async function fetcher(params: { page: number; pageSize: number }) {
+  return await listOutsourceCompanies({
+    name_like: search.name_like || undefined,
+    is_active: search.is_active,
+    limit: params.pageSize,
+    offset: (params.page - 1) * params.pageSize,
+  })
+}
+
+// view 其它地方触发刷新的薄包装（保持调用方不变）
 async function fetchList(): Promise<void> {
-  loading.value = true
-  try {
-    const res = await listOutsourceCompanies({
-      name_like: search.name_like || undefined,
-      is_active: search.is_active,
-      limit: search.limit,
-      offset: (search.offset - 1) * search.limit,
-    })
-    rows.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载失败')
-  } finally {
-    loading.value = false
-  }
+  await pagedRef.value?.fetch()
 }
 
 async function fetchOutsourceProcesses(): Promise<void> {
@@ -299,8 +288,8 @@ async function fetchOutsourceProcesses(): Promise<void> {
 function onReset(): void {
   search.name_like = ''
   search.is_active = undefined
-  search.offset = 1
-  fetchList()
+  // 2026-08-25 T7：重置同时调 reset 把页码拨回 1
+  void pagedRef.value?.reset()
 }
 
 function onNew(): void {
@@ -432,11 +421,21 @@ async function onDelete(row: OutsourceCompany): Promise<void> {
 onMounted(() => {
   void fetchOutsourceProcesses()
   // 从 localStorage 恢复搜索 + 分页大小；强制将当前页重置到第 1 页（避免恢复到无数据页）
-  const persisted = restoreOutsourceCompanyFilter()
-  if (persisted && persisted.search) {
-    Object.assign(search, persisted.search as Partial<typeof search>)
-    search.offset = 1
+  const persisted = restoreOutsourceCompanyFilter() as
+    | { search?: Partial<typeof search>; pageSize?: number }
+    | null
+    | undefined
+  if (persisted) {
+    if (persisted.search) Object.assign(search, persisted.search)
+    if (typeof persisted.pageSize === 'number') {
+      pagedRef.value!.pageSize.value = persisted.pageSize
+    }
   }
+  // 双向同步 PagedTable.pageSize → view 本地 pageSize（触发 persist 自动写盘）
+  watch(
+    () => pagedRef.value?.pageSize?.value,
+    (s) => { if (typeof s === 'number') pageSize.value = s },
+  )
   void fetchList()
 })
 </script>

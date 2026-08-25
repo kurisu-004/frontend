@@ -5,7 +5,8 @@
       <el-button type="primary" @click="showCreate = true">新增账号</el-button>
     </div>
     <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。
-         ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。-->
+         ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。
+         2026-08-25 (T7)：el-pagination 收口到 <PagedTable>，fetcher 内部读 pageSize.value / page.value -->
     <div class="table-toolbar">
       <ColumnVisibilityPopover
         :defs="columnDefs"
@@ -13,67 +14,59 @@
         @reset="columnVisibility.showAll"
       />
     </div>
-    <el-table
-      :data="items"
-      v-loading="loading"
-      row-key="id"
-      stripe
-    >
-      <template #empty>
-        <el-empty description="暂无账号" />
+    <PagedTable ref="pagedRef" :fetcher="fetcher" :default-page-size="20">
+      <template #default="{ items, loading }">
+        <el-table
+          :data="items"
+          v-loading="loading"
+          row-key="id"
+          stripe
+        >
+          <template #empty>
+            <el-empty description="暂无账号" />
+          </template>
+          <el-table-column
+            v-if="columnVisibility.isVisible('username')"
+            prop="username" label="用户名" min-width="120" align="center"
+          />
+          <el-table-column
+            v-if="columnVisibility.isVisible('full_name')"
+            prop="full_name" label="姓名" min-width="100" align="center"
+          />
+          <el-table-column
+            v-if="columnVisibility.isVisible('roles')"
+            label="角色" min-width="200" align="center"
+          >
+            <template #default="{ row }">
+              <el-tag v-for="r in row.roles" :key="r.id" size="small" style="margin-right:4px" :type="r.scope_type ? 'warning' : 'primary'">
+                {{ r.role }}{{ r.shelf_code ? ` @${r.shelf_code}` : '' }}
+              </el-tag>
+              <span v-if="!row.roles.length" class="no-roles">无角色</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-if="columnVisibility.isVisible('is_active')"
+            label="状态" min-width="80" align="center"
+          >
+            <template #default="{ row }">
+              <el-tag :type="row.is_active ? 'success' : 'danger'" size="small">{{ row.is_active ? '启用' : '停用' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" min-width="280" fixed="right" align="center">
+            <template #default="{ row }">
+              <el-button link size="small" @click="openRoles(row)">角色</el-button>
+              <el-button link size="small" @click="editUser(row)">编辑</el-button>
+              <el-popconfirm title="确认重置为默认密码 changeme？" width="240" @confirm="doReset(String(row.id))">
+                <template #reference><el-button link size="small" type="warning">重置密码</el-button></template>
+              </el-popconfirm>
+              <el-popconfirm v-if="row.is_active" title="确认停用？" @confirm="doDeactivate(String(row.id))">
+                <template #reference><el-button link size="small" type="danger">停用</el-button></template>
+              </el-popconfirm>
+            </template>
+          </el-table-column>
+        </el-table>
       </template>
-      <el-table-column
-        v-if="columnVisibility.isVisible('username')"
-        prop="username" label="用户名" min-width="120" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('full_name')"
-        prop="full_name" label="姓名" min-width="100" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('roles')"
-        label="角色" min-width="200" align="center"
-      >
-        <template #default="{ row }">
-          <el-tag v-for="r in row.roles" :key="r.id" size="small" style="margin-right:4px" :type="r.scope_type ? 'warning' : 'primary'">
-            {{ r.role }}{{ r.shelf_code ? ` @${r.shelf_code}` : '' }}
-          </el-tag>
-          <span v-if="!row.roles.length" class="no-roles">无角色</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('is_active')"
-        label="状态" min-width="80" align="center"
-      >
-        <template #default="{ row }">
-          <el-tag :type="row.is_active ? 'success' : 'danger'" size="small">{{ row.is_active ? '启用' : '停用' }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" min-width="280" fixed="right" align="center">
-        <template #default="{ row }">
-          <el-button link size="small" @click="openRoles(row)">角色</el-button>
-          <el-button link size="small" @click="editUser(row)">编辑</el-button>
-          <el-popconfirm title="确认重置为默认密码 changeme？" width="240" @confirm="doReset(String(row.id))">
-            <template #reference><el-button link size="small" type="warning">重置密码</el-button></template>
-          </el-popconfirm>
-          <el-popconfirm v-if="row.is_active" title="确认停用？" @confirm="doDeactivate(String(row.id))">
-            <template #reference><el-button link size="small" type="danger">停用</el-button></template>
-          </el-popconfirm>
-        </template>
-      </el-table-column>
-    </el-table>
-    <div class="pagination">
-      <el-pagination
-        v-model:current-page="page"
-        v-model:page-size="size"
-        :page-sizes="[20, 50, 100]"
-        :total="total"
-        :layout="paginationLayout"
-        :pager-count="7"
-        @current-change="fetchData"
-        @size-change="onPageSizeChange"
-      />
-    </div>
+    </PagedTable>
 
     <!-- create / edit dialog -->
     <el-dialog
@@ -150,7 +143,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listUsers, createUser, updateUser, deactivateUser, resetUserPassword, listUserRoles, addUserRole, removeUserRole } from '@/api/users'
 import { listShelves } from '@/api/shelves'
@@ -158,21 +151,29 @@ import type { UserOut, UserRoleOut } from '@/types/user'
 import type { Shelf } from '@/types/shelf'
 import { InfoFilled } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import PagedTable from '@/components/PagedTable.vue'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 
 const userDlg = useDialogSize({ desktopWidth: 420 })
 const rolesDlg = useDialogSize({ desktopWidth: 560 })
-const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
-const items = ref<UserOut[]>([])
-const loading = ref(false)
-const total = ref(0)
-const page = ref(1)
+// PagedTable 持有 page/pageSize/total/loading/items（2026-08-25 T7）
+const pagedRef = ref()
+// fetcher 闭包从 PagedTable 暴露的 ref 读分页参数（而不是 view 自己再持一份 refs）
+const fetcher = async (params: { page: number; pageSize: number }) => {
+  return await listUsers({
+    limit: params.pageSize,
+    offset: (params.page - 1) * params.pageSize,
+  })
+}
+
+// ============ 筛选状态持久化（2026-08-25 T7：保留 size 持久化）============
+// view 持有一份 pageSize 镜像 `size`，用 useListStatePersist 维持 localStorage 同步；
+// mount 时把 restore 出来的 size 推到 PagedTable.pageSize；之后 watcher 把 PagedTable.pageSize
+// 变回写到 view 本地 size → persist 自动写盘。
 const size = ref(20)
-
-// ============ 筛选状态持久化（page 不持久化）============
 const { restore: restoreUserFilter, clear: clearUserFilter } = useListStatePersist(
   'user_list',
   { size },
@@ -222,17 +223,8 @@ const boundShelfIds = computed<Set<string>>(() => new Set(
 ))
 
 async function fetchData() {
-  loading.value = true
-  try {
-    const res = await listUsers({ limit: size.value, offset: (page.value - 1) * size.value })
-    items.value = res.items; total.value = res.total
-  } finally { loading.value = false }
-}
-
-function onPageSizeChange(value: number) {
-  size.value = value
-  page.value = 1
-  void fetchData()
+  // 2026-08-25 T7：fetchData 现在是 PagedTable 的薄包装；view 其它地方仍调用以触发刷新
+  await pagedRef.value?.fetch()
 }
 
 function resetForm() { userForm.username = ''; userForm.password = ''; userForm.full_name = ''; editingUser.value = null }
@@ -315,11 +307,18 @@ async function doAddRole() {
 async function removeRole(uid: string, rid: string) { await removeUserRole(uid, rid); roleList.value = await listUserRoles(uid); ElMessage.success('已移除') }
 
 onMounted(() => {
-  // 先尝试恢复 localStorage 中的分页大小
-  const persisted = restoreUserFilter()
+  // 2026-08-25 T7：pageSize 持久化通过 view 本地 size ↔ PagedTable.pageSize 双向同步：
+  //   1) 启动时把 restore 出来的 size 推到 PagedTable.pageSize
+  //   2) 之后 watcher 把 PagedTable.pageSize 变回写到 view 本地 size（触发 persist 自动写盘）
+  const persisted = restoreUserFilter() as { size?: number } | null | undefined
   if (persisted && typeof persisted.size === 'number') {
-    size.value = persisted.size
+    pagedRef.value!.pageSize.value = persisted.size
   }
+  // 双向同步：PagedTable → view
+  watch(
+    () => pagedRef.value?.pageSize?.value,
+    (s) => { if (typeof s === 'number') size.value = s },
+  )
   void fetchData()
 })
 </script>

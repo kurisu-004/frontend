@@ -18,6 +18,7 @@ import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import PagedTable from '@/components/PagedTable.vue'
 import { listApprovedForSend, listOutsourceInFlight } from '@/api/outsource'
 import { listCustomers, type Customer } from '@/api/customer'
 import { listShelves } from '@/api/shelves'
@@ -53,7 +54,6 @@ const route = useRoute()
 const router = useRouter()
 const sendDlg = useDialogSize({ desktopWidth: 520 })
 const receiveDlg = useDialogSize({ desktopWidth: 560 })
-const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
 // ============================================================
 // Tab 状态（URL ?tab= 同步）
@@ -102,20 +102,18 @@ async function loadLookups(): Promise<void> {
 
 // ============================================================
 // Tab 1：可发送（APPROVAL 已批报价 + DIRECT 直接发送候选，2026-07-28 合并）
+// 2026-08-25 T7：sendableItems / sendableTotal / sendableLoading / sendablePage 已迁到 <PagedTable> 内部
 // ============================================================
-const sendableItems = ref<SendableItem[]>([])
-const sendableTotal = ref(0)
-const sendableLoading = ref(false)
 const sendableError = ref<string | null>(null)
 const sendableFilter = reactive({ keyword: '', customer_id: '' })
-const sendablePage = ref(1)
+const sendablePagedRef = ref()
+// pageSize 持久化镜像
 const sendablePageSize = ref(20)
 
-// 可发送 tab 持久化（2026-07-30 commit 4B）：sendablePage 排除；activeTab 走 URL，不进快照
+// 可发送 tab 持久化（2026-07-30 commit 4B）；2026-08-25 T7：page 不再持久化；activeTab 走 URL
 const { restore: restoreSendableState } = useListStatePersist(
   'outsource_send_receive_sendable',
   { sendableFilter, sendablePageSize },
-  { exclude: new Set(['sendablePage']) },
 )
 
 // ============ 列可见性 (可发送 tab) ============
@@ -135,27 +133,26 @@ const sendableColumnDefs = [
 ] as const
 const sendableColumnVisibility = useColumnVisibility(sendableColumnDefs, { listKey: 'outsource_send_receive_sendable' })
 
-async function refreshSendable(): Promise<void> {
-  sendableLoading.value = true
+// 2026-08-25 T7：可发送 fetcher 给 PagedTable；其它地方仍调 refreshSendable() 触发刷新
+async function sendableFetcher(params: { page: number; pageSize: number }) {
   sendableError.value = null
   try {
-    // 2026-07-28：统一端点 GET /parts/outsource-sendable（取代旧的两端点合并）
     const r = await listOutsourceSendable({
       keyword: sendableFilter.keyword || undefined,
       customer_id: sendableFilter.customer_id || undefined,
-      limit: sendablePageSize.value,
-      offset: (sendablePage.value - 1) * sendablePageSize.value,
+      limit: params.pageSize,
+      offset: (params.page - 1) * params.pageSize,
     })
-    sendableItems.value = r.items
-    sendableTotal.value = r.total
+    return { items: r.items, total: r.total }
   } catch (e) {
-    sendableItems.value = []
-    sendableTotal.value = 0
     sendableError.value = (e as Error).message ?? '加载可发送列表失败'
     ElMessage.error(sendableError.value)
-  } finally {
-    sendableLoading.value = false
+    return { items: [], total: 0 }
   }
+}
+
+async function refreshSendable(): Promise<void> {
+  await sendablePagedRef.value?.fetch()
 }
 
 const sendDialogVisible = ref(false)
@@ -238,19 +235,13 @@ async function onConfirmSend(): Promise<void> {
 }
 
 function onSendableSearch(): void {
-  sendablePage.value = 1
-  void refreshSendable()
+  // 2026-08-25 T7：调 reset 把页码拨回 1
+  void sendablePagedRef.value?.reset()
 }
 function onSendableReset(): void {
   sendableFilter.keyword = ''
   sendableFilter.customer_id = ''
-  sendablePage.value = 1
-  void refreshSendable()
-}
-function onSendablePageSizeChange(size: number): void {
-  sendablePageSize.value = size
-  sendablePage.value = 1
-  void refreshSendable()
+  void sendablePagedRef.value?.reset()
 }
 
 // ============================================================
@@ -300,7 +291,9 @@ async function handleScannedSerialForSend(code: string): Promise<void> {
     return
   }
   // 必须在当前可发送列表里（status_label === 'sendable'）
-  const match = sendableItems.value.find(
+  // 2026-08-25 T7：sendableItems 已迁到 PagedTable；通过暴露的 items 读取当前页
+  const sendableList = (sendablePagedRef.value?.items?.value ?? []) as SendableItem[]
+  const match = sendableList.find(
     (it) => it.part_id === part.id && it.status_label === 'sendable',
   )
   if (!match) {
@@ -438,20 +431,17 @@ onBeforeUnmount(() => {
 
 // ============================================================
 // Tab 2：待接收
+// 2026-08-25 T7：receivingItems / receivingTotal / receivingLoading / receivingPage 已迁到 <PagedTable> 内部
 // ============================================================
-const receivingItems = ref<OutsourceInFlightItem[]>([])
-const receivingTotal = ref(0)
-const receivingLoading = ref(false)
 const receivingError = ref<string | null>(null)
 const receivingFilter = reactive({ keyword: '', customer_id: '' })
-const receivingPage = ref(1)
+const receivingPagedRef = ref()
 const receivingPageSize = ref(20)
 
-// 待接收 tab 持久化（2026-07-30 commit 4B）：receivingPage 排除；activeTab 走 URL，不进快照
+// 待接收 tab 持久化（2026-07-30 commit 4B）；2026-08-25 T7：page 不再持久化
 const { restore: restoreReceivingState } = useListStatePersist(
   'outsource_send_receive_receiving',
   { receivingFilter, receivingPageSize },
-  { exclude: new Set(['receivingPage']) },
 )
 
 // ============ 列可见性 (待接收 tab) ============
@@ -477,25 +467,25 @@ function receivingRowClassName({ row }: { row: OutsourceInFlightItem }): string 
   return row.is_urgent ? 'row-urgent' : ''
 }
 
-async function refreshReceiving(): Promise<void> {
-  receivingLoading.value = true
+// 2026-08-25 T7：待接收 fetcher 给 PagedTable；其它地方仍调 refreshReceiving() 触发刷新
+async function receivingFetcher(params: { page: number; pageSize: number }) {
   receivingError.value = null
   try {
     const items = await listOutsourceInFlight({
       keyword: receivingFilter.keyword || undefined,
-      limit: receivingPageSize.value,
-      offset: (receivingPage.value - 1) * receivingPageSize.value,
+      limit: params.pageSize,
+      offset: (params.page - 1) * params.pageSize,
     })
-    receivingItems.value = items
-    receivingTotal.value = items.length
+    return { items, total: items.length }
   } catch (e) {
-    receivingItems.value = []
-    receivingTotal.value = 0
     receivingError.value = (e as Error).message ?? '加载待接收列表失败'
     ElMessage.error(receivingError.value)
-  } finally {
-    receivingLoading.value = false
+    return { items: [], total: 0 }
   }
+}
+
+async function refreshReceiving(): Promise<void> {
+  await receivingPagedRef.value?.fetch()
 }
 
 const receiveDialogVisible = ref(false)
@@ -622,19 +612,13 @@ async function onConfirmReceive(): Promise<void> {
 }
 
 function onReceivingSearch(): void {
-  receivingPage.value = 1
-  void refreshReceiving()
+  // 2026-08-25 T7：调 reset 把页码拨回 1
+  void receivingPagedRef.value?.reset()
 }
 function onReceivingReset(): void {
   receivingFilter.keyword = ''
   receivingFilter.customer_id = ''
-  receivingPage.value = 1
-  void refreshReceiving()
-}
-function onReceivingPageSizeChange(size: number): void {
-  receivingPageSize.value = size
-  receivingPage.value = 1
-  void refreshReceiving()
+  void receivingPagedRef.value?.reset()
 }
 
 // ============================================================
@@ -652,12 +636,25 @@ onMounted(async () => {
     // 仅按当前 tab 写回对应字段；另一 tab 的字段不动
     if (activeTab.value === 'receiving') {
       if (persisted.receivingFilter) Object.assign(receivingFilter, persisted.receivingFilter as Partial<typeof receivingFilter>)
-      if (typeof persisted.receivingPageSize === 'number') receivingPageSize.value = persisted.receivingPageSize as number
+      if (typeof persisted.receivingPageSize === 'number') {
+        receivingPagedRef.value!.pageSize.value = persisted.receivingPageSize as number
+      }
     } else {
       if (persisted.sendableFilter) Object.assign(sendableFilter, persisted.sendableFilter as Partial<typeof sendableFilter>)
-      if (typeof persisted.sendablePageSize === 'number') sendablePageSize.value = persisted.sendablePageSize as number
+      if (typeof persisted.sendablePageSize === 'number') {
+        sendablePagedRef.value!.pageSize.value = persisted.sendablePageSize as number
+      }
     }
   }
+  // 2026-08-25 T7：双向同步 PagedTable.pageSize → view 本地 pageSize（触发 persist 自动写盘）
+  watch(
+    () => sendablePagedRef.value?.pageSize?.value,
+    (s) => { if (typeof s === 'number') sendablePageSize.value = s },
+  )
+  watch(
+    () => receivingPagedRef.value?.pageSize?.value,
+    (s) => { if (typeof s === 'number') receivingPageSize.value = s },
+  )
   // 默认拉「可发送」；其他 tab 按需 onActivated 时再拉
   await refreshSendable()
   // 预拉一次「待接收」让数字显示在 tab 标题
@@ -776,7 +773,7 @@ watch(activeTab, async (t) => {
             </el-select>
             <el-button type="primary" @click="onSendableSearch">查询</el-button>
             <el-button @click="onSendableReset">重置</el-button>
-            <span v-if="sendableTotal > 0" class="total-hint">共 {{ sendableTotal }} 条</span>
+            <span v-if="sendablePagedRef?.total?.value && sendablePagedRef.total.value > 0" class="total-hint">共 {{ sendablePagedRef.total.value }} 条</span>
           </div>
           <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。
                ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。-->
@@ -787,9 +784,12 @@ watch(activeTab, async (t) => {
               @reset="sendableColumnVisibility.showAll"
             />
           </div>
+          <!-- 2026-08-25 (T7)：可发送 tab：el-table + el-pagination 收口到 <PagedTable> -->
+          <PagedTable ref="sendablePagedRef" :fetcher="sendableFetcher" :default-page-size="20">
+            <template #default="{ items, loading }">
           <el-table
-            :data="sendableItems"
-            v-loading="sendableLoading"
+            :data="items"
+            v-loading="loading"
             row-key="part_id"
             :empty-text="sendableError ?? '暂无符合条件的可发送零件'"
             :row-class-name="sendableRowClassName"
@@ -901,20 +901,8 @@ watch(activeTab, async (t) => {
               </template>
             </el-table-column>
           </el-table>
-          <div class="pagination">
-            <el-pagination
-              v-model:current-page="sendablePage"
-              v-model:page-size="sendablePageSize"
-              :page-sizes="[20, 50, 100]"
-              :total="sendableTotal"
-              :layout="paginationLayout"
-              :pager-count="7"
-              background
-              size="small"
-              @current-change="refreshSendable"
-              @size-change="onSendablePageSizeChange"
-            />
-          </div>
+            </template>
+          </PagedTable>
         </el-tab-pane>
 
         <!-- ====================== Tab 2: 待接收 ====================== -->
@@ -942,7 +930,7 @@ watch(activeTab, async (t) => {
             </el-select>
             <el-button type="primary" @click="onReceivingSearch">查询</el-button>
             <el-button @click="onReceivingReset">重置</el-button>
-            <span v-if="receivingTotal > 0" class="total-hint">共 {{ receivingTotal }} 条</span>
+            <span v-if="receivingPagedRef?.total?.value && receivingPagedRef.total.value > 0" class="total-hint">共 {{ receivingPagedRef.total.value }} 条</span>
           </div>
           <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。-->
           <div class="table-toolbar">
@@ -952,9 +940,12 @@ watch(activeTab, async (t) => {
               @reset="receivingColumnVisibility.showAll"
             />
           </div>
+          <!-- 2026-08-25 (T7)：待接收 tab：el-table + el-pagination 收口到 <PagedTable> -->
+          <PagedTable ref="receivingPagedRef" :fetcher="receivingFetcher" :default-page-size="20">
+            <template #default="{ items, loading }">
           <el-table
-            :data="receivingItems"
-            v-loading="receivingLoading"
+            :data="items"
+            v-loading="loading"
             row-key="batch_id"
             :empty-text="receivingError ?? '暂无待接收的零件'"
             :row-class-name="receivingRowClassName"
@@ -1016,20 +1007,8 @@ watch(activeTab, async (t) => {
               </template>
             </el-table-column>
           </el-table>
-          <div class="pagination">
-            <el-pagination
-              v-model:current-page="receivingPage"
-              v-model:page-size="receivingPageSize"
-              :page-sizes="[20, 50, 100]"
-              :total="receivingTotal"
-              :layout="paginationLayout"
-              :pager-count="7"
-              background
-              size="small"
-              @current-change="refreshReceiving"
-              @size-change="onReceivingPageSizeChange"
-            />
-          </div>
+            </template>
+          </PagedTable>
         </el-tab-pane>
 
       </el-tabs>
