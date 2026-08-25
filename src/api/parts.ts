@@ -1,7 +1,7 @@
 // 后端零件 API 封装（走 @/api/http 统一 axios 客户端）。
 // 所有 ID 在前端是字符串（雪花 ID 经后端 IdStr 序列化）。
 
-import { api, apiV2 } from '@/api/http'
+import { api, apiV2, cleanParams } from '@/api/http'
 import type { PartFileItem } from '@/types/part_file'
 import type {
   DirectOutsourceCandidateListResult,
@@ -350,16 +350,7 @@ export async function batchUpdatePartsOrderInfo(
 }
 
 // axios 会自动丢掉 undefined/null；但空串不会丢（会触发 LIKE '%%'）。
-// 这里显式 filter 一下，确保空字符串参数也跳过。
-function cleanParams<T extends object>(p: T): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(p)) {
-    if (v === undefined || v === null || v === '') continue
-    if (Array.isArray(v) && v.length === 0) continue
-    out[k] = v
-  }
-  return out
-}
+// 空字符串过滤统一在 @/api/http 的 cleanParams 里实现（2026-08-25 refactor）。
 
 export async function listParts(
   params: ListPartsParams = {},
