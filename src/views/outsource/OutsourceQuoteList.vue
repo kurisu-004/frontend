@@ -8,7 +8,6 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { Filter, RefreshLeft, Search } from '@element-plus/icons-vue'
 import PdfViewer from '@/components/PdfViewer.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -52,13 +51,10 @@ import {
 const { user, hasRole } = useAuthSession()
 const roleMap = computed(() => rolesArrayToMap(user.value?.roles ?? []))
 const route = useRoute()
-const { isMobile } = useBreakpoint()
-const createDlg = useDialogSize({ desktopWidth: 640, fullscreenOnMobile: true })
+const createDlg = useDialogSize({ desktopWidth: 640 })
 const reviewDlg = useDialogSize({ desktopWidth: 480 })
-const previewDlg = useDialogSize({ desktopWidth: 900, fullscreenOnMobile: true })
-const paginationLayout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
-)
+const previewDlg = useDialogSize({ desktopWidth: 900 })
+const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
 /** 按角色注入默认 statuses：
  *  - CLERK 默认 DRAFT（待他提交审核的）
@@ -132,30 +128,6 @@ function resetCustomerDraft(): void {
 function confirmCustomerFilter(): void {
   search.customerId = customerDraft.value ?? ''
   customerPopoverVisible.value = false
-  onSearch()
-}
-
-// 手机筛选抽屉：复用桌面表头 popover 的草稿状态
-const mobileFilterOpen = ref(false)
-const anyFilterActive = computed(() => statusFilterActive.value || customerFilterActive.value)
-
-function openMobileFilter(): void {
-  syncStatusDraft()
-  syncCustomerDraft()
-  mobileFilterOpen.value = true
-}
-function confirmMobileFilter(): void {
-  search.statuses = [...statusDraft.value]
-  search.customerId = customerDraft.value ?? ''
-  mobileFilterOpen.value = false
-  onSearch()
-}
-function resetMobileFilter(): void {
-  statusDraft.value = []
-  customerDraft.value = null
-  search.statuses = []
-  search.customerId = ''
-  mobileFilterOpen.value = false
   onSearch()
 }
 
@@ -692,16 +664,6 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
         </el-button>
 
         <el-button
-          v-if="isMobile"
-          :type="anyFilterActive ? 'primary' : 'default'"
-          plain
-          @click="openMobileFilter"
-        >
-          <el-icon><Filter /></el-icon>
-          <span>筛选</span>
-        </el-button>
-
-        <el-button
           v-if="canCreate(roleMap)"
           type="success"
           @click="openCreate"
@@ -959,7 +921,7 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
           :page-sizes="[20, 50, 100]"
           :total="total"
           :layout="paginationLayout"
-          :pager-count="isMobile ? 5 : 7"
+          :pager-count="7"
           background
           size="small"
           @current-change="refresh"
@@ -972,9 +934,8 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
     <el-dialog
       v-model="showCreate"
       title="新建外协报价"
-      :width="createDlg.width.value"
-      :top="createDlg.top.value"
-      :fullscreen="createDlg.fullscreen.value"
+      :width="createDlg.width"
+      :top="createDlg.top"
     >
       <el-form
         ref="createFormRef"
@@ -1046,8 +1007,8 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
     <el-dialog
       v-model="showApprove"
       title="审批通过"
-      :width="reviewDlg.width.value"
-      :top="reviewDlg.top.value"
+      :width="reviewDlg.width"
+      :top="reviewDlg.top"
     >
       <el-form label-width="100px">
         <el-alert
@@ -1071,8 +1032,8 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
     <el-dialog
       v-model="showReject"
       title="审批拒绝（必填原因）"
-      :width="reviewDlg.width.value"
-      :top="reviewDlg.top.value"
+      :width="reviewDlg.width"
+      :top="reviewDlg.top"
     >
       <el-form label-width="100px">
         <el-form-item label="拒绝原因" required>
@@ -1089,9 +1050,8 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
     <el-dialog
       v-model="drawingPreviewVisible"
       :title="drawingPreviewTitle"
-      :width="previewDlg.width.value"
-      :top="previewDlg.top.value"
-      :fullscreen="previewDlg.fullscreen.value"
+      :width="previewDlg.width"
+      :top="previewDlg.top"
       :close-on-click-modal="false"
       :destroy-on-close="true"
       append-to-body
@@ -1114,47 +1074,6 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
       </div>
       <p v-else class="muted">无可预览内容</p>
     </el-dialog>
-
-    <!-- 手机筛选抽屉：承载桌面状态 / 客户列头筛选 -->
-    <el-drawer
-      v-model="mobileFilterOpen"
-      title="筛选"
-      direction="btt"
-      size="72%"
-    >
-      <div class="mobile-filter">
-        <div class="mf-section">
-          <div class="mf-label">状态</div>
-          <el-checkbox-group v-model="statusDraft" class="mf-status">
-            <el-checkbox
-              v-for="opt in statusOptions"
-              :key="opt.value"
-              :value="opt.value"
-              :label="opt.label"
-            />
-          </el-checkbox-group>
-        </div>
-        <div class="mf-section">
-          <div class="mf-label">客户</div>
-          <el-tree-select
-            v-model="customerDraft"
-            :data="customerTree"
-            node-key="id"
-            :props="{ label: 'name', children: 'children' }"
-            check-strictly
-            clearable
-            filterable
-            placeholder="选择客户"
-            style="width: 100%"
-            @clear="customerDraft = null"
-          />
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="resetMobileFilter">重置</el-button>
-        <el-button type="primary" @click="confirmMobileFilter">确定</el-button>
-      </template>
-    </el-drawer>
   </div>
 </template>
 
@@ -1189,37 +1108,12 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
-
-  @include until(sm) {
-    justify-content: center;
-  }
 }
 
 .table-toolbar {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 8px;
-}
-
-.mobile-filter {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-.mf-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.mf-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.mf-status {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
 .header-cell {

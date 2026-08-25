@@ -9,10 +9,6 @@
     * 「详情」 → 跳 /parts/{id}（PartDetail 页内有图纸下载 / G 代码上传 / 设定单上传）
     * 「下发到生产」 → 弹 el-dialog 同时选下一道工序 + 目标 PRODUCTION 货架，
       调 POST /parts/{id}/release-from-programming（PROGRAMMING → IN_PROCESS）。
-  - 移动端适配（2026-07-21）：
-    * 表格用 ResponsiveList 包裹，< md 自动改为卡片流
-    * 分页 layout 按 isMobile 切换（手机只保留 prev/pager/next）
-    * 下发到生产 el-dialog 用 useDialogSize（手机近全屏）
   - 加急行整行红底 #fde2e2（与 PartsList / InspectionPending 同款）。
   - 自动刷新（5min）按需勾选。
 -->
@@ -202,7 +198,7 @@
         :page-sizes="[20, 50, 100]"
         :total="total"
         :layout="paginationLayout"
-        :pager-count="isMobile ? 5 : 7"
+        :pager-count="7"
         background
         size="small"
         @current-change="fetchList"
@@ -214,9 +210,8 @@
     <el-dialog
       v-model="releaseDialogVisible"
       title="下发到 CNC 货架"
-      :width="releaseDlg.width.value"
-      :top="releaseDlg.top.value"
-      :fullscreen="releaseDlg.fullscreen.value"
+      :width="releaseDlg.width"
+      :top="releaseDlg.top"
       @closed="onReleaseDialogClosed"
     >
       <el-form label-width="96px">
@@ -292,7 +287,6 @@ import {
 } from '@element-plus/icons-vue'
 import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import {
@@ -323,11 +317,7 @@ const search = reactive({ keyword: '', serialNo: '' })
 
 const emptyText = computed(() => errorMsg.value ?? '暂无待编程零件')
 
-const { isMobile } = useBreakpoint()
-// 手机上分页收窄为 prev/pager/next，桌面保留完整布局
-const paginationLayout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
-)
+const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
 function rowClassName({ row }: { row: PartListItem }): string {
   return row.is_urgent ? 'row-urgent' : ''
@@ -408,7 +398,7 @@ onBeforeUnmount(() => {
 })
 
 // ============ 下发到 CNC 货架 对话框 ============
-const releaseDlg = useDialogSize({ desktopWidth: 440, fullscreenOnMobile: true })
+const releaseDlg = useDialogSize({ desktopWidth: 440 })
 const releaseDialogVisible = ref(false)
 const releaseTarget = ref<RowState | null>(null)
 const releaseShelfId = ref<string | null>(null)
@@ -525,10 +515,6 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
-
-  @include until(sm) {
-    justify-content: center;
-  }
 }
 .name-link {
   color: var(--el-color-primary);

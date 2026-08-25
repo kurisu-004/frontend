@@ -101,7 +101,7 @@
         :page-sizes="[20, 50, 100]"
         :total="total"
         :layout="paginationLayout"
-        :pager-count="isMobile ? 5 : 7"
+        :pager-count="7"
         @current-change="fetchData"
         @size-change="onPageSizeChange"
       />
@@ -111,8 +111,8 @@
     <el-dialog
       v-model="showCreate"
       :title="editingUser ? '编辑账号' : '新增账号'"
-      :width="userDlg.width.value"
-      :top="userDlg.top.value"
+      :width="userDlg.width"
+      :top="userDlg.top"
       @closed="resetForm"
     >
       <el-form ref="userFormRef" :model="userForm" :rules="userRules" label-width="80px">
@@ -130,8 +130,8 @@
     <el-dialog
       v-model="showRoles"
       title="角色管理"
-      :width="rolesDlg.width.value"
-      :top="rolesDlg.top.value"
+      :width="rolesDlg.width"
+      :top="rolesDlg.top"
     >
       <p style="margin-bottom:8px">当前角色（{{ roleUser?.username }}）：</p>
       <div v-for="r in roleList" :key="r.id" style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
@@ -191,17 +191,13 @@ import type { Shelf } from '@/types/shelf'
 import { InfoFilled } from '@element-plus/icons-vue'
 import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 
-const { isMobile } = useBreakpoint()
 const userDlg = useDialogSize({ desktopWidth: 420 })
 const rolesDlg = useDialogSize({ desktopWidth: 560 })
-const paginationLayout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
-)
+const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
 const items = ref<UserOut[]>([])
 const loading = ref(false)
@@ -368,10 +364,6 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
-
-  @include until(sm) {
-    justify-content: center;
-  }
 }
 .role-tags {
   display: inline-flex;

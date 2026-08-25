@@ -124,7 +124,7 @@
           :total="total"
           :page-sizes="[50, 100, 200]"
           :layout="paginationLayout"
-          :pager-count="isMobile ? 5 : 7"
+          :pager-count="7"
           @size-change="fetchList"
           @current-change="fetchList"
         />
@@ -135,8 +135,8 @@
     <el-dialog
       v-model="dialogVisible"
       :title="editing ? '编辑外协公司' : '新增外协公司'"
-      :width="companyDlg.width.value"
-      :top="companyDlg.top.value"
+      :width="companyDlg.width"
+      :top="companyDlg.top"
       :close-on-click-modal="false"
       @closed="onDialogClosed"
     >
@@ -182,8 +182,8 @@
     <el-dialog
       v-model="manageDialogVisible"
       :title="managing ? `维护「${managing.name}」的工序能力` : ''"
-      :width="companyDlg.width.value"
-      :top="companyDlg.top.value"
+      :width="companyDlg.width"
+      :top="companyDlg.top"
       :close-on-click-modal="false"
       @closed="onManageDialogClosed"
     >
@@ -213,13 +213,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
 import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -236,11 +235,8 @@ import { listProcesses } from '@/api/process'
 import type { Process } from '@/types/process'
 
 const router = useRouter()
-const { isMobile } = useBreakpoint()
 const companyDlg = useDialogSize({ desktopWidth: 520 })
-const paginationLayout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
-)
+const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -475,10 +471,6 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
-
-  @include until(sm) {
-    justify-content: center;
-  }
 }
 .process-check-group {
   display: flex;

@@ -15,7 +15,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
 import ResponsiveList from '@/components/ResponsiveList.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
@@ -53,12 +52,9 @@ type TabName = 'sendable' | 'receiving'
 
 const route = useRoute()
 const router = useRouter()
-const { isMobile } = useBreakpoint()
 const sendDlg = useDialogSize({ desktopWidth: 520 })
 const receiveDlg = useDialogSize({ desktopWidth: 560 })
-const paginationLayout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
-)
+const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
 // ============================================================
 // Tab 状态（URL ?tab= 同步）
@@ -974,7 +970,7 @@ watch(activeTab, async (t) => {
               :page-sizes="[20, 50, 100]"
               :total="sendableTotal"
               :layout="paginationLayout"
-              :pager-count="isMobile ? 5 : 7"
+              :pager-count="7"
               background
               size="small"
               @current-change="refreshSendable"
@@ -1129,7 +1125,7 @@ watch(activeTab, async (t) => {
               :page-sizes="[20, 50, 100]"
               :total="receivingTotal"
               :layout="paginationLayout"
-              :pager-count="isMobile ? 5 : 7"
+              :pager-count="7"
               background
               size="small"
               @current-change="refreshReceiving"
@@ -1145,8 +1141,8 @@ watch(activeTab, async (t) => {
     <el-dialog
       v-model="sendDialogVisible"
       title="确认发送外协"
-      :width="sendDlg.width.value"
-      :top="sendDlg.top.value"
+      :width="sendDlg.width"
+      :top="sendDlg.top"
     >
       <template v-if="sendTarget">
         <div v-if="sendTarget.send_mode === 'DIRECT'" style="margin-bottom: 12px;">
@@ -1201,8 +1197,8 @@ watch(activeTab, async (t) => {
     <el-dialog
       v-model="receiveDialogVisible"
       title="接收外协件"
-      :width="receiveDlg.width.value"
-      :top="receiveDlg.top.value"
+      :width="receiveDlg.width"
+      :top="receiveDlg.top"
       :close-on-click-modal="false"
       @closed="onReceiveDialogClosed"
     >
@@ -1322,10 +1318,6 @@ watch(activeTab, async (t) => {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
-
-  @include until(sm) {
-    justify-content: center;
-  }
 }
 :deep(.el-tabs__content) {
   overflow: visible;

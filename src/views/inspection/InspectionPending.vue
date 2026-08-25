@@ -255,7 +255,7 @@
         :page-sizes="[20, 50, 100]"
         :total="total"
         :layout="paginationLayout"
-        :pager-count="isMobile ? 5 : 7"
+        :pager-count="7"
         background
         size="small"
         @current-change="fetchList"
@@ -267,8 +267,8 @@
     <el-dialog
       v-model="passDialogVisible"
       title="品检通过"
-      :width="passDlg.width.value"
-      :fullscreen="passDlg.fullscreen.value"
+      :width="passDlg.width"
+      :top="passDlg.top"
       :close-on-click-modal="false"
       @closed="onPassDialogClosed"
     >
@@ -313,9 +313,8 @@
     <el-dialog
       v-model="failDialogVisible"
       title="指定工序 — 选择下一道工序 + 目标生产货架"
-      :width="failDlg.width.value"
-      :top="failDlg.top.value"
-      :fullscreen="failDlg.fullscreen.value"
+      :width="failDlg.width"
+      :top="failDlg.top"
       :close-on-click-modal="false"
       @closed="onFailDialogClosed"
     >
@@ -449,9 +448,8 @@
     <el-dialog
       v-model="scanInspectDialogVisible"
       title="扫码快捷品检 — 选择通过 / 打回"
-      :width="scanInspectDlg.width.value"
-      :top="scanInspectDlg.top.value"
-      :fullscreen="scanInspectDlg.fullscreen.value"
+      :width="scanInspectDlg.width"
+      :top="scanInspectDlg.top"
       :close-on-click-modal="false"
       append-to-body
       @closed="onScanInspectDialogClosed"
@@ -612,7 +610,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshLeft, Search } from '@element-plus/icons-vue'
 import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
@@ -652,11 +649,7 @@ const plannedDateRange = ref<[string, string] | null>(null)
 
 const emptyText = computed(() => errorMsg.value ?? '暂无待品检零件')
 
-const { isMobile } = useBreakpoint()
-// 手机上分页收窄为 prev/pager/next，桌面保留完整布局
-const paginationLayout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
-)
+const paginationLayout = 'total, sizes, prev, pager, next, jumper'
 
 function rowClassName({ row }: { row: RowState }): string {
   return row.is_urgent ? 'row-urgent' : ''
@@ -1142,10 +1135,6 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
-
-  @include until(sm) {
-    justify-content: center;
-  }
 }
 .name-link {
   color: var(--el-color-primary);
