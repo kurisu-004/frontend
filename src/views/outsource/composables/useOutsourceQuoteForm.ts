@@ -26,7 +26,7 @@ import {
   submitOutsourceQuote,
 } from '@/api/outsource'
 import { useConfirm } from '@/composables/useConfirm'
-import type { OutsourceQuote } from '@/types/outsource'
+import { OUTSOURCE_QUOTE_STATUS_LABEL, type OutsourceQuote } from '@/types/outsource'
 import type { PartListItem } from '@/types/parts'
 import type { Process } from '@/types/process'
 
@@ -240,7 +240,7 @@ export function useOutsourceQuoteForm(opts: UseOutsourceQuoteFormOptions) {
     if (
       !await confirmDangerous(
         '确认操作',
-        `确定要软删报价 #${q.id}？`,
+        `确定要软删报价 #${q.id}（${OUTSOURCE_QUOTE_STATUS_LABEL[q.status]}）？`,
       )
     ) return
     try {
