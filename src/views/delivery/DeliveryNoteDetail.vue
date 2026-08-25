@@ -8,7 +8,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 
 import {
   addParts,
@@ -47,6 +47,7 @@ import {
 } from '@/utils/deliveryNotePermissions'
 import { useAuthSession } from '@/composables/useAuthSession'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'  // 2026-08-02
+import { useConfirm } from '@/composables/useConfirm'  // 2026-08-25 统一 confirm 文案
 import type {
   BulkPassFailure,
   BulkPassItem,
@@ -69,6 +70,8 @@ const role = computed(() => ({
 const note = ref<DeliveryNoteDetailOut | null>(null)
 const events = ref<DeliveryNoteEventOut[]>([])
 const loading = ref(false)
+
+const { dangerous: confirmDangerous } = useConfirm()
 /** 详情页可编辑送货日期（DRAFT / SUBMITTED）；PICKED_UP / ARCHIVED 时控件 disabled */
 const editDeliveryDate = ref<string>('')
 
@@ -125,17 +128,11 @@ async function onSubmit() {
     submitDialogVisible.value = true
     return
   }
-  try {
-    await ElMessageBox.confirm(
-      `确认提交 ${note.value.delivery_note_no}？`,
-      '提交送货单',
-      {
-        type: 'warning',
-        confirmButtonText: '提交',
-        cancelButtonText: '取消',
-      },
-    )
-  } catch { return }
+  if (!await confirmDangerous(
+    '提交送货单',
+    `确认提交 ${note.value.delivery_note_no}？`,
+    { type: 'warning', confirmText: '提交', cancelText: '取消' },
+  )) return
   try {
     await submitNote(note.value.id, { version: note.value.version })
     ElMessage.success('已提交')
@@ -185,12 +182,11 @@ function onSubmitError(e: unknown): void {
 
 async function onRecall() {
   if (!note.value) return
-  try {
-    await ElMessageBox.confirm(
-      `确认撤回 ${note.value.delivery_note_no}？`,
-      '撤回送货单', { type: 'warning' },
-    )
-  } catch { return }
+  if (!await confirmDangerous(
+    '撤回送货单',
+    `确认撤回 ${note.value.delivery_note_no}？`,
+    { type: 'warning' },
+  )) return
   try {
     await recallNote(note.value.id, { version: note.value.version })
     ElMessage.success('已撤回')
@@ -202,12 +198,11 @@ async function onRecall() {
 
 async function onSoftDelete() {
   if (!note.value) return
-  try {
-    await ElMessageBox.confirm(
-      `确认删除 ${note.value.delivery_note_no}？关联零件会解除。`,
-      '删除送货单', { type: 'warning' },
-    )
-  } catch { return }
+  if (!await confirmDangerous(
+    '删除送货单',
+    `确认删除 ${note.value.delivery_note_no}？关联零件会解除。`,
+    { type: 'warning' },
+  )) return
   try {
     await softDeleteNote(note.value.id, { version: note.value.version })
     ElMessage.success('已删除')
@@ -307,12 +302,11 @@ async function onRemoveSelected() {
     ElMessage.warning('请勾选要移除的零件')
     return
   }
-  try {
-    await ElMessageBox.confirm(
-      `确认移除选中的 ${selectedItemIds.value.length} 件零件？`,
-      '移除零件', { type: 'warning' },
-    )
-  } catch { return }
+  if (!await confirmDangerous(
+    '移除零件',
+    `确认移除选中的 ${selectedItemIds.value.length} 件零件？`,
+    { type: 'warning' },
+  )) return
   try {
     await removeParts(note.value.id, {
       batch_ids: selectedItemIds.value,

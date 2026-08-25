@@ -185,11 +185,12 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import PagedTable from '@/components/PagedTable.vue'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import { useConfirm } from '@/composables/useConfirm'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import {
@@ -206,6 +207,8 @@ import type { Process } from '@/types/process'
 
 const router = useRouter()
 const companyDlg = useDialogSize({ desktopWidth: 520 })
+
+const { dangerous: confirmDangerous } = useConfirm()
 
 const saving = ref(false)
 // 2026-08-25 T7：page/pageSize/total/loading/items 已迁到 <PagedTable> 内部；view 不再持有
@@ -400,15 +403,11 @@ function onBilling(row: OutsourceCompany): void {
 }
 
 async function onDelete(row: OutsourceCompany): Promise<void> {
-  try {
-    await ElMessageBox.confirm(
-      `确认删除外协公司「${row.name}」？若有工序映射会拒绝。`,
-      '提示',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch {
-    return
-  }
+  if (!await confirmDangerous(
+    '提示',
+    `确认删除外协公司「${row.name}」？若有工序映射会拒绝。`,
+    { type: 'warning', confirmText: '删除', cancelText: '取消' },
+  )) return
   try {
     await softDeleteOutsourceCompany(row.id)
     ElMessage.success('已删除')

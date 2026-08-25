@@ -12,8 +12,9 @@ URL ?tab=sendable|receiving 记忆上次选择；初次进入默认 可发送。
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
+import { useConfirm } from '@/composables/useConfirm'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
@@ -161,6 +162,8 @@ const sendSelectedCompanyId = ref<string>('')
 const sendQuantity = ref<number>(0)
 const sendSubmitting = ref(false)
 
+const { dangerous: confirmDangerous } = useConfirm()
+
 function canSend(item: SendableItem): boolean {
   if (item.status_label !== 'sendable') return false
   if (item.send_mode === 'DIRECT') {
@@ -201,15 +204,11 @@ async function onConfirmSend(): Promise<void> {
   const companyName: string = target.send_mode === 'DIRECT'
     ? target.company_options.find((c) => c.id === sendSelectedCompanyId.value)?.name ?? ''
     : (target.outsource_company_name ?? '')
-  try {
-    await ElMessageBox.confirm(
-      `确认把「${target.part_drawing_no}」（批次 ${target.batch_no}，${sendQuantity.value} / ${target.batch_quantity} 件）发送到「${companyName}」？`,
-      '发送外协',
-      { type: 'warning', confirmButtonText: '确认发送', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
+  if (!await confirmDangerous(
+    '发送外协',
+    `确认把「${target.part_drawing_no}」（批次 ${target.batch_no}，${sendQuantity.value} / ${target.batch_quantity} 件）发送到「${companyName}」？`,
+    { type: 'warning', confirmText: '确认发送', cancelText: '取消' },
+  )) return
   sendSubmitting.value = true
   try {
     const payload: SendToOutsourcePayload = {
@@ -356,15 +355,11 @@ function clearSendQueue(): void {
 
 async function onConfirmBatchSend(): Promise<void> {
   if (sendQueue.value.length === 0) return
-  try {
-    await ElMessageBox.confirm(
-      `确认批量发送 ${sendQueue.value.length} 件零件到外协？`,
-      '批量发送',
-      { type: 'warning', confirmButtonText: '确认发送', cancelButtonText: '取消' },
-    )
-  } catch {
-    return  // 用户取消
-  }
+  if (!await confirmDangerous(
+    '批量发送',
+    `确认批量发送 ${sendQueue.value.length} 件零件到外协？`,
+    { type: 'warning', confirmText: '确认发送', cancelText: '取消' },
+  )) return  // 用户取消
   batchSending.value = true
   const errors: { serial: string; msg: string; idx: number }[] = []
   let okCount = 0
@@ -568,15 +563,11 @@ async function onConfirmReceive(): Promise<void> {
     ElMessage.warning(`数量必须在 1 ~ ${receiveTarget.value.quantity} 之间`)
     return
   }
-  try {
-    await ElMessageBox.confirm(
-      `确认接收「${receiveTarget.value.drawing_no}」（批次 ${receiveTarget.value.batch_no}，${receiveQuantity.value} / ${receiveTarget.value.quantity} 件，${receiveBranchLabel.value}）？`,
-      '接收外协件',
-      { type: 'warning', confirmButtonText: '确认接收', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
+  if (!await confirmDangerous(
+    '接收外协件',
+    `确认接收「${receiveTarget.value.drawing_no}」（批次 ${receiveTarget.value.batch_no}，${receiveQuantity.value} / ${receiveTarget.value.quantity} 件，${receiveBranchLabel.value}）？`,
+    { type: 'warning', confirmText: '确认接收', cancelText: '取消' },
+  )) return
   receiveSubmitting.value = true
   try {
     const qty = receiveQuantity.value === receiveTarget.value.quantity ? null : receiveQuantity.value

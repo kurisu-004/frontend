@@ -1083,6 +1083,7 @@ import { batchCreateParts, type PartBatchFilePayload, type PartCreatePayload } f
 import { listCustomers, type Customer } from '@/api/customer'
 import { createApplicant } from '@/api/applicant'
 import { useApplicantSearch } from '@/composables/useApplicantSearch'
+import { useConfirm } from '@/composables/useConfirm'
 import { useDialogSize } from '@/composables/useDialogSize'
 
 const router = useRouter()
@@ -1093,6 +1094,8 @@ const previewDescCol = 2
 // 各 dialog 独立的响应式宽度（保留桌面固定 px）
 const addDlg = useDialogSize({ desktopWidth: 900 })
 const previewDlg = useDialogSize({ desktopWidth: 720 })
+
+const { dangerous: confirmDangerous } = useConfirm()
 
 // ============ 客户树 ============
 const customers = ref<Customer[]>([])
@@ -1495,17 +1498,14 @@ function onRemoveRow(uid: string): void {
   staged.value.splice(idx, 1)
 }
 
-function onClearAll(): void {
-  ElMessageBox.confirm(`确认清空 ${staged.value.length} 条待新增记录？此操作无法撤销。`, '提示', {
-    confirmButtonText: '清空',
-    cancelButtonText: '取消',
-    type: 'warning',
-  })
-    .then(() => {
-      staged.value.forEach(revokeEntryUrls)
-      staged.value = []
-    })
-    .catch(() => undefined)
+async function onClearAll(): Promise<void> {
+  if (!await confirmDangerous(
+    '提示',
+    `确认清空 ${staged.value.length} 条待新增记录？此操作无法撤销。`,
+    { type: 'warning', confirmText: '清空', cancelText: '取消' },
+  )) return
+  staged.value.forEach(revokeEntryUrls)
+  staged.value = []
 }
 
 function rowClassName({ row }: { row: unknown }): string {
@@ -1521,15 +1521,11 @@ async function onSubmit(): Promise<void> {
     ElMessage.warning('没有可提交的待新增零件')
     return
   }
-  try {
-    await ElMessageBox.confirm(
-      `将向服务端提交 ${staged.value.length} 条新零件，提交后系统按客户自动分配序列号。是否继续？`,
-      '确认提交',
-      { confirmButtonText: '提交', cancelButtonText: '取消', type: 'info' },
-    )
-  } catch {
-    return
-  }
+  if (!await confirmDangerous(
+    '确认提交',
+    `将向服务端提交 ${staged.value.length} 条新零件，提交后系统按客户自动分配序列号。是否继续？`,
+    { type: 'info', confirmText: '提交', cancelText: '取消' },
+  )) return
   submitting.value = true
   try {
     // 1) 先为每条 entry 处理 applicant_id：未选现有申请人的 → 按客户解析一级

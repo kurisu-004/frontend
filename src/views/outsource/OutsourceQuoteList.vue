@@ -4,12 +4,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Filter, RefreshLeft, Search } from '@element-plus/icons-vue'
 import PdfViewer from '@/components/PdfViewer.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import PagedTable from '@/components/PagedTable.vue'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import { useConfirm } from '@/composables/useConfirm'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import {
@@ -633,16 +634,13 @@ async function onReject(): Promise<void> {
   }
 }
 
+const { dangerous: confirmDangerous } = useConfirm()
+
 async function onDelete(q: OutsourceQuote): Promise<void> {
-  try {
-    await ElMessageBox.confirm(
-      `确定要软删报价 #${q.id}（${OUTSOURCE_QUOTE_STATUS_LABEL[q.status]}）？`,
-      '确认操作',
-      { type: 'warning' },
-    )
-  } catch {
-    return
-  }
+  if (!await confirmDangerous(
+    '确认操作',
+    `确定要软删报价 #${q.id}（${OUTSOURCE_QUOTE_STATUS_LABEL[q.status]}）？`,
+  )) return
   try {
     await softDeleteOutsourceQuote(q.id)
     ElMessage.success('已软删')

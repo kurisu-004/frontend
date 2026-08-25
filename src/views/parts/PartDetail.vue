@@ -1062,7 +1062,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules, type UploadFile } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules, type UploadFile } from 'element-plus'
 import { ArrowRight, Connection, Cpu, Document, Plus, PriceTag, Right, Setting, Upload, User } from '@element-plus/icons-vue'
 import FileListCard from '@/components/FileListCard.vue'
 import Barcode from '@/components/Barcode.vue'
@@ -1132,6 +1132,7 @@ import {
 } from '@/api/assembly'
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
 import { useDialogSize } from '@/composables/useDialogSize'
+import { useConfirm } from '@/composables/useConfirm'
 // 2026-08-25 frontend-overall-refactor：
 // - 日期格式化统一到 utils/date（原本地函数把 ISO 字符串 slice，无时区转换；
 //   新函数走 toISOString，后端发本地时间字符串时会差 8h）。
@@ -1152,6 +1153,8 @@ const failInspDlg = useDialogSize({ desktopWidth: 480 })
 const confirmDlg = useDialogSize({ desktopWidth: 420 })
 const releaseDlg = useDialogSize({ desktopWidth: 440 })
 const quoteCreateDlg = useDialogSize({ desktopWidth: 640 })
+
+const { dangerous: confirmDangerous } = useConfirm()
 
 // ============ 数据 ============
 const part = ref<PartItem | null>(null)
@@ -1465,16 +1468,12 @@ async function onSplitConfirm(): Promise<void> {
 }
 
 async function onCancelBatch(b: PartBatch): Promise<void> {
-  try {
-    await ElMessageBox.confirm(
-      `确认取消批次 ${b.batch_label}（${b.quantity} 件，${statusLabelOf(b.status)}）？`
+  if (!await confirmDangerous(
+    '取消批次',
+    `确认取消批次 ${b.batch_label}（${b.quantity} 件，${statusLabelOf(b.status)}）？`
       + '该批次数量将从在制中移除，不可恢复。',
-      '取消批次',
-      { confirmButtonText: '确认取消', cancelButtonText: '返回', type: 'warning' },
-    )
-  } catch {
-    return
-  }
+    { type: 'warning', confirmText: '确认取消', cancelText: '返回' },
+  )) return
   try {
     batches.value = await cancelPartBatch(partId.value, b.id)
     ElMessage.success('批次已取消')
@@ -1808,15 +1807,11 @@ const passSubmitting = ref(false)
 
 async function onPassInspection(): Promise<void> {
   if (!part.value) return
-  try {
-    await ElMessageBox.confirm(
-      `确认零件「${part.value.name}」(${part.value.serial_no || part.value.drawing_no}) 品检合格，进入待送货状态？`,
-      '品检通过',
-      { type: 'success', confirmButtonText: '确认通过', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
+  if (!await confirmDangerous(
+    '品检通过',
+    `确认零件「${part.value.name}」(${part.value.serial_no || part.value.drawing_no}) 品检合格，进入待送货状态？`,
+    { type: 'success', confirmText: '确认通过', cancelText: '取消' },
+  )) return
   passSubmitting.value = true
   try {
     await passInspection(partId.value)

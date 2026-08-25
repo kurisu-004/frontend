@@ -539,11 +539,12 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { RefreshLeft, Search } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import PagedTable from '@/components/PagedTable.vue'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import { useConfirm } from '@/composables/useConfirm'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
 import {
@@ -807,6 +808,8 @@ const failNote = ref<string>('')
 const failQty = ref<number | undefined>(undefined)
 const failSubmitting = ref(false)
 const productionShelves = ref<Shelf[]>([])
+
+const { dangerous: confirmDangerous } = useConfirm()
 const processes = ref<Process[]>([])
 const inspectionShelves = ref<Shelf[]>([])  // 2026-08-12 PR-I-scan-inspect：扫码快捷品检品检架选项
 // 指定工序默认走 INHOUSE 工序（外协工序走 send_to_outsource 路径）；
@@ -986,15 +989,11 @@ async function onFailConfirm(): Promise<void> {
     productionShelves.value.find((s) => String(s.id) === failShelfId.value)?.code ?? ''
   const processCode =
     processes.value.find((p) => String(p.id) === failProcessId.value)?.code ?? ''
-  try {
-    await ElMessageBox.confirm(
-      `确认指定工序「${row.name}」（${row.serial_no || row.drawing_no}）到生产货架 ${shelfCode}，下一道工序 ${processCode}？`,
-      '指定工序',
-      { type: 'warning', confirmButtonText: '确认指定工序', cancelButtonText: '取消' },
-    )
-  } catch {
-    return  // 用户取消
-  }
+  if (!await confirmDangerous(
+    '指定工序',
+    `确认指定工序「${row.name}」（${row.serial_no || row.drawing_no}）到生产货架 ${shelfCode}，下一道工序 ${processCode}？`,
+    { type: 'warning', confirmText: '确认指定工序', cancelText: '取消' },
+  )) return  // 用户取消
   failSubmitting.value = true
   try {
     await failInspection(row.id, {
