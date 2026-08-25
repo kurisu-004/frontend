@@ -53,21 +53,24 @@
     </el-card>
 
     <el-card shadow="never">
-      <ResponsiveList
-        :items="rows"
-        :loading="loading"
+      <div class="table-toolbar">
+        <ColumnVisibilityPopover
+          :defs="columnDefs"
+          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+          @reset="columnVisibility.showAll"
+        />
+      </div>
+      <el-table
+        :data="rows"
+        v-loading="loading"
         row-key="id"
         empty-text="暂无申请人"
         stripe
         border
         size="small"
       >
-        <template #toolbar>
-          <ColumnVisibilityPopover
-            :defs="columnDefs"
-            :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-            @reset="columnVisibility.showAll"
-          />
+        <template #empty>
+          <el-empty description="暂无申请人" />
         </template>
 
         <el-table-column type="index" label="#" width="50" />
@@ -88,7 +91,7 @@
           label="创建时间" min-width="180" align="center"
         >
           <template #default="{ row }">
-            {{ formatDate(row.created_at) }}
+            {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
         <el-table-column label="操作" min-width="180" fixed="right" align="center">
@@ -97,33 +100,15 @@
             <el-button link type="danger" size="small" @click="onDelete(row as Applicant)">删除</el-button>
           </template>
         </el-table-column>
-
-        <!-- 手机卡片 -->
-        <template #card="{ row, index }">
-          <div class="rl-card-head">
-            <span class="rl-card-title">#{{ index + 1 }} · {{ row.name }}</span>
-          </div>
-          <div class="rl-card-sub">{{ row.customer_name || '—' }}</div>
-          <div class="rl-kv">
-            <div class="rl-kv__item rl-kv__item--full">
-              <span class="rl-kv__key">创建时间</span>
-              <span class="rl-kv__val">{{ formatDate(row.created_at) || '—' }}</span>
-            </div>
-          </div>
-          <div class="rl-card-actions">
-            <el-button link type="primary" size="small" @click="onEdit(row as Applicant)">编辑</el-button>
-            <el-button link type="danger" size="small" @click="onDelete(row as Applicant)">删除</el-button>
-          </div>
-        </template>
-      </ResponsiveList>
+      </el-table>
     </el-card>
 
     <el-dialog
       v-model="dialogVisible"
       :title="editing ? '编辑申请人' : '新增申请人'"
-      :width="applicantDlg.width.value"
-      :top="applicantDlg.top.value"
-      :fullscreen="applicantDlg.fullscreen.value"
+      :width="applicantDlg.width"
+      :top="applicantDlg.top"
+      :fullscreen="applicantDlg.fullscreen"
       :close-on-click-modal="false"
       @closed="onDialogClosed"
     >
@@ -166,9 +151,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, RefreshLeft, Search } from '@element-plus/icons-vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -180,8 +163,9 @@ import {
   updateApplicant,
 } from '@/api/applicant'
 import type { Applicant } from '@/types/applicant'
-
-const { isMobile } = useBreakpoint()
+// 2026-08-25 统一日期格式化：原本地 formatDate 输出 YYYY-MM-DD HH:mm:ss（无时区转换），
+// 改为 utils/date.formatDateTime（toISOString → UTC）。若后端发无 'Z' 的本地时间会相差 8h。
+import { formatDateTime } from '@/utils/date'
 
 // ============ 列可见性 ============
 // 「#」和「操作」列不放进 defs → 始终可见,且不出现在列设置弹窗
@@ -209,11 +193,6 @@ const rootOptions = computed(() =>
     .filter((c) => c.parent_id === null)
     .map((c) => ({ id: c.id, name: c.name })),
 )
-
-function formatDate(s: string): string {
-  if (!s) return ''
-  return s.replace('T', ' ').slice(0, 19)
-}
 
 async function fetchList(): Promise<void> {
   loading.value = true
@@ -353,5 +332,10 @@ onMounted(async () => {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-secondary);
+}
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 </style>

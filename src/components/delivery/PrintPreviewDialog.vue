@@ -50,7 +50,7 @@ const emit = defineEmits<{
   'update:modelValue': [v: boolean]
 }>()
 
-const dlg = useDialogSize({ desktopWidth: 1100, fullscreenOnMobile: true })
+const dlg = useDialogSize({ desktopWidth: 1100 })
 
 const previewTableRef = ref()
 const rows = ref<PreviewRow[]>([])
@@ -311,9 +311,9 @@ async function onConfirm(): Promise<void> {
     :title="isLabelMode
       ? '标签打印预览（勾选要打印的行，拖动可调顺序）'
       : '打印预览（拖动行可调整顺序）'"
-    :width="dlg.width.value"
-    :top="dlg.top.value"
-    :fullscreen="dlg.fullscreen.value"
+    :width="dlg.width"
+    :top="dlg.top"
+    :fullscreen="dlg.fullscreen"
     :close-on-click-modal="false"
     destroy-on-close
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"

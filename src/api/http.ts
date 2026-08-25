@@ -349,3 +349,29 @@ apiV2.interceptors.response.use(
   envelopeResponseInterceptor,
   makeEnvelopeErrorInterceptor(apiV2),
 )
+
+/**
+ * 移除值为 undefined / null / 空字符串 / 空数组的 query 字段；保留数字 0 和布尔 false。
+ *
+ * 给 list 类接口（GET /xxx?a=1）用——后端对 '' 会做 LIKE '%%'（导致全量匹配），
+ * axios 默认只 strip undefined / null，不 strip '' / []。把这一步抽到统一的
+ * api/http.ts 里，9 个 list API 共享一份行为（2026-08-25 refactor）。
+ *
+ * 用 `<T extends object>` 而不是 `Record<string, unknown>`：前者接受任意 object
+ * 字面量 / interface（包括 ListPartsParams 这种显式 interface），后者要求有
+ * 显式字符串 index signature，interface 默认不带，导致调用方报 TS2345。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function cleanParams<T extends Record<string, any>>(
+  obj?: T,
+): Record<string, unknown> {
+  if (!obj) return {}
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null) continue
+    if (typeof v === 'string' && v === '') continue
+    if (Array.isArray(v) && v.length === 0) continue
+    out[k] = v
+  }
+  return out
+}

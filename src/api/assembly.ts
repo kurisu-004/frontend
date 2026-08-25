@@ -1,7 +1,7 @@
 // 装配体 REST API（走 @/api/http 统一 axios 客户端）。
 // 创建 / 上传文件走 multipart：data 字段为 JSON 字符串，file 字段为 PDF。
 
-import { api } from '@/api/http'
+import { api, cleanParams } from '@/api/http'
 import type {
   AssemblyCreatePayload,
   AssemblyCreateResult,
@@ -13,15 +13,6 @@ import type {
 } from '@/types/assembly'
 import type { PartFileItem } from '@/types/part_file'
 import type { PartListItem } from '@/types/parts'
-
-function cleanParams<T extends object>(p: T): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(p)) {
-    if (v === undefined || v === null || v === '') continue
-    out[k] = v
-  }
-  return out
-}
 
 export async function listAssemblies(
   q: AssemblyListQuery = {},

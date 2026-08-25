@@ -19,21 +19,23 @@
       </el-form>
     </el-card>
 
-    <ResponsiveList
-      :items="rows"
-      :loading="loading"
+    <div class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+      />
+    </div>
+    <el-table
+      :data="rows"
       row-key="id"
-      empty-text="暂无工序"
+      v-loading="loading"
       stripe
       border
       size="small"
     >
-      <template #toolbar>
-        <ColumnVisibilityPopover
-          :defs="columnDefs"
-          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-          @reset="columnVisibility.showAll"
-        />
+      <template #empty>
+        <el-empty description="暂无工序" />
       </template>
       <el-table-column type="index" label="#" width="50" />
       <el-table-column
@@ -75,43 +77,17 @@
         </template>
       </el-table-column>
 
-      <template #card="{ row }">
-        <div class="rl-card-head">
-          <span class="rl-card-title">{{ row.name }}</span>
-          <el-tag :type="row.category === 'INHOUSE' ? 'primary' : 'warning'" size="small">
-            {{ PROCESS_CATEGORY_LABEL[(row as Process).category] }}
-          </el-tag>
-          <el-tag :type="(row as Process).requires_approval ? 'warning' : 'success'" size="small">
-            {{ (row as Process).requires_approval ? '需要审批' : '直接发送' }}
-          </el-tag>
-        </div>
-        <div class="rl-card-sub">代码 {{ row.code }}</div>
-        <div class="rl-kv">
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">排序</span>
-            <span class="rl-kv__val">{{ row.sort_order }}</span>
-          </div>
-          <div class="rl-kv__item rl-kv__item--full">
-            <span class="rl-kv__key">描述</span>
-            <span class="rl-kv__val">{{ row.description || '—' }}</span>
-          </div>
-        </div>
-        <div v-if="isManager" class="rl-card-actions">
-          <el-button link type="primary" size="small" @click="onEdit(row as Process)">编辑</el-button>
-          <el-button link type="danger" size="small" @click="onDelete(row as Process)">删除</el-button>
-        </div>
-      </template>
-    </ResponsiveList>
+      </el-table>
 
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      :width="dialogSize.width.value"
-      :top="dialogSize.top.value"
-      :fullscreen="dialogSize.fullscreen.value"
+      :width="dialogSize.width"
+      :top="dialogSize.top"
+      :fullscreen="dialogSize.fullscreen"
       @closed="onDialogClosed"
     >
-      <el-form :model="form" label-width="80px" :label-position="isMobile ? 'top' : 'right'">
+      <el-form :model="form" label-width="80px" label-position="right">
         <el-form-item label="代码" required>
           <el-input v-model="form.code" :disabled="!!editing" placeholder="如 车 / 铣 / CNC / 热处理" />
         </el-form-item>
@@ -153,9 +129,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { usePermissions } from '@/composables/usePermissions'
@@ -169,7 +143,6 @@ import {
 import type { Process, ProcessCategory } from '@/types/process'
 import { PROCESS_CATEGORY_LABEL } from '@/types/process'
 
-const { isMobile } = useBreakpoint()
 const { isManager } = usePermissions()
 const dialogSize = useDialogSize({ desktopWidth: 460 })
 
@@ -321,21 +294,9 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .process-list { display: flex; flex-direction: column; gap: 12px; }
-
-@include until(sm) {
-  .filter-card :deep(.el-form--inline) {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .filter-card :deep(.el-form-item) {
-    margin-right: 0;
-  }
-
-  .filter-card :deep(.el-form-item:nth-child(-n + 2)),
-  .filter-card :deep(.el-form-item:nth-child(-n + 2) .el-input),
-  .filter-card :deep(.el-form-item:nth-child(-n + 2) .el-select) {
-    width: 100% !important;
-  }
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 </style>

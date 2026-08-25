@@ -39,6 +39,9 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { Box, Close, Link, Promotion, Upload } from '@element-plus/icons-vue'
 import { onDashboardEvent } from '@/api/dashboard'
 import type { DashboardEvent, DashboardEventType } from '@/types/dashboard'
+// 2026-08-25 统一日期格式化：原本地 formatDate(s.slice(5)) 输出 MM-DD，
+// 改为标准 YYYY-MM-DD（UTC），banner 列宽可能略涨。
+import { formatDate } from '@/utils/date'
 
 interface BannerItem {
   key: number
@@ -107,27 +110,13 @@ function titleFor(item: BannerItem): string {
   return `${subject} 已进入货架等待加工`
 }
 
-function formatDate(s: string): string { return s.length >= 10 ? s.slice(5) : s }
-
 onMounted(() => { offEvent = onDashboardEvent(push) })
 onBeforeUnmount(() => { offEvent?.(); offEvent = null; for (const t of timers.values()) clearTimeout(t); timers.clear() })
 </script>
 
 <style lang="scss" scoped>
 .notification-stack { position: fixed; top: 76px; right: 24px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; max-width: 400px; }
-/* 手机：改为顶部通栏，避开 60px 顶栏 + iOS 安全区 */
-@include until(md) {
-  .notification-stack {
-    top: calc(env(safe-area-inset-top, 0px) + 64px);
-    left: 8px;
-    right: 8px;
-    max-width: none;
-  }
-}
 .banner { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--white); border: 1px solid var(--border-color); border-left: 4px solid var(--primary-color); border-radius: 6px; box-shadow: var(--shadow-md); min-width: 300px; }
-@include until(md) {
-  .banner { min-width: 0; }
-}
 .banner-picked_up { border-left-color: var(--primary-color); }
 .banner-picked_up .banner-icon { color: var(--primary-color); }
 .banner-placed_on_shelf { border-left-color: #e6a23c; }

@@ -39,8 +39,6 @@ export default defineConfig({
     preprocessorOptions: {
       scss: {
         api: 'modern-compiler',
-        // 向每个 <style lang="scss"> 注入断点 mixin（from/until），组件内可直接 @include
-        additionalData: `@use "@/styles/breakpoints" as *;\n`,
       },
     },
   },

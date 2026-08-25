@@ -12,7 +12,7 @@
   形态对齐 frontend/src/views/outsource/OutsourceQuoteList.vue
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Van, Promotion } from '@element-plus/icons-vue'
@@ -39,6 +39,7 @@ import { useAuthSession } from '@/composables/useAuthSession'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import PagedTable from '@/components/PagedTable.vue'
 import PartPickerDialog from '@/components/delivery/PartPickerDialog.vue'
 
 const router = useRouter()
@@ -57,13 +58,11 @@ const allStatuses: DeliveryNoteStatus[] = ['DRAFT', 'SUBMITTED', 'PICKED_UP', 'A
 const statuses = ref<DeliveryNoteStatus[]>(defaultStatusesForRole(role.value))
 const customerId = ref<string>('')
 const keyword = ref('')
-const items = ref<DeliveryNoteOut[]>([])
-const total = ref(0)
-const loading = ref(false)
-const page = ref(1)
+// 2026-08-25 T7：items / total / loading / page 已迁到 <PagedTable>；pageSize 持久化镜像留在 view
+const pagedRef = ref()
 const pageSize = ref(50)
 
-// ============ 筛选状态持久化（2026-07-30 commit 4B）============
+// ============ 筛选状态持久化（2026-07-30 commit 4B；2026-08-25 T7：page 不再持久化）============
 // 把 4 个离散 ref 包成一个对象传给 useListStatePersist；restore 后逐个 .value 写回。
 // page 排除。优先级：URL ?statuses= > restore 快照 > 角色默认
 const { restore: restoreNoteListFilter } = useListStatePersist(
@@ -107,31 +106,37 @@ async function loadCustomers() {
   }
 }
 
-async function fetchList() {
-  loading.value = true
+// 2026-08-25 T7：fetcher 给 PagedTable；其它地方仍调 fetchList() 触发刷新
+async function fetcher(params: { page: number; pageSize: number }) {
   try {
     const resp = await listNotes({
       statuses: statuses.value.length ? statuses.value : undefined,
       customer_id: customerId.value || undefined,
       keyword: keyword.value.trim() || undefined,
-      limit: pageSize.value,
-      offset: (page.value - 1) * pageSize.value,
+      limit: params.pageSize,
+      offset: (params.page - 1) * params.pageSize,
     })
-    items.value = resp.items
-    total.value = resp.total
+    return { items: resp.items, total: resp.total }
   } catch (e) {
     ElMessage.error((e as Error).message ?? '查询失败')
-  } finally {
-    loading.value = false
+    return { items: [], total: 0 }
   }
+}
+
+async function fetchList() {
+  await pagedRef.value?.fetch()
 }
 
 function resetFilter() {
   statuses.value = defaultStatusesForRole(role.value)
   customerId.value = ''
   keyword.value = ''
-  page.value = 1
-  fetchList()
+  void pagedRef.value?.reset()
+}
+
+// 2026-08-25 T7：替换原 @click="page = 1; fetchList()"（page 已被 PagedTable 接管）
+function resetToFirstPage() {
+  void pagedRef.value?.reset()
 }
 
 onMounted(async () => {
@@ -148,14 +153,24 @@ onMounted(async () => {
   if (urlStatuses.length > 0) {
     statuses.value = [...urlStatuses]
   } else {
-    const persisted = restoreNoteListFilter()
+    const persisted = restoreNoteListFilter() as
+      | { statuses?: DeliveryNoteStatus[]; customerId?: string; keyword?: string; pageSize?: number }
+      | null
+      | undefined
     if (persisted) {
-      if (Array.isArray(persisted.statuses)) statuses.value = [...(persisted.statuses as DeliveryNoteStatus[])]
-      if (typeof persisted.customerId === 'string') customerId.value = persisted.customerId as string
-      if (typeof persisted.keyword === 'string') keyword.value = persisted.keyword as string
-      if (typeof persisted.pageSize === 'number') pageSize.value = persisted.pageSize as number
+      if (Array.isArray(persisted.statuses)) statuses.value = [...persisted.statuses]
+      if (typeof persisted.customerId === 'string') customerId.value = persisted.customerId
+      if (typeof persisted.keyword === 'string') keyword.value = persisted.keyword
+      if (typeof persisted.pageSize === 'number') {
+        pagedRef.value!.pageSize.value = persisted.pageSize
+      }
     }
   }
+  // 2026-08-25 T7：双向同步 PagedTable.pageSize → view 本地 pageSize（持久化写盘）
+  watch(
+    () => pagedRef.value?.pageSize?.value,
+    (s) => { if (typeof s === 'number') pageSize.value = s },
+  )
   await fetchList()
 })
 
@@ -287,7 +302,7 @@ async function onSoftDelete(n: DeliveryNoteOut) {
               <el-input v-model="keyword" placeholder="DN-20260723-…" clearable style="width: 200px" />
             </el-form-item>
               <el-form-item>
-                <el-button type="primary" @click="page = 1; fetchList()">查询</el-button>
+                <el-button type="primary" @click="resetToFirstPage()">查询</el-button>
                 <el-button @click="resetFilter">重置</el-button>
               </el-form-item>
           </div>
@@ -319,6 +334,9 @@ async function onSoftDelete(n: DeliveryNoteOut) {
           />
         </div>
       </template>
+    <!-- 2026-08-25 (T7)：el-table + el-pagination 收口到 <PagedTable> -->
+    <PagedTable ref="pagedRef" :fetcher="fetcher" :default-page-size="50" pagination-layout="total, sizes, prev, pager, next">
+      <template #default="{ items, loading }">
     <el-table
       v-loading="loading"
       :data="items"
@@ -412,18 +430,9 @@ async function onSoftDelete(n: DeliveryNoteOut) {
         </template>
       </el-table-column>
     </el-table>
+      </template>
+    </PagedTable>
     </el-card>
-
-    <el-pagination
-      class="pager"
-      :total="total"
-      v-model:current-page="page"
-      v-model:page-size="pageSize"
-      :page-sizes="[20, 50, 100]"
-      layout="total, sizes, prev, pager, next"
-      @current-change="fetchList"
-      @size-change="fetchList"
-    />
 
     <!-- 新建草稿对话框（2026-07-23 重写） -->
     <el-dialog v-model="createDialogOpen" title="新建送货单草稿" width="640px">

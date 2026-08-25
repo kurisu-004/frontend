@@ -1,6 +1,6 @@
 // 外协公司 (OutsourceCompany) API 封装。
 
-import { api } from '@/api/http'
+import { api, cleanParams } from '@/api/http'
 import type {
   ApprovedForSendListResult,
   ApprovedQuoteForSendItem,
@@ -24,16 +24,6 @@ import type {
 } from '@/types/outsource'
 import type { SortDir } from '@/types/parts'
 import type { PartItem, PartListItem } from '@/types/parts'
-
-function cleanParams<T extends object>(p: T): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(p)) {
-    if (v === undefined || v === null || v === '') continue
-    if (Array.isArray(v) && v.length === 0) continue
-    out[k] = v
-  }
-  return out
-}
 
 export async function listOutsourceCompanies(
   params: {

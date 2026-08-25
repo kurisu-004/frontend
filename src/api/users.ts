@@ -1,6 +1,6 @@
 // 账号管理 API（走 @/api/http 统一 axios 客户端）。
 
-import { api } from '@/api/http'
+import { api, cleanParams } from '@/api/http'
 import type { UserOut, UserRoleOut, UserListResult } from '@/types/user'
 
 export interface ListUsersParams {
@@ -8,15 +8,6 @@ export interface ListUsersParams {
   is_active?: boolean
   limit?: number
   offset?: number
-}
-
-function cleanParams<T extends object>(p: T): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(p)) {
-    if (v === undefined || v === null || v === '') continue
-    out[k] = v
-  }
-  return out
 }
 
 export async function listUsers(

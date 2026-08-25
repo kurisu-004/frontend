@@ -224,6 +224,9 @@ import type {
   PickupSkipDetailOut,
   PickupSkipSummaryItem,
 } from '@/types/statistics'
+// 2026-08-25 统一日期格式化：原本地函数用正则切 ISO 字符串，
+// 改为 utils/date.formatDateTime（toISOString → UTC），对后端 UTC 输出行为一致。
+import { formatDateTime } from '@/utils/date'
 
 // ========== 汇总 ==========
 const summaryLoading = ref(false)
@@ -278,13 +281,6 @@ function onPageSizeChange(size: number): void {
   detailPageSize.value = size
   detailPage.value = 1
   void reloadDetail()
-}
-
-function formatDateTime(iso: string): string {
-  // 后端 ISO → 'YYYY-MM-DD HH:mm'，去掉秒数与时区，节省列宽
-  const m = iso.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/)
-  if (m) return `${m[1]} ${m[2]}`
-  return iso
 }
 
 onMounted(reloadSummary)

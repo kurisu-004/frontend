@@ -1,6 +1,6 @@
 // 后端工人 API（走 @/api/http 统一 axios 客户端）。
 
-import { ApiError, api } from '@/api/http'
+import { ApiError, api, cleanParams } from '@/api/http'
 import type {
   Worker,
   WorkerCreatePayload,
@@ -13,15 +13,6 @@ export interface ListWorkersParams {
   is_active?: boolean
   limit?: number
   offset?: number
-}
-
-function cleanParams<T extends object>(p: T): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(p)) {
-    if (v === undefined || v === null || v === '') continue
-    out[k] = v
-  }
-  return out
 }
 
 export async function listWorkers(

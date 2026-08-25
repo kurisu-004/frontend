@@ -19,9 +19,9 @@
   <el-dialog
     :model-value="modelValue"
     :title="dialogTitle"
-    :width="dlg.width.value"
-    :top="dlg.top.value"
-    :fullscreen="dlg.fullscreen.value"
+    :width="dlg.width"
+    :top="dlg.top"
+    :fullscreen="dlg.fullscreen"
     :close-on-click-modal="false"
     destroy-on-close
     @update:model-value="onModelValueChange"
@@ -304,7 +304,7 @@ const emit = defineEmits<{
   success: []
 }>()
 
-const dlg = useDialogSize({ desktopWidth: 1100, fullscreenOnMobile: true })
+const dlg = useDialogSize({ desktopWidth: 1100 })
 
 const dialogTitle = computed(() => '解析系统交期和订单号')
 

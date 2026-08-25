@@ -9,24 +9,29 @@
     * 「详情」 → 跳 /parts/{id}（PartDetail 页内有图纸下载 / G 代码上传 / 设定单上传）
     * 「下发到生产」 → 弹 el-dialog 同时选下一道工序 + 目标 PRODUCTION 货架，
       调 POST /parts/{id}/release-from-programming（PROGRAMMING → IN_PROCESS）。
-  - 移动端适配（2026-07-21）：
-    * 表格用 ResponsiveList 包裹，< md 自动改为卡片流
-    * 分页 layout 按 isMobile 切换（手机只保留 prev/pager/next）
-    * 下发到生产 el-dialog 用 useDialogSize（手机近全屏）
   - 加急行整行红底 #fde2e2（与 PartsList / InspectionPending 同款）。
   - 自动刷新（5min）按需勾选。
+  - 2026-08-25 T14：filter 卡 + 列可见性 + 表格 + 分页 收口到 <PartListShell>；
+    列定义 / 操作列仍在本文件；状态 / fetcher 走 usePendingProgrammingList composable。
 -->
 <template>
   <div class="pending-programming">
-    <el-card shadow="never" class="filter-card">
-      <div class="filter-row">
+    <PartListShell
+      ref="listRef"
+      :column-defs="columnDefs"
+      :fetcher="fetcher"
+      :list-key="'pending_programming'"
+      empty-text="当前无待编程零件"
+      :row-class-name="rowClassName"
+    >
+      <template #filter>
         <el-input
           v-model="search.keyword"
           placeholder="图号 / 名称（前缀搜索）"
           clearable
           style="width: 260px"
-          @keyup.enter="onSearch"
-          @clear="onSearch"
+          @keyup.enter="onRefresh"
+          @clear="onRefresh"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
@@ -38,185 +43,115 @@
           placeholder="序列号"
           clearable
           style="width: 180px"
-          @keyup.enter="onSearch"
-          @clear="onSearch"
+          @keyup.enter="onRefresh"
+          @clear="onRefresh"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
 
-        <el-button @click="onSearch">
-          <el-icon><RefreshLeft /></el-icon>
-          <span>刷新</span>
-        </el-button>
-
         <el-checkbox v-model="autoRefresh" @change="onAutoRefreshToggle">
           自动刷新（5min）
         </el-checkbox>
+      </template>
 
-        <span v-if="total > 0" class="total-hint">共 {{ total }} 条</span>
-        <el-tag v-else-if="!loading" type="info" effect="plain" size="small">
-          当前无待编程零件
-        </el-tag>
-      </div>
-    </el-card>
+      <template #default="{ isVisible }">
+        <el-table-column
+          v-if="isVisible('serial_no')"
+          prop="serial_no"
+          label="序列号"
+          min-width="110"
+          fixed="left"
+          show-overflow-tooltip
+          align="center"
+        >
+          <template #default="{ row }">
+            <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
+          </template>
+        </el-table-column>
 
-    <ResponsiveList
-      :items="items"
-      :loading="loading"
-      row-key="id"
-      :empty-text="emptyText"
-      :card-class="(row) => (row.is_urgent ? 'rl-card--urgent' : '')"
-      stripe
-      border
-      size="small"
-      :row-class-name="rowClassName"
-    >
-      <template #toolbar>
-        <ColumnVisibilityPopover
-          :defs="columnDefs"
-          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-          @reset="columnVisibility.showAll"
+        <el-table-column
+          v-if="isVisible('drawing_no')"
+          prop="drawing_no"
+          label="图号"
+          min-width="130"
+          fixed="left"
+          show-overflow-tooltip
+          align="center"
         />
+
+        <el-table-column
+          v-if="isVisible('name')"
+          prop="name"
+          label="名称"
+          min-width="200"
+          show-overflow-tooltip
+          align="center"
+        >
+          <template #default="{ row }">
+            <router-link :to="`/parts/${row.id}`" class="name-link">
+              {{ row.name }}
+            </router-link>
+          </template>
+        </el-table-column>
+
+        <el-table-column
+          v-if="isVisible('quantity')"
+          prop="quantity"
+          label="数量"
+          min-width="80"
+          align="right"
+        />
+
+        <el-table-column
+          v-if="isVisible('planned_delivery_date')"
+          prop="planned_delivery_date"
+          label="计划交期"
+          min-width="120"
+          align="center"
+        />
+
+        <el-table-column
+          v-if="isVisible('customer')"
+          label="客户"
+          min-width="180"
+          show-overflow-tooltip
+          align="center"
+        >
+          <template #default="{ row }">
+            <span v-if="row.customer_path">{{ row.customer_path }}</span>
+            <span v-else-if="row.customer_name" class="muted">{{ row.customer_name }}</span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" min-width="160" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="primary"
+              size="small"
+              @click="$router.push(`/parts/${row.id}`)"
+            >详情</el-button>
+            <el-button
+              link
+              type="success"
+              size="small"
+              :loading="(row as RowState)._releasing"
+              @click="openReleaseDialog(row as RowState)"
+            >下发</el-button>
+          </template>
+        </el-table-column>
       </template>
-      <el-table-column
-        v-if="columnVisibility.isVisible('serial_no')"
-        prop="serial_no"
-        label="序列号"
-        min-width="110"
-        fixed="left"
-        show-overflow-tooltip align="center">
-        <template #default="{ row }">
-          <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
-        </template>
-      </el-table-column>
-
-      <el-table-column
-        v-if="columnVisibility.isVisible('drawing_no')"
-        prop="drawing_no"
-        label="图号"
-        min-width="130"
-        fixed="left"
-        show-overflow-tooltip align="center"/>
-
-      <el-table-column
-        v-if="columnVisibility.isVisible('name')"
-        prop="name"
-        label="名称"
-        min-width="200"
-        show-overflow-tooltip align="center">
-        <template #default="{ row }">
-          <router-link :to="`/parts/${row.id}`" class="name-link">
-            {{ row.name }}
-          </router-link>
-        </template>
-      </el-table-column>
-
-      <el-table-column
-        v-if="columnVisibility.isVisible('quantity')"
-        prop="quantity" label="数量" min-width="80" align="right" />
-
-      <el-table-column
-        v-if="columnVisibility.isVisible('planned_delivery_date')"
-        prop="planned_delivery_date"
-        label="计划交期"
-        min-width="120" align="center"/>
-
-      <el-table-column
-        v-if="columnVisibility.isVisible('customer')"
-        label="客户" min-width="180" show-overflow-tooltip align="center">
-        <template #default="{ row }">
-          <span v-if="row.customer_path">{{ row.customer_path }}</span>
-          <span v-else-if="row.customer_name" class="muted">{{ row.customer_name }}</span>
-          <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="操作" min-width="160" fixed="right" align="center">
-        <template #default="{ row }">
-          <el-button
-            link
-            type="primary"
-            size="small"
-            @click="$router.push(`/parts/${row.id}`)"
-          >详情</el-button>
-          <el-button
-            link
-            type="success"
-            size="small"
-            :loading="row._releasing"
-            @click="openReleaseDialog(row as PartListItem)"
-          >下发</el-button>
-        </template>
-      </el-table-column>
-
-      <!-- 手机卡片（2026-07-21 同步 master 的「2 个动作」） -->
-      <template #card="{ row }">
-        <div class="rl-card-head">
-          <router-link :to="`/parts/${row.id}`" class="rl-card-title name-link">
-            {{ row.name }}
-          </router-link>
-        </div>
-        <div class="rl-card-sub">
-          图号 {{ row.drawing_no || '—' }} · 序列号 {{ row.serial_no || '—' }}
-        </div>
-        <div class="rl-kv">
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">数量</span>
-            <span class="rl-kv__val">{{ row.quantity }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">计划交期</span>
-            <span class="rl-kv__val">{{ row.planned_delivery_date || '—' }}</span>
-          </div>
-          <div class="rl-kv__item rl-kv__item--full">
-            <span class="rl-kv__key">客户</span>
-            <span class="rl-kv__val">
-              {{ row.customer_path || row.customer_name || '—' }}
-            </span>
-          </div>
-        </div>
-        <div class="rl-card-actions">
-          <el-button
-            link
-            type="primary"
-            size="small"
-            @click="$router.push(`/parts/${row.id}`)"
-          >详情</el-button>
-          <el-button
-            link
-            type="success"
-            size="small"
-            :loading="row._releasing"
-            @click="openReleaseDialog(row as PartListItem)"
-          >下发</el-button>
-        </div>
-      </template>
-    </ResponsiveList>
-
-    <div class="pagination">
-      <el-pagination
-        v-model:current-page="page"
-        v-model:page-size="pageSize"
-        :page-sizes="[20, 50, 100]"
-        :total="total"
-        :layout="paginationLayout"
-        :pager-count="isMobile ? 5 : 7"
-        background
-        size="small"
-        @current-change="fetchList"
-        @size-change="onPageSizeChange"
-      />
-    </div>
+    </PartListShell>
 
     <!-- 下发到 CNC 货架 对话框（PROGRAMMING → IN_PROCESS） —— 与 PartDetail 同款 -->
     <el-dialog
       v-model="releaseDialogVisible"
       title="下发到 CNC 货架"
-      :width="releaseDlg.width.value"
-      :top="releaseDlg.top.value"
-      :fullscreen="releaseDlg.fullscreen.value"
+      :width="releaseDlg.width"
+      :top="releaseDlg.top"
       @closed="onReleaseDialogClosed"
     >
       <el-form label-width="96px">
@@ -284,90 +219,62 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import {
-  RefreshLeft,
-  Search,
-} from '@element-plus/icons-vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import { Search } from '@element-plus/icons-vue'
+import PartListShell from '@/components/PartListShell.vue'
 import { useDialogSize } from '@/composables/useDialogSize'
-import {
-  listPendingProgramming,
-  releaseFromProgramming,
-} from '@/api/parts'
+import { releaseFromProgramming } from '@/api/parts'
 import { listShelves } from '@/api/shelves'
 import { listProcesses } from '@/api/process'
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
-import { useListStatePersist } from '@/composables/useListFilterPersist'
 import type { PartListItem } from '@/types/parts'
 import type { Shelf } from '@/types/shelf'
 import type { Process } from '@/types/process'
+import { usePendingProgrammingList } from './composables/usePendingProgrammingList'
 
 // ============ 列表状态 ============
 interface RowState extends PartListItem {
   _releasing?: boolean
 }
 
-const items = ref<RowState[]>([])
-const total = ref(0)
-const loading = ref(false)
-const errorMsg = ref<string | null>(null)
-const page = ref(1)
-const pageSize = ref(20)
+// ============ T14：列表状态（filter / fetcher）+ 列可见性 ============
+// 列可见性由 PartListShell 内部 useColumnVisibility 持有，default slot 用 isVisible(key) 控制。
+// 「操作」列不放进 defs → 始终可见。
+const columnDefs = [
+  { key: 'serial_no', label: '序列号' },
+  { key: 'drawing_no', label: '图号' },
+  { key: 'name', label: '名称' },
+  { key: 'quantity', label: '数量' },
+  { key: 'planned_delivery_date', label: '计划交期' },
+  { key: 'customer', label: '客户' },
+] as const
 
-const search = reactive({ keyword: '', serialNo: '' })
+const {
+  search,
+  autoRefresh,
+  fetcher,
+  restoreFilter,
+} = usePendingProgrammingList()
 
-const emptyText = computed(() => errorMsg.value ?? '暂无待编程零件')
+// PartListShell 的 ref；后续可按需读 items.value / total.value。
+const listRef = ref()
 
-const { isMobile } = useBreakpoint()
-// 手机上分页收窄为 prev/pager/next，桌面保留完整布局
-const paginationLayout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
-)
-
-function rowClassName({ row }: { row: PartListItem }): string {
+function rowClassName({ row }: { row: PartListItem; rowIndex: number }): string {
   return row.is_urgent ? 'row-urgent' : ''
 }
 
+// 「刷新」按钮 = 列表回到第 1 页再拉（PartListShell.onRefresh = reset()）
+async function onRefresh(): Promise<void> {
+  await listRef.value?.onRefresh()
+}
+
+// 其它地方仍调 fetchList() 触发刷新（包装 listRef.fetch()，保持当前页码）
 async function fetchList(): Promise<void> {
-  loading.value = true
-  errorMsg.value = null
-  try {
-    const resp = await listPendingProgramming({
-      keyword: search.keyword.trim() || undefined,
-      serial_no: search.serialNo.trim() || undefined,
-      sort_by: 'PLANNED_DELIVERY_DATE',
-      sort_dir: 'ASC',
-      limit: pageSize.value,
-      offset: (page.value - 1) * pageSize.value,
-    })
-    items.value = resp.items
-    total.value = resp.total
-  } catch (e) {
-    items.value = []
-    total.value = 0
-    errorMsg.value = (e as Error).message ?? '查询失败'
-  } finally {
-    loading.value = false
-  }
-}
-
-function onSearch(): void {
-  page.value = 1
-  fetchList()
-}
-
-function onPageSizeChange(): void {
-  page.value = 1
-  fetchList()
+  await listRef.value?.fetch()
 }
 
 // ============ 自动刷新 ============
-const autoRefresh = ref(false)
 let autoRefreshTimer: number | null = null
 
 function onAutoRefreshToggle(val: string | number | boolean): void {
@@ -382,25 +289,6 @@ function onAutoRefreshToggle(val: string | number | boolean): void {
   }
 }
 
-// ============ 筛选状态持久化 ============
-const { restore: restoreProgrammingFilter, clear: clearProgrammingFilter } = useListStatePersist(
-  'pending_programming',
-  { search, pageSize, autoRefresh },
-  { exclude: new Set(['page']) },
-)
-
-// ============ 列可见性 ============
-// 「操作」列不放进 defs → 始终可见
-const columnDefs = [
-  { key: 'serial_no', label: '序列号' },
-  { key: 'drawing_no', label: '图号' },
-  { key: 'name', label: '名称' },
-  { key: 'quantity', label: '数量' },
-  { key: 'planned_delivery_date', label: '计划交期' },
-  { key: 'customer', label: '客户' },
-] as const
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'pending_programming' })
-
 onBeforeUnmount(() => {
   if (autoRefreshTimer !== null) {
     window.clearInterval(autoRefreshTimer)
@@ -408,7 +296,7 @@ onBeforeUnmount(() => {
 })
 
 // ============ 下发到 CNC 货架 对话框 ============
-const releaseDlg = useDialogSize({ desktopWidth: 440, fullscreenOnMobile: true })
+const releaseDlg = useDialogSize({ desktopWidth: 440 })
 const releaseDialogVisible = ref(false)
 const releaseTarget = ref<RowState | null>(null)
 const releaseShelfId = ref<string | null>(null)
@@ -486,18 +374,11 @@ async function onReleaseConfirm(): Promise<void> {
 }
 
 onMounted(() => {
-  // 先尝试恢复 localStorage 中的搜索条件 / 分页大小 / 自动刷新
-  const persisted = restoreProgrammingFilter()
-  if (persisted) {
-    if (persisted.search) Object.assign(search, persisted.search)
-    if (typeof persisted.pageSize === 'number') pageSize.value = persisted.pageSize
-    if (typeof persisted.autoRefresh === 'boolean') {
-      autoRefresh.value = persisted.autoRefresh
-      if (autoRefresh.value) {
-        // 重新挂载定时器
-        onAutoRefreshToggle(true)
-      }
-    }
+  // 先尝试恢复 localStorage 中的搜索条件 / 自动刷新（pageSize 由 PartListShell 自行恢复）
+  restoreFilter()
+  if (autoRefresh.value) {
+    // 重新挂载定时器
+    onAutoRefreshToggle(true)
   }
   fetchList()
 })
@@ -506,29 +387,6 @@ onMounted(() => {
 <style lang="scss" scoped>
 .pending-programming {
   padding: 0;
-}
-.filter-card {
-  margin-bottom: 12px;
-}
-.filter-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.total-hint {
-  margin-left: auto;
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-.pagination {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
-
-  @include until(sm) {
-    justify-content: center;
-  }
 }
 .name-link {
   color: var(--el-color-primary);
@@ -539,11 +397,5 @@ onMounted(() => {
 }
 .muted {
   color: var(--text-secondary);
-}
-:deep(.row-urgent) {
-  background: #fde2e2 !important;
-}
-:deep(.row-urgent td) {
-  background: #fde2e2 !important;
 }
 </style>
