@@ -97,8 +97,8 @@
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      :width="customerDlg.width.value"
-      :top="customerDlg.top.value"
+      :width="customerDlg.width"
+      :top="customerDlg.top"
       :close-on-click-modal="false"
       @closed="onDialogClosed"
     >
@@ -521,13 +521,6 @@ onMounted(() => {
 }
 :deep(.el-tree-node__content:hover .tree-row__actions) {
   opacity: 1;
-}
-
-/* 手机/平板无 hover：常显行尾操作按钮，方便触屏点击 */
-@include until(md) {
-  :deep(.tree-row__actions) {
-    opacity: 1 !important;
-  }
 }
 
 /* 筛选表单在窄屏宽度自适应：form-item 内按钮过多时可换行 */

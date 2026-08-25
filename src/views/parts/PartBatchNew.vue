@@ -157,9 +157,9 @@
     <el-dialog
       v-model="addDialogVisible"
       :title="editingUid ? '编辑零件' : '添加零件'"
-      :width="addDlg.width.value"
-      :top="addDlg.top.value"
-      :fullscreen="addDlg.fullscreen.value"
+      :width="addDlg.width"
+      :top="addDlg.top"
+      :fullscreen="addDlg.fullscreen"
       :close-on-click-modal="false"
       @closed="onDialogClosed"
     >
@@ -330,9 +330,9 @@
     <el-dialog
       v-model="previewDialogVisible"
       title="预览零件"
-      :width="previewDlg.width.value"
-      :top="previewDlg.top.value"
-      :fullscreen="previewDlg.fullscreen.value"
+      :width="previewDlg.width"
+      :top="previewDlg.top"
+      :fullscreen="previewDlg.fullscreen"
     >
       <el-descriptions v-if="previewing" :column="previewDescCol" border>
         <el-descriptions-item label="图号">{{ previewing.drawingNo }}</el-descriptions-item>
@@ -1083,18 +1083,16 @@ import { batchCreateParts, type PartBatchFilePayload, type PartCreatePayload } f
 import { listCustomers, type Customer } from '@/api/customer'
 import { createApplicant } from '@/api/applicant'
 import { useApplicantSearch } from '@/composables/useApplicantSearch'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useDialogSize } from '@/composables/useDialogSize'
 
 const router = useRouter()
 
 // ============ 响应式 ============
-const { isMobile } = useBreakpoint()
-const previewDescCol = computed(() => (isMobile.value ? 1 : 2))
+const previewDescCol = 2
 
 // 各 dialog 独立的响应式宽度（保留桌面固定 px）
-const addDlg = useDialogSize({ desktopWidth: 900, fullscreenOnMobile: true })
-const previewDlg = useDialogSize({ desktopWidth: 720, fullscreenOnMobile: true })
+const addDlg = useDialogSize({ desktopWidth: 900 })
+const previewDlg = useDialogSize({ desktopWidth: 720 })
 
 // ============ 客户树 ============
 const customers = ref<Customer[]>([])

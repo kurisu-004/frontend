@@ -666,8 +666,8 @@
     <el-dialog
       v-model="splitDialogVisible"
       title="拆分批次"
-      :width="confirmDlg.width.value"
-      :fullscreen="confirmDlg.fullscreen.value"
+      :width="confirmDlg.width"
+      :fullscreen="confirmDlg.fullscreen"
       @closed="onSplitDialogClosed"
     >
       <div v-if="splitSource" class="split-dialog-body">
@@ -741,9 +741,9 @@
     <el-dialog
       v-model="receiveOutsourceDialogVisible"
       title="外协回收 — 选择目标生产货架与下一道工序"
-      :width="receiveOutsourceDlg.width.value"
-      :top="receiveOutsourceDlg.top.value"
-      :fullscreen="receiveOutsourceDlg.fullscreen.value"
+      :width="receiveOutsourceDlg.width"
+      :top="receiveOutsourceDlg.top"
+      :fullscreen="receiveOutsourceDlg.fullscreen"
       :close-on-click-modal="false"
       @closed="onReceiveOutsourceDialogClosed"
     >
@@ -808,9 +808,9 @@
     <el-dialog
       v-model="failInspDialogVisible"
       title="指定工序 — 选择下一道工序 + 目标生产货架"
-      :width="failInspDlg.width.value"
-      :top="failInspDlg.top.value"
-      :fullscreen="failInspDlg.fullscreen.value"
+      :width="failInspDlg.width"
+      :top="failInspDlg.top"
+      :fullscreen="failInspDlg.fullscreen"
       :close-on-click-modal="false"
       @closed="onFailInspDialogClosed"
     >
@@ -898,9 +898,9 @@
     <el-dialog
       v-model="confirmVisible"
       :title="confirmTitle"
-      :width="confirmDlg.width.value"
-      :top="confirmDlg.top.value"
-      :fullscreen="confirmDlg.fullscreen.value"
+      :width="confirmDlg.width"
+      :top="confirmDlg.top"
+      :fullscreen="confirmDlg.fullscreen"
     >
       <div class="confirm-body">
         <p class="confirm-hint">{{ confirmHint }}</p>
@@ -929,9 +929,9 @@
     <el-dialog
       v-model="releaseVisible"
       title="下发到 CNC 货架"
-      :width="releaseDlg.width.value"
-      :top="releaseDlg.top.value"
-      :fullscreen="releaseDlg.fullscreen.value"
+      :width="releaseDlg.width"
+      :top="releaseDlg.top"
+      :fullscreen="releaseDlg.fullscreen"
       @closed="onReleaseClosed"
     >
       <el-form label-width="96px">
@@ -993,9 +993,9 @@
     <el-dialog
       v-model="showQuoteCreate"
       title="新建外协报价（DRAFT）"
-      :width="quoteCreateDlg.width.value"
-      :top="quoteCreateDlg.top.value"
-      :fullscreen="quoteCreateDlg.fullscreen.value"
+      :width="quoteCreateDlg.width"
+      :top="quoteCreateDlg.top"
+      :fullscreen="quoteCreateDlg.fullscreen"
       :close-on-click-modal="false"
       @closed="onQuoteCreateDialogClosed"
     >
@@ -1132,7 +1132,6 @@ import {
 } from '@/api/assembly'
 import { useAuthSession } from '@/composables/useAuthSession'
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useDialogSize } from '@/composables/useDialogSize'
 
 const route = useRoute()
@@ -1140,15 +1139,14 @@ const router = useRouter()
 const partId = ref<string>(String(route.params.id ?? ''))
 
 // ============ 响应式 ============
-const { isMobile, isTablet } = useBreakpoint()
-const descCol = computed(() => (isMobile.value ? 1 : isTablet.value ? 2 : 3))
+const descCol = 3
 
 // 各 dialog 独立的响应式宽度（保留桌面固定 px）
-const receiveOutsourceDlg = useDialogSize({ desktopWidth: 560, fullscreenOnMobile: true })
-const failInspDlg = useDialogSize({ desktopWidth: 480, fullscreenOnMobile: true })
+const receiveOutsourceDlg = useDialogSize({ desktopWidth: 560 })
+const failInspDlg = useDialogSize({ desktopWidth: 480 })
 const confirmDlg = useDialogSize({ desktopWidth: 420 })
-const releaseDlg = useDialogSize({ desktopWidth: 440, fullscreenOnMobile: true })
-const quoteCreateDlg = useDialogSize({ desktopWidth: 640, fullscreenOnMobile: true })
+const releaseDlg = useDialogSize({ desktopWidth: 440 })
+const quoteCreateDlg = useDialogSize({ desktopWidth: 640 })
 
 // ============ 数据 ============
 const part = ref<PartItem | null>(null)
@@ -2302,11 +2300,6 @@ function onViewQuoteDetail(_q: OutsourceQuote): void {
     border: 1px solid var(--el-border-color-lighter);
     border-radius: 4px;
     font-size: 13px;
-
-    @include until(sm) {
-      grid-template-columns: 1fr;
-      gap: 4px;
-    }
   }
   .cnc-gcode-col,
   .cnc-setup-col {

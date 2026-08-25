@@ -86,12 +86,12 @@
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      :width="dialogSize.width.value"
-      :top="dialogSize.top.value"
-      :fullscreen="dialogSize.fullscreen.value"
+      :width="dialogSize.width"
+      :top="dialogSize.top"
+      :fullscreen="dialogSize.fullscreen"
       @closed="onDialogClosed"
     >
-      <el-form :model="form" label-width="80px" :label-position="isMobile ? 'top' : 'right'">
+      <el-form :model="form" label-width="80px" label-position="right">
         <el-form-item label="代码" required>
           <el-input v-model="form.code" :disabled="!!editing" placeholder="如 车床 / CNC操机" />
         </el-form-item>
@@ -127,7 +127,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
 import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -139,7 +138,6 @@ import {
 } from '@/api/workType'
 import type { WorkType } from '@/types/workType'
 
-const { isMobile } = useBreakpoint()
 const dialogSize = useDialogSize({ desktopWidth: 420 })
 
 const loading = ref(false)
@@ -273,20 +271,4 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .wt-list { display: flex; flex-direction: column; gap: 12px; }
-
-@include until(sm) {
-  .filter-card :deep(.el-form--inline) {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .filter-card :deep(.el-form-item) {
-    margin-right: 0;
-  }
-
-  .filter-card :deep(.el-form-item:first-child),
-  .filter-card :deep(.el-form-item:first-child .el-input) {
-    width: 100% !important;
-  }
-}
 </style>

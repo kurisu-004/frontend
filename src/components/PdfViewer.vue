@@ -195,10 +195,6 @@ onBeforeUnmount(() => {
   gap: 8px;
   min-height: 400px;
   min-width: 0;
-
-  @include until(sm) {
-    min-height: 260px;
-  }
 }
 .loading,
 .error {

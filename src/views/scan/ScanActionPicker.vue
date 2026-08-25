@@ -245,13 +245,4 @@ function rescanBadge(): void {
 .action-grid--two {
   grid-template-columns: repeat(2, 1fr);
 }
-
-@media (max-width: 768px) {
-  .action-grid {
-    grid-template-columns: 1fr;
-  }
-  .action-btn {
-    height: 160px !important;
-  }
-}
 </style>

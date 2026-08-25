@@ -273,9 +273,9 @@
     <el-dialog
       v-model="editVisible"
       title="编辑装配件元数据"
-      :width="editDlg.width.value"
-      :top="editDlg.top.value"
-      :fullscreen="editDlg.fullscreen.value"
+      :width="editDlg.width"
+      :top="editDlg.top"
+      :fullscreen="editDlg.fullscreen"
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -361,9 +361,9 @@
     <el-dialog
       v-model="confirmVisible"
       :title="confirmAction === 'cancel' ? '取消装配件' : '删除装配件'"
-      :width="confirmDlg.width.value"
-      :top="confirmDlg.top.value"
-      :fullscreen="confirmDlg.fullscreen.value"
+      :width="confirmDlg.width"
+      :top="confirmDlg.top"
+      :fullscreen="confirmDlg.fullscreen"
       :close-on-click-modal="false"
     >
       <p class="confirm-hint">
@@ -421,9 +421,9 @@
     <el-dialog
       v-model="addChildVisible"
       title="添加子件"
-      :width="addChildDlg.width.value"
-      :top="addChildDlg.top.value"
-      :fullscreen="addChildDlg.fullscreen.value"
+      :width="addChildDlg.width"
+      :top="addChildDlg.top"
+      :fullscreen="addChildDlg.fullscreen"
       :close-on-click-modal="false"
     >
       <p class="confirm-hint">
@@ -487,7 +487,6 @@ import {
   type OrderStatus,
 } from '@/types/parts'
 import { useAuthSession } from '@/composables/useAuthSession'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useDialogSize } from '@/composables/useDialogSize'
 import ResponsiveList from '@/components/ResponsiveList.vue'
 
@@ -496,13 +495,12 @@ const router = useRouter()
 const { hasRole } = useAuthSession()
 
 // ============ 响应式 ============
-const { isMobile, isTablet } = useBreakpoint()
-const descCol = computed(() => (isMobile.value ? 1 : isTablet.value ? 2 : 3))
+const descCol = 3
 
 // 各 dialog 独立的响应式宽度（保留桌面固定 px）
-const editDlg = useDialogSize({ desktopWidth: 640, fullscreenOnMobile: true })
-const confirmDlg = useDialogSize({ desktopWidth: 480, fullscreenOnMobile: true })
-const addChildDlg = useDialogSize({ desktopWidth: 480, fullscreenOnMobile: true })
+const editDlg = useDialogSize({ desktopWidth: 640 })
+const confirmDlg = useDialogSize({ desktopWidth: 480 })
+const addChildDlg = useDialogSize({ desktopWidth: 480 })
 
 // 权限：取消 / 添加子件 / 上传 PDF = CLERK+；删除 = MANAGER-only。
 const canCancel = computed(
