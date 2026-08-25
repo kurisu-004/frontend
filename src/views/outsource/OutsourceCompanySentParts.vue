@@ -12,9 +12,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type SummaryMethod } from 'element-plus'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import {
@@ -32,7 +30,6 @@ import type { SortDir } from '@/types/parts'
 
 const route = useRoute()
 const router = useRouter()
-const { isMobile } = useBreakpoint()
 
 const companyId = computed(() => String(route.params.id ?? ''))
 const company = ref<OutsourceCompany | null>(null)
@@ -47,9 +44,6 @@ const filter = reactive({
 })
 const sortBy = ref<OutsourceSentPartSortKey>('SENT_AT')
 const sortDir = ref<SortDir>('DESC')
-const paginationLayout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
-)
 
 // ============ 筛选状态持久化（2026-07-30 commit 4B）============
 // 持久化 filter / sortBy / sortDir；该页无 page（接口固定 limit 50 offset 0）。
@@ -363,9 +357,16 @@ watch(companyId, () => {
       </el-form>
     </el-card>
 
-    <ResponsiveList
-      :items="items"
-      :loading="loading"
+    <div class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+      />
+    </div>
+    <el-table
+      :data="items"
+      v-loading="loading"
       row-key="shipment_id"
       :empty-text="error ?? '暂无对账记录'"
       :row-class-name="rowClassName"
@@ -377,12 +378,8 @@ watch(companyId, () => {
       @row-dblclick="onRowDblClick"
       @sort-change="onSortChange"
     >
-      <template #toolbar>
-        <ColumnVisibilityPopover
-          :defs="columnDefs"
-          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-          @reset="columnVisibility.showAll"
-        />
+      <template #empty>
+        <el-empty :description="error ?? '暂无对账记录'" />
       </template>
       <el-table-column
         v-if="columnVisibility.isVisible('part_drawing_no')"
@@ -509,58 +506,7 @@ watch(companyId, () => {
           <el-tag v-else type="info" size="small">未对</el-tag>
         </template>
       </el-table-column>
-
-      <template #card="{ row }">
-        <div class="rl-card-head">
-          <span class="rl-card-title">{{ (row as OutsourceSentPartItem).part_name || '未命名零件' }}</span>
-          <el-tag :type="statusTagType((row as OutsourceSentPartItem).status)" size="small">
-            {{ statusLabel((row as OutsourceSentPartItem).status) }}
-          </el-tag>
-        </div>
-        <div class="rl-card-sub">
-          图号 {{ (row as OutsourceSentPartItem).part_drawing_no || '—' }} ·
-          客户 {{ (row as OutsourceSentPartItem).customer_path || '—' }}
-        </div>
-        <div class="rl-kv">
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">数量</span>
-            <span class="rl-kv__val">{{ (row as OutsourceSentPartItem).quantity ?? '—' }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">单价</span>
-            <span class="rl-kv__val">{{ (row as OutsourceSentPartItem).unit_price ?? '—' }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">总价</span>
-            <span class="rl-kv__val">{{ displayTotalPrice(row as OutsourceSentPartItem) }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">发送时间</span>
-            <span class="rl-kv__val">{{ fmtDt((row as OutsourceSentPartItem).sent_at) }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">回收时间</span>
-            <span class="rl-kv__val">
-              <template v-if="(row as OutsourceSentPartItem).received_at">
-                {{ fmtDt((row as OutsourceSentPartItem).received_at) }}
-              </template>
-              <span v-else style="color: var(--el-color-warning);">未回收</span>
-            </span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">对账</span>
-            <span class="rl-kv__val">
-              <el-tag
-                v-if="(row as OutsourceSentPartItem).is_billed"
-                type="success"
-                size="small"
-              >已对</el-tag>
-              <el-tag v-else type="info" size="small">未对</el-tag>
-            </span>
-          </div>
-        </div>
-      </template>
-    </ResponsiveList>
+    </el-table>
   </div>
 </template>
 
@@ -576,6 +522,12 @@ watch(companyId, () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 .total-hint {

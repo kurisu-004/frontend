@@ -53,21 +53,24 @@
     </el-card>
 
     <el-card shadow="never">
-      <ResponsiveList
-        :items="rows"
-        :loading="loading"
+      <div class="table-toolbar">
+        <ColumnVisibilityPopover
+          :defs="columnDefs"
+          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+          @reset="columnVisibility.showAll"
+        />
+      </div>
+      <el-table
+        :data="rows"
+        v-loading="loading"
         row-key="id"
         empty-text="暂无申请人"
         stripe
         border
         size="small"
       >
-        <template #toolbar>
-          <ColumnVisibilityPopover
-            :defs="columnDefs"
-            :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-            @reset="columnVisibility.showAll"
-          />
+        <template #empty>
+          <el-empty description="暂无申请人" />
         </template>
 
         <el-table-column type="index" label="#" width="50" />
@@ -97,25 +100,7 @@
             <el-button link type="danger" size="small" @click="onDelete(row as Applicant)">删除</el-button>
           </template>
         </el-table-column>
-
-        <!-- 手机卡片 -->
-        <template #card="{ row, index }">
-          <div class="rl-card-head">
-            <span class="rl-card-title">#{{ index + 1 }} · {{ row.name }}</span>
-          </div>
-          <div class="rl-card-sub">{{ row.customer_name || '—' }}</div>
-          <div class="rl-kv">
-            <div class="rl-kv__item rl-kv__item--full">
-              <span class="rl-kv__key">创建时间</span>
-              <span class="rl-kv__val">{{ formatDate(row.created_at) || '—' }}</span>
-            </div>
-          </div>
-          <div class="rl-card-actions">
-            <el-button link type="primary" size="small" @click="onEdit(row as Applicant)">编辑</el-button>
-            <el-button link type="danger" size="small" @click="onDelete(row as Applicant)">删除</el-button>
-          </div>
-        </template>
-      </ResponsiveList>
+      </el-table>
     </el-card>
 
     <el-dialog
@@ -166,9 +151,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, RefreshLeft, Search } from '@element-plus/icons-vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -180,8 +163,6 @@ import {
   updateApplicant,
 } from '@/api/applicant'
 import type { Applicant } from '@/types/applicant'
-
-const { isMobile } = useBreakpoint()
 
 // ============ 列可见性 ============
 // 「#」和「操作」列不放进 defs → 始终可见,且不出现在列设置弹窗
@@ -353,5 +334,10 @@ onMounted(async () => {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-secondary);
+}
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 </style>

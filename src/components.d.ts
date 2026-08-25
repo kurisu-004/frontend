@@ -85,7 +85,6 @@ declare module 'vue' {
     PartPickerDialog: typeof import('./components/delivery/PartPickerDialog.vue')['default']
     PdfViewer: typeof import('./components/PdfViewer.vue')['default']
     PrintPreviewDialog: typeof import('./components/delivery/PrintPreviewDialog.vue')['default']
-    ResponsiveList: typeof import('./components/ResponsiveList.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ShelfPickerCard: typeof import('./components/ShelfPickerCard.vue')['default']

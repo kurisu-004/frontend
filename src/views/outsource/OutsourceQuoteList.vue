@@ -7,7 +7,6 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Filter, RefreshLeft, Search } from '@element-plus/icons-vue'
 import PdfViewer from '@/components/PdfViewer.vue'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
@@ -715,9 +714,16 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
     </el-card>
 
     <el-card shadow="never">
-      <ResponsiveList
-        :items="items"
-        :loading="loading"
+      <div class="table-toolbar">
+        <ColumnVisibilityPopover
+          :defs="columnDefs"
+          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+          @reset="columnVisibility.showAll"
+        />
+      </div>
+      <el-table
+        :data="items"
+        v-loading="loading"
         row-key="id"
         :empty-text="emptyText"
         stripe
@@ -727,14 +733,9 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
         :row-class-name="quoteRowClassName"
         @sort-change="onSortChange"
         @row-click="onRowClick"
-        @card-click="onRowClick"
       >
-        <template #toolbar>
-          <ColumnVisibilityPopover
-            :defs="columnDefs"
-            :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-            @reset="columnVisibility.showAll"
-          />
+        <template #empty>
+          <el-empty :description="emptyText" />
         </template>
         <el-table-column
           v-if="columnVisibility.isVisible('part_serial_no')"
@@ -949,66 +950,7 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
             >删除</el-button>
           </template>
         </el-table-column>
-
-        <template #card="{ row }">
-          <div class="rl-card-head">
-            <span class="rl-card-title">{{ (row as OutsourceQuote).part_name || '未命名零件' }}</span>
-            <el-tag
-              :type="(statusTagType((row as OutsourceQuote).status) || 'info') as 'info' | 'success' | 'warning' | 'danger'"
-              size="small"
-              effect="plain"
-            >
-              {{ statusLabel((row as OutsourceQuote).status) }}
-            </el-tag>
-          </div>
-          <div class="rl-card-sub">
-            图号 {{ (row as OutsourceQuote).part_drawing_no || '—' }} · 序列号 {{ (row as OutsourceQuote).part_serial_no || '—' }}
-          </div>
-          <div class="rl-kv">
-            <div class="rl-kv__item">
-              <span class="rl-kv__key">外协公司</span>
-              <span class="rl-kv__val">{{ (row as OutsourceQuote).outsource_company_name || '—' }}</span>
-            </div>
-            <div class="rl-kv__item">
-              <span class="rl-kv__key">工序</span>
-              <span class="rl-kv__val">{{ (row as OutsourceQuote).process_code || '—' }}</span>
-            </div>
-            <div class="rl-kv__item">
-              <span class="rl-kv__key">单价</span>
-              <span class="rl-kv__val">{{ (row as OutsourceQuote).price }} 元</span>
-            </div>
-            <div class="rl-kv__item rl-kv__item--full">
-              <span class="rl-kv__key">客户</span>
-              <span class="rl-kv__val">{{ (row as OutsourceQuote).customer_path || '—' }}</span>
-            </div>
-          </div>
-          <div class="rl-card-actions">
-            <el-button
-              v-if="canEdit((row as OutsourceQuote), roleMap)"
-              size="small"
-              @click.stop="onSubmit((row as OutsourceQuote))"
-            >提交审核</el-button>
-            <el-button
-              v-if="canApprove((row as OutsourceQuote), roleMap)"
-              size="small"
-              type="success"
-              @click.stop="openApprove((row as OutsourceQuote))"
-            >通过</el-button>
-            <el-button
-              v-if="canReject((row as OutsourceQuote), roleMap)"
-              size="small"
-              type="danger"
-              @click.stop="openReject((row as OutsourceQuote))"
-            >拒绝</el-button>
-            <el-button
-              v-if="canSoftDelete((row as OutsourceQuote), roleMap)"
-              size="small"
-              type="danger"
-              @click.stop="onDelete((row as OutsourceQuote))"
-            >删除</el-button>
-          </div>
-        </template>
-      </ResponsiveList>
+      </el-table>
 
       <div class="pagination">
         <el-pagination
@@ -1251,6 +1193,12 @@ async function onDelete(q: OutsourceQuote): Promise<void> {
   @include until(sm) {
     justify-content: center;
   }
+}
+
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 .mobile-filter {

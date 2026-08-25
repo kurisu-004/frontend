@@ -4,20 +4,23 @@
       <h2>货架管理</h2>
       <el-button type="primary" @click="showCreate = true">新增货架</el-button>
     </div>
-    <ResponsiveList
-      :items="items"
-      :loading="loading"
+    <div class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+      />
+    </div>
+    <el-table
+      :data="items"
+      v-loading="loading"
       row-key="id"
       empty-text="暂无货架"
       stripe
       :default-sort="{ prop: 'display_order', order: 'ascending' }"
     >
-      <template #toolbar>
-        <ColumnVisibilityPopover
-          :defs="columnDefs"
-          :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
-          @reset="columnVisibility.showAll"
-        />
+      <template #empty>
+        <el-empty description="暂无货架" />
       </template>
       <el-table-column
         v-if="columnVisibility.isVisible('code')"
@@ -69,40 +72,7 @@
           </el-popconfirm>
         </template>
       </el-table-column>
-
-      <!-- 手机卡片 -->
-      <template #card="{ row }">
-        <div class="rl-card-head">
-          <span class="rl-card-title">{{ row.name }}</span>
-          <el-tag :type="row.is_active ? 'success' : 'danger'" size="small" effect="plain">
-            {{ row.is_active ? '启用' : '停用' }}
-          </el-tag>
-        </div>
-        <div class="rl-card-sub">
-          {{ row.code }} · {{ row.zone === 'PRODUCTION' ? '生产区' : '品检区' }}
-        </div>
-        <div class="rl-kv">
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">位置</span>
-            <span class="rl-kv__val">{{ row.location || '—' }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">物理顺序</span>
-            <span class="rl-kv__val">{{ row.display_order > 0 ? row.display_order : '未设置' }}</span>
-          </div>
-          <div class="rl-kv__item">
-            <span class="rl-kv__key">账号数</span>
-            <span class="rl-kv__val">{{ row.account_count ?? 0 }}</span>
-          </div>
-        </div>
-        <div class="rl-card-actions">
-          <el-button link size="small" @click="editShelf(row)">编辑</el-button>
-          <el-popconfirm v-if="row.is_active" title="确认停用？" @confirm="doDeactivate(String(row.id))">
-            <template #reference><el-button link size="small" type="danger">停用</el-button></template>
-          </el-popconfirm>
-        </div>
-      </template>
-    </ResponsiveList>
+    </el-table>
 
     <el-dialog
       v-model="showCreate"
@@ -162,9 +132,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import ResponsiveList from '@/components/ResponsiveList.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useColumnVisibility } from '@/composables/useColumnVisibility'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { listShelves, createShelf, updateShelf, deactivateShelf, getShelfProcesses, setShelfProcesses } from '@/api/shelves'
@@ -172,8 +140,6 @@ import { listProcesses } from '@/api/process'
 import type { Shelf } from '@/types/shelf'
 import type { Process } from '@/types/process'
 import { PROCESS_CATEGORY_LABEL } from '@/types/process'
-
-const { isMobile } = useBreakpoint()
 
 // ============ 列可见性 ============
 // 「操作」列不放进 defs → 始终可见
@@ -259,5 +225,10 @@ onMounted(async () => {
   margin-left: 12px;
   font-size: 12px;
   color: #909399;
+}
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 </style>
