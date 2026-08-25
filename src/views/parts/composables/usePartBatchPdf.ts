@@ -3,7 +3,7 @@
 // 2026-08-25 拆分：原 PartBatchNew.vue 第 1605-2857 行的「PDF 上传 + 拆页 + 合并 + 提交」
 // 整段抽到本文件 + PartBatchPdfTab.vue。
 
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import Sortable from 'sortablejs'
@@ -201,9 +201,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   const selectedPages = ref<Set<string>>(new Set())
   const standaloneParts = ref<StandalonePartRow[]>([])
   const assemblies = ref<AssemblyRow[]>([])
-  // PR-H 2026-07-28：拖拽排序 — 表格 DOM ref + Sortable 实例句柄
-  const standaloneTableRef = ref<{ $el?: HTMLElement } | null>(null)
-  const assembliesTableRef = ref<{ $el?: HTMLElement } | null>(null)
+  // PR-H 2026-07-28：拖拽排序 —— Sortable 实例句柄。表格 DOM ref 现在归
+  // PartBatchPdfTab 拥有（作为本地 ref），本 composable 的 init/clear 函数
+  // 接收表格实例作为参数。
   let standaloneSortable: Sortable | null = null
   let assembliesSortable: Sortable | null = null
 
@@ -621,9 +621,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   // ============ 拖拽排序（sortable.js） ============
   // PR-H 2026-07-28：拖动 handle 列重排行顺序。
   // - 不接受嵌套展开行（child-table 不挂 sortable）；仅顶层独立零件 / 装配件行。
-  // - watch 行数 + 数据身份变化时重建实例（避免 v-if / 数据长度变化时 tbody 重建导致旧实例悬挂）。
-  function initStandaloneSortable(): void {
-    const root = standaloneTableRef.value?.$el
+  // - 表格 DOM ref 由 PartBatchPdfTab 拥有；本 composable 接收 el-table 实例
+  //   作为参数（避免 el-table ref 写到父组件的 readonly prop 上静默失败）。
+  function initStandaloneSortable(table: { $el?: HTMLElement } | null | undefined): void {
+    const root = table?.$el
     if (!root) return
     const tbody = root.querySelector(
       '.el-table__body-wrapper .el-table__body > tbody',
@@ -645,8 +646,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       },
     })
   }
-  function initAssembliesSortable(): void {
-    const root = assembliesTableRef.value?.$el
+  function initAssembliesSortable(table: { $el?: HTMLElement } | null | undefined): void {
+    const root = table?.$el
     if (!root) return
     const tbody = root.querySelector(
       '.el-table__body-wrapper .el-table__body > tbody',
@@ -668,14 +669,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       },
     })
   }
-  watch(
-    () => standaloneParts.value.length,
-    () => nextTick(initStandaloneSortable),
-  )
-  watch(
-    () => assemblies.value.length,
-    () => nextTick(initAssembliesSortable),
-  )
+  // 监听行数变化 → 重建 Sortable 句柄（v-if / 数据长度变化时 tbody 重建）
+  // —— 由子组件 PartBatchPdfTab 持有 ref，触发 init；本 composable 暂存
+  // init 函数供子组件回调。
 
   // ============ 源文件区：勾选 + 归组 + 删除 ============
   function togglePageSelection(pdfUid: string, pageIndex: number, on: boolean): void {
@@ -741,11 +737,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     return any && !isPdfFullySelected(pdfUid)
   }
 
-  // el-table 类型来自 element-plus 类型导出，运行时为函数组件；用宽松类型包住
-  const sourceTableRef = ref<{ clearSelection: () => void } | null>(null)
-
-  function clearSelection(): void {
-    sourceTableRef.value?.clearSelection()
+  // el-table 类型来自 element-plus 类型导出，运行时为函数组件；用宽松类型包住。
+  // el-table ref 现在由 PartBatchPdfTab 持有；外部调用（清空选择按钮）需传 ref，
+  // composable 内部 merge 后调用可不传 —— 只重置 selectedPages 状态。
+  function clearSelection(table?: { clearSelection: () => void } | null): void {
+    table?.clearSelection()
     selectedPages.value = new Set()
   }
 
@@ -1280,13 +1276,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     }
   }
 
-  // 暴露给模板的 init 函数（shell 会在 nextTick 调一次）
-  function initSortables(): void {
-    nextTick(() => {
-      initStandaloneSortable()
-      initAssembliesSortable()
-    })
-  }
+  // 暴露给模板的 init 函数（子组件 PartBatchPdfTab 在 onMounted 调一次，
+  // 内部用 nextTick 等表格 ref 挂载；行数变化时由子组件的 watcher 重新触发）。
+  // —— init 函数见上方定义；不在此聚合暴露（保持纯函数、参数化）。
 
   onBeforeUnmount(() => {
     closePdfPreview()
@@ -1315,13 +1307,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     selectedPages,
     standaloneParts,
     assemblies,
-    originalPdfs,
     totalAssemblyChildren,
     sourceTree,
-    // table refs
-    standaloneTableRef,
-    assembliesTableRef,
-    sourceTableRef,
     // preview state
     pdfPreviewing,
     pdfPreviewVisible,
@@ -1348,19 +1335,13 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     onL2Change,
     onAsmPlannedChange,
     // preview
-    previewAt,
     closePdfPreview,
     previewSourceRow,
     previewStandalonePart,
-    previewPdfSource,
     previewPdfSourceByUid,
     pdfSourceLabel,
     // selection
     onSourceSelectionChange,
-    togglePageSelection,
-    togglePdfSelection,
-    isPdfFullySelected,
-    isPdfPartiallySelected,
     clearSelection,
     // merge / split
     mergeSelectedAsPart,
@@ -1382,7 +1363,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     closeManualAsmDialog,
     // submit
     onSubmitPdfTree,
-    // init
-    initSortables,
+    // sortable init (子组件在 onMounted + 行数变化时调用)
+    initStandaloneSortable,
+    initAssembliesSortable,
   }
 }

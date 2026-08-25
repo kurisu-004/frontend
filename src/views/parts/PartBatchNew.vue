@@ -84,10 +84,16 @@ const successNextTab = ref<string>('manual')
 const manual = reactive(usePartBatchManual({ customers, applicantSearch }))
 const pdf = reactive(usePartBatchPdf({ customers, applicantSearch, successNextTab }))
 
+// 2026-08-25 fix：监听 PDF Tab 提交成功后由 composable 写入的 successNextTab，
+// 切回 activeTab。原 PartBatchNew.vue 提交后直接 activeTab='manual'，拆 Tab 后
+// 这部分代码归 PDF Tab composable，shell 负责 tab 切换。
+watch(successNextTab, (v) => {
+  if (v) activeTab.value = v
+})
+
 onMounted(() => {
   void loadCustomers()
-  // 触发 sortable 初始化（nextTick 等 el-table ref 挂载）
-  pdf.initSortables()
+  // sortable 初始化移到 PartBatchPdfTab 自己的 onMounted（ref 现在归子组件所有）
 })
 </script>
 

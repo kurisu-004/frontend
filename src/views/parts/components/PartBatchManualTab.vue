@@ -143,16 +143,17 @@
 
   <!-- 添加 / 编辑 Dialog -->
   <el-dialog
-    v-model="addDialogVisible"
+    :model-value="addDialogVisible"
     :title="editingUid ? '编辑零件' : '添加零件'"
     :width="addDlg.width"
     :top="addDlg.top"
     :fullscreen="addDlg.fullscreen"
     :close-on-click-modal="false"
-    @closed="onDialogClosed"
+    @update:model-value="(v: boolean) => !v && closeAddDialog()"
+    @closed="handleDialogClosed"
   >
     <el-form
-      ref="formRef"
+      ref="formRefLocal"
       :model="form"
       :rules="rules"
       label-width="100px"
@@ -291,18 +292,22 @@
 
     <template #footer>
       <el-button @click="closeAddDialog">取消</el-button>
-      <el-button type="primary" :loading="dialogSubmitting" @click="onAddConfirm">
+      <el-button type="primary" :loading="dialogSubmitting" @click="handleAddConfirm">
         {{ editingUid ? '保存到列表' : '加入列表' }}
       </el-button>
     </template>
   </el-dialog>
 
   <!-- 图纸 PDF 预览 Dialog -->
+  <!-- X / Esc / 遮罩 → emit('update:model-value', false)；父组件 addDialogVisible
+       是 readonly prop，本地 @update 把关动作转给 composable 提供的 closeXxx()。 -->
   <el-dialog
-    v-model="drawingPreviewVisible"
+    :model-value="drawingPreviewVisible"
     :title="`图纸预览 — ${drawingPreviewRow?.drawingNo ?? ''}`"
     fullscreen
     destroy-on-close
+    :before-close="closeDrawingPreview"
+    @update:model-value="(v: boolean) => !v && closeDrawingPreview()"
     @closed="onDrawingPreviewClosed"
   >
     <PdfViewer
@@ -316,11 +321,12 @@
 
 <!-- 预览 Dialog（只读，手机全屏 / 桌面 720px，列数随断点切换） -->
   <el-dialog
-    v-model="previewDialogVisible"
+    :model-value="previewDialogVisible"
     title="预览零件"
     :width="previewDlg.width"
     :top="previewDlg.top"
     :fullscreen="previewDlg.fullscreen"
+    @update:model-value="(v: boolean) => !v && closePreviewDialog()"
   >
     <el-descriptions v-if="previewing" :column="previewDescCol" border>
       <el-descriptions-item label="图号">{{ previewing.drawingNo }}</el-descriptions-item>
@@ -353,6 +359,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { FormInstance, FormRules, UploadFile } from 'element-plus'
 import { DocumentAdd, Picture, Plus, Upload } from '@element-plus/icons-vue'
 import PdfViewer from '@/components/PdfViewer.vue'
@@ -360,7 +367,13 @@ import ResponsiveList from '@/components/ResponsiveList.vue'
 import type { FormState, StagedEntry } from '../composables/usePartBatchManual'
 
 // 父组件 `v-bind="manual"` 摊开传入本组件需要的所有 props。
-defineProps<{
+// 2026-08-25 fix：el-form 的 ref 必须用本组件本地 ref —— 之前 `ref="formRef"` 把
+// 表单实例写到父组件传下来的 readonly prop 上静默失败，导致 manual 录入表单
+// 校验永远不触发。formRefLocal 拥有 el-form 实例后，handleAddConfirm /
+// handleDialogClosed 把它作为参数传给 composable 的 onAddConfirm / onDialogClosed。
+const formRefLocal = ref<FormInstance>()
+
+const props = defineProps<{
   previewDescCol: number
   addDlg: { width: string | number; top: string; fullscreen: false }
   previewDlg: { width: string | number; top: string; fullscreen: false }
@@ -378,12 +391,12 @@ defineProps<{
   previewing: StagedEntry | null
   submitting: boolean
   form: FormState
-  formRef: FormInstance | undefined
   rules: FormRules
   openDrawingPreview: (row: StagedEntry) => void
   onDrawingPreviewClosed: () => void
   closeAddDialog: () => void
   closePreviewDialog: () => void
+  closeDrawingPreview: () => void
   openAddDialog: () => void
   onCustomerChange: (pickedId: unknown) => Promise<void>
   onApplicantSelect: (item: Record<string, unknown>) => void
@@ -391,8 +404,8 @@ defineProps<{
   onDrawingChange: (uploadFile: UploadFile) => void
   onDrawingRemoveUpload: () => void
   onDrawingRemove: () => void
-  onAddConfirm: () => Promise<void>
-  onDialogClosed: () => void
+  onAddConfirm: (form?: FormInstance) => Promise<void>
+  onDialogClosed: (form?: FormInstance) => void
   onRowPreview: (row: StagedEntry) => void
   onEditFromPreview: () => void
   onRemoveRow: (uid: string) => void
@@ -400,6 +413,15 @@ defineProps<{
   rowClassName: (p: { row: unknown }) => string
   onSubmit: () => Promise<void>
 }>()
+
+/** 把本地 formRef 实例传回 composable 的 onAddConfirm。 */
+function handleAddConfirm(): Promise<void> {
+  return props.onAddConfirm(formRefLocal.value)
+}
+/** @closed 触发：composable 需要 form 来 clearValidate()。 */
+function handleDialogClosed(): void {
+  props.onDialogClosed(formRefLocal.value)
+}
 </script>
 
 <style lang="scss" scoped>

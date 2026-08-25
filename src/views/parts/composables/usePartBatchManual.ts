@@ -104,7 +104,10 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
   const staged = ref<StagedEntry[]>([])
 
   // ============ Dialog 表单 ============
-  const formRef = ref<FormInstance>()
+  // 注意：el-form 的 ref 必须在子组件里声明为本地 ref（ref="formRef" 写在子组件
+  // 模板里时，Vue 会把 el-form 实例写到那个 ref 上 —— 而父组件传下来的 formRef 是
+  // readonly prop，写入会静默失败）。子组件把 formRefLocal.value 通过 onAddConfirm
+  // / onDialogClosed 的形参传回本 composable。
   const addDialogVisible = ref(false)
   const dialogSubmitting = ref(false)
   const editingUid = ref<string | null>(null)
@@ -126,6 +129,10 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
   }
   function closePreviewDialog(): void {
     previewDialogVisible.value = false
+  }
+  /** 图纸 PDF 预览 dialog 的关动作（el-dialog X / Esc 触发：先 visible=false，再走 @closed 清 row）。 */
+  function closeDrawingPreview(): void {
+    drawingPreviewVisible.value = false
   }
 
   const initialForm = (): FormState => ({
@@ -251,10 +258,10 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     form.drawingUrl = null
   }
 
-  async function onAddConfirm(): Promise<void> {
-    if (!formRef.value) return
+  async function onAddConfirm(formEl?: FormInstance): Promise<void> {
+    if (!formEl) return
     try {
-      await formRef.value.validate()
+      await formEl.validate()
     } catch {
       return
     }
@@ -319,12 +326,12 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     }
   }
 
-  function onDialogClosed(): void {
+  function onDialogClosed(formEl?: FormInstance): void {
     // 仅在「取消」关闭时表单上仍残留 url 才需要回收；onAddConfirm 成功后已把 url 转交
     if (form.drawingUrl) {
       try { URL.revokeObjectURL(form.drawingUrl) } catch { /* ignore */ }
     }
-    formRef.value?.clearValidate()
+    formEl?.clearValidate()
     Object.assign(form, initialForm())
     editingUid.value = null
   }
@@ -506,13 +513,13 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     previewing,
     submitting,
     form,
-    formRef,
     rules,
     // handlers
     openDrawingPreview,
     onDrawingPreviewClosed,
     closeAddDialog,
     closePreviewDialog,
+    closeDrawingPreview,
     openAddDialog,
     onCustomerChange,
     onApplicantSelect,

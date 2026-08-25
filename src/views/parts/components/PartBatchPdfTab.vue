@@ -155,13 +155,13 @@
           <el-icon><files /></el-icon>
           <span>合并为装配件</span>
         </el-button>
-        <el-button @click="clearSelection">清空选择</el-button>
+        <el-button @click="handleClearSelection">清空选择</el-button>
       </div>
     </div>
 
     <!-- 2026-08-22 a11y：selection 列所在 table 加 aria-label -->
     <el-table
-      ref="sourceTableRef"
+      ref="sourceTableRefLocal"
       :data="sourceTree"
       row-key="id"
       :tree-props="{ children: 'children' }"
@@ -214,7 +214,7 @@
           </el-button>
         </div>
         <el-table
-          ref="standaloneTableRef"
+          ref="standaloneTableRefLocal"
           :data="standaloneParts"
           row-key="uid"
           border
@@ -384,7 +384,7 @@
           </el-button>
         </div>
         <el-table
-          ref="assembliesTableRef"
+          ref="assembliesTableRefLocal"
           :data="assemblies"
           row-key="uid"
           border
@@ -622,11 +622,12 @@
   <!-- PDF 文件名点击触发的全屏预览（Tab 2）。blob URL 生命周期见
        openPdfPreview / closePdfPreview。 -->
   <el-dialog
-    v-model="pdfPreviewVisible"
+    :model-value="pdfPreviewVisible"
     :title="pdfPreviewing?.title ?? 'PDF 预览'"
     fullscreen
     destroy-on-close
     :before-close="closePdfPreview"
+    @update:model-value="(v: boolean) => !v && closePdfPreview()"
   >
     <PdfViewer
       v-if="pdfPreviewing?.url"
@@ -637,10 +638,11 @@
 
   <!-- 手动新增零件 dialog -->
   <el-dialog
-    v-model="manualPartDialogVisible"
+    :model-value="manualPartDialogVisible"
     title="新增独立零件"
     width="520px"
     destroy-on-close
+    @update:model-value="(v: boolean) => !v && closeManualPartDialog()"
   >
     <el-form :model="manualPartForm" label-width="80px">
       <el-form-item label="图号" required>
@@ -673,10 +675,11 @@
 
   <!-- 手动新增装配件 dialog -->
   <el-dialog
-    v-model="manualAsmDialogVisible"
+    :model-value="manualAsmDialogVisible"
     title="新增装配件"
     width="520px"
     destroy-on-close
+    @update:model-value="(v: boolean) => !v && closeManualAsmDialog()"
   >
     <el-form :model="manualAsmForm" label-width="80px">
       <el-form-item label="图号" required>
@@ -709,6 +712,7 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick, onMounted, ref, watch } from 'vue'
 import type { UploadFile } from 'element-plus'
 import {
   Document,
@@ -730,7 +734,10 @@ import type {
 } from '../composables/usePartBatchPdf'
 
 // 父组件 `v-bind="pdf"` 摊开传入本组件需要的所有 props。
-defineProps<{
+// 2026-08-25 fix：3 个 el-table 的 ref 改成本组件本地 ref —— 之前写在父组件
+// 的 readonly prop 上时，el-table 实例会被静默写入失败，导致 Sortable 拖拽
+// 初始化和 clearSelection 全部失效。
+const props = defineProps<{
   l1Customers: { id: string; name: string }[]
   l2Customers: { id: string; name: string }[]
   applicantCandidates: { id: string; name: string }[]
@@ -748,9 +755,6 @@ defineProps<{
   assemblies: AssemblyRow[]
   totalAssemblyChildren: number
   sourceTree: SourceTreeRow[]
-  standaloneTableRef: { $el?: HTMLElement } | null
-  assembliesTableRef: { $el?: HTMLElement } | null
-  sourceTableRef: { clearSelection: () => void } | null
   pdfPreviewing: PdfPreviewState | null
   pdfPreviewVisible: boolean
   manualPartDialogVisible: boolean
@@ -777,7 +781,7 @@ defineProps<{
   previewPdfSourceByUid: (uid: string) => void
   pdfSourceLabel: (uid: string) => string
   onSourceSelectionChange: (rows: SourceTreeRow[]) => void
-  clearSelection: () => void
+  clearSelection: (table: { clearSelection: () => void } | null | undefined) => void
   mergeSelectedAsPart: () => Promise<void>
   mergeSelectedAsAssembly: () => Promise<void>
   splitStandalonePart: (row: StandalonePartRow) => void
@@ -796,7 +800,43 @@ defineProps<{
   closeManualAsmDialog: () => void
   onSubmitPdfTree: () => Promise<void>
   closePdfPreview: () => void
+  initStandaloneSortable: (table: { $el?: HTMLElement } | null | undefined) => void
+  initAssembliesSortable: (table: { $el?: HTMLElement } | null | undefined) => void
 }>()
+
+// 3 个 el-table 的本地 ref（实际持有 el-table 组件实例）。
+// 之前定义在 usePartBatchPdf composable 里时通过 prop 传给本组件，写入失败。
+const sourceTableRefLocal = ref<{ clearSelection: () => void } | null>(null)
+const standaloneTableRefLocal = ref<{ $el?: HTMLElement } | null>(null)
+const assembliesTableRefLocal = ref<{ $el?: HTMLElement } | null>(null)
+
+/** 把 sourceTableRefLocal 传给 composable 的 clearSelection。 */
+function handleClearSelection(): void {
+  props.clearSelection(sourceTableRefLocal.value)
+}
+
+/** 初始挂载：nextTick 等 el-table DOM 完成，再触发 sortable。 */
+onMounted(() => {
+  nextTick(() => {
+    props.initStandaloneSortable(standaloneTableRefLocal.value)
+    props.initAssembliesSortable(assembliesTableRefLocal.value)
+  })
+})
+
+/** 行数变化时重建 Sortable（composable 内原 watcher 已搬到本组件，
+ *  因为它需要持表 ref 触发 init，而 ref 现在归本组件所有）。 */
+watch(
+  () => props.standaloneParts.length,
+  () => {
+    nextTick(() => props.initStandaloneSortable(standaloneTableRefLocal.value))
+  },
+)
+watch(
+  () => props.assemblies.length,
+  () => {
+    nextTick(() => props.initAssembliesSortable(assembliesTableRefLocal.value))
+  },
+)
 </script>
 
 <style lang="scss" scoped>
