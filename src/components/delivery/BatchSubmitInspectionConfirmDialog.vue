@@ -1,17 +1,16 @@
 <!--
-  批量一键送检确认对话框（2026-08-25 新增）。
+  批量一键送检确认对话框（2026-08-25 新增；2026-08-26 合并 INSPECTION 行的处理）。
 
-  用途：扫码建单页遇到 21418 / 21405 时，按 failures[].status 分流：
-  - status ∈ {PENDING, PROGRAMMING, IN_PROCESS} → 弹本对话框
-  - status === 'INSPECTION' → 弹 BlockedScanConfirmDialog（保留旧行为）
+  用途：扫码建单页遇到 21418 / 21405 时，弹本对话框；dialog 内部按 failures[].status 拆两批：
+  - status ∈ {PENDING, PROGRAMMING, IN_PROCESS} → 第一批调 batchScanInspect 送检
+  - status === 'INSPECTION' → 用户勾选「同时过检此件」后第二批调 batchPassInspection
 
   用户选一个品检架（共享）+ 调整每件数量 → 一键调 apiV2.batchScanInspect
   （POST /parts/batch-scan-inspect）。品检员/管理员确认后把生产中的工件搬上
   品检架，submit-success 时父组件用 originalCode 重扫。
 
   设计要点：
-  - 镜像 BlockedScanConfirmDialog 的弹窗结构 + onConfirm 三态分流
-    （submit-success / submit-partial / cancel）。
+  - 弹窗结构 + submit-success / submit-partial 三态分流。
   - 顶部加品检架 el-select（共享架，必填；confirm disabled when 没选）。
   - 表格列：serial_no · drawing_no · 状态 chip · 数量（el-input-number）。
     数量默认 = 该件全量（与 batch-pass-inspection 范式一致）。
