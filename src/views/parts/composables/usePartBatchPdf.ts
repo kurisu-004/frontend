@@ -3,10 +3,10 @@
 // 2026-08-25 拆分：原 PartBatchNew.vue 第 1605-2857 行的「PDF 上传 + 拆页 + 合并 + 提交」
 // 整段抽到本文件 + PartBatchPdfTab.vue。
 
-import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue'
+import { computed, onBeforeUnmount, provide, reactive, ref, watch, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
-import Sortable from 'sortablejs'
+import { useDraggable } from 'vue-draggable-plus'
 import {
   batchCreatePartsWithPdfs,
   type PartBatchFilePayload,
@@ -17,6 +17,7 @@ import type { Customer } from '@/api/customer'
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser'
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser'
 import { parseDrawingFilename } from '@/utils/drawingFilename'
+import { findElTableTbody } from '@/utils/elTable'
 import { pdfjsLib } from '@/utils/pdfjs'
 import {
   makeUid,
@@ -201,11 +202,22 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   const selectedPages = ref<Set<string>>(new Set())
   const standaloneParts = ref<StandalonePartRow[]>([])
   const assemblies = ref<AssemblyRow[]>([])
-  // PR-H 2026-07-28：拖拽排序 —— Sortable 实例句柄。表格 DOM ref 现在归
-  // PartBatchPdfTab 拥有（作为本地 ref），本 composable 的 init/clear 函数
-  // 接收表格实例作为参数。
-  let standaloneSortable: Sortable | null = null
-  let assembliesSortable: Sortable | null = null
+  // PR-H 2026-07-28：拖拽排序 —— vue-draggable-plus 的 useDraggable composable
+  // 在 setup 阶段调用一次后只在初始化时绑定一次目标 tbody；表格 DOM ref 必须
+  // 由本 composable 持有（el-table tbody 会被 EP 重建），通过 provide 暴露给
+  // PartBatchPdfTab 模板用 :ref 把实例回写到 ref。
+  const standaloneTableRef = ref<{ $el?: HTMLElement } | null>(null)
+  const assembliesTableRef = ref<{ $el?: HTMLElement } | null>(null)
+  // useDraggable 真正要的 DOM 是 tbody；watcher 在 tableRef 解析后 query 出 tbody。
+  const standaloneTbodyRef = ref<HTMLElement | null>(null)
+  const assembliesTbodyRef = ref<HTMLElement | null>(null)
+
+  /** 从 el-table 组件实例解析出 EP 渲染出的 tbody DOM。 */
+  function resolveTbody(
+    tableRef: Ref<{ $el?: HTMLElement } | null>,
+  ): HTMLElement | null {
+    return findElTableTbody(tableRef.value?.$el ?? null)
+  }
 
   /** 只用于源文件区表格展示的原始（未合成）PDF。 */
   const originalPdfs = computed(() => allPdfs.value.filter((s) => !s.synthesized))
@@ -618,60 +630,65 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     pdfPreviewVisible.value = false
   }
 
-  // ============ 拖拽排序（sortable.js） ============
+  // ============ 拖拽排序（vue-draggable-plus useDraggable） ============
   // PR-H 2026-07-28：拖动 handle 列重排行顺序。
   // - 不接受嵌套展开行（child-table 不挂 sortable）；仅顶层独立零件 / 装配件行。
-  // - 表格 DOM ref 由 PartBatchPdfTab 拥有；本 composable 接收 el-table 实例
-  //   作为参数（避免 el-table ref 写到父组件的 readonly prop 上静默失败）。
-  function initStandaloneSortable(table: { $el?: HTMLElement } | null | undefined): void {
-    const root = table?.$el
-    if (!root) return
-    const tbody = root.querySelector(
-      '.el-table__body-wrapper .el-table__body > tbody',
-    ) as HTMLElement | null
-    if (!tbody) return
-    standaloneSortable?.destroy()
-    standaloneSortable = Sortable.create(tbody, {
+  // - 2026-08-27 迁移：从 sortablejs 改用 vue-draggable-plus；useDraggable 在
+  //   setup 阶段调用后只初始化一次，el-table tbody 重建后必须手动 start() 重绑。
+  // - 表格 DOM ref 由本 composable 持有，通过 provide('partBatchPdfRefs') 暴露
+  //   给 PartBatchPdfTab，模板用 :ref 回写。
+  /** 拖拽收尾：把 list 从 oldIndex 挪到 newIndex，返回原地复制的 list 给响应式。 */
+  function makeOnEnd<T>(list: Ref<T[]>) {
+    return (evt: { oldIndex?: number; newIndex?: number }) => {
+      const { oldIndex, newIndex } = evt
+      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
+      const next = list.value.slice()
+      const [moved] = next.splice(oldIndex, 1)
+      if (moved) next.splice(newIndex, 0, moved)
+      list.value = next
+    }
+  }
+  const { start: startStandalone } = useDraggable(
+    standaloneTbodyRef,
+    standaloneParts,
+    {
       handle: '.drag-handle',
       draggable: 'tr',
       animation: 150,
       ghostClass: 'sortable-ghost',
-      onEnd(evt: { oldIndex?: number; newIndex?: number }) {
-        const { oldIndex, newIndex } = evt
-        if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
-        const next = standaloneParts.value.slice()
-        const [moved] = next.splice(oldIndex, 1)
-        if (moved) next.splice(newIndex, 0, moved)
-        standaloneParts.value = next
-      },
-    })
-  }
-  function initAssembliesSortable(table: { $el?: HTMLElement } | null | undefined): void {
-    const root = table?.$el
-    if (!root) return
-    const tbody = root.querySelector(
-      '.el-table__body-wrapper .el-table__body > tbody',
-    ) as HTMLElement | null
-    if (!tbody) return
-    assembliesSortable?.destroy()
-    assembliesSortable = Sortable.create(tbody, {
-      handle: '.drag-handle',
-      draggable: 'tr',
-      animation: 150,
-      ghostClass: 'sortable-ghost',
-      onEnd(evt: { oldIndex?: number; newIndex?: number }) {
-        const { oldIndex, newIndex } = evt
-        if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
-        const next = assemblies.value.slice()
-        const [moved] = next.splice(oldIndex, 1)
-        if (moved) next.splice(newIndex, 0, moved)
-        assemblies.value = next
-      },
-    })
-  }
-  // 监听行数变化 → 重建 Sortable 句柄（v-if / 数据长度变化时 tbody 重建）
-  // —— 由子组件 PartBatchPdfTab 持有 ref，触发 init；本 composable 暂存
-  // init 函数供子组件回调。
+      onEnd: makeOnEnd(standaloneParts),
+    },
+  )
+  const { start: startAssemblies } = useDraggable(assembliesTbodyRef, assemblies, {
+    handle: '.drag-handle',
+    draggable: 'tr',
+    animation: 150,
+    ghostClass: 'sortable-ghost',
+    onEnd: makeOnEnd(assemblies),
+  })
+
+  // 监听 tableRef 变化 → 重新解析 tbody 并 start() 重绑 sortable。
+  // 触发时机：el-table 首次挂载、行数变化（v-if / 数据长度变化）让 EP 重建 tbody。
+  watch(
+    standaloneTableRef,
+    () => {
+      standaloneTbodyRef.value = resolveTbody(standaloneTableRef)
+      if (standaloneTbodyRef.value) startStandalone()
+    },
+    { flush: 'post' },
+  )
+  watch(
+    assembliesTableRef,
+    () => {
+      assembliesTbodyRef.value = resolveTbody(assembliesTableRef)
+      if (assembliesTbodyRef.value) startAssemblies()
+    },
+    { flush: 'post' },
+  )
+
+  // 把 tableRef 暴露给 PartBatchPdfTab：provide 注入，避免通过 v-bind 摊开
+  // 时 props readonly 静默丢写。
+  provide('partBatchPdfRefs', { standaloneTableRef, assembliesTableRef })
 
   // ============ 源文件区：勾选 + 归组 + 删除 ============
   function togglePageSelection(pdfUid: string, pageIndex: number, on: boolean): void {
@@ -1276,14 +1293,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     }
   }
 
-  // 暴露给模板的 init 函数（子组件 PartBatchPdfTab 在 onMounted 调一次，
-  // 内部用 nextTick 等表格 ref 挂载；行数变化时由子组件的 watcher 重新触发）。
-  // —— init 函数见上方定义；不在此聚合暴露（保持纯函数、参数化）。
-
+  // 2026-08-27：vue-draggable-plus 的 useDraggable composable 在 unmount 时
+  // 自动 destroy，无需手动调用。
   onBeforeUnmount(() => {
     closePdfPreview()
-    standaloneSortable?.destroy()
-    assembliesSortable?.destroy()
   })
 
   return {
@@ -1363,8 +1376,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     closeManualAsmDialog,
     // submit
     onSubmitPdfTree,
-    // sortable init (子组件在 onMounted + 行数变化时调用)
-    initStandaloneSortable,
-    initAssembliesSortable,
+    // 2026-08-27：el-table DOM ref 由本 composable 持有；PartBatchPdfTab 通过
+    // provide/inject 取到这两个 ref，模板 :ref 把 el-table 实例回写到 composable。
+    standaloneTableRef,
+    assembliesTableRef,
   }
 }

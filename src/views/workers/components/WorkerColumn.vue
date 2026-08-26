@@ -20,21 +20,15 @@
         :status="capacityStatus"
       />
     </template>
-    <draggable
-      :list="batches"
-      :group="'work-orders'"
-      item-key="batch_id"
-      :animation="150"
-      ghost-class="sortable-ghost"
+    <div
+      ref="containerRef"
       class="col-body"
       :data-worker-id="worker.id"
-      @start="onDragStart"
-      @change="onDragChange"
     >
-      <template #item="{ element }">
-        <WorkOrderCard :batch="element" />
-      </template>
-    </draggable>
+      <div v-for="batch in batches" :key="batch.batch_id" class="col-body-item">
+        <WorkOrderCard :batch="batch" />
+      </div>
+    </div>
     <el-empty
       v-if="batches.length === 0"
       description="暂无持有工单"
@@ -44,17 +38,34 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import type { ComputedRef } from 'vue'
-import draggable from 'vuedraggable'
+import { useDraggable } from 'vue-draggable-plus'
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool'
-import { consumeProcessSource, recordSource } from '../composables/dndSourceTracker'
+import { consumeProcessSource, recordSource, type DraggableStartEvent } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
 
 const props = defineProps<{
   worker: Worker
   batches: Card[]
 }>()
+
+// 2026-08-27 fix：props.batches 是 readonly，useDraggable 内部 splice 会触发
+// Vue readonly warn / 静默失败。包成可写本地 ref + watch 双向同步。
+const writableBatches = ref<Card[]>([...props.batches])
+watch(
+  () => props.batches,
+  (next) => { writableBatches.value = [...next] },
+  { deep: true },
+)
+const containerRef = ref<HTMLElement | null>(null)
+const { start } = useDraggable(containerRef, writableBatches, {
+  group: 'work-orders',
+  animation: 150,
+  ghostClass: 'sortable-ghost',
+  onStart: onDragStart,
+  onAdd: onDragAdd,
+})
 
 // 2026-08-26：page provide 必注入；非空断言（无注入则 dev 立即报错，prod 抛运行时错误）。
 const moveBatchToWorker = inject<(batch_id: string, to_worker_id: string, shelf_id: string, process_id: string) => Promise<boolean>>('moveBatchToWorker')!
@@ -73,15 +84,6 @@ const capacityStatus = computed<'success' | 'warning' | ''>(() => {
   return 'success'
 })
 
-interface DraggableStartEvent {
-  item: HTMLElement
-  from: HTMLElement
-}
-
-interface DraggableChangeEvent {
-  added?: { element: Card }
-}
-
 function onDragStart(evt: DraggableStartEvent) {
   // 2026-08-26：记录源工序 ID（拖出 PoolDrawer 的 process_id）。
   // dataset 里的 kebab-case 自动转 camelCase：data-process-id → processId。
@@ -90,9 +92,11 @@ function onDragStart(evt: DraggableStartEvent) {
   if (batchId && fromProcessId) recordSource(batchId, fromProcessId)
 }
 
-async function onDragChange(evt: DraggableChangeEvent) {
-  if (!evt.added) return
-  const batchId = evt.added.element.batch_id
+/** 2026-08-27 迁移：vue-draggable-plus @add 事件 payload = Sortable.js 原生，
+ *  item 为被拖入的 HTMLElement；通过 WorkOrderCard 上的 :data-batch-id 反查 batch_id。 */
+async function onDragAdd(evt: DraggableStartEvent) {
+  const batchId = evt.item.dataset.batchId
+  if (!batchId) return
   const fromProcessId = consumeProcessSource(batchId)
   if (!fromProcessId) return
   await moveBatchToWorker(batchId, props.worker.id, shelfId.value, fromProcessId)

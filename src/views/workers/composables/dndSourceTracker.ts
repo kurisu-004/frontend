@@ -7,6 +7,16 @@
 //
 // 模块级单例（不是 Pinia，CLAUDE.md #1）：WorkerColumn 与 PoolDrawer 共用同一份 Map。
 // 用 "w:" 前缀隔离"源 process_id"和"源 worker_id"两类条目（同 batchId 不会冲突）。
+//
+// 2026-08-27：把 vue-draggable-plus Sortable.js 原生事件子集（onStart/onAdd 共有：
+// item + from）抽成本接口，WorkerColumn / PoolDrawer 共用，避免重复声明。
+
+/** vue-draggable-plus onStart / onAdd 事件最小子集（Sortable.js 原生）。
+ *  拿不到 Vue 包装层；@change.added 需要 evt.item.dataset.batchId 反查源。 */
+export interface DraggableStartEvent {
+  item: HTMLElement
+  from: HTMLElement
+}
 
 const sources = new Map<string, string>()
 

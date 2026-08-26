@@ -9,51 +9,52 @@
         <span class="process-name">{{ pool.process_name }}</span>
         <el-tag size="small" type="info">{{ pool.batches.length }}</el-tag>
       </div>
-      <draggable
-        :list="pool.batches"
-        :group="'work-orders'"
-        item-key="batch_id"
-        :animation="150"
-        ghost-class="sortable-ghost"
+      <div
+        ref="containerRef"
         class="section-body pool-cards"
         :data-process-id="pool.process_id"
-        @start="onDragStart"
-        @change="onDragChange"
       >
-        <template #item="{ element }">
-          <WorkOrderCard :batch="element" />
-        </template>
-      </draggable>
+        <div v-for="batch in pool.batches" :key="batch.batch_id" class="pool-cards-item">
+          <WorkOrderCard :batch="batch" />
+        </div>
+      </div>
     </div>
     <div v-else class="pool-empty">无工序数据</div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { inject } from 'vue'
+import { inject, ref, watch } from 'vue'
 import type { ComputedRef } from 'vue'
-import draggable from 'vuedraggable'
+import { useDraggable } from 'vue-draggable-plus'
 import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool'
-import { consumeWorkerSource, recordWorkerSource } from '../composables/dndSourceTracker'
+import { consumeWorkerSource, recordWorkerSource, type DraggableStartEvent } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
 
 const props = defineProps<{
   pool: ProcessPoolView | null
 }>()
 
+// 同 WorkerColumn 的 fix 模式：props.pool.batches readonly，本地 ref + watch。
+const writablePoolBatches = ref<Card[]>(props.pool ? [...props.pool.batches] : [])
+watch(
+  () => props.pool?.batches,
+  (next) => { writablePoolBatches.value = next ? [...next] : [] },
+  { deep: true, immediate: false },
+)
+const containerRef = ref<HTMLElement | null>(null)
+const { start } = useDraggable(containerRef, writablePoolBatches, {
+  group: 'work-orders',
+  animation: 150,
+  ghostClass: 'sortable-ghost',
+  onStart: onDragStart,
+  onAdd: onDragAdd,
+})
+
 // 2026-08-26：page provide 必注入；非空断言。
 const moveBatchToPool = inject<(batch_id: string, from_worker_id: string, shelf_id: string, next_process_id: string) => Promise<boolean>>('moveBatchToPool')!
 const shelfId = inject<ComputedRef<string>>('shelfId')!
 const activeProcessId = inject<ComputedRef<string>>('activeProcessId')!
-
-interface DraggableStartEvent {
-  item: HTMLElement
-  from: HTMLElement
-}
-
-interface DraggableChangeEvent {
-  added?: { element: Card }
-}
 
 function onDragStart(evt: DraggableStartEvent) {
   // 2026-08-26：记录源 worker ID（拖出 WorkerColumn 的 worker.id）。
@@ -62,10 +63,11 @@ function onDragStart(evt: DraggableStartEvent) {
   if (batchId && fromWorkerId) recordWorkerSource(batchId, fromWorkerId)
 }
 
-async function onDragChange(evt: DraggableChangeEvent) {
-  if (!evt.added) return
+/** 2026-08-27 迁移：vue-draggable-plus @add 事件 payload = Sortable.js 原生。 */
+async function onDragAdd(evt: DraggableStartEvent) {
   if (!props.pool) return
-  const batchId = evt.added.element.batch_id
+  const batchId = evt.item.dataset.batchId
+  if (!batchId) return
   const fromWorkerId = consumeWorkerSource(batchId)
   if (!fromWorkerId) return
   // 撤回目标 = 当前 tab 的 process_id（即此 pool）。

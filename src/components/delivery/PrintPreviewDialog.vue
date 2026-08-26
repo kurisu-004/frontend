@@ -4,7 +4,7 @@
   设计要点：
   - 列：勾选（仅 label 模式）/ 序号（拖动 handle + 数字）/ 订单号 / 分厂 / 申请人 / 图号 / 名称 / 数量
   - 初始顺序 = 详情页当前 ``note.line_items`` 的内存顺序（含用户列头排序的结果）
-  - 行可拖动：sortablejs 复用 ``PartBatchNew.vue`` 的低层 DOM API 模式
+  - 行可拖动：vue-draggable-plus（包 Sortable.js）绑到 el-table 渲染出的 tbody
   - 用户拖动只影响预览副本；详情页 ``note.line_items`` 不变
   - 2026-08-04：单上有装配件子件时显示「合并为一套 / 分开打印所有子件」radio；
     合并模式预览折叠子件为父行；导出时把父行 round-trip 展开为组内 batch id 连续。
@@ -17,13 +17,12 @@
 import {
   computed,
   nextTick,
-  onBeforeUnmount,
   ref,
   watch,
 } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Rank } from '@element-plus/icons-vue'
-import Sortable from 'sortablejs'
+import { useDraggable } from 'vue-draggable-plus'
 
 import {
   printNote,
@@ -54,7 +53,7 @@ const dlg = useDialogSize({ desktopWidth: 1100 })
 
 const previewTableRef = ref()
 const rows = ref<PreviewRow[]>([])
-let sortable: Sortable | null = null
+const tbodyRef = ref<HTMLElement | null>(null)
 const loading = ref(false)
 
 // 2026-08-07：标签模式的勾选状态
@@ -139,6 +138,24 @@ const previewRows = computed<PreviewRow[]>(() => {
   return result
 })
 
+// 2026-08-27：destructure start() — useDraggable 不监听 tbodyRef 变化，
+// 首次 onMounted 后只在初始化时绑定一次。<el-dialog destroy-on-close> 在
+// close 时销毁 slot → reopen 时 <tbody> 是新元素，必须手动 start() 重绑。
+const { start } = useDraggable(tbodyRef, rows, {
+  handle: '.drag-handle',
+  draggable: 'tr',
+  animation: 150,
+  ghostClass: 'sortable-ghost',
+  onEnd(evt: { oldIndex?: number; newIndex?: number }) {
+    const { oldIndex, newIndex } = evt
+    if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
+    const next = rows.value.slice()
+    const [moved] = next.splice(oldIndex, 1)
+    if (moved) next.splice(newIndex, 0, moved)
+    rows.value = next
+  },
+})
+
 watch(
   () => [props.modelValue, mergeMode.value],
   async ([open]) => {
@@ -146,26 +163,26 @@ watch(
       // 拷贝当前内存顺序作为预览初始顺序（不污染详情页）
       rows.value = previewRows.value
       await nextTick()
-      initSortable()
+      refreshTbodyRef()
+      start()  // 2026-08-27：close→reopen 时新 <tbody> 需手动重绑 sortable
       // 2026-08-07：label 模式默认全选
       if (isLabelMode.value) {
         await selectAll()
       }
-    } else {
-      destroySortable()
     }
   },
   // 2026-08-24 bugfix：扫码建单页用 v-if 挂载本组件，首次进入时 modelValue
   // 已经是 true（无 false→true 的「变化」），watch 默认不立即触发会导致
-  // rows 永远是空数组。详情页始终挂载的调用方不受影响（mount 时 open=false
-  // 走 destroySortable() 分支为 no-op）。
+  // rows 永远是空数组。详情页始终挂载的调用方不受影响（mount 时 open=false，
+  // 不进 if 分支，tbodyRef 保持 null，useDraggable 自动忽略）。
   { immediate: true },
 )
 
 watch(previewRows, async (next) => {
   rows.value = next
   await nextTick()
-  initSortable()
+  refreshTbodyRef()
+  start()  // 2026-08-27：previewRows 变化（合并模式切换）后 <tbody> 重建需重绑
   // 2026-08-07：合并模式切换后重置全选
   if (isLabelMode.value) {
     await selectAll()
@@ -192,36 +209,17 @@ function invertSelection(): void {
   rows.value.forEach((r) => t.toggleRowSelection(r, !chosen.has(r)))
 }
 
-function initSortable(): void {
+/** 找到 el-table 渲染出的 tbody 并写到 tbodyRef；随后调用 start() 让 useDraggable 绑到当前 tbody。 */
+function refreshTbodyRef(): void {
   const root = previewTableRef.value?.$el
-  if (!root) return
-  const tbody = root.querySelector(
+  if (!root) {
+    tbodyRef.value = null
+    return
+  }
+  tbodyRef.value = root.querySelector(
     '.el-table__body-wrapper .el-table__body > tbody',
   ) as HTMLElement | null
-  if (!tbody) return
-  sortable?.destroy()
-  sortable = Sortable.create(tbody, {
-    handle: '.drag-handle',
-    draggable: 'tr',
-    animation: 150,
-    ghostClass: 'sortable-ghost',
-    onEnd(evt: { oldIndex?: number; newIndex?: number }) {
-      const { oldIndex, newIndex } = evt
-      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
-      const next = rows.value.slice()
-      const [moved] = next.splice(oldIndex, 1)
-      if (moved) next.splice(newIndex, 0, moved)
-      rows.value = next
-    },
-  })
 }
-
-function destroySortable(): void {
-  sortable?.destroy()
-  sortable = null
-}
-
-onBeforeUnmount(destroySortable)
 
 function onCancel(): void {
   emit('update:modelValue', false)
@@ -306,6 +304,8 @@ async function onConfirm(): Promise<void> {
 </script>
 
 <template>
+  <!-- 2026-08-27：destroy-on-close 会重建 slot 内的 <tbody>；watcher 在 reopen 时
+       refreshTbodyRef() + start() 强制 useDraggable 重新绑定新 tbody。 -->
   <el-dialog
     :model-value="modelValue"
     :title="isLabelMode
