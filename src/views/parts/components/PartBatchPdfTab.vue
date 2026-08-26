@@ -214,7 +214,7 @@
           </el-button>
         </div>
         <el-table
-          ref="standaloneTableRefLocal"
+          :ref="bindStandaloneTableRef"
           :data="standaloneParts"
           row-key="uid"
           border
@@ -384,7 +384,7 @@
           </el-button>
         </div>
         <el-table
-          ref="assembliesTableRefLocal"
+          :ref="bindAssembliesTableRef"
           :data="assemblies"
           row-key="uid"
           border
@@ -712,7 +712,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { inject, ref, type Ref } from 'vue'
 import type { UploadFile } from 'element-plus'
 import {
   Document,
@@ -800,43 +800,34 @@ const props = defineProps<{
   closeManualAsmDialog: () => void
   onSubmitPdfTree: () => Promise<void>
   closePdfPreview: () => void
-  initStandaloneSortable: (table: { $el?: HTMLElement } | null | undefined) => void
-  initAssembliesSortable: (table: { $el?: HTMLElement } | null | undefined) => void
 }>()
 
-// 3 个 el-table 的本地 ref（实际持有 el-table 组件实例）。
-// 之前定义在 usePartBatchPdf composable 里时通过 prop 传给本组件，写入失败。
+// 源文件区 el-table 本地 ref（用于 clearSelection）。拖拽用 el-table 的 ref
+// 由 composable 持有并通过 provide 暴露给本组件。
 const sourceTableRefLocal = ref<{ clearSelection: () => void } | null>(null)
-const standaloneTableRefLocal = ref<{ $el?: HTMLElement } | null>(null)
-const assembliesTableRefLocal = ref<{ $el?: HTMLElement } | null>(null)
 
 /** 把 sourceTableRefLocal 传给 composable 的 clearSelection。 */
 function handleClearSelection(): void {
   props.clearSelection(sourceTableRefLocal.value)
 }
 
-/** 初始挂载：nextTick 等 el-table DOM 完成，再触发 sortable。 */
-onMounted(() => {
-  nextTick(() => {
-    props.initStandaloneSortable(standaloneTableRefLocal.value)
-    props.initAssembliesSortable(assembliesTableRefLocal.value)
-  })
-})
+// 2026-08-27：拖拽 ref 由 composable 持有；provide 注入避免 v-bind 摊开时
+// props readonly 静默丢写。fallback 用局部 ref（不挂 el-table，仅类型兜底）。
+const pdfRefs = inject<{
+  standaloneTableRef: Ref<{ $el?: HTMLElement } | null>
+  assembliesTableRef: Ref<{ $el?: HTMLElement } | null>
+}>('partBatchPdfRefs') ?? {
+  standaloneTableRef: ref<{ $el?: HTMLElement } | null>(null),
+  assembliesTableRef: ref<{ $el?: HTMLElement } | null>(null),
+}
 
-/** 行数变化时重建 Sortable（composable 内原 watcher 已搬到本组件，
- *  因为它需要持表 ref 触发 init，而 ref 现在归本组件所有）。 */
-watch(
-  () => props.standaloneParts.length,
-  () => {
-    nextTick(() => props.initStandaloneSortable(standaloneTableRefLocal.value))
-  },
-)
-watch(
-  () => props.assemblies.length,
-  () => {
-    nextTick(() => props.initAssembliesSortable(assembliesTableRefLocal.value))
-  },
-)
+/** 模板 :ref 回调：把 el-table 实例回写到 composable 持有的 ref。 */
+function bindStandaloneTableRef(el: unknown): void {
+  pdfRefs.standaloneTableRef.value = (el as { $el?: HTMLElement } | null) ?? null
+}
+function bindAssembliesTableRef(el: unknown): void {
+  pdfRefs.assembliesTableRef.value = (el as { $el?: HTMLElement } | null) ?? null
+}
 </script>
 
 <style lang="scss" scoped>
