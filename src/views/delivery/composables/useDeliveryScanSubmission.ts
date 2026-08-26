@@ -5,7 +5,7 @@
 //
 // 持有：
 //   - 扫码防抖态（lastScanCode / lastScanAt / scanning）
-//   - 阻塞弹窗（BlockedScanConfirmDialog）状态
+//   - 阻塞弹窗（BatchSubmitInspectionConfirmDialog）状态
 //   - 打印送货单预览（PrintPreviewDialog）状态
 //   - 提交草稿前的未送检确认（BatchInspectionConfirmDialog）状态
 //   - submittingByNote —— 每张草稿卡片提交中 loading
@@ -33,6 +33,7 @@ import {
   type ScanNoteSummary,
 } from '@/types/deliveryNote'
 import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection'
+import type { BulkScanFailure } from '@/composables/useBulkScanInspect'
 
 export interface UseDeliveryScanSubmissionOptions {
   /** 扫码命中后写入 drafts Map 的回调（由 useDeliveryDraftBoard 注入）。 */
@@ -134,8 +135,8 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
   }
 
   /**
-   * 失败：按 ApiError.code 分流（2026-08-23 增量）。
-   *   - 21418 / 21405（扫码阻塞） → 弹 BlockedScanConfirmDialog 让用户一键通过品检。
+   * 失败：按 ApiError.code 分流（2026-08-23 增量；2026-08-26 改名/换组件）。
+   *   - 21418 / 21405（扫码阻塞） → 弹 BatchSubmitInspectionConfirmDialog 让用户一键送检。
    *   - 其他错误 → 原 ElMessage.error 兜底（事务回滚不会产生草稿，不动 drafts）。
    *
    * 21418 / 21405 阻塞件失败原因包含两类：
@@ -201,20 +202,22 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
   }
 
   /**
-   * 弹窗：阻塞件一键通过品检成功 → 自动用原 code 重扫（再走一遍 scanDelivery）。
+   * 弹窗：阻塞件一键送检成功 → 自动用原 code 重扫（再走一遍 scanDelivery）。
+   * 2026-08-26：弹窗从 BlockedScanConfirmDialog（通过品检）切到 BatchSubmitInspectionConfirmDialog（送检）。
    */
-  async function onBlockedPassSuccess(): Promise<void> {
+  async function onBlockedSubmitSuccess(): Promise<void> {
     blockedDialogVisible.value = false
     await handleScan(blockedOriginalCode.value)
   }
 
   /**
-   * 弹窗：部分通过品检 → 提示用户处理失败项后重新扫码；不主动重扫。
+   * 弹窗：部分送检 → 提示用户处理失败项后重新扫码；不主动重扫。
    * 弹窗保留，由用户在弹窗内点取消关闭。
+   * 2026-08-26：弹窗语义从"通过品检"改为"送检"。
    */
-  function onBlockedPassPartial(result: { passed: BulkPassItem[]; failed: BulkPassFailure[] }): void {
+  function onBlockedSubmitPartial(result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void {
     ElMessage.warning(
-      `部分通过品检：${result.passed.length} 项成功 / ${result.failed.length} 项失败；` +
+      `部分送检：${result.passed.length} 项成功 / ${result.failed.length} 项失败；` +
       `请手动处理失败项后重新扫码`,
     )
   }
@@ -396,8 +399,8 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     handleScan,
     applySuccess,
     applyError,
-    onBlockedPassSuccess,
-    onBlockedPassPartial,
+    onBlockedSubmitSuccess,
+    onBlockedSubmitPartial,
     onBlockedCancel,
     openPrintNote,
     onSubmitDraft,
