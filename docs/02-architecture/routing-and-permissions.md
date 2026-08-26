@@ -211,4 +211,25 @@ graph TD
 - **司机送货台 `/delivery-dispatch/*`**：手机 / 平板上的司机端，竖屏为主，全屏更接近 App 形态。
 - **`/login`**：登录页本身就是独立视觉（背景图 + 居中卡片），不挂任何 layout。
 
+## Dev Dummy Auth
+
+后端未实现 / 离线开发时，可用 dummy auth 跳过登录：
+
+```bash
+npm run dev:dummy        # 等价于 npm run dev -- --dummy-auth
+```
+
+行为：
+- `vite.config.ts` build 期检测到 `--dummy-auth` + `mode !== 'development'` → throw
+- `useAuthSession.initDummyAuth()` 注入 admin session（含 22 个 menuCode 全菜单）
+- router 守卫短路 `refreshOrLogout`（不再调 `/auth/me`）
+- dummy 状态**不写** localStorage，下次非 dummy 启动不会复活
+
+admin 用户身份：
+- username: `dev-admin`
+- roles: `['MANAGER', 'SHELF_ACCOUNT']`
+- shelf_ids: `[]`（管理员无绑货架，`isWildcardShelfAccount()` 走通配路径）
+
+新增 menuCode 时（如 worker-queue-board 加的 `worker_queue`），必须同步更新 `src/composables/__fixtures__/adminMenus.ts`，否则 dummy 模式下该路由被守卫降级踢走。
+
 实现上它们都是 routes 顶层的独立 record（不是 `MainLayout` 的 children），`App.vue` 里根据 `route.meta.fullscreen` 或路由 path 判断不渲染 `<MainLayout>`。需要新加全屏路由时，沿用这三条的结构即可，不要把它们塞进 `/` 的 children 下。

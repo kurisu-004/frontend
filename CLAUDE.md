@@ -26,6 +26,7 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 6. **不要直接 `import 'pdfjs-dist'`**：统一从 `@/utils/pdfjs` import `pdfjsLib`（workerSrc 缓存穿透版本串集中在这里）。
 7. **auth 域 2026-08-26 临时回滚 v1**：`/api/v1/auth/*` 是当前目标；新增 auth 功能统一走 `api`（v1）。**已知 trade-off**：v2 业务端点（`deliveryNote` / `deliveryGroup` / `parts/scanInspect`）仍走 `apiV2`，拿到 v1 JWT 会在 `get_current_user` 处 40101，由 `auth:logout` 兜底重登。**待 v1 业务端点迁完再统一切回 v2**（详见 `docs/02-architecture/api-contract.md`）。
 8. **router `meta.menuCode` 必填**：单一权限源 = 后端菜单树，不填会被守卫误放行。
+9. **dummy-auth 只能 dev 模式用**：`npm run dev:dummy` / `npm run dev -- --dummy-auth` 仅本地调试用。三层 prod 保护已就位（vite build 抛错 + `import.meta.env.DEV` guard + 不写 localStorage）。任何 prod bundle 不应含 dummy-auth 注入路径（grep `initDummyAuth` 仅命中 dev 调用点 + `useAuthSession` 函数定义）。
 
 ## 文档索引
 

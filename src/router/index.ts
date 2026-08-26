@@ -352,10 +352,14 @@ function findFirstMenuPath(tree: MenuNode[]): string | null {
 // 全局前置守卫
 router.beforeEach(async (to, _from, next) => {
   const { useAuthSession } = await import('@/composables/useAuthSession')
-  const { isAuthenticated, refreshOrLogout, menus, hasRole } = useAuthSession()
+  const { isAuthenticated, refreshOrLogout, menus, hasRole, isDummyAuthActive } = useAuthSession()
 
   // 1) 未登录 → /login
-  if (to.meta.requireAuth || to.matched.some((r) => r.meta.requireAuth)) {
+  // 2026-08-26 新增：dummy-auth 短路。
+  // dummy 模式下不再调 /auth/me（会失败并清掉 fake session），直接走后续菜单校验。
+  if (isDummyAuthActive()) {
+    // dummy 模式：跳过 refreshOrLogout，直接进入 allowRoles + menuCode 检查
+  } else if (to.meta.requireAuth || to.matched.some((r) => r.meta.requireAuth)) {
     if (!isAuthenticated()) {
       const ok = await refreshOrLogout(router)
       if (!ok) return
