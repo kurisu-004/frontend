@@ -138,6 +138,24 @@ const previewRows = computed<PreviewRow[]>(() => {
   return result
 })
 
+// 2026-08-27：destructure start() — useDraggable 不监听 tbodyRef 变化，
+// 首次 onMounted 后只在初始化时绑定一次。<el-dialog destroy-on-close> 在
+// close 时销毁 slot → reopen 时 <tbody> 是新元素，必须手动 start() 重绑。
+const { start } = useDraggable(tbodyRef, rows, {
+  handle: '.drag-handle',
+  draggable: 'tr',
+  animation: 150,
+  ghostClass: 'sortable-ghost',
+  onEnd(evt: { oldIndex?: number; newIndex?: number }) {
+    const { oldIndex, newIndex } = evt
+    if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
+    const next = rows.value.slice()
+    const [moved] = next.splice(oldIndex, 1)
+    if (moved) next.splice(newIndex, 0, moved)
+    rows.value = next
+  },
+})
+
 watch(
   () => [props.modelValue, mergeMode.value],
   async ([open]) => {
@@ -146,6 +164,7 @@ watch(
       rows.value = previewRows.value
       await nextTick()
       refreshTbodyRef()
+      start()  // 2026-08-27：close→reopen 时新 <tbody> 需手动重绑 sortable
       // 2026-08-07：label 模式默认全选
       if (isLabelMode.value) {
         await selectAll()
@@ -154,8 +173,8 @@ watch(
   },
   // 2026-08-24 bugfix：扫码建单页用 v-if 挂载本组件，首次进入时 modelValue
   // 已经是 true（无 false→true 的「变化」），watch 默认不立即触发会导致
-  // rows 永远是空数组。详情页始终挂载的调用方不受影响（mount 时 open=false
-  // 时不会进 if 分支，tbodyRef 也不会被刷新——useDraggable 会守空）。
+  // rows 永远是空数组。详情页始终挂载的调用方不受影响（mount 时 open=false，
+  // 不进 if 分支，tbodyRef 保持 null，useDraggable 自动忽略）。
   { immediate: true },
 )
 
@@ -163,6 +182,7 @@ watch(previewRows, async (next) => {
   rows.value = next
   await nextTick()
   refreshTbodyRef()
+  start()  // 2026-08-27：previewRows 变化（合并模式切换）后 <tbody> 重建需重绑
   // 2026-08-07：合并模式切换后重置全选
   if (isLabelMode.value) {
     await selectAll()
@@ -189,22 +209,7 @@ function invertSelection(): void {
   rows.value.forEach((r) => t.toggleRowSelection(r, !chosen.has(r)))
 }
 
-useDraggable(tbodyRef, rows, {
-  handle: '.drag-handle',
-  draggable: 'tr',
-  animation: 150,
-  ghostClass: 'sortable-ghost',
-  onEnd(evt: { oldIndex?: number; newIndex?: number }) {
-    const { oldIndex, newIndex } = evt
-    if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
-    const next = rows.value.slice()
-    const [moved] = next.splice(oldIndex, 1)
-    if (moved) next.splice(newIndex, 0, moved)
-    rows.value = next
-  },
-})
-
-/** 找到 el-table 渲染出的 tbody 并写到 tbodyRef；useDraggable 会监听并自动 init。 */
+/** 找到 el-table 渲染出的 tbody 并写到 tbodyRef；随后调用 start() 让 useDraggable 绑到当前 tbody。 */
 function refreshTbodyRef(): void {
   const root = previewTableRef.value?.$el
   if (!root) {
@@ -299,6 +304,8 @@ async function onConfirm(): Promise<void> {
 </script>
 
 <template>
+  <!-- 2026-08-27：destroy-on-close 会重建 slot 内的 <tbody>；watcher 在 reopen 时
+       refreshTbodyRef() + start() 强制 useDraggable 重新绑定新 tbody。 -->
   <el-dialog
     :model-value="modelValue"
     :title="isLabelMode
