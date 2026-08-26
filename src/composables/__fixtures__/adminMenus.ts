@@ -1,5 +1,5 @@
 // src/composables/__fixtures__/adminMenus.ts
-// 2026-08-26 同步自生产 DB：admin 角色的完整菜单树（26 个 menuCode 全集，含 9 顶级 + 17 leaf，6 个为 path:null 的分组节点）。
+// 2026-08-26 同步自生产 DB：admin 角色的完整菜单树（27 个 menuCode 全集，含 9 顶级 + 18 leaf，6 个为 path:null 的分组节点）。
 // 仅 dev dummy-auth 模式使用（initDummyAuth 注入 useAuthSession.user.menus）；
 // prod bundle 不引用此文件（无 dead code 风险）。
 //
@@ -13,7 +13,7 @@
 // 改动后必须验证：
 //   1. 每个 MenuNode.code 是 router/index.ts 里某条路由的 meta.menuCode
 //   2. 每个 MenuNode.icon 在 MenuTreeItem.vue 的 ICON_MAP 中存在
-//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 20
+//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 21
 
 import type { MenuNode } from '@/types/menu'
 
@@ -60,12 +60,15 @@ export const ADMIN_MENUS: MenuNode[] = [
     code: 'pending_programming', title: '待编程一览', path: '/cnc/pending',
     icon: 'Cpu', sort_order: 25, children: [],
   },
-  // 6. auth_group — 权限管理（分组，2 children）
+  // 6. auth_group — 权限管理（分组，3 children）
+  // 2026-08-26 补回 worker_queue：生产 MANAGER 用户 menus 响应里没有它（权限分配差异），
+  // 但 router 把它注册为 menuCode 且无 allowRoles 短路；dummy 是 dev 工具，加回让守卫放行。
   {
     id: id(6), version: 0, parent_id: null,
     code: 'auth_group', title: '权限管理', path: null,
     icon: 'Key', sort_order: 30, children: [
       { id: id(61), version: 0, parent_id: id(6), code: 'workers_list', title: '工人一览', path: '/workers', icon: 'User', sort_order: 10, children: [] },
+      { id: id(63), version: 0, parent_id: id(6), code: 'worker_queue', title: '工人队列调度', path: '/workers/queue', icon: 'Operation', sort_order: 15, children: [] },
       { id: id(62), version: 0, parent_id: id(6), code: 'users_list', title: '账号管理', path: '/users', icon: 'List', sort_order: 20, children: [] },
     ],
   },

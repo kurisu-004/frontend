@@ -12,7 +12,7 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
 }
 
 describe('ADMIN_MENUS', () => {
-  it('covers all 26 menuCodes', () => {
+  it('covers all 27 menuCodes', () => {
     const all = flatten(ADMIN_MENUS)
     const codes = all.map((n) => n.code)
     expect(codes).toContain('home')
@@ -27,6 +27,8 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('delivery_notes_manage')
     expect(codes).toContain('workers_list')
     expect(codes).toContain('users_list')
+    // 2026-08-26 补回：router /workers/queue 无 allowRoles 短路，dummy 模式必须有此 code
+    expect(codes).toContain('worker_queue')
     expect(codes).toContain('shelves_list')
     expect(codes).toContain('customers_list')
     expect(codes).toContain('applicants_list')
