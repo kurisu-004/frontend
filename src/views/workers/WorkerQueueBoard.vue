@@ -1,15 +1,10 @@
-<!-- 2026-08-26 新增：工人队列调度看板主页面（管理员全局视图）。
-     左：PoolDrawer（按工序分组）；右：WorkerColumn[]。
-     拖拽 wiring 在 Task 6 注入。 -->
+<!-- 2026-08-26 重构：工人队列调度看板主页面。
+     顶部 el-tabs 切换工序；el-splitter 左右分栏（左 PoolDrawer / 右 WorkerColumn[]）。
+     工序能力过滤：workers.filter(w => w.process_ids.includes(activeTab))。
+     DnD 守卫已删：shelfId = auth.activeShelfId() ?? ''，无条件 wire。
+     moveBatchToWorker / moveBatchToPool / shelfId 通过 provide/inject 透传给子组件。 -->
 <template>
   <div class="worker-queue-board">
-    <div class="board-header">
-      <h2 class="title">工人队列调度</h2>
-      <div class="actions">
-        <el-button @click="onRefresh" :loading="loading">刷新</el-button>
-      </div>
-    </div>
-
     <el-alert
       v-if="error"
       type="error"
@@ -23,65 +18,85 @@
       <el-skeleton :rows="5" animated />
     </div>
 
-    <div v-else class="board-content">
-      <PoolDrawer :pools="processPools" />
-      <div class="columns-container">
-        <WorkerColumn
-          v-for="w in workers"
-          :key="w.id"
-          :worker="w"
-          :batches="workerHeld[w.id] ?? []"
+    <template v-else>
+      <el-tabs v-model="activeTab" class="pool-tabs">
+        <el-tab-pane
+          v-for="p in processPools"
+          :key="p.process_id"
+          :name="p.process_id"
+          :label="`${p.process_code} ${p.process_name}`"
         />
-      </div>
+      </el-tabs>
+
+      <el-splitter class="board-splitter">
+        <el-splitter-panel :size="30" :min="240">
+          <PoolDrawer :pool="activePool" />
+        </el-splitter-panel>
+        <el-splitter-panel :size="70" :min="400">
+          <div class="columns-container">
+            <WorkerColumn
+              v-for="w in filteredWorkers"
+              :key="w.id"
+              :worker="w"
+              :batches="workerHeld[w.id] ?? []"
+            />
+            <div v-if="filteredWorkers.length === 0" class="no-workers">
+              该工序暂无可用工人
+            </div>
+          </div>
+        </el-splitter-panel>
+      </el-splitter>
+    </template>
+
+    <div class="board-actions">
+      <el-button @click="onRefresh" :loading="loading">刷新</el-button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, nextTick } from 'vue'
+import { computed, onMounted, provide, ref } from 'vue'
+import type { ComputedRef } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthSession } from '@/composables/useAuthSession'
 import { useWorkerQueue } from '@/composables/useWorkerQueue'
-import { useSortableDnd } from './composables/useSortableDnd'
 import WorkerColumn from './components/WorkerColumn.vue'
 import PoolDrawer from './components/PoolDrawer.vue'
 
 const auth = useAuthSession()
 const queue = useWorkerQueue()
-const { workers, processPools, workerHeld, loading, error, loadBoard } = queue
+const { workers, processPools, workerHeld, loading, error, loadBoard, moveBatchToWorker, moveBatchToPool } = queue
 
-let dndCleanup: (() => void) | null = null
+const activeTab = ref<string>('')
+const activePool = computed(() =>
+  processPools.value.find((p) => p.process_id === activeTab.value) ?? null,
+)
+// 2026-08-26：按当前 tab 的 process_id 过滤可加工工人（Worker.process_ids）。
+const filteredWorkers = computed(() =>
+  workers.value.filter((w) => w.process_ids.includes(activeTab.value)),
+)
+
+// 2026-08-26：移除 shelf_id 守卫；空串 fallback 给真后端兜底（fixture 永远 200）。
+const shelfId = computed(() => auth.activeShelfId() ?? '')
+
+// 子组件需要的 3 个 provide 注入：active tab / move 回调 / 当前 shelfId。
+// 注意 provide 非空断言 —— 同一页面里 WorkerColumn / PoolDrawer 必须 inject 同一组，
+// 否则 DnD 不会生效。
+provide<ComputedRef<string>>('activeProcessId', computed(() => activeTab.value))
+provide<typeof moveBatchToWorker>('moveBatchToWorker', moveBatchToWorker)
+provide<typeof moveBatchToPool>('moveBatchToPool', moveBatchToPool)
+provide<ComputedRef<string>>('shelfId', shelfId)
 
 onMounted(async () => {
   await loadBoard()
-  await nextTick()
-  const shelfId = auth.activeShelfId() ?? ''
-  if (!shelfId) {
-    ElMessage.warning('当前账号未绑定货架，拖拽功能受限')
-    return
-  }
-  dndCleanup = useSortableDnd({
-    moveBatchToWorker: queue.moveBatchToWorker,
-    moveBatchToPool: queue.moveBatchToPool,
-    shelfId,
-  }).cleanup
-})
-
-onUnmounted(() => {
-  dndCleanup?.()
+  if (processPools.value[0]) activeTab.value = processPools.value[0].process_id
 })
 
 async function onRefresh() {
-  dndCleanup?.()
   await loadBoard()
-  await nextTick()
-  const shelfId = auth.activeShelfId() ?? ''
-  if (shelfId) {
-    dndCleanup = useSortableDnd({
-      moveBatchToWorker: queue.moveBatchToWorker,
-      moveBatchToPool: queue.moveBatchToPool,
-      shelfId,
-    }).cleanup
+  // 首次或 refresh 时若 activeTab 还没设（如 processPools 刚加载完），默认选第一个。
+  if (!activeTab.value && processPools.value[0]) {
+    activeTab.value = processPools.value[0].process_id
   }
   ElMessage.success('已刷新')
 }
@@ -95,25 +110,35 @@ async function onRefresh() {
   flex-direction: column;
   box-sizing: border-box;
 }
-.board-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.title { margin: 0; font-size: 20px; }
 .error-alert { margin-bottom: 16px; }
-.board-content {
-  display: flex;
-  gap: 16px;
+.pool-tabs { margin-bottom: 12px; }
+.board-splitter {
   flex: 1;
-  overflow: hidden;
+  min-height: 0;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
 }
 .columns-container {
   display: flex;
   gap: 16px;
-  flex: 1;
+  padding: 12px;
+  height: 100%;
   overflow-x: auto;
+  box-sizing: border-box;
+}
+.no-workers {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+  padding: 40px;
 }
 .loading-state { padding: 40px; }
+.board-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
 </style>

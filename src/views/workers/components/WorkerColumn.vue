@@ -1,4 +1,6 @@
-<!-- 2026-08-26 新增：工人列（看板右栏的单个 worker 容器，Sortable target）。 -->
+<!-- 2026-08-26 重构：工人列（vuedraggable target）。
+     接收父级 provide 注入：moveBatchToWorker / shelfId。
+     @start 把 from dataset 写到 dndSourceTracker；@change.added 时读 + delete，调 moveBatchToWorker。 -->
 <template>
   <el-card class="worker-column" shadow="never">
     <template #header>
@@ -18,25 +20,35 @@
         :status="capacityStatus"
       />
     </template>
-    <div class="col-body" :data-worker-id="worker.id">
-      <WorkOrderCard
-        v-for="b in batches"
-        :key="b.batch_id"
-        :batch="b"
-        :source-worker-id="worker.id"
-      />
-      <el-empty
-        v-if="batches.length === 0"
-        description="暂无持有工单"
-        :image-size="60"
-      />
-    </div>
+    <draggable
+      :list="batches"
+      :group="'work-orders'"
+      item-key="batch_id"
+      :animation="150"
+      ghost-class="sortable-ghost"
+      class="col-body"
+      :data-worker-id="worker.id"
+      @start="onDragStart"
+      @change="onDragChange"
+    >
+      <template #item="{ element }">
+        <WorkOrderCard :batch="element" />
+      </template>
+    </draggable>
+    <el-empty
+      v-if="batches.length === 0"
+      description="暂无持有工单"
+      :image-size="60"
+    />
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
+import type { ComputedRef } from 'vue'
+import draggable from 'vuedraggable'
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool'
+import { consumeProcessSource, recordSource } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
 
 const props = defineProps<{
@@ -44,19 +56,47 @@ const props = defineProps<{
   batches: Card[]
 }>()
 
+// 2026-08-26：page provide 必注入；非空断言（无注入则 dev 立即报错，prod 抛运行时错误）。
+const moveBatchToWorker = inject<(batch_id: string, to_worker_id: string, shelf_id: string, process_id: string) => Promise<boolean>>('moveBatchToWorker')!
+const shelfId = inject<ComputedRef<string>>('shelfId')!
+
 const capacityPercent = computed(() => {
   if (props.worker.max_held === 0) return 0
   return Math.round((props.worker.current_held / props.worker.max_held) * 100)
 })
 
 // 注：el-progress 的 status 只接受 '' | 'success' | 'warning' | 'exception'，
-// 没有 'primary'。中段（>=70%）走空串，让 EP 走默认主色（蓝）—— 与 brief 中
-// 'primary' 的视觉意图（与 success 绿 / warning 黄有别的第三色）一致。
+// 没有 'primary'。中段（>=70%）走空串，让 EP 走默认主色（蓝）。
 const capacityStatus = computed<'success' | 'warning' | ''>(() => {
   if (props.worker.capacity_remaining === 0) return 'warning'
   if (capacityPercent.value >= 70) return ''
   return 'success'
 })
+
+interface DraggableStartEvent {
+  item: HTMLElement
+  from: HTMLElement
+}
+
+interface DraggableChangeEvent {
+  added?: { element: Card }
+}
+
+function onDragStart(evt: DraggableStartEvent) {
+  // 2026-08-26：记录源工序 ID（拖出 PoolDrawer 的 process_id）。
+  // dataset 里的 kebab-case 自动转 camelCase：data-process-id → processId。
+  const batchId = evt.item.dataset.batchId
+  const fromProcessId = evt.from.dataset.processId
+  if (batchId && fromProcessId) recordSource(batchId, fromProcessId)
+}
+
+async function onDragChange(evt: DraggableChangeEvent) {
+  if (!evt.added) return
+  const batchId = evt.added.element.batch_id
+  const fromProcessId = consumeProcessSource(batchId)
+  if (!fromProcessId) return
+  await moveBatchToWorker(batchId, props.worker.id, shelfId.value, fromProcessId)
+}
 </script>
 
 <style scoped>

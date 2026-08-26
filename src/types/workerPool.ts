@@ -15,6 +15,9 @@ export interface Worker {
   /** max_held - current_held */
   capacity_remaining: number
   is_online: boolean
+  /** 该工人可加工工序 ID 列表（用于 tab 过滤）；
+   *  后端尚未暴露 work_type.process_ids 映射，前端在 fixture 落地 */
+  process_ids: string[]
 }
 
 export interface WorkOrderCard {
@@ -32,6 +35,12 @@ export interface WorkOrderCard {
   is_urgent: boolean
   /** OCC 乐观锁 version */
   version: number
+  /** 客户名称（前端扩展，后端待补） */
+  customer: string | null
+  /** 申请人（前端扩展，后端待补） */
+  applicant: string | null
+  /** 所在位置（前端扩展，后端待补） */
+  location: string | null
 }
 
 export interface ProcessPoolView {
