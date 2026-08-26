@@ -679,7 +679,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     standaloneTableRef,
     () => {
       standaloneTbodyRef.value = resolveTbody(standaloneTableRef)
-      startStandalone()
+      if (standaloneTbodyRef.value) startStandalone()
     },
     { flush: 'post' },
   )
@@ -687,7 +687,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     assembliesTableRef,
     () => {
       assembliesTbodyRef.value = resolveTbody(assembliesTableRef)
-      startAssemblies()
+      if (assembliesTbodyRef.value) startAssemblies()
     },
     { flush: 'post' },
   )

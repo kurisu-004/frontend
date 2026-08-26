@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref, toRef } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import type { ComputedRef } from 'vue'
 import { useDraggable } from 'vue-draggable-plus'
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool'
@@ -50,15 +50,21 @@ const props = defineProps<{
   batches: Card[]
 }>()
 
-// 2026-08-27 迁移：vue-draggable-plus 组件仅支持 v-model，batches 是 readonly
-// defineProps 不能 v-model。改用 useDraggable composable 接收 toRef(props, 'batches')，
-// 让 Sortable.js 直接原地变更（与旧 vuedraggable :list 行为一致）。
+// 2026-08-27 fix：props.batches 是 readonly，useDraggable 内部 splice 会触发
+// Vue readonly warn / 静默失败。包成可写本地 ref + watch 双向同步。
+const writableBatches = ref<Card[]>([...props.batches])
+watch(
+  () => props.batches,
+  (next) => { writableBatches.value = [...next] },
+  { deep: true },
+)
 const containerRef = ref<HTMLElement | null>(null)
-const batchesRef = toRef(props, 'batches')
-const { start } = useDraggable(containerRef, batchesRef, {
+const { start } = useDraggable(containerRef, writableBatches, {
   group: 'work-orders',
   animation: 150,
   ghostClass: 'sortable-ghost',
+  onStart: onDragStart,
+  onAdd: onDragAdd,
 })
 
 // 2026-08-26：page provide 必注入；非空断言（无注入则 dev 立即报错，prod 抛运行时错误）。

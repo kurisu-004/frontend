@@ -24,10 +24,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
+import { inject, ref, watch } from 'vue'
 import type { ComputedRef } from 'vue'
 import { useDraggable } from 'vue-draggable-plus'
-import type { ProcessPoolView } from '@/types/workerPool'
+import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool'
 import { consumeWorkerSource, recordWorkerSource } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
 
@@ -35,14 +35,20 @@ const props = defineProps<{
   pool: ProcessPoolView | null
 }>()
 
-// 2026-08-27 迁移：见 WorkerColumn.vue 同段注释。pool 是 readonly prop，
-// pool.batches 用 computed 拆出独立 ref 让 useDraggable 直接 bind。
+// 同 WorkerColumn 的 fix 模式：props.pool.batches readonly，本地 ref + watch。
+const writablePoolBatches = ref<Card[]>(props.pool ? [...props.pool.batches] : [])
+watch(
+  () => props.pool?.batches,
+  (next) => { writablePoolBatches.value = next ? [...next] : [] },
+  { deep: true, immediate: false },
+)
 const containerRef = ref<HTMLElement | null>(null)
-const poolBatchesRef = computed(() => props.pool?.batches ?? [])
-const { start } = useDraggable(containerRef, poolBatchesRef, {
+const { start } = useDraggable(containerRef, writablePoolBatches, {
   group: 'work-orders',
   animation: 150,
   ghostClass: 'sortable-ghost',
+  onStart: onDragStart,
+  onAdd: onDragAdd,
 })
 
 // 2026-08-26：page provide 必注入；非空断言。
