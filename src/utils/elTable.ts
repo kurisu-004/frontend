@@ -9,9 +9,20 @@
 /** el-table 实际渲染出的 tbody selector（EP 内部结构约定）。 */
 const EL_TABLE_TBODY_SELECTOR = '.el-table__body-wrapper .el-table__body > tbody'
 
+/** el-table 实际渲染出的 thead selector（EP 内部结构约定）。
+ *  2026-08-27 新增：列顺序拖动需要把 useDraggable 绑到 <thead>。 */
+const EL_TABLE_THEAD_SELECTOR = '.el-table__header-wrapper table thead'
+
 /** 从 el-table 组件实例（或其 $el 容器）解析出 EP 渲染的 tbody DOM 节点。
  *  找不到返回 null（表格未挂载 / 容器已卸载）。 */
 export function findElTableTbody(el: HTMLElement | null): HTMLElement | null {
   if (!el) return null
   return el.querySelector(EL_TABLE_TBODY_SELECTOR) as HTMLElement | null
+}
+
+/** 从 el-table 组件实例（或其 $el 容器）解析出 EP 渲染的 thead DOM 节点。
+ *  找不到返回 null（表格未挂载 / 容器已卸载 / 列被隐藏无表头）。 */
+export function findElTableThead(el: HTMLElement | null): HTMLElement | null {
+  if (!el) return null
+  return el.querySelector(EL_TABLE_THEAD_SELECTOR) as HTMLElement | null
 }

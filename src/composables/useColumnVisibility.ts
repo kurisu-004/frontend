@@ -37,6 +37,28 @@ export interface ColumnDef {
   label: string
   /** 默认是否可见;缺省 true */
   defaultVisible?: boolean
+  /** 2026-08-27 新增：列拖动支持。
+   *  - type=selection|index|expand → false
+   *  - fixed='left'|'right'|true     → false
+   *  - 其他                          → true
+   *  显式赋值时优先用显式值。 */
+  draggable?: boolean
+  /** 2026-08-27 新增：列稳定标识（透传给 <el-table-column :column-key>）。
+   *  缺省时回落到 key。仅在 key 含中文 / 重复场景显式设置。 */
+  columnKey?: string
+  /** el-table-column type：'selection' / 'index' / 'expand' 时不可拖动 */
+  type?: 'selection' | 'index' | 'expand' | string
+  /** el-table-column fixed：'left' / 'right' / true 时不可拖动 */
+  fixed?: 'left' | 'right' | boolean
+}
+
+/** 推导列默认是否可拖：selection/index/expand、fixed 列默认不可拖，其他默认可拖。
+ *  显式 `def.draggable` 优先级最高。 */
+export function resolveDraggable(def: ColumnDef): boolean {
+  if (def.draggable !== undefined) return def.draggable
+  if (def.type === 'selection' || def.type === 'index' || def.type === 'expand') return false
+  if (def.fixed === 'left' || def.fixed === 'right' || def.fixed === true) return false
+  return true
 }
 
 export interface ColumnVisibilityApi {
