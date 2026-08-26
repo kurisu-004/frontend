@@ -20,20 +20,15 @@
         :status="capacityStatus"
       />
     </template>
-    <VueDraggable
-      v-model="batches"
-      :group="'work-orders'"
-      :animation="150"
-      ghost-class="sortable-ghost"
+    <div
+      ref="containerRef"
       class="col-body"
       :data-worker-id="worker.id"
-      @start="onDragStart"
-      @add="onDragAdd"
     >
       <div v-for="batch in batches" :key="batch.batch_id" class="col-body-item">
         <WorkOrderCard :batch="batch" />
       </div>
-    </VueDraggable>
+    </div>
     <el-empty
       v-if="batches.length === 0"
       description="暂无持有工单"
@@ -43,9 +38,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, ref, toRef } from 'vue'
 import type { ComputedRef } from 'vue'
-import { VueDraggable } from 'vue-draggable-plus'
+import { useDraggable } from 'vue-draggable-plus'
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool'
 import { consumeProcessSource, recordSource } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
@@ -54,6 +49,17 @@ const props = defineProps<{
   worker: Worker
   batches: Card[]
 }>()
+
+// 2026-08-27 迁移：vue-draggable-plus 组件仅支持 v-model，batches 是 readonly
+// defineProps 不能 v-model。改用 useDraggable composable 接收 toRef(props, 'batches')，
+// 让 Sortable.js 直接原地变更（与旧 vuedraggable :list 行为一致）。
+const containerRef = ref<HTMLElement | null>(null)
+const batchesRef = toRef(props, 'batches')
+const { start } = useDraggable(containerRef, batchesRef, {
+  group: 'work-orders',
+  animation: 150,
+  ghostClass: 'sortable-ghost',
+})
 
 // 2026-08-26：page provide 必注入；非空断言（无注入则 dev 立即报错，prod 抛运行时错误）。
 const moveBatchToWorker = inject<(batch_id: string, to_worker_id: string, shelf_id: string, process_id: string) => Promise<boolean>>('moveBatchToWorker')!

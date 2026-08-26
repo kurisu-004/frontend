@@ -9,36 +9,41 @@
         <span class="process-name">{{ pool.process_name }}</span>
         <el-tag size="small" type="info">{{ pool.batches.length }}</el-tag>
       </div>
-      <VueDraggable
-        v-model="pool.batches"
-        :group="'work-orders'"
-        :animation="150"
-        ghost-class="sortable-ghost"
+      <div
+        ref="containerRef"
         class="section-body pool-cards"
         :data-process-id="pool.process_id"
-        @start="onDragStart"
-        @add="onDragAdd"
       >
         <div v-for="batch in pool.batches" :key="batch.batch_id" class="pool-cards-item">
           <WorkOrderCard :batch="batch" />
         </div>
-      </VueDraggable>
+      </div>
     </div>
     <div v-else class="pool-empty">无工序数据</div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { inject } from 'vue'
+import { computed, inject, ref } from 'vue'
 import type { ComputedRef } from 'vue'
-import { VueDraggable } from 'vue-draggable-plus'
-import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool'
+import { useDraggable } from 'vue-draggable-plus'
+import type { ProcessPoolView } from '@/types/workerPool'
 import { consumeWorkerSource, recordWorkerSource } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
 
 const props = defineProps<{
   pool: ProcessPoolView | null
 }>()
+
+// 2026-08-27 迁移：见 WorkerColumn.vue 同段注释。pool 是 readonly prop，
+// pool.batches 用 computed 拆出独立 ref 让 useDraggable 直接 bind。
+const containerRef = ref<HTMLElement | null>(null)
+const poolBatchesRef = computed(() => props.pool?.batches ?? [])
+const { start } = useDraggable(containerRef, poolBatchesRef, {
+  group: 'work-orders',
+  animation: 150,
+  ghostClass: 'sortable-ghost',
+})
 
 // 2026-08-26：page provide 必注入；非空断言。
 const moveBatchToPool = inject<(batch_id: string, from_worker_id: string, shelf_id: string, next_process_id: string) => Promise<boolean>>('moveBatchToPool')!
