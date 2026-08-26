@@ -57,6 +57,7 @@ function config(): UserConfig {
         'element-plus',
         '@element-plus/icons-vue',
         'xlsx',
+        'vue-draggable-plus',
       ],
     },
     // 2026-08-21：EP 改按需加载后，统计页(echarts ~700kB)与 PDF 预览(pdfjs ~560kB)仍是
