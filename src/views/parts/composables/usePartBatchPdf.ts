@@ -17,6 +17,7 @@ import type { Customer } from '@/api/customer'
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser'
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser'
 import { parseDrawingFilename } from '@/utils/drawingFilename'
+import { findElTableTbody } from '@/utils/elTable'
 import { pdfjsLib } from '@/utils/pdfjs'
 import {
   makeUid,
@@ -215,11 +216,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   function resolveTbody(
     tableRef: Ref<{ $el?: HTMLElement } | null>,
   ): HTMLElement | null {
-    const root = tableRef.value?.$el
-    if (!root) return null
-    return root.querySelector(
-      '.el-table__body-wrapper .el-table__body > tbody',
-    ) as HTMLElement | null
+    return findElTableTbody(tableRef.value?.$el ?? null)
   }
 
   /** 只用于源文件区表格展示的原始（未合成）PDF。 */
@@ -640,6 +637,17 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   //   setup 阶段调用后只初始化一次，el-table tbody 重建后必须手动 start() 重绑。
   // - 表格 DOM ref 由本 composable 持有，通过 provide('partBatchPdfRefs') 暴露
   //   给 PartBatchPdfTab，模板用 :ref 回写。
+  /** 拖拽收尾：把 list 从 oldIndex 挪到 newIndex，返回原地复制的 list 给响应式。 */
+  function makeOnEnd<T>(list: Ref<T[]>) {
+    return (evt: { oldIndex?: number; newIndex?: number }) => {
+      const { oldIndex, newIndex } = evt
+      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
+      const next = list.value.slice()
+      const [moved] = next.splice(oldIndex, 1)
+      if (moved) next.splice(newIndex, 0, moved)
+      list.value = next
+    }
+  }
   const { start: startStandalone } = useDraggable(
     standaloneTbodyRef,
     standaloneParts,
@@ -648,14 +656,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       draggable: 'tr',
       animation: 150,
       ghostClass: 'sortable-ghost',
-      onEnd(evt: { oldIndex?: number; newIndex?: number }) {
-        const { oldIndex, newIndex } = evt
-        if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
-        const next = standaloneParts.value.slice()
-        const [moved] = next.splice(oldIndex, 1)
-        if (moved) next.splice(newIndex, 0, moved)
-        standaloneParts.value = next
-      },
+      onEnd: makeOnEnd(standaloneParts),
     },
   )
   const { start: startAssemblies } = useDraggable(assembliesTbodyRef, assemblies, {
@@ -663,14 +664,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     draggable: 'tr',
     animation: 150,
     ghostClass: 'sortable-ghost',
-    onEnd(evt: { oldIndex?: number; newIndex?: number }) {
-      const { oldIndex, newIndex } = evt
-      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
-      const next = assemblies.value.slice()
-      const [moved] = next.splice(oldIndex, 1)
-      if (moved) next.splice(newIndex, 0, moved)
-      assemblies.value = next
-    },
+    onEnd: makeOnEnd(assemblies),
   })
 
   // 监听 tableRef 变化 → 重新解析 tbody 并 start() 重绑 sortable。

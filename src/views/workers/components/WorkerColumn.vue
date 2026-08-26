@@ -42,7 +42,7 @@ import { computed, inject, ref, watch } from 'vue'
 import type { ComputedRef } from 'vue'
 import { useDraggable } from 'vue-draggable-plus'
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool'
-import { consumeProcessSource, recordSource } from '../composables/dndSourceTracker'
+import { consumeProcessSource, recordSource, type DraggableStartEvent } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
 
 const props = defineProps<{
@@ -84,11 +84,6 @@ const capacityStatus = computed<'success' | 'warning' | ''>(() => {
   return 'success'
 })
 
-interface DraggableStartEvent {
-  item: HTMLElement
-  from: HTMLElement
-}
-
 function onDragStart(evt: DraggableStartEvent) {
   // 2026-08-26：记录源工序 ID（拖出 PoolDrawer 的 process_id）。
   // dataset 里的 kebab-case 自动转 camelCase：data-process-id → processId。
@@ -100,7 +95,6 @@ function onDragStart(evt: DraggableStartEvent) {
 /** 2026-08-27 迁移：vue-draggable-plus @add 事件 payload = Sortable.js 原生，
  *  item 为被拖入的 HTMLElement；通过 WorkOrderCard 上的 :data-batch-id 反查 batch_id。 */
 async function onDragAdd(evt: DraggableStartEvent) {
-  if (!evt.item) return
   const batchId = evt.item.dataset.batchId
   if (!batchId) return
   const fromProcessId = consumeProcessSource(batchId)

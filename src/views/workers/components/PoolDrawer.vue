@@ -28,7 +28,7 @@ import { inject, ref, watch } from 'vue'
 import type { ComputedRef } from 'vue'
 import { useDraggable } from 'vue-draggable-plus'
 import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool'
-import { consumeWorkerSource, recordWorkerSource } from '../composables/dndSourceTracker'
+import { consumeWorkerSource, recordWorkerSource, type DraggableStartEvent } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
 
 const props = defineProps<{
@@ -56,11 +56,6 @@ const moveBatchToPool = inject<(batch_id: string, from_worker_id: string, shelf_
 const shelfId = inject<ComputedRef<string>>('shelfId')!
 const activeProcessId = inject<ComputedRef<string>>('activeProcessId')!
 
-interface DraggableStartEvent {
-  item: HTMLElement
-  from: HTMLElement
-}
-
 function onDragStart(evt: DraggableStartEvent) {
   // 2026-08-26：记录源 worker ID（拖出 WorkerColumn 的 worker.id）。
   const batchId = evt.item.dataset.batchId
@@ -71,7 +66,6 @@ function onDragStart(evt: DraggableStartEvent) {
 /** 2026-08-27 迁移：vue-draggable-plus @add 事件 payload = Sortable.js 原生。 */
 async function onDragAdd(evt: DraggableStartEvent) {
   if (!props.pool) return
-  if (!evt.item) return
   const batchId = evt.item.dataset.batchId
   if (!batchId) return
   const fromWorkerId = consumeWorkerSource(batchId)

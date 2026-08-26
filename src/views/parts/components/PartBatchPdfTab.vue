@@ -734,9 +734,11 @@ import type {
 } from '../composables/usePartBatchPdf'
 
 // 父组件 `v-bind="pdf"` 摊开传入本组件需要的所有 props。
-// 2026-08-25 fix：3 个 el-table 的 ref 改成本组件本地 ref —— 之前写在父组件
-// 的 readonly prop 上时，el-table 实例会被静默写入失败，导致 Sortable 拖拽
-// 初始化和 clearSelection 全部失效。
+// 2026-08-25 fix：源文件区 el-table ref 改成本组件本地 ref（之前写在父组件的
+// readonly prop 上时，clearSelection 静默丢写）。
+// 2026-08-27：独立零件 / 装配件 el-table ref 改由父组件 usePartBatchPdf composable
+// 持有，通过 provide/inject 拿回，避免 props readonly 丢写 + 让 sortable 与数据
+// state 在同一文件管理（更内聚）。
 const props = defineProps<{
   l1Customers: { id: string; name: string }[]
   l2Customers: { id: string; name: string }[]
@@ -811,22 +813,26 @@ function handleClearSelection(): void {
   props.clearSelection(sourceTableRefLocal.value)
 }
 
-// 2026-08-27：拖拽 ref 由 composable 持有；provide 注入避免 v-bind 摊开时
-// props readonly 静默丢写。fallback 用局部 ref（不挂 el-table，仅类型兜底）。
+// 2026-08-27：拖拽 ref 由父组件 usePartBatchPdf composable 持有，通过
+// provide/inject 取回；本组件负责把 el-table 实例在 :ref 回调里回写。
+// composable 必注入（页面顶层必定调用 usePartBatchPdf）；非空断言与 inject
+// 类型保持一致，无 fallback（与 WorkerColumn / PoolDrawer 一致：缺失即 dev/prod 立即报错）。
 const pdfRefs = inject<{
   standaloneTableRef: Ref<{ $el?: HTMLElement } | null>
   assembliesTableRef: Ref<{ $el?: HTMLElement } | null>
-}>('partBatchPdfRefs') ?? {
-  standaloneTableRef: ref<{ $el?: HTMLElement } | null>(null),
-  assembliesTableRef: ref<{ $el?: HTMLElement } | null>(null),
+}>('partBatchPdfRefs')!
+
+/** 把模板 :ref 收到的未知值收窄到 el-table 组件实例形状。null 是合法的（卸载时）。 */
+function asElTableInstance(el: unknown): { $el?: HTMLElement } | null {
+  return el == null ? null : (el as { $el?: HTMLElement })
 }
 
 /** 模板 :ref 回调：把 el-table 实例回写到 composable 持有的 ref。 */
 function bindStandaloneTableRef(el: unknown): void {
-  pdfRefs.standaloneTableRef.value = (el as { $el?: HTMLElement } | null) ?? null
+  pdfRefs.standaloneTableRef.value = asElTableInstance(el)
 }
 function bindAssembliesTableRef(el: unknown): void {
-  pdfRefs.assembliesTableRef.value = (el as { $el?: HTMLElement } | null) ?? null
+  pdfRefs.assembliesTableRef.value = asElTableInstance(el)
 }
 </script>
 
