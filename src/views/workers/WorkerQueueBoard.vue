@@ -28,7 +28,7 @@
         />
       </el-tabs>
 
-      <el-splitter layout="vertical" class="board-splitter">
+      <el-splitter class="board-splitter">
         <el-splitter-panel :size="30" :min="240">
           <PoolDrawer :pool="activePool" />
         </el-splitter-panel>
