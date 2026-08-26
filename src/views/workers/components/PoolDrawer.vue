@@ -9,21 +9,20 @@
         <span class="process-name">{{ pool.process_name }}</span>
         <el-tag size="small" type="info">{{ pool.batches.length }}</el-tag>
       </div>
-      <draggable
-        :list="pool.batches"
+      <VueDraggable
+        v-model="pool.batches"
         :group="'work-orders'"
-        item-key="batch_id"
         :animation="150"
         ghost-class="sortable-ghost"
         class="section-body pool-cards"
         :data-process-id="pool.process_id"
         @start="onDragStart"
-        @change="onDragChange"
+        @add="onDragAdd"
       >
-        <template #item="{ element }">
-          <WorkOrderCard :batch="element" />
-        </template>
-      </draggable>
+        <div v-for="batch in pool.batches" :key="batch.batch_id" class="pool-cards-item">
+          <WorkOrderCard :batch="batch" />
+        </div>
+      </VueDraggable>
     </div>
     <div v-else class="pool-empty">无工序数据</div>
   </div>
@@ -32,7 +31,7 @@
 <script setup lang="ts">
 import { inject } from 'vue'
 import type { ComputedRef } from 'vue'
-import draggable from 'vuedraggable'
+import { VueDraggable } from 'vue-draggable-plus'
 import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool'
 import { consumeWorkerSource, recordWorkerSource } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
@@ -51,10 +50,6 @@ interface DraggableStartEvent {
   from: HTMLElement
 }
 
-interface DraggableChangeEvent {
-  added?: { element: Card }
-}
-
 function onDragStart(evt: DraggableStartEvent) {
   // 2026-08-26：记录源 worker ID（拖出 WorkerColumn 的 worker.id）。
   const batchId = evt.item.dataset.batchId
@@ -62,10 +57,12 @@ function onDragStart(evt: DraggableStartEvent) {
   if (batchId && fromWorkerId) recordWorkerSource(batchId, fromWorkerId)
 }
 
-async function onDragChange(evt: DraggableChangeEvent) {
-  if (!evt.added) return
+/** 2026-08-27 迁移：vue-draggable-plus @add 事件 payload = Sortable.js 原生。 */
+async function onDragAdd(evt: DraggableStartEvent) {
   if (!props.pool) return
-  const batchId = evt.added.element.batch_id
+  if (!evt.item) return
+  const batchId = evt.item.dataset.batchId
+  if (!batchId) return
   const fromWorkerId = consumeWorkerSource(batchId)
   if (!fromWorkerId) return
   // 撤回目标 = 当前 tab 的 process_id（即此 pool）。

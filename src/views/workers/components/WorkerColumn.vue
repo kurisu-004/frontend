@@ -20,21 +20,20 @@
         :status="capacityStatus"
       />
     </template>
-    <draggable
-      :list="batches"
+    <VueDraggable
+      v-model="batches"
       :group="'work-orders'"
-      item-key="batch_id"
       :animation="150"
       ghost-class="sortable-ghost"
       class="col-body"
       :data-worker-id="worker.id"
       @start="onDragStart"
-      @change="onDragChange"
+      @add="onDragAdd"
     >
-      <template #item="{ element }">
-        <WorkOrderCard :batch="element" />
-      </template>
-    </draggable>
+      <div v-for="batch in batches" :key="batch.batch_id" class="col-body-item">
+        <WorkOrderCard :batch="batch" />
+      </div>
+    </VueDraggable>
     <el-empty
       v-if="batches.length === 0"
       description="暂无持有工单"
@@ -46,7 +45,7 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
 import type { ComputedRef } from 'vue'
-import draggable from 'vuedraggable'
+import { VueDraggable } from 'vue-draggable-plus'
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool'
 import { consumeProcessSource, recordSource } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
@@ -78,10 +77,6 @@ interface DraggableStartEvent {
   from: HTMLElement
 }
 
-interface DraggableChangeEvent {
-  added?: { element: Card }
-}
-
 function onDragStart(evt: DraggableStartEvent) {
   // 2026-08-26：记录源工序 ID（拖出 PoolDrawer 的 process_id）。
   // dataset 里的 kebab-case 自动转 camelCase：data-process-id → processId。
@@ -90,9 +85,12 @@ function onDragStart(evt: DraggableStartEvent) {
   if (batchId && fromProcessId) recordSource(batchId, fromProcessId)
 }
 
-async function onDragChange(evt: DraggableChangeEvent) {
-  if (!evt.added) return
-  const batchId = evt.added.element.batch_id
+/** 2026-08-27 迁移：vue-draggable-plus @add 事件 payload = Sortable.js 原生，
+ *  item 为被拖入的 HTMLElement；通过 WorkOrderCard 上的 :data-batch-id 反查 batch_id。 */
+async function onDragAdd(evt: DraggableStartEvent) {
+  if (!evt.item) return
+  const batchId = evt.item.dataset.batchId
+  if (!batchId) return
   const fromProcessId = consumeProcessSource(batchId)
   if (!fromProcessId) return
   await moveBatchToWorker(batchId, props.worker.id, shelfId.value, fromProcessId)
