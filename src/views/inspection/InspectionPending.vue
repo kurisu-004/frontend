@@ -63,133 +63,8 @@
         </el-checkbox>
       </template>
 
-      <template #default="{ isVisible }">
-        <el-table-column
-          v-if="isVisible('serial_no')"
-          prop="serial_no"
-          label="序列号"
-          min-width="110"
-          fixed="left"
-          show-overflow-tooltip
-          align="center"
-        >
-          <template #default="{ row }">
-            <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column
-          v-if="isVisible('drawing_no')"
-          prop="drawing_no"
-          label="图号"
-          min-width="130"
-          fixed="left"
-          show-overflow-tooltip
-          align="center"
-        />
-
-        <el-table-column
-          v-if="isVisible('name')"
-          prop="name"
-          label="名称"
-          min-width="200"
-          show-overflow-tooltip
-          align="center"
-        >
-          <template #default="{ row }">
-            <router-link :to="`/parts/${row.id}`" class="name-link">
-              {{ row.name }}
-            </router-link>
-          </template>
-        </el-table-column>
-
-        <el-table-column
-          v-if="isVisible('batch_label')"
-          label="批次"
-          min-width="100"
-          align="center"
-        >
-          <template #default="{ row }">
-            <span class="batch-label">{{ row.batch_label || '—' }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column
-          v-if="isVisible('quantity')"
-          prop="quantity"
-          label="批次量"
-          min-width="80"
-          align="right"
-        />
-
-        <el-table-column
-          v-if="isVisible('planned_delivery_date')"
-          prop="planned_delivery_date"
-          label="计划交期"
-          min-width="120"
-          align="center"
-        />
-
-        <el-table-column
-          v-if="isVisible('system_delivery_date')"
-          prop="system_delivery_date"
-          label="系统交期"
-          min-width="120"
-          align="center"
-        >
-          <template #default="{ row }">
-            <span :class="{ muted: !row.system_delivery_date }">
-              {{ row.system_delivery_date || '—' }}
-            </span>
-          </template>
-        </el-table-column>
-
-        <el-table-column
-          v-if="isVisible('customer')"
-          label="客户"
-          min-width="180"
-          show-overflow-tooltip
-          align="center"
-        >
-          <template #default="{ row }">
-            <span v-if="row.customer_path">{{ row.customer_path }}</span>
-            <span v-else-if="row.customer_name" class="muted">{{ row.customer_name }}</span>
-            <span v-else class="muted">—</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column
-          v-if="isVisible('shelf_code')"
-          label="品检货架"
-          min-width="150"
-          show-overflow-tooltip
-          align="center"
-        >
-          <template #default="{ row }">
-            <span v-if="row.shelf_code">品检 {{ row.shelf_code }}</span>
-            <span v-else class="muted">—</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="操作" min-width="220" fixed="right" align="center">
-          <template #default="{ row }">
-            <el-button
-              link
-              type="success"
-              size="small"
-              :loading="(row as RowState)._passing"
-              @click="onPass(row as RowState)"
-            >品检通过</el-button>
-            <el-button
-              link
-              type="warning"
-              size="small"
-              @click="openFailDialog(row as RowState)"
-            >指定工序</el-button>
-            <el-button link type="primary" size="small" @click="$router.push(`/parts/${row.id}`)">详情</el-button>
-          </template>
-        </el-table-column>
-      </template>
+      <!-- 2026-08-27 T15：列定义全部走 columnDefs（PartListShell 自管 v-for 渲染）；
+           不再写默认 slot。操作列放在 columnDefs 末尾。 -->
     </PartListShell>
 
     <!-- 品检通过对话框（2026-07-29：带数量；部分通过后端先拆再过） -->
@@ -534,10 +409,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue'
+import { ElButton, ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
+import { RouterLink, useRouter } from 'vue-router'
 import PartListShell from '@/components/PartListShell.vue'
+import type { ColumnDef } from '@/composables/useColumnVisibility'
 import { useConfirm } from '@/composables/useConfirm'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
@@ -566,19 +443,189 @@ interface RowState extends PartItem {
 }
 
 // ============ T14：列表状态（filter / fetcher）+ 列可见性 ============
-// 列可见性由 PartListShell 内部 useColumnVisibility 持有，default slot 用 isVisible(key) 控制。
-// 「操作」列不放进 defs → 始终可见。
-const columnDefs = [
-  { key: 'serial_no', label: '序列号' },
-  { key: 'drawing_no', label: '图号' },
-  { key: 'name', label: '名称' },
-  { key: 'batch_label', label: '批次' },
-  { key: 'quantity', label: '批次量' },
-  { key: 'planned_delivery_date', label: '计划交期' },
-  { key: 'system_delivery_date', label: '系统交期' },
-  { key: 'customer', label: '客户' },
-  { key: 'shelf_code', label: '品检货架' },
-] as const
+// 2026-08-27 T15：列定义全部走 columnDefs 配置数组（之前写在 template 默认 slot 的内联列已迁出）。
+// 列可见性由 PartListShell 内部 useColumnVisibility 持有；PartListShell 自管 v-for 渲染，
+// 自定义单元格通过 cellRender(scope) 注入。操作列也放进 defs，draggable=false 防误拖。
+const router = useRouter()
+
+// ---------- 自定义单元格渲染 ----------
+// 参数 row 在 ColumnDef 接口里是 unknown；cast 到 PartItem / RowState 以访问业务字段。
+// 保留旧实现的全部行为：muted 灰底占位、router-link、conditional render、按钮组。
+function renderSerialNo({ row }: { row: unknown }): VNode {
+  const r = row as PartItem
+  return h('span', { class: { muted: !r.serial_no } }, r.serial_no || '—')
+}
+
+function renderName({ row }: { row: unknown }): VNode {
+  const r = row as PartItem
+  return h(
+    RouterLink,
+    { to: `/parts/${r.id}`, class: 'name-link' },
+    () => r.name,
+  )
+}
+
+function renderBatchLabel({ row }: { row: unknown }): VNode {
+  const r = row as PartItem
+  return h('span', { class: 'batch-label' }, r.batch_label || '—')
+}
+
+function renderSystemDeliveryDate({ row }: { row: unknown }): VNode {
+  const r = row as PartItem
+  return h(
+    'span',
+    { class: { muted: !r.system_delivery_date } },
+    r.system_delivery_date || '—',
+  )
+}
+
+function renderCustomer({ row }: { row: unknown }): VNode {
+  const r = row as PartItem
+  if (r.customer_path) return h('span', r.customer_path)
+  if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name)
+  return h('span', { class: 'muted' }, '—')
+}
+
+function renderShelfCode({ row }: { row: unknown }): VNode {
+  const r = row as PartItem
+  if (r.shelf_code) return h('span', `品检 ${r.shelf_code}`)
+  return h('span', { class: 'muted' }, '—')
+}
+
+function renderActions({ row }: { row: unknown }): VNode {
+  const r = row as RowState
+  return h('div', null, [
+    h(
+      ElButton,
+      {
+        link: true,
+        type: 'success',
+        size: 'small',
+        loading: r._passing,
+        onClick: () => onPass(r),
+      },
+      () => '品检通过',
+    ),
+    h(
+      ElButton,
+      {
+        link: true,
+        type: 'warning',
+        size: 'small',
+        onClick: () => openFailDialog(r),
+      },
+      () => '指定工序',
+    ),
+    h(
+      ElButton,
+      {
+        link: true,
+        type: 'primary',
+        size: 'small',
+        onClick: () => router.push(`/parts/${r.id}`),
+      },
+      () => '详情',
+    ),
+  ])
+}
+
+// ---------- 列定义 ----------
+// 字段顺序 = 初始渲染顺序。fixed / type=expand 不参与拖动；操作列 draggable: false 防误拖。
+// 行为与原内联 <el-table-column> 完全一致：min-width / fixed / show-overflow-tooltip / align / cellRender。
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'serial_no',
+    label: '序列号',
+    columnKey: 'serial_no',
+    prop: 'serial_no',
+    minWidth: 110,
+    fixed: 'left',
+    showOverflowTooltip: true,
+    align: 'center',
+    cellRender: renderSerialNo,
+  },
+  {
+    key: 'drawing_no',
+    label: '图号',
+    columnKey: 'drawing_no',
+    prop: 'drawing_no',
+    minWidth: 130,
+    fixed: 'left',
+    showOverflowTooltip: true,
+    align: 'center',
+  },
+  {
+    key: 'name',
+    label: '名称',
+    columnKey: 'name',
+    prop: 'name',
+    minWidth: 200,
+    showOverflowTooltip: true,
+    align: 'center',
+    cellRender: renderName,
+  },
+  {
+    key: 'batch_label',
+    label: '批次',
+    columnKey: 'batch_label',
+    minWidth: 100,
+    align: 'center',
+    cellRender: renderBatchLabel,
+  },
+  {
+    key: 'quantity',
+    label: '批次量',
+    columnKey: 'quantity',
+    prop: 'quantity',
+    minWidth: 80,
+    align: 'right',
+  },
+  {
+    key: 'planned_delivery_date',
+    label: '计划交期',
+    columnKey: 'planned_delivery_date',
+    prop: 'planned_delivery_date',
+    minWidth: 120,
+    align: 'center',
+  },
+  {
+    key: 'system_delivery_date',
+    label: '系统交期',
+    columnKey: 'system_delivery_date',
+    prop: 'system_delivery_date',
+    minWidth: 120,
+    align: 'center',
+    cellRender: renderSystemDeliveryDate,
+  },
+  {
+    key: 'customer',
+    label: '客户',
+    columnKey: 'customer',
+    minWidth: 180,
+    showOverflowTooltip: true,
+    align: 'center',
+    cellRender: renderCustomer,
+  },
+  {
+    key: 'shelf_code',
+    label: '品检货架',
+    columnKey: 'shelf_code',
+    minWidth: 150,
+    showOverflowTooltip: true,
+    align: 'center',
+    cellRender: renderShelfCode,
+  },
+  {
+    key: 'actions',
+    label: '操作',
+    columnKey: 'actions',
+    minWidth: 220,
+    fixed: 'right',
+    align: 'center',
+    draggable: false,
+    cellRender: renderActions,
+  },
+]
 
 const {
   search,

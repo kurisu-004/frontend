@@ -27,7 +27,7 @@
 // 列设置弹窗(见 components/ColumnVisibilityPopover.vue):
 //   <ColumnVisibilityPopover :defs="columnDefs" v-model="columnVisibility.currentMap" />
 
-import { computed, onBeforeUnmount, reactive, watch, type Ref, type WritableComputedRef } from 'vue'
+import { computed, onBeforeUnmount, reactive, watch, type Ref, type VNode, type WritableComputedRef } from 'vue'
 import { useAuthSession } from './useAuthSession'
 
 export interface ColumnDef {
@@ -73,6 +73,14 @@ export interface ColumnDef {
   resizable?: boolean
   className?: string
   labelClassName?: string
+  /** 2026-08-27 新增：自定义单元格渲染函数。PartListShell 的 v-for 列模板里
+   *  通过 `<component :is="d.cellRender(scope)" />` 渲染返回值。scope 形参与
+   *  el-table-column 默认 slot 保持一致（{ row, column, $index }）。
+   *  列元数据为「列定义」的纯数据，所以 row/column 都用 unknown；具体视图在
+   *  cellRender 实现内部自行 cast 到自己的 row 类型。
+   *  与 formatter 互斥：formatter 走 EP 原生字符串格式化；cellRender 用于
+   *  复杂 VNode（router-link、按钮组、条件 class 等）。 */
+  cellRender?: (ctx: { row: unknown; column: unknown; $index: number }) => VNode
 }
 
 /** 推导列默认是否可拖：selection/index/expand、fixed 列默认不可拖，其他默认可拖。

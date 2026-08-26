@@ -115,6 +115,14 @@
               :column-key="d.columnKey ?? d.key"
             >
               <!--
+                2026-08-27 T15：自定义单元格渲染。d.cellRender(scope) 返回 VNode，
+                <component :is> 在 Vue 3 中会克隆传入的 VNode 并渲染。
+                仅当列定义里声明 cellRender 时启用，未声明则走 EP 默认（formatter / prop 透传）。
+              -->
+              <template v-if="d.cellRender" #default="scope">
+                <component :is="d.cellRender(scope)" />
+              </template>
+              <!--
                 可拖列（非 type / 非 fixed）的表头追加拖动手柄。
                 selection/index/expand/fixed 列不挂 handle → sortablejs 不会把它们当 source。
               -->
@@ -125,8 +133,8 @@
             </el-table-column>
           </template>
           <!--
-            兼容旧视图：default slot 仍可注入额外 el-table-column（例如「操作」列）。
-            Task 3 会把 inline 列迁到 columnDefs.cellRender / headerRender，届时可移除本 slot 渲染。
+            兼容旧视图：default slot 仍可注入额外 el-table-column（视图中部分历史遗留）。
+            优先方案：把列定义（含自定义单元格）放在 columnDefs.cellRender 里，本 slot 通常为空。
           -->
           <slot
             :items="items"

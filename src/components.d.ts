@@ -11,6 +11,7 @@ declare module 'vue' {
     BatchInspectionConfirmDialog: typeof import('./components/delivery/BatchInspectionConfirmDialog.vue')['default']
     BatchSubmitInspectionConfirmDialog: typeof import('./components/delivery/BatchSubmitInspectionConfirmDialog.vue')['default']
     BeianFooter: typeof import('./components/BeianFooter.vue')['default']
+    ColumnDragHandle: typeof import('./components/ColumnDragHandle.vue')['default']
     ColumnFilterPopover: typeof import('./components/ColumnFilterPopover.vue')['default']
     ColumnVisibilityPopover: typeof import('./components/ColumnVisibilityPopover.vue')['default']
     EChart: typeof import('./components/EChart.vue')['default']
