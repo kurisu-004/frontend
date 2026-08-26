@@ -38,21 +38,51 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useAuthSession } from '@/composables/useAuthSession'
 import { useWorkerQueue } from '@/composables/useWorkerQueue'
+import { useSortableDnd } from './composables/useSortableDnd'
 import WorkerColumn from './components/WorkerColumn.vue'
 import PoolDrawer from './components/PoolDrawer.vue'
 
+const auth = useAuthSession()
 const queue = useWorkerQueue()
 const { workers, processPools, workerHeld, loading, error, loadBoard } = queue
 
+let dndCleanup: (() => void) | null = null
+
 onMounted(async () => {
   await loadBoard()
+  await nextTick()
+  const shelfId = auth.activeShelfId() ?? ''
+  if (!shelfId) {
+    ElMessage.warning('当前账号未绑定货架，拖拽功能受限')
+    return
+  }
+  dndCleanup = useSortableDnd({
+    moveBatchToWorker: queue.moveBatchToWorker,
+    moveBatchToPool: queue.moveBatchToPool,
+    shelfId,
+  }).cleanup
+})
+
+onUnmounted(() => {
+  dndCleanup?.()
 })
 
 async function onRefresh() {
+  dndCleanup?.()
   await loadBoard()
+  await nextTick()
+  const shelfId = auth.activeShelfId() ?? ''
+  if (shelfId) {
+    dndCleanup = useSortableDnd({
+      moveBatchToWorker: queue.moveBatchToWorker,
+      moveBatchToPool: queue.moveBatchToPool,
+      shelfId,
+    }).cleanup
+  }
   ElMessage.success('已刷新')
 }
 </script>
