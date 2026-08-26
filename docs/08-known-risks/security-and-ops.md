@@ -70,7 +70,11 @@ location ^~ /mcp/ { deny all; }
 
 ## 3. session 吊销：40105 SESSION_REVOKED
 
-### 行为
+### 状态（2026-08-26 起）
+
+**dormant**。40105 是 v2 Rust 后端专属错误码，v2 auth 域 2026-08-26 临时回滚到 v1（详见 [docs/02-architecture/api-contract.md](../02-architecture/api-contract.md) "v1 临时回滚注意事项"），v1 FastAPI 永远不会返回 40105。`src/api/http.ts` 拦截器对该码的处理分支保留为 dead code（按 plan 决策）——保持文件结构完整，便于未来切回 v2 时快速恢复。
+
+### 历史行为（v2 启用期间参考）
 
 `src/api/http.ts` 响应拦截器对 `code === 40105` 的处理：
 
@@ -78,7 +82,7 @@ location ^~ /mcp/ { deny all; }
 - 直接 `window.dispatchEvent(new CustomEvent('auth:logout'))`。
 - `main.ts` 监听 `auth:logout` 事件后 `router.replace('/login')`。
 
-### 触发场景
+### 历史触发场景（v2 启用期间）
 
 | 场景 | 说明 |
 |---|---|
@@ -86,7 +90,7 @@ location ^~ /mcp/ { deny all; }
 | Redis session 被清 | 集群重启 / 主动 flush |
 | 设备异地登录挤下线 | 同一账号多设备登录，旧设备被挤 |
 
-### 为什么 refresh 救不回
+### 历史背景：为什么 refresh 救不回（v2 架构）
 
 v2 auth 用 Redis session 校验 token 有效性，refresh 只是换新 access，本质上 session 已被吊销时再换 access 仍会被同样拒绝。40102 才是 refresh 救得回的（access 过期但 session 仍有效）。
 

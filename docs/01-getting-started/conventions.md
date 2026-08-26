@@ -123,7 +123,7 @@ import type { Part } from '@/types/parts'
 ## 错误处理约定
 
 - **业务错误**：后端抛非 0 code → axios 拦截器抛 `ApiError(code, message)` → 调用方 `try/catch` 后用 `(e as ApiError).code` 判断业务分支。
-- **认证错误**：`40101` 未登录 / `40102` access 过期 / `40103` refresh 失效 / `40105` session 吊销（v2 专属，救不回）。
+- **认证错误**：`40101` 未登录 / `40102` access 过期 / `40103` refresh 失效 / `40105` session 吊销（v2 专属码，2026-08-26 auth 域回滚 v1 后不触发，http.ts 拦截器分支保留为 dead code）。
 - **用户提示**：`ElMessage.error(message)` 用后端 `message`；自定义文案用 `ElMessageBox.alert`。
 - 不要用 `console.error` 替代用户提示（生产环境日志收集不替代 UI 反馈）。
 
@@ -147,4 +147,4 @@ import type { Part } from '@/types/parts'
 - [ ] `auto-imports.d.ts` / `components.d.ts` 如有 diff 已 review（unplugin 偶发重生成）
 - [ ] 关键决策已写注释（带日期戳）
 - [ ] commit message 格式正确（`前缀(scope): 中文一句话`）
-- [ ] 涉及 v1 → v2 迁移，新接口在 `apiV2` 上加
+- [ ] 涉及 v1 → v2 迁移，新接口在 `apiV2` 上加（**注意**：auth 域 2026-08-26 临时回滚 v1，新增 auth 接口必须走 `api`，详见 [CLAUDE.md](../../CLAUDE.md) 硬约束 #7）

@@ -24,7 +24,7 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 4. **EP 命令式 API CSS 必须在 `src/main.ts` 手动 import**：`unplugin-auto-import` resolver 只扫 `<template>`，看不到 `<script setup>` 里的 `ElMessageBox` / `ElMessage` / `ElNotification` / `ElLoading`。
 5. **不要删 `vite.config.ts` 的 `optimizeDeps.include`**：防止 dev 模式 dep discovery 触发整页 full-reload。
 6. **不要直接 `import 'pdfjs-dist'`**：统一从 `@/utils/pdfjs` import `pdfjsLib`（workerSrc 缓存穿透版本串集中在这里）。
-7. **auth 域 2026-08-26 已切 v2**：`/api/v2/auth/*` 是唯一目标；新增功能统一走 `apiV2`；v1 refresh_token 已作废（首登用户会被强制重登一次，由 40101/40103 兜底）。
+7. **auth 域 2026-08-26 临时回滚 v1**：`/api/v1/auth/*` 是当前目标；新增 auth 功能统一走 `api`（v1）。**已知 trade-off**：v2 业务端点（`deliveryNote` / `deliveryGroup` / `parts/scanInspect`）仍走 `apiV2`，拿到 v1 JWT 会在 `get_current_user` 处 40101，由 `auth:logout` 兜底重登。**待 v1 业务端点迁完再统一切回 v2**（详见 `docs/02-architecture/api-contract.md`）。
 8. **router `meta.menuCode` 必填**：单一权限源 = 后端菜单树，不填会被守卫误放行。
 
 ## 文档索引

@@ -6,16 +6,16 @@
 
 ---
 
-`src/api/http.ts` 把 axios 封装成统一的 HTTP 客户端，承担四件事：baseURL 路由、token 注入、信封解封、自动 refresh。`src/api/auth.ts` 是 v2 auth 域的端点封装，与历史 v1 字段完全一致（仅新增错误码 40105）。本篇把这一层契约完整讲清楚。
+`src/api/http.ts` 把 axios 封装成统一的 HTTP 客户端，承担四件事：baseURL 路由、token 注入、信封解封、自动 refresh。`src/api/auth.ts` 是 v1 auth 域的端点封装（2026-08-26 从 v2 临时回滚，业务依赖 v1 FastAPI）。本篇把这一层契约完整讲清楚。
 
 ## 三个 axios 实例
 
 | 实例 | baseURL | 拦截器 | 何时用 |
 |---|---|---|---|
-| `api` | `/api/v1` | 有 | v1 FastAPI 业务接口（默认） |
-| `apiV2` | `/api/v2` | 有 | v2 Rust 后端业务接口（auth / deliveryNote / scanInspect 等已迁移域） |
-| `refreshClient` | `/api/v1` | 无 | 仅 `/auth/refresh`（v1 兼容期） |
-| `refreshClientV2` | `/api/v2` | 无 | 仅 `/api/v2/auth/refresh` |
+| `api` | `/api/v1` | 有 | v1 FastAPI 业务接口（含 auth 域，默认） |
+| `apiV2` | `/api/v2` | 有 | v2 Rust 后端业务接口（deliveryNote / deliveryGroup / parts/scanInspect 等已迁移域） |
+| `refreshClient` | `/api/v1` | 无 | 仅 `/api/v1/auth/refresh`（auth 域当前用） |
+| `refreshClientV2` | `/api/v2` | 无 | 2026-08-26 起无消费者，保留供未来 v2 refresh 端点回归 |
 
 **反例**：`api.post('/v2/...')` 会被 baseURL 拼成 `/api/v1/v2/...`，404 静默失败。**单端点 v2 调用必须 `apiV2.post('/...')`**，路径不带 `/v2` 前缀。
 
@@ -25,7 +25,7 @@
 
 ### refresh 客户端必须与主客户端同版本
 
-切换 v2 时必须保证：**业务走 `apiV2` 则 refresh 走 `refreshClientV2`**。如果业务走 `api` 但 refresh 走 `refreshClientV2`，refresh 端点落在 v2 而原请求重试时仍走 v1，会造成"看似 token 刷新了但后续请求还是 40102"的诡异现象。auth 域切 v2 后，`src/api/auth.ts` 已经把 `refreshTokens` 切到 `refreshClientV2`。
+切换 v2 时必须保证：**业务走 `apiV2` 则 refresh 走 `refreshClientV2`**。如果业务走 `api` 但 refresh 走 `refreshClientV2`，refresh 端点落在 v2 而原请求重试时仍走 v1，会造成"看似 token 刷新了但后续请求还是 40102"的诡异现象。2026-08-26 auth 域回滚 v1 后，`src/api/auth.ts` 已经把 `refreshTokens` 切回 `refreshClient`；**业务走 `apiV2` 时 refresh 仍走 `refreshClientV2`**（业务域目前无 refresh 端点）。
 
 ## 信封协议 `{code, message, data}`
 
@@ -72,16 +72,16 @@ try {
 sequenceDiagram
   participant C as 业务组件
   participant I as axios 拦截器
-  participant R as refreshClientV2
+  participant R as refreshClient
   participant L as main.ts
 
-  C->>I: apiV2.get('/foo')
+  C->>I: api.get('/foo')
   I->>I: 收到 40102<br/>(access 过期)
   I->>I: refreshPromise 是否存在？
   alt 已有 refreshPromise
     I->>I: 复用，等待结果
   else 没有
-    I->>R: refreshClientV2.post('/auth/refresh')
+    I->>R: refreshClient.post('/auth/refresh')
     R-->>I: 新一对 token
     I->>I: persistTokens + dispatch<br/>auth:tokens-refreshed
   end
@@ -171,14 +171,20 @@ const id = parts[0].id  // string
 
 后端 Pydantic v2 默认 lax 模式会从 JSON string 自动 coerce 到 int，所以前端发请求时 `"id": "198362487928651776"`（字符串）和 `"id": 198362487928651776`（数字）后端都能正确解析。`useAuthSession.activeShelfId()` 返回 `string | null` 也是出于同一原因。
 
-## v2 迁移注意事项
+## v1 临时回滚注意事项
 
-**auth 域 2026-08-26 已切 v2**（v1 FastAPI 无 Redis，session 不可靠——历史登录反复出错的根因）。切换带来的两个副作用：
+**auth 域 2026-08-26 临时回滚 v1**（v2 Rust 后端的 Redis `session:tok:<sha256>` 与 v1 FastAPI 的 `get_current_user` 不兼容：v1 后端不认 v2 颁发的 token，v2 后端不认 v1 颁发的 token，跨版本 token 互相不认识）。回滚原因：v1 业务端点（deliveryNote 等）尚未迁移，业务依赖 v1，统一 v1 session 才能让 refresh 流跑通。
 
-1. **旧 v1 refresh_token 立即作废**：v1 / v2 JWT 签名密钥不同、Redis session 表也不同，跨版本 token 互相不认识。
-2. **存量用户首次访问会被强制重登一次**：用户本地 `localStorage` 里残留的是 v1 token，请求 v2 接口时拿 v1 token 去鉴权会得到 40101，拦截器 dispatch `auth:logout` 跳登录。UI 表现是"打开页面一瞬间就跳到登录页"，由 40101/40103 兜底，无中间态报错。
+**已知 trade-off**（不是 bug，是显式接受的副作用）：v2 业务端点（`deliveryNote` / `deliveryGroup` / `parts/scanInspect`）仍走 `apiV2`，拿到 v1 JWT 会在 v2 后端 `get_current_user` 处 40101，由 `auth:logout` 兜底重登。**待 v1 业务端点迁完再统一切回 v2**——本次回滚只是临时止血。
 
-迁移检查清单：
+切回 v2 的触发条件（全部满足）：
+
+1. v1 业务端点全部迁到 v2 后端（Rust）完成。
+2. 验收 v1 → v2 的 JWT 兼容矩阵（v1 颁发的 token 能否被 v2 `get_current_user` 接受——根据 `hsh-erp-rust/docs/api/auth.md`，Rust 端 `deserialize_sub_or_int` + `typ.alias="type"` 兼容两种 JWT 结构，但 v2 Redis session 必须重建）。
+3. 40101/40103 在存量用户的兜底重登完成（按 CLAUDE.md 历史描述约一轮）。
+4. 重新执行 verification 步骤（见本仓库根目录 plan 文件）：把「v1 JWT in devtools」反转为「v2 JWT 必须有 `iss=myerp`」。
+
+迁移检查清单（与 v2 时期一致，本节保留作 reminder）：
 
 - 新增 v2 接口 → `src/api/<domain>.ts` 里 `import { apiV2 } from '@/api/http'`，路径不带 `/v2` 前缀。
 - 新增 v2 refresh 端点 → `import { refreshClientV2 }`，不要混用 `refreshClient`。

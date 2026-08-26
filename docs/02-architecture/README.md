@@ -35,7 +35,7 @@ dev 模式下 `vite.config.ts` 把 `/api` 转发到 `127.0.0.1:8000`；prod 模�
 
 ## 五大决策索引
 
-1. **双 axios 实例 + 信封协议**——`api` (v1) 与 `apiV2` (v2) 共享拦截器，所有响应被解 `{code, message, data}` 信封，非 0 抛 `ApiError`；v2 auth 域 2026-08-26 已切换。
+1. **双 axios 实例 + 信封协议**——`api` (v1) 与 `apiV2` (v2) 共享拦截器，所有响应被解 `{code, message, data}` 信封，非 0 抛 `ApiError`；auth 域 2026-08-26 临时回滚 v1，业务域（deliveryNote / deliveryGroup / parts/scanInspect）仍在 `apiV2`。
    → [api-contract.md](./api-contract.md)
 
 2. **模块级 composable 单例**——装了 pinia 但实际状态全部在 composables 的 module-level ref 里（`useAuthSession` / `useScanSession` / `useBarcodeScanner`），新功能共享状态沿用此模式。
