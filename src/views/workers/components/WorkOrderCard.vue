@@ -1,13 +1,11 @@
 <!-- 2026-08-26 新增：工人队列看板工单卡片。
-     data-* 属性供 Sortable onAdd 取来源信息（哪个 worker / 哪个 process pool）。 -->
+     Task 2：移除 data-* 属性（来源信息改由父级 vuedraggable @change 提供）。
+     Task 3 会做视觉重写。 -->
 <template>
   <el-card
     class="work-order-card"
     :class="{ 'is-urgent': batch.is_urgent }"
     shadow="hover"
-    :data-batch-id="batch.batch_id"
-    :data-from-worker-id="sourceWorkerId"
-    :data-from-process-id="sourceProcessId"
   >
     <template #header>
       <div class="card-header">
@@ -45,10 +43,6 @@ import type { WorkOrderCard as Card } from '@/types/workerPool'
 
 defineProps<{
   batch: Card
-  /** 当卡片由某 worker 持有时设置，供 Sortable onAdd 回调读取 */
-  sourceWorkerId?: string
-  /** 当卡片由某 process pool 持有时设置，供 Sortable onAdd 回调读取 */
-  sourceProcessId?: string
 }>()
 </script>
 

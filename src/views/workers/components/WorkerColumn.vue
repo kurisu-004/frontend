@@ -1,4 +1,5 @@
-<!-- 2026-08-26 新增：工人列（看板右栏的单个 worker 容器，Sortable target）。 -->
+<!-- 2026-08-26 新增：工人列（看板右栏的单个 worker 容器，vuedraggable target）。
+     拖拽 wiring 由 Task 4 注入 activeProcessId；本步先占位 ref(null)。 -->
 <template>
   <el-card class="worker-column" shadow="never">
     <template #header>
@@ -18,31 +19,47 @@
         :status="capacityStatus"
       />
     </template>
-    <div class="col-body" :data-worker-id="worker.id">
-      <WorkOrderCard
-        v-for="b in batches"
-        :key="b.batch_id"
-        :batch="b"
-        :source-worker-id="worker.id"
-      />
-      <el-empty
-        v-if="batches.length === 0"
-        description="暂无持有工单"
-        :image-size="60"
-      />
-    </div>
+    <draggable
+      :list="batches"
+      :group="'work-orders'"
+      item-key="batch_id"
+      :animation="150"
+      ghost-class="sortable-ghost"
+      class="col-body"
+      @change="onDragChange"
+    >
+      <template #item="{ element }">
+        <WorkOrderCard :batch="element" />
+      </template>
+    </draggable>
+    <el-empty
+      v-if="batches.length === 0"
+      description="暂无持有工单"
+      :image-size="60"
+    />
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject, ref } from 'vue'
+import type { Ref } from 'vue'
+import draggable from 'vuedraggable'
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool'
 import WorkOrderCard from './WorkOrderCard.vue'
 
 const props = defineProps<{
   worker: Worker
   batches: Card[]
+  /**
+   * 拖入此工人列时触发。fromProcessId 由父级 provide/inject 注入的 activeProcessId 提供；
+   * Task 4 注入真值，Task 2 暂未提供（WorkerQueueBoard 不传此 prop）。
+   * 可选属性：vue-tsc 不会因为父级未传而报错；onDragChange 内部判空兜底。
+   */
+  onAddToWorker?: (batch: Card, fromProcessId: string | null) => Promise<void>
 }>()
+
+// Task 4 注入当前 tab 的 process_id；Task 2 暂未提供，注入回退到 ref(null)。
+const activeProcessId = inject<Ref<string | null>>('activeProcessId', ref(null))
 
 const capacityPercent = computed(() => {
   if (props.worker.max_held === 0) return 0
@@ -57,6 +74,17 @@ const capacityStatus = computed<'success' | 'warning' | ''>(() => {
   if (capacityPercent.value >= 70) return ''
   return 'success'
 })
+
+interface DraggableChangeEvent {
+  added?: { element: Card }
+}
+
+async function onDragChange(evt: DraggableChangeEvent) {
+  if (!evt.added) return
+  // Task 2 过渡：WorkerQueueBoard 暂未提供 onAddToWorker；Task 4 注入真 handler。
+  if (!props.onAddToWorker) return
+  await props.onAddToWorker(evt.added.element, activeProcessId.value)
+}
 </script>
 
 <style scoped>

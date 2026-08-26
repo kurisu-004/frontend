@@ -1,6 +1,6 @@
 <!-- 2026-08-26 新增：工人队列调度看板主页面（管理员全局视图）。
-     左：PoolDrawer（按工序分组）；右：WorkerColumn[]。
-     拖拽 wiring 在 Task 6 注入。 -->
+     左：PoolDrawer（单 pool，Task 4 注入激活工序）；右：WorkerColumn[]。
+     拖拽 wiring 由 Task 4 通过 provide/inject 接入 dndSourceTracker + activeProcessId。 -->
 <template>
   <div class="worker-queue-board">
     <div class="board-header">
@@ -24,7 +24,7 @@
     </div>
 
     <div v-else class="board-content">
-      <PoolDrawer :pools="processPools" />
+      <PoolDrawer :pool="activePool" />
       <div class="columns-container">
         <WorkerColumn
           v-for="w in workers"
@@ -38,52 +38,25 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
-import { useAuthSession } from '@/composables/useAuthSession'
+import { computed, onMounted } from 'vue'
 import { useWorkerQueue } from '@/composables/useWorkerQueue'
-import { useSortableDnd } from './composables/useSortableDnd'
 import WorkerColumn from './components/WorkerColumn.vue'
 import PoolDrawer from './components/PoolDrawer.vue'
 
-const auth = useAuthSession()
 const queue = useWorkerQueue()
 const { workers, processPools, workerHeld, loading, error, loadBoard } = queue
 
-let dndCleanup: (() => void) | null = null
+// Task 2 过渡占位：activePool 固定取第一个 pool。
+// Task 4 会注入 tab 切换逻辑（按 process_ids / 工序 tab）。
+const activePool = computed(() => processPools.value[0] ?? null)
 
 onMounted(async () => {
   await loadBoard()
-  await nextTick()
-  const shelfId = auth.activeShelfId() ?? ''
-  if (!shelfId) {
-    ElMessage.warning('当前账号未绑定货架，拖拽功能受限')
-    return
-  }
-  dndCleanup = useSortableDnd({
-    moveBatchToWorker: queue.moveBatchToWorker,
-    moveBatchToPool: queue.moveBatchToPool,
-    shelfId,
-  }).cleanup
-})
-
-onUnmounted(() => {
-  dndCleanup?.()
+  // DnD 暂未启用，待 Task 4 完成（vuedraggable provide/inject wiring）。
 })
 
 async function onRefresh() {
-  dndCleanup?.()
   await loadBoard()
-  await nextTick()
-  const shelfId = auth.activeShelfId() ?? ''
-  if (shelfId) {
-    dndCleanup = useSortableDnd({
-      moveBatchToWorker: queue.moveBatchToWorker,
-      moveBatchToPool: queue.moveBatchToPool,
-      shelfId,
-    }).cleanup
-  }
-  ElMessage.success('已刷新')
 }
 </script>
 

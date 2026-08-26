@@ -23,6 +23,7 @@
     "sortablejs": "^1.15.7",
     "vue": "^3.4.0",
     "vue-router": "^4.3.0",
+    "vuedraggable": "^4.1.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
