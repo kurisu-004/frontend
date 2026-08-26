@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 
 import App from './App.vue'
 import router from './router'
+import { useAuthSession } from './composables/useAuthSession'
 import './styles/index.scss'
 
 // Element Plus 命令式 API（ElMessageBox / ElMessage / ElNotification / ElLoading）
@@ -24,6 +25,15 @@ import 'element-plus/theme-chalk/el-overlay.css'
 const app = createApp(App)
 
 app.use(createPinia())
+
+// 2026-08-26 新增：dev-only dummy-auth 注入。
+// __DUMMY_AUTH__ 是 vite build 期常量（见 vite.config.ts define）；prod bundle 里是 false，整段 tree-shake。
+// 必须放在 app.use(router) 之前——router 首次 beforeEach 触发时 user + isDummy 已就位，
+// 守卫短路 refreshOrLogout 不调 /auth/me。
+if (__DUMMY_AUTH__) {
+  useAuthSession().initDummyAuth()
+}
+
 app.use(router)
 
 // 2026-07-10 起：refresh token 失效 / 40102 兜底都走这个事件统一跳登录页。
