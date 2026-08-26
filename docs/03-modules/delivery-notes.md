@@ -55,9 +55,8 @@
 
 | 文件 | 职责 |
 |---|---|
-| `BatchInspectionConfirmDialog.vue` | 批量过品确认弹窗（消费 `useBulkPassInspection`） |
-| `BatchSubmitInspectionConfirmDialog.vue` | 批量送检确认弹窗（消费 `useBulkScanInspect`，处理 21418 / 21405 失败分流） |
-| `BlockedScanConfirmDialog.vue` | 阻塞扫码弹窗（21418 / 21405 失败明细） |
+| `BatchInspectionConfirmDialog.vue` | 提交草稿时批量过品确认弹窗（消费 `useBulkPassInspection`，仅 INSPECTION → READY_TO_SHIP） |
+| `BatchSubmitInspectionConfirmDialog.vue` | 扫码建单时阻塞确认弹窗（消费 `useBulkScanInspect` 送检 + `batchPassInspection` 同时过检；处理 21418 / 21405 失败分流） |
 | `PartPickerDialog.vue` | 零件选择弹窗 |
 | `PrintPreviewDialog.vue` | 打印预览弹窗 |
 
@@ -108,7 +107,7 @@
 | 司机送货 | 扫码上车（`/delivery-dispatch/badge`） → 待送货单选择 → 逐件扫 → 确认送达 |
 | 详情操作 | 添加零件 / 移除零件 / 提交 / 撤回 / 软删 / 扫码领取链接（仅 SUBMITTED 状态） |
 
-扫码建单页遇到 21418（`BIZ_DELIVERY_ASSEMBLY_PARTS_NOT_READY` 装配件整套拒绝）/ 21405 失败时，弹 `<BlockedScanConfirmDialog>` 或 `<BatchSubmitInspectionConfirmDialog>`，按 failures[].status 分流（INSPECTION → 弹 BlockedScanConfirmDialog；IN_PROCESS / PENDING / PROGRAMMING → 弹 BatchSubmitInspectionConfirmDialog）。
+扫码建单页遇到 21418（`BIZ_DELIVERY_ASSEMBLY_PARTS_NOT_READY` 装配件整套拒绝）/ 21405 失败时，统一弹 `<BatchSubmitInspectionConfirmDialog>`：dialog 内部按 `failures[].status` 拆成两批——`status ∈ {PENDING, PROGRAMMING, IN_PROCESS}` 的行调 `useBulkScanInspect`（`POST /parts/batch-scan-inspect`）一键送检；`status === 'INSPECTION'` 的行如用户勾选「同时过检此件」则在确认时追加调 `POST /parts/batch-pass-inspection` 完成过检。
 
 ## 七、权限要求
 
@@ -130,7 +129,7 @@
 
 - **v2 切换后 `ARRAY_AS_CSV_KEYS` 含 `statuses`**：白名单 key 序列化为 CSV 单值 `?statuses=A,B`（与 v1 重复参数 `?statuses=A&statuses=B` 不同），见 `src/api/http.ts` 的 `ARRAY_AS_CSV_KEYS`。
 - **详情缓存策略（5min in-memory）**：mutation 后端已返新 detail 时必须 `put` 写入，不能仅 `invalidate`（避免又调一次 fetcher）。
-- **批量过品的阻塞弹窗 `BlockedScanConfirmDialog`**：21418 错误码（`BIZ_DELIVERY_ASSEMBLY_PARTS_NOT_READY` 装配件整套拒绝含不可入单子件），失败明细走 `data.failures[]`（2026-08-25 后端扩展 `ScanFailureDto`）。
+- **扫码建单阻塞弹窗 `BatchSubmitInspectionConfirmDialog`**：21418 错误码（`BIZ_DELIVERY_ASSEMBLY_PARTS_NOT_READY` 装配件整套拒绝含不可入单子件）/ 21405 失败时统一弹本对话框；失败明细走 `data.failures[]`（2026-08-25 后端扩展 `ScanFailureDto`，新增 `part_id` / `batch_id` / `status` / `drawing_no`）。Dialog 内部按 `status` 自动分流送检 / 同时过检两批调用，无需父组件手动拆。
 - **`usePooledDetail` 失败语义**：任一 worker 抛错 → 该位置返回 null，**不阻断**其他 worker；不适合做副作用密集的写操作（写操作统一走 `useBulkPassInspection` / `useBulkScanInspect` 单 round-trip）。
 - **扫码建单走 v2 但 list / detail 仍是 v1（混合期）**：2026-08-24 起全量切 v2，但 delivery_note 的列表 / 详情 / 事件等只读端点从 v1 切到 v2 时序不同，迁移期间务必确认后端对应端点已上线。
 - **雪花 ID 必为 string**：`note_id` / `part_id` / `worker_id` / `shelf_id` / `group_id` 全部 `string`。

@@ -371,10 +371,11 @@ export async function batchScanInspect(req: {
 
 `DeliveryNoteScan.vue:478-513` 的 `applyError` 按 `failures[].status` 分流：
 
-- `status ∈ {PENDING, PROGRAMMING, IN_PROCESS}` → 弹新建 `BatchSubmitInspectionConfirmDialog`（调 `batchScanInspect`）
-- `status === 'INSPECTION'` → 保留原 `BlockedScanConfirmDialog`（调 `batchPassInspection`）
-- 兼有两类 → 按 status 拆批，依次弹两个弹窗
+- 统一弹 `BatchSubmitInspectionConfirmDialog`（见 `src/components/delivery/BatchSubmitInspectionConfirmDialog.vue`）；dialog 内部按 `failures[].status` 自动拆成两批：
+  - `status ∈ {PENDING, PROGRAMMING, IN_PROCESS}` → 调 `batchScanInspect`（`POST /parts/batch-scan-inspect`）一键送检
+  - `status === 'INSPECTION'` 且用户在「同时过检此件」列勾选 → 在确认时追加调 `batchPassInspection`（`POST /parts/batch-pass-inspection`）过检
+- 父组件 `DeliveryNoteScan.vue` 无需再按 status 拆分弹窗
 
-新弹窗位于 `src/components/delivery/BatchSubmitInspectionConfirmDialog.vue`，镜像 `BlockedScanConfirmDialog.vue`，顶部加 `el-select` 选品检架（拉 `listShelves({ zone: 'INSPECTION', is_active: true })`），每行可调部分数量。
+新弹窗位于 `src/components/delivery/BatchSubmitInspectionConfirmDialog.vue`，顶部加 `el-select` 选品检架（拉 `listShelves({ zone: 'INSPECTION', is_active: true })`），每行可调部分数量，「同时过检此件」列仅 `status === 'INSPECTION'` 的行启用。
 
 详见 `/Users/ren/.claude/plans/pure-cooking-deer.md`（本仓 plan 文件，前端 §B 全节）。

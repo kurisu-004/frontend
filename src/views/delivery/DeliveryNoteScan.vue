@@ -10,7 +10,7 @@
 //       DeliveryGroupPanel           — 分组规则面板（含编辑器 dialog）
 //       DeliveryDraftCard            — 单张草稿卡片（重复 4-5 次）
 //   - 装配壳只负责：拉客户全集 + 订阅扫码枪 + watch L1 变化触发 reload + 编排 3 子组件 +
-//     装配 3 个 page-level dialog（BlockedScanConfirmDialog / PrintPreviewDialog /
+//     装配 3 个 page-level dialog（BatchSubmitInspectionConfirmDialog / PrintPreviewDialog /
 //     BatchInspectionConfirmDialog）+ router.push。
 //
 // 设计要点（沿用原 v3）：
@@ -39,7 +39,7 @@ import { useDeliveryScanSubmission } from './composables/useDeliveryScanSubmissi
 import DeliveryScanBar from './components/DeliveryScanBar.vue'
 import DeliveryGroupPanel from './components/DeliveryGroupPanel.vue'
 import DeliveryDraftCard from './components/DeliveryDraftCard.vue'
-import BlockedScanConfirmDialog from '@/components/delivery/BlockedScanConfirmDialog.vue'
+import BatchSubmitInspectionConfirmDialog from '@/components/delivery/BatchSubmitInspectionConfirmDialog.vue'
 import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'
 import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'
 
@@ -311,14 +311,14 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- ========== 扫码阻塞确认对话框（page-level，shell 渲染） ========== -->
-    <BlockedScanConfirmDialog
+    <!-- ========== 扫码阻塞确认对话框（page-level，shell 渲染；2026-08-26 切换到 BatchSubmitInspectionConfirmDialog，因为阻塞件通常是 IN_PROCESS/PROGRAMMING/PENDING，需送检非过检） ========== -->
+    <BatchSubmitInspectionConfirmDialog
       v-model="submission.blockedDialogVisible.value"
       :failures="submission.blockedFailures.value"
       :reason="submission.blockedReason.value"
       :original-code="submission.blockedOriginalCode.value"
-      @pass-success="submission.onBlockedPassSuccess"
-      @pass-partial="submission.onBlockedPassPartial"
+      @submit-success="submission.onBlockedSubmitSuccess"
+      @submit-partial="submission.onBlockedSubmitPartial"
       @cancel="submission.onBlockedCancel"
     />
 
