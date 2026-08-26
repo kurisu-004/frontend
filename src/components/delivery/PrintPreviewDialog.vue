@@ -4,7 +4,7 @@
   设计要点：
   - 列：勾选（仅 label 模式）/ 序号（拖动 handle + 数字）/ 订单号 / 分厂 / 申请人 / 图号 / 名称 / 数量
   - 初始顺序 = 详情页当前 ``note.line_items`` 的内存顺序（含用户列头排序的结果）
-  - 行可拖动：sortablejs 复用 ``PartBatchNew.vue`` 的低层 DOM API 模式
+  - 行可拖动：vue-draggable-plus（包 Sortable.js）绑到 el-table 渲染出的 tbody
   - 用户拖动只影响预览副本；详情页 ``note.line_items`` 不变
   - 2026-08-04：单上有装配件子件时显示「合并为一套 / 分开打印所有子件」radio；
     合并模式预览折叠子件为父行；导出时把父行 round-trip 展开为组内 batch id 连续。
@@ -17,13 +17,12 @@
 import {
   computed,
   nextTick,
-  onBeforeUnmount,
   ref,
   watch,
 } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Rank } from '@element-plus/icons-vue'
-import Sortable from 'sortablejs'
+import { useDraggable } from 'vue-draggable-plus'
 
 import {
   printNote,
@@ -54,7 +53,7 @@ const dlg = useDialogSize({ desktopWidth: 1100 })
 
 const previewTableRef = ref()
 const rows = ref<PreviewRow[]>([])
-let sortable: Sortable | null = null
+const tbodyRef = ref<HTMLElement | null>(null)
 const loading = ref(false)
 
 // 2026-08-07：标签模式的勾选状态
@@ -146,26 +145,24 @@ watch(
       // 拷贝当前内存顺序作为预览初始顺序（不污染详情页）
       rows.value = previewRows.value
       await nextTick()
-      initSortable()
+      refreshTbodyRef()
       // 2026-08-07：label 模式默认全选
       if (isLabelMode.value) {
         await selectAll()
       }
-    } else {
-      destroySortable()
     }
   },
   // 2026-08-24 bugfix：扫码建单页用 v-if 挂载本组件，首次进入时 modelValue
   // 已经是 true（无 false→true 的「变化」），watch 默认不立即触发会导致
   // rows 永远是空数组。详情页始终挂载的调用方不受影响（mount 时 open=false
-  // 走 destroySortable() 分支为 no-op）。
+  // 时不会进 if 分支，tbodyRef 也不会被刷新——useDraggable 会守空）。
   { immediate: true },
 )
 
 watch(previewRows, async (next) => {
   rows.value = next
   await nextTick()
-  initSortable()
+  refreshTbodyRef()
   // 2026-08-07：合并模式切换后重置全选
   if (isLabelMode.value) {
     await selectAll()
@@ -192,36 +189,32 @@ function invertSelection(): void {
   rows.value.forEach((r) => t.toggleRowSelection(r, !chosen.has(r)))
 }
 
-function initSortable(): void {
+useDraggable(tbodyRef, rows, {
+  handle: '.drag-handle',
+  draggable: 'tr',
+  animation: 150,
+  ghostClass: 'sortable-ghost',
+  onEnd(evt: { oldIndex?: number; newIndex?: number }) {
+    const { oldIndex, newIndex } = evt
+    if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
+    const next = rows.value.slice()
+    const [moved] = next.splice(oldIndex, 1)
+    if (moved) next.splice(newIndex, 0, moved)
+    rows.value = next
+  },
+})
+
+/** 找到 el-table 渲染出的 tbody 并写到 tbodyRef；useDraggable 会监听并自动 init。 */
+function refreshTbodyRef(): void {
   const root = previewTableRef.value?.$el
-  if (!root) return
-  const tbody = root.querySelector(
+  if (!root) {
+    tbodyRef.value = null
+    return
+  }
+  tbodyRef.value = root.querySelector(
     '.el-table__body-wrapper .el-table__body > tbody',
   ) as HTMLElement | null
-  if (!tbody) return
-  sortable?.destroy()
-  sortable = Sortable.create(tbody, {
-    handle: '.drag-handle',
-    draggable: 'tr',
-    animation: 150,
-    ghostClass: 'sortable-ghost',
-    onEnd(evt: { oldIndex?: number; newIndex?: number }) {
-      const { oldIndex, newIndex } = evt
-      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
-      const next = rows.value.slice()
-      const [moved] = next.splice(oldIndex, 1)
-      if (moved) next.splice(newIndex, 0, moved)
-      rows.value = next
-    },
-  })
 }
-
-function destroySortable(): void {
-  sortable?.destroy()
-  sortable = null
-}
-
-onBeforeUnmount(destroySortable)
 
 function onCancel(): void {
   emit('update:modelValue', false)
