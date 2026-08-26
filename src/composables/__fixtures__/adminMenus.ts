@@ -1,5 +1,5 @@
 // src/composables/__fixtures__/adminMenus.ts
-// 2026-08-26 同步自生产 DB：admin 角色的完整菜单树（27 个 menuCode 全集，含 9 顶级 + 18 leaf，6 个为 path:null 的分组节点）。
+// 2026-08-26 同步自生产 DB：admin 角色的完整菜单树（27 个 menuCode 全集：9 顶级 [3 leaf + 6 分组 path:null] + 18 子项 leaf）。
 // 仅 dev dummy-auth 模式使用（initDummyAuth 注入 useAuthSession.user.menus）；
 // prod bundle 不引用此文件（无 dead code 风险）。
 //
@@ -32,7 +32,7 @@ export const ADMIN_MENUS: MenuNode[] = [
     code: 'production_stats', title: '生产统计', path: '/statistics',
     icon: 'DataAnalysis', sort_order: 12, children: [],
   },
-  // 3. customer_management — 客户管理（分组，3 children）
+  // 3. customer_management — 客户管理（分组，2 children）
   {
     id: id(3), version: 0, parent_id: null,
     code: 'customer_management', title: '客户管理', path: null,

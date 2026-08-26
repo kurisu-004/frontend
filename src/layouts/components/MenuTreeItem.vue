@@ -42,9 +42,9 @@ import {
   Van,
   Setting,
   Operation,
-  // 2026-08-26：新增 users_list 用的 List；移除生产 DB 不再用的 9 个
-  // （Lock / Money / CollectionTag / UserFilled / Postcard / Search /
-  //  PriceTag / TakeawayBox / Avatar）—— 见 adminMenus fixture 同步提交。
+  // 2026-08-26：新增 users_list 用的 List；其余 8 个旧图标（Lock / Money / CollectionTag /
+  // UserFilled / Postcard / Search / PriceTag / TakeawayBox）在更早 commit 已不在文件中，
+  // 本次仅实际移除 Avatar。
   List,
 } from '@element-plus/icons-vue'
 import type { MenuNode } from '@/types/menu'
