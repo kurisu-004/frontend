@@ -223,6 +223,20 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '工人一览', icon: 'User', menuCode: 'workers_list', breadcrumb: [{ label: '权限管理', path: '/workers' }, { label: '工人一览' }] },
       },
       {
+        path: 'workers/queue',
+        name: 'WorkerQueueBoard',
+        component: () => import('@/views/workers/WorkerQueueBoard.vue'),
+        meta: {
+          title: '工人队列调度',
+          icon: 'Operation',
+          menuCode: 'worker_queue',
+          breadcrumb: [
+            { label: '权限管理', path: '/workers' },
+            { label: '工人队列调度' },
+          ],
+        },
+      },
+      {
         path: 'users',
         name: 'UserList',
         component: () => import('@/views/users/UserList.vue'),
