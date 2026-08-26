@@ -9,17 +9,21 @@
 
 ## 背景
 
-前端 `BlockedScanConfirmDialog` 在用户扫码建单遇 21418 / 21405 时弹出，列出阻塞子件并提供"一键全部通过品检"按钮。当前实现走前端 worker pool：
+前端在用户扫码建单遇 21418 / 21405 时，由 `BatchSubmitInspectionConfirmDialog`（`src/components/delivery/BatchSubmitInspectionConfirmDialog.vue`）统一弹出；该对话框对 `status === 'INSPECTION'` 的失败子件提供「同时过检此件」列，勾选后追加调 `POST /parts/batch-pass-inspection`。
+
+历史背景：本需求提出时（2026-08-24），扫码建单阻塞弹窗由 `BlockedScanConfirmDialog`（已删除，commit `f33583a`）消费 worker pool：
 
 - 9 件阻塞 → 9 次 `POST /api/v1/parts/{id}/pass-inspection` 串/并发
 - 9 次 round-trip + 9 个独立事务
 - 失败语义依赖前端聚合，没有原子性
 
-更根本的问题：**当前 21418 响应的 `data.failures[]` 只带 `serial_no / name / reason`**（`src/modules/delivery_note/dto.rs:544-548`），前端拿不到 `part_id`，所以弹窗的"一键通过"按钮默认 disabled（`BlockedScanConfirmDialog.vue:67-68` 的 `canBulkPass` guard）。
+更根本的问题：**当时 21418 响应的 `data.failures[]` 只带 `serial_no / name / reason`**（`src/modules/delivery_note/dto.rs:544-548`），前端拿不到 `part_id`，所以弹窗的"一键通过"按钮默认 disabled（已删除组件 `BlockedScanConfirmDialog.vue` 的 `canBulkPass` guard）。
 
 本次需求两个变更一起上：
 1. 新增批量通过品检端点（v2）— 替代 worker pool
 2. 扩展 `ScanFailureDto` — 让 21418 的 failures 自带 `part_id`，弹窗可直接喂给 batch 端点
+
+落地后，`batchPassInspection` 在扫码建单侧被 `BatchSubmitInspectionConfirmDialog` 的「同时过检此件」分支消费；在提交草稿侧仍由 `BatchInspectionConfirmDialog` 消费（INSPECTION-only 路径，行为不变）。
 
 ---
 
@@ -202,9 +206,14 @@ export async function batchPassInspection(
 }
 ```
 
-`BlockedScanConfirmDialog` 切到新端点后：
-- `canBulkPass` 真正可用（part_id 不再是 undefined）
-- 9 件阻塞 1 次 round-trip，无竞态
+`BatchSubmitInspectionConfirmDialog` 切到新端点后：
+- 「同时过检此件」勾选行的 `part_id` 真正可用（`ScanFailureDto` 扩展后）
+- N 件阻塞 → 1 次 `batchPassInspection` round-trip，无竞态
 - 错误码 20101 / 20103 走 `data.failed[]`，UI 仍可逐件标红
+
+迁移 changelog：
+- 2026-08-26（commit `45cc6df`）：扫码阻塞对话框切换为送检（`BatchSubmitInspectionConfirmDialog`），消费 `useBulkScanInspect`；INSPECTION 行通过「同时过检此件」列复用本端点。
+- 2026-08-26（commit `f33583a`）：删除孤儿 `BlockedScanConfirmDialog`（已无引用）。
+- 提交草稿时 INSPECTION-only 的过检仍由 `BatchInspectionConfirmDialog` 消费本端点，行为不变。
 
 `useBulkPassInspection` 保留作为 fallback（万一后端部署延迟，前端照常工作）。
