@@ -103,6 +103,9 @@ export const refreshClient = axios.create({
  * 2026-08-26 新增：与 refreshClient 一一对应；auth 域切 v2 后 /auth/refresh
  * 走它。解耦是为避免 baseURL 串改造成"看似生效实则打 v1"的隐患——refresh 客户端
  * 永远与主业务客户端同版本。
+ *
+ * 2026-08-26 auth 域回滚 v1 后本实例暂无消费者（refreshTokens 改走 refreshClient）；
+ * 保留供未来 v2 refresh 端点回归（业务域上 v2 时配套用），不要随手删。
  */
 export const refreshClientV2 = axios.create({
   baseURL: '/api/v2',
