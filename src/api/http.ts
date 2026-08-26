@@ -21,6 +21,10 @@
 // refreshPromise 等雪崩状态保持模块单例，v1 / v2 并发撞 40102 只触发一次
 // /auth/refresh。单端点的 v2 调用不该用 `api.post('/v2/...')`，会被 baseURL
 // 拼成 `/api/v1/v2/...`。
+// 【2026-08-26 新增】refreshClientV2：与 refreshClient 一一对应，baseURL `/api/v2`，
+// 给 /api/v2/auth/refresh 用。auth 域切 v2 后两者并存：业务走 apiV2，refresh 走
+// refreshClientV2，refresh 客户端与业务 client 永远对应同版本 baseURL，避免
+// 串改造成"看似生效实则打 v1"的隐患。
 
 import axios, {
   AxiosError,
@@ -88,6 +92,20 @@ export const api = axios.create({
  */
 export const refreshClient = axios.create({
   baseURL: '/api/v1',
+  timeout: 30_000,
+  paramsSerializer: serializeParams,
+})
+
+/**
+ * v2 refresh 客户端：baseURL `/api/v2`，其它与 refreshClient 完全一致
+ * （无拦截器、paramsSerializer 同步）。
+ *
+ * 2026-08-26 新增：与 refreshClient 一一对应；auth 域切 v2 后 /auth/refresh
+ * 走它。解耦是为避免 baseURL 串改造成"看似生效实则打 v1"的隐患——refresh 客户端
+ * 永远与主业务客户端同版本。
+ */
+export const refreshClientV2 = axios.create({
+  baseURL: '/api/v2',
   timeout: 30_000,
   paramsSerializer: serializeParams,
 })
@@ -282,6 +300,15 @@ function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
     const apiErr = new ApiError(payload.code, payload.message, error.response)
     const cfg = error.config as (InternalAxiosRequestConfig & { _isRetryAfterRefresh?: boolean }) | undefined
 
+    // 40105 SESSION_REVOKED（v2 才有）：JWT 签名仍有效，但 Redis session:tok:<sha256>
+    // 已被吊销（其它设备 logout / 改密 / 管理员停用）。refresh 也救不回（同一 session
+    // 索引会被连带清掉），直接 dispatch auth:logout 跳登录，不再走下方 40102 的
+    // reactive refresh 分支。
+    if (apiErr.code === 40105) {
+      window.dispatchEvent(new CustomEvent('auth:logout'))
+      throw apiErr
+    }
+
     // 仅在 access 过期且非 refresh 重试时触发自动刷新。
     const shouldRefresh =
       apiErr.code === 40102 && cfg && !cfg._isRetryAfterRefresh
@@ -326,7 +353,15 @@ export class ApiError extends Error {
 
   /** 是否为"未登录 / token 失效"——由调用方决定如何处理（路由跳转 / 重新登录）。 */
   get isAuthError(): boolean {
-    return this.code === 40101 || this.code === 40102 || this.code === 40103
+    // 40105 SESSION_REVOKED：JWT 签名有效但 Redis session 已被吊销。语义上等同
+    // "未登录"，调用方应清 session 跳登录；拦截器内已经 dispatch auth:logout，
+    // 这里只是让业务侧可以分支识别这一类。
+    return (
+      this.code === 40101 ||
+      this.code === 40102 ||
+      this.code === 40103 ||
+      this.code === 40105
+    )
   }
 }
 
