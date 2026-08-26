@@ -1,5 +1,6 @@
-<!-- 2026-08-26 新增：工序 pool 容器（看板左栏，单 pool 视图，vuedraggable target）。
-     Tab 切换由父级提供 pool；本组件只渲染当前激活工序。 -->
+<!-- 2026-08-26 重构：工序 pool 容器（vuedraggable target）。
+     接收父级 provide 注入：moveBatchToPool / shelfId / activeProcessId。
+     @start 把 from dataset 写到 dndSourceTracker（worker 源）；@change.added 时调 moveBatchToPool。 -->
 <template>
   <div class="pool-drawer">
     <div v-if="pool" class="pool-section">
@@ -15,6 +16,8 @@
         :animation="150"
         ghost-class="sortable-ghost"
         class="section-body pool-cards"
+        :data-process-id="pool.process_id"
+        @start="onDragStart"
         @change="onDragChange"
       >
         <template #item="{ element }">
@@ -27,44 +30,56 @@
 </template>
 
 <script setup lang="ts">
+import { inject } from 'vue'
+import type { ComputedRef } from 'vue'
 import draggable from 'vuedraggable'
 import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool'
+import { consumeWorkerSource, recordWorkerSource } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
 
 const props = defineProps<{
   pool: ProcessPoolView | null
-  /**
-   * 从某 worker 列拖回此 pool 时触发。fromWorkerId 由父级 provide/inject 注入
-   * （Task 4 引入 dndSourceTracker），本步仅占位：
-   * WorkerColumn 调用 onAddToWorker（pool → worker），PoolDrawer 调用 onAddToPool
-   * （worker → pool），二者方向相反、来源信息不同。
-   * 可选属性：Task 4 注入真 handler；Task 2 WorkerQueueBoard 不传。
-   */
-  onAddToPool?: (batch: Card, fromWorkerId: string | null) => Promise<void>
 }>()
+
+// 2026-08-26：page provide 必注入；非空断言。
+const moveBatchToPool = inject<(batch_id: string, from_worker_id: string, shelf_id: string, next_process_id: string) => Promise<boolean>>('moveBatchToPool')!
+const shelfId = inject<ComputedRef<string>>('shelfId')!
+const activeProcessId = inject<ComputedRef<string>>('activeProcessId')!
+
+interface DraggableStartEvent {
+  item: HTMLElement
+  from: HTMLElement
+}
 
 interface DraggableChangeEvent {
   added?: { element: Card }
 }
 
+function onDragStart(evt: DraggableStartEvent) {
+  // 2026-08-26：记录源 worker ID（拖出 WorkerColumn 的 worker.id）。
+  const batchId = evt.item.dataset.batchId
+  const fromWorkerId = evt.from.dataset.workerId
+  if (batchId && fromWorkerId) recordWorkerSource(batchId, fromWorkerId)
+}
+
 async function onDragChange(evt: DraggableChangeEvent) {
   if (!evt.added) return
-  // Task 2 过渡：WorkerQueueBoard 暂未提供 onAddToPool；Task 4 注入真 handler。
-  if (!props.onAddToPool) return
-  // Task 4 在 page provide dndSourceTracker.fromWorkerId；
-  // 当前 Task 2 无追踪源，传 null。
-  await props.onAddToPool(evt.added.element, null)
+  if (!props.pool) return
+  const batchId = evt.added.element.batch_id
+  const fromWorkerId = consumeWorkerSource(batchId)
+  if (!fromWorkerId) return
+  // 撤回目标 = 当前 tab 的 process_id（即此 pool）。
+  await moveBatchToPool(batchId, fromWorkerId, shelfId.value, activeProcessId.value)
 }
 </script>
 
 <style scoped>
 .pool-drawer {
-  width: 320px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--el-border-color);
-  padding-right: 16px;
+  width: 100%;
+  height: 100%;
+  padding: 12px;
+  box-sizing: border-box;
   overflow-y: auto;
-  max-height: 80vh;
 }
 .pool-section {
   margin-bottom: 24px;
@@ -87,8 +102,7 @@ async function onDragChange(evt: DraggableChangeEvent) {
   font-size: 13px;
   flex: 1;
 }
-/* 2026-08-26：多列卡片布局用 flex + wrap；具体卡片宽度由 Task 5 视觉重写时
-   细化为 flex: 0 0 calc(50% - 4px) 或固定 220px。 */
+/* 2026-08-26：多列卡片布局用 flex + wrap。 */
 .pool-cards {
   display: flex;
   flex-wrap: wrap;

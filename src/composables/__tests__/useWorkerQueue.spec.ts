@@ -90,4 +90,33 @@ describe('useWorkerQueue', () => {
     expect(q.processPools.value[0]!.batches).toHaveLength(before)
     expect(q.workerHeld.value['1900000000002']).toEqual([])
   })
+
+  // 2026-08-26 新增：覆盖 WorkerQueueBoard 的 capability 过滤逻辑。
+  // 模拟 page 端 filteredWorkers = workers.filter(w => w.process_ids.includes(activeTab))
+  it('filteredWorkers：activeTab=2000000000001 命中 W001/W002（不命中 W003）', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue')
+    const q = useWorkerQueue()
+    await q.loadBoard()
+    const activeTab = '2000000000001'
+    const filtered = q.workers.value.filter((w) => w.process_ids.includes(activeTab))
+    expect(filtered.map((w) => w.id)).toEqual(['1900000000001', '1900000000002'])
+  })
+
+  it('filteredWorkers：activeTab=2000000000002 只命中 W003', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue')
+    const q = useWorkerQueue()
+    await q.loadBoard()
+    const activeTab = '2000000000002'
+    const filtered = q.workers.value.filter((w) => w.process_ids.includes(activeTab))
+    expect(filtered.map((w) => w.id)).toEqual(['1900000000003'])
+  })
+
+  it('filteredWorkers：activeTab=未知 process_id 返回空', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue')
+    const q = useWorkerQueue()
+    await q.loadBoard()
+    const activeTab = '9999999999999'
+    const filtered = q.workers.value.filter((w) => w.process_ids.includes(activeTab))
+    expect(filtered).toEqual([])
+  })
 })

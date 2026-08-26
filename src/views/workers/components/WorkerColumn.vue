@@ -1,5 +1,6 @@
-<!-- 2026-08-26 新增：工人列（看板右栏的单个 worker 容器，vuedraggable target）。
-     拖拽 wiring 由 Task 4 注入 activeProcessId；本步先占位 ref(null)。 -->
+<!-- 2026-08-26 重构：工人列（vuedraggable target）。
+     接收父级 provide 注入：moveBatchToWorker / shelfId。
+     @start 把 from dataset 写到 dndSourceTracker；@change.added 时读 + delete，调 moveBatchToWorker。 -->
 <template>
   <el-card class="worker-column" shadow="never">
     <template #header>
@@ -26,6 +27,8 @@
       :animation="150"
       ghost-class="sortable-ghost"
       class="col-body"
+      :data-worker-id="worker.id"
+      @start="onDragStart"
       @change="onDragChange"
     >
       <template #item="{ element }">
@@ -41,25 +44,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
-import type { Ref } from 'vue'
+import { computed, inject } from 'vue'
+import type { ComputedRef } from 'vue'
 import draggable from 'vuedraggable'
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool'
+import { consumeProcessSource, recordSource } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
 
 const props = defineProps<{
   worker: Worker
   batches: Card[]
-  /**
-   * 拖入此工人列时触发。fromProcessId 由父级 provide/inject 注入的 activeProcessId 提供；
-   * Task 4 注入真值，Task 2 暂未提供（WorkerQueueBoard 不传此 prop）。
-   * 可选属性：vue-tsc 不会因为父级未传而报错；onDragChange 内部判空兜底。
-   */
-  onAddToWorker?: (batch: Card, fromProcessId: string | null) => Promise<void>
 }>()
 
-// Task 4 注入当前 tab 的 process_id；Task 2 暂未提供，注入回退到 ref(null)。
-const activeProcessId = inject<Ref<string | null>>('activeProcessId', ref(null))
+// 2026-08-26：page provide 必注入；非空断言（无注入则 dev 立即报错，prod 抛运行时错误）。
+const moveBatchToWorker = inject<(batch_id: string, to_worker_id: string, shelf_id: string, process_id: string) => Promise<boolean>>('moveBatchToWorker')!
+const shelfId = inject<ComputedRef<string>>('shelfId')!
 
 const capacityPercent = computed(() => {
   if (props.worker.max_held === 0) return 0
@@ -67,23 +66,36 @@ const capacityPercent = computed(() => {
 })
 
 // 注：el-progress 的 status 只接受 '' | 'success' | 'warning' | 'exception'，
-// 没有 'primary'。中段（>=70%）走空串，让 EP 走默认主色（蓝）—— 与 brief 中
-// 'primary' 的视觉意图（与 success 绿 / warning 黄有别的第三色）一致。
+// 没有 'primary'。中段（>=70%）走空串，让 EP 走默认主色（蓝）。
 const capacityStatus = computed<'success' | 'warning' | ''>(() => {
   if (props.worker.capacity_remaining === 0) return 'warning'
   if (capacityPercent.value >= 70) return ''
   return 'success'
 })
 
+interface DraggableStartEvent {
+  item: HTMLElement
+  from: HTMLElement
+}
+
 interface DraggableChangeEvent {
   added?: { element: Card }
 }
 
+function onDragStart(evt: DraggableStartEvent) {
+  // 2026-08-26：记录源工序 ID（拖出 PoolDrawer 的 process_id）。
+  // dataset 里的 kebab-case 自动转 camelCase：data-process-id → processId。
+  const batchId = evt.item.dataset.batchId
+  const fromProcessId = evt.from.dataset.processId
+  if (batchId && fromProcessId) recordSource(batchId, fromProcessId)
+}
+
 async function onDragChange(evt: DraggableChangeEvent) {
   if (!evt.added) return
-  // Task 2 过渡：WorkerQueueBoard 暂未提供 onAddToWorker；Task 4 注入真 handler。
-  if (!props.onAddToWorker) return
-  await props.onAddToWorker(evt.added.element, activeProcessId.value)
+  const batchId = evt.added.element.batch_id
+  const fromProcessId = consumeProcessSource(batchId)
+  if (!fromProcessId) return
+  await moveBatchToWorker(batchId, props.worker.id, shelfId.value, fromProcessId)
 }
 </script>
 
