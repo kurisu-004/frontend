@@ -1,12 +1,12 @@
 <!--
   PartListShell.vue — 共用「过滤卡 + 列可见性 + 表格 + 分页 + 加急红底」壳（T14，
-  T14p5 修复 fetch 错误回传）
+  T14p5 修复 fetch 错误回传，T15 接入列顺序拖动）
 
   复用对象：
     - InspectionPending.vue（src/views/inspection/）
     - PendingProgrammingList.vue（src/views/cnc/）
 
-  设计要点（2026-08-25）：
+  设计要点（2026-08-25 T14）：
   - 视图提供：fetcher、columnDefs、listKey、emptyText、rowClassName
   - 视图提供两个 slot：
       #filter                  filter 行输入控件（视图自管 search.* 绑定）
@@ -25,6 +25,20 @@
   - 列可见性 popover 按 T2 模板提到 .table-toolbar 顶层 div；
     el-pagination 走 <PagedTable> 子组件收口；
     加急红底 #fde2e2 通过 :deep(.row-urgent) 注入，rowClassName 由视图传。
+
+  设计要点（2026-08-27 T15 列顺序拖动接入）：
+  - 列渲染改 v-for：drag.orderedDefs 提供持久化顺序，
+    isVisible + isDraggable 在模板里控制列是否渲染 / 是否带拖动手柄。
+  - useColumnDrag 与 useColumnVisibility 平行，二者共用 columnDefs。
+  - columnDefs 字段扩展（useColumnVisibility 已扩展）：draggable / columnKey / type / fixed，
+    沿用 useColumnDrag.resolveDraggable 推导。
+  - onMounted 调 findElTableThead(tableRef.$el) + drag.applyDrag 把 useDraggable 挂到 <thead>。
+  - 「重置列顺序」按钮在 ColumnVisibilityPopover footer；popover emit 'reset-order'
+    透传到 shell 调 drag.reset()。
+  - 列顺序持久化 key: myerp.list.<userId>.<listKey>_columnOrder
+    （与 _columns / _paged 并列，零冲突）。
+  - 兼容旧视图：default slot 仍可注入额外 el-table-column，shell 的 v-for 列 + slot 列
+    共存。Task 3 会逐视图把 inline 列迁到 columnDefs.cellRender / columnDefs.headerRender。
 -->
 <template>
   <div class="part-list-shell">
@@ -48,12 +62,14 @@
         :model-value="columnVisibility.currentMap"
         @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
       />
     </div>
 
     <PagedTable :fetcher="safeFetcher" :default-page-size="defaultPageSize">
       <template #default="{ items, loading }">
         <el-table
+          ref="tableRef"
           :data="items"
           v-loading="loading"
           row-key="id"
@@ -63,10 +79,61 @@
           size="small"
           :row-class-name="rowClassName"
         >
+          <!--
+            2026-08-27 接入：v-for 列渲染。drag.orderedDefs.value 提供持久化顺序；
+            v-if 由 columnVisibility 控制是否展示。
+            用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+          -->
+          <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+            <el-table-column
+              v-if="columnVisibility.isVisible(d.key)"
+              :prop="d.prop ?? d.key"
+              :label="d.label"
+              :type="d.type"
+              :width="d.width"
+              :min-width="d.minWidth"
+              :fixed="d.fixed"
+              :sortable="d.sortable"
+              :align="d.align"
+              :header-align="d.headerAlign"
+              :show-overflow-tooltip="d.showOverflowTooltip"
+              :formatter="d.formatter"
+              :index="d.index"
+              :selectable="d.selectable"
+              :filters="d.filters"
+              :filter-multiple="d.filterMultiple"
+              :filter-method="d.filterMethod"
+              :filtered-value="d.filteredValue"
+              :sort-method="d.sortMethod"
+              :sort-by="d.sortBy"
+              :sort-orders="d.sortOrders"
+              :resizable="d.resizable"
+              :class-name="d.className"
+              :label-class-name="
+                resolveDraggable(d) ? d.labelClassName : `col-no-drag ${d.labelClassName ?? ''}`.trim()
+              "
+              :column-key="d.columnKey ?? d.key"
+            >
+              <!--
+                可拖列（非 type / 非 fixed）的表头追加拖动手柄。
+                selection/index/expand/fixed 列不挂 handle → sortablejs 不会把它们当 source。
+              -->
+              <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+                <span>{{ d.label }}</span>
+                <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+              </template>
+            </el-table-column>
+          </template>
+          <!--
+            兼容旧视图：default slot 仍可注入额外 el-table-column（例如「操作」列）。
+            Task 3 会把 inline 列迁到 columnDefs.cellRender / headerRender，届时可移除本 slot 渲染。
+          -->
           <slot
             :items="items"
             :loading="loading"
             :is-visible="columnVisibility.isVisible"
+            :is-draggable="resolveDraggable"
+            :ordered-defs="drag.orderedDefs.value"
           />
         </el-table>
       </template>
@@ -75,17 +142,27 @@
 </template>
 
 <script setup lang="ts" generic="T extends { id: string | number }">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RefreshLeft } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import PagedTable from '@/components/PagedTable.vue'
-import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import {
+  useColumnDrag,
+  columnIdentifier,
+} from '@/composables/useColumnDrag'
 import {
   usePagedListQuery,
   type PageQueryParams,
   type PageResult,
 } from '@/composables/usePagedListQuery'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
+import { findElTableThead } from '@/utils/elTable'
 
 const props = withDefaults(defineProps<{
   columnDefs: readonly ColumnDef[]
@@ -121,6 +198,10 @@ async function safeFetcher(params: PageQueryParams): Promise<PageResult<T>> {
 // 列可见性（视图在 default slot 内通过 isVisible(key) 决定每列是否渲染）
 const columnVisibility = useColumnVisibility(props.columnDefs, { listKey: props.listKey })
 
+// 2026-08-27 T15：列顺序拖动（与 visibility 平行，共享 columnDefs）。
+// orderedDefs 提供持久化的当前顺序，applyDrag 在 onMounted 挂到 <thead>。
+const drag = useColumnDrag(props.columnDefs, { listKey: props.listKey })
+
 // 分页状态 + 拉取（闭包由视图 fetcher 提供；safeFetcher 在 shell 里包一层 catch，
 // PagedTable / usePagedListQuery 看到的 fetcher 是吞了错的，loading 才能稳定落地）
 const {
@@ -148,6 +229,17 @@ async function onRefresh(): Promise<void> {
   await reset()
 }
 
+// 2026-08-27 T15：挂 useColumnDrag 到 el-table 的 <thead>。
+// tableRef.value 是 EP el-table 组件实例，$el 是其根容器（外层 .el-table）。
+// findElTableThead 走固定 selector 取真正的 <thead>。
+const tableRef = ref()
+onMounted(() => {
+  const root = tableRef.value?.$el as HTMLElement | undefined
+  if (!root) return
+  const thead = findElTableThead(root)
+  if (thead) drag.applyDrag(thead)
+})
+
 // 类型化 slot prop，便于 IDE 在视图侧取 scope 字段时能拿到推断
 defineSlots<{
   filter(): unknown
@@ -155,6 +247,8 @@ defineSlots<{
     items: T[]
     loading: boolean
     isVisible: (key: string) => boolean
+    isDraggable: (def: ColumnDef) => boolean
+    orderedDefs: ColumnDef[]
   }): unknown
 }>()
 
@@ -199,4 +293,11 @@ defineExpose({
 :deep(.row-urgent td) {
   background: #fde2e2 !important;
 }
+// 2026-08-27 T15：EP thead th 上的 col-no-drag 类让 sortablejs filter 跳过；
+// 同时禁用默认 cursor（不可拖列不放 handle，应显示普通箭头）
+:deep(.col-no-drag) { cursor: default !important; }
+// sortablejs 拖动时的视觉反馈（与 EP 主题色协调，藏青/蓝/浅蓝系）
+:deep(.sortable-ghost) { opacity: 0.5; background: #eaf2fb !important; }
+:deep(.sortable-chosen) { background: #cce0f4 !important; }
+:deep(.sortable-drag) { background: #fff !important; }
 </style>

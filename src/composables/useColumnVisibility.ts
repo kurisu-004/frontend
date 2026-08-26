@@ -50,6 +50,29 @@ export interface ColumnDef {
   type?: 'selection' | 'index' | 'expand' | string
   /** el-table-column fixed：'left' / 'right' / true 时不可拖动 */
   fixed?: 'left' | 'right' | boolean
+  /** 2026-08-27 新增：el-table-column 标准属性透传。PartListShell 用 v-for 渲染时
+   *  从 ColumnDef 上读这些字段，再绑到 <el-table-column>。缺省时回落到 d.key。
+   *  这些字段是「column 元数据」，不参与可见性 / 顺序语义。 */
+  prop?: string
+  width?: number | string
+  minWidth?: number | string
+  sortable?: boolean | 'custom'
+  align?: 'left' | 'center' | 'right'
+  headerAlign?: 'left' | 'center' | 'right'
+  showOverflowTooltip?: boolean
+  formatter?: (row: unknown, column: unknown, cellValue: unknown, index: number) => string
+  index?: number | ((index: number) => number)
+  selectable?: (row: unknown, index: number) => boolean
+  filters?: Array<{ text: string; value: string }>
+  filterMultiple?: boolean
+  filterMethod?: (value: unknown, row: unknown, column: unknown) => boolean
+  filteredValue?: string[]
+  sortMethod?: (a: unknown, b: unknown) => number
+  sortBy?: string | string[]
+  sortOrders?: Array<'ascending' | 'descending' | null>
+  resizable?: boolean
+  className?: string
+  labelClassName?: string
 }
 
 /** 推导列默认是否可拖：selection/index/expand、fixed 列默认不可拖，其他默认可拖。
