@@ -12,7 +12,7 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
 }
 
 describe('ADMIN_MENUS', () => {
-  it('covers all 22 menuCodes', () => {
+  it('covers all 26 menuCodes', () => {
     const all = flatten(ADMIN_MENUS)
     const codes = all.map((n) => n.code)
     expect(codes).toContain('home')
@@ -26,7 +26,6 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('outsource_send_receive_list')
     expect(codes).toContain('delivery_notes_manage')
     expect(codes).toContain('workers_list')
-    expect(codes).toContain('worker_queue')
     expect(codes).toContain('users_list')
     expect(codes).toContain('shelves_list')
     expect(codes).toContain('customers_list')
@@ -34,9 +33,15 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('work_types_list')
     expect(codes).toContain('processes_list')
     expect(codes).toContain('work_type_processes_list')
-    expect(codes).toContain('scan_badge')
     expect(codes).toContain('delivery_dispatch')
     expect(codes).toContain('production_stats')
+    // 2026-08-26 新增：6 个分组 code 断言（生产 DB 暴露给 MANAGER 的分组节点）
+    expect(codes).toContain('customer_management')
+    expect(codes).toContain('order_group')
+    expect(codes).toContain('auth_group')
+    expect(codes).toContain('outsource_list')
+    expect(codes).toContain('floor_group')
+    expect(codes).toContain('settings_root')
   })
 
   it('has unique codes (no dup)', () => {

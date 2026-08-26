@@ -1,5 +1,5 @@
 // src/composables/__fixtures__/adminMenus.ts
-// 2026-08-26 同步自生产 DB：admin 角色的完整菜单树（22 个 menuCode 全集）。
+// 2026-08-26 同步自生产 DB：admin 角色的完整菜单树（26 个 menuCode 全集，含 9 顶级 + 17 leaf，6 个为 path:null 的分组节点）。
 // 仅 dev dummy-auth 模式使用（initDummyAuth 注入 useAuthSession.user.menus）；
 // prod bundle 不引用此文件（无 dead code 风险）。
 //
@@ -13,7 +13,7 @@
 // 改动后必须验证：
 //   1. 每个 MenuNode.code 是 router/index.ts 里某条路由的 meta.menuCode
 //   2. 每个 MenuNode.icon 在 MenuTreeItem.vue 的 ICON_MAP 中存在
-//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 16
+//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 20
 
 import type { MenuNode } from '@/types/menu'
 
