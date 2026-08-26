@@ -18,6 +18,7 @@ import { ref, type Ref } from 'vue'
 import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/auth'
 import type { CurrentUser } from '@/types/user'
 import type { MenuNode } from '@/types/menu'
+import { ADMIN_MENUS } from './__fixtures__/adminMenus'
 
 interface StoredSession {
   token: string
@@ -30,6 +31,15 @@ const user = ref<CurrentUser | null>(null) as Ref<CurrentUser | null>
 const token = ref<string | null>(null)
 // refresh_token 不暴露给组件（只由 axios 拦截器读），但用模块级常量便于内部测试
 let refreshTokenValue: string | null = null
+
+// 2026-08-26 新增：dummy-auth 模块标志。
+// 仅在 `npm run dev -- --dummy-auth` 时为 true；prod build 里 import.meta.env.DEV === false，永远 false。
+// 供 router 守卫短路 refreshOrLogout（避免 dummy 模式下 /auth/me 失败清掉 fake session）。
+let isDummyAuthActiveValue = false
+
+function isDummyAuthActive(): boolean {
+  return isDummyAuthActiveValue
+}
 
 function loadFromStorage(): boolean {
   try {
@@ -186,6 +196,27 @@ export function useAuthSession() {
     }
   }
 
+  // 2026-08-26 新增：dummy-auth 注入（仅 dev + --dummy-auth 时被调用）。
+  // 第三道 prod 保护：import.meta.env.DEV === false 时整段 dead code，prod bundle 不含此函数体。
+  // 不写 localStorage，避免下次非 dummy 启动时被 loadFromStorage 复活。
+  function initDummyAuth(): void {
+    if (!import.meta.env.DEV) return
+    if (!__DUMMY_AUTH__) return
+
+    user.value = {
+      id: '1999999999001',
+      username: 'dev-admin',
+      full_name: '开发模式管理员',
+      is_active: true,
+      roles: ['MANAGER', 'SHELF_ACCOUNT'],
+      shelf_ids: [],
+      menus: ADMIN_MENUS,
+    }
+    token.value = 'dummy-dev-token'
+    refreshTokenValue = 'dummy-dev-refresh'
+    isDummyAuthActiveValue = true
+  }
+
   return {
     user,
     token,
@@ -201,5 +232,8 @@ export function useAuthSession() {
     login,
     logout,
     refreshOrLogout,
+    // 2026-08-26 新增：
+    initDummyAuth,
+    isDummyAuthActive,
   }
 }
