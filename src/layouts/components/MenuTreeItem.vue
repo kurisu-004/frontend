@@ -40,9 +40,12 @@ import {
   Tickets,
   Plus,
   Van,
-  Avatar,
   Setting,
   Operation,
+  // 2026-08-26：新增 users_list 用的 List；其余 8 个旧图标（Lock / Money / CollectionTag /
+  // UserFilled / Postcard / Search / PriceTag / TakeawayBox）在更早 commit 已不在文件中，
+  // 本次仅实际移除 Avatar。
+  List,
 } from '@element-plus/icons-vue'
 import type { MenuNode } from '@/types/menu'
 
@@ -73,16 +76,14 @@ const ICON_MAP: Record<string, unknown> = {
   Platform,
   DataAnalysis,
   Connection,
-  // 2026-08-22：补全侧栏 6 个缺失图标，对应后端 t_menu.icon：
-  //   订单管理 → Tickets    新建零件 → Plus
-  //   送货     → Van        账号管理 → Avatar
-  //   设置     → Setting    工序管理 → Operation
+  // 2026-08-22：补全侧栏 6 个缺失图标
   Tickets,
   Plus,
   Van,
-  Avatar,
   Setting,
   Operation,
+  // 2026-08-26：新增 List（users_list 账号管理），与生产 t_menu.icon 对齐
+  List,
 }
 
 // 按名字查图标；查不到返回 undefined → 模板里 v-if 隐藏图标（不报错）。
