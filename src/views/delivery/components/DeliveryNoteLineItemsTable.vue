@@ -9,6 +9,7 @@
   本组件只负责 UI 编排 + 选择事件转发。
 
   2026-08-25 frontend-overall-refactor：从 DeliveryNoteDetail.vue 抽出。
+  2026-08-27 T17：接入列顺序拖动（HTMLElement 路径 — el-card v-if="note" 始终为 truthy 后 el-table 一直在 DOM）。
 -->
 <template>
   <el-card v-if="note" shadow="never" class="line-items-card">
@@ -16,12 +17,13 @@
       <div class="card-header">
         <span>零件列表 ({{ note.line_items.length }})</span>
         <div class="actions">
-          <!-- 2026-08-02：列显隐控制 -->
+          <!-- 2026-08-02：列显隐控制；2026-08-27 T17 增 @reset-order -->
           <ColumnVisibilityPopover
             :defs="columnDefs"
             :model-value="columnVisibility.currentMap"
             @update:model-value="(v: Record<string, boolean>) => columnVisibility.update(v)"
             @reset="columnVisibility.showAll"
+            @reset-order="drag.reset"
           />
           <el-button
             v-if="canAdd"
@@ -44,6 +46,7 @@
     </template>
     <!-- 2026-08-22 a11y：selection 列所在 table 加 aria-label -->
     <el-table
+      ref="tableRef"
       :data="treeLineItems"
       row-key="id"
       aria-label="送货单明细列表"
@@ -64,113 +67,49 @@
         :selectable="(row: AssemblyTreeRow) => !row.is_asm_row"
       />
       <el-table-column type="index" label="#" width="50" />
-      <!-- 2026-08-02：每列加 v-if；订单号搬到图号/名称之间 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('batch_label')"
-        prop="batch_label" label="批次" min-width="100" sortable align="center">
-        <template #default="{ row }">
-          <template v-if="row.is_asm_row">—</template>
-          <template v-else>{{ row.batch_label || '—' }}</template>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('serial_no')"
-        prop="serial_no" label="序列号" min-width="120" sortable align="center">
-        <template #default="{ row }">
-          <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('drawing_no')"
-        prop="drawing_no" label="图号" min-width="140" sortable align="center"/>
-      <el-table-column
-        v-if="columnVisibility.isVisible('order_no')"
-        prop="order_no" label="订单号" min-width="120" show-overflow-tooltip sortable align="center">
-        <template #default="{ row }">{{ row.order_no || '—' }}</template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('name')"
-        label="名称" min-width="200" sortable align="center">
-        <template #default="{ row }">
-          <template v-if="row.is_asm_row">
-            <el-tag type="warning" size="small" class="asm-tag">装配件</el-tag>
-            <router-link
-              :to="`/assemblies/${row.assembly_id}`"
-              class="assembly-link"
-            >
-              {{ row.name }}
-            </router-link>
+      <!--
+        2026-08-27 T17：列顺序拖动接入。父 useDeliveryNoteDetail 注入的 columnDefs 仅含
+        key + label（无 prop / minWidth 等元数据），本组件本地构建一份 draggableColumnDefs
+        补齐 prop / minWidth / sortable / showOverflowTooltip / align 给 <el-table-column>
+        渲染；visibility 与 drag 共用 listKey `delivery_note_detail_line_items`。
+        装配件/零件两套渲染靠 cellRender + is_asm_row 分支。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
           </template>
-          <template v-else>{{ row.name }}</template>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('customer')"
-        prop="customer_name"
-        label="客户（二级）" min-width="160" show-overflow-tooltip sortable align="center">
-        <template #default="{ row }">
-          <span>{{ row.customer_path ?? row.customer_name ?? '—' }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('applicant_name')"
-        prop="applicant_name" label="申请人" min-width="100" sortable align="center">
-        <template #default="{ row }">{{ row.applicant_name || '—' }}</template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('quantity')"
-        label="数量" min-width="80" sortable align="center">
-        <template #default="{ row }">
-          <template v-if="row.is_asm_row">
-            <strong>1</strong> <span class="muted">套</span>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
           </template>
-          <template v-else>{{ row.quantity }}</template>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('request_date')"
-        label="请购日期" min-width="120" align="center">
-        <template #default="{ row }">{{ row.request_date || '—' }}</template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('planned_delivery_date')"
-        prop="planned_delivery_date"
-        label="计划交期" min-width="120" sortable align="center">
-        <template #default="{ row }">{{ row.planned_delivery_date || '—' }}</template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('system_delivery_date')"
-        prop="system_delivery_date"
-        label="系统交期" min-width="120" sortable align="center">
-        <template #default="{ row }">{{ row.system_delivery_date || '—' }}</template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('note')"
-        label="备注" min-width="120" show-overflow-tooltip align="center">
-        <template #default="{ row }">{{ row.note || '—' }}</template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('status')"
-        label="状态" min-width="120" align="center">
-        <template #default="{ row }">
-          <template v-if="row.is_asm_row">—</template>
-          <el-tag
-            v-else
-            :type="partStatusTagType(row.status)"
-            effect="plain"
-            size="small"
-          >
-            {{ partStatusLabel(row.status) }}
-          </el-tag>
-        </template>
-      </el-table-column>
+        </el-table-column>
+      </template>
     </el-table>
   </el-card>
 </template>
 
 <script setup lang="ts">
+import { h, onMounted, ref } from 'vue'
+import { ElTag } from 'element-plus'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import type { ColumnDef } from '@/composables/useColumnVisibility'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import {
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
+import { findElTableThead } from '@/utils/elTable'
 import type { DeliveryNoteDetailOut } from '@/types/deliveryNote'
 import type { AssemblyTreeRow } from '../composables/useDeliveryNoteDetail'
 
@@ -198,7 +137,7 @@ interface Props {
   deliveryLineRowClassName: (ctx: { row: AssemblyTreeRow }) => string
 }
 
-defineProps<Props>()
+const props = defineProps<Props>()
 
 const emit = defineEmits<{
   /** 点「添加零件」 */
@@ -213,6 +152,92 @@ const emit = defineEmits<{
     order: 'ascending' | 'descending' | null
   }): void
 }>()
+
+// 2026-08-27 T17：列顺序拖动接入。
+// 本地构建 draggableColumnDefs 给 v-for 模板用：补齐 prop / minWidth / sortable /
+// showOverflowTooltip / align。key 集合与父 useDeliveryNoteDetail 注入的 columnDefs 一致，
+// 所以 visibility popover 与 drag 顺序存储互不打架。
+// 装配件行（is_asm_row=true）与零件行（false）渲染分支用 cellRender 处理。
+function renderBatchLabel({ row }: { row: unknown }): ReturnType<typeof h> {
+  const r = row as AssemblyTreeRow
+  return r.is_asm_row
+    ? h('span', null, () => '—')
+    : h('span', null, () => r.batch_label || '—')
+}
+function renderName({ row }: { row: unknown }): ReturnType<typeof h> {
+  const r = row as AssemblyTreeRow
+  if (r.is_asm_row) {
+    return h('div', null, () => [
+      h(ElTag, { type: 'warning', size: 'small', class: 'asm-tag' }, () => '装配件'),
+      h('router-link',
+        { to: `/assemblies/${r.assembly_id}`, class: 'assembly-link' },
+        () => r.name),
+    ])
+  }
+  return h('span', null, () => r.name)
+}
+function renderQuantity({ row }: { row: unknown }): ReturnType<typeof h> {
+  const r = row as AssemblyTreeRow
+  if (r.is_asm_row) {
+    return h('div', null, () => [
+      h('strong', null, () => '1'),
+      h('span', { class: 'muted' }, () => '套'),
+    ])
+  }
+  return h('span', null, () => r.quantity)
+}
+function renderStatus({ row }: { row: unknown }): ReturnType<typeof h> {
+  const r = row as AssemblyTreeRow
+  if (r.is_asm_row) return h('span', null, () => '—')
+  return h(ElTag,
+    { type: props.partStatusTagType(r.status), effect: 'plain', size: 'small' },
+    () => props.partStatusLabel(r.status))
+}
+
+const draggableColumnDefs: ColumnDef[] = [
+  { key: 'batch_label', label: '批次', minWidth: 100, sortable: true, align: 'center',
+    cellRender: renderBatchLabel },
+  { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 120, sortable: true, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as AssemblyTreeRow
+      return h('span', { class: { muted: !r.serial_no } }, () => r.serial_no || '—')
+    } },
+  { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 140, sortable: true, align: 'center' },
+  { key: 'order_no', label: '订单号', prop: 'order_no', minWidth: 120, showOverflowTooltip: true, sortable: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as AssemblyTreeRow).order_no || '—') },
+  { key: 'name', label: '名称', minWidth: 200, sortable: true, align: 'center',
+    cellRender: renderName },
+  { key: 'customer', label: '客户（二级）', prop: 'customer_name', minWidth: 160, showOverflowTooltip: true, sortable: true, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as AssemblyTreeRow
+      return h('span', null, () => r.customer_path ?? r.customer_name ?? '—')
+    } },
+  { key: 'applicant_name', label: '申请人', prop: 'applicant_name', minWidth: 100, sortable: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as AssemblyTreeRow).applicant_name || '—') },
+  { key: 'quantity', label: '数量', minWidth: 80, sortable: true, align: 'center',
+    cellRender: renderQuantity },
+  { key: 'request_date', label: '请购日期', minWidth: 120, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as AssemblyTreeRow).request_date || '—') },
+  { key: 'planned_delivery_date', label: '计划交期', prop: 'planned_delivery_date', minWidth: 120, sortable: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as AssemblyTreeRow).planned_delivery_date || '—') },
+  { key: 'system_delivery_date', label: '系统交期', prop: 'system_delivery_date', minWidth: 120, sortable: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as AssemblyTreeRow).system_delivery_date || '—') },
+  { key: 'note', label: '备注', minWidth: 120, showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as AssemblyTreeRow).note || '—') },
+  { key: 'status', label: '状态', minWidth: 120, align: 'center',
+    cellRender: renderStatus },
+]
+const drag = useColumnDrag(draggableColumnDefs, { listKey: 'delivery_note_detail_line_items' })
+
+const tableRef = ref()
+// 2026-08-27 T17：列拖动 onMounted 挂 useDraggable 到 <thead>。el-card v-if="note" 在
+// note 加载完后一直为 true，el-table 持续在 DOM → HTMLElement 路径。
+onMounted(() => {
+  const root = tableRef.value?.$el as HTMLElement | undefined
+  if (!root) return
+  const thead = findElTableThead(root)
+  if (thead) drag.applyDrag(thead)
+})
 
 function onSelectionChange(rows: AssemblyTreeRow[]): void {
   emit('update:selectedItemIds', rows.map((r) => r.id))

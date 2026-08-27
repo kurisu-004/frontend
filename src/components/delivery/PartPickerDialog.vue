@@ -10,8 +10,8 @@
 //   - el-input-number：references/form.md §InputNumber
 //     > Source: https://element-plus.org/zh-CN/component/input-number.html
 
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ElMessage, ElTag } from 'element-plus'
 import type { TableInstance } from 'element-plus'
 import type {
   DeliveryNoteCandidatePart,
@@ -24,8 +24,15 @@ import {
 } from '@/utils/scanHelpers'
 import type { PartItem } from '@/api/parts'
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
+import { findElTableThead } from '@/utils/elTable'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 // 2026-08-07 picker 富化：L2 客户列 / 全屏 / 多选筛选 / 扫码拦截
 //   - el-dialog fullscreen：references/feedback.md §ElDialog
 //   - el-select multiple + collapse-tags + max-collapse-tags：form.md §el-select
@@ -57,6 +64,7 @@ const qtyMap = ref<Record<string, number>>({})
 
 // 2026-08-04：扫码枪扫码勾选 — 仅按 serial_no 严格匹配（用户决定）。
 // 候选行已 INSPECTION/READY_TO_SHIP 过滤，所以 0 命中 = 零件不在可入单状态 → 走报工台风格位置提示。
+// tableRef 复用于扫码 toggleRowSelection + 2026-08-27 列顺序拖动挂载；保留原始类型。
 const tableRef = ref<TableInstance | null>(null)
 /** 扫码命中行 0.8s 背景闪烁（row-class-name 用） */
 const scanFlashBatchIds = ref<Set<string>>(new Set())
@@ -73,21 +81,54 @@ const existingSet = computed(
   () => new Set(props.existingBatchIds ?? []),
 )
 
-// ============ 列可见性 ============
+// ============ 列可见性 + 列顺序拖动 ============
 // 「selection 勾选列」「入单数量」操作列不放进 defs → 始终可见
-const columnDefs = [
-  { key: 'batch_label', label: '批次' },
-  { key: 'serial_no', label: '序列号' },
-  { key: 'drawing_no', label: '图号' },
-  { key: 'name', label: '名称' },
-  { key: 'order_no', label: '订单号' },
-  { key: 'quantity', label: '批次量' },
-  { key: 'customer_name', label: '二级客户' },  // 2026-08-07 picker 富化
-  { key: 'applicant_name', label: '申请人' },
-  { key: 'status', label: '状态' },
-  { key: 'planned_delivery_date', label: '交期' },
-] as const
+// 2026-08-27 T17：补 prop / minWidth / align + 文本列 / ElTag 列走 cellRender(PartListShell 同款)。
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'batch_label', label: '批次', minWidth: 100, align: 'center',
+    cellRender: ({ row }) => h('span', { class: 'batch-label' }, () => (row as DeliveryNoteCandidatePart).batch_label),
+  },
+  { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 110, sortable: true, align: 'center' },
+  { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 110, sortable: true, align: 'center' },
+  { key: 'name', label: '名称', prop: 'name', minWidth: 140, showOverflowTooltip: true, sortable: true, align: 'center' },
+  {
+    key: 'order_no', label: '订单号', prop: 'order_no', minWidth: 120, showOverflowTooltip: true, sortable: true, align: 'center',
+    cellRender: ({ row }) => h('span', { class: { muted: !(row as DeliveryNoteCandidatePart).order_no } },
+      () => (row as DeliveryNoteCandidatePart).order_no || '—'),
+  },
+  {
+    key: 'quantity', label: '批次量', width: 80, align: 'right',
+    cellRender: ({ row }) => h('span', null, () => (row as DeliveryNoteCandidatePart).quantity),
+  },
+  {
+    key: 'customer_name', label: '二级客户', prop: 'customer_name', minWidth: 130, showOverflowTooltip: true, sortable: true, align: 'center',  // 2026-08-07 picker 富化
+    cellRender: ({ row }) => h('span', { class: { muted: !(row as DeliveryNoteCandidatePart).customer_name } },
+      () => (row as DeliveryNoteCandidatePart).customer_name || '—'),
+  },
+  { key: 'applicant_name', label: '申请人', prop: 'applicant_name', minWidth: 90, align: 'center' },
+  {
+    key: 'status', label: '状态', minWidth: 110, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as DeliveryNoteCandidatePart
+      const tagType = r.status === 'READY_TO_SHIP' ? 'success' : r.status === 'INSPECTION' ? 'warning' : 'info'
+      const tagLabel = r.status === 'READY_TO_SHIP' ? '已通过品检' : r.status === 'INSPECTION' ? '待检' : r.status
+      // cellRender 必须返回单个 VNode；多根标签包 <div>。
+      const onNote = existingSet.value.has(r.batch_id)
+      return onNote
+        ? h('div', null, () => [
+            h(ElTag, { type: tagType, effect: 'light', size: 'small' }, () => tagLabel),
+            h(ElTag, { type: 'info', effect: 'plain', size: 'small', style: 'margin-left: 4px' }, () => '已在单上'),
+          ])
+        : h(ElTag, { type: tagType, effect: 'light', size: 'small' }, () => tagLabel)
+    },
+  },
+  { key: 'planned_delivery_date', label: '交期', prop: 'planned_delivery_date', minWidth: 110, sortable: true, align: 'center' },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_part_picker' })
+const drag = useColumnDrag(columnDefs, { listKey: 'delivery_part_picker' })
+// 2026-08-27 T17：列拖动 onMounted 挂 useDraggable 到 <thead>。
+// 本组件 el-dialog 默认不带 destroy-on-close，el-table 内容持续在 DOM → HTMLElement 路径。
 
 // ============ 2026-08-07：二级客户多选筛选 ============
 /** 多选集合（每个元素是 customer_name 字符串）。空数组 = 不过滤。 */
@@ -297,6 +338,15 @@ function onPickerBatchPicked(p: PartItem): void {
   }
 }
 
+// 2026-08-27 T17：列顺序拖动挂 useDraggable 到 <thead>（HTMLElement 路径）。
+// el-dialog 默认不带 destroy-on-close，el-table 内容始终在 DOM，弹框打开时挂一次即可。
+onMounted(() => {
+  const root = tableRef.value?.$el as HTMLElement | undefined
+  if (!root) return
+  const thead = findElTableThead(root)
+  if (thead) drag.applyDrag(thead)
+})
+
 onBeforeUnmount(() => {
   unsubPickerScan.value?.()
   unsubPickerScan.value = null
@@ -347,6 +397,7 @@ onBeforeUnmount(() => {
           :model-value="columnVisibility.currentMap"
           @update:model-value="columnVisibility.update"
           @reset="columnVisibility.showAll"
+          @reset-order="drag.reset"
         />
       </div>
     </div>
@@ -363,38 +414,35 @@ onBeforeUnmount(() => {
       :row-class-name="rowClass"
       @selection-change="onSelectionChange"
     >
+      <!-- selection 勾选列不放进 defs → 始终可见 -->
       <el-table-column type="selection" width="55" :selectable="rowSelectable" />
-      <el-table-column v-if="columnVisibility.isVisible('batch_label')" label="批次" min-width="100" align="center">
-        <template #default="{ row }">
-          <span class="batch-label">{{ row.batch_label }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column v-if="columnVisibility.isVisible('serial_no')" prop="serial_no" label="序列号" min-width="110" sortable align="center"/>
-      <el-table-column v-if="columnVisibility.isVisible('drawing_no')" prop="drawing_no" label="图号" min-width="110" sortable align="center"/>
-      <el-table-column v-if="columnVisibility.isVisible('name')" prop="name" label="名称" min-width="140" show-overflow-tooltip sortable align="center"/>
-      <!-- 2026-08-01：图号后新增订单号列（与详情页一致），可排序 -->
-      <el-table-column v-if="columnVisibility.isVisible('order_no')" prop="order_no" label="订单号" min-width="120" show-overflow-tooltip sortable align="center">
-        <template #default="{ row }">
-          <span :class="{ muted: !row.order_no }">{{ row.order_no || '—' }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column v-if="columnVisibility.isVisible('quantity')" label="批次量" width="80" align="right">
-        <template #default="{ row }">{{ row.quantity }}</template>
-      </el-table-column>
-      <!-- 2026-08-07 picker 富化：二级客户列（prop 用于排序 / 筛选 / 显隐） -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('customer_name')"
-        prop="customer_name"
-        label="二级客户"
-        min-width="130"
-        show-overflow-tooltip
-        sortable
-        align="center"
-      >
-        <template #default="{ row }">
-          <span :class="{ muted: !row.customer_name }">{{ row.customer_name || '—' }}</span>
-        </template>
-      </el-table-column>
+      <!--
+        2026-08-27 T17：列顺序拖动接入。visibility 与 drag 共用 listKey `delivery_part_picker`。
+        「入单数量」列因 el-input-number + 受控 v-model 不便走 cellRender → 保留字面量放在 v-for 之后。
+        状态列的「已在单上」旁标同理保留字面量（与 drag 互不冲突：旁标在 status 列右侧渲染，sortablejs 只看 <th>）。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
+      <!-- 入单数量列（受控 el-input-number + qtyMap；保留字面量） -->
       <el-table-column label="入单数量" width="150" align="center">
         <template #default="{ row }">
           <el-input-number
@@ -410,28 +458,6 @@ onBeforeUnmount(() => {
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column v-if="columnVisibility.isVisible('applicant_name')" prop="applicant_name" label="申请人" min-width="90" align="center"/>
-      <el-table-column v-if="columnVisibility.isVisible('status')" label="状态" min-width="110" align="center">
-        <template #default="{ row }">
-          <el-tag
-            :type="statusTagType(row.status)"
-            effect="light"
-            size="small"
-          >
-            {{ statusLabel(row.status) }}
-          </el-tag>
-          <el-tag
-            v-if="existingSet.has(row.batch_id)"
-            type="info"
-            effect="plain"
-            size="small"
-            style="margin-left: 4px"
-          >
-            已在单上
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column v-if="columnVisibility.isVisible('planned_delivery_date')" prop="planned_delivery_date" label="交期" min-width="110" sortable align="center"/>
     </el-table>
 
     <template #footer>
