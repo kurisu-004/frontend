@@ -137,6 +137,7 @@ EP 2.14.x 还没有 `<el-config-provider :theme>` 这个 prop，官方文档（t
 | 树形 | `:tree-props="{ children: 'children' }"` + `row-key` |
 | 选中行色 | 全局已在 `index.scss` 提到 `#cce0f4`，带状态的行（`row-urgent` 等）由组件 `:deep()` 继续覆盖 |
 | 大数据 | 默认不开虚拟滚动；> 1000 行考虑 `:virtual-scroll="true"`（见 `responsive-and-layout.md`） |
+| ⚠️ 列插槽守卫 | EP 会用**合成空行** `{ row: {}, $index: -1 }` 额外渲染每列 `#default` 一次并挂进 `.hidden-columns`。插槽里依赖 `row.xxx` 的动态绑定组件（如 `:to` 动态的 `router-link`）**会真的挂载**，必须加 `v-if="row.id"` 之类的守卫。详见 [`08-known-risks/framework-pitfalls.md`](../08-known-risks/framework-pitfalls.md) |
 
 ### el-form
 
