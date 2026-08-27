@@ -242,7 +242,12 @@ const edit = usePartInlineEdit({
   isBatchMode: () => batch.batchMode.value,
 })
 
-const columnDefs: ColumnDef[] = [
+// F2 fix（2026-08-27 Task 6 review）：unit_price / total_price 列从 columnDefs
+// 条件性包含，非 canEdit 用户（INSPECTOR）整列隐藏 — 恢复原 v-if canEdit gate 行为。
+// 18 列拆 base（前 9 列）+ price（10-11 列，仅 canEdit）+ tail（后 7 列），
+// 条件性 spread 保持原默认顺序；useColumnVisibility / useColumnDrag 在 setup 期
+// 一次性拿到 snapshot，canEdit 是 setup 期静态布尔，不会变。
+const baseColumnDefs: ColumnDef[] = [
   // 1. 序列号（popover + 普通 cell；fixed='left' → 默认不可拖）
   {
     key: 'serial_no',
@@ -594,8 +599,12 @@ const columnDefs: ColumnDef[] = [
       return h('span', null, () => r.delivered_quantity ?? 0)
     },
   },
+]
 
-  // 10. 单价（canEdit 闸门；el-input-number 编辑）
+// 仅 canEdit 用户（MANAGER / CLERK）看到；INSPECTOR 整列隐藏 — 见 usePartInlineEdit
+// 与原 PartsTable `v-if="canEdit && columnVisibility.isVisible(...)"` 行为对齐。
+const priceColumnDefs: ColumnDef[] = [
+  // 10. 单价（el-input-number 编辑）
   {
     key: 'unit_price',
     label: '单价',
@@ -622,7 +631,7 @@ const columnDefs: ColumnDef[] = [
     },
   },
 
-  // 11. 总价（computed；canEdit 闸门同 unit_price）
+  // 11. 总价（computed）
   {
     key: 'total_price',
     label: '总价',
@@ -636,7 +645,9 @@ const columnDefs: ColumnDef[] = [
       return h('span', null, () => edit.displayTotalPrice(r))
     },
   },
+]
 
+const tailColumnDefs: ColumnDef[] = [
   // 12. 请购日期（popover + el-date-picker 编辑）
   {
     key: 'request_date',
@@ -927,6 +938,12 @@ const columnDefs: ColumnDef[] = [
       return h('span', null, () => r.note || '—')
     },
   },
+]
+
+const columnDefs: ColumnDef[] = [
+  ...baseColumnDefs,
+  ...(canEdit ? priceColumnDefs : []),
+  ...tailColumnDefs,
 ]
 
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'parts_list_columns' })

@@ -61,13 +61,12 @@
       />
 
       <!--
-        2..19. 18 列数据列（2026-08-27 Task 6 接入）
+        2..19. 18 列数据列（2026-08-27 Task 6 接入，2026-08-27 fix 升级手柄覆盖）
         drag.orderedDefs 提供持久化顺序；columnDefs.cellRender / headerRender 工厂
         在 PartsList.vue 里持有 filter ref / editingId / editBuffer 等响应式闭包。
-        #header 插槽两套：
-          - 有 headerRender 的列（ColumnFilterPopover 9 列 + status / next_process 自定义 badge）：
-            走 d.headerRender(scope)；拖动手柄放在 popover 内部 / 自定义 span 内。
-          - 无 headerRender 的可拖列（非 type / 非 fixed）：渲染 label + ColumnDragHandle。
+        #header 统一模板：headerRender VNode + (无 headerRender 时) d.label 文字 +
+        末尾 ColumnDragHandle。手柄始终渲染，因此 9 列 ColumnFilterPopover +
+        2 列 status / next_process badge 都能拖动。
         sortablejs 通过 .col-no-drag filter 跳过 type=selection/index/expand 与 fixed 列。
       -->
       <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
@@ -98,14 +97,18 @@
           "
           :column-key="d.columnKey ?? d.key"
         >
-          <!-- 自定义表头（ColumnFilterPopover / 选中计数 badge） -->
-          <template v-if="d.headerRender" #header="scope">
-            <component :is="d.headerRender(scope)" />
-          </template>
-          <!-- 可拖列的默认 label + 拖动手柄（无 headerRender 时走这里） -->
-          <template v-else-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
-            <span>{{ d.label }}</span>
-            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          <!-- 自定义表头（ColumnFilterPopover / 选中计数 badge）+ 默认 label +
+            拖动手柄三件套：2026-08-27 fix 把 ColumnDragHandle 提到条件外，
+            此前 v-if/v-else-if 互斥导致 11/18 列（9 列 ColumnFilterPopover +
+            status / next_process badge）走 headerRender 分支后没有手柄，
+            sortablejs handle='.col-drag-handle' 抓不到 → 用户无法拖动。
+            现在统一一个 #header 模板：headerRender 走其自定义 VNode，
+            无 headerRender 时落回 d.label 文字；手柄始终追加在末尾
+            （resolveDraggable(d) && !d.type && !d.fixed 时）。 -->
+          <template v-if="d.headerRender || (resolveDraggable(d) && !d.type && !d.fixed)" #header="scope">
+            <component v-if="d.headerRender" :is="d.headerRender(scope)" />
+            <span v-else>{{ d.label }}</span>
+            <ColumnDragHandle v-if="resolveDraggable(d) && !d.type && !d.fixed" :title="`拖动 ${d.label} 列`" />
           </template>
           <!-- 自定义单元格（editing 切换 / 状态 tag / 链接 / 装配件 tag 等） -->
           <template v-if="d.cellRender" #default="scope">
