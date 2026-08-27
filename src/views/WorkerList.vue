@@ -44,9 +44,11 @@
         :defs="columnDefs"
         :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
       />
     </div>
     <el-table
+      ref="tableRef"
       :data="rows"
       row-key="id"
       v-loading="loading"
@@ -58,43 +60,32 @@
         <el-empty description="暂无工人" />
       </template>
       <el-table-column type="index" label="#" width="50" />
-      <el-table-column
-        v-if="columnVisibility.isVisible('badge_code')"
-        prop="badge_code" label="工牌码" min-width="160" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('name')"
-        prop="name" label="姓名" min-width="120" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('work_type')"
-        label="工种" min-width="120" align="center"
-      >
-        <template #default="{ row }">
-          <el-tag v-if="(row as Worker).work_type_id" size="small" type="primary">
-            {{ workTypeNameById[(row as Worker).work_type_id!] || '...' }}
-          </el-tag>
-          <span v-else style="color: #c0c4cc">未分配</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('is_active')"
-        label="状态" min-width="100" align="center"
-      >
-        <template #default="{ row }">
-          <el-tag :type="(row as Worker).is_active ? 'success' : 'info'" effect="light" size="small">
-            {{ (row as Worker).is_active ? '在职' : '停用' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('created_at')"
-        prop="created_at" label="创建时间" min-width="170" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('updated_at')"
-        prop="updated_at" label="更新时间" min-width="170" align="center"
-      />
+      <!--
+        2026-08-27 T15：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+        用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+        type=index / fixed="right" 操作列保留为字面量 <el-table-column>。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
       <el-table-column label="操作" min-width="220" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="onEdit(row as Worker)">编辑</el-button>
@@ -157,12 +148,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, h, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import { useDialogSize } from '@/composables/useDialogSize'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
+import { findElTableThead } from '@/utils/elTable'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import {
   createWorker,
@@ -199,18 +197,39 @@ const { restore: restoreWorkerFilter, clear: clearWorkerFilter } = useListStateP
   { search },
 )
 
-// ============ 列可见性 ============
-// 「#」和「操作」列不放进 defs → 始终可见
-const columnDefs = [
-  { key: 'badge_code', label: '工牌码' },
-  { key: 'name', label: '姓名' },
-  { key: 'work_type', label: '工种' },
-  { key: 'is_active', label: '状态' },
-  { key: 'created_at', label: '创建时间' },
-  { key: 'updated_at', label: '更新时间' },
-] as const
+// ============ 列可见性 + 列顺序拖动 ============
+// 「#」和「操作」列不放进 defs → 始终可见。
+// 2026-08-27 T15：补 prop / width / minWidth / align + 复杂单元格走 cellRender(PartListShell 同款)。
+const columnDefs: ColumnDef[] = [
+  { key: 'badge_code', label: '工牌码', prop: 'badge_code', minWidth: 160, align: 'center' },
+  { key: 'name', label: '姓名', prop: 'name', minWidth: 120, align: 'center' },
+  {
+    key: 'work_type', label: '工种', minWidth: 120, align: 'center',
+    cellRender: ({ row }) => {
+      const w = row as Worker
+      return w.work_type_id
+        ? h(ElTag, { size: 'small', type: 'primary' },
+            () => workTypeNameById.value[w.work_type_id!] || '...')
+        : h('span', { style: 'color: #c0c4cc' }, () => '未分配')
+    },
+  },
+  {
+    key: 'is_active', label: '状态', minWidth: 100, align: 'center',
+    cellRender: ({ row }) => {
+      const w = row as Worker
+      return h(ElTag, {
+        type: w.is_active ? 'success' : 'info', effect: 'light', size: 'small',
+      }, () => w.is_active ? '在职' : '停用')
+    },
+  },
+  { key: 'created_at', label: '创建时间', prop: 'created_at', minWidth: 170, align: 'center' },
+  { key: 'updated_at', label: '更新时间', prop: 'updated_at', minWidth: 170, align: 'center' },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'worker_list' })
+const drag = useColumnDrag(columnDefs, { listKey: 'worker_list' })
 
+// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到 <thead>
+const tableRef = ref()
 const dialogVisible = ref(false)
 const editing = ref<Worker | null>(null)
 const form = reactive<{ badge_code: string; name: string; work_type_id: string | null }>({
@@ -338,6 +357,12 @@ onMounted(async () => {
   } catch {
     // 不阻塞主页面
   }
+  // 2026-08-27 T15：列顺序拖动挂 useDraggable 到 <thead>。tableRef.value 是 EP el-table 组件实例，
+  // $el 是其根容器；findElTableThead 走固定 selector 取真正的 <thead>。
+  const root = tableRef.value?.$el as HTMLElement | undefined
+  if (!root) return
+  const thead = findElTableThead(root)
+  if (thead) drag.applyDrag(thead)
 })
 </script>
 

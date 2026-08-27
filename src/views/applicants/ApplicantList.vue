@@ -58,9 +58,11 @@
           :defs="columnDefs"
           :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
           @reset="columnVisibility.showAll"
+          @reset-order="drag.reset"
         />
       </div>
       <el-table
+        ref="tableRef"
         :data="rows"
         v-loading="loading"
         row-key="id"
@@ -74,26 +76,32 @@
         </template>
 
         <el-table-column type="index" label="#" width="50" />
-        <el-table-column
-          v-if="columnVisibility.isVisible('name')"
-          prop="name" label="姓名" min-width="160" align="center"
-        />
-        <el-table-column
-          v-if="columnVisibility.isVisible('customer_name')"
-          label="所属一级客户" min-width="180" align="center"
-        >
-          <template #default="{ row }">
-            {{ row.customer_name || '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-if="columnVisibility.isVisible('created_at')"
-          label="创建时间" min-width="180" align="center"
-        >
-          <template #default="{ row }">
-            {{ formatDateTime(row.created_at) }}
-          </template>
-        </el-table-column>
+        <!--
+          2026-08-27 T15：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+          用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+          type=index / fixed="right" 操作列保留为字面量 <el-table-column>。
+        -->
+        <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+          <el-table-column
+            v-if="columnVisibility.isVisible(d.key)"
+            :prop="d.prop ?? d.key"
+            :label="d.label"
+            :width="d.width"
+            :min-width="d.minWidth"
+            :sortable="d.sortable"
+            :align="d.align"
+            :show-overflow-tooltip="d.showOverflowTooltip"
+            :column-key="d.columnKey ?? d.key"
+          >
+            <template v-if="d.cellRender" #default="scope">
+              <component :is="d.cellRender(scope)" />
+            </template>
+            <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+              <span>{{ d.label }}</span>
+              <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+            </template>
+          </el-table-column>
+        </template>
         <el-table-column label="操作" min-width="180" fixed="right" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="onEdit(row as Applicant)">编辑</el-button>
@@ -148,12 +156,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, RefreshLeft, Search } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useDialogSize } from '@/composables/useDialogSize'
+import { findElTableThead } from '@/utils/elTable'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import { listCustomers, type Customer } from '@/api/customer'
 import {
@@ -167,20 +182,30 @@ import type { Applicant } from '@/types/applicant'
 // 改为 utils/date.formatDateTime（toISOString → UTC）。若后端发无 'Z' 的本地时间会相差 8h。
 import { formatDateTime } from '@/utils/date'
 
-// ============ 列可见性 ============
-// 「#」和「操作」列不放进 defs → 始终可见,且不出现在列设置弹窗
-const columnDefs = [
-  { key: 'name', label: '姓名' },
-  { key: 'customer_name', label: '所属一级客户' },
-  { key: 'created_at', label: '创建时间' },
-] as const
+// ============ 列可见性 + 列顺序拖动 ============
+// 「#」和「操作」列不放进 defs → 始终可见,且不出现在列设置弹窗。
+// 2026-08-27 T15：补 prop / minWidth / align + 文本列走 cellRender(PartListShell 同款)。
+const columnDefs: ColumnDef[] = [
+  { key: 'name', label: '姓名', prop: 'name', minWidth: 160, align: 'center' },
+  {
+    key: 'customer_name', label: '所属一级客户', minWidth: 180, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as Applicant).customer_name || '—'),
+  },
+  {
+    key: 'created_at', label: '创建时间', minWidth: 180, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => formatDateTime((row as Applicant).created_at)),
+  },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'applicant_list' })
+const drag = useColumnDrag(columnDefs, { listKey: 'applicant_list' })
 
 const loading = ref(false)
 const saving = ref(false)
 const rows = ref<Applicant[]>([])
 const customers = ref<Customer[]>([])
 const search = reactive({ customerId: '' as string | '', nameLike: '' })
+// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到 <thead>
+const tableRef = ref()
 
 // ============ 筛选状态持久化 ============
 const { restore: restoreApplicantFilter, clear: clearApplicantFilter } = useListStatePersist(
@@ -316,6 +341,11 @@ onMounted(async () => {
   }
   await loadCustomers()
   await fetchList()
+  // 2026-08-27 T15：列顺序拖动挂 useDraggable 到 <thead>
+  const root = tableRef.value?.$el as HTMLElement | undefined
+  if (!root) return
+  const thead = findElTableThead(root)
+  if (thead) drag.applyDrag(thead)
 })
 </script>
 
