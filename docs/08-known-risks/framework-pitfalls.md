@@ -113,6 +113,63 @@ node_modules/vue-draggable-plus/dist/vue-draggable-plus.js
 
 已修：`src/views/workers/WorkerQueueBoard.vue`（2026-08-27，commit `f73afd4`）。
 
+## 4. el-table 列拖动的 `applyDrag` 必须传 Ref 而非一次性 HTMLElement
+
+### 现象
+
+`useColumnDrag`（`src/composables/useColumnDrag.ts`）首次挂载时列拖动工作；下列情形之一出现后**再次渲染即失效**：
+
+- 关闭带 `destroy-on-close` 的 el-dialog 后再次打开；
+- 切换 `<el-tab-pane :lazy="true">` / `<el-tab-pane>` 的 `v-if`；
+- el-drawer 懒加载 body 后再次显示；
+- 任何 el-table 父容器走 `v-if` 重建后再显示。
+
+### 机制
+
+`useDraggable` 绑死 setup 期解析到的 `<thead>` DOM 节点；EP 销毁旧节点时**不会通知 vue-draggable-plus 去 destroy Sortable 实例**，而新节点（即使是同名 `<thead>`）也不会被自动绑定。这跟第 2 节（`useLazyDraggable` 解决 `el=null` 崩溃）是同一类问题的两个面：
+
+| | 第 2 节 | 第 4 节（本文） |
+|---|---|---|
+| 触发时机 | setup 期 | 运行期 |
+| 状态变化 | `null → HTMLElement` | `HTMLElement → null → 新 HTMLElement` |
+| 表现 | 抛错 | 静默失效 |
+
+### 规则
+
+**调 `useColumnDrag(...).applyDrag()` 时，传 `<thead>` 的 Ref 签名，不要传一次性 `HTMLElement`。**
+
+```ts
+// ✅ Ref 签名（自愈）
+const theadRef = ref<HTMLElement | null>(null)
+watch(tableRef, (instance) => {
+  if (!instance?.$el) return
+  nextTick(() => {
+    const thead = findElTableThead(instance.$el as HTMLElement)
+    if (thead) theadRef.value = thead   // 触发 useColumnDrag Ref 路径的 watch
+  })
+}, { immediate: true, flush: 'post' })
+
+const drag = useColumnDrag(columnDefs, { listKey })
+drag.applyDrag(theadRef)  // 内部走 watch + inner.start(el) 模式
+
+// ❌ HTMLElement 一次性签名（dialog/v-if/tab-lazy 场景下重渲染即失效）
+const thead = el.querySelector('thead')!
+drag.applyDrag(thead)
+```
+
+`useColumnDrag` 内部对 Ref 签名走 `immediate: false` + `watch + inner.start(el)` 模式：thead 重建后 ref 会被重新赋值，watch 触发，自动 destroy 旧实例 + 绑新实例。**HTMLElement 一次性签名仅适用于 el-table 在 `onMounted` 时已无条件存在**（顶层路由 + 同步挂载、不嵌 dialog、不走 v-if、不嵌 el-drawer-lazy）的场景。
+
+### 与硬约束 #10 的关系
+
+- 硬约束 #10 解决的是 setup 期 ref 为 null 时的崩溃；
+- 列拖动 Ref 路径解决的是「运行期 ref 从 HTMLElement 变 null 再变 HTMLElement」的同一类问题的更复杂版本，**符合 #10 的精神**。
+- Task 7/8 的某些文件曾用 `applyDrag(thead)` 一次性签名 + 内部走 `watch(tableRef)` 的「半 Ref」模式——这种模式在 dialog 重复开关时，旧的 Sortable 实例不会被 destroy，会**泄漏**。Task 9 已统一改为正确的 Ref 签名。
+
+### 相关提交
+
+- `f7b8f59 feat(table): useColumnDrag.applyDrag 支持 Ref 签名（dialog/v-if 自愈）`
+- `15c0bf4 feat(stats): B 组 statistics + assemblies 接入列拖动（4 文件）`（最后一个 review task，将所有 Ref 路径对齐到正确签名）
+
 ## 相关文档
 
 - [`docs/04-ui-and-styling/element-plus-integration.md`](../04-ui-and-styling/element-plus-integration.md) —— EP 按需加载 / 命令式 API CSS / locale / 主题色
