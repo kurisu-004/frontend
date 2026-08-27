@@ -22,7 +22,7 @@ import {
 } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Rank } from '@element-plus/icons-vue'
-import { useDraggable } from 'vue-draggable-plus'
+import { useLazyDraggable } from '@/composables/useLazyDraggable'
 
 import {
   printNote,
@@ -138,10 +138,11 @@ const previewRows = computed<PreviewRow[]>(() => {
   return result
 })
 
-// 2026-08-27：destructure start() — useDraggable 不监听 tbodyRef 变化，
-// 首次 onMounted 后只在初始化时绑定一次。<el-dialog destroy-on-close> 在
-// close 时销毁 slot → reopen 时 <tbody> 是新元素，必须手动 start() 重绑。
-const { start } = useDraggable(tbodyRef, rows, {
+// 2026-08-27 fix：tbodyRef 在 setup 时为 null（弹窗未打开），且 <el-dialog destroy-on-close>
+// 关闭时销毁 slot、reopen 时 <tbody> 是新元素。此前用 useDraggable 会在挂载时
+// new Sortable(null) 抛错（旧注释里「useDraggable 自动忽略」的说法是错的）。
+// 改用 useLazyDraggable：refreshTbodyRef() 写 ref 即自动重绑，无需手动 start()。
+useLazyDraggable(tbodyRef, rows, {
   handle: '.drag-handle',
   draggable: 'tr',
   animation: 150,
@@ -164,7 +165,6 @@ watch(
       rows.value = previewRows.value
       await nextTick()
       refreshTbodyRef()
-      start()  // 2026-08-27：close→reopen 时新 <tbody> 需手动重绑 sortable
       // 2026-08-07：label 模式默认全选
       if (isLabelMode.value) {
         await selectAll()
@@ -174,7 +174,7 @@ watch(
   // 2026-08-24 bugfix：扫码建单页用 v-if 挂载本组件，首次进入时 modelValue
   // 已经是 true（无 false→true 的「变化」），watch 默认不立即触发会导致
   // rows 永远是空数组。详情页始终挂载的调用方不受影响（mount 时 open=false，
-  // 不进 if 分支，tbodyRef 保持 null，useDraggable 自动忽略）。
+  // 不进 if 分支，tbodyRef 保持 null，useLazyDraggable 不会绑定）。
   { immediate: true },
 )
 
@@ -182,7 +182,6 @@ watch(previewRows, async (next) => {
   rows.value = next
   await nextTick()
   refreshTbodyRef()
-  start()  // 2026-08-27：previewRows 变化（合并模式切换）后 <tbody> 重建需重绑
   // 2026-08-07：合并模式切换后重置全选
   if (isLabelMode.value) {
     await selectAll()
@@ -209,7 +208,7 @@ function invertSelection(): void {
   rows.value.forEach((r) => t.toggleRowSelection(r, !chosen.has(r)))
 }
 
-/** 找到 el-table 渲染出的 tbody 并写到 tbodyRef；随后调用 start() 让 useDraggable 绑到当前 tbody。 */
+/** 找到 el-table 渲染出的 tbody 并写到 tbodyRef；useLazyDraggable 内部 watcher 看到 ref 变化即重绑。 */
 function refreshTbodyRef(): void {
   const root = previewTableRef.value?.$el
   if (!root) {
@@ -304,8 +303,8 @@ async function onConfirm(): Promise<void> {
 </script>
 
 <template>
-  <!-- 2026-08-27：destroy-on-close 会重建 slot 内的 <tbody>；watcher 在 reopen 时
-       refreshTbodyRef() + start() 强制 useDraggable 重新绑定新 tbody。 -->
+  <!-- 2026-08-27 fix：destroy-on-close 会重建 slot 内的 <tbody>；watcher 在 reopen 时
+       refreshTbodyRef() 写 tbodyRef，useLazyDraggable 内部 watcher 自动重绑新 tbody。 -->
   <el-dialog
     :model-value="modelValue"
     :title="isLabelMode
