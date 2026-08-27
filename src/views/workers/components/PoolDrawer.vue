@@ -26,7 +26,7 @@
 <script setup lang="ts">
 import { inject, ref, watch } from 'vue'
 import type { ComputedRef } from 'vue'
-import { useDraggable } from 'vue-draggable-plus'
+import { useLazyDraggable } from '@/composables/useLazyDraggable'
 import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool'
 import { consumeWorkerSource, recordWorkerSource, type DraggableStartEvent } from '../composables/dndSourceTracker'
 import WorkOrderCard from './WorkOrderCard.vue'
@@ -42,8 +42,13 @@ watch(
   (next) => { writablePoolBatches.value = next ? [...next] : [] },
   { deep: true, immediate: false },
 )
+// 2026-08-27 fix：containerRef 在 <div v-if="pool"> 内，而父级 activePool 在
+// WorkerQueueBoard 的 onMounted 里 await loadBoard() 解析前恒为 null，所以组件挂载
+// 瞬间 containerRef 必为 null。原 composable 默认 immediate:true 会在 onMounted 里
+// new Sortable(null) 抛错，且此后不再重绑（此前解构了 start 却从未调用，导致
+// 「工人列 → 工序池」的回退拖拽永久失效）。改用 useLazyDraggable 延后绑定。
 const containerRef = ref<HTMLElement | null>(null)
-const { start } = useDraggable(containerRef, writablePoolBatches, {
+useLazyDraggable(containerRef, writablePoolBatches, {
   group: 'work-orders',
   animation: 150,
   ghostClass: 'sortable-ghost',

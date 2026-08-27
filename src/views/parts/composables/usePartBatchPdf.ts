@@ -6,7 +6,7 @@
 import { computed, onBeforeUnmount, provide, reactive, ref, watch, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
-import { useDraggable } from 'vue-draggable-plus'
+import { useLazyDraggable } from '@/composables/useLazyDraggable'
 import {
   batchCreatePartsWithPdfs,
   type PartBatchFilePayload,
@@ -630,11 +630,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     pdfPreviewVisible.value = false
   }
 
-  // ============ 拖拽排序（vue-draggable-plus useDraggable） ============
+  // ============ 拖拽排序（vue-draggable-plus useLazyDraggable） ============
   // PR-H 2026-07-28：拖动 handle 列重排行顺序。
   // - 不接受嵌套展开行（child-table 不挂 sortable）；仅顶层独立零件 / 装配件行。
-  // - 2026-08-27 迁移：从 sortablejs 改用 vue-draggable-plus；useDraggable 在
-  //   setup 阶段调用后只初始化一次，el-table tbody 重建后必须手动 start() 重绑。
+  // - 2026-08-27 fix：两个 tbodyRef 在 setup 时均为 null，useDraggable 默认 immediate
+  //   会在挂载时 new Sortable(null) 抛错。改用 useLazyDraggable：给 ref 赋值即自动重绑，
+  //   覆盖 el-table 首次挂载与 EP 重建 tbody（行数变化 / v-if）两种时机。
   // - 表格 DOM ref 由本 composable 持有，通过 provide('partBatchPdfRefs') 暴露
   //   给 PartBatchPdfTab，模板用 :ref 回写。
   /** 拖拽收尾：把 list 从 oldIndex 挪到 newIndex，返回原地复制的 list 给响应式。 */
@@ -648,18 +649,14 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       list.value = next
     }
   }
-  const { start: startStandalone } = useDraggable(
-    standaloneTbodyRef,
-    standaloneParts,
-    {
-      handle: '.drag-handle',
-      draggable: 'tr',
-      animation: 150,
-      ghostClass: 'sortable-ghost',
-      onEnd: makeOnEnd(standaloneParts),
-    },
-  )
-  const { start: startAssemblies } = useDraggable(assembliesTbodyRef, assemblies, {
+  useLazyDraggable(standaloneTbodyRef, standaloneParts, {
+    handle: '.drag-handle',
+    draggable: 'tr',
+    animation: 150,
+    ghostClass: 'sortable-ghost',
+    onEnd: makeOnEnd(standaloneParts),
+  })
+  useLazyDraggable(assembliesTbodyRef, assemblies, {
     handle: '.drag-handle',
     draggable: 'tr',
     animation: 150,
@@ -667,13 +664,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     onEnd: makeOnEnd(assemblies),
   })
 
-  // 监听 tableRef 变化 → 重新解析 tbody 并 start() 重绑 sortable。
+  // 监听 tableRef 变化 → 重新解析 tbody 写回 ref；useLazyDraggable 内部 watcher 接管重绑。
   // 触发时机：el-table 首次挂载、行数变化（v-if / 数据长度变化）让 EP 重建 tbody。
   watch(
     standaloneTableRef,
     () => {
       standaloneTbodyRef.value = resolveTbody(standaloneTableRef)
-      if (standaloneTbodyRef.value) startStandalone()
     },
     { flush: 'post' },
   )
@@ -681,7 +677,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     assembliesTableRef,
     () => {
       assembliesTbodyRef.value = resolveTbody(assembliesTableRef)
-      if (assembliesTbodyRef.value) startAssemblies()
     },
     { flush: 'post' },
   )

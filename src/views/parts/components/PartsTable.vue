@@ -229,10 +229,15 @@
               effect="plain"
               style="margin-right: 4px;"
             >装配件</el-tag>
+            <!-- 2026-08-27 fix：EP 的 ElTableColumn 会用合成空行 {} 渲染一次列插槽并挂到
+                 .hidden-columns，此时 row.id 为 undefined 会生成 /parts/undefined，
+                 而路由约束是 parts/:id(\d+) → 触发 [Vue Router warn]。无 id 就不渲染链接。 -->
             <router-link
+              v-if="row.id"
               :to="row.row_type === 'ASSEMBLY' ? `/assemblies/${row.id}` : `/parts/${row.id}`"
               class="name-link"
             >{{ row.name }}</router-link>
+            <span v-else>{{ row.name }}</span>
           </template>
         </template>
       </el-table-column>
