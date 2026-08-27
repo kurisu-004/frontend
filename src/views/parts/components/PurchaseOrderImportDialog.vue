@@ -279,6 +279,7 @@
 import { computed, ref, watch } from 'vue'
 import type { UploadFile, UploadRawFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Upload } from '@element-plus/icons-vue'
 
 import { useDialogSize } from '@/composables/useDialogSize'
 import {
