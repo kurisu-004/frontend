@@ -16,11 +16,12 @@
 <script setup lang="ts">
 import {
   computed,
+  h,
   nextTick,
   ref,
   watch,
 } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElTag } from 'element-plus'
 import { Rank } from '@element-plus/icons-vue'
 import { useLazyDraggable } from '@/composables/useLazyDraggable'
 
@@ -34,6 +35,15 @@ import type {
   DeliveryNoteDetailOut,
   DeliveryNoteLineItem,
 } from '@/types/deliveryNote'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import { findElTableThead } from '@/utils/elTable'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -156,6 +166,64 @@ useLazyDraggable(tbodyRef, rows, {
     rows.value = next
   },
 })
+
+// 2026-08-27 Task 8：列顺序拖动 + 可见性。
+// el-dialog destroy-on-close → Ref 路径：watch(previewTableRef) 重建 thead 后自愈。
+// 与既有 useLazyDraggable 行拖（绑 tbody）独立 —— 列拖挂 thead，DOM 容器完全分离。
+// label 模式首列 selection 勾选列不进 defs（type='selection' 自动不可拖 + v-if 条件）。
+const columnDefs: ColumnDef[] = [
+  {
+    // 序号列：保留行拖手柄 .drag-handle（vue-draggable-plus 行拖的 handle 选择器）。
+    // cellRender 必须返回单个 VNode；行内多根包 <div>。
+    key: 'index', label: '序号', width: 72, align: 'center',
+    cellRender: ({ $index }) => h('div', null, () => [
+      h('span', { class: 'drag-handle', title: '拖动排序' }, () => h(Rank)),
+      h('span', { class: 'row-index' }, () => $index + 1),
+    ]),
+  },
+  {
+    key: 'order_no', label: '订单号', prop: 'order_no', minWidth: 120,
+    showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as PreviewRow).order_no || '—'),
+  },
+  {
+    key: 'customer_name', label: '分厂', prop: 'customer_name', minWidth: 160,
+    showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as PreviewRow).customer_name || '—'),
+  },
+  {
+    key: 'applicant_name', label: '申请人', prop: 'applicant_name', minWidth: 100, align: 'center',
+    cellRender: ({ row }) => h('span', null, () => (row as PreviewRow).applicant_name || '—'),
+  },
+  { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 140, align: 'center' },
+  {
+    key: 'name', label: '名称', minWidth: 180, showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PreviewRow
+      if (isAsmRow(r)) {
+        return h('div', null, () => [
+          h(ElTag, { type: 'warning', size: 'small', class: 'asm-tag' }, () => '装配件'),
+          h('span', null, () => r.name),
+        ])
+      }
+      return h('span', null, () => r.name)
+    },
+  },
+]
+// 「数量」列不进 defs：el-input-number 受控 v-model=r.quantity（asm 行） + 文本回退（普通行），
+// 不便走 cellRender（多分支 + EP 组件 + 受控 modelValue）。
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'print_preview_dialog' })
+const drag = useColumnDrag(columnDefs, { listKey: 'print_preview_dialog' })
+
+watch(previewTableRef, (instance) => {
+  if (!instance) return
+  void nextTick(() => {
+    const root = (instance as { $el?: HTMLElement }).$el
+    if (!root) return
+    const thead = findElTableThead(root)
+    if (thead) drag.applyDrag(thead)
+  })
+}, { flush: 'post' })
 
 watch(
   () => [props.modelValue, mergeMode.value],
@@ -335,6 +403,16 @@ async function onConfirm(): Promise<void> {
         <el-radio-button value="merge">合并一套</el-radio-button>
       </el-radio-group>
     </div>
+    <!-- 2026-08-27 Task 8：列设置工具条 -->
+    <div class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap"
+        @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
+      />
+    </div>
     <!-- 2026-08-22 a11y：selection 列所在的 table 加 aria-label -->
     <el-table
       ref="previewTableRef"
@@ -346,38 +424,30 @@ async function onConfirm(): Promise<void> {
       height="500"
       @selection-change="(v: PreviewRow[]) => (selectedRows = v)"
     >
-      <!-- 2026-08-07：label 模式首列加 el-table 原生 selection 勾选列 -->
+      <!-- 2026-08-07：label 模式首列加 el-table 原生 selection 勾选列（不进 defs：type='selection' 不可拖） -->
       <el-table-column v-if="isLabelMode" type="selection" width="48" />
-      <el-table-column width="72" align="center" label="序号">
-        <template #default="{ $index }">
-          <el-icon class="drag-handle" title="拖动排序"><Rank /></el-icon>
-          <span class="row-index">{{ $index + 1 }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        prop="order_no" label="订单号" min-width="120" show-overflow-tooltip align="center">
-        <template #default="{ row }">{{ row.order_no || '—' }}</template>
-      </el-table-column>
-      <el-table-column
-        prop="customer_name" label="分厂" min-width="160" show-overflow-tooltip align="center">
-        <template #default="{ row }">{{ row.customer_name || '—' }}</template>
-      </el-table-column>
-      <el-table-column
-        prop="applicant_name" label="申请人" min-width="100" align="center">
-        <template #default="{ row }">{{ row.applicant_name || '—' }}</template>
-      </el-table-column>
-      <el-table-column
-        prop="drawing_no" label="图号" min-width="140" align="center"/>
-      <el-table-column
-        label="名称" min-width="180" show-overflow-tooltip align="center">
-        <template #default="{ row }">
-          <template v-if="isAsmRow(row)">
-            <el-tag type="warning" size="small" class="asm-tag">装配件</el-tag>
-            {{ row.name }}
+      <!-- 2026-08-27 Task 8：列顺序拖动接入 -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :align="d.align"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
           </template>
-          <template v-else>{{ row.name }}</template>
-        </template>
-      </el-table-column>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
+      <!-- 「数量」列不进 defs：asm 行 el-input-number + 普通行文本 双分支不便走 cellRender -->
       <el-table-column
         label="数量" min-width="120" align="right">
         <template #default="{ row }">
@@ -406,6 +476,13 @@ async function onConfirm(): Promise<void> {
 </template>
 
 <style scoped>
+/* 2026-08-27 Task 8：列设置工具条 */
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
 .drag-handle {
   cursor: grab;
   color: var(--primary-color);
