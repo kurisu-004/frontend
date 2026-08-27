@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { nextTick } from 'vue'
+import { nextTick, ref, type Ref } from 'vue'
+import type { UseDraggableReturn } from 'vue-draggable-plus'
 import { useColumnDrag, columnIdentifier } from '../useColumnDrag'
 import type { ColumnDef } from '../useColumnVisibility'
 
@@ -7,6 +8,31 @@ import type { ColumnDef } from '../useColumnVisibility'
 vi.mock('../useAuthSession', () => ({
   useAuthSession: () => ({ user: { value: { id: 'u1' } } }),
 }))
+
+// mock vue-draggable-plus 里的 useDraggable，捕获 start/destroy 调用
+const startCalls: HTMLElement[] = []
+const destroyed: string[] = []
+vi.mock('vue-draggable-plus', async () => {
+  const actual = await vi.importActual<typeof import('vue-draggable-plus')>('vue-draggable-plus')
+  return {
+    ...actual,
+    useDraggable: <T>(_el: Ref<HTMLElement | null> | HTMLElement, _list: Ref<T[]>, opts: Record<string, unknown> & { immediate?: boolean }) => {
+      const inner: UseDraggableReturn = {
+        start: (el?: HTMLElement) => { if (el) startCalls.push(el) },
+        pause: () => {},
+        resume: () => {},
+        destroy: () => { destroyed.push('called') },
+        closest: () => null,
+        save: () => [],
+        toArray: () => [],
+        option: (name: string, value?: unknown) => value,
+      }
+      // 模拟 immediate:false → 不自动 start
+      if (opts.immediate !== false) startCalls.push(_el as HTMLElement)
+      return inner
+    },
+  }
+})
 
 // vitest 跑在 node 环境，没有 localStorage global；用 Map 模拟一个最小子集。
 const store = new Map<string, string>()
@@ -89,5 +115,51 @@ describe('useColumnDrag', () => {
     d.orderedKeys.value = ['note', 'serial', 'unit_price']
     await nextTick()
     expect(d.orderedDefs.value.map((c) => c.label)).toEqual(['备注', '序列号', '单价'])
+  })
+})
+
+describe('useColumnDrag applyDrag Ref 签名', () => {
+  beforeEach(() => { startCalls.length = 0; destroyed.length = 0 })
+
+  it('传 Ref 时，ref 从 null 切到 HTMLElement 触发 start(el)', async () => {
+    const d = useColumnDrag(baseDefs, { listKey: 'test_ref_a' })
+    const theadRef = ref<HTMLElement | null>(null)
+    d.applyDrag(theadRef)
+    expect(startCalls.length).toBe(0)  // 初始 null 不应触发 start
+
+    const el = {} as HTMLElement
+    theadRef.value = el
+    await nextTick()
+    // Vue ref 会把对象包成 reactive proxy，start() 收到的是 ref.value（proxy）；
+    // toContain 通过 Object.is 判定，故用 ref.value 比对。
+    expect(startCalls.length).toBe(1)
+    expect(startCalls[0]).toBe(theadRef.value)
+  })
+
+  it('传 Ref 时，ref 切到新元素时先 destroy 旧的再 start 新的', async () => {
+    const d = useColumnDrag(baseDefs, { listKey: 'test_ref_b' })
+    const theadRef = ref<HTMLElement | null>(null)
+    d.applyDrag(theadRef)
+
+    const el1 = {} as HTMLElement
+    theadRef.value = el1
+    await nextTick()
+    expect(startCalls.length).toBe(1)
+    expect(startCalls[0]).toBe(theadRef.value)
+    expect(destroyed.length).toBe(0)
+
+    const el2 = {} as HTMLElement
+    theadRef.value = el2
+    await nextTick()
+    expect(startCalls.length).toBe(2)
+    expect(startCalls[1]).toBe(theadRef.value)
+    expect(destroyed.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('传 HTMLElement 时维持 Phase 1 行为（立即 start 一次）', () => {
+    const d = useColumnDrag(baseDefs, { listKey: 'test_ref_c' })
+    const el = {} as HTMLElement
+    d.applyDrag(el)
+    expect(startCalls).toContain(el)
   })
 })

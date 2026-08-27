@@ -15,7 +15,7 @@
 //   <thead ref="theadRef">...</thead> → drag.applyDrag(theadRef)
 //   <el-table-column v-for="d in drag.orderedDefs.value" :key="d.columnKey ?? d.key" ... :draggable="false" />
 
-import { computed, onBeforeUnmount, ref, type ComputedRef, type Ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { useDraggable } from 'vue-draggable-plus'
 import { useAuthSession } from './useAuthSession'
 import { resolveDraggable, type ColumnDef } from './useColumnVisibility'
@@ -84,6 +84,13 @@ export function columnIdentifier(def: ColumnDef): string {
   return def.columnKey ?? def.key
 }
 
+/** 类型守卫：区分 Ref<HTMLElement | null> 和裸 HTMLElement 调用方。
+ *  运行时检查 `_value` 属性以避免对 HTMLElement 实例误判（HTMLElement 也有 _value getter，
+ *  但 applyDrag 的签名限制参数为 HTMLElement | Ref<HTMLElement | null>，这里做双重保险）。 */
+function isRef(v: unknown): v is Ref<HTMLElement | null> {
+  return typeof v === 'object' && v !== null && '_value' in (v as object)
+}
+
 export function useColumnDrag<T extends ColumnDef>(
   defs: readonly T[],
   options: UseColumnDragOptions,
@@ -112,8 +119,38 @@ export function useColumnDrag<T extends ColumnDef>(
     theadEl: HTMLElement | Ref<HTMLElement | null>,
     dragOpts?: { handle?: string; animation?: number },
   ): void {
-    // 解构 destroy；useDraggable 不监听 ref 变化，挂一次即生效
-    const { destroy } = useDraggable(theadEl, orderedKeys, {
+    if (isRef(theadEl)) {
+      // 2026-08-27 Phase 2：Ref 路径支持 dialog / destroy-on-close / v-if 场景。
+      // 与硬约束 #10（useLazyDraggable 解决 setup 期 null 崩溃）的精神一致：
+      // immediate:false 跳过挂载期自动绑定，由 watch 在 ref 转为非 null 时再 start。
+      // flush: 'post' 保证 DOM 已 patch 完再绑定；ref 换新节点时先 destroy 旧的再 start 新的。
+      const inner = useDraggable(theadEl, orderedKeys, {
+        immediate: false,
+        handle: dragOpts?.handle ?? '.col-drag-handle',
+        filter: '.col-no-drag',
+        animation: dragOpts?.animation ?? 150,
+        direction: 'horizontal',
+        onEnd() {
+          // onEnd 时 sortablejs 已原地 splice orderedKeys；此时落盘
+          persist(options.listKey, orderedKeys.value)
+        },
+      })
+      watch(
+        theadEl,
+        (el) => {
+          boundRef?.destroy()
+          boundRef = null
+          if (!el) return
+          inner.start(el)
+          boundRef = { destroy: () => inner.destroy() }
+        },
+        { immediate: true, flush: 'post' },
+      )
+      return
+    }
+    // HTMLElement 路径（Phase 1 行为）：挂一次即生效
+    const el = theadEl as HTMLElement
+    const { destroy } = useDraggable(el, orderedKeys, {
       handle: dragOpts?.handle ?? '.col-drag-handle',
       filter: '.col-no-drag',
       animation: dragOpts?.animation ?? 150,
