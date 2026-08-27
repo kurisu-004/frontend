@@ -81,6 +81,11 @@ export interface ColumnDef {
    *  与 formatter 互斥：formatter 走 EP 原生字符串格式化；cellRender 用于
    *  复杂 VNode（router-link、按钮组、条件 class 等）。 */
   cellRender?: (ctx: { row: unknown; column: unknown; $index: number }) => VNode
+  /** 2026-08-27 新增：自定义表头渲染函数。PartsTable 等需要把 ColumnFilterPopover
+   *  塞进表头的视图走 h(Component, ...) 工厂；scope 形参与 el-table-column
+   *  #header 插槽保持一致（{ column, $index }）。
+   *  与 cellRender 共同覆盖 v-for 列模板里的 #default / #header 插槽。 */
+  headerRender?: (ctx: { column: unknown; $index: number }) => VNode
 }
 
 /** 推导列默认是否可拖：selection/index/expand、fixed 列默认不可拖，其他默认可拖。
