@@ -57,7 +57,18 @@
 
     <!-- 表 -->
     <el-card shadow="never">
+      <!-- 2026-08-27 Task 9：列设置工具条 -->
+      <div class="table-toolbar">
+        <ColumnVisibilityPopover
+          :defs="columnDefs"
+          :model-value="columnVisibility.currentMap"
+          @update:model-value="columnVisibility.update"
+          @reset="columnVisibility.showAll"
+          @reset-order="drag.reset"
+        />
+      </div>
       <el-table
+        ref="tableRef"
         :data="sortedRows"
         row-key="worker_id"
         stripe
@@ -65,49 +76,27 @@
         size="default"
         empty-text="暂无工人数据"
       >
-        <el-table-column prop="worker_name" label="工人" min-width="120" align="center">
-          <template #default="{ row }">
-            <span>{{ row.worker_name }}</span>
-            <el-tag
-              v-if="!row.is_active"
-              type="info"
-              size="small"
-              effect="plain"
-              style="margin-left: 6px"
-            >已停用</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="badge_code" label="工牌" min-width="140" align="center" />
-        <el-table-column prop="work_type_name" label="工种" min-width="140" align="center">
-          <template #default="{ row }">
-            <el-tag v-if="row.work_type_name" type="primary" size="small" effect="plain">
-              {{ row.work_type_name }}
-            </el-tag>
-            <span v-else style="color: #c0c4cc">未分配</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="participated_part_count" label="参与工单数" min-width="110" align="center"
-          sortable
-        />
-        <el-table-column
-          prop="pickup_count" label="领取次数" min-width="100" align="center"
-          sortable
-        />
-        <el-table-column
-          prop="pickup_quantity" label="领取件数" min-width="100" align="center"
-          sortable
-        />
-        <el-table-column label="贡献度" min-width="200" align="center">
-          <template #default="{ row }">
-            <el-progress
-              v-if="row.contribution_pct !== null"
-              :percentage="Number(row.contribution_pct.toFixed(1))"
-              :stroke-width="10"
-            />
-            <span v-else style="color: #c0c4cc">—</span>
-          </template>
-        </el-table-column>
+        <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+          <el-table-column
+            v-if="columnVisibility.isVisible(d.key)"
+            :prop="d.prop ?? d.key"
+            :label="d.label"
+            :width="d.width"
+            :min-width="d.minWidth"
+            :align="d.align"
+            :sortable="d.sortable"
+            :show-overflow-tooltip="d.showOverflowTooltip"
+            :column-key="d.columnKey ?? d.key"
+          >
+            <template v-if="d.cellRender" #default="scope">
+              <component :is="d.cellRender(scope)" />
+            </template>
+            <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+              <span>{{ d.label }}</span>
+              <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+            </template>
+          </el-table-column>
+        </template>
         <el-table-column label="操作" min-width="100" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
@@ -124,13 +113,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
+import { ElMessage, ElProgress, ElTag } from 'element-plus'
 import EChart from '@/components/EChart.vue'
 import { fetchWorkerStats } from '@/api/statistics'
 import { listWorkTypes } from '@/api/workType'
 import type { WorkerStatsItem } from '@/types/statistics'
 import type { WorkType } from '@/types/workType'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import { findElTableThead } from '@/utils/elTable'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
 interface Props {
   dateFrom: string
@@ -154,6 +152,67 @@ const includeInactive = ref(false)
 
 const workTypes = ref<WorkType[]>([])
 const workTypeOptions = computed(() => workTypes.value)
+
+// 2026-08-27 Task 9：列顺序拖动 + 可见性。
+// 表格在 el-card 内无条件渲染（tab 首次激活时本组件才 mount），
+// onMounted 即可拿到 thead → 走 HTMLElement 路径。
+// 「操作」列 fixed=right，不进 defs（保持 literal 渲染，永不隐藏/拖动）。
+const tableRef = ref()
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'worker_name', label: '工人', prop: 'worker_name', minWidth: 120, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as WorkerStatsItem
+      return h('span', [
+        h('span', r.worker_name),
+        r.is_active === false
+          ? h(
+            ElTag,
+            { type: 'info', size: 'small', effect: 'plain', style: 'margin-left: 6px' },
+            () => '已停用',
+          )
+          : null,
+      ])
+    },
+  },
+  { key: 'badge_code', label: '工牌', prop: 'badge_code', minWidth: 140, align: 'center' },
+  {
+    key: 'work_type_name', label: '工种', prop: 'work_type_name', minWidth: 140, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as WorkerStatsItem
+      return r.work_type_name
+        ? h(ElTag, { type: 'primary', size: 'small', effect: 'plain' }, () => r.work_type_name)
+        : h('span', { style: 'color: #c0c4cc' }, '未分配')
+    },
+  },
+  {
+    key: 'participated_part_count', label: '参与工单数', prop: 'participated_part_count',
+    minWidth: 110, align: 'center', sortable: true,
+  },
+  {
+    key: 'pickup_count', label: '领取次数', prop: 'pickup_count',
+    minWidth: 100, align: 'center', sortable: true,
+  },
+  {
+    key: 'pickup_quantity', label: '领取件数', prop: 'pickup_quantity',
+    minWidth: 100, align: 'center', sortable: true,
+  },
+  {
+    key: 'contribution_pct', label: '贡献度', minWidth: 200, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as WorkerStatsItem
+      // 硬约束 #11：EP 会用合成空行 { row: {} } 额外渲染一次 → 需空值守卫
+      return r.contribution_pct !== null && r.contribution_pct !== undefined
+        ? h(ElProgress, {
+          percentage: Number(r.contribution_pct.toFixed(1)),
+          strokeWidth: 10,
+        })
+        : h('span', { style: 'color: #c0c4cc' }, '—')
+    },
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'worker_stats' })
+const drag = useColumnDrag(columnDefs, { listKey: 'worker_stats' })
 
 // 前端筛过的工人列表
 const filteredRows = computed<WorkerStatsItem[]>(() => {
@@ -188,6 +247,13 @@ async function reload(): Promise<void> {
 }
 
 onMounted(async () => {
+  // 列拖动：thead 需等 el-table 首帧 patch 完才查得到
+  await nextTick()
+  const root = (tableRef.value as { $el?: HTMLElement } | undefined)?.$el
+  if (root) {
+    const thead = findElTableThead(root)
+    if (thead) drag.applyDrag(thead)
+  }
   await reload()
   // 工种下拉只用于筛选，本地缓存。
   try {
@@ -259,5 +325,12 @@ const barOption = computed(() => {
 .chart-title {
   font-weight: 600;
   font-size: 14px;
+}
+
+/* 2026-08-27 Task 9：列设置工具条 */
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 </style>

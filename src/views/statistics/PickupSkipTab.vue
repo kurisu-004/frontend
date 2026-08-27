@@ -21,13 +21,24 @@
       <template #header>
         <div class="card-header">
           <span class="card-title">跳序取件汇总（按工人）</span>
-          <el-button size="small" :loading="summaryLoading" @click="reloadSummary">
-            刷新
-          </el-button>
+          <div class="card-actions">
+            <!-- 2026-08-27 Task 9：列设置 -->
+            <ColumnVisibilityPopover
+              :defs="columnDefs_summary"
+              :model-value="columnVisibility_summary.currentMap"
+              @update:model-value="columnVisibility_summary.update"
+              @reset="columnVisibility_summary.showAll"
+              @reset-order="drag_summary.reset"
+            />
+            <el-button size="small" :loading="summaryLoading" @click="reloadSummary">
+              刷新
+            </el-button>
+          </div>
         </div>
       </template>
 
       <el-table
+        ref="summaryTableRef"
         :data="summaryRows"
         row-key="worker_id"
         stripe
@@ -36,68 +47,27 @@
         empty-text="暂无跳序记录"
         @row-click="onRowClick"
       >
-        <el-table-column
-          prop="worker_name"
-          label="工人"
-          min-width="120"
-          align="center"
-        >
-          <template #default="{ row }">
-            <span>{{ row.worker_name }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="badge_code"
-          label="工牌"
-          min-width="140"
-          align="center"
-        />
-        <el-table-column
-          prop="work_type_name"
-          label="工种"
-          min-width="140"
-          align="center"
-        >
-          <template #default="{ row }">
-            <el-tag
-              v-if="row.work_type_name"
-              type="primary"
-              size="small"
-              effect="plain"
-            >
-              {{ row.work_type_name }}
-            </el-tag>
-            <span v-else style="color: #c0c4cc">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="skip_count"
-          label="跳序次数"
-          min-width="100"
-          align="center"
-          sortable
-        >
-          <template #default="{ row }">
-            <el-tag
-              :type="row.skip_count >= 5 ? 'danger' : row.skip_count >= 2 ? 'warning' : 'info'"
-              size="small"
-              effect="plain"
-            >
-              {{ row.skip_count }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="last_skip_at"
-          label="最近跳序时间"
-          min-width="180"
-          align="center"
-        >
-          <template #default="{ row }">
-            <span v-if="row.last_skip_at">{{ formatDateTime(row.last_skip_at) }}</span>
-            <span v-else style="color: #c0c4cc">—</span>
-          </template>
-        </el-table-column>
+        <template v-for="d in drag_summary.orderedDefs.value" :key="columnIdentifier(d)">
+          <el-table-column
+            v-if="columnVisibility_summary.isVisible(d.key)"
+            :prop="d.prop ?? d.key"
+            :label="d.label"
+            :width="d.width"
+            :min-width="d.minWidth"
+            :align="d.align"
+            :sortable="d.sortable"
+            :show-overflow-tooltip="d.showOverflowTooltip"
+            :column-key="d.columnKey ?? d.key"
+          >
+            <template v-if="d.cellRender" #default="scope">
+              <component :is="d.cellRender(scope)" />
+            </template>
+            <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+              <span>{{ d.label }}</span>
+              <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+            </template>
+          </el-table-column>
+        </template>
       </el-table>
     </el-card>
 
@@ -121,7 +91,18 @@
       </template>
 
       <div v-loading="detailLoading" element-loading-text="加载中">
+        <!-- 2026-08-27 Task 9：列设置工具条 -->
+        <div class="table-toolbar">
+          <ColumnVisibilityPopover
+            :defs="columnDefs_detail"
+            :model-value="columnVisibility_detail.currentMap"
+            @update:model-value="columnVisibility_detail.update"
+            @reset="columnVisibility_detail.showAll"
+            @reset-order="drag_detail.reset"
+          />
+        </div>
         <el-table
+          ref="detailTableRef"
           :data="detailData?.items ?? []"
           row-key="id"
           stripe
@@ -129,71 +110,27 @@
           size="default"
           empty-text="该工人暂无跳序记录"
         >
-          <el-table-column label="时间" min-width="170" align="center">
-            <template #default="{ row }">
-              {{ formatDateTime(row.created_at) }}
-            </template>
-          </el-table-column>
-          <el-table-column label="流水号" min-width="160" align="center">
-            <template #default="{ row }">
-              <el-tag
-                v-if="row.serial_no"
-                type="primary"
-                size="small"
-                effect="plain"
-              >
-                {{ row.serial_no }}
-              </el-tag>
-              <span v-else style="color: #c0c4cc">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column
-            prop="part_name"
-            label="零件名"
-            min-width="200"
-            align="center"
-            show-overflow-tooltip
-          />
-          <el-table-column
-            prop="batch_no"
-            label="批次号"
-            min-width="80"
-            align="center"
-          />
-          <el-table-column
-            prop="quantity"
-            label="数量"
-            min-width="80"
-            align="center"
-          />
-          <el-table-column
-            prop="part_planned_delivery_date"
-            label="所取交期"
-            min-width="120"
-            align="center"
-          >
-            <template #default="{ row }">
-              <span v-if="row.part_planned_delivery_date">
-                {{ row.part_planned_delivery_date }}
-              </span>
-              <span v-else style="color: #c0c4cc">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column
-            prop="skipped_earliest_date"
-            label="被跳过交期"
-            min-width="120"
-            align="center"
-          >
-            <template #default="{ row }">
-              <span v-if="row.skipped_earliest_date">
-                <el-tag type="danger" size="small" effect="plain">
-                  {{ row.skipped_earliest_date }}
-                </el-tag>
-              </span>
-              <span v-else style="color: #c0c4cc">—</span>
-            </template>
-          </el-table-column>
+          <template v-for="d in drag_detail.orderedDefs.value" :key="columnIdentifier(d)">
+            <el-table-column
+              v-if="columnVisibility_detail.isVisible(d.key)"
+              :prop="d.prop ?? d.key"
+              :label="d.label"
+              :width="d.width"
+              :min-width="d.minWidth"
+              :align="d.align"
+              :sortable="d.sortable"
+              :show-overflow-tooltip="d.showOverflowTooltip"
+              :column-key="d.columnKey ?? d.key"
+            >
+              <template v-if="d.cellRender" #default="scope">
+                <component :is="d.cellRender(scope)" />
+              </template>
+              <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+                <span>{{ d.label }}</span>
+                <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+              </template>
+            </el-table-column>
+          </template>
         </el-table>
 
         <el-pagination
@@ -214,8 +151,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
+import { ElMessage, ElTag } from 'element-plus'
 import {
   fetchPickupSkipDetail,
   fetchPickupSkipSummary,
@@ -227,10 +164,70 @@ import type {
 // 2026-08-25 统一日期格式化：原本地函数用正则切 ISO 字符串，
 // 改为 utils/date.formatDateTime（toISOString → UTC），对后端 UTC 输出行为一致。
 import { formatDateTime } from '@/utils/date'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import { findElTableThead } from '@/utils/elTable'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+
+type PickupSkipDetailRow = PickupSkipDetailOut['items'][number]
 
 // ========== 汇总 ==========
 const summaryLoading = ref(false)
 const summaryRows = ref<PickupSkipSummaryItem[]>([])
+
+// 2026-08-27 Task 9：汇总表列顺序拖动 + 可见性。
+// 汇总表在 el-card 内无条件渲染 → onMounted 即可查到 thead，走 HTMLElement 路径。
+const summaryTableRef = ref()
+const columnDefs_summary: ColumnDef[] = [
+  {
+    key: 'worker_name', label: '工人', prop: 'worker_name', minWidth: 120, align: 'center',
+  },
+  { key: 'badge_code', label: '工牌', prop: 'badge_code', minWidth: 140, align: 'center' },
+  {
+    key: 'work_type_name', label: '工种', prop: 'work_type_name', minWidth: 140, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PickupSkipSummaryItem
+      return r.work_type_name
+        ? h(ElTag, { type: 'primary', size: 'small', effect: 'plain' }, () => r.work_type_name)
+        : h('span', { style: 'color: #c0c4cc' }, '—')
+    },
+  },
+  {
+    key: 'skip_count', label: '跳序次数', prop: 'skip_count',
+    minWidth: 100, align: 'center', sortable: true,
+    cellRender: ({ row }) => {
+      const r = row as PickupSkipSummaryItem
+      return h(
+        ElTag,
+        {
+          type: r.skip_count >= 5 ? 'danger' : r.skip_count >= 2 ? 'warning' : 'info',
+          size: 'small',
+          effect: 'plain',
+        },
+        () => String(r.skip_count ?? ''),
+      )
+    },
+  },
+  {
+    key: 'last_skip_at', label: '最近跳序时间', prop: 'last_skip_at',
+    minWidth: 180, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PickupSkipSummaryItem
+      return r.last_skip_at
+        ? h('span', formatDateTime(r.last_skip_at))
+        : h('span', { style: 'color: #c0c4cc' }, '—')
+    },
+  },
+]
+const columnVisibility_summary = useColumnVisibility(columnDefs_summary, {
+  listKey: 'pickup_skip_summary',
+})
+const drag_summary = useColumnDrag(columnDefs_summary, { listKey: 'pickup_skip_summary' })
 
 async function reloadSummary(): Promise<void> {
   summaryLoading.value = true
@@ -251,6 +248,74 @@ const currentWorker = ref<PickupSkipSummaryItem | null>(null)
 const detailData = ref<PickupSkipDetailOut | null>(null)
 const detailPage = ref(1)
 const detailPageSize = ref(20)
+
+// 2026-08-27 Task 9：明细表列顺序拖动 + 可见性。
+// 明细表在 el-drawer 内（drawer body 首次打开才渲染）→ 走 Ref 路径，
+// applyDrag 内部 watch(theadRef)，thead 出现/重建后自愈。
+const detailTableRef = ref()
+const detailTheadRef = ref<HTMLElement | null>(null)
+const columnDefs_detail: ColumnDef[] = [
+  {
+    key: 'created_at', label: '时间', prop: 'created_at', minWidth: 170, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PickupSkipDetailRow
+      return h('span', r.created_at ? formatDateTime(r.created_at) : '')
+    },
+  },
+  {
+    key: 'serial_no', label: '流水号', prop: 'serial_no', minWidth: 160, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PickupSkipDetailRow
+      return r.serial_no
+        ? h(ElTag, { type: 'primary', size: 'small', effect: 'plain' }, () => r.serial_no)
+        : h('span', { style: 'color: #c0c4cc' }, '—')
+    },
+  },
+  {
+    key: 'part_name', label: '零件名', prop: 'part_name', minWidth: 200, align: 'center',
+    showOverflowTooltip: true,
+  },
+  { key: 'batch_no', label: '批次号', prop: 'batch_no', minWidth: 80, align: 'center' },
+  { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 80, align: 'center' },
+  {
+    key: 'part_planned_delivery_date', label: '所取交期', prop: 'part_planned_delivery_date',
+    minWidth: 120, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PickupSkipDetailRow
+      return r.part_planned_delivery_date
+        ? h('span', r.part_planned_delivery_date)
+        : h('span', { style: 'color: #c0c4cc' }, '—')
+    },
+  },
+  {
+    key: 'skipped_earliest_date', label: '被跳过交期', prop: 'skipped_earliest_date',
+    minWidth: 120, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PickupSkipDetailRow
+      return r.skipped_earliest_date
+        ? h(ElTag, { type: 'danger', size: 'small', effect: 'plain' },
+          () => r.skipped_earliest_date)
+        : h('span', { style: 'color: #c0c4cc' }, '—')
+    },
+  },
+]
+const columnVisibility_detail = useColumnVisibility(columnDefs_detail, {
+  listKey: 'pickup_skip_detail',
+})
+const drag_detail = useColumnDrag(columnDefs_detail, { listKey: 'pickup_skip_detail' })
+
+watch(detailTableRef, (instance) => {
+  if (!instance) {
+    detailTheadRef.value = null
+    return
+  }
+  void nextTick(() => {
+    const root = (instance as { $el?: HTMLElement }).$el
+    detailTheadRef.value = root ? findElTableThead(root) : null
+  })
+}, { flush: 'post' })
+
+drag_detail.applyDrag(detailTheadRef)
 
 const detailOffset = computed<number>(() => (detailPage.value - 1) * detailPageSize.value)
 
@@ -283,7 +348,16 @@ function onPageSizeChange(size: number): void {
   void reloadDetail()
 }
 
-onMounted(reloadSummary)
+onMounted(async () => {
+  // 汇总表列拖动：thead 需等 el-table 首帧 patch 完才查得到
+  await nextTick()
+  const root = (summaryTableRef.value as { $el?: HTMLElement } | undefined)?.$el
+  if (root) {
+    const thead = findElTableThead(root)
+    if (thead) drag_summary.applyDrag(thead)
+  }
+  await reloadSummary()
+})
 </script>
 
 <style lang="scss" scoped>
@@ -303,6 +377,19 @@ onMounted(reloadSummary)
 .card-title {
   font-weight: 600;
   font-size: 14px;
+}
+
+/* 2026-08-27 Task 9：列设置工具条 */
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 .drawer-header {
