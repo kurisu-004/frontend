@@ -28,11 +28,13 @@
         />
       </el-tabs>
 
+      <!-- 2026-08-27 修正：size 必须带 % 单位，纯数字会被当成像素（30px/70px）。
+           min 保持裸数字，语义就是 240px / 400px。 -->
       <el-splitter class="board-splitter">
-        <el-splitter-panel :size="30" :min="240">
+        <el-splitter-panel size="30%" :min="240">
           <PoolDrawer :pool="activePool" />
         </el-splitter-panel>
-        <el-splitter-panel :size="70" :min="400">
+        <el-splitter-panel size="70%" :min="400">
           <div class="columns-container">
             <WorkerColumn
               v-for="w in filteredWorkers"
