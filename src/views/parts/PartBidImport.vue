@@ -15,6 +15,14 @@
   - L2 客户解析失败 → 错误行挡住提交。
   - 申请人由后端 bulk-get-or-create 幂等创建，避免前端循环 createApplicant 的 race。
   - 图纸按现有 /parts/batch 模式 multipart 上传，items + files 按下标对齐。
+
+  2026-08-27 T24（B 组 batch 1）：接入列顺序拖动 + ColumnVisibilityPopover。
+  - 顶层路由 view，<el-table> v-if="rows.length > 0"，挂载时 rows 可能为空
+    → HTMLElement 路径 + optional chaining 兜底。
+  - 7 列含 form 控件（el-autocomplete/el-select/el-input/el-input-number/
+    el-switch/el-date-picker），全部用 h() cellRender 转换；
+    v-model 用 modelValue + onUpdate:modelValue 显式双向。
+  - 「序号」index + 「操作」fixed 列保留为字面量 <el-table-column>。
 -->
 <template>
   <div class="bid-import">
@@ -104,6 +112,7 @@
 
       <el-table
         v-if="rows.length > 0"
+        ref="tableRef"
         :data="rows"
         :row-key="(row: ImportRow) => row.uid"
         border
@@ -111,91 +120,35 @@
         :row-class-name="rowClassName"
       >
         <el-table-column type="index" label="序号" width="56" />
-        <el-table-column label="申请人" min-width="150" align="center">
-          <template #default="{ row }">
-            <el-autocomplete
-              v-model="(row as ImportRow).applicantName"
-              value-key="name"
-              :fetch-suggestions="querySearch"
-              :trigger-on-focus="true"
-              :debounce="0"
-              clearable
-              size="small"
-              style="width: 100%"
-              placeholder="申请人"
-              @select="(item: Record<string, unknown>) => onApplicantSelect(row as ImportRow, item as unknown as Applicant)"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="分厂名" min-width="180" align="center">
-          <template #default="{ row }">
-            <el-select
-              v-model="(row as ImportRow).customerId"
-              filterable
-              clearable
-              size="small"
-              style="width: 100%"
-              placeholder="选所属分厂"
-              :disabled="!form.rootCustomerId"
-              @change="() => onRowFactoryChange(row as ImportRow)"
-            >
-              <el-option
-                v-for="f in subFactories"
-                :key="f.id"
-                :label="f.name"
-                :value="f.id"
-              />
-            </el-select>
-          </template>
-        </el-table-column>
-        <el-table-column label="图纸编号" min-width="150" align="center">
-          <template #default="{ row }">
-            <el-input
-              v-model="(row as ImportRow).drawingNo"
-              size="small"
-              placeholder="图纸编号"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="名称" min-width="180" align="center">
-          <template #default="{ row }">
-            <el-input
-              v-model="(row as ImportRow).partName"
-              size="small"
-              placeholder="名称"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="数量" min-width="130" align="center">
-          <template #default="{ row }">
-            <el-input-number
-              v-model="(row as ImportRow).quantity"
-              :min="1"
-              :step="1"
-              step-strictly
-              size="small"
-              controls-position="right"
-              style="width: 110px"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="是否加急" min-width="90" align="center">
-          <template #default="{ row }">
-            <el-switch v-model="(row as ImportRow).isUrgent" />
-          </template>
-        </el-table-column>
-        <el-table-column label="计划交期" min-width="170" align="center">
-          <template #default="{ row }">
-            <el-date-picker
-              v-model="(row as ImportRow).plannedDeliveryDate"
-              type="date"
-              value-format="YYYY-MM-DD"
-              placeholder="计划交期"
-              size="small"
-              style="width: 150px"
-            />
-          </template>
-        </el-table-column>
+        <!--
+          2026-08-27 T24：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+          用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+          form 控件列（autocomplete/select/input/input-number/switch/date-picker）
+          通过 cellRender 用 h() 重建，v-model 走 modelValue + onUpdate:modelValue。
+          操作列 fixed="right" 保留为字面量 <el-table-column>。
+        -->
+        <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+          <el-table-column
+            v-if="columnVisibility.isVisible(d.key)"
+            :prop="d.prop ?? d.key"
+            :label="d.label"
+            :width="d.width"
+            :min-width="d.minWidth"
+            :sortable="d.sortable"
+            :align="d.align"
+            :header-align="d.headerAlign"
+            :show-overflow-tooltip="d.showOverflowTooltip"
+            :column-key="d.columnKey ?? d.key"
+          >
+            <template v-if="d.cellRender" #default="scope">
+              <component :is="d.cellRender(scope)" />
+            </template>
+            <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+              <span>{{ d.label }}</span>
+              <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+            </template>
+          </el-table-column>
+        </template>
         <el-table-column label="操作" min-width="240" align="center" fixed="right">
           <template #default="{ row }">
             <div class="row-ops">
@@ -243,6 +196,17 @@
         <p class="empty-primary">尚未上传 Excel</p>
         <p class="empty-sub">选好 L1 客户后点击「选择 Excel 文件」开始</p>
       </div>
+
+      <!-- 2026-08-27 T24：列设置按钮（仅列表态展示；空态无表可设） -->
+      <div v-if="rows.length > 0" class="table-toolbar">
+        <ColumnVisibilityPopover
+          :defs="columnDefs"
+          :model-value="columnVisibility.currentMap"
+          @update:model-value="columnVisibility.update"
+          @reset="columnVisibility.showAll"
+          @reset-order="drag.reset"
+        />
+      </div>
     </el-card>
 
     <!-- 图纸预览弹窗（仅本地 File，blob URL） -->
@@ -263,12 +227,25 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import * as XLSX from 'xlsx'
-import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
+import {
+  ElAutocomplete,
+  ElDatePicker,
+  ElInput,
+  ElInputNumber,
+  ElMessage,
+  ElMessageBox,
+  ElSelect,
+  ElSwitch,
+  ElOption,
+  type UploadFile,
+} from 'element-plus'
 
 import PdfViewer from '@/components/PdfViewer.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import { listCustomers, type Customer } from '@/api/customer'
 import {
   batchCreateParts,
@@ -277,6 +254,13 @@ import {
 } from '@/api/parts'
 import { bulkGetOrCreateApplicants } from '@/api/applicant'
 import { useApplicantSearch } from '@/composables/useApplicantSearch'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import { findElTableThead } from '@/utils/elTable'
 import type { Applicant } from '@/types/applicant'
 import { parseBidExcel, type BidRow } from '@/utils/bidExcelParser'
 
@@ -370,6 +354,131 @@ interface ImportRow extends BidRow {
 const rows = ref<ImportRow[]>([])
 const parsing = ref(false)
 let _uidCounter = 0
+
+// ============================================================
+// 列顺序拖动 + 可见性
+// 2026-08-27 T24：form 控件列（autocomplete/select/input/input-number/switch/date-picker）
+// 全部用 h() cellRender 重建，v-model 走 modelValue + onUpdate:modelValue。
+// 「序号」index + 「操作」fixed 列不进 defs。
+// ============================================================
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'applicantName', label: '申请人', minWidth: 150, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as ImportRow
+      return h(ElAutocomplete, {
+        modelValue: r.applicantName,
+        'onUpdate:modelValue': (v: string | number) => { r.applicantName = String(v) },
+        'value-key': 'name',
+        'fetch-suggestions': querySearch,
+        'trigger-on-focus': true,
+        debounce: 0,
+        clearable: true,
+        size: 'small',
+        style: 'width: 100%',
+        placeholder: '申请人',
+        onSelect: (item: Record<string, unknown>) => onApplicantSelect(r, item as unknown as Applicant),
+      })
+    },
+  },
+  {
+    key: 'customerId', label: '分厂名', minWidth: 180, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as ImportRow
+      return h(ElSelect, {
+        modelValue: r.customerId,
+        'onUpdate:modelValue': (v: unknown) => { r.customerId = v as string | null },
+        filterable: true,
+        clearable: true,
+        size: 'small',
+        style: 'width: 100%',
+        placeholder: '选所属分厂',
+        disabled: !form.rootCustomerId,
+        onChange: () => onRowFactoryChange(r),
+      }, () => subFactories.value.map((f) =>
+        h(ElOption, { key: f.id, label: f.name, value: f.id })))
+    },
+  },
+  {
+    key: 'drawingNo', label: '图纸编号', minWidth: 150, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as ImportRow
+      return h(ElInput, {
+        modelValue: r.drawingNo,
+        'onUpdate:modelValue': (v: string) => { r.drawingNo = v },
+        size: 'small',
+        placeholder: '图纸编号',
+      })
+    },
+  },
+  {
+    key: 'partName', label: '名称', minWidth: 180, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as ImportRow
+      return h(ElInput, {
+        modelValue: r.partName,
+        'onUpdate:modelValue': (v: string) => { r.partName = v },
+        size: 'small',
+        placeholder: '名称',
+      })
+    },
+  },
+  {
+    key: 'quantity', label: '数量', minWidth: 130, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as ImportRow
+      return h(ElInputNumber, {
+        modelValue: r.quantity,
+        'onUpdate:modelValue': (v: number | undefined) => { r.quantity = v ?? 1 },
+        min: 1,
+        step: 1,
+        'step-strictly': true,
+        size: 'small',
+        'controls-position': 'right',
+        style: 'width: 110px',
+      })
+    },
+  },
+  {
+    key: 'isUrgent', label: '是否加急', minWidth: 90, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as ImportRow
+      return h(ElSwitch, {
+        modelValue: r.isUrgent,
+        'onUpdate:modelValue': (v: string | number | boolean) => { r.isUrgent = Boolean(v) },
+      })
+    },
+  },
+  {
+    key: 'plannedDeliveryDate', label: '计划交期', minWidth: 170, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as ImportRow
+      return h(ElDatePicker, {
+        modelValue: r.plannedDeliveryDate,
+        'onUpdate:modelValue': (v: string) => { r.plannedDeliveryDate = v },
+        type: 'date',
+        'value-format': 'YYYY-MM-DD',
+        placeholder: '计划交期',
+        size: 'small',
+        style: 'width: 150px',
+      })
+    },
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_bid_import' })
+const drag = useColumnDrag(columnDefs, { listKey: 'part_bid_import' })
+
+// 2026-08-27 T24：HTMLElement 路径。路由进入时 rows 为 0 → el-table 未渲染
+// → tableRef undefined；onMounted 用 optional chaining 兜底（HTMLElement 路径标准 trade-off，
+// 用户上传 Excel 解析后才看到表，下次路由进入 / 刷新才能恢复拖动）。
+const tableRef = ref()
+onMounted(() => {
+  const root = tableRef.value?.$el as HTMLElement | undefined
+  if (!root) return
+  const thead = findElTableThead(root)
+  if (thead) drag.applyDrag(thead)
+})
+
 function makeUid(): string {
   _uidCounter += 1
   return `bid-${Date.now()}-${_uidCounter}`
@@ -815,6 +924,13 @@ loadCustomers()
 
 .muted {
   color: var(--text-secondary);
+}
+
+// 2026-08-27 T24：列设置工具条（与 PartListShell 同款）
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 .row-error-text {

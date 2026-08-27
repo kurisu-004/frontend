@@ -6,6 +6,11 @@
   - 报价列表（来自 usePartQuote.fetchQuotes）
   - 新建报价对话框（form ref 局部维护，提交 emit create）
   - 状态门控的「新建」按钮
+
+  2026-08-27 T23（B 组 batch 1）：接入列顺序拖动 + ColumnVisibilityPopover。
+  - el-table 在 el-card 内 v-if 控制（quotes.length > 0 时挂载）→
+    HTMLElement 路径，onMounted 调 findElTableThead(tableRef.$el) + drag.applyDrag。
+  - 「操作」fixed="right" 列保留为字面量 <el-table-column>。
 -->
 <template>
   <el-card
@@ -33,36 +38,39 @@
     </template>
     <el-table
       v-if="quotes.length > 0"
+      ref="tableRef"
       :data="quotes"
       size="small"
       border
       stripe
     >
-      <el-table-column label="状态" min-width="110" align="center">
-        <template #default="{ row }">
-          <el-tag
-            :type="(OUTSOURCE_QUOTE_STATUS_TAG[(row as OutsourceQuote).status] || 'info') as 'info' | 'success' | 'warning' | 'danger'"
-            size="small"
-            effect="plain"
-          >
-            {{ OUTSOURCE_QUOTE_STATUS_LABEL[(row as OutsourceQuote).status] }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column
-        prop="outsource_company_name"
-        label="外协公司"
-        min-width="140"
-        show-overflow-tooltip align="center"/>
-      <el-table-column prop="process_code" label="工序" min-width="100" align="center"/>
-      <el-table-column label="单价(元)" min-width="100" align="right">
-        <template #default="{ row }">{{ (row as OutsourceQuote).price }}</template>
-      </el-table-column>
-      <el-table-column label="创建时间" min-width="160" align="center">
-        <template #default="{ row }">
-          <span class="muted">{{ formatDateTime((row as OutsourceQuote).created_at) }}</span>
-        </template>
-      </el-table-column>
+      <!--
+        2026-08-27 T23：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+        用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+        fixed="right" 操作列保留为字面量 <el-table-column>。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :header-align="d.headerAlign"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
       <el-table-column label="操作" min-width="120" align="center" fixed="right">
         <template #default="{ row }">
           <el-button
@@ -75,6 +83,17 @@
       </el-table-column>
     </el-table>
     <el-empty v-else description="暂无外协报价" />
+
+    <!-- 2026-08-27 T23：列设置按钮（仅列表态展示；空态无表可设） -->
+    <div v-if="quotes.length > 0" class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap"
+        @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
+      />
+    </div>
 
     <!-- 新建外协报价 对话框 -->
     <el-dialog
@@ -147,12 +166,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElTag, type FormInstance, type FormRules } from 'element-plus'
 import { Document, Plus } from '@element-plus/icons-vue'
 import { formatDateTime } from '@/utils/date'
 import { useDialogSize } from '@/composables/useDialogSize'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import { findElTableThead } from '@/utils/elTable'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import { OUTSOURCE_QUOTE_STATUS_LABEL, OUTSOURCE_QUOTE_STATUS_TAG, type OutsourceQuote } from '@/types/outsource'
 import type { Process } from '@/types/process'
 import type { OrderStatus } from '@/types/parts'
@@ -253,7 +281,44 @@ function onViewQuoteDetail() {
   router.push('/outsource/quote')
 }
 
-onMounted(() => emit('fetch'))
+// 2026-08-27 T23：列顺序拖动 + 可见性。
+// 「操作」列固定右侧 → 不进 defs。
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'status', label: '状态', minWidth: 110, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as OutsourceQuote
+      const tagType = (OUTSOURCE_QUOTE_STATUS_TAG[r.status] || 'info') as 'info' | 'success' | 'warning' | 'danger'
+      return h(ElTag, { type: tagType, size: 'small', effect: 'plain' }, () => OUTSOURCE_QUOTE_STATUS_LABEL[r.status])
+    },
+  },
+  {
+    key: 'outsource_company_name', label: '外协公司', prop: 'outsource_company_name',
+    minWidth: 140, showOverflowTooltip: true, align: 'center',
+  },
+  { key: 'process_code', label: '工序', prop: 'process_code', minWidth: 100, align: 'center' },
+  {
+    key: 'price', label: '单价(元)', minWidth: 100, align: 'right',
+    cellRender: ({ row }) => h('span', null, () => (row as OutsourceQuote).price),
+  },
+  {
+    key: 'created_at', label: '创建时间', minWidth: 160, align: 'center',
+    cellRender: ({ row }) => h('span', { class: 'muted' }, () => formatDateTime((row as OutsourceQuote).created_at)),
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_quote_card' })
+const drag = useColumnDrag(columnDefs, { listKey: 'part_quote_card' })
+
+// 2026-08-27 T23：HTMLElement 路径。组件挂载时 quotes 可能为 0 → el-table 未渲染
+// → tableRef undefined；onMounted 用 optional chaining 兜底（HTMLElement 路径标准 trade-off）。
+const tableRef = ref()
+onMounted(() => {
+  emit('fetch')
+  const root = tableRef.value?.$el as HTMLElement | undefined
+  if (!root) return
+  const thead = findElTableThead(root)
+  if (thead) drag.applyDrag(thead)
+})
 watch(() => props.partId, () => emit('fetch'))
 </script>
 
@@ -277,5 +342,12 @@ watch(() => props.partId, () => emit('fetch'))
 }
 .muted {
   color: var(--text-secondary);
+}
+
+// 2026-08-27 T23：列设置工具条（与 PartListShell 同款）
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 </style>

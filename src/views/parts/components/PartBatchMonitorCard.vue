@@ -8,6 +8,12 @@
   - 拆分 / 取消 dialog 状态由本组件局部维护
 
   2026-08-25 frontend-overall-refactor：从 PartDetail.vue 抽出。
+
+  2026-08-27 T22（B 组 batch 1）：接入列顺序拖动 + ColumnVisibilityPopover。
+  - el-table 在 el-card 内 v-if 控制（batches.length > 0 时挂载）→
+    HTMLElement 路径，onMounted 调 findElTableThead(tableRef.$el) + drag.applyDrag。
+  - 「操作」fixed="right" 列受 canManageBatches 控制：保留为字面量 <el-table-column v-if>，
+    不进 defs。
 -->
 <template>
   <el-card shadow="never" class="batch-card" v-loading="batchesLoading">
@@ -21,65 +27,39 @@
     </template>
     <el-table
       v-if="batches.length > 0"
+      ref="tableRef"
       :data="batches"
       size="small"
       border
       stripe
     >
-      <el-table-column label="批次" min-width="110" align="center">
-        <template #default="{ row }">
-          <span class="batch-label">{{ (row as PartBatch).batch_label }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="数量" width="80" align="right">
-        <template #default="{ row }">{{ (row as PartBatch).quantity }}</template>
-      </el-table-column>
-      <el-table-column label="状态" min-width="110" align="center">
-        <template #default="{ row }">
-          <el-tag
-            :type="statusTagType((row as PartBatch).status as OrderStatus)"
-            size="small"
-            effect="plain"
-          >
-            {{ statusLabelOf((row as PartBatch).status) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column
-        label="所在位置"
-        min-width="130"
-        align="center"
-        show-overflow-tooltip
-      >
-        <template #default="{ row }">
-          {{ (row as PartBatch).current_holder_display || '—' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        label="下一工序"
-        min-width="100"
-        align="center"
-        show-overflow-tooltip
-      >
-        <template #default="{ row }">
-          {{ (row as PartBatch).next_process_name || '—' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        label="送货单"
-        min-width="150"
-        align="center"
-        show-overflow-tooltip
-      >
-        <template #default="{ row }">
-          {{ (row as PartBatch).delivery_note_no || '—' }}
-        </template>
-      </el-table-column>
-      <el-table-column label="创建时间" min-width="150" align="center">
-        <template #default="{ row }">
-          <span class="muted">{{ formatDateTime((row as PartBatch).created_at) }}</span>
-        </template>
-      </el-table-column>
+      <!--
+        2026-08-27 T22：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+        用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+        操作列（fixed="right"）受 canManageBatches 控制，保留为字面量 <el-table-column>。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :header-align="d.headerAlign"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
       <el-table-column
         v-if="canManageBatches"
         label="操作"
@@ -106,6 +86,17 @@
       </el-table-column>
     </el-table>
     <el-empty v-else description="暂无批次" />
+
+    <!-- 2026-08-27 T22：列设置按钮（仅列表态展示；空态无表可设） -->
+    <div v-if="batches.length > 0" class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap"
+        @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
+      />
+    </div>
 
     <!-- 拆分批次对话框 -->
     <el-dialog
@@ -151,10 +142,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
+import { ElTag } from 'element-plus'
 import { type PartBatch } from '@/api/parts'
 import { formatDateTime } from '@/utils/date'
 import { useDialogSize } from '@/composables/useDialogSize'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import { findElTableThead } from '@/utils/elTable'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import type { OrderStatus } from '@/types/parts'
 
 const props = defineProps<{
@@ -181,6 +182,57 @@ const batchTotalQty = computed(() =>
 function isTerminalBatch(b: PartBatch): boolean {
   return b.status === 'COMPLETED' || b.status === 'CANCELLED'
 }
+
+// 2026-08-27 T22：列顺序拖动 + 可见性。
+// 「操作」列受 canManageBatches 控制 → 保留为字面量 <el-table-column v-if>，不进 defs。
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'batch_label', label: '批次', minWidth: 110, align: 'center',
+    cellRender: ({ row }) => h('span', { class: 'batch-label' }, () => (row as PartBatch).batch_label ?? ''),
+  },
+  {
+    key: 'quantity', label: '数量', width: 80, align: 'right',
+    cellRender: ({ row }) => h('span', null, () => (row as PartBatch).quantity),
+  },
+  {
+    key: 'status', label: '状态', minWidth: 110, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PartBatch
+      return h(ElTag,
+        { type: props.statusTagType(r.status as OrderStatus), size: 'small', effect: 'plain' },
+        () => props.statusLabelOf(r.status))
+    },
+  },
+  {
+    key: 'current_holder_display', label: '所在位置', minWidth: 130, align: 'center', showOverflowTooltip: true,
+    cellRender: ({ row }) => h('span', null, () => (row as PartBatch).current_holder_display || '—'),
+  },
+  {
+    key: 'next_process_name', label: '下一工序', minWidth: 100, align: 'center', showOverflowTooltip: true,
+    cellRender: ({ row }) => h('span', null, () => (row as PartBatch).next_process_name || '—'),
+  },
+  {
+    key: 'delivery_note_no', label: '送货单', minWidth: 150, align: 'center', showOverflowTooltip: true,
+    cellRender: ({ row }) => h('span', null, () => (row as PartBatch).delivery_note_no || '—'),
+  },
+  {
+    key: 'created_at', label: '创建时间', minWidth: 150, align: 'center',
+    cellRender: ({ row }) => h('span', { class: 'muted' }, () => formatDateTime((row as PartBatch).created_at)),
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_monitor' })
+const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_monitor' })
+
+// 2026-08-27 T22：HTMLElement 路径。组件挂载时 batches 可能为 0 → el-table 未渲染
+// → tableRef undefined；onMounted 用 optional chaining 兜底，等 batches 加载回来
+// 再切换不会自动重绑（HTMLElement 路径标准 trade-off，brief 已认可）。
+const tableRef = ref()
+onMounted(() => {
+  const root = tableRef.value?.$el as HTMLElement | undefined
+  if (!root) return
+  const thead = findElTableThead(root)
+  if (thead) drag.applyDrag(thead)
+})
 
 // ============ 拆分对话框（局部 UI 状态）============
 const splitDlg = useDialogSize({ desktopWidth: 420 })
@@ -243,6 +295,13 @@ function onSplitConfirm(): void {
 }
 .muted {
   color: var(--text-secondary);
+}
+
+// 2026-08-27 T22：列设置工具条（与 PartListShell 同款）
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 .split-dialog-body p {
   margin: 6px 0;
