@@ -27,6 +27,8 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 7. **auth 域 2026-08-26 临时回滚 v1**：`/api/v1/auth/*` 是当前目标；新增 auth 功能统一走 `api`（v1）。**已知 trade-off**：v2 业务端点（`deliveryNote` / `deliveryGroup` / `parts/scanInspect`）仍走 `apiV2`，拿到 v1 JWT 会在 `get_current_user` 处 40101，由 `auth:logout` 兜底重登。**待 v1 业务端点迁完再统一切回 v2**（详见 `docs/02-architecture/api-contract.md`）。
 8. **router `meta.menuCode` 必填**：单一权限源 = 后端菜单树，不填会被守卫误放行。
 9. **dummy-auth 只能 dev 模式用**：`npm run dev:dummy` / `npm run dev -- --dummy-auth` 仅本地调试用。三层 prod 保护已就位（vite build 抛错 + `import.meta.env.DEV` guard + 不写 localStorage）。任何 prod bundle 不应含 dummy-auth 注入路径（grep `initDummyAuth` 仅命中 dev 调用点 + `useAuthSession` 函数定义）。
+10. **容器可能为 null 的拖拽点必须用 `useLazyDraggable`**：`vue-draggable-plus` 的 `useDraggable` 默认 `immediate: true`，会在 `onMounted` 里对 null 元素 `new Sortable(null)` 抛错。容器在 `v-if` 内 / `el-dialog destroy-on-close` 后重建 / el-table `tbody` 需查询才拿得到 → 用 `@/composables/useLazyDraggable`；容器挂载时已无条件存在才可直接 `useDraggable`。给 ref 赋值即触发重绑，**不要**再手动调 `start()`。
+11. **el-table 列插槽里依赖 `row.xxx` 的动态绑定要加空值守卫**：EP 会用合成空行 `{ row: {} }` 额外渲染每列 `#default` 一次并真的挂载（`.hidden-columns`），`:to` 动态的 `router-link` 会因此拼出 `/parts/undefined`。详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md)。
 
 ## 文档索引
 
@@ -39,7 +41,7 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 - 构建部署：[`docs/05-build-and-deploy/`](./docs/05-build-and-deploy/)（开发 / docker / nginx / 发布 checklist 4 篇）
 - 数据与 Excel：[`docs/06-data-and-excel/`](./docs/06-data-and-excel/)（Excel 解析 / PDF 与文件 2 篇）
 - 测试：[`docs/07-testing/testing-strategy.md`](./docs/07-testing/testing-strategy.md)
-- 已知风险：[`docs/08-known-risks/`](./docs/08-known-risks/)（依赖 / 安全运维 2 篇）
+- 已知风险：[`docs/08-known-risks/`](./docs/08-known-risks/)（依赖 / 安全运维 / 框架陷阱 3 篇）
 - 后端需求（给后端 agent）：[`docs/api-requirements/`](./docs/api-requirements/)
 
 ## API 文档路径
