@@ -43,6 +43,7 @@
               :align="d.align"
               :show-overflow-tooltip="d.showOverflowTooltip"
               :column-key="d.columnKey ?? d.key"
+              :label-class-name="drag.dragLabelClass(d)"
             >
               <template v-if="d.cellRender" #default="scope">
                 <component :is="d.cellRender(scope)" />
@@ -161,7 +162,6 @@ import {
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useDialogSize } from '@/composables/useDialogSize'
-import { findElTableThead } from '@/utils/elTable'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 
 const userDlg = useDialogSize({ desktopWidth: 420 })
@@ -169,7 +169,7 @@ const rolesDlg = useDialogSize({ desktopWidth: 560 })
 
 // PagedTable 持有 page/pageSize/total/loading/items（2026-08-25 T7）
 const pagedRef = ref()
-// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到 <thead>
+// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
 const tableRef = ref()
 // fetcher 闭包从 PagedTable 暴露的 ref 读分页参数（而不是 view 自己再持一份 refs）
 const fetcher = async (params: { page: number; pageSize: number }) => {
@@ -193,6 +193,7 @@ const { restore: restoreUserFilter, clear: clearUserFilter } = useListStatePersi
 // ============ 列可见性 + 列顺序拖动 ============
 // 「操作」列不放进 defs → 始终可见。
 // 2026-08-27 T15：补 prop / width / minWidth / align + 复杂单元格走 cellRender。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'username', label: '用户名', prop: 'username', minWidth: 120, align: 'center' },
   { key: 'full_name', label: '姓名', prop: 'full_name', minWidth: 100, align: 'center' },
@@ -201,7 +202,7 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const u = row as UserOut
       if (u.roles.length === 0) {
-        return h('span', { class: 'no-roles' }, () => '无角色')
+        return h('span', { class: 'no-roles' }, '无角色')
       }
       // 2026-08-27 T15：cellRender 必须返回单一 VNode,所以用 div 包裹多个 tag。
       // 原模板直接用 v-for 渲染多个根节点,这里改用 div.role-tags 容器复用 .role-tags flex 样式。
@@ -350,11 +351,9 @@ onMounted(() => {
     (s) => { if (typeof s === 'number') size.value = s },
   )
   void fetchData()
-  // 2026-08-27 T15：列顺序拖动挂 useDraggable 到 <thead>
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+  // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+  drag.applyDrag(tableRef)
 })
 </script>
 

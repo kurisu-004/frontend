@@ -145,6 +145,7 @@
                   :sortable="d.sortable"
                   :show-overflow-tooltip="d.showOverflowTooltip"
                   :column-key="d.columnKey ?? d.key"
+                  :label-class-name="drag.dragLabelClass(d)"
                 >
                   <template v-if="d.cellRender" #default="scope">
                     <component :is="d.cellRender(scope)" />
@@ -174,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { ElMessage, ElTag } from 'element-plus'
 import EChart from '@/components/EChart.vue'
@@ -188,7 +189,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
@@ -211,11 +211,12 @@ const loading = ref(false)
 const data = ref<WorkerDetailOut | null>(null)
 
 // 2026-08-27 Task 9：列顺序拖动 + 可见性。
-// 表格在 `v-if="data"` 内（首次加载完成才渲染，workerId 清空后又销毁）
-// → 走 Ref 路径，watch(tableRef) 在 thead 重建后自愈。
+// 2026-08-28 改造：表格在 `v-if="data"` 内（首次加载完成才渲染，workerId 清空后又销毁）
+// → 传 el-table 实例 ref，composable 内部 watch(ref) + MutationObserver 自愈（无需
+// consumer 侧再 watch(tableRef) 解析 headerRowRef）。
 // 「操作」列 fixed=right，不进 defs。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const tableRef = ref()
-const theadRef = ref<HTMLElement | null>(null)
 const columnDefs: ColumnDef[] = [
   {
     key: 'serial_no', label: '流水号', prop: 'serial_no', minWidth: 160, align: 'center',
@@ -235,7 +236,7 @@ const columnDefs: ColumnDef[] = [
       // 没有 part_id 时不能拼 router-link，否则得到 /parts/undefined
       return r.part_id
         ? h(RouterLink, { to: `/parts/${r.part_id}`, class: 'name-link' }, () => r.name)
-        : h('span', () => r.name ?? '')
+        : h('span', r.name ?? '')
     },
   },
   { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 140, align: 'center' },
@@ -266,19 +267,8 @@ const columnDefs: ColumnDef[] = [
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'worker_detail' })
 const drag = useColumnDrag(columnDefs, { listKey: 'worker_detail' })
 
-watch(tableRef, (instance) => {
-  if (!instance) {
-    theadRef.value = null
-    return
-  }
-  void nextTick(() => {
-    const root = (instance as { $el?: HTMLElement }).$el
-    theadRef.value = root ? findElTableThead(root) : null
-  })
-}, { flush: 'post' })
-
-// Ref 路径：applyDrag 内部 watch(theadRef)，thead 换新节点时先 destroy 旧的再 start
-drag.applyDrag(theadRef)
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部 watch(ref) + MutationObserver 自愈。
+drag.applyDrag(tableRef)
 
 function onPickerChange(v: string | null): void {
   selectedWorkerId.value = v

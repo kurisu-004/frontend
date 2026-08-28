@@ -40,6 +40,7 @@
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />
@@ -127,7 +128,6 @@ import {
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useDialogSize } from '@/composables/useDialogSize'
-import { findElTableThead } from '@/utils/elTable'
 import { listShelves, createShelf, updateShelf, deactivateShelf, getShelfProcesses, setShelfProcesses } from '@/api/shelves'
 import { listProcesses } from '@/api/process'
 import type { Shelf } from '@/types/shelf'
@@ -167,7 +167,7 @@ const drag = useColumnDrag(columnDefs, { listKey: 'shelf_list' })
 const items = ref<Shelf[]>([])
 const loading = ref(false)
 const shelfDlg = useDialogSize({ desktopWidth: 400 })
-// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到 <thead>
+// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
 const tableRef = ref()
 
 const showCreate = ref(false)
@@ -228,11 +228,9 @@ async function doDeactivate(id: string) { await deactivateShelf(id); await fetch
 onMounted(async () => {
   await fetchData()
   try { const res = await listProcesses({ limit: 200 }); allProcesses.value = res.items } catch { /* ignore */ }
-  // 2026-08-27 T15：列顺序拖动挂 useDraggable 到 <thead>
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+  // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+  drag.applyDrag(tableRef)
 })
 </script>
 

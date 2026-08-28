@@ -42,7 +42,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
@@ -81,18 +80,19 @@ const { restore: restoreNoteListFilter } = useListStatePersist(
 // ============ 列可见性 + 列顺序拖动 ============
 // 「操作」列不放进 defs → 始终可见
 // 2026-08-27 T17：补 prop / minWidth / align + 文本列走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'delivery_note_no', label: '单号', prop: 'delivery_note_no', minWidth: 180, align: 'center' },
   {
     key: 'delivery_date', label: '送货日期', minWidth: 120, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as DeliveryNoteOut).delivery_date ?? '—'),
+    cellRender: ({ row }) => h('span', null, (row as DeliveryNoteOut).delivery_date ?? '—'),
   },
   {
     key: 'customer', label: '客户', minWidth: 130, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => {
+    cellRender: ({ row }) => {
       const r = row as DeliveryNoteOut
-      return r.customer_path ?? r.customer_name ?? '—'
-    }),
+      return h('span', null, r.customer_path ?? r.customer_name ?? '—')
+    },
   },
   {
     key: 'status', label: '状态', minWidth: 80, align: 'center',
@@ -108,26 +108,26 @@ const columnDefs: ColumnDef[] = [
     key: 'submitted_at', label: '提交时间', minWidth: 170, align: 'center',
     cellRender: ({ row }) => {
       const r = row as DeliveryNoteOut
-      return h('span', null, () => r.submitted_at ? new Date(r.submitted_at!).toLocaleString() : '—')
+      return h('span', null, r.submitted_at ? new Date(r.submitted_at!).toLocaleString() : '—')
     },
   },
   {
     key: 'picked_up_at', label: '领取时间', minWidth: 170, align: 'center',
     cellRender: ({ row }) => {
       const r = row as DeliveryNoteOut
-      return h('span', null, () => r.picked_up_at ? new Date(r.picked_up_at!).toLocaleString() : '—')
+      return h('span', null, r.picked_up_at ? new Date(r.picked_up_at!).toLocaleString() : '—')
     },
   },
   {
     key: 'driver_worker_name', label: '司机', prop: 'driver_worker_name', minWidth: 80, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as DeliveryNoteOut).driver_worker_name ?? '—'),
+    cellRender: ({ row }) => h('span', null, (row as DeliveryNoteOut).driver_worker_name ?? '—'),
   },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_note_list' })
 const drag = useColumnDrag(columnDefs, { listKey: 'delivery_note_list' })
-// 2026-08-27 T17：列拖动 onMounted 挂 useDraggable 到 <thead>。本视图为顶层路由，
-// PagedTable 内 <el-table> 始终在 DOM（无 destroy-on-close / v-if）→ HTMLElement 路径。
 const tableRef = ref()
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+drag.applyDrag(tableRef)
 
 const customers = ref<{ id: string; name: string; path: string; parent_id: string | null }[]>([])
 
@@ -184,12 +184,6 @@ function resetToFirstPage() {
 }
 
 onMounted(async () => {
-  // 2026-08-27 T17：列顺序拖动挂 useDraggable 到 <thead>（HTMLElement 路径）
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (root) {
-    const thead = findElTableThead(root)
-    if (thead) drag.applyDrag(thead)
-  }
   await loadCustomers()
   // 2026-07-30 commit 4B：筛选项恢复（与 OutsourceQuoteList 同优先级）
   //   1) URL ?statuses=  → 最高优先
@@ -415,6 +409,7 @@ async function onSoftDelete(n: DeliveryNoteOut) {
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />

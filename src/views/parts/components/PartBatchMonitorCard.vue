@@ -9,11 +9,13 @@
 
   2026-08-25 frontend-overall-refactor：从 PartDetail.vue 抽出。
 
-  2026-08-27 T22（B 组 batch 1）：接入列顺序拖动 + ColumnVisibilityPopover。
+  2026-08-28 改造（B 组 batch 1 列拖动接入）：
   - el-table 在 el-card 内 v-if 控制（batches.length > 0 时挂载）→
-    HTMLElement 路径，onMounted 调 findElTableThead(tableRef.$el) + drag.applyDrag。
+    传 el-table 实例 ref 给 drag.applyDrag(tableRef)，composable 内部 watch +
+    MutationObserver 自愈（覆盖 batches=0 → 加载后挂载的过渡）。
   - 「操作」fixed="right" 列受 canManageBatches 控制：保留为字面量 <el-table-column v-if>，
     不进 defs。
+  - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
 -->
 <template>
   <el-card shadow="never" class="batch-card" v-loading="batchesLoading">
@@ -49,6 +51,7 @@
           :align="d.align"
           :header-align="d.headerAlign"
           :show-overflow-tooltip="d.showOverflowTooltip"
+          :label-class-name="drag.dragLabelClass(d)"
           :column-key="d.columnKey ?? d.key"
         >
           <template v-if="d.cellRender" #default="scope">
@@ -153,7 +156,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import type { OrderStatus } from '@/types/parts'
@@ -185,14 +187,15 @@ function isTerminalBatch(b: PartBatch): boolean {
 
 // 2026-08-27 T22：列顺序拖动 + 可见性。
 // 「操作」列受 canManageBatches 控制 → 保留为字面量 <el-table-column v-if>，不进 defs。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
     key: 'batch_label', label: '批次', minWidth: 110, align: 'center',
-    cellRender: ({ row }) => h('span', { class: 'batch-label' }, () => (row as PartBatch).batch_label ?? ''),
+    cellRender: ({ row }) => h('span', { class: 'batch-label' }, (row as PartBatch).batch_label ?? ''),
   },
   {
     key: 'quantity', label: '数量', width: 80, align: 'right',
-    cellRender: ({ row }) => h('span', null, () => (row as PartBatch).quantity),
+    cellRender: ({ row }) => h('span', null, (row as PartBatch).quantity),
   },
   {
     key: 'status', label: '状态', minWidth: 110, align: 'center',
@@ -205,33 +208,30 @@ const columnDefs: ColumnDef[] = [
   },
   {
     key: 'current_holder_display', label: '所在位置', minWidth: 130, align: 'center', showOverflowTooltip: true,
-    cellRender: ({ row }) => h('span', null, () => (row as PartBatch).current_holder_display || '—'),
+    cellRender: ({ row }) => h('span', null, (row as PartBatch).current_holder_display || '—'),
   },
   {
     key: 'next_process_name', label: '下一工序', minWidth: 100, align: 'center', showOverflowTooltip: true,
-    cellRender: ({ row }) => h('span', null, () => (row as PartBatch).next_process_name || '—'),
+    cellRender: ({ row }) => h('span', null, (row as PartBatch).next_process_name || '—'),
   },
   {
     key: 'delivery_note_no', label: '送货单', minWidth: 150, align: 'center', showOverflowTooltip: true,
-    cellRender: ({ row }) => h('span', null, () => (row as PartBatch).delivery_note_no || '—'),
+    cellRender: ({ row }) => h('span', null, (row as PartBatch).delivery_note_no || '—'),
   },
   {
     key: 'created_at', label: '创建时间', minWidth: 150, align: 'center',
-    cellRender: ({ row }) => h('span', { class: 'muted' }, () => formatDateTime((row as PartBatch).created_at)),
+    cellRender: ({ row }) => h('span', { class: 'muted' }, formatDateTime((row as PartBatch).created_at)),
   },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_monitor' })
 const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_monitor' })
 
-// 2026-08-27 T22：HTMLElement 路径。组件挂载时 batches 可能为 0 → el-table 未渲染
-// → tableRef undefined；onMounted 用 optional chaining 兜底，等 batches 加载回来
-// 再切换不会自动重绑（HTMLElement 路径标准 trade-off，brief 已认可）。
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
+// 自愈。组件挂载时 batches=0 → tableRef.value=null → composable 不绑；batches 加载后
+// el-table 挂载 → ref 更新 → composable watch 重新归一化 + 表头首次渲染时自愈。
 const tableRef = ref()
 onMounted(() => {
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  drag.applyDrag(tableRef)
 })
 
 // ============ 拆分对话框（局部 UI 状态）============

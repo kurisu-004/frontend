@@ -76,6 +76,7 @@
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />
@@ -160,7 +161,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import {
   createWorker,
@@ -200,6 +200,7 @@ const { restore: restoreWorkerFilter, clear: clearWorkerFilter } = useListStateP
 // ============ 列可见性 + 列顺序拖动 ============
 // 「#」和「操作」列不放进 defs → 始终可见。
 // 2026-08-27 T15：补 prop / width / minWidth / align + 复杂单元格走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'badge_code', label: '工牌码', prop: 'badge_code', minWidth: 160, align: 'center' },
   { key: 'name', label: '姓名', prop: 'name', minWidth: 120, align: 'center' },
@@ -210,7 +211,7 @@ const columnDefs: ColumnDef[] = [
       return w.work_type_id
         ? h(ElTag, { size: 'small', type: 'primary' },
             () => workTypeNameById.value[w.work_type_id!] || '...')
-        : h('span', { style: 'color: #c0c4cc' }, () => '未分配')
+        : h('span', { style: 'color: #c0c4cc' }, '未分配')
     },
   },
   {
@@ -228,7 +229,7 @@ const columnDefs: ColumnDef[] = [
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'worker_list' })
 const drag = useColumnDrag(columnDefs, { listKey: 'worker_list' })
 
-// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到 <thead>
+// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
 const tableRef = ref()
 const dialogVisible = ref(false)
 const editing = ref<Worker | null>(null)
@@ -357,12 +358,9 @@ onMounted(async () => {
   } catch {
     // 不阻塞主页面
   }
-  // 2026-08-27 T15：列顺序拖动挂 useDraggable 到 <thead>。tableRef.value 是 EP el-table 组件实例，
-  // $el 是其根容器；findElTableThead 走固定 selector 取真正的 <thead>。
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+  // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+  drag.applyDrag(tableRef)
 })
 </script>
 

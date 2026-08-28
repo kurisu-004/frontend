@@ -151,6 +151,7 @@
               :align="d.align"
               :show-overflow-tooltip="d.showOverflowTooltip"
               :column-key="d.columnKey ?? d.key"
+              :label-class-name="drag.dragLabelClass(d)"
             >
               <template v-if="d.cellRender" #default="scope">
                 <component :is="d.cellRender(scope)" />
@@ -211,7 +212,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import type { Customer } from '@/api/customer'
 import OutsourceSendDialog from './components/OutsourceSendDialog.vue'
 import {
@@ -271,6 +271,7 @@ const {
 // ============ 列可见性 + 列顺序拖动 ============
 // 2026-08-27 T16：补 prop / minWidth / align + ElTag / 多根 / 分支类型列走 cellRender(PartListShell 同款)。
 // 「图号」列原本是 <span + el-tag> 双根 → 必须用 <div> 包一层再 h()（cellRender 只接受单 VNode）。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'part_serial_no', label: '序列号', prop: 'part_serial_no', minWidth: 100, align: 'center' },
   {
@@ -279,7 +280,7 @@ const columnDefs: ColumnDef[] = [
       const r = row as SendableItem
       // 2026-07-29 PR-fix-0.2.0 批次化：行=批次，图号旁显示批次号提示
       return h('div', { style: 'display: inline-flex; align-items: center;' }, [
-        h('span', null, () => r.part_drawing_no),
+        h('span', undefined, r.part_drawing_no ?? ''),
         r.batch_no
           ? h(ElTag, { size: 'small', type: 'info', effect: 'plain', style: 'margin-left: 4px' },
               () => `批次 ${r.batch_no}`)
@@ -296,7 +297,7 @@ const columnDefs: ColumnDef[] = [
       const r = row as SendableItem
       return r.shelf_code
         ? h(ElTag, { type: 'info', size: 'small' }, () => r.shelf_code)
-        : h('span', null, () => '—')
+        : h('span', null, '—')
     },
   },
   {
@@ -308,7 +309,7 @@ const columnDefs: ColumnDef[] = [
   { key: 'customer_path', label: '客户', prop: 'customer_path', minWidth: 160, showOverflowTooltip: true, align: 'center' },
   {
     key: 'next_process_name', label: '下一道工序', minWidth: 140, showOverflowTooltip: true, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as SendableItem).next_process_name || '—'),
+    cellRender: ({ row }) => h('span', null, (row as SendableItem).next_process_name || '—'),
   },
   {
     key: 'outsource_company_name', label: '外协公司', minWidth: 160, showOverflowTooltip: true, align: 'center',
@@ -318,35 +319,32 @@ const columnDefs: ColumnDef[] = [
         // 2026-08-27 T16：SendableItem 是 discriminated union，DirectOutsourceCandidateItem / ApprovedQuoteForSendItem
         // 之间无字段重叠 → 走 unknown 二次 cast 满足 TS2352。
         const direct = r as unknown as DirectOutsourceCandidateItem
-        return h('span', null, () =>
-          direct.company_options.map((c) => c.name).join(' / ') || '—')
+        const directLabel = direct.company_options.map((c) => c.name).join(' / ') || '—'
+        return h('span', null, directLabel)
       }
       const approved = r as unknown as ApprovedQuoteForSendItem
-      return h('span', null, () => approved.outsource_company_name || '—')
+      return h('span', null, approved.outsource_company_name || '—')
     },
   },
   {
     key: 'price', label: '单价(元)', minWidth: 100, align: 'right',
     cellRender: ({ row }) => {
       const r = row as SendableItem
-      if (r.send_mode === 'DIRECT') return h('span', null, () => '—')
+      if (r.send_mode === 'DIRECT') return h('span', null, '—')
       const approved = r as unknown as ApprovedQuoteForSendItem
-      return h('span', null, () => String(approved.price))
+      return h('span', null, String(approved.price))
     },
   },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_send_receive_sendable' })
 const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_sendable' })
-// 2026-08-27 T16：列拖动 onMounted 挂 useDraggable 到 <thead>
+// 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
 const tableRef = ref()
 
 // 持久化恢复 + pageSize 双向同步（与原 shell onMounted 等价）
 onMounted(() => {
-  // 2026-08-27 T16：列顺序拖动挂 useDraggable 到 <thead>（本 tab 内 el-table thead 始终存在 → HTMLElement 路径）
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+  drag.applyDrag(tableRef)
 
   const persisted = restore()
   if (persisted) {

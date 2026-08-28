@@ -26,13 +26,14 @@
     el-pagination 走 <PagedTable> 子组件收口；
     加急红底 #fde2e2 通过 :deep(.row-urgent) 注入，rowClassName 由视图传。
 
-  设计要点（2026-08-27 T15 列顺序拖动接入）：
+  设计要点（2026-08-28 列顺序拖动接入）：
   - 列渲染改 v-for：drag.orderedDefs 提供持久化顺序，
     isVisible + isDraggable 在模板里控制列是否渲染 / 是否带拖动手柄。
   - useColumnDrag 与 useColumnVisibility 平行，二者共用 columnDefs。
   - columnDefs 字段扩展（useColumnVisibility 已扩展）：draggable / columnKey / type / fixed，
     沿用 useColumnDrag.resolveDraggable 推导。
-  - onMounted 调 findElTableThead(tableRef.$el) + drag.applyDrag 把 useDraggable 挂到 <thead>。
+  - 传 el-table 实例 ref 给 drag.applyDrag(tableRef)，composable 内部解析表头 +
+    MutationObserver 自愈（覆盖 EP 重建表头 / 数据到达后表头首次渲染）。
   - 「重置列顺序」按钮在 ColumnVisibilityPopover footer；popover emit 'reset-order'
     透传到 shell 调 drag.reset()。
   - 列顺序持久化 key: myerp.list.<userId>.<listKey>_columnOrder
@@ -109,9 +110,7 @@
               :sort-orders="d.sortOrders"
               :resizable="d.resizable"
               :class-name="d.className"
-              :label-class-name="
-                resolveDraggable(d) ? d.labelClassName : `col-no-drag ${d.labelClassName ?? ''}`.trim()
-              "
+              :label-class-name="drag.dragLabelClass(d)"
               :column-key="d.columnKey ?? d.key"
             >
               <!--
@@ -170,7 +169,6 @@ import {
   type PageResult,
 } from '@/composables/usePagedListQuery'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
-import { findElTableThead } from '@/utils/elTable'
 
 const props = withDefaults(defineProps<{
   columnDefs: readonly ColumnDef[]
@@ -207,7 +205,8 @@ async function safeFetcher(params: PageQueryParams): Promise<PageResult<T>> {
 const columnVisibility = useColumnVisibility(props.columnDefs, { listKey: props.listKey })
 
 // 2026-08-27 T15：列顺序拖动（与 visibility 平行，共享 columnDefs）。
-// orderedDefs 提供持久化的当前顺序，applyDrag 在 onMounted 挂到 <thead>。
+// orderedDefs 提供持久化的当前顺序，applyDrag 在 onMounted 挂到表头 <tr>（列换序；
+// 绑 thead 会变成拖整行，2026-08-27 修正）。
 const drag = useColumnDrag(props.columnDefs, { listKey: props.listKey })
 
 // 分页状态 + 拉取（闭包由视图 fetcher 提供；safeFetcher 在 shell 里包一层 catch，
@@ -237,15 +236,11 @@ async function onRefresh(): Promise<void> {
   await reset()
 }
 
-// 2026-08-27 T15：挂 useColumnDrag 到 el-table 的 <thead>。
-// tableRef.value 是 EP el-table 组件实例，$el 是其根容器（外层 .el-table）。
-// findElTableThead 走固定 selector 取真正的 <thead>。
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
+// 自愈（覆盖 EP 重建表头 / 数据到达后表头首次渲染）。consumer 0 行 query 代码。
 const tableRef = ref()
 onMounted(() => {
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  drag.applyDrag(tableRef)
 })
 
 // 类型化 slot prop，便于 IDE 在视图侧取 scope 字段时能拿到推断

@@ -58,6 +58,7 @@
             :sortable="d.sortable"
             :show-overflow-tooltip="d.showOverflowTooltip"
             :column-key="d.columnKey ?? d.key"
+            :label-class-name="drag_summary.dragLabelClass(d)"
           >
             <template v-if="d.cellRender" #default="scope">
               <component :is="d.cellRender(scope)" />
@@ -121,6 +122,7 @@
               :sortable="d.sortable"
               :show-overflow-tooltip="d.showOverflowTooltip"
               :column-key="d.columnKey ?? d.key"
+              :label-class-name="drag_detail.dragLabelClass(d)"
             >
               <template v-if="d.cellRender" #default="scope">
                 <component :is="d.cellRender(scope)" />
@@ -151,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { ElMessage, ElTag } from 'element-plus'
 import {
   fetchPickupSkipDetail,
@@ -170,7 +172,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
@@ -181,7 +182,7 @@ const summaryLoading = ref(false)
 const summaryRows = ref<PickupSkipSummaryItem[]>([])
 
 // 2026-08-27 Task 9：汇总表列顺序拖动 + 可见性。
-// 汇总表在 el-card 内无条件渲染 → onMounted 即可查到 thead，走 HTMLElement 路径。
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部 watch(ref) + MutationObserver 自愈。
 const summaryTableRef = ref()
 const columnDefs_summary: ColumnDef[] = [
   {
@@ -228,6 +229,8 @@ const columnVisibility_summary = useColumnVisibility(columnDefs_summary, {
   listKey: 'pickup_skip_summary',
 })
 const drag_summary = useColumnDrag(columnDefs_summary, { listKey: 'pickup_skip_summary' })
+// 2026-08-28 改造：直接传实例 ref。
+drag_summary.applyDrag(summaryTableRef)
 
 async function reloadSummary(): Promise<void> {
   summaryLoading.value = true
@@ -250,10 +253,10 @@ const detailPage = ref(1)
 const detailPageSize = ref(20)
 
 // 2026-08-27 Task 9：明细表列顺序拖动 + 可见性。
-// 明细表在 el-drawer 内（drawer body 首次打开才渲染）→ 走 Ref 路径，
-// applyDrag 内部 watch(theadRef)，thead 出现/重建后自愈。
+// 2026-08-28 改造：明细表在 el-drawer 内（drawer body 首次打开才渲染 / 开关抽屉会重建），
+// 传 el-table 实例 ref，composable 内部 watch(ref) + MutationObserver 自愈——开关抽屉
+// 重建表头后无需手动重绑，正是新 observer 覆盖的场景。
 const detailTableRef = ref()
-const detailTheadRef = ref<HTMLElement | null>(null)
 const columnDefs_detail: ColumnDef[] = [
   {
     key: 'created_at', label: '时间', prop: 'created_at', minWidth: 170, align: 'center',
@@ -304,18 +307,9 @@ const columnVisibility_detail = useColumnVisibility(columnDefs_detail, {
 })
 const drag_detail = useColumnDrag(columnDefs_detail, { listKey: 'pickup_skip_detail' })
 
-watch(detailTableRef, (instance) => {
-  if (!instance) {
-    detailTheadRef.value = null
-    return
-  }
-  void nextTick(() => {
-    const root = (instance as { $el?: HTMLElement }).$el
-    detailTheadRef.value = root ? findElTableThead(root) : null
-  })
-}, { flush: 'post' })
-
-drag_detail.applyDrag(detailTheadRef)
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部 watch(ref) + MutationObserver 自愈
+// （开关抽屉重建表头自动重绑，consumer 侧无需再手动重绑）。
+drag_detail.applyDrag(detailTableRef)
 
 const detailOffset = computed<number>(() => (detailPage.value - 1) * detailPageSize.value)
 
@@ -349,13 +343,6 @@ function onPageSizeChange(size: number): void {
 }
 
 onMounted(async () => {
-  // 汇总表列拖动：thead 需等 el-table 首帧 patch 完才查得到
-  await nextTick()
-  const root = (summaryTableRef.value as { $el?: HTMLElement } | undefined)?.$el
-  if (root) {
-    const thead = findElTableThead(root)
-    if (thead) drag_summary.applyDrag(thead)
-  }
   await reloadSummary()
 })
 </script>

@@ -97,6 +97,7 @@
           :sortable="d.sortable"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />
@@ -191,7 +192,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, nextTick, onMounted, ref } from 'vue'
+import { h, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import type { UploadFile, FormInstance } from 'element-plus'
 import { ElLink, ElMessage, ElTag } from 'element-plus'
@@ -208,7 +209,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import {
@@ -247,8 +247,9 @@ const router = useRouter()
 const addChildDlg = useDialogSize({ desktopWidth: 480 })
 
 // ============ 2026-08-27 Task 9：子件表列顺序拖动 + 可见性 ============
-// 表格在 el-card 内无条件渲染（不在 dialog / v-if 内）→ onMounted 即可查到 thead，
-// 走 HTMLElement 路径。type=index 的「#」列与 fixed=right 的「操作」列不进 defs。
+// 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+// MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+// type=index 的「#」列与 fixed=right 的「操作」列不进 defs。
 const tableRef = ref()
 const columnDefs: ColumnDef[] = [
   {
@@ -308,14 +309,8 @@ const columnDefs: ColumnDef[] = [
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'assembly_children' })
 const drag = useColumnDrag(columnDefs, { listKey: 'assembly_children' })
-
-onMounted(async () => {
-  await nextTick()
-  const root = (tableRef.value as { $el?: HTMLElement } | undefined)?.$el
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
-})
+// 2026-08-28 改造：直接传实例 ref；composable 内部 watch(ref) + MutationObserver 自愈。
+drag.applyDrag(tableRef)
 
 // ============ 添加子件对话框状态 ============
 const addChildVisible = ref(false)

@@ -7,10 +7,12 @@
   - 新建报价对话框（form ref 局部维护，提交 emit create）
   - 状态门控的「新建」按钮
 
-  2026-08-27 T23（B 组 batch 1）：接入列顺序拖动 + ColumnVisibilityPopover。
+  2026-08-28 改造（B 组 batch 1 列拖动接入）：
   - el-table 在 el-card 内 v-if 控制（quotes.length > 0 时挂载）→
-    HTMLElement 路径，onMounted 调 findElTableThead(tableRef.$el) + drag.applyDrag。
+    传 el-table 实例 ref 给 drag.applyDrag(tableRef)，composable 内部 watch +
+    MutationObserver 自愈（覆盖 quotes=0 → 加载后挂载的过渡）。
   - 「操作」fixed="right" 列保留为字面量 <el-table-column>。
+  - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
 -->
 <template>
   <el-card
@@ -60,6 +62,7 @@
           :align="d.align"
           :header-align="d.headerAlign"
           :show-overflow-tooltip="d.showOverflowTooltip"
+          :label-class-name="drag.dragLabelClass(d)"
           :column-key="d.columnKey ?? d.key"
         >
           <template v-if="d.cellRender" #default="scope">
@@ -178,7 +181,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import { OUTSOURCE_QUOTE_STATUS_LABEL, OUTSOURCE_QUOTE_STATUS_TAG, type OutsourceQuote } from '@/types/outsource'
@@ -283,6 +285,7 @@ function onViewQuoteDetail() {
 
 // 2026-08-27 T23：列顺序拖动 + 可见性。
 // 「操作」列固定右侧 → 不进 defs。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
     key: 'status', label: '状态', minWidth: 110, align: 'center',
@@ -299,25 +302,23 @@ const columnDefs: ColumnDef[] = [
   { key: 'process_code', label: '工序', prop: 'process_code', minWidth: 100, align: 'center' },
   {
     key: 'price', label: '单价(元)', minWidth: 100, align: 'right',
-    cellRender: ({ row }) => h('span', null, () => (row as OutsourceQuote).price),
+    cellRender: ({ row }) => h('span', null, (row as OutsourceQuote).price),
   },
   {
     key: 'created_at', label: '创建时间', minWidth: 160, align: 'center',
-    cellRender: ({ row }) => h('span', { class: 'muted' }, () => formatDateTime((row as OutsourceQuote).created_at)),
+    cellRender: ({ row }) => h('span', { class: 'muted' }, formatDateTime((row as OutsourceQuote).created_at)),
   },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_quote_card' })
 const drag = useColumnDrag(columnDefs, { listKey: 'part_quote_card' })
 
-// 2026-08-27 T23：HTMLElement 路径。组件挂载时 quotes 可能为 0 → el-table 未渲染
-// → tableRef undefined；onMounted 用 optional chaining 兜底（HTMLElement 路径标准 trade-off）。
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
+// 自愈。组件挂载时 quotes=0 → tableRef.value=null → composable 不绑；quotes 加载后
+// el-table 挂载 → ref 更新 → composable watch 重新归一化 + 表头首次渲染时自愈。
 const tableRef = ref()
 onMounted(() => {
   emit('fetch')
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  drag.applyDrag(tableRef)
 })
 watch(() => props.partId, () => emit('fetch'))
 </script>

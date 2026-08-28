@@ -87,6 +87,7 @@
             :sortable="d.sortable"
             :show-overflow-tooltip="d.showOverflowTooltip"
             :column-key="d.columnKey ?? d.key"
+            :label-class-name="drag.dragLabelClass(d)"
           >
             <template v-if="d.cellRender" #default="scope">
               <component :is="d.cellRender(scope)" />
@@ -113,7 +114,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElProgress, ElTag } from 'element-plus'
 import EChart from '@/components/EChart.vue'
 import { fetchWorkerStats } from '@/api/statistics'
@@ -126,7 +127,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
@@ -154,8 +154,6 @@ const workTypes = ref<WorkType[]>([])
 const workTypeOptions = computed(() => workTypes.value)
 
 // 2026-08-27 Task 9：列顺序拖动 + 可见性。
-// 表格在 el-card 内无条件渲染（tab 首次激活时本组件才 mount），
-// onMounted 即可拿到 thead → 走 HTMLElement 路径。
 // 「操作」列 fixed=right，不进 defs（保持 literal 渲染，永不隐藏/拖动）。
 const tableRef = ref()
 const columnDefs: ColumnDef[] = [
@@ -213,6 +211,8 @@ const columnDefs: ColumnDef[] = [
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'worker_stats' })
 const drag = useColumnDrag(columnDefs, { listKey: 'worker_stats' })
+// 2026-08-28 改造：直接传实例 ref；composable 内部 watch(ref) + MutationObserver 自愈。
+drag.applyDrag(tableRef)
 
 // 前端筛过的工人列表
 const filteredRows = computed<WorkerStatsItem[]>(() => {
@@ -247,13 +247,6 @@ async function reload(): Promise<void> {
 }
 
 onMounted(async () => {
-  // 列拖动：thead 需等 el-table 首帧 patch 完才查得到
-  await nextTick()
-  const root = (tableRef.value as { $el?: HTMLElement } | undefined)?.$el
-  if (root) {
-    const thead = findElTableThead(root)
-    if (thead) drag.applyDrag(thead)
-  }
   await reload()
   // 工种下拉只用于筛选，本地缓存。
   try {

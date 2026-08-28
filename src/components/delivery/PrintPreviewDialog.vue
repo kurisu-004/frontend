@@ -41,7 +41,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
@@ -168,32 +167,32 @@ useLazyDraggable(tbodyRef, rows, {
 })
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
-// el-dialog destroy-on-close → Ref 路径：watch(previewTableRef) 重建 thead 后自愈。
-// 与既有 useLazyDraggable 行拖（绑 tbody）独立 —— 列拖挂 thead，DOM 容器完全分离。
+// 与既有 useLazyDraggable 行拖（绑 tbody）独立 —— 列拖挂表头 <tr>，DOM 容器完全分离。
 // label 模式首列 selection 勾选列不进 defs（type='selection' 自动不可拖 + v-if 条件）。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
     // 序号列：保留行拖手柄 .drag-handle（vue-draggable-plus 行拖的 handle 选择器）。
     // cellRender 必须返回单个 VNode；行内多根包 <div>。
     key: 'index', label: '序号', width: 72, align: 'center',
-    cellRender: ({ $index }) => h('div', null, () => [
-      h('span', { class: 'drag-handle', title: '拖动排序' }, () => h(Rank)),
-      h('span', { class: 'row-index' }, () => $index + 1),
+    cellRender: ({ $index }) => h('div', null, [
+      h('span', { class: 'drag-handle', title: '拖动排序' }, h(Rank)),
+      h('span', { class: 'row-index' }, $index + 1),
     ]),
   },
   {
     key: 'order_no', label: '订单号', prop: 'order_no', minWidth: 120,
     showOverflowTooltip: true, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as PreviewRow).order_no || '—'),
+    cellRender: ({ row }) => h('span', null, (row as PreviewRow).order_no || '—'),
   },
   {
     key: 'customer_name', label: '分厂', prop: 'customer_name', minWidth: 160,
     showOverflowTooltip: true, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as PreviewRow).customer_name || '—'),
+    cellRender: ({ row }) => h('span', null, (row as PreviewRow).customer_name || '—'),
   },
   {
     key: 'applicant_name', label: '申请人', prop: 'applicant_name', minWidth: 100, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as PreviewRow).applicant_name || '—'),
+    cellRender: ({ row }) => h('span', null, (row as PreviewRow).applicant_name || '—'),
   },
   { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 140, align: 'center' },
   {
@@ -201,12 +200,12 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const r = row as PreviewRow
       if (isAsmRow(r)) {
-        return h('div', null, () => [
+        return h('div', null, [
           h(ElTag, { type: 'warning', size: 'small', class: 'asm-tag' }, () => '装配件'),
-          h('span', null, () => r.name),
+          h('span', null, r.name),
         ])
       }
-      return h('span', null, () => r.name)
+      return h('span', null, r.name)
     },
   },
 ]
@@ -215,15 +214,9 @@ const columnDefs: ColumnDef[] = [
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'print_preview_dialog' })
 const drag = useColumnDrag(columnDefs, { listKey: 'print_preview_dialog' })
 
-watch(previewTableRef, (instance) => {
-  if (!instance) return
-  void nextTick(() => {
-    const root = (instance as { $el?: HTMLElement }).$el
-    if (!root) return
-    const thead = findElTableThead(root)
-    if (thead) drag.applyDrag(thead)
-  })
-}, { flush: 'post' })
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+// （行拖 useLazyDraggable 仍走 tbody，独立 watcher 不动）
+drag.applyDrag(previewTableRef)
 
 watch(
   () => [props.modelValue, mergeMode.value],
@@ -437,6 +430,7 @@ async function onConfirm(): Promise<void> {
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />

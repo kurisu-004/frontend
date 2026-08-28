@@ -92,9 +92,7 @@
           :sort-orders="d.sortOrders"
           :resizable="d.resizable"
           :class-name="d.className"
-          :label-class-name="
-            resolveDraggable(d) ? d.labelClassName : `col-no-drag ${d.labelClassName ?? ''}`.trim()
-          "
+          :label-class-name="drag.dragLabelClass(d)"
           :column-key="d.columnKey ?? d.key"
         >
           <!-- 自定义表头（ColumnFilterPopover / 选中计数 badge）+ 默认 label +
@@ -178,7 +176,6 @@ import {
   columnIdentifier,
 } from '@/composables/useColumnDrag'
 import { resolveDraggable } from '@/composables/useColumnVisibility'
-import { findElTableThead } from '@/utils/elTable'
 import type { PartListItem } from '@/types/parts'
 import { getAssembly } from '@/api/assembly'
 import type { PartsListCtx } from '../composables/partsListCtx'
@@ -275,18 +272,13 @@ defineExpose({ tableRef })
 // tableRef 的情况下清掉原生筛选列（status / next_process）的内部勾选态。
 // EP clearFilter 会 emit filter-change，onNativeFilterChange 顺手把 search.* 同步清空。
 //
-// 2026-08-27 Task 6：列顺序拖动挂 useDraggable 到 <thead>。PartsTable 非 dialog 非 v-if，
-// tableRef.$el 在 onMounted 时已就绪 → 走 HTMLElement 路径（更直接，省一个 Ref 闭包）。
-// onMounted(() => { ... }) 同一钩子内：先注册 clearNativeFilters，再 applyDrag。
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
+// 自愈（覆盖 EP 重建表头 / 数据到达后表头首次渲染）。consumer 0 行 query 代码。
 onMounted(() => {
   query.registerClearNativeFilters(() => {
     tableRef.value?.clearFilter(['status', 'next_process'])
   })
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (root) {
-    const thead = findElTableThead(root)
-    if (thead) drag.applyDrag(thead)
-  }
+  drag.applyDrag(tableRef)
 })
 
 // 工具栏按钮的简短转发，模板里直接 @click="resetAllFilters"

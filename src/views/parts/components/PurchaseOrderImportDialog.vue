@@ -14,12 +14,13 @@
   - 批量更新失败时，保留对话框，用 failedRows 标红失败候选行 + 主行（任一候选失败 → 主行变红）。
   - 同一 part_id 跨多个 group 重复时，effectiveItems 去重（防御性）。
 
-  2026-08-27 T25（B 组 batch 1）：顶层 el-table 接入列顺序拖动 + ColumnVisibilityPopover。
+  2026-08-28 改造（B 组 batch 1 列拖动接入）：
   - el-dialog destroy-on-close + 顶层 el-table v-if="previewGroups.length > 0"：
     顶层表会在「关闭对话框 → 重开」或「解析完成前 → 解析完成」两个时机反复挂载 / 卸载。
-    用 watch(tableRef) 模式：tableRef 变化 → nextTick 后 findElTableThead + drag.applyDrag
-    重绑；旧 sortable 绑定已随销毁 DOM 失效，无需手动 destroy。
+    传 el-table 实例 ref 给 drag.applyDrag(tableRef)，composable 内部 watch +
+    MutationObserver 自愈（覆盖反复挂载 / 卸载的过渡）。
   - 仅顶层主表接列拖动；嵌套展开子表（候选勾选 / 编辑）保留字面量（列少、行为稳定）。
+  - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
 -->
 
 <template>
@@ -213,6 +214,7 @@
           :align="d.align"
           :header-align="d.headerAlign"
           :show-overflow-tooltip="d.showOverflowTooltip"
+          :label-class-name="drag.dragLabelClass(d)"
           :column-key="d.columnKey ?? d.key"
         >
           <template v-if="d.cellRender" #default="scope">
@@ -265,7 +267,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, ref, watch } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import type { UploadFile, UploadRawFile } from 'element-plus'
 import { ElMessage, ElMessageBox, ElTag, ElTooltip } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
@@ -289,7 +291,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
@@ -352,6 +353,7 @@ const failedRows = ref<Map<string, string>>(new Map())
 
 // 2026-08-27 T25：列顺序拖动 + 可见性。
 // 仅顶层主表主行列接列拖动（type="expand" 嵌套子表保留字面量，不进 defs）。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
     key: 'candidates', label: '候选数', width: 100, align: 'center',
@@ -368,11 +370,11 @@ const columnDefs: ColumnDef[] = [
   {
     key: 'excelDrawingNo', label: '物料代码', minWidth: 170, align: 'center',
     cellRender: ({ row }) => h('span', { class: 'mono' },
-      () => (row as PreviewGroup).excelDrawingNo || '—'),
+      (row as PreviewGroup).excelDrawingNo || '—'),
   },
   {
     key: 'excelName', label: '描述', minWidth: 170, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as PreviewGroup).excelName || '—'),
+    cellRender: ({ row }) => h('span', null, (row as PreviewGroup).excelName || '—'),
   },
   {
     key: 'matchType', label: '匹配方式', width: 120, align: 'center',
@@ -393,27 +395,17 @@ const columnDefs: ColumnDef[] = [
           () => h(ElTag, { type: 'warning', effect: 'plain', size: 'small' },
             () => `${g.warnings.length} 条`))
       }
-      return h('span', { class: 'muted' }, () => '—')
+      return h('span', { class: 'muted' }, '—')
     },
   },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'purchase_order_import' })
 const drag = useColumnDrag(columnDefs, { listKey: 'purchase_order_import' })
 
-// 2026-08-27 T25：watch(tableRef) 路径。el-dialog destroy-on-close + el-table v-if
-// 让「顶层表」反复挂载 / 卸载：每次 tableRef 变化（null → instance / instance → null）
-// → nextTick 后 findElTableThead + drag.applyDrag 重绑。旧 sortable 绑定已随销毁 DOM
-// 失效，无需手动 destroy（仅最后一次 onBeforeUnmount 销毁最新绑定）。
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部 watch + MutationObserver
+// 自愈（覆盖 el-dialog destroy-on-close + el-table v-if 反复挂载 / 卸载场景）。
 const tableRef = ref()
-watch(tableRef, (instance) => {
-  if (!instance) return
-  void nextTick(() => {
-    const root = instance.$el as HTMLElement | undefined
-    if (!root) return
-    const thead = findElTableThead(root)
-    if (thead) drag.applyDrag(thead)
-  })
-}, { flush: 'post' })
+drag.applyDrag(tableRef)
 
 // ============================================================
 // Computed

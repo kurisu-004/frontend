@@ -11,7 +11,7 @@
   而不是用 originalCode 重扫。
 -->
 <script setup lang="ts">
-import { computed, h, nextTick, ref, watch } from 'vue'
+import { computed, h, ref } from 'vue'
 import { ElMessage, ElTag } from 'element-plus'
 import { Select } from '@element-plus/icons-vue'
 
@@ -25,7 +25,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
@@ -58,15 +57,15 @@ const dlg = useDialogSize({ desktopWidth: 640 })
 const bulk = useBulkPassInspection()
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
-// el-dialog destroy-on-close → Ref 路径，watch(tableRef) 重建 thead 后自愈。
 // 「同时过检」/「数量」列不进 defs（el-input-number + v-model + 条件勾选不便走 cellRender）。
 const tableRef = ref()
 const columnDefs: ColumnDef[] = [
   {
     key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center',
+    // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
     cellRender: ({ row }) => h('span',
       { class: { muted: !(row as DeliveryNoteLineItem).serial_no } },
-      () => (row as DeliveryNoteLineItem).serial_no || '—'),
+      (row as DeliveryNoteLineItem).serial_no || '—'),
   },
   { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 100, align: 'center' },
   { key: 'name', label: '名称', prop: 'name', minWidth: 110, showOverflowTooltip: true },
@@ -80,15 +79,8 @@ const columnDefs: ColumnDef[] = [
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'batch_inspection_confirm' })
 const drag = useColumnDrag(columnDefs, { listKey: 'batch_inspection_confirm' })
 
-watch(tableRef, (instance) => {
-  if (!instance) return
-  void nextTick(() => {
-    const root = instance.$el as HTMLElement | undefined
-    if (!root) return
-    const thead = findElTableThead(root)
-    if (thead) drag.applyDrag(thead)
-  })
-}, { flush: 'post' })
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+drag.applyDrag(tableRef)
 
 // noteId 截断展示（雪花 ID 很长）
 const noteShortId = computed(() =>
@@ -191,6 +183,7 @@ async function onConfirm(): Promise<void> {
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />

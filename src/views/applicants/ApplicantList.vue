@@ -92,6 +92,7 @@
             :align="d.align"
             :show-overflow-tooltip="d.showOverflowTooltip"
             :column-key="d.columnKey ?? d.key"
+            :label-class-name="drag.dragLabelClass(d)"
           >
             <template v-if="d.cellRender" #default="scope">
               <component :is="d.cellRender(scope)" />
@@ -168,7 +169,6 @@ import {
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useDialogSize } from '@/composables/useDialogSize'
-import { findElTableThead } from '@/utils/elTable'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import { listCustomers, type Customer } from '@/api/customer'
 import {
@@ -185,15 +185,16 @@ import { formatDateTime } from '@/utils/date'
 // ============ 列可见性 + 列顺序拖动 ============
 // 「#」和「操作」列不放进 defs → 始终可见,且不出现在列设置弹窗。
 // 2026-08-27 T15：补 prop / minWidth / align + 文本列走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'name', label: '姓名', prop: 'name', minWidth: 160, align: 'center' },
   {
     key: 'customer_name', label: '所属一级客户', minWidth: 180, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as Applicant).customer_name || '—'),
+    cellRender: ({ row }) => h('span', null, (row as Applicant).customer_name || '—'),
   },
   {
     key: 'created_at', label: '创建时间', minWidth: 180, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => formatDateTime((row as Applicant).created_at)),
+    cellRender: ({ row }) => h('span', null, formatDateTime((row as Applicant).created_at)),
   },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'applicant_list' })
@@ -204,7 +205,7 @@ const saving = ref(false)
 const rows = ref<Applicant[]>([])
 const customers = ref<Customer[]>([])
 const search = reactive({ customerId: '' as string | '', nameLike: '' })
-// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到 <thead>
+// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
 const tableRef = ref()
 
 // ============ 筛选状态持久化 ============
@@ -341,11 +342,9 @@ onMounted(async () => {
   }
   await loadCustomers()
   await fetchList()
-  // 2026-08-27 T15：列顺序拖动挂 useDraggable 到 <thead>
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+  // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+  drag.applyDrag(tableRef)
 })
 </script>
 

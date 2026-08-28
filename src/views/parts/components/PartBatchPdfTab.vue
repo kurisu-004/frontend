@@ -192,6 +192,7 @@
           :min-width="d.minWidth"
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
+          :label-class-name="drag_source.dragLabelClass(d)"
           :column-key="d.columnKey ?? d.key"
         >
           <template v-if="d.cellRender" #default="scope">
@@ -261,6 +262,7 @@
               :min-width="d.minWidth"
               :align="d.align"
               :show-overflow-tooltip="d.showOverflowTooltip"
+              :label-class-name="drag_standalone.dragLabelClass(d)"
               :column-key="d.columnKey ?? d.key"
             >
               <template v-if="d.cellRender" #default="scope">
@@ -418,6 +420,7 @@
               :min-width="d.minWidth"
               :align="d.align"
               :show-overflow-tooltip="d.showOverflowTooltip"
+              :label-class-name="drag_assembly.dragLabelClass(d)"
               :column-key="d.columnKey ?? d.key"
             >
               <template v-if="d.cellRender" #default="scope">
@@ -544,11 +547,12 @@
 </template>
 
 <script setup lang="ts">
-// 2026-08-27 T23：列顺序拖动 + 可见性（3 个 el-table）。
-// composable 已 provide el-table ref（供行拖 tbody watcher 用）；
-// 本组件在 theadRef_* 派生 thead DOM，applyDrag 走 Ref 路径自愈 v-if/destroy。
+// 2026-08-28 改造：列顺序拖动 + 可见性（3 个 el-table）。
+// 旧版 watcher 派生 headerRowRef_* → onMounted applyDrag 二次绑定的链路拆掉。
+// 现在直接传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+// （覆盖 v-if/destroy 重建 / 表头首次渲染未到两种场景）。
 
-import { h, inject, onMounted, ref, watch, type Ref } from 'vue'
+import { h, inject, onMounted, ref, type Ref } from 'vue'
 import {
   ElAutocomplete,
   ElDatePicker,
@@ -578,7 +582,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import type {
@@ -692,11 +695,13 @@ function bindAssembliesTableRef(el: unknown): void {
 }
 
 // ============ 2026-08-27 T23：列顺序拖动 + 可见性（3 个 el-table）============
-// 与 composable 持有的 row-drag（tbody Sortable）独立 —— 列拖挂 thead。
+// 与 composable 持有的 row-drag（tbody Sortable）独立 —— 列拖挂表头 <tr>（列换序；
+// 绑 thead 会变成拖整行，2026-08-27 修正）。
 // 「选择 / 拖拽手柄 / 操作(fixed) / expand」列不进 defs，保留为字面量 <el-table-column>。
 // 3 个表各自 listKey 独立，互不污染。
 //
 // ---- Source table（PDF 源文件区；selection + 2 列 + fixed='right' 操作）----
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs_source: ColumnDef[] = [
   {
     key: 'filename', label: 'PDF 文件名', minWidth: 280, align: 'center',
@@ -706,30 +711,19 @@ const columnDefs_source: ColumnDef[] = [
         class: 'filename-link',
         style: 'cursor: pointer; color: var(--el-color-primary);',
         onClick: () => props.previewSourceRow(r),
-      }, () => r.filename)
+      }, r.filename)
     },
   },
   {
     key: 'pageIndex', label: '页', minWidth: 60, align: 'center',
     cellRender: ({ row }) => {
       const r = row as SourceTreeRow
-      return h('span', null, () => (r.pageIndex === null ? r.totalPages : r.pageIndex + 1))
+      return h('span', null, (r.pageIndex === null ? r.totalPages : r.pageIndex + 1))
     },
   },
 ]
 const columnVisibility_source = useColumnVisibility(columnDefs_source, { listKey: 'part_batch_pdf_source' })
 const drag_source = useColumnDrag(columnDefs_source, { listKey: 'part_batch_pdf_source' })
-
-// Source 表在 v-if(allPdfs.length > 0) 内 → Ref 路径自愈。
-const sourceTableTheadRef = ref<HTMLElement | null>(null)
-watch(
-  sourceTableRefLocal as unknown as Ref<{ $el?: HTMLElement } | null>,
-  (inst) => {
-    const root = inst?.$el as HTMLElement | undefined
-    sourceTableTheadRef.value = root ? findElTableThead(root) : null
-  },
-  { flush: 'post', immediate: true },
-)
 
 // ---- Standalone table（独立零件；首列拖拽手柄 + 12 列 + fixed='right' 操作）----
 const columnDefs_standalone: ColumnDef[] = [
@@ -920,16 +914,6 @@ const columnDefs_standalone: ColumnDef[] = [
 const columnVisibility_standalone = useColumnVisibility(columnDefs_standalone, { listKey: 'part_batch_pdf_standalone' })
 const drag_standalone = useColumnDrag(columnDefs_standalone, { listKey: 'part_batch_pdf_standalone' })
 
-const standaloneTableTheadRef = ref<HTMLElement | null>(null)
-watch(
-  pdfRefs.standaloneTableRef,
-  (inst) => {
-    const root = inst?.$el as HTMLElement | undefined
-    standaloneTableTheadRef.value = root ? findElTableThead(root) : null
-  },
-  { flush: 'post', immediate: true },
-)
-
 // ---- Assemblies table（装配件；首列拖拽手柄 + expand + 10 列 + fixed='right' 操作）----
 const columnDefs_assembly: ColumnDef[] = [
   {
@@ -1083,30 +1067,22 @@ const columnDefs_assembly: ColumnDef[] = [
     key: 'children_length', label: '子件数', minWidth: 70, align: 'center',
     cellRender: ({ row }) => {
       const r = row as AssemblyRow
-      return h('span', null, () => r.children.length)
+      return h('span', null, r.children.length)
     },
   },
 ]
 const columnVisibility_assembly = useColumnVisibility(columnDefs_assembly, { listKey: 'part_batch_pdf_assembly' })
 const drag_assembly = useColumnDrag(columnDefs_assembly, { listKey: 'part_batch_pdf_assembly' })
 
-const assemblyTableTheadRef = ref<HTMLElement | null>(null)
-watch(
-  pdfRefs.assembliesTableRef,
-  (inst) => {
-    const root = inst?.$el as HTMLElement | undefined
-    assemblyTableTheadRef.value = root ? findElTableThead(root) : null
-  },
-  { flush: 'post', immediate: true },
-)
-
-// 2026-08-27 T23：3 个表统一在 onMounted 调 applyDrag(theadRef)。
-// theadRef_* 由上面 watcher 写入；v-if(allPdfs.length > 0) 期间 allPdfs 改变时 ref
-// 跟着变 → watch 重新 query thead → applyDrag 内部 watcher 再 start 新节点。
+// 2026-08-28 改造：3 个 el-table 实例 ref（local sourceTableRefLocal + composable
+// 通过 provide/inject 注入的 standaloneTableRef / assembliesTableRef）直接传给
+// applyDrag，composable 内部解析表头 + MutationObserver 自愈。旧 watcher 派生
+// headerRowRef_* + onMounted 二次绑定的链路已拆掉，「表头未渲染就跳过 applyDrag →
+// 永久不绑」失效路径已堵。
 onMounted(() => {
-  drag_source.applyDrag(sourceTableTheadRef)
-  drag_standalone.applyDrag(standaloneTableTheadRef)
-  drag_assembly.applyDrag(assemblyTableTheadRef)
+  drag_source.applyDrag(sourceTableRefLocal)
+  drag_standalone.applyDrag(pdfRefs.standaloneTableRef)
+  drag_assembly.applyDrag(pdfRefs.assembliesTableRef)
 })
 </script>
 

@@ -280,9 +280,10 @@ const baseColumnDefs: ColumnDef[] = [
         prefix: () => h(ElIcon, null, () => h(Search)),
       }),
     }),
+    // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
     cellRender: ({ row }) => {
       const r = row as PartListItem
-      return h('span', { class: r.serial_no ? '' : 'muted' }, () => r.serial_no || '—')
+      return h('span', { class: r.serial_no ? '' : 'muted' }, r.serial_no || '—')
     },
   },
 
@@ -335,7 +336,7 @@ const baseColumnDefs: ColumnDef[] = [
           size: 'small',
         })
       }
-      return h('span', null, () => r.order_no || '—')
+      return h('span', null, r.order_no || '—')
     },
   },
 
@@ -379,7 +380,7 @@ const baseColumnDefs: ColumnDef[] = [
           size: 'small',
         })
       }
-      return h('span', null, () => r.drawing_no)
+      return h('span', null, r.drawing_no)
     },
   },
 
@@ -441,10 +442,10 @@ const baseColumnDefs: ColumnDef[] = [
           class: 'name-link',
         }, () => r.name))
       } else {
-        children.push(h('span', null, () => r.name))
+        children.push(h('span', null, r.name))
       }
       // h() 不能返回数组 — 用 fragment 包一层
-      return h('span', null, () => children)
+      return h('span', null, children)
     },
   },
 
@@ -486,9 +487,9 @@ const baseColumnDefs: ColumnDef[] = [
     }),
     cellRender: ({ row }) => {
       const r = row as PartListItem
-      if (r.customer_path) return h('span', null, () => r.customer_path)
-      if (r.customer_name) return h('span', { class: 'muted' }, () => r.customer_name)
-      return h('span', { class: 'muted' }, () => '—')
+      if (r.customer_path) return h('span', null, r.customer_path)
+      if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name)
+      return h('span', { class: 'muted' }, '—')
     },
   },
 
@@ -517,7 +518,7 @@ const baseColumnDefs: ColumnDef[] = [
           style: 'width: 100%',
         })
       }
-      return h('span', null, () => r.applicant_name || '—')
+      return h('span', null, r.applicant_name || '—')
     },
   },
 
@@ -530,10 +531,10 @@ const baseColumnDefs: ColumnDef[] = [
     align: 'center',
     filters: filters.statusNativeOptions,
     filteredValue: filters.statusFilteredValue.value,
-    headerRender: () => h('span', { class: 'status-header' }, () => [
+    headerRender: () => h('span', { class: 'status-header' }, [
       '状态',
       filters.statusSelectedCount.value > 0
-        ? h('span', { class: 'status-count' }, () => `(${filters.statusSelectedCount.value})`)
+        ? h('span', { class: 'status-count' }, `(${filters.statusSelectedCount.value})`)
         : null,
     ]),
     cellRender: ({ row }) => {
@@ -553,7 +554,7 @@ const baseColumnDefs: ColumnDef[] = [
           style: 'margin-left: 4px',
         }, () => '返修'))
       }
-      return h('span', null, () => children)
+      return h('span', null, children)
     },
   },
 
@@ -579,7 +580,7 @@ const baseColumnDefs: ColumnDef[] = [
           style: 'width: 90px',
         })
       }
-      return h('span', null, () => r.quantity)
+      return h('span', null, r.quantity)
     },
   },
 
@@ -594,9 +595,9 @@ const baseColumnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const r = row as PartListItem
       if (r.row_type === 'ASSEMBLY') {
-        return h('span', { class: 'muted' }, () => '—')
+        return h('span', { class: 'muted' }, '—')
       }
-      return h('span', null, () => r.delivered_quantity ?? 0)
+      return h('span', null, r.delivered_quantity ?? 0)
     },
   },
 ]
@@ -627,7 +628,7 @@ const priceColumnDefs: ColumnDef[] = [
           style: 'width: 100px',
         })
       }
-      return h('span', null, () => r.unit_price)
+      return h('span', null, r.unit_price)
     },
   },
 
@@ -642,7 +643,7 @@ const priceColumnDefs: ColumnDef[] = [
     align: 'right',
     cellRender: ({ row }) => {
       const r = row as PartListItem
-      return h('span', null, () => edit.displayTotalPrice(r))
+      return h('span', null, edit.displayTotalPrice(r))
     },
   },
 ]
@@ -694,7 +695,7 @@ const tailColumnDefs: ColumnDef[] = [
           clearable: false,
         })
       }
-      return h('span', null, () => r.request_date)
+      return h('span', null, r.request_date)
     },
   },
 
@@ -744,7 +745,7 @@ const tailColumnDefs: ColumnDef[] = [
           clearable: false,
         })
       }
-      return h('span', null, () => r.planned_delivery_date)
+      return h('span', null, r.planned_delivery_date)
     },
   },
 
@@ -803,7 +804,7 @@ const tailColumnDefs: ColumnDef[] = [
           clearable: true,
         })
       }
-      return h('span', null, () => r.system_delivery_date || '—')
+      return h('span', null, r.system_delivery_date || '—')
     },
   },
 
@@ -830,7 +831,7 @@ const tailColumnDefs: ColumnDef[] = [
           size: 'small',
         }, () => '加急')
       }
-      return h('span', { class: 'muted' }, () => '—')
+      return h('span', { class: 'muted' }, '—')
     },
   },
 
@@ -843,21 +844,21 @@ const tailColumnDefs: ColumnDef[] = [
     align: 'center',
     filters: filters.nextProcessOptions.value,
     filteredValue: filters.nextProcessFilteredValue.value,
-    headerRender: () => h('span', { class: 'status-header' }, () => [
+    headerRender: () => h('span', { class: 'status-header' }, [
       '下一道工序',
       filters.nextProcessSelectedCount.value > 0
-        ? h('span', { class: 'status-count' }, () => `(${filters.nextProcessSelectedCount.value})`)
+        ? h('span', { class: 'status-count' }, `(${filters.nextProcessSelectedCount.value})`)
         : null,
     ]),
     cellRender: ({ row }) => {
       const r = row as PartListItem
       if (r.row_type === 'ASSEMBLY') {
-        return h('span', { class: 'muted' }, () => '—')
+        return h('span', { class: 'muted' }, '—')
       }
       if (r.next_process_name) {
-        return h('span', null, () => r.next_process_name)
+        return h('span', null, r.next_process_name)
       }
-      return h('span', { class: 'muted' }, () => '—')
+      return h('span', { class: 'muted' }, '—')
     },
   },
 
@@ -903,18 +904,18 @@ const tailColumnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const r = row as PartListItem
       if (r.location === 'PRODUCTION_SHELF' && r.shelf_code) {
-        return h('span', null, () => `货架 ${r.shelf_code}`)
+        return h('span', null, `货架 ${r.shelf_code}`)
       }
       if (r.location === 'INSPECTION_SHELF' && r.shelf_code) {
-        return h('span', null, () => `品检 ${r.shelf_code}`)
+        return h('span', null, `品检 ${r.shelf_code}`)
       }
       if (r.location === 'WORKER' && r.worker_name) {
-        return h('span', null, () => r.worker_name)
+        return h('span', null, r.worker_name)
       }
       if (r.location === 'OUTSOURCE_COMPANY' && r.outsource_company_name) {
-        return h('span', null, () => `外协 ${r.outsource_company_name}`)
+        return h('span', null, `外协 ${r.outsource_company_name}`)
       }
-      return h('span', { class: 'muted' }, () => '—')
+      return h('span', { class: 'muted' }, '—')
     },
   },
 
@@ -935,7 +936,7 @@ const tailColumnDefs: ColumnDef[] = [
           size: 'small',
         })
       }
-      return h('span', null, () => r.note || '—')
+      return h('span', null, r.note || '—')
     },
   },
 ]

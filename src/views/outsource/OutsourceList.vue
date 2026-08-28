@@ -68,6 +68,7 @@
                 :align="d.align"
                 :show-overflow-tooltip="d.showOverflowTooltip"
                 :column-key="d.columnKey ?? d.key"
+                :label-class-name="drag.dragLabelClass(d)"
               >
                 <template v-if="d.cellRender" #default="scope">
                   <component :is="d.cellRender(scope)" />
@@ -189,7 +190,6 @@ import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useConfirm } from '@/composables/useConfirm'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
-import { findElTableThead } from '@/utils/elTable'
 import {
   createOutsourceCompany,
   getOutsourceCompany,
@@ -227,19 +227,20 @@ const { restore: restoreOutsourceCompanyFilter } = useListStatePersist(
 // ============ 列可见性 + 列顺序拖动 ============
 // 「#」和「操作」列不放进 defs → 始终可见。
 // 2026-08-27 T16：补 prop / minWidth / align + 文本列走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'name', label: '公司名', prop: 'name', minWidth: 160, align: 'center' },
   {
     key: 'contact_name', label: '联系人', minWidth: 100, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as OutsourceCompany).contact_name || '—'),
+    cellRender: ({ row }) => h('span', null, (row as OutsourceCompany).contact_name || '—'),
   },
   {
     key: 'contact_phone', label: '联系电话', minWidth: 120, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as OutsourceCompany).contact_phone || '—'),
+    cellRender: ({ row }) => h('span', null, (row as OutsourceCompany).contact_phone || '—'),
   },
   {
     key: 'address', label: '地址', prop: 'address', minWidth: 200, showOverflowTooltip: true, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as OutsourceCompany).address || '—'),
+    cellRender: ({ row }) => h('span', null, (row as OutsourceCompany).address || '—'),
   },
   {
     key: 'is_active', label: '状态', minWidth: 80, align: 'center',
@@ -250,7 +251,7 @@ const columnDefs: ColumnDef[] = [
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_company_list' })
 const drag = useColumnDrag(columnDefs, { listKey: 'outsource_company_list' })
-// 2026-08-27 T16：列拖动 onMounted 挂 useDraggable 到 <thead>
+// 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
 const tableRef = ref()
 
 const outsourceProcesses = ref<Process[]>([])
@@ -433,12 +434,8 @@ async function onDelete(row: OutsourceCompany): Promise<void> {
 }
 
 onMounted(() => {
-  // 2026-08-27 T16：列顺序拖动挂 useDraggable 到 <thead>。tableRef.value 是 EP el-table 组件实例，
-  // $el 是其根容器；findElTableThead 走固定 selector 取真正的 <thead>。
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+  drag.applyDrag(tableRef)
 
   void fetchOutsourceProcesses()
   // 从 localStorage 恢复搜索 + 分页大小；强制将当前页重置到第 1 页（避免恢复到无数据页）

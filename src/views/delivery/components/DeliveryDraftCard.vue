@@ -33,7 +33,7 @@
     set-table-ref       — el-table 实例注册 / 反注册
 -->
 <script setup lang="ts">
-import { h, nextTick, ref, watch } from 'vue'
+import { h, ref } from 'vue'
 import { Delete, Printer } from '@element-plus/icons-vue'
 import type { MergedDraftRow } from '../composables/useDeliveryDraftBoard'
 import type { ScanNoteSummary } from '@/types/deliveryNote'
@@ -43,7 +43,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
@@ -81,35 +80,28 @@ function handleTableRef(el: any): void {
 }
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
-// DeliveryNoteScan 在 v-if="draftsCount > 0" 下渲染本卡片，drafts 增减会触发本卡片
-// 整体卸载/重建 → el-table 也是新的；用 Ref 路径：watch(tableEl) 重建后自愈。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
     key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100,
+    // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
     cellRender: ({ row }) => h('span',
       { class: { muted: !(row as MergedDraftRow).serial_no } },
-      () => (row as MergedDraftRow).serial_no || '—'),
+      (row as MergedDraftRow).serial_no || '—'),
   },
   { key: 'name', label: '名称', prop: 'name', minWidth: 110, showOverflowTooltip: true },
   { key: 'quantity', label: '数量', prop: 'quantity', width: 60, align: 'right' },
   {
     key: 'system_delivery_date', label: '系统交期', width: 90, align: 'center',
     cellRender: ({ row }) => h('span', null,
-      () => (row as MergedDraftRow).system_delivery_date || '—'),
+      (row as MergedDraftRow).system_delivery_date || '—'),
   },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_draft_card' })
 const drag = useColumnDrag(columnDefs, { listKey: 'delivery_draft_card' })
 
-watch(tableEl, (instance) => {
-  if (!instance) return
-  void nextTick(() => {
-    const root = (instance as { $el?: HTMLElement }).$el
-    if (!root) return
-    const thead = findElTableThead(root)
-    if (thead) drag.applyDrag(thead)
-  })
-}, { flush: 'post' })
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+drag.applyDrag(tableEl)
 </script>
 
 <template>
@@ -156,6 +148,7 @@ watch(tableEl, (instance) => {
             :align="d.align"
             :show-overflow-tooltip="d.showOverflowTooltip"
             :column-key="d.columnKey ?? d.key"
+            :label-class-name="drag.dragLabelClass(d)"
           >
             <template v-if="d.cellRender" #default="scope">
               <component :is="d.cellRender(scope)" />

@@ -27,7 +27,6 @@ import {
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import RepairStartDialog from './RepairStartDialog.vue'
@@ -91,6 +90,7 @@ function confirmCustomer(): void {
 // ============ 列可见性 + 列顺序拖动 ============
 // 「操作」列不放进 defs（始终可见且按 tab 显隐）。其余 12 列走 v-for 拖动。
 // 2026-08-27 T16：补 prop / width / minWidth / align / sortable + ElTag 列走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'serial_no', label: '流水号', prop: 'serial_no', width: 100, sortable: false },
   { key: 'drawing_no', label: '图号', prop: 'drawing_no', width: 160 },
@@ -101,8 +101,8 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const r = row as PartItem
       return r.customer_path
-        ? h('span', null, () => r.customer_path)
-        : h('span', { class: 'muted' }, () => '—')
+        ? h('span', null, r.customer_path)
+        : h('span', { class: 'muted' }, '—')
     },
   },
   { key: 'order_no', label: '订单号', prop: 'order_no', width: 120 },
@@ -119,8 +119,8 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const r = row as PartItem
       return r.next_process_name
-        ? h('span', null, () => r.next_process_name)
-        : h('span', { class: 'muted' }, () => '—')
+        ? h('span', null, r.next_process_name)
+        : h('span', { class: 'muted' }, '—')
     },
   },
   { key: 'planned_delivery_date', label: '计划交期', prop: 'planned_delivery_date', width: 120, sortable: true },
@@ -131,7 +131,7 @@ const columnDefs: ColumnDef[] = [
       // 2026-08-27 T16：cellRender 类型要求返回 VNode（非 null），用空 span 代替 null。
       return r.is_urgent
         ? h(ElTag, { type: 'danger', size: 'small' }, () => '急')
-        : h('span', null, () => '')
+        : h('span', null, '')
     },
   },
   {
@@ -140,7 +140,7 @@ const columnDefs: ColumnDef[] = [
       const r = row as PartItem
       return r.has_been_repaired
         ? h(ElTag, { type: 'warning', size: 'small', effect: 'dark' }, () => '返修')
-        : h('span', null, () => '')
+        : h('span', null, '')
     },
   },
   {
@@ -148,8 +148,8 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const r = row as PartItem
       return r.current_holder_display
-        ? h('span', null, () => r.current_holder_display)
-        : h('span', { class: 'muted' }, () => '—')
+        ? h('span', null, r.current_holder_display)
+        : h('span', { class: 'muted' }, '—')
     },
   },
 ]
@@ -157,7 +157,7 @@ const columnVisibility = useColumnVisibility(columnDefs, {
   listKey: 'repair_receive_columns',
 })
 const drag = useColumnDrag(columnDefs, { listKey: 'repair_receive_columns' })
-// 2026-08-27 T16：列拖动 onMounted 挂 useDraggable 到 <thead>
+// 2026-08-27 T16：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
 const tableRef = ref()
 
 // —— 列表加载 ——
@@ -233,12 +233,9 @@ async function handleScan(code: string): Promise<void> {
 // —— 生命周期 ——
 let unsubScan: (() => void) | null = null
 onMounted(async () => {
-  // 2026-08-27 T16：列顺序拖动挂 useDraggable 到 <thead>（RepairReceive 不在嵌套 tab 内，el-table 始终在 DOM）
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (root) {
-    const thead = findElTableThead(root)
-    if (thead) drag.applyDrag(thead)
-  }
+  // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+  // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+  drag.applyDrag(tableRef)
   await loadList()
   unsubScan = onScan((code) => void handleScan(code))
 })
@@ -376,6 +373,7 @@ function rowClassName(opts: { row: PartItem }): string {
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />

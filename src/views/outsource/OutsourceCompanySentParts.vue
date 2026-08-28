@@ -21,7 +21,6 @@ import {
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
-import { findElTableThead } from '@/utils/elTable'
 import {
   getOutsourceCompany,
   listCompanySentParts,
@@ -63,16 +62,17 @@ const { restore: restoreSentPartsFilter } = useListStatePersist(
 // ============ 列可见性 + 列顺序拖动 ============
 // 2026-08-27 T16：补 prop / minWidth / align + sortable + cellRender(PartListShell 同款)。
 // 单元格内含行内编辑 el-input-number / el-switch → 走 cellRender 而非 formatter（formatter 只返回字符串）。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'part_drawing_no', label: '图号', prop: 'part_drawing_no', minWidth: 120, align: 'center' },
   { key: 'part_name', label: '名称', prop: 'part_name', minWidth: 160, showOverflowTooltip: true, align: 'center' },
   {
     key: 'customer_path', label: '客户', prop: 'customer_path', minWidth: 160, showOverflowTooltip: true, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as OutsourceSentPartItem).customer_path ?? '—'),
+    cellRender: ({ row }) => h('span', null, (row as OutsourceSentPartItem).customer_path ?? '—'),
   },
   {
     key: 'batch_no', label: '批次号', minWidth: 90, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as OutsourceSentPartItem).batch_no ?? '—'),
+    cellRender: ({ row }) => h('span', null, (row as OutsourceSentPartItem).batch_no ?? '—'),
   },
   {
     key: 'quantity', label: '数量', minWidth: 90, align: 'right',
@@ -87,7 +87,7 @@ const columnDefs: ColumnDef[] = [
           'onUpdate:modelValue': (v: number | null | undefined) => { editBuffer.quantity = v ?? null },
         })
       }
-      return h('span', null, () => r.quantity ?? '—')
+      return h('span', null, r.quantity ?? '—')
     },
   },
   {
@@ -101,24 +101,24 @@ const columnDefs: ColumnDef[] = [
           'onUpdate:modelValue': (v: number | null | undefined) => { editBuffer.unit_price = v ?? null },
         })
       }
-      return h('span', null, () =>
+      return h('span', null,
         r.unit_price !== null && r.unit_price !== undefined ? r.unit_price : '—')
     },
   },
   {
     key: 'total_price', label: '总价', minWidth: 110, align: 'right',
-    cellRender: ({ row }) => h('span', null, () => displayTotalPrice(row as OutsourceSentPartItem)),
+    cellRender: ({ row }) => h('span', null, displayTotalPrice(row as OutsourceSentPartItem)),
   },
   {
     key: 'sent_at', label: '发送时间', prop: 'sent_at', minWidth: 160, align: 'center', sortable: 'custom',
-    cellRender: ({ row }) => h('span', null, () => fmtDt((row as OutsourceSentPartItem).sent_at)),
+    cellRender: ({ row }) => h('span', null, fmtDt((row as OutsourceSentPartItem).sent_at)),
   },
   {
     key: 'received_at', label: '回收时间', prop: 'received_at', minWidth: 160, align: 'center', sortable: 'custom',
     cellRender: ({ row }) => {
       const r = row as OutsourceSentPartItem
-      if (r.received_at) return h('span', null, () => fmtDt(r.received_at))
-      return h('span', { style: 'color: var(--el-color-warning);' }, () => '未回收')
+      if (r.received_at) return h('span', null, fmtDt(r.received_at))
+      return h('span', { style: 'color: var(--el-color-warning);' }, '未回收')
     },
   },
   {
@@ -146,7 +146,7 @@ const columnDefs: ColumnDef[] = [
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_company_sent_parts' })
 const drag = useColumnDrag(columnDefs, { listKey: 'outsource_company_sent_parts' })
-// 2026-08-27 T16：列拖动 onMounted 挂 useDraggable 到 <thead>
+// 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
 const tableRef = ref()
 
 async function loadCompany(): Promise<void> {
@@ -382,12 +382,8 @@ function fmtDt(v: string | null): string {
 }
 
 onMounted(() => {
-  // 2026-08-27 T16：列顺序拖动挂 useDraggable 到 <thead>。tableRef.value 是 EP el-table 组件实例，
-  // $el 是其根容器；findElTableThead 走固定 selector 取真正的 <thead>。
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+  drag.applyDrag(tableRef)
 
   void loadCompany()
   // 2026-07-30 commit 4B：恢复 filter / sortBy / sortDir
@@ -486,6 +482,7 @@ watch(companyId, () => {
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />

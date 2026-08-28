@@ -10,7 +10,7 @@
 //   - el-input-number：references/form.md §InputNumber
 //     > Source: https://element-plus.org/zh-CN/component/input-number.html
 
-import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElTag } from 'element-plus'
 import type { TableInstance } from 'element-plus'
 import type {
@@ -30,7 +30,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 // 2026-08-07 picker 富化：L2 客户列 / 全屏 / 多选筛选 / 扫码拦截
@@ -84,10 +83,11 @@ const existingSet = computed(
 // ============ 列可见性 + 列顺序拖动 ============
 // 「selection 勾选列」「入单数量」操作列不放进 defs → 始终可见
 // 2026-08-27 T17：补 prop / minWidth / align + 文本列 / ElTag 列走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
     key: 'batch_label', label: '批次', minWidth: 100, align: 'center',
-    cellRender: ({ row }) => h('span', { class: 'batch-label' }, () => (row as DeliveryNoteCandidatePart).batch_label),
+    cellRender: ({ row }) => h('span', { class: 'batch-label' }, (row as DeliveryNoteCandidatePart).batch_label ?? '—'),
   },
   { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 110, sortable: true, align: 'center' },
   { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 110, sortable: true, align: 'center' },
@@ -95,16 +95,16 @@ const columnDefs: ColumnDef[] = [
   {
     key: 'order_no', label: '订单号', prop: 'order_no', minWidth: 120, showOverflowTooltip: true, sortable: true, align: 'center',
     cellRender: ({ row }) => h('span', { class: { muted: !(row as DeliveryNoteCandidatePart).order_no } },
-      () => (row as DeliveryNoteCandidatePart).order_no || '—'),
+      (row as DeliveryNoteCandidatePart).order_no || '—'),
   },
   {
     key: 'quantity', label: '批次量', width: 80, align: 'right',
-    cellRender: ({ row }) => h('span', null, () => (row as DeliveryNoteCandidatePart).quantity),
+    cellRender: ({ row }) => h('span', null, (row as DeliveryNoteCandidatePart).quantity),
   },
   {
     key: 'customer_name', label: '二级客户', prop: 'customer_name', minWidth: 130, showOverflowTooltip: true, sortable: true, align: 'center',  // 2026-08-07 picker 富化
     cellRender: ({ row }) => h('span', { class: { muted: !(row as DeliveryNoteCandidatePart).customer_name } },
-      () => (row as DeliveryNoteCandidatePart).customer_name || '—'),
+      (row as DeliveryNoteCandidatePart).customer_name || '—'),
   },
   { key: 'applicant_name', label: '申请人', prop: 'applicant_name', minWidth: 90, align: 'center' },
   {
@@ -116,7 +116,7 @@ const columnDefs: ColumnDef[] = [
       // cellRender 必须返回单个 VNode；多根标签包 <div>。
       const onNote = existingSet.value.has(r.batch_id)
       return onNote
-        ? h('div', null, () => [
+        ? h('div', null, [
             h(ElTag, { type: tagType, effect: 'light', size: 'small' }, () => tagLabel),
             h(ElTag, { type: 'info', effect: 'plain', size: 'small', style: 'margin-left: 4px' }, () => '已在单上'),
           ])
@@ -127,8 +127,9 @@ const columnDefs: ColumnDef[] = [
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_part_picker' })
 const drag = useColumnDrag(columnDefs, { listKey: 'delivery_part_picker' })
-// 2026-08-27 T17：列拖动 onMounted 挂 useDraggable 到 <thead>。
-// 本组件 el-dialog 默认不带 destroy-on-close，el-table 内容持续在 DOM → HTMLElement 路径。
+
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+drag.applyDrag(tableRef)
 
 // ============ 2026-08-07：二级客户多选筛选 ============
 /** 多选集合（每个元素是 customer_name 字符串）。空数组 = 不过滤。 */
@@ -338,15 +339,6 @@ function onPickerBatchPicked(p: PartItem): void {
   }
 }
 
-// 2026-08-27 T17：列顺序拖动挂 useDraggable 到 <thead>（HTMLElement 路径）。
-// el-dialog 默认不带 destroy-on-close，el-table 内容始终在 DOM，弹框打开时挂一次即可。
-onMounted(() => {
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
-})
-
 onBeforeUnmount(() => {
   unsubPickerScan.value?.()
   unsubPickerScan.value = null
@@ -432,6 +424,7 @@ onBeforeUnmount(() => {
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />

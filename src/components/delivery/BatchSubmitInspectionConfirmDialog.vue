@@ -20,7 +20,7 @@
   申请见 docs/api-requirements/scan-inspect.md。
 -->
 <script setup lang="ts">
-import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { ElMessage, ElTag } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 
@@ -36,7 +36,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
@@ -67,9 +66,9 @@ const dlg = useDialogSize({ desktopWidth: 920 })
 const bulk = useBulkScanInspect()
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
-// el-dialog destroy-on-close → Ref 路径，watch(tableRef) 重建 thead 后自愈。
 // 「送检数量」(el-input-number + 受控 v-model) 和「同时过检」(条件 ElCheckbox + v-if)
 // 不进 defs，保留为字面量列。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const tableRef = ref()
 const columnDefs: ColumnDef[] = [
   { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center' },
@@ -77,7 +76,7 @@ const columnDefs: ColumnDef[] = [
     key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 100, align: 'center',
     cellRender: ({ row }) => h('span',
       { class: { muted: !(row as BlockedScanItem).drawing_no } },
-      () => (row as BlockedScanItem).drawing_no || '—'),
+      (row as BlockedScanItem).drawing_no || '—'),
   },
   { key: 'name', label: '名称', prop: 'name', minWidth: 110, showOverflowTooltip: true, align: 'center' },
   {
@@ -85,7 +84,7 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const r = row as BlockedScanItem
       // cellRender 必须返回单个 VNode；空状态回落 —。
-      if (!r.status) return h('span', { class: 'muted' }, () => '—')
+      if (!r.status) return h('span', { class: 'muted' }, '—')
       return h(ElTag,
         { type: r.status === 'INSPECTION' ? 'warning' : 'primary', effect: 'light', size: 'small' },
         () => r.status as string)
@@ -96,22 +95,15 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const reason = (row as BlockedScanItem).reason ?? ''
       return h('span', { title: reason },
-        () => reason.length > 24 ? `${reason.slice(0, 24)}…` : reason)
+        reason.length > 24 ? `${reason.slice(0, 24)}…` : reason)
     },
   },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'batch_submit_inspection_confirm' })
 const drag = useColumnDrag(columnDefs, { listKey: 'batch_submit_inspection_confirm' })
 
-watch(tableRef, (instance) => {
-  if (!instance) return
-  void nextTick(() => {
-    const root = instance.$el as HTMLElement | undefined
-    if (!root) return
-    const thead = findElTableThead(root)
-    if (thead) drag.applyDrag(thead)
-  })
-}, { flush: 'post' })
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+drag.applyDrag(tableRef)
 
 // ============ 品检架候选 ============
 // 扫码建单角色（CLERK / MANAGER / INSPECTOR）没有 SHELF_ACCOUNT 货架绑定，
@@ -368,6 +360,7 @@ async function onConfirm(): Promise<void> {
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />

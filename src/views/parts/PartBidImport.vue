@@ -23,6 +23,7 @@
     el-switch/el-date-picker），全部用 h() cellRender 转换；
     v-model 用 modelValue + onUpdate:modelValue 显式双向。
   - 「序号」index + 「操作」fixed 列保留为字面量 <el-table-column>。
+  - 2026-08-27 列拖点绑定修正：拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）。
 -->
 <template>
   <div class="bid-import">
@@ -138,6 +139,7 @@
             :align="d.align"
             :header-align="d.headerAlign"
             :show-overflow-tooltip="d.showOverflowTooltip"
+            :label-class-name="drag.dragLabelClass(d)"
             :column-key="d.columnKey ?? d.key"
           >
             <template v-if="d.cellRender" #default="scope">
@@ -260,7 +262,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import type { Applicant } from '@/types/applicant'
 import { parseBidExcel, type BidRow } from '@/utils/bidExcelParser'
 
@@ -468,15 +469,12 @@ const columnDefs: ColumnDef[] = [
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_bid_import' })
 const drag = useColumnDrag(columnDefs, { listKey: 'part_bid_import' })
 
-// 2026-08-27 T24：HTMLElement 路径。路由进入时 rows 为 0 → el-table 未渲染
-// → tableRef undefined；onMounted 用 optional chaining 兜底（HTMLElement 路径标准 trade-off，
-// 用户上传 Excel 解析后才看到表，下次路由进入 / 刷新才能恢复拖动）。
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
+// 自愈。路由进入时 rows=0 → tableRef.value=null → composable 不绑；用户上传 Excel
+// rows 变化 → v-if 挂载 → ref 更新 → composable watch 重新归一化 + 表头首次渲染时自愈。
 const tableRef = ref()
 onMounted(() => {
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  drag.applyDrag(tableRef)
 })
 
 function makeUid(): string {

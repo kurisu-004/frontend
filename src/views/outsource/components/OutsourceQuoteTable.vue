@@ -47,6 +47,7 @@
             「状态」/「客户」两列带列头 popover，从 v-for 中剔除（保留 popover header 不能与简单 handle 模板共存），
             改为字面量 <el-table-column>，拖动仅作用于其他数据列。
             fixed="right" 操作列保留为字面量 <el-table-column>。
+            2026-08-28 改造：drag.applyDrag(tableRef) 传 el-table 实例 ref 即可，无需解析 headerRow。
           -->
           <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
             <el-table-column
@@ -59,6 +60,7 @@
               :align="d.align"
               :show-overflow-tooltip="d.showOverflowTooltip"
               :column-key="d.columnKey ?? d.key"
+              :label-class-name="drag.dragLabelClass(d)"
             >
               <template v-if="d.cellRender" #default="scope">
                 <component :is="d.cellRender(scope)" />
@@ -234,7 +236,7 @@
 // 的 submit / approve / reject / delete handler。
 // 行点击 → emit('row-click', row) 用于图纸预览；图号链接点击 → emit('preview-drawing', row)。
 
-import { h, onMounted, ref } from 'vue'
+import { h, ref } from 'vue'
 import { Filter } from '@element-plus/icons-vue'
 import { ElLink } from 'element-plus'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
@@ -245,7 +247,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import {
   OUTSOURCE_QUOTE_STATUS_LABEL,
   OUTSOURCE_QUOTE_STATUS_TAG,
@@ -324,10 +325,11 @@ const quoteColumnDefs = QUOTE_COLUMN_DEFS
 // drag 的 defs 从 QUOTE_COLUMN_DEFS 里滤掉这两列后，再补回 prop / width / sortable / showOverflowTooltip / align 等元数据
 // （v-for 模板需要这些字段渲染 <el-table-column>）。
 // drag listKey 用 `outsource_quote_table`（独立），与 composable 内的 visibility listKey `outsource_quote_list` 区分。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 function renderDrawingNoCell({ row }: { row: unknown }): ReturnType<typeof h> {
   const r = row as OutsourceQuote
   if (!r.part_drawing_no) {
-    return h('span', { class: 'muted' }, () => '—')
+    return h('span', { class: 'muted' }, '—')
   }
   return h(ElLink,
     {
@@ -359,7 +361,7 @@ const draggableColumnDefs: ColumnDef[] = [
     minWidth: 110, align: 'right', sortable: 'custom',
     cellRender: ({ row }) => {
       const r = row as OutsourceQuote
-      return h('span', { class: { muted: !r.part_unit_price } }, () => r.part_unit_price ?? '—')
+      return h('span', { class: { muted: !r.part_unit_price } }, r.part_unit_price ?? '—')
     } },
 ]
 const drag = useColumnDrag(draggableColumnDefs, { listKey: 'outsource_quote_table' })
@@ -378,13 +380,8 @@ function onRowClick(row: unknown): void {
 }
 
 const tableRef = ref()
-// 2026-08-27 T16：列拖动 onMounted 挂 useDraggable 到 <thead>。本组件内 el-table 始终在 DOM → HTMLElement 路径。
-onMounted(() => {
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
-})
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+drag.applyDrag(tableRef)
 </script>
 
 <style lang="scss" scoped>

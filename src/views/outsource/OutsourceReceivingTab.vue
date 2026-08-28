@@ -74,6 +74,7 @@
               :align="d.align"
               :show-overflow-tooltip="d.showOverflowTooltip"
               :column-key="d.columnKey ?? d.key"
+              :label-class-name="drag.dragLabelClass(d)"
             >
               <template v-if="d.cellRender" #default="scope">
                 <component :is="d.cellRender(scope)" />
@@ -134,7 +135,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import type { Customer } from '@/api/customer'
 import type { Shelf as ShelfItem } from '@/types/shelf'
 import type { Process } from '@/types/process'
@@ -185,6 +185,7 @@ const {
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 2026-08-27 T16：补 prop / minWidth / align + ElTag / 文本列走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center' },
   { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 120, align: 'center' },
@@ -197,29 +198,26 @@ const columnDefs: ColumnDef[] = [
   { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 80, align: 'right' },
   {
     key: 'outsource_company_name', label: '外协公司', minWidth: 160, showOverflowTooltip: true, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as OutsourceInFlightItem).outsource_company_name || '—'),
+    cellRender: ({ row }) => h('span', null, (row as OutsourceInFlightItem).outsource_company_name || '—'),
   },
   {
     key: 'sent_at', label: '发送时间', minWidth: 160, align: 'center',
     cellRender: ({ row }) => {
       const r = row as OutsourceInFlightItem
-      return h('span', null, () => r.sent_at ? new Date(r.sent_at!).toLocaleString() : '—')
+      return h('span', null, r.sent_at ? new Date(r.sent_at!).toLocaleString() : '—')
     },
   },
   { key: 'customer_path', label: '客户', prop: 'customer_path', minWidth: 180, showOverflowTooltip: true, align: 'center' },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_send_receive_receiving' })
 const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_receiving' })
-// 2026-08-27 T16：列拖动 onMounted 挂 useDraggable 到 <thead>
+// 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
 const tableRef = ref()
 
 // 持久化恢复 + pageSize 双向同步（与原 shell onMounted 等价）
 onMounted(() => {
-  // 2026-08-27 T16：列顺序拖动挂 useDraggable 到 <thead>（本 tab 内 el-table thead 始终存在 → HTMLElement 路径）
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+  drag.applyDrag(tableRef)
 
   const persisted = restore()
   if (persisted) {

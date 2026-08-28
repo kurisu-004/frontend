@@ -12,11 +12,13 @@
 
   2026-08-25 mobile 适配清理：删除 ResponsiveList 包装，改为纯 el-table（手机卡片视图随 T1 一并撤掉）。
 
-  2026-08-27 T21（B 组 batch 1）：接入列顺序拖动 + ColumnVisibilityPopover。
+  2026-08-28 改造（B 组 batch 1 列拖动接入）：
   - el-table 在 `<el-card>` 内持续挂载（v-else 控制 table vs empty-zone）→
-    HTMLElement 路径，onMounted 调 findElTableThead(tableRef.$el) + drag.applyDrag。
+    传 el-table 实例 ref 给 drag.applyDrag(tableRef)，composable 内部解析表头 +
+    MutationObserver 自愈（覆盖 staged=0 → 加第一行 → 表头首次渲染的过渡）。
   - 「#」index 列 + 「操作」fixed 列保留为字面量 <el-table-column>。
   - 列定义 cellRender 全部用 h()（el-button @click.stop 用 stopPropagation 模拟）。
+  - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
 -->
 
 <template>
@@ -92,6 +94,7 @@
           :align="d.align"
           :header-align="d.headerAlign"
           :show-overflow-tooltip="d.showOverflowTooltip"
+          :label-class-name="drag.dragLabelClass(d)"
           :column-key="d.columnKey ?? d.key"
         >
           <template v-if="d.cellRender" #default="scope">
@@ -359,7 +362,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility'
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import { findElTableThead } from '@/utils/elTable'
 import type { FormState, StagedEntry } from '../composables/usePartBatchManual'
 
 // 父组件 `v-bind="manual"` 摊开传入本组件需要的所有 props。
@@ -371,6 +373,7 @@ const formRefLocal = ref<FormInstance>()
 
 // 2026-08-27 T21：列顺序拖动 + 可见性。
 // 「#」index 列 + 「操作」fixed 列不放进 defs（始终可见、不可拖）。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
     key: 'drawingNo', label: '图号', prop: 'drawingNo', minWidth: 130, align: 'center',
@@ -382,18 +385,18 @@ const columnDefs: ColumnDef[] = [
             onClick: (e: MouseEvent) => { e.stopPropagation(); props.openDrawingPreview(r) } },
           () => r.drawingNo)
       }
-      return h('span', { class: 'mono' }, () => r.drawingNo ?? '')
+      return h('span', { class: 'mono' }, r.drawingNo ?? '')
     },
   },
   { key: 'name', label: '名称', prop: 'name', minWidth: 180, showOverflowTooltip: true, align: 'center' },
   { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 70, align: 'right' },
   {
     key: 'applicantName', label: '申请人', minWidth: 120, showOverflowTooltip: true, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as StagedEntry).applicantName || '—'),
+    cellRender: ({ row }) => h('span', null, (row as StagedEntry).applicantName || '—'),
   },
   {
     key: 'customerLabel', label: '客户', minWidth: 160, showOverflowTooltip: true, align: 'center',
-    cellRender: ({ row }) => h('span', null, () => (row as StagedEntry).customerLabel || '—'),
+    cellRender: ({ row }) => h('span', null, (row as StagedEntry).customerLabel || '—'),
   },
   { key: 'plannedDeliveryDate', label: '计划交期', prop: 'plannedDeliveryDate', minWidth: 120, align: 'center' },
   {
@@ -403,23 +406,19 @@ const columnDefs: ColumnDef[] = [
       if (r.isUrgent) {
         return h(ElTag, { type: 'danger', size: 'small', effect: 'dark' }, () => '加急')
       }
-      return h('span', { class: 'muted' }, () => '—')
+      return h('span', { class: 'muted' }, '—')
     },
   },
 ]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_manual' })
 const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_manual' })
 
-// 2026-08-27 T21：el-table 实例 ref。HTMLElement 路径：onMounted 拿 $el + findElTableThead。
-// 边角：组件挂载时 staged 可能为 0 → el-table 在 v-else 还没渲染 → tableRef 为 undefined
-// （optional chaining 兜底，thead 为 null 时 applyDrag 跳过；用户加第一条后切走 tab 再回来
-// 才能恢复拖动）。这是 HTMLElement 路径的标准 trade-off，brief 已认可。
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
+// 自愈。组件挂载时 staged=0 → tableRef.value=null → composable 不绑；staged 变化触发
+// ref 更新 → composable 内部 watch 重新归一化 + 挂 observer → 表头首次渲染时自愈。
 const tableRef = ref()
 onMounted(() => {
-  const root = tableRef.value?.$el as HTMLElement | undefined
-  if (!root) return
-  const thead = findElTableThead(root)
-  if (thead) drag.applyDrag(thead)
+  drag.applyDrag(tableRef)
 })
 
 const props = defineProps<{
