@@ -77,26 +77,37 @@ export function toBatchPassItems(items: BulkPassItem[]): BatchToShipItem[] {
 /**
  * 纯函数：v2 batch-to-ship 响应 → composable 契约 BulkPassResult。
  *
- * 规则：
- *   - `passed[]`：按响应 submitted[].batch_id（入参 batch_id）反向找回原始 BulkPassItem
- *     （保留 label，方便父组件 toast 时定位）。后端 service 处理顺序与请求 items 一致。
- *   - `failed[]`：后端 failed 按 batch_id 找到原始 item 包成 BulkPassFailure。
+ * 规则（2026-08-28 修正为按位置反查）：
+ *   - `passed[]`：后端 `ToXxxOut` **不序列化 batch_id**（只有 `part` + `new_batch_id`，
+ *     见 inspection.md「ToXxxOut 字段」表），原先按 `s.batch_id` 反查恒为 undefined。
+ *     改按位置对齐：后端顺序处理 items，`submitted[]` 与「请求 items 扣掉 failed[] 之后
+ *     的剩余项」逐位一一对应（保留 label，方便父组件 toast 时定位）。
+ *   - **不能直接用 `requested[i]`**：有 per-item 失败时 submitted 下标整体前移，
+ *     会把失败项误当成通过（例：请求 [B1,B2,B3] + B2 失败 → submitted[1] 是 B3 的结果，
+ *     而 requested[1] 是 B2）。所以先用 failed[].batch_id 扣掉失败项再逐位取。
+ *   - `failed[]`：后端 failed **仍带 batch_id**，按 batch_id 找回原始 item。
  *
- * 复杂度 O(N²)（findIndex / find 在 N≤200 时可忽略）；保持纯函数，不依赖 axios 实例。
+ * 复杂度 O(N)（failed 建 Set）；保持纯函数，不依赖 axios 实例。
  */
 export function mapBatchResult(
   requested: BulkPassItem[],
   result: BatchToShipOutFE,
 ): BulkPassResult {
+  const failedIds = new Set(result.failed.map((f) => f.batch_id))
+  // 请求里未出现在 failed[] 的项，按原顺序排列 —— 与 submitted[] 逐位对应。
+  const candidates = requested.filter((it) => !failedIds.has(it.batch_id))
+
   const passed: BulkPassItem[] = []
-  for (const s of result.submitted) {
-    const idx = requested.findIndex((it) => it.batch_id === s.batch_id)
-    if (idx >= 0) {
-      passed.push(requested[idx])
+  for (let i = 0; i < result.submitted.length; i++) {
+    const original = candidates[i]
+    if (original) {
+      passed.push(original)
     } else {
-      // 理论上不会发生（后端不会凭空返回不在请求里的 batch_id）；防御：构造一个
-      // 无 label 的最小 item，避免 UI 渲染 undefined。
-      passed.push({ batch_id: s.batch_id })
+      // 防御：submitted 比「请求扣掉 failed」还长（后端契约被破坏才会发生）。
+      // 拿不到原始 item，退化用 part 投影占位，避免 UI 渲染 undefined；
+      // 此处 batch_id 位塞的是 part.id（并非真批次 id），仅为占位不参与后续请求。
+      const s = result.submitted[i]
+      passed.push({ batch_id: s.part.id, label: s.part.serial_no ?? undefined })
     }
   }
   const failed: BulkPassFailure[] = result.failed.map((f: BatchToShipFailureFE) => {

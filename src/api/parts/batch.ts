@@ -394,11 +394,18 @@ export interface BatchToInspectionFailureFE {
 }
 
 export interface BatchToInspectionOutFE {
+  /** 成功项，与请求 items 同序（后端顺序处理）；失败项落在 failed[]，
+   *  故 submitted.length = items.length - failed.length，**下标不与 items 对齐**。
+   *  注意后端 `ToXxxOut` 只序列化 `part` + `new_batch_id`，**不含 batch_id**
+   *  （2026-08-28 修正，见 inspection.md「ToXxxOut 字段」表）——响应 → 请求的反查
+   *  只能靠「位置 + 用 failed[].batch_id 扣除失败项」，不能指望 submitted[].batch_id。 */
   submitted: Array<{
-    /** 入参 items[].batch_id（雪花 ID 字符串）。用于响应 → 请求的反查。 */
-    batch_id: string
     part: PartItem
-    /** 部分数量时 = 拆分后的新批次 id；全量时 = 入参 batch_id。null = 全部失败时的回填占位。 */
+    /** 拆批语义（见 inspection.md「自动拆批」）：
+     *  - 整批操作（quantity 缺省 / == batch.quantity）→ `null`，未拆批；
+     *  - 部分操作（quantity < batch.quantity）→ 拆出的 **remainder 批次 id**
+     *    （原批次量减少后留在源状态，待后续操作），**不等于**入参 batch_id。
+     *  前端拿到非 null 应刷新批次列表（会多出一行 quantity = 原量 - 操作量 的批次）。 */
     new_batch_id: string | null
   }>
   failed: BatchToInspectionFailureFE[]
@@ -431,11 +438,14 @@ export interface BatchToShipFailureFE {
 }
 
 export interface BatchToShipOutFE {
+  /** 与 BatchToInspectionOutFE.submitted 同形同语义（后端 `ToXxxOut` 单 / 批端点共用）：
+   *  与请求 items 同序、**不含 batch_id**、失败项不占位。 */
   submitted: Array<{
-    /** 入参 items[].batch_id（雪花 ID 字符串）。用于响应 → 请求的反查。 */
-    batch_id: string
     part: PartItem
-    /** 部分数量时 = 拆分后的新批次 id；全量时 = 入参 batch_id。null = 全部失败时的回填占位。 */
+    /** 拆批语义（见 inspection.md「自动拆批」）：
+     *  - 整批操作（quantity 缺省 / == batch.quantity）→ `null`，未拆批；
+     *  - 部分操作（quantity < batch.quantity）→ 拆出的 **remainder 批次 id**，
+     *    **不等于**入参 batch_id。前端拿到非 null 应刷新批次列表。 */
     new_batch_id: string | null
   }>
   failed: BatchToShipFailureFE[]
