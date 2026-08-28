@@ -1,90 +1,56 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   toBatchScanItems,
   mapScanBatchResult,
+  useBulkScanInspect,
   type BulkScanItem,
 } from './useBulkScanInspect'
-import type { BatchScanInspectOutFE } from '@/api/parts'
+import type { BatchToInspectionOutFE } from '@/api/parts'
 
 describe('toBatchScanItems', () => {
   it('空数组 → 空数组', () => {
     expect(toBatchScanItems([])).toEqual([])
   })
 
-  it('剥掉 label，保留 part_id/decision/batch_id/quantity 等核心字段', () => {
+  it('剥掉 label，保留 batch_id/quantity（route B 不再带 part_id/decision/shelf_id/next_process_id/note）', () => {
     const items: BulkScanItem[] = [
       {
-        part_id: '190000000000001',
         batch_id: '190000000000010',
         quantity: 3,
-        decision: 'PASS',
         label: 'A-01 · 零件甲',
       },
     ]
     expect(toBatchScanItems(items)).toEqual([
-      {
-        part_id: '190000000000001',
-        batch_id: '190000000000010',
-        quantity: 3,
-        decision: 'PASS',
-        shelf_id: null,
-        next_process_id: null,
-        note: null,
-      },
+      { batch_id: '190000000000010', quantity: 3 },
     ])
   })
 
-  it('FAIL 路径：shelf_id/next_process_id/note 全部透传', () => {
+  it('quantity 为 null → undefined（API 不期望 null）', () => {
     const items: BulkScanItem[] = [
-      {
-        part_id: '190000000000001',
-        decision: 'FAIL',
-        shelf_id: '190000000000100',
-        next_process_id: '190000000000200',
-        note: '返工',
-        label: 'A-01',
-      },
+      { batch_id: '190000000000020', quantity: null, label: 'x' },
     ]
     expect(toBatchScanItems(items)).toEqual([
-      {
-        part_id: '190000000000001',
-        batch_id: null,
-        quantity: null,
-        decision: 'FAIL',
-        shelf_id: '190000000000100',
-        next_process_id: '190000000000200',
-        note: '返工',
-      },
+      { batch_id: '190000000000020', quantity: undefined },
     ])
   })
 
-  it('null/undefined 字段统一映射为 null（API 期望 null 而非 undefined）', () => {
-    const items: BulkScanItem[] = [
-      { part_id: '190000000000002', label: 'x' },
-    ]
+  it('quantity 缺省（undefined）保持 undefined', () => {
+    const items: BulkScanItem[] = [{ batch_id: '190000000000030', label: 'y' }]
     expect(toBatchScanItems(items)).toEqual([
-      {
-        part_id: '190000000000002',
-        batch_id: null,
-        quantity: null,
-        decision: null,
-        shelf_id: null,
-        next_process_id: null,
-        note: null,
-      },
+      { batch_id: '190000000000030', quantity: undefined },
     ])
   })
 })
 
 describe('mapScanBatchResult', () => {
   const requested: BulkScanItem[] = [
-    { part_id: '190000000000001', batch_id: 'B1', quantity: 5, label: 'A · 甲' },
-    { part_id: '190000000000002', batch_id: 'B2', label: 'B · 乙' },
-    { part_id: '190000000000003', label: 'C · 丙' },
+    { batch_id: 'B-1', quantity: 5, label: 'A · 甲' },
+    { batch_id: 'B-2', label: 'B · 乙' },
+    { batch_id: 'B-3', label: 'C · 丙' },
   ]
 
   // 最小 PartItem stub —— 仅供测试 mapScanBatchResult 的对齐逻辑
-  function makePartItem(id: string): BatchScanInspectOutFE['submitted'][number] {
+  function makePartItem(id: string): BatchToInspectionOutFE['submitted'][number]['part'] {
     return {
       id,
       version: 1,
@@ -118,9 +84,11 @@ describe('mapScanBatchResult', () => {
     }
   }
 
-  it('submitted 按 part_id 反向找回原始 item（保留 label）', () => {
-    const out: BatchScanInspectOutFE = {
-      submitted: [makePartItem('190000000000002')],
+  it('submitted 按 batch_id 反向找回原始 item（保留 label）', () => {
+    const out: BatchToInspectionOutFE = {
+      submitted: [
+        { batch_id: 'B-2', part: makePartItem('190000000000002'), new_batch_id: 'B-2' },
+      ],
       failed: [],
     }
     const r = mapScanBatchResult(requested, out)
@@ -128,12 +96,12 @@ describe('mapScanBatchResult', () => {
     expect(r.failed).toEqual([])
   })
 
-  it('failed 按 part_id 找到原始 item 包成 BulkScanFailure（含 code/message）', () => {
-    const out: BatchScanInspectOutFE = {
+  it('failed 按 batch_id 找到原始 item 包成 BulkScanFailure（含 code/message）', () => {
+    const out: BatchToInspectionOutFE = {
       submitted: [],
       failed: [
-        { part_id: '190000000000001', code: 20103, message: '状态非法' },
-        { part_id: '190000000000003', code: 20511, message: '品检架 zone 不对' },
+        { batch_id: 'B-1', code: 20103, message: '状态非法' },
+        { batch_id: 'B-3', code: 20511, message: '品检架 zone 不对' },
       ],
     }
     const r = mapScanBatchResult(requested, out)
@@ -145,35 +113,37 @@ describe('mapScanBatchResult', () => {
   })
 
   it('部分成功：submitted + failed 同时存在', () => {
-    const out: BatchScanInspectOutFE = {
+    const out: BatchToInspectionOutFE = {
       submitted: [
-        makePartItem('190000000000001'),
-        makePartItem('190000000000003'),
+        { batch_id: 'B-1', part: makePartItem('190000000000001'), new_batch_id: 'B-1' },
+        { batch_id: 'B-3', part: makePartItem('190000000000003'), new_batch_id: 'B-3' },
       ],
-      failed: [{ part_id: '190000000000002', code: 20103, message: 'X' }],
+      failed: [{ batch_id: 'B-2', code: 20103, message: 'X' }],
     }
     const r = mapScanBatchResult(requested, out)
     expect(r.submitted).toEqual([requested[0], requested[2]])
     expect(r.failed).toEqual([{ item: requested[1], code: 20103, message: 'X' }])
   })
 
-  it('submitted 中的 part_id 不在请求 items（防御）：构造无 label 的最小 item', () => {
-    const out: BatchScanInspectOutFE = {
-      submitted: [makePartItem('190000000000999')],
+  it('submitted 中的 batch_id 不在请求 items（防御）：构造无 label 的最小 item', () => {
+    const out: BatchToInspectionOutFE = {
+      submitted: [
+        { batch_id: 'B-幽灵', part: makePartItem('190000000000999'), new_batch_id: null },
+      ],
       failed: [],
     }
     const r = mapScanBatchResult(requested, out)
-    expect(r.submitted).toEqual([{ part_id: '190000000000999' }])
+    expect(r.submitted).toEqual([{ batch_id: 'B-幽灵' }])
   })
 
-  it('failed 中的 part_id 不在请求 items（防御）：fallback 构造最小 item', () => {
-    const out: BatchScanInspectOutFE = {
+  it('failed 中的 batch_id 不在请求 items（防御）：fallback 构造最小 item', () => {
+    const out: BatchToInspectionOutFE = {
       submitted: [],
-      failed: [{ part_id: '190000000000999', code: 20103, message: '幽灵失败' }],
+      failed: [{ batch_id: 'B-幽灵', code: 20103, message: '幽灵失败' }],
     }
     const r = mapScanBatchResult(requested, out)
     expect(r.failed).toEqual([
-      { item: { part_id: '190000000000999' }, code: 20103, message: '幽灵失败' },
+      { item: { batch_id: 'B-幽灵' }, code: 20103, message: '幽灵失败' },
     ])
   })
 
@@ -182,5 +152,120 @@ describe('mapScanBatchResult', () => {
       submitted: [],
       failed: [],
     })
+  })
+})
+
+describe('useBulkScanInspect().run() (2026-08-28 route B)', () => {
+  it('passes batch_id-only items to batch-to-inspection endpoint', async () => {
+    const apiParts = await import('@/api/parts')
+    const spy = vi.spyOn(apiParts, 'batchToInspection').mockResolvedValue({
+      submitted: [],
+      failed: [],
+    })
+
+    const bulk = useBulkScanInspect()
+    await bulk.run({
+      target_inspection_shelf_id: 'SHELF-1',
+      items: [
+        { batch_id: '111', quantity: 2, label: 'A / 批 111' },
+        { batch_id: '222', label: 'A / 批 222' },
+      ],
+    })
+
+    expect(spy).toHaveBeenCalledWith({
+      target_inspection_shelf_id: 'SHELF-1',
+      items: [
+        { batch_id: '111', quantity: 2 },
+        { batch_id: '222', quantity: undefined },
+      ],
+    })
+    // 关键断言：入参 items **不含 part_id**（route B 也不再带 decision/shelf_id/next_process_id/note）
+    const callArg = spy.mock.calls[0][0]
+    for (const it of callArg.items) {
+      expect(it).not.toHaveProperty('part_id')
+      expect(it).not.toHaveProperty('decision')
+      expect(it).not.toHaveProperty('shelf_id')
+      expect(it).not.toHaveProperty('next_process_id')
+      expect(it).not.toHaveProperty('note')
+    }
+  })
+
+  it('result failed[].item.batch_id 反查回原始 BulkScanItem', async () => {
+    const apiParts = await import('@/api/parts')
+    const requested: BulkScanItem[] = [
+      { batch_id: 'B-1', label: 'L1' },
+      { batch_id: 'B-2', label: 'L2' },
+    ]
+    const out: BatchToInspectionOutFE = {
+      submitted: [],
+      failed: [{ batch_id: 'B-2', code: 20103, message: '状态非法' }],
+    }
+    vi.spyOn(apiParts, 'batchToInspection').mockResolvedValue(out)
+
+    const bulk = useBulkScanInspect()
+    const r = await bulk.run({
+      target_inspection_shelf_id: 'SHELF-1',
+      items: requested,
+    })
+
+    expect(r.failed).toEqual([
+      { item: { batch_id: 'B-2', label: 'L2' }, code: 20103, message: '状态非法' },
+    ])
+    expect(r.submitted).toEqual([])
+  })
+
+  it('result submitted[].batch_id 反查回原始 BulkScanItem', async () => {
+    const apiParts = await import('@/api/parts')
+    const requested: BulkScanItem[] = [
+      { batch_id: 'B-1', label: 'L1' },
+      { batch_id: 'B-2', label: 'L2' },
+    ]
+    const partStub = {
+      id: '190000000000001',
+      version: 1,
+      serial_no: null,
+      name: 'x',
+      drawing_no: 'D',
+      quantity: 1,
+      planned_delivery_date: '2026-09-01',
+      actual_delivery_date: null,
+      is_urgent: false,
+      status: 'INSPECTION',
+      order_no: null,
+      system_delivery_date: null,
+      note: null,
+      customer_name: null,
+      parent_customer_name: null,
+      customer_path: null,
+      delivery_note_id: null,
+      delivery_note_no: null,
+      delivery_note_status: null,
+      assembly_id: null,
+      current_holder_id: null,
+      current_holder_kind: null,
+      shelf_code: null,
+      worker_name: null,
+      outsource_company_name: null,
+      location: 'INSPECTION_SHELF',
+      placed_at: null,
+      next_process_id: null,
+      next_process_name: null,
+    } as const
+    const out: BatchToInspectionOutFE = {
+      submitted: [
+        { batch_id: 'B-2', part: partStub, new_batch_id: 'B-2' },
+      ],
+      failed: [],
+    }
+    vi.spyOn(apiParts, 'batchToInspection').mockResolvedValue(out)
+
+    const bulk = useBulkScanInspect()
+    const r = await bulk.run({
+      target_inspection_shelf_id: 'SHELF-1',
+      items: requested,
+    })
+
+    expect(r.submitted).toEqual([{ batch_id: 'B-2', label: 'L2' }])
+    expect(r.failed).toEqual([])
   })
 })
