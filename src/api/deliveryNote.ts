@@ -371,19 +371,21 @@ function parseFilename(header: string | undefined): string | null {
 }
 
 /**
- * v2 扫码建单（设计文档 §3 D3 + §5）：
- *   POST /api/v2/delivery-notes/scan
- *   body: { code: string }
- *   → { outcome, resolved, note, added_batches, message }
+ * 扫码建单（P3，find-or-create draft + 4 outcome 软化路径）。
  *
- * 后端按 D3 走「扫码 → 解析 L1 → classify → find-or-create DRAFT → 返回落点」。
- * 前端不做 note picker / customer picker / 锁单模式——纯转发。
+ * 2026-08-28 后端路线 B 重构后响应 4 种 outcome：
+ * - ADDED: 草稿已建/复用 + 批次全部挂载
+ * - ALREADY_PRESENT: 草稿已存在 + 全部批次已在本单（幂等）
+ * - CANDIDATES_AVAILABLE: 散件仅 B 组（未送检），unresolved_targets 含候选批次
+ * - PARTIAL_ADDED: 装配件混合（A 组挂载 + B 组子件未送检）
  *
- * 错误码（设计文档 §7）由后端信封 code 字段抛 ApiError，前端按 code 区分：
- *   21417 BIZ_DELIVERY_SCAN_UNKNOWN_CODE         404 — 条码未命中
- *   21418 BIZ_DELIVERY_ASSEMBLY_PARTS_NOT_READY 400 — 装配件整套未齐（含 per-child 明细）
- *   21416 BIZ_DELIVERY_NOTE_SCOPE_MISMATCH      400 — 范围不匹配
- *   21405 / 21406                                400 — 单条扫码失败
+ * 批次 3 分组（A 直接入单 / B 候选送检 / C 短路报错）：
+ *   - A 组（READY_TO_SHIP / INSPECTION）→ added_batches
+ *   - B 组（PENDING / PROGRAMMING / IN_PROCESS 非工人持有 / REPAIRING）→ unresolved_targets
+ *   - C 组（DELIVERED / OUTSOURCE / IN_PROCESS 工人持有 / COMPLETED / CANCELLED）→ 21421 硬错误
+ *
+ * 工人持有以 `t_part_batch.location='WORKER'` 判定（不用 current_holder_id，因为该列在
+ * 货架上存的是 shelf.id）。旧 21405 / 21418 错误码已不再由 scan 触发。
  */
 export async function scanDelivery(code: string): Promise<ScanDeliveryOut> {
   const resp = await apiV2.post<ScanDeliveryOut>('/delivery-notes/scan', { code })

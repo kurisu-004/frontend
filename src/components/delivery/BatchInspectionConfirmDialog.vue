@@ -1,14 +1,18 @@
 <!--
-  批量品检确认对话框（2026-08-23 新增；2026-08-25 切到 v2 批量端点）。
+  批量品检确认对话框（2026-08-23 新增；2026-08-25 切到 v2 批量端点；
+  2026-08-28 切 route B 批量端点 + items 改 batch_id-only）。
 
   用途：送货单详情页提交 / 扫码页二次确认 共用。
   父组件已过滤：status ∉ {INSPECTION, READY_TO_SHIP}。
   父组件拿到 pass-success 后接着调 submitNote(noteId, {version: noteVersion})。
 
-  调 useBulkPassInspection.batchPassInspection → v2 batch 端点；
+  调 useBulkPassInspection.run → v2 batchToShip 端点；
   本组件只处理 INSPECTION/READY_TO_SHIP 件一键过检。区别仅在：
   数据源 = DeliveryNoteLineItem，emit pass-success 后父组件接 submitNote，
   而不是用 originalCode 重扫。
+
+  2026-08-28 路线 B 改造：items 字段收敛为 batch_id + quantity + label；
+  后端 service 按 batch_id 反查 t_part_batch.part_id，前端不再带 part_id。
 -->
 <script setup lang="ts">
 import { computed, h, ref } from 'vue'
@@ -17,7 +21,7 @@ import { Select } from '@element-plus/icons-vue'
 
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useBulkPassInspection } from '@/composables/useBulkPassInspection'
-import type { BulkPassItem, BulkPassFailure } from '@/composables/useBulkPassInspection'
+import type { BulkPassResult } from '@/composables/useBulkPassInspection'
 import type { DeliveryNoteLineItem } from '@/types/deliveryNote'
 import {
   resolveDraggable,
@@ -48,7 +52,7 @@ const emit = defineEmits<{
   /** 全部通过 → 父组件接着 submitNote(noteId, {version: noteVersion}) */
   (e: 'pass-success'): void
   /** 部分通过 → 父组件 toast + 保留弹窗 */
-  (e: 'pass-partial', result: { passed: BulkPassItem[]; failed: BulkPassFailure[] }): void
+  (e: 'pass-partial', result: BulkPassResult): void
   /** 用户点取消 */
   (e: 'cancel'): void
 }>()
@@ -88,30 +92,25 @@ const noteShortId = computed(() =>
 )
 
 // DeliveryNoteLineItem[] → BulkPassItem[]
-// 2026-08-23：DeliveryNoteLineItem.id 才是 batch_id（行身份），
-// 顶层未直接命名 batch_id。fallback undefined 让 useBulkPassInspection 全量过检。
-const items = computed<BulkPassItem[]>(() =>
+// 2026-08-28 路线 B 改造：仅含 batch_id + quantity + label，移除 part_id
+// （后端 service 按 batch_id 反查 t_part_batch.part_id）。
+// DeliveryNoteLineItem.id 才是 batch_id（行身份，2026-07-29 批次化）。
+const items = computed(() =>
   props.uninspectedItems.map((li) => ({
-    part_id: li.part_id,
-    batch_id: li.id || undefined,
+    batch_id: li.id,
     quantity: li.quantity,
     label: `${li.serial_no ?? li.drawing_no} · ${li.name}`,
   })),
 )
 
-// 「一键通过品检」可用条件：列表非空 + 每个 li 都有 part_id
+// 「一键通过品检」可用条件：列表非空。
+// batch_id 由 DeliveryNoteLineItem.id 必填保证，不再校验 part_id。
 const canBulkPass = computed(
-  () =>
-    props.uninspectedItems.length > 0 &&
-    props.uninspectedItems.every(
-      (li) => typeof li.part_id === 'string' && li.part_id.length > 0,
-    ),
+  () => props.uninspectedItems.length > 0,
 )
 
 const disabledTooltip = computed(() =>
-  canBulkPass.value
-    ? ''
-    : '存在缺少 part_id 的行，无法通过品检',
+  canBulkPass.value ? '' : '列表为空',
 )
 
 function onCancel(): void {

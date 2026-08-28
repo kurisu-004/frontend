@@ -22,9 +22,10 @@ import {
   getPart,
   listPartBatches,
   listPartEvents,
-  passInspection,
   softDeletePart,
   splitPartBatch,
+  toProcess,
+  toShip,
   updatePart,
   type PartBatch,
   type PartEvent,
@@ -33,7 +34,7 @@ import {
 } from '@/api/parts'
 import { getAssemblyForPart } from '@/api/assembly'
 import type { AssemblyDetail } from '@/types/assembly'
-import { failInspection, receiveFromOutsource } from '@/api/parts'
+import { receiveFromOutsource } from '@/api/parts'
 import { usePermissions } from '@/composables/usePermissions'
 import { useConfirm } from '@/composables/useConfirm'
 import {
@@ -229,7 +230,7 @@ export function usePartDetail(partId: Ref<string>) {
 
   // ============ 品检通过 ============
   // 2026-08-25 T10p5：恢复 confirmDangerous 二次确认（拆分前 PartDetail.vue 的行为）。
-  // 提示用户「此操作不可撤销」后再调 passInspection API。
+  // 2026-08-28 路线 B：passInspection → toShip（INSPECTION → READY_TO_SHIP）。
   async function onPassInspection(): Promise<boolean> {
     if (!part.value) return false
     const ok = await confirmDangerous(
@@ -239,7 +240,7 @@ export function usePartDetail(partId: Ref<string>) {
     )
     if (!ok) return false
     try {
-      await passInspection(partId.value)
+      await toShip(partId.value)
       ElMessage.success('品检通过')
       await fetchPart()
       void fetchEvents()
@@ -251,13 +252,14 @@ export function usePartDetail(partId: Ref<string>) {
   }
 
   // ============ 指定工序（failInsp dialog 由 shell 持有 UI 状态）============
+  // 2026-08-28 路线 B：failInspection → toProcess（INSPECTION → IN_PROCESS）。
   async function onFailInspection(payload: {
     shelfId: string
     processId: string
     note: string | null
   }): Promise<boolean> {
     try {
-      await failInspection(partId.value, {
+      await toProcess(partId.value, {
         shelf_id: payload.shelfId,
         next_process_id: payload.processId,
         note: payload.note,

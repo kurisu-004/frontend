@@ -223,135 +223,99 @@ export async function listInspectionBatches(params: {
   return resp.data
 }
 
-// ============ 批量品检通过（2026-08-23 新增；2026-08-25 切到 v2 批量端点）==============
+// ============ inspection to-XXX 体系批量（2026-08-28 后端路线 B 重构）==============
 
-/** v2 批量品检入参项（2026-08-25 接入）。
+/** v2 `POST /parts/batch-to-inspection` 入参项。
  *
- * 字段名 / 可选性与后端 `BatchPassItem` 对齐；`part_id` 必填，雪花 ID 字符串。 */
-export interface BatchPassItem {
+ * 字段名 / 可选性与后端 `BatchToInspectionItem` 对齐；`batch_id` 必填，雪花 ID 字符串。
+ * `part_id` **不再需要** —— 后端 service 按 `batch_id` 反查 `t_part_batch.part_id`。 */
+export interface BatchToInspectionItem {
   /** 必填；雪花 ID 字符串（CLAUDE.md §3）。 */
-  part_id: string
-  /** 可选；目标批次 id（雪花 ID 字符串）。缺省 = 状态唯一批次解析。 */
-  batch_id?: string | null
-  /** 可选；部分数量。缺省 = 批次全量；小于批次量时后端会拆分。 */
+  batch_id: string
+  /** 可选；部分数量。缺省 = 批次全量；小于批次量时后端会拆分 remainder。 */
   quantity?: number | null
 }
 
-/** v2 批量品检 per-item 失败元素（2026-08-25 接入）。
- *
- * 与 `BulkPassFailure`（composable 层）是一对一映射；后端 `failed[]` 原样透传。 */
-export interface BatchPassFailureFE {
-  /** 雪花 ID 字符串；与请求 items[].part_id 一一对应。 */
-  part_id: string
-  /** 业务错误码（20101 NOT_FOUND / 20103 INVALID_TRANSITION / 20104 INVALID_VALUE）。 */
+export interface BatchToInspectionRequest {
+  /** 共享品检架 id（雪花 ID 字符串；必填，zone=INSPECTION active）。 */
+  target_inspection_shelf_id: string
+  /** 1..=200 项；超出后端返回 40001 VALIDATION_ERROR。 */
+  items: BatchToInspectionItem[]
+}
+
+export interface BatchToInspectionFailureFE {
+  /** 雪花 ID 字符串；与请求 items[].batch_id 一一对应。 */
+  batch_id: string
+  /** 业务错误码（20103 INVALID_TRANSITION / 20109 / 20111 / 20511 / 20512 等）。 */
   code: number
   /** 后端 message 原样透传。 */
   message: string
 }
 
-/** v2 `POST /parts/batch-pass-inspection` 响应 `data`。 */
-export interface BatchPassInspectionOutFE {
-  /** 成功通过的件（与 PartItem 同源；PartItem 在 part 域是大 DTO，包含 version/批次等）。 */
-  passed: PartItem[]
-  /** 部分失败的 per-item 明细；与请求 items 按 part_id 对齐。 */
-  failed: BatchPassFailureFE[]
+export interface BatchToInspectionOutFE {
+  /** 成功项，与请求 items 同序（后端顺序处理）；失败项落在 failed[]，
+   *  故 submitted.length = items.length - failed.length，**下标不与 items 对齐**。
+   *  注意后端 `ToXxxOut` 只序列化 `part` + `new_batch_id`，**不含 batch_id**
+   *  （2026-08-28 修正，见 inspection.md「ToXxxOut 字段」表）——响应 → 请求的反查
+   *  只能靠「位置 + 用 failed[].batch_id 扣除失败项」，不能指望 submitted[].batch_id。 */
+  submitted: Array<{
+    part: PartItem
+    /** 拆批语义（见 inspection.md「自动拆批」）：
+     *  - 整批操作（quantity 缺省 / == batch.quantity）→ `null`，未拆批；
+     *  - 部分操作（quantity < batch.quantity）→ 拆出的 **remainder 批次 id**
+     *    （原批次量减少后留在源状态，待后续操作），**不等于**入参 batch_id。
+     *  前端拿到非 null 应刷新批次列表（会多出一行 quantity = 原量 - 操作量 的批次）。 */
+    new_batch_id: string | null
+  }>
+  failed: BatchToInspectionFailureFE[]
 }
 
-/**
- * 批量通过品检（v2 端点）。
- *
- * 后端 `POST /api/v2/parts/batch-pass-inspection`：1 次 round-trip 处理 N<=200 件；
- * 整体成功 200 OK + 部分失败走 `data.failed[]`，与单件 `passInspection` 行为对齐。
- *
- * 该端点是 `composables/useBulkPassInspection.run` 的单一后端入口；早前 worker pool
- * 方案（9 次 round-trip）已下线，仅作为 `BulkPassItem[]` → 调用层契约保留 composable 抽象。
- *
- * @see ~/Code/hsh-erp-rust/docs/api/parts.md（待后端 agent 提交 docs 后同步）
- */
-export async function batchPassInspection(
-  items: BatchPassItem[],
-): Promise<BatchPassInspectionOutFE> {
-  const resp = await apiV2.post<BatchPassInspectionOutFE>(
-    '/parts/batch-pass-inspection',
-    { items },
+export async function batchToInspection(
+  payload: BatchToInspectionRequest,
+): Promise<BatchToInspectionOutFE> {
+  const resp = await apiV2.post<BatchToInspectionOutFE>(
+    '/parts/batch-to-inspection',
+    payload,
   )
   return resp.data
 }
 
-// ============ 批量一键送检（2026-08-25 新增；申请见 docs/api-requirements/scan-inspect.md）==============
-//
-// 与 batch-pass-inspection 形态对称：
-// - 单件端点已切 v2（见 ./crud.ts `scanInspect`）
-// - 批量端点走 v2 batch-scan-inspect：共享品检架 + per-item 数量 + 可选 decision
-// - 后端必填：target_inspection_shelf_id（INSPECTION zone active）；items[].part_id 必填，decision 缺省 PASS
-// - 用于：扫码建单扫到 IN_PROCESS/PROGRAMMING/PENDING 工件时弹窗确认；装配件整组送检
-// - 配套 composable: composables/useBulkScanInspect.ts（镜像 useBulkPassInspection）
-
-/** v2 批量一键送检入参项（2026-08-25 新增）。
- *
- * 字段对齐后端 `BatchScanInspectItem`（docs/api-requirements/scan-inspect.md §G.2 端点 2）；
- * `part_id` 必填（雪花 ID 字符串）；`decision` 缺省 = PASS；`shelf_id` / `next_process_id`
- * 仅 FAIL 时必填（前端 UI 默认全 PASS，validator 由后端 model_validator 拦截）。 */
-export interface BatchScanInspectItemFE {
-  /** 必填；雪花 ID 字符串。 */
-  part_id: string
-  /** 可选；缺省 PASS。FAIL 时需要同时给 shelf_id + next_process_id。 */
-  decision?: 'PASS' | 'FAIL' | null
-  /** FAIL 必填；目标生产货架（PRODUCTION zone active）。 */
-  shelf_id?: string | null
-  /** FAIL 必填；下一道工序 id。 */
-  next_process_id?: string | null
-  /** 可选；≤ 500 字符。 */
-  note?: string | null
-  /** 可选；目标批次 id；缺省按状态唯一批次解析。 */
-  batch_id?: string | null
-  /** 可选；部分数量；缺省 = 批次全量；>0 且 ≤ 批次剩余量。 */
+/** v2 `POST /parts/batch-to-ship` 入参项（与 BatchToInspectionItem 同形）。 */
+export interface BatchToShipItem {
+  batch_id: string
   quantity?: number | null
 }
 
-/** v2 批量一键送检入参 request body。 */
-export interface BatchScanInspectRequestFE {
-  /** 共享品检架 id（雪花 ID 字符串；必填，zone=INSPECTION, is_active）。 */
-  target_inspection_shelf_id: string
-  /** 1..=200 项。 */
-  items: BatchScanInspectItemFE[]
+export interface BatchToShipRequest {
+  items: BatchToShipItem[]
 }
 
-/** v2 批量一键送检 per-item 失败元素（与 BatchPassFailureFE 形态对称）。 */
-export interface BatchScanInspectFailureFE {
-  /** 雪花 ID 字符串；与请求 items[].part_id 一一对应。 */
-  part_id: string
-  /** 业务错误码（20103 INVALID_TRANSITION / 20111 INVALID_QUANTITY / 20511 / 20512 等）。 */
+export interface BatchToShipFailureFE {
+  batch_id: string
   code: number
-  /** 后端 message 原样透传。 */
   message: string
 }
 
-/** v2 `POST /parts/batch-scan-inspect` 响应 `data`。 */
-export interface BatchScanInspectOutFE {
-  /** 成功搬上 INSPECTION 架并完成 PASS/FAIL 分流的件。 */
-  submitted: PartItem[]
-  /** per-item 失败明细；与请求 items 按 part_id 对齐。 */
-  failed: BatchScanInspectFailureFE[]
+export interface BatchToShipOutFE {
+  /** 与 BatchToInspectionOutFE.submitted 同形同语义（后端 `ToXxxOut` 单 / 批端点共用）：
+   *  与请求 items 同序、**不含 batch_id**、失败项不占位。 */
+  submitted: Array<{
+    part: PartItem
+    /** 拆批语义（见 inspection.md「自动拆批」）：
+     *  - 整批操作（quantity 缺省 / == batch.quantity）→ `null`，未拆批；
+     *  - 部分操作（quantity < batch.quantity）→ 拆出的 **remainder 批次 id**，
+     *    **不等于**入参 batch_id。前端拿到非 null 应刷新批次列表。 */
+    new_batch_id: string | null
+  }>
+  failed: BatchToShipFailureFE[]
 }
 
-/**
- * 批量一键送检（v2 端点）。
- *
- * 后端 `POST /api/v2/parts/batch-scan-inspect`：1 次 round-trip 处理 N<=200 件；
- * 共享品检架，per-item decision（缺省 PASS）。
- *
- * 该端点是 `composables/useBulkScanInspect.run` 的单一后端入口；
- * 主要消费方：`components/delivery/BatchSubmitInspectionConfirmDialog.vue`（扫码建单弹窗）。
- *
- * @see docs/api-requirements/scan-inspect.md
- */
-export async function batchScanInspect(
-  req: BatchScanInspectRequestFE,
-): Promise<BatchScanInspectOutFE> {
-  const resp = await apiV2.post<BatchScanInspectOutFE>(
-    '/parts/batch-scan-inspect',
-    req,
+export async function batchToShip(
+  payload: BatchToShipRequest,
+): Promise<BatchToShipOutFE> {
+  const resp = await apiV2.post<BatchToShipOutFE>(
+    '/parts/batch-to-ship',
+    payload,
   )
   return resp.data
 }

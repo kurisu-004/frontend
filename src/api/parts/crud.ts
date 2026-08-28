@@ -257,12 +257,6 @@ export interface PartEvent {
   created_at: string
 }
 
-/** 无 body 流转端点的可选批次参数（单件接口使用） */
-export interface BatchActionPayload {
-  batch_id?: string | null
-  quantity?: number | null
-}
-
 // axios 会自动丢掉 undefined/null；但空串不会丢（会触发 LIKE '%%'）。
 // 空字符串过滤统一在 @/api/http 的 cleanParams 里实现（2026-08-25 refactor）。
 
@@ -407,78 +401,73 @@ export async function updatePart(
   return resp.data
 }
 
-/** INSPECTION → READY_TO_SHIP：品检合格（2026-07-29：可选批次/部分数量）。 */
-export async function passInspection(
-  id: string,
-  payload?: BatchActionPayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(
-    `/parts/${id}/pass-inspection`,
-    payload ?? undefined,
-  )
-  return resp.data
-}
+// ============ inspection to-XXX 体系（2026-08-28 后端路线 B 重构）==============
 
-/**
- * 2026-07-21 改：品检打回（INSPECTION → IN_PROCESS）—— 三参 payload：
- * shelf_id + next_process_id（保留为下一道工序，不再清空）+ note（品检备注）。
- * 后端会校验 `t_shelf_process` 映射（缺映射返回 422）。
- */
-export interface FailInspectionPayload {
-  shelf_id: string
-  /** 下一道工序 id（必填；保留为该 part 的下道工序，工人可直接领取） */
-  next_process_id: string
-  /** 品检员填的不合格原因等（写入 t_part_event.note，事件历史一览可见） */
+/** 单件送检（PENDING/PROGRAMMING/IN_PROCESS+PRODUCTION_SHELF → INSPECTION）。
+ * 自动拆批：quantity < batch.quantity 时响应 new_batch_id 为拆出的 remainder。
+ * 后端详见 ~/Code/hsh-erp-rust/docs/api/parts/inspection.md。 */
+export interface ToInspectionPayload {
+  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
+  target_inspection_shelf_id: string
+  /** 可选；≤ 500 字符品检备注（v2 新增）。 */
   note?: string | null
-  /** 2026-07-29：目标批次 id；缺省取唯一 INSPECTION 批次 */
+  /** 可选；多批次歧义时必填。 */
   batch_id?: string | null
-  /** 2026-07-29：部分数量；缺省 = 批次全量 */
+  /** 可选；缺省 = 批次全量；部分数量 < 整批会拆出新批次作 remainder。 */
   quantity?: number | null
 }
 
-export async function failInspection(
+export async function toInspection(
   id: string,
-  payload: FailInspectionPayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(
-    `/parts/${id}/fail-inspection`,
+  payload: ToInspectionPayload,
+): Promise<{ part: PartItem; new_batch_id: string | null }> {
+  const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
+    `/parts/${id}/to-inspection`,
     payload,
   )
   return resp.data
 }
 
-/**
- * 2026-08-12 PR-I-scan-inspect：扫码快捷品检（一步完成搬到品检架 + 通过/打回）。
- * 适用范围：PENDING / PROGRAMMING / IN_PROCESS + location=PRODUCTION_SHELF。
- * 不适用（400 BIZ_INVALID_TRANSITION）：IN_PROCESS+WORKER / READY_TO_SHIP /
- * DELIVERED / REPAIRING / OUTSOURCE / INSPECTION —— 这些状态请走原 pass/fail。
- */
-export interface ScanInspectPayload {
-  /** 目标品检货架 id（雪花 ID 字符串；必填，zone=INSPECTION） */
-  target_inspection_shelf_id: string
-  /** 通过(PASS) / 打回(FAIL) */
-  decision: 'PASS' | 'FAIL'
-  /** 仅 FAIL 需要；目标生产货架 id */
-  shelf_id?: string
-  /** 仅 FAIL 需要；下一道工序 id */
-  next_process_id?: string
-  /** 仅 FAIL 需要；品检备注 */
-  note?: string | null
-  /** 目标批次 id；缺省按状态唯一批次解析（多批次工单必须指定） */
+/** 单件通过品检（INSPECTION → READY_TO_SHIP，可选自动拆批）。
+ * body 可省略（Content-Length: 0 等价于空对象）。 */
+export interface ToShipPayload {
   batch_id?: string | null
-  /** 部分数量；缺省 = 批次全量 */
+  quantity?: number | null
+  note?: string | null
+}
+
+export async function toShip(
+  id: string,
+  payload?: ToShipPayload,
+): Promise<{ part: PartItem; new_batch_id: string | null }> {
+  const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
+    `/parts/${id}/to-ship`,
+    payload ?? {},
+  )
+  return resp.data
+}
+
+/** 单件品检打回（INSPECTION → IN_PROCESS，指定 shelf + next_process）。
+ * 事件类型 INSPECTION_FAILED。 */
+export interface ToProcessPayload {
+  /** 必填；目标生产货架 id（PRODUCTION zone active）。 */
+  shelf_id: string
+  /** 必填；下一道工序 id（保留为该 part 的下道工序，工人可直接领取）。 */
+  next_process_id: string
+  /** 可选；品检备注。 */
+  note?: string | null
+  /** 可选；多批次歧义时必填。 */
+  batch_id?: string | null
+  /** 可选；缺省 = 批次全量。 */
   quantity?: number | null
 }
 
-// 2026-08-25 切换：scanInspect 切到 v2 端点（POST /api/v2/parts/{id}/scan-inspect）。
-// 旧 v1（api.post）保留为兜底 fallback？本仓库单一职责：v2 上线后此函数只走 v2；
-// 历史 v1 调用点已全部迁移（InspectionPending.vue 仅一个调用点，跟着切）。
-export async function scanInspect(
+export async function toProcess(
   id: string,
-  payload: ScanInspectPayload,
-): Promise<PartItem> {
-  const resp = await apiV2.post<PartItem>(
-    `/parts/${id}/scan-inspect`,
+  payload: ToProcessPayload,
+): Promise<{ part: PartItem; new_batch_id: string | null }> {
+  const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
+    `/parts/${id}/to-process`,
     payload,
   )
   return resp.data
@@ -748,16 +737,6 @@ export interface ReceiveFromOutsourcePayload {
   quantity?: number | null
 }
 
-export interface ReceiveToInspectionPayload {
-  shelf_id: string
-  /** True: 自动通过品检 → READY_TO_SHIP（"送货流程"快捷分支，2026-07-16 加） */
-  auto_pass_inspection?: boolean
-  /** 2026-07-30：目标批次 id；缺省按状态唯一批次解析 */
-  batch_id?: string | null
-  /** 2026-07-30：部分接收数量；缺省 = 批次全量 */
-  quantity?: number | null
-}
-
 /**
  * OUTSOURCE → IN_PROCESS：从外协回收，下发到生产货架继续加工。
  */
@@ -767,21 +746,6 @@ export async function receiveFromOutsource(
 ): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/parts/${encodeURIComponent(partId)}/receive-from-outsource`,
-    payload,
-  )
-  return resp.data
-}
-/**
- * 2026-07-16：OUTSOURCE → INSPECTION：外协件直接送检（跳过生产货架）。
- * auto_pass_inspection=True 时连发 pass_inspection 一次推到 READY_TO_SHIP
- * （"送货流程" 快捷分支 = OUTSOURCE → INSPECTION → READY_TO_SHIP）。
- */
-export async function receiveFromOutsourceToInspection(
-  partId: string,
-  payload: ReceiveToInspectionPayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(
-    `/parts/${encodeURIComponent(partId)}/receive-from-outsource-to-inspection`,
     payload,
   )
   return resp.data

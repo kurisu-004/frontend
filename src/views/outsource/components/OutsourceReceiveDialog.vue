@@ -4,7 +4,7 @@
   设计要点：
   - 纯受控组件：所有状态由外部传入；shelves / filteredProcesses 也由外部派生传入。
   - 避免 T9 readonly-prop 陷阱：用 :model-value + @update:model-value 显式双向。
-  - branch / shelf / process / quantity / autoPass / submitting 都是双向；target 是只读快照。
+  - branch / shelf / process / quantity / submitting 都是双向；target 是只读快照。
 -->
 <template>
   <el-dialog
@@ -93,7 +93,6 @@ defineProps<{
   branch: Branch
   shelf: string
   process: string
-  autoPass: boolean
   quantity: number
   submitting: boolean
   branchLabel: string

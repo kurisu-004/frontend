@@ -5,7 +5,8 @@
 //
 // 持有：
 //   - 扫码防抖态（lastScanCode / lastScanAt / scanning）
-//   - 阻塞弹窗（BatchSubmitInspectionConfirmDialog）状态
+//   - route B 候选弹窗（DeliveryScanCandidateDialog）状态（candidateTargets /
+//     originalScanCode / candidateDialogVisible）
 //   - 打印送货单预览（PrintPreviewDialog）状态
 //   - 提交草稿前的未送检确认（BatchInspectionConfirmDialog）状态
 //   - submittingByNote —— 每张草稿卡片提交中 loading
@@ -26,14 +27,13 @@ import { ApiError } from '@/api/http'
 import { useDeliveryNoteDetailCache } from '@/composables/useDeliveryNoteDetailCache'
 import {
   BLOCK_SCAN_CODES,
-  type BlockedScanItem,
   type DeliveryNoteDetailOut,
   type DeliveryNoteLineItem,
   type ScanDeliveryOut,
   type ScanNoteSummary,
+  type ScanUnresolvedTarget,
 } from '@/types/deliveryNote'
 import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection'
-import type { BulkScanFailure } from '@/composables/useBulkScanInspect'
 
 export interface UseDeliveryScanSubmissionOptions {
   /** 扫码命中后写入 drafts Map 的回调（由 useDeliveryDraftBoard 注入）。 */
@@ -57,13 +57,6 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
   /** 当前扫码 inflight 标记（handleScan 重入保护）。 */
   const scanning = ref(false)
 
-  // ============ 扫码阻塞弹窗（2026-08-23 增量）==============
-  /** 弹窗显隐 + 阻塞失败件列表 + 缓存的原始 code（重扫用）。 */
-  const blockedDialogVisible = ref(false)
-  const blockedFailures = ref<BlockedScanItem[]>([])
-  const blockedReason = ref('')
-  const blockedOriginalCode = ref('')
-
   // ============ 打印送货单预览（2026-08-23 增量）==============
   /** preview 弹窗显隐 + 当前打开的 note（getNote 拉回）。 */
   const printNotePreviewVisible = ref(false)
@@ -78,6 +71,14 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
 
   /** 每张草稿卡片各自的提交中 loading 态。 */
   const submittingByNote = reactive<Record<string, boolean>>({})
+
+  // ============ route B 候选批次弹窗（2026-08-28 新增）==============
+  /** 扫码命中 CANDIDATES_AVAILABLE / PARTIAL_ADDED 时把 unresolved_targets 投到这里，
+   * 父组件 DeliveryNoteScan 用 DeliveryScanCandidateDialog 渲染。
+   * 弹窗「一键送检」成功后 emit('done') → 父级用 originalScanCode 重扫。 */
+  const candidateTargets = ref<ScanUnresolvedTarget[]>([])
+  const originalScanCode = ref<string>('')
+  const candidateDialogVisible = ref(false)
 
   // ============ 扫码主流程 ============
 
@@ -111,7 +112,7 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     scanning.value = true
     try {
       const out = await scanDelivery(code)
-      await applySuccess(out)
+      await applySuccess(out, code)
     } catch (e) {
       applyError(code, e)
     } finally {
@@ -120,110 +121,84 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     }
   }
 
-  /** 成功：把 out.note 写入 drafts Map（按 id 替换为后端最新）；fire-and-forget 刷新 detail。 */
-  async function applySuccess(out: ScanDeliveryOut): Promise<void> {
-    opts.writeDraftFromScan(out.note)
-    // 详情同步：失败仅 toast warning，不阻塞主流程的 success 提示。
-    void opts.refreshDraftDetail(out.note.id).catch(() => {
-      /* 已在 refreshDraftDetail 内 toast；这里仅防止 unhandled promise */
-    })
-    if (out.outcome === 'ADDED') {
-      ElMessage.success(`已加入 ${out.resolved.serial_no} → ${out.note.delivery_note_no}`)
-    } else {
-      ElMessage.warning(`${out.resolved.serial_no} 已在 ${out.note.delivery_note_no} 上`)
+  /** 成功：按 outcome 4 分支处理（2026-08-28 路线 B）。
+   *   - ADDED：批次全部已挂载 → writeDraftFromScan + refresh + success toast
+   *   - ALREADY_PRESENT：幂等命中 → refresh + warning（不重复写 draft）
+   *   - CANDIDATES_AVAILABLE：B 组待送检 → writeDraftFromScan（A 组 0 项也写以记录扫码历史）+ 弹候选弹窗
+   *   - PARTIAL_ADDED：装配件混合 → writeDraftFromScan + refresh + 弹候选弹窗 */
+  async function applySuccess(out: ScanDeliveryOut, originalCode: string): Promise<void> {
+    switch (out.outcome) {
+      case 'ADDED':
+        if (out.note) {
+          opts.writeDraftFromScan(out.note)
+          void opts.refreshDraftDetail(out.note.id).catch(() => { /* 已 toast */ })
+        }
+        ElMessage.success(
+          `已加入 ${out.resolved?.serial_no ?? ''} → ${out.note?.delivery_note_no ?? ''}`,
+        )
+        break
+      case 'ALREADY_PRESENT':
+        // 幂等：不重复 writeDraftFromScan（草稿未变化），但提示
+        if (out.note) {
+          void opts.refreshDraftDetail(out.note.id).catch(() => { /* 已 toast */ })
+        }
+        ElMessage.warning(
+          `${out.resolved?.serial_no ?? ''} 已在 ${out.note?.delivery_note_no ?? ''} 上`,
+        )
+        break
+      case 'CANDIDATES_AVAILABLE':
+        // 散件仅 B 组：写草稿（A 组 0 项也要写以记录扫码历史）+ 弹候选弹窗
+        if (out.note) opts.writeDraftFromScan(out.note)
+        candidateTargets.value = out.unresolved_targets ?? []
+        originalScanCode.value = originalCode
+        candidateDialogVisible.value = true
+        ElMessage.info(
+          `识别到 ${out.resolved?.serial_no ?? ''}，但 ${candidateTargets.value.length} 项未送检，请确认`,
+        )
+        break
+      case 'PARTIAL_ADDED':
+        // 装配件混合：A 组已挂载 + B 组子件待送检
+        if (out.note) {
+          opts.writeDraftFromScan(out.note)
+          void opts.refreshDraftDetail(out.note.id).catch(() => { /* 已 toast */ })
+        }
+        candidateTargets.value = out.unresolved_targets ?? []
+        originalScanCode.value = originalCode
+        candidateDialogVisible.value = true
+        ElMessage.success(
+          `草稿已加入 ${out.added_batches?.length ?? 0} 项；剩余 ${candidateTargets.value.length} 项未送检，请确认`,
+        )
+        break
     }
   }
 
   /**
-   * 失败：按 ApiError.code 分流（2026-08-23 增量；2026-08-26 改名/换组件）。
-   *   - 21418 / 21405（扫码阻塞） → 弹 BatchSubmitInspectionConfirmDialog 让用户一键送检。
-   *   - 其他错误 → 原 ElMessage.error 兜底（事务回滚不会产生草稿，不动 drafts）。
+   * 失败：按 ApiError.code 分流（2026-08-28 路线 B 简化）。
+   *   - 21421（BIZ_DELIVERY_BATCH_STATE_INVALID，C 组状态短路：DELIVERED / OUTSOURCE /
+   *     IN_PROCESS 工人持有 / COMPLETED / CANCELLED）→ 直接 toast，无 failures 结构、不弹窗。
+   *   - 21417（BIZ_DELIVERY_SCAN_UNKNOWN_CODE，条码未命中）→ toast 提示。
+   *   - 其他 → 兜底 toast。
    *
-   * 21418 / 21405 阻塞件失败原因包含两类：
-   *   - 「未送检 / 阻塞」类（status=XXX）：品检未通过，弹窗供一键置送检状态。
-   *   - 「on note DN-XXX」类：件已挂别的 active 单 —— 不应入此弹窗，按原 ElMessage 兜底。
+   * 旧 21405 / 21418 不再由 scan 触发（candidate 弹窗由 CANDIDATES_AVAILABLE /
+   * PARTIAL_ADDED outcome 触发，见 applySuccess）。
    */
-  function applyError(code: string, e: unknown): void {
+  function applyError(_code: string, e: unknown): void {
     const apiErr = e as ApiError | null | undefined
     if (
       apiErr instanceof ApiError &&
       (BLOCK_SCAN_CODES as readonly number[]).includes(apiErr.code)
     ) {
-      // 21418 后端 body: { code, message, data: { failures } }；
-      // 错误拦截器保持 envelope 不解封（http.ts:232-234）；同时防御 root-level failures
-      const errBody = (apiErr.response as { data?: any } | undefined)?.data ?? null
-      let failures: BlockedScanItem[] | undefined = errBody?.data?.failures
-      if (!failures || failures.length === 0) {
-        const alt = errBody?.failures
-        if (Array.isArray(alt) && alt.length > 0) failures = alt
-      }
-      // 21405 散件无 failures → 从 message 解析
-      if (!failures || failures.length === 0) {
-        failures = parseBlockMessage(apiErr.message)
-      }
-
-      if (failures && failures.length > 0) {
-        // 过滤「on note DN-」冲突类（不是品检阻塞）
-        const uninspected = failures.filter((f) => !/^on note DN-/.test(f.reason))
-        if (uninspected.length === 0) {
-          ElMessage.error(apiErr.message ?? '扫码失败')
-          return
-        }
-        blockedFailures.value = uninspected
-        blockedReason.value = apiErr.message ?? ''
-        blockedOriginalCode.value = code
-        blockedDialogVisible.value = true
-        return
-      }
+      // 21421 C 组状态短路：无 failures 结构，直接展示 message
+      ElMessage.error(apiErr.message ?? '批次状态不允许扫码建单')
+      return
+    }
+    if (apiErr instanceof ApiError && apiErr.code === 21417) {
+      // BIZ_DELIVERY_SCAN_UNKNOWN_CODE：条码未命中
+      ElMessage.error(`无法识别扫码：${apiErr.message ?? '请检查条码'}`)
+      return
     }
     const fallback = (e as { message?: string } | null | undefined)?.message ?? '扫码失败'
     ElMessage.error(fallback)
-  }
-
-  /**
-   * 从 21405 散件 message 解析单元素 BlockedScanItem[]。
-   *
-   * 后端典型 message：`"part 批次状态 IN_PROCESS, 不可入单"` 或
-   * `"part批次状态 X, 不可入单"`；serial_no 在 message 里没显式给（散件 message
-   * 只提状态），构造单元素用占位 serial_no='-' + name='扫码件' + reason 透传。
-   */
-  function parseBlockMessage(msg: string | undefined): BlockedScanItem[] {
-    if (!msg) return []
-    const statusMatch = msg.match(/status=(\w+)/) ?? msg.match(/批次状态\s*(\w+)/)
-    const status = statusMatch?.[1]
-    return [
-      {
-        serial_no: '-',
-        name: '扫码件',
-        status: status ?? undefined,
-        reason: msg,
-      },
-    ]
-  }
-
-  /**
-   * 弹窗：阻塞件一键送检成功 → 自动用原 code 重扫（再走一遍 scanDelivery）。
-   * 2026-08-26：弹窗从 BlockedScanConfirmDialog（通过品检）切到 BatchSubmitInspectionConfirmDialog（送检）。
-   */
-  async function onBlockedSubmitSuccess(): Promise<void> {
-    blockedDialogVisible.value = false
-    await handleScan(blockedOriginalCode.value)
-  }
-
-  /**
-   * 弹窗：部分送检 → 提示用户处理失败项后重新扫码；不主动重扫。
-   * 弹窗保留，由用户在弹窗内点取消关闭。
-   * 2026-08-26：弹窗语义从"通过品检"改为"送检"。
-   */
-  function onBlockedSubmitPartial(result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void {
-    ElMessage.warning(
-      `部分送检：${result.passed.length} 项成功 / ${result.failed.length} 项失败；` +
-      `请手动处理失败项后重新扫码`,
-    )
-  }
-
-  function onBlockedCancel(): void {
-    blockedDialogVisible.value = false
   }
 
   // ============ 打印送货单 + 提交草稿 ============
@@ -383,10 +358,6 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     scanning,
     lastScanCode,
     lastScanAt,
-    blockedDialogVisible,
-    blockedFailures,
-    blockedReason,
-    blockedOriginalCode,
     printNotePreviewVisible,
     printNoteTarget,
     printNoteLoading,
@@ -394,14 +365,15 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     submitTarget,
     submitUninspected,
     submittingByNote,
+    // 2026-08-28 新增：route B 候选弹窗态
+    candidateTargets,
+    originalScanCode,
+    candidateDialogVisible,
 
     // functions
     handleScan,
     applySuccess,
     applyError,
-    onBlockedSubmitSuccess,
-    onBlockedSubmitPartial,
-    onBlockedCancel,
     openPrintNote,
     onSubmitDraft,
     onSubmitDialogPassSuccess,
