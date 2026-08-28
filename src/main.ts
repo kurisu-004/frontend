@@ -26,11 +26,14 @@ const app = createApp(App)
 
 app.use(createPinia())
 
-// 2026-08-26 新增：dev-only dummy-auth 注入。
-// __DUMMY_AUTH__ 是 vite build 期常量（见 vite.config.ts define）；prod bundle 里是 false，整段 tree-shake。
+// 2026-08-28 重写：dev-only dummy-auth 注入。
+// 改走 `import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'`
+// （由 `npm run dev:dummy` → vite --mode dummy → 自动加载 .env.dummy 注入）。
+// prod build 里 import.meta.env.DEV === false，import.meta.env.VITE_DUMMY_AUTH
+// 也是 undefined，整段 tree-shake。
 // 必须放在 app.use(router) 之前——router 首次 beforeEach 触发时 user + isDummy 已就位，
 // 守卫短路 refreshOrLogout 不调 /auth/me。
-if (__DUMMY_AUTH__) {
+if (import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true') {
   useAuthSession().initDummyAuth()
 }
 

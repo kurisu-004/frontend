@@ -32,9 +32,17 @@ const token = ref<string | null>(null)
 // refresh_token 不暴露给组件（只由 axios 拦截器读），但用模块级常量便于内部测试
 let refreshTokenValue: string | null = null
 
-// 2026-08-26 新增：dummy-auth 模块标志。
-// 仅在 `npm run dev -- --dummy-auth` 时为 true；prod build 里 import.meta.env.DEV === false，永远 false。
-// 供 router 守卫短路 refreshOrLogout（避免 dummy 模式下 /auth/me 失败清掉 fake session）。
+// 2026-08-28 重写：dummy-auth 判定改用 Vite 官方 env 机制。
+// 仅在 `npm run dev:dummy`（=`vite --mode dummy` → 自动加载 .env.dummy → 设置
+// VITE_DUMMY_AUTH=true）时为 true；prod build 里 import.meta.env.DEV === false，
+// 永远 false。供 router 守卫短路 refreshOrLogout（避免 dummy 模式下 /auth/me 失败清掉 fake session）。
+//
+// 收敛到模块级函数 isDummyAuthRequested() 统一判断，避免 main.ts / router / 本文件
+// 内部各写一遍 import.meta.env.DEV && VITE_DUMMY_AUTH === 'true' 漂移。
+function isDummyAuthRequested(): boolean {
+  return import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'
+}
+
 let isDummyAuthActiveValue = false
 
 function isDummyAuthActive(): boolean {
@@ -196,12 +204,12 @@ export function useAuthSession() {
     }
   }
 
-  // 2026-08-26 新增：dummy-auth 注入（仅 dev + --dummy-auth 时被调用）。
+  // 2026-08-26 新增 / 2026-08-28 重写：dummy-auth 注入（仅 `npm run dev:dummy` 时被调用）。
   // 第三道 prod 保护：import.meta.env.DEV === false 时整段 dead code，prod bundle 不含此函数体。
   // 不写 localStorage，避免下次非 dummy 启动时被 loadFromStorage 复活。
+  // 成功注入后打一行 console.info，方便用户一眼确认 dummy 已生效。
   function initDummyAuth(): void {
-    if (!import.meta.env.DEV) return
-    if (!__DUMMY_AUTH__) return
+    if (!isDummyAuthRequested()) return
 
     user.value = {
       id: '1999999999001',
@@ -215,6 +223,9 @@ export function useAuthSession() {
     token.value = 'dummy-dev-token'
     refreshTokenValue = 'dummy-dev-refresh'
     isDummyAuthActiveValue = true
+    // 2026-08-28 新增：浏览器 console 确认标记。仅 dev 模式（外层 isDummyAuthRequested 已守），
+    // prod bundle tree-shake 掉，no-op。
+    console.info('[dummy-auth] 已注入开发用管理员会话（dev-only）')
   }
 
   return {
