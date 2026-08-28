@@ -53,8 +53,6 @@ const emit = defineEmits<{
   (e: 'pass-success'): void
   /** 部分通过 → 父组件 toast + 保留弹窗 */
   (e: 'pass-partial', result: BulkPassResult): void
-  /** 全部失败 → 父组件 toast + 保留弹窗 */
-  (e: 'pass-fail', result: BulkPassResult): void
   /** 用户点取消 */
   (e: 'cancel'): void
 }>()
@@ -134,7 +132,6 @@ async function onConfirm(): Promise<void> {
     emit('pass-partial', result)
   } else {
     ElMessage.error(`全部失败：${result.failed[0]?.message ?? '未知错误'}`)
-    emit('pass-fail', result)
   }
 }
 </script>

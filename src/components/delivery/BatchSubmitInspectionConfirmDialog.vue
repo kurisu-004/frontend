@@ -13,7 +13,7 @@
   管理员确认后把生产中的工件搬上品检架，submit-success 时父组件用 originalCode 重扫。
 
   设计要点：
-  - 弹窗结构 + submit-success / submit-partial / submit-fail 三态分流。
+  - 弹窗结构 + submit-success / submit-partial 两态分流（route B 全失败仅 ElMessage.error，不再 emit）。
   - 顶部加品检架 el-select（共享架，必填；confirm disabled when 没选）。
   - 表格列：serial_no · drawing_no · 状态 chip · 数量（el-input-number）。
     数量默认 = 该件全量（与 batchToShip / batchToInspection 范式一致）。
@@ -66,8 +66,6 @@ const emit = defineEmits<{
   (e: 'submit-success'): void
   /** 部分送检 → 父组件 toast + 保留弹窗 */
   (e: 'submit-partial', result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void
-  /** 全部失败 → 父组件 toast + 保留弹窗 */
-  (e: 'submit-fail', result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void
   /** 用户点取消 */
   (e: 'cancel'): void
 }>()
@@ -302,10 +300,6 @@ async function onConfirm(): Promise<void> {
   } else {
     const firstMsg = firstResult.failed[0]?.message ?? '未知错误'
     ElMessage.error(`全部失败：${firstMsg}`)
-    emit('submit-fail', {
-      passed: firstResult.submitted as unknown as BlockedScanItem[],
-      failed: firstResult.failed,
-    })
   }
 }
 </script>
