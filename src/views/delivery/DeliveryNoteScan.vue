@@ -42,6 +42,7 @@ import DeliveryDraftCard from './components/DeliveryDraftCard.vue'
 import BatchSubmitInspectionConfirmDialog from '@/components/delivery/BatchSubmitInspectionConfirmDialog.vue'
 import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'
 import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'
+import DeliveryScanCandidateDialog from '@/components/delivery/DeliveryScanCandidateDialog.vue'
 
 const router = useRouter()
 
@@ -103,6 +104,15 @@ const submission = useDeliveryScanSubmission({
     board.clearNoteLocalState(noteId)
   },
 })
+
+/** 候选弹窗 done 后：用 originalScanCode 重扫同一 code。
+ *  此时 B 组候选批次已经送检（INSPECTION），二次 scan 应回 PARTIAL_ADDED → ADDED 收敛。
+ *  2026-08-28 路线 B 新增：DeliveryScanCandidateDialog 父级回调。 */
+function onCandidateResolved(): void {
+  if (submission.originalScanCode.value) {
+    void submission.handleScan(submission.originalScanCode.value)
+  }
+}
 
 // ============ 扫码枪订阅 ============
 const { onScan } = useBarcodeScanner()
@@ -343,6 +353,15 @@ onBeforeUnmount(() => {
       @pass-success="submission.onSubmitDialogPassSuccess"
       @pass-partial="submission.onSubmitDialogPassPartial"
       @cancel="submission.onSubmitDialogCancel"
+    />
+
+    <!-- ========== route B 候选批次弹窗（2026-08-28 新增）============
+      CANDIDATES_AVAILABLE / PARTIAL_ADDED 命中后弹出，确认送检后 emit('done')
+      → onCandidateResolved 用 originalScanCode 重扫。 -->
+    <DeliveryScanCandidateDialog
+      v-model="submission.candidateDialogVisible.value"
+      :targets="submission.candidateTargets.value"
+      @done="onCandidateResolved"
     />
   </div>
 </template>
