@@ -105,7 +105,6 @@
       :branch="receiveBranch"
       :shelf="receiveShelf"
       :process="receiveProcess"
-      :auto-pass="autoPass"
       :quantity="receiveQuantity"
       :submitting="receiveSubmitting"
       :branch-label="receiveBranchLabel"
@@ -161,7 +160,6 @@ const {
   receiveBranch,
   receiveShelf,
   receiveProcess,
-  autoPass,
   // 派生
   inspectionShelves,
   filteredProductionShelves,

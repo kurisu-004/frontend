@@ -7,7 +7,7 @@
 //   - receivingPagedRef：<PagedTable> 模板 ref
 //   - shelves / processes：页级 lookup（接收 dialog 用；shell 装载后通过 setter 注入）
 //   - receiveDialogVisible / receiveTarget / receiveBranch / receiveShelf /
-//     receiveProcess / autoPass / receiveQuantity / receiveSubmitting：接收 dialog 状态
+//     receiveProcess / receiveQuantity / receiveSubmitting：接收 dialog 状态
 //   - useShelfProcessFilter 双向收窄（仅 production 分支）
 //
 // 不持有：
@@ -99,7 +99,6 @@ export function useOutsourceReceivingList(
   const receiveBranch = ref<Branch>('production')
   const receiveShelf = ref('')
   const receiveProcess = ref('')
-  const autoPass = ref(false)
 
   // 分支对应货架 / 工序过滤（壳里拿到的 shelves / processes 是只读 lookup）
   const productionShelves = computed(() =>
@@ -136,7 +135,6 @@ export function useOutsourceReceivingList(
     receiveBranch.value = 'production'
     receiveShelf.value = ''
     receiveProcess.value = ''
-    autoPass.value = false
     receiveQuantity.value = row.quantity
     receiveDialogVisible.value = true
     // 2026-07-17：弹窗打开后异步加载映射（仅在 shelves/processes 已就绪时有效）
@@ -147,16 +145,13 @@ export function useOutsourceReceivingList(
     receiveTarget.value = null
     receiveShelf.value = ''
     receiveProcess.value = ''
-    autoPass.value = false
     receiveBranch.value = 'production'
   }
 
   const receiveBranchLabel = computed(() =>
     receiveBranch.value === 'production'
       ? '进入生产货架继续加工'
-      : autoPass.value
-        ? '品检 → 通过品检 → 进入待送货'
-        : '品检',
+      : '品检',
   )
 
   async function onConfirmReceive(): Promise<void> {
@@ -223,7 +218,6 @@ export function useOutsourceReceivingList(
     receiveBranch,
     receiveShelf,
     receiveProcess,
-    autoPass,
     // 派生
     inspectionShelves,
     filteredProductionShelves,
