@@ -303,15 +303,6 @@ dev-only 开关**必须**走 Vite 官方 env 机制：
 - 回归单测：`src/composables/__tests__/useAuthSession.dummy.spec.ts` 用 `vi.stubEnv('VITE_DUMMY_AUTH', 'true')` 走通注入路径 + 两条不注入路径（未设 / 显式 `'false'`）。
 - 第一道 throw 的 curl 验证：`npx vite build --mode dummy` 必须 throw，正常 `npm run build` 通过。
 
-**2026-08-28 补记：路由守卫短路 ≠ 全链路短路。** dummy 模式下 `router/index.ts` 的
-`beforeEach` 已用 `isDummyAuthActive()` 跳过 `refreshOrLogout`，但
-`MainLayout.vue` 的 `onMounted` 仍自行调 `apiMe()` 刷新顶栏用户——dummy token
-被后端拒（40101）后 catch 分支 `router.replace('/login')`，把守卫已放行的会话
-踢回登录页。修复：组件侧同样先判 `isDummyAuthActive()`，短路时直接复用
-session 里的假用户。回归守卫：`src/layouts/__tests__/dummyAuthMeGuard.spec.ts`。
-教训：dummy/ mock 会话的短路要覆盖**所有**独立发起 `/auth/me` 的调用点
-（守卫、布局、页面级 onMounted），不止路由守卫一处。
-
 ## 相关文档
 
 - [`docs/04-ui-and-styling/element-plus-integration.md`](../04-ui-and-styling/element-plus-integration.md) —— EP 按需加载 / 命令式 API CSS / locale / 主题色
