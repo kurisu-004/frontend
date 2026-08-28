@@ -10,16 +10,18 @@
   设计要点：
   - 与 BatchSubmitInspectionConfirmDialog 风格一致（el-dialog + #footer slot），但更轻量：
     route B 不再含 per-row 数量编辑 / 「同时过检」分支（route B inspection 不支持 FAIL）。
-  - 「目标品检架 ID」dev-stage 用 el-input 让用户手动输入；后续 PR 替换为
-    usePartLocationTree 选品检架（与 InspectionPending 共享），见 brief 决策。
+  - 2026-08-28 fix：dev-stage 的 el-input + 数字 regex 替换为 el-select + listShelves
+    拉 INSPECTION zone active 货架列表（与 InspectionPending 同款），避免手敲 ID。
   - items 字段：仅 batch_id + quantity + label（route B 字段收敛）。
 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import { useBulkScanInspect } from '@/composables/useBulkScanInspect'
 import type { BulkScanItem } from '@/composables/useBulkScanInspect'
+import { listShelves } from '@/api/shelves'
+import type { Shelf } from '@/types/shelf'
 import type { ScanUnresolvedTarget, ScanAvailableBatch } from '@/types/deliveryNote'
 
 interface Props {
@@ -27,6 +29,8 @@ interface Props {
   modelValue: boolean
   /** route B 未就绪工单列表（每个含 available_batches[]） */
   targets: ScanUnresolvedTarget[]
+  /** 可选；预选品检架 id（雪花 ID 字符串）。父级若已锁定品检架可传入。 */
+  defaultShelfId?: string
 }
 
 const props = defineProps<Props>()
@@ -40,10 +44,46 @@ const emit = defineEmits<{
 const bulk = useBulkScanInspect()
 const submitting = ref(false)
 
-/** 用户输入的目标品检架 ID（雪花 ID 数字字符串）。
- * 当前实现：dev-stage 用 el-input 让用户手动输入品检架 ID。
- * 后续迭代将替换为 usePartLocationTree 选品检架（与 InspectionPending 共享）。 */
-const targetShelfIdInput = ref<string>('')
+// ============ 品检架候选（INSPECTION zone active）============
+// 2026-08-28 fix：dev-stage el-input + 数字 regex 改为 el-select + listShelves，
+// 复用 InspectionPending 的 picker 模式（`listShelves({zone, is_active, limit})`）。
+const shelves = ref<Shelf[]>([])
+const selectedShelfId = ref<string | null>(props.defaultShelfId ?? null)
+const shelvesLoading = ref(false)
+const shelvesError = ref<string | null>(null)
+
+async function loadShelves(): Promise<void> {
+  shelvesLoading.value = true
+  shelvesError.value = null
+  try {
+    const result = await listShelves({ zone: 'INSPECTION', is_active: true, limit: 200 })
+    shelves.value = result.items
+    // 若 defaultShelfId 不在候选列表里（已被禁用 / 切走），回退到不选中
+    if (props.defaultShelfId && !shelves.value.some((s) => s.id === props.defaultShelfId)) {
+      selectedShelfId.value = null
+    }
+  } catch (e) {
+    shelvesError.value = (e as Error)?.message ?? '加载品检架失败'
+    shelves.value = []
+  } finally {
+    shelvesLoading.value = false
+  }
+}
+
+// 弹窗打开时刷新货架（覆盖父级 defaultShelfId 变化 + 货架启用状态变更）
+watch(
+  () => props.modelValue,
+  (v) => {
+    if (v) {
+      if (props.defaultShelfId) selectedShelfId.value = props.defaultShelfId
+      void loadShelves()
+    }
+  },
+)
+
+onMounted(() => {
+  if (props.modelValue) void loadShelves()
+})
 
 /** 所有未送检批次的总批次数（UI 文案用） */
 const totalBatchCount = computed(() =>
@@ -62,14 +102,14 @@ const flatItems = computed<BulkScanItem[]>(() =>
   ),
 )
 
+const canConfirm = computed(
+  () => props.targets.length > 0 && selectedShelfId.value !== null && selectedShelfId.value.length > 0 && !shelvesLoading.value,
+)
+
 async function onConfirm(): Promise<void> {
-  const shelfId = targetShelfIdInput.value.trim()
+  const shelfId = selectedShelfId.value
   if (!shelfId) {
-    ElMessage.warning('请输入目标品检架 ID')
-    return
-  }
-  if (!/^\d+$/.test(shelfId)) {
-    ElMessage.warning('品检架 ID 必须是数字')
+    ElMessage.warning('请选择品检架')
     return
   }
   submitting.value = true
@@ -116,15 +156,25 @@ async function onConfirm(): Promise<void> {
     />
 
     <div class="shelf-picker">
-      <span class="picker-label">目标品检架 ID（共享）</span>
-      <el-input
-        v-model="targetShelfIdInput"
-        placeholder="输入品检架 ID（数字），如 12345"
-        clearable
+      <span class="picker-label">目标品检架（共享）</span>
+      <el-select
+        v-model="selectedShelfId"
+        :loading="shelvesLoading"
+        placeholder="选择 INSPECTION 区 active 货架"
+        filterable
         style="width: 360px"
-      />
-      <span class="picker-hint muted">
-        dev-stage 临时输入；后续切 usePartLocationTree 选品检架
+        :disabled="shelvesLoading"
+      >
+        <el-option
+          v-for="s in shelves"
+          :key="s.id"
+          :value="s.id"
+          :label="`${s.code} · ${s.name}`"
+        />
+      </el-select>
+      <span v-if="shelvesError" class="muted">{{ shelvesError }}</span>
+      <span v-else-if="shelves.length === 0 && !shelvesLoading" class="muted">
+        （无 active 的 INSPECTION 货架）
       </span>
     </div>
 
@@ -145,7 +195,7 @@ async function onConfirm(): Promise<void> {
       <el-button
         type="primary"
         :loading="submitting"
-        :disabled="targets.length === 0"
+        :disabled="!canConfirm"
         @click="onConfirm"
       >
         一键送检
@@ -168,9 +218,6 @@ async function onConfirm(): Promise<void> {
   font-size: 14px;
   color: var(--el-text-color-regular);
   white-space: nowrap;
-}
-.picker-hint {
-  font-size: 12px;
 }
 .muted {
   color: var(--el-text-color-secondary);
