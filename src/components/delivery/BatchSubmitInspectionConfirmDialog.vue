@@ -74,8 +74,7 @@ const emit = defineEmits<{
 
 const dlg = useDialogSize({ desktopWidth: 920 })
 const bulk = useBulkScanInspect()
-// 2026-08-28 路线 B 改造：第二批「同时过检此件」走 useBulkPassInspection.batchToShip，
-// 不再直接调已 deprecated 的 batchPassInspection（v2 端点重命名为 batchToShip）。
+// 2026-08-28 路线 B 改造：第二批「同时过检此件」走 useBulkPassInspection.batchToShip。
 const passBulk = useBulkPassInspection()
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
