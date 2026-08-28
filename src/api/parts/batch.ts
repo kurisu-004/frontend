@@ -394,7 +394,13 @@ export interface BatchToInspectionFailureFE {
 }
 
 export interface BatchToInspectionOutFE {
-  submitted: Array<{ part: PartItem; new_batch_id: string | null }>
+  submitted: Array<{
+    /** 入参 items[].batch_id（雪花 ID 字符串）。用于响应 → 请求的反查。 */
+    batch_id: string
+    part: PartItem
+    /** 部分数量时 = 拆分后的新批次 id；全量时 = 入参 batch_id。null = 全部失败时的回填占位。 */
+    new_batch_id: string | null
+  }>
   failed: BatchToInspectionFailureFE[]
 }
 
@@ -425,7 +431,13 @@ export interface BatchToShipFailureFE {
 }
 
 export interface BatchToShipOutFE {
-  submitted: Array<{ part: PartItem; new_batch_id: string | null }>
+  submitted: Array<{
+    /** 入参 items[].batch_id（雪花 ID 字符串）。用于响应 → 请求的反查。 */
+    batch_id: string
+    part: PartItem
+    /** 部分数量时 = 拆分后的新批次 id；全量时 = 入参 batch_id。null = 全部失败时的回填占位。 */
+    new_batch_id: string | null
+  }>
   failed: BatchToShipFailureFE[]
 }
 
