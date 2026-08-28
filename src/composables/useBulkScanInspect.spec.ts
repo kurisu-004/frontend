@@ -85,14 +85,23 @@ describe('mapScanBatchResult', () => {
   }
 
   it('submitted 按 batch_id 反向找回原始 item（保留 label）', () => {
+    // 2026-08-28：后端 ToXxxOut 不含 batch_id，改按位置对齐 —— 全部成功时
+    // submitted[] 与 requested[] 逐位对应，label 原样带回。
+    // new_batch_id 语义：requested[0] 带 quantity=5 → 部分操作 → remainder id；
+    // requested[1]/[2] 未带 quantity → 整批操作 → null（不拆批）。
     const out: BatchToInspectionOutFE = {
       submitted: [
-        { batch_id: 'B-2', part: makePartItem('190000000000002'), new_batch_id: 'B-2' },
+        {
+          part: makePartItem('190000000000001'),
+          new_batch_id: 'B-1-remainder',
+        },
+        { part: makePartItem('190000000000002'), new_batch_id: null },
+        { part: makePartItem('190000000000003'), new_batch_id: null },
       ],
       failed: [],
     }
     const r = mapScanBatchResult(requested, out)
-    expect(r.submitted).toEqual([requested[1]])
+    expect(r.submitted).toEqual([requested[0], requested[1], requested[2]])
     expect(r.failed).toEqual([])
   })
 
@@ -113,10 +122,13 @@ describe('mapScanBatchResult', () => {
   })
 
   it('部分成功：submitted + failed 同时存在', () => {
+    // 关键回归：B-2 失败 → submitted[] 只有 2 项且下标整体前移。
+    // 若直接用 requested[i] 取，submitted[1] 会错配成 requested[1]（= 失败的 B-2），
+    // 把失败项误报为送检成功。必须先用 failed[].batch_id 扣除失败项再逐位对齐。
     const out: BatchToInspectionOutFE = {
       submitted: [
-        { batch_id: 'B-1', part: makePartItem('190000000000001'), new_batch_id: 'B-1' },
-        { batch_id: 'B-3', part: makePartItem('190000000000003'), new_batch_id: 'B-3' },
+        { part: makePartItem('190000000000001'), new_batch_id: 'B-1-remainder' },
+        { part: makePartItem('190000000000003'), new_batch_id: null },
       ],
       failed: [{ batch_id: 'B-2', code: 20103, message: 'X' }],
     }
@@ -126,14 +138,38 @@ describe('mapScanBatchResult', () => {
   })
 
   it('submitted 中的 batch_id 不在请求 items（防御）：构造无 label 的最小 item', () => {
+    // 2026-08-28：batch_id 反查改成位置反查后，"对不上" 的条件变成
+    // submitted 比「请求扣掉 failed」还长 —— 这里 3 个请求项全部失败（candidates 为空），
+    // 却仍返回 1 条 submitted，走 part 投影兜底占位。
     const out: BatchToInspectionOutFE = {
       submitted: [
-        { batch_id: 'B-幽灵', part: makePartItem('190000000000999'), new_batch_id: null },
+        { part: makePartItem('190000000000999'), new_batch_id: null },
       ],
-      failed: [],
+      failed: [
+        { batch_id: 'B-1', code: 20103, message: 'a' },
+        { batch_id: 'B-2', code: 20103, message: 'b' },
+        { batch_id: 'B-3', code: 20103, message: 'c' },
+      ],
     }
     const r = mapScanBatchResult(requested, out)
-    expect(r.submitted).toEqual([{ batch_id: 'B-幽灵' }])
+    // makePartItem 的 serial_no 为 null → label 兜成 undefined（即"无 label"）
+    expect(r.submitted).toEqual([{ batch_id: '190000000000999' }])
+  })
+
+  it('防御占位 item 的 label 取 part.serial_no（2026-08-28 新增）', () => {
+    const ghost = { ...makePartItem('190000000000999'), serial_no: 'S-999' }
+    const out: BatchToInspectionOutFE = {
+      submitted: [{ part: ghost, new_batch_id: null }],
+      failed: [
+        { batch_id: 'B-1', code: 20103, message: 'a' },
+        { batch_id: 'B-2', code: 20103, message: 'b' },
+        { batch_id: 'B-3', code: 20103, message: 'c' },
+      ],
+    }
+    const r = mapScanBatchResult(requested, out)
+    expect(r.submitted).toEqual([
+      { batch_id: '190000000000999', label: 'S-999' },
+    ])
   })
 
   it('failed 中的 batch_id 不在请求 items（防御）：fallback 构造最小 item', () => {
@@ -253,9 +289,10 @@ describe('useBulkScanInspect().run() (2026-08-28 route B)', () => {
     } as const
     const out: BatchToInspectionOutFE = {
       submitted: [
-        { batch_id: 'B-2', part: partStub, new_batch_id: 'B-2' },
+        { part: partStub, new_batch_id: null },
       ],
-      failed: [],
+      // B-1 失败 → candidates=[B-2]，submitted[0] 对应 B-2（验证下标前移后仍对得上）
+      failed: [{ batch_id: 'B-1', code: 20103, message: '状态非法' }],
     }
     vi.spyOn(apiParts, 'batchToInspection').mockResolvedValue(out)
 
@@ -266,6 +303,8 @@ describe('useBulkScanInspect().run() (2026-08-28 route B)', () => {
     })
 
     expect(r.submitted).toEqual([{ batch_id: 'B-2', label: 'L2' }])
-    expect(r.failed).toEqual([])
+    expect(r.failed).toEqual([
+      { item: { batch_id: 'B-1', label: 'L1' }, code: 20103, message: '状态非法' },
+    ])
   })
 })
