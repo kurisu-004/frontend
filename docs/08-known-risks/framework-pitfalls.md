@@ -2,7 +2,7 @@
 
 > **目标读者**：Agent / 前端开发
 > **核心价值**：已踩过并修复的框架级陷阱——不是「依赖有漏洞」，而是「按直觉写就会错」的行为。写相关代码前先扫一眼本文。
-> **最后更新**：2026-08-28 · **维护者**：@frontend-team
+> **最后更新**：2026-08-28（第 6 节 dummy-auth env 化）· **维护者**：@frontend-team
 
 ---
 
@@ -273,7 +273,38 @@ return h('router-link', { to: `/parts/${row.id}` }, row.name)
 
 全仓 127 处修复，覆盖 20+ 文件（parts / delivery / outsource / repair / settings / shelves / workers / statistics / parts-list 域的 `cellRender` + `headerRender`）。
 
+## 6. Vite 8 下裸全局 `define` 在 dev client 不替换，dev-only 开关要走 `import.meta.env` + mode/env 文件
+
+### 现象
+
+`npm run dev:dummy`（旧实现：`vite -- --dummy-auth`，靠 `define: { __DUMMY_AUTH__: 'true' }` 注入）起来后浏览器**卡登录页**——但 `curl http://localhost:5173/src/main.ts` 拿到的源码里 `if (__DUMMY_AUTH__)` 这一行**仍是裸标识符**，运行时是 `ReferenceError`。prod build 正常（define 替换发生在 bundle 阶段）。
+
+### 机制
+
+Vite 8.0.16 的 define 插件（`node_modules/vite/dist/node/chunks/node.js:23052` 附近）在 transform handler 开头就 `if (this.environment.config.consumer === "client") return`——dev client 不走 bundled 路径，**裸全局 define 在 dev 下彻底不替换**。只有 `import.meta.env` 在 dev 下由运行时（Vite dev server 注入到 `window` / 模块顶）正常提供，是可靠面。
+
+附加问题：旧 `vite.config.ts` 把配置写成静态 `export default defineConfig(config)`、`config()` 无参，配置求值期拿不到 vite 传入的 `mode` / `command`，只能靠 `process.env.NODE_ENV` 判定——这把「build 期硬 throw」那道保护也变成不可靠：build 阶段 `NODE_ENV` 通常是 `production`、dev 下又是 `development`，但被外部脚本 / 包装层改写后就失效。
+
+### 规则
+
+dev-only 开关**必须**走 Vite 官方 env 机制：
+
+1. 加 `.env.dummy`（提交进仓），内容 `VITE_DUMMY_AUTH=true`。Vite 默认只忽略根 `.env`，`.env.dummy` 不会被忽略。
+2. `package.json`：`"dev:dummy": "vite --mode dummy"`（干净的 mode 机制；不要 `vite -- --dummy-auth`，cac 拒绝未知 flag：`CACError: Unknown option --dummyAuth`）。
+3. `vite.config.ts` 改函数形式拿 `{ command, mode }`，用 `loadEnv(mode, process.cwd(), '')` 读出 `VITE_DUMMY_AUTH`；`command === 'build' && env.VITE_DUMMY_AUTH === 'true'` 主动 throw（防住「`.env.production` 误设」「`--mode dummy build`」两种场景）。
+4. 客户端代码读 `import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'`——`import.meta.env.DEV` 是第二道 prod 保险（prod build 永远是 false，整段 tree-shake），`=== 'true'` 防住空字符串 / `'false'` / 数字字面量。
+5. 判定逻辑收敛到 `useAuthSession.isDummyAuthRequested()` 一个模块级函数，main.ts / router / useAuthSession 内部共享，避免漂移。
+6. 成功注入后 `console.info('[dummy-auth] ...')` 一行作为浏览器侧确认标记（仅 dev，prod tree-shake）。
+
+### 已修 / 当前机制（2026-08-28）
+
+- `.env.dummy` 新增；`package.json` `dev:dummy` 改 `vite --mode dummy`；`vite.config.ts` 改函数形式 + `loadEnv` 判定；`src/env.d.ts` 加 `VITE_DUMMY_AUTH?: string`；`useAuthSession.ts` / `main.ts` 收敛到 `isDummyAuthRequested()`。
+- 三层 prod 保护：build + `VITE_DUMMY_AUTH=true` 硬 throw / `import.meta.env.DEV` guard + `VITE_DUMMY_AUTH === 'true'` 双判定 / 不写 localStorage。
+- 回归单测：`src/composables/__tests__/useAuthSession.dummy.spec.ts` 用 `vi.stubEnv('VITE_DUMMY_AUTH', 'true')` 走通注入路径 + 两条不注入路径（未设 / 显式 `'false'`）。
+- 第一道 throw 的 curl 验证：`npx vite build --mode dummy` 必须 throw，正常 `npm run build` 通过。
+
 ## 相关文档
 
 - [`docs/04-ui-and-styling/element-plus-integration.md`](../04-ui-and-styling/element-plus-integration.md) —— EP 按需加载 / 命令式 API CSS / locale / 主题色
 - [`docs/02-architecture/state-management.md`](../02-architecture/state-management.md) —— composable 单例模式（`useLazyDraggable` 遵循同一约定）
+- [`docs/02-architecture/routing-and-permissions.md`](../02-architecture/routing-and-permissions.md) Dev Dummy Auth 段 —— dummy-auth 启用方式与三层保护说明
