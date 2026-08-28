@@ -216,14 +216,17 @@ graph TD
 后端未实现 / 离线开发时，可用 dummy auth 跳过登录：
 
 ```bash
-npm run dev:dummy        # 等价于 npm run dev -- --dummy-auth
+npm run dev:dummy        # = vite --mode dummy，自动加载 .env.dummy → VITE_DUMMY_AUTH=true
 ```
 
 行为：
-- `vite.config.ts` build 期检测到 `--dummy-auth` + `mode !== 'development'` → throw
-- `useAuthSession.initDummyAuth()` 注入 admin session（含 22 个 menuCode 全菜单）
+- `vite.config.ts` build 期检测到 `VITE_DUMMY_AUTH === 'true'` → throw（防 prod bundle 注入）
+- 客户端读 `import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'`（由 `.env.dummy` 注入，dev server 启动时由 Vite 处理），`useAuthSession.initDummyAuth()` 注入 admin session（含 22 个 menuCode 全菜单）
+- 注入成功后在浏览器 console 打 `[dummy-auth] 已注入开发用管理员会话（dev-only）` 一行作为确认标记
 - router 守卫短路 `refreshOrLogout`（不再调 `/auth/me`）
 - dummy 状态**不写** localStorage，下次非 dummy 启动不会复活
+
+> 2026-08-28 重写：旧的 `npm run dev -- --dummy-auth` 走 `--` 透传，会被 cac 拒绝（`CACError: Unknown option --dummyAuth`）；新方案用 Vite 官方 `--mode dummy` 机制 + `import.meta.env`，dev 客户端也能可靠拿到值（旧的裸全局 `define: { __DUMMY_AUTH__ }` 在 Vite 8 dev client 不生效，详见 [`docs/08-known-risks/framework-pitfalls.md`](../08-known-risks/framework-pitfalls.md) 第 6 节）。
 
 admin 用户身份：
 - username: `dev-admin`

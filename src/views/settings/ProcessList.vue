@@ -24,9 +24,11 @@
         :defs="columnDefs"
         :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
       />
     </div>
     <el-table
+      ref="tableRef"
       :data="rows"
       row-key="id"
       v-loading="loading"
@@ -38,38 +40,33 @@
         <el-empty description="暂无工序" />
       </template>
       <el-table-column type="index" label="#" width="50" />
-      <el-table-column
-        v-if="columnVisibility.isVisible('code')"
-        prop="code" label="代码" min-width="120" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('name')"
-        prop="name" label="名称" min-width="160" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('category')"
-        label="类别" min-width="100" align="center"
-      >
-        <template #default="{ row }">
-          <el-tag :type="(row as Process).category === 'INHOUSE' ? 'primary' : 'warning'" size="small">
-            {{ PROCESS_CATEGORY_LABEL[(row as Process).category] }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('requires_approval')"
-        label="审批模式" min-width="110" align="center"
-      >
-        <template #default="{ row }">
-          <el-tag :type="(row as Process).requires_approval ? 'warning' : 'success'" size="small">
-            {{ (row as Process).requires_approval ? '需要审批' : '直接发送' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('sort_order')"
-        prop="sort_order" label="排序" min-width="80" align="center"
-      />
+      <!--
+        2026-08-27 T15：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+        用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+        type=index / fixed="right" 操作列保留为字面量 <el-table-column>。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
       <el-table-column v-if="isManager" label="操作" min-width="180" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="onEdit(row as Process)">编辑</el-button>
@@ -126,11 +123,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, h, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { usePermissions } from '@/composables/usePermissions'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -160,16 +163,30 @@ const { restore: restoreProcessFilter, clear: clearProcessFilter } = useListStat
   { search },
 )
 
-// ============ 列可见性 ============
-// 「#」和「操作」列不放进 defs → 始终可见
-const columnDefs = [
-  { key: 'code', label: '代码' },
-  { key: 'name', label: '名称' },
-  { key: 'category', label: '类别' },
-  { key: 'requires_approval', label: '审批模式' },
-  { key: 'sort_order', label: '排序' },
-] as const
+// ============ 列可见性 + 列顺序拖动 ============
+// 「#」和「操作」列不放进 defs → 始终可见。
+// 2026-08-27 T15：补 prop / minWidth / align + 复杂单元格走 cellRender。
+const columnDefs: ColumnDef[] = [
+  { key: 'code', label: '代码', prop: 'code', minWidth: 120, align: 'center' },
+  { key: 'name', label: '名称', prop: 'name', minWidth: 160, align: 'center' },
+  {
+    key: 'category', label: '类别', minWidth: 100, align: 'center',
+    cellRender: ({ row }) => h(ElTag,
+      { type: (row as Process).category === 'INHOUSE' ? 'primary' : 'warning', size: 'small' },
+      () => PROCESS_CATEGORY_LABEL[(row as Process).category]),
+  },
+  {
+    key: 'requires_approval', label: '审批模式', minWidth: 110, align: 'center',
+    cellRender: ({ row }) => h(ElTag,
+      { type: (row as Process).requires_approval ? 'warning' : 'success', size: 'small' },
+      () => (row as Process).requires_approval ? '需要审批' : '直接发送'),
+  },
+  { key: 'sort_order', label: '排序', prop: 'sort_order', minWidth: 80, align: 'center' },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'process_list' })
+const drag = useColumnDrag(columnDefs, { listKey: 'process_list' })
+// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
+const tableRef = ref()
 
 const dialogVisible = ref(false)
 const editing = ref<Process | null>(null)
@@ -289,6 +306,9 @@ onMounted(() => {
     Object.assign(search, persisted.search)
   }
   void fetchList()
+  // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+  // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+  drag.applyDrag(tableRef)
 })
 </script>
 

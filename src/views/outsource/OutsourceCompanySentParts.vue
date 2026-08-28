@@ -9,11 +9,17 @@
 - 表格底部：合计行（总价求和）+ 当前页总数
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, type SummaryMethod } from 'element-plus'
+import { ElInputNumber, ElMessage, ElSwitch, ElTag, type SummaryMethod } from 'element-plus'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import {
   getOutsourceCompany,
@@ -53,21 +59,95 @@ const { restore: restoreSentPartsFilter } = useListStatePersist(
   { filter, sortBy, sortDir },
 )
 
-// ============ 列可见性 ============
-const columnDefs = [
-  { key: 'part_drawing_no', label: '图号' },
-  { key: 'part_name', label: '名称' },
-  { key: 'customer_path', label: '客户' },
-  { key: 'batch_no', label: '批次号' },
-  { key: 'quantity', label: '数量' },
-  { key: 'unit_price', label: '单价' },
-  { key: 'total_price', label: '总价' },
-  { key: 'sent_at', label: '发送时间' },
-  { key: 'received_at', label: '回收时间' },
-  { key: 'status', label: '状态' },
-  { key: 'is_billed', label: '对账' },
-] as const
+// ============ 列可见性 + 列顺序拖动 ============
+// 2026-08-27 T16：补 prop / minWidth / align + sortable + cellRender(PartListShell 同款)。
+// 单元格内含行内编辑 el-input-number / el-switch → 走 cellRender 而非 formatter（formatter 只返回字符串）。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const columnDefs: ColumnDef[] = [
+  { key: 'part_drawing_no', label: '图号', prop: 'part_drawing_no', minWidth: 120, align: 'center' },
+  { key: 'part_name', label: '名称', prop: 'part_name', minWidth: 160, showOverflowTooltip: true, align: 'center' },
+  {
+    key: 'customer_path', label: '客户', prop: 'customer_path', minWidth: 160, showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as OutsourceSentPartItem).customer_path ?? '—'),
+  },
+  {
+    key: 'batch_no', label: '批次号', minWidth: 90, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as OutsourceSentPartItem).batch_no ?? '—'),
+  },
+  {
+    key: 'quantity', label: '数量', minWidth: 90, align: 'right',
+    cellRender: ({ row }) => {
+      const r = row as OutsourceSentPartItem
+      // 2026-08-27 T16：cellRender 必须返回单一 VNode。编辑态用 h(ElInputNumber) 直挂（与模板版等价），
+      // 非编辑态走 span；编辑 / 非编辑只可能命中其一，无需 fragment。
+      if (editingId.value === r.shipment_id) {
+        return h(ElInputNumber, {
+          modelValue: editBuffer.quantity, min: 1, max: 999999, controls: false, size: 'small',
+          disabled: savingEdit.value, style: 'width: 80px',
+          'onUpdate:modelValue': (v: number | null | undefined) => { editBuffer.quantity = v ?? null },
+        })
+      }
+      return h('span', null, r.quantity ?? '—')
+    },
+  },
+  {
+    key: 'unit_price', label: '单价(元)', prop: 'unit_price', minWidth: 110, align: 'right', sortable: 'custom',
+    cellRender: ({ row }) => {
+      const r = row as OutsourceSentPartItem
+      if (editingId.value === r.shipment_id) {
+        return h(ElInputNumber, {
+          modelValue: editBuffer.unit_price, min: 0, precision: 2, step: 0.01, controls: false, size: 'small',
+          disabled: savingEdit.value, placeholder: '待填', style: 'width: 100px',
+          'onUpdate:modelValue': (v: number | null | undefined) => { editBuffer.unit_price = v ?? null },
+        })
+      }
+      return h('span', null,
+        r.unit_price !== null && r.unit_price !== undefined ? r.unit_price : '—')
+    },
+  },
+  {
+    key: 'total_price', label: '总价', minWidth: 110, align: 'right',
+    cellRender: ({ row }) => h('span', null, displayTotalPrice(row as OutsourceSentPartItem)),
+  },
+  {
+    key: 'sent_at', label: '发送时间', prop: 'sent_at', minWidth: 160, align: 'center', sortable: 'custom',
+    cellRender: ({ row }) => h('span', null, fmtDt((row as OutsourceSentPartItem).sent_at)),
+  },
+  {
+    key: 'received_at', label: '回收时间', prop: 'received_at', minWidth: 160, align: 'center', sortable: 'custom',
+    cellRender: ({ row }) => {
+      const r = row as OutsourceSentPartItem
+      if (r.received_at) return h('span', null, fmtDt(r.received_at))
+      return h('span', { style: 'color: var(--el-color-warning);' }, '未回收')
+    },
+  },
+  {
+    key: 'status', label: '状态', minWidth: 90, align: 'center',
+    cellRender: ({ row }) => h(ElTag,
+      { type: statusTagType((row as OutsourceSentPartItem).status), size: 'small' },
+      () => statusLabel((row as OutsourceSentPartItem).status)),
+  },
+  {
+    key: 'is_billed', label: '对账', minWidth: 80, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as OutsourceSentPartItem
+      if (editingId.value === r.shipment_id) {
+        return h(ElSwitch, {
+          modelValue: editBuffer.is_billed, size: 'small', disabled: savingEdit.value,
+          // 2026-08-27 T16：ElSwitch 的 update:modelValue 类型是 string|number|boolean（EP 统一事件签名），
+          // 这里只接 boolean → 用 unknown 二次 cast 满足 TS2769。
+          'onUpdate:modelValue': (v: unknown) => { editBuffer.is_billed = v === true },
+        })
+      }
+      if (r.is_billed) return h(ElTag, { type: 'success', size: 'small' }, () => '已对')
+      return h(ElTag, { type: 'info', size: 'small' }, () => '未对')
+    },
+  },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_company_sent_parts' })
+const drag = useColumnDrag(columnDefs, { listKey: 'outsource_company_sent_parts' })
+// 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
+const tableRef = ref()
 
 async function loadCompany(): Promise<void> {
   if (!companyId.value) return
@@ -302,6 +382,9 @@ function fmtDt(v: string | null): string {
 }
 
 onMounted(() => {
+  // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+  drag.applyDrag(tableRef)
+
   void loadCompany()
   // 2026-07-30 commit 4B：恢复 filter / sortBy / sortDir
   const persisted = restoreSentPartsFilter()
@@ -362,9 +445,11 @@ watch(companyId, () => {
         :defs="columnDefs"
         :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
       />
     </div>
     <el-table
+      ref="tableRef"
       :data="items"
       v-loading="loading"
       row-key="shipment_id"
@@ -381,131 +466,33 @@ watch(companyId, () => {
       <template #empty>
         <el-empty :description="error ?? '暂无对账记录'" />
       </template>
-      <el-table-column
-        v-if="columnVisibility.isVisible('part_drawing_no')"
-        prop="part_drawing_no" label="图号" min-width="120" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('part_name')"
-        prop="part_name" label="名称" min-width="160" show-overflow-tooltip align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('customer_path')"
-        prop="customer_path" label="客户" min-width="160" show-overflow-tooltip align="center"
-      >
-        <template #default="{ row }">
-          {{ (row as OutsourceSentPartItem).customer_path ?? '—' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('batch_no')"
-        label="批次号" min-width="90" align="center"
-      >
-        <template #default="{ row }">
-          {{ (row as OutsourceSentPartItem).batch_no ?? '—' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('quantity')"
-        label="数量" min-width="90" align="right"
-      >
-        <template #default="{ row }">
-          <el-input-number
-            v-if="editingId === (row as OutsourceSentPartItem).shipment_id"
-            v-model="editBuffer.quantity"
-            :min="1"
-            :max="999999"
-            :controls="false"
-            size="small"
-            style="width: 80px"
-            :disabled="savingEdit"
-          />
-          <span v-else>{{ (row as OutsourceSentPartItem).quantity ?? '—' }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('unit_price')"
-        label="单价(元)" prop="unit_price" min-width="110" align="right" sortable="custom"
-      >
-        <template #default="{ row }">
-          <el-input-number
-            v-if="editingId === (row as OutsourceSentPartItem).shipment_id"
-            v-model="editBuffer.unit_price"
-            :min="0"
-            :precision="2"
-            :step="0.01"
-            :controls="false"
-            size="small"
-            style="width: 100px"
-            :disabled="savingEdit"
-            placeholder="待填"
-          />
-          <span v-else>
-            {{
-              (row as OutsourceSentPartItem).unit_price !== null &&
-              (row as OutsourceSentPartItem).unit_price !== undefined
-                ? (row as OutsourceSentPartItem).unit_price
-                : '—'
-            }}
-          </span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('total_price')"
-        label="总价" min-width="110" align="right"
-      >
-        <template #default="{ row }">
-          <span>{{ displayTotalPrice(row as OutsourceSentPartItem) }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('sent_at')"
-        label="发送时间" prop="sent_at" min-width="160" align="center" sortable="custom"
-      >
-        <template #default="{ row }">
-          {{ fmtDt((row as OutsourceSentPartItem).sent_at) }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('received_at')"
-        label="回收时间" prop="received_at" min-width="160" align="center" sortable="custom"
-      >
-        <template #default="{ row }">
-          <template v-if="(row as OutsourceSentPartItem).received_at">
-            {{ fmtDt((row as OutsourceSentPartItem).received_at) }}
+      <!--
+        2026-08-27 T16：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+        用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+        本页全部列均进 defs，无 fixed="right" 字面量操作列。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
           </template>
-          <span v-else style="color: var(--el-color-warning);">未回收</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('status')"
-        label="状态" min-width="90" align="center"
-      >
-        <template #default="{ row }">
-          <el-tag :type="statusTagType((row as OutsourceSentPartItem).status)" size="small">
-            {{ statusLabel((row as OutsourceSentPartItem).status) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('is_billed')"
-        label="对账" min-width="80" align="center"
-      >
-        <template #default="{ row }">
-          <el-switch
-            v-if="editingId === (row as OutsourceSentPartItem).shipment_id"
-            v-model="editBuffer.is_billed"
-            size="small"
-            :disabled="savingEdit"
-          />
-          <el-tag
-            v-else-if="(row as OutsourceSentPartItem).is_billed"
-            type="success"
-            size="small"
-          >已对</el-tag>
-          <el-tag v-else type="info" size="small">未对</el-tag>
-        </template>
-      </el-table-column>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
     </el-table>
   </div>
 </template>

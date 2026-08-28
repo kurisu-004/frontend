@@ -34,11 +34,13 @@
           :defs="columnDefs"
           :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
           @reset="columnVisibility.showAll"
+          @reset-order="drag.reset"
         />
       </div>
       <PagedTable ref="pagedRef" :fetcher="fetcher" :default-page-size="100" pagination-layout="total, sizes, prev, pager, next, jumper">
         <template #default="{ items, loading }">
           <el-table
+            ref="tableRef"
             :data="items"
             v-loading="loading"
             row-key="id"
@@ -50,44 +52,33 @@
               <el-empty description="暂无外协公司" />
             </template>
             <el-table-column type="index" label="#" width="50" />
-            <el-table-column
-              v-if="columnVisibility.isVisible('name')"
-              prop="name" label="公司名" min-width="160" align="center"
-            />
-            <el-table-column
-              v-if="columnVisibility.isVisible('contact_name')"
-              prop="contact_name" label="联系人" min-width="100" align="center"
-            >
-              <template #default="{ row }">
-                {{ (row as OutsourceCompany).contact_name || '—' }}
-              </template>
-            </el-table-column>
-            <el-table-column
-              v-if="columnVisibility.isVisible('contact_phone')"
-              prop="contact_phone" label="联系电话" min-width="120" align="center"
-            >
-              <template #default="{ row }">
-                {{ (row as OutsourceCompany).contact_phone || '—' }}
-              </template>
-            </el-table-column>
-            <el-table-column
-              v-if="columnVisibility.isVisible('address')"
-              prop="address" label="地址" min-width="200" show-overflow-tooltip align="center"
-            >
-              <template #default="{ row }">
-                {{ (row as OutsourceCompany).address || '—' }}
-              </template>
-            </el-table-column>
-            <el-table-column
-              v-if="columnVisibility.isVisible('is_active')"
-              label="状态" min-width="80" align="center"
-            >
-              <template #default="{ row }">
-                <el-tag :type="(row as OutsourceCompany).is_active ? 'success' : 'info'" size="small">
-                  {{ (row as OutsourceCompany).is_active ? '启用' : '停用' }}
-                </el-tag>
-              </template>
-            </el-table-column>
+            <!--
+              2026-08-27 T16：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+              用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+              type=index / fixed="right" 操作列保留为字面量 <el-table-column>。
+            -->
+            <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+              <el-table-column
+                v-if="columnVisibility.isVisible(d.key)"
+                :prop="d.prop ?? d.key"
+                :label="d.label"
+                :width="d.width"
+                :min-width="d.minWidth"
+                :sortable="d.sortable"
+                :align="d.align"
+                :show-overflow-tooltip="d.showOverflowTooltip"
+                :column-key="d.columnKey ?? d.key"
+                :label-class-name="drag.dragLabelClass(d)"
+              >
+                <template v-if="d.cellRender" #default="scope">
+                  <component :is="d.cellRender(scope)" />
+                </template>
+                <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+                  <span>{{ d.label }}</span>
+                  <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+                </template>
+              </el-table-column>
+            </template>
             <el-table-column label="操作" min-width="280" fixed="right" align="center">
               <template #default="{ row }">
                 <el-button link type="primary" size="small" @click="onEdit(row as OutsourceCompany)">编辑</el-button>
@@ -183,13 +174,19 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { h, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElTag } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import PagedTable from '@/components/PagedTable.vue'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useConfirm } from '@/composables/useConfirm'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -227,16 +224,35 @@ const { restore: restoreOutsourceCompanyFilter } = useListStatePersist(
   { search, pageSize },
 )
 
-// ============ 列可见性 ============
-// 「#」和「操作」列不放进 defs → 始终可见
-const columnDefs = [
-  { key: 'name', label: '公司名' },
-  { key: 'contact_name', label: '联系人' },
-  { key: 'contact_phone', label: '联系电话' },
-  { key: 'address', label: '地址' },
-  { key: 'is_active', label: '状态' },
-] as const
+// ============ 列可见性 + 列顺序拖动 ============
+// 「#」和「操作」列不放进 defs → 始终可见。
+// 2026-08-27 T16：补 prop / minWidth / align + 文本列走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const columnDefs: ColumnDef[] = [
+  { key: 'name', label: '公司名', prop: 'name', minWidth: 160, align: 'center' },
+  {
+    key: 'contact_name', label: '联系人', minWidth: 100, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as OutsourceCompany).contact_name || '—'),
+  },
+  {
+    key: 'contact_phone', label: '联系电话', minWidth: 120, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as OutsourceCompany).contact_phone || '—'),
+  },
+  {
+    key: 'address', label: '地址', prop: 'address', minWidth: 200, showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as OutsourceCompany).address || '—'),
+  },
+  {
+    key: 'is_active', label: '状态', minWidth: 80, align: 'center',
+    cellRender: ({ row }) => h(ElTag,
+      { type: (row as OutsourceCompany).is_active ? 'success' : 'info', size: 'small' },
+      () => (row as OutsourceCompany).is_active ? '启用' : '停用'),
+  },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_company_list' })
+const drag = useColumnDrag(columnDefs, { listKey: 'outsource_company_list' })
+// 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
+const tableRef = ref()
 
 const outsourceProcesses = ref<Process[]>([])
 
@@ -418,6 +434,9 @@ async function onDelete(row: OutsourceCompany): Promise<void> {
 }
 
 onMounted(() => {
+  // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+  drag.applyDrag(tableRef)
+
   void fetchOutsourceProcesses()
   // 从 localStorage 恢复搜索 + 分页大小；强制将当前页重置到第 1 页（避免恢复到无数据页）
   const persisted = restoreOutsourceCompanyFilter() as

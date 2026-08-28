@@ -12,11 +12,13 @@
         :defs="columnDefs"
         :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
       />
     </div>
     <PagedTable ref="pagedRef" :fetcher="fetcher" :default-page-size="20">
       <template #default="{ items, loading }">
         <el-table
+          ref="tableRef"
           :data="items"
           v-loading="loading"
           row-key="id"
@@ -25,33 +27,33 @@
           <template #empty>
             <el-empty description="暂无账号" />
           </template>
-          <el-table-column
-            v-if="columnVisibility.isVisible('username')"
-            prop="username" label="用户名" min-width="120" align="center"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('full_name')"
-            prop="full_name" label="姓名" min-width="100" align="center"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('roles')"
-            label="角色" min-width="200" align="center"
-          >
-            <template #default="{ row }">
-              <el-tag v-for="r in row.roles" :key="r.id" size="small" style="margin-right:4px" :type="r.scope_type ? 'warning' : 'primary'">
-                {{ r.role }}{{ r.shelf_code ? ` @${r.shelf_code}` : '' }}
-              </el-tag>
-              <span v-if="!row.roles.length" class="no-roles">无角色</span>
-            </template>
-          </el-table-column>
-          <el-table-column
-            v-if="columnVisibility.isVisible('is_active')"
-            label="状态" min-width="80" align="center"
-          >
-            <template #default="{ row }">
-              <el-tag :type="row.is_active ? 'success' : 'danger'" size="small">{{ row.is_active ? '启用' : '停用' }}</el-tag>
-            </template>
-          </el-table-column>
+          <!--
+            2026-08-27 T15：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+            用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+            fixed="right" 操作列保留为字面量 <el-table-column>。
+          -->
+          <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+            <el-table-column
+              v-if="columnVisibility.isVisible(d.key)"
+              :prop="d.prop ?? d.key"
+              :label="d.label"
+              :width="d.width"
+              :min-width="d.minWidth"
+              :sortable="d.sortable"
+              :align="d.align"
+              :show-overflow-tooltip="d.showOverflowTooltip"
+              :column-key="d.columnKey ?? d.key"
+              :label-class-name="drag.dragLabelClass(d)"
+            >
+              <template v-if="d.cellRender" #default="scope">
+                <component :is="d.cellRender(scope)" />
+              </template>
+              <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+                <span>{{ d.label }}</span>
+                <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+              </template>
+            </el-table-column>
+          </template>
           <el-table-column label="操作" min-width="280" fixed="right" align="center">
             <template #default="{ row }">
               <el-button link size="small" @click="openRoles(row)">角色</el-button>
@@ -143,16 +145,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, reactive, computed, onMounted, watch, h } from 'vue'
+import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
 import { listUsers, createUser, updateUser, deactivateUser, resetUserPassword, listUserRoles, addUserRole, removeUserRole } from '@/api/users'
 import { listShelves } from '@/api/shelves'
 import type { UserOut, UserRoleOut } from '@/types/user'
 import type { Shelf } from '@/types/shelf'
 import { InfoFilled } from '@element-plus/icons-vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import PagedTable from '@/components/PagedTable.vue'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 
@@ -161,6 +169,8 @@ const rolesDlg = useDialogSize({ desktopWidth: 560 })
 
 // PagedTable 持有 page/pageSize/total/loading/items（2026-08-25 T7）
 const pagedRef = ref()
+// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
+const tableRef = ref()
 // fetcher 闭包从 PagedTable 暴露的 ref 读分页参数（而不是 view 自己再持一份 refs）
 const fetcher = async (params: { page: number; pageSize: number }) => {
   return await listUsers({
@@ -180,15 +190,36 @@ const { restore: restoreUserFilter, clear: clearUserFilter } = useListStatePersi
   { exclude: new Set(['page']) },
 )
 
-// ============ 列可见性 ============
-// 「操作」列不放进 defs → 始终可见
-const columnDefs = [
-  { key: 'username', label: '用户名' },
-  { key: 'full_name', label: '姓名' },
-  { key: 'roles', label: '角色' },
-  { key: 'is_active', label: '状态' },
-] as const
+// ============ 列可见性 + 列顺序拖动 ============
+// 「操作」列不放进 defs → 始终可见。
+// 2026-08-27 T15：补 prop / width / minWidth / align + 复杂单元格走 cellRender。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const columnDefs: ColumnDef[] = [
+  { key: 'username', label: '用户名', prop: 'username', minWidth: 120, align: 'center' },
+  { key: 'full_name', label: '姓名', prop: 'full_name', minWidth: 100, align: 'center' },
+  {
+    key: 'roles', label: '角色', minWidth: 200, align: 'center',
+    cellRender: ({ row }) => {
+      const u = row as UserOut
+      if (u.roles.length === 0) {
+        return h('span', { class: 'no-roles' }, '无角色')
+      }
+      // 2026-08-27 T15：cellRender 必须返回单一 VNode,所以用 div 包裹多个 tag。
+      // 原模板直接用 v-for 渲染多个根节点,这里改用 div.role-tags 容器复用 .role-tags flex 样式。
+      return h('div', { class: 'role-tags' }, u.roles.map((r) => h(ElTag,
+        { key: r.id, size: 'small', type: r.scope_type ? 'warning' : 'primary' },
+        () => `${r.role}${r.shelf_code ? ` @${r.shelf_code}` : ''}`)))
+    },
+  },
+  {
+    key: 'is_active', label: '状态', minWidth: 80, align: 'center',
+    cellRender: ({ row }) => h(ElTag,
+      { type: (row as UserOut).is_active ? 'success' : 'danger', size: 'small' },
+      () => (row as UserOut).is_active ? '启用' : '停用'),
+  },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'user_list' })
+const drag = useColumnDrag(columnDefs, { listKey: 'user_list' })
 
 const showCreate = ref(false)
 const saving = ref(false)
@@ -320,6 +351,9 @@ onMounted(() => {
     (s) => { if (typeof s === 'number') size.value = s },
   )
   void fetchData()
+  // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+  // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+  drag.applyDrag(tableRef)
 })
 </script>
 

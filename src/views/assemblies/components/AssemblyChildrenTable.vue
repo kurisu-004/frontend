@@ -52,6 +52,14 @@
           </el-tag>
         </span>
         <div class="card-actions">
+          <!-- 2026-08-27 Task 9：列设置 -->
+          <ColumnVisibilityPopover
+            :defs="columnDefs"
+            :model-value="columnVisibility.currentMap"
+            @update:model-value="columnVisibility.update"
+            @reset="columnVisibility.showAll"
+            @reset-order="drag.reset"
+          />
           <el-button
             type="primary"
             plain
@@ -66,6 +74,7 @@
     </template>
 
     <el-table
+      ref="tableRef"
       :data="children ?? []"
       row-key="id"
       border
@@ -77,50 +86,28 @@
         <el-empty description="暂无子零件" />
       </template>
       <el-table-column type="index" label="#" width="50" />
-      <el-table-column label="序列号" min-width="100" align="center">
-        <template #default="{ row }">
-          <el-tag v-if="row.serial_no" type="success" size="small" effect="dark">
-            {{ row.serial_no }}
-          </el-tag>
-          <span v-else class="muted">未分配</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="图号" min-width="160" align="center">
-        <template #default="{ row }">
-          <el-link
-            v-if="childDrawingMap[row.id]"
-            type="primary"
-            @click="onChildDrawingClick(row, childDrawingMap[row.id]!)"
-          >
-            {{ row.drawing_no }}
-          </el-link>
-          <span v-else class="mono">{{ row.drawing_no }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        prop="name"
-        label="名称"
-        min-width="160"
-        show-overflow-tooltip
-        align="center"
-      />
-      <el-table-column prop="quantity" label="数量" min-width="70" align="right" />
-      <el-table-column label="状态" min-width="100" align="center">
-        <template #default="{ row }">
-          <el-tag :type="partStatusTagType(row.status)" size="small">
-            {{ partStatusLabel(row.status) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="计划交期" min-width="120" align="center">
-        <template #default="{ row }">{{ row.planned_delivery_date }}</template>
-      </el-table-column>
-      <el-table-column label="所在位置" min-width="160" align="center">
-        <template #default="{ row }">
-          <span v-if="row.current_holder_display">{{ row.current_holder_display }}</span>
-          <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :align="d.align"
+          :sortable="d.sortable"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
       <el-table-column label="操作" min-width="80" align="center" fixed="right">
         <template #default="{ row }">
           <el-button
@@ -205,10 +192,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { h, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import type { UploadFile, FormInstance } from 'element-plus'
-import { ElMessage } from 'element-plus'
+import { ElLink, ElMessage, ElTag } from 'element-plus'
 import { Loading, Plus, Upload } from '@element-plus/icons-vue'
 
 import PdfViewer from '@/components/PdfViewer.vue'
@@ -216,6 +203,14 @@ import { useDialogSize } from '@/composables/useDialogSize'
 import type { PartFileItem } from '@/types/part_file'
 import type { PartListItem } from '@/types/parts'
 import type { OrderStatus } from '@/types/parts'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import {
   ASSEMBLY_ADD_CHILD_RULES,
   type AssemblyAddChildForm,
@@ -250,6 +245,72 @@ const emit = defineEmits<{
 const router = useRouter()
 
 const addChildDlg = useDialogSize({ desktopWidth: 480 })
+
+// ============ 2026-08-27 Task 9：子件表列顺序拖动 + 可见性 ============
+// 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+// MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+// type=index 的「#」列与 fixed=right 的「操作」列不进 defs。
+const tableRef = ref()
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PartListItem
+      return r.serial_no
+        ? h(ElTag, { type: 'success', size: 'small', effect: 'dark' }, () => r.serial_no)
+        : h('span', { class: 'muted' }, '未分配')
+    },
+  },
+  {
+    key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 160, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PartListItem
+      // 硬约束 #11：EP 合成空行 { row: {} } → r.id 可能 undefined，需守卫
+      const drawing = r.id ? props.childDrawingMap[r.id] : undefined
+      return drawing
+        ? h(
+          ElLink,
+          { type: 'primary', onClick: () => void onChildDrawingClick(r, drawing) },
+          () => r.drawing_no,
+        )
+        : h('span', { class: 'mono' }, r.drawing_no)
+    },
+  },
+  {
+    key: 'name', label: '名称', prop: 'name', minWidth: 160, align: 'center',
+    showOverflowTooltip: true,
+  },
+  { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 70, align: 'right' },
+  {
+    key: 'status', label: '状态', prop: 'status', minWidth: 100, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PartListItem
+      return h(
+        ElTag,
+        { type: props.partStatusTagType(r.status), size: 'small' },
+        () => props.partStatusLabel(r.status),
+      )
+    },
+  },
+  {
+    key: 'planned_delivery_date', label: '计划交期', prop: 'planned_delivery_date',
+    minWidth: 120, align: 'center',
+  },
+  {
+    key: 'current_holder_display', label: '所在位置', prop: 'current_holder_display',
+    minWidth: 160, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as PartListItem
+      return r.current_holder_display
+        ? h('span', r.current_holder_display)
+        : h('span', { class: 'muted' }, '—')
+    },
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'assembly_children' })
+const drag = useColumnDrag(columnDefs, { listKey: 'assembly_children' })
+// 2026-08-28 改造：直接传实例 ref；composable 内部 watch(ref) + MutationObserver 自愈。
+drag.applyDrag(tableRef)
 
 // ============ 添加子件对话框状态 ============
 const addChildVisible = ref(false)

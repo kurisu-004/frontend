@@ -115,7 +115,18 @@
             <template #header>
               <span class="chart-title">参与工单一览（共 {{ data.parts.length }} 件）</span>
             </template>
+            <!-- 2026-08-27 Task 9：列设置工具条 -->
+            <div class="table-toolbar">
+              <ColumnVisibilityPopover
+                :defs="columnDefs"
+                :model-value="columnVisibility.currentMap"
+                @update:model-value="columnVisibility.update"
+                @reset="columnVisibility.showAll"
+                @reset-order="drag.reset"
+              />
+            </div>
             <el-table
+              ref="tableRef"
               :data="data.parts"
               row-key="part_id"
               stripe
@@ -123,35 +134,28 @@
               size="default"
               empty-text="该工人期内未参与工单"
             >
-              <el-table-column label="流水号" min-width="160" align="center">
-                <template #default="{ row }">
-                  <el-tag v-if="row.serial_no" type="primary" size="small" effect="plain">
-                    {{ row.serial_no }}
-                  </el-tag>
-                  <span v-else style="color: #c0c4cc">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="名称" min-width="200" align="center" show-overflow-tooltip>
-                <template #default="{ row }">
-                  <router-link :to="`/parts/${row.part_id}`" class="name-link">
-                    {{ row.name }}
-                  </router-link>
-                </template>
-              </el-table-column>
-              <el-table-column prop="drawing_no" label="图号" min-width="140" align="center" />
-              <el-table-column label="当前状态" min-width="100" align="center">
-                <template #default="{ row }">
-                  <el-tag
-                    :type="STATUS_TAG_TYPE[row.status as OrderStatus] ?? 'info'"
-                    size="small"
-                    effect="plain"
-                  >
-                    {{ STATUS_LABEL[row.status as OrderStatus] ?? row.status }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="pickup_count" label="我的领取次数" min-width="110" align="center" />
-              <el-table-column prop="last_pickup_at" label="最近领取时间" min-width="170" align="center" />
+              <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+                <el-table-column
+                  v-if="columnVisibility.isVisible(d.key)"
+                  :prop="d.prop ?? d.key"
+                  :label="d.label"
+                  :width="d.width"
+                  :min-width="d.minWidth"
+                  :align="d.align"
+                  :sortable="d.sortable"
+                  :show-overflow-tooltip="d.showOverflowTooltip"
+                  :column-key="d.columnKey ?? d.key"
+                  :label-class-name="drag.dragLabelClass(d)"
+                >
+                  <template v-if="d.cellRender" #default="scope">
+                    <component :is="d.cellRender(scope)" />
+                  </template>
+                  <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+                    <span>{{ d.label }}</span>
+                    <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+                  </template>
+                </el-table-column>
+              </template>
               <el-table-column label="操作" min-width="100" fixed="right" align="center">
                 <template #default="{ row }">
                   <el-button
@@ -171,14 +175,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { computed, h, onMounted, ref, watch } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
+import { ElMessage, ElTag } from 'element-plus'
 import EChart from '@/components/EChart.vue'
 import { fetchWorkerDetail, fetchWorkerStats } from '@/api/statistics'
 import type { WorkerDetailOut, WorkerStatsItem } from '@/types/statistics'
 import type { OrderStatus } from '@/types/parts'
 import { STATUS_LABEL, STATUS_TAG_TYPE } from '@/constants/partStatus'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+
+type WorkerPartRow = WorkerDetailOut['parts'][number]
 
 interface Props {
   dateFrom: string
@@ -195,6 +209,66 @@ const hasCache = computed(() => workerOptions.value.length > 0)
 const warmingCache = ref(false)
 const loading = ref(false)
 const data = ref<WorkerDetailOut | null>(null)
+
+// 2026-08-27 Task 9：列顺序拖动 + 可见性。
+// 2026-08-28 改造：表格在 `v-if="data"` 内（首次加载完成才渲染，workerId 清空后又销毁）
+// → 传 el-table 实例 ref，composable 内部 watch(ref) + MutationObserver 自愈（无需
+// consumer 侧再 watch(tableRef) 解析 headerRowRef）。
+// 「操作」列 fixed=right，不进 defs。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const tableRef = ref()
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'serial_no', label: '流水号', prop: 'serial_no', minWidth: 160, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as WorkerPartRow
+      return r.serial_no
+        ? h(ElTag, { type: 'primary', size: 'small', effect: 'plain' }, () => r.serial_no)
+        : h('span', { style: 'color: #c0c4cc' }, '—')
+    },
+  },
+  {
+    key: 'name', label: '名称', prop: 'name', minWidth: 200, align: 'center',
+    showOverflowTooltip: true,
+    cellRender: ({ row }) => {
+      const r = row as WorkerPartRow
+      // 硬约束 #11：EP 合成空行 { row: {} } 会额外渲染一次 →
+      // 没有 part_id 时不能拼 router-link，否则得到 /parts/undefined
+      return r.part_id
+        ? h(RouterLink, { to: `/parts/${r.part_id}`, class: 'name-link' }, () => r.name)
+        : h('span', r.name ?? '')
+    },
+  },
+  { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 140, align: 'center' },
+  {
+    key: 'status', label: '当前状态', prop: 'status', minWidth: 100, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as WorkerPartRow
+      return h(
+        ElTag,
+        {
+          type: STATUS_TAG_TYPE[r.status as OrderStatus] ?? 'info',
+          size: 'small',
+          effect: 'plain',
+        },
+        () => STATUS_LABEL[r.status as OrderStatus] ?? r.status,
+      )
+    },
+  },
+  {
+    key: 'pickup_count', label: '我的领取次数', prop: 'pickup_count',
+    minWidth: 110, align: 'center',
+  },
+  {
+    key: 'last_pickup_at', label: '最近领取时间', prop: 'last_pickup_at',
+    minWidth: 170, align: 'center',
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'worker_detail' })
+const drag = useColumnDrag(columnDefs, { listKey: 'worker_detail' })
+
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部 watch(ref) + MutationObserver 自愈。
+drag.applyDrag(tableRef)
 
 function onPickerChange(v: string | null): void {
   selectedWorkerId.value = v
@@ -337,5 +411,12 @@ const pickupTrendOption = computed(() => {
 }
 .name-link:hover {
   text-decoration: underline;
+}
+
+/* 2026-08-27 Task 9：列设置工具条 */
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 </style>

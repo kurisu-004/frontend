@@ -19,6 +19,7 @@
         :model-value="columnVisibility.currentMap"
         @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
       />
     </div>
     <el-table
@@ -59,613 +60,60 @@
         :selectable="isBatchSelectable"
       />
 
-      <!-- 2. 序列号 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('serial_no')"
-        prop="serial_no"
-        label="序列号"
-        min-width="110"
-        fixed="left"
-        sortable="custom"
-        show-overflow-tooltip
-        align="center"
-      >
-        <template #header>
-          <ColumnFilterPopover
-            label="序列号"
-            :active="serialNoFilter.active.value"
-            v-model:visible="serialNoFilter.visible.value"
-            @show="serialNoFilter.sync"
-            @confirm="serialNoFilter.confirm"
-            @reset="serialNoFilter.reset"
-          >
-            <el-input
-              v-model="serialNoFilter.draft.value"
-              placeholder="序列号（ILIKE 子串）"
-              clearable
-              size="small"
-              :class="{ 'scan-flash': serialNoFlash }"
-              @keyup.enter="serialNoFilter.confirm"
-            >
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
-          </ColumnFilterPopover>
-        </template>
-        <template #default="{ row }">
-          <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 3. 订单号 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('order_no')"
-        prop="order_no"
-        label="订单号"
-        min-width="130"
-        sortable="custom"
-        show-overflow-tooltip
-        align="center"
-      >
-        <template #header>
-          <ColumnFilterPopover
-            label="订单号"
-            :active="orderNoFilter.active.value"
-            :width="280"
-            hint="订单号子串搜索；勾选「仅空白」覆盖输入"
-            v-model:visible="orderNoFilter.visible.value"
-            @show="orderNoFilter.sync"
-            @confirm="orderNoFilter.confirm"
-            @reset="orderNoFilter.reset"
-          >
-            <div class="filter-input-row">
-              <el-input
-                v-model="orderNoFilter.draft.value"
-                placeholder="订单号（ILIKE 子串）"
-                clearable
-                size="small"
-                @keyup.enter="orderNoFilter.confirm"
-              >
-                <template #prefix><el-icon><Search /></el-icon></template>
-              </el-input>
-              <el-checkbox
-                :model-value="orderNoFilter.isNullDraft.value === true"
-                @update:model-value="v => (orderNoFilter.isNullDraft.value = v ? true : undefined)"
-              >仅空白</el-checkbox>
-            </div>
-          </ColumnFilterPopover>
-        </template>
-        <template #default="{ row }">
-          <el-input
-            v-if="editingId === row.id"
-            v-model="editBuffer.order_no"
-            size="small"
-          />
-          <span v-else>{{ row.order_no || '—' }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 4. 图号 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('drawing_no')"
-        prop="drawing_no"
-        label="图号"
-        min-width="130"
-        fixed="left"
-        sortable="custom"
-        show-overflow-tooltip
-        align="center"
-      >
-        <template #header>
-          <ColumnFilterPopover
-            label="图号"
-            :active="drawingNoFilter.active.value"
-            v-model:visible="drawingNoFilter.visible.value"
-            @show="drawingNoFilter.sync"
-            @confirm="drawingNoFilter.confirm"
-            @reset="drawingNoFilter.reset"
-          >
-            <el-input
-              v-model="drawingNoFilter.draft.value"
-              placeholder="图号（ILIKE 子串）"
-              clearable
-              size="small"
-              @keyup.enter="drawingNoFilter.confirm"
-            >
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
-          </ColumnFilterPopover>
-        </template>
-        <template #default="{ row }">
-          <el-input
-            v-if="editingId === row.id"
-            v-model="editBuffer.drawing_no"
-            size="small"
-          />
-          <span v-else>{{ row.drawing_no }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 5. 名称 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('name')"
-        prop="name"
-        label="名称"
-        min-width="200"
-        sortable="custom"
-        show-overflow-tooltip
-        align="center"
-      >
-        <template #header>
-          <ColumnFilterPopover
-            label="名称"
-            :active="nameFilter.active.value"
-            v-model:visible="nameFilter.visible.value"
-            @show="nameFilter.sync"
-            @confirm="nameFilter.confirm"
-            @reset="nameFilter.reset"
-          >
-            <el-input
-              v-model="nameFilter.draft.value"
-              placeholder="名称（ILIKE 子串）"
-              clearable
-              size="small"
-              @keyup.enter="nameFilter.confirm"
-            >
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
-          </ColumnFilterPopover>
-        </template>
-        <template #default="{ row }">
-          <el-input
-            v-if="editingId === row.id"
-            v-model="editBuffer.name"
-            size="small"
-          />
-          <template v-else>
-            <el-tag
-              v-if="row.row_type === 'ASSEMBLY'"
-              type="warning"
-              size="small"
-              effect="plain"
-              style="margin-right: 4px;"
-            >装配件</el-tag>
-            <!-- 2026-08-27 fix：EP 的 ElTableColumn 会用合成空行 {} 渲染一次列插槽并挂到
-                 .hidden-columns，此时 row.id 为 undefined 会生成 /parts/undefined，
-                 而路由约束是 parts/:id(\d+) → 触发 [Vue Router warn]。无 id 就不渲染链接。 -->
-            <router-link
-              v-if="row.id"
-              :to="row.row_type === 'ASSEMBLY' ? `/assemblies/${row.id}` : `/parts/${row.id}`"
-              class="name-link"
-            >{{ row.name }}</router-link>
-            <span v-else>{{ row.name }}</span>
+      <!--
+        2..19. 18 列数据列（2026-08-27 Task 6 接入，2026-08-27 fix 升级手柄覆盖）
+        drag.orderedDefs 提供持久化顺序；columnDefs.cellRender / headerRender 工厂
+        在 PartsList.vue 里持有 filter ref / editingId / editBuffer 等响应式闭包。
+        #header 统一模板：headerRender VNode + (无 headerRender 时) d.label 文字 +
+        末尾 ColumnDragHandle。手柄始终渲染，因此 9 列 ColumnFilterPopover +
+        2 列 status / next_process badge 都能拖动。
+        sortablejs 通过 .col-no-drag filter 跳过 type=selection/index/expand 与 fixed 列。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :type="d.type"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :fixed="d.fixed"
+          :sortable="d.sortable"
+          :align="d.align"
+          :header-align="d.headerAlign"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :formatter="d.formatter"
+          :filters="d.filters"
+          :filter-multiple="d.filterMultiple"
+          :filter-method="d.filterMethod"
+          :filtered-value="d.filteredValue"
+          :sort-method="d.sortMethod"
+          :sort-by="d.sortBy"
+          :sort-orders="d.sortOrders"
+          :resizable="d.resizable"
+          :class-name="d.className"
+          :label-class-name="drag.dragLabelClass(d)"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <!-- 自定义表头（ColumnFilterPopover / 选中计数 badge）+ 默认 label +
+            拖动手柄三件套：2026-08-27 fix 把 ColumnDragHandle 提到条件外，
+            此前 v-if/v-else-if 互斥导致 11/18 列（9 列 ColumnFilterPopover +
+            status / next_process badge）走 headerRender 分支后没有手柄，
+            sortablejs handle='.col-drag-handle' 抓不到 → 用户无法拖动。
+            现在统一一个 #header 模板：headerRender 走其自定义 VNode，
+            无 headerRender 时落回 d.label 文字；手柄始终追加在末尾
+            （resolveDraggable(d) && !d.type && !d.fixed 时）。 -->
+          <template v-if="d.headerRender || (resolveDraggable(d) && !d.type && !d.fixed)" #header="scope">
+            <component v-if="d.headerRender" :is="d.headerRender(scope)" />
+            <span v-else>{{ d.label }}</span>
+            <ColumnDragHandle v-if="resolveDraggable(d) && !d.type && !d.fixed" :title="`拖动 ${d.label} 列`" />
           </template>
-        </template>
-      </el-table-column>
-
-      <!-- 6. 客户 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('customer')"
-        label="客户"
-        min-width="180"
-        show-overflow-tooltip
-        align="center"
-      >
-        <template #header>
-          <ColumnFilterPopover
-            label="客户"
-            :active="customerFilter.active.value"
-            :width="280"
-            hint="选一级客户自动级联其下二级客户"
-            v-model:visible="customerFilter.visible.value"
-            @show="customerFilter.sync"
-            @confirm="customerFilter.confirm"
-            @reset="customerFilter.reset"
-          >
-            <el-tree-select
-              v-model="customerFilter.draft.value"
-              :data="customerTree"
-              node-key="id"
-              :props="{ label: 'name', children: 'children' }"
-              check-strictly
-              clearable
-              filterable
-              placeholder="选择客户"
-              :teleported="false"
-              style="width: 100%"
-              @clear="customerFilter.draft.value = null"
-            />
-          </ColumnFilterPopover>
-        </template>
-        <template #default="{ row }">
-          <span v-if="row.customer_path">{{ row.customer_path }}</span>
-          <span v-else-if="row.customer_name" class="muted">{{ row.customer_name }}</span>
-          <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
-
-      <!-- 7. 申请人 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('applicant')"
-        label="申请人"
-        min-width="160"
-        show-overflow-tooltip
-        align="center"
-      >
-        <template #default="{ row }">
-          <el-autocomplete
-            v-if="editingId === row.id"
-            v-model="editBuffer.applicant_name"
-            value-key="name"
-            :fetch-suggestions="applicantSuggest"
-            :trigger-on-focus="true"
-            :debounce="0"
-            :loading="applicantLoading"
-            placeholder="选择或输入申请人姓名"
-            clearable
-            size="small"
-            style="width: 100%"
-          />
-          <span v-else>{{ row.applicant_name || '—' }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 8. 状态（原生 :filters） -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('status')"
-        label="状态"
-        min-width="140"
-        align="center"
-        column-key="status"
-        :filters="statusNativeOptions"
-        :filtered-value="statusFilteredValue"
-      >
-        <template #header>
-          <span class="status-header">
-            状态
-            <span v-if="statusSelectedCount > 0" class="status-count">({{ statusSelectedCount }})</span>
-          </span>
-        </template>
-        <template #default="{ row }">
-          <el-tag :type="statusTagType(row.status)" effect="plain" size="small">
-            {{ statusLabel(row.status) }}
-          </el-tag>
-          <el-tag
-            v-if="row.has_been_repaired"
-            type="warning"
-            size="small"
-            effect="dark"
-            style="margin-left: 4px"
-          >返修</el-tag>
-        </template>
-      </el-table-column>
-
-      <!-- 9. 数量 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('quantity')"
-        prop="quantity"
-        label="数量"
-        min-width="110"
-        sortable="custom"
-        align="right"
-      >
-        <template #default="{ row }">
-          <el-input-number
-            v-if="editingId === row.id"
-            v-model="editBuffer.quantity"
-            :min="1"
-            :precision="0"
-            :controls="false"
-            size="small"
-            style="width: 90px"
-          />
-          <span v-else>{{ row.quantity }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 10. 已送数量（2026-08-23 从原位置 15 移到数量之后） -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('delivered_quantity')"
-        prop="delivered_quantity"
-        label="已送数量"
-        min-width="100"
-        align="right"
-      >
-        <template #default="{ row }">
-          <span v-if="row.row_type === 'ASSEMBLY'" class="muted">—</span>
-          <span v-else>{{ row.delivered_quantity ?? 0 }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 11. 单价 -->
-      <el-table-column
-        v-if="canEdit && columnVisibility.isVisible('unit_price')"
-        prop="unit_price"
-        label="单价"
-        min-width="120"
-        sortable="custom"
-        align="right"
-      >
-        <template #default="{ row }">
-          <el-input-number
-            v-if="editingId === row.id"
-            v-model="editBuffer.unit_price"
-            :min="0"
-            :precision="2"
-            :step="0.01"
-            :controls="false"
-            size="small"
-            style="width: 100px"
-          />
-          <span v-else>{{ row.unit_price }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 11. 总价 -->
-      <el-table-column
-        v-if="canEdit && columnVisibility.isVisible('total_price')"
-        prop="total_price"
-        label="总价"
-        min-width="120"
-        sortable="custom"
-        align="right"
-      >
-        <template #default="{ row }">
-          <span>{{ displayTotalPrice(row as PartListItem) }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 12. 请购日期 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('request_date')"
-        prop="request_date"
-        label="请购日期"
-        min-width="150"
-        sortable="custom"
-        align="center"
-      >
-        <template #header>
-          <ColumnFilterPopover
-            label="请购日期"
-            :active="requestDateFilter.active.value"
-            :width="280"
-            v-model:visible="requestDateFilter.visible.value"
-            @confirm="requestDateFilter.confirm"
-            @reset="requestDateFilter.reset"
-          >
-            <el-date-picker
-              v-model="requestDateFilter.range.value"
-              type="daterange"
-              value-format="YYYY-MM-DD"
-              range-separator="~"
-              start-placeholder="起点"
-              end-placeholder="终点"
-              unlink-panels
-              clearable
-              size="small"
-              :teleported="false"
-              style="width: 100%"
-            />
-          </ColumnFilterPopover>
-        </template>
-        <template #default="{ row }">
-          <el-date-picker
-            v-if="editingId === row.id"
-            v-model="editBuffer.request_date"
-            type="date"
-            value-format="YYYY-MM-DD"
-            size="small"
-            style="width: 138px"
-            :clearable="false"
-          />
-          <span v-else>{{ row.request_date }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 13. 计划交期 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('planned_delivery_date')"
-        prop="planned_delivery_date"
-        label="计划交期"
-        min-width="150"
-        sortable="custom"
-        align="center"
-      >
-        <template #header>
-          <ColumnFilterPopover
-            label="计划交期"
-            :active="plannedDateFilter.active.value"
-            :width="280"
-            v-model:visible="plannedDateFilter.visible.value"
-            @confirm="plannedDateFilter.confirm"
-            @reset="plannedDateFilter.reset"
-          >
-            <el-date-picker
-              v-model="plannedDateFilter.range.value"
-              type="daterange"
-              value-format="YYYY-MM-DD"
-              range-separator="~"
-              start-placeholder="起点"
-              end-placeholder="终点"
-              unlink-panels
-              clearable
-              size="small"
-              :teleported="false"
-              style="width: 100%"
-            />
-          </ColumnFilterPopover>
-        </template>
-        <template #default="{ row }">
-          <el-date-picker
-            v-if="editingId === row.id"
-            v-model="editBuffer.planned_delivery_date"
-            type="date"
-            value-format="YYYY-MM-DD"
-            size="small"
-            style="width: 138px"
-            :clearable="false"
-          />
-          <span v-else>{{ row.planned_delivery_date }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 14. 系统交期 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('system_delivery_date')"
-        prop="system_delivery_date"
-        label="系统交期"
-        min-width="150"
-        align="center"
-      >
-        <template #header>
-          <ColumnFilterPopover
-            label="系统交期"
-            :active="systemDateFilter.active.value"
-            :width="300"
-            hint="区间 + 「仅空白」checkbox；勾选后区间失效"
-            v-model:visible="systemDateFilter.visible.value"
-            @show="systemDateFilter.sync"
-            @confirm="systemDateFilter.confirm"
-            @reset="systemDateFilter.reset"
-          >
-            <div class="filter-input-row">
-              <el-date-picker
-                v-model="systemDateFilter.range.value"
-                type="daterange"
-                value-format="YYYY-MM-DD"
-                range-separator="~"
-                start-placeholder="起点"
-                end-placeholder="终点"
-                unlink-panels
-                clearable
-                size="small"
-                :teleported="false"
-                style="flex: 1"
-              />
-              <el-checkbox
-                :model-value="systemDateFilter.isNullDraft.value === true"
-                @update:model-value="v => (systemDateFilter.isNullDraft.value = v ? true : undefined)"
-              >仅空白</el-checkbox>
-            </div>
-          </ColumnFilterPopover>
-        </template>
-        <template #default="{ row }">
-          <el-date-picker
-            v-if="editingId === row.id"
-            v-model="editBuffer.system_delivery_date"
-            type="date"
-            value-format="YYYY-MM-DD"
-            size="small"
-            style="width: 138px"
-            clearable
-          />
-          <span v-else>{{ row.system_delivery_date || '—' }}</span>
-        </template>
-      </el-table-column>
-
-      <!-- 15. 加急（2026-08-23 原编号 16，因已送数量挪走而前移） -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('is_urgent')"
-        label="加急"
-        min-width="80"
-        align="center"
-      >
-        <template #default="{ row }">
-          <el-switch
-            v-if="editingId === row.id"
-            v-model="editBuffer.is_urgent"
-            size="small"
-          />
-          <el-tag v-else-if="row.is_urgent" type="danger" effect="plain" size="small">加急</el-tag>
-          <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
-
-      <!-- 17. 下一道工序（原生 :filters） -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('next_process')"
-        label="下一道工序"
-        min-width="130"
-        align="center"
-        column-key="next_process"
-        :filters="nextProcessOptions"
-        :filtered-value="nextProcessFilteredValue"
-      >
-        <template #header>
-          <span class="status-header">
-            下一道工序
-            <span v-if="nextProcessSelectedCount > 0" class="status-count">({{ nextProcessSelectedCount }})</span>
-          </span>
-        </template>
-        <template #default="{ row }">
-          <span v-if="row.row_type === 'ASSEMBLY'" class="muted">—</span>
-          <span v-else-if="row.next_process_name">{{ row.next_process_name }}</span>
-          <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
-
-      <!-- 18. 所在位置 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('location')"
-        label="所在位置"
-        min-width="150"
-        show-overflow-tooltip
-        align="center"
-      >
-        <template #header>
-          <ColumnFilterPopover
-            label="所在位置"
-            :active="locationFilter.active.value"
-            :width="260"
-            hint="选大类命中该类全部；选叶子精确到货架/工人/外协公司"
-            v-model:visible="locationFilter.visible.value"
-            @show="locationFilter.onShow"
-            @confirm="locationFilter.confirm"
-            @reset="locationFilter.reset"
-          >
-            <el-tree-select
-              v-model="locationFilter.draft.value"
-              :data="locationTree"
-              node-key="id"
-              :props="{ label: 'name', children: 'children' }"
-              multiple
-              show-checkbox
-              check-strictly
-              check-on-click-node
-              clearable
-              filterable
-              :teleported="false"
-              placeholder="选择位置"
-              style="width: 100%"
-              @clear="locationFilter.draft.value = []"
-            />
-          </ColumnFilterPopover>
-        </template>
-        <template #default="{ row }">
-          <span v-if="row.location === 'PRODUCTION_SHELF' && row.shelf_code">货架 {{ row.shelf_code }}</span>
-          <span v-else-if="row.location === 'INSPECTION_SHELF' && row.shelf_code">品检 {{ row.shelf_code }}</span>
-          <span v-else-if="row.location === 'WORKER' && row.worker_name">{{ row.worker_name }}</span>
-          <span v-else-if="row.location === 'OUTSOURCE_COMPANY' && row.outsource_company_name">外协 {{ row.outsource_company_name }}</span>
-          <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
-
-      <!-- 19. 备注 -->
-      <el-table-column
-        v-if="columnVisibility.isVisible('note')"
-        label="备注"
-        min-width="160"
-        show-overflow-tooltip
-        align="center"
-      >
-        <template #default="{ row }">
-          <el-input
-            v-if="editingId === row.id"
-            v-model="editBuffer.note"
-            size="small"
-          />
-          <span v-else>{{ row.note || '—' }}</span>
-        </template>
-      </el-table-column>
+          <!-- 自定义单元格（editing 切换 / 状态 tag / 链接 / 装配件 tag 等） -->
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+        </el-table-column>
+      </template>
 
       <!-- 20. 操作 -->
       <el-table-column label="操作" min-width="160" fixed="right" align="center">
@@ -721,15 +169,14 @@
 import { onMounted, ref } from 'vue'
 import type { TableInstance } from 'element-plus'
 import { useRouter } from 'vue-router'
-import { Search } from '@element-plus/icons-vue'
-import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import {
-  ORDER_STATUS_LABEL,
-  ORDER_STATUS_TAG_TYPE,
-  type OrderStatus,
-  type PartListItem,
-} from '@/types/parts'
+  useColumnDrag,
+  columnIdentifier,
+} from '@/composables/useColumnDrag'
+import { resolveDraggable } from '@/composables/useColumnVisibility'
+import type { PartListItem } from '@/types/parts'
 import { getAssembly } from '@/api/assembly'
 import type { PartsListCtx } from '../composables/partsListCtx'
 
@@ -808,6 +255,14 @@ const {
 
 const router = useRouter()
 
+// ============ 列顺序拖动（2026-08-27 Task 6 接入）============
+// 与 PartsList 的 useColumnVisibility 共享同一 columnDefs 数组：
+// 各自 read 同一 localStorage key（myerp.list.<userId>.parts_list_columnOrder），
+// orderedKeys 在 sortablejs onEnd 时落盘，二者内存里的 orderedKeys 通过持久化层一致。
+// listKey 取 PartsList useColumnVisibility 已用的 'parts_list_columns' 同根命名空间，
+// 但 columnOrder 与 _columns 持久化分 key，互不污染。
+const drag = useColumnDrag(columnDefs, { listKey: 'parts_list' })
+
 // ============ 表格 ref（暴露给父组件）============
 const tableRef = ref<TableInstance | null>(null)
 defineExpose({ tableRef })
@@ -816,10 +271,14 @@ defineExpose({ tableRef })
 // 把 el-table.clearFilter 注入 query composable，让 query.resetAllFilters 能不持有
 // tableRef 的情况下清掉原生筛选列（status / next_process）的内部勾选态。
 // EP clearFilter 会 emit filter-change，onNativeFilterChange 顺手把 search.* 同步清空。
+//
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
+// 自愈（覆盖 EP 重建表头 / 数据到达后表头首次渲染）。consumer 0 行 query 代码。
 onMounted(() => {
   query.registerClearNativeFilters(() => {
     tableRef.value?.clearFilter(['status', 'next_process'])
   })
+  drag.applyDrag(tableRef)
 })
 
 // 工具栏按钮的简短转发，模板里直接 @click="resetAllFilters"
@@ -884,15 +343,6 @@ function rowClassName({ row }: { row: PartListItem }): string {
     return 'row-on-delivery-note'
   }
   return ''
-}
-
-function statusLabel(s: OrderStatus): string {
-  return ORDER_STATUS_LABEL[s] ?? s
-}
-function statusTagType(
-  s: OrderStatus,
-): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
-  return ORDER_STATUS_TAG_TYPE[s] ?? 'info'
 }
 
 function onDetail(row: PartListItem): void {
@@ -984,4 +434,11 @@ function onDetail(row: PartListItem): void {
 :deep(.el-table__row.row-on-delivery-note.current-row > td.el-table__cell) {
   background-color: #b3d0ee !important;
 }
+
+// 2026-08-27 Task 6：列顺序拖动视觉反馈（与 PartListShell 同款藏青/蓝/浅蓝系）。
+// sortablejs ghost/chosen/drag 三态分别对应：被拖列（半透明）/ 落点（蓝填充）/ 抓取副本（白）。
+:deep(.col-no-drag) { cursor: default !important; }
+:deep(.sortable-ghost) { opacity: 0.5; background: #eaf2fb !important; }
+:deep(.sortable-chosen) { background: #cce0f4 !important; }
+:deep(.sortable-drag) { background: #fff !important; }
 </style>

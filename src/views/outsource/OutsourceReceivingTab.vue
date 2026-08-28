@@ -41,12 +41,14 @@
         :model-value="columnVisibility.currentMap"
         @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
       />
     </div>
     <!-- 2026-08-25 (T7)：待接收 tab：el-table + el-pagination 收口到 <PagedTable> -->
     <PagedTable ref="receivingPagedRef" :fetcher="receivingFetcher" :default-page-size="20">
       <template #default="{ items, loading }">
         <el-table
+          ref="tableRef"
           :data="items"
           v-loading="loading"
           row-key="batch_id"
@@ -56,50 +58,33 @@
           border
           size="small"
         >
-          <el-table-column
-            v-if="columnVisibility.isVisible('serial_no')"
-            prop="serial_no" label="序列号" min-width="100" align="center"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('drawing_no')"
-            prop="drawing_no" label="图号" min-width="120" align="center"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('name')"
-            prop="name" label="名称" min-width="180" show-overflow-tooltip align="center"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('batch_no')"
-            label="批次号" min-width="80" align="center"
-          >
-            <template #default="{ row }">
-              <el-tag type="info" size="small">批次 {{ (row as OutsourceInFlightItem).batch_no }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column
-            v-if="columnVisibility.isVisible('quantity')"
-            prop="quantity" label="数量" min-width="80" align="right"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('outsource_company_name')"
-            label="外协公司" min-width="160" show-overflow-tooltip align="center"
-          >
-            <template #default="{ row }">
-              {{ (row as OutsourceInFlightItem).outsource_company_name || '—' }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            v-if="columnVisibility.isVisible('sent_at')"
-            label="发送时间" min-width="160" align="center"
-          >
-            <template #default="{ row }">
-              {{ (row as OutsourceInFlightItem).sent_at ? new Date((row as OutsourceInFlightItem).sent_at!).toLocaleString() : '—' }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            v-if="columnVisibility.isVisible('customer_path')"
-            prop="customer_path" label="客户" min-width="180" show-overflow-tooltip align="center"
-          />
+          <!--
+            2026-08-27 T16：列顺序拖动接入。本组件挂在 <el-tab-pane> 内，EP 默认 lazy=false，
+            双 tab 都在 DOM（隐藏用 display:none），el-table thead 一开始就有 → 走 HTMLElement 路径。
+            fixed="right" 操作列保留为字面量 <el-table-column>。
+          -->
+          <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+            <el-table-column
+              v-if="columnVisibility.isVisible(d.key)"
+              :prop="d.prop ?? d.key"
+              :label="d.label"
+              :width="d.width"
+              :min-width="d.minWidth"
+              :sortable="d.sortable"
+              :align="d.align"
+              :show-overflow-tooltip="d.showOverflowTooltip"
+              :column-key="d.columnKey ?? d.key"
+              :label-class-name="drag.dragLabelClass(d)"
+            >
+              <template v-if="d.cellRender" #default="scope">
+                <component :is="d.cellRender(scope)" />
+              </template>
+              <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+                <span>{{ d.label }}</span>
+                <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+              </template>
+            </el-table-column>
+          </template>
           <el-table-column label="操作" min-width="100" fixed="right" align="center">
             <template #default="{ row }">
               <el-button
@@ -139,10 +124,17 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, toRef, watch } from 'vue'
+import { h, onMounted, ref, toRef, watch } from 'vue'
+import { ElTag } from 'element-plus'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import PagedTable from '@/components/PagedTable.vue'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import type { Customer } from '@/api/customer'
 import type { Shelf as ShelfItem } from '@/types/shelf'
 import type { Process } from '@/types/process'
@@ -191,21 +183,42 @@ const {
   processes: toRef(props, 'processes'),
 })
 
-// 列可见性
-const columnDefs = [
-  { key: 'serial_no', label: '序列号' },
-  { key: 'drawing_no', label: '图号' },
-  { key: 'name', label: '名称' },
-  { key: 'batch_no', label: '批次号' },
-  { key: 'quantity', label: '数量' },
-  { key: 'outsource_company_name', label: '外协公司' },
-  { key: 'sent_at', label: '发送时间' },
-  { key: 'customer_path', label: '客户' },
-] as const
+// ============ 列可见性 + 列顺序拖动 ============
+// 2026-08-27 T16：补 prop / minWidth / align + ElTag / 文本列走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const columnDefs: ColumnDef[] = [
+  { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center' },
+  { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 120, align: 'center' },
+  { key: 'name', label: '名称', prop: 'name', minWidth: 180, showOverflowTooltip: true, align: 'center' },
+  {
+    key: 'batch_no', label: '批次号', minWidth: 80, align: 'center',
+    cellRender: ({ row }) => h(ElTag, { type: 'info', size: 'small' },
+      () => `批次 ${(row as OutsourceInFlightItem).batch_no}`),
+  },
+  { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 80, align: 'right' },
+  {
+    key: 'outsource_company_name', label: '外协公司', minWidth: 160, showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as OutsourceInFlightItem).outsource_company_name || '—'),
+  },
+  {
+    key: 'sent_at', label: '发送时间', minWidth: 160, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as OutsourceInFlightItem
+      return h('span', null, r.sent_at ? new Date(r.sent_at!).toLocaleString() : '—')
+    },
+  },
+  { key: 'customer_path', label: '客户', prop: 'customer_path', minWidth: 180, showOverflowTooltip: true, align: 'center' },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_send_receive_receiving' })
+const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_receiving' })
+// 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
+const tableRef = ref()
 
 // 持久化恢复 + pageSize 双向同步（与原 shell onMounted 等价）
 onMounted(() => {
+  // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+  drag.applyDrag(tableRef)
+
   const persisted = restore()
   if (persisted) {
     if (persisted.receivingFilter) Object.assign(receivingFilter, persisted.receivingFilter as Partial<typeof receivingFilter>)

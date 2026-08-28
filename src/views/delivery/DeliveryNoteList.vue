@@ -12,9 +12,9 @@
   形态对齐 frontend/src/views/outsource/OutsourceQuoteList.vue
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
 import { Van, Promotion } from '@element-plus/icons-vue'
 
 import {
@@ -36,9 +36,15 @@ import {
 } from '@/utils/deliveryNotePermissions'
 import { listCustomers } from '@/api/customer'
 import { useAuthSession } from '@/composables/useAuthSession'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import PagedTable from '@/components/PagedTable.vue'
 import PartPickerDialog from '@/components/delivery/PartPickerDialog.vue'
 
@@ -71,19 +77,57 @@ const { restore: restoreNoteListFilter } = useListStatePersist(
   { exclude: new Set(['page']) },
 )
 
-// ============ 列可见性 ============
+// ============ 列可见性 + 列顺序拖动 ============
 // 「操作」列不放进 defs → 始终可见
-const columnDefs = [
-  { key: 'delivery_note_no', label: '单号' },
-  { key: 'delivery_date', label: '送货日期' },
-  { key: 'customer', label: '客户' },
-  { key: 'status', label: '状态' },
-  { key: 'part_count', label: '零件数' },
-  { key: 'submitted_at', label: '提交时间' },
-  { key: 'picked_up_at', label: '领取时间' },
-  { key: 'driver_worker_name', label: '司机' },
-] as const
+// 2026-08-27 T17：补 prop / minWidth / align + 文本列走 cellRender(PartListShell 同款)。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const columnDefs: ColumnDef[] = [
+  { key: 'delivery_note_no', label: '单号', prop: 'delivery_note_no', minWidth: 180, align: 'center' },
+  {
+    key: 'delivery_date', label: '送货日期', minWidth: 120, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as DeliveryNoteOut).delivery_date ?? '—'),
+  },
+  {
+    key: 'customer', label: '客户', minWidth: 130, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as DeliveryNoteOut
+      return h('span', null, r.customer_path ?? r.customer_name ?? '—')
+    },
+  },
+  {
+    key: 'status', label: '状态', minWidth: 80, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as DeliveryNoteOut
+      return h(ElTag,
+        { type: DELIVERY_NOTE_STATUS_TAG[r.status] || 'info', size: 'small', effect: 'plain' },
+        () => DELIVERY_NOTE_STATUS_LABEL[r.status])
+    },
+  },
+  { key: 'part_count', label: '零件数', prop: 'part_count', minWidth: 70, align: 'center' },
+  {
+    key: 'submitted_at', label: '提交时间', minWidth: 170, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as DeliveryNoteOut
+      return h('span', null, r.submitted_at ? new Date(r.submitted_at!).toLocaleString() : '—')
+    },
+  },
+  {
+    key: 'picked_up_at', label: '领取时间', minWidth: 170, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as DeliveryNoteOut
+      return h('span', null, r.picked_up_at ? new Date(r.picked_up_at!).toLocaleString() : '—')
+    },
+  },
+  {
+    key: 'driver_worker_name', label: '司机', prop: 'driver_worker_name', minWidth: 80, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as DeliveryNoteOut).driver_worker_name ?? '—'),
+  },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_note_list' })
+const drag = useColumnDrag(columnDefs, { listKey: 'delivery_note_list' })
+const tableRef = ref()
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+drag.applyDrag(tableRef)
 
 const customers = ref<{ id: string; name: string; path: string; parent_id: string | null }[]>([])
 
@@ -331,6 +375,7 @@ async function onSoftDelete(n: DeliveryNoteOut) {
             :defs="columnDefs"
             :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
             @reset="columnVisibility.showAll"
+            @reset-order="drag.reset"
           />
         </div>
       </template>
@@ -338,6 +383,7 @@ async function onSoftDelete(n: DeliveryNoteOut) {
     <PagedTable ref="pagedRef" :fetcher="fetcher" :default-page-size="50" pagination-layout="total, sizes, prev, pager, next">
       <template #default="{ items, loading }">
     <el-table
+      ref="tableRef"
       v-loading="loading"
       :data="items"
       :row-key="(r: DeliveryNoteOut) => r.id"
@@ -347,71 +393,33 @@ async function onSoftDelete(n: DeliveryNoteOut) {
       border
       :empty-text="loading ? '加载中' : '无数据'"
     >
-      <el-table-column
-        v-if="columnVisibility.isVisible('delivery_note_no')"
-        prop="delivery_note_no" label="单号" min-width="180" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('delivery_date')"
-        label="送货日期" min-width="120" align="center"
-      >
-        <template #default="scope">
-          {{ (scope.row as DeliveryNoteOut).delivery_date ?? '—' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('customer')"
-        label="客户" min-width="130" align="center"
-      >
-        <template #default="scope">
-          {{ (scope.row as DeliveryNoteOut).customer_path
-            ?? (scope.row as DeliveryNoteOut).customer_name ?? '—' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('status')"
-        label="状态" min-width="80" align="center"
-      >
-        <template #default="scope">
-          <el-tag
-            :type="DELIVERY_NOTE_STATUS_TAG[(scope.row as DeliveryNoteOut).status] || 'info'"
-            size="small"
-            effect="plain"
-          >
-            {{ DELIVERY_NOTE_STATUS_LABEL[(scope.row as DeliveryNoteOut).status] }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('part_count')"
-        prop="part_count" label="零件数" min-width="70" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('submitted_at')"
-        label="提交时间" min-width="170" align="center"
-      >
-        <template #default="scope">
-          {{ (scope.row as DeliveryNoteOut).submitted_at
-            ? new Date((scope.row as DeliveryNoteOut).submitted_at!).toLocaleString() : '—' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('picked_up_at')"
-        label="领取时间" min-width="170" align="center"
-      >
-        <template #default="scope">
-          {{ (scope.row as DeliveryNoteOut).picked_up_at
-            ? new Date((scope.row as DeliveryNoteOut).picked_up_at!).toLocaleString() : '—' }}
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('driver_worker_name')"
-        prop="driver_worker_name" label="司机" min-width="80" align="center"
-      >
-        <template #default="scope">
-          {{ (scope.row as DeliveryNoteOut).driver_worker_name ?? '—' }}
-        </template>
-      </el-table-column>
+      <!--
+        2026-08-27 T17：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+        用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+        fixed="right" 操作列保留为字面量 <el-table-column>。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
       <el-table-column label="操作" min-width="120" fixed="right" align="center">
         <template #default="scope">
           <div style="display: flex; align-items: center; gap: 0px;">

@@ -13,6 +13,14 @@
   - 后端 OCC（version）由后端从 match 返回，前端原样回传。
   - 批量更新失败时，保留对话框，用 failedRows 标红失败候选行 + 主行（任一候选失败 → 主行变红）。
   - 同一 part_id 跨多个 group 重复时，effectiveItems 去重（防御性）。
+
+  2026-08-28 改造（B 组 batch 1 列拖动接入）：
+  - el-dialog destroy-on-close + 顶层 el-table v-if="previewGroups.length > 0"：
+    顶层表会在「关闭对话框 → 重开」或「解析完成前 → 解析完成」两个时机反复挂载 / 卸载。
+    传 el-table 实例 ref 给 drag.applyDrag(tableRef)，composable 内部 watch +
+    MutationObserver 自愈（覆盖反复挂载 / 卸载的过渡）。
+  - 仅顶层主表接列拖动；嵌套展开子表（候选勾选 / 编辑）保留字面量（列少、行为稳定）。
+  - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
 -->
 
 <template>
@@ -87,6 +95,7 @@
     <!-- 预览表（嵌套展开行） -->
     <el-table
       v-if="previewGroups.length > 0"
+      ref="tableRef"
       :data="previewGroups"
       row-key="rowNo"
       :row-class-name="rowClassName"
@@ -96,7 +105,7 @@
       border
       stripe
     >
-      <!-- 展开列：嵌套候选子表 -->
+      <!-- 展开列：嵌套候选子表（2026-08-27 T25 决策：嵌套子表不接列拖动，列少行为稳定） -->
       <el-table-column type="expand">
         <template #default="scope">
           <div
@@ -190,62 +199,33 @@
         </template>
       </el-table-column>
 
-      <!-- 主行列 -->
-      <el-table-column label="候选数" width="100" align="center">
-        <template #default="{ row }">
-          <el-tag
-            v-if="(row as PreviewGroup).candidates.length > 0"
-            type="success"
-            effect="plain"
-            size="small"
-          >
-            {{ (row as PreviewGroup).candidates.length }} 候选
-          </el-tag>
-          <el-tag v-else type="danger" effect="light" size="small">未匹配</el-tag>
-        </template>
-      </el-table-column>
-
-      <el-table-column prop="rowNo" label="Excel 行号" width="92" align="center" />
-
-      <el-table-column label="物料代码" min-width="170" align="center">
-        <template #default="{ row }">
-          <span class="mono">{{ (row as PreviewGroup).excelDrawingNo || '—' }}</span>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="描述" min-width="170" align="center">
-        <template #default="{ row }">
-          <span>{{ (row as PreviewGroup).excelName || '—' }}</span>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="匹配方式" width="120" align="center">
-        <template #default="{ row }">
-          <el-tag
-            :type="matchTagType((row as PreviewGroup).matchType)"
-            effect="light"
-            size="small"
-          >
-            {{ matchTagText((row as PreviewGroup).matchType) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="警告" width="90" align="center">
-        <template #default="{ row }">
-          <el-tooltip
-            v-if="(row as PreviewGroup).warnings.length > 0"
-            :content="(row as PreviewGroup).warnings.join('；')"
-            placement="top"
-            :show-after="200"
-          >
-            <el-tag type="warning" effect="plain" size="small">
-              {{ (row as PreviewGroup).warnings.length }} 条
-            </el-tag>
-          </el-tooltip>
-          <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
+      <!--
+        2026-08-27 T25：顶层主表主行列走 v-for 列顺序拖动。type="expand" 列保留为字面量
+        <el-table-column>（filter='.col-no-drag' 已让其不可拖）。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :header-align="d.headerAlign"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :label-class-name="drag.dragLabelClass(d)"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
     </el-table>
 
     <el-empty
@@ -253,6 +233,17 @@
       description="尚未上传 Excel，或解析后无有效数据"
       :image-size="80"
     />
+
+    <!-- 2026-08-27 T25：列设置按钮（仅列表态展示；空态无表可设） -->
+    <div v-if="previewGroups.length > 0" class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap"
+        @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
+      />
+    </div>
 
     <template #footer>
       <div class="dlg-footer">
@@ -276,9 +267,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import type { UploadFile, UploadRawFile } from 'element-plus'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElTag, ElTooltip } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 
 import { useDialogSize } from '@/composables/useDialogSize'
@@ -294,6 +285,14 @@ import {
   parsePurchaseOrderExcel,
   type PurchaseOrderExcelItem,
 } from '@/utils/purchaseOrderExcelParser'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
 // ============================================================
 // Props / Emits
@@ -351,6 +350,62 @@ const parsing = ref(false)
 const submitting = ref(false)
 /** part_id → 失败原因。用于标红失败候选行 + 失败主行（任一候选失败 → 主行变红）。 */
 const failedRows = ref<Map<string, string>>(new Map())
+
+// 2026-08-27 T25：列顺序拖动 + 可见性。
+// 仅顶层主表主行列接列拖动（type="expand" 嵌套子表保留字面量，不进 defs）。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'candidates', label: '候选数', width: 100, align: 'center',
+    cellRender: ({ row }) => {
+      const g = row as PreviewGroup
+      if (g.candidates.length > 0) {
+        return h(ElTag, { type: 'success', effect: 'plain', size: 'small' },
+          () => `${g.candidates.length} 候选`)
+      }
+      return h(ElTag, { type: 'danger', effect: 'light', size: 'small' }, () => '未匹配')
+    },
+  },
+  { key: 'rowNo', label: 'Excel 行号', prop: 'rowNo', width: 92, align: 'center' },
+  {
+    key: 'excelDrawingNo', label: '物料代码', minWidth: 170, align: 'center',
+    cellRender: ({ row }) => h('span', { class: 'mono' },
+      (row as PreviewGroup).excelDrawingNo || '—'),
+  },
+  {
+    key: 'excelName', label: '描述', minWidth: 170, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as PreviewGroup).excelName || '—'),
+  },
+  {
+    key: 'matchType', label: '匹配方式', width: 120, align: 'center',
+    cellRender: ({ row }) => {
+      const g = row as PreviewGroup
+      return h(ElTag,
+        { type: matchTagType(g.matchType), effect: 'light', size: 'small' },
+        () => matchTagText(g.matchType))
+    },
+  },
+  {
+    key: 'warnings', label: '警告', width: 90, align: 'center',
+    cellRender: ({ row }) => {
+      const g = row as PreviewGroup
+      if (g.warnings.length > 0) {
+        return h(ElTooltip,
+          { content: g.warnings.join('；'), placement: 'top', 'show-after': 200 },
+          () => h(ElTag, { type: 'warning', effect: 'plain', size: 'small' },
+            () => `${g.warnings.length} 条`))
+      }
+      return h('span', { class: 'muted' }, '—')
+    },
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'purchase_order_import' })
+const drag = useColumnDrag(columnDefs, { listKey: 'purchase_order_import' })
+
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部 watch + MutationObserver
+// 自愈（覆盖 el-dialog destroy-on-close + el-table v-if 反复挂载 / 卸载场景）。
+const tableRef = ref()
+drag.applyDrag(tableRef)
 
 // ============================================================
 // Computed
@@ -704,6 +759,13 @@ async function onConfirm(): Promise<void> {
 
 .muted {
   color: #909399;
+}
+
+// 2026-08-27 T25：列设置工具条（与 PartListShell 同款）
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 :deep(.row-unmatched) {

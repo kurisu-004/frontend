@@ -9,9 +9,11 @@
         :defs="columnDefs"
         :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
       />
     </div>
     <el-table
+      ref="tableRef"
       :data="items"
       v-loading="loading"
       row-key="id"
@@ -22,48 +24,33 @@
       <template #empty>
         <el-empty description="暂无货架" />
       </template>
-      <el-table-column
-        v-if="columnVisibility.isVisible('code')"
-        prop="code" label="代码" min-width="110" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('name')"
-        prop="name" label="名称" min-width="140" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('zone')"
-        label="区域" min-width="90" align="center"
-      >
-        <template #default="{ row }"><el-tag :type="row.zone === 'PRODUCTION' ? 'primary' : 'warning'" size="small">{{ row.zone === 'PRODUCTION' ? '生产' : '品检' }}</el-tag></template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('location')"
-        prop="location" label="位置" min-width="120" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('display_order')"
-        prop="display_order" label="物理顺序" min-width="100" align="center" sortable
-      >
-        <template #default="{ row }">
-          <el-tag
-            :type="row.display_order > 0 ? 'info' : 'warning'"
-            size="small"
-            effect="plain"
-          >
-            {{ row.display_order > 0 ? row.display_order : '未设置' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-if="columnVisibility.isVisible('account_count')"
-        prop="account_count" label="账号数" min-width="80" align="center"
-      />
-      <el-table-column
-        v-if="columnVisibility.isVisible('is_active')"
-        label="状态" min-width="80" align="center"
-      >
-        <template #default="{ row }"><el-tag :type="row.is_active ? 'success' : 'danger'" size="small">{{ row.is_active ? '启用' : '停用' }}</el-tag></template>
-      </el-table-column>
+      <!--
+        2026-08-27 T15：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+        用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+        fixed="right" 操作列保留为字面量 <el-table-column>。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
       <el-table-column label="操作" min-width="160" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link size="small" @click="editShelf(row)">编辑</el-button>
@@ -130,10 +117,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, onMounted, h } from 'vue'
+import { ElMessage, ElTag } from 'element-plus'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import { useDialogSize } from '@/composables/useDialogSize'
 import { listShelves, createShelf, updateShelf, deactivateShelf, getShelfProcesses, setShelfProcesses } from '@/api/shelves'
 import { listProcesses } from '@/api/process'
@@ -141,22 +134,41 @@ import type { Shelf } from '@/types/shelf'
 import type { Process } from '@/types/process'
 import { PROCESS_CATEGORY_LABEL } from '@/types/process'
 
-// ============ 列可见性 ============
-// 「操作」列不放进 defs → 始终可见
-const columnDefs = [
-  { key: 'code', label: '代码' },
-  { key: 'name', label: '名称' },
-  { key: 'zone', label: '区域' },
-  { key: 'location', label: '位置' },
-  { key: 'display_order', label: '物理顺序' },
-  { key: 'account_count', label: '账号数' },
-  { key: 'is_active', label: '状态' },
-] as const
+// ============ 列可见性 + 列顺序拖动 ============
+// 「操作」列不放进 defs → 始终可见。
+// 2026-08-27 T15：补 prop / width / minWidth / align + 复杂单元格走 cellRender。
+const columnDefs: ColumnDef[] = [
+  { key: 'code', label: '代码', prop: 'code', minWidth: 110, align: 'center' },
+  { key: 'name', label: '名称', prop: 'name', minWidth: 140, align: 'center' },
+  {
+    key: 'zone', label: '区域', minWidth: 90, align: 'center',
+    cellRender: ({ row }) => h(ElTag,
+      { type: (row as Shelf).zone === 'PRODUCTION' ? 'primary' : 'warning', size: 'small' },
+      () => (row as Shelf).zone === 'PRODUCTION' ? '生产' : '品检'),
+  },
+  { key: 'location', label: '位置', prop: 'location', minWidth: 120, align: 'center' },
+  {
+    key: 'display_order', label: '物理顺序', prop: 'display_order', minWidth: 100, align: 'center', sortable: true,
+    cellRender: ({ row }) => h(ElTag,
+      { type: (row as Shelf).display_order > 0 ? 'info' : 'warning', size: 'small', effect: 'plain' },
+      () => (row as Shelf).display_order > 0 ? String((row as Shelf).display_order) : '未设置'),
+  },
+  { key: 'account_count', label: '账号数', prop: 'account_count', minWidth: 80, align: 'center' },
+  {
+    key: 'is_active', label: '状态', minWidth: 80, align: 'center',
+    cellRender: ({ row }) => h(ElTag,
+      { type: (row as Shelf).is_active ? 'success' : 'danger', size: 'small' },
+      () => (row as Shelf).is_active ? '启用' : '停用'),
+  },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'shelf_list' })
+const drag = useColumnDrag(columnDefs, { listKey: 'shelf_list' })
 
 const items = ref<Shelf[]>([])
 const loading = ref(false)
 const shelfDlg = useDialogSize({ desktopWidth: 400 })
+// 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
+const tableRef = ref()
 
 const showCreate = ref(false)
 const saving = ref(false)
@@ -216,6 +228,9 @@ async function doDeactivate(id: string) { await deactivateShelf(id); await fetch
 onMounted(async () => {
   await fetchData()
   try { const res = await listProcesses({ limit: 200 }); allProcesses.value = res.items } catch { /* ignore */ }
+  // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
+  // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
+  drag.applyDrag(tableRef)
 })
 </script>
 

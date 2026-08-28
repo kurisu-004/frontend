@@ -20,8 +20,8 @@
   申请见 docs/api-requirements/scan-inspect.md。
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, h, onMounted, ref } from 'vue'
+import { ElMessage, ElTag } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 
 import { useDialogSize } from '@/composables/useDialogSize'
@@ -30,6 +30,14 @@ import type { BulkScanFailure } from '@/composables/useBulkScanInspect'
 import { listShelves } from '@/api/shelves'
 import type { Shelf } from '@/types/shelf'
 import type { BlockedScanItem } from '@/types/deliveryNote'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
 interface Props {
   /** v-model 显隐 */
@@ -56,6 +64,46 @@ const emit = defineEmits<{
 
 const dlg = useDialogSize({ desktopWidth: 920 })
 const bulk = useBulkScanInspect()
+
+// 2026-08-27 Task 8：列顺序拖动 + 可见性。
+// 「送检数量」(el-input-number + 受控 v-model) 和「同时过检」(条件 ElCheckbox + v-if)
+// 不进 defs，保留为字面量列。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const tableRef = ref()
+const columnDefs: ColumnDef[] = [
+  { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center' },
+  {
+    key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 100, align: 'center',
+    cellRender: ({ row }) => h('span',
+      { class: { muted: !(row as BlockedScanItem).drawing_no } },
+      (row as BlockedScanItem).drawing_no || '—'),
+  },
+  { key: 'name', label: '名称', prop: 'name', minWidth: 110, showOverflowTooltip: true, align: 'center' },
+  {
+    key: 'status', label: '状态', width: 100, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as BlockedScanItem
+      // cellRender 必须返回单个 VNode；空状态回落 —。
+      if (!r.status) return h('span', { class: 'muted' }, '—')
+      return h(ElTag,
+        { type: r.status === 'INSPECTION' ? 'warning' : 'primary', effect: 'light', size: 'small' },
+        () => r.status as string)
+    },
+  },
+  {
+    key: 'reason', label: '原因', minWidth: 120, showOverflowTooltip: true,
+    cellRender: ({ row }) => {
+      const reason = (row as BlockedScanItem).reason ?? ''
+      return h('span', { title: reason },
+        reason.length > 24 ? `${reason.slice(0, 24)}…` : reason)
+    },
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'batch_submit_inspection_confirm' })
+const drag = useColumnDrag(columnDefs, { listKey: 'batch_submit_inspection_confirm' })
+
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+drag.applyDrag(tableRef)
 
 // ============ 品检架候选 ============
 // 扫码建单角色（CLERK / MANAGER / INSPECTOR）没有 SHELF_ACCOUNT 货架绑定，
@@ -283,7 +331,18 @@ async function onConfirm(): Promise<void> {
       </span>
     </div>
 
+    <!-- 2026-08-27 Task 8：列设置工具条 -->
+    <div class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap"
+        @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
+      />
+    </div>
     <el-table
+      ref="tableRef"
       :data="failures"
       stripe
       border
@@ -291,26 +350,28 @@ async function onConfirm(): Promise<void> {
       empty-text="无阻塞项"
       class="submit-table"
     >
-      <el-table-column prop="serial_no" label="序列号" min-width="100" align="center" />
-      <el-table-column prop="drawing_no" label="图号" min-width="100" align="center">
-        <template #default="{ row }">
-          <span :class="{ muted: !row.drawing_no }">{{ row.drawing_no || '—' }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="name" label="名称" min-width="110" show-overflow-tooltip />
-      <el-table-column label="状态" width="100" align="center">
-        <template #default="{ row }">
-          <el-tag
-            v-if="row.status"
-            :type="row.status === 'INSPECTION' ? 'warning' : 'primary'"
-            size="small"
-            effect="light"
-          >
-            {{ row.status }}
-          </el-tag>
-          <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :align="d.align"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
+      <!-- 「送检数量」列（受控 el-input-number + getQuantity/setQuantity；不进 defs） -->
       <el-table-column label="送检数量" width="130" align="center">
         <template #default="{ row }">
           <el-input-number
@@ -324,6 +385,7 @@ async function onConfirm(): Promise<void> {
           />
         </template>
       </el-table-column>
+      <!-- 「同时过检」列（条件 v-if + ElCheckbox；不进 defs） -->
       <el-table-column
         v-if="passableFailures.length > 0"
         label="同时过检"
@@ -337,17 +399,6 @@ async function onConfirm(): Promise<void> {
             @change="() => row.part_id && toggleAlsoPass(row.part_id)"
           />
           <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column
-        label="原因"
-        min-width="120"
-        show-overflow-tooltip
-      >
-        <template #default="{ row }">
-          <span :title="row.reason">
-            {{ row.reason.length > 24 ? `${row.reason.slice(0, 24)}…` : row.reason }}
-          </span>
         </template>
       </el-table-column>
     </el-table>
@@ -383,6 +434,13 @@ async function onConfirm(): Promise<void> {
 <style scoped>
 .submit-alert {
   margin-bottom: 12px;
+}
+
+/* 2026-08-27 Task 8：列设置工具条 */
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 .shelf-picker {
   display: flex;

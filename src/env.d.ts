@@ -8,12 +8,11 @@ declare module '*.vue' {
 
 interface ImportMetaEnv {
   readonly VITE_API_BASE: string
+  // 2026-08-28 新增：dev-only dummy-auth 开关。由 `npm run dev:dummy`
+  // （=`vite --mode dummy`）加载的 .env.dummy 注入；prod build 时 vite.config.ts
+  // 会主动 throw 禁止进 bundle。客户端代码读 `'true'` 字符串判断。
+  readonly VITE_DUMMY_AUTH?: string
 }
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
-
-// 2026-08-26 新增：vite.config.ts define 注入的 build 期常量。
-// true 仅在 dev 模式 + --dummy-auth 同时满足时；prod build 永远是 false。
-// 客户端代码用 `if (__DUMMY_AUTH__)` 即可，TypeScript 也能识别。
-declare const __DUMMY_AUTH__: boolean

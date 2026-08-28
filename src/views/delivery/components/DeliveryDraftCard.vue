@@ -33,10 +33,18 @@
     set-table-ref       — el-table 实例注册 / 反注册
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { h, ref } from 'vue'
 import { Delete, Printer } from '@element-plus/icons-vue'
 import type { MergedDraftRow } from '../composables/useDeliveryDraftBoard'
 import type { ScanNoteSummary } from '@/types/deliveryNote'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 
 defineProps<{
   draft: ScanNoteSummary
@@ -70,6 +78,30 @@ function handleTableRef(el: any): void {
   tableEl.value = el
   emit('set-table-ref', el)
 }
+
+// 2026-08-27 Task 8：列顺序拖动 + 可见性。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100,
+    // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+    cellRender: ({ row }) => h('span',
+      { class: { muted: !(row as MergedDraftRow).serial_no } },
+      (row as MergedDraftRow).serial_no || '—'),
+  },
+  { key: 'name', label: '名称', prop: 'name', minWidth: 110, showOverflowTooltip: true },
+  { key: 'quantity', label: '数量', prop: 'quantity', width: 60, align: 'right' },
+  {
+    key: 'system_delivery_date', label: '系统交期', width: 90, align: 'center',
+    cellRender: ({ row }) => h('span', null,
+      (row as MergedDraftRow).system_delivery_date || '—'),
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_draft_card' })
+const drag = useColumnDrag(columnDefs, { listKey: 'delivery_draft_card' })
+
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+drag.applyDrag(tableEl)
 </script>
 
 <template>
@@ -84,6 +116,16 @@ function handleTableRef(el: any): void {
     </template>
     <div class="draft-card-body">
       <div class="draft-customer">{{ draft.customer_path || '—' }}</div>
+      <!-- 2026-08-27 Task 8：列设置工具条 -->
+      <div class="table-toolbar">
+        <ColumnVisibilityPopover
+          :defs="columnDefs"
+          :model-value="columnVisibility.currentMap"
+          @update:model-value="columnVisibility.update"
+          @reset="columnVisibility.showAll"
+          @reset-order="drag.reset"
+        />
+      </div>
       <el-table
         :ref="handleTableRef"
         :data="rows"
@@ -94,29 +136,30 @@ function handleTableRef(el: any): void {
         empty-text="暂无加入批次 — 扫码加入"
         @selection-change="(rs: MergedDraftRow[]) => emit('selection-change', rs)"
       >
+        <!-- selection 勾选列不进 defs（fixed 列不可拖） -->
         <el-table-column type="selection" width="44" fixed />
-        <el-table-column label="序列号" min-width="100">
-          <template #default="{ row }">
-            <span :class="{ muted: !row.serial_no }">{{ row.serial_no || '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="name"
-          label="名称"
-          min-width="110"
-          show-overflow-tooltip
-        />
-        <el-table-column
-          prop="quantity"
-          label="数量"
-          width="60"
-          align="right"
-        />
-        <el-table-column label="系统交期" width="90" align="center">
-          <template #default="{ row }">
-            {{ row.system_delivery_date || '—' }}
-          </template>
-        </el-table-column>
+        <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+          <el-table-column
+            v-if="columnVisibility.isVisible(d.key)"
+            :prop="d.prop ?? d.key"
+            :label="d.label"
+            :width="d.width"
+            :min-width="d.minWidth"
+            :align="d.align"
+            :show-overflow-tooltip="d.showOverflowTooltip"
+            :column-key="d.columnKey ?? d.key"
+            :label-class-name="drag.dragLabelClass(d)"
+          >
+            <template v-if="d.cellRender" #default="scope">
+              <component :is="d.cellRender(scope)" />
+            </template>
+            <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+              <span>{{ d.label }}</span>
+              <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+            </template>
+          </el-table-column>
+        </template>
+        <!-- 操作列（每行一个移除按钮）不进 defs -->
         <el-table-column label="" width="56" align="center">
           <template #default="{ row }">
             <el-button
@@ -216,6 +259,13 @@ function handleTableRef(el: any): void {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* 2026-08-27 Task 8：列设置工具条 */
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
 }
 
 /* footer：4 按钮等宽 */

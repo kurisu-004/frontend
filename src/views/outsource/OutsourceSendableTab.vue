@@ -118,12 +118,14 @@
         :model-value="columnVisibility.currentMap"
         @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
       />
     </div>
     <!-- 2026-08-25 (T7)：可发送 tab：el-table + el-pagination 收口到 <PagedTable> -->
     <PagedTable ref="sendablePagedRef" :fetcher="sendableFetcher" :default-page-size="20">
       <template #default="{ items, loading }">
         <el-table
+          ref="tableRef"
           :data="items"
           v-loading="loading"
           row-key="part_id"
@@ -133,92 +135,33 @@
           border
           size="small"
         >
-          <el-table-column
-            v-if="columnVisibility.isVisible('part_serial_no')"
-            prop="part_serial_no" label="序列号" min-width="100" align="center"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('part_drawing_no')"
-            prop="part_drawing_no" label="图号" min-width="120" align="center"
-          >
-            <template #default="{ row }">
-              <!-- 2026-07-29 PR-fix-0.2.0 批次化：行=批次，图号旁显示批次号提示 -->
-              <span>{{ (row as SendableItem).part_drawing_no }}</span>
-              <el-tag
-                v-if="(row as SendableItem).batch_no"
-                size="small"
-                type="info"
-                effect="plain"
-                style="margin-left: 4px"
-              >
-                批次 {{ (row as SendableItem).batch_no }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column
-            v-if="columnVisibility.isVisible('part_name')"
-            prop="part_name" label="名称" min-width="180" show-overflow-tooltip align="center"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('quantity')"
-            prop="quantity" label="数量" min-width="80" align="right"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('planned_delivery_date')"
-            prop="planned_delivery_date" label="计划交期" min-width="120" align="center"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('shelf_code')"
-            label="源货架" min-width="80" align="center"
-          >
-            <template #default="{ row }">
-              <el-tag v-if="(row as SendableItem).shelf_code" type="info" size="small">
-                {{ (row as SendableItem).shelf_code }}
-              </el-tag>
-              <span v-else>—</span>
-            </template>
-          </el-table-column>
-          <el-table-column
-            v-if="columnVisibility.isVisible('send_mode')"
-            label="模式" min-width="90" align="center"
-          >
-            <template #default="{ row }">
-              <el-tag v-if="(row as SendableItem).send_mode === 'DIRECT'" type="success" size="small">免审批</el-tag>
-              <el-tag v-else type="warning" size="small">已批报价</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column
-            v-if="columnVisibility.isVisible('customer_path')"
-            prop="customer_path" label="客户" min-width="160" show-overflow-tooltip align="center"
-          />
-          <el-table-column
-            v-if="columnVisibility.isVisible('next_process_name')"
-            label="下一道工序" min-width="140" show-overflow-tooltip align="center"
-          >
-            <template #default="{ row }">{{ (row as SendableItem).next_process_name || '—' }}</template>
-          </el-table-column>
-          <el-table-column
-            v-if="columnVisibility.isVisible('outsource_company_name')"
-            label="外协公司" min-width="160" show-overflow-tooltip align="center"
-          >
-            <template #default="{ row }">
-              <template v-if="(row as SendableItem).send_mode === 'DIRECT'">
-                {{ (row as DirectOutsourceCandidateItem).company_options.map((c) => c.name).join(' / ') || '—' }}
+          <!--
+            2026-08-27 T16：列顺序拖动接入。本组件挂在 <el-tab-pane> 内，EP 默认 lazy=false，
+            双 tab 都在 DOM（隐藏用 display:none），el-table thead 一开始就有 → 走 HTMLElement 路径。
+            fixed="right" 操作列保留为字面量 <el-table-column>。
+          -->
+          <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+            <el-table-column
+              v-if="columnVisibility.isVisible(d.key)"
+              :prop="d.prop ?? d.key"
+              :label="d.label"
+              :width="d.width"
+              :min-width="d.minWidth"
+              :sortable="d.sortable"
+              :align="d.align"
+              :show-overflow-tooltip="d.showOverflowTooltip"
+              :column-key="d.columnKey ?? d.key"
+              :label-class-name="drag.dragLabelClass(d)"
+            >
+              <template v-if="d.cellRender" #default="scope">
+                <component :is="d.cellRender(scope)" />
               </template>
-              <template v-else>
-                {{ (row as ApprovedQuoteForSendItem).outsource_company_name || '—' }}
+              <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+                <span>{{ d.label }}</span>
+                <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
               </template>
-            </template>
-          </el-table-column>
-          <el-table-column
-            v-if="columnVisibility.isVisible('price')"
-            label="单价(元)" min-width="100" align="right"
-          >
-            <template #default="{ row }">
-              <template v-if="(row as SendableItem).send_mode === 'DIRECT'">—</template>
-              <template v-else>{{ (row as ApprovedQuoteForSendItem).price }}</template>
-            </template>
-          </el-table-column>
+            </el-table-column>
+          </template>
           <el-table-column label="操作" min-width="100" fixed="right" align="center">
             <template #default="{ row }">
               <el-tooltip
@@ -256,12 +199,19 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Promotion } from '@element-plus/icons-vue'
+import { ElTag } from 'element-plus'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 import PagedTable from '@/components/PagedTable.vue'
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import { useColumnVisibility } from '@/composables/useColumnVisibility'
+import {
+  useColumnVisibility,
+  resolveDraggable,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
 import type { Customer } from '@/api/customer'
 import OutsourceSendDialog from './components/OutsourceSendDialog.vue'
 import {
@@ -318,24 +268,84 @@ const {
   onSent: () => emit('sent'),
 })
 
-// 列可见性
-const columnDefs = [
-  { key: 'part_serial_no', label: '序列号' },
-  { key: 'part_drawing_no', label: '图号' },
-  { key: 'part_name', label: '名称' },
-  { key: 'quantity', label: '数量' },
-  { key: 'planned_delivery_date', label: '计划交期' },
-  { key: 'shelf_code', label: '源货架' },
-  { key: 'send_mode', label: '模式' },
-  { key: 'customer_path', label: '客户' },
-  { key: 'next_process_name', label: '下一道工序' },
-  { key: 'outsource_company_name', label: '外协公司' },
-  { key: 'price', label: '单价' },
-] as const
+// ============ 列可见性 + 列顺序拖动 ============
+// 2026-08-27 T16：补 prop / minWidth / align + ElTag / 多根 / 分支类型列走 cellRender(PartListShell 同款)。
+// 「图号」列原本是 <span + el-tag> 双根 → 必须用 <div> 包一层再 h()（cellRender 只接受单 VNode）。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const columnDefs: ColumnDef[] = [
+  { key: 'part_serial_no', label: '序列号', prop: 'part_serial_no', minWidth: 100, align: 'center' },
+  {
+    key: 'part_drawing_no', label: '图号', prop: 'part_drawing_no', minWidth: 120, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as SendableItem
+      // 2026-07-29 PR-fix-0.2.0 批次化：行=批次，图号旁显示批次号提示
+      return h('div', { style: 'display: inline-flex; align-items: center;' }, [
+        h('span', undefined, r.part_drawing_no ?? ''),
+        r.batch_no
+          ? h(ElTag, { size: 'small', type: 'info', effect: 'plain', style: 'margin-left: 4px' },
+              () => `批次 ${r.batch_no}`)
+          : null,
+      ])
+    },
+  },
+  { key: 'part_name', label: '名称', prop: 'part_name', minWidth: 180, showOverflowTooltip: true, align: 'center' },
+  { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 80, align: 'right' },
+  { key: 'planned_delivery_date', label: '计划交期', prop: 'planned_delivery_date', minWidth: 120, align: 'center' },
+  {
+    key: 'shelf_code', label: '源货架', minWidth: 80, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as SendableItem
+      return r.shelf_code
+        ? h(ElTag, { type: 'info', size: 'small' }, () => r.shelf_code)
+        : h('span', null, '—')
+    },
+  },
+  {
+    key: 'send_mode', label: '模式', minWidth: 90, align: 'center',
+    cellRender: ({ row }) => h(ElTag,
+      { type: (row as SendableItem).send_mode === 'DIRECT' ? 'success' : 'warning', size: 'small' },
+      () => (row as SendableItem).send_mode === 'DIRECT' ? '免审批' : '已批报价'),
+  },
+  { key: 'customer_path', label: '客户', prop: 'customer_path', minWidth: 160, showOverflowTooltip: true, align: 'center' },
+  {
+    key: 'next_process_name', label: '下一道工序', minWidth: 140, showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as SendableItem).next_process_name || '—'),
+  },
+  {
+    key: 'outsource_company_name', label: '外协公司', minWidth: 160, showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as SendableItem
+      if (r.send_mode === 'DIRECT') {
+        // 2026-08-27 T16：SendableItem 是 discriminated union，DirectOutsourceCandidateItem / ApprovedQuoteForSendItem
+        // 之间无字段重叠 → 走 unknown 二次 cast 满足 TS2352。
+        const direct = r as unknown as DirectOutsourceCandidateItem
+        const directLabel = direct.company_options.map((c) => c.name).join(' / ') || '—'
+        return h('span', null, directLabel)
+      }
+      const approved = r as unknown as ApprovedQuoteForSendItem
+      return h('span', null, approved.outsource_company_name || '—')
+    },
+  },
+  {
+    key: 'price', label: '单价(元)', minWidth: 100, align: 'right',
+    cellRender: ({ row }) => {
+      const r = row as SendableItem
+      if (r.send_mode === 'DIRECT') return h('span', null, '—')
+      const approved = r as unknown as ApprovedQuoteForSendItem
+      return h('span', null, String(approved.price))
+    },
+  },
+]
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_send_receive_sendable' })
+const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_sendable' })
+// 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
+const tableRef = ref()
 
 // 持久化恢复 + pageSize 双向同步（与原 shell onMounted 等价）
 onMounted(() => {
+  // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
+  drag.applyDrag(tableRef)
+
   const persisted = restore()
   if (persisted) {
     if (persisted.sendableFilter) Object.assign(sendableFilter, persisted.sendableFilter as Partial<typeof sendableFilter>)

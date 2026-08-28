@@ -16,7 +16,10 @@ import type { usePartInlineEdit } from './usePartInlineEdit'
 import type { usePartBatchSelection } from './usePartBatchSelection'
 import type { useBatchPrint } from './useBatchPrint'
 import type { usePartDispatch } from './usePartDispatch'
-import type { useColumnVisibility } from '@/composables/useColumnVisibility'
+import type {
+  ColumnDef,
+  useColumnVisibility,
+} from '@/composables/useColumnVisibility'
 
 /** 视图对外暴露的所有 composable 集合 + 视图级权限/配置。 */
 export interface PartsListCtx {
@@ -31,7 +34,9 @@ export interface PartsListCtx {
   /** CNC 编程员视图（默认 statuses=['PROGRAMMING']） */
   isCncProgrammer: boolean
   columnVisibility: ReturnType<typeof useColumnVisibility>
-  columnDefs: readonly { readonly key: string; readonly label: string }[]
+  /** 2026-08-27 Task 6：列定义升级到 ColumnDef（含 prop / minWidth / sortable /
+   *  cellRender / headerRender 等）。PartsTable 用 v-for 渲染并接 useColumnDrag。 */
+  columnDefs: readonly ColumnDef[]
 }
 
 /** el-table 子组件 ref 透出类型（封装 clearSelection / toggleRowSelection / sort）。

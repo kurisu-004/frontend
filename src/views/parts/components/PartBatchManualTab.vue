@@ -11,6 +11,14 @@
   在父组件 usePartBatchManual() 里；本组件 props 全部由父组件 `v-bind` 摊开传入。
 
   2026-08-25 mobile 适配清理：删除 ResponsiveList 包装，改为纯 el-table（手机卡片视图随 T1 一并撤掉）。
+
+  2026-08-28 改造（B 组 batch 1 列拖动接入）：
+  - el-table 在 `<el-card>` 内持续挂载（v-else 控制 table vs empty-zone）→
+    传 el-table 实例 ref 给 drag.applyDrag(tableRef)，composable 内部解析表头 +
+    MutationObserver 自愈（覆盖 staged=0 → 加第一行 → 表头首次渲染的过渡）。
+  - 「#」index 列 + 「操作」fixed 列保留为字面量 <el-table-column>。
+  - 列定义 cellRender 全部用 h()（el-button @click.stop 用 stopPropagation 模拟）。
+  - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
 -->
 
 <template>
@@ -43,9 +51,21 @@
       <p class="empty-sub">点击此处或右上角「+ 添加零件」开始添加</p>
     </div>
 
+    <!-- 2026-08-27 T21：列设置按钮（仅列表态展示；空态无表可设） -->
+    <div v-else class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="columnDefs"
+        :model-value="columnVisibility.currentMap"
+        @update:model-value="columnVisibility.update"
+        @reset="columnVisibility.showAll"
+        @reset-order="drag.reset"
+      />
+    </div>
+
     <!-- 列表态 -->
     <el-table
-      v-else
+      v-if="staged.length > 0"
+      ref="tableRef"
       :data="staged"
       row-key="uid"
       border
@@ -58,33 +78,34 @@
         <el-empty description="暂无待新增零件" />
       </template>
       <el-table-column type="index" label="#" width="50" />
-      <el-table-column label="图号" min-width="130" align="center">
-        <template #default="{ row }">
-          <el-button
-            v-if="(row as StagedEntry).drawingUrl"
-            link type="primary" size="small"
-            @click.stop="openDrawingPreview(row as StagedEntry)"
-          >
-            {{ row.drawingNo }}
-          </el-button>
-          <span v-else class="mono">{{ row.drawingNo }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip align="center"/>
-      <el-table-column prop="quantity" label="数量" min-width="70" align="right" />
-      <el-table-column label="申请人" min-width="120" show-overflow-tooltip align="center">
-        <template #default="{ row }">{{ row.applicantName || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="客户" min-width="160" show-overflow-tooltip align="center">
-        <template #default="{ row }">{{ row.customerLabel || '—' }}</template>
-      </el-table-column>
-      <el-table-column prop="plannedDeliveryDate" label="计划交期" min-width="120" align="center"/>
-      <el-table-column label="加急" min-width="70" align="center">
-        <template #default="{ row }">
-          <el-tag v-if="row.isUrgent" type="danger" size="small" effect="dark">加急</el-tag>
-          <span v-else class="muted">—</span>
-        </template>
-      </el-table-column>
+      <!--
+        2026-08-27 T21：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
+        用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
+        fixed="right" 操作列保留为字面量 <el-table-column>。
+      -->
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :sortable="d.sortable"
+          :align="d.align"
+          :header-align="d.headerAlign"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :label-class-name="drag.dragLabelClass(d)"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
       <el-table-column label="操作" min-width="120" align="center" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click.stop="onRowPreview(row as StagedEntry)">查看</el-button>
@@ -329,10 +350,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import type { FormInstance, FormRules, UploadFile } from 'element-plus'
+import { h, onMounted, ref } from 'vue'
+import { ElButton, ElTag, type FormInstance, type FormRules, type UploadFile } from 'element-plus'
 import { DocumentAdd, Picture, Plus, Upload } from '@element-plus/icons-vue'
 import PdfViewer from '@/components/PdfViewer.vue'
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import {
+  resolveDraggable,
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/composables/useColumnVisibility'
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
 import type { FormState, StagedEntry } from '../composables/usePartBatchManual'
 
 // 父组件 `v-bind="manual"` 摊开传入本组件需要的所有 props。
@@ -341,6 +370,56 @@ import type { FormState, StagedEntry } from '../composables/usePartBatchManual'
 // 校验永远不触发。formRefLocal 拥有 el-form 实例后，handleAddConfirm /
 // handleDialogClosed 把它作为参数传给 composable 的 onAddConfirm / onDialogClosed。
 const formRefLocal = ref<FormInstance>()
+
+// 2026-08-27 T21：列顺序拖动 + 可见性。
+// 「#」index 列 + 「操作」fixed 列不放进 defs（始终可见、不可拖）。
+// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+const columnDefs: ColumnDef[] = [
+  {
+    key: 'drawingNo', label: '图号', prop: 'drawingNo', minWidth: 130, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as StagedEntry
+      if (r.drawingUrl) {
+        return h(ElButton,
+          { link: true, type: 'primary', size: 'small',
+            onClick: (e: MouseEvent) => { e.stopPropagation(); props.openDrawingPreview(r) } },
+          () => r.drawingNo)
+      }
+      return h('span', { class: 'mono' }, r.drawingNo ?? '')
+    },
+  },
+  { key: 'name', label: '名称', prop: 'name', minWidth: 180, showOverflowTooltip: true, align: 'center' },
+  { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 70, align: 'right' },
+  {
+    key: 'applicantName', label: '申请人', minWidth: 120, showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as StagedEntry).applicantName || '—'),
+  },
+  {
+    key: 'customerLabel', label: '客户', minWidth: 160, showOverflowTooltip: true, align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as StagedEntry).customerLabel || '—'),
+  },
+  { key: 'plannedDeliveryDate', label: '计划交期', prop: 'plannedDeliveryDate', minWidth: 120, align: 'center' },
+  {
+    key: 'isUrgent', label: '加急', minWidth: 70, align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as StagedEntry
+      if (r.isUrgent) {
+        return h(ElTag, { type: 'danger', size: 'small', effect: 'dark' }, () => '加急')
+      }
+      return h('span', { class: 'muted' }, '—')
+    },
+  },
+]
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_manual' })
+const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_manual' })
+
+// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
+// 自愈。组件挂载时 staged=0 → tableRef.value=null → composable 不绑；staged 变化触发
+// ref 更新 → composable 内部 watch 重新归一化 + 挂 observer → 表头首次渲染时自愈。
+const tableRef = ref()
+onMounted(() => {
+  drag.applyDrag(tableRef)
+})
 
 const props = defineProps<{
   previewDescCol: number
@@ -449,6 +528,13 @@ function handleDialogClosed(): void {
     background: #f0f7ff;
     border-color: var(--primary-color);
   }
+}
+
+// 2026-08-27 T21：列设置工具条（与 PartListShell 同款）
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 .empty-primary {
   margin: 12px 0 4px;
