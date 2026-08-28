@@ -120,17 +120,20 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     }
   }
 
-  /** 成功：把 out.note 写入 drafts Map（按 id 替换为后端最新）；fire-and-forget 刷新 detail。 */
+  /** 成功：把 out.note 写入 drafts Map（按 id 替换为后端最新）；fire-and-forget 刷新 detail。
+   * 2026-08-28 路线 B 类型重构：`note` / `resolved` 在 ScanDeliveryOut 上变为可选；
+   * 当前仅 ADDED / ALREADY_PRESENT 路径会进入 applySuccess，所以用 `!` 断言即可，
+   * Task 5 将重写本函数处理 CANDIDATES_AVAILABLE / PARTIAL_ADDED。 */
   async function applySuccess(out: ScanDeliveryOut): Promise<void> {
-    opts.writeDraftFromScan(out.note)
+    opts.writeDraftFromScan(out.note!)
     // 详情同步：失败仅 toast warning，不阻塞主流程的 success 提示。
-    void opts.refreshDraftDetail(out.note.id).catch(() => {
+    void opts.refreshDraftDetail(out.note!.id).catch(() => {
       /* 已在 refreshDraftDetail 内 toast；这里仅防止 unhandled promise */
     })
     if (out.outcome === 'ADDED') {
-      ElMessage.success(`已加入 ${out.resolved.serial_no} → ${out.note.delivery_note_no}`)
+      ElMessage.success(`已加入 ${out.resolved!.serial_no} → ${out.note!.delivery_note_no}`)
     } else {
-      ElMessage.warning(`${out.resolved.serial_no} 已在 ${out.note.delivery_note_no} 上`)
+      ElMessage.warning(`${out.resolved!.serial_no} 已在 ${out.note!.delivery_note_no} 上`)
     }
   }
 

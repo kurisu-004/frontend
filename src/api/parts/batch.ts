@@ -258,6 +258,10 @@ export interface BatchPassInspectionOutFE {
 }
 
 /**
+ * @deprecated 2026-08-28 后端路线 B 重命名。改用 `batchToShip`（INSPECTION → READY_TO_SHIP）。
+ * 本函数保留走 v2 `/parts/batch-pass-inspection`，供未迁移调用点过渡。
+ */
+/**
  * 批量通过品检（v2 端点）。
  *
  * 后端 `POST /api/v2/parts/batch-pass-inspection`：1 次 round-trip 处理 N<=200 件；
@@ -336,6 +340,10 @@ export interface BatchScanInspectOutFE {
 }
 
 /**
+ * @deprecated 2026-08-28 后端路线 B 重命名。改用 `batchToInspection`（PENDING/PROGRAMMING/IN_PROCESS → INSPECTION）。
+ * 本函数保留走 v2 `/parts/batch-scan-inspect`，供未迁移调用点过渡。
+ */
+/**
  * 批量一键送检（v2 端点）。
  *
  * 后端 `POST /api/v2/parts/batch-scan-inspect`：1 次 round-trip 处理 N<=200 件；
@@ -352,6 +360,81 @@ export async function batchScanInspect(
   const resp = await apiV2.post<BatchScanInspectOutFE>(
     '/parts/batch-scan-inspect',
     req,
+  )
+  return resp.data
+}
+
+// ============ inspection to-XXX 体系批量（2026-08-28 后端路线 B 重构）==============
+
+/** v2 `POST /parts/batch-to-inspection` 入参项。
+ *
+ * 字段名 / 可选性与后端 `BatchToInspectionItem` 对齐；`batch_id` 必填，雪花 ID 字符串。
+ * `part_id` **不再需要** —— 后端 service 按 `batch_id` 反查 `t_part_batch.part_id`。 */
+export interface BatchToInspectionItem {
+  /** 必填；雪花 ID 字符串（CLAUDE.md §3）。 */
+  batch_id: string
+  /** 可选；部分数量。缺省 = 批次全量；小于批次量时后端会拆分 remainder。 */
+  quantity?: number | null
+}
+
+export interface BatchToInspectionRequest {
+  /** 共享品检架 id（雪花 ID 字符串；必填，zone=INSPECTION active）。 */
+  target_inspection_shelf_id: string
+  /** 1..=200 项；超出后端返回 40001 VALIDATION_ERROR。 */
+  items: BatchToInspectionItem[]
+}
+
+export interface BatchToInspectionFailureFE {
+  /** 雪花 ID 字符串；与请求 items[].batch_id 一一对应。 */
+  batch_id: string
+  /** 业务错误码（20103 INVALID_TRANSITION / 20109 / 20111 / 20511 / 20512 等）。 */
+  code: number
+  /** 后端 message 原样透传。 */
+  message: string
+}
+
+export interface BatchToInspectionOutFE {
+  submitted: Array<{ part: PartItem; new_batch_id: string | null }>
+  failed: BatchToInspectionFailureFE[]
+}
+
+export async function batchToInspection(
+  payload: BatchToInspectionRequest,
+): Promise<BatchToInspectionOutFE> {
+  const resp = await apiV2.post<BatchToInspectionOutFE>(
+    '/parts/batch-to-inspection',
+    payload,
+  )
+  return resp.data
+}
+
+/** v2 `POST /parts/batch-to-ship` 入参项（与 BatchToInspectionItem 同形）。 */
+export interface BatchToShipItem {
+  batch_id: string
+  quantity?: number | null
+}
+
+export interface BatchToShipRequest {
+  items: BatchToShipItem[]
+}
+
+export interface BatchToShipFailureFE {
+  batch_id: string
+  code: number
+  message: string
+}
+
+export interface BatchToShipOutFE {
+  submitted: Array<{ part: PartItem; new_batch_id: string | null }>
+  failed: BatchToShipFailureFE[]
+}
+
+export async function batchToShip(
+  payload: BatchToShipRequest,
+): Promise<BatchToShipOutFE> {
+  const resp = await apiV2.post<BatchToShipOutFE>(
+    '/parts/batch-to-ship',
+    payload,
   )
   return resp.data
 }

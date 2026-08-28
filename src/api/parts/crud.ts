@@ -407,7 +407,13 @@ export async function updatePart(
   return resp.data
 }
 
-/** INSPECTION → READY_TO_SHIP：品检合格（2026-07-29：可选批次/部分数量）。 */
+/**
+ * INSPECTION → READY_TO_SHIP：品检合格（2026-07-29：可选批次/部分数量）。
+ *
+ * @deprecated 2026-08-28 后端 inspection 端点重命名为 to-XXX 体系。
+ * 改用 `toShip`（INSPECTION → READY_TO_SHIP）/ `toProcess`（打回）/ `toInspection`（送检）。
+ * 本函数保留走 v1 `/parts/{id}/pass-inspection`，供未迁移调用点过渡。
+ */
 export async function passInspection(
   id: string,
   payload?: BatchActionPayload,
@@ -423,6 +429,10 @@ export async function passInspection(
  * 2026-07-21 改：品检打回（INSPECTION → IN_PROCESS）—— 三参 payload：
  * shelf_id + next_process_id（保留为下一道工序，不再清空）+ note（品检备注）。
  * 后端会校验 `t_shelf_process` 映射（缺映射返回 422）。
+ *
+ * @deprecated 2026-08-28 后端 inspection 端点重命名为 to-XXX 体系。
+ * 改用 `toProcess`（INSPECTION → IN_PROCESS，指定 shelf + next_process）。
+ * 本函数保留走 v1 `/parts/{id}/fail-inspection`，供未迁移调用点过渡。
  */
 export interface FailInspectionPayload {
   shelf_id: string
@@ -452,6 +462,10 @@ export async function failInspection(
  * 适用范围：PENDING / PROGRAMMING / IN_PROCESS + location=PRODUCTION_SHELF。
  * 不适用（400 BIZ_INVALID_TRANSITION）：IN_PROCESS+WORKER / READY_TO_SHIP /
  * DELIVERED / REPAIRING / OUTSOURCE / INSPECTION —— 这些状态请走原 pass/fail。
+ *
+ * @deprecated 2026-08-28 后端路线 B inspection 不再支持 decision 字段（PASS/FAIL）。
+ * 改用 `toInspection`（仅送检，搬到品检架）+ 后续 `toShip`（通过）或 `toProcess`（打回）。
+ * 本函数保留走 v2 `/parts/{id}/scan-inspect`，供未迁移调用点过渡。
  */
 export interface ScanInspectPayload {
   /** 目标品检货架 id（雪花 ID 字符串；必填，zone=INSPECTION） */
@@ -479,6 +493,78 @@ export async function scanInspect(
 ): Promise<PartItem> {
   const resp = await apiV2.post<PartItem>(
     `/parts/${id}/scan-inspect`,
+    payload,
+  )
+  return resp.data
+}
+
+// ============ inspection to-XXX 体系（2026-08-28 后端路线 B 重构）==============
+
+/** 单件送检（PENDING/PROGRAMMING/IN_PROCESS+PRODUCTION_SHELF → INSPECTION）。
+ * 自动拆批：quantity < batch.quantity 时响应 new_batch_id 为拆出的 remainder。
+ * 后端详见 ~/Code/hsh-erp-rust/docs/api/parts/inspection.md。 */
+export interface ToInspectionPayload {
+  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
+  target_inspection_shelf_id: string
+  /** 可选；≤ 500 字符品检备注（v2 新增）。 */
+  note?: string | null
+  /** 可选；多批次歧义时必填。 */
+  batch_id?: string | null
+  /** 可选；缺省 = 批次全量；部分数量 < 整批会拆出新批次作 remainder。 */
+  quantity?: number | null
+}
+
+export async function toInspection(
+  id: string,
+  payload: ToInspectionPayload,
+): Promise<{ part: PartItem; new_batch_id: string | null }> {
+  const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
+    `/parts/${id}/to-inspection`,
+    payload,
+  )
+  return resp.data
+}
+
+/** 单件通过品检（INSPECTION → READY_TO_SHIP，可选自动拆批）。
+ * body 可省略（Content-Length: 0 等价于空对象）。 */
+export interface ToShipPayload {
+  batch_id?: string | null
+  quantity?: number | null
+  note?: string | null
+}
+
+export async function toShip(
+  id: string,
+  payload?: ToShipPayload,
+): Promise<{ part: PartItem; new_batch_id: string | null }> {
+  const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
+    `/parts/${id}/to-ship`,
+    payload ?? {},
+  )
+  return resp.data
+}
+
+/** 单件品检打回（INSPECTION → IN_PROCESS，指定 shelf + next_process）。
+ * 事件类型 INSPECTION_FAILED。 */
+export interface ToProcessPayload {
+  /** 必填；目标生产货架 id（PRODUCTION zone active）。 */
+  shelf_id: string
+  /** 必填；下一道工序 id（保留为该 part 的下道工序，工人可直接领取）。 */
+  next_process_id: string
+  /** 可选；品检备注。 */
+  note?: string | null
+  /** 可选；多批次歧义时必填。 */
+  batch_id?: string | null
+  /** 可选；缺省 = 批次全量。 */
+  quantity?: number | null
+}
+
+export async function toProcess(
+  id: string,
+  payload: ToProcessPayload,
+): Promise<{ part: PartItem; new_batch_id: string | null }> {
+  const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
+    `/parts/${id}/to-process`,
     payload,
   )
   return resp.data

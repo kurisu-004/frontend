@@ -191,22 +191,26 @@ export const NOTE_SCOPE_LABEL: Record<NoteScope, string> = {
   LEAF: '按零件',
 }
 
-/** 设计文档 §5.7：扫码终端 outcome。ADDED=新入，ALREADY_PRESENT=幂等。 */
-export type ScanOutcome = 'ADDED' | 'ALREADY_PRESENT'
+/** 扫码建单 outcome（2026-08-28 后端路线 B 扩展到 4 种）。
+ * - ADDED：草稿已建/复用 + 批次全部挂载
+ * - ALREADY_PRESENT：草稿已存在 + 全部批次已在本单（幂等）
+ * - CANDIDATES_AVAILABLE：散件仅 B 组（未送检），unresolved_targets 含候选批次
+ * - PARTIAL_ADDED：装配件混合（A 组挂载 + B 组子件未送检） */
+export type ScanOutcome =
+  | 'ADDED'
+  | 'ALREADY_PRESENT'
+  | 'CANDIDATES_AVAILABLE'
+  | 'PARTIAL_ADDED'
 
-/** 设计文档 §5.7.resolved：扫码命中后回传的识别结果。 */
+/** 扫码命中的实体（2026-08-28 路线 B 重构）。
+ * `kind` 替代旧的 part_id / assembly_id 二选一，统一结构。 */
 export interface ScanResolved {
-  /** 工单 id */
-  part_id: string
-  /** 批次 id（v2 批次化；入单键） */
-  batch_id: string
+  kind: 'PART' | 'ASSEMBLY'
+  /** 雪花 ID 字符串（硬约束 #3）；part.id 或 assembly.id。 */
+  id: string
   serial_no: string
   drawing_no: string
   name: string
-  /** 本次扫码最终落到的 note scope；多数情况 L1_WIDE 或 GROUP */
-  scope: NoteScope
-  /** resolved.scope = GROUP 时填：装配件父行 id */
-  assembly_id: string | null
 }
 
 /** 设计文档 §5.7.added_batches：本回合新入单 / 已存在的批次。 */
@@ -217,6 +221,27 @@ export interface ScanAddedBatch {
   drawing_no: string
   name: string
   quantity: number
+}
+
+/** 路线 B B 组候选批次（route B B-group candidate）。
+ * 简化形态：仅含 batch_id / quantity / status，part 级信息在外层 ScanUnresolvedTarget。 */
+export interface ScanAvailableBatch {
+  /** 雪花 ID 字符串。 */
+  batch_id: string
+  /** 该批次当前数量。 */
+  quantity: number
+  /** 批次状态（如 PENDING / PROGRAMMING / IN_PROCESS / REPAIRING）。 */
+  status: string
+}
+
+/** 路线 B 未就绪工单（route B unresolved target）。
+ * 一个 part 可能挂在多个未送检批次（available_batches）。 */
+export interface ScanUnresolvedTarget {
+  part_id: string
+  serial_no: string
+  drawing_no: string
+  name: string
+  available_batches: ScanAvailableBatch[]
 }
 
 /** 草稿卡片要展示的最近加入批次条目（后端 limit=8，按 id DESC）。 */
@@ -259,11 +284,12 @@ export interface ScanNoteSummary {
 /** 设计文档 §5.7 扫码端点响应。 */
 export interface ScanDeliveryOut {
   outcome: ScanOutcome
-  resolved: ScanResolved
-  note: ScanNoteSummary
-  added_batches: ScanAddedBatch[]
-  /** 服务端已拼好的中文提示；前端原样展示（含 21418 多行失败明细） */
-  message: string
+  resolved?: ScanResolved
+  note?: ScanNoteSummary
+  added_batches?: ScanAddedBatch[]
+  /** 2026-08-28 新增：仅 CANDIDATES_AVAILABLE / PARTIAL_ADDED 时非空。 */
+  unresolved_targets?: ScanUnresolvedTarget[]
+  message?: string
 }
 
 export interface ScanDeliveryReq {
@@ -301,13 +327,11 @@ export interface BlockedScanItem {
 }
 
 /**
- * 触发「扫码阻塞确认弹窗」的错误 code 列表。
- * - 21418 BIZ_DELIVERY_ASSEMBLY_PARTS_NOT_READY：装配件整套拒绝，带 data.failures[]
- * - 21405 BIZ_DELIVERY_NOTE_PART_NOT_READY：散件拒绝，无 data，message 解析构造单元素
- *
- * 注意：21419 已被 BIZ_DELIVERY_NOTE_DRAFT_SCOPE_CONFLICT 占用，不在本列表。
+ * 2026-08-28 后端路线 B：scan 路径仅 21421 BIZ_DELIVERY_BATCH_STATE_INVALID
+ * 表示 C 组状态短路（DELIVERED / OUTSOURCE / IN_PROCESS 工人持有 / COMPLETED / CANCELLED）。
+ * 原 21405 / 21418 不再由 scan 触发，由 add-parts 等保留使用。
  */
-export const BLOCK_SCAN_CODES: readonly number[] = [21418, 21405] as const
+export const BLOCK_SCAN_CODES = [21421] as const
 
 /** 触发「扫码阻塞确认弹窗」的 ApiError.code 取值类型。 */
 export type BlockScanCode = (typeof BLOCK_SCAN_CODES)[number]
