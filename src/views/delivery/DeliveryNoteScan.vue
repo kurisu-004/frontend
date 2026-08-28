@@ -10,8 +10,9 @@
 //       DeliveryGroupPanel           — 分组规则面板（含编辑器 dialog）
 //       DeliveryDraftCard            — 单张草稿卡片（重复 4-5 次）
 //   - 装配壳只负责：拉客户全集 + 订阅扫码枪 + watch L1 变化触发 reload + 编排 3 子组件 +
-//     装配 3 个 page-level dialog（BatchSubmitInspectionConfirmDialog / PrintPreviewDialog /
-//     BatchInspectionConfirmDialog）+ router.push。
+//     装配 2 个 page-level dialog（PrintPreviewDialog / BatchInspectionConfirmDialog）+ router.push。
+//   - 2026-08-28 路线 B 改造：移除 BatchSubmitInspectionConfirmDialog 装配（route B 由
+//     DeliveryScanCandidateDialog + outcome 4 分支覆盖）。
 //
 // 设计要点（沿用原 v3）：
 //   - useBarcodeScanner 扫码枪订阅 → handleScan → scanDelivery（后端 find-or-create）。
@@ -39,7 +40,6 @@ import { useDeliveryScanSubmission } from './composables/useDeliveryScanSubmissi
 import DeliveryScanBar from './components/DeliveryScanBar.vue'
 import DeliveryGroupPanel from './components/DeliveryGroupPanel.vue'
 import DeliveryDraftCard from './components/DeliveryDraftCard.vue'
-import BatchSubmitInspectionConfirmDialog from '@/components/delivery/BatchSubmitInspectionConfirmDialog.vue'
 import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'
 import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'
 import DeliveryScanCandidateDialog from '@/components/delivery/DeliveryScanCandidateDialog.vue'
@@ -320,17 +320,6 @@ onBeforeUnmount(() => {
         />
       </div>
     </div>
-
-    <!-- ========== 扫码阻塞确认对话框（page-level，shell 渲染；2026-08-26 切换到 BatchSubmitInspectionConfirmDialog，因为阻塞件通常是 IN_PROCESS/PROGRAMMING/PENDING，需送检非过检） ========== -->
-    <BatchSubmitInspectionConfirmDialog
-      v-model="submission.blockedDialogVisible.value"
-      :failures="submission.blockedFailures.value"
-      :reason="submission.blockedReason.value"
-      :original-code="submission.blockedOriginalCode.value"
-      @submit-success="submission.onBlockedSubmitSuccess"
-      @submit-partial="submission.onBlockedSubmitPartial"
-      @cancel="submission.onBlockedCancel"
-    />
 
     <!-- ========== 打印送货单预览（page-level，shell 渲染） ==========
       v-if 保持：note=null 时（getNote 加载中）不渲染 dialog。openPrintNote

@@ -5,7 +5,8 @@
 //
 // 持有：
 //   - 扫码防抖态（lastScanCode / lastScanAt / scanning）
-//   - 阻塞弹窗（BatchSubmitInspectionConfirmDialog）状态
+//   - route B 候选弹窗（DeliveryScanCandidateDialog）状态（candidateTargets /
+//     originalScanCode / candidateDialogVisible）
 //   - 打印送货单预览（PrintPreviewDialog）状态
 //   - 提交草稿前的未送检确认（BatchInspectionConfirmDialog）状态
 //   - submittingByNote —— 每张草稿卡片提交中 loading
@@ -26,7 +27,6 @@ import { ApiError } from '@/api/http'
 import { useDeliveryNoteDetailCache } from '@/composables/useDeliveryNoteDetailCache'
 import {
   BLOCK_SCAN_CODES,
-  type BlockedScanItem,
   type DeliveryNoteDetailOut,
   type DeliveryNoteLineItem,
   type ScanDeliveryOut,
@@ -34,7 +34,6 @@ import {
   type ScanUnresolvedTarget,
 } from '@/types/deliveryNote'
 import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection'
-import type { BulkScanFailure } from '@/composables/useBulkScanInspect'
 
 export interface UseDeliveryScanSubmissionOptions {
   /** 扫码命中后写入 drafts Map 的回调（由 useDeliveryDraftBoard 注入）。 */
@@ -57,13 +56,6 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
   const lastScanAt = ref(0)
   /** 当前扫码 inflight 标记（handleScan 重入保护）。 */
   const scanning = ref(false)
-
-  // ============ 扫码阻塞弹窗（2026-08-23 增量）==============
-  /** 弹窗显隐 + 阻塞失败件列表 + 缓存的原始 code（重扫用）。 */
-  const blockedDialogVisible = ref(false)
-  const blockedFailures = ref<BlockedScanItem[]>([])
-  const blockedReason = ref('')
-  const blockedOriginalCode = ref('')
 
   // ============ 打印送货单预览（2026-08-23 增量）==============
   /** preview 弹窗显隐 + 当前打开的 note（getNote 拉回）。 */
@@ -187,10 +179,8 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
    *   - 21417（BIZ_DELIVERY_SCAN_UNKNOWN_CODE，条码未命中）→ toast 提示。
    *   - 其他 → 兜底 toast。
    *
-   * 旧 21405 / 21418 不再由 scan 触发（原 onBlockedSubmitSuccess / parseBlockMessage 路径
-   * 已废弃）；candidate 弹窗由 CANDIDATES_AVAILABLE / PARTIAL_ADDED outcome 触发（见 applySuccess）。
-   * 注：原 blocked* 状态 ref 与 onBlocked* 函数保留（DeliveryNoteScan 仍引用 BatchSubmitInspectionConfirmDialog），
-   * 后续 PR 清理。
+   * 旧 21405 / 21418 不再由 scan 触发（candidate 弹窗由 CANDIDATES_AVAILABLE /
+   * PARTIAL_ADDED outcome 触发，见 applySuccess）。
    */
   function applyError(_code: string, e: unknown): void {
     const apiErr = e as ApiError | null | undefined
@@ -209,35 +199,6 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     }
     const fallback = (e as { message?: string } | null | undefined)?.message ?? '扫码失败'
     ElMessage.error(fallback)
-  }
-
-  // 注（2026-08-28）：parseBlockMessage 函数已删除——21405 不再由 scan 触发。
-
-  /**
-   * 弹窗：阻塞件一键送检成功 → 自动用原 code 重扫（再走一遍 scanDelivery）。
-   * 2026-08-26：弹窗从 BlockedScanConfirmDialog（通过品检）切到 BatchSubmitInspectionConfirmDialog（送检）。
-   * 2026-08-28：route B 切换后该函数保留但 applyError 不再触发对应弹窗；后续清理。
-   */
-  async function onBlockedSubmitSuccess(): Promise<void> {
-    blockedDialogVisible.value = false
-    await handleScan(blockedOriginalCode.value)
-  }
-
-  /**
-   * 弹窗：部分送检 → 提示用户处理失败项后重新扫码；不主动重扫。
-   * 弹窗保留，由用户在弹窗内点取消关闭。
-   * 2026-08-26：弹窗语义从"通过品检"改为"送检"。
-   * 2026-08-28：route B 切换后该函数保留但 applyError 不再触发对应弹窗；后续清理。
-   */
-  function onBlockedSubmitPartial(result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void {
-    ElMessage.warning(
-      `部分送检：${result.passed.length} 项成功 / ${result.failed.length} 项失败；` +
-      `请手动处理失败项后重新扫码`,
-    )
-  }
-
-  function onBlockedCancel(): void {
-    blockedDialogVisible.value = false
   }
 
   // ============ 打印送货单 + 提交草稿 ============
@@ -397,10 +358,6 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     scanning,
     lastScanCode,
     lastScanAt,
-    blockedDialogVisible,
-    blockedFailures,
-    blockedReason,
-    blockedOriginalCode,
     printNotePreviewVisible,
     printNoteTarget,
     printNoteLoading,
@@ -417,9 +374,6 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     handleScan,
     applySuccess,
     applyError,
-    onBlockedSubmitSuccess,
-    onBlockedSubmitPartial,
-    onBlockedCancel,
     openPrintNote,
     onSubmitDraft,
     onSubmitDialogPassSuccess,

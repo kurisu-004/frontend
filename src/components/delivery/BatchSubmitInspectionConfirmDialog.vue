@@ -295,7 +295,7 @@ async function onConfirm(): Promise<void> {
     // 保留弹窗让用户看到（按需重试）；合并 failed 给父组件（toast）
     emit('submit-partial', {
       // firstResult.submitted 是 BulkScanItem[]，emit 签名要 BlockedScanItem[]；
-      // 父组件 onBlockedSubmitPartial 只读 .passed.length / .failed.length，强转安全。
+      // 父组件 onSubmitPartial 只读 .passed.length / .failed.length，强转安全。
       passed: firstResult.submitted as unknown as BlockedScanItem[],
       failed: [...firstResult.failed, ...(secondResult?.failed ?? [])],
     })
