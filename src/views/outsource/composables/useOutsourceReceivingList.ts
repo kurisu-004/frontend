@@ -24,7 +24,7 @@ import { ElMessage } from 'element-plus'
 import { listOutsourceInFlight } from '@/api/outsource'
 import {
   receiveFromOutsource,
-  receiveFromOutsourceToInspection,
+  toInspection,
 } from '@/api/parts'
 import { useConfirm } from '@/composables/useConfirm'
 import { useListStatePersist } from '@/composables/useListFilterPersist'
@@ -190,17 +190,15 @@ export function useOutsourceReceivingList(
         })
         ElMessage.success('已下发到生产货架')
       } else {
-        await receiveFromOutsourceToInspection(receiveTarget.value.part_id, {
-          shelf_id: receiveShelf.value,
-          auto_pass_inspection: autoPass.value,
+        // 2026-08-28 路线 B：OUTSOURCE → INSPECTION 改走 toInspection（OUTSOURCE 是 to-inspection 入口状态之一）。
+        // 原 receiveFromOutsourceToInspection 的 auto_pass_inspection 语义去掉，
+        // 路线 B inspection 不支持直接 PASS，需后续品检员手动 toShip。
+        await toInspection(receiveTarget.value.part_id, {
+          target_inspection_shelf_id: receiveShelf.value,
           batch_id: receiveTarget.value.batch_id,
           quantity: qty,
         })
-        ElMessage.success(
-          autoPass.value
-            ? '已送检并自动通过品检 → 待送货'
-            : '已送检，等待品检',
-        )
+        ElMessage.success('已送检，等待品检')
       }
       receiveDialogVisible.value = false
       await refreshReceiving()

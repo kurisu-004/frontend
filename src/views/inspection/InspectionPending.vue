@@ -423,10 +423,10 @@ import {
   findPartBySerialAndPrompt,
 } from '@/utils/scanHelpers'
 import {
-  failInspection,
   getPartBySerial,
-  passInspection,
-  scanInspect,
+  toInspection,
+  toProcess,
+  toShip,
   type PartItem,
 } from '@/api/parts'
 import { listShelves } from '@/api/shelves'
@@ -793,12 +793,12 @@ async function onPassConfirm(): Promise<void> {
   if (!row || !passQty.value) return
   row._passing = true
   try {
-    await passInspection(row.id, {
+    const out = await toShip(row.id, {
       batch_id: row.batch_id ?? null,
       quantity: passQty.value,
     })
     ElMessage.success(
-      `零件 ${row.serial_no || row.drawing_no} 品检通过 × ${passQty.value}`,
+      `零件 ${out.part.serial_no || out.part.drawing_no} 品检通过 × ${passQty.value}`,
     )
     passDialogVisible.value = false
     await fetchList()
@@ -940,28 +940,20 @@ async function onScanInspectConfirm(): Promise<void> {
     ElMessage.warning('请选择品检架')
     return
   }
-  if (
-    scanInspectDecision.value === 'FAIL'
-    && (!scanInspectShelfIdFail.value || !scanInspectProcessId.value)
-  ) {
-    ElMessage.warning('打回生产架时，目标货架与下一道工序必填')
-    return
-  }
   scanInspectSubmitting.value = true
   try {
-    await scanInspect(row.id, {
+    // 2026-08-28 路线 B inspection 重构：scan-inspect 移除 decision 字段。
+    // 路线 B inspection 不支持 FAIL 直接打回，必须先送检到品检架，再走 to-ship / to-process。
+    const out = await toInspection(row.id, {
       target_inspection_shelf_id: scanInspectShelfId.value,
-      decision: scanInspectDecision.value,
-      shelf_id: scanInspectShelfIdFail.value || undefined,
-      next_process_id: scanInspectProcessId.value || undefined,
       note: scanInspectNote.value.trim() || null,
       batch_id: row.batch_id ?? null,
       quantity: scanInspectQty.value ?? null,
     })
+    const shelfCode =
+      inspectionShelves.value.find((s) => String(s.id) === scanInspectShelfId.value)?.code ?? ''
     ElMessage.success(
-      scanInspectDecision.value === 'PASS'
-        ? `零件 ${row.serial_no || row.drawing_no} 快捷品检通过`
-        : `零件 ${row.serial_no || row.drawing_no} 已快捷打回`,
+      `零件 ${out.part.serial_no || out.part.drawing_no} 已快捷送检${shelfCode ? `到 ${shelfCode}` : ''}`,
     )
     scanInspectDialogVisible.value = false
     await fetchList()
@@ -1009,7 +1001,7 @@ async function onFailConfirm(): Promise<void> {
   )) return  // 用户取消
   failSubmitting.value = true
   try {
-    await failInspection(row.id, {
+    const out = await toProcess(row.id, {
       shelf_id: failShelfId.value,
       next_process_id: failProcessId.value,
       note: failNote.value.trim() || null,
@@ -1017,7 +1009,7 @@ async function onFailConfirm(): Promise<void> {
       quantity: failQty.value ?? null,
     })
     ElMessage.success(
-      `零件 ${row.serial_no || row.drawing_no} 已指定下一道工序 ${processCode}，放到生产货架 ${shelfCode}`,
+      `零件 ${out.part.serial_no || out.part.drawing_no} 已指定下一道工序 ${processCode}，放到生产货架 ${shelfCode}`,
     )
     failDialogVisible.value = false
     await fetchList()
