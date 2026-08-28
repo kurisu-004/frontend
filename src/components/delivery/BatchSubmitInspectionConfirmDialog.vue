@@ -1,21 +1,27 @@
 <!--
-  批量一键送检确认对话框（2026-08-25 新增；2026-08-26 合并 INSPECTION 行的处理）。
+  批量一键送检确认对话框（2026-08-25 新增；2026-08-26 合并 INSPECTION 行的处理；
+  2026-08-28 切 route B + items 改 batch_id-only）。
 
-  用途：扫码建单页遇到 21418 / 21405 时，弹本对话框；dialog 内部按 failures[].status 拆两批：
-  - status ∈ {PENDING, PROGRAMMING, IN_PROCESS} → 第一批调 batchScanInspect 送检
-  - status === 'INSPECTION' → 用户勾选「同时过检此件」后第二批调 batchPassInspection
+  用途：扫码建单页遇到 21421（B 组状态短路）时弹本对话框；dialog 内部按
+  failures[].status 拆两批：
+  - status ∈ {PENDING, PROGRAMMING, IN_PROCESS} → 第一批调 useBulkScanInspect
+    走 batchToInspection（PENDING/PROGRAMMING/IN_PROCESS → INSPECTION）
+  - status === 'INSPECTION' → 用户勾选「同时过检此件」后第二批调 useBulkPassInspection
+    走 batchToShip（INSPECTION → READY_TO_SHIP）
 
-  用户选一个品检架（共享）+ 调整每件数量 → 一键调 apiV2.batchScanInspect
-  （POST /parts/batch-scan-inspect）。品检员/管理员确认后把生产中的工件搬上
-  品检架，submit-success 时父组件用 originalCode 重扫。
+  用户选一个品检架（共享）+ 调整每件数量 → 一键调 apiV2 批量端点。品检员/
+  管理员确认后把生产中的工件搬上品检架，submit-success 时父组件用 originalCode 重扫。
 
   设计要点：
-  - 弹窗结构 + submit-success / submit-partial 三态分流。
+  - 弹窗结构 + submit-success / submit-partial / submit-fail 三态分流。
   - 顶部加品检架 el-select（共享架，必填；confirm disabled when 没选）。
   - 表格列：serial_no · drawing_no · 状态 chip · 数量（el-input-number）。
-    数量默认 = 该件全量（与 batch-pass-inspection 范式一致）。
+    数量默认 = 该件全量（与 batchToShip / batchToInspection 范式一致）。
   - 「同时过检此件」列：仅 status==='INSPECTION' 的行启用；勾选后弹窗
     onConfirm 拆成两批：先送检未送检的，再过检已送检的。
+  - 2026-08-28 路线 B 改造：items 字段收敛为 batch_id + quantity + label；
+    route B inspection 不支持 FAIL，第一批 items 不再带 decision / shelf_id /
+    next_process_id / note。
 
   申请见 docs/api-requirements/scan-inspect.md。
 -->
@@ -26,7 +32,9 @@ import { Upload } from '@element-plus/icons-vue'
 
 import { useDialogSize } from '@/composables/useDialogSize'
 import { useBulkScanInspect } from '@/composables/useBulkScanInspect'
-import type { BulkScanFailure } from '@/composables/useBulkScanInspect'
+import type { BulkScanFailure, BulkScanItem } from '@/composables/useBulkScanInspect'
+import { useBulkPassInspection } from '@/composables/useBulkPassInspection'
+import type { BulkPassItem } from '@/composables/useBulkPassInspection'
 import { listShelves } from '@/api/shelves'
 import type { Shelf } from '@/types/shelf'
 import type { BlockedScanItem } from '@/types/deliveryNote'
@@ -58,12 +66,17 @@ const emit = defineEmits<{
   (e: 'submit-success'): void
   /** 部分送检 → 父组件 toast + 保留弹窗 */
   (e: 'submit-partial', result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void
+  /** 全部失败 → 父组件 toast + 保留弹窗 */
+  (e: 'submit-fail', result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void
   /** 用户点取消 */
   (e: 'cancel'): void
 }>()
 
 const dlg = useDialogSize({ desktopWidth: 920 })
 const bulk = useBulkScanInspect()
+// 2026-08-28 路线 B 改造：第二批「同时过检此件」走 useBulkPassInspection.batchToShip，
+// 不再直接调已 deprecated 的 batchPassInspection（v2 端点重命名为 batchToShip）。
+const passBulk = useBulkPassInspection()
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
 // 「送检数量」(el-input-number + 受控 v-model) 和「同时过检」(条件 ElCheckbox + v-if)
@@ -213,18 +226,33 @@ function closeDialog(): void {
 }
 
 // BlockedScanItem[] → BulkScanItem[]
-function toBulkScanItems(
-  rows: BlockedScanItem[],
-): import('@/composables/useBulkScanInspect').BulkScanItem[] {
-  return rows.map((f) => {
+// 2026-08-28 路线 B 改造：仅含 batch_id + quantity + label，移除 part_id / decision /
+// shelf_id / next_process_id / note（route B inspection 不支持 FAIL）。
+// 缺少 batch_id 的行（21405 散件 message 解析出的占位 item）直接过滤，避免
+// 后端 INVALID_VALUE 兜底分支；UI 层仍显示这些行，由用户用其他途径处理。
+function toBulkScanItems(rows: BlockedScanItem[]): BulkScanItem[] {
+  return rows.flatMap((f) => {
+    if (!f.batch_id) return []
     const q = getQuantity(f)
-    return {
-      part_id: f.part_id as string, // canBulkSubmit guard 已确保非空
-      batch_id: f.batch_id ?? undefined,
-      quantity: q ?? undefined,
-      decision: 'PASS', // 批量场景默认全 PASS
+    return [{
+      batch_id: f.batch_id,
+      quantity: q ?? null,
       label: `${f.serial_no} · ${f.name}`,
-    }
+    }]
+  })
+}
+
+// 2026-08-28 路线 B 改造：第二批走 useBulkPassInspection（batchToShip），
+// 同样只带 batch_id + quantity + label。
+function toBulkPassItems(rows: BlockedScanItem[]): BulkPassItem[] {
+  return rows.flatMap((f) => {
+    if (!f.batch_id) return []
+    const q = getQuantity(f)
+    return [{
+      batch_id: f.batch_id,
+      quantity: q ?? null,
+      label: `${f.serial_no} · ${f.name}`,
+    }]
   })
 }
 
@@ -237,28 +265,19 @@ async function onConfirm(): Promise<void> {
     items: toBulkScanItems(inspectableFailures.value),
   })
 
-  // 第二批（可选）：勾选的 INSPECTION 行走 batchPassInspection
+  // 第二批（可选）：勾选的 INSPECTION 行 → READY_TO_SHIP（route B batchToShip）
   const alsoPassRows = passableFailures.value.filter(
-    (f) => f.part_id && checkedAlsoPass.value.has(f.part_id),
+    (f) => f.batch_id && f.part_id && checkedAlsoPass.value.has(f.part_id),
   )
-  // 这里直接调 batchPassInspection（不在 useBulkScanInspect 范围内，复用现有端点）
   let secondResult: { passed: BlockedScanItem[]; failed: BulkScanFailure[] } | null = null
   if (alsoPassRows.length > 0) {
-    const { batchPassInspection } = await import('@/api/parts')
-    const resp = await batchPassInspection(
-      alsoPassRows.map((f) => ({
-        part_id: f.part_id as string,
-        batch_id: f.batch_id ?? undefined,
-        quantity: getQuantity(f) ?? undefined,
-      })),
-    )
+    const passResult = await passBulk.run(toBulkPassItems(alsoPassRows))
+    // useBulkPassInspection 返回 BulkPassFailure（item: BulkPassItem，batch_id 必填）；
+    // emit 签名要 BulkScanFailure，这里仅用 .passed.length / .failed.length 做汇总，
+    // 把 BulkPassFailure 透过类型断言塞进 BulkScanFailure[]（同形同 .code / .message）。
     secondResult = {
-      passed: resp.passed.map((p) => ({ part_id: p.id } as BlockedScanItem)),
-      failed: resp.failed.map((f2) => ({
-        item: { part_id: f2.part_id } as import('@/composables/useBulkScanInspect').BulkScanItem,
-        code: f2.code,
-        message: f2.message,
-      })),
+      passed: passResult.passed as unknown as BlockedScanItem[],
+      failed: passResult.failed as unknown as BulkScanFailure[],
     }
   }
 
@@ -276,14 +295,18 @@ async function onConfirm(): Promise<void> {
     )
     // 保留弹窗让用户看到（按需重试）；合并 failed 给父组件（toast）
     emit('submit-partial', {
-      passed: firstResult.submitted.map(
-        (it) => ({ part_id: it.part_id } as BlockedScanItem),
-      ),
+      // firstResult.submitted 是 BulkScanItem[]，emit 签名要 BlockedScanItem[]；
+      // 父组件 onBlockedSubmitPartial 只读 .passed.length / .failed.length，强转安全。
+      passed: firstResult.submitted as unknown as BlockedScanItem[],
       failed: [...firstResult.failed, ...(secondResult?.failed ?? [])],
     })
   } else {
     const firstMsg = firstResult.failed[0]?.message ?? '未知错误'
     ElMessage.error(`全部失败：${firstMsg}`)
+    emit('submit-fail', {
+      passed: firstResult.submitted as unknown as BlockedScanItem[],
+      failed: firstResult.failed,
+    })
   }
 }
 </script>
