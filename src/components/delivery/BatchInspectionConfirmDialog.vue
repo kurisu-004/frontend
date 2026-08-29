@@ -95,9 +95,11 @@ const noteShortId = computed(() =>
 // 2026-08-28 路线 B 改造：仅含 batch_id + quantity + label，移除 part_id
 // （后端 service 按 batch_id 反查 t_part_batch.part_id）。
 // DeliveryNoteLineItem.id 才是 batch_id（行身份，2026-07-29 批次化）。
+// 2026-08-29：透传 li.version（caller OCC 锚 t_part_batch，来自后端 line_items[].version）。
 const items = computed(() =>
   props.uninspectedItems.map((li) => ({
     batch_id: li.id,
+    version: li.version,
     quantity: li.quantity,
     label: `${li.serial_no ?? li.drawing_no} · ${li.name}`,
   })),

@@ -32,6 +32,7 @@ import {
   type ScanDeliveryOut,
   type ScanNoteSummary,
   type ScanUnresolvedTarget,
+  type SubmitDeliveryOut,
 } from '@/types/deliveryNote'
 import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection'
 
@@ -79,6 +80,14 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
   const candidateTargets = ref<ScanUnresolvedTarget[]>([])
   const originalScanCode = ref<string>('')
   const candidateDialogVisible = ref(false)
+
+  // ============ submit 后 CANDIDATES_AVAILABLE 候选弹窗（2026-08-29 新增）==============
+  /** submit 返回 CANDIDATES_AVAILABLE 时把 unresolved_targets 投到这里，
+   * 父组件 DeliveryNoteScan 用 DeliverySubmitCandidateDialog 渲染。
+   * 弹窗「一键过检并重新提交」成功后 emit('done') → 父级 fetchDetail 拿新 version + doSubmit 重提。 */
+  const submitCandidateTargets = ref<ScanUnresolvedTarget[]>([])
+  const submitCandidateOriginalNote = ref<ScanNoteSummary | null>(null)
+  const submitCandidateDialogVisible = ref(false)
 
   // ============ 扫码主流程 ============
 
@@ -278,7 +287,20 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     const noteId = d.id
     submittingByNote[noteId] = true
     try {
-      await submitNote(noteId, { version: d.version })
+      const out: SubmitDeliveryOut = await submitNote(noteId, { version: d.version })
+      // 2026-08-29：后端 submit 返回 SubmitDeliveryOut，outcome 分流：
+      // - 'SUBMITTED'（或缺失，向后兼容旧 server）：提交成功
+      // - 'CANDIDATES_AVAILABLE'：note 仍是 DRAFT，挂的批次仍有 INSPECTION 未过检；
+      //   弹 DeliverySubmitCandidateDialog 让用户一键过检后再次 submit。
+      if (out.outcome === 'CANDIDATES_AVAILABLE' || out.unresolved_targets) {
+        submitCandidateTargets.value = out.unresolved_targets ?? []
+        submitCandidateOriginalNote.value = d
+        submitCandidateDialogVisible.value = true
+        ElMessage.info(`仍有 ${submitCandidateTargets.value.length} 项未过检，请确认`)
+        // success path 不成立：finally 不靠 return 跳过（submittingByNote 需保留为 true，
+        // dialog 的 done 会重 submit；cancel 后 user 可手动重试）。
+        return
+      }
       // 2026-08-24：note 已提交，缓存不应再保留 DRAFT 视图的 detail。
       detailCache.invalidate(noteId)
       // 本地清掉全部 ref（drafts / draftDetails / selectedByNote / printingByNote /
@@ -353,6 +375,33 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     submitDialogVisible.value = false
   }
 
+  // ============ submit 后 CANDIDATES_AVAILABLE 候选弹窗回调（2026-08-29 新增）==============
+  /** 候选弹窗「一键过检」成功后：刷新 detail（拿新 version）→ 自动重提。
+   *  如果重提又返回 CANDIDATES_AVAILABLE（极端场景：过检后又有新 INSPECTION 批次），由 doSubmit 再次触发弹窗。
+   *  doSubmit 的 submittingByNote 守卫会防止无限递归（同 noteId 上一次 inflight 完成后才能再起）。 */
+  async function onSubmitCandidateDone(): Promise<void> {
+    submitCandidateDialogVisible.value = false
+    const original = submitCandidateOriginalNote.value
+    if (!original) return
+    detailCache.invalidate(original.id)
+    try {
+      const fetched = await detailCache.get(original.id, getNote)
+      if (!fetched) throw new Error('详情拉取失败')
+      await doSubmit({ ...original, version: fetched.version })
+    } catch (e) {
+      ElMessage.error((e as Error).message ?? '重提失败')
+    }
+  }
+
+  function onSubmitCandidateCancel(): void {
+    submitCandidateDialogVisible.value = false
+    // 允许用户手动重试：重置 submitting flag，让 onCardSubmitDraft 重新进入 doSubmit。
+    const original = submitCandidateOriginalNote.value
+    if (original) {
+      submittingByNote[original.id] = false
+    }
+  }
+
   return {
     // state
     scanning,
@@ -369,6 +418,10 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     candidateTargets,
     originalScanCode,
     candidateDialogVisible,
+    // 2026-08-29 新增：submit 后 CANDIDATES_AVAILABLE 候选弹窗态
+    submitCandidateTargets,
+    submitCandidateOriginalNote,
+    submitCandidateDialogVisible,
 
     // functions
     handleScan,
@@ -379,5 +432,8 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     onSubmitDialogPassSuccess,
     onSubmitDialogPassPartial,
     onSubmitDialogCancel,
+    // 2026-08-29 新增：submit 候选弹窗回调
+    onSubmitCandidateDone,
+    onSubmitCandidateCancel,
   }
 }

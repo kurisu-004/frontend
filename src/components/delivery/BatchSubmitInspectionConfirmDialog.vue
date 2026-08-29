@@ -231,8 +231,12 @@ function toBulkScanItems(rows: BlockedScanItem[]): BulkScanItem[] {
   return rows.flatMap((f) => {
     if (!f.batch_id) return []
     const q = getQuantity(f)
+    // 2026-08-29：BlockedScanItem 没有 batch.version（legacy 21405 占位 item）
+    // → 后端会回 40901；本对话框 dead code（DeliveryNoteScan 已不挂载），
+    // 仅补类型必填，行为以 route B 的 DeliveryScanCandidateDialog 为准。
     return [{
       batch_id: f.batch_id,
+      version: 0,
       quantity: q ?? null,
       label: `${f.serial_no} · ${f.name}`,
     }]
@@ -245,8 +249,10 @@ function toBulkPassItems(rows: BlockedScanItem[]): BulkPassItem[] {
   return rows.flatMap((f) => {
     if (!f.batch_id) return []
     const q = getQuantity(f)
+    // 2026-08-29：同上，legacy 占位 item 无 batch.version。
     return [{
       batch_id: f.batch_id,
+      version: 0,
       quantity: q ?? null,
       label: `${f.serial_no} · ${f.name}`,
     }]

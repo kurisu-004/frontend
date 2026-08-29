@@ -228,10 +228,13 @@ export async function listInspectionBatches(params: {
 /** v2 `POST /parts/batch-to-inspection` 入参项。
  *
  * 字段名 / 可选性与后端 `BatchToInspectionItem` 对齐；`batch_id` 必填，雪花 ID 字符串。
- * `part_id` **不再需要** —— 后端 service 按 `batch_id` 反查 `t_part_batch.part_id`。 */
+ * `part_id` **不再需要** —— 后端 service 按 `batch_id` 反查 `t_part_batch.part_id`。
+ * 2026-08-29：新增 `version` 必填，caller OCC 锚 t_part_batch。 */
 export interface BatchToInspectionItem {
   /** 必填；雪花 ID 字符串（CLAUDE.md §3）。 */
   batch_id: string
+  /** 必填；2026-08-29：t_part_batch.version。 */
+  version: number
   /** 可选；部分数量。缺省 = 批次全量；小于批次量时后端会拆分 remainder。 */
   quantity?: number | null
 }
@@ -280,9 +283,12 @@ export async function batchToInspection(
   return resp.data
 }
 
-/** v2 `POST /parts/batch-to-ship` 入参项（与 BatchToInspectionItem 同形）。 */
+/** v2 `POST /parts/batch-to-ship` 入参项（与 BatchToInspectionItem 同形）。
+ * 2026-08-29：新增 `version` 必填，caller OCC 锚 t_part_batch。 */
 export interface BatchToShipItem {
   batch_id: string
+  /** 必填；2026-08-29：t_part_batch.version。 */
+  version: number
   quantity?: number | null
 }
 

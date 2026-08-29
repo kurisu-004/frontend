@@ -231,8 +231,15 @@ export function usePartDetail(partId: Ref<string>) {
   // ============ 品检通过 ============
   // 2026-08-25 T10p5：恢复 confirmDangerous 二次确认（拆分前 PartDetail.vue 的行为）。
   // 2026-08-28 路线 B：passInspection → toShip（INSPECTION → READY_TO_SHIP）。
+  // 2026-08-29：caller OCC 锚 t_part_batch —— 从 batches 找 INSPECTION 状态批次，
+  // 必传 batch_id + version；40901 提示用户刷新。
   async function onPassInspection(): Promise<boolean> {
     if (!part.value) return false
+    const inspectionBatch = batches.value.find((b) => b.status === 'INSPECTION')
+    if (!inspectionBatch) {
+      ElMessage.error('未找到待过检批次')
+      return false
+    }
     const ok = await confirmDangerous(
       '品检通过',
       '确认将此零件标记为品检通过？此操作不可撤销。',
@@ -240,19 +247,31 @@ export function usePartDetail(partId: Ref<string>) {
     )
     if (!ok) return false
     try {
-      await toShip(partId.value)
+      await toShip(partId.value, {
+        batch_id: inspectionBatch.id,
+        version: inspectionBatch.version,
+        quantity: null,
+      })
       ElMessage.success('品检通过')
       await fetchPart()
       void fetchEvents()
       return true
     } catch (e) {
-      ElMessage.error(`品检通过失败：${(e as Error).message}`)
+      // 40901：批次 version 不匹配
+      if ((e as { code?: number }).code === 40901) {
+        ElMessage.warning('该批次已被他人修改，请刷新后重试')
+        void fetchBatches()
+      } else {
+        ElMessage.error(`品检通过失败：${(e as Error).message}`)
+      }
       return false
     }
   }
 
   // ============ 指定工序（failInsp dialog 由 shell 持有 UI 状态）============
   // 2026-08-28 路线 B：failInspection → toProcess（INSPECTION → IN_PROCESS）。
+  // 2026-08-29：to-process 不在 Rust 首次上线的 V2 端点列表（V1 Python），
+  // 保持原行为；batch_id 漏传是已知缺口，不在本任务修复。
   async function onFailInspection(payload: {
     shelfId: string
     processId: string

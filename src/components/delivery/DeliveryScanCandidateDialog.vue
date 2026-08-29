@@ -91,11 +91,13 @@ const totalBatchCount = computed(() =>
 )
 
 /** flatItems：把 ScanUnresolvedTarget[] 展平为 BulkScanItem[]
- *  供 useBulkScanInspect().run() 直接消费。 */
+ *  供 useBulkScanInspect().run() 直接消费。
+ *  2026-08-29：透传 b.version（caller OCC 锚 t_part_batch）。 */
 const flatItems = computed<BulkScanItem[]>(() =>
   props.targets.flatMap((t) =>
     t.available_batches.map((b: ScanAvailableBatch) => ({
       batch_id: b.batch_id,
+      version: b.version,
       quantity: b.quantity,
       label: `${t.serial_no} / 批 ${b.batch_id}`,
     })),

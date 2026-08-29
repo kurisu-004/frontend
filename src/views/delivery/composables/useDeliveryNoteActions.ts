@@ -20,7 +20,7 @@
 //   当前 actions 都是「fire-and-forget」语义，但为了一致性也返回 boolean。
 
 import { ElMessage } from 'element-plus'
-import type { Ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   addParts,
@@ -37,7 +37,11 @@ import type {
   BulkPassFailure,
   BulkPassItem,
 } from '@/composables/useBulkPassInspection'
-import type { DeliveryNoteLineItem } from '@/types/deliveryNote'
+import type {
+  DeliveryNoteLineItem,
+  ScanUnresolvedTarget,
+  SubmitDeliveryOut,
+} from '@/types/deliveryNote'
 
 /**
  * 详情 composable 暴露给 actions 的最小接口（避免 actions 依赖整个 detail composable）。
@@ -71,6 +75,12 @@ export interface UseDeliveryNoteActionsReturn {
   onSoftDelete: () => Promise<boolean>
   onRemoveSelected: () => Promise<boolean>
   onAddParts: (items: AddPartsItem[]) => Promise<boolean>
+  // 2026-08-29 新增：submit 后 CANDIDATES_AVAILABLE 候选弹窗态 + 回调
+  submitCandidateTargets: Ref<ScanUnresolvedTarget[]>
+  submitCandidateDialogVisible: Ref<boolean>
+  submitCandidateNoteId: Ref<string | null>
+  onSubmitCandidateDone: () => Promise<void>
+  onSubmitCandidateCancel: () => void
 }
 
 export function useDeliveryNoteActions(
@@ -79,13 +89,29 @@ export function useDeliveryNoteActions(
   const router = useRouter()
   const { dangerous: confirmDangerous } = useConfirm()
 
+  // ============ submit 后 CANDIDATES_AVAILABLE 候选弹窗（2026-08-29 新增）==============
+  /** submit 返回 CANDIDATES_AVAILABLE 时把 unresolved_targets 投到这里，
+   * shell（DeliveryNoteDetail）用 DeliverySubmitCandidateDialog 渲染。
+   * 弹窗「一键过检并重新提交」成功后 emit('done') → onSubmitCandidateDone
+   * fetchDetail 拿新 version + doSubmit 重提。 */
+  const submitCandidateTargets = ref<ScanUnresolvedTarget[]>([])
+  const submitCandidateDialogVisible = ref(false)
+  const submitCandidateNoteId = ref<string | null>(null)
+
   // ============ 辅助 ============
-  /** submitNote 统一错误处理：识别 21403 BIZ_VERSION_CONFLICT → 刷新详情；其它原样展示 */
+  /** submitNote 统一错误处理：识别 21403 BIZ_VERSION_CONFLICT / 40901 批次 version 不匹配 → 刷新详情；其它原样展示 */
   function onSubmitError(e: unknown): void {
     const err = e as ApiError
     // ApiError 已在 http.ts 信封拦截器中把 backend code 提到顶层 err.code
     if (err?.code === 21403) {
       ElMessage.warning('版本已过期，正在刷新...')
+      void bindings.fetchDetail()
+      return
+    }
+    // 2026-08-29 新增：40901 = BIZ_VERSION_CONFLICT（批次 version 不匹配，
+    // batch-to-ship 联动 submit 时可能附带返回），同样让用户刷新生效。
+    if (err?.code === 40901) {
+      ElMessage.warning('该批次已被他人修改，请刷新后重试')
       void bindings.fetchDetail()
       return
     }
@@ -123,6 +149,36 @@ export function useDeliveryNoteActions(
   }
 
   // ============ 提交（带未送检前置检测 + confirmDangerous）============
+  /**
+   * 内部 submit 助手（2026-08-29 重构）：
+   * - 调 submitNote，按 SubmitDeliveryOut.outcome 分流
+   * - 'SUBMITTED'（或缺失，向后兼容旧 server）→ success path + fetchDetail
+   * - 'CANDIDATES_AVAILABLE' → 弹 DeliverySubmitCandidateDialog；shell 在
+   *   看到 submitCandidateDialogVisible 翻 true 时渲染弹窗
+   * 错误处理：21403 / 40901 → onSubmitError 刷新详情；其它原样展示。
+   * 返回值：success path = true；弹窗 / 错误 / 缺 note = false（shell 不会因此关闭任何东西）。
+   */
+  async function doSubmit(): Promise<boolean> {
+    const n = bindings.note.value
+    if (!n) return false
+    try {
+      const out: SubmitDeliveryOut = await submitNote(n.id, { version: n.version })
+      if (out.outcome === 'CANDIDATES_AVAILABLE' || out.unresolved_targets) {
+        submitCandidateTargets.value = out.unresolved_targets ?? []
+        submitCandidateNoteId.value = n.id
+        submitCandidateDialogVisible.value = true
+        ElMessage.info(`仍有 ${submitCandidateTargets.value.length} 项未过检，请确认`)
+        return false
+      }
+      ElMessage.success('已提交')
+      await bindings.fetchDetail()
+      return true
+    } catch (e) {
+      onSubmitError(e)
+      return false
+    }
+  }
+
   async function onSubmit(): Promise<boolean> {
     const n = bindings.note.value
     if (!n) return false
@@ -135,32 +191,12 @@ export function useDeliveryNoteActions(
       `确认提交 ${n.delivery_note_no}？`,
       { type: 'warning', confirmText: '提交', cancelText: '取消' },
     )) return false
-    try {
-      await submitNote(n.id, { version: n.version })
-      ElMessage.success('已提交')
-      await bindings.fetchDetail()
-      return true
-    } catch (e) {
-      onSubmitError(e)
-      return false
-    }
+    return await doSubmit()
   }
 
   /** BatchInspectionConfirmDialog 全部通过品检 → 继续 submitNote */
   async function onSubmitDialogPassSuccess(): Promise<boolean> {
-    const n = bindings.note.value
-    if (!n) return false
-    // 通过品检后 note.version 可能已变；这里仍用本地缓存 version，
-    // 若与服务端不一致由后端返回 21403 → onSubmitError 接住
-    try {
-      await submitNote(n.id, { version: n.version })
-      ElMessage.success('已通过品检并提交')
-      await bindings.fetchDetail()
-      return true
-    } catch (e) {
-      onSubmitError(e)
-      return false
-    }
+    return await doSubmit()
   }
 
   /** BatchInspectionConfirmDialog 部分通过 → toast 提示失败明细，不关闭弹窗 */
@@ -262,6 +298,27 @@ export function useDeliveryNoteActions(
     }
   }
 
+  // ============ submit 后 CANDIDATES_AVAILABLE 候选弹窗回调（2026-08-29 新增）==============
+  /** 候选弹窗「一键过检」成功后：fetchDetail（拿新 version）→ doSubmit 重提。
+   *  如果重提又返回 CANDIDATES_AVAILABLE（极端场景：过检后又有新 INSPECTION 批次），
+   *  由 doSubmit 再次触发弹窗。doSubmit 同步串行，不会无限递归。 */
+  async function onSubmitCandidateDone(): Promise<void> {
+    submitCandidateDialogVisible.value = false
+    const noteId = submitCandidateNoteId.value
+    if (!noteId) return
+    try {
+      await bindings.fetchDetail()
+      // fetchDetail 后 note.version 已更新；doSubmit 用最新 version 调 submitNote
+      await doSubmit()
+    } catch (e) {
+      ElMessage.error((e as Error).message ?? '重提失败')
+    }
+  }
+
+  function onSubmitCandidateCancel(): void {
+    submitCandidateDialogVisible.value = false
+  }
+
   return {
     setEditDeliveryDate,
     onDeliveryDateChange,
@@ -272,5 +329,11 @@ export function useDeliveryNoteActions(
     onSoftDelete,
     onRemoveSelected,
     onAddParts,
+    // 2026-08-29 新增
+    submitCandidateTargets,
+    submitCandidateDialogVisible,
+    submitCandidateNoteId,
+    onSubmitCandidateDone,
+    onSubmitCandidateCancel,
   }
 }

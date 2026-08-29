@@ -716,10 +716,17 @@ function onPassDialogClosed(): void {
 async function onPassConfirm(): Promise<void> {
   const row = passTarget.value
   if (!row || !passQty.value) return
+  // 2026-08-29：caller OCC 锚 t_part_batch —— row.version 已是 batch version（list 行对齐）。
+  // row.batch_id / row.version 来自 listInspectionBatches 的行（雪花 ID 字符串 + batch version）。
+  if (!row.batch_id || row.version === undefined) {
+    ElMessage.error('该行缺少批次信息，无法送检。请刷新列表后重试')
+    return
+  }
   row._passing = true
   try {
     const out = await toShip(row.id, {
-      batch_id: row.batch_id ?? null,
+      batch_id: row.batch_id,
+      version: row.version,
       quantity: passQty.value,
     })
     ElMessage.success(
@@ -728,7 +735,13 @@ async function onPassConfirm(): Promise<void> {
     passDialogVisible.value = false
     await fetchList()
   } catch (e) {
-    ElMessage.error(`品检通过失败：${(e as Error).message}`)
+    // 40901：批次 version 不匹配
+    if ((e as { code?: number }).code === 40901) {
+      ElMessage.warning('该批次已被他人修改，请刷新后重试')
+      void fetchList()
+    } else {
+      ElMessage.error(`品检通过失败：${(e as Error).message}`)
+    }
   } finally {
     row._passing = false
   }
@@ -833,13 +846,19 @@ async function onScanInspectConfirm(): Promise<void> {
     ElMessage.warning('请选择品检架')
     return
   }
+  // 2026-08-29：caller OCC 锚 t_part_batch —— row.version 已是 batch version（list 行对齐）。
+  if (!row.batch_id || row.version === undefined) {
+    ElMessage.error('该行缺少批次信息，无法送检。请刷新列表后重试')
+    return
+  }
   scanInspectSubmitting.value = true
   try {
     // 2026-08-28 路线 B inspection 重构：scan-inspect 只送检到品检架，
     // FAIL 直接打回不支持——送检后到「待品检」页面走「指定工序」（toProcess）。
     const out = await toInspection(row.id, {
       target_inspection_shelf_id: scanInspectShelfId.value,
-      batch_id: row.batch_id ?? null,
+      batch_id: row.batch_id,
+      version: row.version,
       quantity: scanInspectQty.value ?? null,
     })
     const shelfCode =
@@ -850,7 +869,13 @@ async function onScanInspectConfirm(): Promise<void> {
     scanInspectDialogVisible.value = false
     await fetchList()
   } catch (e) {
-    ElMessage.error(`快捷品检失败：${(e as Error).message}`)
+    // 40901：批次 version 不匹配
+    if ((e as { code?: number }).code === 40901) {
+      ElMessage.warning('该批次已被他人修改，请刷新后重试')
+      void fetchList()
+    } else {
+      ElMessage.error(`快捷品检失败：${(e as Error).message}`)
+    }
   } finally {
     scanInspectSubmitting.value = false
   }
@@ -893,6 +918,7 @@ async function onFailConfirm(): Promise<void> {
   )) return  // 用户取消
   failSubmitting.value = true
   try {
+    // 2026-08-29：to-process 不在 Rust 首次上线的 V2 端点列表（V1 Python），保持原行为。
     const out = await toProcess(row.id, {
       shelf_id: failShelfId.value,
       next_process_id: failProcessId.value,

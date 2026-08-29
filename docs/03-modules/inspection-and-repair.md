@@ -42,6 +42,40 @@
 
 v1/v2 混合期：inspection 域已切 v2（pass/batch-pass/scan-inspect/batch-scan-inspect 全部走 `apiV2`），repair 域仍走 v1（生命周期端点在 Rust 主仓尚未实施）。
 
+## 三点五、批次级 caller OCC（2026-08-29 起）
+
+5 个 inspection / 状态迁移端点入参**必带** `version`，锚 `t_part_batch.version`（不是 `t_part.version`）：
+
+| 端点 | 必填字段 |
+|---|---|
+| `POST /parts/{id}/to-inspection` | `target_inspection_shelf_id` / `batch_id` / `version` |
+| `POST /parts/{id}/to-ship` | `batch_id` / `version` |
+| `POST /parts/{id}/to-process` | `shelf_id` / `next_process_id` / `batch_id` / `version` |
+| `POST /parts/batch-to-inspection` | `target_inspection_shelf_id` / `items[].batch_id` / `items[].version` |
+| `POST /parts/batch-to-ship` | `items[].batch_id` / `items[].version` |
+
+`version` 不符 → **40901 BIZ_VERSION_CONFLICT**。批量端点 per-item 落 `failed[]`，不中断整批；单件端点直接 4xx 抛错。
+
+### version 来源
+
+- `DeliveryNoteLineItem.version`（note detail `line_items[]` 每行带 batch version）
+- `listInspectionBatches` 行的 `version`（与 `OutsourceSendableItem.version` 约定一致，batch level）
+- `OutsourceSendableItem.version`（外协接收批量）
+- `submit` 返回 `unresolved_targets[].available_batches[].version` + scan 同样字段
+- `PartBatch.version`（通过 `listPartBatches(partId)` 取得）
+
+### `/parts/worker-scan` 豁免
+
+纯扫码流，前端手头无 version；保留 service 内部 OCC（不外推到 caller）。
+
+### 前端契约位置
+
+- 类型：`src/composables/useBulkPassInspection.ts` `BulkPassItem.version` / `src/composables/useBulkScanInspect.ts` `BulkScanItem.version`（均必填）
+- API 类型：`src/api/parts/batch.ts` `BatchToShipItem.version` / `BatchToInspectionItem.version`（均必填）
+- 单测：`src/composables/useBulkPassInspection.spec.ts` + `src/composables/useBulkScanInspect.spec.ts` 各加 40901 落 `failed[]` + `version` 端到端透传用例
+
+详见 [plan](../../../.claude/plans/claude-plans-2026-08-29-submit-candidat-idempotent-hamster.md)（F.1–F.4 段）。
+
 ## 四、批量过品的实现
 
 两个批量 composable 是本域的关键抽象：

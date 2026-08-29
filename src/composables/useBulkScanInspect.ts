@@ -29,6 +29,8 @@ import {
 export interface BulkScanItem {
   /** 必填：batchToInspection 入参的 batch id（雪花 ID 字符串）。 */
   batch_id: string
+  /** 必填；2026-08-29：t_part_batch.version，caller OCC 锚定。 */
+  version: number
   /** 可选；部分数量；缺省 = 批次全量。 */
   quantity?: number | null
   /** 展示用（不影响 API 调用）：如 serial_no + name，方便失败 toast 时定位。 */
@@ -66,10 +68,12 @@ export interface UseBulkScanInspectReturn {
  * route B 不再带 part_id —— 后端 service 按 batch_id 反查 t_part_batch.part_id；
  * 路线 B inspection 不支持 FAIL，decision / shelf_id / next_process_id / note 字段
  * 整体移除（后端不再接受）。
+ * 2026-08-29：透传 version（caller OCC 锚 t_part_batch）。
  */
 export function toBatchScanItems(items: BulkScanItem[]): BatchToInspectionItem[] {
   return items.map((it) => ({
     batch_id: it.batch_id,
+    version: it.version,
     quantity: it.quantity ?? undefined,
   }))
 }
@@ -106,14 +110,21 @@ export function mapScanBatchResult(
       // 防御：submitted 比「请求扣掉 failed」还长（后端契约被破坏才会发生）。
       // 拿不到原始 item，退化用 part 投影占位，避免 UI 渲染 undefined；
       // 此处 batch_id 位塞的是 part.id（并非真批次 id），仅为占位不参与后续请求。
+      // 2026-08-29：version 也是占位（0），仅满足类型约束。
       const s = result.submitted[i]
-      submitted.push({ batch_id: s.part.id, label: s.part.serial_no ?? undefined })
+      submitted.push({
+        batch_id: s.part.id,
+        version: 0,
+        label: s.part.serial_no ?? undefined,
+      })
     }
   }
   const failed: BulkScanFailure[] = result.failed.map(
     (f: BatchToInspectionFailureFE) => {
       const original =
-        requested.find((it) => it.batch_id === f.batch_id) ?? { batch_id: f.batch_id }
+        requested.find((it) => it.batch_id === f.batch_id) ??
+        // 2026-08-29：找不到原 item 时退化占位补 version（仅满足类型）。
+        { batch_id: f.batch_id, version: 0 }
       return {
         item: original,
         code: f.code,

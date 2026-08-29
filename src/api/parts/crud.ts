@@ -409,10 +409,12 @@ export async function updatePart(
 export interface ToInspectionPayload {
   /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
   target_inspection_shelf_id: string
+  /** 必填；2026-08-29 起 caller OCC 锚定 t_part_batch，多批次歧义必须显式传。 */
+  batch_id: string
+  /** 必填；2026-08-29：t_part_batch.version，与 batch_id 必须同时匹配，否则 40901。 */
+  version: number
   /** 可选；≤ 500 字符品检备注（v2 新增）。 */
   note?: string | null
-  /** 可选；多批次歧义时必填。 */
-  batch_id?: string | null
   /** 可选；缺省 = 批次全量；部分数量 < 整批会拆出新批次作 remainder。 */
   quantity?: number | null
 }
@@ -429,37 +431,46 @@ export async function toInspection(
 }
 
 /** 单件通过品检（INSPECTION → READY_TO_SHIP，可选自动拆批）。
- * body 可省略（Content-Length: 0 等价于空对象）。 */
+ * 2026-08-29 起 payload 必填：batch_id + version 必传（caller OCC 锚 t_part_batch）。 */
 export interface ToShipPayload {
-  batch_id?: string | null
+  /** 必填；雪花 ID 字符串。 */
+  batch_id: string
+  /** 必填；2026-08-29：t_part_batch.version。 */
+  version: number
   quantity?: number | null
   note?: string | null
 }
 
 export async function toShip(
   id: string,
-  payload?: ToShipPayload,
+  payload: ToShipPayload,
 ): Promise<{ part: PartItem; new_batch_id: string | null }> {
   const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
     `/parts/${id}/to-ship`,
-    payload ?? {},
+    payload,
   )
   return resp.data
 }
 
 /** 单件品检打回（INSPECTION → IN_PROCESS，指定 shelf + next_process）。
- * 事件类型 INSPECTION_FAILED。 */
+ * 事件类型 INSPECTION_FAILED。
+ *
+ * 2026-08-29 范围说明：to-process 不在 Rust 首次上线的 V2 端点列表
+ * （scan-delivery-note 页核心流程只用 scan / batch-to-inspection /
+ * batch-to-ship / submit / to-inspection / to-ship），仍走 V1 Python，
+ * 维持 batch_id 可选、不需要 version。原 onFailInspection 没传 batch_id
+ * 是已知缺口（不在本任务修复）。 */
 export interface ToProcessPayload {
   /** 必填；目标生产货架 id（PRODUCTION zone active）。 */
   shelf_id: string
   /** 必填；下一道工序 id（保留为该 part 的下道工序，工人可直接领取）。 */
   next_process_id: string
-  /** 可选；品检备注。 */
-  note?: string | null
   /** 可选；多批次歧义时必填。 */
   batch_id?: string | null
   /** 可选；缺省 = 批次全量。 */
   quantity?: number | null
+  /** 可选；品检备注。 */
+  note?: string | null
 }
 
 export async function toProcess(

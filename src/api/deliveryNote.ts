@@ -33,6 +33,7 @@ import type {
   DeliveryNoteSortKey,
   DeliveryNoteStatus,
   ScanDeliveryOut,
+  SubmitDeliveryOut,
 } from '@/types/deliveryNote'
 
 // v2 后端 DeliveryNoteListQuery.statuses 是逗号分隔字符串；
@@ -203,11 +204,13 @@ export async function removeParts(
 }
 
 // 8) submit
+// 2026-08-29：submit 返回 SubmitDeliveryOut（outcome 包装）。
+// - SUBMITTED → note 非 null；CANDIDATES_AVAILABLE → unresolved_targets[] 非空 + note=null。
 export async function submitNote(
   noteId: string,
   payload: VersionPayload,
-): Promise<DeliveryNoteOut> {
-  const resp = await apiV2.post<DeliveryNoteOut>(
+): Promise<SubmitDeliveryOut> {
+  const resp = await apiV2.post<SubmitDeliveryOut>(
     `/delivery-notes/${noteId}/submit`,
     payload,
   )

@@ -170,6 +170,10 @@ export function useDeliveryNoteDetail(
       const children = asmGroups.get(li.assembly_id) ?? []
       result.push({
         id: `ASM_${li.assembly_id}`,
+        // 2026-08-29：line_items[].version 变为必填后，AssemblyTreeRow（extends
+        // DeliveryNoteLineItem）也要求 version；装配件父行 version 语义是「任一
+        // 子件版本占位」（父行不参与 batch-to-* 调用，fetchDetail 后随子件刷掉）。
+        version: li.version,
         is_asm_row: true,
         has_children: true,
         assembly_id: li.assembly_id,

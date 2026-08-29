@@ -26,6 +26,7 @@ import { ElMessage } from 'element-plus'
 import PartPickerDialog from '@/components/delivery/PartPickerDialog.vue'
 import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'
 import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'
+import DeliverySubmitCandidateDialog from '@/components/delivery/DeliverySubmitCandidateDialog.vue'
 import { formatNoteEventLabel } from '@/types/deliveryNote'
 import type { AddPartsItem } from '@/api/deliveryNote'
 import type {
@@ -215,6 +216,17 @@ onMounted(() => {
       @pass-success="onSubmitDialogPassSuccess"
       @pass-partial="onSubmitDialogPassPartial"
       @cancel="submitDialogVisible = false"
+    />
+
+    <!-- 2026-08-29：submit 后 CANDIDATES_AVAILABLE 候选弹窗。
+         submit 返回 outcome=CANDIDATES_AVAILABLE 时弹出（草稿仍有 INSPECTION 未过检批次）。
+         确认过检后由 actions.onSubmitCandidateDone fetchDetail + 重 submit。 -->
+    <DeliverySubmitCandidateDialog
+      v-if="detail.note.value"
+      v-model="actions.submitCandidateDialogVisible.value"
+      :targets="actions.submitCandidateTargets.value"
+      @done="actions.onSubmitCandidateDone"
+      @cancel="actions.onSubmitCandidateCancel"
     />
   </div>
 </template>

@@ -39,6 +39,10 @@ export type DeliveryNoteSortDir = 'ASC' | 'DESC'
 export interface DeliveryNoteLineItem {
   /** 批次 id（行身份；2026-07-29 批次化） */
   id: string
+  /** 2026-08-29：批次乐观锁版本；调用 batch-to-* 时必填。
+   *  后端 DeliveryNoteDetailOut.line_items[].version = t_part_batch.version。
+   *  不是 part.version！part.version 是该工单所有批次的聚合投影。 */
+  version: number
   /** 工单 id */
   part_id: string
   batch_no: number | null
@@ -232,6 +236,8 @@ export interface ScanAvailableBatch {
   quantity: number
   /** 批次状态（如 PENDING / PROGRAMMING / IN_PROCESS / REPAIRING）。 */
   status: string
+  /** 2026-08-29：批次乐观锁版本；转发到 batch-to-* 必须带。 */
+  version: number
 }
 
 /** 路线 B 未就绪工单（route B unresolved target）。
@@ -290,6 +296,27 @@ export interface ScanDeliveryOut {
   /** 2026-08-28 新增：仅 CANDIDATES_AVAILABLE / PARTIAL_ADDED 时非空。 */
   unresolved_targets?: ScanUnresolvedTarget[]
   message?: string
+}
+
+/** `POST /delivery-notes/{id}/submit` 结果类别（2026-08-29 起）。
+ *
+ * - `SUBMITTED`：全部批次已 `READY_TO_SHIP`，状态机 DRAFT → SUBMITTED 已提交
+ * - `CANDIDATES_AVAILABLE`：存在仍在 INSPECTION 的已挂单批次，本次未提交，
+ *   返回 `unresolved_targets[]` 供前端一键过检（转发 `batch-to-ship`）。
+ *   走前端确认后再次 submit 即可。
+ */
+export type SubmitOutcome = 'SUBMITTED' | 'CANDIDATES_AVAILABLE'
+
+/** `POST /delivery-notes/{id}/submit` 200 响应（2026-08-29 起）。
+ *
+ * - `outcome=SUBMITTED` → `note` 非 null，`unresolved_targets` 缺省
+ * - `outcome=CANDIDATES_AVAILABLE` → `note` 为 null，`unresolved_targets` 非空（INSPECTION 批次）。
+ *   shape 与 scan 的 `ScanUnresolvedTarget[]` 完全一致（共享 `AvailableBatchDto`）。 */
+export interface SubmitDeliveryOut {
+  outcome: SubmitOutcome
+  note: DeliveryNoteOut | null
+  /** 仅 `CANDIDATES_AVAILABLE` 时存在；`SUBMITTED` 时为 undefined（后端 skip_serializing_if）。 */
+  unresolved_targets?: ScanUnresolvedTarget[]
 }
 
 export interface ScanDeliveryReq {

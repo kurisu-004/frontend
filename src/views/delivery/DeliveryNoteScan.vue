@@ -43,6 +43,7 @@ import DeliveryDraftCard from './components/DeliveryDraftCard.vue'
 import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'
 import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'
 import DeliveryScanCandidateDialog from '@/components/delivery/DeliveryScanCandidateDialog.vue'
+import DeliverySubmitCandidateDialog from '@/components/delivery/DeliverySubmitCandidateDialog.vue'
 
 const router = useRouter()
 
@@ -351,6 +352,16 @@ onBeforeUnmount(() => {
       v-model="submission.candidateDialogVisible.value"
       :targets="submission.candidateTargets.value"
       @done="onCandidateResolved"
+    />
+
+    <!-- ========== submit 后 CANDIDATES_AVAILABLE 候选弹窗（2026-08-29 新增）============
+      submit 返回 CANDIDATES_AVAILABLE 时弹出（草稿仍有 INSPECTION 未过检批次）。
+      确认过检后 emit('done') → onSubmitCandidateDone fetchDetail + doSubmit 重提。 -->
+    <DeliverySubmitCandidateDialog
+      v-model="submission.submitCandidateDialogVisible.value"
+      :targets="submission.submitCandidateTargets.value"
+      @done="submission.onSubmitCandidateDone"
+      @cancel="submission.onSubmitCandidateCancel"
     />
   </div>
 </template>
