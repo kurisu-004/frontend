@@ -19,12 +19,12 @@ import { ElMessage } from 'element-plus'
 import {
   cancelPart,
   cancelPartBatch,
+  failInspection,
   getPart,
   listPartBatches,
   listPartEvents,
   softDeletePart,
   splitPartBatch,
-  toProcess,
   toShip,
   updatePart,
   type PartBatch,
@@ -269,16 +269,16 @@ export function usePartDetail(partId: Ref<string>) {
   }
 
   // ============ 指定工序（failInsp dialog 由 shell 持有 UI 状态）============
-  // 2026-08-28 路线 B：failInspection → toProcess（INSPECTION → IN_PROCESS）。
-  // 2026-08-29：to-process 不在 Rust 首次上线的 V2 端点列表（V1 Python），
-  // 保持原行为；batch_id 漏传是已知缺口，不在本任务修复。
+  // 2026-08-28 路线 B：failInspection 改走 v2 to-process（INSPECTION → IN_PROCESS）。
+  // 2026-08-29：回退到 v1 `failInspection`（v2 to-process 不在 Rust 上线范围）；
+  // batch_id 漏传是已知缺口，不在本任务修复。
   async function onFailInspection(payload: {
     shelfId: string
     processId: string
     note: string | null
   }): Promise<boolean> {
     try {
-      await toProcess(partId.value, {
+      await failInspection(partId.value, {
         shelf_id: payload.shelfId,
         next_process_id: payload.processId,
         note: payload.note,

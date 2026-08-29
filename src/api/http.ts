@@ -25,6 +25,11 @@
 // 给 /api/v2/auth/refresh 用。auth 域切 v2 后两者并存：业务走 apiV2，refresh 走
 // refreshClientV2，refresh 客户端与业务 client 永远对应同版本 baseURL，避免
 // 串改造成"看似生效实则打 v1"的隐患。
+//
+// 【2026-08-29 修正】query 序列化拆 v1 / v2 两份：v1（Python FastAPI）期望
+// `?k=a&k=b` 重复 key；v2（Rust axum）`statuses` 期望 CSV 单值 `?k=a,b`。
+// 原先共用一份 serializeParams，v1 业务端点收到 CSV 会 422。客户端绑定见
+// 各 axios.create 处的 paramsSerializer。
 
 import axios, {
   AxiosError,
@@ -37,26 +42,32 @@ import { refreshTokens, type LoginResponse } from '@/api/auth'
 
 /**
  * 这些 key 在数组形式下需要序列化为 CSV 单值字符串（?k=a,b,c）而非
- * 重复 key 形式（?k=a&k=b&k=c）。v2 后端 Rust 期望 CSV 形式。
+ * 重复 key 形式（?k=a&k=b&k=c）。仅作用于 v2 客户端（Rust axum 期望）。
  * 2026-08-24 新增，与 src/api/deliveryNote.ts 切 v2 同步。
+ *
+ * 2026-08-29 修正：原先 serializeParams 被 v1/v2 共用，导致 v1 Python 端
+ * statuses 收到 CSV 报 422（零件列表 / 外协报价列表状态筛选失效）；现拆成
+ * serializeParamsV1 / serializeParamsV2 分别绑定，ARRAY_AS_CSV_KEYS 只
+ * 由 v2 分支消费。
  */
 const ARRAY_AS_CSV_KEYS = new Set(['statuses'])
 
 /**
  * 把 axios params 对象序列化为 query string。
- * 白名单 key（statuses）数组 → CSV 单值；其它数组 → 重复 key 形式。
- * 暴露给单测直接调用。
+ * csvKeys 命中 → 数组 join(',') 输出 CSV 单值；其它数组 → 重复 key 形式。
+ * 这是内部实现；客户端绑定走 serializeParamsV1 / serializeParamsV2，
+ * 单测也直接调用那两个具名版本。
  */
 // params 用 any：axios 自身 paramsSerializer 签名就是 (params: any) => string，
 // 这里抽出来做单测没必要收窄类型，避免 Array.isArray 后续分支里 val 没法窄化
 // 成 string 让 encodeURIComponent 报 TS2345。
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function serializeParams(params: any): string {
+function serializeParamsWith(params: any, csvKeys: Set<string>): string {
   const parts: string[] = []
   for (const key of Object.keys(params)) {
     const val = params[key]
     if (val === undefined || val === null) continue
-    if (Array.isArray(val) && ARRAY_AS_CSV_KEYS.has(key)) {
+    if (Array.isArray(val) && csvKeys.has(key)) {
       // 白名单 key（v2 后端期望 CSV 单值形式）
       const csv = val.filter((v: unknown) => v !== '' && v != null).join(',')
       if (csv.length > 0) {
@@ -73,6 +84,26 @@ export function serializeParams(params: any): string {
   return parts.join('&')
 }
 
+/** v1（Python FastAPI）：所有数组都走重复 key 形式 ?k=a&k=b。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function serializeParamsV1(params: any): string {
+  return serializeParamsWith(params, new Set())
+}
+
+/** v2（Rust axum）：statuses 数组 → CSV 单值 ?statuses=a,b。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function serializeParamsV2(params: any): string {
+  return serializeParamsWith(params, ARRAY_AS_CSV_KEYS)
+}
+
+/**
+ * @deprecated 等价于 serializeParamsV1。新代码请用具名版本（V1 / V2），
+ * 避免误把 v1 业务端点的 statuses 序列化成 CSV 形式被 Python 后端 422 掉。
+ * 保留作为 alias 仅供已有 import 兼容。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const serializeParams: (params: any) => string = serializeParamsV1
+
 const STORAGE_KEY = 'auth_session'
 
 export const api = axios.create({
@@ -80,7 +111,9 @@ export const api = axios.create({
   // 不显式设 Content-Type：axios 会按 body 类型自动选 application/json / multipart/form-data。
   timeout: 30_000,
   // FastAPI 期望数组参数格式: ?statuses=A&statuses=B（无 [] 后缀）
-  paramsSerializer: serializeParams,
+  // 2026-08-29 由 serializeParams 改为 serializeParamsV1：v1 端点必须走重复 key 形式，
+  // 不能用 v2 的 CSV 单值（Rust axum 才要 CSV）。
+  paramsSerializer: serializeParamsV1,
 })
 
 /**
@@ -93,7 +126,9 @@ export const api = axios.create({
 export const refreshClient = axios.create({
   baseURL: '/api/v1',
   timeout: 30_000,
-  paramsSerializer: serializeParams,
+  // 2026-08-29 改为 serializeParamsV1：refresh 端点永远与业务端点同版本（同 baseURL），
+  // v1 业务走 V1 序列化（重复 key），v2 业务走 V2 序列化（CSV）。
+  paramsSerializer: serializeParamsV1,
 })
 
 /**
@@ -110,7 +145,8 @@ export const refreshClient = axios.create({
 export const refreshClientV2 = axios.create({
   baseURL: '/api/v2',
   timeout: 30_000,
-  paramsSerializer: serializeParams,
+  // 2026-08-29 改为 serializeParamsV2：与 apiV2 同版本，statuses 走 CSV。
+  paramsSerializer: serializeParamsV2,
 })
 
 interface ApiEnvelope<T> {
@@ -379,8 +415,10 @@ export class ApiError extends Error {
 export const apiV2 = axios.create({
   baseURL: '/api/v2',
   timeout: 30_000,
-  // paramsSerializer 与 api 一致——重复定义避免引用 api.defaults 后被改时牵连
-  paramsSerializer: serializeParams,
+  // paramsSerializer 与 api 不同版本：v2 走 serializeParamsV2（statuses 等白名单 CSV）。
+  // 重复定义避免引用 api.defaults 后被改时牵连。
+  // 2026-08-29 拆分：v1 端点必须走 V1 序列化（重复 key），与 V2 CSV 互斥。
+  paramsSerializer: serializeParamsV2,
 })
 apiV2.interceptors.request.use(authRequestInterceptor)
 apiV2.interceptors.response.use(
