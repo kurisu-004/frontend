@@ -2,7 +2,7 @@
 
 > **目标读者**：后端联调 / 新增接口的 Agent / 排查 401 异常链路的同学
 > **核心价值**：把 axios 封装、信封协议、错误码、自动 refresh 链路完整讲清楚，避免误用 `api` / `apiV2` / refresh client
-> **最后更新**：2026-08-26 · **维护者**：@frontend-team
+> **最后更新**：2026-08-29 · **维护者**：@frontend-team
 
 ---
 
@@ -12,8 +12,8 @@
 
 | 实例 | baseURL | 拦截器 | 何时用 |
 |---|---|---|---|
-| `api` | `/api/v1` | 有 | v1 FastAPI 业务接口（含 auth 域，默认） |
-| `apiV2` | `/api/v2` | 有 | v2 Rust 后端业务接口（deliveryNote / deliveryGroup / parts/scanInspect 等已迁移域） |
+| `api` | `/api/v1` | 有 | v1 FastAPI 业务接口（含 auth 域、`parts` 列表、外协报价、`fail-inspection` 等；默认客户端） |
+| `apiV2` | `/api/v2` | 有 | v2 Rust 后端业务接口（**仅服务于 `src/views/delivery/DeliveryNoteScan.vue` 扫码建单页及其路由 B 间接依赖的 inspection 流程**，共 15 个端点 / 4 个文件）—— `deliveryNote.ts` 7 个（`scanDelivery` / `getNote` / `submitNote` / `listNotes` / `batchGetNotes` / `removeParts` / `softDeleteNote`）+ `deliveryGroup.ts` 4 个（整文件 v2，DeliveryNoteScan 唯一消费者）+ `parts/crud.ts` 2 个（`toInspection` / `toShip`）+ `parts/batch.ts` 2 个（`batchToInspection` / `batchToShip`） |
 | `refreshClient` | `/api/v1` | 无 | 仅 `/api/v1/auth/refresh`（auth 域当前用） |
 | `refreshClientV2` | `/api/v2` | 无 | 2026-08-26 起无消费者，保留供未来 v2 refresh 端点回归 |
 
@@ -107,28 +107,38 @@ sequenceDiagram
 
 ## query 序列化
 
-`serializeParams(params)` 把 axios params 对象序列化成 query string：
+`http.ts` 提供两个 serializer（2026-08-29 拆分），按 baseURL 版本各自绑定到 4 个 axios 实例：
 
-- **白名单 key（`statuses`）**：数组 → CSV 单值 `?statuses=A,B`，与 v2 Rust 后端期望对齐。
-- **其它数组 key**：默认重复 `?key=a&key=b`（无 `[]` 后缀），与历史 FastAPI `/api/v1` 兼容。
+| 函数 | 行为 | 适用客户端 |
+|---|---|---|
+| `serializeParamsV1` | **所有数组都重复 key**：`?key=a&key=b`（无 `[]` 后缀） | `api` / `refreshClient`（v1 FastAPI `List[Enum] = Query(None)` 期望重复 key） |
+| `serializeParamsV2` | 白名单 `statuses` → CSV 单值 `?statuses=A,B`；其它数组重复 key | `apiV2` / `refreshClientV2`（v2 Rust `Option<String>` 逗号分隔） |
+
+`serializeParams` 保留为 `serializeParamsV1` 的向后兼容别名（历史代码可能仍在引用；新代码应直接选 `V1` / `V2`）。
 
 ```ts
-// FastAPI 兼容形式（默认）
+// v1 FastAPI 期望：所有数组重复 key
 api.get('/parts', { params: { statuses: ['A', 'B'] } })
 // → GET /api/v1/parts?statuses=A&statuses=B
 
-// v2 后端期望形式（statuses 走 CSV）
+// v2 Rust 期望：statuses 走 CSV
 apiV2.get('/delivery-notes', { params: { statuses: ['DRAFT', 'SHIPPED'] } })
 // → GET /api/v2/delivery-notes?statuses=DRAFT,SHIPPED
 ```
+
+### 踩坑记录（2026-08-29）
+
+拆分前只有一个共享 `serializeParams`，`statuses` 白名单 CSV 行为被 4 个客户端共用。结果 CSV 行为**泄漏到 v1 客户端**：`parts` 列表 / 外协报价列表点状态列筛选时，前端发 `?statuses=A,B`，Python FastAPI 的 `List[OrderStatus] = Query(None)` 期望重复 key 形式 `?statuses=A&statuses=B`，收到 CSV 后解析成单元素列表 `["A,B"]` → `OrderStatus("A,B")` 枚举校验失败 **422**。讽刺的是 `http.ts` 里 v1 客户端上方那行注释 `// FastAPI 期望数组参数格式: ?statuses=A&statuses=B（无 [] 后缀）` 恰好自证这是回归。
+
+修复：按 baseURL 版本拆 `serializeParamsV1` / `serializeParamsV2`，4 个实例各自绑定。**双后端并存期，任何与后端契约耦合的序列化/编码逻辑都必须按版本分离，不能挂在共享工具函数上。** 详细复盘见 [`docs/08-known-risks/framework-pitfalls.md`](../08-known-risks/framework-pitfalls.md) 第 7 节；回归守卫 `src/api/http.spec.ts` 的 `serializeParamsV1({ statuses: [...] })` 重复 key 断言（新增中）。
 
 ## `cleanParams()`
 
 `cleanParams(obj)` 去掉 `undefined` / `null` / 空字符串 `''` / 空数组 `[]` 的字段，保留数字 `0` 和布尔 `false`。给 list 类接口（GET `/xxx?a=1`）用——后端对 `''` 会做 `LIKE '%%'`（导致全量匹配），axios 默认只 strip `undefined` / `null`。2026-08-25 refactor 把 9 个 list API 的清洗逻辑收到 `http.ts` 这一层。
 
 ```ts
-apiV2.get('/parts', { params: cleanParams({ name: '', status: 'A', page: 0 }) })
-// → GET /api/v2/parts?status=A&page=0
+api.get('/parts', { params: cleanParams({ name: '', status: 'A', page: 0 }) })
+// → GET /api/v1/parts?status=A&page=0
 ```
 
 ## localStorage 键 `auth_session`
@@ -175,7 +185,7 @@ const id = parts[0].id  // string
 
 **auth 域 2026-08-26 临时回滚 v1**（v2 Rust 后端的 Redis `session:tok:<sha256>` 与 v1 FastAPI 的 `get_current_user` 不兼容：v1 后端不认 v2 颁发的 token，v2 后端不认 v1 颁发的 token，跨版本 token 互相不认识）。回滚原因：v1 业务端点（deliveryNote 等）尚未迁移，业务依赖 v1，统一 v1 session 才能让 refresh 流跑通。
 
-**已知 trade-off**（不是 bug，是显式接受的副作用）：v2 业务端点（`deliveryNote` / `deliveryGroup` / `parts/scanInspect`）仍走 `apiV2`，拿到 v1 JWT 会在 v2 后端 `get_current_user` 处 40101，由 `auth:logout` 兜底重登。**待 v1 业务端点迁完再统一切回 v2**——本次回滚只是临时止血。
+**已知 trade-off**（不是 bug，是显式接受的副作用）：v2 业务端点（**仅服务于 `src/views/delivery/DeliveryNoteScan.vue` 扫码建单页及其路由 B 间接依赖的 inspection 流程**，共 15 个端点 / 4 个文件：`deliveryNote` 7 + `deliveryGroup` 4 + `parts to-inspection·to-ship·batch-to-inspection·batch-to-ship` 4；详见本文「三个 axios 实例」表）仍走 `apiV2`，拿到 v1 JWT 会在 v2 后端 `get_current_user` 处 40101，由 `auth:logout` 兜底重登。其余 `deliveryNote.ts` 端点（`printNote` / `printNoteLabels` / `listPickupPending` / `createNote` / `listNoteEvents` / `updateNote` / `addParts` / `recallNote` / `pickupScan` / `pickup` / `listCandidateParts`，2026-08-29 回退）+ `parts` 品检打回（`failInspection`，2026-08-29 回退）走 v1 Python FastAPI。**待 v1 业务端点迁完再统一切回 v2**——本次回滚只是临时止血。
 
 切回 v2 的触发条件（全部满足）：
 
@@ -188,6 +198,7 @@ const id = parts[0].id  // string
 
 - 新增 v2 接口 → `src/api/<domain>.ts` 里 `import { apiV2 } from '@/api/http'`，路径不带 `/v2` 前缀。
 - 新增 v2 refresh 端点 → `import { refreshClientV2 }`，不要混用 `refreshClient`。
+- 新增任意端点若带数组参数 → 确认走 `api` / `apiV2` 对应的 serializer（v1 重复 key / v2 `statuses` 走 CSV），不要自己再写 `paramsSerializer`。
 - 后端契约变更 → 更新 `~/Code/hsh-erp-rust/docs/api/<domain>.md`（不要去翻源码反推）。
 
 ## 排错速查
@@ -198,4 +209,5 @@ const id = parts[0].id  // string
 | refresh 后还是 40102 | refresh 客户端与主客户端版本不一致 |
 | 收到响应但 `data` 是 `{code, message, data}` 没解封 | 后端没按信封协议返回（或者是非 JSON 文件 blob） |
 | `pdf` 上传后端报 500 | 走 v1 上传但后端已切 v2，body 字段不兼容 |
+| 列表接口（状态列筛选）返回 422 | 走 v1 但前端发了 CSV 形式 `?statuses=A,B`（共享 `serializeParams` 时代残留），Python `List[Enum]` 解析成单元素列表失败 |
 | 40105 频繁出现 | 改密 / 多设备登录 / 管理员停用了账号，导致当前 Redis session 被吊销 |

@@ -455,30 +455,31 @@ export async function toShip(
 /** 单件品检打回（INSPECTION → IN_PROCESS，指定 shelf + next_process）。
  * 事件类型 INSPECTION_FAILED。
  *
- * 2026-08-29 范围说明：to-process 不在 Rust 首次上线的 V2 端点列表
- * （scan-delivery-note 页核心流程只用 scan / batch-to-inspection /
- * batch-to-ship / submit / to-inspection / to-ship），仍走 V1 Python，
- * 维持 batch_id 可选、不需要 version。原 onFailInspection 没传 batch_id
- * 是已知缺口（不在本任务修复）。 */
-export interface ToProcessPayload {
-  /** 必填；目标生产货架 id（PRODUCTION zone active）。 */
+ * 2026-08-29：从 v2 `POST /parts/{id}/to-process` 回退到 v1
+ * `POST /parts/{id}/fail-inspection`。to-process 不在 Rust v2 首次上线范围
+ * （v2 白名单 = delivery-notes / delivery-groups /
+ * parts to-inspection·to-ship·batch-to-inspection·batch-to-ship），原代码
+ * 错用 apiV2。v1 端点维持 batch_id 可选、不需要 version，返回 PartItem
+ * （无 new_batch_id）。原 onFailInspection 没传 batch_id 是已知缺口
+ * （不在本任务修复）。 */
+export interface FailInspectionPayload {
   shelf_id: string
-  /** 必填；下一道工序 id（保留为该 part 的下道工序，工人可直接领取）。 */
+  /** 下一道工序 id（必填；保留为该 part 的下道工序，工人可直接领取） */
   next_process_id: string
-  /** 可选；多批次歧义时必填。 */
-  batch_id?: string | null
-  /** 可选；缺省 = 批次全量。 */
-  quantity?: number | null
-  /** 可选；品检备注。 */
+  /** 品检员填的不合格原因等（写入 t_part_event.note，事件历史一览可见） */
   note?: string | null
+  /** 2026-07-29：目标批次 id；缺省取唯一 INSPECTION 批次 */
+  batch_id?: string | null
+  /** 2026-07-29：部分数量；缺省 = 批次全量 */
+  quantity?: number | null
 }
 
-export async function toProcess(
+export async function failInspection(
   id: string,
-  payload: ToProcessPayload,
-): Promise<{ part: PartItem; new_batch_id: string | null }> {
-  const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
-    `/parts/${id}/to-process`,
+  payload: FailInspectionPayload,
+): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/parts/${id}/fail-inspection`,
     payload,
   )
   return resp.data

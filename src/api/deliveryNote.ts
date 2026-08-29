@@ -1,28 +1,30 @@
 // 送货单管理 API 封装（PR-G 2026-07-22 重写；2026-07-23 增强：候选零件/可编辑日期/打印；
-// 2026-08-24 切 v2：后端业务 REST 已迁 Rust，本文件全部走 apiV2）。
+// 2026-08-24 切 v2：后端业务 REST 已迁 Rust，本文件全部走 apiV2；
+// 2026-08-29 二次收敛：v2 白名单缩到「只服务于 DeliveryNoteScan.vue 扫码建单」，
+// 列表/详情/调度/打印相关端点回退 v1 Python FastAPI）。
 // 全部雪花 ID 入参为 string（CLAUDE.md §3 JS Number 丢精度）。
 //
-// 端点清单（与 src/modules/delivery_note/handler.rs 对应，全部 baseURL /api/v2）：
-//   GET    /delivery-notes                       - listNotes
-//   GET    /delivery-notes/pickup-pending        - listPickupPending
-//   GET    /delivery-notes/candidate-parts       - listCandidateParts
-//   POST   /delivery-notes                       - createNote
-//   GET    /delivery-notes/{id}                  - getNote
-//   GET    /delivery-notes/{id}/events           - listNoteEvents
-//   POST   /delivery-notes/{id}/update           - updateNote
-//   POST   /delivery-notes/{id}/add-parts        - addParts
-//   POST   /delivery-notes/{id}/remove-parts     - removeParts
-//   POST   /delivery-notes/{id}/submit           - submitNote
-//   POST   /delivery-notes/{id}/recall           - recallNote
-//   POST   /delivery-notes/{id}/pickup-scan      - pickupScan
-//   POST   /delivery-notes/{id}/pickup           - pickup
-//   POST   /delivery-notes/{id}/soft-delete      - softDelete
-//   POST   /delivery-notes/{id}/print            - printNote
-//   POST   /delivery-notes/{id}/print-labels     - printNoteLabels
-//   POST   /delivery-notes/scan                  - scanDelivery (Rust v2 P3)
-//   GET    /delivery-notes/batch-detail          - batchGetNotes (Rust v2 PR3; ids=1,2,3 逗号分隔)
+// 端点清单（路径与 Rust hsh-erp-rust / Python FastAPI 完全一致，仅 baseURL 不同）：
+//   [v2] GET    /delivery-notes                       - listNotes                  (DeliveryNoteScan)
+//   [v1] GET    /delivery-notes/pickup-pending        - listPickupPending          (DispatchNoteList)
+//   [v1] GET    /delivery-notes/candidate-parts       - listCandidateParts         (PartPickerDialog / DeliveryNoteList)
+//   [v1] POST   /delivery-notes                       - createNote                 (DeliveryNoteList 新建草稿)
+//   [v2] GET    /delivery-notes/{id}                  - getNote                    (DeliveryNoteScan)
+//   [v1] GET    /delivery-notes/{id}/events           - listNoteEvents             (DeliveryNoteDetail 事件 tab)
+//   [v1] POST   /delivery-notes/{id}/update           - updateNote                 (DeliveryNoteDetail 改送货日期/备注)
+//   [v1] POST   /delivery-notes/{id}/add-parts        - addParts                   (DeliveryNoteDetail)
+//   [v2] POST   /delivery-notes/{id}/remove-parts     - removeParts                (DeliveryNoteScan)
+//   [v2] POST   /delivery-notes/{id}/submit           - submitNote                 (DeliveryNoteScan)
+//   [v1] POST   /delivery-notes/{id}/recall           - recallNote                 (DeliveryNoteDetail)
+//   [v1] POST   /delivery-notes/{id}/pickup-scan      - pickupScan                 (DispatchNoteList 司机扫码)
+//   [v1] POST   /delivery-notes/{id}/pickup           - pickup                     (DispatchNoteList 司机确认)
+//   [v2] POST   /delivery-notes/{id}/soft-delete      - softDeleteNote             (DeliveryNoteScan)
+//   [v1] POST   /delivery-notes/{id}/print            - printNote                  (PrintPreviewDialog; DeliveryNoteScan + Detail 共用)
+//   [v1] POST   /delivery-notes/{id}/print-labels     - printNoteLabels            (useDeliveryDraftBoard + PrintPreviewDialog)
+//   [v2] POST   /delivery-notes/scan                  - scanDelivery               (DeliveryNoteScan 扫码入口)
+//   [v2] GET    /delivery-notes/batch-detail          - batchGetNotes              (DeliveryNoteScan 批量拉草稿详情)
 
-import { apiV2 } from '@/api/http'
+import { api, apiV2 } from '@/api/http'
 import type {
   DeliveryNoteCandidatePart,
   DeliveryNoteDetailOut,
@@ -36,9 +38,13 @@ import type {
   SubmitDeliveryOut,
 } from '@/types/deliveryNote'
 
-// v2 后端 DeliveryNoteListQuery.statuses 是逗号分隔字符串；
-// src/api/http.ts 的 paramsSerializer 对 'statuses' 自动 join(',')，
-// 调用方保持传数组，无需手动拼字符串。
+// v1 / v2 后端 DeliveryNoteListQuery.statuses 字段类型不同：
+// - v2 Rust: Option<String>，逗号分隔（`?statuses=A,B`），
+//   由 `serializeParamsV2`（白名单 'statuses' → CSV 单值）自动处理。
+// - v1 Python FastAPI: List[DeliveryNoteStatus] = Query(None)，
+//   期望重复 key 形式（`?statuses=A&statuses=B`），
+//   由 `serializeParamsV1`（全部数组重复 key）自动处理。
+// 调用方 listNotes 始终走 v2，调方保持传数组，无需手动拼字符串。
 export interface ListNotesParams {
   statuses?: DeliveryNoteStatus[]
   customer_id?: string
@@ -121,22 +127,22 @@ export async function listNotes(
   return resp.data
 }
 
-// 2) pickup-pending list
+// 2) pickup-pending list（[v1] 2026-08-29：仅 DispatchNoteList 用，回退 v1）
 export async function listPickupPending(
   customer_id?: string,
 ): Promise<DeliveryNoteOut[]> {
-  const resp = await apiV2.get<{ items: DeliveryNoteOut[] }>(
+  const resp = await api.get<{ items: DeliveryNoteOut[] }>(
     '/delivery-notes/pickup-pending',
     { params: customer_id ? { customer_id } : {} },
   )
   return resp.data.items
 }
 
-// 3) create draft
+// 3) create draft（[v1] 2026-08-29：仅 DeliveryNoteList 新建草稿 dialog 用，回退 v1）
 export async function createNote(
   payload: CreateNotePayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await apiV2.post<DeliveryNoteOut>('/delivery-notes', payload)
+  const resp = await api.post<DeliveryNoteOut>('/delivery-notes', payload)
   return resp.data
 }
 
@@ -169,22 +175,22 @@ export async function batchGetNotes(ids: readonly string[]): Promise<DeliveryNot
   return resp.data.items
 }
 
-// 5) events
+// 5) events（[v1] 2026-08-29：仅 DeliveryNoteDetail 事件 tab 用，回退 v1）
 export async function listNoteEvents(
   noteId: string,
 ): Promise<DeliveryNoteEventOut[]> {
-  const resp = await apiV2.get<DeliveryNoteEventOut[]>(
+  const resp = await api.get<DeliveryNoteEventOut[]>(
     `/delivery-notes/${noteId}/events`,
   )
   return resp.data
 }
 
-// 6) add-parts
+// 6) add-parts（[v1] 2026-08-29：仅 DeliveryNoteDetail 用，回退 v1）
 export async function addParts(
   noteId: string,
   payload: AddPartsPayload,
 ): Promise<DeliveryNoteDetailOut> {
-  const resp = await apiV2.post<DeliveryNoteDetailOut>(
+  const resp = await api.post<DeliveryNoteDetailOut>(
     `/delivery-notes/${noteId}/add-parts`,
     payload,
   )
@@ -217,36 +223,36 @@ export async function submitNote(
   return resp.data
 }
 
-// 9) recall
+// 9) recall（[v1] 2026-08-29：仅 DeliveryNoteDetail 用，回退 v1）
 export async function recallNote(
   noteId: string,
   payload: VersionPayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await apiV2.post<DeliveryNoteOut>(
+  const resp = await api.post<DeliveryNoteOut>(
     `/delivery-notes/${noteId}/recall`,
     payload,
   )
   return resp.data
 }
 
-// 10) pickup-scan (driver 累积扫描)
+// 10) pickup-scan (driver 累积扫描)（[v1] 2026-08-29：仅 DispatchNoteList 用，回退 v1）
 export async function pickupScan(
   noteId: string,
   payload: PickupScanPayload,
 ): Promise<DeliveryNotePickupScanOut> {
-  const resp = await apiV2.post<DeliveryNotePickupScanOut>(
+  const resp = await api.post<DeliveryNotePickupScanOut>(
     `/delivery-notes/${noteId}/pickup-scan`,
     payload,
   )
   return resp.data
 }
 
-// 11) pickup (finalize)
+// 11) pickup (finalize)（[v1] 2026-08-29：仅 DispatchNoteList 用，回退 v1）
 export async function pickup(
   noteId: string,
   payload: PickupPayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await apiV2.post<DeliveryNoteOut>(
+  const resp = await api.post<DeliveryNoteOut>(
     `/delivery-notes/${noteId}/pickup`,
     payload,
   )
@@ -264,10 +270,11 @@ export async function softDeleteNote(
 // 2026-07-23 增强 ----------------------------------------------------------
 //
 // 13) candidate-parts（一级客户下 INSPECTION + READY_TO_SHIP 候选入单零件）
+// [v1] 2026-08-29：仅 PartPickerDialog / DeliveryNoteList 用，回退 v1
 export async function listCandidateParts(
   customerId: string,
 ): Promise<DeliveryNoteCandidatePart[]> {
-  const resp = await apiV2.get<{ items: DeliveryNoteCandidatePart[] }>(
+  const resp = await api.get<{ items: DeliveryNoteCandidatePart[] }>(
     '/delivery-notes/candidate-parts',
     { params: { customer_id: customerId } },
   )
@@ -275,11 +282,12 @@ export async function listCandidateParts(
 }
 
 // 14) partial update（详情页改送货日期 / 备注）
+// [v1] 2026-08-29：仅 DeliveryNoteDetail 用，回退 v1
 export async function updateNote(
   noteId: string,
   payload: UpdateNotePayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await apiV2.post<DeliveryNoteOut>(
+  const resp = await api.post<DeliveryNoteOut>(
     `/delivery-notes/${noteId}/update`,
     payload,
   )
@@ -289,9 +297,12 @@ export async function updateNote(
 /**
  * 程序化下载送货单 XLSX（Axios blob + onDownloadProgress）。
  *
- * - 走标准 `apiV2` 拦截器：Authorization 头自动挂、40102 自动 refresh + 重试。
+ * - 走标准 `api`（v1）拦截器：Authorization 头自动挂、40102 自动 refresh + 重试。
  * - `onDownloadProgress` 通过 `Content-Length` 给出 total，前端据此算出百分比。
  * - 拿到完整 Blob 后再用 `URL.createObjectURL` + `<a download>` 触发浏览器保存。
+ *
+ * [v1] 2026-08-29：因 PrintPreviewDialog 被 DeliveryNoteDetail 与 DeliveryNoteScan
+ * 共用且 Detail 不在 v2 范围内，本函数回退 v1 Python。
  */
 export interface PrintNoteProgress {
   loaded: number
@@ -326,7 +337,7 @@ export async function printNote(
   onProgress?: (p: PrintNoteProgress) => void,
 ): Promise<PrintNoteResult> {
   // 2026-08-02 改 POST + body（携带 custom_order；GET 无法带 array body）
-  const resp = await apiV2.post<Blob>(
+  const resp = await api.post<Blob>(
     `/delivery-notes/${encodeURIComponent(noteId)}/print`,
     payload,
     {
@@ -344,13 +355,16 @@ export async function printNote(
 
 /** 2026-08-05 PR-C5：打印标签 Excel（与 printNote 配对，触发浏览器二次下载）。
  * 2026-08-07 升级：可传 ``line_item_ids`` 只打勾选行。
- * 同一 payload 保证行口径与送货单完全一致。 */
+ * 同一 payload 保证行口径与送货单完全一致。
+ *
+ * [v1] 2026-08-29：因 PrintPreviewDialog 被 DeliveryNoteDetail 与 DeliveryNoteScan
+ * 共用且 Detail 不在 v2 范围内，本函数回退 v1 Python。 */
 export async function printNoteLabels(
   noteId: string,
   payload: PrintLabelsPayload = {},
   onProgress?: (p: PrintNoteProgress) => void,
 ): Promise<PrintNoteResult> {
-  const resp = await apiV2.post<Blob>(
+  const resp = await api.post<Blob>(
     `/delivery-notes/${encodeURIComponent(noteId)}/print-labels`,
     payload,
     {

@@ -348,9 +348,9 @@ import {
   findPartBySerialAndPrompt,
 } from '@/utils/scanHelpers'
 import {
+  failInspection,
   getPartBySerial,
   toInspection,
-  toProcess,
   toShip,
   type PartItem,
 } from '@/api/parts'
@@ -804,7 +804,7 @@ async function loadProcesses(): Promise<void> {
 
 // ============ 2026-08-12 PR-I-scan-inspect：扫码快捷品检 ============
 // 命中 PENDING / PROGRAMMING / IN_PROCESS+PRODUCTION_SHELF 时弹本对话框，
-// 一步完成：搬到品检架（路线 B inspection 不支持 FAIL 直接打回，FAIL 路径需到「待品检」页面走 to-process）。
+// 一步完成：搬到品检架（路线 B inspection 不支持 FAIL 直接打回，FAIL 路径需到「待品检」页面走「指定工序」）。
 const scanInspectDlg = useDialogSize({ desktopWidth: 520 })
 const scanInspectDialogVisible = ref(false)
 const scanInspectRow = ref<RowState | null>(null)
@@ -854,7 +854,7 @@ async function onScanInspectConfirm(): Promise<void> {
   scanInspectSubmitting.value = true
   try {
     // 2026-08-28 路线 B inspection 重构：scan-inspect 只送检到品检架，
-    // FAIL 直接打回不支持——送检后到「待品检」页面走「指定工序」（toProcess）。
+    // FAIL 直接打回不支持——送检后到「待品检」页面走「指定工序」（failInspection）。
     const out = await toInspection(row.id, {
       target_inspection_shelf_id: scanInspectShelfId.value,
       batch_id: row.batch_id,
@@ -918,8 +918,8 @@ async function onFailConfirm(): Promise<void> {
   )) return  // 用户取消
   failSubmitting.value = true
   try {
-    // 2026-08-29：to-process 不在 Rust 首次上线的 V2 端点列表（V1 Python），保持原行为。
-    const out = await toProcess(row.id, {
+    // 2026-08-29：回退到 v1 fail-inspection（v2 to-process 不在 Rust 上线范围）。
+    const out = await failInspection(row.id, {
       shelf_id: failShelfId.value,
       next_process_id: failProcessId.value,
       note: failNote.value.trim() || null,
@@ -927,7 +927,7 @@ async function onFailConfirm(): Promise<void> {
       quantity: failQty.value ?? null,
     })
     ElMessage.success(
-      `零件 ${out.part.serial_no || out.part.drawing_no} 已指定下一道工序 ${processCode}，放到生产货架 ${shelfCode}`,
+      `零件 ${out.serial_no || out.drawing_no} 已指定下一道工序 ${processCode}，放到生产货架 ${shelfCode}`,
     )
     failDialogVisible.value = false
     await fetchList()
