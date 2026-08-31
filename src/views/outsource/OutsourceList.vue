@@ -174,7 +174,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, reactive, ref, watch } from 'vue'
+import { h, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElTag } from 'element-plus'
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue'
@@ -215,13 +215,11 @@ const search = reactive<{ name_like: string; is_active: boolean | undefined }>({
   name_like: '',
   is_active: undefined,
 })
-// pageSize 持久化镜像：和 UserList 同样的双向同步模式
-const pageSize = ref(100)
 
-// ============ 筛选状态持久化（2026-07-30 commit 4B；2026-08-25 T7：search 只含过滤项；pageSize 单独持久化）============
+// ============ 筛选状态持久化（2026-07-30 commit 4B；2026-08-25 T7：search 只含过滤项）============
 const { restore: restoreOutsourceCompanyFilter } = useListStatePersist(
   'outsource_company_list',
-  { search, pageSize },
+  { search },
 )
 
 // ============ 列可见性 + 列顺序拖动 ============
@@ -438,22 +436,14 @@ onMounted(() => {
   drag.applyDrag(tableRef)
 
   void fetchOutsourceProcesses()
-  // 从 localStorage 恢复搜索 + 分页大小；强制将当前页重置到第 1 页（避免恢复到无数据页）
+  // 从 localStorage 恢复搜索；强制将当前页重置到第 1 页（避免恢复到无数据页）
   const persisted = restoreOutsourceCompanyFilter() as
-    | { search?: Partial<typeof search>; pageSize?: number }
+    | { search?: Partial<typeof search> }
     | null
     | undefined
   if (persisted) {
     if (persisted.search) Object.assign(search, persisted.search)
-    if (typeof persisted.pageSize === 'number') {
-      pagedRef.value!.pageSize.value = persisted.pageSize
-    }
   }
-  // 双向同步 PagedTable.pageSize → view 本地 pageSize（触发 persist 自动写盘）
-  watch(
-    () => pagedRef.value?.pageSize?.value,
-    (s) => { if (typeof s === 'number') pageSize.value = s },
-  )
   void fetchList()
 })
 </script>

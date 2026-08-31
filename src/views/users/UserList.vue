@@ -145,7 +145,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch, h } from 'vue'
+import { ref, reactive, computed, onMounted, h } from 'vue'
 import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
 import { listUsers, createUser, updateUser, deactivateUser, resetUserPassword, listUserRoles, addUserRole, removeUserRole } from '@/api/users'
 import { listShelves } from '@/api/shelves'
@@ -179,16 +179,14 @@ const fetcher = async (params: { page: number; pageSize: number }) => {
   })
 }
 
-// ============ 筛选状态持久化（2026-08-25 T7：保留 size 持久化）============
-// view 持有一份 pageSize 镜像 `size`，用 useListStatePersist 维持 localStorage 同步；
-// mount 时把 restore 出来的 size 推到 PagedTable.pageSize；之后 watcher 把 PagedTable.pageSize
-// 变回写到 view 本地 size → persist 自动写盘。
-const size = ref(20)
-const { restore: restoreUserFilter, clear: clearUserFilter } = useListStatePersist(
-  'user_list',
-  { size },
-  { exclude: new Set(['page']) },
-)
+// ============ 筛选状态持久化 ============
+// 2026-08-25 T7：pageSize 持久化通过 view 本地 size ↔ PagedTable.pageSize 双向同步；
+//   1) 启动时把 restore 出来的 size 推到 PagedTable.pageSize
+//   2) 之后 watcher 把 PagedTable.pageSize 变回写到 view 本地 size（触发 persist 自动写盘）
+// 2026-08-31：移除 pageSize 持久化。PagedTable 暴露的 pageSize 是 Ref<number>，
+//   Vue 3.5 component proxy 自动 unwrap → 访问得到裸 number，写入/监听都需要走
+//   原 ref（pagedRef.value.pageSize 不能当作 ref 用）。pageSize 重置到默认值
+//   是可接受的 trade-off，与 PartListShell / DeliveryNoteList / OutsourceList 一致。
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 「操作」列不放进 defs → 始终可见。
@@ -338,18 +336,6 @@ async function doAddRole() {
 async function removeRole(uid: string, rid: string) { await removeUserRole(uid, rid); roleList.value = await listUserRoles(uid); ElMessage.success('已移除') }
 
 onMounted(() => {
-  // 2026-08-25 T7：pageSize 持久化通过 view 本地 size ↔ PagedTable.pageSize 双向同步：
-  //   1) 启动时把 restore 出来的 size 推到 PagedTable.pageSize
-  //   2) 之后 watcher 把 PagedTable.pageSize 变回写到 view 本地 size（触发 persist 自动写盘）
-  const persisted = restoreUserFilter() as { size?: number } | null | undefined
-  if (persisted && typeof persisted.size === 'number') {
-    pagedRef.value!.pageSize.value = persisted.size
-  }
-  // 双向同步：PagedTable → view
-  watch(
-    () => pagedRef.value?.pageSize?.value,
-    (s) => { if (typeof s === 'number') size.value = s },
-  )
   void fetchData()
   // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
   // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。

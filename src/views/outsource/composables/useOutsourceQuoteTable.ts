@@ -147,7 +147,6 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
   // ============ 排序 / 分页 ============
   const sortBy = ref<QuoteSortKey>('CREATED_AT')
   const sortDir = ref<'ASC' | 'DESC'>('DESC')
-  const pageSize = ref(20)
   const pagedRef = ref()
   // items 镜像：仅供 actionColumnHeight 计算按钮数（actionColumnHeight 是行级 computed
   // 显式读 items.value，所以 PagedTable.items 也通过 watch 同步到此）
@@ -164,9 +163,13 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
 
   // ============ 持久化 ============
   // 优先级：URL ?statuses=  >  restore 快照  >  角色默认（DRAFT / SUBMITTED）
+  // 2026-08-31：移除 pageSize 持久化。PagedTable 暴露的 pageSize 是 Ref<number>，
+  //   Vue 3.5 component proxy 自动 unwrap → 访问得到裸 number，写入会抛
+  //   "Cannot create property 'value' on number 'X'"。pageSize 重置到默认值
+  //   是可接受的 trade-off，与 PartListShell / DeliveryNoteList / UserList 一致。
   const { restore: restoreQuoteFilter } = useListStatePersist(
     'outsource_quote_list',
-    { search, sortBy, sortDir, pageSize },
+    { search, sortBy, sortDir },
     { exclude: new Set(['page']) },
   )
 
@@ -267,7 +270,6 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
           search?: Partial<QuoteSearchState>
           sortBy?: string
           sortDir?: string
-          pageSize?: number
         }
       | null
       | undefined
@@ -275,9 +277,6 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
       if (persisted.search) Object.assign(search, persisted.search)
       if (typeof persisted.sortBy === 'string') sortBy.value = persisted.sortBy as QuoteSortKey
       if (typeof persisted.sortDir === 'string') sortDir.value = persisted.sortDir as 'ASC' | 'DESC'
-      if (typeof persisted.pageSize === 'number' && pagedRef.value) {
-        pagedRef.value!.pageSize.value = persisted.pageSize
-      }
     }
 
     const urlStatuses = typeof routeQueryStatuses === 'string'
@@ -298,13 +297,9 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
     }
   }
 
-  // ============ pageSize 双向同步（PagedTable.pageSize → 本地 pageSize 触发 persist 写盘）============
-  function syncPageSizeFromPaged(): void {
-    const s = pagedRef.value?.pageSize?.value
-    if (typeof s === 'number') pageSize.value = s
-  }
-
   // ============ items 镜像同步（actionColumnWidth 计算按钮数）============
+  // 2026-08-31：pageSize 持久化已移除，syncPageSizeFromPaged 随之删除（其唯一调用点
+  //   OutsourceQuoteList.vue 的 watch 也是同一个 Vue 3.5 unwrap bug）
   function syncItemsFromPaged(): void {
     const it = pagedRef.value?.items?.value
     items.value = (it ?? []) as OutsourceQuote[]
@@ -318,7 +313,6 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
     errorMsg,
     sortBy,
     sortDir,
-    pageSize,
     pagedRef,
     // popover 状态
     statusFilterActive,
@@ -346,7 +340,6 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
     onSortChange,
     onReset,
     restore,
-    syncPageSizeFromPaged,
     syncItemsFromPaged,
     quoteRowClassName,
   }

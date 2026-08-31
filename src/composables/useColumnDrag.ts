@@ -58,6 +58,7 @@
 import {
   computed,
   isRef,
+  nextTick,
   onBeforeUnmount,
   ref,
   watch,
@@ -391,15 +392,24 @@ export function useColumnDrag<T extends ColumnDef>(
       if (!newTr) {
         // 表头消失（机制 B 中初次未渲染 / EP 重建瞬间）—— 销毁 Sortable，等 observer
         // 再次回调时通过 rebind(newTr) 重建。vdp 的 destroy() 内部 `a == null || a.destroy()`
-        // 是幂等的，重复调安全。
-        inner.destroy()
+        // 是幂等的，重复调安全。try/catch 包裹：防止 Sortable 内部抛错把 Vue
+        // 调度器拉下水（startTime undefined 路径）。
+        try { inner.destroy() } catch { /* swallow */ }
         isAttached = false
         return
       }
       // start(v) 内部 `a && X.destroy(); a = new p(v, j())` —— 自己处理旧实例 + 新建。
       // 可以在 rAF / observer 回调里安全调（不需要 currentInstance）。
-      inner.start(newTr)
-      isAttached = true
+      // try/catch 包裹：transient <tr> 上构造 Sortable 抛错时不让 Vue 调度器
+      // 看到 —— observer 下一帧 mutation 触发 scheduleRebind 重建。
+      try {
+        inner.start(newTr)
+        isAttached = true
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[useColumnDrag] Sortable start failed, will retry on next mutation:', err)
+        isAttached = false
+      }
     }
 
     /** MutationObserver 回调入口：同一帧内只调度一次真实重绑。 */
@@ -408,7 +418,12 @@ export function useColumnDrag<T extends ColumnDef>(
       scheduled = true
       scheduleRaf(() => {
         scheduled = false
-        rebind(resolveCurrentTr())
+        try {
+          rebind(resolveCurrentTr())
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[useColumnDrag] rAF rebind swallowed error:', err)
+        }
       })
     }
 
@@ -438,19 +453,32 @@ export function useColumnDrag<T extends ColumnDef>(
      *    机制 A（表头被 EP 重建）+ 机制 B（表头尚未渲染出现后自动 bind）；
      *  - tableRoot 是其他元素（消费方给了 <tr> / mock DOM 无 .el-table 包装）：
      *    把它本身当 bind 目标（兼容旧 HTMLElement 一次性签名），不挂 observer。
-     *  - tableRoot 是 null：不绑、不挂。 */
+     *  - tableRoot 是 null：不绑、不挂。
+     *  整体 try/catch 兜底：2026-08-31 调查发现 Vue DevTools 浏览器扩展的
+     *  profiler 在 EP 重建表头 / 我们的 rAF 重绑窗口里访问 component.$startTime
+     *  会抛 "Cannot read properties of undefined (reading 'startTime')"。
+     *  错误从 extension content script 冒到 Vue 调度器，被 V8 报告成
+     *  `et.reportAllChanges @ n.timeout`。我们既管不了扩展、也不能调它的内部
+     *  时序，最稳妥的做法是把自己这条路径上任何同步 / 异步抛错都吞掉 —— rebind
+     * 内部已 try/catch，这里再裹一层兜住 resolveRoot / findElTableHeaderRow /
+     *  ensureObserver 这些「dispatch 之前」的失败。 */
     function bindFromRoot(): void {
-      if (!tableRoot) {
-        rebind(null)
-        return
+      try {
+        if (!tableRoot) {
+          rebind(null)
+          return
+        }
+        if (hasElTableClass(tableRoot)) {
+          rebind(findElTableHeaderRow(tableRoot))
+          ensureObserver()
+          return
+        }
+        // 退化路径：mock DOM 没有 .el-table 包装 / 旧 HTMLElement 签名直接传 <tr>
+        rebind(tableRoot)
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[useColumnDrag] bindFromRoot swallowed error:', err)
       }
-      if (hasElTableClass(tableRoot)) {
-        rebind(findElTableHeaderRow(tableRoot))
-        ensureObserver()
-        return
-      }
-      // 退化路径：mock DOM 没有 .el-table 包装 / 旧 HTMLElement 签名直接传 <tr>
-      rebind(tableRoot)
     }
 
     // 取首次归一化的根（Ref 起始可能是 null / 实例 .$el 未挂）；用于 immediate 路径
@@ -458,24 +486,50 @@ export function useColumnDrag<T extends ColumnDef>(
 
     if (isRef(target)) {
       // Ref / 实例 ref 路径：watch ref 值变化时重新归一化 + 重绑。
-      // flush: 'post' 保证 DOM 已 patch 完再绑定；ref 换新节点时先 destroy 旧的再 start 新的。
-      // 2026-08-28 修订：observer 在「拿到根但没找到表头」时由 bindFromRoot 懒挂，
-      // 覆盖机制 B（表头首次渲染 / EP 重建）。
-      watch(
-        target,
-        () => {
+      // 2026-08-31 修订：把 initial bind 从「flush: 'post' 的 watch 立即回调」
+      // 改为「显式 nextTick + 后续 watch 用 flush: 'sync'」。
+      // 原因：consumer 在 onMounted 里调 applyDrag() 时，flush: 'post' 的
+      // immediate 回调被进入 post-mount scheduler 队列 —— 此时 EP 可能还在
+      // 自己的 patch 周期里，findElTableHeaderRow 拿到的可能是 transient <tr>，
+      // 与 Sortable 构造函数 + Vue 调度器交叉触发「Cannot read properties
+      // of undefined」的 scheduler 错误。改成 nextTick + flush: 'sync' 让首次
+      // 绑定在 mount 完成的下一个 microtask 边界同步执行，绕过 post-mount
+      // 队列；后续 ref 变化时直接同步重绑（DOM 已稳定，无 post-mount race）。
+      nextTick(() => {
+        try {
           tableRoot = resolveRoot()
           if (!tableRoot) {
-            // 容器被卸载：disconnect observer + 走 rebind(null) 统一销毁 Sortable
-            // + 清 isAttached 标志
-            observer?.disconnect()
-            observer = null
             rebind(null)
             return
           }
           bindFromRoot()
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[useColumnDrag] initial nextTick bind swallowed error:', err)
+        }
+      })
+      watch(
+        target,
+        () => {
+          try {
+            tableRoot = resolveRoot()
+            if (!tableRoot) {
+              // 容器被卸载：disconnect observer + 走 rebind(null) 统一销毁 Sortable
+              // + 清 isAttached 标志
+              observer?.disconnect()
+              observer = null
+              rebind(null)
+              return
+            }
+            bindFromRoot()
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn('[useColumnDrag] watch rebind swallowed error:', err)
+          }
         },
-        { immediate: true, flush: 'post' },
+        // 后续 ref 变化直接同步重绑（DOM 已挂好且通常不会有 EP 内部 patch 与
+        // 我们的 start 竞争；observer 自愈会覆盖 EP 重建表头的情况）。
+        { flush: 'sync' },
       )
       return
     }

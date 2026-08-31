@@ -167,8 +167,6 @@ function onTableAction(payload: { type: 'submit' | 'approve' | 'reject' | 'delet
 onMounted(async () => {
   await loadLookups()
   table.restore(route.query.statuses)
-  // 2026-08-25 T7：双向同步 PagedTable.pageSize → 本地 pageSize（触发 persist 自动写盘）
-  watch(() => table.pagedRef.value?.pageSize?.value, table.syncPageSizeFromPaged)
   // 2026-08-25 T7：items 镜像同步（actionColumnWidth 计算按钮数）
   watch(() => table.pagedRef.value?.items?.value, table.syncItemsFromPaged)
   await table.refresh()

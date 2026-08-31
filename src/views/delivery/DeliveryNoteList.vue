@@ -12,7 +12,7 @@
   形态对齐 frontend/src/views/outsource/OutsourceQuoteList.vue
 -->
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
 import { Van, Promotion } from '@element-plus/icons-vue'
@@ -64,16 +64,15 @@ const allStatuses: DeliveryNoteStatus[] = ['DRAFT', 'SUBMITTED', 'PICKED_UP', 'A
 const statuses = ref<DeliveryNoteStatus[]>(defaultStatusesForRole(role.value))
 const customerId = ref<string>('')
 const keyword = ref('')
-// 2026-08-25 T7：items / total / loading / page 已迁到 <PagedTable>；pageSize 持久化镜像留在 view
+// 2026-08-25 T7：items / total / loading / page 已迁到 <PagedTable>
 const pagedRef = ref()
-const pageSize = ref(50)
 
 // ============ 筛选状态持久化（2026-07-30 commit 4B；2026-08-25 T7：page 不再持久化）============
-// 把 4 个离散 ref 包成一个对象传给 useListStatePersist；restore 后逐个 .value 写回。
+// 把 3 个离散 ref 包成一个对象传给 useListStatePersist；restore 后逐个 .value 写回。
 // page 排除。优先级：URL ?statuses= > restore 快照 > 角色默认
 const { restore: restoreNoteListFilter } = useListStatePersist(
   'delivery_note_list',
-  { statuses, customerId, keyword, pageSize },
+  { statuses, customerId, keyword },
   { exclude: new Set(['page']) },
 )
 
@@ -187,7 +186,7 @@ onMounted(async () => {
   await loadCustomers()
   // 2026-07-30 commit 4B：筛选项恢复（与 OutsourceQuoteList 同优先级）
   //   1) URL ?statuses=  → 最高优先
-  //   2) restore() 快照里 statuses / customerId / keyword / pageSize
+  //   2) restore() 快照里 statuses / customerId / keyword
   //   3) 角色默认（已在 ref initializer 注入到 statuses.value；restore 不覆盖现有值）
   const urlStatusesRaw = route.query.statuses
   const urlStatuses: DeliveryNoteStatus[] = typeof urlStatusesRaw === 'string'
@@ -198,23 +197,15 @@ onMounted(async () => {
     statuses.value = [...urlStatuses]
   } else {
     const persisted = restoreNoteListFilter() as
-      | { statuses?: DeliveryNoteStatus[]; customerId?: string; keyword?: string; pageSize?: number }
+      | { statuses?: DeliveryNoteStatus[]; customerId?: string; keyword?: string }
       | null
       | undefined
     if (persisted) {
       if (Array.isArray(persisted.statuses)) statuses.value = [...persisted.statuses]
       if (typeof persisted.customerId === 'string') customerId.value = persisted.customerId
       if (typeof persisted.keyword === 'string') keyword.value = persisted.keyword
-      if (typeof persisted.pageSize === 'number') {
-        pagedRef.value!.pageSize.value = persisted.pageSize
-      }
     }
   }
-  // 2026-08-25 T7：双向同步 PagedTable.pageSize → view 本地 pageSize（持久化写盘）
-  watch(
-    () => pagedRef.value?.pageSize?.value,
-    (s) => { if (typeof s === 'number') pageSize.value = s },
-  )
   await fetchList()
 })
 
