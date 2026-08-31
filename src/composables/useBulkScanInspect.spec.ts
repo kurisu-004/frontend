@@ -3,9 +3,11 @@ import {
   toBatchScanItems,
   mapScanBatchResult,
   useBulkScanInspect,
+  buildSelectedScanItems,
   type BulkScanItem,
 } from './useBulkScanInspect'
 import type { BatchToInspectionOutFE } from '@/api/parts'
+import type { ScanUnresolvedTarget } from '@/types/deliveryNote'
 
 describe('toBatchScanItems', () => {
   it('空数组 → 空数组', () => {
@@ -404,6 +406,93 @@ describe('useBulkScanInspect().run() (2026-08-28 route B)', () => {
     expect(r.submitted).toEqual([{ batch_id: 'B-2', version: 1, label: 'L2' }])
     expect(r.failed).toEqual([
       { item: { batch_id: 'B-1', version: 1, label: 'L1' }, code: 20103, message: '状态非法' },
+    ])
+  })
+})
+
+// 2026-08-31：路线 B 候选批次勾选送检（DeliveryScanCandidateDialog 配套）。
+// 派生规则：
+//   - 仅保留 selectedBatchIds 命中的 batch_id；
+//   - 顺序与 targets / available_batches 保持一致（外层 for + 内层 for）；
+//   - label 沿用 dialog 现有格式 `${serial_no} / 批 ${batch_id}`。
+describe('buildSelectedScanItems', () => {
+  it('空 targets → 空数组', () => {
+    expect(buildSelectedScanItems([], new Set())).toEqual([])
+  })
+
+  it('空 selectedBatchIds → 空数组（即使 targets 非空）', () => {
+    const targets: ScanUnresolvedTarget[] = [
+      {
+        part_id: 'P1',
+        serial_no: 'A001',
+        drawing_no: 'D-1',
+        name: 'N1',
+        available_batches: [
+          { batch_id: 'B1', quantity: 5, status: 'PENDING', version: 1 },
+        ],
+      },
+    ]
+    expect(buildSelectedScanItems(targets, new Set())).toEqual([])
+  })
+
+  it('选中 1 个 / 多个批次 → 仅这些批次出现在结果中，按 targets × available_batches 顺序', () => {
+    const targets: ScanUnresolvedTarget[] = [
+      {
+        part_id: 'P1',
+        serial_no: 'A001',
+        drawing_no: 'D-1',
+        name: 'N1',
+        available_batches: [
+          { batch_id: 'B1', quantity: 5, status: 'PENDING', version: 1 },
+          { batch_id: 'B2', quantity: 3, status: 'PENDING', version: 2 },
+        ],
+      },
+      {
+        part_id: 'P2',
+        serial_no: 'A002',
+        drawing_no: 'D-2',
+        name: 'N2',
+        available_batches: [
+          { batch_id: 'B3', quantity: 1, status: 'PROGRAMMING', version: 4 },
+        ],
+      },
+    ]
+    const result = buildSelectedScanItems(targets, new Set(['B2', 'B3']))
+    expect(result).toEqual([
+      {
+        batch_id: 'B2',
+        version: 2,
+        quantity: 3,
+        label: 'A001 / 批 B2',
+      },
+      {
+        batch_id: 'B3',
+        version: 4,
+        quantity: 1,
+        label: 'A002 / 批 B3',
+      },
+    ])
+  })
+
+  it('selectedBatchIds 命中未在 targets 里的 batch_id → 静默忽略', () => {
+    const targets: ScanUnresolvedTarget[] = [
+      {
+        part_id: 'P1',
+        serial_no: 'A001',
+        drawing_no: 'D-1',
+        name: 'N1',
+        available_batches: [
+          { batch_id: 'B1', quantity: 5, status: 'PENDING', version: 1 },
+        ],
+      },
+    ]
+    expect(buildSelectedScanItems(targets, new Set(['B1', 'GHOST']))).toEqual([
+      {
+        batch_id: 'B1',
+        version: 1,
+        quantity: 5,
+        label: 'A001 / 批 B1',
+      },
     ])
   })
 })

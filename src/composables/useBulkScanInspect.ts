@@ -25,6 +25,7 @@ import {
   type BatchToInspectionItem,
   type BatchToInspectionOutFE,
 } from '@/api/parts'
+import type { ScanUnresolvedTarget } from '@/types/deliveryNote'
 
 export interface BulkScanItem {
   /** 必填：batchToInspection 入参的 batch id（雪花 ID 字符串）。 */
@@ -60,6 +61,40 @@ export interface UseBulkScanInspectReturn {
   run: (
     req: { target_inspection_shelf_id: string; items: BulkScanItem[] },
   ) => Promise<BulkScanResult>
+}
+
+/**
+ * 纯函数：从 ScanUnresolvedTarget[] 与 selectedBatchIds 派生 BulkScanItem[]。
+ *
+ * 用途（2026-08-31 路线 B 候选批次勾选送检）：
+ *   - DeliveryScanCandidateDialog 的 el-table 加 type="selection" 后，用户在
+ *     弹窗里勾选要送检的批次；本函数按勾选集合派生 useBulkScanInspect().run()
+ *     要的 items[]，剥掉 UI 展示用的标识、保留 batch_id/version/quantity。
+ *   - 顺序：targets 外层 for × available_batches 内层 for，保证与 dialog 内
+ *     flatBatches（同一派生顺序）的下标一致；与 toBatchScanItems 链路衔接。
+ *
+ * 复杂度 O(N)（N = targets × batches 总数）；纯函数，无副作用，不依赖 axios。
+ *
+ * @param targets 路线 B 未送检工单列表（含 available_batches）。
+ * @param selectedBatchIds 用户在弹窗里勾选的批次 id 集合；未命中则忽略。
+ */
+export function buildSelectedScanItems(
+  targets: ScanUnresolvedTarget[],
+  selectedBatchIds: ReadonlySet<string>,
+): BulkScanItem[] {
+  const items: BulkScanItem[] = []
+  for (const t of targets) {
+    for (const b of t.available_batches) {
+      if (!selectedBatchIds.has(b.batch_id)) continue
+      items.push({
+        batch_id: b.batch_id,
+        version: b.version,
+        quantity: b.quantity,
+        label: `${t.serial_no} / 批 ${b.batch_id}`,
+      })
+    }
+  }
+  return items
 }
 
 /**
