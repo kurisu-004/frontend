@@ -323,12 +323,14 @@
       </template>
     </el-dialog>
 
-    <!-- 2026-08-04：扫码命中同一 serial 多批次时复用报工台 BatchPickerDialog -->
-    <BatchPickerDialog
-      v-model="showBatchPicker"
-      :code="batchPickerCode"
-      :rows="batchPickerRows"
-      @pick="onBatchPicked"
+    <!-- 2026-08-31：扫码命中同一 serial 多批次时弹 ScanBatchPickerDialog（v2 by-serial 端点）。 -->
+    <!-- part 运行时仅在 openScanBatchPicker 设置后才打开弹窗，type cast 安全。 -->
+    <ScanBatchPickerDialog
+      v-model="showScanBatchPicker"
+      :code="scanBatchPickerCode"
+      :part="scanBatchPickerPart as PartScanInfoOut"
+      :batches="scanBatchPickerBatches"
+      @pick="onScanBatchPicked"
     />
   </div>
 </template>
@@ -359,7 +361,10 @@ import { listProcesses } from '@/api/process'
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
 import type { Shelf } from '@/types/shelf'
 import type { Process } from '@/types/process'
-import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue'
+// 2026-08-31 改：扫码多批次命中改走 v2 by-serial 端点 + ScanBatchPickerDialog（路线 B）。
+import ScanBatchPickerDialog from './components/ScanBatchPickerDialog.vue'
+import { getPartBatchesBySerial } from '@/api/parts/batch'
+import type { PartBatchScanOut, PartScanInfoOut } from '@/types/parts'
 import { useInspectionList } from './composables/useInspectionList'
 
 // ============ 状态 ============
@@ -610,9 +615,12 @@ onBeforeUnmount(() => {
 // 已有 dialog 显示时不抢流程。
 const scanChooserOpen = ref(false)
 const scanChooserRow = ref<RowState | null>(null)
-const showBatchPicker = ref(false)
-const batchPickerCode = ref('')
-const batchPickerRows = ref<PartItem[]>([])
+// 2026-08-31 改：扫码多批次命中改走 v2 by-serial 端点弹 ScanBatchPickerDialog；以下 5 个 ref 替代旧 BatchPickerDialog 三件套。
+const showScanBatchPicker = ref(false)
+const scanBatchPickerCode = ref('')
+const scanBatchPickerPart = ref<PartScanInfoOut | null>(null)
+const scanBatchPickerBatches = ref<PartBatchScanOut[]>([])
+const scanBatchPickerLoading = ref(false)
 
 async function onInspectionScan(rawCode: string): Promise<void> {
   const code = rawCode.trim()
@@ -622,7 +630,8 @@ async function onInspectionScan(rawCode: string): Promise<void> {
     passDialogVisible.value ||
     failDialogVisible.value ||
     scanChooserOpen.value ||
-    scanInspectDialogVisible.value
+    scanInspectDialogVisible.value ||
+    showScanBatchPicker.value
   ) {
     return
   }
@@ -644,14 +653,86 @@ async function onInspectionScan(rawCode: string): Promise<void> {
     return
   }
   if (matches.length > 1) {
-    // 多批次命中 — 复用报工台 BatchPickerDialog
-    batchPickerCode.value = code
-    batchPickerRows.value = matches
-    showBatchPicker.value = true
+    // 2026-08-31 改：调 v2 by-serial 端点拿所有批次，弹 ScanBatchPickerDialog（路线 B 配套组件）。
+    await openScanBatchPicker(code)
     return
   }
   // 单条命中 — 按状态路由
   routeScannedPart(matches[0])
+}
+
+// 2026-08-31 改：v2 by-serial 弹窗拉批次入口。
+// - 0 批次 → 走 findPartBySerialAndPrompt 显示「未找到」提示
+// - 1 批次 → 跳过对话框，直接合成 PartItem 路由（用户决策：单批次免打扰）
+// - 多批次 → 设 part/batches 后 showScanBatchPicker = true
+// - 异常（端点失败 / 404 等）→ 走 getPartBySerial / findPartBySerialAndPrompt 兜底
+async function openScanBatchPicker(code: string): Promise<void> {
+  scanBatchPickerLoading.value = true
+  scanBatchPickerCode.value = code
+  try {
+    const ctx = await getPartBatchesBySerial(code)
+    if (ctx.batches.length === 0) {
+      await findPartBySerialAndPrompt(code)
+      return
+    }
+    // 2026-08-31 用户决策：1 批次跳过对话框，直接合成 PartItem 路由
+    if (ctx.batches.length === 1) {
+      routeScannedPart(toPickedPartItem(ctx.part, ctx.batches[0]!))
+      return
+    }
+    // 多批次弹新对话框
+    scanBatchPickerPart.value = ctx.part
+    scanBatchPickerBatches.value = ctx.batches
+    showScanBatchPicker.value = true
+  } catch {
+    await findPartBySerialAndPrompt(code)
+  } finally {
+    scanBatchPickerLoading.value = false
+  }
+}
+
+// 2026-08-31：把 v2 响应顶层 part + 单条 batch 合成为 routeScannedPart 用的最小 PartItem。
+// routeScannedPart 仅依赖 status / location / id / version / batch_id / worker_name；其它字段允许默认值，
+// 下游弹窗不强制校验。location=null 不会误判为 PRODUCTION_SHELF（实际由 status 决定路由分支）。
+function toPickedPartItem(p: PartScanInfoOut, b: PartBatchScanOut): PartItem {
+  return {
+    id: p.id,
+    version: b.version,
+    serial_no: null,
+    name: p.name,
+    drawing_no: p.drawing_no,
+    quantity: b.quantity,
+    planned_delivery_date: '',
+    actual_delivery_date: null,
+    is_urgent: p.is_urgent,
+    status: b.status,
+    order_no: p.order_no,
+    system_delivery_date: p.system_delivery_date,
+    note: p.note,
+    customer_name: null,
+    parent_customer_name: null,
+    customer_path: null,
+    delivery_note_id: null,
+    delivery_note_no: null,
+    delivery_note_status: null,
+    assembly_id: null,
+    current_holder_id: null,
+    current_holder_kind: null,
+    shelf_code: null,
+    worker_name: b.holder_name,
+    outsource_company_name: null,
+    location: null,
+    current_holder_display: b.holder_name ?? null,
+    placed_at: null,
+    next_process_id: null,
+    next_process_name: null,
+    last_inspection_fail_note: null,
+    batch_id: b.id,
+    // v2 响应没有 batch_no；字段为 optional，undefined 即可。
+    batch_no: undefined,
+    batch_label: null,
+    has_been_repaired: false,
+  }
 }
 
 // 统一扫码路由：列表命中 / getPartBySerial fallback / BatchPicker 三处共用
@@ -688,9 +769,10 @@ function onScanChooserFail(): void {
   if (row) void openFailDialog(row)  // 复用现有 openFailDialog
 }
 
-function onBatchPicked(p: PartItem): void {
-  showBatchPicker.value = false
-  routeScannedPart(p)
+// 2026-08-31 改：ScanBatchPickerDialog.pick 回调用 —— 合成 PartItem 后走统一扫码路由。
+function onScanBatchPicked(payload: { batch: PartBatchScanOut; part: PartScanInfoOut }): void {
+  const item = toPickedPartItem(payload.part, payload.batch)
+  routeScannedPart(item)
 }
 
 const { onScan } = useBarcodeScanner()
