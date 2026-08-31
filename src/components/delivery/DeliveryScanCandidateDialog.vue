@@ -18,11 +18,20 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
-import { useBulkScanInspect } from '@/composables/useBulkScanInspect'
-import type { BulkScanItem } from '@/composables/useBulkScanInspect'
+import { buildSelectedScanItems, useBulkScanInspect } from '@/composables/useBulkScanInspect'
 import { listShelves } from '@/api/shelves'
 import type { Shelf } from '@/types/shelf'
 import type { ScanUnresolvedTarget, ScanAvailableBatch } from '@/types/deliveryNote'
+
+// 路线 B 弹窗内的扁平批次行（每个 ScanAvailableBatch 摊平成 el-table 一行，
+// 附带外层 ScanUnresolvedTarget 的 part 级信息以展示序列号/图号/名称）。
+// 2026-08-31 新增：批次勾选送检（route B 部分挑选）。
+interface FlatBatchRow extends ScanAvailableBatch {
+  part_id: string
+  serial_no: string
+  drawing_no: string
+  name: string
+}
 
 interface Props {
   /** v-model 显隐 */
@@ -43,6 +52,9 @@ const emit = defineEmits<{
 
 const bulk = useBulkScanInspect()
 const submitting = ref(false)
+
+/** 用户勾选的批次 id 集合；弹窗打开时（modelValue 变 true）重置为空集。 */
+const selectedBatchIds = ref(new Set<string>())
 
 // ============ 品检架候选（INSPECTION zone active）============
 // 2026-08-28 fix：dev-stage el-input + 数字 regex 改为 el-select + listShelves，
@@ -76,6 +88,7 @@ watch(
   (v) => {
     if (v) {
       if (props.defaultShelfId) selectedShelfId.value = props.defaultShelfId
+      selectedBatchIds.value = new Set() // 重置勾选（防止上次会话残留）
       void loadShelves()
     }
   },
@@ -85,27 +98,35 @@ onMounted(() => {
   if (props.modelValue) void loadShelves()
 })
 
-/** 所有未送检批次的总批次数（UI 文案用） */
-const totalBatchCount = computed(() =>
-  props.targets.reduce((sum, t) => sum + t.available_batches.length, 0),
-)
-
-/** flatItems：把 ScanUnresolvedTarget[] 展平为 BulkScanItem[]
- *  供 useBulkScanInspect().run() 直接消费。
- *  2026-08-29：透传 b.version（caller OCC 锚 t_part_batch）。 */
-const flatItems = computed<BulkScanItem[]>(() =>
+/** flatBatches：把 ScanUnresolvedTarget[] 展平为 FlatBatchRow[]，供 el-table 渲染。 */
+const flatBatches = computed<FlatBatchRow[]>(() =>
   props.targets.flatMap((t) =>
     t.available_batches.map((b: ScanAvailableBatch) => ({
-      batch_id: b.batch_id,
-      version: b.version,
-      quantity: b.quantity,
-      label: `${t.serial_no} / 批 ${b.batch_id}`,
+      ...b,
+      part_id: t.part_id,
+      serial_no: t.serial_no,
+      drawing_no: t.drawing_no,
+      name: t.name,
     })),
   ),
 )
 
+/**
+ * el-table @selection-change 回调：把当前勾选行同步到 selectedBatchIds。
+ * 注意：参数是当前可见勾选行（Element Plus 行为），不是 toggle diff；
+ * 用新 Set 整体替换以确保与 UI 状态一致。
+ */
+function onSelectionChange(rows: FlatBatchRow[]): void {
+  selectedBatchIds.value = new Set(rows.map((r) => r.batch_id))
+}
+
 const canConfirm = computed(
-  () => props.targets.length > 0 && selectedShelfId.value !== null && selectedShelfId.value.length > 0 && !shelvesLoading.value,
+  () =>
+    flatBatches.value.length > 0 &&
+    selectedBatchIds.value.size > 0 &&
+    selectedShelfId.value !== null &&
+    selectedShelfId.value.length > 0 &&
+    !shelvesLoading.value,
 )
 
 async function onConfirm(): Promise<void> {
@@ -114,11 +135,16 @@ async function onConfirm(): Promise<void> {
     ElMessage.warning('请选择品检架')
     return
   }
+  if (selectedBatchIds.value.size === 0) {
+    ElMessage.warning('请至少勾选一个批次')
+    return
+  }
+  const items = buildSelectedScanItems(props.targets, selectedBatchIds.value)
   submitting.value = true
   try {
     const result = await bulk.run({
       target_inspection_shelf_id: shelfId,
-      items: flatItems.value,
+      items,
     })
     if (result.failed.length === 0) {
       ElMessage.success(`已送检 ${result.submitted.length} 项`)
@@ -153,7 +179,7 @@ async function onConfirm(): Promise<void> {
     <el-alert
       type="info"
       :closable="false"
-      :title="`下列 ${targets.length} 个工单（${totalBatchCount} 个批次）未送检；选择品检架后一键送检`"
+      :title="`下列 ${targets.length} 个工单（${flatBatches.length} 个批次）未送检；勾选要送检的批次后选择品检架一键送检`"
       class="candidate-alert"
     />
 
@@ -180,16 +206,28 @@ async function onConfirm(): Promise<void> {
       </span>
     </div>
 
-    <div v-if="targets.length === 0" class="muted">无未送检项</div>
-    <el-table v-else :data="targets" max-height="320" border>
-      <el-table-column prop="serial_no" label="序列号" align="center" />
-      <el-table-column prop="drawing_no" label="图号" align="center" />
-      <el-table-column prop="name" label="名称" align="center" />
-      <el-table-column label="候选批次数" width="120" align="center">
+    <div v-if="flatBatches.length === 0" class="muted">无未送检批次</div>
+    <el-table
+      v-else
+      :data="flatBatches"
+      row-key="batch_id"
+      max-height="320"
+      border
+      aria-label="未送检候选批次列表"
+      empty-text="该工单下暂无可送检批次"
+      @selection-change="onSelectionChange"
+    >
+      <el-table-column type="selection" width="44" fixed="left" />
+      <el-table-column prop="serial_no" label="序列号" min-width="90" align="center" />
+      <el-table-column prop="drawing_no" label="图号" min-width="110" align="center" show-overflow-tooltip />
+      <el-table-column prop="name" label="名称" min-width="80" align="center" show-overflow-tooltip />
+      <el-table-column prop="batch_id" label="批次ID" min-width="140" align="center" show-overflow-tooltip>
         <template #default="{ row }">
-          {{ row.available_batches.length }}
+          {{ row.batch_id }}
         </template>
       </el-table-column>
+      <el-table-column prop="quantity" label="数量" width="70" align="center" />
+      <el-table-column prop="status" label="状态" width="90" align="center" />
     </el-table>
 
     <template #footer>
