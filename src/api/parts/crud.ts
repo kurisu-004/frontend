@@ -401,6 +401,65 @@ export async function updatePart(
   return resp.data
 }
 
+// ============ inspection 单件 v1 体系（inspection 页面专用，回滚自 to-XXX）==============
+
+/** 无 body 流转端点的可选批次参数（单件接口使用）。 */
+export interface BatchActionPayload {
+  batch_id?: string | null
+  quantity?: number | null
+}
+
+/** INSPECTION → READY_TO_SHIP：品检合格（可选批次/部分数量）。
+ * 事件类型 INSPECTED。
+ *
+ * 2026-08-31 回滚：v2 `POST /parts/{id}/to-ship` 在 inspection 页面错用，
+ * 改回 v1 `POST /parts/{id}/pass-inspection`。原 `toShip` v2 保留供
+ * usePartDetail / useOutsourceReceivingList 使用。 */
+export async function passInspection(
+  id: string,
+  payload?: BatchActionPayload,
+): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/parts/${id}/pass-inspection`,
+    payload ?? undefined,
+  )
+  return resp.data
+}
+
+/** 扫码快捷品检（PENDING/PROGRAMMING/IN_PROCESS+PRODUCTION_SHELF → INSPECTION）。
+ * 事件类型 INSPECTED（PASS）/ INSPECTION_FAILED（FAIL）。
+ *
+ * 2026-08-31 回滚：从 v2 `POST /parts/{id}/to-inspection` 改回 v1
+ * `POST /parts/{id}/scan-inspect`。原 `toInspection` v2 保留供
+ * useOutsourceReceivingList 使用。 */
+export interface ScanInspectPayload {
+  /** 必填；目标品检架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
+  target_inspection_shelf_id: string
+  /** 必填；PASS = 走 INSPECTED / FAIL = 走 INSPECTION_FAILED。 */
+  decision: 'PASS' | 'FAIL'
+  /** 仅 FAIL 必填；打回的目标生产货架 id。 */
+  shelf_id?: string
+  /** 仅 FAIL 必填；下一道工序 id。 */
+  next_process_id?: string
+  /** 可选；品检备注（≤ 500 字符）。 */
+  note?: string | null
+  /** 可选；目标批次 id；缺省按状态唯一批次解析。 */
+  batch_id?: string | null
+  /** 可选；缺省 = 批次全量。 */
+  quantity?: number | null
+}
+
+export async function scanInspect(
+  id: string,
+  payload: ScanInspectPayload,
+): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/parts/${id}/scan-inspect`,
+    payload,
+  )
+  return resp.data
+}
+
 // ============ inspection to-XXX 体系（2026-08-28 后端路线 B 重构）==============
 
 /** 单件送检（PENDING/PROGRAMMING/IN_PROCESS+PRODUCTION_SHELF → INSPECTION）。

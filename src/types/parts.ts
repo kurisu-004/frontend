@@ -41,7 +41,9 @@ export const ORDER_STATUS_TAG_TYPE: Record<OrderStatus, 'info' | 'warning' | 'su
   CANCELLED: 'info',
 }
 
-/** 2026-08-31 新增：扫码 v2 端点响应（GET /api/v2/parts/by-serial/{serial_no}/part-batches）。 */
+/** 2026-08-31 新增：扫码 v2 端点响应（GET /api/v2/parts/by-serial/{serial_no}/part-batches）。
+ * 2026-08-31 保留：ScanBatchPickerDialog.vue 仍引用此类型作 dead-code 保留备查，
+ * inspection 页本身已切回 v1 + BatchPickerDialog，零运行时调用。 */
 export interface PartScanInfoOut {
   id: string
   drawing_no: string
@@ -55,7 +57,8 @@ export interface PartScanInfoOut {
   note: string | null
 }
 
-/** 2026-08-31 新增：扫码 v2 端点响应——批次列表。 */
+/** 2026-08-31 新增：扫码 v2 端点响应——批次列表。
+ * 2026-08-31 保留：ScanBatchPickerDialog.vue 仍引用此类型作 dead-code 保留备查。 */
 export interface PartBatchScanOut {
   id: string
   quantity: number
@@ -68,12 +71,6 @@ export interface PartBatchScanOut {
   holder_name: string | null
   /** 批次乐观锁版本号（t_part_batch.version，非 part.version）。 */
   version: number
-}
-
-/** 2026-08-31 新增：扫码 v2 端点响应——零件 + 批次组合。 */
-export interface PartScanContextOut {
-  part: PartScanInfoOut
-  batches: PartBatchScanOut[]
 }
 
 export type PartSortKey =

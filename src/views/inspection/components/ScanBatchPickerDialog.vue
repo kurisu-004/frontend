@@ -12,6 +12,7 @@
     emits:  update:modelValue(v)
             pick({ batch, part })
 -->
+<!-- 2026-08-31 回滚到 v1 + BatchPickerDialog 后无引用，保留备查。 -->
 
 <template>
   <el-dialog
