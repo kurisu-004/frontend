@@ -26,6 +26,9 @@
 
 import { api, apiV2 } from '@/api/http'
 import type {
+  AttachBatchConflict,
+  AttachBatchItem,
+  AttachBatchesOut,
   DeliveryNoteCandidatePart,
   DeliveryNoteDetailOut,
   DeliveryNoteEventOut,
@@ -34,6 +37,7 @@ import type {
   DeliveryNoteSortDir,
   DeliveryNoteSortKey,
   DeliveryNoteStatus,
+  ScanAttachableBatch,
   ScanDeliveryOut,
   SubmitDeliveryOut,
 } from '@/types/deliveryNote'
@@ -406,6 +410,23 @@ function parseFilename(header: string | undefined): string | null {
  */
 export async function scanDelivery(code: string): Promise<ScanDeliveryOut> {
   const resp = await apiV2.post<ScanDeliveryOut>('/delivery-notes/scan', { code })
+  return resp.data
+}
+
+/**
+ * 弹窗提交时把 A 组（INSPECTION / READY_TO_SHIP）批次 attach 到指定 DRAFT 送货单。
+ *
+ * 部分失败（OCC / 状态非法 / 重复）→ 200 + conflicts 列表。
+ * note 非 DRAFT → 409 `BIZ_DELIVERY_NOTE_NOT_DRAFT`。
+ */
+export async function attachBatches(
+  noteId: string,
+  batches: AttachBatchItem[],
+): Promise<AttachBatchesOut> {
+  const resp = await apiV2.post<AttachBatchesOut>(
+    `/delivery-notes/${noteId}/attach-batches`,
+    { batches },
+  )
   return resp.data
 }
 

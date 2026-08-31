@@ -247,7 +247,48 @@ export interface ScanUnresolvedTarget {
   serial_no: string
   drawing_no: string
   name: string
+  /** B 组（需送检）；现状保持不变。 */
   available_batches: ScanAvailableBatch[]
+  /** A 组（可直接 attach）；**2026-08-31 新增字段**。Added 场景下为空 Vec，但 schema 始终存在。 */
+  attachable_batches: ScanAttachableBatch[]
+}
+
+// 2026-08-31 新增：路线 B A 组批次（attach-batches 用）
+export interface ScanAttachableBatch {
+  /** 雪花 ID 字符串。 */
+  batch_id: string
+  /** 该批次当前数量。 */
+  quantity: number
+  /** 仅 INSPECTION / READY_TO_SHIP（与 ScanAvailableBatch 形态区分）。 */
+  status: string
+  /** 2026-08-29：批次乐观锁版本；调用 POST /attach-batches 时必填。 */
+  version: number
+}
+
+// 2026-08-31 新增：attach-batches 请求 / 响应
+export interface AttachBatchesRequest {
+  batches: AttachBatchItem[]
+}
+
+export interface AttachBatchItem {
+  batch_id: string
+  version: number
+}
+
+/** `POST /api/v2/delivery-notes/{note_id}/attach-batches` 响应
+ *
+ * 即使部分失败也返回 200，前端按 conflicts 列表处理。 */
+export interface AttachBatchesOut {
+  /** 成功 attach 的数量。 */
+  attached: number
+  /** 失败的批次明细；OCC / 状态非法 / 不存在都会列在这里。 */
+  conflicts: AttachBatchConflict[]
+}
+
+export interface AttachBatchConflict {
+  batch_id: string
+  /** 失败原因：'VERSION_CONFLICT' | 'BATCH_NOT_FOUND' | 'ALREADY_ATTACHED' | 'INVALID_STATE:XXX' */
+  reason: string
 }
 
 /** 草稿卡片要展示的最近加入批次条目（后端 limit=8，按 id DESC）。 */
