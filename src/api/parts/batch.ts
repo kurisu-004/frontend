@@ -8,6 +8,7 @@
 import { api, apiV2, cleanParams } from '@/api/http'
 import type { PartFileItem } from '@/types/part_file'
 import type { PartCreatePayload, PartItem } from './crud'
+import type { PartScanContextOut } from '@/types/parts'
 
 export interface PartBatchFailure {
   index: number
@@ -322,6 +323,18 @@ export async function batchToShip(
   const resp = await apiV2.post<BatchToShipOutFE>(
     '/parts/batch-to-ship',
     payload,
+  )
+  return resp.data
+}
+
+// ============ 扫码拉批次（路线 B 候选弹窗数据源）==============
+
+/** 2026-08-31 新增：扫码序列号拉批次列表（路线 B 弹窗填充）。 */
+export async function getPartBatchesBySerial(
+  serialNo: string,
+): Promise<PartScanContextOut> {
+  const resp = await apiV2.get<PartScanContextOut>(
+    `/parts/by-serial/${encodeURIComponent(serialNo)}/part-batches`,
   )
   return resp.data
 }

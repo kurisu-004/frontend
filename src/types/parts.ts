@@ -41,6 +41,41 @@ export const ORDER_STATUS_TAG_TYPE: Record<OrderStatus, 'info' | 'warning' | 'su
   CANCELLED: 'info',
 }
 
+/** 2026-08-31 新增：扫码 v2 端点响应（GET /api/v2/parts/by-serial/{serial_no}/part-batches）。 */
+export interface PartScanInfoOut {
+  id: string
+  drawing_no: string
+  name: string
+  quantity: number
+  customer_id: string | null
+  /** 形如 "2026-09-15"；null = 未设置。 */
+  system_delivery_date: string | null
+  is_urgent: boolean
+  order_no: string | null
+  note: string | null
+}
+
+/** 2026-08-31 新增：扫码 v2 端点响应——批次列表。 */
+export interface PartBatchScanOut {
+  id: string
+  quantity: number
+  /** 复用 OrderStatus 枚举；文案映射走 ORDER_STATUS_LABEL。 */
+  status: OrderStatus
+  /**
+   * 当前持有人显示名（后端 LEFT JOIN t_worker / t_shelf 输出）。
+   * 可能语义：工人真名 / 货架 code / 公司名 / null。
+   */
+  holder_name: string | null
+  /** 批次乐观锁版本号（t_part_batch.version，非 part.version）。 */
+  version: number
+}
+
+/** 2026-08-31 新增：扫码 v2 端点响应——零件 + 批次组合。 */
+export interface PartScanContextOut {
+  part: PartScanInfoOut
+  batches: PartBatchScanOut[]
+}
+
 export type PartSortKey =
   | 'PLANNED_DELIVERY_DATE'
   | 'REQUEST_DATE'
