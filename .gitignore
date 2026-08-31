@@ -6,3 +6,5 @@ dist
 
 .claude
 /.env
+
+.playwright-cli
