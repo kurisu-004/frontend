@@ -351,6 +351,7 @@ onBeforeUnmount(() => {
     <DeliveryScanCandidateDialog
       v-model="submission.candidateDialogVisible.value"
       :targets="submission.candidateTargets.value"
+      :note-id="submission.candidateNoteId.value"
       @done="onCandidateResolved"
     />
 
