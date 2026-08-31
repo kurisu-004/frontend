@@ -80,6 +80,8 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
   const candidateTargets = ref<ScanUnresolvedTarget[]>([])
   const originalScanCode = ref<string>('')
   const candidateDialogVisible = ref(false)
+  // 2026-08-31 新增：弹窗需要 noteId（attach-batches endpoint 必填）。
+  const candidateNoteId = ref<string>('')
 
   // ============ submit 后 CANDIDATES_AVAILABLE 候选弹窗（2026-08-29 新增）==============
   /** submit 返回 CANDIDATES_AVAILABLE 时把 unresolved_targets 投到这里，
@@ -156,8 +158,10 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
         )
         break
       case 'CANDIDATES_AVAILABLE':
-        // 散件仅 B 组：写草稿（A 组 0 项也要写以记录扫码历史）+ 弹候选弹窗
+        // 散件含 B 组（未送检）+ 可能含 A 组（可直接 attach）；A 组不再自动 attach，
+        // 改由弹窗用户勾选后调用 attach-batches。写草稿（A 组 0 项也要写以记录扫码历史）+ 弹候选弹窗
         if (out.note) opts.writeDraftFromScan(out.note)
+        candidateNoteId.value = out.note?.id ?? ''  // 2026-08-31 新增
         candidateTargets.value = out.unresolved_targets ?? []
         originalScanCode.value = originalCode
         candidateDialogVisible.value = true
@@ -166,16 +170,18 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
         )
         break
       case 'PARTIAL_ADDED':
-        // 装配件混合：A 组已挂载 + B 组子件待送检
+        // 装配件混合：A 组已挂载 + B 组子件待送检；A 组不再自动 attach（如果有）
         if (out.note) {
           opts.writeDraftFromScan(out.note)
           void opts.refreshDraftDetail(out.note.id).catch(() => { /* 已 toast */ })
         }
+        candidateNoteId.value = out.note?.id ?? ''  // 2026-08-31 新增
         candidateTargets.value = out.unresolved_targets ?? []
         originalScanCode.value = originalCode
         candidateDialogVisible.value = true
-        ElMessage.success(
-          `草稿已加入 ${out.added_batches?.length ?? 0} 项；剩余 ${candidateTargets.value.length} 项未送检，请确认`,
+        // 2026-08-31 改：success → info，因为还有未处理项（A/B 都需要弹窗确认）
+        ElMessage.info(
+          `草稿已加入 ${out.added_batches?.length ?? 0} 项；剩余 ${candidateTargets.value.length} 项未送检，请在弹窗中确认`,
         )
         break
     }
@@ -416,6 +422,7 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
     submittingByNote,
     // 2026-08-28 新增：route B 候选弹窗态
     candidateTargets,
+    candidateNoteId,        // 2026-08-31 新增
     originalScanCode,
     candidateDialogVisible,
     // 2026-08-29 新增：submit 后 CANDIDATES_AVAILABLE 候选弹窗态

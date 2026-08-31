@@ -71,6 +71,7 @@ describe('useDeliveryScanSubmission route B', () => {
           drawing_no: 'D-1',
           name: 'N1',
           available_batches: [{ batch_id: 'B1', quantity: 5, status: 'PENDING', version: 1 }],
+          attachable_batches: [],
         },
       ],
     })
@@ -94,6 +95,7 @@ describe('useDeliveryScanSubmission route B', () => {
           drawing_no: 'D-3',
           name: 'N3',
           available_batches: [{ batch_id: 'B3', quantity: 1, status: 'PROGRAMMING', version: 1 }],
+          attachable_batches: [],
         },
       ],
     })

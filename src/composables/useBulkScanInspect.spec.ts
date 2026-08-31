@@ -430,6 +430,7 @@ describe('buildSelectedScanItems', () => {
         available_batches: [
           { batch_id: 'B1', quantity: 5, status: 'PENDING', version: 1 },
         ],
+        attachable_batches: [],
       },
     ]
     expect(buildSelectedScanItems(targets, new Set())).toEqual([])
@@ -446,6 +447,7 @@ describe('buildSelectedScanItems', () => {
           { batch_id: 'B1', quantity: 5, status: 'PENDING', version: 1 },
           { batch_id: 'B2', quantity: 3, status: 'PENDING', version: 2 },
         ],
+        attachable_batches: [],
       },
       {
         part_id: 'P2',
@@ -455,6 +457,7 @@ describe('buildSelectedScanItems', () => {
         available_batches: [
           { batch_id: 'B3', quantity: 1, status: 'PROGRAMMING', version: 4 },
         ],
+        attachable_batches: [],
       },
     ]
     const result = buildSelectedScanItems(targets, new Set(['B2', 'B3']))
@@ -484,6 +487,7 @@ describe('buildSelectedScanItems', () => {
         available_batches: [
           { batch_id: 'B1', quantity: 5, status: 'PENDING', version: 1 },
         ],
+        attachable_batches: [],
       },
     ]
     expect(buildSelectedScanItems(targets, new Set(['B1', 'GHOST']))).toEqual([
