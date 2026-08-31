@@ -148,8 +148,11 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
   const sortBy = ref<QuoteSortKey>('CREATED_AT')
   const sortDir = ref<'ASC' | 'DESC'>('DESC')
   const pagedRef = ref()
-  // items 镜像：仅供 actionColumnHeight 计算按钮数（actionColumnHeight 是行级 computed
-  // 显式读 items.value，所以 PagedTable.items 也通过 watch 同步到此）
+  // items 镜像：仅供 actionColumnWidth 计算按钮数。同步机制是 fetcher() 直接赋值
+  // （line ~223）：PagedTable 每次 fetch 都会调本 fetcher，所以 items 始终跟随 PagedTable.items。
+  // 2026-08-31：原计划用 watch(pagedRef.items.value, syncItemsFromPaged) 兜底，但 Vue 3.5
+  //   component proxy 自动 unwrap refs → pagedRef.items.value 恒为 undefined → watch
+  //   不触发 → syncItemsFromPaged 是死代码。删除。
   const items = ref<OutsourceQuote[]>([])
   const errorMsg = ref<string | null>(null)
 
@@ -297,14 +300,6 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
     }
   }
 
-  // ============ items 镜像同步（actionColumnWidth 计算按钮数）============
-  // 2026-08-31：pageSize 持久化已移除，syncPageSizeFromPaged 随之删除（其唯一调用点
-  //   OutsourceQuoteList.vue 的 watch 也是同一个 Vue 3.5 unwrap bug）
-  function syncItemsFromPaged(): void {
-    const it = pagedRef.value?.items?.value
-    items.value = (it ?? []) as OutsourceQuote[]
-  }
-
   // ============ route 直接读由 caller 在 restore() 时传入（避免 composable 内 useRoute）============
   return {
     // state
@@ -340,7 +335,6 @@ export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
     onSortChange,
     onReset,
     restore,
-    syncItemsFromPaged,
     quoteRowClassName,
   }
 }

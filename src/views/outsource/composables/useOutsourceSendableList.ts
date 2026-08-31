@@ -3,8 +3,8 @@
 // 可发送 tab 的业务状态 + 业务函数（2026-08-25 T12 从 OutsourceSendReceive.vue 抽出）。
 //
 // 持有：
-//   - sendableFilter / sendablePageSize：filter bar + 分页持久化
-//   - sendablePagedRef：<PagedTable> 模板 ref（用于 fetch / reset / 读 pageSize）
+//   - sendableFilter：filter bar 持久化（pageSize 不再持久化，详见 2026-08-31 注释）
+//   - sendablePagedRef：<PagedTable> 模板 ref（用于 fetch / reset）
 //   - sendQueue / batchSending / scanInput：扫码批量发送队列（PR-I 2026-07-20）
 //   - sendDialogVisible / sendTarget / sendSelectedCompanyId / sendQuantity /
 //     sendSubmitting：发送 dialog 状态（行级 + 扫码级共用）
@@ -72,17 +72,17 @@ export function useOutsourceSendableList(
 ) {
   const { dangerous: confirmDangerous } = useConfirm()
 
-  // ============ 列表 filter + 分页（持久化） ============
+  // ============ 列表 filter（持久化） ============
+  // 2026-08-31 双实例修复：pageSize 不再持久化（与 PartListShell 一致），
+  // 每次进入视图从 <PagedTable :default-page-size="20"> 起算。
   const sendableError = ref<string | null>(null)
   const sendableFilter = reactive({ keyword: '', customer_id: '' })
   const sendablePagedRef = ref()
-  // pageSize 持久化镜像（与 T7 同步：PagedTable.pageSize → view 本地 pageSize）
-  const sendablePageSize = ref(20)
 
   // 可发送 tab 持久化（2026-07-30 commit 4B）；2026-08-25 T7：page 不再持久化
   const persist = useListStatePersist(
     'outsource_send_receive_sendable',
-    { sendableFilter, sendablePageSize },
+    { sendableFilter },
   )
 
   async function sendableFetcher(params: { page: number; pageSize: number }) {
@@ -338,7 +338,6 @@ export function useOutsourceSendableList(
     sendableError,
     sendableFilter,
     sendablePagedRef,
-    sendablePageSize,
     sendQueue,
     batchSending,
     scanInput,
@@ -347,7 +346,7 @@ export function useOutsourceSendableList(
     sendSelectedCompanyId,
     sendQuantity,
     sendSubmitting,
-    // 持久化恢复（shell 在 onMounted 里调一次，把 snapshot 写回 sendableFilter / pageSize）
+    // 持久化恢复（shell 在 onMounted 里调一次，把 snapshot 写回 sendableFilter）
     restore: persist.restore,
     snapshot: persist.snapshot,
     clearPersisted: persist.clear,

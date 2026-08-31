@@ -109,7 +109,7 @@
       </el-select>
       <el-button type="primary" @click="onSendableSearch">查询</el-button>
       <el-button @click="onSendableReset">重置</el-button>
-      <span v-if="sendablePagedRef?.total?.value && sendablePagedRef.total.value > 0" class="total-hint">共 {{ sendablePagedRef.total.value }} 条</span>
+      <span v-if="sendablePagedRef?.total && sendablePagedRef.total > 0" class="total-hint">共 {{ sendablePagedRef.total }} 条</span>
     </div>
     <!-- 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层） -->
     <div class="table-toolbar">
@@ -199,7 +199,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { h, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Promotion } from '@element-plus/icons-vue'
 import { ElTag } from 'element-plus'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
@@ -238,7 +238,6 @@ const {
   sendableError,
   sendableFilter,
   sendablePagedRef,
-  sendablePageSize,
   sendQueue,
   batchSending,
   scanInput,
@@ -341,23 +340,18 @@ const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_sendab
 // 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
 const tableRef = ref()
 
-// 持久化恢复 + pageSize 双向同步（与原 shell onMounted 等价）
+// 持久化恢复（与原 shell onMounted 等价）
+// 2026-08-31 双实例修复：pageSize 不再持久化，每次进入视图从 defaultPageSize（20）起算。
+// 取舍依据与 PartListShell 一致：Vue 3.5 component proxy 会自动 unwrap 暴露的 ref，
+// `sendablePagedRef.value.pageSize.value = N` 实际写入 number.value 抛 TypeError。
 onMounted(() => {
   // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
   drag.applyDrag(tableRef)
 
   const persisted = restore()
-  if (persisted) {
-    if (persisted.sendableFilter) Object.assign(sendableFilter, persisted.sendableFilter as Partial<typeof sendableFilter>)
-    if (typeof persisted.sendablePageSize === 'number') {
-      sendablePagedRef.value!.pageSize.value = persisted.sendablePageSize as number
-    }
+  if (persisted && persisted.sendableFilter) {
+    Object.assign(sendableFilter, persisted.sendableFilter as Partial<typeof sendableFilter>)
   }
-  // 2026-08-25 T7：双向同步 PagedTable.pageSize → view 本地 pageSize（触发 persist 自动写盘）
-  watch(
-    () => sendablePagedRef.value?.pageSize?.value,
-    (s) => { if (typeof s === 'number') sendablePageSize.value = s },
-  )
 })
 
 // 全局扫码监听：仅当本 tab 是 active 时处理。

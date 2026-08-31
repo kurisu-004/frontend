@@ -32,7 +32,7 @@
       </el-select>
       <el-button type="primary" @click="onReceivingSearch">查询</el-button>
       <el-button @click="onReceivingReset">重置</el-button>
-      <span v-if="receivingPagedRef?.total?.value && receivingPagedRef.total.value > 0" class="total-hint">共 {{ receivingPagedRef.total.value }} 条</span>
+      <span v-if="receivingPagedRef?.total && receivingPagedRef.total > 0" class="total-hint">共 {{ receivingPagedRef.total }} 条</span>
     </div>
     <!-- 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层） -->
     <div class="table-toolbar">
@@ -123,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, ref, toRef, watch } from 'vue'
+import { h, onMounted, ref, toRef } from 'vue'
 import { ElTag } from 'element-plus'
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
@@ -152,7 +152,6 @@ const {
   receivingError,
   receivingFilter,
   receivingPagedRef,
-  receivingPageSize,
   receiveDialogVisible,
   receiveTarget,
   receiveSubmitting,
@@ -212,23 +211,18 @@ const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_receiv
 // 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
 const tableRef = ref()
 
-// 持久化恢复 + pageSize 双向同步（与原 shell onMounted 等价）
+// 持久化恢复（与原 shell onMounted 等价）
+// 2026-08-31 双实例修复：pageSize 不再持久化，每次进入视图从 defaultPageSize（20）起算。
+// 取舍依据与 PartListShell 一致：Vue 3.5 component proxy 会自动 unwrap 暴露的 ref，
+// `receivingPagedRef.value.pageSize.value = N` 实际写入 number.value 抛 TypeError。
 onMounted(() => {
   // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
   drag.applyDrag(tableRef)
 
   const persisted = restore()
-  if (persisted) {
-    if (persisted.receivingFilter) Object.assign(receivingFilter, persisted.receivingFilter as Partial<typeof receivingFilter>)
-    if (typeof persisted.receivingPageSize === 'number') {
-      receivingPagedRef.value!.pageSize.value = persisted.receivingPageSize as number
-    }
+  if (persisted && persisted.receivingFilter) {
+    Object.assign(receivingFilter, persisted.receivingFilter as Partial<typeof receivingFilter>)
   }
-  // 2026-08-25 T7：双向同步 PagedTable.pageSize → view 本地 pageSize
-  watch(
-    () => receivingPagedRef.value?.pageSize?.value,
-    (s) => { if (typeof s === 'number') receivingPageSize.value = s },
-  )
 })
 
 // expose 给 shell 用于初始化/联动刷新

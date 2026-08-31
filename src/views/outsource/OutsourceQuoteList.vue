@@ -10,7 +10,7 @@
        - shell onMounted 编排（loadLookups → restore → refresh）
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { RefreshLeft, Search } from '@element-plus/icons-vue'
@@ -167,8 +167,6 @@ function onTableAction(payload: { type: 'submit' | 'approve' | 'reject' | 'delet
 onMounted(async () => {
   await loadLookups()
   table.restore(route.query.statuses)
-  // 2026-08-25 T7：items 镜像同步（actionColumnWidth 计算按钮数）
-  watch(() => table.pagedRef.value?.items?.value, table.syncItemsFromPaged)
   await table.refresh()
 })
 
@@ -208,7 +206,7 @@ const pagedRef = table.pagedRef
           新建报价
         </el-button>
 
-        <span v-if="pagedRef?.total?.value && pagedRef.total.value > 0" class="total-hint">共 {{ pagedRef.total.value }} 条</span>
+        <span v-if="pagedRef?.total && pagedRef.total > 0" class="total-hint">共 {{ pagedRef.total }} 条</span>
       </div>
     </el-card>
 

@@ -3,7 +3,7 @@
 // 待接收 tab 的业务状态 + 业务函数（2026-08-25 T12 从 OutsourceSendReceive.vue 抽出）。
 //
 // 持有：
-//   - receivingFilter / receivingPageSize：filter bar + 分页持久化
+//   - receivingFilter：filter bar 持久化（pageSize 不再持久化，详见 2026-08-31 注释）
 //   - receivingPagedRef：<PagedTable> 模板 ref
 //   - shelves / processes：页级 lookup（接收 dialog 用；shell 装载后通过 setter 注入）
 //   - receiveDialogVisible / receiveTarget / receiveBranch / receiveShelf /
@@ -45,16 +45,17 @@ export function useOutsourceReceivingList(
 ) {
   const { dangerous: confirmDangerous } = useConfirm()
 
-  // ============ 列表 filter + 分页（持久化） ============
+  // ============ 列表 filter（持久化） ============
+  // 2026-08-31 双实例修复：pageSize 不再持久化（与 PartListShell 一致），
+  // 每次进入视图从 <PagedTable :default-page-size="20"> 起算。
   const receivingError = ref<string | null>(null)
   const receivingFilter = reactive({ keyword: '', customer_id: '' })
   const receivingPagedRef = ref()
-  const receivingPageSize = ref(20)
 
   // 待接收 tab 持久化（2026-07-30 commit 4B）；2026-08-25 T7：page 不再持久化
   const persist = useListStatePersist(
     'outsource_send_receive_receiving',
-    { receivingFilter, receivingPageSize },
+    { receivingFilter },
   )
 
   // ============ 加急行红底 ============
@@ -212,7 +213,6 @@ export function useOutsourceReceivingList(
     receivingError,
     receivingFilter,
     receivingPagedRef,
-    receivingPageSize,
     receiveDialogVisible,
     receiveTarget,
     receiveSubmitting,
