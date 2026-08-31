@@ -31,6 +31,7 @@
     />
 
     <el-table
+      v-if="part"
       :data="batches"
       row-key="id"
       border
@@ -42,7 +43,7 @@
       <el-table-column label="批次" min-width="120" align="center">
         <template #default="{ $index }">
           <el-tag
-            v-if="props.part.is_urgent"
+            v-if="props.part!.is_urgent"
             type="danger"
             size="small"
             effect="dark"
@@ -75,8 +76,8 @@
 
       <el-table-column label="系统交期" min-width="120" align="center">
         <template #default>
-          <span :class="{ muted: !props.part.system_delivery_date }">
-            {{ props.part.system_delivery_date ?? '—' }}
+          <span :class="{ muted: !props.part!.system_delivery_date }">
+            {{ props.part!.system_delivery_date ?? '—' }}
           </span>
         </template>
       </el-table-column>
@@ -101,8 +102,8 @@ const props = defineProps<{
   modelValue: boolean
   /** 扫描的序列号，仅用于标题展示 */
   code: string
-  /** v2 响应顶层 part（含 is_urgent / system_delivery_date） */
-  part: PartScanInfoOut
+  /** v2 响应顶层 part（含 is_urgent / system_delivery_date）。可空：父级在拉取批次期间 part 尚未就绪；模板用 v-if 守卫。2026-08-31 改可空以消除父级 template type assertion。 */
+  part?: PartScanInfoOut | null
   /** v2 batches 数组 */
   batches: PartBatchScanOut[]
 }>()
@@ -112,13 +113,14 @@ const emit = defineEmits<{
   (e: 'pick', payload: { batch: PartBatchScanOut; part: PartScanInfoOut }): void
 }>()
 
-/** 加急行 className：part.is_urgent 为真时打 batch-row-urgent 红底（沿用 InspectionPending 既有 row-urgent 视觉 #fde2e2）。 */
+/** 加急行 className：part.is_urgent 为真时打 batch-row-urgent 红底（沿用 InspectionPending 既有 row-urgent 视觉 #fde2e2）。part 未就绪时不加类。 */
 function urgentRowClass({ row }: { row: PartBatchScanOut; rowIndex: number }): string {
-  return props.part.is_urgent ? 'batch-row-urgent' : ''
+  return props.part?.is_urgent ? 'batch-row-urgent' : ''
 }
 
 function onRowClick(row: PartBatchScanOut): void {
-  emit('pick', { batch: row, part: props.part })
+  // props.part 在 v-if="part" 守卫下访问时一定非空；用非空断言收口。
+  emit('pick', { batch: row, part: props.part! })
   emit('update:modelValue', false)
 }
 

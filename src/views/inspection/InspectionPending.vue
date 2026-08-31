@@ -324,11 +324,11 @@
     </el-dialog>
 
     <!-- 2026-08-31：扫码命中同一 serial 多批次时弹 ScanBatchPickerDialog（v2 by-serial 端点）。 -->
-    <!-- part 运行时仅在 openScanBatchPicker 设置后才打开弹窗，type cast 安全。 -->
+    <!-- part 类型 PartScanInfoOut | null；dialog 内部 v-if="part" 守卫，未就绪时不渲染表格。 -->
     <ScanBatchPickerDialog
       v-model="showScanBatchPicker"
       :code="scanBatchPickerCode"
-      :part="scanBatchPickerPart as PartScanInfoOut"
+      :part="scanBatchPickerPart"
       :batches="scanBatchPickerBatches"
       @pick="onScanBatchPicked"
     />
