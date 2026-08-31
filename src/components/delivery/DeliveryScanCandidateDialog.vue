@@ -26,23 +26,12 @@ import { attachBatches } from '@/api/deliveryNote'
 import { listShelves } from '@/api/shelves'
 import type { Shelf } from '@/types/shelf'
 import type { ScanUnresolvedTarget } from '@/types/deliveryNote'
-
-// 路线 B 弹窗内的扁平批次行（每个 ScanAvailableBatch + ScanAttachableBatch 摊平成 el-table 一行，
-// 附带外层 ScanUnresolvedTarget 的 part 级信息以展示序列号/图号/名称）。
-// 2026-08-31 扩展：合并 A+B 组，每行加 `kind` 决定走 attach 还是 inspect。
-type BatchKind = 'ATTACHABLE' | 'INSPECTABLE'
-
-interface FlatBatchRow {
-  batch_id: string
-  quantity: number
-  status: string
-  version: number
-  kind: BatchKind
-  part_id: string
-  serial_no: string
-  drawing_no: string
-  name: string
-}
+// 2026-08-31 抽出：flatBatches + filterTargetsByKind → utils/scanCandidateFlatten.ts（便于单测）。
+import {
+  flattenCandidateBatches,
+  filterTargetsByKind,
+  type FlatBatchRow,
+} from './utils/scanCandidateFlatten'
 
 interface Props {
   /** v-model 显隐 */
@@ -111,34 +100,9 @@ watch(
 )
 
 /** flatBatches：把 ScanUnresolvedTarget[] 展平为 FlatBatchRow[]，合并 A+B 两组。
- *  顺序：ATTACHABLE 在前（同类聚集），INSPECTABLE 在后。 */
-const flatBatches = computed<FlatBatchRow[]>(() =>
-  props.targets.flatMap((t) => {
-    const attachableRows: FlatBatchRow[] = t.attachable_batches.map((b) => ({
-      batch_id: b.batch_id,
-      quantity: b.quantity,
-      status: b.status,
-      version: b.version,
-      kind: 'ATTACHABLE' as const,
-      part_id: t.part_id,
-      serial_no: t.serial_no,
-      drawing_no: t.drawing_no,
-      name: t.name,
-    }))
-    const inspectableRows: FlatBatchRow[] = t.available_batches.map((b) => ({
-      batch_id: b.batch_id,
-      quantity: b.quantity,
-      status: b.status,
-      version: b.version,
-      kind: 'INSPECTABLE' as const,
-      part_id: t.part_id,
-      serial_no: t.serial_no,
-      drawing_no: t.drawing_no,
-      name: t.name,
-    }))
-    return [...attachableRows, ...inspectableRows]
-  }),
-)
+ *  顺序：ATTACHABLE 在前（同类聚集），INSPECTABLE 在后。
+ *  2026-08-31 抽到 utils/scanCandidateFlatten.ts 的纯函数，便于单测。 */
+const flatBatches = computed<FlatBatchRow[]>(() => flattenCandidateBatches(props.targets))
 
 /**
  * el-table @selection-change 回调：把当前勾选行同步到 selectedBatchIds。
@@ -235,22 +199,6 @@ async function onConfirm(): Promise<void> {
   } finally {
     submitting.value = false
   }
-}
-
-/** helper：从 props.targets 中筛出只含指定 kind 行的临时结构，喂给 buildSelectedScanItems。
- *  ATTACHABLE 不走送检，本函数目前只用 INSPECTABLE 路径；保留 ATTACHABLE 分支便于对称扩展。 */
-function filterTargetsByKind(
-  targets: ScanUnresolvedTarget[],
-  _kind: 'INSPECTABLE' | 'ATTACHABLE',
-  selected: Set<string>,
-): ScanUnresolvedTarget[] {
-  return targets
-    .map((t) => ({
-      ...t,
-      available_batches: t.available_batches.filter((b) => selected.has(b.batch_id)),
-      attachable_batches: [],
-    }))
-    .filter((t) => t.available_batches.length > 0)
 }
 </script>
 
