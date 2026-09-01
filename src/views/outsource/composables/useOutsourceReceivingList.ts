@@ -186,14 +186,15 @@ export function useOutsourceReceivingList(
         })
         ElMessage.success('已下发到生产货架')
       } else {
-        // 2026-08-28 路线 B：OUTSOURCE → INSPECTION 改走 toInspection（OUTSOURCE 是 to-inspection 入口状态之一）。
-        // 原 receiveFromOutsourceToInspection 的 auto_pass_inspection 语义去掉，
-        // 路线 B inspection 不支持直接 PASS，需后续品检员手动 toShip。
-        // 2026-08-29：caller OCC 锚 t_part_batch —— receiveTarget.version 已是 batch version。
+        // 2026-08-28 路线 B：OUTSOURCE → INSPECTION 走 toInspection（仅送检，不自动 PASS）。
+        // 后续由品检员手动 toShip。
+        // 2026-09-01：toInspection 已回退 v1（Python FastAPI
+        //   /parts/{id}/receive-from-outsource-to-inspection），
+        //   payload 字段名 `shelf_id`，无 `version`（OCC 锚由 v1 service 层按
+        //   t_part_batch 处理，无需前端传）。
         await toInspection(receiveTarget.value.part_id, {
-          target_inspection_shelf_id: receiveShelf.value,
+          shelf_id: receiveShelf.value,
           batch_id: receiveTarget.value.batch_id,
-          version: receiveTarget.value.version,
           quantity: qty,
         })
         ElMessage.success('已送检，等待品检')

@@ -462,28 +462,39 @@ export async function scanInspect(
 
 // ============ inspection to-XXX 体系（2026-08-28 后端路线 B 重构）==============
 
-/** 单件送检（PENDING/PROGRAMMING/IN_PROCESS+PRODUCTION_SHELF → INSPECTION）。
- * 自动拆批：quantity < batch.quantity 时响应 new_batch_id 为拆出的 remainder。
- * 后端详见 ~/Code/hsh-erp-rust/docs/api/parts/inspection.md。 */
+/** 单件送检。
+ *
+ * 2026-09-01 从 v2 `POST /parts/{id}/to-inspection` 回退到 v1 Python FastAPI
+ * `POST /parts/{id}/receive-from-outsource-to-inspection`（与 2026-08-29
+ * `failInspection` 回退 v1 同款约定）。
+ *
+ * - 路由语义：v1 这条路径**专为 OUTSOURCE → INSPECTION** 设计
+ *   （其他状态送检当前没有 v1 等价端点；如有新流程要走 `auto_pass_inspection`
+ *   默认 false 的「单段送检」语义，请直接用本端点，但需注意 schema 无 `version`，
+ *   OCC 由 service 层按 t_part_batch 处理）。
+ * - payload 字段差异：v1 schema（ReceiveToInspectionRequest）字段名是 `shelf_id`
+ *   （不是 v2 的 `target_inspection_shelf_id`），无 `version`，无 `note`。
+ *   Pydantic 默认 ignore extras，多传字段会被静默丢弃，不返 422。
+ * - response 差异：v1 返回 `PartItem`（无 `new_batch_id`，自动拆批的
+ *   remainder 对当前消费者而言不需要）。
+ * - `auto_pass_inspection` 不传 / 省略 → 默认 false（路线 B：仅送检，
+ *   不直接 PASS；后续由品检员手动 toShip）。
+ */
 export interface ToInspectionPayload {
-  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
-  target_inspection_shelf_id: string
-  /** 必填；2026-08-29 起 caller OCC 锚定 t_part_batch，多批次歧义必须显式传。 */
-  batch_id: string
-  /** 必填；2026-08-29：t_part_batch.version，与 batch_id 必须同时匹配，否则 40901。 */
-  version: number
-  /** 可选；≤ 500 字符品检备注（v2 新增）。 */
-  note?: string | null
-  /** 可选；缺省 = 批次全量；部分数量 < 整批会拆出新批次作 remainder。 */
+  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。v1 schema 名 `shelf_id`。 */
+  shelf_id: string
+  /** 选填；缺省按状态唯一批次解析；多批次歧义时建议显式传。 */
+  batch_id?: string | null
+  /** 选填；缺省 = 批次全量。 */
   quantity?: number | null
 }
 
 export async function toInspection(
   id: string,
   payload: ToInspectionPayload,
-): Promise<{ part: PartItem; new_batch_id: string | null }> {
-  const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
-    `/parts/${id}/to-inspection`,
+): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/parts/${encodeURIComponent(id)}/receive-from-outsource-to-inspection`,
     payload,
   )
   return resp.data
