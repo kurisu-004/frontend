@@ -756,6 +756,7 @@ const tailColumnDefs: ColumnDef[] = [
     columnKey: 'system_delivery_date',
     prop: 'system_delivery_date',
     minWidth: 150,
+    sortable: 'custom',
     align: 'center',
     headerRender: () => h(ColumnFilterPopover, {
       label: '系统交期',
