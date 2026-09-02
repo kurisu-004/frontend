@@ -12,7 +12,7 @@
   形态对齐 frontend/src/views/outsource/OutsourceQuoteList.vue
 -->
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
 import { Van, Promotion } from '@element-plus/icons-vue'
@@ -20,6 +20,7 @@ import { Van, Promotion } from '@element-plus/icons-vue'
 import {
   createNote as createNoteApi,
   listNotes,
+  pickup,
   softDeleteNote,
   type AddPartsItem,
 } from '@/api/deliveryNote'
@@ -30,6 +31,7 @@ import {
   type DeliveryNoteStatus,
 } from '@/types/deliveryNote'
 import {
+  canDeliver,
   canSoftDelete,
   defaultStatusesForRole,
   hasManageNoteRole,
@@ -62,6 +64,15 @@ const role = computed(() => ({
 // ============================================================
 const allStatuses: DeliveryNoteStatus[] = ['DRAFT', 'SUBMITTED', 'PICKED_UP', 'ARCHIVED']
 const statuses = ref<DeliveryNoteStatus[]>(defaultStatusesForRole(role.value))
+
+// 2026-09-02 新增：列表页「一键送货」硬编码默认司机。
+// 来源：用户 2026-09-02 提供的 t_worker.id（DB 中一个在职、工种 code='送货司机' 的工人）。
+// 取值 SQL：
+//   SELECT w.id, w.name, w.badge_code
+//     FROM public.t_worker w
+//     JOIN public.t_work_type wt ON wt.id = w.work_type_id
+//    WHERE wt.code = '送货司机' AND w.is_active AND w.deleted_at IS NULL;
+const DEFAULT_DRIVER_WORKER_ID = '207145104975069184'
 const customerId = ref<string>('')
 const keyword = ref('')
 // 2026-08-25 T7：items / total / loading / page 已迁到 <PagedTable>
@@ -129,6 +140,9 @@ const tableRef = ref()
 drag.applyDrag(tableRef)
 
 const customers = ref<{ id: string; name: string; path: string; parent_id: string | null }[]>([])
+
+// 2026-09-02 新增：per-row loading 容器（reactive Record 让 :loading 自动响应）
+const deliveringMap = reactive<Record<string, boolean>>({})
 
 /** 一级客户视图：新建草稿弹框专用；list-filter 处仍用全集 */
 const rootCustomers = computed(() =>
@@ -299,6 +313,36 @@ async function onSoftDelete(n: DeliveryNoteOut) {
     ElMessage.error((e as Error).message ?? '删除失败')
   }
 }
+
+// 2026-09-02 新增：列表页「一键送货」入口。
+// - ElMessageBox.confirm 确认（与 DispatchNoteList 的 confirmDelivery 形态一致）
+// - 调 v1 /delivery-notes/{id}/pickup（driver_worker_id 用默认常量 + note.version）
+// - 成功后刷新列表；失败展示后端 msg
+async function onDeliver(n: DeliveryNoteOut) {
+  try {
+    await ElMessageBox.confirm(
+      `一键送货 ${n.delivery_note_no}（${n.part_count} 件）？批次将全部置为已送货。`,
+      '一键送货',
+      { type: 'success', confirmButtonText: '确认送货', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  deliveringMap[n.id] = true
+  try {
+    await pickup(n.id, {
+      driver_worker_id: DEFAULT_DRIVER_WORKER_ID,
+      version: n.version,
+      badge_code: null,
+    })
+    ElMessage.success('已送货')
+    await fetchList()
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '送货失败')
+  } finally {
+    delete deliveringMap[n.id]
+  }
+}
 </script>
 
 <template>
@@ -411,11 +455,21 @@ async function onSoftDelete(n: DeliveryNoteOut) {
           </template>
         </el-table-column>
       </template>
-      <el-table-column label="操作" min-width="120" fixed="right" align="center">
+      <el-table-column label="操作" min-width="180" fixed="right" align="center">
         <template #default="scope">
           <div style="display: flex; align-items: center; gap: 0px;">
             <el-button link type="primary" @click="$router.push(`/delivery-notes/${(scope.row as DeliveryNoteOut).id}`)">
               详情
+            </el-button>
+            <!-- 2026-09-02 新增：一键送货（管理角色 + part_count>0 + SUBMITTED） -->
+            <el-button
+              v-if="canDeliver((scope.row as DeliveryNoteOut).status, role, (scope.row as DeliveryNoteOut).part_count)"
+              link
+              type="success"
+              :loading="Boolean(deliveringMap[(scope.row as DeliveryNoteOut).id])"
+              @click="onDeliver(scope.row as DeliveryNoteOut)"
+            >
+              送货
             </el-button>
             <el-button
               v-if="canSoftDelete((scope.row as DeliveryNoteOut).status, role)"
