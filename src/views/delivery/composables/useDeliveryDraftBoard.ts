@@ -35,6 +35,7 @@ import { usePrintedLabels } from '@/composables/usePrintedLabels'
 import { useDeliveryNoteDetailCache } from '@/composables/useDeliveryNoteDetailCache'
 import { triggerBrowserDownload } from '@/utils/download'
 import type {
+  DeliveryNoteDetailOut,
   DeliveryNoteLineItem,
   ScanNoteSummary,
 } from '@/types/deliveryNote'
@@ -273,8 +274,13 @@ export function useDeliveryDraftBoard() {
   /**
    * 拉单个 note 的 line_items 并写回 draftDetails（扫码命中后立即刷新）。
    * 失败 toast warning 但不阻塞主流程（applySuccess 已先 toast ADDED/ALREADY_PRESENT）。
+   *
+   * 2026-09-02 改：返回 DeliveryNoteDetailOut | null，让 caller
+   * （useDeliveryScanSubmission.applySuccess）能取 detail.line_items 里的
+   * per-batch customer_name 拼到扫码 toast 末尾作为 L2 客户标识。
+   * 失败时（warning 已 toast）返回 null，caller 拿到 null 静默降级，不覆盖 warning。
    */
-  async function refreshDraftDetail(noteId: string): Promise<void> {
+  async function refreshDraftDetail(noteId: string): Promise<DeliveryNoteDetailOut | null> {
     // 2026-08-24：强制 invalidate 后重拉，避免命中「旧缓存 + 新后端数据」的不一致窗口。
     detailCache.invalidate(noteId)
     try {
@@ -285,8 +291,10 @@ export function useDeliveryDraftBoard() {
       if (drafts.value[noteId]) {
         drafts.value[noteId] = { ...drafts.value[noteId], version: detail.version }
       }
+      return detail
     } catch (e) {
       ElMessage.warning(`刷新 ${noteId} 详情失败：${(e as Error).message ?? '未知错误'}`)
+      return null
     }
   }
 
