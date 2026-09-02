@@ -61,6 +61,22 @@ export function canPickup(status: DeliveryNoteStatus): boolean {
   return status === 'SUBMITTED'
 }
 
+// 2026-09-02 新增：列表页「一键送货」按钮判定
+// - 状态必须 SUBMITTED（后端只接受此状态 transition）
+// - 至少 1 个零件（避免空单 finalize）
+// - 角色：MANAGER / CLERK / INSPECTOR（管理角色；司机走 DispatchNoteList 扫码台）
+export function canDeliver(
+  status: DeliveryNoteStatus,
+  role: RoleMapLike,
+  partCount: number,
+): boolean {
+  return (
+    hasManageNoteRole(role) &&
+    status === 'SUBMITTED' &&
+    partCount > 0
+  )
+}
+
 // 详情页允许进入：所有合法状态皆可；非有效 status 直接不显示页面。
 export function canView(status: DeliveryNoteStatus): boolean {
   return (
