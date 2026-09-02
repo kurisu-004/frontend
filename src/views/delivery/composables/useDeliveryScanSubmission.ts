@@ -36,16 +36,48 @@ import {
 } from '@/types/deliveryNote'
 import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection'
 
+// 2026-09-02 新增：扫码 toast 末尾追加 L2 客户名的两个 file-scope helper ————————
+// 从 line_items 里按 matcher 命中取首个 L2 客户名（用 customer_name；空时取
+// customer_path 末段）。多个命中时取首个非空，并去重。
+function pickL2Name(
+  lineItems: DeliveryNoteLineItem[] | undefined,
+  matcher: (li: DeliveryNoteLineItem) => boolean,
+): string | null {
+  if (!lineItems) return null
+  const names: string[] = []
+  for (const li of lineItems) {
+    if (!matcher(li)) continue
+    const n = li.customer_name ?? li.customer_path?.split(' / ').pop() ?? null
+    if (n && !names.includes(n)) names.push(n)
+  }
+  return names[0] ?? null
+}
+
+// 从 customer_path 解析 L2（Leaf scope 兜底用）。"L1 / L2" → "L2"；仅 L1 时返回 null。
+function parseL2FromPath(customerPath: string | null | undefined): string | null {
+  if (!customerPath) return null
+  const parts = customerPath.split(' / ')
+  return parts.length > 1 ? (parts[parts.length - 1]?.trim() || null) : null
+}
+
 export interface UseDeliveryScanSubmissionOptions {
   /** 扫码命中后写入 drafts Map 的回调（由 useDeliveryDraftBoard 注入）。 */
   writeDraftFromScan: (note: ScanNoteSummary) => void
-  /** 重新拉单个 note 的 line_items（由 useDeliveryDraftBoard 注入）。 */
-  refreshDraftDetail: (noteId: string) => Promise<void>
+  /** 重新拉单个 note 的 line_items（由 useDeliveryDraftBoard 注入）；
+   *  2026-09-02 改：返回 detail，让 caller 能从 detail.line_items 解析 L2 客户名。
+   *  拉取失败（warning 已 toast）时返回 null，caller 静默降级（不带 L2 段）。 */
+  refreshDraftDetail: (noteId: string) => Promise<DeliveryNoteDetailOut | null>
   /**
    * 提交成功后清掉 note 全部本地 ref（由 useDeliveryDraftBoard 注入）；
    * useDeliveryScanSubmission 不直接知道 draftDetails / selectedByNote / tableRefs 的存在。
    */
   onDraftRemoved: (noteId: string) => void
+  /**
+   * 2026-09-02 新增：读某 note 当前的 line_items（无 IO；CANDIDATES_AVAILABLE
+   * 扫不到新批次时复用同 serial 历史 line_items 取 L2）。
+   * 可选：未注入时 CANDIDATES_AVAILABLE 走 note.customer_path 兜底。
+   */
+  getDraftLineItems?: (noteId: string) => DeliveryNoteLineItem[] | undefined
 }
 
 export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions) {
@@ -136,44 +168,82 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
    *   - ADDED：批次全部已挂载 → writeDraftFromScan + refresh + success toast
    *   - ALREADY_PRESENT：幂等命中 → refresh + warning（不重复写 draft）
    *   - CANDIDATES_AVAILABLE：B 组待送检 → writeDraftFromScan（A 组 0 项也写以记录扫码历史）+ 弹候选弹窗
-   *   - PARTIAL_ADDED：装配件混合 → writeDraftFromScan + refresh + 弹候选弹窗 */
+   *   - PARTIAL_ADDED：装配件混合 → writeDraftFromScan + refresh + 弹候选弹窗
+   *
+   * 2026-09-02 新增：4 个 case 的 toast 末尾都追加 `（<L2>）`，L2 解析失败则静默
+   * 降级回原消息（不覆盖 refresh 失败时的 warning，也不另打 error）。 */
   async function applySuccess(out: ScanDeliveryOut, originalCode: string): Promise<void> {
     switch (out.outcome) {
-      case 'ADDED':
+      case 'ADDED': {
+        // 2026-09-02 改：await refresh 而非 fire-and-forget，拿到 per-batch customer_name
+        // 用于 toast 末尾追加 L2；refresh 内部失败已 toast warning，pickL2Name 静默降级。
+        let l2Name: string | null = null
         if (out.note) {
           opts.writeDraftFromScan(out.note)
-          void opts.refreshDraftDetail(out.note.id).catch(() => { /* 已 toast */ })
+          const detail = await opts.refreshDraftDetail(out.note.id)
+          const firstAddedId = out.added_batches?.[0]?.batch_id
+          l2Name = pickL2Name(
+            detail?.line_items,
+            (li) => String(li.id) === String(firstAddedId),
+          )
         }
         ElMessage.success(
-          `已加入 ${out.resolved?.serial_no ?? ''} → ${out.note?.delivery_note_no ?? ''}`,
+          `已加入 ${out.resolved?.serial_no ?? ''} → ${out.note?.delivery_note_no ?? ''}` +
+            (l2Name ? `（${l2Name}）` : ''),
         )
         break
-      case 'ALREADY_PRESENT':
+      }
+      case 'ALREADY_PRESENT': {
         // 幂等：不重复 writeDraftFromScan（草稿未变化），但提示
+        // 2026-09-02 改：await refresh 取 L2；refresh 失败 → l2Name=null → 静默降级。
+        let l2Name: string | null = null
         if (out.note) {
-          void opts.refreshDraftDetail(out.note.id).catch(() => { /* 已 toast */ })
+          const detail = await opts.refreshDraftDetail(out.note.id)
+          l2Name = pickL2Name(
+            detail?.line_items,
+            (li) => li.serial_no === out.resolved?.serial_no,
+          )
         }
         ElMessage.warning(
-          `${out.resolved?.serial_no ?? ''} 已在 ${out.note?.delivery_note_no ?? ''} 上`,
+          `${out.resolved?.serial_no ?? ''} 已在 ${out.note?.delivery_note_no ?? ''} 上` +
+            (l2Name ? `（${l2Name}）` : ''),
         )
         break
-      case 'CANDIDATES_AVAILABLE':
+      }
+      case 'CANDIDATES_AVAILABLE': {
         // 散件含 B 组（未送检）+ 可能含 A 组（可直接 attach）；A 组不再自动 attach，
         // 改由弹窗用户勾选后调用 attach-batches。写草稿（A 组 0 项也要写以记录扫码历史）+ 弹候选弹窗
+        // 2026-09-02 改：不 refresh（无批次入单），先读 draftDetails[noteId] 里同 serial 的
+        // 历史 line_items 取 L2，都没有再回退到 note.customer_path 末段（Leaf scope）。
+        let l2Name: string | null = null
+        if (out.note) {
+          const items = opts.getDraftLineItems?.(out.note.id)
+          l2Name = pickL2Name(items, (li) => li.serial_no === out.resolved?.serial_no)
+            ?? parseL2FromPath(out.note.customer_path)
+        }
         if (out.note) opts.writeDraftFromScan(out.note)
         candidateNoteId.value = out.note?.id ?? ''  // 2026-08-31 新增
         candidateTargets.value = out.unresolved_targets ?? []
         originalScanCode.value = originalCode
         candidateDialogVisible.value = true
         ElMessage.info(
-          `识别到 ${out.resolved?.serial_no ?? ''}，但 ${candidateTargets.value.length} 项未送检，请确认`,
+          `识别到 ${out.resolved?.serial_no ?? ''}，但 ${candidateTargets.value.length} 项未送检，请确认` +
+            (l2Name ? `（${l2Name}）` : ''),
         )
         break
-      case 'PARTIAL_ADDED':
+      }
+      case 'PARTIAL_ADDED': {
         // 装配件混合：A 组已挂载 + B 组子件待送检；A 组不再自动 attach（如果有）
+        // 2026-09-02 改：await refresh 取 L2（多个 added batch 时取首个匹配）。
+        let l2Name: string | null = null
         if (out.note) {
           opts.writeDraftFromScan(out.note)
-          void opts.refreshDraftDetail(out.note.id).catch(() => { /* 已 toast */ })
+          const detail = await opts.refreshDraftDetail(out.note.id)
+          const addedIds = (out.added_batches ?? []).map((b) => String(b.batch_id))
+          l2Name = pickL2Name(
+            detail?.line_items,
+            (li) => addedIds.includes(String(li.id)),
+          )
         }
         candidateNoteId.value = out.note?.id ?? ''  // 2026-08-31 新增
         candidateTargets.value = out.unresolved_targets ?? []
@@ -181,9 +251,11 @@ export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions
         candidateDialogVisible.value = true
         // 2026-08-31 改：success → info，因为还有未处理项（A/B 都需要弹窗确认）
         ElMessage.info(
-          `草稿已加入 ${out.added_batches?.length ?? 0} 项；剩余 ${candidateTargets.value.length} 项未送检，请在弹窗中确认`,
+          `草稿已加入 ${out.added_batches?.length ?? 0} 项；剩余 ${candidateTargets.value.length} 项未送检，请在弹窗中确认` +
+            (l2Name ? `（${l2Name}）` : ''),
         )
         break
+      }
     }
   }
 
