@@ -69,7 +69,7 @@ export const ADMIN_MENUS: MenuNode[] = [
     code: 'production_group', title: '生产管理', path: null,
     icon: 'Operation', sort_order: 26, children: [
       { id: id(101), version: 0, parent_id: id(10), code: 'process_design_list', title: '工序制定', path: '/production/process-design', icon: 'SetUp', sort_order: 10, children: [] },
-      { id: id(102), version: 0, parent_id: id(10), code: 'worker_queue', title: '工人队列调度', path: '/workers/queue', icon: 'Operation', sort_order: 20, children: [] },
+      { id: id(102), version: 0, parent_id: id(10), code: 'worker_queue', title: '生产队列', path: '/workers/queue', icon: 'Operation', sort_order: 20, children: [] },
     ],
   },
   // 7. auth_group — 权限管理（分组，2 children）

@@ -4,7 +4,7 @@
   2026-09-11 新增。
 
   CLAUDE.md 合规：
-  - #10：容器 ref 在 mount 时已存在（非 v-if / 非 el-table tbody），用 useDraggable 而非 useLazyDraggable。
+  - #10：容器 ref 位于 v-else（空态 vs 列表切换），初始 mount 时为 null → 用 useLazyDraggable。
   - #11：step.xxx 模板引用加空值守卫（虽然 :key 不会出空行，但保持习惯）。
   - #13：本组件不直接用 h() 渲染节点（卡片用 <el-card> 模板），无相关违规。
 -->
@@ -112,7 +112,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { Delete, Plus, Rank } from '@element-plus/icons-vue'
-import { useDraggable } from 'vue-draggable-plus'
+import { useLazyDraggable } from '@/composables/useLazyDraggable'
 import { ElMessage } from 'element-plus'
 import type { ProcessStep } from '@/types/partProcess'
 import { PROCESS_CATEGORY_LABEL } from '@/types/process'
@@ -232,9 +232,10 @@ function onReset(): void {
 }
 
 // ============ 拖拽 ============
-// 容器 ref 在 mount 时已存在（非 v-if/非 el-table tbody，CLAUDE.md #10 不触发 useLazyDraggable）。
+// 容器 ref 位于 v-else 块（空态/列表切换），mount 时可能为 null → useLazyDraggable
+// 强制 immediate: false + watch elRef 转非 null 时 start(el)，符合 CLAUDE.md #10。
 const containerRef = ref<HTMLElement | null>(null)
-useDraggable(containerRef, steps, {
+useLazyDraggable(containerRef, steps, {
   animation: 200,
   handle: '.step-card',
   ghostClass: 'step-card-ghost',

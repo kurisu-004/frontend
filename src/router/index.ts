@@ -242,14 +242,15 @@ const routes: RouteRecordRaw[] = [
         name: 'WorkerQueueBoard',
         component: () => import('@/views/workers/WorkerQueueBoard.vue'),
         meta: {
-          title: '工人队列调度',
+          title: '生产队列',
           icon: 'Operation',
           menuCode: 'worker_queue',
           // 2026-09-11 调整：worker_queue 从 auth_group 迁到 production_group，
           // breadcrumb 第一段跟着改成「生产管理」，path 不动保持 bookmark 可用
+          // 2026-09-11 改名：菜单/页面标题 工人队列调度 → 生产队列
           breadcrumb: [
             { label: '生产管理', path: '/production/process-design' },
-            { label: '工人队列调度' },
+            { label: '生产队列' },
           ],
         },
       },
