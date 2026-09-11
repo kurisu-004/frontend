@@ -1,5 +1,6 @@
 // src/composables/__fixtures__/adminMenus.ts
-// 2026-08-26 同步自生产 DB：admin 角色的完整菜单树（27 个 menuCode 全集：9 顶级 [3 leaf + 6 分组 path:null] + 18 子项 leaf）。
+// 2026-09-11 同步自生产 DB：admin 角色的完整菜单树（29 个 menuCode 全集：10 顶级 [3 leaf + 7 分组 path:null] + 19 子项 leaf）。
+// 2026-09-11 新增 production_group（生产管理）顶级分组，含 process_design_list（工序制定）+ worker_queue（从 auth_group 迁出）。
 // 仅 dev dummy-auth 模式使用（initDummyAuth 注入 useAuthSession.user.menus）；
 // prod bundle 不引用此文件（无 dead code 风险）。
 //
@@ -13,7 +14,7 @@
 // 改动后必须验证：
 //   1. 每个 MenuNode.code 是 router/index.ts 里某条路由的 meta.menuCode
 //   2. 每个 MenuNode.icon 在 MenuTreeItem.vue 的 ICON_MAP 中存在
-//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 21
+//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 22
 
 import type { MenuNode } from '@/types/menu'
 
@@ -60,19 +61,28 @@ export const ADMIN_MENUS: MenuNode[] = [
     code: 'pending_programming', title: '待编程一览', path: '/cnc/pending',
     icon: 'Cpu', sort_order: 25, children: [],
   },
-  // 6. auth_group — 权限管理（分组，3 children）
-  // 2026-08-26 补回 worker_queue：生产 MANAGER 用户 menus 响应里没有它（权限分配差异），
-  // 但 router 把它注册为 menuCode 且无 allowRoles 短路；dummy 是 dev 工具，加回让守卫放行。
+  // 6. production_group — 生产管理（分组，2 children；2026-09-11 新增）
+  // 介于 pending_programming(25) 和 auth_group(30) 之间。worker_queue 从 auth_group
+  // 迁出，与 process_design_list 同组；后续「扫工件」「条码打印」等生产侧功能都挂这里。
+  {
+    id: id(10), version: 0, parent_id: null,
+    code: 'production_group', title: '生产管理', path: null,
+    icon: 'Operation', sort_order: 26, children: [
+      { id: id(101), version: 0, parent_id: id(10), code: 'process_design_list', title: '工序制定', path: '/production/process-design', icon: 'SetUp', sort_order: 10, children: [] },
+      { id: id(102), version: 0, parent_id: id(10), code: 'worker_queue', title: '工人队列调度', path: '/workers/queue', icon: 'Operation', sort_order: 20, children: [] },
+    ],
+  },
+  // 7. auth_group — 权限管理（分组，2 children）
+  // 2026-09-11：worker_queue 迁到 production_group，本分组现仅含 workers_list + users_list。
   {
     id: id(6), version: 0, parent_id: null,
     code: 'auth_group', title: '权限管理', path: null,
     icon: 'Key', sort_order: 30, children: [
       { id: id(61), version: 0, parent_id: id(6), code: 'workers_list', title: '工人一览', path: '/workers', icon: 'User', sort_order: 10, children: [] },
-      { id: id(63), version: 0, parent_id: id(6), code: 'worker_queue', title: '工人队列调度', path: '/workers/queue', icon: 'Operation', sort_order: 15, children: [] },
       { id: id(62), version: 0, parent_id: id(6), code: 'users_list', title: '账号管理', path: '/users', icon: 'List', sort_order: 20, children: [] },
     ],
   },
-  // 7. outsource_list — 外协管理（分组，3 children）
+  // 8. outsource_list — 外协管理（分组，3 children）
   {
     id: id(7), version: 0, parent_id: null,
     code: 'outsource_list', title: '外协管理', path: null,
@@ -82,7 +92,7 @@ export const ADMIN_MENUS: MenuNode[] = [
       { id: id(73), version: 0, parent_id: id(7), code: 'outsource_send_receive_list', title: '外协发送/接收', path: '/outsource/send-receive', icon: 'Promotion', sort_order: 30, children: [] },
     ],
   },
-  // 8. floor_group — 车间（分组，1 child）
+  // 9. floor_group — 车间（分组，1 child）
   {
     id: id(8), version: 0, parent_id: null,
     code: 'floor_group', title: '车间', path: null,
@@ -90,7 +100,7 @@ export const ADMIN_MENUS: MenuNode[] = [
       { id: id(81), version: 0, parent_id: id(8), code: 'shelves_list', title: '货架管理', path: '/shelves', icon: 'Platform', sort_order: 10, children: [] },
     ],
   },
-  // 9. settings_root — 设置（分组，3 children）
+  // 10. settings_root — 设置（分组，3 children）
   {
     id: id(9), version: 0, parent_id: null,
     code: 'settings_root', title: '设置', path: null,

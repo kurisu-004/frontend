@@ -29,6 +29,7 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('users_list')
     // 2026-08-26 补回：router /workers/queue 无 allowRoles 短路，dummy 模式必须有此 code
     expect(codes).toContain('worker_queue')
+    // 2026-09-11：worker_queue 仍必须在菜单树中（router /workers/queue 无 allowRoles 短路）
     expect(codes).toContain('shelves_list')
     expect(codes).toContain('customers_list')
     expect(codes).toContain('applicants_list')
@@ -44,6 +45,9 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('outsource_list')
     expect(codes).toContain('floor_group')
     expect(codes).toContain('settings_root')
+    // 2026-09-11 新增：生产管理分组 + 工序制定菜单 code（process_design_list 在 production_group 下）
+    expect(codes).toContain('production_group')
+    expect(codes).toContain('process_design_list')
   })
 
   it('has unique codes (no dup)', () => {
