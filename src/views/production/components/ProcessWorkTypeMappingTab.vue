@@ -1,3 +1,4 @@
+<!-- 工序映射 Tab（2026-09-12 从 settings/WorkTypeProcess.vue 迁移至 production/components） -->
 <template>
   <div class="wt-proc">
     <el-card shadow="never" class="layout-card">
@@ -42,6 +43,11 @@
               class="proc-item"
             >
               <span class="proc-label">
+                <span
+                  v-if="p.color"
+                  class="color-dot"
+                  :style="{ background: p.color }"
+                />
                 <strong>{{ p.code }}</strong>
                 <span style="margin-left: 6px">{{ p.name }}</span>
                 <el-tag
@@ -163,4 +169,13 @@ onMounted(async () => {
   :deep(.el-checkbox__label) { width: 100%; }
 }
 .proc-label { display: inline-flex; align-items: center; }
+.color-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  margin-right: 6px;
+  border: 1px solid #eee;
+  vertical-align: middle;
+}
 </style>

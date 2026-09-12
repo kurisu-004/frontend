@@ -1,3 +1,7 @@
+<!-- 工序管理 Tab（2026-09-12 从 settings/ProcessList.vue 迁移至 production/components）
+     2026-09-12 新增：表格加「颜色」列（width 80，渲染 24x24 色块），
+     dialog 加 el-color-picker（color-format="hex8" 输出 #RRGGBBAA）。
+-->
 <template>
   <div class="process-list">
     <el-card shadow="never" class="filter-card">
@@ -67,6 +71,22 @@
           </template>
         </el-table-column>
       </template>
+      <!-- 2026-09-12 新增：颜色列，固定在操作列之前 -->
+      <el-table-column label="颜色" width="80" align="center">
+        <template #default="{ row }">
+          <span
+            class="color-swatch"
+            :style="{
+              background: (row as Process).color ?? '#ddd',
+              width: '24px',
+              height: '24px',
+              borderRadius: '4px',
+              display: 'inline-block',
+              border: '1px solid #eee',
+            }"
+          />
+        </template>
+      </el-table-column>
       <el-table-column v-if="isManager" label="操作" min-width="180" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="onEdit(row as Process)">编辑</el-button>
@@ -113,6 +133,11 @@
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" />
         </el-form-item>
+        <!-- 2026-09-12 新增：颜色字段（el-color-picker 输出 hex8 → #RRGGBBAA 9 字符） -->
+        <el-form-item label="颜色">
+          <el-color-picker v-model="form.color" color-format="hex8" />
+          <span class="hint">前端工序卡片按此颜色显示（hex8 含 alpha）</span>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -158,13 +183,13 @@ const search = reactive<{ code_like: string; category: ProcessCategory | undefin
 })
 
 // ============ 筛选状态持久化 ============
-const { restore: restoreProcessFilter, clear: clearProcessFilter } = useListStatePersist(
+const { restore: restoreProcessFilter } = useListStatePersist(
   'process_list',
   { search },
 )
 
 // ============ 列可见性 + 列顺序拖动 ============
-// 「#」和「操作」列不放进 defs → 始终可见。
+// 「#」「颜色」「操作」列不放进 defs → 始终可见。
 // 2026-08-27 T15：补 prop / minWidth / align + 复杂单元格走 cellRender。
 const columnDefs: ColumnDef[] = [
   { key: 'code', label: '代码', prop: 'code', minWidth: 120, align: 'center' },
@@ -191,14 +216,17 @@ const tableRef = ref()
 const dialogVisible = ref(false)
 const editing = ref<Process | null>(null)
 const dialogTitle = computed(() => (editing.value ? '编辑工序' : '新增工序'))
+// 2026-09-12 新增：color 字段（后端 tri-state：undefined=leave / null=clear / string=set）
 const form = reactive<{
   code: string; name: string; category: ProcessCategory
   sort_order: number; description: string
   requires_approval: boolean
+  color: string | null
 }>({
   code: '', name: '', category: 'INHOUSE',
   sort_order: 0, description: '',
   requires_approval: true,  // OUTSOURCE 默认；INHOUSE 在保存时由后端强制为 false
+  color: null,
 })
 
 async function fetchList(): Promise<void> {
@@ -224,6 +252,7 @@ function onNew(): void {
     code: '', name: '', category: 'INHOUSE',
     sort_order: 0, description: '',
     requires_approval: true,
+    color: null,
   })
   dialogVisible.value = true
 }
@@ -234,6 +263,7 @@ function onEdit(row: Process): void {
     sort_order: row.sort_order,
     description: row.description ?? '',
     requires_approval: row.requires_approval ?? true,
+    color: row.color ?? null,
   })
   dialogVisible.value = true
 }
@@ -246,12 +276,17 @@ async function onSave(): Promise<void> {
   saving.value = true
   try {
     if (editing.value) {
+      // update：color 用三态：未改=undefined；el-color-picker 给 null 时显式置 null（清色）
       await updateProcess(editing.value.id, {
         name: form.name.trim(),
         category: form.category,
         sort_order: form.sort_order,
         description: form.description.trim() || null,
         requires_approval: form.requires_approval,
+        // 编辑时：若 color 变化则三态 set；否则保持 leave。
+        // el-color-picker 的 v-model 在未操作时保持上一次的值；我们用「与原值不同」做差量，
+        // 简化处理：编辑时总是显式传当前 picker 值（string 或 null），由后端决定覆盖语义。
+        color: form.color ?? null,
       })
       ElMessage.success('已保存')
     } else {
@@ -262,6 +297,8 @@ async function onSave(): Promise<void> {
         sort_order: form.sort_order,
         description: form.description.trim() || null,
         requires_approval: form.requires_approval,
+        // create：picker 默认 null（不选色），string 表示选了色
+        color: form.color ?? null,
       })
       ElMessage.success('已新增')
     }
@@ -280,6 +317,7 @@ function onDialogClosed(): void {
     code: '', name: '', category: 'INHOUSE',
     sort_order: 0, description: '',
     requires_approval: true,
+    color: null,
   })
 }
 
@@ -318,5 +356,13 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 8px;
+}
+.color-swatch {
+  vertical-align: middle;
+}
+.hint {
+  margin-left: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 </style>
