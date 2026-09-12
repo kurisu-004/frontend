@@ -223,16 +223,34 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '工人一览', icon: 'User', menuCode: 'workers_list', breadcrumb: [{ label: '权限管理', path: '/workers' }, { label: '工人一览' }] },
       },
       {
+        // 2026-09-11 新增：工序制定页（生产管理分组首项）
+        path: 'production/process-design',
+        name: 'ProcessDesign',
+        component: () => import('@/views/production/ProcessDesignView.vue'),
+        meta: {
+          title: '工序制定',
+          icon: 'SetUp',
+          menuCode: 'process_design_list',
+          breadcrumb: [
+            { label: '生产管理', path: '/production/process-design' },
+            { label: '工序制定' },
+          ],
+        },
+      },
+      {
         path: 'workers/queue',
         name: 'WorkerQueueBoard',
         component: () => import('@/views/workers/WorkerQueueBoard.vue'),
         meta: {
-          title: '工人队列调度',
+          title: '生产队列',
           icon: 'Operation',
           menuCode: 'worker_queue',
+          // 2026-09-11 调整：worker_queue 从 auth_group 迁到 production_group，
+          // breadcrumb 第一段跟着改成「生产管理」，path 不动保持 bookmark 可用
+          // 2026-09-11 改名：菜单/页面标题 工人队列调度 → 生产队列
           breadcrumb: [
-            { label: '权限管理', path: '/workers' },
-            { label: '工人队列调度' },
+            { label: '生产管理', path: '/production/process-design' },
+            { label: '生产队列' },
           ],
         },
       },

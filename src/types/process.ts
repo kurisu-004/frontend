@@ -27,11 +27,25 @@ export interface Process {
    * 2026-09-12 新增：前端工序卡片颜色（hex 含 alpha）。
    * 格式 `#RRGGBBAA`，9 字符（Element Plus `el-color-picker color-format="hex8"` 默认输出）。
    * NULL = 未设置（前端视作默认色）。
+   * 合并 fc99d3b（required string|null）和 feature/process-design（optional）冲突时，
+   * 取 HEAD 的 required 语义：后端始终返回字段（可为 null），前端渲染层视 null 为未设置。
    */
   color: string | null
   created_at: string
   updated_at: string
 }
+
+/** 2026-09-12 新增：工序卡片配色预设（Element Plus 主题色 + 互补色），按 sort_order 顺序循环取用。 */
+export const PROCESS_COLOR_PRESETS: readonly string[] = [
+  '#409EFF', // Element Primary 蓝
+  '#67C23A', // Element Success 绿
+  '#E6A23C', // Element Warning 橙
+  '#F56C6C', // Element Danger 红
+  '#909399', // Element Info 灰
+  '#9B59B6', // 紫
+  '#1ABC9C', // 青
+  '#E15C5C', // 暗红
+] as const
 
 export interface ProcessListResult {
   items: Process[]

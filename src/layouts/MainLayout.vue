@@ -239,6 +239,16 @@ async function submitChangePwd(): Promise<void> {
 }
 
 onMounted(async () => {
+  // 2026-09-11 修复：dev:dummy 模式下跳过 apiMe()。
+  // 此前无脑调 /auth/me，dummy token 'dummy-dev-token' 被后端判无效 → 401 →
+  // catch 里 router.replace('/login')。表现为首次打开任意页都被踢回登录页。
+  // dummy 已经注入完整 CurrentUser（含 menus / roles），无需再向 /auth/me 验证。
+  // 三层 prod 保护：
+  //   1) isDummyAuthRequested() 在 import.meta.env.DEV=false 时整段 dead code
+  //   2) useAuthSession.isDummyAuthActive() 由 initDummyAuth 注入
+  //   3) 后端即便返回 401，拦截器也不会触发 auth:logout（refresh 失败分支不命中）
+  const { isDummyAuthActive } = useAuthSession()
+  if (isDummyAuthActive()) return
   try { currentUser.value = await apiMe() } catch { router.replace('/login') }
 })
 </script>
