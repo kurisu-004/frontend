@@ -8,7 +8,20 @@
   双 scale 模型：
     - renderScale: 给 pdfjs.getViewport 用（snap 0.1，0.4-3.0）；改变时触发 PDF 重渲染，保证矢量清晰
     - viewScale : CSS transform 乘数（连续，0.1-10）；仅 CSS 缩放，手感流畅
-    - 滚轮 250ms 节流：每 250ms 把 viewScale 合并到 renderScale → render()，把 viewScale 重置 1
+  2026-09-12 第四轮改造：
+    - 删除 scheduleReRender（250ms 节流的 viewScale → renderScale + render()）：节流触发的 render()
+      会改 canvas.width/height/style.width/style.height → 引起 layout shift 抖动。
+    - 删除 <el-input-number v-model="renderScale"> 缩放比例输入框（抖动源头）。
+    - onWheel 只调 viewScale / tx / ty，不再 scheduleReRender。
+    - 滚轮纯 CSS 缩放：极高缩放（>3x）会有像素感，但避免每次 wheel 后的 canvas 重排抖动。
+    - +/- 按钮（zoomIn / zoomOut）仍触发 render() 重渲染（用户主动意图，不算抖动）。
+  2026-09-12 第四轮改造（T3）：高度链修复。
+    - .pdf-viewer 加 height: 100% + flex: 1 / 去掉 min-height: 400px
+      （同时声明 height/flex：flex 父容器用 flex:1，block 父容器用 height:100%）
+    - .canvas-wrap 加 flex: 1 / min-height: 0（已在第三轮加过 flex: 1）
+    - .pdf-toolbar 加 flex-shrink: 0
+    - DrawingPreviewPane.vue 的 .file-preview 改为 display:flex/flex-direction:column（让 PdfViewer 在此成为 flex item）
+    - 完整高度链：preview-card (flex:1) → preview-tabs (flex:1) → file-preview (flex:1, flex col) → pdf-viewer (flex:1) → canvas-wrap (flex:1) → viewport (flex:1) 撑满父容器
   CLAUDE.md #6：仍走 @/utils/pdfjs，不直接 import pdfjs-dist。
 -->
 <template>
@@ -34,16 +47,8 @@
           </el-button>
         </el-button-group>
         <span class="page-info">{{ page }} / {{ totalPages }}</span>
-        <el-input-number
-          v-model="renderScale"
-          :min="0.4"
-          :max="3"
-          :step="0.2"
-          :precision="1"
-          size="small"
-          controls-position="right"
-          @change="onScaleInputChange"
-        />
+        <!-- 2026-09-12 第四轮：删除 <el-input-number v-model="renderScale"> 缩放比例输入框。
+             滚轮缩放是唯一的连续控制；不再自动 snap-to-renderScale，避免 canvas 内部尺寸变化导致抖动。 -->
         <el-button @click="zoomIn"><el-icon><ZoomIn /></el-icon></el-button>
         <el-button @click="zoomOut"><el-icon><ZoomOut /></el-icon></el-button>
         <el-button @click="resetView" title="双击也可复位">
@@ -194,14 +199,6 @@ function zoomOut() {
   void render()
 }
 
-/** el-input-number 的 @change 回调：参数可能是新值（number）或 undefined（用户清空）。 */
-function onScaleInputChange(v: number | undefined): void {
-  if (typeof v !== 'number' || Number.isNaN(v)) return
-  renderScale.value = clamp(v, 0.4, 3)
-  viewScale.value = 1
-  void render()
-}
-
 function download() {
   const a = document.createElement('a')
   a.href = props.url
@@ -214,7 +211,12 @@ function download() {
 }
 
 // ============ 滚轮缩放 ============
-// 2026-09-12 新增：鼠标点中心缩放 + 250ms 节流 viewScale → renderScale → render()
+// 2026-09-12 新增：鼠标点中心缩放（纯 CSS transform，不触发 render）
+// 2026-09-12 第四轮改造：删除 250ms 节流的 scheduleReRender —— 节流触发的 render() 会改
+// canvas.width/height/style.width/style.height，引起 layout shift 视觉抖动。
+// 现在滚轮只调整 viewScale / tx / ty，由 CSS transform 处理；PDF bitmap 不重渲染。
+// 权衡：极高缩放（>3x）会出现像素感，但避免每次 wheel 后的 canvas 重排抖动；
+// 如需矢量清晰可点 +/- 按钮（zoomIn / zoomOut）触发 render() 重渲染。
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v))
 }
@@ -241,20 +243,7 @@ function onWheel(e: WheelEvent) {
   ty.value = mouseY - (mouseY - ty.value) * ratio
 
   viewScale.value = newViewScale
-  scheduleReRender()
-}
-
-let reRenderTimer: number | null = null
-function scheduleReRender() {
-  if (reRenderTimer !== null) return
-  reRenderTimer = window.setTimeout(() => {
-    // 把 viewScale 合并到 renderScale，viewScale 重置为 1，保证 PDF 矢量清晰
-    const merged = clamp(renderScale.value * viewScale.value, 0.4, 3)
-    renderScale.value = +(merged).toFixed(1)
-    viewScale.value = 1
-    reRenderTimer = null
-    void render()
-  }, 250)
+  // 不再调 scheduleReRender() —— 防止 canvas 内部尺寸变化引发抖动
 }
 
 // ============ 拖动平移 ============
@@ -308,10 +297,6 @@ watch(
 
 onMounted(load)
 onBeforeUnmount(() => {
-  if (reRenderTimer !== null) {
-    window.clearTimeout(reRenderTimer)
-    reRenderTimer = null
-  }
   window.removeEventListener('mousemove', onMouseMove)
   window.removeEventListener('mouseup', onMouseUp)
   if (renderTask) {
@@ -328,13 +313,21 @@ onBeforeUnmount(() => {
 </script>
 
 <style lang="scss" scoped>
+// 2026-09-12 第四轮（T3）：完整高度链让 viewport 撑满父容器
+//   preview-card (flex:1) → .pdf-viewer (height:100%) → .canvas-wrap (flex:1) → .pdf-viewport (flex:1)
+// 关键：.pdf-viewer 必须声明 height: 100% 才能继承自上而下的高度链；
+//       min-height: 0 允许 flex 子项收缩到 0（避免内容撑爆）。
 .pdf-viewer {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 400px;
-  min-width: 0;
+  // 2026-09-12 第四轮：同时声明 height:100% 和 flex:1
+  //   - flex 父容器（如 DrawingPreviewPane 的 .file-preview 现在是 flex column）→ flex:1 生效
+  //   - block 父容器 + definite height（如 FileListCard 的 el-dialog body）→ height:100% 生效
   height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;       /* ← 去掉 400px 下限 */
+  min-width: 0;
 }
 .loading,
 .error {
@@ -349,7 +342,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  flex: 1;
+  flex: 1;             /* ← 撑满父容器 */
   min-height: 0;
 }
 .pdf-toolbar {
@@ -357,7 +350,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  flex-shrink: 0;
+  flex-shrink: 0;      /* ← toolbar 不被压缩 */
 }
 .page-info {
   font-size: 13px;

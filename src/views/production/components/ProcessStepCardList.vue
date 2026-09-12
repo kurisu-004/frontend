@@ -9,6 +9,10 @@
     - 删除按钮移到卡片第一列（flex first child）
     - 卡片左侧 4px 竖条按 step.color 着色，null 时回退 category 默认色（INHOUSE → 蓝 / OUTSOURCE → 橙）
     - 占位方框（.step-add-placeholder）显式排除拖拽（filter: '.step-add-placeholder'）
+  2026-09-12 改造（第四轮 UI 精修）：
+    - 「重置」按钮去掉文字，改为 RefreshLeft 图标 + el-tooltip（T1）
+    - 改回 default button（非 text button，disabled 时更可见）
+    - toolbar 单行：总耗时 tag + spacer + 保存 + 重置 icon（T1，20% 右栏 ≈256px 内能放下）
 
   CLAUDE.md 合规：
   - #10：容器 ref 位于 v-else（空态 vs 列表切换），初始 mount 时为 null → 用 useLazyDraggable。
@@ -19,17 +23,33 @@
   <el-card shadow="never" class="step-list-card">
     <template #header>
       <!-- 2026-09-12 第三轮：header 仅保留总耗时 + 保存 + 重置，删除 +添加工序 / 外协警示 -->
+      <!-- 2026-09-12 第四轮：重置 button 改 icon-only + tooltip，避免右栏 20% 宽度下换行。
+           tag 去掉「总耗时：」前缀（"X 分钟"更紧凑，让 tag+保存+重置 在 234px 内单行排开）。
+           保存 button 用 margin-left: auto 推到右侧（替代原来 div spacer，更省空间） -->
       <div class="toolbar">
-        <el-tag size="large" effect="plain" class="total-minutes">
-          总耗时：{{ totalMinutes }} 分钟
-        </el-tag>
-        <div class="toolbar-spacer" />
-        <el-button :disabled="!dirty" :loading="saving" type="success" size="small" @click="onSave">
+        <el-tooltip
+          :content="`总耗时 ${totalMinutes} 分钟`"
+          placement="top"
+        >
+          <el-tag size="default" effect="plain" class="total-minutes">
+            {{ totalMinutes }} 分钟
+          </el-tag>
+        </el-tooltip>
+        <el-button
+          class="toolbar-save"
+          :disabled="!dirty"
+          :loading="saving"
+          type="success"
+          size="small"
+          @click="onSave"
+        >
           保存
         </el-button>
-        <el-button :disabled="!dirty" text size="small" @click="onReset">
-          重置
-        </el-button>
+        <el-tooltip content="重置" placement="top" :disabled="!dirty">
+          <el-button :disabled="!dirty" size="small" @click="onReset">
+            <el-icon><RefreshLeft /></el-icon>
+          </el-button>
+        </el-tooltip>
       </div>
     </template>
 
@@ -121,7 +141,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Delete, Plus } from '@element-plus/icons-vue'
+import { Delete, Plus, RefreshLeft } from '@element-plus/icons-vue'
 import { useLazyDraggable } from '@/composables/useLazyDraggable'
 import { ElMessage } from 'element-plus'
 import type { ProcessStep } from '@/types/partProcess'
@@ -269,6 +289,11 @@ useLazyDraggable(containerRef, steps, {
   display: flex;
   flex-direction: column;
   height: 100%;
+  // 2026-09-12 第四轮：缩小 el-card__header 横向 padding，给 toolbar 更多空间
+  // （默认 18px 20px 会把 234px 的右栏压成 192px usable）
+  :deep(.el-card__header) {
+    padding: 8px 12px;
+  }
   :deep(.el-card__body) {
     display: flex;
     flex-direction: column;
@@ -281,14 +306,27 @@ useLazyDraggable(containerRef, steps, {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
+  // 2026-09-12 第四轮：子项强制 nowrap，让「总耗时 + 保存 + 重置」优先单行排开
+  // 视口极窄时（如 1440px viewport + 20% 右栏 ≈234px）下，应能单行排开；
+  // 若更窄（如 < 200px 极窄屏），自然换行到第 2 行，仍保持紧凑。
+  :deep(*) {
+    white-space: nowrap;
+  }
 }
-.toolbar-spacer {
-  flex: 1;
+.toolbar-save {
+  // 2026-09-12 第四轮：用 margin-left: auto 替代 div spacer 把保存按钮推到右侧
+  // （div spacer 占用 min-width:8px 是多余的，margin: auto 可以做到 0 宽占位）
+  margin-left: auto;
 }
 .total-minutes {
   font-weight: 600;
+  flex-shrink: 0;
+  // 紧凑 padding：与按钮同高（size="default" 24px）
+  :deep(.el-tag__content) {
+    padding: 0 8px;
+  }
 }
 .empty-state {
   display: flex;

@@ -155,14 +155,20 @@ function isImage(t: string): boolean {
     min-height: 0;
     overflow: hidden;
   }
+  // 2026-09-12 第四轮：el-tab-pane 改为 flex column，让内部 .file-preview 的 flex: 1 生效
+  // （之前 display: block + height: 100% 时，file-preview 仍塌缩到内容高度）
   :deep(.el-tab-pane) {
     height: 100%;
+    display: flex;
+    flex-direction: column;
   }
 }
 .file-preview {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden; // 2026-09-12 第四轮：file-preview 改为 flex column，让 PdfViewer 用 flex: 1 撑满
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: #fafbfc;
