@@ -138,7 +138,7 @@ const rows = ref<WorkType[]>([])
 const search = reactive({ code_like: '' })
 
 // ============ 筛选状态持久化 ============
-const { restore: restoreWorkTypeFilter, clear: clearWorkTypeFilter } = useListStatePersist(
+const { restore: restoreWorkTypeFilter } = useListStatePersist(
   'work_type_list',
   { search },
 )

@@ -90,14 +90,16 @@ export const ADMIN_MENUS: MenuNode[] = [
       { id: id(81), version: 0, parent_id: id(8), code: 'shelves_list', title: '货架管理', path: '/shelves', icon: 'Platform', sort_order: 10, children: [] },
     ],
   },
-  // 9. settings_root — 设置（分组，3 children）
+  // 9. production_group — 生产管理（分组，1 child）
+  // 2026-09-12 新增：合并原 设置/工种管理 + 设置/工序管理 + 设置/工种-工序映射 三菜单到一个 tabbed 页
+  // (/production/process-work-type)。后端 migration 021 同步软删 settings_root + 3 子菜单，
+  // 并在 production_group 下加 process_work_type。后续「制定工序」「生产队列」子菜单（part_process_chain / worker_queue）
+  // 在后端菜单表中已存在，前端页面下个 PR 重建；本次 PR 不动它们的菜单数据。
   {
     id: id(9), version: 0, parent_id: null,
-    code: 'settings_root', title: '设置', path: null,
-    icon: 'Setting', sort_order: 50, children: [
-      { id: id(91), version: 0, parent_id: id(9), code: 'work_types_list', title: '工种管理', path: '/settings/work-types', icon: 'User', sort_order: 10, children: [] },
-      { id: id(92), version: 0, parent_id: id(9), code: 'processes_list', title: '工序管理', path: '/settings/processes', icon: 'Operation', sort_order: 20, children: [] },
-      { id: id(93), version: 0, parent_id: id(9), code: 'work_type_processes_list', title: '工种-工序映射', path: '/settings/work-type-processes', icon: 'Connection', sort_order: 30, children: [] },
+    code: 'production_group', title: '生产管理', path: null,
+    icon: 'Operation', sort_order: 27, children: [
+      { id: id(91), version: 0, parent_id: id(9), code: 'process_work_type', title: '工序工种', path: '/production/process-work-type', icon: 'Operation', sort_order: 5, children: [] },
     ],
   },
 ]

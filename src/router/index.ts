@@ -282,22 +282,16 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        path: 'settings/work-types',
-        name: 'WorkTypeList',
-        component: () => import('@/views/settings/WorkTypeList.vue'),
-        meta: { title: '工种管理', menuCode: 'work_types_list', breadcrumb: [{ label: '设置', path: '/settings/work-types' }, { label: '工种管理' }] },
-      },
-      {
-        path: 'settings/processes',
-        name: 'ProcessList',
-        component: () => import('@/views/settings/ProcessList.vue'),
-        meta: { title: '工序管理', menuCode: 'processes_list', breadcrumb: [{ label: '设置', path: '/settings/work-types' }, { label: '工序管理' }] },
-      },
-      {
-        path: 'settings/work-type-processes',
-        name: 'WorkTypeProcess',
-        component: () => import('@/views/settings/WorkTypeProcess.vue'),
-        meta: { title: '工种-工序映射', menuCode: 'work_type_processes_list', breadcrumb: [{ label: '设置', path: '/settings/work-types' }, { label: '工种-工序映射' }] },
+        // 2026-09-12：合并原 设置/工种管理 + 设置/工序管理 + 设置/工种-工序映射 三菜单到一个
+        // tabbed 页（/production/process-work-type）。原三个 /settings/* 路由已删除。
+        path: 'production/process-work-type',
+        name: 'ProcessWorkType',
+        component: () => import('@/views/production/ProcessWorkTypePage.vue'),
+        meta: {
+          title: '工序工种',
+          menuCode: 'process_work_type',
+          breadcrumb: [{ label: '生产管理', path: '/production/process-work-type' }, { label: '工序工种' }],
+        },
       },
     ],
   },
