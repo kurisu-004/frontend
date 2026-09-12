@@ -1,13 +1,16 @@
 <!--
   PartPickerList.vue
-  工序制定页左栏：搜索 + 双表（待制定 / 已制定）+ 装配件子件展开。
+  工序制定页左栏：搜索 + 三 section（装配件 / 待制定 / 已制定）+ 树表 lazy load 子件展开。
   2026-09-11 新增。
   2026-09-12 重构：
-    - 删除 <el-card #header>（标题信息降级为两表上方小节文字）
+    - 删除 <el-card #header>（标题信息降级为 section 上方小节文字）
     - 单表 → 双表（pendingParts / designedParts 通过 step_count 拆开）
     - 序列号 + 名称两列；图号作 hover tooltip（CLAUDE.md #11 加 :disabled 守卫）
     - 树表 lazy load 复用 PartsTable.vue:291-295 / 297-332 模式（rowKey 前缀化 + matched_children 优先 / getAssembly fallback）
     - 子件 row 点击 → emit('select') → 父组件切换 selectedPartId（CLAUDE.md #11 row 空值守卫）
+  2026-09-12 第五轮：装配件（row_type='ASSEMBLY'）单独展示在顶部「装配件」section。
+  装配件本身不能指定工序（点选时 ProcessStepCardList 显示提示），但仍可点击预览总装图。
+  「待制定 / 已制定」section 只展示 row_type='PART' 的零件。
 -->
 <template>
   <el-card shadow="never" class="picker-card">
@@ -19,6 +22,46 @@
       class="picker-search"
       :prefix-icon="Search"
     />
+
+    <!-- 2026-09-12 第五轮：装配件（row_type='ASSEMBLY'）单独显示在一个 section 里。
+         装配件本身不能指定工序（点击右栏会显示提示），但仍可点击预览其总装图。
+         「待制定 / 已制定」两张表只展示 row_type='PART' 的零件。 -->
+    <div v-if="filteredAssemblies.length > 0" class="picker-section picker-section--assemblies">
+      <div class="section-title">
+        <span>装配件</span>
+        <el-tag size="small" type="warning" effect="plain">{{ filteredAssemblies.length }}</el-tag>
+      </div>
+      <el-table
+        :data="filteredAssemblies"
+        v-loading="loading"
+        lazy
+        :load="loadChildren"
+        :tree-props="{ hasChildren: 'has_children', children: 'children' }"
+        :row-key="rowKey"
+        :current-row-key="selectedPartId ?? undefined"
+        highlight-current-row
+        @row-click="onSelect"
+        size="small"
+        stripe
+        class="picker-table"
+      >
+        <el-table-column prop="serial_no" label="序列号" min-width="110" show-overflow-tooltip />
+        <el-table-column label="名称" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tooltip
+              :content="row?.drawing_no ?? ''"
+              placement="top"
+              :disabled="!row?.drawing_no"
+            >
+              <span class="picker-name">
+                {{ row?.name ?? '—' }}
+                <el-tag size="small" type="warning" effect="plain">装配件</el-tag>
+              </span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
 
     <div class="picker-section">
       <div class="section-title">
@@ -49,12 +92,6 @@
             >
               <span class="picker-name">
                 {{ row?.name ?? '—' }}
-                <el-tag
-                  v-if="row?.row_type === 'ASSEMBLY'"
-                  size="small"
-                  type="warning"
-                  effect="plain"
-                >装配件</el-tag>
               </span>
             </el-tooltip>
           </template>
@@ -91,12 +128,6 @@
             >
               <span class="picker-name">
                 {{ row?.name ?? '—' }}
-                <el-tag
-                  v-if="row?.row_type === 'ASSEMBLY'"
-                  size="small"
-                  type="warning"
-                  effect="plain"
-                >装配件</el-tag>
               </span>
             </el-tooltip>
           </template>
@@ -126,14 +157,22 @@ const loading = loadingParts
 
 const searchKeyword = ref('')
 
+/** 2026-09-12 第五轮：装配件单独展示在一个 section 里（顶部「装配件」表）。
+ *  装配件本身不能指定工序，只能为其子零件制定工序。点选装配件时右栏显示提示，
+ *  但仍可点击行预览总装图（通过 emit('select') 走同一选中通路）。 */
+const assemblies = computed<PartListItem[]>(() =>
+  parts.value.filter((p) => p.row_type === 'ASSEMBLY'),
+)
+
 /** 按 step_count 拆成「待制定 / 已制定」两份。
  *  2026-09-12 新增：原 3 列表格（图号 / 名称 / 状态）改为双表分组展示；
- *  状态信息已通过「待制定 / 已制定」section 标题表达。 */
+ *  状态信息已通过「待制定 / 已制定」section 标题表达。
+ *  2026-09-12 第五轮：这两张表只展示 row_type='PART' 的零件（装配件在独立的「装配件」section 里）。 */
 const pendingParts = computed<PartListItem[]>(() =>
-  parts.value.filter((p) => (allSummaries.value[p.id]?.step_count ?? 0) === 0),
+  parts.value.filter((p) => p.row_type !== 'ASSEMBLY' && (allSummaries.value[p.id]?.step_count ?? 0) === 0),
 )
 const designedParts = computed<PartListItem[]>(() =>
-  parts.value.filter((p) => (allSummaries.value[p.id]?.step_count ?? 0) > 0),
+  parts.value.filter((p) => p.row_type !== 'ASSEMBLY' && (allSummaries.value[p.id]?.step_count ?? 0) > 0),
 )
 
 function filterByKw(arr: PartListItem[]): PartListItem[] {
@@ -150,6 +189,7 @@ function filterByKw(arr: PartListItem[]): PartListItem[] {
 
 const filteredPending = computed(() => filterByKw(pendingParts.value))
 const filteredDesigned = computed(() => filterByKw(designedParts.value))
+const filteredAssemblies = computed(() => filterByKw(assemblies.value))
 
 function onSelect(row: PartListItem): void {
   if (row && row.id) emit('select', row.id)
@@ -225,6 +265,11 @@ async function loadChildren(
   flex-direction: column;
   min-height: 0;
   flex: 1 1 0;
+}
+// 2026-09-12 第五轮：装配件 section 不强制 flex 1（不需要抢占大量空间，列表通常很短）
+.picker-section--assemblies {
+  flex: 0 0 auto;
+  max-height: 35%;
 }
 .section-title {
   display: flex;
