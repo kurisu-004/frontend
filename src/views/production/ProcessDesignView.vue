@@ -24,7 +24,8 @@
         </el-splitter-panel>
 
         <!-- 右：ProcessStepCardList -->
-        <el-splitter-panel :size="pane.rightSize.value" :min="320">
+        <!-- 2026-09-12 第三轮：右栏加 :max="'20%'" 限制最大宽度，drag 超过自动回弹。 -->
+        <el-splitter-panel :size="pane.rightSize.value" :min="320" :max="'20%'">
           <ProcessStepCardList :part-id="selectedPartId" />
         </el-splitter-panel>
       </el-splitter>

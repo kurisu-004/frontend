@@ -25,7 +25,21 @@ export interface Process {
   requires_approval: boolean
   created_at: string
   updated_at: string
+  /** 2026-09-12 新增：可选，工序卡片左侧 4px 竖条颜色（hex #RRGGBB）。后端阶段二补字段。 */
+  color?: string | null
 }
+
+/** 2026-09-12 新增：工序卡片配色预设（Element Plus 主题色 + 互补色），按 sort_order 顺序循环取用。 */
+export const PROCESS_COLOR_PRESETS: readonly string[] = [
+  '#409EFF', // Element Primary 蓝
+  '#67C23A', // Element Success 绿
+  '#E6A23C', // Element Warning 橙
+  '#F56C6C', // Element Danger 红
+  '#909399', // Element Info 灰
+  '#9B59B6', // 紫
+  '#1ABC9C', // 青
+  '#E15C5C', // 暗红
+] as const
 
 export interface ProcessListResult {
   items: Process[]

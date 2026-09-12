@@ -88,6 +88,7 @@ function makeStepFromProcess(p: Process): ProcessStep {
     estimated_minutes: 30,
     note: null,
     sort_order: 0,
+    color: p.color ?? null, // 2026-09-12 新增：透传工序颜色
   }
 }
 

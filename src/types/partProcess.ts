@@ -26,6 +26,8 @@ export interface ProcessStep {
   note: string | null
   /** 0-based 排序，与 array.index 同步；写入时由 reorderSteps 重写 */
   sort_order: number
+  /** 2026-09-12 新增：从 process.color 透传（卡片左侧 4px 竖条），null 时回退到 category 默认色 */
+  color?: string | null
 }
 
 /** 零件 → 工序流程表（mock 阶段 version 始终 0；阶段二对齐后端 schema）。 */
