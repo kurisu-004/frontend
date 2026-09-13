@@ -350,17 +350,18 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        // 2026-09-14 新增：打印模板编辑器（临时 dev 路由，等接入后端菜单树时再加 menuCode）。
-        // menuCode 暂留空：用户明确同意（CLAUDE.md #8 例外）。
+        // 2026-09-14 重写：打印模板编辑器从「自研三栏」换成 `@amdosion/vue3-print` 包实现。
+        // view 名同步改为 PrintTemplateDesigner（保持唯一路由 name 不冲突）。
+        // menuCode 暂留空：等接入后端菜单树时再加（CLAUDE.md #8 例外）。
         // allowRoles 兜底：dev dummy 模式的 dev-admin 角色是 MANAGER，能进；prod 暂不上线。
         path: 'print-templates',
-        name: 'PrintTemplateEditor',
-        component: () => import('@/views/print-templates/PrintTemplateEditor.vue'),
+        name: 'PrintTemplateDesigner',
+        component: () => import('@/views/print-templates/PrintTemplateDesigner.vue'),
         meta: {
-          title: '打印模板编辑器',
+          title: '打印模板设计器',
           icon: 'Printer',
           allowRoles: ['MANAGER'],
-          breadcrumb: [{ label: '打印模板编辑器' }],
+          breadcrumb: [{ label: '打印模板设计器' }],
         },
       },
     ],
