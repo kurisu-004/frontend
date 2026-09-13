@@ -7,6 +7,10 @@
   - dialog 不存在；唯一 UI 状态 = editing 标志（由 usePartDetail 持有）
 
   2026-08-25 frontend-overall-refactor：从 PartDetail.vue 抽出。
+
+  2026-09-13 PR-2 响应式正确性：父级 form = reactive<PartEditForm>(...) 注入，
+  vue/no-mutating-props 禁止 props.form.x = v。本地用 reactive 副本（深拷贝 +
+  watch 同步）+ emit('update:form', v) 双向同步；父级 @update:form 合并即可。
 -->
 <template>
   <el-card v-loading="infoLoading" shadow="never" class="info-card">
@@ -18,7 +22,7 @@
             <span v-else class="muted">—</span>
           </el-descriptions-item>
           <el-descriptions-item label="图号">
-            <el-input v-model="form.drawing_no" size="small" />
+            <el-input v-model="localForm.drawing_no" size="small" />
           </el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="statusTagType(part.status)" effect="plain" size="small">
@@ -36,14 +40,19 @@
           </el-descriptions-item>
 
           <el-descriptions-item label="名称" :span="3">
-            <el-input v-model="form.name" size="small" />
+            <el-input v-model="localForm.name" size="small" />
           </el-descriptions-item>
 
           <el-descriptions-item label="数量">
-            <el-input-number v-model="form.quantity" :min="1" size="small" style="width: 100%" />
+            <el-input-number
+              v-model="localForm.quantity"
+              :min="1"
+              size="small"
+              style="width: 100%"
+            />
           </el-descriptions-item>
           <el-descriptions-item label="加急">
-            <el-switch v-model="form.is_urgent" active-text="加急" />
+            <el-switch v-model="localForm.is_urgent" active-text="加急" />
           </el-descriptions-item>
           <el-descriptions-item label="客户">
             <span v-if="part.customer_path">{{ part.customer_path }}</span>
@@ -53,7 +62,7 @@
 
           <el-descriptions-item label="计划交期">
             <el-date-picker
-              v-model="form.planned_delivery_date"
+              v-model="localForm.planned_delivery_date"
               type="date"
               value-format="YYYY-MM-DD"
               size="small"
@@ -62,7 +71,7 @@
           </el-descriptions-item>
           <el-descriptions-item label="实际送货">
             <el-date-picker
-              v-model="form.actual_delivery_date"
+              v-model="localForm.actual_delivery_date"
               type="date"
               value-format="YYYY-MM-DD"
               size="small"
@@ -73,11 +82,11 @@
 
           <!-- 送货单字段（PR-F 2026-07-17） -->
           <el-descriptions-item label="订单号">
-            <el-input v-model="form.order_no" size="small" placeholder="如 6200037950" />
+            <el-input v-model="localForm.order_no" size="small" placeholder="如 6200037950" />
           </el-descriptions-item>
           <el-descriptions-item label="系统交期">
             <el-date-picker
-              v-model="form.system_delivery_date"
+              v-model="localForm.system_delivery_date"
               type="date"
               value-format="YYYY-MM-DD"
               size="small"
@@ -85,7 +94,7 @@
             />
           </el-descriptions-item>
           <el-descriptions-item label="备注">
-            <el-input v-model="form.note" size="small" placeholder="文员手填" />
+            <el-input v-model="localForm.note" size="small" placeholder="文员手填" />
           </el-descriptions-item>
         </el-descriptions>
 
@@ -163,6 +172,7 @@
 </template>
 
 <script setup lang="ts">
+import { reactive, watch, toRaw } from 'vue';
 import type { PartItem } from '@/api/parts';
 import type { OrderStatus } from '@/types/parts';
 import type { PartEditForm } from '../composables/usePartDetail';
@@ -178,11 +188,36 @@ const props = defineProps<{
   statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'edit'): void;
   (e: 'save'): void;
   (e: 'cancel'): void;
+  // PR-2 2026-09-13：本地副本变更后通知父级合并回 form。
+  (e: 'update:form', v: PartEditForm): void;
 }>();
+
+// PR-2 2026-09-13：父级 form = reactive<PartEditForm>(...)。vue/no-mutating-props
+// 禁止 props.form.x = v。深拷贝一份到本地 reactive，模板 v-model 全部绑本地副本；
+// 父级 props.form 变更（如 onStartEdit 重置）通过 watch 重新覆盖本地；本地副本
+// 变更 emit('update:form') 让父级 Object.assign 合并回去。
+//
+// 用 watch immediate: true 触发一次性拷贝，避免在 setup 顶层直接读 props.form
+// （vue/no-setup-props-destructure）。
+const localForm = reactive<PartEditForm>({} as PartEditForm);
+watch(
+  () => props.form,
+  (v) => {
+    Object.assign(localForm, structuredClone(toRaw(v)));
+  },
+  { deep: true, immediate: true },
+);
+watch(
+  localForm,
+  (v) => {
+    emit('update:form', { ...v });
+  },
+  { deep: true },
+);
 
 const descCol = 3;
 </script>

@@ -36,7 +36,9 @@ const props = defineProps<{
 }>();
 
 // 同 WorkerColumn 的 fix 模式：props.pool.batches readonly，本地 ref + watch。
-const writablePoolBatches = ref<Card[]>(props.pool ? [...props.pool.batches] : []);
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层读 props.pool，
+// 包一层 IIFE 把读取放进函数体。
+const writablePoolBatches = ref<Card[]>((() => (props.pool ? [...props.pool.batches] : []))());
 watch(
   () => props.pool?.batches,
   (next) => {

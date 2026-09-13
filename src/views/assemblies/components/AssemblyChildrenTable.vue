@@ -16,6 +16,10 @@
   本组件只负责 UI 编排 + 表单校验 + Blob URL 释放。
 
   2026-08-25 frontend-overall-refactor：从 AssemblyDetail.vue 抽出。
+
+  2026-09-13 PR-2：父级 addChildForm = reactive<AssemblyAddChildForm>(...)。vue/no-mutating-props
+  禁止 props.addChildForm.x = v。本地 reactive 副本 + watch 同步 +
+  emit('update:form')；父级 @update:form 合并即可。
 -->
 <template>
   <!-- 上传总装 PDF：仅当装配体当前没有 master + 没有子件时才可上传 -->
@@ -151,16 +155,21 @@
     <p class="confirm-hint">
       为本装配体添加一个子件。如需为该子件上传 PDF，请到子件详情页使用「上传图纸」按钮。
     </p>
-    <el-form ref="addChildFormRef" :model="addChildForm" :rules="addChildRules" label-width="96px">
+    <el-form
+      ref="addChildFormRef"
+      :model="localAddChildForm"
+      :rules="addChildRules"
+      label-width="96px"
+    >
       <el-form-item label="图号" prop="drawing_no">
-        <el-input v-model="addChildForm.drawing_no" placeholder="例如：E42FX1020107101-1" />
+        <el-input v-model="localAddChildForm.drawing_no" placeholder="例如：E42FX1020107101-1" />
       </el-form-item>
       <el-form-item label="名称" prop="name">
-        <el-input v-model="addChildForm.name" placeholder="例如：基础板" />
+        <el-input v-model="localAddChildForm.name" placeholder="例如：基础板" />
       </el-form-item>
       <el-form-item label="数量" prop="quantity">
         <el-input-number
-          v-model="addChildForm.quantity"
+          v-model="localAddChildForm.quantity"
           :min="1"
           :step="1"
           controls-position="right"
@@ -178,7 +187,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, ref } from 'vue';
+import { h, reactive, ref, toRaw, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { UploadFile, FormInstance } from 'element-plus';
 import { ElLink, ElMessage, ElTag } from 'element-plus';
@@ -225,12 +234,34 @@ interface Props {
 
 const props = defineProps<Props>();
 
-const emit =
-  defineEmits</** 添加子件 / 上传 PDF 成功后由父组件 refresh */ (e: 'refresh') => void>();
+const emit = defineEmits<{
+  /** 添加子件 / 上传 PDF 成功后由父组件 refresh */
+  (e: 'refresh'): void;
+  // PR-2 2026-09-13：本地副本变更同步给父级。
+  (e: 'update:form', v: AssemblyAddChildForm): void;
+}>();
 
 const router = useRouter();
 
 const addChildDlg = useDialogSize({ desktopWidth: 480 });
+
+// PR-2 2026-09-13：本地 reactive 副本 + watch + emit('update:form')；详见文件头注释。
+// watch immediate: true 触发一次性拷贝，避免在 setup 顶层读 props.addChildForm。
+const localAddChildForm = reactive<AssemblyAddChildForm>({} as AssemblyAddChildForm);
+watch(
+  () => props.addChildForm,
+  (v) => {
+    Object.assign(localAddChildForm, structuredClone(toRaw(v)));
+  },
+  { deep: true, immediate: true },
+);
+watch(
+  localAddChildForm,
+  (v) => {
+    emit('update:form', { ...v });
+  },
+  { deep: true },
+);
 
 // ============ 2026-08-27 Task 9：子件表列顺序拖动 + 可见性 ============
 // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +

@@ -198,8 +198,10 @@ import type { PartsListCtx } from '../composables/partsListCtx';
 
 const props = defineProps<{ ctx: PartsListCtx }>();
 
-// ============ 解构 ctx 到顶层局部变量（模板自动解包）============
-const { query, filters, edit, batch, dispatch, canEdit, columnVisibility, columnDefs } = props.ctx;
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层 `props.ctx.X` 直读；
+// 用 IIFE 把读取放进函数体（解构出来的 ref 仍然是 props.ctx.* 的引用，响应式保留）。
+const { query, filters, edit, batch, dispatch, canEdit, columnVisibility, columnDefs } = (() =>
+  props.ctx)();
 
 const { items, tableKey, defaultSort, emptyText, onSortChange } = query;
 

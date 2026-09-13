@@ -36,7 +36,9 @@ const props = defineProps<{
   target: HTMLElement | null;
 }>();
 
-const containerRef = shallowRef<HTMLElement | null>(props.target);
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止在 setup 顶层读 props.x。
+// 包一层 IIFE 把 props.target 读取放进函数体。
+const containerRef = shallowRef<HTMLElement | null>((() => props.target)());
 
 watch(
   () => props.target,

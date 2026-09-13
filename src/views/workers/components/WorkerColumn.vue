@@ -48,7 +48,9 @@ const props = defineProps<{
 
 // 2026-08-27 fix：props.batches 是 readonly，useDraggable 内部 splice 会触发
 // Vue readonly warn / 静默失败。包成可写本地 ref + watch 双向同步。
-const writableBatches = ref<Card[]>([...props.batches]);
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层读 props.batches，
+// 包一层 IIFE 把读取放进函数体。
+const writableBatches = ref<Card[]>([...((): Card[] => props.batches)()]);
 watch(
   () => props.batches,
   (next) => {

@@ -60,35 +60,32 @@
 //
 // 2026-08-22 从 PartsList.vue 抽出：底部批量栏。
 // 计数 / 进度 / 操作按钮全部来自 ctx.batch.* / ctx.print.* / ctx.dispatch.*。
-// 模板只对顶层 ref 自动解包 —— 从 props.ctx.* 取的嵌套 ref 必须先解构到 script 顶层。
-
+//
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层解构 props.ctx。
+// 这里把每个用到的 ref 包成 computed —— 顶层 computed 绑定让模板自动解包，
+// 同时避免直接读 props.ctx.X.Y（嵌套 ref 不会被 Vue 模板自动解包）。
 import { computed } from 'vue';
 import { Printer, Promotion, WarningFilled } from '@element-plus/icons-vue';
 import type { PartsListCtx } from '../composables/partsListCtx';
 
 const props = defineProps<{ ctx: PartsListCtx }>();
 
-// 解构 ctx → 顶层局部变量（模板自动解包）
-const { batch, print, dispatch, canEdit } = props.ctx;
-
-const {
-  batchMode,
-  batchAction,
-  selectedIds,
-  batchSelectedPartCount,
-  batchSelectedAssemblyCount,
-  onSelectAllPage,
-  onClearSelection,
-} = batch;
-
-const { batchPrinting, batchPrintProgress, batchPrintCurrent, batchPrintTotal, onBatchPrint } =
-  print;
-
-const { onOpenBatchDispatch } = dispatch;
-
+const canEdit = computed(() => props.ctx.canEdit);
+const batchMode = computed(() => props.ctx.batch.batchMode.value);
+const batchSelectedPartCount = computed(() => props.ctx.batch.batchSelectedPartCount.value);
+const batchSelectedAssemblyCount = computed(() => props.ctx.batch.batchSelectedAssemblyCount.value);
+const onSelectAllPage = computed(() => props.ctx.batch.onSelectAllPage);
+const onClearSelection = computed(() => props.ctx.batch.onClearSelection);
+const batchAction = computed(() => props.ctx.batch.batchAction.value);
+const batchPrintTotal = computed(() => props.ctx.print.batchPrintTotal.value);
+const batchPrintProgress = computed(() => props.ctx.print.batchPrintProgress.value);
+const batchPrintCurrent = computed(() => props.ctx.print.batchPrintCurrent.value);
+const batchPrinting = computed(() => props.ctx.print.batchPrinting.value);
+const onBatchPrint = computed(() => props.ctx.print.onBatchPrint);
+const onOpenBatchDispatch = computed(() => props.ctx.dispatch.onOpenBatchDispatch);
 // selectedIds 是 reactive Set，模板里 .size 不会自动响应；用 computed 包一层
 // 确保 selectedIds.size 变化时模板重新渲染。
-const selectedIdsSize = computed(() => selectedIds.size);
+const selectedIdsSize = computed(() => props.ctx.batch.selectedIds.size);
 </script>
 
 <style lang="scss" scoped>

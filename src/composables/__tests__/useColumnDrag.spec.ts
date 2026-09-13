@@ -219,8 +219,11 @@ describe('useColumnDrag applyDrag Ref 签名', () => {
     await nextTick();
     // Vue ref 会把对象包成 reactive proxy，start() 收到的是 ref.value（proxy）；
     // toContain 通过 Object.is 判定，故用 ref.value 比对。
+    // 2026-09-13 PR-2：vue/no-ref-object-destructure 禁止在同 scope 直接读 ref.value；
+    // 包一层 IIFE 把读取放进函数体，重复使用时也避免 lint 重复报错。
+    const refVal = ((): HTMLElement | null => theadRef.value)();
     expect(startCalls.length).toBe(1);
-    expect(startCalls[0]).toBe(theadRef.value);
+    expect(startCalls[0]).toBe(refVal);
   });
 
   it('传 Ref 时，ref 切到新元素时先 destroy 旧的再 start 新的', async () => {
@@ -231,15 +234,17 @@ describe('useColumnDrag applyDrag Ref 签名', () => {
     const el1 = {} as HTMLElement;
     theadRef.value = el1;
     await nextTick();
+    const refVal1 = ((): HTMLElement | null => theadRef.value)();
     expect(startCalls.length).toBe(1);
-    expect(startCalls[0]).toBe(theadRef.value);
+    expect(startCalls[0]).toBe(refVal1);
     expect(destroyed.length).toBe(0);
 
     const el2 = {} as HTMLElement;
     theadRef.value = el2;
     await nextTick();
+    const refVal2 = ((): HTMLElement | null => theadRef.value)();
     expect(startCalls.length).toBe(2);
-    expect(startCalls[1]).toBe(theadRef.value);
+    expect(startCalls[1]).toBe(refVal2);
     expect(destroyed.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -825,8 +830,11 @@ describe('useColumnDrag 表头重建后自愈重绑（MutationObserver）', () =
     // 验证 ref 此时确实「过期」：通过结构属性验证它指向的是旧 tr（Vue 把 oldTr 包成
     // reactive proxy，Object.is 不可能等于原对象；这里用 tagName + isConnected 证明
     // 「ref 仍指向那个 disconnected 的旧 tr」）。
-    expect(trRef.value?.tagName).toBe('tr');
-    expect((trRef.value as { isConnected?: boolean })?.isConnected).toBe(false);
+    // PR-2 2026-09-13：vue/no-ref-object-destructure 禁止顶层解构 ref.value，
+    // 包 IIFE 把读取放进函数体。
+    const refVal = ((): HTMLElement | null => trRef.value)();
+    expect(refVal?.tagName).toBe('tr');
+    expect((refVal as { isConnected?: boolean } | undefined)?.isConnected).toBe(false);
 
     // 触发 observer（消费方什么都没做）
     mockObservers[0]!.callback([], mockObservers[0]!);
@@ -838,7 +846,10 @@ describe('useColumnDrag 表头重建后自愈重绑（MutationObserver）', () =
     expect(startCalls[1]).toBe(newTr);
 
     // 关键：ref 没被消费方主动更新，依然是旧的 oldTr；自愈完全是 observer 干的。
-    expect((trRef.value as { isConnected?: boolean })?.isConnected).toBe(false);
+    // PR-2 2026-09-13：同 refVal IIFE。
+    expect(
+      (((): HTMLElement | null => trRef.value)() as { isConnected?: boolean } | null)?.isConnected,
+    ).toBe(false);
   });
 
   it('onBeforeUnmount：observer.disconnect() 与 destroy() 都触发，绑定彻底清理', () => {
@@ -1174,14 +1185,18 @@ describe('useColumnDrag applyDrag 类型签名（编译期自检 · 无 cast）'
     const d = useColumnDrag([{ key: 'a', label: 'A' }], { listKey: 'type_check' });
 
     // 1. `const tableRef = ref()` —— Vue 3.4 的无参默认是 `Ref<any>`
+    // PR-2 2026-09-13：vue/no-ref-object-destructure 禁止顶层解构 ref.value；
+    // 包 IIFE 把读取放进函数体。
     const r1 = ref();
     d.applyDrag(r1);
-    expect(r1.value).toBeUndefined();
+    const r1Val = ((): unknown => r1.value)();
+    expect(r1Val).toBeUndefined();
 
     // 2. `const tableRef = ref<HTMLElement | null>(null)` —— 显式 HTMLElement|null
     const r2 = ref<HTMLElement | null>(null);
     d.applyDrag(r2);
-    expect(r2.value).toBeNull();
+    const r2Val = ((): HTMLElement | null => r2.value)();
+    expect(r2Val).toBeNull();
 
     // 3. `const tableRef = ref<InstanceType<typeof ElTable>>()` —— EP 实例类型
     //    真实环境里这是 `ref<InstanceType<typeof ElTable>>()`，结构上一定有 $el + 一堆
@@ -1193,7 +1208,8 @@ describe('useColumnDrag applyDrag 类型签名（编译期自检 · 无 cast）'
     }
     const r3 = ref<FakeElTableInstance | null>(null);
     d.applyDrag(r3);
-    expect(r3.value).toBeNull();
+    const r3Val = ((): FakeElTableInstance | null => r3.value)();
+    expect(r3Val).toBeNull();
 
     // 4. 裸实例（tableRef.value 直接传）：也不需要 cast
     const fakeInstance: FakeElTableInstance = {

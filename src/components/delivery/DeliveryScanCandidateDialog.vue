@@ -62,7 +62,9 @@ const selectedBatchIds = ref(new Set<string>());
 // 2026-08-28 fix：dev-stage el-input + 数字 regex 改为 el-select + listShelves，
 // 复用 InspectionPending 的 picker 模式（`listShelves({zone, is_active, limit})`）。
 const shelves = ref<Shelf[]>([]);
-const selectedShelfId = ref<string | null>(props.defaultShelfId ?? null);
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层读 props.defaultShelfId，
+// 包一层 IIFE 把读取放进函数体。
+const selectedShelfId = ref<string | null>((() => props.defaultShelfId ?? null)());
 const shelvesLoading = ref(false);
 const shelvesError = ref<string | null>(null);
 

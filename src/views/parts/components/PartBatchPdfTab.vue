@@ -11,6 +11,11 @@
 
   2026-08-25 拆分：原 PartBatchNew.vue 第 367-1064 行整段挪到本组件，state + handler
   在父组件 usePartBatchPdf() 里；本组件 props 全部由父组件 `v-bind` 摊开传入。
+
+  2026-09-13 PR-2：父级 pdfForm / manualPartForm / manualAsmForm 是 reactive，
+  本组件改为本地 reactive 副本 + watch 同步 + emit('update:pdf-form' / 'update:manual-part-form' /
+  'update:manual-asm-form')；父组件 v-bind 摊开后再单独监听 emit 把值合并回
+  usePartBatchPdf 持有的 form。
 -->
 
 <template>
@@ -22,10 +27,10 @@
   </p>
 
   <el-card shadow="never" class="pdf-form-card">
-    <el-form :model="pdfForm" inline>
+    <el-form :model="localPdfForm" inline>
       <el-form-item label="L1 客户" required>
         <el-select
-          v-model="pdfForm.customerL1Id"
+          v-model="localPdfForm.customerL1Id"
           placeholder="选择一级客户"
           filterable
           clearable
@@ -36,7 +41,7 @@
       </el-form-item>
       <el-form-item label="请购日期">
         <el-date-picker
-          v-model="pdfForm.requestDate"
+          v-model="localPdfForm.requestDate"
           type="date"
           value-format="YYYY-MM-DD"
           placeholder="默认今天"
@@ -491,12 +496,12 @@
     destroy-on-close
     @update:model-value="(v: boolean) => !v && closeManualPartDialog()"
   >
-    <el-form :model="manualPartForm" label-width="80px">
+    <el-form :model="localManualPartForm" label-width="80px">
       <el-form-item label="图号" required>
-        <el-input v-model="manualPartForm.drawing_no" placeholder="必填" />
+        <el-input v-model="localManualPartForm.drawing_no" placeholder="必填" />
       </el-form-item>
       <el-form-item label="名称">
-        <el-input v-model="manualPartForm.name" placeholder="选填" />
+        <el-input v-model="localManualPartForm.name" placeholder="选填" />
       </el-form-item>
       <el-form-item label="图纸" required>
         <el-upload
@@ -530,12 +535,12 @@
     destroy-on-close
     @update:model-value="(v: boolean) => !v && closeManualAsmDialog()"
   >
-    <el-form :model="manualAsmForm" label-width="80px">
+    <el-form :model="localManualAsmForm" label-width="80px">
       <el-form-item label="图号" required>
-        <el-input v-model="manualAsmForm.drawing_no" placeholder="必填" />
+        <el-input v-model="localManualAsmForm.drawing_no" placeholder="必填" />
       </el-form-item>
       <el-form-item label="名称">
-        <el-input v-model="manualAsmForm.name" placeholder="选填" />
+        <el-input v-model="localManualAsmForm.name" placeholder="选填" />
       </el-form-item>
       <el-form-item label="图纸" required>
         <el-upload
@@ -568,7 +573,7 @@
 // 现在直接传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
 // （覆盖 v-if/destroy 重建 / 表头首次渲染未到两种场景）。
 
-import { h, inject, onMounted, ref, type Ref } from 'vue';
+import { h, inject, onMounted, reactive, ref, toRaw, watch, type Ref } from 'vue';
 import {
   ElAutocomplete,
   ElDatePicker,
@@ -678,6 +683,53 @@ const props = defineProps<{
   onSubmitPdfTree: () => Promise<void>;
   closePdfPreview: () => void;
 }>();
+
+// PR-2 2026-09-13：父级三个 form 都是 reactive；vue/no-mutating-props 禁止
+// props.form.x = v。本地副本 + watch + emit 双向同步。
+// watch immediate: true 触发一次性拷贝，避免在 setup 顶层读 props.*Form。
+const emit = defineEmits<{
+  (e: 'update:pdf-form', v: { customerL1Id: string | null; requestDate: string }): void;
+  (e: 'update:manual-part-form', v: { drawing_no: string; name: string; file: File | null }): void;
+  (e: 'update:manual-asm-form', v: { drawing_no: string; name: string; file: File | null }): void;
+}>();
+const localPdfForm = reactive<{ customerL1Id: string | null; requestDate: string }>({
+  customerL1Id: null,
+  requestDate: '',
+});
+const localManualPartForm = reactive<{ drawing_no: string; name: string; file: File | null }>({
+  drawing_no: '',
+  name: '',
+  file: null,
+});
+const localManualAsmForm = reactive<{ drawing_no: string; name: string; file: File | null }>({
+  drawing_no: '',
+  name: '',
+  file: null,
+});
+watch(
+  () => props.pdfForm,
+  (v) => {
+    Object.assign(localPdfForm, toRaw(v));
+  },
+  { deep: true, immediate: true },
+);
+watch(localPdfForm, (v) => emit('update:pdf-form', { ...v }), { deep: true });
+watch(
+  () => props.manualPartForm,
+  (v) => {
+    Object.assign(localManualPartForm, toRaw(v));
+  },
+  { deep: true, immediate: true },
+);
+watch(localManualPartForm, (v) => emit('update:manual-part-form', { ...v }), { deep: true });
+watch(
+  () => props.manualAsmForm,
+  (v) => {
+    Object.assign(localManualAsmForm, toRaw(v));
+  },
+  { deep: true, immediate: true },
+);
+watch(localManualAsmForm, (v) => emit('update:manual-asm-form', { ...v }), { deep: true });
 
 // 源文件区 el-table 本地 ref（用于 clearSelection）。拖拽用 el-table 的 ref
 // 由 composable 持有并通过 provide 暴露给本组件。
@@ -960,7 +1012,7 @@ const columnDefs_standalone: ColumnDef[] = [
         triggerOnFocus: true,
         debounce: 0,
         loading: props.applicantLoading,
-        disabled: !props.pdfForm.customerL1Id,
+        disabled: !localPdfForm.customerL1Id,
         placeholder: '选填',
         clearable: true,
         size: 'small',

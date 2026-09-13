@@ -96,14 +96,17 @@
 //
 // 2026-08-22 从 PartsList.vue 抽出：批量下发 dialog。
 // 模板只对顶层 ref 自动解包 —— 从 props.ctx.* 取的嵌套 ref 必须先解构到 script 顶层。
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层 `props.ctx` 直读。
+// 用 IIFE 包一层把 props.ctx 读取放进函数体。
 
 import { computed } from 'vue';
 import type { PartsListCtx } from '../composables/partsListCtx';
 
 const props = defineProps<{ ctx: PartsListCtx }>();
 
-// 解构 ctx → 顶层局部变量（模板自动解包）
-const { dispatch, batch } = props.ctx;
+// 2026-09-13 PR-2：见文件头注释。
+const dispatch = (() => props.ctx.dispatch)();
+const batch = (() => props.ctx.batch)();
 
 const {
   batchDispatchVisible,

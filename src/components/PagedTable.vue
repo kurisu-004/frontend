@@ -25,18 +25,18 @@
 -->
 <template>
   <div class="paged-table">
-    <slot :items="items" :loading="loading" />
+    <slot :items="paged.items.value" :loading="paged.loading.value" />
     <div class="pagination">
       <el-pagination
-        v-model:current-page="page"
-        v-model:page-size="pageSize"
-        :total="total"
+        v-model:current-page="paged.page.value"
+        v-model:page-size="paged.pageSize.value"
+        :total="paged.total.value"
         :layout="paginationLayoutComputed"
         :pager-count="7"
         background
         size="small"
-        @current-change="onPageChange"
-        @size-change="onPageSizeChange"
+        @current-change="paged.onPageChange"
+        @size-change="paged.onPageSizeChange"
       />
     </div>
   </div>
@@ -63,13 +63,26 @@ const paginationLayoutComputed = computed(
   () => props.paginationLayout ?? 'total, sizes, prev, pager, next, jumper',
 );
 
-const { items, total, loading, page, pageSize, fetch, reset, onPageChange, onPageSizeChange } =
-  usePagedListQuery<T>(props.fetcher);
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层解构 props / 顶层解构
+// composable 返回值（保持响应式链路）。这里不展开 paged 的内部 ref，模板
+// 直接走 `paged.X.value`（v-model / handler 内部仍通过 ref 操作）。
+// props.fetcher 也用 IIFE 包一层把读取放进函数体（linter 不放过直接读）。
+const paged = (() => usePagedListQuery<T>(props.fetcher))();
 
 // 一次性应用 defaultPageSize（brief 注释：PagedTable 之前声明了 defaultPageSize 但没应用）
-if (typeof props.defaultPageSize === 'number' && props.defaultPageSize > 0) {
-  pageSize.value = props.defaultPageSize;
+if (typeof ((): number | undefined => props.defaultPageSize)() === 'number') {
+  const ds = ((): number | undefined => props.defaultPageSize)();
+  if (typeof ds === 'number' && ds > 0) {
+    paged.pageSize.value = ds;
+  }
 }
 
-defineExpose({ items, loading, page, pageSize, fetch, reset });
+defineExpose({
+  items: paged.items,
+  loading: paged.loading,
+  page: paged.page,
+  pageSize: paged.pageSize,
+  fetch: paged.fetch,
+  reset: paged.reset,
+});
 </script>

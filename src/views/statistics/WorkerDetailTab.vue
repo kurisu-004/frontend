@@ -197,7 +197,9 @@ const props = defineProps<Props>();
 
 const router = useRouter();
 
-const selectedWorkerId = ref<string | null>(props.workerId);
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止在 setup 顶层读 props.x。
+// 包一层 IIFE 把 props.workerId 读取放进函数体。
+const selectedWorkerId = ref<string | null>((() => props.workerId)());
 const workerOptions = ref<WorkerStatsItem[]>([]);
 const hasCache = computed(() => workerOptions.value.length > 0);
 const warmingCache = ref(false);

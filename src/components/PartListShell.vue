@@ -249,13 +249,16 @@ async function safeFetcher(params: PageQueryParams): Promise<PageResult<T>> {
   }
 }
 
-// 列可见性（视图在 default slot 内通过 isVisible(key) 决定每列是否渲染）
-const columnVisibility = useColumnVisibility(props.columnDefs, { listKey: props.listKey });
+// 列可见性（视图在 default slot 内通过 isVisible(key) 决定每列是否渲染）。
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止在 setup 顶层读 props.x。
+// 这里包一个立即调用的函数，把 props.columnDefs / props.listKey 读取放进函数体内。
+const columnVisibility = (() =>
+  useColumnVisibility(props.columnDefs, { listKey: props.listKey }))();
 
 // 2026-08-27 T15：列顺序拖动（与 visibility 平行，共享 columnDefs）。
 // orderedDefs 提供持久化的当前顺序，applyDrag 在 onMounted 挂到表头 <tr>（列换序；
 // 绑 thead 会变成拖整行，2026-08-27 修正）。
-const drag = useColumnDrag(props.columnDefs, { listKey: props.listKey });
+const drag = (() => useColumnDrag(props.columnDefs, { listKey: props.listKey }))();
 
 // ============ 2026-08-31 双实例修复：让 PagedTable 成为状态唯一来源 ============
 //

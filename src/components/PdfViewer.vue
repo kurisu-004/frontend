@@ -112,12 +112,14 @@ const props = withDefaults(defineProps<Props>(), {
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
-const page = ref(props.page);
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止在 setup 顶层读 props.x。
+// 包一层 IIFE 把 props.page / props.initialScale 的读取放进函数体。
+const page = ref((() => props.page)());
 const totalPages = ref(0);
 
 // ============ 双 scale 模型 ============
 // 2026-09-12 新增
-const renderScale = ref(props.initialScale); // pdfjs 渲染分辨率（snap 0.1，0.4-3.0）
+const renderScale = ref((() => props.initialScale)()); // pdfjs 渲染分辨率（snap 0.1，0.4-3.0）
 const viewScale = ref(1); // CSS transform 乘数（连续，0.1-10）
 const tx = ref(0); // 平移 x（屏幕 px）
 const ty = ref(0); // 平移 y

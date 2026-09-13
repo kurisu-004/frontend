@@ -58,6 +58,7 @@
       :upload-pdf="uploadPdf"
       :fetch-drawing-blob="fetchDrawingBlob"
       @refresh="fetchData"
+      @update:form="onAddChildFormChange"
     />
 
     <!-- 编辑元数据对话框（CLERK + MANAGER） -->
@@ -69,6 +70,7 @@
       :query-applicants="queryApplicants"
       @open="loadLeafCustomers"
       @submit="onEditSubmit"
+      @update:form="onEditFormChange"
     />
 
     <!-- 取消 / 删除 共用确认对话框 -->
@@ -121,6 +123,7 @@ import AssemblyInfoCard from './components/AssemblyInfoCard.vue';
 import AssemblyChildrenTable from './components/AssemblyChildrenTable.vue';
 import AssemblyEditDialog from './components/AssemblyEditDialog.vue';
 import { useAssemblyDetail } from './composables/useAssemblyDetail';
+import type { AssemblyEditForm, AssemblyAddChildForm } from './composables/useAssemblyDetail';
 
 const route = useRoute();
 const router = useRouter();
@@ -179,6 +182,20 @@ async function onEditSubmit(payload: AssemblyUpdatePayload): Promise<void> {
   } finally {
     editSubmitting.value = false;
   }
+}
+
+// PR-2 2026-09-13：AssemblyEditDialog 用本地 reactive 副本做双向 v-model，
+// emit('update:form') 把最新编辑内容合并回 useAssemblyDetail 持有的 editForm，
+// 保证 onEditSubmit 读 editForm 时拿到的是用户当前编辑值（不再依赖 populateEditForm 之前的快照）。
+function onEditFormChange(next: AssemblyEditForm): void {
+  Object.assign(editForm, next);
+}
+
+// PR-2 2026-09-13：AssemblyChildrenTable 用本地 reactive 副本做双向 v-model，
+// emit('update:form') 同步 addChildForm；addChild 读 addChildForm 时拿到的是
+// 用户当前编辑内容。
+function onAddChildFormChange(next: AssemblyAddChildForm): void {
+  Object.assign(addChildForm, next);
 }
 
 // ============ 取消 / 删除 共用确认对话框 ============

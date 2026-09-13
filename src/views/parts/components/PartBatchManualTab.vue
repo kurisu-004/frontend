@@ -149,7 +149,7 @@
   >
     <el-form
       ref="formRefLocal"
-      :model="form"
+      :model="localForm"
       :rules="rules"
       label-width="100px"
       label-position="right"
@@ -157,12 +157,12 @@
       <div class="form-grid">
         <div>
           <el-form-item label="图号" prop="drawingNo">
-            <el-input v-model="form.drawingNo" placeholder="例如：LT39822" />
+            <el-input v-model="localForm.drawingNo" placeholder="例如：LT39822" />
           </el-form-item>
         </div>
         <div>
           <el-form-item label="名称" prop="name">
-            <el-input v-model="form.name" placeholder="请输入品名 / 零件名称" />
+            <el-input v-model="localForm.name" placeholder="请输入品名 / 零件名称" />
           </el-form-item>
         </div>
       </div>
@@ -171,7 +171,7 @@
         <div>
           <el-form-item label="客户" prop="customerId">
             <el-cascader
-              v-model="form.customerId"
+              v-model="localForm.customerId"
               :options="customerTree"
               :props="{
                 value: 'id',
@@ -190,13 +190,13 @@
         <div>
           <el-form-item label="申请人" prop="applicantName">
             <el-autocomplete
-              v-model="form.applicantName"
+              v-model="localForm.applicantName"
               value-key="name"
               :fetch-suggestions="querySearch"
               :trigger-on-focus="true"
               :debounce="0"
               :loading="applicantLoading"
-              :disabled="!form.customerId"
+              :disabled="!localForm.customerId"
               placeholder="选择或输入申请人姓名（不在表中则提交时自动新增）"
               style="width: 100%"
               clearable
@@ -210,7 +210,7 @@
         <div>
           <el-form-item label="数量" prop="quantity">
             <el-input-number
-              v-model="form.quantity"
+              v-model="localForm.quantity"
               :min="1"
               :step="1"
               controls-position="right"
@@ -220,7 +220,7 @@
         </div>
         <div>
           <el-form-item label="加急">
-            <el-switch v-model="form.isUrgent" />
+            <el-switch v-model="localForm.isUrgent" />
           </el-form-item>
         </div>
       </div>
@@ -229,7 +229,7 @@
         <div>
           <el-form-item label="请购日期" prop="requestDate">
             <el-date-picker
-              v-model="form.requestDate"
+              v-model="localForm.requestDate"
               type="date"
               value-format="YYYY-MM-DD"
               placeholder="请选择"
@@ -240,7 +240,7 @@
         <div>
           <el-form-item label="计划交期" prop="plannedDeliveryDate">
             <el-date-picker
-              v-model="form.plannedDeliveryDate"
+              v-model="localForm.plannedDeliveryDate"
               type="date"
               value-format="YYYY-MM-DD"
               placeholder="请选择"
@@ -254,13 +254,13 @@
       <div class="form-grid">
         <div>
           <el-form-item label="订单号">
-            <el-input v-model="form.orderNo" placeholder="如 6200037950（可选）" />
+            <el-input v-model="localForm.orderNo" placeholder="如 6200037950（可选）" />
           </el-form-item>
         </div>
         <div>
           <el-form-item label="系统交期">
             <el-date-picker
-              v-model="form.systemDeliveryDate"
+              v-model="localForm.systemDeliveryDate"
               type="date"
               value-format="YYYY-MM-DD"
               placeholder="订单方系统内部交期（可选）"
@@ -271,7 +271,7 @@
       </div>
 
       <el-form-item label="备注">
-        <el-input v-model="form.note" placeholder="文员手填备注（可选，送货单可见）" />
+        <el-input v-model="localForm.note" placeholder="文员手填备注（可选，送货单可见）" />
       </el-form-item>
 
       <el-form-item label="图纸">
@@ -285,12 +285,12 @@
         >
           <el-button>
             <el-icon><Upload /></el-icon>
-            <span>{{ form.drawingName ? '更换图纸' : '选择图纸' }}</span>
+            <span>{{ localForm.drawingName ? '更换图纸' : '选择图纸' }}</span>
           </el-button>
         </el-upload>
-        <div v-if="form.drawingName" class="drawing-info">
+        <div v-if="localForm.drawingName" class="drawing-info">
           <el-icon><Picture /></el-icon>
-          <span class="drawing-name">{{ form.drawingName }}</span>
+          <span class="drawing-name">{{ localForm.drawingName }}</span>
           <el-button link type="danger" size="small" @click="onDrawingRemove">移除</el-button>
         </div>
         <p class="form-hint">仅支持 PDF；提交时自动随表图号列点击预览（待新增一览 → 点图号）。</p>
@@ -360,7 +360,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue';
+import { h, onMounted, reactive, ref, toRaw, watch } from 'vue';
 import { ElButton, ElTag, type FormInstance, type FormRules, type UploadFile } from 'element-plus';
 import { DocumentAdd, Picture, Plus, Upload } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
@@ -414,6 +414,27 @@ const props = defineProps<{
   rowClassName: (p: { row: unknown }) => string;
   onSubmit: () => Promise<void>;
 }>();
+
+// PR-2 2026-09-13：父级 form = reactive<FormState>(...)。vue/no-mutating-props
+// 禁止 props.form.x = v。本地 reactive 副本 + watch 双向同步 + emit('update:form')。
+const emit = defineEmits<{
+  (e: 'update:form', v: FormState): void;
+}>();
+const localForm = reactive<FormState>({} as FormState);
+watch(
+  () => props.form,
+  (v) => {
+    Object.assign(localForm, structuredClone(toRaw(v)));
+  },
+  { deep: true, immediate: true },
+);
+watch(
+  localForm,
+  (v) => {
+    emit('update:form', { ...v });
+  },
+  { deep: true },
+);
 
 // 父组件 `v-bind="manual"` 摊开传入本组件需要的所有 props。
 // 2026-08-25 fix：el-form 的 ref 必须用本组件本地 ref —— 之前 `ref="formRef"` 把

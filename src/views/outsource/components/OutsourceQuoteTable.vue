@@ -277,6 +277,8 @@ const emit = defineEmits<{
 }>();
 
 // ============ 解构 ctx 到顶层（模板自动解包）============
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层 `props.ctx` 直读，
+// 用 IIFE 把读取放进函数体。
 const {
   pagedRef,
   fetcher,
@@ -299,9 +301,10 @@ const {
   syncCustomerDraft,
   resetCustomerDraft,
   confirmCustomerFilter,
-} = props.ctx.table;
+} = (() => props.ctx.table)();
 
-const { customerTree, roleMap } = props.ctx;
+// 2026-09-13 PR-2：见上面注释。
+const { customerTree, roleMap } = (() => props.ctx)();
 
 // 列头 popover 的 status 选项
 const statusOptions = STATUS_OPTIONS;

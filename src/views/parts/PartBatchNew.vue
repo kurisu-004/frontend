@@ -24,10 +24,17 @@
   <div class="batch-new">
     <el-tabs v-model="activeTab" class="batch-tabs">
       <el-tab-pane label="录入" name="manual">
-        <PartBatchManualTab v-bind="manual" />
+        <!-- 2026-09-13 PR-2：子组件 emit('update:form') 把本地编辑结果合并回
+             usePartBatchManual 持有的 form（v-bind 摊开 props 后再单独监听 emit）。 -->
+        <PartBatchManualTab v-bind="manual" @update:form="onManualFormChange" />
       </el-tab-pane>
       <el-tab-pane label="PDF 批量上传" name="pdf">
-        <PartBatchPdfTab v-bind="pdf" />
+        <PartBatchPdfTab
+          v-bind="pdf"
+          @update:pdf-form="onPdfFormChange"
+          @update:manual-part-form="onManualPartFormChange"
+          @update:manual-asm-form="onManualAsmFormChange"
+        />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -90,6 +97,23 @@ const pdf = reactive(usePartBatchPdf({ customers, applicantSearch, successNextTa
 watch(successNextTab, (v) => {
   if (v) activeTab.value = v;
 });
+
+// PR-2 2026-09-13：子组件用本地 reactive 副本做双向 v-model，emit('update:form')
+// 通知 shell 把最新值合并回 usePartBatchManual / usePartBatchPdf 持有的 form。
+// 这样子组件读到的 props.form 在 onAddConfirm / onConfirmManualPart 等 handler
+// 触发时就是当前编辑的内容。
+function onManualFormChange(v: Parameters<typeof Object.assign>[1]): void {
+  Object.assign(manual.form, v);
+}
+function onPdfFormChange(v: Parameters<typeof Object.assign>[1]): void {
+  Object.assign(pdf.pdfForm, v);
+}
+function onManualPartFormChange(v: Parameters<typeof Object.assign>[1]): void {
+  Object.assign(pdf.manualPartForm, v);
+}
+function onManualAsmFormChange(v: Parameters<typeof Object.assign>[1]): void {
+  Object.assign(pdf.manualAsmForm, v);
+}
 
 onMounted(() => {
   void loadCustomers();

@@ -10,6 +10,10 @@
     （基于 composable.updateAssembly 的 Promise<boolean> 返回值）
 
   2026-08-25 frontend-overall-refactor：从 AssemblyDetail.vue 抽出。
+
+  2026-09-13 PR-2：父级 form = reactive<AssemblyEditForm>(...)。vue/no-mutating-props
+  禁止 props.form.x = v。本地 reactive 副本 + watch 同步 + emit('update:form')；
+  父级 @update:form 合并即可（提交时 props.form 已是最新编辑值）。
 -->
 <template>
   <el-dialog
@@ -23,16 +27,16 @@
     @update:model-value="(v: boolean) => emit('update:visible', v)"
     @open="emit('open')"
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+    <el-form ref="formRef" :model="localForm" :rules="rules" label-width="100px">
       <el-form-item label="总图图号" prop="drawing_no">
-        <el-input v-model="form.drawing_no" placeholder="例如：E42FX1020107101" />
+        <el-input v-model="localForm.drawing_no" placeholder="例如：E42FX1020107101" />
       </el-form-item>
       <el-form-item label="装配体名称" prop="name">
-        <el-input v-model="form.name" placeholder="例如：精研挡料座" />
+        <el-input v-model="localForm.name" placeholder="例如：精研挡料座" />
       </el-form-item>
       <el-form-item label="客户" prop="customer_id">
         <el-select
-          v-model="form.customer_id"
+          v-model="localForm.customer_id"
           filterable
           placeholder="选择二级客户"
           style="width: 100%"
@@ -47,7 +51,7 @@
       </el-form-item>
       <el-form-item label="申请人">
         <el-autocomplete
-          v-model="form.applicant_name"
+          v-model="localForm.applicant_name"
           :fetch-suggestions="queryApplicants"
           placeholder="输入或选择申请人"
           value-key="name"
@@ -58,7 +62,7 @@
       </el-form-item>
       <el-form-item label="请购日期" prop="request_date">
         <el-date-picker
-          v-model="form.request_date"
+          v-model="localForm.request_date"
           type="date"
           value-format="YYYY-MM-DD"
           style="width: 100%"
@@ -66,7 +70,7 @@
       </el-form-item>
       <el-form-item label="计划交期" prop="planned_delivery_date">
         <el-date-picker
-          v-model="form.planned_delivery_date"
+          v-model="localForm.planned_delivery_date"
           type="date"
           value-format="YYYY-MM-DD"
           style="width: 100%"
@@ -74,14 +78,14 @@
       </el-form-item>
       <el-form-item label="实际送货">
         <el-date-picker
-          v-model="form.actual_delivery_date"
+          v-model="localForm.actual_delivery_date"
           type="date"
           value-format="YYYY-MM-DD"
           style="width: 100%"
         />
       </el-form-item>
       <el-form-item label="加急" prop="is_urgent">
-        <el-switch v-model="form.is_urgent" />
+        <el-switch v-model="localForm.is_urgent" />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -92,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { reactive, ref, toRaw, watch } from 'vue';
 import type { FormInstance } from 'element-plus';
 import { useDialogSize } from '@/composables/useDialogSize';
 import type { Customer } from '@/api/customer';
@@ -121,6 +125,8 @@ const emit = defineEmits<{
   (e: 'submit', payload: AssemblyUpdatePayload): void;
   /** open 时 shell 调 loadLeafCustomers（composable 注入） */
   (e: 'open'): void;
+  // PR-2 2026-09-13：本地副本变更同步给父级。
+  (e: 'update:form', v: AssemblyEditForm): void;
 }>();
 
 const dlg = useDialogSize({ desktopWidth: 640 });
@@ -128,9 +134,28 @@ const dlg = useDialogSize({ desktopWidth: 640 });
 const formRef = ref<FormInstance>();
 const rules = ASSEMBLY_EDIT_RULES;
 
+// PR-2 2026-09-13：本地 reactive 副本（深拷贝 props.form）；watch 双向同步 +
+// emit('update:form')。详见文件头注释。
+// watch immediate: true 触发一次性拷贝，避免在 setup 顶层读 props.form。
+const localForm = reactive<AssemblyEditForm>({} as AssemblyEditForm);
+watch(
+  () => props.form,
+  (v) => {
+    Object.assign(localForm, structuredClone(toRaw(v)));
+  },
+  { deep: true, immediate: true },
+);
+watch(
+  localForm,
+  (v) => {
+    emit('update:form', { ...v });
+  },
+  { deep: true },
+);
+
 function onApplicantSelected(applicant: { id?: string; name?: string }): void {
   if (applicant?.id != null) {
-    props.form.applicant_id = String(applicant.id);
+    localForm.applicant_id = String(applicant.id);
   }
 }
 
@@ -142,7 +167,7 @@ async function onSubmit(): Promise<void> {
     return;
   }
   // 把表单内部空字符串 / falsy 还原成 payload schema 的 null / undefined 语义。
-  const f = props.form;
+  const f = localForm;
   const payload: AssemblyUpdatePayload = {
     drawing_no: f.drawing_no,
     name: f.name,

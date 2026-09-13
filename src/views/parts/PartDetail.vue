@@ -23,6 +23,7 @@
       @edit="onStartEdit"
       @save="onSave"
       @cancel="onCancelEdit"
+      @update:form="onPartInfoFormChange"
     />
 
     <!-- 历史记录 -->
@@ -399,6 +400,7 @@ import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import { useConfirm } from '@/composables/useConfirm';
 import { usePermissions } from '@/composables/usePermissions';
 import { usePartDetail } from './composables/usePartDetail';
+import type { PartEditForm } from './composables/usePartDetail';
 import { usePartFiles } from './composables/usePartFiles';
 import { usePartCncGroups } from './composables/usePartCncGroups';
 import { usePartQuote } from './composables/usePartQuote';
@@ -483,6 +485,13 @@ const {
   loadQuoteCreateData,
   onCreateQuote,
 } = quote;
+
+// PR-2 2026-09-13：PartInfoCard 用本地 reactive 副本做双向 v-model，
+// 父级把子组件 emit('update:form') 的最新值合并回 usePartDetail 持有的 form。
+// 这样 onSave() 读 form.x 拿到的就是子组件当前编辑的内容。
+function onPartInfoFormChange(next: PartEditForm): void {
+  Object.assign(form, next);
+}
 
 // ============ 批次 ============
 // batches / batchesLoading / fetchBatches 来自 usePartDetail（PartBatchMonitorCard 渲染）
