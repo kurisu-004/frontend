@@ -10,11 +10,11 @@
 
 ## 1. Parser 总览
 
-| parser | 输入 | 输出 | 调用入口 |
-|---|---|---|---|
-| `bidExcelParser.ts` | 法拉电子应标 Excel `招标项目-标的` sheet | `BidRow[]` + 错误/警告 | `src/views/parts/PartBidImport.vue` |
-| `purchaseOrderExcelParser.ts` | 采购订单 Excel（`基本资料` + `采购订单明细` sheet） | `ParsedPurchaseOrder` | 内部调用 |
-| `historicalPriceExcelParser.ts` | 历史价确认单 Excel `历史价确认单明细` sheet | `BidRow[]`（复用 BidRow 契约） | 外协对账流程 |
+| parser                          | 输入                                                | 输出                           | 调用入口                            |
+| ------------------------------- | --------------------------------------------------- | ------------------------------ | ----------------------------------- |
+| `bidExcelParser.ts`             | 法拉电子应标 Excel `招标项目-标的` sheet            | `BidRow[]` + 错误/警告         | `src/views/parts/PartBidImport.vue` |
+| `purchaseOrderExcelParser.ts`   | 采购订单 Excel（`基本资料` + `采购订单明细` sheet） | `ParsedPurchaseOrder`          | 内部调用                            |
+| `historicalPriceExcelParser.ts` | 历史价确认单 Excel `历史价确认单明细` sheet         | `BidRow[]`（复用 BidRow 契约） | 外协对账流程                        |
 
 要点：
 
@@ -26,13 +26,13 @@
 
 `src/utils/xlsxParseUtils.ts` 提供 3 个 parser 共用的纯函数——任何新 parser 必须优先复用这些 helper，禁止在 parser 内重复实现等价逻辑。
 
-| helper | 行为 | fallback |
-|---|---|---|
-| `cleanText(value)` | null / undefined / falsy 安全 trim，非字符串先转字符串 | 空串 |
-| `parseIntSafe(value, fallback?)` | 千分位逗号 / 货币符号先剥离再 Number；非整数回退 | null（默认） |
-| `parseDecimal(value)` | 兼容千分位 / 货币符号的十进制解析 | 0 |
-| `parseDecimalOrNull(value)` | 同上但保留 null 语义（与 `parseDecimal` 的差异） | null |
-| `addDays(yyyy_mm_dd, days)` | 基于 `Date.UTC` 做日期加减，规避夏令时踩坑 | — |
+| helper                           | 行为                                                   | fallback     |
+| -------------------------------- | ------------------------------------------------------ | ------------ |
+| `cleanText(value)`               | null / undefined / falsy 安全 trim，非字符串先转字符串 | 空串         |
+| `parseIntSafe(value, fallback?)` | 千分位逗号 / 货币符号先剥离再 Number；非整数回退       | null（默认） |
+| `parseDecimal(value)`            | 兼容千分位 / 货币符号的十进制解析                      | 0            |
+| `parseDecimalOrNull(value)`      | 同上但保留 null 语义（与 `parseDecimal` 的差异）       | null         |
+| `addDays(yyyy_mm_dd, days)`      | 基于 `Date.UTC` 做日期加减，规避夏令时踩坑             | —            |
 
 这些 helper 原本都是 `bidExcelParser.ts` 的私有函数，2026-07-24 新增历史价 parser 时为复用而抽出。
 
@@ -53,9 +53,9 @@
 
 每个 parser 配套两类测试：
 
-| 文件类型 | 用途 | 特点 |
-|---|---|---|
-| `*.spec.ts` | mock 数据（人造 sample，可控） | 跑在 vitest node 环境，无 IO |
+| 文件类型         | 用途                             | 特点                                |
+| ---------------- | -------------------------------- | ----------------------------------- |
+| `*.spec.ts`      | mock 数据（人造 sample，可控）   | 跑在 vitest node 环境，无 IO        |
 | `*.real.spec.ts` | 真实样本（脱敏后的供应商原文件） | 同样 node 环境，但依赖 fixture 目录 |
 
 真实样本 fixtures 统一放在 `src/utils/__tests__/__fixtures__/`，当前规模：

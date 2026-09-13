@@ -11,7 +11,7 @@
     clearSelection / toggleRowSelection / sort。
 -->
 <template>
-  <div ref="wrapEl" class="parts-table-wrap" :key="tableKey">
+  <div ref="wrapEl" :key="tableKey" class="parts-table-wrap">
     <div class="parts-table-toolbar">
       <el-button link @click="resetAllFilters">重置筛选</el-button>
       <ColumnVisibilityPopover
@@ -103,10 +103,16 @@
             现在统一一个 #header 模板：headerRender 走其自定义 VNode，
             无 headerRender 时落回 d.label 文字；手柄始终追加在末尾
             （resolveDraggable(d) && !d.type && !d.fixed 时）。 -->
-          <template v-if="d.headerRender || (resolveDraggable(d) && !d.type && !d.fixed)" #header="scope">
-            <component v-if="d.headerRender" :is="d.headerRender(scope)" />
+          <template
+            v-if="d.headerRender || (resolveDraggable(d) && !d.type && !d.fixed)"
+            #header="scope"
+          >
+            <component :is="d.headerRender(scope)" v-if="d.headerRender" />
             <span v-else>{{ d.label }}</span>
-            <ColumnDragHandle v-if="resolveDraggable(d) && !d.type && !d.fixed" :title="`拖动 ${d.label} 列`" />
+            <ColumnDragHandle
+              v-if="resolveDraggable(d) && !d.type && !d.fixed"
+              :title="`拖动 ${d.label} 列`"
+            />
           </template>
           <!-- 自定义单元格（editing 切换 / 状态 tag / 链接 / 装配件 tag 等） -->
           <template v-if="d.cellRender" #default="scope">
@@ -125,33 +131,46 @@
               size="small"
               :loading="savingEdit"
               @click="saveEdit(row as PartListItem)"
-            >保存</el-button>
+              >保存</el-button
+            >
             <el-button link size="small" @click="cancelEdit">取消</el-button>
           </template>
           <template v-else>
-            <el-button link type="primary" size="small" @click="onDetail(row as PartListItem)">详情</el-button>
-            <el-button v-if="canEdit" link type="warning" size="small" @click="startEdit(row as PartListItem)">编辑</el-button>
+            <el-button link type="primary" size="small" @click="onDetail(row as PartListItem)"
+              >详情</el-button
+            >
+            <el-button
+              v-if="canEdit"
+              link
+              type="warning"
+              size="small"
+              @click="startEdit(row as PartListItem)"
+              >编辑</el-button
+            >
             <el-button
               v-if="canEdit && row.status === 'PENDING' && row.row_type !== 'ASSEMBLY'"
               link
               type="success"
               size="small"
               @click="onDispatch(row as PartListItem)"
-            >下发</el-button>
+              >下发</el-button
+            >
             <el-button
               v-if="canRecallToPending(row as PartListItem)"
               link
               type="danger"
               size="small"
               @click="onRecallToPending(row as PartListItem)"
-            >召回(待生产)</el-button>
+              >召回(待生产)</el-button
+            >
             <el-button
               v-if="canRecallToProgramming(row as PartListItem)"
               link
               type="warning"
               size="small"
               @click="onRecallToProgramming(row as PartListItem)"
-            >召回(待编程)</el-button>
+              >召回(待编程)</el-button
+            >
           </template>
         </template>
       </el-table-column>
@@ -166,41 +185,23 @@
 // 列定义 / 行内编辑 / 批量选中 / 表头 popover 全通过 props.ctx.* 解构到顶层局部
 // 变量后进模板（Vue 模板只对顶层 ref 自动解包；嵌套 ref 不会自动解包）。
 
-import { onMounted, ref } from 'vue'
-import type { TableInstance } from 'element-plus'
-import { useRouter } from 'vue-router'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import {
-  useColumnDrag,
-  columnIdentifier,
-} from '@/composables/useColumnDrag'
-import { resolveDraggable } from '@/composables/useColumnVisibility'
-import type { PartListItem } from '@/types/parts'
-import { getAssembly } from '@/api/assembly'
-import type { PartsListCtx } from '../composables/partsListCtx'
+import { onMounted, ref } from 'vue';
+import type { TableInstance } from 'element-plus';
+import { useRouter } from 'vue-router';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
+import { resolveDraggable } from '@/composables/useColumnVisibility';
+import type { PartListItem } from '@/types/parts';
+import { getAssembly } from '@/api/assembly';
+import type { PartsListCtx } from '../composables/partsListCtx';
 
-const props = defineProps<{ ctx: PartsListCtx }>()
+const props = defineProps<{ ctx: PartsListCtx }>();
 
 // ============ 解构 ctx 到顶层局部变量（模板自动解包）============
-const {
-  query,
-  filters,
-  edit,
-  batch,
-  dispatch,
-  canEdit,
-  columnVisibility,
-  columnDefs,
-} = props.ctx
+const { query, filters, edit, batch, dispatch, canEdit, columnVisibility, columnDefs } = props.ctx;
 
-const {
-  items,
-  tableKey,
-  defaultSort,
-  emptyText,
-  onSortChange,
-} = query
+const { items, tableKey, defaultSort, emptyText, onSortChange } = query;
 
 const {
   serialNoFilter,
@@ -222,7 +223,7 @@ const {
   nextProcessSelectedCount,
   onNativeFilterChange,
   serialNoFlash,
-} = filters
+} = filters;
 
 const {
   editingId,
@@ -236,14 +237,9 @@ const {
   totalPriceSummary,
   applicantSuggest,
   applicantLoading,
-} = edit
+} = edit;
 
-const {
-  batchMode,
-  isBatchSelectable,
-  onSelectionChange,
-  onBatchRowClick,
-} = batch
+const { batchMode, isBatchSelectable, onSelectionChange, onBatchRowClick } = batch;
 
 const {
   onDispatch,
@@ -251,9 +247,9 @@ const {
   canRecallToProgramming,
   onRecallToPending,
   onRecallToProgramming,
-} = dispatch
+} = dispatch;
 
-const router = useRouter()
+const router = useRouter();
 
 // ============ 列顺序拖动（2026-08-27 Task 6 接入）============
 // 与 PartsList 的 useColumnVisibility 共享同一 columnDefs 数组：
@@ -261,11 +257,11 @@ const router = useRouter()
 // orderedKeys 在 sortablejs onEnd 时落盘，二者内存里的 orderedKeys 通过持久化层一致。
 // listKey 取 PartsList useColumnVisibility 已用的 'parts_list_columns' 同根命名空间，
 // 但 columnOrder 与 _columns 持久化分 key，互不污染。
-const drag = useColumnDrag(columnDefs, { listKey: 'parts_list' })
+const drag = useColumnDrag(columnDefs, { listKey: 'parts_list' });
 
 // ============ 表格 ref（暴露给父组件）============
-const tableRef = ref<TableInstance | null>(null)
-defineExpose({ tableRef })
+const tableRef = ref<TableInstance | null>(null);
+defineExpose({ tableRef });
 
 // 2026-08-23：工具栏「重置筛选」按钮 —— 一键清空所有列筛选（文本/日期/status/客户/位置/holder）。
 // 把 el-table.clearFilter 注入 query composable，让 query.resetAllFilters 能不持有
@@ -276,22 +272,22 @@ defineExpose({ tableRef })
 // 自愈（覆盖 EP 重建表头 / 数据到达后表头首次渲染）。consumer 0 行 query 代码。
 onMounted(() => {
   query.registerClearNativeFilters(() => {
-    tableRef.value?.clearFilter(['status', 'next_process'])
-  })
-  drag.applyDrag(tableRef)
-})
+    tableRef.value?.clearFilter(['status', 'next_process']);
+  });
+  drag.applyDrag(tableRef);
+});
 
 // 工具栏按钮的简短转发，模板里直接 @click="resetAllFilters"
 const resetAllFilters = (): void => {
-  query.resetAllFilters()
-}
+  query.resetAllFilters();
+};
 
 // ============ 本地辅助函数 ============
 // 2026-07-30：树表 row-key（避免顶层与子件 id 冲突）
 function rowKey(row: PartListItem): string {
-  if (row.row_type === 'ASSEMBLY') return `ASM_${row.id}`
-  if ((row as { __is_child?: boolean }).__is_child) return `CHILD_${row.id}`
-  return `PART_${row.id}`
+  if (row.row_type === 'ASSEMBLY') return `ASM_${row.id}`;
+  if ((row as { __is_child?: boolean }).__is_child) return `CHILD_${row.id}`;
+  return `PART_${row.id}`;
 }
 
 // 2026-07-30：懒加载装配件子件
@@ -303,8 +299,8 @@ async function loadChildren(
   resolve: (children: PartListItem[]) => void,
 ): Promise<void> {
   if (row.row_type !== 'ASSEMBLY') {
-    resolve([])
-    return
+    resolve([]);
+    return;
   }
   if (row.matched_children) {
     resolve(
@@ -314,41 +310,35 @@ async function loadChildren(
         row_type: 'PART' as const,
         has_children: false,
       })),
-    )
-    return
+    );
+    return;
   }
   try {
-    const detail = await getAssembly(row.id)
+    const detail = await getAssembly(row.id);
     const children = (detail.children ?? []).map((child) => ({
       ...child,
       __is_child: true,
       row_type: 'PART' as const,
       has_children: false,
-    })) as PartListItem[]
-    resolve(children)
+    })) as PartListItem[];
+    resolve(children);
   } catch {
-    resolve([])
+    resolve([]);
   }
 }
 
 function rowClassName({ row }: { row: PartListItem }): string {
-  if (row.is_urgent) return 'row-urgent'
+  if (row.is_urgent) return 'row-urgent';
   // PR-G 2026-07-22：已开具送货单（且尚未归档）的零件行用浅蓝染色；
   // DELIVERED / COMPLETED / CANCELLED 后 delivery_note_id 被 service 置 NULL，颜色自然消失。
-  if (
-    row.delivery_note_id
-    && row.status !== 'DELIVERED'
-    && row.status !== 'COMPLETED'
-  ) {
-    return 'row-on-delivery-note'
+  if (row.delivery_note_id && row.status !== 'DELIVERED' && row.status !== 'COMPLETED') {
+    return 'row-on-delivery-note';
   }
-  return ''
+  return '';
 }
 
 function onDetail(row: PartListItem): void {
-  void router.push(
-    row.row_type === 'ASSEMBLY' ? `/assemblies/${row.id}` : `/parts/${row.id}`,
-  )
+  void router.push(row.row_type === 'ASSEMBLY' ? `/assemblies/${row.id}` : `/parts/${row.id}`);
 }
 </script>
 
@@ -404,10 +394,16 @@ function onDetail(row: PartListItem): void {
 
 // 2026-08-04：扫码命中序列号时输入框 0.6s 脉冲动画
 @keyframes scanFlash {
-  0%   { box-shadow: 0 0 0 0 rgba(64, 158, 255, 0.5); }
-  100% { box-shadow: 0 0 0 6px rgba(64, 158, 255, 0);   }
+  0% {
+    box-shadow: 0 0 0 0 rgba(64, 158, 255, 0.5);
+  }
+  100% {
+    box-shadow: 0 0 0 6px rgba(64, 158, 255, 0);
+  }
 }
-.scan-flash { animation: scanFlash 0.6s ease-out; }
+.scan-flash {
+  animation: scanFlash 0.6s ease-out;
+}
 
 // 加急行：dashboard 同款红底 #fde2e2（与默认 .el-table 浅灰底可叠加）
 :deep(.el-table__row.row-urgent) > td.el-table__cell {
@@ -437,8 +433,17 @@ function onDetail(row: PartListItem): void {
 
 // 2026-08-27 Task 6：列顺序拖动视觉反馈（与 PartListShell 同款藏青/蓝/浅蓝系）。
 // sortablejs ghost/chosen/drag 三态分别对应：被拖列（半透明）/ 落点（蓝填充）/ 抓取副本（白）。
-:deep(.col-no-drag) { cursor: default !important; }
-:deep(.sortable-ghost) { opacity: 0.5; background: #eaf2fb !important; }
-:deep(.sortable-chosen) { background: #cce0f4 !important; }
-:deep(.sortable-drag) { background: #fff !important; }
+:deep(.col-no-drag) {
+  cursor: default !important;
+}
+:deep(.sortable-ghost) {
+  opacity: 0.5;
+  background: #eaf2fb !important;
+}
+:deep(.sortable-chosen) {
+  background: #cce0f4 !important;
+}
+:deep(.sortable-drag) {
+  background: #fff !important;
+}
 </style>

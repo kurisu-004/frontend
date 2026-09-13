@@ -11,37 +11,40 @@
      参考实现：OutsourceSendReceive.vue（send/receive tab 模式）。
 -->
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import WorkTypeTab from './components/WorkTypeTab.vue'
-import ProcessTab from './components/ProcessTab.vue'
-import ProcessWorkTypeMappingTab from './components/ProcessWorkTypeMappingTab.vue'
+import { ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import WorkTypeTab from './components/WorkTypeTab.vue';
+import ProcessTab from './components/ProcessTab.vue';
+import ProcessWorkTypeMappingTab from './components/ProcessWorkTypeMappingTab.vue';
 
-type TabName = 'work-types' | 'processes' | 'mapping'
+type TabName = 'work-types' | 'processes' | 'mapping';
 
-const route = useRoute()
-const router = useRouter()
+const route = useRoute();
+const router = useRouter();
 
 // ============================================================
 // Tab 状态（URL ?tab= 同步）
 // ============================================================
 function readTabFromQuery(): TabName {
-  const t = route.query.tab
-  if (t === 'processes' || t === 'mapping') return t
-  return 'work-types'
+  const t = route.query.tab;
+  if (t === 'processes' || t === 'mapping') return t;
+  return 'work-types';
 }
-const activeTab = ref<TabName>(readTabFromQuery())
+const activeTab = ref<TabName>(readTabFromQuery());
 
-watch(() => route.query.tab, (q) => {
-  if (q === 'work-types' || q === 'processes' || q === 'mapping') {
-    activeTab.value = q
-  }
-})
+watch(
+  () => route.query.tab,
+  (q) => {
+    if (q === 'work-types' || q === 'processes' || q === 'mapping') {
+      activeTab.value = q;
+    }
+  },
+);
 
 function onTabChange(name: string | number): void {
-  const n = name as TabName
-  activeTab.value = n
-  router.replace({ path: '/production/process-work-type', query: { tab: n } })
+  const n = name as TabName;
+  activeTab.value = n;
+  router.replace({ path: '/production/process-work-type', query: { tab: n } });
 }
 </script>
 

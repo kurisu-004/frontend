@@ -8,59 +8,59 @@
 
 ## 一、入口与路由
 
-| 路径 | 路由名 | menuCode | 守卫 |
-|---|---|---|---|
-| `/settings/work-types` | `WorkTypeList` | `work_types_list` | `requireAuth` |
-| `/settings/processes` | `ProcessList` | `processes_list` | `requireAuth` |
+| 路径                            | 路由名            | menuCode                   | 守卫          |
+| ------------------------------- | ----------------- | -------------------------- | ------------- |
+| `/settings/work-types`          | `WorkTypeList`    | `work_types_list`          | `requireAuth` |
+| `/settings/processes`           | `ProcessList`     | `processes_list`           | `requireAuth` |
 | `/settings/work-type-processes` | `WorkTypeProcess` | `work_type_processes_list` | `requireAuth` |
 
 父级为 `MainLayout` 子树。守卫是 router 默认 `requireAuth`；**角色未在 meta 中硬编码**，依赖后端菜单树（`user.menus`）是否下发对应 code。当前实际只有 MANAGER 在菜单里能看到这三项。
 
 ## 二、关键页面
 
-| 文件 | 职责 |
-|---|---|
-| `src/views/settings/WorkTypeList.vue` | 工种一览（CRUD + 列显隐 popover + PagedTable） |
-| `src/views/settings/ProcessList.vue` | 工序一览（CRUD，filter 含 `category` INHOUSE/OUTSOURCE） |
+| 文件                                     | 职责                                                     |
+| ---------------------------------------- | -------------------------------------------------------- |
+| `src/views/settings/WorkTypeList.vue`    | 工种一览（CRUD + 列显隐 popover + PagedTable）           |
+| `src/views/settings/ProcessList.vue`     | 工序一览（CRUD，filter 含 `category` INHOUSE/OUTSOURCE） |
 | `src/views/settings/WorkTypeProcess.vue` | 工种↔工序映射（左侧工种 + 右侧该工种可选工序的多选界面） |
 
 三个页面风格统一：`el-card` 筛选条 → `ColumnVisibilityPopover` 列显隐 → `PagedTable` 数据区 → 顶部「新增」绿色按钮（仅 MANAGER 可见）。`ProcessList.vue` 顶部的「新增工序」按钮用 `v-if="isManager"` 控制显示。
 
 ## 三、主要 API 调用
 
-| 模块 | 端点 | 实例 | 说明 |
-|---|---|---|---|
-| `src/api/workType.ts` | `/work-types`、`/work-types/{id}/processes` | `api`（v1） | 工种 CRUD + 映射读写 |
-| `src/api/process.ts` | `/processes` | `api`（v1） | 工序 CRUD，按 `category` 筛选 |
+| 模块                  | 端点                                        | 实例        | 说明                          |
+| --------------------- | ------------------------------------------- | ----------- | ----------------------------- |
+| `src/api/workType.ts` | `/work-types`、`/work-types/{id}/processes` | `api`（v1） | 工种 CRUD + 映射读写          |
+| `src/api/process.ts`  | `/processes`                                | `api`（v1） | 工序 CRUD，按 `category` 筛选 |
 
-| 函数 | HTTP | 用途 |
-|---|---|---|
-| `listWorkTypes(params)` | GET | 工种列表（`code_like` 模糊） |
-| `createWorkType` / `updateWorkType` / `softDeleteWorkType` | POST | 工种写入，软删除 |
-| `getWorkTypeProcesses` / `setWorkTypeProcesses` | GET / POST | 映射读写 |
-| `listProcesses(params)` | GET | 工序列表（支持 `category` 过滤） |
-| `createProcess` / `updateProcess` / `softDeleteProcess` | POST | 工序写入，软删除 |
+| 函数                                                       | HTTP       | 用途                             |
+| ---------------------------------------------------------- | ---------- | -------------------------------- |
+| `listWorkTypes(params)`                                    | GET        | 工种列表（`code_like` 模糊）     |
+| `createWorkType` / `updateWorkType` / `softDeleteWorkType` | POST       | 工种写入，软删除                 |
+| `getWorkTypeProcesses` / `setWorkTypeProcesses`            | GET / POST | 映射读写                         |
+| `listProcesses(params)`                                    | GET        | 工序列表（支持 `category` 过滤） |
+| `createProcess` / `updateProcess` / `softDeleteProcess`    | POST       | 工序写入，软删除                 |
 
 `category` 是工序的维度：`INHOUSE`（自产）/ `OUTSOURCE`（外协），统计与外协下拉都消费这个枚举。
 
 ## 四、常量与枚举
 
-| 文件 | 用途 |
-|---|---|
+| 文件                          | 用途                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `src/constants/partStatus.ts` | `STATUS_LABEL` / `STATUS_TAG_TYPE`：工单状态的 label + Element Plus tag type 映射，统计页与生产总览复用 |
-| `src/api/parts/batch.ts` | 批量送检 / 批量扫码相关常量（quantity / tolerance） |
-| `src/api/parts/bid.ts` | 投标相关常量（bid sheet 列定义） |
-| `src/api/parts/crud.ts` | CRUD 通用列宽 / 默认 pageSize 等 |
-| `src/api/parts/file.ts` | 上传相关常量（MIME / size limit） |
+| `src/api/parts/batch.ts`      | 批量送检 / 批量扫码相关常量（quantity / tolerance）                                                     |
+| `src/api/parts/bid.ts`        | 投标相关常量（bid sheet 列定义）                                                                        |
+| `src/api/parts/crud.ts`       | CRUD 通用列宽 / 默认 pageSize 等                                                                        |
+| `src/api/parts/file.ts`       | 上传相关常量（MIME / size limit）                                                                       |
 
 > 注：本目录下的 `constants/` 仅 `partStatus.ts` 一个文件，其余按"按域归口"分散到对应 `api/<domain>/` 子目录；新增设置域相关常量建议放 `src/api/workType/` 或 `src/api/process/`。
 
 ## 五、权限
 
-| 角色 | 可见 | 改 |
-|---|---|---|
-| MANAGER | 是 | 是 |
-| CLERK / INSPECTOR / SHELF_ACCOUNT / CNC_PROGRAMMER | 否（菜单不发） | — |
+| 角色                                               | 可见           | 改  |
+| -------------------------------------------------- | -------------- | --- |
+| MANAGER                                            | 是             | 是  |
+| CLERK / INSPECTOR / SHELF_ACCOUNT / CNC_PROGRAMMER | 否（菜单不发） | —   |
 
 破坏性操作（删除工种 / 删除工序 / 重置映射）都用 `el-popconfirm` 二次确认；删除是软删除（`/soft-delete`），后端写 `deleted_at` 即可保留历史关联。
 

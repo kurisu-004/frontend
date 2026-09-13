@@ -32,7 +32,9 @@
       </el-select>
       <el-button type="primary" @click="onReceivingSearch">查询</el-button>
       <el-button @click="onReceivingReset">重置</el-button>
-      <span v-if="receivingPagedRef?.total && receivingPagedRef.total > 0" class="total-hint">共 {{ receivingPagedRef.total }} 条</span>
+      <span v-if="receivingPagedRef?.total && receivingPagedRef.total > 0" class="total-hint"
+        >共 {{ receivingPagedRef.total }} 条</span
+      >
     </div>
     <!-- 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层） -->
     <div class="table-toolbar">
@@ -49,8 +51,8 @@
       <template #default="{ items, loading }">
         <el-table
           ref="tableRef"
-          :data="items"
           v-loading="loading"
+          :data="items"
           row-key="batch_id"
           :empty-text="receivingError ?? '暂无待接收的零件'"
           :row-class-name="receivingRowClassName"
@@ -91,7 +93,8 @@
                 size="small"
                 type="primary"
                 @click="openReceive(row as OutsourceInFlightItem)"
-              >接收</el-button>
+                >接收</el-button
+              >
             </template>
           </el-table-column>
         </el-table>
@@ -123,29 +126,29 @@
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, ref, toRef } from 'vue'
-import { ElTag } from 'element-plus'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import PagedTable from '@/components/PagedTable.vue'
+import { h, onMounted, ref, toRef } from 'vue';
+import { ElTag } from 'element-plus';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import PagedTable from '@/components/PagedTable.vue';
 import {
   useColumnVisibility,
   resolveDraggable,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import type { Customer } from '@/api/customer'
-import type { Shelf as ShelfItem } from '@/types/shelf'
-import type { Process } from '@/types/process'
-import type { OutsourceInFlightItem } from '@/types/outsource'
-import OutsourceReceiveDialog from './components/OutsourceReceiveDialog.vue'
-import { useOutsourceReceivingList } from './composables/useOutsourceReceivingList'
+} from '@/composables/useColumnVisibility';
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
+import type { Customer } from '@/api/customer';
+import type { Shelf as ShelfItem } from '@/types/shelf';
+import type { Process } from '@/types/process';
+import type { OutsourceInFlightItem } from '@/types/outsource';
+import OutsourceReceiveDialog from './components/OutsourceReceiveDialog.vue';
+import { useOutsourceReceivingList } from './composables/useOutsourceReceivingList';
 
 const props = defineProps<{
-  customers: readonly Customer[]
-  shelves: readonly ShelfItem[]
-  processes: readonly Process[]
-}>()
+  customers: readonly Customer[];
+  shelves: readonly ShelfItem[];
+  processes: readonly Process[];
+}>();
 
 const {
   // state
@@ -178,7 +181,7 @@ const {
 } = useOutsourceReceivingList({
   shelves: toRef(props, 'shelves'),
   processes: toRef(props, 'processes'),
-})
+});
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 2026-08-27 T16：补 prop / minWidth / align + ElTag / 文本列走 cellRender(PartListShell 同款)。
@@ -186,30 +189,61 @@ const {
 const columnDefs: ColumnDef[] = [
   { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center' },
   { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 120, align: 'center' },
-  { key: 'name', label: '名称', prop: 'name', minWidth: 180, showOverflowTooltip: true, align: 'center' },
   {
-    key: 'batch_no', label: '批次号', minWidth: 80, align: 'center',
-    cellRender: ({ row }) => h(ElTag, { type: 'info', size: 'small' },
-      () => `批次 ${(row as OutsourceInFlightItem).batch_no}`),
+    key: 'name',
+    label: '名称',
+    prop: 'name',
+    minWidth: 180,
+    showOverflowTooltip: true,
+    align: 'center',
+  },
+  {
+    key: 'batch_no',
+    label: '批次号',
+    minWidth: 80,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h(
+        ElTag,
+        { type: 'info', size: 'small' },
+        () => `批次 ${(row as OutsourceInFlightItem).batch_no}`,
+      ),
   },
   { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 80, align: 'right' },
   {
-    key: 'outsource_company_name', label: '外协公司', minWidth: 160, showOverflowTooltip: true, align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as OutsourceInFlightItem).outsource_company_name || '—'),
+    key: 'outsource_company_name',
+    label: '外协公司',
+    minWidth: 160,
+    showOverflowTooltip: true,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h('span', null, (row as OutsourceInFlightItem).outsource_company_name || '—'),
   },
   {
-    key: 'sent_at', label: '发送时间', minWidth: 160, align: 'center',
+    key: 'sent_at',
+    label: '发送时间',
+    minWidth: 160,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as OutsourceInFlightItem
-      return h('span', null, r.sent_at ? new Date(r.sent_at!).toLocaleString() : '—')
+      const r = row as OutsourceInFlightItem;
+      return h('span', null, r.sent_at ? new Date(r.sent_at!).toLocaleString() : '—');
     },
   },
-  { key: 'customer_path', label: '客户', prop: 'customer_path', minWidth: 180, showOverflowTooltip: true, align: 'center' },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_send_receive_receiving' })
-const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_receiving' })
+  {
+    key: 'customer_path',
+    label: '客户',
+    prop: 'customer_path',
+    minWidth: 180,
+    showOverflowTooltip: true,
+    align: 'center',
+  },
+];
+const columnVisibility = useColumnVisibility(columnDefs, {
+  listKey: 'outsource_send_receive_receiving',
+});
+const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_receiving' });
 // 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
-const tableRef = ref()
+const tableRef = ref();
 
 // 持久化恢复（与原 shell onMounted 等价）
 // 2026-08-31 双实例修复：pageSize 不再持久化，每次进入视图从 defaultPageSize（20）起算。
@@ -217,16 +251,16 @@ const tableRef = ref()
 // `receivingPagedRef.value.pageSize.value = N` 实际写入 number.value 抛 TypeError。
 onMounted(() => {
   // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
-  drag.applyDrag(tableRef)
+  drag.applyDrag(tableRef);
 
-  const persisted = restore()
+  const persisted = restore();
   if (persisted && persisted.receivingFilter) {
-    Object.assign(receivingFilter, persisted.receivingFilter as Partial<typeof receivingFilter>)
+    Object.assign(receivingFilter, persisted.receivingFilter as Partial<typeof receivingFilter>);
   }
-})
+});
 
 // expose 给 shell 用于初始化/联动刷新
-defineExpose({ refresh: refreshReceiving })
+defineExpose({ refresh: refreshReceiving });
 </script>
 
 <style lang="scss" scoped>

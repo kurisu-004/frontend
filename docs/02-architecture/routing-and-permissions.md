@@ -10,46 +10,46 @@
 
 ## 路由总表
 
-| path | name | component | menuCode | meta.requireAuth | 备注 |
-|---|---|---|---|---|---|
-| `/login` | Login | `views/auth/Login.vue` | — | false | 全屏独立路由，不在 MainLayout 内 |
-| `/dashboard` | Dashboard | `views/Dashboard.vue` | `home` | true | 默认重定向目标 |
-| `/parts` | PartsList | `views/parts/PartsList.vue` | `parts_list` | true | 订单管理根 |
-| `/parts/new` | PartsNew | `views/parts/PartBatchNew.vue` | `parts_new` | true | 批量新建 |
-| `/parts/:id` | PartsDetail | `views/parts/PartDetail.vue` | — | true | 复用父级 `parts_list` 权限（matched 链） |
-| `/inspection/pending` | InspectionPending | `views/inspection/InspectionPending.vue` | `inspection_pending` | true | 待品检一览 |
-| `/repair/receive` | RepairReceive | `views/repair/RepairReceive.vue` | `repair_receive` | true | 返修接收 |
-| `/cnc/pending` | PendingProgramming | `views/cnc/PendingProgrammingList.vue` | `pending_programming` | true | CNC 编程员专属 |
-| `/outsource` | — | redirect | — | — | → `/outsource/companies` |
-| `/outsource/companies` | OutsourceCompaniesList | `views/outsource/OutsourceList.vue` | `outsource_companies_list` | true | 外协厂一览 |
-| `/outsource/quotes` | OutsourceQuoteList | `views/outsource/OutsourceQuoteList.vue` | `outsource_quotes_list` | true | 报价一览 |
-| `/outsource/send-receive` | OutsourceSendReceive | `views/outsource/OutsourceSendReceive.vue` | `outsource_send_receive_list` | true | 外协发送/接收 |
-| `/outsource/send` | — | redirect | — | — | → `/outsource/send-receive?tab=sendable` |
-| `/outsource/receive` | — | redirect | — | — | → `/outsource/send-receive?tab=receiving` |
-| `/outsource/companies/:id/sent-parts` | OutsourceCompanySentParts | `views/outsource/OutsourceCompanySentParts.vue` | `outsource_companies_list` | true | 外协对账（不独立成菜单） |
-| `/assemblies` | — | redirect | — | — | → `/parts`（2026-07-30 合并） |
-| `/delivery-notes` | DeliveryNoteList | `views/delivery/DeliveryNoteList.vue` | `delivery_notes_manage` | true | 送货单 |
-| `/delivery-notes/:id` | DeliveryNoteDetail | `views/delivery/DeliveryNoteDetail.vue` | `delivery_notes_manage` | true | 详情（共用 list 权限） |
-| `/delivery-notes/scan` | DeliveryNoteScan | `views/delivery/DeliveryNoteScan.vue` | `delivery_notes_manage` | true | 扫码建单（不独立成菜单） |
-| `/assemblies/:id` | AssemblyDetail | `views/assemblies/AssemblyDetail.vue` | — | true | 详情 |
-| `/workers` | WorkerList | `views/WorkerList.vue` | `workers_list` | true | 工人一览 |
-| `/users` | UserList | `views/users/UserList.vue` | `users_list` | true | 账号管理 |
-| `/shelves` | ShelfList | `views/shelves/ShelfList.vue` | `shelves_list` | true | 货架管理 |
-| `/statistics` | ProductionStats | `views/statistics/ProductionStats.vue` | `production_stats` | true | 生产统计 |
-| `/customers` | CustomerList | `views/customers/CustomerList.vue` | `customers_list` | true | 客户一览 |
-| `/applicants` | ApplicantList | `views/applicants/ApplicantList.vue` | `applicants_list` | true | 申请人一览 |
-| `/settings/work-types` | WorkTypeList | `views/settings/WorkTypeList.vue` | `work_types_list` | true | 工种管理 |
-| `/settings/processes` | ProcessList | `views/settings/ProcessList.vue` | `processes_list` | true | 工序管理 |
-| `/settings/work-type-processes` | WorkTypeProcess | `views/settings/WorkTypeProcess.vue` | `work_type_processes_list` | true | 工种-工序映射 |
-| `/scan` | — | redirect | — | true | → `/scan/badge`（全屏） |
-| `/scan/badge` | ScanBadge | `views/scan/ScanBadgeGate.vue` | `scan_badge` | true | 工牌识别（allowRoles: SHELF_ACCOUNT） |
-| `/scan/action` | ScanAction | `views/scan/ScanActionPicker.vue` | `scan_badge` | true | 操作选择 |
-| `/scan/pick` | ScanPick | `views/scan/ScanPickParts.vue` | `scan_badge` | true | 选件领取 |
-| `/scan/return` | ScanReturn | `views/scan/ScanReturnParts.vue` | `scan_badge` | true | 选件放回 |
-| `/scan/inspect` | ScanInspect | `views/scan/ScanInspectParts.vue` | `scan_badge` | true | 选件送检 |
-| `/delivery-dispatch` | — | redirect | — | true | → `/delivery-dispatch/badge`（全屏） |
-| `/delivery-dispatch/badge` | DispatchBadge | `views/delivery-dispatch/DispatchBadgeGate.vue` | `delivery_dispatch` | true | 司机送货工牌识别 |
-| `/delivery-dispatch/notes` | DispatchNotes | `views/delivery-dispatch/DispatchNoteList.vue` | `delivery_dispatch` | true | 司机待送货单 |
+| path                                  | name                      | component                                       | menuCode                      | meta.requireAuth | 备注                                      |
+| ------------------------------------- | ------------------------- | ----------------------------------------------- | ----------------------------- | ---------------- | ----------------------------------------- |
+| `/login`                              | Login                     | `views/auth/Login.vue`                          | —                             | false            | 全屏独立路由，不在 MainLayout 内          |
+| `/dashboard`                          | Dashboard                 | `views/Dashboard.vue`                           | `home`                        | true             | 默认重定向目标                            |
+| `/parts`                              | PartsList                 | `views/parts/PartsList.vue`                     | `parts_list`                  | true             | 订单管理根                                |
+| `/parts/new`                          | PartsNew                  | `views/parts/PartBatchNew.vue`                  | `parts_new`                   | true             | 批量新建                                  |
+| `/parts/:id`                          | PartsDetail               | `views/parts/PartDetail.vue`                    | —                             | true             | 复用父级 `parts_list` 权限（matched 链）  |
+| `/inspection/pending`                 | InspectionPending         | `views/inspection/InspectionPending.vue`        | `inspection_pending`          | true             | 待品检一览                                |
+| `/repair/receive`                     | RepairReceive             | `views/repair/RepairReceive.vue`                | `repair_receive`              | true             | 返修接收                                  |
+| `/cnc/pending`                        | PendingProgramming        | `views/cnc/PendingProgrammingList.vue`          | `pending_programming`         | true             | CNC 编程员专属                            |
+| `/outsource`                          | —                         | redirect                                        | —                             | —                | → `/outsource/companies`                  |
+| `/outsource/companies`                | OutsourceCompaniesList    | `views/outsource/OutsourceList.vue`             | `outsource_companies_list`    | true             | 外协厂一览                                |
+| `/outsource/quotes`                   | OutsourceQuoteList        | `views/outsource/OutsourceQuoteList.vue`        | `outsource_quotes_list`       | true             | 报价一览                                  |
+| `/outsource/send-receive`             | OutsourceSendReceive      | `views/outsource/OutsourceSendReceive.vue`      | `outsource_send_receive_list` | true             | 外协发送/接收                             |
+| `/outsource/send`                     | —                         | redirect                                        | —                             | —                | → `/outsource/send-receive?tab=sendable`  |
+| `/outsource/receive`                  | —                         | redirect                                        | —                             | —                | → `/outsource/send-receive?tab=receiving` |
+| `/outsource/companies/:id/sent-parts` | OutsourceCompanySentParts | `views/outsource/OutsourceCompanySentParts.vue` | `outsource_companies_list`    | true             | 外协对账（不独立成菜单）                  |
+| `/assemblies`                         | —                         | redirect                                        | —                             | —                | → `/parts`（2026-07-30 合并）             |
+| `/delivery-notes`                     | DeliveryNoteList          | `views/delivery/DeliveryNoteList.vue`           | `delivery_notes_manage`       | true             | 送货单                                    |
+| `/delivery-notes/:id`                 | DeliveryNoteDetail        | `views/delivery/DeliveryNoteDetail.vue`         | `delivery_notes_manage`       | true             | 详情（共用 list 权限）                    |
+| `/delivery-notes/scan`                | DeliveryNoteScan          | `views/delivery/DeliveryNoteScan.vue`           | `delivery_notes_manage`       | true             | 扫码建单（不独立成菜单）                  |
+| `/assemblies/:id`                     | AssemblyDetail            | `views/assemblies/AssemblyDetail.vue`           | —                             | true             | 详情                                      |
+| `/workers`                            | WorkerList                | `views/WorkerList.vue`                          | `workers_list`                | true             | 工人一览                                  |
+| `/users`                              | UserList                  | `views/users/UserList.vue`                      | `users_list`                  | true             | 账号管理                                  |
+| `/shelves`                            | ShelfList                 | `views/shelves/ShelfList.vue`                   | `shelves_list`                | true             | 货架管理                                  |
+| `/statistics`                         | ProductionStats           | `views/statistics/ProductionStats.vue`          | `production_stats`            | true             | 生产统计                                  |
+| `/customers`                          | CustomerList              | `views/customers/CustomerList.vue`              | `customers_list`              | true             | 客户一览                                  |
+| `/applicants`                         | ApplicantList             | `views/applicants/ApplicantList.vue`            | `applicants_list`             | true             | 申请人一览                                |
+| `/settings/work-types`                | WorkTypeList              | `views/settings/WorkTypeList.vue`               | `work_types_list`             | true             | 工种管理                                  |
+| `/settings/processes`                 | ProcessList               | `views/settings/ProcessList.vue`                | `processes_list`              | true             | 工序管理                                  |
+| `/settings/work-type-processes`       | WorkTypeProcess           | `views/settings/WorkTypeProcess.vue`            | `work_type_processes_list`    | true             | 工种-工序映射                             |
+| `/scan`                               | —                         | redirect                                        | —                             | true             | → `/scan/badge`（全屏）                   |
+| `/scan/badge`                         | ScanBadge                 | `views/scan/ScanBadgeGate.vue`                  | `scan_badge`                  | true             | 工牌识别（allowRoles: SHELF_ACCOUNT）     |
+| `/scan/action`                        | ScanAction                | `views/scan/ScanActionPicker.vue`               | `scan_badge`                  | true             | 操作选择                                  |
+| `/scan/pick`                          | ScanPick                  | `views/scan/ScanPickParts.vue`                  | `scan_badge`                  | true             | 选件领取                                  |
+| `/scan/return`                        | ScanReturn                | `views/scan/ScanReturnParts.vue`                | `scan_badge`                  | true             | 选件放回                                  |
+| `/scan/inspect`                       | ScanInspect               | `views/scan/ScanInspectParts.vue`               | `scan_badge`                  | true             | 选件送检                                  |
+| `/delivery-dispatch`                  | —                         | redirect                                        | —                             | true             | → `/delivery-dispatch/badge`（全屏）      |
+| `/delivery-dispatch/badge`            | DispatchBadge             | `views/delivery-dispatch/DispatchBadgeGate.vue` | `delivery_dispatch`           | true             | 司机送货工牌识别                          |
+| `/delivery-dispatch/notes`            | DispatchNotes             | `views/delivery-dispatch/DispatchNoteList.vue`  | `delivery_dispatch`           | true             | 司机待送货单                              |
 
 > 路径含 `(\\d+)` 这类正则约束（如 `/parts/:id(\\d+)`）会限制参数类型——这是为防止雪花 ID 在 URL 里被 `Number()` 丢精度。所有路由的 `meta.title` / `icon` / `breadcrumb` 字段在原文件定义，文档不重复。
 
@@ -116,35 +116,35 @@ sequenceDiagram
 
 ### 5 个核心角色
 
-| 角色码 | 主要能力 | 典型场景 |
-|---|---|---|
-| `MANAGER` | 全模块管理员 | 后台管理、统计、对账 |
-| `CLERK` | 订单 / 外协操作员 | 零件建单、外协发送、报价 |
-| `INSPECTOR` | 品检 / 返修 | 待品检、返修接收、送检 |
-| `SHELF_ACCOUNT` | 工位机扫码 | `/scan/*` 5 个页面（受 `allowRoles` 保护） |
-| `CNC_PROGRAMMER` | CNC 编程员 | `/cnc/pending` 待编程一览 |
+| 角色码           | 主要能力          | 典型场景                                   |
+| ---------------- | ----------------- | ------------------------------------------ |
+| `MANAGER`        | 全模块管理员      | 后台管理、统计、对账                       |
+| `CLERK`          | 订单 / 外协操作员 | 零件建单、外协发送、报价                   |
+| `INSPECTOR`      | 品检 / 返修       | 待品检、返修接收、送检                     |
+| `SHELF_ACCOUNT`  | 工位机扫码        | `/scan/*` 5 个页面（受 `allowRoles` 保护） |
+| `CNC_PROGRAMMER` | CNC 编程员        | `/cnc/pending` 待编程一览                  |
 
 > 角色是**附加能力**，菜单码才是**页面入口**。一个用户可能同时有 `MANAGER` + `INSPECTOR` 两个角色（合集权限）。
 
 ### 核心 menuCode 一览
 
-| menuCode | 路由 | 主要角色 |
-|---|---|---|
-| `home` | `/dashboard` | 全部已登录用户 |
-| `parts_list` | `/parts` | MANAGER / CLERK / INSPECTOR |
-| `parts_new` | `/parts/new` | MANAGER / CLERK |
-| `inspection_pending` | `/inspection/pending` | INSPECTOR / MANAGER |
-| `repair_receive` | `/repair/receive` | MANAGER / CLERK / INSPECTOR |
-| `pending_programming` | `/cnc/pending` | CNC_PROGRAMMER |
-| `outsource_companies_list` | `/outsource/companies` | MANAGER / CLERK |
-| `outsource_quotes_list` | `/outsource/quotes` | MANAGER / CLERK |
-| `outsource_send_receive_list` | `/outsource/send-receive` | MANAGER / CLERK |
-| `delivery_notes_manage` | `/delivery-notes` 系列 | MANAGER / CLERK |
-| `workers_list` / `users_list` | `/workers` / `/users` | MANAGER |
-| `shelves_list` | `/shelves` | MANAGER |
-| `production_stats` | `/statistics` | MANAGER / CLERK |
-| `scan_badge` | `/scan/*` | SHELF_ACCOUNT（通过 `allowRoles` 短路放行） |
-| `delivery_dispatch` | `/delivery-dispatch/*` | MANAGER / INSPECTOR + 特定工种工人 |
+| menuCode                      | 路由                      | 主要角色                                    |
+| ----------------------------- | ------------------------- | ------------------------------------------- |
+| `home`                        | `/dashboard`              | 全部已登录用户                              |
+| `parts_list`                  | `/parts`                  | MANAGER / CLERK / INSPECTOR                 |
+| `parts_new`                   | `/parts/new`              | MANAGER / CLERK                             |
+| `inspection_pending`          | `/inspection/pending`     | INSPECTOR / MANAGER                         |
+| `repair_receive`              | `/repair/receive`         | MANAGER / CLERK / INSPECTOR                 |
+| `pending_programming`         | `/cnc/pending`            | CNC_PROGRAMMER                              |
+| `outsource_companies_list`    | `/outsource/companies`    | MANAGER / CLERK                             |
+| `outsource_quotes_list`       | `/outsource/quotes`       | MANAGER / CLERK                             |
+| `outsource_send_receive_list` | `/outsource/send-receive` | MANAGER / CLERK                             |
+| `delivery_notes_manage`       | `/delivery-notes` 系列    | MANAGER / CLERK                             |
+| `workers_list` / `users_list` | `/workers` / `/users`     | MANAGER                                     |
+| `shelves_list`                | `/shelves`                | MANAGER                                     |
+| `production_stats`            | `/statistics`             | MANAGER / CLERK                             |
+| `scan_badge`                  | `/scan/*`                 | SHELF_ACCOUNT（通过 `allowRoles` 短路放行） |
+| `delivery_dispatch`           | `/delivery-dispatch/*`    | MANAGER / INSPECTOR + 特定工种工人          |
 
 > `code` 必须与后端 `t_menu.code` 字段字面一致。前端守卫做的是**字符串等值匹配**，写错一个字符 = 永远过不去。
 
@@ -220,6 +220,7 @@ npm run dev:dummy        # = vite --mode dummy，自动加载 .env.dummy → VIT
 ```
 
 行为：
+
 - `vite.config.ts` build 期检测到 `VITE_DUMMY_AUTH === 'true'` → throw（防 prod bundle 注入）
 - 客户端读 `import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'`（由 `.env.dummy` 注入，dev server 启动时由 Vite 处理），`useAuthSession.initDummyAuth()` 注入 admin session（含 22 个 menuCode 全菜单）
 - 注入成功后在浏览器 console 打 `[dummy-auth] 已注入开发用管理员会话（dev-only）` 一行作为确认标记
@@ -229,6 +230,7 @@ npm run dev:dummy        # = vite --mode dummy，自动加载 .env.dummy → VIT
 > 2026-08-28 重写：旧的 `npm run dev -- --dummy-auth` 走 `--` 透传，会被 cac 拒绝（`CACError: Unknown option --dummyAuth`）；新方案用 Vite 官方 `--mode dummy` 机制 + `import.meta.env`，dev 客户端也能可靠拿到值（旧的裸全局 `define: { __DUMMY_AUTH__ }` 在 Vite 8 dev client 不生效，详见 [`docs/08-known-risks/framework-pitfalls.md`](../08-known-risks/framework-pitfalls.md) 第 6 节）。
 
 admin 用户身份：
+
 - username: `dev-admin`
 - roles: `['MANAGER', 'SHELF_ACCOUNT']`
 - shelf_ids: `[]`（管理员无绑货架，`isWildcardShelfAccount()` 走通配路径）

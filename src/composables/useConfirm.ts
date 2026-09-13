@@ -1,11 +1,11 @@
 // 2026-08-25 新增：统一 ElMessageBox.confirm 文案的薄封装 composable。
 // 把 try/catch + 转 bool 的样板压到一处，view 层只关心标题/正文/按钮文案。
-import { ElMessageBox } from 'element-plus'
+import { ElMessageBox } from 'element-plus';
 
 export interface ConfirmOptions {
-  confirmText?: string
-  cancelText?: string
-  type?: 'warning' | 'info' | 'success' | 'error'
+  confirmText?: string;
+  cancelText?: string;
+  type?: 'warning' | 'info' | 'success' | 'error';
 }
 
 /**
@@ -23,12 +23,12 @@ export function useConfirm() {
         confirmButtonText: opts.confirmText ?? '确认',
         cancelButtonText: opts.cancelText ?? '取消',
         type: opts.type ?? 'warning',
-      })
-      return true
+      });
+      return true;
     } catch {
-      return false
+      return false;
     }
   }
 
-  return { dangerous }
+  return { dangerous };
 }

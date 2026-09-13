@@ -6,55 +6,51 @@
 // 业务数据由 composable 持有；新建报价对话框的 UI 状态（可见性、loading）
 // 由 PartQuoteCard 局部维护，提交时调本 composable 的 onCreateQuote。
 
-import { computed, reactive, ref, watch, type Ref } from 'vue'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import {
-  createOutsourceQuote,
-  listOutsourceCompanies,
-  listOutsourceQuotes,
-} from '@/api/outsource'
-import type { OutsourceQuote } from '@/types/outsource'
-import { listProcesses } from '@/api/process'
-import type { Process } from '@/types/process'
-import { usePermissions } from '@/composables/usePermissions'
+import { computed, reactive, ref, watch, type Ref } from 'vue';
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
+import { createOutsourceQuote, listOutsourceCompanies, listOutsourceQuotes } from '@/api/outsource';
+import type { OutsourceQuote } from '@/types/outsource';
+import { listProcesses } from '@/api/process';
+import type { Process } from '@/types/process';
+import { usePermissions } from '@/composables/usePermissions';
 
 /** 新建报价对话框的 form 数据。 */
 export interface QuoteCreateForm {
-  outsource_company_id: string
-  process_id: string
-  price: string
-  note: string
+  outsource_company_id: string;
+  process_id: string;
+  price: string;
+  note: string;
 }
 
 export function usePartQuote(partId: Ref<string>, partName: Ref<string | null | undefined>) {
-  const { isManager, isClerk } = usePermissions()
+  const { isManager, isClerk } = usePermissions();
 
-  const quotes = ref<OutsourceQuote[]>([])
-  const quotesLoading = ref(false)
+  const quotes = ref<OutsourceQuote[]>([]);
+  const quotesLoading = ref(false);
   /** MANAGER + CLERK 可见报价卡（PR-H 2026-07-16） */
-  const canViewQuotes = computed(() => isManager.value || isClerk.value)
+  const canViewQuotes = computed(() => isManager.value || isClerk.value);
   /** 状态门控：零件状态 ∈ {PENDING, IN_PROCESS, OUTSOURCE, READY_TO_SHIP, REPAIRING} */
   const canCreateQuote = computed(() => {
     // 实际 part 状态门控由 PartQuoteCard 通过 part prop 控制；
     // 这里只暴露角色门控
-    return isManager.value || isClerk.value
-  })
+    return isManager.value || isClerk.value;
+  });
 
   async function fetchQuotes(): Promise<void> {
     if (!canViewQuotes.value) {
-      quotes.value = []
-      quotesLoading.value = false
-      return
+      quotes.value = [];
+      quotesLoading.value = false;
+      return;
     }
-    quotesLoading.value = true
+    quotesLoading.value = true;
     try {
-      const r = await listOutsourceQuotes({ part_id: partId.value, limit: 200 })
-      quotes.value = r.items
+      const r = await listOutsourceQuotes({ part_id: partId.value, limit: 200 });
+      quotes.value = r.items;
     } catch (e) {
-      quotes.value = []
-      ElMessage.error((e as Error).message ?? '加载外协报价失败')
+      quotes.value = [];
+      ElMessage.error((e as Error).message ?? '加载外协报价失败');
     } finally {
-      quotesLoading.value = false
+      quotesLoading.value = false;
     }
   }
 
@@ -67,46 +63,42 @@ export function usePartQuote(partId: Ref<string>, partName: Ref<string | null | 
       process_id: '',
       price: '',
       note: '',
-    }
+    };
   }
 
   /** 价格 >0 校验（Element Plus validator 不能直接用 number 转 string 比较） */
   const quoteRules: FormRules = {
-    outsource_company_id: [
-      { required: true, message: '请选择外协公司', trigger: 'change' },
-    ],
-    process_id: [
-      { required: true, message: '请选择工序', trigger: 'change' },
-    ],
+    outsource_company_id: [{ required: true, message: '请选择外协公司', trigger: 'change' }],
+    process_id: [{ required: true, message: '请选择工序', trigger: 'change' }],
     price: [
       { required: true, message: '请填写单价', trigger: 'blur' },
       {
         validator: (_rule, value: string, cb) => {
-          const n = Number(value)
+          const n = Number(value);
           if (value === '' || value == null || Number.isNaN(n) || n <= 0) {
-            cb(new Error('单价必须大于 0'))
+            cb(new Error('单价必须大于 0'));
           } else {
-            cb()
+            cb();
           }
         },
         trigger: 'blur',
       },
     ],
-  }
+  };
 
   /** 加载新建对话框所需的下拉数据：外协公司 + OUTSOURCE 工序 */
   async function loadQuoteCreateData(): Promise<{
-    companies: { id: string; name: string }[]
-    outsourceProcesses: Process[]
+    companies: { id: string; name: string }[];
+    outsourceProcesses: Process[];
   }> {
     const [companyResp, procResp] = await Promise.all([
       listOutsourceCompanies({ limit: 200 }),
       listProcesses({ limit: 200 }),
-    ])
+    ]);
     return {
       companies: companyResp.items.map((c) => ({ id: c.id, name: c.name })),
       outsourceProcesses: procResp.items.filter((p) => p.category === 'OUTSOURCE'),
-    }
+    };
   }
 
   /**
@@ -123,19 +115,19 @@ export function usePartQuote(partId: Ref<string>, partName: Ref<string | null | 
         process_id: form.process_id,
         price: form.price || '0',
         note: form.note || null,
-      })
-      ElMessage.success('已创建 DRAFT 报价')
-      await fetchQuotes()
-      return true
+      });
+      ElMessage.success('已创建 DRAFT 报价');
+      await fetchQuotes();
+      return true;
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '创建失败')
-      return false
+      ElMessage.error((e as Error).message ?? '创建失败');
+      return false;
     }
   }
 
   watch(partId, () => {
-    quotes.value = []
-  })
+    quotes.value = [];
+  });
 
   return {
     quotes,
@@ -147,5 +139,5 @@ export function usePartQuote(partId: Ref<string>, partName: Ref<string | null | 
     quoteRules,
     loadQuoteCreateData,
     onCreateQuote,
-  }
+  };
 }

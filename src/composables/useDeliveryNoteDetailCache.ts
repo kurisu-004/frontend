@@ -16,37 +16,37 @@
 // 不持久化：DRAFT 内容实时变化，缓存到 disk 极易脏。
 // 不跨标签页：BroadcastChannel 是过度设计。
 
-import type { DeliveryNoteDetailOut } from '@/types/deliveryNote'
+import type { DeliveryNoteDetailOut } from '@/types/deliveryNote';
 
 /** 缓存兜底过期时间。超过该时长视为失效，下一次 get 会重拉。 */
-const TTL_MS = 5 * 60 * 1000
+const TTL_MS = 5 * 60 * 1000;
 
 interface CacheEntry {
-  detail: DeliveryNoteDetailOut
-  loadedAt: number
+  detail: DeliveryNoteDetailOut;
+  loadedAt: number;
 }
 
 /** 已成功加载的缓存。key = noteId。 */
-const cache = new Map<string, CacheEntry>()
+const cache = new Map<string, CacheEntry>();
 
 /**
  * in-flight Promise，避免并发 reload 同一 note（与 usePartLocationTree 同模式）。
  * value 是 Promise<DeliveryNoteDetailOut | null>，null 表示 fetcher 失败被吞掉。
  */
-const pending = new Map<string, Promise<DeliveryNoteDetailOut | null>>()
+const pending = new Map<string, Promise<DeliveryNoteDetailOut | null>>();
 
 export function useDeliveryNoteDetailCache() {
   /**
    * 同步读缓存。命中且未过期返回 detail，否则返回 null（并清理过期 entry）。
    */
   function peek(noteId: string): DeliveryNoteDetailOut | null {
-    const e = cache.get(noteId)
-    if (!e) return null
+    const e = cache.get(noteId);
+    if (!e) return null;
     if (Date.now() - e.loadedAt > TTL_MS) {
-      cache.delete(noteId)
-      return null
+      cache.delete(noteId);
+      return null;
     }
-    return e.detail
+    return e.detail;
   }
 
   /**
@@ -59,41 +59,41 @@ export function useDeliveryNoteDetailCache() {
     noteId: string,
     fetcher: (id: string) => Promise<DeliveryNoteDetailOut>,
   ): Promise<DeliveryNoteDetailOut | null> {
-    const cached = peek(noteId)
-    if (cached) return cached
-    const p = pending.get(noteId)
-    if (p) return p
+    const cached = peek(noteId);
+    if (cached) return cached;
+    const p = pending.get(noteId);
+    if (p) return p;
     const task = (async () => {
       try {
-        const d = await fetcher(noteId)
-        cache.set(noteId, { detail: d, loadedAt: Date.now() })
-        return d
+        const d = await fetcher(noteId);
+        cache.set(noteId, { detail: d, loadedAt: Date.now() });
+        return d;
       } catch {
-        return null
+        return null;
       } finally {
-        pending.delete(noteId)
+        pending.delete(noteId);
       }
-    })()
-    pending.set(noteId, task)
-    return task
+    })();
+    pending.set(noteId, task);
+    return task;
   }
 
   /** 显式写入（mutation 后端已返新 detail 时调用，避免又调一次 fetcher）。 */
   function put(noteId: string, detail: DeliveryNoteDetailOut): void {
-    cache.set(noteId, { detail, loadedAt: Date.now() })
+    cache.set(noteId, { detail, loadedAt: Date.now() });
   }
 
   /** 显式失效（mutation 后等待下次 get 重拉，或已知数据已 stale）。 */
   function invalidate(noteId: string): void {
-    cache.delete(noteId)
-    pending.delete(noteId)
+    cache.delete(noteId);
+    pending.delete(noteId);
   }
 
   /** 全部清空（页面切换或用户主动 reset 时）。 */
   function clear(): void {
-    cache.clear()
-    pending.clear()
+    cache.clear();
+    pending.clear();
   }
 
-  return { peek, get, put, invalidate, clear }
+  return { peek, get, put, invalidate, clear };
 }

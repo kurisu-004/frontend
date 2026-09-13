@@ -10,51 +10,52 @@
 
 ## 一、入口与路由
 
-| Path | Name | menuCode | 守卫 | 备注 |
-|---|---|---|---|---|
-| `/shelves` | `ShelfList` | `shelves_list` | requireAuth | 侧栏车间 → 货架管理 |
+| Path           | Name                 | menuCode              | 守卫        | 备注                         |
+| -------------- | -------------------- | --------------------- | ----------- | ---------------------------- |
+| `/shelves`     | `ShelfList`          | `shelves_list`        | requireAuth | 侧栏车间 → 货架管理          |
 | `/cnc/pending` | `PendingProgramming` | `pending_programming` | requireAuth | 侧栏顶层菜单；CNC 编程员专属 |
 
 两路由均在 `MainLayout` 子树之下，定义于 `src/router/index.ts`。
 
 ## 二、关键页面
 
-| 文件 | 职责 |
-|---|---|
-| `src/views/shelves/ShelfList.vue` | 货架 CRUD + 货架↔工序映射（多对多），列可见性 popover，物理顺序排序；「编辑工序」弹窗用 `useShelfProcessFilter` 双向过滤 |
+| 文件                                       | 职责                                                                                                                                                                                                                 |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/views/shelves/ShelfList.vue`          | 货架 CRUD + 货架↔工序映射（多对多），列可见性 popover，物理顺序排序；「编辑工序」弹窗用 `useShelfProcessFilter` 双向过滤                                                                                             |
 | `src/views/cnc/PendingProgrammingList.vue` | 待编程一览（status=PROGRAMMING 的零件），CNC 编程员专属；行内操作：「详情」跳 `/parts/:id`、「下发到生产」弹选下一道工序 + 目标 PRODUCTION 货架（POST `/parts/{id}/release-from-programming`）；自动刷新（5min）可选 |
 
 ## 三、主要 API 调用
 
 均走 v1（尚未切 v2）。
 
-| 文件 | 关键端点 | 实例 | 备注 |
-|---|---|---|---|
-| `src/api/shelves.ts` | `GET /shelves`、`POST /shelves`、`POST /shelves/{id}/update`、`POST /shelves/{id}/deactivate`、`GET/POST /shelves/{id}/processes` | `api` (v1) | 共享 HMI picker：`/shelves/for-return`、`/shelves/for-inspection` |
-| `src/api/shelves.ts` | `GET /shelves/processes` | `api` (v1) | 批量取所有 active 货架的工序映射（给 `useShelfProcessFilter` 一次性消费，避免 N+1） |
-| `src/api/cnc.ts` | `GET /parts/{id}/cnc-programs`、`GET /parts/{id}/setup-sheets`、`POST /parts/{id}/cnc-programs`、`POST /parts/{id}/setup-sheets`、`POST /cnc-programs/{fileId}/delete` | `api` (v1) | 单文件 G 代码 / 设定单上传下载 |
-| `src/api/cnc.ts` | `POST /parts/{id}/cnc-pair` | `api` (v1) | **配对上传**：G 代码 + 设定单必须同时提交（multipart，`gcode_file` + `setup_file`） |
+| 文件                 | 关键端点                                                                                                                                                               | 实例       | 备注                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------- |
+| `src/api/shelves.ts` | `GET /shelves`、`POST /shelves`、`POST /shelves/{id}/update`、`POST /shelves/{id}/deactivate`、`GET/POST /shelves/{id}/processes`                                      | `api` (v1) | 共享 HMI picker：`/shelves/for-return`、`/shelves/for-inspection`                   |
+| `src/api/shelves.ts` | `GET /shelves/processes`                                                                                                                                               | `api` (v1) | 批量取所有 active 货架的工序映射（给 `useShelfProcessFilter` 一次性消费，避免 N+1） |
+| `src/api/cnc.ts`     | `GET /parts/{id}/cnc-programs`、`GET /parts/{id}/setup-sheets`、`POST /parts/{id}/cnc-programs`、`POST /parts/{id}/setup-sheets`、`POST /cnc-programs/{fileId}/delete` | `api` (v1) | 单文件 G 代码 / 设定单上传下载                                                      |
+| `src/api/cnc.ts`     | `POST /parts/{id}/cnc-pair`                                                                                                                                            | `api` (v1) | **配对上传**：G 代码 + 设定单必须同时提交（multipart，`gcode_file` + `setup_file`） |
 
 ## 四、货架分类与绑定
 
 货架按 `zone` 划分为 3 类：
 
-| zone | 中文 | 用途 | 关联组件 |
-|---|---|---|---|
-| `PRODUCTION` | 在制件架 | 工人扫码领取 / 放回的目标货架；按工序映射过滤 | HMI 卡片网格 `ScanActionPicker` |
-| `INSPECTION` | 品检架 | 品检流水落点；送检对话框与品检通过后放置位置 | `ScanInspectParts`、品检弹窗 |
-| `HMI` | 工位扫码台 | 物理位置标记；扫码台用 | 旧式 HMI 选件（与上两类不冲突） |
+| zone         | 中文       | 用途                                          | 关联组件                        |
+| ------------ | ---------- | --------------------------------------------- | ------------------------------- |
+| `PRODUCTION` | 在制件架   | 工人扫码领取 / 放回的目标货架；按工序映射过滤 | HMI 卡片网格 `ScanActionPicker` |
+| `INSPECTION` | 品检架     | 品检流水落点；送检对话框与品检通过后放置位置  | `ScanInspectParts`、品检弹窗    |
+| `HMI`        | 工位扫码台 | 物理位置标记；扫码台用                        | 旧式 HMI 选件（与上两类不冲突） |
 
 **货架-工序绑定**（多对多）：
+
 - 一架可对应多道工序（如「A-01」同时承接 CNC 与钳工）；
 - 一道工序可挂多架（按 current_load ASC 排序，自动推荐）；
 - `setShelfProcesses({process_ids: string[]})` 全量替换映射。
 
 ## 五、相关 composable / utils
 
-| 文件 | 用途 |
-|---|---|
-| `src/composables/useShelfProcessFilter.ts` | 货架↔工序双向 reactive 过滤；后端 `GET /shelves/processes` 一次性拉全量映射；选了不兼容的对端时清空对端 + `ElMessage.warning` 提示 |
+| 文件                                         | 用途                                                                                                                                                   |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/composables/useShelfProcessFilter.ts`   | 货架↔工序双向 reactive 过滤；后端 `GET /shelves/processes` 一次性拉全量映射；选了不兼容的对端时清空对端 + `ElMessage.warning` 提示                     |
 | `src/composables/useActiveShelfSelection.ts` | SHELF_ACCOUNT 多货架场景的当前作业货架选择器；单架自动选、多架弹选择器、wildcard（未绑架）走通配；sessionStorage 跨账号切换自动失效（key 含 username） |
 
 ## 六、CNC 待编程
@@ -68,13 +69,14 @@ CNC 编程员（CNC_PROGRAMMER + MANAGER）的工作台，**仅看到 status=PRO
 
 ## 七、权限要求
 
-| 操作 | MANAGER | CLERK | INSPECTOR | SHELF_ACCOUNT | CNC_PROGRAMMER |
-|---|---|---|---|---|---|
-| `/shelves` 增/改/停用 | 允许 | 允许 | 只读 | 只读 | 否 |
-| `/cnc/pending` 进入 | 允许 | 否 | 否 | 否 | 允许 |
-| G 代码上传 / 下发 | 允许 | 否 | 否 | 否 | 允许 |
+| 操作                  | MANAGER | CLERK | INSPECTOR | SHELF_ACCOUNT | CNC_PROGRAMMER |
+| --------------------- | ------- | ----- | --------- | ------------- | -------------- |
+| `/shelves` 增/改/停用 | 允许    | 允许  | 只读      | 只读          | 否             |
+| `/cnc/pending` 进入   | 允许    | 否    | 否        | 否            | 允许           |
+| G 代码上传 / 下发     | 允许    | 否    | 否        | 否            | 允许           |
 
 权限两层叠加：
+
 - **路由级**：`menuCode` 守卫；
 - **行级 / 列级**：UI 用 `v-if` 控显隐。
 

@@ -8,23 +8,14 @@
   - 无 dialog / form
 -->
 <template>
-  <el-card
-    shadow="never"
-    class="assembly-card"
-    v-loading="assemblyLoading"
-  >
+  <el-card v-loading="assemblyLoading" shadow="never" class="assembly-card">
     <template #header>
       <div class="card-header">
         <span class="card-title">
           <el-icon><Connection /></el-icon>
           <span>所属装配件</span>
         </span>
-        <el-button
-          link
-          type="primary"
-          size="small"
-          @click="goToAssembly"
-        >
+        <el-button link type="primary" size="small" @click="goToAssembly">
           查看装配件详情
           <el-icon><ArrowRight /></el-icon>
         </el-button>
@@ -38,7 +29,10 @@
         {{ assemblyDetail.assembly.name }}
       </el-descriptions-item>
       <el-descriptions-item label="装配件状态">
-        <el-tag :type="assemblyDetail.assembly.status === 'COMPLETED' ? 'success' : 'info'" size="small">
+        <el-tag
+          :type="assemblyDetail.assembly.status === 'COMPLETED' ? 'success' : 'info'"
+          size="small"
+        >
           {{ assemblyDetail.assembly.status }}
         </el-tag>
       </el-descriptions-item>
@@ -76,28 +70,28 @@
 </template>
 
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
-import { ArrowRight, Connection } from '@element-plus/icons-vue'
-import type { PartItem } from '@/api/parts'
-import type { AssemblyDetail } from '@/types/assembly'
+import { useRouter } from 'vue-router';
+import { ArrowRight, Connection } from '@element-plus/icons-vue';
+import type { PartItem } from '@/api/parts';
+import type { AssemblyDetail } from '@/types/assembly';
 
 const props = defineProps<{
-  part: PartItem
-  assemblyDetail: AssemblyDetail | null
-  assemblyLoading: boolean
-}>()
+  part: PartItem;
+  assemblyDetail: AssemblyDetail | null;
+  assemblyLoading: boolean;
+}>();
 
-const router = useRouter()
-const descCol = 3
+const router = useRouter();
+const descCol = 3;
 
 function goToAssembly() {
   if (props.part.assembly_id != null) {
-    router.push(`/assemblies/${props.part.assembly_id}`)
+    router.push(`/assemblies/${props.part.assembly_id}`);
   }
 }
 
 function goToSibling(siblingId: string) {
-  router.push(`/parts/${siblingId}`)
+  router.push(`/parts/${siblingId}`);
 }
 </script>
 

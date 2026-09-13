@@ -16,50 +16,47 @@
 //     （如部分通过 → 调 submitNote 仅包通过的；或保留 dialog 让用户重试）。
 //   - progress 字段供 UI 进度条使用；v2 单次调用语义下 done 总是一次跳到 total。
 
-import { reactive, ref, type Ref } from 'vue'
-import { ApiError } from '@/api/http'
+import { reactive, ref, type Ref } from 'vue';
+import type { ApiError } from '@/api/http';
 import {
   batchToShip,
   type BatchToShipFailureFE,
   type BatchToShipItem,
   type BatchToShipOutFE,
-} from '@/api/parts'
+} from '@/api/parts';
 
 export interface BulkPassItem {
   /** 必填：batchToShip 入参的 batch id（雪花 ID 字符串）。 */
-  batch_id: string
+  batch_id: string;
   /** 必填；2026-08-29：t_part_batch.version，caller OCC 锚定。 */
-  version: number
+  version: number;
   /** 可选：部分通过数量；缺省 = 全量。 */
-  quantity?: number | null
+  quantity?: number | null;
   /** 展示用（不影响 API 调用）：如 serial_no + name，方便失败 toast 时定位。 */
-  label?: string
+  label?: string;
 }
 
 export interface BulkPassFailure {
-  item: BulkPassItem
-  code: number
-  message: string
+  item: BulkPassItem;
+  code: number;
+  message: string;
 }
 
 export interface BulkPassResult {
-  passed: BulkPassItem[]
-  failed: BulkPassFailure[]
+  passed: BulkPassItem[];
+  failed: BulkPassFailure[];
 }
 
 export interface BulkPassProgress {
-  done: number
-  total: number
+  done: number;
+  total: number;
 }
 
 export interface UseBulkPassInspectionReturn {
-  running: Ref<boolean>
-  progress: BulkPassProgress
+  running: Ref<boolean>;
+  progress: BulkPassProgress;
   /** 跑一次批量；v2 端点单次 round-trip，不控制并发。 */
-  run: (
-    items: BulkPassItem[],
-    opts?: { concurrency?: number },
-  ) => Promise<BulkPassResult>
+  run: (items: BulkPassItem[], opts?: { concurrency?: number }) => Promise<BulkPassResult>;
 }
 
 /**
@@ -75,7 +72,7 @@ export function toBatchPassItems(items: BulkPassItem[]): BatchToShipItem[] {
     batch_id: it.batch_id,
     version: it.version,
     quantity: it.quantity ?? undefined,
-  }))
+  }));
 }
 
 /**
@@ -97,67 +94,66 @@ export function mapBatchResult(
   requested: BulkPassItem[],
   result: BatchToShipOutFE,
 ): BulkPassResult {
-  const failedIds = new Set(result.failed.map((f) => f.batch_id))
+  const failedIds = new Set(result.failed.map((f) => f.batch_id));
   // 请求里未出现在 failed[] 的项，按原顺序排列 —— 与 submitted[] 逐位对应。
-  const candidates = requested.filter((it) => !failedIds.has(it.batch_id))
+  const candidates = requested.filter((it) => !failedIds.has(it.batch_id));
 
-  const passed: BulkPassItem[] = []
+  const passed: BulkPassItem[] = [];
   for (let i = 0; i < result.submitted.length; i++) {
-    const original = candidates[i]
+    const original = candidates[i];
     if (original) {
-      passed.push(original)
+      passed.push(original);
     } else {
       // 防御：submitted 比「请求扣掉 failed」还长（后端契约被破坏才会发生）。
       // 拿不到原始 item，退化用 part 投影占位，避免 UI 渲染 undefined；
       // 此处 batch_id 位塞的是 part.id（并非真批次 id），仅为占位不参与后续请求。
       // 2026-08-29：version 也是占位（0），仅满足类型约束。
-      const s = result.submitted[i]
+      const s = result.submitted[i];
       passed.push({
         batch_id: s.part.id,
         version: 0,
         label: s.part.serial_no ?? undefined,
-      })
+      });
     }
   }
   const failed: BulkPassFailure[] = result.failed.map((f: BatchToShipFailureFE) => {
-    const original =
-      requested.find((it) => it.batch_id === f.batch_id) ??
+    const original = requested.find((it) => it.batch_id === f.batch_id) ??
       // 2026-08-29：找不到原 item 时退化占位补 version（仅满足类型）。
-      { batch_id: f.batch_id, version: 0 }
+      { batch_id: f.batch_id, version: 0 };
     return {
       item: original,
       code: f.code,
       message: f.message,
-    }
-  })
-  return { passed, failed }
+    };
+  });
+  return { passed, failed };
 }
 
 export function useBulkPassInspection(): UseBulkPassInspectionReturn {
-  const running = ref(false)
-  const progress = reactive<BulkPassProgress>({ done: 0, total: 0 })
+  const running = ref(false);
+  const progress = reactive<BulkPassProgress>({ done: 0, total: 0 });
 
   async function run(
     items: BulkPassItem[],
     _opts: { concurrency?: number } = {},
   ): Promise<BulkPassResult> {
     // concurrency 参数已无意义（v2 端点 N≤200 顺序处理）；保留入参兼容旧调用方。
-    void _opts
-    running.value = true
-    progress.total = items.length
-    progress.done = 0
+    void _opts;
+    running.value = true;
+    progress.total = items.length;
+    progress.done = 0;
 
     try {
-      const out = await batchToShip({ items: toBatchPassItems(items) })
+      const out = await batchToShip({ items: toBatchPassItems(items) });
       // 单次 round-trip 语义：done 一次跳到 total。保留 progress 字段便于未来
       // 扩展（如后端拆批/流式返回时回填分阶段进度）。
-      progress.done = items.length
-      return mapBatchResult(items, out)
+      progress.done = items.length;
+      return mapBatchResult(items, out);
     } catch (e) {
       // 端点级错误（VALIDATION_ERROR / FORBIDDEN 等）：把请求 items 全部标为
       // 失败抛回，弹窗走 part-partial / 全失败兜底分支。
-      const err = e as ApiError
-      progress.done = items.length
+      const err = e as ApiError;
+      progress.done = items.length;
       return {
         passed: [],
         failed: items.map((item) => ({
@@ -165,11 +161,11 @@ export function useBulkPassInspection(): UseBulkPassInspectionReturn {
           code: err?.code ?? 0,
           message: err?.message ?? '未知错误',
         })),
-      }
+      };
     } finally {
-      running.value = false
+      running.value = false;
     }
   }
 
-  return { running, progress, run }
+  return { running, progress, run };
 }

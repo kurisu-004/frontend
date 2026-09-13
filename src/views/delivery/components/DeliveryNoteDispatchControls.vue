@@ -16,25 +16,13 @@
     </template>
     <div class="actions-row">
       <el-space wrap>
-        <el-button
-          v-if="canSubmit(note.status, role)"
-          type="primary"
-          @click="emit('submit')"
-        >
+        <el-button v-if="canSubmit(note.status, role)" type="primary" @click="emit('submit')">
           提交
         </el-button>
-        <el-button
-          v-if="canRecall(note.status, role)"
-          type="warning"
-          @click="emit('recall')"
-        >
+        <el-button v-if="canRecall(note.status, role)" type="warning" @click="emit('recall')">
           撤回
         </el-button>
-        <el-button
-          v-if="canPrint(role, note.part_count)"
-          type="success"
-          @click="emit('print')"
-        >
+        <el-button v-if="canPrint(role, note.part_count)" type="success" @click="emit('print')">
           打印送货单
         </el-button>
         <el-button
@@ -59,29 +47,24 @@
 </template>
 
 <script setup lang="ts">
-import type { DeliveryNoteStatus } from '@/types/deliveryNote'
-import type { DeliveryNoteRoleMap } from '../composables/useDeliveryNoteDetail'
-import {
-  canPrint,
-  canRecall,
-  canSoftDelete,
-  canSubmit,
-} from '@/utils/deliveryNotePermissions'
+import type { DeliveryNoteStatus } from '@/types/deliveryNote';
+import type { DeliveryNoteRoleMap } from '../composables/useDeliveryNoteDetail';
+import { canPrint, canRecall, canSoftDelete, canSubmit } from '@/utils/deliveryNotePermissions';
 
 interface Props {
-  note: { status: DeliveryNoteStatus; part_count: number; delivery_note_no: string }
-  role: DeliveryNoteRoleMap
+  note: { status: DeliveryNoteStatus; part_count: number; delivery_note_no: string };
+  role: DeliveryNoteRoleMap;
 }
 
-defineProps<Props>()
+defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'submit'): void
-  (e: 'recall'): void
-  (e: 'print'): void
-  (e: 'print-labels'): void
-  (e: 'soft-delete'): void
-}>()
+  (e: 'submit'): void;
+  (e: 'recall'): void;
+  (e: 'print'): void;
+  (e: 'print-labels'): void;
+  (e: 'soft-delete'): void;
+}>();
 </script>
 
 <style lang="scss" scoped>

@@ -11,7 +11,7 @@
   2026-08-25 frontend-overall-refactor：从 PartDetail.vue 抽出。
 -->
 <template>
-  <el-card shadow="never" class="cnc-card" v-loading="cncLoading">
+  <el-card v-loading="cncLoading" shadow="never" class="cnc-card">
     <template #header>
       <div class="card-header">
         <span class="card-title">
@@ -42,9 +42,12 @@
               <el-button link type="primary" size="small" @click="onDownloadCnc(g)">下载</el-button>
               <el-button
                 v-if="canManageCncFiles"
-                link type="danger" size="small"
+                link
+                type="danger"
+                size="small"
                 @click="onDeleteCnc(g.id)"
-              >删除</el-button>
+                >删除</el-button
+              >
             </div>
           </template>
           <span v-else class="cnc-empty">—</span>
@@ -56,12 +59,17 @@
               <span class="cnc-name">{{ group.setup.original_filename }}</span>
               <span class="cnc-size">{{ formatBytes(group.setup.file_size) }}</span>
               <span class="cnc-time">{{ formatDateTime(group.setup.created_at) }}</span>
-              <el-button link type="primary" size="small" @click="onDownloadCnc(group.setup)">下载</el-button>
+              <el-button link type="primary" size="small" @click="onDownloadCnc(group.setup)"
+                >下载</el-button
+              >
               <el-button
                 v-if="canManageSetupSheet"
-                link type="danger" size="small"
+                link
+                type="danger"
+                size="small"
                 @click="onDeleteCnc(group.setup.id)"
-              >删除</el-button>
+                >删除</el-button
+              >
             </div>
           </template>
           <span v-else class="cnc-empty">无设定单</span>
@@ -89,9 +97,14 @@
     </div>
 
     <!-- 配对上传对话框 -->
-    <el-dialog v-model="pairUploadVisible" title="配对上载 G 代码 + CNC 设定单" width="500px" @close="onPairUploadClose">
+    <el-dialog
+      v-model="pairUploadVisible"
+      title="配对上载 G 代码 + CNC 设定单"
+      width="500px"
+      @close="onPairUploadClose"
+    >
       <el-form label-width="100px">
-        <el-form-item label="G 代码文件" :for="''">
+        <el-form-item label="G 代码文件" for="">
           <el-upload
             :auto-upload="false"
             :show-file-list="true"
@@ -105,7 +118,7 @@
             <el-button plain>选择 G 代码（可多个）</el-button>
           </el-upload>
         </el-form-item>
-        <el-form-item label="CNC 设定单" :for="''">
+        <el-form-item label="CNC 设定单" for="">
           <el-upload
             :auto-upload="false"
             :show-file-list="true"
@@ -113,20 +126,25 @@
             name="cnc_setup"
             accept=".pdf"
             :on-change="onPairSetupChange"
-            :on-remove="() => { pairSetupFile = null }"
+            :on-remove="
+              () => {
+                pairSetupFile = null;
+              }
+            "
           >
             <el-button plain>选择设定单 (.pdf)</el-button>
           </el-upload>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="pairUploadVisible = false" :disabled="pairUploading">取消</el-button>
+        <el-button :disabled="pairUploading" @click="pairUploadVisible = false">取消</el-button>
         <el-button
           type="primary"
           :loading="pairUploading"
           :disabled="pairGcodeFiles.length === 0 || !pairSetupFile"
           @click="onPairUploadConfirm"
-        >确认上传</el-button>
+          >确认上传</el-button
+        >
       </template>
     </el-dialog>
 
@@ -190,36 +208,37 @@
           :loading="releaseSubmitting"
           :disabled="!releaseShelfId || !releaseNextProcessId"
           @click="onReleaseConfirm"
-        >确认下发</el-button>
+          >确认下发</el-button
+        >
       </template>
     </el-dialog>
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { type UploadFile } from 'element-plus'
-import { Cpu, Upload } from '@element-plus/icons-vue'
-import { formatDateTime } from '@/utils/date'
-import { useDialogSize } from '@/composables/useDialogSize'
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
-import type { PartFileItem } from '@/types/part_file'
-import type { Process } from '@/types/process'
-import type { Shelf } from '@/types/shelf'
-import type { OrderStatus } from '@/types/parts'
-import type { CncSetupGroup } from '../composables/usePartCncGroups'
+import { computed, onMounted, ref, watch } from 'vue';
+import type { UploadFile } from 'element-plus';
+import { Cpu, Upload } from '@element-plus/icons-vue';
+import { formatDateTime } from '@/utils/date';
+import { useDialogSize } from '@/composables/useDialogSize';
+import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
+import type { PartFileItem } from '@/types/part_file';
+import type { Process } from '@/types/process';
+import type { Shelf } from '@/types/shelf';
+import type { OrderStatus } from '@/types/parts';
+import type { CncSetupGroup } from '../composables/usePartCncGroups';
 
 const props = defineProps<{
-  partId: string
-  partStatus: OrderStatus
-  cncSetupGroups: CncSetupGroup[]
-  cncLoading: boolean
-  canManageCncFiles: boolean
-  canManageSetupSheet: boolean
+  partId: string;
+  partStatus: OrderStatus;
+  cncSetupGroups: CncSetupGroup[];
+  cncLoading: boolean;
+  canManageCncFiles: boolean;
+  canManageSetupSheet: boolean;
   /** 货架 ↔ 工序 共享缓存（shell 加载，PartCncCard 与 failInsp/receive 共用） */
-  productionShelves: Shelf[]
-  processes: Process[]
-  formatBytes: (n: number) => string
+  productionShelves: Shelf[];
+  processes: Process[];
+  formatBytes: (n: number) => string;
   // 2026-08-25 T10p5：上传文件 staging 助手，由 usePartCncGroups 注入；
   // 失败扩展名时统一 ElMessage.warning 提示（修复前内联实现丢提示的回归）。
   fileList: (
@@ -227,25 +246,31 @@ const props = defineProps<{
     file: UploadFile,
     accept: string,
     matchExt?: boolean,
-  ) => UploadFile[]
-  onDownloadCnc: (p: PartFileItem) => void
-  onDeleteCnc: (id: string) => void
-}>()
+  ) => UploadFile[];
+  onDownloadCnc: (p: PartFileItem) => void;
+  onDeleteCnc: (id: string) => void;
+}>();
 
 const emit = defineEmits<{
-  (e: 'fetch'): void
+  (e: 'fetch'): void;
   // 2026-08-25 T10p5：dialog 关闭延迟到 API 成功之后（避免 API 失败但 dialog 已关）。
   // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
-  (e: 'pair-upload', payload: { gcodes: File[]; setup: File; resolve: (ok: boolean) => void }): void
-  (e: 'release', payload: { shelfId: string; processId: string; resolve: (ok: boolean) => void }): void
-  (e: 'release-success'): void
-}>()
+  (
+    e: 'pair-upload',
+    payload: { gcodes: File[]; setup: File; resolve: (ok: boolean) => void },
+  ): void;
+  (
+    e: 'release',
+    payload: { shelfId: string; processId: string; resolve: (ok: boolean) => void },
+  ): void;
+  (e: 'release-success'): void;
+}>();
 
 // ============ 配对上传对话框（局部 UI 状态）============
-const pairUploadVisible = ref(false)
-const pairGcodeFiles = ref<UploadFile[]>([])
-const pairSetupFile = ref<File | null>(null)
-const pairUploading = ref(false)
+const pairUploadVisible = ref(false);
+const pairGcodeFiles = ref<UploadFile[]>([]);
+const pairSetupFile = ref<File | null>(null);
+const pairUploading = ref(false);
 
 function onPairGcodeChange(file: UploadFile, _uploadFiles: UploadFile[]): void {
   // 2026-08-25 T10p5：走 usePartCncGroups.fileList，失败扩展名时统一 ElMessage.warning 提示。
@@ -254,52 +279,52 @@ function onPairGcodeChange(file: UploadFile, _uploadFiles: UploadFile[]): void {
     file,
     '.nc,.tap,.cnc,.mpf,.ngc',
     true,
-  )
+  );
 }
 function onPairGcodeRemove(file: UploadFile): void {
-  pairGcodeFiles.value = pairGcodeFiles.value.filter((f) => f.uid !== file.uid)
+  pairGcodeFiles.value = pairGcodeFiles.value.filter((f) => f.uid !== file.uid);
 }
 function onPairSetupChange(file: UploadFile): void {
-  pairSetupFile.value = file.raw ?? null
+  pairSetupFile.value = file.raw ?? null;
 }
 function onPairUploadClose(): void {
-  pairGcodeFiles.value = []
-  pairSetupFile.value = null
+  pairGcodeFiles.value = [];
+  pairSetupFile.value = null;
 }
 
 function openPairUpload() {
-  pairGcodeFiles.value = []
-  pairSetupFile.value = null
-  pairUploadVisible.value = true
+  pairGcodeFiles.value = [];
+  pairSetupFile.value = null;
+  pairUploadVisible.value = true;
 }
 
 function onPairUploadConfirm(): void {
-  const raws: File[] = []
+  const raws: File[] = [];
   for (const f of pairGcodeFiles.value) {
-    if (f.raw) raws.push(f.raw)
+    if (f.raw) raws.push(f.raw);
   }
-  if (raws.length === 0 || !pairSetupFile.value) return
-  pairUploading.value = true
+  if (raws.length === 0 || !pairSetupFile.value) return;
+  pairUploading.value = true;
   // shell 调 resolve(ok)：成功才关 dialog + 清空 files + reset submitting。
   emit('pair-upload', {
     gcodes: raws,
     setup: pairSetupFile.value,
     resolve: (ok: boolean) => {
-      pairUploading.value = false
+      pairUploading.value = false;
       if (ok) {
-        pairUploadVisible.value = false
-        onPairUploadClose()
+        pairUploadVisible.value = false;
+        onPairUploadClose();
       }
     },
-  })
+  });
 }
 
 // ============ 下发到 CNC 货架对话框（局部 UI 状态）============
-const releaseDlg = useDialogSize({ desktopWidth: 440 })
-const releaseVisible = ref(false)
-const releaseShelfId = ref<string | null>(null)
-const releaseNextProcessId = ref<string | null>(null)
-const releaseSubmitting = ref(false)
+const releaseDlg = useDialogSize({ desktopWidth: 440 });
+const releaseVisible = ref(false);
+const releaseShelfId = ref<string | null>(null);
+const releaseNextProcessId = ref<string | null>(null);
+const releaseSubmitting = ref(false);
 
 const {
   filteredShelves: releaseFilteredShelves,
@@ -310,38 +335,43 @@ const {
   computed(() => props.processes),
   releaseShelfId,
   releaseNextProcessId,
-)
+);
 
 async function openRelease() {
-  releaseShelfId.value = null
-  releaseNextProcessId.value = null
+  releaseShelfId.value = null;
+  releaseNextProcessId.value = null;
   try {
-    await loadReleaseMap()
-  } catch { /* filteredXxx 走兜底全量 */ }
-  releaseVisible.value = true
+    await loadReleaseMap();
+  } catch {
+    /* filteredXxx 走兜底全量 */
+  }
+  releaseVisible.value = true;
 }
 
 function onReleaseClosed(): void {
-  releaseShelfId.value = null
-  releaseNextProcessId.value = null
+  releaseShelfId.value = null;
+  releaseNextProcessId.value = null;
 }
 
 function onReleaseConfirm(): void {
-  if (!releaseShelfId.value || !releaseNextProcessId.value) return
-  releaseSubmitting.value = true
+  if (!releaseShelfId.value || !releaseNextProcessId.value) return;
+  releaseSubmitting.value = true;
   // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
   emit('release', {
     shelfId: releaseShelfId.value,
     processId: releaseNextProcessId.value,
     resolve: (ok: boolean) => {
-      releaseSubmitting.value = false
-      if (ok) releaseVisible.value = false
+      releaseSubmitting.value = false;
+      if (ok) releaseVisible.value = false;
     },
-  })
+  });
 }
 
-onMounted(() => emit('fetch'))
-watch(() => props.partId, () => emit('fetch'))
+onMounted(() => emit('fetch'));
+watch(
+  () => props.partId,
+  () => emit('fetch'),
+);
 </script>
 
 <style lang="scss" scoped>

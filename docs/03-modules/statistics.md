@@ -8,13 +8,13 @@
 
 ## 一、入口与路由
 
-| 项 | 值 |
-|---|---|
-| 路径 | `/statistics` |
-| 组件 | `src/views/statistics/ProductionStats.vue` |
-| 守卫 | `requireAuth: true`（MANAGER-only 校验在数据层） |
-| menuCode | `production_stats` |
-| 父级 | `MainLayout` 子树 |
+| 项       | 值                                               |
+| -------- | ------------------------------------------------ |
+| 路径     | `/statistics`                                    |
+| 组件     | `src/views/statistics/ProductionStats.vue`       |
+| 守卫     | `requireAuth: true`（MANAGER-only 校验在数据层） |
+| menuCode | `production_stats`                               |
+| 父级     | `MainLayout` 子树                                |
 
 路由定义见 `src/router/index.ts`，父级 `/` 节点自带 `MainLayout` 包裹。后端统计域 router-level `require_role(MANAGER)` —— 非 MANAGER 调任意端点会拿到 403，前端菜单也通过 `user.menus` 过滤，菜单不可见就进不来。
 
@@ -22,12 +22,12 @@
 
 `src/views/statistics/ProductionStats.vue`（壳，7.1K）：顶部筛选（时间范围 + 自定义日期对），下方 4 个 Tab。
 
-| Tab | 文件 | 职责 |
-|---|---|---|
-| 总览 | `OverviewTab.vue`（9.5K） | 4 大图：订单数（按日）/ 完成数（按日）/ 趋势折线 / 工人排名柱状 |
-| 工人统计 | `WorkerStatsTab.vue`（7.9K） | 工种筛选 + 工人贡献度列表（pickup_count / return_count / completion_rate） |
-| 工人详情 | `WorkerDetailTab.vue`（10.5K） | 单工人折线（按日 pickup / return）+ 参与工单表 |
-| 跳序领取 | `PickupSkipTab.vue`（9.1K） | 跳序取件汇总 + drawer 明细分页（不消费时间范围，append-only 历史流） |
+| Tab      | 文件                           | 职责                                                                       |
+| -------- | ------------------------------ | -------------------------------------------------------------------------- |
+| 总览     | `OverviewTab.vue`（9.5K）      | 4 大图：订单数（按日）/ 完成数（按日）/ 趋势折线 / 工人排名柱状            |
+| 工人统计 | `WorkerStatsTab.vue`（7.9K）   | 工种筛选 + 工人贡献度列表（pickup_count / return_count / completion_rate） |
+| 工人详情 | `WorkerDetailTab.vue`（10.5K） | 单工人折线（按日 pickup / return）+ 参与工单表                             |
+| 跳序领取 | `PickupSkipTab.vue`（9.1K）    | 跳序取件汇总 + drawer 明细分页（不消费时间范围，append-only 历史流）       |
 
 四个 Tab 都用静态 `import`（`OverviewTab` / `WorkerStatsTab` / `WorkerDetailTab` / `PickupSkipTab`），但 `<el-tab-pane>` 内置 `v-if` 控制子组件挂载，未激活的 Tab 内容不渲染——ECharts 实例仅在 tab 激活时创建与销毁。
 
@@ -35,13 +35,13 @@
 
 `src/api/statistics.ts`（**全部走 `api`（v1），baseURL `/api/v1`**）：
 
-| 函数 | 端点 | 用途 |
-|---|---|---|
-| `fetchOverview(q)` | `GET /statistics/overview` | 总览 4 大图 |
-| `fetchWorkerStats(q)` | `GET /statistics/workers` | 工人贡献度列表（一次性全量） |
-| `fetchWorkerDetail(workerId, q)` | `GET /statistics/workers/{worker_id}` | 单工人详情 |
-| `fetchPickupSkipSummary()` | `GET /statistics/pickup-skips` | 跳序取件汇总（按工人聚合） |
-| `fetchPickupSkipDetail(workerId, q)` | `GET /statistics/pickup-skips/{worker_id}` | 单工人跳序事件明细分页 |
+| 函数                                 | 端点                                       | 用途                         |
+| ------------------------------------ | ------------------------------------------ | ---------------------------- |
+| `fetchOverview(q)`                   | `GET /statistics/overview`                 | 总览 4 大图                  |
+| `fetchWorkerStats(q)`                | `GET /statistics/workers`                  | 工人贡献度列表（一次性全量） |
+| `fetchWorkerDetail(workerId, q)`     | `GET /statistics/workers/{worker_id}`      | 单工人详情                   |
+| `fetchPickupSkipSummary()`           | `GET /statistics/pickup-skips`             | 跳序取件汇总（按工人聚合）   |
+| `fetchPickupSkipDetail(workerId, q)` | `GET /statistics/pickup-skips/{worker_id}` | 单工人跳序事件明细分页       |
 
 入参 `date_from` / `date_to` 必填 `'YYYY-MM-DD'`（后端严格校验）；`fetchPickupSkipSummary` / `fetchPickupSkipDetail` 无日期范围（append-only 历史流）。
 
@@ -51,12 +51,12 @@
 
 `src/components/EChart.vue`（ECharts 6 封装）：
 
-| 设计点 | 说明 |
-|---|---|
-| 模块化注册 | `echarts/core` + `use`，不引入全量 bundle |
-| v5 主题锁定 | `import 'echarts/theme/v5'`（ECharts 6 默认主题变更，注册 v5 旧主题保持原有配色） |
-| `ResizeObserver` | 容器尺寸变化时自动 `chart.resize()` |
-| `onBeforeUnmount` | `chart.dispose()` 释放实例，避免内存泄漏 |
+| 设计点            | 说明                                                                              |
+| ----------------- | --------------------------------------------------------------------------------- |
+| 模块化注册        | `echarts/core` + `use`，不引入全量 bundle                                         |
+| v5 主题锁定       | `import 'echarts/theme/v5'`（ECharts 6 默认主题变更，注册 v5 旧主题保持原有配色） |
+| `ResizeObserver`  | 容器尺寸变化时自动 `chart.resize()`                                               |
+| `onBeforeUnmount` | `chart.dispose()` 释放实例，避免内存泄漏                                          |
 
 四个 Tab 都是按需引入（静态 `import`）+ `<el-tab-pane v-if>` 控制挂载：首屏只引入 `OverviewTab`，其他三个 Tab 的 ECharts 实例仅在切换时创建。
 
@@ -64,11 +64,11 @@
 
 复用 `src/api/dashboard.ts` 的 WS 单例：
 
-| 项 | 说明 |
-|---|---|
-| 连接 | `ws://.../api/v1/ws/dashboard?token=...`（不走 axios） |
+| 项         | 说明                                                         |
+| ---------- | ------------------------------------------------------------ |
+| 连接       | `ws://.../api/v1/ws/dashboard?token=...`（不走 axios）       |
 | 模块级单例 | 多页面共享同一连接；重复调用 `connect()` 直接返回已有 socket |
-| 频道订阅 | `onDashboardSnapshot(handler)` / `onDashboardEvent(handler)` |
+| 频道订阅   | `onDashboardSnapshot(handler)` / `onDashboardEvent(handler)` |
 
 新事件触发时增量更新图表：业务事件（PICKED_UP / RETURNED / INSPECTED 等）由 WS 推送 → 总览 / 工人统计的 KPI 数字局部刷新，**不需要整体 refetch**。
 
@@ -76,34 +76,34 @@
 
 ## 六、业务指标
 
-| 指标 | 来源 | 展示 |
-|---|---|---|
-| 订单数（按时间窗口） | `fetchOverview` | KPI 卡 + 柱状 |
-| 完成数（按时间窗口） | `fetchOverview` | KPI 卡 + 柱状 |
-| 趋势（折线） | `fetchOverview` 的 `daily_created` / `daily_completed` | 折线图 |
-| 工人排名（柱状） | `fetchOverview` 的 worker ranking | 水平条形 |
-| 工人贡献度 | `fetchWorkerStats` | 表格 + 工种筛选 |
-| 单工人详情 | `fetchWorkerDetail` | 折线 + 工单表 |
-| 跳序领取（异常分析） | `fetchPickupSkipSummary` / `Detail` | 汇总表 + drawer 明细 |
+| 指标                 | 来源                                                   | 展示                 |
+| -------------------- | ------------------------------------------------------ | -------------------- |
+| 订单数（按时间窗口） | `fetchOverview`                                        | KPI 卡 + 柱状        |
+| 完成数（按时间窗口） | `fetchOverview`                                        | KPI 卡 + 柱状        |
+| 趋势（折线）         | `fetchOverview` 的 `daily_created` / `daily_completed` | 折线图               |
+| 工人排名（柱状）     | `fetchOverview` 的 worker ranking                      | 水平条形             |
+| 工人贡献度           | `fetchWorkerStats`                                     | 表格 + 工种筛选      |
+| 单工人详情           | `fetchWorkerDetail`                                    | 折线 + 工单表        |
+| 跳序领取（异常分析） | `fetchPickupSkipSummary` / `Detail`                    | 汇总表 + drawer 明细 |
 
 跳序领取指工人跳过了正常的工序路径直接取件（例如跳过 PROGRAMMING 直接 PICK_UP），是流程异常的强信号——统计页用于回溯这类事件。
 
 ## 七、权限要求
 
-| 角色 | 权限 |
-|---|---|
-| `MANAGER` | 全权访问 |
-| 其他角色 | 菜单不可见（`user.menus` 过滤），调后端 403 |
+| 角色      | 权限                                        |
+| --------- | ------------------------------------------- |
+| `MANAGER` | 全权访问                                    |
+| 其他角色  | 菜单不可见（`user.menus` 过滤），调后端 403 |
 
 后端 router-level `require_role(MANAGER)`。
 
 ## 八、后端契约锚链
 
-| 文档 | 路径 |
-|---|---|
-| statistics 域 | `~/Code/hsh-erp-rust/docs/api/index.md` 标注「未上线域」（**当前 v2 statistics 路由 nest 但 handler 空 → 全部 404**）；本前端仍走 v1 `/api/v1/statistics.py` |
-| WebSocket 增量推送协议 | `~/Code/hsh-erp-rust/docs/api/websocket.md` |
-| dashboard WS 实现细节 | `src/api/dashboard.ts` |
+| 文档                   | 路径                                                                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| statistics 域          | `~/Code/hsh-erp-rust/docs/api/index.md` 标注「未上线域」（**当前 v2 statistics 路由 nest 但 handler 空 → 全部 404**）；本前端仍走 v1 `/api/v1/statistics.py` |
+| WebSocket 增量推送协议 | `~/Code/hsh-erp-rust/docs/api/websocket.md`                                                                                                                  |
+| dashboard WS 实现细节  | `src/api/dashboard.ts`                                                                                                                                       |
 
 > statistics 在 v2 主仓尚未实施（路由 nest 但 handler 空）。前端保持 v1 调用，等 v2 上线后切 `apiV2`。
 

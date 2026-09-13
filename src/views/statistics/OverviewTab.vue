@@ -40,12 +40,7 @@
         </el-col>
         <el-col :xs="12" :sm="12" :md="6">
           <el-card shadow="never" class="kpi-card">
-            <el-statistic
-              title="期内总产值"
-              :value="valueYuan"
-              :precision="2"
-              prefix="¥"
-            />
+            <el-statistic title="期内总产值" :value="valueYuan" :precision="2" prefix="¥" />
           </el-card>
         </el-col>
       </el-row>
@@ -81,11 +76,7 @@
             <el-statistic title="超期未交付数" :value="data.overdue_undelivered_count">
               <template #title>
                 <span>超期未交付数</span>
-                <el-tooltip
-                  effect="dark"
-                  content="当前快照，不受时间筛选影响"
-                  placement="top"
-                >
+                <el-tooltip effect="dark" content="当前快照，不受时间筛选影响" placement="top">
                   <el-icon style="margin-left: 4px" :size="12"><Warning /></el-icon>
                 </el-tooltip>
               </template>
@@ -148,56 +139,56 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Warning } from '@element-plus/icons-vue'
-import EChart from '@/components/EChart.vue'
-import { fetchOverview } from '@/api/statistics'
-import type { OverviewOut } from '@/types/statistics'
-import type { OrderStatus } from '@/types/parts'
-import { STATUS_LABEL, STATUS_TAG_TYPE } from '@/constants/partStatus'
+import { computed, onMounted, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
+import { Warning } from '@element-plus/icons-vue';
+import EChart from '@/components/EChart.vue';
+import { fetchOverview } from '@/api/statistics';
+import type { OverviewOut } from '@/types/statistics';
+import type { OrderStatus } from '@/types/parts';
+import { STATUS_LABEL, STATUS_TAG_TYPE } from '@/constants/partStatus';
 
 interface Props {
-  dateFrom: string
-  dateTo: string
+  dateFrom: string;
+  dateTo: string;
 }
-const props = defineProps<Props>()
+const props = defineProps<Props>();
 
-const loading = ref(false)
-const data = ref<OverviewOut | null>(null)
+const loading = ref(false);
+const data = ref<OverviewOut | null>(null);
 
 async function reload(): Promise<void> {
-  if (!props.dateFrom || !props.dateTo) return
-  loading.value = true
+  if (!props.dateFrom || !props.dateTo) return;
+  loading.value = true;
   try {
     data.value = await fetchOverview({
       date_from: props.dateFrom,
       date_to: props.dateTo,
-    })
+    });
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载概览失败')
+    ElMessage.error((e as Error).message ?? '加载概览失败');
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
-onMounted(reload)
-watch(() => [props.dateFrom, props.dateTo], reload)
+onMounted(reload);
+watch(() => [props.dateFrom, props.dateTo], reload);
 
 // 期内总产值：后端 delivered_value 是 string（Decimal 序列化为字符串保精度），
 // el-statistic 接受 number；这里转 number。
 const valueYuan = computed<number>(() => {
-  if (!data.value) return 0
-  const v = Number(data.value.delivered_value)
-  return Number.isFinite(v) ? v : 0
-})
+  if (!data.value) return 0;
+  const v = Number(data.value.delivered_value);
+  return Number.isFinite(v) ? v : 0;
+});
 
 // ============== ECharts options ==============
 
 const dailyOption = computed(() => {
-  const created = data.value?.daily_created ?? []
-  const completed = data.value?.daily_completed ?? []
-  const dates = created.map((d) => d.date)
+  const created = data.value?.daily_created ?? [];
+  const completed = data.value?.daily_completed ?? [];
+  const dates = created.map((d) => d.date);
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['每日新建', '每日完成'], top: 0 },
@@ -222,11 +213,11 @@ const dailyOption = computed(() => {
         areaStyle: { opacity: 0.15 },
       },
     ],
-  }
-})
+  };
+});
 
 const deliveryOption = computed(() => {
-  const perf = data.value?.delivery_performance ?? { on_time: 0, orange: 0, red: 0 }
+  const perf = data.value?.delivery_performance ?? { on_time: 0, orange: 0, red: 0 };
   return {
     tooltip: { trigger: 'item', formatter: '{b}: {c} 件 ({d}%)' },
     legend: { bottom: 0 },
@@ -244,11 +235,11 @@ const deliveryOption = computed(() => {
         ],
       },
     ],
-  }
-})
+  };
+});
 
 const statusOption = computed(() => {
-  const items = data.value?.status_distribution ?? []
+  const items = data.value?.status_distribution ?? [];
   return {
     tooltip: { trigger: 'item', formatter: '{b}: {c} 件 ({d}%)' },
     legend: { type: 'scroll', orient: 'vertical', left: 0, top: 'middle' },
@@ -267,19 +258,24 @@ const statusOption = computed(() => {
         })),
       },
     ],
-  }
-})
+  };
+});
 
 // el-tag type → 简化的 hex，用于饼图。
 function tagColor(statusValue: string): string {
-  const t = STATUS_TAG_TYPE[statusValue as OrderStatus]
+  const t = STATUS_TAG_TYPE[statusValue as OrderStatus];
   switch (t) {
-    case 'success': return '#67c23a'
-    case 'warning': return '#e6a23c'
-    case 'danger':  return '#f56c6c'
-    case 'primary': return '#409eff'
+    case 'success':
+      return '#67c23a';
+    case 'warning':
+      return '#e6a23c';
+    case 'danger':
+      return '#f56c6c';
+    case 'primary':
+      return '#409eff';
     case 'info':
-    default:        return '#909399'
+    default:
+      return '#909399';
   }
 }
 </script>
@@ -292,7 +288,9 @@ function tagColor(statusValue: string): string {
   gap: 12px;
 }
 
-.kpi-row { width: 100%; }
+.kpi-row {
+  width: 100%;
+}
 
 .kpi-card :deep(.el-card__body) {
   padding: 16px;

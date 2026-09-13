@@ -20,30 +20,28 @@
 //   行为一致：原本就没把 date range 进持久化）。
 // - autoRefresh 布尔持久化：onMounted 时视图读 autoRefresh 后再创建 timer。
 
-import { reactive, ref, type Ref } from 'vue'
-import { listInspectionBatches, type PartItem } from '@/api/parts'
-import {
-  useListStatePersist,
-} from '@/composables/useListFilterPersist'
-import type { PageQueryParams, PageResult } from '@/composables/usePagedListQuery'
+import { reactive, ref, type Ref } from 'vue';
+import { listInspectionBatches, type PartItem } from '@/api/parts';
+import { useListStatePersist } from '@/composables/useListFilterPersist';
+import type { PageQueryParams, PageResult } from '@/composables/usePagedListQuery';
 
 export interface UseInspectionListReturn {
   /** 视图 filter 输入（关键字 / 序列号） */
-  search: { keyword: string; serialNo: string }
+  search: { keyword: string; serialNo: string };
   /** 计划交期范围（datarange）；非持久化，遵循旧 InspectionPending 行为 */
-  plannedDateRange: Ref<[string, string] | null>
+  plannedDateRange: Ref<[string, string] | null>;
   /** 自动刷新开关（持久化）；timer 由视图自管 */
-  autoRefresh: Ref<boolean>
+  autoRefresh: Ref<boolean>;
   /** 传给 <PartListShell :fetcher="fetcher">；fetch 失败抛错，由 shell.safeFetcher 接住 */
-  fetcher: (params: PageQueryParams) => Promise<PageResult<PartItem>>
+  fetcher: (params: PageQueryParams) => Promise<PageResult<PartItem>>;
   /** onMounted 调用一次：从 localStorage 恢复 search / autoRefresh */
-  restoreFilter: () => void
+  restoreFilter: () => void;
 }
 
 export function useInspectionList(): UseInspectionListReturn {
-  const search = reactive({ keyword: '', serialNo: '' })
-  const plannedDateRange = ref<[string, string] | null>(null)
-  const autoRefresh = ref(false)
+  const search = reactive({ keyword: '', serialNo: '' });
+  const plannedDateRange = ref<[string, string] | null>(null);
+  const autoRefresh = ref(false);
 
   async function fetcher(params: PageQueryParams): Promise<PageResult<PartItem>> {
     // fetch 抛错 → PartListShell.safeFetcher 接住并写到内部 errorMsg，
@@ -55,8 +53,8 @@ export function useInspectionList(): UseInspectionListReturn {
       planned_delivery_date_to: plannedDateRange.value?.[1],
       limit: params.pageSize,
       offset: (params.page - 1) * params.pageSize,
-    })
-    return { items: resp.items, total: resp.total }
+    });
+    return { items: resp.items, total: resp.total };
   }
 
   // 持久化 search / autoRefresh（pageSize 由 PartListShell 单独持久化）
@@ -64,16 +62,14 @@ export function useInspectionList(): UseInspectionListReturn {
     'inspection_pending_filter',
     { search, autoRefresh },
     { exclude: new Set(['page']) },
-  )
+  );
 
   function restoreFilter(): void {
-    const s = restore() as
-      | { search?: Partial<typeof search>; autoRefresh?: boolean }
-      | null
-    if (!s) return
-    if (s.search) Object.assign(search, s.search)
+    const s = restore() as { search?: Partial<typeof search>; autoRefresh?: boolean } | null;
+    if (!s) return;
+    if (s.search) Object.assign(search, s.search);
     if (typeof s.autoRefresh === 'boolean') {
-      autoRefresh.value = s.autoRefresh
+      autoRefresh.value = s.autoRefresh;
     }
   }
 
@@ -83,5 +79,5 @@ export function useInspectionList(): UseInspectionListReturn {
     autoRefresh,
     fetcher,
     restoreFilter,
-  }
+  };
 }

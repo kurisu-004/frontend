@@ -18,16 +18,16 @@
 //     onSave: async (row, payload) => { await updatePart(row.id, payload) },
 //   })
 
-import { onBeforeUnmount, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { onBeforeUnmount, ref, watch, type ComputedRef, type Ref } from 'vue';
 
 export interface UseRowEditorOptions<TRow extends { id: string }> {
-  items: Ref<TRow[]>
+  items: Ref<TRow[]>;
   /** 当前账号是否有编辑权限（决定 onRowDblClick 是否进入编辑） */
-  canEdit: ComputedRef<boolean> | Ref<boolean>
+  canEdit: ComputedRef<boolean> | Ref<boolean>;
   /** 该类型行可编辑字段的白名单（其他字段不允许在 editBuffer 中变更） */
-  editableFields: ReadonlyArray<keyof TRow>
+  editableFields: ReadonlyArray<keyof TRow>;
   /** 保存回调：caller 实现具体 PUT/POST */
-  onSave: (row: TRow, payload: Partial<TRow>) => Promise<void>
+  onSave: (row: TRow, payload: Partial<TRow>) => Promise<void>;
 }
 
 /**
@@ -41,64 +41,62 @@ const ENTER_BLACKLIST_SELECTORS = [
   '.el-tree-select__popper',
   '.el-cascader__dropdown',
   '.el-date-picker',
-]
+];
 
 function isInEnterBlacklist(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
+  if (!(target instanceof HTMLElement)) return false;
   for (const sel of ENTER_BLACKLIST_SELECTORS) {
-    if (target.closest(sel)) return true
+    if (target.closest(sel)) return true;
   }
-  return false
+  return false;
 }
 
 export interface UseRowEditorApi<TRow extends { id: string }> {
-  editingId: Ref<string | null>
-  editBuffer: Ref<Partial<TRow>>
-  isEditing: (row: TRow) => boolean
-  startEdit: (row: TRow) => void
-  saveEdit: (row: TRow) => Promise<void>
-  cancelEdit: () => void
-  onRowDblClick: (row: TRow) => void
+  editingId: Ref<string | null>;
+  editBuffer: Ref<Partial<TRow>>;
+  isEditing: (row: TRow) => boolean;
+  startEdit: (row: TRow) => void;
+  saveEdit: (row: TRow) => Promise<void>;
+  cancelEdit: () => void;
+  onRowDblClick: (row: TRow) => void;
 }
 
 export function useRowEditor<TRow extends { id: string }>(
   options: UseRowEditorOptions<TRow>,
 ): UseRowEditorApi<TRow> {
-  const { items, canEdit, editableFields, onSave } = options
-  const editingId = ref<string | null>(null)
-  const editBuffer = ref<Partial<TRow>>({}) as Ref<Partial<TRow>>
+  const { items, canEdit, editableFields, onSave } = options;
+  const editingId = ref<string | null>(null);
+  const editBuffer = ref<Partial<TRow>>({}) as Ref<Partial<TRow>>;
 
   function isEditing(row: TRow): boolean {
-    return editingId.value === row.id
+    return editingId.value === row.id;
   }
 
   function startEdit(row: TRow): void {
-    if (!canEdit.value) return
-    const buf: Partial<TRow> = {}
+    if (!canEdit.value) return;
+    const buf: Partial<TRow> = {};
     for (const k of editableFields) {
-      ;(buf as Record<string, unknown>)[k as string] = (row as Record<string, unknown>)[
-        k as string
-      ]
+      (buf as Record<string, unknown>)[k as string] = (row as Record<string, unknown>)[k as string];
     }
-    editBuffer.value = buf
-    editingId.value = row.id
+    editBuffer.value = buf;
+    editingId.value = row.id;
   }
 
   async function saveEdit(row: TRow): Promise<void> {
-    if (editingId.value !== row.id) return
+    if (editingId.value !== row.id) return;
     try {
-      await onSave(row, { ...editBuffer.value })
-      editingId.value = null
-      editBuffer.value = {}
+      await onSave(row, { ...editBuffer.value });
+      editingId.value = null;
+      editBuffer.value = {};
     } catch (err) {
       // caller 已弹 ElMessage；保留 editingId 让用户继续修改
-      console.error('[useRowEditor] saveEdit failed', err)
+      console.error('[useRowEditor] saveEdit failed', err);
     }
   }
 
   function cancelEdit(): void {
-    editingId.value = null
-    editBuffer.value = {}
+    editingId.value = null;
+    editBuffer.value = {};
   }
 
   /**
@@ -108,41 +106,41 @@ export function useRowEditor<TRow extends { id: string }>(
    * 2026-08-25 ResponsiveList 已删除（T1 mobile 清理），改为 el-table。
    */
   function onRowDblClick(row: TRow): void {
-    if (!canEdit.value) return
-    if (editingId.value === row.id) return
+    if (!canEdit.value) return;
+    if (editingId.value === row.id) return;
     if (editingId.value) {
       // 用 setTimeout 让 ElMessage 不阻塞下一次 click
       setTimeout(() => {
         // 这里仅控制台告警；上层组件可自行 import ElMessage
-        console.warn('[useRowEditor] 有未保存的编辑行，请先保存或取消')
-      }, 0)
-      return
+        console.warn('[useRowEditor] 有未保存的编辑行，请先保存或取消');
+      }, 0);
+      return;
     }
-    startEdit(row)
+    startEdit(row);
   }
 
   function onEditEnter(e: KeyboardEvent): void {
-    if (e.key !== 'Enter') return
-    if (editingId.value == null) return
-    if (isInEnterBlacklist(e.target)) return
-    e.preventDefault()
-    const row = items.value.find((r) => r.id === editingId.value)
-    if (row) void saveEdit(row)
+    if (e.key !== 'Enter') return;
+    if (editingId.value == null) return;
+    if (isInEnterBlacklist(e.target)) return;
+    e.preventDefault();
+    const row = items.value.find((r) => r.id === editingId.value);
+    if (row) void saveEdit(row);
   }
 
   watch(editingId, (val) => {
-    if (typeof document === 'undefined') return
+    if (typeof document === 'undefined') return;
     if (val != null) {
-      document.addEventListener('keydown', onEditEnter)
+      document.addEventListener('keydown', onEditEnter);
     } else {
-      document.removeEventListener('keydown', onEditEnter)
+      document.removeEventListener('keydown', onEditEnter);
     }
-  })
+  });
 
   onBeforeUnmount(() => {
-    if (typeof document === 'undefined') return
-    document.removeEventListener('keydown', onEditEnter)
-  })
+    if (typeof document === 'undefined') return;
+    document.removeEventListener('keydown', onEditEnter);
+  });
 
   return {
     editingId,
@@ -152,5 +150,5 @@ export function useRowEditor<TRow extends { id: string }>(
     saveEdit,
     cancelEdit,
     onRowDblClick,
-  }
+  };
 }

@@ -35,12 +35,7 @@
     </div>
     <div v-else>
       <el-tabs v-model="activeTab" class="process-tabs">
-        <el-tab-pane
-          v-for="cat in tabs"
-          :key="cat.key"
-          :label="cat.label"
-          :name="cat.key"
-        >
+        <el-tab-pane v-for="cat in tabs" :key="cat.key" :label="cat.label" :name="cat.key">
           <div v-if="cat.processes.length === 0" class="tab-empty">
             <el-icon :size="48" color="#c0c4cc"><Box /></el-icon>
             <p>「{{ cat.label }}」暂无工序</p>
@@ -90,57 +85,55 @@
  * 与 ShelfPickerDialog 同样基于 HmiPickerCard 视觉规范（kind=process），
  * 视觉一致性靠共享组件保证。
  */
-import { computed, ref, watch } from 'vue'
-import {
-  Box,
-  CircleCloseFilled,
-  Loading,
-  Select,
-} from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import HmiPickerCard from '@/components/HmiPickerCard.vue'
-import { listProcesses } from '@/api/process'
-import type { Process } from '@/types/process'
+import { computed, ref, watch } from 'vue';
+import { Box, CircleCloseFilled, Loading, Select } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import HmiPickerCard from '@/components/HmiPickerCard.vue';
+import { listProcesses } from '@/api/process';
+import type { Process } from '@/types/process';
 
-const props = withDefaults(defineProps<{
-  modelValue: boolean
-  /** 'return' = 选下一道工序；'inspection' = 选送检对应工序 */
-  kind?: 'return' | 'inspection'
-  /** 工件 next_process_id：预填选中并标推荐（橙色边框） */
-  currentProcessId?: string | null
-  /** 不可选的工序 id 列表（被排除的卡片显示为禁用 + hint） */
-  excludeProcessIds?: string[]
-}>(), {
-  kind: 'return',
-  currentProcessId: null,
-  excludeProcessIds: () => [],
-})
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean;
+    /** 'return' = 选下一道工序；'inspection' = 选送检对应工序 */
+    kind?: 'return' | 'inspection';
+    /** 工件 next_process_id：预填选中并标推荐（橙色边框） */
+    currentProcessId?: string | null;
+    /** 不可选的工序 id 列表（被排除的卡片显示为禁用 + hint） */
+    excludeProcessIds?: string[];
+  }>(),
+  {
+    kind: 'return',
+    currentProcessId: null,
+    excludeProcessIds: () => [],
+  },
+);
 
 const emit = defineEmits<{
-  'update:modelValue': [v: boolean]
+  'update:modelValue': [v: boolean];
   /** 确认后把整条 Process 传给父组件；父组件按 process.id 提交 + 用 name/code 展示 */
-  confirm: [process: Process]
-  cancel: []
-}>()
+  confirm: [process: Process];
+  cancel: [];
+}>();
 
-const loading = ref(false)
-const errorMessage = ref<string | null>(null)
-const processes = ref<Process[]>([])
-const selectedId = ref<string | null>(null)
-const activeTab = ref<'INHOUSE' | 'OUTSOURCE'>('INHOUSE')
+const loading = ref(false);
+const errorMessage = ref<string | null>(null);
+const processes = ref<Process[]>([]);
+const selectedId = ref<string | null>(null);
+const activeTab = ref<'INHOUSE' | 'OUTSOURCE'>('INHOUSE');
 
 const titleText = computed<string>(() =>
   props.kind === 'inspection' ? '选择送检对应工序' : '选择下一道工序',
-)
+);
 
 const nextButtonText = computed<string>(() =>
   props.kind === 'inspection' ? '下一步 · 选送检架' : '下一步 · 选货架',
-)
+);
 
 interface TabEntry {
-  key: 'INHOUSE' | 'OUTSOURCE'
-  label: string
-  processes: Process[]
+  key: 'INHOUSE' | 'OUTSOURCE';
+  label: string;
+  processes: Process[];
 }
 
 const tabs = computed<TabEntry[]>(() => [
@@ -154,74 +147,73 @@ const tabs = computed<TabEntry[]>(() => [
     label: '外协',
     processes: processes.value.filter((p) => p.category === 'OUTSOURCE'),
   },
-])
+]);
 
 watch(
   () => [props.modelValue, props.currentProcessId] as const,
   async ([visible, currentId]) => {
-    if (!visible) return
+    if (!visible) return;
     // 先把 selectedId + activeTab 用 currentId 预填；load 完成后保持
-    selectedId.value = currentId ?? null
-    await load()
+    selectedId.value = currentId ?? null;
+    await load();
     if (currentId) {
-      const matched = processes.value.find((p) => p.id === currentId)
+      const matched = processes.value.find((p) => p.id === currentId);
       if (matched) {
-        activeTab.value = matched.category === 'OUTSOURCE'
-          ? 'OUTSOURCE' : 'INHOUSE'
+        activeTab.value = matched.category === 'OUTSOURCE' ? 'OUTSOURCE' : 'INHOUSE';
       }
     } else {
       // 无 currentProcessId：默认自产 tab
-      activeTab.value = 'INHOUSE'
+      activeTab.value = 'INHOUSE';
     }
     // 被排除的工序不能预填：清空（确认按钮会因 selectedId null 而禁用，强制用户改选）
     if (selectedId.value && props.excludeProcessIds.includes(selectedId.value)) {
-      selectedId.value = null
+      selectedId.value = null;
     }
   },
   { immediate: true },
-)
+);
 
 async function load(): Promise<void> {
-  loading.value = true
-  errorMessage.value = null
+  loading.value = true;
+  errorMessage.value = null;
   try {
-    const resp = await listProcesses({ limit: 200 })
-    processes.value = resp.items
+    const resp = await listProcesses({ limit: 200 });
+    processes.value = resp.items;
     // 若 currentProcessId 在新列表中找不到（已被删除），清空选中让用户重选
     if (selectedId.value && !processes.value.some((p) => p.id === selectedId.value)) {
-      selectedId.value = null
+      selectedId.value = null;
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
-    errorMessage.value = msg || '加载失败'
-    selectedId.value = null
-    ElMessage.error(errorMessage.value)
+    const msg = err instanceof Error ? err.message : String(err);
+    errorMessage.value = msg || '加载失败';
+    selectedId.value = null;
+    ElMessage.error(errorMessage.value);
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 function onSelect(id: string): void {
-  selectedId.value = id
+  selectedId.value = id;
 }
 
 function onConfirm(): void {
   if (!selectedId.value) {
-    ElMessage.warning('请先选择工序')
-    return
+    ElMessage.warning('请先选择工序');
+    return;
   }
-  const selected = processes.value.find((p) => p.id === selectedId.value)
+  const selected = processes.value.find((p) => p.id === selectedId.value);
   if (!selected) {
     // 不该发生：selectedId 是从 processes 派生出来的；保护一下
-    ElMessage.error('所选工序已不可用，请重新选择')
-    return
+    ElMessage.error('所选工序已不可用，请重新选择');
+    return;
   }
-  emit('confirm', selected)
+  emit('confirm', selected);
 }
 
 function onCancel(): void {
-  emit('cancel')
-  emit('update:modelValue', false)
+  emit('cancel');
+  emit('update:modelValue', false);
 }
 </script>
 
@@ -239,7 +231,10 @@ function onCancel(): void {
   padding: 80px 20px;
   gap: 12px;
   color: #909399;
-  p { margin: 0; font-size: 16px; }
+  p {
+    margin: 0;
+    font-size: 16px;
+  }
 }
 .card-grid {
   display: grid;
@@ -258,16 +253,27 @@ function onCancel(): void {
   padding: 48px 0;
   gap: 12px;
   color: #606266;
-  p { margin: 0; }
+  p {
+    margin: 0;
+  }
 }
 .error-state {
   color: #f56c6c;
-  .error-text { font-size: 16px; font-weight: 600; }
+  .error-text {
+    font-size: 16px;
+    font-weight: 600;
+  }
 }
-.is-loading { animation: spin 1s linear infinite; }
+.is-loading {
+  animation: spin 1s linear infinite;
+}
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 /* HMI 触摸友好 tab 标签 */
 :deep(.el-tabs__item) {

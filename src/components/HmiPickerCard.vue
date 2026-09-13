@@ -58,12 +58,11 @@
       <div v-if="location" class="location">{{ location }}</div>
       <div class="load">
         <el-icon><Box /></el-icon>
-        <span>在架 <strong>{{ currentLoad }}</strong> 件</span>
+        <span
+          >在架 <strong>{{ currentLoad }}</strong> 件</span
+        >
       </div>
-      <div
-        v-if="mappedProcessCodes && mappedProcessCodes.length"
-        class="processes"
-      >
+      <div v-if="mappedProcessCodes && mappedProcessCodes.length" class="processes">
         <el-tag
           v-for="c in mappedProcessCodes"
           :key="c"
@@ -97,34 +96,34 @@
  * 2026-08-05：新增 disabled/hint props，支持 ProcessPickerDialog 排除指定工序
  *（不隐藏：工人能看到工序存在但不可选，避免困惑）。
  */
-import { Box } from '@element-plus/icons-vue'
+import { Box } from '@element-plus/icons-vue';
 
 const props = defineProps<{
-  kind: 'process' | 'shelf'
-  code: string
-  name: string
-  isSelected: boolean
+  kind: 'process' | 'shelf';
+  code: string;
+  name: string;
+  isSelected: boolean;
   /** 禁用态：半透明 + 不可点击/键盘激活（pointer-events:none + onClick 短路） */
-  disabled?: boolean
+  disabled?: boolean;
   /** 禁用原因展示在卡内底部（红字小字） */
-  hint?: string
+  hint?: string;
 
   /** kind='process' */
-  category?: 'INHOUSE' | 'OUTSOURCE'
+  category?: 'INHOUSE' | 'OUTSOURCE';
 
   /** kind='shelf' */
-  location?: string
-  currentLoad?: number
-  mappedProcessCodes?: readonly string[]
-}>()
+  location?: string;
+  currentLoad?: number;
+  mappedProcessCodes?: readonly string[];
+}>();
 
 const emit = defineEmits<{
-  select: []
-}>()
+  select: [];
+}>();
 
 function onClick(): void {
-  if (props.disabled) return
-  emit('select')
+  if (props.disabled) return;
+  emit('select');
 }
 </script>
 

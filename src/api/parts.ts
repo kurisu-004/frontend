@@ -8,4 +8,4 @@
 //
 // 2026-08-25 merge fix：worktree 分支新增的 `scanInspect` / `batchScanInspect`
 // 已分别落位到 ./parts/crud.ts（v2 端点）与 ./parts/batch.ts（v2 批量端点）。
-export * from './parts/index'
+export * from './parts/index';

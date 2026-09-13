@@ -13,15 +13,7 @@
 当前条目：
 
 ```ts
-include: [
-  'vue',
-  'vue-router',
-  'pinia',
-  'axios',
-  'element-plus',
-  '@element-plus/icons-vue',
-  'xlsx',
-]
+include: ['vue', 'vue-router', 'pinia', 'axios', 'element-plus', '@element-plus/icons-vue', 'xlsx'];
 ```
 
 判断要不要追加一条目：如果 `import` 触发 dev 卡顿 / 频繁 full-reload，就把那个包加进来；不频繁就不加。准则**保守**——多加一个 bundle 几十 KB 的包进 dev chunk 只是 cold start 慢几百毫秒，少了却会让每次点新路由都 full-reload。
@@ -71,11 +63,11 @@ Components({
 CSS 缺失的症状很明显：消息框落左上角、按钮纵向堆叠、标题被截。修复方式是在 `src/main.ts` 顶部**手动 import** 这 4 个 CSS：
 
 ```ts
-import 'element-plus/theme-chalk/el-message-box.css'
-import 'element-plus/theme-chalk/el-message.css'
-import 'element-plus/theme-chalk/el-notification.css'
-import 'element-plus/theme-chalk/el-loading.css'
-import 'element-plus/theme-chalk/el-overlay.css'
+import 'element-plus/theme-chalk/el-message-box.css';
+import 'element-plus/theme-chalk/el-message.css';
+import 'element-plus/theme-chalk/el-notification.css';
+import 'element-plus/theme-chalk/el-loading.css';
+import 'element-plus/theme-chalk/el-overlay.css';
 ```
 
 （`el-overlay.css` 是消息框 / notification 的遮罩层，2026-08-22 重构漏了这一层，全站弹窗无样式，截图记录在 `main.ts` 注释里。）
@@ -85,7 +77,7 @@ import 'element-plus/theme-chalk/el-overlay.css'
 `@element-plus/icons-vue` 不在 `optimizeDeps.include` 也不会被 auto-import——图标组件**必须显式 import** 后在 `<script setup>` 注册才能用：
 
 ```ts
-import { ArrowLeft, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, Search } from '@element-plus/icons-vue';
 ```
 
 不要把整个 `@element-plus/icons-vue` 拉满。
@@ -112,14 +104,14 @@ EP 所有用 `var(--el-color-primary*)` 取色的组件（按钮 / switch / chec
 
 项目色板：
 
-| 角色 | 颜色 | 用途 |
-| --- | --- | --- |
-| 藏青 | `#1e4d8b` | 主色（按钮、链接、激活态） |
-| 蓝 | `#2c6cb8` | hover、辅按钮 |
-| 浅蓝 | `#4a8fd6` | light-3 一档 |
-| 极浅蓝 | `#eaf2fb` | light-9（背景、选中行底色） |
-| 侧栏藏青 | `#1a3a6b` | 侧栏底色（比主色更深） |
-| 内容灰 | `#f5f7fa` | 页面背景 |
+| 角色     | 颜色      | 用途                        |
+| -------- | --------- | --------------------------- |
+| 藏青     | `#1e4d8b` | 主色（按钮、链接、激活态）  |
+| 蓝       | `#2c6cb8` | hover、辅按钮               |
+| 浅蓝     | `#4a8fd6` | light-3 一档                |
+| 极浅蓝   | `#eaf2fb` | light-9（背景、选中行底色） |
+| 侧栏藏青 | `#1a3a6b` | 侧栏底色（比主色更深）      |
+| 内容灰   | `#f5f7fa` | 页面背景                    |
 
 ### 死代码的教训
 
@@ -139,7 +131,7 @@ EP 所有用 `var(--el-color-primary*)` 取色的组件（按钮 / switch / chec
 </template>
 
 <script setup lang="ts">
-import zhCn from 'element-plus/es/locale/lang/zh-cn.mjs'
+import zhCn from 'element-plus/es/locale/lang/zh-cn.mjs';
 </script>
 ```
 
@@ -196,8 +188,8 @@ resolve: {
 双侧配置确保运行时（vite 解析）与类型检查（`vue-tsc`）走同一份路径。引用示例：
 
 ```ts
-import { useAuthSession } from '@/composables/useAuthSession'
-import { pdfjsLib } from '@/utils/pdfjs'
+import { useAuthSession } from '@/composables/useAuthSession';
+import { pdfjsLib } from '@/utils/pdfjs';
 ```
 
 不要在 `src/**` 内部用相对路径穿越多级（`../../../composables/...`），一律 `@/...`。

@@ -10,15 +10,11 @@
   2026-08-25 frontend-overall-refactor：从 DeliveryNoteDetail.vue 抽出。
 -->
 <template>
-  <el-page-header @back="emit('back')" class="page-header">
+  <el-page-header class="page-header" @back="emit('back')">
     <template #content>
       <span class="page-title">
         {{ note.delivery_note_no }}
-        <el-tag
-          :type="statusTag || 'info'"
-          size="small"
-          effect="plain"
-        >
+        <el-tag :type="statusTag || 'info'" size="small" effect="plain">
           {{ statusLabel }}
         </el-tag>
       </span>
@@ -61,44 +57,43 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { DeliveryNoteDetailOut, DeliveryNoteStatus } from '@/types/deliveryNote'
-import {
-  DELIVERY_NOTE_STATUS_LABEL,
-  DELIVERY_NOTE_STATUS_TAG,
-} from '@/types/deliveryNote'
+import { computed } from 'vue';
+import type { DeliveryNoteDetailOut, DeliveryNoteStatus } from '@/types/deliveryNote';
+import { DELIVERY_NOTE_STATUS_LABEL, DELIVERY_NOTE_STATUS_TAG } from '@/types/deliveryNote';
 
 interface Props {
-  note: DeliveryNoteDetailOut
+  note: DeliveryNoteDetailOut;
   /** 送货日期 picker v-model（受控；composable 持有 source of truth） */
-  editDeliveryDate: string
+  editDeliveryDate: string;
 }
 
-const props = defineProps<Props>()
+const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'back'): void
+  (e: 'back'): void;
   /** 日期 picker 输入更新（composable 写入 editDeliveryDate） */
-  (e: 'update:editDeliveryDate', v: string): void
+  (e: 'update:editDeliveryDate', v: string): void;
   /** 日期 picker 提交（composable 调 API） */
-  (e: 'delivery-date-change', v: string | null): void
-}>()
+  (e: 'delivery-date-change', v: string | null): void;
+}>();
 
 /** DRAFT / SUBMITTED 状态可编辑送货日期；其它状态 disabled */
-const canEditDate = computed(() =>
-  props.note.status === 'DRAFT' || props.note.status === 'SUBMITTED',
-)
+const canEditDate = computed(
+  () => props.note.status === 'DRAFT' || props.note.status === 'SUBMITTED',
+);
 
-const statusLabel = computed(() =>
-  DELIVERY_NOTE_STATUS_LABEL[props.note.status as DeliveryNoteStatus] ?? props.note.status,
-)
-const statusTag = computed(() =>
-  DELIVERY_NOTE_STATUS_TAG[props.note.status as DeliveryNoteStatus] ?? 'info',
-)
+const statusLabel = computed(
+  () => DELIVERY_NOTE_STATUS_LABEL[props.note.status as DeliveryNoteStatus] ?? props.note.status,
+);
+const statusTag = computed(
+  () => DELIVERY_NOTE_STATUS_TAG[props.note.status as DeliveryNoteStatus] ?? 'info',
+);
 </script>
 
 <style lang="scss" scoped>
-.page-header { margin-bottom: 16px; }
+.page-header {
+  margin-bottom: 16px;
+}
 .page-title {
   display: flex;
   align-items: center;
@@ -106,5 +101,7 @@ const statusTag = computed(() =>
   font-size: 18px;
   font-weight: 600;
 }
-.info-card { margin-bottom: 16px; }
+.info-card {
+  margin-bottom: 16px;
+}
 </style>

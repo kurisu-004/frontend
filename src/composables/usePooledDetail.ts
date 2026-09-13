@@ -18,7 +18,7 @@
 
 export interface PooledOptions {
   /** 并发上限，默认 4。 */
-  concurrency?: number
+  concurrency?: number;
 }
 
 export async function runPooled<T, R>(
@@ -26,25 +26,25 @@ export async function runPooled<T, R>(
   worker: (item: T, index: number) => Promise<R>,
   opts: PooledOptions = {},
 ): Promise<Array<R | null>> {
-  const concurrency = Math.max(1, opts.concurrency ?? 4)
-  const results: Array<R | null> = new Array(items.length).fill(null)
-  let cursor = 0
+  const concurrency = Math.max(1, opts.concurrency ?? 4);
+  const results: Array<R | null> = new Array(items.length).fill(null);
+  let cursor = 0;
 
   async function pump(): Promise<void> {
     while (true) {
-      const idx = cursor
-      cursor += 1
-      if (idx >= items.length) return
+      const idx = cursor;
+      cursor += 1;
+      if (idx >= items.length) return;
       try {
-        results[idx] = await worker(items[idx], idx)
+        results[idx] = await worker(items[idx], idx);
       } catch {
         // 与 DeliveryNoteScan.vue:362 旧行为一致：失败丢弃，下游用 null 占位
-        results[idx] = null
+        results[idx] = null;
       }
     }
   }
 
-  const n = Math.min(concurrency, items.length)
-  await Promise.all(Array.from({ length: n }, pump))
-  return results
+  const n = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: n }, pump));
+  return results;
 }

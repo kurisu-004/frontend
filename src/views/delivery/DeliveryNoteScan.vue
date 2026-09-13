@@ -19,218 +19,223 @@
 //   - DeliveryGroupEditor 已内嵌到 DeliveryGroupPanel，本组件不再持有。
 //   - applySuccess 同步刷新 draftDetails（扫码命中后立即把最新 line_items 拉回）。
 
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import { useDeliveryScanState } from '@/composables/useDeliveryScanState'
-import { listCustomers, type Customer } from '@/api/customer'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
+import { useDeliveryScanState } from '@/composables/useDeliveryScanState';
+import { listCustomers, type Customer } from '@/api/customer';
 import {
   createDeliveryGroup,
   listDeliveryGroups,
   softDeleteDeliveryGroup,
   updateDeliveryGroup,
-} from '@/api/deliveryGroup'
-import { useAuthSession } from '@/composables/useAuthSession'
-import { canPrint } from '@/utils/deliveryNotePermissions'
-import type { DeliveryGroupListOut, DeliveryGroupOut } from '@/types/deliveryGroup'
-import type { ScanNoteSummary } from '@/types/deliveryNote'
-import { useDeliveryDraftBoard } from './composables/useDeliveryDraftBoard'
-import { useDeliveryScanSubmission } from './composables/useDeliveryScanSubmission'
-import DeliveryScanBar from './components/DeliveryScanBar.vue'
-import DeliveryGroupPanel from './components/DeliveryGroupPanel.vue'
-import DeliveryDraftCard from './components/DeliveryDraftCard.vue'
-import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'
-import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'
-import DeliveryScanCandidateDialog from '@/components/delivery/DeliveryScanCandidateDialog.vue'
-import DeliverySubmitCandidateDialog from '@/components/delivery/DeliverySubmitCandidateDialog.vue'
+} from '@/api/deliveryGroup';
+import { useAuthSession } from '@/composables/useAuthSession';
+import { canPrint } from '@/utils/deliveryNotePermissions';
+import type { DeliveryGroupListOut, DeliveryGroupOut } from '@/types/deliveryGroup';
+import type { ScanNoteSummary } from '@/types/deliveryNote';
+import { useDeliveryDraftBoard } from './composables/useDeliveryDraftBoard';
+import { useDeliveryScanSubmission } from './composables/useDeliveryScanSubmission';
+import DeliveryScanBar from './components/DeliveryScanBar.vue';
+import DeliveryGroupPanel from './components/DeliveryGroupPanel.vue';
+import DeliveryDraftCard from './components/DeliveryDraftCard.vue';
+import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue';
+import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue';
+import DeliveryScanCandidateDialog from '@/components/delivery/DeliveryScanCandidateDialog.vue';
+import DeliverySubmitCandidateDialog from '@/components/delivery/DeliverySubmitCandidateDialog.vue';
 
-const router = useRouter()
+const router = useRouter();
 
 // ============ L1 / 客户全集 ============
-const scanState = useDeliveryScanState()
-const auth = useAuthSession()
+const scanState = useDeliveryScanState();
+const auth = useAuthSession();
 
 /** 全量客户列表（listCustomers() 返回平铺）。 */
-const allCustomers = ref<Customer[]>([])
+const allCustomers = ref<Customer[]>([]);
 /** 一级客户全集（parent_id === null）。 */
 const rootCustomers = computed<Customer[]>(() =>
   allCustomers.value.filter((c) => c.parent_id === null),
-)
+);
 /** 当前 L1 下的 L2 客户全集（分组编辑器用）。 */
 const allL2Customers = computed<Customer[]>(() => {
-  if (!scanState.l1CustomerId.value) return []
-  return allCustomers.value.filter((c) => c.parent_id === scanState.l1CustomerId.value)
-})
+  if (!scanState.l1CustomerId.value) return [];
+  return allCustomers.value.filter((c) => c.parent_id === scanState.l1CustomerId.value);
+});
 
 /** CurrentUser.roles → boolean map（canPrint 用）。 */
 const roleMap = computed<{ MANAGER?: boolean; CLERK?: boolean; INSPECTOR?: boolean }>(() => {
-  const r = auth.user.value?.roles ?? []
+  const r = auth.user.value?.roles ?? [];
   return {
     MANAGER: r.includes('MANAGER'),
     CLERK: r.includes('CLERK'),
     INSPECTOR: r.includes('INSPECTOR'),
-  }
-})
+  };
+});
 
 // ============ 分组态 ============
-const groups = ref<DeliveryGroupListOut>({ groups: [], ungrouped_customers: [] })
-const groupsLoading = ref(false)
+const groups = ref<DeliveryGroupListOut>({ groups: [], ungrouped_customers: [] });
+const groupsLoading = ref(false);
 
 /** 拉当前 L1 下的分组 + 未分组 L2。 */
 async function reloadGroups(l1Id: string): Promise<void> {
   if (!l1Id) {
-    groups.value = { groups: [], ungrouped_customers: [] }
-    return
+    groups.value = { groups: [], ungrouped_customers: [] };
+    return;
   }
-  groupsLoading.value = true
+  groupsLoading.value = true;
   try {
-    groups.value = await listDeliveryGroups(l1Id)
+    groups.value = await listDeliveryGroups(l1Id);
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载分组规则失败')
+    ElMessage.error((e as Error).message ?? '加载分组规则失败');
   } finally {
-    groupsLoading.value = false
+    groupsLoading.value = false;
   }
 }
 
 // ============ 草稿卡片业务（board）============
-const board = useDeliveryDraftBoard()
+const board = useDeliveryDraftBoard();
 
 // ============ 扫码 + 提交 + 预览（submission）============
 const submission = useDeliveryScanSubmission({
   writeDraftFromScan: board.writeDraftFromScan,
   refreshDraftDetail: board.refreshDraftDetail,
   onDraftRemoved: (noteId) => {
-    delete submission.submittingByNote[noteId]
-    board.clearNoteLocalState(noteId)
+    delete submission.submittingByNote[noteId];
+    board.clearNoteLocalState(noteId);
   },
-})
+});
 
 /** 候选弹窗 done 后：用 originalScanCode 重扫同一 code。
  *  此时 B 组候选批次已经送检（INSPECTION），二次 scan 应回 PARTIAL_ADDED → ADDED 收敛。
  *  2026-08-28 路线 B 新增：DeliveryScanCandidateDialog 父级回调。 */
 function onCandidateResolved(): void {
   if (submission.originalScanCode.value) {
-    void submission.handleScan(submission.originalScanCode.value)
+    void submission.handleScan(submission.originalScanCode.value);
   }
 }
 
 // ============ 扫码枪订阅 ============
-const { onScan } = useBarcodeScanner()
-let unsubScan: (() => void) | null = null
+const { onScan } = useBarcodeScanner();
+let unsubScan: (() => void) | null = null;
 
 // ============ 草稿卡片：行为函数（透传 board / submission 业务）============
 /** 草稿卡片 row 是否允许打印（角色 + 至少 1 个零件；与 detail page 同款）。 */
 function canPrintNote(d: ScanNoteSummary): boolean {
-  const partCount = (d as { part_count?: number }).part_count ?? d.recent_items.length
-  return canPrint(roleMap.value, partCount)
+  const partCount = (d as { part_count?: number }).part_count ?? d.recent_items.length;
+  return canPrint(roleMap.value, partCount);
 }
 
 /** 草稿卡片 row 是否允许提交（status === 'DRAFT'）。 */
 function canSubmitDraft(d: ScanNoteSummary): boolean {
-  return d.status === 'DRAFT'
+  return d.status === 'DRAFT';
 }
 
 // ============ 卡片跳转 ============
 function gotoDetail(draft: ScanNoteSummary): void {
-  void router.push(`/delivery-notes/${draft.id}`)
+  void router.push(`/delivery-notes/${draft.id}`);
 }
 
 function gotoAllDrafts(): void {
-  if (!scanState.l1CustomerId.value) return
+  if (!scanState.l1CustomerId.value) return;
   void router.push({
     path: '/delivery-notes',
     query: { statuses: 'DRAFT', customer_id: scanState.l1CustomerId.value },
-  })
+  });
 }
 
 // ============ 分组：create / update / delete ============
-async function onGroupCreate(payload: { name: string; member_customer_ids: string[] }): Promise<void> {
-  if (!scanState.l1CustomerId.value) return
+async function onGroupCreate(payload: {
+  name: string;
+  member_customer_ids: string[];
+}): Promise<void> {
+  if (!scanState.l1CustomerId.value) return;
   try {
     await createDeliveryGroup({
       customer_id: scanState.l1CustomerId.value,
       name: payload.name,
       member_customer_ids: payload.member_customer_ids,
-    })
-    ElMessage.success('分组已创建')
-    await reloadGroups(scanState.l1CustomerId.value)
+    });
+    ElMessage.success('分组已创建');
+    await reloadGroups(scanState.l1CustomerId.value);
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '保存分组失败')
+    ElMessage.error((e as Error).message ?? '保存分组失败');
   }
 }
 
 async function onGroupUpdate(payload: {
-  group: DeliveryGroupOut
-  name: string
-  member_customer_ids: string[]
+  group: DeliveryGroupOut;
+  name: string;
+  member_customer_ids: string[];
 }): Promise<void> {
   try {
     await updateDeliveryGroup(payload.group.id, {
       version: payload.group.version,
       name: payload.name,
       member_customer_ids: payload.member_customer_ids,
-    })
-    ElMessage.success('分组已更新')
+    });
+    ElMessage.success('分组已更新');
     if (scanState.l1CustomerId.value) {
-      await reloadGroups(scanState.l1CustomerId.value)
+      await reloadGroups(scanState.l1CustomerId.value);
     }
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '保存分组失败')
+    ElMessage.error((e as Error).message ?? '保存分组失败');
   }
 }
 
 async function onGroupDelete(g: DeliveryGroupOut): Promise<void> {
   try {
-    await softDeleteDeliveryGroup(g.id, { version: g.version })
-    ElMessage.success('分组已删除')
+    await softDeleteDeliveryGroup(g.id, { version: g.version });
+    ElMessage.success('分组已删除');
     if (scanState.l1CustomerId.value) {
-      await reloadGroups(scanState.l1CustomerId.value)
+      await reloadGroups(scanState.l1CustomerId.value);
     }
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '删除分组失败')
+    ElMessage.error((e as Error).message ?? '删除分组失败');
   }
 }
 
 // ============ 草稿卡片：emit → 业务函数桥接 ============
 function onCardGotoDetail(d: ScanNoteSummary): void {
-  gotoDetail(d)
+  gotoDetail(d);
 }
 function onCardSelectionChange(d: ScanNoteSummary, rows: any[]): void {
-  board.onSelectionChange(d.id, rows)
+  board.onSelectionChange(d.id, rows);
 }
 function onCardRemove(d: ScanNoteSummary, row: any): void {
-  void board.onRemove(d, row)
+  void board.onRemove(d, row);
 }
 function onCardPrintLabels(d: ScanNoteSummary): void {
-  void board.onPrintLabels(d)
+  void board.onPrintLabels(d);
 }
 function onCardDeleteDraft(d: ScanNoteSummary): void {
-  void board.onDeleteDraft(d)
+  void board.onDeleteDraft(d);
 }
 function onCardPrintNote(d: ScanNoteSummary): void {
-  void submission.openPrintNote(d)
+  void submission.openPrintNote(d);
 }
 function onCardSubmitDraft(d: ScanNoteSummary): void {
-  void submission.onSubmitDraft(d)
+  void submission.onSubmitDraft(d);
 }
 function onCardTableRef(d: ScanNoteSummary, el: any): void {
-  board.setTableRef(d.id, el)
+  board.setTableRef(d.id, el);
 }
 
 // ============ 生命周期 ============
 onMounted(async () => {
   // L1 持久化恢复：单例扫描整个页面载入后从 localStorage 读回；只触发一次
-  scanState.init()
+  scanState.init();
   // 扫码枪订阅：每页独立挂载；卸载时退订避免劫持到其他页
-  unsubScan = onScan((code) => { void submission.handleScan(code) })
+  unsubScan = onScan((code) => {
+    void submission.handleScan(code);
+  });
   // 拉客户全集
   try {
-    allCustomers.value = await listCustomers()
+    allCustomers.value = await listCustomers();
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载客户列表失败')
+    ElMessage.error((e as Error).message ?? '加载客户列表失败');
   }
-})
+});
 
 /**
  * L1 变化（init 从 localStorage 恢复 / 用户切换 el-select）→ 重拉分组 + 草稿。
@@ -242,18 +247,18 @@ watch(
   scanState.l1CustomerId,
   async (id) => {
     if (!id) {
-      groups.value = { groups: [], ungrouped_customers: [] }
-      return
+      groups.value = { groups: [], ungrouped_customers: [] };
+      return;
     }
-    await Promise.all([reloadGroups(id), board.reloadDrafts(id)])
+    await Promise.all([reloadGroups(id), board.reloadDrafts(id)]);
   },
   { immediate: true },
-)
+);
 
 onBeforeUnmount(() => {
-  unsubScan?.()
-  unsubScan = null
-})
+  unsubScan?.();
+  unsubScan = null;
+});
 </script>
 
 <template>
@@ -278,15 +283,10 @@ onBeforeUnmount(() => {
     />
 
     <!-- 草稿卡片列表 -->
-    <div class="drafts-section" v-loading="board.draftsLoading.value">
+    <div v-loading="board.draftsLoading.value" class="drafts-section">
       <div class="drafts-header">
         <span class="dn-scan-card-title">当前草稿（{{ board.draftsCount.value }}）</span>
-        <el-button
-          v-if="board.draftsCount.value > 0"
-          link
-          type="primary"
-          @click="gotoAllDrafts"
-        >
+        <el-button v-if="board.draftsCount.value > 0" link type="primary" @click="gotoAllDrafts">
           查看全部 →
         </el-button>
       </div>

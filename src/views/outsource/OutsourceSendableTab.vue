@@ -28,12 +28,9 @@
       <el-tag v-if="sendQueue.length > 0" type="success" effect="plain" size="small">
         队列 {{ sendQueue.length }} 件
       </el-tag>
-      <el-button
-        v-if="sendQueue.length > 0"
-        link
-        size="small"
-        @click="clearSendQueue"
-      >清空队列</el-button>
+      <el-button v-if="sendQueue.length > 0" link size="small" @click="clearSendQueue"
+        >清空队列</el-button
+      >
     </div>
 
     <!-- 扫码队列表格 -->
@@ -51,10 +48,22 @@
           <span :class="{ muted: !row.part.serial_no }">{{ row.part.serial_no || '—' }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="part.drawing_no" label="图号" min-width="120" align="center"/>
-      <el-table-column prop="part.name" label="名称" min-width="160" show-overflow-tooltip align="center"/>
-      <el-table-column prop="outsource_company_name" label="外协公司" min-width="160" show-overflow-tooltip align="center"/>
-      <el-table-column prop="process_name" label="外协工序" min-width="120" align="center"/>
+      <el-table-column prop="part.drawing_no" label="图号" min-width="120" align="center" />
+      <el-table-column
+        prop="part.name"
+        label="名称"
+        min-width="160"
+        show-overflow-tooltip
+        align="center"
+      />
+      <el-table-column
+        prop="outsource_company_name"
+        label="外协公司"
+        min-width="160"
+        show-overflow-tooltip
+        align="center"
+      />
+      <el-table-column prop="process_name" label="外协工序" min-width="120" align="center" />
       <el-table-column prop="quantity" label="数量" min-width="80" align="right" />
       <el-table-column prop="price" label="单价(元)" min-width="80" align="right" />
       <el-table-column label="状态" min-width="80" align="center">
@@ -65,23 +74,18 @@
       </el-table-column>
       <el-table-column label="操作" min-width="70" fixed="right" align="center">
         <template #default="{ $index }">
-          <el-button
-            link
-            type="danger"
-            size="small"
-            @click="removeFromSendQueue($index)"
-          >移除</el-button>
+          <el-button link type="danger" size="small" @click="removeFromSendQueue($index)"
+            >移除</el-button
+          >
         </template>
       </el-table-column>
     </el-table>
 
     <div v-if="sendQueue.length > 0" class="batch-bar">
-      <span class="batch-info">已入队 <strong>{{ sendQueue.length }}</strong> 件</span>
-      <el-button
-        type="primary"
-        :loading="batchSending"
-        @click="onConfirmBatchSend"
+      <span class="batch-info"
+        >已入队 <strong>{{ sendQueue.length }}</strong> 件</span
       >
+      <el-button type="primary" :loading="batchSending" @click="onConfirmBatchSend">
         确认发送 {{ sendQueue.length }} 件
       </el-button>
     </div>
@@ -109,7 +113,9 @@
       </el-select>
       <el-button type="primary" @click="onSendableSearch">查询</el-button>
       <el-button @click="onSendableReset">重置</el-button>
-      <span v-if="sendablePagedRef?.total && sendablePagedRef.total > 0" class="total-hint">共 {{ sendablePagedRef.total }} 条</span>
+      <span v-if="sendablePagedRef?.total && sendablePagedRef.total > 0" class="total-hint"
+        >共 {{ sendablePagedRef.total }} 条</span
+      >
     </div>
     <!-- 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层） -->
     <div class="table-toolbar">
@@ -126,8 +132,8 @@
       <template #default="{ items, loading }">
         <el-table
           ref="tableRef"
-          :data="items"
           v-loading="loading"
+          :data="items"
           row-key="part_id"
           :empty-text="sendableError ?? '暂无符合条件的可发送零件'"
           :row-class-name="sendableRowClassName"
@@ -171,12 +177,9 @@
               >
                 <el-button size="small" disabled>发送</el-button>
               </el-tooltip>
-              <el-button
-                v-else
-                size="small"
-                type="primary"
-                @click="openSend(row as SendableItem)"
-              >发送</el-button>
+              <el-button v-else size="small" type="primary" @click="openSend(row as SendableItem)"
+                >发送</el-button
+              >
             </template>
           </el-table-column>
         </el-table>
@@ -199,39 +202,35 @@
 </template>
 
 <script setup lang="ts">
-import { h, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Promotion } from '@element-plus/icons-vue'
-import { ElTag } from 'element-plus'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import PagedTable from '@/components/PagedTable.vue'
-import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
+import { h, onBeforeUnmount, onMounted, ref } from 'vue';
+import { Promotion } from '@element-plus/icons-vue';
+import { ElTag } from 'element-plus';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import PagedTable from '@/components/PagedTable.vue';
+import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import {
   useColumnVisibility,
   resolveDraggable,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import type { Customer } from '@/api/customer'
-import OutsourceSendDialog from './components/OutsourceSendDialog.vue'
+} from '@/composables/useColumnVisibility';
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
+import type { Customer } from '@/api/customer';
+import OutsourceSendDialog from './components/OutsourceSendDialog.vue';
 import {
   useOutsourceSendableList,
   type SendableItem,
-} from './composables/useOutsourceSendableList'
-import type {
-  ApprovedQuoteForSendItem,
-} from '@/types/outsource'
-import type { DirectOutsourceCandidateItem } from '@/types/directOutsource'
+} from './composables/useOutsourceSendableList';
+import type { ApprovedQuoteForSendItem } from '@/types/outsource';
+import type { DirectOutsourceCandidateItem } from '@/types/directOutsource';
 
 const props = defineProps<{
-  customers: readonly Customer[]
+  customers: readonly Customer[];
   /** 是否当前激活 tab（用于全局扫码：仅激活 tab 接收扫码） */
-  active: boolean
-}>()
+  active: boolean;
+}>();
 
-const emit = defineEmits<{
-  (e: 'sent'): void
-}>()
+const emit = defineEmits<(e: 'sent') => void>();
 
 const {
   // state
@@ -265,80 +264,138 @@ const {
   onConfirmBatchSend,
 } = useOutsourceSendableList({
   onSent: () => emit('sent'),
-})
+});
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 2026-08-27 T16：补 prop / minWidth / align + ElTag / 多根 / 分支类型列走 cellRender(PartListShell 同款)。
 // 「图号」列原本是 <span + el-tag> 双根 → 必须用 <div> 包一层再 h()（cellRender 只接受单 VNode）。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
-  { key: 'part_serial_no', label: '序列号', prop: 'part_serial_no', minWidth: 100, align: 'center' },
   {
-    key: 'part_drawing_no', label: '图号', prop: 'part_drawing_no', minWidth: 120, align: 'center',
+    key: 'part_serial_no',
+    label: '序列号',
+    prop: 'part_serial_no',
+    minWidth: 100,
+    align: 'center',
+  },
+  {
+    key: 'part_drawing_no',
+    label: '图号',
+    prop: 'part_drawing_no',
+    minWidth: 120,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as SendableItem
+      const r = row as SendableItem;
       // 2026-07-29 PR-fix-0.2.0 批次化：行=批次，图号旁显示批次号提示
       return h('div', { style: 'display: inline-flex; align-items: center;' }, [
         h('span', undefined, r.part_drawing_no ?? ''),
         r.batch_no
-          ? h(ElTag, { size: 'small', type: 'info', effect: 'plain', style: 'margin-left: 4px' },
-              () => `批次 ${r.batch_no}`)
+          ? h(
+              ElTag,
+              { size: 'small', type: 'info', effect: 'plain', style: 'margin-left: 4px' },
+              () => `批次 ${r.batch_no}`,
+            )
           : null,
-      ])
+      ]);
     },
   },
-  { key: 'part_name', label: '名称', prop: 'part_name', minWidth: 180, showOverflowTooltip: true, align: 'center' },
-  { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 80, align: 'right' },
-  { key: 'planned_delivery_date', label: '计划交期', prop: 'planned_delivery_date', minWidth: 120, align: 'center' },
   {
-    key: 'shelf_code', label: '源货架', minWidth: 80, align: 'center',
+    key: 'part_name',
+    label: '名称',
+    prop: 'part_name',
+    minWidth: 180,
+    showOverflowTooltip: true,
+    align: 'center',
+  },
+  { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 80, align: 'right' },
+  {
+    key: 'planned_delivery_date',
+    label: '计划交期',
+    prop: 'planned_delivery_date',
+    minWidth: 120,
+    align: 'center',
+  },
+  {
+    key: 'shelf_code',
+    label: '源货架',
+    minWidth: 80,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as SendableItem
+      const r = row as SendableItem;
       return r.shelf_code
         ? h(ElTag, { type: 'info', size: 'small' }, () => r.shelf_code)
-        : h('span', null, '—')
+        : h('span', null, '—');
     },
   },
   {
-    key: 'send_mode', label: '模式', minWidth: 90, align: 'center',
-    cellRender: ({ row }) => h(ElTag,
-      { type: (row as SendableItem).send_mode === 'DIRECT' ? 'success' : 'warning', size: 'small' },
-      () => (row as SendableItem).send_mode === 'DIRECT' ? '免审批' : '已批报价'),
+    key: 'send_mode',
+    label: '模式',
+    minWidth: 90,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h(
+        ElTag,
+        {
+          type: (row as SendableItem).send_mode === 'DIRECT' ? 'success' : 'warning',
+          size: 'small',
+        },
+        () => ((row as SendableItem).send_mode === 'DIRECT' ? '免审批' : '已批报价'),
+      ),
   },
-  { key: 'customer_path', label: '客户', prop: 'customer_path', minWidth: 160, showOverflowTooltip: true, align: 'center' },
   {
-    key: 'next_process_name', label: '下一道工序', minWidth: 140, showOverflowTooltip: true, align: 'center',
+    key: 'customer_path',
+    label: '客户',
+    prop: 'customer_path',
+    minWidth: 160,
+    showOverflowTooltip: true,
+    align: 'center',
+  },
+  {
+    key: 'next_process_name',
+    label: '下一道工序',
+    minWidth: 140,
+    showOverflowTooltip: true,
+    align: 'center',
     cellRender: ({ row }) => h('span', null, (row as SendableItem).next_process_name || '—'),
   },
   {
-    key: 'outsource_company_name', label: '外协公司', minWidth: 160, showOverflowTooltip: true, align: 'center',
+    key: 'outsource_company_name',
+    label: '外协公司',
+    minWidth: 160,
+    showOverflowTooltip: true,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as SendableItem
+      const r = row as SendableItem;
       if (r.send_mode === 'DIRECT') {
         // 2026-08-27 T16：SendableItem 是 discriminated union，DirectOutsourceCandidateItem / ApprovedQuoteForSendItem
         // 之间无字段重叠 → 走 unknown 二次 cast 满足 TS2352。
-        const direct = r as unknown as DirectOutsourceCandidateItem
-        const directLabel = direct.company_options.map((c) => c.name).join(' / ') || '—'
-        return h('span', null, directLabel)
+        const direct = r as unknown as DirectOutsourceCandidateItem;
+        const directLabel = direct.company_options.map((c) => c.name).join(' / ') || '—';
+        return h('span', null, directLabel);
       }
-      const approved = r as unknown as ApprovedQuoteForSendItem
-      return h('span', null, approved.outsource_company_name || '—')
+      const approved = r as unknown as ApprovedQuoteForSendItem;
+      return h('span', null, approved.outsource_company_name || '—');
     },
   },
   {
-    key: 'price', label: '单价(元)', minWidth: 100, align: 'right',
+    key: 'price',
+    label: '单价(元)',
+    minWidth: 100,
+    align: 'right',
     cellRender: ({ row }) => {
-      const r = row as SendableItem
-      if (r.send_mode === 'DIRECT') return h('span', null, '—')
-      const approved = r as unknown as ApprovedQuoteForSendItem
-      return h('span', null, String(approved.price))
+      const r = row as SendableItem;
+      if (r.send_mode === 'DIRECT') return h('span', null, '—');
+      const approved = r as unknown as ApprovedQuoteForSendItem;
+      return h('span', null, String(approved.price));
     },
   },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_send_receive_sendable' })
-const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_sendable' })
+];
+const columnVisibility = useColumnVisibility(columnDefs, {
+  listKey: 'outsource_send_receive_sendable',
+});
+const drag = useColumnDrag(columnDefs, { listKey: 'outsource_send_receive_sendable' });
 // 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
-const tableRef = ref()
+const tableRef = ref();
 
 // 持久化恢复（与原 shell onMounted 等价）
 // 2026-08-31 双实例修复：pageSize 不再持久化，每次进入视图从 defaultPageSize（20）起算。
@@ -346,39 +403,39 @@ const tableRef = ref()
 // `sendablePagedRef.value.pageSize.value = N` 实际写入 number.value 抛 TypeError。
 onMounted(() => {
   // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
-  drag.applyDrag(tableRef)
+  drag.applyDrag(tableRef);
 
-  const persisted = restore()
+  const persisted = restore();
   if (persisted && persisted.sendableFilter) {
-    Object.assign(sendableFilter, persisted.sendableFilter as Partial<typeof sendableFilter>)
+    Object.assign(sendableFilter, persisted.sendableFilter as Partial<typeof sendableFilter>);
   }
-})
+});
 
 // 全局扫码监听：仅当本 tab 是 active 时处理。
 // T12 决策：扫码订阅放本组件内（tab 级别），避免与 composable 实例错位
 // （shell 不能直接持有 useOutsourceSendableList，否则会跟 tab 内的实例 state 隔离）。
-const { onScan: onGlobalScan } = useBarcodeScanner()
-let unsubScan: (() => void) | null = null
+const { onScan: onGlobalScan } = useBarcodeScanner();
+let unsubScan: (() => void) | null = null;
 
 onMounted(() => {
   unsubScan = onGlobalScan((code) => {
     if (props.active) {
-      void handleScannedSerialForSend(code)
+      void handleScannedSerialForSend(code);
     }
-  })
-})
+  });
+});
 
 onBeforeUnmount(() => {
   if (unsubScan) {
-    unsubScan()
-    unsubScan = null
+    unsubScan();
+    unsubScan = null;
   }
-})
+});
 
 // expose refresh 给 shell 用于初始化 / 联动刷新
 defineExpose({
   refresh: refreshSendable,
-})
+});
 </script>
 
 <style lang="scss" scoped>

@@ -35,7 +35,9 @@
 
     <div class="content">
       <h2 class="state-title">请选择报工操作</h2>
-      <div v-if="shelfLoading" style="text-align:center;padding:40px 0;color:#909399">加载货架信息...</div>
+      <div v-if="shelfLoading" style="text-align: center; padding: 40px 0; color: #909399">
+        加载货架信息...
+      </div>
       <div v-else class="action-grid" :class="{ 'action-grid--two': !showInspect }">
         <el-button
           v-if="showPickUp"
@@ -76,72 +78,62 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeMount, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import {
-  Avatar,
-  Back,
-  Box,
-  Check,
-  Refresh,
-} from '@element-plus/icons-vue'
-import {
-  ACTION_LABEL,
-  useScanSession,
-  type WorkAction,
-} from '@/composables/useScanSession'
-import { useActiveShelfSelection } from '@/composables/useActiveShelfSelection'
+import { computed, onBeforeMount, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import { Avatar, Back, Box, Check, Refresh } from '@element-plus/icons-vue';
+import { ACTION_LABEL, useScanSession, type WorkAction } from '@/composables/useScanSession';
+import { useActiveShelfSelection } from '@/composables/useActiveShelfSelection';
 
-const router = useRouter()
-const { worker, setAction, reset, requireWorker } = useScanSession()
-const shelfSel = useActiveShelfSelection()
+const router = useRouter();
+const { worker, setAction, reset, requireWorker } = useScanSession();
+const shelfSel = useActiveShelfSelection();
 
-const shelfLoading = ref(true)
+const shelfLoading = ref(true);
 
 // 2026-07-13：boundZones = 绑定架 zone 的并集，决定按钮显隐
 // - 含 PRODUCTION → PICK_UP + RETURN
 // - 含 INSPECTION → INSPECT
 const boundZones = computed<Set<string>>(() => {
-  const s = new Set<string>()
+  const s = new Set<string>();
   for (const o of shelfSel.options.value) {
     if (o.zone === 'PRODUCTION' || o.zone === 'INSPECTION') {
-      s.add(o.zone)
+      s.add(o.zone);
     }
   }
-  return s
-})
-const showPickUp = computed<boolean>(() => boundZones.value.has('PRODUCTION'))
-const showReturn = computed<boolean>(() => boundZones.value.has('PRODUCTION'))
-const showInspect = computed<boolean>(() => boundZones.value.has('INSPECTION'))
+  return s;
+});
+const showPickUp = computed<boolean>(() => boundZones.value.has('PRODUCTION'));
+const showReturn = computed<boolean>(() => boundZones.value.has('PRODUCTION'));
+const showInspect = computed<boolean>(() => boundZones.value.has('INSPECTION'));
 
 onBeforeMount(async () => {
-  if (!requireWorker(router)) return
+  if (!requireWorker(router)) return;
   // 拉候选架（绑定架详情；wildcard → 空；多架 → 等用户选）
-  await shelfSel.initShelves()
-  shelfLoading.value = false
-})
+  await shelfSel.initShelves();
+  shelfLoading.value = false;
+});
 
 function selectAction(a: WorkAction): void {
-  setAction(a)
-  ElMessage.success(`已选择: ${ACTION_LABEL[a]}`)
+  setAction(a);
+  ElMessage.success(`已选择: ${ACTION_LABEL[a]}`);
   // PICK_UP 走「按工种选件」新流程 → /scan/pick
   // RETURN 走「按工人列持有件 → 选件 → 选工序 → 选架」新流程 → /scan/return
   // INSPECT 走「按工人列持有件 → 选件 → 扫码确认 → 选品检架」新流程 → /scan/inspect
   // 送货入口已移到 MANAGER/INSPECTOR 的「送货」菜单（/delivery-dispatch）。
   if (a === 'PICK_UP') {
-    void router.push('/scan/pick')
+    void router.push('/scan/pick');
   } else if (a === 'RETURN') {
-    void router.push('/scan/return')
+    void router.push('/scan/return');
   } else if (a === 'INSPECT') {
-    void router.push('/scan/inspect')
+    void router.push('/scan/inspect');
   }
 }
 
 function rescanBadge(): void {
   // 不再需要清客户端缓存：findWorkerByBadge 直接打后端，结果强一致。
-  reset()
-  void router.replace('/scan/badge')
+  reset();
+  void router.replace('/scan/badge');
 }
 </script>
 

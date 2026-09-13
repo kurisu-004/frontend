@@ -1,55 +1,50 @@
 // 后端工人 API（走 @/api/http 统一 axios 客户端）。
 
-import { ApiError, api, cleanParams } from '@/api/http'
+import { ApiError, api, cleanParams } from '@/api/http';
 import type {
   Worker,
   WorkerCreatePayload,
   WorkerListResult,
   WorkerUpdatePayload,
-} from '@/types/worker'
+} from '@/types/worker';
 
 export interface ListWorkersParams {
-  name_like?: string
-  is_active?: boolean
-  limit?: number
-  offset?: number
+  name_like?: string;
+  is_active?: boolean;
+  limit?: number;
+  offset?: number;
 }
 
-export async function listWorkers(
-  params: ListWorkersParams = {},
-): Promise<WorkerListResult> {
+export async function listWorkers(params: ListWorkersParams = {}): Promise<WorkerListResult> {
   const resp = await api.get<WorkerListResult>('/workers', {
     params: cleanParams(params),
-  })
-  return resp.data
+  });
+  return resp.data;
 }
 
 export async function getWorker(id: string): Promise<Worker> {
-  const resp = await api.get<Worker>(`/workers/${id}`)
-  return resp.data
+  const resp = await api.get<Worker>(`/workers/${id}`);
+  return resp.data;
 }
 
 export async function createWorker(payload: WorkerCreatePayload): Promise<Worker> {
-  const resp = await api.post<Worker>('/workers', payload)
-  return resp.data
+  const resp = await api.post<Worker>('/workers', payload);
+  return resp.data;
 }
 
-export async function updateWorker(
-  id: string,
-  payload: WorkerUpdatePayload,
-): Promise<Worker> {
-  const resp = await api.post<Worker>(`/workers/${id}/update`, payload)
-  return resp.data
+export async function updateWorker(id: string, payload: WorkerUpdatePayload): Promise<Worker> {
+  const resp = await api.post<Worker>(`/workers/${id}/update`, payload);
+  return resp.data;
 }
 
 export async function deactivateWorker(id: string): Promise<Worker> {
-  const resp = await api.post<Worker>(`/workers/${id}/deactivate`)
-  return resp.data
+  const resp = await api.post<Worker>(`/workers/${id}/deactivate`);
+  return resp.data;
 }
 
 export async function reactivateWorker(id: string): Promise<Worker> {
-  const resp = await api.post<Worker>(`/workers/${id}/reactivate`)
-  return resp.data
+  const resp = await api.post<Worker>(`/workers/${id}/reactivate`);
+  return resp.data;
 }
 
 // ============ 工牌扫码定位 ============
@@ -64,8 +59,8 @@ export async function reactivateWorker(id: string): Promise<Worker> {
 
 // 后端错误码：20201 = BIZ_WORKER_NOT_FOUND, 20202 = BIZ_WORKER_INACTIVE。
 // 这两种是扫描时的"未识别"业务态，前端按 null 处理；其他错误原样抛出。
-const WORKER_NOT_FOUND = 20201
-const WORKER_INACTIVE = 20202
+const WORKER_NOT_FOUND = 20201;
+const WORKER_INACTIVE = 20202;
 
 /**
  * 按工牌码精确匹配工人。
@@ -74,18 +69,18 @@ const WORKER_INACTIVE = 20202
  * - 网络 / 其他错误 → 原样抛 ApiError。
  */
 export async function findWorkerByBadge(badgeCode: string): Promise<Worker | null> {
-  const code = badgeCode.trim()
-  if (!code) return null
+  const code = badgeCode.trim();
+  if (!code) return null;
 
   try {
     const resp = await api.post<Worker>('/workers/verify-badge', {
       badge_code: code,
-    })
-    return resp.data
+    });
+    return resp.data;
   } catch (e) {
     if (e instanceof ApiError && (e.code === WORKER_NOT_FOUND || e.code === WORKER_INACTIVE)) {
-      return null
+      return null;
     }
-    throw e
+    throw e;
   }
 }

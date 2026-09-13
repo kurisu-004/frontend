@@ -19,31 +19,28 @@
   - 事件流 timeline（轻量、本地，留在 shell）
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import { ElMessage } from 'element-plus';
 
-import PartPickerDialog from '@/components/delivery/PartPickerDialog.vue'
-import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue'
-import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue'
-import DeliverySubmitCandidateDialog from '@/components/delivery/DeliverySubmitCandidateDialog.vue'
-import { formatNoteEventLabel } from '@/types/deliveryNote'
-import type { AddPartsItem } from '@/api/deliveryNote'
-import type {
-  BulkPassFailure,
-  BulkPassItem,
-} from '@/composables/useBulkPassInspection'
-import DeliveryNoteHeaderCard from './components/DeliveryNoteHeaderCard.vue'
-import DeliveryNoteLineItemsTable from './components/DeliveryNoteLineItemsTable.vue'
-import DeliveryNoteDispatchControls from './components/DeliveryNoteDispatchControls.vue'
-import { useDeliveryNoteDetail } from './composables/useDeliveryNoteDetail'
-import { useDeliveryNoteActions } from './composables/useDeliveryNoteActions'
+import PartPickerDialog from '@/components/delivery/PartPickerDialog.vue';
+import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue';
+import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue';
+import DeliverySubmitCandidateDialog from '@/components/delivery/DeliverySubmitCandidateDialog.vue';
+import { formatNoteEventLabel } from '@/types/deliveryNote';
+import type { AddPartsItem } from '@/api/deliveryNote';
+import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection';
+import DeliveryNoteHeaderCard from './components/DeliveryNoteHeaderCard.vue';
+import DeliveryNoteLineItemsTable from './components/DeliveryNoteLineItemsTable.vue';
+import DeliveryNoteDispatchControls from './components/DeliveryNoteDispatchControls.vue';
+import { useDeliveryNoteDetail } from './composables/useDeliveryNoteDetail';
+import { useDeliveryNoteActions } from './composables/useDeliveryNoteActions';
 
-const route = useRoute()
+const route = useRoute();
 
-const noteId = computed<string>(() => String(route.params.id ?? ''))
+const noteId = computed<string>(() => String(route.params.id ?? ''));
 
-const detail = useDeliveryNoteDetail(noteId)
+const detail = useDeliveryNoteDetail(noteId);
 
 // ============ 业务操作（绑到 detail 的 state）============
 const actions = useDeliveryNoteActions({
@@ -63,71 +60,72 @@ const actions = useDeliveryNoteActions({
   editDeliveryDate: detail.editDeliveryDate,
   fetchDetail: detail.fetchDetail,
   setSelectedItemIds: detail.setSelectedItemIds,
-})
+});
 
 // ============ UI state（dialog 可见性由 shell 持有）============
-const addDialogOpen = ref(false)
-const previewVisible = ref(false)
-const previewMode = ref<'note' | 'label'>('note')
-const submitDialogVisible = ref(false)
+const addDialogOpen = ref(false);
+const previewVisible = ref(false);
+const previewMode = ref<'note' | 'label'>('note');
+const submitDialogVisible = ref(false);
 
 // ============ 事件流 timeline（数据已在 detail.events）============
 
 // ============ 事件处理 ============
 function onBack(): void {
-  history.length > 1 ? history.back() : window.location.assign('/delivery-notes')
+  history.length > 1 ? history.back() : window.location.assign('/delivery-notes');
 }
 
 function openAddDialog(): void {
-  addDialogOpen.value = true
+  addDialogOpen.value = true;
 }
 
 async function onPickerSubmit(items: AddPartsItem[]): Promise<void> {
-  const ok = await actions.onAddParts(items)
-  if (ok) addDialogOpen.value = false
+  const ok = await actions.onAddParts(items);
+  if (ok) addDialogOpen.value = false;
 }
 
 function onPrint(): void {
-  previewMode.value = 'note'
-  previewVisible.value = true
+  previewMode.value = 'note';
+  previewVisible.value = true;
 }
 
 function onPrintLabels(): void {
-  previewMode.value = 'label'
-  previewVisible.value = true
+  previewMode.value = 'label';
+  previewVisible.value = true;
 }
 
 async function onSubmit(): Promise<void> {
   // 先调 actions.onSubmit；如果返回 false + 有未送检件 → 打开批量过检弹窗；
   // 其它情况 actions.onSubmit 已经处理完了。
-  const ok = await actions.onSubmit()
+  const ok = await actions.onSubmit();
   if (!ok && detail.uninspectedItems.value.length > 0) {
-    submitDialogVisible.value = true
+    submitDialogVisible.value = true;
   }
 }
 
 async function onSubmitDialogPassSuccess(): Promise<void> {
-  submitDialogVisible.value = false
-  await actions.onSubmitDialogPassSuccess()
+  submitDialogVisible.value = false;
+  await actions.onSubmitDialogPassSuccess();
 }
 
-function onSubmitDialogPassPartial(
-  result: { passed: BulkPassItem[]; failed: BulkPassFailure[] },
-): void {
-  actions.onSubmitDialogPassPartial(result)
+function onSubmitDialogPassPartial(result: {
+  passed: BulkPassItem[];
+  failed: BulkPassFailure[];
+}): void {
+  actions.onSubmitDialogPassPartial(result);
 }
 
 // ============ 生命周期 ============
 watch(noteId, () => {
   void detail.fetchDetail().catch((e: Error) => {
-    ElMessage.error(e.message ?? '加载失败')
-  })
-})
+    ElMessage.error(e.message ?? '加载失败');
+  });
+});
 onMounted(() => {
   void detail.fetchDetail().catch((e: Error) => {
-    ElMessage.error(e.message ?? '加载失败')
-  })
-})
+    ElMessage.error(e.message ?? '加载失败');
+  });
+});
 </script>
 
 <template>
@@ -232,10 +230,14 @@ onMounted(() => {
 </template>
 
 <style lang="scss" scoped>
-.delivery-note-detail { padding: 16px; }
+.delivery-note-detail {
+  padding: 16px;
+}
 .line-items-card,
 .actions-card,
-.events-card { margin-bottom: 16px; }
+.events-card {
+  margin-bottom: 16px;
+}
 .event-note {
   font-size: 13px;
   color: #666;

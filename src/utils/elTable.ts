@@ -7,24 +7,24 @@
 // 集中 selector 在这里：避免 spread 到各 composable 内部；改 EP 版本时只动一处。
 
 /** el-table 实际渲染出的 tbody selector（EP 内部结构约定）。 */
-const EL_TABLE_TBODY_SELECTOR = '.el-table__body-wrapper .el-table__body > tbody'
+const EL_TABLE_TBODY_SELECTOR = '.el-table__body-wrapper .el-table__body > tbody';
 
 /** el-table 实际渲染出的 thead selector（EP 内部结构约定）。
  *  2026-08-27 修订：仅作为「表头行容器」解析的入口；列拖动绑 tr，不再绑 thead。 */
-const EL_TABLE_THEAD_SELECTOR = '.el-table__header-wrapper table thead'
+const EL_TABLE_THEAD_SELECTOR = '.el-table__header-wrapper table thead';
 
 /** 2026-08-28 新增：表头区域外层 div。useColumnDrag 在它身上挂 MutationObserver，
  *  监听数据从「空数组」变为「有数据」时 EP 重建表头 DOM 的瞬间，避免一次性绑定失效。 */
-const EL_TABLE_HEADER_WRAPPER_SELECTOR = '.el-table__header-wrapper'
+const EL_TABLE_HEADER_WRAPPER_SELECTOR = '.el-table__header-wrapper';
 
 /** 消费方在表头叶子列 <th> 上挂的拖拽手柄类名（与 useColumnDrag.handle 默认值一致）。 */
-const EL_TABLE_DRAG_HANDLE_CLASS = '.col-drag-handle'
+const EL_TABLE_DRAG_HANDLE_CLASS = '.col-drag-handle';
 
 /** 从 el-table 组件实例（或其 $el 容器）解析出 EP 渲染的 tbody DOM 节点。
  *  找不到返回 null（表格未挂载 / 容器已卸载）。 */
 export function findElTableTbody(el: HTMLElement | null): HTMLElement | null {
-  if (!el) return null
-  return el.querySelector(EL_TABLE_TBODY_SELECTOR) as HTMLElement | null
+  if (!el) return null;
+  return el.querySelector(EL_TABLE_TBODY_SELECTOR) as HTMLElement | null;
 }
 
 /** 从 el-table 组件实例（或其 $el 容器）解析出 EP 渲染的「表头外层 wrapper」DOM 节点。
@@ -32,8 +32,8 @@ export function findElTableTbody(el: HTMLElement | null): HTMLElement | null {
  *  2026-08-28 新增：useColumnDrag 自愈重绑用 — 在 wrapper 上挂 MutationObserver
  *  监听 EP 重建表头 DOM 的瞬间。找不到返回 null（表格未挂载 / 容器已卸载）。 */
 export function findElTableHeaderWrapper(el: HTMLElement | null): HTMLElement | null {
-  if (!el) return null
-  return el.querySelector(EL_TABLE_HEADER_WRAPPER_SELECTOR) as HTMLElement | null
+  if (!el) return null;
+  return el.querySelector(EL_TABLE_HEADER_WRAPPER_SELECTOR) as HTMLElement | null;
 }
 
 /** 从 el-table 组件实例（或其 $el 容器）解析出 EP 渲染的「表头行」<tr> DOM 节点。
@@ -50,12 +50,12 @@ export function findElTableHeaderWrapper(el: HTMLElement | null): HTMLElement | 
  *  4. 都找不到返回 null（表格未挂载 / 容器已卸载 / 列被全隐藏）。
  */
 export function findElTableHeaderRow(el: HTMLElement | null): HTMLElement | null {
-  if (!el) return null
-  const thead = el.querySelector(EL_TABLE_THEAD_SELECTOR) as HTMLElement | null
-  if (!thead) return null
-  const rows = thead.querySelectorAll('tr')
+  if (!el) return null;
+  const thead = el.querySelector(EL_TABLE_THEAD_SELECTOR) as HTMLElement | null;
+  if (!thead) return null;
+  const rows = thead.querySelectorAll('tr');
   for (const tr of Array.from(rows)) {
-    if (tr.querySelector(EL_TABLE_DRAG_HANDLE_CLASS)) return tr as HTMLElement
+    if (tr.querySelector(EL_TABLE_DRAG_HANDLE_CLASS)) return tr as HTMLElement;
   }
-  return (rows[0] as HTMLElement | undefined) ?? null
+  return (rows[0] as HTMLElement | undefined) ?? null;
 }

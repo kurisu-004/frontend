@@ -13,11 +13,7 @@
       >
         <el-carousel-item v-for="(page, pageIdx) in shelfPages" :key="pageIdx">
           <div class="shelf-page">
-            <div
-              v-for="g in page"
-              :key="g.shelf_id"
-              class="shelf-card"
-            >
+            <div v-for="g in page" :key="g.shelf_id" class="shelf-card">
               <div class="shelf-card-head">
                 <span class="shelf-code">{{ g.shelf_code }}</span>
                 <span class="shelf-name">{{ g.shelf_name }}</span>
@@ -34,12 +30,15 @@
                       :class="['item-serial', { 'is-clickable': canOpenPartDetail }]"
                       :title="canOpenPartDetail ? '查看详情' : ''"
                       @click="canOpenPartDetail && goPartDetail(item.id)"
-                    >{{ item.serial_no || '—' }}</span>
+                      >{{ item.serial_no || '—' }}</span
+                    >
                     <span class="item-name" :title="item.name">{{ item.name }}</span>
                     <span class="item-process" :title="item.next_process_name || ''">
                       {{ item.next_process_name || '—' }}
                     </span>
-                    <span class="item-due">{{ formatDashboardDeliveryDate(item.planned_delivery_date) }}</span>
+                    <span class="item-due">{{
+                      formatDashboardDeliveryDate(item.planned_delivery_date)
+                    }}</span>
                   </div>
                 </template>
                 <div v-else class="shelf-empty">空</div>
@@ -54,22 +53,23 @@
     <section class="inprocess-area">
       <div class="inprocess-card">
         <div class="inprocess-head">
-          <span class="inprocess-title"><el-icon class="title-icon"><Tools /></el-icon>正在加工</span>
+          <span class="inprocess-title"
+            ><el-icon class="title-icon"><Tools /></el-icon>正在加工</span
+          >
           <span class="inprocess-count">{{ workerParts.length }} 件</span>
         </div>
         <div class="inprocess-items">
           <template v-if="workerGroups.length > 0">
-            <div
-              v-for="group in workerGroups"
-              :key="group.key"
-              class="worker-group"
-            >
+            <div v-for="group in workerGroups" :key="group.key" class="worker-group">
               <div class="worker-name">{{ group.worker_name || '未记录' }}</div>
               <div class="worker-chips">
                 <span
                   v-for="item in group.items"
                   :key="item.batch_id || item.id"
-                  :class="['worker-chip', { urgent: item.is_urgent, 'is-clickable': canOpenPartDetail }]"
+                  :class="[
+                    'worker-chip',
+                    { urgent: item.is_urgent, 'is-clickable': canOpenPartDetail },
+                  ]"
                   :title="canOpenPartDetail ? '查看详情' : ''"
                   @click="canOpenPartDetail && goPartDetail(item.id)"
                 >
@@ -86,78 +86,75 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { Tools } from '@element-plus/icons-vue'
-import { onDashboardSnapshot } from '@/api/dashboard'
-import { usePermissions } from '@/composables/usePermissions'
-import type {
-  DashboardPartItem,
-  DashboardShelfGroup,
-  DashboardSnapshot,
-} from '@/types/dashboard'
-import { formatDashboardDeliveryDate } from '@/utils/deliveryDate'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { Tools } from '@element-plus/icons-vue';
+import { onDashboardSnapshot } from '@/api/dashboard';
+import { usePermissions } from '@/composables/usePermissions';
+import type { DashboardPartItem, DashboardShelfGroup, DashboardSnapshot } from '@/types/dashboard';
+import { formatDashboardDeliveryDate } from '@/utils/deliveryDate';
 
-const router = useRouter()
-const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions()
+const router = useRouter();
+const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
 
 // 工控机账号（纯 SHELF_ACCOUNT）禁跳详情；与后端 GET /parts/{id} 读权限对齐
 const canOpenPartDetail = computed(
   () => isManager.value || isClerk.value || isInspector.value || isCncProgrammer.value,
-)
+);
 
 function goPartDetail(id: string): void {
-  router.push(`/parts/${id}`)
+  router.push(`/parts/${id}`);
 }
 
-const shelfGroups = ref<DashboardShelfGroup[]>([])
-const workerParts = ref<DashboardSnapshot['data']['in_process']>([])
+const shelfGroups = ref<DashboardShelfGroup[]>([]);
+const workerParts = ref<DashboardSnapshot['data']['in_process']>([]);
 
-let offSnap: (() => void) | null = null
+let offSnap: (() => void) | null = null;
 
 function applySnapshot(snap: DashboardSnapshot): void {
-  shelfGroups.value = snap.data.on_production_shelves
-  workerParts.value = snap.data.in_process
+  shelfGroups.value = snap.data.on_production_shelves;
+  workerParts.value = snap.data.in_process;
 }
 
 // ============ 货架轮播分页 ============
 const shelfPages = computed(() => {
-  const groups = shelfGroups.value
-  const pages: DashboardShelfGroup[][] = []
+  const groups = shelfGroups.value;
+  const pages: DashboardShelfGroup[][] = [];
   for (let i = 0; i < groups.length; i += 2) {
-    pages.push(groups.slice(i, i + 2))
+    pages.push(groups.slice(i, i + 2));
   }
-  return pages
-})
+  return pages;
+});
 
 // ============ 工人分组 ============
 interface WorkerGroup {
-  key: string
-  worker_name: string | null
-  items: DashboardPartItem[]
+  key: string;
+  worker_name: string | null;
+  items: DashboardPartItem[];
 }
 
 const workerGroups = computed(() => {
-  const map = new Map<string, WorkerGroup>()
+  const map = new Map<string, WorkerGroup>();
   for (const p of workerParts.value) {
-    const key = String(p.current_holder_id ?? p.worker_name ?? 'unknown')
-    const existing = map.get(key)
+    const key = String(p.current_holder_id ?? p.worker_name ?? 'unknown');
+    const existing = map.get(key);
     if (existing) {
-      existing.items.push(p)
+      existing.items.push(p);
     } else {
-      map.set(key, { key, worker_name: p.worker_name ?? null, items: [p] })
+      map.set(key, { key, worker_name: p.worker_name ?? null, items: [p] });
     }
   }
-  return Array.from(map.values())
-})
+  return Array.from(map.values());
+});
 
 onMounted(() => {
-  offSnap = onDashboardSnapshot(applySnapshot)
-})
+  offSnap = onDashboardSnapshot(applySnapshot);
+});
 
 onBeforeUnmount(() => {
-  offSnap?.(); offSnap = null
-})
+  offSnap?.();
+  offSnap = null;
+});
 </script>
 
 <style lang="scss" scoped>
@@ -226,7 +223,14 @@ onBeforeUnmount(() => {
   color: var(--primary-color);
   font-family: 'SF Mono', Menlo, Consolas, monospace;
 }
-.shelf-name { font-size: 13px; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shelf-name {
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .shelf-count {
   font-size: 12px;
   color: var(--text-secondary);
@@ -243,14 +247,18 @@ onBeforeUnmount(() => {
 }
 .shelf-item {
   display: grid;
-  grid-template-columns: 96px 1.4fr 1fr 80px;   /* 序号 | 名称 | 下一工序 | 交期 */
+  grid-template-columns: 96px 1.4fr 1fr 80px; /* 序号 | 名称 | 下一工序 | 交期 */
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
   font-size: 13px;
   border-bottom: 1px dashed #f0f0f0;
-  &.urgent { background: #fde2e2; }
-  &:last-child { border-bottom: none; }
+  &.urgent {
+    background: #fde2e2;
+  }
+  &:last-child {
+    border-bottom: none;
+  }
 }
 .item-serial {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
@@ -362,7 +370,10 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
-  &.urgent { background: #fde2e2; color: #f56c6c; }
+  &.urgent {
+    background: #fde2e2;
+    color: #f56c6c;
+  }
 }
 .inprocess-empty {
   width: 100%;
@@ -389,60 +400,108 @@ onBeforeUnmount(() => {
 // 视距 5-8m，ppi ≈ 40。×2 起点保证「抬头就能看清」最小字号 26px。
 // ============================================================
 @media (min-width: 1600px) {
-  .inprocess-title                     { font-size: 32px; }
-  .shelf-code                          { font-size: 28px; }
-  .shelf-name                          { font-size: 26px; }
-  .shelf-count, .inprocess-count       { font-size: 22px; padding: 4px 14px; }
-  .shelf-item                          {
+  .inprocess-title {
+    font-size: 32px;
+  }
+  .shelf-code {
+    font-size: 28px;
+  }
+  .shelf-name {
+    font-size: 26px;
+  }
+  .shelf-count,
+  .inprocess-count {
+    font-size: 22px;
+    padding: 4px 14px;
+  }
+  .shelf-item {
     font-size: 26px;
     padding: 14px 20px;
     gap: 12px;
     grid-template-columns: 140px 1.4fr 1fr 100px;
   }
-  .item-serial                         { font-size: 28px; }
-  .item-process                        { font-size: 26px; }
-  .item-due                            { font-size: 24px; }
-  .shelf-empty, .shelves-empty         { font-size: 26px; }
-  .worker-group                        {
+  .item-serial {
+    font-size: 28px;
+  }
+  .item-process {
+    font-size: 26px;
+  }
+  .item-due {
+    font-size: 24px;
+  }
+  .shelf-empty,
+  .shelves-empty {
+    font-size: 26px;
+  }
+  .worker-group {
     padding: 10px 20px;
     gap: 12px;
     border-radius: 10px;
   }
-  .worker-name                         { font-size: 24px; }
-  .worker-chip                         {
+  .worker-name {
+    font-size: 24px;
+  }
+  .worker-chip {
     font-size: 22px;
     padding: 4px 12px;
     border-radius: 6px;
   }
-  .inprocess-empty                     { font-size: 24px; padding: 32px 0; }
+  .inprocess-empty {
+    font-size: 24px;
+    padding: 32px 0;
+  }
 }
 
 @media (min-width: 2400px) {
-  .inprocess-title                     { font-size: 40px; }
-  .shelf-code                          { font-size: 34px; }
-  .shelf-name                          { font-size: 32px; }
-  .shelf-count, .inprocess-count       { font-size: 28px; padding: 6px 18px; }
-  .shelf-item                          {
+  .inprocess-title {
+    font-size: 40px;
+  }
+  .shelf-code {
+    font-size: 34px;
+  }
+  .shelf-name {
+    font-size: 32px;
+  }
+  .shelf-count,
+  .inprocess-count {
+    font-size: 28px;
+    padding: 6px 18px;
+  }
+  .shelf-item {
     font-size: 32px;
     padding: 18px 28px;
     gap: 16px;
     grid-template-columns: 180px 1.4fr 1fr 120px;
   }
-  .item-serial                         { font-size: 34px; }
-  .item-process                        { font-size: 32px; }
-  .item-due                            { font-size: 30px; }
-  .shelf-empty, .shelves-empty         { font-size: 32px; }
-  .worker-group                        {
+  .item-serial {
+    font-size: 34px;
+  }
+  .item-process {
+    font-size: 32px;
+  }
+  .item-due {
+    font-size: 30px;
+  }
+  .shelf-empty,
+  .shelves-empty {
+    font-size: 32px;
+  }
+  .worker-group {
     padding: 14px 28px;
     gap: 16px;
     border-radius: 12px;
   }
-  .worker-name                         { font-size: 30px; }
-  .worker-chip                         {
+  .worker-name {
+    font-size: 30px;
+  }
+  .worker-chip {
     font-size: 28px;
     padding: 6px 16px;
     border-radius: 8px;
   }
-  .inprocess-empty                     { font-size: 30px; padding: 48px 0; }
+  .inprocess-empty {
+    font-size: 30px;
+    padding: 48px 0;
+  }
 }
 </style>

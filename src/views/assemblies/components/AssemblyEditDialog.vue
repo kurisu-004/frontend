@@ -23,12 +23,7 @@
     @update:model-value="(v: boolean) => emit('update:visible', v)"
     @open="emit('open')"
   >
-    <el-form
-      ref="formRef"
-      :model="form"
-      :rules="rules"
-      label-width="100px"
-    >
+    <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
       <el-form-item label="总图图号" prop="drawing_no">
         <el-input v-model="form.drawing_no" placeholder="例如：E42FX1020107101" />
       </el-form-item>
@@ -91,69 +86,63 @@
     </el-form>
     <template #footer>
       <el-button @click="emit('update:visible', false)">取消</el-button>
-      <el-button
-        type="primary"
-        :loading="submitting"
-        @click="onSubmit"
-      >
-        保存
-      </el-button>
+      <el-button type="primary" :loading="submitting" @click="onSubmit"> 保存 </el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import type { FormInstance } from 'element-plus'
-import { useDialogSize } from '@/composables/useDialogSize'
-import type { Customer } from '@/api/customer'
-import type { Applicant } from '@/types/applicant'
+import { ref } from 'vue';
+import type { FormInstance } from 'element-plus';
+import { useDialogSize } from '@/composables/useDialogSize';
+import type { Customer } from '@/api/customer';
+import type { Applicant } from '@/types/applicant';
 import {
   ASSEMBLY_EDIT_RULES,
   formatCustomerOptionLabel,
   type AssemblyEditForm,
-} from '../composables/useAssemblyDetail'
-import type { AssemblyUpdatePayload } from '@/types/assembly'
+} from '../composables/useAssemblyDetail';
+import type { AssemblyUpdatePayload } from '@/types/assembly';
 
 interface Props {
-  visible: boolean
-  submitting: boolean
-  customers: Customer[]
+  visible: boolean;
+  submitting: boolean;
+  customers: Customer[];
   /** form 数据；shell 在 open 前已通过 composable.populateEditForm 填好。 */
-  form: AssemblyEditForm
+  form: AssemblyEditForm;
   /** applicant autocomplete 的查询函数（直接绑给 :fetch-suggestions） */
-  queryApplicants: (qs: string, cb: (items: Applicant[]) => void) => void
+  queryApplicants: (qs: string, cb: (items: Applicant[]) => void) => void;
 }
 
-const props = defineProps<Props>()
+const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:visible', v: boolean): void
-  (e: 'submit', payload: AssemblyUpdatePayload): void
+  (e: 'update:visible', v: boolean): void;
+  (e: 'submit', payload: AssemblyUpdatePayload): void;
   /** open 时 shell 调 loadLeafCustomers（composable 注入） */
-  (e: 'open'): void
-}>()
+  (e: 'open'): void;
+}>();
 
-const dlg = useDialogSize({ desktopWidth: 640 })
+const dlg = useDialogSize({ desktopWidth: 640 });
 
-const formRef = ref<FormInstance>()
-const rules = ASSEMBLY_EDIT_RULES
+const formRef = ref<FormInstance>();
+const rules = ASSEMBLY_EDIT_RULES;
 
 function onApplicantSelected(applicant: { id?: string; name?: string }): void {
   if (applicant?.id != null) {
-    props.form.applicant_id = String(applicant.id)
+    props.form.applicant_id = String(applicant.id);
   }
 }
 
 async function onSubmit(): Promise<void> {
-  if (!formRef.value) return
+  if (!formRef.value) return;
   try {
-    await formRef.value.validate()
+    await formRef.value.validate();
   } catch {
-    return
+    return;
   }
   // 把表单内部空字符串 / falsy 还原成 payload schema 的 null / undefined 语义。
-  const f = props.form
+  const f = props.form;
   const payload: AssemblyUpdatePayload = {
     drawing_no: f.drawing_no,
     name: f.name,
@@ -164,8 +153,8 @@ async function onSubmit(): Promise<void> {
     planned_delivery_date: f.planned_delivery_date,
     actual_delivery_date: f.actual_delivery_date || null,
     is_urgent: f.is_urgent,
-  }
-  emit('submit', payload)
+  };
+  emit('submit', payload);
 }
 </script>
 

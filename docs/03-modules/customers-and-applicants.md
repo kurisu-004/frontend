@@ -10,50 +10,51 @@
 
 ## 一、入口与路由
 
-| Path | Name | menuCode | 守卫 | 备注 |
-|---|---|---|---|---|
-| `/customers` | `CustomerList` | `customers_list` | requireAuth | 侧栏客户管理 → 客户一览 |
+| Path          | Name            | menuCode          | 守卫        | 备注                      |
+| ------------- | --------------- | ----------------- | ----------- | ------------------------- |
+| `/customers`  | `CustomerList`  | `customers_list`  | requireAuth | 侧栏客户管理 → 客户一览   |
 | `/applicants` | `ApplicantList` | `applicants_list` | requireAuth | 侧栏客户管理 → 申请人一览 |
 
 两路由均在 `MainLayout` 子树之下，路由定义在 `src/router/index.ts`。`menuCode` 与后端菜单表 `t_menu.code` 对齐——前置守卫 `allowByMenuCode`（DFS 在 `user.menus` 中查 code）即单一权限源，不通过的访问会被降级到菜单树首个可达 path。
 
 ## 二、关键页面
 
-| 文件 | 职责 |
-|---|---|
-| `src/views/customers/CustomerList.vue` | 客户树（L1 + L2 两级），el-tree + 节点 hover 操作（+ / 编辑 / 删除），新增根/叶弹窗含 `serial_prefix` 输入（L1 必填、L2 禁用继承父） |
-| `src/views/applicants/ApplicantList.vue` | 申请人平铺表格，按所属一级客户 + 姓名模糊筛选；新增/编辑 dialog 强制选 L1 根（不允许挂到 L2） |
+| 文件                                     | 职责                                                                                                                                 |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/views/customers/CustomerList.vue`   | 客户树（L1 + L2 两级），el-tree + 节点 hover 操作（+ / 编辑 / 删除），新增根/叶弹窗含 `serial_prefix` 输入（L1 必填、L2 禁用继承父） |
+| `src/views/applicants/ApplicantList.vue` | 申请人平铺表格，按所属一级客户 + 姓名模糊筛选；新增/编辑 dialog 强制选 L1 根（不允许挂到 L2）                                        |
 
 ## 三、主要 API 调用
 
 均走 v1 客户端（`src/api/http.ts` 的 `api` 实例，baseURL `/api/v1`），尚未切 v2。
 
-| 文件 | 关键端点 | 实例 | 后端契约 |
-|---|---|---|---|
-| `src/api/customer.ts` | `GET /customers`、`GET /customers/{id}`、`POST /customers`、`POST /customers/{id}/update`、`POST /customers/{id}/soft-delete` | `api` (v1) | 待迁移 v2 |
-| `src/api/applicant.ts` | `GET /applicants`、`GET /applicants/search`、`POST /applicants/bulk-get-or-create`、`GET/POST/applicants/{id}/...` | `api` (v1) | 待迁移 v2 |
+| 文件                   | 关键端点                                                                                                                      | 实例       | 后端契约  |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `src/api/customer.ts`  | `GET /customers`、`GET /customers/{id}`、`POST /customers`、`POST /customers/{id}/update`、`POST /customers/{id}/soft-delete` | `api` (v1) | 待迁移 v2 |
+| `src/api/applicant.ts` | `GET /applicants`、`GET /applicants/search`、`POST /applicants/bulk-get-or-create`、`GET/POST/applicants/{id}/...`            | `api` (v1) | 待迁移 v2 |
 
 `bulkGetOrCreateApplicants(items)` 是本域唯一复合端点：传入 `{name, customer_id}[]`，后端按 `(name, l1_root_id)` 幂等去重，返回 `{name, customer_id, applicant_id}[]`。投标 Excel 导入流程依赖它一次性建好缺失申请人，避免前端循环 `createApplicant` 的 race。
 
 ## 四、权限要求
 
-| 操作 | MANAGER | CLERK | INSPECTOR | SHELF_ACCOUNT |
-|---|---|---|---|---|
-| 客户增/改 | 允许 | 允许 | 只读 | 只读 |
-| 客户软删 | 允许 | 允许 | 否 | 否 |
-| 申请人增/改 | 允许 | 允许 | 只读 | 只读 |
-| 申请人软删 | 允许 | 允许 | 否 | 否 |
+| 操作        | MANAGER | CLERK | INSPECTOR | SHELF_ACCOUNT |
+| ----------- | ------- | ----- | --------- | ------------- |
+| 客户增/改   | 允许    | 允许  | 只读      | 只读          |
+| 客户软删    | 允许    | 允许  | 否        | 否            |
+| 申请人增/改 | 允许    | 允许  | 只读      | 只读          |
+| 申请人软删  | 允许    | 允许  | 否        | 否            |
 
 权限由两层叠加：
+
 - **路由级**：`menuCode` 守卫决定能否进入页面；
 - **UI 级**：el-button / el-form-item 用 `v-if="canEdit"` 控显隐，`canEdit` 由当前用户角色组合（MANAGER ∪ CLERK 即 true）计算。
 
 ## 五、相关 composable / utils
 
-| 文件 | 用途 |
-|---|---|
-| `src/composables/useCustomerTree.ts` | 客户级联树一次性加载（onMounted 拉全量），产出 `tree: CascaderNode[]` + `resolveRootCustomerId(pickedId)`（任选叶子 → 解析到所属 L1 根 id） |
-| `src/composables/useApplicantSearch.ts` | 申请人 autocomplete：只在切换客户时拉一次全集（limit=200），客户端子串过滤；缓存命中同客户不重拉 |
+| 文件                                    | 用途                                                                                                                                        |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/composables/useCustomerTree.ts`    | 客户级联树一次性加载（onMounted 拉全量），产出 `tree: CascaderNode[]` + `resolveRootCustomerId(pickedId)`（任选叶子 → 解析到所属 L1 根 id） |
+| `src/composables/useApplicantSearch.ts` | 申请人 autocomplete：只在切换客户时拉一次全集（limit=200），客户端子串过滤；缓存命中同客户不重拉                                            |
 
 这两个 composable 是**跨域** 复用：除本域页面外，`PartBatchNew` 的两个 Tab、装配件创建、外协报价表单的「申请人」自动补全都消费它们。
 

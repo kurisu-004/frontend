@@ -37,9 +37,11 @@
       <el-icon :size="36" color="#f56c6c"><CircleCloseFilled /></el-icon>
       <p class="error-text">{{ errorMessage }}</p>
       <p class="error-hint">
-        {{ kind === 'inspection'
+        {{
+          kind === 'inspection'
             ? '请联系管理员在「账号管理」给本 SHELF_ACCOUNT 账号绑定品检货架'
-            : '请联系管理员在「货架管理」给某架配置该工序' }}
+            : '请联系管理员在「货架管理」给某架配置该工序'
+        }}
       </p>
     </div>
     <div v-else-if="shelves.length === 0" class="empty-state">
@@ -86,113 +88,111 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import {
-  Box,
-  CircleCloseFilled,
-  Loading,
-  Select,
-} from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import HmiPickerCard from '@/components/HmiPickerCard.vue'
-import { listShelvesForReturn, listShelvesForInspection } from '@/api/shelves'
-import type { ShelfForReturn } from '@/types/shelf'
+import { ref, watch } from 'vue';
+import { Box, CircleCloseFilled, Loading, Select } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import HmiPickerCard from '@/components/HmiPickerCard.vue';
+import { listShelvesForReturn, listShelvesForInspection } from '@/api/shelves';
+import type { ShelfForReturn } from '@/types/shelf';
 
-const props = withDefaults(defineProps<{
-  modelValue: boolean
-  /** RETURN 必填（用于查 /shelves/for-return）；INSPECT 时可省略。 */
-  nextProcessId?: string
-  kind?: 'return' | 'inspection'
-  /** 空状态操作按钮文案；不传则不显示按钮 */
-  emptyActionLabel?: string
-}>(), {
-  kind: 'return',
-  nextProcessId: '',
-  emptyActionLabel: '',
-})
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean;
+    /** RETURN 必填（用于查 /shelves/for-return）；INSPECT 时可省略。 */
+    nextProcessId?: string;
+    kind?: 'return' | 'inspection';
+    /** 空状态操作按钮文案；不传则不显示按钮 */
+    emptyActionLabel?: string;
+  }>(),
+  {
+    kind: 'return',
+    nextProcessId: '',
+    emptyActionLabel: '',
+  },
+);
 
 const emit = defineEmits<{
-  'update:modelValue': [v: boolean]
-  confirm: [shelfId: string]
-  cancel: []
+  'update:modelValue': [v: boolean];
+  confirm: [shelfId: string];
+  cancel: [];
   /** 空状态操作按钮点击；接收方应关闭 dialog 并回退流程 */
-  'empty-action': []
-}>()
+  'empty-action': [];
+}>();
 
-const loading = ref(false)
-const errorMessage = ref<string | null>(null)
-const shelves = ref<ShelfForReturn[]>([])
-const selectedId = ref<string | null>(null)
+const loading = ref(false);
+const errorMessage = ref<string | null>(null);
+const shelves = ref<ShelfForReturn[]>([]);
+const selectedId = ref<string | null>(null);
 
 watch(
   () => [props.modelValue, props.nextProcessId, props.kind] as const,
   async ([visible, pid, k]) => {
-    if (!visible) return
+    if (!visible) return;
     if (k === 'inspection') {
-      await loadInspection()
+      await loadInspection();
     } else if (pid) {
-      await loadReturn(pid)
+      await loadReturn(pid);
     }
   },
   { immediate: true },
-)
+);
 
 async function loadReturn(nextProcessId: string): Promise<void> {
-  loading.value = true
-  errorMessage.value = null
-  shelves.value = []
-  selectedId.value = null
+  loading.value = true;
+  errorMessage.value = null;
+  shelves.value = [];
+  selectedId.value = null;
   try {
-    const result = await listShelvesForReturn(nextProcessId)
-    shelves.value = result.items
+    const result = await listShelvesForReturn(nextProcessId);
+    shelves.value = result.items;
     // 2026-07-17 移除「默认选中推荐架」行为：工人点选 free；推荐字段后端保留
     // 用于客户端下次调用 if needed，但本 dialog 不再自动高亮 + 一键提交。
   } catch (err: unknown) {
     // 后端 BIZ_SHELF_NO_MATCH_FOR_PROCESS 等业务异常会进到这里
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = err instanceof Error ? err.message : String(err);
     // 后端 axios 拦截器把 BizError message 放进 err.message
-    errorMessage.value = msg || '加载失败'
-    selectedId.value = null
-    ElMessage.error(errorMessage.value)
+    errorMessage.value = msg || '加载失败';
+    selectedId.value = null;
+    ElMessage.error(errorMessage.value);
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function loadInspection(): Promise<void> {
-  loading.value = true
-  errorMessage.value = null
-  shelves.value = []
-  selectedId.value = null
+  loading.value = true;
+  errorMessage.value = null;
+  shelves.value = [];
+  selectedId.value = null;
   try {
-    const result = await listShelvesForInspection()
-    shelves.value = result.items
+    const result = await listShelvesForInspection();
+    shelves.value = result.items;
     // 不自动选中推荐架（与 RETURN 一致，2026-07-17 移除）
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
-    errorMessage.value = msg || '加载失败'
-    selectedId.value = null
-    ElMessage.error(errorMessage.value)
+    const msg = err instanceof Error ? err.message : String(err);
+    errorMessage.value = msg || '加载失败';
+    selectedId.value = null;
+    ElMessage.error(errorMessage.value);
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 function onSelect(shelfId: string): void {
-  selectedId.value = shelfId
+  selectedId.value = shelfId;
 }
 
 function onConfirm(): void {
   if (!selectedId.value) {
-    ElMessage.warning(props.kind === 'inspection' ? '请先选择送检货架' : '请先选择放回货架')
-    return
+    ElMessage.warning(props.kind === 'inspection' ? '请先选择送检货架' : '请先选择放回货架');
+    return;
   }
-  emit('confirm', selectedId.value)
+  emit('confirm', selectedId.value);
 }
 
 function onCancel(): void {
-  emit('cancel')
-  emit('update:modelValue', false)
+  emit('cancel');
+  emit('update:modelValue', false);
 }
 
 /**
@@ -200,8 +200,8 @@ function onCancel(): void {
  * ProcessPickerDialog 让工人重选工序），同时把 dialog 关闭。
  */
 function onEmptyAction(): void {
-  emit('empty-action')
-  emit('update:modelValue', false)
+  emit('empty-action');
+  emit('update:modelValue', false);
 }
 </script>
 
@@ -224,17 +224,29 @@ function onEmptyAction(): void {
   padding: 48px 0;
   gap: 12px;
   color: #606266;
-  p { margin: 0; }
+  p {
+    margin: 0;
+  }
 }
 .error-state {
   color: #f56c6c;
-  .error-text { font-size: 16px; font-weight: 600; }
-  .error-hint { font-size: 13px; color: #909399; }
+  .error-text {
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .error-hint {
+    font-size: 13px;
+    color: #909399;
+  }
 }
 .empty-state {
   gap: 16px;
   padding: 64px 0;
-  .empty-text { font-size: 18px; font-weight: 500; color: #606266; }
+  .empty-text {
+    font-size: 18px;
+    font-weight: 500;
+    color: #606266;
+  }
   .empty-action-btn {
     min-width: 200px;
     font-size: 18px;
@@ -242,10 +254,16 @@ function onEmptyAction(): void {
     padding: 14px 32px;
   }
 }
-.is-loading { animation: spin 1s linear infinite; }
+.is-loading {
+  animation: spin 1s linear infinite;
+}
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 .confirm-btn {
   min-width: 200px;

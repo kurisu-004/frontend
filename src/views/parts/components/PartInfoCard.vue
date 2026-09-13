@@ -9,7 +9,7 @@
   2026-08-25 frontend-overall-refactor：从 PartDetail.vue 抽出。
 -->
 <template>
-  <el-card shadow="never" class="info-card" v-loading="infoLoading">
+  <el-card v-loading="infoLoading" shadow="never" class="info-card">
     <template v-if="part">
       <template v-if="editing">
         <el-descriptions :column="descCol" border>
@@ -40,7 +40,7 @@
           </el-descriptions-item>
 
           <el-descriptions-item label="数量">
-            <el-input-number v-model="form.quantity" :min="1" size="small" style="width:100%" />
+            <el-input-number v-model="form.quantity" :min="1" size="small" style="width: 100%" />
           </el-descriptions-item>
           <el-descriptions-item label="加急">
             <el-switch v-model="form.is_urgent" active-text="加急" />
@@ -53,14 +53,20 @@
 
           <el-descriptions-item label="计划交期">
             <el-date-picker
-              v-model="form.planned_delivery_date" type="date"
-              value-format="YYYY-MM-DD" size="small" style="width:100%"
+              v-model="form.planned_delivery_date"
+              type="date"
+              value-format="YYYY-MM-DD"
+              size="small"
+              style="width: 100%"
             />
           </el-descriptions-item>
           <el-descriptions-item label="实际送货">
             <el-date-picker
-              v-model="form.actual_delivery_date" type="date"
-              value-format="YYYY-MM-DD" size="small" style="width:100%"
+              v-model="form.actual_delivery_date"
+              type="date"
+              value-format="YYYY-MM-DD"
+              size="small"
+              style="width: 100%"
             />
           </el-descriptions-item>
           <el-descriptions-item label="单据 ID">#{{ part.id }}</el-descriptions-item>
@@ -71,8 +77,11 @@
           </el-descriptions-item>
           <el-descriptions-item label="系统交期">
             <el-date-picker
-              v-model="form.system_delivery_date" type="date"
-              value-format="YYYY-MM-DD" size="small" style="width:100%"
+              v-model="form.system_delivery_date"
+              type="date"
+              value-format="YYYY-MM-DD"
+              size="small"
+              style="width: 100%"
             />
           </el-descriptions-item>
           <el-descriptions-item label="备注">
@@ -121,7 +130,9 @@
             <span v-else class="muted">—</span>
           </el-descriptions-item>
 
-          <el-descriptions-item label="计划交期">{{ part.planned_delivery_date }}</el-descriptions-item>
+          <el-descriptions-item label="计划交期">{{
+            part.planned_delivery_date
+          }}</el-descriptions-item>
           <el-descriptions-item label="实际送货">
             <span v-if="part.actual_delivery_date">{{ part.actual_delivery_date }}</span>
             <span v-else class="muted">—</span>
@@ -152,28 +163,28 @@
 </template>
 
 <script setup lang="ts">
-import type { PartItem } from '@/api/parts'
-import type { OrderStatus } from '@/types/parts'
-import type { PartEditForm } from '../composables/usePartDetail'
+import type { PartItem } from '@/api/parts';
+import type { OrderStatus } from '@/types/parts';
+import type { PartEditForm } from '../composables/usePartDetail';
 
 const props = defineProps<{
-  part: PartItem | null
-  editing: boolean
-  saving: boolean
-  form: PartEditForm
-  infoLoading: boolean
-  canEditPart: boolean
-  statusLabel: (s: OrderStatus) => string
-  statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger'
-}>()
+  part: PartItem | null;
+  editing: boolean;
+  saving: boolean;
+  form: PartEditForm;
+  infoLoading: boolean;
+  canEditPart: boolean;
+  statusLabel: (s: OrderStatus) => string;
+  statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
+}>();
 
 defineEmits<{
-  (e: 'edit'): void
-  (e: 'save'): void
-  (e: 'cancel'): void
-}>()
+  (e: 'edit'): void;
+  (e: 'save'): void;
+  (e: 'cancel'): void;
+}>();
 
-const descCol = 3
+const descCol = 3;
 </script>
 
 <style lang="scss" scoped>

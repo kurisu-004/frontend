@@ -14,7 +14,7 @@
       ref="listRef"
       :column-defs="columnDefs"
       :fetcher="fetcher"
-      :list-key="'inspection_pending'"
+      list-key="inspection_pending"
       empty-text="当前无待品检零件"
       :row-class-name="rowClassName"
     >
@@ -109,7 +109,8 @@
           :loading="!!passTarget?._passing"
           :disabled="!passQty"
           @click="onPassConfirm"
-        >确认通过</el-button>
+          >确认通过</el-button
+        >
       </template>
     </el-dialog>
 
@@ -158,7 +159,13 @@
               :label="`${p.code} — ${p.name}`"
             >
               {{ p.code }} — {{ p.name }}
-              <el-tag v-if="p.category === 'OUTSOURCE'" type="warning" size="small" effect="plain" class="opt-tag">
+              <el-tag
+                v-if="p.category === 'OUTSOURCE'"
+                type="warning"
+                size="small"
+                effect="plain"
+                class="opt-tag"
+              >
                 外协
               </el-tag>
             </el-option>
@@ -222,7 +229,8 @@
           :loading="failSubmitting"
           :disabled="!failProcessId || !failShelfId"
           @click="onFailConfirm"
-        >确认指定工序</el-button>
+          >确认指定工序</el-button
+        >
       </template>
     </el-dialog>
 
@@ -266,7 +274,13 @@
         <div>
           <strong>当前状态：</strong>
           <el-tag size="small" :type="scanInspectRow.status === 'PENDING' ? 'info' : 'primary'">
-            {{ scanInspectRow.status === 'PENDING' ? '待下发' : scanInspectRow.status === 'PROGRAMMING' ? '编程中' : '生产中' }}
+            {{
+              scanInspectRow.status === 'PENDING'
+                ? '待下发'
+                : scanInspectRow.status === 'PROGRAMMING'
+                  ? '编程中'
+                  : '生产中'
+            }}
           </el-tag>
         </div>
       </div>
@@ -327,7 +341,13 @@
                 :label="`${p.code} — ${p.name}`"
               >
                 {{ p.code }} — {{ p.name }}
-                <el-tag v-if="p.category === 'OUTSOURCE'" type="warning" size="small" effect="plain" class="opt-tag">
+                <el-tag
+                  v-if="p.category === 'OUTSOURCE'"
+                  type="warning"
+                  size="small"
+                  effect="plain"
+                  class="opt-tag"
+                >
                   外协
                 </el-tag>
               </el-option>
@@ -390,11 +410,13 @@
         <el-button
           :type="scanInspectDecision === 'PASS' ? 'success' : 'warning'"
           :loading="scanInspectSubmitting"
-          :disabled="!scanInspectShelfId
-            || (scanInspectDecision === 'FAIL'
-              && (!scanInspectShelfIdFail || !scanInspectProcessId))"
+          :disabled="
+            !scanInspectShelfId ||
+            (scanInspectDecision === 'FAIL' && (!scanInspectShelfIdFail || !scanInspectProcessId))
+          "
           @click="onScanInspectConfirm"
-        >确认品检</el-button>
+          >确认品检</el-button
+        >
       </template>
     </el-dialog>
 
@@ -409,91 +431,80 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue'
-import { ElButton, ElMessage } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
-import { RouterLink, useRouter } from 'vue-router'
-import PartListShell from '@/components/PartListShell.vue'
-import type { ColumnDef } from '@/composables/useColumnVisibility'
-import { useConfirm } from '@/composables/useConfirm'
-import { useDialogSize } from '@/composables/useDialogSize'
-import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import {
-  findAllByCode,
-  findPartBySerialAndPrompt,
-} from '@/utils/scanHelpers'
+import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue';
+import { ElButton, ElMessage } from 'element-plus';
+import { Search } from '@element-plus/icons-vue';
+import { RouterLink, useRouter } from 'vue-router';
+import PartListShell from '@/components/PartListShell.vue';
+import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { useConfirm } from '@/composables/useConfirm';
+import { useDialogSize } from '@/composables/useDialogSize';
+import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
+import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 import {
   failInspection,
   getPartBySerial,
   passInspection,
   scanInspect,
   type PartItem,
-} from '@/api/parts'
-import { listShelves } from '@/api/shelves'
-import { listProcesses } from '@/api/process'
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
-import type { Shelf } from '@/types/shelf'
-import type { Process } from '@/types/process'
-import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue'
-import { useInspectionList } from './composables/useInspectionList'
+} from '@/api/parts';
+import { listShelves } from '@/api/shelves';
+import { listProcesses } from '@/api/process';
+import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
+import type { Shelf } from '@/types/shelf';
+import type { Process } from '@/types/process';
+import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
+import { useInspectionList } from './composables/useInspectionList';
 
 // ============ 状态 ============
 interface RowState extends PartItem {
-  _passing?: boolean
+  _passing?: boolean;
 }
 
 // ============ T14：列表状态（filter / fetcher）+ 列可见性 ============
 // 2026-08-27 T15：列定义全部走 columnDefs 配置数组（之前写在 template 默认 slot 的内联列已迁出）。
 // 列可见性由 PartListShell 内部 useColumnVisibility 持有；PartListShell 自管 v-for 渲染，
 // 自定义单元格通过 cellRender(scope) 注入。操作列也放进 defs，draggable=false 防误拖。
-const router = useRouter()
+const router = useRouter();
 
 // ---------- 自定义单元格渲染 ----------
 // 参数 row 在 ColumnDef 接口里是 unknown；cast 到 PartItem / RowState 以访问业务字段。
 // 保留旧实现的全部行为：muted 灰底占位、router-link、conditional render、按钮组。
 function renderSerialNo({ row }: { row: unknown }): VNode {
-  const r = row as PartItem
-  return h('span', { class: { muted: !r.serial_no } }, r.serial_no || '—')
+  const r = row as PartItem;
+  return h('span', { class: { muted: !r.serial_no } }, r.serial_no || '—');
 }
 
 function renderName({ row }: { row: unknown }): VNode {
-  const r = row as PartItem
-  return h(
-    RouterLink,
-    { to: `/parts/${r.id}`, class: 'name-link' },
-    () => r.name,
-  )
+  const r = row as PartItem;
+  return h(RouterLink, { to: `/parts/${r.id}`, class: 'name-link' }, () => r.name);
 }
 
 function renderBatchLabel({ row }: { row: unknown }): VNode {
-  const r = row as PartItem
-  return h('span', { class: 'batch-label' }, r.batch_label || '—')
+  const r = row as PartItem;
+  return h('span', { class: 'batch-label' }, r.batch_label || '—');
 }
 
 function renderSystemDeliveryDate({ row }: { row: unknown }): VNode {
-  const r = row as PartItem
-  return h(
-    'span',
-    { class: { muted: !r.system_delivery_date } },
-    r.system_delivery_date || '—',
-  )
+  const r = row as PartItem;
+  return h('span', { class: { muted: !r.system_delivery_date } }, r.system_delivery_date || '—');
 }
 
 function renderCustomer({ row }: { row: unknown }): VNode {
-  const r = row as PartItem
-  if (r.customer_path) return h('span', r.customer_path)
-  if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name)
-  return h('span', { class: 'muted' }, '—')
+  const r = row as PartItem;
+  if (r.customer_path) return h('span', r.customer_path);
+  if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name);
+  return h('span', { class: 'muted' }, '—');
 }
 
 function renderShelfCode({ row }: { row: unknown }): VNode {
-  const r = row as PartItem
-  if (r.shelf_code) return h('span', `品检 ${r.shelf_code}`)
-  return h('span', { class: 'muted' }, '—')
+  const r = row as PartItem;
+  if (r.shelf_code) return h('span', `品检 ${r.shelf_code}`);
+  return h('span', { class: 'muted' }, '—');
 }
 
 function renderActions({ row }: { row: unknown }): VNode {
-  const r = row as RowState
+  const r = row as RowState;
   return h('div', null, [
     h(
       ElButton,
@@ -526,7 +537,7 @@ function renderActions({ row }: { row: unknown }): VNode {
       },
       () => '详情',
     ),
-  ])
+  ]);
 }
 
 // ---------- 列定义 ----------
@@ -625,55 +636,49 @@ const columnDefs: ColumnDef[] = [
     draggable: false,
     cellRender: renderActions,
   },
-]
+];
 
-const {
-  search,
-  plannedDateRange,
-  autoRefresh,
-  fetcher,
-  restoreFilter,
-} = useInspectionList()
+const { search, plannedDateRange, autoRefresh, fetcher, restoreFilter } = useInspectionList();
 
 // PartListShell 的 ref；扫码匹配遍历当前页 items 用 listRef.value.items.value。
-const listRef = ref()
+const listRef = ref();
 
 function rowClassName({ row }: { row: PartItem; rowIndex: number }): string {
-  return row.is_urgent ? 'row-urgent' : ''
+  return row.is_urgent ? 'row-urgent' : '';
 }
 
 // 「刷新」按钮 = 列表回到第 1 页再拉（PartListShell.onRefresh = reset()）
 async function onRefresh(): Promise<void> {
-  await listRef.value?.onRefresh()
+  await listRef.value?.onRefresh();
 }
 
 // 其它地方仍调 fetchList() 触发刷新（包装 listRef.fetch()，保持当前页码）
 async function fetchList(): Promise<void> {
-  await listRef.value?.fetch()
+  await listRef.value?.fetch();
 }
 
 // ============ 自动刷新 ============
-let autoRefreshTimer: number | null = null
+let autoRefreshTimer: number | null = null;
 
 function onAutoRefreshToggle(val: string | number | boolean): void {
   if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer)
-    autoRefreshTimer = null
+    window.clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
   }
   if (val) {
     autoRefreshTimer = window.setInterval(() => {
-      fetchList()
-    }, 300_000)
+      fetchList();
+    }, 300_000);
   }
 }
 
 onBeforeUnmount(() => {
   if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer)
+    window.clearInterval(autoRefreshTimer);
   }
   // 2026-08-04：扫码订阅退订
-  unsubInspectionScan()
-})
+  unsubInspectionScan();
+});
 
 // ============ 2026-08-04：扫码枪扫描序列号 → 二选一弹框 / 报工台风格位置提示 ============
 //
@@ -683,15 +688,15 @@ onBeforeUnmount(() => {
 //   - 0 命中（零件不在 INSPECTION 状态或根本不存在）→ 走 findPartBySerialAndPrompt
 //     显示当前位置 / 持有人 / 状态 / 下一工序，提示「该零件不在本工序」。
 // 已有 dialog 显示时不抢流程。
-const scanChooserOpen = ref(false)
-const scanChooserRow = ref<RowState | null>(null)
-const showBatchPicker = ref(false)
-const batchPickerCode = ref('')
-const batchPickerRows = ref<PartItem[]>([])
+const scanChooserOpen = ref(false);
+const scanChooserRow = ref<RowState | null>(null);
+const showBatchPicker = ref(false);
+const batchPickerCode = ref('');
+const batchPickerRows = ref<PartItem[]>([]);
 
 async function onInspectionScan(rawCode: string): Promise<void> {
-  const code = rawCode.trim()
-  if (!code) return
+  const code = rawCode.trim();
+  if (!code) return;
   // 已有 dialog 在显示时不抢流程
   if (
     passDialogVisible.value ||
@@ -699,34 +704,31 @@ async function onInspectionScan(rawCode: string): Promise<void> {
     scanChooserOpen.value ||
     scanInspectDialogVisible.value
   ) {
-    return
+    return;
   }
   // 快速路径：在当前已加载列表里按 serial_no || drawing_no 匹配（不限状态，按命中的状态分流）
-  const matches = findAllByCode(
-    (listRef.value?.items.value ?? []) as unknown as PartItem[],
-    code,
-  )
+  const matches = findAllByCode((listRef.value?.items.value ?? []) as unknown as PartItem[], code);
   if (matches.length === 0) {
     // 0 命中 — PENDING / PROGRAMMING / IN_PROCESS+ON_SHELF 永远不会出现在 inspection 一览；
     // 调 getPartBySerial 按 serial_no 查任意状态零件，再按状态路由。
     try {
-      const part = await getPartBySerial(code)
-      routeScannedPart(part)
+      const part = await getPartBySerial(code);
+      routeScannedPart(part);
     } catch {
       // 404 / 网络错误 → 走 helper 显示「未找到」warning + 位置提示
-      await findPartBySerialAndPrompt(code)
+      await findPartBySerialAndPrompt(code);
     }
-    return
+    return;
   }
   if (matches.length > 1) {
     // 多批次命中 — 复用报工台 BatchPickerDialog
-    batchPickerCode.value = code
-    batchPickerRows.value = matches
-    showBatchPicker.value = true
-    return
+    batchPickerCode.value = code;
+    batchPickerRows.value = matches;
+    showBatchPicker.value = true;
+    return;
   }
   // 单条命中 — 按状态路由
-  routeScannedPart(matches[0])
+  routeScannedPart(matches[0]);
 }
 
 // 统一扫码路由：列表命中 / getPartBySerial fallback / BatchPicker 三处共用
@@ -734,97 +736,97 @@ async function onInspectionScan(rawCode: string): Promise<void> {
 // - PENDING / PROGRAMMING / IN_PROCESS+PRODUCTION_SHELF → 扫码快捷品检（新弹窗）
 // - 其他（IN_PROCESS+WORKER / READY_TO_SHIP / DELIVERED / REPAIRING / OUTSOURCE）→ 降级提示
 function routeScannedPart(part: PartItem): void {
-  const row = part as unknown as RowState
+  const row = part as unknown as RowState;
   if (part.status === 'INSPECTION') {
-    scanChooserRow.value = row
-    scanChooserOpen.value = true
+    scanChooserRow.value = row;
+    scanChooserOpen.value = true;
   } else if (
     part.status === 'PENDING' ||
     part.status === 'PROGRAMMING' ||
     (part.status === 'IN_PROCESS' && part.location === 'PRODUCTION_SHELF')
   ) {
-    openScanInspectDialog(row)
+    openScanInspectDialog(row);
   } else {
-    void findPartBySerialAndPrompt(part.serial_no ?? part.drawing_no ?? '')
+    void findPartBySerialAndPrompt(part.serial_no ?? part.drawing_no ?? '');
   }
 }
 
 function onScanChooserPass(): void {
-  const row = scanChooserRow.value
-  scanChooserOpen.value = false
-  scanChooserRow.value = null
-  if (row) onPass(row)  // 复用现有 onPass：弹原 pass dialog
+  const row = scanChooserRow.value;
+  scanChooserOpen.value = false;
+  scanChooserRow.value = null;
+  if (row) onPass(row); // 复用现有 onPass：弹原 pass dialog
 }
 
 function onScanChooserFail(): void {
-  const row = scanChooserRow.value
-  scanChooserOpen.value = false
-  scanChooserRow.value = null
-  if (row) void openFailDialog(row)  // 复用现有 openFailDialog
+  const row = scanChooserRow.value;
+  scanChooserOpen.value = false;
+  scanChooserRow.value = null;
+  if (row) void openFailDialog(row); // 复用现有 openFailDialog
 }
 
 function onBatchPicked(p: PartItem): void {
-  showBatchPicker.value = false
-  routeScannedPart(p)
+  showBatchPicker.value = false;
+  routeScannedPart(p);
 }
 
-const { onScan } = useBarcodeScanner()
-const unsubInspectionScan = onScan((code) => { void onInspectionScan(code) })
+const { onScan } = useBarcodeScanner();
+const unsubInspectionScan = onScan((code) => {
+  void onInspectionScan(code);
+});
 
 // ============ 品检通过（2026-07-29：带数量，部分通过先拆再过）============
-const passDlg = useDialogSize({ desktopWidth: 420 })
-const passDialogVisible = ref(false)
-const passTarget = ref<RowState | null>(null)
-const passQty = ref<number | undefined>(undefined)
+const passDlg = useDialogSize({ desktopWidth: 420 });
+const passDialogVisible = ref(false);
+const passTarget = ref<RowState | null>(null);
+const passQty = ref<number | undefined>(undefined);
 
 function onPass(row: RowState): void {
-  passTarget.value = row
-  passQty.value = row.quantity
-  passDialogVisible.value = true
+  passTarget.value = row;
+  passQty.value = row.quantity;
+  passDialogVisible.value = true;
 }
 
 function onPassDialogClosed(): void {
-  passTarget.value = null
-  passQty.value = undefined
+  passTarget.value = null;
+  passQty.value = undefined;
 }
 
 async function onPassConfirm(): Promise<void> {
-  const row = passTarget.value
-  if (!row || !passQty.value) return
-  row._passing = true
+  const row = passTarget.value;
+  if (!row || !passQty.value) return;
+  row._passing = true;
   try {
     await passInspection(row.id, {
       batch_id: row.batch_id ?? null,
       quantity: passQty.value,
-    })
-    ElMessage.success(
-      `零件 ${row.serial_no || row.drawing_no} 品检通过 × ${passQty.value}`,
-    )
-    passDialogVisible.value = false
-    await fetchList()
+    });
+    ElMessage.success(`零件 ${row.serial_no || row.drawing_no} 品检通过 × ${passQty.value}`);
+    passDialogVisible.value = false;
+    await fetchList();
   } catch (e) {
-    ElMessage.error(`品检通过失败：${(e as Error).message}`)
+    ElMessage.error(`品检通过失败：${(e as Error).message}`);
   } finally {
-    row._passing = false
+    row._passing = false;
   }
 }
 
 // ============ 指定工序对话框 ============
 // 2026-07-21 改：先选下一道工序，再选目标生产货架（按 shelf↔process 映射过滤）。
 // 同时支持可选「品检备注」，写入 t_part_event.note，事件历史与工人领取卡片均可见。
-const failDlg = useDialogSize({ desktopWidth: 520 })
-const failDialogVisible = ref(false)
-const failTarget = ref<RowState | null>(null)
-const failProcessId = ref<string>('')
-const failShelfId = ref<string>('')
-const failNote = ref<string>('')
-const failQty = ref<number | undefined>(undefined)
-const failSubmitting = ref(false)
-const productionShelves = ref<Shelf[]>([])
+const failDlg = useDialogSize({ desktopWidth: 520 });
+const failDialogVisible = ref(false);
+const failTarget = ref<RowState | null>(null);
+const failProcessId = ref<string>('');
+const failShelfId = ref<string>('');
+const failNote = ref<string>('');
+const failQty = ref<number | undefined>(undefined);
+const failSubmitting = ref(false);
+const productionShelves = ref<Shelf[]>([]);
 
-const { dangerous: confirmDangerous } = useConfirm()
-const processes = ref<Process[]>([])
-const inspectionShelves = ref<Shelf[]>([])  // 2026-08-12 PR-I-scan-inspect：扫码快捷品检品检架选项
+const { dangerous: confirmDangerous } = useConfirm();
+const processes = ref<Process[]>([]);
+const inspectionShelves = ref<Shelf[]>([]); // 2026-08-12 PR-I-scan-inspect：扫码快捷品检品检架选项
 // 指定工序默认走 INHOUSE 工序（外协工序走 send_to_outsource 路径）；
 // 不强制过滤 category，避免业务上「品检后直接外协返修」分支被锁死。
 const {
@@ -836,47 +838,51 @@ const {
   processes,
   computed({
     get: () => failShelfId.value || null,
-    set: (v) => { failShelfId.value = v ?? '' },
+    set: (v) => {
+      failShelfId.value = v ?? '';
+    },
   }),
   computed({
     get: () => failProcessId.value || null,
-    set: (v) => { failProcessId.value = v ?? '' },
+    set: (v) => {
+      failProcessId.value = v ?? '';
+    },
   }),
-)
+);
 
 async function loadProductionShelves(): Promise<void> {
   try {
-    const resp = await listShelves({ zone: 'PRODUCTION', is_active: true, limit: 200 })
-    productionShelves.value = resp.items
+    const resp = await listShelves({ zone: 'PRODUCTION', is_active: true, limit: 200 });
+    productionShelves.value = resp.items;
   } catch (e) {
-    ElMessage.error(`加载生产货架失败：${(e as Error).message}`)
-    productionShelves.value = []
+    ElMessage.error(`加载生产货架失败：${(e as Error).message}`);
+    productionShelves.value = [];
   }
 }
 
 async function loadProcesses(): Promise<void> {
   try {
-    const resp = await listProcesses({ limit: 200 })
-    processes.value = resp.items
+    const resp = await listProcesses({ limit: 200 });
+    processes.value = resp.items;
   } catch (e) {
-    ElMessage.error(`加载工序失败：${(e as Error).message}`)
-    processes.value = []
+    ElMessage.error(`加载工序失败：${(e as Error).message}`);
+    processes.value = [];
   }
 }
 
 // ============ 2026-08-12 PR-I-scan-inspect：扫码快捷品检 ============
 // 命中 PENDING / PROGRAMMING / IN_PROCESS+PRODUCTION_SHELF 时弹本对话框，
 // 一步完成：搬到品检架 + 通过品检 / 指定下一工序。
-const scanInspectDlg = useDialogSize({ desktopWidth: 520 })
-const scanInspectDialogVisible = ref(false)
-const scanInspectRow = ref<RowState | null>(null)
-const scanInspectShelfId = ref<string>('')         // 目标品检架
-const scanInspectProcessId = ref<string>('')       // 下一道工序（仅 FAIL）
-const scanInspectShelfIdFail = ref<string>('')     // 目标生产架（仅 FAIL）
-const scanInspectNote = ref<string>('')
-const scanInspectQty = ref<number | undefined>(undefined)
-const scanInspectDecision = ref<'PASS' | 'FAIL'>('PASS')
-const scanInspectSubmitting = ref(false)
+const scanInspectDlg = useDialogSize({ desktopWidth: 520 });
+const scanInspectDialogVisible = ref(false);
+const scanInspectRow = ref<RowState | null>(null);
+const scanInspectShelfId = ref<string>(''); // 目标品检架
+const scanInspectProcessId = ref<string>(''); // 下一道工序（仅 FAIL）
+const scanInspectShelfIdFail = ref<string>(''); // 目标生产架（仅 FAIL）
+const scanInspectNote = ref<string>('');
+const scanInspectQty = ref<number | undefined>(undefined);
+const scanInspectDecision = ref<'PASS' | 'FAIL'>('PASS');
+const scanInspectSubmitting = ref(false);
 
 // 复用 fail 弹窗的 shelf/process 双向过滤
 const {
@@ -887,67 +893,71 @@ const {
   processes,
   computed({
     get: () => scanInspectShelfIdFail.value || null,
-    set: (v) => { scanInspectShelfIdFail.value = v ?? '' },
+    set: (v) => {
+      scanInspectShelfIdFail.value = v ?? '';
+    },
   }),
   computed({
     get: () => scanInspectProcessId.value || null,
-    set: (v) => { scanInspectProcessId.value = v ?? '' },
+    set: (v) => {
+      scanInspectProcessId.value = v ?? '';
+    },
   }),
-)
+);
 
 async function loadInspectionShelves(): Promise<void> {
   try {
-    const resp = await listShelves({ zone: 'INSPECTION', is_active: true, limit: 200 })
-    inspectionShelves.value = resp.items
+    const resp = await listShelves({ zone: 'INSPECTION', is_active: true, limit: 200 });
+    inspectionShelves.value = resp.items;
   } catch (e) {
-    ElMessage.error(`加载品检货架失败：${(e as Error).message}`)
-    inspectionShelves.value = []
+    ElMessage.error(`加载品检货架失败：${(e as Error).message}`);
+    inspectionShelves.value = [];
   }
 }
 
 async function openScanInspectDialog(row: RowState): Promise<void> {
-  scanInspectRow.value = row
-  scanInspectShelfId.value = ''
-  scanInspectShelfIdFail.value = ''
-  scanInspectProcessId.value = ''
-  scanInspectNote.value = ''
-  scanInspectQty.value = row.quantity
-  scanInspectDecision.value = 'PASS'
-  scanInspectDialogVisible.value = true
+  scanInspectRow.value = row;
+  scanInspectShelfId.value = '';
+  scanInspectShelfIdFail.value = '';
+  scanInspectProcessId.value = '';
+  scanInspectNote.value = '';
+  scanInspectQty.value = row.quantity;
+  scanInspectDecision.value = 'PASS';
+  scanInspectDialogVisible.value = true;
   // 三个候选数据源并发加载（inspectionShelves / productionShelves / processes）
   await Promise.all([
     inspectionShelves.value.length === 0 ? loadInspectionShelves() : Promise.resolve(),
     productionShelves.value.length === 0 ? loadProductionShelves() : Promise.resolve(),
     processes.value.length === 0 ? loadProcesses() : Promise.resolve(),
-  ])
-  void loadShelfProcessMap()
+  ]);
+  void loadShelfProcessMap();
 }
 
 function onScanInspectDialogClosed(): void {
-  scanInspectRow.value = null
-  scanInspectShelfId.value = ''
-  scanInspectShelfIdFail.value = ''
-  scanInspectProcessId.value = ''
-  scanInspectNote.value = ''
-  scanInspectQty.value = undefined
-  scanInspectDecision.value = 'PASS'
+  scanInspectRow.value = null;
+  scanInspectShelfId.value = '';
+  scanInspectShelfIdFail.value = '';
+  scanInspectProcessId.value = '';
+  scanInspectNote.value = '';
+  scanInspectQty.value = undefined;
+  scanInspectDecision.value = 'PASS';
 }
 
 async function onScanInspectConfirm(): Promise<void> {
-  const row = scanInspectRow.value
-  if (!row) return
+  const row = scanInspectRow.value;
+  if (!row) return;
   if (!scanInspectShelfId.value) {
-    ElMessage.warning('请选择品检架')
-    return
+    ElMessage.warning('请选择品检架');
+    return;
   }
   if (
-    scanInspectDecision.value === 'FAIL'
-    && (!scanInspectShelfIdFail.value || !scanInspectProcessId.value)
+    scanInspectDecision.value === 'FAIL' &&
+    (!scanInspectShelfIdFail.value || !scanInspectProcessId.value)
   ) {
-    ElMessage.warning('打回生产架时，目标货架与下一道工序必填')
-    return
+    ElMessage.warning('打回生产架时，目标货架与下一道工序必填');
+    return;
   }
-  scanInspectSubmitting.value = true
+  scanInspectSubmitting.value = true;
   try {
     await scanInspect(row.id, {
       target_inspection_shelf_id: scanInspectShelfId.value,
@@ -957,57 +967,59 @@ async function onScanInspectConfirm(): Promise<void> {
       note: scanInspectNote.value.trim() || null,
       batch_id: row.batch_id ?? null,
       quantity: scanInspectQty.value ?? null,
-    })
+    });
     ElMessage.success(
       scanInspectDecision.value === 'PASS'
         ? `零件 ${row.serial_no || row.drawing_no} 快捷品检通过`
         : `零件 ${row.serial_no || row.drawing_no} 已快捷打回`,
-    )
-    scanInspectDialogVisible.value = false
-    await fetchList()
+    );
+    scanInspectDialogVisible.value = false;
+    await fetchList();
   } catch (e) {
-    ElMessage.error(`快捷品检失败：${(e as Error).message}`)
+    ElMessage.error(`快捷品检失败：${(e as Error).message}`);
   } finally {
-    scanInspectSubmitting.value = false
+    scanInspectSubmitting.value = false;
   }
 }
 
 async function openFailDialog(row: RowState): Promise<void> {
-  failTarget.value = row
-  failProcessId.value = ''
-  failShelfId.value = ''
-  failNote.value = ''
-  failQty.value = row.quantity
-  failDialogVisible.value = true
+  failTarget.value = row;
+  failProcessId.value = '';
+  failShelfId.value = '';
+  failNote.value = '';
+  failQty.value = row.quantity;
+  failDialogVisible.value = true;
   await Promise.all([
     productionShelves.value.length === 0 ? loadProductionShelves() : Promise.resolve(),
     processes.value.length === 0 ? loadProcesses() : Promise.resolve(),
-  ])
+  ]);
   // shelves/processes 加载完后异步拉映射；映射未到位前 filteredXxx 走兜底全量
-  void loadShelfProcessMap()
+  void loadShelfProcessMap();
 }
 
 function onFailDialogClosed(): void {
-  failTarget.value = null
-  failProcessId.value = ''
-  failShelfId.value = ''
-  failNote.value = ''
-  failQty.value = undefined
+  failTarget.value = null;
+  failProcessId.value = '';
+  failShelfId.value = '';
+  failNote.value = '';
+  failQty.value = undefined;
 }
 
 async function onFailConfirm(): Promise<void> {
-  if (!failTarget.value || !failProcessId.value || !failShelfId.value) return
-  const row = failTarget.value
+  if (!failTarget.value || !failProcessId.value || !failShelfId.value) return;
+  const row = failTarget.value;
   const shelfCode =
-    productionShelves.value.find((s) => String(s.id) === failShelfId.value)?.code ?? ''
-  const processCode =
-    processes.value.find((p) => String(p.id) === failProcessId.value)?.code ?? ''
-  if (!await confirmDangerous(
-    '指定工序',
-    `确认指定工序「${row.name}」（${row.serial_no || row.drawing_no}）到生产货架 ${shelfCode}，下一道工序 ${processCode}？`,
-    { type: 'warning', confirmText: '确认指定工序', cancelText: '取消' },
-  )) return  // 用户取消
-  failSubmitting.value = true
+    productionShelves.value.find((s) => String(s.id) === failShelfId.value)?.code ?? '';
+  const processCode = processes.value.find((p) => String(p.id) === failProcessId.value)?.code ?? '';
+  if (
+    !(await confirmDangerous(
+      '指定工序',
+      `确认指定工序「${row.name}」（${row.serial_no || row.drawing_no}）到生产货架 ${shelfCode}，下一道工序 ${processCode}？`,
+      { type: 'warning', confirmText: '确认指定工序', cancelText: '取消' },
+    ))
+  )
+    return; // 用户取消
+  failSubmitting.value = true;
   try {
     // 2026-08-29：回退到 v1 fail-inspection（v2 to-process 不在 Rust 上线范围）。
     const out = await failInspection(row.id, {
@@ -1016,28 +1028,28 @@ async function onFailConfirm(): Promise<void> {
       note: failNote.value.trim() || null,
       batch_id: row.batch_id ?? null,
       quantity: failQty.value ?? null,
-    })
+    });
     ElMessage.success(
       `零件 ${out.serial_no || out.drawing_no} 已指定下一道工序 ${processCode}，放到生产货架 ${shelfCode}`,
-    )
-    failDialogVisible.value = false
-    await fetchList()
+    );
+    failDialogVisible.value = false;
+    await fetchList();
   } catch (e) {
-    ElMessage.error(`指定工序失败：${(e as Error).message}`)
+    ElMessage.error(`指定工序失败：${(e as Error).message}`);
   } finally {
-    failSubmitting.value = false
+    failSubmitting.value = false;
   }
 }
 
 onMounted(() => {
   // 先尝试恢复 localStorage 中的搜索条件 / 自动刷新（pageSize 由 PartListShell 自行恢复）
-  restoreFilter()
+  restoreFilter();
   if (autoRefresh.value) {
     // 重新挂载定时器
-    onAutoRefreshToggle(true)
+    onAutoRefreshToggle(true);
   }
-  fetchList()
-})
+  fetchList();
+});
 </script>
 
 <style lang="scss" scoped>

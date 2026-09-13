@@ -22,21 +22,21 @@
 // 服务端不做此解析（DB 存原始 UTF-8 original_filename，仅在 UI 预填用）。
 
 export interface ParsedDrawingFilename {
-  drawingNo: string | null
-  partName: string | null
+  drawingNo: string | null;
+  partName: string | null;
 }
 
 export function parseDrawingFilename(filename: string): ParsedDrawingFilename {
   // 去掉扩展名（仅 .pdf / .PDF，不区分大小写，避免误切）；strip 前后空白
-  const noExtTrim = filename.replace(/\.pdf$/i, '').trim()
-  if (!noExtTrim) return { drawingNo: null, partName: null }
+  const noExtTrim = filename.replace(/\.pdf$/i, '').trim();
+  if (!noExtTrim) return { drawingNo: null, partName: null };
 
   // 唯一规则：首个 '_' 切；无 '_' 一律双 null 让用户手填
-  const u = noExtTrim.indexOf('_')
-  if (u < 0) return { drawingNo: null, partName: null }
+  const u = noExtTrim.indexOf('_');
+  if (u < 0) return { drawingNo: null, partName: null };
 
   return {
     drawingNo: noExtTrim.slice(0, u).trim() || null,
     partName: noExtTrim.slice(u + 1).trim() || null,
-  }
+  };
 }

@@ -11,24 +11,24 @@
 // - 这里返回的是 `ComputedRef<boolean>`，不是 boolean；模板里直接用即可。
 // - 不要在 service 层或 composable 内部「读一次 hasRole 当常量」——角色可能在登录后变更。
 
-import { computed, type ComputedRef } from 'vue'
-import { useAuthSession } from './useAuthSession'
+import { computed, type ComputedRef } from 'vue';
+import { useAuthSession } from './useAuthSession';
 
 export interface PermissionsApi {
-  isManager: ComputedRef<boolean>
-  isClerk: ComputedRef<boolean>
-  isInspector: ComputedRef<boolean>
-  isCncProgrammer: ComputedRef<boolean>
-  isShelfAccount: ComputedRef<boolean>
+  isManager: ComputedRef<boolean>;
+  isClerk: ComputedRef<boolean>;
+  isInspector: ComputedRef<boolean>;
+  isCncProgrammer: ComputedRef<boolean>;
+  isShelfAccount: ComputedRef<boolean>;
 }
 
 export function usePermissions(): PermissionsApi {
-  const { hasRole } = useAuthSession()
+  const { hasRole } = useAuthSession();
   return {
     isManager: computed(() => hasRole('MANAGER')),
     isClerk: computed(() => hasRole('CLERK')),
     isInspector: computed(() => hasRole('INSPECTOR')),
     isCncProgrammer: computed(() => hasRole('CNC_PROGRAMMER')),
     isShelfAccount: computed(() => hasRole('SHELF_ACCOUNT')),
-  }
+  };
 }

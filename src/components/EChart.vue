@@ -17,14 +17,10 @@
 <script setup lang="ts">
 // 2026-08-21：echarts 6 默认主题变更（配色、legend 默认底部等）。注册 v5 旧主题
 // 并在 init 时指定，锁定现有视觉，避免历史图表出现 subtle 差异。
-import 'echarts/theme/v5'
-import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import * as echarts from 'echarts/core'
-import {
-  BarChart,
-  LineChart,
-  PieChart,
-} from 'echarts/charts'
+import 'echarts/theme/v5';
+import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import * as echarts from 'echarts/core';
+import { BarChart, LineChart, PieChart } from 'echarts/charts';
 import {
   DatasetComponent,
   GridComponent,
@@ -33,12 +29,17 @@ import {
   TitleComponent,
   ToolboxComponent,
   TooltipComponent,
-} from 'echarts/components'
+} from 'echarts/components';
 // ECharts 5.x：LabelLayout / UniversalTransition 不在 echarts/components 而在 features
 // 子路径下。详见 https://echarts.apache.org/handbook/en/basics/import/
-import { LabelLayout, UniversalTransition } from 'echarts/features'
-import { CanvasRenderer } from 'echarts/renderers'
-import type { ECharts, EChartsCoreOption } from 'echarts/core'
+import { LabelLayout, UniversalTransition } from 'echarts/features';
+import { CanvasRenderer } from 'echarts/renderers';
+import type { ECharts, EChartsCoreOption } from 'echarts/core';
+
+const props = withDefaults(defineProps<Props>(), {
+  height: '320px',
+  loading: false,
+});
 
 // 注册三大类：图表 / 组件 / 渲染器。绝对不要 import 'echarts'，
 // 否则会把 ~900KB 全量 bundle 拉进来。
@@ -56,80 +57,75 @@ echarts.use([
   TooltipComponent,
   UniversalTransition,
   CanvasRenderer,
-])
+]);
 
 interface Props {
   /** 完整 ECharts 配置。可选响应式：父组件传 reactive object 时 watch 会自动重设。 */
-  option: EChartsCoreOption
+  option: EChartsCoreOption;
   /** CSS height。容器宽度跟随父级，由 ResizeObserver 触发 resize()。 */
-  height?: string
+  height?: string;
   /** 显示 ECharts 内置 loading 蒙层。 */
-  loading?: boolean
+  loading?: boolean;
 }
 
-const props = withDefaults(defineProps<Props>(), {
-  height: '320px',
-  loading: false,
-})
-
-const rootRef = ref<HTMLDivElement | null>(null)
+const rootRef = ref<HTMLDivElement | null>(null);
 // shallowRef：ECharts 实例内部持有 zrender 状态，不需要 deep reactive 包裹。
-const chart = shallowRef<ECharts | null>(null)
-let resizeObserver: ResizeObserver | null = null
+const chart = shallowRef<ECharts | null>(null);
+let resizeObserver: ResizeObserver | null = null;
 
 function applyOption(c: ECharts, opt: EChartsCoreOption): void {
   // notMerge=true：切视图时彻底重设，旧 series / dataset / visualMap 全部清掉，
   // 避免"切换不同口径的同一类图"导致 legend 残留。
-  c.setOption(opt, true)
+  c.setOption(opt, true);
 }
 
 function initChart(el: HTMLDivElement): void {
-  const c = echarts.init(el, 'v5', { renderer: 'canvas' })
-  chart.value = c
-  if (props.option) applyOption(c, props.option)
-  if (props.loading) c.showLoading()
-  resizeObserver = new ResizeObserver(() => c.resize())
-  resizeObserver.observe(el)
+  const c = echarts.init(el, 'v5', { renderer: 'canvas' });
+  chart.value = c;
+  if (props.option) applyOption(c, props.option);
+  if (props.loading) c.showLoading();
+  resizeObserver = new ResizeObserver(() => c.resize());
+  resizeObserver.observe(el);
 }
 
 onMounted(() => {
-  const el = rootRef.value
-  if (el) initChart(el)
-})
+  const el = rootRef.value;
+  if (el) initChart(el);
+});
 
 watch(
   () => props.option,
   (next) => {
-    const c = chart.value
-    if (!c) return
-    applyOption(c, next)
+    const c = chart.value;
+    if (!c) return;
+    applyOption(c, next);
   },
   { deep: true },
-)
+);
 
 watch(
   () => props.loading,
   (next) => {
-    const c = chart.value
-    if (!c) return
+    const c = chart.value;
+    if (!c) return;
     if (next) {
-      c.showLoading()
+      c.showLoading();
     } else {
-      c.hideLoading()
+      c.hideLoading();
     }
   },
-)
+);
 
 onBeforeUnmount(() => {
   if (resizeObserver) {
-    resizeObserver.disconnect()
-    resizeObserver = null
+    resizeObserver.disconnect();
+    resizeObserver = null;
   }
   if (chart.value) {
-    chart.value.dispose()
-    chart.value = null
+    chart.value.dispose();
+    chart.value = null;
   }
-})
+});
 </script>
 
 <style lang="scss" scoped>

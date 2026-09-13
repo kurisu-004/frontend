@@ -9,7 +9,7 @@
   - 2026-08-25 frontend-overall-refactor：从 2355 行单体拆为装配壳
 -->
 <template>
-  <div class="part-detail" v-loading="infoLoading">
+  <div v-loading="infoLoading" class="part-detail">
     <!-- 信息卡 -->
     <PartInfoCard
       :part="part"
@@ -52,10 +52,7 @@
     </el-card>
 
     <!-- 所属送货单 -->
-    <PartDeliveryNoteLinkCard
-      v-if="part && part.delivery_note_id != null"
-      :part="part"
-    />
+    <PartDeliveryNoteLinkCard v-if="part && part.delivery_note_id != null" :part="part" />
 
     <!-- 所属装配件 -->
     <PartAssemblyLinkCard
@@ -146,36 +143,29 @@
     />
 
     <!-- 底部操作：取消订单 / 删除 / 品检 / 外协回收（按角色门控） -->
-    <el-card shadow="never" class="bottom-actions" v-if="part">
+    <el-card v-if="part" shadow="never" class="bottom-actions">
       <div class="action-row">
         <!-- 品检相关：仅 INSPECTION 状态可见 -->
         <template v-if="canInspect && part.status === 'INSPECTION'">
-          <el-button
-            type="success"
-            :loading="passSubmitting"
-            @click="onPassInspection"
-          >品检通过</el-button>
-          <el-button
-            type="warning"
-            @click="openFailInspDialog"
-          >指定工序</el-button>
+          <el-button type="success" :loading="passSubmitting" @click="onPassInspection"
+            >品检通过</el-button
+          >
+          <el-button type="warning" @click="openFailInspDialog">指定工序</el-button>
         </template>
         <!-- 外协回收：OUTSOURCE 状态可见（MANAGER + CLERK） -->
         <el-button
           v-if="canReceiveFromOutsource && part.status === 'OUTSOURCE'"
           type="success"
           @click="openReceiveOutsourceDialog"
-        >外协回收</el-button>
+          >外协回收</el-button
+        >
         <el-button
           v-if="canCancelPart && part.status !== 'CANCELLED' && part.status !== 'COMPLETED'"
           type="warning"
           @click="openConfirmForCancel"
-        >取消订单</el-button>
-        <el-button
-          v-if="canDeletePart"
-          type="danger"
-          @click="openConfirmForDelete"
-        >删除</el-button>
+          >取消订单</el-button
+        >
+        <el-button v-if="canDeletePart" type="danger" @click="openConfirmForDelete">删除</el-button>
       </div>
     </el-card>
 
@@ -190,11 +180,17 @@
       @closed="onReceiveOutsourceDialogClosed"
     >
       <el-form label-width="110px">
-        <el-form-item label="目标生产货架" required :for="''">
+        <el-form-item label="目标生产货架" required for="">
           <el-radio-group
             v-model="receiveShelfId"
             aria-label="目标生产货架"
-            style="display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto;"
+            style="
+              display: flex;
+              flex-direction: column;
+              gap: 6px;
+              max-height: 180px;
+              overflow-y: auto;
+            "
           >
             <el-radio
               v-for="s in receiveFilteredShelves"
@@ -208,17 +204,19 @@
             <span v-if="receiveFilteredShelves.length === 0" class="muted">没有可用生产货架</span>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="下一道工序" required :for="''">
+        <el-form-item label="下一道工序" required for="">
           <el-radio-group
             v-model="receiveProcessId"
             aria-label="下一道工序"
-            style="display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto;"
+            style="
+              display: flex;
+              flex-direction: column;
+              gap: 6px;
+              max-height: 180px;
+              overflow-y: auto;
+            "
           >
-            <el-radio
-              v-for="p in receiveFilteredProcesses"
-              :key="p.id"
-              :value="String(p.id)"
-            >
+            <el-radio v-for="p in receiveFilteredProcesses" :key="p.id" :value="String(p.id)">
               {{ p.code }} — {{ p.name }}
             </el-radio>
             <span v-if="receiveFilteredProcesses.length === 0" class="muted">
@@ -240,7 +238,8 @@
           :loading="receiveSubmitting"
           :disabled="!receiveShelfId || !receiveProcessId"
           @click="onReceiveConfirm"
-        >确认回收</el-button>
+          >确认回收</el-button
+        >
       </template>
     </el-dialog>
 
@@ -270,7 +269,13 @@
               :label="`${p.code} — ${p.name}`"
             >
               {{ p.code }} — {{ p.name }}
-              <el-tag v-if="p.category === 'OUTSOURCE'" type="warning" size="small" effect="plain" class="opt-tag">
+              <el-tag
+                v-if="p.category === 'OUTSOURCE'"
+                type="warning"
+                size="small"
+                effect="plain"
+                class="opt-tag"
+              >
                 外协
               </el-tag>
             </el-option>
@@ -330,7 +335,8 @@
           :loading="failInspSubmitting"
           :disabled="!failInspProcessId || !failInspShelfId"
           @click="onFailInspectionConfirm"
-        >确认指定工序</el-button>
+          >确认指定工序</el-button
+        >
       </template>
     </el-dialog>
 
@@ -361,117 +367,160 @@
           :loading="confirmSubmitting"
           :disabled="!confirmSerialNo.trim()"
           @click="onConfirmAction"
-        >确认{{ confirmAction === 'cancel' ? '取消' : '删除' }}</el-button>
+          >确认{{ confirmAction === 'cancel' ? '取消' : '删除' }}</el-button
+        >
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { PriceTag } from '@element-plus/icons-vue'
-import FileListCard from '@/components/FileListCard.vue'
-import Barcode from '@/components/Barcode.vue'
-import PartInfoCard from './components/PartInfoCard.vue'
-import PartHistoryCard from './components/PartHistoryCard.vue'
-import PartDeliveryNoteLinkCard from './components/PartDeliveryNoteLinkCard.vue'
-import PartAssemblyLinkCard from './components/PartAssemblyLinkCard.vue'
-import PartCncCard from './components/PartCncCard.vue'
-import PartQuoteCard from './components/PartQuoteCard.vue'
-import PartBatchMonitorCard from './components/PartBatchMonitorCard.vue'
-import type { PartBatch } from '@/api/parts'
-import { uploadPart3DModel, uploadPartCadFile, uploadPartDrawing } from '@/api/assembly'
-import { listShelves } from '@/api/shelves'
-import type { Shelf } from '@/types/shelf'
-import { listProcesses } from '@/api/process'
-import type { Process } from '@/types/process'
-import { useDialogSize } from '@/composables/useDialogSize'
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
-import { useConfirm } from '@/composables/useConfirm'
-import { usePermissions } from '@/composables/usePermissions'
-import { usePartDetail } from './composables/usePartDetail'
-import { usePartFiles } from './composables/usePartFiles'
-import { usePartCncGroups } from './composables/usePartCncGroups'
-import { usePartQuote } from './composables/usePartQuote'
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import { PriceTag } from '@element-plus/icons-vue';
+import FileListCard from '@/components/FileListCard.vue';
+import Barcode from '@/components/Barcode.vue';
+import PartInfoCard from './components/PartInfoCard.vue';
+import PartHistoryCard from './components/PartHistoryCard.vue';
+import PartDeliveryNoteLinkCard from './components/PartDeliveryNoteLinkCard.vue';
+import PartAssemblyLinkCard from './components/PartAssemblyLinkCard.vue';
+import PartCncCard from './components/PartCncCard.vue';
+import PartQuoteCard from './components/PartQuoteCard.vue';
+import PartBatchMonitorCard from './components/PartBatchMonitorCard.vue';
+import type { PartBatch } from '@/api/parts';
+import { uploadPart3DModel, uploadPartCadFile, uploadPartDrawing } from '@/api/assembly';
+import { listShelves } from '@/api/shelves';
+import type { Shelf } from '@/types/shelf';
+import { listProcesses } from '@/api/process';
+import type { Process } from '@/types/process';
+import { useDialogSize } from '@/composables/useDialogSize';
+import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
+import { useConfirm } from '@/composables/useConfirm';
+import { usePermissions } from '@/composables/usePermissions';
+import { usePartDetail } from './composables/usePartDetail';
+import { usePartFiles } from './composables/usePartFiles';
+import { usePartCncGroups } from './composables/usePartCncGroups';
+import { usePartQuote } from './composables/usePartQuote';
 
-const route = useRoute()
-const partId = ref<string>(String(route.params.id ?? ''))
+const route = useRoute();
+const partId = ref<string>(String(route.params.id ?? ''));
 
 // ============ 4 个 composables ============
-const detail = usePartDetail(partId)
-const files = usePartFiles(partId)
-const cnc = usePartCncGroups(partId)
-const quote = usePartQuote(partId, computed(() => detail.part.value?.name))
+const detail = usePartDetail(partId);
+const files = usePartFiles(partId);
+const cnc = usePartCncGroups(partId);
+const quote = usePartQuote(
+  partId,
+  computed(() => detail.part.value?.name),
+);
 
 // 从 composables 解构出来（业务函数 + 状态）
 const {
-  part, infoLoading, events, eventsLoading,
-  editing, saving, form,
-  assemblyDetail, assemblyLoading,
-  batches, batchesLoading,
-  canEditPart, canCancelPart, canDeletePart, canInspect, canReceiveFromOutsource,
-  canManageDrawings, canManage3DModels, canManageCncFiles, canManageSetupSheet, canManageBatches,
-  fetchPart, fetchEvents, fetchAssembly, fetchBatches,
-  onStartEdit, onCancelEdit, onSave,
-  onFailInspection, onReceiveFromOutsource,
-  onCancelOrder, onDeletePart,
-  onSplitBatch, onCancelBatch,
-  statusLabel, statusTagType, statusLabelOf, eventLabel, eventTagType,
-} = detail
+  part,
+  infoLoading,
+  events,
+  eventsLoading,
+  editing,
+  saving,
+  form,
+  assemblyDetail,
+  assemblyLoading,
+  batches,
+  batchesLoading,
+  canEditPart,
+  canCancelPart,
+  canDeletePart,
+  canInspect,
+  canReceiveFromOutsource,
+  canManageDrawings,
+  canManage3DModels,
+  canManageCncFiles,
+  canManageSetupSheet,
+  canManageBatches,
+  fetchPart,
+  fetchEvents,
+  fetchAssembly,
+  fetchBatches,
+  onStartEdit,
+  onCancelEdit,
+  onSave,
+  onFailInspection,
+  onReceiveFromOutsource,
+  onCancelOrder,
+  onDeletePart,
+  onSplitBatch,
+  onCancelBatch,
+  statusLabel,
+  statusTagType,
+  statusLabelOf,
+  eventLabel,
+  eventTagType,
+} = detail;
+
+const { drawings, models3d, cadFiles, fetchDrawings, fetch3DModels, fetchCadFiles } = files;
 
 const {
-  drawings, models3d, cadFiles,
-  fetchDrawings, fetch3DModels, fetchCadFiles,
-} = files
-
-const {
-  cncSetupGroups, cncLoading,
-  fetchCncPrograms, formatBytes, onDownloadCnc, onDeleteCnc,
-  onPairUpload, onReleaseToShelf,
+  cncSetupGroups,
+  cncLoading,
+  fetchCncPrograms,
+  formatBytes,
+  onDownloadCnc,
+  onDeleteCnc,
+  onPairUpload,
+  onReleaseToShelf,
   // 2026-08-25 T10p5：上传 staging 助手（含 ElMessage.warning 兜底），通过函数 prop 注入 PartCncCard。
   fileList,
-} = cnc
+} = cnc;
 
 const {
-  quotes, quotesLoading, canViewQuotes, canCreateQuote: canCreateQuoteBase,
-  fetchQuotes, quoteRules, loadQuoteCreateData, onCreateQuote,
-} = quote
+  quotes,
+  quotesLoading,
+  canViewQuotes,
+  canCreateQuote: canCreateQuoteBase,
+  fetchQuotes,
+  quoteRules,
+  loadQuoteCreateData,
+  onCreateQuote,
+} = quote;
 
 // ============ 批次 ============
 // batches / batchesLoading / fetchBatches 来自 usePartDetail（PartBatchMonitorCard 渲染）
 
 // ============ 共享 shelves/processes 缓存（release / failInsp / receive 共用）============
-const productionShelves = ref<Shelf[]>([])
-const processes = ref<Process[]>([])
+const productionShelves = ref<Shelf[]>([]);
+const processes = ref<Process[]>([]);
 async function ensureShelvesProcesses(): Promise<void> {
   if (productionShelves.value.length === 0) {
     try {
-      const resp = await listShelves({ zone: 'PRODUCTION', is_active: true, limit: 200 })
-      productionShelves.value = resp.items
-    } catch { /* ignore */ }
+      const resp = await listShelves({ zone: 'PRODUCTION', is_active: true, limit: 200 });
+      productionShelves.value = resp.items;
+    } catch {
+      /* ignore */
+    }
   }
   if (processes.value.length === 0) {
     try {
-      const resp = await listProcesses({ limit: 200 })
-      processes.value = resp.items
-    } catch { /* ignore */ }
+      const resp = await listProcesses({ limit: 200 });
+      processes.value = resp.items;
+    } catch {
+      /* ignore */
+    }
   }
 }
 
 // ============ 底部 dialog 状态（shell 局部维护）============
-const failInspDlg = useDialogSize({ desktopWidth: 480 })
-const receiveOutsourceDlg = useDialogSize({ desktopWidth: 560 })
-const confirmDlg = useDialogSize({ desktopWidth: 420 })
-const { dangerous: confirmDangerous } = useConfirm()
+const failInspDlg = useDialogSize({ desktopWidth: 480 });
+const receiveOutsourceDlg = useDialogSize({ desktopWidth: 560 });
+const confirmDlg = useDialogSize({ desktopWidth: 420 });
+const { dangerous: confirmDangerous } = useConfirm();
 
 // 品检打回（指定工序）对话框
-const failInspDialogVisible = ref(false)
-const failInspProcessId = ref<string>('')
-const failInspShelfId = ref<string>('')
-const failInspNote = ref<string>('')
-const failInspSubmitting = ref(false)
+const failInspDialogVisible = ref(false);
+const failInspProcessId = ref<string>('');
+const failInspShelfId = ref<string>('');
+const failInspNote = ref<string>('');
+const failInspSubmitting = ref(false);
 const {
   filteredShelves: failInspFilteredShelves,
   filteredProcesses: failInspFilteredProcesses,
@@ -481,50 +530,52 @@ const {
   computed(() => processes.value),
   computed({
     get: () => failInspShelfId.value || null,
-    set: (v) => { failInspShelfId.value = v ?? '' },
+    set: (v) => {
+      failInspShelfId.value = v ?? '';
+    },
   }),
   computed({
     get: () => failInspProcessId.value || null,
-    set: (v) => { failInspProcessId.value = v ?? '' },
+    set: (v) => {
+      failInspProcessId.value = v ?? '';
+    },
   }),
-)
+);
 
 async function openFailInspDialog() {
-  failInspProcessId.value = ''
-  failInspShelfId.value = ''
-  failInspNote.value = ''
-  await ensureShelvesProcesses()
-  void loadFailInspMap()
-  failInspDialogVisible.value = true
+  failInspProcessId.value = '';
+  failInspShelfId.value = '';
+  failInspNote.value = '';
+  await ensureShelvesProcesses();
+  void loadFailInspMap();
+  failInspDialogVisible.value = true;
 }
 function onFailInspDialogClosed() {
-  failInspProcessId.value = ''
-  failInspShelfId.value = ''
-  failInspNote.value = ''
+  failInspProcessId.value = '';
+  failInspShelfId.value = '';
+  failInspNote.value = '';
 }
 async function onFailInspectionConfirm() {
-  if (!failInspProcessId.value || !failInspShelfId.value) return
-  failInspSubmitting.value = true
+  if (!failInspProcessId.value || !failInspShelfId.value) return;
+  failInspSubmitting.value = true;
   try {
     const ok = await onFailInspection({
       shelfId: failInspShelfId.value,
       processId: failInspProcessId.value,
       note: failInspNote.value.trim() || null,
-    })
-    if (ok) failInspDialogVisible.value = false
+    });
+    if (ok) failInspDialogVisible.value = false;
   } finally {
-    failInspSubmitting.value = false
+    failInspSubmitting.value = false;
   }
 }
 
 // 外协回收对话框
-const receiveOutsourceDialogVisible = ref(false)
-const receiveShelfId = ref<string>('')
-const receiveProcessId = ref<string>('')
-const receiveSubmitting = ref(false)
-const inhouseProcesses = computed(() =>
-  processes.value.filter((p) => p.category === 'INHOUSE'),
-)
+const receiveOutsourceDialogVisible = ref(false);
+const receiveShelfId = ref<string>('');
+const receiveProcessId = ref<string>('');
+const receiveSubmitting = ref(false);
+const inhouseProcesses = computed(() => processes.value.filter((p) => p.category === 'INHOUSE'));
 const {
   filteredShelves: receiveFilteredShelves,
   filteredProcesses: receiveFilteredProcesses,
@@ -534,96 +585,99 @@ const {
   inhouseProcesses,
   computed({
     get: () => receiveShelfId.value || null,
-    set: (v) => { receiveShelfId.value = v ?? '' },
+    set: (v) => {
+      receiveShelfId.value = v ?? '';
+    },
   }),
   computed({
     get: () => receiveProcessId.value || null,
-    set: (v) => { receiveProcessId.value = v ?? '' },
+    set: (v) => {
+      receiveProcessId.value = v ?? '';
+    },
   }),
-)
+);
 
 async function openReceiveOutsourceDialog() {
-  receiveShelfId.value = ''
-  receiveProcessId.value = ''
-  await ensureShelvesProcesses()
-  void loadReceiveMap()
-  receiveOutsourceDialogVisible.value = true
+  receiveShelfId.value = '';
+  receiveProcessId.value = '';
+  await ensureShelvesProcesses();
+  void loadReceiveMap();
+  receiveOutsourceDialogVisible.value = true;
 }
 function onReceiveOutsourceDialogClosed() {
-  receiveShelfId.value = ''
-  receiveProcessId.value = ''
+  receiveShelfId.value = '';
+  receiveProcessId.value = '';
 }
 async function onReceiveConfirm() {
-  if (!receiveShelfId.value || !receiveProcessId.value) return
-  receiveSubmitting.value = true
+  if (!receiveShelfId.value || !receiveProcessId.value) return;
+  receiveSubmitting.value = true;
   try {
     const ok = await onReceiveFromOutsource({
       shelfId: receiveShelfId.value,
       processId: receiveProcessId.value,
-    })
-    if (ok) receiveOutsourceDialogVisible.value = false
+    });
+    if (ok) receiveOutsourceDialogVisible.value = false;
   } finally {
-    receiveSubmitting.value = false
+    receiveSubmitting.value = false;
   }
 }
 
 // 取消订单 / 删除（共用 confirm dialog）
-const confirmVisible = ref(false)
-const confirmAction = ref<'cancel' | 'delete'>('cancel')
-const confirmSerialNo = ref('')
-const confirmSubmitting = ref(false)
-const confirmTitle = computed(() =>
-  confirmAction.value === 'cancel' ? '取消订单' : '删除零件'
-)
+const confirmVisible = ref(false);
+const confirmAction = ref<'cancel' | 'delete'>('cancel');
+const confirmSerialNo = ref('');
+const confirmSubmitting = ref(false);
+const confirmTitle = computed(() => (confirmAction.value === 'cancel' ? '取消订单' : '删除零件'));
 const confirmHint = computed(() => {
-  const base = confirmAction.value === 'cancel'
-    ? '取消后订单将变为 CANCELLED 状态，流水号将被释放。'
-    : '删除后将软删除该零件记录。'
-  return `${base}\n请输入该零件的流水号以确认操作。`
-})
+  const base =
+    confirmAction.value === 'cancel'
+      ? '取消后订单将变为 CANCELLED 状态，流水号将被释放。'
+      : '删除后将软删除该零件记录。';
+  return `${base}\n请输入该零件的流水号以确认操作。`;
+});
 
 function openConfirmForCancel() {
-  confirmAction.value = 'cancel'
-  confirmSerialNo.value = ''
-  confirmVisible.value = true
+  confirmAction.value = 'cancel';
+  confirmSerialNo.value = '';
+  confirmVisible.value = true;
 }
 function openConfirmForDelete() {
-  confirmAction.value = 'delete'
-  confirmSerialNo.value = ''
-  confirmVisible.value = true
+  confirmAction.value = 'delete';
+  confirmSerialNo.value = '';
+  confirmVisible.value = true;
 }
 async function onConfirmAction() {
-  const expected = part.value?.serial_no
+  const expected = part.value?.serial_no;
   if (!expected) {
-    ElMessage.error('该零件无流水号，无法执行此操作')
-    return
+    ElMessage.error('该零件无流水号，无法执行此操作');
+    return;
   }
   if (confirmSerialNo.value.trim() !== expected) {
-    ElMessage.error('流水号不匹配，请重新输入')
-    return
+    ElMessage.error('流水号不匹配，请重新输入');
+    return;
   }
-  confirmSubmitting.value = true
+  confirmSubmitting.value = true;
   try {
     if (confirmAction.value === 'cancel') {
-      const ok = await onCancelOrder()
-      if (ok) confirmVisible.value = false
+      const ok = await onCancelOrder();
+      if (ok) confirmVisible.value = false;
     } else {
       // delete 成功后 onDeletePart 内 router.push('/parts')，不再需要 close
-      await onDeletePart()
+      await onDeletePart();
     }
   } finally {
-    confirmSubmitting.value = false
+    confirmSubmitting.value = false;
   }
 }
 
 // ============ 品检通过（shell 包一层 passSubmitting loading）============
-const passSubmitting = ref(false)
+const passSubmitting = ref(false);
 async function onPassInspection() {
-  passSubmitting.value = true
+  passSubmitting.value = true;
   try {
-    await detail.onPassInspection()
+    await detail.onPassInspection();
   } finally {
-    passSubmitting.value = false
+    passSubmitting.value = false;
   }
 }
 
@@ -631,97 +685,100 @@ async function onPassInspection() {
 // 2026-08-25 T10p5：emit payload 改为 { batch, quantity, resolve }，
 // shell 等 API 完成再调 resolve，把 dialog 关闭时机下沉到 API 成功之后。
 async function handleSplitBatch(payload: {
-  batch: PartBatch
-  quantity: number
-  resolve: (ok: boolean) => void
+  batch: PartBatch;
+  quantity: number;
+  resolve: (ok: boolean) => void;
 }) {
-  const result = await onSplitBatch(payload.batch, payload.quantity)
-  payload.resolve(result !== null)
-  void fetchBatches()
+  const result = await onSplitBatch(payload.batch, payload.quantity);
+  payload.resolve(result !== null);
+  void fetchBatches();
 }
 async function handleCancelBatch(batch: PartBatch) {
-  if (!await confirmDangerous(
-    '取消批次',
-    `确认取消批次 ${batch.batch_label}（${batch.quantity} 件，${statusLabelOf(batch.status)}）？`
-      + '该批次数量将从在制中移除，不可恢复。',
-    { type: 'warning', confirmText: '确认取消', cancelText: '返回' },
-  )) return
-  await onCancelBatch(batch)
-  void fetchBatches()
+  if (
+    !(await confirmDangerous(
+      '取消批次',
+      `确认取消批次 ${batch.batch_label}（${batch.quantity} 件，${statusLabelOf(batch.status)}）？` +
+        '该批次数量将从在制中移除，不可恢复。',
+      { type: 'warning', confirmText: '确认取消', cancelText: '返回' },
+    ))
+  )
+    return;
+  await onCancelBatch(batch);
+  void fetchBatches();
 }
 
 // ============ 配对上传 / 下发（PartCncCard 触发）============
 // 2026-08-25 T10p5：emit payload 改为 { gcodes, setup, resolve }，
 // shell 等 API 完成再调 resolve：成功才关 dialog + reset submitting。
 async function handlePairUpload(payload: {
-  gcodes: File[]
-  setup: File
-  resolve: (ok: boolean) => void
+  gcodes: File[];
+  setup: File;
+  resolve: (ok: boolean) => void;
 }) {
-  const ok = await onPairUpload(payload.gcodes, payload.setup)
-  payload.resolve(ok)
+  const ok = await onPairUpload(payload.gcodes, payload.setup);
+  payload.resolve(ok);
 }
 async function handleRelease(payload: {
-  shelfId: string
-  processId: string
-  resolve: (ok: boolean) => void
+  shelfId: string;
+  processId: string;
+  resolve: (ok: boolean) => void;
 }) {
-  const ok = await onReleaseToShelf(payload.shelfId, payload.processId)
+  const ok = await onReleaseToShelf(payload.shelfId, payload.processId);
   if (ok) {
-    await fetchPart()
-    void fetchEvents()
+    await fetchPart();
+    void fetchEvents();
   }
-  payload.resolve(ok)
+  payload.resolve(ok);
 }
 
 // ============ 报价新建（PartQuoteCard 触发）============
 // 2026-08-25 T10p5：emit payload 改为 { form, resolve }，
 // shell 等 API 完成再调 resolve：成功才关 dialog + reset submitting。
 async function handleCreateQuote(payload: {
-  form: { outsource_company_id: string; process_id: string; price: string; note: string }
-  resolve: (ok: boolean) => void
+  form: { outsource_company_id: string; process_id: string; price: string; note: string };
+  resolve: (ok: boolean) => void;
 }) {
-  const ok = await onCreateQuote(payload.form)
-  if (ok) void fetchEvents()  // 同步刷新历史（QUOTE_CREATED 事件）
-  payload.resolve(ok)
+  const ok = await onCreateQuote(payload.form);
+  if (ok) void fetchEvents(); // 同步刷新历史（QUOTE_CREATED 事件）
+  payload.resolve(ok);
 }
 
 // ============ 切换 partId 时重置 ============
-const { isInspector } = usePermissions()
+const { isInspector } = usePermissions();
 // FileListCard 需要 !isInspector 决定 show-print（直接用 raw ref）
-const isInspectorRaw = computed(() => isInspector.value)
+const isInspectorRaw = computed(() => isInspector.value);
 
 watch(
   () => route.params.id,
   async (id) => {
-    const s = String(id ?? '')
-    if (!s) return
-    partId.value = s
-    quotes.value = []
-    drawings.value = []
-    models3d.value = []
-    cadFiles.value = []
-    await fetchPart()
-    void fetchEvents()
-    void fetchBatches()
-    void fetchQuotes()
-    void fetchDrawings()
-    void fetch3DModels()
-    void fetchCadFiles()
-    void fetchCncPrograms()
+    const s = String(id ?? '');
+    if (!s) return;
+    partId.value = s;
+    quotes.value = [];
+    drawings.value = [];
+    models3d.value = [];
+    cadFiles.value = [];
+    await fetchPart();
+    void fetchEvents();
+    void fetchBatches();
+    void fetchQuotes();
+    void fetchDrawings();
+    void fetch3DModels();
+    void fetchCadFiles();
+    void fetchCncPrograms();
   },
-)
+);
 
 onMounted(() => {
-  void fetchPart()
-  void fetchEvents()
-  void fetchBatches()
-  void fetchQuotes()
-  void fetchDrawings()
-  void fetch3DModels()
-  void fetchCadFiles()
-  void fetchCncPrograms()
-})
+  void fetchPart();
+  void fetchEvents();
+  void fetchBatches();
+  void fetchQuotes();
+  void fetchDrawings();
+  void fetch3DModels();
+  void fetchCadFiles();
+  void fetchCncPrograms();
+});
 </script>
 
 <style lang="scss" scoped>

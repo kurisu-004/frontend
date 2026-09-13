@@ -15,27 +15,27 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
-import JsBarcode from 'jsbarcode'
+import { onMounted, ref, watch } from 'vue';
+import JsBarcode from 'jsbarcode';
 
 interface Props {
-  value: string
-  format?: string
-  width?: number
-  height?: number
-  displayValue?: boolean
+  value: string;
+  format?: string;
+  width?: number;
+  height?: number;
+  displayValue?: boolean;
 }
 const props = withDefaults(defineProps<Props>(), {
   format: 'CODE39',
   width: 2,
   height: 60,
   displayValue: true,
-})
+});
 
-const svgRef = ref<SVGSVGElement | null>(null)
+const svgRef = ref<SVGSVGElement | null>(null);
 
 function render(): void {
-  if (!svgRef.value || !props.value) return
+  if (!svgRef.value || !props.value) return;
   try {
     JsBarcode(svgRef.value, props.value, {
       format: props.format,
@@ -44,17 +44,14 @@ function render(): void {
       displayValue: props.displayValue,
       margin: 8,
       fontSize: 14,
-    })
+    });
   } catch (e) {
-    console.warn('Barcode render failed:', (e as Error).message)
+    console.warn('Barcode render failed:', (e as Error).message);
   }
 }
 
-onMounted(render)
-watch(
-  () => [props.value, props.format, props.width, props.height, props.displayValue],
-  render,
-)
+onMounted(render);
+watch(() => [props.value, props.format, props.width, props.height, props.displayValue], render);
 </script>
 
 <style lang="scss" scoped>

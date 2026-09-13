@@ -10,20 +10,15 @@
     <div class="table-toolbar">
       <ColumnVisibilityPopover
         :defs="columnDefs"
-        :model-value="columnVisibility.currentMap" @update:model-value="columnVisibility.update"
+        :model-value="columnVisibility.currentMap"
+        @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
         @reset-order="drag.reset"
       />
     </div>
     <PagedTable ref="pagedRef" :fetcher="fetcher" :default-page-size="20">
       <template #default="{ items, loading }">
-        <el-table
-          ref="tableRef"
-          :data="items"
-          v-loading="loading"
-          row-key="id"
-          stripe
-        >
+        <el-table ref="tableRef" v-loading="loading" :data="items" row-key="id" stripe>
           <template #empty>
             <el-empty description="暂无账号" />
           </template>
@@ -58,11 +53,23 @@
             <template #default="{ row }">
               <el-button link size="small" @click="openRoles(row)">角色</el-button>
               <el-button link size="small" @click="editUser(row)">编辑</el-button>
-              <el-popconfirm title="确认重置为默认密码 changeme？" width="240" @confirm="doReset(String(row.id))">
-                <template #reference><el-button link size="small" type="warning">重置密码</el-button></template>
+              <el-popconfirm
+                title="确认重置为默认密码 changeme？"
+                width="240"
+                @confirm="doReset(String(row.id))"
+              >
+                <template #reference
+                  ><el-button link size="small" type="warning">重置密码</el-button></template
+                >
               </el-popconfirm>
-              <el-popconfirm v-if="row.is_active" title="确认停用？" @confirm="doDeactivate(String(row.id))">
-                <template #reference><el-button link size="small" type="danger">停用</el-button></template>
+              <el-popconfirm
+                v-if="row.is_active"
+                title="确认停用？"
+                @confirm="doDeactivate(String(row.id))"
+              >
+                <template #reference
+                  ><el-button link size="small" type="danger">停用</el-button></template
+                >
               </el-popconfirm>
             </template>
           </el-table-column>
@@ -79,38 +86,48 @@
       @closed="resetForm"
     >
       <el-form ref="userFormRef" :model="userForm" :rules="userRules" label-width="80px">
-        <el-form-item label="用户名" prop="username"><el-input v-model="userForm.username" :disabled="!!editingUser" /></el-form-item>
-        <el-form-item label="姓名" prop="full_name"><el-input v-model="userForm.full_name" /></el-form-item>
-        <el-form-item label="密码" prop="password"><el-input v-model="userForm.password" type="password" show-password placeholder="留空不改" /></el-form-item>
+        <el-form-item label="用户名" prop="username"
+          ><el-input v-model="userForm.username" :disabled="!!editingUser"
+        /></el-form-item>
+        <el-form-item label="姓名" prop="full_name"
+          ><el-input v-model="userForm.full_name"
+        /></el-form-item>
+        <el-form-item label="密码" prop="password"
+          ><el-input
+            v-model="userForm.password"
+            type="password"
+            show-password
+            placeholder="留空不改"
+        /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCreate = false">取消</el-button>
-        <el-button type="primary" @click="saveUser" :loading="saving">保存</el-button>
+        <el-button type="primary" :loading="saving" @click="saveUser">保存</el-button>
       </template>
     </el-dialog>
 
     <!-- role dialog -->
-    <el-dialog
-      v-model="showRoles"
-      title="角色管理"
-      :width="rolesDlg.width"
-      :top="rolesDlg.top"
-    >
-      <p style="margin-bottom:8px">当前角色（{{ roleUser?.username }}）：</p>
-      <div v-for="r in roleList" :key="r.id" style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+    <el-dialog v-model="showRoles" title="角色管理" :width="rolesDlg.width" :top="rolesDlg.top">
+      <p style="margin-bottom: 8px">当前角色（{{ roleUser?.username }}）：</p>
+      <div
+        v-for="r in roleList"
+        :key="r.id"
+        style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px"
+      >
         <el-tag size="small">{{ r.role }}{{ r.shelf_code ? ` @${r.shelf_code}` : '' }}</el-tag>
-        <el-button link size="small" type="danger" @click="removeRole(String(roleUser?.id ?? ''), String(r.id))">移除</el-button>
+        <el-button
+          link
+          size="small"
+          type="danger"
+          @click="removeRole(String(roleUser?.id ?? ''), String(r.id))"
+          >移除</el-button
+        >
       </div>
       <el-divider />
       <el-form inline>
         <el-form-item label="加角色">
-          <el-select v-model="addRoleForm.role" placeholder="选角色" style="width:160px" clearable>
-            <el-option
-              v-for="o in ROLE_OPTIONS"
-              :key="o.value"
-              :label="o.label"
-              :value="o.value"
-            />
+          <el-select v-model="addRoleForm.role" placeholder="选角色" style="width: 160px" clearable>
+            <el-option v-for="o in ROLE_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="addRoleForm.role === 'SHELF_ACCOUNT'" label="货架（可多选）">
@@ -122,7 +139,7 @@
             collapse-tags-tooltip
             :max-collapse-tags="3"
             placeholder="选 1+ 个货架；留空 = 共享 HMI 通行"
-            style="width:340px"
+            style="width: 340px"
             clearable
           >
             <el-option
@@ -134,50 +151,69 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item><el-button @click="doAddRole" :disabled="!addRoleForm.role">添加</el-button></el-form-item>
+        <el-form-item
+          ><el-button :disabled="!addRoleForm.role" @click="doAddRole"
+            >添加</el-button
+          ></el-form-item
+        >
       </el-form>
-      <p v-if="addRoleForm.role === 'SHELF_ACCOUNT' && addRoleForm.shelfIds.length === 0" class="scope-hint">
+      <p
+        v-if="addRoleForm.role === 'SHELF_ACCOUNT' && addRoleForm.shelfIds.length === 0"
+        class="scope-hint"
+      >
         <el-icon><InfoFilled /></el-icon>
-        <span>货架留空 = 共享工控机（HMI）通行：该账号意图覆盖车间所有 PRODUCTION 架，不绑死单架。</span>
+        <span
+          >货架留空 = 共享工控机（HMI）通行：该账号意图覆盖车间所有 PRODUCTION
+          架，不绑死单架。</span
+        >
       </p>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, h } from 'vue'
-import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
-import { listUsers, createUser, updateUser, deactivateUser, resetUserPassword, listUserRoles, addUserRole, removeUserRole } from '@/api/users'
-import { listShelves } from '@/api/shelves'
-import type { UserOut, UserRoleOut } from '@/types/user'
-import type { Shelf } from '@/types/shelf'
-import { InfoFilled } from '@element-plus/icons-vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import PagedTable from '@/components/PagedTable.vue'
+import { ref, reactive, computed, onMounted, h } from 'vue';
+import { ElMessage, ElMessageBox, ElTag } from 'element-plus';
+import {
+  listUsers,
+  createUser,
+  updateUser,
+  deactivateUser,
+  resetUserPassword,
+  listUserRoles,
+  addUserRole,
+  removeUserRole,
+} from '@/api/users';
+import { listShelves } from '@/api/shelves';
+import type { UserOut, UserRoleOut } from '@/types/user';
+import type { Shelf } from '@/types/shelf';
+import { InfoFilled } from '@element-plus/icons-vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import PagedTable from '@/components/PagedTable.vue';
 import {
   useColumnVisibility,
   resolveDraggable,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import { useDialogSize } from '@/composables/useDialogSize'
-import { useListStatePersist } from '@/composables/useListFilterPersist'
+} from '@/composables/useColumnVisibility';
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
+import { useDialogSize } from '@/composables/useDialogSize';
+import { useListStatePersist } from '@/composables/useListFilterPersist';
 
-const userDlg = useDialogSize({ desktopWidth: 420 })
-const rolesDlg = useDialogSize({ desktopWidth: 560 })
+const userDlg = useDialogSize({ desktopWidth: 420 });
+const rolesDlg = useDialogSize({ desktopWidth: 560 });
 
 // PagedTable 持有 page/pageSize/total/loading/items（2026-08-25 T7）
-const pagedRef = ref()
+const pagedRef = ref();
 // 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
-const tableRef = ref()
+const tableRef = ref();
 // fetcher 闭包从 PagedTable 暴露的 ref 读分页参数（而不是 view 自己再持一份 refs）
 const fetcher = async (params: { page: number; pageSize: number }) => {
   return await listUsers({
     limit: params.pageSize,
     offset: (params.page - 1) * params.pageSize,
-  })
-}
+  });
+};
 
 // ============ 筛选状态持久化 ============
 // 2026-08-25 T7：pageSize 持久化通过 view 本地 size ↔ PagedTable.pageSize 双向同步；
@@ -196,43 +232,58 @@ const columnDefs: ColumnDef[] = [
   { key: 'username', label: '用户名', prop: 'username', minWidth: 120, align: 'center' },
   { key: 'full_name', label: '姓名', prop: 'full_name', minWidth: 100, align: 'center' },
   {
-    key: 'roles', label: '角色', minWidth: 200, align: 'center',
+    key: 'roles',
+    label: '角色',
+    minWidth: 200,
+    align: 'center',
     cellRender: ({ row }) => {
-      const u = row as UserOut
+      const u = row as UserOut;
       if (u.roles.length === 0) {
-        return h('span', { class: 'no-roles' }, '无角色')
+        return h('span', { class: 'no-roles' }, '无角色');
       }
       // 2026-08-27 T15：cellRender 必须返回单一 VNode,所以用 div 包裹多个 tag。
       // 原模板直接用 v-for 渲染多个根节点,这里改用 div.role-tags 容器复用 .role-tags flex 样式。
-      return h('div', { class: 'role-tags' }, u.roles.map((r) => h(ElTag,
-        { key: r.id, size: 'small', type: r.scope_type ? 'warning' : 'primary' },
-        () => `${r.role}${r.shelf_code ? ` @${r.shelf_code}` : ''}`)))
+      return h(
+        'div',
+        { class: 'role-tags' },
+        u.roles.map((r) =>
+          h(
+            ElTag,
+            { key: r.id, size: 'small', type: r.scope_type ? 'warning' : 'primary' },
+            () => `${r.role}${r.shelf_code ? ` @${r.shelf_code}` : ''}`,
+          ),
+        ),
+      );
     },
   },
   {
-    key: 'is_active', label: '状态', minWidth: 80, align: 'center',
-    cellRender: ({ row }) => h(ElTag,
-      { type: (row as UserOut).is_active ? 'success' : 'danger', size: 'small' },
-      () => (row as UserOut).is_active ? '启用' : '停用'),
+    key: 'is_active',
+    label: '状态',
+    minWidth: 80,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h(ElTag, { type: (row as UserOut).is_active ? 'success' : 'danger', size: 'small' }, () =>
+        (row as UserOut).is_active ? '启用' : '停用',
+      ),
   },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'user_list' })
-const drag = useColumnDrag(columnDefs, { listKey: 'user_list' })
+];
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'user_list' });
+const drag = useColumnDrag(columnDefs, { listKey: 'user_list' });
 
-const showCreate = ref(false)
-const saving = ref(false)
-const editingUser = ref<UserOut | null>(null)
-const userFormRef = ref()
-const userForm = reactive({ username: '', password: '', full_name: '' })
+const showCreate = ref(false);
+const saving = ref(false);
+const editingUser = ref<UserOut | null>(null);
+const userFormRef = ref();
+const userForm = reactive({ username: '', password: '', full_name: '' });
 const userRules = {
   username: [{ required: true, message: '必填' }],
   full_name: [{ required: true, message: '必填' }],
-}
+};
 
-const showRoles = ref(false)
-const roleUser = ref<UserOut | null>(null)
-const roleList = ref<UserRoleOut[]>([])
-const shelfOptions = ref<Shelf[]>([])
+const showRoles = ref(false);
+const roleUser = ref<UserOut | null>(null);
+const roleList = ref<UserRoleOut[]>([]);
+const shelfOptions = ref<Shelf[]>([]);
 // 2026-07-13：5 个 role 全量暴露；shelfIds 多选。
 // shelfIds 在前端保持字符串：雪花 ID 长度 > 2^53，Number() 会丢精度。
 const ROLE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
@@ -241,117 +292,173 @@ const ROLE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'SHELF_ACCOUNT', label: '货架一体机账号' },
   { value: 'INSPECTOR', label: '品检员' },
   { value: 'CNC_PROGRAMMER', label: 'CNC 编程员' },
-]
-const addRoleForm = reactive<{ role: string; shelfIds: string[] }>({ role: '', shelfIds: [] })
+];
+const addRoleForm = reactive<{ role: string; shelfIds: string[] }>({ role: '', shelfIds: [] });
 
 // 当前账号已绑的 SHELF_ACCOUNT 货架 id 集合（多选下拉 disabled 防重复绑）
-const boundShelfIds = computed<Set<string>>(() => new Set(
-  roleList.value
-    .filter((r) => r.role === 'SHELF_ACCOUNT' && r.scope_id)
-    .map((r) => String(r.scope_id)),
-))
+const boundShelfIds = computed<Set<string>>(
+  () =>
+    new Set(
+      roleList.value
+        .filter((r) => r.role === 'SHELF_ACCOUNT' && r.scope_id)
+        .map((r) => String(r.scope_id)),
+    ),
+);
 
 async function fetchData() {
   // 2026-08-25 T7：fetchData 现在是 PagedTable 的薄包装；view 其它地方仍调用以触发刷新
-  await pagedRef.value?.fetch()
+  await pagedRef.value?.fetch();
 }
 
-function resetForm() { userForm.username = ''; userForm.password = ''; userForm.full_name = ''; editingUser.value = null }
-function editUser(obj: any) { const u = obj as UserOut; editingUser.value = u; userForm.username = u.username; userForm.full_name = u.full_name; userForm.password = ''; showCreate.value = true }
+function resetForm() {
+  userForm.username = '';
+  userForm.password = '';
+  userForm.full_name = '';
+  editingUser.value = null;
+}
+function editUser(obj: any) {
+  const u = obj as UserOut;
+  editingUser.value = u;
+  userForm.username = u.username;
+  userForm.full_name = u.full_name;
+  userForm.password = '';
+  showCreate.value = true;
+}
 
 async function saveUser() {
-  const valid = await userFormRef.value?.validate().catch(() => false)
-  if (!valid) return
-  saving.value = true
+  const valid = await userFormRef.value?.validate().catch(() => false);
+  if (!valid) return;
+  saving.value = true;
   try {
     if (editingUser.value) {
-      const p: any = { full_name: userForm.full_name }
-      if (userForm.password) p.password = userForm.password
-      await updateUser(String(editingUser.value.id), p)
+      const p: any = { full_name: userForm.full_name };
+      if (userForm.password) p.password = userForm.password;
+      await updateUser(String(editingUser.value.id), p);
     } else {
-      await createUser({ username: userForm.username, password: userForm.password || 'changeme', full_name: userForm.full_name })
+      await createUser({
+        username: userForm.username,
+        password: userForm.password || 'changeme',
+        full_name: userForm.full_name,
+      });
     }
-    showCreate.value = false
-    await fetchData()
-    ElMessage.success('已保存')
-  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
-  finally { saving.value = false }
+    showCreate.value = false;
+    await fetchData();
+    ElMessage.success('已保存');
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败');
+  } finally {
+    saving.value = false;
+  }
 }
 
-async function doDeactivate(id: string) { await deactivateUser(id); await fetchData(); ElMessage.success('已停用') }
+async function doDeactivate(id: string) {
+  await deactivateUser(id);
+  await fetchData();
+  ElMessage.success('已停用');
+}
 
 async function doReset(id: string) {
   try {
-    await resetUserPassword(id)
-    ElMessage.success('已重置为默认密码 changeme')
-  } catch (e: any) { ElMessage.error(e?.message || '重置失败') }
+    await resetUserPassword(id);
+    ElMessage.success('已重置为默认密码 changeme');
+  } catch (e: any) {
+    ElMessage.error(e?.message || '重置失败');
+  }
 }
 
-async function openRoles(obj: any) { const u = obj as UserOut;
-  roleUser.value = u
-  roleList.value = await listUserRoles(String(u.id))
-  shelfOptions.value = (await listShelves({ is_active: true, limit: 200 })).items
-  addRoleForm.role = ''; addRoleForm.shelfIds = []
-  showRoles.value = true
+async function openRoles(obj: any) {
+  const u = obj as UserOut;
+  roleUser.value = u;
+  roleList.value = await listUserRoles(String(u.id));
+  shelfOptions.value = (await listShelves({ is_active: true, limit: 200 })).items;
+  addRoleForm.role = '';
+  addRoleForm.shelfIds = [];
+  showRoles.value = true;
 }
 
 async function doAddRole() {
-  if (!roleUser.value || !addRoleForm.role) return
-  const targetRole = addRoleForm.role  // 捕获，下面的异步调用之后用
+  if (!roleUser.value || !addRoleForm.role) return;
+  const targetRole = addRoleForm.role; // 捕获，下面的异步调用之后用
   try {
     if (targetRole === 'SHELF_ACCOUNT') {
       // 多货架绑定：循环 N 次 addUserRole（DB 唯一约束天然去重 → 409 提示）
       // 空数组 → 走 scope_id=NULL 通配（共享 HMI 场景）
       if (addRoleForm.shelfIds.length === 0) {
         await addUserRole(String(roleUser.value.id), {
-          role: 'SHELF_ACCOUNT', scope_type: 'shelf', scope_id: null,
-        })
+          role: 'SHELF_ACCOUNT',
+          scope_type: 'shelf',
+          scope_id: null,
+        });
       } else {
         for (const sid of addRoleForm.shelfIds) {
           await addUserRole(String(roleUser.value.id), {
-            role: 'SHELF_ACCOUNT', scope_type: 'shelf', scope_id: sid,
-          })
+            role: 'SHELF_ACCOUNT',
+            scope_type: 'shelf',
+            scope_id: sid,
+          });
         }
       }
     } else {
       // 非 SHELF_ACCOUNT role（MANAGER/CLERK/INSPECTOR/CNC_PROGRAMMER）：scope 必须 NULL
       await addUserRole(String(roleUser.value.id), {
-        role: targetRole, scope_type: null, scope_id: null,
-      })
+        role: targetRole,
+        scope_type: null,
+        scope_id: null,
+      });
     }
-    roleList.value = await listUserRoles(String(roleUser.value.id))
-    addRoleForm.shelfIds = []
-    ElMessage.success('已添加')
+    roleList.value = await listUserRoles(String(roleUser.value.id));
+    addRoleForm.shelfIds = [];
+    ElMessage.success('已添加');
     // 提示 SHELF_ACCOUNT：绑定变更要等 token 自动刷新（最多 12h）或重新登录
     if (targetRole === 'SHELF_ACCOUNT') {
       ElMessageBox.alert(
         '绑定变更已写入。关联 SHELF_ACCOUNT 账号需重新登录或等待 access token 自动刷新（最多 12h）后才能看到新货架范围。',
         '提示',
         { type: 'info' },
-      ).catch(() => { /* 用户关掉提示，忽略 */ })
+      ).catch(() => {
+        /* 用户关掉提示，忽略 */
+      });
     }
-  } catch (e: any) { ElMessage.error(e?.message || '添加失败') }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '添加失败');
+  }
 }
 
-async function removeRole(uid: string, rid: string) { await removeUserRole(uid, rid); roleList.value = await listUserRoles(uid); ElMessage.success('已移除') }
+async function removeRole(uid: string, rid: string) {
+  await removeUserRole(uid, rid);
+  roleList.value = await listUserRoles(uid);
+  ElMessage.success('已移除');
+}
 
 onMounted(() => {
-  void fetchData()
+  void fetchData();
   // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
   // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
-  drag.applyDrag(tableRef)
-})
+  drag.applyDrag(tableRef);
+});
 </script>
 
 <style lang="scss" scoped>
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; h2 { margin: 0; font-size: 18px; } }
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  h2 {
+    margin: 0;
+    font-size: 18px;
+  }
+}
 // 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层）
 .table-toolbar {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 8px;
 }
-.no-roles { color: #c0c4cc; font-size: 13px; }
+.no-roles {
+  color: #c0c4cc;
+  font-size: 13px;
+}
 .pagination {
   display: flex;
   justify-content: flex-end;

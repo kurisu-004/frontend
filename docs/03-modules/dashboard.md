@@ -8,13 +8,13 @@
 
 ## 一、入口与路由
 
-| 项 | 值 |
-|---|---|
-| 路径 | `/dashboard`（`/` 重定向到此） |
-| 组件 | `src/views/Dashboard.vue` |
-| 守卫 | `requireAuth: true`（所有登录用户） |
-| menuCode | `home` |
-| 父级 | `MainLayout` 子树 |
+| 项       | 值                                  |
+| -------- | ----------------------------------- |
+| 路径     | `/dashboard`（`/` 重定向到此）      |
+| 组件     | `src/views/Dashboard.vue`           |
+| 守卫     | `requireAuth: true`（所有登录用户） |
+| menuCode | `home`                              |
+| 父级     | `MainLayout` 子树                   |
 
 路由定义见 `src/router/index.ts`，父级 `/` 节点自带 `redirect: '/dashboard'`，登录后浏览器地址栏落到 `/dashboard`。
 
@@ -25,13 +25,13 @@
 
 ## 三、主要 API 调用
 
-| 端点 | 实例 | 用途 |
-|---|---|---|
-| `ws://.../api/v1/ws/dashboard`（含 `?token=`） | WebSocket（不走 axios） | dashboard snapshot + 业务事件推送 |
-| `onDashboardSnapshot(handler)` | `src/api/dashboard.ts` 模块级单例 | 订阅全量快照 |
-| `onDashboardEvent(handler)` | 同上 | 订阅增量事件（被 NotificationBanner 消费） |
-| `onDashboardStatus(handler)` | 同上 | 订阅连接状态（connecting / open / closed） |
-| `reconnectDashboard()` | 同上 | JWT 刷新后强制重连（监听 `auth:tokens-refreshed`） |
+| 端点                                           | 实例                              | 用途                                               |
+| ---------------------------------------------- | --------------------------------- | -------------------------------------------------- |
+| `ws://.../api/v1/ws/dashboard`（含 `?token=`） | WebSocket（不走 axios）           | dashboard snapshot + 业务事件推送                  |
+| `onDashboardSnapshot(handler)`                 | `src/api/dashboard.ts` 模块级单例 | 订阅全量快照                                       |
+| `onDashboardEvent(handler)`                    | 同上                              | 订阅增量事件（被 NotificationBanner 消费）         |
+| `onDashboardStatus(handler)`                   | 同上                              | 订阅连接状态（connecting / open / closed）         |
+| `reconnectDashboard()`                         | 同上                              | JWT 刷新后强制重连（监听 `auth:tokens-refreshed`） |
 
 `src/api/dashboard.ts` 是 WebSocket 单例 + 多频道订阅的实现：模块级维护 `ws`、`snapSubs`、`eventSubs`、`statusSubs` 三个 Set；第一个订阅触发 `ensureConnected()`，最后一个反订阅只 `unsubscribe` 频道，不断 socket。指数退避重连 1s → 2s → 4s → ... 上限 10s。
 
@@ -41,10 +41,10 @@
 
 ## 五、权限
 
-| 角色 | 可见性 | 点击详情 |
-|---|---|---|
-| MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER | 是 | 是 |
-| SHELF_ACCOUNT（工控机） | 是 | **否**（`canOpenPartDetail` 闭锁） |
+| 角色                                         | 可见性 | 点击详情                           |
+| -------------------------------------------- | ------ | ---------------------------------- |
+| MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER | 是     | 是                                 |
+| SHELF_ACCOUNT（工控机）                      | 是     | **否**（`canOpenPartDetail` 闭锁） |
 
 `canOpenPartDetail` 在 `Dashboard.vue` 顶部定义，纯前端 gate；后端 `GET /parts/{id}` 同样对 SHELF_ACCOUNT 收紧，前后端一致。
 
@@ -80,10 +80,10 @@
 
 dashboard WS 消息三类，前端分发靠 `msg.type` 判断：
 
-| 类型 | 触发时机 | 关键字段 |
-|---|---|---|
-| `snapshot` | 连接建立后第一帧 / 每次重连后第一帧 | `data.on_production_shelves[]`、`data.in_process[]` |
-| `event` | 工人刷卡、零件状态切换等增量事件 | `event_type`（PICKED_UP / RETURNED / INSPECTED ...）、`drawing_no`、`shelf_code`、`is_urgent` |
-| 状态 | WebSocket 实例自身 | 仅客户端内部：`connecting` / `open` / `closed` |
+| 类型       | 触发时机                            | 关键字段                                                                                      |
+| ---------- | ----------------------------------- | --------------------------------------------------------------------------------------------- |
+| `snapshot` | 连接建立后第一帧 / 每次重连后第一帧 | `data.on_production_shelves[]`、`data.in_process[]`                                           |
+| `event`    | 工人刷卡、零件状态切换等增量事件    | `event_type`（PICKED_UP / RETURNED / INSPECTED ...）、`drawing_no`、`shelf_code`、`is_urgent` |
+| 状态       | WebSocket 实例自身                  | 仅客户端内部：`connecting` / `open` / `closed`                                                |
 
 前端 `DashboardServerMessage` 是 `snapshot | event` 的联合类型；状态走单独的 `onDashboardStatus` 通道，不进入 dispatch 路径。完整字段定义见 `src/types/dashboard.ts`。

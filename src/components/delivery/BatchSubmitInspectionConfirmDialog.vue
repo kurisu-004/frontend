@@ -26,166 +26,182 @@
   申请见 docs/api-requirements/scan-inspect.md。
 -->
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue'
-import { ElMessage, ElTag } from 'element-plus'
-import { Upload } from '@element-plus/icons-vue'
+import { computed, h, onMounted, ref } from 'vue';
+import { ElMessage, ElTag } from 'element-plus';
+import { Upload } from '@element-plus/icons-vue';
 
-import { useDialogSize } from '@/composables/useDialogSize'
-import { useBulkScanInspect } from '@/composables/useBulkScanInspect'
-import type { BulkScanFailure, BulkScanItem } from '@/composables/useBulkScanInspect'
-import { useBulkPassInspection } from '@/composables/useBulkPassInspection'
-import type { BulkPassItem } from '@/composables/useBulkPassInspection'
-import { listShelves } from '@/api/shelves'
-import type { Shelf } from '@/types/shelf'
-import type { BlockedScanItem } from '@/types/deliveryNote'
+import { useDialogSize } from '@/composables/useDialogSize';
+import { useBulkScanInspect } from '@/composables/useBulkScanInspect';
+import type { BulkScanFailure, BulkScanItem } from '@/composables/useBulkScanInspect';
+import { useBulkPassInspection } from '@/composables/useBulkPassInspection';
+import type { BulkPassItem } from '@/composables/useBulkPassInspection';
+import { listShelves } from '@/api/shelves';
+import type { Shelf } from '@/types/shelf';
+import type { BlockedScanItem } from '@/types/deliveryNote';
 import {
   resolveDraggable,
   useColumnVisibility,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+} from '@/composables/useColumnVisibility';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 
 interface Props {
   /** v-model 显隐 */
-  modelValue: boolean
+  modelValue: boolean;
   /** 待送检件列表（父组件应已剔除 'on note DN-XXX' 冲突项，且仅保留 status ∈ {PENDING, PROGRAMMING, IN_PROCESS}） */
-  failures: BlockedScanItem[]
+  failures: BlockedScanItem[];
   /** 后端 message，作为弹窗副标题展示 */
-  reason: string
+  reason: string;
   /** 扫码时缓存的 code，emit submit-success 时父组件用它重扫 */
-  originalCode: string
+  originalCode: string;
 }
 
-const props = defineProps<Props>()
+const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void
+  (e: 'update:modelValue', v: boolean): void;
   /** 全部送检成功 → 父组件重扫 originalCode */
-  (e: 'submit-success'): void
+  (e: 'submit-success'): void;
   /** 部分送检 → 父组件 toast + 保留弹窗 */
-  (e: 'submit-partial', result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void
+  (e: 'submit-partial', result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void;
   /** 用户点取消 */
-  (e: 'cancel'): void
-}>()
+  (e: 'cancel'): void;
+}>();
 
-const dlg = useDialogSize({ desktopWidth: 920 })
-const bulk = useBulkScanInspect()
+const dlg = useDialogSize({ desktopWidth: 920 });
+const bulk = useBulkScanInspect();
 // 2026-08-28 路线 B 改造：第二批「同时过检此件」走 useBulkPassInspection.batchToShip。
-const passBulk = useBulkPassInspection()
+const passBulk = useBulkPassInspection();
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
 // 「送检数量」(el-input-number + 受控 v-model) 和「同时过检」(条件 ElCheckbox + v-if)
 // 不进 defs，保留为字面量列。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
-const tableRef = ref()
+const tableRef = ref();
 const columnDefs: ColumnDef[] = [
   { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center' },
   {
-    key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 100, align: 'center',
-    cellRender: ({ row }) => h('span',
-      { class: { muted: !(row as BlockedScanItem).drawing_no } },
-      (row as BlockedScanItem).drawing_no || '—'),
+    key: 'drawing_no',
+    label: '图号',
+    prop: 'drawing_no',
+    minWidth: 100,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h(
+        'span',
+        { class: { muted: !(row as BlockedScanItem).drawing_no } },
+        (row as BlockedScanItem).drawing_no || '—',
+      ),
   },
-  { key: 'name', label: '名称', prop: 'name', minWidth: 110, showOverflowTooltip: true, align: 'center' },
   {
-    key: 'status', label: '状态', width: 100, align: 'center',
+    key: 'name',
+    label: '名称',
+    prop: 'name',
+    minWidth: 110,
+    showOverflowTooltip: true,
+    align: 'center',
+  },
+  {
+    key: 'status',
+    label: '状态',
+    width: 100,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as BlockedScanItem
+      const r = row as BlockedScanItem;
       // cellRender 必须返回单个 VNode；空状态回落 —。
-      if (!r.status) return h('span', { class: 'muted' }, '—')
-      return h(ElTag,
+      if (!r.status) return h('span', { class: 'muted' }, '—');
+      return h(
+        ElTag,
         { type: r.status === 'INSPECTION' ? 'warning' : 'primary', effect: 'light', size: 'small' },
-        () => r.status as string)
+        () => r.status as string,
+      );
     },
   },
   {
-    key: 'reason', label: '原因', minWidth: 120, showOverflowTooltip: true,
+    key: 'reason',
+    label: '原因',
+    minWidth: 120,
+    showOverflowTooltip: true,
     cellRender: ({ row }) => {
-      const reason = (row as BlockedScanItem).reason ?? ''
-      return h('span', { title: reason },
-        reason.length > 24 ? `${reason.slice(0, 24)}…` : reason)
+      const reason = (row as BlockedScanItem).reason ?? '';
+      return h('span', { title: reason }, reason.length > 24 ? `${reason.slice(0, 24)}…` : reason);
     },
   },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'batch_submit_inspection_confirm' })
-const drag = useColumnDrag(columnDefs, { listKey: 'batch_submit_inspection_confirm' })
+];
+const columnVisibility = useColumnVisibility(columnDefs, {
+  listKey: 'batch_submit_inspection_confirm',
+});
+const drag = useColumnDrag(columnDefs, { listKey: 'batch_submit_inspection_confirm' });
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
-drag.applyDrag(tableRef)
+drag.applyDrag(tableRef);
 
 // ============ 品检架候选 ============
 // 扫码建单角色（CLERK / MANAGER / INSPECTOR）没有 SHELF_ACCOUNT 货架绑定，
 // 因此本对话框直接拉全场 INSPECTION active 货架让用户选一个。
-const shelves = ref<Shelf[]>([])
-const selectedShelfId = ref<string | null>(null)
-const shelvesLoading = ref(false)
-const shelvesError = ref<string | null>(null)
+const shelves = ref<Shelf[]>([]);
+const selectedShelfId = ref<string | null>(null);
+const shelvesLoading = ref(false);
+const shelvesError = ref<string | null>(null);
 
 async function loadShelves(): Promise<void> {
-  shelvesLoading.value = true
-  shelvesError.value = null
+  shelvesLoading.value = true;
+  shelvesError.value = null;
   try {
-    const result = await listShelves({ zone: 'INSPECTION', is_active: true })
-    shelves.value = result.items
+    const result = await listShelves({ zone: 'INSPECTION', is_active: true });
+    shelves.value = result.items;
   } catch (e) {
-    shelvesError.value = (e as Error)?.message ?? '加载品检架失败'
-    shelves.value = []
+    shelvesError.value = (e as Error)?.message ?? '加载品检架失败';
+    shelves.value = [];
   } finally {
-    shelvesLoading.value = false
+    shelvesLoading.value = false;
   }
 }
 
 onMounted(() => {
-  void loadShelves()
-})
+  void loadShelves();
+});
 
 // ============ 副标题：去掉"失败明细：..."之后的部分（明细已在表格）============
 const shortReason = computed(() => {
-  const r = props.reason ?? ''
-  const cut = r.split(/失败明细[:：]/)[0].trim()
-  return cut || r
-})
+  const r = props.reason ?? '';
+  const cut = r.split(/失败明细[:：]/)[0].trim();
+  return cut || r;
+});
 
 // ============ per-row 数量（默认 = 该件 quantity）============
-const rowQuantities = ref<Record<string, number | null>>({})
+const rowQuantities = ref<Record<string, number | null>>({});
 // 返回该行用户调过的数量；未调过返回 null（提交时 fallback 到 row.quantity 全量）。
 // 防御：part_id 可能为 undefined（21405 散件），返回 null 不参与索引。
 function getQuantity(row: BlockedScanItem): number | null {
-  if (!row.part_id) return null
-  return row.part_id in rowQuantities.value
-    ? rowQuantities.value[row.part_id] ?? null
-    : null
+  if (!row.part_id) return null;
+  return row.part_id in rowQuantities.value ? (rowQuantities.value[row.part_id] ?? null) : null;
 }
 function setQuantity(row: BlockedScanItem, val: number | null): void {
-  if (!row.part_id) return
-  rowQuantities.value = { ...rowQuantities.value, [row.part_id]: val }
+  if (!row.part_id) return;
+  rowQuantities.value = { ...rowQuantities.value, [row.part_id]: val };
 }
 
 // ============ 兼过检勾选（仅 status==='INSPECTION' 的行启用）============
 // 设计说明：扫码建单 21418 失败明细里可能同时含 IN_PROCESS 子件 + 已 INSPECTION 子件
 // （典型场景：装配件混合状态）。本对话框默认只处理 status ∈ {PENDING/PROGRAMMING/IN_PROCESS}
 // 的"未送检"行；用户在表格里勾选"同时帮它过检"，则确认时拆成两批调用。
-const checkedAlsoPass = ref<Set<string>>(new Set())
+const checkedAlsoPass = ref<Set<string>>(new Set());
 function toggleAlsoPass(partId: string): void {
-  const next = new Set(checkedAlsoPass.value)
-  if (next.has(partId)) next.delete(partId)
-  else next.add(partId)
-  checkedAlsoPass.value = next
+  const next = new Set(checkedAlsoPass.value);
+  if (next.has(partId)) next.delete(partId);
+  else next.add(partId);
+  checkedAlsoPass.value = next;
 }
 
 const inspectableFailures = computed(() =>
   props.failures.filter(
-    (f) =>
-      f.status === 'PENDING' ||
-      f.status === 'PROGRAMMING' ||
-      f.status === 'IN_PROCESS',
+    (f) => f.status === 'PENDING' || f.status === 'PROGRAMMING' || f.status === 'IN_PROCESS',
   ),
-)
-const passableFailures = computed(() =>
-  props.failures.filter((f) => f.status === 'INSPECTION'),
-)
+);
+const passableFailures = computed(() => props.failures.filter((f) => f.status === 'INSPECTION'));
 
 // ============ 可用条件 ============
 // - 至少一个"待送检"行（inspectableFailures 非空）
@@ -196,30 +212,28 @@ const canBulkSubmit = computed(
     inspectableFailures.value.length > 0 &&
     selectedShelfId.value !== null &&
     selectedShelfId.value.length > 0 &&
-    props.failures.every(
-      (f) => typeof f.part_id === 'string' && f.part_id.length > 0,
-    ),
-)
+    props.failures.every((f) => typeof f.part_id === 'string' && f.part_id.length > 0),
+);
 
 const disabledTooltip = computed(() => {
-  if (shelvesError.value) return `品检架加载失败：${shelvesError.value}`
-  if (!selectedShelfId.value) return '请先选择品检架'
+  if (shelvesError.value) return `品检架加载失败：${shelvesError.value}`;
+  if (!selectedShelfId.value) return '请先选择品检架';
   if (inspectableFailures.value.length === 0) {
-    return '列表中没有可送检的件（status ∉ {PENDING, PROGRAMMING, IN_PROCESS}）'
+    return '列表中没有可送检的件（status ∉ {PENDING, PROGRAMMING, IN_PROCESS}）';
   }
-  return ''
-})
+  return '';
+});
 
 // ============ actions ============
 
 function onCancel(): void {
-  emit('update:modelValue', false)
-  emit('cancel')
+  emit('update:modelValue', false);
+  emit('cancel');
 }
 
 // 关闭弹窗的统一入口（submit-success / partial 都用）
 function closeDialog(): void {
-  emit('update:modelValue', false)
+  emit('update:modelValue', false);
 }
 
 // BlockedScanItem[] → BulkScanItem[]
@@ -229,83 +243,85 @@ function closeDialog(): void {
 // 后端 INVALID_VALUE 兜底分支；UI 层仍显示这些行，由用户用其他途径处理。
 function toBulkScanItems(rows: BlockedScanItem[]): BulkScanItem[] {
   return rows.flatMap((f) => {
-    if (!f.batch_id) return []
-    const q = getQuantity(f)
+    if (!f.batch_id) return [];
+    const q = getQuantity(f);
     // 2026-08-29：BlockedScanItem 没有 batch.version（legacy 21405 占位 item）
     // → 后端会回 40901；本对话框 dead code（DeliveryNoteScan 已不挂载），
     // 仅补类型必填，行为以 route B 的 DeliveryScanCandidateDialog 为准。
-    return [{
-      batch_id: f.batch_id,
-      version: 0,
-      quantity: q ?? null,
-      label: `${f.serial_no} · ${f.name}`,
-    }]
-  })
+    return [
+      {
+        batch_id: f.batch_id,
+        version: 0,
+        quantity: q ?? null,
+        label: `${f.serial_no} · ${f.name}`,
+      },
+    ];
+  });
 }
 
 // 2026-08-28 路线 B 改造：第二批走 useBulkPassInspection（batchToShip），
 // 同样只带 batch_id + quantity + label。
 function toBulkPassItems(rows: BlockedScanItem[]): BulkPassItem[] {
   return rows.flatMap((f) => {
-    if (!f.batch_id) return []
-    const q = getQuantity(f)
+    if (!f.batch_id) return [];
+    const q = getQuantity(f);
     // 2026-08-29：同上，legacy 占位 item 无 batch.version。
-    return [{
-      batch_id: f.batch_id,
-      version: 0,
-      quantity: q ?? null,
-      label: `${f.serial_no} · ${f.name}`,
-    }]
-  })
+    return [
+      {
+        batch_id: f.batch_id,
+        version: 0,
+        quantity: q ?? null,
+        label: `${f.serial_no} · ${f.name}`,
+      },
+    ];
+  });
 }
 
 async function onConfirm(): Promise<void> {
-  if (!canBulkSubmit.value || !selectedShelfId.value) return
+  if (!canBulkSubmit.value || !selectedShelfId.value) return;
 
   // 第一批：送检 inspectableFailures
   const firstResult = await bulk.run({
     target_inspection_shelf_id: selectedShelfId.value,
     items: toBulkScanItems(inspectableFailures.value),
-  })
+  });
 
   // 第二批（可选）：勾选的 INSPECTION 行 → READY_TO_SHIP（route B batchToShip）
   const alsoPassRows = passableFailures.value.filter(
     (f) => f.batch_id && f.part_id && checkedAlsoPass.value.has(f.part_id),
-  )
-  let secondResult: { passed: BlockedScanItem[]; failed: BulkScanFailure[] } | null = null
+  );
+  let secondResult: { passed: BlockedScanItem[]; failed: BulkScanFailure[] } | null = null;
   if (alsoPassRows.length > 0) {
-    const passResult = await passBulk.run(toBulkPassItems(alsoPassRows))
+    const passResult = await passBulk.run(toBulkPassItems(alsoPassRows));
     // useBulkPassInspection 返回 BulkPassFailure（item: BulkPassItem，batch_id 必填）；
     // emit 签名要 BulkScanFailure，这里仅用 .passed.length / .failed.length 做汇总，
     // 把 BulkPassFailure 透过类型断言塞进 BulkScanFailure[]（同形同 .code / .message）。
     secondResult = {
       passed: passResult.passed as unknown as BlockedScanItem[],
       failed: passResult.failed as unknown as BulkScanFailure[],
-    }
+    };
   }
 
   // 汇总两批结果
-  const totalPassed = firstResult.submitted.length + (secondResult?.passed.length ?? 0)
-  const totalFailed = firstResult.failed.length + (secondResult?.failed.length ?? 0)
+  const totalPassed = firstResult.submitted.length + (secondResult?.passed.length ?? 0);
+  const totalFailed = firstResult.failed.length + (secondResult?.failed.length ?? 0);
 
   if (totalFailed === 0) {
-    ElMessage.success(`已送检 ${totalPassed} 项`)
-    closeDialog()
-    emit('submit-success')
+    ElMessage.success(`已送检 ${totalPassed} 项`);
+    closeDialog();
+    emit('submit-success');
   } else if (totalPassed > 0) {
-    ElMessage.warning(
-      `部分送检：${totalPassed} 项成功 / ${totalFailed} 项失败`,
-    )
+    ElMessage.warning(`部分送检：${totalPassed} 项成功 / ${totalFailed} 项失败`);
     // 保留弹窗让用户看到（按需重试）；合并 failed 给父组件（toast）
     emit('submit-partial', {
       // firstResult.submitted 是 BulkScanItem[]，emit 签名要 BlockedScanItem[]；
       // 父组件 onSubmitPartial 只读 .passed.length / .failed.length，强转安全。
       passed: firstResult.submitted as unknown as BlockedScanItem[],
       failed: [...firstResult.failed, ...(secondResult?.failed ?? [])],
-    })
+    });
   } else {
-    const firstMsg = firstResult.failed[0]?.message ?? '未知错误'
-    ElMessage.error(`全部失败：${firstMsg}`)
+    const firstMsg = firstResult.failed[0]?.message ?? '未知错误';
+    ElMessage.error(`全部失败：${firstMsg}`);
   }
 }
 </script>
@@ -402,7 +418,12 @@ async function onConfirm(): Promise<void> {
             :max="row.quantity ?? 9999"
             size="small"
             :controls="false"
-            :disabled="!row.part_id || (row.status !== 'PENDING' && row.status !== 'PROGRAMMING' && row.status !== 'IN_PROCESS')"
+            :disabled="
+              !row.part_id ||
+              (row.status !== 'PENDING' &&
+                row.status !== 'PROGRAMMING' &&
+                row.status !== 'IN_PROCESS')
+            "
             @update:model-value="(v) => setQuantity(row as BlockedScanItem, v as number | null)"
           />
         </template>

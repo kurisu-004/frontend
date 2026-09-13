@@ -1,19 +1,19 @@
-import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import type { MenuNode } from '@/types/menu'
+import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
+import type { MenuNode } from '@/types/menu';
 
 declare module 'vue-router' {
   interface RouteMeta {
-    title?: string
-    icon?: string
-    breadcrumb?: Array<{ label: string; path?: string }>
-    requireAuth?: boolean
+    title?: string;
+    icon?: string;
+    breadcrumb?: Array<{ label: string; path?: string }>;
+    requireAuth?: boolean;
     /** 该路由所需的菜单 code；缺省表示不依赖菜单（公开 / 已登录即可）。
      *  守卫会校验"用户的菜单树中是否包含该 code"，单一权限源。 */
-    menuCode?: string
+    menuCode?: string;
     /** 该路由的访问条件：用户只要拥有任一列出的角色即可进入，无需 menuCode 命中。
      *  用例：工位扫码台（/scan/*）—— SHELF_ACCOUNT 业务上必须能进，但 SHELF_ACCOUNT
      *  的菜单树不含 scan_badge。allowRoles 检查在 menuCode 检查之前触发。 */
-    allowRoles?: string[]
+    allowRoles?: string[];
   }
 }
 
@@ -42,19 +42,35 @@ const routes: RouteRecordRaw[] = [
         path: 'parts',
         name: 'PartsList',
         component: () => import('@/views/parts/PartsList.vue'),
-        meta: { title: '零件一览', icon: 'Box', menuCode: 'parts_list', breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '零件一览' }] },
+        meta: {
+          title: '零件一览',
+          icon: 'Box',
+          menuCode: 'parts_list',
+          breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '零件一览' }],
+        },
       },
       {
         path: 'parts/new',
         name: 'PartsNew',
         component: () => import('@/views/parts/PartBatchNew.vue'),
-        meta: { title: '新建零件', menuCode: 'parts_new', breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '新建零件' }] },
+        meta: {
+          title: '新建零件',
+          menuCode: 'parts_new',
+          breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '新建零件' }],
+        },
       },
       {
         path: 'parts/:id(\\d+)',
         name: 'PartsDetail',
         component: () => import('@/views/parts/PartDetail.vue'),
-        meta: { title: '零件详情', breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '零件一览', path: '/parts' }, { label: '详情' }] },
+        meta: {
+          title: '零件详情',
+          breadcrumb: [
+            { label: '订单管理', path: '/parts' },
+            { label: '零件一览', path: '/parts' },
+            { label: '详情' },
+          ],
+        },
         props: true,
       },
       {
@@ -77,10 +93,7 @@ const routes: RouteRecordRaw[] = [
           title: '返修接收',
           icon: 'Tools',
           menuCode: 'repair_receive',
-          breadcrumb: [
-            { label: '订单管理', path: '/parts' },
-            { label: '返修接收' },
-          ],
+          breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '返修接收' }],
         },
       },
       {
@@ -213,14 +226,26 @@ const routes: RouteRecordRaw[] = [
         path: 'assemblies/:id(\\d+)',
         name: 'AssemblyDetail',
         component: () => import('@/views/assemblies/AssemblyDetail.vue'),
-        meta: { title: '装配件详情', breadcrumb: [{ label: '订单管理', path: '/assemblies' }, { label: '装配件一览', path: '/assemblies' }, { label: '详情' }] },
+        meta: {
+          title: '装配件详情',
+          breadcrumb: [
+            { label: '订单管理', path: '/assemblies' },
+            { label: '装配件一览', path: '/assemblies' },
+            { label: '详情' },
+          ],
+        },
         props: true,
       },
       {
         path: 'workers',
         name: 'WorkerList',
         component: () => import('@/views/WorkerList.vue'),
-        meta: { title: '工人一览', icon: 'User', menuCode: 'workers_list', breadcrumb: [{ label: '权限管理', path: '/workers' }, { label: '工人一览' }] },
+        meta: {
+          title: '工人一览',
+          icon: 'User',
+          menuCode: 'workers_list',
+          breadcrumb: [{ label: '权限管理', path: '/workers' }, { label: '工人一览' }],
+        },
       },
       {
         // 2026-09-11 新增：工序制定页（生产管理分组首项）
@@ -258,13 +283,23 @@ const routes: RouteRecordRaw[] = [
         path: 'users',
         name: 'UserList',
         component: () => import('@/views/users/UserList.vue'),
-        meta: { title: '账号管理', icon: 'Key', menuCode: 'users_list', breadcrumb: [{ label: '权限管理', path: '/users' }, { label: '账号管理' }] },
+        meta: {
+          title: '账号管理',
+          icon: 'Key',
+          menuCode: 'users_list',
+          breadcrumb: [{ label: '权限管理', path: '/users' }, { label: '账号管理' }],
+        },
       },
       {
         path: 'shelves',
         name: 'ShelfList',
         component: () => import('@/views/shelves/ShelfList.vue'),
-        meta: { title: '货架管理', icon: 'Platform', menuCode: 'shelves_list', breadcrumb: [{ label: '车间', path: '/shelves' }, { label: '货架管理' }] },
+        meta: {
+          title: '货架管理',
+          icon: 'Platform',
+          menuCode: 'shelves_list',
+          breadcrumb: [{ label: '车间', path: '/shelves' }, { label: '货架管理' }],
+        },
       },
       {
         path: 'statistics',
@@ -308,7 +343,10 @@ const routes: RouteRecordRaw[] = [
         meta: {
           title: '工序工种',
           menuCode: 'process_work_type',
-          breadcrumb: [{ label: '生产管理', path: '/production/process-work-type' }, { label: '工序工种' }],
+          breadcrumb: [
+            { label: '生产管理', path: '/production/process-work-type' },
+            { label: '工序工种' },
+          ],
         },
       },
     ],
@@ -319,11 +357,36 @@ const routes: RouteRecordRaw[] = [
     meta: { requireAuth: true, allowRoles: ['SHELF_ACCOUNT'] },
     children: [
       { path: '', redirect: '/scan/badge' },
-      { path: 'badge', name: 'ScanBadge', component: () => import('@/views/scan/ScanBadgeGate.vue'), meta: { title: '扫码台 · 工牌识别', menuCode: 'scan_badge' } },
-      { path: 'action', name: 'ScanAction', component: () => import('@/views/scan/ScanActionPicker.vue'), meta: { title: '扫码台 · 操作选择', menuCode: 'scan_badge' } },
-      { path: 'pick', name: 'ScanPick', component: () => import('@/views/scan/ScanPickParts.vue'), meta: { title: '扫码台 · 选件领取', menuCode: 'scan_badge' } },
-      { path: 'return', name: 'ScanReturn', component: () => import('@/views/scan/ScanReturnParts.vue'), meta: { title: '扫码台 · 选件放回', menuCode: 'scan_badge' } },
-      { path: 'inspect', name: 'ScanInspect', component: () => import('@/views/scan/ScanInspectParts.vue'), meta: { title: '扫码台 · 选件送检', menuCode: 'scan_badge' } },
+      {
+        path: 'badge',
+        name: 'ScanBadge',
+        component: () => import('@/views/scan/ScanBadgeGate.vue'),
+        meta: { title: '扫码台 · 工牌识别', menuCode: 'scan_badge' },
+      },
+      {
+        path: 'action',
+        name: 'ScanAction',
+        component: () => import('@/views/scan/ScanActionPicker.vue'),
+        meta: { title: '扫码台 · 操作选择', menuCode: 'scan_badge' },
+      },
+      {
+        path: 'pick',
+        name: 'ScanPick',
+        component: () => import('@/views/scan/ScanPickParts.vue'),
+        meta: { title: '扫码台 · 选件领取', menuCode: 'scan_badge' },
+      },
+      {
+        path: 'return',
+        name: 'ScanReturn',
+        component: () => import('@/views/scan/ScanReturnParts.vue'),
+        meta: { title: '扫码台 · 选件放回', menuCode: 'scan_badge' },
+      },
+      {
+        path: 'inspect',
+        name: 'ScanInspect',
+        component: () => import('@/views/scan/ScanInspectParts.vue'),
+        meta: { title: '扫码台 · 选件送检', menuCode: 'scan_badge' },
+      },
     ],
   },
   // 司机送货扫码台（2026-07-23）：MANAGER/INSPECTOR 的「送货」菜单入口，全屏、
@@ -348,37 +411,37 @@ const routes: RouteRecordRaw[] = [
       },
     ],
   },
-]
+];
 
-const router = createRouter({ history: createWebHistory(), routes })
+const router = createRouter({ history: createWebHistory(), routes });
 
 /** DFS 在用户的菜单树中查找指定 code。 */
 function treeContainsCode(tree: MenuNode[], code: string): boolean {
-  const stack: MenuNode[] = [...tree]
+  const stack: MenuNode[] = [...tree];
   while (stack.length > 0) {
-    const n = stack.pop()!
-    if (n.code === code) return true
-    if (n.children.length > 0) stack.push(...n.children)
+    const n = stack.pop()!;
+    if (n.code === code) return true;
+    if (n.children.length > 0) stack.push(...n.children);
   }
-  return false
+  return false;
 }
 
 /** DFS 在用户的菜单树中找第一个有 path 的节点路径；找不到返回 null。
  *  用作 menuCode 校验失败时的降级目标：避免再次陷入相同的菜单校验循环。 */
 function findFirstMenuPath(tree: MenuNode[]): string | null {
-  const stack: MenuNode[] = [...tree]
+  const stack: MenuNode[] = [...tree];
   while (stack.length > 0) {
-    const n = stack.pop()!
-    if (n.path) return n.path
-    if (n.children.length > 0) stack.push(...n.children)
+    const n = stack.pop()!;
+    if (n.path) return n.path;
+    if (n.children.length > 0) stack.push(...n.children);
   }
-  return null
+  return null;
 }
 
 // 全局前置守卫
 router.beforeEach(async (to, _from, next) => {
-  const { useAuthSession } = await import('@/composables/useAuthSession')
-  const { isAuthenticated, refreshOrLogout, menus, hasRole, isDummyAuthActive } = useAuthSession()
+  const { useAuthSession } = await import('@/composables/useAuthSession');
+  const { isAuthenticated, refreshOrLogout, menus, hasRole, isDummyAuthActive } = useAuthSession();
 
   // 1) 未登录 → /login
   // 2026-08-26 新增：dummy-auth 短路。
@@ -387,29 +450,29 @@ router.beforeEach(async (to, _from, next) => {
     // dummy 模式：跳过 refreshOrLogout，直接进入 allowRoles + menuCode 检查
   } else if (to.meta.requireAuth || to.matched.some((r) => r.meta.requireAuth)) {
     if (!isAuthenticated()) {
-      const ok = await refreshOrLogout(router)
-      if (!ok) return
+      const ok = await refreshOrLogout(router);
+      if (!ok) return;
     }
   }
 
   // 2) allowRoles 短路：用户拥有任一列出的角色则直接放行，不管 menuCode。
   //    用于 SHELF_ACCOUNT → /scan/* 等"业务上必须能进但 menuCode 校验会卡住"的场景。
-  const allowRoles = to.meta.allowRoles ?? []
+  const allowRoles = to.meta.allowRoles ?? [];
   if (allowRoles.length > 0 && allowRoles.some((r) => hasRole(r))) {
-    return next()
+    return next();
   }
 
   // 3) menuCode 校验：菜单树中存在对应 code 即放行。
   //    单一权限源。降级目标：用户菜单树中第一个可达路径；
   //    若菜单树为空（极端情况）→ /login。
-  const code = to.meta.menuCode
+  const code = to.meta.menuCode;
   if (code && !treeContainsCode(menus(), code)) {
-    const fallback = findFirstMenuPath(menus()) ?? '/login'
-    if (fallback === to.fullPath) return next()  // 自环保护，防止未来回归
-    return next(fallback)
+    const fallback = findFirstMenuPath(menus()) ?? '/login';
+    if (fallback === to.fullPath) return next(); // 自环保护，防止未来回归
+    return next(fallback);
   }
 
-  next()
-})
+  next();
+});
 
-export default router
+export default router;

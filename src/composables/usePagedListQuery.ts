@@ -15,31 +15,31 @@
 //   再调 pagedRef.value?.reset()。
 // - fetch 失败时不抛（view 自行 try/catch），但 loading 永远会清掉。
 
-import { ref, type Ref } from 'vue'
+import { ref, type Ref } from 'vue';
 
 export interface PageResult<T> {
-  items: T[]
-  total: number
+  items: T[];
+  total: number;
 }
 
 export interface PageQueryParams {
-  page: number
-  pageSize: number
-  keyword?: string
+  page: number;
+  pageSize: number;
+  keyword?: string;
 }
 
 export interface UsePagedListQueryReturn<T> {
-  items: Ref<T[]>
-  total: Ref<number>
-  loading: Ref<boolean>
-  page: Ref<number>
-  pageSize: Ref<number>
-  keyword: Ref<string>
-  fetch: () => Promise<void>
-  onPageChange: (p: number) => void
-  onPageSizeChange: (s: number) => void
-  onSearch: (k: string) => void
-  reset: () => Promise<void>
+  items: Ref<T[]>;
+  total: Ref<number>;
+  loading: Ref<boolean>;
+  page: Ref<number>;
+  pageSize: Ref<number>;
+  keyword: Ref<string>;
+  fetch: () => Promise<void>;
+  onPageChange: (p: number) => void;
+  onPageSizeChange: (s: number) => void;
+  onSearch: (k: string) => void;
+  reset: () => Promise<void>;
 }
 
 /**
@@ -51,49 +51,49 @@ export interface UsePagedListQueryReturn<T> {
 export function usePagedListQuery<T>(
   fetcher: (params: PageQueryParams) => Promise<PageResult<T>>,
 ): UsePagedListQueryReturn<T> {
-  const items = ref<T[]>([]) as Ref<T[]>
-  const total = ref(0)
-  const loading = ref(false)
-  const page = ref(1)
-  const pageSize = ref(20)
-  const keyword = ref('')
+  const items = ref<T[]>([]) as Ref<T[]>;
+  const total = ref(0);
+  const loading = ref(false);
+  const page = ref(1);
+  const pageSize = ref(20);
+  const keyword = ref('');
 
   async function fetch(): Promise<void> {
-    loading.value = true
+    loading.value = true;
     try {
       const result = await fetcher({
         page: page.value,
         pageSize: pageSize.value,
         keyword: keyword.value || undefined,
-      })
-      items.value = result.items
-      total.value = result.total
+      });
+      items.value = result.items;
+      total.value = result.total;
     } finally {
-      loading.value = false
+      loading.value = false;
     }
   }
 
   function onPageChange(p: number): void {
-    page.value = p
-    void fetch()
+    page.value = p;
+    void fetch();
   }
 
   function onPageSizeChange(s: number): void {
-    page.value = 1
-    pageSize.value = s
-    void fetch()
+    page.value = 1;
+    pageSize.value = s;
+    void fetch();
   }
 
   function onSearch(k: string): void {
-    page.value = 1
-    keyword.value = k
-    void fetch()
+    page.value = 1;
+    keyword.value = k;
+    void fetch();
   }
 
   async function reset(): Promise<void> {
-    page.value = 1
-    keyword.value = ''
-    await fetch()
+    page.value = 1;
+    keyword.value = '';
+    await fetch();
   }
 
   return {
@@ -108,5 +108,5 @@ export function usePagedListQuery<T>(
     onPageSizeChange,
     onSearch,
     reset,
-  }
+  };
 }

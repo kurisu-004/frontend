@@ -108,10 +108,7 @@
       <!-- 展开列：嵌套候选子表（2026-08-27 T25 决策：嵌套子表不接列拖动，列少行为稳定） -->
       <el-table-column type="expand">
         <template #default="scope">
-          <div
-            v-if="(scope.row as PreviewGroup).candidates.length > 0"
-            class="candidate-panel"
-          >
+          <div v-if="(scope.row as PreviewGroup).candidates.length > 0" class="candidate-panel">
             <el-table
               :data="(scope.row as PreviewGroup).candidates"
               :row-class-name="candidateRowClassName"
@@ -137,10 +134,7 @@
                     <span class="mono">{{ (row as CandidateRow).part.drawing_no || '—' }}</span>
                     <span>{{ (row as CandidateRow).part.name }}</span>
                   </div>
-                  <div
-                    v-if="(row as CandidateRow).part.assembly_name"
-                    class="assembly-line muted"
-                  >
+                  <div v-if="(row as CandidateRow).part.assembly_name" class="assembly-line muted">
                     所属装配件：{{ (row as CandidateRow).part.assembly_name }}
                   </div>
                 </template>
@@ -150,9 +144,7 @@
               <el-table-column label="现订单号 → 新订单号" min-width="220">
                 <template #default="{ row }">
                   <div class="edit-stack">
-                    <span class="cur mono">{{
-                      (row as CandidateRow).part.order_no || '—'
-                    }}</span>
+                    <span class="cur mono">{{ (row as CandidateRow).part.order_no || '—' }}</span>
                     <el-input
                       v-model="(row as CandidateRow).orderNo"
                       size="small"
@@ -267,12 +259,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref, watch } from 'vue'
-import type { UploadFile, UploadRawFile } from 'element-plus'
-import { ElMessage, ElMessageBox, ElTag, ElTooltip } from 'element-plus'
-import { Upload } from '@element-plus/icons-vue'
+import { computed, h, ref, watch } from 'vue';
+import type { UploadFile, UploadRawFile } from 'element-plus';
+import { ElMessage, ElMessageBox, ElTag, ElTooltip } from 'element-plus';
+import { Upload } from '@element-plus/icons-vue';
 
-import { useDialogSize } from '@/composables/useDialogSize'
+import { useDialogSize } from '@/composables/useDialogSize';
 import {
   batchUpdatePartsOrderInfo,
   matchPartsByExcelItems,
@@ -280,33 +272,33 @@ import {
   type PartBatchOrderInfoMatchResult,
   type PartBatchOrderInfoUpdateItem,
   type PartMatchInfo,
-} from '@/api/parts'
+} from '@/api/parts';
 import {
   parsePurchaseOrderExcel,
   type PurchaseOrderExcelItem,
-} from '@/utils/purchaseOrderExcelParser'
+} from '@/utils/purchaseOrderExcelParser';
 import {
   resolveDraggable,
   useColumnVisibility,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+} from '@/composables/useColumnVisibility';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 
 // ============================================================
 // Props / Emits
 // ============================================================
 
-const props = defineProps<{ modelValue: boolean }>()
+const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{
-  'update:modelValue': [value: boolean]
-  success: []
-}>()
+  'update:modelValue': [value: boolean];
+  success: [];
+}>();
 
-const dlg = useDialogSize({ desktopWidth: 1100 })
+const dlg = useDialogSize({ desktopWidth: 1100 });
 
-const dialogTitle = computed(() => '解析系统交期和订单号')
+const dialogTitle = computed(() => '解析系统交期和订单号');
 
 // ============================================================
 // 行模型（v0.3.3 follow-up：嵌套展开 + 多候选）
@@ -317,116 +309,140 @@ const dialogTitle = computed(() => '解析系统交期和订单号')
  * `candidates` 长度 0 / 1 / N；0 即未匹配（主行红底 + 展开箭头但内容空）。
  */
 interface PreviewGroup {
-  rowNo: number
-  lineNo: string
-  excelDrawingNo: string
-  excelName: string
-  matchType: 'PART_CODE' | 'PART_NAME' | 'ASSEMBLY_CODE' | 'ASSEMBLY_NAME' | 'NONE'
-  warnings: string[]
-  candidates: CandidateRow[]
+  rowNo: number;
+  lineNo: string;
+  excelDrawingNo: string;
+  excelName: string;
+  matchType: 'PART_CODE' | 'PART_NAME' | 'ASSEMBLY_CODE' | 'ASSEMBLY_NAME' | 'NONE';
+  warnings: string[];
+  candidates: CandidateRow[];
 }
 
 interface CandidateRow {
-  part: PartMatchInfo
+  part: PartMatchInfo;
   /** 默认 = isEmptyTarget(part)，用户可改 */
-  selected: boolean
+  selected: boolean;
   /** 默认 = 当前 docNo */
-  orderNo: string
+  orderNo: string;
   /** 默认 = Excel 行的 deliveryDate */
-  systemDeliveryDate: string | null
+  systemDeliveryDate: string | null;
 }
 
 // ============================================================
 // 状态
 // ============================================================
 
-const uploadRef = ref<{ clearFiles?: () => void } | null>(null)
-const docNo = ref('')
-const parseErrors = ref<string[]>([])
-const parseWarnings = ref<string[]>([])
-const matchErrors = ref<string[]>([])
-const previewGroups = ref<PreviewGroup[]>([])
-const parsing = ref(false)
-const submitting = ref(false)
+const uploadRef = ref<{ clearFiles?: () => void } | null>(null);
+const docNo = ref('');
+const parseErrors = ref<string[]>([]);
+const parseWarnings = ref<string[]>([]);
+const matchErrors = ref<string[]>([]);
+const previewGroups = ref<PreviewGroup[]>([]);
+const parsing = ref(false);
+const submitting = ref(false);
 /** part_id → 失败原因。用于标红失败候选行 + 失败主行（任一候选失败 → 主行变红）。 */
-const failedRows = ref<Map<string, string>>(new Map())
+const failedRows = ref<Map<string, string>>(new Map());
 
 // 2026-08-27 T25：列顺序拖动 + 可见性。
 // 仅顶层主表主行列接列拖动（type="expand" 嵌套子表保留字面量，不进 defs）。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
-    key: 'candidates', label: '候选数', width: 100, align: 'center',
+    key: 'candidates',
+    label: '候选数',
+    width: 100,
+    align: 'center',
     cellRender: ({ row }) => {
-      const g = row as PreviewGroup
+      const g = row as PreviewGroup;
       if (g.candidates.length > 0) {
-        return h(ElTag, { type: 'success', effect: 'plain', size: 'small' },
-          () => `${g.candidates.length} 候选`)
+        return h(
+          ElTag,
+          { type: 'success', effect: 'plain', size: 'small' },
+          () => `${g.candidates.length} 候选`,
+        );
       }
-      return h(ElTag, { type: 'danger', effect: 'light', size: 'small' }, () => '未匹配')
+      return h(ElTag, { type: 'danger', effect: 'light', size: 'small' }, () => '未匹配');
     },
   },
   { key: 'rowNo', label: 'Excel 行号', prop: 'rowNo', width: 92, align: 'center' },
   {
-    key: 'excelDrawingNo', label: '物料代码', minWidth: 170, align: 'center',
-    cellRender: ({ row }) => h('span', { class: 'mono' },
-      (row as PreviewGroup).excelDrawingNo || '—'),
+    key: 'excelDrawingNo',
+    label: '物料代码',
+    minWidth: 170,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h('span', { class: 'mono' }, (row as PreviewGroup).excelDrawingNo || '—'),
   },
   {
-    key: 'excelName', label: '描述', minWidth: 170, align: 'center',
+    key: 'excelName',
+    label: '描述',
+    minWidth: 170,
+    align: 'center',
     cellRender: ({ row }) => h('span', null, (row as PreviewGroup).excelName || '—'),
   },
   {
-    key: 'matchType', label: '匹配方式', width: 120, align: 'center',
+    key: 'matchType',
+    label: '匹配方式',
+    width: 120,
+    align: 'center',
     cellRender: ({ row }) => {
-      const g = row as PreviewGroup
-      return h(ElTag,
-        { type: matchTagType(g.matchType), effect: 'light', size: 'small' },
-        () => matchTagText(g.matchType))
+      const g = row as PreviewGroup;
+      return h(ElTag, { type: matchTagType(g.matchType), effect: 'light', size: 'small' }, () =>
+        matchTagText(g.matchType),
+      );
     },
   },
   {
-    key: 'warnings', label: '警告', width: 90, align: 'center',
+    key: 'warnings',
+    label: '警告',
+    width: 90,
+    align: 'center',
     cellRender: ({ row }) => {
-      const g = row as PreviewGroup
+      const g = row as PreviewGroup;
       if (g.warnings.length > 0) {
-        return h(ElTooltip,
+        return h(
+          ElTooltip,
           { content: g.warnings.join('；'), placement: 'top', 'show-after': 200 },
-          () => h(ElTag, { type: 'warning', effect: 'plain', size: 'small' },
-            () => `${g.warnings.length} 条`))
+          () =>
+            h(
+              ElTag,
+              { type: 'warning', effect: 'plain', size: 'small' },
+              () => `${g.warnings.length} 条`,
+            ),
+        );
       }
-      return h('span', { class: 'muted' }, '—')
+      return h('span', { class: 'muted' }, '—');
     },
   },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'purchase_order_import' })
-const drag = useColumnDrag(columnDefs, { listKey: 'purchase_order_import' })
+];
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'purchase_order_import' });
+const drag = useColumnDrag(columnDefs, { listKey: 'purchase_order_import' });
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部 watch + MutationObserver
 // 自愈（覆盖 el-dialog destroy-on-close + el-table v-if 反复挂载 / 卸载场景）。
-const tableRef = ref()
-drag.applyDrag(tableRef)
+const tableRef = ref();
+drag.applyDrag(tableRef);
 
 // ============================================================
 // Computed
 // ============================================================
 
-const groupsCount = computed(() => previewGroups.value.length)
+const groupsCount = computed(() => previewGroups.value.length);
 const matchedGroupsCount = computed(
   () => previewGroups.value.filter((g) => g.candidates.length > 0).length,
-)
+);
 const unmatchedGroupsCount = computed(
   () => previewGroups.value.filter((g) => g.candidates.length === 0).length,
-)
+);
 const candidatesTotalCount = computed(() =>
   previewGroups.value.reduce((s, g) => s + g.candidates.length, 0),
-)
+);
 
 interface EffectiveItem {
-  part_id: string
-  version: number
-  order_no: string
-  system_delivery_date: string | null
+  part_id: string;
+  version: number;
+  order_no: string;
+  system_delivery_date: string | null;
 }
 
 /**
@@ -434,26 +450,26 @@ interface EffectiveItem {
  * 不可能跨 group 出现，但保留 seen 集合以防万一）。
  */
 const effectiveItems = computed<EffectiveItem[]>(() => {
-  const out: EffectiveItem[] = []
-  const seen = new Set<string>()
+  const out: EffectiveItem[] = [];
+  const seen = new Set<string>();
   for (const g of previewGroups.value) {
     for (const c of g.candidates) {
-      if (!c.selected) continue
-      if (failedRows.value.has(c.part.part_id)) continue
-      if (seen.has(c.part.part_id)) continue
-      seen.add(c.part.part_id)
+      if (!c.selected) continue;
+      if (failedRows.value.has(c.part.part_id)) continue;
+      if (seen.has(c.part.part_id)) continue;
+      seen.add(c.part.part_id);
       out.push({
         part_id: c.part.part_id,
         version: c.part.version,
         order_no: c.orderNo,
         system_delivery_date: c.systemDeliveryDate,
-      })
+      });
     }
   }
-  return out
-})
+  return out;
+});
 
-const effectiveCount = computed(() => effectiveItems.value.length)
+const effectiveCount = computed(() => effectiveItems.value.length);
 
 // ============================================================
 // 默认选择 helper
@@ -461,9 +477,9 @@ const effectiveCount = computed(() => effectiveItems.value.length)
 
 /** 当候选零件的 order_no 和 system_delivery_date 都为空时默认勾选（"待填"零件）。 */
 function isEmptyTarget(p: PartMatchInfo): boolean {
-  const orderEmpty = !p.order_no || p.order_no.trim() === ''
-  const dateEmpty = p.system_delivery_date == null
-  return orderEmpty && dateEmpty
+  const orderEmpty = !p.order_no || p.order_no.trim() === '';
+  const dateEmpty = p.system_delivery_date == null;
+  return orderEmpty && dateEmpty;
 }
 
 // ============================================================
@@ -473,31 +489,29 @@ function isEmptyTarget(p: PartMatchInfo): boolean {
 function rowClassName({ row }: { row: PreviewGroup }): string {
   // 任一候选失败 → 主行变红
   if (row.candidates.some((c) => failedRows.value.has(c.part.part_id))) {
-    return 'row-failed'
+    return 'row-failed';
   }
-  if (row.candidates.length === 0) return 'row-unmatched'
-  if (row.warnings.length > 0) return 'row-warnings'
-  return ''
+  if (row.candidates.length === 0) return 'row-unmatched';
+  if (row.warnings.length > 0) return 'row-warnings';
+  return '';
 }
 
 function candidateRowClassName({ row }: { row: CandidateRow }): string {
-  return failedRows.value.has(row.part.part_id) ? 'candidate-failed' : ''
+  return failedRows.value.has(row.part.part_id) ? 'candidate-failed' : '';
 }
 
-function matchTagType(
-  t: PreviewGroup['matchType'],
-): 'success' | 'warning' | 'danger' | 'info' {
-  if (t === 'PART_CODE' || t === 'ASSEMBLY_CODE') return 'success'
-  if (t === 'PART_NAME' || t === 'ASSEMBLY_NAME') return 'warning'
-  return 'info'
+function matchTagType(t: PreviewGroup['matchType']): 'success' | 'warning' | 'danger' | 'info' {
+  if (t === 'PART_CODE' || t === 'ASSEMBLY_CODE') return 'success';
+  if (t === 'PART_NAME' || t === 'ASSEMBLY_NAME') return 'warning';
+  return 'info';
 }
 
 function matchTagText(t: PreviewGroup['matchType']): string {
-  if (t === 'PART_CODE') return '零件编号'
-  if (t === 'PART_NAME') return '零件名称'
-  if (t === 'ASSEMBLY_CODE') return '装配件编号'
-  if (t === 'ASSEMBLY_NAME') return '装配件名称'
-  return '未匹配'
+  if (t === 'PART_CODE') return '零件编号';
+  if (t === 'PART_NAME') return '零件名称';
+  if (t === 'ASSEMBLY_CODE') return '装配件编号';
+  if (t === 'ASSEMBLY_NAME') return '装配件名称';
+  return '未匹配';
 }
 
 // ============================================================
@@ -505,30 +519,30 @@ function matchTagText(t: PreviewGroup['matchType']): string {
 // ============================================================
 
 function reset(): void {
-  docNo.value = ''
-  parseErrors.value = []
-  parseWarnings.value = []
-  matchErrors.value = []
-  previewGroups.value = []
-  failedRows.value = new Map()
+  docNo.value = '';
+  parseErrors.value = [];
+  parseWarnings.value = [];
+  matchErrors.value = [];
+  previewGroups.value = [];
+  failedRows.value = new Map();
   // 清掉 el-upload 内部缓存，否则 :limit=1 时再次上传同一文件不会触发 on-change
-  uploadRef.value?.clearFiles?.()
+  uploadRef.value?.clearFiles?.();
 }
 
 function onModelValueChange(open: boolean): void {
-  emit('update:modelValue', open)
+  emit('update:modelValue', open);
 }
 
 function onCancel(): void {
-  emit('update:modelValue', false)
+  emit('update:modelValue', false);
 }
 
 watch(
   () => props.modelValue,
   (open) => {
-    if (!open) reset()
+    if (!open) reset();
   },
-)
+);
 
 // ============================================================
 // Excel 上传 + 解析 + 匹配
@@ -536,35 +550,35 @@ watch(
 
 async function onFileChange(uploadFile: UploadFile): Promise<void> {
   // 替换文件 → 上一轮的预览 / 错误全清
-  previewGroups.value = []
-  parseErrors.value = []
-  parseWarnings.value = []
-  matchErrors.value = []
-  failedRows.value = new Map()
+  previewGroups.value = [];
+  parseErrors.value = [];
+  parseWarnings.value = [];
+  matchErrors.value = [];
+  failedRows.value = new Map();
 
-  const raw: UploadRawFile | undefined = uploadFile.raw
+  const raw: UploadRawFile | undefined = uploadFile.raw;
   if (!raw) {
-    parseErrors.value = ['未读取到文件内容']
-    return
+    parseErrors.value = ['未读取到文件内容'];
+    return;
   }
 
-  parsing.value = true
+  parsing.value = true;
   try {
-    const buf = await raw.arrayBuffer()
-    const parsed = parsePurchaseOrderExcel(buf)
-    docNo.value = parsed.docNo
-    parseErrors.value = parsed.errors
-    parseWarnings.value = parsed.warnings
+    const buf = await raw.arrayBuffer();
+    const parsed = parsePurchaseOrderExcel(buf);
+    docNo.value = parsed.docNo;
+    parseErrors.value = parsed.errors;
+    parseWarnings.value = parsed.warnings;
 
     if (parsed.errors.length > 0) {
       // 致命错误：不再请求 match
-      previewGroups.value = []
-      return
+      previewGroups.value = [];
+      return;
     }
     if (parsed.items.length === 0) {
-      parseWarnings.value = [...parseWarnings.value, 'Excel 没有可识别的有效明细行']
-      previewGroups.value = []
-      return
+      parseWarnings.value = [...parseWarnings.value, 'Excel 没有可识别的有效明细行'];
+      previewGroups.value = [];
+      return;
     }
 
     const matchItems: PartBatchOrderInfoMatchItem[] = parsed.items.map((it) => ({
@@ -575,24 +589,24 @@ async function onFileChange(uploadFile: UploadFile): Promise<void> {
       delivery_date: it.deliveryDate,
       unit_price: it.unitPrice,
       quantity: it.shippableQty,
-    }))
+    }));
 
     const results = await matchPartsByExcelItems({
       doc_no: parsed.docNo,
       items: matchItems,
-    })
-    previewGroups.value = buildPreviewGroups(parsed.items, results)
+    });
+    previewGroups.value = buildPreviewGroups(parsed.items, results);
   } catch (e) {
-    parseErrors.value = [(e as Error).message ?? 'Excel 解析或匹配失败']
-    previewGroups.value = []
+    parseErrors.value = [(e as Error).message ?? 'Excel 解析或匹配失败'];
+    previewGroups.value = [];
   } finally {
-    parsing.value = false
+    parsing.value = false;
   }
 }
 
 /** el-upload :limit=1 超限时触发；保留旧文件、丢弃新文件。 */
 function onExceed(_files: File[]): void {
-  ElMessage.warning('已选择过 Excel，请先取消或重置后再上传新文件')
+  ElMessage.warning('已选择过 Excel，请先取消或重置后再上传新文件');
 }
 
 /**
@@ -605,10 +619,10 @@ function buildPreviewGroups(
 ): PreviewGroup[] {
   const resultByRow = new Map<number, PartBatchOrderInfoMatchResult>(
     results.map((r) => [r.row_no, r]),
-  )
+  );
   return items.map((it) => {
-    const r = resultByRow.get(it.rowNo)
-    const parts = r?.parts ?? []
+    const r = resultByRow.get(it.rowNo);
+    const parts = r?.parts ?? [];
     return {
       rowNo: it.rowNo,
       lineNo: it.lineNo,
@@ -622,8 +636,8 @@ function buildPreviewGroups(
         orderNo: docNo.value,
         systemDeliveryDate: it.deliveryDate,
       })),
-    }
-  })
+    };
+  });
 }
 
 // ============================================================
@@ -631,10 +645,10 @@ function buildPreviewGroups(
 // ============================================================
 
 async function onConfirm(): Promise<void> {
-  const items = effectiveItems.value
+  const items = effectiveItems.value;
   if (items.length === 0) {
-    ElMessage.warning('没有可更新的零件')
-    return
+    ElMessage.warning('没有可更新的零件');
+    return;
   }
 
   try {
@@ -642,43 +656,41 @@ async function onConfirm(): Promise<void> {
       `将更新 ${items.length} 个零件的订单号与系统交期，是否继续？`,
       '确认更新',
       { type: 'warning', confirmButtonText: '更新', cancelButtonText: '取消' },
-    )
+    );
   } catch {
-    return // 用户取消
+    return; // 用户取消
   }
 
-  submitting.value = true
+  submitting.value = true;
   try {
     const payloadItems: PartBatchOrderInfoUpdateItem[] = items.map((it) => ({
       part_id: it.part_id,
       version: it.version,
       order_no: it.order_no,
       system_delivery_date: it.system_delivery_date,
-    }))
-    const result = await batchUpdatePartsOrderInfo({ items: payloadItems })
+    }));
+    const result = await batchUpdatePartsOrderInfo({ items: payloadItems });
 
-    failedRows.value = new Map(
-      result.failed.map((f) => [f.part_id, `${f.code}: ${f.message}`]),
-    )
+    failedRows.value = new Map(result.failed.map((f) => [f.part_id, `${f.code}: ${f.message}`]));
 
     if (result.failed.length === 0) {
-      ElMessage.success(`已更新 ${result.updated.length} 个零件`)
-      emit('success')
-      emit('update:modelValue', false)
-      return
+      ElMessage.success(`已更新 ${result.updated.length} 个零件`);
+      emit('success');
+      emit('update:modelValue', false);
+      return;
     }
 
-    const updated = result.updated.length
-    const failed = result.failed.length
+    const updated = result.updated.length;
+    const failed = result.failed.length;
     if (updated === 0) {
-      ElMessage.error(`全部 ${failed} 条更新失败，请检查失败行`)
+      ElMessage.error(`全部 ${failed} 条更新失败，请检查失败行`);
     } else {
-      ElMessage.warning(`更新 ${updated} 条，失败 ${failed} 条；失败行已标红，可修正后重试`)
+      ElMessage.warning(`更新 ${updated} 条，失败 ${failed} 条；失败行已标红，可修正后重试`);
     }
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '批量更新失败')
+    ElMessage.error((e as Error).message ?? '批量更新失败');
   } finally {
-    submitting.value = false
+    submitting.value = false;
   }
 }
 </script>

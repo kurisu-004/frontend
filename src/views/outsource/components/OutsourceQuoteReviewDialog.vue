@@ -29,7 +29,9 @@
           :model-value="reviewNote"
           type="textarea"
           :placeholder="mode === 'approve' ? '可留空' : '请填写拒绝原因'"
-          @update:model-value="(v: string | number) => $emit('update:note', typeof v === 'number' ? String(v) : v)"
+          @update:model-value="
+            (v: string | number) => $emit('update:note', typeof v === 'number' ? String(v) : v)
+          "
         />
       </el-form-item>
     </el-form>
@@ -43,27 +45,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useDialogSize } from '@/composables/useDialogSize'
+import { computed } from 'vue';
+import { useDialogSize } from '@/composables/useDialogSize';
 
-type ReviewMode = 'approve' | 'reject'
+type ReviewMode = 'approve' | 'reject';
 
 const props = defineProps<{
-  modelValue: boolean
-  mode: ReviewMode
-  reviewNote: string
-}>()
+  modelValue: boolean;
+  mode: ReviewMode;
+  reviewNote: string;
+}>();
 
 defineEmits<{
-  (e: 'update:model-value', value: boolean): void
-  (e: 'update:note', value: string): void
-  (e: 'confirm'): void
-}>()
+  (e: 'update:model-value', value: boolean): void;
+  (e: 'update:note', value: string): void;
+  (e: 'confirm'): void;
+}>();
 
-const dialogSize = useDialogSize({ desktopWidth: 480 })
+const dialogSize = useDialogSize({ desktopWidth: 480 });
 
-const title = computed(() => props.mode === 'approve' ? '审批通过' : '审批拒绝（必填原因）')
-const label = computed(() => props.mode === 'approve' ? '审批意见' : '拒绝原因')
-const confirmButtonType = computed(() => props.mode === 'approve' ? 'success' : 'danger')
-const confirmText = computed(() => props.mode === 'approve' ? '通过' : '拒绝')
+const title = computed(() => (props.mode === 'approve' ? '审批通过' : '审批拒绝（必填原因）'));
+const label = computed(() => (props.mode === 'approve' ? '审批意见' : '拒绝原因'));
+const confirmButtonType = computed(() => (props.mode === 'approve' ? 'success' : 'danger'));
+const confirmText = computed(() => (props.mode === 'approve' ? '通过' : '拒绝'));
 </script>

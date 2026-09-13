@@ -72,8 +72,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { ArrowDown, ArrowUp } from '@element-plus/icons-vue'
+import { computed } from 'vue';
+import { ArrowDown, ArrowUp } from '@element-plus/icons-vue';
 
 type PopoverPlacement =
   | 'top'
@@ -87,16 +87,16 @@ type PopoverPlacement =
   | 'left-end'
   | 'right'
   | 'right-start'
-  | 'right-end'
+  | 'right-end';
 
 interface Props {
-  label: string
-  active?: boolean
-  count?: number
-  width?: number
-  hint?: string
-  placement?: PopoverPlacement
-  visible?: boolean
+  label: string;
+  active?: boolean;
+  count?: number;
+  width?: number;
+  hint?: string;
+  placement?: PopoverPlacement;
+  visible?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -106,18 +106,18 @@ const props = withDefaults(defineProps<Props>(), {
   hint: '',
   placement: 'bottom-start',
   visible: undefined,
-})
+});
 
 const emit = defineEmits<{
-  'update:visible': [value: boolean]
-  show: []
-  confirm: []
-  reset: []
-}>()
+  'update:visible': [value: boolean];
+  show: [];
+  confirm: [];
+  reset: [];
+}>();
 
 const headerText = computed(() =>
   props.count > 0 ? `${props.label}(${props.count})` : props.label,
-)
+);
 </script>
 
 <style lang="scss" scoped>

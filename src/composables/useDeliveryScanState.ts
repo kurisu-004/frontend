@@ -18,62 +18,62 @@
 //     静默吞掉；扫码台不能因持久化失败而阻塞选客户。
 //   - JSON 损坏 / 非对象 → 落回空字符串。
 
-import { ref, type Ref } from 'vue'
+import { ref, type Ref } from 'vue';
 
-const KEY = 'delivery_scan_l1_v1'
+const KEY = 'delivery_scan_l1_v1';
 
 interface Persisted {
-  l1CustomerId: string
+  l1CustomerId: string;
 }
 
 function readPersisted(): Persisted {
   try {
-    const raw = localStorage.getItem(KEY)
-    if (!raw) return { l1CustomerId: '' }
-    const parsed = JSON.parse(raw) as unknown
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return { l1CustomerId: '' };
+    const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const obj = parsed as Partial<Persisted>
+      const obj = parsed as Partial<Persisted>;
       return {
         l1CustomerId: typeof obj.l1CustomerId === 'string' ? obj.l1CustomerId : '',
-      }
+      };
     }
-    return { l1CustomerId: '' }
+    return { l1CustomerId: '' };
   } catch {
-    return { l1CustomerId: '' }
+    return { l1CustomerId: '' };
   }
 }
 
 function persist(data: Persisted): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(data))
+    localStorage.setItem(KEY, JSON.stringify(data));
   } catch {
     /* quota / 隐私模式 / disabled — 静默忽略 */
   }
 }
 
 /** 模块级 ref，所有调用方共享同一份响应式状态。 */
-const _l1CustomerId: Ref<string> = ref('')
+const _l1CustomerId: Ref<string> = ref('');
 /** 是否已从 localStorage 初始化（避免 setup 期 ref('') 触发 watch 误清空）。 */
-const _loaded: Ref<boolean> = ref(false)
+const _loaded: Ref<boolean> = ref(false);
 
 export function useDeliveryScanState() {
   /** 从 localStorage 读初始值；调用方在 onMounted 顶部调一次。 */
   function init(): void {
-    if (_loaded.value) return
-    const persisted = readPersisted()
-    _l1CustomerId.value = persisted.l1CustomerId
-    _loaded.value = true
+    if (_loaded.value) return;
+    const persisted = readPersisted();
+    _l1CustomerId.value = persisted.l1CustomerId;
+    _loaded.value = true;
   }
 
   function setL1CustomerId(id: string): void {
-    _l1CustomerId.value = id
-    persist({ l1CustomerId: id })
+    _l1CustomerId.value = id;
+    persist({ l1CustomerId: id });
   }
 
   function clear(): void {
-    _l1CustomerId.value = ''
+    _l1CustomerId.value = '';
     try {
-      localStorage.removeItem(KEY)
+      localStorage.removeItem(KEY);
     } catch {
       /* 静默忽略 */
     }
@@ -84,5 +84,5 @@ export function useDeliveryScanState() {
     setL1CustomerId,
     clear,
     init,
-  }
+  };
 }

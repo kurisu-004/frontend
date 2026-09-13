@@ -14,23 +14,23 @@
 // - login() 把 resp.refresh_token 也存进去；
 // - logout() 不变（直接 removeItem 把三件套一起清）。
 
-import { ref, type Ref } from 'vue'
-import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/auth'
-import type { CurrentUser } from '@/types/user'
-import type { MenuNode } from '@/types/menu'
-import { ADMIN_MENUS } from './__fixtures__/adminMenus'
+import { ref, type Ref } from 'vue';
+import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/auth';
+import type { CurrentUser } from '@/types/user';
+import type { MenuNode } from '@/types/menu';
+import { ADMIN_MENUS } from './__fixtures__/adminMenus';
 
 interface StoredSession {
-  token: string
+  token: string;
   /** 2026-07-10 新增：refresh token（7d TTL）。老条目可能缺省，按 null 处理。 */
-  refresh_token?: string | null
-  user: CurrentUser
+  refresh_token?: string | null;
+  user: CurrentUser;
 }
 
-const user = ref<CurrentUser | null>(null) as Ref<CurrentUser | null>
-const token = ref<string | null>(null)
+const user = ref<CurrentUser | null>(null) as Ref<CurrentUser | null>;
+const token = ref<string | null>(null);
 // refresh_token 不暴露给组件（只由 axios 拦截器读），但用模块级常量便于内部测试
-let refreshTokenValue: string | null = null
+let refreshTokenValue: string | null = null;
 
 // 2026-08-28 重写：dummy-auth 判定改用 Vite 官方 env 机制。
 // 仅在 `npm run dev:dummy`（=`vite --mode dummy` → 自动加载 .env.dummy → 设置
@@ -40,36 +40,36 @@ let refreshTokenValue: string | null = null
 // 收敛到模块级函数 isDummyAuthRequested() 统一判断，避免 main.ts / router / 本文件
 // 内部各写一遍 import.meta.env.DEV && VITE_DUMMY_AUTH === 'true' 漂移。
 function isDummyAuthRequested(): boolean {
-  return import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'
+  return import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true';
 }
 
-let isDummyAuthActiveValue = false
+let isDummyAuthActiveValue = false;
 
 function isDummyAuthActive(): boolean {
-  return isDummyAuthActiveValue
+  return isDummyAuthActiveValue;
 }
 
 function loadFromStorage(): boolean {
   try {
-    const raw = localStorage.getItem('auth_session')
-    if (!raw) return false
-    const s: StoredSession = JSON.parse(raw)
-    if (!s.token || !s.user) return false
+    const raw = localStorage.getItem('auth_session');
+    if (!raw) return false;
+    const s: StoredSession = JSON.parse(raw);
+    if (!s.token || !s.user) return false;
     // 兼容旧版本 localStorage（没有 menus 字段）：补默认值，下次 /auth/me 会刷新。
-    s.user.menus = s.user.menus ?? []
-    token.value = s.token
-    refreshTokenValue = s.refresh_token ?? null
-    user.value = s.user
-    return true
+    s.user.menus = s.user.menus ?? [];
+    token.value = s.token;
+    refreshTokenValue = s.refresh_token ?? null;
+    user.value = s.user;
+    return true;
   } catch {
-    return false
+    return false;
   }
 }
 
 function saveToStorage(): void {
   if (!token.value || !user.value) {
-    localStorage.removeItem('auth_session')
-    return
+    localStorage.removeItem('auth_session');
+    return;
   }
   localStorage.setItem(
     'auth_session',
@@ -78,39 +78,39 @@ function saveToStorage(): void {
       refresh_token: refreshTokenValue,
       user: user.value,
     }),
-  )
+  );
 }
 
 // 监听拦截器刷新成功的广播事件，同步 module-level refs
 if (typeof window !== 'undefined') {
   window.addEventListener('auth:tokens-refreshed', ((e: Event) => {
-    const ce = e as CustomEvent<{ token: string; refresh_token: string; user: CurrentUser }>
-    const pair = ce.detail
+    const ce = e as CustomEvent<{ token: string; refresh_token: string; user: CurrentUser }>;
+    const pair = ce.detail;
     if (pair?.token) {
-      token.value = pair.token
-      refreshTokenValue = pair.refresh_token ?? null
-      user.value = pair.user
+      token.value = pair.token;
+      refreshTokenValue = pair.refresh_token ?? null;
+      user.value = pair.user;
     }
-  }) as EventListener)
+  }) as EventListener);
 }
 
 // 启动时尝试恢复
-loadFromStorage()
+loadFromStorage();
 
 export function useAuthSession() {
-  const isAuthenticated = (): boolean => !!token.value && !!user.value
+  const isAuthenticated = (): boolean => !!token.value && !!user.value;
 
   function hasRole(role: string): boolean {
-    return user.value?.roles.includes(role) ?? false
+    return user.value?.roles.includes(role) ?? false;
   }
 
   function canOperateShelf(shelfId: string): boolean {
-    if (hasRole('MANAGER')) return true
-    if (!hasRole('SHELF_ACCOUNT')) return false
+    if (hasRole('MANAGER')) return true;
+    if (!hasRole('SHELF_ACCOUNT')) return false;
     // 2026-07-13：与后端 CurrentUser.can_operate_shelf 对齐，补 wildcard 兜底
     // （SHELF_ACCOUNT 且未绑任何 active 架 → 视为共享 HMI 通行）。
-    if (isWildcardShelfAccount()) return true
-    return (user.value?.shelf_ids ?? []).includes(shelfId)
+    if (isWildcardShelfAccount()) return true;
+    return (user.value?.shelf_ids ?? []).includes(shelfId);
   }
 
   /**
@@ -121,8 +121,8 @@ export function useAuthSession() {
    * 后端 Pydantic v2 默认 lax 模式会从 JSON string 自动 coerce 到 int。
    */
   function activeShelfId(): string | null {
-    const ids = user.value?.shelf_ids ?? []
-    return ids.length > 0 ? ids[0] : null
+    const ids = user.value?.shelf_ids ?? [];
+    return ids.length > 0 ? ids[0] : null;
   }
 
   /**
@@ -130,7 +130,7 @@ export function useAuthSession() {
    * SHELF_ACCOUNT 多货架场景用；与后端 user.shelf_ids 一一对应。
    */
   function boundShelves(): string[] {
-    return user.value?.shelf_ids ?? []
+    return user.value?.shelf_ids ?? [];
   }
 
   /**
@@ -144,63 +144,63 @@ export function useAuthSession() {
    * 退化为「按钮可见但提交时被后端 403」，可接受。
    */
   function isWildcardShelfAccount(): boolean {
-    return hasRole('SHELF_ACCOUNT') && boundShelves().length === 0
+    return hasRole('SHELF_ACCOUNT') && boundShelves().length === 0;
   }
 
   /** 当前可见菜单树（顶层列表；children 在节点里）。 */
   function menus(): MenuNode[] {
-    return user.value?.menus ?? []
+    return user.value?.menus ?? [];
   }
 
   /** DFS 在菜单树中查找指定 code。供路由守卫使用。 */
   function hasMenuCode(code: string): boolean {
-    const tree = menus()
-    const stack: MenuNode[] = [...tree]
+    const tree = menus();
+    const stack: MenuNode[] = [...tree];
     while (stack.length > 0) {
-      const n = stack.pop()!
-      if (n.code === code) return true
-      if (n.children.length > 0) stack.push(...n.children)
+      const n = stack.pop()!;
+      if (n.code === code) return true;
+      if (n.children.length > 0) stack.push(...n.children);
     }
-    return false
+    return false;
   }
 
   function getAuthHeader(): Record<string, string> {
-    if (!token.value) return {}
-    return { Authorization: `Bearer ${token.value}` }
+    if (!token.value) return {};
+    return { Authorization: `Bearer ${token.value}` };
   }
 
   async function login(username: string, password: string): Promise<CurrentUser> {
-    const resp = await apiLogin(username, password)
-    token.value = resp.token
-    refreshTokenValue = resp.refresh_token ?? null
-    user.value = resp.user
-    saveToStorage()
-    return resp.user
+    const resp = await apiLogin(username, password);
+    token.value = resp.token;
+    refreshTokenValue = resp.refresh_token ?? null;
+    user.value = resp.user;
+    saveToStorage();
+    return resp.user;
   }
 
   async function logout(): Promise<void> {
-    await apiLogout()
-    token.value = null
-    refreshTokenValue = null
-    user.value = null
-    localStorage.removeItem('auth_session')
+    await apiLogout();
+    token.value = null;
+    refreshTokenValue = null;
+    user.value = null;
+    localStorage.removeItem('auth_session');
   }
 
   /** 异步守卫：拉 /auth/me 验证 token 仍有效；失败则清 session 跳 /login */
   async function refreshOrLogout(router: { replace: (p: string) => void }): Promise<boolean> {
     try {
-      const u = await apiMe()
+      const u = await apiMe();
       // 兼容老后端（没有 menus 字段）
-      u.menus = u.menus ?? []
-      user.value = u
-      return true
+      u.menus = u.menus ?? [];
+      user.value = u;
+      return true;
     } catch {
-      token.value = null
-      refreshTokenValue = null
-      user.value = null
-      localStorage.removeItem('auth_session')
-      router.replace('/login')
-      return false
+      token.value = null;
+      refreshTokenValue = null;
+      user.value = null;
+      localStorage.removeItem('auth_session');
+      router.replace('/login');
+      return false;
     }
   }
 
@@ -209,7 +209,7 @@ export function useAuthSession() {
   // 不写 localStorage，避免下次非 dummy 启动时被 loadFromStorage 复活。
   // 成功注入后打一行 console.info，方便用户一眼确认 dummy 已生效。
   function initDummyAuth(): void {
-    if (!isDummyAuthRequested()) return
+    if (!isDummyAuthRequested()) return;
 
     user.value = {
       id: '1999999999001',
@@ -219,13 +219,13 @@ export function useAuthSession() {
       roles: ['MANAGER', 'SHELF_ACCOUNT'],
       shelf_ids: [],
       menus: ADMIN_MENUS,
-    }
-    token.value = 'dummy-dev-token'
-    refreshTokenValue = 'dummy-dev-refresh'
-    isDummyAuthActiveValue = true
+    };
+    token.value = 'dummy-dev-token';
+    refreshTokenValue = 'dummy-dev-refresh';
+    isDummyAuthActiveValue = true;
     // 2026-08-28 新增：浏览器 console 确认标记。仅 dev 模式（外层 isDummyAuthRequested 已守），
     // prod bundle tree-shake 掉，no-op。
-    console.info('[dummy-auth] 已注入开发用管理员会话（dev-only）')
+    console.info('[dummy-auth] 已注入开发用管理员会话（dev-only）');
   }
 
   return {
@@ -246,5 +246,5 @@ export function useAuthSession() {
     // 2026-08-26 新增：
     initDummyAuth,
     isDummyAuthActive,
-  }
+  };
 }

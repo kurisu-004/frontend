@@ -33,11 +33,7 @@
       <el-header class="header">
         <!-- 桌面布局：左侧 = 折叠按钮 + 面包屑；右侧 = 刷新 + 个人信息 -->
         <div class="header-left">
-          <el-button
-            link
-            class="collapse-btn"
-            @click="onNavToggle"
-          >
+          <el-button link class="collapse-btn" @click="onNavToggle">
             <el-icon :size="20">
               <Fold v-if="!isCollapse" />
               <Expand v-else />
@@ -45,11 +41,7 @@
           </el-button>
 
           <el-breadcrumb separator="/" class="breadcrumb">
-            <el-breadcrumb-item
-              v-for="(item, idx) in breadcrumbItems"
-              :key="idx"
-              :to="item.to"
-            >
+            <el-breadcrumb-item v-for="(item, idx) in breadcrumbItems" :key="idx" :to="item.to">
               {{ item.label }}
             </el-breadcrumb-item>
           </el-breadcrumb>
@@ -102,13 +94,28 @@
     >
       <el-form ref="pwdFormRef" :model="pwdForm" :rules="pwdRules" label-width="90px">
         <el-form-item label="原密码" prop="oldPassword">
-          <el-input v-model="pwdForm.oldPassword" type="password" show-password placeholder="请输入原密码" />
+          <el-input
+            v-model="pwdForm.oldPassword"
+            type="password"
+            show-password
+            placeholder="请输入原密码"
+          />
         </el-form-item>
         <el-form-item label="新密码" prop="newPassword">
-          <el-input v-model="pwdForm.newPassword" type="password" show-password placeholder="至少 6 位" />
+          <el-input
+            v-model="pwdForm.newPassword"
+            type="password"
+            show-password
+            placeholder="至少 6 位"
+          />
         </el-form-item>
         <el-form-item label="确认新密码" prop="confirmPassword">
-          <el-input v-model="pwdForm.confirmPassword" type="password" show-password placeholder="再次输入新密码" />
+          <el-input
+            v-model="pwdForm.confirmPassword"
+            type="password"
+            show-password
+            placeholder="再次输入新密码"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -123,118 +130,134 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import type { FormInstance, FormRules } from 'element-plus'
-import {
-  Box, Fold, Expand, Refresh, ArrowDown, Lock, SwitchButton,
-} from '@element-plus/icons-vue'
-import { useAuthSession } from '@/composables/useAuthSession'
-import { useDialogSize } from '@/composables/useDialogSize'
-import { me as apiMe, changeMyPassword } from '@/api/auth'
-import MenuTreeItem from '@/layouts/components/MenuTreeItem.vue'
-import type { CurrentUser } from '@/types/user'
+import { ref, reactive, computed, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import type { FormInstance, FormRules } from 'element-plus';
+import { Box, Fold, Expand, Refresh, ArrowDown, Lock, SwitchButton } from '@element-plus/icons-vue';
+import { useAuthSession } from '@/composables/useAuthSession';
+import { useDialogSize } from '@/composables/useDialogSize';
+import { me as apiMe, changeMyPassword } from '@/api/auth';
+import MenuTreeItem from '@/layouts/components/MenuTreeItem.vue';
+import type { CurrentUser } from '@/types/user';
 
-type UserCmd = 'change-password' | 'logout'
+type UserCmd = 'change-password' | 'logout';
 
-const route = useRoute()
-const router = useRouter()
+const route = useRoute();
+const router = useRouter();
 
-const isCollapse = ref(false)
-const currentUser = ref<CurrentUser | null>(null)
-const { logout, menus } = useAuthSession()
+const isCollapse = ref(false);
+const currentUser = ref<CurrentUser | null>(null);
+const { logout, menus } = useAuthSession();
 
-const menuList = computed(() => menus())
+const menuList = computed(() => menus());
 
-const userInfo = computed(() => ({ name: currentUser.value?.full_name || currentUser.value?.username || '未登录' }))
+const userInfo = computed(() => ({
+  name: currentUser.value?.full_name || currentUser.value?.username || '未登录',
+}));
 
-const activeMenu = computed<string>(() => route.path)
+const activeMenu = computed<string>(() => route.path);
 
 const breadcrumbItems = computed<{ label: string; to?: string }[]>(() => {
-  const raw = route.meta?.breadcrumb ?? []
-  const list = raw.length > 0 ? raw : [{ label: route.meta?.title || '首页' }]
+  const raw = route.meta?.breadcrumb ?? [];
+  const list = raw.length > 0 ? raw : [{ label: route.meta?.title || '首页' }];
   return list.map((it, idx, arr) => ({
     label: it.label,
     to: idx === arr.length - 1 || !it.path ? undefined : it.path,
-  }))
-})
+  }));
+});
 
 // 顶栏折叠按钮：切换侧栏宽度
 const onNavToggle = (): void => {
-  isCollapse.value = !isCollapse.value
-}
+  isCollapse.value = !isCollapse.value;
+};
 
 // 侧栏菜单项选中：路由跳转（<el-menu router> 已自动路由，这里冗余兜底，确保 router 实例可用）
 function onMenuSelect(index: string): void {
-  router.push(index)
+  router.push(index);
 }
 
 // 修改密码弹窗尺寸
-const pwdDlg = useDialogSize({ desktopWidth: 420 })
+const pwdDlg = useDialogSize({ desktopWidth: 420 });
 
-const reload = (): void => { ElMessage.success('刷新成功'); router.go(0) }
+const reload = (): void => {
+  ElMessage.success('刷新成功');
+  router.go(0);
+};
 
 const handleUserCmd = async (cmd: string | number | object): Promise<void> => {
-  const command = cmd as UserCmd
+  const command = cmd as UserCmd;
   if (command === 'logout') {
     try {
-      await ElMessageBox.confirm('确定要退出登录吗？', '提示', { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' })
-      await logout()
-      ElMessage.success('已退出登录')
-      router.replace('/login')
-    } catch { /* cancelled */ }
+      await ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      });
+      await logout();
+      ElMessage.success('已退出登录');
+      router.replace('/login');
+    } catch {
+      /* cancelled */
+    }
   } else if (command === 'change-password') {
-    showChangePwd.value = true
+    showChangePwd.value = true;
   }
-}
+};
 
 // ---- 修改密码 ----
-const showChangePwd = ref(false)
-const pwdSaving = ref(false)
-const pwdFormRef = ref<FormInstance>()
-const pwdForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
+const showChangePwd = ref(false);
+const pwdSaving = ref(false);
+const pwdFormRef = ref<FormInstance>();
+const pwdForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' });
 
 const validateNewPwd = (_rule: unknown, value: string, callback: (err?: Error) => void): void => {
-  if (!value) return callback(new Error('请输入新密码'))
-  if (value.length < 6) return callback(new Error('新密码至少 6 位'))
-  if (value === pwdForm.oldPassword) return callback(new Error('新密码不能与原密码相同'))
+  if (!value) return callback(new Error('请输入新密码'));
+  if (value.length < 6) return callback(new Error('新密码至少 6 位'));
+  if (value === pwdForm.oldPassword) return callback(new Error('新密码不能与原密码相同'));
   // 新密码变化时，若确认框已填，重新触发确认框校验
-  if (pwdForm.confirmPassword) pwdFormRef.value?.validateField('confirmPassword')
-  callback()
-}
-const validateConfirmPwd = (_rule: unknown, value: string, callback: (err?: Error) => void): void => {
-  if (!value) return callback(new Error('请再次输入新密码'))
-  if (value !== pwdForm.newPassword) return callback(new Error('两次输入的新密码不一致'))
-  callback()
-}
+  if (pwdForm.confirmPassword) pwdFormRef.value?.validateField('confirmPassword');
+  callback();
+};
+const validateConfirmPwd = (
+  _rule: unknown,
+  value: string,
+  callback: (err?: Error) => void,
+): void => {
+  if (!value) return callback(new Error('请再次输入新密码'));
+  if (value !== pwdForm.newPassword) return callback(new Error('两次输入的新密码不一致'));
+  callback();
+};
 const pwdRules: FormRules = {
   oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
   newPassword: [{ validator: validateNewPwd, trigger: 'blur' }],
   confirmPassword: [{ validator: validateConfirmPwd, trigger: 'blur' }],
-}
+};
 
 function resetPwdForm(): void {
-  pwdForm.oldPassword = ''
-  pwdForm.newPassword = ''
-  pwdForm.confirmPassword = ''
-  pwdFormRef.value?.clearValidate()
+  pwdForm.oldPassword = '';
+  pwdForm.newPassword = '';
+  pwdForm.confirmPassword = '';
+  pwdFormRef.value?.clearValidate();
 }
 
 async function submitChangePwd(): Promise<void> {
-  const valid = await pwdFormRef.value?.validate().catch(() => false)
-  if (!valid) return
-  pwdSaving.value = true
+  const valid = await pwdFormRef.value?.validate().catch(() => false);
+  if (!valid) return;
+  pwdSaving.value = true;
   try {
-    await changeMyPassword({ old_password: pwdForm.oldPassword, new_password: pwdForm.newPassword })
-    showChangePwd.value = false
-    ElMessage.success('密码已修改，请重新登录')
-    await logout()
-    router.replace('/login')
+    await changeMyPassword({
+      old_password: pwdForm.oldPassword,
+      new_password: pwdForm.newPassword,
+    });
+    showChangePwd.value = false;
+    ElMessage.success('密码已修改，请重新登录');
+    await logout();
+    router.replace('/login');
   } catch (e: any) {
-    ElMessage.error(e?.message || '修改密码失败')
+    ElMessage.error(e?.message || '修改密码失败');
   } finally {
-    pwdSaving.value = false
+    pwdSaving.value = false;
   }
 }
 
@@ -247,10 +270,14 @@ onMounted(async () => {
   //   1) isDummyAuthRequested() 在 import.meta.env.DEV=false 时整段 dead code
   //   2) useAuthSession.isDummyAuthActive() 由 initDummyAuth 注入
   //   3) 后端即便返回 401，拦截器也不会触发 auth:logout（refresh 失败分支不命中）
-  const { isDummyAuthActive } = useAuthSession()
-  if (isDummyAuthActive()) return
-  try { currentUser.value = await apiMe() } catch { router.replace('/login') }
-})
+  const { isDummyAuthActive } = useAuthSession();
+  if (isDummyAuthActive()) return;
+  try {
+    currentUser.value = await apiMe();
+  } catch {
+    router.replace('/login');
+  }
+});
 </script>
 
 <style lang="scss" scoped>

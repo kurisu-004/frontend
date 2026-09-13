@@ -33,75 +33,83 @@
     set-table-ref       — el-table 实例注册 / 反注册
 -->
 <script setup lang="ts">
-import { h, ref } from 'vue'
-import { Delete, Printer } from '@element-plus/icons-vue'
-import type { MergedDraftRow } from '../composables/useDeliveryDraftBoard'
-import type { ScanNoteSummary } from '@/types/deliveryNote'
+import { h, ref } from 'vue';
+import { Delete, Printer } from '@element-plus/icons-vue';
+import type { MergedDraftRow } from '../composables/useDeliveryDraftBoard';
+import type { ScanNoteSummary } from '@/types/deliveryNote';
 import {
   resolveDraggable,
   useColumnVisibility,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+} from '@/composables/useColumnVisibility';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 
 defineProps<{
-  draft: ScanNoteSummary
-  rows: MergedDraftRow[]
-  selectedRows: MergedDraftRow[]
-  selectionCount: number
-  printing: boolean
-  deleting: boolean
-  submitting: boolean
-  canPrint: boolean
-  canSubmit: boolean
-  rowClassName: (info: { row: MergedDraftRow }) => string
-}>()
+  draft: ScanNoteSummary;
+  rows: MergedDraftRow[];
+  selectedRows: MergedDraftRow[];
+  selectionCount: number;
+  printing: boolean;
+  deleting: boolean;
+  submitting: boolean;
+  canPrint: boolean;
+  canSubmit: boolean;
+  rowClassName: (info: { row: MergedDraftRow }) => string;
+}>();
 
 const emit = defineEmits<{
-  (e: 'goto-detail'): void
-  (e: 'selection-change', rows: MergedDraftRow[]): void
-  (e: 'remove', row: MergedDraftRow): void
-  (e: 'print-labels'): void
-  (e: 'print-note'): void
-  (e: 'delete-draft'): void
-  (e: 'submit-draft'): void
-  (e: 'set-table-ref', el: any): void
-}>()
+  (e: 'goto-detail'): void;
+  (e: 'selection-change', rows: MergedDraftRow[]): void;
+  (e: 'remove', row: MergedDraftRow): void;
+  (e: 'print-labels'): void;
+  (e: 'print-note'): void;
+  (e: 'delete-draft'): void;
+  (e: 'submit-draft'): void;
+  (e: 'set-table-ref', el: any): void;
+}>();
 
 // el-table 实例本地声明；emit 上传给 shell（board.setTableRef 内部 Map 管理）。
 // T9 教训：template ref 不能写到 readonly prop 上（Vue 静默失败）。
-const tableEl = ref<any>(null)
+const tableEl = ref<any>(null);
 
 function handleTableRef(el: any): void {
-  tableEl.value = el
-  emit('set-table-ref', el)
+  tableEl.value = el;
+  emit('set-table-ref', el);
 }
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
-    key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100,
+    key: 'serial_no',
+    label: '序列号',
+    prop: 'serial_no',
+    minWidth: 100,
     // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
-    cellRender: ({ row }) => h('span',
-      { class: { muted: !(row as MergedDraftRow).serial_no } },
-      (row as MergedDraftRow).serial_no || '—'),
+    cellRender: ({ row }) =>
+      h(
+        'span',
+        { class: { muted: !(row as MergedDraftRow).serial_no } },
+        (row as MergedDraftRow).serial_no || '—',
+      ),
   },
   { key: 'name', label: '名称', prop: 'name', minWidth: 110, showOverflowTooltip: true },
   { key: 'quantity', label: '数量', prop: 'quantity', width: 60, align: 'right' },
   {
-    key: 'system_delivery_date', label: '系统交期', width: 90, align: 'center',
-    cellRender: ({ row }) => h('span', null,
-      (row as MergedDraftRow).system_delivery_date || '—'),
+    key: 'system_delivery_date',
+    label: '系统交期',
+    width: 90,
+    align: 'center',
+    cellRender: ({ row }) => h('span', null, (row as MergedDraftRow).system_delivery_date || '—'),
   },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_draft_card' })
-const drag = useColumnDrag(columnDefs, { listKey: 'delivery_draft_card' })
+];
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_draft_card' });
+const drag = useColumnDrag(columnDefs, { listKey: 'delivery_draft_card' });
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
-drag.applyDrag(tableEl)
+drag.applyDrag(tableEl);
 </script>
 
 <template>

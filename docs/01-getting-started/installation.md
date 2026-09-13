@@ -8,13 +8,13 @@
 
 ## 环境要求
 
-| 工具 | 版本 | 备注 |
-|---|---|---|
-| Node | 24+ | 与 `Dockerfile` 一致（`node:24-alpine`） |
-| npm | 10+ | 跟随 Node 24 自带 |
+| 工具        | 版本       | 备注                                                          |
+| ----------- | ---------- | ------------------------------------------------------------- |
+| Node        | 24+        | 与 `Dockerfile` 一致（`node:24-alpine`）                      |
+| npm         | 10+        | 跟随 Node 24 自带                                             |
 | pnpm / yarn | **不推荐** | 仓库锁的是 `package-lock.json`，其他包管理器不会复用 lockfile |
-| Docker | 24+ | 仅部署需要；本地开发不依赖 |
-| Git | 2.30+ | worktree 功能需要 |
+| Docker      | 24+        | 仅部署需要；本地开发不依赖                                    |
+| Git         | 2.30+      | worktree 功能需要                                             |
 
 Node 18 / 20 没测过，理论上 vite 8 要 Node 20+，但 CI 与 Docker 都跑 24，强烈建议对齐。
 
@@ -22,10 +22,10 @@ Node 18 / 20 没测过，理论上 vite 8 要 Node 20+，但 CI 与 Docker 都�
 
 后端双轨决定了本地需要两个后端仓 + 一个前端仓：
 
-| 仓 | 路径 | 端口 | 说明 |
-|---|---|---|---|
-| 前端 | `/Users/ren/Code/frontend` | 5173 | 本仓 |
-| 主仓（v1 后端） | `/Users/ren/Code/myERP` | 8000 | FastAPI，历史业务域 |
+| 仓                   | 路径                           | 端口 | 说明                                                          |
+| -------------------- | ------------------------------ | ---- | ------------------------------------------------------------- |
+| 前端                 | `/Users/ren/Code/frontend`     | 5173 | 本仓                                                          |
+| 主仓（v1 后端）      | `/Users/ren/Code/myERP`        | 8000 | FastAPI，历史业务域                                           |
 | Rust 主仓（v2 后端） | `/Users/ren/Code/hsh-erp-rust` | 3000 | axum + sqlx，新功能域（auth / deliveryNote / scanInspect 等） |
 
 后端契约统一维护在：
@@ -63,9 +63,9 @@ npm run dev
 
 `vite.config.ts` 的 dev 代理配置：
 
-| 前端路径 | 代理目标 | 用途 |
-|---|---|---|
-| `/api` | `http://127.0.0.1:8000` | v1 FastAPI 主后端（默认走 `src/api/*.ts` 里的 `api` 实例） |
+| 前端路径 | 代理目标                | 用途                                                       |
+| -------- | ----------------------- | ---------------------------------------------------------- |
+| `/api`   | `http://127.0.0.1:8000` | v1 FastAPI 主后端（默认走 `src/api/*.ts` 里的 `api` 实例） |
 
 > `/api/v2/*` 也走这条规则落到 `:8000`。v2 实际由 Rust :3000 提供，端到端路由取决于 `myERP` 后端 docker-compose 与 nginx 的实际配置（前置 nginx 可能再反代到 Rust）。本地仅跑 Rust 不跑 FastAPI 时需要自行调整代理规则；常见做法是把 Rust 也起在 :8000（FastAPI 让出端口）或在前置加一层 nginx。
 
@@ -80,13 +80,13 @@ unplugin-auto-import / unplugin-vue-components 在首次 `npm run dev` 时会扫
 
 ## 常用 npm 脚本
 
-| 命令 | 作用 |
-|---|---|
-| `npm run dev` | vite dev server（`:5173`，HMR） |
-| `npm run typecheck` | `vue-tsc --noEmit` — 只跑类型检查，不出 dist |
-| `npm run build` | `vue-tsc --noEmit && vite build` — 类型检查 + 生产构建 |
-| `npm run preview` | vite preview — 本地预览 dist |
-| `npm run test` | vitest run — 全部单测 |
+| 命令                | 作用                                                   |
+| ------------------- | ------------------------------------------------------ |
+| `npm run dev`       | vite dev server（`:5173`，HMR）                        |
+| `npm run typecheck` | `vue-tsc --noEmit` — 只跑类型检查，不出 dist           |
+| `npm run build`     | `vue-tsc --noEmit && vite build` — 类型检查 + 生产构建 |
+| `npm run preview`   | vite preview — 本地预览 dist                           |
+| `npm run test`      | vitest run — 全部单测                                  |
 
 Docker 镜像构建只跑 `npx vite build`（不做类型检查，靠 CI / 本地 `npm run typecheck` 兜底），见 `Dockerfile` 注释。
 

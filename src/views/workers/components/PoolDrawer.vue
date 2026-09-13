@@ -9,11 +9,7 @@
         <span class="process-name">{{ pool.process_name }}</span>
         <el-tag size="small" type="info">{{ pool.batches.length }}</el-tag>
       </div>
-      <div
-        ref="containerRef"
-        class="section-body pool-cards"
-        :data-process-id="pool.process_id"
-      >
+      <div ref="containerRef" class="section-body pool-cards" :data-process-id="pool.process_id">
         <div v-for="batch in pool.batches" :key="batch.batch_id" class="pool-cards-item">
           <WorkOrderCard :batch="batch" />
         </div>
@@ -24,59 +20,73 @@
 </template>
 
 <script setup lang="ts">
-import { inject, ref, watch } from 'vue'
-import type { ComputedRef } from 'vue'
-import { useLazyDraggable } from '@/composables/useLazyDraggable'
-import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool'
-import { consumeWorkerSource, recordWorkerSource, type DraggableStartEvent } from '../composables/dndSourceTracker'
-import WorkOrderCard from './WorkOrderCard.vue'
+import { inject, ref, watch } from 'vue';
+import type { ComputedRef } from 'vue';
+import { useLazyDraggable } from '@/composables/useLazyDraggable';
+import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool';
+import {
+  consumeWorkerSource,
+  recordWorkerSource,
+  type DraggableStartEvent,
+} from '../composables/dndSourceTracker';
+import WorkOrderCard from './WorkOrderCard.vue';
 
 const props = defineProps<{
-  pool: ProcessPoolView | null
-}>()
+  pool: ProcessPoolView | null;
+}>();
 
 // 同 WorkerColumn 的 fix 模式：props.pool.batches readonly，本地 ref + watch。
-const writablePoolBatches = ref<Card[]>(props.pool ? [...props.pool.batches] : [])
+const writablePoolBatches = ref<Card[]>(props.pool ? [...props.pool.batches] : []);
 watch(
   () => props.pool?.batches,
-  (next) => { writablePoolBatches.value = next ? [...next] : [] },
+  (next) => {
+    writablePoolBatches.value = next ? [...next] : [];
+  },
   { deep: true, immediate: false },
-)
+);
 // 2026-08-27 fix：containerRef 在 <div v-if="pool"> 内，而父级 activePool 在
 // WorkerQueueBoard 的 onMounted 里 await loadBoard() 解析前恒为 null，所以组件挂载
 // 瞬间 containerRef 必为 null。原 composable 默认 immediate:true 会在 onMounted 里
 // new Sortable(null) 抛错，且此后不再重绑（此前解构了 start 却从未调用，导致
 // 「工人列 → 工序池」的回退拖拽永久失效）。改用 useLazyDraggable 延后绑定。
-const containerRef = ref<HTMLElement | null>(null)
+const containerRef = ref<HTMLElement | null>(null);
 useLazyDraggable(containerRef, writablePoolBatches, {
   group: 'work-orders',
   animation: 150,
   ghostClass: 'sortable-ghost',
   onStart: onDragStart,
   onAdd: onDragAdd,
-})
+});
 
 // 2026-08-26：page provide 必注入；非空断言。
-const moveBatchToPool = inject<(batch_id: string, from_worker_id: string, shelf_id: string, next_process_id: string) => Promise<boolean>>('moveBatchToPool')!
-const shelfId = inject<ComputedRef<string>>('shelfId')!
-const activeProcessId = inject<ComputedRef<string>>('activeProcessId')!
+const moveBatchToPool =
+  inject<
+    (
+      batch_id: string,
+      from_worker_id: string,
+      shelf_id: string,
+      next_process_id: string,
+    ) => Promise<boolean>
+  >('moveBatchToPool')!;
+const shelfId = inject<ComputedRef<string>>('shelfId')!;
+const activeProcessId = inject<ComputedRef<string>>('activeProcessId')!;
 
 function onDragStart(evt: DraggableStartEvent) {
   // 2026-08-26：记录源 worker ID（拖出 WorkerColumn 的 worker.id）。
-  const batchId = evt.item.dataset.batchId
-  const fromWorkerId = evt.from.dataset.workerId
-  if (batchId && fromWorkerId) recordWorkerSource(batchId, fromWorkerId)
+  const batchId = evt.item.dataset.batchId;
+  const fromWorkerId = evt.from.dataset.workerId;
+  if (batchId && fromWorkerId) recordWorkerSource(batchId, fromWorkerId);
 }
 
 /** 2026-08-27 迁移：vue-draggable-plus @add 事件 payload = Sortable.js 原生。 */
 async function onDragAdd(evt: DraggableStartEvent) {
-  if (!props.pool) return
-  const batchId = evt.item.dataset.batchId
-  if (!batchId) return
-  const fromWorkerId = consumeWorkerSource(batchId)
-  if (!fromWorkerId) return
+  if (!props.pool) return;
+  const batchId = evt.item.dataset.batchId;
+  if (!batchId) return;
+  const fromWorkerId = consumeWorkerSource(batchId);
+  if (!fromWorkerId) return;
   // 撤回目标 = 当前 tab 的 process_id（即此 pool）。
-  await moveBatchToPool(batchId, fromWorkerId, shelfId.value, activeProcessId.value)
+  await moveBatchToPool(batchId, fromWorkerId, shelfId.value, activeProcessId.value);
 }
 </script>
 

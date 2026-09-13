@@ -25,50 +25,55 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { Aim } from '@element-plus/icons-vue'
-import { findWorkerByBadge } from '@/api/worker'
-import { useAuthSession } from '@/composables/useAuthSession'
-import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import { useScanSession } from '@/composables/useScanSession'
+import { onBeforeUnmount, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import { Aim } from '@element-plus/icons-vue';
+import { findWorkerByBadge } from '@/api/worker';
+import { useAuthSession } from '@/composables/useAuthSession';
+import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
+import { useScanSession } from '@/composables/useScanSession';
 
-const router = useRouter()
-const { onScan } = useBarcodeScanner()
-const { setWorker } = useScanSession()
-const { isAuthenticated, refreshOrLogout, user } = useAuthSession()
+const router = useRouter();
+const { onScan } = useBarcodeScanner();
+const { setWorker } = useScanSession();
+const { isAuthenticated, refreshOrLogout, user } = useAuthSession();
 
 onMounted(async () => {
   if (!isAuthenticated()) {
-    const ok = await refreshOrLogout(router)
-    if (!ok) return
+    const ok = await refreshOrLogout(router);
+    if (!ok) return;
   }
   // 不再预热 worker 缓存：findWorkerByBadge 改为后端单点 query（POST /workers/verify-badge）。
   // 扫描时直接打到后端，结果强一致、无 500 条硬上限、无 TTL 失效问题。
-})
+});
 
 const unsubscribe = onScan(async (code) => {
   try {
-    const worker = await findWorkerByBadge(code)
+    const worker = await findWorkerByBadge(code);
     if (!worker) {
-      ElMessage.warning(`未识别工牌: ${code}`)
-      return
+      ElMessage.warning(`未识别工牌: ${code}`);
+      return;
     }
-    setWorker(worker)
-    void router.push('/scan/action')
+    setWorker(worker);
+    void router.push('/scan/action');
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '工牌查询失败')
+    ElMessage.error((e as Error).message ?? '工牌查询失败');
   }
-})
+});
 
 onBeforeUnmount(() => {
-  unsubscribe()
-})
+  unsubscribe();
+});
 
-const { logout } = useAuthSession()
-async function switchAccount(): Promise<void> { await logout(); router.replace('/login') }
-function goHome(): void { void router.push('/dashboard') }
+const { logout } = useAuthSession();
+async function switchAccount(): Promise<void> {
+  await logout();
+  router.replace('/login');
+}
+function goHome(): void {
+  void router.push('/dashboard');
+}
 </script>
 
 <style lang="scss" scoped>
@@ -99,8 +104,15 @@ function goHome(): void { void router.push('/dashboard') }
   animation: pulse-scale 1.8s ease-in-out infinite;
 }
 @keyframes pulse-scale {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50%      { transform: scale(1.15); opacity: 0.7; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.7;
+  }
 }
 
 .title {

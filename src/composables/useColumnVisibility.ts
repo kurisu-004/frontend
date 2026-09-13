@@ -27,52 +27,60 @@
 // 列设置弹窗(见 components/ColumnVisibilityPopover.vue):
 //   <ColumnVisibilityPopover :defs="columnDefs" v-model="columnVisibility.currentMap" />
 
-import { computed, onBeforeUnmount, reactive, watch, type Ref, type VNode, type WritableComputedRef } from 'vue'
-import { useAuthSession } from './useAuthSession'
+import {
+  computed,
+  onBeforeUnmount,
+  reactive,
+  watch,
+  type Ref,
+  type VNode,
+  type WritableComputedRef,
+} from 'vue';
+import { useAuthSession } from './useAuthSession';
 
 export interface ColumnDef {
   /** 唯一 key,英文/中文皆可,作为可见性 map 的 key */
-  key: string
+  key: string;
   /** 弹窗里 checkbox 的显示文字 */
-  label: string
+  label: string;
   /** 默认是否可见;缺省 true */
-  defaultVisible?: boolean
+  defaultVisible?: boolean;
   /** 2026-08-27 新增：列拖动支持。
    *  - type=selection|index|expand → false
    *  - fixed='left'|'right'|true     → false
    *  - 其他                          → true
    *  显式赋值时优先用显式值。 */
-  draggable?: boolean
+  draggable?: boolean;
   /** 2026-08-27 新增：列稳定标识（透传给 <el-table-column :column-key>）。
    *  缺省时回落到 key。仅在 key 含中文 / 重复场景显式设置。 */
-  columnKey?: string
+  columnKey?: string;
   /** el-table-column type：'selection' / 'index' / 'expand' 时不可拖动 */
-  type?: 'selection' | 'index' | 'expand' | string
+  type?: 'selection' | 'index' | 'expand' | string;
   /** el-table-column fixed：'left' / 'right' / true 时不可拖动 */
-  fixed?: 'left' | 'right' | boolean
+  fixed?: 'left' | 'right' | boolean;
   /** 2026-08-27 新增：el-table-column 标准属性透传。PartListShell 用 v-for 渲染时
    *  从 ColumnDef 上读这些字段，再绑到 <el-table-column>。缺省时回落到 d.key。
    *  这些字段是「column 元数据」，不参与可见性 / 顺序语义。 */
-  prop?: string
-  width?: number | string
-  minWidth?: number | string
-  sortable?: boolean | 'custom'
-  align?: 'left' | 'center' | 'right'
-  headerAlign?: 'left' | 'center' | 'right'
-  showOverflowTooltip?: boolean
-  formatter?: (row: unknown, column: unknown, cellValue: unknown, index: number) => string
-  index?: number | ((index: number) => number)
-  selectable?: (row: unknown, index: number) => boolean
-  filters?: Array<{ text: string; value: string }>
-  filterMultiple?: boolean
-  filterMethod?: (value: unknown, row: unknown, column: unknown) => boolean
-  filteredValue?: string[]
-  sortMethod?: (a: unknown, b: unknown) => number
-  sortBy?: string | string[]
-  sortOrders?: Array<'ascending' | 'descending' | null>
-  resizable?: boolean
-  className?: string
-  labelClassName?: string
+  prop?: string;
+  width?: number | string;
+  minWidth?: number | string;
+  sortable?: boolean | 'custom';
+  align?: 'left' | 'center' | 'right';
+  headerAlign?: 'left' | 'center' | 'right';
+  showOverflowTooltip?: boolean;
+  formatter?: (row: unknown, column: unknown, cellValue: unknown, index: number) => string;
+  index?: number | ((index: number) => number);
+  selectable?: (row: unknown, index: number) => boolean;
+  filters?: Array<{ text: string; value: string }>;
+  filterMultiple?: boolean;
+  filterMethod?: (value: unknown, row: unknown, column: unknown) => boolean;
+  filteredValue?: string[];
+  sortMethod?: (a: unknown, b: unknown) => number;
+  sortBy?: string | string[];
+  sortOrders?: Array<'ascending' | 'descending' | null>;
+  resizable?: boolean;
+  className?: string;
+  labelClassName?: string;
   /** 2026-08-27 新增：自定义单元格渲染函数。PartListShell 的 v-for 列模板里
    *  通过 `<component :is="d.cellRender(scope)" />` 渲染返回值。scope 形参与
    *  el-table-column 默认 slot 保持一致（{ row, column, $index }）。
@@ -80,21 +88,21 @@ export interface ColumnDef {
    *  cellRender 实现内部自行 cast 到自己的 row 类型。
    *  与 formatter 互斥：formatter 走 EP 原生字符串格式化；cellRender 用于
    *  复杂 VNode（router-link、按钮组、条件 class 等）。 */
-  cellRender?: (ctx: { row: unknown; column: unknown; $index: number }) => VNode
+  cellRender?: (ctx: { row: unknown; column: unknown; $index: number }) => VNode;
   /** 2026-08-27 新增：自定义表头渲染函数。PartsTable 等需要把 ColumnFilterPopover
    *  塞进表头的视图走 h(Component, ...) 工厂；scope 形参与 el-table-column
    *  #header 插槽保持一致（{ column, $index }）。
    *  与 cellRender 共同覆盖 v-for 列模板里的 #default / #header 插槽。 */
-  headerRender?: (ctx: { column: unknown; $index: number }) => VNode
+  headerRender?: (ctx: { column: unknown; $index: number }) => VNode;
 }
 
 /** 推导列默认是否可拖：selection/index/expand、fixed 列默认不可拖，其他默认可拖。
  *  显式 `def.draggable` 优先级最高。 */
 export function resolveDraggable(def: ColumnDef): boolean {
-  if (def.draggable !== undefined) return def.draggable
-  if (def.type === 'selection' || def.type === 'index' || def.type === 'expand') return false
-  if (def.fixed === 'left' || def.fixed === 'right' || def.fixed === true) return false
-  return true
+  if (def.draggable !== undefined) return def.draggable;
+  if (def.type === 'selection' || def.type === 'index' || def.type === 'expand') return false;
+  if (def.fixed === 'left' || def.fixed === 'right' || def.fixed === true) return false;
+  return true;
 }
 
 export interface ColumnVisibilityApi {
@@ -102,32 +110,32 @@ export interface ColumnVisibilityApi {
    *  暴露为普通对象(`reactive`),而非 Ref/ComputedRef,这样 `v-model="columnVisibility.currentMap"`
    *  在 vue-tsc 下类型直通(原生 vue 的 v-model 模板展开,ref/computed 走特殊处理,
    *  vue-tsc 无法追踪)。 */
-  currentMap: Record<string, boolean>
+  currentMap: Record<string, boolean>;
   /** 单 key 查询;未知 key 视为可见 */
-  isVisible: (key: string) => boolean
+  isVisible: (key: string) => boolean;
   /** 切换单 key(value 缺省时取反) */
-  toggle: (key: string, value?: boolean) => void
+  toggle: (key: string, value?: boolean) => void;
   /** 整表更新(从 el-checkbox-group 的「全选/全不选」或 popover 整表 emit 用)。
    *  原地突变 reactive Proxy,保持 watch 依赖不断。 */
-  update: (next: Record<string, boolean>) => void
+  update: (next: Record<string, boolean>) => void;
   /** 全部显示 */
-  showAll: () => void
+  showAll: () => void;
   /** 全部隐藏(操作列等不应隐藏的 key 不放进 defs 即可) */
-  hideAll: () => void
+  hideAll: () => void;
   /** 所有声明的 key 列表(只读) */
-  allKeys: readonly string[]
+  allKeys: readonly string[];
 }
 
 /** 构造 localStorage key:含 user.id 后缀,避免共享浏览器账号污染。 */
 function storageKey(listKey: string): string {
-  let suffix = 'anon'
+  let suffix = 'anon';
   try {
-    const { user } = useAuthSession()
-    if (user.value?.id) suffix = String(user.value.id)
+    const { user } = useAuthSession();
+    if (user.value?.id) suffix = String(user.value.id);
   } catch {
     /* useAuthSession 在 setup 外调用会失败 → 落到 anon */
   }
-  return `myerp.list.${suffix}.${listKey}_columns`
+  return `myerp.list.${suffix}.${listKey}_columns`;
 }
 
 /**
@@ -135,11 +143,11 @@ function storageKey(listKey: string): string {
  * defs 中未声明的 key 一律视为可见,不需要进 map。
  */
 function buildInitial(defs: readonly ColumnDef[]): Record<string, boolean> {
-  const init: Record<string, boolean> = {}
+  const init: Record<string, boolean> = {};
   for (const d of defs) {
-    init[d.key] = d.defaultVisible === false ? false : true
+    init[d.key] = d.defaultVisible === false ? false : true;
   }
-  return init
+  return init;
 }
 
 /**
@@ -151,26 +159,26 @@ function restoreFromStorage(
   init: Record<string, boolean>,
 ): Record<string, boolean> {
   try {
-    const raw = localStorage.getItem(storageKey(listKey))
-    if (!raw) return init
-    const parsed = JSON.parse(raw) as Record<string, unknown> | null
-    if (!parsed || typeof parsed !== 'object') return init
-    const next: Record<string, boolean> = { ...init }
+    const raw = localStorage.getItem(storageKey(listKey));
+    if (!raw) return init;
+    const parsed = JSON.parse(raw) as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== 'object') return init;
+    const next: Record<string, boolean> = { ...init };
     for (const [k, v] of Object.entries(parsed)) {
       if (typeof v === 'boolean' && k in init) {
-        next[k] = v
+        next[k] = v;
       }
     }
-    return next
+    return next;
   } catch {
     /* localStorage 被禁 / 解析失败 / 写入值非对象 → 静默回退到默认值 */
-    return init
+    return init;
   }
 }
 
 function persistToStorage(listKey: string, value: Record<string, boolean>): void {
   try {
-    localStorage.setItem(storageKey(listKey), JSON.stringify(value))
+    localStorage.setItem(storageKey(listKey), JSON.stringify(value));
   } catch {
     /* 静默失败(localStorage 满、隐私模式等) */
   }
@@ -180,42 +188,42 @@ export function useColumnVisibility(
   defs: readonly ColumnDef[],
   options: { listKey: string },
 ): ColumnVisibilityApi {
-  const allKeys = defs.map((d) => d.key)
-  const initial = buildInitial(defs)
+  const allKeys = defs.map((d) => d.key);
+  const initial = buildInitial(defs);
   // 用 reactive() 包装让 v-model 在 vue-tsc 下类型直通;
   // 写入/读取 currentMap[key] 自动触发响应式。
   const currentMap = reactive<Record<string, boolean>>(
     restoreFromStorage(options.listKey, initial),
-  )
+  );
 
   // 防抖落盘(300ms),与 useListStatePersist 节奏一致
-  let timer: ReturnType<typeof setTimeout> | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null;
   watch(
     currentMap,
     () => {
-      if (timer !== null) clearTimeout(timer)
-      timer = setTimeout(() => persistToStorage(options.listKey, currentMap), 300)
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => persistToStorage(options.listKey, currentMap), 300);
     },
     { deep: true },
-  )
+  );
 
   // 卸载前同步写一次(防止 timer 没触发就关闭页面)
   onBeforeUnmount(() => {
     if (timer !== null) {
-      clearTimeout(timer)
-      timer = null
+      clearTimeout(timer);
+      timer = null;
     }
-    persistToStorage(options.listKey, currentMap)
-  })
+    persistToStorage(options.listKey, currentMap);
+  });
 
   function isVisible(key: string): boolean {
-    return currentMap[key] !== false
+    return currentMap[key] !== false;
   }
 
   function toggle(key: string, value?: boolean): void {
-    const target = value === undefined ? !currentMap[key] : value
+    const target = value === undefined ? !currentMap[key] : value;
     // 原地修改,保持 Proxy 引用稳定(deep watch 仍会触发)
-    currentMap[key] = target
+    currentMap[key] = target;
   }
 
   /**
@@ -225,20 +233,20 @@ export function useColumnVisibility(
    */
   function update(next: Record<string, boolean>): void {
     for (const k of Object.keys(currentMap)) {
-      if (!(k in next)) delete currentMap[k]
+      if (!(k in next)) delete currentMap[k];
     }
     for (const [k, v] of Object.entries(next)) {
-      currentMap[k] = v
+      currentMap[k] = v;
     }
   }
 
   function showAll(): void {
-    for (const k of allKeys) currentMap[k] = true
+    for (const k of allKeys) currentMap[k] = true;
   }
 
   function hideAll(): void {
-    for (const k of allKeys) currentMap[k] = false
+    for (const k of allKeys) currentMap[k] = false;
   }
 
-  return { currentMap, isVisible, toggle, update, showAll, hideAll, allKeys }
+  return { currentMap, isVisible, toggle, update, showAll, hideAll, allKeys };
 }

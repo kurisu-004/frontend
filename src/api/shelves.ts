@@ -1,79 +1,69 @@
 // 货架 API（走 @/api/http 统一 axios 客户端）。
 
-import { api, cleanParams } from '@/api/http'
+import { api, cleanParams } from '@/api/http';
 import type {
   Shelf,
   ShelfForReturnResult,
   ShelfListResult,
   ShelfWithProcesses,
   SetShelfProcessesPayload,
-} from '@/types/shelf'
+} from '@/types/shelf';
 
 export interface ListShelvesParams {
-  zone?: string
-  is_active?: boolean
-  limit?: number
-  offset?: number
+  zone?: string;
+  is_active?: boolean;
+  limit?: number;
+  offset?: number;
 }
 
-export async function listShelves(
-  params: ListShelvesParams = {},
-): Promise<ShelfListResult> {
+export async function listShelves(params: ListShelvesParams = {}): Promise<ShelfListResult> {
   const resp = await api.get<ShelfListResult>('/shelves', {
     params: cleanParams(params),
-  })
-  return resp.data
+  });
+  return resp.data;
 }
 
 export interface CreateShelfPayload {
-  code: string
-  name: string
-  zone: string
-  location?: string
-  display_order?: number
+  code: string;
+  name: string;
+  zone: string;
+  location?: string;
+  display_order?: number;
 }
 
 export async function createShelf(payload: CreateShelfPayload): Promise<Shelf> {
-  const resp = await api.post<Shelf>('/shelves', payload)
-  return resp.data
+  const resp = await api.post<Shelf>('/shelves', payload);
+  return resp.data;
 }
 
 export interface UpdateShelfPayload {
-  name?: string
-  location?: string
-  is_active?: boolean
-  display_order?: number
+  name?: string;
+  location?: string;
+  is_active?: boolean;
+  display_order?: number;
 }
 
-export async function updateShelf(
-  id: string,
-  payload: UpdateShelfPayload,
-): Promise<Shelf> {
-  const resp = await api.post<Shelf>(`/shelves/${id}/update`, payload)
-  return resp.data
+export async function updateShelf(id: string, payload: UpdateShelfPayload): Promise<Shelf> {
+  const resp = await api.post<Shelf>(`/shelves/${id}/update`, payload);
+  return resp.data;
 }
 
 export async function deactivateShelf(id: string): Promise<Shelf> {
-  const resp = await api.post<Shelf>(`/shelves/${id}/deactivate`)
-  return resp.data
+  const resp = await api.post<Shelf>(`/shelves/${id}/deactivate`);
+  return resp.data;
 }
 
-export async function getShelfProcesses(
-  id: string,
-): Promise<ShelfWithProcesses> {
-  const resp = await api.get<ShelfWithProcesses>(`/shelves/${id}/processes`)
-  return resp.data
+export async function getShelfProcesses(id: string): Promise<ShelfWithProcesses> {
+  const resp = await api.get<ShelfWithProcesses>(`/shelves/${id}/processes`);
+  return resp.data;
 }
 
 export async function setShelfProcesses(
   id: string,
   payload: SetShelfProcessesPayload,
 ): Promise<ShelfWithProcesses> {
-  const resp = await api.post<ShelfWithProcesses>(
-    `/shelves/${id}/processes`,
-    payload,
-  )
-  return resp.data
+  const resp = await api.post<ShelfWithProcesses>(`/shelves/${id}/processes`, payload);
+  return resp.data;
 }
 
 /**
@@ -83,13 +73,11 @@ export async function setShelfProcesses(
  *
  * 错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS（没有 active 架映射该 process）
  */
-export async function listShelvesForReturn(
-  nextProcessId: string,
-): Promise<ShelfForReturnResult> {
+export async function listShelvesForReturn(nextProcessId: string): Promise<ShelfForReturnResult> {
   const resp = await api.get<ShelfForReturnResult>('/shelves/for-return', {
     params: { next_process_id: nextProcessId },
-  })
-  return resp.data
+  });
+  return resp.data;
 }
 
 /**
@@ -101,8 +89,8 @@ export async function listShelvesForReturn(
  * scope 内无 INSPECTION 架）。
  */
 export async function listShelvesForInspection(): Promise<ShelfForReturnResult> {
-  const resp = await api.get<ShelfForReturnResult>('/shelves/for-inspection')
-  return resp.data
+  const resp = await api.get<ShelfForReturnResult>('/shelves/for-inspection');
+  return resp.data;
 }
 
 /**
@@ -114,13 +102,13 @@ export async function listShelvesForInspection(): Promise<ShelfForReturnResult> 
  * N+1 次 `GET /shelves/{id}/processes` 调用。
  */
 export interface ShelfProcessMapping {
-  shelf_id: string
-  process_ids: string[]
+  shelf_id: string;
+  process_ids: string[];
 }
 export interface ShelfProcessMappingsResult {
-  items: ShelfProcessMapping[]
+  items: ShelfProcessMapping[];
 }
 export async function getAllShelfProcessMappings(): Promise<ShelfProcessMappingsResult> {
-  const resp = await api.get<ShelfProcessMappingsResult>('/shelves/processes')
-  return resp.data
+  const resp = await api.get<ShelfProcessMappingsResult>('/shelves/processes');
+  return resp.data;
 }
