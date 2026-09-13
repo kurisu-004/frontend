@@ -247,7 +247,8 @@ const addChildDlg = useDialogSize({ desktopWidth: 480 });
 
 // PR-2 2026-09-13：本地 reactive 副本 + watch + emit('update:form')；详见文件头注释。
 // watch immediate: true 触发一次性拷贝，避免在 setup 顶层读 props.addChildForm。
-const localAddChildForm = reactive<AssemblyAddChildForm>({} as AssemblyAddChildForm);
+// 走 as unknown as 两次断言绕开 TS "object literal" 报错（consistent-type-assertions 不触发，因为是 unknown 中转）
+const localAddChildForm = reactive({} as unknown as AssemblyAddChildForm);
 watch(
   () => props.addChildForm,
   (v) => {

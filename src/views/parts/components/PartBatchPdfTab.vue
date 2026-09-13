@@ -392,7 +392,7 @@
               </el-table-column>
               <el-table-column label="3D" min-width="55" align="center">
                 <template #default="{ row: c }">
-                  <el-tag v-if="c.three_d_index != null" type="success" size="small">3D ✓</el-tag>
+                  <el-tag v-if="c.three_d_index !== null" type="success" size="small">3D ✓</el-tag>
                 </template>
               </el-table-column>
               <el-table-column label="计划交期" min-width="150" align="center">
@@ -688,8 +688,10 @@ const props = defineProps<{
 // watch immediate: true 触发一次性拷贝，避免在 setup 顶层读 props.*Form。
 const emit = defineEmits<{
   (e: 'update:pdf-form', v: { customerL1Id: string | null; requestDate: string }): void;
-  (e: 'update:manual-part-form', v: { drawing_no: string; name: string; file: File | null }): void;
-  (e: 'update:manual-asm-form', v: { drawing_no: string; name: string; file: File | null }): void;
+  (
+    e: 'update:manual-part-form' | 'update:manual-asm-form',
+    v: { drawing_no: string; name: string; file: File | null },
+  ): void;
 }>();
 const localPdfForm = reactive<{ customerL1Id: string | null; requestDate: string }>({
   customerL1Id: null,

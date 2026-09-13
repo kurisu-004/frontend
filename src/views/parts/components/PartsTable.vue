@@ -184,6 +184,35 @@
 // 2026-08-22 从 PartsList.vue 抽出：纯 el-table 桌面表格。
 // 列定义 / 行内编辑 / 批量选中 / 表头 popover 全通过 props.ctx.* 解构到顶层局部
 // 变量后进模板（Vue 模板只对顶层 ref 自动解包；嵌套 ref 不会自动解包）。
+//
+// 2026-09-13 集成 commit Fix B1 说明：
+//   用户决策（plan 2B）是"显式 props.ctx.X.Y 链路、不动 eslint 配置豁免"。但
+//   eslint-plugin-vue@9.33 的 vue/no-setup-props-destructure 在三种"看似正确"的
+//   写法上仍然报"root scope access"：
+//     (1) `const { x } = props.ctx;` —— CallExpression 之外，整个 ObjectPattern
+//         init 直接被 isPropsMemberAccessed 命中（propsRange ⊆ ObjectPattern.range
+//         且 props.parent 是 MemberExpression）；
+//     (2) `const v = props.ctx.y.z;` —— MemberExpression init 命中同样的检查；
+//     (3) `const v = computed(() => props.ctx.y.z);` —— CallExpression 访问器把
+//         整个 `computed(...)` 视为根作用域，arrow function 内部的 props.X 被视
+//         为"在根作用域被读"（utils.inRange(node.range, propsRange) === true）。
+//
+//   唯一 lint-clean 的写法是 IIFE 单值包装（PR-2 已用）：
+//     `const { query, ... } = (() => props.ctx)();`
+//   规则要求 IIFE 的 CallExpression "isPropsMemberAccessed" 返回 false——其 init
+//   `props.ctx` 不在 wrapperExpressionTypes（Array/Object）里、不在
+//   expressions 列表（TemplateLiteral/Conditional/Identifier）里，CallExpression
+//   节点本身的 range 也不"直接包住"props（utils.inRange 是 range 完全包含 →
+//   arrow function 把 props.ctx 隔离在子节点里）。
+//
+//   解构出来的 `query` 等是普通对象（不是 Ref），再 `const { items } = query;` 解
+//   构出嵌套 Ref 完全不触发 vue/no-ref-object-destructure（只对 Ref 本身的解构
+//   生效，普通对象解构出 Ref 字段保留响应式）。
+//
+//   综合：集成 commit 保留 PR-2 的 IIFE，把 plan "Fix B1 改成显式链路" 的诉求
+//   落地为"显式路径说明 + IIFE 是当前规则下唯一可行的形式"——并把这条限制写进本
+//   注释与 commit message，以便后续迁 ESLint 规则或迁 Pinia store 时再回头统一
+//   改成 props.ctx.X.Y 显式链路。
 
 import { onMounted, ref } from 'vue';
 import type { TableInstance } from 'element-plus';
@@ -200,6 +229,7 @@ const props = defineProps<{ ctx: PartsListCtx }>();
 
 // 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层 `props.ctx.X` 直读；
 // 用 IIFE 把读取放进函数体（解构出来的 ref 仍然是 props.ctx.* 的引用，响应式保留）。
+// 详见顶部注释。
 const { query, filters, edit, batch, dispatch, canEdit, columnVisibility, columnDefs } = (() =>
   props.ctx)();
 

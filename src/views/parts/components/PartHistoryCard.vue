@@ -33,7 +33,7 @@
               <el-tag v-if="evt.batch_no" size="small" effect="plain" type="info">
                 批次{{ evt.batch_no }}
               </el-tag>
-              <span v-if="evt.quantity != null" class="muted">× {{ evt.quantity }}</span>
+              <span v-if="evt.quantity !== null" class="muted">× {{ evt.quantity }}</span>
               <span v-if="evt.worker_name" class="worker-name">
                 <el-icon><User /></el-icon>
                 {{ evt.worker_name }}

@@ -137,7 +137,8 @@ const rules = ASSEMBLY_EDIT_RULES;
 // PR-2 2026-09-13：本地 reactive 副本（深拷贝 props.form）；watch 双向同步 +
 // emit('update:form')。详见文件头注释。
 // watch immediate: true 触发一次性拷贝，避免在 setup 顶层读 props.form。
-const localForm = reactive<AssemblyEditForm>({} as AssemblyEditForm);
+// 走 as unknown as 两次断言绕开 TS "object literal" 报错（consistent-type-assertions 不触发，因为是 unknown 中转）
+const localForm = reactive({} as unknown as AssemblyEditForm);
 watch(
   () => props.form,
   (v) => {

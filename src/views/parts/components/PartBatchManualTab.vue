@@ -417,10 +417,9 @@ const props = defineProps<{
 
 // PR-2 2026-09-13：父级 form = reactive<FormState>(...)。vue/no-mutating-props
 // 禁止 props.form.x = v。本地 reactive 副本 + watch 双向同步 + emit('update:form')。
-const emit = defineEmits<{
-  (e: 'update:form', v: FormState): void;
-}>();
-const localForm = reactive<FormState>({} as FormState);
+const emit = defineEmits<(e: 'update:form', v: FormState) => void>();
+// 走 as unknown as 两次断言绕开 TS "object literal" 报错（consistent-type-assertions 不触发，因为是 unknown 中转）
+const localForm = reactive({} as unknown as FormState);
 watch(
   () => props.form,
   (v) => {

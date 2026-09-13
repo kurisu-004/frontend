@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { nextTick, ref, type Ref } from 'vue';
 import type { UseDraggableReturn } from 'vue-draggable-plus';
+import type * as VueDraggablePlus from 'vue-draggable-plus';
 import { useColumnDrag, columnIdentifier } from '../useColumnDrag';
 import type { ColumnDef } from '../useColumnVisibility';
 
@@ -29,7 +30,7 @@ function recordCallSite(tag: string): string {
   return syncStackDepth > 0 ? `[sync:${tag}]` : `[async:${tag}]`;
 }
 vi.mock('vue-draggable-plus', async () => {
-  const actual = await vi.importActual<typeof import('vue-draggable-plus')>('vue-draggable-plus');
+  const actual = await vi.importActual<typeof VueDraggablePlus>('vue-draggable-plus');
   return {
     ...actual,
     useDraggable: <T>(
@@ -214,6 +215,7 @@ describe('useColumnDrag applyDrag Ref 签名', () => {
     d.applyDrag(theadRef);
     expect(startCalls.length).toBe(0); // 初始 null 不应触发 start
 
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub：HTMLElement 在 node 环境无 DOM，纯空对象占位即可
     const el = {} as HTMLElement;
     theadRef.value = el;
     await nextTick();
@@ -231,6 +233,7 @@ describe('useColumnDrag applyDrag Ref 签名', () => {
     const theadRef = ref<HTMLElement | null>(null);
     d.applyDrag(theadRef);
 
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub：HTMLElement 在 node 环境无 DOM
     const el1 = {} as HTMLElement;
     theadRef.value = el1;
     await nextTick();
@@ -239,6 +242,7 @@ describe('useColumnDrag applyDrag Ref 签名', () => {
     expect(startCalls[0]).toBe(refVal1);
     expect(destroyed.length).toBe(0);
 
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub：HTMLElement 在 node 环境无 DOM
     const el2 = {} as HTMLElement;
     theadRef.value = el2;
     await nextTick();
@@ -250,6 +254,7 @@ describe('useColumnDrag applyDrag Ref 签名', () => {
 
   it('传 HTMLElement 时维持 Phase 1 行为（立即 start 一次）', () => {
     const d = useColumnDrag(baseDefs, { listKey: 'test_ref_c' });
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub：HTMLElement 在 node 环境无 DOM
     const el = {} as HTMLElement;
     d.applyDrag(el);
     expect(startCalls).toContain(el);
@@ -260,47 +265,54 @@ describe('useColumnDrag applyDrag Ref 签名', () => {
 describe('useColumnDrag dragLabelClass', () => {
   it('可拖列（普通列）：返回 "col-draggable col-key-<key>"', () => {
     const d = useColumnDrag(baseDefs, { listKey: 'cls_a' });
-    expect(d.dragLabelClass({ key: 'serial' } as ColumnDef)).toBe('col-draggable col-key-serial');
+    const colDef: ColumnDef = { key: 'serial', label: '序列号' };
+    expect(d.dragLabelClass(colDef)).toBe('col-draggable col-key-serial');
   });
 
   it('不可拖列（type=selection）：返回 "col-no-drag"（filter 用）', () => {
     const d = useColumnDrag(baseDefs, { listKey: 'cls_b' });
-    expect(d.dragLabelClass({ key: 'sel', type: 'selection' } as ColumnDef)).toBe('col-no-drag');
+    const colDef: ColumnDef = { key: 'sel', type: 'selection', label: '选择' };
+    expect(d.dragLabelClass(colDef)).toBe('col-no-drag');
   });
 
   it('不可拖列（type=index）：返回 "col-no-drag"', () => {
     const d = useColumnDrag(baseDefs, { listKey: 'cls_b2' });
-    expect(d.dragLabelClass({ key: 'idx', type: 'index' } as ColumnDef)).toBe('col-no-drag');
+    const colDef: ColumnDef = { key: 'idx', type: 'index', label: '序号' };
+    expect(d.dragLabelClass(colDef)).toBe('col-no-drag');
   });
 
   it('不可拖列（fixed=left）：返回 "col-no-drag"', () => {
     const d = useColumnDrag(baseDefs, { listKey: 'cls_c' });
-    expect(d.dragLabelClass({ key: 'op', fixed: 'left' } as ColumnDef)).toBe('col-no-drag');
+    const colDef: ColumnDef = { key: 'op', fixed: 'left', label: '操作' };
+    expect(d.dragLabelClass(colDef)).toBe('col-no-drag');
   });
 
   it('不可拖列（draggable: false 显式）：返回 "col-no-drag"（显式优先于默认）', () => {
     const d = useColumnDrag(baseDefs, { listKey: 'cls_d' });
-    expect(d.dragLabelClass({ key: 'a', draggable: false } as ColumnDef)).toBe('col-no-drag');
+    const colDef: ColumnDef = { key: 'a', draggable: false, label: '测试' };
+    expect(d.dragLabelClass(colDef)).toBe('col-no-drag');
   });
 
   it('可拖列 + 自定义 labelClassName：正确合并（col-draggable col-key-<key> 在前，自定义在后）', () => {
     const d = useColumnDrag(baseDefs, { listKey: 'cls_e' });
-    expect(
-      d.dragLabelClass({
-        key: 'a',
-        labelClassName: 'custom-x text-right',
-      } as ColumnDef),
-    ).toBe('col-draggable col-key-a custom-x text-right');
+    const colDef: ColumnDef = {
+      key: 'a',
+      labelClassName: 'custom-x text-right',
+      label: '测试',
+    };
+    expect(d.dragLabelClass(colDef)).toBe('col-draggable col-key-a custom-x text-right');
   });
 
   it('labelClassName 前后多余空格被整体 trim 掉（结果首尾无空格）', () => {
     const d = useColumnDrag(baseDefs, { listKey: 'cls_f' });
     // 实现用 String.prototype.trim()：只裁整体首尾；labelClassName 内部的空格原样保留。
     // 这里断言「结果首尾没有空格」即可覆盖 trim 的关键语义。
-    const result = d.dragLabelClass({
+    const colDef: ColumnDef = {
       key: 'a',
       labelClassName: '  spaced  ',
-    } as ColumnDef);
+      label: '测试',
+    };
+    const result = d.dragLabelClass(colDef);
     expect(result.startsWith('col-draggable')).toBe(true);
     expect(result.endsWith('spaced')).toBe(true);
     expect(result).not.toMatch(/^\s|\s$/);
@@ -308,9 +320,8 @@ describe('useColumnDrag dragLabelClass', () => {
 
   it('columnKey 优先于 key（key 含中文 / 重复时稳定标识）', () => {
     const d = useColumnDrag(baseDefs, { listKey: 'cls_g' });
-    expect(d.dragLabelClass({ key: '中文', columnKey: 'stable_a' } as ColumnDef)).toBe(
-      'col-draggable col-key-stable_a',
-    );
+    const colDef: ColumnDef = { key: '中文', columnKey: 'stable_a', label: '中文测试' };
+    expect(d.dragLabelClass(colDef)).toBe('col-draggable col-key-stable_a');
   });
 });
 

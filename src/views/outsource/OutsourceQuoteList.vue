@@ -18,6 +18,7 @@ import { useAuthSession } from '@/composables/useAuthSession';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import { listProcesses } from '@/api/process';
 import type { Process } from '@/types/process';
+import type { OutsourceQuote } from '@/types/outsource';
 import { listPartFiles } from '@/api/assembly';
 import { listQuotableParts } from '@/api/outsource';
 import { api } from '@/api/http';
@@ -153,7 +154,7 @@ onBeforeUnmount(() => {
 // ============================================================
 function onTableAction(payload: {
   type: 'submit' | 'approve' | 'reject' | 'delete';
-  row: import('@/types/outsource').OutsourceQuote;
+  row: OutsourceQuote;
 }): void {
   if (payload.type === 'submit') void form.onSubmit(payload.row);
   else if (payload.type === 'approve') form.openApprove(payload.row);

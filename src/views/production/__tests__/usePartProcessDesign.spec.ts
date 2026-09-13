@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // 写入真实字符串；JSON.parse/stringify 走原生。
 function makeLocalStorage(): Storage {
   let store: Record<string, string> = {};
-  return {
+  const obj: Storage = {
     get length() {
       return Object.keys(store).length;
     },
@@ -32,7 +32,8 @@ function makeLocalStorage(): Storage {
     setItem(key: string, value: string) {
       store[key] = value;
     },
-  } as Storage;
+  };
+  return obj;
 }
 
 beforeEach(() => {

@@ -53,11 +53,11 @@
     </el-card>
 
     <!-- 所属送货单 -->
-    <PartDeliveryNoteLinkCard v-if="part && part.delivery_note_id != null" :part="part" />
+    <PartDeliveryNoteLinkCard v-if="part && part.delivery_note_id !== null" :part="part" />
 
     <!-- 所属装配件 -->
     <PartAssemblyLinkCard
-      v-if="part && part.assembly_id != null"
+      v-if="part && part.assembly_id !== null"
       :part="part"
       :assembly-detail="assemblyDetail"
       :assembly-loading="assemblyLoading"

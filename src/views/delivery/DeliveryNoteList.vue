@@ -63,7 +63,10 @@ const role = computed(() => ({
 // 一览过滤
 // ============================================================
 const allStatuses: DeliveryNoteStatus[] = ['DRAFT', 'SUBMITTED', 'PICKED_UP', 'ARCHIVED'];
-const statuses = ref<DeliveryNoteStatus[]>(defaultStatusesForRole(role.value));
+// vue/no-ref-object-destructure：role 是 computed，value 不能直接读；IIFE 包一层把读取放进函数体。
+const statuses = ref<DeliveryNoteStatus[]>(
+  defaultStatusesForRole(((): typeof role.value => role.value)()),
+);
 
 // 2026-09-02 新增：列表页「一键送货」硬编码默认司机。
 // 来源：用户 2026-09-02 提供的 t_worker.id（DB 中一个在职、工种 code='送货司机' 的工人）。

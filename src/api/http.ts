@@ -34,6 +34,7 @@
 import type { AxiosError } from 'axios';
 import axios, {
   type AxiosInstance,
+  type AxiosRequestHeaders,
   type AxiosResponse,
   type InternalAxiosRequestConfig,
 } from 'axios';
@@ -355,9 +356,13 @@ function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
     try {
       const fresh = await getOrCreateRefresh();
       // 用新 token 重试原请求；标记 _isRetryAfterRefresh 防递归
+      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- cfg.headers 是 AxiosHeaders 实例不能 spread 成普通对象，断言为带 _isRetryAfterRefresh 标记的 InternalAxiosRequestConfig
       const retryCfg = {
         ...cfg,
-        headers: { ...(cfg.headers ?? {}), Authorization: `Bearer ${fresh.token}` },
+        headers: {
+          ...((cfg.headers as AxiosRequestHeaders | undefined) ?? {}),
+          Authorization: `Bearer ${fresh.token}`,
+        },
         _isRetryAfterRefresh: true,
       } as InternalAxiosRequestConfig & { _isRetryAfterRefresh?: boolean };
       // 用闭包持有的 client 重试——api 实例回到 api.request，apiV2 回到 apiV2.request

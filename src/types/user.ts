@@ -1,6 +1,8 @@
 /** 与后端 enum UserRole 对齐 */
 export type UserRole = 'MANAGER' | 'SHELF_ACCOUNT' | 'CLERK' | 'INSPECTOR' | 'CNC_PROGRAMMER';
 
+import type { MenuNode } from './menu';
+
 export interface UserOut {
   id: string;
   /** 乐观锁版本号；每次 UPDATE 自增 */
@@ -33,7 +35,7 @@ export interface CurrentUser {
   is_active: boolean;
   roles: string[]; // 字符串数组，如 ["MANAGER"]
   shelf_ids: string[]; // SHELF_ACCOUNT 时非空
-  menus: import('./menu').MenuNode[]; // 登录时拉回，渲染侧边栏 + 路由守卫用
+  menus: MenuNode[]; // 登录时拉回，渲染侧边栏 + 路由守卫用
 }
 
 export interface UserListResult {

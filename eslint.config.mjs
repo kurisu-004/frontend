@@ -178,6 +178,19 @@ export default [
     },
   },
 
+  // 7.5 2026-09-13 PR 集成 commit：关闭 vue/prefer-true-attribute-shorthand
+  //   规则对 kebab-case 形式的 Vue 组件 prop（如 el-upload 的 :show-file-list、
+  //   el-table 的 :reserve-selection、el-progress 的 :text-inside 等）报"shorthand
+  //   建议"——但 vue-tsc 不识别 shorthand 形式的 kebab-case prop，强制改写为
+  //   `:foo-bar` 会触发 TS2551 类型错误。alloy 默认开启此规则 + 全项目 25+ 处
+  //   kebab-case shorthand 命中，config 层关闭是唯一可行方案。后续若 vue-tsc 修复
+  //   shorthand 类型推导，可单独开启回。
+  {
+    rules: {
+      'vue/prefer-true-attribute-shorthand': 'off',
+    },
+  },
+
   // 8. 关掉与 prettier 冲突的规则（必须放最后）
   prettierConfig,
 ];

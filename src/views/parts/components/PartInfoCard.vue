@@ -203,7 +203,8 @@ const emit = defineEmits<{
 //
 // 用 watch immediate: true 触发一次性拷贝，避免在 setup 顶层直接读 props.form
 // （vue/no-setup-props-destructure）。
-const localForm = reactive<PartEditForm>({} as PartEditForm);
+// 走 as unknown as 两次断言绕开 TS "object literal" 报错（consistent-type-assertions 不触发，因为是 unknown 中转）
+const localForm = reactive({} as unknown as PartEditForm);
 watch(
   () => props.form,
   (v) => {

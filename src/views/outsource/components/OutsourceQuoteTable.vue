@@ -251,10 +251,11 @@ import { canApprove, canEdit, canReject, canSoftDelete } from '@/utils/outsource
 import { STATUS_OPTIONS, QUOTE_COLUMN_DEFS } from '../composables/useOutsourceQuoteTable';
 import type { useCustomerTree } from '@/composables/useCustomerTree';
 import type { ComputedRef } from 'vue';
+import type { useOutsourceQuoteTable } from '../composables/useOutsourceQuoteTable';
 
 /** 视图 ctx：caller 注入的 composable 集合 */
 export interface OutsourceQuoteTableCtx {
-  table: ReturnType<typeof import('../composables/useOutsourceQuoteTable').useOutsourceQuoteTable>;
+  table: ReturnType<typeof useOutsourceQuoteTable>;
   /** user.roles（用于 canEdit / canApprove / etc 权限判断） */
   roleMap: ComputedRef<ReturnType<typeof rolesArrayToMap>> | ReturnType<typeof rolesArrayToMap>;
   /** 客户级联树（列头客户 popover 用） */

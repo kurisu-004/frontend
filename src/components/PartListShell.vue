@@ -179,11 +179,11 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility';
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
-import {
+import type {
   // 2026-08-31：usePagedListQuery 不再由 PartListShell 直接持有（避免双实例撕裂），
   // 但 PageQueryParams / PageResult 仍用作 fetcher 签名类型。
-  type PageQueryParams,
-  type PageResult,
+  PageQueryParams,
+  PageResult,
 } from '@/composables/usePagedListQuery';
 
 // 2026-08-31：PagedTable.vue 的 defineExpose({ items, loading, page, pageSize, fetch, reset })

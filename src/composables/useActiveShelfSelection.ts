@@ -19,7 +19,7 @@
 //   if (sel.selectedZone.value === 'PRODUCTION') { /* 显示 PICK_UP/RETURN */ }
 //   const id = sel.selectedShelfId.value   // 提交 PICK/RETURN 时用
 
-import { computed, ref } from 'vue';
+import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { listShelves } from '@/api/shelves';
 import { useAuthSession } from '@/composables/useAuthSession';
 import type { Shelf } from '@/types/shelf';
@@ -34,13 +34,13 @@ const SESSION_KEY_PREFIX = 'active_shelf_selection:';
 
 export interface ActiveShelfSelection {
   /** 当前选中的货架 id（字符串）。null = 未选 / wildcard。 */
-  selectedShelfId: import('vue').Ref<string | null>;
+  selectedShelfId: Ref<string | null>;
   /** 用户能选的候选（绑定架详情；wildcard → 空数组）。 */
-  options: import('vue').Ref<ShelfOption[]>;
+  options: Ref<ShelfOption[]>;
   /** 当前所选货架的 zone。 */
-  selectedZone: import('vue').Ref<'PRODUCTION' | 'INSPECTION' | null>;
+  selectedZone: Ref<'PRODUCTION' | 'INSPECTION' | null>;
   /** 是否处于「多架 + 必须显示选择器」状态。 */
-  showShelfSelector: import('vue').ComputedRef<boolean>;
+  showShelfSelector: ComputedRef<boolean>;
   /** 加载候选架（进入扫码台时调一次）。 */
   initShelves: () => Promise<void>;
   /** 显式清空选择（账号切换 / 重置用）。 */

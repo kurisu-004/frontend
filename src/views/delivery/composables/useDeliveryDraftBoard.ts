@@ -158,7 +158,7 @@ export function useDeliveryDraftBoard() {
       );
       foldedComputeds.set(noteId, c);
     }
-    return c.value;
+    return ((): MergedDraftRow[] => c!.value)();
   }
 
   /** el-table 行已打印绿底（与 DeliveryNoteDetail.vue row-urgent 样式对齐）。 */

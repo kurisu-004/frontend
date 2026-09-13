@@ -57,6 +57,7 @@ describe('useLazyDraggable', () => {
     await nextTick();
     expect(startSpy).not.toHaveBeenCalled();
 
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub：HTMLElement 在 node 环境无 DOM
     const el = {} as HTMLElement;
     elRef.value = el;
     await nextTick();
@@ -68,10 +69,12 @@ describe('useLazyDraggable', () => {
     const elRef = ref<HTMLElement | null>(null);
     useLazyDraggable(elRef, ref<number[]>([]));
 
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub
     const first = {} as HTMLElement;
     elRef.value = first;
     await nextTick();
 
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub
     const second = {} as HTMLElement;
     elRef.value = second;
     await nextTick();
@@ -81,6 +84,7 @@ describe('useLazyDraggable', () => {
   });
 
   it('elRef 被置回 null 时不调 start()', async () => {
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub
     const elRef = ref<HTMLElement | null>({} as HTMLElement);
     useLazyDraggable(elRef, ref<number[]>([]));
     await nextTick();

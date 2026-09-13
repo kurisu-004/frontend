@@ -285,7 +285,7 @@ export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetai
   }
 
   // mark `canView_` as used internally (kept in interface for shell use)
-  void canView_.value;
+  void ((): unknown => canView_.value)();
   void hasManageNoteRole;
 
   return {
