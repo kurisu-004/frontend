@@ -177,7 +177,7 @@ import type { PartItem } from '@/api/parts';
 import type { OrderStatus } from '@/types/parts';
 import type { PartEditForm } from '../composables/usePartDetail';
 
-defineProps<{
+const props = defineProps<{
   part: PartItem | null;
   editing: boolean;
   saving: boolean;
