@@ -349,6 +349,20 @@ const routes: RouteRecordRaw[] = [
           ],
         },
       },
+      {
+        // 2026-09-14 新增：打印模板编辑器（临时 dev 路由，等接入后端菜单树时再加 menuCode）。
+        // menuCode 暂留空：用户明确同意（CLAUDE.md #8 例外）。
+        // allowRoles 兜底：dev dummy 模式的 dev-admin 角色是 MANAGER，能进；prod 暂不上线。
+        path: 'print-templates',
+        name: 'PrintTemplateEditor',
+        component: () => import('@/views/print-templates/PrintTemplateEditor.vue'),
+        meta: {
+          title: '打印模板编辑器',
+          icon: 'Printer',
+          allowRoles: ['MANAGER'],
+          breadcrumb: [{ label: '打印模板编辑器' }],
+        },
+      },
     ],
   },
   // 工位扫码台
