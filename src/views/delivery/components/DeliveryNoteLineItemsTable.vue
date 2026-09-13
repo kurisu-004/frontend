@@ -17,13 +17,13 @@
       <div class="card-header">
         <span>零件列表 ({{ note.line_items.length }})</span>
         <div class="actions">
-          <!-- 2026-08-02：列显隐控制；2026-08-27 T17 增 @reset-order -->
+          <!-- 2026-08-02：列显隐控制；2026-08-27 T17 增 @resetOrder -->
           <ColumnVisibilityPopover
             :defs="columnDefs"
             :model-value="columnVisibility.currentMap"
             @update:model-value="(v: Record<string, boolean>) => columnVisibility.update(v)"
             @reset="columnVisibility.showAll"
-            @reset-order="drag.reset"
+            @resetOrder="drag.reset"
           />
           <el-button v-if="canAdd" type="primary" size="small" @click="emit('add')">
             添加零件

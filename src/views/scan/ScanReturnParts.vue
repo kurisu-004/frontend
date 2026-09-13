@@ -198,7 +198,7 @@
       empty-action-label="重新选择工序"
       @confirm="onShelfConfirm"
       @cancel="onShelfCancel"
-      @empty-action="onShelfEmpty"
+      @emptyAction="onShelfEmpty"
     />
 
     <!-- 数量选择弹窗 -->

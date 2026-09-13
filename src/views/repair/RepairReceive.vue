@@ -350,7 +350,7 @@ function rowClassName(opts: { row: PartItem }): string {
         :defs="columnDefs"
         :model-value="columnVisibility.currentMap"
         @update:model-value="(v: Record<string, boolean>) => (columnVisibility.currentMap = v)"
-        @reset-order="drag.reset"
+        @resetOrder="drag.reset"
       />
     </div>
     <el-table

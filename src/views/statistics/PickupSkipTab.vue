@@ -28,7 +28,7 @@
               :model-value="columnVisibility_summary.currentMap"
               @update:model-value="columnVisibility_summary.update"
               @reset="columnVisibility_summary.showAll"
-              @reset-order="drag_summary.reset"
+              @resetOrder="drag_summary.reset"
             />
             <el-button size="small" :loading="summaryLoading" @click="reloadSummary">
               刷新
@@ -99,7 +99,7 @@
             :model-value="columnVisibility_detail.currentMap"
             @update:model-value="columnVisibility_detail.update"
             @reset="columnVisibility_detail.showAll"
-            @reset-order="drag_detail.reset"
+            @resetOrder="drag_detail.reset"
           />
         </div>
         <el-table

@@ -111,7 +111,7 @@
       :on-download-cnc="onDownloadCnc"
       :on-delete-cnc="onDeleteCnc"
       @fetch="fetchCncPrograms"
-      @pair-upload="handlePairUpload"
+      @pairUpload="handlePairUpload"
       @release="handleRelease"
     />
 
@@ -140,7 +140,7 @@
       :status-label-of="statusLabelOf"
       @fetch="fetchBatches"
       @split="handleSplitBatch"
-      @cancel-batch="handleCancelBatch"
+      @cancelBatch="handleCancelBatch"
     />
 
     <!-- 底部操作：取消订单 / 删除 / 品检 / 外协回收（按角色门控） -->

@@ -217,7 +217,7 @@ const pagedRef = table.pagedRef;
           customerTree,
         }"
         @row-click="previewDrawing"
-        @preview-drawing="previewDrawing"
+        @previewDrawing="previewDrawing"
         @action="onTableAction"
       />
     </el-card>
@@ -237,12 +237,12 @@ const pagedRef = table.pagedRef;
       @update:company-id="(v: string) => (form.createForm.outsource_company_id = v)"
       @update:price="(v: string) => (form.createForm.price = v)"
       @update:note="(v: string) => (form.createForm.note = v)"
-      @form-ref="
+      @formRef="
         (el) => {
           form.createFormRef.value = el ?? undefined;
         }
       "
-      @part-change="form.onCreatePartChange"
+      @partChange="form.onCreatePartChange"
       @confirm="form.onCreate"
     />
 

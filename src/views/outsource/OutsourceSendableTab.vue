@@ -124,7 +124,7 @@
         :model-value="columnVisibility.currentMap"
         @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
-        @reset-order="drag.reset"
+        @resetOrder="drag.reset"
       />
     </div>
     <!-- 2026-08-25 (T7)：可发送 tab：el-table + el-pagination 收口到 <PagedTable> -->

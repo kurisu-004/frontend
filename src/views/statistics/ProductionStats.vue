@@ -63,7 +63,7 @@
           v-if="dateFrom"
           :date-from="dateFrom"
           :date-to="dateTo"
-          @select-worker="onSelectWorker"
+          @selectWorker="onSelectWorker"
         />
       </el-tab-pane>
       <el-tab-pane label="单工人详情" name="worker-detail">

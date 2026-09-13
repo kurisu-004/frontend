@@ -310,14 +310,14 @@ onBeforeUnmount(() => {
           :can-print="canPrintNote(d)"
           :can-submit="canSubmitDraft(d)"
           :row-class-name="board.rowClassName"
-          @goto-detail="onCardGotoDetail(d)"
+          @gotoDetail="onCardGotoDetail(d)"
           @selection-change="(rs: any) => onCardSelectionChange(d, rs)"
           @remove="(r: any) => onCardRemove(d, r)"
-          @print-labels="onCardPrintLabels(d)"
-          @delete-draft="onCardDeleteDraft(d)"
-          @print-note="onCardPrintNote(d)"
-          @submit-draft="onCardSubmitDraft(d)"
-          @set-table-ref="(el: any) => onCardTableRef(d, el)"
+          @printLabels="onCardPrintLabels(d)"
+          @deleteDraft="onCardDeleteDraft(d)"
+          @printNote="onCardPrintNote(d)"
+          @submitDraft="onCardSubmitDraft(d)"
+          @setTableRef="(el: any) => onCardTableRef(d, el)"
         />
       </div>
     </div>
@@ -340,8 +340,8 @@ onBeforeUnmount(() => {
       :note-id="submission.submitTarget.value?.id ?? ''"
       :note-version="submission.submitTarget.value?.version ?? 0"
       source="submit"
-      @pass-success="submission.onSubmitDialogPassSuccess"
-      @pass-partial="submission.onSubmitDialogPassPartial"
+      @passSuccess="submission.onSubmitDialogPassSuccess"
+      @passPartial="submission.onSubmitDialogPassPartial"
       @cancel="submission.onSubmitDialogCancel"
     />
 

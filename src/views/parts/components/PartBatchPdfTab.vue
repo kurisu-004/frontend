@@ -171,7 +171,7 @@
         :model-value="columnVisibility_source.currentMap"
         @update:model-value="columnVisibility_source.update"
         @reset="columnVisibility_source.showAll"
-        @reset-order="drag_source.reset"
+        @resetOrder="drag_source.reset"
       />
     </div>
 
@@ -240,7 +240,7 @@
           :model-value="columnVisibility_standalone.currentMap"
           @update:model-value="columnVisibility_standalone.update"
           @reset="columnVisibility_standalone.showAll"
-          @reset-order="drag_standalone.reset"
+          @resetOrder="drag_standalone.reset"
         />
       </div>
       <el-table
@@ -312,7 +312,7 @@
           :model-value="columnVisibility_assembly.currentMap"
           @update:model-value="columnVisibility_assembly.update"
           @reset="columnVisibility_assembly.showAll"
-          @reset-order="drag_assembly.reset"
+          @resetOrder="drag_assembly.reset"
         />
       </div>
       <el-table

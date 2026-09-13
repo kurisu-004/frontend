@@ -404,7 +404,7 @@ async function onConfirm(): Promise<void> {
         :model-value="columnVisibility.currentMap"
         @update:model-value="columnVisibility.update"
         @reset="columnVisibility.showAll"
-        @reset-order="drag.reset"
+        @resetOrder="drag.reset"
       />
     </div>
     <!-- 2026-08-22 a11y：selection 列所在的 table 加 aria-label -->

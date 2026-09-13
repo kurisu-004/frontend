@@ -136,7 +136,7 @@ onMounted(() => {
         :edit-delivery-date="detail.editDeliveryDate.value"
         @back="onBack"
         @update:edit-delivery-date="actions.setEditDeliveryDate"
-        @delivery-date-change="(v: string | null) => actions.onDeliveryDateChange(v)"
+        @deliveryDateChange="(v: string | null) => actions.onDeliveryDateChange(v)"
       />
 
       <DeliveryNoteLineItemsTable
@@ -151,7 +151,7 @@ onMounted(() => {
         :part-status-tag-type="detail.partStatusTagType"
         :delivery-line-row-class-name="detail.deliveryLineRowClassName"
         @add="openAddDialog"
-        @remove-selected="() => actions.onRemoveSelected()"
+        @removeSelected="() => actions.onRemoveSelected()"
         @update:selected-item-ids="(ids: string[]) => detail.setSelectedItemIds(ids)"
         @sort-change="detail.onLineItemSort"
       />
@@ -162,8 +162,8 @@ onMounted(() => {
         @submit="onSubmit"
         @recall="() => actions.onRecall()"
         @print="onPrint"
-        @print-labels="onPrintLabels"
-        @soft-delete="() => actions.onSoftDelete()"
+        @printLabels="onPrintLabels"
+        @softDelete="() => actions.onSoftDelete()"
       />
 
       <el-card shadow="never" class="events-card">
@@ -211,8 +211,8 @@ onMounted(() => {
       :note-id="detail.note.value.id"
       :note-version="detail.note.value.version"
       source="submit"
-      @pass-success="onSubmitDialogPassSuccess"
-      @pass-partial="onSubmitDialogPassPartial"
+      @passSuccess="onSubmitDialogPassSuccess"
+      @passPartial="onSubmitDialogPassPartial"
       @cancel="submitDialogVisible = false"
     />
 

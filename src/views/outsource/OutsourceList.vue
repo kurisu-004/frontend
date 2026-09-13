@@ -35,7 +35,7 @@
           :model-value="columnVisibility.currentMap"
           @update:model-value="columnVisibility.update"
           @reset="columnVisibility.showAll"
-          @reset-order="drag.reset"
+          @resetOrder="drag.reset"
         />
       </div>
       <PagedTable

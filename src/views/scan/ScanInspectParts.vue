@@ -188,7 +188,7 @@
       empty-action-label="取消选择"
       @confirm="onShelfConfirm"
       @cancel="onShelfCancel"
-      @empty-action="onShelfEmpty"
+      @emptyAction="onShelfEmpty"
     />
 
     <!-- 数量选择弹窗 -->

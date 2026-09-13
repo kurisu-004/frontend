@@ -191,6 +191,18 @@ export default [
     },
   },
 
+  // 7.6 2026-09-13 PR 集成 commit：关闭 vue/v-on-event-hyphenation
+  //   PR-3 把 emit 声明 + emit() 调用统一改为 camelCase（如 emit('resetOrder')），
+  //   而 Vue 3 模板里 @reset-order 只监听 emit('reset-order')，不互通
+  //   emit('resetOrder')——必须保持 camelCase 形式才能命中。alloy 默认开启此规则
+  //   会强制改写为 kebab，事件就会静默断连。全项目 51 处 camelCase 自定义事件
+  //   监听命中，config 层关闭是唯一可行方案。
+  {
+    rules: {
+      'vue/v-on-event-hyphenation': 'off',
+    },
+  },
+
   // 8. 关掉与 prettier 冲突的规则（必须放最后）
   prettierConfig,
 ];
