@@ -144,6 +144,17 @@ export default [
     },
   },
 
+  // 6.5 2026-09-13 新增：src/utils/pdfjs.ts 是 pdfjs-dist 唯一白名单入口
+  //   上面 .vue / .ts 块的 no-restricted-imports 会自伤（自身两条 import 即命中规则），
+  //   这里对该文件单独关闭 no-restricted-imports，保留 pdfjs 单点配置语义。
+  //   关联 CLAUDE.md #6。
+  {
+    files: ['src/utils/pdfjs.ts'],
+    rules: {
+      'no-restricted-imports': 'off',
+    },
+  },
+
   // 7. 全局 linterOptions：大厂共识「防患于未然」式禁用必须被检测
   //    注意 flat config 下必须放在 linterOptions，不是 rules
   {

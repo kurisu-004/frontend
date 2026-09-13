@@ -118,10 +118,7 @@
             </template>
             <template #default="{ row }">
               <el-tag
-                :type="
-                  (statusTagType((row as OutsourceQuote).status) || 'info') as
-                    'info' | 'success' | 'warning' | 'danger'
-                "
+                :type="statusTagType((row as OutsourceQuote).status) || 'info'"
                 size="small"
                 effect="plain"
               >

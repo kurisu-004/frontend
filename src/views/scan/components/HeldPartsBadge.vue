@@ -13,13 +13,6 @@
   - workerId: 雪花 ID 字符串（来自 useScanSession.worker.value.id）
   - maxListHeight: drawer 内列表最大高度（默认 calc(100vh - 200px)）
   - autoOpenOnChange: 持有件变化后是否自动打开 drawer（默认 false）
-
-  用法：
-  <!-- 仅手动按钮打开 -->
-<HeldPartsBadge :worker-id="String(worker.id)" />
-
-<!-- 领取/放回后自动弹出让工人确认 -->
-<HeldPartsBadge :worker-id="String(worker.id)" :auto-open-on-change="true" />
 -->
 
 <template>
@@ -98,6 +91,13 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * 用法：
+ * - 仅手动按钮打开：
+ *   <HeldPartsBadge :worker-id="String(worker.id)" />
+ * - 领取/放回后自动弹出让工人确认：
+ *   <HeldPartsBadge :worker-id="String(worker.id)" :auto-open-on-change="true" />
+ */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Box, Loading, Refresh, User, WarningFilled } from '@element-plus/icons-vue';
 import { listPartsHeldByWorker } from '@/api/parts';
