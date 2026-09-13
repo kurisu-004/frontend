@@ -116,7 +116,7 @@ const emit = defineEmits<{
   confirm: [shelfId: string];
   cancel: [];
   /** 空状态操作按钮点击；接收方应关闭 dialog 并回退流程 */
-  'empty-action': [];
+  emptyAction: [];
 }>();
 
 const loading = ref(false);
@@ -200,7 +200,7 @@ function onCancel(): void {
  * ProcessPickerDialog 让工人重选工序），同时把 dialog 关闭。
  */
 function onEmptyAction(): void {
-  emit('empty-action');
+  emit('emptyAction');
   emit('update:modelValue', false);
 }
 </script>

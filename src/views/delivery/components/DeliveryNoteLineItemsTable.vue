@@ -32,7 +32,7 @@
             v-if="canEdit && selectedItemIds.length"
             type="danger"
             size="small"
-            @click="emit('remove-selected')"
+            @click="emit('removeSelected')"
           >
             移除选中 ({{ selectedItemIds.length }})
           </el-button>
@@ -133,19 +133,18 @@ const props = defineProps<Props>();
 
 const emit = defineEmits<{
   /** 点「添加零件」 */
-  (e: 'add'): void;
+  add: [];
   /** 点「移除选中」 */
-  (e: 'remove-selected'): void;
+  removeSelected: [];
   /** 选中行变化（受控） */
-  (e: 'update:selectedItemIds', ids: string[]): void;
+  'update:selectedItemIds': [ids: string[]];
   /** 排序变化 */
-  (
-    e: 'sort-change',
+  sortChange: [
     sort: {
       prop: string | null;
       order: 'ascending' | 'descending' | null;
     },
-  ): void;
+  ];
 }>();
 
 // 2026-08-27 T17：列顺序拖动接入。
@@ -315,7 +314,7 @@ function onSortChange(sort: {
   prop: string | null;
   order: 'ascending' | 'descending' | null;
 }): void {
-  emit('sort-change', sort);
+  emit('sortChange', sort);
 }
 </script>
 

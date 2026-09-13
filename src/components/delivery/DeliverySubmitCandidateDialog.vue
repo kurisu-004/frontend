@@ -32,13 +32,13 @@ interface Props {
 const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void;
+  'update:modelValue': [v: boolean];
   /** 全部 / 部分过检成功后 emit，父级 fetchDetail 拿新 version + 再次 submit。
    *  若再次返回 CANDIDATES_AVAILABLE（极端：过检后又有新 INSPECTION 批次）由父级
    *  的 doSubmit 守卫（submittingByNote）兜底再次触发弹窗。 */
-  (e: 'done'): void;
+  done: [];
   /** 用户取消 */
-  (e: 'cancel'): void;
+  cancel: [];
 }>();
 
 const bulk = useBulkPassInspection();

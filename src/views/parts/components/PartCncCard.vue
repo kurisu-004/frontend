@@ -252,18 +252,12 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'fetch'): void;
+  fetch: [];
   // 2026-08-25 T10p5：dialog 关闭延迟到 API 成功之后（避免 API 失败但 dialog 已关）。
   // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
-  (
-    e: 'pair-upload',
-    payload: { gcodes: File[]; setup: File; resolve: (ok: boolean) => void },
-  ): void;
-  (
-    e: 'release',
-    payload: { shelfId: string; processId: string; resolve: (ok: boolean) => void },
-  ): void;
-  (e: 'release-success'): void;
+  pairUpload: [payload: { gcodes: File[]; setup: File; resolve: (ok: boolean) => void }];
+  release: [payload: { shelfId: string; processId: string; resolve: (ok: boolean) => void }];
+  releaseSuccess: [];
 }>();
 
 // ============ 配对上传对话框（局部 UI 状态）============
@@ -306,7 +300,7 @@ function onPairUploadConfirm(): void {
   if (raws.length === 0 || !pairSetupFile.value) return;
   pairUploading.value = true;
   // shell 调 resolve(ok)：成功才关 dialog + 清空 files + reset submitting。
-  emit('pair-upload', {
+  emit('pairUpload', {
     gcodes: raws,
     setup: pairSetupFile.value,
     resolve: (ok: boolean) => {

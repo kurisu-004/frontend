@@ -8,7 +8,7 @@
 -->
 
 <template>
-  <span class="delivery-date" :class="urgencyClass">
+  <span :class="['delivery-date', urgencyClass]">
     <el-icon><Calendar /></el-icon>
     <span>{{ formattedDate }}</span>
     <span v-if="daysText" class="days-left">· {{ daysText }}</span>

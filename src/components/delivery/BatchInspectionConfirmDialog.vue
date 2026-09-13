@@ -48,13 +48,13 @@ interface Props {
 const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void;
+  'update:modelValue': [v: boolean];
   /** 全部通过 → 父组件接着 submitNote(noteId, {version: noteVersion}) */
-  (e: 'pass-success'): void;
+  passSuccess: [];
   /** 部分通过 → 父组件 toast + 保留弹窗 */
-  (e: 'pass-partial', result: BulkPassResult): void;
+  passPartial: [result: BulkPassResult];
   /** 用户点取消 */
-  (e: 'cancel'): void;
+  cancel: [];
 }>();
 
 const dlg = useDialogSize({ desktopWidth: 640 });
@@ -136,10 +136,10 @@ async function onConfirm(): Promise<void> {
   if (result.failed.length === 0) {
     ElMessage.success(`已通过品检 ${result.passed.length} 项`);
     emit('update:modelValue', false);
-    emit('pass-success');
+    emit('passSuccess');
   } else if (result.passed.length > 0) {
     ElMessage.warning(`部分通过：${result.passed.length} 项成功 / ${result.failed.length} 项失败`);
-    emit('pass-partial', result);
+    emit('passPartial', result);
   } else {
     ElMessage.error(`全部失败：${result.failed[0]?.message ?? '未知错误'}`);
   }

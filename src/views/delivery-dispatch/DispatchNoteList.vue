@@ -45,8 +45,7 @@
           v-for="n in notes"
           :key="n.id"
           shadow="hover"
-          class="note-card"
-          :class="{ 'is-expanded': expandedId === n.id }"
+          :class="['note-card', { 'is-expanded': expandedId === n.id }]"
         >
           <div class="note-head" @click="toggleExpand(n.id)">
             <div class="note-head-main">
@@ -56,8 +55,7 @@
             <div class="note-head-right">
               <span
                 v-if="states[n.id]?.detail"
-                class="scan-progress"
-                :class="{ 'is-ready': states[n.id]?.ready }"
+                :class="['scan-progress', { 'is-ready': states[n.id]?.ready }]"
               >
                 已扫 {{ states[n.id]?.scannedCount ?? 0 }} /
                 {{ states[n.id]?.expectedCount ?? n.part_count }}
@@ -65,7 +63,7 @@
               <el-tag v-else type="warning" size="small" effect="plain">
                 {{ n.part_count }} 件
               </el-tag>
-              <el-icon class="expand-caret" :class="{ open: expandedId === n.id }">
+              <el-icon :class="['expand-caret', { open: expandedId === n.id }]">
                 <ArrowDown />
               </el-icon>
             </div>
@@ -75,8 +73,7 @@
             <div
               v-for="item in states[n.id]?.detail?.line_items ?? []"
               :key="item.id"
-              class="line-item"
-              :class="{ 'is-scanned': isScanned(n.id, item) }"
+              :class="['line-item', { 'is-scanned': isScanned(n.id, item) }]"
             >
               <el-icon class="scan-mark"
                 ><CircleCheck v-if="isScanned(n.id, item)" /><Clock v-else

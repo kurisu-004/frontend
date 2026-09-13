@@ -102,11 +102,13 @@
             :key="p.batch_id || p.id"
             :data-batch-id="String(p.batch_id || p.id)"
             shadow="hover"
-            class="part-row"
-            :class="{
-              'is-selected': sameBatch(selectedPart, p),
-              'is-urgent': p.is_urgent,
-            }"
+            :class="[
+              'part-row',
+              {
+                'is-selected': sameBatch(selectedPart, p),
+                'is-urgent': p.is_urgent,
+              },
+            ]"
             @click="onSelect(p)"
           >
             <div class="part-row-main">

@@ -23,8 +23,7 @@
       </div>
     </template>
     <el-card
-      class="work-order-card"
-      :class="{ 'is-urgent': batch.is_urgent }"
+      :class="['work-order-card', { 'is-urgent': batch.is_urgent }]"
       :data-batch-id="batch.batch_id"
       shadow="hover"
     >

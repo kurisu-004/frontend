@@ -92,7 +92,7 @@
                   @show="syncStatusDraft"
                 >
                   <template #reference>
-                    <el-icon class="filter-icon" :class="{ active: statusFilterActive }">
+                    <el-icon :class="['filter-icon', { active: statusFilterActive }]">
                       <Filter />
                     </el-icon>
                   </template>
@@ -148,7 +148,7 @@
                   @show="syncCustomerDraft"
                 >
                   <template #reference>
-                    <el-icon class="filter-icon" :class="{ active: customerFilterActive }">
+                    <el-icon :class="['filter-icon', { active: customerFilterActive }]">
                       <Filter />
                     </el-icon>
                   </template>
@@ -268,12 +268,9 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'row-click', row: OutsourceQuote): void;
-  (e: 'preview-drawing', row: OutsourceQuote): void;
-  (
-    e: 'action',
-    payload: { type: 'submit' | 'approve' | 'reject' | 'delete'; row: OutsourceQuote },
-  ): void;
+  rowClick: [row: OutsourceQuote];
+  previewDrawing: [row: OutsourceQuote];
+  action: [payload: { type: 'submit' | 'approve' | 'reject' | 'delete'; row: OutsourceQuote }];
 }>();
 
 // ============ 解构 ctx 到顶层（模板自动解包）============
@@ -331,7 +328,7 @@ function renderDrawingNoCell({ row }: { row: unknown }): ReturnType<typeof h> {
       underline: false,
       onClick: (e: MouseEvent) => {
         e.stopPropagation();
-        emit('preview-drawing', r);
+        emit('previewDrawing', r);
       },
     },
     () => r.part_drawing_no,
@@ -415,7 +412,7 @@ function statusTagType(s: OutsourceQuoteStatus): 'info' | 'success' | 'warning' 
 }
 
 function onRowClick(row: unknown): void {
-  emit('row-click', row as OutsourceQuote);
+  emit('rowClick', row as OutsourceQuote);
 }
 
 const tableRef = ref();

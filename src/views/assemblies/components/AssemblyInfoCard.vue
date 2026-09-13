@@ -104,10 +104,10 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const emit = defineEmits<{
-  (e: 'back'): void;
-  (e: 'edit'): void;
-  (e: 'cancel'): void;
-  (e: 'delete'): void;
+  back: [];
+  edit: [];
+  cancel: [];
+  delete: [];
 }>();
 </script>
 

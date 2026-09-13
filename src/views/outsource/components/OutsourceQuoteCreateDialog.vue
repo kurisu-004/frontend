@@ -15,7 +15,7 @@
     @update:model-value="(v: boolean) => $emit('update:model-value', v)"
   >
     <el-form
-      :ref="(el) => $emit('form-ref', el as FormInstance | null)"
+      :ref="(el) => $emit('formRef', el as FormInstance | null)"
       :model="form"
       :rules="rules"
       label-width="100px"
@@ -29,7 +29,7 @@
           @update:model-value="
             (v: string | number | boolean | undefined) => $emit('update:part-id', String(v ?? ''))
           "
-          @change="(v: string) => $emit('part-change', v)"
+          @change="(v: string) => $emit('partChange', v)"
         >
           <el-option
             v-for="p in parts"
@@ -119,15 +119,15 @@ defineProps<{
 }>();
 
 defineEmits<{
-  (e: 'update:model-value', value: boolean): void;
-  (e: 'update:part-id', value: string): void;
-  (e: 'update:process-id', value: string): void;
-  (e: 'update:company-id', value: string): void;
-  (e: 'update:price', value: string): void;
-  (e: 'update:note', value: string): void;
-  (e: 'form-ref', value: FormInstance | null): void;
-  (e: 'part-change', partId: string): void;
-  (e: 'confirm'): void;
+  'update:model-value': [value: boolean];
+  'update:part-id': [value: string];
+  'update:process-id': [value: string];
+  'update:company-id': [value: string];
+  'update:price': [value: string];
+  'update:note': [value: string];
+  formRef: [value: FormInstance | null];
+  partChange: [partId: string];
+  confirm: [];
 }>();
 
 const dialogSize = useDialogSize({ desktopWidth: 640 });

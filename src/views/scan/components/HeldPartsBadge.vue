@@ -68,7 +68,7 @@
       </div>
 
       <div v-else class="held-list" :style="{ maxHeight: maxListHeight }">
-        <div v-for="p in parts" :key="p.id" class="held-row" :class="{ 'is-urgent': p.is_urgent }">
+        <div v-for="p in parts" :key="p.id" :class="['held-row', { 'is-urgent': p.is_urgent }]">
           <div class="held-row-main">
             <span class="held-serial">{{ p.serial_no || '—' }}</span>
             <span class="held-drawing">{{ p.drawing_no }}</span>

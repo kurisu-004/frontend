@@ -189,11 +189,11 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'edit'): void;
-  (e: 'save'): void;
-  (e: 'cancel'): void;
+  edit: [];
+  save: [];
+  cancel: [];
   // PR-2 2026-09-13：本地副本变更后通知父级合并回 form。
-  (e: 'update:form', v: PartEditForm): void;
+  'update:form': [v: PartEditForm];
 }>();
 
 // PR-2 2026-09-13：父级 form = reactive<PartEditForm>(...)。vue/no-mutating-props

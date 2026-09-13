@@ -19,11 +19,13 @@
 -->
 <template>
   <div
-    class="shelf-card"
-    :class="{
-      'is-recommended': shelf.is_recommended,
-      'is-selected': isSelected,
-    }"
+    :class="[
+      'shelf-card',
+      {
+        'is-recommended': shelf.is_recommended,
+        'is-selected': isSelected,
+      },
+    ]"
     role="button"
     tabindex="0"
     @click="onClick"

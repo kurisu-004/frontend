@@ -33,7 +33,7 @@
     - reset       点「重置」时触发
 -->
 <template>
-  <span class="cfp-header" :class="{ 'is-active': active }" @click.stop>
+  <span :class="['cfp-header', { 'is-active': active }]" @click.stop>
     <span>{{ headerText }}</span>
     <el-popover
       :width="width"

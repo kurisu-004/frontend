@@ -37,7 +37,7 @@
           :disabled="!canEditDate"
           style="width: 160px"
           @update:model-value="(v: string) => emit('update:editDeliveryDate', v ?? '')"
-          @change="(v: string | null) => emit('delivery-date-change', v)"
+          @change="(v: string | null) => emit('deliveryDateChange', v)"
         />
       </el-descriptions-item>
       <el-descriptions-item label="提交时间">
@@ -70,11 +70,11 @@ interface Props {
 const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'back'): void;
+  back: [];
   /** 日期 picker 输入更新（composable 写入 editDeliveryDate） */
-  (e: 'update:editDeliveryDate', v: string): void;
+  'update:editDeliveryDate': [v: string];
   /** 日期 picker 提交（composable 调 API） */
-  (e: 'delivery-date-change', v: string | null): void;
+  deliveryDateChange: [v: string | null];
 }>();
 
 /** DRAFT / SUBMITTED 状态可编辑送货日期；其它状态 disabled */

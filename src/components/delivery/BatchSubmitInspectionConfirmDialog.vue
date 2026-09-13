@@ -61,13 +61,13 @@ interface Props {
 const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void;
+  'update:modelValue': [v: boolean];
   /** 全部送检成功 → 父组件重扫 originalCode */
-  (e: 'submit-success'): void;
+  submitSuccess: [];
   /** 部分送检 → 父组件 toast + 保留弹窗 */
-  (e: 'submit-partial', result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }): void;
+  submitPartial: [result: { passed: BlockedScanItem[]; failed: BulkScanFailure[] }];
   /** 用户点取消 */
-  (e: 'cancel'): void;
+  cancel: [];
 }>();
 
 const dlg = useDialogSize({ desktopWidth: 920 });
@@ -309,11 +309,11 @@ async function onConfirm(): Promise<void> {
   if (totalFailed === 0) {
     ElMessage.success(`已送检 ${totalPassed} 项`);
     closeDialog();
-    emit('submit-success');
+    emit('submitSuccess');
   } else if (totalPassed > 0) {
     ElMessage.warning(`部分送检：${totalPassed} 项成功 / ${totalFailed} 项失败`);
     // 保留弹窗让用户看到（按需重试）；合并 failed 给父组件（toast）
-    emit('submit-partial', {
+    emit('submitPartial', {
       // firstResult.submitted 是 BulkScanItem[]，emit 签名要 BlockedScanItem[]；
       // 父组件 onSubmitPartial 只读 .passed.length / .failed.length，强转安全。
       passed: firstResult.submitted as unknown as BlockedScanItem[],

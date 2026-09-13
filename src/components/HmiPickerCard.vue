@@ -28,8 +28,7 @@
 -->
 <template>
   <div
-    class="hmi-card"
-    :class="{ 'is-selected': isSelected, 'is-disabled': disabled }"
+    :class="['hmi-card', { 'is-selected': isSelected, 'is-disabled': disabled }]"
     role="button"
     tabindex="0"
     :aria-disabled="disabled || undefined"

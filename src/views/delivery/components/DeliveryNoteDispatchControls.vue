@@ -29,7 +29,7 @@
           v-if="canPrint(role, note.part_count)"
           type="success"
           plain
-          @click="emit('print-labels')"
+          @click="emit('printLabels')"
         >
           打印标签
         </el-button>
@@ -38,7 +38,7 @@
         v-if="canSoftDelete(note.status, role)"
         type="danger"
         plain
-        @click="emit('soft-delete')"
+        @click="emit('softDelete')"
       >
         删除草稿
       </el-button>
@@ -59,11 +59,11 @@ interface Props {
 defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'submit'): void;
-  (e: 'recall'): void;
-  (e: 'print'): void;
-  (e: 'print-labels'): void;
-  (e: 'soft-delete'): void;
+  submit: [];
+  recall: [];
+  print: [];
+  printLabels: [];
+  softDelete: [];
 }>();
 </script>
 

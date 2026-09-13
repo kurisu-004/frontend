@@ -91,12 +91,14 @@
             :key="p.batch_id || p.id"
             :data-batch-id="String(p.batch_id || p.id)"
             shadow="hover"
-            class="part-row"
-            :class="{
-              'is-selected': sameBatch(selectedPart, p),
-              'is-urgent': p.is_urgent,
-              'is-inspection-failed': !!p.last_inspection_fail_note,
-            }"
+            :class="[
+              'part-row',
+              {
+                'is-selected': sameBatch(selectedPart, p),
+                'is-urgent': p.is_urgent,
+                'is-inspection-failed': !!p.last_inspection_fail_note,
+              },
+            ]"
             @click="onSelect(p)"
           >
             <div class="part-row-main">

@@ -38,7 +38,7 @@
       <div v-if="shelfLoading" style="text-align: center; padding: 40px 0; color: #909399">
         加载货架信息...
       </div>
-      <div v-else class="action-grid" :class="{ 'action-grid--two': !showInspect }">
+      <div v-else :class="['action-grid', { 'action-grid--two': !showInspect }]">
         <el-button
           v-if="showPickUp"
           type="primary"

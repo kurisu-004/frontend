@@ -75,7 +75,7 @@
             link
             type="danger"
             size="small"
-            @click="$emit('cancel-batch', row as PartBatch)"
+            @click="$emit('cancelBatch', row as PartBatch)"
             >取消</el-button
           >
         </template>
@@ -170,7 +170,7 @@ const emit = defineEmits<{
     e: 'split',
     payload: { batch: PartBatch; quantity: number; resolve: (ok: boolean) => void },
   ): void;
-  (e: 'cancel-batch', batch: PartBatch): void;
+  (e: 'cancelBatch', batch: PartBatch): void;
 }>();
 
 const batchTotalQty = computed(() => props.batches.reduce((acc, b) => acc + b.quantity, 0));

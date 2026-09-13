@@ -62,7 +62,7 @@
         >
         <el-button link size="small" @click="emitReset">重置</el-button>
         <!-- 2026-08-27 新增：emit reset-order 由 PartListShell 监听并转发给 useColumnDrag.reset() -->
-        <el-button link size="small" @click="emit('reset-order')">重置列顺序</el-button>
+        <el-button link size="small" @click="emit('resetOrder')">重置列顺序</el-button>
       </div>
     </div>
   </el-popover>
@@ -88,7 +88,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   reset: [];
-  'reset-order': [];
+  resetOrder: [];
 }>();
 
 // Vue 3.4+ defineModel:接受 v-model 绑定,自动处理 prop + emit 双向。

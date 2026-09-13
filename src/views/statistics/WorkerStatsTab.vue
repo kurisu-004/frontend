@@ -133,7 +133,7 @@ interface Props {
 }
 const props = defineProps<Props>();
 
-const emit = defineEmits<(e: 'select-worker', workerId: string) => void>();
+const emit = defineEmits<(e: 'selectWorker', workerId: string) => void>();
 
 const loading = ref(false);
 const rows = ref<WorkerStatsItem[]>([]);
@@ -277,7 +277,7 @@ onMounted(async () => {
 watch(() => [props.dateFrom, props.dateTo], reload);
 
 function onSelectWorker(workerId: string): void {
-  emit('select-worker', workerId);
+  emit('selectWorker', workerId);
 }
 
 function onWorkTypeChange(): void {

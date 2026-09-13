@@ -118,13 +118,13 @@ defineProps<{
 }>();
 
 defineEmits<{
-  (e: 'update:model-value', value: boolean): void;
-  (e: 'update:branch', value: Branch): void;
-  (e: 'update:shelf', value: string): void;
-  (e: 'update:process', value: string): void;
-  (e: 'update:quantity', value: number): void;
-  (e: 'closed'): void;
-  (e: 'confirm'): void;
+  'update:model-value': [value: boolean];
+  'update:branch': [value: Branch];
+  'update:shelf': [value: string];
+  'update:process': [value: string];
+  'update:quantity': [value: number];
+  closed: [];
+  confirm: [];
 }>();
 
 const dialogSize = useDialogSize({ desktopWidth: 560 });

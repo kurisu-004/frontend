@@ -76,8 +76,7 @@
       <div
         v-for="f in files"
         :key="f.id"
-        class="file-item"
-        :class="{ 'is-active': previewFile?.id === f.id }"
+        :class="['file-item', { 'is-active': previewFile?.id === f.id }]"
         @click="onPreview(f)"
       >
         <el-icon :size="28" :color="iconColor(f.file_type)">

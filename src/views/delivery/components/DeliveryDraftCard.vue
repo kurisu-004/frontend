@@ -60,14 +60,14 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'goto-detail'): void;
-  (e: 'selection-change', rows: MergedDraftRow[]): void;
-  (e: 'remove', row: MergedDraftRow): void;
-  (e: 'print-labels'): void;
-  (e: 'print-note'): void;
-  (e: 'delete-draft'): void;
-  (e: 'submit-draft'): void;
-  (e: 'set-table-ref', el: any): void;
+  gotoDetail: [];
+  selectionChange: [rows: MergedDraftRow[]];
+  remove: [row: MergedDraftRow];
+  printLabels: [];
+  printNote: [];
+  deleteDraft: [];
+  submitDraft: [];
+  setTableRef: [el: any];
 }>();
 
 // el-table 实例本地声明；emit 上传给 shell（board.setTableRef 内部 Map 管理）。
@@ -76,7 +76,7 @@ const tableEl = ref<any>(null);
 
 function handleTableRef(el: any): void {
   tableEl.value = el;
-  emit('set-table-ref', el);
+  emit('setTableRef', el);
 }
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
@@ -115,7 +115,7 @@ drag.applyDrag(tableEl);
 <template>
   <el-card shadow="hover" class="draft-card">
     <template #header>
-      <div class="draft-card-head" @click="emit('goto-detail')">
+      <div class="draft-card-head" @click="emit('gotoDetail')">
         <span class="draft-no draft-no-link">{{ draft.delivery_note_no }}</span>
         <el-tag size="small" type="info" effect="plain">
           {{ draft.scope_label }}
@@ -142,7 +142,7 @@ drag.applyDrag(tableEl);
         height="240"
         size="small"
         empty-text="暂无加入批次 — 扫码加入"
-        @selection-change="(rs: MergedDraftRow[]) => emit('selection-change', rs)"
+        @selection-change="(rs: MergedDraftRow[]) => emit('selectionChange', rs)"
       >
         <!-- selection 勾选列不进 defs（fixed 列不可拖） -->
         <el-table-column type="selection" width="44" fixed />
@@ -190,7 +190,7 @@ drag.applyDrag(tableEl);
           plain
           class="footer-btn"
           :loading="deleting"
-          @click="emit('delete-draft')"
+          @click="emit('deleteDraft')"
         >
           <el-icon><Delete /></el-icon>
           删除草稿
@@ -200,7 +200,7 @@ drag.applyDrag(tableEl);
           plain
           class="footer-btn"
           :disabled="!canPrint"
-          @click="emit('print-note')"
+          @click="emit('printNote')"
         >
           <el-icon><Printer /></el-icon>
           打印送货单
@@ -211,7 +211,7 @@ drag.applyDrag(tableEl);
           class="footer-btn"
           :disabled="selectionCount === 0"
           :loading="printing"
-          @click="emit('print-labels')"
+          @click="emit('printLabels')"
         >
           <el-icon><Printer /></el-icon>
           打印标签{{ selectionCount > 0 ? `（${selectionCount}）` : '' }}
@@ -221,7 +221,7 @@ drag.applyDrag(tableEl);
           class="footer-btn"
           :disabled="!canSubmit"
           :loading="submitting"
-          @click="emit('submit-draft')"
+          @click="emit('submitDraft')"
         >
           提交草稿
         </el-button>
