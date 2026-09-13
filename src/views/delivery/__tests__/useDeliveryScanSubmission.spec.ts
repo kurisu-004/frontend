@@ -5,8 +5,8 @@
 //   - CANDIDATES_AVAILABLE / PARTIAL_ADDED（新增：触发候选弹窗，不走 ElMessage.warning）
 // 错误码迁移：BLOCK_SCAN_CODES = [21421]（旧 21405/21418 不再由 scan 触发）。
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { nextTick } from 'vue'
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { nextTick } from 'vue';
 
 // mock scanDelivery 模块 —— 必须在 import 之前（vi.mock 会 hoist）。
 // 2026-08-29：submitNote 也需要被 mock，因为新测试要触发 submit 路径。
@@ -15,7 +15,7 @@ vi.mock('@/api/deliveryNote', () => ({
   scanDelivery: vi.fn(),
   getNote: vi.fn(),
   submitNote: vi.fn(),
-}))
+}));
 
 // 2026-08-28 测试环境：vitest 跑在 node 下，element-plus 的 ElMessage 调用 document。
 // 整体 stub 为 vi.fn()，无副作用；后续测试关心副作用（如 candidateDialogVisible.value）
@@ -30,20 +30,20 @@ vi.mock('element-plus', () => ({
   ElMessageBox: {
     confirm: vi.fn(),
   },
-}))
+}));
 
-import { scanDelivery } from '@/api/deliveryNote'
-import { useDeliveryScanSubmission } from '../composables/useDeliveryScanSubmission'
-import { ApiError } from '@/api/http'
+import { scanDelivery } from '@/api/deliveryNote';
+import { useDeliveryScanSubmission } from '../composables/useDeliveryScanSubmission';
+import { ApiError } from '@/api/http';
 
 const baseOpts = () => ({
   writeDraftFromScan: vi.fn(),
   refreshDraftDetail: vi.fn().mockResolvedValue(undefined),
   onDraftRemoved: vi.fn(),
-})
+});
 
 describe('useDeliveryScanSubmission route B', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => vi.clearAllMocks());
 
   it('ADDED outcome writes draft + shows success', async () => {
     vi.mocked(scanDelivery).mockResolvedValue({
@@ -51,12 +51,12 @@ describe('useDeliveryScanSubmission route B', () => {
       resolved: { kind: 'PART', id: '1', serial_no: 'A001', drawing_no: 'D-1', name: 'N1' },
       note: { id: 'N1', delivery_note_no: 'DN-001' } as any,
       added_batches: [],
-    })
-    const opts = baseOpts()
-    const { submission } = build(opts)
-    await submission.handleScan('A001')
-    expect(opts.writeDraftFromScan).toHaveBeenCalled()
-  })
+    });
+    const opts = baseOpts();
+    const { submission } = build(opts);
+    await submission.handleScan('A001');
+    expect(opts.writeDraftFromScan).toHaveBeenCalled();
+  });
 
   it('CANDIDATES_AVAILABLE outcome opens candidate dialog (no ElMessage.warning)', async () => {
     vi.mocked(scanDelivery).mockResolvedValue({
@@ -74,20 +74,29 @@ describe('useDeliveryScanSubmission route B', () => {
           attachable_batches: [],
         },
       ],
-    })
-    const opts = baseOpts()
-    const { submission, candidateDialogVisible } = build(opts)
-    await submission.handleScan('A001')
-    await nextTick()
-    expect(candidateDialogVisible.value).toBe(true)
-  })
+    });
+    const opts = baseOpts();
+    const { submission, candidateDialogVisible } = build(opts);
+    await submission.handleScan('A001');
+    await nextTick();
+    expect(candidateDialogVisible.value).toBe(true);
+  });
 
   it('PARTIAL_ADDED outcome writes A 组 draft + opens candidate dialog', async () => {
     vi.mocked(scanDelivery).mockResolvedValue({
       outcome: 'PARTIAL_ADDED',
       resolved: { kind: 'ASSEMBLY', id: 'A1', serial_no: 'AS001', drawing_no: 'AD-1', name: 'AN1' },
       note: { id: 'N1', delivery_note_no: 'DN-001' } as any,
-      added_batches: [{ batch_id: 'B2', part_id: '2', serial_no: 'P002', drawing_no: 'D-2', name: 'N2', quantity: 3 }],
+      added_batches: [
+        {
+          batch_id: 'B2',
+          part_id: '2',
+          serial_no: 'P002',
+          drawing_no: 'D-2',
+          name: 'N2',
+          quantity: 3,
+        },
+      ],
       unresolved_targets: [
         {
           part_id: '3',
@@ -98,42 +107,42 @@ describe('useDeliveryScanSubmission route B', () => {
           attachable_batches: [],
         },
       ],
-    })
-    const opts = baseOpts()
-    const { submission, candidateDialogVisible } = build(opts)
-    await submission.handleScan('AS001')
-    await nextTick()
-    expect(opts.writeDraftFromScan).toHaveBeenCalled()
-    expect(candidateDialogVisible.value).toBe(true)
-  })
+    });
+    const opts = baseOpts();
+    const { submission, candidateDialogVisible } = build(opts);
+    await submission.handleScan('AS001');
+    await nextTick();
+    expect(opts.writeDraftFromScan).toHaveBeenCalled();
+    expect(candidateDialogVisible.value).toBe(true);
+  });
 
   it('applyError handles 21421 via BLOCK_SCAN_CODES (toast only, no dialog)', async () => {
     // 错误码 21421 应直接走 ElMessage.error(message)，不弹候选弹窗（不在 route B 弹窗流程）
-    const { ApiError } = await import('@/api/http')
-    vi.mocked(scanDelivery).mockRejectedValue(new ApiError(21421, 'C 组状态不允许'))
-    const opts = baseOpts()
-    const { submission, candidateDialogVisible } = build(opts)
-    await submission.handleScan('X')
-    await nextTick()
-    expect(candidateDialogVisible.value).toBe(false)
-  })
+    const { ApiError } = await import('@/api/http');
+    vi.mocked(scanDelivery).mockRejectedValue(new ApiError(21421, 'C 组状态不允许'));
+    const opts = baseOpts();
+    const { submission, candidateDialogVisible } = build(opts);
+    await submission.handleScan('X');
+    await nextTick();
+    expect(candidateDialogVisible.value).toBe(false);
+  });
 
   it('applyError does NOT trigger candidate dialog for legacy 21405', async () => {
-    vi.mocked(scanDelivery).mockRejectedValue(new ApiError(21405, 'legacy msg'))
-    const opts = baseOpts()
-    const { submission, candidateDialogVisible } = build(opts)
-    await submission.handleScan('X')
-    await nextTick()
-    expect(candidateDialogVisible.value).toBe(false)
-  })
-})
+    vi.mocked(scanDelivery).mockRejectedValue(new ApiError(21405, 'legacy msg'));
+    const opts = baseOpts();
+    const { submission, candidateDialogVisible } = build(opts);
+    await submission.handleScan('X');
+    await nextTick();
+    expect(candidateDialogVisible.value).toBe(false);
+  });
+});
 
 // 2026-08-29：submit 后端 outcome 包装（替换原 21405 硬错误路径）
 // - SUBMITTED → 清草稿（onDraftRemoved）
 // - CANDIDATES_AVAILABLE → 弹 DeliverySubmitCandidateDialog
 // 详见 docs/03-modules/scan-route-b-fix.md「submit outcome 包装」节。
 describe('useDeliveryScanSubmission submit outcome (2026-08-29)', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => vi.clearAllMocks());
 
   // 2026-08-29：mock 一个最小 DeliveryNoteDetailOut + ScanNoteSummary，用于触发
   // onSubmitDraft → confirmAndSubmit → doSubmit 路径。
@@ -192,7 +201,7 @@ describe('useDeliveryScanSubmission submit outcome (2026-08-29)', () => {
         },
       ],
       scanned_serials: [],
-    }
+    };
   }
 
   function makeDraft(noteId: string, version: number) {
@@ -212,13 +221,13 @@ describe('useDeliveryScanSubmission submit outcome (2026-08-29)', () => {
       created_at: '2026-08-29',
       updated_at: '2026-08-29',
       recent_items: [],
-    }
+    };
   }
 
   // 2026-08-29：submit 返回 SUBMITTED → 调 onDraftRemoved 清本地状态、不弹 candidate dialog
   it('SUBMITTED outcome clears draft via onDraftRemoved (no candidate dialog)', async () => {
-    const { getNote, submitNote } = await import('@/api/deliveryNote')
-    vi.mocked(getNote).mockResolvedValue(makeReadyDetail('N1', 5) as any)
+    const { getNote, submitNote } = await import('@/api/deliveryNote');
+    vi.mocked(getNote).mockResolvedValue(makeReadyDetail('N1', 5) as any);
     vi.mocked(submitNote).mockResolvedValue({
       outcome: 'SUBMITTED',
       note: {
@@ -242,22 +251,22 @@ describe('useDeliveryScanSubmission submit outcome (2026-08-29)', () => {
         created_at: '2026-08-29',
         updated_at: '2026-08-29',
       },
-    } as any)
+    } as any);
 
-    const opts = baseOpts()
-    const { submission, submitCandidateDialogVisible } = build(opts)
-    await submission.onSubmitDraft(makeDraft('N1', 5) as any)
-    await nextTick()
+    const opts = baseOpts();
+    const { submission, submitCandidateDialogVisible } = build(opts);
+    await submission.onSubmitDraft(makeDraft('N1', 5) as any);
+    await nextTick();
 
-    expect(opts.onDraftRemoved).toHaveBeenCalledWith('N1')
-    expect(submitCandidateDialogVisible.value).toBe(false)
-  })
+    expect(opts.onDraftRemoved).toHaveBeenCalledWith('N1');
+    expect(submitCandidateDialogVisible.value).toBe(false);
+  });
 
   // 2026-08-29：submit 返回 CANDIDATES_AVAILABLE → 弹 DeliverySubmitCandidateDialog，
   // **不**调 onDraftRemoved（草稿保留 + 等待用户在 dialog 里点「一键过检」）。
   it('CANDIDATES_AVAILABLE outcome opens submit candidate dialog', async () => {
-    const { getNote, submitNote } = await import('@/api/deliveryNote')
-    vi.mocked(getNote).mockResolvedValue(makeReadyDetail('N1', 5) as any)
+    const { getNote, submitNote } = await import('@/api/deliveryNote');
+    vi.mocked(getNote).mockResolvedValue(makeReadyDetail('N1', 5) as any);
     vi.mocked(submitNote).mockResolvedValue({
       outcome: 'CANDIDATES_AVAILABLE',
       note: null,
@@ -267,53 +276,51 @@ describe('useDeliveryScanSubmission submit outcome (2026-08-29)', () => {
           serial_no: 'A001',
           drawing_no: 'D-1',
           name: 'N1',
-          available_batches: [
-            { batch_id: 'B1', quantity: 5, status: 'INSPECTION', version: 1 },
-          ],
+          available_batches: [{ batch_id: 'B1', quantity: 5, status: 'INSPECTION', version: 1 }],
         },
       ],
-    } as any)
+    } as any);
 
-    const opts = baseOpts()
-    const { submission, submitCandidateDialogVisible, submitCandidateTargets } = build(opts)
-    await submission.onSubmitDraft(makeDraft('N1', 5) as any)
-    await nextTick()
+    const opts = baseOpts();
+    const { submission, submitCandidateDialogVisible, submitCandidateTargets } = build(opts);
+    await submission.onSubmitDraft(makeDraft('N1', 5) as any);
+    await nextTick();
 
-    expect(opts.onDraftRemoved).not.toHaveBeenCalled()
-    expect(submitCandidateDialogVisible.value).toBe(true)
-    expect(submitCandidateTargets.value).toHaveLength(1)
-    expect(submitCandidateTargets.value[0].available_batches[0].batch_id).toBe('B1')
-    expect(submitCandidateTargets.value[0].available_batches[0].version).toBe(1)
-  })
+    expect(opts.onDraftRemoved).not.toHaveBeenCalled();
+    expect(submitCandidateDialogVisible.value).toBe(true);
+    expect(submitCandidateTargets.value).toHaveLength(1);
+    expect(submitCandidateTargets.value[0].available_batches[0].batch_id).toBe('B1');
+    expect(submitCandidateTargets.value[0].available_batches[0].version).toBe(1);
+  });
 
   // 2026-08-29：submit 抛 21403 BIZ_VERSION_CONFLICT → 走 onSubmitDraftError 警告分支
   it('submit error 21403 BIZ_VERSION_CONFLICT triggers warning (no candidate dialog, no draft removed)', async () => {
-    const { getNote, submitNote } = await import('@/api/deliveryNote')
-    const { ElMessage } = await import('element-plus')
-    vi.mocked(getNote).mockResolvedValue(makeReadyDetail('N1', 5) as any)
-    vi.mocked(submitNote).mockRejectedValue(new ApiError(21403, '版本已过期'))
+    const { getNote, submitNote } = await import('@/api/deliveryNote');
+    const { ElMessage } = await import('element-plus');
+    vi.mocked(getNote).mockResolvedValue(makeReadyDetail('N1', 5) as any);
+    vi.mocked(submitNote).mockRejectedValue(new ApiError(21403, '版本已过期'));
 
-    const opts = baseOpts()
-    const { submission, submitCandidateDialogVisible } = build(opts)
-    await submission.onSubmitDraft(makeDraft('N1', 5) as any)
-    await nextTick()
+    const opts = baseOpts();
+    const { submission, submitCandidateDialogVisible } = build(opts);
+    await submission.onSubmitDraft(makeDraft('N1', 5) as any);
+    await nextTick();
 
     // 失败路径：onDraftRemoved 不应被调；candidate dialog 不应被弹；
     // ElMessage.warning 应被触发（21403 提示「版本已过期，正在刷新...」）。
-    expect(opts.onDraftRemoved).not.toHaveBeenCalled()
-    expect(submitCandidateDialogVisible.value).toBe(false)
-    expect(ElMessage.warning).toHaveBeenCalled()
-  })
-})
+    expect(opts.onDraftRemoved).not.toHaveBeenCalled();
+    expect(submitCandidateDialogVisible.value).toBe(false);
+    expect(ElMessage.warning).toHaveBeenCalled();
+  });
+});
 
 // 辅助：build composable 实例并暴露内部状态（视具体 export 形态调整）
 function build(opts: ReturnType<typeof baseOpts>) {
-  const inst = useDeliveryScanSubmission(opts as any)
+  const inst = useDeliveryScanSubmission(opts as any);
   return {
     submission: inst,
     candidateDialogVisible: (inst as any).candidateDialogVisible,
     // 2026-08-29 新增：submit 后 CANDIDATES_AVAILABLE 弹窗态
     submitCandidateDialogVisible: (inst as any).submitCandidateDialogVisible,
     submitCandidateTargets: (inst as any).submitCandidateTargets,
-  }
+  };
 }

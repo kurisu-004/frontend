@@ -8,15 +8,10 @@
   for；radio-group 上加 aria-label。
 -->
 <template>
-  <el-dialog
-    v-model="batchDispatchVisible"
-    title="批量下发"
-    width="480px"
-    destroy-on-close
-  >
+  <el-dialog v-model="batchDispatchVisible" title="批量下发" width="480px" destroy-on-close>
     <el-form label-width="96px">
       <!-- 2026-08-22 a11y：批量下发同样单包 radio-group -->
-      <el-form-item label="下发方式" :for="''">
+      <el-form-item label="下发方式" for="">
         <el-radio-group v-model="batchDispatchAction" aria-label="下发方式">
           <el-radio-button value="shelf">下生产货架</el-radio-button>
           <el-radio-button value="programming">发编程</el-radio-button>
@@ -87,11 +82,11 @@
         type="primary"
         :loading="batchDispatchSubmitting"
         :disabled="
-          batchDispatchAction === 'shelf'
-          && (!batchDispatchShelfId || !batchDispatchNextProcessId)
+          batchDispatchAction === 'shelf' && (!batchDispatchShelfId || !batchDispatchNextProcessId)
         "
         @click="onBatchDispatchConfirm"
-      >确认</el-button>
+        >确认</el-button
+      >
     </template>
   </el-dialog>
 </template>
@@ -102,13 +97,13 @@
 // 2026-08-22 从 PartsList.vue 抽出：批量下发 dialog。
 // 模板只对顶层 ref 自动解包 —— 从 props.ctx.* 取的嵌套 ref 必须先解构到 script 顶层。
 
-import { computed } from 'vue'
-import type { PartsListCtx } from '../composables/partsListCtx'
+import { computed } from 'vue';
+import type { PartsListCtx } from '../composables/partsListCtx';
 
-const props = defineProps<{ ctx: PartsListCtx }>()
+const props = defineProps<{ ctx: PartsListCtx }>();
 
 // 解构 ctx → 顶层局部变量（模板自动解包）
-const { dispatch, batch } = props.ctx
+const { dispatch, batch } = props.ctx;
 
 const {
   batchDispatchVisible,
@@ -119,13 +114,13 @@ const {
   batchFilteredShelves,
   batchFilteredProcesses,
   onBatchDispatchConfirm,
-} = dispatch
+} = dispatch;
 
-const { selectedIds, batchAction } = batch
+const { selectedIds, batchAction } = batch;
 
 // selectedIds 是 reactive Set，模板里 .size 不会自动响应；用 computed 包一层
 // 确保 selectedIds.size 变化时模板重新渲染。
-const selectedIdsSize = computed(() => selectedIds.size)
+const selectedIdsSize = computed(() => selectedIds.size);
 </script>
 
 <style lang="scss" scoped>

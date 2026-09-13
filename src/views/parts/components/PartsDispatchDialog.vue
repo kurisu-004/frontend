@@ -16,7 +16,7 @@
   >
     <el-form label-width="96px">
       <!-- 2026-08-22 a11y：单包 el-radio-group 触发 for= 指向非 labelable 元素警告 -->
-      <el-form-item label="下发方式" :for="''">
+      <el-form-item label="下发方式" for="">
         <el-radio-group v-model="dispatchMode" aria-label="下发方式">
           <el-radio value="direct">直接下到生产货架</el-radio>
           <el-radio value="cnc">发送至 CNC 编程</el-radio>
@@ -49,12 +49,7 @@
             clearable
             :disabled="!dispatchNextProcessId"
           >
-            <el-option
-              v-for="s in filteredShelves"
-              :key="s.id"
-              :label="s.name"
-              :value="s.id"
-            />
+            <el-option v-for="s in filteredShelves" :key="s.id" :label="s.name" :value="s.id" />
             <template #empty>
               <span class="muted">
                 {{
@@ -96,12 +91,12 @@
 // 2026-08-22 从 PartsList.vue 抽出：单件下发 dialog。
 // 模板只对顶层 ref 自动解包 —— 从 props.ctx.* 取的嵌套 ref 必须先解构到 script 顶层。
 
-import type { PartsListCtx } from '../composables/partsListCtx'
+import type { PartsListCtx } from '../composables/partsListCtx';
 
-const props = defineProps<{ ctx: PartsListCtx }>()
+const props = defineProps<{ ctx: PartsListCtx }>();
 
 // 解构 ctx → 顶层局部变量（模板自动解包）
-const { dispatch } = props.ctx
+const { dispatch } = props.ctx;
 
 const {
   dispatchVisible,
@@ -113,7 +108,7 @@ const {
   filteredProcesses,
   onDispatchClosed,
   onDispatchConfirm,
-} = dispatch
+} = dispatch;
 </script>
 
 <style lang="scss" scoped>

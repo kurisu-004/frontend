@@ -42,65 +42,75 @@
               :worker="w"
               :batches="workerHeld[w.id] ?? []"
             />
-            <div v-if="filteredWorkers.length === 0" class="no-workers">
-              该工序暂无可用工人
-            </div>
+            <div v-if="filteredWorkers.length === 0" class="no-workers">该工序暂无可用工人</div>
           </div>
         </el-splitter-panel>
       </el-splitter>
     </template>
 
     <div class="board-actions">
-      <el-button @click="onRefresh" :loading="loading">刷新</el-button>
+      <el-button :loading="loading" @click="onRefresh">刷新</el-button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, provide, ref } from 'vue'
-import type { ComputedRef } from 'vue'
-import { ElMessage } from 'element-plus'
-import { useAuthSession } from '@/composables/useAuthSession'
-import { useWorkerQueue } from '@/composables/useWorkerQueue'
-import WorkerColumn from './components/WorkerColumn.vue'
-import PoolDrawer from './components/PoolDrawer.vue'
+import { computed, onMounted, provide, ref } from 'vue';
+import type { ComputedRef } from 'vue';
+import { ElMessage } from 'element-plus';
+import { useAuthSession } from '@/composables/useAuthSession';
+import { useWorkerQueue } from '@/composables/useWorkerQueue';
+import WorkerColumn from './components/WorkerColumn.vue';
+import PoolDrawer from './components/PoolDrawer.vue';
 
-const auth = useAuthSession()
-const queue = useWorkerQueue()
-const { workers, processPools, workerHeld, loading, error, loadBoard, moveBatchToWorker, moveBatchToPool } = queue
+const auth = useAuthSession();
+const queue = useWorkerQueue();
+const {
+  workers,
+  processPools,
+  workerHeld,
+  loading,
+  error,
+  loadBoard,
+  moveBatchToWorker,
+  moveBatchToPool,
+} = queue;
 
-const activeTab = ref<string>('')
-const activePool = computed(() =>
-  processPools.value.find((p) => p.process_id === activeTab.value) ?? null,
-)
+const activeTab = ref<string>('');
+const activePool = computed(
+  () => processPools.value.find((p) => p.process_id === activeTab.value) ?? null,
+);
 // 2026-08-26：按当前 tab 的 process_id 过滤可加工工人（Worker.process_ids）。
 const filteredWorkers = computed(() =>
   workers.value.filter((w) => w.process_ids.includes(activeTab.value)),
-)
+);
 
 // 2026-08-26：移除 shelf_id 守卫；空串 fallback 给真后端兜底（fixture 永远 200）。
-const shelfId = computed(() => auth.activeShelfId() ?? '')
+const shelfId = computed(() => auth.activeShelfId() ?? '');
 
 // 子组件需要的 3 个 provide 注入：active tab / move 回调 / 当前 shelfId。
 // 注意 provide 非空断言 —— 同一页面里 WorkerColumn / PoolDrawer 必须 inject 同一组，
 // 否则 DnD 不会生效。
-provide<ComputedRef<string>>('activeProcessId', computed(() => activeTab.value))
-provide<typeof moveBatchToWorker>('moveBatchToWorker', moveBatchToWorker)
-provide<typeof moveBatchToPool>('moveBatchToPool', moveBatchToPool)
-provide<ComputedRef<string>>('shelfId', shelfId)
+provide<ComputedRef<string>>(
+  'activeProcessId',
+  computed(() => activeTab.value),
+);
+provide<typeof moveBatchToWorker>('moveBatchToWorker', moveBatchToWorker);
+provide<typeof moveBatchToPool>('moveBatchToPool', moveBatchToPool);
+provide<ComputedRef<string>>('shelfId', shelfId);
 
 onMounted(async () => {
-  await loadBoard()
-  if (processPools.value[0]) activeTab.value = processPools.value[0].process_id
-})
+  await loadBoard();
+  if (processPools.value[0]) activeTab.value = processPools.value[0].process_id;
+});
 
 async function onRefresh() {
-  await loadBoard()
+  await loadBoard();
   // 首次或 refresh 时若 activeTab 还没设（如 processPools 刚加载完），默认选第一个。
   if (!activeTab.value && processPools.value[0]) {
-    activeTab.value = processPools.value[0].process_id
+    activeTab.value = processPools.value[0].process_id;
   }
-  ElMessage.success('已刷新')
+  ElMessage.success('已刷新');
 }
 </script>
 
@@ -112,8 +122,12 @@ async function onRefresh() {
   flex-direction: column;
   box-sizing: border-box;
 }
-.error-alert { margin-bottom: 16px; }
-.pool-tabs { margin-bottom: 12px; }
+.error-alert {
+  margin-bottom: 16px;
+}
+.pool-tabs {
+  margin-bottom: 12px;
+}
 .board-splitter {
   flex: 1;
   min-height: 0;
@@ -137,7 +151,9 @@ async function onRefresh() {
   font-size: 14px;
   padding: 40px;
 }
-.loading-state { padding: 40px; }
+.loading-state {
+  padding: 40px;
+}
 .board-actions {
   margin-top: 12px;
   display: flex;

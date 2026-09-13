@@ -1,0 +1,157 @@
+// 2026-09-13 接入 ESLint v9 flat config + 腾讯 AlloyTeam 规范（vue + typescript preset）
+// 桥接策略：alloy v5.x 只导出 legacy .eslintrc 预设，通过 @eslint/eslintrc 的 FlatCompat
+// 转换为 flat config 数组，保持 eslint.config.mjs 文件形态。
+//
+// 与 CLAUDE.md 硬约束的对齐：
+//   #4  EP 命令式 API CSS 必须手动 import → 放行 element-plus/theme-chalk/*.css
+//   #5  vite.config.ts optimizeDeps.include 不能动 → 配置文件单独分块，关 no-console
+//   #6  pdfjs 必须从 @/utils/pdfjs 统一导入 → no-restricted-imports 限制裸 pdfjs-dist
+//   #10 useLazyDraggable 模式 → 放行 vue-draggable-plus
+//   #13 h() 函数 children 用法 → 不加 vue/no-restricted-syntax 一刀切
+
+import vueParser from 'vue-eslint-parser';
+import tsParser from '@typescript-eslint/parser';
+import { FlatCompat } from '@eslint/eslintrc';
+import prettierConfig from 'eslint-config-prettier';
+import globals from 'globals';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+
+const compat = new FlatCompat({
+  baseDirectory: __dirname,
+});
+
+// 注意 flat config 顺序：后写的覆盖前写的。
+// alloy/vue 和 alloy/typescript 的 extends 块都包含全局 languageOptions.parser，
+// 后面专门加的 files-constrained 块负责按文件类型恢复正确 parser。
+export default [
+  // 1. ignore 列表：产物目录、unplugin 生成文件、构建脚本
+  {
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'coverage/**',
+      'public/**',
+      'scripts/**',
+      '**/*.min.js',
+      'src/auto-imports.d.ts', // unplugin-auto-import 生成
+      'src/components.d.ts', // unplugin-vue-components 生成
+    ],
+  },
+
+  // 2. alloy 规则全集（vue + typescript）—— 顺序无所谓，仅导入 plugin/rules
+  //    不能放在 .vue / .ts 块前面，因为 compat.extends 会展开成多个 config 对象，
+  //    全局 parser 会"传染"到后续所有文件类型匹配。
+  ...compat.extends('eslint-config-alloy/vue'),
+  ...compat.extends('eslint-config-alloy/typescript'),
+
+  // 3. .vue 文件：vue-eslint-parser 外层 + TS 内层
+  {
+    files: ['**/*.vue'],
+    languageOptions: {
+      parser: vueParser,
+      parserOptions: {
+        parser: tsParser,
+        extraFileExtensions: ['.vue'],
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      },
+      globals: {
+        ...globals.browser,
+      },
+    },
+    rules: {
+      // CLAUDE.md #6：禁止裸 pdfjs-dist，必须走 @/utils/pdfjs
+      // worker 子路径仅在 @/utils/pdfjs.ts 内部使用，需留口子
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'pdfjs-dist',
+              message: '请通过 @/utils/pdfjs 统一导入 pdfjs（CLAUDE.md #6）',
+            },
+          ],
+          patterns: [
+            {
+              group: ['pdfjs-dist/*', '!pdfjs-dist/build/pdf.worker.min.mjs'],
+              message:
+                '请通过 @/utils/pdfjs 统一导入 pdfjs（CLAUDE.md #6）。worker 子路径仅在 @/utils/pdfjs.ts 内部允许',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // 4. .ts / .tsx 文件：TS parser
+  {
+    files: ['**/*.{ts,tsx,mts,cts}'],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      },
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+    },
+    rules: {
+      // 与 .vue 块保持一致
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'pdfjs-dist',
+              message: '请通过 @/utils/pdfjs 统一导入 pdfjs（CLAUDE.md #6）',
+            },
+          ],
+          patterns: [
+            {
+              group: ['pdfjs-dist/*', '!pdfjs-dist/build/pdf.worker.min.mjs'],
+              message:
+                '请通过 @/utils/pdfjs 统一导入 pdfjs（CLAUDE.md #6）。worker 子路径仅在 @/utils/pdfjs.ts 内部允许',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // 5. 单测文件：宽松规则（避免 baseline 误报）
+  {
+    files: ['**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-non-null-assertion': 'off',
+    },
+  },
+
+  // 6. 配置文件（vite/vitest/eslint.config.mjs 自身）：node globals + 关 no-console
+  {
+    files: ['eslint.config.mjs', 'vite.config.ts', 'vitest.config.ts'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      'no-console': 'off',
+    },
+  },
+
+  // 7. 全局 linterOptions：大厂共识「防患于未然」式禁用必须被检测
+  //    注意 flat config 下必须放在 linterOptions，不是 rules
+  {
+    linterOptions: {
+      reportUnusedDisableDirectives: 'error',
+    },
+  },
+
+  // 8. 关掉与 prettier 冲突的规则（必须放最后）
+  prettierConfig,
+];

@@ -6,10 +6,10 @@
 // 注意：货物(劳务)名称 / 方案/设计图纸 等含特殊字符的列名必须用 quoted key，
 // 与 Excel 表头严格一致。
 
-import { describe, it, expect } from 'vitest'
-import * as XLSX from 'xlsx'
+import { describe, it, expect } from 'vitest';
+import * as XLSX from 'xlsx';
 
-import { parseBidExcel, type BidRow } from '../bidExcelParser'
+import { parseBidExcel, type BidRow } from '../bidExcelParser';
 
 const ALL_HEADERS = [
   '序号',
@@ -35,21 +35,18 @@ const ALL_HEADERS = [
   '不含税价格',
   '预估交期天数',
   '报价反馈',
-] as const
+] as const;
 
-type RowDict = Record<string, unknown>
+type RowDict = Record<string, unknown>;
 
-function buildWorkbook(
-  rows: RowDict[],
-  sheetName = '招标项目-标的',
-): XLSX.WorkBook {
-  const ws = XLSX.utils.json_to_sheet(rows, { header: [...ALL_HEADERS] })
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, sheetName)
-  return wb
+function buildWorkbook(rows: RowDict[], sheetName = '招标项目-标的'): XLSX.WorkBook {
+  const ws = XLSX.utils.json_to_sheet(rows, { header: [...ALL_HEADERS] });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  return wb;
 }
 
-const TODAY = '2026-07-13'
+const TODAY = '2026-07-13';
 
 describe('parseBidExcel', () => {
   it('parses a valid 5-row bid sample', () => {
@@ -109,52 +106,52 @@ describe('parseBidExcel', () => {
         含税单价: 0,
         预估交期天数: 14,
       },
-    ])
+    ]);
 
-    const result = parseBidExcel(wb, TODAY)
+    const result = parseBidExcel(wb, TODAY);
 
-    expect(result.errors).toEqual([])
-    expect(result.rows).toHaveLength(5)
+    expect(result.errors).toEqual([]);
+    expect(result.rows).toHaveLength(5);
 
     // row 1
-    const r1 = result.rows[0] as BidRow
-    expect(r1.rowNumber).toBe(2) // 1-based + header
-    expect(r1.applicantName).toBe('黄启福')
-    expect(r1.deptCode).toBe('F05')
-    expect(r1.deptName).toBe('五厂')
-    expect(r1.drawingNo).toBe('E42ZZL521335302')
-    expect(r1.partName).toBe('先导半成品下压机构4-5(改)')
-    expect(r1.quantity).toBe(10)
-    expect(r1.isUrgent).toBe(false)
-    expect(r1.deliveryDays).toBe(14)
-    expect(r1.plannedDeliveryDate).toBe('2026-07-27')
-    expect(r1.totalPrice).toBe(0)
-    expect(r1.warnings).toEqual([])
+    const r1 = result.rows[0] as BidRow;
+    expect(r1.rowNumber).toBe(2); // 1-based + header
+    expect(r1.applicantName).toBe('黄启福');
+    expect(r1.deptCode).toBe('F05');
+    expect(r1.deptName).toBe('五厂');
+    expect(r1.drawingNo).toBe('E42ZZL521335302');
+    expect(r1.partName).toBe('先导半成品下压机构4-5(改)');
+    expect(r1.quantity).toBe(10);
+    expect(r1.isUrgent).toBe(false);
+    expect(r1.deliveryDays).toBe(14);
+    expect(r1.plannedDeliveryDate).toBe('2026-07-27');
+    expect(r1.totalPrice).toBe(0);
+    expect(r1.warnings).toEqual([]);
 
     // row 2: 含税单价 12.5 × 50 = 625。
     // 注：2026-07-30 起批量导入不再自动识别 紧急状态 → isUrgent=false，
     // 不论原表里写的是「急件 / 非常紧急 / 正常 / 空」都一样。
-    const r2 = result.rows[1] as BidRow
-    expect(r2.isUrgent).toBe(false)
-    expect(r2.plannedDeliveryDate).toBe('2026-07-20')
-    expect(r2.unitPrice).toBe(12.5)
-    expect(r2.totalPrice).toBe(625)
-    expect(r2.quantity).toBe(50)
+    const r2 = result.rows[1] as BidRow;
+    expect(r2.isUrgent).toBe(false);
+    expect(r2.plannedDeliveryDate).toBe('2026-07-20');
+    expect(r2.unitPrice).toBe(12.5);
+    expect(r2.totalPrice).toBe(625);
+    expect(r2.quantity).toBe(50);
 
     // row 3: 非常紧急 同上 → false
-    expect((result.rows[2] as BidRow).isUrgent).toBe(false)
-    expect((result.rows[2] as BidRow).plannedDeliveryDate).toBe('2026-07-18')
+    expect((result.rows[2] as BidRow).isUrgent).toBe(false);
+    expect((result.rows[2] as BidRow).plannedDeliveryDate).toBe('2026-07-18');
 
     // row 4: 空 紧急状态 → 默认 false，无错误
-    expect((result.rows[3] as BidRow).isUrgent).toBe(false)
-    expect((result.rows[3] as BidRow).warnings).toEqual([])
+    expect((result.rows[3] as BidRow).isUrgent).toBe(false);
+    expect((result.rows[3] as BidRow).warnings).toEqual([]);
 
     // row 5: 紧急状态「未知紧急」原行为是 false + warning「未识别」。
     // 2026-07-30 起批量导入不再读 紧急状态，所以此处的值不影响结果，
     // 也不会再发 warning。仅断言 isUrgent=false。
-    const r5 = result.rows[4] as BidRow
-    expect(r5.isUrgent).toBe(false)
-  })
+    const r5 = result.rows[4] as BidRow;
+    expect(r5.isUrgent).toBe(false);
+  });
 
   it('skips trailing empty rows', () => {
     const wb = buildWorkbook([
@@ -171,11 +168,11 @@ describe('parseBidExcel', () => {
       },
       {}, // 全空
       {}, // 全空
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    expect(result.rows).toHaveLength(1)
-    expect(result.errors).toEqual([])
-  })
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    expect(result.rows).toHaveLength(1);
+    expect(result.errors).toEqual([]);
+  });
 
   it('flags error rows for missing required fields', () => {
     const wb = buildWorkbook([
@@ -212,15 +209,15 @@ describe('parseBidExcel', () => {
         含税单价: 0,
         预估交期天数: 14,
       },
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    expect(result.rows).toHaveLength(3) // 仍 parse 出 3 行
-    expect(result.errors).toHaveLength(3)
-    expect(result.errors[0]?.message).toMatch(/申请人不能为空/)
-    expect(result.errors[1]?.message).toMatch(/物料编号不能为空/)
-    expect(result.errors[2]?.message).toMatch(/货物\(劳务\)名称不能为空/)
-    expect(result.errors[0]?.rowNumber).toBe(2)
-  })
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    expect(result.rows).toHaveLength(3); // 仍 parse 出 3 行
+    expect(result.errors).toHaveLength(3);
+    expect(result.errors[0]?.message).toMatch(/申请人不能为空/);
+    expect(result.errors[1]?.message).toMatch(/物料编号不能为空/);
+    expect(result.errors[2]?.message).toMatch(/货物\(劳务\)名称不能为空/);
+    expect(result.errors[0]?.rowNumber).toBe(2);
+  });
 
   it('flags error rows for invalid quantity / delivery days', () => {
     const wb = buildWorkbook([
@@ -268,14 +265,14 @@ describe('parseBidExcel', () => {
         含税单价: 0,
         预估交期天数: 0, // 非正
       },
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    expect(result.errors).toHaveLength(4)
-    expect(result.errors[0]?.message).toMatch(/计划数量必须为正整数/)
-    expect(result.errors[1]?.message).toMatch(/计划数量必须为正整数/)
-    expect(result.errors[2]?.message).toMatch(/预估交期天数必须为正整数/)
-    expect(result.errors[3]?.message).toMatch(/预估交期天数必须为正整数/)
-  })
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    expect(result.errors).toHaveLength(4);
+    expect(result.errors[0]?.message).toMatch(/计划数量必须为正整数/);
+    expect(result.errors[1]?.message).toMatch(/计划数量必须为正整数/);
+    expect(result.errors[2]?.message).toMatch(/预估交期天数必须为正整数/);
+    expect(result.errors[3]?.message).toMatch(/预估交期天数必须为正整数/);
+  });
 
   it('warns (does not block) for duplicate drawing_no within the batch', () => {
     const wb = buildWorkbook([
@@ -301,12 +298,12 @@ describe('parseBidExcel', () => {
         含税单价: 0,
         预估交期天数: 14,
       },
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    expect(result.errors).toEqual([])
-    expect(result.rows).toHaveLength(2)
-    expect((result.rows[1] as BidRow).warnings).toContain('本批次有重复图号')
-  })
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    expect(result.errors).toEqual([]);
+    expect(result.rows).toHaveLength(2);
+    expect((result.rows[1] as BidRow).warnings).toContain('本批次有重复图号');
+  });
 
   it('clamps negative unit price to 0 with a warning', () => {
     const wb = buildWorkbook([
@@ -321,14 +318,14 @@ describe('parseBidExcel', () => {
         含税单价: -1,
         预估交期天数: 14,
       },
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    expect(result.errors).toEqual([])
-    const r = result.rows[0] as BidRow
-    expect(r.unitPrice).toBe(0)
-    expect(r.totalPrice).toBe(0)
-    expect(r.warnings).toContain('含税单价为负数，已按 0 处理')
-  })
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    expect(result.errors).toEqual([]);
+    const r = result.rows[0] as BidRow;
+    expect(r.unitPrice).toBe(0);
+    expect(r.totalPrice).toBe(0);
+    expect(r.warnings).toContain('含税单价为负数，已按 0 处理');
+  });
 
   it('extracts first fileName from 方案/设计图纸 JSON cell', () => {
     const wb = buildWorkbook([
@@ -336,8 +333,7 @@ describe('parseBidExcel', () => {
         申请人: 'A',
         申请人所在一级部门: 'F01',
         申请人所在一级部门名称: '一厂',
-        '方案/设计图纸':
-          '[{"accessoryId":"abc","fileName":"abc.PDF"},{"fileName":"def.PDF"}]',
+        '方案/设计图纸': '[{"accessoryId":"abc","fileName":"abc.PDF"},{"fileName":"def.PDF"}]',
         物料编号: 'D1',
         '货物(劳务)名称': 'P1',
         紧急状态: '正常',
@@ -345,10 +341,10 @@ describe('parseBidExcel', () => {
         含税单价: 0,
         预估交期天数: 14,
       },
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    expect((result.rows[0] as BidRow).designDrawingLabel).toBe('abc.PDF')
-  })
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    expect((result.rows[0] as BidRow).designDrawingLabel).toBe('abc.PDF');
+  });
 
   it('handles truncated JSON cell gracefully (returns null)', () => {
     const wb = buildWorkbook([
@@ -364,10 +360,10 @@ describe('parseBidExcel', () => {
         含税单价: 0,
         预估交期天数: 14,
       },
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    expect((result.rows[0] as BidRow).designDrawingLabel).toBeNull()
-  })
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    expect((result.rows[0] as BidRow).designDrawingLabel).toBeNull();
+  });
 
   it('computes planned_delivery_date = today + deliveryDays', () => {
     const wb = buildWorkbook([
@@ -393,11 +389,11 @@ describe('parseBidExcel', () => {
         含税单价: 0,
         预估交期天数: 7,
       },
-    ])
-    const result = parseBidExcel(wb, '2026-12-30') // 跨年
-    expect((result.rows[0] as BidRow).plannedDeliveryDate).toBe('2026-12-31')
-    expect((result.rows[1] as BidRow).plannedDeliveryDate).toBe('2027-01-06')
-  })
+    ]);
+    const result = parseBidExcel(wb, '2026-12-30'); // 跨年
+    expect((result.rows[0] as BidRow).plannedDeliveryDate).toBe('2026-12-31');
+    expect((result.rows[1] as BidRow).plannedDeliveryDate).toBe('2027-01-06');
+  });
 
   it('throws when sheet name is wrong', () => {
     const wb = buildWorkbook(
@@ -415,9 +411,9 @@ describe('parseBidExcel', () => {
         },
       ],
       'wrong-sheet',
-    )
-    expect(() => parseBidExcel(wb, TODAY)).toThrow(/招标项目-标的/)
-  })
+    );
+    expect(() => parseBidExcel(wb, TODAY)).toThrow(/招标项目-标的/);
+  });
 
   it('throws when required headers are missing', () => {
     // 不走 buildWorkbook helper（helper 强制注入完整表头），手动建一个
@@ -427,18 +423,18 @@ describe('parseBidExcel', () => {
         申请人: 'A',
         物料编号: 'D1',
       },
-    ])
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, '招标项目-标的')
-    expect(() => parseBidExcel(wb, TODAY)).toThrow(/Excel 缺少必需列/)
-  })
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '招标项目-标的');
+    expect(() => parseBidExcel(wb, TODAY)).toThrow(/Excel 缺少必需列/);
+  });
 
   it('handles empty workbook gracefully', () => {
-    const wb = buildWorkbook([])
-    const result = parseBidExcel(wb, TODAY)
-    expect(result.rows).toEqual([])
-    expect(result.warnings).toContain('Excel 没有数据行')
-  })
+    const wb = buildWorkbook([]);
+    const result = parseBidExcel(wb, TODAY);
+    expect(result.rows).toEqual([]);
+    expect(result.warnings).toContain('Excel 没有数据行');
+  });
 
   it('strips whitespace from text fields', () => {
     const wb = buildWorkbook([
@@ -453,15 +449,15 @@ describe('parseBidExcel', () => {
         含税单价: 0,
         预估交期天数: 14,
       },
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    const r = result.rows[0] as BidRow
-    expect(r.applicantName).toBe('张三')
-    expect(r.deptCode).toBe('F05')
-    expect(r.deptName).toBe('五厂')
-    expect(r.drawingNo).toBe('D1')
-    expect(r.partName).toBe('P1')
-  })
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    const r = result.rows[0] as BidRow;
+    expect(r.applicantName).toBe('张三');
+    expect(r.deptCode).toBe('F05');
+    expect(r.deptName).toBe('五厂');
+    expect(r.drawingNo).toBe('D1');
+    expect(r.partName).toBe('P1');
+  });
 
   it('silently skips stray rows where only 物料编号 is populated', () => {
     // 行 18 类残留：把「E42xxx  名称」整体粘到物料编号单元格，其他关键
@@ -480,15 +476,14 @@ describe('parseBidExcel', () => {
       },
       {
         // 残留：仅物料编号被粘进来（其它关键字段全空）
-        物料编号:
-          'E42JRM5502072101  MX55D压膜轮φ30（HSD45）（附报告）',
+        物料编号: 'E42JRM5502072101  MX55D压膜轮φ30（HSD45）（附报告）',
       },
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    expect(result.rows).toHaveLength(1)
-    expect(result.errors).toEqual([])
-    expect(result.warnings.some((w) => /已忽略 \d+ 行/.test(w))).toBe(true)
-  })
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    expect(result.rows).toHaveLength(1);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings.some((w) => /已忽略 \d+ 行/.test(w))).toBe(true);
+  });
 
   it('does NOT skip rows that have only drawing_no missing other fields (real errors)', () => {
     // 反向断言：drawingNo 缺失 + 其他字段填了的行，依然应当走 rowErrors 路径，
@@ -504,11 +499,11 @@ describe('parseBidExcel', () => {
         含税单价: 0,
         预估交期天数: 14,
       },
-    ])
-    const result = parseBidExcel(wb, TODAY)
-    expect(result.rows).toHaveLength(1)
-    expect(result.errors).toHaveLength(1)
-    expect(result.errors[0].message).toContain('物料编号不能为空')
-    expect(result.warnings).toEqual([])
-  })
-})
+    ]);
+    const result = parseBidExcel(wb, TODAY);
+    expect(result.rows).toHaveLength(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].message).toContain('物料编号不能为空');
+    expect(result.warnings).toEqual([]);
+  });
+});

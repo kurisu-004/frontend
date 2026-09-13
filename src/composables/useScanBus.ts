@@ -11,33 +11,33 @@
  * 不要在此总线放大型 payload（保持轻量信号语义）。
  */
 
-import { ref, type Ref } from 'vue'
+import { ref, type Ref } from 'vue';
 
 /** 模块级信号：当前工人持有件变化（领取/放回/送检后） */
-const heldVersion = ref(0)
+const heldVersion = ref(0);
 
-export type HeldChangeHandler = (newVersion: number) => void
-const listeners = new Set<HeldChangeHandler>()
+export type HeldChangeHandler = (newVersion: number) => void;
+const listeners = new Set<HeldChangeHandler>();
 
 export function useScanBus(): {
-  emitHeldChanged: () => void
-  onHeldChanged: (fn: HeldChangeHandler) => () => void
-  heldVersion: Readonly<Ref<number>>
+  emitHeldChanged: () => void;
+  onHeldChanged: (fn: HeldChangeHandler) => () => void;
+  heldVersion: Readonly<Ref<number>>;
 } {
   return {
     /** 自增信号 + 通知监听者 */
     emitHeldChanged(): void {
-      heldVersion.value++
-      listeners.forEach((fn) => fn(heldVersion.value))
+      heldVersion.value++;
+      listeners.forEach((fn) => fn(heldVersion.value));
     },
     /** 监听持有件变化（返回 off 函数，组件 unmount 时调用） */
     onHeldChanged(fn: HeldChangeHandler): () => void {
-      listeners.add(fn)
+      listeners.add(fn);
       return () => {
-        listeners.delete(fn)
-      }
+        listeners.delete(fn);
+      };
     },
     /** 当前版本号 ref，徽章组件 watch 它 */
     heldVersion: heldVersion as Readonly<Ref<number>>,
-  }
+  };
 }

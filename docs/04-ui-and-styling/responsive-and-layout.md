@@ -23,11 +23,11 @@
 
 以下路由**不在** MainLayout 内：
 
-| 路由 | 原因 |
-| --- | --- |
-| `/login` | 登录页独立视觉 |
-| `/scan/*` | 工位扫码台是 1080p 大屏触摸 HMI，需要全屏布局 |
-| `/delivery-dispatch/*` | 司机送货台同理，全屏触摸 |
+| 路由                   | 原因                                          |
+| ---------------------- | --------------------------------------------- |
+| `/login`               | 登录页独立视觉                                |
+| `/scan/*`              | 工位扫码台是 1080p 大屏触摸 HMI，需要全屏布局 |
+| `/delivery-dispatch/*` | 司机送货台同理，全屏触摸                      |
 
 路由配置上这些页面直接挂 `<router-view />` 的根路由 / 独立的 path tree，不被 `MainLayout` 包。`router/index.ts` 里看 meta.layout 之类的字段可识别。
 
@@ -60,12 +60,12 @@
 
 ### EP 默认断点（沿用）
 
-| 断点 | px |
-| --- | --- |
-| sm | 768 |
-| md | 992 |
-| lg | 1200 |
-| xl | 1920 |
+| 断点 | px   |
+| ---- | ---- |
+| sm   | 768  |
+| md   | 992  |
+| lg   | 1200 |
+| xl   | 1920 |
 
 `.form-grid` / 各组件的 `@media` 直接用这四个阈值。
 
@@ -96,13 +96,13 @@ SCSS breakpoints mixin 在 T1 重构（commit 8168b2b）删除，**不要**在�
 长按按钮持续滚动（报工台场景：长按「+」「-」按钮连续调整数量）。
 
 ```ts
-import { useHoldToScroll } from '@/composables/useHoldToScroll'
+import { useHoldToScroll } from '@/composables/useHoldToScroll';
 
 const { start, stop } = useHoldToScroll({
   onTick: () => value.value++,
   initialDelay: 300,
   interval: 80,
-})
+});
 // @mousedown="start" / @mouseup="stop" / @mouseleave="stop"
 ```
 

@@ -18,38 +18,29 @@
     @close="$emit('close')"
   >
     <div v-if="url" class="drawing-frame-wrap">
-      <PdfViewer
-        v-if="isPdf"
-        :url="url"
-      />
-      <el-image
-        v-else
-        :src="url"
-        :preview-src-list="[url]"
-        fit="contain"
-        class="drawing-image"
-      />
+      <PdfViewer v-if="isPdf" :url="url" />
+      <el-image v-else :src="url" :preview-src-list="[url]" fit="contain" class="drawing-image" />
     </div>
     <p v-else class="muted">无可预览内容</p>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { useDialogSize } from '@/composables/useDialogSize'
+import { useDialogSize } from '@/composables/useDialogSize';
 
 defineProps<{
-  modelValue: boolean
-  url: string | null
-  title: string
-  isPdf: boolean
-}>()
+  modelValue: boolean;
+  url: string | null;
+  title: string;
+  isPdf: boolean;
+}>();
 
 defineEmits<{
-  (e: 'update:model-value', value: boolean): void
-  (e: 'close'): void
-}>()
+  (e: 'update:model-value', value: boolean): void;
+  (e: 'close'): void;
+}>();
 
-const dialogSize = useDialogSize({ desktopWidth: 900 })
+const dialogSize = useDialogSize({ desktopWidth: 900 });
 </script>
 
 <style lang="scss" scoped>

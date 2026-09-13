@@ -20,7 +20,7 @@
       ref="listRef"
       :column-defs="columnDefs"
       :fetcher="fetcher"
-      :list-key="'pending_programming'"
+      list-key="pending_programming"
       empty-text="当前无待编程零件"
       :row-class-name="rowClassName"
     >
@@ -126,66 +126,63 @@
           :loading="releaseSubmitting"
           :disabled="!releaseShelfId || !releaseProcessId"
           @click="onReleaseConfirm"
-        >确认下发</el-button>
+          >确认下发</el-button
+        >
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue'
-import { ElButton, ElMessage } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
-import { RouterLink, useRouter } from 'vue-router'
-import PartListShell from '@/components/PartListShell.vue'
-import type { ColumnDef } from '@/composables/useColumnVisibility'
-import { useDialogSize } from '@/composables/useDialogSize'
-import { releaseFromProgramming } from '@/api/parts'
-import { listShelves } from '@/api/shelves'
-import { listProcesses } from '@/api/process'
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
-import type { PartListItem } from '@/types/parts'
-import type { Shelf } from '@/types/shelf'
-import type { Process } from '@/types/process'
-import { usePendingProgrammingList } from './composables/usePendingProgrammingList'
+import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue';
+import { ElButton, ElMessage } from 'element-plus';
+import { Search } from '@element-plus/icons-vue';
+import { RouterLink, useRouter } from 'vue-router';
+import PartListShell from '@/components/PartListShell.vue';
+import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { useDialogSize } from '@/composables/useDialogSize';
+import { releaseFromProgramming } from '@/api/parts';
+import { listShelves } from '@/api/shelves';
+import { listProcesses } from '@/api/process';
+import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
+import type { PartListItem } from '@/types/parts';
+import type { Shelf } from '@/types/shelf';
+import type { Process } from '@/types/process';
+import { usePendingProgrammingList } from './composables/usePendingProgrammingList';
 
 // ============ 列表状态 ============
 interface RowState extends PartListItem {
-  _releasing?: boolean
+  _releasing?: boolean;
 }
 
 // ============ T14：列表状态（filter / fetcher）+ 列可见性 ============
 // 2026-08-27 T15：列定义全部走 columnDefs 配置数组（之前写在 template 默认 slot 的内联列已迁出）。
 // 列可见性由 PartListShell 内部 useColumnVisibility 持有；PartListShell 自管 v-for 渲染，
 // 自定义单元格通过 cellRender(scope) 注入。操作列也放进 defs，draggable=false 防误拖。
-const router = useRouter()
+const router = useRouter();
 
 // ---------- 自定义单元格渲染 ----------
 // 参数 row 在 ColumnDef 接口里是 unknown；cast 到 PartListItem / RowState 以访问业务字段。
 // 保留旧实现的全部行为：muted 灰底占位、router-link、conditional render、按钮组。
 function renderSerialNo({ row }: { row: unknown }): VNode {
-  const r = row as PartListItem
-  return h('span', { class: { muted: !r.serial_no } }, r.serial_no || '—')
+  const r = row as PartListItem;
+  return h('span', { class: { muted: !r.serial_no } }, r.serial_no || '—');
 }
 
 function renderName({ row }: { row: unknown }): VNode {
-  const r = row as PartListItem
-  return h(
-    RouterLink,
-    { to: `/parts/${r.id}`, class: 'name-link' },
-    () => r.name,
-  )
+  const r = row as PartListItem;
+  return h(RouterLink, { to: `/parts/${r.id}`, class: 'name-link' }, () => r.name);
 }
 
 function renderCustomer({ row }: { row: unknown }): VNode {
-  const r = row as PartListItem
-  if (r.customer_path) return h('span', r.customer_path)
-  if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name)
-  return h('span', { class: 'muted' }, '—')
+  const r = row as PartListItem;
+  if (r.customer_path) return h('span', r.customer_path);
+  if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name);
+  return h('span', { class: 'muted' }, '—');
 }
 
 function renderActions({ row }: { row: unknown }): VNode {
-  const r = row as RowState
+  const r = row as RowState;
   return h('div', null, [
     h(
       ElButton,
@@ -208,7 +205,7 @@ function renderActions({ row }: { row: unknown }): VNode {
       },
       () => '下发',
     ),
-  ])
+  ]);
 }
 
 // ---------- 列定义 ----------
@@ -281,140 +278,122 @@ const columnDefs: ColumnDef[] = [
     draggable: false,
     cellRender: renderActions,
   },
-]
+];
 
-const {
-  search,
-  autoRefresh,
-  fetcher,
-  restoreFilter,
-} = usePendingProgrammingList()
+const { search, autoRefresh, fetcher, restoreFilter } = usePendingProgrammingList();
 
 // PartListShell 的 ref；后续可按需读 items.value / total.value。
-const listRef = ref()
+const listRef = ref();
 
 function rowClassName({ row }: { row: PartListItem; rowIndex: number }): string {
-  return row.is_urgent ? 'row-urgent' : ''
+  return row.is_urgent ? 'row-urgent' : '';
 }
 
 // 「刷新」按钮 = 列表回到第 1 页再拉（PartListShell.onRefresh = reset()）
 async function onRefresh(): Promise<void> {
-  await listRef.value?.onRefresh()
+  await listRef.value?.onRefresh();
 }
 
 // 其它地方仍调 fetchList() 触发刷新（包装 listRef.fetch()，保持当前页码）
 async function fetchList(): Promise<void> {
-  await listRef.value?.fetch()
+  await listRef.value?.fetch();
 }
 
 // ============ 自动刷新 ============
-let autoRefreshTimer: number | null = null
+let autoRefreshTimer: number | null = null;
 
 function onAutoRefreshToggle(val: string | number | boolean): void {
   if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer)
-    autoRefreshTimer = null
+    window.clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
   }
   if (val) {
     autoRefreshTimer = window.setInterval(() => {
-      fetchList()
-    }, 300_000)
+      fetchList();
+    }, 300_000);
   }
 }
 
 onBeforeUnmount(() => {
   if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer)
+    window.clearInterval(autoRefreshTimer);
   }
-})
+});
 
 // ============ 下发到 CNC 货架 对话框 ============
-const releaseDlg = useDialogSize({ desktopWidth: 440 })
-const releaseDialogVisible = ref(false)
-const releaseTarget = ref<RowState | null>(null)
-const releaseShelfId = ref<string | null>(null)
-const releaseProcessId = ref<string | null>(null)
-const releaseSubmitting = ref(false)
-const productionShelves = ref<Shelf[]>([])
-const processes = ref<Process[]>([])
+const releaseDlg = useDialogSize({ desktopWidth: 440 });
+const releaseDialogVisible = ref(false);
+const releaseTarget = ref<RowState | null>(null);
+const releaseShelfId = ref<string | null>(null);
+const releaseProcessId = ref<string | null>(null);
+const releaseSubmitting = ref(false);
+const productionShelves = ref<Shelf[]>([]);
+const processes = ref<Process[]>([]);
 // 2026-07-17：CNC 下发只允许 INHOUSE 工序（外协工序走 send_to_outsource）
-const inhouseProcesses = computed(() =>
-  processes.value.filter((p) => p.category === 'INHOUSE'),
-)
+const inhouseProcesses = computed(() => processes.value.filter((p) => p.category === 'INHOUSE'));
 
 // 2026-07-17：useShelfProcessFilter 双向收窄（CNC 下发对话框）
 const {
   filteredShelves: filteredProductionShelves,
   filteredProcesses: filteredInhouseProcesses,
   load: loadReleaseMap,
-} = useShelfProcessFilter(
-  productionShelves,
-  inhouseProcesses,
-  releaseShelfId,
-  releaseProcessId,
-)
+} = useShelfProcessFilter(productionShelves, inhouseProcesses, releaseShelfId, releaseProcessId);
 
 async function openReleaseDialog(row: RowState): Promise<void> {
-  releaseTarget.value = row
-  releaseShelfId.value = null
-  releaseProcessId.value = null
+  releaseTarget.value = row;
+  releaseShelfId.value = null;
+  releaseProcessId.value = null;
   try {
     const [shelfResp, procResp] = await Promise.all([
       productionShelves.value.length === 0
         ? listShelves({ zone: 'PRODUCTION', is_active: true, limit: 200 })
         : Promise.resolve(null),
-      processes.value.length === 0
-        ? listProcesses({ limit: 200 })
-        : Promise.resolve(null),
-    ])
-    if (shelfResp) productionShelves.value = shelfResp.items
-    if (procResp) processes.value = procResp.items
-    void loadReleaseMap()
+      processes.value.length === 0 ? listProcesses({ limit: 200 }) : Promise.resolve(null),
+    ]);
+    if (shelfResp) productionShelves.value = shelfResp.items;
+    if (procResp) processes.value = procResp.items;
+    void loadReleaseMap();
   } catch (e) {
-    ElMessage.error(`加载失败：${(e as Error).message}`)
+    ElMessage.error(`加载失败：${(e as Error).message}`);
   }
-  releaseDialogVisible.value = true
+  releaseDialogVisible.value = true;
 }
 
 function onReleaseDialogClosed(): void {
-  releaseTarget.value = null
-  releaseShelfId.value = null
-  releaseProcessId.value = null
+  releaseTarget.value = null;
+  releaseShelfId.value = null;
+  releaseProcessId.value = null;
 }
 
 async function onReleaseConfirm(): Promise<void> {
-  if (!releaseTarget.value || !releaseShelfId.value || !releaseProcessId.value) return
-  const row = releaseTarget.value
-  const shelfCode =
-    productionShelves.value.find((s) => s.id === releaseShelfId.value)?.code ?? ''
-  const processCode =
-    processes.value.find((p) => p.id === releaseProcessId.value)?.code ?? ''
-  row._releasing = true
-  releaseSubmitting.value = true
+  if (!releaseTarget.value || !releaseShelfId.value || !releaseProcessId.value) return;
+  const row = releaseTarget.value;
+  const shelfCode = productionShelves.value.find((s) => s.id === releaseShelfId.value)?.code ?? '';
+  const processCode = processes.value.find((p) => p.id === releaseProcessId.value)?.code ?? '';
+  row._releasing = true;
+  releaseSubmitting.value = true;
   try {
-    await releaseFromProgramming(row.id, releaseShelfId.value, releaseProcessId.value)
-    ElMessage.success(
-      `零件 ${row.serial_no || row.drawing_no} 已下发到生产货架 ${shelfCode}`,
-    )
-    releaseDialogVisible.value = false
-    await fetchList()
+    await releaseFromProgramming(row.id, releaseShelfId.value, releaseProcessId.value);
+    ElMessage.success(`零件 ${row.serial_no || row.drawing_no} 已下发到生产货架 ${shelfCode}`);
+    releaseDialogVisible.value = false;
+    await fetchList();
   } catch (e) {
-    ElMessage.error(`下发失败：${(e as Error).message}`)
+    ElMessage.error(`下发失败：${(e as Error).message}`);
   } finally {
-    row._releasing = false
-    releaseSubmitting.value = false
+    row._releasing = false;
+    releaseSubmitting.value = false;
   }
 }
 
 onMounted(() => {
   // 先尝试恢复 localStorage 中的搜索条件 / 自动刷新（pageSize 由 PartListShell 自行恢复）
-  restoreFilter()
+  restoreFilter();
   if (autoRefresh.value) {
     // 重新挂载定时器
-    onAutoRefreshToggle(true)
+    onAutoRefreshToggle(true);
   }
-  fetchList()
-})
+  fetchList();
+});
 </script>
 
 <style lang="scss" scoped>

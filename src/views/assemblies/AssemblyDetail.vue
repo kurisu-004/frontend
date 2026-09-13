@@ -18,7 +18,7 @@
   数据来源：GET /api/v1/assemblies/:id
 -->
 <template>
-  <div class="assembly-detail" v-loading="loading">
+  <div v-loading="loading" class="assembly-detail">
     <AssemblyInfoCard
       v-if="detail"
       :assembly="detail.assembly"
@@ -112,24 +112,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import FileListCard from '@/components/FileListCard.vue'
-import { useDialogSize } from '@/composables/useDialogSize'
-import type { AssemblyUpdatePayload } from '@/types/assembly'
-import AssemblyInfoCard from './components/AssemblyInfoCard.vue'
-import AssemblyChildrenTable from './components/AssemblyChildrenTable.vue'
-import AssemblyEditDialog from './components/AssemblyEditDialog.vue'
-import { useAssemblyDetail } from './composables/useAssemblyDetail'
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import FileListCard from '@/components/FileListCard.vue';
+import { useDialogSize } from '@/composables/useDialogSize';
+import type { AssemblyUpdatePayload } from '@/types/assembly';
+import AssemblyInfoCard from './components/AssemblyInfoCard.vue';
+import AssemblyChildrenTable from './components/AssemblyChildrenTable.vue';
+import AssemblyEditDialog from './components/AssemblyEditDialog.vue';
+import { useAssemblyDetail } from './composables/useAssemblyDetail';
 
-const route = useRoute()
-const router = useRouter()
+const route = useRoute();
+const router = useRouter();
 
 // ============ 路由 → assemblyId ============
 const assemblyId = computed<string>(() => {
-  const raw = route.params.id
-  return String(Array.isArray(raw) ? raw[0] : raw ?? '')
-})
+  const raw = route.params.id;
+  return String(Array.isArray(raw) ? raw[0] : (raw ?? ''));
+});
 
 // ============ composable：业务状态 + 业务函数 ============
 const {
@@ -160,60 +160,61 @@ const {
   partStatusLabel,
   partStatusTagType,
   childRowClass,
-} = useAssemblyDetail(assemblyId)
+} = useAssemblyDetail(assemblyId);
 
 // ============ 编辑对话框（UI 状态留在 shell；宽度由 AssemblyEditDialog 内部 useDialogSize 管）============
-const editVisible = ref(false)
-const editSubmitting = ref(false)
+const editVisible = ref(false);
+const editSubmitting = ref(false);
 
 function openEditDialog(): void {
-  populateEditForm()
-  editVisible.value = true
+  populateEditForm();
+  editVisible.value = true;
 }
 
 async function onEditSubmit(payload: AssemblyUpdatePayload): Promise<void> {
-  editSubmitting.value = true
+  editSubmitting.value = true;
   try {
-    const ok = await updateAssembly(payload)
-    if (ok) editVisible.value = false
+    const ok = await updateAssembly(payload);
+    if (ok) editVisible.value = false;
   } finally {
-    editSubmitting.value = false
+    editSubmitting.value = false;
   }
 }
 
 // ============ 取消 / 删除 共用确认对话框 ============
-const confirmDlg = useDialogSize({ desktopWidth: 480 })
-const confirmVisible = ref(false)
-const confirmAction = ref<'cancel' | 'delete'>('cancel')
-const confirmSerial = ref('')
-const confirmSubmitting = ref(false)
+const confirmDlg = useDialogSize({ desktopWidth: 480 });
+const confirmVisible = ref(false);
+const confirmAction = ref<'cancel' | 'delete'>('cancel');
+const confirmSerial = ref('');
+const confirmSubmitting = ref(false);
 
 function openConfirmDialog(action: 'cancel' | 'delete'): void {
-  confirmAction.value = action
-  confirmSerial.value = ''
-  confirmVisible.value = true
+  confirmAction.value = action;
+  confirmSerial.value = '';
+  confirmVisible.value = true;
 }
 
 async function onConfirmSubmit(): Promise<void> {
-  if (!detail.value) return
-  confirmSubmitting.value = true
+  if (!detail.value) return;
+  confirmSubmitting.value = true;
   try {
-    const ok = confirmAction.value === 'cancel'
-      ? await cancelAssembly(confirmSerial.value)
-      : await deleteAssembly(confirmSerial.value)
-    if (ok) confirmVisible.value = false
+    const ok =
+      confirmAction.value === 'cancel'
+        ? await cancelAssembly(confirmSerial.value)
+        : await deleteAssembly(confirmSerial.value);
+    if (ok) confirmVisible.value = false;
   } finally {
-    confirmSubmitting.value = false
+    confirmSubmitting.value = false;
   }
 }
 
 // ============ 导航 ============
 function onBack(): void {
-  router.push('/parts')
+  router.push('/parts');
 }
 
-watch(() => route.params.id, fetchData)
-onMounted(fetchData)
+watch(() => route.params.id, fetchData);
+onMounted(fetchData);
 </script>
 
 <style lang="scss" scoped>

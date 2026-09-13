@@ -24,8 +24,8 @@
       <template #default="{ items, loading }">
         <el-table
           ref="tableRef"
-          :data="items"
           v-loading="loading"
+          :data="items"
           row-key="id"
           :empty-text="emptyText"
           stripe
@@ -84,18 +84,15 @@
               <span class="header-cell">
                 <span>状态</span>
                 <el-popover
+                  v-model:visible="statusPopoverVisible"
                   :width="220"
                   placement="bottom-start"
                   trigger="click"
                   :show-arrow="false"
-                  v-model:visible="statusPopoverVisible"
                   @show="syncStatusDraft"
                 >
                   <template #reference>
-                    <el-icon
-                      class="filter-icon"
-                      :class="{ active: statusFilterActive }"
-                    >
+                    <el-icon class="filter-icon" :class="{ active: statusFilterActive }">
                       <Filter />
                     </el-icon>
                   </template>
@@ -112,18 +109,19 @@
                   </el-checkbox-group>
                   <div class="filter-actions">
                     <el-button size="small" link @click="resetStatusDraft">重置</el-button>
-                    <el-button
-                      size="small"
-                      type="primary"
-                      @click="confirmStatusFilter"
-                    >确定</el-button>
+                    <el-button size="small" type="primary" @click="confirmStatusFilter"
+                      >确定</el-button
+                    >
                   </div>
                 </el-popover>
               </span>
             </template>
             <template #default="{ row }">
               <el-tag
-                :type="(statusTagType((row as OutsourceQuote).status) || 'info') as 'info' | 'success' | 'warning' | 'danger'"
+                :type="
+                  (statusTagType((row as OutsourceQuote).status) || 'info') as
+                    'info' | 'success' | 'warning' | 'danger'
+                "
                 size="small"
                 effect="plain"
               >
@@ -145,18 +143,15 @@
               <span class="header-cell">
                 <span>客户</span>
                 <el-popover
+                  v-model:visible="customerPopoverVisible"
                   :width="280"
                   placement="bottom-start"
                   trigger="click"
                   :show-arrow="false"
-                  v-model:visible="customerPopoverVisible"
                   @show="syncCustomerDraft"
                 >
                   <template #reference>
-                    <el-icon
-                      class="filter-icon"
-                      :class="{ active: customerFilterActive }"
-                    >
+                    <el-icon class="filter-icon" :class="{ active: customerFilterActive }">
                       <Filter />
                     </el-icon>
                   </template>
@@ -178,17 +173,17 @@
                   />
                   <div class="filter-actions">
                     <el-button size="small" link @click="resetCustomerDraft">重置</el-button>
-                    <el-button
-                      size="small"
-                      type="primary"
-                      @click="confirmCustomerFilter"
-                    >确定</el-button>
+                    <el-button size="small" type="primary" @click="confirmCustomerFilter"
+                      >确定</el-button
+                    >
                   </div>
                 </el-popover>
               </span>
             </template>
             <template #default="{ row }">
-              <span v-if="(row as OutsourceQuote).customer_path">{{ (row as OutsourceQuote).customer_path }}</span>
+              <span v-if="(row as OutsourceQuote).customer_path">{{
+                (row as OutsourceQuote).customer_path
+              }}</span>
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
@@ -200,25 +195,29 @@
                 v-if="canEdit(row as OutsourceQuote, roleMap)"
                 size="small"
                 @click.stop="$emit('action', { type: 'submit', row: row as OutsourceQuote })"
-              >提交审核</el-button>
+                >提交审核</el-button
+              >
               <el-button
                 v-if="canApprove(row as OutsourceQuote, roleMap)"
                 size="small"
                 type="success"
                 @click.stop="$emit('action', { type: 'approve', row: row as OutsourceQuote })"
-              >通过</el-button>
+                >通过</el-button
+              >
               <el-button
                 v-if="canReject(row as OutsourceQuote, roleMap)"
                 size="small"
                 type="danger"
                 @click.stop="$emit('action', { type: 'reject', row: row as OutsourceQuote })"
-              >拒绝</el-button>
+                >拒绝</el-button
+              >
               <el-button
                 v-if="canSoftDelete(row as OutsourceQuote, roleMap)"
                 size="small"
                 type="danger"
                 @click.stop="$emit('action', { type: 'delete', row: row as OutsourceQuote })"
-              >删除</el-button>
+                >删除</el-button
+              >
             </template>
           </el-table-column>
         </el-table>
@@ -236,55 +235,49 @@
 // 的 submit / approve / reject / delete handler。
 // 行点击 → emit('row-click', row) 用于图纸预览；图号链接点击 → emit('preview-drawing', row)。
 
-import { h, ref } from 'vue'
-import { Filter } from '@element-plus/icons-vue'
-import { ElLink } from 'element-plus'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import PagedTable from '@/components/PagedTable.vue'
-import {
-  resolveDraggable,
-  type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
+import { h, ref } from 'vue';
+import { Filter } from '@element-plus/icons-vue';
+import { ElLink } from 'element-plus';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import PagedTable from '@/components/PagedTable.vue';
+import { resolveDraggable, type ColumnDef } from '@/composables/useColumnVisibility';
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import {
   OUTSOURCE_QUOTE_STATUS_LABEL,
   OUTSOURCE_QUOTE_STATUS_TAG,
   type OutsourceQuote,
   type OutsourceQuoteStatus,
-} from '@/types/outsource'
-import {
-  canApprove,
-  canEdit,
-  canReject,
-  canSoftDelete,
-  rolesArrayToMap,
-} from '@/utils/outsourceQuotePermissions'
-import {
-  STATUS_OPTIONS,
-  QUOTE_COLUMN_DEFS,
-} from '../composables/useOutsourceQuoteTable'
-import type { useCustomerTree } from '@/composables/useCustomerTree'
-import type { ComputedRef } from 'vue'
+} from '@/types/outsource';
+import type { rolesArrayToMap } from '@/utils/outsourceQuotePermissions';
+import { canApprove, canEdit, canReject, canSoftDelete } from '@/utils/outsourceQuotePermissions';
+import { STATUS_OPTIONS, QUOTE_COLUMN_DEFS } from '../composables/useOutsourceQuoteTable';
+import type { useCustomerTree } from '@/composables/useCustomerTree';
+import type { ComputedRef } from 'vue';
 
 /** 视图 ctx：caller 注入的 composable 集合 */
 export interface OutsourceQuoteTableCtx {
-  table: ReturnType<typeof import('../composables/useOutsourceQuoteTable').useOutsourceQuoteTable>
+  table: ReturnType<typeof import('../composables/useOutsourceQuoteTable').useOutsourceQuoteTable>;
   /** user.roles（用于 canEdit / canApprove / etc 权限判断） */
-  roleMap: ComputedRef<ReturnType<typeof rolesArrayToMap>> | ReturnType<typeof rolesArrayToMap>
+  roleMap: ComputedRef<ReturnType<typeof rolesArrayToMap>> | ReturnType<typeof rolesArrayToMap>;
   /** 客户级联树（列头客户 popover 用） */
-  customerTree: ReturnType<typeof useCustomerTree>['tree'] | ReturnType<typeof useCustomerTree>['tree']['value']
+  customerTree:
+    | ReturnType<typeof useCustomerTree>['tree']
+    | ReturnType<typeof useCustomerTree>['tree']['value'];
 }
 
 const props = defineProps<{
-  ctx: OutsourceQuoteTableCtx
-}>()
+  ctx: OutsourceQuoteTableCtx;
+}>();
 
 const emit = defineEmits<{
-  (e: 'row-click', row: OutsourceQuote): void
-  (e: 'preview-drawing', row: OutsourceQuote): void
-  (e: 'action', payload: { type: 'submit' | 'approve' | 'reject' | 'delete'; row: OutsourceQuote }): void
-}>()
+  (e: 'row-click', row: OutsourceQuote): void;
+  (e: 'preview-drawing', row: OutsourceQuote): void;
+  (
+    e: 'action',
+    payload: { type: 'submit' | 'approve' | 'reject' | 'delete'; row: OutsourceQuote },
+  ): void;
+}>();
 
 // ============ 解构 ctx 到顶层（模板自动解包）============
 const {
@@ -309,16 +302,16 @@ const {
   syncCustomerDraft,
   resetCustomerDraft,
   confirmCustomerFilter,
-} = props.ctx.table
+} = props.ctx.table;
 
-const { customerTree, roleMap } = props.ctx
+const { customerTree, roleMap } = props.ctx;
 
 // 列头 popover 的 status 选项
-const statusOptions = STATUS_OPTIONS
+const statusOptions = STATUS_OPTIONS;
 
 // quoteColumnDefs 给 ColumnVisibilityPopover 用（保持「操作列不进 defs」契约；
 // 「状态」/「客户」两列带列头 popover，也在此 defs 中以便开关显隐，但不走 v-for 拖动）。
-const quoteColumnDefs = QUOTE_COLUMN_DEFS
+const quoteColumnDefs = QUOTE_COLUMN_DEFS;
 
 // 2026-08-27 T16：列顺序拖动接入。
 // 「状态」/「客户」两列带列头 popover，不能套通用 drag-handle 模板 → 改 literal <el-table-column>。
@@ -327,61 +320,107 @@ const quoteColumnDefs = QUOTE_COLUMN_DEFS
 // drag listKey 用 `outsource_quote_table`（独立），与 composable 内的 visibility listKey `outsource_quote_list` 区分。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 function renderDrawingNoCell({ row }: { row: unknown }): ReturnType<typeof h> {
-  const r = row as OutsourceQuote
+  const r = row as OutsourceQuote;
   if (!r.part_drawing_no) {
-    return h('span', { class: 'muted' }, '—')
+    return h('span', { class: 'muted' }, '—');
   }
-  return h(ElLink,
+  return h(
+    ElLink,
     {
       type: 'primary',
       underline: false,
       onClick: (e: MouseEvent) => {
-        e.stopPropagation()
-        emit('preview-drawing', r)
+        e.stopPropagation();
+        emit('preview-drawing', r);
       },
     },
-    () => r.part_drawing_no)
+    () => r.part_drawing_no,
+  );
 }
 
 const draggableColumnDefs: ColumnDef[] = [
-  { key: 'part_serial_no', label: '序列号', prop: 'part_serial_no',
-    minWidth: 100, sortable: 'custom', showOverflowTooltip: true, align: 'center' },
-  { key: 'part_drawing_no', label: '图号', prop: 'part_drawing_no',
-    minWidth: 120, sortable: 'custom', showOverflowTooltip: true, align: 'center',
-    cellRender: renderDrawingNoCell },
-  { key: 'part_name', label: '名称', prop: 'part_name',
-    minWidth: 180, sortable: 'custom', showOverflowTooltip: true, align: 'center' },
-  { key: 'outsource_company_name', label: '外协公司', prop: 'outsource_company_name',
-    minWidth: 160, sortable: 'custom', showOverflowTooltip: true, align: 'center' },
-  { key: 'process_code', label: '工序', prop: 'process_code',
-    minWidth: 100, sortable: 'custom', align: 'center' },
-  { key: 'price', label: '外协报价(元)', prop: 'price',
-    minWidth: 110, align: 'right', sortable: 'custom' },
-  { key: 'part_unit_price', label: '订单单价(元)', prop: 'part_unit_price',
-    minWidth: 110, align: 'right', sortable: 'custom',
+  {
+    key: 'part_serial_no',
+    label: '序列号',
+    prop: 'part_serial_no',
+    minWidth: 100,
+    sortable: 'custom',
+    showOverflowTooltip: true,
+    align: 'center',
+  },
+  {
+    key: 'part_drawing_no',
+    label: '图号',
+    prop: 'part_drawing_no',
+    minWidth: 120,
+    sortable: 'custom',
+    showOverflowTooltip: true,
+    align: 'center',
+    cellRender: renderDrawingNoCell,
+  },
+  {
+    key: 'part_name',
+    label: '名称',
+    prop: 'part_name',
+    minWidth: 180,
+    sortable: 'custom',
+    showOverflowTooltip: true,
+    align: 'center',
+  },
+  {
+    key: 'outsource_company_name',
+    label: '外协公司',
+    prop: 'outsource_company_name',
+    minWidth: 160,
+    sortable: 'custom',
+    showOverflowTooltip: true,
+    align: 'center',
+  },
+  {
+    key: 'process_code',
+    label: '工序',
+    prop: 'process_code',
+    minWidth: 100,
+    sortable: 'custom',
+    align: 'center',
+  },
+  {
+    key: 'price',
+    label: '外协报价(元)',
+    prop: 'price',
+    minWidth: 110,
+    align: 'right',
+    sortable: 'custom',
+  },
+  {
+    key: 'part_unit_price',
+    label: '订单单价(元)',
+    prop: 'part_unit_price',
+    minWidth: 110,
+    align: 'right',
+    sortable: 'custom',
     cellRender: ({ row }) => {
-      const r = row as OutsourceQuote
-      return h('span', { class: { muted: !r.part_unit_price } }, r.part_unit_price ?? '—')
-    } },
-]
-const drag = useColumnDrag(draggableColumnDefs, { listKey: 'outsource_quote_table' })
+      const r = row as OutsourceQuote;
+      return h('span', { class: { muted: !r.part_unit_price } }, r.part_unit_price ?? '—');
+    },
+  },
+];
+const drag = useColumnDrag(draggableColumnDefs, { listKey: 'outsource_quote_table' });
 
 function statusLabel(s: OutsourceQuoteStatus): string {
-  return OUTSOURCE_QUOTE_STATUS_LABEL[s] ?? s
+  return OUTSOURCE_QUOTE_STATUS_LABEL[s] ?? s;
 }
-function statusTagType(
-  s: OutsourceQuoteStatus,
-): 'info' | 'success' | 'warning' | 'danger' | '' {
-  return OUTSOURCE_QUOTE_STATUS_TAG[s] ?? 'info'
+function statusTagType(s: OutsourceQuoteStatus): 'info' | 'success' | 'warning' | 'danger' | '' {
+  return OUTSOURCE_QUOTE_STATUS_TAG[s] ?? 'info';
 }
 
 function onRowClick(row: unknown): void {
-  emit('row-click', row as OutsourceQuote)
+  emit('row-click', row as OutsourceQuote);
 }
 
-const tableRef = ref()
+const tableRef = ref();
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
-drag.applyDrag(tableRef)
+drag.applyDrag(tableRef);
 </script>
 
 <style lang="scss" scoped>

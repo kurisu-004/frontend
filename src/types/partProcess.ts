@@ -6,45 +6,45 @@
 // 每个 Part 维护一个有序工序列表（粗加工 → 精加工 → 品检 → 外协热处理…），
 // 每道工序带预计耗时与备注；后续工人扫码后即可按流程卡点推进。
 
-import type { ProcessCategory } from './process'
+import type { ProcessCategory } from './process';
 
 /** UI 单卡工序行。`uid` 仅用作 sortable.js / Vue v-for 的本地 key，不参与后端。 */
 export interface ProcessStep {
   /** 本地 UI key（不参与后端，crypto.randomUUID 生成） */
-  uid: string
+  uid: string;
   /** FK → Process.id（雪花 ID 字符串，禁止 Number() 转换） */
-  process_id: string
+  process_id: string;
   /** 冗余：便于 UI 直显，不依赖联表 */
-  process_code: string
+  process_code: string;
   /** 冗余 */
-  process_name: string
+  process_name: string;
   /** 冗余 */
-  category: ProcessCategory
+  category: ProcessCategory;
   /** 整数预计耗时（分钟，el-input-number :precision=0） */
-  estimated_minutes: number
+  estimated_minutes: number;
   /** 备注；空串/null 在持久化时归一化为 null */
-  note: string | null
+  note: string | null;
   /** 0-based 排序，与 array.index 同步；写入时由 reorderSteps 重写 */
-  sort_order: number
+  sort_order: number;
   /** 2026-09-12 新增：从 process.color 透传（卡片左侧 4px 竖条），null 时回退到 category 默认色 */
-  color?: string | null
+  color?: string | null;
 }
 
 /** 零件 → 工序流程表（mock 阶段 version 始终 0；阶段二对齐后端 schema）。 */
 export interface PartProcessFlow {
   /** FK → Part.id（雪花 ID 字符串） */
-  part_id: string
+  part_id: string;
   /** 乐观锁版本号；mock 阶段始终 0；阶段二与后端 OCC 对齐 */
-  version: number
-  steps: ProcessStep[]
+  version: number;
+  steps: ProcessStep[];
   /** ISO 字符串；每次 upsert/reorder/delete 时刷新 */
-  updated_at: string
+  updated_at: string;
 }
 
 /** 摘要：用于右栏 toolbar 展示总耗时 / 含外协提示。 */
 export interface PartProcessSummary {
-  step_count: number
-  total_minutes: number
+  step_count: number;
+  total_minutes: number;
   /** 流程中任一工序 category === 'OUTSOURCE' 且 requires_approval=true 时为 true */
-  has_outsource_approval: boolean
+  has_outsource_approval: boolean;
 }

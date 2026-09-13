@@ -20,11 +20,11 @@
 ```ts
 // 反例：注释复述代码
 // 设置 count 为 0
-count.value = 0
+count.value = 0;
 
 // 正例：注释解释为什么
 // 2026-08-22 新增：v1 session 无 Redis，重置避免 40102 死循环
-count.value = 0
+count.value = 0;
 ```
 
 ### 日期戳约定
@@ -43,15 +43,15 @@ count.value = 0
 
 格式：`<前缀>(<scope>): <中文一句话>`
 
-| 前缀 | 用途 |
-|---|---|
-| `feat` | 新功能 |
-| `fix` | 修 bug |
-| `refactor` | 重构（不改行为） |
-| `docs` | 文档 |
-| `test` | 测试 |
-| `chore` | 构建 / 依赖 / 杂项 |
-| `perf` | 性能优化 |
+| 前缀       | 用途               |
+| ---------- | ------------------ |
+| `feat`     | 新功能             |
+| `fix`      | 修 bug             |
+| `refactor` | 重构（不改行为）   |
+| `docs`     | 文档               |
+| `test`     | 测试               |
+| `chore`    | 构建 / 依赖 / 杂项 |
+| `perf`     | 性能优化           |
 
 示例：
 
@@ -72,14 +72,14 @@ commit body 可选；多人协作的 PR 推荐写清楚"为什么"和"取舍"。
 
 ## 文件命名
 
-| 类型 | 命名 | 示例 |
-|---|---|---|
-| Vue 组件 | PascalCase | `PartsList.vue`、`PartDetail.vue` |
-| composable | camelCase + `use` 前缀 | `useAuthSession.ts`、`useBarcodeScanner.ts` |
-| API 模块 | camelCase + `.ts` | `auth.ts`、`parts.ts`、`deliveryNote.ts` |
-| 业务类型 | camelCase + `.ts` | `parts.ts`、`deliveryNote.ts` |
-| 工具函数 | camelCase + `.ts` | `pdfjs.ts`、`mergePdfs.ts` |
-| 单测 | 与源文件同名 + `.spec.ts` | `useBulkPassInspection.spec.ts` |
+| 类型       | 命名                      | 示例                                        |
+| ---------- | ------------------------- | ------------------------------------------- |
+| Vue 组件   | PascalCase                | `PartsList.vue`、`PartDetail.vue`           |
+| composable | camelCase + `use` 前缀    | `useAuthSession.ts`、`useBarcodeScanner.ts` |
+| API 模块   | camelCase + `.ts`         | `auth.ts`、`parts.ts`、`deliveryNote.ts`    |
+| 业务类型   | camelCase + `.ts`         | `parts.ts`、`deliveryNote.ts`               |
+| 工具函数   | camelCase + `.ts`         | `pdfjs.ts`、`mergePdfs.ts`                  |
+| 单测       | 与源文件同名 + `.spec.ts` | `useBulkPassInspection.spec.ts`             |
 
 > 一个例外：`src/api/parts.ts` 是历史兼容 shim，re-export 自 `./parts/index.ts`。**新增域不要再造这种 shim**，直接在 `src/api/<domain>.ts` 写代码。
 
@@ -93,22 +93,22 @@ commit body 可选；多人协作的 PR 推荐写清楚"为什么"和"取舍"。
 引用方式：
 
 ```ts
-import { useAuthSession } from '@/composables/useAuthSession'
-import PartInfoCard from '@/views/parts/components/PartInfoCard.vue'
-import type { Part } from '@/types/parts'
+import { useAuthSession } from '@/composables/useAuthSession';
+import PartInfoCard from '@/views/parts/components/PartInfoCard.vue';
+import type { Part } from '@/types/parts';
 ```
 
 **不要**用相对路径 `../../../composables/useAuthSession` 跨目录引用，可读性差且重构时易碎。
 
 ## 主题色
 
-| 色名 | 十六进制 | 用途 |
-|---|---|---|
+| 色名         | 十六进制  | 用途                                                        |
+| ------------ | --------- | ----------------------------------------------------------- |
 | 藏青（主色） | `#1e4d8b` | EP `--el-color-primary` 覆盖（`src/styles/variables.scss`） |
-| 蓝 | `#2c6cb8` | 次主色 |
-| 浅蓝 | `#4a8fd6` | 高亮 / hover |
-| 灰 | `#f5f7fa` | 背景 |
-| 白 | `#ffffff` | 卡片底色 |
+| 蓝           | `#2c6cb8` | 次主色                                                      |
+| 浅蓝         | `#4a8fd6` | 高亮 / hover                                                |
+| 灰           | `#f5f7fa` | 背景                                                        |
+| 白           | `#ffffff` | 卡片底色                                                    |
 
 主题色通过 CSS 变量覆盖（不走 EP 2.14.x 尚未支持的 `theme` prop），详见 [02-architecture/build-and-tooling.md](../02-architecture/build-and-tooling.md)。
 

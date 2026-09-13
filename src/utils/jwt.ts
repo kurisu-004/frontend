@@ -8,36 +8,36 @@
 // 不引入 jwt-decode 等第三方依赖，10 行代码搞定。
 
 export interface JwtClaims {
-  sub: string
-  exp: number // epoch seconds
-  iat: number
-  username?: string
-  roles?: string[]
-  shelf_ids?: string[]
-  type?: 'access' | 'refresh'
-  ver?: number // refresh token 携带的轮转版本号
-  [k: string]: unknown
+  sub: string;
+  exp: number; // epoch seconds
+  iat: number;
+  username?: string;
+  roles?: string[];
+  shelf_ids?: string[];
+  type?: 'access' | 'refresh';
+  ver?: number; // refresh token 携带的轮转版本号
+  [k: string]: unknown;
 }
 
 /** 解 JWT payload；任何解析失败返回 null（不抛错，避免破坏拦截器主流程）。 */
 export function decodeJwt(token: string): JwtClaims | null {
-  if (!token) return null
-  const parts = token.split('.')
-  if (parts.length !== 3) return null
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
   try {
     // base64url → base64
-    const padded = parts[1].replace(/-/g, '+').replace(/_/g, '/')
-    const padLen = (4 - (padded.length % 4)) % 4
-    const decoded = atob(padded + '='.repeat(padLen))
-    return JSON.parse(decoded) as JwtClaims
+    const padded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padLen = (4 - (padded.length % 4)) % 4;
+    const decoded = atob(padded + '='.repeat(padLen));
+    return JSON.parse(decoded) as JwtClaims;
   } catch {
-    return null
+    return null;
   }
 }
 
 /** 距过期秒数（正数 = 还剩多久过期）；解析失败返回 null。 */
 export function tokenExpiresIn(token: string): number | null {
-  const claims = decodeJwt(token)
-  if (!claims) return null
-  return Math.floor(claims.exp - Date.now() / 1000)
+  const claims = decodeJwt(token);
+  if (!claims) return null;
+  return Math.floor(claims.exp - Date.now() / 1000);
 }

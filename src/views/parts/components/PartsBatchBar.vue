@@ -17,9 +17,7 @@
       <span v-if="batchSelectedAssemblyCount > 0" class="bar-info__assembly">
         装配件 <strong>{{ batchSelectedAssemblyCount }}</strong> 件
         <el-tooltip placement="top" :show-after="0">
-          <template #content>
-            勾选装配件行将打印该装配件的<b>全部子件</b>图纸
-          </template>
+          <template #content> 勾选装配件行将打印该装配件的<b>全部子件</b>图纸 </template>
           <el-icon class="batch-hint"><WarningFilled /></el-icon>
         </el-tooltip>
       </span>
@@ -50,12 +48,7 @@
       <el-icon><Printer /></el-icon>
       <span>打印预览（{{ selectedIdsSize }} 件）</span>
     </el-button>
-    <el-button
-      v-else
-      type="primary"
-      :disabled="selectedIdsSize === 0"
-      @click="onOpenBatchDispatch"
-    >
+    <el-button v-else type="primary" :disabled="selectedIdsSize === 0" @click="onOpenBatchDispatch">
       <el-icon><Promotion /></el-icon>
       <span>批量下发（{{ selectedIdsSize }} 件）</span>
     </el-button>
@@ -69,14 +62,14 @@
 // 计数 / 进度 / 操作按钮全部来自 ctx.batch.* / ctx.print.* / ctx.dispatch.*。
 // 模板只对顶层 ref 自动解包 —— 从 props.ctx.* 取的嵌套 ref 必须先解构到 script 顶层。
 
-import { computed } from 'vue'
-import { Printer, Promotion, WarningFilled } from '@element-plus/icons-vue'
-import type { PartsListCtx } from '../composables/partsListCtx'
+import { computed } from 'vue';
+import { Printer, Promotion, WarningFilled } from '@element-plus/icons-vue';
+import type { PartsListCtx } from '../composables/partsListCtx';
 
-const props = defineProps<{ ctx: PartsListCtx }>()
+const props = defineProps<{ ctx: PartsListCtx }>();
 
 // 解构 ctx → 顶层局部变量（模板自动解包）
-const { batch, print, dispatch, canEdit } = props.ctx
+const { batch, print, dispatch, canEdit } = props.ctx;
 
 const {
   batchMode,
@@ -86,21 +79,16 @@ const {
   batchSelectedAssemblyCount,
   onSelectAllPage,
   onClearSelection,
-} = batch
+} = batch;
 
-const {
-  batchPrinting,
-  batchPrintProgress,
-  batchPrintCurrent,
-  batchPrintTotal,
-  onBatchPrint,
-} = print
+const { batchPrinting, batchPrintProgress, batchPrintCurrent, batchPrintTotal, onBatchPrint } =
+  print;
 
-const { onOpenBatchDispatch } = dispatch
+const { onOpenBatchDispatch } = dispatch;
 
 // selectedIds 是 reactive Set，模板里 .size 不会自动响应；用 computed 包一层
 // 确保 selectedIds.size 变化时模板重新渲染。
-const selectedIdsSize = computed(() => selectedIds.size)
+const selectedIdsSize = computed(() => selectedIds.size);
 </script>
 
 <style lang="scss" scoped>

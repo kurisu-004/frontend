@@ -1,9 +1,9 @@
-import 'vue-router'
+import 'vue-router';
 
 declare module 'vue-router' {
   interface RouteMeta {
-    title?: string
-    icon?: string
-    breadcrumb?: string[]
+    title?: string;
+    icon?: string;
+    breadcrumb?: string[];
   }
 }

@@ -86,16 +86,12 @@
       关键修复：ref="pagedTableRef" 让 PartListShell 拿到 PagedTable 实例；
       其 defineExpose 的 items / loading / fetch / reset 是 el-table 真正绑定的数据源。
     -->
-    <PagedTable
-      ref="pagedTableRef"
-      :fetcher="safeFetcher"
-      :default-page-size="defaultPageSize"
-    >
+    <PagedTable ref="pagedTableRef" :fetcher="safeFetcher" :default-page-size="defaultPageSize">
       <template #default="{ items, loading }">
         <el-table
           ref="tableRef"
-          :data="items"
           v-loading="loading"
+          :data="items"
           row-key="id"
           :empty-text="emptyText"
           stripe
@@ -172,52 +168,52 @@
 </template>
 
 <script setup lang="ts" generic="T extends { id: string | number }">
-import { computed, onMounted, ref, shallowRef, type Ref } from 'vue'
-import { RefreshLeft } from '@element-plus/icons-vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import PagedTable from '@/components/PagedTable.vue'
+import { computed, onMounted, ref, shallowRef, type Ref } from 'vue';
+import { RefreshLeft } from '@element-plus/icons-vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import PagedTable from '@/components/PagedTable.vue';
 import {
   useColumnVisibility,
   resolveDraggable,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import {
-  useColumnDrag,
-  columnIdentifier,
-} from '@/composables/useColumnDrag'
+} from '@/composables/useColumnVisibility';
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import {
   // 2026-08-31：usePagedListQuery 不再由 PartListShell 直接持有（避免双实例撕裂），
   // 但 PageQueryParams / PageResult 仍用作 fetcher 签名类型。
   usePagedListQuery,
   type PageQueryParams,
   type PageResult,
-} from '@/composables/usePagedListQuery'
+} from '@/composables/usePagedListQuery';
 
 // 2026-08-31：PagedTable.vue 的 defineExpose({ items, loading, page, pageSize, fetch, reset })
 // 不会被 Vue 的 InstanceType<typeof PagedTable> 透传到 CreateComponentPublicInstance 上，
 // 手动定义一份暴露类型让 PartListShell 透传时类型正确（与 PagedTable 保持同步）。
 interface PagedTableExposed<T> {
-  items: Ref<T[]>
-  loading: Ref<boolean>
-  page: Ref<number>
-  pageSize: Ref<number>
-  fetch: () => Promise<void>
-  reset: () => Promise<void>
+  items: Ref<T[]>;
+  loading: Ref<boolean>;
+  page: Ref<number>;
+  pageSize: Ref<number>;
+  fetch: () => Promise<void>;
+  reset: () => Promise<void>;
 }
 
-const props = withDefaults(defineProps<{
-  columnDefs: readonly ColumnDef[]
-  fetcher: (params: PageQueryParams) => Promise<PageResult<T>>
-  listKey: string
-  defaultPageSize?: number
-  emptyText?: string
-  rowClassName?: (ctx: { row: T; rowIndex: number }) => string
-}>(), {
-  defaultPageSize: 20,
-  emptyText: '暂无数据',
-  rowClassName: () => '',
-})
+const props = withDefaults(
+  defineProps<{
+    columnDefs: readonly ColumnDef[];
+    fetcher: (params: PageQueryParams) => Promise<PageResult<T>>;
+    listKey: string;
+    defaultPageSize?: number;
+    emptyText?: string;
+    rowClassName?: (ctx: { row: T; rowIndex: number }) => string;
+  }>(),
+  {
+    defaultPageSize: 20,
+    emptyText: '暂无数据',
+    rowClassName: () => '',
+  },
+);
 
 // 2026-08-25 T14p5：fetch 错误回传
 // 旧 monolith 视图在 computed emptyText 里渲染 fetch 错误，方便用户区分
@@ -229,39 +225,37 @@ const props = withDefaults(defineProps<{
 // 原因：PagedTable 不暴露 total（按本任务约束不修改 PagedTable.vue），
 // 但 template 的「共 N 条」需要展示真实 total；safeFetcher 是唯一被 PagedTable
 // 真正调用的 fetcher 包装点，在此处截留 total 是最小侵入的做法。
-const errorMsg = ref<string | null>(null)
+const errorMsg = ref<string | null>(null);
 // template 里 `v-if="total > 0"` / `共 {{ total }} 条` 直接读 total，所以 total
 // 必须是同 setup 作用域的顶层 ref（不能只藏在 defineExpose 的 getter 里）。
-const total = ref(0)
-const emptyText = computed(() => errorMsg.value ?? props.emptyText)
+const total = ref(0);
+const emptyText = computed(() => errorMsg.value ?? props.emptyText);
 
 // template 的 `!loading` 也要在 setup 作用域内；PagedTable 暴露的 loading
 // 是 instance B 的真值（el-table v-loading 也用这个）。computed 透传，
 // mount 前 pagedTableRef 为 null → fallback false（与原代码默认一致）。
-const loading = computed<boolean>(
-  () => pagedTableRef.value?.loading?.value ?? false,
-)
+const loading = computed<boolean>(() => pagedTableRef.value?.loading?.value ?? false);
 
 async function safeFetcher(params: PageQueryParams): Promise<PageResult<T>> {
-  errorMsg.value = null
+  errorMsg.value = null;
   try {
-    const result = await props.fetcher(params)
-    total.value = result.total
-    return result
+    const result = await props.fetcher(params);
+    total.value = result.total;
+    return result;
   } catch (e) {
-    errorMsg.value = (e as Error).message ?? '查询失败'
-    total.value = 0
-    return { items: [], total: 0 }
+    errorMsg.value = (e as Error).message ?? '查询失败';
+    total.value = 0;
+    return { items: [], total: 0 };
   }
 }
 
 // 列可见性（视图在 default slot 内通过 isVisible(key) 决定每列是否渲染）
-const columnVisibility = useColumnVisibility(props.columnDefs, { listKey: props.listKey })
+const columnVisibility = useColumnVisibility(props.columnDefs, { listKey: props.listKey });
 
 // 2026-08-27 T15：列顺序拖动（与 visibility 平行，共享 columnDefs）。
 // orderedDefs 提供持久化的当前顺序，applyDrag 在 onMounted 挂到表头 <tr>（列换序；
 // 绑 thead 会变成拖整行，2026-08-27 修正）。
-const drag = useColumnDrag(props.columnDefs, { listKey: props.listKey })
+const drag = useColumnDrag(props.columnDefs, { listKey: props.listKey });
 
 // ============ 2026-08-31 双实例修复：让 PagedTable 成为状态唯一来源 ============
 //
@@ -278,11 +272,11 @@ const drag = useColumnDrag(props.columnDefs, { listKey: props.listKey })
 // Ref<...> 嵌套全部解包成裸值（ref<T> 会让类型层面展开 .value，与运行时
 // reactive 包裹 + 自动解包表现一致）。shallowRef 不做深度响应化，保留
 // Ref 包装的类型形态，让 getter / computed 能拿到 .value 访问权。
-const pagedTableRef = shallowRef<PagedTableExposed<T> | null>(null)
+const pagedTableRef = shallowRef<PagedTableExposed<T> | null>(null);
 
 async function onRefresh(): Promise<void> {
   // 刷新按钮 = 「重置到第 1 页 + 重新拉取」，与 T7 之前 InspectionPending 的 onSearch 语义一致
-  await pagedTableRef.value?.reset()
+  await pagedTableRef.value?.reset();
 }
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
@@ -299,22 +293,22 @@ async function onRefresh(): Promise<void> {
 // 形式不靠谱：Vue 3.5 的 component proxy setter 在 ref 类型暴露时**不能保证**写回
 // 暴露的 ref；直接修改 PagedTable.vue 暴露 setPageSize 又被约束禁止。
 // 最终选择：彻底放弃 pageSize 持久化，避免跨组件 ref 写权博弈。
-const tableRef = ref()
+const tableRef = ref();
 onMounted(() => {
-  drag.applyDrag(tableRef)
-})
+  drag.applyDrag(tableRef);
+});
 
 // 类型化 slot prop，便于 IDE 在视图侧取 scope 字段时能拿到推断
 defineSlots<{
-  filter(): unknown
-  default(props: {
-    items: T[]
-    loading: boolean
-    isVisible: (key: string) => boolean
-    isDraggable: (def: ColumnDef) => boolean
-    orderedDefs: ColumnDef[]
-  }): unknown
-}>()
+  filter: () => unknown;
+  default: (props: {
+    items: T[];
+    loading: boolean;
+    isVisible: (key: string) => boolean;
+    isDraggable: (def: ColumnDef) => boolean;
+    orderedDefs: ColumnDef[];
+  }) => unknown;
+}>();
 
 // ============ 转发 PagedTable 的 refs（el-table 真正绑定的数据源）============
 //
@@ -324,17 +318,17 @@ defineSlots<{
 // fetch / reset / onRefresh 是函数，直接透传。
 defineExpose({
   get items() {
-    return pagedTableRef.value?.items ?? computed(() => [] as T[])
+    return pagedTableRef.value?.items ?? computed(() => [] as T[]);
   },
   total,
   loading,
   get pageSize() {
-    return pagedTableRef.value?.pageSize ?? computed(() => props.defaultPageSize)
+    return pagedTableRef.value?.pageSize ?? computed(() => props.defaultPageSize);
   },
   fetch: () => pagedTableRef.value?.fetch(),
   reset: () => pagedTableRef.value?.reset(),
   onRefresh,
-})
+});
 </script>
 
 <style lang="scss" scoped>
@@ -369,9 +363,18 @@ defineExpose({
 }
 // 2026-08-27 T15：EP thead th 上的 col-no-drag 类让 sortablejs filter 跳过；
 // 同时禁用默认 cursor（不可拖列不放 handle，应显示普通箭头）
-:deep(.col-no-drag) { cursor: default !important; }
+:deep(.col-no-drag) {
+  cursor: default !important;
+}
 // sortablejs 拖动时的视觉反馈（与 EP 主题色协调，藏青/蓝/浅蓝系）
-:deep(.sortable-ghost) { opacity: 0.5; background: #eaf2fb !important; }
-:deep(.sortable-chosen) { background: #cce0f4 !important; }
-:deep(.sortable-drag) { background: #fff !important; }
+:deep(.sortable-ghost) {
+  opacity: 0.5;
+  background: #eaf2fb !important;
+}
+:deep(.sortable-chosen) {
+  background: #cce0f4 !important;
+}
+:deep(.sortable-drag) {
+  background: #fff !important;
+}
 </style>

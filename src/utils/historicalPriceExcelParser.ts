@@ -21,20 +21,11 @@
 // - 有「税率」列（13% 之类的百分比），但 BidRow / Part / remarkText 都没有
 //   税率字段，故解析时**直接丢弃**（不进 REQUIRED_HEADERS，不进 BidRow）。
 
-import * as XLSX from 'xlsx'
-import {
-  addDays,
-  cleanText,
-  parseDecimalOrNull,
-  parseIntSafe,
-} from './xlsxParseUtils'
-import type {
-  BidRow,
-  ParseError,
-  ParseResult,
-} from './bidExcelParser'
+import * as XLSX from 'xlsx';
+import { addDays, cleanText, parseDecimalOrNull, parseIntSafe } from './xlsxParseUtils';
+import type { BidRow, ParseError, ParseResult } from './bidExcelParser';
 
-const SHEET_NAME = '历史价确认单明细'
+const SHEET_NAME = '历史价确认单明细';
 
 const REQUIRED_HEADERS = [
   '申请部门',
@@ -45,7 +36,7 @@ const REQUIRED_HEADERS = [
   '采购数量',
   '含税单价',
   '含税价格',
-]
+];
 
 /**
  * 解析历史价确认单 workbook 为 BidRow[]。
@@ -64,16 +55,13 @@ const REQUIRED_HEADERS = [
  * - 物料编号重复 → rowWarnings 推入
  * - 整行空 → 静默跳过
  */
-export function parseHistoricalPriceExcel(
-  workbook: XLSX.WorkBook,
-  today: string,
-): ParseResult {
-  const sheet = workbook.Sheets[SHEET_NAME]
+export function parseHistoricalPriceExcel(workbook: XLSX.WorkBook, today: string): ParseResult {
+  const sheet = workbook.Sheets[SHEET_NAME];
   if (!sheet) {
-    const available = workbook.SheetNames.join(', ')
+    const available = workbook.SheetNames.join(', ');
     throw new Error(
       `请上传正确的历史价确认单 Excel（应包含 "${SHEET_NAME}" sheet），当前文件 sheet: ${available}`,
-    )
+    );
   }
 
   // 用 header:1 模式读第一行做列名校验；缺整列才能识别。
@@ -81,99 +69,97 @@ export function parseHistoricalPriceExcel(
     header: 1,
     raw: false,
     blankrows: false,
-  })
-  const headerRow: unknown[] = (rawHeader[0] ?? []) as unknown[]
+  });
+  const headerRow: unknown[] = (rawHeader[0] ?? []) as unknown[];
   if (headerRow.length === 0) {
-    return { rows: [], errors: [], warnings: ['Excel 没有数据行'] }
+    return { rows: [], errors: [], warnings: ['Excel 没有数据行'] };
   }
-  const headers = headerRow.map((h) => cleanText(h))
-  const missing = REQUIRED_HEADERS.filter((h) => !headers.includes(h))
+  const headers = headerRow.map((h) => cleanText(h));
+  const missing = REQUIRED_HEADERS.filter((h) => !headers.includes(h));
   if (missing.length > 0) {
-    throw new Error(`Excel 缺少必需列：${missing.join('、')}`)
+    throw new Error(`Excel 缺少必需列：${missing.join('、')}`);
   }
 
   const rawRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(sheet, {
     defval: null,
     raw: false,
     blankrows: false,
-  })
+  });
 
   if (rawRows.length === 0) {
-    return { rows: [], errors: [], warnings: ['Excel 没有数据行'] }
+    return { rows: [], errors: [], warnings: ['Excel 没有数据行'] };
   }
 
-  const rows: BidRow[] = []
-  const errors: ParseError[] = []
-  const seenDrawingNo = new Set<string>()
+  const rows: BidRow[] = [];
+  const errors: ParseError[] = [];
+  const seenDrawingNo = new Set<string>();
 
   for (let i = 0; i < rawRows.length; i++) {
-    const raw = rawRows[i]
-    const rowNumber = i + 2 // 0-index + 跳过表头
+    const raw = rawRows[i];
+    const rowNumber = i + 2; // 0-index + 跳过表头
 
-    const deptName = cleanText(raw['申请部门'])
-    const applicantName = cleanText(raw['申请人'])
-    const drawingNo = cleanText(raw['物料编号'])
-    const partName = cleanText(raw['物料名称'])
-    const quantityRaw = raw['采购数量']
-    const unitPriceRaw = parseDecimalOrNull(raw['含税单价'])
-    const unitPrice = unitPriceRaw == null || unitPriceRaw < 0 ? 0 : unitPriceRaw
-    const deliveryDaysRaw = raw['交期(天)']
-    const totalPriceRaw = parseDecimalOrNull(raw['含税价格'])
+    const deptName = cleanText(raw['申请部门']);
+    const applicantName = cleanText(raw['申请人']);
+    const drawingNo = cleanText(raw['物料编号']);
+    const partName = cleanText(raw['物料名称']);
+    const quantityRaw = raw['采购数量'];
+    const unitPriceRaw = parseDecimalOrNull(raw['含税单价']);
+    const unitPrice = unitPriceRaw == null || unitPriceRaw < 0 ? 0 : unitPriceRaw;
+    const deliveryDaysRaw = raw['交期(天)'];
+    const totalPriceRaw = parseDecimalOrNull(raw['含税价格']);
 
     // 整行空：静默跳过（防止末尾回车产生的空行污染）
-    const allEmpty = [deptName, applicantName, drawingNo, partName].every(
-      (s) => !s,
-    )
-    if (allEmpty) continue
+    const allEmpty = [deptName, applicantName, drawingNo, partName].every((s) => !s);
+    if (allEmpty) continue;
 
-    const rowWarnings: string[] = []
-    const rowErrors: string[] = []
+    const rowWarnings: string[] = [];
+    const rowErrors: string[] = [];
 
-    if (!applicantName) rowErrors.push('申请人不能为空')
-    if (!drawingNo) rowErrors.push('物料编号不能为空')
-    if (!partName) rowErrors.push('物料名称不能为空')
+    if (!applicantName) rowErrors.push('申请人不能为空');
+    if (!drawingNo) rowErrors.push('物料编号不能为空');
+    if (!partName) rowErrors.push('物料名称不能为空');
 
-    let quantity = 0
+    let quantity = 0;
     if (quantityRaw == null || quantityRaw === '') {
-      rowErrors.push('采购数量不能为空')
+      rowErrors.push('采购数量不能为空');
     } else {
       // Excel 单元格常带千分位逗号（如 "1,500"），先剥离再 parseIntSafe 走相同路径
-      const n = parseIntSafe(quantityRaw, null)
+      const n = parseIntSafe(quantityRaw, null);
       if (n == null || n <= 0) {
-        rowErrors.push(`采购数量必须为正整数（当前：${quantityRaw}）`)
+        rowErrors.push(`采购数量必须为正整数（当前：${quantityRaw}）`);
       } else {
-        quantity = n
+        quantity = n;
       }
     }
 
-    let deliveryDays = 0
-    const ddParsed = parseIntSafe(deliveryDaysRaw)
+    let deliveryDays = 0;
+    const ddParsed = parseIntSafe(deliveryDaysRaw);
     if (ddParsed == null || ddParsed <= 0) {
-      rowErrors.push(`交期(天)必须为正整数（当前：${deliveryDaysRaw}）`)
+      rowErrors.push(`交期(天)必须为正整数（当前：${deliveryDaysRaw}）`);
     } else {
-      deliveryDays = ddParsed
+      deliveryDays = ddParsed;
     }
 
     if (unitPriceRaw != null && unitPriceRaw < 0) {
-      rowWarnings.push('含税单价为负数，已按 0 处理')
+      rowWarnings.push('含税单价为负数，已按 0 处理');
     }
 
     if (drawingNo && seenDrawingNo.has(drawingNo)) {
-      rowWarnings.push('本批次有重复图号')
+      rowWarnings.push('本批次有重复图号');
     } else if (drawingNo) {
-      seenDrawingNo.add(drawingNo)
+      seenDrawingNo.add(drawingNo);
     }
 
     // 历史价确认单自带「含税价格」列，优先用；缺 / 非法 → 用 unitPrice * quantity 兜底
-    let totalPrice = unitPrice * quantity
+    let totalPrice = unitPrice * quantity;
     if (totalPriceRaw != null && totalPriceRaw >= 0) {
-      totalPrice = totalPriceRaw
+      totalPrice = totalPriceRaw;
     }
 
-    const plannedDeliveryDate = deliveryDays > 0 ? addDays(today, deliveryDays) : ''
+    const plannedDeliveryDate = deliveryDays > 0 ? addDays(today, deliveryDays) : '';
 
     if (rowErrors.length > 0) {
-      errors.push({ rowNumber, message: rowErrors.join('；') })
+      errors.push({ rowNumber, message: rowErrors.join('；') });
     }
 
     rows.push({
@@ -193,8 +179,8 @@ export function parseHistoricalPriceExcel(
       processTypeLabel: null,
       remarkText: null,
       warnings: rowWarnings,
-    })
+    });
   }
 
-  return { rows, errors, warnings: [] }
+  return { rows, errors, warnings: [] };
 }

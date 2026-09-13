@@ -12,72 +12,73 @@
 // sizes 是各 panel 的像素宽度（不是百分比），所以持久化前要把 px 转 percent，
 // 恢复时再从 percent 转回 px 字符串传给 :size。
 
-import { ref, type Ref } from 'vue'
+import { ref, type Ref } from 'vue';
 
-export interface PaneSize { left: number; center: number; right: number }
-
-export interface UseResizablePaneReturn {
-  leftSize: Ref<string>
-  centerSize: Ref<string>
-  rightSize: Ref<string>
-  /** 绑定到 <el-splitter @resize-end="onResizeEnd">。
-   *  接受 EP 的 (index, sizes: number[]) 签名；sizes 是 px。 */
-  onResizeEnd: (index: number, sizes: number[]) => void
+export interface PaneSize {
+  left: number;
+  center: number;
+  right: number;
 }
 
-export function useResizablePane(
-  storageKey: string,
-  defaults: PaneSize,
-): UseResizablePaneReturn {
-  const stored = readStored(storageKey)
-  const initial = stored ?? defaults
+export interface UseResizablePaneReturn {
+  leftSize: Ref<string>;
+  centerSize: Ref<string>;
+  rightSize: Ref<string>;
+  /** 绑定到 <el-splitter @resize-end="onResizeEnd">。
+   *  接受 EP 的 (index, sizes: number[]) 签名；sizes 是 px。 */
+  onResizeEnd: (index: number, sizes: number[]) => void;
+}
 
-  const leftSize = ref<string>(`${initial.left}%`)
-  const centerSize = ref<string>(`${initial.center}%`)
-  const rightSize = ref<string>(`${initial.right}%`)
+export function useResizablePane(storageKey: string, defaults: PaneSize): UseResizablePaneReturn {
+  const stored = readStored(storageKey);
+  const initial = stored ?? defaults;
+
+  const leftSize = ref<string>(`${initial.left}%`);
+  const centerSize = ref<string>(`${initial.center}%`);
+  const rightSize = ref<string>(`${initial.right}%`);
 
   function onResizeEnd(_index: number, sizes: number[]): void {
-    if (!Array.isArray(sizes) || sizes.length !== 3) return
-    const total = sizes[0] + sizes[1] + sizes[2]
-    if (total <= 0) return
+    if (!Array.isArray(sizes) || sizes.length !== 3) return;
+    const total = sizes[0] + sizes[1] + sizes[2];
+    if (total <= 0) return;
     const next: PaneSize = {
       left: Math.round((sizes[0] / total) * 1000) / 10,
       center: Math.round((sizes[1] / total) * 1000) / 10,
       right: Math.round((sizes[2] / total) * 1000) / 10,
-    }
-    writeStored(storageKey, next)
+    };
+    writeStored(storageKey, next);
     // 同步本地 ref：刷新页面 / 切路由后 useResizablePane 会再读 localStorage，
     // 但在内存里也更新一下，避免 splitter 内部 px 与 prop :size 短期不一致。
-    leftSize.value = `${next.left}%`
-    centerSize.value = `${next.center}%`
-    rightSize.value = `${next.right}%`
+    leftSize.value = `${next.left}%`;
+    centerSize.value = `${next.center}%`;
+    rightSize.value = `${next.right}%`;
   }
 
-  return { leftSize, centerSize, rightSize, onResizeEnd }
+  return { leftSize, centerSize, rightSize, onResizeEnd };
 }
 
 function readStored(key: string): PaneSize | null {
   try {
-    const raw = localStorage.getItem(key)
-    if (!raw) return null
-    const v = JSON.parse(raw) as Partial<PaneSize> | null
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<PaneSize> | null;
     if (
-      v
-      && typeof v.left === 'number'
-      && typeof v.center === 'number'
-      && typeof v.right === 'number'
+      v &&
+      typeof v.left === 'number' &&
+      typeof v.center === 'number' &&
+      typeof v.right === 'number'
     ) {
-      return { left: v.left, center: v.center, right: v.right }
+      return { left: v.left, center: v.center, right: v.right };
     }
   } catch {
     /* ignore */
   }
-  return null
+  return null;
 }
 
 function writeStored(key: string, v: PaneSize): void {
   try {
-    localStorage.setItem(key, JSON.stringify(v))
+    localStorage.setItem(key, JSON.stringify(v));
   } catch {
     /* quota exceeded → ignore */
   }

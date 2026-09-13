@@ -5,7 +5,7 @@
 // 和前端 el-upload 直接走 `api/parts/{id}/...` 端点；本子域仅含返回文件 Blob 的
 // 打印端点。CNC 程序 / 设定单的 list/upload/delete 详见 `api/cnc.ts`。
 
-import { api } from '@/api/http'
+import { api } from '@/api/http';
 
 /**
  * 生成零件的双面打印 PDF（图纸 + 反面右下角条形码）。
@@ -14,11 +14,10 @@ import { api } from '@/api/http'
  * 注：返回的是文件 blob，调用方需自行用 iframe / window 触发打印。
  */
 export async function printPartDrawing(partId: string): Promise<Blob> {
-  const resp = await api.get<Blob>(
-    `/parts/${encodeURIComponent(partId)}/print-drawing`,
-    { responseType: 'blob' },
-  )
-  return resp.data
+  const resp = await api.get<Blob>(`/parts/${encodeURIComponent(partId)}/print-drawing`, {
+    responseType: 'blob',
+  });
+  return resp.data;
 }
 
 /**
@@ -34,6 +33,6 @@ export async function printPartDrawingBatch(
     '/parts/print-drawing-batch',
     { part_ids: partIds, assembly_ids: assemblyIds },
     { responseType: 'blob', timeout: 10 * 60 * 1000 },
-  )
-  return resp.data
+  );
+  return resp.data;
 }

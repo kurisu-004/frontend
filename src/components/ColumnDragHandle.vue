@@ -13,9 +13,9 @@
 </template>
 
 <script setup lang="ts">
-import { Rank } from '@element-plus/icons-vue'
+import { Rank } from '@element-plus/icons-vue';
 
-withDefaults(defineProps<{ title?: string }>(), { title: '拖动列' })
+withDefaults(defineProps<{ title?: string }>(), { title: '拖动列' });
 </script>
 
 <style lang="scss" scoped>
@@ -26,7 +26,11 @@ withDefaults(defineProps<{ title?: string }>(), { title: '拖动列' })
   vertical-align: middle;
   font-size: 14px;
 
-  &:hover { color: var(--el-color-primary); }
-  &:active { cursor: grabbing; }
+  &:hover {
+    color: var(--el-color-primary);
+  }
+  &:active {
+    cursor: grabbing;
+  }
 }
 </style>

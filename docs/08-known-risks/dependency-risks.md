@@ -33,12 +33,12 @@
 
 ### 缓解措施
 
-| 措施 | 实施位置 |
-|---|---|
-| 文件大小限制 | nginx `client_max_body_size 300m` |
-| MIME 白名单 | 前端 el-upload `accept=".xlsx,.xls"` |
-| 解析器异常捕获 | parser 入口统一 fail-fast，错误向上抛 |
-| 禁用宏 / 公式 | parser 仅 `XLSX.read` + `sheet_to_json`，不 eval |
+| 措施           | 实施位置                                         |
+| -------------- | ------------------------------------------------ |
+| 文件大小限制   | nginx `client_max_body_size 300m`                |
+| MIME 白名单    | 前端 el-upload `accept=".xlsx,.xls"`             |
+| 解析器异常捕获 | parser 入口统一 fail-fast，错误向上抛            |
+| 禁用宏 / 公式  | parser 仅 `XLSX.read` + `sheet_to_json`，不 eval |
 
 ### 迁移路径（未来）
 
@@ -83,11 +83,11 @@
 
 ### 何时递增版本串
 
-| 触发条件 | 动作 |
-|---|---|
-| worker 行为变更（pdfjs 升级） | 同步递增 |
-| 缓存中毒再次发生 | 立即递增 |
-| nginx MIME 修复后再上线 | 同步递增（确保历史中毒缓存被覆盖） |
+| 触发条件                      | 动作                               |
+| ----------------------------- | ---------------------------------- |
+| worker 行为变更（pdfjs 升级） | 同步递增                           |
+| 缓存中毒再次发生              | 立即递增                           |
+| nginx MIME 修复后再上线       | 同步递增（确保历史中毒缓存被覆盖） |
 
 递增方式：直接修改 `PDF_WORKER_CACHE_BUST` 常量值，建议日期格式（`v=YYYYMMDD`）。
 
@@ -127,11 +127,11 @@ onwarn(warning, defaultHandler) {
 
 ## 4. 依赖审计建议
 
-| 频率 | 动作 |
-|---|---|
-| CI（每次 PR） | `npm audit` —— high / critical 立即通知 |
-| 每月 | 手动扫一遍新增依赖的 last commit 时间、维护活跃度 |
-| 升级前 | 检查目标版本是否仍在维护，CHANGELOG 是否有 breaking change |
-| 引入新依赖 | 评估：last commit 是否 < 1y？是否有 npm audit 警告？是否仅维护者个人使用？ |
+| 频率          | 动作                                                                       |
+| ------------- | -------------------------------------------------------------------------- |
+| CI（每次 PR） | `npm audit` —— high / critical 立即通知                                    |
+| 每月          | 手动扫一遍新增依赖的 last commit 时间、维护活跃度                          |
+| 升级前        | 检查目标版本是否仍在维护，CHANGELOG 是否有 breaking change                 |
+| 引入新依赖    | 评估：last commit 是否 < 1y？是否有 npm audit 警告？是否仅维护者个人使用？ |
 
 避免引入：last commit > 2y 无更新的依赖、仅个人维护且无 bus factor 的依赖、未发布到 npm 只能从 CDN 加载的依赖（除非与 SheetJS 类似有充分理由）。

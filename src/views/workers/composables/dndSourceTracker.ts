@@ -14,32 +14,32 @@
 /** vue-draggable-plus onStart / onAdd 事件最小子集（Sortable.js 原生）。
  *  拿不到 Vue 包装层；@change.added 需要 evt.item.dataset.batchId 反查源。 */
 export interface DraggableStartEvent {
-  item: HTMLElement
-  from: HTMLElement
+  item: HTMLElement;
+  from: HTMLElement;
 }
 
-const sources = new Map<string, string>()
+const sources = new Map<string, string>();
 
 /** 记录卡片从某工序 pool 拖出（WorkerColumn 接收端使用）。 */
 export function recordSource(batchId: string, fromProcessId: string): void {
-  sources.set(batchId, fromProcessId)
+  sources.set(batchId, fromProcessId);
 }
 
 /** 记录卡片从某 worker 列拖出（PoolDrawer 接收端使用）。 */
 export function recordWorkerSource(batchId: string, fromWorkerId: string): void {
-  sources.set(`w:${batchId}`, fromWorkerId)
+  sources.set(`w:${batchId}`, fromWorkerId);
 }
 
 /** 读 + 删：卡片从某工序 pool 拖出。WorkerColumn 在 @change.added 时调用。 */
 export function consumeProcessSource(batchId: string): string | undefined {
-  const v = sources.get(batchId)
-  sources.delete(batchId)
-  return v
+  const v = sources.get(batchId);
+  sources.delete(batchId);
+  return v;
 }
 
 /** 读 + 删：卡片从某 worker 列拖出。PoolDrawer 在 @change.added 时调用。 */
 export function consumeWorkerSource(batchId: string): string | undefined {
-  const v = sources.get(`w:${batchId}`)
-  sources.delete(`w:${batchId}`)
-  return v
+  const v = sources.get(`w:${batchId}`);
+  sources.delete(`w:${batchId}`);
+  return v;
 }

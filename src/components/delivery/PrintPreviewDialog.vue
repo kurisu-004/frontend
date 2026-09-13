@@ -14,122 +14,108 @@
   - 取消 → 关闭对话框
 -->
 <script setup lang="ts">
-import {
-  computed,
-  h,
-  nextTick,
-  ref,
-  watch,
-} from 'vue'
-import { ElMessage, ElTag } from 'element-plus'
-import { Rank } from '@element-plus/icons-vue'
-import { useLazyDraggable } from '@/composables/useLazyDraggable'
+import { computed, h, nextTick, ref, watch } from 'vue';
+import { ElMessage, ElTag } from 'element-plus';
+import { Rank } from '@element-plus/icons-vue';
+import { useLazyDraggable } from '@/composables/useLazyDraggable';
 
-import {
-  printNote,
-  printNoteLabels,
-} from '@/api/deliveryNote'
-import { useDialogSize } from '@/composables/useDialogSize'
-import { triggerBrowserDownload } from '@/utils/download'
-import type {
-  DeliveryNoteDetailOut,
-  DeliveryNoteLineItem,
-} from '@/types/deliveryNote'
+import { printNote, printNoteLabels } from '@/api/deliveryNote';
+import { useDialogSize } from '@/composables/useDialogSize';
+import { triggerBrowserDownload } from '@/utils/download';
+import type { DeliveryNoteDetailOut, DeliveryNoteLineItem } from '@/types/deliveryNote';
 import {
   resolveDraggable,
   useColumnVisibility,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+} from '@/composables/useColumnVisibility';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 
 const props = withDefaults(
   defineProps<{
-    modelValue: boolean
-    note: DeliveryNoteDetailOut | null
+    modelValue: boolean;
+    note: DeliveryNoteDetailOut | null;
     /** 2026-08-07：'note' = 只导送货单；'label' = 只导标签（可勾选行） */
-    mode?: 'note' | 'label'
+    mode?: 'note' | 'label';
   }>(),
   { mode: 'note' },
-)
+);
 
 const emit = defineEmits<{
-  'update:modelValue': [v: boolean]
-}>()
+  'update:modelValue': [v: boolean];
+}>();
 
-const dlg = useDialogSize({ desktopWidth: 1100 })
+const dlg = useDialogSize({ desktopWidth: 1100 });
 
-const previewTableRef = ref()
-const rows = ref<PreviewRow[]>([])
-const tbodyRef = ref<HTMLElement | null>(null)
-const loading = ref(false)
+const previewTableRef = ref();
+const rows = ref<PreviewRow[]>([]);
+const tbodyRef = ref<HTMLElement | null>(null);
+const loading = ref(false);
 
 // 2026-08-07：标签模式的勾选状态
-const selectedRows = ref<PreviewRow[]>([])
+const selectedRows = ref<PreviewRow[]>([]);
 
 // 2026-08-04：单上是否含有装配件子件
-const hasAssemblies = computed(
-  () => props.note?.line_items.some((li) => li.assembly_id) ?? false,
-)
+const hasAssemblies = computed(() => props.note?.line_items.some((li) => li.assembly_id) ?? false);
 // 2026-08-07 改默认：单上含装配件子件时直接合并为一套打印（与后端 merge_assemblies 默认一致）
-const mergeMode = ref<'separate' | 'merge'>('merge')
+const mergeMode = ref<'separate' | 'merge'>('merge');
 
 // 2026-08-07：是否为标签导出模式
-const isLabelMode = computed(() => props.mode === 'label')
+const isLabelMode = computed(() => props.mode === 'label');
 
 interface PreviewAssemblyRow {
-  id: string
-  is_asm_row: true
-  assembly_id: string
-  order_no: string
-  customer_name: string
-  applicant_name: string
-  drawing_no: string
-  name: string
-  quantity: number
-  unit: string
+  id: string;
+  is_asm_row: true;
+  assembly_id: string;
+  order_no: string;
+  customer_name: string;
+  applicant_name: string;
+  drawing_no: string;
+  name: string;
+  quantity: number;
+  unit: string;
 }
-type PreviewRow = DeliveryNoteLineItem | PreviewAssemblyRow
+type PreviewRow = DeliveryNoteLineItem | PreviewAssemblyRow;
 
 // 2026-08-07：同 part 多批次折叠（_split 产生同 part 同送货单）。
 // 永远开启，先于装配体折叠：每 part 仅产出一行，quantity 求和；
 // 行 id = 首个出现的 batch id（= 后端代表批次 id 约定）。
 // 与 DeliveryNoteLineItem 1:1 → DeliveryNoteLineItem（保留原 part_id 用于 asm 折叠判断）。
 function foldSamePart(items: DeliveryNoteLineItem[]): DeliveryNoteLineItem[] {
-  const qty = new Map<string, number>()
-  const rep = new Map<string, DeliveryNoteLineItem>()
-  const order: string[] = []
+  const qty = new Map<string, number>();
+  const rep = new Map<string, DeliveryNoteLineItem>();
+  const order: string[] = [];
   for (const li of items) {
-    const pid = String(li.part_id)
+    const pid = String(li.part_id);
     if (qty.has(pid)) {
-      qty.set(pid, qty.get(pid)! + li.quantity)
-      continue
+      qty.set(pid, qty.get(pid)! + li.quantity);
+      continue;
     }
-    qty.set(pid, li.quantity)
-    rep.set(pid, li)
-    order.push(pid)
+    qty.set(pid, li.quantity);
+    rep.set(pid, li);
+    order.push(pid);
   }
-  return order.map((pid) => ({ ...rep.get(pid)!, quantity: qty.get(pid)! }))
+  return order.map((pid) => ({ ...rep.get(pid)!, quantity: qty.get(pid)! }));
 }
 
 // 预览表格行：合并模式构造父行 + 散件；非合并模式 = line_items 拷贝
 const previewRows = computed<PreviewRow[]>(() => {
-  if (!props.note) return []
+  if (!props.note) return [];
   // 2026-08-07：先做同 part 折叠，再做装配体折叠。装配体折叠对折叠后的 part 唯一行生效。
-  const flat = foldSamePart(props.note.line_items)
+  const flat = foldSamePart(props.note.line_items);
   if (!mergeMode.value || mergeMode.value === 'separate') {
-    return [...flat]
+    return [...flat];
   }
-  const result: PreviewRow[] = []
-  const insertedAsm = new Set<string>()
+  const result: PreviewRow[] = [];
+  const insertedAsm = new Set<string>();
   flat.forEach((li) => {
     if (!li.assembly_id) {
-      result.push(li)
-      return
+      result.push(li);
+      return;
     }
-    if (insertedAsm.has(li.assembly_id)) return
-    const siblings = flat.filter((x) => x.assembly_id === li.assembly_id)
+    if (insertedAsm.has(li.assembly_id)) return;
+    const siblings = flat.filter((x) => x.assembly_id === li.assembly_id);
     result.push({
       id: `ASM_${li.assembly_id}`,
       is_asm_row: true,
@@ -141,11 +127,11 @@ const previewRows = computed<PreviewRow[]>(() => {
       name: li.assembly_name ?? '',
       quantity: 1,
       unit: '套',
-    })
-    insertedAsm.add(li.assembly_id)
-  })
-  return result
-})
+    });
+    insertedAsm.add(li.assembly_id);
+  });
+  return result;
+});
 
 // 2026-08-27 fix：tbodyRef 在 setup 时为 null（弹窗未打开），且 <el-dialog destroy-on-close>
 // 关闭时销毁 slot、reopen 时 <tbody> 是新元素。此前用 useDraggable 会在挂载时
@@ -157,14 +143,14 @@ useLazyDraggable(tbodyRef, rows, {
   animation: 150,
   ghostClass: 'sortable-ghost',
   onEnd(evt: { oldIndex?: number; newIndex?: number }) {
-    const { oldIndex, newIndex } = evt
-    if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
-    const next = rows.value.slice()
-    const [moved] = next.splice(oldIndex, 1)
-    if (moved) next.splice(newIndex, 0, moved)
-    rows.value = next
+    const { oldIndex, newIndex } = evt;
+    if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
+    const next = rows.value.slice();
+    const [moved] = next.splice(oldIndex, 1);
+    if (moved) next.splice(newIndex, 0, moved);
+    rows.value = next;
   },
-})
+});
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
 // 与既有 useLazyDraggable 行拖（绑 tbody）独立 —— 列拖挂表头 <tr>，DOM 容器完全分离。
@@ -174,61 +160,81 @@ const columnDefs: ColumnDef[] = [
   {
     // 序号列：保留行拖手柄 .drag-handle（vue-draggable-plus 行拖的 handle 选择器）。
     // cellRender 必须返回单个 VNode；行内多根包 <div>。
-    key: 'index', label: '序号', width: 72, align: 'center',
-    cellRender: ({ $index }) => h('div', null, [
-      h('span', { class: 'drag-handle', title: '拖动排序' }, h(Rank)),
-      h('span', { class: 'row-index' }, $index + 1),
-    ]),
+    key: 'index',
+    label: '序号',
+    width: 72,
+    align: 'center',
+    cellRender: ({ $index }) =>
+      h('div', null, [
+        h('span', { class: 'drag-handle', title: '拖动排序' }, h(Rank)),
+        h('span', { class: 'row-index' }, $index + 1),
+      ]),
   },
   {
-    key: 'order_no', label: '订单号', prop: 'order_no', minWidth: 120,
-    showOverflowTooltip: true, align: 'center',
+    key: 'order_no',
+    label: '订单号',
+    prop: 'order_no',
+    minWidth: 120,
+    showOverflowTooltip: true,
+    align: 'center',
     cellRender: ({ row }) => h('span', null, (row as PreviewRow).order_no || '—'),
   },
   {
-    key: 'customer_name', label: '分厂', prop: 'customer_name', minWidth: 160,
-    showOverflowTooltip: true, align: 'center',
+    key: 'customer_name',
+    label: '分厂',
+    prop: 'customer_name',
+    minWidth: 160,
+    showOverflowTooltip: true,
+    align: 'center',
     cellRender: ({ row }) => h('span', null, (row as PreviewRow).customer_name || '—'),
   },
   {
-    key: 'applicant_name', label: '申请人', prop: 'applicant_name', minWidth: 100, align: 'center',
+    key: 'applicant_name',
+    label: '申请人',
+    prop: 'applicant_name',
+    minWidth: 100,
+    align: 'center',
     cellRender: ({ row }) => h('span', null, (row as PreviewRow).applicant_name || '—'),
   },
   { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 140, align: 'center' },
   {
-    key: 'name', label: '名称', minWidth: 180, showOverflowTooltip: true, align: 'center',
+    key: 'name',
+    label: '名称',
+    minWidth: 180,
+    showOverflowTooltip: true,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as PreviewRow
+      const r = row as PreviewRow;
       if (isAsmRow(r)) {
         return h('div', null, [
           h(ElTag, { type: 'warning', size: 'small', class: 'asm-tag' }, () => '装配件'),
           h('span', null, r.name),
-        ])
+        ]);
       }
-      return h('span', null, r.name)
+      return h('span', null, r.name);
     },
   },
-]
+];
 // 「数量」列不进 defs：el-input-number 受控 v-model=r.quantity（asm 行） + 文本回退（普通行），
 // 不便走 cellRender（多分支 + EP 组件 + 受控 modelValue）。
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'print_preview_dialog' })
-const drag = useColumnDrag(columnDefs, { listKey: 'print_preview_dialog' })
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'print_preview_dialog' });
+const drag = useColumnDrag(columnDefs, { listKey: 'print_preview_dialog' });
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
 // （行拖 useLazyDraggable 仍走 tbody，独立 watcher 不动）
-drag.applyDrag(previewTableRef)
+drag.applyDrag(previewTableRef);
 
 watch(
   () => [props.modelValue, mergeMode.value],
   async ([open]) => {
     if (open && props.note) {
       // 拷贝当前内存顺序作为预览初始顺序（不污染详情页）
-      rows.value = previewRows.value
-      await nextTick()
-      refreshTbodyRef()
+      rows.value = previewRows.value;
+      await nextTick();
+      refreshTbodyRef();
       // 2026-08-07：label 模式默认全选
       if (isLabelMode.value) {
-        await selectAll()
+        await selectAll();
       }
     }
   },
@@ -237,128 +243,128 @@ watch(
   // rows 永远是空数组。详情页始终挂载的调用方不受影响（mount 时 open=false，
   // 不进 if 分支，tbodyRef 保持 null，useLazyDraggable 不会绑定）。
   { immediate: true },
-)
+);
 
 watch(previewRows, async (next) => {
-  rows.value = next
-  await nextTick()
-  refreshTbodyRef()
+  rows.value = next;
+  await nextTick();
+  refreshTbodyRef();
   // 2026-08-07：合并模式切换后重置全选
   if (isLabelMode.value) {
-    await selectAll()
+    await selectAll();
   }
-})
+});
 
 function isAsmRow(r: unknown): r is PreviewAssemblyRow {
-  return typeof r === 'object' && r !== null
-    && (r as PreviewAssemblyRow).is_asm_row === true
+  return typeof r === 'object' && r !== null && (r as PreviewAssemblyRow).is_asm_row === true;
 }
 
 // 2026-08-07：标签模式全选 / 反选
 async function selectAll(): Promise<void> {
-  await nextTick()
-  const t = previewTableRef.value
-  if (!t) return
+  await nextTick();
+  const t = previewTableRef.value;
+  if (!t) return;
   // 逐行 toggle true（不用 toggleAllSelection：toggle 语义会全消）
-  rows.value.forEach((r) => t.toggleRowSelection(r, true))
+  rows.value.forEach((r) => t.toggleRowSelection(r, true));
 }
 function invertSelection(): void {
-  const t = previewTableRef.value
-  if (!t) return
-  const chosen = new Set(selectedRows.value)
-  rows.value.forEach((r) => t.toggleRowSelection(r, !chosen.has(r)))
+  const t = previewTableRef.value;
+  if (!t) return;
+  const chosen = new Set(selectedRows.value);
+  rows.value.forEach((r) => t.toggleRowSelection(r, !chosen.has(r)));
 }
 
 /** 找到 el-table 渲染出的 tbody 并写到 tbodyRef；useLazyDraggable 内部 watcher 看到 ref 变化即重绑。 */
 function refreshTbodyRef(): void {
-  const root = previewTableRef.value?.$el
+  const root = previewTableRef.value?.$el;
   if (!root) {
-    tbodyRef.value = null
-    return
+    tbodyRef.value = null;
+    return;
   }
   tbodyRef.value = root.querySelector(
     '.el-table__body-wrapper .el-table__body > tbody',
-  ) as HTMLElement | null
+  ) as HTMLElement | null;
 }
 
 function onCancel(): void {
-  emit('update:modelValue', false)
+  emit('update:modelValue', false);
 }
 
 async function onConfirm(): Promise<void> {
-  if (!props.note) return
-  loading.value = true
+  if (!props.note) return;
+  loading.value = true;
   try {
     // 2026-08-24 bugfix：custom_order / line_item_ids 都必须覆盖 line_items[*].id
     // 全部批次（后端 rep-id 校验 21113）。rows 经过 foldSamePart 折叠后每个 part 仅产
     // 出代表 batch id，会漏掉同 part 多批次 / 装配件子件多批次——这里查全量必须用原始
     // line_items，不能用折叠后的 flat。
-    const allItems = props.note.line_items
-    let custom_order: string[]
-    let mergeFlag = false
-    let merge_quantities: Record<string, number> | undefined
+    const allItems = props.note.line_items;
+    let custom_order: string[];
+    let mergeFlag = false;
+    let merge_quantities: Record<string, number> | undefined;
     if (mergeMode.value === 'merge') {
       // 合并模式：父行 → 组内 batch id 连续；散件行原样
-      custom_order = []
-      merge_quantities = {}
+      custom_order = [];
+      merge_quantities = {};
       rows.value.forEach((r) => {
         if (isAsmRow(r)) {
-          merge_quantities![r.assembly_id] = r.quantity
+          merge_quantities![r.assembly_id] = r.quantity;
           allItems
             .filter((li) => li.assembly_id === r.assembly_id)
-            .forEach((c) => custom_order.push(String(c.id)))
+            .forEach((c) => custom_order.push(String(c.id)));
         } else {
           allItems
             .filter((li) => li.part_id === (r as DeliveryNoteLineItem).part_id)
-            .forEach((c) => custom_order.push(String(c.id)))
+            .forEach((c) => custom_order.push(String(c.id)));
         }
-      })
-      mergeFlag = true
+      });
+      mergeFlag = true;
     } else {
-      custom_order = []
+      custom_order = [];
       rows.value.forEach((r) => {
         allItems
           .filter((li) => li.part_id === (r as DeliveryNoteLineItem).part_id)
-          .forEach((c) => custom_order.push(String(c.id)))
-      })
+          .forEach((c) => custom_order.push(String(c.id)));
+      });
     }
 
     if (isLabelMode.value) {
       // 2026-08-07：label 模式 → 展开勾选行成子件 batch id（与 custom_order 同一口径）
       // 2026-08-24：同上面 custom_order 一样改用 allItems，否则 line_item_ids 也漏批次。
-      const line_item_ids: string[] = []
+      const line_item_ids: string[] = [];
       selectedRows.value.forEach((r) => {
         if (isAsmRow(r)) {
           allItems
             .filter((li) => li.assembly_id === r.assembly_id)
-            .forEach((c) => line_item_ids.push(String(c.id)))
+            .forEach((c) => line_item_ids.push(String(c.id)));
         } else {
           allItems
             .filter((li) => li.part_id === (r as DeliveryNoteLineItem).part_id)
-            .forEach((c) => line_item_ids.push(String(c.id)))
+            .forEach((c) => line_item_ids.push(String(c.id)));
         }
-      })
+      });
       const { blob, filename } = await printNoteLabels(props.note.id, {
         custom_order,
         merge_assemblies: mergeFlag,
         merge_quantities,
         line_item_ids,
-      })
-      triggerBrowserDownload(blob, filename)
+      });
+      triggerBrowserDownload(blob, filename);
     } else {
       // 2026-08-07：note 模式 → 仅导送货单，不再串联标签下载
-      const { blob, filename } = await printNote(
-        props.note.id,
-        { custom_order, merge_assemblies: mergeFlag, merge_quantities },
-      )
-      triggerBrowserDownload(blob, filename)
+      const { blob, filename } = await printNote(props.note.id, {
+        custom_order,
+        merge_assemblies: mergeFlag,
+        merge_quantities,
+      });
+      triggerBrowserDownload(blob, filename);
     }
-    ElMessage.success('已导出')
-    emit('update:modelValue', false)
+    ElMessage.success('已导出');
+    emit('update:modelValue', false);
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '导出失败')
+    ElMessage.error((e as Error).message ?? '导出失败');
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 </script>
@@ -368,9 +374,9 @@ async function onConfirm(): Promise<void> {
        refreshTbodyRef() 写 tbodyRef，useLazyDraggable 内部 watcher 自动重绑新 tbody。 -->
   <el-dialog
     :model-value="modelValue"
-    :title="isLabelMode
-      ? '标签打印预览（勾选要打印的行，拖动可调顺序）'
-      : '打印预览（拖动行可调整顺序）'"
+    :title="
+      isLabelMode ? '标签打印预览（勾选要打印的行，拖动可调顺序）' : '打印预览（拖动行可调整顺序）'
+    "
     :width="dlg.width"
     :top="dlg.top"
     :fullscreen="dlg.fullscreen"
@@ -386,12 +392,7 @@ async function onConfirm(): Promise<void> {
         <el-button size="small" @click="invertSelection">反选</el-button>
       </el-space>
       <!-- 2026-08-04：仅当单上含装配件子件时显示（el-radio-button 更醒目） -->
-      <el-radio-group
-        v-if="hasAssemblies"
-        v-model="mergeMode"
-        size="small"
-        class="merge-toggle"
-      >
+      <el-radio-group v-if="hasAssemblies" v-model="mergeMode" size="small" class="merge-toggle">
         <el-radio-button value="separate">分开打子件</el-radio-button>
         <el-radio-button value="merge">合并一套</el-radio-button>
       </el-radio-group>
@@ -442,14 +443,16 @@ async function onConfirm(): Promise<void> {
         </el-table-column>
       </template>
       <!-- 「数量」列不进 defs：asm 行 el-input-number + 普通行文本 双分支不便走 cellRender -->
-      <el-table-column
-        label="数量" min-width="120" align="right">
+      <el-table-column label="数量" min-width="120" align="right">
         <template #default="{ row }">
           <el-input-number
             v-if="isAsmRow(row)"
             v-model="row.quantity"
-            :min="1" :max="999" :precision="0"
-            size="small" controls-position="right"
+            :min="1"
+            :max="999"
+            :precision="0"
+            size="small"
+            controls-position="right"
             style="width: 110px"
           />
           <span v-else>{{ row.quantity }}</span>
@@ -460,9 +463,11 @@ async function onConfirm(): Promise<void> {
     <template #footer>
       <el-button @click="onCancel">取消</el-button>
       <el-button
-        type="primary" :loading="loading"
+        type="primary"
+        :loading="loading"
         :disabled="!rows.length || (isLabelMode && !selectedRows.length)"
-        @click="onConfirm">
+        @click="onConfirm"
+      >
         {{ isLabelMode ? '导出标签' : '导出送货单' }}
       </el-button>
     </template>
@@ -509,5 +514,7 @@ async function onConfirm(): Promise<void> {
 .merge-toggle {
   color: var(--text-primary);
 }
-.asm-tag { margin-right: 4px; }
+.asm-tag {
+  margin-right: 4px;
+}
 </style>

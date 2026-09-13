@@ -18,32 +18,28 @@
 //   `pending_programming_filter`）。
 // - autoRefresh 布尔持久化：onMounted 时视图读 autoRefresh 后再创建 timer。
 
-import { reactive, ref, type Ref } from 'vue'
-import { listPendingProgramming } from '@/api/parts'
-import type { PartListItem } from '@/types/parts'
-import {
-  useListStatePersist,
-} from '@/composables/useListFilterPersist'
-import type { PageQueryParams, PageResult } from '@/composables/usePagedListQuery'
+import { reactive, ref, type Ref } from 'vue';
+import { listPendingProgramming } from '@/api/parts';
+import type { PartListItem } from '@/types/parts';
+import { useListStatePersist } from '@/composables/useListFilterPersist';
+import type { PageQueryParams, PageResult } from '@/composables/usePagedListQuery';
 
 export interface UsePendingProgrammingListReturn {
   /** 视图 filter 输入（关键字 / 序列号） */
-  search: { keyword: string; serialNo: string }
+  search: { keyword: string; serialNo: string };
   /** 自动刷新开关（持久化）；timer 由视图自管 */
-  autoRefresh: Ref<boolean>
+  autoRefresh: Ref<boolean>;
   /** 传给 <PartListShell :fetcher="fetcher">；fetch 失败抛错，由 shell.safeFetcher 接住 */
-  fetcher: (params: PageQueryParams) => Promise<PageResult<PartListItem>>
+  fetcher: (params: PageQueryParams) => Promise<PageResult<PartListItem>>;
   /** onMounted 调用一次：从 localStorage 恢复 search / autoRefresh */
-  restoreFilter: () => void
+  restoreFilter: () => void;
 }
 
 export function usePendingProgrammingList(): UsePendingProgrammingListReturn {
-  const search = reactive({ keyword: '', serialNo: '' })
-  const autoRefresh = ref(false)
+  const search = reactive({ keyword: '', serialNo: '' });
+  const autoRefresh = ref(false);
 
-  async function fetcher(
-    params: PageQueryParams,
-  ): Promise<PageResult<PartListItem>> {
+  async function fetcher(params: PageQueryParams): Promise<PageResult<PartListItem>> {
     // fetch 抛错 → PartListShell.safeFetcher 接住并写到内部 errorMsg，
     // 用户在 el-table 空态能看到原始错误信息（区分「队列空」/「后端挂了」）。
     const resp = await listPendingProgramming({
@@ -53,8 +49,8 @@ export function usePendingProgrammingList(): UsePendingProgrammingListReturn {
       sort_dir: 'ASC',
       limit: params.pageSize,
       offset: (params.page - 1) * params.pageSize,
-    })
-    return { items: resp.items, total: resp.total }
+    });
+    return { items: resp.items, total: resp.total };
   }
 
   // 持久化 search / autoRefresh（pageSize 由 PartListShell 单独持久化）
@@ -62,16 +58,14 @@ export function usePendingProgrammingList(): UsePendingProgrammingListReturn {
     'pending_programming_filter',
     { search, autoRefresh },
     { exclude: new Set(['page']) },
-  )
+  );
 
   function restoreFilter(): void {
-    const s = restore() as
-      | { search?: Partial<typeof search>; autoRefresh?: boolean }
-      | null
-    if (!s) return
-    if (s.search) Object.assign(search, s.search)
+    const s = restore() as { search?: Partial<typeof search>; autoRefresh?: boolean } | null;
+    if (!s) return;
+    if (s.search) Object.assign(search, s.search);
     if (typeof s.autoRefresh === 'boolean') {
-      autoRefresh.value = s.autoRefresh
+      autoRefresh.value = s.autoRefresh;
     }
   }
 
@@ -80,5 +74,5 @@ export function usePendingProgrammingList(): UsePendingProgrammingListReturn {
     autoRefresh,
     fetcher,
     restoreFilter,
-  }
+  };
 }

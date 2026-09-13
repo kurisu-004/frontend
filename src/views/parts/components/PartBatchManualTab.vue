@@ -41,11 +41,7 @@
     </div>
 
     <!-- 空态：点空白处打开 dialog -->
-    <div
-      v-if="staged.length === 0"
-      class="empty-zone"
-      @click="openAddDialog"
-    >
+    <div v-if="staged.length === 0" class="empty-zone" @click="openAddDialog">
       <el-icon :size="64" color="#c0c4cc"><DocumentAdd /></el-icon>
       <p class="empty-primary">暂无待新增零件</p>
       <p class="empty-sub">点击此处或右上角「+ 添加零件」开始添加</p>
@@ -108,8 +104,16 @@
       </template>
       <el-table-column label="操作" min-width="120" align="center" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" size="small" @click.stop="onRowPreview(row as StagedEntry)">查看</el-button>
-          <el-button link type="danger" size="small" @click.stop="onRemoveRow((row as StagedEntry).uid)">删除</el-button>
+          <el-button link type="primary" size="small" @click.stop="onRowPreview(row as StagedEntry)"
+            >查看</el-button
+          >
+          <el-button
+            link
+            type="danger"
+            size="small"
+            @click.stop="onRemoveRow((row as StagedEntry).uid)"
+            >删除</el-button
+          >
         </template>
       </el-table-column>
 
@@ -169,7 +173,13 @@
             <el-cascader
               v-model="form.customerId"
               :options="customerTree"
-              :props="{ value: 'id', label: 'name', children: 'children', checkStrictly: true, emitPath: false }"
+              :props="{
+                value: 'id',
+                label: 'name',
+                children: 'children',
+                checkStrictly: true,
+                emitPath: false,
+              }"
               placeholder="选择一级 / 二级客户"
               style="width: 100%"
               clearable
@@ -199,7 +209,13 @@
       <div class="form-grid">
         <div>
           <el-form-item label="数量" prop="quantity">
-            <el-input-number v-model="form.quantity" :min="1" :step="1" controls-position="right" style="width: 100%" />
+            <el-input-number
+              v-model="form.quantity"
+              :min="1"
+              :step="1"
+              controls-position="right"
+              style="width: 100%"
+            />
           </el-form-item>
         </div>
         <div>
@@ -301,16 +317,10 @@
     @update:model-value="(v: boolean) => !v && closeDrawingPreview()"
     @closed="onDrawingPreviewClosed"
   >
-    <PdfViewer
-      v-if="drawingPreviewRow?.drawingUrl"
-      :url="drawingPreviewRow.drawingUrl"
-      :page="1"
-
-
-    />
+    <PdfViewer v-if="drawingPreviewRow?.drawingUrl" :url="drawingPreviewRow.drawingUrl" :page="1" />
   </el-dialog>
 
-<!-- 预览 Dialog（只读，手机全屏 / 桌面 720px，列数随断点切换） -->
+  <!-- 预览 Dialog（只读，手机全屏 / 桌面 720px，列数随断点切换） -->
   <el-dialog
     :model-value="previewDialogVisible"
     title="预览零件"
@@ -322,23 +332,23 @@
     <el-descriptions v-if="previewing" :column="previewDescCol" border>
       <el-descriptions-item label="图号">{{ previewing.drawingNo }}</el-descriptions-item>
       <el-descriptions-item label="名称">{{ previewing.name }}</el-descriptions-item>
-      <el-descriptions-item label="申请人">{{ previewing.applicantName || '—' }}</el-descriptions-item>
-      <el-descriptions-item label="客户">{{ previewing.customerLabel || '—' }}</el-descriptions-item>
+      <el-descriptions-item label="申请人">{{
+        previewing.applicantName || '—'
+      }}</el-descriptions-item>
+      <el-descriptions-item label="客户">{{
+        previewing.customerLabel || '—'
+      }}</el-descriptions-item>
       <el-descriptions-item label="数量">{{ previewing.quantity }}</el-descriptions-item>
       <el-descriptions-item label="加急">
         <el-tag v-if="previewing.isUrgent" type="danger" size="small" effect="dark">加急</el-tag>
         <span v-else class="muted">否</span>
       </el-descriptions-item>
       <el-descriptions-item label="请购日期">{{ previewing.requestDate }}</el-descriptions-item>
-      <el-descriptions-item label="计划交期">{{ previewing.plannedDeliveryDate }}</el-descriptions-item>
+      <el-descriptions-item label="计划交期">{{
+        previewing.plannedDeliveryDate
+      }}</el-descriptions-item>
       <el-descriptions-item label="图纸" :span="2">
-        <PdfViewer
-          v-if="previewing.drawingUrl"
-          :url="previewing.drawingUrl"
-          :page="1"
-
-
-        />
+        <PdfViewer v-if="previewing.drawingUrl" :url="previewing.drawingUrl" :page="1" />
         <span v-else class="muted">未上传</span>
       </el-descriptions-item>
     </el-descriptions>
@@ -350,125 +360,162 @@
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue'
-import { ElButton, ElTag, type FormInstance, type FormRules, type UploadFile } from 'element-plus'
-import { DocumentAdd, Picture, Plus, Upload } from '@element-plus/icons-vue'
-import PdfViewer from '@/components/PdfViewer.vue'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+import { h, onMounted, ref } from 'vue';
+import { ElButton, ElTag, type FormInstance, type FormRules, type UploadFile } from 'element-plus';
+import { DocumentAdd, Picture, Plus, Upload } from '@element-plus/icons-vue';
+import PdfViewer from '@/components/PdfViewer.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import {
   resolveDraggable,
   useColumnVisibility,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import type { FormState, StagedEntry } from '../composables/usePartBatchManual'
+} from '@/composables/useColumnVisibility';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import type { FormState, StagedEntry } from '../composables/usePartBatchManual';
+
+const props = defineProps<{
+  previewDescCol: number;
+  addDlg: { width: string | number; top: string; fullscreen: false };
+  previewDlg: { width: string | number; top: string; fullscreen: false };
+  customerTree: { id: string; name: string; children?: { id: string; name: string }[] }[];
+  applicantCandidates: { id: string; name: string }[];
+  applicantLoading: boolean;
+  querySearch: (queryString: string, cb: (items: { id: string; name: string }[]) => void) => void;
+  staged: StagedEntry[];
+  addDialogVisible: boolean;
+  dialogSubmitting: boolean;
+  editingUid: string | null;
+  drawingPreviewVisible: boolean;
+  drawingPreviewRow: StagedEntry | null;
+  previewDialogVisible: boolean;
+  previewing: StagedEntry | null;
+  submitting: boolean;
+  form: FormState;
+  rules: FormRules;
+  openDrawingPreview: (row: StagedEntry) => void;
+  onDrawingPreviewClosed: () => void;
+  closeAddDialog: () => void;
+  closePreviewDialog: () => void;
+  closeDrawingPreview: () => void;
+  openAddDialog: () => void;
+  onCustomerChange: (pickedId: unknown) => Promise<void>;
+  onApplicantSelect: (item: Record<string, unknown>) => void;
+  beforeDrawingUpload: (rawFile: File & { name?: string }) => boolean;
+  onDrawingChange: (uploadFile: UploadFile) => void;
+  onDrawingRemoveUpload: () => void;
+  onDrawingRemove: () => void;
+  onAddConfirm: (form?: FormInstance) => Promise<void>;
+  onDialogClosed: (form?: FormInstance) => void;
+  onRowPreview: (row: StagedEntry) => void;
+  onEditFromPreview: () => void;
+  onRemoveRow: (uid: string) => void;
+  onClearAll: () => Promise<void>;
+  rowClassName: (p: { row: unknown }) => string;
+  onSubmit: () => Promise<void>;
+}>();
 
 // 父组件 `v-bind="manual"` 摊开传入本组件需要的所有 props。
 // 2026-08-25 fix：el-form 的 ref 必须用本组件本地 ref —— 之前 `ref="formRef"` 把
 // 表单实例写到父组件传下来的 readonly prop 上静默失败，导致 manual 录入表单
 // 校验永远不触发。formRefLocal 拥有 el-form 实例后，handleAddConfirm /
 // handleDialogClosed 把它作为参数传给 composable 的 onAddConfirm / onDialogClosed。
-const formRefLocal = ref<FormInstance>()
+const formRefLocal = ref<FormInstance>();
 
 // 2026-08-27 T21：列顺序拖动 + 可见性。
 // 「#」index 列 + 「操作」fixed 列不放进 defs（始终可见、不可拖）。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
-    key: 'drawingNo', label: '图号', prop: 'drawingNo', minWidth: 130, align: 'center',
+    key: 'drawingNo',
+    label: '图号',
+    prop: 'drawingNo',
+    minWidth: 130,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as StagedEntry
+      const r = row as StagedEntry;
       if (r.drawingUrl) {
-        return h(ElButton,
-          { link: true, type: 'primary', size: 'small',
-            onClick: (e: MouseEvent) => { e.stopPropagation(); props.openDrawingPreview(r) } },
-          () => r.drawingNo)
+        return h(
+          ElButton,
+          {
+            link: true,
+            type: 'primary',
+            size: 'small',
+            onClick: (e: MouseEvent) => {
+              e.stopPropagation();
+              props.openDrawingPreview(r);
+            },
+          },
+          () => r.drawingNo,
+        );
       }
-      return h('span', { class: 'mono' }, r.drawingNo ?? '')
+      return h('span', { class: 'mono' }, r.drawingNo ?? '');
     },
   },
-  { key: 'name', label: '名称', prop: 'name', minWidth: 180, showOverflowTooltip: true, align: 'center' },
+  {
+    key: 'name',
+    label: '名称',
+    prop: 'name',
+    minWidth: 180,
+    showOverflowTooltip: true,
+    align: 'center',
+  },
   { key: 'quantity', label: '数量', prop: 'quantity', minWidth: 70, align: 'right' },
   {
-    key: 'applicantName', label: '申请人', minWidth: 120, showOverflowTooltip: true, align: 'center',
+    key: 'applicantName',
+    label: '申请人',
+    minWidth: 120,
+    showOverflowTooltip: true,
+    align: 'center',
     cellRender: ({ row }) => h('span', null, (row as StagedEntry).applicantName || '—'),
   },
   {
-    key: 'customerLabel', label: '客户', minWidth: 160, showOverflowTooltip: true, align: 'center',
+    key: 'customerLabel',
+    label: '客户',
+    minWidth: 160,
+    showOverflowTooltip: true,
+    align: 'center',
     cellRender: ({ row }) => h('span', null, (row as StagedEntry).customerLabel || '—'),
   },
-  { key: 'plannedDeliveryDate', label: '计划交期', prop: 'plannedDeliveryDate', minWidth: 120, align: 'center' },
   {
-    key: 'isUrgent', label: '加急', minWidth: 70, align: 'center',
+    key: 'plannedDeliveryDate',
+    label: '计划交期',
+    prop: 'plannedDeliveryDate',
+    minWidth: 120,
+    align: 'center',
+  },
+  {
+    key: 'isUrgent',
+    label: '加急',
+    minWidth: 70,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as StagedEntry
+      const r = row as StagedEntry;
       if (r.isUrgent) {
-        return h(ElTag, { type: 'danger', size: 'small', effect: 'dark' }, () => '加急')
+        return h(ElTag, { type: 'danger', size: 'small', effect: 'dark' }, () => '加急');
       }
-      return h('span', { class: 'muted' }, '—')
+      return h('span', { class: 'muted' }, '—');
     },
   },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_manual' })
-const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_manual' })
+];
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_manual' });
+const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_manual' });
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
 // 自愈。组件挂载时 staged=0 → tableRef.value=null → composable 不绑；staged 变化触发
 // ref 更新 → composable 内部 watch 重新归一化 + 挂 observer → 表头首次渲染时自愈。
-const tableRef = ref()
+const tableRef = ref();
 onMounted(() => {
-  drag.applyDrag(tableRef)
-})
-
-const props = defineProps<{
-  previewDescCol: number
-  addDlg: { width: string | number; top: string; fullscreen: false }
-  previewDlg: { width: string | number; top: string; fullscreen: false }
-  customerTree: { id: string; name: string; children?: { id: string; name: string }[] }[]
-  applicantCandidates: { id: string; name: string }[]
-  applicantLoading: boolean
-  querySearch: (queryString: string, cb: (items: { id: string; name: string }[]) => void) => void
-  staged: StagedEntry[]
-  addDialogVisible: boolean
-  dialogSubmitting: boolean
-  editingUid: string | null
-  drawingPreviewVisible: boolean
-  drawingPreviewRow: StagedEntry | null
-  previewDialogVisible: boolean
-  previewing: StagedEntry | null
-  submitting: boolean
-  form: FormState
-  rules: FormRules
-  openDrawingPreview: (row: StagedEntry) => void
-  onDrawingPreviewClosed: () => void
-  closeAddDialog: () => void
-  closePreviewDialog: () => void
-  closeDrawingPreview: () => void
-  openAddDialog: () => void
-  onCustomerChange: (pickedId: unknown) => Promise<void>
-  onApplicantSelect: (item: Record<string, unknown>) => void
-  beforeDrawingUpload: (rawFile: File & { name?: string }) => boolean
-  onDrawingChange: (uploadFile: UploadFile) => void
-  onDrawingRemoveUpload: () => void
-  onDrawingRemove: () => void
-  onAddConfirm: (form?: FormInstance) => Promise<void>
-  onDialogClosed: (form?: FormInstance) => void
-  onRowPreview: (row: StagedEntry) => void
-  onEditFromPreview: () => void
-  onRemoveRow: (uid: string) => void
-  onClearAll: () => Promise<void>
-  rowClassName: (p: { row: unknown }) => string
-  onSubmit: () => Promise<void>
-}>()
+  drag.applyDrag(tableRef);
+});
 
 /** 把本地 formRef 实例传回 composable 的 onAddConfirm。 */
 function handleAddConfirm(): Promise<void> {
-  return props.onAddConfirm(formRefLocal.value)
+  return props.onAddConfirm(formRefLocal.value);
 }
 /** @closed 触发：composable 需要 form 来 clearValidate()。 */
 function handleDialogClosed(): void {
-  props.onDialogClosed(formRefLocal.value)
+  props.onDialogClosed(formRefLocal.value);
 }
 </script>
 
@@ -522,7 +569,9 @@ function handleDialogClosed(): void {
   border: 1px dashed var(--border-color);
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 
   &:hover {
     background: #f0f7ff;

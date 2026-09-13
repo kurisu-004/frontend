@@ -24,7 +24,7 @@
 //   [v2] POST   /delivery-notes/scan                  - scanDelivery               (DeliveryNoteScan 扫码入口)
 //   [v2] GET    /delivery-notes/batch-detail          - batchGetNotes              (DeliveryNoteScan 批量拉草稿详情)
 
-import { api, apiV2 } from '@/api/http'
+import { api, apiV2 } from '@/api/http';
 import type {
   AttachBatchConflict,
   AttachBatchItem,
@@ -40,7 +40,7 @@ import type {
   ScanAttachableBatch,
   ScanDeliveryOut,
   SubmitDeliveryOut,
-} from '@/types/deliveryNote'
+} from '@/types/deliveryNote';
 
 // v1 / v2 后端 DeliveryNoteListQuery.statuses 字段类型不同：
 // - v2 Rust: Option<String>，逗号分隔（`?statuses=A,B`），
@@ -50,110 +50,103 @@ import type {
 //   由 `serializeParamsV1`（全部数组重复 key）自动处理。
 // 调用方 listNotes 始终走 v2，调方保持传数组，无需手动拼字符串。
 export interface ListNotesParams {
-  statuses?: DeliveryNoteStatus[]
-  customer_id?: string
-  keyword?: string
-  sort_by?: DeliveryNoteSortKey
-  sort_dir?: DeliveryNoteSortDir
-  limit?: number
-  offset?: number
+  statuses?: DeliveryNoteStatus[];
+  customer_id?: string;
+  keyword?: string;
+  sort_by?: DeliveryNoteSortKey;
+  sort_dir?: DeliveryNoteSortDir;
+  limit?: number;
+  offset?: number;
 }
 
 export interface DeliveryNoteListResponse {
-  items: DeliveryNoteOut[]
-  total: number
-  limit: number
-  offset: number
+  items: DeliveryNoteOut[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 /** 入单条目（2026-07-29 批次化）：批次 + 可选部分数量（小于批次量时后端自动拆分） */
 export interface AddPartsItem {
-  batch_id: string
-  quantity?: number | null
+  batch_id: string;
+  quantity?: number | null;
 }
 
 export interface CreateNotePayload {
-  customer_id: string
+  customer_id: string;
   /** YYYY-MM-DD；不传时服务端 fallback 到创建当天 */
-  delivery_date?: string | null
+  delivery_date?: string | null;
   /** 原子带入首批零件（批次条目）；后端 add_parts 内部跑一次 */
-  items?: AddPartsItem[]
-  note?: string | null
+  items?: AddPartsItem[];
+  note?: string | null;
 }
 
 export interface UpdateNotePayload {
-  version: number
+  version: number;
   /** 不传（undefined）= 不改；空串=清空（服务端支持时） */
-  delivery_date?: string | null
-  note?: string | null
+  delivery_date?: string | null;
+  note?: string | null;
 }
 
 export interface AddPartsPayload {
-  items: AddPartsItem[]
-  version: number
+  items: AddPartsItem[];
+  version: number;
 }
 
 export interface RemovePartsPayload {
-  batch_ids: string[]
-  version: number
+  batch_ids: string[];
+  version: number;
 }
 
 export interface VersionPayload {
-  version: number
+  version: number;
 }
 
 export interface PickupScanPayload {
-  part_serial: string
-  badge_code?: string | null
+  part_serial: string;
+  badge_code?: string | null;
 }
 
 export interface PickupPayload {
-  driver_worker_id: string
-  version: number
-  badge_code?: string | null
+  driver_worker_id: string;
+  version: number;
+  badge_code?: string | null;
 }
 
 // 1) list
-export async function listNotes(
-  params: ListNotesParams = {},
-): Promise<DeliveryNoteListResponse> {
-  const query: Record<string, unknown> = {}
-  if (params.statuses?.length) query.statuses = params.statuses
-  if (params.customer_id) query.customer_id = params.customer_id
-  if (params.keyword) query.keyword = params.keyword
-  if (params.sort_by) query.sort_by = params.sort_by
-  if (params.sort_dir) query.sort_dir = params.sort_dir
-  if (params.limit !== undefined) query.limit = params.limit
-  if (params.offset !== undefined) query.offset = params.offset
+export async function listNotes(params: ListNotesParams = {}): Promise<DeliveryNoteListResponse> {
+  const query: Record<string, unknown> = {};
+  if (params.statuses?.length) query.statuses = params.statuses;
+  if (params.customer_id) query.customer_id = params.customer_id;
+  if (params.keyword) query.keyword = params.keyword;
+  if (params.sort_by) query.sort_by = params.sort_by;
+  if (params.sort_dir) query.sort_dir = params.sort_dir;
+  if (params.limit !== undefined) query.limit = params.limit;
+  if (params.offset !== undefined) query.offset = params.offset;
   const resp = await apiV2.get<DeliveryNoteListResponse>('/delivery-notes', {
     params: query,
-  })
-  return resp.data
+  });
+  return resp.data;
 }
 
 // 2) pickup-pending list（[v1] 2026-08-29：仅 DispatchNoteList 用，回退 v1）
-export async function listPickupPending(
-  customer_id?: string,
-): Promise<DeliveryNoteOut[]> {
-  const resp = await api.get<{ items: DeliveryNoteOut[] }>(
-    '/delivery-notes/pickup-pending',
-    { params: customer_id ? { customer_id } : {} },
-  )
-  return resp.data.items
+export async function listPickupPending(customer_id?: string): Promise<DeliveryNoteOut[]> {
+  const resp = await api.get<{ items: DeliveryNoteOut[] }>('/delivery-notes/pickup-pending', {
+    params: customer_id ? { customer_id } : {},
+  });
+  return resp.data.items;
 }
 
 // 3) create draft（[v1] 2026-08-29：仅 DeliveryNoteList 新建草稿 dialog 用，回退 v1）
-export async function createNote(
-  payload: CreateNotePayload,
-): Promise<DeliveryNoteOut> {
-  const resp = await api.post<DeliveryNoteOut>('/delivery-notes', payload)
-  return resp.data
+export async function createNote(payload: CreateNotePayload): Promise<DeliveryNoteOut> {
+  const resp = await api.post<DeliveryNoteOut>('/delivery-notes', payload);
+  return resp.data;
 }
 
 // 4) detail
 export async function getNote(noteId: string): Promise<DeliveryNoteDetailOut> {
-  const resp = await apiV2.get<DeliveryNoteDetailOut>(`/delivery-notes/${noteId}`)
-  return resp.data
+  const resp = await apiV2.get<DeliveryNoteDetailOut>(`/delivery-notes/${noteId}`);
+  return resp.data;
 }
 
 /** `GET /delivery-notes/batch-detail?ids=...` 响应载体（2026-08-24 后端 PR3 新增）。
@@ -163,7 +156,7 @@ export async function getNote(noteId: string): Promise<DeliveryNoteDetailOut> {
  * 限制 1..=200 项，超出或非 i64 后端返回 400 / BIZ_INVALID_VALUE（20104）。
  */
 export interface BatchDeliveryDetailData {
-  items: DeliveryNoteDetailOut[]
+  items: DeliveryNoteDetailOut[];
 }
 
 /**
@@ -172,21 +165,17 @@ export interface BatchDeliveryDetailData {
  * 注意：后端按 ids 入参顺序返回；调用方需要按 id 自索引对齐到本地草稿。
  */
 export async function batchGetNotes(ids: readonly string[]): Promise<DeliveryNoteDetailOut[]> {
-  if (ids.length === 0) return []
+  if (ids.length === 0) return [];
   const resp = await apiV2.get<BatchDeliveryDetailData>('/delivery-notes/batch-detail', {
     params: { ids: ids.join(',') },
-  })
-  return resp.data.items
+  });
+  return resp.data.items;
 }
 
 // 5) events（[v1] 2026-08-29：仅 DeliveryNoteDetail 事件 tab 用，回退 v1）
-export async function listNoteEvents(
-  noteId: string,
-): Promise<DeliveryNoteEventOut[]> {
-  const resp = await api.get<DeliveryNoteEventOut[]>(
-    `/delivery-notes/${noteId}/events`,
-  )
-  return resp.data
+export async function listNoteEvents(noteId: string): Promise<DeliveryNoteEventOut[]> {
+  const resp = await api.get<DeliveryNoteEventOut[]>(`/delivery-notes/${noteId}/events`);
+  return resp.data;
 }
 
 // 6) add-parts（[v1] 2026-08-29：仅 DeliveryNoteDetail 用，回退 v1）
@@ -197,8 +186,8 @@ export async function addParts(
   const resp = await api.post<DeliveryNoteDetailOut>(
     `/delivery-notes/${noteId}/add-parts`,
     payload,
-  )
-  return resp.data
+  );
+  return resp.data;
 }
 
 // 7) remove-parts
@@ -209,8 +198,8 @@ export async function removeParts(
   const resp = await apiV2.post<DeliveryNoteDetailOut>(
     `/delivery-notes/${noteId}/remove-parts`,
     payload,
-  )
-  return resp.data
+  );
+  return resp.data;
 }
 
 // 8) submit
@@ -220,11 +209,8 @@ export async function submitNote(
   noteId: string,
   payload: VersionPayload,
 ): Promise<SubmitDeliveryOut> {
-  const resp = await apiV2.post<SubmitDeliveryOut>(
-    `/delivery-notes/${noteId}/submit`,
-    payload,
-  )
-  return resp.data
+  const resp = await apiV2.post<SubmitDeliveryOut>(`/delivery-notes/${noteId}/submit`, payload);
+  return resp.data;
 }
 
 // 9) recall（[v1] 2026-08-29：仅 DeliveryNoteDetail 用，回退 v1）
@@ -232,11 +218,8 @@ export async function recallNote(
   noteId: string,
   payload: VersionPayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await api.post<DeliveryNoteOut>(
-    `/delivery-notes/${noteId}/recall`,
-    payload,
-  )
-  return resp.data
+  const resp = await api.post<DeliveryNoteOut>(`/delivery-notes/${noteId}/recall`, payload);
+  return resp.data;
 }
 
 // 10) pickup-scan (driver 累积扫描)（[v1] 2026-08-29：仅 DispatchNoteList 用，回退 v1）
@@ -247,42 +230,31 @@ export async function pickupScan(
   const resp = await api.post<DeliveryNotePickupScanOut>(
     `/delivery-notes/${noteId}/pickup-scan`,
     payload,
-  )
-  return resp.data
+  );
+  return resp.data;
 }
 
 // 11) pickup (finalize)（[v1] 2026-08-29：仅 DispatchNoteList 用，回退 v1）
-export async function pickup(
-  noteId: string,
-  payload: PickupPayload,
-): Promise<DeliveryNoteOut> {
-  const resp = await api.post<DeliveryNoteOut>(
-    `/delivery-notes/${noteId}/pickup`,
-    payload,
-  )
-  return resp.data
+export async function pickup(noteId: string, payload: PickupPayload): Promise<DeliveryNoteOut> {
+  const resp = await api.post<DeliveryNoteOut>(`/delivery-notes/${noteId}/pickup`, payload);
+  return resp.data;
 }
 
 // 12) soft-delete
-export async function softDeleteNote(
-  noteId: string,
-  payload: VersionPayload,
-): Promise<void> {
-  await apiV2.post(`/delivery-notes/${noteId}/soft-delete`, payload)
+export async function softDeleteNote(noteId: string, payload: VersionPayload): Promise<void> {
+  await apiV2.post(`/delivery-notes/${noteId}/soft-delete`, payload);
 }
 
 // 2026-07-23 增强 ----------------------------------------------------------
 //
 // 13) candidate-parts（一级客户下 INSPECTION + READY_TO_SHIP 候选入单零件）
 // [v1] 2026-08-29：仅 PartPickerDialog / DeliveryNoteList 用，回退 v1
-export async function listCandidateParts(
-  customerId: string,
-): Promise<DeliveryNoteCandidatePart[]> {
+export async function listCandidateParts(customerId: string): Promise<DeliveryNoteCandidatePart[]> {
   const resp = await api.get<{ items: DeliveryNoteCandidatePart[] }>(
     '/delivery-notes/candidate-parts',
     { params: { customer_id: customerId } },
-  )
-  return resp.data.items
+  );
+  return resp.data.items;
 }
 
 // 14) partial update（详情页改送货日期 / 备注）
@@ -291,11 +263,8 @@ export async function updateNote(
   noteId: string,
   payload: UpdateNotePayload,
 ): Promise<DeliveryNoteOut> {
-  const resp = await api.post<DeliveryNoteOut>(
-    `/delivery-notes/${noteId}/update`,
-    payload,
-  )
-  return resp.data
+  const resp = await api.post<DeliveryNoteOut>(`/delivery-notes/${noteId}/update`, payload);
+  return resp.data;
 }
 
 /**
@@ -309,30 +278,30 @@ export async function updateNote(
  * 共用且 Detail 不在 v2 范围内，本函数回退 v1 Python。
  */
 export interface PrintNoteProgress {
-  loaded: number
-  total: number
+  loaded: number;
+  total: number;
 }
 
 export interface PrintNoteResult {
-  blob: Blob
-  filename: string
+  blob: Blob;
+  filename: string;
 }
 
 export interface PrintNotePayload {
   /** 2026-08-02 新增：批次 id 顺序（与预览组件产出对齐；空 = 走默认 DB 顺序） */
-  custom_order?: string[]
+  custom_order?: string[];
   /** 2026-08-04 新增：装配件子件合并为一行（数量 1，单位套，总装图信息）；
    * false = 散件逐行（默认）。 */
-  merge_assemblies?: boolean
+  merge_assemblies?: boolean;
   /** 2026-08-04 扩展：装配件合并行每套 override 数量（assembly_id 雪花 ID 字符串 → 套数，≥ 1） */
-  merge_quantities?: Record<string, number>
+  merge_quantities?: Record<string, number>;
 }
 
 /** 2026-08-07：标签导出专用（送货单 /print 不支持部分导出）。 */
 export interface PrintLabelsPayload extends PrintNotePayload {
   /** 只打这些批次行（line_items[].id）；省略 = 全部。
    *  合并模式下需由调用方把装配件父行展开为组内子件 id。 */
-  line_item_ids?: string[]
+  line_item_ids?: string[];
 }
 
 export async function printNote(
@@ -347,14 +316,12 @@ export async function printNote(
     {
       responseType: 'blob',
       onDownloadProgress: (event) => {
-        onProgress?.({ loaded: event.loaded, total: event.total ?? 0 })
+        onProgress?.({ loaded: event.loaded, total: event.total ?? 0 });
       },
     },
-  )
-  const filename =
-    parseFilename(resp.headers['content-disposition']) ??
-    `note-${noteId}.xlsx`
-  return { blob: resp.data, filename }
+  );
+  const filename = parseFilename(resp.headers['content-disposition']) ?? `note-${noteId}.xlsx`;
+  return { blob: resp.data, filename };
 }
 
 /** 2026-08-05 PR-C5：打印标签 Excel（与 printNote 配对，触发浏览器二次下载）。
@@ -374,21 +341,19 @@ export async function printNoteLabels(
     {
       responseType: 'blob',
       onDownloadProgress: (event) => {
-        onProgress?.({ loaded: event.loaded, total: event.total ?? 0 })
+        onProgress?.({ loaded: event.loaded, total: event.total ?? 0 });
       },
     },
-  )
-  const filename =
-    parseFilename(resp.headers['content-disposition']) ??
-    `label-${noteId}.xlsx`
-  return { blob: resp.data, filename }
+  );
+  const filename = parseFilename(resp.headers['content-disposition']) ?? `label-${noteId}.xlsx`;
+  return { blob: resp.data, filename };
 }
 
 /** 解析 `attachment; filename="delivery_note_F_123.xlsx"`。 */
 function parseFilename(header: string | undefined): string | null {
-  if (!header) return null
-  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header)
-  return m ? decodeURIComponent(m[1].trim()) : null
+  if (!header) return null;
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+  return m ? decodeURIComponent(m[1].trim()) : null;
 }
 
 /**
@@ -409,8 +374,8 @@ function parseFilename(header: string | undefined): string | null {
  * 货架上存的是 shelf.id）。旧 21405 / 21418 错误码已不再由 scan 触发。
  */
 export async function scanDelivery(code: string): Promise<ScanDeliveryOut> {
-  const resp = await apiV2.post<ScanDeliveryOut>('/delivery-notes/scan', { code })
-  return resp.data
+  const resp = await apiV2.post<ScanDeliveryOut>('/delivery-notes/scan', { code });
+  return resp.data;
 }
 
 /**
@@ -423,10 +388,8 @@ export async function attachBatches(
   noteId: string,
   batches: AttachBatchItem[],
 ): Promise<AttachBatchesOut> {
-  const resp = await apiV2.post<AttachBatchesOut>(
-    `/delivery-notes/${noteId}/attach-batches`,
-    { batches },
-  )
-  return resp.data
+  const resp = await apiV2.post<AttachBatchesOut>(`/delivery-notes/${noteId}/attach-batches`, {
+    batches,
+  });
+  return resp.data;
 }
-

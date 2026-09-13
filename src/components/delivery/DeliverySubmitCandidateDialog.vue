@@ -15,39 +15,39 @@
   后端 service 按 batch_id 反查 t_part_batch.part_id，前端不重复带 part_id。
 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, ref } from 'vue';
+import { ElMessage } from 'element-plus';
 
-import { useBulkPassInspection } from '@/composables/useBulkPassInspection'
-import type { BulkPassItem } from '@/composables/useBulkPassInspection'
-import type { ScanUnresolvedTarget } from '@/types/deliveryNote'
+import { useBulkPassInspection } from '@/composables/useBulkPassInspection';
+import type { BulkPassItem } from '@/composables/useBulkPassInspection';
+import type { ScanUnresolvedTarget } from '@/types/deliveryNote';
 
 interface Props {
   /** v-model 显隐 */
-  modelValue: boolean
+  modelValue: boolean;
   /** submit 返回的未过检工单列表（每个含 available_batches[]，均为 INSPECTION 状态） */
-  targets: ScanUnresolvedTarget[]
+  targets: ScanUnresolvedTarget[];
 }
 
-const props = defineProps<Props>()
+const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void
+  (e: 'update:modelValue', v: boolean): void;
   /** 全部 / 部分过检成功后 emit，父级 fetchDetail 拿新 version + 再次 submit。
    *  若再次返回 CANDIDATES_AVAILABLE（极端：过检后又有新 INSPECTION 批次）由父级
    *  的 doSubmit 守卫（submittingByNote）兜底再次触发弹窗。 */
-  (e: 'done'): void
+  (e: 'done'): void;
   /** 用户取消 */
-  (e: 'cancel'): void
-}>()
+  (e: 'cancel'): void;
+}>();
 
-const bulk = useBulkPassInspection()
-const submitting = ref(false)
+const bulk = useBulkPassInspection();
+const submitting = ref(false);
 
 /** 所有未过检批次的总批次数（UI 文案用） */
 const totalBatchCount = computed(() =>
   props.targets.reduce((sum, t) => sum + t.available_batches.length, 0),
-)
+);
 
 /** flatItems：把 ScanUnresolvedTarget[] 展平为 BulkPassItem[]
  *  供 useBulkPassInspection().run() 直接消费。
@@ -61,33 +61,33 @@ const flatItems = computed<BulkPassItem[]>(() =>
       label: `${t.serial_no} / 批 ${b.batch_id}`,
     })),
   ),
-)
+);
 
 async function onConfirm(): Promise<void> {
-  if (!props.targets.length) return
-  submitting.value = true
+  if (!props.targets.length) return;
+  submitting.value = true;
   try {
-    const result = await bulk.run(flatItems.value)
+    const result = await bulk.run(flatItems.value);
     if (result.failed.length === 0) {
-      ElMessage.success(`已过检 ${result.passed.length} 项`)
-      emit('done')
-      emit('update:modelValue', false)
+      ElMessage.success(`已过检 ${result.passed.length} 项`);
+      emit('done');
+      emit('update:modelValue', false);
     } else if (result.passed.length > 0) {
-      ElMessage.warning(`部分过检：${result.passed.length} 成功 / ${result.failed.length} 失败`)
+      ElMessage.warning(`部分过检：${result.passed.length} 成功 / ${result.failed.length} 失败`);
       // 部分成功也视为「resolved enough」——重 submit 走 CANDIDATES_AVAILABLE 二次判定
-      emit('done')
-      emit('update:modelValue', false)
+      emit('done');
+      emit('update:modelValue', false);
     } else {
-      ElMessage.error(`全部失败：${result.failed[0]?.message ?? '未知错误'}`)
+      ElMessage.error(`全部失败：${result.failed[0]?.message ?? '未知错误'}`);
     }
   } finally {
-    submitting.value = false
+    submitting.value = false;
   }
 }
 
 function onCancel(): void {
-  emit('update:modelValue', false)
-  emit('cancel')
+  emit('update:modelValue', false);
+  emit('cancel');
 }
 </script>
 

@@ -69,68 +69,68 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue';
 
 const props = defineProps<{
-  modelValue: boolean
-  max: number
-  serialNo?: string | null
-  partName?: string | null
-  actionLabel?: string
-}>()
+  modelValue: boolean;
+  max: number;
+  serialNo?: string | null;
+  partName?: string | null;
+  actionLabel?: string;
+}>();
 
 const emit = defineEmits<{
-  'update:modelValue': [v: boolean]
-  confirm: [qty: number]
-  cancel: []
-}>()
+  'update:modelValue': [v: boolean];
+  confirm: [qty: number];
+  cancel: [];
+}>();
 
-const qty = ref(0)
+const qty = ref(0);
 
 watch(
   () => props.modelValue,
   (visible) => {
     if (visible) {
-      qty.value = props.max
+      qty.value = props.max;
     }
   },
   { immediate: true },
-)
+);
 
 const dialogTitle = computed<string>(() => {
-  const label = props.actionLabel || '数量'
-  const id = props.serialNo || ''
-  return id ? `${label}数量 · ${id}` : `${label}数量`
-})
+  const label = props.actionLabel || '数量';
+  const id = props.serialNo || '';
+  return id ? `${label}数量 · ${id}` : `${label}数量`;
+});
 
 const confirmText = computed<string>(() => {
-  return props.actionLabel ? `确定${props.actionLabel}` : '确定'
-})
+  return props.actionLabel ? `确定${props.actionLabel}` : '确定';
+});
 
 function add(n: number): void {
-  qty.value = Math.min(qty.value + n, props.max)
+  qty.value = Math.min(qty.value + n, props.max);
 }
 
 function sub(n: number): void {
-  qty.value = Math.max(qty.value - n, 0)
+  qty.value = Math.max(qty.value - n, 0);
 }
 
 function setZero(): void {
-  qty.value = 0
+  qty.value = 0;
 }
 
 function setMax(): void {
-  qty.value = props.max
+  qty.value = props.max;
 }
 
 function onCancel(): void {
-  emit('cancel')
-  emit('update:modelValue', false)
+  emit('cancel');
+  emit('update:modelValue', false);
 }
 
 function onConfirm(): void {
-  if (qty.value <= 0) return
-  emit('confirm', qty.value)
+  if (qty.value <= 0) return;
+  emit('confirm', qty.value);
 }
 </script>
 

@@ -43,38 +43,33 @@
 </template>
 
 <script setup lang="ts" generic="T">
-import { computed } from 'vue'
-import { usePagedListQuery } from '@/composables/usePagedListQuery'
+import { computed } from 'vue';
+import { usePagedListQuery } from '@/composables/usePagedListQuery';
 
 const props = defineProps<{
-  fetcher: (params: { page: number; pageSize: number; keyword?: string }) => Promise<{ items: T[]; total: number }>
+  fetcher: (params: {
+    page: number;
+    pageSize: number;
+    keyword?: string;
+  }) => Promise<{ items: T[]; total: number }>;
   /** 分页器 layout 字符串，默认 `'total, sizes, prev, pager, next, jumper'` */
-  paginationLayout?: string
+  paginationLayout?: string;
   /** 初始每页大小（一次性，setup 时应用一次；后续由 el-pagination v-model:page-size 接管） */
-  defaultPageSize?: number
-}>()
+  defaultPageSize?: number;
+}>();
 
 // 计算属性包裹默认 layout，避免和 default props 同名 shadowing
 const paginationLayoutComputed = computed(
   () => props.paginationLayout ?? 'total, sizes, prev, pager, next, jumper',
-)
+);
 
-const {
-  items,
-  total,
-  loading,
-  page,
-  pageSize,
-  fetch,
-  reset,
-  onPageChange,
-  onPageSizeChange,
-} = usePagedListQuery<T>(props.fetcher)
+const { items, total, loading, page, pageSize, fetch, reset, onPageChange, onPageSizeChange } =
+  usePagedListQuery<T>(props.fetcher);
 
 // 一次性应用 defaultPageSize（brief 注释：PagedTable 之前声明了 defaultPageSize 但没应用）
 if (typeof props.defaultPageSize === 'number' && props.defaultPageSize > 0) {
-  pageSize.value = props.defaultPageSize
+  pageSize.value = props.defaultPageSize;
 }
 
-defineExpose({ items, loading, page, pageSize, fetch, reset })
+defineExpose({ items, loading, page, pageSize, fetch, reset });
 </script>

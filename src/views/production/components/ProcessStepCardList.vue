@@ -30,10 +30,7 @@
            tag 去掉「总耗时：」前缀（"X 分钟"更紧凑，让 tag+保存+重置 在 234px 内单行排开）。
            保存 button 用 margin-left: auto 推到右侧（替代原来 div spacer，更省空间） -->
       <div class="toolbar">
-        <el-tooltip
-          :content="`总耗时 ${totalMinutes} 分钟`"
-          placement="top"
-        >
+        <el-tooltip :content="`总耗时 ${totalMinutes} 分钟`" placement="top">
           <el-tag size="default" effect="plain" class="total-minutes">
             {{ totalMinutes }} 分钟
           </el-tag>
@@ -62,15 +59,14 @@
       <el-icon :size="40" color="#909399"><InfoFilled /></el-icon>
       <p class="assembly-hint-title">装配件不能指定工序</p>
       <p class="assembly-hint-body">
-        「{{ currentPart?.name ?? '该装配件' }}」是装配件（总装图），请在左侧展开后选择其子零件来制定工序。
+        「{{
+          currentPart?.name ?? '该装配件'
+        }}」是装配件（总装图），请在左侧展开后选择其子零件来制定工序。
       </p>
     </div>
 
     <div v-else-if="steps.length === 0" class="empty-state">
-      <el-empty
-        description="该零件暂无工序，点击下方方框添加第一道工序"
-        :image-size="80"
-      />
+      <el-empty description="该零件暂无工序，点击下方方框添加第一道工序" :image-size="80" />
       <!-- 2026-09-12 第三轮：空态也展示占位方框（与有步骤时保持一致入口） -->
       <div class="step-add-placeholder step-add-placeholder--solo" @click="onAdd">
         <el-icon :size="20"><Plus /></el-icon>
@@ -140,11 +136,7 @@
       </el-card>
 
       <!-- 2026-09-12 第三轮：列表末尾虚线占位方框（点击 → onAdd） -->
-      <div
-        class="step-add-placeholder"
-        :data-draggable="false"
-        @click="onAdd"
-      >
+      <div class="step-add-placeholder" :data-draggable="false" @click="onAdd">
         <el-icon :size="20"><Plus /></el-icon>
         <span>添加工序</span>
       </div>
@@ -153,44 +145,37 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { Delete, InfoFilled, Plus, RefreshLeft } from '@element-plus/icons-vue'
-import { useLazyDraggable } from '@/composables/useLazyDraggable'
-import { ElMessage } from 'element-plus'
-import type { ProcessStep } from '@/types/partProcess'
-import { usePartProcessDesign } from '../composables/usePartProcessDesign'
+import { computed, ref, watch } from 'vue';
+import { Delete, InfoFilled, Plus, RefreshLeft } from '@element-plus/icons-vue';
+import { useLazyDraggable } from '@/composables/useLazyDraggable';
+import { ElMessage } from 'element-plus';
+import type { ProcessStep } from '@/types/partProcess';
+import { usePartProcessDesign } from '../composables/usePartProcessDesign';
 
 const props = defineProps<{
-  partId: string | null
-}>()
+  partId: string | null;
+}>();
 
-const {
-  parts,
-  processes,
-  getFlowByPartId,
-  upsertSteps,
-  deleteStep,
-  newStep,
-  summaries,
-} = usePartProcessDesign()
+const { parts, processes, getFlowByPartId, upsertSteps, deleteStep, newStep, summaries } =
+  usePartProcessDesign();
 
-const steps = ref<ProcessStep[]>([])
-const savedSnapshot = ref<string>('') // JSON.stringify 当前已保存的 steps
-const dirty = ref(false)
-const saving = ref(false)
+const steps = ref<ProcessStep[]>([]);
+const savedSnapshot = ref<string>(''); // JSON.stringify 当前已保存的 steps
+const dirty = ref(false);
+const saving = ref(false);
 
 // 当前 partId 对应零件的派生
 const currentPart = computed(() =>
-  props.partId ? parts.value.find((p) => p.id === props.partId) ?? null : null,
-)
+  props.partId ? (parts.value.find((p) => p.id === props.partId) ?? null) : null,
+);
 // 2026-09-12 第五轮：装配配件选中时不显示工序编辑 UI，仅展示「请选择子零件」提示。
 // 装配配件本身不能指定工序，只能为其子零件制定工序。
-const isAssembly = computed(() => currentPart.value?.row_type === 'ASSEMBLY')
+const isAssembly = computed(() => currentPart.value?.row_type === 'ASSEMBLY');
 // 当前 partId 对应流程的派生
-const currentFlow = computed(() => (props.partId ? getFlowByPartId(props.partId) : null))
+const currentFlow = computed(() => (props.partId ? getFlowByPartId(props.partId) : null));
 const totalMinutes = computed(() =>
   props.partId && !isAssembly.value ? summaries(props.partId).total_minutes : 0,
-)
+);
 // 2026-09-12 第三轮：删除 hasOutsource 派生（不再展示外协警示）。
 // 保留 summaries 调用以确保派生触发；如不再需要可后续清理。
 
@@ -199,108 +184,110 @@ watch(
   () => props.partId,
   (newId) => {
     if (!newId) {
-      steps.value = []
-      savedSnapshot.value = ''
-      dirty.value = false
-      return
+      steps.value = [];
+      savedSnapshot.value = '';
+      dirty.value = false;
+      return;
     }
-    const f = getFlowByPartId(newId)
-    steps.value = f ? f.steps.map((s) => ({ ...s })) : []
-    savedSnapshot.value = JSON.stringify(steps.value)
-    dirty.value = false
+    const f = getFlowByPartId(newId);
+    steps.value = f ? f.steps.map((s) => ({ ...s })) : [];
+    savedSnapshot.value = JSON.stringify(steps.value);
+    dirty.value = false;
   },
   { immediate: true },
-)
+);
 
 /** 步骤本地修改：标 dirty，触发自动保存（800ms 防抖）。 */
-let saveTimer: ReturnType<typeof setTimeout> | null = null
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
 watch(
   steps,
   () => {
-    if (!props.partId) return
-    dirty.value = JSON.stringify(steps.value) !== savedSnapshot.value
-    if (saveTimer) clearTimeout(saveTimer)
+    if (!props.partId) return;
+    dirty.value = JSON.stringify(steps.value) !== savedSnapshot.value;
+    if (saveTimer) clearTimeout(saveTimer);
     if (dirty.value) {
-      saveTimer = setTimeout(() => { void doAutoSave() }, 800)
+      saveTimer = setTimeout(() => {
+        void doAutoSave();
+      }, 800);
     }
   },
   { deep: true },
-)
+);
 
 async function doAutoSave(): Promise<void> {
-  if (!props.partId) return
-  upsertSteps(props.partId, steps.value)
-  savedSnapshot.value = JSON.stringify(steps.value)
-  dirty.value = false
+  if (!props.partId) return;
+  upsertSteps(props.partId, steps.value);
+  savedSnapshot.value = JSON.stringify(steps.value);
+  dirty.value = false;
 }
 
 function onAdd(): void {
   if (!props.partId) {
-    ElMessage.warning('请先选择零件')
-    return
+    ElMessage.warning('请先选择零件');
+    return;
   }
   // 2026-09-12 第五轮：装配件不能指定工序
   if (isAssembly.value) {
-    ElMessage.warning('装配件不能指定工序，请选择其子零件')
-    return
+    ElMessage.warning('装配件不能指定工序，请选择其子零件');
+    return;
   }
-  steps.value = [...steps.value, newStep()]
+  steps.value = [...steps.value, newStep()];
 }
 
 function onDelete(step: ProcessStep): void {
-  steps.value = steps.value.filter((s) => s.uid !== step.uid)
+  steps.value = steps.value.filter((s) => s.uid !== step.uid);
 }
 
 function onProcessChange(step: ProcessStep, id: string): void {
-  const p = processes.value.find((pp) => pp.id === id)
+  const p = processes.value.find((pp) => pp.id === id);
   if (!p) {
-    step.process_id = ''
-    step.process_code = ''
-    step.process_name = ''
-    step.category = 'INHOUSE'
-    step.color = null
-    return
+    step.process_id = '';
+    step.process_code = '';
+    step.process_name = '';
+    step.category = 'INHOUSE';
+    step.color = null;
+    return;
   }
-  step.process_id = p.id
-  step.process_code = p.code
-  step.process_name = p.name
-  step.category = p.category
+  step.process_id = p.id;
+  step.process_code = p.code;
+  step.process_name = p.name;
+  step.category = p.category;
   // 2026-09-12 第三轮：选中工序时同步透传 color
-  step.color = p.color ?? null
+  step.color = p.color ?? null;
 }
 
 async function onSave(): Promise<void> {
-  if (!props.partId) return
-  saving.value = true
+  if (!props.partId) return;
+  saving.value = true;
   try {
-    await doAutoSave()
-    ElMessage.success('已保存')
+    await doAutoSave();
+    ElMessage.success('已保存');
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '保存失败')
+    ElMessage.error((e as Error).message ?? '保存失败');
   } finally {
-    saving.value = false
+    saving.value = false;
   }
 }
 
 function onReset(): void {
-  if (!props.partId) return
-  const f = getFlowByPartId(props.partId)
-  steps.value = f ? f.steps.map((s) => ({ ...s })) : []
-  savedSnapshot.value = JSON.stringify(steps.value)
-  dirty.value = false
+  if (!props.partId) return;
+  const f = getFlowByPartId(props.partId);
+  steps.value = f ? f.steps.map((s) => ({ ...s })) : [];
+  savedSnapshot.value = JSON.stringify(steps.value);
+  dirty.value = false;
 }
 
 /** 2026-09-12 第三轮：卡片左侧 4px 竖条颜色。优先 step.color，无则回退 category 默认色。 */
 function cardColor(step: ProcessStep): string {
-  if (step.color) return step.color
-  return step.category === 'OUTSOURCE' ? '#E6A23C' : '#409EFF'
+  if (step.color) return step.color;
+  return step.category === 'OUTSOURCE' ? '#E6A23C' : '#409EFF';
 }
 
 // ============ 拖拽 ============
 // 容器 ref 位于 v-else 块（空态/列表切换），mount 时可能为 null → useLazyDraggable
 // 强制 immediate: false + watch elRef 转非 null 时 start(el)，符合 CLAUDE.md #10。
 // 2026-09-12 第三轮：filter: '.step-add-placeholder' 显式排除占位方框，避免 Sortable 误选。
-const containerRef = ref<HTMLElement | null>(null)
+const containerRef = ref<HTMLElement | null>(null);
 useLazyDraggable(containerRef, steps, {
   animation: 200,
   handle: '.step-card',
@@ -309,7 +296,7 @@ useLazyDraggable(containerRef, steps, {
   ghostClass: 'step-card-ghost',
   chosenClass: 'step-card-chosen',
   dragClass: 'step-card-drag',
-})
+});
 </script>
 
 <style lang="scss" scoped>

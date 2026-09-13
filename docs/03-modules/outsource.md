@@ -10,61 +10,61 @@
 
 ## 一、入口与路由
 
-| Path | Name | menuCode | 守卫 | 备注 |
-|---|---|---|---|---|
-| `/outsource` | — | — | redirect → `/outsource/companies` | 旧入口重定向 |
-| `/outsource/companies` | `OutsourceCompaniesList` | `outsource_companies_list` | requireAuth | 外协厂一览 |
-| `/outsource/quotes` | `OutsourceQuoteList` | `outsource_quotes_list` | requireAuth | 报价一览（MANAGER + CLERK） |
-| `/outsource/send-receive` | `OutsourceSendReceive` | `outsource_send_receive_list` | requireAuth | 发送 / 接收（合并页，含两个 Tab） |
-| `/outsource/send` | — | — | redirect → `/outsource/send-receive?tab=sendable` | 旧路径兼容 |
-| `/outsource/receive` | — | — | redirect → `/outsource/send-receive?tab=receiving` | 旧路径兼容 |
-| `/outsource/companies/:id/sent-parts` | `OutsourceCompanySentParts` | `outsource_companies_list` | requireAuth | 外协对账（一览入口；不暴露为独立菜单，从公司列表「对账」链接进入） |
+| Path                                  | Name                        | menuCode                      | 守卫                                               | 备注                                                               |
+| ------------------------------------- | --------------------------- | ----------------------------- | -------------------------------------------------- | ------------------------------------------------------------------ |
+| `/outsource`                          | —                           | —                             | redirect → `/outsource/companies`                  | 旧入口重定向                                                       |
+| `/outsource/companies`                | `OutsourceCompaniesList`    | `outsource_companies_list`    | requireAuth                                        | 外协厂一览                                                         |
+| `/outsource/quotes`                   | `OutsourceQuoteList`        | `outsource_quotes_list`       | requireAuth                                        | 报价一览（MANAGER + CLERK）                                        |
+| `/outsource/send-receive`             | `OutsourceSendReceive`      | `outsource_send_receive_list` | requireAuth                                        | 发送 / 接收（合并页，含两个 Tab）                                  |
+| `/outsource/send`                     | —                           | —                             | redirect → `/outsource/send-receive?tab=sendable`  | 旧路径兼容                                                         |
+| `/outsource/receive`                  | —                           | —                             | redirect → `/outsource/send-receive?tab=receiving` | 旧路径兼容                                                         |
+| `/outsource/companies/:id/sent-parts` | `OutsourceCompanySentParts` | `outsource_companies_list`    | requireAuth                                        | 外协对账（一览入口；不暴露为独立菜单，从公司列表「对账」链接进入） |
 
 全部在 `MainLayout` 子树下，定义于 `src/router/index.ts`。
 
 ## 二、关键页面
 
-| 文件 | 职责 |
-|---|---|
-| `src/views/outsource/OutsourceList.vue` | 外协厂一览：CRUD + 工序映射 + 列可见性 + 状态（启用/停用）筛选；行内「对账」链接跳 `OutsourceCompanySentParts` |
-| `src/views/outsource/OutsourceQuoteList.vue` | 报价一览：壳 + `OutsourceQuoteTable` + 3 个 dialog + `OutsourceQuotePdfPreview`；列头 popover 筛选 + 列头排序 + 分页 sizes |
-| `src/views/outsource/OutsourceSendReceive.vue` | 发送 / 接收页（壳）：两个 Tab；URL `?tab=sendable\|receiving` 记忆选择 |
-| `src/views/outsource/OutsourceSendableTab.vue` | Tab 1「可发送」：列出至少有一条 APPROVED 报价的零件；行内「发送」弹 `OutsourceSendDialog` |
-| `src/views/outsource/OutsourceReceivingTab.vue` | Tab 2「待接收」：列出 status=OUTSOURCE 的零件；行内「接收」弹 `OutsourceReceiveDialog` |
+| 文件                                                | 职责                                                                                                                                    |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/views/outsource/OutsourceList.vue`             | 外协厂一览：CRUD + 工序映射 + 列可见性 + 状态（启用/停用）筛选；行内「对账」链接跳 `OutsourceCompanySentParts`                          |
+| `src/views/outsource/OutsourceQuoteList.vue`        | 报价一览：壳 + `OutsourceQuoteTable` + 3 个 dialog + `OutsourceQuotePdfPreview`；列头 popover 筛选 + 列头排序 + 分页 sizes              |
+| `src/views/outsource/OutsourceSendReceive.vue`      | 发送 / 接收页（壳）：两个 Tab；URL `?tab=sendable\|receiving` 记忆选择                                                                  |
+| `src/views/outsource/OutsourceSendableTab.vue`      | Tab 1「可发送」：列出至少有一条 APPROVED 报价的零件；行内「发送」弹 `OutsourceSendDialog`                                               |
+| `src/views/outsource/OutsourceReceivingTab.vue`     | Tab 2「待接收」：列出 status=OUTSOURCE 的零件；行内「接收」弹 `OutsourceReceiveDialog`                                                  |
 | `src/views/outsource/OutsourceCompanySentParts.vue` | 外协对账：按公司聚合 `t_outsource_quote`，单价/总价/发送/回收时间 + 行内编辑（双击改单价/数量/对账标记；Enter 确认 / Esc 取消）+ 合计行 |
 
 ### 子组件（`src/views/outsource/components/`）
 
-| 文件 | 职责 |
-|---|---|
-| `OutsourceQuoteTable.vue` | 报价 el-table：列头 popover + 排序 + 行类名（按状态着色）+ 行内操作按权限禁用 |
+| 文件                             | 职责                                                                                                                             |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `OutsourceQuoteTable.vue`        | 报价 el-table：列头 popover + 排序 + 行类名（按状态着色）+ 行内操作按权限禁用                                                    |
 | `OutsourceQuoteCreateDialog.vue` | 新建报价：选零件（仅「绑定了外协工序的货架」上的零件，按 `listQuotableParts`） + 工序 + 公司 + 单价/总价；提交后自动跳 list 刷新 |
-| `OutsourceQuoteReviewDialog.vue` | 审批 / 拒绝 dialog：仅 MANAGER + SUBMITTED 可触发；批注必填 |
-| `OutsourceQuotePdfPreview.vue` | 报价 PDF 预览：调后端生成 PDF（与图纸打印同链路 pdfjs 渲染） |
-| `OutsourceSendDialog.vue` | 发送对话框：选外协公司 + 确认发送（基于已批报价） |
-| `OutsourceReceiveDialog.vue` | 接收对话框：扫码确认 + 选落点货架 + 下一道工序 |
+| `OutsourceQuoteReviewDialog.vue` | 审批 / 拒绝 dialog：仅 MANAGER + SUBMITTED 可触发；批注必填                                                                      |
+| `OutsourceQuotePdfPreview.vue`   | 报价 PDF 预览：调后端生成 PDF（与图纸打印同链路 pdfjs 渲染）                                                                     |
+| `OutsourceSendDialog.vue`        | 发送对话框：选外协公司 + 确认发送（基于已批报价）                                                                                |
+| `OutsourceReceiveDialog.vue`     | 接收对话框：扫码确认 + 选落点货架 + 下一道工序                                                                                   |
 
 ## 三、主要 API 调用
 
 均走 v1 客户端（`src/api/http.ts` 的 `api`），尚未切 v2。
 
-| 文件 | 关键端点 |
-|---|---|
-| `src/api/outsource.ts` | 公司 CRUD：`GET /outsource-companies`、`GET/POST /outsource-companies/{id}/...`、`POST /outsource-companies/{id}/processes`（工序映射） |
-| `src/api/outsource.ts` | 报价 CRUD：`GET /outsource-quotes`、`POST /outsource-quotes`、`/submit`、`/approve`、`/reject`、`/soft-delete` |
-| `src/api/outsource.ts` | 发送侧：`GET /outsource-quotes/approved-for-send`、`GET /outsource-quotes/quotable-parts`（picker 默认筛选） |
+| 文件                   | 关键端点                                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/api/outsource.ts` | 公司 CRUD：`GET /outsource-companies`、`GET/POST /outsource-companies/{id}/...`、`POST /outsource-companies/{id}/processes`（工序映射）                                                                |
+| `src/api/outsource.ts` | 报价 CRUD：`GET /outsource-quotes`、`POST /outsource-quotes`、`/submit`、`/approve`、`/reject`、`/soft-delete`                                                                                         |
+| `src/api/outsource.ts` | 发送侧：`GET /outsource-quotes/approved-for-send`、`GET /outsource-quotes/quotable-parts`（picker 默认筛选）                                                                                           |
 | `src/api/outsource.ts` | 对账：`GET /outsource-companies/{id}/sent-parts`（filter: keyword / sent_from / sent_to / received_from / received_to + sort_by）、`POST /outsource-shipments/{shipmentId}/reconcile-update`（行编辑） |
-| `src/api/outsource.ts` | 外协中批次：`GET /parts/outsource-in-flight`（跨域；返回 plain list，分页 total 取列表长度） |
+| `src/api/outsource.ts` | 外协中批次：`GET /parts/outsource-in-flight`（跨域；返回 plain list，分页 total 取列表长度）                                                                                                           |
 
 ## 四、相关 composable / utils
 
-| 文件 | 用途 |
-|---|---|
-| `src/utils/outsourceQuotePermissions.ts` | 报价权限纯函数（`canCreate` / `canEdit` / `canApprove` / `canReject` / `canWithdraw` / `canSoftDelete`），不依赖 auth session；供 vitest 单测 |
-| `src/views/outsource/composables/useOutsourceQuoteTable.ts` | 报价表格状态机（search / sort / popover / 列可见性 / 行类名） |
-| `src/views/outsource/composables/useOutsourceQuoteForm.ts` | 报价 form / dialog 状态（create / approve / reject / delete / submit） |
-| `src/views/outsource/composables/useOutsourceSendableList.ts` | Tab 1 fetcher |
-| `src/views/outsource/composables/useOutsourceReceivingList.ts` | Tab 2 fetcher |
+| 文件                                                           | 用途                                                                                                                                          |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/utils/outsourceQuotePermissions.ts`                       | 报价权限纯函数（`canCreate` / `canEdit` / `canApprove` / `canReject` / `canWithdraw` / `canSoftDelete`），不依赖 auth session；供 vitest 单测 |
+| `src/views/outsource/composables/useOutsourceQuoteTable.ts`    | 报价表格状态机（search / sort / popover / 列可见性 / 行类名）                                                                                 |
+| `src/views/outsource/composables/useOutsourceQuoteForm.ts`     | 报价 form / dialog 状态（create / approve / reject / delete / submit）                                                                        |
+| `src/views/outsource/composables/useOutsourceSendableList.ts`  | Tab 1 fetcher                                                                                                                                 |
+| `src/views/outsource/composables/useOutsourceReceivingList.ts` | Tab 2 fetcher                                                                                                                                 |
 
 通用 composable 也复用：`useCustomerTree`（客户下拉）、`useColumnVisibility`（列可见性）、`useListStatePersist`（filter / sort 持久化）。
 
@@ -73,10 +73,10 @@
 ```
 报价（t_outsource_quote.status）
 DRAFT ──submit──▶ SUBMITTED ──approve──▶ APPROVED ──send──▶ OUTSOURCING ──receive──▶ RECEIVED ──bill──▶ BILLED
-  │                    │                                                                          
-  │                    └─reject──▶ REJECTED ──┐                                                    
-  │                                         │                                                    
-  └────────────────── soft-delete ───────────┘                                                    
+  │                    │
+  │                    └─reject──▶ REJECTED ──┐
+  │                                         │
+  └────────────────── soft-delete ───────────┘
 
 对账事实：发送 / 接收 / 单价 / 总价 / 对账标记（reconcile_update 行编辑）
 ```
@@ -91,14 +91,14 @@ DRAFT ──submit──▶ SUBMITTED ──approve──▶ APPROVED ──send
 
 ## 六、权限要求
 
-| 操作 | MANAGER | CLERK | 其他 |
-|---|---|---|---|
-| 外协厂 CRUD | 允许 | 允许 | 只读 / 否 |
-| 报价 CRUD | 允许 | 仅 DRAFT 自己 | 只读 |
-| 报价 submit / withdraw | 允许 | 允许 | 否 |
-| 报价 approve / reject | 允许 | 否 | 否 |
-| 发送 / 接收 | 允许 | 允许 | 否 |
-| 对账行编辑 | 允许 | 允许 | 否 |
+| 操作                   | MANAGER | CLERK         | 其他      |
+| ---------------------- | ------- | ------------- | --------- |
+| 外协厂 CRUD            | 允许    | 允许          | 只读 / 否 |
+| 报价 CRUD              | 允许    | 仅 DRAFT 自己 | 只读      |
+| 报价 submit / withdraw | 允许    | 允许          | 否        |
+| 报价 approve / reject  | 允许    | 否            | 否        |
+| 发送 / 接收            | 允许    | 允许          | 否        |
+| 对账行编辑             | 允许    | 允许          | 否        |
 
 UI 控显隐按 `rolesArrayToMap(user.roles)` 产出的 `RoleLike` + `canXxx()` 组合判定，与 `useAuthSession` 解耦（不直接读 store）。
 

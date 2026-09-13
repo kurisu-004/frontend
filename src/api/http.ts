@@ -31,14 +31,14 @@
 // 原先共用一份 serializeParams，v1 业务端点收到 CSV 会 422。客户端绑定见
 // 各 axios.create 处的 paramsSerializer。
 
+import type { AxiosError } from 'axios';
 import axios, {
-  AxiosError,
   type AxiosInstance,
   type AxiosResponse,
   type InternalAxiosRequestConfig,
-} from 'axios'
-import { decodeJwt } from '@/utils/jwt'
-import { refreshTokens, type LoginResponse } from '@/api/auth'
+} from 'axios';
+import { decodeJwt } from '@/utils/jwt';
+import { refreshTokens, type LoginResponse } from '@/api/auth';
 
 /**
  * 这些 key 在数组形式下需要序列化为 CSV 单值字符串（?k=a,b,c）而非
@@ -50,7 +50,7 @@ import { refreshTokens, type LoginResponse } from '@/api/auth'
  * serializeParamsV1 / serializeParamsV2 分别绑定，ARRAY_AS_CSV_KEYS 只
  * 由 v2 分支消费。
  */
-const ARRAY_AS_CSV_KEYS = new Set(['statuses'])
+const ARRAY_AS_CSV_KEYS = new Set(['statuses']);
 
 /**
  * 把 axios params 对象序列化为 query string。
@@ -61,39 +61,39 @@ const ARRAY_AS_CSV_KEYS = new Set(['statuses'])
 // params 用 any：axios 自身 paramsSerializer 签名就是 (params: any) => string，
 // 这里抽出来做单测没必要收窄类型，避免 Array.isArray 后续分支里 val 没法窄化
 // 成 string 让 encodeURIComponent 报 TS2345。
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 function serializeParamsWith(params: any, csvKeys: Set<string>): string {
-  const parts: string[] = []
+  const parts: string[] = [];
   for (const key of Object.keys(params)) {
-    const val = params[key]
-    if (val === undefined || val === null) continue
+    const val = params[key];
+    if (val === undefined || val === null) continue;
     if (Array.isArray(val) && csvKeys.has(key)) {
       // 白名单 key（v2 后端期望 CSV 单值形式）
-      const csv = val.filter((v: unknown) => v !== '' && v != null).join(',')
+      const csv = val.filter((v: unknown) => v !== '' && v != null).join(',');
       if (csv.length > 0) {
-        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(csv)}`)
+        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(csv)}`);
       }
     } else if (Array.isArray(val)) {
       for (const v of val) {
-        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`)
+        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`);
       }
     } else {
-      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`)
+      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
     }
   }
-  return parts.join('&')
+  return parts.join('&');
 }
 
 /** v1（Python FastAPI）：所有数组都走重复 key 形式 ?k=a&k=b。 */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export function serializeParamsV1(params: any): string {
-  return serializeParamsWith(params, new Set())
+  return serializeParamsWith(params, new Set());
 }
 
 /** v2（Rust axum）：statuses 数组 → CSV 单值 ?statuses=a,b。 */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export function serializeParamsV2(params: any): string {
-  return serializeParamsWith(params, ARRAY_AS_CSV_KEYS)
+  return serializeParamsWith(params, ARRAY_AS_CSV_KEYS);
 }
 
 /**
@@ -101,10 +101,10 @@ export function serializeParamsV2(params: any): string {
  * 避免误把 v1 业务端点的 statuses 序列化成 CSV 形式被 Python 后端 422 掉。
  * 保留作为 alias 仅供已有 import 兼容。
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const serializeParams: (params: any) => string = serializeParamsV1
 
-const STORAGE_KEY = 'auth_session'
+export const serializeParams: (params: any) => string = serializeParamsV1;
+
+const STORAGE_KEY = 'auth_session';
 
 export const api = axios.create({
   baseURL: '/api/v1',
@@ -114,7 +114,7 @@ export const api = axios.create({
   // 2026-08-29 由 serializeParams 改为 serializeParamsV1：v1 端点必须走重复 key 形式，
   // 不能用 v2 的 CSV 单值（Rust axum 才要 CSV）。
   paramsSerializer: serializeParamsV1,
-})
+});
 
 /**
  * 专用 refresh 客户端：无任何拦截器，仅给 /auth/refresh 用。
@@ -129,7 +129,7 @@ export const refreshClient = axios.create({
   // 2026-08-29 改为 serializeParamsV1：refresh 端点永远与业务端点同版本（同 baseURL），
   // v1 业务走 V1 序列化（重复 key），v2 业务走 V2 序列化（CSV）。
   paramsSerializer: serializeParamsV1,
-})
+});
 
 /**
  * v2 refresh 客户端：baseURL `/api/v2`，其它与 refreshClient 完全一致
@@ -147,12 +147,12 @@ export const refreshClientV2 = axios.create({
   timeout: 30_000,
   // 2026-08-29 改为 serializeParamsV2：与 apiV2 同版本，statuses 走 CSV。
   paramsSerializer: serializeParamsV2,
-})
+});
 
 interface ApiEnvelope<T> {
-  code: number
-  message: string
-  data: T
+  code: number;
+  message: string;
+  data: T;
 }
 
 function isEnvelope(v: unknown): v is ApiEnvelope<unknown> {
@@ -162,29 +162,29 @@ function isEnvelope(v: unknown): v is ApiEnvelope<unknown> {
     typeof (v as ApiEnvelope<unknown>).code === 'number' &&
     'message' in (v as ApiEnvelope<unknown>) &&
     'data' in (v as ApiEnvelope<unknown>)
-  )
+  );
 }
 
 // ===== storage helpers =====
 function readToken(): string | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const s = JSON.parse(raw) as { token?: string }
-    return s?.token ?? null
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as { token?: string };
+    return s?.token ?? null;
   } catch {
-    return null
+    return null;
   }
 }
 
 function readRefreshToken(): string | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const s = JSON.parse(raw) as { refresh_token?: string | null }
-    return s?.refresh_token ?? null
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as { refresh_token?: string | null };
+    return s?.refresh_token ?? null;
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -197,29 +197,29 @@ function persistTokens(pair: LoginResponse): void {
     token: '',
     refresh_token: null,
     user: null,
-  }
+  };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) cur = { ...cur, ...JSON.parse(raw) }
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) cur = { ...cur, ...JSON.parse(raw) };
   } catch {
     /* 损坏的 storage 当空对象处理 */
   }
-  cur.token = pair.token
-  cur.refresh_token = pair.refresh_token
-  cur.user = pair.user
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(cur))
-  window.dispatchEvent(new CustomEvent('auth:tokens-refreshed', { detail: pair }))
+  cur.token = pair.token;
+  cur.refresh_token = pair.refresh_token;
+  cur.user = pair.user;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(cur));
+  window.dispatchEvent(new CustomEvent('auth:tokens-refreshed', { detail: pair }));
 }
 
 // ===== token 自动刷新状态 =====
-let refreshPromise: Promise<LoginResponse> | null = null
-let cachedAccessExp: number | null = null
-let lastProactiveFireMs = 0
+let refreshPromise: Promise<LoginResponse> | null = null;
+let cachedAccessExp: number | null = null;
+let lastProactiveFireMs = 0;
 
 /** 剩余寿命 < 该秒数就触发 proactive 刷新。 */
-const REFRESH_AHEAD_SECONDS = 5 * 60
+const REFRESH_AHEAD_SECONDS = 5 * 60;
 /** proactive 节流：30s 内最多触发一次（避免短时间内连续刷新）。 */
-const PROACTIVE_THROTTLE_MS = 30_000
+const PROACTIVE_THROTTLE_MS = 30_000;
 
 /**
  * 实际执行 refresh：读 localStorage 里的 refresh_token，调 /auth/refresh，
@@ -228,14 +228,14 @@ const PROACTIVE_THROTTLE_MS = 30_000
  * 失败抛 ApiError；调用方（拦截器）负责 dispatch auth:logout。
  */
 async function doRefresh(): Promise<LoginResponse> {
-  const rt = readRefreshToken()
+  const rt = readRefreshToken();
   if (!rt) {
-    throw new ApiError(40103, 'no refresh token')
+    throw new ApiError(40103, 'no refresh token');
   }
-  const fresh = await refreshTokens(rt)
-  persistTokens(fresh)
-  cachedAccessExp = decodeJwt(fresh.token)?.exp ?? null
-  return fresh
+  const fresh = await refreshTokens(rt);
+  persistTokens(fresh);
+  cachedAccessExp = decodeJwt(fresh.token)?.exp ?? null;
+  return fresh;
 }
 
 /**
@@ -246,46 +246,44 @@ function getOrCreateRefresh(): Promise<LoginResponse> {
   if (!refreshPromise) {
     refreshPromise = (async () => {
       try {
-        return await doRefresh()
+        return await doRefresh();
       } finally {
         setTimeout(() => {
-          refreshPromise = null
-        }, 0)
+          refreshPromise = null;
+        }, 0);
       }
-    })()
+    })();
   }
-  return refreshPromise
+  return refreshPromise;
 }
 
 /** Proactive：每次成功响应后检查 exp，剩余 < 5min 就 fire-and-forget 刷新。 */
 function maybeProactiveRefresh(): void {
   if (cachedAccessExp === null) {
-    const t = readToken()
-    if (!t) return
-    cachedAccessExp = decodeJwt(t)?.exp ?? null
-    if (cachedAccessExp === null) return
+    const t = readToken();
+    if (!t) return;
+    cachedAccessExp = decodeJwt(t)?.exp ?? null;
+    if (cachedAccessExp === null) return;
   }
-  const nowSec = Math.floor(Date.now() / 1000)
-  if (cachedAccessExp - nowSec > REFRESH_AHEAD_SECONDS) return
-  if (Date.now() - lastProactiveFireMs < PROACTIVE_THROTTLE_MS) return
-  lastProactiveFireMs = Date.now()
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (cachedAccessExp - nowSec > REFRESH_AHEAD_SECONDS) return;
+  if (Date.now() - lastProactiveFireMs < PROACTIVE_THROTTLE_MS) return;
+  lastProactiveFireMs = Date.now();
   void getOrCreateRefresh().catch(() => {
     /* reactive 路径会兜底；这里只 fire-and-forget */
-  })
+  });
 }
 
 // ===== 拦截器（具名，api / apiV2 复用） =====
 
 /** 请求拦截：挂 Authorization。 */
-function authRequestInterceptor(
-  config: InternalAxiosRequestConfig,
-): InternalAxiosRequestConfig {
-  const token = readToken()
+function authRequestInterceptor(config: InternalAxiosRequestConfig): InternalAxiosRequestConfig {
+  const token = readToken();
   if (token) {
     // 用 .set 避免某些 axios 版本对 headers 直接赋值的 readonly 警告。
-    config.headers.set('Authorization', `Bearer ${token}`)
+    config.headers.set('Authorization', `Bearer ${token}`);
   }
-  return config
+  return config;
 }
 
 /**
@@ -294,17 +292,17 @@ function authRequestInterceptor(
  * maybeProactiveRefresh（剩余寿命 < 5min 后台 fire-and-forget 刷新）。
  */
 function envelopeResponseInterceptor(response: AxiosResponse): AxiosResponse {
-  const payload = response.data
+  const payload = response.data;
   if (isEnvelope(payload)) {
     if (payload.code !== 0) {
-      throw new ApiError(payload.code, payload.message, response)
+      throw new ApiError(payload.code, payload.message, response);
     }
     // 直接把 response.data 替换成解封后的 data，保持 `api.get<T>()` 的 .data 语义。
-    response.data = payload.data
+    response.data = payload.data;
   }
   // 非标准响应（如文件 blob / 文本）原样返回
-  maybeProactiveRefresh()
-  return response
+  maybeProactiveRefresh();
+  return response;
 }
 
 /**
@@ -319,13 +317,13 @@ function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
   return async (error: AxiosError) => {
     // blob 响应的 error body 也是 Blob；isEnvelope(blob) 返回 false 会让
     // 401 自动刷新失效。先把 Blob body 读成文本再尝试 JSON parse。
-    let payload: unknown = error.response?.data
+    let payload: unknown = error.response?.data;
     if (payload instanceof Blob) {
       try {
-        const text = await payload.text()
-        payload = text ? JSON.parse(text) : null
+        const text = await payload.text();
+        payload = text ? JSON.parse(text) : null;
       } catch {
-        payload = null
+        payload = null;
       }
     }
     if (!isEnvelope(payload)) {
@@ -333,61 +331,58 @@ function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
         error.response?.status ?? 0,
         error.message || 'network error',
         error.response,
-      )
+      );
     }
 
-    const apiErr = new ApiError(payload.code, payload.message, error.response)
-    const cfg = error.config as (InternalAxiosRequestConfig & { _isRetryAfterRefresh?: boolean }) | undefined
+    const apiErr = new ApiError(payload.code, payload.message, error.response);
+    const cfg = error.config as
+      (InternalAxiosRequestConfig & { _isRetryAfterRefresh?: boolean }) | undefined;
 
     // 40105 SESSION_REVOKED（v2 才有）：JWT 签名仍有效，但 Redis session:tok:<sha256>
     // 已被吊销（其它设备 logout / 改密 / 管理员停用）。refresh 也救不回（同一 session
     // 索引会被连带清掉），直接 dispatch auth:logout 跳登录，不再走下方 40102 的
     // reactive refresh 分支。
     if (apiErr.code === 40105) {
-      window.dispatchEvent(new CustomEvent('auth:logout'))
-      throw apiErr
+      window.dispatchEvent(new CustomEvent('auth:logout'));
+      throw apiErr;
     }
 
     // 仅在 access 过期且非 refresh 重试时触发自动刷新。
-    const shouldRefresh =
-      apiErr.code === 40102 && cfg && !cfg._isRetryAfterRefresh
+    const shouldRefresh = apiErr.code === 40102 && cfg && !cfg._isRetryAfterRefresh;
 
-    if (!shouldRefresh) throw apiErr
+    if (!shouldRefresh) throw apiErr;
 
     try {
-      const fresh = await getOrCreateRefresh()
+      const fresh = await getOrCreateRefresh();
       // 用新 token 重试原请求；标记 _isRetryAfterRefresh 防递归
       const retryCfg = {
         ...cfg,
         headers: { ...(cfg.headers ?? {}), Authorization: `Bearer ${fresh.token}` },
         _isRetryAfterRefresh: true,
-      } as InternalAxiosRequestConfig & { _isRetryAfterRefresh?: boolean }
+      } as InternalAxiosRequestConfig & { _isRetryAfterRefresh?: boolean };
       // 用闭包持有的 client 重试——api 实例回到 api.request，apiV2 回到 apiV2.request
-      return await client.request(retryCfg)
+      return await client.request(retryCfg);
     } catch (refreshErr) {
       // refresh 失败：触发全局登出事件，main.ts 监听后 router.replace('/login')
-      window.dispatchEvent(new CustomEvent('auth:logout'))
-      throw refreshErr
+      window.dispatchEvent(new CustomEvent('auth:logout'));
+      throw refreshErr;
     }
-  }
+  };
 }
 
-api.interceptors.request.use(authRequestInterceptor)
-api.interceptors.response.use(
-  envelopeResponseInterceptor,
-  makeEnvelopeErrorInterceptor(api),
-)
+api.interceptors.request.use(authRequestInterceptor);
+api.interceptors.response.use(envelopeResponseInterceptor, makeEnvelopeErrorInterceptor(api));
 
 /** 业务异常：code !== 0 时抛出；调用方用 try/catch + (e as ApiError).code 取错误码。 */
 export class ApiError extends Error {
-  public readonly code: number
-  public readonly response: unknown
+  public readonly code: number;
+  public readonly response: unknown;
 
   constructor(code: number, message: string, response?: unknown) {
-    super(message)
-    this.name = 'ApiError'
-    this.code = code
-    this.response = response
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;
+    this.response = response;
   }
 
   /** 是否为"未登录 / token 失效"——由调用方决定如何处理（路由跳转 / 重新登录）。 */
@@ -395,12 +390,7 @@ export class ApiError extends Error {
     // 40105 SESSION_REVOKED：JWT 签名有效但 Redis session 已被吊销。语义上等同
     // "未登录"，调用方应清 session 跳登录；拦截器内已经 dispatch auth:logout，
     // 这里只是让业务侧可以分支识别这一类。
-    return (
-      this.code === 40101 ||
-      this.code === 40102 ||
-      this.code === 40103 ||
-      this.code === 40105
-    )
+    return this.code === 40101 || this.code === 40102 || this.code === 40103 || this.code === 40105;
   }
 }
 
@@ -419,12 +409,9 @@ export const apiV2 = axios.create({
   // 重复定义避免引用 api.defaults 后被改时牵连。
   // 2026-08-29 拆分：v1 端点必须走 V1 序列化（重复 key），与 V2 CSV 互斥。
   paramsSerializer: serializeParamsV2,
-})
-apiV2.interceptors.request.use(authRequestInterceptor)
-apiV2.interceptors.response.use(
-  envelopeResponseInterceptor,
-  makeEnvelopeErrorInterceptor(apiV2),
-)
+});
+apiV2.interceptors.request.use(authRequestInterceptor);
+apiV2.interceptors.response.use(envelopeResponseInterceptor, makeEnvelopeErrorInterceptor(apiV2));
 
 /**
  * 移除值为 undefined / null / 空字符串 / 空数组的 query 字段；保留数字 0 和布尔 false。
@@ -437,17 +424,15 @@ apiV2.interceptors.response.use(
  * 字面量 / interface（包括 ListPartsParams 这种显式 interface），后者要求有
  * 显式字符串 index signature，interface 默认不带，导致调用方报 TS2345。
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function cleanParams<T extends Record<string, any>>(
-  obj?: T,
-): Record<string, unknown> {
-  if (!obj) return {}
-  const out: Record<string, unknown> = {}
+
+export function cleanParams<T extends Record<string, any>>(obj?: T): Record<string, unknown> {
+  if (!obj) return {};
+  const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (v === undefined || v === null) continue
-    if (typeof v === 'string' && v === '') continue
-    if (Array.isArray(v) && v.length === 0) continue
-    out[k] = v
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'string' && v === '') continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    out[k] = v;
   }
-  return out
+  return out;
 }

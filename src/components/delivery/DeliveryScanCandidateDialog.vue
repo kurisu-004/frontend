@@ -18,69 +18,69 @@
     attach-batches，INSPECTABLE 走 batch-to-inspection。默认全勾（用户取消即部分处理）。
 -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 
-import { buildSelectedScanItems, useBulkScanInspect } from '@/composables/useBulkScanInspect'
-import { attachBatches } from '@/api/deliveryNote'
-import { listShelves } from '@/api/shelves'
-import type { Shelf } from '@/types/shelf'
-import type { ScanUnresolvedTarget } from '@/types/deliveryNote'
+import { buildSelectedScanItems, useBulkScanInspect } from '@/composables/useBulkScanInspect';
+import { attachBatches } from '@/api/deliveryNote';
+import { listShelves } from '@/api/shelves';
+import type { Shelf } from '@/types/shelf';
+import type { ScanUnresolvedTarget } from '@/types/deliveryNote';
 // 2026-08-31 抽出：flatBatches + filterTargetsByKind → utils/scanCandidateFlatten.ts（便于单测）。
 import {
   flattenCandidateBatches,
   filterTargetsByKind,
   type FlatBatchRow,
-} from './utils/scanCandidateFlatten'
+} from './utils/scanCandidateFlatten';
 
 interface Props {
   /** v-model 显隐 */
-  modelValue: boolean
+  modelValue: boolean;
   /** route B 未就绪工单列表（每个含 available_batches[] + attachable_batches[]） */
-  targets: ScanUnresolvedTarget[]
+  targets: ScanUnresolvedTarget[];
   /** 可选；预选品检架 id（雪花 ID 字符串）。父级若已锁定品检架可传入。 */
-  defaultShelfId?: string
+  defaultShelfId?: string;
   /** 2026-08-31 新增：attach-batches endpoint 必填。 */
-  noteId: string
+  noteId: string;
 }
 
-const props = defineProps<Props>()
+const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void
+  (e: 'update:modelValue', v: boolean): void;
   /** 全部 / 部分送检成功后 emit，父级用 originalScanCode 重扫 */
-  (e: 'done'): void
-}>()
+  (e: 'done'): void;
+}>();
 
-const bulk = useBulkScanInspect()
-const submitting = ref(false)
+const bulk = useBulkScanInspect();
+const submitting = ref(false);
 
 /** 用户勾选的批次 id 集合；弹窗打开时（modelValue 变 true）重置为空集。 */
-const selectedBatchIds = ref(new Set<string>())
+const selectedBatchIds = ref(new Set<string>());
 
 // ============ 品检架候选（INSPECTION zone active）============
 // 2026-08-28 fix：dev-stage el-input + 数字 regex 改为 el-select + listShelves，
 // 复用 InspectionPending 的 picker 模式（`listShelves({zone, is_active, limit})`）。
-const shelves = ref<Shelf[]>([])
-const selectedShelfId = ref<string | null>(props.defaultShelfId ?? null)
-const shelvesLoading = ref(false)
-const shelvesError = ref<string | null>(null)
+const shelves = ref<Shelf[]>([]);
+const selectedShelfId = ref<string | null>(props.defaultShelfId ?? null);
+const shelvesLoading = ref(false);
+const shelvesError = ref<string | null>(null);
 
 async function loadShelves(): Promise<void> {
-  shelvesLoading.value = true
-  shelvesError.value = null
+  shelvesLoading.value = true;
+  shelvesError.value = null;
   try {
-    const result = await listShelves({ zone: 'INSPECTION', is_active: true, limit: 200 })
-    shelves.value = result.items
+    const result = await listShelves({ zone: 'INSPECTION', is_active: true, limit: 200 });
+    shelves.value = result.items;
     // 若 defaultShelfId 不在候选列表里（已被禁用 / 切走），回退到不选中
     if (props.defaultShelfId && !shelves.value.some((s) => s.id === props.defaultShelfId)) {
-      selectedShelfId.value = null
+      selectedShelfId.value = null;
     }
   } catch (e) {
-    shelvesError.value = (e as Error)?.message ?? '加载品检架失败'
-    shelves.value = []
+    shelvesError.value = (e as Error)?.message ?? '加载品检架失败';
+    shelves.value = [];
   } finally {
-    shelvesLoading.value = false
+    shelvesLoading.value = false;
   }
 }
 
@@ -89,20 +89,20 @@ watch(
   () => props.modelValue,
   (v) => {
     if (v) {
-      if (props.defaultShelfId) selectedShelfId.value = props.defaultShelfId
+      if (props.defaultShelfId) selectedShelfId.value = props.defaultShelfId;
       // 2026-08-31 改：默认全选（Element Plus el-table type="selection" 不支持「打开即默认全选」，
       // 用 selectedBatchIds 模拟；用户取消勾选即走部分处理路径）。
-      selectedBatchIds.value = new Set(flatBatches.value.map((r) => r.batch_id))
-      void loadShelves()
+      selectedBatchIds.value = new Set(flatBatches.value.map((r) => r.batch_id));
+      void loadShelves();
     }
   },
-  { immediate: true },  // 2026-08-31 加：与 onMounted 二选一，避免重复 loadShelves
-)
+  { immediate: true }, // 2026-08-31 加：与 onMounted 二选一，避免重复 loadShelves
+);
 
 /** flatBatches：把 ScanUnresolvedTarget[] 展平为 FlatBatchRow[]，合并 A+B 两组。
  *  顺序：ATTACHABLE 在前（同类聚集），INSPECTABLE 在后。
  *  2026-08-31 抽到 utils/scanCandidateFlatten.ts 的纯函数，便于单测。 */
-const flatBatches = computed<FlatBatchRow[]>(() => flattenCandidateBatches(props.targets))
+const flatBatches = computed<FlatBatchRow[]>(() => flattenCandidateBatches(props.targets));
 
 /**
  * el-table @selection-change 回调：把当前勾选行同步到 selectedBatchIds。
@@ -110,7 +110,7 @@ const flatBatches = computed<FlatBatchRow[]>(() => flattenCandidateBatches(props
  * 用新 Set 整体替换以确保与 UI 状态一致。
  */
 function onSelectionChange(rows: FlatBatchRow[]): void {
-  selectedBatchIds.value = new Set(rows.map((r) => r.batch_id))
+  selectedBatchIds.value = new Set(rows.map((r) => r.batch_id));
 }
 
 /** 是否勾了 INSPECTABLE 行（决定货架是否必填） */
@@ -118,7 +118,7 @@ const hasInspectableSelected = computed(() =>
   flatBatches.value
     .filter((r) => selectedBatchIds.value.has(r.batch_id))
     .some((r) => r.kind === 'INSPECTABLE'),
-)
+);
 
 const canConfirm = computed(
   () =>
@@ -126,47 +126,46 @@ const canConfirm = computed(
     selectedBatchIds.value.size > 0 &&
     !shelvesLoading.value &&
     // 货架仅在勾了 INSPECTABLE 时必填
-    (!hasInspectableSelected.value || (selectedShelfId.value !== null && selectedShelfId.value.length > 0)),
-)
+    (!hasInspectableSelected.value ||
+      (selectedShelfId.value !== null && selectedShelfId.value.length > 0)),
+);
 
 async function onConfirm(): Promise<void> {
   if (selectedBatchIds.value.size === 0) {
-    ElMessage.warning('请至少勾选一个批次')
-    return
+    ElMessage.warning('请至少勾选一个批次');
+    return;
   }
 
-  const selectedRows = flatBatches.value.filter((r) =>
-    selectedBatchIds.value.has(r.batch_id),
-  )
-  const inspectable = selectedRows.filter((r) => r.kind === 'INSPECTABLE')
-  const attachable = selectedRows.filter((r) => r.kind === 'ATTACHABLE')
+  const selectedRows = flatBatches.value.filter((r) => selectedBatchIds.value.has(r.batch_id));
+  const inspectable = selectedRows.filter((r) => r.kind === 'INSPECTABLE');
+  const attachable = selectedRows.filter((r) => r.kind === 'ATTACHABLE');
 
   // 货架仅在有 INSPECTABLE 时必填
-  const shelfId = selectedShelfId.value
+  const shelfId = selectedShelfId.value;
   if (inspectable.length > 0 && !shelfId) {
-    ElMessage.warning('请选择品检架')
-    return
+    ElMessage.warning('请选择品检架');
+    return;
   }
 
-  submitting.value = true
+  submitting.value = true;
   try {
-    let inspectOk = 0
-    let inspectFail = 0
-    let attachOk = 0
-    let attachFail = 0
+    let inspectOk = 0;
+    let inspectFail = 0;
+    let attachOk = 0;
+    let attachFail = 0;
 
     // 1) INSPECTABLE：一键送检（复用 buildSelectedScanItems，喂只剩 INSPECTABLE 的临时结构）
     if (inspectable.length > 0 && shelfId) {
       const items = buildSelectedScanItems(
         filterTargetsByKind(props.targets, 'INSPECTABLE', selectedBatchIds.value),
         selectedBatchIds.value,
-      )
+      );
       const result = await bulk.run({
         target_inspection_shelf_id: shelfId,
         items,
-      })
-      inspectOk = result.submitted.length
-      inspectFail = result.failed.length
+      });
+      inspectOk = result.submitted.length;
+      inspectFail = result.failed.length;
     }
 
     // 2) ATTACHABLE：attach-batches
@@ -174,30 +173,30 @@ async function onConfirm(): Promise<void> {
       const result = await attachBatches(
         props.noteId,
         attachable.map((r) => ({ batch_id: r.batch_id, version: r.version })),
-      )
-      attachOk = result.attached
-      attachFail = result.conflicts.length
+      );
+      attachOk = result.attached;
+      attachFail = result.conflicts.length;
     }
 
     // 3) 汇总 toast
-    const totalOk = inspectOk + attachOk
-    const totalFail = inspectFail + attachFail
+    const totalOk = inspectOk + attachOk;
+    const totalFail = inspectFail + attachFail;
     if (totalFail === 0 && totalOk > 0) {
-      ElMessage.success(`已处理 ${totalOk} 项`)
-      emit('done')
-      emit('update:modelValue', false)
+      ElMessage.success(`已处理 ${totalOk} 项`);
+      emit('done');
+      emit('update:modelValue', false);
     } else if (totalOk === 0) {
-      ElMessage.error('全部处理失败，请检查后重试')
+      ElMessage.error('全部处理失败，请检查后重试');
     } else {
       ElMessage.warning(
         `部分处理：送检 ${inspectOk}/${inspectable.length}，加入 ${attachOk}/${attachable.length}`,
-      )
+      );
       // 部分成功也算 resolved（父级重扫会再判定）
-      emit('done')
-      emit('update:modelValue', false)
+      emit('done');
+      emit('update:modelValue', false);
     }
   } finally {
-    submitting.value = false
+    submitting.value = false;
   }
 }
 </script>
@@ -215,7 +214,7 @@ async function onConfirm(): Promise<void> {
     <el-alert
       type="info"
       :closable="false"
-      :title="`勾选要处理的批次：A 组「加入」送货单；B 组「送检」后入单。已默认全选。`"
+      title="勾选要处理的批次：A 组「加入」送货单；B 组「送检」后入单。已默认全选。"
       class="candidate-alert"
     />
 
@@ -257,18 +256,33 @@ async function onConfirm(): Promise<void> {
       <!-- 2026-08-31 新增：动作列，区分 ATTACHABLE（加入） / INSPECTABLE（送检） -->
       <el-table-column label="动作" width="80" align="center">
         <template #default="{ row }">
-          <el-tag
-            :type="row.kind === 'ATTACHABLE' ? 'success' : 'warning'"
-            size="small"
-          >
+          <el-tag :type="row.kind === 'ATTACHABLE' ? 'success' : 'warning'" size="small">
             {{ row.kind === 'ATTACHABLE' ? '加入' : '送检' }}
           </el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="serial_no" label="序列号" min-width="90" align="center" />
-      <el-table-column prop="drawing_no" label="图号" min-width="110" align="center" show-overflow-tooltip />
-      <el-table-column prop="name" label="名称" min-width="80" align="center" show-overflow-tooltip />
-      <el-table-column prop="batch_id" label="批次ID" min-width="140" align="center" show-overflow-tooltip>
+      <el-table-column
+        prop="drawing_no"
+        label="图号"
+        min-width="110"
+        align="center"
+        show-overflow-tooltip
+      />
+      <el-table-column
+        prop="name"
+        label="名称"
+        min-width="80"
+        align="center"
+        show-overflow-tooltip
+      />
+      <el-table-column
+        prop="batch_id"
+        label="批次ID"
+        min-width="140"
+        align="center"
+        show-overflow-tooltip
+      >
         <template #default="{ row }">
           {{ row.batch_id }}
         </template>
@@ -279,12 +293,7 @@ async function onConfirm(): Promise<void> {
 
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button
-        type="primary"
-        :loading="submitting"
-        :disabled="!canConfirm"
-        @click="onConfirm"
-      >
+      <el-button type="primary" :loading="submitting" :disabled="!canConfirm" @click="onConfirm">
         确认处理
       </el-button>
     </template>

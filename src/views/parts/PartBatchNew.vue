@@ -34,67 +34,67 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { listCustomers, type Customer } from '@/api/customer'
-import { useApplicantSearch } from '@/composables/useApplicantSearch'
-import PartBatchManualTab from './components/PartBatchManualTab.vue'
-import PartBatchPdfTab from './components/PartBatchPdfTab.vue'
-import { usePartBatchManual } from './composables/usePartBatchManual'
-import { usePartBatchPdf } from './composables/usePartBatchPdf'
+import { onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import { listCustomers, type Customer } from '@/api/customer';
+import { useApplicantSearch } from '@/composables/useApplicantSearch';
+import PartBatchManualTab from './components/PartBatchManualTab.vue';
+import PartBatchPdfTab from './components/PartBatchPdfTab.vue';
+import { usePartBatchManual } from './composables/usePartBatchManual';
+import { usePartBatchPdf } from './composables/usePartBatchPdf';
 
-const router = useRouter()
-const route = useRoute()
+const router = useRouter();
+const route = useRoute();
 
 // ============ 客户全集（两 Tab 共用，避免重复拉） ============
-const customers = ref<Customer[]>([])
+const customers = ref<Customer[]>([]);
 async function loadCustomers(): Promise<void> {
   try {
-    customers.value = await listCustomers()
+    customers.value = await listCustomers();
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '客户列表加载失败')
+    ElMessage.error((e as Error).message ?? '客户列表加载失败');
   }
 }
 
 // ============ 申请人搜索（两 Tab 共用 cache） ============
 const applicantSearch = useApplicantSearch({
   resolveRootCustomerId: (pickedId) => {
-    if (!pickedId) return null
-    const picked = customers.value.find((c) => c.id === pickedId)
-    if (!picked) return null
-    if (picked.parent_id === null) return picked.id
-    return picked.parent_id
+    if (!pickedId) return null;
+    const picked = customers.value.find((c) => c.id === pickedId);
+    if (!picked) return null;
+    if (picked.parent_id === null) return picked.id;
+    return picked.parent_id;
   },
-})
+});
 
 // ============ 当前激活 tab ============
 // URL ?tab=manual|pdf 双向同步；缺省 manual。
-const activeTab = ref<string>(typeof route.query.tab === 'string' ? route.query.tab : 'manual')
+const activeTab = ref<string>(typeof route.query.tab === 'string' ? route.query.tab : 'manual');
 watch(activeTab, (v) => {
-  router.replace({ query: { ...route.query, tab: v } })
-})
+  router.replace({ query: { ...route.query, tab: v } });
+});
 
 // PDF Tab 提交成功后切到的 tab 名（默认 manual）。
-const successNextTab = ref<string>('manual')
+const successNextTab = ref<string>('manual');
 
 // ============ 两 Tab composable ============
 // 2026-08-25：包一层 reactive() 让 v-bind="..." 能把嵌套 ref / computed 在
 // 类型层面「解包」成普通值，避开 Vue 3.4 对 v-bind object 静态类型严格校验。
-const manual = reactive(usePartBatchManual({ customers, applicantSearch }))
-const pdf = reactive(usePartBatchPdf({ customers, applicantSearch, successNextTab }))
+const manual = reactive(usePartBatchManual({ customers, applicantSearch }));
+const pdf = reactive(usePartBatchPdf({ customers, applicantSearch, successNextTab }));
 
 // 2026-08-25 fix：监听 PDF Tab 提交成功后由 composable 写入的 successNextTab，
 // 切回 activeTab。原 PartBatchNew.vue 提交后直接 activeTab='manual'，拆 Tab 后
 // 这部分代码归 PDF Tab composable，shell 负责 tab 切换。
 watch(successNextTab, (v) => {
-  if (v) activeTab.value = v
-})
+  if (v) activeTab.value = v;
+});
 
 onMounted(() => {
-  void loadCustomers()
+  void loadCustomers();
   // sortable 初始化移到 PartBatchPdfTab 自己的 onMounted（ref 现在归子组件所有）
-})
+});
 </script>
 
 <style lang="scss" scoped>

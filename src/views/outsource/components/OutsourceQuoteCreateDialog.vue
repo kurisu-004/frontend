@@ -24,9 +24,11 @@
         <el-select
           :model-value="form.part_id"
           filterable
-          style="width:100%"
+          style="width: 100%"
           placeholder="可选报价零件（在外协工序货架上的在制件；按图号/名称筛选）"
-          @update:model-value="(v: string | number | boolean | undefined) => $emit('update:part-id', String(v ?? ''))"
+          @update:model-value="
+            (v: string | number | boolean | undefined) => $emit('update:part-id', String(v ?? ''))
+          "
           @change="(v: string) => $emit('part-change', v)"
         >
           <el-option
@@ -41,8 +43,11 @@
         <el-select
           :model-value="form.process_id"
           filterable
-          style="width:100%"
-          @update:model-value="(v: string | number | boolean | undefined) => $emit('update:process-id', String(v ?? ''))"
+          style="width: 100%"
+          @update:model-value="
+            (v: string | number | boolean | undefined) =>
+              $emit('update:process-id', String(v ?? ''))
+          "
         >
           <el-option
             v-for="p in processes"
@@ -59,15 +64,13 @@
           :disabled="!form.process_id"
           :loading="companiesLoading"
           placeholder="请先选择工序"
-          style="width:100%"
-          @update:model-value="(v: string | number | boolean | undefined) => $emit('update:company-id', String(v ?? ''))"
+          style="width: 100%"
+          @update:model-value="
+            (v: string | number | boolean | undefined) =>
+              $emit('update:company-id', String(v ?? ''))
+          "
         >
-          <el-option
-            v-for="c in companies"
-            :key="c.id"
-            :label="c.name"
-            :value="c.id"
-          />
+          <el-option v-for="c in companies" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
       </el-form-item>
       <el-form-item label="单价(元)" prop="price">
@@ -76,14 +79,18 @@
           type="number"
           :precision="2"
           :step="0.01"
-          @update:model-value="(v: string | number) => $emit('update:price', typeof v === 'number' ? String(v) : v)"
+          @update:model-value="
+            (v: string | number) => $emit('update:price', typeof v === 'number' ? String(v) : v)
+          "
         />
       </el-form-item>
       <el-form-item label="备注">
         <el-input
           :model-value="form.note"
           type="textarea"
-          @update:model-value="(v: string | number) => $emit('update:note', typeof v === 'number' ? String(v) : v)"
+          @update:model-value="
+            (v: string | number) => $emit('update:note', typeof v === 'number' ? String(v) : v)
+          "
         />
       </el-form-item>
     </el-form>
@@ -95,33 +102,33 @@
 </template>
 
 <script setup lang="ts">
-import { useDialogSize } from '@/composables/useDialogSize'
-import type { FormInstance, FormRules } from 'element-plus'
-import type { CreateQuoteForm } from '../composables/useOutsourceQuoteForm'
-import type { PartListItem } from '@/types/parts'
-import type { Process } from '@/types/process'
+import { useDialogSize } from '@/composables/useDialogSize';
+import type { FormInstance, FormRules } from 'element-plus';
+import type { CreateQuoteForm } from '../composables/useOutsourceQuoteForm';
+import type { PartListItem } from '@/types/parts';
+import type { Process } from '@/types/process';
 
 defineProps<{
-  modelValue: boolean
-  form: CreateQuoteForm
-  rules: FormRules
-  parts: readonly PartListItem[]
-  processes: readonly Process[]
-  companies: readonly { id: string; name: string }[]
-  companiesLoading: boolean
-}>()
+  modelValue: boolean;
+  form: CreateQuoteForm;
+  rules: FormRules;
+  parts: readonly PartListItem[];
+  processes: readonly Process[];
+  companies: readonly { id: string; name: string }[];
+  companiesLoading: boolean;
+}>();
 
 defineEmits<{
-  (e: 'update:model-value', value: boolean): void
-  (e: 'update:part-id', value: string): void
-  (e: 'update:process-id', value: string): void
-  (e: 'update:company-id', value: string): void
-  (e: 'update:price', value: string): void
-  (e: 'update:note', value: string): void
-  (e: 'form-ref', value: FormInstance | null): void
-  (e: 'part-change', partId: string): void
-  (e: 'confirm'): void
-}>()
+  (e: 'update:model-value', value: boolean): void;
+  (e: 'update:part-id', value: string): void;
+  (e: 'update:process-id', value: string): void;
+  (e: 'update:company-id', value: string): void;
+  (e: 'update:price', value: string): void;
+  (e: 'update:note', value: string): void;
+  (e: 'form-ref', value: FormInstance | null): void;
+  (e: 'part-change', partId: string): void;
+  (e: 'confirm'): void;
+}>();
 
-const dialogSize = useDialogSize({ desktopWidth: 640 })
+const dialogSize = useDialogSize({ desktopWidth: 640 });
 </script>

@@ -12,12 +12,12 @@
 //      （PrintPreviewDialog）、EP 表格 tbody 需查询才拿得到（usePartBatchPdf）。
 // 不适用：容器在挂载时已存在的场景（WorkerColumn、useColumnDrag.applyDrag），直接用 useDraggable 即可。
 
-import { watch, type Ref } from 'vue'
+import { watch, type Ref } from 'vue';
 import {
   useDraggable,
   type UseDraggableOptions,
   type UseDraggableReturn,
-} from 'vue-draggable-plus'
+} from 'vue-draggable-plus';
 
 export function useLazyDraggable<T>(
   elRef: Ref<HTMLElement | null>,
@@ -25,8 +25,14 @@ export function useLazyDraggable<T>(
   options: UseDraggableOptions<T> = {},
 ): UseDraggableReturn {
   // 覆写放在展开之后：即使调用方显式传了 immediate: true 也会被强制关掉。
-  const inner = useDraggable(elRef, listRef, { ...options, immediate: false })
+  const inner = useDraggable(elRef, listRef, { ...options, immediate: false });
   // flush: 'post' 保证 DOM 已 patch 完再绑定。
-  watch(elRef, (el) => { if (el) inner.start(el) }, { flush: 'post' })
-  return inner
+  watch(
+    elRef,
+    (el) => {
+      if (el) inner.start(el);
+    },
+    { flush: 'post' },
+  );
+  return inner;
 }

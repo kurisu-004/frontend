@@ -5,11 +5,21 @@
   <el-tooltip placement="top" :show-after="200" :disabled="!hasDetails">
     <template #content>
       <div class="card-tooltip">
-        <div><span class="tt-label">图号</span><span>{{ batch.drawing_no }}</span></div>
-        <div v-if="batch.serial_no"><span class="tt-label">序列号</span><span>{{ batch.serial_no }}</span></div>
-        <div v-if="batch.customer"><span class="tt-label">客户</span><span>{{ batch.customer }}</span></div>
-        <div v-if="batch.applicant"><span class="tt-label">申请人</span><span>{{ batch.applicant }}</span></div>
-        <div v-if="batch.location"><span class="tt-label">所在位置</span><span>{{ batch.location }}</span></div>
+        <div>
+          <span class="tt-label">图号</span><span>{{ batch.drawing_no }}</span>
+        </div>
+        <div v-if="batch.serial_no">
+          <span class="tt-label">序列号</span><span>{{ batch.serial_no }}</span>
+        </div>
+        <div v-if="batch.customer">
+          <span class="tt-label">客户</span><span>{{ batch.customer }}</span>
+        </div>
+        <div v-if="batch.applicant">
+          <span class="tt-label">申请人</span><span>{{ batch.applicant }}</span>
+        </div>
+        <div v-if="batch.location">
+          <span class="tt-label">所在位置</span><span>{{ batch.location }}</span>
+        </div>
       </div>
     </template>
     <el-card
@@ -37,14 +47,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { WorkOrderCard as Card } from '@/types/workerPool'
+import { computed } from 'vue';
+import type { WorkOrderCard as Card } from '@/types/workerPool';
 
-const props = defineProps<{ batch: Card }>()
+const props = defineProps<{ batch: Card }>();
 
-const dueDate = computed(() =>
-  props.batch.planned_delivery_date ?? props.batch.system_delivery_date ?? '',
-)
+const dueDate = computed(
+  () => props.batch.planned_delivery_date ?? props.batch.system_delivery_date ?? '',
+);
 
 const hasDetails = computed(
   () =>
@@ -52,7 +62,7 @@ const hasDetails = computed(
     !!props.batch.applicant ||
     !!props.batch.location ||
     !!props.batch.serial_no,
-)
+);
 </script>
 
 <style scoped>
@@ -60,27 +70,53 @@ const hasDetails = computed(
   cursor: grab;
   border-left: 3px solid transparent;
 }
-.work-order-card:active { cursor: grabbing; }
-.work-order-card.is-urgent { border-left-color: #e6a23c; }
+.work-order-card:active {
+  cursor: grabbing;
+}
+.work-order-card.is-urgent {
+  border-left-color: #e6a23c;
+}
 .card-header {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   font-weight: 600;
 }
 .batch-no {
   font-family: var(--el-font-family-monospace, monospace);
   font-size: 13px;
 }
-.card-body { font-size: 13px; line-height: 1.5; }
-.name-row { font-weight: 500; }
+.card-body {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.name-row {
+  font-weight: 500;
+}
 .meta-row {
-  display: flex; gap: 4px; align-items: baseline;
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
   color: var(--el-text-color-secondary);
 }
-.qty { font-weight: 600; color: var(--el-color-primary); }
-.dot { color: var(--el-text-color-placeholder); }
-.due { font-variant-numeric: tabular-nums; }
-.card-tooltip .tt-label {
-  display: inline-block; min-width: 4em; color: rgba(255,255,255,0.65);
+.qty {
+  font-weight: 600;
+  color: var(--el-color-primary);
 }
-.card-tooltip > div { display: flex; gap: 8px; line-height: 1.6; }
+.dot {
+  color: var(--el-text-color-placeholder);
+}
+.due {
+  font-variant-numeric: tabular-nums;
+}
+.card-tooltip .tt-label {
+  display: inline-block;
+  min-width: 4em;
+  color: rgba(255, 255, 255, 0.65);
+}
+.card-tooltip > div {
+  display: flex;
+  gap: 8px;
+  line-height: 1.6;
+}
 </style>

@@ -47,7 +47,9 @@
     <div v-if="shelf.location" class="location">{{ shelf.location }}</div>
     <div class="load">
       <el-icon><Box /></el-icon>
-      <span>在架 <strong>{{ shelf.current_load }}</strong> 件</span>
+      <span
+        >在架 <strong>{{ shelf.current_load }}</strong> 件</span
+      >
     </div>
     <div v-if="shelf.mapped_process_codes.length" class="processes">
       <el-tag
@@ -65,20 +67,20 @@
 </template>
 
 <script setup lang="ts">
-import { Box, StarFilled } from '@element-plus/icons-vue'
-import type { ShelfForReturn } from '@/types/shelf'
+import { Box, StarFilled } from '@element-plus/icons-vue';
+import type { ShelfForReturn } from '@/types/shelf';
 
 const props = defineProps<{
-  shelf: ShelfForReturn
-  isSelected: boolean
-}>()
+  shelf: ShelfForReturn;
+  isSelected: boolean;
+}>();
 
 const emit = defineEmits<{
-  select: [shelfId: string]
-}>()
+  select: [shelfId: string];
+}>();
 
 function onClick(): void {
-  emit('select', props.shelf.id)
+  emit('select', props.shelf.id);
 }
 </script>
 

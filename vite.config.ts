@@ -1,9 +1,9 @@
-import { defineConfig, loadEnv, type UserConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
-import AutoImport from 'unplugin-auto-import/vite'
-import Components from 'unplugin-vue-components/vite'
-import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
-import { fileURLToPath, URL } from 'node:url'
+import { defineConfig, loadEnv, type UserConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
+import AutoImport from 'unplugin-auto-import/vite';
+import Components from 'unplugin-vue-components/vite';
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers';
+import { fileURLToPath, URL } from 'node:url';
 
 // 2026-08-28 重写：弃用裸全局 `define: { __DUMMY_AUTH__ }` 方案（Vite 8 dev client
 // 不走 define 替换，详见 docs/08-known-risks/framework-pitfalls.md 第 6 节）。
@@ -14,7 +14,7 @@ import { fileURLToPath, URL } from 'node:url'
 
 function config({ command, mode }: { command: 'build' | 'serve'; mode: string }): UserConfig {
   // loadEnv 第三个参数 '' 表示读所有变量（不限 VITE_ 前缀），方便后面读 VITE_DUMMY_AUTH。
-  const env = loadEnv(mode, process.cwd(), '')
+  const env = loadEnv(mode, process.cwd(), '');
 
   // 第一道 prod 保护：build 期只要 VITE_DUMMY_AUTH === 'true'（不论 mode 是什么，
   // 防住「.env.production 误设 VITE_DUMMY_AUTH=true」「--mode dummy build」两种情况）
@@ -22,8 +22,8 @@ function config({ command, mode }: { command: 'build' | 'serve'; mode: string })
   if (command === 'build' && env.VITE_DUMMY_AUTH === 'true') {
     throw new Error(
       '[dummy-auth] refusing to build with VITE_DUMMY_AUTH=true. ' +
-      'Remove VITE_DUMMY_AUTH from your .env / .env.dummy or run dev mode only.',
-    )
+        'Remove VITE_DUMMY_AUTH from your .env / .env.dummy or run dev mode only.',
+    );
   }
 
   return {
@@ -78,9 +78,9 @@ function config({ command, mode }: { command: 'build' | 'serve'; mode: string })
             typeof warning.id === 'string' &&
             warning.id.includes('@vueuse/core')
           ) {
-            return
+            return;
           }
-          defaultHandler(warning)
+          defaultHandler(warning);
         },
       },
     },
@@ -95,7 +95,7 @@ function config({ command, mode }: { command: 'build' | 'serve'; mode: string })
         },
       },
     },
-  }
+  };
 }
 
-export default defineConfig(config)
+export default defineConfig(config);

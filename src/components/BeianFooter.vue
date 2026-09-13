@@ -17,12 +17,7 @@
     </a>
 
     <!-- ICP 备案：工信部 LOGO + 备案号 -->
-    <a
-      class="beian-link"
-      href="https://beian.miit.gov.cn/"
-      target="_blank"
-      rel="noreferrer"
-    >
+    <a class="beian-link" href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">
       <svg class="beian-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path
           d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h6v2H7v-2z"

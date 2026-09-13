@@ -10,88 +10,88 @@
 
 ## 一、入口与路由
 
-| Path | Name | menuCode | 守卫 | 备注 |
-|---|---|---|---|---|
-| `/parts` | `PartsList` | `parts_list` | requireAuth | 零件一览（含装配件，rowType 过滤） |
-| `/parts/new` | `PartsNew` | `parts_new` | requireAuth | 批量新建（双 Tab：手动录入 / PDF 批量上传） |
-| `/parts/:id` | `PartsDetail` | — | requireAuth | 零件详情（共享 menuCode 校验沿父路由；id 雪花字符串） |
-| `/parts/import/bid` | — | — | requireAuth | 投标 Excel 导入（旧 `/parts/new/bid-import` 兼容路径） |
-| `/assemblies` | — | — | redirect → `/parts` | 装配件一览退役 |
-| `/assemblies/:id` | `AssemblyDetail` | — | requireAuth | 装配件详情（独立路由壳，UI 走装配视图） |
+| Path                | Name             | menuCode     | 守卫                | 备注                                                   |
+| ------------------- | ---------------- | ------------ | ------------------- | ------------------------------------------------------ |
+| `/parts`            | `PartsList`      | `parts_list` | requireAuth         | 零件一览（含装配件，rowType 过滤）                     |
+| `/parts/new`        | `PartsNew`       | `parts_new`  | requireAuth         | 批量新建（双 Tab：手动录入 / PDF 批量上传）            |
+| `/parts/:id`        | `PartsDetail`    | —            | requireAuth         | 零件详情（共享 menuCode 校验沿父路由；id 雪花字符串）  |
+| `/parts/import/bid` | —                | —            | requireAuth         | 投标 Excel 导入（旧 `/parts/new/bid-import` 兼容路径） |
+| `/assemblies`       | —                | —            | redirect → `/parts` | 装配件一览退役                                         |
+| `/assemblies/:id`   | `AssemblyDetail` | —            | requireAuth         | 装配件详情（独立路由壳，UI 走装配视图）                |
 
 全部在 `MainLayout` 子树下，定义于 `src/router/index.ts`。
 
 ## 二、关键页面
 
-| 文件 | 大小 | 职责 |
-|---|---|---|
-| `src/views/parts/PartsList.vue` | 12.8K | 零件一览装配壳：filter-card + `PartsTable` + `PartsBatchBar` + 分页 + 4 个下发 dialog + 隐藏 iframe（批量打印预览）；`canEdit` 决定下发/导入按钮可见性 |
-| `src/views/parts/PartBatchNew.vue` | 3.9K | 批量新建壳：el-tabs 挂载「录入」+「PDF 批量上传」两个 Tab 组件；成功后两 Tab 都跳 `/parts?status=PENDING` |
-| `src/views/parts/PartDetail.vue` | 24.8K | 零件详情壳：9 张卡（7 子组件 + 3 个 FileListCard）+ 底部操作栏（品检通过 / 指定工序 / 外协回收 / 取消订单 / 删除）；dialog 状态由 shell 局部维护 |
-| `src/views/parts/PartBidImport.vue` | 25.8K | 投标 Excel 导入：选 L1 客户 + 请购日期 + 上传 .xlsx → 解析 → 预览（每行按部门名解析到 L2 + 可手挂 PDF） → 提交（dedupe 申请人 → bulkGetOrCreate → batchCreateParts multipart） → 跳 `/parts?status=PENDING` |
-| `src/views/assemblies/AssemblyDetail.vue` | 6.7K | 装配件详情壳：`AssemblyInfoCard` + `AssemblyChildrenTable` + 总装 PDF + 编辑对话框；调 `useAssemblyDetail` composable |
+| 文件                                      | 大小  | 职责                                                                                                                                                                                                        |
+| ----------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/views/parts/PartsList.vue`           | 12.8K | 零件一览装配壳：filter-card + `PartsTable` + `PartsBatchBar` + 分页 + 4 个下发 dialog + 隐藏 iframe（批量打印预览）；`canEdit` 决定下发/导入按钮可见性                                                      |
+| `src/views/parts/PartBatchNew.vue`        | 3.9K  | 批量新建壳：el-tabs 挂载「录入」+「PDF 批量上传」两个 Tab 组件；成功后两 Tab 都跳 `/parts?status=PENDING`                                                                                                   |
+| `src/views/parts/PartDetail.vue`          | 24.8K | 零件详情壳：9 张卡（7 子组件 + 3 个 FileListCard）+ 底部操作栏（品检通过 / 指定工序 / 外协回收 / 取消订单 / 删除）；dialog 状态由 shell 局部维护                                                            |
+| `src/views/parts/PartBidImport.vue`       | 25.8K | 投标 Excel 导入：选 L1 客户 + 请购日期 + 上传 .xlsx → 解析 → 预览（每行按部门名解析到 L2 + 可手挂 PDF） → 提交（dedupe 申请人 → bulkGetOrCreate → batchCreateParts multipart） → 跳 `/parts?status=PENDING` |
+| `src/views/assemblies/AssemblyDetail.vue` | 6.7K  | 装配件详情壳：`AssemblyInfoCard` + `AssemblyChildrenTable` + 总装 PDF + 编辑对话框；调 `useAssemblyDetail` composable                                                                                       |
 
 ### 子组件（`src/views/parts/components/`）
 
-| 文件 | 职责 |
-|---|---|
-| `PartInfoCard.vue` | 信息卡 + 行内编辑（editing 切换；form 由 usePartDetail 持有） |
-| `PartHistoryCard.vue` | 历史事件卡（事件列表 + 标签映射） |
-| `PartCncCard.vue` | CNC 文件卡（G 代码 / 设定单上传下载，list/upload/delete 走 `api/cnc.ts`） |
-| `PartQuoteCard.vue` | 报价卡（外协报价关联） |
-| `PartDeliveryNoteLinkCard.vue` | 送货单关联卡（仅 `part.delivery_note_id != null` 时显示） |
-| `PartAssemblyLinkCard.vue` | 装配件关联卡（仅 `part.assembly_id != null` 时显示） |
-| `PartBatchMonitorCard.vue` | 批次监控卡（批次列表 + 拆分 / 取消批次） |
-| `PartBatchManualTab.vue` | 批量新建 Tab 1「录入」：Dialog 入队 → 提交 N 条 |
-| `PartBatchPdfTab.vue` | 批量新建 Tab 2「PDF 批量上传」：拖 PDF + 可选 Excel + 可选 3D 模型 → 单页独立零件 / 多页装配件 |
-| `PartsTable.vue` | 零件一览纯 el-table：列定义 / 行内编辑 / 批量选中 / 表头 popover；懒加载树（`has_children` / `children`） |
-| `PartsBatchBar.vue` | 批量操作栏（批量下发 / 批量品检通过 / 批量打印） |
-| `PartsDispatchDialog.vue` | 单件下发对话框（选目标 PRODUCTION 货架 + 下一道工序） |
-| `PartsBatchDispatchDialog.vue` | 批量下发对话框 |
-| `PurchaseOrderImportDialog.vue` | 采购订单 Excel 导入对话框（解析系统交期 + 订单号） |
+| 文件                            | 职责                                                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `PartInfoCard.vue`              | 信息卡 + 行内编辑（editing 切换；form 由 usePartDetail 持有）                                             |
+| `PartHistoryCard.vue`           | 历史事件卡（事件列表 + 标签映射）                                                                         |
+| `PartCncCard.vue`               | CNC 文件卡（G 代码 / 设定单上传下载，list/upload/delete 走 `api/cnc.ts`）                                 |
+| `PartQuoteCard.vue`             | 报价卡（外协报价关联）                                                                                    |
+| `PartDeliveryNoteLinkCard.vue`  | 送货单关联卡（仅 `part.delivery_note_id != null` 时显示）                                                 |
+| `PartAssemblyLinkCard.vue`      | 装配件关联卡（仅 `part.assembly_id != null` 时显示）                                                      |
+| `PartBatchMonitorCard.vue`      | 批次监控卡（批次列表 + 拆分 / 取消批次）                                                                  |
+| `PartBatchManualTab.vue`        | 批量新建 Tab 1「录入」：Dialog 入队 → 提交 N 条                                                           |
+| `PartBatchPdfTab.vue`           | 批量新建 Tab 2「PDF 批量上传」：拖 PDF + 可选 Excel + 可选 3D 模型 → 单页独立零件 / 多页装配件            |
+| `PartsTable.vue`                | 零件一览纯 el-table：列定义 / 行内编辑 / 批量选中 / 表头 popover；懒加载树（`has_children` / `children`） |
+| `PartsBatchBar.vue`             | 批量操作栏（批量下发 / 批量品检通过 / 批量打印）                                                          |
+| `PartsDispatchDialog.vue`       | 单件下发对话框（选目标 PRODUCTION 货架 + 下一道工序）                                                     |
+| `PartsBatchDispatchDialog.vue`  | 批量下发对话框                                                                                            |
+| `PurchaseOrderImportDialog.vue` | 采购订单 Excel 导入对话框（解析系统交期 + 订单号）                                                        |
 
 ## 三、主要 API 调用
 
 `src/api/parts.ts` 是兼容 shim（`export * from './parts'`），实际代码在 `src/api/parts/` 子目录：
 
-| 文件 | 职责 | v1 / v2 |
-|---|---|---|
-| `src/api/parts/index.ts` | 聚合 4 子文件 re-export | — |
-| `src/api/parts/crud.ts` | 单件 CRUD + 全生命周期（创建 / 更新 / 上下架 / 扫码 / 品检 / 外协送收 / 返修 / 完成 / 取消 / 释放编程 / failInspection 等） | `scanInspect` 单件 2026-08-25 切 v2 |
-| `src/api/parts/batch.ts` | 批量新建 + PDF 树形批量 + 批次 CRUD + `listInspectionBatches` + `batchPassInspection` + `batchScanInspect` | `batchPassInspection` / `batchScanInspect` 2026-08-25 切 v2 |
-| `src/api/parts/bid.ts` | 应标 Excel 解析后批量匹配 + 回填订单号 / 系统交期 | v1 |
-| `src/api/parts/file.ts` | 图纸双面打印 PDF 生成（单件 `/print-drawing` + 批量合并 `/print-drawing-batch`） | v1 |
-| `src/api/assembly.ts` | 装配件 CRUD（已合并到本域，老路由保留兼容） | v1 |
+| 文件                     | 职责                                                                                                                        | v1 / v2                                                     |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `src/api/parts/index.ts` | 聚合 4 子文件 re-export                                                                                                     | —                                                           |
+| `src/api/parts/crud.ts`  | 单件 CRUD + 全生命周期（创建 / 更新 / 上下架 / 扫码 / 品检 / 外协送收 / 返修 / 完成 / 取消 / 释放编程 / failInspection 等） | `scanInspect` 单件 2026-08-25 切 v2                         |
+| `src/api/parts/batch.ts` | 批量新建 + PDF 树形批量 + 批次 CRUD + `listInspectionBatches` + `batchPassInspection` + `batchScanInspect`                  | `batchPassInspection` / `batchScanInspect` 2026-08-25 切 v2 |
+| `src/api/parts/bid.ts`   | 应标 Excel 解析后批量匹配 + 回填订单号 / 系统交期                                                                           | v1                                                          |
+| `src/api/parts/file.ts`  | 图纸双面打印 PDF 生成（单件 `/print-drawing` + 批量合并 `/print-drawing-batch`）                                            | v1                                                          |
+| `src/api/assembly.ts`    | 装配件 CRUD（已合并到本域，老路由保留兼容）                                                                                 | v1                                                          |
 
 ## 四、相关 composable / utils
 
 **通用 composable**（在 `src/composables/`）：
 
-| 文件 | 用途 |
-|---|---|
-| `usePartLocationTree` | 零件「所在位置」5 大类（OFFICE / PRODUCTION_SHELF / WORKER / INSPECTION_SHELF / OUTSOURCE_COMPANY）+ holder 叶子树；模块级 Promise 缓存 + `splitLocationSelection` 把 el-tree-select 多选值拆成后端 `locations` + `holder_ids` |
-| `useBulkPassInspection` | 批量品检通过 v2 端点封装；单次 round-trip，`{passed, failed}` 部分失败语义；保留 `BulkPassItem[]` 契约（弹窗依赖） |
-| `useBulkScanInspect` | 批量一键送检 v2 端点封装；与 `useBulkPassInspection` 形态对称；主要消费方：扫码建单弹窗 `BatchSubmitInspectionConfirmDialog` |
-| `useListFilterPersist` | 列表 filter / sort / pageSize 持久化（`useListStatePersist` / `usePartsColumnFilters` 共用底层） |
+| 文件                    | 用途                                                                                                                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `usePartLocationTree`   | 零件「所在位置」5 大类（OFFICE / PRODUCTION_SHELF / WORKER / INSPECTION_SHELF / OUTSOURCE_COMPANY）+ holder 叶子树；模块级 Promise 缓存 + `splitLocationSelection` 把 el-tree-select 多选值拆成后端 `locations` + `holder_ids` |
+| `useBulkPassInspection` | 批量品检通过 v2 端点封装；单次 round-trip，`{passed, failed}` 部分失败语义；保留 `BulkPassItem[]` 契约（弹窗依赖）                                                                                                             |
+| `useBulkScanInspect`    | 批量一键送检 v2 端点封装；与 `useBulkPassInspection` 形态对称；主要消费方：扫码建单弹窗 `BatchSubmitInspectionConfirmDialog`                                                                                                   |
+| `useListFilterPersist`  | 列表 filter / sort / pageSize 持久化（`useListStatePersist` / `usePartsColumnFilters` 共用底层）                                                                                                                               |
 
 **页级 composable**（在 `src/views/parts/composables/`）：
 
-| 文件 | 用途 |
-|---|---|
-| `usePartDetail` | 详情页业务状态：fetchPart / editing / saving / 取消订单 / 删除 / 品检通过 / 指定工序 / 外协回收 / 批次拆分取消 |
-| `usePartFiles` | 详情页文件列表 / 上传 / 删除 |
-| `usePartCncGroups` | 详情页 CNC 文件分组（G 代码 / 设定单） |
-| `usePartQuote` | 详情页报价关联 |
-| `usePartsListQuery` | 列表查询状态机（search / items / total / loading / sort / page）；URL `?status=` 注入或 localStorage 恢复 |
-| `usePartsColumnFilters` | 列头 popover 筛选（多列并发 + draft 同步） |
-| `usePartInlineEdit` | 行内编辑（form / saving / 提交 / 取消） |
-| `usePartDispatch` | 单件 / 批量下发对话框状态 |
-| `useBatchPrint` | 批量打印（隐藏 iframe + 合并 PDF Blob） |
-| `usePartBatchSelection` | 列表多选状态 |
-| `usePartBatchManual` | 批量新建 Tab 1 状态 + handler |
-| `usePartBatchPdf` | 批量新建 Tab 2 状态 + handler（PDF 解析 + 树形提交） |
-| `usePartBatchShared` | 两 Tab 纯工具函数 |
-| `partsListCtx` | 列表 context（共享 parts / selection / columnVisibility） |
+| 文件                    | 用途                                                                                                           |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `usePartDetail`         | 详情页业务状态：fetchPart / editing / saving / 取消订单 / 删除 / 品检通过 / 指定工序 / 外协回收 / 批次拆分取消 |
+| `usePartFiles`          | 详情页文件列表 / 上传 / 删除                                                                                   |
+| `usePartCncGroups`      | 详情页 CNC 文件分组（G 代码 / 设定单）                                                                         |
+| `usePartQuote`          | 详情页报价关联                                                                                                 |
+| `usePartsListQuery`     | 列表查询状态机（search / items / total / loading / sort / page）；URL `?status=` 注入或 localStorage 恢复      |
+| `usePartsColumnFilters` | 列头 popover 筛选（多列并发 + draft 同步）                                                                     |
+| `usePartInlineEdit`     | 行内编辑（form / saving / 提交 / 取消）                                                                        |
+| `usePartDispatch`       | 单件 / 批量下发对话框状态                                                                                      |
+| `useBatchPrint`         | 批量打印（隐藏 iframe + 合并 PDF Blob）                                                                        |
+| `usePartBatchSelection` | 列表多选状态                                                                                                   |
+| `usePartBatchManual`    | 批量新建 Tab 1 状态 + handler                                                                                  |
+| `usePartBatchPdf`       | 批量新建 Tab 2 状态 + handler（PDF 解析 + 树形提交）                                                           |
+| `usePartBatchShared`    | 两 Tab 纯工具函数                                                                                              |
+| `partsListCtx`          | 列表 context（共享 parts / selection / columnVisibility）                                                      |
 
 ## 五、业务流程与状态机
 
@@ -119,17 +119,18 @@ REPAIRING（返修子态）：INSPECTION 触发打回或返修接收标记
 
 ## 六、权限要求
 
-| 操作 | MANAGER | CLERK | INSPECTOR | SHELF_ACCOUNT | CNC_PROGRAMMER |
-|---|---|---|---|---|---|
-| `/parts` 列表 | 允许 | 允许 | 允许（按列过滤） | 通过扫码台间接 | 否 |
-| `/parts/new` 批量新建 | 允许 | 允许 | 否 | 否 | 否 |
-| 详情行内编辑 | 允许 | 允许 | 只读 | 只读 | 只读 |
-| 批量 PDF 上传 | 允许 | 允许 | 否 | 否 | 否 |
-| 投标 Excel 导入 | 允许 | 允许 | 否 | 否 | 否 |
-| 品检通过 | 是 | 否 | 是 | 否 | 否 |
-| 取消 / 删除 | 允许 | 允许 | 否 | 否 | 否 |
+| 操作                  | MANAGER | CLERK | INSPECTOR        | SHELF_ACCOUNT  | CNC_PROGRAMMER |
+| --------------------- | ------- | ----- | ---------------- | -------------- | -------------- |
+| `/parts` 列表         | 允许    | 允许  | 允许（按列过滤） | 通过扫码台间接 | 否             |
+| `/parts/new` 批量新建 | 允许    | 允许  | 否               | 否             | 否             |
+| 详情行内编辑          | 允许    | 允许  | 只读             | 只读           | 只读           |
+| 批量 PDF 上传         | 允许    | 允许  | 否               | 否             | 否             |
+| 投标 Excel 导入       | 允许    | 允许  | 否               | 否             | 否             |
+| 品检通过              | 是      | 否    | 是               | 否             | 否             |
+| 取消 / 删除           | 允许    | 允许  | 否               | 否             | 否             |
 
 权限两层叠加：
+
 - **路由级**：`menuCode` 守卫；
 - **UI 级**：`canEdit` / `canManageDrawings` / `canEditPart` 等 computed 控制按钮 / 表单禁用。
 

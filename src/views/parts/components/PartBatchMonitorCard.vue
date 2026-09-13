@@ -18,23 +18,14 @@
   - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
 -->
 <template>
-  <el-card shadow="never" class="batch-card" v-loading="batchesLoading">
+  <el-card v-loading="batchesLoading" shadow="never" class="batch-card">
     <template #header>
       <div class="card-header">
         <span class="card-title">批次监控</span>
-        <span class="event-count">
-          共 {{ batches.length }} 批 / {{ batchTotalQty }} 件
-        </span>
+        <span class="event-count"> 共 {{ batches.length }} 批 / {{ batchTotalQty }} 件 </span>
       </div>
     </template>
-    <el-table
-      v-if="batches.length > 0"
-      ref="tableRef"
-      :data="batches"
-      size="small"
-      border
-      stripe
-    >
+    <el-table v-if="batches.length > 0" ref="tableRef" :data="batches" size="small" border stripe>
       <!--
         2026-08-27 T22：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
         用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
@@ -77,14 +68,16 @@
             type="primary"
             size="small"
             @click="openSplitDialog(row as PartBatch)"
-          >拆分</el-button>
+            >拆分</el-button
+          >
           <el-button
             v-if="!isTerminalBatch(row as PartBatch)"
             link
             type="danger"
             size="small"
             @click="$emit('cancel-batch', row as PartBatch)"
-          >取消</el-button>
+            >取消</el-button
+          >
         </template>
       </el-table-column>
     </el-table>
@@ -111,8 +104,7 @@
     >
       <div v-if="splitSource" class="split-dialog-body">
         <p>
-          源批次 <b>{{ splitSource.batch_label }}</b>
-          （当前 {{ splitSource.quantity }} 件，
+          源批次 <b>{{ splitSource.batch_label }}</b> （当前 {{ splitSource.quantity }} 件，
           {{ statusLabelOf(splitSource.status) }}）
         </p>
         <el-form label-width="90px">
@@ -127,8 +119,8 @@
           </el-form-item>
         </el-form>
         <p class="muted">
-          拆出后：源批次剩 {{ splitSource.quantity - (splitQuantity ?? 0) }} 件，
-          新批次 {{ splitQuantity ?? 0 }} 件（继承当前状态/位置）。
+          拆出后：源批次剩 {{ splitSource.quantity - (splitQuantity ?? 0) }} 件， 新批次
+          {{ splitQuantity ?? 0 }} 件（继承当前状态/位置）。
         </p>
       </div>
       <template #footer>
@@ -138,51 +130,53 @@
           :loading="splitSubmitting"
           :disabled="!splitQuantity || !splitSource || splitQuantity >= splitSource.quantity"
           @click="onSplitConfirm"
-        >确认拆分</el-button>
+          >确认拆分</el-button
+        >
       </template>
     </el-dialog>
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue'
-import { ElTag } from 'element-plus'
-import { type PartBatch } from '@/api/parts'
-import { formatDateTime } from '@/utils/date'
-import { useDialogSize } from '@/composables/useDialogSize'
+import { computed, h, onMounted, ref } from 'vue';
+import { ElTag } from 'element-plus';
+import type { PartBatch } from '@/api/parts';
+import { formatDateTime } from '@/utils/date';
+import { useDialogSize } from '@/composables/useDialogSize';
 import {
   resolveDraggable,
   useColumnVisibility,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import type { OrderStatus } from '@/types/parts'
+} from '@/composables/useColumnVisibility';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import type { OrderStatus } from '@/types/parts';
 
 const props = defineProps<{
-  partId: string
-  batches: PartBatch[]
-  batchesLoading: boolean
-  canManageBatches: boolean
-  statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger'
-  statusLabelOf: (s: string | null | undefined) => string
-}>()
+  partId: string;
+  batches: PartBatch[];
+  batchesLoading: boolean;
+  canManageBatches: boolean;
+  statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
+  statusLabelOf: (s: string | null | undefined) => string;
+}>();
 
 const emit = defineEmits<{
-  (e: 'fetch'): void
+  (e: 'fetch'): void;
   // 2026-08-25 T10p5：dialog 关闭延迟到 API 成功之后。
   // shell 调用 resolve(ok) → 本组件根据 ok 决定是否关 dialog + reset submitting。
-  (e: 'split', payload: { batch: PartBatch; quantity: number; resolve: (ok: boolean) => void }): void
-  (e: 'cancel-batch', batch: PartBatch): void
-}>()
+  (
+    e: 'split',
+    payload: { batch: PartBatch; quantity: number; resolve: (ok: boolean) => void },
+  ): void;
+  (e: 'cancel-batch', batch: PartBatch): void;
+}>();
 
-const batchTotalQty = computed(() =>
-  props.batches.reduce((acc, b) => acc + b.quantity, 0),
-)
+const batchTotalQty = computed(() => props.batches.reduce((acc, b) => acc + b.quantity, 0));
 
 function isTerminalBatch(b: PartBatch): boolean {
-  return b.status === 'COMPLETED' || b.status === 'CANCELLED'
+  return b.status === 'COMPLETED' || b.status === 'CANCELLED';
 }
 
 // 2026-08-27 T22：列顺序拖动 + 可见性。
@@ -190,80 +184,108 @@ function isTerminalBatch(b: PartBatch): boolean {
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
-    key: 'batch_label', label: '批次', minWidth: 110, align: 'center',
-    cellRender: ({ row }) => h('span', { class: 'batch-label' }, (row as PartBatch).batch_label ?? ''),
+    key: 'batch_label',
+    label: '批次',
+    minWidth: 110,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h('span', { class: 'batch-label' }, (row as PartBatch).batch_label ?? ''),
   },
   {
-    key: 'quantity', label: '数量', width: 80, align: 'right',
+    key: 'quantity',
+    label: '数量',
+    width: 80,
+    align: 'right',
     cellRender: ({ row }) => h('span', null, (row as PartBatch).quantity),
   },
   {
-    key: 'status', label: '状态', minWidth: 110, align: 'center',
+    key: 'status',
+    label: '状态',
+    minWidth: 110,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as PartBatch
-      return h(ElTag,
+      const r = row as PartBatch;
+      return h(
+        ElTag,
         { type: props.statusTagType(r.status as OrderStatus), size: 'small', effect: 'plain' },
-        () => props.statusLabelOf(r.status))
+        () => props.statusLabelOf(r.status),
+      );
     },
   },
   {
-    key: 'current_holder_display', label: '所在位置', minWidth: 130, align: 'center', showOverflowTooltip: true,
+    key: 'current_holder_display',
+    label: '所在位置',
+    minWidth: 130,
+    align: 'center',
+    showOverflowTooltip: true,
     cellRender: ({ row }) => h('span', null, (row as PartBatch).current_holder_display || '—'),
   },
   {
-    key: 'next_process_name', label: '下一工序', minWidth: 100, align: 'center', showOverflowTooltip: true,
+    key: 'next_process_name',
+    label: '下一工序',
+    minWidth: 100,
+    align: 'center',
+    showOverflowTooltip: true,
     cellRender: ({ row }) => h('span', null, (row as PartBatch).next_process_name || '—'),
   },
   {
-    key: 'delivery_note_no', label: '送货单', minWidth: 150, align: 'center', showOverflowTooltip: true,
+    key: 'delivery_note_no',
+    label: '送货单',
+    minWidth: 150,
+    align: 'center',
+    showOverflowTooltip: true,
     cellRender: ({ row }) => h('span', null, (row as PartBatch).delivery_note_no || '—'),
   },
   {
-    key: 'created_at', label: '创建时间', minWidth: 150, align: 'center',
-    cellRender: ({ row }) => h('span', { class: 'muted' }, formatDateTime((row as PartBatch).created_at)),
+    key: 'created_at',
+    label: '创建时间',
+    minWidth: 150,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h('span', { class: 'muted' }, formatDateTime((row as PartBatch).created_at)),
   },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_monitor' })
-const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_monitor' })
+];
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_monitor' });
+const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_monitor' });
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
 // 自愈。组件挂载时 batches=0 → tableRef.value=null → composable 不绑；batches 加载后
 // el-table 挂载 → ref 更新 → composable watch 重新归一化 + 表头首次渲染时自愈。
-const tableRef = ref()
+const tableRef = ref();
 onMounted(() => {
-  drag.applyDrag(tableRef)
-})
+  drag.applyDrag(tableRef);
+});
 
 // ============ 拆分对话框（局部 UI 状态）============
-const splitDlg = useDialogSize({ desktopWidth: 420 })
-const splitDialogVisible = ref(false)
-const splitSource = ref<PartBatch | null>(null)
-const splitQuantity = ref<number | undefined>(undefined)
-const splitSubmitting = ref(false)
+const splitDlg = useDialogSize({ desktopWidth: 420 });
+const splitDialogVisible = ref(false);
+const splitSource = ref<PartBatch | null>(null);
+const splitQuantity = ref<number | undefined>(undefined);
+const splitSubmitting = ref(false);
 
 function openSplitDialog(b: PartBatch): void {
-  splitSource.value = b
-  splitQuantity.value = undefined
-  splitDialogVisible.value = true
+  splitSource.value = b;
+  splitQuantity.value = undefined;
+  splitDialogVisible.value = true;
 }
 
 function onSplitDialogClosed(): void {
-  splitSource.value = null
-  splitQuantity.value = undefined
+  splitSource.value = null;
+  splitQuantity.value = undefined;
 }
 
 function onSplitConfirm(): void {
-  if (!splitSource.value || !splitQuantity.value) return
-  splitSubmitting.value = true
+  if (!splitSource.value || !splitQuantity.value) return;
+  splitSubmitting.value = true;
   // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
   emit('split', {
     batch: splitSource.value,
     quantity: splitQuantity.value,
     resolve: (ok: boolean) => {
-      splitSubmitting.value = false
-      if (ok) splitDialogVisible.value = false
+      splitSubmitting.value = false;
+      if (ok) splitDialogVisible.value = false;
     },
-  })
+  });
 }
 </script>
 

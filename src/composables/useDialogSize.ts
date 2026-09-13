@@ -1,15 +1,15 @@
-import type { Ref } from 'vue'
+import type { Ref } from 'vue';
 
 export interface DialogSizeOptions {
-  desktopWidth?: string | number
+  desktopWidth?: string | number;
   /** 已废弃：保留参数名以兼容调用方，但忽略值 */
-  fullscreenOnMobile?: boolean
+  fullscreenOnMobile?: boolean;
 }
 
 export interface DialogSizeResult {
-  width: string | number
-  top: string
-  fullscreen: false
+  width: string | number;
+  top: string;
+  fullscreen: false;
 }
 
 /**
@@ -19,10 +19,10 @@ export interface DialogSizeResult {
 export function useDialogSize(
   options: DialogSizeOptions | Ref<DialogSizeOptions> = {},
 ): DialogSizeResult {
-  const opts = 'value' in options ? options.value : options
+  const opts = 'value' in options ? options.value : options;
   return {
     width: opts.desktopWidth ?? '600px',
     top: '15vh',
     fullscreen: false,
-  }
+  };
 }

@@ -19,15 +19,15 @@
 ```ts
 // 错：workerSrc 未配置 → pdfjs 退化到主线程 fake worker，大 PDF 卡死
 //     cMap 也没设 → CJK PDF 字符画成方块
-import { getDocument } from 'pdfjs-dist'
+import { getDocument } from 'pdfjs-dist';
 ```
 
 正例：
 
 ```ts
-import { pdfjsLib, PDF_CMAP_OPTIONS } from '@/utils/pdfjs'
+import { pdfjsLib, PDF_CMAP_OPTIONS } from '@/utils/pdfjs';
 
-const task = pdfjsLib.getDocument({ url: pdfUrl, ...PDF_CMAP_OPTIONS })
+const task = pdfjsLib.getDocument({ url: pdfUrl, ...PDF_CMAP_OPTIONS });
 ```
 
 单点配置里做的事没法在每个调用方各自重复（worker 路径带 hash / cMapUrl 是相对 assets 的运行时路径），所以强约束走"单点 import"。
@@ -37,8 +37,8 @@ const task = pdfjsLib.getDocument({ url: pdfUrl, ...PDF_CMAP_OPTIONS })
 `src/utils/pdfjs.ts` 顶部：
 
 ```ts
-const PDF_WORKER_CACHE_BUST = 'v=20260719'
-pdfjsLib.GlobalWorkerOptions.workerSrc = `${PdfWorkerUrl}?${PDF_WORKER_CACHE_BUST}`
+const PDF_WORKER_CACHE_BUST = 'v=20260719';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `${PdfWorkerUrl}?${PDF_WORKER_CACHE_BUST}`;
 ```
 
 **历史教训（2026-07-19 复盘）**：生产 nginx 没配 `.mjs` 的 MIME，pdf worker 以 `application/octet-stream` + `Cache-Control: max-age=31536000, immutable` 下发。worker 文件名是 vite 内容 hash，nginx 修复 MIME 后文件名不变，被浏览器按年缓存的"中毒响应"继续整年复用——控制台报 `Failed to load module script ... octet-stream`，pdfjs 退化到主线程 fake worker，所有 PDF 预览卡顿。
@@ -71,11 +71,11 @@ CJK PDF（中文 / 日文 / 韩文）需要 cMap（字符名 → glyph index 的
 
 Props：
 
-| 名称 | 类型 | 默认 | 说明 |
-| --- | --- | --- | --- |
-| `url` | `string` | — | PDF 的可访问 URL（一般是后端即时签发的 COS 临时链接） |
-| `page` | `number` | `1` | 初始页码（外部受控可用 `watch` 同步） |
-| `initialScale` | `number` | `1.0` | 初始缩放，范围 `0.4 ~ 3.0` |
+| 名称           | 类型     | 默认  | 说明                                                  |
+| -------------- | -------- | ----- | ----------------------------------------------------- |
+| `url`          | `string` | —     | PDF 的可访问 URL（一般是后端即时签发的 COS 临时链接） |
+| `page`         | `number` | `1`   | 初始页码（外部受控可用 `watch` 同步）                 |
+| `initialScale` | `number` | `1.0` | 初始缩放，范围 `0.4 ~ 3.0`                            |
 
 事件：无显式 `emit`——外部若要监听翻页/缩放，`watch(props.page)` 与 `watch(props.url)` 即可。内部已经按 `page` / `scale` reactive 驱动 `render()`。
 
@@ -96,7 +96,7 @@ Props：
 路径：`src/utils/mergePdfs.ts`。
 
 ```ts
-export async function mergePdfBlobs(blobs: Blob[]): Promise<Blob>
+export async function mergePdfBlobs(blobs: Blob[]): Promise<Blob>;
 ```
 
 浏览器端用 `pdf-lib` 按数组顺序合并多个 PDF Blob 为单个 Blob。空数组 → 0 页 PDF（不抛错）。典型场景：批量打印前把多张图纸 PDF 合并成一份下发；PartsList 批量送检时图纸双面合并。
@@ -125,11 +125,11 @@ location ~* \.mjs$ {
 
 ## 缓存策略完整图
 
-| 路径 | Cache-Control | 用途 |
-| --- | --- | --- |
-| `/` (HTML) | 无缓存（`expires -1` 默认） | SPA 入口，每次验证最新 |
+| 路径                 | Cache-Control                         | 用途                                          |
+| -------------------- | ------------------------------------- | --------------------------------------------- |
+| `/` (HTML)           | 无缓存（`expires -1` 默认）           | SPA 入口，每次验证最新                        |
 | `/assets/*.{js,css}` | `public, max-age=31536000, immutable` | vite 打包出的内容 hash 文件，内容变则文件名变 |
-| `*.mjs`（含 worker） | `expires 1h`，不强制 immutable | pdfjs worker 等模块脚本，1h revalidate |
-| `/api/*` | `no-cache`（默认） | 后端响应永远验证 |
+| `*.mjs`（含 worker） | `expires 1h`，不强制 immutable        | pdfjs worker 等模块脚本，1h revalidate        |
+| `/api/*`             | `no-cache`（默认）                    | 后端响应永远验证                              |
 
 **MCP 端点（`/api/mcp*`、`/mcp`）在 nginx 层 `deny all`**——应用层无鉴权，安全完全靠 nginx + 云安全组。这条与 PDF 无关但属于同层"反向用 nginx 加固"的设计，详见 nginx.conf 注释。

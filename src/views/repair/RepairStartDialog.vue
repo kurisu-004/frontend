@@ -12,112 +12,116 @@
  *
  * 顶部「返修数量」输入框（quantity < batch.quantity 触发 _maybe_split 拆批）
  */
-import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { CircleCheck, Select } from '@element-plus/icons-vue'
-import { repairDispatch } from '@/api/parts'
-import { listShelves } from '@/api/shelves'
-import { listProcesses } from '@/api/process'
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter'
-import type { PartItem } from '@/api/parts'
-import type { Shelf } from '@/types/shelf'
-import type { Process } from '@/types/process'
+import { computed, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
+import { CircleCheck, Select } from '@element-plus/icons-vue';
+import { repairDispatch } from '@/api/parts';
+import { listShelves } from '@/api/shelves';
+import { listProcesses } from '@/api/process';
+import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
+import type { PartItem } from '@/api/parts';
+import type { Shelf } from '@/types/shelf';
+import type { Process } from '@/types/process';
 
 const props = defineProps<{
-  modelValue: boolean
-  target: PartItem | null
-}>()
+  modelValue: boolean;
+  target: PartItem | null;
+}>();
 const emit = defineEmits<{
-  'update:modelValue': [v: boolean]
-  confirm: []
-}>()
+  'update:modelValue': [v: boolean];
+  confirm: [];
+}>();
 
-const actionTab = ref<'dispatch' | 'inspect'>('dispatch')
-const quantity = ref<number>(1)
-const processId = ref<string>('')
-const shelfId = ref<string>('')
-const inspShelfId = ref<string>('')
-const submittingDispatch = ref(false)
-const submittingInspect = ref(false)
+const actionTab = ref<'dispatch' | 'inspect'>('dispatch');
+const quantity = ref<number>(1);
+const processId = ref<string>('');
+const shelfId = ref<string>('');
+const inspShelfId = ref<string>('');
+const submittingDispatch = ref(false);
+const submittingInspect = ref(false);
 
-const productionShelves = ref<Shelf[]>([])
-const inspectionShelves = ref<Shelf[]>([])
-const processes = ref<Process[]>([])
+const productionShelves = ref<Shelf[]>([]);
+const inspectionShelves = ref<Shelf[]>([]);
+const processes = ref<Process[]>([]);
 
-const { filteredShelves: filteredProductionShelves, filteredProcesses, load: loadProcessMap } =
-  useShelfProcessFilter(
-    productionShelves,
-    processes,
-    computed({
-      get: () => shelfId.value || null,
-      set: (v) => { shelfId.value = v ?? '' },
-    }),
-    computed({
-      get: () => processId.value || null,
-      set: (v) => { processId.value = v ?? '' },
-    }),
-  )
+const {
+  filteredShelves: filteredProductionShelves,
+  filteredProcesses,
+  load: loadProcessMap,
+} = useShelfProcessFilter(
+  productionShelves,
+  processes,
+  computed({
+    get: () => shelfId.value || null,
+    set: (v) => {
+      shelfId.value = v ?? '';
+    },
+  }),
+  computed({
+    get: () => processId.value || null,
+    set: (v) => {
+      processId.value = v ?? '';
+    },
+  }),
+);
 
 watch(
   () => [props.modelValue, props.target?.id] as const,
   async ([v]) => {
     if (v) {
-      actionTab.value = 'dispatch'
-      quantity.value = props.target?.quantity ?? 1
-      processId.value = props.target?.next_process_id ?? ''
-      shelfId.value = ''
-      inspShelfId.value = ''
-      await reloadOptions()
+      actionTab.value = 'dispatch';
+      quantity.value = props.target?.quantity ?? 1;
+      processId.value = props.target?.next_process_id ?? '';
+      shelfId.value = '';
+      inspShelfId.value = '';
+      await reloadOptions();
     }
   },
   { immediate: true },
-)
+);
 
 async function reloadOptions(): Promise<void> {
   const [prod, insp, procs] = await Promise.all([
     listShelves({ zone: 'PRODUCTION', is_active: true, limit: 200 }),
     listShelves({ zone: 'INSPECTION', is_active: true, limit: 200 }),
     listProcesses({ limit: 200 }),
-  ])
-  productionShelves.value = prod.items
-  inspectionShelves.value = insp.items
-  processes.value = procs.items
-  await loadProcessMap()
+  ]);
+  productionShelves.value = prod.items;
+  inspectionShelves.value = insp.items;
+  processes.value = procs.items;
+  await loadProcessMap();
 }
 
 async function onSubmit(): Promise<void> {
-  if (!props.target || !quantity.value) return
-  const isInspect = actionTab.value === 'inspect'
+  if (!props.target || !quantity.value) return;
+  const isInspect = actionTab.value === 'inspect';
   if (isInspect) {
-    if (!inspShelfId.value) return
+    if (!inspShelfId.value) return;
   } else {
-    if (!shelfId.value) return
+    if (!shelfId.value) return;
   }
-  const submitting = isInspect ? submittingInspect : submittingDispatch
-  submitting.value = true
+  const submitting = isInspect ? submittingInspect : submittingDispatch;
+  submitting.value = true;
   try {
     await repairDispatch(props.target.id, {
       shelf_id: isInspect ? inspShelfId.value : shelfId.value,
-      next_process_id: !isInspect ? (processId.value || null) : null,
+      next_process_id: !isInspect ? processId.value || null : null,
       batch_id: props.target.batch_id ?? null,
-      quantity:
-        quantity.value < (props.target.quantity ?? 1)
-          ? quantity.value
-          : null,
-    })
-    const label = props.target.serial_no || props.target.drawing_no
-    ElMessage.success(`返修完成 · ${label} 已${isInspect ? '送检' : '下发'}`)
-    emit('confirm')
-    emit('update:modelValue', false)
+      quantity: quantity.value < (props.target.quantity ?? 1) ? quantity.value : null,
+    });
+    const label = props.target.serial_no || props.target.drawing_no;
+    ElMessage.success(`返修完成 · ${label} 已${isInspect ? '送检' : '下发'}`);
+    emit('confirm');
+    emit('update:modelValue', false);
   } catch (e) {
-    ElMessage.error(`返修下发失败：${(e as Error).message}`)
+    ElMessage.error(`返修下发失败：${(e as Error).message}`);
   } finally {
-    submitting.value = false
+    submitting.value = false;
   }
 }
 
 function onCancel(): void {
-  emit('update:modelValue', false)
+  emit('update:modelValue', false);
 }
 </script>
 
@@ -196,9 +200,7 @@ function onCancel(): void {
               />
               <template #empty>
                 <span class="muted">
-                  {{ processId
-                    ? '当前工序未映射任何生产货架'
-                    : '请先选择工序' }}
+                  {{ processId ? '当前工序未映射任何生产货架' : '请先选择工序' }}
                 </span>
               </template>
             </el-select>

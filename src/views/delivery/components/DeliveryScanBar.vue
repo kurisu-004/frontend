@@ -19,16 +19,14 @@
     update:l1Id   — 用户切换选项时触发；shell 调 setL1CustomerId
 -->
 <script setup lang="ts">
-import type { Customer } from '@/api/customer'
+import type { Customer } from '@/api/customer';
 
 defineProps<{
-  l1Id: string
-  rootCustomers: Customer[]
-}>()
+  l1Id: string;
+  rootCustomers: Customer[];
+}>();
 
-const emit = defineEmits<{
-  (e: 'update:l1Id', value: string): void
-}>()
+const emit = defineEmits<(e: 'update:l1Id', value: string) => void>();
 </script>
 
 <template>
@@ -44,31 +42,12 @@ const emit = defineEmits<{
         style="width: 280px"
         @update:model-value="(v: string) => emit('update:l1Id', v)"
       >
-        <el-option
-          v-for="c in rootCustomers"
-          :key="c.id"
-          :label="c.name"
-          :value="c.id"
-        />
+        <el-option v-for="c in rootCustomers" :key="c.id" :label="c.name" :value="c.id" />
       </el-select>
     </div>
     <div class="scan-bar__right">
-      <el-tag
-        v-if="l1Id"
-        type="success"
-        size="small"
-        effect="dark"
-      >
-        扫码就绪
-      </el-tag>
-      <el-tag
-        v-else
-        type="info"
-        size="small"
-        effect="plain"
-      >
-        等待选择客户
-      </el-tag>
+      <el-tag v-if="l1Id" type="success" size="small" effect="dark"> 扫码就绪 </el-tag>
+      <el-tag v-else type="info" size="small" effect="plain"> 等待选择客户 </el-tag>
     </div>
   </div>
 </template>

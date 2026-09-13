@@ -46,13 +46,13 @@ Element Plus 2.7.x 在本仓库走纯按需自动加载（`unplugin-auto-import`
 
 以下 API 的 CSS 必须**手动** import，路径在 `src/main.ts`：
 
-| 命令式 API | 必须 import 的 CSS |
-| --- | --- |
-| `ElMessage` | `element-plus/theme-chalk/el-message.css` |
-| `ElMessageBox` | `element-plus/theme-chalk/el-message-box.css` |
+| 命令式 API       | 必须 import 的 CSS                             |
+| ---------------- | ---------------------------------------------- |
+| `ElMessage`      | `element-plus/theme-chalk/el-message.css`      |
+| `ElMessageBox`   | `element-plus/theme-chalk/el-message-box.css`  |
 | `ElNotification` | `element-plus/theme-chalk/el-notification.css` |
-| `ElLoading` | `element-plus/theme-chalk/el-loading.css` |
-| 弹层遮罩 | `element-plus/theme-chalk/el-overlay.css` |
+| `ElLoading`      | `element-plus/theme-chalk/el-loading.css`      |
+| 弹层遮罩         | `element-plus/theme-chalk/el-overlay.css`      |
 
 **不能删**。背景：2026-08-22 一次重构漏了这些 import，全站弹窗样式丢失（消息框落左上角、按钮纵向堆叠、标题被截）。修复方式就是恢复这五行 import + 加注释。
 
@@ -128,57 +128,57 @@ EP 2.14.x 还没有 `<el-config-provider :theme>` 这个 prop，官方文档（t
 
 ### el-table
 
-| 项 | 说明 |
-| --- | --- |
-| 列固定 | `:fixed="left\|right"`，左右可同时固定多个 |
-| 排序 | `:default-sort` + `@sort-change`，server-side 模式自己处理 |
-| 列筛选 | 列内 `column.filterDropdown` + `filters` / `filter-method` |
-| 行选择 | `@selection-change` 拿 `selection[]` |
-| 树形 | `:tree-props="{ children: 'children' }"` + `row-key` |
-| 选中行色 | 全局已在 `index.scss` 提到 `#cce0f4`，带状态的行（`row-urgent` 等）由组件 `:deep()` 继续覆盖 |
-| 大数据 | 默认不开虚拟滚动；> 1000 行考虑 `:virtual-scroll="true"`（见 `responsive-and-layout.md`） |
+| 项            | 说明                                                                                                                                                                                                                                                                                                              |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 列固定        | `:fixed="left\|right"`，左右可同时固定多个                                                                                                                                                                                                                                                                        |
+| 排序          | `:default-sort` + `@sort-change`，server-side 模式自己处理                                                                                                                                                                                                                                                        |
+| 列筛选        | 列内 `column.filterDropdown` + `filters` / `filter-method`                                                                                                                                                                                                                                                        |
+| 行选择        | `@selection-change` 拿 `selection[]`                                                                                                                                                                                                                                                                              |
+| 树形          | `:tree-props="{ children: 'children' }"` + `row-key`                                                                                                                                                                                                                                                              |
+| 选中行色      | 全局已在 `index.scss` 提到 `#cce0f4`，带状态的行（`row-urgent` 等）由组件 `:deep()` 继续覆盖                                                                                                                                                                                                                      |
+| 大数据        | 默认不开虚拟滚动；> 1000 行考虑 `:virtual-scroll="true"`（见 `responsive-and-layout.md`）                                                                                                                                                                                                                         |
 | ⚠️ 列插槽守卫 | EP 会用**合成空行** `{ row: {}, $index: -1 }` 额外渲染每列 `#default` 一次并挂进 `.hidden-columns`。插槽里依赖 `row.xxx` 的动态绑定组件（如 `:to` 动态的 `router-link`）**会真的挂载**，必须加 `v-if="row.id"` 之类的守卫。详见 [`08-known-risks/framework-pitfalls.md`](../08-known-risks/framework-pitfalls.md) |
 
 ### el-form
 
-| 项 | 说明 |
-| --- | --- |
-| 校验 | `rules` + `formRef.value.validate()`，异步校验返回 Promise |
-| 重置 | `formRef.value.resetFields()`，前提 `:model` 必须有初始值 |
-| 嵌套 | 多组字段用 `<el-form-item :prop="\`list.\${i}.field\`">` |
-| label-width | 统一 100px，跨行字段用 `label-position="top"` 改竖排 |
+| 项          | 说明                                                       |
+| ----------- | ---------------------------------------------------------- |
+| 校验        | `rules` + `formRef.value.validate()`，异步校验返回 Promise |
+| 重置        | `formRef.value.resetFields()`，前提 `:model` 必须有初始值  |
+| 嵌套        | 多组字段用 `<el-form-item :prop="\`list.\${i}.field\`">`   |
+| label-width | 统一 100px，跨行字段用 `label-position="top"` 改竖排       |
 
 ### el-dialog
 
-| 项 | 说明 |
-| --- | --- |
-| v-model | 必传，控制显隐；关闭前可 `before-close` 拦截 |
-| 拖拽 | `draggable` prop，EP 默认开启 |
-| 全屏 | 业务统一用 `useDialogSize()` 静态桌面尺寸（避免响应式 dialog 抖动），不再用 `fullscreen` |
-| 嵌套 | 弹窗里再开弹窗，append-to-body 慎用，常见于 picker 二级 |
+| 项      | 说明                                                                                     |
+| ------- | ---------------------------------------------------------------------------------------- |
+| v-model | 必传，控制显隐；关闭前可 `before-close` 拦截                                             |
+| 拖拽    | `draggable` prop，EP 默认开启                                                            |
+| 全屏    | 业务统一用 `useDialogSize()` 静态桌面尺寸（避免响应式 dialog 抖动），不再用 `fullscreen` |
+| 嵌套    | 弹窗里再开弹窗，append-to-body 慎用，常见于 picker 二级                                  |
 
 ### el-pagination
 
-| 项 | 说明 |
-| --- | --- |
-| layout | 常用 `"total, sizes, prev, pager, next, jumper"`，按场景砍 |
-| page-sizes | 默认 `[10, 20, 50, 100]` |
-| server-side | `:current-page.sync` + `:page-size.sync`，触发 list 接口 |
+| 项          | 说明                                                       |
+| ----------- | ---------------------------------------------------------- |
+| layout      | 常用 `"total, sizes, prev, pager, next, jumper"`，按场景砍 |
+| page-sizes  | 默认 `[10, 20, 50, 100]`                                   |
+| server-side | `:current-page.sync` + `:page-size.sync`，触发 list 接口   |
 
 ### el-date-picker
 
-| 项 | 说明 |
-| --- | --- |
-| value-format | 必传（`'YYYY-MM-DD HH:mm:ss'` 或 `'YYYY-MM-DD'`），不传拿 ISO 串 |
-| daterange | `type="daterange"` + `range-separator="至"`，`value` 是 `[start, end]` 二元组 |
-| shortcuts | 配置 `shortcuts: [{ text, value }]`，value 是函数返回 Date |
+| 项           | 说明                                                                          |
+| ------------ | ----------------------------------------------------------------------------- |
+| value-format | 必传（`'YYYY-MM-DD HH:mm:ss'` 或 `'YYYY-MM-DD'`），不传拿 ISO 串              |
+| daterange    | `type="daterange"` + `range-separator="至"`，`value` 是 `[start, end]` 二元组 |
+| shortcuts    | 配置 `shortcuts: [{ text, value }]`，value 是函数返回 Date                    |
 
 ### el-tree
 
-| 项 | 说明 |
-| --- | --- |
-| data | 直接传树结构 |
-| props | `:props="{ label: 'name', children: 'children' }"` |
-| node-click | `@node-click(node, data, ...)` |
-| lazy | `:load="loadNode"` + `:lazy="true"`，按需加载子树 |
-| 默认展开 | `:default-expanded-keys="[...]"` |
+| 项         | 说明                                               |
+| ---------- | -------------------------------------------------- |
+| data       | 直接传树结构                                       |
+| props      | `:props="{ label: 'name', children: 'children' }"` |
+| node-click | `@node-click(node, data, ...)`                     |
+| lazy       | `:load="loadNode"` + `:lazy="true"`，按需加载子树  |
+| 默认展开   | `:default-expanded-keys="[...]"`                   |

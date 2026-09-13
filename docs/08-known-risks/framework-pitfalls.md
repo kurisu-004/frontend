@@ -78,10 +78,10 @@ node_modules/vue-draggable-plus/dist/vue-draggable-plus.js
 
 ### 规则
 
-| 场景 | 用哪个 |
-|---|---|
+| 场景                                                                                     | 用哪个                                                          |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | 容器在 `v-if` 内 / el-dialog `destroy-on-close` 后重建 / el-table `tbody` 需查询才拿得到 | **`useLazyDraggable`**（`src/composables/useLazyDraggable.ts`） |
-| 容器在组件挂载时已无条件存在 | 直接 `useDraggable` |
+| 容器在组件挂载时已无条件存在                                                             | 直接 `useDraggable`                                             |
 
 `useLazyDraggable` 强制 `immediate: false`，改由 `watch(elRef, el => el && start(el), { flush: 'post' })` 在 ref 转为非 null 时绑定；ref 换成新节点时会自动重绑（`start()` 内部先 destroy 再 new，不会泄漏）。**给 ref 赋值就是重绑的触发条件，不需要再手动调 `start()`。**
 
@@ -142,11 +142,11 @@ DOM 解析职责**完全收回 `useColumnDrag` 内部**，consumer 侧不再需�
 
 ```ts
 // 1. 创建 useColumnDrag
-const drag = useColumnDrag(columnDefs, { listKey: 'parts_list' })
+const drag = useColumnDrag(columnDefs, { listKey: 'parts_list' });
 
 // 2. 把 el-table 组件 ref 传给 applyDrag（其他什么都不用）
-const tableRef = ref<InstanceType<typeof ElTable>>()
-onMounted(() => drag.applyDrag(tableRef))
+const tableRef = ref<InstanceType<typeof ElTable>>();
+onMounted(() => drag.applyDrag(tableRef));
 ```
 
 ```vue
@@ -174,12 +174,12 @@ onMounted(() => drag.applyDrag(tableRef))
 
 ### 常见踩点 / 必须避免的写法
 
-| 反例 | 为什么错 |
-|---|---|
-| `drag.applyDrag(findElTableHeaderRow(tableRef.$el))` | consumer 自己解析 DOM + 一次性签名。命中机制 B（表头未渲染 → null → 不绑）；后续 EP 重建 → 旧 Sortable 泄漏。 |
+| 反例                                                                                                                                    | 为什么错                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `drag.applyDrag(findElTableHeaderRow(tableRef.$el))`                                                                                    | consumer 自己解析 DOM + 一次性签名。命中机制 B（表头未渲染 → null → 不绑）；后续 EP 重建 → 旧 Sortable 泄漏。                                       |
 | `const headerRowRef = ref<HTMLElement \| null>(null); watch(...) { ... if (tr) headerRowRef.value = tr }; drag.applyDrag(headerRowRef)` | consumer 派生 ref + 手写 watcher。把 composable 该做的 DOM 解析 + 自愈重新发明一遍，且 `headerRowRef.value` 赋值时机对不上 EP layout → 仍是机制 B。 |
-| `drag.applyDrag(theadRef)`（直接绑 `<thead>` ref） | 绑错容器：sortablejs 把 `<thead>` 的直接子 `<tr>` 算 sortable item → 拖整行表头。 |
-| 列只写 `prop / label`，不写 `:label-class-name="drag.dragLabelClass(d)"` | sortablejs 的 `draggable: 'th.col-draggable'` selector 永远匹配不到 → 拖动完全不工作。这是「列能被拖」的**必要条件**。 |
+| `drag.applyDrag(theadRef)`（直接绑 `<thead>` ref）                                                                                      | 绑错容器：sortablejs 把 `<thead>` 的直接子 `<tr>` 算 sortable item → 拖整行表头。                                                                   |
+| 列只写 `prop / label`，不写 `:label-class-name="drag.dragLabelClass(d)"`                                                                | sortablejs 的 `draggable: 'th.col-draggable'` selector 永远匹配不到 → 拖动完全不工作。这是「列能被拖」的**必要条件**。                              |
 
 ### 新增列拖动的 Checklist
 
@@ -214,7 +214,7 @@ onMounted(() => drag.applyDrag(tableRef))
 ```ts
 // ❌ 坏：h('span', props, () => X)
 function cellRender({ row }: { row: Part }) {
-  return h('span', { class: 'name' }, () => row.name)   // 渲染为空
+  return h('span', { class: 'name' }, () => row.name); // 渲染为空
 }
 ```
 
@@ -222,20 +222,20 @@ Vue 3 的 `normalizeChildren` 看见第三参是函数，会把它打成 **`SLOT
 
 - ✅ 正确：第三参直接传值（字符串 / 数组 / VNode）：
   ```ts
-  return h('span', { class: 'name' }, row.name)
+  return h('span', { class: 'name' }, row.name);
   ```
 - ✅ 正确：组件用法 `h(ElTag, props, () => X)` 是**对的**——函数 children 走的是组件 slot 分发路径，不经过 `mountElement`。
 - ⚠️ 多行 / 数组写法务必先提取局部变量再传入：
   ```ts
-  const children = [h('span', null, row.name), h('em', null, row.unit)]
-  return h('div', { class: 'cell' }, children)   // 别写 h('div', { class: 'cell' }, () => [...])
+  const children = [h('span', null, row.name), h('em', null, row.unit)];
+  return h('div', { class: 'cell' }, children); // 别写 h('div', { class: 'cell' }, () => [...])
   ```
 
 #### B. `h('router-link', ...)` —— 字符串 type 不做组件解析
 
 ```ts
 // ❌ 坏：h('router-link', props, X)
-return h('router-link', { to: `/parts/${row.id}` }, row.name)
+return h('router-link', { to: `/parts/${row.id}` }, row.name);
 // 渲染为 <router-link> 字面自定义元素 —— 没 props 分发、没 router 行为，
 // 看起来「标签出来了但点击不跳转 / 样式没生效」。
 ```
@@ -244,20 +244,20 @@ return h('router-link', { to: `/parts/${row.id}` }, row.name)
 
 - ✅ 正确：传导入的组件本身：
   ```ts
-  import { RouterLink } from 'vue-router'
-  return h(RouterLink, { to: `/parts/${row.id}` }, () => row.name)  // 函数 children 在组件 slot 里合法
+  import { RouterLink } from 'vue-router';
+  return h(RouterLink, { to: `/parts/${row.id}` }, () => row.name); // 函数 children 在组件 slot 里合法
   ```
 - 同理：`h('el-button', ...)` 也是坏的，必须 `h(ElButton, ...)`。
 - ⚠️ 反过来：组件用法 `h(RouterLink, ..., () => row.name)` 里的函数 children **是合法的**（与 A 的「原生元素」区别开）——守卫单测只针对原生小写标签，不误伤组件写法。
 
 ### 规则
 
-| 写法 | 状态 |
-|---|---|
-| `h('span' / 'div' / 'td' / ..., props, value)` | OK（值 / 数组） |
-| `h('span' / ..., props, () => X)` | **坏**：原生元素函数 children → 渲染为空 |
-| `h(ElXxx / RouterLink / ..., props, value 或 () => X)` | OK（组件的 slots 走分发路径） |
-| `h('router-link' / 'el-button' / ...)`（任何 kebab-case 字符串） | **坏**：字符串 type 不做组件解析 |
+| 写法                                                             | 状态                                     |
+| ---------------------------------------------------------------- | ---------------------------------------- |
+| `h('span' / 'div' / 'td' / ..., props, value)`                   | OK（值 / 数组）                          |
+| `h('span' / ..., props, () => X)`                                | **坏**：原生元素函数 children → 渲染为空 |
+| `h(ElXxx / RouterLink / ..., props, value 或 () => X)`           | OK（组件的 slots 走分发路径）            |
+| `h('router-link' / 'el-button' / ...)`（任何 kebab-case 字符串） | **坏**：字符串 type 不做组件解析         |
 
 ### 回归守卫
 
@@ -319,11 +319,11 @@ dev-only 开关**必须**走 Vite 官方 env 机制：
 
 ```ts
 // 修复前（泄漏）
-api.get('/parts', { params: { statuses: ['A', 'B'] } })
+api.get('/parts', { params: { statuses: ['A', 'B'] } });
 // → GET /api/v1/parts?statuses=A,B   ← FastAPI 解析成 ["A,B"] → 422
 
 // 修复后
-api.get('/parts', { params: { statuses: ['A', 'B'] } })
+api.get('/parts', { params: { statuses: ['A', 'B'] } });
 // → GET /api/v1/parts?statuses=A&statuses=B   ← FastAPI 正确解析成 ["A","B"]
 ```
 
@@ -333,9 +333,9 @@ api.get('/parts', { params: { statuses: ['A', 'B'] } })
 
 具体到本仓当前架构：
 
-| 函数 | 行为 | 绑定 |
-|---|---|---|
-| `serializeParamsV1` | **所有数组都重复 key**：`?key=a&key=b` | `api` / `refreshClient`（v1 FastAPI） |
+| 函数                | 行为                                                           | 绑定                                   |
+| ------------------- | -------------------------------------------------------------- | -------------------------------------- |
+| `serializeParamsV1` | **所有数组都重复 key**：`?key=a&key=b`                         | `api` / `refreshClient`（v1 FastAPI）  |
 | `serializeParamsV2` | 白名单 `statuses` → CSV 单值 `?statuses=A,B`；其它数组重复 key | `apiV2` / `refreshClientV2`（v2 Rust） |
 
 `serializeParams` 保留为 `serializeParamsV1` 的向后兼容别名（历史代码可能仍在引用；新代码应直接选 `V1` / `V2`）。

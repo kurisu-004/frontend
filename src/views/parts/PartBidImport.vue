@@ -63,7 +63,7 @@
           />
         </el-form-item>
         <!-- 2026-08-22 a11y：加 name 给隐藏 file input；同时 :for="" 防止 el-form-item 误绑 -->
-        <el-form-item label="应标 Excel" :for="''">
+        <el-form-item label="应标 Excel" for="">
           <el-upload
             :auto-upload="false"
             :show-file-list="false"
@@ -93,17 +93,19 @@
       <div class="preview-header">
         <h3>预览（{{ rows.length }} 条）</h3>
         <div>
-          <el-button @click="onAddBlankRow" :disabled="submitting">
+          <el-button :disabled="submitting" @click="onAddBlankRow">
             <el-icon><Plus /></el-icon>
             <span>新增一行</span>
           </el-button>
-          <el-button @click="onClearAll" :disabled="rows.length === 0 || submitting">
+          <el-button :disabled="rows.length === 0 || submitting" @click="onClearAll">
             清空
           </el-button>
           <el-button
             type="primary"
             :loading="submitting"
-            :disabled="rows.length === 0 || errorRowCount > 0 || !form.rootCustomerId || !form.requestDate"
+            :disabled="
+              rows.length === 0 || errorRowCount > 0 || !form.rootCustomerId || !form.requestDate
+            "
             @click="onSubmit"
           >
             提交 {{ rows.length }} 条
@@ -229,9 +231,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import * as XLSX from 'xlsx'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import * as XLSX from 'xlsx';
 import {
   ElAutocomplete,
   ElDatePicker,
@@ -243,94 +245,83 @@ import {
   ElSwitch,
   ElOption,
   type UploadFile,
-} from 'element-plus'
+} from 'element-plus';
 
-import PdfViewer from '@/components/PdfViewer.vue'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import { listCustomers, type Customer } from '@/api/customer'
-import {
-  batchCreateParts,
-  type PartBatchFilePayload,
-  type PartCreatePayload,
-} from '@/api/parts'
-import { bulkGetOrCreateApplicants } from '@/api/applicant'
-import { useApplicantSearch } from '@/composables/useApplicantSearch'
+import PdfViewer from '@/components/PdfViewer.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import { listCustomers, type Customer } from '@/api/customer';
+import { batchCreateParts, type PartBatchFilePayload, type PartCreatePayload } from '@/api/parts';
+import { bulkGetOrCreateApplicants } from '@/api/applicant';
+import { useApplicantSearch } from '@/composables/useApplicantSearch';
 import {
   resolveDraggable,
   useColumnVisibility,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import type { Applicant } from '@/types/applicant'
-import { parseBidExcel, type BidRow } from '@/utils/bidExcelParser'
+} from '@/composables/useColumnVisibility';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import type { Applicant } from '@/types/applicant';
+import { parseBidExcel, type BidRow } from '@/utils/bidExcelParser';
 
 // ============================================================
 // 顶层表单
 // ============================================================
 
 interface FormState {
-  rootCustomerId: string | null
-  requestDate: string
+  rootCustomerId: string | null;
+  requestDate: string;
 }
 const form = reactive<FormState>({
   rootCustomerId: null,
   requestDate: todayIso(),
-})
+});
 function todayIso(): string {
-  const d = new Date()
+  const d = new Date();
   return [
     d.getFullYear(),
     String(d.getMonth() + 1).padStart(2, '0'),
     String(d.getDate()).padStart(2, '0'),
-  ].join('-')
+  ].join('-');
 }
 
 // ============================================================
 // 客户树
 // ============================================================
 
-const customers = ref<Customer[]>([])
-const rootCustomers = computed(() =>
-  customers.value.filter((c) => c.parent_id === null),
-)
+const customers = ref<Customer[]>([]);
+const rootCustomers = computed(() => customers.value.filter((c) => c.parent_id === null));
 
 /** 当前 L1 根客户下的二级分厂，供「分厂名」下拉用。 */
 const subFactories = computed(() =>
-  form.rootCustomerId
-    ? customers.value.filter((c) => c.parent_id === form.rootCustomerId)
-    : [],
-)
+  form.rootCustomerId ? customers.value.filter((c) => c.parent_id === form.rootCustomerId) : [],
+);
 
 /** 客户 id → 所属一级客户 id（一级 → 自己；二级 → parent）。 */
 function resolveRootCustomerId(pickedId: string | null): string | null {
-  if (!pickedId) return null
-  const found = customers.value.find((c) => c.id === pickedId)
-  if (!found) return null
-  return found.parent_id ?? found.id
+  if (!pickedId) return null;
+  const found = customers.value.find((c) => c.id === pickedId);
+  if (!found) return null;
+  return found.parent_id ?? found.id;
 }
 
 // 申请人自动补全：全表共享（L1 根客户在顶部统一选择，切换时载入一次）。
-const { loadForCustomer: loadApplicantsForCustomer, querySearch } =
-  useApplicantSearch({ resolveRootCustomerId })
+const { loadForCustomer: loadApplicantsForCustomer, querySearch } = useApplicantSearch({
+  resolveRootCustomerId,
+});
 
 async function loadCustomers(): Promise<void> {
   try {
-    customers.value = await listCustomers()
+    customers.value = await listCustomers();
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '客户列表加载失败')
+    ElMessage.error((e as Error).message ?? '客户列表加载失败');
   }
 }
 
 function findL2UnderRoot(rootId: string, deptName: string): Customer | null {
-  const trimmed = deptName.trim()
-  if (!trimmed) return null
+  const trimmed = deptName.trim();
+  if (!trimmed) return null;
   // 精确匹配优先；同根下同名的二级客户存在多个时取第一个（少见）
-  return (
-    customers.value.find(
-      (c) => c.parent_id === rootId && c.name.trim() === trimmed,
-    ) ?? null
-  )
+  return customers.value.find((c) => c.parent_id === rootId && c.name.trim() === trimmed) ?? null;
 }
 
 // ============================================================
@@ -338,23 +329,23 @@ function findL2UnderRoot(rootId: string, deptName: string): Customer | null {
 // ============================================================
 
 interface ImportRow extends BidRow {
-  uid: string
+  uid: string;
   // 解析期错误（缺申请人/缺图号/缺名称/数量异常等），从 parser.errors 取
-  parserErrors: string[]
+  parserErrors: string[];
   // 解析后由 page 补的字段
-  customerId: string | null
-  customerLabel: string
-  rootCustomerId: string | null  // 由 customerId 上溯
-  drawingFile: File | null
-  drawingName: string | null
-  drawingUrl: string | null
+  customerId: string | null;
+  customerLabel: string;
+  rootCustomerId: string | null; // 由 customerId 上溯
+  drawingFile: File | null;
+  drawingName: string | null;
+  drawingUrl: string | null;
   // 提交时由 bulkGetOrCreate 返回的 applicant_id 字符串
-  applicantId: string | null
+  applicantId: string | null;
 }
 
-const rows = ref<ImportRow[]>([])
-const parsing = ref(false)
-let _uidCounter = 0
+const rows = ref<ImportRow[]>([]);
+const parsing = ref(false);
+let _uidCounter = 0;
 
 // ============================================================
 // 列顺序拖动 + 可见性
@@ -364,12 +355,17 @@ let _uidCounter = 0
 // ============================================================
 const columnDefs: ColumnDef[] = [
   {
-    key: 'applicantName', label: '申请人', minWidth: 150, align: 'center',
+    key: 'applicantName',
+    label: '申请人',
+    minWidth: 150,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as ImportRow
+      const r = row as ImportRow;
       return h(ElAutocomplete, {
         modelValue: r.applicantName,
-        'onUpdate:modelValue': (v: string | number) => { r.applicantName = String(v) },
+        'onUpdate:modelValue': (v: string | number) => {
+          r.applicantName = String(v);
+        },
         'value-key': 'name',
         'fetch-suggestions': querySearch,
         'trigger-on-focus': true,
@@ -378,113 +374,151 @@ const columnDefs: ColumnDef[] = [
         size: 'small',
         style: 'width: 100%',
         placeholder: '申请人',
-        onSelect: (item: Record<string, unknown>) => onApplicantSelect(r, item as unknown as Applicant),
-      })
+        onSelect: (item: Record<string, unknown>) =>
+          onApplicantSelect(r, item as unknown as Applicant),
+      });
     },
   },
   {
-    key: 'customerId', label: '分厂名', minWidth: 180, align: 'center',
+    key: 'customerId',
+    label: '分厂名',
+    minWidth: 180,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as ImportRow
-      return h(ElSelect, {
-        modelValue: r.customerId,
-        'onUpdate:modelValue': (v: unknown) => { r.customerId = v as string | null },
-        filterable: true,
-        clearable: true,
-        size: 'small',
-        style: 'width: 100%',
-        placeholder: '选所属分厂',
-        disabled: !form.rootCustomerId,
-        onChange: () => onRowFactoryChange(r),
-      }, () => subFactories.value.map((f) =>
-        h(ElOption, { key: f.id, label: f.name, value: f.id })))
+      const r = row as ImportRow;
+      return h(
+        ElSelect,
+        {
+          modelValue: r.customerId,
+          'onUpdate:modelValue': (v: unknown) => {
+            r.customerId = v as string | null;
+          },
+          filterable: true,
+          clearable: true,
+          size: 'small',
+          style: 'width: 100%',
+          placeholder: '选所属分厂',
+          disabled: !form.rootCustomerId,
+          onChange: () => onRowFactoryChange(r),
+        },
+        () => subFactories.value.map((f) => h(ElOption, { key: f.id, label: f.name, value: f.id })),
+      );
     },
   },
   {
-    key: 'drawingNo', label: '图纸编号', minWidth: 150, align: 'center',
+    key: 'drawingNo',
+    label: '图纸编号',
+    minWidth: 150,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as ImportRow
+      const r = row as ImportRow;
       return h(ElInput, {
         modelValue: r.drawingNo,
-        'onUpdate:modelValue': (v: string) => { r.drawingNo = v },
+        'onUpdate:modelValue': (v: string) => {
+          r.drawingNo = v;
+        },
         size: 'small',
         placeholder: '图纸编号',
-      })
+      });
     },
   },
   {
-    key: 'partName', label: '名称', minWidth: 180, align: 'center',
+    key: 'partName',
+    label: '名称',
+    minWidth: 180,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as ImportRow
+      const r = row as ImportRow;
       return h(ElInput, {
         modelValue: r.partName,
-        'onUpdate:modelValue': (v: string) => { r.partName = v },
+        'onUpdate:modelValue': (v: string) => {
+          r.partName = v;
+        },
         size: 'small',
         placeholder: '名称',
-      })
+      });
     },
   },
   {
-    key: 'quantity', label: '数量', minWidth: 130, align: 'center',
+    key: 'quantity',
+    label: '数量',
+    minWidth: 130,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as ImportRow
+      const r = row as ImportRow;
       return h(ElInputNumber, {
         modelValue: r.quantity,
-        'onUpdate:modelValue': (v: number | undefined) => { r.quantity = v ?? 1 },
+        'onUpdate:modelValue': (v: number | undefined) => {
+          r.quantity = v ?? 1;
+        },
         min: 1,
         step: 1,
         'step-strictly': true,
         size: 'small',
         'controls-position': 'right',
         style: 'width: 110px',
-      })
+      });
     },
   },
   {
-    key: 'isUrgent', label: '是否加急', minWidth: 90, align: 'center',
+    key: 'isUrgent',
+    label: '是否加急',
+    minWidth: 90,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as ImportRow
+      const r = row as ImportRow;
       return h(ElSwitch, {
         modelValue: r.isUrgent,
-        'onUpdate:modelValue': (v: string | number | boolean) => { r.isUrgent = Boolean(v) },
-      })
+        'onUpdate:modelValue': (v: string | number | boolean) => {
+          r.isUrgent = Boolean(v);
+        },
+      });
     },
   },
   {
-    key: 'plannedDeliveryDate', label: '计划交期', minWidth: 170, align: 'center',
+    key: 'plannedDeliveryDate',
+    label: '计划交期',
+    minWidth: 170,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as ImportRow
+      const r = row as ImportRow;
       return h(ElDatePicker, {
         modelValue: r.plannedDeliveryDate,
-        'onUpdate:modelValue': (v: string) => { r.plannedDeliveryDate = v },
+        'onUpdate:modelValue': (v: string) => {
+          r.plannedDeliveryDate = v;
+        },
         type: 'date',
         'value-format': 'YYYY-MM-DD',
         placeholder: '计划交期',
         size: 'small',
         style: 'width: 150px',
-      })
+      });
     },
   },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_bid_import' })
-const drag = useColumnDrag(columnDefs, { listKey: 'part_bid_import' })
+];
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_bid_import' });
+const drag = useColumnDrag(columnDefs, { listKey: 'part_bid_import' });
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
 // 自愈。路由进入时 rows=0 → tableRef.value=null → composable 不绑；用户上传 Excel
 // rows 变化 → v-if 挂载 → ref 更新 → composable watch 重新归一化 + 表头首次渲染时自愈。
-const tableRef = ref()
+const tableRef = ref();
 onMounted(() => {
-  drag.applyDrag(tableRef)
-})
+  drag.applyDrag(tableRef);
+});
 
 function makeUid(): string {
-  _uidCounter += 1
-  return `bid-${Date.now()}-${_uidCounter}`
+  _uidCounter += 1;
+  return `bid-${Date.now()}-${_uidCounter}`;
 }
 
 function revokeDrawingUrl(row: ImportRow): void {
   if (row.drawingUrl) {
-    try { URL.revokeObjectURL(row.drawingUrl) } catch { /* ignore */ }
+    try {
+      URL.revokeObjectURL(row.drawingUrl);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -501,22 +535,18 @@ function rowHasError(r: ImportRow): boolean {
     !r.quantity ||
     r.quantity < 1 ||
     !r.plannedDeliveryDate
-  )
+  );
 }
 
-const errorRowCount = computed(
-  () => rows.value.filter(rowHasError).length,
-)
+const errorRowCount = computed(() => rows.value.filter(rowHasError).length);
 
-const deptVariety = computed(
-  () => new Set(rows.value.map((r) => r.deptName).filter(Boolean)).size,
-)
+const deptVariety = computed(() => new Set(rows.value.map((r) => r.deptName).filter(Boolean)).size);
 
 function rowClassName({ row }: { row: unknown }): string {
-  const r = row as ImportRow
-  if (rowHasError(r)) return 'row-error'
-  if (r.isUrgent) return 'row-urgent'
-  return ''
+  const r = row as ImportRow;
+  if (rowHasError(r)) return 'row-error';
+  if (r.isUrgent) return 'row-urgent';
+  return '';
 }
 
 function buildImportRow(bid: BidRow, errors: string[]): ImportRow {
@@ -531,63 +561,61 @@ function buildImportRow(bid: BidRow, errors: string[]): ImportRow {
     drawingName: null,
     drawingUrl: null,
     applicantId: null,
-  }
+  };
 }
 
 function resolveAllCustomers(): void {
-  if (!form.rootCustomerId) return
-  const rootId = form.rootCustomerId
+  if (!form.rootCustomerId) return;
+  const rootId = form.rootCustomerId;
   for (const r of rows.value) {
     if (!r.deptName) {
-      r.customerId = null
-      r.customerLabel = ''
-      r.rootCustomerId = null
-      continue
+      r.customerId = null;
+      r.customerLabel = '';
+      r.rootCustomerId = null;
+      continue;
     }
-    const l2 = findL2UnderRoot(rootId, r.deptName)
+    const l2 = findL2UnderRoot(rootId, r.deptName);
     if (l2) {
-      r.customerId = l2.id
-      r.rootCustomerId = rootId
-      r.customerLabel = `${l2.parent_name ?? ''}${l2.parent_name ? ' / ' : ''}${l2.name}`
+      r.customerId = l2.id;
+      r.rootCustomerId = rootId;
+      r.customerLabel = `${l2.parent_name ?? ''}${l2.parent_name ? ' / ' : ''}${l2.name}`;
     } else {
-      r.customerId = null
-      r.rootCustomerId = null
-      r.customerLabel = ''
+      r.customerId = null;
+      r.rootCustomerId = null;
+      r.customerLabel = '';
     }
   }
 }
 
 async function onRootCustomerChange(): Promise<void> {
   // 清掉不属于新根的已选分厂（避免残留跨客户的 customerId）
-  const validIds = new Set(subFactories.value.map((c) => c.id))
+  const validIds = new Set(subFactories.value.map((c) => c.id));
   for (const r of rows.value) {
     if (r.customerId && !validIds.has(r.customerId)) {
-      r.customerId = null
-      r.rootCustomerId = null
-      r.customerLabel = ''
+      r.customerId = null;
+      r.rootCustomerId = null;
+      r.customerLabel = '';
     }
   }
-  resolveAllCustomers()
-  await loadApplicantsForCustomer(form.rootCustomerId)
+  resolveAllCustomers();
+  await loadApplicantsForCustomer(form.rootCustomerId);
 }
 
 /** 分厂下拉变更：同步 rootCustomerId + customerLabel。 */
 function onRowFactoryChange(row: ImportRow): void {
   if (!row.customerId) {
-    row.rootCustomerId = null
-    row.customerLabel = ''
-    return
+    row.rootCustomerId = null;
+    row.customerLabel = '';
+    return;
   }
-  const sub = subFactories.value.find((c) => c.id === row.customerId)
-  row.rootCustomerId = form.rootCustomerId
-  row.customerLabel = sub
-    ? `${sub.parent_name ? sub.parent_name + ' / ' : ''}${sub.name}`
-    : ''
+  const sub = subFactories.value.find((c) => c.id === row.customerId);
+  row.rootCustomerId = form.rootCustomerId;
+  row.customerLabel = sub ? `${sub.parent_name ? sub.parent_name + ' / ' : ''}${sub.name}` : '';
 }
 
 /** 申请人 autocomplete 选中：回填姓名。 */
 function onApplicantSelect(row: ImportRow, item: Applicant): void {
-  if (item?.name) row.applicantName = item.name
+  if (item?.name) row.applicantName = item.name;
 }
 
 /** 构造一条空白可编辑行（手工补单用）。 */
@@ -618,11 +646,11 @@ function makeBlankRow(): ImportRow {
     drawingName: null,
     drawingUrl: null,
     applicantId: null,
-  }
+  };
 }
 
 function onAddBlankRow(): void {
-  rows.value.push(makeBlankRow())
+  rows.value.push(makeBlankRow());
 }
 
 // ============================================================
@@ -630,41 +658,41 @@ function onAddBlankRow(): void {
 // ============================================================
 
 async function onExcelChange(uploadFile: UploadFile): Promise<void> {
-  const raw = uploadFile.raw
-  if (!raw) return
+  const raw = uploadFile.raw;
+  if (!raw) return;
   // 替换文件 → 撤销旧 URL
-  rows.value.forEach(revokeDrawingUrl)
-  rows.value = []
-  parsing.value = true
+  rows.value.forEach(revokeDrawingUrl);
+  rows.value = [];
+  parsing.value = true;
   try {
-    const buf = await raw.arrayBuffer()
-    const wb = XLSX.read(buf, { type: 'array' })
-    const result = parseBidExcel(wb, form.requestDate || todayIso())
+    const buf = await raw.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const result = parseBidExcel(wb, form.requestDate || todayIso());
     if (result.rows.length === 0) {
-      ElMessage.warning('Excel 没有可识别的数据行')
-      return
+      ElMessage.warning('Excel 没有可识别的数据行');
+      return;
     }
     // 收集 parse 期错误（按 rowNumber 索引）
-    const errByRow = new Map<number, string>()
-    for (const e of result.errors) errByRow.set(e.rowNumber, e.message)
+    const errByRow = new Map<number, string>();
+    for (const e of result.errors) errByRow.set(e.rowNumber, e.message);
     rows.value = result.rows.map((bid) =>
       buildImportRow(bid, errByRow.get(bid.rowNumber) ? [errByRow.get(bid.rowNumber)!] : []),
-    )
-    resolveAllCustomers()
-    await loadApplicantsForCustomer(form.rootCustomerId)
-    const blocking = errorRowCount.value
+    );
+    resolveAllCustomers();
+    await loadApplicantsForCustomer(form.rootCustomerId);
+    const blocking = errorRowCount.value;
     if (blocking > 0) {
       ElMessage.warning(
         `解析完成，共 ${rows.value.length} 行；其中 ${blocking} 行有错误，请修正后再提交`,
-      )
+      );
     } else {
-      ElMessage.success(`解析完成，共 ${rows.value.length} 行可提交`)
+      ElMessage.success(`解析完成，共 ${rows.value.length} 行可提交`);
     }
   } catch (e) {
-    ElMessage.error(`Excel 解析失败：${(e as Error).message}`)
-    rows.value = []
+    ElMessage.error(`Excel 解析失败：${(e as Error).message}`);
+    rows.value = [];
   } finally {
-    parsing.value = false
+    parsing.value = false;
   }
 }
 
@@ -673,120 +701,126 @@ async function onExcelChange(uploadFile: UploadFile): Promise<void> {
 // ============================================================
 
 function onRemoveRow(row: ImportRow): void {
-  revokeDrawingUrl(row)
-  rows.value = rows.value.filter((r) => r.uid !== row.uid)
+  revokeDrawingUrl(row);
+  rows.value = rows.value.filter((r) => r.uid !== row.uid);
 }
 
 function onClearAll(): void {
-  if (rows.value.length === 0) return
+  if (rows.value.length === 0) return;
   ElMessageBox.confirm(`确认清空 ${rows.value.length} 条预览记录？`, '提示', {
     confirmButtonText: '清空',
     cancelButtonText: '取消',
     type: 'warning',
   })
     .then(() => {
-      rows.value.forEach(revokeDrawingUrl)
-      rows.value = []
+      rows.value.forEach(revokeDrawingUrl);
+      rows.value = [];
     })
-    .catch(() => undefined)
+    .catch(() => undefined);
 }
 
 function onRowDrawingChange(row: ImportRow, uploadFile: UploadFile): void {
-  const raw = uploadFile.raw
-  if (!raw) return
+  const raw = uploadFile.raw;
+  if (!raw) return;
   if (row.drawingUrl) {
-    try { URL.revokeObjectURL(row.drawingUrl) } catch { /* ignore */ }
+    try {
+      URL.revokeObjectURL(row.drawingUrl);
+    } catch {
+      /* ignore */
+    }
   }
-  row.drawingFile = raw
-  row.drawingName = uploadFile.name
-  row.drawingUrl = URL.createObjectURL(raw)
+  row.drawingFile = raw;
+  row.drawingName = uploadFile.name;
+  row.drawingUrl = URL.createObjectURL(raw);
 }
 function onRowDrawingRemove(row: ImportRow): void {
   if (row.drawingUrl) {
-    try { URL.revokeObjectURL(row.drawingUrl) } catch { /* ignore */ }
+    try {
+      URL.revokeObjectURL(row.drawingUrl);
+    } catch {
+      /* ignore */
+    }
   }
-  row.drawingFile = null
-  row.drawingName = null
-  row.drawingUrl = null
+  row.drawingFile = null;
+  row.drawingName = null;
+  row.drawingUrl = null;
 }
 
 // ============================================================
 // 图纸预览（弹窗内嵌 iframe，PDF 由浏览器原生渲染）
 // ============================================================
 
-const drawingPreviewVisible = ref(false)
-const drawingPreviewUrl = ref<string | null>(null)
-const drawingPreviewTitle = ref('图纸预览')
+const drawingPreviewVisible = ref(false);
+const drawingPreviewUrl = ref<string | null>(null);
+const drawingPreviewTitle = ref('图纸预览');
 
 function openDrawingPreview(row: ImportRow): void {
-  if (!row.drawingUrl || !row.drawingName) return
-  drawingPreviewUrl.value = row.drawingUrl
-  drawingPreviewTitle.value = `图纸预览 — ${row.drawingNo} / ${row.drawingName}`
-  drawingPreviewVisible.value = true
+  if (!row.drawingUrl || !row.drawingName) return;
+  drawingPreviewUrl.value = row.drawingUrl;
+  drawingPreviewTitle.value = `图纸预览 — ${row.drawingNo} / ${row.drawingName}`;
+  drawingPreviewVisible.value = true;
 }
 
 // ============================================================
 // 提交
 // ============================================================
 
-const submitting = ref(false)
-const router = useRouter()
+const submitting = ref(false);
+const router = useRouter();
 
 async function onSubmit(): Promise<void> {
   if (rows.value.length === 0) {
-    ElMessage.warning('没有可提交的行')
-    return
+    ElMessage.warning('没有可提交的行');
+    return;
   }
   if (errorRowCount.value > 0) {
-    ElMessage.error(`仍有 ${errorRowCount.value} 行错误，请先修正`)
-    return
+    ElMessage.error(`仍有 ${errorRowCount.value} 行错误，请先修正`);
+    return;
   }
   if (!form.rootCustomerId || !form.requestDate) {
-    ElMessage.error('请先选择 L1 客户 + 请购日期')
-    return
+    ElMessage.error('请先选择 L1 客户 + 请购日期');
+    return;
   }
   try {
     await ElMessageBox.confirm(
       `将向服务端提交 ${rows.value.length} 条新零件，提交后系统按客户自动分配序列号。是否继续？`,
       '确认提交',
       { confirmButtonText: '提交', cancelButtonText: '取消', type: 'info' },
-    )
+    );
   } catch {
-    return
+    return;
   }
-  submitting.value = true
+  submitting.value = true;
   try {
     // 1) dedupe (applicantName, customerId[L2]) → bulk get-or-create
-    const uniqPairs = new Map<string, { name: string; customer_id: string }>()
+    const uniqPairs = new Map<string, { name: string; customer_id: string }>();
     for (const r of rows.value) {
-      if (!r.customerId) continue
-      const key = `${r.applicantName}::${r.customerId}`
+      if (!r.customerId) continue;
+      const key = `${r.applicantName}::${r.customerId}`;
       if (!uniqPairs.has(key)) {
-        uniqPairs.set(key, { name: r.applicantName, customer_id: r.customerId })
+        uniqPairs.set(key, { name: r.applicantName, customer_id: r.customerId });
       }
     }
-    const applicantItems = Array.from(uniqPairs.values())
+    const applicantItems = Array.from(uniqPairs.values());
     if (applicantItems.length === 0) {
-      throw new Error('没有可用的申请人条目（所有行都缺申请人）')
+      throw new Error('没有可用的申请人条目（所有行都缺申请人）');
     }
-    const applicantsOut = await bulkGetOrCreateApplicants(applicantItems)
+    const applicantsOut = await bulkGetOrCreateApplicants(applicantItems);
     // 索引：applicant_id by (applicantName, l1RootId)
-    const applicantIdByKey = new Map<string, string>()
+    const applicantIdByKey = new Map<string, string>();
     for (const a of applicantsOut) {
-      applicantIdByKey.set(`${a.name}::${a.customer_id}`, a.applicant_id)
+      applicantIdByKey.set(`${a.name}::${a.customer_id}`, a.applicant_id);
     }
 
     // 2) 校验每行都能拿到 applicant_id
     for (const r of rows.value) {
-      if (!r.customerId) continue
-      const key = `${r.applicantName}::${r.rootCustomerId}`
-      const aid = applicantIdByKey.get(key)
+      if (!r.customerId) continue;
+      const key = `${r.applicantName}::${r.rootCustomerId}`;
+      const aid = applicantIdByKey.get(key);
       if (!aid) {
-        throw new Error(
-          `无法为「${r.applicantName}」（${r.customerLabel}）解析 applicant_id`,
-        )
+        throw new Error(`无法为「${r.applicantName}」（${r.customerLabel}）解析 applicant_id`);
       }
-      r.applicantId = aid
+      r.applicantId = aid;
     }
 
     // 3) 构造 PartCreatePayload[] + files
@@ -802,7 +836,7 @@ async function onSubmit(): Promise<void> {
       planned_delivery_date: r.plannedDeliveryDate,
       is_urgent: r.isUrgent,
       customer_id: r.customerId!,
-    }))
+    }));
     const files: (PartBatchFilePayload | null)[] = rows.value.map((r) =>
       r.drawingFile
         ? {
@@ -811,32 +845,32 @@ async function onSubmit(): Promise<void> {
             contentType: 'application/pdf',
           }
         : null,
-    )
+    );
 
-    const res = await batchCreateParts(items, files)
+    const res = await batchCreateParts(items, files);
     if (res.failed.length > 0) {
       const sample = res.failed
         .slice(0, 5)
         .map((f) => `第 ${f.index + 1} 行：${f.message}`)
-        .join('\n')
-      const more = res.failed.length > 5 ? `\n...还有 ${res.failed.length - 5} 行失败` : ''
+        .join('\n');
+      const more = res.failed.length > 5 ? `\n...还有 ${res.failed.length - 5} 行失败` : '';
       ElMessageBox.alert(
         `服务端拒绝了 ${res.failed.length} 行：\n${sample}${more}`,
         '部分行未通过',
         { type: 'warning' },
-      )
-      return
+      );
+      return;
     }
 
     // 4) 释放所有 blob URL + 清空 + 跳转
-    rows.value.forEach(revokeDrawingUrl)
-    rows.value = []
-    ElMessage.success(`成功新建 ${res.created.length} 条零件`)
-    router.push({ path: '/parts', query: { status: 'PENDING' } })
+    rows.value.forEach(revokeDrawingUrl);
+    rows.value = [];
+    ElMessage.success(`成功新建 ${res.created.length} 条零件`);
+    router.push({ path: '/parts', query: { status: 'PENDING' } });
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '提交失败')
+    ElMessage.error((e as Error).message ?? '提交失败');
   } finally {
-    submitting.value = false
+    submitting.value = false;
   }
 }
 
@@ -845,11 +879,11 @@ async function onSubmit(): Promise<void> {
 // ============================================================
 
 onBeforeUnmount(() => {
-  rows.value.forEach(revokeDrawingUrl)
-})
+  rows.value.forEach(revokeDrawingUrl);
+});
 
 // 进页时拉客户列表
-loadCustomers()
+loadCustomers();
 </script>
 
 <style lang="scss" scoped>

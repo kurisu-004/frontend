@@ -24,9 +24,9 @@
 `src/utils/mergePdfs.ts` 用 `pdf-lib` 在浏览器端把多个 PDF Blob 按数组顺序合并成单个 PDF Blob：
 
 ```ts
-import { mergePdfBlobs } from '@/utils/mergePdfs'
+import { mergePdfBlobs } from '@/utils/mergePdfs';
 
-const merged = await mergePdfBlobs([pdfBlob1, pdfBlob2, pdfBlob3])
+const merged = await mergePdfBlobs([pdfBlob1, pdfBlob2, pdfBlob3]);
 ```
 
 典型用途：
@@ -42,11 +42,11 @@ const merged = await mergePdfBlobs([pdfBlob1, pdfBlob2, pdfBlob3])
 
 通用文件 API 与下载助手：
 
-| 工具 | 路径 | 作用 |
-|---|---|---|
-| 文件 API | `src/api/file.ts` | 通用文件上传 / 下载 / 删除接口 |
-| 下载助手 | `src/utils/download.ts` | 浏览器端触发 Blob 下载（`a.click()` + `Blob`） |
-| 文件列表卡片 | `src/components/FileListCard.vue` | 通用文件列表展示 + 上传 / 预览 / 下载交互 |
+| 工具         | 路径                              | 作用                                           |
+| ------------ | --------------------------------- | ---------------------------------------------- |
+| 文件 API     | `src/api/file.ts`                 | 通用文件上传 / 下载 / 删除接口                 |
+| 下载助手     | `src/utils/download.ts`           | 浏览器端触发 Blob 下载（`a.click()` + `Blob`） |
+| 文件列表卡片 | `src/components/FileListCard.vue` | 通用文件列表展示 + 上传 / 预览 / 下载交互      |
 
 新页面涉及文件上传时优先复用 `FileListCard.vue`，避免在每个 view 重复写 el-upload + 文件列表渲染逻辑。
 
@@ -75,14 +75,14 @@ location /api/ {
 
 系统里出现的图纸 / 模型文件类型（与后端约定一致）：
 
-| 编码 | 含义 | 典型格式 |
-|---|---|---|
-| `DRAWING` | 图纸 | PDF |
-| `3D_MODEL` | 3D 模型 | STEP / IGES / STL |
-| `G_CODE` | G 代码 | 数控加工程序 |
-| `SETUP_SHEET` | 设定单 | PDF |
-| `ASSEMBLY_MASTER` | 总装图 | PDF |
-| `CAD_2D` | 二维 CAD | DWG / DXF |
+| 编码              | 含义     | 典型格式          |
+| ----------------- | -------- | ----------------- |
+| `DRAWING`         | 图纸     | PDF               |
+| `3D_MODEL`        | 3D 模型  | STEP / IGES / STL |
+| `G_CODE`          | G 代码   | 数控加工程序      |
+| `SETUP_SHEET`     | 设定单   | PDF               |
+| `ASSEMBLY_MASTER` | 总装图   | PDF               |
+| `CAD_2D`          | 二维 CAD | DWG / DXF         |
 
 PDF 类型（`DRAWING` / `SETUP_SHEET` / `ASSEMBLY_MASTER`）走 `PdfViewer.vue` 直接预览；其他类型走通用下载链接。
 

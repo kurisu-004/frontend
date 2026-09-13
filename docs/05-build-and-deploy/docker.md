@@ -10,10 +10,10 @@
 
 整个前端产物是一个 Docker 镜像 `myerp-frontend`，分两个阶段构建：
 
-| 阶段 | 基础镜像 | 作用 | 产物 |
-|---|---|---|---|
-| builder | `node:24-alpine` | 安装依赖 + vite build | `dist/` 静态文件 |
-| runtime | `nginx:1.30-alpine` | 托管 `dist/` + 反代后端 | 可运行的容器 |
+| 阶段    | 基础镜像            | 作用                    | 产物             |
+| ------- | ------------------- | ----------------------- | ---------------- |
+| builder | `node:24-alpine`    | 安装依赖 + vite build   | `dist/` 静态文件 |
+| runtime | `nginx:1.30-alpine` | 托管 `dist/` + 反代后端 | 可运行的容器     |
 
 最终镜像只包含 `nginx + dist + nginx.conf + entrypoint.sh`，node 工具链在 builder 阶段结束后被丢弃。镜像体积比单阶段小一个数量级（典型 ~50MB vs ~600MB）。
 

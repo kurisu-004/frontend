@@ -12,7 +12,7 @@
 // - fetchPickupSkipSummary   → tab4 跳序取件汇总（按工人）
 // - fetchPickupSkipDetail    → tab4 单工人跳序事件明细分页
 
-import { api } from '@/api/http'
+import { api } from '@/api/http';
 import type {
   OverviewOut,
   PickupSkipDetailOut,
@@ -20,7 +20,7 @@ import type {
   StatisticsQuery,
   WorkerDetailOut,
   WorkerStatsListOut,
-} from '@/types/statistics'
+} from '@/types/statistics';
 
 /**
  * GET /statistics/overview
@@ -33,8 +33,8 @@ import type {
 export async function fetchOverview(q: StatisticsQuery): Promise<OverviewOut> {
   const { data } = await api.get<OverviewOut>('/statistics/overview', {
     params: { date_from: q.date_from, date_to: q.date_to },
-  })
-  return data
+  });
+  return data;
 }
 
 /**
@@ -46,8 +46,8 @@ export async function fetchOverview(q: StatisticsQuery): Promise<OverviewOut> {
 export async function fetchWorkerStats(q: StatisticsQuery): Promise<WorkerStatsListOut> {
   const { data } = await api.get<WorkerStatsListOut>('/statistics/workers', {
     params: { date_from: q.date_from, date_to: q.date_to },
-  })
-  return data
+  });
+  return data;
 }
 
 /**
@@ -65,8 +65,8 @@ export async function fetchWorkerDetail(
     {
       params: { date_from: q.date_from, date_to: q.date_to },
     },
-  )
-  return data
+  );
+  return data;
 }
 
 /**
@@ -76,8 +76,8 @@ export async function fetchWorkerDetail(
  * 后端单条 SQL GROUP BY worker_id 完成，sort: skip_count desc, last_skip_at desc。
  */
 export async function fetchPickupSkipSummary(): Promise<PickupSkipSummaryOut> {
-  const { data } = await api.get<PickupSkipSummaryOut>('/statistics/pickup-skips')
-  return data
+  const { data } = await api.get<PickupSkipSummaryOut>('/statistics/pickup-skips');
+  return data;
 }
 
 /**
@@ -93,6 +93,6 @@ export async function fetchPickupSkipDetail(
   const { data } = await api.get<PickupSkipDetailOut>(
     `/statistics/pickup-skips/${encodeURIComponent(workerId)}`,
     { params: { limit: q.limit, offset: q.offset } },
-  )
-  return data
+  );
+  return data;
 }

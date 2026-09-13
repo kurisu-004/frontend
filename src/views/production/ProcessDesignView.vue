@@ -25,7 +25,7 @@
 
         <!-- 右：ProcessStepCardList -->
         <!-- 2026-09-12 第三轮：右栏加 :max="'20%'" 限制最大宽度，drag 超过自动回弹。 -->
-        <el-splitter-panel :size="pane.rightSize.value" :min="320" :max="'20%'">
+        <el-splitter-panel :size="pane.rightSize.value" :min="320" max="20%">
           <ProcessStepCardList :part-id="selectedPartId" />
         </el-splitter-panel>
       </el-splitter>
@@ -34,37 +34,37 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import type { PartListItem } from '@/types/parts'
-import PartPickerList from './components/PartPickerList.vue'
-import DrawingPreviewPane from './components/DrawingPreviewPane.vue'
-import ProcessStepCardList from './components/ProcessStepCardList.vue'
-import { usePartProcessDesign } from './composables/usePartProcessDesign'
-import { useResizablePane } from '@/composables/useResizablePane'
+import { computed, onMounted, ref } from 'vue';
+import type { PartListItem } from '@/types/parts';
+import PartPickerList from './components/PartPickerList.vue';
+import DrawingPreviewPane from './components/DrawingPreviewPane.vue';
+import ProcessStepCardList from './components/ProcessStepCardList.vue';
+import { usePartProcessDesign } from './composables/usePartProcessDesign';
+import { useResizablePane } from '@/composables/useResizablePane';
 
-const { parts, loadParts, loadProcesses } = usePartProcessDesign()
+const { parts, loadParts, loadProcesses } = usePartProcessDesign();
 
 // 2026-09-12 新增：三栏宽度持久化。默认 20% / 60% / 20%，中间图纸占主。
-const pane = useResizablePane('process_design_layout', { left: 20, center: 60, right: 20 })
+const pane = useResizablePane('process_design_layout', { left: 20, center: 60, right: 20 });
 
-const selectedPartId = ref<string | null>(null)
+const selectedPartId = ref<string | null>(null);
 
 const selectedPart = computed<PartListItem | null>(() => {
-  if (!selectedPartId.value) return null
-  return parts.value.find((p) => p.id === selectedPartId.value) ?? null
-})
+  if (!selectedPartId.value) return null;
+  return parts.value.find((p) => p.id === selectedPartId.value) ?? null;
+});
 
 function onSelectPart(partId: string): void {
-  selectedPartId.value = partId
+  selectedPartId.value = partId;
 }
 
 onMounted(async () => {
-  await Promise.all([loadParts(), loadProcesses()])
+  await Promise.all([loadParts(), loadProcesses()]);
   // 默认选中第一个有流程的零件，方便用户首次进入就看到示例
-  const seeded = ['5000000000001', '5000000000003']
-  const first = parts.value.find((p) => seeded.includes(p.id))
-  if (first) selectedPartId.value = first.id
-})
+  const seeded = ['5000000000001', '5000000000003'];
+  const first = parts.value.find((p) => seeded.includes(p.id));
+  if (first) selectedPartId.value = first.id;
+});
 </script>
 
 <style lang="scss" scoped>

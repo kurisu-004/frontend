@@ -31,8 +31,8 @@
         <div v-else class="file-preview">
           <PdfViewer
             v-if="isPdf(selectedFile.file_type)"
-            :url="selectedFile.preview_url"
             :key="selectedFile.id"
+            :url="selectedFile.preview_url"
           />
           <el-image
             v-else-if="isImage(selectedFile.file_type)"
@@ -66,55 +66,55 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { Tools } from '@element-plus/icons-vue'
-import PdfViewer from '@/components/PdfViewer.vue'
-import type { PartListItem } from '@/types/parts'
-import { usePartFiles } from '../../parts/composables/usePartFiles'
-import { FIXTURE_FILES, type MockPartFile } from '../__fixtures__/partProcess.fixtures'
+import { computed, ref, watch } from 'vue';
+import { Tools } from '@element-plus/icons-vue';
+import PdfViewer from '@/components/PdfViewer.vue';
+import type { PartListItem } from '@/types/parts';
+import { usePartFiles } from '../../parts/composables/usePartFiles';
+import { FIXTURE_FILES, type MockPartFile } from '../__fixtures__/partProcess.fixtures';
 
 const props = defineProps<{
-  part: PartListItem | null
-}>()
+  part: PartListItem | null;
+}>();
 
-const activeTab = ref<'drawings' | 'models3d' | 'cad'>('drawings')
-const partIdRef = computed<string>(() => props.part?.id ?? '')
-const partFiles = usePartFiles(partIdRef)
-const { fetchDrawings, fetch3DModels, fetchCadFiles } = partFiles
+const activeTab = ref<'drawings' | 'models3d' | 'cad'>('drawings');
+const partIdRef = computed<string>(() => props.part?.id ?? '');
+const partFiles = usePartFiles(partIdRef);
+const { fetchDrawings, fetch3DModels, fetchCadFiles } = partFiles;
 
 // mock 文件列表（阶段二由 usePartFiles 接管）
-const mockFiles = ref<MockPartFile[]>([])
+const mockFiles = ref<MockPartFile[]>([]);
 // 2026-09-12：drawings 只保留可预览的 PDF / 图片（其他类型在 3D / CAD 占位 tab 表达，
 // 不再走 non-pdf-preview 兜底）。
 const drawings = computed(() =>
   mockFiles.value.filter((f) => isPdf(f.file_type) || isImage(f.file_type)),
-)
-const selectedFile = ref<MockPartFile | null>(null)
+);
+const selectedFile = ref<MockPartFile | null>(null);
 
 watch(
   () => props.part?.id,
   async (newId) => {
-    selectedFile.value = null
+    selectedFile.value = null;
     if (!newId) {
-      mockFiles.value = []
-      return
+      mockFiles.value = [];
+      return;
     }
-    mockFiles.value = FIXTURE_FILES[newId] ?? []
+    mockFiles.value = FIXTURE_FILES[newId] ?? [];
     // 阶段二：替换为 usePartFiles 的 fetch*
-    await Promise.all([fetchDrawings(), fetch3DModels(), fetchCadFiles()])
+    await Promise.all([fetchDrawings(), fetch3DModels(), fetchCadFiles()]);
     // 默认选中第一张图纸
-    const first = drawings.value[0]
-    if (first) selectedFile.value = first
+    const first = drawings.value[0];
+    if (first) selectedFile.value = first;
   },
   { immediate: true },
-)
+);
 
 function isPdf(t: string): boolean {
-  return t.toUpperCase() === 'PDF'
+  return t.toUpperCase() === 'PDF';
 }
 function isImage(t: string): boolean {
-  const up = t.toUpperCase()
-  return ['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'WEBP'].includes(up)
+  const up = t.toUpperCase();
+  return ['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'WEBP'].includes(up);
 }
 </script>
 

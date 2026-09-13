@@ -16,10 +16,10 @@
 
   用法：
   <!-- 仅手动按钮打开 -->
-  <HeldPartsBadge :worker-id="String(worker.id)" />
+<HeldPartsBadge :worker-id="String(worker.id)" />
 
-  <!-- 领取/放回后自动弹出让工人确认 -->
-  <HeldPartsBadge :worker-id="String(worker.id)" :auto-open-on-change="true" />
+<!-- 领取/放回后自动弹出让工人确认 -->
+<HeldPartsBadge :worker-id="String(worker.id)" :auto-open-on-change="true" />
 -->
 
 <template>
@@ -31,13 +31,7 @@
   >
     <el-icon><Box /></el-icon>
     <span>已持有</span>
-    <el-badge
-      v-if="count > 0"
-      :value="count"
-      :max="99"
-      class="count-badge"
-      type="danger"
-    />
+    <el-badge v-if="count > 0" :value="count" :max="99" class="count-badge" type="danger" />
     <span v-else class="muted-inline">0 件</span>
   </el-button>
 
@@ -58,12 +52,7 @@
           <span>{{ workerId ? '当前工人' : '未识别' }}</span>
           <span class="held-count-inline">共 {{ count }} 件</span>
         </span>
-        <el-button
-          size="small"
-          link
-          :loading="loading"
-          @click="fetchHeld"
-        >
+        <el-button size="small" link :loading="loading" @click="fetchHeld">
           <el-icon><Refresh /></el-icon>
           <span>刷新</span>
         </el-button>
@@ -86,12 +75,7 @@
       </div>
 
       <div v-else class="held-list" :style="{ maxHeight: maxListHeight }">
-        <div
-          v-for="p in parts"
-          :key="p.id"
-          class="held-row"
-          :class="{ 'is-urgent': p.is_urgent }"
-        >
+        <div v-for="p in parts" :key="p.id" class="held-row" :class="{ 'is-urgent': p.is_urgent }">
           <div class="held-row-main">
             <span class="held-serial">{{ p.serial_no || '—' }}</span>
             <span class="held-drawing">{{ p.drawing_no }}</span>
@@ -101,9 +85,7 @@
             <el-tag v-if="p.next_process_name" size="small" type="info" effect="plain">
               下一工序：{{ p.next_process_name }}
             </el-tag>
-            <el-tag v-else size="small" type="warning" effect="plain">
-              未选工序
-            </el-tag>
+            <el-tag v-else size="small" type="warning" effect="plain"> 未选工序 </el-tag>
             <el-tag v-if="p.shelf_code" size="small" effect="plain">
               货架 {{ p.shelf_code }}
             </el-tag>
@@ -116,87 +98,81 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import {
-  Box,
-  Loading,
-  Refresh,
-  User,
-  WarningFilled,
-} from '@element-plus/icons-vue'
-import { listPartsHeldByWorker } from '@/api/parts'
-import type { PartItem } from '@/api/parts'
-import { useScanBus } from '@/composables/useScanBus'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { Box, Loading, Refresh, User, WarningFilled } from '@element-plus/icons-vue';
+import { listPartsHeldByWorker } from '@/api/parts';
+import type { PartItem } from '@/api/parts';
+import { useScanBus } from '@/composables/useScanBus';
 
 const props = withDefaults(
   defineProps<{
-    workerId: string
-    maxListHeight?: string
+    workerId: string;
+    maxListHeight?: string;
     /** 持有件变化后是否自动打开 drawer（让工人确认领取/放回结果） */
-    autoOpenOnChange?: boolean
+    autoOpenOnChange?: boolean;
   }>(),
   {
     maxListHeight: 'calc(100vh - 200px)',
     autoOpenOnChange: false,
   },
-)
+);
 
-const { heldVersion, onHeldChanged } = useScanBus()
+const { heldVersion, onHeldChanged } = useScanBus();
 
-const drawerVisible = ref(false)
-const parts = ref<PartItem[]>([])
-const loading = ref(false)
-const errorMsg = ref<string | null>(null)
-let offBus: (() => void) | null = null
+const drawerVisible = ref(false);
+const parts = ref<PartItem[]>([]);
+const loading = ref(false);
+const errorMsg = ref<string | null>(null);
+let offBus: (() => void) | null = null;
 
-const count = computed(() => parts.value.length)
+const count = computed(() => parts.value.length);
 
 async function fetchHeld(): Promise<void> {
-  if (!props.workerId) return
-  loading.value = true
-  errorMsg.value = null
+  if (!props.workerId) return;
+  loading.value = true;
+  errorMsg.value = null;
   try {
-    parts.value = await listPartsHeldByWorker(props.workerId)
+    parts.value = await listPartsHeldByWorker(props.workerId);
   } catch (e) {
-    errorMsg.value = (e as Error).message ?? '加载失败'
-    parts.value = []
+    errorMsg.value = (e as Error).message ?? '加载失败';
+    parts.value = [];
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 function onOpen(): void {
   // 每次打开都重新拉一次（最新数据）
-  void fetchHeld()
+  void fetchHeld();
 }
 
 onMounted(() => {
   // 初次拉一次（即便不打开 drawer 也有数据驱动徽章计数）
-  void fetchHeld()
+  void fetchHeld();
   // 监听持有件变化（PICK_UP / RETURN / INSPECT 提交后）
   offBus = onHeldChanged(async () => {
-    await fetchHeld()
+    await fetchHeld();
     // 自动打开 drawer：让工人看到刚领取/放回后的最新持有列表
     if (props.autoOpenOnChange) {
-      drawerVisible.value = true
+      drawerVisible.value = true;
     }
-  })
-})
+  });
+});
 
 onUnmounted(() => {
   if (offBus) {
-    offBus()
-    offBus = null
+    offBus();
+    offBus = null;
   }
-})
+});
 
 // workerId 变更时重新拉
 watch(
   () => props.workerId,
   () => {
-    void fetchHeld()
+    void fetchHeld();
   },
-)
+);
 </script>
 
 <style scoped>

@@ -49,7 +49,8 @@
             size="small"
             effect="dark"
             class="urgent-chip"
-          >加急</el-tag>
+            >加急</el-tag
+          >
           <span class="batch-no">{{ $index + 1 }}</span>
         </template>
       </el-table-column>
@@ -69,7 +70,12 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="所在位置 / 持有人" min-width="180" align="center" show-overflow-tooltip>
+      <el-table-column
+        label="所在位置 / 持有人"
+        min-width="180"
+        align="center"
+        show-overflow-tooltip
+      >
         <template #default="{ row }">
           <span :class="{ muted: !row?.holder_name }">{{ row?.holder_name ?? '—' }}</span>
         </template>
@@ -97,36 +103,36 @@ import {
   type OrderStatus,
   type PartBatchScanOut,
   type PartScanInfoOut,
-} from '@/types/parts'
+} from '@/types/parts';
 
 const props = defineProps<{
-  modelValue: boolean
+  modelValue: boolean;
   /** 扫描的序列号，仅用于标题展示 */
-  code: string
+  code: string;
   /** v2 响应顶层 part（含 is_urgent / system_delivery_date）。可空：父级在拉取批次期间 part 尚未就绪；模板用 v-if 守卫。2026-08-31 改可空以消除父级 template type assertion。 */
-  part?: PartScanInfoOut | null
+  part?: PartScanInfoOut | null;
   /** v2 batches 数组 */
-  batches: PartBatchScanOut[]
-}>()
+  batches: PartBatchScanOut[];
+}>();
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void
-  (e: 'pick', payload: { batch: PartBatchScanOut; part: PartScanInfoOut }): void
-}>()
+  (e: 'update:modelValue', v: boolean): void;
+  (e: 'pick', payload: { batch: PartBatchScanOut; part: PartScanInfoOut }): void;
+}>();
 
 /** 加急行 className：part.is_urgent 为真时打 batch-row-urgent 红底（沿用 InspectionPending 既有 row-urgent 视觉 #fde2e2）。part 未就绪时不加类。 */
 function urgentRowClass({ row }: { row: PartBatchScanOut; rowIndex: number }): string {
-  return props.part?.is_urgent ? 'batch-row-urgent' : ''
+  return props.part?.is_urgent ? 'batch-row-urgent' : '';
 }
 
 function onRowClick(row: PartBatchScanOut): void {
   // props.part 在 v-if="part" 守卫下访问时一定非空；用非空断言收口。
-  emit('pick', { batch: row, part: props.part! })
-  emit('update:modelValue', false)
+  emit('pick', { batch: row, part: props.part! });
+  emit('update:modelValue', false);
 }
 
 function onCancel(): void {
-  emit('update:modelValue', false)
+  emit('update:modelValue', false);
 }
 </script>
 

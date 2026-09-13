@@ -10,48 +10,44 @@
  *
  * 扫码：useBarcodeScanner 全局监听；命中已送货列表弹 dialog；未命中复用报工台 findPartBySerialAndPrompt。
  */
-import { h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElTag } from 'element-plus'
-import { Filter, Tools } from '@element-plus/icons-vue'
-import {
-  listRepairBatches,
-  listRepairingBatches,
-  type PartItem,
-} from '@/api/parts'
-import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import { useCustomerTree } from '@/composables/useCustomerTree'
+import { h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { ElMessage, ElTag } from 'element-plus';
+import { Filter, Tools } from '@element-plus/icons-vue';
+import { listRepairBatches, listRepairingBatches, type PartItem } from '@/api/parts';
+import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
+import { useCustomerTree } from '@/composables/useCustomerTree';
 import {
   useColumnVisibility,
   resolveDraggable,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import RepairStartDialog from './RepairStartDialog.vue'
+} from '@/composables/useColumnVisibility';
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
+import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import RepairStartDialog from './RepairStartDialog.vue';
 
-const { onScan } = useBarcodeScanner()
-const { tree: customerTree } = useCustomerTree()
+const { onScan } = useBarcodeScanner();
+const { tree: customerTree } = useCustomerTree();
 
-type TabKey = 'delivered' | 'repairing'
-const activeTab = ref<TabKey>('delivered')
+type TabKey = 'delivered' | 'repairing';
+const activeTab = ref<TabKey>('delivered');
 
 // —— 列表状态 ——
-const rows = ref<PartItem[]>([])
-const total = ref(0)
-const loading = ref(false)
-const limit = ref(50)
-const offset = ref(0)
+const rows = ref<PartItem[]>([]);
+const total = ref(0);
+const loading = ref(false);
+const limit = ref(50);
+const offset = ref(0);
 
 // —— 筛选状态（精简版；后端 /repair-batches 仅支持 keyword + customer_id + serial_no） ——
 const search = reactive<{
-  keyword: string
-  orderNo: string
-  serialNo: string
-  customerId: string
-  isUrgent: boolean | null
-  plannedDeliverySortAsc: boolean
+  keyword: string;
+  orderNo: string;
+  serialNo: string;
+  customerId: string;
+  isUrgent: boolean | null;
+  plannedDeliverySortAsc: boolean;
 }>({
   keyword: '',
   orderNo: '',
@@ -59,32 +55,32 @@ const search = reactive<{
   customerId: '',
   isUrgent: null,
   plannedDeliverySortAsc: true,
-})
+});
 
 // —— Dialog 状态 ——
 const startDialog = ref<{ open: boolean; target: PartItem | null }>({
   open: false,
   target: null,
-})
+});
 
 // —— 客户 popover 状态 ——
-const customerPopoverVisible = ref(false)
-const customerDraft = ref<string | null>(null)
+const customerPopoverVisible = ref(false);
+const customerDraft = ref<string | null>(null);
 
 function syncCustomerDraft(): void {
-  customerDraft.value = search.customerId || null
+  customerDraft.value = search.customerId || null;
 }
 function resetCustomer(): void {
-  search.customerId = ''
-  customerDraft.value = null
-  customerPopoverVisible.value = false
-  onSearch()
+  search.customerId = '';
+  customerDraft.value = null;
+  customerPopoverVisible.value = false;
+  onSearch();
 }
 function confirmCustomer(): void {
-  search.customerId = customerDraft.value ?? ''
-  customerPopoverVisible.value = false
-  offset.value = 0
-  void loadList()
+  search.customerId = customerDraft.value ?? '';
+  customerPopoverVisible.value = false;
+  offset.value = 0;
+  void loadList();
 }
 
 // ============ 列可见性 + 列顺序拖动 ============
@@ -97,72 +93,92 @@ const columnDefs: ColumnDef[] = [
   { key: 'name', label: '名称', prop: 'name', minWidth: 200 },
   { key: 'quantity', label: '数量', prop: 'quantity', width: 80, align: 'right' },
   {
-    key: 'customer', label: '客户', minWidth: 180,
+    key: 'customer',
+    label: '客户',
+    minWidth: 180,
     cellRender: ({ row }) => {
-      const r = row as PartItem
+      const r = row as PartItem;
       return r.customer_path
         ? h('span', null, r.customer_path)
-        : h('span', { class: 'muted' }, '—')
+        : h('span', { class: 'muted' }, '—');
     },
   },
   { key: 'order_no', label: '订单号', prop: 'order_no', width: 120 },
   {
-    key: 'status', label: '状态', width: 120,
+    key: 'status',
+    label: '状态',
+    width: 120,
     cellRender: ({ row }) => {
-      const r = row as PartItem
-      const t = r.status === 'DELIVERED' ? 'success' : r.status === 'REPAIRING' ? 'danger' : 'info'
-      return h(ElTag, { type: t, effect: 'plain', size: 'small' }, () => r.status)
+      const r = row as PartItem;
+      const t = r.status === 'DELIVERED' ? 'success' : r.status === 'REPAIRING' ? 'danger' : 'info';
+      return h(ElTag, { type: t, effect: 'plain', size: 'small' }, () => r.status);
     },
   },
   {
-    key: 'next_process', label: '下一工序', minWidth: 140,
+    key: 'next_process',
+    label: '下一工序',
+    minWidth: 140,
     cellRender: ({ row }) => {
-      const r = row as PartItem
+      const r = row as PartItem;
       return r.next_process_name
         ? h('span', null, r.next_process_name)
-        : h('span', { class: 'muted' }, '—')
+        : h('span', { class: 'muted' }, '—');
     },
   },
-  { key: 'planned_delivery_date', label: '计划交期', prop: 'planned_delivery_date', width: 120, sortable: true },
   {
-    key: 'is_urgent', label: '加急', width: 64, align: 'center',
+    key: 'planned_delivery_date',
+    label: '计划交期',
+    prop: 'planned_delivery_date',
+    width: 120,
+    sortable: true,
+  },
+  {
+    key: 'is_urgent',
+    label: '加急',
+    width: 64,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as PartItem
+      const r = row as PartItem;
       // 2026-08-27 T16：cellRender 类型要求返回 VNode（非 null），用空 span 代替 null。
       return r.is_urgent
         ? h(ElTag, { type: 'danger', size: 'small' }, () => '急')
-        : h('span', null, '')
+        : h('span', null, '');
     },
   },
   {
-    key: 'has_been_repaired', label: '返修', width: 64, align: 'center',
+    key: 'has_been_repaired',
+    label: '返修',
+    width: 64,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as PartItem
+      const r = row as PartItem;
       return r.has_been_repaired
         ? h(ElTag, { type: 'warning', size: 'small', effect: 'dark' }, () => '返修')
-        : h('span', null, '')
+        : h('span', null, '');
     },
   },
   {
-    key: 'location', label: '所在位置', minWidth: 160,
+    key: 'location',
+    label: '所在位置',
+    minWidth: 160,
     cellRender: ({ row }) => {
-      const r = row as PartItem
+      const r = row as PartItem;
       return r.current_holder_display
         ? h('span', null, r.current_holder_display)
-        : h('span', { class: 'muted' }, '—')
+        : h('span', { class: 'muted' }, '—');
     },
   },
-]
+];
 const columnVisibility = useColumnVisibility(columnDefs, {
   listKey: 'repair_receive_columns',
-})
-const drag = useColumnDrag(columnDefs, { listKey: 'repair_receive_columns' })
+});
+const drag = useColumnDrag(columnDefs, { listKey: 'repair_receive_columns' });
 // 2026-08-27 T16：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
-const tableRef = ref()
+const tableRef = ref();
 
 // —— 列表加载 ——
 async function loadList(): Promise<void> {
-  loading.value = true
+  loading.value = true;
   try {
     const params = {
       keyword: search.keyword || undefined,
@@ -170,93 +186,88 @@ async function loadList(): Promise<void> {
       customer_id: search.customerId || undefined,
       limit: limit.value,
       offset: offset.value,
-    }
+    };
     const result =
       activeTab.value === 'delivered'
         ? await listRepairBatches(params)
-        : await listRepairingBatches(params)
-    rows.value = result.items
-    total.value = result.total
+        : await listRepairingBatches(params);
+    rows.value = result.items;
+    total.value = result.total;
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '列表加载失败')
+    ElMessage.error((e as Error).message ?? '列表加载失败');
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 function onSearch(): void {
-  offset.value = 0
-  void loadList()
+  offset.value = 0;
+  void loadList();
 }
 function onReset(): void {
-  search.keyword = ''
-  search.orderNo = ''
-  search.serialNo = ''
-  search.isUrgent = null
-  search.plannedDeliverySortAsc = true
-  offset.value = 0
-  void loadList()
+  search.keyword = '';
+  search.orderNo = '';
+  search.serialNo = '';
+  search.isUrgent = null;
+  search.plannedDeliverySortAsc = true;
+  offset.value = 0;
+  void loadList();
 }
 
 async function switchTab(tab: TabKey): Promise<void> {
-  activeTab.value = tab
-  offset.value = 0
-  await loadList()
+  activeTab.value = tab;
+  offset.value = 0;
+  await loadList();
 }
 
 // —— 操作按钮 ——
 function onClickStartRepair(row: PartItem): void {
-  startDialog.value = { open: true, target: row }
+  startDialog.value = { open: true, target: row };
 }
 async function onDialogConfirm(): Promise<void> {
-  await loadList()
+  await loadList();
 }
 
 // —— 扫描处理 ——
 async function handleScan(code: string): Promise<void> {
   const found = findAllByCode(rows.value, code).filter((r) =>
-    activeTab.value === 'delivered'
-      ? r.status === 'DELIVERED'
-      : r.status === 'REPAIRING',
-  )
+    activeTab.value === 'delivered' ? r.status === 'DELIVERED' : r.status === 'REPAIRING',
+  );
   if (found.length >= 1) {
     if (activeTab.value === 'delivered') {
-      onClickStartRepair(found[0])
+      onClickStartRepair(found[0]);
     }
     // 返修中 tab 是纯查询：只命中列表，不弹 dialog
-    return
+    return;
   }
   // 未命中：复用报工台兜底（提示该零件位置）
-  await findPartBySerialAndPrompt(code)
+  await findPartBySerialAndPrompt(code);
 }
 
 // —— 生命周期 ——
-let unsubScan: (() => void) | null = null
+let unsubScan: (() => void) | null = null;
 onMounted(async () => {
   // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
   // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
-  drag.applyDrag(tableRef)
-  await loadList()
-  unsubScan = onScan((code) => void handleScan(code))
-})
+  drag.applyDrag(tableRef);
+  await loadList();
+  unsubScan = onScan((code) => void handleScan(code));
+});
 onBeforeUnmount(() => {
-  if (unsubScan) unsubScan()
-})
+  if (unsubScan) unsubScan();
+});
 
 // —— 行 className（加急红底） ——
 function rowClassName(opts: { row: PartItem }): string {
-  const classes: string[] = []
-  if (opts.row.is_urgent) classes.push('row-urgent')
-  return classes.join(' ')
+  const classes: string[] = [];
+  if (opts.row.is_urgent) classes.push('row-urgent');
+  return classes.join(' ');
 }
 </script>
 
 <template>
   <div class="repair-receive">
-    <el-tabs
-      v-model="activeTab"
-      @tab-change="(t) => void switchTab(t as TabKey)"
-    >
+    <el-tabs v-model="activeTab" @tab-change="(t) => void switchTab(t as TabKey)">
       <el-tab-pane label="已送货" name="delivered" />
       <el-tab-pane label="返修中" name="repairing" />
     </el-tabs>
@@ -286,10 +297,10 @@ function rowClassName(opts: { row: PartItem }): string {
         <div class="filter-group">
           <!-- 客户列头 el-tree-select（与 PartsList 同款） -->
           <el-popover
+            v-model:visible="customerPopoverVisible"
             :width="280"
             placement="bottom-start"
             trigger="click"
-            v-model:visible="customerPopoverVisible"
             @show="syncCustomerDraft"
           >
             <template #reference>
@@ -314,15 +325,18 @@ function rowClassName(opts: { row: PartItem }): string {
             />
             <div class="filter-actions">
               <el-button size="small" link @click="resetCustomer">重置</el-button>
-              <el-button size="small" type="primary" @click="confirmCustomer"
-                >确定</el-button
-              >
+              <el-button size="small" type="primary" @click="confirmCustomer">确定</el-button>
             </div>
           </el-popover>
 
           <el-checkbox
             :model-value="search.isUrgent === true"
-            @update:model-value="(v: boolean | string | number) => { search.isUrgent = v === true ? true : null; onSearch() }"
+            @update:model-value="
+              (v: boolean | string | number) => {
+                search.isUrgent = v === true ? true : null;
+                onSearch();
+              }
+            "
             >仅加急</el-checkbox
           >
 
@@ -341,20 +355,16 @@ function rowClassName(opts: { row: PartItem }): string {
     </div>
     <el-table
       ref="tableRef"
+      v-loading="loading"
       :data="rows"
       :row-key="(row: PartItem) => row.id"
-      v-loading="loading"
       stripe
       border
       size="small"
       :row-class-name="rowClassName"
     >
       <template #empty>
-        <el-empty
-          :description="
-            activeTab === 'delivered' ? '暂无已送货件' : '暂无返修中件'
-          "
-        />
+        <el-empty :description="activeTab === 'delivered' ? '暂无已送货件' : '暂无返修中件'" />
       </template>
 
       <!--
@@ -386,18 +396,9 @@ function rowClassName(opts: { row: PartItem }): string {
       </template>
 
       <!-- 操作列：已送货 tab 显示「返修」按钮；返修中 tab 隐藏整列 -->
-      <el-table-column
-        v-if="activeTab === 'delivered'"
-        label="操作"
-        width="100"
-        fixed="right"
-      >
+      <el-table-column v-if="activeTab === 'delivered'" label="操作" width="100" fixed="right">
         <template #default="{ row }">
-          <el-button
-            type="warning"
-            size="small"
-            @click="onClickStartRepair(row as PartItem)"
-          >
+          <el-button type="warning" size="small" @click="onClickStartRepair(row as PartItem)">
             <el-icon><Tools /></el-icon>
             <span>返修</span>
           </el-button>
@@ -415,8 +416,19 @@ function rowClassName(opts: { row: PartItem }): string {
         :page-size="limit"
         :current-page="Math.floor(offset / limit) + 1"
         :page-sizes="[20, 50, 100, 200]"
-        @size-change="(s: number) => { limit = s; offset = 0; void loadList() }"
-        @current-change="(p: number) => { offset = (p - 1) * limit; void loadList() }"
+        @size-change="
+          (s: number) => {
+            limit = s;
+            offset = 0;
+            void loadList();
+          }
+        "
+        @current-change="
+          (p: number) => {
+            offset = (p - 1) * limit;
+            void loadList();
+          }
+        "
       />
     </div>
 

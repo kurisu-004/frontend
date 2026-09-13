@@ -32,18 +32,18 @@
         <el-tag size="small" type="warning" effect="plain">{{ filteredAssemblies.length }}</el-tag>
       </div>
       <el-table
-        :data="filteredAssemblies"
         v-loading="loading"
+        :data="filteredAssemblies"
         lazy
         :load="loadChildren"
         :tree-props="{ hasChildren: 'has_children', children: 'children' }"
         :row-key="rowKey"
         :current-row-key="selectedPartId ?? undefined"
         highlight-current-row
-        @row-click="onSelect"
         size="small"
         stripe
         class="picker-table"
+        @row-click="onSelect"
       >
         <el-table-column prop="serial_no" label="序列号" min-width="110" show-overflow-tooltip />
         <el-table-column label="名称" min-width="180" show-overflow-tooltip>
@@ -69,18 +69,18 @@
         <el-tag size="small" effect="plain">{{ filteredPending.length }}</el-tag>
       </div>
       <el-table
-        :data="filteredPending"
         v-loading="loading"
+        :data="filteredPending"
         lazy
         :load="loadChildren"
         :tree-props="{ hasChildren: 'has_children', children: 'children' }"
         :row-key="rowKey"
         :current-row-key="selectedPartId ?? undefined"
         highlight-current-row
-        @row-click="onSelect"
         size="small"
         stripe
         class="picker-table"
+        @row-click="onSelect"
       >
         <el-table-column prop="serial_no" label="序列号" min-width="110" show-overflow-tooltip />
         <el-table-column label="名称" min-width="180" show-overflow-tooltip>
@@ -105,18 +105,18 @@
         <el-tag size="small" effect="plain">{{ filteredDesigned.length }}</el-tag>
       </div>
       <el-table
-        :data="filteredDesigned"
         v-loading="loading"
+        :data="filteredDesigned"
         lazy
         :load="loadChildren"
         :tree-props="{ hasChildren: 'has_children', children: 'children' }"
         :row-key="rowKey"
         :current-row-key="selectedPartId ?? undefined"
         highlight-current-row
-        @row-click="onSelect"
         size="small"
         stripe
         class="picker-table"
+        @row-click="onSelect"
       >
         <el-table-column prop="serial_no" label="序列号" min-width="110" show-overflow-tooltip />
         <el-table-column label="名称" min-width="180" show-overflow-tooltip>
@@ -138,70 +138,71 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Search } from '@element-plus/icons-vue'
-import type { PartListItem } from '@/types/parts'
-import { getAssembly } from '@/api/assembly'
-import { usePartProcessDesign } from '../composables/usePartProcessDesign'
+import { computed, ref } from 'vue';
+import { Search } from '@element-plus/icons-vue';
+import type { PartListItem } from '@/types/parts';
+import { getAssembly } from '@/api/assembly';
+import { usePartProcessDesign } from '../composables/usePartProcessDesign';
 
 const props = defineProps<{
-  selectedPartId: string | null
-}>()
+  selectedPartId: string | null;
+}>();
 
-const emit = defineEmits<{
-  (e: 'select', partId: string): void
-}>()
+const emit = defineEmits<(e: 'select', partId: string) => void>();
 
-const { parts, loadingParts, allSummaries } = usePartProcessDesign()
-const loading = loadingParts
+const { parts, loadingParts, allSummaries } = usePartProcessDesign();
+const loading = loadingParts;
 
-const searchKeyword = ref('')
+const searchKeyword = ref('');
 
 /** 2026-09-12 第五轮：装配件单独展示在一个 section 里（顶部「装配件」表）。
  *  装配件本身不能指定工序，只能为其子零件制定工序。点选装配件时右栏显示提示，
  *  但仍可点击行预览总装图（通过 emit('select') 走同一选中通路）。 */
 const assemblies = computed<PartListItem[]>(() =>
   parts.value.filter((p) => p.row_type === 'ASSEMBLY'),
-)
+);
 
 /** 按 step_count 拆成「待制定 / 已制定」两份。
  *  2026-09-12 新增：原 3 列表格（图号 / 名称 / 状态）改为双表分组展示；
  *  状态信息已通过「待制定 / 已制定」section 标题表达。
  *  2026-09-12 第五轮：这两张表只展示 row_type='PART' 的零件（装配件在独立的「装配件」section 里）。 */
 const pendingParts = computed<PartListItem[]>(() =>
-  parts.value.filter((p) => p.row_type !== 'ASSEMBLY' && (allSummaries.value[p.id]?.step_count ?? 0) === 0),
-)
+  parts.value.filter(
+    (p) => p.row_type !== 'ASSEMBLY' && (allSummaries.value[p.id]?.step_count ?? 0) === 0,
+  ),
+);
 const designedParts = computed<PartListItem[]>(() =>
-  parts.value.filter((p) => p.row_type !== 'ASSEMBLY' && (allSummaries.value[p.id]?.step_count ?? 0) > 0),
-)
+  parts.value.filter(
+    (p) => p.row_type !== 'ASSEMBLY' && (allSummaries.value[p.id]?.step_count ?? 0) > 0,
+  ),
+);
 
 function filterByKw(arr: PartListItem[]): PartListItem[] {
-  const kw = searchKeyword.value.trim().toLowerCase()
-  if (!kw) return arr
+  const kw = searchKeyword.value.trim().toLowerCase();
+  if (!kw) return arr;
   return arr.filter((p) => {
-    if (!p) return false
+    if (!p) return false;
     return (
-      (p.drawing_no ?? '').toLowerCase().includes(kw)
-      || (p.name ?? '').toLowerCase().includes(kw)
-    )
-  })
+      (p.drawing_no ?? '').toLowerCase().includes(kw) || (p.name ?? '').toLowerCase().includes(kw)
+    );
+  });
 }
 
-const filteredPending = computed(() => filterByKw(pendingParts.value))
-const filteredDesigned = computed(() => filterByKw(designedParts.value))
-const filteredAssemblies = computed(() => filterByKw(assemblies.value))
+const filteredPending = computed(() => filterByKw(pendingParts.value));
+const filteredDesigned = computed(() => filterByKw(designedParts.value));
+const filteredAssemblies = computed(() => filterByKw(assemblies.value));
 
 function onSelect(row: PartListItem): void {
-  if (row && row.id) emit('select', row.id)
+  if (row && row.id) emit('select', row.id);
 }
 
 /** 2026-07-30：树表 row-key（避免顶层与子件 id 冲突）。
  *  复用 PartsTable.vue:291-295 模式。 */
 function rowKey(row: PartListItem): string {
-  if (!row) return ''
-  if (row.row_type === 'ASSEMBLY') return `ASM_${row.id}`
-  if ((row as { __is_child?: boolean }).__is_child) return `CHILD_${row.id}`
-  return `PART_${row.id}`
+  if (!row) return '';
+  if (row.row_type === 'ASSEMBLY') return `ASM_${row.id}`;
+  if ((row as { __is_child?: boolean }).__is_child) return `CHILD_${row.id}`;
+  return `PART_${row.id}`;
 }
 
 /** 2026-09-12 新增：懒加载装配件子件（复用 PartsTable.vue:297-332 模式）。
@@ -213,8 +214,8 @@ async function loadChildren(
   resolve: (children: PartListItem[]) => void,
 ): Promise<void> {
   if (!row || row.row_type !== 'ASSEMBLY') {
-    resolve([])
-    return
+    resolve([]);
+    return;
   }
   if (row.matched_children) {
     resolve(
@@ -224,20 +225,20 @@ async function loadChildren(
         row_type: 'PART' as const,
         has_children: false,
       })),
-    )
-    return
+    );
+    return;
   }
   try {
-    const detail = await getAssembly(row.id)
+    const detail = await getAssembly(row.id);
     const children = (detail.children ?? []).map((child) => ({
       ...child,
       __is_child: true,
       row_type: 'PART' as const,
       has_children: false,
-    })) as PartListItem[]
-    resolve(children)
+    })) as PartListItem[];
+    resolve(children);
   } catch {
-    resolve([])
+    resolve([]);
   }
 }
 </script>

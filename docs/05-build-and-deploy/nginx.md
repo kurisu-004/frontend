@@ -10,12 +10,12 @@
 
 容器启动时由 `entrypoint.sh` 用 `envsubst` 渲染到最终配置。**只**白名单这 4 个变量（避免把 `$request_uri` / `$host` 等 nginx 内置变量误替换）：
 
-| 占位符 | 作用 | 生产示例 |
-|---|---|---|
-| `${NGINX_SERVER_NAME}` | server 块的 `server_name` | `hsh-erp.cloud`（测试服设 `_`） |
-| `${NGINX_REDIRECT_TARGET}` | `:80` 301 跳转目标 | `https://hsh-erp.cloud`（测试服留空） |
-| `${SSL_CRT_FILENAME}` | `/etc/nginx/ssl/` 下的证书文件名 | `hsh-erp.cloud_bundle.crt` |
-| `${SSL_KEY_FILENAME}` | `/etc/nginx/ssl/` 下的私钥文件名 | `hsh-erp.cloud.key` |
+| 占位符                     | 作用                             | 生产示例                              |
+| -------------------------- | -------------------------------- | ------------------------------------- |
+| `${NGINX_SERVER_NAME}`     | server 块的 `server_name`        | `hsh-erp.cloud`（测试服设 `_`）       |
+| `${NGINX_REDIRECT_TARGET}` | `:80` 301 跳转目标               | `https://hsh-erp.cloud`（测试服留空） |
+| `${SSL_CRT_FILENAME}`      | `/etc/nginx/ssl/` 下的证书文件名 | `hsh-erp.cloud_bundle.crt`            |
+| `${SSL_KEY_FILENAME}`      | `/etc/nginx/ssl/` 下的私钥文件名 | `hsh-erp.cloud.key`                   |
 
 变量值由 docker-compose 的 `environment:` 块注入；测试服务器无需域名 / 证书时只需覆盖 `NGINX_SERVER_NAME=_` + `NGINX_REDIRECT_TARGET=` + 不挂证书，entrypoint 会自动走 HTTP-only 分支。
 
@@ -57,12 +57,12 @@ server {
 
 ### 安全 headers
 
-| Header | 值 | 作用 |
-|---|---|---|
-| `X-Frame-Options` | `SAMEORIGIN` | 防 clickjacking（同源才能 iframe） |
-| `X-Content-Type-Options` | `nosniff` | 防 MIME sniffing |
-| `Referrer-Policy` | `no-referrer-when-downgrade` | HTTPS→HTTPS 带 Referer，HTTP 不带 |
-| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains; preload` | HSTS 2 年 + 子域 + 预加载列表 |
+| Header                      | 值                                             | 作用                               |
+| --------------------------- | ---------------------------------------------- | ---------------------------------- |
+| `X-Frame-Options`           | `SAMEORIGIN`                                   | 防 clickjacking（同源才能 iframe） |
+| `X-Content-Type-Options`    | `nosniff`                                      | 防 MIME sniffing                   |
+| `Referrer-Policy`           | `no-referrer-when-downgrade`                   | HTTPS→HTTPS 带 Referer，HTTP 不带  |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains; preload` | HSTS 2 年 + 子域 + 预加载列表      |
 
 **HSTS 只在 HTTPS 块加**——HTTP 块如果也带 HSTS，浏览器会被强制锁到 HTTPS，本地未备案环境会彻底打不开。
 
@@ -189,12 +189,12 @@ upstream `myerp_backend` = `backend:8000`（FastAPI 历史 v1，仅作兼容兜�
 
 ## 缓存策略
 
-| 路径 | 策略 | 原因 |
-|---|---|---|
-| HTML（`/`） | 无缓存（默认） | SPA 入口，版本更新要立即生效 |
-| `/assets/*` | `expires 1y` + `Cache-Control: public, immutable` | vite 产出的 hashed 资源，文件名带 hash 即可长期缓存 |
-| `.mjs` | `expires 1h`，**不**强制 immutable | 与 worker MIME 历史教训呼应——1h 后 revalidate |
-| `/api/`、`/api/v2/`、`/ws/` | no-cache（默认） | API 响应不该被缓存 |
+| 路径                        | 策略                                              | 原因                                                |
+| --------------------------- | ------------------------------------------------- | --------------------------------------------------- |
+| HTML（`/`）                 | 无缓存（默认）                                    | SPA 入口，版本更新要立即生效                        |
+| `/assets/*`                 | `expires 1y` + `Cache-Control: public, immutable` | vite 产出的 hashed 资源，文件名带 hash 即可长期缓存 |
+| `.mjs`                      | `expires 1h`，**不**强制 immutable                | 与 worker MIME 历史教训呼应——1h 后 revalidate       |
+| `/api/`、`/api/v2/`、`/ws/` | no-cache（默认）                                  | API 响应不该被缓存                                  |
 
 ## SPA fallback
 

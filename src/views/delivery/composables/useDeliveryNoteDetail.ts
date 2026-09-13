@@ -16,119 +16,109 @@
 // - fetcher 让 fetch 自然抛出 → 顶层 shell 捕获提示（与 PartListShell 同款 T14p5 模式）。
 //   但本页不强求该模式——详情页有「加载失败占位」的明确语义，所以 detail.value 失败时为 null。
 
-import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue'
-import {
-  getNote,
-  listNoteEvents,
-  type AddPartsItem,
-} from '@/api/deliveryNote'
-import {
-  type DeliveryNoteDetailOut,
-  type DeliveryNoteEventOut,
-  type DeliveryNoteLineItem,
-} from '@/types/deliveryNote'
-import type { OrderStatus } from '@/types/parts'
-import {
-  ORDER_STATUS_LABEL,
-  ORDER_STATUS_TAG_TYPE,
-} from '@/types/parts'
-import {
-  canAddRemoveParts,
-  canView,
-  hasManageNoteRole,
-} from '@/utils/deliveryNotePermissions'
-import { useAuthSession } from '@/composables/useAuthSession'
-import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility'
+import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
+import { getNote, listNoteEvents, type AddPartsItem } from '@/api/deliveryNote';
+import type {
+  DeliveryNoteDetailOut,
+  DeliveryNoteEventOut,
+  DeliveryNoteLineItem,
+} from '@/types/deliveryNote';
+import type { OrderStatus } from '@/types/parts';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
+import { canAddRemoveParts, canView, hasManageNoteRole } from '@/utils/deliveryNotePermissions';
+import { useAuthSession } from '@/composables/useAuthSession';
+import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility';
 
 export interface DeliveryNoteRoleMap {
-  MANAGER: boolean
-  CLERK: boolean
-  INSPECTOR: boolean
+  MANAGER: boolean;
+  CLERK: boolean;
+  INSPECTOR: boolean;
 }
 
 /** 装配件父行 + 子件行的扁平 + 嵌套结构（供 el-table tree-props 渲染）。 */
 export interface AssemblyTreeRow extends DeliveryNoteLineItem {
-  is_asm_row?: boolean
-  has_children?: boolean
-  children?: DeliveryNoteLineItem[]
-  unit?: string
+  is_asm_row?: boolean;
+  has_children?: boolean;
+  children?: DeliveryNoteLineItem[];
+  unit?: string;
 }
 
 export interface UseDeliveryNoteDetailReturn {
   // data
-  note: Ref<DeliveryNoteDetailOut | null>
-  events: Ref<DeliveryNoteEventOut[]>
-  loading: Ref<boolean>
+  note: Ref<DeliveryNoteDetailOut | null>;
+  events: Ref<DeliveryNoteEventOut[]>;
+  loading: Ref<boolean>;
   // role / permissions
-  role: ComputedRef<DeliveryNoteRoleMap>
-  canAdd: ComputedRef<boolean>
-  canEdit: ComputedRef<boolean>
-  canView: ComputedRef<boolean>
+  role: ComputedRef<DeliveryNoteRoleMap>;
+  canAdd: ComputedRef<boolean>;
+  canEdit: ComputedRef<boolean>;
+  canView: ComputedRef<boolean>;
   // derived
-  uninspectedItems: ComputedRef<DeliveryNoteLineItem[]>
-  existingBatchIdsForPicker: ComputedRef<string[]>
-  treeLineItems: ComputedRef<AssemblyTreeRow[]>
+  uninspectedItems: ComputedRef<DeliveryNoteLineItem[]>;
+  existingBatchIdsForPicker: ComputedRef<string[]>;
+  treeLineItems: ComputedRef<AssemblyTreeRow[]>;
   // column visibility
-  columnDefs: readonly ColumnDef[]
-  columnVisibility: ReturnType<typeof useColumnVisibility>
+  columnDefs: readonly ColumnDef[];
+  columnVisibility: ReturnType<typeof useColumnVisibility>;
   // UI state
-  editDeliveryDate: Ref<string>
-  selectedItemIds: Ref<string[]>
+  editDeliveryDate: Ref<string>;
+  selectedItemIds: Ref<string[]>;
   // fetchers
-  fetchDetail: () => Promise<void>
+  fetchDetail: () => Promise<void>;
   // helpers
-  partStatusLabel: (s: OrderStatus | string) => string
-  partStatusTagType: (s: OrderStatus | string) =>
-    'primary' | 'success' | 'warning' | 'info' | 'danger'
-  deliveryLineRowClassName: (ctx: { row: AssemblyTreeRow }) => string
+  partStatusLabel: (s: OrderStatus | string) => string;
+  partStatusTagType: (
+    s: OrderStatus | string,
+  ) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
+  deliveryLineRowClassName: (ctx: { row: AssemblyTreeRow }) => string;
   /** 客户端排序（详情一次性返回全量 line_items；null 强制末尾） */
-  onLineItemSort: (sort: { prop: string | null; order: 'ascending' | 'descending' | null }) => void
+  onLineItemSort: (sort: { prop: string | null; order: 'ascending' | 'descending' | null }) => void;
   /** 把外部选中（picker 提交等）写入 selectedItemIds */
-  setSelectedItemIds: (ids: string[]) => void
+  setSelectedItemIds: (ids: string[]) => void;
   /** 暴露出来给 actions 用：当前 note 的 AddPartsItem（仅 batch_id） */
-  buildAddPartsItems: (ids: string[]) => AddPartsItem[]
+  buildAddPartsItems: (ids: string[]) => AddPartsItem[];
 }
 
-export function useDeliveryNoteDetail(
-  noteId: Ref<string>,
-): UseDeliveryNoteDetailReturn {
-  const { hasRole } = useAuthSession()
+export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetailReturn {
+  const { hasRole } = useAuthSession();
 
   // ============ 角色矩阵 ============
   const role = computed<DeliveryNoteRoleMap>(() => ({
     MANAGER: hasRole('MANAGER'),
     CLERK: hasRole('CLERK'),
     INSPECTOR: hasRole('INSPECTOR'),
-  }))
+  }));
 
   // ============ 主数据 ============
-  const note = ref<DeliveryNoteDetailOut | null>(null)
-  const events = ref<DeliveryNoteEventOut[]>([])
-  const loading = ref(false)
+  const note = ref<DeliveryNoteDetailOut | null>(null);
+  const events = ref<DeliveryNoteEventOut[]>([]);
+  const loading = ref(false);
 
   async function fetchDetail(): Promise<void> {
-    const id = noteId.value
-    if (!id) return
-    loading.value = true
+    const id = noteId.value;
+    if (!id) return;
+    loading.value = true;
     try {
-      note.value = await getNote(id)
-      events.value = await listNoteEvents(id)
+      note.value = await getNote(id);
+      events.value = await listNoteEvents(id);
       // 进入页面时同步本地 editDeliveryDate 到当前 delivery_date；
       // 用户改了日期后这个 ref 也保持本地未保存状态。
-      editDeliveryDate.value = note.value?.delivery_date ?? ''
+      editDeliveryDate.value = note.value?.delivery_date ?? '';
     } catch (e) {
-      note.value = null
-      events.value = []
-      throw e  // 让 shell 捕获并 ElMessage.error
+      note.value = null;
+      events.value = [];
+      throw e; // 让 shell 捕获并 ElMessage.error
     } finally {
-      loading.value = false
+      loading.value = false;
     }
   }
 
   // ============ 权限派生 ============
-  const canView_ = computed(() => note.value != null && canView(note.value.status))
-  const canAdd = computed(() => note.value != null && canAddRemoveParts(note.value.status, role.value))
-  const canEdit = computed(() => canAdd.value)  // canEdit 与 canAdd 同步
+  const canView_ = computed(() => note.value != null && canView(note.value.status));
+  const canAdd = computed(
+    () => note.value != null && canAddRemoveParts(note.value.status, role.value),
+  );
+  const canEdit = computed(() => canAdd.value); // canEdit 与 canAdd 同步
 
   // ============ 未送检 / 阻塞件 ============
   // 后端允许入单的两个状态：INSPECTION（已送检 / 待贴标）与 READY_TO_SHIP（合格）；
@@ -137,37 +127,37 @@ export function useDeliveryNoteDetail(
     (note.value?.line_items ?? []).filter(
       (li) => li.status !== 'INSPECTION' && li.status !== 'READY_TO_SHIP',
     ),
-  )
+  );
 
   /** 当前单上已有批次 id 列表（picker 高亮禁用用） */
   const existingBatchIdsForPicker = computed(() =>
     note.value == null ? [] : note.value.line_items.map((it) => it.id),
-  )
+  );
 
   // ============ 装配件父行 + 子件行 tree 结构 ============
   const treeLineItems = computed<AssemblyTreeRow[]>(() => {
-    if (!note.value) return []
-    const flat = note.value.line_items
-    const asmGroups = new Map<string, DeliveryNoteLineItem[]>()
-    const loose: DeliveryNoteLineItem[] = []
+    if (!note.value) return [];
+    const flat = note.value.line_items;
+    const asmGroups = new Map<string, DeliveryNoteLineItem[]>();
+    const loose: DeliveryNoteLineItem[] = [];
     flat.forEach((li) => {
       if (li.assembly_id) {
-        const arr = asmGroups.get(li.assembly_id) ?? []
-        arr.push(li)
-        asmGroups.set(li.assembly_id, arr)
+        const arr = asmGroups.get(li.assembly_id) ?? [];
+        arr.push(li);
+        asmGroups.set(li.assembly_id, arr);
       } else {
-        loose.push(li)
+        loose.push(li);
       }
-    })
-    const result: AssemblyTreeRow[] = []
-    const insertedAsm = new Set<string>()
+    });
+    const result: AssemblyTreeRow[] = [];
+    const insertedAsm = new Set<string>();
     flat.forEach((li) => {
       if (!li.assembly_id) {
-        result.push(li as AssemblyTreeRow)
-        return
+        result.push(li as AssemblyTreeRow);
+        return;
       }
-      if (insertedAsm.has(li.assembly_id)) return
-      const children = asmGroups.get(li.assembly_id) ?? []
+      if (insertedAsm.has(li.assembly_id)) return;
+      const children = asmGroups.get(li.assembly_id) ?? [];
       result.push({
         id: `ASM_${li.assembly_id}`,
         // 2026-08-29：line_items[].version 变为必填后，AssemblyTreeRow（extends
@@ -204,11 +194,11 @@ export function useDeliveryNoteDetail(
         scanned: false,
         parent_customer_name: children[0]?.parent_customer_name ?? null,
         children,
-      })
-      insertedAsm.add(li.assembly_id)
-    })
-    return result
-  })
+      });
+      insertedAsm.add(li.assembly_id);
+    });
+    return result;
+  });
 
   // ============ 列显隐（line items 表）============
   const columnDefs: readonly ColumnDef[] = [
@@ -225,42 +215,46 @@ export function useDeliveryNoteDetail(
     { key: 'system_delivery_date', label: '系统交期' },
     { key: 'note', label: '备注' },
     { key: 'status', label: '状态' },
-  ]
+  ];
   const columnVisibility = useColumnVisibility(columnDefs, {
     listKey: 'delivery_note_detail_line_items',
-  })
+  });
 
   // ============ UI state ============
-  const editDeliveryDate = ref<string>('')
-  const selectedItemIds = ref<string[]>([])
+  const editDeliveryDate = ref<string>('');
+  const selectedItemIds = ref<string[]>([]);
 
   function setSelectedItemIds(ids: string[]): void {
-    selectedItemIds.value = ids
+    selectedItemIds.value = ids;
   }
 
   // 切 noteId 时清空选中
   watch(noteId, () => {
-    selectedItemIds.value = []
-  })
+    selectedItemIds.value = [];
+  });
 
   // ============ 标签 / 行样式 helpers ============
   function partStatusLabel(s: OrderStatus | string): string {
-    return (ORDER_STATUS_LABEL as Record<string, string>)[s] ?? String(s)
+    return (ORDER_STATUS_LABEL as Record<string, string>)[s] ?? String(s);
   }
   function partStatusTagType(
     s: OrderStatus | string,
   ): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
-    return (ORDER_STATUS_TAG_TYPE as Record<
-      string,
-      'primary' | 'success' | 'warning' | 'info' | 'danger'
-    >)[s] ?? 'info'
+    return (
+      (
+        ORDER_STATUS_TAG_TYPE as Record<
+          string,
+          'primary' | 'success' | 'warning' | 'info' | 'danger'
+        >
+      )[s] ?? 'info'
+    );
   }
   function deliveryLineRowClassName({ row }: { row: AssemblyTreeRow }): string {
     // 虚拟装配件父行的 urgent 取任一子件加急（与子件红底联动）
     if (row.is_asm_row) {
-      return row.is_urgent ? 'row-urgent' : ''
+      return row.is_urgent ? 'row-urgent' : '';
     }
-    return row.is_urgent ? 'row-urgent' : ''
+    return row.is_urgent ? 'row-urgent' : '';
   }
 
   // ============ 客户端排序 ============
@@ -268,31 +262,31 @@ export function useDeliveryNoteDetail(
     prop,
     order,
   }: {
-    prop: string | null
-    order: 'ascending' | 'descending' | null
+    prop: string | null;
+    order: 'ascending' | 'descending' | null;
   }): void {
-    if (!note.value || !prop || !order) return
-    const dir = order === 'ascending' ? 1 : -1
+    if (!note.value || !prop || !order) return;
+    const dir = order === 'ascending' ? 1 : -1;
     note.value.line_items.sort((a: DeliveryNoteLineItem, b: DeliveryNoteLineItem) => {
-      const av = a[prop as keyof DeliveryNoteLineItem] as unknown
-      const bv = b[prop as keyof DeliveryNoteLineItem] as unknown
-      if (av == null && bv == null) return 0
-      if (av == null) return 1
-      if (bv == null) return -1
-      if (av < bv) return -1 * dir
-      if (av > bv) return 1 * dir
-      return 0
-    })
+      const av = a[prop as keyof DeliveryNoteLineItem] as unknown;
+      const bv = b[prop as keyof DeliveryNoteLineItem] as unknown;
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
   }
 
   // ============ AddPartsItem 构造（actions 用）============
   function buildAddPartsItems(ids: string[]): AddPartsItem[] {
-    return ids.map((id) => ({ batch_id: id }))
+    return ids.map((id) => ({ batch_id: id }));
   }
 
   // mark `canView_` as used internally (kept in interface for shell use)
-  void canView_
-  void hasManageNoteRole
+  void canView_.value;
+  void hasManageNoteRole;
 
   return {
     // data
@@ -323,5 +317,5 @@ export function useDeliveryNoteDetail(
     onLineItemSort,
     setSelectedItemIds,
     buildAddPartsItems,
-  }
+  };
 }

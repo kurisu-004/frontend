@@ -5,17 +5,17 @@
  * 调用方负责传入后端响应里 ``Content-Disposition`` 解析出的 ``filename``（含扩展名）。
  */
 export function triggerBrowserDownload(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
+  const url = URL.createObjectURL(blob);
   try {
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    a.style.display = 'none'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   } finally {
     // 延后 revoke，给浏览器一点时间发起下载
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 }

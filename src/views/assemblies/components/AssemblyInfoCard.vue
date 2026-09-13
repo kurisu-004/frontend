@@ -80,33 +80,35 @@
 </template>
 
 <script setup lang="ts">
-import type { AssemblyItem, AssemblyStatus } from '@/types/assembly'
-import { formatDateTime } from '@/utils/date'
-import AssemblyActionBar from './AssemblyActionBar.vue'
+import type { AssemblyItem, AssemblyStatus } from '@/types/assembly';
+import { formatDateTime } from '@/utils/date';
+import AssemblyActionBar from './AssemblyActionBar.vue';
 
 interface Props {
-  assembly: AssemblyItem | null
+  assembly: AssemblyItem | null;
   /** 描述列数（默认 3） */
-  descCol?: number
+  descCol?: number;
   /** 权限 flag（shell 计算好传入） */
-  canEditContent: boolean
-  canCancel: boolean
-  canDelete: boolean
+  canEditContent: boolean;
+  canCancel: boolean;
+  canDelete: boolean;
   /** 状态 → label / tag-type 注入（composable 提供） */
-  statusLabel: (s: AssemblyStatus | string) => string
-  statusTagType: (s: AssemblyStatus | string) => 'info' | 'warning' | 'success' | 'danger' | 'primary'
+  statusLabel: (s: AssemblyStatus | string) => string;
+  statusTagType: (
+    s: AssemblyStatus | string,
+  ) => 'info' | 'warning' | 'success' | 'danger' | 'primary';
 }
 
 const props = withDefaults(defineProps<Props>(), {
   descCol: 3,
-})
+});
 
 const emit = defineEmits<{
-  (e: 'back'): void
-  (e: 'edit'): void
-  (e: 'cancel'): void
-  (e: 'delete'): void
-}>()
+  (e: 'back'): void;
+  (e: 'edit'): void;
+  (e: 'cancel'): void;
+  (e: 'delete'): void;
+}>();
 </script>
 
 <style lang="scss" scoped>

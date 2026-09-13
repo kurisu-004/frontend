@@ -30,39 +30,39 @@
 // 用专门的非拦截 axios 实例（refreshClient）调 /auth/refresh，避免递归触发
 // 拦截器内的刷新逻辑。
 
-import { api, refreshClient, ApiError } from '@/api/http'
-import type { CurrentUser } from '@/types/user'
+import { api, refreshClient, ApiError } from '@/api/http';
+import type { CurrentUser } from '@/types/user';
 
 export interface LoginResponse {
-  token: string
+  token: string;
   /** 2026-07-10 新增：refresh token（7d TTL，type="refresh"）。 */
-  refresh_token: string
-  user: CurrentUser
+  refresh_token: string;
+  user: CurrentUser;
 }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
-  const resp = await api.post<LoginResponse>('/auth/login', { username, password })
-  return resp.data
+  const resp = await api.post<LoginResponse>('/auth/login', { username, password });
+  return resp.data;
 }
 
 export async function me(): Promise<CurrentUser> {
-  const resp = await api.get<CurrentUser>('/auth/me')
-  return resp.data
+  const resp = await api.get<CurrentUser>('/auth/me');
+  return resp.data;
 }
 
 export async function logout(): Promise<void> {
   // no-op：客户端丢 token 即可。这里容忍失败（不清 localStorage 也不抛）。
   // v1 后端 logout 是 no-op（仅返回 {"ok": true}），客户端吞失败的兜底语义不变。
   try {
-    await api.post('/auth/logout')
+    await api.post('/auth/logout');
   } catch {
     /* noop */
   }
 }
 
 export interface ChangePasswordPayload {
-  old_password: string
-  new_password: string
+  old_password: string;
+  new_password: string;
 }
 
 /**
@@ -74,7 +74,7 @@ export interface ChangePasswordPayload {
  * 失败抛 ApiError：code === 40104 (BIZ_AUTH_OLD_PASSWORD_MISMATCH) → 旧密码错误。
  */
 export async function changeMyPassword(payload: ChangePasswordPayload): Promise<void> {
-  await api.post('/auth/change-password', payload)
+  await api.post('/auth/change-password', payload);
 }
 
 /**
@@ -88,13 +88,14 @@ export async function changeMyPassword(payload: ChangePasswordPayload): Promise<
  * - code === 0 / 其它 → 见后端 envelope 语义。
  */
 export async function refreshTokens(refresh_token: string): Promise<LoginResponse> {
-  const resp = await refreshClient.post<{ code: number; message: string; data: LoginResponse | null }>(
-    '/auth/refresh',
-    { refresh_token },
-  )
-  const env = resp.data
+  const resp = await refreshClient.post<{
+    code: number;
+    message: string;
+    data: LoginResponse | null;
+  }>('/auth/refresh', { refresh_token });
+  const env = resp.data;
   if (env.code !== 0 || !env.data) {
-    throw new ApiError(env.code, env.message || 'refresh failed')
+    throw new ApiError(env.code, env.message || 'refresh failed');
   }
-  return env.data
+  return env.data;
 }

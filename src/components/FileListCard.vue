@@ -118,13 +118,8 @@
         v-if="previewFile && isPdf(previewFile.file_type)"
         :url="previewBlobUrl"
         :page="defaultPage"
-
-
       />
-      <div
-        v-else-if="previewFile && isImage(previewFile.file_type)"
-        class="image-preview-wrap"
-      >
+      <div v-else-if="previewFile && isImage(previewFile.file_type)" class="image-preview-wrap">
         <!-- 2026-07-14：HEIC 不被浏览器支持 → 走下载；其它图片走 el-image 全屏预览 -->
         <el-image
           v-if="!isHeic(previewFile.file_type)"
@@ -132,16 +127,14 @@
           :preview-src-list="[previewBlobUrl]"
           :initial-index="0"
           fit="contain"
-          style="max-width: 100%; max-height: calc(100vh - 80px);"
+          style="max-width: 100%; max-height: calc(100vh - 80px)"
         />
         <div v-else class="non-pdf-preview">
           <el-icon :size="48" :color="iconColor(previewFile.file_type)">
             <component :is="iconOf(previewFile.file_type)" />
           </el-icon>
           <p class="non-pdf-name">{{ previewFile.original_filename }}</p>
-          <p class="non-pdf-hint">
-            HEIC 格式浏览器不直接支持预览，请下载后查看。
-          </p>
+          <p class="non-pdf-hint">HEIC 格式浏览器不直接支持预览，请下载后查看。</p>
           <el-button type="primary" @click="downloadCurrent">
             <el-icon><Download /></el-icon>
             <span>下载文件</span>
@@ -166,15 +159,24 @@
     <!-- 打印用隐藏 iframe -->
     <iframe
       ref="printIframeRef"
-      style="position: fixed; right: 0; bottom: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none;"
+      style="
+        position: fixed;
+        right: 0;
+        bottom: 0;
+        width: 1px;
+        height: 1px;
+        border: 0;
+        opacity: 0;
+        pointer-events: none;
+      "
       title="打印预览"
     />
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, onBeforeUnmount, ref } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Delete,
   DocumentRemove,
@@ -183,71 +185,14 @@ import {
   Files,
   Printer,
   Upload,
-} from '@element-plus/icons-vue'
-import type { UploadFile } from 'element-plus'
-import PdfViewer from './PdfViewer.vue'
-import { api } from '@/api/http'
-import { deleteFile, getDownloadUrl } from '@/api/assembly'
-import { printPartDrawing } from '@/api/parts'
-import type { PartFileItem, PartFileKind } from '@/types/part_file'
+} from '@element-plus/icons-vue';
+import type { UploadFile } from 'element-plus';
+import PdfViewer from './PdfViewer.vue';
+import { api } from '@/api/http';
+import { deleteFile, getDownloadUrl } from '@/api/assembly';
+import { printPartDrawing } from '@/api/parts';
+import type { PartFileItem, PartFileKind } from '@/types/part_file';
 
-// ----- ACCEPT 与 title 按 kind 自动派生 -----
-// 2026-07-14：DRAWING 加 9 种图片（PNG/JPG/.../HEIC，与 PDF 同槽）；
-// 3D_MODEL 加 IGES/STL/OBJ/3MF；新增 CAD_2D (DWG/DXF)
-const ACCEPT_BY_KIND: Record<PartFileKind, string> = {
-  DRAWING:
-    '.pdf,.png,.jpg,.jpeg,.gif,.bmp,.tif,.tiff,.webp,.heic',
-  '3D_MODEL': '.step,.stp,.iges,.igs,.stl,.obj,.3mf',
-  G_CODE: '.nc,.tap,.cnc,.mpf,.ngc',
-  SETUP_SHEET: '.pdf',
-  ASSEMBLY_MASTER: '.pdf',
-  CAD_2D: '.dwg,.dxf',
-}
-
-const TITLE_BY_KIND: Record<PartFileKind, string> = {
-  DRAWING: '图纸',
-  '3D_MODEL': '3D 模型',
-  G_CODE: 'G 代码',
-  SETUP_SHEET: 'CNC 设定单',
-  ASSEMBLY_MASTER: '总装图',
-  CAD_2D: 'CAD 源文件',
-}
-
-const EMPTY_TEXT_BY_KIND: Record<PartFileKind, string> = {
-  DRAWING: '暂无图纸',
-  '3D_MODEL': '暂无 3D 模型',
-  G_CODE: '暂无 G 代码',
-  SETUP_SHEET: '暂无 CNC 设定单',
-  ASSEMBLY_MASTER: '暂无总装图',
-  CAD_2D: '暂无 CAD 源文件',
-}
-
-const UPLOAD_LABEL_BY_KIND: Record<PartFileKind, string> = {
-  DRAWING: '图纸',
-  '3D_MODEL': '3D 模型',
-  G_CODE: 'G 代码',
-  SETUP_SHEET: '设定单',
-  ASSEMBLY_MASTER: '总装图',
-  CAD_2D: 'CAD 源文件',
-}
-
-interface Props {
-  files: PartFileItem[]
-  ownerType: 'assembly' | 'part'
-  ownerId: string
-  defaultPage?: number
-  showUpload?: boolean
-  showDelete?: boolean
-  showPrint?: boolean
-  kind?: PartFileKind
-  title?: string
-  accept?: string
-  emptyText?: string
-  /** 自定义上传函数（用于不同 kind 走不同 endpoint） */
-  apiUpload?: (ownerId: string, file: File) => Promise<PartFileItem>
-  /** 自定义删除函数（默认走 /files/{id}/delete） */
-  apiDelete?: (fileId: string) => Promise<void>
-}
 const props = withDefaults(defineProps<Props>(), {
   defaultPage: 1,
   showUpload: false,
@@ -257,124 +202,170 @@ const props = withDefaults(defineProps<Props>(), {
   title: '',
   accept: '',
   emptyText: '',
-})
+});
 
 const emit = defineEmits<{
-  uploaded: [PartFileItem]
-  deleted: [string]
-  refresh: []
-}>()
+  uploaded: [PartFileItem];
+  deleted: [string];
+  refresh: [];
+}>();
 
-const ACCEPT = computed<string>(() =>
-  props.accept || ACCEPT_BY_KIND[props.kind],
-)
-const titleText = computed<string>(() =>
-  props.title || TITLE_BY_KIND[props.kind],
-)
-const emptyTextText = computed<string>(() =>
-  props.emptyText || EMPTY_TEXT_BY_KIND[props.kind],
-)
+// ----- ACCEPT 与 title 按 kind 自动派生 -----
+// 2026-07-14：DRAWING 加 9 种图片（PNG/JPG/.../HEIC，与 PDF 同槽）；
+// 3D_MODEL 加 IGES/STL/OBJ/3MF；新增 CAD_2D (DWG/DXF)
+const ACCEPT_BY_KIND: Record<PartFileKind, string> = {
+  DRAWING: '.pdf,.png,.jpg,.jpeg,.gif,.bmp,.tif,.tiff,.webp,.heic',
+  '3D_MODEL': '.step,.stp,.iges,.igs,.stl,.obj,.3mf',
+  G_CODE: '.nc,.tap,.cnc,.mpf,.ngc',
+  SETUP_SHEET: '.pdf',
+  ASSEMBLY_MASTER: '.pdf',
+  CAD_2D: '.dwg,.dxf',
+};
+
+const TITLE_BY_KIND: Record<PartFileKind, string> = {
+  DRAWING: '图纸',
+  '3D_MODEL': '3D 模型',
+  G_CODE: 'G 代码',
+  SETUP_SHEET: 'CNC 设定单',
+  ASSEMBLY_MASTER: '总装图',
+  CAD_2D: 'CAD 源文件',
+};
+
+const EMPTY_TEXT_BY_KIND: Record<PartFileKind, string> = {
+  DRAWING: '暂无图纸',
+  '3D_MODEL': '暂无 3D 模型',
+  G_CODE: '暂无 G 代码',
+  SETUP_SHEET: '暂无 CNC 设定单',
+  ASSEMBLY_MASTER: '暂无总装图',
+  CAD_2D: '暂无 CAD 源文件',
+};
+
+const UPLOAD_LABEL_BY_KIND: Record<PartFileKind, string> = {
+  DRAWING: '图纸',
+  '3D_MODEL': '3D 模型',
+  G_CODE: 'G 代码',
+  SETUP_SHEET: '设定单',
+  ASSEMBLY_MASTER: '总装图',
+  CAD_2D: 'CAD 源文件',
+};
+
+interface Props {
+  files: PartFileItem[];
+  ownerType: 'assembly' | 'part';
+  ownerId: string;
+  defaultPage?: number;
+  showUpload?: boolean;
+  showDelete?: boolean;
+  showPrint?: boolean;
+  kind?: PartFileKind;
+  title?: string;
+  accept?: string;
+  emptyText?: string;
+  /** 自定义上传函数（用于不同 kind 走不同 endpoint） */
+  apiUpload?: (ownerId: string, file: File) => Promise<PartFileItem>;
+  /** 自定义删除函数（默认走 /files/{id}/delete） */
+  apiDelete?: (fileId: string) => Promise<void>;
+}
+const ACCEPT = computed<string>(() => props.accept || ACCEPT_BY_KIND[props.kind]);
+const titleText = computed<string>(() => props.title || TITLE_BY_KIND[props.kind]);
+const emptyTextText = computed<string>(() => props.emptyText || EMPTY_TEXT_BY_KIND[props.kind]);
 const uploadLabelText = computed<string>(() => {
-  const base = UPLOAD_LABEL_BY_KIND[props.kind]
-  return `${files.value.length > 0 ? '替换' : '上传'}${base}`
-})
+  const base = UPLOAD_LABEL_BY_KIND[props.kind];
+  return `${files.value.length > 0 ? '替换' : '上传'}${base}`;
+});
 
-const uploading = ref(false)
-const previewVisible = ref(false)
-const previewFile = ref<PartFileItem | null>(null)
-const previewBlobUrl = ref<string>('')
-const files = computed<PartFileItem[]>(() => props.files)
+const uploading = ref(false);
+const previewVisible = ref(false);
+const previewFile = ref<PartFileItem | null>(null);
+const previewBlobUrl = ref<string>('');
+const files = computed<PartFileItem[]>(() => props.files);
 
-const previewTitle = computed<string>(
-  () => `预览 — ${previewFile.value?.original_filename ?? ''}`,
-)
+const previewTitle = computed<string>(() => `预览 — ${previewFile.value?.original_filename ?? ''}`);
 
 function isPdf(t: string): boolean {
-  return t.toUpperCase() === 'PDF'
+  return t.toUpperCase() === 'PDF';
 }
 // 2026-07-14：DRAWING 扩 9 种图片格式
-const IMAGE_TYPES = new Set([
-  'PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'TIF', 'TIFF', 'WEBP',
-])
+const IMAGE_TYPES = new Set(['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'TIF', 'TIFF', 'WEBP']);
 function isImage(t: string): boolean {
-  return IMAGE_TYPES.has(t.toUpperCase())
+  return IMAGE_TYPES.has(t.toUpperCase());
 }
 function isHeic(t: string): boolean {
-  return t.toUpperCase() === 'HEIC'
+  return t.toUpperCase() === 'HEIC';
 }
 function iconOf(t: string) {
-  const up = t.toUpperCase()
-  if (up === 'PDF') return Picture
-  if (IMAGE_TYPES.has(up)) return Picture
-  return Files
+  const up = t.toUpperCase();
+  if (up === 'PDF') return Picture;
+  if (IMAGE_TYPES.has(up)) return Picture;
+  return Files;
 }
 function iconColor(t: string): string {
-  const up = t.toUpperCase()
-  if (up === 'PDF') return '#e15c5c'
-  if (IMAGE_TYPES.has(up)) return '#67c23a'  // 图片：绿色
-  if (up === 'STEP' || up === 'STP' || up === 'IGES' || up === 'IGS') return '#3a7bd5'
-  if (up === 'STL' || up === 'OBJ' || up === '3MF') return '#3a7bd5'
-  if (up === 'DWG' || up === 'DXF') return '#ff9800'
-  return '#909399'
+  const up = t.toUpperCase();
+  if (up === 'PDF') return '#e15c5c';
+  if (IMAGE_TYPES.has(up)) return '#67c23a'; // 图片：绿色
+  if (up === 'STEP' || up === 'STP' || up === 'IGES' || up === 'IGS') return '#3a7bd5';
+  if (up === 'STL' || up === 'OBJ' || up === '3MF') return '#3a7bd5';
+  if (up === 'DWG' || up === 'DXF') return '#ff9800';
+  return '#909399';
 }
 function formatSize(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / (1024 * 1024)).toFixed(2)} MB`
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 async function onPick(uploadFile: UploadFile): Promise<void> {
-  if (!uploadFile.raw) return
+  if (!uploadFile.raw) return;
   if (!props.apiUpload) {
-    ElMessage.error('FileListCard 未配置 apiUpload，无法上传')
-    return
+    ElMessage.error('FileListCard 未配置 apiUpload，无法上传');
+    return;
   }
-  uploading.value = true
+  uploading.value = true;
   try {
-    const result = await props.apiUpload(props.ownerId, uploadFile.raw)
-    ElMessage.success(`已上传：${result.original_filename}`)
-    emit('uploaded', result)
-    emit('refresh')
+    const result = await props.apiUpload(props.ownerId, uploadFile.raw);
+    ElMessage.success(`已上传：${result.original_filename}`);
+    emit('uploaded', result);
+    emit('refresh');
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '上传失败')
+    ElMessage.error((e as Error).message ?? '上传失败');
   } finally {
-    uploading.value = false
+    uploading.value = false;
   }
 }
 
 async function onPreview(f: PartFileItem): Promise<void> {
-  previewFile.value = f
-  previewVisible.value = true
+  previewFile.value = f;
+  previewVisible.value = true;
   try {
-    const resp = await api.get(`/files/${f.id}/content`, { responseType: 'blob' })
-    if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value)
-    previewBlobUrl.value = URL.createObjectURL(resp.data)
+    const resp = await api.get(`/files/${f.id}/content`, { responseType: 'blob' });
+    if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
+    previewBlobUrl.value = URL.createObjectURL(resp.data);
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载文件失败')
+    ElMessage.error((e as Error).message ?? '加载文件失败');
   }
 }
 
 function onPreviewClosed(): void {
   if (previewBlobUrl.value) {
-    URL.revokeObjectURL(previewBlobUrl.value)
-    previewBlobUrl.value = ''
+    URL.revokeObjectURL(previewBlobUrl.value);
+    previewBlobUrl.value = '';
   }
 }
 
 async function downloadCurrent(): Promise<void> {
-  if (!previewFile.value) return
+  if (!previewFile.value) return;
   try {
-    const url = await getDownloadUrl(previewFile.value.id)
-    const a = document.createElement('a')
-    a.href = url
-    a.target = '_blank'
-    a.rel = 'noopener'
-    a.download = ''
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+    const url = await getDownloadUrl(previewFile.value.id);
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '下载失败')
+    ElMessage.error((e as Error).message ?? '下载失败');
   }
 }
 
@@ -384,66 +375,66 @@ async function onDelete(f: PartFileItem): Promise<void> {
       `确认删除「${f.original_filename}」？删除后文件仍可从 COS 重新下载，但前端不再列出。`,
       '删除文件',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-    )
+    );
   } catch {
-    return
+    return;
   }
   try {
     if (props.apiDelete) {
-      await props.apiDelete(f.id)
+      await props.apiDelete(f.id);
     } else {
-      await deleteFile(f.id)
+      await deleteFile(f.id);
     }
-    ElMessage.success('已删除')
-    emit('deleted', f.id)
-    emit('refresh')
+    ElMessage.success('已删除');
+    emit('deleted', f.id);
+    emit('refresh');
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '删除失败')
+    ElMessage.error((e as Error).message ?? '删除失败');
   }
 }
 
 // ============================================================
 // 双面打印：仅对 ownerType='part' 生效
 // ============================================================
-const printing = ref(false)
-const printIframeRef = ref<HTMLIFrameElement | null>(null)
-let printBlobUrl = ''
+const printing = ref(false);
+const printIframeRef = ref<HTMLIFrameElement | null>(null);
+let printBlobUrl = '';
 
 async function onPrint(): Promise<void> {
-  if (props.ownerType !== 'part') return
-  printing.value = true
+  if (props.ownerType !== 'part') return;
+  printing.value = true;
   try {
-    const blob = await printPartDrawing(props.ownerId)
-    if (printBlobUrl) URL.revokeObjectURL(printBlobUrl)
-    printBlobUrl = URL.createObjectURL(blob)
+    const blob = await printPartDrawing(props.ownerId);
+    if (printBlobUrl) URL.revokeObjectURL(printBlobUrl);
+    printBlobUrl = URL.createObjectURL(blob);
 
-    const iframe = printIframeRef.value
+    const iframe = printIframeRef.value;
     if (!iframe) {
-      ElMessage.error('打印 iframe 未挂载，请刷新页面后重试')
-      return
+      ElMessage.error('打印 iframe 未挂载，请刷新页面后重试');
+      return;
     }
-    iframe.src = printBlobUrl
+    iframe.src = printBlobUrl;
     iframe.onload = () => {
       try {
-        iframe.contentWindow?.focus()
-        iframe.contentWindow?.print()
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
       } catch {
-        const w = window.open(printBlobUrl, '_blank')
-        if (w) w.print()
+        const w = window.open(printBlobUrl, '_blank');
+        if (w) w.print();
       }
-    }
+    };
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '生成打印 PDF 失败')
+    ElMessage.error((e as Error).message ?? '生成打印 PDF 失败');
   } finally {
     setTimeout(() => {
-      printing.value = false
-    }, 800)
+      printing.value = false;
+    }, 800);
   }
 }
 
 onBeforeUnmount(() => {
-  if (printBlobUrl) URL.revokeObjectURL(printBlobUrl)
-})
+  if (printBlobUrl) URL.revokeObjectURL(printBlobUrl);
+});
 </script>
 
 <style lang="scss" scoped>
@@ -496,7 +487,9 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color);
   border-radius: 6px;
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
   position: relative;
 
   &:hover {

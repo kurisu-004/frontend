@@ -16,98 +16,98 @@
 
 「分页 + 表格」通用壳。内部封装 `usePagedListQuery`，view 通过 ref 拿 fetch / reset。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | 任意「列表 + 分页 + 单查询」的轻量页面 |
+| 项       | 说明                                                                                           |
+| -------- | ---------------------------------------------------------------------------------------------- |
+| 用途     | 任意「列表 + 分页 + 单查询」的轻量页面                                                         |
 | 关键约束 | 列定义由父组件传入（slot）；fetch 是 async 函数；不支持列筛选 / 行类型色（用 `PartListShell`） |
-| 不适用 | 列可见性切换、行级加急 / 送货单状态色 —— 改用 `PartListShell` |
+| 不适用   | 列可见性切换、行级加急 / 送货单状态色 —— 改用 `PartListShell`                                  |
 
 ### PartListShell.vue
 
 「filter 卡 + 列可见性 + 表格 + 分页 + 加急红底」壳。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | 部件列表场景，目前 InspectionPending / PendingProgramming 共用 |
+| 项       | 说明                                                                                                          |
+| -------- | ------------------------------------------------------------------------------------------------------------- |
+| 用途     | 部件列表场景，目前 InspectionPending / PendingProgramming 共用                                                |
 | 关键约束 | 内置 `ColumnVisibilityPopover` + 加急行（`row-urgent`）红底；fetch 接口签名固定 `{ page, pageSize, filters }` |
-| 不适用 | 非部件域列表（用 `PagedTable`） |
+| 不适用   | 非部件域列表（用 `PagedTable`）                                                                               |
 
 ### FileListCard.vue
 
 文件列表 + 上传 / 删除 / 预览通用卡。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | 装配 / 部件 / 工艺卡任意文件管理场景 |
+| 项       | 说明                                                                                                               |
+| -------- | ------------------------------------------------------------------------------------------------------------------ |
+| 用途     | 装配 / 部件 / 工艺卡任意文件管理场景                                                                               |
 | 关键约束 | 按 `kind` 区分：DRAWING / 3D_MODEL / G_CODE / SETUP_SHEET / ASSEMBLY_MASTER / CAD_2D，不同 kind 走不同预览器与图标 |
-| 复用 | `kind` 是 enum，新业务加新 kind 必须先扩 enum 再用 |
+| 复用     | `kind` 是 enum，新业务加新 kind 必须先扩 enum 再用                                                                 |
 
 ### Barcode.vue
 
 `jsbarcode` 渲染 SVG 条形码。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | 工位扫码台打印 / 显示部件号 |
+| 项       | 说明                                                           |
+| -------- | -------------------------------------------------------------- |
+| 用途     | 工位扫码台打印 / 显示部件号                                    |
 | 关键约束 | 默认 CODE39（适配车间喷码机），其他类型通过 `format` prop 覆盖 |
-| 依赖 | `jsbarcode`，体积小，按需引入 |
+| 依赖     | `jsbarcode`，体积小，按需引入                                  |
 
 ### EChart.vue
 
 ECharts 6 封装。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | dashboard / 报表页 |
-| 关键约束 | v5 主题锁定；`ResizeObserver` 自适应父容器；unmount 时 `dispose()` 防内存泄漏 |
-| 主题 | 通过 `option` 传入，主题色用本项目 `--primary-color` / `--primary-light` / `--primary-lighter` 三色梯度 |
+| 项       | 说明                                                                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------- |
+| 用途     | dashboard / 报表页                                                                                      |
+| 关键约束 | v5 主题锁定；`ResizeObserver` 自适应父容器；unmount 时 `dispose()` 防内存泄漏                           |
+| 主题     | 通过 `option` 传入，主题色用本项目 `--primary-color` / `--primary-light` / `--primary-lighter` 三色梯度 |
 
 ### PdfViewer.vue
 
 `pdfjs-dist` 内嵌预览（翻页 / 缩放 / 下载）。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | 图纸 / 工艺卡 PDF 预览 |
-| 关键约束 | worker 配置从 `src/utils/pdfjs.ts` 统一拿，**不要**自己 import `pdfjs-dist` |
-| CMap | 解析 CJK PDF 时需 cMap（已在 `pdfjs.ts` 配好），遇到乱码先确认 PDF_CMAP_OPTIONS 已传 |
+| 项       | 说明                                                                                 |
+| -------- | ------------------------------------------------------------------------------------ |
+| 用途     | 图纸 / 工艺卡 PDF 预览                                                               |
+| 关键约束 | worker 配置从 `src/utils/pdfjs.ts` 统一拿，**不要**自己 import `pdfjs-dist`          |
+| CMap     | 解析 CJK PDF 时需 cMap（已在 `pdfjs.ts` 配好），遇到乱码先确认 PDF_CMAP_OPTIONS 已传 |
 
 ### BeianFooter.vue
 
 公安网安备 + ICP 备案号 footer。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | 全站底部合规备案信息 |
+| 项       | 说明                                     |
+| -------- | ---------------------------------------- |
+| 用途     | 全站底部合规备案信息                     |
 | 关键约束 | 部署环境变量决定展示的备案号，不要硬编码 |
 
 ### HmiPickerCard.vue
 
 HMI 触摸友好大卡片（kind=`process` \| `shelf`）。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | 工位 HMI 大屏选工序 / 选货架 |
+| 项       | 说明                                                   |
+| -------- | ------------------------------------------------------ |
+| 用途     | 工位 HMI 大屏选工序 / 选货架                           |
 | 关键约束 | 最小点击区 48px；大字号；不带 hover 态（触摸屏无意义） |
-| 复用 | 同结构不同 kind 用 prop 切换样式 |
+| 复用     | 同结构不同 kind 用 prop 切换样式                       |
 
 ### NotificationBanner.vue
 
 大屏实时事件横幅。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | 工位 / 看板顶部实时事件流 |
+| 项       | 说明                                                                                      |
+| -------- | ----------------------------------------------------------------------------------------- |
+| 用途     | 工位 / 看板顶部实时事件流                                                                 |
 | 关键约束 | 从 dashboard WS event 通道消费 PICKED_UP / RETURNED / INSPECTED 事件；自动滚动 + 自动消失 |
-| 挂载点 | MainLayout 顶部统一挂一份 |
+| 挂载点   | MainLayout 顶部统一挂一份                                                                 |
 
 ### ColumnFilterPopover.vue / ColumnVisibilityPopover.vue
 
 列头 popover。
 
-| 项 | 说明 |
-| --- | --- |
-| 用途 | 列筛选（按值多选）+ 列显隐切换 |
+| 项       | 说明                                                                              |
+| -------- | --------------------------------------------------------------------------------- |
+| 用途     | 列筛选（按值多选）+ 列显隐切换                                                    |
 | 关键约束 | 通过 popover 挂在 `el-table` 列头；`PartListShell` 内置 `ColumnVisibilityPopover` |
 
 ## 列表页标准结构
@@ -193,9 +193,9 @@ HMI 触摸友好大卡片（kind=`process` \| `shelf`）。
 原因：响应式 dialog 在窗口 resize 时会抖动（dialog 内容 reflow），HMI 大屏固定 1920×1080 不需要响应式，桌面端 1280×800 起也不需要响应式。统一静态尺寸视觉更稳。
 
 ```ts
-import { useDialogSize } from '@/composables/useDialogSize'
+import { useDialogSize } from '@/composables/useDialogSize';
 
-const { width, height } = useDialogSize()
+const { width, height } = useDialogSize();
 // width / height 直接绑到 el-dialog 的 :width / 自定义 max-height
 ```
 

@@ -15,81 +15,95 @@
   后端 service 按 batch_id 反查 t_part_batch.part_id，前端不再带 part_id。
 -->
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
-import { ElMessage, ElTag } from 'element-plus'
-import { Select } from '@element-plus/icons-vue'
+import { computed, h, ref } from 'vue';
+import { ElMessage, ElTag } from 'element-plus';
+import { Select } from '@element-plus/icons-vue';
 
-import { useDialogSize } from '@/composables/useDialogSize'
-import { useBulkPassInspection } from '@/composables/useBulkPassInspection'
-import type { BulkPassResult } from '@/composables/useBulkPassInspection'
-import type { DeliveryNoteLineItem } from '@/types/deliveryNote'
+import { useDialogSize } from '@/composables/useDialogSize';
+import { useBulkPassInspection } from '@/composables/useBulkPassInspection';
+import type { BulkPassResult } from '@/composables/useBulkPassInspection';
+import type { DeliveryNoteLineItem } from '@/types/deliveryNote';
 import {
   resolveDraggable,
   useColumnVisibility,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
+} from '@/composables/useColumnVisibility';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 
 interface Props {
   /** v-model 显隐 */
-  modelValue: boolean
+  modelValue: boolean;
   /** 未送检零件列表（父组件已过滤 status ∉ {INSPECTION, READY_TO_SHIP}） */
-  uninspectedItems: DeliveryNoteLineItem[]
+  uninspectedItems: DeliveryNoteLineItem[];
   /** 当前 note id（仅展示用，真正 submit 在父组件做） */
-  noteId: string
+  noteId: string;
   /** 乐观锁；emit pass-success 后父组件 submitNote 透传 */
-  noteVersion: number
+  noteVersion: number;
   /** 调用来源（预留扩展如 'recall'；当前仅 'submit'） */
-  source: 'submit'
+  source: 'submit';
 }
 
-const props = defineProps<Props>()
+const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void
+  (e: 'update:modelValue', v: boolean): void;
   /** 全部通过 → 父组件接着 submitNote(noteId, {version: noteVersion}) */
-  (e: 'pass-success'): void
+  (e: 'pass-success'): void;
   /** 部分通过 → 父组件 toast + 保留弹窗 */
-  (e: 'pass-partial', result: BulkPassResult): void
+  (e: 'pass-partial', result: BulkPassResult): void;
   /** 用户点取消 */
-  (e: 'cancel'): void
-}>()
+  (e: 'cancel'): void;
+}>();
 
-const dlg = useDialogSize({ desktopWidth: 640 })
-const bulk = useBulkPassInspection()
+const dlg = useDialogSize({ desktopWidth: 640 });
+const bulk = useBulkPassInspection();
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
 // 「同时过检」/「数量」列不进 defs（el-input-number + v-model + 条件勾选不便走 cellRender）。
-const tableRef = ref()
+const tableRef = ref();
 const columnDefs: ColumnDef[] = [
   {
-    key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center',
+    key: 'serial_no',
+    label: '序列号',
+    prop: 'serial_no',
+    minWidth: 100,
+    align: 'center',
     // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
-    cellRender: ({ row }) => h('span',
-      { class: { muted: !(row as DeliveryNoteLineItem).serial_no } },
-      (row as DeliveryNoteLineItem).serial_no || '—'),
+    cellRender: ({ row }) =>
+      h(
+        'span',
+        { class: { muted: !(row as DeliveryNoteLineItem).serial_no } },
+        (row as DeliveryNoteLineItem).serial_no || '—',
+      ),
   },
   { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 100, align: 'center' },
   { key: 'name', label: '名称', prop: 'name', minWidth: 110, showOverflowTooltip: true },
   { key: 'quantity', label: '数量', prop: 'quantity', width: 80, align: 'right' },
   {
-    key: 'status', label: '当前状态', minWidth: 120, align: 'center',
-    cellRender: ({ row }) => h(ElTag, { type: 'warning', effect: 'light', size: 'small' },
-      () => (row as DeliveryNoteLineItem).status),
+    key: 'status',
+    label: '当前状态',
+    minWidth: 120,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h(
+        ElTag,
+        { type: 'warning', effect: 'light', size: 'small' },
+        () => (row as DeliveryNoteLineItem).status,
+      ),
   },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'batch_inspection_confirm' })
-const drag = useColumnDrag(columnDefs, { listKey: 'batch_inspection_confirm' })
+];
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'batch_inspection_confirm' });
+const drag = useColumnDrag(columnDefs, { listKey: 'batch_inspection_confirm' });
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
-drag.applyDrag(tableRef)
+drag.applyDrag(tableRef);
 
 // noteId 截断展示（雪花 ID 很长）
 const noteShortId = computed(() =>
   props.noteId.length > 8 ? `${props.noteId.slice(0, 8)}…` : props.noteId,
-)
+);
 
 // DeliveryNoteLineItem[] → BulkPassItem[]
 // 2026-08-28 路线 B 改造：仅含 batch_id + quantity + label，移除 part_id
@@ -103,37 +117,31 @@ const items = computed(() =>
     quantity: li.quantity,
     label: `${li.serial_no ?? li.drawing_no} · ${li.name}`,
   })),
-)
+);
 
 // 「一键通过品检」可用条件：列表非空。
 // batch_id 由 DeliveryNoteLineItem.id 必填保证，不再校验 part_id。
-const canBulkPass = computed(
-  () => props.uninspectedItems.length > 0,
-)
+const canBulkPass = computed(() => props.uninspectedItems.length > 0);
 
-const disabledTooltip = computed(() =>
-  canBulkPass.value ? '' : '列表为空',
-)
+const disabledTooltip = computed(() => (canBulkPass.value ? '' : '列表为空'));
 
 function onCancel(): void {
-  emit('update:modelValue', false)
-  emit('cancel')
+  emit('update:modelValue', false);
+  emit('cancel');
 }
 
 async function onConfirm(): Promise<void> {
-  if (!canBulkPass.value) return
-  const result = await bulk.run(items.value)
+  if (!canBulkPass.value) return;
+  const result = await bulk.run(items.value);
   if (result.failed.length === 0) {
-    ElMessage.success(`已通过品检 ${result.passed.length} 项`)
-    emit('update:modelValue', false)
-    emit('pass-success')
+    ElMessage.success(`已通过品检 ${result.passed.length} 项`);
+    emit('update:modelValue', false);
+    emit('pass-success');
   } else if (result.passed.length > 0) {
-    ElMessage.warning(
-      `部分通过：${result.passed.length} 项成功 / ${result.failed.length} 项失败`,
-    )
-    emit('pass-partial', result)
+    ElMessage.warning(`部分通过：${result.passed.length} 项成功 / ${result.failed.length} 项失败`);
+    emit('pass-partial', result);
   } else {
-    ElMessage.error(`全部失败：${result.failed[0]?.message ?? '未知错误'}`)
+    ElMessage.error(`全部失败：${result.failed[0]?.message ?? '未知错误'}`);
   }
 }
 </script>
@@ -205,11 +213,7 @@ async function onConfirm(): Promise<void> {
             进度 {{ bulk.progress.done }} / {{ bulk.progress.total }}
           </span>
           <el-button @click="onCancel">取消</el-button>
-          <el-tooltip
-            :content="disabledTooltip"
-            :disabled="canBulkPass"
-            placement="top"
-          >
+          <el-tooltip :content="disabledTooltip" :disabled="canBulkPass" placement="top">
             <el-button
               type="primary"
               :loading="bulk.running.value"

@@ -10,12 +10,12 @@
 
 ## 三个 axios 实例
 
-| 实例 | baseURL | 拦截器 | 何时用 |
-|---|---|---|---|
-| `api` | `/api/v1` | 有 | v1 FastAPI 业务接口（含 auth 域、`parts` 列表、外协报价、`fail-inspection` 等；默认客户端） |
-| `apiV2` | `/api/v2` | 有 | v2 Rust 后端业务接口（**仅服务于 `src/views/delivery/DeliveryNoteScan.vue` 扫码建单页及其路由 B 间接依赖的 inspection 流程**，共 15 个端点 / 4 个文件）—— `deliveryNote.ts` 7 个（`scanDelivery` / `getNote` / `submitNote` / `listNotes` / `batchGetNotes` / `removeParts` / `softDeleteNote`）+ `deliveryGroup.ts` 4 个（整文件 v2，DeliveryNoteScan 唯一消费者）+ `parts/crud.ts` 2 个（`toInspection` / `toShip`）+ `parts/batch.ts` 2 个（`batchToInspection` / `batchToShip`） |
-| `refreshClient` | `/api/v1` | 无 | 仅 `/api/v1/auth/refresh`（auth 域当前用） |
-| `refreshClientV2` | `/api/v2` | 无 | 2026-08-26 起无消费者，保留供未来 v2 refresh 端点回归 |
+| 实例              | baseURL   | 拦截器 | 何时用                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------- | --------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `api`             | `/api/v1` | 有     | v1 FastAPI 业务接口（含 auth 域、`parts` 列表、外协报价、`fail-inspection` 等；默认客户端）                                                                                                                                                                                                                                                                                                                                                                                          |
+| `apiV2`           | `/api/v2` | 有     | v2 Rust 后端业务接口（**仅服务于 `src/views/delivery/DeliveryNoteScan.vue` 扫码建单页及其路由 B 间接依赖的 inspection 流程**，共 15 个端点 / 4 个文件）—— `deliveryNote.ts` 7 个（`scanDelivery` / `getNote` / `submitNote` / `listNotes` / `batchGetNotes` / `removeParts` / `softDeleteNote`）+ `deliveryGroup.ts` 4 个（整文件 v2，DeliveryNoteScan 唯一消费者）+ `parts/crud.ts` 2 个（`toInspection` / `toShip`）+ `parts/batch.ts` 2 个（`batchToInspection` / `batchToShip`） |
+| `refreshClient`   | `/api/v1` | 无     | 仅 `/api/v1/auth/refresh`（auth 域当前用）                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `refreshClientV2` | `/api/v2` | 无     | 2026-08-26 起无消费者，保留供未来 v2 refresh 端点回归                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 **反例**：`api.post('/v2/...')` 会被 baseURL 拼成 `/api/v1/v2/...`，404 静默失败。**单端点 v2 调用必须 `apiV2.post('/...')`**，路径不带 `/v2` 前缀。
 
@@ -47,22 +47,22 @@ try {
 
 ### code 编号约定
 
-| 区间 | 语义 | 备注 |
-|---|---|---|
-| `0` | 成功 | 拦截器解封 |
-| `40101`–`40105` | 鉴权错误 | 见下表，拦截器有特殊处理 |
-| `2xxxx` | 业务错误 | 由调用方按 code 分支处理 |
-| `4xxxx` | 系统 / 校验错误 | 通常 5xx 对应 server 端异常 |
+| 区间            | 语义            | 备注                        |
+| --------------- | --------------- | --------------------------- |
+| `0`             | 成功            | 拦截器解封                  |
+| `40101`–`40105` | 鉴权错误        | 见下表，拦截器有特殊处理    |
+| `2xxxx`         | 业务错误        | 由调用方按 code 分支处理    |
+| `4xxxx`         | 系统 / 校验错误 | 通常 5xx 对应 server 端异常 |
 
 ## 认证错误码表
 
-| code | 常量 | 拦截器行为 |
-|---|---|---|
-| 40101 | `BIZ_AUTH_INVALID` | 抛错，调用方兜底（通常是路由守卫的 `refreshOrLogout`） |
-| 40102 | `TOKEN_EXPIRED` | 自动 refresh + 重试原请求（`refreshPromise` 单例防雪崩） |
-| 40103 | `BIZ_AUTH_REFRESH_INVALID` | dispatch `auth:logout`，跳登录 |
-| 40104 | `OLD_PASSWORD_MISMATCH` | 抛错，改密 dialog 提示用户 |
-| 40105 | `SESSION_REVOKED` | dispatch `auth:logout`（**不走 refresh**：JWT 签名仍有效但 Redis `session:tok:<sha256>` 已被吊销，refresh 也救不回） |
+| code  | 常量                       | 拦截器行为                                                                                                           |
+| ----- | -------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 40101 | `BIZ_AUTH_INVALID`         | 抛错，调用方兜底（通常是路由守卫的 `refreshOrLogout`）                                                               |
+| 40102 | `TOKEN_EXPIRED`            | 自动 refresh + 重试原请求（`refreshPromise` 单例防雪崩）                                                             |
+| 40103 | `BIZ_AUTH_REFRESH_INVALID` | dispatch `auth:logout`，跳登录                                                                                       |
+| 40104 | `OLD_PASSWORD_MISMATCH`    | 抛错，改密 dialog 提示用户                                                                                           |
+| 40105 | `SESSION_REVOKED`          | dispatch `auth:logout`（**不走 refresh**：JWT 签名仍有效但 Redis `session:tok:<sha256>` 已被吊销，refresh 也救不回） |
 
 `ApiError` 类暴露 `isAuthError` getter：40101 / 40102 / 40103 / 40105 都返回 true，调用方可一次性判断"是不是 session 出问题了"。
 
@@ -109,20 +109,20 @@ sequenceDiagram
 
 `http.ts` 提供两个 serializer（2026-08-29 拆分），按 baseURL 版本各自绑定到 4 个 axios 实例：
 
-| 函数 | 行为 | 适用客户端 |
-|---|---|---|
-| `serializeParamsV1` | **所有数组都重复 key**：`?key=a&key=b`（无 `[]` 后缀） | `api` / `refreshClient`（v1 FastAPI `List[Enum] = Query(None)` 期望重复 key） |
-| `serializeParamsV2` | 白名单 `statuses` → CSV 单值 `?statuses=A,B`；其它数组重复 key | `apiV2` / `refreshClientV2`（v2 Rust `Option<String>` 逗号分隔） |
+| 函数                | 行为                                                           | 适用客户端                                                                    |
+| ------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `serializeParamsV1` | **所有数组都重复 key**：`?key=a&key=b`（无 `[]` 后缀）         | `api` / `refreshClient`（v1 FastAPI `List[Enum] = Query(None)` 期望重复 key） |
+| `serializeParamsV2` | 白名单 `statuses` → CSV 单值 `?statuses=A,B`；其它数组重复 key | `apiV2` / `refreshClientV2`（v2 Rust `Option<String>` 逗号分隔）              |
 
 `serializeParams` 保留为 `serializeParamsV1` 的向后兼容别名（历史代码可能仍在引用；新代码应直接选 `V1` / `V2`）。
 
 ```ts
 // v1 FastAPI 期望：所有数组重复 key
-api.get('/parts', { params: { statuses: ['A', 'B'] } })
+api.get('/parts', { params: { statuses: ['A', 'B'] } });
 // → GET /api/v1/parts?statuses=A&statuses=B
 
 // v2 Rust 期望：statuses 走 CSV
-apiV2.get('/delivery-notes', { params: { statuses: ['DRAFT', 'SHIPPED'] } })
+apiV2.get('/delivery-notes', { params: { statuses: ['DRAFT', 'SHIPPED'] } });
 // → GET /api/v2/delivery-notes?statuses=DRAFT,SHIPPED
 ```
 
@@ -137,7 +137,7 @@ apiV2.get('/delivery-notes', { params: { statuses: ['DRAFT', 'SHIPPED'] } })
 `cleanParams(obj)` 去掉 `undefined` / `null` / 空字符串 `''` / 空数组 `[]` 的字段，保留数字 `0` 和布尔 `false`。给 list 类接口（GET `/xxx?a=1`）用——后端对 `''` 会做 `LIKE '%%'`（导致全量匹配），axios 默认只 strip `undefined` / `null`。2026-08-25 refactor 把 9 个 list API 的清洗逻辑收到 `http.ts` 这一层。
 
 ```ts
-api.get('/parts', { params: cleanParams({ name: '', status: 'A', page: 0 }) })
+api.get('/parts', { params: cleanParams({ name: '', status: 'A', page: 0 }) });
 // → GET /api/v1/parts?status=A&page=0
 ```
 
@@ -145,9 +145,9 @@ api.get('/parts', { params: cleanParams({ name: '', status: 'A', page: 0 }) })
 
 ```ts
 interface StoredSession {
-  token: string              // access JWT
-  refresh_token: string      // 7d TTL refresh JWT（2026-07-10 新增）
-  user: CurrentUser          // 含 menus / roles / shelf_ids
+  token: string; // access JWT
+  refresh_token: string; // 7d TTL refresh JWT（2026-07-10 新增）
+  user: CurrentUser; // 含 menus / roles / shelf_ids
 }
 ```
 
@@ -160,8 +160,8 @@ refresh 失败 / 40101 / 40103 / 40105 都不直接调 vue-router，而是 `wind
 ```ts
 // main.ts（拦截器反向依赖的解耦点）
 window.addEventListener('auth:logout', () => {
-  router.replace('/login')
-})
+  router.replace('/login');
+});
 ```
 
 为什么不直接在拦截器 `import router`：会形成循环依赖（router 引 store / composable，composable 引 http，http 又引 router），且不便单测。CustomEvent 是最低耦合的桥。
@@ -172,11 +172,11 @@ window.addEventListener('auth:logout', () => {
 
 ```ts
 // 错误（丢精度）
-const id = Number(parts[0].id)
+const id = Number(parts[0].id);
 // Number("198362487928651776") → 198362487928651780（实测差 4）
 
 // 正确
-const id = parts[0].id  // string
+const id = parts[0].id; // string
 ```
 
 后端 Pydantic v2 默认 lax 模式会从 JSON string 自动 coerce 到 int，所以前端发请求时 `"id": "198362487928651776"`（字符串）和 `"id": 198362487928651776`（数字）后端都能正确解析。`useAuthSession.activeShelfId()` 返回 `string | null` 也是出于同一原因。
@@ -203,11 +203,11 @@ const id = parts[0].id  // string
 
 ## 排错速查
 
-| 现象 | 可能原因 |
-|---|---|
-| 请求 404，路径看着对 | `baseURL` 错了（用了 `api` 但端点已迁 v2） |
-| refresh 后还是 40102 | refresh 客户端与主客户端版本不一致 |
-| 收到响应但 `data` 是 `{code, message, data}` 没解封 | 后端没按信封协议返回（或者是非 JSON 文件 blob） |
-| `pdf` 上传后端报 500 | 走 v1 上传但后端已切 v2，body 字段不兼容 |
-| 列表接口（状态列筛选）返回 422 | 走 v1 但前端发了 CSV 形式 `?statuses=A,B`（共享 `serializeParams` 时代残留），Python `List[Enum]` 解析成单元素列表失败 |
-| 40105 频繁出现 | 改密 / 多设备登录 / 管理员停用了账号，导致当前 Redis session 被吊销 |
+| 现象                                                | 可能原因                                                                                                               |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 请求 404，路径看着对                                | `baseURL` 错了（用了 `api` 但端点已迁 v2）                                                                             |
+| refresh 后还是 40102                                | refresh 客户端与主客户端版本不一致                                                                                     |
+| 收到响应但 `data` 是 `{code, message, data}` 没解封 | 后端没按信封协议返回（或者是非 JSON 文件 blob）                                                                        |
+| `pdf` 上传后端报 500                                | 走 v1 上传但后端已切 v2，body 字段不兼容                                                                               |
+| 列表接口（状态列筛选）返回 422                      | 走 v1 但前端发了 CSV 形式 `?statuses=A,B`（共享 `serializeParams` 时代残留），Python `List[Enum]` 解析成单元素列表失败 |
+| 40105 频繁出现                                      | 改密 / 多设备登录 / 管理员停用了账号，导致当前 Redis session 被吊销                                                    |

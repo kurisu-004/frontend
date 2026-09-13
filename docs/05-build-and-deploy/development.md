@@ -10,13 +10,13 @@
 
 `package.json` 里只暴露这五个脚本。每个脚本对应一种工作场景，混用会导致 dev 能跑、生产构建挂；或反过来。
 
-| 命令 | 用途 | 何时用 |
-|---|---|---|
-| `npm run dev` | 启动 vite dev server（监听 `:5173`，带 HMR + `/api` proxy） | 日常开发 |
-| `npm run typecheck` | 只跑 `vue-tsc --noEmit`，不做产物构建 | 改完类型想快速验证，不想等完整 build |
-| `npm run build` | `vue-tsc --noEmit && vite build`：先类型检查再产出 `dist/` | CI / 上线前 |
-| `npm run preview` | `vite preview`，本地起静态服务预览 `dist/` | 构建完想看生产产物效果 |
-| `npm run test` | `vitest run`（node 环境，只跑纯函数/单例测试） | 改完 utils / api 跑回归 |
+| 命令                | 用途                                                        | 何时用                               |
+| ------------------- | ----------------------------------------------------------- | ------------------------------------ |
+| `npm run dev`       | 启动 vite dev server（监听 `:5173`，带 HMR + `/api` proxy） | 日常开发                             |
+| `npm run typecheck` | 只跑 `vue-tsc --noEmit`，不做产物构建                       | 改完类型想快速验证，不想等完整 build |
+| `npm run build`     | `vue-tsc --noEmit && vite build`：先类型检查再产出 `dist/`  | CI / 上线前                          |
+| `npm run preview`   | `vite preview`，本地起静态服务预览 `dist/`                  | 构建完想看生产产物效果               |
+| `npm run test`      | `vitest run`（node 环境，只跑纯函数/单例测试）              | 改完 utils / api 跑回归              |
 
 ## dev 模式行为
 
@@ -65,14 +65,14 @@ vite 8 底层从 rollup 切到 rolldown，迁移期 `@vueuse/core` 的 dist 里�
 
 ## dev / build 行为差异
 
-| 维度 | dev | build |
-|---|---|---|
-| 模块加载 | ESM 即时编译，浏览器按需 import | Rollup 全量打包 + tree-shake |
-| 代码分割 | 无（单 SPA 入口） | `splitChunks` 按 import 边界自动切 |
-| Source map | 内联（开发期可读） | 单独 `.js.map` 文件（生产期按需启用） |
-| HMR | 支持 | 不涉及 |
-| 类型检查 | 不跑 | 跑（前置 vue-tsc） |
-| EP CSS | 按需注入（resolver 扫到 `<template>` 才注） | 按需注入 + 提取到独立 chunk |
+| 维度       | dev                                         | build                                 |
+| ---------- | ------------------------------------------- | ------------------------------------- |
+| 模块加载   | ESM 即时编译，浏览器按需 import             | Rollup 全量打包 + tree-shake          |
+| 代码分割   | 无（单 SPA 入口）                           | `splitChunks` 按 import 边界自动切    |
+| Source map | 内联（开发期可读）                          | 单独 `.js.map` 文件（生产期按需启用） |
+| HMR        | 支持                                        | 不涉及                                |
+| 类型检查   | 不跑                                        | 跑（前置 vue-tsc）                    |
+| EP CSS     | 按需注入（resolver 扫到 `<template>` 才注） | 按需注入 + 提取到独立 chunk           |
 
 ## 常见 dev 问题排查
 

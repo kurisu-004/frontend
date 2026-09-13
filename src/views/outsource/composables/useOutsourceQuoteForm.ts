@@ -15,8 +15,8 @@
 // - parts / processes / customers（页级共享 lookup，由 shell 装载并下传）
 // - 表格列表状态（由 useOutsourceQuoteTable 持有）
 
-import { reactive, ref, watch } from 'vue'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { reactive, ref, watch } from 'vue';
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
 import {
   approveOutsourceQuote,
   createOutsourceQuote,
@@ -24,96 +24,92 @@ import {
   rejectOutsourceQuote,
   softDeleteOutsourceQuote,
   submitOutsourceQuote,
-} from '@/api/outsource'
-import { useConfirm } from '@/composables/useConfirm'
-import { OUTSOURCE_QUOTE_STATUS_LABEL, type OutsourceQuote } from '@/types/outsource'
-import type { PartListItem } from '@/types/parts'
-import type { Process } from '@/types/process'
+} from '@/api/outsource';
+import { useConfirm } from '@/composables/useConfirm';
+import { OUTSOURCE_QUOTE_STATUS_LABEL, type OutsourceQuote } from '@/types/outsource';
+import type { PartListItem } from '@/types/parts';
+import type { Process } from '@/types/process';
 
 /** 新建报价表单（reactive） */
 export interface CreateQuoteForm {
-  part_id: string
-  outsource_company_id: string
-  process_id: string
-  price: string
-  note: string
+  part_id: string;
+  outsource_company_id: string;
+  process_id: string;
+  price: string;
+  note: string;
 }
 
 export interface UseOutsourceQuoteFormOptions {
   /** 页级共享 lookup（仅在 props 变化时赋进来；本地维护 reactive 镜像） */
-  parts: () => readonly PartListItem[]
-  processes: () => readonly Process[]
+  parts: () => readonly PartListItem[];
+  processes: () => readonly Process[];
   /** 创建 / 审批 / 删除 成功后由 caller 触发表格刷新 */
-  refresh: () => Promise<void> | void
+  refresh: () => Promise<void> | void;
 }
 
 export function useOutsourceQuoteForm(opts: UseOutsourceQuoteFormOptions) {
-  const { dangerous: confirmDangerous } = useConfirm()
+  const { dangerous: confirmDangerous } = useConfirm();
 
   // ============ 新建报价 dialog ============
-  const showCreate = ref(false)
-  const createFormRef = ref<FormInstance>()
+  const showCreate = ref(false);
+  const createFormRef = ref<FormInstance>();
   const createForm = reactive<CreateQuoteForm>({
     part_id: '',
     outsource_company_id: '',
     process_id: '',
     price: '',
     note: '',
-  })
+  });
 
   // 前端必填校验：4 个核心字段都必填，price 还需 > 0（镜像 schema/outsource_quote.py
   // `OutsourceQuoteCreateRequest` 的 `gt=0`）。
   const createRules: FormRules = {
     part_id: [{ required: true, message: '请选择零件', trigger: 'change' }],
-    outsource_company_id: [
-      { required: true, message: '请选择外协公司', trigger: 'change' },
-    ],
-    process_id: [
-      { required: true, message: '请选择工序', trigger: 'change' },
-    ],
+    outsource_company_id: [{ required: true, message: '请选择外协公司', trigger: 'change' }],
+    process_id: [{ required: true, message: '请选择工序', trigger: 'change' }],
     price: [
       { required: true, message: '请填写单价', trigger: 'blur' },
       {
         validator: (_rule, value: string, cb) => {
-          const n = Number(value)
+          const n = Number(value);
           if (value === '' || value == null || Number.isNaN(n) || n <= 0) {
-            cb(new Error('单价必须大于 0'))
+            cb(new Error('单价必须大于 0'));
           } else {
-            cb()
+            cb();
           }
         },
         trigger: 'blur',
       },
     ],
-  }
+  };
 
   function openCreate(): void {
-    createForm.part_id = ''
-    createForm.outsource_company_id = ''
-    createForm.process_id = ''
-    createForm.price = ''
-    createForm.note = ''
-    showCreate.value = true
+    createForm.part_id = '';
+    createForm.outsource_company_id = '';
+    createForm.process_id = '';
+    createForm.price = '';
+    createForm.note = '';
+    showCreate.value = true;
   }
 
   // ============ 工序 → 外协公司级联（PR-H 2026-07-28）============
-  const companies = ref<{ id: string; name: string }[]>([])
-  const companiesLoading = ref(false)
+  const companies = ref<{ id: string; name: string }[]>([]);
+  const companiesLoading = ref(false);
 
   async function loadCompaniesByProcess(processId: string): Promise<void> {
     if (!processId) {
-      companies.value = []
-      return
+      companies.value = [];
+      return;
     }
-    companiesLoading.value = true
+    companiesLoading.value = true;
     try {
-      const cs = await listCompaniesByProcess(processId)
-      companies.value = cs.map((c) => ({ id: c.id, name: c.name }))
+      const cs = await listCompaniesByProcess(processId);
+      companies.value = cs.map((c) => ({ id: c.id, name: c.name }));
     } catch (e) {
-      companies.value = []
-      ElMessage.error((e as Error).message ?? '外协公司加载失败')
+      companies.value = [];
+      ElMessage.error((e as Error).message ?? '外协公司加载失败');
     } finally {
-      companiesLoading.value = false
+      companiesLoading.value = false;
     }
   }
 
@@ -123,40 +119,40 @@ export function useOutsourceQuoteForm(opts: UseOutsourceQuoteFormOptions) {
   watch(
     () => createForm.process_id,
     (newPid) => {
-      createForm.outsource_company_id = ''
-      void loadCompaniesByProcess(newPid)
+      createForm.outsource_company_id = '';
+      void loadCompaniesByProcess(newPid);
     },
-  )
+  );
 
   /** PR-H 2026-07-28：选择零件后自动填工序（仅当 next_process_id 类别 = OUTSOURCE）。
    *  其他情况（INHOUSE / NULL）留空并提示。 */
   function onCreatePartChange(partId: string): void {
-    createForm.process_id = ''
-    createForm.outsource_company_id = ''
-    if (!partId) return
-    const part = opts.parts().find((p) => p.id === partId)
+    createForm.process_id = '';
+    createForm.outsource_company_id = '';
+    if (!partId) return;
+    const part = opts.parts().find((p) => p.id === partId);
     if (!part?.next_process_id) {
-      if (part) ElMessage.info('该零件未设置下一工序，请手动选择')
-      return
+      if (part) ElMessage.info('该零件未设置下一工序，请手动选择');
+      return;
     }
     // 仅当 next_process 类别 = OUTSOURCE 时自动填
-    const proc = opts.processes().find((p) => p.id === part.next_process_id)
+    const proc = opts.processes().find((p) => p.id === part.next_process_id);
     if (proc && proc.category === 'OUTSOURCE') {
-      createForm.process_id = part.next_process_id
+      createForm.process_id = part.next_process_id;
       // 触发 loadCompaniesByProcess 级联加载公司
-      void loadCompaniesByProcess(part.next_process_id)
+      void loadCompaniesByProcess(part.next_process_id);
     } else {
-      ElMessage.info('该零件的下一工序不是外协工序，请手动选择')
+      ElMessage.info('该零件的下一工序不是外协工序，请手动选择');
     }
   }
 
   async function onCreate(): Promise<void> {
-    if (!createFormRef.value) return
+    if (!createFormRef.value) return;
     // el-form 校验：4 个必填字段 + price > 0；校验失败时 validate() reject，直接短路（红字提示）
     try {
-      await createFormRef.value.validate()
+      await createFormRef.value.validate();
     } catch {
-      return
+      return;
     }
     try {
       await createOutsourceQuote({
@@ -165,90 +161,91 @@ export function useOutsourceQuoteForm(opts: UseOutsourceQuoteFormOptions) {
         process_id: createForm.process_id,
         price: createForm.price || '0',
         note: createForm.note || null,
-      })
-      ElMessage.success('已创建 DRAFT 报价')
-      showCreate.value = false
-      await opts.refresh()
+      });
+      ElMessage.success('已创建 DRAFT 报价');
+      showCreate.value = false;
+      await opts.refresh();
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '创建失败')
+      ElMessage.error((e as Error).message ?? '创建失败');
     }
   }
 
   // ============ 提交审核（无 dialog，直接发请求）============
   async function onSubmit(q: OutsourceQuote): Promise<void> {
     try {
-      await submitOutsourceQuote(q.id)
-      ElMessage.success('已提交审核')
-      await opts.refresh()
+      await submitOutsourceQuote(q.id);
+      ElMessage.success('已提交审核');
+      await opts.refresh();
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '提交失败')
+      ElMessage.error((e as Error).message ?? '提交失败');
     }
   }
 
   // ============ 审批 dialog（通过 + 拒绝）============
-  const showApprove = ref(false)
-  const showReject = ref(false)
-  const reviewNote = ref('')
-  const activeQuote = ref<OutsourceQuote | null>(null)
+  const showApprove = ref(false);
+  const showReject = ref(false);
+  const reviewNote = ref('');
+  const activeQuote = ref<OutsourceQuote | null>(null);
 
   function openApprove(q: OutsourceQuote): void {
-    activeQuote.value = q
-    reviewNote.value = ''
-    showApprove.value = true
+    activeQuote.value = q;
+    reviewNote.value = '';
+    showApprove.value = true;
   }
   function openReject(q: OutsourceQuote): void {
-    activeQuote.value = q
-    reviewNote.value = ''
-    showReject.value = true
+    activeQuote.value = q;
+    reviewNote.value = '';
+    showReject.value = true;
   }
 
   async function onApprove(): Promise<void> {
-    if (!activeQuote.value) return
+    if (!activeQuote.value) return;
     try {
       await approveOutsourceQuote(activeQuote.value.id, {
         version: activeQuote.value.version,
         review_note: reviewNote.value || null,
-      })
-      ElMessage.success('已通过')
-      showApprove.value = false
-      await opts.refresh()
+      });
+      ElMessage.success('已通过');
+      showApprove.value = false;
+      await opts.refresh();
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '审批失败')
+      ElMessage.error((e as Error).message ?? '审批失败');
     }
   }
 
   async function onReject(): Promise<void> {
     if (!activeQuote.value || !reviewNote.value.trim()) {
-      ElMessage.warning('请填写拒绝原因')
-      return
+      ElMessage.warning('请填写拒绝原因');
+      return;
     }
     try {
       await rejectOutsourceQuote(activeQuote.value.id, {
         version: activeQuote.value.version,
         review_note: reviewNote.value.trim(),
-      })
-      ElMessage.success('已拒绝')
-      showReject.value = false
-      await opts.refresh()
+      });
+      ElMessage.success('已拒绝');
+      showReject.value = false;
+      await opts.refresh();
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '拒绝失败')
+      ElMessage.error((e as Error).message ?? '拒绝失败');
     }
   }
 
   // ============ 软删（二次确认）============
   async function onDelete(q: OutsourceQuote): Promise<void> {
     if (
-      !await confirmDangerous(
+      !(await confirmDangerous(
         '确认操作',
         `确定要软删报价 #${q.id}（${OUTSOURCE_QUOTE_STATUS_LABEL[q.status]}）？`,
-      )
-    ) return
+      ))
+    )
+      return;
     try {
-      await softDeleteOutsourceQuote(q.id)
-      ElMessage.success('已软删')
-      await opts.refresh()
+      await softDeleteOutsourceQuote(q.id);
+      ElMessage.success('已软删');
+      await opts.refresh();
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '删除失败')
+      ElMessage.error((e as Error).message ?? '删除失败');
     }
   }
 
@@ -278,5 +275,5 @@ export function useOutsourceQuoteForm(opts: UseOutsourceQuoteFormOptions) {
     onReject,
     // 删除
     onDelete,
-  }
+  };
 }

@@ -7,7 +7,7 @@
   - 纯展示，无 dialog / form
 -->
 <template>
-  <el-card shadow="never" class="history-card" v-loading="eventsLoading">
+  <el-card v-loading="eventsLoading" shadow="never" class="history-card">
     <template #header>
       <div class="card-header">
         <span class="card-title">历史记录</span>
@@ -73,18 +73,18 @@
 </template>
 
 <script setup lang="ts">
-import { Right, Setting, User } from '@element-plus/icons-vue'
-import type { PartEvent } from '@/api/parts'
-import { formatDateTime } from '@/utils/date'
+import { Right, Setting, User } from '@element-plus/icons-vue';
+import type { PartEvent } from '@/api/parts';
+import { formatDateTime } from '@/utils/date';
 
 defineProps<{
-  partId: string
-  events: PartEvent[] | null
-  eventsLoading: boolean
-  statusLabelOf: (s: string | null | undefined) => string
-  eventLabel: (t: string) => string
-  eventTagType: (t: string) => 'primary' | 'success' | 'warning' | 'info' | 'danger'
-}>()
+  partId: string;
+  events: PartEvent[] | null;
+  eventsLoading: boolean;
+  statusLabelOf: (s: string | null | undefined) => string;
+  eventLabel: (t: string) => string;
+  eventTagType: (t: string) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
+}>();
 </script>
 
 <style lang="scss" scoped>

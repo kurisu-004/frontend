@@ -41,8 +41,8 @@
       <div class="cvp__header">显示列</div>
       <el-checkbox-group
         :model-value="visibleKeys"
-        @update:model-value="onChange"
         class="cvp__list"
+        @update:model-value="onChange"
       >
         <el-checkbox
           v-for="d in defs"
@@ -54,8 +54,12 @@
         />
       </el-checkbox-group>
       <div class="cvp__footer">
-        <el-button link size="small" type="primary" :disabled="allVisible" @click="emitShowAll">全选</el-button>
-        <el-button link size="small" type="primary" :disabled="allHidden" @click="emitHideAll">全不选</el-button>
+        <el-button link size="small" type="primary" :disabled="allVisible" @click="emitShowAll"
+          >全选</el-button
+        >
+        <el-button link size="small" type="primary" :disabled="allHidden" @click="emitHideAll"
+          >全不选</el-button
+        >
         <el-button link size="small" @click="emitReset">重置</el-button>
         <!-- 2026-08-27 新增：emit reset-order 由 PartListShell 监听并转发给 useColumnDrag.reset() -->
         <el-button link size="small" @click="emit('reset-order')">重置列顺序</el-button>
@@ -65,75 +69,77 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Setting } from '@element-plus/icons-vue'
-import type { ColumnDef } from '@/composables/useColumnVisibility'
+import { computed, ref } from 'vue';
+import { Setting } from '@element-plus/icons-vue';
+import type { ColumnDef } from '@/composables/useColumnVisibility';
 
 interface Props {
-  defs: readonly ColumnDef[]
-  label?: string
-  placement?: 'bottom' | 'bottom-start' | 'bottom-end' | 'top' | 'top-start' | 'top-end'
-  width?: number
+  defs: readonly ColumnDef[];
+  label?: string;
+  placement?: 'bottom' | 'bottom-start' | 'bottom-end' | 'top' | 'top-start' | 'top-end';
+  width?: number;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   label: '',
   placement: 'bottom-end',
   width: 220,
-})
+});
+
+const emit = defineEmits<{
+  reset: [];
+  'reset-order': [];
+}>();
 
 // Vue 3.4+ defineModel:接受 v-model 绑定,自动处理 prop + emit 双向。
 // 这里「visible 自身无默认」 → required:true 由 useColumnVisibility.currentMap
 // (WritableComputedRef) 提供,无需任何 cast 即可与 `v-model="x.currentMap"` 配合。
-const modelValue = defineModel<Record<string, boolean>>({ required: true })
+const modelValue = defineModel<Record<string, boolean>>({ required: true });
 
-const emit = defineEmits<{
-  reset: []
-  'reset-order': []
-}>()
-
-const popoverVisible = ref(false)
+const popoverVisible = ref(false);
 
 // 把 map → array(el-checkbox-group 期望数组)
 const visibleKeys = computed<string[]>(() => {
-  const keys: string[] = []
+  const keys: string[] = [];
   for (const d of props.defs) {
-    if (modelValue.value[d.key] !== false) keys.push(d.key)
+    if (modelValue.value[d.key] !== false) keys.push(d.key);
   }
-  return keys
-})
+  return keys;
+});
 
 // 把 array → map(每个 defs.key 都出现,不在新数组里的 = false)
 // el-checkbox-group 的 @update:model-value 实际类型是 CheckboxGroupValueType
 // (string | number | boolean),但我们这里 el-checkbox 的 :value 全部是 string,
 // 所以运行时只可能是 string[];为通过 vue-tsc 类型校验用 unknown 收口。
 function onChange(newKeys: unknown): void {
-  const arr = Array.isArray(newKeys) ? newKeys.filter((k): k is string => typeof k === 'string') : []
-  const set = new Set(arr)
-  const next: Record<string, boolean> = {}
+  const arr = Array.isArray(newKeys)
+    ? newKeys.filter((k): k is string => typeof k === 'string')
+    : [];
+  const set = new Set(arr);
+  const next: Record<string, boolean> = {};
   for (const d of props.defs) {
-    next[d.key] = set.has(d.key)
+    next[d.key] = set.has(d.key);
   }
-  modelValue.value = next
+  modelValue.value = next;
 }
 
-const allVisible = computed(() => visibleKeys.value.length === props.defs.length)
-const allHidden = computed(() => visibleKeys.value.length === 0)
+const allVisible = computed(() => visibleKeys.value.length === props.defs.length);
+const allHidden = computed(() => visibleKeys.value.length === 0);
 
 function emitShowAll(): void {
-  const next: Record<string, boolean> = {}
-  for (const d of props.defs) next[d.key] = true
-  modelValue.value = next
+  const next: Record<string, boolean> = {};
+  for (const d of props.defs) next[d.key] = true;
+  modelValue.value = next;
 }
 
 function emitHideAll(): void {
-  const next: Record<string, boolean> = {}
-  for (const d of props.defs) next[d.key] = false
-  modelValue.value = next
+  const next: Record<string, boolean> = {};
+  for (const d of props.defs) next[d.key] = false;
+  modelValue.value = next;
 }
 
 function emitReset(): void {
-  emit('reset')
+  emit('reset');
 }
 </script>
 
@@ -177,7 +183,7 @@ function emitReset(): void {
   }
 
   &__item {
-    margin-right: 0 !important;  // 覆盖 el-checkbox border 默认的右外边距
+    margin-right: 0 !important; // 覆盖 el-checkbox border 默认的右外边距
     width: 100%;
   }
 

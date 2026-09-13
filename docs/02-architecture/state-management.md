@@ -23,24 +23,33 @@
 
 ```ts
 // src/composables/useScanSession.ts（节选）
-import { ref, type Ref } from 'vue'
-import type { Worker } from '@/types/worker'
+import { ref, type Ref } from 'vue';
+import type { Worker } from '@/types/worker';
 
 // 模块级 state —— 文件被 import 一次就只有这一份
-const worker = ref<Worker | null>(null)
-const action = ref<WorkAction | null>(null)
+const worker = ref<Worker | null>(null);
+const action = ref<WorkAction | null>(null);
 
 export function useScanSession() {
-  function setWorker(w: Worker | null) { worker.value = w }
-  function setAction(a: WorkAction | null) { action.value = a }
-  function reset() { worker.value = null; action.value = null }
+  function setWorker(w: Worker | null) {
+    worker.value = w;
+  }
+  function setAction(a: WorkAction | null) {
+    action.value = a;
+  }
+  function reset() {
+    worker.value = null;
+    action.value = null;
+  }
   // ...
   return {
     worker: worker as Ref<Worker | null>,
     action: action as Ref<WorkAction | null>,
-    setWorker, setAction, reset,
+    setWorker,
+    setAction,
+    reset,
     // ... 守卫函数
-  }
+  };
 }
 ```
 
@@ -48,8 +57,8 @@ export function useScanSession() {
 
 ```vue
 <script setup lang="ts">
-import { useScanSession } from '@/composables/useScanSession'
-const { worker, action, setWorker } = useScanSession()
+import { useScanSession } from '@/composables/useScanSession';
+const { worker, action, setWorker } = useScanSession();
 // worker 是 Ref<Worker | null>，组件里直接 v-bind 即可
 </script>
 ```
@@ -62,14 +71,14 @@ const { worker, action, setWorker } = useScanSession()
 
 ## 6 大全局 singleton 表
 
-| composable | 关键 state | 持久化 | 谁用 |
-|---|---|---|---|
-| `useAuthSession` | `user`, `token`, `refresh_token` | localStorage `auth_session` | router 守卫、MainLayout、所有登录态判断 |
-| `useScanSession` | `worker`（工牌扫出的工人）、`action`（PICK_UP/RETURN/INSPECT/DELIVER） | 无（跨路由内存态） | `/scan/*` 5 个页面、`/delivery-dispatch/*` |
-| `useBarcodeScanner` | `scanBuffer`、`lastScan`、`enabled` | 无（监听器跟随模块单例） | 任何页面都能 `onScan(cb)` 订阅 |
-| `useScanBus` | `heldVersion`（自增信号）、`listeners` Set | 无（轻量事件总线） | HeldPartsBadge 等"持有件变化需重渲染"的组件 |
-| `useActiveShelfSelection` | `selectedShelfId`、`options`、`selectedZone` | sessionStorage `active_shelf_selection:<userId>` | `/scan/*` 多架 SHELF_ACCOUNT |
-| `useDeliveryScanState` | `l1CustomerId` | localStorage `delivery_scan_l1_v1` | `DeliveryNoteScan.vue`（扫码建单页） |
+| composable                | 关键 state                                                             | 持久化                                           | 谁用                                        |
+| ------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| `useAuthSession`          | `user`, `token`, `refresh_token`                                       | localStorage `auth_session`                      | router 守卫、MainLayout、所有登录态判断     |
+| `useScanSession`          | `worker`（工牌扫出的工人）、`action`（PICK_UP/RETURN/INSPECT/DELIVER） | 无（跨路由内存态）                               | `/scan/*` 5 个页面、`/delivery-dispatch/*`  |
+| `useBarcodeScanner`       | `scanBuffer`、`lastScan`、`enabled`                                    | 无（监听器跟随模块单例）                         | 任何页面都能 `onScan(cb)` 订阅              |
+| `useScanBus`              | `heldVersion`（自增信号）、`listeners` Set                             | 无（轻量事件总线）                               | HeldPartsBadge 等"持有件变化需重渲染"的组件 |
+| `useActiveShelfSelection` | `selectedShelfId`、`options`、`selectedZone`                           | sessionStorage `active_shelf_selection:<userId>` | `/scan/*` 多架 SHELF_ACCOUNT                |
+| `useDeliveryScanState`    | `l1CustomerId`                                                         | localStorage `delivery_scan_l1_v1`               | `DeliveryNoteScan.vue`（扫码建单页）        |
 
 > 这 6 个 composable 是项目里**唯一**应该新增 / 修改全局状态的入口。其他看起来像状态但其实是组件级 prop 的（如 `currentDeliveryNoteId`），应该留在 `setup()` 内。
 
@@ -85,9 +94,9 @@ const { worker, action, setWorker } = useScanSession()
 
 ```ts
 // src/composables/useFooFilter.ts —— 反例
-const filter = ref({ status: '', keyword: '' })  // 模块级，但只在一个页面用
+const filter = ref({ status: '', keyword: '' }); // 模块级，但只在一个页面用
 export function useFooFilter() {
-  return { filter }
+  return { filter };
 }
 ```
 
@@ -97,20 +106,20 @@ export function useFooFilter() {
 
 ```ts
 // src/composables/useDeliveryScanState.ts（节选）
-const KEY = 'delivery_scan_l1_v1'
-const _l1CustomerId: Ref<string> = ref('')
+const KEY = 'delivery_scan_l1_v1';
+const _l1CustomerId: Ref<string> = ref('');
 
 export function useDeliveryScanState() {
   function init() {
     // 从 localStorage 读，覆盖初始空值
-    const raw = localStorage.getItem(KEY)
-    if (raw) _l1CustomerId.value = JSON.parse(raw).l1CustomerId
+    const raw = localStorage.getItem(KEY);
+    if (raw) _l1CustomerId.value = JSON.parse(raw).l1CustomerId;
   }
   function setL1CustomerId(id: string) {
-    _l1CustomerId.value = id
-    localStorage.setItem(KEY, JSON.stringify({ l1CustomerId: id }))
+    _l1CustomerId.value = id;
+    localStorage.setItem(KEY, JSON.stringify({ l1CustomerId: id }));
   }
-  return { l1CustomerId: _l1CustomerId, setL1CustomerId, init }
+  return { l1CustomerId: _l1CustomerId, setL1CustomerId, init };
 }
 ```
 
@@ -134,7 +143,7 @@ export function useDeliveryScanState() {
 // src/api/http.ts —— 拦截器侧
 function persistTokens(pair: LoginResponse): void {
   // ... 写 localStorage ...
-  window.dispatchEvent(new CustomEvent('auth:tokens-refreshed', { detail: pair }))
+  window.dispatchEvent(new CustomEvent('auth:tokens-refreshed', { detail: pair }));
 }
 ```
 
@@ -142,13 +151,13 @@ function persistTokens(pair: LoginResponse): void {
 // src/composables/useAuthSession.ts —— composable 侧
 if (typeof window !== 'undefined') {
   window.addEventListener('auth:tokens-refreshed', ((e: Event) => {
-    const pair = (e as CustomEvent<LoginResponse>).detail
+    const pair = (e as CustomEvent<LoginResponse>).detail;
     if (pair?.token) {
-      token.value = pair.token
-      refreshTokenValue = pair.refresh_token ?? null
-      user.value = pair.user
+      token.value = pair.token;
+      refreshTokenValue = pair.refresh_token ?? null;
+      user.value = pair.user;
     }
-  }) as EventListener)
+  }) as EventListener);
 }
 ```
 

@@ -10,28 +10,23 @@
 //   - el-input-number：references/form.md §InputNumber
 //     > Source: https://element-plus.org/zh-CN/component/input-number.html
 
-import { computed, h, onBeforeUnmount, ref, watch } from 'vue'
-import { ElMessage, ElTag } from 'element-plus'
-import type { TableInstance } from 'element-plus'
-import type {
-  DeliveryNoteCandidatePart,
-} from '@/types/deliveryNote'
-import { listCandidateParts, type AddPartsItem } from '@/api/deliveryNote'
-import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import {
-  findBySerialNo,
-  findPartBySerialAndPrompt,
-} from '@/utils/scanHelpers'
-import type { PartItem } from '@/api/parts'
-import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue'
+import { computed, h, onBeforeUnmount, ref, watch } from 'vue';
+import { ElMessage, ElTag } from 'element-plus';
+import type { TableInstance } from 'element-plus';
+import type { DeliveryNoteCandidatePart } from '@/types/deliveryNote';
+import { listCandidateParts, type AddPartsItem } from '@/api/deliveryNote';
+import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
+import { findBySerialNo, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
+import type { PartItem } from '@/api/parts';
+import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import {
   useColumnVisibility,
   resolveDraggable,
   type ColumnDef,
-} from '@/composables/useColumnVisibility'
-import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag'
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue'
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
+} from '@/composables/useColumnVisibility';
+import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 // 2026-08-07 picker 富化：L2 客户列 / 全屏 / 多选筛选 / 扫码拦截
 //   - el-dialog fullscreen：references/feedback.md §ElDialog
 //   - el-select multiple + collapse-tags + max-collapse-tags：form.md §el-select
@@ -40,45 +35,43 @@ import ColumnDragHandle from '@/components/ColumnDragHandle.vue'
 
 const props = defineProps<{
   /** v-model 兼容（标准命名 modelValue + update:modelValue 来自 el-dialog 习惯） */
-  modelValue: boolean
+  modelValue: boolean;
   /** L1 一级客户雪花 ID 字符串（必填；为 '' 时不加载） */
-  customerId: string
+  customerId: string;
   /** 已在本单上的批次 id 列表 — 显示但置灰，避免重复选择 */
-  existingBatchIds?: string[]
+  existingBatchIds?: string[];
   /** 弹框标题 */
-  title?: string
-}>()
+  title?: string;
+}>();
 
 const emit = defineEmits<{
-  'update:modelValue': [val: boolean]
+  'update:modelValue': [val: boolean];
   /** 用户点确认时回传勾选的批次条目（batch_id + 入单数量） */
-  submit: [items: AddPartsItem[]]
-}>()
+  submit: [items: AddPartsItem[]];
+}>();
 
-const loading = ref(false)
-const rows = ref<DeliveryNoteCandidatePart[]>([])
-const selectedRows = ref<DeliveryNoteCandidatePart[]>([])
+const loading = ref(false);
+const rows = ref<DeliveryNoteCandidatePart[]>([]);
+const selectedRows = ref<DeliveryNoteCandidatePart[]>([]);
 /** 每个勾选批次的入单数量（默认批次全量；可改小 → 后端自动拆分） */
-const qtyMap = ref<Record<string, number>>({})
+const qtyMap = ref<Record<string, number>>({});
 
 // 2026-08-04：扫码枪扫码勾选 — 仅按 serial_no 严格匹配（用户决定）。
 // 候选行已 INSPECTION/READY_TO_SHIP 过滤，所以 0 命中 = 零件不在可入单状态 → 走报工台风格位置提示。
 // tableRef 复用于扫码 toggleRowSelection + 2026-08-27 列顺序拖动挂载；保留原始类型。
-const tableRef = ref<TableInstance | null>(null)
+const tableRef = ref<TableInstance | null>(null);
 /** 扫码命中行 0.8s 背景闪烁（row-class-name 用） */
-const scanFlashBatchIds = ref<Set<string>>(new Set())
+const scanFlashBatchIds = ref<Set<string>>(new Set());
 /** 扫码订阅句柄（弹框关闭时退订，避免 DeliveryNoteList 关闭 picker 后还在劫持扫码） */
-const unsubPickerScan = ref<(() => void) | null>(null)
+const unsubPickerScan = ref<(() => void) | null>(null);
 /** 同一 serial 在候选里多批次（极少见）— 复用报工台 BatchPickerDialog 选一个 */
-const showPickerBatchPicker = ref(false)
-const pickerBatchCode = ref('')
-const pickerBatchRows = ref<PartItem[]>([])
+const showPickerBatchPicker = ref(false);
+const pickerBatchCode = ref('');
+const pickerBatchRows = ref<PartItem[]>([]);
 
-const { onScan } = useBarcodeScanner()
+const { onScan } = useBarcodeScanner();
 
-const existingSet = computed(
-  () => new Set(props.existingBatchIds ?? []),
-)
+const existingSet = computed(() => new Set(props.existingBatchIds ?? []));
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 「selection 勾选列」「入单数量」操作列不放进 defs → 始终可见
@@ -86,79 +79,142 @@ const existingSet = computed(
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
-    key: 'batch_label', label: '批次', minWidth: 100, align: 'center',
-    cellRender: ({ row }) => h('span', { class: 'batch-label' }, (row as DeliveryNoteCandidatePart).batch_label ?? '—'),
-  },
-  { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 110, sortable: true, align: 'center' },
-  { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 110, sortable: true, align: 'center' },
-  { key: 'name', label: '名称', prop: 'name', minWidth: 140, showOverflowTooltip: true, sortable: true, align: 'center' },
-  {
-    key: 'order_no', label: '订单号', prop: 'order_no', minWidth: 120, showOverflowTooltip: true, sortable: true, align: 'center',
-    cellRender: ({ row }) => h('span', { class: { muted: !(row as DeliveryNoteCandidatePart).order_no } },
-      (row as DeliveryNoteCandidatePart).order_no || '—'),
+    key: 'batch_label',
+    label: '批次',
+    minWidth: 100,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h('span', { class: 'batch-label' }, (row as DeliveryNoteCandidatePart).batch_label ?? '—'),
   },
   {
-    key: 'quantity', label: '批次量', width: 80, align: 'right',
+    key: 'serial_no',
+    label: '序列号',
+    prop: 'serial_no',
+    minWidth: 110,
+    sortable: true,
+    align: 'center',
+  },
+  {
+    key: 'drawing_no',
+    label: '图号',
+    prop: 'drawing_no',
+    minWidth: 110,
+    sortable: true,
+    align: 'center',
+  },
+  {
+    key: 'name',
+    label: '名称',
+    prop: 'name',
+    minWidth: 140,
+    showOverflowTooltip: true,
+    sortable: true,
+    align: 'center',
+  },
+  {
+    key: 'order_no',
+    label: '订单号',
+    prop: 'order_no',
+    minWidth: 120,
+    showOverflowTooltip: true,
+    sortable: true,
+    align: 'center',
+    cellRender: ({ row }) =>
+      h(
+        'span',
+        { class: { muted: !(row as DeliveryNoteCandidatePart).order_no } },
+        (row as DeliveryNoteCandidatePart).order_no || '—',
+      ),
+  },
+  {
+    key: 'quantity',
+    label: '批次量',
+    width: 80,
+    align: 'right',
     cellRender: ({ row }) => h('span', null, (row as DeliveryNoteCandidatePart).quantity),
   },
   {
-    key: 'customer_name', label: '二级客户', prop: 'customer_name', minWidth: 130, showOverflowTooltip: true, sortable: true, align: 'center',  // 2026-08-07 picker 富化
-    cellRender: ({ row }) => h('span', { class: { muted: !(row as DeliveryNoteCandidatePart).customer_name } },
-      (row as DeliveryNoteCandidatePart).customer_name || '—'),
+    key: 'customer_name',
+    label: '二级客户',
+    prop: 'customer_name',
+    minWidth: 130,
+    showOverflowTooltip: true,
+    sortable: true,
+    align: 'center', // 2026-08-07 picker 富化
+    cellRender: ({ row }) =>
+      h(
+        'span',
+        { class: { muted: !(row as DeliveryNoteCandidatePart).customer_name } },
+        (row as DeliveryNoteCandidatePart).customer_name || '—',
+      ),
   },
   { key: 'applicant_name', label: '申请人', prop: 'applicant_name', minWidth: 90, align: 'center' },
   {
-    key: 'status', label: '状态', minWidth: 110, align: 'center',
+    key: 'status',
+    label: '状态',
+    minWidth: 110,
+    align: 'center',
     cellRender: ({ row }) => {
-      const r = row as DeliveryNoteCandidatePart
-      const tagType = r.status === 'READY_TO_SHIP' ? 'success' : r.status === 'INSPECTION' ? 'warning' : 'info'
-      const tagLabel = r.status === 'READY_TO_SHIP' ? '已通过品检' : r.status === 'INSPECTION' ? '待检' : r.status
+      const r = row as DeliveryNoteCandidatePart;
+      const tagType =
+        r.status === 'READY_TO_SHIP' ? 'success' : r.status === 'INSPECTION' ? 'warning' : 'info';
+      const tagLabel =
+        r.status === 'READY_TO_SHIP' ? '已通过品检' : r.status === 'INSPECTION' ? '待检' : r.status;
       // cellRender 必须返回单个 VNode；多根标签包 <div>。
-      const onNote = existingSet.value.has(r.batch_id)
+      const onNote = existingSet.value.has(r.batch_id);
       return onNote
         ? h('div', null, [
             h(ElTag, { type: tagType, effect: 'light', size: 'small' }, () => tagLabel),
-            h(ElTag, { type: 'info', effect: 'plain', size: 'small', style: 'margin-left: 4px' }, () => '已在单上'),
+            h(
+              ElTag,
+              { type: 'info', effect: 'plain', size: 'small', style: 'margin-left: 4px' },
+              () => '已在单上',
+            ),
           ])
-        : h(ElTag, { type: tagType, effect: 'light', size: 'small' }, () => tagLabel)
+        : h(ElTag, { type: tagType, effect: 'light', size: 'small' }, () => tagLabel);
     },
   },
-  { key: 'planned_delivery_date', label: '交期', prop: 'planned_delivery_date', minWidth: 110, sortable: true, align: 'center' },
-]
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_part_picker' })
-const drag = useColumnDrag(columnDefs, { listKey: 'delivery_part_picker' })
+  {
+    key: 'planned_delivery_date',
+    label: '交期',
+    prop: 'planned_delivery_date',
+    minWidth: 110,
+    sortable: true,
+    align: 'center',
+  },
+];
+const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_part_picker' });
+const drag = useColumnDrag(columnDefs, { listKey: 'delivery_part_picker' });
 
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
-drag.applyDrag(tableRef)
+drag.applyDrag(tableRef);
 
 // ============ 2026-08-07：二级客户多选筛选 ============
 /** 多选集合（每个元素是 customer_name 字符串）。空数组 = 不过滤。 */
-const customerFilter = ref<string[]>([])
+const customerFilter = ref<string[]>([]);
 
 /** 工具栏下拉的选项：从已加载 rows 派生去重的 customer_name 列表。 */
 const customerFilterOptions = computed(() => {
-  const s = new Set<string>()
+  const s = new Set<string>();
   for (const r of rows.value) {
-    if (r.customer_name) s.add(r.customer_name)
+    if (r.customer_name) s.add(r.customer_name);
   }
-  return [...s].sort()
-})
+  return [...s].sort();
+});
 
 /** 筛选后的表格数据源（保留 selectedRows 在筛内外的合并逻辑见 onSelectionChange）。 */
 const filteredRows = computed(() => {
-  if (!customerFilter.value || customerFilter.value.length === 0) return rows.value
-  const set = new Set(customerFilter.value)
-  return rows.value.filter((r) => r.customer_name && set.has(r.customer_name))
-})
+  if (!customerFilter.value || customerFilter.value.length === 0) return rows.value;
+  const set = new Set(customerFilter.value);
+  return rows.value.filter((r) => r.customer_name && set.has(r.customer_name));
+});
 
 /** 工具栏筛外已勾批次的数量（用于角标提示，避免用户被「勾了又看不到」困惑）。 */
 const hiddenSelectedCount = computed(() => {
-  if (!customerFilter.value || customerFilter.value.length === 0) return 0
-  const set = new Set(customerFilter.value)
-  return selectedRows.value.filter(
-    (r) => !r.customer_name || !set.has(r.customer_name),
-  ).length
-})
+  if (!customerFilter.value || customerFilter.value.length === 0) return 0;
+  const set = new Set(customerFilter.value);
+  return selectedRows.value.filter((r) => !r.customer_name || !set.has(r.customer_name)).length;
+});
 
 // 监听 customerId / 打开 → 拉候选
 watch(
@@ -166,183 +222,181 @@ watch(
   async ([open, cid]) => {
     if (!open || !cid) {
       // 关闭时退订扫码，避免 DeliveryNoteList 上也被这个组件劫持
-      unsubPickerScan.value?.()
-      unsubPickerScan.value = null
-      return
+      unsubPickerScan.value?.();
+      unsubPickerScan.value = null;
+      return;
     }
     // 2026-08-07：重新打开弹框时清掉上一轮的 L2 筛选，避免陈旧状态误伤扫码。
-    customerFilter.value = []
-    loading.value = true
+    customerFilter.value = [];
+    loading.value = true;
     try {
-      rows.value = await listCandidateParts(cid)
-      selectedRows.value = []
-      qtyMap.value = {}
+      rows.value = await listCandidateParts(cid);
+      selectedRows.value = [];
+      qtyMap.value = {};
     } catch (e: unknown) {
-      ElMessage.error((e as Error).message ?? '加载候选零件失败')
+      ElMessage.error((e as Error).message ?? '加载候选零件失败');
     } finally {
-      loading.value = false
+      loading.value = false;
     }
     // 打开后订阅扫码（只在第一次挂一次，避免 HMR 重复挂）
     if (!unsubPickerScan.value) {
-      unsubPickerScan.value = onScan((code) => { void onPickerScan(code) })
+      unsubPickerScan.value = onScan((code) => {
+        void onPickerScan(code);
+      });
     }
   },
   { immediate: true },
-)
+);
 
 /** 2026-08-07 全屏表格高度：留出 toolbar + footer + dialog header 的空间。 */
-const tableHeight = computed(() => 'calc(100vh - 240px)')
+const tableHeight = computed(() => 'calc(100vh - 240px)');
 
 function rowSelectable(row: DeliveryNoteCandidatePart): boolean {
-  return !existingSet.value.has(row.batch_id)
+  return !existingSet.value.has(row.batch_id);
 }
 
 function onSelectionChange(rowsSel: DeliveryNoteCandidatePart[]) {
   // 2026-08-07：@selection-change 只反映当前可见行；保留之前被筛外勾上的批次，
   // 否则切筛选就会丢掉用户已选的勾（el-table 的 :data 切换会重置其内部 selection）。
-  const visibleIds = new Set(rowsSel.map((r) => r.batch_id))
-  const hiddenPrev = selectedRows.value.filter(
-    (r) => !visibleIds.has(r.batch_id),
-  )
-  selectedRows.value = [...hiddenPrev, ...rowsSel]
+  const visibleIds = new Set(rowsSel.map((r) => r.batch_id));
+  const hiddenPrev = selectedRows.value.filter((r) => !visibleIds.has(r.batch_id));
+  selectedRows.value = [...hiddenPrev, ...rowsSel];
   // 新勾选的行默认全量；取消勾选的行清掉数量
-  const next: Record<string, number> = {}
+  const next: Record<string, number> = {};
   for (const r of selectedRows.value) {
-    next[r.batch_id] = qtyMap.value[r.batch_id] ?? r.quantity
+    next[r.batch_id] = qtyMap.value[r.batch_id] ?? r.quantity;
   }
-  qtyMap.value = next
+  qtyMap.value = next;
 }
 
 function qtyOf(row: DeliveryNoteCandidatePart): number {
-  return qtyMap.value[row.batch_id] ?? row.quantity
+  return qtyMap.value[row.batch_id] ?? row.quantity;
 }
 
 function onSubmit() {
   const items: AddPartsItem[] = selectedRows.value.map((r) => ({
     batch_id: r.batch_id,
     quantity: qtyOf(r),
-  }))
-  emit('submit', items)
-  emit('update:modelValue', false)
+  }));
+  emit('submit', items);
+  emit('update:modelValue', false);
 }
 
 function onCancel() {
-  emit('update:modelValue', false)
+  emit('update:modelValue', false);
 }
 
 function statusTagType(s: string): 'warning' | 'success' | 'info' {
-  if (s === 'READY_TO_SHIP') return 'success'
-  if (s === 'INSPECTION') return 'warning'
-  return 'info'
+  if (s === 'READY_TO_SHIP') return 'success';
+  if (s === 'INSPECTION') return 'warning';
+  return 'info';
 }
 function statusLabel(s: string): string {
-  if (s === 'READY_TO_SHIP') return '已通过品检'
-  if (s === 'INSPECTION') return '待检'
-  return s
+  if (s === 'READY_TO_SHIP') return '已通过品检';
+  if (s === 'INSPECTION') return '待检';
+  return s;
 }
 
 // ============ 2026-08-04：扫码勾选 ============
 
 /** 行闪烁 0.8s（row-class-name 用） */
 function flashRow(batchId: string): void {
-  scanFlashBatchIds.value = new Set([...scanFlashBatchIds.value, batchId])
+  scanFlashBatchIds.value = new Set([...scanFlashBatchIds.value, batchId]);
   setTimeout(() => {
-    const next = new Set(scanFlashBatchIds.value)
-    next.delete(batchId)
-    scanFlashBatchIds.value = next
-  }, 800)
+    const next = new Set(scanFlashBatchIds.value);
+    next.delete(batchId);
+    scanFlashBatchIds.value = next;
+  }, 800);
 }
 
 /** 程序化切换 el-table 选中状态，并同步本地 selectedRows / qtyMap。
  *  注意：toggleRowSelection 在「取消选中」分支不一定触发 @selection-change，需手动同步。 */
 function toggleRowByBatchId(batchId: string): void {
-  const table = tableRef.value
-  if (!table) return
-  const row = rows.value.find((r) => r.batch_id === batchId)
-  if (!row) return
-  const isSelected = selectedRows.value.some((r) => r.batch_id === batchId)
+  const table = tableRef.value;
+  if (!table) return;
+  const row = rows.value.find((r) => r.batch_id === batchId);
+  if (!row) return;
+  const isSelected = selectedRows.value.some((r) => r.batch_id === batchId);
   if (isSelected) {
-    table.toggleRowSelection(row, false)
-    selectedRows.value = selectedRows.value.filter((r) => r.batch_id !== batchId)
-    const nextQty = { ...qtyMap.value }
-    delete nextQty[batchId]
-    qtyMap.value = nextQty
+    table.toggleRowSelection(row, false);
+    selectedRows.value = selectedRows.value.filter((r) => r.batch_id !== batchId);
+    const nextQty = { ...qtyMap.value };
+    delete nextQty[batchId];
+    qtyMap.value = nextQty;
   } else {
-    table.toggleRowSelection(row, true)
-    selectedRows.value = [...selectedRows.value, row]
-    qtyMap.value = { ...qtyMap.value, [batchId]: row.quantity }
+    table.toggleRowSelection(row, true);
+    selectedRows.value = [...selectedRows.value, row];
+    qtyMap.value = { ...qtyMap.value, [batchId]: row.quantity };
   }
 }
 
 /** 行 class — 用于扫码命中时 0.8s 背景闪烁 */
 function rowClass({ row }: { row: DeliveryNoteCandidatePart }): string {
-  return scanFlashBatchIds.value.has(row.batch_id) ? 'row-scan-flash' : ''
+  return scanFlashBatchIds.value.has(row.batch_id) ? 'row-scan-flash' : '';
 }
 
 async function onPickerScan(rawCode: string): Promise<void> {
-  const code = rawCode.trim()
-  if (!code || !props.modelValue) return
+  const code = rawCode.trim();
+  if (!code || !props.modelValue) return;
   // 仅按 serial_no 严格匹配（用户决定 — barcodes = 工单 serial）
   const matches = findBySerialNo(
     rows.value as unknown as Array<{ serial_no: string | null }>,
     code,
-  ) as unknown as DeliveryNoteCandidatePart[]
+  ) as unknown as DeliveryNoteCandidatePart[];
   // 过滤掉已在单上的批次（rowSelectable 已禁用，避免重复入单）
-  const selectable = matches.filter(
-    (r) => !existingSet.value.has(r.batch_id),
-  )
+  const selectable = matches.filter((r) => !existingSet.value.has(r.batch_id));
   if (selectable.length === 0) {
     // 候选里没有 → 报工台风格位置提示（零件可能不在 INSPECTION/READY_TO_SHIP）
-    await findPartBySerialAndPrompt(code)
-    return
+    await findPartBySerialAndPrompt(code);
+    return;
   }
   // 2026-08-07：二级客户筛选拦截 — 筛外的 serial 不勾选，ElMessage.warning 提示。
   // 仅在「全集中能命中 + 筛内 0 命中 + 用户确实设了筛选」时触发，避免无筛选时误报。
-  const filterSet = new Set(customerFilter.value ?? [])
+  const filterSet = new Set(customerFilter.value ?? []);
   if (filterSet.size > 0) {
     const inFilter = selectable.filter(
       (r) => r.customer_name != null && filterSet.has(r.customer_name),
-    )
+    );
     if (inFilter.length === 0) {
-      const actual = selectable[0]?.customer_name ?? '未知'
+      const actual = selectable[0]?.customer_name ?? '未知';
       ElMessage.warning(
         `扫取的图纸属于【${actual}】，不在筛选范围【${[...filterSet].join('、')}】内，未勾选`,
-      )
-      return
+      );
+      return;
     }
     // 用筛内命中继续原流程
-    return proceedSelect(inFilter)
+    return proceedSelect(inFilter);
   }
-  return proceedSelect(selectable)
+  return proceedSelect(selectable);
 
   function proceedSelect(list: DeliveryNoteCandidatePart[]) {
     if (list.length > 1) {
       // 同一 serial 多批次 — 复用报工台 BatchPickerDialog
-      pickerBatchCode.value = code
-      pickerBatchRows.value = list as unknown as PartItem[]
-      showPickerBatchPicker.value = true
-      return
+      pickerBatchCode.value = code;
+      pickerBatchRows.value = list as unknown as PartItem[];
+      showPickerBatchPicker.value = true;
+      return;
     }
     // 单条命中 → 切换勾选 + 行闪烁
-    const target = list[0]
-    toggleRowByBatchId(target.batch_id)
-    flashRow(target.batch_id)
+    const target = list[0];
+    toggleRowByBatchId(target.batch_id);
+    flashRow(target.batch_id);
   }
 }
 
 function onPickerBatchPicked(p: PartItem): void {
-  showPickerBatchPicker.value = false
-  const batchId = p.batch_id
+  showPickerBatchPicker.value = false;
+  const batchId = p.batch_id;
   if (batchId) {
-    toggleRowByBatchId(batchId)
-    flashRow(batchId)
+    toggleRowByBatchId(batchId);
+    flashRow(batchId);
   }
 }
 
 onBeforeUnmount(() => {
-  unsubPickerScan.value?.()
-  unsubPickerScan.value = null
-})
+  unsubPickerScan.value?.();
+  unsubPickerScan.value = null;
+});
 </script>
 
 <template>
@@ -377,12 +431,7 @@ onBeforeUnmount(() => {
           style="width: 240px"
           class="picker-filter-select"
         >
-          <el-option
-            v-for="opt in customerFilterOptions"
-            :key="opt"
-            :label="opt"
-            :value="opt"
-          />
+          <el-option v-for="opt in customerFilterOptions" :key="opt" :label="opt" :value="opt" />
         </el-select>
         <ColumnVisibilityPopover
           :defs="columnDefs"
@@ -439,14 +488,21 @@ onBeforeUnmount(() => {
       <el-table-column label="入单数量" width="150" align="center">
         <template #default="{ row }">
           <el-input-number
-            v-if="selectedRows.some((r) => r.batch_id === (row as DeliveryNoteCandidatePart).batch_id)"
+            v-if="
+              selectedRows.some((r) => r.batch_id === (row as DeliveryNoteCandidatePart).batch_id)
+            "
             :model-value="qtyOf(row as DeliveryNoteCandidatePart)"
             :min="1"
             :max="(row as DeliveryNoteCandidatePart).quantity"
             :precision="0"
             size="small"
             style="width: 120px"
-            @update:model-value="(v: number | undefined) => { const r = row as DeliveryNoteCandidatePart; qtyMap = { ...qtyMap, [r.batch_id]: v ?? r.quantity } }"
+            @update:model-value="
+              (v: number | undefined) => {
+                const r = row as DeliveryNoteCandidatePart;
+                qtyMap = { ...qtyMap, [r.batch_id]: v ?? r.quantity };
+              }
+            "
           />
           <span v-else class="muted">—</span>
         </template>
@@ -455,11 +511,7 @@ onBeforeUnmount(() => {
 
     <template #footer>
       <el-button @click="onCancel">取消</el-button>
-      <el-button
-        type="primary"
-        :disabled="!selectedRows.length"
-        @click="onSubmit"
-      >
+      <el-button type="primary" :disabled="!selectedRows.length" @click="onSubmit">
         加入{{ selectedRows.length ? `（${selectedRows.length}）` : '' }}
       </el-button>
     </template>
@@ -510,8 +562,12 @@ onBeforeUnmount(() => {
 
 /* 2026-08-04：扫码命中行 0.8s 背景闪烁 */
 @keyframes pickerScanFlash {
-  0%   { background-color: #ecf5ff; }
-  100% { background-color: transparent; }
+  0% {
+    background-color: #ecf5ff;
+  }
+  100% {
+    background-color: transparent;
+  }
 }
 :deep(.row-scan-flash td) {
   animation: pickerScanFlash 0.8s ease-out;

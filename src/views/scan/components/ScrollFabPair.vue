@@ -28,31 +28,34 @@
 </template>
 
 <script setup lang="ts">
-import { watch, onMounted, onBeforeUnmount, shallowRef } from 'vue'
-import { ArrowUp, ArrowDown } from '@element-plus/icons-vue'
-import { useHoldToScroll } from '@/composables/useHoldToScroll'
+import { watch, onMounted, onBeforeUnmount, shallowRef } from 'vue';
+import { ArrowUp, ArrowDown } from '@element-plus/icons-vue';
+import { useHoldToScroll } from '@/composables/useHoldToScroll';
 
 const props = defineProps<{
-  target: HTMLElement | null
-}>()
+  target: HTMLElement | null;
+}>();
 
-const containerRef = shallowRef<HTMLElement | null>(props.target)
+const containerRef = shallowRef<HTMLElement | null>(props.target);
 
-watch(() => props.target, (el) => {
-  containerRef.value = el
-  if (el) bindContainer()
-})
+watch(
+  () => props.target,
+  (el) => {
+    containerRef.value = el;
+    if (el) bindContainer();
+  },
+);
 
 const { atTop, atBottom, onPressDown, onPressUp, bindContainer, unbindContainer } =
-  useHoldToScroll(containerRef)
+  useHoldToScroll(containerRef);
 
 onMounted(() => {
-  bindContainer()
-})
+  bindContainer();
+});
 
 onBeforeUnmount(() => {
-  unbindContainer()
-})
+  unbindContainer();
+});
 </script>
 
 <style scoped>
@@ -83,7 +86,10 @@ onBeforeUnmount(() => {
   user-select: none;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
-  transition: background-color 0.2s, opacity 0.2s, transform 0.1s;
+  transition:
+    background-color 0.2s,
+    opacity 0.2s,
+    transform 0.1s;
 }
 
 .scroll-btn:active:not(:disabled) {

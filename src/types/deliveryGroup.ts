@@ -8,42 +8,42 @@
 
 /** 分组成员：L2 客户引用（雪花 ID + 名称）。 */
 export interface DeliveryGroupMemberOut {
-  customer_id: string
-  customer_name: string
+  customer_id: string;
+  customer_name: string;
 }
 
 /** 单条分组实体（含成员列表与乐观锁 version）。 */
 export interface DeliveryGroupOut {
-  id: string
+  id: string;
   /** L1 一级客户 id（分组必须挂在某个 L1 root 下）。 */
-  customer_id: string
-  name: string
-  members: DeliveryGroupMemberOut[]
+  customer_id: string;
+  name: string;
+  members: DeliveryGroupMemberOut[];
   /** 乐观锁 version；update / soft-delete 必须带，服务端校验。 */
-  version: number
-  created_at: string
-  updated_at: string
+  version: number;
+  created_at: string;
+  updated_at: string;
 }
 
 /** 未被任何分组覆盖的 L2 客户（前端用于「未分组 L2」提示）。 */
 export interface UngroupedCustomerOut {
-  id: string
-  name: string
+  id: string;
+  name: string;
 }
 
 /** 某个 L1 下分组列表 + 未分组 L2 列表的完整视图（GET /delivery-groups）。 */
 export interface DeliveryGroupListOut {
-  groups: DeliveryGroupOut[]
-  ungrouped_customers: UngroupedCustomerOut[]
+  groups: DeliveryGroupOut[];
+  ungrouped_customers: UngroupedCustomerOut[];
 }
 
 /** POST /delivery-groups body —— 新建分组。 */
 export interface CreateDeliveryGroupRequest {
   /** L1 root id。 */
-  customer_id: string
-  name: string
+  customer_id: string;
+  name: string;
   /** L2 成员 id 列表（service 端会校验全部属于该 L1）。 */
-  member_customer_ids: string[]
+  member_customer_ids: string[];
 }
 
 /**
@@ -51,12 +51,12 @@ export interface CreateDeliveryGroupRequest {
  * `member_customer_ids` 字段「存在即全量替换」语义：传数组 = 覆盖，不传 = 不动。
  */
 export interface UpdateDeliveryGroupRequest {
-  version: number
-  name?: string | null
-  member_customer_ids?: string[] | null
+  version: number;
+  name?: string | null;
+  member_customer_ids?: string[] | null;
 }
 
 /** 携带 version 的请求体（用于 soft-delete）。 */
 export interface DeliveryGroupVersionRequest {
-  version: number
+  version: number;
 }

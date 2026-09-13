@@ -18,11 +18,14 @@
   >
     <el-form label-width="120px">
       <!-- 2026-08-22 a11y：单包 el-radio-group 触发 for= 指向非 labelable 元素警告 -->
-      <el-form-item label="接收分支" :for="''">
+      <el-form-item label="接收分支" for="">
         <el-radio-group
           :model-value="branch"
           aria-label="接收分支"
-          @update:model-value="(v: string | number | boolean | undefined) => $emit('update:branch', (v ?? 'production') as Branch)"
+          @update:model-value="
+            (v: string | number | boolean | undefined) =>
+              $emit('update:branch', (v ?? 'production') as Branch)
+          "
         >
           <el-radio value="production">进入生产货架</el-radio>
           <el-radio value="inspection">进入品检货架</el-radio>
@@ -34,10 +37,12 @@
           :placeholder="branch === 'production' ? '生产区' : '品检区'"
           filterable
           style="width: 100%"
-          @update:model-value="(v: string | number | boolean | undefined) => $emit('update:shelf', String(v ?? ''))"
+          @update:model-value="
+            (v: string | number | boolean | undefined) => $emit('update:shelf', String(v ?? ''))
+          "
         >
           <el-option
-            v-for="s in (branch === 'production' ? productionShelves : inspectionShelves)"
+            v-for="s in branch === 'production' ? productionShelves : inspectionShelves"
             :key="s.id"
             :label="`${s.code} — ${s.name}`"
             :value="s.id"
@@ -67,9 +72,13 @@
           :controls="false"
           size="small"
           style="width: 120px"
-          @update:model-value="(v: number | undefined) => $emit('update:quantity', typeof v === 'number' ? v : 0)"
+          @update:model-value="
+            (v: number | undefined) => $emit('update:quantity', typeof v === 'number' ? v : 0)
+          "
         />
-        <span v-if="target" style="margin-left: 8px; color: var(--el-text-color-secondary);">/ {{ target.quantity }} 件</span>
+        <span v-if="target" style="margin-left: 8px; color: var(--el-text-color-secondary)"
+          >/ {{ target.quantity }} 件</span
+        >
       </el-form-item>
     </el-form>
     <template #footer>
@@ -81,35 +90,42 @@
   </el-dialog>
 </template>
 
-<script setup lang="ts" generic="P extends { id: string; code: string; name: string }, S extends { id: string; code: string; name: string; zone: string; is_active: boolean }">
-import { useDialogSize } from '@/composables/useDialogSize'
-import type { OutsourceInFlightItem } from '@/types/outsource'
+<script
+  setup
+  lang="ts"
+  generic="
+    P extends { id: string; code: string; name: string },
+    S extends { id: string; code: string; name: string; zone: string; is_active: boolean }
+  "
+>
+import { useDialogSize } from '@/composables/useDialogSize';
+import type { OutsourceInFlightItem } from '@/types/outsource';
 
-type Branch = 'production' | 'inspection'
+type Branch = 'production' | 'inspection';
 
 defineProps<{
-  modelValue: boolean
-  target: OutsourceInFlightItem | null
-  branch: Branch
-  shelf: string
-  process: string
-  quantity: number
-  submitting: boolean
-  branchLabel: string
-  productionShelves: readonly S[]
-  inspectionShelves: readonly S[]
-  filteredInhouseProcesses: readonly P[]
-}>()
+  modelValue: boolean;
+  target: OutsourceInFlightItem | null;
+  branch: Branch;
+  shelf: string;
+  process: string;
+  quantity: number;
+  submitting: boolean;
+  branchLabel: string;
+  productionShelves: readonly S[];
+  inspectionShelves: readonly S[];
+  filteredInhouseProcesses: readonly P[];
+}>();
 
 defineEmits<{
-  (e: 'update:model-value', value: boolean): void
-  (e: 'update:branch', value: Branch): void
-  (e: 'update:shelf', value: string): void
-  (e: 'update:process', value: string): void
-  (e: 'update:quantity', value: number): void
-  (e: 'closed'): void
-  (e: 'confirm'): void
-}>()
+  (e: 'update:model-value', value: boolean): void;
+  (e: 'update:branch', value: Branch): void;
+  (e: 'update:shelf', value: string): void;
+  (e: 'update:process', value: string): void;
+  (e: 'update:quantity', value: number): void;
+  (e: 'closed'): void;
+  (e: 'confirm'): void;
+}>();
 
-const dialogSize = useDialogSize({ desktopWidth: 560 })
+const dialogSize = useDialogSize({ desktopWidth: 560 });
 </script>

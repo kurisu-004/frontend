@@ -14,35 +14,33 @@
 //
 // 全部走 apiV2，token / refresh / 信封逻辑与 v1 共享。
 
-import { apiV2 } from '@/api/http'
+import { apiV2 } from '@/api/http';
 import type {
   CreateDeliveryGroupRequest,
   DeliveryGroupListOut,
   DeliveryGroupOut,
   DeliveryGroupVersionRequest,
   UpdateDeliveryGroupRequest,
-} from '@/types/deliveryGroup'
+} from '@/types/deliveryGroup';
 
 /**
  * 拉某个 L1 客户下的全部分组 + 未分组 L2 列表。
  * 注意事项：`customer_id` 必须是单值 string，axios 的 paramsSerializer 会把它
  * 序列化为 `?customer_id=...`；绝不能传数组——会被展成 `?customer_id=&customer_id=&...`。
  */
-export async function listDeliveryGroups(
-  l1Id: string,
-): Promise<DeliveryGroupListOut> {
+export async function listDeliveryGroups(l1Id: string): Promise<DeliveryGroupListOut> {
   const resp = await apiV2.get<DeliveryGroupListOut>('/delivery-groups', {
     params: { customer_id: l1Id },
-  })
-  return resp.data
+  });
+  return resp.data;
 }
 
 /** 新建分组（service 端校验 name 不重复、member 全部属于 L1）。 */
 export async function createDeliveryGroup(
   payload: CreateDeliveryGroupRequest,
 ): Promise<DeliveryGroupOut> {
-  const resp = await apiV2.post<DeliveryGroupOut>('/delivery-groups', payload)
-  return resp.data
+  const resp = await apiV2.post<DeliveryGroupOut>('/delivery-groups', payload);
+  return resp.data;
 }
 
 /**
@@ -56,8 +54,8 @@ export async function updateDeliveryGroup(
   const resp = await apiV2.post<DeliveryGroupOut>(
     `/delivery-groups/${encodeURIComponent(id)}/update`,
     payload,
-  )
-  return resp.data
+  );
+  return resp.data;
 }
 
 /** 软删除（带 version 乐观锁；后端会在还有 DRAFT 在用时拒绝 21413）。 */
@@ -65,8 +63,5 @@ export async function softDeleteDeliveryGroup(
   id: string,
   payload: DeliveryGroupVersionRequest,
 ): Promise<void> {
-  await apiV2.post(
-    `/delivery-groups/${encodeURIComponent(id)}/soft-delete`,
-    payload,
-  )
+  await apiV2.post(`/delivery-groups/${encodeURIComponent(id)}/soft-delete`, payload);
 }

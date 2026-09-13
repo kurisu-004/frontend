@@ -1,0 +1,7 @@
+dist
+node_modules
+coverage
+*.min.js
+src/auto-imports.d.ts
+src/components.d.ts
+package-lock.json

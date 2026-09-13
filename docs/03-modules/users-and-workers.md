@@ -8,19 +8,19 @@
 
 ## 一、入口与路由
 
-| 路径 | 路由名 | menuCode | 守卫 |
-|---|---|---|---|
-| `/users` | `UserList` | `users_list` | `requireAuth` |
+| 路径       | 路由名       | menuCode       | 守卫          |
+| ---------- | ------------ | -------------- | ------------- |
+| `/users`   | `UserList`   | `users_list`   | `requireAuth` |
 | `/workers` | `WorkerList` | `workers_list` | `requireAuth` |
 
 父级 `MainLayout` 子树，菜单分组为「权限管理」（`breadcrumb` 一致）。守卫只用 `requireAuth`；具体角色能否进取决于后端菜单树是否下发对应 code。
 
 ## 二、关键页面
 
-| 文件 | 职责 |
-|---|---|
-| `src/views/users/UserList.vue` | 账号管理：列表 + 角色管理弹窗 + 新增 / 编辑 / 停用 / 重置密码 |
-| `src/views/WorkerList.vue` | 工人一览（**位于 `src/views/` 根目录，不在 `users/` 子目录**） |
+| 文件                           | 职责                                                           |
+| ------------------------------ | -------------------------------------------------------------- |
+| `src/views/users/UserList.vue` | 账号管理：列表 + 角色管理弹窗 + 新增 / 编辑 / 停用 / 重置密码  |
+| `src/views/WorkerList.vue`     | 工人一览（**位于 `src/views/` 根目录，不在 `users/` 子目录**） |
 
 `UserList.vue` 顶部固定「新增账号」按钮 + `ColumnVisibilityPopover` 列显隐 + `PagedTable` 分页；每行操作列有「角色 / 编辑 / 重置密码 / 停用 / 删除」。重置密码用 `el-popconfirm` 二次确认（默认值 `changeme`）。
 
@@ -30,20 +30,20 @@
 
 ### 账号（`src/api/users.ts`，走 `api` v1）
 
-| 函数 | HTTP | 用途 |
-|---|---|---|
-| `listUsers(params)` | GET | 账号列表（`username_like` / `is_active`） |
-| `createUser` / `updateUser` / `deactivateUser` | POST | CRUD；`/users` + `/users/{id}/update` + `/users/{id}/deactivate` |
-| `resetUserPassword(id)` | POST `/users/{id}/reset-password` | 管理员重置为 `changeme`；后端会轮转其 refresh token |
-| `listUserRoles` / `addUserRole` / `removeUserRole` | GET / POST | 角色增删（含 `scope_type` / `scope_id` 货架范围） |
+| 函数                                               | HTTP                              | 用途                                                             |
+| -------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------- |
+| `listUsers(params)`                                | GET                               | 账号列表（`username_like` / `is_active`）                        |
+| `createUser` / `updateUser` / `deactivateUser`     | POST                              | CRUD；`/users` + `/users/{id}/update` + `/users/{id}/deactivate` |
+| `resetUserPassword(id)`                            | POST `/users/{id}/reset-password` | 管理员重置为 `changeme`；后端会轮转其 refresh token              |
+| `listUserRoles` / `addUserRole` / `removeUserRole` | GET / POST                        | 角色增删（含 `scope_type` / `scope_id` 货架范围）                |
 
 ### 工人（`src/api/worker.ts`，走 `api` v1）
 
-| 函数 | HTTP | 用途 |
-|---|---|---|
-| `listWorkers(params)` | GET | 工人列表（`name_like` / `is_active`） |
-| `getWorker` / `createWorker` / `updateWorker` / `deactivateWorker` / `reactivateWorker` | GET / POST | CRUD；复用 `/workers/{id}/update` 等动词后缀路径 |
-| `findWorkerByBadge(badgeCode)` | POST `/workers/verify-badge` | **工牌扫码定位**：单点 query，避开了旧「GET /workers 拉全表客户端 find」的越权 + 500 条硬上限两个问题 |
+| 函数                                                                                    | HTTP                         | 用途                                                                                                  |
+| --------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `listWorkers(params)`                                                                   | GET                          | 工人列表（`name_like` / `is_active`）                                                                 |
+| `getWorker` / `createWorker` / `updateWorker` / `deactivateWorker` / `reactivateWorker` | GET / POST                   | CRUD；复用 `/workers/{id}/update` 等动词后缀路径                                                      |
+| `findWorkerByBadge(badgeCode)`                                                          | POST `/workers/verify-badge` | **工牌扫码定位**：单点 query，避开了旧「GET /workers 拉全表客户端 find」的越权 + 500 条硬上限两个问题 |
 
 `findWorkerByBadge` 关键约定：业务错误码 `20201`（`BIZ_WORKER_NOT_FOUND`）/ `20202`（`BIZ_WORKER_INACTIVE`）**不抛错**，前端按 `null` 处理（"未识别"是合法的扫描业务态）；其余网络错误原样抛 `ApiError`。该端点对 SHELF_ACCOUNT 也开放（`require_auth()` 即可），是工位扫码台能跑通的根因。
 
@@ -51,12 +51,12 @@
 
 账号和工人在后端是**两张独立表**，不要尝试合并：
 
-| 维度 | 账号（User） | 工人（Worker） |
-|---|---|---|
-| 用途 | 登录系统 + 鉴权 | 车间业务归属 + 工牌识别 |
-| 关键字段 | username / password / roles[] | name / work_type_id / badge_code / shelf_ids[] |
-| 关系 | 一对多 / 多对多 → 工人 | 反向 |
-| 角色 / 工种 | 5 种角色（见下） | 来自 `settings/work-types` 字典 |
+| 维度        | 账号（User）                  | 工人（Worker）                                 |
+| ----------- | ----------------------------- | ---------------------------------------------- |
+| 用途        | 登录系统 + 鉴权               | 车间业务归属 + 工牌识别                        |
+| 关键字段    | username / password / roles[] | name / work_type_id / badge_code / shelf_ids[] |
+| 关系        | 一对多 / 多对多 → 工人        | 反向                                           |
+| 角色 / 工种 | 5 种角色（见下）              | 来自 `settings/work-types` 字典                |
 
 一个账号可对应 0 / 1 / 多个工人（不一定一一对应：管理员账号通常无 worker 记录，工人账号也可挂多个工人用于代理）。
 
@@ -66,13 +66,13 @@
 
 账号角色（5 种，写在 `UserRole.role` 字段，由后端菜单表控制可见性）：
 
-| 角色 | 说明 |
-|---|---|
-| `MANAGER` | 系统管理员，全权限 |
-| `CLERK` | 业务员（订单 / 送货单） |
-| `INSPECTOR` | 品检 / 返修 |
-| `SHELF_ACCOUNT` | 工控机账号（货架台 / 扫码台），业务上必须能进 `/scan/*` 但菜单树不含 `scan_badge`，靠 router meta 的 `allowRoles` 短路放行 |
-| `CNC_PROGRAMMER` | CNC 编程员，子角色，常与 INSPECTOR 共存 |
+| 角色             | 说明                                                                                                                       |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `MANAGER`        | 系统管理员，全权限                                                                                                         |
+| `CLERK`          | 业务员（订单 / 送货单）                                                                                                    |
+| `INSPECTOR`      | 品检 / 返修                                                                                                                |
+| `SHELF_ACCOUNT`  | 工控机账号（货架台 / 扫码台），业务上必须能进 `/scan/*` 但菜单树不含 `scan_badge`，靠 router meta 的 `allowRoles` 短路放行 |
+| `CNC_PROGRAMMER` | CNC 编程员，子角色，常与 INSPECTOR 共存                                                                                    |
 
 工人工种（来自 `settings/work-types` 字典，存 `Worker.work_type_id`）：CNC 操作员 / 装配工 / 检验员等，**与账号角色无映射关系**。
 
@@ -87,11 +87,11 @@
 
 ## 七、权限
 
-| 路径 | MANAGER | CLERK | INSPECTOR | SHELF_ACCOUNT | CNC_PROGRAMMER |
-|---|---|---|---|---|---|
-| `/users`（账号管理） | RW | R | R | — | R |
-| `/workers`（工人一览） | RW | R | R | R（仅自己） | R |
-| `/scan/*`（扫码台） | — | — | — | RW（`allowRoles`） | — |
+| 路径                   | MANAGER | CLERK | INSPECTOR | SHELF_ACCOUNT      | CNC_PROGRAMMER |
+| ---------------------- | ------- | ----- | --------- | ------------------ | -------------- |
+| `/users`（账号管理）   | RW      | R     | R         | —                  | R              |
+| `/workers`（工人一览） | RW      | R     | R         | R（仅自己）        | R              |
+| `/scan/*`（扫码台）    | —       | —     | —         | RW（`allowRoles`） | —              |
 
 工人一览的「仅自己」逻辑目前由后端 `listWorkers` 过滤；前端不强行隐藏入口。
 

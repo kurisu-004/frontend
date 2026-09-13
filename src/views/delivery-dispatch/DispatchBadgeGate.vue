@@ -24,69 +24,67 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { Van } from '@element-plus/icons-vue'
-import { findWorkerByBadge } from '@/api/worker'
-import { listWorkTypes } from '@/api/workType'
-import type { WorkType } from '@/types/workType'
-import { useAuthSession } from '@/composables/useAuthSession'
-import { useBarcodeScanner } from '@/composables/useBarcodeScanner'
-import { useScanSession } from '@/composables/useScanSession'
+import { onBeforeUnmount, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import { Van } from '@element-plus/icons-vue';
+import { findWorkerByBadge } from '@/api/worker';
+import { listWorkTypes } from '@/api/workType';
+import type { WorkType } from '@/types/workType';
+import { useAuthSession } from '@/composables/useAuthSession';
+import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
+import { useScanSession } from '@/composables/useScanSession';
 
-const DRIVER_WORK_TYPE_CODE = '送货司机'
+const DRIVER_WORK_TYPE_CODE = '送货司机';
 
-const router = useRouter()
-const { onScan } = useBarcodeScanner()
-const { setWorker } = useScanSession()
-const { isAuthenticated, refreshOrLogout } = useAuthSession()
+const router = useRouter();
+const { onScan } = useBarcodeScanner();
+const { setWorker } = useScanSession();
+const { isAuthenticated, refreshOrLogout } = useAuthSession();
 
 onMounted(async () => {
   if (!isAuthenticated()) {
-    await refreshOrLogout(router)
+    await refreshOrLogout(router);
   }
-})
+});
 
 /** 解析工人工种码（verify-badge 只回 work_type_id，需再查工种表）。 */
 async function resolveWorkTypeCode(workTypeId: string | null): Promise<string | null> {
-  if (!workTypeId) return null
+  if (!workTypeId) return null;
   try {
-    const resp = await listWorkTypes({ limit: 200 })
-    const wt = (resp.items as WorkType[]).find(
-      (w) => String(w.id) === String(workTypeId),
-    )
-    return wt?.code ?? null
+    const resp = await listWorkTypes({ limit: 200 });
+    const wt = (resp.items as WorkType[]).find((w) => String(w.id) === String(workTypeId));
+    return wt?.code ?? null;
   } catch {
-    return null
+    return null;
   }
 }
 
 const unsubscribe = onScan(async (code) => {
   try {
-    const worker = await findWorkerByBadge(code)
+    const worker = await findWorkerByBadge(code);
     if (!worker) {
-      ElMessage.warning(`未识别工牌: ${code}`)
-      return
+      ElMessage.warning(`未识别工牌: ${code}`);
+      return;
     }
-    const wtCode = await resolveWorkTypeCode(worker.work_type_id)
+    const wtCode = await resolveWorkTypeCode(worker.work_type_id);
     if (wtCode !== DRIVER_WORK_TYPE_CODE) {
-      ElMessage.error(`${worker.name} 不是送货司机，无法送货`)
-      return
+      ElMessage.error(`${worker.name} 不是送货司机，无法送货`);
+      return;
     }
-    setWorker(worker)
-    void router.push('/delivery-dispatch/notes')
+    setWorker(worker);
+    void router.push('/delivery-dispatch/notes');
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '工牌查询失败')
+    ElMessage.error((e as Error).message ?? '工牌查询失败');
   }
-})
+});
 
 onBeforeUnmount(() => {
-  unsubscribe()
-})
+  unsubscribe();
+});
 
 function goHome(): void {
-  void router.push('/dashboard')
+  void router.push('/dashboard');
 }
 </script>
 
@@ -118,8 +116,15 @@ function goHome(): void {
   animation: pulse-scale 1.8s ease-in-out infinite;
 }
 @keyframes pulse-scale {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50%      { transform: scale(1.15); opacity: 0.7; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.7;
+  }
 }
 
 .title {

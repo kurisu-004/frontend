@@ -17,12 +17,12 @@
 // getDocument({ cMapUrl, cMapPacked: true }) 时引用。
 // （直接 `import ... from 'pdfjs-dist/cmaps/?url'` 对目录无效，Rolldown 不解析。）
 
-import * as pdfjsLib from 'pdfjs-dist'
-import PdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import * as pdfjsLib from 'pdfjs-dist';
+import PdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-const PDF_WORKER_CACHE_BUST = 'v=20260719'
+const PDF_WORKER_CACHE_BUST = 'v=20260719';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `${PdfWorkerUrl}?${PDF_WORKER_CACHE_BUST}`
+pdfjsLib.GlobalWorkerOptions.workerSrc = `${PdfWorkerUrl}?${PDF_WORKER_CACHE_BUST}`;
 
 // `import.meta.glob` 把 pdfjs-dist 内置的 cMap 二进制全部以 ?url 拷进 Vite assets。
 // 返回 map<相对路径, url>；取任一项 URL，按目录前缀截出 cMapUrl（pdfjs 自行拼文件名）。
@@ -32,17 +32,15 @@ const cMapUrls = import.meta.glob('/node_modules/pdfjs-dist/cmaps/*.bcmap', {
   eager: true,
   query: '?url',
   import: 'default',
-}) as Record<string, string>
-const firstCMapUrl = Object.values(cMapUrls)[0]
+}) as Record<string, string>;
+const firstCMapUrl = Object.values(cMapUrls)[0];
 /** 形如 `/assets/cmaps-xxxx/`，pdfjs 后续会拼具体文件名。 */
-export const PDF_CMAP_URL = firstCMapUrl
-  ? firstCMapUrl.replace(/[^/]+$/, '')
-  : ''
+export const PDF_CMAP_URL = firstCMapUrl ? firstCMapUrl.replace(/[^/]+$/, '') : '';
 
 /** 在 getDocument 时传入，启用 cMap 渲染。 */
 export const PDF_CMAP_OPTIONS = {
   cMapUrl: PDF_CMAP_URL,
   cMapPacked: true,
-} as const
+} as const;
 
-export { pdfjsLib }
+export { pdfjsLib };

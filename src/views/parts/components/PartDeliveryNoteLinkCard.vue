@@ -12,21 +12,11 @@
         <span class="card-title">
           <el-icon><Document /></el-icon>
           <span>所属送货单</span>
-          <el-tag
-            v-if="part.delivery_note_status"
-            :type="tagType"
-            size="small"
-            effect="plain"
-          >
+          <el-tag v-if="part.delivery_note_status" :type="tagType" size="small" effect="plain">
             {{ statusLabel }}
           </el-tag>
         </span>
-        <el-button
-          link
-          type="primary"
-          size="small"
-          @click="goToDeliveryNote"
-        >
+        <el-button link type="primary" size="small" @click="goToDeliveryNote">
           查看送货单详情
           <el-icon><ArrowRight /></el-icon>
         </el-button>
@@ -44,37 +34,37 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRouter } from 'vue-router'
-import { ArrowRight, Document } from '@element-plus/icons-vue'
-import type { PartItem } from '@/api/parts'
+import { computed } from 'vue';
+import { useRouter } from 'vue-router';
+import { ArrowRight, Document } from '@element-plus/icons-vue';
+import type { PartItem } from '@/api/parts';
 import {
   DELIVERY_NOTE_STATUS_LABEL,
   DELIVERY_NOTE_STATUS_TAG,
   type DeliveryNoteStatus,
-} from '@/types/deliveryNote'
+} from '@/types/deliveryNote';
 
 const props = defineProps<{
-  part: PartItem
-}>()
+  part: PartItem;
+}>();
 
-const router = useRouter()
+const router = useRouter();
 
 const tagType = computed<'info' | 'success' | 'warning' | 'danger'>(() => {
-  const s = props.part.delivery_note_status as DeliveryNoteStatus | null | undefined
-  if (!s) return 'info'
-  return (DELIVERY_NOTE_STATUS_TAG[s] ?? 'info') as 'info' | 'success' | 'warning' | 'danger'
-})
+  const s = props.part.delivery_note_status as DeliveryNoteStatus | null | undefined;
+  if (!s) return 'info';
+  return (DELIVERY_NOTE_STATUS_TAG[s] ?? 'info') as 'info' | 'success' | 'warning' | 'danger';
+});
 
 const statusLabel = computed(() => {
-  const s = props.part.delivery_note_status as DeliveryNoteStatus | null | undefined
-  if (!s) return ''
-  return DELIVERY_NOTE_STATUS_LABEL[s] ?? ''
-})
+  const s = props.part.delivery_note_status as DeliveryNoteStatus | null | undefined;
+  if (!s) return '';
+  return DELIVERY_NOTE_STATUS_LABEL[s] ?? '';
+});
 
 function goToDeliveryNote() {
   if (props.part.delivery_note_id != null) {
-    router.push(`/delivery-notes/${props.part.delivery_note_id}`)
+    router.push(`/delivery-notes/${props.part.delivery_note_id}`);
   }
 }
 </script>

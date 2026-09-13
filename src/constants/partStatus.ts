@@ -6,7 +6,7 @@
 // 偏订单管理语义。两者并存不重复：project 范围内的 status 枚举值稳定，仅文案表述
 // 不同。
 
-import type { OrderStatus } from '@/types/parts'
+import type { OrderStatus } from '@/types/parts';
 
 export const STATUS_LABEL: Record<OrderStatus, string> = {
   PENDING: '待处理',
@@ -19,9 +19,12 @@ export const STATUS_LABEL: Record<OrderStatus, string> = {
   OUTSOURCE: '外协',
   COMPLETED: '已完成',
   CANCELLED: '已取消',
-}
+};
 
-export const STATUS_TAG_TYPE: Record<OrderStatus, 'info' | 'primary' | 'success' | 'warning' | 'danger'> = {
+export const STATUS_TAG_TYPE: Record<
+  OrderStatus,
+  'info' | 'primary' | 'success' | 'warning' | 'danger'
+> = {
   PENDING: 'info',
   PROGRAMMING: 'primary',
   IN_PROCESS: 'primary',
@@ -32,4 +35,4 @@ export const STATUS_TAG_TYPE: Record<OrderStatus, 'info' | 'primary' | 'success'
   OUTSOURCE: 'primary',
   COMPLETED: 'success',
   CANCELLED: 'info',
-}
+};

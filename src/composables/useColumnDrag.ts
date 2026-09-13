@@ -64,44 +64,43 @@ import {
   watch,
   type ComputedRef,
   type Ref,
-} from 'vue'
-import { useDraggable } from 'vue-draggable-plus'
-import { findElTableHeaderRow } from '@/utils/elTable'
-import { useAuthSession } from './useAuthSession'
-import { resolveDraggable, type ColumnDef } from './useColumnVisibility'
+} from 'vue';
+import { useDraggable } from 'vue-draggable-plus';
+import { findElTableHeaderRow } from '@/utils/elTable';
+import { useAuthSession } from './useAuthSession';
+import { resolveDraggable, type ColumnDef } from './useColumnVisibility';
 
 export interface UseColumnDragOptions {
-  listKey: string
+  listKey: string;
 }
 
 /** 任意 ref 形态 —— 故意只声明 `readonly value: unknown`，让消费方不用关心 ref
  *  装的具体是 HTMLElement、组件实例、还是 `ref()` 无参默认的 `Ref<any>`。
  *  Vue 的 Ref<T> 是协变的，Ref<T> 始终可赋值给 `{ readonly value: unknown }`。
  *  运行时用 isRef(target) + '$el' in value + closest in value 三段判定具体形态。 */
-type AnyRefLike = { readonly value: unknown }
+interface AnyRefLike {
+  readonly value: unknown;
+}
 
 /** 任意 el-table 组件实例形态 —— `InstanceType<typeof ElTable>` 带一堆 EP 成员，
  *  但结构上一定含 `$el: HTMLElement`；这里只声明 `$el?: unknown` 保持最大兼容，
  *  不污染公共签名为 any。运行时再判断 $el 是否真的是 HTMLElement。 */
-type AnyInstanceLike = { $el?: unknown }
+interface AnyInstanceLike {
+  $el?: unknown;
+}
 
 /** applyDrag 接受的 target 形态（按运行时判定顺序）：
  *  1. AnyRefLike — 任意 Vue Ref（`tableRef`、`ref()` 无参、`InstanceType<typeof ElTable>` 的 Ref 都行）；
  *  2. AnyInstanceLike — 裸组件实例（`tableRef.value`，或直接传实例）；
  *  3. HTMLElement — 裸元素 / `findElTableHeaderRow(el)` 的返回值（旧签名兼容）；
  *  4. null | undefined — 不绑、不抛错。 */
-export type ApplyDragTarget =
-  | AnyRefLike
-  | AnyInstanceLike
-  | HTMLElement
-  | null
-  | undefined
+export type ApplyDragTarget = AnyRefLike | AnyInstanceLike | HTMLElement | null | undefined;
 
 export interface ColumnDragApi<T extends ColumnDef = ColumnDef> {
   /** 当前顺序的 columnKey 列表（v-for :key 用） */
-  orderedKeys: Ref<string[]>
+  orderedKeys: Ref<string[]>;
   /** 按 orderedKeys 重排后的 ColumnDef 列表（v-for 绑这个） */
-  orderedDefs: ComputedRef<T[]>
+  orderedDefs: ComputedRef<T[]>;
   /** 在表头 <tr> 上挂 useDraggable；找不到表头时不放弃，挂 MutationObserver
    *  在 .el-table 根上等表头出现再绑（覆盖机制 A：EP 重建表头；机制 B：表头初始未渲染）。
    *
@@ -118,36 +117,33 @@ export interface ColumnDragApi<T extends ColumnDef = ColumnDef> {
    *  运行时归一化（无 any / 无 cast）：isRef(target) → 取 value → 判 '$el' → 判 closest 链。
    *  公共签名用 `{ readonly value: unknown }` / `{ $el?: unknown }` 而不是 Ref<T>，
    *  这样消费方写 `drag.applyDrag(tableRef)` 不需要任何 `as unknown as Ref<...>` 强转。 */
-  applyDrag: (
-    target: ApplyDragTarget,
-    options?: { handle?: string; animation?: number },
-  ) => void
+  applyDrag: (target: ApplyDragTarget, options?: { handle?: string; animation?: number }) => void;
   /** 给 <el-table-column :label-class-name> 用：可拖列打上 col-draggable +
    *  col-key-<key>，不可拖列打上 col-no-drag。sortablejs 据此识别可排序子元素。 */
-  dragLabelClass: (def: T) => string
+  dragLabelClass: (def: T) => string;
   /** 还原到 defs 初始顺序 + 清持久化 */
-  reset: () => void
+  reset: () => void;
   /** 仅清持久化（不改内存） */
-  clear: () => void
+  clear: () => void;
   /** 是否已挂 useDraggable（调试用） */
-  isBound: () => boolean
+  isBound: () => boolean;
 }
 
 /** 构造 localStorage key：含 user.id 后缀，避免共享浏览器账号污染。 */
 function storageKey(listKey: string): string {
-  let suffix = 'anon'
+  let suffix = 'anon';
   try {
-    const { user } = useAuthSession()
-    if (user.value?.id) suffix = String(user.value.id)
+    const { user } = useAuthSession();
+    if (user.value?.id) suffix = String(user.value.id);
   } catch {
     /* useAuthSession 在 setup 外调用会失败 → 落到 anon */
   }
-  return `myerp.list.${suffix}.${listKey}_columnOrder`
+  return `myerp.list.${suffix}.${listKey}_columnOrder`;
 }
 
 function persist(listKey: string, keys: string[]): void {
   try {
-    localStorage.setItem(storageKey(listKey), JSON.stringify(keys))
+    localStorage.setItem(storageKey(listKey), JSON.stringify(keys));
   } catch {
     /* 静默失败（localStorage 满 / 隐私模式等） */
   }
@@ -157,46 +153,46 @@ function persist(listKey: string, keys: string[]): void {
  *  非法 key（非 string / 不在 defs 中）一律丢弃。解析失败回退到默认顺序。 */
 function restore(listKey: string, defKeys: string[]): string[] {
   try {
-    const raw = localStorage.getItem(storageKey(listKey))
-    if (!raw) return [...defKeys]
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return [...defKeys]
-    const set = new Set(defKeys)
-    const known = parsed.filter((k): k is string => typeof k === 'string' && set.has(k))
-    const missing = defKeys.filter((k) => !known.includes(k))
-    return [...known, ...missing]
+    const raw = localStorage.getItem(storageKey(listKey));
+    if (!raw) return [...defKeys];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [...defKeys];
+    const set = new Set(defKeys);
+    const known = parsed.filter((k): k is string => typeof k === 'string' && set.has(k));
+    const missing = defKeys.filter((k) => !known.includes(k));
+    return [...known, ...missing];
   } catch {
-    return [...defKeys]
+    return [...defKeys];
   }
 }
 
 /** 取列稳定标识：columnKey 优先，回落 key */
 export function columnIdentifier(def: ColumnDef): string {
-  return def.columnKey ?? def.key
+  return def.columnKey ?? def.key;
 }
 
 /** 标记类前缀：sortablejs 通过该前缀识别「这个 <th> 属于哪一列」。 */
-const COL_KEY_CLASS_PREFIX = 'col-key-'
+const COL_KEY_CLASS_PREFIX = 'col-key-';
 
 /** 从 th 的 className 里解析 col-key-<key>。返回 null 表示该 th 没打标记。 */
 function parseColKeyFromClass(className: string): string | null {
-  const classes = className.split(/\s+/)
+  const classes = className.split(/\s+/);
   for (const c of classes) {
-    if (c.startsWith(COL_KEY_CLASS_PREFIX)) return c.slice(COL_KEY_CLASS_PREFIX.length)
+    if (c.startsWith(COL_KEY_CLASS_PREFIX)) return c.slice(COL_KEY_CLASS_PREFIX.length);
   }
-  return null
+  return null;
 }
 
 /** 从表头 <tr> 内同步出「当前实际渲染的可拖动列」key 序列。
  *  排序与 <th> 在 DOM 里的物理顺序一致，sortablejs 给的 oldIndex/newIndex 也按此序列。 */
 function syncDragKeysFromDOM(rowHeaderEl: HTMLElement): string[] {
-  const ths = Array.from(rowHeaderEl.querySelectorAll<HTMLElement>('th.col-draggable'))
-  const keys: string[] = []
+  const ths = Array.from(rowHeaderEl.querySelectorAll<HTMLElement>('th.col-draggable'));
+  const keys: string[] = [];
   for (const th of ths) {
-    const k = parseColKeyFromClass(th.className)
-    if (k) keys.push(k)
+    const k = parseColKeyFromClass(th.className);
+    if (k) keys.push(k);
   }
-  return keys
+  return keys;
 }
 
 /** 从三种 target 形态中归一化出「.el-table 根元素」。
@@ -209,86 +205,86 @@ function syncDragKeysFromDOM(rowHeaderEl: HTMLElement): string[] {
  *  （mock 只暴露 className: string，不暴露 classList / nodeType）。className
  *  在真 DOM 上也是 string（DOM Living Standard: HTMLElement.className），无回归。 */
 function hasElTableClass(el: { className?: string } | null | undefined): boolean {
-  if (!el || typeof el.className !== 'string') return false
-  return el.className.split(/\s+/).includes('el-table')
+  if (!el || typeof el.className !== 'string') return false;
+  return el.className.split(/\s+/).includes('el-table');
 }
 
 function normalizeToElTableRoot(target: unknown): HTMLElement | null {
-  if (target == null) return null
+  if (target == null) return null;
   // 实例形态：带 $el 属性（HTMLElement 不会有 $el —— mock DOM 不算 HTMLElement）
-  const maybeInstance = target as { $el?: HTMLElement | null }
+  const maybeInstance = target as { $el?: HTMLElement | null };
   if (
     maybeInstance &&
     '$el' in maybeInstance &&
     maybeInstance.$el &&
     typeof (maybeInstance.$el as HTMLElement).closest === 'function'
   ) {
-    const el = maybeInstance.$el as HTMLElement
-    const root = el.closest('.el-table') as HTMLElement | null
-    return root ?? el
+    const el = maybeInstance.$el as HTMLElement;
+    const root = el.closest('.el-table') as HTMLElement | null;
+    return root ?? el;
   }
   // 元素形态
-  const el = target as HTMLElement
+  const el = target as HTMLElement;
   if (el && typeof (el as { closest?: unknown }).closest === 'function') {
-    if (hasElTableClass(el)) return el
-    const root = (el as HTMLElement).closest('.el-table') as HTMLElement | null
-    if (root) return root
+    if (hasElTableClass(el)) return el;
+    const root = (el as HTMLElement).closest('.el-table') as HTMLElement | null;
+    if (root) return root;
   }
   // 退化：mock DOM / 非 EP 表格 → 直接用元素自身
-  return el as HTMLElement
+  return el as HTMLElement;
 }
 
 export function useColumnDrag<T extends ColumnDef>(
   defs: readonly T[],
   options: UseColumnDragOptions,
 ): ColumnDragApi<T> {
-  const defKeys = defs.map(columnIdentifier)
-  const orderedKeys = ref<string[]>(restore(options.listKey, defKeys))
+  const defKeys = defs.map(columnIdentifier);
+  const orderedKeys = ref<string[]>(restore(options.listKey, defKeys));
 
   const orderedDefs = computed<T[]>(() => {
-    const map = new Map(defs.map((d) => [columnIdentifier(d), d]))
-    const result: T[] = []
+    const map = new Map(defs.map((d) => [columnIdentifier(d), d]));
+    const result: T[] = [];
     for (const k of orderedKeys.value) {
-      const d = map.get(k)
-      if (d) result.push(d)
+      const d = map.get(k);
+      if (d) result.push(d);
     }
     // 防御：defs 中新增但 orderedKeys 没有的 key（不应发生，restore 已 merge）
     for (const d of defs) {
-      if (!orderedKeys.value.includes(columnIdentifier(d))) result.push(d)
+      if (!orderedKeys.value.includes(columnIdentifier(d))) result.push(d);
     }
-    return result
-  })
+    return result;
+  });
 
   // 内部 dragKeys：只装当前实际渲染的可拖动列 key。vue-draggable-plus 会在拖动时
   // 原地 splice 这个数组，oldIndex/newIndex 与 <th> 在 DOM 里的物理顺序对齐。
   // 初值留空数组——onStart 会从 DOM 同步。
-  const dragKeys = ref<string[]>([])
+  const dragKeys = ref<string[]>([]);
 
   // 2026-08-28 新增：表头 DOM 重建后自愈用的 MutationObserver。
   // 暴露在 setup 闭包外层，便于 onBeforeUnmount.disconnect()，避免泄漏。
-  let observer: MutationObserver | null = null
+  let observer: MutationObserver | null = null;
   // 是否已成功 attach Sortable 到某个表头 <tr>（isBound API 暴露）。
   // useDraggable 自身的 Sortable 实例生命周期由 vdp 内部维护（onUnmounted 自动清理），
   // 我们只关心「真的绑上了可拖列」这个状态给 isBound() 返回。
-  let isAttached = false
+  let isAttached = false;
 
   /** 防抖调度：rAF 优先，fallback setTimeout(0)。合并同一帧内的多次 mutation 触发。 */
   function scheduleRaf(cb: () => void): void {
     if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(cb)
-      return
+      requestAnimationFrame(cb);
+      return;
     }
-    setTimeout(cb, 0)
+    setTimeout(cb, 0);
   }
 
   /** 给 <el-table-column :label-class-name> 用。可拖列打 col-draggable + col-key-<key>；
    *  不可拖列打 col-no-drag（filter 用）。 */
   function dragLabelClass(def: T): string {
-    const custom = def.labelClassName ?? ''
+    const custom = def.labelClassName ?? '';
     if (resolveDraggable(def) && !def.type && !def.fixed) {
-      return `col-draggable ${COL_KEY_CLASS_PREFIX}${columnIdentifier(def)} ${custom}`.trim()
+      return `col-draggable ${COL_KEY_CLASS_PREFIX}${columnIdentifier(def)} ${custom}`.trim();
     }
-    return `col-no-drag ${custom}`.trim()
+    return `col-no-drag ${custom}`.trim();
   }
 
   function applyDrag(
@@ -296,14 +292,14 @@ export function useColumnDrag<T extends ColumnDef>(
     dragOpts?: { handle?: string; animation?: number },
   ): void {
     // 闭包内的 onStart snapshot + onEnd merge state
-    let subSet: Set<string> = new Set()
+    let subSet: Set<string> = new Set();
 
     /** 当前绑定的表头 <tr>。所有「实际绑到哪个节点」的真相都来自这里。 */
-    let currentTr: HTMLElement | null = null
+    let currentTr: HTMLElement | null = null;
     /** 防抖标志：同一帧内多次 mutation 只触发一次真实重绑。 */
-    let scheduled = false
+    let scheduled = false;
     /** 当前已解析的 .el-table 根（observer 挂载点）。 */
-    let tableRoot: HTMLElement | null = null
+    let tableRoot: HTMLElement | null = null;
 
     /** 通用 Sortable 选项：绑 dragKeys，draggable 只认 th.col-draggable。 */
     const sortableOpts = {
@@ -317,33 +313,31 @@ export function useColumnDrag<T extends ColumnDef>(
         // sortablejs splice dragKeys 之前完成（onStart 在 drop 之前触发）。
         // 2026-08-28 修订：用闭包内 currentTr 而非外部 target，确保读到的是
         // 当前实际绑定节点（重绑后取到的是新 <tr>，不是消费方传进来的旧节点）。
-        const el = currentTr
-        if (!el) return
-        dragKeys.value = syncDragKeysFromDOM(el)
-        subSet = new Set(dragKeys.value)
+        const el = currentTr;
+        if (!el) return;
+        dragKeys.value = syncDragKeysFromDOM(el);
+        subSet = new Set(dragKeys.value);
       },
       onEnd: () => {
         // onUpdate 已经在内部把 DOM 还原并原地 splice dragKeys；此时 dragKeys.value
         // 已经是新顺序。不要再读 DOM（DOM 已被还原）。
-        const newSub = [...dragKeys.value]
+        const newSub = [...dragKeys.value];
         if (newSub.length !== subSet.size) {
           // 防御：长度不匹配 = sortablejs 在 drag 过程中出了意外（最常见是
           // dragKeys 被外部改动 / DOM 重渲染打断了排序），直接放弃合并、不写盘。
-          // eslint-disable-next-line no-console
+
           console.warn(
             '[useColumnDrag] dragKeys length mismatch:',
             `expected ${subSet.size}, got ${newSub.length}. Skipping merge.`,
-          )
-          return
+          );
+          return;
         }
-        if (subSet.size === 0) return
-        let i = 0
-        orderedKeys.value = orderedKeys.value.map((k) =>
-          subSet.has(k) ? newSub[i++] ?? k : k,
-        )
-        persist(options.listKey, orderedKeys.value)
+        if (subSet.size === 0) return;
+        let i = 0;
+        orderedKeys.value = orderedKeys.value.map((k) => (subSet.has(k) ? (newSub[i++] ?? k) : k));
+        persist(options.listKey, orderedKeys.value);
       },
-    }
+    };
 
     // ─── 关键：useDraggable 必须在 applyDrag 同步栈内创建 ─────────────────
     //
@@ -368,12 +362,12 @@ export function useColumnDrag<T extends ColumnDef>(
     //
     // vdp 不 watch target ref（源码 line 1488-1496 只 watch options `i`），
     //   不会和我们的 rebind 双重绑定。
-    const boundTrRef: Ref<HTMLElement | null> = ref(null)
-    const inner = useDraggable(boundTrRef, dragKeys, { ...sortableOpts, immediate: false })
+    const boundTrRef: Ref<HTMLElement | null> = ref(null);
+    const inner = useDraggable(boundTrRef, dragKeys, { ...sortableOpts, immediate: false });
 
     /** 从 tableRoot 出发找表头 <tr>。找不到返回 null。 */
     function resolveCurrentTr(): HTMLElement | null {
-      return tableRoot ? findElTableHeaderRow(tableRoot) : null
+      return tableRoot ? findElTableHeaderRow(tableRoot) : null;
     }
 
     /** 幂等重绑：同一节点且仍连通 → 跳过；否则 destroy 旧 + start 新。
@@ -381,50 +375,51 @@ export function useColumnDrag<T extends ColumnDef>(
      *  isConnected 用于检测「节点被 EP 替换」（引用未变不可能，但 ref 路径下
      *  消费方可能把同一个 ref 指向旧 tr —— 此时 isConnected=false → 仍要重绑）。 */
     function rebind(newTr: HTMLElement | null): void {
-      const sameNode = newTr !== null && newTr === currentTr
+      const sameNode = newTr !== null && newTr === currentTr;
       const stillConnected =
-        currentTr !== null &&
-        (currentTr as { isConnected?: boolean }).isConnected !== false
-      if (sameNode && stillConnected) return
-      currentTr = newTr
+        currentTr !== null && (currentTr as { isConnected?: boolean }).isConnected !== false;
+      if (sameNode && stillConnected) return;
+      currentTr = newTr;
       // 保持 boundTrRef 与 currentTr 同步（一致性保证 + 调试可见）
-      boundTrRef.value = newTr
+      boundTrRef.value = newTr;
       if (!newTr) {
         // 表头消失（机制 B 中初次未渲染 / EP 重建瞬间）—— 销毁 Sortable，等 observer
         // 再次回调时通过 rebind(newTr) 重建。vdp 的 destroy() 内部 `a == null || a.destroy()`
         // 是幂等的，重复调安全。try/catch 包裹：防止 Sortable 内部抛错把 Vue
         // 调度器拉下水（startTime undefined 路径）。
-        try { inner.destroy() } catch { /* swallow */ }
-        isAttached = false
-        return
+        try {
+          inner.destroy();
+        } catch {
+          /* swallow */
+        }
+        isAttached = false;
+        return;
       }
       // start(v) 内部 `a && X.destroy(); a = new p(v, j())` —— 自己处理旧实例 + 新建。
       // 可以在 rAF / observer 回调里安全调（不需要 currentInstance）。
       // try/catch 包裹：transient <tr> 上构造 Sortable 抛错时不让 Vue 调度器
       // 看到 —— observer 下一帧 mutation 触发 scheduleRebind 重建。
       try {
-        inner.start(newTr)
-        isAttached = true
+        inner.start(newTr);
+        isAttached = true;
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('[useColumnDrag] Sortable start failed, will retry on next mutation:', err)
-        isAttached = false
+        console.warn('[useColumnDrag] Sortable start failed, will retry on next mutation:', err);
+        isAttached = false;
       }
     }
 
     /** MutationObserver 回调入口：同一帧内只调度一次真实重绑。 */
     function scheduleRebind(): void {
-      if (scheduled) return
-      scheduled = true
+      if (scheduled) return;
+      scheduled = true;
       scheduleRaf(() => {
-        scheduled = false
+        scheduled = false;
         try {
-          rebind(resolveCurrentTr())
+          rebind(resolveCurrentTr());
         } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn('[useColumnDrag] rAF rebind swallowed error:', err)
+          console.warn('[useColumnDrag] rAF rebind swallowed error:', err);
         }
-      })
+      });
     }
 
     /** 懒挂 observer：挂在 .el-table 根上（不是 header wrapper）—— 覆盖机制 B
@@ -433,19 +428,18 @@ export function useColumnDrag<T extends ColumnDef>(
      *  attributes 会触发重绑风暴甚至死循环。
      *  找不到 root / 浏览器无 MutationObserver 时不挂（退化到一次性绑定，不抛错）。 */
     function ensureObserver(): void {
-      if (observer || !tableRoot) return
+      if (observer || !tableRoot) return;
       const MO = (typeof MutationObserver !== 'undefined' ? MutationObserver : null) as
-        | typeof MutationObserver
-        | null
-      if (!MO) return
-      observer = new MO(scheduleRebind)
-      observer.observe(tableRoot, { childList: true, subtree: true })
+        typeof MutationObserver | null;
+      if (!MO) return;
+      observer = new MO(scheduleRebind);
+      observer.observe(tableRoot, { childList: true, subtree: true });
     }
 
     /** 把当前 target（ref 或裸值）解析成 .el-table 根，写入 tableRoot。 */
     function resolveRoot(): HTMLElement | null {
-      const raw = isRef(target) ? target.value : target
-      return normalizeToElTableRoot(raw)
+      const raw = isRef(target) ? target.value : target;
+      return normalizeToElTableRoot(raw);
     }
 
     /** 拿到根后分支：
@@ -465,24 +459,23 @@ export function useColumnDrag<T extends ColumnDef>(
     function bindFromRoot(): void {
       try {
         if (!tableRoot) {
-          rebind(null)
-          return
+          rebind(null);
+          return;
         }
         if (hasElTableClass(tableRoot)) {
-          rebind(findElTableHeaderRow(tableRoot))
-          ensureObserver()
-          return
+          rebind(findElTableHeaderRow(tableRoot));
+          ensureObserver();
+          return;
         }
         // 退化路径：mock DOM 没有 .el-table 包装 / 旧 HTMLElement 签名直接传 <tr>
-        rebind(tableRoot)
+        rebind(tableRoot);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('[useColumnDrag] bindFromRoot swallowed error:', err)
+        console.warn('[useColumnDrag] bindFromRoot swallowed error:', err);
       }
     }
 
     // 取首次归一化的根（Ref 起始可能是 null / 实例 .$el 未挂）；用于 immediate 路径
-    tableRoot = resolveRoot()
+    tableRoot = resolveRoot();
 
     if (isRef(target)) {
       // Ref / 实例 ref 路径：watch ref 值变化时重新归一化 + 重绑。
@@ -497,54 +490,52 @@ export function useColumnDrag<T extends ColumnDef>(
       // 队列；后续 ref 变化时直接同步重绑（DOM 已稳定，无 post-mount race）。
       nextTick(() => {
         try {
-          tableRoot = resolveRoot()
+          tableRoot = resolveRoot();
           if (!tableRoot) {
-            rebind(null)
-            return
+            rebind(null);
+            return;
           }
-          bindFromRoot()
+          bindFromRoot();
         } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn('[useColumnDrag] initial nextTick bind swallowed error:', err)
+          console.warn('[useColumnDrag] initial nextTick bind swallowed error:', err);
         }
-      })
+      });
       watch(
         target,
         () => {
           try {
-            tableRoot = resolveRoot()
+            tableRoot = resolveRoot();
             if (!tableRoot) {
               // 容器被卸载：disconnect observer + 走 rebind(null) 统一销毁 Sortable
               // + 清 isAttached 标志
-              observer?.disconnect()
-              observer = null
-              rebind(null)
-              return
+              observer?.disconnect();
+              observer = null;
+              rebind(null);
+              return;
             }
-            bindFromRoot()
+            bindFromRoot();
           } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn('[useColumnDrag] watch rebind swallowed error:', err)
+            console.warn('[useColumnDrag] watch rebind swallowed error:', err);
           }
         },
         // 后续 ref 变化直接同步重绑（DOM 已挂好且通常不会有 EP 内部 patch 与
         // 我们的 start 竞争；observer 自愈会覆盖 EP 重建表头的情况）。
         { flush: 'sync' },
-      )
-      return
+      );
+      return;
     }
     // 裸 HTMLElement / 实例：挂一次即生效（observer 自愈后续 EP 重建 / 机制 B）
-    bindFromRoot()
+    bindFromRoot();
   }
 
   function reset(): void {
-    orderedKeys.value = [...defKeys]
-    persist(options.listKey, orderedKeys.value)
+    orderedKeys.value = [...defKeys];
+    persist(options.listKey, orderedKeys.value);
   }
 
   function clear(): void {
     try {
-      localStorage.removeItem(storageKey(options.listKey))
+      localStorage.removeItem(storageKey(options.listKey));
     } catch {
       /* silent */
     }
@@ -556,9 +547,9 @@ export function useColumnDrag<T extends ColumnDef>(
     // 创建的，getCurrentInstance() 有值，hook 成功挂上）。这里我们只负责自己
     // 持有的 observer 的 disconnect，避免 headerWrapper 被卸载后 observer
     // 仍持有它的引用 → 内存泄漏。
-    observer?.disconnect()
-    observer = null
-  })
+    observer?.disconnect();
+    observer = null;
+  });
 
   return {
     orderedKeys,
@@ -568,8 +559,8 @@ export function useColumnDrag<T extends ColumnDef>(
     reset,
     clear,
     isBound: () => isAttached,
-  }
+  };
 }
 
 /** 重新导出 resolveDraggable 便于消费方从同一入口引用。 */
-export { resolveDraggable }
+export { resolveDraggable };
