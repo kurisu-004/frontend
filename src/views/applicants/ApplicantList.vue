@@ -210,10 +210,7 @@ const search = reactive({ customerId: '' as string | '', nameLike: '' });
 const tableRef = ref();
 
 // ============ 筛选状态持久化 ============
-const { restore: restoreApplicantFilter, clear: clearApplicantFilter } = useListStatePersist(
-  'applicant_list',
-  { search },
-);
+const { restore: restoreApplicantFilter } = useListStatePersist('applicant_list', { search });
 
 const rootOptions = computed(() =>
   customers.value.filter((c) => c.parent_id === null).map((c) => ({ id: c.id, name: c.name })),

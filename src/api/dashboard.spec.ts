@@ -1,32 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 class FakeWebSocket {
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSING = 2;
-  static readonly CLOSED = 3;
+  public static readonly CONNECTING = 0;
+  public static readonly OPEN = 1;
+  public static readonly CLOSING = 2;
+  public static readonly CLOSED = 3;
 
-  static instances: FakeWebSocket[] = [];
+  public static instances: FakeWebSocket[] = [];
 
-  readonly url: string;
-  readyState = FakeWebSocket.CONNECTING;
-  readonly send = vi.fn();
-  onopen: (() => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  public readonly url: string;
+  public readyState = FakeWebSocket.CONNECTING;
+  public readonly send = vi.fn();
+  public onopen: (() => void) | null = null;
+  public onmessage: ((event: { data: string }) => void) | null = null;
+  public onerror: (() => void) | null = null;
+  public onclose: (() => void) | null = null;
 
-  constructor(url: string) {
+  public constructor(url: string) {
     this.url = url;
     FakeWebSocket.instances.push(this);
   }
 
-  open(): void {
+  public open(): void {
     this.readyState = FakeWebSocket.OPEN;
     this.onopen?.();
   }
 
-  close(): void {
+  public close(): void {
     this.readyState = FakeWebSocket.CLOSED;
     this.onclose?.();
   }

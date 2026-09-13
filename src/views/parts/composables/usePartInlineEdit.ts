@@ -5,8 +5,8 @@
 //
 // 删死代码 `applicantEditingReady`（已 grep 确认模板未用）。
 
-import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue';
+import { ElMessage } from 'element-plus';
 import type { SummaryMethod } from 'element-plus';
 import { updatePart, type PartUpdatePayload } from '@/api/parts';
 import { updateAssembly } from '@/api/assembly';

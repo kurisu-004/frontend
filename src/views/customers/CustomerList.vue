@@ -202,10 +202,7 @@ const customers = ref<Customer[]>([]);
 const search = reactive({ keyword: '' });
 
 // ============ 筛选状态持久化 ============
-const { restore: restoreCustomerFilter, clear: clearCustomerFilter } = useListStatePersist(
-  'customer_list',
-  { search },
-);
+const { restore: restoreCustomerFilter } = useListStatePersist('customer_list', { search });
 
 // 弹窗尺寸：桌面 480px，手机 92vw + 6vh
 const customerDlg = useDialogSize({ desktopWidth: 480 });

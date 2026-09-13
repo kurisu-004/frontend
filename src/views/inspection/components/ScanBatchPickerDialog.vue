@@ -121,7 +121,7 @@ const emit = defineEmits<{
 }>();
 
 /** 加急行 className：part.is_urgent 为真时打 batch-row-urgent 红底（沿用 InspectionPending 既有 row-urgent 视觉 #fde2e2）。part 未就绪时不加类。 */
-function urgentRowClass({ row }: { row: PartBatchScanOut; rowIndex: number }): string {
+function urgentRowClass(_arg: { row: PartBatchScanOut; rowIndex: number }): string {
   return props.part?.is_urgent ? 'batch-row-urgent' : '';
 }
 

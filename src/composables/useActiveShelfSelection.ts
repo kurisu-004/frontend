@@ -48,7 +48,7 @@ export interface ActiveShelfSelection {
 }
 
 export function useActiveShelfSelection(): ActiveShelfSelection {
-  const { boundShelves, isWildcardShelfAccount, user } = useAuthSession();
+  const { boundShelves, user } = useAuthSession();
 
   const selectedShelfId = ref<string | null>(null);
   const options = ref<ShelfOption[]>([]);

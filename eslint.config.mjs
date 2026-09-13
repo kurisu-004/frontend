@@ -46,6 +46,21 @@ export default [
   ...compat.extends('eslint-config-alloy/vue'),
   ...compat.extends('eslint-config-alloy/typescript'),
 
+  // 2.5 2026-09-13 补 alloy 默认未配的下划线豁免：本仓库习惯用 `_x` 标记故意未使用
+  // （如 catch 忽略、回调占位、未用参数），避免被误报为未使用。
+  {
+    rules: {
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
+    },
+  },
+
   // 3. .vue 文件：vue-eslint-parser 外层 + TS 内层
   {
     files: ['**/*.vue'],

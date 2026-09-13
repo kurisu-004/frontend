@@ -690,13 +690,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   provide('partBatchPdfRefs', { standaloneTableRef, assembliesTableRef });
 
   // ============ 源文件区：勾选 + 归组 + 删除 ============
-  function togglePageSelection(pdfUid: string, pageIndex: number, on: boolean): void {
-    const next = new Set(selectedPages.value);
-    const k = pageUid(pdfUid, pageIndex);
-    if (on) next.add(k);
-    else next.delete(k);
-    selectedPages.value = next;
-  }
 
   /** el-table type=selection 回调：把选中的 SourceTreeRow 扁平化成页 UID 集合。
    *  顶层被选中 → 等价于「该 PDF 全部页」。 */
@@ -717,40 +710,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   function previewSourceRow(row: SourceTreeRow): void {
     const page = row.pageIndex === null ? 1 : row.pageIndex + 1;
     previewAt(row.pdfSourceUid, `${row.filename} 预览`, page);
-  }
-
-  function togglePdfSelection(pdfUid: string, on: boolean): void {
-    const src = allPdfs.value.find((s) => s.uid === pdfUid);
-    if (!src) return;
-    const next = new Set(selectedPages.value);
-    for (let p = 0; p < src.totalPages; p++) {
-      const k = pageUid(pdfUid, p);
-      if (on) next.add(k);
-      else next.delete(k);
-    }
-    selectedPages.value = next;
-  }
-
-  function isPdfFullySelected(pdfUid: string): boolean {
-    const src = allPdfs.value.find((s) => s.uid === pdfUid);
-    if (!src || src.totalPages === 0) return false;
-    for (let p = 0; p < src.totalPages; p++) {
-      if (!selectedPages.value.has(pageUid(pdfUid, p))) return false;
-    }
-    return true;
-  }
-
-  function isPdfPartiallySelected(pdfUid: string): boolean {
-    const src = allPdfs.value.find((s) => s.uid === pdfUid);
-    if (!src) return false;
-    let any = false;
-    for (let p = 0; p < src.totalPages; p++) {
-      if (selectedPages.value.has(pageUid(pdfUid, p))) {
-        any = true;
-        break;
-      }
-    }
-    return any && !isPdfFullySelected(pdfUid);
   }
 
   // el-table 类型来自 element-plus 类型导出，运行时为函数组件；用宽松类型包住。
@@ -991,9 +950,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   /** 预览独立零件 / 装配件图纸。 */
   function previewStandalonePart(row: StandalonePartRow): void {
     previewAt(row.pdfSourceUid, `${row.drawing_no || row.name} 预览`, 1);
-  }
-  function previewPdfSource(src: PdfSource): void {
-    previewAt(src.uid, `${src.filename} 预览`, 1);
   }
   function previewPdfSourceByUid(uid: string): void {
     previewAt(uid, `${pdfSourceLabel(uid)} 预览`, 1);

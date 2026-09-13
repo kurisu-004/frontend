@@ -105,7 +105,6 @@ function scanSource(file: string, source: string): Hit[] {
     let depthP = 1;
     let depthB = 0;
     let depthC = 0;
-    let topCommas = 0;
     let inStr: string | null = null;
     let escaped = false;
     let lineCount = 0;
@@ -233,7 +232,6 @@ function scanSource(file: string, source: string): Hit[] {
         continue;
       }
       if (ch === ',' && depthP === 1 && depthB === 0 && depthC === 0) {
-        topCommas++;
         awaitingToken = true;
         i++;
         continue;

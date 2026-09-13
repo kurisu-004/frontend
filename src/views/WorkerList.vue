@@ -183,10 +183,7 @@ const search = reactive<{ name_like: string; is_active: boolean | undefined }>({
 });
 
 // ============ 筛选状态持久化 ============
-const { restore: restoreWorkerFilter, clear: clearWorkerFilter } = useListStatePersist(
-  'worker_list',
-  { search },
-);
+const { restore: restoreWorkerFilter } = useListStatePersist('worker_list', { search });
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 「#」和「操作」列不放进 defs → 始终可见。

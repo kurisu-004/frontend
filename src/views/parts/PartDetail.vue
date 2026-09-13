@@ -442,7 +442,6 @@ const {
   canManageBatches,
   fetchPart,
   fetchEvents,
-  fetchAssembly,
   fetchBatches,
   onStartEdit,
   onCancelEdit,

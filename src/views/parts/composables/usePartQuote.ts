@@ -6,8 +6,8 @@
 // 业务数据由 composable 持有；新建报价对话框的 UI 状态（可见性、loading）
 // 由 PartQuoteCard 局部维护，提交时调本 composable 的 onCreateQuote。
 
-import { computed, reactive, ref, watch, type Ref } from 'vue';
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
+import { computed, ref, watch, type Ref } from 'vue';
+import { ElMessage, type FormRules } from 'element-plus';
 import { createOutsourceQuote, listOutsourceCompanies, listOutsourceQuotes } from '@/api/outsource';
 import type { OutsourceQuote } from '@/types/outsource';
 import { listProcesses } from '@/api/process';
@@ -22,7 +22,7 @@ export interface QuoteCreateForm {
   note: string;
 }
 
-export function usePartQuote(partId: Ref<string>, partName: Ref<string | null | undefined>) {
+export function usePartQuote(partId: Ref<string>, _partName: Ref<string | null | undefined>) {
   const { isManager, isClerk } = usePermissions();
 
   const quotes = ref<OutsourceQuote[]>([]);

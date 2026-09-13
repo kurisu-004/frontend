@@ -183,7 +183,7 @@ async function loadCustomers() {
       parent_id: c.parent_id ?? null,
       path: c.parent_name ? `${c.parent_name} / ${c.name}` : c.name,
     }));
-  } catch (e) {
+  } catch {
     // ignore
   }
 }

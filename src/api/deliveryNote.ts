@@ -26,7 +26,6 @@
 
 import { api, apiV2 } from '@/api/http';
 import type {
-  AttachBatchConflict,
   AttachBatchItem,
   AttachBatchesOut,
   DeliveryNoteCandidatePart,
@@ -37,7 +36,6 @@ import type {
   DeliveryNoteSortDir,
   DeliveryNoteSortKey,
   DeliveryNoteStatus,
-  ScanAttachableBatch,
   ScanDeliveryOut,
   SubmitDeliveryOut,
 } from '@/types/deliveryNote';

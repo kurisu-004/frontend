@@ -96,12 +96,8 @@ const drawingPreviewLoading = ref(false);
 // 缓存：同一 part_id 重复点不重复拉取
 const drawingCache = new Map<string, PartFileItem | null>();
 
-const IMAGE_FILE_TYPES = new Set(['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'TIF', 'TIFF', 'WEBP']);
 function isPdfType(t: string): boolean {
   return t.toUpperCase() === 'PDF';
-}
-function isImageType(t: string): boolean {
-  return IMAGE_FILE_TYPES.has(t.toUpperCase());
 }
 
 async function ensureDrawing(partId: string): Promise<PartFileItem | null> {

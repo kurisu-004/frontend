@@ -59,7 +59,7 @@ watch(
   { deep: true },
 );
 const containerRef = ref<HTMLElement | null>(null);
-const { start } = useDraggable(containerRef, writableBatches, {
+useDraggable(containerRef, writableBatches, {
   group: 'work-orders',
   animation: 150,
   ghostClass: 'sortable-ghost',

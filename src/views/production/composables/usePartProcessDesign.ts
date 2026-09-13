@@ -96,20 +96,6 @@ function rewriteSortOrder(steps: ProcessStep[]): ProcessStep[] {
   return steps.map((s, i) => ({ ...s, sort_order: i }));
 }
 
-function getOrCreateFlow(partId: string): PartProcessFlow {
-  let f = flows.value[partId];
-  if (!f) {
-    f = {
-      part_id: partId,
-      version: 0,
-      steps: [],
-      updated_at: new Date().toISOString(),
-    };
-    flows.value = { ...flows.value, [partId]: f };
-  }
-  return f;
-}
-
 // ============ 暴露给组件的 composable ============
 export function usePartProcessDesign() {
   ensureInitialized();

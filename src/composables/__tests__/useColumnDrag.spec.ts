@@ -95,22 +95,22 @@ const fakeStorage = {
 const mockObservers: MockMutationObserver[] = [];
 
 class MockMutationObserver {
-  callback: MutationCallback;
-  target: Node | null = null;
-  options: MutationObserverInit | undefined;
-  disconnected = false;
-  constructor(cb: MutationCallback) {
+  public callback: MutationCallback;
+  public target: Node | null = null;
+  public options: MutationObserverInit | undefined;
+  public disconnected = false;
+  public constructor(cb: MutationCallback) {
     this.callback = cb;
     mockObservers.push(this);
   }
-  observe(target: Node, options?: MutationObserverInit): void {
+  public observe(target: Node, options?: MutationObserverInit): void {
     this.target = target;
     this.options = options;
   }
-  disconnect(): void {
+  public disconnect(): void {
     this.disconnected = true;
   }
-  takeRecords(): MutationRecord[] {
+  public takeRecords(): MutationRecord[] {
     return [];
   }
 }
@@ -725,7 +725,7 @@ describe('useColumnDrag 表头重建后自愈重绑（MutationObserver）', () =
 
   it('HTMLElement 路径：observer 触发后，新 tr 与旧 tr 是同一节点且仍连通 → 不重绑', () => {
     const tr = buildHeaderTr(['a', 'b']);
-    const { root } = buildMockElTable({ initialTrs: [tr] });
+    const { root: _root } = buildMockElTable({ initialTrs: [tr] });
     const d = useColumnDrag(
       [
         { key: 'a', label: 'A' },
@@ -806,7 +806,7 @@ describe('useColumnDrag 表头重建后自愈重绑（MutationObserver）', () =
     // 这是任务里点名要覆盖的核心场景：消费方 Ref 路径 + EP 内部重建 DOM
     // （消费方不知道、没动 ref）→ observer 必须自愈。
     const oldTr = buildHeaderTr(['a', 'b']);
-    const { root, replaceFirstHeaderTr } = buildMockElTable({ initialTrs: [oldTr] });
+    const { root: _root, replaceFirstHeaderTr } = buildMockElTable({ initialTrs: [oldTr] });
     const trRef = ref<HTMLElement | null>(null);
     const d = useColumnDrag(
       [
@@ -1053,7 +1053,7 @@ describe('useColumnDrag 表头重建后自愈重绑（MutationObserver）', () =
     delete (globalThis as { MutationObserver?: unknown }).MutationObserver;
     try {
       const tr = buildHeaderTr(['a']);
-      const { root } = buildMockElTable({ initialTrs: [tr] });
+      const { root: _root } = buildMockElTable({ initialTrs: [tr] });
       const d = useColumnDrag([{ key: 'a', label: 'A' }], { listKey: 'no_mo' });
       // 不应抛错
       expect(() => d.applyDrag(tr as unknown as HTMLElement)).not.toThrow();
@@ -1112,7 +1112,7 @@ describe('useColumnDrag 表头重建后自愈重绑（MutationObserver）', () =
     // 场景：consumer 传裸元素（不是 ref）→ bindFromRoot 在同步栈内直接调 rebind。
     // 重绑（observer 触发的 rAF）里**不应该**再 useDraggable，只能 start/destroy。
     const oldTr = buildHeaderTr(['a', 'b']);
-    const { root, replaceFirstHeaderTr } = buildMockElTable({ initialTrs: [oldTr] });
+    const { root: _root, replaceFirstHeaderTr } = buildMockElTable({ initialTrs: [oldTr] });
     const defs: ColumnDef[] = [
       { key: 'a', label: 'A' },
       { key: 'b', label: 'B' },

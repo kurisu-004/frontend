@@ -52,7 +52,7 @@ describe('useDeliveryNoteDetailCache', () => {
   it('get：并发同 noteId，fetcher 只调一次', async () => {
     let resolveFn!: (v: DeliveryNoteDetailOut) => void;
     const fetcher = vi.fn(
-      (id: string) =>
+      (_id: string) =>
         new Promise<DeliveryNoteDetailOut>((res) => {
           resolveFn = res;
         }),

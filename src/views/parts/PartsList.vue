@@ -1135,7 +1135,6 @@ const {
   onReset,
   onRowTypeChange,
   onPageSizeChange,
-  restoreState,
   tableKey: _tableKey, // 由 PartsTable 直接消费 query.tableKey
   registerBeforeSearch: _rbs, // 已在上方调用
   registerAfterFetch: _raf, // 已在上方调用

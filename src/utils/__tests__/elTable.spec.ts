@@ -85,15 +85,6 @@ function collectAll(root: MockEl): MockEl[] {
   return [root, ...collectDescendants(root)];
 }
 
-function matchChain(node: MockEl, segments: Segment[], idx: number): boolean {
-  if (idx >= segments.length) return true;
-  if (!matchSegment(node, segments[idx]!.part)) return false;
-  if (idx === segments.length - 1) return true;
-  const next = segments[idx + 1]!;
-  const candidates = next.combinator === '>' ? node.children : collectDescendants(node);
-  return candidates.some((c) => matchChain(c, segments, idx + 1));
-}
-
 /** 沿 segment 链向前推进：每一步筛出「与当前候选集按 combinator 关联、且匹配下一段」的子集。
  *  最终 candidates 就是 selector 命中的节点集合（匹配的是最后一段）。 */
 function stepForward(root: MockEl, segs: Segment[]): MockEl[] | null {

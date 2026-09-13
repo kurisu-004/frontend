@@ -144,7 +144,7 @@ import type { PartListItem } from '@/types/parts';
 import { getAssembly } from '@/api/assembly';
 import { usePartProcessDesign } from '../composables/usePartProcessDesign';
 
-const props = defineProps<{
+defineProps<{
   selectedPartId: string | null;
 }>();
 

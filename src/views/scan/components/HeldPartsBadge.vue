@@ -117,7 +117,7 @@ const props = withDefaults(
   },
 );
 
-const { heldVersion, onHeldChanged } = useScanBus();
+const { onHeldChanged } = useScanBus();
 
 const drawerVisible = ref(false);
 const parts = ref<PartItem[]>([]);

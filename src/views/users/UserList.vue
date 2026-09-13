@@ -198,7 +198,6 @@ import {
 } from '@/composables/useColumnVisibility';
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import { useDialogSize } from '@/composables/useDialogSize';
-import { useListStatePersist } from '@/composables/useListFilterPersist';
 
 const userDlg = useDialogSize({ desktopWidth: 420 });
 const rolesDlg = useDialogSize({ desktopWidth: 560 });

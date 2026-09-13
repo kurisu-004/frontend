@@ -205,41 +205,10 @@ const { query, filters, edit, batch, dispatch, canEdit, columnVisibility, column
 
 const { items, tableKey, defaultSort, emptyText, onSortChange } = query;
 
-const {
-  serialNoFilter,
-  drawingNoFilter,
-  nameFilter,
-  orderNoFilter,
-  requestDateFilter,
-  plannedDateFilter,
-  systemDateFilter,
-  customerFilter,
-  customerTree,
-  locationFilter,
-  locationTree,
-  statusNativeOptions,
-  statusFilteredValue,
-  statusSelectedCount,
-  nextProcessOptions,
-  nextProcessFilteredValue,
-  nextProcessSelectedCount,
-  onNativeFilterChange,
-  serialNoFlash,
-} = filters;
+const { onNativeFilterChange } = filters;
 
-const {
-  editingId,
-  savingEdit,
-  editBuffer,
-  startEdit,
-  saveEdit,
-  cancelEdit,
-  onRowDblClick,
-  displayTotalPrice,
-  totalPriceSummary,
-  applicantSuggest,
-  applicantLoading,
-} = edit;
+const { editingId, savingEdit, startEdit, saveEdit, cancelEdit, onRowDblClick, totalPriceSummary } =
+  edit;
 
 const { batchMode, isBatchSelectable, onSelectionChange, onBatchRowClick } = batch;
 

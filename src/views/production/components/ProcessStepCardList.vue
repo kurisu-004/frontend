@@ -156,7 +156,7 @@ const props = defineProps<{
   partId: string | null;
 }>();
 
-const { parts, processes, getFlowByPartId, upsertSteps, deleteStep, newStep, summaries } =
+const { parts, processes, getFlowByPartId, upsertSteps, newStep, summaries } =
   usePartProcessDesign();
 
 const steps = ref<ProcessStep[]>([]);
@@ -171,8 +171,6 @@ const currentPart = computed(() =>
 // 2026-09-12 第五轮：装配配件选中时不显示工序编辑 UI，仅展示「请选择子零件」提示。
 // 装配配件本身不能指定工序，只能为其子零件制定工序。
 const isAssembly = computed(() => currentPart.value?.row_type === 'ASSEMBLY');
-// 当前 partId 对应流程的派生
-const currentFlow = computed(() => (props.partId ? getFlowByPartId(props.partId) : null));
 const totalMinutes = computed(() =>
   props.partId && !isAssembly.value ? summaries(props.partId).total_minutes : 0,
 );

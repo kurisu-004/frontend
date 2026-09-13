@@ -588,7 +588,6 @@ import {
 import type { UploadFile } from 'element-plus';
 import {
   Document,
-  Link,
   MagicStick,
   Plus,
   Rank,

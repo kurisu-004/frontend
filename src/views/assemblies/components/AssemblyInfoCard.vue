@@ -99,7 +99,7 @@ interface Props {
   ) => 'info' | 'warning' | 'success' | 'danger' | 'primary';
 }
 
-const props = withDefaults(defineProps<Props>(), {
+withDefaults(defineProps<Props>(), {
   descCol: 3,
 });
 

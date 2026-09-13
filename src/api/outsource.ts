@@ -3,7 +3,6 @@
 import { api, cleanParams } from '@/api/http';
 import type {
   ApprovedForSendListResult,
-  ApprovedQuoteForSendItem,
   OutsourceCompany,
   OutsourceCompanyCreatePayload,
   OutsourceCompanyListResult,
@@ -23,7 +22,7 @@ import type {
   SetOutsourceCompanyProcessesPayload,
 } from '@/types/outsource';
 import type { SortDir } from '@/types/parts';
-import type { PartItem, PartListItem } from '@/types/parts';
+import type { PartListItem } from '@/types/parts';
 
 export async function listOutsourceCompanies(
   params: {

@@ -64,7 +64,7 @@
         </el-table-column>
       </template>
       <el-table-column label="操作" min-width="120" align="center" fixed="right">
-        <template #default="{ row }">
+        <template #default>
           <el-button link type="primary" size="small" @click="onViewQuoteDetail">详情</el-button>
         </template>
       </el-table-column>

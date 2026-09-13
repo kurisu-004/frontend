@@ -378,7 +378,7 @@ export class ApiError extends Error {
   public readonly code: number;
   public readonly response: unknown;
 
-  constructor(code: number, message: string, response?: unknown) {
+  public constructor(code: number, message: string, response?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
@@ -386,7 +386,7 @@ export class ApiError extends Error {
   }
 
   /** 是否为"未登录 / token 失效"——由调用方决定如何处理（路由跳转 / 重新登录）。 */
-  get isAuthError(): boolean {
+  public get isAuthError(): boolean {
     // 40105 SESSION_REVOKED：JWT 签名有效但 Redis session 已被吊销。语义上等同
     // "未登录"，调用方应清 session 跳登录；拦截器内已经 dispatch auth:logout，
     // 这里只是让业务侧可以分支识别这一类。

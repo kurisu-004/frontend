@@ -286,17 +286,6 @@ function onCancel() {
   emit('update:modelValue', false);
 }
 
-function statusTagType(s: string): 'warning' | 'success' | 'info' {
-  if (s === 'READY_TO_SHIP') return 'success';
-  if (s === 'INSPECTION') return 'warning';
-  return 'info';
-}
-function statusLabel(s: string): string {
-  if (s === 'READY_TO_SHIP') return '已通过品检';
-  if (s === 'INSPECTION') return '待检';
-  return s;
-}
-
 // ============ 2026-08-04：扫码勾选 ============
 
 /** 行闪烁 0.8s（row-class-name 用） */

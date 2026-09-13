@@ -369,7 +369,6 @@ async function onReleaseConfirm(): Promise<void> {
   if (!releaseTarget.value || !releaseShelfId.value || !releaseProcessId.value) return;
   const row = releaseTarget.value;
   const shelfCode = productionShelves.value.find((s) => s.id === releaseShelfId.value)?.code ?? '';
-  const processCode = processes.value.find((p) => p.id === releaseProcessId.value)?.code ?? '';
   row._releasing = true;
   releaseSubmitting.value = true;
   try {
