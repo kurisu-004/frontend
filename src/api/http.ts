@@ -21,10 +21,9 @@
 // refreshPromise 等雪崩状态保持模块单例，v1 / v2 并发撞 40102 只触发一次
 // /auth/refresh。单端点的 v2 调用不该用 `api.post('/v2/...')`，会被 baseURL
 // 拼成 `/api/v1/v2/...`。
-// 【2026-08-26 新增】refreshClientV2：与 refreshClient 一一对应，baseURL `/api/v2`，
-// 给 /api/v2/auth/refresh 用。auth 域切 v2 后两者并存：业务走 apiV2，refresh 走
-// refreshClientV2，refresh 客户端与业务 client 永远对应同版本 baseURL，避免
-// 串改造成"看似生效实则打 v1"的隐患。
+// 【2026-08-26 新增】refreshClientV2：消费者 = src/api/auth.ts::refreshTokens()，
+// 给 /api/v2/auth/refresh 用。refresh 客户端与业务 client 永远对应同版本 baseURL，
+// 避免串改造成"看似生效实则打 v1"的隐患。
 //
 // 【2026-08-29 修正】query 序列化拆 v1 / v2 两份：v1（Python FastAPI）期望
 // `?k=a&k=b` 重复 key；v2（Rust axum）`statuses` 期望 CSV 单值 `?k=a,b`。
@@ -139,9 +138,6 @@ export const refreshClient = axios.create({
  * 2026-08-26 新增：与 refreshClient 一一对应；auth 域切 v2 后 /auth/refresh
  * 走它。解耦是为避免 baseURL 串改造成"看似生效实则打 v1"的隐患——refresh 客户端
  * 永远与主业务客户端同版本。
- *
- * 2026-08-26 auth 域回滚 v1 后本实例暂无消费者（refreshTokens 改走 refreshClient）；
- * 保留供未来 v2 refresh 端点回归（业务域上 v2 时配套用），不要随手删。
  */
 export const refreshClientV2 = axios.create({
   baseURL: '/api/v2',
