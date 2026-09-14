@@ -4,10 +4,9 @@
   2026-09-11 新增。
   2026-09-12 改造：CSS flex → <el-splitter> 三栏可拖拽，宽度持久化到 localStorage
                    （src/composables/useResizablePane.ts，key='process_design_layout'）。
-
-  阶段一（mock）：composable 内部直接读 fixtures，零件/工序都从 fixture 加载；
-  localStorage 持久化流程编辑。阶段二切真接口后，composable 内 listParts / listProcesses
-  替换为 apiV2 调用，新增 apiV2.post(...) 提交流程表，CLAUDE.md #2 合规。
+  2026-09-14 改造：切真接口后，删除「默认选中种子零件」逻辑（fixture-only）；
+                   改为「选中第一个零件」或保持空态让用户手动选。composable 内
+                   loadParts / loadProcesses / loadFlowForPart 均走 apiV2。
 -->
 <template>
   <div class="process-design">
@@ -60,10 +59,9 @@ function onSelectPart(partId: string): void {
 
 onMounted(async () => {
   await Promise.all([loadParts(), loadProcesses()]);
-  // 默认选中第一个有流程的零件，方便用户首次进入就看到示例
-  const seeded = ['5000000000001', '5000000000003'];
-  const first = parts.value.find((p) => seeded.includes(p.id));
-  if (first) selectedPartId.value = first.id;
+  // 2026-09-14：不再有 fixture 种子零件；保持未选中态让用户手动选（与生产对齐）。
+  // 旧 fixture 模式下默认选中 `5000000000001`/`5000000000003` 是为了 demo；切真接口后
+  // 这些 ID 在生产数据库不一定存在，留空让用户从左栏列表选。
 });
 </script>
 

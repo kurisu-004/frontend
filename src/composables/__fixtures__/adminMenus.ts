@@ -1,6 +1,9 @@
 // src/composables/__fixtures__/adminMenus.ts
-// 2026-09-12 同步自生产 DB：admin 角色的完整菜单树（30 个 menuCode 全集：10 顶级 [3 leaf + 7 分组 path:null] + 20 子项 leaf）。
-// 2026-09-11 新增 production_group（生产管理）顶级分组，含 process_design_list（工序制定）+ worker_queue（从 auth_group 迁出）。
+// 2026-09-14 同步自生产 DB：admin 角色的完整菜单树（30 个 menuCode 全集：11 顶级 [3 leaf + 8 分组 path:null] + 21 子项 leaf）。
+// 2026-09-14 新增 template_management（模板管理）顶级分组（sort_order=27，production_group=26 之后），
+// 含 print_templates_designer（模板编辑，/print-templates/designer）。
+// 2026-09-14 menuCode 改名：process_design_list → part_process_chain（对齐后端 t_menu migration 017/018/021）。
+// 2026-09-11 新增 production_group（生产管理）顶级分组，含 part_process_chain（工序制定）+ worker_queue（从 auth_group 迁出）。
 // 2026-09-12 合并 fc99d3b tabbed 页：production_group 新增 process_work_type（工序工种，/production/process-work-type）。
 // settings_root 暂时保留（fc99d3b 后端 migration 已软删，但前端 fixture 仍挂 3 个旧子菜单码以兜底路由守卫，
 // 待后端菜单树彻底下架 settings_root 后再移除）。
@@ -17,7 +20,7 @@
 // 改动后必须验证：
 //   1. 每个 MenuNode.code 是 router/index.ts 里某条路由的 meta.menuCode
 //   2. 每个 MenuNode.icon 在 MenuTreeItem.vue 的 ICON_MAP 中存在
-//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 22
+//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 23
 
 import type { MenuNode } from '@/types/menu';
 
@@ -175,7 +178,7 @@ export const ADMIN_MENUS: MenuNode[] = [
     children: [],
   },
   // 6. production_group — 生产管理（分组，3 children）
-  // 2026-09-11 首次落地：worker_queue 从 auth_group 迁出，与 process_design_list 同组。
+  // 2026-09-11 首次落地：worker_queue 从 auth_group 迁出，与 part_process_chain 同组。
   // 2026-09-12 合并 fc99d3b tabbed 页：process_work_type 也挂这里（router /production/process-work-type）。
   // 介于 pending_programming(25) 和 auth_group(30) 之间；后续「扫工件」「条码打印」等生产侧功能都挂这里。
   {
@@ -200,10 +203,12 @@ export const ADMIN_MENUS: MenuNode[] = [
         children: [],
       },
       {
+        // 2026-09-14 menuCode 改名：process_design_list → part_process_chain
+        // 对齐后端 t_menu（migration 017/018/021）code；前端 router 也同步改名。
         id: id(101),
         version: 0,
         parent_id: id(10),
-        code: 'process_design_list',
+        code: 'part_process_chain',
         title: '工序制定',
         path: '/production/process-design',
         icon: 'SetUp',
@@ -225,6 +230,34 @@ export const ADMIN_MENUS: MenuNode[] = [
   },
   // 7. auth_group — 权限管理（分组，2 children）
   // 2026-09-11：worker_queue 迁到 production_group，本分组现仅含 workers_list + users_list。
+  {
+    // 2026-09-14 新增：template_management 顶级分组（sort_order=27，挂在
+    // production_group=26 之后、auth_group=30 之前），含 print_templates_designer
+    // 二级菜单（router /print-templates/designer）。后端 t_menu 由 backend-rust
+    // implementor 在另一 worktree 的 migration 同步写。PrintTemplateDesigner 不接
+    // 后端 API（用户决策），仍跑 localStorage；菜单树只为权限 + 侧栏展示。
+    id: id(11),
+    version: 0,
+    parent_id: null,
+    code: 'template_management',
+    title: '模板管理',
+    path: null,
+    icon: 'Document',
+    sort_order: 27,
+    children: [
+      {
+        id: id(111),
+        version: 0,
+        parent_id: id(11),
+        code: 'print_templates_designer',
+        title: '模板编辑',
+        path: '/print-templates/designer',
+        icon: 'Printer',
+        sort_order: 10,
+        children: [],
+      },
+    ],
+  },
   {
     id: id(6),
     version: 0,

@@ -42,8 +42,10 @@ import {
   // UserFilled / Postcard / Search / PriceTag / TakeawayBox）在更早 commit 已不在文件中，
   // 本次仅实际移除 Avatar。
   List,
-  // 2026-09-11：工序制定 process_design_list 用 SetUp
+  // 2026-09-11：工序制定（part_process_chain）用 SetUp
   SetUp,
+  // 2026-09-14：打印模板设计器（print_templates_designer）用 Printer
+  Printer,
 } from '@element-plus/icons-vue';
 import type { MenuNode } from '@/types/menu';
 
@@ -82,8 +84,10 @@ const ICON_MAP: Record<string, unknown> = {
   Operation,
   // 2026-08-26：新增 List（users_list 账号管理），与生产 t_menu.icon 对齐
   List,
-  // 2026-09-11：工序制定 process_design_list
+  // 2026-09-11：工序制定（part_process_chain）
   SetUp,
+  // 2026-09-14：打印模板设计器（print_templates_designer）
+  Printer,
 };
 
 // 按名字查图标；查不到返回 undefined → 模板里 v-if 隐藏图标（不报错）。

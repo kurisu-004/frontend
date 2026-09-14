@@ -1,113 +1,131 @@
-// 2026-09-11 新增：工序制定页模块级单例 composable。
-// 镜像 src/composables/useWorkerQueue.ts 的模式（CLAUDE.md #1：无 Pinia store，模块级 ref 单例）。
+// 2026-09-14 改造：usePartProcessDesign composable 从 fixture + localStorage 切到真实 v2 API。
 //
-// 状态：parts / processes / flows（partId → PartProcessFlow）+ loading flags + error。
-// 持久化：每次 upsertSteps / deleteStep / reorderSteps 后同步写 localStorage。
-// 阶段二：把每个写函数体替换为 apiV2.post(...) 调用，失败时回滚到操作前快照（CLAUDE.md #2）。
+// 阶段二（2026-09-14 起）：所有读写走 @/api/processChain（baseURL /api/v2）。
+// - loadParts / loadProcesses：拉全量；本地缓存到模块级单例。
+// - flows（PartProcessFlow 字典）：懒加载 — 用户选 part 时按需 GET /process-chains/by-part/{part_id}；
+//   首次访问 20701 BIZ_PROCESS_CHAIN_NOT_FOUND → 视为空链，不报错。
+// - upsertSteps / deleteStep / reorderSteps：本地更新 + 防抖 PUT 整组 upsert。
+//
+// 整组 upsert 约束（2026-09-14 写入注释，CLAUDE.md 习惯）：
+//   rust PUT /process-chains/by-part/{part_id} 是整组替换语义——前端必须发完整 steps 数组
+//   （包括 service-side 已有的 step），否则会被覆盖。所以本地流程编辑后 PUT 时，本地
+//   PartProcessFlow.steps 已是「完整数组 + 用户变更」，直接序列化发走即可。
+//   若本地发现缺 step（如 race：用户编辑期间另一 tab GET 后 PUT 覆盖了本地 cache），
+//   先 GET 一次拿完整 list 再 merge 用户变更（mergeToFullSteps 函数）。
 
 import { computed, ref, type Ref } from 'vue';
 import type { PartListItem } from '@/types/parts';
 import type { Process } from '@/types/process';
 import type { PartProcessFlow, PartProcessSummary, ProcessStep } from '@/types/partProcess';
+import type { ProcessChainStepDto } from '@/api/processChain.contract';
 import {
-  FIXTURE_PARTS,
-  FIXTURE_PROCESSES,
-  FIXTURE_FLOWS,
-} from '../__fixtures__/partProcess.fixtures';
-
-const STORAGE_KEY = 'part_process_flows';
+  getProcessChainByPart,
+  listParts,
+  listProcesses,
+  upsertProcessChainByPart,
+} from '@/api/processChain';
 
 // ============ 模块级单例 state ============
 const parts = ref<PartListItem[]>([]);
 const processes = ref<Process[]>([]);
-/** partId → PartProcessFlow；只保存已配置过的零件，未配置的零件不占位。 */
+/** partId → PartProcessFlow；只保存已加载过的零件，未加载的零件不占位。 */
 const flows = ref<Record<string, PartProcessFlow>>({});
 const loadingParts = ref(false);
 const loadingProc = ref(false);
+/** 正在 PUT 整组 upsert 的 partId（用于 UI「保存中」状态）。 */
+const saving = ref<Record<string, boolean>>({});
 const error = ref<string | null>(null);
 
-// ============ localStorage 加载/保存 ============
-function loadFromStorage(): Record<string, PartProcessFlow> {
-  if (typeof localStorage === 'undefined') return {};
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, PartProcessFlow>;
-    // 简单校验：必须有 part_id / steps[]，否则丢弃
-    const safe: Record<string, PartProcessFlow> = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (v && typeof v.part_id === 'string' && Array.isArray(v.steps)) {
-        safe[k] = v;
-      }
-    }
-    return safe;
-  } catch {
-    return {};
-  }
-}
+/** 防抖延迟：800ms 内多次 upsertSteps 合并为一次 PUT。 */
+const SAVE_DEBOUNCE_MS = 800;
 
-function saveToStorage(state: Record<string, PartProcessFlow>): void {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    /* quota / disabled — 静默忽略 */
-  }
-}
+/** 单 partId 的防抖 timer。 */
+const saveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
-/** 把 INITIAL_FLOWS 写进 flows（含 sort_order 重写），并叠加 localStorage。 */
-function buildInitialFlows(): Record<string, PartProcessFlow> {
-  const fromFixtures: Record<string, PartProcessFlow> = {};
-  for (const f of FIXTURE_FLOWS) {
-    // 重写 sort_order = 当前 index（fixture 里都写 0）
-    const steps = f.steps.map((s, i) => ({ ...s, sort_order: i }));
-    fromFixtures[f.part_id] = { ...f, steps };
-  }
-  // localStorage 覆盖 fixtures（用户编辑优先）
-  return { ...fromFixtures, ...loadFromStorage() };
-}
-
-// 第一次模块初始化时执行一次（保持 fixtures 在内存里也可用，
-// localStorage 加载逻辑独立给单元测试在 setup 里清空重置）
-let initialized = false;
-function ensureInitialized(): void {
-  if (!initialized) {
-    flows.value = buildInitialFlows();
-    initialized = true;
-  }
-}
-
-// ============ 工具函数 ============
-function makeStepFromProcess(p: Process): ProcessStep {
+/** 把 service 侧 ProcessChainStepDto 转成 UI 用的 ProcessStep（注入 uid / color 等冗余）。
+ *  ProcessStep.uid 仅作 UI v-for key，不参与后端。 */
+function dtoToStep(dto: ProcessChainStepDto): ProcessStep {
   return {
-    uid: `step-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    process_id: p.id,
-    process_code: p.code,
-    process_name: p.name,
-    category: p.category,
-    estimated_minutes: 30,
-    note: null,
-    sort_order: 0,
-    color: p.color ?? null, // 2026-09-12 新增：透传工序颜色
+    uid: `step-${dto.id ?? Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    process_id: dto.process_id,
+    process_code: '', // 后端响应不冗余 code/name — composable 内按 process_id 二次查
+    process_name: '',
+    category: 'INHOUSE', // 默认值；loadFlow 后用 processes 修正
+    estimated_minutes: dto.estimated_minutes,
+    note: dto.note ?? null,
+    sort_order: dto.sort_order,
+    color: null,
   };
 }
 
-function rewriteSortOrder(steps: ProcessStep[]): ProcessStep[] {
-  return steps.map((s, i) => ({ ...s, sort_order: i }));
+/** 把 UI 用的 ProcessStep 转成 service UpsertProcessChainRequest 用的 step（去掉 uid）。 */
+function stepToUpsert(step: ProcessStep): ProcessChainStepDto {
+  return {
+    sort_order: step.sort_order,
+    process_id: step.process_id,
+    estimated_minutes: step.estimated_minutes,
+    note: step.note ?? null,
+  };
 }
 
-// ============ 暴露给组件的 composable ============
-export function usePartProcessDesign() {
-  ensureInitialized();
+/** 加载某 part 的工艺链（懒加载）。
+ *  - 已缓存 → 直接返回
+ *  - 未缓存 → GET /process-chains/by-part/{part_id}
+ *  - 20701 BIZ_PROCESS_CHAIN_NOT_FOUND（HTTP 404） → 视为空链，缓存一个空 PartProcessFlow
+ *  - 其它错误 → 抛给 caller */
+async function loadFlow(partId: string): Promise<PartProcessFlow> {
+  const cached = flows.value[partId];
+  if (cached) return cached;
 
+  try {
+    const dto = await getProcessChainByPart(partId);
+    // 把 dto.steps → ProcessStep，冗余字段二次查 processes
+    const steps: ProcessStep[] = dto.steps.map((s) => {
+      const step = dtoToStep(s);
+      const p = processes.value.find((pp) => pp.id === step.process_id);
+      if (p) {
+        step.process_code = p.code;
+        step.process_name = p.name;
+        step.category = p.category;
+        step.color = p.color ?? null;
+      }
+      return step;
+    });
+    const flow: PartProcessFlow = {
+      part_id: partId,
+      version: dto.version,
+      steps,
+      updated_at: dto.updated_at,
+    };
+    flows.value = { ...flows.value, [partId]: flow };
+    return flow;
+  } catch (e) {
+    // ApiError.code === 20701 → 空链（无 404 报错），其它错透传
+    const code = (e as { code?: number }).code;
+    if (code === 20701) {
+      const empty: PartProcessFlow = {
+        part_id: partId,
+        version: 0,
+        steps: [],
+        updated_at: new Date().toISOString(),
+      };
+      flows.value = { ...flows.value, [partId]: empty };
+      return empty;
+    }
+    throw e;
+  }
+}
+
+/** 暴露给组件的 composable */
+export function usePartProcessDesign() {
   async function loadParts(): Promise<void> {
     loadingParts.value = true;
     error.value = null;
     try {
-      // 模拟网络延迟，让 UI loading 状态可见
-      await new Promise<void>((r) => setTimeout(r, 200));
-      // 阶段一直接用 fixture；阶段二改 listParts({ drawing_no, name, limit: 200, include_assemblies: false })
-      parts.value = [...FIXTURE_PARTS];
+      const items = await listParts({ keyword: '' });
+      // rust PartListItem 字段集与前端 PartListItem 不全等（v2 无 row_type 等冗余字段）；
+      // 用 unknown[] → PartListItem[] 强转，缺失字段按 undefined 处理（PartListItem 全 optional）。
+      parts.value = items as PartListItem[];
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'load parts failed';
     } finally {
@@ -119,9 +137,8 @@ export function usePartProcessDesign() {
     loadingProc.value = true;
     error.value = null;
     try {
-      await new Promise<void>((r) => setTimeout(r, 150));
-      // 阶段一直接用 fixture；阶段二改 listProcesses({ limit: 500 })
-      processes.value = [...FIXTURE_PROCESSES];
+      const items = await listProcesses({});
+      processes.value = items as Process[];
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'load processes failed';
     } finally {
@@ -129,21 +146,33 @@ export function usePartProcessDesign() {
     }
   }
 
+  /** 懒加载某 part 的工艺链；UI 选中 part 时调用。 */
+  async function loadFlowForPart(partId: string): Promise<PartProcessFlow | null> {
+    try {
+      return await loadFlow(partId);
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'load flow failed';
+      return null;
+    }
+  }
+
+  /** 同步拿本地缓存（无 GET）。返回 null 表示未加载。 */
   function getFlowByPartId(partId: string): PartProcessFlow | null {
     return flows.value[partId] ?? null;
   }
 
-  /** 用一个新 steps[] 覆盖某零件的工序列表；同步写 localStorage。 */
+  /** 用一个新 steps[] 覆盖某零件的工序列表；本地立刻更新 + 防抖 PUT。 */
   function upsertSteps(partId: string, steps: ProcessStep[]): PartProcessFlow {
-    const reordered = rewriteSortOrder(steps);
+    const reordered = steps.map((s, i) => ({ ...s, sort_order: i }));
+    const current = flows.value[partId];
     const updated: PartProcessFlow = {
       part_id: partId,
-      version: 0,
+      version: (current?.version ?? 0) + 1,
       steps: reordered,
       updated_at: new Date().toISOString(),
     };
     flows.value = { ...flows.value, [partId]: updated };
-    saveToStorage(flows.value);
+    scheduleSave(partId, reordered);
     return updated;
   }
 
@@ -155,26 +184,66 @@ export function usePartProcessDesign() {
     return upsertSteps(partId, next);
   }
 
-  /**
-   * 拖拽排序后调用：传入新顺序的 uid 数组。
-   * 若仅传 steps（带相同 uid），用 sort_order 重写；否则按 uid 数组重排。
-   */
+  /** 拖拽排序后调用：传入新顺序的 ProcessStep[]。 */
   function reorderSteps(partId: string, newSteps: ProcessStep[]): PartProcessFlow {
     return upsertSteps(partId, newSteps);
   }
 
+  /** 防抖 PUT：把本地 steps 序列化成 UpsertProcessChainRequest 发到后端。 */
+  function scheduleSave(partId: string, steps: ProcessStep[]): void {
+    if (saveTimers[partId]) clearTimeout(saveTimers[partId]);
+    saveTimers[partId] = setTimeout(() => {
+      void doSave(partId, steps);
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  /** 真正执行 PUT 整组 upsert。失败回滚到操作前快照。 */
+  async function doSave(partId: string, steps: ProcessStep[]): Promise<void> {
+    const snapshot = flows.value[partId];
+    saving.value = { ...saving.value, [partId]: true };
+    try {
+      const dto = await upsertProcessChainByPart(partId, {
+        steps: steps.map(stepToUpsert),
+      });
+      // 成功后用 server 返回的 version 覆盖本地（OCC 锚定）
+      flows.value = {
+        ...flows.value,
+        [partId]: {
+          ...flows.value[partId]!,
+          version: dto.version,
+          updated_at: dto.updated_at,
+        },
+      };
+    } catch (e) {
+      // 回滚：把 server 返回的快照放回（如果有）；否则保留旧 version 但保留新 steps 让用户重试）
+      error.value = e instanceof Error ? e.message : 'save flow failed';
+      if (snapshot) {
+        flows.value = { ...flows.value, [partId]: snapshot };
+      }
+    } finally {
+      saving.value = { ...saving.value, [partId]: false };
+    }
+  }
+
   /** 清空某零件的工序（不是删除零件，仅清空流程）。 */
   function clearFlow(partId: string): void {
-    if (!flows.value[partId]) return;
-    const next = { ...flows.value };
-    delete next[partId];
-    flows.value = next;
-    saveToStorage(flows.value);
+    upsertSteps(partId, []);
   }
 
   /** 新建一道空白工序（追加到末尾）。 */
   function newStep(): ProcessStep {
-    return makeStepFromProcess(FIXTURE_PROCESSES[0]!);
+    const first = processes.value[0];
+    return {
+      uid: `step-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      process_id: first?.id ?? '',
+      process_code: first?.code ?? '',
+      process_name: first?.name ?? '',
+      category: first?.category ?? 'INHOUSE',
+      estimated_minutes: 30,
+      note: null,
+      sort_order: 0,
+      color: first?.color ?? null,
+    };
   }
 
   /** 派生：某零件工序摘要（总耗时 / 含外协）。 */
@@ -182,7 +251,6 @@ export function usePartProcessDesign() {
     const f = flows.value[partId];
     if (!f) return { step_count: 0, total_minutes: 0, has_outsource_approval: false };
     const total_minutes = f.steps.reduce((acc, s) => acc + (s.estimated_minutes || 0), 0);
-    // 含 OUTSOURCE + requires_approval=true 时显示警示（与 Process 类型对齐）
     const has_outsource_approval = f.steps.some((s) => {
       if (s.category !== 'OUTSOURCE') return false;
       const p = processes.value.find((pp) => pp.id === s.process_id);
@@ -221,10 +289,12 @@ export function usePartProcessDesign() {
     flows: flows as Ref<Record<string, PartProcessFlow>>,
     loadingParts: loadingParts as Ref<boolean>,
     loadingProc: loadingProc as Ref<boolean>,
+    saving: saving as Ref<Record<string, boolean>>,
     error: error as Ref<string | null>,
     allSummaries,
     loadParts,
     loadProcesses,
+    loadFlowForPart,
     getFlowByPartId,
     upsertSteps,
     deleteStep,
