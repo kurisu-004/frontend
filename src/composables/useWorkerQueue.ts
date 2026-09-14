@@ -8,33 +8,34 @@
 //   POST /api/v2/admin/worker-pool/refill           ← refillWorkerPool
 //   POST /api/v2/admin/worker-pool/remove           ← removeFromWorkerPool
 //   POST /api/v2/admin/worker-pool/auto-allocate    ← autoAllocate
+// - 2026-09-14 follow-up：WorkerPoolState 新增 held_batches 字段；moveBatchToWorker
+//   改用 assignWorkerPool（单 batch 分配，替代批量 refill 的语义滥用）。
 //
 // 适配策略（CLAUDE.md 习惯；rust 实际响应字段为准，**只改前端**适配 rust）：
 // - `workers[]`：聚合各 process 的 WorkerBriefDto + 二次 GET WorkerPoolState 补
-//   max_held / current_held / capacity_remaining；process_ids 从聚合过程派生（worker
-//   出现在哪个 process 的 pool 响应里就 +1）。
+//   max_held / current_held / capacity_remaining / held_batches；process_ids 从聚合
+//   过程派生（worker 出现在哪个 process 的 pool 响应里就 +1）。
 // - `processPools[]`：从 WorkerPoolDto.items 映射（PoolBatchItem → WorkOrderCard）。
-// - `workerHeld`：WorkerPoolState 仅返回 current_held 计数（无 batch 列表），rust
-//   端未提供「worker 持有 batch 列表」单端点 → loadBoard 后 workerHeld 恒为空 {}。
-//   拖拽乐观更新期间，本地缓存仍能渲染；下次刷新清空（UX 退化，文档记录在 view）。
-// - moveBatchToWorker → 调 refillWorkerPool（rust 不提供「单 batch 分配」端点）；
+// - `workerHeld`：2026-09-14 follow-up 起，由 loadBoard 从 WorkerStateDto.held_batches
+//   填充（不再恒为空）。WorkerTakenItemDto → WorkOrderCard 的字段映射 heldToCard 函数。
+// - moveBatchToWorker → 调 assignWorkerPool（单 batch 分配，1-to-1 语义）；
 //   moveBatchToPool → 调 removeFromWorkerPool（1-to-1 语义吻合）。
 
 import { ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
+  assignWorkerPool,
   autoAllocate,
   getWorkerPoolByProcess,
   getWorkerState,
-  refillWorkerPool,
   removeFromWorkerPool,
 } from '@/api/workerPool';
 import { listProcesses } from '@/api/processChain';
 import type {
+  AssignResultDto,
   PoolBatchItemDto,
   WorkerBriefDto,
   WorkerPoolDto,
-  WorkerRefillResultDto,
   WorkerStateDto,
   WorkerTakenItemDto,
 } from '@/api/workerPool.contract';
@@ -43,8 +44,8 @@ import type { Worker, ProcessPoolView, WorkOrderCard } from '@/types/workerPool'
 // 模块级单例 state
 const workers = ref<Worker[]>([]);
 const processPools = ref<ProcessPoolView[]>([]);
-/** worker_id → 持有的 WorkOrderCard[]；rust 端无单端点 GET，loadBoard 后为空。
- *  拖拽乐观更新期间由 moveBatchToWorker 写入，下次刷新清空。 */
+/** worker_id → 持有的 WorkOrderCard[]；2026-09-14 follow-up 起由 loadBoard 从
+ *  WorkerStateDto.held_batches 填充（之前版本恒为空）。 */
 const workerHeld = ref<Record<string, WorkOrderCard[]>>({});
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -71,6 +72,29 @@ function poolItemToCard(it: PoolBatchItemDto): WorkOrderCard {
     customer: it.customer_name ?? null,
     applicant: it.applicant_name ?? null,
     location: it.shelf_code ?? null,
+  };
+}
+
+/** 把 WorkerTakenItemDto 适配成 UI WorkOrderCard（字段映射，2026-09-14 新增）。
+ *  WorkerTakenItemDto 字段比 PoolBatchItemDto 窄：无 name / customer / applicant / location。
+ *  这些字段在「worker 持有 batch」视图降级为 null / 空串——v iew 层用 shelf_code 等
+ *  已缓存字段补足。 */
+function heldToCard(it: WorkerTakenItemDto): WorkOrderCard {
+  return {
+    batch_id: it.batch_id,
+    batch_no: `B${it.batch_no}`,
+    part_id: it.part_id,
+    drawing_no: it.drawing_no,
+    part_name: '',
+    quantity: it.quantity,
+    serial_no: it.serial_no,
+    system_delivery_date: it.system_delivery_date,
+    planned_delivery_date: it.planned_delivery_date,
+    is_urgent: it.is_urgent,
+    version: it.version,
+    customer: null,
+    applicant: null,
+    location: null,
   };
 }
 
@@ -171,15 +195,15 @@ export function useWorkerQueue() {
               w.capacity_remaining = state.capacity_remaining;
               w.work_type_code = state.work_type_code || w.work_type_code;
             }
+            // 2026-09-14 follow-up：WorkerStateDto 新增 held_batches 字段，
+            // 直接转 WorkOrderCard 写入 workerHeld（不再恒为空）。
+            workerHeld.value[wid] = (state.held_batches ?? []).map(heldToCard);
           }
         }
       }
 
       workers.value = Array.from(workerMap.values());
       processPools.value = newProcessPools;
-      // 2026-09-14：workerHeld 保持 {}（WorkerPoolState 不含 batch 列表）。
-      // 拖拽乐观更新期间，moveBatchToWorker 写入；下次 loadBoard 清空。
-      workerHeld.value = {};
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'load failed';
     } finally {
@@ -206,16 +230,16 @@ export function useWorkerQueue() {
   }
 
   /** 把 batch 从 pool 移到 worker。
-   *  真实 API：rust 不提供「单 batch 分配」端点，调 refillWorkerPool（批量抢到 max_held）。
+   *  真实 API：assignWorkerPool（单 batch 分配，2026-09-14 follow-up）。
+   *  替代之前用 refillWorkerPool 批量抢批的语义滥用。
    *  乐观更新：本地把目标 batch 从 pool 移到 workerHeld[worker_id]。
    *  失败回滚。 */
   async function moveBatchToWorker(
     batch_id: string,
     to_worker_id: string,
     shelf_id: string,
-    _process_id: string,
+    process_id: string,
   ): Promise<boolean> {
-    void _process_id;
     const target = workers.value.find((w) => w.id === to_worker_id);
     if (!target) {
       error.value = `worker ${to_worker_id} not found`;
@@ -247,24 +271,16 @@ export function useWorkerQueue() {
     target.capacity_remaining -= 1;
 
     try {
-      // 2026-09-14：rust refillWorkerPool 批量抢到 max_held；与「单 batch 分配」语义
-      // 不完全一致，但这是该域唯一可用的「worker 从 pool 拿 batch」端点。
-      const result: WorkerRefillResultDto = await refillWorkerPool({
+      // 2026-09-14 follow-up：改用 assignWorkerPool（单 batch 分配语义，1-to-1）。
+      // 服务端只确认一个 batch（taken 是单值，不是数组），assign 端点不会 0 个返回：
+      // 容量已满 / 池外 / 不存在走 ApiError code 路径，正常路径 result.taken 非空。
+      const result: AssignResultDto = await assignWorkerPool({
         worker_id: to_worker_id,
+        batch_id,
         shelf_id: String(shelf_id),
+        process_id: String(process_id),
       });
-      // 2026-09-14 review 第 2 轮：parse result.taken（服务端确认抢到的批次）。
-      // WorkerRefillResult 按 worker 拆分（单一 worker_id），taken[] 含服务端确认抢到的批次。
-      // 由于 taken 字段窄（无 name / drawing_no / customer 等 WorkOrderCard 必备字段），
-      // 不重构 workerHeld — 保留乐观更新（已含 dragged batch）。其他被自动抢到的批次
-      // 将在下次 loadBoard 后由 workerHeld 派生更新。直接内部 ElMessage 反馈（不再
-      // 暴露 lastTakenCount ref — 模块级单例有粘性，view 层无法可靠消费「本次调用」的 N）。
-      // 服务端返回 0 通常意味着「池空 / 容量触顶」正常路径，info 提示而非 success。
-      if (result.taken.length > 0) {
-        ElMessage.success(`已批量抢到 ${result.taken.length} 个`);
-      } else {
-        ElMessage.info('池空或容量触顶，未抢到新批次');
-      }
+      ElMessage.success(`已分配批次 ${result.taken.batch_no} 到 ${target.name}`);
       return true;
     } catch (e) {
       // 回滚
@@ -280,6 +296,7 @@ export function useWorkerQueue() {
       target.current_held -= 1;
       target.capacity_remaining += 1;
       error.value = e instanceof Error ? e.message : 'assign failed';
+      ElMessage.error((e as Error).message ?? '分配批次失败');
       return false;
     }
   }

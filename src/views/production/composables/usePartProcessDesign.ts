@@ -14,6 +14,8 @@
 //   先 GET 一次拿完整 list 再 merge 用户变更（mergeToFullSteps 函数）。
 
 import { computed, ref, type Ref } from 'vue';
+import { ElMessage } from 'element-plus';
+import { ApiError } from '@/api/http';
 import type { PartListItem } from '@/types/parts';
 import type { Process } from '@/types/process';
 import type { PartProcessFlow, PartProcessSummary, ProcessStep } from '@/types/partProcess';
@@ -101,8 +103,10 @@ async function loadFlow(partId: string): Promise<PartProcessFlow> {
     return flow;
   } catch (e) {
     // ApiError.code === 20701 → 空链（无 404 报错），其它错透传
-    const code = (e as { code?: number }).code;
-    if (code === 20701) {
+    // 2026-09-14 follow-up：用 instanceof ApiError 替代 `(e as { code?: number }).code`，
+    // 避免 TS 「Object is possibly 'unknown'」误报，且对未来非 ApiError 异常路径
+    // （如网络层抛裸 Error）更安全。
+    if (e instanceof ApiError && e.code === 20701) {
       const empty: PartProcessFlow = {
         part_id: partId,
         version: 0,
@@ -216,7 +220,11 @@ export function usePartProcessDesign() {
       };
     } catch (e) {
       // 回滚：把 server 返回的快照放回（如果有）；否则保留旧 version 但保留新 steps 让用户重试）
-      error.value = e instanceof Error ? e.message : 'save flow failed';
+      const msg = e instanceof Error ? e.message : 'save flow failed';
+      error.value = msg;
+      // 2026-09-14 follow-up：除 error.value 内部状态外，弹 ElMessage.error
+      // 提升 UX 反馈（之前只在 saving=true 时 UI 无感，失败仅 error.value 静默变化）。
+      ElMessage.error(`保存工艺链失败：${msg}`);
       if (snapshot) {
         flows.value = { ...flows.value, [partId]: snapshot };
       }

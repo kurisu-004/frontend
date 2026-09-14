@@ -188,7 +188,10 @@ const totalMinutes = computed(() =>
 /** 当 partId 变化或外部流程变更：载入当前流程到本地 steps，更新 dirty。
  *  2026-09-14 切真接口后：先 getFlowByPartId 拿本地缓存，若未加载则触发
  *  loadFlowForPart 异步拉取；拉到后再同步本地 steps（异步部分用 watch 二次触发）。
- */
+ *
+ *  2026-09-14 follow-up：加 partId race 守卫。场景：用户选 A → 等待 A 懒加载 →
+ *  切到 B → B 走 cache 立即同步 → A 加载完成回填时陈旧闭包会用 A.steps 覆盖 B.steps。
+ *  守卫点：await loadFlowForPart 后再次校验 newId === props.partId（不再一致就放弃写入）。 */
 watch(
   () => props.partId,
   async (newId) => {
@@ -202,6 +205,9 @@ watch(
     if (!f) {
       // 2026-09-14：触发懒加载；loadFlowForPart 完成后 flows 单例更新会触发下方 watch
       await loadFlowForPart(newId);
+      // 2026-09-14 follow-up：race 守卫 — 等待期间用户可能已切到别的 part；
+      // 此时 props.partId !== newId，写入会用陈旧闭包覆盖新 part 的 steps。
+      if (newId !== props.partId) return;
       f = getFlowByPartId(newId);
     }
     steps.value = f ? f.steps.map((s) => ({ ...s })) : [];
@@ -213,11 +219,17 @@ watch(
 
 /** 监听本地 flows 单例更新（懒加载完成后），重新同步 steps。
  *  2026-09-14 新增：composable 切换到真接口后，loadFlowForPart 是 async，
- *  上方 watch 的 await 之后 f 仍可能为 null（load 失败），需要二次 watch 兜底。 */
+ *  上方 watch 的 await 之后 f 仍可能为 null（load 失败），需要二次 watch 兜底。
+ *
+ *  2026-09-14 follow-up：加 partId race 守卫 — flows 单例按 partId 存盘，
+ *  异步 GET 完成时回调 f.part_id 必须 === 当前 props.partId，否则是别的 part 的
+ *  loadFlow 完成回调，丢弃即可。 */
 watch(
   () => (props.partId ? flows.value[props.partId] : null),
   (f) => {
     if (!f || !props.partId) return;
+    // 2026-09-14 follow-up：race 守卫 — 异步 load 完成时 f.part_id 必须等于当前 props.partId
+    if (f.part_id !== props.partId) return;
     // 仅在本地未 dirty 时刷新（避免保存中误覆盖用户编辑）
     if (dirty.value) return;
     steps.value = f.steps.map((s) => ({ ...s }));
