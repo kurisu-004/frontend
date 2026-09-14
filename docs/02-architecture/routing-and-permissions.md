@@ -38,9 +38,6 @@
 | `/statistics`                         | ProductionStats           | `views/statistics/ProductionStats.vue`          | `production_stats`            | true             | 生产统计                                  |
 | `/customers`                          | CustomerList              | `views/customers/CustomerList.vue`              | `customers_list`              | true             | 客户一览                                  |
 | `/applicants`                         | ApplicantList             | `views/applicants/ApplicantList.vue`            | `applicants_list`             | true             | 申请人一览                                |
-| `/settings/work-types`                | WorkTypeList              | `views/settings/WorkTypeList.vue`               | `work_types_list`             | true             | 工种管理                                  |
-| `/settings/processes`                 | ProcessList               | `views/settings/ProcessList.vue`                | `processes_list`              | true             | 工序管理                                  |
-| `/settings/work-type-processes`       | WorkTypeProcess           | `views/settings/WorkTypeProcess.vue`            | `work_type_processes_list`    | true             | 工种-工序映射                             |
 | `/scan`                               | —                         | redirect                                        | —                             | true             | → `/scan/badge`（全屏）                   |
 | `/scan/badge`                         | ScanBadge                 | `views/scan/ScanBadgeGate.vue`                  | `scan_badge`                  | true             | 工牌识别（allowRoles: SHELF_ACCOUNT）     |
 | `/scan/action`                        | ScanAction                | `views/scan/ScanActionPicker.vue`               | `scan_badge`                  | true             | 操作选择                                  |
@@ -50,6 +47,10 @@
 | `/delivery-dispatch`                  | —                         | redirect                                        | —                             | true             | → `/delivery-dispatch/badge`（全屏）      |
 | `/delivery-dispatch/badge`            | DispatchBadge             | `views/delivery-dispatch/DispatchBadgeGate.vue` | `delivery_dispatch`           | true             | 司机送货工牌识别                          |
 | `/delivery-dispatch/notes`            | DispatchNotes             | `views/delivery-dispatch/DispatchNoteList.vue`  | `delivery_dispatch`           | true             | 司机待送货单                              |
+| `/delivery-notes/scan`                | DeliveryNoteScan          | `views/delivery/DeliveryNoteScan.vue`           | `delivery_notes_manage`       | true             | 2026-08-21 扫码建单（不独立成菜单）        |
+| `/production/process-design`          | ProcessDesign             | `views/production/ProcessDesignView.vue`        | `process_design_list`         | true             | 2026-09-11 工序制定（fixture→apiV2）       |
+| `/production/process-work-type`       | ProcessWorkType           | `views/production/ProcessWorkTypePage.vue`      | `process_work_type`           | true             | 2026-09-12 tabbed shell，合并原 settings  |
+| `/print-templates`                    | PrintTemplateDesigner     | `views/print-templates/PrintTemplateDesigner.vue` | —（`allowRoles: ['MANAGER']`） | true          | 2026-09-14 打印模板编辑器（menuCode 暂空） |
 
 > 路径含 `(\\d+)` 这类正则约束（如 `/parts/:id(\\d+)`）会限制参数类型——这是为防止雪花 ID 在 URL 里被 `Number()` 丢精度。所有路由的 `meta.title` / `icon` / `breadcrumb` 字段在原文件定义，文档不重复。
 

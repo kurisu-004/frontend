@@ -2,7 +2,9 @@
 
 > **目标读者**：所有人
 > **核心价值**：9 大分组树状索引 + 按身份速查分流
-> **最后更新**：2026-08-26 · **维护者**：@frontend-team
+> **最后更新**：2026-09-14 · **维护者**：@frontend-team
+
+> ⚠️ 本仓库的 lint/format 检查已升级到 ESLint v9 + Prettier v3 (2026-09-13)。提交前必须 `npm run lint && npm run format:check` 通过。
 
 ---
 

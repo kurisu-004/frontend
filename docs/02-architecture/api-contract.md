@@ -2,7 +2,7 @@
 
 > **目标读者**：后端联调 / 新增接口的 Agent / 排查 401 异常链路的同学
 > **核心价值**：把 axios 封装、信封协议、错误码、自动 refresh 链路完整讲清楚，避免误用 `api` / `apiV2` / refresh client
-> **最后更新**：2026-08-29 · **维护者**：@frontend-team
+> **最后更新**：2026-09-14 · **维护者**：@frontend-team
 
 ---
 
@@ -13,7 +13,7 @@
 | 实例              | baseURL   | 拦截器 | 何时用                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ----------------- | --------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `api`             | `/api/v1` | 有     | v1 FastAPI 业务接口（含 auth 域、`parts` 列表、外协报价、`fail-inspection` 等；默认客户端）                                                                                                                                                                                                                                                                                                                                                                                          |
-| `apiV2`           | `/api/v2` | 有     | v2 Rust 后端业务接口（**仅服务于 `src/views/delivery/DeliveryNoteScan.vue` 扫码建单页及其路由 B 间接依赖的 inspection 流程**，共 15 个端点 / 4 个文件）—— `deliveryNote.ts` 7 个（`scanDelivery` / `getNote` / `submitNote` / `listNotes` / `batchGetNotes` / `removeParts` / `softDeleteNote`）+ `deliveryGroup.ts` 4 个（整文件 v2，DeliveryNoteScan 唯一消费者）+ `parts/crud.ts` 2 个（`toInspection` / `toShip`）+ `parts/batch.ts` 2 个（`batchToInspection` / `batchToShip`） |
+| `apiV2`           | `/api/v2` | 有     | v2 Rust 后端业务接口（**仅服务于 `src/views/delivery/DeliveryNoteScan.vue` 扫码建单页及其路由 B 间接依赖的 inspection 流程**，共 **14 个端点** / 4 个文件）—— `deliveryNote.ts` 7 个（`scanDelivery` / `getNote` / `submitNote` / `listNotes` / `batchGetNotes` / `removeParts` / `softDeleteNote`）+ `deliveryGroup.ts` 4 个（整文件 v2，DeliveryNoteScan 唯一消费者）+ `parts/crud.ts` **1 个**（`toShip`；`toInspection` 已 2026-09-01 回滚 v1）+ `parts/batch.ts` 2 个（`batchToInspection` / `batchToShip`） |
 | `refreshClient`   | `/api/v1` | 无     | 仅 `/api/v1/auth/refresh`（auth 域当前用）                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `refreshClientV2` | `/api/v2` | 无     | 2026-08-26 起无消费者，保留供未来 v2 refresh 端点回归                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
@@ -130,7 +130,7 @@ apiV2.get('/delivery-notes', { params: { statuses: ['DRAFT', 'SHIPPED'] } });
 
 拆分前只有一个共享 `serializeParams`，`statuses` 白名单 CSV 行为被 4 个客户端共用。结果 CSV 行为**泄漏到 v1 客户端**：`parts` 列表 / 外协报价列表点状态列筛选时，前端发 `?statuses=A,B`，Python FastAPI 的 `List[OrderStatus] = Query(None)` 期望重复 key 形式 `?statuses=A&statuses=B`，收到 CSV 后解析成单元素列表 `["A,B"]` → `OrderStatus("A,B")` 枚举校验失败 **422**。讽刺的是 `http.ts` 里 v1 客户端上方那行注释 `// FastAPI 期望数组参数格式: ?statuses=A&statuses=B（无 [] 后缀）` 恰好自证这是回归。
 
-修复：按 baseURL 版本拆 `serializeParamsV1` / `serializeParamsV2`，4 个实例各自绑定。**双后端并存期，任何与后端契约耦合的序列化/编码逻辑都必须按版本分离，不能挂在共享工具函数上。** 详细复盘见 [`docs/08-known-risks/framework-pitfalls.md`](../08-known-risks/framework-pitfalls.md) 第 7 节；回归守卫 `src/api/http.spec.ts` 的 `serializeParamsV1({ statuses: [...] })` 重复 key 断言（新增中）。
+修复：按 baseURL 版本拆 `serializeParamsV1` / `serializeParamsV2`，4 个实例各自绑定。**双后端并存期，任何与后端契约耦合的序列化/编码逻辑都必须按版本分离，不能挂在共享工具函数上。** 详细复盘见 [`docs/08-known-risks/framework-pitfalls.md`](../08-known-risks/framework-pitfalls.md) 第 7 节；回归守卫已在 `src/api/http.spec.ts` 落地——`serializeParamsV1({ statuses: [...] })` 断言重复 key 形式（不含 `%2C` 编码逗号），`serializeParamsV2` 断言 `statuses` 走 CSV 单值 / 数组空串过滤 / 混合白名单 + 普通键，2026-09-14 起覆盖了「statuses CSV 泄漏到 v1」与「statuses 走重复 key 触发 422」两个回归点。
 
 ## `cleanParams()`
 
@@ -185,7 +185,20 @@ const id = parts[0].id; // string
 
 **auth 域 2026-08-26 临时回滚 v1**（v2 Rust 后端的 Redis `session:tok:<sha256>` 与 v1 FastAPI 的 `get_current_user` 不兼容：v1 后端不认 v2 颁发的 token，v2 后端不认 v1 颁发的 token，跨版本 token 互相不认识）。回滚原因：v1 业务端点（deliveryNote 等）尚未迁移，业务依赖 v1，统一 v1 session 才能让 refresh 流跑通。
 
-**已知 trade-off**（不是 bug，是显式接受的副作用）：v2 业务端点（**仅服务于 `src/views/delivery/DeliveryNoteScan.vue` 扫码建单页及其路由 B 间接依赖的 inspection 流程**，共 15 个端点 / 4 个文件：`deliveryNote` 7 + `deliveryGroup` 4 + `parts to-inspection·to-ship·batch-to-inspection·batch-to-ship` 4；详见本文「三个 axios 实例」表）仍走 `apiV2`，拿到 v1 JWT 会在 v2 后端 `get_current_user` 处 40101，由 `auth:logout` 兜底重登。其余 `deliveryNote.ts` 端点（`printNote` / `printNoteLabels` / `listPickupPending` / `createNote` / `listNoteEvents` / `updateNote` / `addParts` / `recallNote` / `pickupScan` / `pickup` / `listCandidateParts`，2026-08-29 回退）+ `parts` 品检打回（`failInspection`，2026-08-29 回退）走 v1 Python FastAPI。**待 v1 业务端点迁完再统一切回 v2**——本次回滚只是临时止血。
+**已知 trade-off**（不是 bug，是显式接受的副作用）：v2 业务端点（**仅服务于 `src/views/delivery/DeliveryNoteScan.vue` 扫码建单页及其路由 B 间接依赖的 inspection 流程**，共 **14 个端点** / 4 个文件：`deliveryNote` 7 + `deliveryGroup` 4 + `parts to-ship·batch-to-inspection·batch-to-ship` 3；详见本文「三个 axios 实例」表）仍走 `apiV2`，拿到 v1 JWT 会在 v2 后端 `get_current_user` 处 40101，由 `auth:logout` 兜底重登。
+
+### 回滚记录（按端点粒度）
+
+| 端点                                | 文件                          | 回退日期    | 提交 SHA | 说明                                                                       |
+| ----------------------------------- | ----------------------------- | ----------- | -------- | -------------------------------------------------------------------------- |
+| `POST /auth/*`                      | `src/api/auth.ts`（整文件）   | 2026-08-26  | —        | auth 域整体回退 v1；v2 refresh 端点保留为 `refreshClientV2` 占位           |
+| `POST /parts/{id}/receive-from-outsource-to-inspection` | `src/api/parts/crud.ts::toInspection` | 2026-09-01 | `e250667` | 单件送检；当前仅支持 OUTSOURCE → INSPECTION；payload schema 用 `shelf_id`，无 `version` |
+| `POST /parts/{id}/pass-inspection`  | `src/api/parts/crud.ts::failInspection` | 2026-08-29 | — | 单件品检打回                                                                 |
+| `printNote` / `printNoteLabels` / `listPickupPending` / `createNote` / `listNoteEvents` / `updateNote` / `addParts` / `recallNote` / `pickupScan` / `pickup` / `listCandidateParts` | `src/api/deliveryNote.ts`（11 端点） | 2026-08-29 | — | 送货单非扫码链路（详情打印、扫码领取、候选人列表等）整体回退 v1 |
+
+> 「—」表示合并在单次 auth / deliveryNote 回退 commit 内，未单独算 SHA；如需精确 commit 走 `git log --oneline -- src/api/auth.ts` / `-- src/api/deliveryNote.ts` 查询回退提交。
+
+**待 v1 业务端点迁完再统一切回 v2**——本次回滚只是临时止血。
 
 切回 v2 的触发条件（全部满足）：
 

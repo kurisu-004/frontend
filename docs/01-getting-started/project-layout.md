@@ -2,7 +2,7 @@
 
 > **目标读者**：新人前端 / Agent 接手新模块
 > **核心价值**：30 秒理解 `src/` 拓扑、各目录职责、关键文件位置
-> **最后更新**：2026-08-26 · **维护者**：@frontend-team
+> **最后更新**：2026-09-14 · **维护者**：@frontend-team
 
 ---
 
@@ -30,8 +30,8 @@ frontend/
 
 ```
 src/
-├── api/                    接口层 — 按业务域切分（17 个 .ts + parts/ 子目录）
-├── components/             跨业务域通用组件（10+ 个）
+├── api/                    接口层 — 按业务域切分（17+ 个 .ts + parts/ 子目录）
+├── components/             跨业务域通用组件（13+ 个）
 ├── composables/            模块级单例 composable（30+ 个）
 ├── constants/              静态映射（partStatus / batch / bid / crud / file）
 ├── layouts/                MainLayout 等布局
@@ -39,14 +39,14 @@ src/
 ├── styles/                 全局样式 + 主题变量
 ├── types/                  业务类型定义
 ├── utils/                  工具函数（pdfjs / jwt / date / excel parsers）
-├── views/                  业务模块（11 业务域）
+├── views/                  业务模块（14 业务域）
 ├── App.vue                 根组件（中文 locale 下沉到这里）
 ├── main.ts                 应用入口（pinia / router / EP CSS 手动 import）
 ├── auto-imports.d.ts       unplugin 自动生成（已 git 跟踪）
 └── components.d.ts         unplugin 自动生成（已 git 跟踪）
 ```
 
-## src/views/ — 11 业务域归属表
+## src/views/ — 14 业务域归属表
 
 业务模块以域为单位组织在 `src/views/<domain>/` 下。路由路径与路由 `meta.menuCode` 见 `src/router/index.ts`。
 
@@ -56,7 +56,7 @@ src/
 | `views/WorkerList.vue`     | 工人花名册（**注意在 views 根目录**）              | `workers_list`                                                                       |
 | `views/auth/Login.vue`     | 登录（独立全屏路由树）                             | —                                                                                    |
 | `views/parts/`             | 零件 / 装配（核心域，含 11+ 详情子组件）           | `parts_list` / `parts_new`                                                           |
-| `views/inspection/`        | 待品检一览                                         | `inspection_pending`                                                                 |
+| `views/inspection/`        | 待品检一览 + ScanBatchPickerDialog 组件            | `inspection_pending`                                                                 |
 | `views/repair/`            | 返修接收                                           | `repair_receive`                                                                     |
 | `views/cnc/`               | 待编程一览（CNC 编程员专属）                       | `pending_programming`                                                                |
 | `views/assemblies/`        | 装配件详情（老路由 `/assemblies` 已并入 `/parts`） | —                                                                                    |
@@ -68,23 +68,26 @@ src/
 | `views/users/`             | 账号管理（含角色分配）                             | `users_list`                                                                         |
 | `views/customers/`         | 客户树                                             | `customers_list`                                                                     |
 | `views/applicants/`        | 申请人主数据                                       | `applicants_list`                                                                    |
-| `views/settings/`          | 工种 / 工序 / 映射                                 | `work_types_list` / `processes_list` / `work_type_processes_list`                    |
+| `views/workers/`           | 生产队列看板（`WorkerQueueBoard.vue`）             | `worker_queue`                                                                       |
+| `views/production/`        | 工序制定页 + 工序工种 tabbed shell                 | `process_design_list` / `process_work_type`                                          |
+| `views/print-templates/`   | 打印模板编辑器（基于 `@amdosion/vue3-print`）     | —（`allowRoles: ['MANAGER']` 短路）                                                  |
 | `views/statistics/`        | 生产统计（4 Tab）                                  | `production_stats`                                                                   |
 
-> **老路径兼容**：`/assemblies` → 重定向到 `/parts`；`/outsource` → `/outsource/companies`；`/outsource/send` 与 `/outsource/receive` → `/outsource/send-receive`。不要新增新的重定向，老域往新域合并是既定方向。
+> **老路径兼容**：`/assemblies` → 重定向到 `/parts`；`/outsource` → `/outsource/companies`；`/outsource/send` 与 `/outsource/receive` → `/outsource/send-receive`；`/settings/{work-types,processes,work-type-processes}` → 2026-09-12 合并到 `/production/process-work-type` 后整段删除。不要新增新的重定向，老域往新域合并是既定方向。
 
-## src/api/ — 接口层（17 文件 + parts/ 子目录）
+## src/api/ — 接口层（17+ 文件 + parts/ 子目录）
 
 按业务域切分，每个文件导出对应的 axios 调用函数。**v1 走 `api` 实例，v2 走 `apiV2` 实例**，新接口必须在 `apiV2` 上加。
 
 | 文件               | 域                                                          | v1 / v2                                            |
 | ------------------ | ----------------------------------------------------------- | -------------------------------------------------- |
-| `http.ts`          | 双实例 + 拦截器 + 401 处理                                  | 共用基座                                           |
-| `auth.ts`          | 登录 / 刷新 / me                                            | **v2**                                             |
-| `deliveryNote.ts`  | 送货单 CRUD + 详情 + 扫码建单                               | **v2**                                             |
+| `http.ts`          | 双实例 + 拦截器 + 401 处理 + 拆分 V1/V2 serializer          | 共用基座                                           |
+| `auth.ts`          | 登录 / 刷新 / me                                            | **v1**（2026-08-26 回滚）                          |
+| `deliveryNote.ts`  | 送货单 CRUD + 详情 + 扫码建单 + `attachBatches` (`819e3b5`) | v2（7）+ v1（11）                                 |
 | `deliveryGroup.ts` | 送货组聚合                                                  | **v2**                                             |
 | `parts.ts`         | 兼容 shim，re-export `./parts/*`                            | —                                                  |
 | `parts/`           | 拆为 `crud.ts` / `batch.ts` / `bid.ts` / `file.ts` 4 子文件 | v1 + 部分 v2（`scanInspect` / `batchScanInspect`） |
+| `parts/crud.ts::getPartBySerial` | `/parts/by-serial/{serial}` 扫码检索      | v1（2026-09-01 `f4f39e6`）                         |
 | `dashboard.ts`     | 首页大屏 + WebSocket 入口                                   | v1                                                 |
 | `outsource.ts`     | 外协全流程                                                  | v1                                                 |
 | `shelves.ts`       | 货架管理                                                    | v1                                                 |
@@ -96,6 +99,7 @@ src/
 | `cnc.ts`           | CNC 待编程                                                  | v1                                                 |
 | `process.ts`       | 工序                                                        | v1                                                 |
 | `workType.ts`      | 工种                                                        | v1                                                 |
+| `workerPool.ts`    | 工人 pool（v2，待后端）                                     | fixture + 预留 apiV2                               |
 | `statistics.ts`    | 生产统计                                                    | v1                                                 |
 
 ## src/composables/ — 30+ 模块级单例
@@ -105,18 +109,21 @@ src/
 | 名称                         | 职责                                                |
 | ---------------------------- | --------------------------------------------------- |
 | `useActiveShelfSelection`    | 工位扫码台的"当前货架"选中状态                      |
+| `useAmdPrintTemplates`      | 打印模板存储层（2026-09-14 替换原 `usePrintTemplates` 自建 8 文件） |
 | `useApplicantSearch`         | 申请人下拉搜索（懒加载）                            |
 | `useAuthSession`             | 登录态 + token + 用户菜单（核心）                   |
 | `useBarcodeScanner`          | 扫码枪输入识别（Web Bluetooth / 键盘事件）          |
 | `useBulkPassInspection`      | 批量通过品检（v2 端点）                             |
 | `useBulkScanInspect`         | 批量扫码送检（v2 端点）                             |
-| `useColumnVisibility`        | 表格列显隐持久化                                    |
+| `useColumnDrag`              | el-table 列拖动基建（`MutationObserver` 自愈 EP 表头重建） |
+| `useColumnVisibility`        | 表格列显隐持久化；驱动 `ColumnFilterPopover` + `ColumnDragHandle` |
 | `useConfirm`                 | 全局 `ElMessageBox.confirm` 封装                    |
 | `useCustomerTree`            | 客户树懒加载                                        |
 | `useDeliveryNoteDetailCache` | 送货单详情页缓存（共享给列表 → 详情）               |
 | `useDeliveryScanState`       | 扫码建单的扫码状态机                                |
 | `useDialogSize`              | `el-dialog` 响应式 size（lg/md/sm/full）            |
 | `useHoldToScroll`            | 长按加速滚动（扫码台选件列表用）                    |
+| `useLazyDraggable`           | 容器为 null 时的拖拽兜底（`vue-draggable-plus` `useDraggable` 立即对 null 元素 `new Sortable` 抛错的修复） |
 | `useListFilterPersist`       | 列表筛选条件持久化到 localStorage                   |
 | `usePagedListQuery`          | 分页查询的通用模板                                  |
 | `usePartLocationTree`        | 零件位置树（货架 → 库位）                           |
@@ -124,11 +131,13 @@ src/
 | `usePermissions`             | 权限工具（hasRole / hasMenuCode / canOperateShelf） |
 | `usePooledDetail`            | 详情页对象池（避免反复创建销毁）                    |
 | `usePrintedLabels`           | 已打印标签记录                                      |
+| `useResizablePane`           | `el-splitter` 面板宽度持久化（工序制定页用）        |
 | `useRowEditor`               | el-table 行内编辑                                   |
 | `useScanBus`                 | 扫码事件总线（跨组件传递扫码事件）                  |
 | `useScanPartsSort`           | 扫码选件的排序规则                                  |
 | `useScanSession`             | 扫码台的 worker session（核心）                     |
 | `useShelfProcessFilter`      | 货架工序筛选                                        |
+| `useWorkerQueue`             | 生产队列看板状态机（pool / worker / held 三态）     |
 
 **模式约定**：所有 composable 都是模块级 `ref` + 导出 `useXxx()`，调用方操作同一份响应式状态。详见 [02-architecture/state-management.md](../02-architecture/state-management.md)。**禁止新建 Pinia store**。
 
@@ -136,8 +145,8 @@ src/
 
 两类组件目录要分清：
 
-- **`src/components/`** — 跨业务域通用组件：`Barcode` / `EChart` / `PdfViewer` / `FileListCard` / `PartListShell` / `PagedTable` / `HmiPickerCard` / `ShelfPickerCard` / `NotificationBanner` / `ColumnFilterPopover` / `ColumnVisibilityPopover` / `BeianFooter`（备案号）。
-- **`src/views/<domain>/components/`** — 单业务域内组件，例：`views/parts/components/PartsTable.vue`、`views/parts/components/PartInfoCard.vue`、`views/delivery/components/DeliveryNoteDetail*.vue`。
+- **`src/components/`** — 跨业务域通用组件：`Barcode` / `EChart` / `PdfViewer` / `FileListCard` / `PartListShell` / `PagedTable` / `HmiPickerCard` / `ShelfPickerCard` / `NotificationBanner` / `ColumnFilterPopover` / `ColumnVisibilityPopover` / `ColumnDragHandle`（每个可拖拽 `el-table` 顶部使用） / `BeianFooter`（备案号）。
+- **`src/views/<domain>/components/`** — 单业务域内组件，例：`views/parts/components/PartsTable.vue`、`views/parts/components/PartInfoCard.vue`、`views/delivery/components/DeliveryNoteDetail*.vue`、`views/inspection/components/ScanBatchPickerDialog.vue`（route-B picker，供送货单扫码建单选批次）、`views/production/components/{PartPickerList,DrawingPreviewPane,ProcessStepCardList,WorkTypeTab,ProcessTab,ProcessWorkTypeMappingTab}.vue`。
 
 判定原则：**被两个及以上业务域使用 → `src/components/`**；仅一个域用 → `views/<domain>/components/`。重构时遇到跨域复用需求，按此原则迁移。
 
