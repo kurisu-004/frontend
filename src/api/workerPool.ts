@@ -4,6 +4,7 @@
 //   GET  /api/v2/worker-pool/state?worker_id=&shelf_id=    ← getWorkerState
 //   GET  /api/v2/worker-pool/{process_id}                 ← getWorkerPoolByProcess
 //   POST /api/v2/admin/worker-pool/refill                 ← refillWorkerPool
+//   POST /api/v2/admin/worker-pool/assign                 ← assignWorkerPool（2026-09-14 新增）
 //   POST /api/v2/admin/worker-pool/remove                 ← removeFromWorkerPool
 //   POST /api/v2/admin/worker-pool/auto-allocate          ← autoAllocate
 //
@@ -11,9 +12,13 @@
 // 历史变更：
 //   - 2026-08-26：阶段一，全部走 fixture + delay；阶段二标记替换点
 //   - 2026-09-14：阶段二，全部切到 apiV2；DTO 类型独立到 ./workerPool.contract.ts
+//   - 2026-09-14 follow-up：新增 assignWorkerPool（单 batch 分配，替代批量 refill
+//     在「拖拽 batch 到 worker」场景的滥用）
 
 import { apiV2, cleanParams } from '@/api/http';
 import type {
+  AdminAssignRequest,
+  AssignResultDto,
   AutoAllocateRequest,
   AutoAllocateResultDto,
   WorkerPoolDto,
@@ -49,9 +54,21 @@ export async function getWorkerPoolByProcess(processId: string | number): Promis
 
 /** POST /api/v2/admin/worker-pool/refill
  *  Manager only。WS 广播 WORKER_POOL_REFILL_DONE / WORKER_POOL_EMPTY（前端按需订阅）。
- *  业务错：20202 INACTIVE / 20904 MAX_HELD_NOT_SET / 20905 NO_PROCESS_MAPPING。 */
+ *  业务错：20202 INACTIVE / 20904 MAX_HELD_NOT_SET / 20905 NO_PROCESS_MAPPING。
+ *  2026-09-14 follow-up：仅用于「批量抢批」场景（auto-allocate 入口）。
+ *  拖拽 batch → worker 改用 assignWorkerPool（单 batch 分配语义）。 */
 export async function refillWorkerPool(req: WorkerRefillRequest): Promise<WorkerRefillResultDto> {
   const resp = await apiV2.post<WorkerRefillResultDto>('/admin/worker-pool/refill', req);
+  return resp.data;
+}
+
+/** POST /api/v2/admin/worker-pool/assign（2026-09-14 新增）
+ *  Manager only。单 batch 分配：把候选池某个 batch 直接塞给 worker。
+ *  替代之前「拖拽 batch → worker 调 refillWorkerPool（批量抢到 max_held）」的滥用。
+ *  业务错：20204 WORKER_CAPACITY_EXCEEDED / 20706 BIZ_BATCH_NOT_IN_POOL /
+ *         20114 BIZ_PART_BATCH_NOT_HELD_BY_WORKER / 20801 NOT_FOUND。 */
+export async function assignWorkerPool(req: AdminAssignRequest): Promise<AssignResultDto> {
+  const resp = await apiV2.post<AssignResultDto>('/admin/worker-pool/assign', req);
   return resp.data;
 }
 

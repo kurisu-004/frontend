@@ -3,14 +3,65 @@
 // 原 fixture 驱动（3 worker / 2 process pool）改为 vi.mock('@/api/workerPool' | '@/api/process')
 // 注入稳定 stub 数据。断言 composable 的 loadBoard 聚合逻辑 + moveBatchToWorker/Pool 的
 // 乐观更新 + 错误回滚。
+//
+// 2026-09-14 follow-up：
+// - STUB_STATES 加 held_batches 字段（WorkerStateDto 新增）；loadBoard 后 workerHeld 非空。
+// - mock 矩阵把 refillWorkerPool 替换为 assignWorkerPool（assign 端点，单 batch 分配语义）。
+// - moveBatchToWorker 成功路径改断言「已分配批次 X 到 Y」；删除 ElMessage.info 路径
+//   （assign 端点不会 0 个返回：容量满 / 池外走 ApiError code 路径）。
+// - 新增 moveBatchToWorker 失败（assign 端点 20204 WORKER_CAPACITY_EXCEEDED）用例，
+//   断言 catch 路径：error.value 含语义、ElMessage.error 被调。
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ApiError } from '@/api/http';
 import type { WorkerPoolDto, WorkerStateDto } from '@/api/workerPool.contract';
 
 // stub processes
 const STUB_PROCESSES = [
   { id: '2000000000001', code: 'CNC-01', name: '粗加工' },
   { id: '2000000000002', code: 'QC-01', name: '质检' },
+];
+
+// 2026-09-14 follow-up：held_batches 共享 stub（loadBoard 后 workerHeld 派生此源）。
+const STUB_HELD_BY_W001 = [
+  {
+    batch_id: '3000000010001',
+    part_id: '4000000000001',
+    batch_no: 1001,
+    quantity: 2,
+    serial_no: null,
+    drawing_no: 'DWG-A001',
+    system_delivery_date: '2026-09-05',
+    planned_delivery_date: null,
+    is_urgent: false,
+    version: 1,
+  },
+];
+const STUB_HELD_BY_W003 = [
+  {
+    batch_id: '3000000030001',
+    part_id: '4000000000003',
+    batch_no: 3001,
+    quantity: 4,
+    serial_no: 'SN-003',
+    drawing_no: 'DWG-B001',
+    system_delivery_date: '2026-09-01',
+    planned_delivery_date: null,
+    is_urgent: true,
+    version: 1,
+  },
+  {
+    batch_id: '3000000030002',
+    part_id: '4000000000003',
+    batch_no: 3002,
+    quantity: 6,
+    serial_no: null,
+    drawing_no: 'DWG-B001',
+    system_delivery_date: '2026-09-02',
+    planned_delivery_date: null,
+    is_urgent: false,
+    version: 1,
+  },
 ];
 
 // stub WorkerPoolDto（每 process 一个）
@@ -123,6 +174,7 @@ const STUB_POOL_2000000000002: WorkerPoolDto = {
 };
 
 // stub WorkerStateDto（每个 worker 一条；shelf_id='0' 触发 40001 时 catch 兜底）
+// 2026-09-14 follow-up：W001/W003 加 held_batches；W002 持有数为 0 所以 held 空。
 const STUB_STATES: Record<string, WorkerStateDto> = {
   '1900000000001': {
     worker_id: '1900000000001',
@@ -132,6 +184,7 @@ const STUB_STATES: Record<string, WorkerStateDto> = {
     current_held: 1,
     capacity_remaining: 2,
     pool_count_by_process: [{ process_id: '2000000000001', pool_count: 2 }],
+    held_batches: STUB_HELD_BY_W001,
   },
   '1900000000002': {
     worker_id: '1900000000002',
@@ -141,6 +194,7 @@ const STUB_STATES: Record<string, WorkerStateDto> = {
     current_held: 0,
     capacity_remaining: 3,
     pool_count_by_process: [{ process_id: '2000000000001', pool_count: 2 }],
+    held_batches: [],
   },
   '1900000000003': {
     worker_id: '1900000000003',
@@ -150,6 +204,7 @@ const STUB_STATES: Record<string, WorkerStateDto> = {
     current_held: 2,
     capacity_remaining: 0,
     pool_count_by_process: [{ process_id: '2000000000002', pool_count: 1 }],
+    held_batches: STUB_HELD_BY_W003,
   },
 };
 
@@ -157,6 +212,7 @@ const STUB_STATES: Record<string, WorkerStateDto> = {
 // 2026-09-14 review 第 1 轮：listProcesses 改 mock 在 @/api/processChain（v2），
 // 不再 mock @/api/process（v1）；返回形状从 { items: [...] } 简化为裸数组
 // （processChain.ts:49 的封装已剥 envelope）。
+// 2026-09-14 follow-up：refillWorkerPool mock 删除，替换为 assignWorkerPool。
 vi.mock('@/api/workerPool', () => ({
   getWorkerPoolByProcess: vi.fn(async (processId: string) => {
     if (processId === '2000000000001') return STUB_POOL_2000000000001;
@@ -168,12 +224,29 @@ vi.mock('@/api/workerPool', () => ({
     if (!s) throw new Error('unknown worker');
     return s;
   }),
-  refillWorkerPool: vi.fn(async () => ({
-    worker_id: '1900000000002',
-    shelf_id: '5000000000001',
-    taken: [],
-    pool_empty: true,
-  })),
+  assignWorkerPool: vi.fn(async (req: { worker_id: string; batch_id: string }) => {
+    // 默认 mock：模拟「分配成功」回执
+    const state = STUB_STATES[req.worker_id];
+    return {
+      worker_id: req.worker_id,
+      batch_id: req.batch_id,
+      shelf_id: '5000000000001',
+      taken: {
+        batch_id: req.batch_id,
+        part_id: '4000000000001',
+        batch_no: 1,
+        quantity: 5,
+        serial_no: null,
+        drawing_no: 'DWG-A001',
+        system_delivery_date: '2026-09-05',
+        planned_delivery_date: null,
+        is_urgent: true,
+        version: 2,
+      },
+      current_held: (state?.current_held ?? 0) + 1,
+      max_held: state?.max_held ?? 3,
+    };
+  }),
   removeFromWorkerPool: vi.fn(async () => ({
     batch_id: '3000000000010',
     part_id: '4000000000010',
@@ -219,7 +292,7 @@ beforeEach(() => {
 });
 
 describe('useWorkerQueue', () => {
-  it('loadBoard populates workers / processPools / workerHeld', async () => {
+  it('loadBoard populates workers / processPools / workerHeld（2026-09-14 follow-up：held 由 STUB_STATES 派生）', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const q = useWorkerQueue();
     await q.loadBoard('5000000000001');
@@ -227,8 +300,11 @@ describe('useWorkerQueue', () => {
     expect(q.processPools.value).toHaveLength(2);
     expect(q.processPools.value[0]!.batches).toHaveLength(2);
     expect(q.processPools.value[1]!.batches).toHaveLength(1);
-    // 2026-09-14：workerHeld 恒为空（WorkerPoolState 不含 batch 列表）
-    expect(q.workerHeld.value).toEqual({});
+    // 2026-09-14 follow-up：workerHeld 不再恒为空，从 WorkerStateDto.held_batches 派生。
+    expect(q.workerHeld.value['1900000000001']).toHaveLength(1);
+    expect(q.workerHeld.value['1900000000001']![0]!.batch_id).toBe('3000000010001');
+    expect(q.workerHeld.value['1900000000002']).toEqual([]);
+    expect(q.workerHeld.value['1900000000003']).toHaveLength(2);
     expect(q.loading.value).toBe(false);
   });
 
@@ -269,9 +345,9 @@ describe('useWorkerQueue', () => {
     expect(w1?.capacity_remaining).toBe(2);
   });
 
-  it('moveBatchToWorker 调 refillWorkerPool：乐观把 batch 从 pool 移到 workerHeld', async () => {
+  it('moveBatchToWorker 调 assignWorkerPool：乐观把 batch 从 pool 移到 workerHeld（2026-09-14 follow-up）', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    const { refillWorkerPool } = await import('@/api/workerPool');
+    const { assignWorkerPool } = await import('@/api/workerPool');
     const { ElMessage } = await import('element-plus');
     const q = useWorkerQueue();
     await q.loadBoard('5000000000001');
@@ -290,47 +366,40 @@ describe('useWorkerQueue', () => {
 
     expect(ok).toBe(true);
     expect(pool.batches).toHaveLength(beforePool - 1);
-    // 2026-09-14：乐观更新写入 workerHeld
+    // 2026-09-14 follow-up：loadBoard 已填 W002 的 STUB_HELD_BY_W002=[]，乐观更新后多 1 条
     expect(q.workerHeld.value['1900000000002']).toHaveLength(1);
     expect(q.workerHeld.value['1900000000002']![0]!.batch_id).toBe('3000000000001');
     expect(targetWorker.current_held).toBe(beforeHeld + 1);
     expect(targetWorker.capacity_remaining).toBe(targetWorker.max_held - targetWorker.current_held);
-    expect(refillWorkerPool).toHaveBeenCalledWith({
+    // 2026-09-14 follow-up：assignWorkerPool 入参含 batch_id / shelf_id / process_id
+    expect(assignWorkerPool).toHaveBeenCalledWith({
       worker_id: '1900000000002',
+      batch_id: '3000000000001',
       shelf_id: '5000000000001',
+      process_id: '2000000000001',
     });
-    // 2026-09-14 review 第 2 轮：refillWorkerPool mock 返回 taken: []，断言 ElMessage.info
-    // 触发（「池空或容量触顶」正常路径），且 ElMessage.success **未**调用（避免误弹）。
-    expect(ElMessage.info).toHaveBeenCalledWith('池空或容量触顶，未抢到新批次');
-    expect(ElMessage.success).not.toHaveBeenCalled();
+    // 2026-09-14 follow-up：assign 端点只会成功或抛 ApiError，ElMessage.success 用新文案
+    expect(ElMessage.success).toHaveBeenCalledWith('已分配批次 1 到 李四');
+    expect(ElMessage.info).not.toHaveBeenCalled();
   });
 
-  it('moveBatchToWorker 成功且 taken.length>0 时 ElMessage.success 触发', async () => {
+  it('moveBatchToWorker assign 端点抛 ApiError(20204)：回滚 + ElMessage.error', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    const { refillWorkerPool } = await import('@/api/workerPool');
+    const { assignWorkerPool } = await import('@/api/workerPool');
     const { ElMessage } = await import('element-plus');
-    // 单测隔离：覆盖 refillWorkerPool mock 返回 taken: [item]。
-    vi.mocked(refillWorkerPool).mockResolvedValueOnce({
-      worker_id: '1900000000002',
-      shelf_id: '5000000000001',
-      taken: [
-        {
-          batch_id: '3000000000001',
-          part_id: '4000000000001',
-          batch_no: 1,
-          quantity: 5,
-          serial_no: null,
-          drawing_no: 'DWG-A001',
-          system_delivery_date: '2026-09-05',
-          planned_delivery_date: null,
-          is_urgent: true,
-          version: 2,
-        },
-      ],
-      pool_empty: false,
-    });
+    // 单测隔离：模拟服务端 20204 WORKER_CAPACITY_EXCEEDED（容量触顶，race 场景：
+    // 前端乐观更新时 capacity_remaining=1，服务端实际已 0/0 触顶）
+    vi.mocked(assignWorkerPool).mockRejectedValueOnce(
+      new ApiError(20204, 'WORKER_CAPACITY_EXCEEDED'),
+    );
     const q = useWorkerQueue();
     await q.loadBoard('5000000000001');
+
+    const pool = q.processPools.value[0]!;
+    const beforePool = pool.batches.length;
+    const targetWorker = q.workers.value.find((w) => w.id === '1900000000002')!;
+    const beforeHeld = targetWorker.current_held;
+    const beforeCap = targetWorker.capacity_remaining;
 
     const ok = await q.moveBatchToWorker(
       '3000000000001',
@@ -339,12 +408,19 @@ describe('useWorkerQueue', () => {
       '2000000000001',
     );
 
-    expect(ok).toBe(true);
-    expect(ElMessage.success).toHaveBeenCalledWith('已批量抢到 1 个');
-    expect(ElMessage.info).not.toHaveBeenCalled();
+    expect(ok).toBe(false);
+    expect(q.error.value).toContain('WORKER_CAPACITY_EXCEEDED');
+    // 回滚：pool 恢复原 batches；workerHeld 撤销；计数回到原值
+    expect(q.processPools.value[0]!.batches).toHaveLength(beforePool);
+    expect(q.workerHeld.value['1900000000002']).toEqual([]);
+    expect(targetWorker.current_held).toBe(beforeHeld);
+    expect(targetWorker.capacity_remaining).toBe(beforeCap);
+    // 2026-09-14 follow-up：catch 分支必须弹 ElMessage.error（替代原仅 error.value 静默）
+    expect(ElMessage.error).toHaveBeenCalledWith('WORKER_CAPACITY_EXCEEDED');
+    expect(ElMessage.success).not.toHaveBeenCalled();
   });
 
-  it('moveBatchToWorker 拒绝：目标 worker capacity 已满', async () => {
+  it('moveBatchToWorker 拒绝：目标 worker capacity 已满（前端预检，2026-09-14 follow-up 保留）', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const q = useWorkerQueue();
     await q.loadBoard('5000000000001');

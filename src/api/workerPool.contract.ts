@@ -4,31 +4,38 @@
 //   GET  /api/v2/worker-pool/state?worker_id=&shelf_id=    ← getWorkerState
 //   GET  /api/v2/worker-pool/{process_id}                 ← getWorkerPoolByProcess
 //   POST /api/v2/admin/worker-pool/refill                 ← refillWorkerPool
+//   POST /api/v2/admin/worker-pool/assign                 ← assignWorkerPool（2026-09-14 新增）
 //   POST /api/v2/admin/worker-pool/remove                 ← removeFromWorkerPool
 //   POST /api/v2/admin/worker-pool/auto-allocate          ← autoAllocate
 //
 // 端点形状以 rust 实际为准（worker-pool.md）：
 // - i64 主键 → JSON 字符串（雪花 ID 防 JS 精度截断，CLAUDE.md #3）
 // - role 守卫下沉到 service（manager / manager+clerk+inspector），前端靠 token 拦截
-// - WorkerPoolState 不含 batch 列表，仅 current_held 计数；worker-held batches 不在
-//   单端点 GET 中返回（PoolBatchItem 是候选池，不含已 taken 的 worker 持有）
+// - 2026-09-14：WorkerPoolState 新增 held_batches 字段（worker 持有 batch 列表）；
+//   之前版本无此字段，前端 workerHeld 恒为空（UX 退化），文档记录已废。
 
 /** `GET /api/v2/worker-pool/state` 出参（rust WorkerPoolState）。
  *  pool_count_by_process 仅含该 worker 工种映射到的工序；空工种时退化为 []。 */
 export interface WorkerStateDto {
   worker_id: string;
   worker_name: string;
-  work_type_code: string;
+  work_type_code: string | null;
   /** work_type.max_held_batches；未设置时 0（rust 端 20904 错误） */
   max_held: number;
   /** worker 当前持有批次数（IN_PROCESS + WORKER + current_holder_id = worker_id） */
   current_held: number;
   /** max(0, max_held - current_held) */
   capacity_remaining: number;
-  pool_count_by_process: Array<{
-    process_id: string;
-    pool_count: number;
-  }>;
+  pool_count_by_process: PoolCountDto[];
+  /** 2026-09-14 新增：worker 当前持有的 batch 列表（WorkOrderCard 必备字段子集）。
+   *  与 PoolBatchItemDto 不同：taken 由 service 序列化时已是「持有批次」语义。 */
+  held_batches: WorkerTakenItemDto[];
+}
+
+/** WorkerStateDto.pool_count_by_process 的元素类型（rust PoolCount）。 */
+export interface PoolCountDto {
+  process_id: string;
+  pool_count: number;
 }
 
 /** `GET /api/v2/worker-pool/{process_id}` 内嵌的工人简短记录（rust WorkerBrief）。 */
@@ -104,6 +111,30 @@ export interface WorkerRemoveRequest {
   shelf_id: string;
   /** 撤回后落入的下一道工序 ID */
   next_process_id: string;
+}
+
+/** `POST /api/v2/admin/worker-pool/assign` 请求（rust AdminAssignRequest，2026-09-14 新增）。
+ *  单 batch 分配（替代之前的批量 refill）：把候选池某个 batch 直接塞给 worker。
+ *  业务错：20204 WORKER_CAPACITY_EXCEEDED / 20114 BIZ_PART_BATCH_NOT_HELD_BY_WORKER /
+ *         20801 NOT_FOUND / 20706 BIZ_BATCH_NOT_IN_POOL。 */
+export interface AdminAssignRequest {
+  worker_id: string;
+  batch_id: string;
+  shelf_id: string;
+  /** 选填：明确分配到哪道工序；缺省由 service 端从 batch.next_process_id 推导。 */
+  process_id?: string;
+}
+
+/** `POST /api/v2/admin/worker-pool/assign` 出参（rust AssignResult，2026-09-14 新增）。 */
+export interface AssignResultDto {
+  worker_id: string;
+  batch_id: string;
+  shelf_id: string;
+  taken: WorkerTakenItemDto;
+  /** 分配后 worker 当前持有数（= current_held + 1） */
+  current_held: number;
+  /** 分配后 worker max_held（不变） */
+  max_held: number;
 }
 
 /** `POST /api/v2/admin/worker-pool/refill` 出参（rust RefillResult）。 */
