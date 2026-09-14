@@ -21,6 +21,7 @@
 //   moveBatchToPool → 调 removeFromWorkerPool（1-to-1 语义吻合）。
 
 import { ref, type Ref } from 'vue';
+import { ElMessage } from 'element-plus';
 import {
   autoAllocate,
   getWorkerPoolByProcess,
@@ -47,10 +48,11 @@ const processPools = ref<ProcessPoolView[]>([]);
 const workerHeld = ref<Record<string, WorkOrderCard[]>>({});
 const loading = ref(false);
 const error = ref<string | null>(null);
-/** 2026-09-14 review 第 1 轮：上次 refillWorkerPool 服务端确认抢到的批次总数。
- *  moveBatchToWorker 不直接用，但暴露给 view 层做 ElMessage 提示（「已批量抢到 N 个」）。
- *  服务端返回 0 通常意味着「池空 / 容量触顶」正常路径，不视为错误。 */
-const lastTakenCount = ref<number>(0);
+// 2026-09-14 review 第 2 轮：删除原 lastTakenCount 模块级单例 ref — 该 ref 跨
+// moveBatchToWorker 调用天然粘性（用户拖 batch A 后，下次拖 batch B 看到的是上一次的 N），
+// 且 view 层从未消费（grep 全仓 0 命中），永远 0、永远不触发 UI 反馈。
+// 改为在 moveBatchToWorker 内部直接 ElMessage.success（与 moveBatchToPool 失败回滚
+// 时 error.value = ... 的内部 UX 处理风格一致）。
 
 /** 把 PoolBatchItemDto 适配成 UI WorkOrderCard（字段映射）。 */
 function poolItemToCard(it: PoolBatchItemDto): WorkOrderCard {
@@ -251,14 +253,18 @@ export function useWorkerQueue() {
         worker_id: to_worker_id,
         shelf_id: String(shelf_id),
       });
-      // 2026-09-14 review 第 1 轮：parse result.taken（服务端确认抢到的批次）。
+      // 2026-09-14 review 第 2 轮：parse result.taken（服务端确认抢到的批次）。
       // WorkerRefillResult 按 worker 拆分（单一 worker_id），taken[] 含服务端确认抢到的批次。
       // 由于 taken 字段窄（无 name / drawing_no / customer 等 WorkOrderCard 必备字段），
       // 不重构 workerHeld — 保留乐观更新（已含 dragged batch）。其他被自动抢到的批次
-      // 将在下次 loadBoard 后由 workerHeld 派生更新。记录 taken 长度供上层 UI 反馈
-      // （如 ElMessage「已批量抢到 N 个」），但不在此抛出 — 避免与正常「池空 / 容量触顶」
-      // 场景冲突。
-      lastTakenCount.value = result.taken.length;
+      // 将在下次 loadBoard 后由 workerHeld 派生更新。直接内部 ElMessage 反馈（不再
+      // 暴露 lastTakenCount ref — 模块级单例有粘性，view 层无法可靠消费「本次调用」的 N）。
+      // 服务端返回 0 通常意味着「池空 / 容量触顶」正常路径，info 提示而非 success。
+      if (result.taken.length > 0) {
+        ElMessage.success(`已批量抢到 ${result.taken.length} 个`);
+      } else {
+        ElMessage.info('池空或容量触顶，未抢到新批次');
+      }
       return true;
     } catch (e) {
       // 回滚
@@ -364,7 +370,6 @@ export function useWorkerQueue() {
     workerHeld: workerHeld as Ref<Record<string, WorkOrderCard[]>>,
     loading: loading as Ref<boolean>,
     error: error as Ref<string | null>,
-    lastTakenCount: lastTakenCount as Ref<number>,
     loadBoard,
     moveBatchToWorker,
     moveBatchToPool,

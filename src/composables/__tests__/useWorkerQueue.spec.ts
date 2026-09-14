@@ -202,6 +202,17 @@ vi.mock('@/api/processChain', () => ({
   listProcesses: vi.fn(async () => STUB_PROCESSES),
 }));
 
+// 2026-09-14 review 第 2 轮：mock element-plus ElMessage，断言 moveBatchToWorker
+// 内部 ElMessage.success / info 调用（替代原 lastTakenCount ref 的 view 层消费）。
+// 不导入整个 element-plus（避免拖入 EP 注册副作用），只 stub 用到的命令式 API。
+vi.mock('element-plus', () => ({
+  ElMessage: {
+    success: vi.fn(),
+    info: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
@@ -261,6 +272,7 @@ describe('useWorkerQueue', () => {
   it('moveBatchToWorker 调 refillWorkerPool：乐观把 batch 从 pool 移到 workerHeld', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const { refillWorkerPool } = await import('@/api/workerPool');
+    const { ElMessage } = await import('element-plus');
     const q = useWorkerQueue();
     await q.loadBoard('5000000000001');
 
@@ -287,6 +299,49 @@ describe('useWorkerQueue', () => {
       worker_id: '1900000000002',
       shelf_id: '5000000000001',
     });
+    // 2026-09-14 review 第 2 轮：refillWorkerPool mock 返回 taken: []，断言 ElMessage.info
+    // 触发（「池空或容量触顶」正常路径），且 ElMessage.success **未**调用（避免误弹）。
+    expect(ElMessage.info).toHaveBeenCalledWith('池空或容量触顶，未抢到新批次');
+    expect(ElMessage.success).not.toHaveBeenCalled();
+  });
+
+  it('moveBatchToWorker 成功且 taken.length>0 时 ElMessage.success 触发', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    const { refillWorkerPool } = await import('@/api/workerPool');
+    const { ElMessage } = await import('element-plus');
+    // 单测隔离：覆盖 refillWorkerPool mock 返回 taken: [item]。
+    vi.mocked(refillWorkerPool).mockResolvedValueOnce({
+      worker_id: '1900000000002',
+      shelf_id: '5000000000001',
+      taken: [
+        {
+          batch_id: '3000000000001',
+          part_id: '4000000000001',
+          batch_no: 1,
+          quantity: 5,
+          serial_no: null,
+          drawing_no: 'DWG-A001',
+          system_delivery_date: '2026-09-05',
+          planned_delivery_date: null,
+          is_urgent: true,
+          version: 2,
+        },
+      ],
+      pool_empty: false,
+    });
+    const q = useWorkerQueue();
+    await q.loadBoard('5000000000001');
+
+    const ok = await q.moveBatchToWorker(
+      '3000000000001',
+      '1900000000002',
+      '5000000000001',
+      '2000000000001',
+    );
+
+    expect(ok).toBe(true);
+    expect(ElMessage.success).toHaveBeenCalledWith('已批量抢到 1 个');
+    expect(ElMessage.info).not.toHaveBeenCalled();
   });
 
   it('moveBatchToWorker 拒绝：目标 worker capacity 已满', async () => {
