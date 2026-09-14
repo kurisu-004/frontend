@@ -28,6 +28,7 @@ import {
   refillWorkerPool,
   removeFromWorkerPool,
 } from '@/api/workerPool';
+import { listProcesses } from '@/api/processChain';
 import type {
   PoolBatchItemDto,
   WorkerBriefDto,
@@ -46,6 +47,10 @@ const processPools = ref<ProcessPoolView[]>([]);
 const workerHeld = ref<Record<string, WorkOrderCard[]>>({});
 const loading = ref(false);
 const error = ref<string | null>(null);
+/** 2026-09-14 review 第 1 轮：上次 refillWorkerPool 服务端确认抢到的批次总数。
+ *  moveBatchToWorker 不直接用，但暴露给 view 层做 ElMessage 提示（「已批量抢到 N 个」）。
+ *  服务端返回 0 通常意味着「池空 / 容量触顶」正常路径，不视为错误。 */
+const lastTakenCount = ref<number>(0);
 
 /** 把 PoolBatchItemDto 适配成 UI WorkOrderCard（字段映射）。 */
 function poolItemToCard(it: PoolBatchItemDto): WorkOrderCard {
@@ -88,15 +93,21 @@ export function useWorkerQueue() {
    *  1) GET /api/v2/processes?limit=500 拿到所有 process（用于「按 process 维度」遍历）
    *  2) 并发调 getWorkerPoolByProcess(processId) 拿到各 process 的 worker / items
    *  3) 聚合：worker 跨 process 出现 → process_ids += processId；items → processPools
-   *  4) 二次并发 getWorkerState 补 max_held / current_held / capacity_remaining */
-  async function loadBoard(): Promise<void> {
+   *  4) 二次并发 getWorkerState 补 max_held / current_held / capacity_remaining
+   *
+   * 2026-09-14 review 第 1 轮：
+   * - `shelfId` 由 view 层从 `useAuthSession().activeShelfId()` 注入；null/空串 → 跳过
+   *   二次 GET（rust WorkerPoolState 必填 shelf_id；无激活货架时用占位 '0' 必触发 40001
+   *   BIZ_SHELF_NOT_FOUND，导致所有 worker 的 max_held/current_held/capacity_remaining 退化为 0）。
+   * - `listProcesses` 改从 `@/api/processChain` 导入（v2，baseURL /api/v2）；不再走
+   *   `@/api/process` 的 v1 端点。 */
+  async function loadBoard(shelfId: string | null): Promise<void> {
     loading.value = true;
     error.value = null;
     try {
-      // 1) 拉所有 process
-      const processesMod = await import('@/api/process');
-      const procList = await processesMod.listProcesses({ limit: 500 });
-      const processIds: string[] = (procList.items as Array<{ id: string }>).map((p) => p.id);
+      // 1) 拉所有 process（v2 端点 /api/v2/processes）
+      const procList = await listProcesses({});
+      const processIds: string[] = (procList as Array<{ id: string }>).map((p) => p.id);
 
       // 2) 并发拉各 process 的 pool detail
       const poolResults = await Promise.allSettled(
@@ -135,32 +146,29 @@ export function useWorkerQueue() {
       });
 
       // 4) 二次并发 getWorkerState 补 max_held / current_held / capacity_remaining
-      // shelf_id 取当前激活的货架（auth.activeShelfId）；无激活时退化为空串，service 端报 40001
-      // 这里用 shelfId 注入由 caller 通过 activeShelfId 提供；为简化，loadBoard 不传 shelf_id
-      // 而由 view 层后续按需注入（workerHeld 永远空 {}，不影响）
-      // 实际：WorkerPoolState 需要 shelf_id（必填），所以此处用占位空串触发 40001 → 静默忽略
-      const stateResults = await Promise.allSettled(
-        Array.from(workerIds).map(async (wid) => {
-          // shelf_id 占位 '0'：rust 端会 40001；为简洁，这里仅在 worker 已有 state 时填充，
-          // 真实刷新需要 caller 提供 shelfId
-          try {
-            return await getWorkerState({ worker_id: wid, shelf_id: '0' });
-          } catch {
-            return null;
-          }
-        }),
-      );
-      let i = 0;
-      for (const wid of workerIds) {
-        const r = stateResults[i++];
-        if (r && r.status === 'fulfilled' && r.value) {
-          const state: WorkerStateDto = r.value;
-          const w = workerMap.get(wid);
-          if (w) {
-            w.max_held = state.max_held;
-            w.current_held = state.current_held;
-            w.capacity_remaining = state.capacity_remaining;
-            w.work_type_code = state.work_type_code || w.work_type_code;
+      // shelfId 由 caller 注入；空 → 跳过二次 GET（已知 UX 退化：worker 列显示「0/0」）。
+      if (shelfId && shelfId.length > 0) {
+        const stateResults = await Promise.allSettled(
+          Array.from(workerIds).map(async (wid) => {
+            try {
+              return await getWorkerState({ worker_id: wid, shelf_id: shelfId });
+            } catch {
+              return null;
+            }
+          }),
+        );
+        let i = 0;
+        for (const wid of workerIds) {
+          const r = stateResults[i++];
+          if (r && r.status === 'fulfilled' && r.value) {
+            const state: WorkerStateDto = r.value;
+            const w = workerMap.get(wid);
+            if (w) {
+              w.max_held = state.max_held;
+              w.current_held = state.current_held;
+              w.capacity_remaining = state.capacity_remaining;
+              w.work_type_code = state.work_type_code || w.work_type_code;
+            }
           }
         }
       }
@@ -239,11 +247,18 @@ export function useWorkerQueue() {
     try {
       // 2026-09-14：rust refillWorkerPool 批量抢到 max_held；与「单 batch 分配」语义
       // 不完全一致，但这是该域唯一可用的「worker 从 pool 拿 batch」端点。
-      const _result: WorkerRefillResultDto = await refillWorkerPool({
+      const result: WorkerRefillResultDto = await refillWorkerPool({
         worker_id: to_worker_id,
         shelf_id: String(shelf_id),
       });
-      void _result;
+      // 2026-09-14 review 第 1 轮：parse result.taken（服务端确认抢到的批次）。
+      // WorkerRefillResult 按 worker 拆分（单一 worker_id），taken[] 含服务端确认抢到的批次。
+      // 由于 taken 字段窄（无 name / drawing_no / customer 等 WorkOrderCard 必备字段），
+      // 不重构 workerHeld — 保留乐观更新（已含 dragged batch）。其他被自动抢到的批次
+      // 将在下次 loadBoard 后由 workerHeld 派生更新。记录 taken 长度供上层 UI 反馈
+      // （如 ElMessage「已批量抢到 N 个」），但不在此抛出 — 避免与正常「池空 / 容量触顶」
+      // 场景冲突。
+      lastTakenCount.value = result.taken.length;
       return true;
     } catch (e) {
       // 回滚
@@ -321,7 +336,9 @@ export function useWorkerQueue() {
   }
 
   /** POST /api/v2/admin/worker-pool/auto-allocate 触发入口（前端可挂按钮）。
-   *  流程：调用方传 processId + shelfId + mode + fill_ratio；返回填充结果。 */
+   *  流程：调用方传 processId + shelfId + mode + fill_ratio；返回填充结果。
+   *  2026-09-14 review 第 1 轮：loadBoard 需要 shelfId；这里从 req.shelf_id 派生（auto-allocate
+   *  本就需要 shelf_id 入参）。 */
   async function runAutoAllocate(req: {
     process_id: string;
     shelf_id: string;
@@ -332,8 +349,8 @@ export function useWorkerQueue() {
     error.value = null;
     try {
       await autoAllocate(req);
-      // 成功后刷新整个看板
-      await loadBoard();
+      // 成功后刷新整个看板，shelfId 来自 req（auto-allocate 必填）
+      await loadBoard(req.shelf_id);
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'auto allocate failed';
     } finally {
@@ -347,6 +364,7 @@ export function useWorkerQueue() {
     workerHeld: workerHeld as Ref<Record<string, WorkOrderCard[]>>,
     loading: loading as Ref<boolean>,
     error: error as Ref<string | null>,
+    lastTakenCount: lastTakenCount as Ref<number>,
     loadBoard,
     moveBatchToWorker,
     moveBatchToPool,

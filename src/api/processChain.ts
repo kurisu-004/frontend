@@ -11,7 +11,7 @@
 // 前端必须发完整 steps 数组（包括 service-side 已有的 step），否则会被覆盖。
 // 详见 usePartProcessDesign.ts 的 GET-merge-PUT 模式。
 
-import { apiV2 } from '@/api/http';
+import { apiV2, cleanParams } from '@/api/http';
 import type { ProcessChainByPartDto, UpsertProcessChainRequest } from './processChain.contract';
 
 /** GET /api/v2/process-chains/by-part/{part_id}
@@ -56,17 +56,17 @@ export async function listProcesses(params: { is_active?: boolean } = {}): Promi
 }
 
 /** GET /api/v2/parts
- *  转引 @/api/parts/crud.ts 的 listParts（v2 端点已存在）。
+ *  2026-09-14 review 第 1 轮：直接 apiV2.get('/parts')，不再转引 @/api/parts/crud.ts
+ *  （后者走 v1 baseURL /api/v1，与本文件 v2 定位冲突）。
  *  keyword 模糊过滤图号/名称（PartListQuery.keyword，rust 端 2026-08 已支持）。
- *  limit=200 + include_assemblies=false：工序制定只需零件本体，装配件由独立 API 处理。 */
+ *  limit=200：v2 不支持 include_assemblies（已删除该参数）；工序制定只需零件本体。
+ *  返回 PartListOut.items（rust 端 PartListItem = TPart 28 列 + customer_name / l1_customer_name）。 */
 export async function listParts(params: { keyword?: string } = {}): Promise<unknown[]> {
-  // 2026-09-14：转引 api/parts/crud.ts 的 listParts；返回 unknown[] 让 consumer
-  // 按需强转（usePartProcessDesign 强转为 PartListItem[]，接受可选字段缺失）。
-  const mod = await import('@/api/parts');
-  const out = await mod.listParts({
-    keyword: params.keyword,
-    limit: 200,
-    include_assemblies: false,
-  });
-  return out.items as unknown[];
+  const resp = await apiV2.get<{
+    items: unknown[];
+    total: string;
+    limit: string;
+    offset: string;
+  }>('/parts', { params: cleanParams({ keyword: params.keyword, limit: 200 }) });
+  return resp.data.items;
 }

@@ -153,7 +153,10 @@ const STUB_STATES: Record<string, WorkerStateDto> = {
   },
 };
 
-// mock api/workerPool + api/process（必须在 import composable 之前 hoist）
+// mock api/workerPool + api/processChain（必须在 import composable 之前 hoist）
+// 2026-09-14 review 第 1 轮：listProcesses 改 mock 在 @/api/processChain（v2），
+// 不再 mock @/api/process（v1）；返回形状从 { items: [...] } 简化为裸数组
+// （processChain.ts:49 的封装已剥 envelope）。
 vi.mock('@/api/workerPool', () => ({
   getWorkerPoolByProcess: vi.fn(async (processId: string) => {
     if (processId === '2000000000001') return STUB_POOL_2000000000001;
@@ -193,13 +196,10 @@ vi.mock('@/api/workerPool', () => ({
   })),
 }));
 
-vi.mock('@/api/process', () => ({
-  listProcesses: vi.fn(async () => ({
-    items: STUB_PROCESSES,
-    total: STUB_PROCESSES.length,
-    limit: 500,
-    offset: 0,
-  })),
+vi.mock('@/api/processChain', () => ({
+  // listProcesses 在 useWorkerQueue.ts 顶部被 import；返回形状是裸数组
+  // （processChain.ts:49 的封装已剥 envelope），不是 { items, total, ... }。
+  listProcesses: vi.fn(async () => STUB_PROCESSES),
 }));
 
 beforeEach(() => {
@@ -211,7 +211,7 @@ describe('useWorkerQueue', () => {
   it('loadBoard populates workers / processPools / workerHeld', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const q = useWorkerQueue();
-    await q.loadBoard();
+    await q.loadBoard('5000000000001');
     expect(q.workers.value).toHaveLength(3);
     expect(q.processPools.value).toHaveLength(2);
     expect(q.processPools.value[0]!.batches).toHaveLength(2);
@@ -224,7 +224,7 @@ describe('useWorkerQueue', () => {
   it('filteredWorkers：activeTab=2000000000001 命中 W001/W002（不命中 W003）', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const q = useWorkerQueue();
-    await q.loadBoard();
+    await q.loadBoard('5000000000001');
     const activeTab = '2000000000001';
     const filtered = q.workers.value.filter((w) => w.process_ids.includes(activeTab));
     expect(filtered.map((w) => w.id).sort()).toEqual(['1900000000001', '1900000000002']);
@@ -233,7 +233,7 @@ describe('useWorkerQueue', () => {
   it('filteredWorkers：activeTab=2000000000002 只命中 W003', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const q = useWorkerQueue();
-    await q.loadBoard();
+    await q.loadBoard('5000000000001');
     const activeTab = '2000000000002';
     const filtered = q.workers.value.filter((w) => w.process_ids.includes(activeTab));
     expect(filtered.map((w) => w.id)).toEqual(['1900000000003']);
@@ -242,7 +242,7 @@ describe('useWorkerQueue', () => {
   it('filteredWorkers：activeTab=未知 process_id 返回空', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const q = useWorkerQueue();
-    await q.loadBoard();
+    await q.loadBoard('5000000000001');
     const activeTab = '9999999999999';
     const filtered = q.workers.value.filter((w) => w.process_ids.includes(activeTab));
     expect(filtered).toEqual([]);
@@ -251,7 +251,7 @@ describe('useWorkerQueue', () => {
   it('WorkerState 合并：W001 max_held=3 / current_held=1 / capacity_remaining=2', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const q = useWorkerQueue();
-    await q.loadBoard();
+    await q.loadBoard('5000000000001');
     const w1 = q.workers.value.find((w) => w.id === '1900000000001');
     expect(w1?.max_held).toBe(3);
     expect(w1?.current_held).toBe(1);
@@ -262,7 +262,7 @@ describe('useWorkerQueue', () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const { refillWorkerPool } = await import('@/api/workerPool');
     const q = useWorkerQueue();
-    await q.loadBoard();
+    await q.loadBoard('5000000000001');
 
     const pool = q.processPools.value[0]!;
     const beforePool = pool.batches.length;
@@ -292,7 +292,7 @@ describe('useWorkerQueue', () => {
   it('moveBatchToWorker 拒绝：目标 worker capacity 已满', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const q = useWorkerQueue();
-    await q.loadBoard();
+    await q.loadBoard('5000000000001');
     // W003 王五 capacity_remaining = 0
     const ok = await q.moveBatchToWorker(
       '3000000000001',
@@ -309,7 +309,7 @@ describe('useWorkerQueue', () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const { removeFromWorkerPool } = await import('@/api/workerPool');
     const q = useWorkerQueue();
-    await q.loadBoard();
+    await q.loadBoard('5000000000001');
     // 先放一个 batch 到 workerHeld（模拟之前 moveBatchToWorker）
     await q.moveBatchToWorker('3000000000001', '1900000000002', '5000000000001', '2000000000001');
     expect(q.workerHeld.value['1900000000002']).toHaveLength(1);
