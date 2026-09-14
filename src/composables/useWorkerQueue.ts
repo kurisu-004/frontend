@@ -33,6 +33,7 @@ import {
 import { listProcesses } from '@/api/processChain';
 import type {
   AssignResultDto,
+  HeldBatchItemDto,
   PoolBatchItemDto,
   WorkerBriefDto,
   WorkerPoolDto,
@@ -75,26 +76,31 @@ function poolItemToCard(it: PoolBatchItemDto): WorkOrderCard {
   };
 }
 
-/** 把 WorkerTakenItemDto 适配成 UI WorkOrderCard（字段映射，2026-09-14 新增）。
- *  WorkerTakenItemDto 字段比 PoolBatchItemDto 窄：无 name / customer / applicant / location。
- *  这些字段在「worker 持有 batch」视图降级为 null / 空串——v iew 层用 shelf_code 等
- *  已缓存字段补足。 */
-function heldToCard(it: WorkerTakenItemDto): WorkOrderCard {
+/** 把 HeldBatchItemDto 适配成 UI WorkOrderCard（2026-09-14 follow-up round-2 全字段映射）。
+ *  2026-09-14 第一轮：上游字段是窄 WorkerTakenItemDto（无 name / customer / applicant /
+ *  shelf_code），展示字段被退化为 null / 空串（注释里写「降级」是当时妥协）。
+ *  2026-09-14 follow-up round-2：后端扩 JOIN 把展示字段补齐，HeldBatchItemDto 是全字段
+ *  DTO（含 part_name / customer_name / applicant_name / location / shelf_code / note /
+ *  parent_customer_name 等），此处不再有字段降级。
+ *  - `location`：直接取 HeldBatchItemDto.location（enum string，如 'WORKER'），
+ *    与 poolItemToCard 不同（pool 用 shelf_code 表示货架 code）；语义清晰区分
+ *    「持有方」与「货架 code」，UI tooltip「所在位置」按 enum 显示。 */
+function heldToCard(it: HeldBatchItemDto): WorkOrderCard {
   return {
     batch_id: it.batch_id,
     batch_no: `B${it.batch_no}`,
     part_id: it.part_id,
     drawing_no: it.drawing_no,
-    part_name: '',
+    part_name: it.name,
     quantity: it.quantity,
     serial_no: it.serial_no,
     system_delivery_date: it.system_delivery_date,
     planned_delivery_date: it.planned_delivery_date,
     is_urgent: it.is_urgent,
     version: it.version,
-    customer: null,
-    applicant: null,
-    location: null,
+    customer: it.customer_name,
+    applicant: it.applicant_name,
+    location: it.location,
   };
 }
 

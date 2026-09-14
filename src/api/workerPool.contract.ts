@@ -13,6 +13,11 @@
 // - role 守卫下沉到 service（manager / manager+clerk+inspector），前端靠 token 拦截
 // - 2026-09-14：WorkerPoolState 新增 held_batches 字段（worker 持有 batch 列表）；
 //   之前版本无此字段，前端 workerHeld 恒为空（UX 退化），文档记录已废。
+// - 2026-09-14 follow-up round-2：held_batches 元素类型从窄字段集 WorkerTakenItemDto
+//   升级为完整 DTO HeldBatchItemDto（含 part_name / customer_name / applicant_name /
+//   location / shelf_code 等展示字段），消除前端 heldToCard 字段降级（之前 version
+//   之外的展示字段全部置 null / 空串）。后端对应在另一 worktree 扩 JOIN 拿全字段，
+//   此 TS interface 与 rust HeldBatchItem 严格对齐（本文件权威）。
 
 /** `GET /api/v2/worker-pool/state` 出参（rust WorkerPoolState）。
  *  pool_count_by_process 仅含该 worker 工种映射到的工序；空工种时退化为 []。 */
@@ -27,15 +32,65 @@ export interface WorkerStateDto {
   /** max(0, max_held - current_held) */
   capacity_remaining: number;
   pool_count_by_process: PoolCountDto[];
-  /** 2026-09-14 新增：worker 当前持有的 batch 列表（WorkOrderCard 必备字段子集）。
-   *  与 PoolBatchItemDto 不同：taken 由 service 序列化时已是「持有批次」语义。 */
-  held_batches: WorkerTakenItemDto[];
+  /** 2026-09-14 新增；2026-09-14 follow-up round-2 升级为 HeldBatchItemDto（展示
+   *  字段全字段，对应 rust 端 JOIN t_part / t_customer / t_applicant / t_shelf 后
+   *  的 HeldBatchItem）。 */
+  held_batches: HeldBatchItemDto[];
 }
 
 /** WorkerStateDto.pool_count_by_process 的元素类型（rust PoolCount）。 */
 export interface PoolCountDto {
   process_id: string;
   pool_count: number;
+}
+
+/** 2026-09-14 follow-up round-2 新增：`WorkerStateDto.held_batches` 元素类型
+ *  （rust `HeldBatchItem`，由 `PartBatchRepo::list_held_by_worker_with_part` JOIN
+ *  t_part / t_customer / t_applicant / t_shelf 后序列化）。包含前端 heldToCard
+ *  渲染所需的全部展示字段，消除之前 WorkerTakenItemDto 字段过窄导致的「name /
+ *  customer_name / applicant_name / location / shelf_code 等核心展示字段被降级
+ *  为 null / 空串」的 UX 退化问题。
+ *
+ *  字段命名 / 类型与 Rust `HeldBatchItem` 严格一一对应（本文件是权威）：
+ *  - 雪花 ID 全 string；
+ *  - 日期 ISO `"YYYY-MM-DD"` 字符串；
+ *  - `location` 是 t_part_batch.location enum string
+ *    （'OFFICE' / 'PRODUCTION_SHELF' / 'WORKER' / 'INSPECTION_SHELF' / 'OUTSOURCE_COMPANY'）；
+ *  - `customer_name` = L2 客户名（叶子），`parent_customer_name` = L1 客户名（一级集团）。
+ */
+export interface HeldBatchItemDto {
+  /** t_part_batch.id，雪花 ID */
+  batch_id: string;
+  /** t_part.id，雪花 ID */
+  part_id: string;
+  batch_no: number;
+  quantity: number;
+  /** t_part.serial_no */
+  serial_no: string | null;
+  /** t_part.drawing_no */
+  drawing_no: string;
+  /** t_part.name（零件 / 工单名称） */
+  name: string;
+  /** t_part.system_delivery_date */
+  system_delivery_date: string | null;
+  /** t_part.planned_delivery_date */
+  planned_delivery_date: string | null;
+  is_urgent: boolean;
+  /** L2 客户名（来自 t_customer L2.name） */
+  customer_name: string | null;
+  /** L1 客户名（一级集团，t_customer L1.name） */
+  parent_customer_name: string | null;
+  /** t_applicant.name */
+  applicant_name: string | null;
+  /** t_part_batch.location enum string（'OFFICE' / 'PRODUCTION_SHELF' / 'WORKER' /
+   *  'INSPECTION_SHELF' / 'OUTSOURCE_COMPANY'） */
+  location: string;
+  /** t_shelf.code（批次当前 / 历史所在货架 code；held 状态下可为 null） */
+  shelf_code: string | null;
+  /** t_part.note */
+  note: string | null;
+  /** OCC 乐观锁 version */
+  version: number;
 }
 
 /** `GET /api/v2/worker-pool/{process_id}` 内嵌的工人简短记录（rust WorkerBrief）。 */

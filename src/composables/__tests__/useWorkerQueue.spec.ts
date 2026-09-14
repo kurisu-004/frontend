@@ -11,10 +11,19 @@
 //   （assign 端点不会 0 个返回：容量满 / 池外走 ApiError code 路径）。
 // - 新增 moveBatchToWorker 失败（assign 端点 20204 WORKER_CAPACITY_EXCEEDED）用例，
 //   断言 catch 路径：error.value 含语义、ElMessage.error 被调。
+//
+// 2026-09-14 follow-up round-2：
+// - STUB_HELD_BY_W001 升级为 HeldBatchItemDto 全字段（含 name / customer_name /
+//   applicant_name / location / shelf_code / note / parent_customer_name），对应
+//   后端 HeldBatchItem 与 HeldBatchItemDto 对齐；消除 heldToCard 字段降级。
+// - STUB_HELD_BY_W003 简化为空（任务规约：W002/W003 held_batches = []）。
+// - 新增「loadBoard 后 workerHeld 非空且字段完整」用例，断言 W001 持有的 batch
+//   字段全部正确（part_name='零件甲' / customer_name='法拉电子' / applicant_name='张三'
+//   / location='WORKER'，W002 仍空）。
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ApiError } from '@/api/http';
-import type { WorkerPoolDto, WorkerStateDto } from '@/api/workerPool.contract';
+import type { HeldBatchItemDto, WorkerPoolDto, WorkerStateDto } from '@/api/workerPool.contract';
 
 // stub processes
 const STUB_PROCESSES = [
@@ -22,47 +31,30 @@ const STUB_PROCESSES = [
   { id: '2000000000002', code: 'QC-01', name: '质检' },
 ];
 
-// 2026-09-14 follow-up：held_batches 共享 stub（loadBoard 后 workerHeld 派生此源）。
-const STUB_HELD_BY_W001 = [
+// 2026-09-14 follow-up round-2：held_batches 元素升级为 HeldBatchItemDto 全字段。
+const STUB_HELD_BY_W001: HeldBatchItemDto[] = [
   {
-    batch_id: '3000000010001',
-    part_id: '4000000000001',
-    batch_no: 1001,
-    quantity: 2,
-    serial_no: null,
-    drawing_no: 'DWG-A001',
-    system_delivery_date: '2026-09-05',
-    planned_delivery_date: null,
-    is_urgent: false,
-    version: 1,
-  },
-];
-const STUB_HELD_BY_W003 = [
-  {
-    batch_id: '3000000030001',
-    part_id: '4000000000003',
-    batch_no: 3001,
-    quantity: 4,
-    serial_no: 'SN-003',
-    drawing_no: 'DWG-B001',
-    system_delivery_date: '2026-09-01',
-    planned_delivery_date: null,
+    batch_id: '2100000000001',
+    part_id: '1800000000001',
+    batch_no: 1,
+    quantity: 5,
+    serial_no: 'F001-001',
+    drawing_no: 'DWG-001',
+    name: '零件甲',
+    system_delivery_date: '2026-09-30',
+    planned_delivery_date: '2026-10-15',
     is_urgent: true,
-    version: 1,
-  },
-  {
-    batch_id: '3000000030002',
-    part_id: '4000000000003',
-    batch_no: 3002,
-    quantity: 6,
-    serial_no: null,
-    drawing_no: 'DWG-B001',
-    system_delivery_date: '2026-09-02',
-    planned_delivery_date: null,
-    is_urgent: false,
-    version: 1,
+    customer_name: '法拉电子',
+    parent_customer_name: null,
+    applicant_name: '张三',
+    location: 'WORKER',
+    shelf_code: 'A-01',
+    note: '加急',
+    version: 3,
   },
 ];
+// W003 按 task 规约 held_batches = []（不再用旧的 STUB_HELD_BY_W003 双 item 矩阵）；
+// 单 item 覆盖已由 W001 提供。
 
 // stub WorkerPoolDto（每 process 一个）
 const STUB_POOL_2000000000001: WorkerPoolDto = {
@@ -174,7 +166,8 @@ const STUB_POOL_2000000000002: WorkerPoolDto = {
 };
 
 // stub WorkerStateDto（每个 worker 一条；shelf_id='0' 触发 40001 时 catch 兜底）
-// 2026-09-14 follow-up：W001/W003 加 held_batches；W002 持有数为 0 所以 held 空。
+// 2026-09-14 follow-up round-2：仅 W001 含 held_batches（W002/W003 按任务规约为空）；
+// held_batches 元素类型为 HeldBatchItemDto（含全展示字段，对应 HeldBatchItemDto 16+ 字段）。
 const STUB_STATES: Record<string, WorkerStateDto> = {
   '1900000000001': {
     worker_id: '1900000000001',
@@ -204,7 +197,7 @@ const STUB_STATES: Record<string, WorkerStateDto> = {
     current_held: 2,
     capacity_remaining: 0,
     pool_count_by_process: [{ process_id: '2000000000002', pool_count: 1 }],
-    held_batches: STUB_HELD_BY_W003,
+    held_batches: [],
   },
 };
 
@@ -292,7 +285,7 @@ beforeEach(() => {
 });
 
 describe('useWorkerQueue', () => {
-  it('loadBoard populates workers / processPools / workerHeld（2026-09-14 follow-up：held 由 STUB_STATES 派生）', async () => {
+  it('loadBoard populates workers / processPools / workerHeld（2026-09-14 follow-up round-2：W001 含 1 item / W002/W003 空）', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const q = useWorkerQueue();
     await q.loadBoard('5000000000001');
@@ -300,12 +293,39 @@ describe('useWorkerQueue', () => {
     expect(q.processPools.value).toHaveLength(2);
     expect(q.processPools.value[0]!.batches).toHaveLength(2);
     expect(q.processPools.value[1]!.batches).toHaveLength(1);
-    // 2026-09-14 follow-up：workerHeld 不再恒为空，从 WorkerStateDto.held_batches 派生。
+    // 2026-09-14 follow-up round-2：workerHeld 不再恒为空，从 WorkerStateDto.held_batches
+    // 派生；W001 含 1 个 HeldBatchItemDto 全字段 item，W002/W003 按规约为空。
     expect(q.workerHeld.value['1900000000001']).toHaveLength(1);
-    expect(q.workerHeld.value['1900000000001']![0]!.batch_id).toBe('3000000010001');
+    expect(q.workerHeld.value['1900000000001']![0]!.batch_id).toBe('2100000000001');
     expect(q.workerHeld.value['1900000000002']).toEqual([]);
-    expect(q.workerHeld.value['1900000000003']).toHaveLength(2);
+    expect(q.workerHeld.value['1900000000003']).toEqual([]);
     expect(q.loading.value).toBe(false);
+  });
+
+  it('loadBoard 后 workerHeld 非空且字段完整（2026-09-14 follow-up round-2：消除字段降级）', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    const q = useWorkerQueue();
+    await q.loadBoard('5000000000001');
+    // W001 含 1 个 HeldBatchItemDto 全字段 item
+    expect(q.workerHeld.value['1900000000001']).toHaveLength(1);
+    const card = q.workerHeld.value['1900000000001']![0]!;
+    // 2026-09-14 follow-up round-2：之前降级为 null/空串的字段现在为真值
+    expect(card.part_name).toBe('零件甲');
+    expect(card.customer).toBe('法拉电子');
+    expect(card.applicant).toBe('张三');
+    expect(card.location).toBe('WORKER');
+    // 其余字段也完整保留（drawing_no / batch_no / quantity / serial_no /
+    // system_delivery_date / planned_delivery_date / is_urgent / version）
+    expect(card.drawing_no).toBe('DWG-001');
+    expect(card.batch_no).toBe('B1');
+    expect(card.quantity).toBe(5);
+    expect(card.serial_no).toBe('F001-001');
+    expect(card.system_delivery_date).toBe('2026-09-30');
+    expect(card.planned_delivery_date).toBe('2026-10-15');
+    expect(card.is_urgent).toBe(true);
+    expect(card.version).toBe(3);
+    // W002 仍空
+    expect(q.workerHeld.value['1900000000002']).toHaveLength(0);
   });
 
   it('filteredWorkers：activeTab=2000000000001 命中 W001/W002（不命中 W003）', async () => {
