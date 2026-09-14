@@ -248,14 +248,15 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        // 2026-09-11 新增：工序制定页（生产管理分组首项）
+        // 2026-09-14 menuCode 改名：process_design_list → part_process_chain
+        // 对齐后端 t_menu（migration 017/018/021 写入）的 menuCode。
         path: 'production/process-design',
         name: 'ProcessDesign',
         component: () => import('@/views/production/ProcessDesignView.vue'),
         meta: {
           title: '工序制定',
           icon: 'SetUp',
-          menuCode: 'process_design_list',
+          menuCode: 'part_process_chain',
           breadcrumb: [
             { label: '生产管理', path: '/production/process-design' },
             { label: '工序制定' },
@@ -352,14 +353,16 @@ const routes: RouteRecordRaw[] = [
       {
         // 2026-09-14 重写：打印模板编辑器从「自研三栏」换成 `@amdosion/vue3-print` 包实现。
         // view 名同步改为 PrintTemplateDesigner（保持唯一路由 name 不冲突）。
-        // menuCode 暂留空：等接入后端菜单树时再加（CLAUDE.md #8 例外）。
-        // allowRoles 兜底：dev dummy 模式的 dev-admin 角色是 MANAGER，能进；prod 暂不上线。
+        // 2026-09-14 menuCode 补齐：print_templates_designer（与后端 t_menu 一级
+        // template_management → 二级 print_templates_designer 对齐；CLAUDE.md #8）。
+        // allowRoles 兜底保留：dev dummy 模式 dev-admin 角色是 MANAGER，能进。
         path: 'print-templates',
         name: 'PrintTemplateDesigner',
         component: () => import('@/views/print-templates/PrintTemplateDesigner.vue'),
         meta: {
           title: '打印模板设计器',
           icon: 'Printer',
+          menuCode: 'print_templates_designer',
           allowRoles: ['MANAGER'],
           breadcrumb: [{ label: '打印模板设计器' }],
         },

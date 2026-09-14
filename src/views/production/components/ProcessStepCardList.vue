@@ -156,8 +156,16 @@ const props = defineProps<{
   partId: string | null;
 }>();
 
-const { parts, processes, getFlowByPartId, upsertSteps, newStep, summaries } =
-  usePartProcessDesign();
+const {
+  parts,
+  processes,
+  flows,
+  getFlowByPartId,
+  loadFlowForPart,
+  upsertSteps,
+  newStep,
+  summaries,
+} = usePartProcessDesign();
 
 const steps = ref<ProcessStep[]>([]);
 const savedSnapshot = ref<string>(''); // JSON.stringify 当前已保存的 steps
@@ -177,22 +185,44 @@ const totalMinutes = computed(() =>
 // 2026-09-12 第三轮：删除 hasOutsource 派生（不再展示外协警示）。
 // 保留 summaries 调用以确保派生触发；如不再需要可后续清理。
 
-/** 当 partId 变化或外部流程变更：载入当前流程到本地 steps，更新 dirty。 */
+/** 当 partId 变化或外部流程变更：载入当前流程到本地 steps，更新 dirty。
+ *  2026-09-14 切真接口后：先 getFlowByPartId 拿本地缓存，若未加载则触发
+ *  loadFlowForPart 异步拉取；拉到后再同步本地 steps（异步部分用 watch 二次触发）。
+ */
 watch(
   () => props.partId,
-  (newId) => {
+  async (newId) => {
     if (!newId) {
       steps.value = [];
       savedSnapshot.value = '';
       dirty.value = false;
       return;
     }
-    const f = getFlowByPartId(newId);
+    let f = getFlowByPartId(newId);
+    if (!f) {
+      // 2026-09-14：触发懒加载；loadFlowForPart 完成后 flows 单例更新会触发下方 watch
+      await loadFlowForPart(newId);
+      f = getFlowByPartId(newId);
+    }
     steps.value = f ? f.steps.map((s) => ({ ...s })) : [];
     savedSnapshot.value = JSON.stringify(steps.value);
     dirty.value = false;
   },
   { immediate: true },
+);
+
+/** 监听本地 flows 单例更新（懒加载完成后），重新同步 steps。
+ *  2026-09-14 新增：composable 切换到真接口后，loadFlowForPart 是 async，
+ *  上方 watch 的 await 之后 f 仍可能为 null（load 失败），需要二次 watch 兜底。 */
+watch(
+  () => (props.partId ? flows.value[props.partId] : null),
+  (f) => {
+    if (!f || !props.partId) return;
+    // 仅在本地未 dirty 时刷新（避免保存中误覆盖用户编辑）
+    if (dirty.value) return;
+    steps.value = f.steps.map((s) => ({ ...s }));
+    savedSnapshot.value = JSON.stringify(steps.value);
+  },
 );
 
 /** 步骤本地修改：标 dirty，触发自动保存（800ms 防抖）。 */

@@ -100,12 +100,14 @@ provide<typeof moveBatchToPool>('moveBatchToPool', moveBatchToPool);
 provide<ComputedRef<string>>('shelfId', shelfId);
 
 onMounted(async () => {
-  await loadBoard();
+  // 2026-09-14 review 第 1 轮：注入 shelfId 给 loadBoard（WorkerPoolState 必填），
+  // 由 auth.activeShelfId() 取当前激活货架；null → 跳过二次 GET。
+  await loadBoard(shelfId.value || null);
   if (processPools.value[0]) activeTab.value = processPools.value[0].process_id;
 });
 
 async function onRefresh() {
-  await loadBoard();
+  await loadBoard(shelfId.value || null);
   // 首次或 refresh 时若 activeTab 还没设（如 processPools 刚加载完），默认选第一个。
   if (!activeTab.value && processPools.value[0]) {
     activeTab.value = processPools.value[0].process_id;

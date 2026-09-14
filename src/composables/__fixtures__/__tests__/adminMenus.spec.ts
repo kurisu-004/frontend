@@ -12,7 +12,9 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
 }
 
 describe('ADMIN_MENUS', () => {
-  it('covers all 27 menuCodes', () => {
+  // 2026-09-14：新增 template_management + print_templates_designer（模板管理分组 + 模板编辑子菜单）
+  // + part_process_chain（2026-09-14 menuCode 改名）。code 总数 27 → 30。
+  it('covers all 30 menuCodes', () => {
     const all = flatten(ADMIN_MENUS);
     const codes = all.map((n) => n.code);
     expect(codes).toContain('home');
@@ -45,9 +47,13 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('outsource_list');
     expect(codes).toContain('floor_group');
     expect(codes).toContain('settings_root');
-    // 2026-09-11 新增：生产管理分组 + 工序制定菜单 code（process_design_list 在 production_group 下）
+    // 2026-09-11 新增：生产管理分组 + 工序制定菜单 code
     expect(codes).toContain('production_group');
-    expect(codes).toContain('process_design_list');
+    // 2026-09-14 改名：process_design_list → part_process_chain（对齐后端 t_menu）
+    expect(codes).toContain('part_process_chain');
+    // 2026-09-14 新增：模板管理分组 + 模板编辑子菜单
+    expect(codes).toContain('template_management');
+    expect(codes).toContain('print_templates_designer');
   });
 
   it('has unique codes (no dup)', () => {
