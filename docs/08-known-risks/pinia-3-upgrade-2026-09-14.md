@@ -56,7 +56,7 @@ src/main.ts:2:  import { createPinia } from 'pinia';
 src/main.ts:34: app.use(createPinia());
 ```
 
-**结论：仓库当前没有 Pinia store**（CLAUDE.md #1 硬约束：不要新建 Pinia store），唯一引用是 `main.ts` 的 `createPinia()` 实例化与 `app.use(...)`。
+**结论：仓库当前没有 Pinia store**（2026-09-15 已放开 CLAUDE.md 原硬约束「不要新建 Pinia store」；放开后按需新增 store），唯一引用是 `main.ts` 的 `createPinia()` 实例化与 `app.use(...)`。
 
 升级影响面：
 
@@ -104,7 +104,7 @@ src/main.ts:34: app.use(createPinia());
 2. **vite 8 / rolldown**：包版运行时依赖 `@vueuse/core`（见 `dependency-risks.md` 第 3 节 rolldown 噪音），Pinia 3 升级本身不引入新噪音，但若后续 vite/rolldown 升级触及 Pinia 内部 store 创建路径，需回头验。
 3. **嵌入运行时切换**：未来若换包（如 `vue-print-next` 等），同样按"包依赖的 Pinia 版本 ≥ 宿主 Pinia 版本"对齐即可。
 4. **不要回退**：本仓库一旦在 dev / prod 同时跑包版 + 旧版组件，包内部 Pinia 与宿主 Pinia 版本不一致会引发运行时隐性问题。不要回退到 2.x。
-5. **CLAUDE.md #1**（不建新 Pinia store）保持不变——本升级仅 bump 版本号，不引入新 store。
+5. **CLAUDE.md 原硬约束「不要新建 Pinia store」已于 2026-09-15 放开**——本升级仅 bump 版本号，不引入新 store；后续按需新增。
 
 ---
 
@@ -112,4 +112,4 @@ src/main.ts:34: app.use(createPinia());
 
 - [`docs/08-known-risks/dependency-risks.md`](./dependency-risks.md) —— 全仓依赖风险登记总入口（本节为新增条目）
 - [`docs/08-known-risks/lint-fix-2026-09-13.md`](./lint-fix-2026-09-13.md) —— 最近的 lint fix 决策参考格式
-- `frontend/CLAUDE.md` 硬约束 #1（不建 Pinia store） / #4（EP CSS 手动 import）/ #14（lint + format 强制）
+- `frontend/CLAUDE.md`（#3 EP CSS 手动 import）/（#13 lint + format 强制）——「不建 Pinia store」硬约束已于 2026-09-15 移除

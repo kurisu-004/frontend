@@ -211,8 +211,7 @@
 //
 //   综合：集成 commit 保留 PR-2 的 IIFE，把 plan "Fix B1 改成显式链路" 的诉求
 //   落地为"显式路径说明 + IIFE 是当前规则下唯一可行的形式"——并把这条限制写进本
-//   注释与 commit message，以便后续迁 ESLint 规则或迁 Pinia store 时再回头统一
-//   改成 props.ctx.X.Y 显式链路。
+//   注释与 commit message。
 
 import { onMounted, ref } from 'vue';
 import type { TableInstance } from 'element-plus';

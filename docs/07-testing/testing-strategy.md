@@ -32,7 +32,7 @@
 
 - 组件渲染 / props / events / slots
 - 路由导航 / 权限守卫（前端守卫逻辑 10 行内可直接读）
-- Pinia store（本项目实际不用，状态都在 composable 模块级 ref）
+- 共享状态：composable 模块级 ref（`useAuthSession` / `useScanSession` 模式），按需在测试里 import 直接断言
 - E2E（无 Playwright/Cypress，按需再评估）
 
 ## 三、测试运行器

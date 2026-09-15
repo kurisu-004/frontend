@@ -373,6 +373,5 @@ grep -rn '<param_key>' src/api
 ## 相关文档
 
 - [`docs/04-ui-and-styling/element-plus-integration.md`](../04-ui-and-styling/element-plus-integration.md) —— EP 按需加载 / 命令式 API CSS / locale / 主题色
-- [`docs/02-architecture/state-management.md`](../02-architecture/state-management.md) —— composable 单例模式（`useLazyDraggable` 遵循同一约定）
 - [`docs/02-architecture/routing-and-permissions.md`](../02-architecture/routing-and-permissions.md) Dev Dummy Auth 段 —— dummy-auth 启用方式与三层保护说明
 - [`docs/02-architecture/api-contract.md`](../02-architecture/api-contract.md) —— query 序列化 / 信封协议 / 自动 refresh（第 7 节相关）

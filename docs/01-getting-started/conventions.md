@@ -131,7 +131,6 @@ import type { Part } from '@/types/parts';
 
 完整版见仓库根 [CLAUDE.md](../../CLAUDE.md) "硬约束" 段。这里只列最常踩的几条：
 
-- **不要新建 Pinia store** — 共享状态沿用 composable 模块级单例
 - **不要直接 `import 'pdfjs-dist'`** — 必须从 `@/utils/pdfjs` 引入
 - **不要给 EP 写 `theme` prop** — 主题色走 CSS 变量
 - **不要把雪花 ID 转 `Number()`** — 会丢精度，全用 `string`
