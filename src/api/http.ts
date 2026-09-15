@@ -31,15 +31,19 @@
 // - 2026-09-14：auth 域切 v2（`apiV2` / `refreshClientV2`）。
 // - 2026-09-15 Phase 5：业务全切 v2 → 删除 `apiV2` / `refreshClientV2`，合入 `api` /
 //   `refreshClient`（baseURL `/api/v2`）；新增 `apiPrint`（baseURL `/api/v1`）专供
-//   4 个打印端点。serializeParamsV2 同步合并进 serializeParamsV1（v1 业务剩 4 端点，
-//   仅数组走重复 key；CSV 白名单已无消费者，ARRAY_AS_CSV_KEYS 不再导出）。
+//   4 个打印端点。
+// - 2026-09-15 hotfix：Phase 5 误合并 `serializeParamsV2` 引入 regression——v2 端点
+//   `GET /api/v2/parts?statuses=...` 用重复 key 形式后端 axum 解析失败返 400。
+//   恢复 2026-08-29 的 CSV 白名单拆分：`api` / `refreshClient` 绑 `serializeParamsV2`
+//   （白名单 `statuses` 等数组 → CSV 单值）；`apiPrint` 维持 `serializeParamsV1`
+//   （FastAPI 期望重复 key）。
 //
-// 【2026-08-29 → 2026-09-15 序列化合并】原本 v1/v2 分两份 serializer：
+// 【2026-08-29 拆分 → Phase 5 误合并 → 2026-09-15 hotfix 还原】
 //   - v1 FastAPI 期望所有数组 → 重复 key 形式 `?k=a&k=b`；
-//   - v2 Rust axum `statuses` 期望 CSV 单值 `?statuses=a,b`。
-// v1 业务剩 4 端点都不传数组 → 单一 `serializeParamsV1`（数组走重复 key）覆盖 v2 业务
-// 的非 `statuses` 数组（v2 `statuses` 由 v2 端点改走单值 string 类型，后端 schema 同步
-// 收敛——见 backend-rust/docs/api/）。CSV 白名单已无消费者，导出保留为内部 helper。
+//   - v2 Rust axum `statuses`（Vec<String>）期望 CSV 单值 `?statuses=a,b`（axum 的
+//     Query 反序列化器对 Vec<T> 默认按 `,` 分隔，对 `?k=a&k=b` 行为依赖实现）。
+//   两边语义不一致，**不能合并**——CSV 白名单机制恢复（ARRAY_AS_CSV_KEYS 白名单 +
+//   serializeParamsWith 共用实现 + serializeParamsV1/V2 两条具名导出）。
 
 import type { AxiosError } from 'axios';
 import axios, {
@@ -55,14 +59,43 @@ import { refreshTokens, type LoginResponse } from '@/api/auth';
 // 这里抽出来做单测没必要收窄类型，避免 Array.isArray 后续分支里 val 没法窄化
 // 成 string 让 encodeURIComponent 报 TS2345。
 
-function serializeParamsWith(params: any): string {
+/**
+ * v2 后端期望多值筛选走 CSV 单值形式（`?statuses=A,B`）的 key 白名单。
+ *
+ * 2026-09-15 Phase 5 误合并后回归：原 `serializeParamsV2`（CSV 白名单）被删除，
+ * 统一用 `serializeParamsV1`（数组重复 key）→ 前端 `GET /api/v2/parts?statuses=A&statuses=B`
+ * 后端 axum 解析失败返 400 Bad Request，UI 打开 /parts 直接白屏。本 hotfix 恢复 CSV
+ * 白名单机制：`statuses`（及未来其它 v2 多值筛选字段）数组 → CSV 单值，
+ * 其它数组仍走重复 key（v1 端点 + v2 未列入白名单的数组字段都靠这条分支）。
+ *
+ * 历史脉络（不要回退）：
+ * - 2026-08-29 拆分原因：v1 Python FastAPI 期望所有数组 → 重复 key，v2 Rust axum 的
+ *   `statuses` 期望 CSV 单值（axum Query 反序列化器对 Vec<T> 默认按 `,` 分隔，对 `?k=a&k=b`
+ *   形式的反序列化行为依赖实现，可能只取首元素或报错，必须按后端期望的格式发）。
+ * - 当前 v2 schema 决定保留 `statuses` 为多值（Vec<String>），所以 CSV 白名单机制恢复。
+ */
+const ARRAY_AS_CSV_KEYS = new Set<string>(['statuses']);
+
+function serializeParamsWith(params: any, csvKeys: Set<string>): string {
   const parts: string[] = [];
   for (const key of Object.keys(params)) {
     const val = params[key];
     if (val === undefined || val === null) continue;
     if (Array.isArray(val)) {
-      for (const v of val) {
-        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`);
+      if (csvKeys.has(key)) {
+        // CSV 单值：数组 → "a,b,c"，单个元素 → "a"。空数组已在 cleanParams 阶段
+        // 剥掉，这里再保险一次。
+        // 用 `%2C`（逗号转义）拼接而不是字面 `,`：encodeURIComponent 不会编码 `,`，
+        // 但 RFC 3986 规定 query 里的分隔符需要百分号转义，避免后端/中间件误判。
+        if (val.length === 0) continue;
+        parts.push(
+          `${encodeURIComponent(key)}=${val.map((v) => encodeURIComponent(v)).join('%2C')}`,
+        );
+      } else {
+        // 重复 key：每个元素独立 push（v1 端点 / v2 非白名单数组字段）
+        for (const v of val) {
+          parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`);
+        }
       }
     } else {
       parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
@@ -71,18 +104,21 @@ function serializeParamsWith(params: any): string {
   return parts.join('&');
 }
 
-/** v1 + v2 共用的 query 序列化器：所有数组走重复 key 形式 `?k=a&k=b`。
- *  2026-09-15 Phase 5 合并：v2 业务 `statuses` 字段由后端 schema 改为单值 string，
- *  重复 key 形式同样兼容（FastAPI 解析 CSV 会拒，但 Rust 端 List / String 单值字段
- *  解析重复 key 仅取首元素——与 CSV 单值语义兼容）。原 `serializeParamsV2`（CSV 白名单）
- *  已无消费者，不导出。 */
+/** v1 专用 query 序列化器：所有数组走重复 key 形式 `?k=a&k=b`。
+ *  专供 `apiPrint`（baseURL `/api/v1`）使用，匹配 Python FastAPI Query 解析语义。 */
 export function serializeParamsV1(params: any): string {
-  return serializeParamsWith(params);
+  return serializeParamsWith(params, new Set());
 }
 
-/** @deprecated 等价于 serializeParamsV1。2026-09-15 Phase 5 起 v1/v2 共用同一份
- *  serializer（v2 `statuses` 改单值 string 后重复 key 与 CSV 语义兼容）。保留
- *  作为 alias 仅供已有 import 不至于崩；新代码请用具名 V1。 */
+/** v2 专用 query 序列化器：白名单内 key（`statuses` 等）走 CSV 单值 `?k=a,b`，
+ *  其它数组维持重复 key。专供 `api` / `refreshClient`（baseURL `/api/v2`）使用，
+ *  匹配 Rust axum Query 反序列化对 Vec<T> 的 CSV 期望。 */
+export function serializeParamsV2(params: any): string {
+  return serializeParamsWith(params, ARRAY_AS_CSV_KEYS);
+}
+
+/** @deprecated 等价于 serializeParamsV1。2026-08-29 起作为 alias 保留，供历史
+ *  import 不至于崩；新代码请用具名 V1 / V2。 */
 export const serializeParams: (params: any) => string = serializeParamsV1;
 
 const STORAGE_KEY = 'auth_session';
@@ -91,8 +127,10 @@ const STORAGE_KEY = 'auth_session';
 export const api = axios.create({
   baseURL: '/api/v2',
   // 不显式设 Content-Type：axios 会按 body 类型自动选 application/json / multipart/form-data。
+  // paramsSerializer 走 V2：白名单 key（statuses 等）数组 → CSV 单值；其它数组 → 重复 key。
+  // 2026-09-15 Phase 5 曾误用 V1，导致 v2 axum 反序列化 `?statuses=A&statuses=B` 失败返 400。
   timeout: 30_000,
-  paramsSerializer: serializeParamsV1,
+  paramsSerializer: serializeParamsV2,
 });
 
 /**
@@ -105,7 +143,9 @@ export const api = axios.create({
 export const refreshClient = axios.create({
   baseURL: '/api/v2',
   timeout: 30_000,
-  paramsSerializer: serializeParamsV1,
+  // 业务 v2 客户端，与 `api` 保持一致序列化策略（虽然 /auth/refresh 通常无 query，
+  // 但万一 future 加 query 参数就走 V2 不踩坑）
+  paramsSerializer: serializeParamsV2,
 });
 
 // ===== 打印专用客户端（v1，2026-09-15 Phase 5 新增）=====
