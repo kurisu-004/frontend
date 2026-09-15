@@ -31,7 +31,7 @@ myERP 工厂管理系统前端。后端双轨运行：v1 FastAPI（`/api/v1`，�
 
 ```
 Vite 8  ·  Vue 3.4  ·  TypeScript 5.4  ·  Element Plus 2.7
-axios  ·  echarts 6  ·  pdfjs 6  ·  xlsx 0.18  ·  pinia 2  ·  sortablejs
+axios  ·  echarts 6  ·  pdfjs 6  ·  xlsx 0.18  ·  pinia 3  ·  sortablejs
 ```
 
 ## 快速跑起来
