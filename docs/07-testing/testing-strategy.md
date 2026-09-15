@@ -33,6 +33,7 @@
 - 组件渲染 / props / events / slots
 - 路由导航 / 权限守卫（前端守卫逻辑 10 行内可直接读）
 - 共享状态：composable 模块级 ref（`useAuthSession` / `useScanSession` 模式），按需在测试里 import 直接断言
+- Pinia 页面级 setup store **可测**（2026-09-15 开闸：`setActivePinia(createPinia())` + node 环境，参考 `usePartsListStore.spec.ts`；`.vue` 依赖需 factory stub）—— 不要测跨路由全局 Pinia store（项目仍禁止）
 - E2E（无 Playwright/Cypress，按需再评估）
 
 ## 三、测试运行器
@@ -59,20 +60,21 @@ npx vitest --watch                 # watch 模式（开发期）
 
 ## 四、测试文件索引
 
-| 文件                                                          | 覆盖目标                                                             |
-| ------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `src/api/http.spec.ts`                                        | `serializeParams` / `cleanParams` 纯函数（query 序列化、白名单 CSV） |
-| `src/api/dashboard.spec.ts`                                   | 大屏 snapshot 序列化与 event handler 映射                            |
-| `src/utils/__tests__/date.spec.ts`                            | 日期格式化（年月日 / 时分秒 / ISO）                                  |
-| `src/utils/__tests__/mergePdfs.spec.ts`                       | pdf-lib 多 PDF 合并（pdf-lib 是 node 库，干净）                      |
-| `src/utils/__tests__/bidExcelParser.spec.ts`                  | 投标 Excel 解析（mock 数据，含 80+ 用例）                            |
-| `src/utils/__tests__/bidExcelParser.real.spec.ts`             | 投标 Excel 解析（真实 fixture）                                      |
-| `src/utils/__tests__/historicalPriceExcelParser.spec.ts`      | 历史价 Excel 解析（mock）                                            |
-| `src/utils/__tests__/historicalPriceExcelParser.real.spec.ts` | 历史价 Excel 解析（真实 fixture）                                    |
-| `src/composables/useBulkPassInspection.spec.ts`               | 批量通过品检 composable（init / 状态 / cleanup）                     |
-| `src/composables/useBulkScanInspect.spec.ts`                  | 批量扫码送检 composable                                              |
-| `src/composables/useDeliveryNoteDetailCache.spec.ts`          | 送货单详情 N+1 缓存                                                  |
-| `src/composables/usePooledDetail.spec.ts`                     | 通用并发限流 composable                                              |
+| 文件                                                              | 覆盖目标                                                                                                                                   |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/api/http.spec.ts`                                            | `serializeParams` / `cleanParams` 纯函数（query 序列化、白名单 CSV）                                                                       |
+| `src/api/dashboard.spec.ts`                                       | 大屏 snapshot 序列化与 event handler 映射                                                                                                  |
+| `src/utils/__tests__/date.spec.ts`                                | 日期格式化（年月日 / 时分秒 / ISO）                                                                                                        |
+| `src/utils/__tests__/mergePdfs.spec.ts`                           | pdf-lib 多 PDF 合并（pdf-lib 是 node 库，干净）                                                                                            |
+| `src/utils/__tests__/bidExcelParser.spec.ts`                      | 投标 Excel 解析（mock 数据，含 80+ 用例）                                                                                                  |
+| `src/utils/__tests__/bidExcelParser.real.spec.ts`                 | 投标 Excel 解析（真实 fixture）                                                                                                            |
+| `src/utils/__tests__/historicalPriceExcelParser.spec.ts`          | 历史价 Excel 解析（mock）                                                                                                                  |
+| `src/utils/__tests__/historicalPriceExcelParser.real.spec.ts`     | 历史价 Excel 解析（真实 fixture）                                                                                                          |
+| `src/composables/useBulkPassInspection.spec.ts`                   | 批量通过品检 composable（init / 状态 / cleanup）                                                                                           |
+| `src/composables/useBulkScanInspect.spec.ts`                      | 批量扫码送检 composable                                                                                                                    |
+| `src/composables/useDeliveryNoteDetailCache.spec.ts`              | 送货单详情 N+1 缓存                                                                                                                        |
+| `src/composables/usePooledDetail.spec.ts`                         | 通用并发限流 composable                                                                                                                    |
+| `src/views/parts/composables/__tests__/usePartsListStore.spec.ts` | parts 列表页 Pinia setup store（2026-09-15 首例：装配完整性 / 嵌套解包 / 批量选择流 / 空值守卫 / fetchList 联动 / `$dispose` 重建 6 用例） |
 
 ## 五、命名约定
 

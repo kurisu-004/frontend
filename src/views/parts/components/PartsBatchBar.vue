@@ -4,53 +4,62 @@
   2026-08-22 从 PartsList.vue 抽出：底部批量操作栏（计数 + tooltip + 全选/清空 +
   打印进度条 + 操作按钮）。
 
+  2026-09-15 重构：状态全部来自 usePartsListStore（Pinia setup store），原 :ctx prop
+  模式删除；selectedIds 是 reactive Set，经 store 深代理后身份保持、.size 可跟踪，
+  模板直接 store.batch.selectedIds.size 即可触发响应式更新（无需 computed 包一层）。
+
   隐藏 iframe（批量打印预览）保留在 PartsList.vue 壳内，不在此组件渲染：
-  iframe 与 ctx.print.iframeRef 在 onMounted 里同步赋值，确保 ctx.print.onBatchPrint
+  iframe 与 store.print.iframeRef 在 onMounted 里同步赋值，确保 store.print.onBatchPrint
   触发时 iframe 已挂载。
 -->
 <template>
-  <div v-if="canEdit && batchMode" class="batch-bar">
+  <div v-if="store.canEdit && store.batch.batchMode" class="batch-bar">
     <div class="bar-info">
-      <span v-if="batchSelectedPartCount > 0">
-        零件 <strong>{{ batchSelectedPartCount }}</strong> 件
+      <span v-if="store.batch.batchSelectedPartCount > 0">
+        零件 <strong>{{ store.batch.batchSelectedPartCount }}</strong> 件
       </span>
-      <span v-if="batchSelectedAssemblyCount > 0" class="bar-info__assembly">
-        装配件 <strong>{{ batchSelectedAssemblyCount }}</strong> 件
+      <span v-if="store.batch.batchSelectedAssemblyCount > 0" class="bar-info__assembly">
+        装配件 <strong>{{ store.batch.batchSelectedAssemblyCount }}</strong> 件
         <el-tooltip placement="top" :show-after="0">
           <template #content> 勾选装配件行将打印该装配件的<b>全部子件</b>图纸 </template>
           <el-icon class="batch-hint"><WarningFilled /></el-icon>
         </el-tooltip>
       </span>
-      <el-button link size="small" @click="onSelectAllPage">全选当前页</el-button>
-      <el-button link size="small" @click="onClearSelection">清空选择</el-button>
+      <el-button link size="small" @click="store.batch.onSelectAllPage">全选当前页</el-button>
+      <el-button link size="small" @click="store.batch.onClearSelection">清空选择</el-button>
     </div>
 
     <!-- 打印进度 -->
-    <div v-if="batchPrintTotal > 0" class="batch-print-progress">
+    <div v-if="store.print.batchPrintTotal > 0" class="batch-print-progress">
       <el-progress
-        :percentage="batchPrintProgress"
+        :percentage="store.print.batchPrintProgress"
         :stroke-width="16"
         :text-inside="true"
         :show-text="true"
       />
       <div class="batch-print-progress__text">
-        正在生成打印文件 {{ batchPrintCurrent }}/{{ batchPrintTotal }}
+        正在生成打印文件 {{ store.print.batchPrintCurrent }}/{{ store.print.batchPrintTotal }}
       </div>
     </div>
 
     <el-button
-      v-if="batchAction === 'print'"
+      v-if="store.batch.batchAction === 'print'"
       type="primary"
-      :loading="batchPrinting"
-      :disabled="selectedIdsSize === 0 || batchPrintTotal > 0"
-      @click="onBatchPrint"
+      :loading="store.print.batchPrinting"
+      :disabled="store.batch.selectedIds.size === 0 || store.print.batchPrintTotal > 0"
+      @click="store.print.onBatchPrint"
     >
       <el-icon><Printer /></el-icon>
-      <span>打印预览（{{ selectedIdsSize }} 件）</span>
+      <span>打印预览（{{ store.batch.selectedIds.size }} 件）</span>
     </el-button>
-    <el-button v-else type="primary" :disabled="selectedIdsSize === 0" @click="onOpenBatchDispatch">
+    <el-button
+      v-else
+      type="primary"
+      :disabled="store.batch.selectedIds.size === 0"
+      @click="store.dispatch.onOpenBatchDispatch"
+    >
       <el-icon><Promotion /></el-icon>
-      <span>批量下发（{{ selectedIdsSize }} 件）</span>
+      <span>批量下发（{{ store.batch.selectedIds.size }} 件）</span>
     </el-button>
   </div>
 </template>
@@ -58,34 +67,12 @@
 <script setup lang="ts">
 // views/parts/components/PartsBatchBar.vue
 //
-// 2026-08-22 从 PartsList.vue 抽出：底部批量栏。
-// 计数 / 进度 / 操作按钮全部来自 ctx.batch.* / ctx.print.* / ctx.dispatch.*。
-//
-// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层解构 props.ctx。
-// 这里把每个用到的 ref 包成 computed —— 顶层 computed 绑定让模板自动解包，
-// 同时避免直接读 props.ctx.X.Y（嵌套 ref 不会被 Vue 模板自动解包）。
-import { computed } from 'vue';
+// 2026-09-15 重构：状态全部来自 usePartsListStore（Pinia setup store）。
+// 计数 / 进度 / 操作按钮直接 store.batch.* / store.print.* / store.dispatch.* 访问。
 import { Printer, Promotion, WarningFilled } from '@element-plus/icons-vue';
-import type { PartsListCtx } from '../composables/partsListCtx';
+import { usePartsListStore } from '../composables/usePartsListStore';
 
-const props = defineProps<{ ctx: PartsListCtx }>();
-
-const canEdit = computed(() => props.ctx.canEdit);
-const batchMode = computed(() => props.ctx.batch.batchMode.value);
-const batchSelectedPartCount = computed(() => props.ctx.batch.batchSelectedPartCount.value);
-const batchSelectedAssemblyCount = computed(() => props.ctx.batch.batchSelectedAssemblyCount.value);
-const onSelectAllPage = computed(() => props.ctx.batch.onSelectAllPage);
-const onClearSelection = computed(() => props.ctx.batch.onClearSelection);
-const batchAction = computed(() => props.ctx.batch.batchAction.value);
-const batchPrintTotal = computed(() => props.ctx.print.batchPrintTotal.value);
-const batchPrintProgress = computed(() => props.ctx.print.batchPrintProgress.value);
-const batchPrintCurrent = computed(() => props.ctx.print.batchPrintCurrent.value);
-const batchPrinting = computed(() => props.ctx.print.batchPrinting.value);
-const onBatchPrint = computed(() => props.ctx.print.onBatchPrint);
-const onOpenBatchDispatch = computed(() => props.ctx.dispatch.onOpenBatchDispatch);
-// selectedIds 是 reactive Set，模板里 .size 不会自动响应；用 computed 包一层
-// 确保 selectedIds.size 变化时模板重新渲染。
-const selectedIdsSize = computed(() => props.ctx.batch.selectedIds.size);
+const store = usePartsListStore();
 </script>
 
 <style lang="scss" scoped>
@@ -127,7 +114,7 @@ const selectedIdsSize = computed(() => props.ctx.batch.selectedIds.size);
   flex: 1;
   margin: 0 12px;
 }
-.batch-print-progress__text {
+.batch-bar .batch-print-progress__text {
   text-align: center;
   font-size: 12px;
   color: var(--el-text-color-secondary);

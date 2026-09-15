@@ -18,12 +18,13 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 
 ## 硬约束（agent 速查）
 
-1. **不要写 `api.post('/v2/...')`**：新接口必须 `import { apiV2 } from '@/api/http'` 然后 `apiV2.post(...)`。
-2. **雪花 ID 必须 string**：后端 ID > 2^53，`Number()` 丢精度（见 `useAuthSession.activeShelfId()`）。
-3. **EP 命令式 API CSS 必须在 `src/main.ts` 手动 import**：`unplugin-auto-import` resolver 只扫 `<template>`，看不到 `<script setup>` 里的 `ElMessageBox` / `ElMessage` / `ElNotification` / `ElLoading`。
-4. **不要删 `vite.config.ts` 的 `optimizeDeps.include`**：防止 dev 模式 dep discovery 触发整页 full-reload。
-5. **不要直接 `import 'pdfjs-dist'`**：统一从 `@/utils/pdfjs` import `pdfjsLib`（workerSrc 缓存穿透版本串集中在这里）。
-6. **业务端点 2026-09-15 Phase 5 一次性切到 v2（backend-rust 实现）**：`api` / `refreshClient` baseURL 统一为 `/api/v2`，原 `apiV2` / `refreshClientV2` 已合并删除。所有业务端点（auth / parts / delivery-notes / delivery-groups / process-chain / worker-pool / applicants / assembly / cnc / customers / outsource / processes / shelves / statistics / users / workers / work-types）统一走 `api`。仅 4 个打印端点保留 v1，**专供 `apiPrint` 客户端**（baseURL `/api/v1`，与 `api` 共享同一组拦截器与 `refreshPromise` 单例）：
+1. **Pinia store 仅限页面级复杂状态（2026-09-15 用户批准开闸）；跨页共享仍用 composable 模块级单例**：pinia@3.0.4 已装、`main.ts` 已 `app.use(createPinia())`，首例 `usePartsListStore`（`src/views/parts/composables/`，:ctx prop 模式重构）。新建 store 必须同时满足：a) 状态只服务单个页面/路由，不跨页共享；b) ≥ 3 个并列子组件共享同一组 composable 切片（:ctx prop 穿透 / IIFE 解构绕 lint 即为信号）；c) setup store 返回嵌套切片对象，消费侧统一 `store.切片.字段` 访问、禁止解构 store、不写 `.value`。页面级 store 就近放 `views/<域>/composables/useXxxStore.ts`；壳组件 `onBeforeUnmount` 必须 `store.$dispose()`（Pinia 是单例，不 dispose 会把 editingId/选中集等瞬态泄漏到下次进入）；store 必须在组件 setup 内首次实例化（切片内 onMounted/onBeforeUnmount 依赖组件实例）；store 内不 import vue-router（route/router 留壳）。跨路由全局状态（auth / 扫码 session / 扫码总线等）仍一律 `useAuthSession` / `useScanSession` / `useBarcodeScanner` 模块级单例模式，不得建全局 store。
+2. **不要写 `api.post('/v2/...')`**：新接口必须 `import { apiV2 } from '@/api/http'` 然后 `apiV2.post(...)`。
+3. **雪花 ID 必须 string**：后端 ID > 2^53，`Number()` 丢精度（见 `useAuthSession.activeShelfId()`）。
+4. **EP 命令式 API CSS 必须在 `src/main.ts` 手动 import**：`unplugin-auto-import` resolver 只扫 `<template>`，看不到 `<script setup>` 里的 `ElMessageBox` / `ElMessage` / `ElNotification` / `ElLoading`。
+5. **不要删 `vite.config.ts` 的 `optimizeDeps.include`**：防止 dev 模式 dep discovery 触发整页 full-reload。
+6. **不要直接 `import 'pdfjs-dist'`**：统一从 `@/utils/pdfjs` import `pdfjsLib`（workerSrc 缓存穿透版本串集中在这里）。
+7. **业务端点 2026-09-15 Phase 5 一次性切到 v2（backend-rust 实现）**：`api` / `refreshClient` baseURL 统一为 `/api/v2`，原 `apiV2` / `refreshClientV2` 已合并删除。所有业务端点（auth / parts / delivery-notes / delivery-groups / process-chain / worker-pool / applicants / assembly / cnc / customers / outsource / processes / shelves / statistics / users / workers / work-types）统一走 `api`。仅 4 个打印端点保留 v1，**专供 `apiPrint` 客户端**（baseURL `/api/v1`，与 `api` 共享同一组拦截器与 `refreshPromise` 单例）：
    - `POST /delivery-notes/{id}/print` ← `printNote`
    - `POST /delivery-notes/{id}/print-labels` ← `printNoteLabels`
    - `GET  /parts/{id}/print-drawing` ← `printPartDrawing`
