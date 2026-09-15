@@ -5,6 +5,11 @@
 //   onDashboardEvent(ev => ...)
 //   onDashboardStatus(s => ...)
 //   // 组件卸载时调 off()；off 只取消对应频道订阅，不关闭长连接。
+//
+// 2026-09-15 Phase 5：WS URL 改为 `${proto}://${location.host}/ws/dashboard`（不带
+// `/api/v1` 前缀），与 backend-rust `ws_hub` 模块的 `WsEvent::DashboardEvent`
+// 路由对齐。token 通过 query string 携带（`?token=...`）—— v2 后端 ws_hub 在
+// upgrade 阶段从 query 取 token 校验 Redis session。
 
 import type {
   ConnectionStatus,
@@ -31,8 +36,11 @@ const eventSubs = new Set<EventHandler>();
 const statusSubs = new Set<StatusHandler>();
 
 function url(): string {
+  // 2026-09-15 Phase 5：去掉 /api/v1 前缀；ws_hub（rust）走 /ws/dashboard。
+  // 同源策略：浏览器只接触 frontend nginx（dev 5173 / prod 8080 / stage 443），
+  // nginx 模板已把 /ws/* 反代到 rust-backend:3000。
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const base = `${proto}://${location.host}/api/v1/ws/dashboard`;
+  const base = `${proto}://${location.host}/ws/dashboard`;
   const raw = localStorage.getItem('auth_session');
   if (raw) {
     try {

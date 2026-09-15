@@ -1,4 +1,4 @@
-// 2026-09-14 重写：worker-pool 域前端 API（v2，baseURL /api/v2）。
+// worker-pool 域前端 API（v2，baseURL /api/v2，2026-09-15 Phase 5 业务全切 v2）。
 //
 // 端点（与 backend-rust/src/modules/worker_pool/handler.rs 对齐）：
 //   GET  /api/v2/worker-pool/state?worker_id=&shelf_id=    ← getWorkerState
@@ -8,14 +8,15 @@
 //   POST /api/v2/admin/worker-pool/remove                 ← removeFromWorkerPool
 //   POST /api/v2/admin/worker-pool/auto-allocate          ← autoAllocate
 //
-// 注意：v2 端点必须用 apiV2（CLAUDE.md #2），禁止 api.post('/v2/...')。
+// 业务端点统一走 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 起）。
 // 历史变更：
 //   - 2026-08-26：阶段一，全部走 fixture + delay；阶段二标记替换点
 //   - 2026-09-14：阶段二，全部切到 apiV2；DTO 类型独立到 ./workerPool.contract.ts
 //   - 2026-09-14 follow-up：新增 assignWorkerPool（单 batch 分配，替代批量 refill
 //     在「拖拽 batch 到 worker」场景的滥用）
+//   - 2026-09-15 Phase 5：`apiV2` → `api`（baseURL `/api/v2`，业务全切 v2）
 
-import { apiV2, cleanParams } from '@/api/http';
+import { api, cleanParams } from '@/api/http';
 import type {
   AdminAssignRequest,
   AssignResultDto,
@@ -36,7 +37,7 @@ export async function getWorkerState(params: {
   worker_id: string;
   shelf_id: string;
 }): Promise<WorkerStateDto> {
-  const resp = await apiV2.get<WorkerStateDto>('/worker-pool/state', {
+  const resp = await api.get<WorkerStateDto>('/worker-pool/state', {
     params: cleanParams(params),
   });
   return resp.data;
@@ -46,7 +47,7 @@ export async function getWorkerState(params: {
  *  Manager+Clerk+Inspector（service 守卫）。
  *  返回 process 元数据 + 可执行该工序的工人 + 工种 max_held + 跨货架候选批次全量。 */
 export async function getWorkerPoolByProcess(processId: string | number): Promise<WorkerPoolDto> {
-  const resp = await apiV2.get<WorkerPoolDto>(
+  const resp = await api.get<WorkerPoolDto>(
     `/worker-pool/${encodeURIComponent(String(processId))}`,
   );
   return resp.data;
@@ -58,7 +59,7 @@ export async function getWorkerPoolByProcess(processId: string | number): Promis
  *  2026-09-14 follow-up：仅用于「批量抢批」场景（auto-allocate 入口）。
  *  拖拽 batch → worker 改用 assignWorkerPool（单 batch 分配语义）。 */
 export async function refillWorkerPool(req: WorkerRefillRequest): Promise<WorkerRefillResultDto> {
-  const resp = await apiV2.post<WorkerRefillResultDto>('/admin/worker-pool/refill', req);
+  const resp = await api.post<WorkerRefillResultDto>('/admin/worker-pool/refill', req);
   return resp.data;
 }
 
@@ -68,7 +69,7 @@ export async function refillWorkerPool(req: WorkerRefillRequest): Promise<Worker
  *  业务错：20204 WORKER_CAPACITY_EXCEEDED / 20706 BIZ_BATCH_NOT_IN_POOL /
  *         20114 BIZ_PART_BATCH_NOT_HELD_BY_WORKER / 20801 NOT_FOUND。 */
 export async function assignWorkerPool(req: AdminAssignRequest): Promise<AssignResultDto> {
-  const resp = await apiV2.post<AssignResultDto>('/admin/worker-pool/assign', req);
+  const resp = await api.post<AssignResultDto>('/admin/worker-pool/assign', req);
   return resp.data;
 }
 
@@ -77,7 +78,7 @@ export async function assignWorkerPool(req: AdminAssignRequest): Promise<AssignR
  *  业务错：20114 BIZ_PART_BATCH_NOT_HELD_BY_WORKER（worker 不持有该 batch）。
  *  WS 广播 WORKER_POOL_ADMIN_REMOVED。 */
 export async function removeFromWorkerPool(req: WorkerRemoveRequest): Promise<WorkerTakenItemDto> {
-  const resp = await apiV2.post<WorkerTakenItemDto>('/admin/worker-pool/remove', req);
+  const resp = await api.post<WorkerTakenItemDto>('/admin/worker-pool/remove', req);
   return resp.data;
 }
 
@@ -86,6 +87,6 @@ export async function removeFromWorkerPool(req: WorkerRemoveRequest): Promise<Wo
  *  业务错：20704 BIZ_AUTO_ALLOCATE_INVALID_RATIO（fill_ratio ∈ [0,1]）/ 20904 / 20905 / 20801 NOT_FOUND。
  *  WS 广播 WORKER_POOL_AUTO_ALLOCATE_DONE（payload 含 mode / fill_ratio / pool_empty）。 */
 export async function autoAllocate(req: AutoAllocateRequest): Promise<AutoAllocateResultDto> {
-  const resp = await apiV2.post<AutoAllocateResultDto>('/admin/worker-pool/auto-allocate', req);
+  const resp = await api.post<AutoAllocateResultDto>('/admin/worker-pool/auto-allocate', req);
   return resp.data;
 }

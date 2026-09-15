@@ -1,11 +1,19 @@
 <!--
   ScanPickParts.vue
 
-  /scan/pick —— 扫码台 PICK_UP 新流程
-  1. 拉取 worker.work_type_id 映射下、当前货架上的零件列表
+  /scan/pick —— 扫码台 PICK_UP 流程（2026-09-15 Phase 5）
+
+  流程：
+  1. 拉取 worker.work_type_id 映射下、当前货架上的零件列表（listPartsByWorkTypeAllShelves）
   2. 工人点选一个零件 → 进入「等待扫码」状态
   3. 扫码枪输入 serial_no；前端校验必须等于选中零件.serial_no；不等则拒绝
-  4. 通过则调 POST /parts/pick-up；成功后自动回到列表（可选再选下一件）
+  4. 通过则调 POST /parts/pick-up（v2 B 方案手动 pick-up 兜底）；成功后自动回到列表
+
+  2026-09-15 Phase 5：
+  - 业务全切 v2（pickUpPart 现在走 `/api/v2/parts/pick-up`）
+  - 保留 listPartsByWorkTypeAllShelves 作为 PICK_UP 主路径（v2 兼容）
+  - 新增 worker-scan API（RETURNED event_type）作为放回一体化入口（ScanReturnParts 使用），
+    本页 PICK_UP 不直接调 worker-scan，仍走 pickUpPart（B 方案手动 pick-up）
 -->
 
 <template>

@@ -1,13 +1,18 @@
 <!--
   ScanActionPicker.vue
 
-  /scan/action：选择报工操作（取件 / 放回 / 送检 / 送货）。
+  /scan/action：选择报工操作（取件 / 放回 / 送检）。
   入口守卫：worker 缺失则跳回 /scan/badge。
 
   按钮按「绑定架 zone 并集」显示（HMI 账号在账号管理页绑定的货架决定）：
     * 绑了任意 PRODUCTION 架 → PICK_UP + RETURN
     * 绑了任意 INSPECTION 架 → INSPECT
     * 两种 zone 都绑了 → 三个按钮全显示
+
+  2026-09-15 Phase 5：RETURN / INSPECT 后端走 worker-scan（`POST /parts/worker-scan`，
+  event_type=RETURNED / INSPECTED）二合一；PICK_UP 仍走 `POST /parts/pick-up`
+  （B 方案手动 pick-up 兜底）。送货入口已移到 MANAGER/INSPECTOR 的「送货」菜单
+  （/delivery-dispatch），扫码台不再有 DELIVER 操作。
 
   注：HMI 账号已不再与货架一一对应，故不再显示「当前货架」选择器；
   具体作业货架由下游各流程的 ShelfPickerDialog / 零件持有者决定。
