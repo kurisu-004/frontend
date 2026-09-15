@@ -1,8 +1,8 @@
-# 状态管理：模块级 composable 单例
+# 状态管理：模块级单例 + 页面级 Pinia 边界
 
-> **目标读者**：Agent 接手新模块、新人理解为何不写 Pinia store
-> **核心价值**：解释"为什么项目装了 Pinia 却不用"以及如何正确放置共享状态
-> **最后更新**：2026-08-26 · **维护者**：@frontend-team
+> **目标读者**：Agent 接手新模块、新人理解项目共享状态放置规范
+> **核心价值**：解释跨路由全局状态走 composable 模块级单例、页面级复杂状态可建 Pinia setup store 的边界划分
+> **最后更新**：2026-09-15 · **维护者**：@frontend-team
 
 ---
 
@@ -11,6 +11,7 @@
 `main.ts` 里 `app.use(createPinia())` 是仓库脚手架默认带的依赖。2026-09-15 之前项目从未创建过任何 `defineStore()`，所有跨组件、跨路由共享的状态都以**模块级 `ref` + composable 单例**承载。这是个反共识设计，但符合"跨页全局状态有限"的实际复杂度。
 
 > **2026-09-15 修订**：用户批准 Pinia 3 setup store 用于「页面级复杂状态」（首例 `usePartsListStore`，`src/views/parts/composables/`）。开闸背景：parts 列表页 :ctx prop 模式三痛点：
+>
 > 1. 字段膨胀 —— 7 类 composable 切片 + 列定义 + 权限标识，单次 `defineProps<{ ctx: PartsListCtx }>()` 后顶层解构 7-8 个 ref/computed 已逼近 lint 心智负担上限；
 > 2. 嵌套 ref 经 props（Vue `shallowReactive`）传递不解包 —— 子组件模板里 `ctx.batch.batchMode` 仍要 .value 解包，否则页面静默不更新；
 > 3. IIFE 绕 `vue/no-setup-props-destructure` —— 出现大量 `(() => props.ctx)()` 噪声。
@@ -144,15 +145,15 @@ export function useDeliveryScanState() {
 
 #### 页面级 vs 全局边界
 
-| 维度 | 页面级 Pinia setup store | 全局 composable 单例 |
-|---|---|---|
-| 作用范围 | 单路由 / 单页面（离开 `$dispose` 重建） | 跨路由 |
-| 典型场景 | 多子组件共享同一组业务 composable（列定义 + 行内编辑 + 批量等） | auth session、扫码 session、扫码总线 |
-| 路径 | `src/views/<域>/composables/useXxxStore.ts` | `src/composables/useXxx.ts` |
-| 生命周期 | `onBeforeUnmount` 必 `store.$dispose()` | 模块级单例，无 dispose |
-| 实例化时点 | 组件 setup 顶部首调（让切片内 lifecycle hook 绑到组件） | import 一次即生效 |
-| Vue Router 依赖 | 不 import（store 单测需要无 router） | 按需 |
-| 持久化 | 子切片可独立 localStorage（如 `useColumnVisibility`） | 通常模块级 + storage |
+| 维度            | 页面级 Pinia setup store                                        | 全局 composable 单例                 |
+| --------------- | --------------------------------------------------------------- | ------------------------------------ |
+| 作用范围        | 单路由 / 单页面（离开 `$dispose` 重建）                         | 跨路由                               |
+| 典型场景        | 多子组件共享同一组业务 composable（列定义 + 行内编辑 + 批量等） | auth session、扫码 session、扫码总线 |
+| 路径            | `src/views/<域>/composables/useXxxStore.ts`                     | `src/composables/useXxx.ts`          |
+| 生命周期        | `onBeforeUnmount` 必 `store.$dispose()`                         | 模块级单例，无 dispose               |
+| 实例化时点      | 组件 setup 顶部首调（让切片内 lifecycle hook 绑到组件）         | import 一次即生效                    |
+| Vue Router 依赖 | 不 import（store 单测需要无 router）                            | 按需                                 |
+| 持久化          | 子切片可独立 localStorage（如 `useColumnVisibility`）           | 通常模块级 + storage                 |
 
 跨路由全局状态（auth / 扫码 session / 扫码总线等）**仍一律** composable 单例模式，不得建全局 store。
 

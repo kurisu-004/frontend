@@ -38,8 +38,7 @@ dev 模式下 `vite.config.ts` 把 `/api` 转发到 `127.0.0.1:8000`；prod 模�
 1. **双 axios 实例 + 信封协议**——`api` (v1) 与 `apiV2` (v2) 共享拦截器，所有响应被解 `{code, message, data}` 信封，非 0 抛 `ApiError`；auth 域 2026-08-26 临时回滚 v1，业务域（deliveryNote / deliveryGroup / parts/scanInspect）仍在 `apiV2`。
    → [api-contract.md](./api-contract.md)
 
-2. **模块级 composable 单例**——装了 pinia 但实际状态全部在 composables 的 module-level ref 里（`useAuthSession` / `useScanSession` / `useBarcodeScanner`），新功能共享状态沿用此模式。
-   → [state-management.md](./state-management.md)
+2. **状态管理：模块级单例 + 页面级 Pinia 边界**——跨路由全局状态（auth / scan session / 扫码总线等）走 composable 模块级单例；单页面 ≥3 子组件共享的复杂状态可建 Pinia setup store（页面级，就近放 `views/<域>/composables/`，壳 `onBeforeUnmount` 调 `$dispose`）。详见 [state-management.md](./state-management.md)。
 
 3. **三道路由守卫 + menuCode 单一权限源**——`requireAuth` / `allowRoles` / `menuCode` 三道检查；菜单渲染与路由守卫共用后端下发的菜单树。
    → [routing-and-permissions.md](./routing-and-permissions.md)

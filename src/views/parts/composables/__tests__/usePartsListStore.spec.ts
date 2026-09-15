@@ -59,18 +59,19 @@ vi.mock('@/components/ColumnFilterPopover.vue', () => ({
 import { usePartsListStore } from '../usePartsListStore';
 import type { PartListItem } from '@/types/parts';
 
-function makeRow(id: string, status: string = 'IN_PROCESS'): PartListItem {
-  return {
+function makeRow(id: string, status = 'IN_PROCESS'): PartListItem {
+  const row = {
     id,
     row_type: 'PART',
-    status: status as PartListItem['status'],
+    status,
     serial_no: `SN${id}`,
     drawing_no: `D${id}`,
     name: `零件 ${id}`,
     quantity: 1,
     unit_price: 10,
     is_urgent: false,
-  } as PartListItem;
+  };
+  return row as PartListItem;
 }
 
 describe('usePartsListStore', () => {

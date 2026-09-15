@@ -5,7 +5,7 @@
 // 折中：@start 时（DOM dataset 还完整）把 batchId → sourceId 写到模块级 Map；
 // @change.added 时读 + delete。
 //
-// 模块级单例（不是 Pinia，CLAUDE.md #1）：WorkerColumn 与 PoolDrawer 共用同一份 Map。
+// 模块级单例：WorkerColumn 与 PoolDrawer 共用同一份 Map。
 // 用 "w:" 前缀隔离"源 process_id"和"源 worker_id"两类条目（同 batchId 不会冲突）。
 //
 // 2026-08-27：把 vue-draggable-plus Sortable.js 原生事件子集（onStart/onAdd 共有：

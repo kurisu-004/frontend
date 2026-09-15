@@ -5,8 +5,7 @@
 // useAmdPrintTemplates（Amd = @amdosion/vue3-print），专门服务于新包版编辑器
 // PrintTemplateDesigner.vue。
 //
-// 模式：模块级单例（与 CLAUDE.md #1「不要新建 Pinia store」一致），
-// 与 useAuthSession / useScanSession / useBarcodeScanner 同款。
+// 模式：模块级单例（与 useAuthSession / useScanSession / useBarcodeScanner 同款）。
 //
 // 本期实现：
 //   - localStorage 持久化（key = `amd_print_templates_v1`）

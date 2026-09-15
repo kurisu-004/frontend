@@ -139,8 +139,6 @@ src/
 | `useShelfProcessFilter`      | 货架工序筛选                                        |
 | `useWorkerQueue`             | 生产队列看板状态机（pool / worker / held 三态）     |
 
-**模式约定**：所有 composable 都是模块级 `ref` + 导出 `useXxx()`，调用方操作同一份响应式状态。详见 [02-architecture/state-management.md](../02-architecture/state-management.md)。**禁止新建 Pinia store**。
-
 ## src/components/ vs views/<domain>/components/
 
 两类组件目录要分清：

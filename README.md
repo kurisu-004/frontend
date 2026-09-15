@@ -34,7 +34,7 @@ npm run test         # vitest run（全部单测）
 src/
 ├── api/             # 接口 & mock（.ts，按域切分；v1 / apiV2 双 axios 实例）
 ├── components/      # 跨业务域通用组件（13+ 个）
-├── composables/     # 模块级单例 composable（30+ 个，禁止 Pinia store）
+├── composables/     # 模块级单例 composable（30+ 个）
 ├── constants/       # 静态映射（partStatus / batch / bid / crud / file）
 ├── layouts/         # 布局组件（MainLayout 等）
 ├── router/          # 路由（含 RouteMeta 类型扩展，menuCode 单一权限源）
