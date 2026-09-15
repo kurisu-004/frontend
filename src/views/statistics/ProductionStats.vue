@@ -33,10 +33,10 @@
         <!-- 2026-08-22 a11y：单包 el-radio-group 会让 el-form-item 把 for= 指向非 labelable 的 <div role="radiogroup">，显式 :for="" 强制渲染成 <div role="group"> -->
         <el-form-item label="时间范围" for="">
           <el-radio-group v-model="rangePreset" aria-label="时间范围" @change="onPresetChange">
-            <el-radio-button label="this-month">本月</el-radio-button>
-            <el-radio-button label="last-month">上月</el-radio-button>
-            <el-radio-button label="this-year">本年</el-radio-button>
-            <el-radio-button label="custom">自定义</el-radio-button>
+            <el-radio-button value="this-month">本月</el-radio-button>
+            <el-radio-button value="last-month">上月</el-radio-button>
+            <el-radio-button value="this-year">本年</el-radio-button>
+            <el-radio-button value="custom">自定义</el-radio-button>
           </el-radio-group>
           <el-date-picker
             v-if="rangePreset === 'custom'"
