@@ -69,7 +69,8 @@ async function loadLookups(): Promise<void> {
       listShelves({ is_active: true }),
       listProcesses({ limit: 200 }),
     ]);
-    customers.value = cs;
+    // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
+    customers.value = cs.items;
     shelves.value = ss.items;
     processes.value = ps.items;
   } catch (e) {

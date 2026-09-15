@@ -238,7 +238,8 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   async function loadLeafCustomers(): Promise<void> {
     loadingCustomers.value = true;
     try {
-      const all = await listCustomers();
+      // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
+      const all = (await listCustomers()).items;
       leafCustomers.value = all.filter((c) => c.parent_id !== null);
     } catch (e) {
       leafCustomers.value = [];

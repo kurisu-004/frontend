@@ -39,8 +39,19 @@ export interface CustomerUpdatePayload {
   serial_prefix?: string | null;
 }
 
-export async function listCustomers(): Promise<Customer[]> {
-  const resp = await api.get<Customer[]>('/customers');
+/**
+ * 分页客户列表结果（v2 backend-rust 的 `/api/v2/customers` 返回结构）。
+ * 2026-09-15 新增：Phase 5 切到 v2 后后端返回分页结构，前端用 `.items` 取数组。
+ */
+export interface CustomerListResult {
+  items: Customer[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function listCustomers(): Promise<CustomerListResult> {
+  const resp = await api.get<CustomerListResult>('/customers');
   return resp.data;
 }
 
