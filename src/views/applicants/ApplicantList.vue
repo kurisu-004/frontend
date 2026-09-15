@@ -234,7 +234,8 @@ async function fetchList(): Promise<void> {
 
 async function loadCustomers(): Promise<void> {
   try {
-    customers.value = await listCustomers();
+    // 全量一级客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
+    customers.value = (await listCustomers()).items;
   } catch (e) {
     ElMessage.error((e as Error).message ?? '客户列表加载失败');
   }

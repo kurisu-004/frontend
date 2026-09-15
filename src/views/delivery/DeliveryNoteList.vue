@@ -179,7 +179,8 @@ const rootCustomers = computed(() => customers.value.filter((c) => c.parent_id =
 
 async function loadCustomers() {
   try {
-    const list = await listCustomers();
+    // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
+    const list = (await listCustomers()).items;
     customers.value = list.map((c: any) => ({
       id: c.id,
       name: c.name,

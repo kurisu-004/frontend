@@ -231,7 +231,8 @@ onMounted(async () => {
   });
   // 拉客户全集
   try {
-    allCustomers.value = await listCustomers();
+    // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
+    allCustomers.value = (await listCustomers()).items;
   } catch (e) {
     ElMessage.error((e as Error).message ?? '加载客户列表失败');
   }
