@@ -8,14 +8,21 @@
 
 ## 设计决策
 
-`main.ts` 里 `app.use(createPinia())` 是历史包袱：仓库脚手架时代默认带的依赖，但项目从未创建过任何 `defineStore()`。所有跨组件、跨路由共享的状态，都以**模块级 `ref` + composable 单例**承载。这是个反共识设计，背后的判断是：
+`main.ts` 里 `app.use(createPinia())` 是仓库脚手架默认带的依赖。2026-09-15 之前项目从未创建过任何 `defineStore()`，所有跨组件、跨路由共享的状态都以**模块级 `ref` + composable 单例**承载。这是个反共识设计，但符合"跨页全局状态有限"的实际复杂度。
 
-- **状态规模可控**：业务复杂度中等（订单 / 工位扫码 / 送货），跨组件共享的状态只有 auth、扫码 session、当前工人、当前货架这几类，没必要上 Pinia 的 `state` / `actions` / `mutations` 三件套。
-- **Vue 3 idiomatic**：Composition API 的核心卖点就是"按需提取可复用逻辑"。模块级 ref 是 Vue 3 文档明文推荐的全局状态方案。
-- **减少心智负担**：少一个心智模型（不用记 `useStore()` 怎么命名 / action 怎么 commit / devtools 时间旅行对业务有没有意义）。
-- **devtools 时间旅行需求弱**：本项目主要状态都是"瞬时态"（扫码中转、auth session），出问题靠日志和后端审计，不靠 store snapshot。
+> **2026-09-15 修订**：用户批准 Pinia 3 setup store 用于「页面级复杂状态」（首例 `usePartsListStore`，`src/views/parts/composables/`）。开闸背景：parts 列表页 :ctx prop 模式三痛点：
+> 1. 字段膨胀 —— 7 类 composable 切片 + 列定义 + 权限标识，单次 `defineProps<{ ctx: PartsListCtx }>()` 后顶层解构 7-8 个 ref/computed 已逼近 lint 心智负担上限；
+> 2. 嵌套 ref 经 props（Vue `shallowReactive`）传递不解包 —— 子组件模板里 `ctx.batch.batchMode` 仍要 .value 解包，否则页面静默不更新；
+> 3. IIFE 绕 `vue/no-setup-props-destructure` —— 出现大量 `(() => props.ctx)()` 噪声。
+>
+> Pinia setup store 返回深 `reactive()` 代理（对比 props 是 shallowReactive），嵌套 ref 自动解包，消费侧统一 `store.切片.字段` 路径访问、不写 `.value`。详见 CLAUDE.md 硬约束 #1 与本文末尾"何时该考虑 Pinia"。
 
-> 结论：**CLAUDE.md 明确禁止新增 Pinia store**。新功能共享状态沿用 composable 单例模式。
+页面级 store 的边界（页面级 vs 全局）见后文「页面级 vs 全局」表。新功能共享状态按以下规则二选一：
+
+- **跨路由全局**（auth / 扫码 session / 扫码总线等）→ composable 模块级单例（详见后文 6 大 singleton 表）
+- **页面级复杂状态**（≥ 3 个并列子组件共享同一组 composable 切片）→ Pinia setup store（就近放 `views/<域>/composables/useXxxStore.ts`）
+
+不再"一律禁止 Pinia"。
 
 ## 模块级单例模式
 
@@ -127,13 +134,27 @@ export function useDeliveryScanState() {
 
 ### 何时该考虑 Pinia
 
-只有同时满足以下三条时，才考虑引入 Pinia：
+页面级 setup store 必须**同时满足三条**才考虑引入（与 CLAUDE.md 硬约束 #1 同源）：
 
-1. 跨 ≥ 5 个组件共享状态；
-2. 状态变更链路复杂（需要 devtools 时间旅行调试）；
-3. mutation 之间有严格顺序约束（需要 transaction / middleware）。
+1. **页面级**：状态只服务单个页面/路由，不跨页共享 —— 跨页用 composable 单例更简单。
+2. **≥ 3 个并列子组件共享同一组 composable 切片**：列定义 / 行内编辑 / 批量选中 / 下发 / 打印等 ≥ 3 个切片被 ≥ 3 个子组件消费；:ctx prop 穿透 / IIFE 解构绕 lint 即为强烈信号。
+3. **setup store 返回嵌套切片对象**：消费侧统一 `store.切片.字段` 访问、禁止解构 store、不写 `.value`。
 
-当前项目不存在这样的场景。**新增 Pinia store 是 anti-pattern**，违反 CLAUDE.md 明确约束。
+只要任一条不满足，回到 composable 单例（页面级）或 props/emits（父子单向流）。
+
+#### 页面级 vs 全局边界
+
+| 维度 | 页面级 Pinia setup store | 全局 composable 单例 |
+|---|---|---|
+| 作用范围 | 单路由 / 单页面（离开 `$dispose` 重建） | 跨路由 |
+| 典型场景 | 多子组件共享同一组业务 composable（列定义 + 行内编辑 + 批量等） | auth session、扫码 session、扫码总线 |
+| 路径 | `src/views/<域>/composables/useXxxStore.ts` | `src/composables/useXxx.ts` |
+| 生命周期 | `onBeforeUnmount` 必 `store.$dispose()` | 模块级单例，无 dispose |
+| 实例化时点 | 组件 setup 顶部首调（让切片内 lifecycle hook 绑到组件） | import 一次即生效 |
+| Vue Router 依赖 | 不 import（store 单测需要无 router） | 按需 |
+| 持久化 | 子切片可独立 localStorage（如 `useColumnVisibility`） | 通常模块级 + storage |
+
+跨路由全局状态（auth / 扫码 session / 扫码总线等）**仍一律** composable 单例模式，不得建全局 store。
 
 ## 拦截器 ↔ composable 解耦
 
@@ -180,5 +201,9 @@ if (typeof window !== 'undefined') {
 3. **能否放进已有的 6 个 composable 之一？**
    - 是 → 在对应 composable 里加字段（避免单例爆炸）
    - 否 → 新建 composable 单例，参考上面"模块级单例模式"模板
+
+4. **是否页面级 ≥ 3 个子组件共享同一组 composable 切片？**
+   - 是 → 新建 Pinia setup store（参见「何时该考虑 Pinia」三条判据），就近放 `views/<域>/composables/useXxxStore.ts`，壳组件 `onBeforeUnmount` 必 `store.$dispose()`，消费侧统一 `store.切片.字段`、禁止解构、不写 `.value`。参考首例 `usePartsListStore`（`src/views/parts/composables/`）
+   - 否 → 维持 composable 单例（回到上面三问的最后一问）或 props/emits
 
 新建的 composable 文件路径：`src/composables/useXxx.ts`，命名沿用 `use` 前缀 + PascalCase 主题名。如果该状态需要跨页面持久化，参考 `useDeliveryScanState` 的 localStorage / `useActiveShelfSelection` 的 sessionStorage 模板。

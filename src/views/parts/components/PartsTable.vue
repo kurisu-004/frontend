@@ -1,36 +1,32 @@
 <!--
   PartsTable.vue
 
-  2026-08-22 从 PartsList.vue 抽出：纯 el-table 桌面表格组件。
-
-  设计要点：
-  - 用纯 el-table 替代 ResponsiveList 桌面分支（手机适配已移除）。
-  - 列定义 / 行内编辑 / 批量选中 / 表头 popover 全部从 ctx.* 解构到顶层局部变量
-    再进模板（Vue 模板只对 setup 顶层 ref 自动解包）。
-  - 父组件通过 ref="partsTableRef" 拿到 `tableRef`（el-table 实例），可调
-    clearSelection / toggleRowSelection / sort。
+  2026-09-15 重构：状态全部来自 `usePartsListStore`（Pinia setup store）；
+  本组件只持有 el-table DOM 逻辑：列拖动 / tableRef 暴露 / 懒加载子件。
+  原 :ctx prop 模式删除，列定义 / 行内编辑 / 批量选中 / 表头 popover 等
+  全部从 store.* 取（深 reactive 自动解包，模板里直接 store.xxx 访问）。
 -->
 <template>
-  <div ref="wrapEl" :key="tableKey" class="parts-table-wrap">
+  <div ref="wrapEl" :key="store.query.tableKey" class="parts-table-wrap">
     <div class="parts-table-toolbar">
-      <el-button link @click="resetAllFilters">重置筛选</el-button>
+      <el-button link @click="store.query.resetAllFilters()">重置筛选</el-button>
       <ColumnVisibilityPopover
-        :defs="columnDefs"
-        :model-value="columnVisibility.currentMap"
-        @update:model-value="columnVisibility.update"
-        @reset="columnVisibility.showAll"
+        :defs="store.columnDefs"
+        :model-value="store.columnVisibility.currentMap"
+        @update:model-value="store.columnVisibility.update"
+        @reset="store.columnVisibility.showAll"
         @resetOrder="drag.reset"
       />
     </div>
     <el-table
       ref="tableRef"
-      :data="items"
+      :data="store.query.items"
       :row-key="rowKey"
-      :default-sort="defaultSort"
+      :default-sort="store.query.defaultSort"
       :row-class-name="rowClassName"
-      :row-style="{ cursor: batchMode ? 'pointer' : 'default' }"
-      :show-summary="canEdit"
-      :summary-method="totalPriceSummary"
+      :row-style="{ cursor: store.batch.batchMode ? 'pointer' : 'default' }"
+      :show-summary="store.canEdit"
+      :summary-method="store.edit.totalPriceSummary"
       lazy
       :load="loadChildren"
       :tree-props="{ hasChildren: 'has_children', children: 'children' }"
@@ -41,29 +37,29 @@
       border
       size="small"
       style="width: 100%"
-      @sort-change="onSortChange"
-      @selection-change="onSelectionChange"
-      @row-click="onBatchRowClick"
-      @row-dblclick="onRowDblClick"
-      @filter-change="onNativeFilterChange"
+      @sort-change="store.query.onSortChange"
+      @selection-change="store.batch.onSelectionChange"
+      @row-click="store.batch.onBatchRowClick"
+      @row-dblclick="store.edit.onRowDblClick"
+      @filter-change="store.filters.onNativeFilterChange"
     >
       <template #empty>
-        <el-empty :description="emptyText" />
+        <el-empty :description="store.query.emptyText" />
       </template>
 
       <!-- 1. selection（批量模式） -->
       <el-table-column
-        v-if="batchMode"
+        v-if="store.batch.batchMode"
         type="selection"
         width="55"
         :reserve-selection="true"
-        :selectable="isBatchSelectable"
+        :selectable="store.batch.isBatchSelectable"
       />
 
       <!--
         2..19. 18 列数据列（2026-08-27 Task 6 接入，2026-08-27 fix 升级手柄覆盖）
         drag.orderedDefs 提供持久化顺序；columnDefs.cellRender / headerRender 工厂
-        在 PartsList.vue 里持有 filter ref / editingId / editBuffer 等响应式闭包。
+        在 partsListColumnDefs.ts 里持有 filter ref / editingId / editBuffer 等响应式闭包。
         #header 统一模板：headerRender VNode + (无 headerRender 时) d.label 文字 +
         末尾 ColumnDragHandle。手柄始终渲染，因此 9 列 ColumnFilterPopover +
         2 列 status / next_process badge 都能拖动。
@@ -71,7 +67,7 @@
       -->
       <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
         <el-table-column
-          v-if="columnVisibility.isVisible(d.key)"
+          v-if="store.columnVisibility.isVisible(d.key)"
           :prop="d.prop ?? d.key"
           :label="d.label"
           :type="d.type"
@@ -124,51 +120,51 @@
       <!-- 20. 操作 -->
       <el-table-column label="操作" min-width="160" fixed="right" align="center">
         <template #default="{ row }">
-          <template v-if="editingId === row.id">
+          <template v-if="store.edit.editingId === row.id">
             <el-button
               link
               type="primary"
               size="small"
-              :loading="savingEdit"
-              @click="saveEdit(row as PartListItem)"
+              :loading="store.edit.savingEdit"
+              @click="store.edit.saveEdit(row as PartListItem)"
               >保存</el-button
             >
-            <el-button link size="small" @click="cancelEdit">取消</el-button>
+            <el-button link size="small" @click="store.edit.cancelEdit">取消</el-button>
           </template>
           <template v-else>
             <el-button link type="primary" size="small" @click="onDetail(row as PartListItem)"
               >详情</el-button
             >
             <el-button
-              v-if="canEdit"
+              v-if="store.canEdit"
               link
               type="warning"
               size="small"
-              @click="startEdit(row as PartListItem)"
+              @click="store.edit.startEdit(row as PartListItem)"
               >编辑</el-button
             >
             <el-button
-              v-if="canEdit && row.status === 'PENDING' && row.row_type !== 'ASSEMBLY'"
+              v-if="store.canEdit && row.status === 'PENDING' && row.row_type !== 'ASSEMBLY'"
               link
               type="success"
               size="small"
-              @click="onDispatch(row as PartListItem)"
+              @click="store.dispatch.onDispatch(row as PartListItem)"
               >下发</el-button
             >
             <el-button
-              v-if="canRecallToPending(row as PartListItem)"
+              v-if="store.dispatch.canRecallToPending(row as PartListItem)"
               link
               type="danger"
               size="small"
-              @click="onRecallToPending(row as PartListItem)"
+              @click="store.dispatch.onRecallToPending(row as PartListItem)"
               >召回(待生产)</el-button
             >
             <el-button
-              v-if="canRecallToProgramming(row as PartListItem)"
+              v-if="store.dispatch.canRecallToProgramming(row as PartListItem)"
               link
               type="warning"
               size="small"
-              @click="onRecallToProgramming(row as PartListItem)"
+              @click="store.dispatch.onRecallToProgramming(row as PartListItem)"
               >召回(待编程)</el-button
             >
           </template>
@@ -181,38 +177,9 @@
 <script setup lang="ts">
 // views/parts/components/PartsTable.vue
 //
-// 2026-08-22 从 PartsList.vue 抽出：纯 el-table 桌面表格。
-// 列定义 / 行内编辑 / 批量选中 / 表头 popover 全通过 props.ctx.* 解构到顶层局部
-// 变量后进模板（Vue 模板只对顶层 ref 自动解包；嵌套 ref 不会自动解包）。
-//
-// 2026-09-13 集成 commit Fix B1 说明：
-//   用户决策（plan 2B）是"显式 props.ctx.X.Y 链路、不动 eslint 配置豁免"。但
-//   eslint-plugin-vue@9.33 的 vue/no-setup-props-destructure 在三种"看似正确"的
-//   写法上仍然报"root scope access"：
-//     (1) `const { x } = props.ctx;` —— CallExpression 之外，整个 ObjectPattern
-//         init 直接被 isPropsMemberAccessed 命中（propsRange ⊆ ObjectPattern.range
-//         且 props.parent 是 MemberExpression）；
-//     (2) `const v = props.ctx.y.z;` —— MemberExpression init 命中同样的检查；
-//     (3) `const v = computed(() => props.ctx.y.z);` —— CallExpression 访问器把
-//         整个 `computed(...)` 视为根作用域，arrow function 内部的 props.X 被视
-//         为"在根作用域被读"（utils.inRange(node.range, propsRange) === true）。
-//
-//   唯一 lint-clean 的写法是 IIFE 单值包装（PR-2 已用）：
-//     `const { query, ... } = (() => props.ctx)();`
-//   规则要求 IIFE 的 CallExpression "isPropsMemberAccessed" 返回 false——其 init
-//   `props.ctx` 不在 wrapperExpressionTypes（Array/Object）里、不在
-//   expressions 列表（TemplateLiteral/Conditional/Identifier）里，CallExpression
-//   节点本身的 range 也不"直接包住"props（utils.inRange 是 range 完全包含 →
-//   arrow function 把 props.ctx 隔离在子节点里）。
-//
-//   解构出来的 `query` 等是普通对象（不是 Ref），再 `const { items } = query;` 解
-//   构出嵌套 Ref 完全不触发 vue/no-ref-object-destructure（只对 Ref 本身的解构
-//   生效，普通对象解构出 Ref 字段保留响应式）。
-//
-//   综合：集成 commit 保留 PR-2 的 IIFE，把 plan "Fix B1 改成显式链路" 的诉求
-//   落地为"显式路径说明 + IIFE 是当前规则下唯一可行的形式"——并把这条限制写进本
-//   注释与 commit message，以便后续迁 ESLint 规则或迁 Pinia store 时再回头统一
-//   改成 props.ctx.X.Y 显式链路。
+// 2026-09-15 重构：状态全部来自 usePartsListStore（Pinia setup store），本组件只持有
+// el-table DOM 逻辑：列拖动（useColumnDrag）/ tableRef 暴露 / 懒加载子件 / 双击进编辑路由。
+// 原 :ctx prop 模式删除，IIFE 绕 lint 的考据注释块全部清理。
 
 import { onMounted, ref } from 'vue';
 import type { TableInstance } from 'element-plus';
@@ -223,42 +190,18 @@ import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import { resolveDraggable } from '@/composables/useColumnVisibility';
 import type { PartListItem } from '@/types/parts';
 import { getAssembly } from '@/api/assembly';
-import type { PartsListCtx } from '../composables/partsListCtx';
+import { usePartsListStore } from '../composables/usePartsListStore';
 
-const props = defineProps<{ ctx: PartsListCtx }>();
-
-// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层 `props.ctx.X` 直读；
-// 用 IIFE 把读取放进函数体（解构出来的 ref 仍然是 props.ctx.* 的引用，响应式保留）。
-// 详见顶部注释。
-const { query, filters, edit, batch, dispatch, canEdit, columnVisibility, columnDefs } = (() =>
-  props.ctx)();
-
-const { items, tableKey, defaultSort, emptyText, onSortChange } = query;
-
-const { onNativeFilterChange } = filters;
-
-const { editingId, savingEdit, startEdit, saveEdit, cancelEdit, onRowDblClick, totalPriceSummary } =
-  edit;
-
-const { batchMode, isBatchSelectable, onSelectionChange, onBatchRowClick } = batch;
-
-const {
-  onDispatch,
-  canRecallToPending,
-  canRecallToProgramming,
-  onRecallToPending,
-  onRecallToProgramming,
-} = dispatch;
-
+const store = usePartsListStore();
 const router = useRouter();
 
 // ============ 列顺序拖动（2026-08-27 Task 6 接入）============
-// 与 PartsList 的 useColumnVisibility 共享同一 columnDefs 数组：
+// 与 store.columnVisibility 共享同一 columnDefs 数组：
 // 各自 read 同一 localStorage key（myerp.list.<userId>.parts_list_columnOrder），
 // orderedKeys 在 sortablejs onEnd 时落盘，二者内存里的 orderedKeys 通过持久化层一致。
-// listKey 取 PartsList useColumnVisibility 已用的 'parts_list_columns' 同根命名空间，
+// listKey 取 useColumnVisibility 已用的 'parts_list_columns' 同根命名空间，
 // 但 columnOrder 与 _columns 持久化分 key，互不污染。
-const drag = useColumnDrag(columnDefs, { listKey: 'parts_list' });
+const drag = useColumnDrag(store.columnDefs, { listKey: 'parts_list' });
 
 // ============ 表格 ref（暴露给父组件）============
 const tableRef = ref<TableInstance | null>(null);
@@ -272,16 +215,11 @@ defineExpose({ tableRef });
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
 // 自愈（覆盖 EP 重建表头 / 数据到达后表头首次渲染）。consumer 0 行 query 代码。
 onMounted(() => {
-  query.registerClearNativeFilters(() => {
+  store.query.registerClearNativeFilters(() => {
     tableRef.value?.clearFilter(['status', 'next_process']);
   });
   drag.applyDrag(tableRef);
 });
-
-// 工具栏按钮的简短转发，模板里直接 @click="resetAllFilters"
-const resetAllFilters = (): void => {
-  query.resetAllFilters();
-};
 
 // ============ 本地辅助函数 ============
 // 2026-07-30：树表 row-key（避免顶层与子件 id 冲突）

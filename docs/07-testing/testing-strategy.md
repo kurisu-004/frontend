@@ -32,7 +32,7 @@
 
 - 组件渲染 / props / events / slots
 - 路由导航 / 权限守卫（前端守卫逻辑 10 行内可直接读）
-- Pinia store（本项目实际不用，状态都在 composable 模块级 ref）
+- Pinia 页面级 setup store **可测**（2026-09-15 开闸：`setActivePinia(createPinia())` + node 环境，参考 `usePartsListStore.spec.ts`；`.vue` 依赖需 factory stub）—— 不要测跨路由全局 Pinia store（项目仍禁止）
 - E2E（无 Playwright/Cypress，按需再评估）
 
 ## 三、测试运行器
@@ -73,6 +73,7 @@ npx vitest --watch                 # watch 模式（开发期）
 | `src/composables/useBulkScanInspect.spec.ts`                  | 批量扫码送检 composable                                              |
 | `src/composables/useDeliveryNoteDetailCache.spec.ts`          | 送货单详情 N+1 缓存                                                  |
 | `src/composables/usePooledDetail.spec.ts`                     | 通用并发限流 composable                                              |
+| `src/views/parts/composables/__tests__/usePartsListStore.spec.ts` | parts 列表页 Pinia setup store（2026-09-15 首例：装配完整性 / 嵌套解包 / 批量选择流 / 空值守卫 / fetchList 联动 / `$dispose` 重建 6 用例） |
 
 ## 五、命名约定
 

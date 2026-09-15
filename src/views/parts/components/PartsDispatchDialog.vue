@@ -6,34 +6,37 @@
   弹窗 width=480px（不再绑 top，使用 EP 默认 15vh）。
   2026-08-22 a11y：单包 el-radio-group 触发 for= 指向非 labelable 元素警告，
   通过 `<el-form-item label="..." :for="''">` 显式清空 for；radio-group 上加 aria-label。
+
+  2026-09-15 重构：状态全部来自 usePartsListStore（Pinia setup store），原 :ctx prop
+  模式删除。
 -->
 <template>
   <el-dialog
-    v-model="dispatchVisible"
-    :title="dispatchMode === 'cnc' ? '发送至 CNC 编程' : '下发零件'"
+    v-model="store.dispatch.dispatchVisible"
+    :title="store.dispatch.dispatchMode === 'cnc' ? '发送至 CNC 编程' : '下发零件'"
     width="480px"
-    @closed="onDispatchClosed"
+    @closed="store.dispatch.onDispatchClosed"
   >
     <el-form label-width="96px">
       <!-- 2026-08-22 a11y：单包 el-radio-group 触发 for= 指向非 labelable 元素警告 -->
       <el-form-item label="下发方式" for="">
-        <el-radio-group v-model="dispatchMode" aria-label="下发方式">
+        <el-radio-group v-model="store.dispatch.dispatchMode" aria-label="下发方式">
           <el-radio value="direct">直接下到生产货架</el-radio>
           <el-radio value="cnc">发送至 CNC 编程</el-radio>
         </el-radio-group>
       </el-form-item>
-      <template v-if="dispatchMode === 'direct'">
+      <template v-if="store.dispatch.dispatchMode === 'direct'">
         <!-- 2026-07-21：先选下一道工序，再选目标货架；货架候选按映射过滤 -->
         <el-form-item label="下一道工序" required>
           <el-select
-            v-model="dispatchNextProcessId"
+            v-model="store.dispatch.dispatchNextProcessId"
             placeholder="请先选择下一道工序"
             style="width: 100%"
             filterable
             clearable
           >
             <el-option
-              v-for="p in filteredProcesses"
+              v-for="p in store.dispatch.filteredProcesses"
               :key="p.id"
               :label="`${p.code} / ${p.name}`"
               :value="p.id"
@@ -42,18 +45,23 @@
         </el-form-item>
         <el-form-item label="目标货架" required>
           <el-select
-            v-model="dispatchShelfId"
+            v-model="store.dispatch.dispatchShelfId"
             placeholder="先选工序；货架候选按映射过滤"
             style="width: 100%"
             filterable
             clearable
-            :disabled="!dispatchNextProcessId"
+            :disabled="!store.dispatch.dispatchNextProcessId"
           >
-            <el-option v-for="s in filteredShelves" :key="s.id" :label="s.name" :value="s.id" />
+            <el-option
+              v-for="s in store.dispatch.filteredShelves"
+              :key="s.id"
+              :label="s.name"
+              :value="s.id"
+            />
             <template #empty>
               <span class="muted">
                 {{
-                  dispatchNextProcessId
+                  store.dispatch.dispatchNextProcessId
                     ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
                     : '请先选择下一道工序'
                 }}
@@ -72,14 +80,17 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="dispatchVisible = false">取消</el-button>
+      <el-button @click="store.dispatch.dispatchVisible = false">取消</el-button>
       <el-button
         type="primary"
-        :loading="dispatchSubmitting"
-        :disabled="dispatchMode === 'direct' && (!dispatchShelfId || !dispatchNextProcessId)"
-        @click="onDispatchConfirm"
+        :loading="store.dispatch.dispatchSubmitting"
+        :disabled="
+          store.dispatch.dispatchMode === 'direct' &&
+          (!store.dispatch.dispatchShelfId || !store.dispatch.dispatchNextProcessId)
+        "
+        @click="store.dispatch.onDispatchConfirm"
       >
-        {{ dispatchMode === 'cnc' ? '发送至 CNC 编程' : '确认下发' }}
+        {{ store.dispatch.dispatchMode === 'cnc' ? '发送至 CNC 编程' : '确认下发' }}
       </el-button>
     </template>
   </el-dialog>
@@ -88,29 +99,10 @@
 <script setup lang="ts">
 // views/parts/components/PartsDispatchDialog.vue
 //
-// 2026-08-22 从 PartsList.vue 抽出：单件下发 dialog。
-// 模板只对顶层 ref 自动解包 —— 从 props.ctx.* 取的嵌套 ref 必须先解构到 script 顶层。
-// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层 `props.ctx` 直读。
-// 用 IIFE 包一层把 props.ctx 读取放进函数体。
+// 2026-09-15 重构：状态全部来自 usePartsListStore（Pinia setup store）。
+import { usePartsListStore } from '../composables/usePartsListStore';
 
-import type { PartsListCtx } from '../composables/partsListCtx';
-
-const props = defineProps<{ ctx: PartsListCtx }>();
-
-// 2026-09-13 PR-2：见文件头注释。
-const dispatch = (() => props.ctx.dispatch)();
-
-const {
-  dispatchVisible,
-  dispatchMode,
-  dispatchShelfId,
-  dispatchNextProcessId,
-  dispatchSubmitting,
-  filteredShelves,
-  filteredProcesses,
-  onDispatchClosed,
-  onDispatchConfirm,
-} = dispatch;
+const store = usePartsListStore();
 </script>
 
 <style lang="scss" scoped>
