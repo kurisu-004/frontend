@@ -24,7 +24,13 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 4. **EP 命令式 API CSS 必须在 `src/main.ts` 手动 import**：`unplugin-auto-import` resolver 只扫 `<template>`，看不到 `<script setup>` 里的 `ElMessageBox` / `ElMessage` / `ElNotification` / `ElLoading`。
 5. **不要删 `vite.config.ts` 的 `optimizeDeps.include`**：防止 dev 模式 dep discovery 触发整页 full-reload。
 6. **不要直接 `import 'pdfjs-dist'`**：统一从 `@/utils/pdfjs` import `pdfjsLib`（workerSrc 缓存穿透版本串集中在这里）。
-7. **auth 域 2026-09-14 切到 v2（backend-rust 实现）**：`/api/v2/auth/*` 是当前目标；新增 auth 功能统一走 `apiV2`，refresh 用 `refreshClientV2`（baseURL 一致）。登录拿到 v2 JWT → deliveryNote / deliveryGroup / parts/scanInspect 那 14+4 个 v2 业务端点的 trade-off（v1 JWT → 40101）自动解除。`apiV2` 与 `api` 共享同一拦截器，雪崩防御 `refreshPromise` 模块单例。
+7. **业务端点 2026-09-15 Phase 5 一次性切到 v2（backend-rust 实现）**：`api` / `refreshClient` baseURL 统一为 `/api/v2`，原 `apiV2` / `refreshClientV2` 已合并删除。所有业务端点（auth / parts / delivery-notes / delivery-groups / process-chain / worker-pool / applicants / assembly / cnc / customers / outsource / processes / shelves / statistics / users / workers / work-types）统一走 `api`。仅 4 个打印端点保留 v1，**专供 `apiPrint` 客户端**（baseURL `/api/v1`，与 `api` 共享同一组拦截器与 `refreshPromise` 单例）：
+   - `POST /delivery-notes/{id}/print` ← `printNote`
+   - `POST /delivery-notes/{id}/print-labels` ← `printNoteLabels`
+   - `GET  /parts/{id}/print-drawing` ← `printPartDrawing`
+   - `POST /parts/print-drawing-batch` ← `printPartDrawingBatch`
+
+   新增业务端点直接 `import { api } from '@/api/http'` 后 `api.get/post(...)`，路径不带 `/v2` 前缀；新增打印端点 `import { apiPrint }` 后 `apiPrint.get/post(...)`。序列化：v1/v2 共用 `serializeParamsV1`（数组重复 key 形式）—— v2 `statuses` 字段由后端 schema 改为单值 string，重复 key 与 CSV 语义兼容。
 
 8. **router `meta.menuCode` 必填**：单一权限源 = 后端菜单树，不填会被守卫误放行。
 9. **dummy-auth 只能 dev 模式用**：`npm run dev:dummy`（=`vite --mode dummy`，自动加载 `.env.dummy` → 注入 `VITE_DUMMY_AUTH=true`）仅本地调试用。**不要**写 `npm run dev -- --dummy-auth`（cac 拒绝未知 flag，会崩）。三层 prod 保护已就位：`vite build` + `VITE_DUMMY_AUTH=true` → 硬 throw / `import.meta.env.DEV` guard + `VITE_DUMMY_AUTH === 'true'` 双判定 / 不写 localStorage。任何 prod bundle 不应含 dummy-auth 注入路径（grep `initDummyAuth` 仅命中 dev 调用点 + `useAuthSession` 函数定义）。判定逻辑统一收敛在 `useAuthSession.isDummyAuthRequested()`（2026-08-28 重写，详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md) 第 6 节）。

@@ -1,11 +1,12 @@
 // 后端零件 API 封装 —— 批量 / 批次化端点（批量新建、批次拆分/取消、品检待办、批量品检通过）。
+// 2026-09-15 Phase 5：业务全切 v2，统一走 `api`（baseURL `/api/v2`）。
 // 2026-08-25：从原 1165 行 api/parts.ts 拆分到 ./ 子文件；本文件是 ./batch 子域。
 //
 // 跨子域类型引用：PartItem / PartCreatePayload 定义在 ./crud；本文件所有批量响应
 // （DTO / 失败明细）都涉及单件 DTO 与单件创建 payload，因此仅 type-only 导入，
 // 运行时不会产生 ESM 循环。
 
-import { api, apiV2, cleanParams } from '@/api/http';
+import { api, cleanParams } from '@/api/http';
 import type { PartFileItem } from '@/types/part_file';
 import type { PartCreatePayload, PartItem } from './crud';
 
@@ -268,7 +269,7 @@ export interface BatchToInspectionOutFE {
 export async function batchToInspection(
   payload: BatchToInspectionRequest,
 ): Promise<BatchToInspectionOutFE> {
-  const resp = await apiV2.post<BatchToInspectionOutFE>('/parts/batch-to-inspection', payload);
+  const resp = await api.post<BatchToInspectionOutFE>('/parts/batch-to-inspection', payload);
   return resp.data;
 }
 
@@ -306,6 +307,6 @@ export interface BatchToShipOutFE {
 }
 
 export async function batchToShip(payload: BatchToShipRequest): Promise<BatchToShipOutFE> {
-  const resp = await apiV2.post<BatchToShipOutFE>('/parts/batch-to-ship', payload);
+  const resp = await api.post<BatchToShipOutFE>('/parts/batch-to-ship', payload);
   return resp.data;
 }

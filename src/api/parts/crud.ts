@@ -1,4 +1,7 @@
 // 后端零件 API 封装 —— 单件 CRUD + 生命周期（生产/扫码/品检/外协/返修/打印等）。
+// 2026-09-15 Phase 5：业务全切 v2，`api`（baseURL `/api/v2`）默认客户端。
+// 打印 2 端点（print-drawing / print-drawing-batch）保留 v1，走 `apiPrint`，
+// 在 ./file.ts 单独声明，本文件不重复 export。
 // 所有 ID 在前端是字符串（雪花 ID 经后端 IdStr 序列化）。
 // 2026-08-25：从原 1165 行 api/parts.ts 拆分到 ./ 子文件；本文件是 ./crud 子域。
 //
@@ -6,7 +9,7 @@
 // listRepairingBatches 是单件 lifecycle，但响应形态与品检待办一致）。用 `import type`
 // 顶置避免 inline import 的可读性问题；type-only 导入是擦除的，运行时无循环代价。
 
-import { api, apiV2, cleanParams } from '@/api/http';
+import { api, cleanParams } from '@/api/http';
 import type { DirectOutsourceCandidateListResult } from '@/types/directOutsource';
 import type { OutsourceSendableListResult } from '@/types/outsource';
 import type {
@@ -371,6 +374,66 @@ export async function scanPart(payload: PartScanPayload): Promise<PartItem> {
   return resp.data;
 }
 
+/**
+ * 2026-09-15 Phase 5 新增：扫码台 RETURN / INSPECT 二合一入口。
+ *
+ * 后端 `POST /api/v2/parts/worker-scan`（rust modules/part/handler.rs::worker_scan）：
+ *  - event_type=RETURNED  → mark_returned（IN_PROCESS+WORKER → ON_SHELF/PROCESS）
+ *  - event_type=INSPECTED → mark_inspected（INSPECTION → INSPECTED/INSPECTION_FAILED）
+ *
+ * 单一端点替代 v1 的 `POST /parts/scan?event_type=...`（v1 Python 仍在维护，旧 v1
+ * `scanPart` 路径保留为兼容兜底；新前端流程推荐 worker-scan）。
+ *
+ * 入参：
+ *  - serial_no: 序列号
+ *  - badge_code: 工牌码
+ *  - event_type: 'RETURNED' | 'INSPECTED'
+ *  - shelf_id: 目标货架雪花 ID 字符串（RETURNED=生产架 / INSPECTED=品检架）
+ *  - next_process_id?: 仅 RETURNED 必填；工人手动输入下一道工序
+ *  - target_inspection_shelf_id?: 仅 INSPECTED 必填；品检架 id
+ *  - batch_id?: 可选；多批次歧义时显式指定
+ *
+ * 失败抛 ApiError：
+ *  - 20103 INVALID_TRANSITION：状态机迁移非法
+ *  - 20202 WORKER_INACTIVE：工牌未识别 / 已停用
+ *  - 20401 / 20403 等
+ */
+export interface WorkerScanPayload {
+  serial_no: string;
+  badge_code: string;
+  event_type: 'RETURNED' | 'INSPECTED';
+  /** 雪花 ID 字符串（CLAUDE.md §3）；RETURNED=生产架 / INSPECTED=品检架 */
+  shelf_id: string;
+  /** 仅 RETURNED 必填 */
+  next_process_id?: string | null;
+  /** 仅 INSPECTED 必填 */
+  target_inspection_shelf_id?: string | null;
+  /** 可选；多批次歧义时显式指定 */
+  batch_id?: string | null;
+}
+
+export interface WorkerScanOut {
+  /** worker_scan_event service 层最小投影 */
+  scan: {
+    worker_id: string;
+    part_id: string;
+    batch_id: string;
+    event_type: string;
+    /** 父装配件 id（仅当 INSPECTED 分支触发父 status 变更时 Some） */
+    synced_assembly_id: string | null;
+  };
+  /** 同事务 WorkerPoolService::refill 结果（前端按需消费） */
+  refill: {
+    pool_count_by_process: { process_id: string; pool_count: number }[];
+    held_batches: unknown[];
+  };
+}
+
+export async function workerScan(payload: WorkerScanPayload): Promise<WorkerScanOut> {
+  const resp = await api.post<WorkerScanOut>('/parts/worker-scan', payload);
+  return resp.data;
+}
+
 export async function listPartEvents(id: string): Promise<PartEvent[]> {
   const resp = await api.get<PartEvent[]>(`/parts/${id}/events`);
   return resp.data;
@@ -396,9 +459,7 @@ export interface BatchActionPayload {
 /** INSPECTION → READY_TO_SHIP：品检合格（可选批次/部分数量）。
  * 事件类型 INSPECTED。
  *
- * 2026-08-31 回滚：v2 `POST /parts/{id}/to-ship` 在 inspection 页面错用，
- * 改回 v1 `POST /parts/{id}/pass-inspection`。原 `toShip` v2 保留供
- * usePartDetail / useOutsourceReceivingList 使用。 */
+ * 2026-09-15 Phase 5：原 v1 `POST /parts/{id}/pass-inspection` 已统一切 v2。 */
 export async function passInspection(id: string, payload?: BatchActionPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>(`/parts/${id}/pass-inspection`, payload ?? undefined);
   return resp.data;
@@ -407,9 +468,9 @@ export async function passInspection(id: string, payload?: BatchActionPayload): 
 /** 扫码快捷品检（PENDING/PROGRAMMING/IN_PROCESS+PRODUCTION_SHELF → INSPECTION）。
  * 事件类型 INSPECTED（PASS）/ INSPECTION_FAILED（FAIL）。
  *
- * 2026-08-31 回滚：从 v2 `POST /parts/{id}/to-inspection` 改回 v1
- * `POST /parts/{id}/scan-inspect`。原 `toInspection` v2 保留供
- * useOutsourceReceivingList 使用。 */
+ * 2026-09-15 Phase 5：原 v1 `POST /parts/{id}/scan-inspect` 改走 v2 `POST /parts/{id}/scan-inspect`；
+ * payload schema 与后端 v2 `ScanInspectRequest` 对齐（target_inspection_shelf_id 必填）。
+ * 注：单段「送检」在 v2 不单独走 `toInspection`，所有 INSPECT 都走 scan-inspect 一体化。 */
 export interface ScanInspectPayload {
   /** 必填；目标品检架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
   target_inspection_shelf_id: string;
@@ -434,26 +495,14 @@ export async function scanInspect(id: string, payload: ScanInspectPayload): Prom
 
 // ============ inspection to-XXX 体系（2026-08-28 后端路线 B 重构）==============
 
-/** 单件送检。
+/** 单件送检（OUTSOURCE → INSPECTION，保留路线 B 端点以兼容外协接收 tab）。
  *
- * 2026-09-01 从 v2 `POST /parts/{id}/to-inspection` 回退到 v1 Python FastAPI
- * `POST /parts/{id}/receive-from-outsource-to-inspection`（与 2026-08-29
- * `failInspection` 回退 v1 同款约定）。
- *
- * - 路由语义：v1 这条路径**专为 OUTSOURCE → INSPECTION** 设计
- *   （其他状态送检当前没有 v1 等价端点；如有新流程要走 `auto_pass_inspection`
- *   默认 false 的「单段送检」语义，请直接用本端点，但需注意 schema 无 `version`，
- *   OCC 由 service 层按 t_part_batch 处理）。
- * - payload 字段差异：v1 schema（ReceiveToInspectionRequest）字段名是 `shelf_id`
- *   （不是 v2 的 `target_inspection_shelf_id`），无 `version`，无 `note`。
- *   Pydantic 默认 ignore extras，多传字段会被静默丢弃，不返 422。
- * - response 差异：v1 返回 `PartItem`（无 `new_batch_id`，自动拆批的
- *   remainder 对当前消费者而言不需要）。
- * - `auto_pass_inspection` 不传 / 省略 → 默认 false（路线 B：仅送检，
- *   不直接 PASS；后续由品检员手动 toShip）。
- */
+ * 2026-09-15 Phase 5：原 v1 `POST /parts/{id}/receive-from-outsource-to-inspection`
+ * 路由保留并切到 v2 — v2 业务端点覆盖该路径，schema 仍为 `shelf_id`（不是
+ * `target_inspection_shelf_id`）。payload 字段差异：v2 schema 无 `version`，
+ * OCC 由 service 层按 t_part_batch 处理。 */
 export interface ToInspectionPayload {
-  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。v1 schema 名 `shelf_id`。 */
+  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。v2 schema 名 `shelf_id`。 */
   shelf_id: string;
   /** 选填；缺省按状态唯一批次解析；多批次歧义时建议显式传。 */
   batch_id?: string | null;
@@ -470,7 +519,8 @@ export async function toInspection(id: string, payload: ToInspectionPayload): Pr
 }
 
 /** 单件通过品检（INSPECTION → READY_TO_SHIP，可选自动拆批）。
- * 2026-08-29 起 payload 必填：batch_id + version 必传（caller OCC 锚 t_part_batch）。 */
+ * 2026-09-15 Phase 5：原 v2 `POST /parts/{id}/to-ship` 继续走 v2 业务 `api`。
+ * payload 必填：batch_id + version 必传（caller OCC 锚 t_part_batch）。 */
 export interface ToShipPayload {
   /** 必填；雪花 ID 字符串。 */
   batch_id: string;
@@ -484,7 +534,7 @@ export async function toShip(
   id: string,
   payload: ToShipPayload,
 ): Promise<{ part: PartItem; new_batch_id: string | null }> {
-  const resp = await apiV2.post<{ part: PartItem; new_batch_id: string | null }>(
+  const resp = await api.post<{ part: PartItem; new_batch_id: string | null }>(
     `/parts/${id}/to-ship`,
     payload,
   );
@@ -494,13 +544,8 @@ export async function toShip(
 /** 单件品检打回（INSPECTION → IN_PROCESS，指定 shelf + next_process）。
  * 事件类型 INSPECTION_FAILED。
  *
- * 2026-08-29：从 v2 `POST /parts/{id}/to-process` 回退到 v1
- * `POST /parts/{id}/fail-inspection`。to-process 不在 Rust v2 首次上线范围
- * （v2 白名单 = delivery-notes / delivery-groups /
- * parts to-inspection·to-ship·batch-to-inspection·batch-to-ship），原代码
- * 错用 apiV2。v1 端点维持 batch_id 可选、不需要 version，返回 PartItem
- * （无 new_batch_id）。原 onFailInspection 没传 batch_id 是已知缺口
- * （不在本任务修复）。 */
+ * 2026-09-15 Phase 5：原 v1 `POST /parts/{id}/fail-inspection` 路由保留并切 v2。
+ * v2 业务端点覆盖该路径，schema 与 v1 一致（无 `version`，OCC 由 service 层处理）。 */
 export interface FailInspectionPayload {
   shelf_id: string;
   /** 下一道工序 id（必填；保留为该 part 的下道工序，工人可直接领取） */
@@ -527,7 +572,8 @@ export async function deliverPart(id: string): Promise<PartItem> {
   return resp.data;
 }
 
-/** 扫码台：司机确认发货（PR-C 2026-07-10）。 */
+/** 扫码台：司机确认发货（PR-C 2026-07-10）。
+ * 2026-09-15 Phase 5：原 v1 `POST /parts/scan/deliver-part` 切到 v2。 */
 export interface ScanDeliverPartPayload {
   part_id: string;
   worker_badge_code: string;

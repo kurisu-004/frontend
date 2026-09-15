@@ -1,4 +1,5 @@
 // 2026-09-14 新增：process_chain 域前端契约（types only，无 runtime）。
+// 2026-09-15 Phase 5：业务全切 v2；端点 baseURL `/api/v2`，业务统一走 `api`。
 //
 // 端点（与 backend-rust/src/modules/process_chain/handler.rs 对齐）：
 //   GET  /api/v2/process-chains/by-part/{part_id}  ← getProcessChainByPart

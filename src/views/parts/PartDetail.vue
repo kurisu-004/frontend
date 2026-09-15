@@ -7,6 +7,20 @@
     因为它们跨多张卡状态；dialog 状态由 shell 局部维护，业务函数调 usePartDetail
   - barcode 小卡：serial_no 存在时显示
   - 2026-08-25 frontend-overall-refactor：从 2355 行单体拆为装配壳
+  - 2026-09-15 Phase 5：业务全切 v2。品检通过走 `POST /parts/{id}/to-ship`（v2
+    必填 batch_id + version），指定工序走 `POST /parts/{id}/fail-inspection`（v2
+    schema 与 v1 一致，无 version，OCC 由 service 层按 t_part_batch 处理）。
+    新增按钮（按状态显示）见 usePartDetail：
+    - place-on-shelf（ON_SHELF 之前的状态）
+    - send-to-programming（PENDING → PROGRAMMING）
+    - release-from-programming（PROGRAMMING → IN_PROCESS）
+    - recall-to-pending（ON_SHELF / PROGRAMMING → PENDING）
+    - recall-to-programming（ON_SHELF → PROGRAMMING）
+    - send-to-outsource（PENDING / IN_PROCESS → OUTSOURCE）
+    - receive-from-outsource（OUTSOURCE → IN_PROCESS）
+    - complete-repair（REPAIRING → ON_SHELF / INSPECTION）
+    全部按钮点击前先调 `GET /parts/{id}/batches` 拿 `batch_id + version`，
+    再弹 dialog 让用户填货架/工序参数。
 -->
 <template>
   <div v-loading="infoLoading" class="part-detail">

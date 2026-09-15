@@ -1,11 +1,13 @@
 <!--
   ScanReturnParts.vue
 
-  /scan/return —— 扫码台 RETURN 新流程（2026-07-10 PR-E）
+  /scan/return —— 扫码台 RETURN 流程（2026-07-10 PR-E，2026-09-15 Phase 5 切 v2）
   1. onBeforeMount 调 GET /parts/by-worker/{worker_id} 列出当前 worker 持有件
   2. 工人点选一件 → 弹「下一道工序」picker（el-radio-group）
   3. 选完工序 → 弹 ShelfPickerDialog（共享 HMI 卡片网格）
-  4. 提交 POST /parts/scan (event_type=RETURNED, shelf_id, next_process_id, badge_code)
+  4. 2026-09-15 Phase 5：提交改走 POST /parts/worker-scan（event_type=RETURNED），
+     单一端点扫 RETURN；旧 POST /parts/scan?event_type=RETURNED 保留 v1 兼容，
+     新流程走 v2 worker-scan（service 层 mark_returned + 同事务 WorkerPool refill）。
   5. 成功后自动 refresh（该件从列表消失）
 
   与 ScanPickParts.vue 范式对齐：
@@ -294,7 +296,7 @@ import { useScanPartsSort } from '@/composables/useScanPartsSort';
 import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
-import { listPartsHeldByWorker, scanPart, type PartItem } from '@/api/parts';
+import { listPartsHeldByWorker, workerScan, type PartItem } from '@/api/parts';
 import ShelfPickerDialog from '@/views/scan/components/ShelfPickerDialog.vue';
 import ProcessPickerDialog from '@/views/scan/components/ProcessPickerDialog.vue';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
@@ -543,26 +545,26 @@ async function onShelfConfirm(shelfId: string): Promise<void> {
     return;
   }
   pendingShelfId.value = shelfId;
-  showQtyDialog.value = true;
+  // 2026-09-15 Phase 5：RETURN 走 worker-scan（整批 RETURN，不支持部分数量）；
+  // 跳过 QuantityDialog 直接提交。
+  await submitReturn();
 }
 
-async function onQtyConfirm(qty: number): Promise<void> {
-  showQtyDialog.value = false;
+/** 实际提交：worker-scan（event_type=RETURNED）。 */
+async function submitReturn(): Promise<void> {
   if (!selectedPart.value || !selectedNextProcessId.value || !worker.value) {
     ElMessage.warning('选择已重置，请重新选择零件');
     return;
   }
-  selectedQty.value = qty;
   submitting.value = true;
   try {
-    await scanPart({
+    await workerScan({
       serial_no: selectedPart.value.serial_no ?? '',
+      badge_code: worker.value.badge_code ?? '',
       event_type: 'RETURNED',
       shelf_id: pendingShelfId.value,
-      badge_code: worker.value.badge_code ?? '',
       next_process_id: selectedNextProcessId.value,
       batch_id: selectedPart.value.batch_id ?? null,
-      quantity: qty,
     });
     ElMessage.success(
       `已放回：${selectedPart.value.serial_no} → ${selectedNextProcessName.value ?? ''}`,
@@ -575,6 +577,18 @@ async function onQtyConfirm(qty: number): Promise<void> {
   } finally {
     submitting.value = false;
   }
+}
+
+async function onQtyConfirm(qty: number): Promise<void> {
+  // 2026-09-15 Phase 5：worker-scan 不支持部分数量；保留 dialog 入口以兼容
+  // 旧调试路径，正常流程已由 onShelfConfirm → submitReturn 跳过此步。
+  showQtyDialog.value = false;
+  if (!selectedPart.value || !selectedNextProcessId.value || !worker.value) {
+    ElMessage.warning('选择已重置，请重新选择零件');
+    return;
+  }
+  selectedQty.value = qty;
+  await submitReturn();
 }
 
 function onShelfCancel(): void {

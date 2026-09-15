@@ -1,16 +1,15 @@
 <!--
   ScanInspectParts.vue
 
-  /scan/inspect —— 扫码台 INSPECT 新流程（2026-07-19，仿 ScanReturnParts.vue 范式）
+  /scan/inspect —— 扫码台 INSPECT 流程（2026-07-19，2026-09-15 Phase 5 切 v2）
   1. onBeforeMount 调 GET /parts/by-worker/{worker_id} 列出当前 worker 持有件
   2. 工人点选一件 → 进入「待扫码确认」状态（confirm-bar 提示扫该件条码）
   3. 扫码枪扫到与选中件 serial_no 匹配的条码 → 弹 ShelfPickerDialog(kind=inspection)
      （与 ScanPickParts.vue 的「选中后扫码确认」同款防误触模式；不匹配 → ElMessage.error）
   4. 送检只需指定品检货架，不需要下一道工序（后端 INSPECTED 忽略 next_process_id）
-  5. 提交 POST /parts/scan (event_type=INSPECTED, shelf_id=target_inspection_shelf_id=选中品检架)
-     —— shelf_id 供 require_shelf_account_from_body 做货架权限校验，
-        target_inspection_shelf_id 供 service 校验 zone=INSPECTION；
-        两处都填同一个选中架即可（picker 只列本账号 scope 内的品检架）
+  5. 2026-09-15 Phase 5：提交改走 POST /parts/worker-scan（event_type=INSPECTED），
+     worker-scan 走 service::mark_inspected → 写事件 + 同事务 WorkerPool refill。
+     旧 POST /parts/scan?event_type=INSPECTED 保留 v1 兼容。
   6. 成功后自动 refresh（该件从列表消失）
 
   旧「扫一批条码」流程（ScanPartsWork.vue ?action=inspect）已随本页上线替换不保留。
@@ -284,7 +283,7 @@ import { useScanPartsSort } from '@/composables/useScanPartsSort';
 import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
-import { listPartsHeldByWorker, scanPart, type PartItem } from '@/api/parts';
+import { listPartsHeldByWorker, workerScan, type PartItem } from '@/api/parts';
 import ShelfPickerDialog from '@/views/scan/components/ShelfPickerDialog.vue';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
@@ -499,26 +498,30 @@ async function onShelfConfirm(shelfId: string): Promise<void> {
     return;
   }
   pendingShelfId.value = shelfId;
-  showQtyDialog.value = true;
+  // 2026-09-15 Phase 5：worker-scan（event_type=INSPECTED）整批送检，
+  // 不支持部分数量，跳过 QuantityDialog 直接提交。
+  await submitInspect();
 }
 
-async function onQtyConfirm(qty: number): Promise<void> {
-  showQtyDialog.value = false;
+/** 实际提交：worker-scan（event_type=INSPECTED）。
+ *
+ * 入参 schema：serial_no + badge_code + shelf_id + target_inspection_shelf_id
+ * （INSPECTED 必填）+ batch_id。可选 next_process_id（INSPECTED 忽略）。
+ */
+async function submitInspect(): Promise<void> {
   if (!selectedPart.value || !worker.value) {
     ElMessage.warning('选择已重置，请重新选择零件');
     return;
   }
-  selectedQty.value = qty;
   submitting.value = true;
   try {
-    await scanPart({
+    await workerScan({
       serial_no: selectedPart.value.serial_no ?? '',
+      badge_code: worker.value.badge_code ?? '',
       event_type: 'INSPECTED',
       shelf_id: pendingShelfId.value,
-      badge_code: worker.value.badge_code ?? '',
       target_inspection_shelf_id: pendingShelfId.value,
       batch_id: selectedPart.value.batch_id ?? null,
-      quantity: qty,
     });
     ElMessage.success(`已送检：${selectedPart.value.serial_no}`);
     cancelSelect();
@@ -529,6 +532,18 @@ async function onQtyConfirm(qty: number): Promise<void> {
   } finally {
     submitting.value = false;
   }
+}
+
+async function onQtyConfirm(qty: number): Promise<void> {
+  // 2026-09-15 Phase 5：worker-scan 不支持部分数量；保留 dialog 入口以兼容
+  // 旧调试路径，正常流程已由 onShelfConfirm → submitInspect 跳过此步。
+  showQtyDialog.value = false;
+  if (!selectedPart.value || !worker.value) {
+    ElMessage.warning('选择已重置，请重新选择零件');
+    return;
+  }
+  selectedQty.value = qty;
+  await submitInspect();
 }
 
 function onShelfCancel(): void {

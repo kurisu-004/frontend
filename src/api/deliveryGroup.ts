@@ -1,4 +1,4 @@
-// 送货分组 API 封装（Rust v2 P1；baseURL /api/v2）。
+// 送货分组 API 封装（Rust v2 P1；baseURL /api/v2，2026-09-15 Phase 5 业务全切 v2）。
 // 端点清单（与 hsh-erp-rust 的 delivery_groups router 对应）：
 //   GET    /delivery-groups?customer_id=...        - listDeliveryGroups
 //   POST   /delivery-groups                        - createDeliveryGroup
@@ -12,9 +12,9 @@
 //   40901 BIZ_DELIVERY_VERSION_CONFLICT             409 — version 不匹配
 //   20104 BIZ_DELIVERY_NOT_FOUND                    404 — 分组不存在（已并发删）
 //
-// 全部走 apiV2，token / refresh / 信封逻辑与 v1 共享。
+// 业务统一走 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 起）。
 
-import { apiV2 } from '@/api/http';
+import { api } from '@/api/http';
 import type {
   CreateDeliveryGroupRequest,
   DeliveryGroupListOut,
@@ -29,7 +29,7 @@ import type {
  * 序列化为 `?customer_id=...`；绝不能传数组——会被展成 `?customer_id=&customer_id=&...`。
  */
 export async function listDeliveryGroups(l1Id: string): Promise<DeliveryGroupListOut> {
-  const resp = await apiV2.get<DeliveryGroupListOut>('/delivery-groups', {
+  const resp = await api.get<DeliveryGroupListOut>('/delivery-groups', {
     params: { customer_id: l1Id },
   });
   return resp.data;
@@ -39,7 +39,7 @@ export async function listDeliveryGroups(l1Id: string): Promise<DeliveryGroupLis
 export async function createDeliveryGroup(
   payload: CreateDeliveryGroupRequest,
 ): Promise<DeliveryGroupOut> {
-  const resp = await apiV2.post<DeliveryGroupOut>('/delivery-groups', payload);
+  const resp = await api.post<DeliveryGroupOut>('/delivery-groups', payload);
   return resp.data;
 }
 
@@ -51,7 +51,7 @@ export async function updateDeliveryGroup(
   id: string,
   payload: UpdateDeliveryGroupRequest,
 ): Promise<DeliveryGroupOut> {
-  const resp = await apiV2.post<DeliveryGroupOut>(
+  const resp = await api.post<DeliveryGroupOut>(
     `/delivery-groups/${encodeURIComponent(id)}/update`,
     payload,
   );
@@ -63,5 +63,5 @@ export async function softDeleteDeliveryGroup(
   id: string,
   payload: DeliveryGroupVersionRequest,
 ): Promise<void> {
-  await apiV2.post(`/delivery-groups/${encodeURIComponent(id)}/soft-delete`, payload);
+  await api.post(`/delivery-groups/${encodeURIComponent(id)}/soft-delete`, payload);
 }

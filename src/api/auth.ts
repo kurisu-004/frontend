@@ -6,16 +6,16 @@
 // （其它设备 logout / 改密 / 管理员停用后 JWT 仍签名有效但 session 索引
 // 已被吊销，由 http.ts 拦截器直接 dispatch auth:logout 不走 refresh）。
 //
-// 切 v2 后附带收益：trade-off 段（deliveryNote 14 个 + parts scanInspect
-// 4 个 v2 业务端点拿到 v1 JWT 在 get_current_user 处 40101）自动消失——
-// 全链路统一 v2 JWT 后这些端点正常工作。
+// 2026-09-15 Phase 5：业务全切 v2；`api` 与 `refreshClient` baseURL 统一改为
+// `/api/v2`，原 `apiV2` / `refreshClientV2` 合并进 `api` / `refreshClient`。
+// auth 域走 `api` / `refreshClient`（baseURL `/api/v2`）。
 //
-// 端点（全部经 apiV2 / refreshClientV2）：
+// 端点（全部经 api / refreshClient）：
 //   POST   /auth/login            → login()
 //   GET    /auth/me               → me()
 //   POST   /auth/logout           → logout()
 //   POST   /auth/change-password  → changeMyPassword()
-//   POST   /auth/refresh          → refreshTokens()（refreshClientV2，无拦截器）
+//   POST   /auth/refresh          → refreshTokens()（refreshClient，无拦截器）
 //
 // 错误码：BIZ_AUTH_INVALID=40101 / TOKEN_EXPIRED=40102 /
 // REFRESH_INVALID=40103 / OLD_PASSWORD_MISMATCH=40104 /
@@ -26,10 +26,10 @@
 // - /auth/me / /auth/logout 自动挂 Authorization
 //
 // 2026-07-10 起 LoginResponse 多一个 refresh_token 字段；refreshTokens()
-// 用专门的非拦截 axios 实例（refreshClientV2）调 /auth/refresh，避免递归触发
+// 用专门的非拦截 axios 实例（refreshClient）调 /auth/refresh，避免递归触发
 // 拦截器内的刷新逻辑。
 
-import { apiV2, refreshClientV2, ApiError } from '@/api/http';
+import { api, refreshClient, ApiError } from '@/api/http';
 import type { CurrentUser } from '@/types/user';
 
 export interface LoginResponse {
@@ -40,20 +40,20 @@ export interface LoginResponse {
 }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
-  const resp = await apiV2.post<LoginResponse>('/auth/login', { username, password });
+  const resp = await api.post<LoginResponse>('/auth/login', { username, password });
   return resp.data;
 }
 
 export async function me(): Promise<CurrentUser> {
-  const resp = await apiV2.get<CurrentUser>('/auth/me');
+  const resp = await api.get<CurrentUser>('/auth/me');
   return resp.data;
 }
 
 export async function logout(): Promise<void> {
   // no-op：客户端丢 token 即可。这里容忍失败（不清 localStorage 也不抛）。
-  // v1 后端 logout 是 no-op（仅返回 {"ok": true}），客户端吞失败的兜底语义不变。
+  // 后端 logout 是 no-op（仅返回 {"ok": true}），客户端吞失败的兜底语义不变。
   try {
-    await apiV2.post('/auth/logout');
+    await api.post('/auth/logout');
   } catch {
     /* noop */
   }
@@ -73,7 +73,7 @@ export interface ChangePasswordPayload {
  * 失败抛 ApiError：code === 40104 (BIZ_AUTH_OLD_PASSWORD_MISMATCH) → 旧密码错误。
  */
 export async function changeMyPassword(payload: ChangePasswordPayload): Promise<void> {
-  await apiV2.post('/auth/change-password', payload);
+  await api.post('/auth/change-password', payload);
 }
 
 /**
@@ -87,7 +87,7 @@ export async function changeMyPassword(payload: ChangePasswordPayload): Promise<
  * - code === 0 / 其它 → 见后端 envelope 语义。
  */
 export async function refreshTokens(refresh_token: string): Promise<LoginResponse> {
-  const resp = await refreshClientV2.post<{
+  const resp = await refreshClient.post<{
     code: number;
     message: string;
     data: LoginResponse | null;
