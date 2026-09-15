@@ -3,7 +3,8 @@
 //   - 货架（shelves_list）从 floor_group 移到 auth_group，与 users_list / workers_list 同组
 //     （sort_order 30）。业务上货架归属权限管理范畴。
 //   - 扫码台（scan_badge）从 floor_group 升级为顶级菜单（sort_order 13，紧跟
-//     production_stats=12 之后），path=/scan（router /scan → /scan/badge 重定向）。
+//     production_stats=12 之后），path=/scan/badge（router/index.ts:382 子路由 'badge'；
+//     父路由 /scan 路径仅承载 redirect 到 /scan/badge，不暴露菜单）。
 //   - 车间（floor_group）软删：子项全部迁出后保留空分组节点（comment-only soft-delete，
 //     与 backend-rust 025 的 `is_active=false` 等价语义；MenuNode 类型未含 is_active
 //     字段故不在 TS 里表达，靠注释 + 路由层 `meta.menuCode` 缺失自然失效来兜底）。
@@ -34,7 +35,7 @@
 // 改动后必须验证：
 //   1. 每个 MenuNode.code 是 router/index.ts 里某条路由的 meta.menuCode
 //   2. 每个 MenuNode.icon 在 MenuTreeItem.vue 的 ICON_MAP 中存在
-//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 24
+//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 25
 
 import type { MenuNode } from '@/types/menu';
 
@@ -384,8 +385,8 @@ export const ADMIN_MENUS: MenuNode[] = [
     children: [],
   },
   // 2026-09-16 新增顶级菜单：scan_badge 扫码台（从 floor_group 升级，sort_order=13
-  // 紧跟 production_stats=12 之后、customer_management=15 之前）。path=/scan
-  // （router /scan → /scan/badge 重定向；meta.menuCode=scan_badge 见 router/index.ts:382）。
+  // 紧跟 production_stats=12 之后、customer_management=15 之前）。path=/scan/badge
+  // （router/index.ts:382 子路由 'badge'；父路由 /scan 路径仅承载 redirect，不暴露菜单）。
   // backend-rust 025 同步提升；router 早已就绪（5 个子路由共用 scan_badge menuCode）。
   // icon=Operation：表达「操作台/工位」语义；与 production_group 主图标同名是历史
   // 既有约定（auth_group 内 Platform / work_types_list User 等也复用同名），侧栏
@@ -396,7 +397,7 @@ export const ADMIN_MENUS: MenuNode[] = [
     parent_id: null,
     code: 'scan_badge',
     title: '扫码台',
-    path: '/scan',
+    path: '/scan/badge',
     icon: 'Operation',
     sort_order: 13,
     children: [],
