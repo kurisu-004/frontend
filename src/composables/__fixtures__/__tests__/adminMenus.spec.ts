@@ -64,7 +64,10 @@ describe('ADMIN_MENUS', () => {
 
   it('all leaf nodes have path', () => {
     const all = flatten(ADMIN_MENUS);
-    const leaves = all.filter((n) => n.children.length === 0);
+    // 2026-09-16：leaf 定义收紧为「无 children 且 path 非 null」，排除空分组节点
+    // （如 floor_group 软删后 children=[] / path=null——它不是 leaf，是「已停用」的分组，
+    // 路径缺失是正确的）。原 filter `n.children.length === 0` 会把空分组误判为 leaf。
+    const leaves = all.filter((n) => n.children.length === 0 && n.path !== null);
     for (const leaf of leaves) {
       expect(leaf.path).toBeTruthy();
     }
