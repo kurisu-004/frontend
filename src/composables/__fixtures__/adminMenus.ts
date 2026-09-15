@@ -1,12 +1,27 @@
 // src/composables/__fixtures__/adminMenus.ts
-// 2026-09-14 同步自生产 DB：admin 角色的完整菜单树（30 个 menuCode 全集：11 顶级 [3 leaf + 8 分组 path:null] + 21 子项 leaf）。
+// 2026-09-16 同步 backend-rust sqlx migration 025：
+//   - 货架（shelves_list）从 floor_group 移到 auth_group，与 users_list / workers_list 同组
+//     （sort_order 30）。业务上货架归属权限管理范畴。
+//   - 扫码台（scan_badge）从 floor_group 升级为顶级菜单（sort_order 13，紧跟
+//     production_stats=12 之后），path=/scan/badge（router/index.ts:382 子路由 'badge'；
+//     父路由 /scan 路径仅承载 redirect 到 /scan/badge，不暴露菜单）。
+//   - 车间（floor_group）软删：子项全部迁出后保留空分组节点（comment-only soft-delete，
+//     与 backend-rust 025 的 `is_active=false` 等价语义；MenuNode 类型未含 is_active
+//     字段故不在 TS 里表达，靠注释 + 路由层 `meta.menuCode` 缺失自然失效来兜底）。
+// 2026-09-16 print_templates_designer path 修复：/print-templates/designer → /print-templates，
+// 对齐 router/index.ts:359-369 单路由（router path 已统一为 /print-templates）。
+// 2026-09-16 part_process_chain path 已是 /production/process-design（router 已对齐），无需改路径。
+// 2026-09-14 同步自生产 DB：admin 角色的完整菜单树（11 顶级 + 21 子项 leaf + 1 新顶级 scan_badge = 33 code）。
 // 2026-09-14 新增 template_management（模板管理）顶级分组（sort_order=27，production_group=26 之后），
-// 含 print_templates_designer（模板编辑，/print-templates/designer）。
+// 含 print_templates_designer（模板编辑）。
 // 2026-09-14 menuCode 改名：process_design_list → part_process_chain（对齐后端 t_menu migration 017/018/021）。
+// 2026-09-14 path 对齐 router：part_process_chain.path = /production/process-design。
 // 2026-09-11 新增 production_group（生产管理）顶级分组，含 part_process_chain（工序制定）+ worker_queue（从 auth_group 迁出）。
 // 2026-09-12 合并 fc99d3b tabbed 页：production_group 新增 process_work_type（工序工种，/production/process-work-type）。
 // settings_root 暂时保留（fc99d3b 后端 migration 已软删，但前端 fixture 仍挂 3 个旧子菜单码以兜底路由守卫，
 // 待后端菜单树彻底下架 settings_root 后再移除）。
+// floor_group 软删保留（2026-09-16，迁 shelves_list 后无子项；待后端彻底下架再移除 fixture 行；
+// __tests__/adminMenus.spec.ts 断言 floor_group 必须存在，故暂不能删）。
 // 仅 dev dummy-auth 模式使用（initDummyAuth 注入 useAuthSession.user.menus）；
 // prod bundle 不引用此文件（无 dead code 风险）。
 //
@@ -20,7 +35,7 @@
 // 改动后必须验证：
 //   1. 每个 MenuNode.code 是 router/index.ts 里某条路由的 meta.menuCode
 //   2. 每个 MenuNode.icon 在 MenuTreeItem.vue 的 ICON_MAP 中存在
-//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 23
+//   3. leaf 节点（path 非 null 且 children 为空）数 = 路由可点击菜单数 = 25
 
 import type { MenuNode } from '@/types/menu';
 
@@ -233,9 +248,12 @@ export const ADMIN_MENUS: MenuNode[] = [
   {
     // 2026-09-14 新增：template_management 顶级分组（sort_order=27，挂在
     // production_group=26 之后、auth_group=30 之前），含 print_templates_designer
-    // 二级菜单（router /print-templates/designer）。后端 t_menu 由 backend-rust
+    // 二级菜单（router /print-templates）。后端 t_menu 由 backend-rust
     // implementor 在另一 worktree 的 migration 同步写。PrintTemplateDesigner 不接
     // 后端 API（用户决策），仍跑 localStorage；菜单树只为权限 + 侧栏展示。
+    // 2026-09-16 path 改 /print-templates 对齐 router，dev dummy 也跟上（router
+    // 真实 path 是 /print-templates，dev dummy 之前写 /print-templates/designer
+    // 已被 MenuTreeItem 渲染成死链）。
     id: id(11),
     version: 0,
     parent_id: null,
@@ -251,7 +269,7 @@ export const ADMIN_MENUS: MenuNode[] = [
         parent_id: id(11),
         code: 'print_templates_designer',
         title: '模板编辑',
-        path: '/print-templates/designer',
+        path: '/print-templates',
         icon: 'Printer',
         sort_order: 10,
         children: [],
@@ -288,6 +306,19 @@ export const ADMIN_MENUS: MenuNode[] = [
         path: '/users',
         icon: 'List',
         sort_order: 20,
+        children: [],
+      },
+      {
+        // 2026-09-16 从 floor_group 迁入：业务上货架归属权限管理（与工人/账号同类）。
+        // backend-rust 025 同步；dev dummy 与生产对齐。sort_order=30 接在 users_list=20 之后。
+        id: id(63),
+        version: 0,
+        parent_id: id(6),
+        code: 'shelves_list',
+        title: '货架管理',
+        path: '/shelves',
+        icon: 'Platform',
+        sort_order: 30,
         children: [],
       },
     ],
@@ -338,7 +369,10 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 9. floor_group — 车间（分组，1 child）
+  // 9. floor_group — 车间（软删分组，0 children）
+  // 2026-09-16 停用，业务归入权限管理；保留行便于回滚 + __tests__ 断言。
+  // backend-rust 025 对应 `is_active=false`；前端 MenuNode 类型无 is_active 字段，
+  // 软删语义靠「无 children」+ 无路由 meta.menuCode 自然失效来兜底。
   {
     id: id(8),
     version: 0,
@@ -348,19 +382,25 @@ export const ADMIN_MENUS: MenuNode[] = [
     path: null,
     icon: 'Tools',
     sort_order: 40,
-    children: [
-      {
-        id: id(81),
-        version: 0,
-        parent_id: id(8),
-        code: 'shelves_list',
-        title: '货架管理',
-        path: '/shelves',
-        icon: 'Platform',
-        sort_order: 10,
-        children: [],
-      },
-    ],
+    children: [],
+  },
+  // 2026-09-16 新增顶级菜单：scan_badge 扫码台（从 floor_group 升级，sort_order=13
+  // 紧跟 production_stats=12 之后、customer_management=15 之前）。path=/scan/badge
+  // （router/index.ts:382 子路由 'badge'；父路由 /scan 路径仅承载 redirect，不暴露菜单）。
+  // backend-rust 025 同步提升；router 早已就绪（5 个子路由共用 scan_badge menuCode）。
+  // icon=Operation：表达「操作台/工位」语义；与 production_group 主图标同名是历史
+  // 既有约定（auth_group 内 Platform / work_types_list User 等也复用同名），侧栏
+  // 仍靠 title 区分。Cellphone 暂不引入 ICON_MAP（菜单图标导入白名单收敛约束）。
+  {
+    id: id(12),
+    version: 0,
+    parent_id: null,
+    code: 'scan_badge',
+    title: '扫码台',
+    path: '/scan/badge',
+    icon: 'Operation',
+    sort_order: 13,
+    children: [],
   },
   // 10. settings_root — 设置（分组，3 children）
   {

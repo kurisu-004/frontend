@@ -14,7 +14,9 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
 describe('ADMIN_MENUS', () => {
   // 2026-09-14：新增 template_management + print_templates_designer（模板管理分组 + 模板编辑子菜单）
   // + part_process_chain（2026-09-14 menuCode 改名）。code 总数 27 → 30。
-  it('covers all 30 menuCodes', () => {
+  // 2026-09-16：scan_badge 升顶级（floor_group → auth_group 货架移入 + 扫码台升级 + 车间软删）。
+  // code 总数 27 → 30 → 33。
+  it('covers all 33 menuCodes', () => {
     const all = flatten(ADMIN_MENUS);
     const codes = all.map((n) => n.code);
     expect(codes).toContain('home');
@@ -54,6 +56,8 @@ describe('ADMIN_MENUS', () => {
     // 2026-09-14 新增：模板管理分组 + 模板编辑子菜单
     expect(codes).toContain('template_management');
     expect(codes).toContain('print_templates_designer');
+    // 2026-09-16 新增：扫码台从 floor_group 升级为顶级菜单（sort_order=13）
+    expect(codes).toContain('scan_badge');
   });
 
   it('has unique codes (no dup)', () => {
@@ -64,7 +68,10 @@ describe('ADMIN_MENUS', () => {
 
   it('all leaf nodes have path', () => {
     const all = flatten(ADMIN_MENUS);
-    const leaves = all.filter((n) => n.children.length === 0);
+    // 2026-09-16：leaf 定义收紧为「无 children 且 path 非 null」，排除空分组节点
+    // （如 floor_group 软删后 children=[] / path=null——它不是 leaf，是「已停用」的分组，
+    // 路径缺失是正确的）。原 filter `n.children.length === 0` 会把空分组误判为 leaf。
+    const leaves = all.filter((n) => n.children.length === 0 && n.path !== null);
     for (const leaf of leaves) {
       expect(leaf.path).toBeTruthy();
     }
