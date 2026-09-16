@@ -35,16 +35,21 @@ export interface Process {
   updated_at: string;
 }
 
-/** 2026-09-12 新增：工序卡片配色预设（Element Plus 主题色 + 互补色），按 sort_order 顺序循环取用。 */
+/**
+ * 2026-09-16 替换：工序卡片配色预设改为标准 8 色彩虹（红→橙→黄→绿→青→蓝→紫→粉），
+ * 按 sort_order 顺序循环取用 + el-color-picker 预定义色板。饱和的 Flat UI 调色板
+ * 视觉区分度高，便于一眼分辨相邻工序；末尾 alpha = FF 表示完全不透明，
+ * 与后端 t_process.color VARCHAR(9) 的 `#RRGGBBAA` 格式兼容（color-format="hex8"）。
+ */
 export const PROCESS_COLOR_PRESETS: readonly string[] = [
-  '#409EFF', // Element Primary 蓝
-  '#67C23A', // Element Success 绿
-  '#E6A23C', // Element Warning 橙
-  '#F56C6C', // Element Danger 红
-  '#909399', // Element Info 灰
-  '#9B59B6', // 紫
-  '#1ABC9C', // 青
-  '#E15C5C', // 暗红
+  '#E74C3CFF', // 红
+  '#F39C12FF', // 橙
+  '#F1C40FFF', // 黄
+  '#2ECC71FF', // 绿
+  '#1ABC9CFF', // 青
+  '#3498DBFF', // 蓝
+  '#9B59B6FF', // 紫
+  '#FF69B4FF', // 粉（补充色，让预设覆盖超过 7 色工序仍可循环区分）
 ] as const;
 
 export interface ProcessListResult {

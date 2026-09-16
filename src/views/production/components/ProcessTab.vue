@@ -147,10 +147,19 @@
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" />
         </el-form-item>
-        <!-- 2026-09-12 新增：颜色字段（el-color-picker 输出 hex8 → #RRGGBBAA 9 字符） -->
+        <!--
+          2026-09-16 升级：el-color-picker 加 show-alpha + 预定义色板（PROCESS_COLOR_PRESETS）。
+          color-format="hex8" 输出 #RRGGBBAA 9 字符，与后端 t_process.color VARCHAR(9) 兼容；
+          predefine 必须是可变 string[]，故展开 readonly 常量（深拷贝避免引用突变）。
+        -->
         <el-form-item label="颜色">
-          <el-color-picker v-model="form.color" color-format="hex8" />
-          <span class="hint">前端工序卡片按此颜色显示（hex8 含 alpha）</span>
+          <el-color-picker
+            v-model="form.color"
+            color-format="hex8"
+            :show-alpha="true"
+            :predefine="[...PROCESS_COLOR_PRESETS]"
+          />
+          <span class="hint">点击预设色板一键填色，hex8 含 alpha</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -178,7 +187,7 @@ import { usePermissions } from '@/composables/usePermissions';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
 import { createProcess, listProcesses, softDeleteProcess, updateProcess } from '@/api/process';
 import type { Process, ProcessCategory } from '@/types/process';
-import { PROCESS_CATEGORY_LABEL } from '@/types/process';
+import { PROCESS_CATEGORY_LABEL, PROCESS_COLOR_PRESETS } from '@/types/process';
 
 const { isManager } = usePermissions();
 const dialogSize = useDialogSize({ desktopWidth: 460 });
@@ -309,18 +318,22 @@ async function onSave(): Promise<void> {
   saving.value = true;
   try {
     if (editing.value) {
-      // update：color 用三态：未改=undefined；el-color-picker 给 null 时显式置 null（清色）
-      await updateProcess(editing.value.id, {
+      // 2026-09-16 修复：update 走差量。category 是业务唯一键（保护 t_part.next_process_id
+      // 等外键引用），后端 20104 拒绝 category 变更；前端必须只在用户**主动改 category**
+      // 时才发该字段，未改则省略 → 后端 Option<None> 走 leave 语义。
+      const payload: Parameters<typeof updateProcess>[1] = {
         name: form.name.trim(),
-        category: form.category,
         sort_order: form.sort_order,
         description: form.description.trim() || null,
         requires_approval: form.requires_approval,
-        // 编辑时：若 color 变化则三态 set；否则保持 leave。
-        // el-color-picker 的 v-model 在未操作时保持上一次的值；我们用「与原值不同」做差量，
-        // 简化处理：编辑时总是显式传当前 picker 值（string 或 null），由后端决定覆盖语义。
+        // color 三态：未改 = 上一次的值（picker 默认保留）；此处显式传当前值，
+        // 后端按 string|null 覆盖语义处理；与原值相等也是无副作用的 set。
         color: form.color ?? null,
-      });
+      };
+      if (form.category !== editing.value.category) {
+        payload.category = form.category;
+      }
+      await updateProcess(editing.value.id, payload);
       ElMessage.success('已保存');
     } else {
       await createProcess({
