@@ -146,4 +146,4 @@ import type { Part } from '@/types/parts';
 - [ ] `auto-imports.d.ts` / `components.d.ts` 如有 diff 已 review（unplugin 偶发重生成）
 - [ ] 关键决策已写注释（带日期戳）
 - [ ] commit message 格式正确（`前缀(scope): 中文一句话`）
-- [ ] 涉及 v1 → v2 迁移，新接口在 `apiV2` 上加（**注意**：auth 域 2026-08-26 临时回滚 v1，新增 auth 接口必须走 `api`，详见 [CLAUDE.md](../../CLAUDE.md) 硬约束 #7）
+- [ ] 业务端点统一走 `api`（2026-09-15 Phase 5 一次性切到 v2，`api` baseURL 已是 `/api/v2`，原 `apiV2` 已合并删除）；4 个打印端点保留 v1 走 `apiPrint`。新增业务接口用 `import { api } from '@/api/http'`。详见 [CLAUDE.md](../../CLAUDE.md) 硬约束 #7

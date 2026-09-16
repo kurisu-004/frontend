@@ -322,23 +322,22 @@ dev-only 开关**必须**走 Vite 官方 env 机制：
 api.get('/parts', { params: { statuses: ['A', 'B'] } });
 // → GET /api/v1/parts?statuses=A,B   ← FastAPI 解析成 ["A,B"] → 422
 
-// 修复后
+// 修复后（Phase 5 后：v2 业务由 `api` 直接走，无 `apiV2`）
 api.get('/parts', { params: { statuses: ['A', 'B'] } });
-// → GET /api/v1/parts?statuses=A&statuses=B   ← FastAPI 正确解析成 ["A","B"]
+// → GET /api/v2/parts?statuses=A&statuses=B   ← v2 Rust 走 Option<String>，重复 key 与 CSV 兼容
 ```
 
-### 规则
+### 2026-09-15 Phase 5 合并结果
 
-**双后端并存期，任何与后端契约耦合的序列化/编码逻辑（params 序列化、date 格式、ID 类型 coerce、path 风格等）都必须按 baseURL 版本分离，不能挂在共享工具函数上。**
+业务端点全部切到 v2 后，`apiV2` / `refreshClientV2` 已删除；`statuses` 由后端 schema 改为 `Option<String>` 单值 string，重复 key 与 CSV 语义兼容——`serializeParamsV1`（数组重复 key）一套就够。`serializeParamsV2` 与 `ARRAY_AS_CSV_KEYS` 白名单一并删除（无消费者）。
 
-具体到本仓当前架构：
+### 规则（修订版）
 
-| 函数                | 行为                                                           | 绑定                                   |
-| ------------------- | -------------------------------------------------------------- | -------------------------------------- |
-| `serializeParamsV1` | **所有数组都重复 key**：`?key=a&key=b`                         | `api` / `refreshClient`（v1 FastAPI）  |
-| `serializeParamsV2` | 白名单 `statuses` → CSV 单值 `?statuses=A,B`；其它数组重复 key | `apiV2` / `refreshClientV2`（v2 Rust） |
+v1 / v2 业务端点分流后：
 
-`serializeParams` 保留为 `serializeParamsV1` 的向后兼容别名（历史代码可能仍在引用；新代码应直接选 `V1` / `V2`）。
+- v1 4 个打印端点走 `apiPrint`（baseURL `/api/v1`），FastAPI 期望重复 key。
+- v2 业务端点走 `api`（baseURL `/api/v2`），Rust axum 期望 `Option<String>`（重复 key 与 CSV 兼容）。
+- 共用 `serializeParamsV1`（所有数组重复 key）即可。新增业务端点不需要按版本选 serializer。
 
 改共享 serializer（或任何耦合后端契约的共享工具）前先 grep 所有消费该 key 的调用点：
 
@@ -346,27 +345,26 @@ api.get('/parts', { params: { statuses: ['A', 'B'] } });
 grep -rn '<param_key>' src/api
 ```
 
-逐个确认每个调用点走哪个客户端（`api` 还是 `apiV2`），再决定是保留单 serializer 还是拆版本。
+逐个确认每个调用点走哪个客户端（`api` / `apiPrint`），再决定是否调整 serializer。
 
-### 回归守卫（2026-08-29 新增中）
+### 回归守卫（保留）
 
-`src/api/http.spec.ts` 增加：
+`src/api/http.spec.ts`：
 
-- `serializeParamsV1({ statuses: ['A', 'B'] })` 必须输出 `statuses=A&statuses=B`（v1 FastAPI `List[Enum]` 兼容）；
-- `serializeParamsV2({ statuses: ['A', 'B'] })` 必须输出 `statuses=A,B`（v2 Rust `Option<String>` 兼容）；
-- `serializeParamsV1({ ids: [1, 2] })` 与 `serializeParamsV2({ ids: [1, 2] })` 都必须输出 `ids=1&ids=2`（非白名单 key 在两个版本都走重复 key）。
+- `serializeParamsV1({ statuses: ['A', 'B'] })` 必须输出 `statuses=A&statuses=B`（v1 FastAPI `List[Enum]` + v2 Rust `Option<String>` 都兼容）；
+- `serializeParamsV1({ ids: [1, 2] })` 必须输出 `ids=1&ids=2`（非白名单 key 重复 key）。
 
-### 已修 / 受害者清单（2026-08-29）
+### 历史记录（2026-08-29 拆分 → 2026-09-15 Phase 5 合并）
 
-- 已修：`src/api/http.ts` 拆为 `serializeParamsV1` / `serializeParamsV2`，4 个客户端按 baseURL 版本各自绑定。
-- 受害者（修复前漏返 422）：
+- 2026-08-29：`src/api/http.ts` 拆为 `serializeParamsV1` / `serializeParamsV2`，4 个客户端按 baseURL 版本各自绑定。
+- 2026-08-29 受害者清单（修复前漏返 422）：
   - `src/api/parts/crud.ts` `listParts`（v1 FastAPI，发 `statuses` 数组筛选）；
   - `src/api/outsource.ts` `listOutsourceQuotes`（v1 FastAPI，发 `statuses` 数组筛选）。
-- 未波及：v2 Rust 端点（**仅服务于 `src/views/delivery/DeliveryNoteScan.vue` 扫码建单页及其路由 B 间接依赖的 inspection 流程**，共 15 个端点 / 4 个文件：`deliveryNote` 7 + `deliveryGroup` 4 + `parts to-inspection·to-ship·batch-to-inspection·batch-to-ship` 4）的 `statuses` 本来就走 CSV，反而是正确方向。
+- 2026-09-15 Phase 5：`serializeParamsV2` 与 `ARRAY_AS_CSV_KEYS` 白名单删除（v2 schema 改单值 string）；`apiV2` / `refreshClientV2` 合并到 `api` / `refreshClient`。
 
 ### 同期相关改动
 
-- `src/api/parts/crud.ts` 的 `toProcess`（`POST /api/v2/parts/{id}/to-process`，品检打回 / 指定工序）回退为 `failInspection`（`POST /api/v1/parts/{id}/fail-inspection`，返回 `PartItem`）。理由：to-process 不在 Rust v2 首次上线范围，原代码注释自己写着「仍走 V1 Python」却错用了 `apiV2`。
+- `src/api/parts/crud.ts` 的 `toProcess`（`POST /api/v2/parts/{id}/to-process`，品检打回 / 指定工序）回退为 `failInspection`（`POST /api/v1/parts/{id}/fail-inspection`，返回 `PartItem`）。理由：to-process 不在 Rust v2 首次上线范围，原代码注释自己写着「仍走 V1 Python」却错用了 `apiV2`。**2026-09-15 Phase 5 后该端点改走 `api`（v2 业务实例）**：`src/api/parts/crud.ts::scanInspect` 取代原 `failInspection`，所有 inspection 路径统一到 v2（见 [`docs/03-modules/inspection-and-repair.md`](../03-modules/inspection-and-repair.md)）。
 - `src/api/deliveryNote.ts` 在第一轮收敛（仅保留 `deliveryNote` + `deliveryGroup` + `parts to-XXX` 走 v2）后再次收敛到 **DeliveryNoteScan-only**：11 个函数（`printNote` / `printNoteLabels` / `listPickupPending` / `createNote` / `listNoteEvents` / `updateNote` / `addParts` / `recallNote` / `pickupScan` / `pickup` / `listCandidateParts`）由 `apiV2` 改回 `api`。其中 `printNote` / `printNoteLabels` 是关键 trade-off：与 `PrintPreviewDialog` 绑定的两个端点被 `DeliveryNoteDetail` 与 `DeliveryNoteScan` 共用，函数粒度无法按页面切版本；为不让 `DeliveryNoteDetail` 顺带进 v2（增加 JWT 40101 风险），统一走 v1 Python。`listCandidateParts` 仅 `PartPickerDialog`（`DeliveryNoteList` 装载）使用，所以可安全回 v1。`deliveryGroup.ts` 整文件仍 v2（DeliveryNoteScan 是 `deliveryGroup.ts` 4 个函数的**唯一**消费者）。
 - CLAUDE.md 硬约束 #7、[`docs/02-architecture/api-contract.md`](../02-architecture/api-contract.md) 的「query 序列化」节与「排错速查」表同步更新。
 

@@ -82,11 +82,11 @@
 
 ### 三栏结构
 
-| 栏位                       | 组件                              | 职责                                       |
-| -------------------------- | --------------------------------- | ------------------------------------------ |
-| 左 — 零件列表              | `components/PartPickerList.vue`   | 列出所有可制定工序的零件（fixture/数据源） |
-| 中 — 图纸预览              | `components/DrawingPreviewPane.vue` | pdfjs 渲染选中零件的图纸 PDF                |
-| 右 — 工序步骤卡片列表      | `components/ProcessStepCardList.vue` | 工序拖拽排序、新增 / 编辑 / 删除          |
+| 栏位                  | 组件                                 | 职责                                       |
+| --------------------- | ------------------------------------ | ------------------------------------------ |
+| 左 — 零件列表         | `components/PartPickerList.vue`      | 列出所有可制定工序的零件（fixture/数据源） |
+| 中 — 图纸预览         | `components/DrawingPreviewPane.vue`  | pdfjs 渲染选中零件的图纸 PDF               |
+| 右 — 工序步骤卡片列表 | `components/ProcessStepCardList.vue` | 工序拖拽排序、新增 / 编辑 / 删除           |
 
 `useResizablePane` 持久化 splitter 宽度到 localStorage，刷新后保留用户习惯。
 
@@ -105,3 +105,20 @@
 - **雪花 ID 必须 string**：`partId` / `processId` 都按 string 传，不要 `Number()`
 - **不强制要求所有零件有图纸**：无图纸的零件中间栏降级显示「未上传图纸」占位
 - **步骤排序改动**：拖拽后只改本地 state，落库需点「保存」按钮（避免每帧请求风暴）
+
+## 工艺链必填守卫（20706 / BIZ_PROCESS_CHAIN_REQUIRED，2026-09-16 PR-3）
+
+下发前必须先制定工艺链的兜底链路。后端 `place_on_shelf` / `release_from_programming` / `send_to_outsource` 三条 service 路径会在 `part.process_chain_id IS NULL` 时返回 20706（HTTP 409，message「请先制定工序链」）。
+
+- **兜底 composable**：`src/composables/useProcessChainRequiredHandler.ts`
+  - `BIZ_PROCESS_CHAIN_REQUIRED = 20706`
+  - `isProcessChainRequiredError(e)` type guard
+  - `handleProcessChainRequired(e, partId, router)` 弹「前往制定」ElMessageBox 确认框 → `router.push('/production/process-design?part_id=XXX')` 深链跳转
+- **集成点**（6 条）：
+  - `usePartDispatch.ts` 单件 / 批量下发（`placeOnShelf`）
+  - `usePartCncGroups.ts` `releaseFromProgramming`（CNC 下发生产）
+  - `PendingProgrammingList.vue` `releaseFromProgramming`（CNC 待编程一览）
+  - `useOutsourceSendableList.ts` 单件 / 批量 `sendToOutsource`（外协送件）
+- **单测**：`src/composables/__tests__/useProcessChainRequiredHandler.spec.ts` 覆盖 ApiError(20706) true / 其它 false / 弹框确认跳转 / 弹框取消不跳 / `part_id` 缺省无 deep link
+- **process_chain_id 字段**：后端 `t_part.process_chain_id`（雪花 ID 字符串；null = 未制定工序），list / detail 出参都带，前端 UI 工序制定页「待制定 / 已制定」分组改由本字段驱动（PR-2 2026-09-16 新增）
+- **batch 步骤对齐**：PR-3 2026-09-16 起 `t_part_batch.next_process_id` 重命名为 `current_process_step_id`（FK → `t_process_chain_step.id`），与工艺链步骤强绑定

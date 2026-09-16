@@ -77,7 +77,7 @@ src/
 
 ## src/api/ — 接口层（17+ 文件 + parts/ 子目录）
 
-按业务域切分，每个文件导出对应的 axios 调用函数。**v1 走 `api` 实例，v2 走 `apiV2` 实例**，新接口必须在 `apiV2` 上加。
+按业务域切分，每个文件导出对应的 axios 调用函数。**业务端点统一走 `api` 实例（baseURL `/api/v2`，2026-09-15 Phase 5 一次性切到 v2，原 `apiV2` 已合并删除）；4 个打印端点保留 v1 走 `apiPrint`**，新业务接口必须 `import { api } from '@/api/http'`，打印接口必须 `import { apiPrint }`。
 
 | 文件                             | 域                                                          | v1 / v2                                            |
 | -------------------------------- | ----------------------------------------------------------- | -------------------------------------------------- |
@@ -99,7 +99,7 @@ src/
 | `cnc.ts`                         | CNC 待编程                                                  | v1                                                 |
 | `process.ts`                     | 工序                                                        | v1                                                 |
 | `workType.ts`                    | 工种                                                        | v1                                                 |
-| `workerPool.ts`                  | 工人 pool（v2，待后端）                                     | fixture + 预留 apiV2                               |
+| `workerPool.ts`                  | 工人 pool（v2，待后端）                                     | fixture + 预留 `api`（v2 业务实例）                |
 | `statistics.ts`                  | 生产统计                                                    | v1                                                 |
 
 ## src/composables/ — 30+ 模块级单例

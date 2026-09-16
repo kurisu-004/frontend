@@ -40,7 +40,7 @@ Node 18 / 20 没测过，理论上 vite 8 要 Node 20+，但 CI 与 Docker 都�
 └── websocket.md
 ```
 
-> 前端 `src/api/` 下 `api`（v1）与 `apiV2`（v2）两个 axios 实例并存，**新接口必须走 `apiV2`**，迁移进度见 `docs/03-modules/README.md` 的 v1/v2 迁移表。
+> 前端 2026-09-15 Phase 5 已一次性切到 v2：`api`（baseURL `/api/v2`，原 `apiV2` 已合并删除）+ `apiPrint`（baseURL `/api/v1`，专供 4 个打印端点）。**新业务接口必须 `import { api } from '@/api/http'`**（路径不带 `/v2` 前缀）；新增打印端点 `import { apiPrint }`。
 
 ## 首次安装
 

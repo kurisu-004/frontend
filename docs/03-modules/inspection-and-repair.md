@@ -46,13 +46,13 @@ v1/v2 混合期：inspection 域已切 v2（pass/batch-pass/scan-inspect/batch-s
 
 5 个 inspection / 状态迁移端点入参**必带** `version`，锚 `t_part_batch.version`（不是 `t_part.version`）：
 
-| 端点                              | 必填字段                                                              |
-| --------------------------------- | --------------------------------------------------------------------- |
-| `POST /parts/{id}/to-inspection`  | `target_inspection_shelf_id` / `batch_id` / `version`                 |
-| `POST /parts/{id}/to-ship`        | `batch_id` / `version`                                                |
-| `POST /parts/{id}/to-process`     | `shelf_id` / `next_process_id` / `batch_id` / `version`               |
-| `POST /parts/batch-to-inspection` | `target_inspection_shelf_id` / `items[].batch_id` / `items[].version` |
-| `POST /parts/batch-to-ship`       | `items[].batch_id` / `items[].version`                                |
+| 端点                               | 必填字段                                                                                                                                                |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /parts/{id}/to-inspection`   | `target_inspection_shelf_id` / `batch_id` / `version`                                                                                                   |
+| `POST /parts/{id}/to-ship`         | `batch_id` / `version`                                                                                                                                  |
+| `POST /parts/{id}/fail-inspection` | `shelf_id` / `next_process_id` / `batch_id` / `version`（2026-08-29 由 `to-process` 回退；v2 业务 `api` 实例；PR-3 2026-09-16 起 20706 守卫工艺链必填） |
+| `POST /parts/batch-to-inspection`  | `target_inspection_shelf_id` / `items[].batch_id` / `items[].version`                                                                                   |
+| `POST /parts/batch-to-ship`        | `items[].batch_id` / `items[].version`                                                                                                                  |
 
 `version` 不符 → **40901 BIZ_VERSION_CONFLICT**。批量端点 per-item 落 `failed[]`，不中断整批；单件端点直接 4xx 抛错。
 
