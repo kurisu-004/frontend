@@ -281,24 +281,31 @@ const files = computed<PartFileItem[]>(() => props.files);
 
 const previewTitle = computed<string>(() => `预览 — ${previewFile.value?.original_filename ?? ''}`);
 
+// 2026-09-16：file_type 为 undefined/null/'' 时所有 toUpperCase 工具函数直接炸，
+// 入口加空守卫避免在 reactivity 重渲染期炸 TypeError
 function isPdf(t: string): boolean {
+  if (!t) return false;
   return t.toUpperCase() === 'PDF';
 }
 // 2026-07-14：DRAWING 扩 9 种图片格式
 const IMAGE_TYPES = new Set(['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'TIF', 'TIFF', 'WEBP']);
 function isImage(t: string): boolean {
+  if (!t) return false;
   return IMAGE_TYPES.has(t.toUpperCase());
 }
 function isHeic(t: string): boolean {
+  if (!t) return false;
   return t.toUpperCase() === 'HEIC';
 }
 function iconOf(t: string) {
+  if (!t) return Files; // 兜底通用文件图标
   const up = t.toUpperCase();
   if (up === 'PDF') return Picture;
   if (IMAGE_TYPES.has(up)) return Picture;
   return Files;
 }
 function iconColor(t: string): string {
+  if (!t) return '#909399'; // 兜底灰色
   const up = t.toUpperCase();
   if (up === 'PDF') return '#e15c5c';
   if (IMAGE_TYPES.has(up)) return '#67c23a'; // 图片：绿色

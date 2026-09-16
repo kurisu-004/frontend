@@ -77,8 +77,10 @@
       :assembly-loading="assemblyLoading"
     />
 
-    <!-- 图纸 / 3D 模型 / CAD 源文件 -->
+    <!-- 图纸 / 3D 模型 / CAD 源文件（2026-09-16 加 v-if="part" 守：避免 part 为 null
+         时进入 FileListCard 子渲染链，触发 toUpperCase 炸 undefined） -->
     <FileListCard
+      v-if="part"
       :files="drawings"
       owner-type="part"
       :owner-id="partId"
@@ -90,6 +92,7 @@
       @refresh="fetchDrawings"
     />
     <FileListCard
+      v-if="part"
       :files="models3d"
       owner-type="part"
       :owner-id="partId"
@@ -100,6 +103,7 @@
       @refresh="fetch3DModels"
     />
     <FileListCard
+      v-if="part"
       :files="cadFiles"
       owner-type="part"
       :owner-id="partId"
