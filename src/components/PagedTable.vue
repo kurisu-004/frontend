@@ -22,6 +22,10 @@
   - 不加 <style>：brief 明确「不加 style block」（T1 已经删了 breakpoints additionalData，
     任何 @include from/until 会坏；保持组件完全样式中立，让外层 .pagination 仍由 view 控制）。
   - defineExpose 暴露 items / loading / page / pageSize / fetch / reset 方便 view 触发刷新。
+
+  2026-09-16 重构：EP 2.14.2 deprecated @current-change / @size-change，el-pagination 改用
+  v-model 双绑 + composable 内部 watch([page,pageSize,keyword]) 统一接管 fetch。壳层无需
+  监听分页事件。usePagedListQuery 的 public API 也已删除 onPageChange / onPageSizeChange。
 -->
 <template>
   <div class="paged-table">
@@ -35,8 +39,6 @@
         :pager-count="7"
         background
         size="small"
-        @current-change="paged.onPageChange"
-        @size-change="paged.onPageSizeChange"
       />
     </div>
   </div>
