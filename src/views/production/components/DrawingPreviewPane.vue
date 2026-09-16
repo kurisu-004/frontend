@@ -10,7 +10,8 @@
     - 选中 part 后默认选中第一张 PDF / 图片
   - 选 PDF → <PdfViewer :url="blobUrl">
   - 选图片 → <el-image :src="blobUrl">
-  - 图片 / PDF 走 mock blobUrl = 'about:blank'；阶段二切 api.get('/files/{id}/content', blob)
+  - 图片 / PDF 走 mock blobUrl = 'about:blank'；阶段二切 api.get('/part-files/{id}/content', blob)
+    （2026-09-16 更新：v2 无 /files/* 路由，内容端点为 /part-files/{id}/content）
 -->
 <template>
   <el-card shadow="never" class="preview-card">

@@ -45,7 +45,7 @@
                 link
                 type="danger"
                 size="small"
-                @click="onDeleteCnc(g.id)"
+                @click="onDeleteCnc(g.id, g.version)"
                 >删除</el-button
               >
             </div>
@@ -67,7 +67,7 @@
                 link
                 type="danger"
                 size="small"
-                @click="onDeleteCnc(group.setup.id)"
+                @click="onDeleteCnc(group.setup.id, group.setup.version)"
                 >删除</el-button
               >
             </div>
@@ -238,7 +238,8 @@ const props = defineProps<{
   /** 货架 ↔ 工序 共享缓存（shell 加载，PartCncCard 与 failInsp/receive 共用） */
   productionShelves: Shelf[];
   processes: Process[];
-  formatBytes: (n: number) => string;
+  // 2026-09-16：v2 file_size 为 string（i64 雪花序列化器），formatBytes 入参兼容 string | number
+  formatBytes: (v: string | number) => string;
   // 2026-08-25 T10p5：上传文件 staging 助手，由 usePartCncGroups 注入；
   // 失败扩展名时统一 ElMessage.warning 提示（修复前内联实现丢提示的回归）。
   fileList: (
@@ -248,7 +249,8 @@ const props = defineProps<{
     matchExt?: boolean,
   ) => UploadFile[];
   onDownloadCnc: (p: PartFileItem) => void;
-  onDeleteCnc: (id: string) => void;
+  // 2026-09-16：v2 软删强制 OCC body { version }，删除需携带行内版本号
+  onDeleteCnc: (id: string, version: number) => void;
 }>();
 
 const emit = defineEmits<{

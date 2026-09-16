@@ -262,7 +262,7 @@ interface Props {
   emptyText?: string;
   /** 自定义上传函数（用于不同 kind 走不同 endpoint） */
   apiUpload?: (ownerId: string, file: File) => Promise<PartFileItem>;
-  /** 自定义删除函数（默认走 /files/{id}/delete） */
+  /** 自定义删除函数（默认走 /part-files/{id}/delete，2026-09-16 切 v2 后路径） */
   apiDelete?: (fileId: string) => Promise<void>;
 }
 const ACCEPT = computed<string>(() => props.accept || ACCEPT_BY_KIND[props.kind]);
@@ -314,7 +314,9 @@ function iconColor(t: string): string {
   if (up === 'DWG' || up === 'DXF') return '#ff9800';
   return '#909399';
 }
-function formatSize(n: number): string {
+// 2026-09-16：v2 file_size 为 string（i64 雪花序列化器），入参兼容 string | number
+function formatSize(v: string | number): string {
+  const n = Number(v);
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
@@ -343,7 +345,8 @@ async function onPreview(f: PartFileItem): Promise<void> {
   previewFile.value = f;
   previewVisible.value = true;
   try {
-    const resp = await api.get(`/files/${f.id}/content`, { responseType: 'blob' });
+    // 2026-09-16：v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
+    const resp = await api.get(`/part-files/${f.id}/content`, { responseType: 'blob' });
     if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
     previewBlobUrl.value = URL.createObjectURL(resp.data);
   } catch (e) {
@@ -389,7 +392,8 @@ async function onDelete(f: PartFileItem): Promise<void> {
     if (props.apiDelete) {
       await props.apiDelete(f.id);
     } else {
-      await deleteFile(f.id);
+      // 2026-09-16：v2 软删强制 OCC body { version }，传行内乐观锁版本号
+      await deleteFile(f.id, f.version);
     }
     ElMessage.success('已删除');
     emit('deleted', f.id);
