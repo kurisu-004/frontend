@@ -144,8 +144,6 @@
           layout="total, sizes, prev, pager, next, jumper"
           background
           class="detail-pagination"
-          @current-change="reloadDetail"
-          @size-change="onPageSizeChange"
         />
       </div>
     </el-drawer>
@@ -153,7 +151,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue';
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElTag } from 'element-plus';
 import { fetchPickupSkipDetail, fetchPickupSkipSummary } from '@/api/statistics';
 import type { PickupSkipDetailOut, PickupSkipSummaryItem } from '@/types/statistics';
@@ -343,6 +341,29 @@ drag_detail.applyDrag(detailTableRef);
 
 const detailOffset = computed<number>(() => (detailPage.value - 1) * detailPageSize.value);
 
+// ============ 分页变化驱动 reloadDetail ============
+// 2026-09-16 重构：EP 2.14.2 deprecated @current-change / @size-change，改用 v-model + watch
+// 接管。pageSize 变化时复位 page=1（原 onPageSizeChange 语义），page=1 赋值会让本 watcher
+// 再触发一次落入 fetch 分支。
+// suppress 旗标：onRowClick 内部 JS 写 detailPage/detailPageSize 时抑制 watcher，防止与显式
+// reloadDetail 双触发（旧版 @current-change 是 UI 事件，JS 写 ref 不触发；新版 watcher 监听
+// ref 变化，JS 写 ref 必触发）。nextTick 等 watcher 回调先在 suppress 下 flush（return）后再
+// 关闭旗标并显式 reloadDetail，保证切 worker / 翻页 / 改 page-size 都是单 fetch。
+let suppressDetailWatch = false;
+
+watch(
+  () => [detailPage.value, detailPageSize.value] as const,
+  ([newPage, newSize], [_oldPage, oldSize]) => {
+    if (suppressDetailWatch) return;
+    if (oldSize === undefined) return;
+    if (newSize !== oldSize && newPage !== 1) {
+      detailPage.value = 1;
+      return;
+    }
+    void reloadDetail();
+  },
+);
+
 async function reloadDetail(): Promise<void> {
   if (!currentWorker.value) return;
   detailLoading.value = true;
@@ -358,18 +379,15 @@ async function reloadDetail(): Promise<void> {
   }
 }
 
-function onRowClick(row: PickupSkipSummaryItem): void {
+async function onRowClick(row: PickupSkipSummaryItem): Promise<void> {
   currentWorker.value = row;
+  drawerVisible.value = true;
+  suppressDetailWatch = true;
   detailPage.value = 1;
   detailPageSize.value = 20;
-  drawerVisible.value = true;
-  void reloadDetail();
-}
-
-function onPageSizeChange(size: number): void {
-  detailPageSize.value = size;
-  detailPage.value = 1;
-  void reloadDetail();
+  await nextTick(); // 让 watcher 回调在 suppress 下先 flush（return）
+  suppressDetailWatch = false;
+  await reloadDetail();
 }
 
 onMounted(async () => {

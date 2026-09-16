@@ -177,9 +177,15 @@ const orderImportVisible = ref(false);
 // （保持原 onPageSizeChange 语义），page=1 的赋值会让本 watcher 再触发一次，
 // 第二次回调命中 page-only 分支并 fetch。
 // 首屏 fetch 仍由 onMounted 负责，本 watch 用默认 immediate:false，不重复触发。
+//
+// 2026-09-16 续：onMounted 期间 restoreState 可能同步改 pageSize（持久化场景），
+// 触发的 watcher 入队后会与下方 fetchList() 撞车（双 fetch）。suppress 旗标在
+// restoreState + nextTick 期间生效，让 watcher 回调直接 return，再放行 fetch。
+let suppressPaginationWatch = false;
 watch(
   () => [store.query.page, store.query.pageSize] as const,
   ([newPage, newSize], [_oldPage, oldSize]) => {
+    if (suppressPaginationWatch) return;
     if (oldSize === undefined) return;
     if (newSize !== oldSize && newPage !== 1) {
       // pageSize 变化但当前不在第 1 页：复位 page；page=1 会触发本 watcher 再回调一次 fetch。
@@ -202,8 +208,14 @@ const unsubPartsListScan = onScan((code) => {
 });
 
 onMounted(async () => {
+  // 2026-09-16 续：restoreState 可能同步改 pageSize（持久化场景），watcher 入队后
+  // 回调会与下方 fetchList() 撞车。suppress 旗标在 restoreState + nextTick 期间
+  // 生效，让 watcher 回调直接 return，再放行 fetch。
+  suppressPaginationWatch = true;
   // 1) 优先从 URL ?status= 注入；否则从 localStorage 恢复
   store.query.restoreState(route.query.status);
+  await nextTick();
+  suppressPaginationWatch = false;
   void store.query.fetchList();
 
   // 2026-07-29 PR-fix-0.2.0：表头排序箭头要等 el-table 挂载后手动调一次 sort()，

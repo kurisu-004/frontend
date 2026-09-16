@@ -10,7 +10,7 @@
  *
  * 扫码：useBarcodeScanner 全局监听；命中已送货列表弹 dialog；未命中复用报工台 findPartBySerialAndPrompt。
  */
-import { h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElTag } from 'element-plus';
 import { Filter, Tools } from '@element-plus/icons-vue';
 import { listRepairBatches, listRepairingBatches, type PartItem } from '@/api/parts';
@@ -37,8 +37,10 @@ const activeTab = ref<TabKey>('delivered');
 const rows = ref<PartItem[]>([]);
 const total = ref(0);
 const loading = ref(false);
-const limit = ref(50);
-const offset = ref(0);
+const page = ref(1);
+const pageSize = ref(50);
+// 2026-09-16 重构：API 仍用 limit/offset（后端 /repair-batches 协议不变），这里派生 offset。
+const offset = computed<number>(() => (page.value - 1) * pageSize.value);
 
 // —— 筛选状态（精简版；后端 /repair-batches 仅支持 keyword + customer_id + serial_no） ——
 const search = reactive<{
@@ -79,8 +81,8 @@ function resetCustomer(): void {
 function confirmCustomer(): void {
   search.customerId = customerDraft.value ?? '';
   customerPopoverVisible.value = false;
-  offset.value = 0;
-  void loadList();
+  // 2026-09-16 重构：page=1 由 watcher 接管 fetch。
+  page.value = 1;
 }
 
 // ============ 列可见性 + 列顺序拖动 ============
@@ -184,7 +186,7 @@ async function loadList(): Promise<void> {
       keyword: search.keyword || undefined,
       serial_no: search.serialNo || undefined,
       customer_id: search.customerId || undefined,
-      limit: limit.value,
+      limit: pageSize.value,
       offset: offset.value,
     };
     const result =
@@ -200,9 +202,27 @@ async function loadList(): Promise<void> {
   }
 }
 
+// ============ 分页变化驱动 loadList ============
+// 2026-09-16 重构：EP 2.14.2 推荐 v-model + watch 接管，替代被弃用的 @current-change /
+// @size-change。pageSize 变化时复位 page=1（原 @size-change 内联逻辑），page=1 赋值会
+// 让本 watcher 再触发一次落入 fetch 分支。
+// 首屏 fetch 仍由 onMounted 负责（watch 默认 immediate:false）。switchTab / onDialogConfirm
+// 改 page=1 触发 watcher 接管 fetch；dialog 提交后刷新当前页（不改 page）走独立显式 loadList。
+watch(
+  () => [page.value, pageSize.value] as const,
+  ([newPage, newSize], [_oldPage, oldSize]) => {
+    if (oldSize === undefined) return;
+    if (newSize !== oldSize && newPage !== 1) {
+      page.value = 1;
+      return;
+    }
+    void loadList();
+  },
+);
+
 function onSearch(): void {
-  offset.value = 0;
-  void loadList();
+  // 2026-09-16 重构：page=1 由 watcher 接管 fetch。
+  page.value = 1;
 }
 function onReset(): void {
   search.keyword = '';
@@ -210,14 +230,14 @@ function onReset(): void {
   search.serialNo = '';
   search.isUrgent = null;
   search.plannedDeliverySortAsc = true;
-  offset.value = 0;
-  void loadList();
+  // 2026-09-16 重构：page=1 由 watcher 接管 fetch。
+  page.value = 1;
 }
 
 async function switchTab(tab: TabKey): Promise<void> {
   activeTab.value = tab;
-  offset.value = 0;
-  await loadList();
+  // 2026-09-16 重构：page=1 由 watcher 接管 fetch（不再显式 await loadList）。
+  page.value = 1;
 }
 
 // —— 操作按钮 ——
@@ -411,24 +431,12 @@ function rowClassName(opts: { row: PartItem }): string {
     <!-- 分页 -->
     <div class="pagination-row">
       <el-pagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
         layout="total, prev, pager, next, sizes"
         :total="total"
-        :page-size="limit"
-        :current-page="Math.floor(offset / limit) + 1"
         :page-sizes="[20, 50, 100, 200]"
-        @size-change="
-          (s: number) => {
-            limit = s;
-            offset = 0;
-            void loadList();
-          }
-        "
-        @current-change="
-          (p: number) => {
-            offset = (p - 1) * limit;
-            void loadList();
-          }
-        "
+        background
       />
     </div>
 

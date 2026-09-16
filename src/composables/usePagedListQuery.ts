@@ -11,11 +11,22 @@
 //   过滤项：statuses / customer_id / date range 等），keyword 参数为可选（view 不用就忽略）。
 // - keyword 改变时 onSearch() 同时把 page 重置 1，pageSize 改变时同样；这是「搜了就要看第一页」
 //   的标准语义。
-// - reset() 把 page 回到 1 并清空 keyword，再 fetch；view 的 onReset() 只需要先清自己 search.*，
-//   再调 pagedRef.value?.reset()。
+// - reset() 把 page 回到 1 并清空 keyword；保留 async 签名以兼容 view 端 `await pagedRef.value?.reset()`。
 // - fetch 失败时不抛（view 自行 try/catch），但 loading 永远会清掉。
+//
+// 2026-09-16 重构：删 onPageChange / onPageSizeChange（EP 2.14.2 弃用 @current-change /
+// @size-change，改 v-model + watch）；watcher 内部统一接管 [page, pageSize, keyword]
+// 任意变化触发 fetch。onSearch / reset 只改 ref（不再显式 fetch），watcher 入队后
+// 在 nextTick 触发 fetch。
+//
+// suppressSetupChange 处理 PagedTable.vue 在 setup 内应用 defaultPageSize 触发的首次 watcher：
+// - 当 pageSize 从 initialPageSize 变为其它值、且 page/keyword 没变时 → 是 setup 内的
+//   defaultPageSize 同步赋值（Vue 把变化入队到 watcher），需要忽略这一次回调。
+// - 用户后续任何交互都会让 oldSize !== initialPageSize 或 page/keyword 改变，自然落入 fetch 分支。
+// 不能简单用 boolean ignoreFirst 旗标：因为 defaultPageSize=20 与 initialPageSize=20 相同时，
+//   Vue 不会触发 watcher（值未变），ignoreFirst 仍为 true，会误吞第一次用户交互。
 
-import { ref, type Ref } from 'vue';
+import { ref, watch, type Ref } from 'vue';
 
 export interface PageResult<T> {
   items: T[];
@@ -36,8 +47,6 @@ export interface UsePagedListQueryReturn<T> {
   pageSize: Ref<number>;
   keyword: Ref<string>;
   fetch: () => Promise<void>;
-  onPageChange: (p: number) => void;
-  onPageSizeChange: (s: number) => void;
   onSearch: (k: string) => void;
   reset: () => Promise<void>;
 }
@@ -58,6 +67,11 @@ export function usePagedListQuery<T>(
   const pageSize = ref(20);
   const keyword = ref('');
 
+  // 2026-09-16 重构：捕获初始 pageSize 值，用于识别 PagedTable.vue 在 setup 内应用
+  // defaultPageSize 触发的 watcher。用 IIFE 把 .value 读取挪到独立作用域，规避
+  // vue/no-ref-object-destructure（误报：这里就是要捕获一次快照，不希望响应式更新）。
+  const initialPageSize = (() => pageSize.value)();
+
   async function fetch(): Promise<void> {
     loading.value = true;
     try {
@@ -73,27 +87,45 @@ export function usePagedListQuery<T>(
     }
   }
 
-  function onPageChange(p: number): void {
-    page.value = p;
-    void fetch();
-  }
-
-  function onPageSizeChange(s: number): void {
-    page.value = 1;
-    pageSize.value = s;
-    void fetch();
-  }
+  // 2026-09-16 重构：watch [page, pageSize, keyword] 统一接管 fetch，替代事件钩子
+  //（EP 2.14.2 deprecated @current-change / @size-change）。
+  watch(
+    () => [page.value, pageSize.value, keyword.value] as const,
+    ([newPage, newSize, newKeyword], [oldPage, oldSize, oldKeyword]) => {
+      // 跳过 PagedTable.vue setup 内应用 defaultPageSize 触发的首次 watcher：
+      // pageSize 从 initialPageSize 变为其它、其它维度未变 → 这是 setup 内的同步赋值，
+      // consumer 的 onMounted 显式 fetch() 是真正的首屏拉取入口。
+      if (
+        oldSize === initialPageSize &&
+        newSize !== initialPageSize &&
+        newPage === 1 &&
+        oldPage === 1 &&
+        newKeyword === '' &&
+        oldKeyword === ''
+      ) {
+        return;
+      }
+      // pageSize 变化但当前不在第 1 页：先复位 page=1（链式再触发 watcher 落入 fetch 分支）
+      if (newSize !== oldSize && newPage !== 1) {
+        page.value = 1;
+        return;
+      }
+      void fetch();
+    },
+  );
 
   function onSearch(k: string): void {
+    // 2026-09-16 重构：watcher 接管 fetch，仅写 ref。
     page.value = 1;
     keyword.value = k;
-    void fetch();
   }
 
   async function reset(): Promise<void> {
+    // 2026-09-16 重构：watcher 接管 fetch，仅写 ref；保留 async/Promise<void> 签名
+    // 以兼容 view 端 `await pagedRef.value?.reset()`。
     page.value = 1;
     keyword.value = '';
-    await fetch();
+    return Promise.resolve();
   }
 
   return {
@@ -104,8 +136,6 @@ export function usePagedListQuery<T>(
     pageSize,
     keyword,
     fetch,
-    onPageChange,
-    onPageSizeChange,
     onSearch,
     reset,
   };
