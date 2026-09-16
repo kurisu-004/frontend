@@ -247,6 +247,13 @@ export interface PartBatchTreeResultFE {
  * 批量树形创建：单页 PDF → 独立零件；多页 PDF → 装配件 + 子件。
  * 文件按 `pdf_index` 隐式对齐 `items`（frontend 端按上传顺序记录）。
  * PR-H 2026-07-28：`threeDModels` 按 `items[i].three_d_index` 对齐。
+ *
+ * @deprecated 2026-09-16 M3-T3.4：multipart `/parts/batch-with-pdfs` 在 v2 rust 后端
+ * 语义已变化（仅接 `BatchWithPdfsRequest { customer_id, applicant_name, ... } + pdf`
+ * 单 assembly 自动派生，与本函数 `items[] + assemblies[] + files[]` 的灵活语义不兼容）。
+ * Tab 2「PDF 批量上传」已迁移到 `batchCreateParts` JSON 路径（场景 A 直传 COS）。
+ * 本函数保留导出仅供历史调用点（如有）编译期不崩；新代码请用 `batchCreateParts` +
+ * `useCosUpload` 链路。
  */
 export async function batchCreatePartsWithPdfs(
   items: PartBatchTreeItemFE[],
