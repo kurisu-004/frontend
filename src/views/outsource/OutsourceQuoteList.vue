@@ -19,7 +19,7 @@ import { useCustomerTree } from '@/composables/useCustomerTree';
 import { listProcesses } from '@/api/process';
 import type { Process } from '@/types/process';
 import type { OutsourceQuote } from '@/types/outsource';
-import { listPartFiles } from '@/api/assembly';
+import { listPartFilesByOwner } from '@/api/assembly';
 import { listQuotableParts } from '@/api/outsource';
 import { api } from '@/api/http';
 import type { PartFileItem } from '@/types/part_file';
@@ -103,8 +103,8 @@ function isPdfType(t: string): boolean {
 
 async function ensureDrawing(partId: string): Promise<PartFileItem | null> {
   if (drawingCache.has(partId)) return drawingCache.get(partId) ?? null;
-  // 2026-09-16 Phase 5 切 v2 后：listPartFiles 返回分页包装 { items, total }，取 .items
-  const files = (await listPartFiles(partId, 'DRAWING')).items;
+  // 2026-09-16 T3.5：列表端点切到 v2 /part-files?owner_id=...&kind=...（owner 多态）
+  const files = (await listPartFilesByOwner(partId, 'DRAWING')).items;
   const f = files[0] ?? null;
   drawingCache.set(partId, f);
   return f;

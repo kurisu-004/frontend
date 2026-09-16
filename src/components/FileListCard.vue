@@ -2,6 +2,11 @@
   FileListCard.vue
 
   通用「文件列表 + 上传/删除/预览」卡片组件（2026-07-10 重写，2026-07-14 扩展）。
+  2026-09-16 T3.5：场景 B 详情页补传改造。
+  - apiUpload 不再限定必填；showUpload=true 但未注入时弹错误提示
+  - 新增 apiGetPreviewUrl / apiGetDownloadUrl / apiDelete props，默认走
+    `api/parts/file.ts` 的新函数（v2 实际路径 /part-files/{id}/...）
+  - 删除旧的 `api.get('/part-files/${id}/content')` 硬编码 → 走 props 注入
 
   用 kind 字段区分文件类型：
   - DRAWING           零件 / 子件 图纸
@@ -27,8 +32,10 @@
   - accept?:             string   默认按 kind 决定
   - emptyText?:          string   默认按 kind 显示
   - uploadLabel?:        string   默认 '上传' / '替换'（按 files.length 自动）
-  - apiUpload?:          (id, file) => Promise<PartFileItem>   必填（自定义 endpoint）
-  - apiDelete?:          (id) => Promise<void>                 默认走全局 deleteFile
+  - apiUpload?:          (id, file) => Promise<PartFileItem>   自定义上传 endpoint
+  - apiGetPreviewUrl?:   (fileId) => Promise<string> | string   预览 URL（默认走 v2 /part-files/{id}/content）
+  - apiGetDownloadUrl?:  (fileId) => Promise<string> | string   下载 URL（默认走 v2 /part-files/{id}/url）
+  - apiDelete?:          (fileId) => Promise<void>              删除（默认走 v2 /part-files/{id}/delete）
 -->
 <template>
   <el-card shadow="never" class="files-card">
@@ -187,8 +194,7 @@ import {
 } from '@element-plus/icons-vue';
 import type { UploadFile } from 'element-plus';
 import PdfViewer from './PdfViewer.vue';
-import { api } from '@/api/http';
-import { deleteFile, getDownloadUrl } from '@/api/assembly';
+import { deletePartFile, fetchPartFileContent, getPartFileDownloadUrl } from '@/api/parts/file';
 import { printPartDrawing } from '@/api/parts';
 import type { PartFileItem, PartFileKind } from '@/types/part_file';
 
@@ -260,9 +266,23 @@ interface Props {
   title?: string;
   accept?: string;
   emptyText?: string;
-  /** 自定义上传函数（用于不同 kind 走不同 endpoint） */
+  /**
+   * 自定义上传函数（不同 kind / 场景走不同 endpoint）。2026-09-16 T3.5：
+   * PartDetail 三处挂载走 `usePartFileUpload({ ownerPartId, kind })`。
+   * showUpload=true 时未注入会弹错（避免误把旧 multipart 路径暴露出去）。
+   */
   apiUpload?: (ownerId: string, file: File) => Promise<PartFileItem>;
-  /** 自定义删除函数（默认走 /part-files/{id}/delete，2026-09-16 切 v2 后路径） */
+  /**
+   * 预览 URL（相对路径 `/part-files/{id}/content`）。默认走 `fetchPartFileContent`
+   * 拿 blob；可注入换签名 URL 链路（如私有桶）。
+   */
+  apiGetPreviewUrl?: (fileId: string) => Promise<string> | string;
+  /** 下载 URL（`GET /part-files/{id}/url` 返回 download_url）。 */
+  apiGetDownloadUrl?: (fileId: string) => Promise<string> | string;
+  /**
+   * 自定义删除函数。默认走 `deletePartFile(fileId, version)`（v2 实际路径 +
+   * OCC version 必传）。
+   */
   apiDelete?: (fileId: string) => Promise<void>;
 }
 const ACCEPT = computed<string>(() => props.accept || ACCEPT_BY_KIND[props.kind]);
@@ -345,13 +365,34 @@ async function onPreview(f: PartFileItem): Promise<void> {
   previewFile.value = f;
   previewVisible.value = true;
   try {
-    // 2026-09-16：v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
-    const resp = await api.get(`/part-files/${f.id}/content`, { responseType: 'blob' });
+    // 2026-09-16 T3.5：v2 实际路径走 /part-files/{id}/content；
+    // 优先级 props.apiGetPreviewUrl > 默认 fetchPartFileContent。
+    const blob = props.apiGetPreviewUrl
+      ? await fetchPreviewBlob(f.id, props.apiGetPreviewUrl)
+      : await fetchPartFileContent(f.id);
     if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
-    previewBlobUrl.value = URL.createObjectURL(resp.data);
+    previewBlobUrl.value = URL.createObjectURL(blob);
   } catch (e) {
     ElMessage.error((e as Error).message ?? '加载文件失败');
   }
+}
+
+/**
+ * 把 caller 注入的 apiGetPreviewUrl 返回值（URL 字符串）走 `api` 实例 GET 拉 blob。
+ *
+ * caller 必传 URL 字符串（类型契约 `(fileId) => Promise<string> | string`），
+ * 不支持直接返回 blob —— 直接返回 blob 的 caller 应该在调用前自己拉好，再传 URL。
+ * 这里只走 URL 拉 blob 一条路径，保持类型契约简单。
+ */
+async function fetchPreviewBlob(
+  fileId: string,
+  apiGetPreviewUrl: (id: string) => Promise<string> | string,
+): Promise<Blob> {
+  const url = await apiGetPreviewUrl(fileId);
+  // URL 字符串 → axios 直接 GET（带 api 实例鉴权拦截器 + baseURL 拼接）
+  const { api } = await import('@/api/http');
+  const resp = await api.get<Blob>(url, { responseType: 'blob' });
+  return resp.data;
 }
 
 function onPreviewClosed(): void {
@@ -364,7 +405,10 @@ function onPreviewClosed(): void {
 async function downloadCurrent(): Promise<void> {
   if (!previewFile.value) return;
   try {
-    const url = await getDownloadUrl(previewFile.value.id);
+    // 2026-09-16 T3.5：默认走 v2 /part-files/{id}/url，签名由 props 覆盖
+    const url = props.apiGetDownloadUrl
+      ? await props.apiGetDownloadUrl(previewFile.value.id)
+      : await getPartFileDownloadUrl(previewFile.value.id);
     const a = document.createElement('a');
     a.href = url;
     a.target = '_blank';
@@ -392,8 +436,8 @@ async function onDelete(f: PartFileItem): Promise<void> {
     if (props.apiDelete) {
       await props.apiDelete(f.id);
     } else {
-      // 2026-09-16：v2 软删强制 OCC body { version }，传行内乐观锁版本号
-      await deleteFile(f.id, f.version);
+      // 2026-09-16 T3.5：v2 软删强制 OCC body { version }，传行内乐观锁版本号
+      await deletePartFile(f.id, f.version);
     }
     ElMessage.success('已删除');
     emit('deleted', f.id);
