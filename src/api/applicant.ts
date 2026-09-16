@@ -26,12 +26,22 @@ export async function listApplicants(
 /**
  * 申请人前序查询：零件对话框自动补全用。
  * `customer_id` 必须是一级客户的 id（后端会校验 parent_id IS NULL）。
+ *
+ * 2026-09-16 修复：原先调 `/applicants/search`，但 rust v2 后端
+ * applicant 域（`backend-rust/src/modules/applicant/handler.rs`）路由表只含
+ * `//` / `/{id}` / `/{id}/update` / `/{id}/soft-delete`，无 `/search`。
+ * 前端调 `/applicants/search` 时被 `/{id}` 路由捕获，`Path<i64>` 解析
+ * "search" 失败 → 400 VALIDATION_ERROR。
+ *
+ * 改调 list 端点 `/applicants` 复用已有 `customer_id` / `name_like` / `limit`
+ * 过滤能力，`ApplicantListResult.items` 直接抽出来作为返回值，外部行为不变。
+ * `ApplicantSearchParams.name_prefix?` 字段保留（调用方未传），对未来扩展开放。
  */
 export async function searchApplicants(params: ApplicantSearchParams): Promise<Applicant[]> {
-  const resp = await api.get<Applicant[]>('/applicants/search', {
+  const resp = await api.get<ApplicantListResult>('/applicants', {
     params: cleanParams(params),
   });
-  return resp.data;
+  return resp.data.items;
 }
 
 export interface BulkApplicantItemPayload {
