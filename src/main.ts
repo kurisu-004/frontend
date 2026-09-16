@@ -17,11 +17,6 @@ import 'element-plus/theme-chalk/el-notification.css';
 import 'element-plus/theme-chalk/el-loading.css';
 import 'element-plus/theme-chalk/el-overlay.css';
 
-// 2026-09-14 调整：@amdosion/vue3-print 设计器 CSS（vue3-print.css 含组件库样式，
-// print-lock.css 是打印时的 @media print 锁屏规则，缺一整个页面布局错位）。
-// 从 main.ts 全量 import 移到 src/views/print-templates/PrintTemplateDesigner.vue 顶部
-// 路由级 import（配合 lazy chunk 隔离，访问其它路由不下载这两个 CSS）。
-//
 // 2026-08-21：Element Plus 全量注册（app.use + 全局图标循环）已移除，改为
 // unplugin-auto-import / unplugin-vue-components 按需自动解析（见 vite.config.ts），
 // index chunk 从 1.1MB 降到 500kB 以下。中文 locale 下沉到 App.vue 根级

@@ -17,7 +17,6 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@amdosion/vue3-print": "^1.0.40",
     "@element-plus/icons-vue": "^2.3.1",
     "axios": "^1.18.1",
     "cos-js-sdk-v5": "^1.10.1",
@@ -31,6 +30,7 @@
     "vue": "^3.4.0",
     "vue-draggable-plus": "^0.6.1",
     "vue-router": "^4.3.0",
+    "x-data-spreadsheet": "^1.1.9",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
