@@ -268,11 +268,8 @@ async function loadChildren(
 
 function rowClassName({ row }: { row: PartListItem }): string {
   if (row.is_urgent) return 'row-urgent';
-  // PR-G 2026-07-22：已开具送货单（且尚未归档）的零件行用浅蓝染色；
-  // DELIVERED / COMPLETED / CANCELLED 后 delivery_note_id 被 service 置 NULL，颜色自然消失。
-  if (row.delivery_note_id && row.status !== 'DELIVERED' && row.status !== 'COMPLETED') {
-    return 'row-on-delivery-note';
-  }
+  // 2026-09-16 PR-2：part 级 delivery_note_id 随 t_part 瘦身下线，
+  // 「已开送货单浅蓝染色」同步移除（row-on-delivery-note 样式一并清理）。
   return '';
 }
 
@@ -352,22 +349,12 @@ function onDetail(row: PartListItem): void {
   background-color: #fbcaca !important;
 }
 
-// PR-G 2026-07-22：已开过送货单（且尚未 PICKED_UP）的零件行用浅蓝 #e6f4ff 提示
-:deep(.el-table__row.row-on-delivery-note) > td.el-table__cell {
-  background-color: #e6f4ff !important;
-}
-:deep(.el-table__row.row-on-delivery-note:hover > td.el-table__cell) {
-  background-color: #d0e8ff !important;
-}
-
 // 2026-08-22：复制自 ResponsiveList.vue 的 current-row 覆盖（这些全局 current-row
 // 覆盖写在 ResponsiveList 的 :deep 里，仅作用于 ResponsiveList 渲染的 el-table）。
-// 这里把同款覆盖复制到 PartsTable，让本组件 el-table 也享受加急/已开单行选中色加深。
+// 这里把同款覆盖复制到 PartsTable，让本组件 el-table 也享受加急行选中色加深。
+// 2026-09-16 PR-2：row-on-delivery-note 三条规则随 part 级 delivery_note_id 下线删除。
 :deep(.el-table__row.row-urgent.current-row > td.el-table__cell) {
   background-color: #fbcaca !important;
-}
-:deep(.el-table__row.row-on-delivery-note.current-row > td.el-table__cell) {
-  background-color: #b3d0ee !important;
 }
 
 // 2026-08-27 Task 6：列顺序拖动视觉反馈（与 PartListShell 同款藏青/蓝/浅蓝系）。

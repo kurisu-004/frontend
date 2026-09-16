@@ -66,8 +66,8 @@
       </div>
     </el-card>
 
-    <!-- 所属送货单 -->
-    <PartDeliveryNoteLinkCard v-if="part && part.delivery_note_id !== null" :part="part" />
+    <!-- 2026-09-16 PR-2：part 级 delivery_note_id 随 t_part 瘦身下线，
+         「所属送货单卡」删除；批次级送货单号见 PartBatchMonitorCard。 -->
 
     <!-- 所属装配件 -->
     <PartAssemblyLinkCard
@@ -405,7 +405,6 @@ import FileListCard from '@/components/FileListCard.vue';
 import Barcode from '@/components/Barcode.vue';
 import PartInfoCard from './components/PartInfoCard.vue';
 import PartHistoryCard from './components/PartHistoryCard.vue';
-import PartDeliveryNoteLinkCard from './components/PartDeliveryNoteLinkCard.vue';
 import PartAssemblyLinkCard from './components/PartAssemblyLinkCard.vue';
 import PartCncCard from './components/PartCncCard.vue';
 import PartQuoteCard from './components/PartQuoteCard.vue';

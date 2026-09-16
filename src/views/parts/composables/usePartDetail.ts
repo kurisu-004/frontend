@@ -46,14 +46,14 @@ import {
   type PartEventType,
 } from '@/types/parts';
 
-/** 行内编辑 form。 */
+/** 行内编辑 form。
+ *  2026-09-16 PR-2：actual_delivery_date 随 t_part 瘦身从表单 / 提交载荷一并删除。 */
 export interface PartEditForm {
   name: string;
   drawing_no: string;
   quantity: number;
   is_urgent: boolean;
   planned_delivery_date: string;
-  actual_delivery_date: string | null;
   order_no: string | null;
   system_delivery_date: string | null;
   note: string | null;
@@ -66,7 +66,6 @@ function makeEmptyEditForm(): PartEditForm {
     quantity: 1,
     is_urgent: false,
     planned_delivery_date: '',
-    actual_delivery_date: null,
     order_no: null,
     system_delivery_date: null,
     note: null,
@@ -137,7 +136,6 @@ export function usePartDetail(partId: Ref<string>) {
     form.quantity = part.value.quantity;
     form.is_urgent = part.value.is_urgent;
     form.planned_delivery_date = part.value.planned_delivery_date;
-    form.actual_delivery_date = part.value.actual_delivery_date;
     form.order_no = part.value.order_no;
     form.system_delivery_date = part.value.system_delivery_date;
     form.note = part.value.note;
@@ -157,7 +155,6 @@ export function usePartDetail(partId: Ref<string>) {
         quantity: form.quantity,
         is_urgent: form.is_urgent,
         planned_delivery_date: form.planned_delivery_date,
-        actual_delivery_date: form.actual_delivery_date || null,
         order_no: form.order_no || null,
         system_delivery_date: form.system_delivery_date || null,
         note: form.note || null,

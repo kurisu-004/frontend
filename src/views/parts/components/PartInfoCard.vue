@@ -11,6 +11,9 @@
   2026-09-13 PR-2 响应式正确性：父级 form = reactive<PartEditForm>(...) 注入，
   vue/no-mutating-props 禁止 props.form.x = v。本地用 reactive 副本（深拷贝 +
   watch 同步）+ emit('update:form', v) 双向同步；父级 @update:form 合并即可。
+
+  2026-09-16 t_part 瘦身（PR-2）：has_been_repaired / actual_delivery_date 随后端
+  列下线，「返修」标签与「实际送货」编辑控件 / 展示项一并删除。
 -->
 <template>
   <el-card v-loading="infoLoading" shadow="never" class="info-card">
@@ -27,15 +30,6 @@
           <el-descriptions-item label="状态">
             <el-tag :type="statusTagType(part.status)" effect="plain" size="small">
               {{ statusLabel(part.status) }}
-            </el-tag>
-            <el-tag
-              v-if="part.has_been_repaired"
-              type="warning"
-              size="small"
-              effect="dark"
-              style="margin-left: 6px"
-            >
-              返修
             </el-tag>
           </el-descriptions-item>
 
@@ -69,15 +63,7 @@
               style="width: 100%"
             />
           </el-descriptions-item>
-          <el-descriptions-item label="实际送货">
-            <el-date-picker
-              v-model="localForm.actual_delivery_date"
-              type="date"
-              value-format="YYYY-MM-DD"
-              size="small"
-              style="width: 100%"
-            />
-          </el-descriptions-item>
+          <!-- 2026-09-16 PR-2：actual_delivery_date 随 t_part 瘦身下线，编辑控件删除 -->
           <el-descriptions-item label="单据 ID">#{{ part.id }}</el-descriptions-item>
 
           <!-- 送货单字段（PR-F 2026-07-17） -->
@@ -115,15 +101,7 @@
             <el-tag :type="statusTagType(part.status)" effect="plain" size="small">
               {{ statusLabel(part.status) }}
             </el-tag>
-            <el-tag
-              v-if="part.has_been_repaired"
-              type="warning"
-              size="small"
-              effect="dark"
-              style="margin-left: 6px"
-            >
-              返修
-            </el-tag>
+            <!-- 2026-09-16 PR-2：has_been_repaired 随 t_part 瘦身下线，「返修」标签删除 -->
           </el-descriptions-item>
 
           <el-descriptions-item label="名称" :span="3">{{ part.name }}</el-descriptions-item>
@@ -142,10 +120,7 @@
           <el-descriptions-item label="计划交期">{{
             part.planned_delivery_date
           }}</el-descriptions-item>
-          <el-descriptions-item label="实际送货">
-            <span v-if="part.actual_delivery_date">{{ part.actual_delivery_date }}</span>
-            <span v-else class="muted">—</span>
-          </el-descriptions-item>
+          <!-- 2026-09-16 PR-2：actual_delivery_date 随 t_part 瘦身下线，展示项删除 -->
           <el-descriptions-item label="单据 ID">#{{ part.id }}</el-descriptions-item>
 
           <!-- 送货单字段（PR-F 2026-07-17） -->
