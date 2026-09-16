@@ -76,14 +76,7 @@
           style="width: 100%"
         />
       </el-form-item>
-      <el-form-item label="实际送货">
-        <el-date-picker
-          v-model="localForm.actual_delivery_date"
-          type="date"
-          value-format="YYYY-MM-DD"
-          style="width: 100%"
-        />
-      </el-form-item>
+      <!-- 2026-09-16 PR-2：actual_delivery_date 随 t_assembly 瘦身下线，表单项删除 -->
       <el-form-item label="加急" prop="is_urgent">
         <el-switch v-model="localForm.is_urgent" />
       </el-form-item>
@@ -177,7 +170,7 @@ async function onSubmit(): Promise<void> {
     applicant_id: f.applicant_id || null,
     request_date: f.request_date,
     planned_delivery_date: f.planned_delivery_date,
-    actual_delivery_date: f.actual_delivery_date || null,
+    // 2026-09-16 PR-2：actual_delivery_date 随 t_assembly 瘦身从提交载荷删除。
     is_urgent: f.is_urgent,
   };
   emit('submit', payload);

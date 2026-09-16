@@ -331,19 +331,8 @@ const columnDefs: ColumnDef[] = [
     minWidth: 120,
     align: 'center',
   },
-  {
-    key: 'current_holder_display',
-    label: '所在位置',
-    prop: 'current_holder_display',
-    minWidth: 160,
-    align: 'center',
-    cellRender: ({ row }) => {
-      const r = row as PartListItem;
-      return r.current_holder_display
-        ? h('span', r.current_holder_display)
-        : h('span', { class: 'muted' }, '—');
-    },
-  },
+  // 2026-09-16 PR-2：子件出参（v2 AssemblyChildOut）本就不含位置字段，
+  // current_holder_display 随 PartListItem 瘦身删除，「所在位置」列一并移除。
 ];
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'assembly_children' });
 const drag = useColumnDrag(columnDefs, { listKey: 'assembly_children' });

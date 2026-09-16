@@ -46,7 +46,8 @@ import {
 } from '@/types/assembly';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE, type OrderStatus } from '@/types/parts';
 
-/** 编辑装配件元数据表单（可空字段用空字符串占位，提交时转回 null）。 */
+/** 编辑装配件元数据表单（可空字段用空字符串占位，提交时转回 null）。
+ *  2026-09-16 PR-2：actual_delivery_date 随 t_assembly 瘦身从表单状态删除。 */
 export interface AssemblyEditForm {
   drawing_no: string;
   name: string;
@@ -55,7 +56,6 @@ export interface AssemblyEditForm {
   applicant_id: string;
   request_date: string;
   planned_delivery_date: string;
-  actual_delivery_date: string;
   is_urgent: boolean;
 }
 
@@ -68,7 +68,6 @@ function makeEmptyEditForm(): AssemblyEditForm {
     applicant_id: '',
     request_date: '',
     planned_delivery_date: '',
-    actual_delivery_date: '',
     is_urgent: false,
   };
 }
@@ -222,7 +221,6 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     editForm.applicant_id = '';
     editForm.request_date = a.request_date;
     editForm.planned_delivery_date = a.planned_delivery_date;
-    editForm.actual_delivery_date = a.actual_delivery_date ?? '';
     editForm.is_urgent = a.is_urgent;
   }
 
