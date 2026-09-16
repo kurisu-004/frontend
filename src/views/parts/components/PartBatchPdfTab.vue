@@ -507,25 +507,36 @@
     </el-card>
   </div>
 
-  <!-- 提交按钮：放在装配件表下方（form-card 顶部仅保留解析拆分）。 -->
+  <!-- 提交按钮：放在装配件表下方（form-card 顶部仅保留解析拆分）。
+       2026-09-16 M3-B 复审：拆「先上传 → 后提交」两步，按钮 disabled 走阶段机。 -->
   <div v-if="allPdfs.length > 0" class="pdf-footer-actions">
+    <el-button
+      type="primary"
+      size="large"
+      :disabled="!canStartUpload || pdfSubmitting"
+      :loading="pdfSubmitting && uploadStage === 'uploading'"
+      @click="onStartUpload"
+    >
+      <el-icon><upload-filled /></el-icon>
+      <span
+        >开始上传（{{ standaloneParts.length }} 个零件 + {{ assemblies.length }} 个装配件）</span
+      >
+    </el-button>
     <el-button
       type="success"
       size="large"
-      :disabled="
-        (standaloneParts.length === 0 && assemblies.length === 0) ||
-        pdfSubmitting ||
-        hasUploadErrors
-      "
-      @click="onSubmitPdfTree"
+      :disabled="!canSubmitCreate || pdfSubmitting"
+      :loading="pdfSubmitting && uploadStage === 'committed'"
+      @click="onCommit"
     >
       <el-icon><check /></el-icon>
-      <span
-        >提交创建（{{ standaloneParts.length }} 个零件 + {{ assemblies.length }} 个装配件）</span
-      >
+      <span>提交创建</span>
     </el-button>
-    <!-- 2026-09-16 T3.4：上传失败时提示用户点行内「重试」按钮 -->
-    <span v-if="hasUploadErrors" class="upload-error-hint">有文件上传失败，请点行内「重试」</span>
+    <!-- 2026-09-16 M3-B 复审：删掉误导的「有文件上传失败」统一提示；改成阶段化文案
+         （按钮 disabled 状态已经反映，行内 cell 也有各自的红字）。 -->
+    <span v-if="uploadStage === 'uploaded' && hasUploadErrors" class="upload-error-hint"
+      >仍有文件上传失败，请点行内「重试」</span
+    >
   </div>
 
   <!-- PDF 文件名点击触发的全屏预览（Tab 2）。blob URL 生命周期见
@@ -740,7 +751,8 @@ const props = defineProps<{
   onManualAsmFileRemove: () => void;
   confirmManualAssembly: () => Promise<void>;
   closeManualAsmDialog: () => void;
-  onSubmitPdfTree: () => Promise<void>;
+  // 2026-09-16 M3-B 复审：原 onSubmitPdfTree 拆为「开始上传」+「提交创建」两步。
+  // onStartUpload / onCommit 见下方。
   closePdfPreview: () => void;
   // 2026-09-16 T3.4：上传状态（cell + 反查函数 + 全局汇总）
   pdfUploadCells: Record<string, UploadStatusCellViewCell>;
@@ -749,6 +761,12 @@ const props = defineProps<{
   getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCellViewCell | undefined;
   hasUploadErrors: boolean;
   retryUploadByRow: (rowUid: string, slot: 'pdf' | '3d', threeDIndex?: number) => Promise<void>;
+  // 2026-09-16 M3-B 复审：拆「先上传 → 后提交」两步
+  onStartUpload: () => Promise<void>;
+  onCommit: () => Promise<void>;
+  uploadStage: 'idle' | 'uploading' | 'uploaded' | 'committed';
+  canStartUpload: boolean;
+  canSubmitCreate: boolean;
 }>();
 
 // PR-2 2026-09-13：父级三个 form 都是 reactive；vue/no-mutating-props 禁止
@@ -832,11 +850,9 @@ function bindAssembliesTableRef(el: unknown): void {
 }
 
 // ============ 2026-09-16 T3.4：上传重试 handler ============
-// usePartBatchPdf composable 的 retryUploadByRow 在 onSubmitPdfTree 之外无法触发
-// （cosUpload 实例在闭包内，submit 结束即被 GC）。当前 T3.4 范围：上传失败 → 用户
-// 必须再次点击「提交创建」让 onSubmitPdfTree 重新走一遍（包含 startUpload），或在
-// 后续任务里把 cosUpload 实例提升到 composable 顶层的 ref 让 retry 全程可触达。
-// 这里只暴露 stub：直接弹「请重新提交」提示，避免 retry 行为不一致。
+// 2026-09-16 M3-B 复审修复：cosUpload 提到 usePartBatchPdf composable 顶层 Ref 后，
+// retryUploadByRow 不再是 stub —— 行内「重试」按钮可直接调 useCosUpload.retryItem()，
+// 不必再走「重新提交」整条流程。onRetry* 五处 handler 仅做 rowUid 解析转发。
 function onRetryStandalonePdf(row: StandalonePartRow): void {
   void props.retryUploadByRow(row.uid, 'pdf');
 }

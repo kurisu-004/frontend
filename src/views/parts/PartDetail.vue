@@ -78,7 +78,10 @@
     />
 
     <!-- 图纸 / 3D 模型 / CAD 源文件（2026-09-16 加 v-if="part" 守：避免 part 为 null
-         时进入 FileListCard 子渲染链，触发 toUpperCase 炸 undefined） -->
+         时进入 FileListCard 子渲染链，触发 toUpperCase 炸 undefined）。
+         2026-09-16 T3.5：补传场景 B 三处挂载均走 usePartFileUpload（hash → upload-intents
+         → COS 直传 → confirmPartFile），旧 multipart 路径已删除（后端 404）。
+         预览 / 下载默认走 v2 /part-files/{id}/url + /content 实际路径。 -->
     <FileListCard
       v-if="part"
       :files="drawings"
@@ -88,7 +91,7 @@
       :show-upload="canManageDrawings"
       :show-delete="canManageDrawings"
       :show-print="!isInspectorRaw"
-      :api-upload="uploadPartDrawing"
+      :api-upload="drawingUpload"
       @refresh="fetchDrawings"
     />
     <FileListCard
@@ -99,7 +102,7 @@
       kind="3D_MODEL"
       :show-upload="canManage3DModels"
       :show-delete="canManage3DModels"
-      :api-upload="uploadPart3DModel"
+      :api-upload="model3dUpload"
       @refresh="fetch3DModels"
     />
     <FileListCard
@@ -110,7 +113,7 @@
       kind="CAD_2D"
       :show-upload="canManageDrawings"
       :show-delete="canManageDrawings"
-      :api-upload="uploadPartCadFile"
+      :api-upload="cadUpload"
       @refresh="fetchCadFiles"
     />
 
@@ -408,7 +411,6 @@ import PartCncCard from './components/PartCncCard.vue';
 import PartQuoteCard from './components/PartQuoteCard.vue';
 import PartBatchMonitorCard from './components/PartBatchMonitorCard.vue';
 import type { PartBatch } from '@/api/parts';
-import { uploadPart3DModel, uploadPartCadFile, uploadPartDrawing } from '@/api/assembly';
 import { listShelves } from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';
 import { listProcesses } from '@/api/process';
@@ -417,6 +419,7 @@ import { useDialogSize } from '@/composables/useDialogSize';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import { useConfirm } from '@/composables/useConfirm';
 import { usePermissions } from '@/composables/usePermissions';
+import { usePartFileUpload } from '@/composables/usePartFileUpload';
 import { usePartDetail } from './composables/usePartDetail';
 import type { PartEditForm } from './composables/usePartDetail';
 import { usePartFiles } from './composables/usePartFiles';
@@ -478,6 +481,27 @@ const {
 } = detail;
 
 const { drawings, models3d, cadFiles, fetchDrawings, fetch3DModels, fetchCadFiles } = files;
+
+// 2026-09-16 T3.5：三个 kind 各自的补传 composable（场景 B）。
+// 复用同一 partId（雪花 ID 字符串），kind 是字面量。
+// FileListCard 期望 `apiUpload: (ownerId, file) => Promise<PartFileItem>` 签名，
+// 而 usePartFileUpload.upload 仅接 file（owner 已在 composable 闭包里）→ 这里
+// 适配成兼容签名。
+const drawingUploadComp = usePartFileUpload({
+  ownerPartId: partId,
+  kind: 'DRAWING',
+});
+const model3dUploadComp = usePartFileUpload({
+  ownerPartId: partId,
+  kind: '3D_MODEL',
+});
+const cadUploadComp = usePartFileUpload({
+  ownerPartId: partId,
+  kind: 'CAD_2D',
+});
+const drawingUpload = (_ownerId: string, file: File) => drawingUploadComp.upload(file);
+const model3dUpload = (_ownerId: string, file: File) => model3dUploadComp.upload(file);
+const cadUpload = (_ownerId: string, file: File) => cadUploadComp.upload(file);
 
 const {
   cncSetupGroups,

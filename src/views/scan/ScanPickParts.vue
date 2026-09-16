@@ -273,7 +273,7 @@ import {
 } from '@element-plus/icons-vue';
 import { api } from '@/api/http';
 import PdfViewer from '@/components/PdfViewer.vue';
-import { getDownloadUrl, listPartFiles } from '@/api/assembly';
+import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
@@ -394,8 +394,8 @@ async function onPreview(p: PartItem): Promise<void> {
   const myToken = ++previewToken;
   try {
     // 1. 取该零件的 DRAWING 文件列表
-    // 2026-09-16 Phase 5 切 v2 后：listPartFiles 返回分页包装 { items, total }，取 .items
-    const files = (await listPartFiles(String(p.id), 'DRAWING')).items;
+    // 2026-09-16 T3.5：列表端点切到 v2 /part-files?owner_id=...&kind=...（owner 多态）
+    const files = (await listPartFilesByOwner(String(p.id), 'DRAWING')).items;
     if (myToken !== previewToken) return;
     if (!files.length) {
       ElMessage.warning('暂无图纸');
