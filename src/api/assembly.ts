@@ -11,7 +11,7 @@ import type {
   AssemblyItem,
   AssemblyUpdatePayload,
 } from '@/types/assembly';
-import type { PartFileItem, PartFileListResult, PartFileUrlResult } from '@/types/part_file';
+import type { PartFileItem, PartFileListResult } from '@/types/part_file';
 import type { PartListItem } from '@/types/parts';
 
 export async function listAssemblies(q: AssemblyListQuery = {}): Promise<AssemblyListResult> {
@@ -106,10 +106,10 @@ export async function listPartFiles(
   partId: string,
   kind?: 'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D',
 ): Promise<PartFileListResult> {
-  const resp = await api.get<PartFileListResult>(`/parts/${partId}/files`, {
-    params: kind ? { kind, limit: 500 } : { limit: 500 },
-  });
-  return resp.data;
+  // 2026-09-16 T3.5：v2 后端无 `/parts/{id}/files` 端点；保留此函数作为
+  // `listPartFilesByOwner` 的 deprecation alias，转发到 `/part-files?owner_id=...`。
+  // 下游调用点已在 T3.5 一次切换到 listPartFilesByOwner；M3-C 完成时统一移除。
+  return listPartFilesByOwner(partId, kind);
 }
 
 /**
@@ -138,6 +138,11 @@ export async function listPartFilesByOwner(
  * 上传零件图纸。2026-07-14 起 DRAWING 同时接受 PDF + 8 种图片格式
  * （PNG/JPG/JPEG/GIF/BMP/TIF/TIFF/WEBP/HEIC），后端 /drawings 端点统一处理。
  * 图片与 PDF 同槽（单文件覆盖语义）。
+ *
+ * @deprecated 2026-09-16 M3 重构：multipart 直传路径已被 COS 直传 + JSON 链路取代，
+ * 后端 `/parts/{id}/drawings` 端点已删除（v2 不再支持 multipart upload）。
+ * 详情页补传请改用 `usePartFileUpload({ ownerPartId, kind: 'DRAWING' })`（场景 B）。
+ * 保留 export 仅作 import 兼容；调用会抛 404 Not Found。
  */
 export async function uploadPartDrawing(partId: string, file: File): Promise<PartFileItem> {
   const form = new FormData();
@@ -146,7 +151,13 @@ export async function uploadPartDrawing(partId: string, file: File): Promise<Par
   return resp.data;
 }
 
-/** 上传零件 3D 模型（STEP / STP / IGES / IGS / STL / OBJ / 3MF）。 */
+/**
+ * 上传零件 3D 模型（STEP / STP / IGES / IGS / STL / OBJ / 3MF）。
+ *
+ * @deprecated 2026-09-16 M3 重构：multipart 直传路径已被 COS 直传 + JSON 链路取代，
+ * 后端 `/parts/{id}/3d-models` 端点已删除。详情页补传请改用
+ * `usePartFileUpload({ ownerPartId, kind: '3D_MODEL' })`（场景 B）。
+ */
 export async function uploadPart3DModel(partId: string, file: File): Promise<PartFileItem> {
   const form = new FormData();
   form.append('file', file);
@@ -157,6 +168,10 @@ export async function uploadPart3DModel(partId: string, file: File): Promise<Par
 /**
  * 上传零件 CAD 源文件（DWG / DXF）。2026-07-14 新增 kind=CAD_2D：
  * 与 PDF 图纸生命周期分离，删除 CAD 源不影响打印用 PDF。
+ *
+ * @deprecated 2026-09-16 M3 重构：multipart 直传路径已被 COS 直传 + JSON 链路取代，
+ * 后端 `/parts/{id}/cad-files` 端点已删除。详情页补传请改用
+ * `usePartFileUpload({ ownerPartId, kind: 'CAD_2D' })`（场景 B）。
  */
 export async function uploadPartCadFile(partId: string, file: File): Promise<PartFileItem> {
   const form = new FormData();
@@ -165,17 +180,17 @@ export async function uploadPartCadFile(partId: string, file: File): Promise<Par
   return resp.data;
 }
 
-export async function deleteFile(fileId: string, version: number): Promise<void> {
-  // 2026-09-16：v2 无 /files/* 路由，软删走 /part-files/{id}/delete；
-  // v2 soft_delete_part_file 强制 Json body { version }（OCC），bodyless POST 会 415
-  await api.post(`/part-files/${fileId}/delete`, { version });
-}
+/**
+ * @deprecated 2026-09-16 T3.5：合并到 `deletePartFile(fileId, version)`。
+ * 保留为 alias 以兼容未迁移 import；新代码请用具名导出。
+ */
+export { deletePartFile as deleteFile } from '@/api/parts/file';
 
-export async function getDownloadUrl(fileId: string): Promise<string> {
-  // 2026-09-16：v2 签发端点为 /part-files/{id}/url，返回字段为 download_url（非 url）
-  const resp = await api.get<PartFileUrlResult>(`/part-files/${fileId}/url`);
-  return resp.data.download_url;
-}
+/**
+ * @deprecated 2026-09-16 T3.5：合并到 `getPartFileDownloadUrl(fileId)`。
+ * 保留为 alias 以兼容未迁移 import；新代码请用具名导出。
+ */
+export { getPartFileDownloadUrl as getDownloadUrl } from '@/api/parts/file';
 
 /** 类型守卫 */
 export function isAssemblyItem(v: unknown): v is AssemblyItem {
