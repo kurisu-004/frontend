@@ -4,13 +4,15 @@
   2026-09-11 新增。
   2026-09-12 重构：
     - 删除 <el-card #header>（标题信息降级为 section 上方小节文字）
-    - 单表 → 双表（pendingParts / designedParts 通过 step_count 拆开）
+    - 单表 → 双表（pendingParts / designedParts 拆开；2026-09-16 起按 process_chain_id 分组）
     - 序列号 + 名称两列；图号作 hover tooltip（CLAUDE.md #11 加 :disabled 守卫）
     - 树表 lazy load 复用 PartsTable.vue:291-295 / 297-332 模式（rowKey 前缀化 + matched_children 优先 / getAssembly fallback）
     - 子件 row 点击 → emit('select') → 父组件切换 selectedPartId（CLAUDE.md #11 row 空值守卫）
   2026-09-12 第五轮：装配件（row_type='ASSEMBLY'）单独展示在顶部「装配件」section。
   装配件本身不能指定工序（点选时 ProcessStepCardList 显示提示），但仍可点击预览总装图。
   「待制定 / 已制定」section 只展示 row_type='PART' 的零件。
+  2026-09-16：「待制定 / 已制定」分组改为 part.process_chain_id 驱动
+  （null → 待制定 / 非 null → 已制定），替代原 step_count 懒加载派生。
 -->
 <template>
   <el-card shadow="never" class="picker-card">
@@ -143,6 +145,7 @@ import { Search } from '@element-plus/icons-vue';
 import type { PartListItem } from '@/types/parts';
 import { getAssembly } from '@/api/assembly';
 import { usePartProcessDesign } from '../composables/usePartProcessDesign';
+import { splitPartsByProcessDesign } from '../utils/partDesignGrouping';
 
 defineProps<{
   selectedPartId: string | null;
@@ -150,7 +153,7 @@ defineProps<{
 
 const emit = defineEmits<(e: 'select', partId: string) => void>();
 
-const { parts, loadingParts, allSummaries } = usePartProcessDesign();
+const { parts, loadingParts } = usePartProcessDesign();
 const loading = loadingParts;
 
 const searchKeyword = ref('');
@@ -162,24 +165,18 @@ const assemblies = computed<PartListItem[]>(() =>
   parts.value.filter((p) => p.row_type === 'ASSEMBLY'),
 );
 
-/** 按 step_count 拆成「待制定 / 已制定」两份。
+/** 按 process_chain_id 拆成「待制定 / 已制定」两份。
  *  2026-09-12 新增：原 3 列表格（图号 / 名称 / 状态）改为双表分组展示；
  *  状态信息已通过「待制定 / 已制定」section 标题表达。
  *  2026-09-12 第五轮：这两张表只展示 row_type='PART' 的零件（装配件在独立的「装配件」section 里）。
- *  2026-09-16 说明：「已制定」section 是按本地步骤数（step_count > 0）派生的，
- *  不是按后端 part.status —— 因为 2026-09-16 起 usePartProcessDesign.loadParts
- *  固定传 status='PENDING'，已进入编程/车间的工件根本不会出现在 parts.value 里，
- *  本地看到的「已制定」实际是「已编辑过但尚未保存」或「保存过但仍在 PENDING」状态。
- *  视觉上「待制定 / 已制定」与「未保存 / 已保存」语义不完全等价，这是当前限制。 */
-const pendingParts = computed<PartListItem[]>(() =>
-  parts.value.filter(
-    (p) => p.row_type !== 'ASSEMBLY' && (allSummaries.value[p.id]?.step_count ?? 0) === 0,
-  ),
-);
-const designedParts = computed<PartListItem[]>(() =>
-  parts.value.filter(
-    (p) => p.row_type !== 'ASSEMBLY' && (allSummaries.value[p.id]?.step_count ?? 0) > 0,
-  ),
+ *  2026-09-16 改造：分组依据从「本地懒加载缓存的 step_count > 0」改为
+ *  part.process_chain_id（后端 /parts 出参新增字段；null → 待制定 / 非 null → 已制定）。
+ *  旧逻辑的限制随之消除：未点击过的零件不会再被误判为「待制定」——
+ *  是否制定过工序现在由后端链外键直接表达，与本地懒加载状态无关。
+ *  拆分逻辑抽在 utils/partDesignGrouping.ts（纯函数，便于 node 环境 vitest 直测）。 */
+const pendingParts = computed<PartListItem[]>(() => splitPartsByProcessDesign(parts.value).pending);
+const designedParts = computed<PartListItem[]>(
+  () => splitPartsByProcessDesign(parts.value).designed,
 );
 
 function filterByKw(arr: PartListItem[]): PartListItem[] {
