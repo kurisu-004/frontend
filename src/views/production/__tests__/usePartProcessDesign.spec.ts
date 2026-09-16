@@ -1,28 +1,36 @@
 // 2026-09-14 改造：usePartProcessDesign 测试 fixture → mock API。
 //
 // 原 fixture 驱动测试（5 零件 / 6 工序 / 2 预填流程）改为 vi.mock('@/api/processChain') 注入
-// 稳定 stub 数据，断言 composable 的本地 state / saveFlow / 懒加载行为。
+// 稳定 stub 数据，断言 composable 的本地 state / save / 懒加载行为。
 //
 // 覆盖：
 //   1. loadParts / loadProcesses：模块级单例 state 填充
-//   2. upsertSteps：本地立刻更新（不自动 PUT，需手动 saveFlow）
+//   2. upsertSteps：本地立刻更新（不自动 PUT，需手动 save）
 //   3. loadFlowForPart：懒加载并缓存到 flows；二次访问走缓存
 //   4. reorderSteps → sort_order 重写为新 index
 //   5. deleteStep 按 uid 删除
 //   6. summaries 聚合正确（含 OUTSOURCE 时 has_outsource_approval === true）
 //   7. newStep 返回默认空白工序
 //   8. clearFlow 把 steps 置空
-//   9. saveFlow 走 PUT 整组 + 成功后用 dto.version 覆盖本地
+//   9. save 走本地 mutate + PUT 整组 + 成功后用 dto.version 覆盖本地
+//  10. save 失败时 ElMessage.error 被调 + error.value 同步 + dirty 由 UI 维持（不变 composable 内部状态）
 //
 // 2026-09-14 follow-up：
 // - 20701 路径改用 ApiError 实例（替代原 `(e as { code?: number }).code` 字面量挂码），
 //   对应 usePartProcessDesign.ts 里 `e instanceof ApiError && e.code === 20701` 的新分支。
-// - 新增 saveFlow 失败 it 用例：mock upsertProcessChainByPart 抛 ApiError(500)，
+// - 新增 save 失败 it 用例：mock upsertProcessChainByPart 抛 ApiError(500)，
 //   断言 catch 块 ElMessage.error 被调（mock element-plus stub）。
 //
 // 2026-09-16 改造：删除防抖自动保存（scheduleSave）的相关 it 用例；
-// upsertSteps 不再触发 PUT，持久化由 saveFlow 显式调用。
-// 同时更新 loadParts → listParts 调用，确保 status='PENDING' 透传。
+// upsertSteps 不再触发 PUT，持久化由公开 save(partId, steps) 显式调用。
+// 同时更新 loadParts → listParts 调用，确保 status='PENDING' 透传（不传 keyword，
+// 走 processChain.listParts 默认 undefined 入参）。
+//
+// 2026-09-16 第 1 轮 review 修复：saveFlow 改为 internal（不 export），外部唯一入口
+// 是公开 save(partId, steps)。两个 it 用例（原 upsertSteps 「显式 saveFlow 才 PUT」
+// 与「save 失败时 ElMessage.error」）改为断言公开 save；公开 save 内部串行做
+// upsertSteps + saveFlow，行为契约：成功 → mutate + PUT；失败 → mutate + PUT 抛错 +
+// ElMessage.error + error.value。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ApiError } from '@/api/http';
@@ -255,11 +263,13 @@ describe('usePartProcessDesign', () => {
     expect(getProcessChainByPart).toHaveBeenCalledTimes(1);
   });
 
-  it('upsertSteps：本地立刻更新（不自动 PUT，需手动 saveFlow）', async () => {
+  it('upsertSteps：本地立刻更新（不自动 PUT，需手动 save）', async () => {
     // 2026-09-16 改造：upsertSteps 不再触发防抖 PUT，断言改为：
     //   - 本地立刻更新（同步）
     //   - 不调 upsertProcessChainByPart（即使用 vi.advanceTimersByTime 也无 PUT）
-    //   - saveFlow 显式调用后才 PUT 整组
+    //   - 公开 save 显式调用后才 PUT 整组
+    // 2026-09-16 第 1 轮 review 修复：saveFlow 已 internal，外部唯一入口是 save；
+    // save 内部串行做 upsertSteps + saveFlow（PUT），所以这里直接断言 save。
     const { usePartProcessDesign } = await import('../composables/usePartProcessDesign');
     const { upsertProcessChainByPart } = await import('@/api/processChain');
     const q = usePartProcessDesign();
@@ -285,8 +295,9 @@ describe('usePartProcessDesign', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(upsertProcessChainByPart).not.toHaveBeenCalled();
 
-    // 显式调用 saveFlow 才 PUT
-    await q.saveFlow('5000000000005', newSteps);
+    // 2026-09-16 第 1 轮 review 修复：显式调公开 save 才 PUT（save 内部包了
+    // upsertSteps + saveFlow，对外只暴露这一个入口）
+    await q.save('5000000000005', newSteps);
     expect(upsertProcessChainByPart).toHaveBeenCalledTimes(1);
     const lastCall = (upsertProcessChainByPart as ReturnType<typeof vi.fn>).mock.calls.at(-1);
     expect(lastCall![1].steps).toHaveLength(2);
@@ -392,9 +403,12 @@ describe('usePartProcessDesign', () => {
     expect(q.error.value).toBeNull(); // 不应被设为 error
   });
 
-  it('saveFlow 失败时 ElMessage.error 被调 + error.value 同步（2026-09-14 follow-up + 2026-09-16 改造）', async () => {
+  it('save 失败时 ElMessage.error 被调 + error.value 同步（2026-09-14 follow-up + 2026-09-16 改造 + 第 1 轮 review 修复）', async () => {
     // 2026-09-16 改造：原 it 走「upsertSteps → 防抖 → doSave → catch」路径；
-    // 现在 scheduleSave 已删除，改为「saveFlow 显式调用 → catch」路径。
+    // scheduleSave 已删除，改为「saveFlow 显式调用 → catch」路径。
+    // 2026-09-16 第 1 轮 review 修复：saveFlow 已 internal，外部唯一入口是公开
+    // save(partId, steps)。save 内部串行做 upsertSteps + saveFlow，失败时
+    // saveFlow 内部已弹 ElMessage.error + 设 error.value + 重抛。
     const { usePartProcessDesign } = await import('../composables/usePartProcessDesign');
     const { upsertProcessChainByPart } = await import('@/api/processChain');
     const { ElMessage } = await import('element-plus');
@@ -405,15 +419,19 @@ describe('usePartProcessDesign', () => {
     await q.loadProcesses();
     await q.loadFlowForPart('5000000000005');
 
-    // 2026-09-16：upsertSteps 是纯本地 mutation，不触发 PUT；
-    // 这里直接 await saveFlow 触发 PUT → catch 分支。
+    // 2026-09-16 第 1 轮 review 修复：直接 await save（公开入口）；save 内部
+    // 已做 upsertSteps + saveFlow，失败时 saveFlow 会抛 → save 重抛 → 测试断言。
+    // 行为契约：失败保留本地 steps（已 mutate）+ 不清 dirty（composable 不持
+    // 组件级 dirty ref，由 UI 控制；本测试只断言 composable 侧可观察副作用）。
     const targetSteps = [q.newStep()];
-    q.upsertSteps('5000000000005', targetSteps);
-    await q.saveFlow('5000000000005', targetSteps);
+    await expect(q.save('5000000000005', targetSteps)).rejects.toBeInstanceOf(ApiError);
 
     expect(upsertProcessChainByPart).toHaveBeenCalledTimes(1);
     // 2026-09-14 follow-up：catch 块必须同时设置 error.value 和弹 ElMessage.error
     expect(q.error.value).toBe('save fail');
     expect(ElMessage.error).toHaveBeenCalledWith('保存工艺链失败：save fail');
+    // 2026-09-16 第 1 轮 review 修复：失败时 flows 单例保留 mutate 后状态
+    // （新 steps 已在；composable 不回滚），dirty 由 UI 自行维持 true
+    expect(q.getFlowByPartId('5000000000005')!.steps).toEqual(targetSteps);
   });
 });
