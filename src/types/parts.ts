@@ -137,7 +137,6 @@ export interface PartListItem {
   /** 请购日期 */
   request_date: string;
   planned_delivery_date: string;
-  actual_delivery_date: string | null;
   is_urgent: boolean;
   status: OrderStatus;
   /** PR-F 2026-07-17：送货单字段 */
@@ -149,16 +148,16 @@ export interface PartListItem {
   customer_name: string | null;
   parent_customer_name: string | null;
   customer_path: string | null;
-  /** PR-G 2026-07-22：所属送货单 id（NULL = 未开单）；列表浅蓝染色依据 */
-  delivery_note_id: string | null;
+  /** 2026-09-16 起为后端派生（min-progress 活跃批次的 location：
+   *  OFFICE/PRODUCTION_SHELF/WORKER/INSPECTION_SHELF/OUTSOURCE_COMPANY），无活跃批次为 null。
+   *  t_part 瘦身（PR-2 2026-09-16）：原 delivery_note_id / shelf_code / worker_name /
+   *  outsource_company_name / current_holder_display / actual_delivery_date /
+   *  has_been_repaired 等 part 级字段随列下线一并删除，位置展示统一由
+   *  location + holder_name 承接。 */
   location: string | null;
-  shelf_code: string | null;
-  worker_name: string | null;
-  /** holder 是外协公司时的公司名（OUTSOURCE_COMPANY 位置带出） */
-  outsource_company_name?: string | null;
-  /** 所在位置（2026-07-11 接入）：装配体子件表用，PRODUCTION_SHELF→'货架 A-01'；
-   * INSPECTION_SHELF→'品检 A-01'；WORKER→'工人 张三'；OFFICE→'编程员持有'。 */
-  current_holder_display?: string | null;
+  /** 2026-09-16 新增：min-progress 活跃批次 holder 解析名
+   *  （货架 code / 工人姓名 / 外协公司名；OFFICE 或无活跃批次为 null）。 */
+  holder_name?: string | null;
   /** PR-H 2026-07-28：下一工序 id（NULL = 未设置；新建外协报价 picker 自动填工序用） */
   next_process_id: string | null;
   /** PR-H 2026-07-28：下一工序名 */
@@ -181,8 +180,6 @@ export interface PartListItem {
   child_count?: number | null;
   /** 2026-07-30：创建时间（装配件行带出） */
   created_at?: string | null;
-  /** PR-M 2026-08-04：是否经历过返修（用于列表行展示「返修」el-tag） */
-  has_been_repaired?: boolean;
   /** C2 2026-08-05：装配件携带的「命中子件」；仅当 next_process_ids / locations /
    *  holder_ids 筛选激活时填充。其余情况为 null。前端 loadChildren 优先消费。 */
   matched_children?: PartListItem[] | null;

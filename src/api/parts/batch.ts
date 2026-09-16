@@ -35,8 +35,8 @@ export interface PartBatchFilePayload {
  *
  *  与 rust 后端 `PartBatchCreateItem`（`backend-rust/src/modules/part/dto_crud.rs:47`）
  *  对齐：后端契约要求 top-level `customer_id`，item 不带；FE 多带几个可选字段
- *  （`applicant_id` / `unit_price` / `actual_delivery_date`）后端 serde 默认
- *  忽略，不影响解析。
+ *  （`applicant_id` / `unit_price`）后端 serde 默认忽略，不影响解析。
+ *  2026-09-16 PR-2：`actual_delivery_date` 随 t_part 瘦身从出入参一并移除。
  *
  *  2026-09-16 M3：新增可选 `drawing_file` / `model3d_file`（FileBinding）——
  *  前端直传 COS 后用这两个字段把 tmp_key + sha 绑定到新 part。至少 status=done

@@ -31,7 +31,6 @@ export interface PartItem {
   drawing_no: string;
   quantity: number;
   planned_delivery_date: string;
-  actual_delivery_date: string | null;
   is_urgent: boolean;
   status: OrderStatus;
   /** PR-F 2026-07-17：送货单字段 */
@@ -41,14 +40,11 @@ export interface PartItem {
   customer_name: string | null;
   parent_customer_name: string | null;
   customer_path: string | null;
-  /** PR-G 2026-07-22：所属送货单（NULL = 未开单；详情页可链接到送货单） */
-  delivery_note_id: string | null;
-  /** PR-G 2026-07-22：所属送货单单号 DN-YYYYMMDD-NNNN（与 detail.batch_fetch 同事务返回） */
-  delivery_note_no: string | null;
-  /** PR-G 2026-07-22：所属送货单状态 */
-  delivery_note_status: string | null;
+  // PR-2 2026-09-16 t_part 瘦身：part 级 actual_delivery_date / current_holder_id /
+  // placed_at / delivery_note_id / has_been_repaired 随后端列下线删除；连带仅服务
+  // 「所属送货单卡」的 delivery_note_no / delivery_note_status 一并移除（该卡已删，
+  // 批次级送货单号由 PartBatchMonitorCard 经 t_part_batch 字段展示）。
   assembly_id: string | null;
-  current_holder_id: string | null;
   current_holder_kind: 'shelf' | 'worker' | 'outsource_company' | null;
   shelf_code: string | null;
   worker_name: string | null;
@@ -57,7 +53,6 @@ export interface PartItem {
   location: string | null;
   /** 后端 service/part.py:3675-3684 生成的当前位置描述：货架 A-01 / 品检 A-01 / 工人 张三 / 外协 公司名 / 编程员持有。仅用于「扫描错页」等展示用途，不参与业务校验。 */
   current_holder_display?: string | null;
-  placed_at: string | null;
   /** 下一道工序 id（NULL = 未设置） */
   next_process_id: string | null;
   /** 下一道工序名称（NULL = 未设置；由后端在 list/get 响应中带出） */
@@ -76,8 +71,6 @@ export interface PartItem {
   batch_id?: string | null;
   batch_no?: number | null;
   batch_label?: string | null;
-  /** PR-M 2026-08-04：是否经历过返修（用于列表 / 卡片 / 详情显示「返修」标签） */
-  has_been_repaired?: boolean;
 }
 
 export interface PartListResult {
@@ -179,7 +172,6 @@ export interface PartCreatePayload {
   total_price?: number | null;
   request_date: string;
   planned_delivery_date: string;
-  actual_delivery_date?: string | null;
   is_urgent?: boolean;
   /** PR-F 2026-07-17：送货单字段 */
   order_no?: string | null;
@@ -202,7 +194,6 @@ export interface PartUpdatePayload {
   total_price?: number | null;
   request_date?: string;
   planned_delivery_date?: string;
-  actual_delivery_date?: string | null;
   is_urgent?: boolean;
   /** PR-F 2026-07-17：送货单字段 */
   order_no?: string | null;
@@ -702,9 +693,10 @@ export async function listPartsByWorkType(
 
 /**
  * 共享 HMI PICK_UP 跨架列表（2026-07-10）。
- * 列出**所有**生产货架上、该工种可领的零件；前端按 `current_holder_id`
- * 在卡片网格里分组。
+ * 列出**所有**生产货架上、该工种可领的零件。
  * 排序与 `listPartsByWorkType` 一致。
+ * 2026-09-16 PR-2：出参不再含 part 级 current_holder_id（t_part 瘦身），
+ * 扫码提交货架由 useActiveShelfSelection 的选中架兜底。
  */
 export async function listPartsByWorkTypeAllShelves(workTypeId: string): Promise<PartItem[]> {
   const resp = await api.get<PartItem[]>(
