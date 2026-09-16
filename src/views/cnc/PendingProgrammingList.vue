@@ -145,6 +145,7 @@ import { releaseFromProgramming } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import { listProcesses } from '@/api/process';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
+import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
 import type { PartListItem } from '@/types/parts';
 import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
@@ -377,7 +378,12 @@ async function onReleaseConfirm(): Promise<void> {
     releaseDialogVisible.value = false;
     await fetchList();
   } catch (e) {
-    ElMessage.error(`下发失败：${(e as Error).message}`);
+    // 2026-09-16 PR-3：20706 BIZ_PROCESS_CHAIN_REQUIRED 兜底 —— 弹「前往制定」框；
+    // 命中后不走普通 ElMessage.error 兜底，避免重复提示。
+    const handled = await handleProcessChainRequired(e, row.id, router);
+    if (!handled) {
+      ElMessage.error(`下发失败：${(e as Error).message}`);
+    }
   } finally {
     row._releasing = false;
     releaseSubmitting.value = false;

@@ -22,9 +22,15 @@
 // 跨 composable 通信：
 //   - opts.onSent()：发送成功（单件 + 批量均会触发）→ shell 拿这个钩子去刷 receiving tab。
 //     这里不直接持有 receiving tab 的 refresh 引用，是为了保持 composable 单例纯净。
+//
+// 2026-09-16 PR-3：sendToOutsource 后端新增前置校验 —— part.process_chain_id 非空，
+// 否则 20706 BIZ_PROCESS_CHAIN_REQUIRED。onConfirmSend（单件）+ onConfirmBatchSend（批量）
+// 都接 handleProcessChainRequired 兜底：命中 → 弹「前往制定」确认框 → 跳
+// /production/process-design?part_id=XXX；批量命中即 break 不再继续。
 
 import { ElMessage } from 'element-plus';
 import { reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import {
   getPartBySerial,
   listOutsourceSendable,
@@ -34,6 +40,7 @@ import {
 } from '@/api/parts';
 import { useConfirm } from '@/composables/useConfirm';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
+import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
 import type { ApprovedQuoteForSendItem, OutsourceSendableItem } from '@/types/outsource';
 import type { DirectOutsourceCandidateItem } from '@/types/directOutsource';
 
@@ -65,6 +72,10 @@ export interface UseOutsourceSendableListOptions {
 }
 
 export function useOutsourceSendableList(options: UseOutsourceSendableListOptions = {}) {
+  // 2026-09-17 PR-3 修复：useRouter() 必须在 setup 顶部一次性拿闭包复用，禁止在 async 事件回调里调
+  // —— vue-router 4.6.4 + vue 3.5.38 下 inject() 在 lifecycle hook 之外返回 undefined。
+  const router = useRouter();
+
   const { dangerous: confirmDangerous } = useConfirm();
 
   // ============ 列表 filter（持久化） ============
@@ -189,7 +200,12 @@ export function useOutsourceSendableList(options: UseOutsourceSendableListOption
       // 发送成功后该零件应出现在「待接收」tab，主动 refresh 一次
       options.onSent?.();
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '发送失败');
+      // 2026-09-16 PR-3：20706 BIZ_PROCESS_CHAIN_REQUIRED 兜底 —— 弹「前往制定」框；
+      // 命中后不走普通 ElMessage.error 兜底。
+      const handled = await handleProcessChainRequired(e, target.part_id, router);
+      if (!handled) {
+        ElMessage.error((e as Error).message ?? '发送失败');
+      }
     } finally {
       sendSubmitting.value = false;
     }
@@ -296,9 +312,12 @@ export function useOutsourceSendableList(options: UseOutsourceSendableListOption
     batchSending.value = true;
     const errors: { serial: string; msg: string; idx: number }[] = [];
     let okCount = 0;
+    // 2026-09-16 PR-3：批量路径接 20706 兜底；命中后批量循环 break（用户先去补单工艺链）。
+    let processChainRequiredHit = false;
     // 串行 for 循环：避免并发踩状态机；失败项保留在队列可重试
     for (let i = 0; i < sendQueue.value.length; i++) {
       const item = sendQueue.value[i];
+      if (processChainRequiredHit) break;
       try {
         const payload: SendToOutsourcePayload = {
           outsource_company_id: item.outsource_company_id,
@@ -314,6 +333,20 @@ export function useOutsourceSendableList(options: UseOutsourceSendableListOption
         sendQueue.value.splice(i, 1);
         i--; // 抵消 splice 导致的位移
       } catch (e) {
+        // 20706 兜底：弹确认框 → 跳工艺制定页；命中即中断后续发送
+        const handled = await handleProcessChainRequired(e, item.part.id, router);
+        if (handled) {
+          processChainRequiredHit = true;
+          const msg = (e as Error).message ?? '请先制定工序链';
+          errors.push({
+            serial: item.part.serial_no || item.part.drawing_no,
+            msg,
+            idx: i,
+          });
+          sendQueue.value[i]._failed = true;
+          sendQueue.value[i]._failMsg = msg;
+          break;
+        }
         const msg = (e as Error).message ?? '未知错误';
         errors.push({
           serial: item.part.serial_no || item.part.drawing_no,

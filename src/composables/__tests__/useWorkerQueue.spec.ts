@@ -57,6 +57,8 @@ const STUB_HELD_BY_W001: HeldBatchItemDto[] = [
 // 单 item 覆盖已由 W001 提供。
 
 // stub WorkerPoolDto（每 process 一个）
+// 2026-09-16 PR-3：PoolBatchItemDto 删 placed_at（t_part_batch 列下线），改用
+// current_process_step_id（可选 nullable）。fixture 同步精简。
 const STUB_POOL_2000000000001: WorkerPoolDto = {
   process_id: '2000000000001',
   process_code: 'CNC-01',
@@ -97,7 +99,7 @@ const STUB_POOL_2000000000001: WorkerPoolDto = {
       shelf_name: 'A 区货架 1',
       is_urgent: true,
       note: null,
-      placed_at: '2026-09-01T08:00:00Z',
+      current_process_step_id: '5000000000010',
       version: 1,
     },
     {
@@ -119,7 +121,7 @@ const STUB_POOL_2000000000001: WorkerPoolDto = {
       shelf_name: 'A 区货架 1',
       is_urgent: false,
       note: null,
-      placed_at: '2026-09-01T08:00:00Z',
+      current_process_step_id: '5000000000011',
       version: 1,
     },
   ],
@@ -159,7 +161,7 @@ const STUB_POOL_2000000000002: WorkerPoolDto = {
       shelf_name: 'A 区货架 1',
       is_urgent: true,
       note: null,
-      placed_at: '2026-09-01T08:00:00Z',
+      current_process_step_id: '5000000000012',
       version: 2,
     },
   ],

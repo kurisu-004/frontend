@@ -116,7 +116,16 @@ export interface WorkTypeMaxHeldDto {
 }
 
 /** `GET /api/v2/worker-pool/{process_id}` 内嵌的候选批次（rust PoolBatchItem）。
- *  候选 = IN_PROCESS + PRODUCTION_SHELF + holder=shelf_id + next_process_id=process_id。 */
+ *  候选 = IN_PROCESS + PRODUCTION_SHELF + holder=shelf_id + step.process_id=process_id。
+ *
+ * 2026-09-16 PR-3：
+ * - 删 `placed_at`：t_part_batch 列下线；候选池的「积压多久」展示改由后端派生
+ *   `pooled_for_minutes`（分钟数）或前端按 created_at 算，字段是否回填以
+ *   实际后端响应为准（本接口先标记为下线，UI 不再消费）。
+ * - 新增 `current_process_step_id`（可选）：与 PartBatch 同语义，逻辑 FK →
+ *   t_process_chain_step.id；URL `{process_id}` 占位对应 service 端字段仍
+ *   叫 `next_process_id`（因本端点匹配口径没变 —— 服务端用 process_id 匹，
+ *   UI 仍要传 process_id）。 */
 export interface PoolBatchItemDto {
   batch_id: string;
   part_id: string;
@@ -141,8 +150,8 @@ export interface PoolBatchItemDto {
   shelf_name: string;
   is_urgent: boolean;
   note: string | null;
-  /** 批次上架时间（用于「积压多久」展示） */
-  placed_at: string;
+  /** 2026-09-16 PR-3 新增：当前所在工艺链步骤 id（与 PartBatch 同语义；nullable）。 */
+  current_process_step_id?: string | null;
   version: number;
 }
 
@@ -181,7 +190,9 @@ export interface AdminAssignRequest {
   worker_id: string;
   batch_id: string;
   shelf_id: string;
-  /** 选填：明确分配到哪道工序；缺省由 service 端从 batch.next_process_id 推导。 */
+  /** 选填：明确分配到哪道工序；缺省由 service 端从 batch 的当前工艺链步骤
+   *  推导（PR-3 后：t_part_batch.next_process_id 已被 current_process_step_id 取代，
+   *  service JOIN step.process_id 拿候选 process）。 */
   process_id?: string;
 }
 
