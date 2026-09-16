@@ -113,6 +113,28 @@ export async function listPartFiles(
 }
 
 /**
+ * 2026-09-16 M3 新增：owner 维度列出文件（`GET /api/v2/part-files?owner_id=...&kind=...`）。
+ *
+ * 替代 `listPartFiles` 的 `/parts/{part_id}/files` 旧路径——v2 rust 后端已经
+ *  把列表端点统一到 `/part-files`（按 owner_id 多态查询）。kind 缺省 = 不过滤。
+ *
+ *  与 `listPartFiles` 区别：
+ *  - 路径：`/part-files?owner_id=...&kind=...`（owner 多态）
+ *  - 参数：limit 上限 500（v2 默认 50 会静默截断）
+ *
+ *  旧函数保留为 deprecation alias，下游调用点改在 M3-C 一次到位。
+ */
+export async function listPartFilesByOwner(
+  partId: string,
+  kind?: 'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D',
+): Promise<PartFileListResult> {
+  const resp = await api.get<PartFileListResult>('/part-files', {
+    params: kind ? { owner_id: partId, kind, limit: 500 } : { owner_id: partId, limit: 500 },
+  });
+  return resp.data;
+}
+
+/**
  * 上传零件图纸。2026-07-14 起 DRAWING 同时接受 PDF + 8 种图片格式
  * （PNG/JPG/JPEG/GIF/BMP/TIF/TIFF/WEBP/HEIC），后端 /drawings 端点统一处理。
  * 图片与 PDF 同槽（单文件覆盖语义）。

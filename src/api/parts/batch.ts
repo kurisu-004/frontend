@@ -7,7 +7,7 @@
 // 运行时不会产生 ESM 循环。
 
 import { api, cleanParams } from '@/api/http';
-import type { PartFileItem } from '@/types/part_file';
+import type { FileBinding, PartFileItem } from '@/types/part_file';
 import type { PartCreatePayload, PartItem } from './crud';
 
 export interface PartBatchFailure {
@@ -18,6 +18,8 @@ export interface PartBatchFailure {
 export interface PartBatchResult {
   created: PartItem[];
   failed: PartBatchFailure[];
+  /** 后端 commit 后自清理的 tmp 对象 key 列表，前端忽略（M3 范围）。 */
+  cleanup_tmp_keys?: string[];
 }
 
 export interface PartBatchFilePayload {
@@ -34,7 +36,11 @@ export interface PartBatchFilePayload {
  *  与 rust 后端 `PartBatchCreateItem`（`backend-rust/src/modules/part/dto_crud.rs:47`）
  *  对齐：后端契约要求 top-level `customer_id`，item 不带；FE 多带几个可选字段
  *  （`applicant_id` / `unit_price` / `actual_delivery_date`）后端 serde 默认
- *  忽略，不影响解析。 */
+ *  忽略，不影响解析。
+ *
+ *  2026-09-16 M3：新增可选 `drawing_file` / `model3d_file`（FileBinding）——
+ *  前端直传 COS 后用这两个字段把 tmp_key + sha 绑定到新 part。至少 status=done
+ *  才允许提交（M3-C 强制）；上传失败 → 表单提交按钮 disabled。 */
 interface PartBatchCreateItemFE {
   name: string;
   drawing_no: string;
@@ -47,6 +53,10 @@ interface PartBatchCreateItemFE {
   system_delivery_date?: string | null;
   note?: string | null;
   applicant_id?: string | null;
+  /** 2026-09-16 M3：可选图纸文件绑定（DRAWING kind）。 */
+  drawing_file?: FileBinding;
+  /** 2026-09-16 M3：可选 3D 模型绑定（3D_MODEL kind）。 */
+  model3d_file?: FileBinding;
 }
 
 interface PartBatchCreateRequestFE {
@@ -66,6 +76,20 @@ interface PartBatchCreateOutFE {
   /** 后端 `Vec<PartDetailOut>`，结构上与 `PartItem` 兼容（`PartDetailOut` 是超集） */
   created: unknown[];
   failed: PartBatchCreateFailureFE[];
+  /** 2026-09-16 M3：后端 commit 后自清理的失败 tmp 对象 key 列表，前端忽略。 */
+  cleanup_tmp_keys?: string[];
+}
+
+/** `POST /parts/batch` 单 item 入参（含可选文件绑定）。
+ *
+ * 2026-09-16 M3 新增：扩展 `PartCreatePayload` 携带文件绑定。新建工单时若已
+ *  直传 COS 成功（status=done），把 `binding` 字段传给本函数即可组装进 batch
+ *  item 的 `drawing_file` / `model3d_file`。 */
+export interface PartBatchCreatePayload extends PartCreatePayload {
+  /** 选填：图纸文件绑定（已直传 COS 完成后传入）。 */
+  drawing_file?: FileBinding;
+  /** 选填：3D 模型文件绑定。 */
+  model3d_file?: FileBinding;
 }
 
 /**
@@ -81,17 +105,20 @@ interface PartBatchCreateOutFE {
  * - 只发 JSON items，**不上传图纸**（图纸后续走「前端上传」重构）。
  * - 提交前由 caller `usePartBatchManual` 完成申请人 dedupe（同 L1 root
  *   下同名命中 applicantSearch 缓存 → 复用 id），避免重复 POST 触发 409。
+ * - 2026-09-16 M3：item 可选携带 `drawing_file` / `model3d_file`（已直传
+ *   COS 完成的绑定），后端在事务内 head + copy tmp → 正式 CAS key + 插
+ *   `t_part_file(READY)`。
  *
  * 后端契约（`PartBatchCreateRequest { customer_id, items }`）要求 top-level
  * `customer_id`、item 不带 `customer_id`；本函数按 customer_id 分组提交，
  * 每组共享 top-level customer_id，避免跨客户混合导致的语义错误。
  */
-export async function batchCreateParts(items: PartCreatePayload[]): Promise<PartBatchResult> {
+export async function batchCreateParts(items: PartBatchCreatePayload[]): Promise<PartBatchResult> {
   if (items.length === 0) {
-    return { created: [], failed: [] };
+    return { created: [], failed: [], cleanup_tmp_keys: [] };
   }
   // 按 customer_id 分组，每组单独提交一次。
-  const groups = new Map<string, PartCreatePayload[]>();
+  const groups = new Map<string, PartBatchCreatePayload[]>();
   for (const it of items) {
     const list = groups.get(it.customer_id);
     if (list) {
@@ -102,6 +129,7 @@ export async function batchCreateParts(items: PartCreatePayload[]): Promise<Part
   }
   const created: PartItem[] = [];
   const failed: PartBatchFailure[] = [];
+  const cleanupTmpKeys: string[] = [];
   let globalOffset = 0;
   for (const [customerId, groupItems] of groups) {
     const body: PartBatchCreateRequestFE = {
@@ -118,12 +146,15 @@ export async function batchCreateParts(items: PartCreatePayload[]): Promise<Part
         message: f.message,
       })),
     );
+    if (resp.data.cleanup_tmp_keys) {
+      cleanupTmpKeys.push(...resp.data.cleanup_tmp_keys);
+    }
     globalOffset += groupItems.length;
   }
-  return { created, failed };
+  return { created, failed, cleanup_tmp_keys: cleanupTmpKeys };
 }
 
-function toPartBatchCreateItem(it: PartCreatePayload): PartBatchCreateItemFE {
+function toPartBatchCreateItem(it: PartBatchCreatePayload): PartBatchCreateItemFE {
   return {
     name: it.name,
     drawing_no: it.drawing_no,
@@ -136,6 +167,8 @@ function toPartBatchCreateItem(it: PartCreatePayload): PartBatchCreateItemFE {
     system_delivery_date: it.system_delivery_date,
     note: it.note,
     applicant_id: it.applicant_id,
+    drawing_file: it.drawing_file,
+    model3d_file: it.model3d_file,
   };
 }
 

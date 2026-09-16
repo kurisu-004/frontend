@@ -143,6 +143,13 @@ export default [
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-non-null-assertion': 'off',
+      // 2026-09-16 新增：单测里大量「const items = ref([...])；items.value.every(...)」
+      // 模式，rule 把所有 ref.value 同作用域读取都标"会丢响应性"。但单测只读不写
+      // （mutation 通过 useCosUpload 等被测 composable 完成），且 refs 通常只活
+      // 在单个 it() 块内，不会跨测试污染。禁用以避免批量行级 eslint-disable。
+      // 替代规则 `vue/no-ref-object-reactivity-loss` 同义，一起关。
+      'vue/no-ref-object-destructure': 'off',
+      'vue/no-ref-object-reactivity-loss': 'off',
     },
   },
 

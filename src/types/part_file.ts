@@ -12,6 +12,9 @@
 //   分页包装 PartFileListOut = { items, total }（无 limit/offset），新增 PartFileListResult；
 // - PartFileItem.file_size 由 number 改 string（v2 i64 雪花序列化器统一转 string）；
 // - 删除 download_url（v2 列表项不再即时签发下载 URL，改走 GET /part-files/{id}/url）。
+//
+// 2026-09-16 M3 新增：STS 直传 COS 契约（upload-intents / confirm / FileBinding）。
+// 所有 id 字段保持 string 雪花；file_size 为 string i64；content_sha256 为 64-char 小写 hex。
 
 /** 文件类型枚举（与后端 PartFileKind 的字符串值对齐） */
 export type PartFileKind =
@@ -91,3 +94,112 @@ export interface CncPairedFileRef {
 export type DrawingFileItem = PartFileItem;
 /** @deprecated 用 PartFileItem 替代 */
 export type CncProgramItem = PartFileItem;
+
+// ============================================================
+// 2026-09-16 M3 新增：STS 直传 COS 契约（与 backend-rust part_file::dto 对齐）
+// ============================================================
+
+/** STS 临时凭证（`POST /api/v2/part-files/upload-intents` 返回）。
+ *
+ *  直接喂给 `new COS({ SecretId, SecretKey, SecurityToken, XCosSecurityToken })`。
+ *  expired_time 是 UTC 秒数（i64，JSON 解析为 number），前端比较时需 *1000。
+ */
+export interface CosCredentials {
+  tmp_secret_id: string;
+  tmp_secret_key: string;
+  session_token: string;
+  /** UTC 秒（i64，后端直接以 i64 序列化） */
+  expired_time: number;
+}
+
+/** upload-intents 单项入参（与 `UploadIntentItemIn` 对齐）。 */
+export interface UploadIntentItemIn {
+  kind: PartFileKind;
+  filename: string;
+  /** 字节数；v2 i64 序列化器统一转 string，消费侧同样按 string 序列化回发。 */
+  file_size: string;
+  /** 64-char 小写 hex；由前端 `computeSha256` 计算。 */
+  content_sha256: string;
+  content_type: string;
+}
+
+/** upload-intents 请求 body（与 `UploadIntentsIn` 对齐）。
+ *
+ *  owner_part_id 可选：场景 A（创建工单）不填，后端直接签发新 batch tmp_key；
+ *  场景 B（详情页补传）填 part_id，后端会按 (part_id, kind, sha) 查重，
+ *  命中项标 `dedup_hit: true` 附 `existing_file`，跳过上传直接用旧文件。
+ */
+export interface UploadIntentsIn {
+  owner_part_id?: string;
+  files: UploadIntentItemIn[];
+}
+
+/** upload-intents 单项出参（与 `UploadIntentItemOut` 对齐）。 */
+export interface UploadIntentItemOut {
+  /** 前端生成的 client_ref（用于在 items 数组中反查原始 File）。 */
+  client_ref: string;
+  /** COS tmp 区 key；后端生成，前端需原样填回 confirm / batch item。 */
+  tmp_key: string;
+  /** true = 后端按 (owner, kind, sha) 命中已有文件，可跳过上传直接复用 existing_file。 */
+  dedup_hit: boolean;
+  /** dedup_hit 时返回已有文件（前端用其替换本次上传）；非命中时 undefined。 */
+  existing_file?: PartFileItem;
+}
+
+/** upload-intents 完整响应（与 `UploadIntentsOut` 对齐）。 */
+export interface UploadIntentsOut {
+  credentials: CosCredentials;
+  bucket: string;
+  region: string;
+  /** STS policy resource 限定前缀（前端展示用，实际写传时 tmp_key 已自含该前缀）。 */
+  tmp_prefix: string;
+  items: UploadIntentItemOut[];
+}
+
+/** `POST /api/v2/parts/{id}/files/confirm` 入参（场景 B）。 */
+export interface ConfirmFileIn {
+  kind: PartFileKind;
+  tmp_key: string;
+  content_sha256: string;
+  original_filename: string;
+  file_size: string;
+  content_type: string;
+}
+
+/** 批量建单 item 的文件绑定（场景 A）。
+ *
+ *  与 rust 后端 `PartBatchCreateItem.drawing_file` / `model3d_file` 字段对齐，
+ *  类型为 `FileBindingIn`（tmp_key + sha + filename + size + content_type）。
+ */
+export interface FileBinding {
+  tmp_key: string;
+  content_sha256: string;
+  original_filename: string;
+  file_size: string;
+  content_type: string;
+}
+
+/** `POST /api/v2/parts/batch` 出参（场景 A，FE 视图）。
+ *
+ *  与 rust 后端 `PartBatchCreateOut` 对齐：`created` = `Vec<PartDetailOut>`，
+ *  `failed` = `Vec<PartBatchCreateFailure>`，`cleanup_tmp_keys` = 后端自清理的
+ *  失败 tmp 对象 key 列表。前端**忽略** cleanup_tmp_keys（M3 范围，T3.4 改造后
+ *  表单提交也无需关心），后端 commit 后会尽力清理。 */
+export interface PartBatchCreateOut {
+  created: PartFileDetailOut[];
+  failed: Array<{
+    item_index: number;
+    code: number;
+    message: string;
+    part_id?: string | null;
+  }>;
+  cleanup_tmp_keys: string[];
+}
+
+/** `PartBatchCreateOut.created[]` 单元素形状——结构上与 PartItem 兼容但
+ *  含 version / 等额外字段（PartDetailOut 超集）。vitest / TS 类型断言时
+ *  用 `as unknown as PartItem` 即可。 */
+export interface PartFileDetailOut {
+  id: string;
+  version: number;
+}
