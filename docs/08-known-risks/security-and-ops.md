@@ -173,6 +173,6 @@ location ~* \.mjs$ {
 
 ### 完全切完前的兼容性
 
-- `src/api/http.ts` 同时挂载 v1（`api`）和 v2（`apiV2`）两个 axios 实例，baseURL 分别为 `/api/v1` 和 `/api/v2`。
-- 新功能统一走 `apiV2`，v1 仅作为业务兼容兜底。
+- **2026-09-15 Phase 5 已完成切流**：`src/api/http.ts` 现挂 `api`（baseURL `/api/v2`）+ `refreshClient`（baseURL `/api/v2`，无拦截器）+ `apiPrint`（baseURL `/api/v1`，4 个打印端点专用）。原 `apiV2` / `refreshClientV2` 已合并删除。
+- 业务端点统一走 `api`（v2），4 个打印端点保留 v1 走 `apiPrint`。
 - 前端不要写「v1 token → v2 token 自动迁移」逻辑——不同 JWT 签名 + 不同 session 表，根本无法迁移，必须重登。

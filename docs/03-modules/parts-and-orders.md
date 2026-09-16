@@ -33,22 +33,22 @@
 
 ### 子组件（`src/views/parts/components/`）
 
-| 文件                            | 职责                                                                                                      |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `PartInfoCard.vue`              | 信息卡 + 行内编辑（editing 切换；form 由 usePartDetail 持有）                                             |
-| `PartHistoryCard.vue`           | 历史事件卡（事件列表 + 标签映射）                                                                         |
-| `PartCncCard.vue`               | CNC 文件卡（G 代码 / 设定单上传下载，list/upload/delete 走 `api/cnc.ts`）                                 |
-| `PartQuoteCard.vue`             | 报价卡（外协报价关联）                                                                                    |
-| `PartDeliveryNoteLinkCard.vue`  | 送货单关联卡（仅 `part.delivery_note_id != null` 时显示）                                                 |
-| `PartAssemblyLinkCard.vue`      | 装配件关联卡（仅 `part.assembly_id != null` 时显示）                                                      |
-| `PartBatchMonitorCard.vue`      | 批次监控卡（批次列表 + 拆分 / 取消批次）                                                                  |
-| `PartBatchManualTab.vue`        | 批量新建 Tab 1「录入」：Dialog 入队 → 提交 N 条                                                           |
-| `PartBatchPdfTab.vue`           | 批量新建 Tab 2「PDF 批量上传」：拖 PDF + 可选 Excel + 可选 3D 模型 → 单页独立零件 / 多页装配件            |
-| `PartsTable.vue`                | 零件一览纯 el-table：列定义 / 行内编辑 / 批量选中 / 表头 popover；懒加载树（`has_children` / `children`） |
-| `PartsBatchBar.vue`             | 批量操作栏（批量下发 / 批量品检通过 / 批量打印）                                                          |
-| `PartsDispatchDialog.vue`       | 单件下发对话框（选目标 PRODUCTION 货架 + 下一道工序）                                                     |
-| `PartsBatchDispatchDialog.vue`  | 批量下发对话框                                                                                            |
-| `PurchaseOrderImportDialog.vue` | 采购订单 Excel 导入对话框（解析系统交期 + 订单号）                                                        |
+| 文件                               | 职责                                                                                                                                                                          |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PartInfoCard.vue`                 | 信息卡 + 行内编辑（editing 切换；form 由 usePartDetail 持有）                                                                                                                 |
+| `PartHistoryCard.vue`              | 历史事件卡（事件列表 + 标签映射）                                                                                                                                             |
+| `PartCncCard.vue`                  | CNC 文件卡（G 代码 / 设定单上传下载，list/upload/delete 走 `api/cnc.ts`）                                                                                                     |
+| `PartQuoteCard.vue`                | 报价卡（外协报价关联）                                                                                                                                                        |
+| ~~`PartDeliveryNoteLinkCard.vue`~~ | **2026-09-16 PR-2 删除**：随 `part.delivery_note_id` 列下线一并移除；批次级送货单号改由 `PartBatchMonitorCard` 经 `t_part_batch.delivery_note_no` 字段展示（PR-2 2026-09-16） |
+| `PartAssemblyLinkCard.vue`         | 装配件关联卡（仅 `part.assembly_id != null` 时显示）                                                                                                                          |
+| `PartBatchMonitorCard.vue`         | 批次监控卡（批次列表 + 拆分 / 取消批次）                                                                                                                                      |
+| `PartBatchManualTab.vue`           | 批量新建 Tab 1「录入」：Dialog 入队 → 提交 N 条                                                                                                                               |
+| `PartBatchPdfTab.vue`              | 批量新建 Tab 2「PDF 批量上传」：拖 PDF + 可选 Excel + 可选 3D 模型 → 单页独立零件 / 多页装配件                                                                                |
+| `PartsTable.vue`                   | 零件一览纯 el-table：列定义 / 行内编辑 / 批量选中 / 表头 popover；懒加载树（`has_children` / `children`）                                                                     |
+| `PartsBatchBar.vue`                | 批量操作栏（批量下发 / 批量品检通过 / 批量打印）                                                                                                                              |
+| `PartsDispatchDialog.vue`          | 单件下发对话框（选目标 PRODUCTION 货架 + 下一道工序）                                                                                                                         |
+| `PartsBatchDispatchDialog.vue`     | 批量下发对话框                                                                                                                                                                |
+| `PurchaseOrderImportDialog.vue`    | 采购订单 Excel 导入对话框（解析系统交期 + 订单号）                                                                                                                            |
 
 ## 三、主要 API 调用
 

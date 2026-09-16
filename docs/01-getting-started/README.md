@@ -8,7 +8,7 @@
 
 ## 这是什么
 
-myERP 工厂管理系统前端。后端双轨运行：v1 FastAPI（`/api/v1`，历史兼容）+ v2 Rust 主仓 `~/Code/hsh-erp-rust`（`/api/v2`，新功能优先）。前端用 `api` 和 `apiV2` 两个 axios 实例同时对接两套后端。
+myERP 工厂管理系统前端。后端双轨运行：v1 FastAPI（`/api/v1`，历史兼容）+ v2 Rust 主仓 `~/Code/hsh-erp-rust`（`/api/v2`，新功能优先）。**前端 2026-09-15 Phase 5 已一次性切到 v2**：`api` baseURL 统一为 `/api/v2`，原 `apiV2` 已合并删除；4 个打印端点保留 v1 走 `apiPrint`。详见 [CLAUDE.md](../../CLAUDE.md) 硬约束 #7。
 
 系统覆盖 **11 个业务域**：
 

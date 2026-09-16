@@ -6,7 +6,8 @@
                    （src/composables/useResizablePane.ts，key='process_design_layout'）。
   2026-09-14 改造：切真接口后，删除「默认选中种子零件」逻辑（fixture-only）；
                    改为「选中第一个零件」或保持空态让用户手动选。composable 内
-                   loadParts / loadProcesses / loadFlowForPart 均走 apiV2。
+                   loadParts / loadProcesses / loadFlowForPart 均走 `api`（2026-09-15
+                   Phase 5 业务全切 v2 后 baseURL `/api/v2`，原 `apiV2` 已合并删除）。
 -->
 <template>
   <div class="process-design">

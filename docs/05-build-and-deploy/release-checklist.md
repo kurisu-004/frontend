@@ -21,17 +21,13 @@
 - [ ] **docs/ 已同步**：修改了架构或域逻辑 → 对应 `02-architecture/` / `03-modules/` / `05-build-and-deploy/` 文档同步更新。
 - [ ] **回滚预案准备**：前一版镜像 tag 已记录；前一版 `nginx.conf` 已备份；前一版 docker-compose 已保存到发布分支。
 
-## v1 → v2 切流流程（以 auth 为例）
+## v1 → v2 切流流程（已完成 2026-09-15 Phase 5）
 
-v1 FastAPI → v2 Rust 主仓是大版本迁移，frontend 已经在 v2 实例（`apiV2`）上写新代码，但老业务还在 v1 上跑。完整切换需要 6 步：
+v1 FastAPI → v2 Rust 主仓是大版本迁移，frontend 已在 2026-09-15 Phase 5 一次性切到 v2：`api` baseURL 统一为 `/api/v2`，原 `apiV2` / `refreshClientV2` 已合并删除；4 个打印端点（`printNote` / `printNoteLabels` / `printPartDrawing` / `printPartDrawingBatch`）保留 v1 走 `apiPrint`。本节保留作为历史流程记录，新代码不需要重新切流。
 
-> **2026-08-26 注**：auth 域临时回滚 v1（v1/v2 JWT 不兼容，业务仍依赖 v1）。本节描述的是完整 v2 切换流程，目前只完成了第 1 步（部分业务域在 v2）+ 第 2 步（v2 Rust 主仓已上线）。**切回 v2 的触发条件见 [docs/02-architecture/api-contract.md](../02-architecture/api-contract.md) "v1 临时回滚注意事项"**。
+### 1. 前端全量切到 v2（已完成）
 
-### 1. 前端全量切到 `apiV2`
-
-`src/api/auth.ts` 全量改用 `apiV2` + `refreshClientV2`。所有 v2 实例的 axios 请求走 `http://127.0.0.1:8000/api/v2/auth/*`（或 dev proxy）。
-
-> **当前状态**：auth 域 2026-08-26 已切回 `api` + `refreshClient`；其余业务域（deliveryNote / deliveryGroup / parts/scanInspect）仍在 `apiV2`。不要在 auth 域写新 v2 代码。
+2026-09-15 PR-1 Phase 5：`src/api/auth.ts` 等 17 个业务 api 文件全量改用 `api` + `refreshClient`（baseURL 都是 `/api/v2`）。所有 v2 业务实例的 axios 请求走 `http://127.0.0.1:3000/api/v2/*`（或 dev proxy）。
 
 ### 2. 后端上线 v2 域
 
@@ -65,13 +61,12 @@ map $cookie_user_id $auth_backend {
 
 灰度观察 1-2 周后，把所有 `/api/v1/*` 反代注释掉或返回 410 Gone。删除前端 `src/api/http.ts` 里 v1 的兜底逻辑。
 
-### 6. 监控：40101 / 40103 / 40105 错误率
+### 6. 监控：40101 / 40103 / 40105 错误率（已完成 Phase 5 后）
 
 上线后 24 小时重点盯：
 
-- `40101`（未登录）—— 正常范围内的登录失败。**回滚 v1 期间，业务域（走 `apiV2`）拿到 v1 JWT 也会 40101**，是预期行为。
-- `40103`（refresh 失效）—— v1 → v2 切换后**预期会有一次尖峰**，因为所有存量用户的旧 refresh_token 失效。
-- `40105`——当前 v1 不返回该码，监控告警阈值调零或保留为 historical-only。
+- `40101`（未登录）—— 正常范围内的登录失败。
+- `40103`（refresh 失效）—— Phase 5 切流后**预期会有一次尖峰**，所有存量用户的旧 v1 refresh_token 失效。
 - `40105`（SESSION_REVOKED）—— v2 Redis session 已被吊销，需要重新登录。
 
 错误率超过 1% 持续 10 分钟触发回滚。

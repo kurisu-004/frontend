@@ -30,15 +30,15 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
    - `GET  /parts/{id}/print-drawing` ← `printPartDrawing`
    - `POST /parts/print-drawing-batch` ← `printPartDrawingBatch`
 
-   新增业务端点直接 `import { api } from '@/api/http'` 后 `api.get/post(...)`，路径不带 `/v2` 前缀；新增打印端点 `import { apiPrint }` 后 `apiPrint.get/post(...)`。序列化：v1/v2 共用 `serializeParamsV1`（数组重复 key 形式）—— v2 `statuses` 字段由后端 schema 改为单值 string，重复 key 与 CSV 语义兼容。
+   新增业务端点直接 `import { api } from '@/api/http'` 后 `api.get/post(...)`，路径不带 `/v2` 前缀；新增打印端点 `import { apiPrint }` 后 `apiPrint.get/post(...)`。序列化：v2 业务走 `serializeParamsV2`（CSV 白名单 `statuses` / `locations` / `holder_ids`，2026-09-17 PR-4 起三个 key，与 backend-rust `PartListQuery` 三个 `Option<String>` 字段对齐）；其它数组仍走重复 key（v1 兼容 + v2 未列入白名单的数组字段）。打印端点走 `serializeParamsV1`（FastAPI 期望重复 key）。两份 serializer 不能合并——CSV 单值 vs 重复 key 语义两边不一致。
 
-7. **router `meta.menuCode` 必填**：单一权限源 = 后端菜单树，不填会被守卫误放行。
-8. **dummy-auth 只能 dev 模式用**：`npm run dev:dummy`（=`vite --mode dummy`，自动加载 `.env.dummy` → 注入 `VITE_DUMMY_AUTH=true`）仅本地调试用。**不要**写 `npm run dev -- --dummy-auth`（cac 拒绝未知 flag，会崩）。三层 prod 保护已就位：`vite build` + `VITE_DUMMY_AUTH=true` → 硬 throw / `import.meta.env.DEV` guard + `VITE_DUMMY_AUTH === 'true'` 双判定 / 不写 localStorage。任何 prod bundle 不应含 dummy-auth 注入路径（grep `initDummyAuth` 仅命中 dev 调用点 + `useAuthSession` 函数定义）。判定逻辑统一收敛在 `useAuthSession.isDummyAuthRequested()`（2026-08-28 重写，详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md) 第 6 节）。
-9. **容器可能为 null 的拖拽点必须用 `useLazyDraggable`**：`vue-draggable-plus` 的 `useDraggable` 默认 `immediate: true`，会在 `onMounted` 里对 null 元素 `new Sortable(null)` 抛错。容器在 `v-if` 内 / `el-dialog destroy-on-close` 后重建 / el-table `tbody` 需查询才拿得到 → 用 `@/composables/useLazyDraggable`；容器挂载时已无条件存在才可直接 `useDraggable`。给 ref 赋值即触发重绑，**不要**再手动调 `start()`。
-10. **el-table 列插槽里依赖 `row.xxx` 的动态绑定要加空值守卫**：EP 会用合成空行 `{ row: {} }` 额外渲染每列 `#default` 一次并真的挂载（`.hidden-columns`），`:to` 动态的 `router-link` 会因此拼出 `/parts/undefined`。详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md)。
-11. **el-table 列拖动统一 `drag.applyDrag(tableRef)`，不要自己解析表头 DOM**：`useColumnDrag` 内部已经接 EP 表头重建自愈（`MutationObserver` 挂在 `.el-table` 根上、只听 `childList+subtree`），任何把 `findElTableHeaderRow(tableRef.$el)` 留在 consumer 里、null 守卫跳过、派生 `headerRowRef` 再 watch 的旧写法都会丢自愈——必须直接把 el-table 组件 ref 传进去。列 `v-for` 必须 `:label-class-name="drag.dragLabelClass(d)"`（不打 `col-draggable` / `col-key-<key>` 就进不了 sortablejs 索引序列）。详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md) 第 4 节。
-12. **`h()` 给原生元素传 children 不能用函数**：`h('span', props, () => X)` / `h('router-link', props, X)` 都是坏的——前者 Vue 3 的 `normalizeChildren` 会把函数当 slots（`SLOTS_CHILDREN`），而 `mountElement` 只处理 `TEXT_CHILDREN`/`ARRAY_CHILDREN`，元素渲染为空；后者 `h()` 传字符串 type 不做组件解析，会渲染成字面自定义元素。组件用法 `h(ElTag, props, () => X)` 是正确的（slots 走组件分发）。`src/composables/__tests__/nativeVnodeChildren.spec.ts` 是回归守卫单测，命中即失败。详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md) 第 5 节。
-13. **新增/修改文件必须过 `npm run lint` 与 `npm run format:check`**：两者均通过才能提交。禁止使用文件级 `/* eslint-disable */` 批量绕过——遇到误报先在 `eslint.config.mjs` 配置层解决，再考虑行级 `// eslint-disable-next-line` 且必须给原因。`src/auto-imports.d.ts` 与 `src/components.d.ts` 已 ignore，不得手动 lint。详见 [`docs/02-architecture/code-quality.md`](./docs/02-architecture/code-quality.md)。
+8. **router `meta.menuCode` 必填**：单一权限源 = 后端菜单树，不填会被守卫误放行。
+9. **dummy-auth 只能 dev 模式用**：`npm run dev:dummy`（=`vite --mode dummy`，自动加载 `.env.dummy` → 注入 `VITE_DUMMY_AUTH=true`）仅本地调试用。**不要**写 `npm run dev -- --dummy-auth`（cac 拒绝未知 flag，会崩）。三层 prod 保护已就位：`vite build` + `VITE_DUMMY_AUTH=true` → 硬 throw / `import.meta.env.DEV` guard + `VITE_DUMMY_AUTH === 'true'` 双判定 / 不写 localStorage。任何 prod bundle 不应含 dummy-auth 注入路径（grep `initDummyAuth` 仅命中 dev 调用点 + `useAuthSession` 函数定义）。判定逻辑统一收敛在 `useAuthSession.isDummyAuthRequested()`（2026-08-28 重写，详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md) 第 6 节）。
+10. **容器可能为 null 的拖拽点必须用 `useLazyDraggable`**：`vue-draggable-plus` 的 `useDraggable` 默认 `immediate: true`，会在 `onMounted` 里对 null 元素 `new Sortable(null)` 抛错。容器在 `v-if` 内 / `el-dialog destroy-on-close` 后重建 / el-table `tbody` 需查询才拿得到 → 用 `@/composables/useLazyDraggable`；容器挂载时已无条件存在才可直接 `useDraggable`。给 ref 赋值即触发重绑，**不要**再手动调 `start()`。
+11. **el-table 列插槽里依赖 `row.xxx` 的动态绑定要加空值守卫**：EP 会用合成空行 `{ row: {} }` 额外渲染每列 `#default` 一次并真的挂载（`.hidden-columns`），`:to` 动态的 `router-link` 会因此拼出 `/parts/undefined`。详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md)。
+12. **el-table 列拖动统一 `drag.applyDrag(tableRef)`，不要自己解析表头 DOM**：`useColumnDrag` 内部已经接 EP 表头重建自愈（`MutationObserver` 挂在 `.el-table` 根上、只听 `childList+subtree`），任何把 `findElTableHeaderRow(tableRef.$el)` 留在 consumer 里、null 守卫跳过、派生 `headerRowRef` 再 watch 的旧写法都会丢自愈——必须直接把 el-table 组件 ref 传进去。列 `v-for` 必须 `:label-class-name="drag.dragLabelClass(d)"`（不打 `col-draggable` / `col-key-<key>` 就进不了 sortablejs 索引序列）。详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md) 第 4 节。
+13. **`h()` 给原生元素传 children 不能用函数**：`h('span', props, () => X)` / `h('router-link', props, X)` 都是坏的——前者 Vue 3 的 `normalizeChildren` 会把函数当 slots（`SLOTS_CHILDREN`），而 `mountElement` 只处理 `TEXT_CHILDREN`/`ARRAY_CHILDREN`，元素渲染为空；后者 `h()` 传字符串 type 不做组件解析，会渲染成字面自定义元素。组件用法 `h(ElTag, props, () => X)` 是正确的（slots 走组件分发）。`src/composables/__tests__/nativeVnodeChildren.spec.ts` 是回归守卫单测，命中即失败。详见 [`docs/08-known-risks/framework-pitfalls.md`](./docs/08-known-risks/framework-pitfalls.md) 第 5 节。
+14. **新增/修改文件必须过 `npm run lint` 与 `npm run format:check`**：两者均通过才能提交。禁止使用文件级 `/* eslint-disable */` 批量绕过——遇到误报先在 `eslint.config.mjs` 配置层解决，再考虑行级 `// eslint-disable-next-line` 且必须给原因。`src/auto-imports.d.ts` 与 `src/components.d.ts` 已 ignore，不得手动 lint。详见 [`docs/02-architecture/code-quality.md`](./docs/02-architecture/code-quality.md)。
 
 ## 文档索引
 
@@ -66,6 +66,13 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 
 - 代码注释、commit message、文档一律中文。
 - 注释里带日期戳（如 `2026-08-26 新增`）说明变更缘由是本仓库的通行做法。
+
+## 近期重大重构（2026-09 系列）
+
+- **PR-1（2026-09-15，pages 阶段）**：Phase 5 业务端点一次性切到 v2（backend-rust 实现）。`api` / `refreshClient` baseURL 统一为 `/api/v2`，原 `apiV2` / `refreshClientV2` 已合并删除；4 个打印端点保留 v1 走 `apiPrint`。详见 CLAUDE.md §硬约束 #7。
+- **PR-2（2026-09-16，t_part 瘦身）**：后端 `t_part` / `t_part_batch` / `t_assembly` 列下线（part 级 `delivery_note_id` / `shelf_code` / `worker_name` / `outsource_company_name` / `current_holder_display` / `actual_delivery_date` / `has_been_repaired` + 装配件级 `actual_delivery_date`），列表 `location` 改为后端派生（min-progress 活跃批次），新增 `holder_name` 字段；前端类型声明 + 视图展示 + 单测 stub 同步清理。
+- **PR-3（2026-09-16/17，t_part_batch 步骤化）**：后端 `t_part_batch.next_process_id` 重命名为 `current_process_step_id`（FK → `t_process_chain_step.id`，与工艺链步骤强绑定），`placed_at` 列下线；新增 20706 `BIZ_PROCESS_CHAIN_REQUIRED` 错误码 + 工艺链必填守卫；前端新增 `useProcessChainRequiredHandler` 兜底助手，6 个下发路径接入，4 条 view 路径（`PartsTable` / `RepairReceive` / `InspectionPending` / `OutsourceQuoteNew`）实测通过。
+- **PR-4（2026-09-17，守卫配套 + 文档同步）**：前后端 `PartListQuery` 加 `locations` + `holder_ids` 过滤（后端查 `t_part_batch EXISTS`，OR 关系 —— 命中 `locations` 大类 OR 任一 `holder_ids` 都算中）。前端契约对齐（`ListPartsParams` 早于 PR-4 已在 2026-08-05 声明 `locations?: string[]` / `holder_ids?: string[]`，本 PR 仅新增单测覆盖 + 全仓 docs 同步）。
 
 ## 已知风险
 

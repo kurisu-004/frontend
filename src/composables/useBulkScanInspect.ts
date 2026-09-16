@@ -4,8 +4,9 @@
 //
 // 用途：
 //   - 扫码建单页「批量一键送检」确认对话框（BatchSubmitInspectionConfirmDialog）共享本 composable。
-//   - 单次调用 apiV2.batchToInspection（POST /parts/batch-to-inspection），共享品检架 +
-//     per-item 数量；route B 把 PENDING/PROGRAMMING/IN_PROCESS → INSPECTION。
+//   - 单次调用 `api.batchToInspection`（POST /parts/batch-to-inspection，2026-09-15 Phase 5
+//     业务全切 v2 后由 `api` 直接接 baseURL `/api/v2`），共享品检架 + per-item 数量；route B
+//     把 PENDING/PROGRAMMING/IN_PROCESS → INSPECTION。
 //   - 1 次 round-trip，per-item 失败走响应 data.failed[]。
 //
 // 设计：

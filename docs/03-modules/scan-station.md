@@ -74,7 +74,7 @@ PICK_UP / RETURN / INSPECT 三大卡片 → `useScanSession.setAction()` → 跳
 | `POST /parts/{id}/pickup-scan`     | `api`（v1） | 扫码领取（单件）                                |
 | `POST /parts/{id}/pickup`          | `api`（v1） | 确认领取（点选）                                |
 | `POST /parts/{id}/return`          | `api`（v1） | 放回                                            |
-| `POST /parts/batch-scan-inspect`   | `apiV2`     | 批量送检（INSPECT 页消费 `useBulkScanInspect`） |
+| `POST /parts/batch-scan-inspect`   | `api`（v2） | 批量送检（INSPECT 页消费 `useBulkScanInspect`） |
 | `GET /shelves`                     | `api`（v1） | 当前作业货架列表                                |
 | `GET /parts/by-serial/{serial_no}` | `api`（v1） | 错页时 `findPartBySerialAndPrompt` 提示         |
 

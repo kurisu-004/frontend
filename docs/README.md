@@ -10,7 +10,7 @@
 
 ## 项目一句话
 
-myERP 工厂管理系统前端，Vite 8 + Vue 3.4 + TypeScript + Element Plus 2.7。后端双轨：v1 FastAPI（`/api/v1`）+ v2 Rust 主仓 `~/Code/hsh-erp-rust`（`/api/v2`），前端用 `api` 和 `apiV2` 双 axios 实例。
+myERP 工厂管理系统前端，Vite 8 + Vue 3.4 + TypeScript + Element Plus 2.7。后端双轨：v1 FastAPI（`/api/v1`，仅保留 4 个打印端点）+ v2 Rust 主仓 `~/Code/hsh-erp-rust`（`/api/v2`，业务全量）。前端用 `api` 单一业务 axios 实例（baseURL `/api/v2`，2026-09-15 Phase 5 起合并原 `apiV2`）+ `apiPrint`（baseURL `/api/v1`，4 个打印端点专用）。
 
 ## 文档地图
 

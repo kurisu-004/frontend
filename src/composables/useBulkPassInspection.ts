@@ -5,8 +5,9 @@
 //
 // 用途：
 //   - 扫码建单页 / 送货单详情页的「批量通过品检」确认对话框共享本 composable。
-//   - 2026-08-28 起：单次调用 apiV2.batchToShip（POST /parts/batch-to-ship），
-//     路线 B 把 INSPECTION → READY_TO_SHIP 整批过品；per-item 失败走响应 data.failed[]。
+//   - 2026-08-28 起：单次调用 `api.batchToShip`（POST /parts/batch-to-ship，2026-09-15 Phase 5
+//     业务全切 v2 后由 `api` 直接接 baseURL `/api/v2`），路线 B 把 INSPECTION → READY_TO_SHIP
+//     整批过品；per-item 失败走响应 data.failed[]。
 //     后端无批量端点的 fallback 路径已下线（v2 端点是硬依赖）。
 //
 // 设计：

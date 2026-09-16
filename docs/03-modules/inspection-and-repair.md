@@ -32,27 +32,27 @@
 
 | 端点                                | 实例        | 用途                                                                                              |
 | ----------------------------------- | ----------- | ------------------------------------------------------------------------------------------------- |
-| `POST /parts/batch-pass-inspection` | `apiV2`     | 批量通过品检（N≤200，单 round-trip，per-item 失败走 `data.failed[]`）                             |
-| `POST /parts/batch-scan-inspect`    | `apiV2`     | 批量一键送检（共享品检架 + per-item decision）                                                    |
-| `POST /parts/{id}/scan-inspect`     | `apiV2`     | 单件一键送检（2026-08-25 切 v2；InspectionPending 唯一的单件调用点已跟切）                        |
+| `POST /parts/batch-pass-inspection` | `api`（v2） | 批量通过品检（N≤200，单 round-trip，per-item 失败走 `data.failed[]`）                             |
+| `POST /parts/batch-scan-inspect`    | `api`（v2） | 批量一键送检（共享品检架 + per-item decision）                                                    |
+| `POST /parts/{id}/scan-inspect`     | `api`（v2） | 单件一键送检（2026-08-25 切 v2；InspectionPending 唯一的单件调用点已跟切）                        |
 | `GET /parts/repair-batches`         | `api`（v1） | 返修接收 · 已送货列表                                                                             |
 | `GET /parts/repairing-batches`      | `api`（v1） | 返修接收 · 返修中列表                                                                             |
 | `POST /parts/{id}/start-repair`     | `api`（v1） | 创建维修工单（INSPECTION/READY_TO_SHIP/DELIVERED → REPAIRING；支持 batch_id + quantity 部分返修） |
 | `POST /parts/{id}/complete-repair`  | `api`（v1） | 返修完成（→ ON_SHELF 或 → INSPECTION；shelf.zone 决定去向）                                       |
 
-v1/v2 混合期：inspection 域已切 v2（pass/batch-pass/scan-inspect/batch-scan-inspect 全部走 `apiV2`），repair 域仍走 v1（生命周期端点在 Rust 主仓尚未实施）。
+Phase 5 后切流说明（2026-09-15）：业务端点统一走 `api`（baseURL `/api/v2`），原 `apiV2` 已合并删除；上表 `api`（v2）列实际就是合并后的统一客户端。repair 端点表格未列出（API 标注需补 v2 实施后刷新），目前仍在 `apiPrint` 等同的 v1 体系或合并后的 `api` 上跑（详见 `docs/02-architecture/api-contract.md`）。
 
 ## 三点五、批次级 caller OCC（2026-08-29 起）
 
 5 个 inspection / 状态迁移端点入参**必带** `version`，锚 `t_part_batch.version`（不是 `t_part.version`）：
 
-| 端点                              | 必填字段                                                              |
-| --------------------------------- | --------------------------------------------------------------------- |
-| `POST /parts/{id}/to-inspection`  | `target_inspection_shelf_id` / `batch_id` / `version`                 |
-| `POST /parts/{id}/to-ship`        | `batch_id` / `version`                                                |
-| `POST /parts/{id}/to-process`     | `shelf_id` / `next_process_id` / `batch_id` / `version`               |
-| `POST /parts/batch-to-inspection` | `target_inspection_shelf_id` / `items[].batch_id` / `items[].version` |
-| `POST /parts/batch-to-ship`       | `items[].batch_id` / `items[].version`                                |
+| 端点                               | 必填字段                                                                                                                                                |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /parts/{id}/to-inspection`   | `target_inspection_shelf_id` / `batch_id` / `version`                                                                                                   |
+| `POST /parts/{id}/to-ship`         | `batch_id` / `version`                                                                                                                                  |
+| `POST /parts/{id}/fail-inspection` | `shelf_id` / `next_process_id` / `batch_id` / `version`（2026-08-29 由 `to-process` 回退；v2 业务 `api` 实例；PR-3 2026-09-16 起 20706 守卫工艺链必填） |
+| `POST /parts/batch-to-inspection`  | `target_inspection_shelf_id` / `items[].batch_id` / `items[].version`                                                                                   |
+| `POST /parts/batch-to-ship`        | `items[].batch_id` / `items[].version`                                                                                                                  |
 
 `version` 不符 → **40901 BIZ_VERSION_CONFLICT**。批量端点 per-item 落 `failed[]`，不中断整批；单件端点直接 4xx 抛错。
 
@@ -82,7 +82,7 @@ v1/v2 混合期：inspection 域已切 v2（pass/batch-pass/scan-inspect/batch-s
 
 ### `useBulkPassInspection`
 
-- 调用 `apiV2.batchPassInspection(items)` 一次，单 round-trip 处理 N≤200 件。
+- 调用 `api.batchPassInspection(items)` 一次，单 round-trip 处理 N≤200 件。
 - 返回 `{ passed, failed }`：`passed[]` 按 part_id 反向找回原始 `BulkPassItem`（保留 `label`，弹窗可定位）；`failed[]` 透传后端 code + message。
 - 端点级错误（VALIDATION_ERROR / FORBIDDEN 等）走 catch：把请求 items 全部标为失败抛回，弹窗走 part-partial / 全失败兜底分支。
 - `progress: { done, total }` 字段保留供 UI 进度条使用；单 round-trip 语义下 done 一次跳到 total，但保留字段便于未来扩展（流式返回 / 多批次拆分）。

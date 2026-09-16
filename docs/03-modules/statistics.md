@@ -105,7 +105,7 @@
 | WebSocket 增量推送协议 | `~/Code/hsh-erp-rust/docs/api/websocket.md`                                                                                                                  |
 | dashboard WS 实现细节  | `src/api/dashboard.ts`                                                                                                                                       |
 
-> statistics 在 v2 主仓尚未实施（路由 nest 但 handler 空）。前端保持 v1 调用，等 v2 上线后切 `apiV2`。
+> statistics 在 v2 主仓尚未实施（路由 nest 但 handler 空）。前端保持 v1 调用，等 v2 上线后切到统一 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 起合并原 `apiV2`）。
 
 ## 九、关键约束与陷阱
 
