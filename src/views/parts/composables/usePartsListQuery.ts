@@ -4,7 +4,7 @@
 //
 // 职责：
 // - 持有 search reactive + items/total/loading/page/pageSize/sort refs；
-// - buildParams / fetchList / onSearch / onReset / onSortChange / onPageSizeChange；
+// - buildParams / fetchList / onSearch / onReset / onSortChange；
 // - restoreState：URL ?status= 注入或 localStorage 恢复；
 // - 横切 beforeSearch / afterFetch：供其他 composable（如 usePartsColumnFilters）在
 //   fetch 前后插入逻辑（同步 draft / 调 snapshot / 恢复勾选等）。
@@ -237,7 +237,6 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions) {
   const onSearch = (): void => {
     page.value = 1;
     beforeSearch?.();
-    void fetchList();
   };
 
   // 2026-08-05：行类型切换——ALL↔PART/ASSEMBLY 视为筛选条件变化，复用 onSearch 入口
@@ -256,12 +255,6 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions) {
     if (!prop || !order) return;
     sortBy.value = PART_SORT_PROP_MAP[prop] ?? 'PLANNED_DELIVERY_DATE';
     sortDir.value = order === 'ascending' ? 'ASC' : 'DESC';
-    void fetchList();
-  }
-
-  function onPageSizeChange(size: number): void {
-    pageSize.value = size;
-    page.value = 1;
     void fetchList();
   }
 
@@ -289,7 +282,6 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions) {
     // customerId，仅清空 keyword / orderNo / 三个日期区间 / 两个 isNull。
     // 下次刷新页面恢复的就是这种"半清空"状态。
     snapshotPersist();
-    void fetchList();
   }
 
   // 2026-08-23：工具栏「重置筛选」一键清空 —— 与 onReset 的「半清空」相反：
@@ -321,7 +313,6 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions) {
     beforeSearch?.(); // 清批量选择
     clearNativeFilters?.();
     snapshotPersist();
-    void fetchList();
   }
 
   // ============ restoreState ============
@@ -399,7 +390,6 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions) {
     onReset,
     onRowTypeChange,
     onSortChange,
-    onPageSizeChange,
     restoreState,
     snapshotPersist,
     registerBeforeSearch,

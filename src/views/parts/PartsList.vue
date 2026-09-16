@@ -121,8 +121,6 @@
         :pager-count="7"
         background
         size="small"
-        @current-change="store.query.fetchList"
-        @size-change="store.query.onPageSizeChange"
       />
     </div>
 
@@ -144,7 +142,7 @@
 // 不再 import 任何业务 composable 与 ColumnDef — 全部从 store 取。
 // 移除所有手机适配代码（ResponsiveList 卡片视图、el-drawer 移动筛选抽屉等）。
 
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Close, Document, Printer, Promotion, RefreshLeft, Upload } from '@element-plus/icons-vue';
 import PartsTable from './components/PartsTable.vue';
@@ -172,6 +170,25 @@ const iframeRef = ref<HTMLIFrameElement | null>(null);
 
 // ============ 采购订单 Excel 导入对话框可见性 ============
 const orderImportVisible = ref(false);
+
+// ============ 分页变化驱动 fetch ============
+// 2026-09-16 修复：EP 2.14.2 弃用 @current-change / @size-change（推荐改用 v-model + watch）。
+// 这里 watch [page, pageSize] 任一变化 → 触发 fetchList；pageSize 变化时先把 page 复位到 1
+// （保持原 onPageSizeChange 语义），page=1 的赋值会让本 watcher 再触发一次，
+// 第二次回调命中 page-only 分支并 fetch。
+// 首屏 fetch 仍由 onMounted 负责，本 watch 用默认 immediate:false，不重复触发。
+watch(
+  () => [store.query.page, store.query.pageSize] as const,
+  ([newPage, newSize], [_oldPage, oldSize]) => {
+    if (oldSize === undefined) return;
+    if (newSize !== oldSize && newPage !== 1) {
+      // pageSize 变化但当前不在第 1 页：复位 page；page=1 会触发本 watcher 再回调一次 fetch。
+      store.query.page = 1;
+      return;
+    }
+    void store.query.fetchList();
+  },
+);
 
 // ============ 扫码：序列号直搜 ============
 // 2026-09-15：从 store 读 edit.editingId / filters.onSerialNoScan（深代理自动解包）。
