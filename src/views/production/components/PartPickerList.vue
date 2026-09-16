@@ -165,7 +165,12 @@ const assemblies = computed<PartListItem[]>(() =>
 /** 按 step_count 拆成「待制定 / 已制定」两份。
  *  2026-09-12 新增：原 3 列表格（图号 / 名称 / 状态）改为双表分组展示；
  *  状态信息已通过「待制定 / 已制定」section 标题表达。
- *  2026-09-12 第五轮：这两张表只展示 row_type='PART' 的零件（装配件在独立的「装配件」section 里）。 */
+ *  2026-09-12 第五轮：这两张表只展示 row_type='PART' 的零件（装配件在独立的「装配件」section 里）。
+ *  2026-09-16 说明：「已制定」section 是按本地步骤数（step_count > 0）派生的，
+ *  不是按后端 part.status —— 因为 2026-09-16 起 usePartProcessDesign.loadParts
+ *  固定传 status='PENDING'，已进入编程/车间的工件根本不会出现在 parts.value 里，
+ *  本地看到的「已制定」实际是「已编辑过但尚未保存」或「保存过但仍在 PENDING」状态。
+ *  视觉上「待制定 / 已制定」与「未保存 / 已保存」语义不完全等价，这是当前限制。 */
 const pendingParts = computed<PartListItem[]>(() =>
   parts.value.filter(
     (p) => p.row_type !== 'ASSEMBLY' && (allSummaries.value[p.id]?.step_count ?? 0) === 0,

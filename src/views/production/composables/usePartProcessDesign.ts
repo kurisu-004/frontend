@@ -2,9 +2,15 @@
 //
 // 阶段二（2026-09-14 起）：所有读写走 @/api/processChain（baseURL /api/v2）。
 // - loadParts / loadProcesses：拉全量；本地缓存到模块级单例。
+//   2026-09-16 修复：loadParts 固定传 status='PENDING'，已下发编程/车间的工件不再进入工序制定。
 // - flows（PartProcessFlow 字典）：懒加载 — 用户选 part 时按需 GET /process-chains/by-part/{part_id}；
 //   首次访问 20701 BIZ_PROCESS_CHAIN_NOT_FOUND → 视为空链，不报错。
-// - upsertSteps / deleteStep / reorderSteps：本地更新 + 防抖 PUT 整组 upsert。
+// - upsertSteps / deleteStep / reorderSteps：纯本地 mutation，不自动 PUT。
+// - saveFlow：手动触发的 PUT 整组 upsert（由 ProcessStepCardList 保存按钮触发）。
+//
+// 2026-09-16 改造：删除 scheduleSave 防抖链路。原先「steps 变更 → 800ms 后自动 PUT」的设计
+// 让保存按钮形同虚设（永远 disabled 因为 dirty 在 PUT 后立刻被清零），改成显式手动保存。
+// 持久化入口唯一化为 saveFlow(partId, steps)，由 UI 保存按钮调用。
 //
 // 整组 upsert 约束（2026-09-14 写入注释，CLAUDE.md 习惯）：
 //   rust PUT /process-chains/by-part/{part_id} 是整组替换语义——前端必须发完整 steps 数组
@@ -37,12 +43,6 @@ const loadingProc = ref(false);
 /** 正在 PUT 整组 upsert 的 partId（用于 UI「保存中」状态）。 */
 const saving = ref<Record<string, boolean>>({});
 const error = ref<string | null>(null);
-
-/** 防抖延迟：800ms 内多次 upsertSteps 合并为一次 PUT。 */
-const SAVE_DEBOUNCE_MS = 800;
-
-/** 单 partId 的防抖 timer。 */
-const saveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
 /** 把 service 侧 ProcessChainStepDto 转成 UI 用的 ProcessStep（注入 uid / color 等冗余）。
  *  ProcessStep.uid 仅作 UI v-for key，不参与后端。 */
@@ -126,7 +126,12 @@ export function usePartProcessDesign() {
     loadingParts.value = true;
     error.value = null;
     try {
-      const items = await listParts({ keyword: '' });
+      // 2026-09-16 修复：固定 status='PENDING'。
+      // 工序制定仅针对未下发的工件；已下发编程（PROGRAMMING）/车间（IN_PROCESS 等）
+      // 的工件不应在此页面展示，否则会让用户重复制定或误操作。
+      // 后端 PartListQuery.status 单值过滤（与 src/api/parts/crud.ts 的 statuses 多值
+      // 数组语义不同，此处走单值；statuses 留给其它列表页多选场景）。
+      const items = await listParts({ keyword: '', status: 'PENDING' });
       // rust PartListItem 字段集与前端 PartListItem 不全等（v2 无 row_type 等冗余字段）；
       // 用 unknown[] → PartListItem[] 强转，缺失字段按 undefined 处理（PartListItem 全 optional）。
       parts.value = items as PartListItem[];
@@ -165,7 +170,10 @@ export function usePartProcessDesign() {
     return flows.value[partId] ?? null;
   }
 
-  /** 用一个新 steps[] 覆盖某零件的工序列表；本地立刻更新 + 防抖 PUT。 */
+  /** 用一个新 steps[] 覆盖某零件的工序列表；本地立刻更新（不自动 PUT）。
+   *  2026-09-16 改造：去掉 scheduleSave 调用。原先每次 upsertSteps 都会触发
+   *  800ms 防抖自动保存，导致 ProcessStepCardList 的「保存」按钮永远 disabled。
+   *  现在 upsertSteps 是纯本地 mutation，持久化由 saveFlow(partId, steps) 显式触发。 */
   function upsertSteps(partId: string, steps: ProcessStep[]): PartProcessFlow {
     const reordered = steps.map((s, i) => ({ ...s, sort_order: i }));
     const current = flows.value[partId];
@@ -176,7 +184,6 @@ export function usePartProcessDesign() {
       updated_at: new Date().toISOString(),
     };
     flows.value = { ...flows.value, [partId]: updated };
-    scheduleSave(partId, reordered);
     return updated;
   }
 
@@ -193,16 +200,11 @@ export function usePartProcessDesign() {
     return upsertSteps(partId, newSteps);
   }
 
-  /** 防抖 PUT：把本地 steps 序列化成 UpsertProcessChainRequest 发到后端。 */
-  function scheduleSave(partId: string, steps: ProcessStep[]): void {
-    if (saveTimers[partId]) clearTimeout(saveTimers[partId]);
-    saveTimers[partId] = setTimeout(() => {
-      void doSave(partId, steps);
-    }, SAVE_DEBOUNCE_MS);
-  }
-
-  /** 真正执行 PUT 整组 upsert。失败回滚到操作前快照。 */
-  async function doSave(partId: string, steps: ProcessStep[]): Promise<void> {
+  /** 显式持久化：把本地 steps 序列化成 UpsertProcessChainRequest 发到后端。
+   *  2026-09-16 改造：由 ProcessStepCardList 的「保存」按钮直接触发（替代原先的
+   *  scheduleSave 防抖自动保存）；失败回滚到操作前快照。
+   *  调用前必须确保 flows.value[partId] 已包含目标 steps（即先 upsertSteps 本地更新）。 */
+  async function saveFlow(partId: string, steps: ProcessStep[]): Promise<void> {
     const snapshot = flows.value[partId];
     saving.value = { ...saving.value, [partId]: true };
     try {
@@ -307,6 +309,7 @@ export function usePartProcessDesign() {
     upsertSteps,
     deleteStep,
     reorderSteps,
+    saveFlow,
     clearFlow,
     newStep,
     summaries,

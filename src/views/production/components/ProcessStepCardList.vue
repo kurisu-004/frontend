@@ -2,6 +2,9 @@
   ProcessStepCardList.vue
   工序制定页右栏：拖拽工序卡片列表。
   2026-09-11 新增。
+  2026-09-16 改造：删除「dirty=true → 800ms 自动保存」防抖链路，改为显式保存按钮触发。
+  原 watch(steps) 内的 setTimeout(doAutoSave) 让保存按钮永远 disabled（dirty 在 PUT 成功后
+  立刻被清零）；现在 watch 只同步 dirty，持久化入口唯一化为 onSave → saveFlow(partId, steps)。
   2026-09-12 改造（第三轮 UI 精修）：
     - 删除 header 中的「外协警示」<el-alert>（S3）
     - 删除 header 中的「+ 添加工序」按钮（S3）；改在卡片列表末尾放虚线方框占位（点击 → onAdd）
@@ -163,6 +166,7 @@ const {
   getFlowByPartId,
   loadFlowForPart,
   upsertSteps,
+  saveFlow,
   newStep,
   summaries,
 } = usePartProcessDesign();
@@ -237,29 +241,17 @@ watch(
   },
 );
 
-/** 步骤本地修改：标 dirty，触发自动保存（800ms 防抖）。 */
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
+/** 步骤本地修改：仅标 dirty（不同步触发 PUT）。2026-09-16 改造：
+ *  删掉原先的「dirty=true → 800ms 后自动 doAutoSave」防抖链路。
+ *  持久化入口唯一化为 onSave 按钮（→ saveFlow），避免保存按钮形同虚设。 */
 watch(
   steps,
   () => {
     if (!props.partId) return;
     dirty.value = JSON.stringify(steps.value) !== savedSnapshot.value;
-    if (saveTimer) clearTimeout(saveTimer);
-    if (dirty.value) {
-      saveTimer = setTimeout(() => {
-        void doAutoSave();
-      }, 800);
-    }
   },
   { deep: true },
 );
-
-async function doAutoSave(): Promise<void> {
-  if (!props.partId) return;
-  upsertSteps(props.partId, steps.value);
-  savedSnapshot.value = JSON.stringify(steps.value);
-  dirty.value = false;
-}
 
 function onAdd(): void {
   if (!props.partId) {
@@ -300,7 +292,15 @@ async function onSave(): Promise<void> {
   if (!props.partId) return;
   saving.value = true;
   try {
-    await doAutoSave();
+    // 2026-09-16 改造：直接走显式 saveFlow（替代原 doAutoSave → upsertSteps →
+    // 防抖 scheduleSave → 800ms 后 PUT 的隐式链路）。
+    // 步骤 1：本地 mutation（更新 flows.value[partId].steps + sort_order）
+    upsertSteps(props.partId, steps.value);
+    // 步骤 2：PUT 整组 upsert 到后端
+    await saveFlow(props.partId, steps.value);
+    // 步骤 3：成功后刷新 savedSnapshot 并清 dirty
+    savedSnapshot.value = JSON.stringify(steps.value);
+    dirty.value = false;
     ElMessage.success('已保存');
   } catch (e) {
     ElMessage.error((e as Error).message ?? '保存失败');

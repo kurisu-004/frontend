@@ -1,23 +1,28 @@
 // 2026-09-14 改造：usePartProcessDesign 测试 fixture → mock API。
 //
 // 原 fixture 驱动测试（5 零件 / 6 工序 / 2 预填流程）改为 vi.mock('@/api/processChain') 注入
-// 稳定 stub 数据，断言 composable 的本地 state / 防抖 upsert / 懒加载行为。
+// 稳定 stub 数据，断言 composable 的本地 state / saveFlow / 懒加载行为。
 //
 // 覆盖：
 //   1. loadParts / loadProcesses：模块级单例 state 填充
-//   2. upsertSteps：本地立刻更新 + 触发防抖 PUT（用 vi.advanceTimers 跑 fake timer）
+//   2. upsertSteps：本地立刻更新（不自动 PUT，需手动 saveFlow）
 //   3. loadFlowForPart：懒加载并缓存到 flows；二次访问走缓存
 //   4. reorderSteps → sort_order 重写为新 index
 //   5. deleteStep 按 uid 删除
 //   6. summaries 聚合正确（含 OUTSOURCE 时 has_outsource_approval === true）
 //   7. newStep 返回默认空白工序
 //   8. clearFlow 把 steps 置空
+//   9. saveFlow 走 PUT 整组 + 成功后用 dto.version 覆盖本地
 //
 // 2026-09-14 follow-up：
 // - 20701 路径改用 ApiError 实例（替代原 `(e as { code?: number }).code` 字面量挂码），
 //   对应 usePartProcessDesign.ts 里 `e instanceof ApiError && e.code === 20701` 的新分支。
-// - 新增 doSave 失败 it 用例：mock upsertProcessChainByPart 抛 ApiError(500)，
+// - 新增 saveFlow 失败 it 用例：mock upsertProcessChainByPart 抛 ApiError(500)，
 //   断言 catch 块 ElMessage.error 被调（mock element-plus stub）。
+//
+// 2026-09-16 改造：删除防抖自动保存（scheduleSave）的相关 it 用例；
+// upsertSteps 不再触发 PUT，持久化由 saveFlow 显式调用。
+// 同时更新 loadParts → listParts 调用，确保 status='PENDING' 透传。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ApiError } from '@/api/http';
@@ -250,7 +255,11 @@ describe('usePartProcessDesign', () => {
     expect(getProcessChainByPart).toHaveBeenCalledTimes(1);
   });
 
-  it('upsertSteps：本地立刻更新 + 防抖 PUT 整组', async () => {
+  it('upsertSteps：本地立刻更新（不自动 PUT，需手动 saveFlow）', async () => {
+    // 2026-09-16 改造：upsertSteps 不再触发防抖 PUT，断言改为：
+    //   - 本地立刻更新（同步）
+    //   - 不调 upsertProcessChainByPart（即使用 vi.advanceTimersByTime 也无 PUT）
+    //   - saveFlow 显式调用后才 PUT 整组
     const { usePartProcessDesign } = await import('../composables/usePartProcessDesign');
     const { upsertProcessChainByPart } = await import('@/api/processChain');
     const q = usePartProcessDesign();
@@ -271,11 +280,14 @@ describe('usePartProcessDesign', () => {
     // 本地立刻更新（同步）
     expect(q.getFlowByPartId('5000000000005')!.steps).toHaveLength(2);
 
-    // 防抖：800ms 后才 PUT
+    // 2026-09-16：upsertSteps 不自动 PUT；跑 fake timer 也无 PUT
     expect(upsertProcessChainByPart).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(900);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(upsertProcessChainByPart).not.toHaveBeenCalled();
+
+    // 显式调用 saveFlow 才 PUT
+    await q.saveFlow('5000000000005', newSteps);
     expect(upsertProcessChainByPart).toHaveBeenCalledTimes(1);
-    // 整组 upsert：steps 数组必须含全部 2 步
     const lastCall = (upsertProcessChainByPart as ReturnType<typeof vi.fn>).mock.calls.at(-1);
     expect(lastCall![1].steps).toHaveLength(2);
   });
@@ -380,7 +392,9 @@ describe('usePartProcessDesign', () => {
     expect(q.error.value).toBeNull(); // 不应被设为 error
   });
 
-  it('doSave 失败时 ElMessage.error 被调 + error.value 同步（2026-09-14 follow-up）', async () => {
+  it('saveFlow 失败时 ElMessage.error 被调 + error.value 同步（2026-09-14 follow-up + 2026-09-16 改造）', async () => {
+    // 2026-09-16 改造：原 it 走「upsertSteps → 防抖 → doSave → catch」路径；
+    // 现在 scheduleSave 已删除，改为「saveFlow 显式调用 → catch」路径。
     const { usePartProcessDesign } = await import('../composables/usePartProcessDesign');
     const { upsertProcessChainByPart } = await import('@/api/processChain');
     const { ElMessage } = await import('element-plus');
@@ -391,9 +405,11 @@ describe('usePartProcessDesign', () => {
     await q.loadProcesses();
     await q.loadFlowForPart('5000000000005');
 
-    // 触发一次 upsert → 防抖 → 跑 fake timer → 调 doSave → catch
-    q.upsertSteps('5000000000005', [q.newStep()]);
-    await vi.advanceTimersByTimeAsync(900);
+    // 2026-09-16：upsertSteps 是纯本地 mutation，不触发 PUT；
+    // 这里直接 await saveFlow 触发 PUT → catch 分支。
+    const targetSteps = [q.newStep()];
+    q.upsertSteps('5000000000005', targetSteps);
+    await q.saveFlow('5000000000005', targetSteps);
 
     expect(upsertProcessChainByPart).toHaveBeenCalledTimes(1);
     // 2026-09-14 follow-up：catch 块必须同时设置 error.value 和弹 ElMessage.error

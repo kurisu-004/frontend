@@ -12,6 +12,7 @@
 // 详见 usePartProcessDesign.ts 的 GET-merge-PUT 模式。
 
 import { api, cleanParams } from '@/api/http';
+import type { OrderStatus } from '@/types/parts';
 import type { ProcessChainByPartDto, UpsertProcessChainRequest } from './processChain.contract';
 
 /** GET /api/v2/process-chains/by-part/{part_id}
@@ -58,14 +59,23 @@ export async function listProcesses(params: { is_active?: boolean } = {}): Promi
 /** GET /api/v2/parts
  *  走 api（baseURL `/api/v2`）。
  *  keyword 模糊过滤图号/名称（PartListQuery.keyword，rust 端 2026-08 已支持）。
+ *  status 单值过滤（PartListQuery.status）：rust 端 2026-08 已支持；
+ *  工序制定页固定传 `PENDING` —— 已经下发编程/车间的工件不应在此页展示
+ *  （v2 PartStatus 枚举与 OrderStatus 一致：PENDING / PROGRAMMING / IN_PROCESS / ...）。
  *  limit=200：v2 不支持 include_assemblies（已删除该参数）；工序制定只需零件本体。
- *  返回 PartListOut.items（rust 端 PartListItem = TPart 28 列 + customer_name / l1_customer_name）。 */
-export async function listParts(params: { keyword?: string } = {}): Promise<unknown[]> {
+ *  返回 PartListOut.items（rust 端 PartListItem = TPart 28 列 + customer_name / l1_customer_name）。
+ *  2026-09-16 修复：新增 status 入参（与 src/api/parts/crud.ts:statuses 不复用，
+ *  那个是 OrderStatus[] 重复 key，给其它列表页用；这里走单值 status，与后端 PartListQuery.status 对齐）。 */
+export async function listParts(
+  params: { keyword?: string; status?: OrderStatus } = {},
+): Promise<unknown[]> {
   const resp = await api.get<{
     items: unknown[];
     total: string;
     limit: string;
     offset: string;
-  }>('/parts', { params: cleanParams({ keyword: params.keyword, limit: 200 }) });
+  }>('/parts', {
+    params: cleanParams({ keyword: params.keyword, status: params.status, limit: 200 }),
+  });
   return resp.data.items;
 }
