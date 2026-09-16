@@ -322,22 +322,25 @@ dev-only 开关**必须**走 Vite 官方 env 机制：
 api.get('/parts', { params: { statuses: ['A', 'B'] } });
 // → GET /api/v1/parts?statuses=A,B   ← FastAPI 解析成 ["A,B"] → 422
 
-// 修复后（Phase 5 后：v2 业务由 `api` 直接走，无 `apiV2`）
+// 修复后（Phase 5 hotfix 后：v2 业务由 `api` 走 serializeParamsV2）
 api.get('/parts', { params: { statuses: ['A', 'B'] } });
-// → GET /api/v2/parts?statuses=A&statuses=B   ← v2 Rust 走 Option<String>，重复 key 与 CSV 兼容
+// → GET /api/v2/parts?statuses=A,B   ← v2 Rust 走 CSV 单值（白名单 statuses）
+api.get('/parts', { params: { ids: ['1', '2'] } });
+// → GET /api/v2/parts?ids=1&ids=2   ← 其它数组走重复 key
 ```
 
-### 2026-09-15 Phase 5 合并结果
+### 2026-09-15 Phase 5 误合并 → hotfix 还原
 
-业务端点全部切到 v2 后，`apiV2` / `refreshClientV2` 已删除；`statuses` 由后端 schema 改为 `Option<String>` 单值 string，重复 key 与 CSV 语义兼容——`serializeParamsV1`（数组重复 key）一套就够。`serializeParamsV2` 与 `ARRAY_AS_CSV_KEYS` 白名单一并删除（无消费者）。
+- Phase 5：业务端点全部切到 v2 后，`apiV2` / `refreshClientV2` 合并进 `api` / `refreshClient`；误以为 v2 schema 已统一 `Option<String>` 删 `serializeParamsV2`，但 axum `Query<Vec<T>>` 实际仍按 `,` 分隔 → 重复 key `?statuses=A&statuses=B` 触发 regression（v2 端点 GET 返 400）。
+- hotfix：恢复 CSV 白名单拆分——`api` / `refreshClient` 绑 `serializeParamsV2`，`apiPrint` 维持 `serializeParamsV1`，`serializeParamsV2` 与 `ARRAY_AS_CSV_KEYS` 白名单保留。
 
 ### 规则（修订版）
 
 v1 / v2 业务端点分流后：
 
 - v1 4 个打印端点走 `apiPrint`（baseURL `/api/v1`），FastAPI 期望重复 key。
-- v2 业务端点走 `api`（baseURL `/api/v2`），Rust axum 期望 `Option<String>`（重复 key 与 CSV 兼容）。
-- 共用 `serializeParamsV1`（所有数组重复 key）即可。新增业务端点不需要按版本选 serializer。
+- v2 业务端点走 `api`（baseURL `/api/v2`），Rust axum 期望 `Vec<T>` 按 CSV 分隔（白名单 key）+ 重复 key（其它）。
+- 两份 serializer 必须保留——**不能合并**。新增业务端点不需要按版本选 serializer，但 backend 端 `Query<T>` 的类型决定走 V1 / V2。
 
 改共享 serializer（或任何耦合后端契约的共享工具）前先 grep 所有消费该 key 的调用点：
 
@@ -347,20 +350,23 @@ grep -rn '<param_key>' src/api
 
 逐个确认每个调用点走哪个客户端（`api` / `apiPrint`），再决定是否调整 serializer。
 
-### 回归守卫（保留）
+### 回归守卫（保留 + 扩充）
 
 `src/api/http.spec.ts`：
 
-- `serializeParamsV1({ statuses: ['A', 'B'] })` 必须输出 `statuses=A&statuses=B`（v1 FastAPI `List[Enum]` + v2 Rust `Option<String>` 都兼容）；
-- `serializeParamsV1({ ids: [1, 2] })` 必须输出 `ids=1&ids=2`（非白名单 key 重复 key）。
+- `serializeParamsV1({ statuses: ['A', 'B'] })` 必须输出 `statuses=A&statuses=B`（v1 FastAPI `List[Enum]` 兼容）；
+- `serializeParamsV2({ statuses: ['A', 'B'] })` 必须输出 `statuses=A,B`（v2 Rust `Vec<T>` CSV 兼容）；
+- `serializeParamsV1({ ids: [1, 2] })` 必须输出 `ids=1&ids=2`（非白名单 key 重复 key）；
+- `serializeParamsV2({ ids: [1, 2] })` 也输出 `ids=1&ids=2`（非白名单 key 重复 key，CSV 白名单仅作用于 statuses 等）。
 
-### 历史记录（2026-08-29 拆分 → 2026-09-15 Phase 5 合并）
+### 历史记录（2026-08-29 拆分 → 2026-09-15 Phase 5 误合并 → hotfix 还原）
 
 - 2026-08-29：`src/api/http.ts` 拆为 `serializeParamsV1` / `serializeParamsV2`，4 个客户端按 baseURL 版本各自绑定。
 - 2026-08-29 受害者清单（修复前漏返 422）：
   - `src/api/parts/crud.ts` `listParts`（v1 FastAPI，发 `statuses` 数组筛选）；
   - `src/api/outsource.ts` `listOutsourceQuotes`（v1 FastAPI，发 `statuses` 数组筛选）。
-- 2026-09-15 Phase 5：`serializeParamsV2` 与 `ARRAY_AS_CSV_KEYS` 白名单删除（v2 schema 改单值 string）；`apiV2` / `refreshClientV2` 合并到 `api` / `refreshClient`。
+- 2026-09-15 Phase 5：`apiV2` / `refreshClientV2` 合并到 `api` / `refreshClient`；误删 `serializeParamsV2` 引入 regression（axum `Query<Vec<T>>` 解析重复 key 失败）。
+- 2026-09-15 hotfix：恢复 `serializeParamsV2` 与 `ARRAY_AS_CSV_KEYS` 白名单。
 
 ### 同期相关改动
 

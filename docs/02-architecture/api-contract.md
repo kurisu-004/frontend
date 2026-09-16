@@ -110,25 +110,28 @@ sequenceDiagram
 
 ## query 序列化
 
-`http.ts` 单一 serializer（2026-09-15 Phase 5 合并）：
+`http.ts` 保留两份 serializer（2026-09-15 Phase 5 合并 v2 → 2026-09-15 hotfix 还原）：
 
-| 函数                | 行为                                                   | 适用客户端                                                                                                       |
-| ------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `serializeParamsV1` | **所有数组都重复 key**：`?key=a&key=b`（无 `[]` 后缀） | `api` / `refreshClient` / `apiPrint`（v1 / v2 共用；v2 业务 `statuses` 改单值 string，重复 key 与 CSV 语义兼容） |
+| 函数                | 行为                                                            | 适用客户端                                                                       |
+| ------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `serializeParamsV1` | **所有数组都重复 key**：`?key=a&key=b`（无 `[]` 后缀）          | `apiPrint`（baseURL `/api/v1`，FastAPI 期望重复 key）                            |
+| `serializeParamsV2` | 白名单 key（`statuses` 等）→ CSV 单值 `?statuses=A,B`；其它重复 | `api` / `refreshClient`（baseURL `/api/v2`，Rust axum `Vec<T>` 默认按 `,` 分隔） |
 
-`serializeParams` 保留为 `serializeParamsV1` 的向后兼容别名（历史代码可能仍在引用；新代码应直接选 `V1`）。
+`serializeParams` 保留为 `serializeParamsV1` 的向后兼容别名（历史代码可能仍在引用；新代码应直接选 `V1` / `V2`）。
 
 ```ts
 // v1 FastAPI 期望：所有数组重复 key
 apiPrint.post('/delivery-notes/{id}/print', { custom_order: [...] });
-// → POST /api/v1/delivery-notes/{id}/print
+// → POST /api/v1/delivery-notes/{id}/print?custom_order=a&custom_order=b
 
-// v2 业务期望：所有数组重复 key（statuses 单值 string 与重复 key 语义兼容）
+// v2 业务期望：白名单 statuses 走 CSV 单值；其它数组走重复 key
 api.get('/delivery-notes', { params: { statuses: ['DRAFT', 'SHIPPED'] } });
-// → GET /api/v2/delivery-notes?statuses=DRAFT&statuses=SHIPPED
+// → GET /api/v2/delivery-notes?statuses=DRAFT,SHIPPED
+api.get('/delivery-notes', { params: { ids: ['1', '2'] } });
+// → GET /api/v2/delivery-notes?ids=1&ids=2（非白名单 key 走重复 key）
 ```
 
-### 历史拆分记录（2026-08-29 → 2026-09-15 合并）
+### 历史拆分记录（2026-08-29 → 2026-09-15 Phase 5 → 2026-09-15 hotfix）
 
 拆分前曾有 v1/v2 两份 serializer：
 
@@ -137,7 +140,9 @@ api.get('/delivery-notes', { params: { statuses: ['DRAFT', 'SHIPPED'] } });
 
 拆分原因：v1 业务与 v2 业务并存期间，CSV 单值行为泄漏到 v1 客户端 → `parts` 列表 / 外协报价列表点状态列筛选时，前端发 `?statuses=A,B`，Python FastAPI 期望重复 key 形式 `?statuses=A&statuses=B`，收到 CSV 后解析成单元素列表 `["A,B"]` → `OrderStatus("A,B")` 枚举校验失败 **422**。
 
-2026-09-15 Phase 5 合并：v2 业务 `statuses` 字段由后端 schema 改为单值 string（`PartListQuery.statuses: Option<String>`），重复 key 与 CSV 语义兼容——前端共用 `serializeParamsV1`（数组重复 key形式）即可。CSV 白名单已无消费者，`serializeParamsV2` 删除。回归守卫已在 `src/api/http.spec.ts` 落地——`serializeParamsV1({ statuses: [...] })` 断言重复 key 形式（不含 `%2C` 编码逗号），覆盖「statuses 走重复 key 触发 422」回归点。
+2026-09-15 Phase 5 误合并：`apiV2` / `refreshClientV2` 合并进 `api` / `refreshClient` 时，`serializeParamsV2` 一并删除，统一用 `serializeParamsV1`（数组重复 key）。**误判**：v2 axum `Query<Vec<T>>` 默认按 `,` 分隔，重复 key `?statuses=A&statuses=B` 实际会失败（axum 反序列化器对重复 key 的处理依赖实现，常见情形是取最后 / 报错），引入 regression。
+
+2026-09-15 hotfix 还原：恢复 2026-08-29 的 CSV 白名单拆分——`api` / `refreshClient` 绑 `serializeParamsV2`（白名单 `statuses` 等数组 → CSV 单值），`apiPrint` 维持 `serializeParamsV1`（FastAPI 期望重复 key）。`serializeParamsV2` 保留。回归守卫在 `src/api/http.spec.ts` 落地——`serializeParamsV1` / `serializeParamsV2` 各覆盖一组用例。
 
 ## `cleanParams()`
 

@@ -9,8 +9,9 @@
   - status === 'INSPECTION' → 用户勾选「同时过检此件」后第二批调 useBulkPassInspection
     走 batchToShip（INSPECTION → READY_TO_SHIP）
 
-  用户选一个品检架（共享）+ 调整每件数量 → 一键调 apiV2 批量端点。品检员/
-  管理员确认后把生产中的工件搬上品检架，submit-success 时父组件用 originalCode 重扫。
+  用户选一个品检架（共享）+ 调整每件数量 → 一键调 `api`（2026-09-15 Phase 5 业务全切 v2 后
+  baseURL `/api/v2`）批量端点。品检员/管理员确认后把生产中的工件搬上品检架，submit-success
+  时父组件用 originalCode 重扫。
 
   设计要点：
   - 弹窗结构 + submit-success / submit-partial 两态分流（route B 全失败仅 ElMessage.error，不再 emit）。
