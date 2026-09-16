@@ -27,21 +27,18 @@ export async function listApplicants(
  * 申请人前序查询：零件对话框自动补全用。
  * `customer_id` 必须是一级客户的 id（后端会校验 parent_id IS NULL）。
  *
- * 2026-09-16 修复：原先调 `/applicants/search`，但 rust v2 后端
- * applicant 域（`backend-rust/src/modules/applicant/handler.rs`）路由表只含
- * `//` / `/{id}` / `/{id}/update` / `/{id}/soft-delete`，无 `/search`。
- * 前端调 `/applicants/search` 时被 `/{id}` 路由捕获，`Path<i64>` 解析
- * "search" 失败 → 400 VALIDATION_ERROR。
+ * 2026-09-16 重构：原 `searchApplicants` 调 `/applicants/search`，但 rust v2
+ * 后端 applicant 域（`backend-rust/src/modules/applicant/handler.rs`）
+ * 路由表只挂 `/` / `/{id}` / `/{id}/update` / `/{id}/soft-delete`，
+ * 无 `/search`；请求被 `/{id}` 捕获后 `Path<i64>` 解析 "search" 失败 → 400。
  *
- * 改调 list 端点 `/applicants` 复用已有 `customer_id` / `name_like` / `limit`
- * 过滤能力，`ApplicantListResult.items` 直接抽出来作为返回值，外部行为不变。
- * `ApplicantSearchParams.name_prefix?` 字段保留（调用方未传），对未来扩展开放。
+ * 现改调 list 端点 `/applicants`，内部委托给 `listApplicants`，从
+ * `ApplicantListResult.items` 抽出数组返回。`ApplicantSearchParams.name_like?`
+ * 字段对齐后端契约（原误写为 `name_prefix`，调用方未传，影响为零）。
  */
 export async function searchApplicants(params: ApplicantSearchParams): Promise<Applicant[]> {
-  const resp = await api.get<ApplicantListResult>('/applicants', {
-    params: cleanParams(params),
-  });
-  return resp.data.items;
+  const result = await listApplicants(params);
+  return result.items;
 }
 
 export interface BulkApplicantItemPayload {

@@ -23,7 +23,8 @@ export interface ApplicantUpdatePayload {
 
 export interface ApplicantSearchParams {
   customer_id: string;
-  name_prefix?: string;
+  /** 后端 list 契约对齐 `name_like`（dto.rs:43），调用方目前未传 */
+  name_like?: string;
   limit?: number;
 }
 
