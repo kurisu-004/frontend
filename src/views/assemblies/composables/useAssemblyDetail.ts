@@ -354,7 +354,8 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
    * 调用方负责 URL.revokeObjectURL 释放（onDrawingPreviewClosed）。
    */
   async function fetchDrawingBlob(drawing: PartFileItem): Promise<string> {
-    const resp = await api.get<Blob>(`/files/${drawing.id}/content`, {
+    // 2026-09-16：v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
+    const resp = await api.get<Blob>(`/part-files/${drawing.id}/content`, {
       responseType: 'blob',
     });
     return URL.createObjectURL(resp.data);

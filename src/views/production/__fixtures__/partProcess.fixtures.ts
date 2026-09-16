@@ -16,7 +16,8 @@ export interface MockPartFile {
   file_type: string;
   original_filename: string;
   file_size: number;
-  /** 内嵌预览用的占位 blob url；后端真接入后改 `api.get(/files/{id}/content, blob)` */
+  /** 内嵌预览用的占位 blob url；后端真接入后改 `api.get(/part-files/{id}/content, blob)`
+      （2026-09-16 更新：v2 无 /files/* 路由） */
   preview_url: string;
 }
 

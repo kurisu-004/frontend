@@ -66,8 +66,10 @@ export function usePartCncGroups(partId: Ref<string>) {
   async function fetchCncPrograms(): Promise<void> {
     cncLoading.value = true;
     try {
-      cncPrograms.value = await listPartCncPrograms(partId.value, 'G_CODE');
-      setupSheets.value = await listPartSetupSheets(partId.value);
+      // 2026-09-16 Phase 5 切 v2 后契约错位修复：v2 列表返回分页包装 { items, total }，
+      // 旧代码直接迭代包装对象导致 PartDetail 页 TypeError: r is not iterable 刷屏
+      cncPrograms.value = (await listPartCncPrograms(partId.value, 'G_CODE')).items;
+      setupSheets.value = (await listPartSetupSheets(partId.value)).items;
     } catch (e) {
       cncPrograms.value = [];
       setupSheets.value = [];
@@ -77,7 +79,9 @@ export function usePartCncGroups(partId: Ref<string>) {
     }
   }
 
-  function formatBytes(n: number): string {
+  // 2026-09-16：v2 file_size 为 string（i64 雪花序列化器），入参兼容 string | number
+  function formatBytes(v: string | number): string {
+    const n = Number(v);
     if (n < 1024) return `${n} B`;
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
     return `${(n / 1024 / 1024).toFixed(2)} MB`;
@@ -92,9 +96,10 @@ export function usePartCncGroups(partId: Ref<string>) {
     }
   }
 
-  async function onDeleteCnc(id: string): Promise<void> {
+  // 2026-09-16：v2 软删强制 OCC body { version }，version 由模板行内数据穿透传入
+  async function onDeleteCnc(id: string, version: number): Promise<void> {
     try {
-      await deleteCncProgram(id);
+      await deleteCncProgram(id, version);
       ElMessage.success('已删除');
       void fetchCncPrograms();
     } catch (e) {

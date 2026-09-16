@@ -394,7 +394,8 @@ async function onPreview(p: PartItem): Promise<void> {
   const myToken = ++previewToken;
   try {
     // 1. 取该零件的 DRAWING 文件列表
-    const files = await listPartFiles(String(p.id), 'DRAWING');
+    // 2026-09-16 Phase 5 切 v2 后：listPartFiles 返回分页包装 { items, total }，取 .items
+    const files = (await listPartFiles(String(p.id), 'DRAWING')).items;
     if (myToken !== previewToken) return;
     if (!files.length) {
       ElMessage.warning('暂无图纸');
@@ -405,7 +406,8 @@ async function onPreview(p: PartItem): Promise<void> {
     previewFile.value = f;
     // 2. PDF / 图片需要 blob URL；HEIC / STEP / DWG 等直接走下载按钮
     if (isPdf(f.file_type) || isImage(f.file_type)) {
-      const resp = await api.get(`/files/${f.id}/content`, { responseType: 'blob' });
+      // 2026-09-16：v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
+      const resp = await api.get(`/part-files/${f.id}/content`, { responseType: 'blob' });
       if (myToken !== previewToken) return;
       if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
       previewBlobUrl.value = URL.createObjectURL(resp.data);

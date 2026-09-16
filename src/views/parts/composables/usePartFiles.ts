@@ -18,7 +18,8 @@ export function usePartFiles(partId: Ref<string>) {
 
   async function fetchDrawings(): Promise<void> {
     try {
-      drawings.value = await listPartFiles(partId.value, 'DRAWING');
+      // 2026-09-16：v2 列表返回分页包装 { items, total }，用 .items 取数组
+      drawings.value = (await listPartFiles(partId.value, 'DRAWING')).items;
     } catch (e) {
       drawings.value = [];
       ElMessage.error((e as Error).message ?? '加载图纸列表失败');
@@ -27,7 +28,8 @@ export function usePartFiles(partId: Ref<string>) {
 
   async function fetch3DModels(): Promise<void> {
     try {
-      models3d.value = await listPartFiles(partId.value, '3D_MODEL');
+      // 2026-09-16：同上，取 .items
+      models3d.value = (await listPartFiles(partId.value, '3D_MODEL')).items;
     } catch (e) {
       models3d.value = [];
       ElMessage.error((e as Error).message ?? '加载 3D 模型列表失败');
@@ -36,7 +38,8 @@ export function usePartFiles(partId: Ref<string>) {
 
   async function fetchCadFiles(): Promise<void> {
     try {
-      cadFiles.value = await listPartFiles(partId.value, 'CAD_2D');
+      // 2026-09-16：同上，取 .items
+      cadFiles.value = (await listPartFiles(partId.value, 'CAD_2D')).items;
     } catch (e) {
       cadFiles.value = [];
       ElMessage.error((e as Error).message ?? '加载 CAD 源文件失败');

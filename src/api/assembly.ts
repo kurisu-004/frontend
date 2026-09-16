@@ -11,7 +11,7 @@ import type {
   AssemblyItem,
   AssemblyUpdatePayload,
 } from '@/types/assembly';
-import type { PartFileItem } from '@/types/part_file';
+import type { PartFileItem, PartFileListResult, PartFileUrlResult } from '@/types/part_file';
 import type { PartListItem } from '@/types/parts';
 
 export async function listAssemblies(q: AssemblyListQuery = {}): Promise<AssemblyListResult> {
@@ -93,17 +93,21 @@ export async function updateAssembly(
 // 2026-07-10 起：装配体文件由 create_assembly / upload_total_pdf 流创建，
 // 不再有独立的 POST /assemblies/{id}/files。list 仍可调用。
 
-export async function listAssemblyFiles(id: string): Promise<PartFileItem[]> {
-  const resp = await api.get<PartFileItem[]>(`/assemblies/${id}/files`);
+// 2026-09-16 Phase 5 切 v2 后：列表端点返回分页包装 { items, total }（PartFileListResult），
+// v2 默认 limit=50 会静默截断，clamp 上限 500，统一按上限取全量。
+export async function listAssemblyFiles(id: string): Promise<PartFileListResult> {
+  const resp = await api.get<PartFileListResult>(`/assemblies/${id}/files`, {
+    params: { limit: 500 },
+  });
   return resp.data;
 }
 
 export async function listPartFiles(
   partId: string,
   kind?: 'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D',
-): Promise<PartFileItem[]> {
-  const resp = await api.get<PartFileItem[]>(`/parts/${partId}/files`, {
-    params: kind ? { kind } : {},
+): Promise<PartFileListResult> {
+  const resp = await api.get<PartFileListResult>(`/parts/${partId}/files`, {
+    params: kind ? { kind, limit: 500 } : { limit: 500 },
   });
   return resp.data;
 }
@@ -139,13 +143,16 @@ export async function uploadPartCadFile(partId: string, file: File): Promise<Par
   return resp.data;
 }
 
-export async function deleteFile(fileId: string): Promise<void> {
-  await api.post(`/files/${fileId}/delete`);
+export async function deleteFile(fileId: string, version: number): Promise<void> {
+  // 2026-09-16：v2 无 /files/* 路由，软删走 /part-files/{id}/delete；
+  // v2 soft_delete_part_file 强制 Json body { version }（OCC），bodyless POST 会 415
+  await api.post(`/part-files/${fileId}/delete`, { version });
 }
 
 export async function getDownloadUrl(fileId: string): Promise<string> {
-  const resp = await api.get<{ url: string }>(`/files/${fileId}/download-url`);
-  return resp.data.url;
+  // 2026-09-16：v2 签发端点为 /part-files/{id}/url，返回字段为 download_url（非 url）
+  const resp = await api.get<PartFileUrlResult>(`/part-files/${fileId}/url`);
+  return resp.data.download_url;
 }
 
 /** 类型守卫 */
