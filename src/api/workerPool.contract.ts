@@ -29,6 +29,10 @@ export interface WorkerStateDto {
   /** work_type.max_held_batches；未设置时 0（rust 端 20904 错误） */
   max_held: number;
   /** worker 当前持有批次数（IN_PROCESS + WORKER + current_holder_id = worker_id） */
+  // 2026-09-16 PR-2：filter 改走 t_part_batch.location + status + current_holder_id
+  // （t_part 瘦身 / Rust v2 迁移 027：t_part.current_holder_id / t_part.location
+  // 已下线，t_part_batch 同名字段保留并承载真实状态；契约字段名不变，仍指
+  // t_part_batch 的 current_holder_id 列，对接 rust v2 侧 handler 已完成）。
   current_held: number;
   /** max(0, max_held - current_held) */
   capacity_remaining: number;

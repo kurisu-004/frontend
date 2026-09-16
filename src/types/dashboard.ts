@@ -12,6 +12,9 @@ export interface DashboardPartItem {
   is_urgent: boolean;
   planned_delivery_date: string | null;
   picked_up_at: string | null;
+  // 2026-09-16 PR-2 暂存：以下 4 字段（current_holder_id / current_holder_kind /
+  // shelf_code / placed_at）值来自 rust 后端 dashboard/service.rs（已核实只读
+  // t_part_batch，未依赖已删 t_part 列），类型对齐在后续 PR 同步，PR-2 不改字段。
   current_holder_id: string | null;
   current_holder_kind: 'shelf' | 'worker' | null;
   shelf_code: string | null;
