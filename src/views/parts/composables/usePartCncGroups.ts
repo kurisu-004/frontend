@@ -5,9 +5,14 @@
 //
 // composable 不持有 dialog 状态——配对上传 / 下发对话框的可见性 / 表单
 // 状态由 PartCncCard 局部维护；提交时调用本 composable 暴露的纯函数。
+//
+// 2026-09-16 PR-3：releaseFromProgramming 后端新增前置校验 —— part.process_chain_id
+// 非空，否则 20706 BIZ_PROCESS_CHAIN_REQUIRED。onReleaseToShelf 接 handleProcessChainRequired：
+// 命中 → 弹「前往制定」确认框 → 跳 /production/process-design?part_id=XXX。
 
 import { computed, ref, watch, type Ref } from 'vue';
 import { ElMessage, type UploadFile } from 'element-plus';
+import { useRouter } from 'vue-router';
 import {
   deleteCncProgram,
   getCncDownloadUrl,
@@ -18,6 +23,7 @@ import {
 import { releaseFromProgramming } from '@/api/parts';
 import type { PartFileItem } from '@/types/part_file';
 import { usePermissions } from '@/composables/usePermissions';
+import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
 
 /** CNC 配对组：1 设定单 + 0~N 个 G 代码（setup=null 表示「未配对」桶） */
 export interface CncSetupGroup {
@@ -149,6 +155,9 @@ export function usePartCncGroups(partId: Ref<string>) {
    * 下发到 CNC 货架（PROGRAMMING → IN_PROCESS）。
    * 由 PartCncCard 在 release dialog 内调用：
    *   if (await onReleaseToShelf(shelfId, processId)) releaseVisible = false
+   *
+   * 2026-09-16 PR-3：releaseFromProgramming 后端新增 20706 校验；命中时
+   * 弹「前往制定」确认框并跳工艺制定页，不走普通 ElMessage.error 兜底。
    */
   async function onReleaseToShelf(shelfId: string, processId: string): Promise<boolean> {
     try {
@@ -156,7 +165,11 @@ export function usePartCncGroups(partId: Ref<string>) {
       ElMessage.success('已下发到生产货架');
       return true;
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '下发失败');
+      const router = useRouter();
+      const handled = await handleProcessChainRequired(e, partId.value, router);
+      if (!handled) {
+        ElMessage.error((e as Error).message ?? '下发失败');
+      }
       return false;
     }
   }

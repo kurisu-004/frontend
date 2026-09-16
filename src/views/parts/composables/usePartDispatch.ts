@@ -4,9 +4,15 @@
 //
 // 2026-08-22：不用 useDialogSize（弹窗 size 在模板里写死即可，避免引入额外 composable
 // 依赖）。
+//
+// 2026-09-16 PR-3：placeOnShelf 后端新增前置校验 —— part.process_chain_id 非空，
+// 否则 20706 BIZ_PROCESS_CHAIN_REQUIRED。单件 / 批量两条 path 都 wrap
+// `handleProcessChainRequired`：命中 20706 → 弹「前往制定」确认框 → 跳
+// /production/process-design?part_id=XXX；命中后直接 return，不进 toast 兜底。
 
 import { ref, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useRouter } from 'vue-router';
 import { placeOnShelf, recallToPending, recallToProgramming, sendToProgramming } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import { listProcesses } from '@/api/process';
@@ -15,6 +21,7 @@ import type { Process } from '@/types/process';
 import type { PartListItem } from '@/types/parts';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import { useAuthSession } from '@/composables/useAuthSession';
+import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
 import type { SelectedRowType } from './usePartBatchSelection';
 
 interface TableRef {
@@ -96,7 +103,13 @@ export function usePartDispatch(deps: UsePartDispatchDeps) {
       dispatchVisible.value = false;
       void deps.fetchList();
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '下发失败');
+      // 2026-09-16 PR-3：20706 BIZ_PROCESS_CHAIN_REQUIRED 兜底 —— 弹「前往制定」框，
+      // 命中后不 toast 普通错误（避免重复提示）。
+      const router = useRouter();
+      const handled = await handleProcessChainRequired(e, dispatchPartId.value, router);
+      if (!handled) {
+        ElMessage.error((e as Error).message ?? '下发失败');
+      }
     } finally {
       dispatchSubmitting.value = false;
     }
@@ -166,9 +179,13 @@ export function usePartDispatch(deps: UsePartDispatchDeps) {
 
     const failures: { label: string; message: string }[] = [];
     let successCount = 0;
+    // 2026-09-16 PR-3：批量路径也接 20706 兜底；命中后批量循环 break，避免反复弹框。
+    const router = useRouter();
+    let processChainRequiredHit = false;
     batchDispatchSubmitting.value = true;
     try {
       for (const t of targets) {
+        if (processChainRequiredHit) break;
         try {
           if (batchDispatchAction.value === 'programming') {
             await sendToProgramming(t.id);
@@ -189,6 +206,16 @@ export function usePartDispatch(deps: UsePartDispatchDeps) {
           // 注：selectedRows.value 是 ref，这里通过 deps.selectedRows（Ref）改值
           deps.selectedRows.value = deps.selectedRows.value.filter((r) => r.id !== t.id);
         } catch (e) {
+          // 20706 兜底：弹确认框 → 跳工艺制定页；命中后批量中断（用户先去补单）
+          const handled = await handleProcessChainRequired(e, t.id, router);
+          if (handled) {
+            processChainRequiredHit = true;
+            failures.push({
+              label: t.label,
+              message: (e as Error).message ?? '请先制定工序链',
+            });
+            break;
+          }
           failures.push({
             label: t.label,
             message: (e as Error).message ?? '未知错误',
@@ -197,6 +224,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps) {
       }
       if (successCount > 0) ElMessage.success(`成功下发 ${successCount} 件`);
       if (failures.length > 0) {
+        // 20706 触发的失败已经走过弹框 + 跳转流程，toast 简化为「部分失败」
         ElMessage.error(
           `失败 ${failures.length} 件：${failures
             .map((f) => `${f.label}（${f.message}）`)
