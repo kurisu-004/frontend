@@ -351,8 +351,8 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        // 2026-09-14 重写：打印模板编辑器从「自研三栏」换成 `@amdosion/vue3-print` 包实现。
-        // view 名同步改为 PrintTemplateDesigner（保持唯一路由 name 不冲突）。
+        // 2026-09-16 改造：view 从 @amdosion/vue3-print 包版设计器改为 x-data-spreadsheet
+        // 通用表格编辑器（in-memory，不持久化）。路由 name 沿用 PrintTemplateDesigner。
         // 2026-09-14 menuCode 补齐：print_templates_designer（与后端 t_menu 一级
         // template_management → 二级 print_templates_designer 对齐；CLAUDE.md #8）。
         // allowRoles 兜底保留：dev dummy 模式 dev-admin 角色是 MANAGER，能进。
