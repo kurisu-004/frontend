@@ -280,6 +280,25 @@
             </template>
           </el-table-column>
         </template>
+        <!-- 2026-09-16 T3.4：上传状态列（PDF + 3D 模型进度 / 重试）。cells 仅在提交
+             流程启动后被填充，submit 前为空。 -->
+        <el-table-column label="上传" min-width="140" align="center">
+          <template #default="{ row }">
+            <div class="upload-cell">
+              <UploadStatusCellView
+                :cell="getRowPdfCell(row as StandalonePartRow)"
+                label="PDF"
+                @retry="onRetryStandalonePdf(row as StandalonePartRow)"
+              />
+              <UploadStatusCellView
+                v-if="(row as StandalonePartRow).three_d_index !== null"
+                :cell="getRowThreeDCell(row as StandalonePartRow)"
+                label="3D"
+                @retry="onRetryStandaloneThreeD(row as StandalonePartRow)"
+              />
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" min-width="120" align="center" fixed="right">
           <template #default="{ row }">
             <el-button
@@ -424,6 +443,24 @@
                   />
                 </template>
               </el-table-column>
+              <!-- 2026-09-16 T3.4：子件上传状态（共享顶层 PDF + 各自 3D）。 -->
+              <el-table-column label="上传" min-width="140" align="center">
+                <template #default="{ row: c }">
+                  <div class="upload-cell">
+                    <UploadStatusCellView
+                      :cell="getRowPdfCell(c as AssemblyChildRow)"
+                      label="PDF"
+                      @retry="onRetryAssemblyChildPdf(c as AssemblyChildRow)"
+                    />
+                    <UploadStatusCellView
+                      v-if="(c as AssemblyChildRow).three_d_index !== null"
+                      :cell="getRowThreeDCell(c as AssemblyChildRow)"
+                      label="3D"
+                      @retry="onRetryAssemblyChildThreeD(c as AssemblyChildRow)"
+                    />
+                  </div>
+                </template>
+              </el-table-column>
             </el-table>
           </template>
         </el-table-column>
@@ -449,6 +486,16 @@
             </template>
           </el-table-column>
         </template>
+        <!-- 2026-09-16 T3.4：装配件顶层 PDF 上传状态列；子件上传状态在下方子表里。 -->
+        <el-table-column label="上传" min-width="140" align="center">
+          <template #default="{ row }">
+            <UploadStatusCellView
+              :cell="getRowPdfCell(row as AssemblyRow)"
+              label="主图"
+              @retry="onRetryAssemblyMasterPdf(row as AssemblyRow)"
+            />
+          </template>
+        </el-table-column>
         <el-table-column label="操作" min-width="80" align="center" fixed="right">
           <template #default="{ row }">
             <el-button link type="danger" size="small" @click="removeAssembly(row.uid)"
@@ -465,7 +512,11 @@
     <el-button
       type="success"
       size="large"
-      :disabled="(standaloneParts.length === 0 && assemblies.length === 0) || pdfSubmitting"
+      :disabled="
+        (standaloneParts.length === 0 && assemblies.length === 0) ||
+        pdfSubmitting ||
+        hasUploadErrors
+      "
       @click="onSubmitPdfTree"
     >
       <el-icon><check /></el-icon>
@@ -473,6 +524,8 @@
         >提交创建（{{ standaloneParts.length }} 个零件 + {{ assemblies.length }} 个装配件）</span
       >
     </el-button>
+    <!-- 2026-09-16 T3.4：上传失败时提示用户点行内「重试」按钮 -->
+    <span v-if="hasUploadErrors" class="upload-error-hint">有文件上传失败，请点行内「重试」</span>
   </div>
 
   <!-- PDF 文件名点击触发的全屏预览（Tab 2）。blob URL 生命周期见
@@ -604,6 +657,7 @@ import {
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import UploadStatusCellView from '@/components/UploadStatusCellView.vue';
 import type {
   AssemblyChildRow,
   AssemblyRow,
@@ -618,6 +672,13 @@ import type {
 // 2026-08-27：独立零件 / 装配件 el-table ref 改由父组件 usePartBatchPdf composable
 // 持有，通过 provide/inject 拿回，避免 props readonly 丢写 + 让 sortable 与数据
 // state 在同一文件管理（更内聚）。
+/** 与 UploadStatusCellView.vue::UploadStatusCell 同形，跨文件复用。 */
+interface UploadStatusCellViewCell {
+  status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
+  progress: number;
+  error?: string;
+}
+
 const props = defineProps<{
   l1Customers: { id: string; name: string }[];
   l2Customers: { id: string; name: string }[];
@@ -681,6 +742,13 @@ const props = defineProps<{
   closeManualAsmDialog: () => void;
   onSubmitPdfTree: () => Promise<void>;
   closePdfPreview: () => void;
+  // 2026-09-16 T3.4：上传状态（cell + 反查函数 + 全局汇总）
+  pdfUploadCells: Record<string, UploadStatusCellViewCell>;
+  threeDUploadCells: Record<string, UploadStatusCellViewCell>;
+  getRowPdfCell: (row: { pdfSourceUid: string }) => UploadStatusCellViewCell | undefined;
+  getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCellViewCell | undefined;
+  hasUploadErrors: boolean;
+  retryUploadByRow: (rowUid: string, slot: 'pdf' | '3d', threeDIndex?: number) => Promise<void>;
 }>();
 
 // PR-2 2026-09-13：父级三个 form 都是 reactive；vue/no-mutating-props 禁止
@@ -761,6 +829,28 @@ function bindStandaloneTableRef(el: unknown): void {
 }
 function bindAssembliesTableRef(el: unknown): void {
   pdfRefs.assembliesTableRef.value = asElTableInstance(el);
+}
+
+// ============ 2026-09-16 T3.4：上传重试 handler ============
+// usePartBatchPdf composable 的 retryUploadByRow 在 onSubmitPdfTree 之外无法触发
+// （cosUpload 实例在闭包内，submit 结束即被 GC）。当前 T3.4 范围：上传失败 → 用户
+// 必须再次点击「提交创建」让 onSubmitPdfTree 重新走一遍（包含 startUpload），或在
+// 后续任务里把 cosUpload 实例提升到 composable 顶层的 ref 让 retry 全程可触达。
+// 这里只暴露 stub：直接弹「请重新提交」提示，避免 retry 行为不一致。
+function onRetryStandalonePdf(row: StandalonePartRow): void {
+  void props.retryUploadByRow(row.uid, 'pdf');
+}
+function onRetryStandaloneThreeD(row: StandalonePartRow): void {
+  void props.retryUploadByRow(row.uid, '3d', row.three_d_index ?? undefined);
+}
+function onRetryAssemblyMasterPdf(row: AssemblyRow): void {
+  void props.retryUploadByRow(row.uid, 'pdf');
+}
+function onRetryAssemblyChildPdf(c: AssemblyChildRow): void {
+  void props.retryUploadByRow(c.uid, 'pdf');
+}
+function onRetryAssemblyChildThreeD(c: AssemblyChildRow): void {
+  void props.retryUploadByRow(c.uid, '3d', c.three_d_index ?? undefined);
 }
 
 // ============ 2026-08-27 T23：列顺序拖动 + 可见性（3 个 el-table）============
@@ -1312,6 +1402,20 @@ onMounted(() => {
   margin-top: 16px;
   display: flex;
   justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+
+.upload-error-hint {
+  color: var(--el-color-danger);
+  font-size: 13px;
+}
+
+.upload-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
 }
 
 /* PR-H 2026-07-28：sortable.js 拖拽视觉 */
