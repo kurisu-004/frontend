@@ -200,9 +200,22 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions) {
       // 雪花 ID 一律以字符串直接传给后端（CLAUDE.md §3）——禁止 Number()，
       // 否则 19 位 ID 在 JS Number（MAX_SAFE_INTEGER≈9.007e15）丢精度，IN 永不命中。
       // 空数组 = undefined（不发参数，保留现有清空过滤行为）。
-      next_process_ids: search.nextProcessIds.length > 0 ? search.nextProcessIds : undefined,
-      locations: search.locations.length > 0 ? search.locations : undefined,
-      holder_ids: search.holderIds.length > 0 ? search.holderIds : undefined,
+      // 2026-09-17 PR-4：Array.isArray 防御性守卫——localStorage 反序列化 / 跨 caller
+      // 注入 / type-only 引用解构等异常路径可能塞入非数组值；buildParams 必须
+      // 兜底回 undefined，避免 axios paramsSerializer 抛 TypeError 或把非预期值
+      // 发出去（holder_ids 混入非雪花 ID 字符串后端 parse 失败 → 40001）。
+      next_process_ids:
+        Array.isArray(search.nextProcessIds) && search.nextProcessIds.length > 0
+          ? search.nextProcessIds
+          : undefined,
+      locations:
+        Array.isArray(search.locations) && search.locations.length > 0
+          ? search.locations
+          : undefined,
+      holder_ids:
+        Array.isArray(search.holderIds) && search.holderIds.length > 0
+          ? search.holderIds
+          : undefined,
       row_type: search.rowType !== 'ALL' ? search.rowType : undefined,
       sort_by: sortBy.value,
       sort_dir: sortDir.value,

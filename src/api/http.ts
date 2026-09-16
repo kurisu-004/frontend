@@ -44,6 +44,10 @@
 //     Query 反序列化器对 Vec<T> 默认按 `,` 分隔，对 `?k=a&k=b` 行为依赖实现）。
 //   两边语义不一致，**不能合并**——CSV 白名单机制恢复（ARRAY_AS_CSV_KEYS 白名单 +
 //   serializeParamsWith 共用实现 + serializeParamsV1/V2 两条具名导出）。
+// - 2026-09-17 PR-4 同步：backend-rust PartListQuery 加 `locations` / `holder_ids`
+//   两个 `Option<String>`（逗号分隔单值）。前端 wire-format 必须同步：把这两个
+//   key 加入 `ARRAY_AS_CSV_KEYS` 白名单，编码 `?locations=A%2CB&holder_ids=X%2CY`。
+//   与 `statuses` 同走 CSV 单值路径。详见 `ARRAY_AS_CSV_KEYS` 注释。
 
 import type { AxiosError } from 'axios';
 import axios, {
@@ -68,13 +72,22 @@ import { refreshTokens, type LoginResponse } from '@/api/auth';
  * 白名单机制：`statuses`（及未来其它 v2 多值筛选字段）数组 → CSV 单值，
  * 其它数组仍走重复 key（v1 端点 + v2 未列入白名单的数组字段都靠这条分支）。
  *
+ * 2026-09-17 PR-4 同步：backend-rust PartListQuery 加 `locations` + `holder_ids`
+ * 两个 `Option<String>`（逗号分隔字符串，与 `statuses` 同形）。前端不加入白名单会
+ * 触发 backend axum 解析失败：`?locations=A&locations=B` → Query<String> 单值
+ * 解析失败（axum::extract::Query<Option<String>> 只取第一个值或报错）；CSV
+ * 编码 `?locations=A%2CB` 才是正确 wire-format。`holder_ids` 同理（后端
+ * service 层把 CSV 拆 Vec<i64>，parse 失败 → 40001 VALIDATION_ERROR）。
+ *
  * 历史脉络（不要回退）：
  * - 2026-08-29 拆分原因：v1 Python FastAPI 期望所有数组 → 重复 key，v2 Rust axum 的
  *   `statuses` 期望 CSV 单值（axum Query 反序列化器对 Vec<T> 默认按 `,` 分隔，对 `?k=a&k=b`
  *   形式的反序列化行为依赖实现，可能只取首元素或报错，必须按后端期望的格式发）。
  * - 当前 v2 schema 决定保留 `statuses` 为多值（Vec<String>），所以 CSV 白名单机制恢复。
+ * - 2026-09-17 PR-4：locations / holder_ids 加入白名单，wire-format 与 backend
+ *   PartListQuery 单值 String 解析对齐。
  */
-const ARRAY_AS_CSV_KEYS = new Set<string>(['statuses']);
+const ARRAY_AS_CSV_KEYS = new Set<string>(['statuses', 'locations', 'holder_ids']);
 
 function serializeParamsWith(params: any, csvKeys: Set<string>): string {
   const parts: string[] = [];
@@ -110,9 +123,12 @@ export function serializeParamsV1(params: any): string {
   return serializeParamsWith(params, new Set());
 }
 
-/** v2 专用 query 序列化器：白名单内 key（`statuses` 等）走 CSV 单值 `?k=a,b`，
- *  其它数组维持重复 key。专供 `api` / `refreshClient`（baseURL `/api/v2`）使用，
- *  匹配 Rust axum Query 反序列化对 Vec<T> 的 CSV 期望。 */
+/** v2 专用 query 序列化器：白名单内 key（`statuses` / `locations` / `holder_ids`
+ *  等）走 CSV 单值 `?k=a%2Cb`，其它数组维持重复 key。专供 `api` / `refreshClient`
+ *  （baseURL `/api/v2`）使用，匹配 Rust axum Query 反序列化对 Vec<T> 的 CSV 期望。
+ *
+ *  2026-09-17 PR-4 同步：locations / holder_ids 加入 `ARRAY_AS_CSV_KEYS`，与
+ *  backend-rust `PartListQuery`（`Option<String>` 逗号分隔）解析对齐。 */
 export function serializeParamsV2(params: any): string {
   return serializeParamsWith(params, ARRAY_AS_CSV_KEYS);
 }
