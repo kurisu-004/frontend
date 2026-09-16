@@ -34,9 +34,10 @@
           <el-option
             v-for="p in parts"
             :key="p.id"
-            :label="`${p.serial_no ?? '—'} | ${p.drawing_no ?? ''} | ${p.name} | ${p.shelf_code ?? ''}`"
+            :label="`${p.serial_no ?? '—'} | ${p.drawing_no ?? ''} | ${p.name}`"
             :value="p.id"
           />
+          <!-- 2026-09-16 PR-2：label 尾部 shelf_code 随 PartListItem 瘦身删除（v2 从未提供） -->
         </el-select>
       </el-form-item>
       <el-form-item label="工序" prop="process_id">
