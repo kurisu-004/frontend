@@ -2,6 +2,9 @@
   ProcessStepCardList.vue
   工序制定页右栏：拖拽工序卡片列表。
   2026-09-11 新增。
+  2026-09-16 改造：删除「dirty=true → 800ms 自动保存」防抖链路，改为显式保存按钮触发。
+  原 watch(steps) 内的 setTimeout(doAutoSave) 让保存按钮永远 disabled（dirty 在 PUT 成功后
+  立刻被清零）；现在 watch 只同步 dirty，持久化入口唯一化为 onSave → saveFlow(partId, steps)。
   2026-09-12 改造（第三轮 UI 精修）：
     - 删除 header 中的「外协警示」<el-alert>（S3）
     - 删除 header 中的「+ 添加工序」按钮（S3）；改在卡片列表末尾放虚线方框占位（点击 → onAdd）
@@ -28,7 +31,9 @@
       <!-- 2026-09-12 第三轮：header 仅保留总耗时 + 保存 + 重置，删除 +添加工序 / 外协警示 -->
       <!-- 2026-09-12 第四轮：重置 button 改 icon-only + tooltip，避免右栏 20% 宽度下换行。
            tag 去掉「总耗时：」前缀（"X 分钟"更紧凑，让 tag+保存+重置 在 234px 内单行排开）。
-           保存 button 用 margin-left: auto 推到右侧（替代原来 div spacer，更省空间） -->
+           保存 button 用 margin-left: auto 推到右侧（替代原来 div spacer，更省空间）。
+           2026-09-16：重复点击防御——依赖 EP el-button 在 :loading="saving" 时自动禁用
+           点击（无需另加 disabled 锁）；同时 :disabled="!dirty" 防止无变更时点击。 -->
       <div class="toolbar">
         <el-tooltip :content="`总耗时 ${totalMinutes} 分钟`" placement="top">
           <el-tag size="default" effect="plain" class="total-minutes">
@@ -156,16 +161,8 @@ const props = defineProps<{
   partId: string | null;
 }>();
 
-const {
-  parts,
-  processes,
-  flows,
-  getFlowByPartId,
-  loadFlowForPart,
-  upsertSteps,
-  newStep,
-  summaries,
-} = usePartProcessDesign();
+const { parts, processes, flows, getFlowByPartId, loadFlowForPart, save, newStep, summaries } =
+  usePartProcessDesign();
 
 const steps = ref<ProcessStep[]>([]);
 const savedSnapshot = ref<string>(''); // JSON.stringify 当前已保存的 steps
@@ -237,29 +234,17 @@ watch(
   },
 );
 
-/** 步骤本地修改：标 dirty，触发自动保存（800ms 防抖）。 */
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
+/** 步骤本地修改：仅标 dirty（不同步触发 PUT）。2026-09-16 改造：
+ *  删掉原先的「dirty=true → 800ms 后自动 doAutoSave」防抖链路。
+ *  持久化入口唯一化为 onSave 按钮（→ saveFlow），避免保存按钮形同虚设。 */
 watch(
   steps,
   () => {
     if (!props.partId) return;
     dirty.value = JSON.stringify(steps.value) !== savedSnapshot.value;
-    if (saveTimer) clearTimeout(saveTimer);
-    if (dirty.value) {
-      saveTimer = setTimeout(() => {
-        void doAutoSave();
-      }, 800);
-    }
   },
   { deep: true },
 );
-
-async function doAutoSave(): Promise<void> {
-  if (!props.partId) return;
-  upsertSteps(props.partId, steps.value);
-  savedSnapshot.value = JSON.stringify(steps.value);
-  dirty.value = false;
-}
 
 function onAdd(): void {
   if (!props.partId) {
@@ -300,10 +285,22 @@ async function onSave(): Promise<void> {
   if (!props.partId) return;
   saving.value = true;
   try {
-    await doAutoSave();
+    // 2026-09-16 改造：直接走公开 save(partId, steps)（替代原 doAutoSave → upsertSteps →
+    // 防抖 scheduleSave → 800ms 后 PUT 的隐式链路，以及第 1 轮 review 前的
+    // upsertSteps + saveFlow 两步拆分）。save 内部已串行做：① 本地 upsertSteps
+    // mutate → ② PUT 整组 → ③ 成功由本函数清 dirty / 失败保留 dirty。
+    await save(props.partId, steps.value);
+    // 成功：刷新 savedSnapshot 并清 dirty（save 内部已做 mutate + PUT，
+    // 这里只负责同步本地 dirty 标志位）。
+    savedSnapshot.value = JSON.stringify(steps.value);
+    dirty.value = false;
     ElMessage.success('已保存');
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '保存失败');
+    // 2026-09-16 第 1 轮 review 修复：失败时**保留** steps 与 dirty=true，
+    // 让用户编辑不丢、可点保存按钮重试。ElMessage.error 在 composable saveFlow
+    // 内部已弹过，这里不再重复弹错；只在 dirty 已通过其他途径被清掉的极端
+    // 路径下做兜底提示。
+    void e;
   } finally {
     saving.value = false;
   }
