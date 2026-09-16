@@ -24,6 +24,27 @@
 // - COS SDK 用 XHR，**只能在浏览器环境跑**；vitest 单测用 happy-dom + mock。
 // - 单测不发起真实 HTTP：mock COS 类（不能真传 COS 桶）；mock 凭证过期时间
 //   用 `vi.useFakeTimers()` + `vi.setSystemTime()`。
+//
+// COS 桶 CORS 约束（2026-09-16 M3-C 联调发现，运维必读）：
+// - 前端 cos-js-sdk-v5 直连 COS 桶域名（`{bucket}-{appid}.cos.{region}.myqcloud.com`），
+//   **不走** frontend nginx，因此 nginx 配置（仅反代 /api/*）不生效；CORS 必须
+//   在 COS 控制台「存储桶 → 权限管理 → 跨域访问 CORS 设置」显式开启：
+//   - 来源 Origin：`http://localhost:8080`（dev）/ staging 域名 / 生产域名
+//   - 操作 Methods：`PUT, POST, GET, HEAD, DELETE`（SDK 上传主要用 PUT）
+//   - 允许 Headers：`*`
+//   - 暴露 Headers：`ETag, x-cos-*`（上传完成后 SDK 要读 ETag）
+//   - 超时秒数：建议 ≥ 300（大文件分块耗时）
+// - 没配 CORS → 浏览器报 `No 'Access-Control-Allow-Origin' header is present`，
+//   PUT 预检 403；M4 联调首日必踩。已在 docs/06-data-and-excel/pdf-and-file.md
+//   同步此约束。
+//
+// STS policy resource 对齐（2026-09-16 M3-C）：
+// - 后端 `tmp_sub_prefix = "{cfg_tmp_prefix}{Uuid::new_v4()}"`（场景 A）或
+//   `"{cfg_tmp_prefix}part/{owner_id}"`（场景 B）；前端 useCosUpload 直传时 key
+//   必须以 `tmp/` 开头（实际是 `tmp/batch_uuid/seq_filename` 或
+//   `tmp/part/{owner_id}/...`），与服务端 STS policy resource `tmp_prefix/*` 匹配。
+// - 重签场景：tmp_key 由 caller 重排 seq 时会变 → 上文 `applyFreshIntents`
+//   兜底 reset pending 强制重传，不会让鬼状态穿透到 commit / confirm。
 
 import COS from 'cos-js-sdk-v5';
 import { computed, type ComputedRef, type Ref } from 'vue';
@@ -136,7 +157,22 @@ export function useCosUpload(opts: UseCosUploadOptions): UseCosUploadReturn {
 
   /**
    * 把整批 items 的 credentials / bucket / region 替换成新签发的。
-   * caller 必须保证新 intents.items 与旧 items 按 client_ref 一一对应、tmp_key 一致。
+   *
+   * 2026-09-16 M3-A 复审 Blocker 兜底（M3-C T3.4 集成时发现）：
+   * 原实现只覆盖 credentials / bucket / region + 在 `fresh.tmp_key` 存在时无脑覆盖
+   * `it.tmp_key`，但**已 done/error 状态**没被复位——会出现「重签后凭证是新的、tmp_key
+   * 也变了，但 status 仍是 done」的鬼状态（实际上传已被旧 STS 写到了旧 key，
+   * 后续 commit / confirm 拿新 tmp_key 去 head 必 404）。
+   *
+   * 正确语义：
+   * - tmp_key 不变（场景 B dedup 命中 / 重签保持一致）：仅刷 credentials / bucket / region。
+   * - tmp_key 变了（场景 A 重签时 server 重新分配 seq / 跨批次漂移）：**强制 reset pending**，
+   *   清 progress / etag / error，下一次 startUpload / retryItem 拉起重传。
+   * - 上传中（status='uploading'）+ tmp_key 变化：理论上 ensureFreshCredentials 只在
+   *   pending/error 上触发，不应撞到 uploading；万一撞到（caller race），强制 mark error
+   *   让重试可见（不让 in-flight 写旧 key）。
+   * - fresh.tmp_key 为空（旧实现只覆盖存在的 tmp_key，留下旧的）：极端情况，让 status=error
+   *   显式提示「STS 重签后 tmp_key 缺失，请重新发起」。
    */
   function applyFreshIntents(intents: UploadIntentsOut): void {
     // 按 client_ref 索引映射
@@ -151,8 +187,28 @@ export function useCosUpload(opts: UseCosUploadOptions): UseCosUploadReturn {
       it.bucket = intents.bucket;
       it.region = intents.region;
       it.tmp_prefix = intents.tmp_prefix;
-      // tmp_key 由 caller 保证一致；若不一致，composable 用新签发的（兜底）。
-      if (fresh.tmp_key) it.tmp_key = fresh.tmp_key;
+      // tmp_key 分支处理（见函数 doc）
+      if (fresh.tmp_key && fresh.tmp_key !== it.tmp_key) {
+        // tmp_key 真的变了 → 强制该 item 走重传
+        it.tmp_key = fresh.tmp_key;
+        if (it.status === 'done' || it.status === 'error') {
+          it.status = 'pending';
+          it.progress = 0;
+          it.error = undefined;
+          it.etag = undefined;
+        } else if (it.status === 'uploading') {
+          // 理论上不该撞到；撞到就强制 error，避免 in-flight 写到旧 key
+          it.status = 'error';
+          it.error = '重签时上传进行中（tmp_key 已变），请重新发起';
+          it.progress = 0;
+        }
+      } else if (!fresh.tmp_key && it.tmp_key) {
+        // 旧实现漏分支：之前有 tmp_key 现在空了（极端，不应发生）→ 强制 retry 可见
+        it.status = 'error';
+        it.error = 'STS 重签后 tmp_key 缺失，请重新发起';
+        it.progress = 0;
+      }
+      // 其他两种情况（都为空 = dedup 命中；都一致 = 普通重签）：不动 status。
     }
   }
 

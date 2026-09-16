@@ -7,13 +7,12 @@ import { computed, onBeforeUnmount, provide, reactive, ref, watch, type Ref } fr
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
-import {
-  batchCreatePartsWithPdfs,
-  type PartBatchFilePayload,
-  type PartBatchTreeAssemblyFE,
-  type PartBatchTreeItemFE,
-} from '@/api/parts';
+import { useCosUpload, type CosUploadItem } from '@/composables/useCosUpload';
+import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
+import { createUploadIntents } from '@/api/parts/file';
 import type { Customer } from '@/api/customer';
+import type { FileBinding, PartFileKind } from '@/types/part_file';
+import { computeSha256 } from '@/utils/fileHash';
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser';
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
 import { parseDrawingFilename } from '@/utils/drawingFilename';
@@ -1126,6 +1125,256 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     ElMessage.success(`已新增装配件（共 ${totalPages} 子件）`);
   }
 
+  // ============================================================
+  // 2026-09-16 T3.4：COS 直传 + JSON batchCreate 链路
+  // ============================================================
+
+  /**
+   * 文件上传运行时单元（UI 进度展示用）。key = `pdf:${srcUid}` 或 `3d:${fileUid}`，
+   * 与 filesToUpload[i].key 一一对应；UI 通过 `getPdfUploadCell(rowUid, 'pdf')` /
+   * `getThreeDUploadCell(rowUid, threeDIndex)` 反查。
+   */
+  interface UploadStatusCell {
+    /** 当前阶段：hashing / uploading / done / error / pending。 */
+    status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
+    /** 0-100。hashing 与 uploading 阶段都走该字段。 */
+    progress: number;
+    /** 错误信息（status='error' 时）。 */
+    error?: string;
+  }
+  /** 反查用：client_ref → status cell（map 而非 reactive 数组，配合 watch deep）。 */
+  const pdfUploadCells = reactive<Record<string, UploadStatusCell>>({});
+  const threeDUploadCells = reactive<Record<string, UploadStatusCell>>({});
+
+  /**
+   * 任意 Blob → File。PdfSource.raw 在合成路径（pdf-lib save()）下是 Blob 而非 File，
+   * computeSha256 / cos-js-sdk-v5 都接受 File 或 Blob，但 hash-wasm.createSHA256
+   * 默认按 File.slice 分块，两者等价。这里统一包成 File 以简化下游类型。
+   */
+  function ensureFile(blob: Blob, filename: string): File {
+    if (blob instanceof File) return blob;
+    return new File([blob], filename, { type: blob.type || 'application/octet-stream' });
+  }
+
+  /**
+   * 受控并发跑 async 函数（与 useCosUpload.ts::runWithConcurrency 同语义；本文件
+   * 的 hash 阶段独立一份以避免暴露 useCosUpload 内部 API）。
+   */
+  async function runWithConcurrency<T>(
+    items: T[],
+    limit: number,
+    fn: (it: T) => Promise<void>,
+  ): Promise<void> {
+    if (items.length === 0) return;
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (cursor < items.length) {
+        const i = cursor++;
+        await fn(items[i]!);
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  /**
+   * 决定某个 row 的 PDF 单元（用于 UI 显示上传状态）。
+   * 同一 PDF 源被多个 row 共享时（assembly 子件继承顶层 PDF），所有 row 显示同一状态。
+   */
+  function getRowPdfCell(row: { pdfSourceUid: string }): UploadStatusCell | undefined {
+    return pdfUploadCells[`pdf:${row.pdfSourceUid}`];
+  }
+  /** 决定某个 row 的 3D 单元。 */
+  function getRowThreeDCell(row: { three_d_index: number | null }): UploadStatusCell | undefined {
+    if (row.three_d_index === null) return undefined;
+    const f = threeDModelFiles.value[row.three_d_index];
+    if (!f) return undefined;
+    return threeDUploadCells[`3d:${f.uid}`];
+  }
+
+  /** 全局上传就绪状态：所有 file cell 都为 done（用于提交按钮 disabled）。 */
+  const allUploadsDone = computed<boolean>(() => {
+    const keys = Object.keys(pdfUploadCells);
+    const tkeys = Object.keys(threeDUploadCells);
+    if (keys.length === 0 && tkeys.length === 0) return true; // 无文件 = 视为就绪
+    return (
+      keys.every((k) => pdfUploadCells[k]?.status === 'done') &&
+      tkeys.every((k) => threeDUploadCells[k]?.status === 'done')
+    );
+  });
+
+  /** 当前是否有任何文件上传失败（用于提交按钮 disabled）。 */
+  const hasUploadErrors = computed<boolean>(() => {
+    return (
+      Object.values(pdfUploadCells).some((c) => c.status === 'error') ||
+      Object.values(threeDUploadCells).some((c) => c.status === 'error')
+    );
+  });
+
+  /** UI 调用：从 cosUpload.items[index] 同步 cell。 */
+  function syncCellsFromCosItems(items: CosUploadItem[], entries: FileUploadEntry[]): void {
+    items.forEach((it, idx) => {
+      const entry = entries[idx];
+      if (!entry) return;
+      const cell: UploadStatusCell = {
+        status: it.status,
+        progress: it.progress,
+        error: it.error,
+      };
+      if (entry.kind === 'DRAWING') {
+        pdfUploadCells[entry.key] = cell;
+      } else {
+        threeDUploadCells[entry.key] = cell;
+      }
+    });
+  }
+
+  /**
+   * 文件上传条目（统一容器）。
+   * - key：UI 反查用（`pdf:${srcUid}` / `3d:${fileUid}`）。
+   * - rowRefs：哪些 row 引用了该文件（同一 PDF 被多个 row 共享时会有 N 个 ref）。
+   * - sha / clientRef / tmpKey：hash + createUploadIntents + 上传完成后回填。
+   */
+  interface FileUploadEntry {
+    key: string;
+    kind: PartFileKind;
+    filename: string;
+    file: File;
+    size: number;
+    contentType: string;
+    sha?: string;
+    clientRef?: string;
+    tmpKey?: string;
+    rowRefs: RowRef[];
+  }
+  /** row 反向引用：哪个 row 用了哪个文件（用于回填 FileBinding）。 */
+  type RowRef =
+    | { rowKind: 'standalone'; rowUid: string }
+    | { rowKind: 'asmMaster'; rowUid: string }
+    | { rowKind: 'asmChild'; rowUid: string; asmUid: string };
+
+  /** 收集本批次所有待上传文件（PDF + 3D），按 (kind, srcUid/fileUid) 去重。 */
+  function collectFilesToUpload(): FileUploadEntry[] {
+    const map = new Map<string, FileUploadEntry>();
+    const ensure = (key: string, make: () => FileUploadEntry): FileUploadEntry => {
+      const existing = map.get(key);
+      if (existing) return existing;
+      const created = make();
+      map.set(key, created);
+      return created;
+    };
+
+    // 1) PDF：独立零件行
+    for (const r of standaloneParts.value) {
+      const src = allPdfs.value.find((s) => s.uid === r.pdfSourceUid);
+      if (!src) continue;
+      const key = `pdf:${src.uid}`;
+      ensure(key, () => ({
+        key,
+        kind: 'DRAWING',
+        filename: src.filename,
+        file: ensureFile(src.raw, src.filename),
+        size: src.raw.size,
+        contentType: src.raw.type || 'application/pdf',
+        rowRefs: [{ rowKind: 'standalone', rowUid: r.uid }],
+      })).rowRefs.push({ rowKind: 'standalone', rowUid: r.uid });
+    }
+    // 2) PDF：装配件顶层（master）
+    for (const a of assemblies.value) {
+      const src = allPdfs.value.find((s) => s.uid === a.pdfSourceUid);
+      if (!src) continue;
+      const key = `pdf:${src.uid}`;
+      ensure(key, () => ({
+        key,
+        kind: 'DRAWING',
+        filename: src.filename,
+        file: ensureFile(src.raw, src.filename),
+        size: src.raw.size,
+        contentType: src.raw.type || 'application/pdf',
+        rowRefs: [],
+      })).rowRefs.push({ rowKind: 'asmMaster', rowUid: a.uid });
+      // 子件共享同 PDF
+      for (const c of a.children) {
+        map.get(key)!.rowRefs.push({ rowKind: 'asmChild', rowUid: c.uid, asmUid: a.uid });
+      }
+    }
+    // 3) 3D 模型：被 row 引用的（three_d_index 指向的文件）
+    const referencedThreeD = new Set<number>();
+    for (const r of standaloneParts.value) {
+      if (r.three_d_index !== null) referencedThreeD.add(r.three_d_index);
+    }
+    for (const a of assemblies.value) {
+      for (const c of a.children) {
+        if (c.three_d_index !== null) referencedThreeD.add(c.three_d_index);
+      }
+    }
+    referencedThreeD.forEach((idx) => {
+      const f = threeDModelFiles.value[idx];
+      const raw = f?.raw as File | undefined;
+      if (!f || !raw) return;
+      const key = `3d:${f.uid}`;
+      ensure(key, () => ({
+        key,
+        kind: '3D_MODEL',
+        filename: f.name,
+        file: raw,
+        size: raw.size,
+        contentType: raw.type || 'application/octet-stream',
+        rowRefs: [],
+      }));
+    });
+    return Array.from(map.values());
+  }
+
+  /** 从已上传的 entry 构建 FileBinding（提交时挂到 row 的 drawing_file/model3d_file）。 */
+  function buildBindingFromEntry(entry: FileUploadEntry): FileBinding | undefined {
+    if (!entry.tmpKey || !entry.sha) return undefined;
+    return {
+      tmp_key: entry.tmpKey,
+      content_sha256: entry.sha,
+      original_filename: entry.filename,
+      file_size: String(entry.size),
+      content_type: entry.contentType,
+    };
+  }
+
+  /** 给 row 反查它对应的 PDF entry（用于把 FileBinding 写回）。 */
+  function findPdfEntryForRow(rowUid: string): FileUploadEntry | undefined {
+    for (const e of lastUploadEntries) {
+      if (e.kind !== 'DRAWING') continue;
+      if (e.rowRefs.some((r) => r.rowUid === rowUid)) return e;
+    }
+    return undefined;
+  }
+  /** 给 row 反查它对应的 3D entry。 */
+  function findThreeDEntryForRow(rowUid: string, threeDIndex: number): FileUploadEntry | undefined {
+    const f = threeDModelFiles.value[threeDIndex];
+    if (!f) return undefined;
+    const key = `3d:${f.uid}`;
+    return lastUploadEntries.find((e) => e.key === key);
+  }
+
+  /** 本次提交对应的上传条目集合（仅 onSubmitPdfTree 期间有效，buildBinding 时用）。 */
+  let lastUploadEntries: FileUploadEntry[] = [];
+
+  /** UI 调用：单项重试。映射 rowUid → 找到对应 entry 的 clientRef 触发 retryItem。 */
+  async function retryUploadByRow(
+    rowUid: string,
+    slot: 'pdf' | '3d',
+    threeDIndex?: number,
+    cosUpload?: { retryItem: (ref: string) => Promise<void> },
+    items?: CosUploadItem[],
+  ): Promise<void> {
+    if (!cosUpload || !items) return;
+    let entry: FileUploadEntry | undefined;
+    if (slot === 'pdf') {
+      entry = findPdfEntryForRow(rowUid);
+    } else {
+      entry = threeDIndex !== undefined ? findThreeDEntryForRow(rowUid, threeDIndex) : undefined;
+    }
+    if (!entry?.clientRef) return;
+    await cosUpload.retryItem(entry.clientRef);
+  }
+
   /** 点击「提交创建」 */
   async function onSubmitPdfTree(): Promise<void> {
     if (standaloneParts.value.length === 0 && assemblies.value.length === 0) {
@@ -1151,125 +1400,230 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     }
     pdfSubmitting.value = true;
     try {
-      const items: PartBatchTreeItemFE[] = [];
-      const assembliesPayload: PartBatchTreeAssemblyFE[] = [];
-      // files 按 allPdfs 顺序对齐（顺序即为后端的 pdf_index）
-      const files: PartBatchFilePayload[] = allPdfs.value.map((src) => ({
-        data: src.raw,
-        filename: src.filename,
-        contentType: 'application/pdf',
-      }));
+      // ===== 2026-09-16 T3.4 重写：COS 直传 + JSON batchCreate =====
+      // 七步流程（plan T3.4）：
+      // 1) 收集待上传文件（PDF + 3D），按 (kind, srcUid/fileUid) 去重；保留 rowRefs
+      //    反查哪些 row 需要这个 FileBinding
+      // 2) 受控并发 3 hash → UI cell.status='hashing' → 完成后 'pending'
+      // 3) 调 createUploadIntents (owner_part_id 缺省 = 场景 A)；按 idx 把
+      //    client_ref / tmp_key 回填到 entries
+      // 4) 构造 CosUploadItem[] + useCosUpload.startUpload()，watch deep 把 status /
+      //    progress / error 同步到 UI cells
+      // 5) 上传完成检查：任何 cell.status !== 'done' → 阻断提交，提示用户重试
+      // 6) 按 row 构造 PartBatchCreatePayload[]，drawing_file / model3d_file 从 entries
+      //    派生 FileBinding。**装配主子件展平**为独立 part（v2 JSON 端点不支持
+      //    assembly_uid，2026-09-16 M3 设计决策；assembly 概念暂时隐式，UI 列表可
+      //    通过 drawing_no 前缀 `图号-01/-02/...` 标识归属）
+      // 7) 调 batchCreateParts(JSON)；created / failed 分别提示；commit 后由后端
+      //    spawn 异步清理 tmp_keys，前端不维护 cleanup
 
-      // PR-H 2026-07-28：3D 模型按 threeDModelFiles 顺序对齐（与 items[i].three_d_index 对齐）
-      const threeDModelPayloads: PartBatchFilePayload[] = [];
-      for (const f of threeDModelFiles.value) {
-        const raw = f.raw;
-        if (!raw) continue;
-        threeDModelPayloads.push({
-          data: raw,
-          filename: f.name,
-          contentType: 'application/octet-stream', // 后端按扩展名重新判
+      // 清空旧的 cell（重新解析拆分后可能引用变了）
+      Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
+      Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
+
+      // 步骤 1：收集文件
+      const entries = collectFilesToUpload();
+      lastUploadEntries = entries;
+
+      // 步骤 2：受控并发 3 hash
+      if (entries.length > 0) {
+        entries.forEach((e) => {
+          const cell: UploadStatusCell = { status: 'hashing', progress: 0 };
+          if (e.kind === 'DRAWING') pdfUploadCells[e.key] = cell;
+          else threeDUploadCells[e.key] = cell;
+        });
+        await runWithConcurrency(entries, 3, async (entry) => {
+          const sha = await computeSha256(entry.file);
+          entry.sha = sha;
+          const cell =
+            entry.kind === 'DRAWING' ? pdfUploadCells[entry.key] : threeDUploadCells[entry.key];
+          if (cell) {
+            cell.status = 'pending';
+            cell.progress = 0;
+          }
         });
       }
 
-      // 独立零件：page_index 始终 0（合成 / 原 PDF 都按整体上传）
-      for (const r of standaloneParts.value) {
-        const pdfIndex = allPdfs.value.findIndex((s) => s.uid === r.pdfSourceUid);
-        if (pdfIndex < 0) {
-          ElMessage.error(`独立零件 ${r.drawing_no} 引用了已删除的图纸源`);
+      // 步骤 3：createUploadIntents（owner_part_id 缺省 = 场景 A 批量创建）
+      let cosUpload: ReturnType<typeof useCosUpload> | undefined;
+      let cosItemsRef: Ref<CosUploadItem[]> | undefined;
+      if (entries.length > 0) {
+        const intents = await createUploadIntents({
+          files: entries.map((e) => ({
+            kind: e.kind,
+            filename: e.filename,
+            // v2 i64 序列化器要求 file_size 走 string；前端 Blob.size 是 number，按
+            // CLAUDE.md §3 统一以 string 透传，避免后端 serde 拒收。
+            file_size: String(e.size),
+            content_sha256: e.sha!,
+            content_type: e.contentType,
+          })),
+        });
+        // 按 idx 顺序回填 client_ref / tmp_key（后端 items 与请求 files 顺序对齐）
+        intents.items.forEach((out, idx) => {
+          const entry = entries[idx]!;
+          entry.clientRef = out.client_ref;
+          entry.tmpKey = out.tmp_key;
+        });
+
+        // 步骤 4：构造 CosUploadItem[] + useCosUpload
+        cosItemsRef = ref<CosUploadItem[]>(
+          entries.map((e) => ({
+            client_ref: e.clientRef!,
+            file: e.file,
+            tmp_key: e.tmpKey!,
+            bucket: intents.bucket,
+            region: intents.region,
+            tmp_prefix: intents.tmp_prefix,
+            credentials: intents.credentials,
+            status: 'pending',
+            progress: 0,
+          })),
+        );
+        cosUpload = useCosUpload({
+          items: cosItemsRef,
+          // 重签回调：用相同 (kind, filename, sha, size, content_type) 再调一次。
+          // 旧实现是相同 sha → 同 tmp_key；M3-A Blocker 兜底处理 tmp_key 漂移
+          // （applyFreshIntents 重置 status=pending 强制重传）。
+          refetchIntents: async () =>
+            createUploadIntents({
+              files: entries.map((e) => ({
+                kind: e.kind,
+                filename: e.filename,
+                file_size: String(e.size),
+                content_sha256: e.sha!,
+                content_type: e.contentType,
+              })),
+            }),
+        });
+
+        // 同步 status / progress / error 到 UI cells（每次 cosItemsRef 变都跑一遍）
+        const stopSync = watch(cosItemsRef, (items) => syncCellsFromCosItems(items, entries), {
+          deep: true,
+          immediate: true,
+        });
+
+        try {
+          // 步骤 5：上传全部
+          await cosUpload.startUpload();
+        } finally {
+          stopSync();
+        }
+
+        // 上传失败检查：任何 cell.status === 'error' → 阻断提交（强制用户重试）
+        const failedKeys: string[] = [];
+        entries.forEach((e, idx) => {
+          const it = cosItemsRef!.value[idx];
+          if (it && it.status !== 'done') failedKeys.push(`${e.filename}（${e.kind}）`);
+        });
+        if (failedKeys.length > 0) {
+          ElMessageBox.alert(
+            `${failedKeys.length} 个文件上传失败，请点击「重试」后再次提交：\n` +
+              failedKeys.slice(0, 5).join('\n') +
+              (failedKeys.length > 5 ? '\n…' : ''),
+            '上传失败',
+            { type: 'error' },
+          );
           return;
         }
+      }
+
+      // 步骤 6：构造 PartBatchCreatePayload[]
+      // - 装配主子件统一展平为独立 part（M3 v2 端点无 assembly_uid 支持）；
+      //   子件图号 / 名称沿用原 drawing_no / name；quantity / 分厂 / 申请人继承自顶层。
+      // - drawing_file：从 PDF entry 派生；model3d_file：从 3D entry 派生。
+      const items: PartBatchCreatePayload[] = [];
+      for (const r of standaloneParts.value) {
+        const pdfEntry = findPdfEntryForRow(r.uid);
+        const threeDEntry =
+          r.three_d_index !== null ? findThreeDEntryForRow(r.uid, r.three_d_index) : undefined;
+        const drawingFile = pdfEntry ? buildBindingFromEntry(pdfEntry) : undefined;
+        const model3dFile = threeDEntry ? buildBindingFromEntry(threeDEntry) : undefined;
         items.push({
-          pdf_index: pdfIndex,
-          page_index: 0,
-          assembly_uid: null,
-          is_master: false,
-          drawing_no: r.drawing_no,
           name: r.name || r.drawing_no,
+          drawing_no: r.drawing_no,
           applicant_name: r.applicant_name,
-          applicant_id: null,
+          applicant_id: null, // M3 v2 JSON 端点无 applicant_id 字段
           quantity: r.quantity,
-          customer_id: r.customer_id,
           request_date: r.request_date,
           planned_delivery_date: r.planned_delivery_date || r.request_date,
-          system_delivery_date: r.system_delivery_date,
-          order_no: r.order_no,
-          note: r.note,
           is_urgent: r.is_urgent,
-          // PR-H 2026-07-28
-          unit_price: r.unit_price ?? null,
-          total_price: r.total_price ?? null,
-          three_d_index: r.three_d_index ?? null,
+          order_no: r.order_no,
+          system_delivery_date: r.system_delivery_date,
+          note: r.note,
+          customer_id: r.customer_id,
+          drawing_file: drawingFile,
+          model3d_file: model3dFile,
         });
       }
-
-      // 装配件 + 子件
       for (const a of assemblies.value) {
-        const pdfIndex = allPdfs.value.findIndex((s) => s.uid === a.pdfSourceUid);
-        if (pdfIndex < 0) {
-          ElMessage.error(`装配件 ${a.drawing_no} 引用了已删除的图纸源`);
-          return;
-        }
-        assembliesPayload.push({
-          uid: a.uid,
-          drawing_no: a.drawing_no || null,
-          name: a.name || null,
+        // 顶层 master part（也是独立 part，不创建 assembly 父节点）
+        const masterPdfEntry = findPdfEntryForRow(a.uid);
+        items.push({
+          name: a.name || a.drawing_no || `装配件-${a.uid}`,
+          drawing_no: a.drawing_no || '',
           applicant_name: a.applicant_name,
           applicant_id: null,
-          customer_id: a.customer_id,
+          quantity: a.quantity,
           request_date: a.request_date,
           planned_delivery_date: a.planned_delivery_date || a.request_date,
-          system_delivery_date: a.system_delivery_date,
-          order_no: a.order_no,
-          note: a.note,
           is_urgent: a.is_urgent,
-          quantity: a.quantity,
+          order_no: a.order_no,
+          system_delivery_date: a.system_delivery_date,
+          note: a.note,
+          customer_id: a.customer_id,
+          drawing_file: masterPdfEntry ? buildBindingFromEntry(masterPdfEntry) : undefined,
+          // master 顶层不强挂 3D（按 row.three_d_index 约定，3D 挂到具体子件）
+          model3d_file: undefined,
         });
+        // 子件：每个子件一个 part（共享顶层 PDF）
         for (const c of a.children) {
+          const childPdfEntry = findPdfEntryForRow(c.uid);
+          const threeDEntry =
+            c.three_d_index !== null ? findThreeDEntryForRow(c.uid, c.three_d_index) : undefined;
           items.push({
-            pdf_index: pdfIndex,
-            page_index: c.page_index,
-            assembly_uid: a.uid,
-            is_master: a.masterPageIndex === c.page_index,
-            drawing_no: c.drawing_no,
             name: c.name || `子件${c.page_index + 1}`,
-            // 分厂 / 申请人继承自装配件顶层
-            applicant_name: a.applicant_name,
+            drawing_no: c.drawing_no,
+            applicant_name: a.applicant_name, // 继承顶层
             applicant_id: null,
             quantity: c.quantity,
-            customer_id: a.customer_id,
             request_date: c.request_date,
             planned_delivery_date: c.planned_delivery_date || c.request_date,
-            system_delivery_date: c.system_delivery_date,
-            order_no: c.order_no,
-            note: c.note,
             is_urgent: c.is_urgent,
-            // PR-H 2026-07-28
-            unit_price: c.unit_price ?? null,
-            total_price: c.total_price ?? null,
-            three_d_index: c.three_d_index ?? null,
+            order_no: c.order_no,
+            system_delivery_date: c.system_delivery_date,
+            note: c.note,
+            customer_id: a.customer_id, // 分厂继承顶层
+            drawing_file: childPdfEntry ? buildBindingFromEntry(childPdfEntry) : undefined,
+            model3d_file: threeDEntry ? buildBindingFromEntry(threeDEntry) : undefined,
           });
         }
       }
 
-      const res = await batchCreatePartsWithPdfs(
-        items,
-        assembliesPayload,
-        files,
-        threeDModelPayloads,
-      );
-      if (res.failed && res.failed.length > 0) {
-        const msgs = res.failed
+      // 步骤 7：JSON batchCreate（v2 后端按 customer_id 自动分组；无需前端分组）
+      // 注：applicant dedupe 在 PDF Tab 不需要 —— JSON 端点不接受 applicant_id，
+      // applicant_name 走字符串直存（同名校验在 createApplicant 单点路径上，本路径
+      // 不触发）。同名重复只会让 t_part.applicant_name 出现重复字符串，不影响
+      // applicant 表去重。详见 T3.4 调研报告 §7。
+      const res = await batchCreateParts(items);
+      if (res.failed.length > 0) {
+        const sample = res.failed
           .slice(0, 5)
-          .map((f) => f.message)
-          .join('；');
-        ElMessageBox.alert(`前置校验失败 ${res.failed.length} 条：${msgs}`, '提交失败', {
-          type: 'error',
-        });
+          .map((f) => `第 ${f.index + 1} 行：${f.message}`)
+          .join('\n');
+        const more = res.failed.length > 5 ? `\n...还有 ${res.failed.length - 5} 行失败` : '';
+        ElMessageBox.alert(
+          `服务端拒绝了 ${res.failed.length} 行：\n${sample}${more}`,
+          '部分行未通过',
+          { type: 'warning' },
+        );
         return;
       }
+      const standaloneCount = standaloneParts.value.length;
+      const assemblyMasters = assemblies.value.length;
+      const childCount = assemblies.value.reduce((s, a) => s + a.children.length, 0);
       ElMessage.success(
-        `成功创建 ${res.standalone_parts.length} 个独立零件 + ${res.assemblies.length} 个装配件`,
+        `成功创建 ${res.created.length} 条零件（${standaloneCount} 独立 + ${assemblyMasters} 装配件顶层 + ${childCount} 子件）`,
       );
       // 清空 + 跳回
       allPdfs.value = [];
@@ -1278,7 +1632,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       selectedPages.value.clear();
       pdfFiles.value = [];
       excelFiles.value = [];
-      threeDModelFiles.value = []; // PR-H 2026-07-28
+      threeDModelFiles.value = [];
+      Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
+      Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
+      lastUploadEntries = [];
+      void cosUpload; // 引用保留避免 GC（closure 持有 items ref）
+      void cosItemsRef;
       successNextTab.value = 'manual';
       router.push('/parts?status=PENDING');
     } catch (e) {
@@ -1375,5 +1734,13 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     // provide/inject 取到这两个 ref，模板 :ref 把 el-table 实例回写到 composable。
     standaloneTableRef,
     assembliesTableRef,
+    // 2026-09-16 T3.4：上传状态（UI 进度 / 重试用）
+    pdfUploadCells,
+    threeDUploadCells,
+    getRowPdfCell,
+    getRowThreeDCell,
+    allUploadsDone,
+    hasUploadErrors,
+    retryUploadByRow,
   };
 }

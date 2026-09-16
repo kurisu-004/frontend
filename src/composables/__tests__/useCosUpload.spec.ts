@@ -369,3 +369,153 @@ describe('useCosUpload / allDone & allOk', () => {
     expect(allOk.value).toBe(true);
   });
 });
+
+// 2026-09-16 M3-A 复审 Blocker 兜底：applyFreshIntents 重签时 tmp_key 变化必须
+// 强制 reset pending，否则「旧 STS 写旧 key + 新 tmp_key 拿去 confirm」会出现
+// 「status=done 但文件实际没在新 key」鬼状态，后续 commit / confirm 必 404。
+//
+// 策略：startUpload 总是先 ensureFreshCredentials()（凭证即将过期即触发），故可以
+// 通过预置 item.status='done|error|uploading' + expiring 凭证 + 差异化 tmp_key 的
+// 重签响应来间接观察 applyFreshIntents 的副作用。
+describe('useCosUpload / applyFreshIntents (M3-A 复审 Blocker 兜底)', () => {
+  /** 让 makeCredentials 的 expired_time 落在「即将过期」区间（< 5 min 余量）。 */
+  function expiringExpiredTime(): number {
+    return Math.floor(Date.now() / 1000) + 60; // 1 分钟后过期 → EXPIRY_AHEAD_MS=5min 立即命中
+  }
+
+  it('tmp_key 不变 + 之前 done → 仅刷 credentials，status/progress/etag 不动', async () => {
+    const expSec = expiringExpiredTime();
+    const file = new File(['x'], 'x');
+    const items: Ref<CosUploadItem[]> = ref([
+      {
+        ...makeItem('ref-1', 'tmp/x.pdf', file, expSec),
+        status: 'done',
+        progress: 100,
+        etag: '"old-etag"',
+      },
+    ]);
+    uploadFileSpy.mockResolvedValue(mockSuccess()); // 即便被调用也不应执行（status=done 不进 targets）
+    const refetchIntents = vi.fn(async () =>
+      makeIntents([{ client_ref: 'ref-1', tmp_key: 'tmp/x.pdf' }], expSec + 7200),
+    );
+    const { startUpload } = useCosUpload({ items, refetchIntents });
+    await startUpload();
+
+    // tmp_key 一致 → status 保持 done；credentials 已刷到新值
+    expect(refetchIntents).toHaveBeenCalledTimes(1);
+    expect(items.value[0]!.status).toBe('done');
+    expect(items.value[0]!.progress).toBe(100);
+    expect(items.value[0]!.etag).toBe('"old-etag"');
+    expect(items.value[0]!.tmp_key).toBe('tmp/x.pdf');
+    expect(items.value[0]!.credentials.expired_time).toBe(expSec + 7200);
+    // done 不进 targets → uploadFile 不被调用
+    expect(uploadFileSpy).not.toHaveBeenCalled();
+  });
+
+  it('tmp_key 变化 + 之前 done → 强制 reset pending + 清 etag/progress，下一次 upload 用新 key', async () => {
+    const expSec = expiringExpiredTime();
+    const file = new File(['x'], 'x');
+    const items: Ref<CosUploadItem[]> = ref([
+      {
+        ...makeItem('ref-1', 'tmp/old.pdf', file, expSec),
+        status: 'done',
+        progress: 100,
+        etag: '"old-etag"',
+      },
+    ]);
+    // 故意让 upload 失败 → 最终 status=error 但**用新 tmp_key 上传**（证明 reset 生效）
+    uploadFileSpy.mockRejectedValue(new Error('mock upload fail'));
+    const refetchIntents = vi.fn(async () =>
+      makeIntents([{ client_ref: 'ref-1', tmp_key: 'tmp/new.pdf' }], expSec + 7200),
+    );
+    const { startUpload } = useCosUpload({ items, refetchIntents });
+    await startUpload();
+
+    expect(items.value[0]!.tmp_key).toBe('tmp/new.pdf');
+    // 旧的 etag/progress 已被清（applyFreshIntents reset 阶段）
+    // 之后 uploadOne 失败覆盖 progress=0, error=...；核心断言是 uploadFile 被调用时 Key 是新值
+    expect(uploadFileSpy).toHaveBeenCalledTimes(1);
+    expect(uploadFileSpy.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ Key: 'tmp/new.pdf' }),
+    );
+    expect(items.value[0]!.status).toBe('error');
+    expect(items.value[0]!.error).toBe('mock upload fail');
+  });
+
+  it('tmp_key 变化 + 之前 error → 强制 reset pending + 清 error', async () => {
+    const expSec = expiringExpiredTime();
+    const file = new File(['x'], 'x');
+    const items: Ref<CosUploadItem[]> = ref([
+      {
+        ...makeItem('ref-1', 'tmp/old.pdf', file, expSec),
+        status: 'error',
+        progress: 0,
+        error: '先前失败',
+      },
+    ]);
+    uploadFileSpy.mockRejectedValue(new Error('still fail'));
+    const refetchIntents = vi.fn(async () =>
+      makeIntents([{ client_ref: 'ref-1', tmp_key: 'tmp/new.pdf' }], expSec + 7200),
+    );
+    const { startUpload } = useCosUpload({ items, refetchIntents });
+    await startUpload();
+
+    // 先被 applyFreshIntents 清掉 error（reset pending）→ 再被 uploadOne 失败覆盖 error
+    // 验证 reset 生效：uploadFile 用的是新 tmp_key
+    expect(items.value[0]!.tmp_key).toBe('tmp/new.pdf');
+    expect(uploadFileSpy.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ Key: 'tmp/new.pdf' }),
+    );
+    expect(items.value[0]!.status).toBe('error');
+    expect(items.value[0]!.error).toBe('still fail'); // 被新 error 覆盖，证明 reset 清空旧 error 后才被覆盖
+  });
+
+  it('tmp_key 变化 + 之前 uploading → 强制 mark error，避免 in-flight 写到旧 key', async () => {
+    const expSec = expiringExpiredTime();
+    const file = new File(['x'], 'x');
+    const items: Ref<CosUploadItem[]> = ref([
+      {
+        ...makeItem('ref-1', 'tmp/old.pdf', file, expSec),
+        status: 'uploading',
+        progress: 50,
+      },
+    ]);
+    uploadFileSpy.mockResolvedValue(mockSuccess()); // 不应被调用（status=error 不进 targets）
+    const refetchIntents = vi.fn(async () =>
+      makeIntents([{ client_ref: 'ref-1', tmp_key: 'tmp/new.pdf' }], expSec + 7200),
+    );
+    const { startUpload } = useCosUpload({ items, refetchIntents });
+    await startUpload();
+
+    // uploading + tmp_key 变化 → status=error（不进入 targets 二次上传）
+    expect(items.value[0]!.tmp_key).toBe('tmp/new.pdf');
+    expect(items.value[0]!.status).toBe('error');
+    expect(items.value[0]!.progress).toBe(0);
+    expect(items.value[0]!.error).toMatch(/重签时上传进行中/);
+    expect(uploadFileSpy).not.toHaveBeenCalled();
+  });
+
+  it('旧 tmp_key 存在 + 新 tmp_key 为空 → 强制 mark error（旧实现漏分支兜底）', async () => {
+    const expSec = expiringExpiredTime();
+    const file = new File(['x'], 'x');
+    const items: Ref<CosUploadItem[]> = ref([
+      {
+        ...makeItem('ref-1', 'tmp/old.pdf', file, expSec),
+        status: 'done',
+        progress: 100,
+        etag: '"old"',
+      },
+    ]);
+    uploadFileSpy.mockResolvedValue(mockSuccess());
+    // 极端场景：重签返回的 items 里没填 tmp_key（不应发生，但兜底要捕获）
+    const refetchIntents = vi.fn(async () =>
+      makeIntents([{ client_ref: 'ref-1', tmp_key: '' }], expSec + 7200),
+    );
+    const { startUpload } = useCosUpload({ items, refetchIntents });
+    await startUpload();
+
+    expect(items.value[0]!.status).toBe('error');
+    expect(items.value[0]!.error).toMatch(/tmp_key 缺失/);
+    expect(uploadFileSpy).not.toHaveBeenCalled();
+  });
+});

@@ -50,6 +50,48 @@ const merged = await mergePdfBlobs([pdfBlob1, pdfBlob2, pdfBlob3]);
 
 新页面涉及文件上传时优先复用 `FileListCard.vue`，避免在每个 view 重复写 el-upload + 文件列表渲染逻辑。
 
+### 3.1 COS 直传链路（2026-09-16 M3 新增）
+
+图纸 / 3D 模型等大文件不再走 multipart 由后端代理上传 COS，改为：后端签发 STS 临时凭证 + tmp_key → 前端 cos-js-sdk-v5 直传 COS tmp 区 → 业务端点（建单 / 补传）携带 tmp_key + sha 由后端 head + copy 到正式 CAS key。
+
+涉及的模块（自上而下）：
+
+| 模块                             | 路径                                                                                | 作用                                                                            |
+| -------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| STS 凭证申请 + confirm（场景 B） | `src/api/parts/file.ts`                                                             | `createUploadIntents` / `confirmPartFile`                                       |
+| JSON batch create（场景 A）      | `src/api/parts/batch.ts`                                                            | `batchCreateParts` items 含 `drawing_file?` / `model3d_file?` FileBinding       |
+| COS 直传 composable              | `src/composables/useCosUpload.ts`                                                   | cos-js-sdk-v5 封装 + 凭证过期自动重签                                           |
+| 流式 SHA-256 hash 工具           | `src/utils/fileHash.ts`                                                             | hash-wasm 8MB 分块，恒定内存                                                    |
+| 类型契约                         | `src/types/part_file.ts`                                                            | `CosCredentials` / `UploadIntentsIn/Out` / `FileBinding` / `PartBatchCreateOut` |
+| PartBatchPdfTab 集成             | `src/views/parts/components/PartBatchPdfTab.vue` + `composables/usePartBatchPdf.ts` | Tab 2「PDF 批量上传」改造为 COS 直传 + JSON batch                               |
+| 行内进度 / 重试单元              | `src/components/UploadStatusCellView.vue`                                           | T3.4 复用 cell 显示组件                                                         |
+
+#### COS 桶 CORS 配置（必读，运维首次部署必踩坑）
+
+前端 cos-js-sdk-v5 直连 COS 桶域名（`{bucket}-{appid}.cos.{region}.myqcloud.com`），**不走** frontend nginx，因此 nginx 配置（仅反代 `/api/*`）不生效；CORS 必须**在 COS 控制台**「存储桶 → 权限管理 → 跨域访问 CORS 设置」显式开启：
+
+- **来源 Origin**：
+  - `http://localhost:8080`（dev 本地 nginx）
+  - staging 域名
+  - 生产域名
+- **操作 Methods**：`PUT, POST, GET, HEAD, DELETE`（SDK 上传主要用 `PUT`）
+- **允许 Headers**：`*`
+- **暴露 Headers**：`ETag, x-cos-*`（上传完成后 SDK 要读 `ETag`）
+- **超时秒数**：建议 ≥ 300（大文件分块耗时）
+
+**没配 CORS 的表现**：浏览器报 `No 'Access-Control-Allow-Origin' header is present`，PUT 预检 403；前端上传组件表现为「上传中…」无限挂起，最终 SDK 内部 reject 抛 `TypeError: Failed to fetch`。
+
+**配错位置**（曾踩）：腾讯云 COS 的 CORS 在「存储桶」级别设置，**不是**用户级 / 角色级；新桶默认无 CORS。
+
+#### STS policy resource 与 tmp_key 模板对齐
+
+后端 STS policy 的 resource 限定前缀：
+
+- 场景 A（创建工单）：`tmp_sub_prefix = "{cfg_tmp_prefix}{Uuid::new_v4()}"` → 实 key 形如 `tmp/<batch_uuid>/<seq>_<sanitized_filename>`
+- 场景 B（详情页补传）：`tmp_sub_prefix = "{cfg_tmp_prefix}part/{owner_id}"` → 实 key 形如 `tmp/part/<part_id>/<seq>_<sanitized_filename>`
+
+前端 `useCosUpload` 直传时只需把后端返回的 `tmp_key` 原样填到 `cos.uploadFile({ Key: tmp_key })` —— 前端不需要自己拼 prefix。重签场景下若 `tmp_key` 变化，composable 内部的 `applyFreshIntents` 兜底（详见 `src/composables/useCosUpload.ts` 注释）会 reset status=pending 强制重传，不会让「旧 STS 写旧 key + 新 tmp_key 拿去 commit」的鬼状态穿透。
+
 ## 4. nginx 300m 上限对齐
 
 `nginx.conf` 关键配置：

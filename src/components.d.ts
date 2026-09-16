@@ -96,6 +96,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ShelfPickerCard: typeof import('./components/ShelfPickerCard.vue')['default']
+    UploadStatusCellView: typeof import('./components/UploadStatusCellView.vue')['default']
   }
   export interface ComponentCustomProperties {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']
