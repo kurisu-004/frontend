@@ -363,6 +363,9 @@ function parseFilename(header: string | undefined): string | null {
  *
  * 工人持有以 `t_part_batch.location='WORKER'` 判定（不用 current_holder_id，因为该列在
  * 货架上存的是 shelf.id）。旧 21405 / 21418 错误码已不再由 scan 触发。
+ * 2026-09-16 PR-2：current_holder_id 列已下线（t_part 瘦身 / Rust v2 迁移 027，
+ * 物理位置 / 持有者 / 上架时间全部归 t_part_batch），批次级 current_holder_id 保留；
+ * 本判定走 batch.location 不再涉及该列下线讨论。
  */
 export async function scanDelivery(code: string): Promise<ScanDeliveryOut> {
   const resp = await api.post<ScanDeliveryOut>('/delivery-notes/scan', { code });

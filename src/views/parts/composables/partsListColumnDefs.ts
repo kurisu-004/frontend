@@ -415,7 +415,10 @@ export function buildPartsListColumnDefs(deps: {
         ]),
       cellRender: ({ row }) => {
         const r = row as PartListItem;
-        const children: ReturnType<typeof h>[] = [
+        // 2026-09-16 PR-2：has_been_repaired 随 t_part 瘦身下线，状态列不再渲染「返修」标。
+        return h(
+          'span',
+          null,
           h(
             ElTag,
             {
@@ -425,22 +428,7 @@ export function buildPartsListColumnDefs(deps: {
             },
             () => ORDER_STATUS_LABEL[r.status] ?? r.status,
           ),
-        ];
-        if (r.has_been_repaired) {
-          children.push(
-            h(
-              ElTag,
-              {
-                type: 'warning',
-                size: 'small',
-                effect: 'dark',
-                style: 'margin-left: 4px',
-              },
-              () => '返修',
-            ),
-          );
-        }
-        return h('span', null, children);
+        );
       },
     },
 
@@ -851,17 +839,20 @@ export function buildPartsListColumnDefs(deps: {
         ),
       cellRender: ({ row }) => {
         const r = row as PartListItem;
-        if (r.location === 'PRODUCTION_SHELF' && r.shelf_code) {
-          return h('span', null, `货架 ${r.shelf_code}`);
+        // 2026-09-16 PR-2：location 改为后端派生（min-progress 活跃批次），holder 名
+        // 统一走新增 holder_name（货架 code / 工人姓名 / 外协公司名）；原 shelf_code /
+        // worker_name / outsource_company_name 系 v1 遗留声明，v2 从未提供，已删除。
+        if (r.location === 'PRODUCTION_SHELF' && r.holder_name) {
+          return h('span', null, `货架 ${r.holder_name}`);
         }
-        if (r.location === 'INSPECTION_SHELF' && r.shelf_code) {
-          return h('span', null, `品检 ${r.shelf_code}`);
+        if (r.location === 'INSPECTION_SHELF' && r.holder_name) {
+          return h('span', null, `品检 ${r.holder_name}`);
         }
-        if (r.location === 'WORKER' && r.worker_name) {
-          return h('span', null, r.worker_name);
+        if (r.location === 'WORKER' && r.holder_name) {
+          return h('span', null, r.holder_name);
         }
-        if (r.location === 'OUTSOURCE_COMPANY' && r.outsource_company_name) {
-          return h('span', null, `外协 ${r.outsource_company_name}`);
+        if (r.location === 'OUTSOURCE_COMPANY' && r.holder_name) {
+          return h('span', null, `外协 ${r.holder_name}`);
         }
         return h('span', { class: 'muted' }, '—');
       },

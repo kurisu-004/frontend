@@ -62,6 +62,9 @@ describe('mapScanBatchResult', () => {
   ];
 
   // 最小 PartItem stub —— 仅供测试 mapScanBatchResult 的对齐逻辑
+  // 2026-09-16 PR-2：随 t_part 瘦身后端列下线，actual_delivery_date / current_holder_id /
+  // placed_at / delivery_note_id / delivery_note_no / delivery_note_status 等 part 级字段
+  // 从 stub 同步精简（PartItem 类型已不含这些字段）。
   function makePartItem(id: string): BatchToInspectionOutFE['submitted'][number]['part'] {
     return {
       id,
@@ -71,7 +74,6 @@ describe('mapScanBatchResult', () => {
       drawing_no: 'D',
       quantity: 1,
       planned_delivery_date: '2026-09-01',
-      actual_delivery_date: null,
       is_urgent: false,
       status: 'INSPECTION',
       order_no: null,
@@ -80,17 +82,12 @@ describe('mapScanBatchResult', () => {
       customer_name: null,
       parent_customer_name: null,
       customer_path: null,
-      delivery_note_id: null,
-      delivery_note_no: null,
-      delivery_note_status: null,
       assembly_id: null,
-      current_holder_id: null,
       current_holder_kind: null,
       shelf_code: null,
       worker_name: null,
       outsource_company_name: null,
       location: 'INSPECTION_SHELF',
-      placed_at: null,
       next_process_id: null,
       next_process_name: null,
     };
@@ -347,6 +344,7 @@ describe('useBulkScanInspect().run() (2026-08-28 route B)', () => {
       { batch_id: 'B-1', version: 1, label: 'L1' },
       { batch_id: 'B-2', version: 1, label: 'L2' },
     ];
+    // 2026-09-16 PR-2：随 t_part 瘦身后端列下线，part 级字段从 stub 同步精简。
     const partStub = {
       id: '190000000000001',
       version: 1,
@@ -355,7 +353,6 @@ describe('useBulkScanInspect().run() (2026-08-28 route B)', () => {
       drawing_no: 'D',
       quantity: 1,
       planned_delivery_date: '2026-09-01',
-      actual_delivery_date: null,
       is_urgent: false,
       status: 'INSPECTION',
       order_no: null,
@@ -364,17 +361,12 @@ describe('useBulkScanInspect().run() (2026-08-28 route B)', () => {
       customer_name: null,
       parent_customer_name: null,
       customer_path: null,
-      delivery_note_id: null,
-      delivery_note_no: null,
-      delivery_note_status: null,
       assembly_id: null,
-      current_holder_id: null,
       current_holder_kind: null,
       shelf_code: null,
       worker_name: null,
       outsource_company_name: null,
       location: 'INSPECTION_SHELF',
-      placed_at: null,
       next_process_id: null,
       next_process_name: null,
     } as const;

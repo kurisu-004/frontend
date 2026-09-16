@@ -62,7 +62,7 @@ export interface AssemblyItem {
   customer_path: string | null;
   request_date: string;
   planned_delivery_date: string;
-  actual_delivery_date: string | null;
+  // PR-2 2026-09-16 t_assembly 瘦身：actual_delivery_date 随后端列下线从出参删除。
   is_urgent: boolean;
   /** PENDING / IN_PROCESS / INSPECTION / READY_TO_SHIP / DELIVERED / COMPLETED / CANCELLED */
   status: AssemblyStatus;
@@ -167,7 +167,7 @@ export interface AssemblyUpdatePayload {
   /** YYYY-MM-DD */
   request_date?: string | null;
   planned_delivery_date?: string | null;
-  actual_delivery_date?: string | null;
+  // PR-2 2026-09-16 t_assembly 瘦身：更新请求体不再接受 actual_delivery_date。
   is_urgent?: boolean | null;
   // —— 2026-07-24 新增 ——
   quantity?: number | null;

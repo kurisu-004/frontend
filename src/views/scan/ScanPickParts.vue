@@ -341,7 +341,9 @@ function isHeic(t: string): boolean {
 onBeforeMount(async () => {
   if (!requireWorker(router)) return;
   // 多架 SHELF_ACCOUNT：worker 已在 ScanActionPicker 顶部选好当前作业架；
-  // 单架时直接 = shelfSel.selectedShelfId（唯一架）；wildcard 时为 null（兜底到 current_holder_id）
+  // 单架时直接 = shelfSel.selectedShelfId（唯一架）；
+  // wildcard 时为 null —— 2026-09-16 PR-2 起 part 级 current_holder_id 随
+  // t_part 瘦身下线，wildcard 无选中架时由下方守卫报错提示。
   shelfId.value = shelfSel.selectedShelfId.value ?? '';
   await refresh();
 });
@@ -466,10 +468,10 @@ async function applyScanSelection(p: PartItem): Promise<void> {
   const key = String(p.batch_id || p.id);
   await scrollCardIntoView(key);
   if (!worker.value) return;
-  // 多架/单架/wildcard 三态统一：选中件的实际 current_holder_id（来自后端收口后的
-  // 列表）作 shelf_id 主路径；兜底用 shelfSel.selectedShelfId（单架时 = 唯一架
-  // id；wildcard 时为 null）。
-  const useShelfId = p.current_holder_id || shelfId.value;
+  // 2026-09-16 PR-2：part 级 current_holder_id 随 t_part 瘦身下线，shelf_id 统一
+  // 取 useActiveShelfSelection 的当前作业架（单架 = 唯一架 id；多架 = 工人已选架；
+  // wildcard 未选架为 '' → 下方守卫报错）。
+  const useShelfId = shelfId.value;
   if (!useShelfId) {
     ElMessage.error('未找到零件所在货架信息');
     return;
@@ -511,7 +513,8 @@ async function onQtyConfirm(qty: number): Promise<void> {
   showQtyDialog.value = false;
   if (!selectedPart.value || !worker.value) return;
   const code = selectedPart.value.serial_no || selectedPart.value.drawing_no || '';
-  const useShelfId = selectedPart.value.current_holder_id || shelfId.value;
+  // 2026-09-16 PR-2：同 applyScanSelection，shelf_id 只取当前作业架。
+  const useShelfId = shelfId.value;
   if (!useShelfId) {
     ElMessage.error('未找到零件所在货架信息');
     return;

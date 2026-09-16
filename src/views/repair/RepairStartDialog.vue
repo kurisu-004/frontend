@@ -139,12 +139,7 @@ function onCancel(): void {
       <div><strong>图号：</strong>{{ target.drawing_no }}</div>
       <div><strong>名称：</strong>{{ target.name }}</div>
       <div><strong>总数：</strong>{{ target.quantity }}</div>
-      <el-alert
-        v-if="target.has_been_repaired"
-        type="warning"
-        :closable="false"
-        title="该件此前已返修过，本次仍会保留返修标记"
-      />
+      <!-- 2026-09-16 PR-2：has_been_repaired 随 t_part 瘦身下线，「此前已返修」提示删除 -->
     </div>
 
     <el-form label-width="84px" style="margin-top: 12px">

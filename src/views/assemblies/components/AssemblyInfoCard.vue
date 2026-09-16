@@ -63,9 +63,7 @@
       <el-descriptions-item label="计划交期">
         {{ assembly.planned_delivery_date }}
       </el-descriptions-item>
-      <el-descriptions-item label="实际送货">
-        {{ assembly.actual_delivery_date || '—' }}
-      </el-descriptions-item>
+      <!-- 2026-09-16 PR-2：actual_delivery_date 随 t_assembly 瘦身下线，展示行删除 -->
       <el-descriptions-item label="创建时间">
         {{ formatDateTime(assembly.created_at) }}
       </el-descriptions-item>
