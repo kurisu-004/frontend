@@ -72,6 +72,10 @@ export interface UseOutsourceSendableListOptions {
 }
 
 export function useOutsourceSendableList(options: UseOutsourceSendableListOptions = {}) {
+  // 2026-09-17 PR-3 修复：useRouter() 必须在 setup 顶部一次性拿闭包复用，禁止在 async 事件回调里调
+  // —— vue-router 4.6.4 + vue 3.5.38 下 inject() 在 lifecycle hook 之外返回 undefined。
+  const router = useRouter();
+
   const { dangerous: confirmDangerous } = useConfirm();
 
   // ============ 列表 filter（持久化） ============
@@ -198,7 +202,6 @@ export function useOutsourceSendableList(options: UseOutsourceSendableListOption
     } catch (e) {
       // 2026-09-16 PR-3：20706 BIZ_PROCESS_CHAIN_REQUIRED 兜底 —— 弹「前往制定」框；
       // 命中后不走普通 ElMessage.error 兜底。
-      const router = useRouter();
       const handled = await handleProcessChainRequired(e, target.part_id, router);
       if (!handled) {
         ElMessage.error((e as Error).message ?? '发送失败');
@@ -310,7 +313,6 @@ export function useOutsourceSendableList(options: UseOutsourceSendableListOption
     const errors: { serial: string; msg: string; idx: number }[] = [];
     let okCount = 0;
     // 2026-09-16 PR-3：批量路径接 20706 兜底；命中后批量循环 break（用户先去补单工艺链）。
-    const router = useRouter();
     let processChainRequiredHit = false;
     // 串行 for 循环：避免并发踩状态机；失败项保留在队列可重试
     for (let i = 0; i < sendQueue.value.length; i++) {

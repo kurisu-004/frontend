@@ -32,6 +32,10 @@ export interface CncSetupGroup {
 }
 
 export function usePartCncGroups(partId: Ref<string>) {
+  // 2026-09-17 PR-3 修复：useRouter() 必须在 setup 顶部一次性拿闭包复用，禁止在 async 事件回调里调
+  // —— vue-router 4.6.4 + vue 3.5.38 下 inject() 在 lifecycle hook 之外返回 undefined。
+  const router = useRouter();
+
   const cncPrograms = ref<PartFileItem[]>([]);
   const setupSheets = ref<PartFileItem[]>([]);
   const cncLoading = ref(false);
@@ -165,7 +169,6 @@ export function usePartCncGroups(partId: Ref<string>) {
       ElMessage.success('已下发到生产货架');
       return true;
     } catch (e) {
-      const router = useRouter();
       const handled = await handleProcessChainRequired(e, partId.value, router);
       if (!handled) {
         ElMessage.error((e as Error).message ?? '下发失败');

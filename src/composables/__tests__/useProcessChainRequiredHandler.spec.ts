@@ -4,36 +4,22 @@
 // - isProcessChainRequiredError：true / false / 非 ApiError 三分支
 // - handleProcessChainRequired：弹框确认 → 跳路由；弹框取消 → 不跳；非 20706 → 不弹框不跳
 // - part_id 缺省时：不带 ?part_id= deep link
-// - processChainRequiredFallbackMessage：20706 → null（已处理）；其它 → 错误字符串
-// - quickWarnProcessChainRequired：20706 → ElMessage.warning；其它 → 不弹
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/api/http';
 
 const mockConfirm = vi.fn();
-const mockMessage = Object.assign(vi.fn(), {
-  success: vi.fn(),
-  warning: vi.fn(),
-  error: vi.fn(),
-  info: vi.fn(),
-});
 
 vi.mock('element-plus', () => ({
   ElMessageBox: {
     confirm: mockConfirm,
   },
-  ElMessage: mockMessage,
 }));
 
 const routerPush = vi.fn(async () => undefined);
 
-const {
-  BIZ_PROCESS_CHAIN_REQUIRED,
-  isProcessChainRequiredError,
-  handleProcessChainRequired,
-  processChainRequiredFallbackMessage,
-  quickWarnProcessChainRequired,
-} = await import('../useProcessChainRequiredHandler');
+const { BIZ_PROCESS_CHAIN_REQUIRED, isProcessChainRequiredError, handleProcessChainRequired } =
+  await import('../useProcessChainRequiredHandler');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -154,53 +140,5 @@ describe('handleProcessChainRequired', () => {
       '需要先制定工序链',
       expect.any(Object),
     );
-  });
-});
-
-describe('processChainRequiredFallbackMessage', () => {
-  it('20706 → null（提示已由弹框处理，caller 不要重复 toast）', () => {
-    const e = new ApiError(20706, '请先制定工序链');
-    expect(processChainRequiredFallbackMessage(e, 'P-001')).toBeNull();
-  });
-
-  it('其它 ApiError → "label：错误信息" 形式', () => {
-    const e = new ApiError(20103, 'INVALID_TRANSITION');
-    expect(processChainRequiredFallbackMessage(e, 'P-001')).toBe('P-001：INVALID_TRANSITION');
-  });
-
-  it('普通 Error → "label：message" 形式', () => {
-    expect(processChainRequiredFallbackMessage(new Error('boom'), 'P-001')).toBe('P-001：boom');
-  });
-
-  it('null / undefined → "label：未知错误" 兜底', () => {
-    expect(processChainRequiredFallbackMessage(null, 'P-001')).toBe('P-001：未知错误');
-    expect(processChainRequiredFallbackMessage(undefined, 'P-001')).toBe('P-001：未知错误');
-  });
-});
-
-describe('quickWarnProcessChainRequired', () => {
-  it('20706 → ElMessage.warning 取 e.message', () => {
-    const e = new ApiError(20706, '请先制定工序链');
-    quickWarnProcessChainRequired(e);
-    expect(mockMessage.warning).toHaveBeenCalledWith('请先制定工序链');
-  });
-
-  it('20706 + message 缺失 → fallback 文案', () => {
-    const e = new ApiError(20706, '');
-    quickWarnProcessChainRequired(e);
-    expect(mockMessage.warning).toHaveBeenCalledWith('请先制定工序链');
-  });
-
-  it('20706 + 自定义 fallback', () => {
-    const e = new ApiError(20706, '');
-    quickWarnProcessChainRequired(e, '请先制定工序链再下单');
-    expect(mockMessage.warning).toHaveBeenCalledWith('请先制定工序链再下单');
-  });
-
-  it('非 20706 → 不弹任何 toast', () => {
-    const e = new ApiError(20103, 'INVALID_TRANSITION');
-    quickWarnProcessChainRequired(e);
-    expect(mockMessage.warning).not.toHaveBeenCalled();
-    expect(mockMessage.error).not.toHaveBeenCalled();
   });
 });

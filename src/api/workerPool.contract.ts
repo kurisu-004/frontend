@@ -123,10 +123,9 @@ export interface WorkTypeMaxHeldDto {
  *   `pooled_for_minutes`（分钟数）或前端按 created_at 算，字段是否回填以
  *   实际后端响应为准（本接口先标记为下线，UI 不再消费）。
  * - 新增 `current_process_step_id`（可选）：与 PartBatch 同语义，逻辑 FK →
- *   t_process_chain_step.id；保留 `next_process_id` 因 worker_pool 端点仍
- *   用 process_id 直接 JOIN 候选池的 step.process_id（service 字段名仍叫
- *   `next_process_id`，因本端点匹配口径没变 —— 服务端用 process_id 匹，UI
- *   仍要传 process_id）。 */
+ *   t_process_chain_step.id；URL `{process_id}` 占位对应 service 端字段仍
+ *   叫 `next_process_id`（因本端点匹配口径没变 —— 服务端用 process_id 匹，
+ *   UI 仍要传 process_id）。 */
 export interface PoolBatchItemDto {
   batch_id: string;
   part_id: string;

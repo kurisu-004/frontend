@@ -20,7 +20,7 @@
 // 注意：part_id 由 caller 显式传入（不依赖 ApiError.payload 反查），避免
 // 后端响应结构改动把这条 UI 流误伤。
 
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessageBox } from 'element-plus';
 import type { ApiError } from '@/api/http';
 
 /** 20706 BIZ_PROCESS_CHAIN_REQUIRED —— 后端 src/shared/error.rs::code 新增。 */
@@ -43,7 +43,8 @@ export function isProcessChainRequiredError(e: unknown): e is ApiError {
  * @param partId         当前操作的 part 雪花 ID 字符串（用于 deep link）；
  *                       null/undefined → 不带 part_id，仅跳工艺制定列表
  * @param router         vue-router 实例（由 caller 注入；不直接 import 以保持纯函数）
- * @returns Promise<boolean>  true = 已处理（弹框 + 跳转 / 用户取消）；false = 非 20706，
+ * @returns Promise<boolean>  true = 已兜底（已弹框；含「用户取消确认框」与「跳转成功」两种情况）；
+ *                       caller 拿 true 不必再 toast 普通错误。false = 非 20706，
  *                       caller 应继续原 throw / 兜底。
  */
 export async function handleProcessChainRequired(
@@ -71,22 +72,4 @@ export async function handleProcessChainRequired(
     // 用户取消确认框 —— 静默 return，不弹错（caller 后续流程继续按用户的取消走）
   }
   return true;
-}
-
-/**
- * 给批量下发场景准备的助手：返回「未命中 20706 时给 caller 的回退错误消息」。
- * 20706 已弹过跳转框，caller 不需要再 toast；其它错误码走 toast 兜底。
- */
-export function processChainRequiredFallbackMessage(e: unknown, partLabel: string): string | null {
-  if (isProcessChainRequiredError(e)) return null;
-  return `${partLabel}：${(e as { message?: string } | null)?.message ?? '未知错误'}`;
-}
-
-/** 单件场景快速调用版：检测到 20706 直接 ElMessage.warning 不弹框（用于 inline 操作）。
- *  适用场景：扫码台 RETURN / PICK_UP 等高频小屏，弹框打断手感；这里仅 toast 兜底，
- *  详细「前往制定」流程留给详情页 / 列表页的大屏路径。 */
-export function quickWarnProcessChainRequired(e: unknown, fallback = '请先制定工序链'): void {
-  if (isProcessChainRequiredError(e)) {
-    ElMessage.warning(e.message || fallback);
-  }
 }

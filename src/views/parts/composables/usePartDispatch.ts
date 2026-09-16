@@ -37,6 +37,10 @@ export interface UsePartDispatchDeps {
 }
 
 export function usePartDispatch(deps: UsePartDispatchDeps) {
+  // 2026-09-17 PR-3 修复：useRouter() 必须在 setup 顶部一次性拿闭包复用，禁止在 async 事件回调里调
+  // —— vue-router 4.6.4 + vue 3.5.38 下 inject() 在 lifecycle hook 之外返回 undefined。
+  const router = useRouter();
+
   // ============ 共享数据 ============
   const shelves = ref<Shelf[]>([]);
   const processes = ref<Process[]>([]);
@@ -105,7 +109,6 @@ export function usePartDispatch(deps: UsePartDispatchDeps) {
     } catch (e) {
       // 2026-09-16 PR-3：20706 BIZ_PROCESS_CHAIN_REQUIRED 兜底 —— 弹「前往制定」框，
       // 命中后不 toast 普通错误（避免重复提示）。
-      const router = useRouter();
       const handled = await handleProcessChainRequired(e, dispatchPartId.value, router);
       if (!handled) {
         ElMessage.error((e as Error).message ?? '下发失败');
@@ -180,7 +183,6 @@ export function usePartDispatch(deps: UsePartDispatchDeps) {
     const failures: { label: string; message: string }[] = [];
     let successCount = 0;
     // 2026-09-16 PR-3：批量路径也接 20706 兜底；命中后批量循环 break，避免反复弹框。
-    const router = useRouter();
     let processChainRequiredHit = false;
     batchDispatchSubmitting.value = true;
     try {
