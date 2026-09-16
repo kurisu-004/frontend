@@ -147,18 +147,7 @@ const columnDefs: ColumnDef[] = [
         : h('span', null, '');
     },
   },
-  {
-    key: 'has_been_repaired',
-    label: '返修',
-    width: 64,
-    align: 'center',
-    cellRender: ({ row }) => {
-      const r = row as PartItem;
-      return r.has_been_repaired
-        ? h(ElTag, { type: 'warning', size: 'small', effect: 'dark' }, () => '返修')
-        : h('span', null, '');
-    },
-  },
+  // 2026-09-16 PR-2：has_been_repaired 随 t_part / 批次出参瘦身下线，「返修」列删除。
   {
     key: 'location',
     label: '所在位置',
