@@ -280,7 +280,21 @@ export async function batchCreatePartsWithPdfs(
 // 批次（2026-07-29 批次化）
 // ============================================================
 
-/** 批次监控条目（详情页批次卡片） */
+/** 批次监控条目（详情页批次卡片）
+ *
+ * 2026-09-16 PR-3 字段下线/替换（后端 `t_part_batch` 同步瘦身）：
+ * - 删 `next_process_id`：原意为「下一道工序 id」，PR-3 重命名为
+ *   `current_process_step_id`（FK → t_process_chain_step.id），
+ *   与工艺链步骤强绑定，语义不再等价于「下一道工序」。
+ * - 删 `placed_at`：t_part_batch 列下线（前端展示改用 created_at / 事件历史，
+ *   「上架积压」语义让位给 dashboard snapshot）。
+ * - `has_been_repaired` 已于 PR-2 删除，本次确认零残留。
+ * - 保留 `next_process_name`：后端 JOIN step.process 后展示名仍按此名吐出
+ *   （process-chain step.process → process.name），字段名不变，前端展示
+ *   「下一工序」列继续工作。
+ * - 新增 `current_process_step_id`：可选（部分老接口可能未带；新接口必带）。
+ *   UI 取 `step.process` 派生展示名，与 `next_process_name` 互补。
+ */
 export interface PartBatch {
   id: string;
   version: number;
@@ -292,9 +306,12 @@ export interface PartBatch {
   location: string | null;
   current_holder_id: string | null;
   current_holder_display: string | null;
-  next_process_id: string | null;
+  /** 2026-09-16 PR-3 新增：当前所在工艺链步骤 id（雪花 ID 字符串；null = 未绑定步骤）。
+   *  逻辑 FK → t_process_chain_step.id；展示名由后端 JOIN 派生为 next_process_name。 */
+  current_process_step_id?: string | null;
+  /** 下一道工序展示名（后端 JOIN step.process 后由 service 输出）。
+   *  PR-3 之前字段名 next_process_name 继续沿用，避免前端展示层回退。 */
   next_process_name: string | null;
-  placed_at: string | null;
   delivery_note_id: string | null;
   delivery_note_no: string | null;
   parent_batch_id: string | null;

@@ -12,17 +12,20 @@ export interface DashboardPartItem {
   is_urgent: boolean;
   planned_delivery_date: string | null;
   picked_up_at: string | null;
-  // 2026-09-16 PR-2 暂存：以下 4 字段（current_holder_id / current_holder_kind /
-  // shelf_code / placed_at）值来自 rust 后端 dashboard/service.rs（已核实只读
-  // t_part_batch，未依赖已删 t_part 列），类型对齐在后续 PR 同步，PR-2 不改字段。
+  // 2026-09-16 PR-2 暂存：以下 3 字段（current_holder_id / current_holder_kind /
+  // shelf_code）值来自 rust 后端 dashboard/service.rs（已核实只读
+  // t_part_batch，未依赖已删 t_part 列），类型对齐在后续 PR 同步。
+  // 2026-09-16 PR-3：删 `placed_at` —— t_part_batch 列下线（PR-3 后端）；
+  // dashboard WS 投影自 service.rs 也同步清理（前端类型同步对齐）。
   current_holder_id: string | null;
   current_holder_kind: 'shelf' | 'worker' | null;
   shelf_code: string | null;
-  placed_at: string | null;
   worker_name?: string | null;
   customer_name: string | null;
   customer_path: string | null;
   // Dashboard 大屏「下一工序」直接展示，省一次前端 /processes 请求
+  // 2026-09-16 PR-3：next_process_id 保留（仍是 t_part rollup 列，PR-3 后端未删）；
+  // PR-3 后端派生语义改为 min-progress 活跃批次的 step.process_id，对应 UI 展示不变。
   next_process_id: string | null;
   next_process_name: string | null;
 }
