@@ -4,6 +4,7 @@
 // 整段抽到本文件 + PartBatchPdfTab.vue。
 
 import { computed, onBeforeUnmount, provide, reactive, ref, watch, type Ref } from 'vue';
+import type { UseCosUploadReturn } from '@/composables/useCosUpload';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
@@ -1356,38 +1357,96 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   /** 本次提交对应的上传条目集合（仅 onSubmitPdfTree 期间有效，buildBinding 时用）。 */
   let lastUploadEntries: FileUploadEntry[] = [];
 
-  /** UI 调用：单项重试。映射 rowUid → 找到对应 entry 的 clientRef 触发 retryItem。 */
+  // ============================================================
+  // 2026-09-16 M3-B 复审兜底：cosUpload 提升到 composable 顶层
+  // ============================================================
+  //
+  // 旧实现的 cosUpload / cosItemsRef 是在 onSubmitPdfTree 内 `let` 声明的局部变量，
+  // retryUploadByRow 拿不到 → 实际是空操作 stub（仅弹「请重新提交」提示）。
+  // 复审要求：cosUpload 提到顶层 Ref<UseCosUploadReturn | null>，让 row 内「重试」
+  // 按钮能直接调 retryItem()，不必再走「重提交 → 重新走整条七步流程」。
+  //
+  // 提交拆两步：
+  // - 「开始上传」：hash + createUploadIntents + useCosUpload.startUpload()，uploadStage='uploaded'
+  // - 「提交创建」：仅 batchCreateParts + 清空，uploadStage='committed'
+  // 「重试」按钮（行内）调 cosUpload.value?.retryItem(clientRef)，全程在 uploaded 阶段可达。
+  //
+  // null = 本次会话还没点过「开始上传」；上传 / 提交各自结束后清回 null（与 cell 一起重置）。
+  // cosItemsRef 是顶层 Ref<CosUploadItem[]>，useCosUpload 在闭包里持有它，
+  // retryItem 时能读到同一对象（mutable status / progress / etag 都是原地写）。
+  // 「未开始上传」状态下用空数组占位（避免 useCosUpload 内部 items.value[i] 炸 RangeError）。
+  const cosUpload = ref<UseCosUploadReturn | null>(null);
+  const cosItemsRef = ref<CosUploadItem[]>([]);
+
+  /** 上传阶段机。状态机转换：
+   *  - idle → uploading → uploaded → committed
+   *  - uploaded → uploading（用户点行内「重试」，单文件重跑）
+   *  - committed → idle（提交完成、清空，下次重新解析后可再提交） */
+  const uploadStage = ref<'idle' | 'uploading' | 'uploaded' | 'committed'>('idle');
+
+  /** 计算属性：是否可以点「开始上传」（PDF/3D 文件都至少有一份处于 pending/error）。 */
+  const canStartUpload = computed<boolean>(
+    () =>
+      (standaloneParts.value.length > 0 || assemblies.value.length > 0) &&
+      uploadStage.value === 'idle',
+  );
+
+  /** 计算属性：是否可以点「提交创建」（所有 cell.status === 'done'）。 */
+  const canSubmitCreate = computed<boolean>(() => {
+    if (uploadStage.value !== 'uploaded') return false;
+    const pdfKeys = Object.keys(pdfUploadCells);
+    const tKeys = Object.keys(threeDUploadCells);
+    if (pdfKeys.length === 0 && tKeys.length === 0) return true; // 无文件 = 视为就绪
+    return (
+      pdfKeys.every((k) => pdfUploadCells[k]?.status === 'done') &&
+      tKeys.every((k) => threeDUploadCells[k]?.status === 'done')
+    );
+  });
+
+  /** UI 调用：单项重试。映射 rowUid → 找到对应 entry 的 clientRef 触发 retryItem。
+   *
+   * 2026-09-16 M3-B 复审修复：cosUpload 提升到 composable 顶层后，retryItem
+   * 全程可触达（不再依赖 caller 注入）；单元接收 (rowUid, slot, threeDIndex?) 即可。
+   * 行内「重试」按钮在「开始上传」之后、commit 之前任意时刻可点。
+   */
   async function retryUploadByRow(
     rowUid: string,
     slot: 'pdf' | '3d',
     threeDIndex?: number,
-    cosUpload?: { retryItem: (ref: string) => Promise<void> },
-    items?: CosUploadItem[],
   ): Promise<void> {
-    if (!cosUpload || !items) return;
+    const upload = cosUpload.value;
+    if (!upload) {
+      ElMessage.warning('请先点「开始上传」再使用行内「重试」');
+      return;
+    }
     let entry: FileUploadEntry | undefined;
     if (slot === 'pdf') {
       entry = findPdfEntryForRow(rowUid);
     } else {
       entry = threeDIndex !== undefined ? findThreeDEntryForRow(rowUid, threeDIndex) : undefined;
     }
-    if (!entry?.clientRef) return;
-    await cosUpload.retryItem(entry.clientRef);
-  }
-
-  /** 点击「提交创建」 */
-  async function onSubmitPdfTree(): Promise<void> {
-    if (standaloneParts.value.length === 0 && assemblies.value.length === 0) {
-      ElMessage.warning('请先解析上传');
+    if (!entry?.clientRef) {
+      ElMessage.warning('找不到对应上传条目，请重新点「开始上传」');
       return;
     }
-    // 前端兜底：所有 row 的 customer_id 必须有 L2 客户（后端强校验 L2-leaf）
+    // 标记 uploading 阶段让 UI 知道「正在重试」（但保持 uploaded 阶段，commit 仍可走）
+    uploadStage.value = 'uploading';
+    try {
+      await upload.retryItem(entry.clientRef);
+    } finally {
+      // 重试完成：恢复 uploaded 阶段；如仍有 error 项，canSubmitCreate 会保持 false
+      uploadStage.value = 'uploaded';
+    }
+  }
+
+  /** 前端兜底：所有 row 的 customer_id 必须有 L2 客户（后端强校验 L2-leaf）。
+   *  返回 true 表示通过，false 表示阻塞；阻塞时已通过 ElMessage.warning 提示。 */
+  function validateL2Customers(): boolean {
     const missing: string[] = [];
     for (const r of standaloneParts.value) {
       if (!r.customer_id) missing.push(`独立零件 ${r.drawing_no || r.uid}`);
     }
     for (const a of assemblies.value) {
-      // 子件分厂继承自顶层 → 顶层 customer_id 校验已覆盖
       if (!a.customer_id) missing.push(`装配件 ${a.drawing_no || a.uid}`);
     }
     if (missing.length > 0) {
@@ -1396,27 +1455,38 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
           missing.slice(0, 5).join('\n') +
           (missing.length > 5 ? '\n…' : ''),
       );
+      return false;
+    }
+    return true;
+  }
+
+  /** 点击「开始上传」按钮（2026-09-16 M3-B 复审拆第一步）。
+   *
+   * 七步流程中的步骤 1-5：
+   * 1) 收集待上传文件（PDF + 3D），按 (kind, srcUid/fileUid) 去重；保留 rowRefs
+   *    反查哪些 row 需要这个 FileBinding
+   * 2) 受控并发 3 hash → UI cell.status='hashing' → 完成后 'pending'
+   * 3) 调 createUploadIntents (owner_part_id 缺省 = 场景 A)；按 idx 把
+   *    client_ref / tmp_key 回填到 entries
+   * 4) 构造 CosUploadItem[] + useCosUpload，**提升到顶层 ref**（cosUpload.value），
+   *    让 row 内「重试」按钮能直接调 retryItem(client_ref)
+   * 5) startUpload() 完成后 uploadStage='uploaded'；如任何 cell.status !== 'done'
+   *    保留在 'uploading' 阶段让行内 retry 按钮可达（不再强制 alert 阻断）
+   */
+  async function onStartUpload(): Promise<void> {
+    if (standaloneParts.value.length === 0 && assemblies.value.length === 0) {
+      ElMessage.warning('请先解析上传');
       return;
     }
-    pdfSubmitting.value = true;
-    try {
-      // ===== 2026-09-16 T3.4 重写：COS 直传 + JSON batchCreate =====
-      // 七步流程（plan T3.4）：
-      // 1) 收集待上传文件（PDF + 3D），按 (kind, srcUid/fileUid) 去重；保留 rowRefs
-      //    反查哪些 row 需要这个 FileBinding
-      // 2) 受控并发 3 hash → UI cell.status='hashing' → 完成后 'pending'
-      // 3) 调 createUploadIntents (owner_part_id 缺省 = 场景 A)；按 idx 把
-      //    client_ref / tmp_key 回填到 entries
-      // 4) 构造 CosUploadItem[] + useCosUpload.startUpload()，watch deep 把 status /
-      //    progress / error 同步到 UI cells
-      // 5) 上传完成检查：任何 cell.status !== 'done' → 阻断提交，提示用户重试
-      // 6) 按 row 构造 PartBatchCreatePayload[]，drawing_file / model3d_file 从 entries
-      //    派生 FileBinding。**装配主子件展平**为独立 part（v2 JSON 端点不支持
-      //    assembly_uid，2026-09-16 M3 设计决策；assembly 概念暂时隐式，UI 列表可
-      //    通过 drawing_no 前缀 `图号-01/-02/...` 标识归属）
-      // 7) 调 batchCreateParts(JSON)；created / failed 分别提示；commit 后由后端
-      //    spawn 异步清理 tmp_keys，前端不维护 cleanup
+    if (!validateL2Customers()) return;
+    if (uploadStage.value !== 'idle') {
+      ElMessage.warning('已上传或已提交；如需重传请重新解析');
+      return;
+    }
 
+    pdfSubmitting.value = true;
+    uploadStage.value = 'uploading';
+    try {
       // 清空旧的 cell（重新解析拆分后可能引用变了）
       Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
       Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
@@ -1444,9 +1514,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
         });
       }
 
-      // 步骤 3：createUploadIntents（owner_part_id 缺省 = 场景 A 批量创建）
-      let cosUpload: ReturnType<typeof useCosUpload> | undefined;
-      let cosItemsRef: Ref<CosUploadItem[]> | undefined;
+      // 步骤 3+4+5：createUploadIntents + 构造 cosItemsRef + useCosUpload + startUpload
       if (entries.length > 0) {
         const intents = await createUploadIntents({
           files: entries.map((e) => ({
@@ -1459,28 +1527,24 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
             content_type: e.contentType,
           })),
         });
-        // 按 idx 顺序回填 client_ref / tmp_key（后端 items 与请求 files 顺序对齐）
         intents.items.forEach((out, idx) => {
           const entry = entries[idx]!;
           entry.clientRef = out.client_ref;
           entry.tmpKey = out.tmp_key;
         });
 
-        // 步骤 4：构造 CosUploadItem[] + useCosUpload
-        cosItemsRef = ref<CosUploadItem[]>(
-          entries.map((e) => ({
-            client_ref: e.clientRef!,
-            file: e.file,
-            tmp_key: e.tmpKey!,
-            bucket: intents.bucket,
-            region: intents.region,
-            tmp_prefix: intents.tmp_prefix,
-            credentials: intents.credentials,
-            status: 'pending',
-            progress: 0,
-          })),
-        );
-        cosUpload = useCosUpload({
+        cosItemsRef.value = entries.map((e) => ({
+          client_ref: e.clientRef!,
+          file: e.file,
+          tmp_key: e.tmpKey!,
+          bucket: intents.bucket,
+          region: intents.region,
+          tmp_prefix: intents.tmp_prefix,
+          credentials: intents.credentials,
+          status: 'pending',
+          progress: 0,
+        }));
+        cosUpload.value = useCosUpload({
           items: cosItemsRef,
           // 重签回调：用相同 (kind, filename, sha, size, content_type) 再调一次。
           // 旧实现是相同 sha → 同 tmp_key；M3-A Blocker 兜底处理 tmp_key 漂移
@@ -1504,30 +1568,52 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
         });
 
         try {
-          // 步骤 5：上传全部
-          await cosUpload.startUpload();
+          // 紧邻上面 cosUpload.value = useCosUpload(...) 已确保非 null；await 跨越
+          // 边界 TS 不会保持 narrowing，加非空断言。
+          await cosUpload.value!.startUpload();
         } finally {
           stopSync();
         }
-
-        // 上传失败检查：任何 cell.status === 'error' → 阻断提交（强制用户重试）
-        const failedKeys: string[] = [];
-        entries.forEach((e, idx) => {
-          const it = cosItemsRef!.value[idx];
-          if (it && it.status !== 'done') failedKeys.push(`${e.filename}（${e.kind}）`);
-        });
-        if (failedKeys.length > 0) {
-          ElMessageBox.alert(
-            `${failedKeys.length} 个文件上传失败，请点击「重试」后再次提交：\n` +
-              failedKeys.slice(0, 5).join('\n') +
-              (failedKeys.length > 5 ? '\n…' : ''),
-            '上传失败',
-            { type: 'error' },
-          );
-          return;
-        }
       }
 
+      // 阶段切到 uploaded；失败项由行内 retry 兜底，不阻断 stage
+      uploadStage.value = 'uploaded';
+
+      const failedCount =
+        Object.values(pdfUploadCells).filter((c) => c.status === 'error').length +
+        Object.values(threeDUploadCells).filter((c) => c.status === 'error').length;
+      if (failedCount === 0) {
+        ElMessage.success('所有文件已上传完成，请确认后提交创建');
+      } else {
+        ElMessage.warning(`${failedCount} 个文件上传失败，请点行内「重试」`);
+      }
+    } catch (e) {
+      // 上传阶段异常 → 回滚到 idle 允许重试
+      uploadStage.value = 'idle';
+      ElMessage.error((e as Error).message ?? '上传失败');
+    } finally {
+      pdfSubmitting.value = false;
+    }
+  }
+
+  /** 点击「提交创建」按钮（2026-09-16 M3-B 复审拆第二步）。
+   *
+   * 步骤 6+7：仅 batchCreateParts + 清空，不再触发上传。前提：uploadStage='uploaded'
+   * 且所有 cell.status === 'done'（UI 通过 disabled 阻止；这里再校验一次）。
+   */
+  async function onCommit(): Promise<void> {
+    if (uploadStage.value !== 'uploaded') {
+      ElMessage.warning('请先点「开始上传」');
+      return;
+    }
+    if (!canSubmitCreate.value) {
+      ElMessage.warning('仍有文件上传失败，请先点行内「重试」');
+      return;
+    }
+    if (!validateL2Customers()) return;
+
+    pdfSubmitting.value = true;
+    try {
       // 步骤 6：构造 PartBatchCreatePayload[]
       // - 装配主子件统一展平为独立 part（M3 v2 端点无 assembly_uid 支持）；
       //   子件图号 / 名称沿用原 drawing_no / name；quantity / 分厂 / 申请人继承自顶层。
@@ -1636,8 +1722,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
       Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
       lastUploadEntries = [];
-      void cosUpload; // 引用保留避免 GC（closure 持有 items ref）
-      void cosItemsRef;
+      // 释放上传引用，避免下次会话持到 stale items（cosUpload.value = null 让 retryUploadByRow 兜底）
+      cosUpload.value = null;
+      cosItemsRef.value = [];
+      uploadStage.value = 'committed';
+      // 重置回 idle 供下次「开始上传」使用
+      uploadStage.value = 'idle';
       successNextTab.value = 'manual';
       router.push('/parts?status=PENDING');
     } catch (e) {
@@ -1729,7 +1819,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     confirmManualAssembly,
     closeManualAsmDialog,
     // submit
-    onSubmitPdfTree,
+    // 2026-09-16 M3-B 复审：原 onSubmitPdfTree 拆成「先上传 → 后提交」两步。
+    // onStartUpload：hash + createUploadIntents + useCosUpload + startUpload
+    // onCommit：仅 batchCreateParts + 清空 + 跳页
+    onStartUpload,
+    onCommit,
     // 2026-08-27：el-table DOM ref 由本 composable 持有；PartBatchPdfTab 通过
     // provide/inject 取到这两个 ref，模板 :ref 把 el-table 实例回写到 composable。
     standaloneTableRef,
@@ -1741,6 +1835,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     getRowThreeDCell,
     allUploadsDone,
     hasUploadErrors,
+    // 2026-09-16 M3-B 复审：阶段机 + 按钮 disabled 判定
+    uploadStage,
+    canStartUpload,
+    canSubmitCreate,
     retryUploadByRow,
   };
 }
