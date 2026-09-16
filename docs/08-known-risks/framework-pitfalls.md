@@ -324,9 +324,11 @@ api.get('/parts', { params: { statuses: ['A', 'B'] } });
 
 // 修复后（Phase 5 hotfix 后：v2 业务由 `api` 走 serializeParamsV2）
 api.get('/parts', { params: { statuses: ['A', 'B'] } });
-// → GET /api/v2/parts?statuses=A,B   ← v2 Rust 走 CSV 单值（白名单 statuses）
+// → GET /api/v2/parts?statuses=A%2CB   ← v2 Rust 走 CSV 单值（白名单 statuses，`,` 经 percent-encoding 为 `%2C`）
 api.get('/parts', { params: { ids: ['1', '2'] } });
 // → GET /api/v2/parts?ids=1&ids=2   ← 其它数组走重复 key
+// 2026-09-17 PR-4 同步：locations / holder_ids 同样进 CSV 白名单，
+// backend-rust PartListQuery 三个 `Option<String>` 字段全部按逗号单值解析。
 ```
 
 ### 2026-09-15 Phase 5 误合并 → hotfix 还原

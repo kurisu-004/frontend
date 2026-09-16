@@ -124,12 +124,30 @@ sequenceDiagram
 apiPrint.post('/delivery-notes/{id}/print', { custom_order: [...] });
 // → POST /api/v1/delivery-notes/{id}/print?custom_order=a&custom_order=b
 
-// v2 业务期望：白名单 statuses 走 CSV 单值；其它数组走重复 key
+// v2 业务期望：白名单 key 走 CSV 单值（注意 `,` 经 percent-encoding 为 `%2C`）；其它数组走重复 key
+// 2026-09-17 PR-4 同步：CSV 白名单扩为 `statuses` / `locations` / `holder_ids`
+// （与 backend-rust PartListQuery `Option<String>` 逗号解析对齐）
 api.get('/delivery-notes', { params: { statuses: ['DRAFT', 'SHIPPED'] } });
-// → GET /api/v2/delivery-notes?statuses=DRAFT,SHIPPED
+// → GET /api/v2/delivery-notes?statuses=DRAFT%2CSHIPPED
+api.get('/parts', { params: { locations: ['PRODUCTION_SHELF', 'WORKER'] } });
+// → GET /api/v2/parts?locations=PRODUCTION_SHELF%2CWORKER
+api.get('/parts', { params: { holder_ids: ['1700000000000000001', '1700000000000000002'] } });
+// → GET /api/v2/parts?holder_ids=1700000000000000001%2C1700000000000000002
 api.get('/delivery-notes', { params: { ids: ['1', '2'] } });
 // → GET /api/v2/delivery-notes?ids=1&ids=2（非白名单 key 走重复 key）
 ```
+
+### CSV 白名单（2026-09-17 PR-4 同步）
+
+`ARRAY_AS_CSV_KEYS` 白名单（`src/api/http.ts`）：
+
+| key          | 后端 schema                             | 加白名单日期    | 备注                                                                                                                  |
+| ------------ | --------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `statuses`   | `Option<String>` CSV → service Vec      | 2026-08-29 拆分 | Phase 5 误合并后 2026-09-15 hotfix 还原                                                                               |
+| `locations`  | `Option<String>` CSV → service Vec      | 2026-09-17 PR-4 | `PartListQuery` 同步：t_part_batch.location 大类（OFFICE / PRODUCTION_SHELF / WORKER / ...）                          |
+| `holder_ids` | `Option<String>` CSV → service Vec<i64> | 2026-09-17 PR-4 | `PartListQuery` 同步：t_part_batch.current_holder_id 多态 holder（t_shelf / t_worker / t_outsource_company 任一命中） |
+
+未列入白名单的数组字段一律走重复 key（v1 兼容 + v2 部分端点未声明 schema）；前端发送前用 `cleanParams` strip 空数组（空数组 = 不发）。
 
 ### 历史拆分记录（2026-08-29 → 2026-09-15 Phase 5 → 2026-09-15 hotfix）
 
@@ -142,7 +160,11 @@ api.get('/delivery-notes', { params: { ids: ['1', '2'] } });
 
 2026-09-15 Phase 5 误合并：`apiV2` / `refreshClientV2` 合并进 `api` / `refreshClient` 时，`serializeParamsV2` 一并删除，统一用 `serializeParamsV1`（数组重复 key）。**误判**：v2 axum `Query<Vec<T>>` 默认按 `,` 分隔，重复 key `?statuses=A&statuses=B` 实际会失败（axum 反序列化器对重复 key 的处理依赖实现，常见情形是取最后 / 报错），引入 regression。
 
-2026-09-15 hotfix 还原：恢复 2026-08-29 的 CSV 白名单拆分——`api` / `refreshClient` 绑 `serializeParamsV2`（白名单 `statuses` 等数组 → CSV 单值），`apiPrint` 维持 `serializeParamsV1`（FastAPI 期望重复 key）。`serializeParamsV2` 保留。回归守卫在 `src/api/http.spec.ts` 落地——`serializeParamsV1` / `serializeParamsV2` 各覆盖一组用例。
+2026-09-15 hotfix 还原：恢复 2026-08-29 的 CSV 白名单拆分——`api` / `refreshClient` 绑 `serializeParamsV2`（白名单 `statuses` 等数组 → CSV 单值），`apiPrint` 维持 `serializeParamsV1`（FastAPI 期望重复 key）。`serializeParamsV2` 保留。
+
+2026-09-17 PR-4 同步：白名单扩为 `statuses` / `locations` / `holder_ids`（与 backend-rust `PartListQuery` 三个 `Option<String>` 字段对齐），保证前端 `?locations=A%2CB&holder_ids=X%2CY` 能被 axum `Query<String>` 反序列化器正确解析（重复 key 形式会失败）。
+
+回归守卫在 `src/api/http.spec.ts` 落地——`serializeParamsV1` / `serializeParamsV2` 各覆盖一组用例；`usePartsListQuery.locationsHolderIds.spec.ts` 加 F3 wire-format 断言验证完整 URL 形态。
 
 ## `cleanParams()`
 

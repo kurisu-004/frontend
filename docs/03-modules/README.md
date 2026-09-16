@@ -29,32 +29,32 @@
 
 ## 二、v1 / v2 迁移进度
 
-后端契约统一路径：`~/Code/hsh-erp-rust/docs/api/`（按域切分）。前端 `src/api/` 下既有 `api`（v1）也有 `apiV2`（v2）两个 axios 实例，**新功能必须在 `apiV2` 上加**。
+后端契约统一路径：`~/Code/hsh-erp-rust/docs/api/`（按域切分）。前端 `src/api/` 下业务端点统一走 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 一次性切流，原 `apiV2` 已合并删除），打印端点（4 个）走 `apiPrint`（baseURL `/api/v1`）。**新业务功能在 `api` 上加**。
 
-| 域                                              | 当前状态                                | 切换 / 回退时间                         |
-| ----------------------------------------------- | --------------------------------------- | --------------------------------------- |
-| auth                                            | **100% v1**（2026-08-26 回滚）          | 回退 2026-08-26                         |
-| deliveryNote                                    | 部分 v2（7 v2 + 11 v1）                 | v2 上线 2026-08-21，部分回退 2026-08-29 |
-| deliveryGroup                                   | 100% v2                                 | V2 P1                                   |
-| 单件 `scanInspect`                              | v2                                      | 2026-08-25                              |
-| 单件 `toInspection`                             | **v1**（2026-09-01 回退）               | 回退 2026-09-01                         |
-| 单件 `toShip`                                   | v2                                      | V2 P1                                   |
-| 单件 `failInspection`                           | **v1**（2026-08-29 回退）               | 回退 2026-08-29                         |
-| 批量 `batchToInspection`                        | v2                                      | V2 P1                                   |
-| 批量 `batchToShip`                              | v2                                      | V2 P1                                   |
-| 批量 `batchPassInspection` / `batchScanInspect` | v2                                      | 2026-08-25                              |
-| 零件 CRUD（其余）                               | v1                                      | —                                       |
-| 装配                                            | v1                                      | —                                       |
-| 外协                                            | v1                                      | —                                       |
-| 货架                                            | v1                                      | —                                       |
-| CNC                                             | v1                                      | —                                       |
-| 客户 / 申请人                                   | v1                                      | —                                       |
-| 账号 / 工人                                     | v1                                      | —                                       |
-| 大屏 WS                                         | v1                                      | —                                       |
-| 统计                                            | v1                                      | —                                       |
-| 工序工种（process / workType）                  | v1                                      | —                                       |
-| 生产域（`process-design` / `worker-pool`）      | 逐步 v2（fixture → apiV2）              | 2026-09-11 起                           |
-| 打印模板                                        | v1（前端独立编辑器，调用 `apiV2` 占位） | 2026-09-14                              |
+| 域                                              | 当前状态                                   | 切换 / 回退时间                         |
+| ----------------------------------------------- | ------------------------------------------ | --------------------------------------- |
+| auth                                            | **100% v1**（2026-08-26 回滚）             | 回退 2026-08-26                         |
+| deliveryNote                                    | 部分 v2（7 v2 + 11 v1）                    | v2 上线 2026-08-21，部分回退 2026-08-29 |
+| deliveryGroup                                   | 100% v2                                    | V2 P1                                   |
+| 单件 `scanInspect`                              | v2                                         | 2026-08-25                              |
+| 单件 `toInspection`                             | **v1**（2026-09-01 回退）                  | 回退 2026-09-01                         |
+| 单件 `toShip`                                   | v2                                         | V2 P1                                   |
+| 单件 `failInspection`                           | **v1**（2026-08-29 回退）                  | 回退 2026-08-29                         |
+| 批量 `batchToInspection`                        | v2                                         | V2 P1                                   |
+| 批量 `batchToShip`                              | v2                                         | V2 P1                                   |
+| 批量 `batchPassInspection` / `batchScanInspect` | v2                                         | 2026-08-25                              |
+| 零件 CRUD（其余）                               | v1                                         | —                                       |
+| 装配                                            | v1                                         | —                                       |
+| 外协                                            | v1                                         | —                                       |
+| 货架                                            | v1                                         | —                                       |
+| CNC                                             | v1                                         | —                                       |
+| 客户 / 申请人                                   | v1                                         | —                                       |
+| 账号 / 工人                                     | v1                                         | —                                       |
+| 大屏 WS                                         | v1                                         | —                                       |
+| 统计                                            | v1                                         | —                                       |
+| 工序工种（process / workType）                  | v1                                         | —                                       |
+| 生产域（`process-design` / `worker-pool`）      | v2（业务走 `api`）                         | 2026-09-15 Phase 5 切流                 |
+| 打印模板                                        | v1（前端独立编辑器，调用 `apiPrint` 占位） | 2026-09-15 Phase 5 切流                 |
 
 **deliveryNote v2 数 = 7**：`scanDelivery` / `getNote` / `submitNote` / `listNotes` / `batchGetNotes` / `removeParts` / `softDeleteNote`。**v1 数 = 11**：`printNote` / `printNoteLabels` / `listPickupPending` / `createNote` / `listNoteEvents` / `updateNote` / `addParts` / `recallNote` / `pickupScan` / `pickup` / `listCandidateParts`（2026-08-29 回退）。详见 `docs/02-architecture/api-contract.md`「v1 临时回滚注意事项」。
 
@@ -92,7 +92,7 @@
 按顺序走完 5 步，前后端契约一致即可上线：
 
 1. **建目录**：`src/views/<new-domain>/` 放 `.vue` 页面（按 List / Detail / FormDialog 拆）。
-2. **写接口**：`src/api/<new-domain>.ts` 走 `apiV2`（baseURL `/api/v2`），遵循信封 `{code, message, data}`。
+2. **写接口**：`src/api/<new-domain>.ts` 业务端点走 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 起），打印端点（如果新增）走 `apiPrint`（baseURL `/api/v1`）；遵循信封 `{code, message, data}`。
 3. **写类型**：`src/types/<new-domain>.ts` 集中放请求/响应类型，**雪花 ID 用 string**。
 4. **加路由**：`src/router/index.ts` 加路由 + meta；**`menuCode` 必填**（与后端菜单表对齐，前置守卫 `allowByMenuCode` 会卡）。
 5. **加文档**：`docs/03-modules/<new-domain>.md` 按本 README 第三节的共同大纲写。

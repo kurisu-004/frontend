@@ -66,11 +66,11 @@
 
 ## 四、主要 API 调用
 
-### `src/api/deliveryNote.ts`（17 个端点，全部 `apiV2`，2026-08-24 切）
+### `src/api/deliveryNote.ts`（17 个端点，业务全部走 `api`（v2），2026-08-24 切流）
 
-`listNotes` / `listPickupPending` / `createNote` / `getNote` / `listBatchDeliveryDetails` / `listNoteEvents` / `addParts` / `removeParts` / `submitNote` / `recallNote` / `pickupScan` / `pickup` / `softDeleteNote` / `listCandidateParts` / `updateNote` / `printNote` / `scanDelivery`。
+`listNotes` / `listPickupPending` / `createNote` / `getNote` / `listBatchDeliveryDetails` / `listNoteEvents` / `addParts` / `removeParts` / `submitNote` / `recallNote` / `pickupScan` / `pickup` / `softDeleteNote` / `listCandidateParts` / `updateNote` / `scanDelivery`（其中 `printNote` 是 4 个打印端点之一，走 `apiPrint` / v1；2026-09-15 Phase 5 后业务 16 个端点统一走 `api`，原 `apiV2` 已合并删除）。
 
-### `src/api/deliveryGroup.ts`（V2 P1，全部 `apiV2`）
+### `src/api/deliveryGroup.ts`（V2 P1，业务全部走 `api`（v2））
 
 `listDeliveryGroups` / `createDeliveryGroup` / `updateDeliveryGroup` / `softDeleteDeliveryGroup`。
 
