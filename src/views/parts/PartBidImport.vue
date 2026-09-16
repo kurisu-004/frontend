@@ -251,7 +251,7 @@ import PdfViewer from '@/components/PdfViewer.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import { listCustomers, type Customer } from '@/api/customer';
-import { batchCreateParts, type PartBatchFilePayload, type PartCreatePayload } from '@/api/parts';
+import { batchCreateParts, type PartCreatePayload } from '@/api/parts';
 import { bulkGetOrCreateApplicants } from '@/api/applicant';
 import { useApplicantSearch } from '@/composables/useApplicantSearch';
 import {
@@ -824,7 +824,9 @@ async function onSubmit(): Promise<void> {
       r.applicantId = aid;
     }
 
-    // 3) 构造 PartCreatePayload[] + files
+    // 3) 构造 PartCreatePayload[]
+    // 2026-09-16：图纸上传暂时移除（multipart /parts/batch 路由在 v2 后端不存在，
+    // 触 415）；待「前端上传」重构再补回。图纸暂不带，仅 items 走 JSON 提交。
     const items: PartCreatePayload[] = rows.value.map((r) => ({
       name: r.partName,
       drawing_no: r.drawingNo,
@@ -838,17 +840,8 @@ async function onSubmit(): Promise<void> {
       is_urgent: r.isUrgent,
       customer_id: r.customerId!,
     }));
-    const files: (PartBatchFilePayload | null)[] = rows.value.map((r) =>
-      r.drawingFile
-        ? {
-            data: r.drawingFile,
-            filename: r.drawingName ?? 'drawing.pdf',
-            contentType: 'application/pdf',
-          }
-        : null,
-    );
 
-    const res = await batchCreateParts(items, files);
+    const res = await batchCreateParts(items);
     if (res.failed.length > 0) {
       const sample = res.failed
         .slice(0, 5)

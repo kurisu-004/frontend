@@ -29,25 +29,114 @@ export interface PartBatchFilePayload {
   contentType?: string;
 }
 
+/** `POST /parts/batch` 单 item 入参（FE 视图）。
+ *
+ *  与 rust 后端 `PartBatchCreateItem`（`backend-rust/src/modules/part/dto_crud.rs:47`）
+ *  对齐：后端契约要求 top-level `customer_id`，item 不带；FE 多带几个可选字段
+ *  （`applicant_id` / `unit_price` / `actual_delivery_date`）后端 serde 默认
+ *  忽略，不影响解析。 */
+interface PartBatchCreateItemFE {
+  name: string;
+  drawing_no: string;
+  applicant_name: string;
+  quantity: number;
+  request_date: string;
+  planned_delivery_date: string;
+  is_urgent?: boolean;
+  order_no?: string | null;
+  system_delivery_date?: string | null;
+  note?: string | null;
+  applicant_id?: string | null;
+}
+
+interface PartBatchCreateRequestFE {
+  customer_id: string;
+  items: PartBatchCreateItemFE[];
+}
+
+interface PartBatchCreateFailureFE {
+  part_id?: string | null;
+  code: number;
+  message: string;
+  /** 后端字段名，组内下标；FE 拼装时换算回全局下标 */
+  item_index: number;
+}
+
+interface PartBatchCreateOutFE {
+  /** 后端 `Vec<PartDetailOut>`，结构上与 `PartItem` 兼容（`PartDetailOut` 是超集） */
+  created: unknown[];
+  failed: PartBatchCreateFailureFE[];
+}
+
 /**
- * 批量新建零件（multipart/form-data）。
+ * 批量新建零件（JSON）。
  *
- * 后端 `POST /parts/batch` 2026-07-09 起接受 `data` (JSON 字符串) + `files` (PDF 数组)，
- * 文件与 items 按下标对齐；缺失位按无图处理。任一上传失败 → 整批回滚。
+ * 2026-09-16 修复：原实现以 multipart/form-data 调 `/parts/batch`，但 v2
+ * rust 后端（`backend-rust/src/modules/part/handler.rs::batch_create_parts`）
+ * 只接受 application/json → 415 Unsupported Media Type。后端 multipart
+ * 路由是 `/parts/batch-with-pdfs`（语义不同：单 PDF 多页拆装配件），
+ * 不适用于「录入」批量新建"每条 entry 可带 1 张图"场景。
  *
- * 不手动设 Content-Type —— axios 会自动加正确的 multipart boundary。
+ * 当前改造：
+ * - 只发 JSON items，**不上传图纸**（图纸后续走「前端上传」重构）。
+ * - 提交前由 caller `usePartBatchManual` 完成申请人 dedupe（同 L1 root
+ *   下同名命中 applicantSearch 缓存 → 复用 id），避免重复 POST 触发 409。
+ *
+ * 后端契约（`PartBatchCreateRequest { customer_id, items }`）要求 top-level
+ * `customer_id`、item 不带 `customer_id`；本函数按 customer_id 分组提交，
+ * 每组共享 top-level customer_id，避免跨客户混合导致的语义错误。
  */
-export async function batchCreateParts(
-  items: PartCreatePayload[],
-  files: (PartBatchFilePayload | null)[] = [],
-): Promise<PartBatchResult> {
-  const form = new FormData();
-  form.append('data', JSON.stringify({ items }));
-  files.forEach((f) => {
-    if (f) form.append('files', f.data, f.filename);
-  });
-  const resp = await api.post<PartBatchResult>('/parts/batch', form);
-  return resp.data;
+export async function batchCreateParts(items: PartCreatePayload[]): Promise<PartBatchResult> {
+  if (items.length === 0) {
+    return { created: [], failed: [] };
+  }
+  // 按 customer_id 分组，每组单独提交一次。
+  const groups = new Map<string, PartCreatePayload[]>();
+  for (const it of items) {
+    const list = groups.get(it.customer_id);
+    if (list) {
+      list.push(it);
+    } else {
+      groups.set(it.customer_id, [it]);
+    }
+  }
+  const created: PartItem[] = [];
+  const failed: PartBatchFailure[] = [];
+  let globalOffset = 0;
+  for (const [customerId, groupItems] of groups) {
+    const body: PartBatchCreateRequestFE = {
+      customer_id: customerId,
+      items: groupItems.map(toPartBatchCreateItem),
+    };
+    const resp = await api.post<PartBatchCreateOutFE>('/parts/batch', body);
+    // 后端 created: Vec<PartDetailOut>（结构兼容 PartItem，断言转换）
+    created.push(...(resp.data.created as PartItem[]));
+    // 后端 failed[i].item_index 是组内下标，换算回全局下标便于 caller 显示「第 X 行」
+    failed.push(
+      ...resp.data.failed.map((f) => ({
+        index: globalOffset + f.item_index,
+        message: f.message,
+      })),
+    );
+    globalOffset += groupItems.length;
+  }
+  return { created, failed };
+}
+
+function toPartBatchCreateItem(it: PartCreatePayload): PartBatchCreateItemFE {
+  return {
+    name: it.name,
+    drawing_no: it.drawing_no,
+    applicant_name: it.applicant_name ?? '',
+    quantity: it.quantity ?? 1,
+    request_date: it.request_date,
+    planned_delivery_date: it.planned_delivery_date,
+    is_urgent: it.is_urgent,
+    order_no: it.order_no,
+    system_delivery_date: it.system_delivery_date,
+    note: it.note,
+    applicant_id: it.applicant_id,
+  };
 }
 
 // ===== 2026-07-21：批量树形创建（PDF 批量上传，单页=独立零件，多页=装配件+子件） =====

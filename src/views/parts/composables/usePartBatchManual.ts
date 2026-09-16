@@ -14,7 +14,8 @@ import {
   type UploadFile,
 } from 'element-plus';
 import { createApplicant } from '@/api/applicant';
-import { batchCreateParts, type PartBatchFilePayload, type PartCreatePayload } from '@/api/parts';
+import { batchCreateParts, type PartCreatePayload } from '@/api/parts';
+import type { Applicant } from '@/types/applicant';
 import type { Customer } from '@/api/customer';
 import { useConfirm } from '@/composables/useConfirm';
 import { useDialogSize } from '@/composables/useDialogSize';
@@ -72,10 +73,12 @@ export interface UsePartBatchManualOptions {
   customers: Ref<Customer[]>;
   /** 申请人搜索共享实例（shell 创建一次；两 Tab 共用 cache）。 */
   applicantSearch: {
-    applicants: Ref<{ id: string; name: string }[]>;
+    applicants: Ref<Applicant[]>;
+    /** 当前缓存对应的一级客户 id；Bug 2 dedupe 用 */
+    rootCustomerId: Ref<string | null>;
     loading: Ref<boolean>;
     loadForCustomer: (pickedId: string | null) => Promise<void>;
-    querySearch: (queryString: string, cb: (items: { id: string; name: string }[]) => void) => void;
+    querySearch: (queryString: string, cb: (items: Applicant[]) => void) => void;
   };
 }
 
@@ -441,15 +444,29 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
       return;
     submitting.value = true;
     try {
-      // 1) 先为每条 entry 处理 applicant_id：未选现有申请人的 → 按客户解析一级
-      //    后调 createApplicant 自动新增。
+      // 1) 先为每条 entry 处理 applicant_id：
+      //    - 已有 applicantId（用户从下拉挑的）→ 跳过；
+      //    - 在缓存中能按 name 命中 → 复用其 id（2026-09-16 修复，避免
+      //      对已存在的 applicant 重复 POST → 409 Conflict）；
+      //    - 缓存未命中（且缓存对应 L1 root 与本条 L1 一致时才查，避免
+      //      跨 L1 root 误判）→ 调 createApplicant 自动新增。
       for (const s of staged.value) {
         if (s.applicantId) continue;
-        if (!s.applicantName.trim() || !s.customerId) continue;
+        const trimmed = s.applicantName.trim();
+        if (!trimmed || !s.customerId) continue;
         const rootId = resolveRootCustomerId(customers, s.customerId);
         if (rootId === null) continue;
+        if (applicantSearch.rootCustomerId.value === rootId) {
+          const cached = applicantSearch.applicants.value.find(
+            (a) => a.name === trimmed && a.customer_id === rootId,
+          );
+          if (cached) {
+            s.applicantId = cached.id;
+            continue;
+          }
+        }
         const created = await createApplicant({
-          name: s.applicantName.trim(),
+          name: trimmed,
           customer_id: String(rootId),
         });
         s.applicantId = created.id;
@@ -473,18 +490,10 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
         // customer_id 雪花 ID 字符串（CLAUDE.md §3）
         customer_id: s.customerId!,
       }));
-      // 2026-07-09 起：图纸走 multipart，与 items 按下标对齐。
-      // drawingFile 为 null → 该行不上传图纸（后端按 None 处理）。
-      const files: (PartBatchFilePayload | null)[] = staged.value.map((s) =>
-        s.drawingFile
-          ? {
-              data: s.drawingFile,
-              filename: s.drawingName ?? 'drawing.pdf',
-              contentType: 'application/pdf',
-            }
-          : null,
-      );
-      const res = await batchCreateParts(items, files);
+      // 2026-09-16：图纸上传暂时移除（multipart /parts/batch 路由在 v2 后端
+      // 不存在，触 415）；待「前端上传」重构（前端直传 COS，提交时只传
+      // 已上传的 URL 列表）再补回。staged 条目上的 drawingFile 暂不处理。
+      const res = await batchCreateParts(items);
       if (res.failed.length > 0) {
         const sample = res.failed
           .slice(0, 5)
