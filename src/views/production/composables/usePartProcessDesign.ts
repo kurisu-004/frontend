@@ -3,10 +3,19 @@
 // 阶段二（2026-09-14 起）：所有读写走 @/api/processChain（baseURL /api/v2）。
 // - loadParts / loadProcesses：拉全量；本地缓存到模块级单例。
 //   2026-09-16 修复：loadParts 固定传 status='PENDING'，已下发编程/车间的工件不再进入工序制定。
-// - flows（PartProcessFlow 字典）：懒加载 — 用户选 part 时按需 GET /process-chains/by-part/{part_id}；
-//   首次访问 20701 BIZ_PROCESS_CHAIN_NOT_FOUND → 视为空链，不报错。
+// - flows（PartProcessFlow 字典）：懒加载 — 用户选 part 时按需拉取；
+//   2026-09-16 起加载路径由 part.process_chain_id 驱动（见下方第 4 段）；
+//   20701 BIZ_PROCESS_CHAIN_NOT_FOUND → 视为空链，不报错。
 // - upsertSteps / deleteStep / reorderSteps：纯本地 mutation，不自动 PUT。
 // - saveFlow：手动触发的 PUT 整组 upsert（由 ProcessStepCardList 保存按钮触发）。
+//
+// 2026-09-16 process_chain_id FK 翻转（后端 PR 并行）：
+// - 后端 /parts 列表/详情出参新增 process_chain_id（null = 未制定工序）；
+//   左栏「待制定 / 已制定」分组改由该字段驱动（见 PartPickerList.vue）。
+// - loadFlow 不再走 by-part 端点：part.process_chain_id 非空 → GET /process-chains/{chain_id}；
+//   为空 → 未制定过工序，不发请求，直接缓存空链。
+// - save 成功后把 upsert 响应的链 id 回写到本地零件的 process_chain_id（首次保存建链场景），
+//   该零件立刻从「待制定」移入「已制定」分组（响应式，无需整表刷新）。
 //
 // 2026-09-16 改造：删除 scheduleSave 防抖链路。原先「steps 变更 → 800ms 后自动 PUT」的设计
 // 让保存按钮形同虚设（永远 disabled 因为 dirty 在 PUT 后立刻被清零），改成显式手动保存。
@@ -36,7 +45,7 @@ import type { Process } from '@/types/process';
 import type { PartProcessFlow, PartProcessSummary, ProcessStep } from '@/types/partProcess';
 import type { ProcessChainStepDto } from '@/api/processChain.contract';
 import {
-  getProcessChainByPart,
+  getProcessChainById,
   listParts,
   listProcesses,
   upsertProcessChainByPart,
@@ -80,16 +89,33 @@ function stepToUpsert(step: ProcessStep): ProcessChainStepDto {
 }
 
 /** 加载某 part 的工艺链（懒加载）。
+ *  2026-09-16 改造：加载路径由 part.process_chain_id 驱动（替代原 by-part 端点直查）——
  *  - 已缓存 → 直接返回
- *  - 未缓存 → GET /process-chains/by-part/{part_id}
- *  - 20701 BIZ_PROCESS_CHAIN_NOT_FOUND（HTTP 404） → 视为空链，缓存一个空 PartProcessFlow
+ *  - part.process_chain_id 为空 → 未制定过工序，不发请求，直接缓存空链
+ *  - part.process_chain_id 非空 → GET /process-chains/{chain_id}
+ *  - 20701 BIZ_PROCESS_CHAIN_NOT_FOUND（HTTP 404，链已删/脏数据） → 视为空链，缓存空 flow
  *  - 其它错误 → 抛给 caller */
 async function loadFlow(partId: string): Promise<PartProcessFlow> {
   const cached = flows.value[partId];
   if (cached) return cached;
 
+  // 2026-09-16 新增：链 id 取自本地零件列表（loadParts 已带出 process_chain_id）。
+  // 零件不在本地列表（异常路径，如列表尚未加载）时按「无链」处理 —— 不发请求；
+  // UI 正常路径下点击的零件必在 parts.value 里。
+  const chainId = parts.value.find((p) => p.id === partId)?.process_chain_id ?? null;
+  if (!chainId) {
+    const empty: PartProcessFlow = {
+      part_id: partId,
+      version: 0,
+      steps: [],
+      updated_at: new Date().toISOString(),
+    };
+    flows.value = { ...flows.value, [partId]: empty };
+    return empty;
+  }
+
   try {
-    const dto = await getProcessChainByPart(partId);
+    const dto = await getProcessChainById(chainId);
     // 把 dto.steps → ProcessStep，冗余字段二次查 processes
     const steps: ProcessStep[] = dto.steps.map((s) => {
       const step = dtoToStep(s);
@@ -235,6 +261,16 @@ export function usePartProcessDesign() {
           updated_at: dto.updated_at,
         },
       };
+      // 2026-09-16 新增：无链 part 首次保存时后端建链并回写 part.process_chain_id
+      // （upsert 响应的 `id` 即链 id；既有链保存时 id 不变，赋值幂等）。
+      // 前端同步更新本地零件列表，让该零件立刻从「待制定」移入「已制定」分组
+      // （响应式驱动 PartPickerList 的 splitPartsByProcessDesign，无需整表刷新）。
+      const idx = parts.value.findIndex((p) => p.id === partId);
+      if (idx !== -1 && parts.value[idx]!.process_chain_id !== dto.id) {
+        const next = parts.value.slice();
+        next[idx] = { ...next[idx]!, process_chain_id: dto.id };
+        parts.value = next;
+      }
     } catch (e) {
       // 失败：保留本地 steps 与 dirty=true（mutate 在调用方 save 入口已完成），
       // 让用户编辑不丢、可重试。

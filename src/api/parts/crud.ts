@@ -62,6 +62,9 @@ export interface PartItem {
   next_process_id: string | null;
   /** 下一道工序名称（NULL = 未设置；由后端在 list/get 响应中带出） */
   next_process_name: string | null;
+  /** 2026-09-16 新增：工艺链 id（雪花 ID 字符串；null = 未制定工序）。
+   *  与后端 PartDetailOut flatten 出参对齐（GET /parts/{id} 详情同源新增）。 */
+  process_chain_id?: string | null;
   /**
    * 2026-07-21：该 part 最近一次品检打回（INSPECTION_FAILED）事件的 note。
    * 格式：`"打回到货架：<code> 下一工序：<code> | 备注：<note>"`。

@@ -163,6 +163,10 @@ export interface PartListItem {
   next_process_id: string | null;
   /** PR-H 2026-07-28：下一工序名 */
   next_process_name: string | null;
+  /** 2026-09-16 新增：工艺链 id（雪花 ID 字符串；null = 未制定工序）。
+   *  后端 2026-09-16 起在 GET /parts 列表项与 GET /parts/{id} 详情出参新增；
+   *  工序制定页「待制定 / 已制定」分组改由本字段驱动（替代原 step_count 懒加载派生）。 */
+  process_chain_id?: string | null;
   /** 2026-07-29 PR-fix-0.2.0 批次化字段：仅 /outsource-quotes/quotable-parts 走批次时填充 */
   batch_id?: string | null;
   /** 2026-07-29 PR-fix-0.2.0 批次化字段：批次号（per-part 递增） */
