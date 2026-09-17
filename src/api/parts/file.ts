@@ -6,16 +6,12 @@
 // 和前端 el-upload 直接走 `api/parts/{id}/...` 端点；本子域仅含返回文件 Blob 的
 // 打印端点。CNC 程序 / 设定单的 list/upload/delete 详见 `api/cnc.ts`。
 //
-// 2026-09-16 M3：新增 createUploadIntents / confirmPartFile（STS 直传 COS 链路）。
+// 2026-09-16 M3 + 2026-09-17 STS 端口迁移：原 createUploadIntents（backend-rust bulk）已下线；
+// 本文件保留 confirmPartFile（场景 B 专用确认端点）配合 grantStsTmpKey
+// （python STS 单端口，详见 @/api/files/sts）。
 
 import { api, apiPrint } from '@/api/http';
-import type {
-  ConfirmFileIn,
-  PartFileItem,
-  PartFileUrlResult,
-  UploadIntentsIn,
-  UploadIntentsOut,
-} from '@/types/part_file';
+import type { ConfirmFileIn, PartFileItem, PartFileUrlResult } from '@/types/part_file';
 
 /**
  * 生成零件的双面打印 PDF（图纸 + 反面右下角条形码）。
@@ -52,23 +48,8 @@ export async function printPartDrawingBatch(
 }
 
 // ============================================================
-// 2026-09-16 M3：STS 直传 COS 链路（与 backend-rust part_file handler 对齐）
+// 2026-09-16 M3 + 2026-09-17 STS 端口迁移：场景 B 确认端点（与 python STS grantStsTmpKey 配合）
 // ============================================================
-
-/**
- * `POST /api/v2/part-files/upload-intents`：批量申请 STS 临时凭证 + tmp_key。
- *
- * 走 `api`（baseURL `/api/v2`）。请求入参：`UploadIntentsIn`；响应：`UploadIntentsOut`。
- *
- * 场景：
- * - 创建工单（场景 A）：不传 `owner_part_id`，每个 file 都会分配 tmp_key；
- * - 详情页补传（场景 B）：传 `owner_part_id`，后端按 (part, kind, sha) 查重，
- *   命中项标 `dedup_hit: true` 并附 `existing_file`；前端可直接跳过上传复用旧文件。
- */
-export async function createUploadIntents(payload: UploadIntentsIn): Promise<UploadIntentsOut> {
-  const resp = await api.post<UploadIntentsOut>('/part-files/upload-intents', payload);
-  return resp.data;
-}
 
 /**
  * `POST /api/v2/parts/{part_id}/files/confirm`：场景 B 确认绑定。
