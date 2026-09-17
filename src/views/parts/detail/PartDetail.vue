@@ -12,6 +12,10 @@
     - 新增「时间线」卡：3 列 flex 容器 → PartBatchMonitorCard（左，批次列表
       + 拆分 / 取消 + 行选中联动） / PartHistoryCard（中，按选中批次过滤的
       历史）/ ProcessChainCard（右，工艺链可视化）。
+  - 2026-09-17 UI 调整第 2 轮：
+    - 删除顶部独立的 PartHistoryCard（重复，搬到时间线卡内）。
+    - 时间线卡去 header；批次监控移到历史 + 工序链下方（同行撑满）。
+    - 零件文件卡 body 不再嵌套 card，按钮移到最外层 footer。
   - 底部操作（品检 / 外协回收 / 取消 / 删除）留在 shell，因为它们跨多张卡
     状态；dialog 状态由 shell 局部维护，业务函数调 usePartDetail。
   - 2026-09-15 Phase 5：业务全切 v2（api 基址 `/api/v2`）。品检通过走
@@ -35,17 +39,6 @@
       @save="onSave"
       @cancel="onCancelEdit"
       @update:form="onPartInfoFormChange"
-    />
-
-    <!-- 历史记录（被选中批次时由 PartHistoryCard 内部按 batch_id 过滤） -->
-    <PartHistoryCard
-      :part-id="partId"
-      :events="events"
-      :events-loading="eventsLoading"
-      :status-label-of="statusLabelOf"
-      :event-label="eventLabel"
-      :event-tag-type="eventTagType"
-      :selected-batch-id="selectedBatchId"
     />
 
     <!-- 条形码（仅当存在 serial_no 时显示） -->
@@ -106,30 +99,11 @@
       - PartBatchMonitorCard 行选中 → onBatchSelect → 写入 selectedBatchId
       - selectedBatchId 同步驱动：PartHistoryCard 过滤 / ProcessChainCard
         高亮 current_process_step_id 对应步骤。
+      - 2026-09-17 UI 调整第 2 轮：去掉外层 header；批次监控移到历史 +
+        工序链下方（同行撑满），避免两列等高造成批次表区域浪费。
     -->
     <el-card shadow="never" class="timeline-card">
-      <template #header>
-        <div class="card-header">
-          <span class="card-title">
-            <el-icon><Clock /></el-icon>
-            <span>时间线</span>
-          </span>
-        </div>
-      </template>
-      <div class="timeline-row">
-        <PartBatchMonitorCard
-          :part-id="partId"
-          :batches="batches"
-          :batches-loading="batchesLoading"
-          :can-manage-batches="canManageBatches"
-          :status-tag-type="statusTagType"
-          :status-label-of="statusLabelOf"
-          :selected-batch-id="selectedBatchId"
-          @fetch="fetchBatches"
-          @split="handleSplitBatch"
-          @cancelBatch="handleCancelBatch"
-          @select="onBatchSelect"
-        />
+      <div class="timeline-top">
         <PartHistoryCard
           :part-id="partId"
           :events="events"
@@ -144,6 +118,22 @@
           :current-step-id="currentStepId"
           :loading="processChain.loading.value"
           :processes-lookup="processesLookup"
+        />
+      </div>
+      <div class="timeline-bottom">
+        <PartBatchMonitorCard
+          :part-id="partId"
+          :batches="batches"
+          :batches-loading="batchesLoading"
+          :can-manage-batches="canManageBatches"
+          :status-tag-type="statusTagType"
+          :status-label-of="statusLabelOf"
+          :selected-batch-id="selectedBatchId"
+          :wrap-card="false"
+          @fetch="fetchBatches"
+          @split="handleSplitBatch"
+          @cancelBatch="handleCancelBatch"
+          @select="onBatchSelect"
         />
       </div>
     </el-card>
@@ -384,7 +374,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { Clock, PriceTag } from '@element-plus/icons-vue';
+import { PriceTag } from '@element-plus/icons-vue';
 import Barcode from '@/components/Barcode.vue';
 import PartInfoCard from './components/PartInfoCard.vue';
 import PartHistoryCard from './components/PartHistoryCard.vue';
@@ -900,25 +890,36 @@ onMounted(() => {
   }
 }
 
-// 2026-09-17 PR-4：时间线卡（PartBatchMonitorCard + PartHistoryCard + ProcessChainCard
-// 三列联动）。子卡自带 :deep(.el-card__body) padding，这里只约束容器 + 三列等宽。
+// 2026-09-17 PR-4 + 2026-09-17 UI 调整第 2 轮：时间线卡。
+// 第 2 轮改造：
+//   1. 去掉外层 card header；
+//   2. body 拆成两行：上方历史 + 工序链（flex 等高、滚动），下方批次监控
+//      （自然撑开、不限高度）。批次表本身就有行数自适应，外层 60vh 限制
+//      反而会让列拖动 / 拆分 dialog 弹出时撑爆区域。
+// 子卡自带 :deep(.el-card__body) padding，这里只约束容器 + 子卡视觉。
 // 子卡用 flex: 1 1 0 + min-width: 0 允许内部 el-table / el-timeline 自然收缩；
 // overflow-y: auto 避免批次多时整体撑爆页面。
 .timeline-card {
   :deep(.el-card__body) {
     padding: 12px 16px;
   }
-  .timeline-row {
+  .timeline-top {
     display: flex;
     gap: 12px;
     height: 60vh;
     overflow-y: auto;
-    // 子卡片（PartBatchMonitorCard / PartHistoryCard / ProcessChainCard）
-    // 各占 1 / 3 宽度；min-width: 0 防 flex 子项最小内容宽度撑爆容器。
+    // 历史 + 工序链两列等宽；min-width: 0 防 flex 子项最小内容宽度撑爆容器。
     :deep(.el-card) {
       flex: 1 1 0;
       min-width: 0;
       overflow-y: auto;
+    }
+  }
+  .timeline-bottom {
+    margin-top: 12px;
+    // 批次监控卡以 wrapCard=false 渲染（裸 div），让其撑满宽度。
+    :deep(.batch-card-flat) {
+      width: 100%;
     }
   }
 }

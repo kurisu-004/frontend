@@ -49,7 +49,7 @@
         </span>
         <div class="header-actions">
           <el-button
-            v-if="showPrint && ownerType === 'part'"
+            v-if="showPrint && ownerType === 'part' && !hideHeaderActions"
             type="success"
             plain
             :loading="printing"
@@ -59,7 +59,8 @@
             <span>打印图纸（含条形码）</span>
           </el-button>
           <el-upload
-            v-if="showUpload"
+            v-if="showUpload && !hideHeaderActions"
+            ref="uploadRef"
             :show-file-list="false"
             :auto-upload="false"
             :on-change="onPick"
@@ -203,6 +204,7 @@ const props = withDefaults(defineProps<Props>(), {
   showUpload: false,
   showDelete: false,
   showPrint: false,
+  hideHeaderActions: false,
   kind: 'DRAWING',
   title: '',
   accept: '',
@@ -262,6 +264,12 @@ interface Props {
   showUpload?: boolean;
   showDelete?: boolean;
   showPrint?: boolean;
+  /**
+   * 2026-09-17 UI 调整：是否隐藏内层 header 的「打印 / 上传」按钮。
+   * PartFilesTabsCard footer 已统一收纳这两类入口，传 true 让 header 只剩
+   * 文件数 tag，避免重复按钮。
+   */
+  hideHeaderActions?: boolean;
   kind?: PartFileKind;
   title?: string;
   accept?: string;
@@ -340,6 +348,21 @@ function formatSize(v: string | number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+// 2026-09-17 UI 调整：父级（PartFilesTabsCard）footer 「上传 / 打印」按钮通过
+// ref 调本方法触发文件选择；走 el-upload 内部 input[type=file].click() 复用
+// 现有 onPick 路径，避免在两个地方维护上传签名。
+const uploadRef = ref();
+function triggerUpload(): void {
+  const root = uploadRef.value?.$el;
+  if (!root) {
+    ElMessage.error('上传控件未挂载，请刷新页面后重试');
+    return;
+  }
+  const input = root.querySelector('input[type=file]');
+  if (input) input.click();
+  else ElMessage.error('未找到文件选择控件');
 }
 
 async function onPick(uploadFile: UploadFile): Promise<void> {
@@ -488,6 +511,20 @@ async function onPrint(): Promise<void> {
 
 onBeforeUnmount(() => {
   if (printBlobUrl) URL.revokeObjectURL(printBlobUrl);
+});
+
+// 2026-09-17 UI 调整：暴露 print / triggerUpload 给父级（PartFilesTabsCard）
+// footer 按钮调用，把「打印图纸 / 上传」入口收敛到外层 footer。
+// 同时把 uploading / printing 两个 loading ref 也暴露出去 —— 父级 footer
+// 按钮要展示与内层一致的 loading 状态，避免点击后无反馈。
+// getSelectedFileId 留接口位：FileListCard 当前不维护选中态（PartFilesTabsCard
+// 持有 selectedFileId），先返回 null 保持 API 对称。
+defineExpose({
+  print: onPrint,
+  triggerUpload,
+  uploading,
+  printing,
+  getSelectedFileId: () => null as string | null,
 });
 </script>
 

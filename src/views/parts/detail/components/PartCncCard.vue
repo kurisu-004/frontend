@@ -78,7 +78,7 @@
     </div>
     <el-empty v-else description="暂无 CNC 程序" :image-size="80" />
 
-    <div v-if="canManageCncFiles || canManageSetupSheet" class="cnc-upload">
+    <div v-if="(canManageCncFiles || canManageSetupSheet) && !hideHeaderActions" class="cnc-upload">
       <el-button
         v-if="canManageCncFiles && canManageSetupSheet"
         type="primary"
@@ -228,30 +228,39 @@ import type { Shelf } from '@/types/shelf';
 import type { OrderStatus } from '@/types/parts';
 import type { CncSetupGroup } from '../composables/usePartCncGroups';
 
-const props = defineProps<{
-  partId: string;
-  partStatus: OrderStatus;
-  cncSetupGroups: CncSetupGroup[];
-  cncLoading: boolean;
-  canManageCncFiles: boolean;
-  canManageSetupSheet: boolean;
-  /** 货架 ↔ 工序 共享缓存（shell 加载，PartCncCard 与 failInsp/receive 共用） */
-  productionShelves: Shelf[];
-  processes: Process[];
-  // 2026-09-16：v2 file_size 为 string（i64 雪花序列化器），formatBytes 入参兼容 string | number
-  formatBytes: (v: string | number) => string;
-  // 2026-08-25 T10p5：上传文件 staging 助手，由 usePartCncGroups 注入；
-  // 失败扩展名时统一 ElMessage.warning 提示（修复前内联实现丢提示的回归）。
-  fileList: (
-    current: UploadFile[],
-    file: UploadFile,
-    accept: string,
-    matchExt?: boolean,
-  ) => UploadFile[];
-  onDownloadCnc: (p: PartFileItem) => void;
-  // 2026-09-16：v2 软删强制 OCC body { version }，删除需携带行内版本号
-  onDeleteCnc: (id: string, version: number) => void;
-}>();
+const props = withDefaults(
+  defineProps<{
+    partId: string;
+    partStatus: OrderStatus;
+    cncSetupGroups: CncSetupGroup[];
+    cncLoading: boolean;
+    canManageCncFiles: boolean;
+    canManageSetupSheet: boolean;
+    /** 货架 ↔ 工序 共享缓存（shell 加载，PartCncCard 与 failInsp/receive 共用） */
+    productionShelves: Shelf[];
+    processes: Process[];
+    // 2026-09-16：v2 file_size 为 string（i64 雪花序列化器），formatBytes 入参兼容 string | number
+    formatBytes: (v: string | number) => string;
+    // 2026-08-25 T10p5：上传文件 staging 助手，由 usePartCncGroups 注入；
+    // 失败扩展名时统一 ElMessage.warning 提示（修复前内联实现丢提示的回归）。
+    fileList: (
+      current: UploadFile[],
+      file: UploadFile,
+      accept: string,
+      matchExt?: boolean,
+    ) => UploadFile[];
+    onDownloadCnc: (p: PartFileItem) => void;
+    // 2026-09-16：v2 软删强制 OCC body { version }，删除需携带行内版本号
+    onDeleteCnc: (id: string, version: number) => void;
+    /**
+     * 2026-09-17 UI 调整：是否隐藏内层「配对上载 / 下发到 CNC 货架」按钮。
+     * PartFilesTabsCard footer 已统一收纳这两类入口，传 true 让 body 只剩
+     * 配对列表 + dialog，避免重复按钮。
+     */
+    hideHeaderActions?: boolean;
+  }>(),
+  { hideHeaderActions: false },
+);
 
 const emit = defineEmits<{
   fetch: [];
@@ -368,6 +377,16 @@ watch(
   () => props.partId,
   () => emit('fetch'),
 );
+
+// 2026-09-17 UI 调整：暴露配对上传 / 下发对话框打开方法给父级
+// PartFilesTabsCard footer 按钮调用，把 CNC 操作的入口收敛到外层 footer。
+// 内部仍保留按钮（其它入口：装配件页暂无，复用 PartFilesTabsCard 入口即可）
+// —— PartCncCard 当前唯一调用方就是 PartFilesTabsCard，但保留内部按钮以防
+// 未来抽到独立路由。
+defineExpose({
+  openPairUpload,
+  openRelease,
+});
 </script>
 
 <style lang="scss" scoped>

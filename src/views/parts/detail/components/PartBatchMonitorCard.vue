@@ -28,134 +28,98 @@
   - 加 @row-click + :row-class-name：点击批次行 emit('select', batch| null)，
     同一行二次点击撤销选中（与点空白处一致）；操作列按钮 stopPropagation 避免
     误触选中。
+
+  2026-09-17 UI 调整第 2 轮：
+  - 默认 wrapCard=false（裸 div 渲染）：详情页时间线卡父级已包 el-card，避免
+    嵌套两重。保留 wrapCard=true 兼容未来独立入口（包 el-card + header）。
 -->
 <template>
-  <el-card v-loading="batchesLoading" shadow="never" class="batch-card">
+  <!-- wrapCard=true：包外层 el-card（独立入口用） -->
+  <el-card v-if="wrapCard" v-loading="batchesLoading" shadow="never" class="batch-card">
     <template #header>
       <div class="card-header">
         <span class="card-title">批次监控</span>
         <span class="event-count"> 共 {{ batches.length }} 批 / {{ batchTotalQty }} 件 </span>
       </div>
     </template>
-    <el-table
-      v-if="batches.length > 0"
-      ref="tableRef"
-      :data="batches"
-      size="small"
-      border
-      stripe
+    <BatchBody
+      :batches="batches"
+      :can-manage-batches="canManageBatches"
+      :status-tag-type="statusTagType"
+      :status-label-of="statusLabelOf"
       :row-class-name="rowClassName"
-      @row-click="onRowClick"
-    >
-      <!--
-        2026-08-27 T22：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
-        用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
-        操作列（fixed="right"）受 canManageBatches 控制，保留为字面量 <el-table-column>。
-      -->
-      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
-        <el-table-column
-          v-if="columnVisibility.isVisible(d.key)"
-          :prop="d.prop ?? d.key"
-          :label="d.label"
-          :width="d.width"
-          :min-width="d.minWidth"
-          :sortable="d.sortable"
-          :align="d.align"
-          :header-align="d.headerAlign"
-          :show-overflow-tooltip="d.showOverflowTooltip"
-          :label-class-name="drag.dragLabelClass(d)"
-          :column-key="d.columnKey ?? d.key"
-        >
-          <template v-if="d.cellRender" #default="scope">
-            <component :is="d.cellRender(scope)" />
-          </template>
-          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
-            <span>{{ d.label }}</span>
-            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
-          </template>
-        </el-table-column>
-      </template>
-      <el-table-column
-        v-if="canManageBatches"
-        label="操作"
-        width="130"
-        align="center"
-        fixed="right"
-      >
-        <template #default="{ row }">
-          <el-button
-            v-if="!isTerminalBatch(row as PartBatch) && (row as PartBatch).quantity > 1"
-            link
-            type="primary"
-            size="small"
-            @click.stop="openSplitDialog(row as PartBatch)"
-            >拆分</el-button
-          >
-          <el-button
-            v-if="!isTerminalBatch(row as PartBatch)"
-            link
-            type="danger"
-            size="small"
-            @click.stop="$emit('cancelBatch', row as PartBatch)"
-            >取消</el-button
-          >
-        </template>
-      </el-table-column>
-    </el-table>
-    <el-empty v-else description="暂无批次" />
-
-    <!-- 2026-08-27 T22：列设置按钮（仅列表态展示；空态无表可设） -->
-    <div v-if="batches.length > 0" class="table-toolbar">
-      <ColumnVisibilityPopover
-        :defs="columnDefs"
-        :model-value="columnVisibility.currentMap"
-        @update:model-value="columnVisibility.update"
-        @reset="columnVisibility.showAll"
-        @resetOrder="drag.reset"
-      />
-    </div>
-
-    <!-- 拆分批次对话框 -->
-    <el-dialog
-      v-model="splitDialogVisible"
-      title="拆分批次"
-      :width="splitDlg.width"
-      :fullscreen="splitDlg.fullscreen"
-      @closed="onSplitDialogClosed"
-    >
-      <div v-if="splitSource" class="split-dialog-body">
-        <p>
-          源批次 <b>{{ splitSource.batch_label }}</b> （当前 {{ splitSource.quantity }} 件，
-          {{ statusLabelOf(splitSource.status) }}）
-        </p>
-        <el-form label-width="90px">
-          <el-form-item label="拆出数量" required>
-            <el-input-number
-              v-model="splitQuantity"
-              :min="1"
-              :max="splitSource.quantity - 1"
-              :precision="0"
-              style="width: 160px"
-            />
-          </el-form-item>
-        </el-form>
-        <p class="muted">
-          拆出后：源批次剩 {{ splitSource.quantity - (splitQuantity ?? 0) }} 件， 新批次
-          {{ splitQuantity ?? 0 }} 件（继承当前状态/位置）。
-        </p>
-      </div>
-      <template #footer>
-        <el-button @click="splitDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="splitSubmitting"
-          :disabled="!splitQuantity || !splitSource || splitQuantity >= splitSource.quantity"
-          @click="onSplitConfirm"
-          >确认拆分</el-button
-        >
-      </template>
-    </el-dialog>
+      :on-row-click="onRowClick"
+      :is-terminal-batch="isTerminalBatch"
+      :open-split-dialog="openSplitDialog"
+      :table-ref="tableRef"
+      :drag="drag"
+      :column-identifier="columnIdentifier"
+      :column-visibility="columnVisibility"
+      :resolve-draggable="resolveDraggable"
+      :column-defs="columnDefs"
+    />
   </el-card>
+
+  <!-- wrapCard=false：裸渲染（详情页时间线卡父级已包），靠 CSS 与父级视觉对齐 -->
+  <div v-else v-loading="batchesLoading" class="batch-card batch-card-flat">
+    <BatchBody
+      :batches="batches"
+      :can-manage-batches="canManageBatches"
+      :status-tag-type="statusTagType"
+      :status-label-of="statusLabelOf"
+      :row-class-name="rowClassName"
+      :on-row-click="onRowClick"
+      :is-terminal-batch="isTerminalBatch"
+      :open-split-dialog="openSplitDialog"
+      :table-ref="tableRef"
+      :drag="drag"
+      :column-identifier="columnIdentifier"
+      :column-visibility="columnVisibility"
+      :resolve-draggable="resolveDraggable"
+      :column-defs="columnDefs"
+    />
+  </div>
+
+  <!-- 拆分批次对话框（两种模式共用，靠 teleport 默认挂到 body） -->
+  <el-dialog
+    v-model="splitDialogVisible"
+    title="拆分批次"
+    :width="splitDlg.width"
+    :fullscreen="splitDlg.fullscreen"
+    @closed="onSplitDialogClosed"
+  >
+    <div v-if="splitSource" class="split-dialog-body">
+      <p>
+        源批次 <b>{{ splitSource.batch_label }}</b> （当前 {{ splitSource.quantity }} 件，
+        {{ statusLabelOf(splitSource.status) }}）
+      </p>
+      <el-form label-width="90px">
+        <el-form-item label="拆出数量" required>
+          <el-input-number
+            v-model="splitQuantity"
+            :min="1"
+            :max="splitSource.quantity - 1"
+            :precision="0"
+            style="width: 160px"
+          />
+        </el-form-item>
+      </el-form>
+      <p class="muted">
+        拆出后：源批次剩 {{ splitSource.quantity - (splitQuantity ?? 0) }} 件， 新批次
+        {{ splitQuantity ?? 0 }} 件（继承当前状态/位置）。
+      </p>
+    </div>
+    <template #footer>
+      <el-button @click="splitDialogVisible = false">取消</el-button>
+      <el-button
+        type="primary"
+        :loading="splitSubmitting"
+        :disabled="!splitQuantity || !splitSource || splitQuantity >= splitSource.quantity"
+        @click="onSplitConfirm"
+        >确认拆分</el-button
+      >
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -169,25 +133,33 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility';
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
-import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
-import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import type { OrderStatus } from '@/types/parts';
+import BatchBody from './PartBatchMonitorBody.vue';
 
-const props = defineProps<{
-  partId: string;
-  batches: PartBatch[];
-  batchesLoading: boolean;
-  canManageBatches: boolean;
-  /**
-   * 2026-09-17 新增：当前选中批次 id（受控）。
-   * 同一行二次点击 / 切换到不同行都通过 @row-click → emit('select') 走。
-   * 父级 usePartDetail 持有 selectedBatchId ref，本卡与 ProcessChainCard /
-   * PartHistoryCard 共享同一份 selectedBatchId 形成联动。
-   */
-  selectedBatchId?: string | null;
-  statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
-  statusLabelOf: (s: string | null | undefined) => string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    partId: string;
+    batches: PartBatch[];
+    batchesLoading: boolean;
+    canManageBatches: boolean;
+    /**
+     * 2026-09-17 新增：当前选中批次 id（受控）。
+     * 同一行二次点击 / 切换到不同行都通过 @row-click → emit('select') 走。
+     * 父级 usePartDetail 持有 selectedBatchId ref，本卡与 ProcessChainCard /
+     * PartHistoryCard 共享同一份 selectedBatchId 形成联动。
+     */
+    selectedBatchId?: string | null;
+    statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
+    statusLabelOf: (s: string | null | undefined) => string;
+    /**
+     * 2026-09-17 UI 调整：是否包外层 el-card + header。
+     * 默认 false（详情页时间线卡父级已包，避免嵌套两重）；
+     * 独立入口（如未来批量批次管理页）传 true 即可拿到完整卡视觉。
+     */
+    wrapCard?: boolean;
+  }>(),
+  { wrapCard: false, selectedBatchId: null },
+);
 
 const emit = defineEmits<{
   (e: 'fetch'): void;
@@ -328,6 +300,10 @@ function onSplitConfirm(): void {
   :deep(.el-card__body) {
     padding: 16px 20px;
   }
+}
+// 2026-09-17 UI 调整：wrapCard=false 时裸 div 渲染，padding 留给父级卡片控制。
+.batch-card-flat {
+  padding: 0;
 }
 .card-header {
   display: flex;
