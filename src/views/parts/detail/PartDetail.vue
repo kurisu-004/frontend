@@ -523,10 +523,15 @@ const currentStepId = computed<string | null>(() => processChain.currentStepId.v
 
 // 2026-09-17 PR-4：part.process_chain_id 变化时拉链（首次 part 加载 + 后续
 // 工艺变更）。useProcessChain 内部已 watch partId 清空状态；这里只触发拉取。
+// 2026-09-17 review 第 1 轮修复：chain 变化前先重置 selectedBatchId，避免旧批次 id
+// 在 chain 未拉完前被 currentStepId 派生计算时引用到错误的 step。
 watch(
   () => part.value?.process_chain_id,
   (id) => {
-    if (id) void processChain.fetchProcessChain();
+    if (id) {
+      selectedBatchId.value = null;
+      void processChain.fetchProcessChain();
+    }
   },
 );
 

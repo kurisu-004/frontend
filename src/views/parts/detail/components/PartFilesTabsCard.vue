@@ -5,8 +5,10 @@
   - 4 个 tab：DRAWING / 3D_MODEL / CAD_2D / CNC_PAIR
   - 前 3 个走 FileListCard（kind 区分）
   - 第 4 个 CNC_PAIR 走 PartCncCard
-  - footer：DRAWING tab 显示「打印图纸」（!isInspector），其它三 tab 显示「上传」，
-    选中 files 行时显示「删除选中」
+  - 「打印图纸」入口收敛在 FileListCard 自身 header（:show-print="!isInspector"，
+    DRAWING tab 生效）；本卡 footer 不再复制一份入口（2026-09-17 review 第 1 轮
+    修复重复按钮）。
+  - footer：选中 files 行时显示「删除选中」
   - 文件上传 / 删除 api-upload / api-delete 等签名与 FileListCard 现有契约一致
 
   2026-09-17 新增：PartDetail 卡片拆分重构。
@@ -14,6 +16,9 @@
     不暴露 row-select 事件，本组件通过监听 @uploaded / @deleted 维护瞬态；
     后续如需 click-to-select，由 FileListCard 加 @select 事件或在本卡外层
     套 click 拦截。删除选中按钮仅在该状态下显示。
+  2026-09-17 review 第 1 轮修复：移除 footer 重复的「打印图纸」按钮 + 改
+    onDeleteSelected 用 selectedFile 完整对象的 version 调 deletePartFile
+    （方案 B，FileListCard 暂未接通 @select，先按 id 查 filesForActiveTab）。
 -->
 <template>
   <el-card shadow="never" class="files-tabs-card">
@@ -111,14 +116,6 @@
             @click="onDeleteSelected"
             >删除选中</el-button
           >
-          <el-button
-            v-if="activeTab === 'DRAWING' && !isInspector"
-            type="success"
-            plain
-            :loading="printing"
-            @click="onPrintDrawing"
-            >打印图纸</el-button
-          >
         </div>
       </div>
     </template>
@@ -126,12 +123,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { FolderOpened } from '@element-plus/icons-vue';
 import FileListCard from '@/components/FileListCard.vue';
 import PartCncCard from './PartCncCard.vue';
-import { printPartDrawing } from '@/api/parts/file';
 import { deletePartFile } from '@/api/parts/file';
 import type { PartFileItem } from '@/types/part_file';
 import type { CncSetupGroup } from '../composables/usePartCncGroups';
@@ -186,12 +182,29 @@ const emit = defineEmits<{
 const activeTab = ref<TabKey>('DRAWING');
 
 /**
+ * 当前激活 tab 对应的文件数组。FileListCard 不暴露 @select，所以「删除选中」按钮
+ * 仅按 id 查本表回填 version。后续 FileListCard 暴露 @select 后，本 computed 可去掉，
+ * 直接用 selectedFile.value.version。
+ */
+const filesForActiveTab = computed<PartFileItem[]>(() => {
+  switch (activeTab.value) {
+    case 'DRAWING':
+      return props.drawings;
+    case '3D_MODEL':
+      return props.models3d;
+    case 'CAD_2D':
+      return props.cadFiles;
+    default:
+      return [];
+  }
+});
+
+/**
  * 选中状态：FileListCard 当前不暴露 row-select 事件，本组件通过监听
  * @uploaded / @deleted 维护；click 选中待 FileListCard 加 @select 事件后接通。
  */
 const selectedFileId = ref<string | null>(null);
 const deleteSelectedSubmitting = ref(false);
-const printing = ref(false);
 
 function onFileUploaded(_kind: TabKey, f: PartFileItem): void {
   // 上传成功后暂不更新选中（保持旧选中）；caller 触发 refresh 后会重新拉列表
@@ -203,11 +216,17 @@ function onFileDeleted(_kind: TabKey, id: string): void {
 
 async function onDeleteSelected(): Promise<void> {
   if (!selectedFileId.value) return;
-  // FileListCard 已弹 ElMessageBox 二次确认；本组件层不再重复 confirm。
-  // 直接走 v2 软删（OCC version 必传）；version 暂传 0（FileListCard 走 props 路径）。
+  // 2026-09-17 review 第 1 轮修复：从 filesForActiveTab 回查完整 PartFileItem，
+  // 用 item.version 调 v2 软删（OCC version 必传）；硬传 0 会 409。
+  const item = filesForActiveTab.value.find((f) => f.id === selectedFileId.value);
+  if (!item) {
+    // 选中态已与列表不同步（refresh 中间态），安全降级
+    selectedFileId.value = null;
+    return;
+  }
   deleteSelectedSubmitting.value = true;
   try {
-    await deletePartFile(selectedFileId.value, 0);
+    await deletePartFile(item.id, Number(item.version));
     ElMessage.success('已删除');
     selectedFileId.value = null;
     emit('refresh', activeTab.value as 'DRAWING' | '3D_MODEL' | 'CAD_2D');
@@ -218,37 +237,7 @@ async function onDeleteSelected(): Promise<void> {
   }
 }
 
-async function onPrintDrawing(): Promise<void> {
-  printing.value = true;
-  try {
-    const blob = await printPartDrawing(props.partId);
-    const url = URL.createObjectURL(blob);
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.src = url;
-    document.body.appendChild(iframe);
-    iframe.onload = () => {
-      try {
-        iframe.contentWindow?.focus();
-        iframe.contentWindow?.print();
-      } catch {
-        window.open(url, '_blank')?.print();
-      } finally {
-        setTimeout(() => {
-          URL.revokeObjectURL(url);
-          iframe.remove();
-          printing.value = false;
-        }, 800);
-      }
-    };
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '生成打印 PDF 失败');
-    printing.value = false;
-  }
-}
-
 // 切换 partId 时清空选中
-import { watch } from 'vue';
 watch(
   () => props.partId,
   () => {
@@ -262,6 +251,13 @@ watch(
 .files-tabs-card {
   :deep(.el-card__body) {
     padding: 16px 20px;
+  }
+  // 2026-09-17 review 第 1 轮修复：把 el-tabs header 底边距显式置 0，
+  // 保证 card header 行高（40px）与其它卡片对齐；覆盖 EP 默认
+  // .el-tabs__header { margin-bottom: 16px }。与下方 .inline-tabs 块
+  // 内容重复但写在卡片层做兜底，删 .inline-tabs 也不退化。
+  :deep(.el-tabs__header) {
+    margin-bottom: 0;
   }
 }
 
