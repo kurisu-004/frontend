@@ -12,7 +12,12 @@
 -->
 <template>
   <el-card v-loading="cncLoading" shadow="never" class="cnc-card">
-    <template #header>
+    <!--
+      2026-09-17 review 第 2 轮新增：bareMode=true 时整个 header 整块不渲染
+      （PartFilesTabsCard 用：「body 部分就直接是图纸、3D 模型等文件，
+      不要再套一层 card」）。
+    -->
+    <template v-if="!bareMode" #header>
       <div class="card-header">
         <span class="card-title">
           <el-icon><Cpu /></el-icon>
@@ -258,8 +263,16 @@ const props = withDefaults(
      * 配对列表 + dialog，避免重复按钮。
      */
     hideHeaderActions?: boolean;
+    /**
+     * 2026-09-17 review 第 2 轮新增：是否完全去掉内层 header 渲染。
+     * bareMode=true 时整个 `<template #header>` 块 v-if 不渲染（不再显示
+     * 「CNC 文件」标题），用于 PartFilesTabsCard 这种「外层已包 el-card +
+     * header，内层不要再嵌一层」的场景。hideHeaderActions 控制内层按钮是
+     * 否显示（bareMode 下也保留隐藏语义以避免 button 散落在 body）。
+     */
+    bareMode?: boolean;
   }>(),
-  { hideHeaderActions: false },
+  { hideHeaderActions: false, bareMode: false },
 );
 
 const emit = defineEmits<{

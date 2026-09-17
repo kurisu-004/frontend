@@ -27,6 +27,13 @@
     openPairUpload / openRelease —— 通过 ref 调，footer 统一收纳入口。
   - 内层 el-card 用 :deep() 去 border / shadow / background，看起来像普通
     body 区域而非嵌套卡片。
+  2026-09-17 review 第 2 轮：内层 card header 完全去掉（用户原文「body 部分
+  就直接是图纸、3D 模型等文件，不要再套一层 card」），改传 :bare-mode="true"。
+  - FileListCard / PartCncCard 各自加 bareMode prop；bareMode 下整块
+    `<template #header>` v-if 不渲染。
+  - FileListCard bareMode 下独立挂一个 display:none 的 <el-upload>，
+    保证 triggerUpload() 仍可调 input[type=file].click()（走 el-upload 内
+    部 input 复用 onPick 签名）。
 -->
 <template>
   <el-card shadow="never" class="files-tabs-card">
@@ -58,6 +65,7 @@
         :show-delete="canManageDrawings"
         :show-print="!isInspector"
         :hide-header-actions="true"
+        :bare-mode="true"
         :api-upload="drawingUpload"
         @refresh="$emit('refresh', 'DRAWING')"
         @uploaded="onFileUploaded('DRAWING', $event)"
@@ -73,6 +81,7 @@
         :show-upload="canManage3DModels"
         :show-delete="canManage3DModels"
         :hide-header-actions="true"
+        :bare-mode="true"
         :api-upload="model3dUpload"
         @refresh="$emit('refresh', '3D_MODEL')"
         @uploaded="onFileUploaded('3D_MODEL', $event)"
@@ -88,6 +97,7 @@
         :show-upload="canManageDrawings"
         :show-delete="canManageDrawings"
         :hide-header-actions="true"
+        :bare-mode="true"
         :api-upload="cadUpload"
         @refresh="$emit('refresh', 'CAD_2D')"
         @uploaded="onFileUploaded('CAD_2D', $event)"
@@ -112,6 +122,7 @@
       :on-download-cnc="onDownloadCnc"
       :on-delete-cnc="onDeleteCnc"
       :hide-header-actions="true"
+      :bare-mode="true"
       @fetch="$emit('fetch')"
       @pairUpload="(payload) => $emit('pairUpload', payload)"
       @release="(payload) => $emit('release', payload)"

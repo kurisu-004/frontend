@@ -39,7 +39,14 @@
 -->
 <template>
   <el-card shadow="never" class="files-card">
-    <template #header>
+    <!--
+      2026-09-17 review 第 2 轮修复：bareMode=true 时整块 header 不渲染
+      （PartFilesTabsCard 用：「body 部分就直接是图纸、3D 模型等文件，
+      不要再套一层 card」）。内部 el-upload 仍要挂载（独立 <el-upload> 在
+      模板下方），保证父级 footer 调 triggerUpload() 能拿到 input[type=file]
+      并触发 .click()。
+    -->
+    <template v-if="!bareMode" #header>
       <div class="card-header">
         <span class="card-title">
           {{ titleText }}
@@ -58,15 +65,23 @@
             <el-icon><Printer /></el-icon>
             <span>打印图纸（含条形码）</span>
           </el-button>
+          <!--
+            2026-09-17 review 第 2 轮修复：v-if 拆开。
+            旧版 `v-if="showUpload && !hideHeaderActions"` 让 hideHeaderActions=true
+            时整个 <el-upload> 被卸载 → uploadRef 永远是 undefined → 外层 footer
+            点「上传图纸」按钮走 triggerUpload() 弹「上传控件未挂载」。
+            现在 <el-upload> 由 showUpload 单独控制，内部 button 由 hideHeaderActions
+            决定：uploadRef 始终可用，hideHeaderActions 只是把按钮文字藏起来。
+          -->
           <el-upload
-            v-if="showUpload && !hideHeaderActions"
+            v-if="showUpload"
             ref="uploadRef"
             :show-file-list="false"
             :auto-upload="false"
             :on-change="onPick"
             :accept="ACCEPT"
           >
-            <el-button type="primary" plain :loading="uploading">
+            <el-button v-if="!hideHeaderActions" type="primary" plain :loading="uploading">
               <el-icon><Upload /></el-icon>
               <span>{{ uploadLabelText }}</span>
             </el-button>
@@ -74,6 +89,22 @@
         </div>
       </div>
     </template>
+
+    <!--
+      bareMode 下独立挂一个 display:none 的 <el-upload>，复用 uploadRef ref 名。
+      Vue 3 v-if 互斥渲染，同名 ref 在 v-if 切换时自动 rebind，triggerUpload()
+      始终能调到 input[type=file].click()。与上方 header 内的 el-upload 不会
+      同时挂载（v-if 互斥）。
+    -->
+    <el-upload
+      v-if="showUpload && bareMode"
+      ref="uploadRef"
+      :show-file-list="false"
+      :auto-upload="false"
+      :on-change="onPick"
+      :accept="ACCEPT"
+      style="display: none"
+    />
 
     <div v-if="files.length === 0" class="empty-tip">
       <el-icon :size="32" color="#c0c4cc"><DocumentRemove /></el-icon>
@@ -205,6 +236,12 @@ const props = withDefaults(defineProps<Props>(), {
   showDelete: false,
   showPrint: false,
   hideHeaderActions: false,
+  // 2026-09-17 review 第 2 轮新增：bareMode=true 时整个 header 不渲染。
+  // bareMode 优先级：true 时整个 header 不渲染（无论 hideHeaderActions）；
+  // hideHeaderActions=true 时只隐藏 header 内的按钮，header 标题与计数
+  // tag 仍显示。bareMode 下独立挂一个 hidden el-upload 保证 triggerUpload()
+  // 仍可调 input。
+  bareMode: false,
   kind: 'DRAWING',
   title: '',
   accept: '',
@@ -270,6 +307,18 @@ interface Props {
    * 文件数 tag，避免重复按钮。
    */
   hideHeaderActions?: boolean;
+  /**
+   * 2026-09-17 review 第 2 轮新增：是否完全去掉内层 header 渲染。
+   * bareMode=true 时整个 `<template #header>` 块 v-if 不渲染，body 直接
+   * 是文件列表；用于 PartFilesTabsCard 这种「外层已包 el-card + header，
+   * 内层不要再嵌一层」的嵌入场景。
+   * bareMode 下仍需挂载 <el-upload>（display:none）以保证 triggerUpload()
+   * 能调底层 input.click()。
+   * 优先级：bareMode=true 覆盖 hideHeaderActions（header 整块消失，
+   * hideHeaderActions 退化为无意义）；hideHeaderActions=true 时只藏按钮，
+   * header 标题与计数 tag 仍显示。
+   */
+  bareMode?: boolean;
   kind?: PartFileKind;
   title?: string;
   accept?: string;

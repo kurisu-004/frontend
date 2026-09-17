@@ -82,6 +82,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import type { ColumnDef, ColumnVisibilityApi } from '@/composables/useColumnVisibility';
@@ -108,4 +109,16 @@ defineProps<{
 defineEmits<{
   cancelBatch: [batch: PartBatch];
 }>();
+
+// 2026-09-17 review 第 2 轮修复：父组件 PartBatchMonitorCard 通过模板 ref 拿 body
+// 实例，从这里拿 el-table 实例调 drag.applyDrag()。Vue 3 template ref 机制只匹配
+// <script setup> 里顶层同名 ref —— 之前 template 写 `ref="tableRef"` 但脚本里没
+// 声明同名 ref，绑定永远为空，applyDrag 拿 undefined 静默失效。
+// 现在通过 defineExpose({ tableRef }) 把这个真实 ref 暴露出去，父组件 onMounted
+// 时按 ref 自动拿到 el-table 实例。
+const tableRef = ref();
+// 2026-09-17 修订：放弃 InstanceType<typeof ElTable> 类型（applyDrag 内部已
+// 用 unknown/AnyInstanceLike 兼容各种形态，强类型反而会触发 vue-tsc "类型不
+// 兼容" 噪声），改用无类型约束的 ref —— applyDrag 运行时正常解析。
+defineExpose({ tableRef });
 </script>

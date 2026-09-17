@@ -43,6 +43,7 @@
       </div>
     </template>
     <BatchBody
+      ref="bodyRef"
       :batches="batches"
       :can-manage-batches="canManageBatches"
       :status-tag-type="statusTagType"
@@ -51,7 +52,6 @@
       :on-row-click="onRowClick"
       :is-terminal-batch="isTerminalBatch"
       :open-split-dialog="openSplitDialog"
-      :table-ref="tableRef"
       :drag="drag"
       :column-identifier="columnIdentifier"
       :column-visibility="columnVisibility"
@@ -63,6 +63,7 @@
   <!-- wrapCard=false：裸渲染（详情页时间线卡父级已包），靠 CSS 与父级视觉对齐 -->
   <div v-else v-loading="batchesLoading" class="batch-card batch-card-flat">
     <BatchBody
+      ref="bodyRef"
       :batches="batches"
       :can-manage-batches="canManageBatches"
       :status-tag-type="statusTagType"
@@ -71,7 +72,6 @@
       :on-row-click="onRowClick"
       :is-terminal-batch="isTerminalBatch"
       :open-split-dialog="openSplitDialog"
-      :table-ref="tableRef"
       :drag="drag"
       :column-identifier="columnIdentifier"
       :column-visibility="columnVisibility"
@@ -123,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue';
+import { computed, h, onMounted, ref, watch } from 'vue';
 import { ElTag } from 'element-plus';
 import type { PartBatch } from '@/api/parts';
 import { useDialogSize } from '@/composables/useDialogSize';
@@ -254,13 +254,29 @@ const columnDefs: ColumnDef[] = [
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_monitor' });
 const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_monitor' });
 
-// 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
-// 自愈。组件挂载时 batches=0 → tableRef.value=null → composable 不绑；batches 加载后
-// el-table 挂载 → ref 更新 → composable watch 重新归一化 + 表头首次渲染时自愈。
-const tableRef = ref();
-onMounted(() => {
-  drag.applyDrag(tableRef);
-});
+// 2026-09-17 review 第 2 轮修复：列拖动接入改走 bodyRef → body 暴露的 tableRef。
+// 旧版在父组件顶层 `const tableRef = ref()` 只是普通 ref，跟模板里的 `ref="tableRef"`
+// 不挂钩（Vue 3 template ref 只匹配 <script setup> 里声明的顶层 ref），applyDrag
+// 拿到 undefined 静默失效。batches=0 阶段 el-table 不挂载，tableRef 仍 undefined；
+// v-if 切到 batches>0 后需要重新触发 applyDrag —— watch bodyRef.value.tableRef 兜底。
+// 2026-09-17 修订：bodyRef 用结构化类型而非 InstanceType<typeof BatchBody>，
+// <script setup> 编译产物不是合法构造器类型，InstanceType 取不到实例字段类型。
+const bodyRef = ref<{ tableRef?: unknown } | null>(null);
+// applyDrag 创建的内部 useDraggable 不可重复注册（每调一次都会新建一个），
+// 用一次性的 flag 锁住，只在 tableRef 第一次非空时触发。
+let dragApplied = false;
+function tryApplyDrag(): void {
+  if (dragApplied) return;
+  const t = bodyRef.value?.tableRef;
+  if (!t) return;
+  drag.applyDrag(t as Parameters<typeof drag.applyDrag>[0]);
+  dragApplied = true;
+}
+onMounted(tryApplyDrag);
+watch(
+  () => bodyRef.value?.tableRef,
+  () => tryApplyDrag(),
+);
 
 // ============ 拆分对话框（局部 UI 状态）============
 const splitDlg = useDialogSize({ desktopWidth: 420 });
