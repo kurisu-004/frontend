@@ -275,31 +275,43 @@
       </el-form-item>
 
       <el-form-item label="图纸">
-        <el-upload
-          :auto-upload="false"
-          :show-file-list="false"
-          :on-change="onDrawingChange"
-          :on-remove="onDrawingRemoveUpload"
-          :before-upload="beforeDrawingUpload"
-          accept=".pdf"
-        >
-          <el-button>
-            <el-icon><Upload /></el-icon>
-            <span>{{ localForm.drawingName ? '更换图纸' : '选择图纸' }}</span>
-          </el-button>
-        </el-upload>
-        <div v-if="localForm.drawingName" class="drawing-info">
-          <el-icon><Picture /></el-icon>
-          <span class="drawing-name">{{ localForm.drawingName }}</span>
-          <el-button link type="danger" size="small" @click="onDrawingRemove">移除</el-button>
+        <div class="drawing-uploader">
+          <!-- 2026-09-17 M4：图纸上传走 CosUploader（前端直传 COS tmp 区）。
+               - accept=".pdf" + :multiple=false：单 PDF 限；
+               - :max-size-m-b="300"：与 nginx 300m 上限对齐；
+               - 不开 computeHash：sha 由 composable.requestDrawingUpload 内
+                 computeSha256 算一次（避免大 PDF 算两次）；
+               - @change 本地 wrapper trim 旧项只留最新（绕开 el-upload :limit
+                 统计坑：cosUploader.removeItem 不会清 el-upload 内部列表）。
+          -->
+          <CosUploader
+            ref="uploaderRef"
+            :request-upload="requestDrawingUpload"
+            accept=".pdf"
+            :multiple="false"
+            :max-size-m-b="300"
+            tip="仅支持 PDF；提交时自动随表图号列点击预览（待新增一览 → 点图号）。"
+            empty-text="未选择图纸（可选）"
+            @change="handleUploaderChange"
+            @uploaded="onDrawingUploaded"
+            @all-done="onDrawingAllDone"
+            @error="onDrawingUploadError"
+          />
+          <p v-if="editingUid && localForm.drawingName" class="form-hint">
+            当前图纸：{{ localForm.drawingName }}；重新上传将替换。
+          </p>
         </div>
-        <p class="form-hint">仅支持 PDF；提交时自动随表图号列点击预览（待新增一览 → 点图号）。</p>
       </el-form-item>
     </el-form>
 
     <template #footer>
       <el-button @click="closeAddDialog">取消</el-button>
-      <el-button type="primary" :loading="dialogSubmitting" @click="handleAddConfirm">
+      <el-button
+        type="primary"
+        :loading="dialogSubmitting"
+        :disabled="drawingUploading"
+        @click="handleAddConfirm"
+      >
         {{ editingUid ? '保存到列表' : '加入列表' }}
       </el-button>
     </template>
@@ -361,9 +373,10 @@
 
 <script setup lang="ts">
 import { h, onMounted, reactive, ref, toRaw, watch } from 'vue';
-import { ElButton, ElTag, type FormInstance, type FormRules, type UploadFile } from 'element-plus';
-import { DocumentAdd, Picture, Plus, Upload } from '@element-plus/icons-vue';
+import { ElButton, ElTag, type FormInstance, type FormRules } from 'element-plus';
+import { DocumentAdd, Plus, Upload } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
+import CosUploader from '@/components/CosUploader.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import {
@@ -372,6 +385,11 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility';
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import type {
+  CosUploadedItem,
+  CosUploaderItem,
+  CosUploadSession,
+} from '@/composables/useCosUploader';
 import type { FormState, StagedEntry } from '../composables/usePartBatchManual';
 
 const props = defineProps<{
@@ -393,6 +411,8 @@ const props = defineProps<{
   submitting: boolean;
   form: FormState;
   rules: FormRules;
+  /** 2026-09-17 M4：图纸上传中标记。「加入列表」按钮 :disabled 用。 */
+  drawingUploading: boolean;
   openDrawingPreview: (row: StagedEntry) => void;
   onDrawingPreviewClosed: () => void;
   closeAddDialog: () => void;
@@ -401,10 +421,13 @@ const props = defineProps<{
   openAddDialog: () => void;
   onCustomerChange: (pickedId: unknown) => Promise<void>;
   onApplicantSelect: (item: Record<string, unknown>) => void;
-  beforeDrawingUpload: (rawFile: File & { name?: string }) => boolean;
-  onDrawingChange: (uploadFile: UploadFile) => void;
-  onDrawingRemoveUpload: () => void;
-  onDrawingRemove: () => void;
+  // 2026-09-17 M4：图纸上传回调五件套（替代 beforeDrawingUpload +
+  // onDrawingChange + onDrawingRemoveUpload + onDrawingRemove 四件套）。
+  requestDrawingUpload: (files: File[]) => Promise<CosUploadSession>;
+  onDrawingUploaded: (item: CosUploadedItem) => void;
+  onDrawingItemsChange: (items: CosUploaderItem[]) => void;
+  onDrawingAllDone: () => void;
+  onDrawingUploadError: (item: CosUploaderItem) => void;
   onAddConfirm: (form?: FormInstance) => Promise<void>;
   onDialogClosed: (form?: FormInstance) => void;
   onRowPreview: (row: StagedEntry) => void;
@@ -529,12 +552,46 @@ onMounted(() => {
   drag.applyDrag(tableRef);
 });
 
+// 2026-09-17 M4：图纸上传 CosUploader ref。用于 handleUploaderChange trim +
+// handleDialogClosed 时强制清队列。
+const uploaderRef = ref<InstanceType<typeof CosUploader> | null>(null);
+
+/**
+ * 本地 @change wrapper：cosUploader.removeItem 不会清 el-upload 内部列表，
+ * `:limit="1"` 会导致永远超限。我们绕开方案：:limit="0"（不限）+ :multiple="false"，
+ * 选第 N 个文件后这里 trim：保留最新一条，把前 N-1 条从 cos-uploader 内部移出。
+ *
+ * 注意：每次 uploaderRef.value?.removeItem(...) 内部会 splice + emit('change')
+ * 递归触发本 wrapper，所以要确保只在 items.length > 1 时才进入 trim 循环。
+ * removeItem 已发 change 事件，items 引用在新一轮 change 回调中是已被修改的。
+ */
+async function handleUploaderChange(items: CosUploaderItem[]): Promise<void> {
+  if (items.length > 1) {
+    // 同步遍历：本次事件触发的 items 已被 cos-uploader 内部 splice 影响。
+    // 我们用 items.length - 1 算 trim 上限（保留最后一项）。
+    const trimCount = items.length - 1;
+    for (let i = 0; i < trimCount; i += 1) {
+      const it = items[i];
+      if (it) {
+        await uploaderRef.value?.removeItem(it.client_ref);
+      }
+    }
+  }
+  // 转 trim 后的最新列表（removeItem 已触发 change，本处 items 已是 trim 后状态）
+  props.onDrawingItemsChange(items);
+}
+
 /** 把本地 formRef 实例传回 composable 的 onAddConfirm。 */
 function handleAddConfirm(): Promise<void> {
   return props.onAddConfirm(formRefLocal.value);
 }
-/** @closed 触发：composable 需要 form 来 clearValidate()。 */
+/** @closed 触发：composable 需要 form 来 clearValidate()。
+ *
+ * 2026-09-17 M4：同步调 uploaderRef.clear() 让 cos-uploader 内部清空列表
+ * （触发所有已 done 项的 cancel 回调，best-effort 清理 COS tmp 对象）。
+ */
 function handleDialogClosed(): void {
+  void uploaderRef.value?.clear();
   props.onDialogClosed(formRefLocal.value);
 }
 </script>

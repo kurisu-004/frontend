@@ -6,17 +6,19 @@
 
 import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
-import {
-  ElMessage,
-  ElMessageBox,
-  type FormInstance,
-  type FormRules,
-  type UploadFile,
-} from 'element-plus';
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { createApplicant } from '@/api/applicant';
-import { batchCreateParts, type PartCreatePayload } from '@/api/parts';
+import { createUploadIntents } from '@/api/parts/file';
+import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
 import type { Applicant } from '@/types/applicant';
+import type { FileBinding } from '@/types/part_file';
 import type { Customer } from '@/api/customer';
+import { computeSha256 } from '@/utils/fileHash';
+import type {
+  CosUploadedItem,
+  CosUploaderItem,
+  CosUploadSession,
+} from '@/composables/useCosUploader';
 import { useConfirm } from '@/composables/useConfirm';
 import { useDialogSize } from '@/composables/useDialogSize';
 import {
@@ -47,6 +49,8 @@ export interface StagedEntry {
   drawingFile: File | null;
   drawingName: string | null;
   drawingUrl: string | null;
+  /** 2026-09-17 M4：图纸上传走 COS 直传，提交时挂 FileBinding 给后端 batch 事务 */
+  drawingBinding: FileBinding | null;
 }
 
 export interface FormState {
@@ -66,6 +70,8 @@ export interface FormState {
   drawingFile: File | null;
   drawingName: string | null;
   drawingUrl: string | null;
+  /** 2026-09-17 M4：图纸上传走 COS 直传，提交时挂 FileBinding 给后端 batch 事务 */
+  drawingBinding: FileBinding | null;
 }
 
 export interface UsePartBatchManualOptions {
@@ -121,6 +127,19 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
   const dialogSubmitting = ref(false);
   const editingUid = ref<string | null>(null);
 
+  // ============ 图纸 COS 上传（2026-09-17 M4）============
+  /**
+   * 图纸上传中标记：onAddConfirm 据此守卫"上传未完成不允许提交"。
+   *
+   * 设计要点：保持 drawingUploading 在 module-scope ref（而非在每个 item 上）
+   * 是为了让组件模板能直接 v-bind 一个 bool 给"加入列表"按钮 `:disabled`，
+   * 不必遍历 items 数组。composable 内部维护模块级 Map<File, sha>，
+   * 因为 upload 回调内我们直接拿到 raw File，用 Map<File, string> 按 File
+   * identity 取 sha 最稳（无 getter/setter 序列化问题）。
+   */
+  const drawingUploading = ref(false);
+  const drawingShaMap = new Map<File, string>();
+
   /** PDF 弹窗预览（图号列点击触发） */
   const drawingPreviewVisible = ref(false);
   const drawingPreviewRow = ref<StagedEntry | null>(null);
@@ -160,6 +179,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     drawingFile: null,
     drawingName: null,
     drawingUrl: null,
+    drawingBinding: null,
   });
 
   const form = reactive<FormState>(initialForm());
@@ -234,19 +254,65 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     // form.applicantName 由 v-model 自动同步为 item.name，无需手动设
   }
 
-  function beforeDrawingUpload(rawFile: File & { name?: string }): boolean {
-    // 仅接受 PDF（2026-07-07 起与服务端 drawing.py upload_to_part 同步）。
-    // el-upload 的 before-upload 返回 false 会阻止 on-change 触发；
-    // 返回 true 走 on-change（兜底再校验一次）。
-    if (!rawFile?.name?.toLowerCase().endsWith('.pdf')) {
-      ElMessage.error('图纸必须是 .pdf 后缀');
-      return false;
+  // ============ 图纸 COS 上传（2026-09-17 M4）============
+  //
+  // CosUploader 走「前端直传 COS tmp 区 → 提交时挂 FileBinding → 后端 batch 事务内
+  // head + copy tmp → 正式 CAS key + 插 t_part_file(READY)」两段式链路。
+  // 后端 createUploadIntents 入参 `content_sha256` 必填（src/types/part_file.ts:122），
+  // 所以本 composable 在 requestUpload 回调里**先算 sha 再调 intents**——不开组件
+  // computeHash 避免大 PDF 算两次（cos-uploader 文档 §2.1 备注）。sha 存模块级
+  // Map<File, string>，onDrawingUploaded 时按 File 对象 identity 取用。
+  //
+  // 用户取消对话框 / 移除文件会留孤儿 tmp 对象 → 后端 M3 设计靠 COS tmp 区生命周期
+  // 自动清理（与 PDF Tab 场景 A 同款假设），前端不显式 cancel。
+
+  /**
+   * 校验 + 算 sha + 调 createUploadIntents，拼出 CosUploadSession 返回给组件。
+   *
+   * 场景 A：不传 owner_part_id（创建工单）。item.kind 固定 'DRAWING'（2026-09-17
+   * M4 范围只接入图纸；3D 模型走 PDF Tab）。
+   */
+  async function requestDrawingUpload(files: File[]): Promise<CosUploadSession> {
+    const items = [];
+    for (const f of files) {
+      // accept=".pdf" 拦截 picker，但拖拽可以绕过，组件层兜底再校验一次
+      if (!f.name.toLowerCase().endsWith('.pdf')) {
+        throw new Error('图纸必须是 .pdf 后缀');
+      }
+      // 先算 sha（intents 入参必填；不开组件 computeHash 避免算两次）
+      const sha = await computeSha256(f);
+      drawingShaMap.set(f, sha);
+      items.push({
+        kind: 'DRAWING' as const,
+        filename: f.name,
+        // v2 i64 雪花序列化器要求 file_size 走 string（与 usePartBatchPdf.onStartUpload 对齐）
+        file_size: String(f.size),
+        content_sha256: sha,
+        content_type: f.type || 'application/pdf',
+      });
     }
-    return true;
+    const out = await createUploadIntents({ files: items });
+    return {
+      credentials: out.credentials,
+      bucket: out.bucket,
+      region: out.region,
+      items: out.items.map((i) => ({ client_ref: i.client_ref, tmp_key: i.tmp_key })),
+    };
   }
 
-  function onDrawingChange(uploadFile: UploadFile): void {
-    // 替换旧文件 → 撤销旧 URL
+  /**
+   * 单文件上传完成后回调：写 binding + 新建 blob URL 给 PdfViewer 预览。
+   *
+   * sha 丢失说明 drawingShaMap 被错误清理（不可能发生在组件正常生命周期），
+   * 抛 ElMessage.error 让 caller 重传。
+   */
+  function onDrawingUploaded(item: CosUploadedItem): void {
+    const sha = drawingShaMap.get(item.file) ?? '';
+    if (!sha) {
+      ElMessage.error('图纸 hash 记录丢失，请重新上传');
+      return;
+    }
+    // 替换旧文件 → 撤销旧 blob URL 防止内存泄漏
     if (form.drawingUrl) {
       try {
         URL.revokeObjectURL(form.drawingUrl);
@@ -254,15 +320,23 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
         /* ignore */
       }
     }
-    form.drawingFile = uploadFile.raw ?? null;
-    form.drawingName = uploadFile.name;
-    form.drawingUrl = uploadFile.raw ? URL.createObjectURL(uploadFile.raw) : null;
+    form.drawingBinding = {
+      tmp_key: item.tmp_key,
+      content_sha256: sha,
+      original_filename: item.file.name,
+      file_size: String(item.file.size),
+      content_type: item.file.type || 'application/pdf',
+    };
+    form.drawingFile = item.file;
+    form.drawingName = item.file.name;
+    form.drawingUrl = URL.createObjectURL(item.file);
   }
-  function onDrawingRemoveUpload(): void {
-    // el-upload 自带 remove 按钮触发（这里 on-remove 没绑在按钮上，留作 hook）
-    onDrawingRemove();
-  }
-  function onDrawingRemove(): void {
+
+  /**
+   * 清空 form 上图纸相关字段 + revoke blob URL。
+   * 复用于：列表清空 + 替换中间态 + 关闭对话框。
+   */
+  function clearDrawingForm(): void {
     if (form.drawingUrl) {
       try {
         URL.revokeObjectURL(form.drawingUrl);
@@ -270,13 +344,55 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
         /* ignore */
       }
     }
+    form.drawingBinding = null;
     form.drawingFile = null;
     form.drawingName = null;
     form.drawingUrl = null;
   }
 
+  /**
+   * CosUploader @change：维护 drawingUploading 状态 + 处理空列表 / 替换中间态。
+   *
+   * 不变量：「form drawing 字段反映 last successful upload」——
+   * - 用户移除所有项 → 清空 form 图纸字段；
+   * - 用户换图但最新一项仍在 hashing/uploading/pending → 保留旧 binding（直到新项
+   *   uploaded 事件触发 onDrawingUploaded 覆盖）；同时清 preview（保持"上传中时不展示旧预览"
+   *   的 UX）。这里我们选择更保守的策略：只要 latest item 不在 done，就清 binding + 预览，
+   *   上传成功后由 onDrawingUploaded 重新写回。
+   */
+  function onDrawingItemsChange(items: CosUploaderItem[]): void {
+    drawingUploading.value = items.some(
+      (it) => it.status === 'pending' || it.status === 'hashing' || it.status === 'uploading',
+    );
+    if (items.length === 0) {
+      clearDrawingForm();
+      return;
+    }
+    const newest = items[items.length - 1]!;
+    if (newest.status !== 'done' && (form.drawingBinding || form.drawingUrl)) {
+      clearDrawingForm();
+    }
+  }
+
+  /** @all-done：全部进入终态（done / error），关闭 uploading 标记。 */
+  function onDrawingAllDone(): void {
+    drawingUploading.value = false;
+  }
+
+  /** @error：单文件上传或 confirm 失败，关闭 uploading 标记 + 提示用户。 */
+  function onDrawingUploadError(item: CosUploaderItem): void {
+    drawingUploading.value = false;
+    ElMessage.error(`图纸上传失败：${item.error ?? '未知错误'}`);
+  }
+
   async function onAddConfirm(formEl?: FormInstance): Promise<void> {
     if (!formEl) return;
+    // 2026-09-17 M4：图纸上传中守卫。M3-C 后端要求 binding 与图片必须同时提交；
+    // 上传未完成时拒绝 addConfirm，避免 staged 条目带 stale binding。
+    if (drawingUploading.value) {
+      ElMessage.error('图纸上传中，请稍候');
+      return;
+    }
     try {
       await formEl.validate();
     } catch {
@@ -320,6 +436,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
         drawingFile: form.drawingFile,
         drawingName: form.drawingName,
         drawingUrl: form.drawingUrl,
+        drawingBinding: form.drawingBinding,
       };
 
       if (editingUid.value) {
@@ -334,6 +451,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
         form.drawingUrl = null;
         form.drawingFile = null;
         form.drawingName = null;
+        form.drawingBinding = null;
         staged.value.push(entry);
       }
       addDialogVisible.value = false;
@@ -355,6 +473,9 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     formEl?.clearValidate();
     Object.assign(form, initialForm());
     editingUid.value = null;
+    // 2026-09-17 M4：清模块级上传状态。下次打开 dialog 不会继承旧 File 的 sha 记录。
+    drawingShaMap.clear();
+    drawingUploading.value = false;
   }
 
   // ============ 行操作：查看 / 删除 / 编辑 ============
@@ -388,6 +509,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
       drawingFile: target.drawingFile,
       drawingName: target.drawingName,
       drawingUrl: target.drawingUrl,
+      drawingBinding: target.drawingBinding,
     });
     addDialogVisible.value = true;
     // 标记该 entry 的 url 已被 dialog 接管；切到 list 时不再 revoke 它
@@ -395,6 +517,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     target.drawingUrl = null;
     target.drawingFile = null;
     target.drawingName = null;
+    target.drawingBinding = null;
     // 同步刷新 rootCustomerId 与申请人候选（让下拉带回原选项）
     if (target.customerId) {
       void applicantSearch.loadForCustomer(target.customerId);
@@ -473,7 +596,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
       }
 
       // 2) 构造批量 payload
-      const items: PartCreatePayload[] = staged.value.map((s) => ({
+      const items: PartBatchCreatePayload[] = staged.value.map((s) => ({
         name: s.name,
         drawing_no: s.drawingNo,
         applicant_name: s.applicantName,
@@ -489,10 +612,11 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
         note: s.note,
         // customer_id 雪花 ID 字符串（CLAUDE.md §3）
         customer_id: s.customerId!,
+        // 2026-09-17 M4：图纸 FileBinding。后端 PartBatchCreatePayload.drawing_file
+        // 必传 FileBindingIn（可选？null 触发后端跳过）；未上传图纸时给 undefined
+        // 让 v2 后端 schema 跳过该字段。
+        drawing_file: s.drawingBinding ?? undefined,
       }));
-      // 2026-09-16：图纸上传暂时移除（multipart /parts/batch 路由在 v2 后端
-      // 不存在，触 415）；待「前端上传」重构（前端直传 COS，提交时只传
-      // 已上传的 URL 列表）再补回。staged 条目上的 drawingFile 暂不处理。
       const res = await batchCreateParts(items);
       if (res.failed.length > 0) {
         const sample = res.failed
@@ -547,6 +671,8 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     submitting,
     form,
     rules,
+    // 2026-09-17 M4：图纸上传状态（CosUploader 守卫 + 子组件 disabled 绑定）
+    drawingUploading,
     // handlers
     openDrawingPreview,
     onDrawingPreviewClosed,
@@ -556,10 +682,14 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     openAddDialog,
     onCustomerChange,
     onApplicantSelect,
-    beforeDrawingUpload,
-    onDrawingChange,
-    onDrawingRemoveUpload,
-    onDrawingRemove,
+    // 2026-09-17 M4：图纸上传回调（替代 beforeDrawingUpload + onDrawingChange +
+    // onDrawingRemoveUpload + onDrawingRemove 四件套）。CosUploader 通过这五
+    // 个回调驱动 form 图纸状态机。
+    requestDrawingUpload,
+    onDrawingUploaded,
+    onDrawingItemsChange,
+    onDrawingAllDone,
+    onDrawingUploadError,
     onAddConfirm,
     onDialogClosed,
     onRowPreview,
