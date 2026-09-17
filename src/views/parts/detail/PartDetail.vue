@@ -2,25 +2,22 @@
   PartDetail.vue
 
   /parts/:id  零件详情页（装配壳）。
-  - 9 张卡由 7 个子组件 + 3 个 FileListCard 组成
-  - 底部操作（品检通过 / 指定工序 / 外协回收 / 取消订单 / 删除）留在 shell，
-    因为它们跨多张卡状态；dialog 状态由 shell 局部维护，业务函数调 usePartDetail
-  - barcode 小卡：serial_no 存在时显示
-  - 2026-08-25 frontend-overall-refactor：从 2355 行单体拆为装配壳
-  - 2026-09-15 Phase 5：业务全切 v2。品检通过走 `POST /parts/{id}/to-ship`（v2
-    必填 batch_id + version），指定工序走 `POST /parts/{id}/fail-inspection`（v2
-    schema 与 v1 一致，无 version，OCC 由 service 层按 t_part_batch 处理）。
-    新增按钮（按状态显示）见 usePartDetail：
-    - place-on-shelf（ON_SHELF 之前的状态）
-    - send-to-programming（PENDING → PROGRAMMING）
-    - release-from-programming（PROGRAMMING → IN_PROCESS）
-    - recall-to-pending（ON_SHELF / PROGRAMMING → PENDING）
-    - recall-to-programming（ON_SHELF → PROGRAMMING）
-    - send-to-outsource（PENDING / IN_PROCESS → OUTSOURCE）
-    - receive-from-outsource（OUTSOURCE → IN_PROCESS）
-    - complete-repair（REPAIRING → ON_SHELF / INSPECTION）
-    全部按钮点击前先调 `GET /parts/{id}/batches` 拿 `batch_id + version`，
-    再弹 dialog 让用户填货架/工序参数。
+  - 8 张卡：信息卡 / 历史记录卡 / 条形码卡 / 装配件卡 / 零件文件 tabs 卡 /
+    时间线卡（含批次监控 + 历史过滤 + 工序链）/ 底部操作 / dialog 区。
+  - 2026-09-17 PR-4 卡片化重构：
+    - 删除 PartQuoteCard / usePartQuote（外协报价下线，仅保留 /outsource/quote
+      入口；PartDetail 不再展示报价列表）。
+    - 4 张 FileListCard + PartCncCard 合并为 PartFilesTabsCard（el-tabs 切
+      DRAWING / 3D_MODEL / CAD_2D / CNC_PAIR 4 tab）。
+    - 新增「时间线」卡：3 列 flex 容器 → PartBatchMonitorCard（左，批次列表
+      + 拆分 / 取消 + 行选中联动） / PartHistoryCard（中，按选中批次过滤的
+      历史）/ ProcessChainCard（右，工艺链可视化）。
+  - 底部操作（品检 / 外协回收 / 取消 / 删除）留在 shell，因为它们跨多张卡
+    状态；dialog 状态由 shell 局部维护，业务函数调 usePartDetail。
+  - 2026-09-15 Phase 5：业务全切 v2（api 基址 `/api/v2`）。品检通过走
+    `POST /parts/{id}/to-ship`（v2 必填 batch_id + version），指定工序走
+    `POST /parts/{id}/fail-inspection`。
+  - 工艺链：part.process_chain_id 改走 useProcessChain 拉链（PR-3）。
 -->
 <template>
   <div v-loading="infoLoading" class="part-detail">
@@ -40,7 +37,7 @@
       @update:form="onPartInfoFormChange"
     />
 
-    <!-- 历史记录 -->
+    <!-- 历史记录（被选中批次时由 PartHistoryCard 内部按 batch_id 过滤） -->
     <PartHistoryCard
       :part-id="partId"
       :events="events"
@@ -48,6 +45,7 @@
       :status-label-of="statusLabelOf"
       :event-label="eventLabel"
       :event-tag-type="eventTagType"
+      :selected-batch-id="selectedBatchId"
     />
 
     <!-- 条形码（仅当存在 serial_no 时显示） -->
@@ -66,9 +64,6 @@
       </div>
     </el-card>
 
-    <!-- 2026-09-16 PR-2：part 级 delivery_note_id 随 t_part 瘦身下线，
-         「所属送货单卡」删除；批次级送货单号见 PartBatchMonitorCard。 -->
-
     <!-- 所属装配件 -->
     <PartAssemblyLinkCard
       v-if="part && part.assembly_id !== null"
@@ -77,92 +72,81 @@
       :assembly-loading="assemblyLoading"
     />
 
-    <!-- 图纸 / 3D 模型 / CAD 源文件（2026-09-16 加 v-if="part" 守：避免 part 为 null
-         时进入 FileListCard 子渲染链，触发 toUpperCase 炸 undefined）。
-         2026-09-16 T3.5：补传场景 B 三处挂载均走 usePartFileUpload（hash → upload-intents
-         → COS 直传 → confirmPartFile），旧 multipart 路径已删除（后端 404）。
-         预览 / 下载默认走 v2 /part-files/{id}/url + /content 实际路径。 -->
-    <FileListCard
-      v-if="part"
-      :files="drawings"
-      owner-type="part"
-      :owner-id="partId"
-      kind="DRAWING"
-      :show-upload="canManageDrawings"
-      :show-delete="canManageDrawings"
-      :show-print="!isInspectorRaw"
-      :api-upload="drawingUpload"
-      @refresh="fetchDrawings"
-    />
-    <FileListCard
-      v-if="part"
-      :files="models3d"
-      owner-type="part"
-      :owner-id="partId"
-      kind="3D_MODEL"
-      :show-upload="canManage3DModels"
-      :show-delete="canManage3DModels"
-      :api-upload="model3dUpload"
-      @refresh="fetch3DModels"
-    />
-    <FileListCard
-      v-if="part"
-      :files="cadFiles"
-      owner-type="part"
-      :owner-id="partId"
-      kind="CAD_2D"
-      :show-upload="canManageDrawings"
-      :show-delete="canManageDrawings"
-      :api-upload="cadUpload"
-      @refresh="fetchCadFiles"
-    />
-
-    <!-- CNC 文件 -->
-    <PartCncCard
+    <!-- 零件文件 tabs 卡（2026-09-17 PR-4：合并 4 张 FileListCard + PartCncCard） -->
+    <PartFilesTabsCard
       :part-id="partId"
       :part-status="part?.status ?? 'PENDING'"
-      :cnc-setup-groups="cncSetupGroups"
-      :cnc-loading="cncLoading"
+      :drawings="drawings"
+      :models3d="models3d"
+      :cad-files="cadFiles"
+      :can-manage-drawings="canManageDrawings"
+      :can-manage-3-d-models="canManage3DModels"
       :can-manage-cnc-files="canManageCncFiles"
       :can-manage-setup-sheet="canManageSetupSheet"
+      :is-inspector="isInspectorRaw"
+      :drawing-upload="drawingUpload"
+      :model3d-upload="model3dUpload"
+      :cad-upload="cadUpload"
+      :cnc-setup-groups="cncSetupGroups"
+      :cnc-loading="cncLoading"
       :production-shelves="productionShelves"
       :processes="processes"
       :format-bytes="formatBytes"
       :file-list="fileList"
       :on-download-cnc="onDownloadCnc"
       :on-delete-cnc="onDeleteCnc"
+      @refresh="onFileTabRefresh"
       @fetch="fetchCncPrograms"
       @pairUpload="handlePairUpload"
       @release="handleRelease"
     />
 
-    <!-- 外协报价 -->
-    <PartQuoteCard
-      v-if="canViewQuotes"
-      :part-id="partId"
-      :part-name="part?.name"
-      :part-status="part?.status ?? 'PENDING'"
-      :quotes="quotes"
-      :quotes-loading="quotesLoading"
-      :can-create-quote-base="canCreateQuoteBase"
-      :quote-rules="quoteRules"
-      :load-quote-create-data="loadQuoteCreateData"
-      @fetch="fetchQuotes"
-      @create="handleCreateQuote"
-    />
-
-    <!-- 批次监控 -->
-    <PartBatchMonitorCard
-      :part-id="partId"
-      :batches="batches"
-      :batches-loading="batchesLoading"
-      :can-manage-batches="canManageBatches"
-      :status-tag-type="statusTagType"
-      :status-label-of="statusLabelOf"
-      @fetch="fetchBatches"
-      @split="handleSplitBatch"
-      @cancelBatch="handleCancelBatch"
-    />
+    <!--
+      时间线卡（2026-09-17 PR-4）：批次列表 + 历史 + 工序链 三列联动。
+      - PartBatchMonitorCard 行选中 → onBatchSelect → 写入 selectedBatchId
+      - selectedBatchId 同步驱动：PartHistoryCard 过滤 / ProcessChainCard
+        高亮 current_process_step_id 对应步骤。
+    -->
+    <el-card shadow="never" class="timeline-card">
+      <template #header>
+        <div class="card-header">
+          <span class="card-title">
+            <el-icon><Clock /></el-icon>
+            <span>时间线</span>
+          </span>
+        </div>
+      </template>
+      <div class="timeline-row">
+        <PartBatchMonitorCard
+          :part-id="partId"
+          :batches="batches"
+          :batches-loading="batchesLoading"
+          :can-manage-batches="canManageBatches"
+          :status-tag-type="statusTagType"
+          :status-label-of="statusLabelOf"
+          :selected-batch-id="selectedBatchId"
+          @fetch="fetchBatches"
+          @split="handleSplitBatch"
+          @cancelBatch="handleCancelBatch"
+          @select="onBatchSelect"
+        />
+        <PartHistoryCard
+          :part-id="partId"
+          :events="events"
+          :events-loading="eventsLoading"
+          :status-label-of="statusLabelOf"
+          :event-label="eventLabel"
+          :event-tag-type="eventTagType"
+          :selected-batch-id="selectedBatchId"
+        />
+        <ProcessChainCard
+          :steps="processChain.steps.value"
+          :current-step-id="currentStepId"
+          :loading="processChain.loading.value"
+          :processes-lookup="processesLookup"
+        />
+      </div>
+    </el-card>
 
     <!-- 底部操作：取消订单 / 删除 / 品检 / 外协回收（按角色门控） -->
     <el-card v-if="part" shadow="never" class="bottom-actions">
@@ -400,15 +384,14 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { PriceTag } from '@element-plus/icons-vue';
-import FileListCard from '@/components/FileListCard.vue';
+import { Clock, PriceTag } from '@element-plus/icons-vue';
 import Barcode from '@/components/Barcode.vue';
 import PartInfoCard from './components/PartInfoCard.vue';
 import PartHistoryCard from './components/PartHistoryCard.vue';
 import PartAssemblyLinkCard from './components/PartAssemblyLinkCard.vue';
-import PartCncCard from './components/PartCncCard.vue';
-import PartQuoteCard from './components/PartQuoteCard.vue';
+import PartFilesTabsCard from './components/PartFilesTabsCard.vue';
 import PartBatchMonitorCard from './components/PartBatchMonitorCard.vue';
+import ProcessChainCard from './components/ProcessChainCard.vue';
 import type { PartBatch } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';
@@ -423,19 +406,16 @@ import { usePartDetail } from './composables/usePartDetail';
 import type { PartEditForm } from './composables/usePartDetail';
 import { usePartFiles } from './composables/usePartFiles';
 import { usePartCncGroups } from './composables/usePartCncGroups';
-import { usePartQuote } from './composables/usePartQuote';
+import { useProcessChain } from './composables/useProcessChain';
 
 const route = useRoute();
 const partId = ref<string>(String(route.params.id ?? ''));
 
-// ============ 4 个 composables ============
+// ============ composables ============
+// 2026-09-17 PR-4：删 usePartQuote（外协报价下线，仅保留 /outsource/quote 入口）。
 const detail = usePartDetail(partId);
 const files = usePartFiles(partId);
 const cnc = usePartCncGroups(partId);
-const quote = usePartQuote(
-  partId,
-  computed(() => detail.part.value?.name),
-);
 
 // 从 composables 解构出来（业务函数 + 状态）
 const {
@@ -483,7 +463,7 @@ const { drawings, models3d, cadFiles, fetchDrawings, fetch3DModels, fetchCadFile
 
 // 2026-09-16 T3.5：三个 kind 各自的补传 composable（场景 B）。
 // 复用同一 partId（雪花 ID 字符串），kind 是字面量。
-// FileListCard 期望 `apiUpload: (ownerId, file) => Promise<PartFileItem>` 签名，
+// PartFilesTabsCard 期望 `apiUpload: (ownerId, file) => Promise<PartFileItem>` 签名，
 // 而 usePartFileUpload.upload 仅接 file（owner 已在 composable 闭包里）→ 这里
 // 适配成兼容签名。
 const drawingUploadComp = usePartFileUpload({
@@ -511,20 +491,9 @@ const {
   onDeleteCnc,
   onPairUpload,
   onReleaseToShelf,
-  // 2026-08-25 T10p5：上传 staging 助手（含 ElMessage.warning 兜底），通过函数 prop 注入 PartCncCard。
+  // 2026-08-25 T10p5：上传 staging 助手（含 ElMessage.warning 兜底），通过函数 prop 注入 PartFilesTabsCard。
   fileList,
 } = cnc;
-
-const {
-  quotes,
-  quotesLoading,
-  canViewQuotes,
-  canCreateQuote: canCreateQuoteBase,
-  fetchQuotes,
-  quoteRules,
-  loadQuoteCreateData,
-  onCreateQuote,
-} = quote;
 
 // PR-2 2026-09-13：PartInfoCard 用本地 reactive 副本做双向 v-model，
 // 父级把子组件 emit('update:form') 的最新值合并回 usePartDetail 持有的 form。
@@ -533,8 +502,33 @@ function onPartInfoFormChange(next: PartEditForm): void {
   Object.assign(form, next);
 }
 
-// ============ 批次 ============
-// batches / batchesLoading / fetchBatches 来自 usePartDetail（PartBatchMonitorCard 渲染）
+// ============ 选中批次（2026-09-17 PR-4：3 卡联动锚）============
+// PartBatchMonitorCard 行选中 → onBatchSelect → 写入 selectedBatchId；
+// PartHistoryCard 按 batch_id 过滤 / ProcessChainCard 高亮
+// current_process_step_id 对应步骤。
+const selectedBatchId = ref<string | null>(null);
+function onBatchSelect(b: PartBatch | null): void {
+  selectedBatchId.value = b?.id ?? null;
+}
+
+// ============ 工序链（2026-09-17 PR-4：useProcessChain 拉链）============
+// batches / part 来自 usePartDetail；selectedBatchId 同步驱动 currentStepId。
+const processChain = useProcessChain(
+  partId,
+  computed(() => part.value),
+  computed(() => batches.value),
+  selectedBatchId,
+);
+const currentStepId = computed<string | null>(() => processChain.currentStepId.value);
+
+// 2026-09-17 PR-4：part.process_chain_id 变化时拉链（首次 part 加载 + 后续
+// 工艺变更）。useProcessChain 内部已 watch partId 清空状态；这里只触发拉取。
+watch(
+  () => part.value?.process_chain_id,
+  (id) => {
+    if (id) void processChain.fetchProcessChain();
+  },
+);
 
 // ============ 共享 shelves/processes 缓存（release / failInsp / receive 共用）============
 const productionShelves = ref<Shelf[]>([]);
@@ -557,6 +551,17 @@ async function ensureShelvesProcesses(): Promise<void> {
     }
   }
 }
+
+// 2026-09-17 PR-4：ProcessChainCard 需要 { process_id → { code, name } } 字典。
+// processes 由 ensureShelvesProcesses 缓存（failInsp / receive / 配对下发共用），
+// 这里派生 O(1) 查找表，避免在 ProcessChainCard 内 v-for .find。
+const processesLookup = computed<Record<string, { code: string; name: string }>>(() => {
+  const map: Record<string, { code: string; name: string }> = {};
+  for (const p of processes.value) {
+    map[p.id] = { code: p.code, name: p.name };
+  }
+  return map;
+});
 
 // ============ 底部 dialog 状态（shell 局部维护）============
 const failInspDlg = useDialogSize({ desktopWidth: 480 });
@@ -756,7 +761,7 @@ async function handleCancelBatch(batch: PartBatch) {
   void fetchBatches();
 }
 
-// ============ 配对上传 / 下发（PartCncCard 触发）============
+// ============ 配对上传 / 下发（PartFilesTabsCard → PartCncCard 触发）============
 // 2026-08-25 T10p5：emit payload 改为 { gcodes, setup, resolve }，
 // shell 等 API 完成再调 resolve：成功才关 dialog + reset submitting。
 async function handlePairUpload(payload: {
@@ -780,21 +785,18 @@ async function handleRelease(payload: {
   payload.resolve(ok);
 }
 
-// ============ 报价新建（PartQuoteCard 触发）============
-// 2026-08-25 T10p5：emit payload 改为 { form, resolve }，
-// shell 等 API 完成再调 resolve：成功才关 dialog + reset submitting。
-async function handleCreateQuote(payload: {
-  form: { outsource_company_id: string; process_id: string; price: string; note: string };
-  resolve: (ok: boolean) => void;
-}) {
-  const ok = await onCreateQuote(payload.form);
-  if (ok) void fetchEvents(); // 同步刷新历史（QUOTE_CREATED 事件）
-  payload.resolve(ok);
+// ============ 零件文件 tabs 刷新（PartFilesTabsCard 触发）============
+// 2026-09-17 PR-4：tabs 卡把三个 FileListCard 的 refresh 收敛成一个 emit('refresh', kind)。
+// 这里按 kind 转发回 usePartFiles 对应的 fetch*。
+async function onFileTabRefresh(kind: 'DRAWING' | '3D_MODEL' | 'CAD_2D'): Promise<void> {
+  if (kind === 'DRAWING') await fetchDrawings();
+  else if (kind === '3D_MODEL') await fetch3DModels();
+  else await fetchCadFiles();
 }
 
 // ============ 切换 partId 时重置 ============
 const { isInspector } = usePermissions();
-// FileListCard 需要 !isInspector 决定 show-print（直接用 raw ref）
+// PartFilesTabsCard 需要 !isInspector 决定 DRAWING tab 的「打印图纸」按钮可见性。
 const isInspectorRaw = computed(() => isInspector.value);
 
 watch(
@@ -803,14 +805,16 @@ watch(
     const s = String(id ?? '');
     if (!s) return;
     partId.value = s;
-    quotes.value = [];
+    // 2026-09-17 PR-4：清空选中批次（useProcessChain 内部已 watch partId 清空
+    // selectedBatchId，但切 partId 时立刻置空让 PartHistoryCard 立刻恢复展示
+    // 全部事件，避免闪旧批次的过滤态）。
+    selectedBatchId.value = null;
     drawings.value = [];
     models3d.value = [];
     cadFiles.value = [];
     await fetchPart();
     void fetchEvents();
     void fetchBatches();
-    void fetchQuotes();
     void fetchDrawings();
     void fetch3DModels();
     void fetchCadFiles();
@@ -822,7 +826,6 @@ onMounted(() => {
   void fetchPart();
   void fetchEvents();
   void fetchBatches();
-  void fetchQuotes();
   void fetchDrawings();
   void fetch3DModels();
   void fetchCadFiles();
@@ -889,6 +892,29 @@ onMounted(() => {
     color: var(--text-secondary);
     font-size: 13px;
     margin-bottom: 16px;
+  }
+}
+
+// 2026-09-17 PR-4：时间线卡（PartBatchMonitorCard + PartHistoryCard + ProcessChainCard
+// 三列联动）。子卡自带 :deep(.el-card__body) padding，这里只约束容器 + 三列等宽。
+// 子卡用 flex: 1 1 0 + min-width: 0 允许内部 el-table / el-timeline 自然收缩；
+// overflow-y: auto 避免批次多时整体撑爆页面。
+.timeline-card {
+  :deep(.el-card__body) {
+    padding: 12px 16px;
+  }
+  .timeline-row {
+    display: flex;
+    gap: 12px;
+    height: 60vh;
+    overflow-y: auto;
+    // 子卡片（PartBatchMonitorCard / PartHistoryCard / ProcessChainCard）
+    // 各占 1 / 3 宽度；min-width: 0 防 flex 子项最小内容宽度撑爆容器。
+    :deep(.el-card) {
+      flex: 1 1 0;
+      min-width: 0;
+      overflow-y: auto;
+    }
   }
 }
 </style>

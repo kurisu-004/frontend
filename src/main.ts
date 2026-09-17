@@ -16,6 +16,12 @@ import 'element-plus/theme-chalk/el-message.css';
 import 'element-plus/theme-chalk/el-notification.css';
 import 'element-plus/theme-chalk/el-loading.css';
 import 'element-plus/theme-chalk/el-overlay.css';
+// 2026-09-17 新增：PartDetail 卡片化重构（PR-4）引入 el-tabs（PartFilesTabsCard
+// header 行内 tabs）和 el-timeline（ProcessChainCard / PartHistoryCard）。
+// unplugin-auto-import resolver 只扫 <template>，但走 CSS bundle 仍需手动
+// 引入 theme-chalk CSS（与 ElMessage 等命令式 API 同源问题）。
+import 'element-plus/theme-chalk/el-tabs.css';
+import 'element-plus/theme-chalk/el-timeline.css';
 
 // 2026-08-21：Element Plus 全量注册（app.use + 全局图标循环）已移除，改为
 // unplugin-auto-import / unplugin-vue-components 按需自动解析（见 vite.config.ts），
