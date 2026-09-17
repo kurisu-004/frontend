@@ -554,6 +554,70 @@ describe('useCosUploader / 并发上限', () => {
     expect(peakInFlight).toBeGreaterThanOrEqual(1);
     expect(itemsRef.value.every((it) => it.status === 'done')).toBe(true);
   });
+
+  // 2026-09-17 复审加固：concurrency=0 / 负数 / undefined 必须被入口 Math.max(1, ?? 3)
+  // 兜底，避免 runWithConcurrency 推 0 worker → Promise.all([]) 立即 resolve、
+  // 整批上传静默全空。
+  it('concurrency=0 被兜底为 1：3 个文件仍能全部 done', async () => {
+    const files = [new File(['1'], '1'), new File(['2'], '2'), new File(['3'], '3')];
+    const session = makeSession(['tmp/1', 'tmp/2', 'tmp/3']);
+    const items = buildCosUploadItems(files, session);
+    const itemsRef: Ref<CosUploaderItem[]> = ref(items);
+
+    let inFlight = 0;
+    let peakInFlight = 0;
+    uploadFileSpy.mockImplementation(
+      (params: { onProgress?: (p: { percent: number }) => void }) => {
+        inFlight += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        params.onProgress?.({ percent: 0.5 });
+        const p = Promise.resolve(mockSuccess()).finally(() => {
+          inFlight -= 1;
+        });
+        return p;
+      },
+    );
+
+    const refetchSession = vi.fn(async () => session);
+    const { startUpload } = useCosUploader({
+      items: itemsRef,
+      refetchSession,
+      initialSession: session,
+      concurrency: 0,
+    });
+    await startUpload();
+
+    // 兜底后实际 in-flight 上限是 1（3 个文件串行推完）
+    expect(peakInFlight).toBe(1);
+    expect(itemsRef.value.every((it) => it.status === 'done')).toBe(true);
+    expect(uploadFileSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('concurrency=负数 被兜底为 1', async () => {
+    const files = [new File(['1'], '1'), new File(['2'], '2')];
+    const session = makeSession(['tmp/1', 'tmp/2']);
+    const items = buildCosUploadItems(files, session);
+    const itemsRef: Ref<CosUploaderItem[]> = ref(items);
+
+    uploadFileSpy.mockImplementation(
+      (params: { onProgress?: (p: { percent: number }) => void }) => {
+        params.onProgress?.({ percent: 0.5 });
+        return Promise.resolve(mockSuccess());
+      },
+    );
+
+    const refetchSession = vi.fn(async () => session);
+    const { startUpload } = useCosUploader({
+      items: itemsRef,
+      refetchSession,
+      initialSession: session,
+      concurrency: -5,
+    });
+    await startUpload();
+
+    expect(itemsRef.value.every((it) => it.status === 'done')).toBe(true);
+    expect(uploadFileSpy).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ============ tests: allDone / allOk ============

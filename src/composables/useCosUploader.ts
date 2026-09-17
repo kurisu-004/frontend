@@ -187,7 +187,13 @@ export interface UseCosUploaderOptions {
    * - false：item 状态直接 pending → uploading → done / error。
    */
   computeHash?: boolean;
-  /** 最大并发文件数；默认 3（对齐 SDK 默认 FileParallelLimit）。 */
+  /**
+   * 最大并发文件数；默认 3（对齐 SDK 默认 FileParallelLimit）。
+   *
+   * 2026-09-17 复审加固：caller 必须传 `≥ 1`；`undefined` / `0` / 负数都会被 composable
+   * 入口 `Math.max(1, ?? 3)` 兜底提升，避免 `runWithConcurrency` 推出 0 worker 导致
+   * `Promise.all([])` 立即 resolve、整批上传静默全空。
+   */
   concurrency?: number;
 }
 
@@ -237,7 +243,10 @@ function isCredentialExpiring(c: CosCredentials, nowMs: number): boolean {
 }
 
 export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderReturn {
-  const { items, refetchSession, initialSession, computeHash = false, concurrency = 3 } = opts;
+  // 2026-09-17 复审加固：concurrency 必须 ≥ 1；undefined 默认 3，0 / 负数兜底提升为 1。
+  // 见 UseCosUploaderOptions.concurrency 注释。
+  const concurrency = Math.max(1, opts.concurrency ?? 3);
+  const { items, refetchSession, initialSession, computeHash = false } = opts;
 
   /**
    * 当前批的共享凭证 / bucket / region。
