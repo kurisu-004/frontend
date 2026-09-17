@@ -14,6 +14,7 @@ declare module 'vue' {
     ColumnDragHandle: typeof import('./components/ColumnDragHandle.vue')['default']
     ColumnFilterPopover: typeof import('./components/ColumnFilterPopover.vue')['default']
     ColumnVisibilityPopover: typeof import('./components/ColumnVisibilityPopover.vue')['default']
+    CosUploader: typeof import('./components/CosUploader.vue')['default']
     DeliveryScanCandidateDialog: typeof import('./components/delivery/DeliveryScanCandidateDialog.vue')['default']
     DeliverySubmitCandidateDialog: typeof import('./components/delivery/DeliverySubmitCandidateDialog.vue')['default']
     EChart: typeof import('./components/EChart.vue')['default']
