@@ -16,41 +16,44 @@
 
 ### 2.1 Props
 
-| 名称            | 类型                                          | 必填 | 默认值                                        | 说明                                                                                             |
-| --------------- | --------------------------------------------- | ---- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `requestUpload` | `(file: File) => Promise<CosUploadSession>`   | 是   | —                                             | 单文件申请 STS 凭证 + tmp_key；caller 注入，与业务端点解耦                                       |
-| `confirm`       | `(item: CosUploadedItem) => Promise<unknown>` | 否   | `undefined`                                   | 单文件上传完成后由组件自动调用；返回业务侧结果（如 `PartFileItem`）                              |
-| `cancel`        | `(item: CosUploadedItem) => Promise<void>`    | 否   | `undefined`                                   | 用户主动取消某 item 时由组件回调；caller 负责清理后端 tmp 对象                                   |
-| `accept`        | `string`                                      | 否   | `'*/*'`                                       | `el-upload` 的 accept 属性，控制文件选择对话框类型                                               |
-| `multiple`      | `boolean`                                     | 否   | `false`                                       | 是否允许多选；多选时 `requestUpload` 会并发触发                                                  |
-| `limit`         | `number`                                      | 否   | `Infinity`                                    | 最大文件数；超出时 `el-upload` onExceed 触发                                                     |
-| `maxSizeMB`     | `number`                                      | 否   | `300`                                         | 单文件上限（与 nginx `client_max_body_size 300m` 对齐）；超出组件层拦截                          |
-| `disabled`      | `boolean`                                     | 否   | `false`                                       | 全局禁用（按钮置灰 + 拒绝拖拽）                                                                  |
-| `autoUpload`    | `boolean`                                     | 否   | `true`                                        | `false` 时仅入队不自动 startUpload，由 caller 调 `startUpload()` 命令式触发                      |
-| `computeHash`   | `(file: File) => Promise<string>`             | 否   | `undefined`                                   | 流式 SHA-256；组件把它放在上传前同步执行，结果附在 item 上传给 `requestUpload`（用于后端 dedup） |
-| `concurrency`   | `number`                                      | 否   | `3`                                           | 最大并发上传文件数（对齐 SDK 默认 `FileParallelLimit`）                                          |
-| `tip`           | `string`                                      | 否   | `'支持 PDF / 图片 / 3D 模型，单文件 ≤ 300MB'` | 组件底部提示文案                                                                                 |
+| 名称            | 类型                                           | 必填 | 默认值      | 说明                                                                                                                                  |
+| --------------- | ---------------------------------------------- | ---- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestUpload` | `(files: File[]) => Promise<CosUploadSession>` | 是   | —           | 申请 STS 凭证 + 整批 `tmp_key`；caller 注入，与业务端点解耦；返回的 `session.items` 数组按下标与 caller 选中的 `File[]` 一一对应      |
+| `confirm`       | `(item: CosUploadedItem) => Promise<unknown>`  | 否   | `undefined` | 单文件上传完成后由组件自动调用；返回业务侧结果（如 `PartFileItem`）                                                                   |
+| `cancel`        | `(tmpKey: string) => Promise<void>`            | 否   | `undefined` | 用户主动移除已上传 item 时由组件回调；caller 负责清理后端 tmp 对象（参数为 `item.tmp_key`）                                           |
+| `accept`        | `string`                                       | 否   | `''`        | `el-upload` 的 accept 属性，控制文件选择对话框类型；空字符串表示不限制                                                                |
+| `multiple`      | `boolean`                                      | 否   | `true`      | 是否允许多选；多选时 `requestUpload` 会并发触发                                                                                       |
+| `limit`         | `number`                                       | 否   | `0`         | 最大文件数；`0` 表示不限制；超出时 `el-upload` onExceed 触发                                                                          |
+| `maxSizeMB`     | `number`                                       | 否   | `undefined` | 单文件上限（与 nginx `client_max_body_size 300m` 对齐）；`undefined` 表示不限制；超出组件层拦截                                       |
+| `disabled`      | `boolean`                                      | 否   | `false`     | 全局禁用（按钮置灰 + 拒绝拖拽）                                                                                                       |
+| `autoUpload`    | `boolean`                                      | 否   | `true`      | `false` 时仅入队不自动 startUpload，由 caller 调 `startUpload()` 命令式触发                                                           |
+| `computeHash`   | `boolean`                                      | 否   | `false`     | 是否启用流式 SHA-256；启用时由组件内部 `computeSha256` 计算（进度映射 0-30%），结果写入 `item.sha256`；不接收 caller 注入的 hash 函数 |
+| `concurrency`   | `number`                                       | 否   | `3`         | 最大并发上传文件数（对齐 SDK 默认 `FileParallelLimit`）；caller 必须传 `≥ 1`（`0` / 负数会被 composable 兜底提升为 1）                |
+| `tip`           | `string`                                       | 否   | `''`        | 组件底部提示文案                                                                                                                      |
 
 ### 2.2 Events
 
-| 事件名     | 回调签名                                           | 触发时机                                           |
-| ---------- | -------------------------------------------------- | -------------------------------------------------- |
-| `change`   | `(items: CosUploaderItem[]) => void`               | 用户选 / 删 / 重试了 item 时                       |
-| `uploaded` | `(result: unknown, item: CosUploaderItem) => void` | 单文件 confirm 成功后（`confirm` 回调 resolve 时） |
-| `all-done` | `(items: CosUploaderItem[]) => void`               | 所有 item 都进入终态（done / error）时             |
-| `error`    | `(err: Error, item: CosUploaderItem) => void`      | 单文件上传或 confirm 失败时                        |
+| 事件名     | 回调签名                             | 触发时机                                           |
+| ---------- | ------------------------------------ | -------------------------------------------------- |
+| `change`   | `(items: CosUploaderItem[]) => void` | 用户选 / 删 / 重试了 item 时                       |
+| `uploaded` | `(item: CosUploadedItem) => void`    | 单文件 confirm 成功后（`confirm` 回调 resolve 时） |
+| `all-done` | `(items: CosUploadedItem[]) => void` | 所有 item 都进入终态（done / error）时             |
+| `error`    | `(item: CosUploaderItem) => void`    | 单文件上传或 confirm 失败时                        |
+| `exceed`   | `(files: File[]) => void`            | 用户选的文件数超出 `limit` 时                      |
+
+> 事件名 `all-done` 在源码 emit 内部以 `allDone`（camelCase）落地，遵循 `vue/custom-event-name-casing` 规则；模板监听仍写 `@all-done`，Vue 自动转换驼峰 ↔ 短横线，两端互通。
 
 ### 2.3 Exposes
 
-| 名称          | 类型                                   | 说明                                                   |
-| ------------- | -------------------------------------- | ------------------------------------------------------ |
-| `items`       | `Ref<CosUploaderItem[]>`               | 当前上传队列（响应式），可直接在父级 `v-for` 渲染      |
-| `startUpload` | `() => Promise<void>`                  | 命令式触发整批上传（仅当 `autoUpload=false` 时需要）   |
-| `retryItem`   | `(clientRef: string) => Promise<void>` | 单项重试（status=error → pending → 重传 → 重 confirm） |
-| `removeItem`  | `(clientRef: string) => void`          | 移除某 item（若已上传会先调 `cancel` 回调）            |
-| `clear`       | `() => void`                           | 清空整个队列（不触发 cancel，由 caller 自管）          |
-| `allDone`     | `ComputedRef<boolean>`                 | 所有 item 进入终态                                     |
-| `allOk`       | `ComputedRef<boolean>`                 | 所有 item status=done                                  |
+| 名称          | 类型                                   | 说明                                                                       |
+| ------------- | -------------------------------------- | -------------------------------------------------------------------------- |
+| `items`       | `Ref<CosUploaderItem[]>`               | 当前上传队列（响应式），可直接在父级 `v-for` 渲染                          |
+| `startUpload` | `() => Promise<void>`                  | 命令式触发整批上传（仅当 `autoUpload=false` 时需要）                       |
+| `retryItem`   | `(clientRef: string) => Promise<void>` | 单项重试（status=error → pending → 重传 → 重 confirm）                     |
+| `removeItem`  | `(clientRef: string) => Promise<void>` | 移除某 item（若已上传会先调 `cancel` 回调；`cancel` 失败仅警告不阻塞移除） |
+| `clear`       | `() => Promise<void>`                  | 清空整个队列（已 done 的项会 best-effort 触发 `cancel` 回调）              |
+| `allDone`     | `ComputedRef<boolean>`                 | 所有 item 进入终态                                                         |
+| `allOk`       | `ComputedRef<boolean>`                 | 所有 item status=done                                                      |
 
 ### 2.4 用法示例
 
@@ -62,15 +65,16 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import CosUploader from '@/components/CosUploader.vue';
-import type { CosUploadSession } from '@/types/cos_upload';
+import type { CosCredentials, CosUploadSession } from '@/types/cos_upload';
 import { api } from '@/api/http';
 
 const itemsRef = ref<unknown[]>([]);
 
-// caller 只需注入一个 requestUpload：调后端拿 STS + tmp_key
-async function requestUpload(file: File): Promise<CosUploadSession> {
-  // 这里走任意后端端点（caller 自定义）；单文件场景下 items 只放一项
-  const clientRef = crypto.randomUUID();
+// caller 只需注入一个 requestUpload：调后端拿 STS + 整批 tmp_key
+async function requestUpload(files: File[]): Promise<CosUploadSession> {
+  // 这里走任意后端端点（caller 自定义）；本组件 onPick 一次只传 1 个 file
+  const [file] = files;
+  if (!file) throw new Error('files 为空');
   const { data } = await api.post<{
     credentials: CosCredentials;
     bucket: string;
@@ -85,7 +89,7 @@ async function requestUpload(file: File): Promise<CosUploadSession> {
     credentials: data.credentials,
     bucket: data.bucket,
     region: data.region,
-    items: [{ client_ref: clientRef, tmp_key: data.tmp_key }],
+    items: [{ client_ref: crypto.randomUUID(), tmp_key: data.tmp_key }],
   };
 }
 </script>
@@ -105,20 +109,20 @@ import { ref } from 'vue';
 import CosUploader from '@/components/CosUploader.vue';
 import type { CosUploadedItem, CosUploadSession } from '@/types/cos_upload';
 import { api } from '@/api/http';
-import { computeSha256 } from '@/utils/fileHash';
 
 interface MyFileItem {
   id: string;
   filename: string;
 }
 
-// 1. 申请 STS + tmp_key（业务端点）
-async function requestUpload(file: File, contentSha256: string): Promise<CosUploadSession> {
+// 1. 申请 STS + 整批 tmp_key（业务端点）
+async function requestUpload(files: File[]): Promise<CosUploadSession> {
   const { data } = await api.post<CosUploadSession>('/my-domain/upload-intents', {
-    filename: file.name,
-    file_size: String(file.size),
-    content_type: file.type,
-    content_sha256: contentSha256,
+    files: files.map((f) => ({
+      filename: f.name,
+      file_size: String(f.size),
+      content_type: f.type,
+    })),
   });
   return data;
 }
@@ -135,14 +139,17 @@ async function confirm(item: CosUploadedItem): Promise<MyFileItem> {
   return data;
 }
 
-// 3. cancel 回调：用户主动取消时清理后端 tmp 对象（可选）
-async function cancel(item: CosUploadedItem): Promise<void> {
-  await api.post('/my-domain/upload-cancel', { tmp_key: item.tmp_key });
+// 3. cancel 回调：用户主动移除已上传 item 时清理后端 tmp 对象（可选）
+async function cancel(tmpKey: string): Promise<void> {
+  await api.post('/my-domain/upload-cancel', { tmp_key: tmpKey });
 }
+
+// 是否启用流式 SHA-256（开启后 item.sha256 自动写入，可在 confirm 用）
+const needSha256 = true;
 
 const uploaderRef = ref<InstanceType<typeof CosUploader>>();
 
-function onAllDone() {
+function onAllDone(items: CosUploadedItem[]) {
   // 全部上传完（含 finish + 错误），UI 可关闭 / 跳列表
 }
 </script>
@@ -153,7 +160,7 @@ function onAllDone() {
     :request-upload="requestUpload"
     :confirm="confirm"
     :cancel="cancel"
-    :compute-hash="computeSha256"
+    :compute-hash="needSha256"
     multiple
     :limit="20"
     :max-size-m-b="300"
