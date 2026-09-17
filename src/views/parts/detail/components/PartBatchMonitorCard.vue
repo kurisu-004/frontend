@@ -6,6 +6,8 @@
   - 拆分对话框（partId + batch + quantity → emit split）
   - 取消按钮（emit cancel-batch；父组件弹 confirm 后再调 usePartDetail.onCancelBatch）
   - 拆分 / 取消 dialog 状态由本组件局部维护
+  - 行选中（@row-click → emit select）让 ProcessChainCard / PartHistoryCard
+    按选中 batch 派生高亮步骤 / 过滤事件
 
   2026-08-25 frontend-overall-refactor：从 PartDetail.vue 抽出。
 
@@ -16,6 +18,16 @@
   - 「操作」fixed="right" 列受 canManageBatches 控制：保留为字面量 <el-table-column v-if>，
     不进 defs。
   - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
+
+  2026-09-17 PR-3 改造：
+  - 移除 next_process_name / created_at 列：
+    next_process_name 已在 PartBatchMonitorCard 内被 PR-3 步骤化替换为
+    current_process_step_id（FK → t_process_chain_step.id），由 ProcessChainCard
+    通过 process chain steps 渲染；created_at 视觉价值低 + 与批次流水管理重叠。
+  - 移除「批次名」「创建时间」之外的批次细节展示 → 卡片进一步瘦身。
+  - 加 @row-click + :row-class-name：点击批次行 emit('select', batch| null)，
+    同一行二次点击撤销选中（与点空白处一致）；操作列按钮 stopPropagation 避免
+    误触选中。
 -->
 <template>
   <el-card v-loading="batchesLoading" shadow="never" class="batch-card">
@@ -25,7 +37,16 @@
         <span class="event-count"> 共 {{ batches.length }} 批 / {{ batchTotalQty }} 件 </span>
       </div>
     </template>
-    <el-table v-if="batches.length > 0" ref="tableRef" :data="batches" size="small" border stripe>
+    <el-table
+      v-if="batches.length > 0"
+      ref="tableRef"
+      :data="batches"
+      size="small"
+      border
+      stripe
+      :row-class-name="rowClassName"
+      @row-click="onRowClick"
+    >
       <!--
         2026-08-27 T22：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
         用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
@@ -67,7 +88,7 @@
             link
             type="primary"
             size="small"
-            @click="openSplitDialog(row as PartBatch)"
+            @click.stop="openSplitDialog(row as PartBatch)"
             >拆分</el-button
           >
           <el-button
@@ -75,7 +96,7 @@
             link
             type="danger"
             size="small"
-            @click="$emit('cancelBatch', row as PartBatch)"
+            @click.stop="$emit('cancelBatch', row as PartBatch)"
             >取消</el-button
           >
         </template>
@@ -141,7 +162,6 @@
 import { computed, h, onMounted, ref } from 'vue';
 import { ElTag } from 'element-plus';
 import type { PartBatch } from '@/api/parts';
-import { formatDateTime } from '@/utils/date';
 import { useDialogSize } from '@/composables/useDialogSize';
 import {
   resolveDraggable,
@@ -158,6 +178,13 @@ const props = defineProps<{
   batches: PartBatch[];
   batchesLoading: boolean;
   canManageBatches: boolean;
+  /**
+   * 2026-09-17 新增：当前选中批次 id（受控）。
+   * 同一行二次点击 / 切换到不同行都通过 @row-click → emit('select') 走。
+   * 父级 usePartDetail 持有 selectedBatchId ref，本卡与 ProcessChainCard /
+   * PartHistoryCard 共享同一份 selectedBatchId 形成联动。
+   */
+  selectedBatchId?: string | null;
   statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
   statusLabelOf: (s: string | null | undefined) => string;
 }>();
@@ -171,12 +198,35 @@ const emit = defineEmits<{
     payload: { batch: PartBatch; quantity: number; resolve: (ok: boolean) => void },
   ): void;
   (e: 'cancelBatch', batch: PartBatch): void;
+  // 2026-09-17 新增：行选中（toggle）。payload = PartBatch 时选中；
+  // payload = null 时撤销选中。
+  (e: 'select', batch: PartBatch | null): void;
 }>();
 
 const batchTotalQty = computed(() => props.batches.reduce((acc, b) => acc + b.quantity, 0));
 
 function isTerminalBatch(b: PartBatch): boolean {
   return b.status === 'COMPLETED' || b.status === 'CANCELLED';
+}
+
+/**
+ * 2026-09-17 新增：行选中态。
+ * - rowClassName 给 el-table 当前选中行加 is-selected-batch
+ *   （CSS scoped 命中后背景色改变，与 EP 默认 hover 区分开）
+ * - onRowClick 实现 toggle：同一行二次点击撤销选中；
+ *   操作列按钮已 @click.stop，不会冒泡到 @row-click。
+ */
+function rowClassName({ row }: { row: PartBatch }): string {
+  if (row.id === props.selectedBatchId) return 'is-selected-batch';
+  return '';
+}
+
+function onRowClick(row: PartBatch): void {
+  if (row.id === props.selectedBatchId) {
+    emit('select', null);
+  } else {
+    emit('select', row);
+  }
 }
 
 // 2026-08-27 T22：列顺序拖动 + 可见性。
@@ -221,28 +271,12 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => h('span', null, (row as PartBatch).current_holder_display || '—'),
   },
   {
-    key: 'next_process_name',
-    label: '下一工序',
-    minWidth: 100,
-    align: 'center',
-    showOverflowTooltip: true,
-    cellRender: ({ row }) => h('span', null, (row as PartBatch).next_process_name || '—'),
-  },
-  {
     key: 'delivery_note_no',
     label: '送货单',
     minWidth: 150,
     align: 'center',
     showOverflowTooltip: true,
     cellRender: ({ row }) => h('span', null, (row as PartBatch).delivery_note_no || '—'),
-  },
-  {
-    key: 'created_at',
-    label: '创建时间',
-    minWidth: 150,
-    align: 'center',
-    cellRender: ({ row }) =>
-      h('span', { class: 'muted' }, formatDateTime((row as PartBatch).created_at)),
   },
 ];
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_monitor' });
@@ -328,5 +362,17 @@ function onSplitConfirm(): void {
 .split-dialog-body p {
   margin: 6px 0;
   line-height: 1.6;
+}
+
+// 2026-09-17 新增：行选中态高亮。
+// EP el-table row-class-name 加的 class 挂在 <tr> 上，但 hover/默认选中
+// 也是 <tr>；用更高优先级的 background-color 直接覆盖，叠加 hover 用
+// background-image 透明叠加即可。`--primary-bg` 在 variables.scss 已声明。
+:deep(.el-table__row.is-selected-batch),
+:deep(.el-table__row.is-selected-batch td.el-table__cell) {
+  background-color: var(--primary-bg, #ecf5ff) !important;
+}
+:deep(.el-table__row.is-selected-batch:hover > td.el-table__cell) {
+  background-color: var(--primary-bg, #ecf5ff) !important;
 }
 </style>
