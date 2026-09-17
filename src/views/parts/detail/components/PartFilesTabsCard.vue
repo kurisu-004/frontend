@@ -19,6 +19,21 @@
   2026-09-17 review 第 1 轮修复：移除 footer 重复的「打印图纸」按钮 + 改
     onDeleteSelected 用 selectedFile 完整对象的 version 调 deletePartFile
     （方案 B，FileListCard 暂未接通 @select，先按 id 查 filesForActiveTab）。
+
+  2026-09-17 UI 调整第 2 轮：按钮迁移到最外层 footer + 内层 card 视觉平。
+  - 内层 FileListCard / PartCncCard 传 :hide-header-actions="true"，避免与外
+    层 footer 重复按钮。
+  - FileListCard 暴露 print / triggerUpload；PartCncCard 暴露
+    openPairUpload / openRelease —— 通过 ref 调，footer 统一收纳入口。
+  - 内层 el-card 用 :deep() 去 border / shadow / background，看起来像普通
+    body 区域而非嵌套卡片。
+  2026-09-17 review 第 2 轮：内层 card header 完全去掉（用户原文「body 部分
+  就直接是图纸、3D 模型等文件，不要再套一层 card」），改传 :bare-mode="true"。
+  - FileListCard / PartCncCard 各自加 bareMode prop；bareMode 下整块
+    `<template #header>` v-if 不渲染。
+  - FileListCard bareMode 下独立挂一个 display:none 的 <el-upload>，
+    保证 triggerUpload() 仍可调 input[type=file].click()（走 el-upload 内
+    部 input 复用 onPick 签名）。
 -->
 <template>
   <el-card shadow="never" class="files-tabs-card">
@@ -37,10 +52,11 @@
       </div>
     </template>
 
-    <!-- DRAWING / 3D_MODEL / CAD_2D → FileListCard -->
+    <!-- DRAWING / 3D_MODEL / CAD_2D → FileListCard（内层，视觉平） -->
     <template v-if="activeTab !== 'CNC_PAIR'">
       <FileListCard
         v-if="activeTab === 'DRAWING'"
+        ref="fileListCardRef"
         :files="drawings"
         owner-type="part"
         :owner-id="partId"
@@ -48,6 +64,8 @@
         :show-upload="canManageDrawings"
         :show-delete="canManageDrawings"
         :show-print="!isInspector"
+        :hide-header-actions="true"
+        :bare-mode="true"
         :api-upload="drawingUpload"
         @refresh="$emit('refresh', 'DRAWING')"
         @uploaded="onFileUploaded('DRAWING', $event)"
@@ -55,12 +73,15 @@
       />
       <FileListCard
         v-else-if="activeTab === '3D_MODEL'"
+        ref="fileListCardRef"
         :files="models3d"
         owner-type="part"
         :owner-id="partId"
         kind="3D_MODEL"
         :show-upload="canManage3DModels"
         :show-delete="canManage3DModels"
+        :hide-header-actions="true"
+        :bare-mode="true"
         :api-upload="model3dUpload"
         @refresh="$emit('refresh', '3D_MODEL')"
         @uploaded="onFileUploaded('3D_MODEL', $event)"
@@ -68,12 +89,15 @@
       />
       <FileListCard
         v-else
+        ref="fileListCardRef"
         :files="cadFiles"
         owner-type="part"
         :owner-id="partId"
         kind="CAD_2D"
         :show-upload="canManageDrawings"
         :show-delete="canManageDrawings"
+        :hide-header-actions="true"
+        :bare-mode="true"
         :api-upload="cadUpload"
         @refresh="$emit('refresh', 'CAD_2D')"
         @uploaded="onFileUploaded('CAD_2D', $event)"
@@ -81,9 +105,10 @@
       />
     </template>
 
-    <!-- CNC_PAIR → PartCncCard -->
+    <!-- CNC_PAIR → PartCncCard（内层，视觉平） -->
     <PartCncCard
       v-else
+      ref="cncCardRef"
       :part-id="partId"
       :part-status="partStatus"
       :cnc-setup-groups="cncSetupGroups"
@@ -96,20 +121,96 @@
       :file-list="fileList"
       :on-download-cnc="onDownloadCnc"
       :on-delete-cnc="onDeleteCnc"
+      :hide-header-actions="true"
+      :bare-mode="true"
       @fetch="$emit('fetch')"
       @pairUpload="(payload) => $emit('pairUpload', payload)"
       @release="(payload) => $emit('release', payload)"
     />
 
     <!-- 底部操作条：按 tab 区分按钮 + 选中态 -->
-    <template v-if="activeTab !== 'CNC_PAIR'" #footer>
+    <template #footer>
       <div class="card-footer">
-        <span v-if="selectedFileId" class="footer-tip muted">
+        <span v-if="selectedFileId && activeTab !== 'CNC_PAIR'" class="footer-tip muted">
           已选中文件 #{{ selectedFileId }}
         </span>
+        <span v-else class="footer-tip muted">
+          {{ footerHint }}
+        </span>
         <div class="footer-actions">
+          <!-- DRAWING tab：打印图纸 + 上传图纸 -->
+          <template v-if="activeTab === 'DRAWING'">
+            <el-button
+              v-if="!isInspector"
+              type="success"
+              plain
+              :loading="printing"
+              @click="onPrintDrawing"
+            >
+              <el-icon><Printer /></el-icon>
+              <span>打印图纸（含条形码）</span>
+            </el-button>
+            <el-button
+              v-if="canManageDrawings"
+              type="primary"
+              plain
+              :loading="uploading"
+              @click="onUploadDrawing"
+            >
+              <el-icon><Upload /></el-icon>
+              <span>{{ drawings.length > 0 ? '替换图纸' : '上传图纸' }}</span>
+            </el-button>
+          </template>
+
+          <!-- 3D_MODEL tab：上传 3D 模型 -->
+          <template v-else-if="activeTab === '3D_MODEL'">
+            <el-button
+              v-if="canManage3DModels"
+              type="primary"
+              plain
+              :loading="uploading"
+              @click="onUpload3DModel"
+            >
+              <el-icon><Upload /></el-icon>
+              <span>{{ models3d.length > 0 ? '替换 3D 模型' : '上传 3D 模型' }}</span>
+            </el-button>
+          </template>
+
+          <!-- CAD_2D tab：上传 CAD 源文件 -->
+          <template v-else-if="activeTab === 'CAD_2D'">
+            <el-button
+              v-if="canManageDrawings"
+              type="primary"
+              plain
+              :loading="uploading"
+              @click="onUploadCad"
+            >
+              <el-icon><Upload /></el-icon>
+              <span>{{ cadFiles.length > 0 ? '替换 CAD 源文件' : '上传 CAD 源文件' }}</span>
+            </el-button>
+          </template>
+
+          <!-- CNC_PAIR tab：配对上载 + 下发到 CNC 货架 -->
+          <template v-else>
+            <el-button
+              v-if="canManageCncFiles && canManageSetupSheet"
+              type="primary"
+              @click="onOpenPairUpload"
+            >
+              <el-icon><Upload /></el-icon><span>配对上载 (G代码 + 设定单)</span>
+            </el-button>
+            <el-button
+              v-if="canManageCncFiles && partStatus === 'PROGRAMMING'"
+              type="success"
+              @click="onOpenRelease"
+            >
+              下发到 CNC 货架
+            </el-button>
+          </template>
+
+          <!-- 删除选中：非 CNC tab + 有选中态时显示 -->
           <el-button
-            v-if="selectedFileId"
+            v-if="activeTab !== 'CNC_PAIR' && selectedFileId"
             type="danger"
             plain
             :loading="deleteSelectedSubmitting"
@@ -125,7 +226,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { FolderOpened } from '@element-plus/icons-vue';
+import { FolderOpened, Printer, Upload } from '@element-plus/icons-vue';
 import FileListCard from '@/components/FileListCard.vue';
 import PartCncCard from './PartCncCard.vue';
 import { deletePartFile } from '@/api/parts/file';
@@ -181,6 +282,14 @@ const emit = defineEmits<{
 
 const activeTab = ref<TabKey>('DRAWING');
 
+// 2026-09-17 UI 调整：ref 拿 FileListCard / PartCncCard 实例，footer 按钮
+// 通过 expose 出的方法触发，避免重复渲染按钮 + 重复维护上传/打印签名。
+const fileListCardRef = ref<InstanceType<typeof FileListCard> | null>(null);
+const cncCardRef = ref<InstanceType<typeof PartCncCard> | null>(null);
+// 2026-09-17 UI 调整：footer 按钮触发 FileListCard 内部动作时复用子组件的
+// loading 状态（避免在父组件再开一份）。这里只追踪自身 loading 的删除动作。
+const deleteSelectedSubmitting = ref(false);
+
 /**
  * 当前激活 tab 对应的文件数组。FileListCard 不暴露 @select，所以「删除选中」按钮
  * 仅按 id 查本表回填 version。后续 FileListCard 暴露 @select 后，本 computed 可去掉，
@@ -204,7 +313,6 @@ const filesForActiveTab = computed<PartFileItem[]>(() => {
  * @uploaded / @deleted 维护；click 选中待 FileListCard 加 @select 事件后接通。
  */
 const selectedFileId = ref<string | null>(null);
-const deleteSelectedSubmitting = ref(false);
 
 function onFileUploaded(_kind: TabKey, f: PartFileItem): void {
   // 上传成功后暂不更新选中（保持旧选中）；caller 触发 refresh 后会重新拉列表
@@ -237,7 +345,35 @@ async function onDeleteSelected(): Promise<void> {
   }
 }
 
-// 切换 partId 时清空选中
+// ============ Footer 按钮 → 子组件方法 ============
+// 2026-09-17 UI 调整：footer 通过 ref 调 FileListCard / PartCncCard expose 出的方法，
+// 避免在两个组件里各维护一份上传 / 打印 / 配对 / 下发逻辑。
+
+function onPrintDrawing(): void {
+  fileListCardRef.value?.print?.();
+}
+
+function onUploadDrawing(): void {
+  fileListCardRef.value?.triggerUpload?.();
+}
+
+function onUpload3DModel(): void {
+  fileListCardRef.value?.triggerUpload?.();
+}
+
+function onUploadCad(): void {
+  fileListCardRef.value?.triggerUpload?.();
+}
+
+function onOpenPairUpload(): void {
+  cncCardRef.value?.openPairUpload?.();
+}
+
+function onOpenRelease(): void {
+  cncCardRef.value?.openRelease?.();
+}
+
+// 切换 partId 时清空选中 + 重置 tab
 watch(
   () => props.partId,
   () => {
@@ -245,6 +381,27 @@ watch(
     activeTab.value = 'DRAWING';
   },
 );
+
+// 2026-09-17 UI 调整：footer 左侧 hint 文字（按 tab 提示当前区域）。
+const footerHint = computed<string>(() => {
+  switch (activeTab.value) {
+    case 'DRAWING':
+      return '支持上传 PDF / PNG / JPG 等图纸，打印可自动附带条形码';
+    case '3D_MODEL':
+      return '支持 STEP / STP / IGES / STL / OBJ / 3MF 格式';
+    case 'CAD_2D':
+      return '支持 DWG / DXF 源文件';
+    case 'CNC_PAIR':
+      return 'G 代码必须配设定单，下发到 PROGRAMMING 状态下的 CNC 货架';
+    default:
+      return '';
+  }
+});
+
+// loading 复用子组件状态：footer 按钮从 FileListCard 暴露的 uploading / printing
+// ref 派生（defineExpose 会自动 unwrap 一层 ref，读 boolean 即可）。
+const printing = computed<boolean>(() => fileListCardRef.value?.printing ?? false);
+const uploading = computed<boolean>(() => fileListCardRef.value?.uploading ?? false);
 </script>
 
 <style lang="scss" scoped>
@@ -258,6 +415,21 @@ watch(
   // 内容重复但写在卡片层做兜底，删 .inline-tabs 也不退化。
   :deep(.el-tabs__header) {
     margin-bottom: 0;
+  }
+  // 2026-09-17 UI 调整第 2 轮：内层 FileListCard / PartCncCard 视觉平，
+  // 去 border / shadow / header background，让它们看起来像 body 区域而非嵌套卡片。
+  // 内层卡仍有自己的 padding（fil-grid 需要），保留内层 __body padding 不动。
+  :deep(.el-card.files-card),
+  :deep(.el-card.cnc-card) {
+    border: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+  :deep(.el-card.files-card) > .el-card__header,
+  :deep(.el-card.cnc-card) > .el-card__header {
+    // 内层 header 只剩标题 + 文件数 tag，padding 收紧与外层视觉平
+    padding: 12px 0;
+    border-bottom: 1px dashed var(--el-border-color-lighter);
   }
 }
 
