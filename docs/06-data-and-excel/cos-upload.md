@@ -274,6 +274,77 @@ now_ms + 5 * 60_000 >= credentials.expired_time * 1000
 
 **没配 CORS 的表现**：浏览器 DevTools Network 报 `No 'Access-Control-Allow-Origin' header is present`，PUT 预检 403；前端上传组件表现为「上传中…」无限挂起，最终 SDK 内部 reject 抛 `TypeError: Failed to fetch`。**联调首日必踩**，请提前在 COS 控制台配好。
 
+### 5.4 STS 凭证签发端口迁移（2026-09-17）
+
+2026-09-17 起，前端「上传图纸」3 处入口（`usePartFileUpload` / `usePartBatchPdf` /
+`usePartBatchManual`）的 STS 凭证签发从 backend-rust `POST
+/api/v2/part-files/upload-intents` 切到 backend-python `POST /api/v1/files/sts-tmp-keys`。
+
+#### 5.4.1 端口契约差异
+
+| 维度             | backend-rust（旧，已下线）                                                                                           | backend-python（2026-09-17 起）                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 路径             | `POST /api/v2/part-files/upload-intents`                                                                             | `POST /api/v1/files/sts-tmp-keys`                                              |
+| baseURL / 客户端 | `api`（`/api/v2`）                                                                                                   | `apiPrint`（`/api/v1`，与 4 个打印端点共享拦截器 + refreshPromise）            |
+| 单次签发 key 数  | bulk：1+ 个 key（按 `files[]` 数组长度）                                                                             | 单端口 1 个 key                                                                |
+| dedup            | 是（按 `(owner_part_id, kind, sha)` 命中已有文件，标 `dedup_hit=true` 附 `existing_file`，前端可跳过上传复用旧文件） | 否（无 dedup 语义；按用户决策"不要 dedup"）                                    |
+| tmp_prefix 字段  | `tmp_prefix`（part-file 域 UploadIntentsOut 字段）                                                                   | `upload_prefix`（python 端 STS policy resource 限定前缀）                      |
+| credentials 字段 | `tmp_secret_id` / `tmp_secret_key` / `session_token` / `expired_time`                                                | 同上 + `start_time`（python 端多 1 个字段，前端不消费）                        |
+| 端点文件         | `backend-rust/src/handlers/partner-files.rs::upload_intents`                                                         | `backend-python/api/v1/sts.py::grant_sts_tmp_keys`                             |
+| 适配文件         | `frontend/src/api/parts/file.ts::createUploadIntents`（已删）                                                        | `frontend/src/api/files/sts.ts::grantStsTmpKey`                                |
+| 类型契约         | `src/types/part_file.ts::UploadIntentsIn / Out`（part-file 域专用，含 dedup_hit / existing_file）                    | `src/types/sts.ts::StsTmpKeysRequest / StsTmpKeysResponse / StsCredentialsOut` |
+
+#### 5.4.2 caller 适配（3 处 composable）
+
+**单端口 1-key response → session.items[1] 形态**：python STS 一次只签 1 个 key，
+而 `useCosUpload` / `useCosUploader` 期待 `CosUploadSession.items[]` 数组形态（每项
+含 `client_ref` + `tmp_key`）。3 处 caller 的适配策略：
+
+- **场景 A `usePartFileUpload`（PartDetail 单文件补传）**：单文件 → 单 port 一次响应，
+  caller 用 `crypto.randomUUID()` 生成 `client_ref`，把响应塞进 1 项数组并包成
+  `UploadIntentsOut` 喂给 `useCosUpload`；`refetchIntents` 同源调用复用同一
+  `client_ref`。
+- **场景 B `usePartBatchPdf`（批量 PDF Tab）**：批量 N 文件 → 对每条 file 并发调
+  `grantStsTmpKey`（concurrency 3，与 hash 阶段对齐）；`credentials` / `bucket` /
+  `region` 取首条响应（python 端共享同一 STS 角色结果稳定），所有 item 共用。
+- **场景 C `usePartBatchManual`（手工录入 Tab）**：单次选 1 个文件 → 同样调 1 次
+  `grantStsTmpKey`，包成 `CosUploadSession` 喂给 `useCosUploader`（通用 composable）。
+
+**PartFileKind → StsPurpose 映射**（`src/types/sts.ts::PartFileKindToStsPurpose`）：
+
+| PartFileKind      | StsPurpose        |
+| ----------------- | ----------------- |
+| `DRAWING`         | `drawing`         |
+| `3D_MODEL`        | `3d_model`        |
+| `CAD_2D`          | `cad_2d`          |
+| `G_CODE`          | `g_code`          |
+| `SETUP_SHEET`     | `setup_sheet`     |
+| `ASSEMBLY_MASTER` | `assembly_master` |
+
+`content_sha256` 严格截前 16 hex（python schema 约束 16-64 hex 边界，与
+backend-python `schema/sts.py::StsTmpKeysRequest.content_sha256` 字段定义对齐）。
+
+#### 5.4.3 凭证过期检测公式
+
+复用现成 5 分钟检测：`useCosUpload.ts::152` /
+`useCosUploader.ts::241-243` 的
+`(Date.now() + 5 * 60_000) >= credentials.expired_time * 1000` 判定。`expired_time`
+来自 python 端 i64 雪花序列化器（JSON 解析为 number 秒数），`* 1000` 转毫秒对齐
+`Date.now()`。
+
+`refetchIntents` / `refetchSession` 在 3 处 caller 都重新调 `grantStsTmpKey` 拿新
+STS + tmp_key；tmp_key 通常稳定不变（python 端按 `(purpose, filename,
+content_sha256)` 派生唯一 key），即使漂移 `useCosUpload.applyFreshIntents` /
+`useCosUploader.applyFreshSession` 内部兜底强制 reset pending 重传。
+
+#### 5.4.4 nginx 路由 + COS CORS 依赖
+
+- **nginx**：是否需要新加 `location /api/v1/files/sts-tmp-keys`？当前 frontend nginx
+  已对 `/api/v1/*` 全部反代到 python backend（`compose` / `nginx.conf` 在 `frontend/`
+  子模块），新端点无需新加 location（**仅 surface，未实际验证 dev compose 联调**）。
+- **COS CORS**：python STS 端点本身不进 COS（只是签发）；实际 PUT 直传仍走 §5.3
+  同款 CORS 规则，COS 桶无需新加。
+
 ## 6. nginx 300m 上限对齐
 
 `nginx.conf` 关键配置：

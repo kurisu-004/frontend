@@ -8,8 +8,9 @@ import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { createApplicant } from '@/api/applicant';
-import { createUploadIntents } from '@/api/parts/file';
 import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
+import { grantStsTmpKey } from '@/api/files/sts';
+import { PartFileKindToStsPurpose } from '@/types/sts';
 import type { Applicant } from '@/types/applicant';
 import type { FileBinding } from '@/types/part_file';
 import type { Customer } from '@/api/customer';
@@ -267,36 +268,54 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
   // 自动清理（与 PDF Tab 场景 A 同款假设），前端不显式 cancel。
 
   /**
-   * 校验 + 算 sha + 调 createUploadIntents，拼出 CosUploadSession 返回给组件。
+   * 校验 + 算 sha + 调 grantStsTmpKey，并发拼出 CosUploadSession 返回给组件。
    *
    * 场景 A：不传 owner_part_id（创建工单）。item.kind 固定 'DRAWING'（2026-09-17
    * M4 范围只接入图纸；3D 模型走 PDF Tab）。
+   *
+   * 2026-09-17 STS 端口迁移：原 backend-rust createUploadIntents 一次签 N 个 key
+   * （bulk + dedup）；python `POST /api/v1/files/sts-tmp-keys` 是单端口 1-key 响应。
+   * 改为对每个 file 独立并发调 grantStsTmpKey；client_ref 由 caller 用
+   * crypto.randomUUID() 生成（useCosUploader buildCosUploadItems 内部也会生成
+   * 一份，但保留外部生成便于 refetch 复用）。credentials / bucket / region 来自
+   * 首条响应（python 端共享同一 STS 角色，结果稳定）。
    */
   async function requestDrawingUpload(files: File[]): Promise<CosUploadSession> {
-    const items = [];
+    // 校验 + 算 sha（intents 入参必填；不开组件 computeHash 避免算两次）
     for (const f of files) {
       // accept=".pdf" 拦截 picker，但拖拽可以绕过，组件层兜底再校验一次
       if (!f.name.toLowerCase().endsWith('.pdf')) {
         throw new Error('图纸必须是 .pdf 后缀');
       }
-      // 先算 sha（intents 入参必填；不开组件 computeHash 避免算两次）
-      const sha = await computeSha256(f);
-      drawingShaMap.set(f, sha);
-      items.push({
-        kind: 'DRAWING' as const,
-        filename: f.name,
-        // v2 i64 雪花序列化器要求 file_size 走 string（与 usePartBatchPdf.onStartUpload 对齐）
-        file_size: String(f.size),
-        content_sha256: sha,
-        content_type: f.type || 'application/pdf',
-      });
     }
-    const out = await createUploadIntents({ files: items });
+    const shas = await Promise.all(files.map(async (f) => [f, await computeSha256(f)] as const));
+    for (const [f, sha] of shas) drawingShaMap.set(f, sha);
+
+    // 并发调 grantStsTmpKey
+    const stsList = await Promise.all(
+      files.map(async (f) => {
+        const [file, sha] = shas.find(([it]) => it === f)!;
+        return grantStsTmpKey({
+          purpose: PartFileKindToStsPurpose['DRAWING'] ?? 'drawing',
+          filename: file.name,
+          content_type: file.type || 'application/pdf',
+          // python schema 约束 16-64 hex；前端算 SHA-256 截前 16 hex。
+          content_sha256: sha.slice(0, 16),
+        });
+      }),
+    );
+
+    const first = stsList[0]!;
     return {
-      credentials: out.credentials,
-      bucket: out.bucket,
-      region: out.region,
-      items: out.items.map((i) => ({ client_ref: i.client_ref, tmp_key: i.tmp_key })),
+      // python 端多 1 个 start_time 字段，caller 不需要；CosUploadSession.credentials
+      // 是通用 CosCredentials（字段集是子集），TS 允许结构上多字段的对象赋给少字段结构。
+      credentials: first.credentials,
+      bucket: first.bucket,
+      region: first.region,
+      items: stsList.map((s) => ({
+        client_ref: crypto.randomUUID(),
+        tmp_key: s.tmp_key,
+      })),
     };
   }
 

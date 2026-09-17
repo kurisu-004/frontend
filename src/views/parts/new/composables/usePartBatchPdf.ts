@@ -10,9 +10,10 @@ import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { useCosUpload, type CosUploadItem } from '@/composables/useCosUpload';
 import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
-import { createUploadIntents } from '@/api/parts/file';
+import { grantStsTmpKey } from '@/api/files/sts';
+import { PartFileKindToStsPurpose, type StsTmpKeysResponse } from '@/types/sts';
 import type { Customer } from '@/api/customer';
-import type { FileBinding, PartFileKind } from '@/types/part_file';
+import type { FileBinding, PartFileKind, UploadIntentsOut } from '@/types/part_file';
 import { computeSha256 } from '@/utils/fileHash';
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser';
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
@@ -1164,14 +1165,14 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   async function runWithConcurrency<T>(
     items: T[],
     limit: number,
-    fn: (it: T) => Promise<void>,
+    fn: (it: T, idx: number) => Promise<void>,
   ): Promise<void> {
     if (items.length === 0) return;
     let cursor = 0;
     const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
       while (cursor < items.length) {
         const i = cursor++;
-        await fn(items[i]!);
+        await fn(items[i]!, i);
       }
     });
     await Promise.all(workers);
@@ -1514,51 +1515,81 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
         });
       }
 
-      // 步骤 3+4+5：createUploadIntents + 构造 cosItemsRef + useCosUpload + startUpload
+      // 步骤 3+4+5：grantStsTmpKey (并发) + 构造 cosItemsRef + useCosUpload + startUpload
+      //
+      // 2026-09-17 STS 端口迁移：原 backend-rust createUploadIntents 一次签 N 个 key
+      // （bulk + dedup）；python `POST /api/v1/files/sts-tmp-keys` 是单端口 1-key 响应，
+      // 因此改为对每条 file 并发调 grantStsTmpKey（concurrency 3 与 hash 阶段对齐）。
+      // 各 file 独立签发，credentials / bucket / region 来自最后一条响应（python
+      // 端按 tmp_default_user_id=1 共享同一 STS 角色，结果稳定），回填到所有 item。
       if (entries.length > 0) {
-        const intents = await createUploadIntents({
-          files: entries.map((e) => ({
-            kind: e.kind,
-            filename: e.filename,
-            // v2 i64 序列化器要求 file_size 走 string；前端 Blob.size 是 number，按
-            // CLAUDE.md §3 统一以 string 透传，避免后端 serde 拒收。
-            file_size: String(e.size),
-            content_sha256: e.sha!,
-            content_type: e.contentType,
-          })),
+        const stsList: StsTmpKeysResponse[] = [];
+        await runWithConcurrency(entries, 3, async (entry, idx) => {
+          const sts = await grantStsTmpKey({
+            purpose: PartFileKindToStsPurpose[entry.kind] ?? 'tmp',
+            filename: entry.filename,
+            content_type: entry.contentType,
+            // python schema 约束 16-64 hex；前端算 SHA-256 截前 16 hex。
+            content_sha256: (entry.sha ?? '').slice(0, 16),
+          });
+          // 写入 entries[idx] 同步索引；stsList 仅缓存以备后续构造 cosItemsRef
+          entry.clientRef = crypto.randomUUID();
+          entry.tmpKey = sts.tmp_key;
+          stsList[idx] = sts;
         });
-        intents.items.forEach((out, idx) => {
-          const entry = entries[idx]!;
-          entry.clientRef = out.client_ref;
-          entry.tmpKey = out.tmp_key;
-        });
+
+        // 取最后一条 sts 响应作为批级 bucket / region / credentials（python 端同角色
+        // 共享一致），所有 item 共用；M3-C 旧实现也是同样假设（intents.credentials
+        // 覆盖所有 item）。
+        const bucket = stsList[0]?.bucket ?? '';
+        const region = stsList[0]?.region ?? '';
+        const credentials = stsList[0]?.credentials;
+        if (!credentials) {
+          throw new Error('grantStsTmpKey 未返回任何凭证（响应异常）');
+        }
+        const tmpPrefix = stsList[0]?.upload_prefix ?? '';
 
         cosItemsRef.value = entries.map((e) => ({
           client_ref: e.clientRef!,
           file: e.file,
           tmp_key: e.tmpKey!,
-          bucket: intents.bucket,
-          region: intents.region,
-          tmp_prefix: intents.tmp_prefix,
-          credentials: intents.credentials,
+          bucket,
+          region,
+          tmp_prefix: tmpPrefix,
+          credentials,
           status: 'pending',
           progress: 0,
         }));
         cosUpload.value = useCosUpload({
           items: cosItemsRef,
-          // 重签回调：用相同 (kind, filename, sha, size, content_type) 再调一次。
-          // 旧实现是相同 sha → 同 tmp_key；M3-A Blocker 兜底处理 tmp_key 漂移
-          // （applyFreshIntents 重置 status=pending 强制重传）。
-          refetchIntents: async () =>
-            createUploadIntents({
-              files: entries.map((e) => ({
-                kind: e.kind,
-                filename: e.filename,
-                file_size: String(e.size),
-                content_sha256: e.sha!,
-                content_type: e.contentType,
+          // 凭证过期重签：与首次同样的并发调 grantStsTmpKey，复用同一组 client_ref
+          // 让 useCosUpload.applyFreshIntents 按 Map 找到对应 item；credentials /
+          // bucket / region 仍是批级共享。
+          refetchIntents: async (): Promise<UploadIntentsOut> => {
+            const reList: StsTmpKeysResponse[] = [];
+            await runWithConcurrency(entries, 3, async (entry, idx) => {
+              const sts = await grantStsTmpKey({
+                purpose: PartFileKindToStsPurpose[entry.kind] ?? 'tmp',
+                filename: entry.filename,
+                content_type: entry.contentType,
+                content_sha256: (entry.sha ?? '').slice(0, 16),
+              });
+              reList[idx] = sts;
+            });
+            const cred = reList[0]?.credentials;
+            if (!cred) throw new Error('grantStsTmpKey 重签未返回凭证');
+            return {
+              credentials: cred,
+              bucket: reList[0]?.bucket ?? '',
+              region: reList[0]?.region ?? '',
+              tmp_prefix: reList[0]?.upload_prefix ?? '',
+              items: entries.map((e, idx) => ({
+                client_ref: e.clientRef!,
+                tmp_key: reList[idx]?.tmp_key ?? e.tmpKey ?? '',
+                dedup_hit: false,
               })),
-            }),
+            };
+          },
         });
 
         // 同步 status / progress / error 到 UI cells（每次 cosItemsRef 变都跑一遍）

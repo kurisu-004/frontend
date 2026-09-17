@@ -1,7 +1,7 @@
-// src/api/parts/file.spec.ts（2026-09-16 frontend-overall-cos-direct-upload）
+// src/api/parts/file.spec.ts（2026-09-16 frontend-overall-cos-direct-upload，
+// 2026-09-17 STS 端口迁移：删除原 createUploadIntents 测试，移到 usePartFileUpload.spec.ts）
 //
 // 验证：
-// - createUploadIntents POST /api/v2/part-files/upload-intents，body 与响应类型一致；
 // - confirmPartFile POST /api/v2/parts/{id}/files/confirm；
 // - getPartFileDownloadUrl GET /api/v2/part-files/{id}/url，返回 download_url 字段；
 // - deletePartFile POST /api/v2/part-files/{id}/delete，body 强制 { version }（OCC）；
@@ -32,7 +32,6 @@ vi.mock('@/api/http', () => ({
 
 import {
   confirmPartFile,
-  createUploadIntents,
   deletePartFile,
   fetchPartFileContent,
   getPartFileContentUrl,
@@ -40,7 +39,7 @@ import {
   printPartDrawing,
   printPartDrawingBatch,
 } from './file';
-import type { ConfirmFileIn, UploadIntentItemIn, UploadIntentsOut } from '@/types/part_file';
+import type { ConfirmFileIn } from '@/types/part_file';
 
 beforeEach(() => {
   postCalls.mockReset();
@@ -49,109 +48,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe('createUploadIntents', () => {
-  it('POST /api/v2/part-files/upload-intents，body 与响应类型对齐', async () => {
-    const out: UploadIntentsOut = {
-      credentials: {
-        tmp_secret_id: 'AKIDxxx',
-        tmp_secret_key: 'SECRETxxx',
-        session_token: 'TOKENxxx',
-        expired_time: 1_900_000_000,
-      },
-      bucket: 'examplebucket-1250000000',
-      region: 'ap-shanghai',
-      tmp_prefix: 'tmp/spike/',
-      items: [
-        {
-          client_ref: 'ref-1',
-          tmp_key: 'tmp/spike/seq_a.pdf',
-          dedup_hit: false,
-        },
-        {
-          client_ref: 'ref-2',
-          tmp_key: 'tmp/spike/seq_b.stp',
-          dedup_hit: true,
-          // existing_file 命中时后端会填；这里 stub 字段省略，TS 允许 undefined
-        },
-      ],
-    };
-    postCalls.mockResolvedValueOnce({ data: out });
-
-    const files: UploadIntentItemIn[] = [
-      {
-        kind: 'DRAWING',
-        filename: 'a.pdf',
-        file_size: '12345',
-        content_sha256: 'a'.repeat(64),
-        content_type: 'application/pdf',
-      },
-    ];
-    const resp = await createUploadIntents({
-      owner_part_id: '190000000000001',
-      files,
-    });
-
-    // 调用形态：POST /part-files/upload-intents（baseURL /api/v2 由 api 实例自带）
-    expect(postCalls).toHaveBeenCalledTimes(1);
-    const [url, body] = postCalls.mock.calls[0]!;
-    expect(url).toBe('/part-files/upload-intents');
-    expect(body).toEqual({
-      owner_part_id: '190000000000001',
-      files: [
-        {
-          kind: 'DRAWING',
-          filename: 'a.pdf',
-          file_size: '12345',
-          content_sha256: 'a'.repeat(64),
-          content_type: 'application/pdf',
-        },
-      ],
-    });
-
-    // 响应：保持类型一致（credentials / bucket / region / tmp_prefix / items）
-    expect(resp.credentials.tmp_secret_id).toBe('AKIDxxx');
-    expect(resp.bucket).toBe('examplebucket-1250000000');
-    expect(resp.items).toHaveLength(2);
-    expect(resp.items[0]!.dedup_hit).toBe(false);
-    expect(resp.items[1]!.dedup_hit).toBe(true);
-  });
-
-  it('owner_part_id 可选：场景 A 不传 owner_part_id', async () => {
-    postCalls.mockResolvedValueOnce({
-      data: {
-        credentials: {
-          tmp_secret_id: 'x',
-          tmp_secret_key: 'y',
-          session_token: 'z',
-          expired_time: 0,
-        },
-        bucket: 'b',
-        region: 'r',
-        tmp_prefix: 'p',
-        items: [],
-      } satisfies UploadIntentsOut,
-    });
-
-    await createUploadIntents({
-      files: [
-        {
-          kind: '3D_MODEL',
-          filename: 'b.stp',
-          file_size: '999',
-          content_sha256: 'b'.repeat(64),
-          content_type: 'application/step',
-        },
-      ],
-    });
-
-    const [, body] = postCalls.mock.calls[0]!;
-    // owner_part_id 不传时 body 里也不出现（cleanParams 由调用方决定；本测试
-    // 验证 createUploadIntents 不主动塞 undefined 字段——axios 会自动剥离）
-    expect((body as Record<string, unknown>).owner_part_id).toBeUndefined();
-    expect((body as Record<string, unknown>).files).toHaveLength(1);
-  });
 });
 
 describe('confirmPartFile', () => {
