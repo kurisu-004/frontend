@@ -196,6 +196,13 @@ const {
 });
 ```
 
+**`initialSession` 批级凭证源（2026-09-17 实装补齐）**：`useCosUploader` 把 `credentials` / `bucket` / `region` 放在 session 顶层而非每个 item 上（与 `useCosUpload` 把这些挂在每个 item 的设计不同；通用化必然选择——item 不能绑定桶级元数据），因此 composable 必须额外持一份 session 引用。caller 通过 `initialSession` 把自己已拿到的 batch session 喂进来作为批级凭证源（推荐用法：先 `await refetchSession()` 拿 session → `buildCosUploadItems` → `useCosUploader({ initialSession: session, refetchSession })`，避免凭证健康时被重复 refetch）。**两条使用路径**：
+
+- **路径 1（推荐）**：caller 主动传 `initialSession`，composable 把它作为批级凭证源，仅在 `(Date.now() + 5 * 60_000) >= expired_time * 1000` 时才调 `refetchSession` 重签——caller 完全控制「凭证健康时不主动 refetch」。
+- **路径 2（兜底）**：caller 不传 `initialSession` 时，composable 首次 `startUpload` / `retryItem` 时会主动调一次 `refetchSession` 拿当前批级凭证（与 `useCosUpload` 行为略有差异；caller 若希望「凭证健康时不调 refetch」必须传 `initialSession`）。
+
+**注意**：`initialSession` 是 composable 的内部字段，**不在组件 Props 中暴露**——`CosUploader.vue` 内部消费 composable 时不传 `initialSession`，让 composable 走路径 2 兜底（详见 §2.1 的组件 Props 表）。
+
 **凭证过期自动重签策略**：每文件直传前 composable 内部检测 `(Date.now() + 5 * 60_000) >= expired_time * 1000` 是否成立，任意一项即将过期即整批调用 `requestUpload` 重新签发。**若 caller 重新签发后某 item 的 `tmp_key` 发生变化**，`useCosUploader` 内部的兜底机制（与 `useCosUpload.applyFreshIntents` 同源）会强制把该 item 的 status 复位为 `pending`，清空 progress / etag / error，下次 `startUpload` / `retryItem` 重新拉起上传，避免「旧 STS 写到旧 key + 新 tmp_key 拿去 confirm」的鬼状态穿透。
 
 **并发控制**：默认 `concurrency=3`（对齐 cos-js-sdk-v5 默认 `FileParallelLimit`）；如需调整传 `concurrency` 参数；并发实现为简易信号量 worker 池，单文件内部切片由 SDK 自动处理。
