@@ -49,7 +49,7 @@ docker build -t myerp-frontend .   # 多阶段镜像：node:24-alpine 构建 →
 - 业务模块：[`docs/03-modules/`](./docs/03-modules/)（11 个域，按业务切分）
 - UI 与样式：[`docs/04-ui-and-styling/`](./docs/04-ui-and-styling/)（组件模式 / 设计 token / EP 集成 / 响应式）
 - 构建部署：[`docs/05-build-and-deploy/`](./docs/05-build-and-deploy/)（开发 / docker / nginx / 发布 checklist 4 篇）
-- 数据与 Excel：[`docs/06-data-and-excel/`](./docs/06-data-and-excel/)（Excel 解析 / PDF 与文件 2 篇）
+- 数据与 Excel：[`docs/06-data-and-excel/`](./docs/06-data-and-excel/)（Excel 解析 / PDF 与文件 / COS 上传 3 篇）
 - 测试：[`docs/07-testing/testing-strategy.md`](./docs/07-testing/testing-strategy.md)
 - 已知风险：[`docs/08-known-risks/`](./docs/08-known-risks/)（依赖 / 安全运维 / 框架陷阱 3 篇）
 - 后端需求（给后端 agent）：[`docs/api-requirements/`](./docs/api-requirements/)
