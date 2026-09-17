@@ -65,7 +65,7 @@
 - **L1 客户**（`parent_id IS NULL`）：必须填 `serial_prefix`（A-Z 单字符，全局唯一）；订单号 `<prefix>-<date>-<seq>` 的前缀即由此决定；展示时根节点名前挂 el-tag 显示当前字母。
 - **L2 客户**（`parent_id = <L1.id>`）：`serial_prefix` 字段恒 null，永远继承父；不允许再下挂孙节点（前端 el-tree 仅两层，后端也会拒）。
 - **删除约束**：后端检查下级客户 + 关联申请人 + 关联零件 / 装配体，任意被引用即拒绝软删（前端按钮 hover 提示引用计数）。
-- **导入流程**：投标 Excel 导入 (`PartBidImport`) 走「按一级部门名解析到 L2」；缺失分厂的行标红挡住提交；最终缺失的申请人通过 `bulkGetOrCreateApplicants` 幂等补建。
+- **导入流程**：PDF 批量上传 Tab（`usePartBatchPdf`）内置「按一级部门名解析到 L2」逻辑；缺失分厂的行标红挡住提交；最终缺失的申请人通过 `bulkGetOrCreateApplicants` 幂等补建。
 
 ## 七、后端契约锚链
 

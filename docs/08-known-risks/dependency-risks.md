@@ -26,7 +26,7 @@
 ### 攻击面评估
 
 - 仅 4 个 parser 工具函数使用：`bidExcelParser.ts` / `purchaseOrderExcelParser.ts` / `historicalPriceExcelParser.ts` / 共享 `xlsxParseUtils.ts`。
-- 3 个视图统一收口：`PartBidImport.vue` 等导入入口。
+- 2 个视图统一收口：`usePartBatchPdf`（PDF 批量上传 Tab）等导入入口。
 - 不执行公式 / 宏（仅读取 cell 值）。
 - 不解析加密文件（Excel 加密工作簿会直接报错拒绝）。
 - 文件来源受信任——用户主动上传内部业务文件，非公开互联网下载。

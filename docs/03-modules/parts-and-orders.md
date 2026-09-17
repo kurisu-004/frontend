@@ -10,14 +10,13 @@
 
 ## 一、入口与路由
 
-| Path                | Name             | menuCode     | 守卫                | 备注                                                   |
-| ------------------- | ---------------- | ------------ | ------------------- | ------------------------------------------------------ |
-| `/parts`            | `PartsList`      | `parts_list` | requireAuth         | 零件一览（含装配件，rowType 过滤）                     |
-| `/parts/new`        | `PartsNew`       | `parts_new`  | requireAuth         | 批量新建（双 Tab：手动录入 / PDF 批量上传）            |
-| `/parts/:id`        | `PartsDetail`    | —            | requireAuth         | 零件详情（共享 menuCode 校验沿父路由；id 雪花字符串）  |
-| `/parts/import/bid` | —                | —            | requireAuth         | 投标 Excel 导入（旧 `/parts/new/bid-import` 兼容路径） |
-| `/assemblies`       | —                | —            | redirect → `/parts` | 装配件一览退役                                         |
-| `/assemblies/:id`   | `AssemblyDetail` | —            | requireAuth         | 装配件详情（独立路由壳，UI 走装配视图）                |
+| Path              | Name             | menuCode     | 守卫                | 备注                                                  |
+| ----------------- | ---------------- | ------------ | ------------------- | ----------------------------------------------------- |
+| `/parts`          | `PartsList`      | `parts_list` | requireAuth         | 零件一览（含装配件，rowType 过滤）                    |
+| `/parts/new`      | `PartsNew`       | `parts_new`  | requireAuth         | 批量新建（双 Tab：手动录入 / PDF 批量上传）           |
+| `/parts/:id`      | `PartsDetail`    | —            | requireAuth         | 零件详情（共享 menuCode 校验沿父路由；id 雪花字符串） |
+| `/assemblies`     | —                | —            | redirect → `/parts` | 装配件一览退役                                        |
+| `/assemblies/:id` | `AssemblyDetail` | —            | requireAuth         | 装配件详情（独立路由壳，UI 走装配视图）               |
 
 全部在 `MainLayout` 子树下，定义于 `src/router/index.ts`。
 
@@ -28,7 +27,6 @@
 | `src/views/parts/list/PartsList.vue`      | 9.7K  | 零件一览装配壳：filter-card + `PartsTable` + `PartsBatchBar` + 分页 + 2 个下发 dialog + 隐藏 iframe（批量打印预览）；状态装配在 `usePartsListStore`（Pinia setup store，2026-09-15），壳只留路由/生命周期/DOM 同步 |
 | `src/views/parts/new/PartBatchNew.vue`    | 3.9K  | 批量新建壳：el-tabs 挂载「录入」+「PDF 批量上传」两个 Tab 组件；成功后两 Tab 都跳 `/parts?status=PENDING`                                                                                                          |
 | `src/views/parts/detail/PartDetail.vue`   | 24.8K | 零件详情壳：9 张卡（7 子组件 + 3 个 FileListCard）+ 底部操作栏（品检通过 / 指定工序 / 外协回收 / 取消订单 / 删除）；dialog 状态由 shell 局部维护                                                                   |
-| `src/views/parts/PartBidImport.vue`       | 25.8K | 投标 Excel 导入：选 L1 客户 + 请购日期 + 上传 .xlsx → 解析 → 预览（每行按部门名解析到 L2 + 可手挂 PDF） → 提交（dedupe 申请人 → bulkGetOrCreate → batchCreateParts multipart） → 跳 `/parts?status=PENDING`        |
 | `src/views/assemblies/AssemblyDetail.vue` | 6.7K  | 装配件详情壳：`AssemblyInfoCard` + `AssemblyChildrenTable` + 总装 PDF + 编辑对话框；调 `useAssemblyDetail` composable                                                                                              |
 
 ### 子组件（按菜单归属分三组，2026-09-17 拆分明细）

@@ -2,7 +2,7 @@
 
 > **目标读者**：新人 / Agent（写新 parser / 改 Excel 导入流程）
 > **核心价值**：3 个 Excel parser 的全景图、共享工具、测试约定、新增 parser 的 checklist。
-> **最后更新**：2026-08-26 · **维护者**：@frontend-team
+> **最后更新**：2026-09-17 · **维护者**：@frontend-team
 
 ---
 
@@ -10,11 +10,11 @@
 
 ## 1. Parser 总览
 
-| parser                          | 输入                                                | 输出                           | 调用入口                            |
-| ------------------------------- | --------------------------------------------------- | ------------------------------ | ----------------------------------- |
-| `bidExcelParser.ts`             | 法拉电子应标 Excel `招标项目-标的` sheet            | `BidRow[]` + 错误/警告         | `src/views/parts/PartBidImport.vue` |
-| `purchaseOrderExcelParser.ts`   | 采购订单 Excel（`基本资料` + `采购订单明细` sheet） | `ParsedPurchaseOrder`          | 内部调用                            |
-| `historicalPriceExcelParser.ts` | 历史价确认单 Excel `历史价确认单明细` sheet         | `BidRow[]`（复用 BidRow 契约） | 外协对账流程                        |
+| parser                          | 输入                                                | 输出                           | 调用入口                                             |
+| ------------------------------- | --------------------------------------------------- | ------------------------------ | ---------------------------------------------------- |
+| `bidExcelParser.ts`             | 法拉电子应标 Excel `招标项目-标的` sheet            | `BidRow[]` + 错误/警告         | `src/views/parts/new/composables/usePartBatchPdf.ts` |
+| `purchaseOrderExcelParser.ts`   | 采购订单 Excel（`基本资料` + `采购订单明细` sheet） | `ParsedPurchaseOrder`          | 内部调用                                             |
+| `historicalPriceExcelParser.ts` | 历史价确认单 Excel `历史价确认单明细` sheet         | `BidRow[]`（复用 BidRow 契约） | 外协对账流程                                         |
 
 要点：
 
@@ -36,20 +36,7 @@
 
 这些 helper 原本都是 `bidExcelParser.ts` 的私有函数，2026-07-24 新增历史价 parser 时为复用而抽出。
 
-## 3. 典型调用入口 `PartBidImport.vue`
-
-路径：`src/views/parts/PartBidImport.vue`。
-
-完整流程：
-
-1. 用户上传 Excel（`el-upload`，手动模式 `auto-upload="false"`，前端自己读 ArrayBuffer）。
-2. `XLSX.read(arrayBuffer)` 解出 workbook，调对应 parser 得到 `BidRow[]` + `errors` + `warnings`。
-3. el-table 预览解析结果，errors 行高亮阻断提交，warnings 标记但允许继续。
-4. 用户调整加急 / 单价 / 交期后点确认，前端批量匹配已有 Part，写回订单号 / 系统交期。
-
-`PartBidImport.vue` 自身只负责 UI 编排和提交逻辑，不持有任何 Excel 解析代码——这是 parser 抽出来的根本目的。
-
-## 4. 测试约定
+## 3. 测试约定
 
 每个 parser 配套两类测试：
 
@@ -65,7 +52,7 @@
 
 新增 parser 时强烈建议遵循同一约定：先写 mock 测试覆盖边界（空表 / 缺列 / 异常字符），再用真实样本兜底。
 
-## 5. xlsx 风险指针
+## 4. xlsx 风险指针
 
 `xlsx@0.18.5` 在 npm audit 中标 high（原型污染 + ReDoS），npm 官方仓库至今无修复版本（SheetJS 新版只通过自家 CDN 分发）。
 
@@ -78,7 +65,7 @@
 
 2026-08-21 决策保留当前版本并承担风险。详细评估 + 未来迁移路径见 [08-known-risks/dependency-risks.md](../08-known-risks/dependency-risks.md)。
 
-## 6. 写新 parser 的 checklist
+## 5. 写新 parser 的 checklist
 
 1. 在 `src/utils/` 加 `xxxExcelParser.ts`，导出 `parseXxxExcel(workbook, ...)` 纯函数与对应 TS 类型。
 2. 复用 `xlsxParseUtils.ts` 的 `cleanText` / `parseIntSafe` / `parseDecimal*` / `addDays`，不要重写等价逻辑。
