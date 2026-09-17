@@ -46,7 +46,7 @@ node_modules/element-plus/es/components/table/src/table-column/
 
 ### 已修 / 待留意
 
-- 已修：`src/views/parts/components/PartsTable.vue` 名称列（2026-08-27，commit `8447b46`）。
+- 已修：`src/views/parts/list/components/PartsTable.vue` 名称列（2026-08-27，commit `8447b46`）。
 - **待留意**：同文件的**操作列**是同形的 `<template v-else>` Fragment，同样会被合成空行渲染进 `.hidden-columns`。当前无害，因为 ① 按钮只有 `@click`、没有内联读 `row.xxx` 的渲染输出，且 `.hidden-columns` 不可点击；② `canRecallToPending` / `canRecallToProgramming` 对 `{}` 容错；③「下发」按钮的 `v-if` 含 `row.status === 'PENDING'`，空行下直接 false。**今后往该列加 `router-link` 或任何依赖 `row.xxx` 的内联表达式时，必须套用上面的守卫。**
 - 同类可疑点（暂未触发，改动时留意）：`src/views/delivery/components/DeliveryNoteLineItemsTable.vue` 的链接在 `v-if="row.is_asm_row"` 下，空行时恰好为 false 才没炸。
 

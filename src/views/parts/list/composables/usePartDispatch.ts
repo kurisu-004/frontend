@@ -1,4 +1,4 @@
-// views/parts/composables/usePartDispatch.ts
+// views/parts/list/composables/usePartDispatch.ts
 //
 // 2026-08-22 从 PartsList.vue 抽出：单件下发 + 批量下发 + 召回（2026-08-05）。
 //

@@ -1,4 +1,4 @@
-// views/parts/composables/usePartBatchSelection.ts
+// views/parts/list/composables/usePartBatchSelection.ts
 //
 // 2026-08-22 从 PartsList.vue 抽出：批量选中状态机（print / dispatch 两动作共用）。
 //

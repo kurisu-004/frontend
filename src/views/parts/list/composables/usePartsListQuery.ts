@@ -1,4 +1,4 @@
-// views/parts/composables/usePartsListQuery.ts
+// views/parts/list/composables/usePartsListQuery.ts
 //
 // 2026-08-22 从 PartsList.vue 抽出：列表查询状态机（search/items/total/loading/sort/page）。
 //

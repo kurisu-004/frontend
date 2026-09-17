@@ -25,30 +25,41 @@
 
 | 文件                                      | 大小  | 职责                                                                                                                                                                                                               |
 | ----------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/views/parts/PartsList.vue`           | 9.7K  | 零件一览装配壳：filter-card + `PartsTable` + `PartsBatchBar` + 分页 + 2 个下发 dialog + 隐藏 iframe（批量打印预览）；状态装配在 `usePartsListStore`（Pinia setup store，2026-09-15），壳只留路由/生命周期/DOM 同步 |
-| `src/views/parts/PartBatchNew.vue`        | 3.9K  | 批量新建壳：el-tabs 挂载「录入」+「PDF 批量上传」两个 Tab 组件；成功后两 Tab 都跳 `/parts?status=PENDING`                                                                                                          |
-| `src/views/parts/PartDetail.vue`          | 24.8K | 零件详情壳：9 张卡（7 子组件 + 3 个 FileListCard）+ 底部操作栏（品检通过 / 指定工序 / 外协回收 / 取消订单 / 删除）；dialog 状态由 shell 局部维护                                                                   |
+| `src/views/parts/list/PartsList.vue`      | 9.7K  | 零件一览装配壳：filter-card + `PartsTable` + `PartsBatchBar` + 分页 + 2 个下发 dialog + 隐藏 iframe（批量打印预览）；状态装配在 `usePartsListStore`（Pinia setup store，2026-09-15），壳只留路由/生命周期/DOM 同步 |
+| `src/views/parts/new/PartBatchNew.vue`    | 3.9K  | 批量新建壳：el-tabs 挂载「录入」+「PDF 批量上传」两个 Tab 组件；成功后两 Tab 都跳 `/parts?status=PENDING`                                                                                                          |
+| `src/views/parts/detail/PartDetail.vue`   | 24.8K | 零件详情壳：9 张卡（7 子组件 + 3 个 FileListCard）+ 底部操作栏（品检通过 / 指定工序 / 外协回收 / 取消订单 / 删除）；dialog 状态由 shell 局部维护                                                                   |
 | `src/views/parts/PartBidImport.vue`       | 25.8K | 投标 Excel 导入：选 L1 客户 + 请购日期 + 上传 .xlsx → 解析 → 预览（每行按部门名解析到 L2 + 可手挂 PDF） → 提交（dedupe 申请人 → bulkGetOrCreate → batchCreateParts multipart） → 跳 `/parts?status=PENDING`        |
 | `src/views/assemblies/AssemblyDetail.vue` | 6.7K  | 装配件详情壳：`AssemblyInfoCard` + `AssemblyChildrenTable` + 总装 PDF + 编辑对话框；调 `useAssemblyDetail` composable                                                                                              |
 
-### 子组件（`src/views/parts/components/`）
+### 子组件（按菜单归属分三组，2026-09-17 拆分明细）
 
-| 文件                               | 职责                                                                                                                                                                          |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PartInfoCard.vue`                 | 信息卡 + 行内编辑（editing 切换；form 由 usePartDetail 持有）                                                                                                                 |
-| `PartHistoryCard.vue`              | 历史事件卡（事件列表 + 标签映射）                                                                                                                                             |
-| `PartCncCard.vue`                  | CNC 文件卡（G 代码 / 设定单上传下载，list/upload/delete 走 `api/cnc.ts`）                                                                                                     |
-| `PartQuoteCard.vue`                | 报价卡（外协报价关联）                                                                                                                                                        |
-| ~~`PartDeliveryNoteLinkCard.vue`~~ | **2026-09-16 PR-2 删除**：随 `part.delivery_note_id` 列下线一并移除；批次级送货单号改由 `PartBatchMonitorCard` 经 `t_part_batch.delivery_note_no` 字段展示（PR-2 2026-09-16） |
-| `PartAssemblyLinkCard.vue`         | 装配件关联卡（仅 `part.assembly_id != null` 时显示）                                                                                                                          |
-| `PartBatchMonitorCard.vue`         | 批次监控卡（批次列表 + 拆分 / 取消批次）                                                                                                                                      |
-| `PartBatchManualTab.vue`           | 批量新建 Tab 1「录入」：Dialog 入队 → 提交 N 条                                                                                                                               |
-| `PartBatchPdfTab.vue`              | 批量新建 Tab 2「PDF 批量上传」：拖 PDF + 可选 Excel + 可选 3D 模型 → 单页独立零件 / 多页装配件                                                                                |
-| `PartsTable.vue`                   | 零件一览纯 el-table：列定义 / 行内编辑 / 批量选中 / 表头 popover；懒加载树（`has_children` / `children`）                                                                     |
-| `PartsBatchBar.vue`                | 批量操作栏（批量下发 / 批量品检通过 / 批量打印）                                                                                                                              |
-| `PartsDispatchDialog.vue`          | 单件下发对话框（选目标 PRODUCTION 货架 + 下一道工序）                                                                                                                         |
-| `PartsBatchDispatchDialog.vue`     | 批量下发对话框                                                                                                                                                                |
-| `PurchaseOrderImportDialog.vue`    | 采购订单 Excel 导入对话框（解析系统交期 + 订单号）                                                                                                                            |
+#### list 组（`src/views/parts/list/components/`）
+
+| 文件                            | 职责                                                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `PartsTable.vue`                | 零件一览纯 el-table：列定义 / 行内编辑 / 批量选中 / 表头 popover；懒加载树（`has_children` / `children`） |
+| `PartsBatchBar.vue`             | 批量操作栏（批量下发 / 批量品检通过 / 批量打印）                                                          |
+| `PartsDispatchDialog.vue`       | 单件下发对话框（选目标 PRODUCTION 货架 + 下一道工序）                                                     |
+| `PartsBatchDispatchDialog.vue`  | 批量下发对话框                                                                                            |
+| `PurchaseOrderImportDialog.vue` | 采购订单 Excel 导入对话框（解析系统交期 + 订单号）                                                        |
+
+#### new 组（`src/views/parts/new/components/`）
+
+| 文件                     | 职责                                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------- |
+| `PartBatchManualTab.vue` | 批量新建 Tab 1「录入」：Dialog 入队 → 提交 N 条                                                |
+| `PartBatchPdfTab.vue`    | 批量新建 Tab 2「PDF 批量上传」：拖 PDF + 可选 Excel + 可选 3D 模型 → 单页独立零件 / 多页装配件 |
+
+#### detail 组（`src/views/parts/detail/components/`）
+
+| 文件                       | 职责                                                                      |
+| -------------------------- | ------------------------------------------------------------------------- |
+| `PartInfoCard.vue`         | 信息卡 + 行内编辑（editing 切换；form 由 usePartDetail 持有）             |
+| `PartHistoryCard.vue`      | 历史事件卡（事件列表 + 标签映射）                                         |
+| `PartCncCard.vue`          | CNC 文件卡（G 代码 / 设定单上传下载，list/upload/delete 走 `api/cnc.ts`） |
+| `PartQuoteCard.vue`        | 报价卡（外协报价关联）                                                    |
+| `PartAssemblyLinkCard.vue` | 装配件关联卡（仅 `part.assembly_id != null` 时显示）                      |
+| `PartBatchMonitorCard.vue` | 批次监控卡（批次列表 + 拆分 / 取消批次）                                  |
 
 ## 三、主要 API 调用
 
@@ -74,26 +85,38 @@
 | `useBulkScanInspect`    | 批量一键送检 v2 端点封装；与 `useBulkPassInspection` 形态对称；主要消费方：扫码建单弹窗 `BatchSubmitInspectionConfirmDialog`                                                                                                   |
 | `useListFilterPersist`  | 列表 filter / sort / pageSize 持久化（`useListStatePersist` / `usePartsColumnFilters` 共用底层）                                                                                                                               |
 
-**页级 composable**（在 `src/views/parts/composables/`）：
+**页级 composable**（按菜单归属分三组，2026-09-17 拆分明细）：
 
-| 文件                    | 用途                                                                                                                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `usePartDetail`         | 详情页业务状态：fetchPart / editing / saving / 取消订单 / 删除 / 品检通过 / 指定工序 / 外协回收 / 批次拆分取消                                                                                                     |
-| `usePartFiles`          | 详情页文件列表 / 上传 / 删除                                                                                                                                                                                       |
-| `usePartCncGroups`      | 详情页 CNC 文件分组（G 代码 / 设定单）                                                                                                                                                                             |
-| `usePartQuote`          | 详情页报价关联                                                                                                                                                                                                     |
-| `usePartsListQuery`     | 列表查询状态机（search / items / total / loading / sort / page）；URL `?status=` 注入或 localStorage 恢复                                                                                                          |
-| `usePartsColumnFilters` | 列头 popover 筛选（多列并发 + draft 同步）                                                                                                                                                                         |
-| `usePartInlineEdit`     | 行内编辑（form / saving / 提交 / 取消）                                                                                                                                                                            |
-| `usePartDispatch`       | 单件 / 批量下发对话框状态                                                                                                                                                                                          |
-| `useBatchPrint`         | 批量打印（隐藏 iframe + 合并 PDF Blob）                                                                                                                                                                            |
-| `usePartBatchSelection` | 列表多选状态                                                                                                                                                                                                       |
-| `usePartBatchManual`    | 批量新建 Tab 1 状态 + handler                                                                                                                                                                                      |
-| `usePartBatchPdf`       | 批量新建 Tab 2 状态 + handler（PDF 解析 + 树形提交）                                                                                                                                                               |
-| `usePartBatchShared`    | 两 Tab 纯工具函数                                                                                                                                                                                                  |
-| `partsListCtx`          | **2026-09-15 已删除**：列表 :ctx prop 模式被 Pinia `usePartsListStore` 取代；`PartsListCtx` 接口 + `PartsTableRef` 死类型一并清理                                                                                  |
-| `usePartsListStore`     | **2026-09-15 新增**：parts 列表页 Pinia setup store（`src/views/parts/composables/`），id `'parts-list'`，装配六切片 + 列定义 + 列可见性；消费侧统一 `store.切片.字段`，壳 `onBeforeUnmount` 必 `store.$dispose()` |
-| `partsListColumnDefs`   | **2026-09-15 新增**：18 列 ColumnDef 工厂（base 9 + price 2 仅 canEdit + tail 7），从 `PartsList.vue` L240-1097 切割                                                                                               |
+#### list 组（`src/views/parts/list/composables/`）
+
+| 文件                    | 用途                                                                                                                                                                                                                    |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `usePartsListQuery`     | 列表查询状态机（search / items / total / loading / sort / page）；URL `?status=` 注入或 localStorage 恢复                                                                                                               |
+| `usePartsColumnFilters` | 列头 popover 筛选（多列并发 + draft 同步）                                                                                                                                                                              |
+| `usePartInlineEdit`     | 行内编辑（form / saving / 提交 / 取消）                                                                                                                                                                                 |
+| `usePartDispatch`       | 单件 / 批量下发对话框状态                                                                                                                                                                                               |
+| `useBatchPrint`         | 批量打印（隐藏 iframe + 合并 PDF Blob）                                                                                                                                                                                 |
+| `usePartBatchSelection` | 列表多选状态                                                                                                                                                                                                            |
+| `partsListCtx`          | **2026-09-15 已删除**：列表 :ctx prop 模式被 Pinia `usePartsListStore` 取代；`PartsListCtx` 接口 + `PartsTableRef` 死类型一并清理                                                                                       |
+| `usePartsListStore`     | **2026-09-15 新增**：parts 列表页 Pinia setup store（`src/views/parts/list/composables/`），id `'parts-list'`，装配六切片 + 列定义 + 列可见性；消费侧统一 `store.切片.字段`，壳 `onBeforeUnmount` 必 `store.$dispose()` |
+| `partsListColumnDefs`   | **2026-09-15 新增**：18 列 ColumnDef 工厂（base 9 + price 2 仅 canEdit + tail 7），从 `PartsList.vue` L240-1097 切割                                                                                                    |
+
+#### new 组（`src/views/parts/new/composables/`）
+
+| 文件                 | 用途                                                 |
+| -------------------- | ---------------------------------------------------- |
+| `usePartBatchManual` | 批量新建 Tab 1 状态 + handler                        |
+| `usePartBatchPdf`    | 批量新建 Tab 2 状态 + handler（PDF 解析 + 树形提交） |
+| `usePartBatchShared` | 两 Tab 纯工具函数                                    |
+
+#### detail 组（`src/views/parts/detail/composables/`）
+
+| 文件               | 用途                                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `usePartDetail`    | 详情页业务状态：fetchPart / editing / saving / 取消订单 / 删除 / 品检通过 / 指定工序 / 外协回收 / 批次拆分取消 |
+| `usePartFiles`     | 详情页文件列表 / 上传 / 删除                                                                                   |
+| `usePartCncGroups` | 详情页 CNC 文件分组（G 代码 / 设定单）                                                                         |
+| `usePartQuote`     | 详情页报价关联                                                                                                 |
 
 ## 五、业务流程与状态机
 

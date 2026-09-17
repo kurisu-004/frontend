@@ -144,7 +144,7 @@ src/
 两类组件目录要分清：
 
 - **`src/components/`** — 跨业务域通用组件：`Barcode` / `EChart` / `PdfViewer` / `FileListCard` / `PartListShell` / `PagedTable` / `HmiPickerCard` / `ShelfPickerCard` / `NotificationBanner` / `ColumnFilterPopover` / `ColumnVisibilityPopover` / `ColumnDragHandle`（每个可拖拽 `el-table` 顶部使用） / `BeianFooter`（备案号）。
-- **`src/views/<domain>/components/`** — 单业务域内组件，例：`views/parts/components/PartsTable.vue`、`views/parts/components/PartInfoCard.vue`、`views/delivery/components/DeliveryNoteDetail*.vue`、`views/inspection/components/ScanBatchPickerDialog.vue`（route-B picker，供送货单扫码建单选批次）、`views/production/components/{PartPickerList,DrawingPreviewPane,ProcessStepCardList,WorkTypeTab,ProcessTab,ProcessWorkTypeMappingTab}.vue`。
+- **`src/views/<domain>/components/`** — 单业务域内组件，按菜单子目录组织（例：零件域按 list / new / detail 三菜单分目录），例：`views/parts/list/components/PartsTable.vue`、`views/parts/detail/components/PartInfoCard.vue`、`views/delivery/components/DeliveryNoteDetail*.vue`、`views/inspection/components/ScanBatchPickerDialog.vue`（route-B picker，供送货单扫码建单选批次）、`views/production/components/{PartPickerList,DrawingPreviewPane,ProcessStepCardList,WorkTypeTab,ProcessTab,ProcessWorkTypeMappingTab}.vue`。
 
 判定原则：**被两个及以上业务域使用 → `src/components/`**；仅一个域用 → `views/<domain>/components/`。重构时遇到跨域复用需求，按此原则迁移。
 

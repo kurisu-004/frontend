@@ -1,4 +1,4 @@
-// views/parts/composables/usePartQuote.ts
+// views/parts/detail/composables/usePartQuote.ts
 //
 // 2026-08-25 frontend-overall-refactor：PartDetail 拆分的 usePartQuote。
 // 负责零件外协报价列表的拉取 + 新建报价的提交。

@@ -1,4 +1,4 @@
-// views/parts/composables/usePartFiles.ts
+// views/parts/detail/composables/usePartFiles.ts
 //
 // 2026-08-25 frontend-overall-refactor：PartDetail 拆分的 usePartFiles。
 // 负责 drawing / 3D model / CAD 源文件三套文件列表的拉取。

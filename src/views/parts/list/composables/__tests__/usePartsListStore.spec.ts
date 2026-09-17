@@ -1,4 +1,4 @@
-// src/views/parts/composables/__tests__/usePartsListStore.spec.ts
+// src/views/parts/list/composables/__tests__/usePartsListStore.spec.ts
 //
 // 2026-09-15 新增：usePartsListStore Pinia setup store 单测（vitest node 环境）。
 //

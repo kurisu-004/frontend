@@ -1,4 +1,4 @@
-// views/parts/composables/usePartInlineEdit.ts
+// views/parts/list/composables/usePartInlineEdit.ts
 //
 // 2026-08-22 从 PartsList.vue 抽出：行内编辑（editBuffer / startEdit / saveEdit / cancelEdit）
 // + 申请人 autocomplete 集成 + Enter/Esc 键盘监听。

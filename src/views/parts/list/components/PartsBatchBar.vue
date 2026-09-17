@@ -65,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-// views/parts/components/PartsBatchBar.vue
+// views/parts/list/components/PartsBatchBar.vue
 //
 // 2026-09-15 重构：状态全部来自 usePartsListStore（Pinia setup store）。
 // 计数 / 进度 / 操作按钮直接 store.batch.* / store.print.* / store.dispatch.* 访问。

@@ -94,7 +94,7 @@ commit body 可选；多人协作的 PR 推荐写清楚"为什么"和"取舍"。
 
 ```ts
 import { useAuthSession } from '@/composables/useAuthSession';
-import PartInfoCard from '@/views/parts/components/PartInfoCard.vue';
+import PartInfoCard from '@/views/parts/detail/components/PartInfoCard.vue';
 import type { Part } from '@/types/parts';
 ```
 

@@ -1,4 +1,4 @@
-// views/parts/composables/useBatchPrint.ts
+// views/parts/list/composables/useBatchPrint.ts
 //
 // 2026-08-22 从 PartsList.vue 抽出：批量打印图纸（iframe + 批次并发 + PDF 合并）。
 //

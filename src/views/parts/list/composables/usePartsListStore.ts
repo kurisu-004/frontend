@@ -1,4 +1,4 @@
-// views/parts/composables/usePartsListStore.ts
+// views/parts/list/composables/usePartsListStore.ts
 //
 // 2026-09-15 新增：parts 列表页 Pinia setup store，替代 partsListCtx 的 :ctx prop 模式
 // （用户 2026-09-15 批准页面级复杂状态可用 Pinia 3，覆盖 CLAUDE.md 旧硬约束 #1）。

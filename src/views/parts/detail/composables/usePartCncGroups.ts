@@ -1,4 +1,4 @@
-// views/parts/composables/usePartCncGroups.ts
+// views/parts/detail/composables/usePartCncGroups.ts
 //
 // 2026-08-25 frontend-overall-refactor：PartDetail 拆分的 usePartCncGroups。
 // 负责 CNC G 代码 + 设定单的拉取 / 下载 / 删除 / 配对上传 / 下发到 CNC 货架。

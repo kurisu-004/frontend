@@ -41,7 +41,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'parts',
         name: 'PartsList',
-        component: () => import('@/views/parts/PartsList.vue'),
+        component: () => import('@/views/parts/list/PartsList.vue'),
         meta: {
           title: '零件一览',
           icon: 'Box',
@@ -52,7 +52,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'parts/new',
         name: 'PartsNew',
-        component: () => import('@/views/parts/PartBatchNew.vue'),
+        component: () => import('@/views/parts/new/PartBatchNew.vue'),
         meta: {
           title: '新建零件',
           menuCode: 'parts_new',
@@ -62,7 +62,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'parts/:id(\\d+)',
         name: 'PartsDetail',
-        component: () => import('@/views/parts/PartDetail.vue'),
+        component: () => import('@/views/parts/detail/PartDetail.vue'),
         meta: {
           title: '零件详情',
           breadcrumb: [

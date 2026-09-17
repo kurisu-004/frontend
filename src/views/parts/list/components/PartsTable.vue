@@ -175,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-// views/parts/components/PartsTable.vue
+// views/parts/list/components/PartsTable.vue
 //
 // 2026-09-15 重构：状态全部来自 usePartsListStore（Pinia setup store），本组件只持有
 // el-table DOM 逻辑：列拖动（useColumnDrag）/ tableRef 暴露 / 懒加载子件 / 双击进编辑路由。

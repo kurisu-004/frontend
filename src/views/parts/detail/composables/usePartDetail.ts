@@ -1,4 +1,4 @@
-// views/parts/composables/usePartDetail.ts
+// views/parts/detail/composables/usePartDetail.ts
 //
 // 2026-08-25 frontend-overall-refactor：PartDetail 拆分的 usePartDetail。
 // 负责 /parts/:id 详情页的所有 page-level 业务：

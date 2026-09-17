@@ -1,4 +1,4 @@
-// views/parts/composables/usePartsColumnFilters.ts
+// views/parts/list/composables/usePartsColumnFilters.ts
 //
 // 2026-08-22 从 PartsList.vue 抽出：表头筛选状态集合（文本/日期/客户/位置/原生列 + 扫码）。
 //

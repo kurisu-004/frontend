@@ -10,7 +10,7 @@
 
 `main.ts` 里 `app.use(createPinia())` 是仓库脚手架默认带的依赖。2026-09-15 之前项目从未创建过任何 `defineStore()`，所有跨组件、跨路由共享的状态都以**模块级 `ref` + composable 单例**承载。这是个反共识设计，但符合"跨页全局状态有限"的实际复杂度。
 
-> **2026-09-15 修订**：用户批准 Pinia 3 setup store 用于「页面级复杂状态」（首例 `usePartsListStore`，`src/views/parts/composables/`）。开闸背景：parts 列表页 :ctx prop 模式三痛点：
+> **2026-09-15 修订**：用户批准 Pinia 3 setup store 用于「页面级复杂状态」（首例 `usePartsListStore`，`src/views/parts/list/composables/`）。开闸背景：parts 列表页 :ctx prop 模式三痛点：
 >
 > 1. 字段膨胀 —— 7 类 composable 切片 + 列定义 + 权限标识，单次 `defineProps<{ ctx: PartsListCtx }>()` 后顶层解构 7-8 个 ref/computed 已逼近 lint 心智负担上限；
 > 2. 嵌套 ref 经 props（Vue `shallowReactive`）传递不解包 —— 子组件模板里 `ctx.batch.batchMode` 仍要 .value 解包，否则页面静默不更新；
@@ -204,7 +204,7 @@ if (typeof window !== 'undefined') {
    - 否 → 新建 composable 单例，参考上面"模块级单例模式"模板
 
 4. **是否页面级 ≥ 3 个子组件共享同一组 composable 切片？**
-   - 是 → 新建 Pinia setup store（参见「何时该考虑 Pinia」三条判据），就近放 `views/<域>/composables/useXxxStore.ts`，壳组件 `onBeforeUnmount` 必 `store.$dispose()`，消费侧统一 `store.切片.字段`、禁止解构、不写 `.value`。参考首例 `usePartsListStore`（`src/views/parts/composables/`）
+   - 是 → 新建 Pinia setup store（参见「何时该考虑 Pinia」三条判据），就近放 `views/<域>/composables/useXxxStore.ts`，壳组件 `onBeforeUnmount` 必 `store.$dispose()`，消费侧统一 `store.切片.字段`、禁止解构、不写 `.value`。参考首例 `usePartsListStore`（`src/views/parts/list/composables/`）
    - 否 → 维持 composable 单例（回到上面三问的最后一问）或 props/emits
 
 新建的 composable 文件路径：`src/composables/useXxx.ts`，命名沿用 `use` 前缀 + PascalCase 主题名。如果该状态需要跨页面持久化，参考 `useDeliveryScanState` 的 localStorage / `useActiveShelfSelection` 的 sessionStorage 模板。

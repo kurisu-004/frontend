@@ -102,7 +102,7 @@
 </template>
 
 <script setup lang="ts">
-// views/parts/components/PartsBatchDispatchDialog.vue
+// views/parts/list/components/PartsBatchDispatchDialog.vue
 //
 // 2026-09-15 重构：状态全部来自 usePartsListStore（Pinia setup store）。
 import { usePartsListStore } from '../composables/usePartsListStore';

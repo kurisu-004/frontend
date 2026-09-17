@@ -1,4 +1,4 @@
-// src/views/parts/composables/__tests__/usePartsListQuery.locationsHolderIds.spec.ts
+// src/views/parts/list/composables/__tests__/usePartsListQuery.locationsHolderIds.spec.ts
 //
 // 2026-09-17 PR-4 新增：usePartsListQuery `locations` + `holder_ids` 过滤参数契约单测。
 //

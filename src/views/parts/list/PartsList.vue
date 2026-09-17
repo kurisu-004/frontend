@@ -4,7 +4,7 @@
   2026-09-15 重构：壳仅保留 filter-card / PartsTable / PartsBatchBar / iframe /
   分页 / 两个下发 dialog / 采购单导入 dialog；其余六切片装配、列定义、列可见性、
   getTable 闭包、ctx 字面量装配、顶层解构块 / void 抑制全部迁入 `usePartsListStore`
-  （Pinia setup store，详见 src/views/parts/composables/usePartsListStore.ts）。
+（Pinia setup store，详见 src/views/parts/list/composables/usePartsListStore.ts）。
 
   本壳职责：
   - 顶部 filter-card（行类型 + 重置 + 操作按钮组）；
@@ -133,11 +133,11 @@
 </template>
 
 <script setup lang="ts">
-// views/parts/PartsList.vue
+// views/parts/list/PartsList.vue
 //
 // 2026-09-15 重构壳：仅保留 filter-card / PartsTable / PartsBatchBar / iframe /
 // 分页 / 两个下发 dialog / 采购单导入 dialog；其余全部下沉到 usePartsListStore
-// （Pinia setup store，详见 src/views/parts/composables/usePartsListStore.ts）。
+// （Pinia setup store，详见 src/views/parts/list/composables/usePartsListStore.ts）。
 //
 // 不再 import 任何业务 composable 与 ColumnDef — 全部从 store 取。
 // 移除所有手机适配代码（ResponsiveList 卡片视图、el-drawer 移动筛选抽屉等）。

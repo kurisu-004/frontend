@@ -71,7 +71,7 @@ import { computed, ref, watch } from 'vue';
 import { Tools } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
 import type { PartListItem } from '@/types/parts';
-import { usePartFiles } from '../../parts/composables/usePartFiles';
+import { usePartFiles } from '../../parts/detail/composables/usePartFiles';
 import { FIXTURE_FILES, type MockPartFile } from '../__fixtures__/partProcess.fixtures';
 
 const props = defineProps<{
