@@ -183,7 +183,7 @@ import {
   listUserRoles,
   addUserRole,
   removeUserRole,
-} from '@/api/users';
+} from '@/api/iam';
 import { listShelves } from '@/api/shelves';
 import type { UserOut, UserRoleOut } from '@/types/user';
 import type { Shelf } from '@/types/shelf';

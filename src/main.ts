@@ -38,7 +38,7 @@ app.use(createPinia());
 // prod build 里 import.meta.env.DEV === false，import.meta.env.VITE_DUMMY_AUTH
 // 也是 undefined，整段 tree-shake。
 // 必须放在 app.use(router) 之前——router 首次 beforeEach 触发时 user + isDummy 已就位，
-// 守卫短路 refreshOrLogout 不调 /auth/me。
+// 守卫短路 refreshOrLogout 不调 /iam/me。
 if (import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true') {
   useAuthSession().initDummyAuth();
 }

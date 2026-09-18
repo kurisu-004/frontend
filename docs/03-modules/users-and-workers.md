@@ -28,14 +28,14 @@
 
 ## 三、主要 API 调用
 
-### 账号（`src/api/users.ts`，走 `api` v1）
+### 账号（`src/api/iam.ts`，走 `api` v2；2026-09-19 合并自原 `auth.ts`+`users.ts`）
 
-| 函数                                               | HTTP                              | 用途                                                             |
-| -------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------- |
-| `listUsers(params)`                                | GET                               | 账号列表（`username_like` / `is_active`）                        |
-| `createUser` / `updateUser` / `deactivateUser`     | POST                              | CRUD；`/users` + `/users/{id}/update` + `/users/{id}/deactivate` |
-| `resetUserPassword(id)`                            | POST `/users/{id}/reset-password` | 管理员重置为 `changeme`；后端会轮转其 refresh token              |
-| `listUserRoles` / `addUserRole` / `removeUserRole` | GET / POST                        | 角色增删（含 `scope_type` / `scope_id` 货架范围）                |
+| 函数                                               | HTTP                                  | 用途                                                                         |
+| -------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------- |
+| `listUsers(params)`                                | GET                                   | 账号列表（`username_like` / `is_active`）                                    |
+| `createUser` / `updateUser` / `deactivateUser`     | POST                                  | CRUD；`/iam/users` + `/iam/users/{id}/update` + `/iam/users/{id}/deactivate` |
+| `resetUserPassword(id)`                            | POST `/iam/users/{id}/reset-password` | 管理员重置为 `changeme`；后端会轮转其 refresh token                          |
+| `listUserRoles` / `addUserRole` / `removeUserRole` | GET / POST                            | 角色增删（含 `scope_type` / `scope_id` 货架范围）                            |
 
 ### 工人（`src/api/worker.ts`，走 `api` v1）
 
@@ -103,9 +103,9 @@
 
 ## 九、后端契约
 
-- `~/Code/hsh-erp-rust/docs/api/users.md` — 账号 CRUD + 角色管理 + 重置密码。
+- `~/Code/hsh-erp-rust/docs/api/iam.md` — 账号 CRUD + 角色管理 + 重置密码 + 登录 / 改密 / session（2026-09-19 把原 `auth.md`+`users.md` 合并到 `iam` 域）。
 - `~/Code/hsh-erp-rust/docs/api/worker-pool.md` — 工人池（**注意文件名为 `worker-pool.md`，不是 `workers.md`**），含工牌扫码定位端点规范与错误码。
-- 当前两个域**仍在 v1 FastAPI**，未上线 v2 切换。
+- 工人域（`worker-pool.md`）**仍在 v1 FastAPI**，未上线 v2 切换；账号域（`iam.md`）2026-09-19 已合并并切 v2。
 
 ## 十、关键约束与陷阱
 

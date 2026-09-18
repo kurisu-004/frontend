@@ -137,7 +137,7 @@ import type { FormInstance, FormRules } from 'element-plus';
 import { Box, Fold, Expand, Refresh, ArrowDown, Lock, SwitchButton } from '@element-plus/icons-vue';
 import { useAuthSession } from '@/composables/useAuthSession';
 import { useDialogSize } from '@/composables/useDialogSize';
-import { me as apiMe, changeMyPassword } from '@/api/auth';
+import { me as apiMe, changeMyPassword } from '@/api/iam';
 import MenuTreeItem from '@/layouts/components/MenuTreeItem.vue';
 import type { CurrentUser } from '@/types/user';
 
@@ -263,9 +263,9 @@ async function submitChangePwd(): Promise<void> {
 
 onMounted(async () => {
   // 2026-09-11 修复：dev:dummy 模式下跳过 apiMe()。
-  // 此前无脑调 /auth/me，dummy token 'dummy-dev-token' 被后端判无效 → 401 →
+  // 此前无脑调 /iam/me，dummy token 'dummy-dev-token' 被后端判无效 → 401 →
   // catch 里 router.replace('/login')。表现为首次打开任意页都被踢回登录页。
-  // dummy 已经注入完整 CurrentUser（含 menus / roles），无需再向 /auth/me 验证。
+  // dummy 已经注入完整 CurrentUser（含 menus / roles），无需再向 /iam/me 验证。
   // 三层 prod 保护：
   //   1) isDummyAuthRequested() 在 import.meta.env.DEV=false 时整段 dead code
   //   2) useAuthSession.isDummyAuthActive() 由 initDummyAuth 注入

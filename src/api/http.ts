@@ -7,13 +7,13 @@
 // 3) 响应拦截：
 //    a) 解 `{code, message, data}` 信封 → 调用方拿到的是原始 data。
 //    b) token 自动刷新：
-//       - reactive：收到 40102（access 过期）→ 调 /auth/refresh 换新 token → 重试原请求；
+//       - reactive：收到 40102（access 过期）→ 调 /iam/refresh 换新 token → 重试原请求；
 //       - proactive：每次成功响应都看一眼 exp，剩余 < 5min 就后台 fire-and-forget 刷新。
-//    c) 雪崩防御：模块级 refreshPromise 队列，并发 40102 只触发一次 /auth/refresh。
+//    c) 雪崩防御：模块级 refreshPromise 队列，并发 40102 只触发一次 /iam/refresh。
 //    d) code !== 0 → 抛 `ApiError(code, message)`，调用方用 try/catch 即可拿到业务错误码。
 //
 // 4) `refreshClient`：无任何拦截器的裸 axios 实例（baseURL `/api/v2`），专门给
-//    /api/v2/auth/refresh 用，避免响应拦截器里的 40102 → refresh 链路递归触发。
+//    /api/v2/iam/refresh 用，避免响应拦截器里的 40102 → refresh 链路递归触发。
 //    失败兜底：refresh 失败 → dispatchEvent('auth:logout')，由 main.ts 监听后
 //    router.replace('/login')。session 失效的统一入口。
 //
@@ -57,7 +57,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios';
 import { decodeJwt } from '@/utils/jwt';
-import { refreshTokens, type LoginResponse } from '@/api/auth';
+import { refreshTokens, type LoginResponse } from '@/api/iam';
 
 // params 用 any：axios 自身 paramsSerializer 签名就是 (params: any) => string，
 // 这里抽出来做单测没必要收窄类型，避免 Array.isArray 后续分支里 val 没法窄化
@@ -150,16 +150,16 @@ export const api = axios.create({
 });
 
 /**
- * 专用 refresh 客户端（v2）：无任何拦截器，仅给 /api/v2/auth/refresh 用。
+ * 专用 refresh 客户端（v2）：无任何拦截器，仅给 /api/v2/iam/refresh 用。
  *
  * 为什么独立一份：响应拦截器里"40102 → 调 refreshTokens"如果走 `api` 实例，
  * refreshTokens 失败 → 抛 ApiError → 又进响应拦截器 → 又触发 refresh 逻辑 → 递归。
- * 用裸实例把 /auth/refresh 隔离在拦截器之外。
+ * 用裸实例把 /iam/refresh 隔离在拦截器之外。
  */
 export const refreshClient = axios.create({
   baseURL: '/api/v2',
   timeout: 30_000,
-  // 业务 v2 客户端，与 `api` 保持一致序列化策略（虽然 /auth/refresh 通常无 query，
+  // 业务 v2 客户端，与 `api` 保持一致序列化策略（虽然 /iam/refresh 通常无 query，
   // 但万一 future 加 query 参数就走 V2 不踩坑）
   paramsSerializer: serializeParamsV2,
 });
@@ -175,7 +175,7 @@ export const refreshClient = axios.create({
  *
  * 为什么不并入 `api`：v1 Python 仍维护这 4 端点；后续若打印也迁 v2 再统一。
  * 为什么不另外写一份拦截器：与 `api` 共用模块单例 `refreshPromise`，并发撞 40102
- * 只触发一次 /auth/refresh；打印流与业务流是同 token / 同 user，refresh 共享无副作用。
+ * 只触发一次 /iam/refresh；打印流与业务流是同 token / 同 user，refresh 共享无副作用。
  */
 export const apiPrint = axios.create({
   baseURL: '/api/v1',
@@ -256,7 +256,7 @@ const REFRESH_AHEAD_SECONDS = 5 * 60;
 const PROACTIVE_THROTTLE_MS = 30_000;
 
 /**
- * 实际执行 refresh：读 localStorage 里的 refresh_token，调 /auth/refresh，
+ * 实际执行 refresh：读 localStorage 里的 refresh_token，调 /iam/refresh，
  * 把新一对 token 写回 storage（persistTokens）。
  *
  * 失败抛 ApiError；调用方（拦截器）负责 dispatch auth:logout。
@@ -345,7 +345,7 @@ function envelopeResponseInterceptor(response: AxiosResponse): AxiosResponse {
  *
  * 用工厂 + 闭包持有 client，是为了让 api / apiPrint 各自 `client.request(retryCfg)`
  * 在自己实例上重试，不被另一实例的拦截器链干扰。refreshPromise 等雪崩状态
- * 仍是模块单例，两实例并发撞 40102 只触发一次 /auth/refresh。
+ * 仍是模块单例，两实例并发撞 40102 只触发一次 /iam/refresh。
  */
 function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
   return async (error: AxiosError) => {

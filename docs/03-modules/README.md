@@ -58,7 +58,7 @@
 
 **deliveryNote v2 数 = 7**：`scanDelivery` / `getNote` / `submitNote` / `listNotes` / `batchGetNotes` / `removeParts` / `softDeleteNote`。**v1 数 = 11**：`printNote` / `printNoteLabels` / `listPickupPending` / `createNote` / `listNoteEvents` / `updateNote` / `addParts` / `recallNote` / `pickupScan` / `pickup` / `listCandidateParts`（2026-08-29 回退）。详见 `docs/02-architecture/api-contract.md`「v1 临时回滚注意事项」。
 
-迁移通用规则：v1 → v2 切换后，v1 refresh_token / session 立即作废（不同 JWT 签名 + 不同 session 表），受影响用户首次访问会被强制重登一次，由 40101/40103 静默兜底（见 `src/api/auth.ts`）。
+迁移通用规则：v1 → v2 切换后，v1 refresh_token / session 立即作废（不同 JWT 签名 + 不同 session 表），受影响用户首次访问会被强制重登一次，由 40101/40103 静默兜底（见 `src/api/iam.ts`）。
 
 ## 三、各域文档共同大纲
 
