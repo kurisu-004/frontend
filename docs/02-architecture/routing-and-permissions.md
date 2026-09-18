@@ -62,7 +62,7 @@ sequenceDiagram
     participant Browser as 浏览器
     participant Router as router.beforeEach
     participant Auth as useAuthSession
-    participant API as /auth/me
+    participant API as /iam/me
     participant Login as /login
 
     Browser->>Router: router.push('/parts/new')
@@ -75,7 +75,7 @@ sequenceDiagram
         Router->>API: refreshOrLogout()
         API-->>Auth: 200 CurrentUser
         Auth-->>Router: ok=true，继续
-        alt /auth/me 失败
+        alt /iam/me 失败
             API-->>Router: throw
             Router->>Login: router.replace('/login')
         end
@@ -225,7 +225,7 @@ npm run dev:dummy        # = vite --mode dummy，自动加载 .env.dummy → VIT
 - `vite.config.ts` build 期检测到 `VITE_DUMMY_AUTH === 'true'` → throw（防 prod bundle 注入）
 - 客户端读 `import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'`（由 `.env.dummy` 注入，dev server 启动时由 Vite 处理），`useAuthSession.initDummyAuth()` 注入 admin session（含 22 个 menuCode 全菜单）
 - 注入成功后在浏览器 console 打 `[dummy-auth] 已注入开发用管理员会话（dev-only）` 一行作为确认标记
-- router 守卫短路 `refreshOrLogout`（不再调 `/auth/me`）
+- router 守卫短路 `refreshOrLogout`（不再调 `/iam/me`）
 - dummy 状态**不写** localStorage，下次非 dummy 启动不会复活
 
 > 2026-08-28 重写：旧的 `npm run dev -- --dummy-auth` 走 `--` 透传，会被 cac 拒绝（`CACError: Unknown option --dummyAuth`）；新方案用 Vite 官方 `--mode dummy` 机制 + `import.meta.env`，dev 客户端也能可靠拿到值（旧的裸全局 `define: { __DUMMY_AUTH__ }` 在 Vite 8 dev client 不生效，详见 [`docs/08-known-risks/framework-pitfalls.md`](../08-known-risks/framework-pitfalls.md) 第 6 节）。

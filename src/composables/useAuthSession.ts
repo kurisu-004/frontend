@@ -3,7 +3,7 @@
 // 通用账号 session（不是业务 worker；后者保持在 useScanSession）。
 // - 模块级单例，跨组件共享（与 useScanSession / useBarcodeScanner 同构）。
 // - localStorage key: 'auth_session'；内容 { token, refresh_token, user }。
-// - login() → POST /auth/login（返回双 token）；logout() → 清 storage + 回 /login。
+// - login() → POST /iam/login（返回双 token）；logout() → 清 storage + 回 /login。
 // - hasRole / canOperateShelf 供路由守卫和组件使用。
 // - menus() 返回当前用户的菜单树（来自后端 CurrentUser.menus），供
 //   MainLayout 渲染侧边栏 + 路由守卫校验 menuCode。
@@ -15,7 +15,7 @@
 // - logout() 不变（直接 removeItem 把三件套一起清）。
 
 import { ref, type Ref } from 'vue';
-import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/auth';
+import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/iam';
 import type { CurrentUser } from '@/types/user';
 import type { MenuNode } from '@/types/menu';
 import { ADMIN_MENUS } from './__fixtures__/adminMenus';
@@ -35,7 +35,7 @@ let refreshTokenValue: string | null = null;
 // 2026-08-28 重写：dummy-auth 判定改用 Vite 官方 env 机制。
 // 仅在 `npm run dev:dummy`（=`vite --mode dummy` → 自动加载 .env.dummy → 设置
 // VITE_DUMMY_AUTH=true）时为 true；prod build 里 import.meta.env.DEV === false，
-// 永远 false。供 router 守卫短路 refreshOrLogout（避免 dummy 模式下 /auth/me 失败清掉 fake session）。
+// 永远 false。供 router 守卫短路 refreshOrLogout（避免 dummy 模式下 /iam/me 失败清掉 fake session）。
 //
 // 收敛到模块级函数 isDummyAuthRequested() 统一判断，避免 main.ts / router / 本文件
 // 内部各写一遍 import.meta.env.DEV && VITE_DUMMY_AUTH === 'true' 漂移。
@@ -55,7 +55,7 @@ function loadFromStorage(): boolean {
     if (!raw) return false;
     const s: StoredSession = JSON.parse(raw);
     if (!s.token || !s.user) return false;
-    // 兼容旧版本 localStorage（没有 menus 字段）：补默认值，下次 /auth/me 会刷新。
+    // 兼容旧版本 localStorage（没有 menus 字段）：补默认值，下次 /iam/me 会刷新。
     s.user.menus = s.user.menus ?? [];
     token.value = s.token;
     refreshTokenValue = s.refresh_token ?? null;
@@ -186,7 +186,7 @@ export function useAuthSession() {
     localStorage.removeItem('auth_session');
   }
 
-  /** 异步守卫：拉 /auth/me 验证 token 仍有效；失败则清 session 跳 /login */
+  /** 异步守卫：拉 /iam/me 验证 token 仍有效；失败则清 session 跳 /login */
   async function refreshOrLogout(router: { replace: (p: string) => void }): Promise<boolean> {
     try {
       const u = await apiMe();

@@ -27,7 +27,7 @@ v1 FastAPI → v2 Rust 主仓是大版本迁移，frontend 已在 2026-09-15 Pha
 
 ### 1. 前端全量切到 v2（已完成）
 
-2026-09-15 PR-1 Phase 5：`src/api/auth.ts` 等 17 个业务 api 文件全量改用 `api` + `refreshClient`（baseURL 都是 `/api/v2`）。所有 v2 业务实例的 axios 请求走 `http://127.0.0.1:3000/api/v2/*`（或 dev proxy）。
+2026-09-15 PR-1 Phase 5：`src/api/iam.ts`（合并自 `auth.ts`+`users.ts`）等业务 api 文件全量改用 `api` + `refreshClient`（baseURL 都是 `/api/v2`）。所有 v2 业务实例的 axios 请求走 `http://127.0.0.1:3000/api/v2/*`（或 dev proxy）。
 
 ### 2. 后端上线 v2 域
 

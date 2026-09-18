@@ -25,7 +25,7 @@
 // 仅 dev dummy-auth 模式使用（initDummyAuth 注入 useAuthSession.user.menus）；
 // prod bundle 不引用此文件（无 dead code 风险）。
 //
-// 数据来源：实际生产环境登录响应（USER / 15060779955 的 /auth/login 返回 data.menus）。
+// 数据来源：实际生产环境登录响应（USER / 15060779955 的 /iam/login 返回 data.menus）。
 // 维护纪律：每次后端菜单树（t_menu）变更，必须把生产最新响应粘到这里同步；否则 dummy
 // 模式下侧栏显示与生产不一致，且 menuCode 不存在的子项会被守卫降级踢走。
 //

@@ -79,28 +79,28 @@ src/
 
 按业务域切分，每个文件导出对应的 axios 调用函数。**业务端点统一走 `api` 实例（baseURL `/api/v2`，2026-09-15 Phase 5 一次性切到 v2，原 `apiV2` 已合并删除）；4 个打印端点保留 v1 走 `apiPrint`**，新业务接口必须 `import { api } from '@/api/http'`，打印接口必须 `import { apiPrint }`。
 
-| 文件                             | 域                                                          | v1 / v2                                            |
-| -------------------------------- | ----------------------------------------------------------- | -------------------------------------------------- |
-| `http.ts`                        | 双实例 + 拦截器 + 401 处理 + 拆分 V1/V2 serializer          | 共用基座                                           |
-| `auth.ts`                        | 登录 / 刷新 / me                                            | **v1**（2026-08-26 回滚）                          |
-| `deliveryNote.ts`                | 送货单 CRUD + 详情 + 扫码建单 + `attachBatches` (`819e3b5`) | v2（7）+ v1（11）                                  |
-| `deliveryGroup.ts`               | 送货组聚合                                                  | **v2**                                             |
-| `parts.ts`                       | 兼容 shim，re-export `./parts/*`                            | —                                                  |
-| `parts/`                         | 拆为 `crud.ts` / `batch.ts` / `bid.ts` / `file.ts` 4 子文件 | v1 + 部分 v2（`scanInspect` / `batchScanInspect`） |
-| `parts/crud.ts::getPartBySerial` | `/parts/by-serial/{serial}` 扫码检索                        | v1（2026-09-01 `f4f39e6`）                         |
-| `dashboard.ts`                   | 首页大屏 + WebSocket 入口                                   | v1                                                 |
-| `outsource.ts`                   | 外协全流程                                                  | v1                                                 |
-| `shelves.ts`                     | 货架管理                                                    | v1                                                 |
-| `users.ts`                       | 账号                                                        | v1                                                 |
-| `worker.ts`                      | 工人                                                        | v1                                                 |
-| `customer.ts`                    | 客户                                                        | v1                                                 |
-| `applicant.ts`                   | 申请人                                                      | v1                                                 |
-| `assembly.ts`                    | 装配件                                                      | v1                                                 |
-| `cnc.ts`                         | CNC 待编程                                                  | v1                                                 |
-| `process.ts`                     | 工序                                                        | v1                                                 |
-| `workType.ts`                    | 工种                                                        | v1                                                 |
-| `workerPool.ts`                  | 工人 pool（v2，待后端）                                     | fixture + 预留 `api`（v2 业务实例）                |
-| `statistics.ts`                  | 生产统计                                                    | v1                                                 |
+| 文件                             | 域                                                               | v1 / v2                                            |
+| -------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------- |
+| `http.ts`                        | 双实例 + 拦截器 + 401 处理 + 拆分 V1/V2 serializer               | 共用基座                                           |
+| `auth.ts`                        | 登录 / 刷新 / me                                                 | **v1**（2026-08-26 回滚）                          |
+| `deliveryNote.ts`                | 送货单 CRUD + 详情 + 扫码建单 + `attachBatches` (`819e3b5`)      | v2（7）+ v1（11）                                  |
+| `deliveryGroup.ts`               | 送货组聚合                                                       | **v2**                                             |
+| `parts.ts`                       | 兼容 shim，re-export `./parts/*`                                 | —                                                  |
+| `parts/`                         | 拆为 `crud.ts` / `batch.ts` / `bid.ts` / `file.ts` 4 子文件      | v1 + 部分 v2（`scanInspect` / `batchScanInspect`） |
+| `parts/crud.ts::getPartBySerial` | `/parts/by-serial/{serial}` 扫码检索                             | v1（2026-09-01 `f4f39e6`）                         |
+| `dashboard.ts`                   | 首页大屏 + WebSocket 入口                                        | v1                                                 |
+| `outsource.ts`                   | 外协全流程                                                       | v1                                                 |
+| `shelves.ts`                     | 货架管理                                                         | v1                                                 |
+| `iam.ts`                         | 账号 + 会话 + 账号管理（2026-09-19 合并自 `auth.ts`+`users.ts`） | **v2**（backend-rust `iam` 域）                    |
+| `worker.ts`                      | 工人                                                             | v1                                                 |
+| `customer.ts`                    | 客户                                                             | v1                                                 |
+| `applicant.ts`                   | 申请人                                                           | v1                                                 |
+| `assembly.ts`                    | 装配件                                                           | v1                                                 |
+| `cnc.ts`                         | CNC 待编程                                                       | v1                                                 |
+| `process.ts`                     | 工序                                                             | v1                                                 |
+| `workType.ts`                    | 工种                                                             | v1                                                 |
+| `workerPool.ts`                  | 工人 pool（v2，待后端）                                          | fixture + 预留 `api`（v2 业务实例）                |
+| `statistics.ts`                  | 生产统计                                                         | v1                                                 |
 
 ## src/composables/ — 30+ 模块级单例
 

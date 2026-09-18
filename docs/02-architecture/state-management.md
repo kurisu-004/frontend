@@ -159,7 +159,7 @@ export function useDeliveryScanState() {
 
 ## 拦截器 ↔ composable 解耦
 
-`src/api/http.ts` 的 axios 拦截器需要在新 token 刷新后通知 `useAuthSession` 更新 module-level refs。如果直接 `import { useAuthSession } from '@/composables/useAuthSession'`，会引入循环依赖（http.ts 被 auth.ts 引，auth.ts 又被 useAuthSession 引）。解法是 **CustomEvent**：
+`src/api/http.ts` 的 axios 拦截器需要在新 token 刷新后通知 `useAuthSession` 更新 module-level refs。如果直接 `import { useAuthSession } from '@/composables/useAuthSession'`，会引入循环依赖（http.ts 被 iam.ts 引，iam.ts 又被 useAuthSession 引）。解法是 **CustomEvent**：
 
 ```ts
 // src/api/http.ts —— 拦截器侧

@@ -14,17 +14,17 @@
 | --------------- | --------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `api`           | `/api/v2` | 有     | v2 Rust 后端**业务**接口（默认客户端）。所有 18 个 api 文件 + 业务 composable 走它。2026-09-15 Phase 5 起，`api` 直接以 v2 为默认；原 `apiV2` 已合并删除。                                                   |
 | `apiPrint`      | `/api/v1` | 有     | v1 Python FastAPI 上**仅 4 个打印端点**专供客户端（与 `api` 共享同一组拦截器与 `refreshPromise` 单例）：`printNote` / `printNoteLabels` / `printPartDrawing` / `printPartDrawingBatch`。其它业务端点不走它。 |
-| `refreshClient` | `/api/v2` | 无     | 仅 `/api/v2/auth/refresh`（v2 auth 域，baseURL 与业务 `api` 同版本）。                                                                                                                                       |
+| `refreshClient` | `/api/v2` | 无     | 仅 `/api/v2/iam/refresh`（v2 iam 域，baseURL 与业务 `api` 同版本）。                                                                                                                                         |
 
 **反例**：`api.post('/v2/...')` 会被 baseURL 拼成 `/api/v2/v2/...`，404 静默失败。**单端点 v2 调用必须 `api.post('/...')`**，路径不带 `/v2` 前缀。打印端点必须 `apiPrint.post(...)`，不要走 `api`（baseURL 不一致）。
 
 ### refresh 客户端为什么独立
 
-`refreshClient` 没有挂任何拦截器。原因：响应拦截器里有"40102 → 自动 refresh → 重试原请求"链路。如果 `/auth/refresh` 也走 `api`，refresh 自身失败抛 `ApiError` 40102，又会进拦截器再触发 refresh，无限递归。refresh 必须走裸实例隔离。
+`refreshClient` 没有挂任何拦截器。原因：响应拦截器里有"40102 → 自动 refresh → 重试原请求"链路。如果 `/iam/refresh` 也走 `api`，refresh 自身失败抛 `ApiError` 40102，又会进拦截器再触发 refresh，无限递归。refresh 必须走裸实例隔离。
 
 ### refresh 客户端必须与主客户端同版本
 
-切换 v2 时必须保证：**业务走 `api` 则 refresh 走 `refreshClient`**。两实例 baseURL 都是 `/api/v2`，refresh 端点落在 v2，原请求重试时也走 v2，token 一致。打印 `apiPrint` 与 `api` 共享 `refreshPromise`，并发撞 40102 只触发一次 `/auth/refresh`——同 token / 同 user，refresh 共享无副作用。
+切换 v2 时必须保证：**业务走 `api` 则 refresh 走 `refreshClient`**。两实例 baseURL 都是 `/api/v2`，refresh 端点落在 v2，原请求重试时也走 v2，token 一致。打印 `apiPrint` 与 `api` 共享 `refreshPromise`，并发撞 40102 只触发一次 `/iam/refresh`——同 token / 同 user，refresh 共享无副作用。
 
 ### 打印客户端为什么不并入 `api`
 
@@ -84,7 +84,7 @@ sequenceDiagram
   alt 已有 refreshPromise
     I->>I: 复用，等待结果
   else 没有
-    I->>R: refreshClient.post('/auth/refresh')
+    I->>R: refreshClient.post('/iam/refresh')
     R-->>I: 新一对 token
     I->>I: persistTokens + dispatch<br/>auth:tokens-refreshed
   end
@@ -96,7 +96,7 @@ sequenceDiagram
   L->>L: router.replace('/login')
 ```
 
-并发撞 40102 时只触发一次 `/auth/refresh`：模块级 `refreshPromise` 单例，第一个请求触发后写入 promise，后续 40102 复用同一个；完成后用 `setTimeout(..., 0)` 让微任务队列里的消费者先看到结果再清空。
+并发撞 40102 时只触发一次 `/iam/refresh`：模块级 `refreshPromise` 单例，第一个请求触发后写入 promise，后续 40102 复用同一个；完成后用 `setTimeout(..., 0)` 让微任务队列里的消费者先看到结果再清空。
 
 ## Proactive refresh
 
