@@ -59,9 +59,7 @@
     <ul class="orphan-list">
       <li v-for="f in orphanFileRefs" :key="f.client_ref">
         <code>{{ f.original_filename }}</code>
-        <span class="orphan-meta"
-          >（{{ f.kind }} · {{ (f.file_size / 1024).toFixed(1) }} KB）</span
-        >
+        <span class="orphan-meta">（{{ f.kind }} · {{ (f.file_size / 1024).toFixed(1) }} KB）</span>
       </li>
     </ul>
     <p class="orphan-hint">
@@ -458,7 +456,12 @@ const props = defineProps<{
   drawingUploading: boolean;
   // 2026-09-18 A3：hydrate 结果（顶部 el-alert + 孤儿文件面板）
   hydrateRestoredCount: number;
-  orphanFileRefs: { client_ref: string; kind: string; original_filename: string; file_size: number }[];
+  orphanFileRefs: {
+    client_ref: string;
+    kind: string;
+    original_filename: string;
+    file_size: number;
+  }[];
   openDrawingPreview: (row: StagedEntry) => void;
   onDrawingPreviewClosed: () => void;
   closeAddDialog: () => void;

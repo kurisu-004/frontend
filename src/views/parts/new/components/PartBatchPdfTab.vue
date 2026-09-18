@@ -173,9 +173,8 @@
       <li v-for="f in orphanFileRefs" :key="f.client_ref">
         <code>{{ f.original_filename }}</code>
         <span class="orphan-meta"
-          >（{{ f.kind }} · {{ (f.file_size / 1024).toFixed(1) }} KB · uploaded {{
-            f.uploaded_at ?? 'unknown'
-          }}）</span
+          >（{{ f.kind }} · {{ (f.file_size / 1024).toFixed(1) }} KB · uploaded
+          {{ f.uploaded_at ?? 'unknown' }}）</span
         >
       </li>
     </ul>
@@ -467,14 +466,10 @@
               <!-- 2026-09-18 A3：子件 fileLink 状态 tag（与独立零件 / 装配件顶层同语义） -->
               <el-table-column label="图纸上传" min-width="100" align="center">
                 <template #default="{ row: c }">
-                  <template
-                    v-if="(c as AssemblyChildRow).fileLink?.client_ref"
-                  >
+                  <template v-if="(c as AssemblyChildRow).fileLink?.client_ref">
                     <el-tag type="success" size="small">已上传</el-tag>
                   </template>
-                  <template
-                    v-else-if="(c as AssemblyChildRow).fileLinkNeedReselect"
-                  >
+                  <template v-else-if="(c as AssemblyChildRow).fileLinkNeedReselect">
                     <el-tag type="warning" size="small">需重传</el-tag>
                   </template>
                 </template>
@@ -835,7 +830,13 @@ const props = defineProps<{
   canSubmitCreate: boolean;
   // 2026-09-18 A3：hydrate 结果（顶部 el-alert + 孤儿文件面板）
   hydrateRestoredCount: number;
-  orphanFileRefs: { client_ref: string; kind: string; original_filename: string; file_size: number; uploaded_at: string | null }[];
+  orphanFileRefs: {
+    client_ref: string;
+    kind: string;
+    original_filename: string;
+    file_size: number;
+    uploaded_at: string | null;
+  }[];
 }>();
 
 // PR-2 2026-09-13：父级三个 form 都是 reactive；vue/no-mutating-props 禁止
@@ -1051,24 +1052,20 @@ const columnDefs_standalone: ColumnDef[] = [
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as StandalonePartRow;
-      return h(
-        'div',
-        { class: 'drawing-cell' },
-        [
-          h(
-            ElLink,
-            {
-              type: 'primary',
-              underline: 'never',
-              class: 'filename-link',
-              onClick: () => props.previewStandalonePart(r),
-            },
-            () => props.pdfSourceLabel(r.pdfSourceUid),
-          ),
-          // 2026-09-18 A3：row.fileLink 状态 tag（见 renderFileLinkTag 注释）
-          renderFileLinkTag(r.fileLink, r.fileLinkNeedReselect),
-        ],
-      );
+      return h('div', { class: 'drawing-cell' }, [
+        h(
+          ElLink,
+          {
+            type: 'primary',
+            underline: 'never',
+            class: 'filename-link',
+            onClick: () => props.previewStandalonePart(r),
+          },
+          () => props.pdfSourceLabel(r.pdfSourceUid),
+        ),
+        // 2026-09-18 A3：row.fileLink 状态 tag（见 renderFileLinkTag 注释）
+        renderFileLinkTag(r.fileLink, r.fileLinkNeedReselect),
+      ]);
     },
   },
   {
@@ -1314,24 +1311,20 @@ const columnDefs_assembly: ColumnDef[] = [
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as AssemblyRow;
-      return h(
-        'div',
-        { class: 'drawing-cell' },
-        [
-          h(
-            ElLink,
-            {
-              type: 'primary',
-              underline: 'never',
-              class: 'filename-link',
-              onClick: () => props.previewPdfSourceByUid(r.pdfSourceUid),
-            },
-            () => props.pdfSourceLabel(r.pdfSourceUid),
-          ),
-          // 2026-09-18 A3：见 standalone 注释
-          renderFileLinkTag(r.fileLink, r.fileLinkNeedReselect),
-        ],
-      );
+      return h('div', { class: 'drawing-cell' }, [
+        h(
+          ElLink,
+          {
+            type: 'primary',
+            underline: 'never',
+            class: 'filename-link',
+            onClick: () => props.previewPdfSourceByUid(r.pdfSourceUid),
+          },
+          () => props.pdfSourceLabel(r.pdfSourceUid),
+        ),
+        // 2026-09-18 A3：见 standalone 注释
+        renderFileLinkTag(r.fileLink, r.fileLinkNeedReselect),
+      ]);
     },
   },
   {

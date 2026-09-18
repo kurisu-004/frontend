@@ -1572,13 +1572,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     // 3) assemblies（master = a.children[0]，其余 child）
     assemblies.value = merged.pdfAssemblies.map((a) => {
       const masterMerged = a.children[0];
-      const masterRow: AssemblyRow = deserializeAssemblyRow(
-        a.row,
-        masterMerged?.drawing,
-      );
+      const masterRow: AssemblyRow = deserializeAssemblyRow(a.row, masterMerged?.drawing);
       // 过滤掉 master 占位（children[0] 是 master），保留真正的 child 行
       const childMerged = a.children.slice(1).filter(
-        (c): c is (typeof a.children)[number] & {
+        (
+          c,
+        ): c is (typeof a.children)[number] & {
           row: SerializedAssemblyChildRow;
         } => 'page_index' in c.row,
       );
@@ -1597,11 +1596,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     drawing: 'done' | 'need_reselect' | undefined,
     _threeD: 'done' | 'need_reselect' | undefined,
   ): StandalonePartRow {
-    const fileLink = buildFileLinkFromSnapshot(
-      row.drawing_client_ref,
-      row.drawing_sha256,
-      drawing,
-    );
+    const fileLink = buildFileLinkFromSnapshot(row.drawing_client_ref, row.drawing_sha256, drawing);
     return {
       uid: row.uid,
       pdfSourceUid: row.pdfSourceUid,
@@ -1640,11 +1635,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     row: SerializedAssemblyRow,
     drawing: 'done' | 'need_reselect' | undefined,
   ): AssemblyRow {
-    const fileLink = buildFileLinkFromSnapshot(
-      row.drawing_client_ref,
-      row.drawing_sha256,
-      drawing,
-    );
+    const fileLink = buildFileLinkFromSnapshot(row.drawing_client_ref, row.drawing_sha256, drawing);
     return {
       uid: row.uid,
       pdfSourceUid: row.pdfSourceUid,
@@ -1673,11 +1664,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     drawing: 'done' | 'need_reselect' | undefined,
     _threeD: 'done' | 'need_reselect' | undefined,
   ): AssemblyChildRow {
-    const fileLink = buildFileLinkFromSnapshot(
-      row.drawing_client_ref,
-      row.drawing_sha256,
-      drawing,
-    );
+    const fileLink = buildFileLinkFromSnapshot(row.drawing_client_ref, row.drawing_sha256, drawing);
     return {
       uid: row.uid,
       pdfSourceUid: row.pdfSourceUid,

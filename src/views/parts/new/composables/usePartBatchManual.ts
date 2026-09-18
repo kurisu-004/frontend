@@ -224,9 +224,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     // 仅在 drawing='done' 时重建 drawingBinding（tmp_key + sha 从 session.files 反查）
     let drawingBinding: FileBinding | null = null;
     if (drawing === 'done' && entry.drawingClientRef) {
-      const sessFile = session.files.value.find(
-        (f) => f.client_ref === entry.drawingClientRef,
-      );
+      const sessFile = session.files.value.find((f) => f.client_ref === entry.drawingClientRef);
       if (sessFile && entry.drawingTmpKey && entry.drawingSha256) {
         drawingBinding = {
           tmp_key: entry.drawingTmpKey,
@@ -874,15 +872,14 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
           active_tab: prev?.active_tab ?? 'manual',
           saved_at: new Date().toISOString(),
           // 保留 pdf_tab 旧值；只有 PDF Tab 自己的 saver 会更新 pdf_tab 段
-          pdf_tab:
-            prev?.pdf_tab ?? {
-              customerL1Id: null,
-              requestDate: '',
-              rows: [],
-              assemblies: [],
-              selectedPages: [],
-              file_links: [],
-            },
+          pdf_tab: prev?.pdf_tab ?? {
+            customerL1Id: null,
+            requestDate: '',
+            rows: [],
+            assemblies: [],
+            selectedPages: [],
+            file_links: [],
+          },
           manual_tab: serializeManualTab(),
         };
         draft.saver.schedule(basePayload);
