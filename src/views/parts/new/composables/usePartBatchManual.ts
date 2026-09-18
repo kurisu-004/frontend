@@ -3,14 +3,27 @@
 // 2026-08-25 拆分：原 PartBatchNew.vue 第 1069-1603 行的「手工录入 + 待新增列表 + Dialog + 提交」
 // 整段抽到本文件 + PartBatchManualTab.vue。Shell 通过 `v-bind="manual"` 把本 composable 返回
 // 的对象铺给 tab 组件。
+//
+// 2026-09-18 接入 backend-rust `/api/v2/upload-sessions/*` 共享 STS session pool：
+// - `requestDrawingUpload` 不再并发调 grantStsTmpKey（每文件 1-key），
+//   改用 `useUploadSession.allocate(files)` 单次签整批 tmp_key；
+// - onCommit 成功后调 `session.consumeFiles(submittedClientRefs)` 通知后端
+//   延长 tmp 保留窗口；
+// - mount 时 `useUploadSession.init('parts_new')` + draft 持久化（与 PDF
+//   Tab 共享同一单例 session）。
 
-import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { createApplicant } from '@/api/applicant';
 import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
-import { grantStsTmpKey } from '@/api/files/sts';
-import { PartFileKindToStsPurpose } from '@/types/sts';
+import { getUploadSession } from '@/composables/useUploadSession';
+import {
+  usePartsNewDraft,
+  mergeDraftWithSession,
+  type MergeResult,
+  type SerializedStagedEntry,
+} from '@/composables/usePartsNewDraft';
 import type { Applicant } from '@/types/applicant';
 import type { FileBinding } from '@/types/part_file';
 import type { Customer } from '@/api/customer';
@@ -52,6 +65,12 @@ export interface StagedEntry {
   drawingUrl: string | null;
   /** 2026-09-17 M4：图纸上传走 COS 直传，提交时挂 FileBinding 给后端 batch 事务 */
   drawingBinding: FileBinding | null;
+  /**
+   * 2026-09-18 接入 upload_session：图纸对应的 upload session client_ref。
+   * 新图纸上传成功（onDrawingUploaded）时由 session.allocate 写入；commit 成功后
+   * 用此字段调 session.consumeFiles。
+   */
+  drawingClientRef?: string;
 }
 
 export interface FormState {
@@ -140,6 +159,110 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
    */
   const drawingUploading = ref(false);
   const drawingShaMap = new Map<File, string>();
+
+  // ============================================================
+  // 2026-09-18 upload-session 接入：单例 session + draft 持久化
+  // ============================================================
+  //
+  // 与 PDF Tab（usePartBatchPdf）共享同一 `parts_new` scope session —— useUploadSession
+  // 用模块级 Map 实现 scope → state 单例，两 Tab 多次调用 getUploadSession('parts_new')
+  // 拿到同一 state。Manual Tab 主要场景是单文件选图，每次 allocate 仍走单端口，
+  // 但凭证由共享 session pool 提供，避开每文件一次 grantStsTmpKey 调用。
+  //
+  // draft 持久化：手工录入 Tab 待新增列表（staged）的可序列化字段在 mount 时
+  // 恢复（session.files 命中 done → 行恢复 FileBinding），变更后 debounce 写
+  // localStorage，commit / discard 时清空。
+  const session = getUploadSession('parts_new');
+  const draft = usePartsNewDraft();
+
+  // 2026-09-18 A1：mount 时 hydrate staged entries（draft + session.files 合并）。
+  // 暴露 hydrateResult / hydrateRestoredCount / orphanFileRefs 给 UI 渲染
+  // 「已恢复 N 条」顶部 el-alert + 「孤儿文件待认领」面板（A3）。
+  const hydrateResult = ref<MergeResult | null>(null);
+  const hydrateRestoredCount = computed<number>(() => {
+    const r = hydrateResult.value;
+    if (!r) return 0;
+    return r.manualStaged.filter((s) => s.drawing === 'done').length;
+  });
+  const orphanFileRefs = computed(() => hydrateResult.value?.orphanFileRefs ?? []);
+
+  onMounted(async () => {
+    try {
+      await session.init('parts_new');
+      // 1) hydrate staged from draft + session
+      const loaded = draft.load();
+      const merged = mergeDraftWithSession(loaded, session.session.value);
+      hydrateResult.value = merged;
+      applyHydrate(merged);
+    } catch (e) {
+      console.warn('[usePartBatchManual] session.init failed', e);
+    }
+  });
+
+  /**
+   * 把 mergeDraftWithSession 结果写到 staged。
+   * 仅 restored=true 时执行。
+   *
+   * 写入策略：
+   * - 序列化字段全部还原（图号 / 名称 / 申请人 / 客户 / 日期等）；
+   * - drawing='done' → entry.drawingClientRef = client_ref，entry.drawingBinding
+   *   从 session.files 反查 tmp_key 重建（这样 staged 列表的「已上传」tag 与
+   *   commit 时的 FileBinding 都到位）；
+   * - drawing='need_reselect' / undefined → 不写 drawingClientRef / drawingBinding，
+   *   UI 渲染「需重传」tag。
+   */
+  function applyHydrate(merged: MergeResult): void {
+    if (!merged.restored) return;
+    staged.value = merged.manualStaged.map((m) => deserializeStaged(m.entry, m.drawing));
+  }
+
+  /** 把 SerializedStagedEntry + drawing 状态 → StagedEntry（不含 File）。 */
+  function deserializeStaged(
+    entry: SerializedStagedEntry,
+    drawing: 'done' | 'need_reselect' | undefined,
+  ): StagedEntry {
+    // 仅在 drawing='done' 时重建 drawingBinding（tmp_key + sha 从 session.files 反查）
+    let drawingBinding: FileBinding | null = null;
+    if (drawing === 'done' && entry.drawingClientRef) {
+      const sessFile = session.files.value.find((f) => f.client_ref === entry.drawingClientRef);
+      if (sessFile && entry.drawingTmpKey && entry.drawingSha256) {
+        drawingBinding = {
+          tmp_key: entry.drawingTmpKey,
+          content_sha256: entry.drawingSha256,
+          original_filename: entry.drawingFilename ?? sessFile.original_filename,
+          file_size: entry.drawingFileSize ?? String(sessFile.file_size),
+          content_type: entry.drawingContentType ?? sessFile.content_type,
+        };
+      }
+    }
+    return {
+      uid: entry.uid,
+      drawingNo: entry.drawingNo,
+      name: entry.name,
+      applicantName: entry.applicantName,
+      applicantId: entry.applicantId,
+      customerId: entry.customerId,
+      customerLabel: entry.customerLabel,
+      quantity: entry.quantity,
+      isUrgent: entry.isUrgent,
+      requestDate: entry.requestDate,
+      plannedDeliveryDate: entry.plannedDeliveryDate,
+      orderNo: entry.orderNo,
+      systemDeliveryDate: entry.systemDeliveryDate,
+      note: entry.note,
+      // 文件相关：hydrate 时不持有 File（File 不存 localStorage）；File /
+      // blob URL 仅在用户重新打开 dialog 重新选择时才赋值
+      drawingFile: null,
+      drawingName: entry.drawingFilename ?? null,
+      drawingUrl: null,
+      drawingBinding,
+      drawingClientRef: drawing === 'done' ? entry.drawingClientRef : undefined,
+    };
+  }
+
+  /** drawingClientRef → file 的反向索引：上传完成时按 File 取 client_ref。
+   *  提交成功后按 staged[i].drawingClientRef 调 session.consumeFiles。 */
+  const drawingClientRefByFile = new Map<File, string>();
 
   /** PDF 弹窗预览（图号列点击触发） */
   const drawingPreviewVisible = ref(false);
@@ -255,30 +378,34 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     // form.applicantName 由 v-model 自动同步为 item.name，无需手动设
   }
 
-  // ============ 图纸 COS 上传（2026-09-17 M4）============
+  // ============ 图纸 COS 上传（2026-09-17 M4 + 2026-09-18 upload_session）============
   //
   // CosUploader 走「前端直传 COS tmp 区 → 提交时挂 FileBinding → 后端 batch 事务内
   // head + copy tmp → 正式 CAS key + 插 t_part_file(READY)」两段式链路。
-  // 后端 createUploadIntents 入参 `content_sha256` 必填（src/types/part_file.ts:122），
-  // 所以本 composable 在 requestUpload 回调里**先算 sha 再调 intents**——不开组件
-  // computeHash 避免大 PDF 算两次（cos-uploader 文档 §2.1 备注）。sha 存模块级
+  //
+  // 2026-09-18 改造：原 grantStsTmpKey（每文件 1-key）替换为 upload session 共享
+  // STS：单次 `session.allocate(files)` 拿整批 tmp_key，凭证过期由 useUploadSession
+  // 定时器自动续期。两 Tab（Manual / PDF）共享同一 `parts_new` scope session。
+  //
+  // sha 仍由本 composable 算（不开组件 computeHash 避免大 PDF 算两次），存模块级
   // Map<File, string>，onDrawingUploaded 时按 File 对象 identity 取用。
   //
-  // 用户取消对话框 / 移除文件会留孤儿 tmp 对象 → 后端 M3 设计靠 COS tmp 区生命周期
-  // 自动清理（与 PDF Tab 场景 A 同款假设），前端不显式 cancel。
+  // 用户取消对话框 / 移除文件会留孤儿 tmp 对象 → session 会话结束后由后端
+  // discard 兜底回收（详见 useUploadSession.discard），前端不显式 cancel。
 
   /**
-   * 校验 + 算 sha + 调 grantStsTmpKey，并发拼出 CosUploadSession 返回给组件。
+   * 校验 + 算 sha + 调 session.allocate，拼出 CosUploadSession 返回给组件。
    *
-   * 场景 A：不传 owner_part_id（创建工单）。item.kind 固定 'DRAWING'（2026-09-17
-   * M4 范围只接入图纸；3D 模型走 PDF Tab）。
+   * 2026-09-18 改造：原本每文件并发调 grantStsTmpKey；现在改用共享 session pool
+   * 一次签整批 tmp_key。新流程：
+   * 1) ensure session.init('parts_new') —— mount 时已 init 过；
+   * 2) session.allocate([{client_ref, kind, original_filename, file_size,
+   *    content_type, content_sha256}]) 拿 N 个 tmp_key；
+   * 3) 把 client_ref + tmp_key + sha 映射回 caller 期待 CosUploadSession.items
+   *    形态（同时塞 sha 给组件做 confirm 用）。
    *
-   * 2026-09-17 STS 端口迁移：原 backend-rust createUploadIntents 一次签 N 个 key
-   * （bulk + dedup）；python `POST /api/v1/files/sts-tmp-keys` 是单端口 1-key 响应。
-   * 改为对每个 file 独立并发调 grantStsTmpKey；client_ref 由 caller 用
-   * crypto.randomUUID() 生成（useCosUploader buildCosUploadItems 内部也会生成
-   * 一份，但保留外部生成便于 refetch 复用）。credentials / bucket / region 来自
-   * 首条响应（python 端共享同一 STS 角色，结果稳定）。
+   * client_ref 由 caller（这里）生成（crypto.randomUUID），便于后续
+   * session.markComplete / removeFiles / consumeFiles 反查。
    */
   async function requestDrawingUpload(files: File[]): Promise<CosUploadSession> {
     // 校验 + 算 sha（intents 入参必填；不开组件 computeHash 避免算两次）
@@ -291,30 +418,44 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     const shas = await Promise.all(files.map(async (f) => [f, await computeSha256(f)] as const));
     for (const [f, sha] of shas) drawingShaMap.set(f, sha);
 
-    // 并发调 grantStsTmpKey
-    const stsList = await Promise.all(
-      files.map(async (f) => {
-        const [file, sha] = shas.find(([it]) => it === f)!;
-        return grantStsTmpKey({
-          purpose: PartFileKindToStsPurpose['DRAWING'] ?? 'drawing',
-          filename: file.name,
-          content_type: file.type || 'application/pdf',
-          // python schema 约束 16-64 hex；前端算 SHA-256 截前 16 hex。
-          content_sha256: sha.slice(0, 16),
-        });
+    // ensure session init（mount 时已 init；兜底覆盖边缘情况）
+    if (!session.isReady.value) {
+      await session.init('parts_new');
+    }
+
+    // 一次性 allocate：拿整批 tmp_key + 共享 session 顶层 credentials
+    const clientRefs = files.map(() => crypto.randomUUID());
+    const allocated = await session.allocate(
+      files.map((f, i) => {
+        const sha = shas.find(([it]) => it === f)![1];
+        return {
+          client_ref: clientRefs[i]!,
+          kind: 'drawing',
+          original_filename: f.name,
+          file_size: f.size,
+          content_type: f.type || 'application/pdf',
+          content_sha256: sha,
+        };
       }),
     );
 
-    const first = stsList[0]!;
+    // session 顶层 credentials / bucket / region 共享给所有 item
+    const credentials = session.credentials.value;
+    const bucket = session.bucket.value;
+    const region = session.region.value;
+    if (!credentials || !bucket || !region) {
+      throw new Error('upload session 凭证或桶信息缺失');
+    }
+
+    // CosUploader 组件 CosUploadSession.items 需要 client_ref + tmp_key 一一对应；
+    // sha 暂存进 caller 闭包，onDrawingUploaded 时按 File 身份取用。
     return {
-      // python 端多 1 个 start_time 字段，caller 不需要；CosUploadSession.credentials
-      // 是通用 CosCredentials（字段集是子集），TS 允许结构上多字段的对象赋给少字段结构。
-      credentials: first.credentials,
-      bucket: first.bucket,
-      region: first.region,
-      items: stsList.map((s) => ({
-        client_ref: crypto.randomUUID(),
-        tmp_key: s.tmp_key,
+      credentials,
+      bucket,
+      region,
+      items: allocated.map((a) => ({
+        client_ref: a.client_ref,
+        tmp_key: a.tmp_key,
       })),
     };
   }
@@ -349,6 +490,16 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     form.drawingFile = item.file;
     form.drawingName = item.file.name;
     form.drawingUrl = URL.createObjectURL(item.file);
+
+    // 2026-09-18 接入 upload_session：
+    // 1) 记录 client_ref（CosUploader 通过 item.client_ref 传回），便于后续
+    //    onAddConfirm 写入 staged.drawingClientRef、commit 成功后 consumeFiles；
+    // 2) 通知 session 该 file 已 done（后端 SessionFile.status=done，tmp_key +
+    //    sha 由 caller 提供，etag 由 COS 返回）。
+    drawingClientRefByFile.set(item.file, item.client_ref);
+    void session.markComplete(item.client_ref, item.etag).catch(() => {
+      /* best-effort；status=done 已本地落地，session.files 同步失败不影响 commit */
+    });
   }
 
   /**
@@ -456,6 +607,11 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
         drawingName: form.drawingName,
         drawingUrl: form.drawingUrl,
         drawingBinding: form.drawingBinding,
+        // 2026-09-18：从 drawingClientRefByFile 反查当前图纸对应的 client_ref；
+        // 编辑模式下也允许 client_ref 跟随新 file 更新。
+        drawingClientRef: form.drawingFile
+          ? drawingClientRefByFile.get(form.drawingFile)
+          : undefined,
       };
 
       if (editingUid.value) {
@@ -495,6 +651,11 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     // 2026-09-17 M4：清模块级上传状态。下次打开 dialog 不会继承旧 File 的 sha 记录。
     drawingShaMap.clear();
     drawingUploading.value = false;
+    // 2026-09-18 C1：清 drawingClientRefByFile Map（防止 File 引用堆积 → 内存泄漏）。
+    // Map 内每个 File 对象 identity 是当前这次 dialog 选出来的；关闭 dialog 后
+    // 下次打开是新一次 uploader 流程，File 已被 GC 链断开，Map 持有它们等于
+    // 永久泄漏。Map.clear() 让所有引用断开，下一轮 onDrawingUploaded 重新填充。
+    drawingClientRefByFile.clear();
   }
 
   // ============ 行操作：查看 / 删除 / 编辑 ============
@@ -650,9 +811,28 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
         );
         return;
       }
+
+      // 2026-09-18 接入 upload_session：通知后端「本批 tmp 文件已被消费」。
+      // consume 仅延长 tmp 保留窗口（便于 batch_create_parts 事务内 head + copy
+      // tmp → 正式 CAS key 完成）；tmp 物理删除由 batch_create_parts 端点 spawn
+      // delete 兜底（详见 backend-rust `src/handlers/parts/batch.rs`），前端不感知。
+      // submittedClientRefs 仅含本批实际走 COS 上传的新图纸（不含编辑模式
+      // 复用旧 FileBinding 的条目——那些走原 binding 路径，不经过 session）。
+      const submittedClientRefs = staged.value
+        .map((s) => s.drawingClientRef)
+        .filter((r): r is string => !!r);
+      if (submittedClientRefs.length > 0) {
+        await session.consumeFiles(submittedClientRefs).catch(() => {
+          /* best-effort；失败不影响提交结果 */
+        });
+      }
+
       // 释放所有 blob URL
       staged.value.forEach(revokeEntryUrls);
       staged.value = [];
+      // 2026-09-18：提交成功后清空 draft（保留 session 单例，下一批次继续复用）
+      draft.saver.cancel();
+      draft.clear();
       ElMessage.success(`成功新建 ${res.created.length} 条零件`);
       // 跳到零件一览并筛选「待生产」，便于核对刚添加的零件
       router.push({ path: '/parts', query: { status: 'PENDING' } });
@@ -663,9 +843,81 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     }
   }
 
+  // 2026-09-18：unmount 时刷新 draft 快照 + 撤销 pending saver。session 不在
+  // unmount 销毁 —— 两 Tab 共享同一单例，PDF Tab 仍在活跃时 session 续期
+  // 定时器必须存活。
   onBeforeUnmount(() => {
     staged.value.forEach(revokeEntryUrls);
+    draft.saver.flush();
+    draft.saver.cancel();
   });
+
+  // ============================================================
+  // 2026-09-18 draft 持久化：监听 staged 变更 → debounce 500ms 写 localStorage
+  // ============================================================
+  //
+  // 写时机：staged 数组任意字段变化 → schedule saver（debounce 500ms）；
+  // commit 成功后 → clearDraft。
+  //
+  // 2026-09-18 B1 修复：cross-tab clobber。Manual Tab saver 之前写整个 payload
+  // 时把 pdf_tab 覆盖为空（{rows:[]/...}），导致 PDF Tab 自己的 watcher 触发
+  // 时再次覆盖 manual_tab → 两 Tab 任意一边写就抹掉另一边。改为：schedule 前
+  // 先 draft.load() 取旧 payload，仅覆盖本 Tab 段。
+  if (draft.userId) {
+    watch(
+      () => JSON.stringify(serializeManualTab()),
+      () => {
+        const prev = draft.load();
+        const basePayload = {
+          active_tab: prev?.active_tab ?? 'manual',
+          saved_at: new Date().toISOString(),
+          // 保留 pdf_tab 旧值；只有 PDF Tab 自己的 saver 会更新 pdf_tab 段
+          pdf_tab: prev?.pdf_tab ?? {
+            customerL1Id: null,
+            requestDate: '',
+            rows: [],
+            assemblies: [],
+            selectedPages: [],
+            file_links: [],
+          },
+          manual_tab: serializeManualTab(),
+        };
+        draft.saver.schedule(basePayload);
+      },
+    );
+  }
+
+  /** staged 数组 → SerializedStagedEntry[]（不含 File / blob URL，只存 binding）。 */
+  function serializeManualTab(): { staged: SerializedStagedEntry[]; form_draft?: unknown } {
+    return {
+      staged: staged.value.map((s) => ({
+        uid: s.uid,
+        drawingNo: s.drawingNo,
+        name: s.name,
+        applicantName: s.applicantName,
+        applicantId: s.applicantId,
+        customerId: s.customerId,
+        customerLabel: s.customerLabel,
+        quantity: s.quantity,
+        isUrgent: s.isUrgent,
+        requestDate: s.requestDate,
+        plannedDeliveryDate: s.plannedDeliveryDate,
+        orderNo: s.orderNo,
+        systemDeliveryDate: s.systemDeliveryDate,
+        note: s.note,
+        ...(s.drawingBinding
+          ? {
+              drawingTmpKey: s.drawingBinding.tmp_key,
+              drawingSha256: s.drawingBinding.content_sha256,
+              drawingFilename: s.drawingBinding.original_filename,
+              drawingFileSize: s.drawingBinding.file_size,
+              drawingContentType: s.drawingBinding.content_type,
+            }
+          : {}),
+        ...(s.drawingClientRef ? { drawingClientRef: s.drawingClientRef } : {}),
+      })),
+    };
+  }
 
   return {
     // dialog size + responsive
@@ -692,6 +944,10 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions) {
     rules,
     // 2026-09-17 M4：图纸上传状态（CosUploader 守卫 + 子组件 disabled 绑定）
     drawingUploading,
+    // 2026-09-18 A3：hydrate 结果给 UI 渲染顶部「已恢复 N 条」el-alert +
+    // 孤儿文件待认领面板（合并 dry-run 由 usePartsNewDraft.mergeDraftWithSession 完成）
+    hydrateRestoredCount,
+    orphanFileRefs,
     // handlers
     openDrawingPreview,
     onDrawingPreviewClosed,
