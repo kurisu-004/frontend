@@ -26,6 +26,26 @@
     删除条目。
   </p>
 
+  <!-- 2026-09-18 A3：mount 时 hydrate 完成后顶部 el-alert 总览「已恢复 N 条已上传图纸」。
+       hydrateRestoredCount>0 → success；=0 → info（无恢复但路由存在）；负向（need_reselect）
+       → warning 副文。 -->
+  <el-alert
+    v-if="hydrateRestoredCount > 0"
+    :title="`已恢复 ${hydrateRestoredCount} 条已上传图纸`"
+    type="success"
+    :closable="false"
+    show-icon
+    class="hydrate-summary"
+  />
+  <el-alert
+    v-else-if="orphanFileRefs.length > 0"
+    :title="`发现 ${orphanFileRefs.length} 个孤儿文件未引用`"
+    type="info"
+    :closable="false"
+    show-icon
+    class="hydrate-summary"
+  />
+
   <el-card shadow="never" class="pdf-form-card">
     <el-form :model="localPdfForm" inline>
       <el-form-item label="L1 客户" required>
@@ -135,6 +155,36 @@
   </el-card>
 
   <!-- ① 源文件区 -->
+  <!-- 2026-09-18 A3：孤儿文件待认领面板。orphanFileRefs 是 session.files 中
+       存在但不在 snapshot file_links 引用集合的条目（典型场景：用户上次上传了
+       文件但刷新页面时 draft 因 user_id / version 不匹配被丢弃，session.files
+       仍残留）。让用户能看到这些文件 → 可作为重新选图 / 删 session 的入口。 -->
+  <el-alert
+    v-if="orphanFileRefs.length > 0"
+    type="warning"
+    :closable="false"
+    show-icon
+    class="orphan-alert"
+  >
+    <template #title>
+      <span>孤儿文件待认领（{{ orphanFileRefs.length }} 个）</span>
+    </template>
+    <ul class="orphan-list">
+      <li v-for="f in orphanFileRefs" :key="f.client_ref">
+        <code>{{ f.original_filename }}</code>
+        <span class="orphan-meta"
+          >（{{ f.kind }} · {{ (f.file_size / 1024).toFixed(1) }} KB · uploaded {{
+            f.uploaded_at ?? 'unknown'
+          }}）</span
+        >
+      </li>
+    </ul>
+    <p class="orphan-hint">
+      这些文件存在于 upload session 但未关联到任何行 —— 可忽略（最终会随 session discard 回收），
+      或在本 Tab 重新解析文件时手动认领。
+    </p>
+  </el-alert>
+
   <el-card v-if="allPdfs.length > 0" shadow="never" class="pdf-source-card">
     <div class="source-header">
       <span class="title">源文件区</span>
@@ -414,6 +464,21 @@
                   <el-tag v-if="c.three_d_index !== null" type="success" size="small">3D ✓</el-tag>
                 </template>
               </el-table-column>
+              <!-- 2026-09-18 A3：子件 fileLink 状态 tag（与独立零件 / 装配件顶层同语义） -->
+              <el-table-column label="图纸上传" min-width="100" align="center">
+                <template #default="{ row: c }">
+                  <template
+                    v-if="(c as AssemblyChildRow).fileLink?.client_ref"
+                  >
+                    <el-tag type="success" size="small">已上传</el-tag>
+                  </template>
+                  <template
+                    v-else-if="(c as AssemblyChildRow).fileLinkNeedReselect"
+                  >
+                    <el-tag type="warning" size="small">需重传</el-tag>
+                  </template>
+                </template>
+              </el-table-column>
               <el-table-column label="计划交期" min-width="150" align="center">
                 <template #default="{ row: c }">
                   <el-date-picker
@@ -672,6 +737,7 @@ import UploadStatusCellView from '@/components/UploadStatusCellView.vue';
 import type {
   AssemblyChildRow,
   AssemblyRow,
+  FileLink,
   PdfPreviewState,
   SourceTreeRow,
   StandalonePartRow,
@@ -767,6 +833,9 @@ const props = defineProps<{
   uploadStage: 'idle' | 'uploading' | 'uploaded' | 'committed';
   canStartUpload: boolean;
   canSubmitCreate: boolean;
+  // 2026-09-18 A3：hydrate 结果（顶部 el-alert + 孤儿文件面板）
+  hydrateRestoredCount: number;
+  orphanFileRefs: { client_ref: string; kind: string; original_filename: string; file_size: number; uploaded_at: string | null }[];
 }>();
 
 // PR-2 2026-09-13：父级三个 form 都是 reactive；vue/no-mutating-props 禁止
@@ -869,6 +938,29 @@ function onRetryAssemblyChildThreeD(c: AssemblyChildRow): void {
   void props.retryUploadByRow(c.uid, '3d', c.three_d_index ?? undefined);
 }
 
+// ============ 2026-09-18 A3：row.fileLink 状态 tag（cellRender helper）============
+//
+// 三种渲染分支：
+// - fileLink?.client_ref 非空 → 已上传（绿 type=success）；
+// - fileLink=null + fileLinkNeedReselect=true → 需重传（黄 type=warning，
+//   之前 snapshot 有 drawing_client_ref 但 session 没命中，session 失效或已被消费）；
+// - fileLink=null + fileLinkNeedReselect=false → 未上传（不渲染 tag）。
+//
+// 返回 NOTHING（空 span）让 h('div', {}, [...]) 渲染出 0 子节点空 div 视觉对齐。
+const NOTHING = h('span', null);
+function renderFileLinkTag(
+  fileLink: FileLink | null | undefined,
+  needReselect: boolean | undefined,
+): typeof NOTHING {
+  if (fileLink?.client_ref) {
+    return h(ElTag, { type: 'success', size: 'small' }, () => '已上传');
+  }
+  if (needReselect) {
+    return h(ElTag, { type: 'warning', size: 'small' }, () => '需重传');
+  }
+  return NOTHING;
+}
+
 // ============ 2026-08-27 T23：列顺序拖动 + 可见性（3 个 el-table）============
 // 与 composable 持有的 row-drag（tbody Sortable）独立 —— 列拖挂表头 <tr>（列换序；
 // 绑 thead 会变成拖整行，2026-08-27 修正）。
@@ -954,20 +1046,28 @@ const columnDefs_standalone: ColumnDef[] = [
   {
     key: 'pdfSourceUid',
     label: '图纸',
-    minWidth: 200,
+    minWidth: 220,
     showOverflowTooltip: true,
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as StandalonePartRow;
       return h(
-        ElLink,
-        {
-          type: 'primary',
-          underline: 'never',
-          class: 'filename-link',
-          onClick: () => props.previewStandalonePart(r),
-        },
-        () => props.pdfSourceLabel(r.pdfSourceUid),
+        'div',
+        { class: 'drawing-cell' },
+        [
+          h(
+            ElLink,
+            {
+              type: 'primary',
+              underline: 'never',
+              class: 'filename-link',
+              onClick: () => props.previewStandalonePart(r),
+            },
+            () => props.pdfSourceLabel(r.pdfSourceUid),
+          ),
+          // 2026-09-18 A3：row.fileLink 状态 tag（见 renderFileLinkTag 注释）
+          renderFileLinkTag(r.fileLink, r.fileLinkNeedReselect),
+        ],
       );
     },
   },
@@ -1209,20 +1309,28 @@ const columnDefs_assembly: ColumnDef[] = [
   {
     key: 'pdfSourceUid',
     label: '图纸',
-    minWidth: 180,
+    minWidth: 220,
     showOverflowTooltip: true,
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as AssemblyRow;
       return h(
-        ElLink,
-        {
-          type: 'primary',
-          underline: 'never',
-          class: 'filename-link',
-          onClick: () => props.previewPdfSourceByUid(r.pdfSourceUid),
-        },
-        () => props.pdfSourceLabel(r.pdfSourceUid),
+        'div',
+        { class: 'drawing-cell' },
+        [
+          h(
+            ElLink,
+            {
+              type: 'primary',
+              underline: 'never',
+              class: 'filename-link',
+              onClick: () => props.previewPdfSourceByUid(r.pdfSourceUid),
+            },
+            () => props.pdfSourceLabel(r.pdfSourceUid),
+          ),
+          // 2026-09-18 A3：见 standalone 注释
+          renderFileLinkTag(r.fileLink, r.fileLinkNeedReselect),
+        ],
       );
     },
   },
@@ -1439,6 +1547,36 @@ onMounted(() => {
   cursor: grab;
   color: var(--text-secondary);
   font-size: 16px;
+}
+
+/* 2026-09-18 A3：hydrate 顶部总览 alert 与孤儿文件面板 */
+.hydrate-summary {
+  margin: 0 0 12px;
+}
+.orphan-alert {
+  margin: 0 0 12px;
+}
+.orphan-list {
+  margin: 6px 0;
+  padding-left: 20px;
+  font-size: 13px;
+}
+.orphan-meta {
+  color: var(--text-secondary);
+  margin-left: 6px;
+}
+.orphan-hint {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* 2026-09-18 A3：图纸列的 link + tag 两行布局 */
+.drawing-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 .drag-handle:hover {
   color: var(--el-color-primary);

@@ -26,6 +26,49 @@
     点击下方空白区域或「+ 添加零件」按钮，逐条录入零件信息（含图纸），最后统一提交。
   </p>
 
+  <!-- 2026-09-18 A3：mount 时 hydrate 完成后顶部 el-alert 总览「已恢复 N 条已上传图纸」 -->
+  <el-alert
+    v-if="hydrateRestoredCount > 0"
+    :title="`已恢复 ${hydrateRestoredCount} 条已上传图纸`"
+    type="success"
+    :closable="false"
+    show-icon
+    class="hydrate-summary"
+  />
+  <el-alert
+    v-else-if="orphanFileRefs.length > 0"
+    :title="`发现 ${orphanFileRefs.length} 个孤儿文件未引用`"
+    type="info"
+    :closable="false"
+    show-icon
+    class="hydrate-summary"
+  />
+
+  <!-- 2026-09-18 A3：孤儿文件待认领面板（与 PDF Tab 同语义；典型场景：上批次上传过
+       但刷新时 draft 因 user_id 不匹配被丢弃）。 -->
+  <el-alert
+    v-if="orphanFileRefs.length > 0"
+    type="warning"
+    :closable="false"
+    show-icon
+    class="orphan-alert"
+  >
+    <template #title>
+      <span>孤儿文件待认领（{{ orphanFileRefs.length }} 个）</span>
+    </template>
+    <ul class="orphan-list">
+      <li v-for="f in orphanFileRefs" :key="f.client_ref">
+        <code>{{ f.original_filename }}</code>
+        <span class="orphan-meta"
+          >（{{ f.kind }} · {{ (f.file_size / 1024).toFixed(1) }} KB）</span
+        >
+      </li>
+    </ul>
+    <p class="orphan-hint">
+      这些文件存在于 upload session 但未关联到任何条目 —— 可忽略（最终随 session discard 回收）。
+    </p>
+  </el-alert>
+
   <el-card shadow="never" class="staging-card">
     <div class="staging-header">
       <div class="staging-title-wrap">
@@ -413,6 +456,9 @@ const props = defineProps<{
   rules: FormRules;
   /** 2026-09-17 M4：图纸上传中标记。「加入列表」按钮 :disabled 用。 */
   drawingUploading: boolean;
+  // 2026-09-18 A3：hydrate 结果（顶部 el-alert + 孤儿文件面板）
+  hydrateRestoredCount: number;
+  orphanFileRefs: { client_ref: string; kind: string; original_filename: string; file_size: number }[];
   openDrawingPreview: (row: StagedEntry) => void;
   onDrawingPreviewClosed: () => void;
   closeAddDialog: () => void;
@@ -493,6 +539,29 @@ const columnDefs: ColumnDef[] = [
         );
       }
       return h('span', { class: 'mono' }, r.drawingNo ?? '');
+    },
+  },
+  // 2026-09-18 A3：图纸上传状态列。drawingClientRef 存在（hydrate 或本批新传）
+  // → 标「已上传」绿 tag；hydrate 时 drawing='need_reselect'（snapshot 有
+  // client_ref 但 session 没命中）→ 标「需重传」黄 tag。两种互斥。
+  {
+    key: 'drawingUpload',
+    label: '图纸上传',
+    minWidth: 90,
+    align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as StagedEntry;
+      if (r.drawingClientRef && r.drawingBinding) {
+        return h(ElTag, { type: 'success', size: 'small' }, () => '已上传');
+      }
+      // hydrate 时 snapshot 有 client_ref 但 session 缺 → drawingClientRef
+      // 字段保持 undefined（deserializeStaged 内只在 drawing='done' 才写）。
+      // 这里用反向判定：drawingName 残留（hydrate 时从 drawingFilename 写入）
+      // 但 drawingBinding 为 null → 标「需重传」。
+      if (r.drawingName && !r.drawingBinding && !r.drawingFile) {
+        return h(ElTag, { type: 'warning', size: 'small' }, () => '需重传');
+      }
+      return h('span', { class: 'muted' }, '—');
     },
   },
   {
@@ -684,6 +753,28 @@ function handleDialogClosed(): void {
 
 .muted {
   color: var(--text-secondary);
+}
+
+/* 2026-09-18 A3：hydrate 顶部总览 alert 与孤儿文件面板 */
+.hydrate-summary {
+  margin: 0 0 12px;
+}
+.orphan-alert {
+  margin: 0 0 12px;
+}
+.orphan-list {
+  margin: 6px 0;
+  padding-left: 20px;
+  font-size: 13px;
+}
+.orphan-meta {
+  color: var(--text-secondary);
+  margin-left: 6px;
+}
+.orphan-hint {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .drawing-info {

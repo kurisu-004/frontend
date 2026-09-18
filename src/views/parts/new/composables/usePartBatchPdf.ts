@@ -127,6 +127,15 @@ export interface StandalonePartRow {
    * 普通新解析行不设置（保持 null）。
    */
   fileLink?: FileLink | null;
+  /**
+   * 2026-09-18 A3：hydrate 时 snapshot 原 drawing_client_ref 的"曾上传过"标记。
+   * 区分两种 null fileLink：
+   * - fileLink=null + fileLinkNeedReselect=true → 之前传过但 session 失效，需重传；
+   * - fileLink=null + fileLinkNeedReselect=false → 从未上传，保持普通态。
+   * 仅 deserialize 时根据 snapshot.drawing_client_ref + drawing 状态写入，
+   * 用户编辑 / 新增行不会自动设置（默认 undefined，UI 当 false 处理）。
+   */
+  fileLinkNeedReselect?: boolean;
 }
 
 /** 装配件子件。分厂 / 申请人由顶层 AssemblyRow 指定，提交时复制到每条 item。 */
@@ -151,6 +160,8 @@ export interface AssemblyChildRow {
   three_d_index: number | null;
   /** 2026-09-18 接入 upload_session：见 StandalonePartRow.fileLink 注释 */
   fileLink?: FileLink | null;
+  /** 2026-09-18 A3：见 StandalonePartRow.fileLinkNeedReselect 注释 */
+  fileLinkNeedReselect?: boolean;
 }
 
 /** 装配件顶层行。 */
@@ -174,6 +185,8 @@ export interface AssemblyRow {
   children: AssemblyChildRow[];
   /** 2026-09-18 接入 upload_session：顶层 master 也可能来自 session.files；见上 */
   fileLink?: FileLink | null;
+  /** 2026-09-18 A3：见 StandalonePartRow.fileLinkNeedReselect 注释 */
+  fileLinkNeedReselect?: boolean;
 }
 
 /** 弹窗内显示的 blob URL + 标题 + 起始页。blob URL 由 pdfFiles[i].raw →
@@ -1584,6 +1597,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     drawing: 'done' | 'need_reselect' | undefined,
     _threeD: 'done' | 'need_reselect' | undefined,
   ): StandalonePartRow {
+    const fileLink = buildFileLinkFromSnapshot(
+      row.drawing_client_ref,
+      row.drawing_sha256,
+      drawing,
+    );
     return {
       uid: row.uid,
       pdfSourceUid: row.pdfSourceUid,
@@ -1609,7 +1627,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       // undefined（snapshot 没引用）→ fileLink=null（保持未上传态）。
       // 3D 模型不写入 row.fileLink（独立零件行仅在上传阶段通过 three_d_index
       // 关联 3D 模型 entry，提交时按 entry 反查；本字段仅承载图纸 binding）。
-      fileLink: buildFileLinkFromSnapshot(row.drawing_client_ref, row.drawing_sha256, drawing),
+      fileLink,
+      // 2026-09-18 A3：fileLink=null 但 snapshot 曾带 drawing_client_ref →
+      // 标「需重传」；用于 UI 区分"从未上传"vs"上传过但 session 失效"。
+      fileLinkNeedReselect: !fileLink && !!row.drawing_client_ref,
     };
   }
 
@@ -1619,6 +1640,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     row: SerializedAssemblyRow,
     drawing: 'done' | 'need_reselect' | undefined,
   ): AssemblyRow {
+    const fileLink = buildFileLinkFromSnapshot(
+      row.drawing_client_ref,
+      row.drawing_sha256,
+      drawing,
+    );
     return {
       uid: row.uid,
       pdfSourceUid: row.pdfSourceUid,
@@ -1636,7 +1662,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       masterPageIndex: row.masterPageIndex,
       quantity: row.quantity,
       children: [],
-      fileLink: buildFileLinkFromSnapshot(row.drawing_client_ref, row.drawing_sha256, drawing),
+      fileLink,
+      fileLinkNeedReselect: !fileLink && !!row.drawing_client_ref,
     };
   }
 
@@ -1646,6 +1673,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     drawing: 'done' | 'need_reselect' | undefined,
     _threeD: 'done' | 'need_reselect' | undefined,
   ): AssemblyChildRow {
+    const fileLink = buildFileLinkFromSnapshot(
+      row.drawing_client_ref,
+      row.drawing_sha256,
+      drawing,
+    );
     return {
       uid: row.uid,
       pdfSourceUid: row.pdfSourceUid,
@@ -1662,7 +1694,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       unit_price: row.unit_price,
       total_price: row.total_price,
       three_d_index: row.three_d_index,
-      fileLink: buildFileLinkFromSnapshot(row.drawing_client_ref, row.drawing_sha256, drawing),
+      fileLink,
+      fileLinkNeedReselect: !fileLink && !!row.drawing_client_ref,
     };
   }
 
