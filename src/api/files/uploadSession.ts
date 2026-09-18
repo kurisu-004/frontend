@@ -166,7 +166,11 @@ export async function renewUploadSessionCredentials(
  * 标记 file 为「已消费」—— 后端会延长对应 tmp 对象保留窗口，便于业务
  * 端点（batch create parts / confirm part file）在事务内 head + copy。
  *
- * 通常在 batch 提交成功后批量调；不影响 status（仍是 done），仅标记消费状态。
+ * 2026-09-18 注释修正：本端点仅延长保留窗口（business extension），tmp 物理
+ * 删除由 batch_create_parts / confirm-part-file 等下游业务端点 spawn delete
+ * 兜底（详见 backend-rust `src/handlers/parts/batch.rs`）。前端不感知 tmp
+ * 删除；与 `removeFiles`（仅本地过滤 session.files）不同，consumeFiles 走
+ * 后端协议，状态变化可观测。
  */
 export async function consumeUploadSessionFiles(
   sessionId: string,

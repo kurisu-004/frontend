@@ -78,7 +78,7 @@ function makeSession(overrides?: Partial<UploadSession>): UploadSession {
 function makeFile(overrides?: Partial<SessionFile>): SessionFile {
   return {
     client_ref: 'ref-default',
-    kind: 'drawing',
+    kind: 'drawing' as const,
     original_filename: 'a.pdf',
     file_size: 1024,
     content_type: 'application/pdf',
@@ -266,7 +266,7 @@ describe('useUploadSession / allocate', () => {
     const out = await u.allocate([
       {
         client_ref: 'ref-a',
-        kind: 'drawing',
+        kind: 'drawing' as const,
         original_filename: 'a.pdf',
         file_size: 1024,
         content_type: 'application/pdf',
@@ -274,7 +274,7 @@ describe('useUploadSession / allocate', () => {
       },
       {
         client_ref: 'ref-b',
-        kind: '3d_model',
+        kind: '3d_model' as const,
         original_filename: 'b.stp',
         file_size: 2048,
         content_type: 'application/octet-stream',
@@ -352,9 +352,12 @@ describe('useUploadSession / removeFiles & consumeFiles', () => {
     expect(removeUploadSessionFiles).not.toHaveBeenCalled();
   });
 
-  it('consumeFiles 不修改本地 state（仅标记后端）', async () => {
+  it('consumeFiles 同步过滤本地 state（C3 修复）', async () => {
     const sess = makeSession({
-      files: [makeFile({ client_ref: 'ref-a', status: 'done' })],
+      files: [
+        makeFile({ client_ref: 'ref-a', status: 'done' }),
+        makeFile({ client_ref: 'ref-b', status: 'done' }),
+      ],
     });
     getOrCreateUploadSession.mockResolvedValueOnce(sess);
     consumeUploadSessionFiles.mockResolvedValueOnce({ consumed: ['ref-a'] });
@@ -364,8 +367,10 @@ describe('useUploadSession / removeFiles & consumeFiles', () => {
 
     const consumed = await u.consumeFiles(['ref-a']);
     expect(consumed).toEqual(['ref-a']);
-    // 本地 files 不变（status 仍 done）
-    expect(u.files.value[0]?.status).toBe('done');
+    // 2026-09-18 C3：consume 后从 session.files 过滤掉被消费的条目
+    // （避免后续 mount 时 mergeDraftWithSession 误把已消费文件当作孤儿）。
+    expect(u.files.value).toHaveLength(1);
+    expect(u.files.value[0]?.client_ref).toBe('ref-b');
   });
 
   it('consumeFiles 未初始化 → 静默返回 []，不抛错', async () => {

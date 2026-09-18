@@ -186,14 +186,40 @@ export type MergedFileStatus =
   | 'done' // session.files 命中 + status=done → 行直接恢复「已上传」
   | 'need_reselect'; // session.files 缺该 client_ref 或 status≠done → 需重选
 
-/** 合并后行 + file 关联。 */
-export interface MergedRow {
-  /** 原始 draft 中的 row（带 drawing_client_ref / drawing_sha256）。 */
-  row: SerializedStandalonePartRow | SerializedAssemblyRow | SerializedAssemblyChildRow;
-  /** 该 row 的图纸 file 状态（无关联则为 undefined）。 */
+/**
+ * 合并后独立零件行（pdfRows[i]）。
+ *
+ * 2026-09-18 收窄：原 MergedRow 把三种 row 类型 union 在一个 row 字段，
+ * caller 端 deserialize 时做类型断言；本次拆成三个具名 interface + 三个
+ * 数组元素类型，让 TS 编译期挡错。
+ */
+export interface MergedStandaloneRow {
+  row: SerializedStandalonePartRow;
   drawing: MergedFileStatus | undefined;
-  /** 该 row 的 3D 模型 file 状态。 */
   threeD: MergedFileStatus | undefined;
+}
+
+/** 合并后装配件子件行。 */
+export interface MergedAssemblyChildRow {
+  row: SerializedAssemblyChildRow;
+  drawing: MergedFileStatus | undefined;
+  threeD: MergedFileStatus | undefined;
+}
+
+/** 合并后装配件顶层行 + 其下所有子件（master 用 children[0]，其余是 child）。 */
+export interface MergedAssembly {
+  row: SerializedAssemblyRow;
+  children: Array<MergedAssemblyChildRow | MergedStandaloneRowLike>;
+}
+
+/**
+ * MergedAssembly.children 元素联合（master 在 [0]，child 在 [1..]）。
+ * master 只关心 drawing 字段，无 threeD。
+ */
+export interface MergedStandaloneRowLike {
+  row: SerializedStandalonePartRow | SerializedAssemblyRow | SerializedAssemblyChildRow;
+  drawing: MergedFileStatus | undefined;
+  threeD?: MergedFileStatus | undefined;
 }
 
 /** 合并后 staging 条目（手工录入 Tab）。 */
@@ -204,8 +230,8 @@ export interface MergedStaged {
 
 /** 合并结果。 */
 export interface MergeResult {
-  pdfRows: MergedRow[];
-  pdfAssemblies: Array<{ row: SerializedAssemblyRow; children: MergedRow[] }>;
+  pdfRows: MergedStandaloneRow[];
+  pdfAssemblies: MergedAssembly[];
   manualStaged: MergedStaged[];
   /** session.files 存在但不在快照里的 client_refs（用于「源文件区待认领」展示）。 */
   orphanFileRefs: SessionFile[];
@@ -251,19 +277,19 @@ export function mergeDraftWithSession(
     return f.status === 'done' ? 'done' : 'need_reselect';
   };
 
-  const pdfRows: MergedRow[] = draft.pdf_tab.rows.map((row) => ({
+  const pdfRows: MergedStandaloneRow[] = draft.pdf_tab.rows.map((row) => ({
     row,
     drawing: classifyFile(row.drawing_client_ref),
     threeD: classifyFile(row.three_d_client_ref),
   }));
 
-  const pdfAssemblies = draft.pdf_tab.assemblies.map((a) => {
-    const master: MergedRow = {
+  const pdfAssemblies: MergedAssembly[] = draft.pdf_tab.assemblies.map((a) => {
+    const master: MergedStandaloneRowLike = {
       row: a,
       drawing: classifyFile(a.drawing_client_ref),
       threeD: undefined,
     };
-    const children: MergedRow[] = a.children.map((c) => ({
+    const children: MergedAssemblyChildRow[] = a.children.map((c) => ({
       row: c,
       drawing: classifyFile(c.drawing_client_ref),
       threeD: classifyFile(c.three_d_client_ref),

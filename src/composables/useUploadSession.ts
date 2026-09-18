@@ -96,6 +96,22 @@ export interface UseUploadSessionReturn {
  * 模块级 Map 缓存（scope → UseUploadSessionScopeState）实现「同一 scope
  * 多次 getUploadSession 拿到同一单例」。discard 后从 Map 删除，下次
  * getUploadSession(scope) 重新构造。
+ *
+ * 2026-09-18 C4：scopeStates 是模块级 Map，**生命周期等同于 JS 模块**（即
+ * 整个单页应用生命周期 + 测试进程生命周期）。每个 scope 的 state 含 session
+ * ref + renew 定时器 + renewing 标志。**任何 scope 注销路径必须调 `discard()`**，
+ * 否则：
+ * - 定时器泄漏（renewTimer 持有 setTimeout 引用）；
+ * - session ref 持有 StsCredentials（session_token / tmp_secret_key），
+ *   跨用户 / 跨测试时残留在 Map 里 → 凭证 + tmp 文件句柄悬空；
+ * - route 切走后再回来 init 同 scope，**复用旧 state**，导致 session 跨
+ *   用户复用（典型 bug 场景：用户 A 退出 → 用户 B 登录 → useUploadSession
+ *   命中 Map 旧 scope → 拿到 A 的 STS 凭证）。
+ *
+ * 推荐接入点：
+ * - 路由层：router.afterEach 监听离开 /parts/new 时调 session.discard()；
+ * - 测试层：每个 test 在 afterEach 调 discard() 清理（useUploadSession.spec.ts
+ *   已实现该模式）。
  */
 interface ScopeState {
   session: Ref<UploadSession | null>;
@@ -321,8 +337,19 @@ export function getUploadSession(scope: UploadScope): UseUploadSessionReturn {
   }
 
   /**
-   * 标记 file 已消费：batch 提交成功后调；不影响 status（仍是 done），
-   * 仅延长 tmp 对象保留窗口。失败不影响前端状态（best-effort）。
+   * 标记 file 已消费：batch 提交成功后调。
+   *
+   * 2026-09-18 C3 修复：原实现只调 API，不动本地 session.files；导致后续
+   * mount 时 `mergeDraftWithSession` 仍把已消费文件当成"待恢复"列入 draft →
+   * orphanFileRefs 误判。本次改为同步本地：consume 后从 session.files 过滤掉
+   * 对应 client_refs（与 removeFiles 行为对齐；仅本地 state 层面）。
+   *
+   * 后端语义：consume 端点仅延长 tmp 对象保留窗口（便于 batch_create_parts
+   * 事务内 head + copy tmp → 正式 CAS key 完成），tmp 实际删除由 batch_create_parts
+   * 端点 spawn delete 兜底（详见 backend-rust `src/handlers/parts/batch.rs`）。
+   * 前端不感知 tmp 物理删除。
+   *
+   * 失败不影响前端状态（best-effort；与原语义一致）。
    */
   async function consumeFiles(clientRefs: string[]): Promise<string[]> {
     const cur = state.session.value;
@@ -332,6 +359,12 @@ export function getUploadSession(scope: UploadScope): UseUploadSessionReturn {
       scope: cur.scope,
       client_refs: clientRefs,
     });
+    // 同步本地 state：consume 完成后从 session.files 过滤（避免 hydrate 时误入 orphan）
+    const consumedSet = new Set(out.consumed);
+    if (consumedSet.size > 0) {
+      const nextFiles = cur.files.filter((f) => !consumedSet.has(f.client_ref));
+      state.session.value = { ...cur, files: nextFiles };
+    }
     return out.consumed;
   }
 

@@ -16,6 +16,13 @@
 // - `scope`：当前实现仅 `parts_new`（新建零件场景），但接口允许扩展；
 // - `tmp_prefix`：STS policy resource 限定前缀（前端展示用，实际写传时 tmp_key 已自含）；
 // - `credentials.expired_time` / `start_time`：UTC 秒（i64，JSON 解析为 number）。
+//
+// 2026-09-18 D2：`kind` 收窄为 `PartFileKind | StsPurpose`（与 PartFileKindToStsPurpose
+// value 集合对齐）。原 `string` 太宽会掩盖错拼 / 旧大写 kind 等历史 bug；新类型
+// 让 caller 端编辑器自动提示可用值，TS 编译期挡掉 typo。
+
+import type { PartFileKind } from './part_file';
+import type { StsPurpose } from './sts';
 
 /** 上传 session 作用域（与 backend-rust `UploadScope` Literal 对齐）。
  *  2026-09-18：当前实现仅 `parts_new`；新增 / 删减 / 重命名必须同步后端 schema。 */
@@ -25,11 +32,13 @@ export type UploadScope = 'parts_new';
 export interface SessionFile {
   /** 前端生成的 client_ref（crypto.randomUUID），上传 + complete 阶段用于反查。 */
   client_ref: string;
-  /** 文件 kind（前端统一小写：'drawing' / '3d_model' / ...，与 python StsPurpose 同源）。 */
-  kind: string;
+  /** 文件 kind：与 PartFileKindToStsPurpose value 集合对齐。PartFileKind 来自
+   *  part_file 域（DRAWING/3D_MODEL/...）；StsPurpose 是其小写映射版本。
+   *  前端实际写入 / 读取一律用小写 StsPurpose（后端契约约定）。 */
+  kind: PartFileKind | StsPurpose;
   /** 原始文件名。 */
   original_filename: string;
-  /** 字节数；v2 i64 雪花序列化器统一转 string，消费侧 Number() 后再格式化。 */
+  /** 字节数（i64；远小于 2^53，JSON number 安全消费；与雪花 ID 不同，雪花需 string）。 */
   file_size: number;
   /** MIME type（image/png、application/pdf、application/octet-stream 等）。 */
   content_type: string;
@@ -90,7 +99,8 @@ export type GetOrCreateUploadSessionOut = UploadSession;
 export interface AllocateUploadSessionFileIn {
   /** 前端生成的 client_ref（caller 决定，便于 allocate 后反查 File）。 */
   client_ref: string;
-  kind: string;
+  /** 文件 kind：与 SessionFile.kind 同集。caller 端优先传小写 StsPurpose。 */
+  kind: PartFileKind | StsPurpose;
   original_filename: string;
   file_size: number;
   content_type: string;

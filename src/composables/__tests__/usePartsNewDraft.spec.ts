@@ -132,7 +132,7 @@ describe('mergeDraftWithSession', () => {
       files: [
         {
           client_ref: 'r1',
-          kind: 'drawing',
+          kind: 'drawing' as const,
           original_filename: 'a.pdf',
           file_size: 1,
           content_type: 'application/pdf',
@@ -245,7 +245,7 @@ describe('mergeDraftWithSession', () => {
       files: [
         {
           client_ref: 'r-done',
-          kind: 'drawing',
+          kind: 'drawing' as const,
           original_filename: 'a.pdf',
           file_size: 1,
           content_type: 'application/pdf',
@@ -315,7 +315,7 @@ describe('mergeDraftWithSession', () => {
       files: [
         {
           client_ref: 'r-pending',
-          kind: 'drawing',
+          kind: 'drawing' as const,
           original_filename: 'a.pdf',
           file_size: 1,
           content_type: 'application/pdf',
@@ -351,7 +351,7 @@ describe('mergeDraftWithSession', () => {
       files: [
         {
           client_ref: 'r-orphan',
-          kind: 'drawing',
+          kind: 'drawing' as const,
           original_filename: 'a.pdf',
           file_size: 1,
           content_type: 'application/pdf',
@@ -454,7 +454,7 @@ describe('mergeDraftWithSession', () => {
       files: [
         {
           client_ref: 'r-asm',
-          kind: 'drawing',
+          kind: 'drawing' as const,
           original_filename: 'asm.pdf',
           file_size: 1,
           content_type: 'application/pdf',
@@ -466,7 +466,7 @@ describe('mergeDraftWithSession', () => {
         },
         {
           client_ref: 'r-child-done',
-          kind: 'drawing',
+          kind: 'drawing' as const,
           original_filename: 'c1.pdf',
           file_size: 1,
           content_type: 'application/pdf',
@@ -478,7 +478,7 @@ describe('mergeDraftWithSession', () => {
         },
         {
           client_ref: 'r-child-pending',
-          kind: 'drawing',
+          kind: 'drawing' as const,
           original_filename: 'c2.pdf',
           file_size: 1,
           content_type: 'application/pdf',
@@ -544,7 +544,7 @@ describe('mergeDraftWithSession', () => {
       files: [
         {
           client_ref: 'r-staged',
-          kind: 'drawing',
+          kind: 'drawing' as const,
           original_filename: 's.pdf',
           file_size: 1,
           content_type: 'application/pdf',
