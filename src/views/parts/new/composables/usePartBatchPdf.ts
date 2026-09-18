@@ -2,16 +2,32 @@
 //
 // 2026-08-25 拆分：原 PartBatchNew.vue 第 1605-2857 行的「PDF 上传 + 拆页 + 合并 + 提交」
 // 整段抽到本文件 + PartBatchPdfTab.vue。
+//
+// 2026-09-18 接入 backend-rust `/api/v2/upload-sessions/*` 共享 STS session pool：
+// - onStartUpload 不再每文件并发调 `grantStsTmpKey`，改为单次 `session.allocate(N)`
+//   拿整批 tmp_key；session 凭证过期由 `useUploadSession` 定时器自动续期。
+// - useCosUpload 的 `refetchIntents` 回调改为 `session.renew()` + 从最新 session
+//   字段重建 UploadIntentsOut。
+// - onCommit 成功后调 `session.consumeFiles(submittedClientRefs)` 通知后端延长
+//   tmp 对象保留窗口（便于后端事务内 head + copy）。
+// - mount 时 `useUploadSession.init('parts_new')` + 配合 `usePartsNewDraft` 恢复
+//   session.files 中 status='done' 的条目到 rows 的「已上传」区。
 
-import { computed, onBeforeUnmount, provide, reactive, ref, watch, type Ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, watch, type Ref } from 'vue';
 import type { UseCosUploadReturn } from '@/composables/useCosUpload';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { useCosUpload, type CosUploadItem } from '@/composables/useCosUpload';
 import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
-import { grantStsTmpKey } from '@/api/files/sts';
-import { PartFileKindToStsPurpose, type StsTmpKeysResponse } from '@/types/sts';
+import { getUploadSession } from '@/composables/useUploadSession';
+import {
+  usePartsNewDraft,
+  type SerializedAssemblyChildRow,
+  type SerializedAssemblyRow,
+  type SerializedPdfTab,
+  type SerializedStandalonePartRow,
+} from '@/composables/usePartsNewDraft';
 import type { Customer } from '@/api/customer';
 import type { FileBinding, PartFileKind, UploadIntentsOut } from '@/types/part_file';
 import { computeSha256 } from '@/utils/fileHash';
@@ -54,6 +70,30 @@ export interface PdfSource {
   originPdfUid?: string;
 }
 
+/**
+ * row → upload session file 缝合标记（2026-09-18 接入 upload_session 时新增）。
+ *
+ * 当 row.fileLink 非空时：
+ * - client_ref：upload session 中分配的 client_ref（refetch / markComplete /
+ *   removeFiles / consumeFiles 都用这个 key）；
+ * - sha256：图纸 SHA-256 hex（与后端 SessionFile.content_sha256 对齐，便于
+ *   后端 commit 时按 (sha) 验真）；
+ * - tmp_key：COS tmp 区 key（提交时挂到 part_batch payload 的 drawing_file）。
+ *
+ * UI 层根据 fileLink 是否存在决定渲染「已上传」态还是「需选择文件」态。
+ */
+export interface FileLink {
+  client_ref: string;
+  sha256: string;
+  tmp_key: string;
+  /** 文件大小（bytes），用于 row.fileSize 显示；session.files 中也有但不强依赖 */
+  file_size?: number;
+  /** 原始文件名（仅展示）；session.files.original_filename 同源 */
+  original_filename?: string;
+  /** 绑定时间（ISO8601）；session.files.uploaded_at 同源，UI 展示用 */
+  uploaded_at?: string | null;
+}
+
 /** 独立零件表的一行。 */
 export interface StandalonePartRow {
   uid: string;
@@ -79,6 +119,12 @@ export interface StandalonePartRow {
   total_price: number | null;
   /** PR-H 2026-07-28：3D 模型数组下标；null = 不挂 */
   three_d_index: number | null;
+  /**
+   * 2026-09-18 接入 upload_session：当 row 由 session.files 中 status=done 的
+   * 条目恢复而来时设置，UI 据此展示「已上传」badge + 跳过文件选择器。
+   * 普通新解析行不设置（保持 null）。
+   */
+  fileLink?: FileLink | null;
 }
 
 /** 装配件子件。分厂 / 申请人由顶层 AssemblyRow 指定，提交时复制到每条 item。 */
@@ -101,6 +147,8 @@ export interface AssemblyChildRow {
   total_price: number | null;
   /** PR-H 2026-07-28：3D 模型数组下标；null = 不挂 */
   three_d_index: number | null;
+  /** 2026-09-18 接入 upload_session：见 StandalonePartRow.fileLink 注释 */
+  fileLink?: FileLink | null;
 }
 
 /** 装配件顶层行。 */
@@ -122,6 +170,8 @@ export interface AssemblyRow {
   /** 装配体套数（默认 1）。2026-08-04 新增：用于背面页 Q: 打印 */
   quantity: number;
   children: AssemblyChildRow[];
+  /** 2026-09-18 接入 upload_session：顶层 master 也可能来自 session.files；见上 */
+  fileLink?: FileLink | null;
 }
 
 /** 弹窗内显示的 blob URL + 标题 + 起始页。blob URL 由 pdfFiles[i].raw →
@@ -1359,6 +1409,245 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   let lastUploadEntries: FileUploadEntry[] = [];
 
   // ============================================================
+  // 2026-09-18 upload-session 接入：单例 session + draft 持久化
+  // ============================================================
+  //
+  // parts/new 两个 Tab（PDF + Manual）共享同一 `parts_new` scope 的 session。
+  // useUploadSession 用模块级 Map 实现 scope → state 单例，所以两次调用
+  // getUploadSession('parts_new') 拿到的是同一 state。
+  //
+  // mount 时 init session 拿首次 STS 凭证 + 启动 renew 定时器（凭证过期前 5min
+  // 自动续期）；draft 在 mount 时合并 session.files 与 localStorage 快照恢复
+  // 工作现场，commit / discard 时清空。
+  const session = getUploadSession('parts_new');
+  const draft = usePartsNewDraft();
+
+  /**
+   * mount 时调：init session + 从 session.files 同步已 done 文件到本地 cell。
+   *
+   * 注意：此函数不直接 hydrate rows / staged（hydrate 走 usePartBatchManual
+   * 各自的 restoreDraft 调用，本 composable 不重复 —— 两 Tab 共享 session 后
+   * 任一 Tab mount 都会触发 init，但 rows 是各自 Tab 的 UI 数据，由各自
+   * composable 的 hydrateFromDraft 单独负责）。
+   *
+   * 这里只负责 session init + 一次性补齐「session.files 中 status=done 但
+   * 本地 pdfUploadCells / threeDUploadCells 尚未记录」的文件（典型场景：
+   * 另一 Tab 上传完共享 session 后，本 Tab 第一次 mount 看到 done 文件）。
+   */
+  onMounted(async () => {
+    try {
+      await session.init('parts_new');
+      // sync session.files → local cells（仅补缺，不覆盖当前正在上传的 cell）
+      syncCellsFromSession();
+    } catch (e) {
+      // init 失败不阻断 UI；用户后续点「开始上传」时再重试 init
+      console.warn('[usePartBatchPdf] session.init failed', e);
+    }
+  });
+
+  /**
+   * 把 session.files 中 status=done 的条目同步到本地 pdfUploadCells
+   * （仅当 cell 还未存在时新增；正在上传中的 cell 不动）。
+   *
+   * 主要场景：两 Tab 共享 session，另一 Tab 完成上传后本 Tab 第一次 mount
+   * 应立即看到 done 状态（避免本 Tab 「开始上传」时拿旧 cell 状态做判断）。
+   */
+  function syncCellsFromSession(): void {
+    const files = session.files.value;
+    for (const f of files) {
+      if (f.status !== 'done') continue;
+      const key = fileKeyFromSessionFile(f);
+      if (!key) continue;
+      // 已存在则跳过（不覆盖当前 in-progress 的 cell）
+      if (f.kind === 'drawing') {
+        if (!pdfUploadCells[key]) pdfUploadCells[key] = { status: 'done', progress: 100 };
+      } else if (f.kind === '3d_model') {
+        if (!threeDUploadCells[key]) threeDUploadCells[key] = { status: 'done', progress: 100 };
+      }
+    }
+  }
+
+  /**
+   * 把 SessionFile 翻译成 pdfUploadCells / threeDUploadCells 的 key
+   * （`pdf:${client_ref}` / `3d:${client_ref}`），用于 syncCellsFromSession
+   * 把 session 状态映射回 UI cell 空间。
+   *
+   * 当前实现：UI cell key 仍然用 pdfSourceUid / fileUid（PDF Tab 沿用），但
+   * session.files 的 client_ref 与本地 entry.clientRef 一一对应。
+   * 本函数返回 null 时由 caller 跳过（f.kind 不在已知枚举内）。
+   */
+  function fileKeyFromSessionFile(f: { client_ref: string; kind: string }): string | null {
+    if (f.kind === 'drawing') return `pdf:${f.client_ref}`;
+    if (f.kind === '3d_model') return `3d:${f.client_ref}`;
+    return null;
+  }
+
+  // ============================================================
+  // 2026-09-18 draft 持久化：监听 rows / assemblies 变更 → debounce 500ms 写 localStorage
+  // ============================================================
+  //
+  // 写时机：
+  // - rows / assemblies 任意字段变化 → schedule saver（debounce 500ms 合并）；
+  // - onStartUpload 启动前（mount 时基线快照 + 每次「开始上传」前）→ saver.flush()；
+  // - onCommit 成功后 → clearDraft + 清 sessions（保留 session 单例由 caller 决定）。
+  //
+  // 注意：snapshot 只存「可序列化子集」—— rows / assemblies 的文本字段 +
+  // fileLink（client_ref / sha256 / tmp_key）。pdfSourceUid 引用 allPdfs[i].raw
+  // （File / Blob）不存，所以恢复后 UI 必须重新选择文件（除非 row.fileLink 命中
+  // session.files 中 status=done 的条目）。
+  //
+  // watch 深度递归覆盖嵌套字段（applicant_name / quantity 等所有变化都触发）；
+  // debounce 500ms 避免连续编辑（如键入图号）每字都写一次。
+  if (draft.userId) {
+    watch(
+      () => [pdfForm.customerL1Id, pdfForm.requestDate, JSON.stringify(serializePdfTab())] as const,
+      () => {
+        draft.saver.schedule({
+          active_tab: 'pdf',
+          saved_at: new Date().toISOString(),
+          pdf_tab: serializePdfTab(),
+          manual_tab: { staged: [] }, // PDF Tab 不写 manual 段
+        });
+      },
+    );
+  }
+
+  /**
+   * 把当前 PDF Tab state 序列化成 SerializedPdfTab 形态（不含 File / Blob）。
+   * 详见 usePartsNewDraft.SerializedPdfTab。
+   */
+  function serializePdfTab(): SerializedPdfTab {
+    return {
+      customerL1Id: pdfForm.customerL1Id,
+      requestDate: pdfForm.requestDate,
+      rows: standaloneParts.value.map(serializeStandalonePartRow),
+      assemblies: assemblies.value.map(serializeAssemblyRow),
+      selectedPages: Array.from(selectedPages.value),
+      file_links: serializeFileLinks(),
+    };
+  }
+
+  /** 单个 standalone part row → SerializedStandalonePartRow。 */
+  function serializeStandalonePartRow(r: StandalonePartRow): SerializedStandalonePartRow {
+    return {
+      uid: r.uid,
+      pdfSourceUid: r.pdfSourceUid,
+      pageCount: r.pageCount,
+      ...(r.mergedFrom ? { mergedFrom: r.mergedFrom } : {}),
+      drawing_no: r.drawing_no,
+      name: r.name,
+      applicant_name: r.applicant_name,
+      customer_id: r.customer_id,
+      customer_name: r.customer_name,
+      request_date: r.request_date,
+      planned_delivery_date: r.planned_delivery_date,
+      system_delivery_date: r.system_delivery_date,
+      order_no: r.order_no,
+      note: r.note,
+      is_urgent: r.is_urgent,
+      quantity: r.quantity,
+      unit_price: r.unit_price,
+      total_price: r.total_price,
+      three_d_index: r.three_d_index,
+      ...(r.fileLink
+        ? { drawing_client_ref: r.fileLink.client_ref, drawing_sha256: r.fileLink.sha256 }
+        : {}),
+    };
+  }
+
+  /** 单个 assembly row → SerializedAssemblyRow（含 children 递归）。 */
+  function serializeAssemblyRow(a: AssemblyRow): SerializedAssemblyRow {
+    return {
+      uid: a.uid,
+      pdfSourceUid: a.pdfSourceUid,
+      drawing_no: a.drawing_no,
+      name: a.name,
+      applicant_name: a.applicant_name,
+      customer_id: a.customer_id,
+      customer_name: a.customer_name,
+      request_date: a.request_date,
+      planned_delivery_date: a.planned_delivery_date,
+      system_delivery_date: a.system_delivery_date,
+      order_no: a.order_no,
+      note: a.note,
+      is_urgent: a.is_urgent,
+      masterPageIndex: a.masterPageIndex,
+      quantity: a.quantity,
+      ...(a.fileLink
+        ? { drawing_client_ref: a.fileLink.client_ref, drawing_sha256: a.fileLink.sha256 }
+        : {}),
+      children: a.children.map(serializeAssemblyChildRow),
+    };
+  }
+
+  function serializeAssemblyChildRow(c: AssemblyChildRow): SerializedAssemblyChildRow {
+    return {
+      uid: c.uid,
+      pdfSourceUid: c.pdfSourceUid,
+      page_index: c.page_index,
+      drawing_no: c.drawing_no,
+      name: c.name,
+      quantity: c.quantity,
+      is_urgent: c.is_urgent,
+      request_date: c.request_date,
+      planned_delivery_date: c.planned_delivery_date,
+      system_delivery_date: c.system_delivery_date,
+      order_no: c.order_no,
+      note: c.note,
+      unit_price: c.unit_price,
+      total_price: c.total_price,
+      three_d_index: c.three_d_index,
+      ...(c.fileLink
+        ? { drawing_client_ref: c.fileLink.client_ref, drawing_sha256: c.fileLink.sha256 }
+        : {}),
+    };
+  }
+
+  /**
+   * 收集所有 row.fileLink → file_links 数组。
+   * bound_row_ids 用 row uid 数组（一个 file 可能被多个 row 引用：装配主子件）。
+   */
+  function serializeFileLinks(): SerializedPdfTab['file_links'] {
+    const links: SerializedPdfTab['file_links'] = [];
+    const seen = new Map<
+      string,
+      { kind: 'drawing' | '3d_model'; sha256: string; rowIds: Set<string> }
+    >();
+    const addLink = (
+      clientRef: string | undefined,
+      sha: string | undefined,
+      rowUid: string,
+      kind: 'drawing' | '3d_model',
+    ): void => {
+      if (!clientRef || !sha) return;
+      const cur = seen.get(clientRef);
+      if (cur) {
+        cur.rowIds.add(rowUid);
+        return;
+      }
+      seen.set(clientRef, { kind, sha256: sha, rowIds: new Set([rowUid]) });
+    };
+    standaloneParts.value.forEach((r) => {
+      addLink(r.fileLink?.client_ref, r.fileLink?.sha256, r.uid, 'drawing');
+    });
+    assemblies.value.forEach((a) => {
+      addLink(a.fileLink?.client_ref, a.fileLink?.sha256, a.uid, 'drawing');
+      a.children.forEach((c) => {
+        addLink(c.fileLink?.client_ref, c.fileLink?.sha256, c.uid, 'drawing');
+      });
+    });
+    seen.forEach((v, k) => {
+      links.push({
+        client_ref: k,
+        sha256: v.sha256,
+        bound_row_ids: Array.from(v.rowIds),
+        kind: v.kind,
+      });
+    });
+    return links;
+  }
+
+  // ============================================================
   // 2026-09-16 M3-B 复审兜底：cosUpload 提升到 composable 顶层
   // ============================================================
   //
@@ -1485,6 +1774,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
       return;
     }
 
+    // 2026-09-18：上传前 flush draft 快照（把当前解析结果固化进 localStorage，
+    // 万一上传中途页面刷新，用户重进仍能从 draft + session.files 恢复）
+    draft.saver.flush();
+
     pdfSubmitting.value = true;
     uploadStage.value = 'uploading';
     try {
@@ -1515,40 +1808,55 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
         });
       }
 
-      // 步骤 3+4+5：grantStsTmpKey (并发) + 构造 cosItemsRef + useCosUpload + startUpload
+      // 步骤 3+4+5：upload-session 共享 STS 单端口签 N 个 key
       //
-      // 2026-09-17 STS 端口迁移：原 backend-rust createUploadIntents 一次签 N 个 key
-      // （bulk + dedup）；python `POST /api/v1/files/sts-tmp-keys` 是单端口 1-key 响应，
-      // 因此改为对每条 file 并发调 grantStsTmpKey（concurrency 3 与 hash 阶段对齐）。
-      // 各 file 独立签发，credentials / bucket / region 来自最后一条响应（python
-      // 端按 tmp_default_user_id=1 共享同一 STS 角色，结果稳定），回填到所有 item。
+      // 2026-09-18：替换原 backend-python grantStsTmpKey（每文件并发 1-key 响应）。
+      // 新方案 backend-rust `/api/v2/upload-sessions/{id}/files:allocate` 一次签
+      // N 个 tmp_key + 共享同一 STS 凭证；凭证过期由 useUploadSession 定时器在
+      // expired_time - 5min 自动 renew，refetchIntents 回调只负责重建
+      // UploadIntentsOut 形状（applyFreshIntents 内部按 client_ref 索引到 item）。
       if (entries.length > 0) {
-        const stsList: StsTmpKeysResponse[] = [];
-        await runWithConcurrency(entries, 3, async (entry, idx) => {
-          const sts = await grantStsTmpKey({
-            purpose: PartFileKindToStsPurpose[entry.kind] ?? 'tmp',
-            filename: entry.filename,
-            content_type: entry.contentType,
-            // python schema 约束 16-64 hex；前端算 SHA-256 截前 16 hex。
-            content_sha256: (entry.sha ?? '').slice(0, 16),
-          });
-          // 写入 entries[idx] 同步索引；stsList 仅缓存以备后续构造 cosItemsRef
-          entry.clientRef = crypto.randomUUID();
-          entry.tmpKey = sts.tmp_key;
-          stsList[idx] = sts;
+        // 1) 给每条 entry 生成 client_ref（UUID，便于后端 batch dedup 与本地索引）
+        entries.forEach((e) => {
+          if (!e.clientRef) e.clientRef = crypto.randomUUID();
         });
 
-        // 取最后一条 sts 响应作为批级 bucket / region / credentials（python 端同角色
-        // 共享一致），所有 item 共用；M3-C 旧实现也是同样假设（intents.credentials
-        // 覆盖所有 item）。
-        const bucket = stsList[0]?.bucket ?? '';
-        const region = stsList[0]?.region ?? '';
-        const credentials = stsList[0]?.credentials;
-        if (!credentials) {
-          throw new Error('grantStsTmpKey 未返回任何凭证（响应异常）');
+        // 2) ensure upload session 已 init（mount 时已 init 过；用户在别处
+        //    discard 过的极端情况走兜底 init）
+        if (!session.isReady.value) {
+          await session.init('parts_new');
         }
-        const tmpPrefix = stsList[0]?.upload_prefix ?? '';
 
+        // 3) 一次性 allocate：拿到 N 个 tmp_key（共享 session 顶层 credentials）
+        const allocated = await session.allocate(
+          entries.map((e) => ({
+            client_ref: e.clientRef!,
+            kind: e.kind,
+            original_filename: e.filename,
+            file_size: e.size,
+            content_type: e.contentType,
+            content_sha256: e.sha!,
+          })),
+        );
+
+        // 4) 回填 tmp_key 到 entries（按 client_ref 索引）
+        const tmpKeyByRef = new Map(allocated.map((a) => [a.client_ref, a.tmp_key]));
+        entries.forEach((e) => {
+          const k = tmpKeyByRef.get(e.clientRef!);
+          if (k) e.tmpKey = k;
+        });
+
+        // 5) 校验 session 凭证 / bucket / region 就绪
+        const credentials = session.credentials.value;
+        const bucket = session.bucket.value;
+        const region = session.region.value;
+        const tmpPrefix = session.tmpPrefix.value ?? '';
+        if (!credentials || !bucket || !region) {
+          throw new Error('upload session 凭证或桶信息缺失');
+        }
+
+        // 6) 构造 cosItemsRef：所有 item 共享 session 顶层 credentials / bucket /
+        //    region，tmp_key 各自从 allocate 响应取（per-item）
         cosItemsRef.value = entries.map((e) => ({
           client_ref: e.clientRef!,
           file: e.file,
@@ -1560,43 +1868,50 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
           status: 'pending',
           progress: 0,
         }));
+
+        // 7) useCosUpload：refetchIntents 改为 session.renew + 从最新 session 重建
+        //    UploadIntentsOut 形状。applyFreshIntents 内部按 client_ref 索引到 item。
         cosUpload.value = useCosUpload({
           items: cosItemsRef,
-          // 凭证过期重签：与首次同样的并发调 grantStsTmpKey，复用同一组 client_ref
-          // 让 useCosUpload.applyFreshIntents 按 Map 找到对应 item；credentials /
-          // bucket / region 仍是批级共享。
           refetchIntents: async (): Promise<UploadIntentsOut> => {
-            const reList: StsTmpKeysResponse[] = [];
-            await runWithConcurrency(entries, 3, async (entry, idx) => {
-              const sts = await grantStsTmpKey({
-                purpose: PartFileKindToStsPurpose[entry.kind] ?? 'tmp',
-                filename: entry.filename,
-                content_type: entry.contentType,
-                content_sha256: (entry.sha ?? '').slice(0, 16),
-              });
-              reList[idx] = sts;
-            });
-            const cred = reList[0]?.credentials;
-            if (!cred) throw new Error('grantStsTmpKey 重签未返回凭证');
+            await session.renew();
+            const fresh = session.session.value;
+            if (!fresh) throw new Error('upload session 已被 discard');
             return {
-              credentials: cred,
-              bucket: reList[0]?.bucket ?? '',
-              region: reList[0]?.region ?? '',
-              tmp_prefix: reList[0]?.upload_prefix ?? '',
-              items: entries.map((e, idx) => ({
+              credentials: fresh.credentials,
+              bucket: fresh.bucket,
+              region: fresh.region,
+              tmp_prefix: fresh.tmp_prefix,
+              items: entries.map((e) => ({
                 client_ref: e.clientRef!,
-                tmp_key: reList[idx]?.tmp_key ?? e.tmpKey ?? '',
+                tmp_key: tmpKeyByRef.get(e.clientRef!) ?? e.tmpKey ?? '',
                 dedup_hit: false,
               })),
             };
           },
         });
 
-        // 同步 status / progress / error 到 UI cells（每次 cosItemsRef 变都跑一遍）
-        const stopSync = watch(cosItemsRef, (items) => syncCellsFromCosItems(items, entries), {
-          deep: true,
-          immediate: true,
-        });
+        // 同步 status / progress / error 到 UI cells（每次 cosItemsRef 变都跑一遍）；
+        // 同时在 item status 变 'done' 时调 session.markComplete，让 session.files
+        // 同步推进 status → 'done'（供 mount 恢复 / batch commit 时 reuse）。
+        const completedClientRefs = new Set<string>();
+        const stopSync = watch(
+          cosItemsRef,
+          (items) => {
+            syncCellsFromCosItems(items, entries);
+            for (const it of items) {
+              if (it.status === 'done' && !completedClientRefs.has(it.client_ref)) {
+                completedClientRefs.add(it.client_ref);
+                // markComplete 失败不阻断 UI（status=done 已写入，仅 session.files
+                // 同步延后；下次 batch commit 时仍按 tmp_key 走）
+                void session.markComplete(it.client_ref, it.etag).catch(() => {
+                  /* swallow */
+                });
+              }
+            }
+          },
+          { deep: true, immediate: true },
+        );
 
         try {
           // 紧邻上面 cosUpload.value = useCosUpload(...) 已确保非 null；await 跨越
@@ -1736,12 +2051,30 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
         );
         return;
       }
+
+      // 2026-09-18 接入 upload_session：通知后端延长本次提交所用 tmp 对象的保留
+      // 窗口（后端事务内 head + copy tmp → 正式 CAS key 需要这段额外时间）。
+      // submittedClientRefs 来自 lastUploadEntries（本次提交真实上传的文件），
+      // 不包含 row.fileLink 引用但本批未上传的复用项（那些已经在之前的提交里
+      // consume 过或由 markComplete 触发过 commit，无需再 notify）。
+      const submittedClientRefs = lastUploadEntries
+        .map((e) => e.clientRef)
+        .filter((r): r is string => !!r);
+      if (submittedClientRefs.length > 0) {
+        await session.consumeFiles(submittedClientRefs).catch(() => {
+          /* best-effort；失败不影响提交结果 */
+        });
+      }
+
       const standaloneCount = standaloneParts.value.length;
       const assemblyMasters = assemblies.value.length;
       const childCount = assemblies.value.reduce((s, a) => s + a.children.length, 0);
       ElMessage.success(
         `成功创建 ${res.created.length} 条零件（${standaloneCount} 独立 + ${assemblyMasters} 装配件顶层 + ${childCount} 子件）`,
       );
+      // 2026-09-18：提交成功后清空 draft（保留 session 单例，下一批次继续复用）
+      draft.saver.cancel();
+      draft.clear();
       // 清空 + 跳回
       allPdfs.value = [];
       standaloneParts.value = [];
@@ -1770,8 +2103,14 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
 
   // 2026-08-27：vue-draggable-plus 的 useDraggable composable 在 unmount 时
   // 自动 destroy，无需手动调用。
+  //
+  // 2026-09-18：unmount 时刷新 draft 快照 + 撤销 pending saver（避免 debounce
+  // 在组件已销毁后写入 stale state）。session 不在 unmount 销毁 —— 两 Tab
+  // 共享同一单例，Manual Tab 仍在活跃时 session 续期定时器必须存活。
   onBeforeUnmount(() => {
     closePdfPreview();
+    draft.saver.flush();
+    draft.saver.cancel();
   });
 
   return {
