@@ -40,8 +40,10 @@ export interface CustomerUpdatePayload {
 }
 
 /**
- * 分页客户列表结果（v2 backend-rust 的 `/api/v2/customers` 返回结构）。
+ * 分页客户列表结果（v2 backend-rust 的 `/api/v2/com/customers` 返回结构）。
  * 2026-09-15 新增：Phase 5 切到 v2 后后端返回分页结构，前端用 `.items` 取数组。
+ * 2026-09-19 com 模块归位：customer/applicant 域聚合到 com（Customer Order Management）下，
+ *   URL 从 `/api/v2/customers` 迁到 `/api/v2/com/customers`。
  */
 export interface CustomerListResult {
   items: Customer[];
@@ -51,17 +53,17 @@ export interface CustomerListResult {
 }
 
 export async function listCustomers(): Promise<CustomerListResult> {
-  const resp = await api.get<CustomerListResult>('/customers');
+  const resp = await api.get<CustomerListResult>('/com/customers');
   return resp.data;
 }
 
 export async function getCustomer(id: string): Promise<Customer> {
-  const resp = await api.get<Customer>(`/customers/${id}`);
+  const resp = await api.get<Customer>(`/com/customers/${id}`);
   return resp.data;
 }
 
 export async function createCustomer(payload: CustomerCreatePayload): Promise<Customer> {
-  const resp = await api.post<Customer>('/customers', payload);
+  const resp = await api.post<Customer>('/com/customers', payload);
   return resp.data;
 }
 
@@ -69,10 +71,10 @@ export async function updateCustomer(
   id: string,
   payload: CustomerUpdatePayload,
 ): Promise<Customer> {
-  const resp = await api.post<Customer>(`/customers/${id}/update`, payload);
+  const resp = await api.post<Customer>(`/com/customers/${id}/update`, payload);
   return resp.data;
 }
 
 export async function softDeleteCustomer(id: string): Promise<void> {
-  await api.post(`/customers/${id}/soft-delete`);
+  await api.post(`/com/customers/${id}/soft-delete`);
 }

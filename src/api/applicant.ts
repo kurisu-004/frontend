@@ -17,7 +17,7 @@ export async function listApplicants(
     offset?: number;
   } = {},
 ): Promise<ApplicantListResult> {
-  const resp = await api.get<ApplicantListResult>('/applicants', {
+  const resp = await api.get<ApplicantListResult>('/com/applicants', {
     params: cleanParams(params),
   });
   return resp.data;
@@ -32,9 +32,10 @@ export async function listApplicants(
  * 路由表只挂 `/` / `/{id}` / `/{id}/update` / `/{id}/soft-delete`，
  * 无 `/search`；请求被 `/{id}` 捕获后 `Path<i64>` 解析 "search" 失败 → 400。
  *
- * 现改调 list 端点 `/applicants`，内部委托给 `listApplicants`，从
- * `ApplicantListResult.items` 抽出数组返回。`ApplicantSearchParams.name_like?`
- * 字段对齐后端契约（原误写为 `name_prefix`，调用方未传，影响为零）。
+ * 现改调 list 端点 `/com/applicants`（2026-09-19 com 模块归位后路径），
+ * 内部委托给 `listApplicants`，从 `ApplicantListResult.items` 抽出数组返回。
+ * `ApplicantSearchParams.name_like?` 字段对齐后端契约（原误写为 `name_prefix`，
+ * 调用方未传，影响为零）。
  */
 export async function searchApplicants(params: ApplicantSearchParams): Promise<Applicant[]> {
   const result = await listApplicants(params);
@@ -60,17 +61,19 @@ export interface BulkApplicantResult {
 export async function bulkGetOrCreateApplicants(
   items: BulkApplicantItemPayload[],
 ): Promise<BulkApplicantResult[]> {
-  const resp = await api.post<BulkApplicantResult[]>('/applicants/bulk-get-or-create', { items });
+  const resp = await api.post<BulkApplicantResult[]>('/com/applicants/bulk-get-or-create', {
+    items,
+  });
   return resp.data;
 }
 
 export async function getApplicant(id: string): Promise<Applicant> {
-  const resp = await api.get<Applicant>(`/applicants/${id}`);
+  const resp = await api.get<Applicant>(`/com/applicants/${id}`);
   return resp.data;
 }
 
 export async function createApplicant(payload: ApplicantCreatePayload): Promise<Applicant> {
-  const resp = await api.post<Applicant>('/applicants', payload);
+  const resp = await api.post<Applicant>('/com/applicants', payload);
   return resp.data;
 }
 
@@ -78,10 +81,10 @@ export async function updateApplicant(
   id: string,
   payload: ApplicantUpdatePayload,
 ): Promise<Applicant> {
-  const resp = await api.post<Applicant>(`/applicants/${id}/update`, payload);
+  const resp = await api.post<Applicant>(`/com/applicants/${id}/update`, payload);
   return resp.data;
 }
 
 export async function softDeleteApplicant(id: string): Promise<void> {
-  await api.post(`/applicants/${id}/soft-delete`);
+  await api.post(`/com/applicants/${id}/soft-delete`);
 }
