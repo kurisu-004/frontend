@@ -97,6 +97,9 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ShelfPickerCard: typeof import('./components/ShelfPickerCard.vue')['default']
+    StepViewer: typeof import('./components/three/StepViewer.vue')['default']
+    StepViewerProgress: typeof import('./components/three/StepViewerProgress.vue')['default']
+    StepViewerToolbar: typeof import('./components/three/StepViewerToolbar.vue')['default']
     UploadStatusCellView: typeof import('./components/UploadStatusCellView.vue')['default']
   }
   export interface ComponentCustomProperties {
