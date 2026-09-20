@@ -143,7 +143,7 @@
       </div>
     </div>
 
-    <!-- 预览弹窗（全屏）：PDF 用 PdfViewer；图片用 el-image；其它走下载提示 -->
+    <!-- 预览弹窗（全屏）：PDF 用 PdfViewer；图片用 el-image；3D 模型走 StepViewer；其它走下载提示 -->
     <el-dialog
       v-model="previewVisible"
       :title="previewTitle"
@@ -179,6 +179,20 @@
           </el-button>
         </div>
       </div>
+      <!-- 2026-09-20 PR step-viewer-integration：3D 模型内嵌预览。
+           occt-wasm 当前支持 STEP/STP/IGES/IGS/STL/BREP，OBJ/3MF 不支持
+           → 仍走下面 non-pdf-preview 下载兜底 -->
+      <StepViewer
+        v-else-if="
+          previewFile && isOcctSupported(previewFile.file_type) && previewBlobUrl && stepFormat
+        "
+        :src="previewBlobUrl"
+        :format="stepFormat"
+        src-type="blob-url"
+        :height="stepViewerHeight"
+        error-prefix="3D 模型加载失败"
+        @error="onStepError"
+      />
       <div v-else class="non-pdf-preview">
         <el-icon :size="48" :color="iconColor(previewFile?.file_type || '')">
           <component :is="iconOf(previewFile?.file_type || '')" />
@@ -226,6 +240,9 @@ import {
 } from '@element-plus/icons-vue';
 import type { UploadFile } from 'element-plus';
 import PdfViewer from './PdfViewer.vue';
+// 2026-09-20 PR step-viewer-integration：3D 模型内嵌预览组件 + 文件类型判定
+import StepViewer from './three/StepViewer.vue';
+import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
 import { deletePartFile, fetchPartFileContent, getPartFileDownloadUrl } from '@/api/parts/file';
 import { printPartDrawing } from '@/api/parts';
 import type { PartFileItem, PartFileKind } from '@/types/part_file';
@@ -357,6 +374,22 @@ const previewBlobUrl = ref<string>('');
 const files = computed<PartFileItem[]>(() => props.files);
 
 const previewTitle = computed<string>(() => `预览 — ${previewFile.value?.original_filename ?? ''}`);
+
+// 2026-09-20 PR step-viewer-integration：StepViewer fullscreen 高度。
+// el-dialog fullscreen 时 body padding ~16px + header ~56px → 大致留 calc(100vh - 80px)
+// 让 3D canvas 撑满。StepViewer 内部 .step-viewer-host 用 v-bind(hostHeight) 直接生效。
+const stepViewerHeight = computed<string>(() => 'calc(100vh - 80px)');
+
+// 2026-09-20：把 previewFile.file_type 映射成 occt-wasm 期望的 format（用于 StepViewer
+// props.format —— blob URL 场景下无法自动探测）。
+const stepFormat = computed<'step' | 'stl' | 'brep' | undefined>(() => {
+  if (!previewFile.value) return undefined;
+  return fileTypeToOcctFormat(previewFile.value.file_type) ?? undefined;
+});
+
+function onStepError(msg: string): void {
+  ElMessage.error(msg);
+}
 
 // 2026-09-16：file_type 为 undefined/null/'' 时所有 toUpperCase 工具函数直接炸，
 // 入口加空守卫避免在 reactivity 重渲染期炸 TypeError

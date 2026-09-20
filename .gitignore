@@ -9,3 +9,8 @@ dist
 
 .playwright-cli
 .worktrees/
+
+# 2026-09-20 PR step-viewer-integration：occt-wasm 的 wasm + js 由 postinstall hook
+# 生成到 public/，vite 直接从根路径 fetch。文件大（22M），不入 git。
+/public/occt-wasm.wasm
+/public/occt-wasm.js
