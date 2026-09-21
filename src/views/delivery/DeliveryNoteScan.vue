@@ -20,6 +20,7 @@
 //   - applySuccess 同步刷新 draftDetails（扫码命中后立即把最新 line_items 拉回）。
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { ComponentInstance } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElTable } from 'element-plus';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
@@ -35,7 +36,11 @@ import { useAuthSession } from '@/composables/useAuthSession';
 import { canPrint } from '@/utils/deliveryNotePermissions';
 import type { DeliveryGroupListOut, DeliveryGroupOut } from '@/types/deliveryGroup';
 import type { ScanNoteSummary } from '@/types/deliveryNote';
-import { useDeliveryDraftBoard, type MergedDraftRow } from './composables/useDeliveryDraftBoard';
+import {
+  useDeliveryDraftBoard,
+  type DraftTableInstance,
+  type MergedDraftRow,
+} from './composables/useDeliveryDraftBoard';
 import { useDeliveryScanSubmission } from './composables/useDeliveryScanSubmission';
 import DeliveryScanBar from './components/DeliveryScanBar.vue';
 import DeliveryGroupPanel from './components/DeliveryGroupPanel.vue';
@@ -217,8 +222,8 @@ function onCardPrintNote(d: ScanNoteSummary): void {
 function onCardSubmitDraft(d: ScanNoteSummary): void {
   void submission.onSubmitDraft(d);
 }
-function onCardTableRef(d: ScanNoteSummary, el: InstanceType<typeof ElTable> | null): void {
-  board.setTableRef(d.id, el);
+function onCardTableRef(d: ScanNoteSummary, el: ComponentInstance<typeof ElTable> | null): void {
+  board.setTableRef(d.id, el as DraftTableInstance | null);
 }
 
 // ============ 生命周期 ============
@@ -318,7 +323,7 @@ onBeforeUnmount(() => {
           @deleteDraft="onCardDeleteDraft(d)"
           @printNote="onCardPrintNote(d)"
           @submitDraft="onCardSubmitDraft(d)"
-          @setTableRef="(el: InstanceType<typeof ElTable> | null) => onCardTableRef(d, el)"
+          @setTableRef="(el: ComponentInstance<typeof ElTable> | null) => onCardTableRef(d, el)"
         />
       </div>
     </div>
