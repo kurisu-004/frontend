@@ -36,7 +36,37 @@ export interface UsePartDispatchDeps {
   getTable: () => TableRef | null | undefined;
 }
 
-export function usePartDispatch(deps: UsePartDispatchDeps) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartDispatchReturn {
+  shelves: Ref<Shelf[]>;
+  processes: Ref<Process[]>;
+  dispatchVisible: Ref<boolean>;
+  dispatchMode: Ref<'direct' | 'cnc'>;
+  dispatchShelfId: Ref<string | null>;
+  dispatchNextProcessId: Ref<string | null>;
+  dispatchPartId: Ref<string | null>;
+  dispatchSubmitting: Ref<boolean>;
+  filteredShelves: ReturnType<typeof useShelfProcessFilter>['filteredShelves'];
+  filteredProcesses: ReturnType<typeof useShelfProcessFilter>['filteredProcesses'];
+  onDispatch: (row: PartListItem) => Promise<void>;
+  onDispatchClosed: () => void;
+  onDispatchConfirm: () => Promise<void>;
+  batchDispatchVisible: Ref<boolean>;
+  batchDispatchAction: Ref<'shelf' | 'programming'>;
+  batchDispatchShelfId: Ref<string | null>;
+  batchDispatchNextProcessId: Ref<string | null>;
+  batchDispatchSubmitting: Ref<boolean>;
+  batchFilteredShelves: ReturnType<typeof useShelfProcessFilter>['filteredShelves'];
+  batchFilteredProcesses: ReturnType<typeof useShelfProcessFilter>['filteredProcesses'];
+  onOpenBatchDispatch: () => Promise<void>;
+  onBatchDispatchConfirm: () => Promise<void>;
+  canRecallToPending: (row: PartListItem) => boolean;
+  canRecallToProgramming: (row: PartListItem) => boolean;
+  onRecallToPending: (row: PartListItem) => Promise<void>;
+  onRecallToProgramming: (row: PartListItem) => Promise<void>;
+}
+
+export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchReturn {
   // 2026-09-17 PR-3 修复：useRouter() 必须在 setup 顶部一次性拿闭包复用，禁止在 async 事件回调里调
   // —— vue-router 4.6.4 + vue 3.5.38 下 inject() 在 lifecycle hook 之外返回 undefined。
   const router = useRouter();
