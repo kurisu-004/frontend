@@ -58,7 +58,20 @@ const ACTION_TO_SLUG: Record<WorkAction, WorkActionSlug> = {
 const worker = ref<Worker | null>(null);
 const action = ref<WorkAction | null>(null);
 
-export function useScanSession() {
+/** 2026-09-21 显式返回类型。 */
+export interface UseScanSessionReturn {
+  worker: Ref<Worker | null>;
+  action: Ref<WorkAction | null>;
+  setWorker: (w: Worker | null) => void;
+  setAction: (a: WorkAction | null) => void;
+  reset: () => void;
+  requireWorker: (router: Router) => boolean;
+  requireWorkerAndAction: (router: Router) => boolean;
+  slugToAction: (slug: unknown) => WorkAction | null;
+  actionToSlug: (a: WorkAction) => WorkActionSlug;
+}
+
+export function useScanSession(): UseScanSessionReturn {
   function setWorker(w: Worker | null): void {
     worker.value = w;
   }

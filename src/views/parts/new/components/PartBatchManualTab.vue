@@ -414,7 +414,14 @@
 
 <script setup lang="ts">
 import { h, onMounted, reactive, ref, toRaw, watch } from 'vue';
-import { ElButton, ElTag, type FormInstance, type FormRules } from 'element-plus';
+import {
+  ElButton,
+  ElTag,
+  ElTable,
+  type FormInstance,
+  type FormRules,
+  type TableInstance,
+} from 'element-plus';
 import { DocumentAdd, Plus, Upload } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
 import CosUploader from '@/components/CosUploader.vue';
@@ -619,7 +626,8 @@ const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_manual' });
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
 // 自愈。组件挂载时 staged=0 → tableRef.value=null → composable 不绑；staged 变化触发
 // ref 更新 → composable 内部 watch 重新归一化 + 挂 observer → 表头首次渲染时自愈。
-const tableRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP TableInstance；null 初值
+const tableRef = ref<TableInstance | null>(null);
 onMounted(() => {
   drag.applyDrag(tableRef);
 });

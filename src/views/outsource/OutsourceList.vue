@@ -202,7 +202,7 @@
 <script setup lang="ts">
 import { h, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage, ElTag } from 'element-plus';
+import { ElMessage, ElTag, ElTable, type TableInstance } from 'element-plus';
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
@@ -292,7 +292,8 @@ const columnDefs: ColumnDef[] = [
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_company_list' });
 const drag = useColumnDrag(columnDefs, { listKey: 'outsource_company_list' });
 // 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
-const tableRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP TableInstance；null 初值
+const tableRef = ref<TableInstance | null>(null);
 
 const outsourceProcesses = ref<Process[]>([]);
 

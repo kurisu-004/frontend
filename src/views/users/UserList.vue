@@ -173,7 +173,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, h } from 'vue';
-import { ElMessage, ElMessageBox, ElTag } from 'element-plus';
+import { ElMessage, ElMessageBox, ElTag, ElForm, type FormInstance } from 'element-plus';
 import {
   listUsers,
   createUser,
@@ -273,7 +273,8 @@ const drag = useColumnDrag(columnDefs, { listKey: 'user_list' });
 const showCreate = ref(false);
 const saving = ref(false);
 const editingUser = ref<UserOut | null>(null);
-const userFormRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP FormInstance；null 初值避免 dialog 关闭态访问 .validate
+const userFormRef = ref<FormInstance | null>(null);
 const userForm = reactive({ username: '', password: '', full_name: '' });
 const userRules = {
   username: [{ required: true, message: '必填' }],

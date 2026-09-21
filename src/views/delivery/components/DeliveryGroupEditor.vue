@@ -14,7 +14,7 @@
 // 父组件负责调 createDeliveryGroup / updateDeliveryGroup 并处理 ApiError。
 
 import { computed, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElForm, type FormInstance } from 'element-plus';
 import type { FormRules } from 'element-plus';
 import type { Customer } from '@/api/customer';
 import type { DeliveryGroupOut } from '@/types/deliveryGroup';
@@ -30,7 +30,8 @@ const emit = defineEmits<{
   (e: 'cancel'): void;
 }>();
 
-const formRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP FormInstance；null 初值（onConfirm 已有 !formRef.value 守卫）
+const formRef = ref<FormInstance | null>(null);
 const form = ref({
   name: '',
   member_customer_ids: [] as string[],

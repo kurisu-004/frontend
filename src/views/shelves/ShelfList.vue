@@ -140,7 +140,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, h } from 'vue';
-import { ElMessage, ElTag } from 'element-plus';
+import { ElMessage, ElTag, ElForm, type FormInstance } from 'element-plus';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import {
@@ -226,7 +226,8 @@ const saving = ref(false);
 const allProcesses = ref<Process[]>([]);
 const selectedProcessIds = ref<string[]>([]);
 const editingShelf = ref<Shelf | null>(null);
-const shelfFormRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP FormInstance；null 初值避免 dialog 关闭态访问 .validate
+const shelfFormRef = ref<FormInstance | null>(null);
 const shelfForm = reactive({
   code: '',
   name: '',

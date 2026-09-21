@@ -39,7 +39,7 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue';
-import { ElForm } from 'element-plus';
+import { ElForm, type FormInstance } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { User, Lock, Box } from '@element-plus/icons-vue';
 import { useAuthSession } from '@/composables/useAuthSession';
@@ -51,8 +51,8 @@ const LockIcon = Lock;
 const router = useRouter();
 const { login } = useAuthSession();
 
-// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 ElForm 实例（auto-import 不补类型），null 初值避免 v-if 提前访问 .validate
-const formRef = ref<InstanceType<typeof ElForm> | null>(null);
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP FormInstance；null 初值避免 v-if 提前访问 .validate
+const formRef = ref<FormInstance | null>(null);
 const loading = ref(false);
 const error = ref('');
 const form = reactive({ username: '', password: '' });

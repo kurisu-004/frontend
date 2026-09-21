@@ -228,7 +228,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox, ElUpload, type UploadInstance } from 'element-plus';
 import {
   Delete,
   DocumentRemove,
@@ -435,7 +435,8 @@ function formatSize(v: string | number): string {
 // 2026-09-17 UI 调整：父级（PartFilesTabsCard）footer 「上传 / 打印」按钮通过
 // ref 调本方法触发文件选择；走 el-upload 内部 input[type=file].click() 复用
 // 现有 onPick 路径，避免在两个地方维护上传签名。
-const uploadRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP UploadInstance；null 初值（uploadRef?.$el 访问走 ? 链）
+const uploadRef = ref<UploadInstance | null>(null);
 function triggerUpload(): void {
   const root = uploadRef.value?.$el;
   if (!root) {

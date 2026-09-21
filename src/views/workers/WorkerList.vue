@@ -141,7 +141,7 @@
 
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref } from 'vue';
-import { ElMessage, ElMessageBox, ElTag } from 'element-plus';
+import { ElMessage, ElMessageBox, ElTag, ElTable, type TableInstance } from 'element-plus';
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
@@ -233,7 +233,8 @@ const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'worker_list
 const drag = useColumnDrag(columnDefs, { listKey: 'worker_list' });
 
 // 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
-const tableRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP TableInstance；null 初值
+const tableRef = ref<TableInstance | null>(null);
 const dialogVisible = ref(false);
 const editing = ref<Worker | null>(null);
 const form = reactive<{ badge_code: string; name: string; work_type_id: string | null }>({
