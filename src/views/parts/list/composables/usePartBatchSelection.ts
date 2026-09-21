@@ -8,7 +8,7 @@
 // - restoreTableSelection 在 fetchList 后由 view 在 nextTick 恢复勾选 UI。
 // - table ref 通过 deps.getTable() 解耦（PartsList → partsListRef.elTableRef）。
 
-import { computed, nextTick, reactive, ref, type Ref } from 'vue';
+import { computed, nextTick, reactive, ref, type ComputedRef, type Ref } from 'vue';
 import type { PartListItem } from '@/types/parts';
 
 export type BatchAction = 'print' | 'dispatch';
@@ -25,7 +25,31 @@ export interface UsePartBatchSelectionDeps {
   getTable: () => TableRef | null | undefined;
 }
 
-export function usePartBatchSelection(deps: UsePartBatchSelectionDeps) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartBatchSelectionReturn {
+  batchMode: Ref<boolean>;
+  batchAction: Ref<BatchAction>;
+  selectedRows: Ref<PartListItem[]>;
+  selectedIds: Set<string>;
+  selectedRowTypes: Map<string, SelectedRowType>;
+  batchSelectedPartCount: ComputedRef<number>;
+  batchSelectedAssemblyCount: ComputedRef<number>;
+  isBatchSelectable: (row: PartListItem) => boolean;
+  clearAllSelection: () => void;
+  onEnterBatchMode: () => void;
+  onEnterBatchDispatchMode: () => void;
+  onExitBatchMode: () => void;
+  onSelectionChange: (rows: PartListItem[]) => void;
+  onSelectAllPage: () => void;
+  onClearSelection: () => void;
+  rebuildSelectedRows: (currentPageRows: PartListItem[]) => void;
+  onBatchRowClick: (row: PartListItem, _column: unknown, _event: MouseEvent) => void;
+  restoreTableSelection: () => void;
+}
+
+export function usePartBatchSelection(
+  deps: UsePartBatchSelectionDeps,
+): UsePartBatchSelectionReturn {
   const batchMode = ref(false);
   const batchAction = ref<BatchAction>('print');
   const selectedRows = ref<PartListItem[]>([]);

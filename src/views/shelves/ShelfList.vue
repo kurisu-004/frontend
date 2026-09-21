@@ -54,7 +54,7 @@
       </template>
       <el-table-column label="操作" min-width="160" fixed="right" align="center">
         <template #default="{ row }">
-          <el-button link size="small" @click="editShelf(row)">编辑</el-button>
+          <el-button link size="small" @click="editShelf(row as Shelf)">编辑</el-button>
           <el-popconfirm
             v-if="row.is_active"
             title="确认停用？"
@@ -140,7 +140,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, h } from 'vue';
-import { ElMessage, ElTag } from 'element-plus';
+import { ElMessage, ElTag, ElForm, type FormInstance } from 'element-plus';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import {
@@ -226,7 +226,8 @@ const saving = ref(false);
 const allProcesses = ref<Process[]>([]);
 const selectedProcessIds = ref<string[]>([]);
 const editingShelf = ref<Shelf | null>(null);
-const shelfFormRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP FormInstance；null 初值避免 dialog 关闭态访问 .validate
+const shelfFormRef = ref<FormInstance | null>(null);
 const shelfForm = reactive({
   code: '',
   name: '',
@@ -258,17 +259,17 @@ function resetForm() {
   selectedProcessIds.value = [];
   editingShelf.value = null;
 }
-async function editShelf(s: any) {
-  const sh = s as Shelf;
-  editingShelf.value = sh;
-  shelfForm.code = sh.code;
-  shelfForm.name = sh.name;
-  shelfForm.zone = sh.zone;
-  shelfForm.location = sh.location ?? '';
-  shelfForm.display_order = sh.display_order ?? 0;
+async function editShelf(s: Shelf) {
+  // 2026-09-21 收紧：原 `s: any` + `as Shelf` 双层断言合并为单一参数类型
+  editingShelf.value = s;
+  shelfForm.code = s.code;
+  shelfForm.name = s.name;
+  shelfForm.zone = s.zone;
+  shelfForm.location = s.location ?? '';
+  shelfForm.display_order = s.display_order ?? 0;
   showCreate.value = true;
   try {
-    const sp = await getShelfProcesses(String(sh.id));
+    const sp = await getShelfProcesses(String(s.id));
     selectedProcessIds.value = sp.processes.map((p) => p.process_id);
   } catch {
     selectedProcessIds.value = [];
@@ -302,8 +303,10 @@ async function saveShelf() {
     showCreate.value = false;
     await fetchData();
     ElMessage.success('已保存');
-  } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败');
+  } catch (e: unknown) {
+    // 2026-09-21 收紧：catch 由 any 改为 unknown，按 TS 严格模式要求做 Error 判别
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage.error(msg || '保存失败');
   } finally {
     saving.value = false;
   }

@@ -39,6 +39,7 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue';
+import { ElForm, type FormInstance } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { User, Lock, Box } from '@element-plus/icons-vue';
 import { useAuthSession } from '@/composables/useAuthSession';
@@ -50,7 +51,8 @@ const LockIcon = Lock;
 const router = useRouter();
 const { login } = useAuthSession();
 
-const formRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP FormInstance；null 初值避免 v-if 提前访问 .validate
+const formRef = ref<FormInstance | null>(null);
 const loading = ref(false);
 const error = ref('');
 const form = reactive({ username: '', password: '' });
@@ -81,8 +83,8 @@ async function doLogin() {
     } else {
       error.value = '账号无任何可用角色';
     }
-  } catch (e: any) {
-    error.value = e?.message || '登录失败';
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : '登录失败';
   } finally {
     loading.value = false;
   }

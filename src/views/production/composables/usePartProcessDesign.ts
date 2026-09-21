@@ -37,7 +37,7 @@
 //   若本地发现缺 step（如 race：用户编辑期间另一 tab GET 后 PUT 覆盖了本地 cache），
 //   先 GET 一次拿完整 list 再 merge 用户变更（mergeToFullSteps 函数）。
 
-import { computed, ref, type Ref } from 'vue';
+import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { ApiError } from '@/api/http';
 import type { PartListItem } from '@/types/parts';
@@ -156,7 +156,30 @@ async function loadFlow(partId: string): Promise<PartProcessFlow> {
 }
 
 /** 暴露给组件的 composable */
-export function usePartProcessDesign() {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartProcessDesignReturn {
+  parts: Ref<PartListItem[]>;
+  processes: Ref<Process[]>;
+  flows: Ref<Record<string, PartProcessFlow>>;
+  loadingParts: Ref<boolean>;
+  loadingProc: Ref<boolean>;
+  saving: Ref<Record<string, boolean>>;
+  error: Ref<string | null>;
+  allSummaries: ComputedRef<Record<string, PartProcessSummary>>;
+  loadParts: () => Promise<void>;
+  loadProcesses: () => Promise<void>;
+  loadFlowForPart: (partId: string) => Promise<PartProcessFlow | null>;
+  getFlowByPartId: (partId: string) => PartProcessFlow | null;
+  upsertSteps: (partId: string, steps: ProcessStep[]) => PartProcessFlow;
+  deleteStep: (partId: string, uid: string) => PartProcessFlow | null;
+  reorderSteps: (partId: string, newSteps: ProcessStep[]) => PartProcessFlow;
+  save: (partId: string, steps: ProcessStep[]) => Promise<void>;
+  clearFlow: (partId: string) => void;
+  newStep: () => ProcessStep;
+  summaries: (partId: string) => PartProcessSummary;
+}
+
+export function usePartProcessDesign(): UsePartProcessDesignReturn {
   async function loadParts(): Promise<void> {
     loadingParts.value = true;
     error.value = null;

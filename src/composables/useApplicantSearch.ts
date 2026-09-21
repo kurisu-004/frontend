@@ -35,7 +35,16 @@ export interface UseApplicantSearchOptions {
   resolveRootCustomerId: (pickedId: string | null) => string | null;
 }
 
-export function useApplicantSearch(opts: UseApplicantSearchOptions) {
+/** 2026-09-21 显式返回类型。 */
+export interface UseApplicantSearchReturn {
+  applicants: Ref<Applicant[]>;
+  loading: Ref<boolean>;
+  rootCustomerId: Ref<string | null>;
+  loadForCustomer: (pickedId: string | null) => Promise<void>;
+  querySearch: (queryString: string, callback: (items: Applicant[]) => void) => void;
+}
+
+export function useApplicantSearch(opts: UseApplicantSearchOptions): UseApplicantSearchReturn {
   const applicants: Ref<Applicant[]> = ref<Applicant[]>([]);
   const loading = ref(false);
   /** 当前缓存对应的一级客户 id；切客户时若相同则不重拉。 */

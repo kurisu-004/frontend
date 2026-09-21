@@ -54,7 +54,16 @@ function persist(): void {
   }
 }
 
-export function usePrintedLabels() {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePrintedLabelsReturn {
+  isPrintedBatch: (batchId: string) => boolean;
+  isPrintedForNote: (noteId: string, batchId: string) => boolean;
+  markPrinted: (noteId: string, batchIds: string[]) => void;
+  unmark: (noteId: string, batchIds: string[]) => void;
+  store: Ref<Store>;
+}
+
+export function usePrintedLabels(): UsePrintedLabelsReturn {
   /** 跨 note 查单个 batch 是否已打印（O(n) where n = 草稿数；草稿量 < 200 可接受）。 */
   function isPrintedBatch(batchId: string): boolean {
     const map = _store.value;

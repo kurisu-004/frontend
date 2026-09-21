@@ -56,7 +56,15 @@ const _l1CustomerId: Ref<string> = ref('');
 /** 是否已从 localStorage 初始化（避免 setup 期 ref('') 触发 watch 误清空）。 */
 const _loaded: Ref<boolean> = ref(false);
 
-export function useDeliveryScanState() {
+/** 2026-09-21 显式返回类型。 */
+export interface UseDeliveryScanStateReturn {
+  l1CustomerId: Ref<string>;
+  setL1CustomerId: (id: string) => void;
+  clear: () => void;
+  init: () => void;
+}
+
+export function useDeliveryScanState(): UseDeliveryScanStateReturn {
   /** 从 localStorage 读初始值；调用方在 onMounted 顶部调一次。 */
   function init(): void {
     if (_loaded.value) return;

@@ -254,8 +254,8 @@ async function submitChangePwd(): Promise<void> {
     ElMessage.success('密码已修改，请重新登录');
     await logout();
     router.replace('/login');
-  } catch (e: any) {
-    ElMessage.error(e?.message || '修改密码失败');
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '修改密码失败');
   } finally {
     pwdSaving.value = false;
   }

@@ -50,28 +50,28 @@ src/
 
 业务模块以域为单位组织在 `src/views/<domain>/` 下。路由路径与路由 `meta.menuCode` 见 `src/router/index.ts`。
 
-| 路径                       | 一句话职责                                           | 主要 menuCode                                                                        |
-| -------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `views/Dashboard.vue`      | 首页大屏（WebSocket 实时推送）                       | `home`                                                                               |
-| `views/WorkerList.vue`     | 工人花名册（**注意在 views 根目录**）                | `workers_list`                                                                       |
-| `views/auth/Login.vue`     | 登录（独立全屏路由树）                               | —                                                                                    |
-| `views/parts/`             | 零件 / 装配（核心域，含 11+ 详情子组件）             | `parts_list` / `parts_new`                                                           |
-| `views/inspection/`        | 待品检一览 + ScanBatchPickerDialog 组件              | `inspection_pending`                                                                 |
-| `views/repair/`            | 返修接收                                             | `repair_receive`                                                                     |
-| `views/cnc/`               | 待编程一览（CNC 编程员专属）                         | `pending_programming`                                                                |
-| `views/assemblies/`        | 装配件详情（老路由 `/assemblies` 已并入 `/parts`）   | —                                                                                    |
-| `views/outsource/`         | 外协厂 / 报价 / 发送接收 / 对账                      | `outsource_companies_list` / `outsource_quotes_list` / `outsource_send_receive_list` |
-| `views/delivery/`          | 送货单列表 / 详情 / v2 扫码建单                      | `delivery_notes_manage`                                                              |
-| `views/delivery-dispatch/` | 司机送货台（独立全屏路由树）                         | `delivery_dispatch`                                                                  |
-| `views/scan/`              | 工位扫码台（独立全屏路由树）                         | `scan_badge`（守卫用 `allowRoles` 兜底）                                             |
-| `views/shelves/`           | 货架管理                                             | `shelves_list`                                                                       |
-| `views/users/`             | 账号管理（含角色分配）                               | `users_list`                                                                         |
-| `views/customers/`         | 客户树                                               | `customers_list`                                                                     |
-| `views/applicants/`        | 申请人主数据                                         | `applicants_list`                                                                    |
-| `views/workers/`           | 生产队列看板（`WorkerQueueBoard.vue`）               | `worker_queue`                                                                       |
-| `views/production/`        | 工序制定页 + 工序工种 tabbed shell                   | `process_design_list` / `process_work_type`                                          |
-| `views/print-templates/`   | 通用表格编辑器（基于 x-data-spreadsheet，in-memory） | —（`allowRoles: ['MANAGER']` 短路）                                                  |
-| `views/statistics/`        | 生产统计（4 Tab）                                    | `production_stats`                                                                   |
+| 路径                                | 一句话职责                                           | 主要 menuCode                                                                        |
+| ----------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `views/dashboard/DashboardView.vue` | 首页大屏（WebSocket 实时推送）                       | `home`                                                                               |
+| `views/workers/WorkerList.vue`      | 工人花名册（**注意在 views 根目录**）                | `workers_list`                                                                       |
+| `views/auth/LoginView.vue`          | 登录（独立全屏路由树）                               | —                                                                                    |
+| `views/parts/`                      | 零件 / 装配（核心域，含 11+ 详情子组件）             | `parts_list` / `parts_new`                                                           |
+| `views/inspection/`                 | 待品检一览 + ScanBatchPickerDialog 组件              | `inspection_pending`                                                                 |
+| `views/repair/`                     | 返修接收                                             | `repair_receive`                                                                     |
+| `views/cnc/`                        | 待编程一览（CNC 编程员专属）                         | `pending_programming`                                                                |
+| `views/assemblies/`                 | 装配件详情（老路由 `/assemblies` 已并入 `/parts`）   | —                                                                                    |
+| `views/outsource/`                  | 外协厂 / 报价 / 发送接收 / 对账                      | `outsource_companies_list` / `outsource_quotes_list` / `outsource_send_receive_list` |
+| `views/delivery/`                   | 送货单列表 / 详情 / v2 扫码建单                      | `delivery_notes_manage`                                                              |
+| `views/delivery-dispatch/`          | 司机送货台（独立全屏路由树）                         | `delivery_dispatch`                                                                  |
+| `views/scan/`                       | 工位扫码台（独立全屏路由树）                         | `scan_badge`（守卫用 `allowRoles` 兜底）                                             |
+| `views/shelves/`                    | 货架管理                                             | `shelves_list`                                                                       |
+| `views/users/`                      | 账号管理（含角色分配）                               | `users_list`                                                                         |
+| `views/customers/`                  | 客户树                                               | `customers_list`                                                                     |
+| `views/applicants/`                 | 申请人主数据                                         | `applicants_list`                                                                    |
+| `views/workers/`                    | 生产队列看板（`WorkerQueueBoard.vue`）               | `worker_queue`                                                                       |
+| `views/production/`                 | 工序制定页 + 工序工种 tabbed shell                   | `process_design_list` / `process_work_type`                                          |
+| `views/print-templates/`            | 通用表格编辑器（基于 x-data-spreadsheet，in-memory） | —（`allowRoles: ['MANAGER']` 短路）                                                  |
+| `views/statistics/`                 | 生产统计（4 Tab）                                    | `production_stats`                                                                   |
 
 > **老路径兼容**：`/assemblies` → 重定向到 `/parts`；`/outsource` → `/outsource/companies`；`/outsource/send` 与 `/outsource/receive` → `/outsource/send-receive`；`/settings/{work-types,processes,work-type-processes}` → 2026-09-12 合并到 `/production/process-work-type` 后整段删除。不要新增新的重定向，老域往新域合并是既定方向。
 

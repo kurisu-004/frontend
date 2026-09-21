@@ -8,7 +8,7 @@
 //   现有的 emitPath:false + checkStrictly:true 用法；
 // - 错误用 Element Plus 全局 ElMessage 提示（沿用项目惯例）。
 
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { listCustomers, type Customer } from '@/api/customer';
 
@@ -19,7 +19,16 @@ export interface CustomerCascaderNode {
   [key: string]: unknown;
 }
 
-export function useCustomerTree() {
+/** 2026-09-21 显式返回类型。 */
+export interface UseCustomerTreeReturn {
+  customers: Ref<Customer[]>;
+  tree: ComputedRef<CustomerCascaderNode[]>;
+  loading: Ref<boolean>;
+  load: () => Promise<void>;
+  resolveRootCustomerId: (pickedId: string | null) => string | null;
+}
+
+export function useCustomerTree(): UseCustomerTreeReturn {
   const customers = ref<Customer[]>([]);
   const loading = ref(false);
 

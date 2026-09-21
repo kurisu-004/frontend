@@ -15,7 +15,17 @@ import { ElMessage } from 'element-plus';
 import { listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
 
-export function usePartFiles(partId: Ref<string>) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartFilesReturn {
+  drawings: Ref<PartFileItem[]>;
+  models3d: Ref<PartFileItem[]>;
+  cadFiles: Ref<PartFileItem[]>;
+  fetchDrawings: () => Promise<void>;
+  fetch3DModels: () => Promise<void>;
+  fetchCadFiles: () => Promise<void>;
+}
+
+export function usePartFiles(partId: Ref<string>): UsePartFilesReturn {
   const drawings = ref<PartFileItem[]>([]);
   const models3d = ref<PartFileItem[]>([]);
   const cadFiles = ref<PartFileItem[]>([]);

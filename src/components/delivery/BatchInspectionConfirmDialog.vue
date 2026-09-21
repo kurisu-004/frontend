@@ -16,7 +16,7 @@
 -->
 <script setup lang="ts">
 import { computed, h, ref } from 'vue';
-import { ElMessage, ElTag } from 'element-plus';
+import { ElMessage, ElTag, ElTable, type TableInstance } from 'element-plus';
 import { Select } from '@element-plus/icons-vue';
 
 import { useDialogSize } from '@/composables/useDialogSize';
@@ -62,7 +62,8 @@ const bulk = useBulkPassInspection();
 
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
 // 「同时过检」/「数量」列不进 defs（el-input-number + v-model + 条件勾选不便走 cellRender）。
-const tableRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP TableInstance；null 初值
+const tableRef = ref<TableInstance | null>(null);
 const columnDefs: ColumnDef[] = [
   {
     key: 'serial_no',

@@ -10,7 +10,7 @@
 // `handleProcessChainRequired`：命中 20706 → 弹「前往制定」确认框 → 跳
 // /production/process-design?part_id=XXX；命中后直接 return，不进 toast 兜底。
 
-import { ref, type Ref } from 'vue';
+import { ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { placeOnShelf, recallToPending, recallToProgramming, sendToProgramming } from '@/api/parts';
@@ -36,7 +36,40 @@ export interface UsePartDispatchDeps {
   getTable: () => TableRef | null | undefined;
 }
 
-export function usePartDispatch(deps: UsePartDispatchDeps) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartDispatchReturn {
+  shelves: Ref<Shelf[]>;
+  processes: Ref<Process[]>;
+  dispatchVisible: Ref<boolean>;
+  dispatchMode: Ref<'direct' | 'cnc'>;
+  dispatchShelfId: Ref<string | null>;
+  dispatchNextProcessId: Ref<string | null>;
+  dispatchPartId: Ref<string | null>;
+  dispatchSubmitting: Ref<boolean>;
+  // 2026-09-21 fix：原 ReturnType<typeof useShelfProcessFilter> 默认泛型落到 Identifiable，
+  // 下游 el-option 访问 .code / .name 编译失败。收紧到 Shelf / Process 业务类型。
+  filteredShelves: ComputedRef<readonly Shelf[]>;
+  filteredProcesses: ComputedRef<readonly Process[]>;
+  onDispatch: (row: PartListItem) => Promise<void>;
+  onDispatchClosed: () => void;
+  onDispatchConfirm: () => Promise<void>;
+  batchDispatchVisible: Ref<boolean>;
+  batchDispatchAction: Ref<'shelf' | 'programming'>;
+  batchDispatchShelfId: Ref<string | null>;
+  batchDispatchNextProcessId: Ref<string | null>;
+  batchDispatchSubmitting: Ref<boolean>;
+  // 2026-09-21 fix：同上，单件 / 批量两条 path 同源问题
+  batchFilteredShelves: ComputedRef<readonly Shelf[]>;
+  batchFilteredProcesses: ComputedRef<readonly Process[]>;
+  onOpenBatchDispatch: () => Promise<void>;
+  onBatchDispatchConfirm: () => Promise<void>;
+  canRecallToPending: (row: PartListItem) => boolean;
+  canRecallToProgramming: (row: PartListItem) => boolean;
+  onRecallToPending: (row: PartListItem) => Promise<void>;
+  onRecallToProgramming: (row: PartListItem) => Promise<void>;
+}
+
+export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchReturn {
   // 2026-09-17 PR-3 修复：useRouter() 必须在 setup 顶部一次性拿闭包复用，禁止在 async 事件回调里调
   // —— vue-router 4.6.4 + vue 3.5.38 下 inject() 在 lifecycle hook 之外返回 undefined。
   const router = useRouter();

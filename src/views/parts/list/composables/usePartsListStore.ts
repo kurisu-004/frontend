@@ -24,7 +24,7 @@ import { usePartBatchSelection } from './usePartBatchSelection';
 import { useBatchPrint } from './useBatchPrint';
 import { usePartDispatch } from './usePartDispatch';
 import { usePartInlineEdit } from './usePartInlineEdit';
-import { buildPartsListColumnDefs } from './partsListColumnDefs';
+import { buildPartsListColumnDefs } from '@/utils/partsListColumnDefs';
 import type { PartListItem } from '@/types/parts';
 
 /** 壳注册的 el-table getter（结构类型，对齐 batch/dispatch 两个 composable 的最小需求）。

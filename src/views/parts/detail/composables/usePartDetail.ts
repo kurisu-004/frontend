@@ -13,7 +13,7 @@
 // composable 只持有纯业务数据 + 业务函数；dialog 可见性、form 数据 refs 由
 // 各自的子组件或 shell 持有，调用本 composable 的纯函数完成提交。
 
-import { computed, reactive, ref, watch, type Ref } from 'vue';
+import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
@@ -72,7 +72,55 @@ function makeEmptyEditForm(): PartEditForm {
   };
 }
 
-export function usePartDetail(partId: Ref<string>) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartDetailReturn {
+  part: Ref<PartItem | null>;
+  infoLoading: Ref<boolean>;
+  events: Ref<PartEvent[] | null>;
+  eventsLoading: Ref<boolean>;
+  editing: Ref<boolean>;
+  saving: Ref<boolean>;
+  form: PartEditForm;
+  assemblyDetail: Ref<AssemblyDetail | null>;
+  assemblyLoading: Ref<boolean>;
+  batches: Ref<PartBatch[]>;
+  batchesLoading: Ref<boolean>;
+  canEditPart: ComputedRef<boolean>;
+  canCancelPart: ComputedRef<boolean>;
+  canDeletePart: ComputedRef<boolean>;
+  canInspect: ComputedRef<boolean>;
+  canReceiveFromOutsource: ComputedRef<boolean>;
+  canManageDrawings: ComputedRef<boolean>;
+  canManage3DModels: ComputedRef<boolean>;
+  canManageCncFiles: ComputedRef<boolean>;
+  canManageSetupSheet: ComputedRef<boolean>;
+  canManageBatches: ComputedRef<boolean>;
+  fetchPart: () => Promise<void>;
+  fetchEvents: () => Promise<void>;
+  fetchAssembly: () => Promise<void>;
+  fetchBatches: () => Promise<void>;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSave: () => Promise<void>;
+  onCancelOrder: () => Promise<boolean>;
+  onDeletePart: () => Promise<boolean>;
+  onPassInspection: () => Promise<boolean>;
+  onFailInspection: (payload: {
+    shelfId: string;
+    processId: string;
+    note: string | null;
+  }) => Promise<boolean>;
+  onReceiveFromOutsource: (payload: { shelfId: string; processId: string }) => Promise<boolean>;
+  onSplitBatch: (batch: PartBatch, quantity: number) => Promise<PartBatch[] | null>;
+  onCancelBatch: (batch: PartBatch) => Promise<PartBatch[] | null>;
+  statusLabel: (s: OrderStatus) => string;
+  statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
+  statusLabelOf: (s: string | null | undefined) => string;
+  eventLabel: (t: string) => string;
+  eventTagType: (t: string) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
+}
+
+export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   const router = useRouter();
   const { isManager, isClerk, isInspector, isCncProgrammer: isCnc } = usePermissions();
   // 2026-08-25 T10p5：品检通过属于不可撤销操作，先用 useConfirm 二次确认。

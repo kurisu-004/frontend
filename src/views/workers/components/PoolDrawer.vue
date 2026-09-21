@@ -28,7 +28,7 @@ import {
   consumeWorkerSource,
   recordWorkerSource,
   type DraggableStartEvent,
-} from '../composables/dndSourceTracker';
+} from '@/utils/dndSourceTracker';
 import WorkOrderCard from './WorkOrderCard.vue';
 
 const props = defineProps<{

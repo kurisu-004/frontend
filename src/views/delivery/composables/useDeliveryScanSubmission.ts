@@ -20,7 +20,7 @@
 //   - refreshDraftDetail(noteId) → board 重新拉详情
 //   - clearNoteLocalState(noteId) → board 在 submit 成功后清掉全部 ref
 
-import { nextTick, reactive, ref } from 'vue';
+import { nextTick, reactive, ref, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getNote, scanDelivery, submitNote } from '@/api/deliveryNote';
 import { ApiError } from '@/api/http';
@@ -80,7 +80,43 @@ export interface UseDeliveryScanSubmissionOptions {
   getDraftLineItems?: (noteId: string) => DeliveryNoteLineItem[] | undefined;
 }
 
-export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions) {
+/** 2026-09-21 显式返回类型。 */
+export interface UseDeliveryScanSubmissionReturn {
+  scanning: Ref<boolean>;
+  lastScanCode: Ref<string>;
+  lastScanAt: Ref<number>;
+  printNotePreviewVisible: Ref<boolean>;
+  printNoteTarget: Ref<DeliveryNoteDetailOut | null>;
+  printNoteLoading: Ref<boolean>;
+  submitDialogVisible: Ref<boolean>;
+  submitTarget: Ref<ScanNoteSummary | null>;
+  submitUninspected: Ref<DeliveryNoteLineItem[]>;
+  submittingByNote: Record<string, boolean>;
+  candidateTargets: Ref<ScanUnresolvedTarget[]>;
+  candidateNoteId: Ref<string>;
+  originalScanCode: Ref<string>;
+  candidateDialogVisible: Ref<boolean>;
+  submitCandidateTargets: Ref<ScanUnresolvedTarget[]>;
+  submitCandidateOriginalNote: Ref<ScanNoteSummary | null>;
+  submitCandidateDialogVisible: Ref<boolean>;
+  handleScan: (rawCode: string) => Promise<void>;
+  applySuccess: (out: ScanDeliveryOut, originalCode: string) => Promise<void>;
+  applyError: (_code: string, e: unknown) => void;
+  openPrintNote: (d: ScanNoteSummary) => Promise<void>;
+  onSubmitDraft: (d: ScanNoteSummary) => Promise<void>;
+  onSubmitDialogPassSuccess: () => Promise<void>;
+  onSubmitDialogPassPartial: (result: {
+    passed: BulkPassItem[];
+    failed: BulkPassFailure[];
+  }) => void;
+  onSubmitDialogCancel: () => void;
+  onSubmitCandidateDone: () => Promise<void>;
+  onSubmitCandidateCancel: () => void;
+}
+
+export function useDeliveryScanSubmission(
+  opts: UseDeliveryScanSubmissionOptions,
+): UseDeliveryScanSubmissionReturn {
   const detailCache = useDeliveryNoteDetailCache();
 
   // ============ 扫码防抖态 ============

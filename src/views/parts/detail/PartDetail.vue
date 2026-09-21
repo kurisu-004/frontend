@@ -53,7 +53,7 @@
         </div>
       </template>
       <div class="barcode-wrap">
-        <Barcode :value="part.serial_no" format="CODE39" :height="80" :width="2" />
+        <BarcodeView :value="part.serial_no" format="CODE39" :height="80" :width="2" />
       </div>
     </el-card>
 
@@ -375,7 +375,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { PriceTag } from '@element-plus/icons-vue';
-import Barcode from '@/components/Barcode.vue';
+import BarcodeView from '@/components/BarcodeView.vue';
 import PartInfoCard from './components/PartInfoCard.vue';
 import PartHistoryCard from './components/PartHistoryCard.vue';
 import PartAssemblyLinkCard from './components/PartAssemblyLinkCard.vue';

@@ -16,7 +16,7 @@
 // - 创建 / 审批 dialog（useOutsourceQuoteForm 持有）
 // - 图纸预览状态（由 drawingPreview 子组件 / composable 持有；当前留在 shell）
 
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { listOutsourceQuotes } from '@/api/outsource';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
@@ -94,7 +94,49 @@ export interface UseOutsourceQuoteTableOptions {
   roleMap: ComputedRef<ReturnType<typeof rolesArrayToMap>>;
 }
 
-export function useOutsourceQuoteTable(opts: UseOutsourceQuoteTableOptions) {
+/** 2026-09-21 显式返回类型。 */
+export interface UseOutsourceQuoteTableReturn {
+  search: QuoteSearchState;
+  items: Ref<OutsourceQuote[]>;
+  errorMsg: Ref<string | null>;
+  sortBy: Ref<QuoteSortKey>;
+  sortDir: Ref<'ASC' | 'DESC'>;
+  pagedRef: Ref<{ total?: number; items?: OutsourceQuote[] } | undefined>;
+  statusFilterActive: ComputedRef<boolean>;
+  customerFilterActive: ComputedRef<boolean>;
+  statusPopoverVisible: Ref<boolean>;
+  statusDraft: Ref<OutsourceQuoteStatus[]>;
+  customerPopoverVisible: Ref<boolean>;
+  customerDraft: Ref<string | null>;
+  defaultSort: ComputedRef<{ prop: string; order: 'ascending' | 'descending' }>;
+  emptyText: ComputedRef<string>;
+  columnVisibility: ReturnType<typeof useColumnVisibility>;
+  actionColumnWidth: ComputedRef<number>;
+  syncStatusDraft: () => void;
+  resetStatusDraft: () => void;
+  confirmStatusFilter: () => void;
+  syncCustomerDraft: () => void;
+  resetCustomerDraft: () => void;
+  confirmCustomerFilter: () => void;
+  buildParams: (params: { page: number; pageSize: number }) => Record<string, unknown>;
+  fetcher: (params: {
+    page: number;
+    pageSize: number;
+  }) => Promise<{ items: OutsourceQuote[]; total: number }>;
+  refresh: () => Promise<void>;
+  onSearch: () => void;
+  onSortChange: (payload: {
+    prop: string | null;
+    order: 'ascending' | 'descending' | null;
+  }) => void;
+  onReset: () => void;
+  restore: (routeQueryStatuses: unknown) => void;
+  quoteRowClassName: (ctx: { row: OutsourceQuote }) => string;
+}
+
+export function useOutsourceQuoteTable(
+  opts: UseOutsourceQuoteTableOptions,
+): UseOutsourceQuoteTableReturn {
   // ============ 筛选 / 排序 / 分页 状态 ============
   const search = reactive<QuoteSearchState>(initialQuoteSearch());
 

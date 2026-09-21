@@ -97,7 +97,28 @@ if (typeof window !== 'undefined') {
 // 启动时尝试恢复
 loadFromStorage();
 
-export function useAuthSession() {
+/** 2026-09-21 显式返回类型。 */
+export interface UseAuthSessionReturn {
+  user: Ref<CurrentUser | null>;
+  token: Ref<string | null>;
+  isAuthenticated: () => boolean;
+  hasRole: (role: string) => boolean;
+  canOperateShelf: (shelfId: string) => boolean;
+  /** 当前 SHELF_ACCOUNT scope 第一个货架 id（雪花 ID 字符串）。 */
+  activeShelfId: () => string | null;
+  boundShelves: () => string[];
+  isWildcardShelfAccount: () => boolean;
+  menus: () => MenuNode[];
+  hasMenuCode: (code: string) => boolean;
+  getAuthHeader: () => Record<string, string>;
+  login: (username: string, password: string) => Promise<CurrentUser>;
+  logout: () => Promise<void>;
+  refreshOrLogout: (router: { replace: (p: string) => void }) => Promise<boolean>;
+  initDummyAuth: () => void;
+  isDummyAuthActive: () => boolean;
+}
+
+export function useAuthSession(): UseAuthSessionReturn {
   const isAuthenticated = (): boolean => !!token.value && !!user.value;
 
   function hasRole(role: string): boolean {

@@ -1,4 +1,4 @@
-// views/parts/list/composables/partsListColumnDefs.ts
+// 原 views/parts/list/composables/partsListColumnDefs.ts，2026-09-21 迁至 src/utils/
 //
 // 2026-09-15 从 PartsList.vue 抽出：18 列 ColumnDef 工厂（base 9 + price 2 仅 canEdit +
 // tail 7）。cellRender / headerRender 闭包持 raw composable 切片（ref 照写 .value），
@@ -22,8 +22,8 @@ import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
 import type { PartListItem } from '@/types/parts';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
-import type { usePartsColumnFilters } from './usePartsColumnFilters';
-import type { usePartInlineEdit } from './usePartInlineEdit';
+import type { usePartsColumnFilters } from '@/views/parts/list/composables/usePartsColumnFilters';
+import type { usePartInlineEdit } from '@/views/parts/list/composables/usePartInlineEdit';
 
 export function buildPartsListColumnDefs(deps: {
   filters: ReturnType<typeof usePartsColumnFilters>;

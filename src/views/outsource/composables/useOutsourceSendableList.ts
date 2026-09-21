@@ -29,7 +29,7 @@
 // /production/process-design?part_id=XXX；批量命中即 break 不再继续。
 
 import { ElMessage } from 'element-plus';
-import { reactive, ref } from 'vue';
+import { reactive, ref, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   getPartBySerial,
@@ -71,7 +71,52 @@ export interface UseOutsourceSendableListOptions {
   onSent?: () => void;
 }
 
-export function useOutsourceSendableList(options: UseOutsourceSendableListOptions = {}) {
+/** 2026-09-21 显式返回类型。 */
+export interface UseOutsourceSendableListReturn {
+  sendableError: Ref<string | null>;
+  sendableFilter: { keyword: string; customer_id: string };
+  sendablePagedRef: Ref<
+    | {
+        total?: number;
+        items?: SendableItem[];
+        fetch?: () => Promise<void>;
+        reset?: () => Promise<void>;
+      }
+    | undefined
+  >;
+  sendQueue: Ref<SendQueueItem[]>;
+  batchSending: Ref<boolean>;
+  scanInput: Ref<string>;
+  sendDialogVisible: Ref<boolean>;
+  sendTarget: Ref<SendableItem | null>;
+  sendSelectedCompanyId: Ref<string>;
+  sendQuantity: Ref<number>;
+  sendSubmitting: Ref<boolean>;
+  restore: () => Record<string, unknown> | null;
+  snapshot: () => void;
+  clearPersisted: () => void;
+  sendableFetcher: (params: {
+    page: number;
+    pageSize: number;
+  }) => Promise<{ items: SendableItem[]; total: number }>;
+  refreshSendable: () => Promise<void>;
+  onSendableSearch: () => void;
+  onSendableReset: () => void;
+  sendableRowClassName: (ctx: { row: SendableItem }) => string;
+  canSend: (item: SendableItem) => boolean;
+  openSend: (item: SendableItem) => void;
+  onConfirmSend: () => Promise<void>;
+  handleScannedSerialForSend: (code: string) => Promise<void>;
+  onScanInputEnter: () => void;
+  onScanInputClear: () => void;
+  removeFromSendQueue: (idx: number) => void;
+  clearSendQueue: () => void;
+  onConfirmBatchSend: () => Promise<void>;
+}
+
+export function useOutsourceSendableList(
+  options: UseOutsourceSendableListOptions = {},
+): UseOutsourceSendableListReturn {
   // 2026-09-17 PR-3 修复：useRouter() 必须在 setup 顶部一次性拿闭包复用，禁止在 async 事件回调里调
   // —— vue-router 4.6.4 + vue 3.5.38 下 inject() 在 lifecycle hook 之外返回 undefined。
   const router = useRouter();

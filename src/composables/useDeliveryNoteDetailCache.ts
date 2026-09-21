@@ -35,7 +35,19 @@ const cache = new Map<string, CacheEntry>();
  */
 const pending = new Map<string, Promise<DeliveryNoteDetailOut | null>>();
 
-export function useDeliveryNoteDetailCache() {
+/** 2026-09-21 显式返回类型。 */
+export interface UseDeliveryNoteDetailCacheReturn {
+  peek: (noteId: string) => DeliveryNoteDetailOut | null;
+  get: (
+    noteId: string,
+    fetcher: (id: string) => Promise<DeliveryNoteDetailOut>,
+  ) => Promise<DeliveryNoteDetailOut | null>;
+  put: (noteId: string, detail: DeliveryNoteDetailOut) => void;
+  invalidate: (noteId: string) => void;
+  clear: () => void;
+}
+
+export function useDeliveryNoteDetailCache(): UseDeliveryNoteDetailCacheReturn {
   /**
    * 同步读缓存。命中且未过期返回 detail，否则返回 null（并清理过期 entry）。
    */

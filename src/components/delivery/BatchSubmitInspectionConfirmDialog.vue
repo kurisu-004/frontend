@@ -28,7 +28,7 @@
 -->
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue';
-import { ElMessage, ElTag } from 'element-plus';
+import { ElMessage, ElTag, ElTable, type TableInstance } from 'element-plus';
 import { Upload } from '@element-plus/icons-vue';
 
 import { useDialogSize } from '@/composables/useDialogSize';
@@ -80,7 +80,8 @@ const passBulk = useBulkPassInspection();
 // 「送检数量」(el-input-number + 受控 v-model) 和「同时过检」(条件 ElCheckbox + v-if)
 // 不进 defs，保留为字面量列。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
-const tableRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP TableInstance；null 初值
+const tableRef = ref<TableInstance | null>(null);
 const columnDefs: ColumnDef[] = [
   { key: 'serial_no', label: '序列号', prop: 'serial_no', minWidth: 100, align: 'center' },
   {

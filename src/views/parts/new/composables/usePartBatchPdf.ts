@@ -13,7 +13,19 @@
 // - mount 时 `useUploadSession.init('parts_new')` + 配合 `usePartsNewDraft` 恢复
 //   session.files 中 status='done' 的条目到 rows 的「已上传」区。
 
-import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, watch, type Ref } from 'vue';
+import {
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  provide,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+  type ComputedRef,
+  type Ref,
+  type ShallowRef,
+} from 'vue';
 import type { UseCosUploadReturn } from '@/composables/useCosUpload';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
@@ -32,6 +44,7 @@ import {
 } from '@/composables/usePartsNewDraft';
 import type { Customer } from '@/api/customer';
 import type { FileBinding, PartFileKind, UploadIntentsOut } from '@/types/part_file';
+import type { SessionFile } from '@/types/upload_session';
 import { computeSha256 } from '@/utils/fileHash';
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser';
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
@@ -197,6 +210,19 @@ export interface PdfPreviewState {
   page: number;
 }
 
+/**
+ * 2026-09-21 显式返回类型需要：模块级 export UploadStatusCell 接口，
+ * UsePartBatchPdfReturn 在文件较前位置引用它。
+ */
+export interface UploadStatusCell {
+  /** 当前阶段：hashing / uploading / done / error / pending。 */
+  status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
+  /** 0-100。hashing 与 uploading 阶段都走该字段。 */
+  progress: number;
+  /** 错误信息（status='error' 时）。 */
+  error?: string;
+}
+
 export interface UsePartBatchPdfOptions {
   /** 客户全集（由 shell 加载并传入；两个 Tab 共用）。 */
   customers: Ref<Customer[]>;
@@ -214,7 +240,105 @@ export interface UsePartBatchPdfOptions {
 /**
  * Tab 2「PDF 批量上传」的全部 state + handler。返回值直接 `v-bind` 给 PartBatchPdfTab。
  */
-export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartBatchPdfReturn {
+  pdfForm: PdfFormState;
+  // applicants（来自 applicantSearch 共享 instance；组件 props 是 unref 后的裸值）
+  applicantCandidates: Ref<Array<{ id: string; name: string }>>;
+  applicantLoading: Ref<boolean>;
+  querySearch: (
+    queryString: string,
+    cb: (items: Array<{ id: string; name: string }>) => void,
+  ) => void;
+  l1Customers: ComputedRef<Array<{ id: string; name: string }>>;
+  l2Customers: ComputedRef<Array<{ id: string; name: string }>>;
+  pdfFiles: Ref<UploadFile[]>;
+  excelFiles: Ref<UploadFile[]>;
+  threeDModelFiles: Ref<UploadFile[]>;
+  pdfBuildingTree: Ref<boolean>;
+  pdfSubmitting: Ref<boolean>;
+  allPdfs: Ref<PdfSource[]>;
+  selectedPages: Ref<Set<string>>;
+  standaloneParts: Ref<StandalonePartRow[]>;
+  assemblies: Ref<AssemblyRow[]>;
+  standaloneTableRef: Ref<{ $el?: HTMLElement } | null>;
+  assembliesTableRef: Ref<{ $el?: HTMLElement } | null>;
+  standaloneTbodyRef: Ref<HTMLElement | null>;
+  assembliesTbodyRef: Ref<HTMLElement | null>;
+  originalPdfs: ComputedRef<PdfSource[]>;
+  totalAssemblyChildren: ComputedRef<number>;
+  sourceTree: ComputedRef<SourceTreeRow[]>;
+  onPdfChange: (file: UploadFile) => void;
+  onPdfRemove: (file: UploadFile) => void;
+  onExcelChange: (file: UploadFile) => void;
+  onExcelRemove: (file: UploadFile) => void;
+  onThreeDModelChange: (file: UploadFile) => void;
+  onThreeDModelRemove: (file: UploadFile) => void;
+  rebuildFromUploads: () => Promise<void>;
+  previewAt: (pdfSourceUid: string, title: string, page: number) => void;
+  closePdfPreview: () => void;
+  pdfPreviewing: Ref<PdfPreviewState | null>;
+  pdfPreviewVisible: Ref<boolean>;
+  resolveTbody: (tableRef: Ref<{ $el?: HTMLElement } | null>) => HTMLElement | null;
+  clearSelection: (table?: { clearSelection: () => void } | null) => void;
+  mergeSelectedAsPart: () => Promise<void>;
+  mergeSelectedAsAssembly: () => Promise<void>;
+  splitStandalonePart: (row: StandalonePartRow) => void;
+  removePdf: (pdfUid: string) => void;
+  removeStandalonePart: (uid: string) => void;
+  removeAssembly: (uid: string) => void;
+  pdfSourceLabel: (uid: string) => string;
+  previewStandalonePart: (row: StandalonePartRow) => void;
+  previewPdfSourceByUid: (uid: string) => void;
+  onUnitPriceChange: (row: StandalonePartRow, v: number | undefined) => void;
+  onChildUnitPriceChange: (c: AssemblyChildRow, v: number | undefined) => void;
+  onL2Change: (row: { customer_id: string; customer_name?: string }, v: string) => void;
+  onAsmPlannedChange: (asmRow: AssemblyRow, v: string) => void;
+  onSourceSelectionChange: (rows: SourceTreeRow[]) => void;
+  previewSourceRow: (row: SourceTreeRow) => void;
+  hydrateResult: Ref<MergeResult | null>;
+  hydrateRestoredCount: ComputedRef<number>;
+  // 2026-09-21 fix：原 unknown[] 与 PartBatchNew.vue v-bind propType `{client_ref, kind,
+  // original_filename, file_size, uploaded_at}[]` 不兼容；收紧到 SessionFile[]（后端
+  // /upload-sessions 单端点唯一结构，hydrate 输出与 UI 期望一致）。
+  orphanFileRefs: ComputedRef<SessionFile[]>;
+  pdfUploadCells: Record<string, UploadStatusCell>;
+  threeDUploadCells: Record<string, UploadStatusCell>;
+  allUploadsDone: ComputedRef<boolean>;
+  hasUploadErrors: ComputedRef<boolean>;
+  getRowPdfCell: (row: { pdfSourceUid: string }) => UploadStatusCell | undefined;
+  getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCell | undefined;
+  cosUpload: ShallowRef<UseCosUploadReturn | null>;
+  cosItemsRef: Ref<CosUploadItem[]>;
+  uploadStage: Ref<'idle' | 'uploading' | 'uploaded' | 'committed'>;
+  canStartUpload: ComputedRef<boolean>;
+  canSubmitCreate: ComputedRef<boolean>;
+  retryUploadByRow: (rowUid: string, slot: 'pdf' | '3d', threeDIndex?: number) => Promise<void>;
+  onStartUpload: () => Promise<void>;
+  // 2026-09-21 fix：PartBatchNew.vue 在 v-bind 时传了 onCommit，但 T-B8 显式返回类型化时漏声明。
+  onCommit: () => Promise<void>;
+  validateL2Customers: () => boolean;
+  manualPartDialogVisible: Ref<boolean>;
+  manualPartForm: { drawing_no: string; name: string; file: File | null };
+  manualPartFileList: ComputedRef<UploadFile[]>;
+  manualPartFormValid: ComputedRef<boolean>;
+  closeManualPartDialog: () => void;
+  manualAsmDialogVisible: Ref<boolean>;
+  manualAsmForm: { drawing_no: string; name: string; file: File | null };
+  manualAsmFileList: ComputedRef<UploadFile[]>;
+  manualAsmFormValid: ComputedRef<boolean>;
+  closeManualAsmDialog: () => void;
+  addManualPart: () => void;
+  confirmManualPart: () => Promise<void>;
+  onManualPartFileChange: (file: UploadFile) => void;
+  onManualPartFileRemove: () => void;
+  addManualAssembly: () => void;
+  confirmManualAssembly: () => Promise<void>;
+  onManualAsmFileChange: (file: UploadFile) => void;
+  onManualAsmFileRemove: () => void;
+}
+
+export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfReturn {
   const { customers, applicantSearch, successNextTab } = opts;
   const router = useRouter();
 
@@ -364,7 +488,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   async function readExcel(file: File): Promise<BidRow[]> {
     const buf = await file.arrayBuffer();
 
-    const XLSX: any = await import('xlsx');
+    // 2026-09-21 对齐 TS 严格：动态 import 拿 xlsx 必须靠 typeof import() 反推类型。
+    // 项目 eslint 规则 @typescript-eslint/consistent-type-imports 默认禁此内联写法，
+    // 但本文件刻意保持动态 import 以避免 xlsx（~700KB）进首屏 bundle，故此处加行级豁免。
+    // 已知风险见 docs/08-known-risks/dependency-risks.md。
+    // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- 动态 import 故意不进主 bundle，类型只能内联 typeof import() 反推
+    const XLSX: typeof import('xlsx') = await import('xlsx');
     const wb = XLSX.read(buf, { type: 'array' });
     const sheetNames = wb.SheetNames;
     let parsed: ParseResult;
@@ -1196,21 +1325,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   // 2026-09-16 T3.4：COS 直传 + JSON batchCreate 链路
   // ============================================================
 
-  /**
-   * 文件上传运行时单元（UI 进度展示用）。key = `pdf:${srcUid}` 或 `3d:${fileUid}`，
-   * 与 filesToUpload[i].key 一一对应；UI 通过 `getPdfUploadCell(rowUid, 'pdf')` /
-   * `getThreeDUploadCell(rowUid, threeDIndex)` 反查。
-   */
-  interface UploadStatusCell {
-    /** 当前阶段：hashing / uploading / done / error / pending。 */
-    status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
-    /** 0-100。hashing 与 uploading 阶段都走该字段。 */
-    progress: number;
-    /** 错误信息（status='error' 时）。 */
-    error?: string;
-  }
-  /** 反查用：client_ref → status cell（map 而非 reactive 数组，配合 watch deep）。 */
-  const pdfUploadCells = reactive<Record<string, UploadStatusCell>>({});
+  /** 反查用：client_ref → status cell（map 而非 reactive 数组，配合 watch deep）。 */ const pdfUploadCells =
+    reactive<Record<string, UploadStatusCell>>({});
   const threeDUploadCells = reactive<Record<string, UploadStatusCell>>({});
 
   /**
@@ -1947,7 +2063,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   // cosItemsRef 是顶层 Ref<CosUploadItem[]>，useCosUpload 在闭包里持有它，
   // retryItem 时能读到同一对象（mutable status / progress / etag 都是原地写）。
   // 「未开始上传」状态下用空数组占位（避免 useCosUpload 内部 items.value[i] 炸 RangeError）。
-  const cosUpload = ref<UseCosUploadReturn | null>(null);
+  const cosUpload = shallowRef<UseCosUploadReturn | null>(null);
   const cosItemsRef = ref<CosUploadItem[]>([]);
 
   /** 上传阶段机。状态机转换：
@@ -2463,6 +2579,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     previewSourceRow,
     previewStandalonePart,
     previewPdfSourceByUid,
+    previewAt,
     pdfSourceLabel,
     // selection
     onSourceSelectionChange,
@@ -2495,6 +2612,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     // provide/inject 取到这两个 ref，模板 :ref 把 el-table 实例回写到 composable。
     standaloneTableRef,
     assembliesTableRef,
+    standaloneTbodyRef,
+    assembliesTbodyRef,
+    resolveTbody,
+    originalPdfs,
     // 2026-09-16 T3.4：上传状态（UI 进度 / 重试用）
     pdfUploadCells,
     threeDUploadCells,
@@ -2502,6 +2623,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     getRowThreeDCell,
     allUploadsDone,
     hasUploadErrors,
+    cosUpload,
+    cosItemsRef,
+    validateL2Customers,
     // 2026-09-16 M3-B 复审：阶段机 + 按钮 disabled 判定
     uploadStage,
     canStartUpload,
@@ -2510,6 +2634,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
     // 2026-09-18 A3：hydrate 结果给 UI 渲染顶部「已恢复 N 条」el-alert +
     // 孤儿文件待认领面板（合并由 usePartsNewDraft.mergeDraftWithSession 完成）
     hydrateRestoredCount,
+    hydrateResult,
     orphanFileRefs,
   };
 }

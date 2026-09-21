@@ -2,7 +2,18 @@ import { ref, type Ref } from 'vue';
 
 export type ScrollDir = 'up' | 'down';
 
-export function useHoldToScroll(containerRef: Ref<HTMLElement | null>) {
+/** 2026-09-21 显式返回类型。 */
+export interface UseHoldToScrollReturn {
+  atTop: Ref<boolean>;
+  atBottom: Ref<boolean>;
+  recalc: () => void;
+  onPressDown: (dir: ScrollDir) => void;
+  onPressUp: () => void;
+  bindContainer: () => void;
+  unbindContainer: () => void;
+}
+
+export function useHoldToScroll(containerRef: Ref<HTMLElement | null>): UseHoldToScrollReturn {
   const atTop = ref(true);
   const atBottom = ref(true);
 

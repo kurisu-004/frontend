@@ -59,9 +59,17 @@ import axios, {
 import { decodeJwt } from '@/utils/jwt';
 import { refreshTokens, type LoginResponse } from '@/api/iam';
 
-// params 用 any：axios 自身 paramsSerializer 签名就是 (params: any) => string，
-// 这里抽出来做单测没必要收窄类型，避免 Array.isArray 后续分支里 val 没法窄化
-// 成 string 让 encodeURIComponent 报 TS2345。
+// 2026-09-21 params 收紧：serializeParamsWith / serializeParamsV1 / serializeParamsV2 /
+// serializeParams 别名的 params 由 `any` 收紧为 `Record<string, unknown>`，与 axios 自身
+// `paramsSerializer: (params: any) => string` 的契约解耦（axios 是 JS 不查，
+// 但 TS 端能收窄就收窄）。Array.isArray 后 val 仍是 unknown，需要逐元素 `as string`
+// 才能喂 encodeURIComponent——集中在这条注释提示，不再每处重复。
+//
+// cleanParams 是已知例外：泛型 `<T extends Record<string, unknown>>` 会让
+// ListPartsParams / AssemblyListQuery / ListUsersParams / ListShelvesParams /
+// ListWorkersParams 这类 interface 形参在调用处报 TS2345（interface 缺字符串 index
+// signature，不满足 `Record<string, unknown>` 约束）。原注释已说明，保留
+// `<T extends Record<string, any>>` 不动；本轮统一收紧跳过此函数。
 
 /**
  * v2 后端期望多值筛选走 CSV 单值形式（`?statuses=A,B`）的 key 白名单。
@@ -89,7 +97,7 @@ import { refreshTokens, type LoginResponse } from '@/api/iam';
  */
 const ARRAY_AS_CSV_KEYS = new Set<string>(['statuses', 'locations', 'holder_ids']);
 
-function serializeParamsWith(params: any, csvKeys: Set<string>): string {
+function serializeParamsWith(params: Record<string, unknown>, csvKeys: Set<string>): string {
   const parts: string[] = [];
   for (const key of Object.keys(params)) {
     const val = params[key];
@@ -102,16 +110,16 @@ function serializeParamsWith(params: any, csvKeys: Set<string>): string {
         // 但 RFC 3986 规定 query 里的分隔符需要百分号转义，避免后端/中间件误判。
         if (val.length === 0) continue;
         parts.push(
-          `${encodeURIComponent(key)}=${val.map((v) => encodeURIComponent(v)).join('%2C')}`,
+          `${encodeURIComponent(key)}=${val.map((v) => encodeURIComponent(v as string)).join('%2C')}`,
         );
       } else {
         // 重复 key：每个元素独立 push（v1 端点 / v2 非白名单数组字段）
         for (const v of val) {
-          parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`);
+          parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v as string)}`);
         }
       }
     } else {
-      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
+      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val as string)}`);
     }
   }
   return parts.join('&');
@@ -119,7 +127,7 @@ function serializeParamsWith(params: any, csvKeys: Set<string>): string {
 
 /** v1 专用 query 序列化器：所有数组走重复 key 形式 `?k=a&k=b`。
  *  专供 `apiPrint`（baseURL `/api/v1`）使用，匹配 Python FastAPI Query 解析语义。 */
-export function serializeParamsV1(params: any): string {
+export function serializeParamsV1(params: Record<string, unknown>): string {
   return serializeParamsWith(params, new Set());
 }
 
@@ -129,13 +137,13 @@ export function serializeParamsV1(params: any): string {
  *
  *  2026-09-17 PR-4 同步：locations / holder_ids 加入 `ARRAY_AS_CSV_KEYS`，与
  *  backend-rust `PartListQuery`（`Option<String>` 逗号分隔）解析对齐。 */
-export function serializeParamsV2(params: any): string {
+export function serializeParamsV2(params: Record<string, unknown>): string {
   return serializeParamsWith(params, ARRAY_AS_CSV_KEYS);
 }
 
 /** @deprecated 等价于 serializeParamsV1。2026-08-29 起作为 alias 保留，供历史
  *  import 不至于崩；新代码请用具名 V1 / V2。 */
-export const serializeParams: (params: any) => string = serializeParamsV1;
+export const serializeParams: (params: Record<string, unknown>) => string = serializeParamsV1;
 
 const STORAGE_KEY = 'auth_session';
 
@@ -445,9 +453,13 @@ export class ApiError extends Error {
  * axios 默认只 strip undefined / null，不 strip '' / []。把这一步抽到统一的
  * api/http.ts 里，9 个 list API 共享一份行为（2026-08-25 refactor）。
  *
- * 用 `<T extends object>` 而不是 `Record<string, unknown>`：前者接受任意 object
- * 字面量 / interface（包括 ListPartsParams 这种显式 interface），后者要求有
- * 显式字符串 index signature，interface 默认不带，导致调用方报 TS2345。
+ * 2026-09-21：本轮参数收紧**未动**本函数。泛型约束 `<T extends Record<string, any>>`
+ * 不能改为 `Record<string, unknown>` —— ListPartsParams / AssemblyListQuery /
+ * ListUsersParams / ListShelvesParams / ListWorkersParams 这类 interface 形参
+ * 缺字符串 index signature，不满足 `Record<string, unknown>` 约束，5 处调用点会
+ * 全报 TS2345（已在 2026-08-25 refactor 注释里记录原因）。`Record<string, any>`
+ * 实际等价于任意 object 字面量 / interface，是 TS 在此场景下唯一不破坏调用方的
+ * 收窄档位。
  */
 
 export function cleanParams<T extends Record<string, any>>(obj?: T): Record<string, unknown> {

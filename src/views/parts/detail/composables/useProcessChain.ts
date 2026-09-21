@@ -10,17 +10,28 @@
 // 注：process_chain_id 是 part.process_chain_id（PR-3 引入），selectedBatchId
 // 默认 null，由 PartBatchMonitorCard @row-click 写入；batches 来自 usePartDetail。
 
-import { computed, ref, watch, type Ref } from 'vue';
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { getProcessChainById } from '@/api/processChain';
 import type { ProcessChainByPartDto, ProcessChainStepDto } from '@/api/processChain.contract';
 import type { PartItem, PartBatch } from '@/api/parts';
+
+/** 2026-09-21 显式返回类型。 */
+export interface UseProcessChainReturn {
+  chain: Ref<ProcessChainByPartDto | null>;
+  steps: Ref<ProcessChainStepDto[]>;
+  loading: Ref<boolean>;
+  /** 当前选中批次所在工艺链步骤 id（PR-3 强绑定 current_process_step_id）。 */
+  currentStepId: ComputedRef<string | null>;
+  setSelectedBatchId: (id: string | null) => void;
+  fetchProcessChain: () => Promise<void>;
+}
 
 export function useProcessChain(
   partId: Ref<string>,
   part: Ref<PartItem | null>,
   batches: Ref<PartBatch[]>,
   selectedBatchId: Ref<string | null>,
-) {
+): UseProcessChainReturn {
   const chain = ref<ProcessChainByPartDto | null>(null);
   const steps = ref<ProcessChainStepDto[]>([]);
   const loading = ref(false);

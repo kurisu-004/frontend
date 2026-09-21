@@ -4,7 +4,7 @@
 //
 // 2026-08-22：PDF 合并已抽到 src/utils/mergePdfs.ts（mergePdfBlobs），这里只调它。
 
-import { onBeforeUnmount, ref } from 'vue';
+import { onBeforeUnmount, ref, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { printPartDrawingBatch } from '@/api/parts';
 import { mergePdfBlobs } from '@/utils/mergePdfs';
@@ -15,7 +15,17 @@ export interface UseBatchPrintDeps {
   selectedRowTypes: Map<string, SelectedRowType>;
 }
 
-export function useBatchPrint(deps: UseBatchPrintDeps) {
+/** 2026-09-21 显式返回类型。 */
+export interface UseBatchPrintReturn {
+  batchPrinting: Ref<boolean>;
+  batchPrintProgress: Ref<number>;
+  batchPrintCurrent: Ref<number>;
+  batchPrintTotal: Ref<number>;
+  iframeRef: Ref<HTMLIFrameElement | null>;
+  onBatchPrint: () => Promise<void>;
+}
+
+export function useBatchPrint(deps: UseBatchPrintDeps): UseBatchPrintReturn {
   const batchPrinting = ref(false);
   const batchPrintProgress = ref(0);
   const batchPrintCurrent = ref(0);

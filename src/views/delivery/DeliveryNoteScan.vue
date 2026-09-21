@@ -20,8 +20,9 @@
 //   - applySuccess 同步刷新 draftDetails（扫码命中后立即把最新 line_items 拉回）。
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { ComponentInstance } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElTable } from 'element-plus';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useDeliveryScanState } from '@/composables/useDeliveryScanState';
 import { listCustomers, type Customer } from '@/api/customer';
@@ -35,7 +36,11 @@ import { useAuthSession } from '@/composables/useAuthSession';
 import { canPrint } from '@/utils/deliveryNotePermissions';
 import type { DeliveryGroupListOut, DeliveryGroupOut } from '@/types/deliveryGroup';
 import type { ScanNoteSummary } from '@/types/deliveryNote';
-import { useDeliveryDraftBoard } from './composables/useDeliveryDraftBoard';
+import {
+  useDeliveryDraftBoard,
+  type DraftTableInstance,
+  type MergedDraftRow,
+} from './composables/useDeliveryDraftBoard';
 import { useDeliveryScanSubmission } from './composables/useDeliveryScanSubmission';
 import DeliveryScanBar from './components/DeliveryScanBar.vue';
 import DeliveryGroupPanel from './components/DeliveryGroupPanel.vue';
@@ -199,10 +204,10 @@ async function onGroupDelete(g: DeliveryGroupOut): Promise<void> {
 function onCardGotoDetail(d: ScanNoteSummary): void {
   gotoDetail(d);
 }
-function onCardSelectionChange(d: ScanNoteSummary, rows: any[]): void {
+function onCardSelectionChange(d: ScanNoteSummary, rows: MergedDraftRow[]): void {
   board.onSelectionChange(d.id, rows);
 }
-function onCardRemove(d: ScanNoteSummary, row: any): void {
+function onCardRemove(d: ScanNoteSummary, row: MergedDraftRow): void {
   void board.onRemove(d, row);
 }
 function onCardPrintLabels(d: ScanNoteSummary): void {
@@ -217,8 +222,8 @@ function onCardPrintNote(d: ScanNoteSummary): void {
 function onCardSubmitDraft(d: ScanNoteSummary): void {
   void submission.onSubmitDraft(d);
 }
-function onCardTableRef(d: ScanNoteSummary, el: any): void {
-  board.setTableRef(d.id, el);
+function onCardTableRef(d: ScanNoteSummary, el: ComponentInstance<typeof ElTable> | null): void {
+  board.setTableRef(d.id, el as DraftTableInstance | null);
 }
 
 // ============ 生命周期 ============
@@ -312,13 +317,13 @@ onBeforeUnmount(() => {
           :can-submit="canSubmitDraft(d)"
           :row-class-name="board.rowClassName"
           @gotoDetail="onCardGotoDetail(d)"
-          @selection-change="(rs: any) => onCardSelectionChange(d, rs)"
-          @remove="(r: any) => onCardRemove(d, r)"
+          @selection-change="(rs: MergedDraftRow[]) => onCardSelectionChange(d, rs)"
+          @remove="(r: MergedDraftRow) => onCardRemove(d, r)"
           @printLabels="onCardPrintLabels(d)"
           @deleteDraft="onCardDeleteDraft(d)"
           @printNote="onCardPrintNote(d)"
           @submitDraft="onCardSubmitDraft(d)"
-          @setTableRef="(el: any) => onCardTableRef(d, el)"
+          @setTableRef="(el: ComponentInstance<typeof ElTable> | null) => onCardTableRef(d, el)"
         />
       </div>
     </div>

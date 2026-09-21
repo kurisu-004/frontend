@@ -51,8 +51,8 @@
           </template>
           <el-table-column label="操作" min-width="280" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button link size="small" @click="openRoles(row)">角色</el-button>
-              <el-button link size="small" @click="editUser(row)">编辑</el-button>
+              <el-button link size="small" @click="openRoles(row as UserOut)">角色</el-button>
+              <el-button link size="small" @click="editUser(row as UserOut)">编辑</el-button>
               <el-popconfirm
                 title="确认重置为默认密码 changeme？"
                 width="240"
@@ -173,7 +173,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, h } from 'vue';
-import { ElMessage, ElMessageBox, ElTag } from 'element-plus';
+import { ElMessage, ElMessageBox, ElTag, ElForm, type FormInstance } from 'element-plus';
 import {
   listUsers,
   createUser,
@@ -183,6 +183,7 @@ import {
   listUserRoles,
   addUserRole,
   removeUserRole,
+  type UpdateUserPayload,
 } from '@/api/iam';
 import { listShelves } from '@/api/shelves';
 import type { UserOut, UserRoleOut } from '@/types/user';
@@ -272,7 +273,8 @@ const drag = useColumnDrag(columnDefs, { listKey: 'user_list' });
 const showCreate = ref(false);
 const saving = ref(false);
 const editingUser = ref<UserOut | null>(null);
-const userFormRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP FormInstance；null 初值避免 dialog 关闭态访问 .validate
+const userFormRef = ref<FormInstance | null>(null);
 const userForm = reactive({ username: '', password: '', full_name: '' });
 const userRules = {
   username: [{ required: true, message: '必填' }],
@@ -315,11 +317,10 @@ function resetForm() {
   userForm.full_name = '';
   editingUser.value = null;
 }
-function editUser(obj: any) {
-  const u = obj as UserOut;
-  editingUser.value = u;
-  userForm.username = u.username;
-  userForm.full_name = u.full_name;
+function editUser(obj: UserOut) {
+  editingUser.value = obj;
+  userForm.username = obj.username;
+  userForm.full_name = obj.full_name;
   userForm.password = '';
   showCreate.value = true;
 }
@@ -330,7 +331,7 @@ async function saveUser() {
   saving.value = true;
   try {
     if (editingUser.value) {
-      const p: any = { full_name: userForm.full_name };
+      const p: UpdateUserPayload = { full_name: userForm.full_name };
       if (userForm.password) p.password = userForm.password;
       await updateUser(String(editingUser.value.id), p);
     } else {
@@ -343,8 +344,9 @@ async function saveUser() {
     showCreate.value = false;
     await fetchData();
     ElMessage.success('已保存');
-  } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败');
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage.error(msg || '保存失败');
   } finally {
     saving.value = false;
   }
@@ -360,15 +362,15 @@ async function doReset(id: string) {
   try {
     await resetUserPassword(id);
     ElMessage.success('已重置为默认密码 changeme');
-  } catch (e: any) {
-    ElMessage.error(e?.message || '重置失败');
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage.error(msg || '重置失败');
   }
 }
 
-async function openRoles(obj: any) {
-  const u = obj as UserOut;
-  roleUser.value = u;
-  roleList.value = await listUserRoles(String(u.id));
+async function openRoles(obj: UserOut) {
+  roleUser.value = obj;
+  roleList.value = await listUserRoles(String(obj.id));
   shelfOptions.value = (await listShelves({ is_active: true, limit: 200 })).items;
   addRoleForm.role = '';
   addRoleForm.shelfIds = [];
@@ -418,8 +420,9 @@ async function doAddRole() {
         /* 用户关掉提示，忽略 */
       });
     }
-  } catch (e: any) {
-    ElMessage.error(e?.message || '添加失败');
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ElMessage.error(msg || '添加失败');
   }
 }
 

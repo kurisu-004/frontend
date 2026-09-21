@@ -82,7 +82,39 @@ export interface UsePartsColumnFiltersDeps {
   snapshot: () => void;
 }
 
-export function usePartsColumnFilters(deps: UsePartsColumnFiltersDeps) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartsColumnFiltersReturn {
+  serialNoFilter: TextFilter;
+  drawingNoFilter: TextFilter;
+  nameFilter: TextFilter;
+  orderNoFilter: TextWithNullFilter;
+  requestDateFilter: DateRangeFilter;
+  plannedDateFilter: DateRangeFilter;
+  systemDateFilter: DateRangeWithNullFilter;
+  customerTree: ComputedRef<CustomerCascaderNode[]>;
+  customerFilter: CustomerFilter;
+  locationTree: ReturnType<typeof usePartLocationTree>['tree'];
+  locationFilter: LocationFilter;
+  statusNativeOptions: { text: string; value: string }[];
+  statusFilteredValue: ComputedRef<string[]>;
+  statusFilterActive: ComputedRef<boolean>;
+  statusSelectedCount: ComputedRef<number>;
+  nextProcessOptions: ComputedRef<{ text: string; value: string }[]>;
+  nextProcessFilteredValue: ComputedRef<string[]>;
+  nextProcessFilterActive: ComputedRef<boolean>;
+  nextProcessSelectedCount: ComputedRef<number>;
+  loadNextProcessOptions: () => Promise<void>;
+  onNativeFilterChange: (payload: Record<string, string[]>) => void;
+  serialNoFlash: Ref<boolean>;
+  onSerialNoScan: (rawCode: string) => void;
+  statusDraft: Ref<OrderStatus[]>;
+  statusUrgentDraft: Ref<boolean>;
+  nextProcessDraft: Ref<string[]>;
+}
+
+export function usePartsColumnFilters(
+  deps: UsePartsColumnFiltersDeps,
+): UsePartsColumnFiltersReturn {
   // ============ 客户树 + 位置树（供 popover 和行内编辑复用） ============
   const { tree: customerTree } = useCustomerTree();
   const { tree: locationTree, load: loadLocationTree } = usePartLocationTree();

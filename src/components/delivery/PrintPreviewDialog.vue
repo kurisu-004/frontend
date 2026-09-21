@@ -15,7 +15,7 @@
 -->
 <script setup lang="ts">
 import { computed, h, nextTick, ref, watch } from 'vue';
-import { ElMessage, ElTag } from 'element-plus';
+import { ElMessage, ElTag, ElTable, type TableInstance } from 'element-plus';
 import { Rank } from '@element-plus/icons-vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 
@@ -48,7 +48,8 @@ const emit = defineEmits<{
 
 const dlg = useDialogSize({ desktopWidth: 1100 });
 
-const previewTableRef = ref();
+// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP TableInstance；null 初值
+const previewTableRef = ref<TableInstance | null>(null);
 const rows = ref<PreviewRow[]>([]);
 const tbodyRef = ref<HTMLElement | null>(null);
 const loading = ref(false);
