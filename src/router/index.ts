@@ -22,7 +22,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'Login',
-    component: () => import('@/views/auth/Login.vue'),
+    component: () => import('@/views/auth/LoginView.vue'),
     meta: { title: '登录' },
   },
   // MainLayout 子树
@@ -35,7 +35,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'dashboard',
         name: 'Dashboard',
-        component: () => import('@/views/Dashboard.vue'),
+        component: () => import('@/views/dashboard/DashboardView.vue'),
         meta: { title: '首页', icon: 'House', breadcrumb: [{ label: '首页' }], menuCode: 'home' },
       },
       {
@@ -239,7 +239,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'workers',
         name: 'WorkerList',
-        component: () => import('@/views/WorkerList.vue'),
+        component: () => import('@/views/workers/WorkerList.vue'),
         meta: {
           title: '工人一览',
           icon: 'User',
