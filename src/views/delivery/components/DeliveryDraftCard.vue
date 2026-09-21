@@ -35,6 +35,7 @@
 <script setup lang="ts">
 import { h, ref } from 'vue';
 import { Delete, Printer } from '@element-plus/icons-vue';
+import { ElTable } from 'element-plus'; // 2026-09-21 T-B4：收紧 emits / ref / 函数参 any → InstanceType<typeof ElTable> | null
 import type { MergedDraftRow } from '../composables/useDeliveryDraftBoard';
 import type { ScanNoteSummary } from '@/types/deliveryNote';
 import {
@@ -67,14 +68,16 @@ const emit = defineEmits<{
   printNote: [];
   deleteDraft: [];
   submitDraft: [];
-  setTableRef: [el: any];
+  setTableRef: [el: InstanceType<typeof ElTable> | null];
 }>();
 
 // el-table 实例本地声明；emit 上传给 shell（board.setTableRef 内部 Map 管理）。
 // T9 教训：template ref 不能写到 readonly prop 上（Vue 静默失败）。
-const tableEl = ref<any>(null);
+// 2026-09-21 T-B4：收紧 any → InstanceType<typeof ElTable> | null，与 T-B3 的
+// DeliveryNoteScan.onCardTableRef / 模板 @setTableRef 签名保持一致。
+const tableEl = ref<InstanceType<typeof ElTable> | null>(null);
 
-function handleTableRef(el: any): void {
+function handleTableRef(el: InstanceType<typeof ElTable> | null): void {
   tableEl.value = el;
   emit('setTableRef', el);
 }
