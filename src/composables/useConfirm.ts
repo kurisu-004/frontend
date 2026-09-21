@@ -8,11 +8,16 @@ export interface ConfirmOptions {
   type?: 'warning' | 'info' | 'success' | 'error';
 }
 
+/** 2026-09-21 显式返回类型。 */
+export interface UseConfirmReturn {
+  dangerous: (title: string, message: string, opts?: ConfirmOptions) => Promise<boolean>;
+}
+
 /**
  * 提供一个 dangerous() 二次确认调用。
  * 返回 Promise<boolean>：true 表示用户点了确认，false 表示取消或关闭。
  */
-export function useConfirm() {
+export function useConfirm(): UseConfirmReturn {
   async function dangerous(
     title: string,
     message: string,

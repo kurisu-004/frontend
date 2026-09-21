@@ -119,7 +119,35 @@ function mergeWorker(brief: WorkerBriefDto, state: WorkerStateDto | null): Worke
   };
 }
 
-export function useWorkerQueue() {
+/** 2026-09-21 显式返回类型。 */
+export interface UseWorkerQueueReturn {
+  workers: Ref<Worker[]>;
+  processPools: Ref<ProcessPoolView[]>;
+  workerHeld: Ref<Record<string, WorkOrderCard[]>>;
+  loading: Ref<boolean>;
+  error: Ref<string | null>;
+  loadBoard: (shelfId: string | null) => Promise<void>;
+  moveBatchToWorker: (
+    batch_id: string,
+    to_worker_id: string,
+    shelf_id: string,
+    process_id: string,
+  ) => Promise<boolean>;
+  moveBatchToPool: (
+    batch_id: string,
+    from_worker_id: string,
+    shelf_id: string,
+    next_process_id: string,
+  ) => Promise<boolean>;
+  runAutoAllocate: (req: {
+    process_id: string;
+    shelf_id: string;
+    mode: 'COUNT' | 'TIME';
+    fill_ratio: number;
+  }) => Promise<void>;
+}
+
+export function useWorkerQueue(): UseWorkerQueueReturn {
   /** 拉所有 process 的 pool detail + 二次查 worker state。
    *  流程：
    *  1) GET /api/v2/processes?limit=500 拿到所有 process（用于「按 process 维度」遍历）

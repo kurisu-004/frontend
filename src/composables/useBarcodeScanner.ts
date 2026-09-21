@@ -14,7 +14,7 @@
 // - 扫码前缀后必须 preventDefault：避免 Enter 同时触发 form submit。
 // - 订阅者抛错要 try/catch：单个页面报错不应让全局监听崩。
 
-import { onBeforeUnmount, ref } from 'vue';
+import { onBeforeUnmount, ref, type Ref } from 'vue';
 
 export type ScanHandler = (code: string) => void;
 export type Unsubscribe = () => void;
@@ -121,7 +121,17 @@ function installListener(): void {
 }
 
 // ============ 公开 API ============
-export function useBarcodeScanner() {
+/** 2026-09-21 显式返回类型。 */
+export interface UseBarcodeScannerReturn {
+  onScan: (handler: ScanHandler) => Unsubscribe;
+  setEnabled: (value: boolean) => void;
+  clearBuffer: () => void;
+  enabled: Ref<boolean>;
+  lastScan: Ref<string>;
+  lastScanAt: Ref<number>;
+}
+
+export function useBarcodeScanner(): UseBarcodeScannerReturn {
   installListener();
 
   function onScan(handler: ScanHandler): Unsubscribe {
