@@ -13,7 +13,19 @@
 // - mount 时 `useUploadSession.init('parts_new')` + 配合 `usePartsNewDraft` 恢复
 //   session.files 中 status='done' 的条目到 rows 的「已上传」区。
 
-import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
+import {
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  provide,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+  type ComputedRef,
+  type Ref,
+  type ShallowRef,
+} from 'vue';
 import type { UseCosUploadReturn } from '@/composables/useCosUpload';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
@@ -32,6 +44,7 @@ import {
 } from '@/composables/usePartsNewDraft';
 import type { Customer } from '@/api/customer';
 import type { FileBinding, PartFileKind, UploadIntentsOut } from '@/types/part_file';
+import type { SessionFile } from '@/types/upload_session';
 import { computeSha256 } from '@/utils/fileHash';
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser';
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
@@ -233,7 +246,10 @@ export interface UsePartBatchPdfReturn {
   // applicants（来自 applicantSearch 共享 instance；组件 props 是 unref 后的裸值）
   applicantCandidates: Ref<Array<{ id: string; name: string }>>;
   applicantLoading: Ref<boolean>;
-  querySearch: (queryString: string, cb: (items: Array<{ id: string; name: string }>) => void) => void;
+  querySearch: (
+    queryString: string,
+    cb: (items: Array<{ id: string; name: string }>) => void,
+  ) => void;
   l1Customers: ComputedRef<Array<{ id: string; name: string }>>;
   l2Customers: ComputedRef<Array<{ id: string; name: string }>>;
   pdfFiles: Ref<UploadFile[]>;
@@ -282,20 +298,25 @@ export interface UsePartBatchPdfReturn {
   previewSourceRow: (row: SourceTreeRow) => void;
   hydrateResult: Ref<MergeResult | null>;
   hydrateRestoredCount: ComputedRef<number>;
-  orphanFileRefs: ComputedRef<unknown[]>;
+  // 2026-09-21 fix：原 unknown[] 与 PartBatchNew.vue v-bind propType `{client_ref, kind,
+  // original_filename, file_size, uploaded_at}[]` 不兼容；收紧到 SessionFile[]（后端
+  // /upload-sessions 单端点唯一结构，hydrate 输出与 UI 期望一致）。
+  orphanFileRefs: ComputedRef<SessionFile[]>;
   pdfUploadCells: Record<string, UploadStatusCell>;
   threeDUploadCells: Record<string, UploadStatusCell>;
   allUploadsDone: ComputedRef<boolean>;
   hasUploadErrors: ComputedRef<boolean>;
   getRowPdfCell: (row: { pdfSourceUid: string }) => UploadStatusCell | undefined;
   getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCell | undefined;
-  cosUpload: Ref<UseCosUploadReturn | null>;
+  cosUpload: ShallowRef<UseCosUploadReturn | null>;
   cosItemsRef: Ref<CosUploadItem[]>;
   uploadStage: Ref<'idle' | 'uploading' | 'uploaded' | 'committed'>;
   canStartUpload: ComputedRef<boolean>;
   canSubmitCreate: ComputedRef<boolean>;
   retryUploadByRow: (rowUid: string, slot: 'pdf' | '3d', threeDIndex?: number) => Promise<void>;
   onStartUpload: () => Promise<void>;
+  // 2026-09-21 fix：PartBatchNew.vue 在 v-bind 时传了 onCommit，但 T-B8 显式返回类型化时漏声明。
+  onCommit: () => Promise<void>;
   validateL2Customers: () => boolean;
   manualPartDialogVisible: Ref<boolean>;
   manualPartForm: { drawing_no: string; name: string; file: File | null };
@@ -315,10 +336,6 @@ export interface UsePartBatchPdfReturn {
   confirmManualAssembly: () => Promise<void>;
   onManualAsmFileChange: (file: UploadFile) => void;
   onManualAsmFileRemove: () => void;
-  removeStandalonePart: (uid: string) => void;
-  removeAssembly: (uid: string) => void;
-  removePdf: (pdfUid: string) => void;
-  onStartUpload: () => Promise<void>;
 }
 
 export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfReturn {
@@ -1308,7 +1325,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   // 2026-09-16 T3.4：COS 直传 + JSON batchCreate 链路
   // ============================================================
 
-  /** 反查用：client_ref → status cell（map 而非 reactive 数组，配合 watch deep）。 */  const pdfUploadCells = reactive<Record<string, UploadStatusCell>>({});
+  /** 反查用：client_ref → status cell（map 而非 reactive 数组，配合 watch deep）。 */ const pdfUploadCells =
+    reactive<Record<string, UploadStatusCell>>({});
   const threeDUploadCells = reactive<Record<string, UploadStatusCell>>({});
 
   /**
@@ -2045,7 +2063,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   // cosItemsRef 是顶层 Ref<CosUploadItem[]>，useCosUpload 在闭包里持有它，
   // retryItem 时能读到同一对象（mutable status / progress / etag 都是原地写）。
   // 「未开始上传」状态下用空数组占位（避免 useCosUpload 内部 items.value[i] 炸 RangeError）。
-  const cosUpload = ref<UseCosUploadReturn | null>(null);
+  const cosUpload = shallowRef<UseCosUploadReturn | null>(null);
   const cosItemsRef = ref<CosUploadItem[]>([]);
 
   /** 上传阶段机。状态机转换：
@@ -2561,6 +2579,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     previewSourceRow,
     previewStandalonePart,
     previewPdfSourceByUid,
+    previewAt,
     pdfSourceLabel,
     // selection
     onSourceSelectionChange,
@@ -2593,6 +2612,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     // provide/inject 取到这两个 ref，模板 :ref 把 el-table 实例回写到 composable。
     standaloneTableRef,
     assembliesTableRef,
+    standaloneTbodyRef,
+    assembliesTbodyRef,
+    resolveTbody,
+    originalPdfs,
     // 2026-09-16 T3.4：上传状态（UI 进度 / 重试用）
     pdfUploadCells,
     threeDUploadCells,
@@ -2600,6 +2623,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     getRowThreeDCell,
     allUploadsDone,
     hasUploadErrors,
+    cosUpload,
+    cosItemsRef,
+    validateL2Customers,
     // 2026-09-16 M3-B 复审：阶段机 + 按钮 disabled 判定
     uploadStage,
     canStartUpload,
@@ -2608,6 +2634,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     // 2026-09-18 A3：hydrate 结果给 UI 渲染顶部「已恢复 N 条」el-alert +
     // 孤儿文件待认领面板（合并由 usePartsNewDraft.mergeDraftWithSession 完成）
     hydrateRestoredCount,
+    hydrateResult,
     orphanFileRefs,
   };
 }

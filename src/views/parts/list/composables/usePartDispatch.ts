@@ -10,7 +10,7 @@
 // `handleProcessChainRequired`：命中 20706 → 弹「前往制定」确认框 → 跳
 // /production/process-design?part_id=XXX；命中后直接 return，不进 toast 兜底。
 
-import { ref, type Ref } from 'vue';
+import { ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { placeOnShelf, recallToPending, recallToProgramming, sendToProgramming } from '@/api/parts';
@@ -46,8 +46,10 @@ export interface UsePartDispatchReturn {
   dispatchNextProcessId: Ref<string | null>;
   dispatchPartId: Ref<string | null>;
   dispatchSubmitting: Ref<boolean>;
-  filteredShelves: ReturnType<typeof useShelfProcessFilter>['filteredShelves'];
-  filteredProcesses: ReturnType<typeof useShelfProcessFilter>['filteredProcesses'];
+  // 2026-09-21 fix：原 ReturnType<typeof useShelfProcessFilter> 默认泛型落到 Identifiable，
+  // 下游 el-option 访问 .code / .name 编译失败。收紧到 Shelf / Process 业务类型。
+  filteredShelves: ComputedRef<readonly Shelf[]>;
+  filteredProcesses: ComputedRef<readonly Process[]>;
   onDispatch: (row: PartListItem) => Promise<void>;
   onDispatchClosed: () => void;
   onDispatchConfirm: () => Promise<void>;
@@ -56,8 +58,9 @@ export interface UsePartDispatchReturn {
   batchDispatchShelfId: Ref<string | null>;
   batchDispatchNextProcessId: Ref<string | null>;
   batchDispatchSubmitting: Ref<boolean>;
-  batchFilteredShelves: ReturnType<typeof useShelfProcessFilter>['filteredShelves'];
-  batchFilteredProcesses: ReturnType<typeof useShelfProcessFilter>['filteredProcesses'];
+  // 2026-09-21 fix：同上，单件 / 批量两条 path 同源问题
+  batchFilteredShelves: ComputedRef<readonly Shelf[]>;
+  batchFilteredProcesses: ComputedRef<readonly Process[]>;
   onOpenBatchDispatch: () => Promise<void>;
   onBatchDispatchConfirm: () => Promise<void>;
   canRecallToPending: (row: PartListItem) => boolean;

@@ -105,13 +105,18 @@ export interface UseDeliveryScanSubmissionReturn {
   openPrintNote: (d: ScanNoteSummary) => Promise<void>;
   onSubmitDraft: (d: ScanNoteSummary) => Promise<void>;
   onSubmitDialogPassSuccess: () => Promise<void>;
-  onSubmitDialogPassPartial: (result: { passed: BulkPassItem[]; failed: BulkPassFailure[] }) => void;
+  onSubmitDialogPassPartial: (result: {
+    passed: BulkPassItem[];
+    failed: BulkPassFailure[];
+  }) => void;
   onSubmitDialogCancel: () => void;
   onSubmitCandidateDone: () => Promise<void>;
   onSubmitCandidateCancel: () => void;
 }
 
-export function useDeliveryScanSubmission(opts: UseDeliveryScanSubmissionOptions): UseDeliveryScanSubmissionReturn {
+export function useDeliveryScanSubmission(
+  opts: UseDeliveryScanSubmissionOptions,
+): UseDeliveryScanSubmissionReturn {
   const detailCache = useDeliveryNoteDetailCache();
 
   // ============ 扫码防抖态 ============

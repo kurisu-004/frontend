@@ -112,7 +112,9 @@ export interface UsePartsColumnFiltersReturn {
   nextProcessDraft: Ref<string[]>;
 }
 
-export function usePartsColumnFilters(deps: UsePartsColumnFiltersDeps): UsePartsColumnFiltersReturn {
+export function usePartsColumnFilters(
+  deps: UsePartsColumnFiltersDeps,
+): UsePartsColumnFiltersReturn {
   // ============ 客户树 + 位置树（供 popover 和行内编辑复用） ============
   const { tree: customerTree } = useCustomerTree();
   const { tree: locationTree, load: loadLocationTree } = usePartLocationTree();

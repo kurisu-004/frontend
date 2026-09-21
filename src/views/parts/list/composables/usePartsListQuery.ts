@@ -117,7 +117,10 @@ export interface UsePartsListQueryReturn {
   onSearch: () => void;
   onReset: () => void;
   onRowTypeChange: () => void;
-  onSortChange: (payload: { prop: string | null; order: 'ascending' | 'descending' | null }) => void;
+  onSortChange: (payload: {
+    prop: string | null;
+    order: 'ascending' | 'descending' | null;
+  }) => void;
   restoreState: (queryStatus: unknown) => void;
   snapshotPersist: () => void;
   registerBeforeSearch: (fn: () => void) => void;

@@ -12,7 +12,16 @@
 // - mount 时 `useUploadSession.init('parts_new')` + draft 持久化（与 PDF
 //   Tab 共享同一单例 session）。
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
+import {
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+  type ComputedRef,
+  type Ref,
+} from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { createApplicant } from '@/api/applicant';
@@ -116,7 +125,9 @@ export interface UsePartBatchManualReturn {
   previewDescCol: number;
   addDlg: DialogSizeResult;
   previewDlg: DialogSizeResult;
-  customerTree: ComputedRef<Array<{ id: string; name: string; children: Array<{ id: string; name: string }> }>>;
+  customerTree: ComputedRef<
+    Array<{ id: string; name: string; children: Array<{ id: string; name: string }> }>
+  >;
   applicantCandidates: Ref<Applicant[]>;
   applicantLoading: Ref<boolean>;
   querySearch: (queryString: string, cb: (items: Applicant[]) => void) => void;
@@ -133,7 +144,9 @@ export interface UsePartBatchManualReturn {
   rules: FormRules;
   drawingUploading: Ref<boolean>;
   hydrateRestoredCount: ComputedRef<number>;
-  orphanFileRefs: ComputedRef<Array<{ client_ref: string; kind: string; original_filename: string; file_size: number }>>;
+  orphanFileRefs: ComputedRef<
+    Array<{ client_ref: string; kind: string; original_filename: string; file_size: number }>
+  >;
   openDrawingPreview: (row: StagedEntry) => void;
   onDrawingPreviewClosed: () => void;
   closeAddDialog: () => void;

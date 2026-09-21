@@ -47,7 +47,9 @@ export interface UsePartBatchSelectionReturn {
   restoreTableSelection: () => void;
 }
 
-export function usePartBatchSelection(deps: UsePartBatchSelectionDeps): UsePartBatchSelectionReturn {
+export function usePartBatchSelection(
+  deps: UsePartBatchSelectionDeps,
+): UsePartBatchSelectionReturn {
   const batchMode = ref(false);
   const batchAction = ref<BatchAction>('print');
   const selectedRows = ref<PartListItem[]>([]);
