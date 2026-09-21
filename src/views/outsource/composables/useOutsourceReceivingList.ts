@@ -19,7 +19,7 @@
 //   - OutsourceReceivingTab 通过 props 读 receivingFilter / receiveDialogXxx，
 //     通过 defineExpose 把 refresh() 暴露给页级 shell 用于「发送后联动刷新」。
 
-import { computed, reactive, ref, type Ref } from 'vue';
+import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { listOutsourceInFlight } from '@/api/outsource';
 import { receiveFromOutsource, toInspection } from '@/api/parts';
@@ -37,7 +37,41 @@ export interface UseOutsourceReceivingListOptions {
   processes: Ref<readonly Process[]>;
 }
 
-export function useOutsourceReceivingList(options: UseOutsourceReceivingListOptions) {
+/** 2026-09-21 显式返回类型。 */
+export interface UseOutsourceReceivingListReturn {
+  receivingError: Ref<string | null>;
+  receivingFilter: { keyword: string; customer_id: string };
+  receivingPagedRef: Ref<unknown>;
+  receiveDialogVisible: Ref<boolean>;
+  receiveTarget: Ref<OutsourceInFlightItem | null>;
+  receiveSubmitting: Ref<boolean>;
+  receiveQuantity: Ref<number>;
+  receiveBranch: Ref<Branch>;
+  receiveShelf: Ref<string>;
+  receiveProcess: Ref<string>;
+  inspectionShelves: ComputedRef<ShelfItem[]>;
+  filteredProductionShelves: ComputedRef<ShelfItem[]>;
+  filteredInhouseProcesses: ComputedRef<Process[]>;
+  receiveBranchLabel: ComputedRef<string>;
+  restore: () => unknown;
+  snapshot: () => unknown;
+  clearPersisted: () => unknown;
+  receivingFetcher: (params: {
+    page: number;
+    pageSize: number;
+  }) => Promise<{ items: OutsourceInFlightItem[]; total: number }>;
+  refreshReceiving: () => Promise<void>;
+  onReceivingSearch: () => void;
+  onReceivingReset: () => void;
+  receivingRowClassName: (ctx: { row: OutsourceInFlightItem }) => string;
+  openReceive: (row: OutsourceInFlightItem) => void;
+  onReceiveDialogClosed: () => void;
+  onConfirmReceive: () => Promise<void>;
+}
+
+export function useOutsourceReceivingList(
+  options: UseOutsourceReceivingListOptions,
+): UseOutsourceReceivingListReturn {
   const { dangerous: confirmDangerous } = useConfirm();
 
   // ============ 列表 filter（持久化） ============

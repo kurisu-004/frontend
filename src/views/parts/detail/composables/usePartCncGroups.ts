@@ -10,7 +10,7 @@
 // 非空，否则 20706 BIZ_PROCESS_CHAIN_REQUIRED。onReleaseToShelf 接 handleProcessChainRequired：
 // 命中 → 弹「前往制定」确认框 → 跳 /production/process-design?part_id=XXX。
 
-import { computed, ref, watch, type Ref } from 'vue';
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, type UploadFile } from 'element-plus';
 import { useRouter } from 'vue-router';
 import {
@@ -31,7 +31,29 @@ export interface CncSetupGroup {
   gcodes: PartFileItem[];
 }
 
-export function usePartCncGroups(partId: Ref<string>) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartCncGroupsReturn {
+  cncPrograms: Ref<PartFileItem[]>;
+  setupSheets: Ref<PartFileItem[]>;
+  cncLoading: Ref<boolean>;
+  cncSetupGroups: ComputedRef<CncSetupGroup[]>;
+  canManageCncFiles: ComputedRef<boolean>;
+  canManageSetupSheet: ComputedRef<boolean>;
+  fetchCncPrograms: () => Promise<void>;
+  formatBytes: (v: string | number) => string;
+  onDownloadCnc: (p: PartFileItem) => Promise<void>;
+  onDeleteCnc: (id: string, version: number) => Promise<void>;
+  onPairUpload: (rawGcodes: File[], setupFile: File) => Promise<boolean>;
+  onReleaseToShelf: (shelfId: string, processId: string) => Promise<boolean>;
+  fileList: (
+    current: UploadFile[],
+    file: UploadFile,
+    accept: string,
+    matchExt?: boolean,
+  ) => UploadFile[];
+}
+
+export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
   // 2026-09-17 PR-3 修复：useRouter() 必须在 setup 顶部一次性拿闭包复用，禁止在 async 事件回调里调
   // —— vue-router 4.6.4 + vue 3.5.38 下 inject() 在 lifecycle hook 之外返回 undefined。
   const router = useRouter();
