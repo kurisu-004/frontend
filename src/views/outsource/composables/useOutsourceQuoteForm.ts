@@ -15,7 +15,7 @@
 // - parts / processes / customers（页级共享 lookup，由 shell 装载并下传）
 // - 表格列表状态（由 useOutsourceQuoteTable 持有）
 
-import { reactive, ref, watch } from 'vue';
+import { reactive, ref, watch, type Ref } from 'vue';
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
 import {
   approveOutsourceQuote,
@@ -47,7 +47,33 @@ export interface UseOutsourceQuoteFormOptions {
   refresh: () => Promise<void> | void;
 }
 
-export function useOutsourceQuoteForm(opts: UseOutsourceQuoteFormOptions) {
+/** 2026-09-21 显式返回类型。 */
+export interface UseOutsourceQuoteFormReturn {
+  showCreate: Ref<boolean>;
+  createFormRef: Ref<FormInstance | undefined>;
+  createForm: CreateQuoteForm;
+  createRules: FormRules;
+  openCreate: () => void;
+  onCreate: () => Promise<void>;
+  onCreatePartChange: (partId: string) => void;
+  companies: Ref<{ id: string; name: string }[]>;
+  companiesLoading: Ref<boolean>;
+  loadCompaniesByProcess: (processId: string) => Promise<void>;
+  onSubmit: (q: OutsourceQuote) => Promise<void>;
+  showApprove: Ref<boolean>;
+  showReject: Ref<boolean>;
+  reviewNote: Ref<string>;
+  activeQuote: Ref<OutsourceQuote | null>;
+  openApprove: (q: OutsourceQuote) => void;
+  openReject: (q: OutsourceQuote) => void;
+  onApprove: () => Promise<void>;
+  onReject: () => Promise<void>;
+  onDelete: (q: OutsourceQuote) => Promise<void>;
+}
+
+export function useOutsourceQuoteForm(
+  opts: UseOutsourceQuoteFormOptions,
+): UseOutsourceQuoteFormReturn {
   const { dangerous: confirmDangerous } = useConfirm();
 
   // ============ 新建报价 dialog ============
