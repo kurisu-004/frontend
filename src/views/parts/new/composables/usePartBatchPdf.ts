@@ -307,6 +307,18 @@ export interface UsePartBatchPdfReturn {
   manualAsmFileList: ComputedRef<UploadFile[]>;
   manualAsmFormValid: ComputedRef<boolean>;
   closeManualAsmDialog: () => void;
+  addManualPart: () => void;
+  confirmManualPart: () => Promise<void>;
+  onManualPartFileChange: (file: UploadFile) => void;
+  onManualPartFileRemove: () => void;
+  addManualAssembly: () => void;
+  confirmManualAssembly: () => Promise<void>;
+  onManualAsmFileChange: (file: UploadFile) => void;
+  onManualAsmFileRemove: () => void;
+  removeStandalonePart: (uid: string) => void;
+  removeAssembly: (uid: string) => void;
+  removePdf: (pdfUid: string) => void;
+  onStartUpload: () => Promise<void>;
 }
 
 export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfReturn {
