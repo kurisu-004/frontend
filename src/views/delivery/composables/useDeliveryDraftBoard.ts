@@ -103,7 +103,31 @@ function foldBySerial(
   return order.map((k) => groups.get(k)!);
 }
 
-export function useDeliveryDraftBoard() {
+/** 2026-09-21 显式返回类型。 */
+export interface UseDeliveryDraftBoardReturn {
+  drafts: Ref<Record<string, ScanNoteSummary>>;
+  draftDetails: Record<string, DeliveryNoteLineItem[]>;
+  draftsLoading: Ref<boolean>;
+  draftsCount: ComputedRef<number>;
+  selectedByNote: Record<string, MergedDraftRow[]>;
+  printingByNote: Record<string, boolean>;
+  deletingByNote: Record<string, boolean>;
+  setTableRef: (noteId: string, el: DraftTableInstance | null) => void;
+  foldedRows: (noteId: string) => MergedDraftRow[];
+  rowClassName: (ctx: { row: MergedDraftRow }) => string;
+  onSelectionChange: (noteId: string, rows: MergedDraftRow[]) => void;
+  hasSelection: (noteId: string) => boolean;
+  getSelectionSize: (noteId: string) => number;
+  reloadDrafts: (l1Id: string) => Promise<void>;
+  refreshDraftDetail: (noteId: string) => Promise<DeliveryNoteDetailOut | null>;
+  writeDraftFromScan: (note: ScanNoteSummary) => void;
+  onRemove: (d: ScanNoteSummary, row: MergedDraftRow) => Promise<void>;
+  onPrintLabels: (d: ScanNoteSummary) => Promise<void>;
+  onDeleteDraft: (d: ScanNoteSummary) => Promise<void>;
+  clearNoteLocalState: (noteId: string) => void;
+}
+
+export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
   const printedLabelStore = usePrintedLabels();
   const detailCache = useDeliveryNoteDetailCache();
 

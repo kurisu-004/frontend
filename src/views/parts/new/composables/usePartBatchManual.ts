@@ -12,7 +12,7 @@
 // - mount 时 `useUploadSession.init('parts_new')` + draft 持久化（与 PDF
 //   Tab 共享同一单例 session）。
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type Ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { createApplicant } from '@/api/applicant';
@@ -111,7 +111,53 @@ export interface UsePartBatchManualOptions {
 /**
  * Tab 1「录入」的全部 state + handler。返回值直接 `v-bind` 给 PartBatchManualTab。
  */
-export function usePartBatchManual(opts: UsePartBatchManualOptions) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartBatchManualReturn {
+  previewDescCol: number;
+  addDlg: DialogSizeResult;
+  previewDlg: DialogSizeResult;
+  customerTree: ComputedRef<Array<{ id: string; name: string; children: Array<{ id: string; name: string }> }>>;
+  applicantCandidates: Ref<Applicant[]>;
+  applicantLoading: Ref<boolean>;
+  querySearch: (queryString: string, cb: (items: Applicant[]) => void) => void;
+  staged: Ref<StagedEntry[]>;
+  addDialogVisible: Ref<boolean>;
+  dialogSubmitting: Ref<boolean>;
+  editingUid: Ref<string | null>;
+  drawingPreviewVisible: Ref<boolean>;
+  drawingPreviewRow: Ref<StagedEntry | null>;
+  previewDialogVisible: Ref<boolean>;
+  previewing: Ref<StagedEntry | null>;
+  submitting: Ref<boolean>;
+  form: FormState;
+  rules: FormRules;
+  drawingUploading: Ref<boolean>;
+  hydrateRestoredCount: ComputedRef<number>;
+  orphanFileRefs: ComputedRef<unknown[]>;
+  openDrawingPreview: (row: StagedEntry) => void;
+  onDrawingPreviewClosed: () => void;
+  closeAddDialog: () => void;
+  closePreviewDialog: () => void;
+  closeDrawingPreview: () => void;
+  openAddDialog: () => void;
+  onCustomerChange: (pickedId: unknown) => Promise<void>;
+  onApplicantSelect: (item: Record<string, unknown>) => void;
+  requestDrawingUpload: (files: File[]) => Promise<CosUploadSession>;
+  onDrawingUploaded: (item: CosUploadedItem) => void;
+  onDrawingItemsChange: (items: CosUploaderItem[]) => void;
+  onDrawingAllDone: () => void;
+  onDrawingUploadError: (item: CosUploaderItem) => void;
+  onAddConfirm: (formEl?: FormInstance) => Promise<void>;
+  onDialogClosed: (formEl?: FormInstance) => void;
+  onRowPreview: (row: StagedEntry) => void;
+  onEditFromPreview: () => void;
+  onRemoveRow: (uid: string) => void;
+  onClearAll: () => Promise<void>;
+  rowClassName: (ctx: { row: unknown }) => string;
+  onSubmit: () => Promise<void>;
+}
+
+export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatchManualReturn {
   const { customers, applicantSearch } = opts;
   const router = useRouter();
 
