@@ -40,7 +40,23 @@ export interface UsePartInlineEditDeps {
   isBatchMode: () => boolean;
 }
 
-export function usePartInlineEdit(deps: UsePartInlineEditDeps) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartInlineEditReturn {
+  editingId: Ref<string | null>;
+  savingEdit: Ref<boolean>;
+  editBuffer: EditBuffer;
+  startEdit: (row: PartListItem) => void;
+  cancelEdit: () => void;
+  saveEdit: (row: PartListItem) => Promise<void>;
+  onRowDblClick: (row: PartListItem) => void;
+  displayTotalPrice: (row: PartListItem) => string;
+  totalPriceSummary: SummaryMethod<PartListItem>;
+  applicantSuggest: (queryString: string, callback: (items: Applicant[]) => void) => void;
+  applicantLoading: Ref<boolean>;
+  resolveRootCustomerForRow: (row: PartListItem) => string | null;
+}
+
+export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEditReturn {
   const editingId = ref<string | null>(null);
   const savingEdit = ref(false);
   const editBuffer = reactive<EditBuffer>({
