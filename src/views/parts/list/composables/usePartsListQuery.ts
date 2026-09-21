@@ -9,7 +9,7 @@
 // - 横切 beforeSearch / afterFetch：供其他 composable（如 usePartsColumnFilters）在
 //   fetch 前后插入逻辑（同步 draft / 调 snapshot / 恢复勾选等）。
 
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { ListPartsParams } from '@/api/parts';
 import {
@@ -98,7 +98,35 @@ export interface UsePartsListQueryOptions {
   isCncProgrammer: boolean;
 }
 
-export function usePartsListQuery(opts: UsePartsListQueryOptions) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartsListQueryReturn {
+  search: PartsSearchState;
+  items: Ref<PartListItem[]>;
+  total: Ref<number>;
+  loading: Ref<boolean>;
+  errorMsg: Ref<string | null>;
+  page: Ref<number>;
+  pageSize: Ref<number>;
+  sortBy: Ref<PartSortKey>;
+  sortDir: Ref<SortDir>;
+  statusOptions: { value: OrderStatus; label: string }[];
+  tableKey: ComputedRef<string>;
+  defaultSort: ComputedRef<{ prop: string; order: 'ascending' | 'descending' }>;
+  emptyText: ComputedRef<string>;
+  fetchList: () => Promise<void>;
+  onSearch: () => void;
+  onReset: () => void;
+  onRowTypeChange: () => void;
+  onSortChange: (payload: { prop: string | null; order: 'ascending' | 'descending' | null }) => void;
+  restoreState: (queryStatus: unknown) => void;
+  snapshotPersist: () => void;
+  registerBeforeSearch: (fn: () => void) => void;
+  registerAfterFetch: (fn: () => void) => void;
+  registerClearNativeFilters: (fn: () => void) => void;
+  resetAllFilters: () => void;
+}
+
+export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQueryReturn {
   // ============ 状态 ============
   const search = reactive<PartsSearchState>(initialPartsSearch(opts.isCncProgrammer));
   const items = ref<PartListItem[]>([]);
