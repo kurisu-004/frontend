@@ -133,7 +133,7 @@ export interface UsePartBatchManualReturn {
   rules: FormRules;
   drawingUploading: Ref<boolean>;
   hydrateRestoredCount: ComputedRef<number>;
-  orphanFileRefs: ComputedRef<unknown[]>;
+  orphanFileRefs: ComputedRef<Array<{ client_ref: string; kind: string; original_filename: string; file_size: number }>>;
   openDrawingPreview: (row: StagedEntry) => void;
   onDrawingPreviewClosed: () => void;
   closeAddDialog: () => void;
