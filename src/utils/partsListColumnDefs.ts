@@ -1,4 +1,4 @@
-// views/parts/list/composables/partsListColumnDefs.ts
+// 原 views/parts/list/composables/partsListColumnDefs.ts，2026-09-21 迁至 src/utils/
 //
 // 2026-09-15 从 PartsList.vue 抽出：18 列 ColumnDef 工厂（base 9 + price 2 仅 canEdit +
 // tail 7）。cellRender / headerRender 闭包持 raw composable 切片（ref 照写 .value），

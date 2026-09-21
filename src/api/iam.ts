@@ -4,7 +4,7 @@
 // changeMyPassword）+ `src/api/users.ts`（listUsers / createUser / updateUser /
 // deactivateUser / resetUserPassword / listUserRoles / addUserRole /
 // removeUserRole）合并为单一 `src/api/iam.ts`。13 个函数名保持不变，消费方
-// （`useAuthSession` / `Login.vue` / `UserList.vue` / `http.ts` / `MainLayout.vue`）
+// （`useAuthSession` / `LoginView.vue` / `UserList.vue` / `http.ts` / `MainLayout.vue`）
 // 仅改 import 路径。
 //
 // 2026-09-14 切 v2：v1 Python FastAPI 无 Redis session，登录反复出错；

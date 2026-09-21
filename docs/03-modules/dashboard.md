@@ -8,20 +8,20 @@
 
 ## 一、入口与路由
 
-| 项       | 值                                  |
-| -------- | ----------------------------------- |
-| 路径     | `/dashboard`（`/` 重定向到此）      |
-| 组件     | `src/views/Dashboard.vue`           |
-| 守卫     | `requireAuth: true`（所有登录用户） |
-| menuCode | `home`                              |
-| 父级     | `MainLayout` 子树                   |
+| 项       | 值                                      |
+| -------- | --------------------------------------- |
+| 路径     | `/dashboard`（`/` 重定向到此）          |
+| 组件     | `src/views/dashboard/DashboardView.vue` |
+| 守卫     | `requireAuth: true`（所有登录用户）     |
+| menuCode | `home`                                  |
+| 父级     | `MainLayout` 子树                       |
 
 路由定义见 `src/router/index.ts`，父级 `/` 节点自带 `redirect: '/dashboard'`，登录后浏览器地址栏落到 `/dashboard`。
 
 ## 二、关键页面
 
-- `src/views/Dashboard.vue` — 上下两段：顶部 2/3 货架轮播（`el-carousel` 每页 2 个货架卡，间隔 8s）+ 底部 1/3 正在加工（按工人分组的流水号 chips）。数据全部来自 WS snapshot，不发任何 HTTP 拉取。
-- `src/components/NotificationBanner.vue` — 业务事件横幅（`Teleport to body`），消费 `onDashboardEvent`，由 `MainLayout` 挂载，**不在 Dashboard.vue 内**。PICKED_UP / RETURNED / INSPECTED 三类事件对应不同图标，加急件额外显示红色 tag。
+- `src/views/dashboard/DashboardView.vue` — 上下两段：顶部 2/3 货架轮播（`el-carousel` 每页 2 个货架卡，间隔 8s）+ 底部 1/3 正在加工（按工人分组的流水号 chips）。数据全部来自 WS snapshot，不发任何 HTTP 拉取。
+- `src/components/NotificationBanner.vue` — 业务事件横幅（`Teleport to body`），消费 `onDashboardEvent`，由 `MainLayout` 挂载，**不在 DashboardView 内**。PICKED_UP / RETURNED / INSPECTED 三类事件对应不同图标，加急件额外显示红色 tag。
 
 ## 三、主要 API 调用
 
@@ -46,7 +46,7 @@
 | MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER | 是     | 是                                 |
 | SHELF_ACCOUNT（工控机）                      | 是     | **否**（`canOpenPartDetail` 闭锁） |
 
-`canOpenPartDetail` 在 `Dashboard.vue` 顶部定义，纯前端 gate；后端 `GET /parts/{id}` 同样对 SHELF_ACCOUNT 收紧，前后端一致。
+`canOpenPartDetail` 在 `DashboardView` 顶部定义，纯前端 gate；后端 `GET /parts/{id}` 同样对 SHELF_ACCOUNT 收紧，前后端一致。
 
 ## 六、相关 composable / utils
 
