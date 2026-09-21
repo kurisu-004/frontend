@@ -230,6 +230,10 @@ export interface UsePartBatchPdfOptions {
 /** 2026-09-21 显式返回类型。 */
 export interface UsePartBatchPdfReturn {
   pdfForm: PdfFormState;
+  // applicants（来自 applicantSearch 共享 instance；组件 props 是 unref 后的裸值）
+  applicantCandidates: Ref<Array<{ id: string; name: string }>>;
+  applicantLoading: Ref<boolean>;
+  querySearch: (queryString: string, cb: (items: Array<{ id: string; name: string }>) => void) => void;
   l1Customers: ComputedRef<Array<{ id: string; name: string }>>;
   l2Customers: ComputedRef<Array<{ id: string; name: string }>>;
   pdfFiles: Ref<UploadFile[]>;
@@ -270,6 +274,8 @@ export interface UsePartBatchPdfReturn {
   pdfSourceLabel: (uid: string) => string;
   previewStandalonePart: (row: StandalonePartRow) => void;
   previewPdfSourceByUid: (uid: string) => void;
+  onUnitPriceChange: (row: StandalonePartRow, v: number | undefined) => void;
+  onChildUnitPriceChange: (c: AssemblyChildRow, v: number | undefined) => void;
   onL2Change: (row: { customer_id: string; customer_name?: string }, v: string) => void;
   onAsmPlannedChange: (asmRow: AssemblyRow, v: string) => void;
   onSourceSelectionChange: (rows: SourceTreeRow[]) => void;
@@ -292,12 +298,14 @@ export interface UsePartBatchPdfReturn {
   onStartUpload: () => Promise<void>;
   validateL2Customers: () => boolean;
   manualPartDialogVisible: Ref<boolean>;
-  manualPartFormValid: ComputedRef<boolean>;
+  manualPartForm: { drawing_no: string; name: string; file: File | null };
   manualPartFileList: ComputedRef<UploadFile[]>;
+  manualPartFormValid: ComputedRef<boolean>;
   closeManualPartDialog: () => void;
   manualAsmDialogVisible: Ref<boolean>;
-  manualAsmFormValid: ComputedRef<boolean>;
+  manualAsmForm: { drawing_no: string; name: string; file: File | null };
   manualAsmFileList: ComputedRef<UploadFile[]>;
+  manualAsmFormValid: ComputedRef<boolean>;
   closeManualAsmDialog: () => void;
 }
 
