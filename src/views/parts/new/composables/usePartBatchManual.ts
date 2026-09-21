@@ -34,7 +34,7 @@ import type {
   CosUploadSession,
 } from '@/composables/useCosUploader';
 import { useConfirm } from '@/composables/useConfirm';
-import { useDialogSize } from '@/composables/useDialogSize';
+import { useDialogSize, type DialogSizeResult } from '@/composables/useDialogSize';
 import {
   findCustomerLabel,
   makeUid,

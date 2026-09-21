@@ -16,7 +16,7 @@
 // - 创建 / 审批 dialog（useOutsourceQuoteForm 持有）
 // - 图纸预览状态（由 drawingPreview 子组件 / composable 持有；当前留在 shell）
 
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { listOutsourceQuotes } from '@/api/outsource';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
@@ -101,7 +101,7 @@ export interface UseOutsourceQuoteTableReturn {
   errorMsg: Ref<string | null>;
   sortBy: Ref<QuoteSortKey>;
   sortDir: Ref<'ASC' | 'DESC'>;
-  pagedRef: Ref<unknown>;
+  pagedRef: Ref<{ total?: number; items?: OutsourceQuote[] } | undefined>;
   statusFilterActive: ComputedRef<boolean>;
   customerFilterActive: ComputedRef<boolean>;
   statusPopoverVisible: Ref<boolean>;

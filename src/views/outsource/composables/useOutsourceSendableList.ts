@@ -75,7 +75,7 @@ export interface UseOutsourceSendableListOptions {
 export interface UseOutsourceSendableListReturn {
   sendableError: Ref<string | null>;
   sendableFilter: { keyword: string; customer_id: string };
-  sendablePagedRef: Ref<unknown>;
+  sendablePagedRef: Ref<{ total?: number; items?: SendableItem[]; fetch?: () => Promise<void>; reset?: () => Promise<void> } | undefined>;
   sendQueue: Ref<SendQueueItem[]>;
   batchSending: Ref<boolean>;
   scanInput: Ref<string>;

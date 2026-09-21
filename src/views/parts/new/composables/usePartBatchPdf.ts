@@ -197,6 +197,19 @@ export interface PdfPreviewState {
   page: number;
 }
 
+/**
+ * 2026-09-21 显式返回类型需要：模块级 export UploadStatusCell 接口，
+ * UsePartBatchPdfReturn 在文件较前位置引用它。
+ */
+export interface UploadStatusCell {
+  /** 当前阶段：hashing / uploading / done / error / pending。 */
+  status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
+  /** 0-100。hashing 与 uploading 阶段都走该字段。 */
+  progress: number;
+  /** 错误信息（status='error' 时）。 */
+  error?: string;
+}
+
 export interface UsePartBatchPdfOptions {
   /** 客户全集（由 shell 加载并传入；两个 Tab 共用）。 */
   customers: Ref<Customer[]>;
@@ -1275,21 +1288,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   // 2026-09-16 T3.4：COS 直传 + JSON batchCreate 链路
   // ============================================================
 
-  /**
-   * 文件上传运行时单元（UI 进度展示用）。key = `pdf:${srcUid}` 或 `3d:${fileUid}`，
-   * 与 filesToUpload[i].key 一一对应；UI 通过 `getPdfUploadCell(rowUid, 'pdf')` /
-   * `getThreeDUploadCell(rowUid, threeDIndex)` 反查。
-   */
-  interface UploadStatusCell {
-    /** 当前阶段：hashing / uploading / done / error / pending。 */
-    status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
-    /** 0-100。hashing 与 uploading 阶段都走该字段。 */
-    progress: number;
-    /** 错误信息（status='error' 时）。 */
-    error?: string;
-  }
-  /** 反查用：client_ref → status cell（map 而非 reactive 数组，配合 watch deep）。 */
-  const pdfUploadCells = reactive<Record<string, UploadStatusCell>>({});
+  /** 反查用：client_ref → status cell（map 而非 reactive 数组，配合 watch deep）。 */  const pdfUploadCells = reactive<Record<string, UploadStatusCell>>({});
   const threeDUploadCells = reactive<Record<string, UploadStatusCell>>({});
 
   /**

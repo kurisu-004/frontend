@@ -41,7 +41,7 @@ export interface UseOutsourceReceivingListOptions {
 export interface UseOutsourceReceivingListReturn {
   receivingError: Ref<string | null>;
   receivingFilter: { keyword: string; customer_id: string };
-  receivingPagedRef: Ref<unknown>;
+  receivingPagedRef: Ref<{ total?: number; fetch?: () => Promise<void>; reset?: () => Promise<void> } | undefined>;
   receiveDialogVisible: Ref<boolean>;
   receiveTarget: Ref<OutsourceInFlightItem | null>;
   receiveSubmitting: Ref<boolean>;
@@ -49,9 +49,9 @@ export interface UseOutsourceReceivingListReturn {
   receiveBranch: Ref<Branch>;
   receiveShelf: Ref<string>;
   receiveProcess: Ref<string>;
-  inspectionShelves: ComputedRef<ShelfItem[]>;
-  filteredProductionShelves: ComputedRef<ShelfItem[]>;
-  filteredInhouseProcesses: ComputedRef<Process[]>;
+  inspectionShelves: ComputedRef<readonly ShelfItem[]>;
+  filteredProductionShelves: ComputedRef<readonly ShelfItem[]>;
+  filteredInhouseProcesses: ComputedRef<readonly Process[]>;
   receiveBranchLabel: ComputedRef<string>;
   restore: () => unknown;
   snapshot: () => unknown;
