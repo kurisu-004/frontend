@@ -364,7 +364,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
   async function readExcel(file: File): Promise<BidRow[]> {
     const buf = await file.arrayBuffer();
 
-    const XLSX: any = await import('xlsx');
+    // 2026-09-21 对齐 TS 严格：动态 import 拿 xlsx 必须靠 typeof import() 反推类型。
+    // 项目 eslint 规则 @typescript-eslint/consistent-type-imports 默认禁此内联写法，
+    // 但本文件刻意保持动态 import 以避免 xlsx（~700KB）进首屏 bundle，故此处加行级豁免。
+    // 已知风险见 docs/08-known-risks/dependency-risks.md。
+    // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- 动态 import 故意不进主 bundle，类型只能内联 typeof import() 反推
+    const XLSX: typeof import('xlsx') = await import('xlsx');
     const wb = XLSX.read(buf, { type: 'array' });
     const sheetNames = wb.SheetNames;
     let parsed: ParseResult;
