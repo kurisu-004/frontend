@@ -13,7 +13,7 @@
 // - mount 时 `useUploadSession.init('parts_new')` + 配合 `usePartsNewDraft` 恢复
 //   session.files 中 status='done' 的条目到 rows 的「已上传」区。
 
-import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, watch, type Ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import type { UseCosUploadReturn } from '@/composables/useCosUpload';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
@@ -214,7 +214,81 @@ export interface UsePartBatchPdfOptions {
 /**
  * Tab 2「PDF 批量上传」的全部 state + handler。返回值直接 `v-bind` 给 PartBatchPdfTab。
  */
-export function usePartBatchPdf(opts: UsePartBatchPdfOptions) {
+/** 2026-09-21 显式返回类型。 */
+export interface UsePartBatchPdfReturn {
+  pdfForm: PdfFormState;
+  l1Customers: ComputedRef<Array<{ id: string; name: string }>>;
+  l2Customers: ComputedRef<Array<{ id: string; name: string }>>;
+  pdfFiles: Ref<UploadFile[]>;
+  excelFiles: Ref<UploadFile[]>;
+  threeDModelFiles: Ref<UploadFile[]>;
+  pdfBuildingTree: Ref<boolean>;
+  pdfSubmitting: Ref<boolean>;
+  allPdfs: Ref<PdfSource[]>;
+  selectedPages: Ref<Set<string>>;
+  standaloneParts: Ref<StandalonePartRow[]>;
+  assemblies: Ref<AssemblyRow[]>;
+  standaloneTableRef: Ref<{ $el?: HTMLElement } | null>;
+  assembliesTableRef: Ref<{ $el?: HTMLElement } | null>;
+  standaloneTbodyRef: Ref<HTMLElement | null>;
+  assembliesTbodyRef: Ref<HTMLElement | null>;
+  originalPdfs: ComputedRef<PdfSource[]>;
+  totalAssemblyChildren: ComputedRef<number>;
+  sourceTree: ComputedRef<SourceTreeRow[]>;
+  onPdfChange: (file: UploadFile) => void;
+  onPdfRemove: (file: UploadFile) => void;
+  onExcelChange: (file: UploadFile) => void;
+  onExcelRemove: (file: UploadFile) => void;
+  onThreeDModelChange: (file: UploadFile) => void;
+  onThreeDModelRemove: (file: UploadFile) => void;
+  rebuildFromUploads: () => Promise<void>;
+  previewAt: (pdfSourceUid: string, title: string, page: number) => void;
+  closePdfPreview: () => void;
+  pdfPreviewing: Ref<PdfPreviewState | null>;
+  pdfPreviewVisible: Ref<boolean>;
+  resolveTbody: (tableRef: Ref<{ $el?: HTMLElement } | null>) => HTMLElement | null;
+  clearSelection: (table?: { clearSelection: () => void } | null) => void;
+  mergeSelectedAsPart: () => Promise<void>;
+  mergeSelectedAsAssembly: () => Promise<void>;
+  splitStandalonePart: (row: StandalonePartRow) => void;
+  removePdf: (pdfUid: string) => void;
+  removeStandalonePart: (uid: string) => void;
+  removeAssembly: (uid: string) => void;
+  pdfSourceLabel: (uid: string) => string;
+  previewStandalonePart: (row: StandalonePartRow) => void;
+  previewPdfSourceByUid: (uid: string) => void;
+  onL2Change: (row: { customer_id: string; customer_name?: string }, v: string) => void;
+  onAsmPlannedChange: (asmRow: AssemblyRow, v: string) => void;
+  onSourceSelectionChange: (rows: SourceTreeRow[]) => void;
+  previewSourceRow: (row: SourceTreeRow) => void;
+  hydrateResult: Ref<MergeResult | null>;
+  hydrateRestoredCount: ComputedRef<number>;
+  orphanFileRefs: ComputedRef<unknown[]>;
+  pdfUploadCells: Record<string, UploadStatusCell>;
+  threeDUploadCells: Record<string, UploadStatusCell>;
+  allUploadsDone: ComputedRef<boolean>;
+  hasUploadErrors: ComputedRef<boolean>;
+  getRowPdfCell: (row: { pdfSourceUid: string }) => UploadStatusCell | undefined;
+  getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCell | undefined;
+  cosUpload: Ref<UseCosUploadReturn | null>;
+  cosItemsRef: Ref<CosUploadItem[]>;
+  uploadStage: Ref<'idle' | 'uploading' | 'uploaded' | 'committed'>;
+  canStartUpload: ComputedRef<boolean>;
+  canSubmitCreate: ComputedRef<boolean>;
+  retryUploadByRow: (rowUid: string, slot: 'pdf' | '3d', threeDIndex?: number) => Promise<void>;
+  onStartUpload: () => Promise<void>;
+  validateL2Customers: () => boolean;
+  manualPartDialogVisible: Ref<boolean>;
+  manualPartFormValid: ComputedRef<boolean>;
+  manualPartFileList: ComputedRef<UploadFile[]>;
+  closeManualPartDialog: () => void;
+  manualAsmDialogVisible: Ref<boolean>;
+  manualAsmFormValid: ComputedRef<boolean>;
+  manualAsmFileList: ComputedRef<UploadFile[]>;
+  closeManualAsmDialog: () => void;
+}
+
+export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfReturn {
   const { customers, applicantSearch, successNextTab } = opts;
   const router = useRouter();
 
