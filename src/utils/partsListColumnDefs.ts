@@ -22,8 +22,8 @@ import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
 import type { PartListItem } from '@/types/parts';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
-import type { usePartsColumnFilters } from './usePartsColumnFilters';
-import type { usePartInlineEdit } from './usePartInlineEdit';
+import type { usePartsColumnFilters } from '@/views/parts/list/composables/usePartsColumnFilters';
+import type { usePartInlineEdit } from '@/views/parts/list/composables/usePartInlineEdit';
 
 export function buildPartsListColumnDefs(deps: {
   filters: ReturnType<typeof usePartsColumnFilters>;
