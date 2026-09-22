@@ -1,22 +1,33 @@
 // utils/jwt.ts
 //
 // 纯解析：base64url 解码 JWT payload（不做签名校验 —— 服务端 enforce）。
-// 用于：
-// 1. axios 响应拦截器读 exp 字段做 proactive refresh；
-// 2. useAuthSession 等需要看 claims 的场景。
+// 仅用于 axios 响应拦截器读 exp 字段做 proactive refresh（http.ts:279 / :307）。
 //
 // 不引入 jwt-decode 等第三方依赖，10 行代码搞定。
+//
+// 2026-09-23 重构：JwtClaims 收敛到 backend-rust AccessTokenClaims 实际 8 字段；
+// 删除 username/roles/shelf_ids/type/ver（业务字段来自 CurrentUser，不走 JWT；
+// ver 是 RefreshTokenClaims 的 refresh_version，前端不读 refresh payload）；
+// 删除 [k: string]: unknown 索引签名（Rust schema 是闭集，正向安全优先）；
+// 删除 tokenExpiresIn 死代码（全仓 0 caller）。
 
 export interface JwtClaims {
+  /** 雪花 ID 字符串（与 CurrentUser.id 一致；不丢精度） */
   sub: string;
-  exp: number; // epoch seconds
+  /** 接收方；backend-rust 设为本服务标识 */
+  aud: string;
+  /** 签发时刻（epoch seconds） */
   iat: number;
-  username?: string;
-  roles?: string[];
-  shelf_ids?: string[];
-  type?: 'access' | 'refresh';
-  ver?: number; // refresh token 携带的轮转版本号
-  [k: string]: unknown;
+  /** 生效时刻（epoch seconds） */
+  nbf: number;
+  /** 过期时刻（epoch seconds）—— http.ts 唯一消费点 */
+  exp: number;
+  /** 签发方；backend-rust 设为本服务标识 */
+  iss: string;
+  /** JWT 唯一标识（UUID v4 字符串） */
+  jti: string;
+  /** token 类型；access token 恒为 'access'（refresh payload 不经此函数） */
+  typ: string;
 }
 
 /** 解 JWT payload；任何解析失败返回 null（不抛错，避免破坏拦截器主流程）。 */
@@ -33,11 +44,4 @@ export function decodeJwt(token: string): JwtClaims | null {
   } catch {
     return null;
   }
-}
-
-/** 距过期秒数（正数 = 还剩多久过期）；解析失败返回 null。 */
-export function tokenExpiresIn(token: string): number | null {
-  const claims = decodeJwt(token);
-  if (!claims) return null;
-  return Math.floor(claims.exp - Date.now() / 1000);
 }
