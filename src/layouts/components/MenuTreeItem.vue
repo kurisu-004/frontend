@@ -44,8 +44,6 @@ import {
   List,
   // 2026-09-11：工序制定（part_process_chain）用 SetUp
   SetUp,
-  // 2026-09-14：打印模板设计器（print_templates_designer）用 Printer
-  Printer,
 } from '@element-plus/icons-vue';
 import type { MenuNode } from '@/types/menu';
 
@@ -86,8 +84,6 @@ const ICON_MAP: Record<string, unknown> = {
   List,
   // 2026-09-11：工序制定（part_process_chain）
   SetUp,
-  // 2026-09-14：打印模板设计器（print_templates_designer）
-  Printer,
 };
 
 // 按名字查图标；查不到返回 undefined → 模板里 v-if 隐藏图标（不报错）。
