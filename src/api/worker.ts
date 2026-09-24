@@ -1,6 +1,6 @@
 // 后端工人 API（走 @/api/http 统一 axios 客户端）。
 
-import { ApiError, api, cleanParams } from '@/api/http';
+import { ApiError, api, cleanParams, normalizeListResult } from '@/api/http';
 import type {
   Worker,
   WorkerCreatePayload,
@@ -16,45 +16,49 @@ export interface ListWorkersParams {
 }
 
 export async function listWorkers(params: ListWorkersParams = {}): Promise<WorkerListResult> {
-  const resp = await api.get<WorkerListResult>('/workers', {
+  // 2026-09-25 修正：后端路由前缀缺失 /prod/ 段，补齐对齐 v2 backend-rust 实际契约。
+  const resp = await api.get<WorkerListResult>('/prod/workers', {
     params: cleanParams(params),
   });
-  return resp.data;
+  // 2026-09-25 修正：用 normalizeListResult 包一层，把 total/limit/offset 强制成 number。
+  // 后端 WorkerListOut 当前是 i64 number，但 schema 漂移历史里偶有走 serialize_i64
+  // 字符串的域，本 helper 兜底。schema 类型保持不变。
+  return normalizeListResult(resp.data);
 }
 
 export async function getWorker(id: string): Promise<Worker> {
-  const resp = await api.get<Worker>(`/workers/${id}`);
+  const resp = await api.get<Worker>(`/prod/workers/${id}`);
   return resp.data;
 }
 
 export async function createWorker(payload: WorkerCreatePayload): Promise<Worker> {
-  const resp = await api.post<Worker>('/workers', payload);
+  const resp = await api.post<Worker>('/prod/workers', payload);
   return resp.data;
 }
 
 export async function updateWorker(id: string, payload: WorkerUpdatePayload): Promise<Worker> {
-  const resp = await api.post<Worker>(`/workers/${id}/update`, payload);
+  const resp = await api.post<Worker>(`/prod/workers/${id}/update`, payload);
   return resp.data;
 }
 
 export async function deactivateWorker(id: string): Promise<Worker> {
-  const resp = await api.post<Worker>(`/workers/${id}/deactivate`);
+  const resp = await api.post<Worker>(`/prod/workers/${id}/deactivate`);
   return resp.data;
 }
 
 export async function reactivateWorker(id: string): Promise<Worker> {
-  const resp = await api.post<Worker>(`/workers/${id}/reactivate`);
+  const resp = await api.post<Worker>(`/prod/workers/${id}/reactivate`);
   return resp.data;
 }
 
 // ============ 工牌扫码定位 ============
 //
-// 旧实现：拉一次 GET /workers?is_active=true&limit=500 → 客户端 Array.find。
+// 旧实现：拉一次 GET /prod/workers?is_active=true&limit=500 → 客户端 Array.find。
 // 问题：(1) 整张工人表被无权用户拿走（信息泄露 / 越权）；
-//       (2) SHELF_ACCOUNT 根本无权调 GET /workers（router 强制 MANAGER），原本就是 403 隐患；
+//       (2) SHELF_ACCOUNT 根本无权调 GET /prod/workers（router 强制 MANAGER），原本就是 403 隐患；
 //       (3) 500 条硬上限导致工人 >500 时扫描误报；
 //       (4) 60s TTL 导致新增 / 停用延迟生效。
-// 新实现：POST /workers/verify-badge 单点 query；权限 = require_auth()，
+// 新实现：POST /prod/workers/verify-badge 单点 query；权限 = require_auth()，
 //       MANAGER 与 SHELF_ACCOUNT 都能调。后端在 service 层做 is_active 校验。
 
 // 后端错误码：20201 = BIZ_WORKER_NOT_FOUND, 20202 = BIZ_WORKER_INACTIVE。
@@ -73,7 +77,7 @@ export async function findWorkerByBadge(badgeCode: string): Promise<Worker | nul
   if (!code) return null;
 
   try {
-    const resp = await api.post<Worker>('/workers/verify-badge', {
+    const resp = await api.post<Worker>('/prod/workers/verify-badge', {
       badge_code: code,
     });
     return resp.data;

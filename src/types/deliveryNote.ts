@@ -357,10 +357,13 @@ export interface ScanDeliveryReq {
 /**
  * 后端 21418 / 21405 错误响应的 data.failures[] 元素结构。
  *
- * 当前后端只填 serial_no / name / reason；part_id / batch_id / drawing_no / status
- * 计划在 ~/Code/hsh-erp-rust/src/modules/delivery_note/dto.rs:523-529 的
- * ScanFailureDto 扩展后才有。前端先以可选字段写，扩展前「一键通过品检」按钮
- * 检测到 part_id 缺失时 disabled + tooltip 提示「需要后端扩展」。
+ * 2026-09-25 修正：原注释指向 ~/Code/hsh-erp-rust/... 已过期（仓库已迁移到
+ * backend-rust 子模块），canonical 路径改为 `backend-rust/src/shared/error.rs::BizWithFailures`。
+ *
+ * v2 当前后端 data.failures 仅含 `serial_no` / `name` / `reason`；扩展前
+ * `part_id` / `batch_id` / `drawing_no` / `status` 这些可选字段始终 undefined。
+ * 前端先以可选字段写，扩展前「一键通过品检」按钮检测到 part_id 缺失时 disabled
+ * + tooltip 提示「需要后端扩展」。
  */
 export interface BlockedScanItem {
   /** 后端扩展后必有；扩展前 undefined。雪花 ID 用 string（与全仓约定一致，见 BulkPassItem.part_id）。 */

@@ -7,7 +7,7 @@
 // 运行时不会产生 ESM 循环。
 
 import { api, cleanParams } from '@/api/http';
-import type { FileBinding, PartFileItem } from '@/types/part_file';
+import type { FileBinding } from '@/types/part_file';
 import type { PartCreatePayload, PartItem } from './crud';
 
 export interface PartBatchFailure {
@@ -172,109 +172,17 @@ function toPartBatchCreateItem(it: PartBatchCreatePayload): PartBatchCreateItemF
   };
 }
 
-// ===== 2026-07-21：批量树形创建（PDF 批量上传，单页=独立零件，多页=装配件+子件） =====
-
-export interface PartBatchTreeAssemblyFE {
-  uid: string;
-  drawing_no: string | null;
-  name: string | null;
-  applicant_name: string | null;
-  applicant_id: string | null;
-  customer_id: string;
-  request_date: string;
-  planned_delivery_date: string;
-  system_delivery_date?: string | null;
-  order_no?: string | null;
-  note?: string | null;
-  is_urgent: boolean;
-  /** 装配体套数（默认 1）。2026-08-04 新增：用于背面页 Q: 打印。 */
-  quantity: number;
-}
-
-export interface PartBatchTreeItemFE {
-  pdf_index: number;
-  page_index: number;
-  assembly_uid: string | null;
-  is_master: boolean;
-  drawing_no: string;
-  name: string;
-  applicant_name: string | null;
-  applicant_id: string | null;
-  quantity: number;
-  customer_id: string;
-  request_date: string;
-  planned_delivery_date: string;
-  system_delivery_date?: string | null;
-  order_no?: string | null;
-  note?: string | null;
-  is_urgent: boolean;
-  /** PR-H 2026-07-28：含税单价（来自历史价确认单 G 列；可空） */
-  unit_price?: number | null;
-  /** PR-H 2026-07-28：含税价格（来自历史价确认单 I 列；空时按 unit_price × quantity 计算） */
-  total_price?: number | null;
-  /** PR-H 2026-07-28：3D 模型下标（指向 three_d_models 数组；null = 不挂） */
-  three_d_index?: number | null;
-}
-
-export interface PartBatchTreePartResultFE {
-  uid: string;
-  kind: 'part' | 'assembly_child';
-  part: PartItem;
-}
-
-export interface PartBatchTreeAssemblyResultFE {
-  uid: string;
-  assembly: {
-    id: string;
-    serial_no: string | null;
-    drawing_no: string;
-    name: string;
-    status: string;
-    child_count: number;
-  };
-  master_file: PartFileItem | null;
-  children: PartBatchTreePartResultFE[];
-  child_files: PartFileItem[];
-}
-
-export interface PartBatchTreeResultFE {
-  standalone_parts: PartBatchTreePartResultFE[];
-  assemblies: PartBatchTreeAssemblyResultFE[];
-  failed: PartBatchFailure[];
-}
-
-/**
- * 批量树形创建：单页 PDF → 独立零件；多页 PDF → 装配件 + 子件。
- * 文件按 `pdf_index` 隐式对齐 `items`（frontend 端按上传顺序记录）。
- * PR-H 2026-07-28：`threeDModels` 按 `items[i].three_d_index` 对齐。
- *
- * @deprecated 2026-09-16 M3-T3.4：multipart `/parts/batch-with-pdfs` 在 v2 rust 后端
- * 语义已变化（仅接 `BatchWithPdfsRequest { customer_id, applicant_name, ... } + pdf`
- * 单 assembly 自动派生，与本函数 `items[] + assemblies[] + files[]` 的灵活语义不兼容）。
- * Tab 2「PDF 批量上传」已迁移到 `batchCreateParts` JSON 路径（场景 A 直传 COS）。
- * 本函数保留导出仅供历史调用点（如有）编译期不崩；新代码请用 `batchCreateParts` +
- * `useCosUpload` 链路。
- */
-export async function batchCreatePartsWithPdfs(
-  items: PartBatchTreeItemFE[],
-  assemblies: PartBatchTreeAssemblyFE[],
-  files: PartBatchFilePayload[],
-  threeDModels: PartBatchFilePayload[] = [],
-): Promise<PartBatchTreeResultFE> {
-  const form = new FormData();
-  form.append('data', JSON.stringify({ items, assemblies }));
-  files.forEach((f) => {
-    if (f.data) form.append('files', f.data, f.filename);
-  });
-  threeDModels.forEach((f) => {
-    if (f.data) form.append('three_d_models', f.data, f.filename);
-  });
-  // 批量上传可能耗时数分钟，单点延长到 10 分钟；全局 axios `timeout: 30_000` 不动（其他业务保持短超时）。
-  const resp = await api.post<PartBatchTreeResultFE>('/parts/batch-with-pdfs', form, {
-    timeout: 10 * 60 * 1000,
-  });
-  return resp.data;
-}
+// ===== 2026-07-21：批量树形创建（PDF 批量上传）— 2026-09-25 删除 =====
+//
+// 原 batchCreatePartsWithPdfs 函数（@deprecated 状态）与配套类型
+// PartBatchTreeItemFE / PartBatchTreeAssemblyFE / PartBatchTreePartResultFE /
+// PartBatchTreeAssemblyResultFE / PartBatchTreeResultFE 一并删除。Tab 2「PDF 批量上传」
+// 已迁移到 batchCreateParts JSON 路径（场景 A 直传 COS）+ useCosUpload 链路，
+// 全仓零调用方。如未来重新启用，按下方归档注释里的入参 / 返回结构复原。
+//   入参：{ items: PartBatchTreeItemFE[], assemblies: PartBatchTreeAssemblyFE[],
+//          files: PartBatchFilePayload[], threeDModels?: PartBatchFilePayload[] }
+//   端点：POST /parts/batch-with-pdfs（multipart, field=data JSON + files + three_d_models）
+//   返回：PartBatchTreeResultFE { standalone_parts, assemblies, failed }
 
 // ============================================================
 // 批次（2026-07-29 批次化）

@@ -10,7 +10,6 @@
 // 顶置避免 inline import 的可读性问题；type-only 导入是擦除的，运行时无循环代价。
 
 import { api, cleanParams } from '@/api/http';
-import type { DirectOutsourceCandidateListResult } from '@/types/directOutsource';
 import type { OutsourceSendableListResult } from '@/types/outsource';
 import type {
   LocationTreeNode,
@@ -78,6 +77,11 @@ export interface PartListResult {
   total: number;
   limit: number;
   offset: number;
+  // 2026-09-25 备注：backend-rust PartListOut 当前走 serialize_i64 → JSON 字符串；
+  // 本 schema 暂保留 number 类型（决定权在 frontend，是 backend-rust 后续要修的契约点）。
+  // 实际接收响应时由 listParts / listPendingProgramming 等 caller 在响应包装层用
+  // @/api/http.normalizeListResult 包一层，把 string 兜底成 number。schema 类型本身
+  // 不变，避免大改所有调用方。
 }
 
 /** 雪花 ID 字符串（CLAUDE.md §3 — 19 位 > JS Number.MAX_SAFE_INTEGER） */
@@ -758,7 +762,8 @@ export async function sendToOutsource(
 }
 
 /**
- * 统一外协可发送一览（2026-07-28 新增；取代 listDirectOutsourceCandidates / listApprovedForSend）：
+ * 统一外协可发送一览（2026-07-28 新增；取代旧 listDirectOutsourceCandidates /
+ * listApprovedForSend 两个端点）：
  * 合并 APPROVAL（需审批 + 有报价）和 DIRECT（无需审批可直发）两类，
  * 每行带 send_mode + source_status 字段。
  */
@@ -776,24 +781,9 @@ export async function listOutsourceSendable(
   return resp.data;
 }
 
-/**
- * 直接发送外协候选（已弃用；2026-07-28 后由 listOutsourceSendable 取代）。
- * 保留以兼容旧调用方；新代码请用 listOutsourceSendable。
- */
-export async function listDirectOutsourceCandidates(
-  params: {
-    keyword?: string;
-    customer_id?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
-): Promise<DirectOutsourceCandidateListResult> {
-  const resp = await api.get<DirectOutsourceCandidateListResult>(
-    '/parts/direct-outsource-candidates',
-    { params: cleanParams(params) },
-  );
-  return resp.data;
-}
+// 2026-09-25 清理：listDirectOutsourceCandidates 函数（@deprecated 状态）删除。
+// 自 2026-07-28 起由 listOutsourceSendable 取代；全仓零调用方。@/types/directOutsource.ts
+// 类型文件保留作为归档备查（导出符号未被引用），如未来彻底不再需要可一并删除。
 
 export interface ReceiveFromOutsourcePayload {
   shelf_id: string;

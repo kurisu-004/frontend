@@ -10,6 +10,12 @@
 // `/api/v1` 前缀），与 backend-rust `ws_hub` 模块的 `WsEvent::DashboardEvent`
 // 路由对齐。token 通过 query string 携带（`?token=...`）—— v2 后端 ws_hub 在
 // upgrade 阶段从 query 取 token 校验 Redis session。
+//
+// 【2026-09-25 协议对齐注释】subscribe / unsubscribe 文本帧：服务端当前不消费
+// 这两个文本帧（v2 后端 ws_hub 仅按连接初始订阅集合默认推 snapshot / events），
+// subscribe 仅作为 client-side 控制帧 —— 连接成功后发送是为了在客户端维护
+// 「我已声明订阅」的视图（供日志 / 调试 / 重连后 syncSubscriptions 复用）。
+// sendSubscriptionCommand 调用必须保留，避免大改；行为正确即可。
 
 import type {
   ConnectionStatus,
@@ -90,6 +96,9 @@ function sendSubscriptionCommand(
 ): void {
   if (!socket || socket !== ws || socket.readyState !== WebSocket.OPEN) return;
   try {
+    // 2026-09-25 注释：后端当前不消费此文本帧，仅维护 client-side 订阅视图。
+    // 连接成功后发送 subscribe 是为了日志一致 / 调试用。重连 / 新订阅时
+    // syncSubscriptions 调用是必要的（维护本地 channelHandlers → 订阅意图的映射）。
     socket.send(JSON.stringify({ type: action, channel }));
   } catch (e) {
     console.error('dashboard WS subscription command error', e);

@@ -141,6 +141,33 @@ export function serializeParamsV2(params: Record<string, unknown>): string {
   return serializeParamsWith(params, ARRAY_AS_CSV_KEYS);
 }
 
+/**
+ * 把后端 list 响应统一规整成 number 类型的分页字段（2026-09-25 新增）。
+ *
+ * 后端 v2 不同域的 list 端点分页字段类型不一致：
+ * - `PartListOut`（parts 域）走 `serialize_i64` → JSON 字符串；
+ * - `UserListOut` / `WorkerListOut` / `CustomerListOut` / `OutsourceCompanyListOut` /
+ *   `OutsourceQuoteListOut` / `ShelfListOut` / `DeliveryNoteListOut` /
+ *   `DeliveryGroupListOut` / `ProcessListOut` 用裸 i64 number。
+ *
+ * 调用方拿到响应后用本函数包一层，调用处就能稳定用 `Number` 比较 / 算术运算
+ * 而不必关心后端实际是 string 还是 number。**不修改 schema 类型本身**，仅
+ * 在响应包装层做归一化（`items` 保持原样）。
+ */
+export function normalizeListResult<T>(resp: {
+  items: T[];
+  total: string | number;
+  limit: string | number;
+  offset: string | number;
+}): { items: T[]; total: number; limit: number; offset: number } {
+  return {
+    items: resp.items,
+    total: Number(resp.total),
+    limit: Number(resp.limit),
+    offset: Number(resp.offset),
+  };
+}
+
 /** @deprecated 等价于 serializeParamsV1。2026-08-29 起作为 alias 保留，供历史
  *  import 不至于崩；新代码请用具名 V1 / V2。 */
 export const serializeParams: (params: Record<string, unknown>) => string = serializeParamsV1;

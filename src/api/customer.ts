@@ -2,7 +2,7 @@
 // Excel 批量导入零件时用 listCustomers() 拉全量客户，
 // 客户端按 `parent_name / name` 唯一定位叶子客户的 id。
 
-import { api } from '@/api/http';
+import { api, normalizeListResult } from '@/api/http';
 
 export interface Customer {
   id: string;
@@ -54,7 +54,10 @@ export interface CustomerListResult {
 
 export async function listCustomers(): Promise<CustomerListResult> {
   const resp = await api.get<CustomerListResult>('/com/customers');
-  return resp.data;
+  // 2026-09-25 修正：用 normalizeListResult 包一层，把 total/limit/offset 强制成 number。
+  // 后端 CustomerListOut 当前是 i64 number，但本 helper 兜底未来漂移到 serialize_i64 字符串的
+  // 场景。schema 类型保持不变。
+  return normalizeListResult(resp.data);
 }
 
 export async function getCustomer(id: string): Promise<Customer> {

@@ -1,6 +1,6 @@
 // 外协公司 (OutsourceCompany) API 封装。
 
-import { api, cleanParams } from '@/api/http';
+import { api, cleanParams, normalizeListResult } from '@/api/http';
 import type {
   ApprovedForSendListResult,
   OutsourceCompany,
@@ -35,7 +35,10 @@ export async function listOutsourceCompanies(
   const resp = await api.get<OutsourceCompanyListResult>('/outsource-companies', {
     params: cleanParams(params),
   });
-  return resp.data;
+  // 2026-09-25 修正：用 normalizeListResult 包一层，把 total/limit/offset 强制成 number。
+  // 后端 OutsourceCompanyListOut 当前是 i64 number，但本 helper 兜底未来漂移到
+  // serialize_i64 字符串的场景。schema 类型保持不变。
+  return normalizeListResult(resp.data);
 }
 
 export async function getOutsourceCompany(id: string): Promise<OutsourceCompanyWithProcesses> {
@@ -106,7 +109,10 @@ export async function listOutsourceQuotes(
   const resp = await api.get<OutsourceQuoteListResult>('/outsource-quotes', {
     params: cleanParams(params),
   });
-  return resp.data;
+  // 2026-09-25 修正：用 normalizeListResult 包一层，把 total/limit/offset 强制成 number。
+  // 后端 OutsourceQuoteListOut 当前是 i64 number，但本 helper 兜底未来漂移到
+  // serialize_i64 字符串的场景。schema 类型保持不变。
+  return normalizeListResult(resp.data);
 }
 
 export async function getOutsourceQuote(id: string): Promise<OutsourceQuote> {
