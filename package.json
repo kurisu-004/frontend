@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
+    "@tanstack/vue-query": "^5.103.2",
     "axios": "^1.18.1",
     "cos-js-sdk-v5": "^1.10.1",
     "echarts": "^6.1.0",
@@ -59,5 +60,8 @@
     "vitest": "^4.1.11",
     "vue-eslint-parser": "^9.4.3",
     "vue-tsc": "^2.0.16"
+  },
+  "allowScripts": {
+    "cos-js-sdk-v5@1.10.1": true
   }
 }
