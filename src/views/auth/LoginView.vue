@@ -1,94 +1,144 @@
 <template>
   <div class="login-page">
-    <div class="login-card">
-      <div class="card-header">
-        <el-icon :size="32" style="color: var(--primary-lighter)"><Box /></el-icon>
-        <h1>myERP</h1>
-        <p>零件加工订单管理系统</p>
-      </div>
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        label-position="top"
-        @submit.prevent="doLogin"
-      >
-        <el-form-item label="账号" prop="username">
-          <el-input v-model="form.username" placeholder="用户名" :prefix-icon="UserIcon" />
+    <LoginCard
+      title="myERP"
+      subtitle="零件加工订单管理系统"
+      :submitting="submitting"
+      :error-message="errorMessage"
+      @submit="onSubmit"
+    >
+      <el-form :model="form" label-position="top" @submit.prevent>
+        <el-form-item label="账号" :error="errors.username">
+          <el-input
+            v-model="form.username"
+            placeholder="用户名"
+            :prefix-icon="UserIcon"
+            @blur="validateField('username')"
+          />
         </el-form-item>
-        <el-form-item label="密码" prop="password">
+        <el-form-item label="密码" :error="errors.password">
           <el-input
             v-model="form.password"
             type="password"
             placeholder="密码"
             show-password
             :prefix-icon="LockIcon"
+            @blur="validateField('password')"
           />
         </el-form-item>
-        <el-button type="primary" native-type="submit" :loading="loading" class="submit-btn">
-          {{ loading ? '登录中...' : '登 录' }}
-        </el-button>
       </el-form>
-      <p v-if="error" class="error-msg">{{ error }}</p>
-    </div>
-    <div class="login-page-footer">
-      <BeianFooter />
-    </div>
+      <template #footer>
+        <BeianFooter />
+      </template>
+    </LoginCard>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
-import { ElForm, type FormInstance } from 'element-plus';
+// 2026-09-24 重构：登录页接入 TanStack Query useMutation + Zod schema 校验。
+//
+// 关键设计：
+//   - useMutation 是仓内首例；retry: 0 必须显式写，避免默认 3 次重试。
+//   - mutationFn 调 useAuthSession().login() 而非直接 api.post：token 持久化
+//     与 ApiError 规范化都在 useAuthSession 那一层，mutationFn 必须薄。
+//   - Zod schema 把 trim 放在最前；mutationFn 不再做 trim（避免双重 trim）。
+//   - LoginCard 只持展示态（不持表单），emit submit 无 payload，父组件
+//     持有 form ref 与 mutation。
+//   - 错误映射：40101（账号或密码错）/ 40105（session 吊销）→ 友好文案；
+//     其它错误 → err.message 或兜底文案。
+
+import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { User, Lock, Box } from '@element-plus/icons-vue';
+import { useMutation } from '@tanstack/vue-query';
+import { User, Lock } from '@element-plus/icons-vue';
 import { useAuthSession } from '@/composables/useAuthSession';
+import type { ApiError } from '@/api/http';
+import type { CurrentUser } from '@/types/user';
 import BeianFooter from '@/components/BeianFooter.vue';
+import LoginCard from './LoginCard.vue';
+import { loginSchema, toFieldErrors, type LoginInput, type LoginFieldErrors } from './loginSchema';
 
 const UserIcon = User;
 const LockIcon = Lock;
 
 const router = useRouter();
-const { login } = useAuthSession();
+const session = useAuthSession();
 
-// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP FormInstance；null 初值避免 v-if 提前访问 .validate
-const formRef = ref<FormInstance | null>(null);
-const loading = ref(false);
-const error = ref('');
-const form = reactive({ username: '', password: '' });
-const rules = {
-  username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+const form = ref<LoginInput>({ username: '', password: '' });
+const errors = ref<LoginFieldErrors>({});
+// 2026-09-24 新增：账号无任何可用角色的独立提示位（业务逻辑判断，不属于 mutation 失败）。
+const noRoleError = ref('');
+
+const loginMutation = useMutation<CurrentUser, ApiError, LoginInput>({
+  mutationKey: ['auth', 'login'],
+  retry: 0,
+  mutationFn: async (creds) => {
+    // Zod schema 已在 safeParse 时完成 trim，creds.username 已是 trim 后值。
+    // mutationFn 不再二次 trim。
+    return session.login(creds.username, creds.password);
+  },
+  onSuccess: (user) => {
+    // 按角色优先级自动跳转（与改造前一致）。
+    if (user.roles.includes('MANAGER')) {
+      router.replace('/dashboard');
+      return;
+    }
+    if (user.roles.includes('CLERK') || user.roles.includes('CNC_PROGRAMMER')) {
+      router.replace('/parts');
+      return;
+    }
+    if (user.roles.includes('INSPECTOR')) {
+      router.replace('/inspection/pending');
+      return;
+    }
+    if (user.roles.includes('SHELF_ACCOUNT')) {
+      router.replace('/scan/badge');
+      return;
+    }
+    noRoleError.value = '账号无任何可用角色';
+  },
+});
+
+const submitting = computed(() => loginMutation.isPending.value);
+const errorMessage = computed(() => {
+  if (noRoleError.value) return noRoleError.value;
+  const err = loginMutation.error.value;
+  if (!err) return '';
+  // 40101 BIZ_AUTH_INVALID / 40105 SESSION_REVOKED 统一文案。
+  if (err.code === 40101 || err.code === 40105) return '账号或密码错误，请重试';
+  return err.message || '登录失败，请稍后重试';
+});
+
+/** 单字段校验：onBlur 触发。 */
+const validateField = (field: keyof LoginInput) => {
+  // 2026-09-24：直接取 schema.shape[field]（ZodObject 提供 Record<keyof T, ZodTypeAny>）
+  // 而非 .pick({...} as Record<...})，避开 consistent-type-assertions 规则。
+  const fieldSchema = loginSchema.shape[field];
+  const result = fieldSchema.safeParse(form.value[field]);
+  if (result.success) {
+    delete errors.value[field];
+  } else {
+    errors.value[field] = result.error.issues[0]?.message;
+  }
 };
 
-async function doLogin() {
-  const valid = await formRef.value?.validate().catch(() => false);
-  if (!valid) return;
-  loading.value = true;
-  error.value = '';
-  try {
-    const u = await login(form.username, form.password);
-    // 按角色自动跳。优先级：MANAGER → /dashboard；
-    // CLERK / CNC_PROGRAMMER → /parts（编程员默认筛选 PROGRAMMING）；
-    // INSPECTOR → /inspection/pending（品检员的日常入口，2026-07-20 PR-I）；
-    // 纯 SHELF_ACCOUNT → /scan/badge。
-    if (u.roles.includes('MANAGER')) {
-      router.replace('/dashboard');
-    } else if (u.roles.includes('CLERK') || u.roles.includes('CNC_PROGRAMMER')) {
-      router.replace('/parts');
-    } else if (u.roles.includes('INSPECTOR')) {
-      router.replace('/inspection/pending');
-    } else if (u.roles.includes('SHELF_ACCOUNT')) {
-      router.replace('/scan/badge');
-    } else {
-      error.value = '账号无任何可用角色';
-    }
-  } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : '登录失败';
-  } finally {
-    loading.value = false;
+const onSubmit = async () => {
+  // 全表单校验。
+  const result = loginSchema.safeParse(form.value);
+  if (!result.success) {
+    errors.value = toFieldErrors(result.error.issues);
+    return;
   }
-}
+  errors.value = {};
+  noRoleError.value = '';
+  // mutateAsync 错误已被 useMutation 写入 mutation.error.value（驱动 errorMessage）；
+  // 这里 try/catch 仅用于吞掉 promise rejection，避免 unhandledRejection。
+  try {
+    await loginMutation.mutateAsync(result.data);
+  } catch {
+    /* 错误已通过 mutation.error.value 暴露给 LoginCard 的 errorMessage slot */
+  }
+};
 </script>
 
 <style lang="scss" scoped>
@@ -99,41 +149,5 @@ async function doLogin() {
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #1a365d 0%, #2d5a87 100%);
-}
-
-.login-page-footer {
-  margin-top: 24px;
-}
-.login-card {
-  width: 380px;
-  max-width: calc(100vw - 24px);
-  background: #fff;
-  border-radius: 8px;
-  padding: 40px 36px 32px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
-}
-.card-header {
-  text-align: center;
-  margin-bottom: 28px;
-  h1 {
-    margin: 8px 0 4px;
-    font-size: 22px;
-    color: #1a365d;
-  }
-  p {
-    color: #909399;
-    font-size: 13px;
-    margin: 0;
-  }
-}
-.submit-btn {
-  width: 100%;
-  margin-top: 8px;
-}
-.error-msg {
-  color: #f56c6c;
-  font-size: 13px;
-  text-align: center;
-  margin-top: 12px;
 }
 </style>

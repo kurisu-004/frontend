@@ -150,6 +150,9 @@ export default [
       // 替代规则 `vue/no-ref-object-reactivity-loss` 同义，一起关。
       'vue/no-ref-object-destructure': 'off',
       'vue/no-ref-object-reactivity-loss': 'off',
+      // 2026-09-24 新增：spec 文件集中放置 EP/桩组件，单测场景可接受，
+      // 收敛到 config 层避免文件级 eslint-disable（CLAUDE.md #14）。
+      'vue/one-component-per-file': 'off',
     },
   },
 
