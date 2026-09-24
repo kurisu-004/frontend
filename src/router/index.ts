@@ -350,23 +350,6 @@ const routes: RouteRecordRaw[] = [
           ],
         },
       },
-      {
-        // 2026-09-16 改造：view 从 @amdosion/vue3-print 包版设计器改为 x-data-spreadsheet
-        // 通用表格编辑器（in-memory，不持久化）。路由 name 沿用 PrintTemplateDesigner。
-        // 2026-09-14 menuCode 补齐：print_templates_designer（与后端 t_menu 一级
-        // template_management → 二级 print_templates_designer 对齐；CLAUDE.md #8）。
-        // allowRoles 兜底保留：dev dummy 模式 dev-admin 角色是 MANAGER，能进。
-        path: 'print-templates',
-        name: 'PrintTemplateDesigner',
-        component: () => import('@/views/print-templates/PrintTemplateDesigner.vue'),
-        meta: {
-          title: '打印模板设计器',
-          icon: 'Printer',
-          menuCode: 'print_templates_designer',
-          allowRoles: ['MANAGER'],
-          breadcrumb: [{ label: '打印模板设计器' }],
-        },
-      },
     ],
   },
   // 工位扫码台
