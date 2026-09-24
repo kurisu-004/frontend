@@ -45,7 +45,7 @@
 // 用专门的非拦截 axios 实例（refreshClient）调 /iam/refresh，避免递归触发
 // 拦截器内的刷新逻辑。
 
-import { api, refreshClient, ApiError, cleanParams } from '@/api/http';
+import { api, refreshClient, ApiError, cleanParams, normalizeListResult } from '@/api/http';
 import type { CurrentUser, UserOut, UserRoleOut, UserListResult } from '@/types/user';
 
 export interface LoginResponse {
@@ -126,7 +126,10 @@ export interface ListUsersParams {
 
 export async function listUsers(params: ListUsersParams = {}): Promise<UserListResult> {
   const resp = await api.get<UserListResult>('/iam/users', { params: cleanParams(params) });
-  return resp.data;
+  // 2026-09-25 修正：用 normalizeListResult 包一层，把 total/limit/offset 强制成 number。
+  // 后端 UserListOut 当前是 i64 number，但本 helper 兜底未来漂移到 serialize_i64 字符串的
+  // 场景。schema 类型保持不变。
+  return normalizeListResult(resp.data);
 }
 
 export interface CreateUserPayload {

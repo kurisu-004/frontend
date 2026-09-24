@@ -1,3 +1,16 @@
+/**
+ * 命名约定（2026-09-25 同步）：
+ * - `PartItem` ≡ 后端 `PartDetailOut`（单件详情完整字段，含 customer_name / l1_customer_name / current_batch_id 等）
+ * - `PartListItem` ≡ 后端 `PartListItem`（列表条目，字段较 PartItem 少）
+ * - `PartCreatePayload` ≡ 后端 `PartCreateRequest`
+ * - `PartUpdatePayload` ≡ 后端 `PartUpdateRequest`
+ * 命名不一致是有意的历史选择；不要混用。
+ *
+ * 注意：本文件下方另有一个早期的 `PartItem` interface（id / drawingNo 等 camelCase 旧形态），
+ * 那是入库表单用的本地视图类型，与上方注释描述的"PartItem ≡ PartDetailOut"是两套类型，
+ * 不冲突（前端在 PartBatchManualTab 等录入表单场景消费旧 PartItem，详情 / 列表消费 PartDetailOut
+ * 等价的 PartItem）。新代码请按上下文选用，跨场景不要混用。
+ */
 export type PartCategory = '紧固件' | '轴承' | '传动件' | '电气件' | '油液' | '其他';
 export type PartStatus = '启用' | '停用';
 export type WarehouseStatus = '未入库' | '部分入库' | '已入库';

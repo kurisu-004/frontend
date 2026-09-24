@@ -192,9 +192,8 @@ export function usePartProcessDesign(): UsePartProcessDesignReturn {
       // 2026-09-16 第 1 轮 review：listParts 默认 keyword 入参是 undefined，
       // cleanParams 会 strip undefined，传空串是语义冗余，这里直接不传 keyword。
       const items = await listParts({ status: 'PENDING' });
-      // rust PartListItem 字段集与前端 PartListItem 不全等（v2 无 row_type 等冗余字段）；
-      // 用 unknown[] → PartListItem[] 强转，缺失字段按 undefined 处理（PartListItem 全 optional）。
-      parts.value = items as PartListItem[];
+      // 2026-09-25 修正：listParts 已返回 PartListItem[]，无需再就地强转。
+      parts.value = items;
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'load parts failed';
     } finally {
@@ -207,7 +206,8 @@ export function usePartProcessDesign(): UsePartProcessDesignReturn {
     error.value = null;
     try {
       const items = await listProcesses({});
-      processes.value = items as Process[];
+      // 2026-09-25 修正：listProcesses 已返回 Process[]，无需再就地强转。
+      processes.value = items;
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'load processes failed';
     } finally {

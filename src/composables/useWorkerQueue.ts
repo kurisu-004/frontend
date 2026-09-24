@@ -150,11 +150,13 @@ export interface UseWorkerQueueReturn {
 export function useWorkerQueue(): UseWorkerQueueReturn {
   /** 拉所有 process 的 pool detail + 二次查 worker state。
    *  流程：
-   *  1) GET /api/v2/processes?limit=500 拿到所有 process（用于「按 process 维度」遍历）
+   *  1) GET /api/v2/prod/processes?limit=500 拿到所有 process（用于「按 process 维度」遍历）
    *  2) 并发调 getWorkerPoolByProcess(processId) 拿到各 process 的 worker / items
    *  3) 聚合：worker 跨 process 出现 → process_ids += processId；items → processPools
    *  4) 二次并发 getWorkerState 补 max_held / current_held / capacity_remaining
    *
+   * 2026-09-25 修正：listProcesses 路径漂移到 /prod/processes；返回类型由 unknown[] 改为
+   * Process[]，composable 内不再就地强转（listProcesses.from `@/api/processChain`）。
    * 2026-09-14 review 第 1 轮：
    * - `shelfId` 由 view 层从 `useAuthSession().activeShelfId()` 注入；null/空串 → 跳过
    *   二次 GET（rust WorkerPoolState 必填 shelf_id；无激活货架时用占位 '0' 必触发 40001
@@ -165,9 +167,9 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
     loading.value = true;
     error.value = null;
     try {
-      // 1) 拉所有 process（v2 端点 /api/v2/processes）
+      // 1) 拉所有 process（v2 端点 /api/v2/prod/processes）
       const procList = await listProcesses({});
-      const processIds: string[] = (procList as Array<{ id: string }>).map((p) => p.id);
+      const processIds: string[] = procList.map((p) => p.id);
 
       // 2) 并发拉各 process 的 pool detail
       const poolResults = await Promise.allSettled(

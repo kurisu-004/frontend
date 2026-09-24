@@ -128,3 +128,66 @@ export async function fetchPartFileContent(fileId: string): Promise<Blob> {
   });
   return resp.data;
 }
+
+// ============================================================
+// 2026-09-25 迁移：原误放在 assembly.ts 的零件文件上传函数迁回 parts/file.ts。
+// ============================================================
+//
+// 历史背景：2026-09-16 M3 重构时 multipart 直传路径被 COS 直传 + JSON 链路取代，
+// 后端 `/parts/{id}/drawings` / `/3d-models` / `/cad-files` 端点已删除（v2 不再
+// 支持 multipart upload）。原函数在 assembly.ts 标注 @deprecated 但保留 export。
+// 2026-09-25 清理：把 export 从 assembly.ts 迁移到本文件（更符合子域归属），
+// 调用端继续可用，但实际调用会抛 404 Not Found。详情页补传请改用
+// `usePartFileUpload({ ownerPartId, kind: 'DRAWING' })`（场景 B）。
+
+/**
+ * 上传零件图纸。2026-07-14 起 DRAWING 同时接受 PDF + 8 种图片格式
+ * （PNG/JPG/JPEG/GIF/BMP/TIF/TIFF/WEBP/HEIC），后端 /drawings 端点统一处理。
+ * 图片与 PDF 同槽（单文件覆盖语义）。
+ *
+ * @deprecated 2026-09-16 M3 重构：multipart 直传路径已被 COS 直传 + JSON 链路取代，
+ * 后端 `/parts/{id}/drawings` 端点已删除（v2 不再支持 multipart upload）。
+ * 详情页补传请改用 `usePartFileUpload({ ownerPartId, kind: 'DRAWING' })`（场景 B）。
+ * 保留 export 仅作 import 兼容；调用会抛 404 Not Found。
+ *
+ * 2026-09-25 迁移：从 `api/assembly.ts` 迁回 `api/parts/file.ts`（更符合子域归属）。
+ */
+export async function uploadPartDrawing(partId: string, file: File): Promise<PartFileItem> {
+  const form = new FormData();
+  form.append('file', file);
+  const resp = await api.post<PartFileItem>(`/parts/${partId}/drawings`, form);
+  return resp.data;
+}
+
+/**
+ * 上传零件 3D 模型（STEP / STP / IGES / IGS / STL / OBJ / 3MF）。
+ *
+ * @deprecated 2026-09-16 M3 重构：multipart 直传路径已被 COS 直传 + JSON 链路取代，
+ * 后端 `/parts/{id}/3d-models` 端点已删除。详情页补传请改用
+ * `usePartFileUpload({ ownerPartId, kind: '3D_MODEL' })`（场景 B）。
+ *
+ * 2026-09-25 迁移：从 `api/assembly.ts` 迁回 `api/parts/file.ts`。
+ */
+export async function uploadPart3DModel(partId: string, file: File): Promise<PartFileItem> {
+  const form = new FormData();
+  form.append('file', file);
+  const resp = await api.post<PartFileItem>(`/parts/${partId}/3d-models`, form);
+  return resp.data;
+}
+
+/**
+ * 上传零件 CAD 源文件（DWG / DXF）。2026-07-14 新增 kind=CAD_2D：
+ * 与 PDF 图纸生命周期分离，删除 CAD 源不影响打印用 PDF。
+ *
+ * @deprecated 2026-09-16 M3 重构：multipart 直传路径已被 COS 直传 + JSON 链路取代，
+ * 后端 `/parts/{id}/cad-files` 端点已删除。详情页补传请改用
+ * `usePartFileUpload({ ownerPartId, kind: 'CAD_2D' })`（场景 B）。
+ *
+ * 2026-09-25 迁移：从 `api/assembly.ts` 迁回 `api/parts/file.ts`。
+ */
+export async function uploadPartCadFile(partId: string, file: File): Promise<PartFileItem> {
+  const form = new FormData();
+  form.append('file', file);
+  const resp = await api.post<PartFileItem>(`/parts/${partId}/cad-files`, form);
+  return resp.data;
+}
