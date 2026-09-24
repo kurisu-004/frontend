@@ -2,6 +2,7 @@
 // 覆盖：空字段校验、全空格 username trim、合法凭据成功跳转、ApiError 40101
 // 错误映射、mutationFn 调用参数、Zod 校验失败时不调 login。
 // @vitest-environment happy-dom
+/* eslint-disable vue/one-component-per-file -- 本文件为 spec 桩组件集中放置，单测场景可接受 */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
@@ -42,8 +43,7 @@ const ElButtonStub = defineComponent({
         {
           ...attrs,
           type: attrs['native-type'] ?? attrs.type ?? 'button',
-          disabled:
-            attrs.disabled === true || attrs.disabled === '' || attrs.disabled === 'true',
+          disabled: attrs.disabled === true || attrs.disabled === '' || attrs.disabled === 'true',
         },
         slots.default?.(),
       );
@@ -102,17 +102,16 @@ const globalConfig = {
     ElFormItem: ElFormItemStub,
   },
   // 2026-09-24：useMutation 需要 QueryClient。每个测试一个 client 避免状态泄漏；
-  // defaultErrorHandler 静默吃掉 mutation 内部 promise 的未捕获错误，避免 vitest 抛 unhandled rejection。
+  // mutation 内部 promise 没人在外层 await 时，落到这里吃掉。
   plugins: [
     [
       VueQueryPlugin,
       {
         queryClient: new QueryClient({
           defaultOptions: { mutations: { retry: 0 } },
-          // mutation 内部 promise 没人在外层 await 时，落到这里吃掉。
         }),
       },
-    ],
+    ] as [typeof VueQueryPlugin, { queryClient: QueryClient }],
   ],
 };
 

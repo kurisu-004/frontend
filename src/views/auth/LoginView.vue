@@ -52,7 +52,7 @@ import { useRouter } from 'vue-router';
 import { useMutation } from '@tanstack/vue-query';
 import { User, Lock } from '@element-plus/icons-vue';
 import { useAuthSession } from '@/composables/useAuthSession';
-import { ApiError } from '@/api/http';
+import type { ApiError } from '@/api/http';
 import type { CurrentUser } from '@/types/user';
 import BeianFooter from '@/components/BeianFooter.vue';
 import LoginCard from './LoginCard.vue';
@@ -111,8 +111,10 @@ const errorMessage = computed(() => {
 
 /** 单字段校验：onBlur 触发。 */
 const validateField = (field: keyof LoginInput) => {
-  const fieldSchema = loginSchema.pick({ [field]: true } as Record<keyof LoginInput, true>);
-  const result = fieldSchema.safeParse(form.value);
+  // 2026-09-24：直接取 schema.shape[field]（ZodObject 提供 Record<keyof T, ZodTypeAny>）
+  // 而非 .pick({...} as Record<...})，避开 consistent-type-assertions 规则。
+  const fieldSchema = loginSchema.shape[field];
+  const result = fieldSchema.safeParse(form.value[field]);
   if (result.success) {
     delete errors.value[field];
   } else {
