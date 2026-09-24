@@ -7,7 +7,7 @@
       :error-message="errorMessage"
       @submit="onSubmit"
     >
-      <el-form ref="formRef" :model="form" label-position="top" @submit.prevent>
+      <el-form :model="form" label-position="top" @submit.prevent>
         <el-form-item label="账号" :error="errors.username">
           <el-input
             v-model="form.username"
