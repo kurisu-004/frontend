@@ -5,7 +5,6 @@
 // vitest 单独跑不走该插件，el-card / el-button 不会被解析为组件。挂个最小 stub
 // 让 mount 跑得通：el-card 当透明容器、el-button 透传 attrs/slots 给原生 button。
 // @vitest-environment happy-dom
-/* eslint-disable vue/one-component-per-file -- 本文件为 spec 桩组件集中放置，单测场景可接受 */
 
 import { describe, it, expect } from 'vitest';
 import { defineComponent, h } from 'vue';

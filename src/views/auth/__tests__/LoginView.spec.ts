@@ -2,7 +2,6 @@
 // 覆盖：空字段校验、全空格 username trim、合法凭据成功跳转、ApiError 40101
 // 错误映射、mutationFn 调用参数、Zod 校验失败时不调 login。
 // @vitest-environment happy-dom
-/* eslint-disable vue/one-component-per-file -- 本文件为 spec 桩组件集中放置，单测场景可接受 */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
