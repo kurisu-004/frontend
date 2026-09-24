@@ -1,5 +1,20 @@
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
+// 2026-09-24 新增：注册 TanStack Query 仓内首个 QueryClient。
+// 仓内首例 useMutation 出现在 LoginView.vue（2026-09-24 登录页改造）。
+//
+// 全局 mutation 默认 retry: 0：TanStack Query 默认失败重试 3 次（指数退避），
+// 登录失败若重试会导致用户以为"点了没反应"；其它 mutation 失败重试通常也
+// 是浪费（业务错误码不会被重试结果修复）。所以全局关掉。
+//
+// queries 默认 retry: 0 + refetchOnWindowFocus: false：
+//   - retry: 0 — 仓内目前没有 useQuery 先例，但避免后续迁移时静默重试；
+//   - refetchOnWindowFocus: false — 默认 true 会让编辑类表单的 GET 在窗口
+//     切换时频繁刷，先关掉避免未来引入即踩坑。
+//
+// plugin 顺序硬约束：VueQueryPlugin 必须在 createPinia 之后、app.mount 之前。
+// 否则 useMutation 会抛 "No QueryClient set"。
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 import App from './App.vue';
 import router from './router';
@@ -30,7 +45,16 @@ import 'element-plus/theme-chalk/el-timeline.css';
 // 命令式 API 样式见更上方那块注释（resolver 看不到 <script setup> 里的调用）。
 const app = createApp(App);
 
+// 2026-09-24 新增：仓内首个 QueryClient（默认 retry: 0，详见 import 块上方注释）。
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: 0, refetchOnWindowFocus: false },
+    mutations: { retry: 0 },
+  },
+});
+
 app.use(createPinia());
+app.use(VueQueryPlugin, { queryClient });
 
 // 2026-08-28 重写：dev-only dummy-auth 注入。
 // 改走 `import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'`
