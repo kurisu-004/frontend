@@ -16,7 +16,9 @@ describe('ADMIN_MENUS', () => {
   // + part_process_chain（2026-09-14 menuCode 改名）。code 总数 27 → 30。
   // 2026-09-16：scan_badge 升顶级（floor_group → auth_group 货架移入 + 扫码台升级 + 车间软删）。
   // code 总数 27 → 30 → 33。
-  it('covers all 33 menuCodes', () => {
+  // 2026-09-24：template_management + print_templates_designer 随 x-data-spreadsheet 弃用而下线（用户决策
+  // 不再做模板编辑器，路由 /print-templates 与 view PrintTemplateDesigner 一并删除）。code 总数 33 → 31。
+  it('covers all 31 menuCodes', () => {
     const all = flatten(ADMIN_MENUS);
     const codes = all.map((n) => n.code);
     expect(codes).toContain('home');
@@ -53,9 +55,6 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('production_group');
     // 2026-09-14 改名：process_design_list → part_process_chain（对齐后端 t_menu）
     expect(codes).toContain('part_process_chain');
-    // 2026-09-14 新增：模板管理分组 + 模板编辑子菜单
-    expect(codes).toContain('template_management');
-    expect(codes).toContain('print_templates_designer');
     // 2026-09-16 新增：扫码台从 floor_group 升级为顶级菜单（sort_order=13）
     expect(codes).toContain('scan_badge');
   });
