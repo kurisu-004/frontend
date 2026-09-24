@@ -15,6 +15,11 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - 代码注释、commit message、文档一律中文。
 - 注释里带日期戳（如 `2026-08-26 新增`）说明变更缘由是本仓库的通行做法。
 
+## 架构约定（硬约束）
+
+- **登录页架构（2026-09-24）**：`LoginView` 持表单 ref + `useMutation`（`retry: 0`，mutation 失败绝不能重试 3 次）+ Zod schema 校验；`LoginCard.vue` 是纯展示视觉壳（不持表单状态），通过 `#default` slot 注入字段，`#footer` slot 注入链接；emit `submit` 不带 payload。复用时只改 LoginView，不动 LoginCard。
+- **TanStack Query（2026-09-24 首例基建）**：`QueryClient` 在 `src/main.ts` 注册（pinia 之后、mount 之前），全局 `mutations.retry: 0` / `queries.retry: 0` / `queries.refetchOnWindowFocus: false`。新增 mutation 时默认不再写 retry，信任全局默认。useMutation 失败重试是 TanStack 默认 3 次指数退避，对所有业务 mutation 都是反模式。
+- **Zod schema-first**（2026-09-24 起）：表单类 schema 写在 `src/views/<域>/<表单>Schema.ts`，导出 schema + `z.infer` 派生的 TS 类型；trim / min / max 链式顺序 trim 在前。错误聚合用 `toFieldErrors` 工具（同 schema 文件内）。
 
 ## 已知风险
 
