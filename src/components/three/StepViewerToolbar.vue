@@ -30,7 +30,7 @@
 import { ref, watch } from 'vue';
 import type { SceneManager } from '@/three/SceneManager';
 import { applyPreset, VIEW_PRESETS, type ViewPresetId } from '@/three/ViewPresets';
-import { useStepViewer } from '@/composables/useStepViewer';
+import { useStepViewer } from './useStepViewer';
 
 const props = defineProps<{
   /** SceneManager 实例（外部 v-if 已保证非空，但 TS 类型上保留 nullable 方便 StepViewer.vue

@@ -21,7 +21,7 @@
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 
-import { buildSelectedScanItems, useBulkScanInspect } from '@/composables/useBulkScanInspect';
+import { buildSelectedScanItems, useBulkScanInspect } from '@/views/delivery/composables/useBulkScanInspect';
 import { attachBatches } from '@/api/deliveryNote';
 import { listShelves } from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';

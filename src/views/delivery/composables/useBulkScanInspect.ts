@@ -1,4 +1,4 @@
-// composables/useBulkScanInspect.ts
+// views/delivery/composables/useBulkScanInspect.ts
 //
 // 批量一键送检 composable（2026-08-25 新增；2026-08-28 切 route B + item 改 batch_id-only）。
 //

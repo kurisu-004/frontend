@@ -1,4 +1,4 @@
-// composables/useBulkPassInspection.ts
+// views/delivery/composables/useBulkPassInspection.ts
 //
 // 批量品检通过 composable（2026-08-23 新增；2026-08-25 切 v2 批量端点；
 //   2026-08-28 切 route B 批量端点 + item 改 batch_id-only）。
@@ -63,7 +63,7 @@ export interface UseBulkPassInspectionReturn {
 /**
  * 纯函数：`BulkPassItem[] → BatchToShipItem[]`，剥掉展示用 `label`。
  *
- * 导出供单测（composables/useBulkPassInspection.spec.ts）覆盖；保持映射规则
+ * 导出供单测（__tests__/useBulkPassInspection.spec.ts）覆盖；保持映射规则
  * 集中在一处，弹窗侧只关心 UI 类型。route B 下不再需要 part_id —— 后端 service
  * 按 batch_id 反查 t_part_batch.part_id。
  * 2026-08-29：透传 version（caller OCC 锚 t_part_batch）。

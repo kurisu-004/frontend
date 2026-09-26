@@ -88,7 +88,7 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Avatar, Back, Box, Check, Refresh } from '@element-plus/icons-vue';
 import { ACTION_LABEL, useScanSession, type WorkAction } from '@/composables/useScanSession';
-import { useActiveShelfSelection } from '@/composables/useActiveShelfSelection';
+import { useActiveShelfSelection } from '@/views/scan/composables/useActiveShelfSelection';
 
 const router = useRouter();
 const { worker, setAction, reset, requireWorker } = useScanSession();

@@ -32,7 +32,7 @@ import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { useCosUpload, type CosUploadItem } from '@/composables/useCosUpload';
 import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
-import { getUploadSession } from '@/composables/useUploadSession';
+import { getUploadSession } from '@/views/parts/new/composables/useUploadSession';
 import {
   usePartsNewDraft,
   mergeDraftWithSession,
@@ -41,7 +41,7 @@ import {
   type SerializedAssemblyRow,
   type SerializedPdfTab,
   type SerializedStandalonePartRow,
-} from '@/composables/usePartsNewDraft';
+} from '@/views/parts/new/composables/usePartsNewDraft';
 import type { Customer } from '@/api/customer';
 import type { FileBinding, PartFileKind, UploadIntentsOut } from '@/types/part_file';
 import type { SessionFile } from '@/types/upload_session';
@@ -471,7 +471,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     return [...current, file];
   }
 
-  /** PDF 按页数动态读取（pdfjs-dist）。与 composables/usePdfPageCount.ts 同模式：
+  /** PDF 按页数动态读取（pdfjs-dist）。与 utils/pdfjs.ts 的 countPdfPages 同模式：
    *  destroy() 在 PDFDocumentLoadingTask 上，不在 PDFDocumentProxy 上（旧实现
    *  调 doc.destroy() 抛 "doc.destroy is not a function"）。 */
   async function countPdfPages(file: File): Promise<number> {

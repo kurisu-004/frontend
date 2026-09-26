@@ -1,4 +1,4 @@
-// composables/useDeliveryScanState.ts
+// views/delivery/composables/useDeliveryScanState.ts
 //
 // 扫码建单页 L1 客户选择持久化（2026-08-23 新增）。
 //

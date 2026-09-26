@@ -31,8 +31,8 @@ import {
   removeParts,
   softDeleteNote,
 } from '@/api/deliveryNote';
-import { usePrintedLabels } from '@/composables/usePrintedLabels';
-import { useDeliveryNoteDetailCache } from '@/composables/useDeliveryNoteDetailCache';
+import { usePrintedLabels } from '@/views/delivery/composables/usePrintedLabels';
+import { useDeliveryNoteDetailCache } from '@/views/delivery/composables/useDeliveryNoteDetailCache';
 import { triggerBrowserDownload } from '@/utils/download';
 import type {
   DeliveryNoteDetailOut,

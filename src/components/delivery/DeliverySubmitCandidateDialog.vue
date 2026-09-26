@@ -18,8 +18,8 @@
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 
-import { useBulkPassInspection } from '@/composables/useBulkPassInspection';
-import type { BulkPassItem } from '@/composables/useBulkPassInspection';
+import { useBulkPassInspection } from '@/views/delivery/composables/useBulkPassInspection';
+import type { BulkPassItem } from '@/views/delivery/composables/useBulkPassInspection';
 import type { ScanUnresolvedTarget } from '@/types/deliveryNote';
 
 interface Props {

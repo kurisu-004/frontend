@@ -1,4 +1,4 @@
-// src/composables/useResizablePane.ts
+// views/production/composables/useResizablePane.ts
 //
 // 2026-09-12 新增：三栏 splitter 大小持久化（CLAUDE.md 配套：替换硬编码 CSS flex）。
 // 注意：此处的「单例」语义是 per-key —— 每个 storageKey 对应独立的 ref trio，

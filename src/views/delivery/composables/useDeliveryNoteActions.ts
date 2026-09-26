@@ -33,7 +33,7 @@ import {
 } from '@/api/deliveryNote';
 import type { ApiError } from '@/api/http';
 import { useConfirm } from '@/composables/useConfirm';
-import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection';
+import type { BulkPassFailure, BulkPassItem } from '@/views/delivery/composables/useBulkPassInspection';
 import type {
   DeliveryNoteLineItem,
   ScanUnresolvedTarget,

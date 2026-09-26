@@ -91,6 +91,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
       - **简单页面**（一个列表 + 一些筛选，如 `ApplicantList.vue` / `DeliveryNoteList.vue` / `DeliveryNoteScan.vue` / `OutsourceSendReceive.vue` / `PartBatchNew.vue`）：直接在 `<script setup>` 内消费共享 query composable（`useCustomersQuery()` 等），不强建 store。
       - **复杂页面**（多切片、强耦合状态，如 `PartsList`）：建页面 store（`usePartsListStore`），内部 useQuery + useMutation + invalidate 失效。
       - 区分标准：是否需要跨切片共享状态 / 是否需要 `$dispose` 防泄漏 / 是否需要 4 不变量约束。
+- **composable 归属判别（2026-09-27 新增）**：`src/composables/` 仅放跨 ≥3 个顶层域（applicants / assemblies / auth / cnc / customers / dashboard / delivery / delivery-dispatch / inspection / outsource / parts / production / repair / scan / shelves / statistics / users / workers 等）的全局共享 composable。单域 composable 一律就近放到 `views/<域>/composables/`（view 级）或 `components/<域>/`（组件级）。判别标准：在仓内 `rg -l` 统计**排除 composables/ 自身**的 import 引用文件数，跨 ≥3 个顶层域才留全局；只有 1 个域时即便文件很大（如 `useWorkerQueue` 433 行、`useUploadSession` 411 行）也下沉。spec 文件与源文件保持同级 `__tests__/` 目录。
 
 ## 已知风险
 

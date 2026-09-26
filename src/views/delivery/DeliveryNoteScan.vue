@@ -24,7 +24,7 @@ import type { ComponentInstance } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElTable } from 'element-plus';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useDeliveryScanState } from '@/composables/useDeliveryScanState';
+import { useDeliveryScanState } from '@/views/delivery/composables/useDeliveryScanState';
 import type { Customer } from '@/api/customer';
 // 2026-09-26：客户全集改走共享 query（CustomerList 写后失效自动 refetch）。
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';

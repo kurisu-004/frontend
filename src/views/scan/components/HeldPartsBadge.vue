@@ -102,7 +102,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Box, Loading, Refresh, User, WarningFilled } from '@element-plus/icons-vue';
 import { listPartsHeldByWorker } from '@/api/parts';
 import type { PartItem } from '@/api/parts';
-import { useScanBus } from '@/composables/useScanBus';
+import { useScanBus } from '@/views/scan/composables/useScanBus';
 
 const props = withDefaults(
   defineProps<{

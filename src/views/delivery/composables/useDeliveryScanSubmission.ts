@@ -24,7 +24,7 @@ import { nextTick, reactive, ref, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getNote, scanDelivery, submitNote } from '@/api/deliveryNote';
 import { ApiError } from '@/api/http';
-import { useDeliveryNoteDetailCache } from '@/composables/useDeliveryNoteDetailCache';
+import { useDeliveryNoteDetailCache } from '@/views/delivery/composables/useDeliveryNoteDetailCache';
 import {
   BLOCK_SCAN_CODES,
   type DeliveryNoteDetailOut,
@@ -34,7 +34,7 @@ import {
   type ScanUnresolvedTarget,
   type SubmitDeliveryOut,
 } from '@/types/deliveryNote';
-import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection';
+import type { BulkPassFailure, BulkPassItem } from '@/views/delivery/composables/useBulkPassInspection';
 
 // 2026-09-02 新增：扫码 toast 末尾追加 L2 客户名的两个 file-scope helper ————————
 // 从 line_items 里按 matcher 命中取首个 L2 客户名（用 customer_name；空时取
