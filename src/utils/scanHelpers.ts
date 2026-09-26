@@ -65,9 +65,9 @@ export async function findPartBySerialAndPrompt(code: string): Promise<void> {
     { label: '状态', value: part.status },
     { label: '当前所在', value: where },
   ];
-  // 2026-09-27 前后端字段对齐：列表响应 + 详情响应均不再含 next_process_id /
-  // next_process_name；本 helper 删除该显示行；「下一道工序」展示入口由
-  // process_chain_id → /process-chains/{id} 解析提供。
+  // PartListItem.next_process_id / next_process_name 字段随 /parts 列表响应下线（2026-09-27 字段对齐）
+  // 详情出参（PartDetailOut）仍保留 next_process_id（PartItem 保留该字段供 scan RETURN 等流程消费）；
+  // 本 helper 删除 next_process_name 显示行，「下一道工序」展示入口由 process_chain_id 派生。
   const messageVNode = h(
     'div',
     {

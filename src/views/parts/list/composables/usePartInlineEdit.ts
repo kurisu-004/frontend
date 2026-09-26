@@ -68,7 +68,6 @@ export interface UsePartInlineEditReturn {
   cancelEdit: () => void;
   saveEdit: (row: PartListItem) => Promise<void>;
   onRowDblClick: (row: PartListItem) => void;
-  displayTotalPrice: (row: PartListItem) => string;
   totalPriceSummary: SummaryMethod<PartListItem>;
   applicantSuggest: (queryString: string, callback: (items: Applicant[]) => void) => void;
   applicantLoading: Ref<boolean>;
@@ -272,21 +271,6 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     startEdit(row);
   }
 
-  // 2026-07-24 v2：总价列响应式显示（编辑态用 editBuffer，非编辑态用 row）。
-  // 2026-09-27 前后端字段对齐：unit_price 改 string —— 显示逻辑保留
-  // （编辑态下实时反映 quantity × unit_price 给用户反馈），仅 Number() 转换
-  // 改为 parseFloat 防御非数字字符。合计 / 单行都走同样兜底。
-  function displayTotalPrice(row: PartListItem): string {
-    if (editingId.value === row.id) {
-      const q = Number(editBuffer.quantity ?? row.quantity);
-      const p = parseFloat(editBuffer.unit_price ?? row.unit_price ?? '0');
-      return Number.isFinite(q) && Number.isFinite(p) ? (q * p).toFixed(2) : '—';
-    }
-    const q = Number(row.quantity);
-    const p = parseFloat(row.unit_price ?? '0');
-    return Number.isFinite(q) && Number.isFinite(p) ? (q * p).toFixed(2) : '—';
-  }
-
   // 2026-07-24 v2：表格底部合计行（仅总价列求和）。
   // 2026-09-27：unit_price 改 string；改走 parseFloat 与编辑态对齐。
   const totalPriceSummary: SummaryMethod<PartListItem> = ({ columns, data }) => {
@@ -354,7 +338,6 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     cancelEdit,
     saveEdit,
     onRowDblClick,
-    displayTotalPrice,
     totalPriceSummary,
     applicantSuggest,
     applicantLoading,
