@@ -22,6 +22,7 @@ import type { SummaryMethod } from 'element-plus';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { updatePart, type PartUpdatePayload } from '@/api/parts';
 import { updateAssembly } from '@/api/assembly';
+import type { AssemblyUpdatePayload } from '@/types/assembly';
 import { useApplicantSearch } from '@/composables/useApplicantSearch';
 import { qk } from '@/composables/queries/keys';
 import type { PartListItem } from '@/types/parts';
@@ -34,7 +35,9 @@ export interface EditBuffer {
   drawing_no: string;
   applicant_name: string;
   quantity: number;
-  unit_price: number;
+  /** 2026-09-27 前后端字段对齐：unit_price 改 string（与后端 rust_decimal::Decimal
+   *  序列化对齐），不再前端做 Number() 转换。 */
+  unit_price: string;
   request_date: string;
   planned_delivery_date: string;
   system_delivery_date: string | null;
@@ -65,7 +68,6 @@ export interface UsePartInlineEditReturn {
   cancelEdit: () => void;
   saveEdit: (row: PartListItem) => Promise<void>;
   onRowDblClick: (row: PartListItem) => void;
-  displayTotalPrice: (row: PartListItem) => string;
   totalPriceSummary: SummaryMethod<PartListItem>;
   applicantSuggest: (queryString: string, callback: (items: Applicant[]) => void) => void;
   applicantLoading: Ref<boolean>;
@@ -80,7 +82,8 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     drawing_no: '',
     applicant_name: '',
     quantity: 1,
-    unit_price: 0,
+    // 2026-09-27：unit_price 改 string，初值用 '0' 占位。
+    unit_price: '0',
     request_date: '',
     planned_delivery_date: '',
     system_delivery_date: null,
@@ -172,7 +175,20 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
   const saveEditMutation = useMutation<unknown, Error, SaveEditVars>({
     mutationKey: ['parts', 'inline-edit', 'save'],
     mutationFn: ({ row, payload }) => {
-      if (row.row_type === 'ASSEMBLY') return updateAssembly(row.id, payload);
+      if (row.row_type === 'ASSEMBLY') {
+        // 2026-09-27 M2 收尾：M2 revert AssemblyUpdatePayload.unit_price /
+        // total_price 回 number（后端 assembly 域未加
+        // #[serde(with = "rust_decimal::serde::str")]，JSON number），但
+        // EditBuffer / PartUpdatePayload.unit_price / total_price 仍是 string
+        // （后端 parts 域已对齐 serde-with-str）。此处显式 string → number 转换
+        // 避免类型不兼容 + 后端反序列化失败（40001）。
+        const assemblyPayload: AssemblyUpdatePayload = {
+          ...payload,
+          unit_price: payload.unit_price == null ? null : Number(payload.unit_price),
+          total_price: payload.total_price == null ? null : Number(payload.total_price),
+        };
+        return updateAssembly(row.id, assemblyPayload);
+      }
       return updatePart(row.id, payload);
     },
     onSuccess: (_data, { row, payload }) => {
@@ -255,25 +271,14 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     startEdit(row);
   }
 
-  // 2026-07-24 v2：总价列响应式显示（编辑态用 editBuffer，非编辑态用 row）
-  function displayTotalPrice(row: PartListItem): string {
-    if (editingId.value === row.id) {
-      const q = Number(editBuffer.quantity ?? row.quantity);
-      const p = Number(editBuffer.unit_price ?? row.unit_price);
-      return Number.isFinite(q) && Number.isFinite(p) ? (q * p).toFixed(2) : '—';
-    }
-    const q = Number(row.quantity);
-    const p = Number(row.unit_price);
-    return Number.isFinite(q) && Number.isFinite(p) ? (q * p).toFixed(2) : '—';
-  }
-
-  // 2026-07-24 v2：表格底部合计行（仅总价列求和）
+  // 2026-07-24 v2：表格底部合计行（仅总价列求和）。
+  // 2026-09-27：unit_price 改 string；改走 parseFloat 与编辑态对齐。
   const totalPriceSummary: SummaryMethod<PartListItem> = ({ columns, data }) => {
     return columns.map((col, index) => {
       if (col.label === '总价') {
         const total = data.reduce((sum, row) => {
           const q = Number(row.quantity ?? 0);
-          const p = Number(row.unit_price ?? 0);
+          const p = parseFloat(row.unit_price ?? '0');
           return sum + (Number.isFinite(q) && Number.isFinite(p) ? q * p : 0);
         }, 0);
         return total.toFixed(2);
@@ -333,7 +338,6 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     cancelEdit,
     saveEdit,
     onRowDblClick,
-    displayTotalPrice,
     totalPriceSummary,
     applicantSuggest,
     applicantLoading,

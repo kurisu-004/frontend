@@ -27,10 +27,18 @@
 //     这个默认行为并提示 reviewer 升级方向）。
 //   - S10：customerListResultSchema 对 overall shape 拒绝（如 total 缺）→ 抛
 //     ZodError。
+//   - S11（2026-09-27 前后端字段对齐）：partSchema.parse 接受 backend-rust
+//     PartListOut 真实形态（含 unit_price / total_price / l1_customer_name
+//     string 类型字段，不含 customer_path / next_process_id / next_process_name）。
+//   - S12：partSchema 缺 unit_price → 抛 ZodError。
+//   - S13：partSchema 缺 total_price → 抛 ZodError。
+//   - S14：partSchema 缺 l1_customer_name → 抛 ZodError（nullable 但必填字段，
+//     与 customerSchema S4 同形态的 regression guard）。
 //
 // 数据来源：
 //   - backend-rust/docs/api/customers.md:142-153（CustomerOut 8 字段）
 //   - backend-rust/docs/api/production/processes.md:159-173（ProcessOut 11 字段）
+//   - backend-rust/docs/api/parts.md（PartListOut / PartListItem 字段）
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -38,6 +46,8 @@ import {
   customerListResultSchema,
   processSchema,
   processListResultSchema,
+  partSchema,
+  partListResultSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -306,6 +316,122 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(result.items).toHaveLength(1);
       expect(result.total).toBe(1);
       expect(result.items[0]?.version).toBe(2);
+    });
+  });
+
+  describe('partSchema（2026-09-27 前后端字段对齐）', () => {
+    // 完整 PartListItem 形态：与后端 backend-rust PartListOut 真实返回结构对齐
+    // （TPart 22 列 flatten + unit_price / total_price string + l1_customer_name，
+    // 不含已下线的 parent_customer_name / customer_path / next_process_id /
+    // next_process_name）。
+    function makeBasePart(): Record<string, unknown> {
+      return {
+        id: '180000000000001',
+        version: 5,
+        serial_no: 'SN-001',
+        name: '零件甲',
+        drawing_no: 'DWG-001',
+        applicant_name: '张三',
+        quantity: 10,
+        unit_price: '100.50',
+        total_price: '1005.00',
+        request_date: '2026-09-01',
+        planned_delivery_date: '2026-09-30',
+        is_urgent: true,
+        status: 'IN_PROCESS',
+        order_no: 'PO-2026-001',
+        system_delivery_date: '2026-10-15',
+        note: '首件',
+        customer_name: '客户乙',
+        l1_customer_name: '客户甲',
+        location: 'PRODUCTION_SHELF',
+        holder_name: 'A-01',
+        process_chain_id: '160000000000001',
+      };
+    }
+
+    it('S11：解析 backend-rust PartListItem 完整形态（unit_price / total_price 为 string）', () => {
+      const parsed = partSchema.parse(makeBasePart());
+      expect(parsed.id).toBe('180000000000001');
+      expect(parsed.unit_price).toBe('100.50');
+      expect(parsed.total_price).toBe('1005.00');
+      expect(parsed.l1_customer_name).toBe('客户甲');
+      expect(parsed.customer_name).toBe('客户乙');
+      // status enum 锁死
+      expect(parsed.status).toBe('IN_PROCESS');
+      // zod 默认 strip 模式：未声明字段（customer_path / next_process_id /
+      // next_process_name）即使存在也会被丢弃
+      const asRecord = parsed as unknown as Record<string, unknown>;
+      expect(asRecord.customer_path).toBeUndefined();
+      expect(asRecord.next_process_id).toBeUndefined();
+      expect(asRecord.next_process_name).toBeUndefined();
+      expect(asRecord.parent_customer_name).toBeUndefined();
+    });
+
+    it('S11b：unit_price 接受 rust_decimal 序列化的任意 string 形态（含 "0" / "100.50"）', () => {
+      // 后端 rust_decimal::Decimal + serde-with-str 序列化产生任意精度字符串
+      expect(partSchema.parse({ ...makeBasePart(), unit_price: '0' }).unit_price).toBe('0');
+      expect(partSchema.parse({ ...makeBasePart(), unit_price: '0.00' }).unit_price).toBe('0.00');
+      expect(
+        partSchema.parse({ ...makeBasePart(), unit_price: '9999999.9999' }).unit_price,
+      ).toBe('9999999.9999');
+    });
+
+    it('S12：缺 unit_price → 抛 ZodError（regression guard）', () => {
+      // 背景：2026-09-27 把 unit_price 从 z.number() 改 z.string()，如果 schema
+      // 漏列或类型写错会静默 strip —— 本用例锁死「必须声明为必填 string」。
+      const { unit_price: _, ...rest } = makeBasePart();
+      void _;
+      expect(() => partSchema.parse(rest)).toThrow();
+    });
+
+    it('S12b：unit_price 传 number（与旧 schema 形态） → 抛 ZodError', () => {
+      // 防止有人不小心把 schema 改回 z.number() —— 必须是 string。
+      expect(() => partSchema.parse({ ...makeBasePart(), unit_price: 100 })).toThrow();
+    });
+
+    it('S13：缺 total_price → 抛 ZodError（regression guard）', () => {
+      const { total_price: _, ...rest } = makeBasePart();
+      void _;
+      expect(() => partSchema.parse(rest)).toThrow();
+    });
+
+    it('S13b：total_price 传 number → 抛 ZodError', () => {
+      expect(() => partSchema.parse({ ...makeBasePart(), total_price: 1005 })).toThrow();
+    });
+
+    it('S14：缺 l1_customer_name → 抛 ZodError（nullable 但必填字段）', () => {
+      // 背景：与 customerSchema S4 同形态 —— nullable 不代表 optional，必填
+      // 字段必须显式声明（即使是 null 也得带 key）。zod 默认 strip 模式下
+      // 漏列会让 backend-rust 真返回的 l1_customer_name 在前端拿不到。
+      const { l1_customer_name: _, ...rest } = makeBasePart();
+      void _;
+      expect(() => partSchema.parse(rest)).toThrow();
+    });
+
+    it('S14b：l1_customer_name = null 是合法值（一级客户）', () => {
+      const parsed = partSchema.parse({ ...makeBasePart(), l1_customer_name: null });
+      expect(parsed.l1_customer_name).toBeNull();
+    });
+
+    it('S14c：l1_customer_name = "客户甲" 是合法值（二级客户）', () => {
+      const parsed = partSchema.parse({ ...makeBasePart(), l1_customer_name: '客户甲' });
+      expect(parsed.l1_customer_name).toBe('客户甲');
+    });
+
+    it('partListResultSchema 接受 PartListOut 分页结构（items + 数字分页字段）', () => {
+      // normalizeListResult 在 listParts caller 层把 total/limit/offset 兜底成
+      // number；partListResultSchema.parse 期望 number 形态（与 schemas 4 个
+      // 其它 list 结果 schema 一致）。
+      const result = partListResultSchema.parse({
+        items: [makeBasePart()],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      });
+      expect(result.items).toHaveLength(1);
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.unit_price).toBe('100.50');
     });
   });
 });

@@ -91,8 +91,15 @@ export type ProcessListResultSchema = z.infer<typeof processListResultSchema>;
 //   - 后端 Rust 当前可能少返部分可选字段（如 batch_id / child_count / has_children），
 //     schema 用 .optional() / .nullable() 全部容忍，避免 Zod parse 失败导致整表白屏。
 //   - id 雪花 ID 字符串；version 是乐观锁 number。
-//   - is_urgent / quantity / unit_price / total_price / sort 时出现 0 是合法值，
-//     不能用 .min(0) / .nonnegative() 等严格限制（已是 number 即可）。
+//   - is_urgent / quantity 出现 0 是合法值；unit_price / total_price 是 string
+//     （rust_decimal::Decimal + serde-with-str 序列化），允许 '0' / '0.00' /
+//     '100.50' 等任意金额字符串形态，不强制 .regex。
+//
+// 2026-09-27 前后端字段对齐：
+//   - parent_customer_name rename → l1_customer_name（与后端 PartListOut 对齐）；
+//   - 删 customer_path（前端派生 l1 + customer_name，schema 不声明）；
+//   - 删 next_process_id / next_process_name（列表响应不返，schema 不声明）；
+//   - unit_price / total_price：z.number() → z.string()（rust_decimal string）。
 export const partSchema = z.object({
   id: z.string(),
   version: z.number(),
@@ -101,8 +108,8 @@ export const partSchema = z.object({
   drawing_no: z.string(),
   applicant_name: z.string().nullable(),
   quantity: z.number(),
-  unit_price: z.number(),
-  total_price: z.number(),
+  unit_price: z.string(),
+  total_price: z.string(),
   request_date: z.string(),
   planned_delivery_date: z.string(),
   is_urgent: z.boolean(),
@@ -123,12 +130,9 @@ export const partSchema = z.object({
   delivered_quantity: z.number().nullable().optional(),
   note: z.string().nullable(),
   customer_name: z.string().nullable(),
-  parent_customer_name: z.string().nullable(),
-  customer_path: z.string().nullable(),
+  l1_customer_name: z.string().nullable(),
   location: z.string().nullable(),
   holder_name: z.string().nullable().optional(),
-  next_process_id: z.string().nullable(),
-  next_process_name: z.string().nullable(),
   process_chain_id: z.string().nullable().optional(),
   batch_id: z.string().nullable().optional(),
   batch_no: z.number().nullable().optional(),

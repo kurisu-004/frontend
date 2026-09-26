@@ -360,7 +360,11 @@ export function buildPartsListColumnDefs(deps: {
         ),
       cellRender: ({ row }) => {
         const r = row as PartListItem;
-        if (r.customer_path) return h('span', null, r.customer_path);
+        // 2026-09-27 前后端字段对齐：后端不再返 customer_path，前端派生
+        // 「一级 / 二级」展示路径 = l1_customer_name + customer_name。
+        if (r.l1_customer_name) {
+          return h('span', null, `${r.l1_customer_name} / ${r.customer_name ?? '—'}`);
+        }
         if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name);
         return h('span', { class: 'muted' }, '—');
       },
@@ -481,7 +485,9 @@ export function buildPartsListColumnDefs(deps: {
   // 仅 canEdit 用户（MANAGER / CLERK）看到；INSPECTOR 整列隐藏 — 见 usePartInlineEdit
   // 与原 PartsTable `v-if="canEdit && columnVisibility.isVisible(...)"` 行为对齐。
   const priceColumnDefs: ColumnDef[] = [
-    // 10. 单价（el-input-number 编辑）
+    // 10. 单价（el-input-number 编辑；2026-09-27 改为 string 类型，后端返回
+    //    rust_decimal::Decimal 序列化的 string，前端透传；编辑缓冲同步走 string，
+    //    display 直接渲染 string，不走 Number()）。
     {
       key: 'unit_price',
       label: '单价',
@@ -493,15 +499,12 @@ export function buildPartsListColumnDefs(deps: {
       cellRender: ({ row }) => {
         const r = row as PartListItem;
         if (canEdit && edit.editingId.value === r.id) {
-          return h(ElInputNumber, {
+          return h(ElInput, {
             modelValue: edit.editBuffer.unit_price,
-            'onUpdate:modelValue': (v: number | undefined) => {
-              edit.editBuffer.unit_price = v ?? 0;
+            'onUpdate:modelValue': (v: string) => {
+              edit.editBuffer.unit_price = v ?? '';
             },
-            min: 0,
-            precision: 2,
-            step: 0.01,
-            controls: false,
+            placeholder: '单价',
             size: 'small',
             style: 'width: 100px',
           });
@@ -510,7 +513,7 @@ export function buildPartsListColumnDefs(deps: {
       },
     },
 
-    // 11. 总价（computed）
+    // 11. 总价（直接渲染后端 string；2026-09-27 与后端对齐后不再前端派生）
     {
       key: 'total_price',
       label: '总价',
@@ -521,7 +524,7 @@ export function buildPartsListColumnDefs(deps: {
       align: 'right',
       cellRender: ({ row }) => {
         const r = row as PartListItem;
-        return h('span', null, edit.displayTotalPrice(r));
+        return h('span', null, r.total_price);
       },
     },
   ];
@@ -760,35 +763,14 @@ export function buildPartsListColumnDefs(deps: {
       },
     },
 
-    // 16. 下一道工序（原生 :filters + 选中计数 badge；装配件行恒为 '—'）
-    {
-      key: 'next_process',
-      label: '下一道工序',
-      columnKey: 'next_process',
-      minWidth: 130,
-      align: 'center',
-      filters: filters.nextProcessOptions.value,
-      filteredValue: filters.nextProcessFilteredValue.value,
-      headerRender: () =>
-        h('span', { class: 'status-header' }, [
-          '下一道工序',
-          filters.nextProcessSelectedCount.value > 0
-            ? h('span', { class: 'status-count' }, `(${filters.nextProcessSelectedCount.value})`)
-            : null,
-        ]),
-      cellRender: ({ row }) => {
-        const r = row as PartListItem;
-        if (r.row_type === 'ASSEMBLY') {
-          return h('span', { class: 'muted' }, '—');
-        }
-        if (r.next_process_name) {
-          return h('span', null, r.next_process_name);
-        }
-        return h('span', { class: 'muted' }, '—');
-      },
-    },
+    // 2026-09-27 前后端字段对齐：删除「下一道工序」整列 —— 后端 list 响应不再
+    // 返 next_process_id / next_process_name，原生 :filters 也随之移除。
+    // 列定义、headerRender / cellRender、`filters.nextProcessOptions.value` /
+    // `filters.nextProcessFilteredValue.value` / `filters.nextProcessSelectedCount.value`
+    // 全部下沉到 usePartsColumnFilters.ts 清理（nextProcessIds 在 search state
+    // 中一并删除，list 端点 `next_process_ids` query 参数随之移除）。
 
-    // 17. 所在位置（popover + el-tree-select 多选）
+    // 16. 所在位置（popover + el-tree-select 多选）
     {
       key: 'location',
       label: '所在位置',

@@ -5,17 +5,24 @@
 // 设计：
 // - 文本列 + 日期列 + 客户 + 位置：每个 column 一组 {visible, draft, active, confirm, reset}
 //   （custom 字段各有 isNullDraft / range 等扩展）；
-// - 原生列：状态 + 下一道工序走 EP :filters 下拉，filtered-value 由 search 派生，
+// - 原生列：仅「状态」走 EP :filters 下拉，filtered-value 由 search 派生，
 //   @filter-change 由 onNativeFilterChange 翻译回 search + onSearch()。
 // - 客户 / 位置 tree 由 useCustomerTree / usePartLocationTree 提供，一并导出供行内
 //   编辑复用。
+//
+// 2026-09-27 前后端字段对齐：移除「下一道工序」原生列相关状态机——
+//   - nextProcessOptions / nextProcessFilteredValue / nextProcessSelectedCount /
+//     nextProcessFilterActive / loadNextProcessOptions 全部删除；
+//   - useProcessesQuery 不再需要（原本只服务此列下拉）；
+//   - onNativeFilterChange 不再处理 'next_process' 列变化；
+//   - onSerialNoScan / 草稿同步不再清 nextProcessIds / nextProcessDraft。
+// 同步删除 usePartsListQuery.ts 中 nextProcessIds search state + `next_process_ids`
+// query 参数构造。
 
 import { computed, ref, type Ref } from 'vue';
 import { ORDER_STATUS_LABEL, type OrderStatus } from '@/types/parts';
-import type { Process } from '@/types/process';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import { splitLocationSelection, usePartLocationTree } from '@/views/parts/list/composables/usePartLocationTree';
-import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
 import type { LocationTreeNode } from '@/types/parts';
 import type { PartsSearchState } from './usePartsListQuery';
@@ -101,17 +108,11 @@ export interface UsePartsColumnFiltersReturn {
   statusFilteredValue: ComputedRef<string[]>;
   statusFilterActive: ComputedRef<boolean>;
   statusSelectedCount: ComputedRef<number>;
-  nextProcessOptions: ComputedRef<{ text: string; value: string }[]>;
-  nextProcessFilteredValue: ComputedRef<string[]>;
-  nextProcessFilterActive: ComputedRef<boolean>;
-  nextProcessSelectedCount: ComputedRef<number>;
-  loadNextProcessOptions: () => Promise<void>;
   onNativeFilterChange: (payload: Record<string, string[]>) => void;
   serialNoFlash: Ref<boolean>;
   onSerialNoScan: (rawCode: string) => void;
   statusDraft: Ref<OrderStatus[]>;
   statusUrgentDraft: Ref<boolean>;
-  nextProcessDraft: Ref<string[]>;
 }
 
 export function usePartsColumnFilters(
@@ -374,28 +375,10 @@ export function usePartsColumnFilters(
   );
   const statusSelectedCount = computed(() => deps.search.statuses.length);
 
-  // 下一道工序：2026-09-26（B 任务）切到共享 useProcessesQuery —— A 任务已建，
-  // session 级缓存（staleTime: POSITIVE_INFINITY），自动 fetch，零手动 load。
-  // 原 loadNextProcessOptions 幂等守卫（已有数据不重拉）由 useQuery 缓存层替代，
-  // 外部调用方（PartsList.vue）可安全移除。
-  const procQuery = useProcessesQuery({ limit: 200 });
-  const nextProcessList = computed<Process[]>(() => procQuery.data.value?.items ?? []);
-  const nextProcessOptions = computed<{ text: string; value: string }[]>(() =>
-    nextProcessList.value.map((p) => ({
-      text: `${p.code} / ${p.name}`,
-      value: String(p.id),
-    })),
-  );
-  const nextProcessFilteredValue = computed<string[]>(() => deps.search.nextProcessIds);
-  const nextProcessFilterActive = computed(() => deps.search.nextProcessIds.length > 0);
-  const nextProcessSelectedCount = computed(() => deps.search.nextProcessIds.length);
-  // 2026-09-26（B 任务）：loadNextProcessOptions 保留为 no-op（PartsList.vue 仍调，
-  // 但内部已迁 useQuery 自动 fetch；保留方法签名维持 caller 零改动）。
-  async function loadNextProcessOptions(): Promise<void> {
-    /* no-op：useProcessesQuery 自动 fetch */
-  }
-  // 2026-08-22：原生面板打开前选项须就绪；现在由 useQuery 自动 fetch。
-  // 与下发对话框各自的 processes 缓存相互独立（互不污染）。
+  // 2026-09-27 前后端字段对齐：删除「下一道工序」原生列相关状态机——
+  // procQuery / nextProcessList / nextProcessOptions / nextProcessFilteredValue /
+  // nextProcessFilterActive / nextProcessSelectedCount / loadNextProcessOptions /
+  // nextProcessDraft 全部随本列删除。后续若恢复此筛选，重新引入即可。
 
   // ============ filter-change 翻译 ============
   // 2026-08-22：EP 2.14 filter-change 只上报本次变更的那一列
@@ -406,10 +389,6 @@ export function usePartsColumnFilters(
       const v = payload.status;
       deps.search.statuses = v.filter((x): x is OrderStatus => x !== URGENT_FILTER_VALUE);
       deps.search.isUrgent = v.includes(URGENT_FILTER_VALUE) ? true : null;
-      changed = true;
-    }
-    if ('next_process' in payload) {
-      deps.search.nextProcessIds = [...payload.next_process];
       changed = true;
     }
     if (changed) deps.onSearch();
@@ -423,7 +402,7 @@ export function usePartsColumnFilters(
     const code = rawCode.trim();
     if (!code) return;
     // 清空所有筛选（keyword/orderNo/drawingNo/name/serialNo/statuses/isUrgent/customerId/
-    // 3 个日期区间/nextProcessIds/locations），只保留 serialNo 搜索。
+    // 3 个日期区间/locations），只保留 serialNo 搜索。
     deps.search.keyword = '';
     deps.search.drawingNo = '';
     deps.search.name = '';
@@ -440,13 +419,11 @@ export function usePartsColumnFilters(
     deps.search.systemDeliveryDateFrom = '';
     deps.search.systemDeliveryDateTo = '';
     deps.search.systemDeliveryDateIsNull = undefined;
-    deps.search.nextProcessIds = [];
     deps.search.locations = [];
     deps.search.holderIds = [];
     // 同步刷新 popover 内 draft 状态（避免下次打开还看到旧的）。
     statusDraft.value = [];
     statusUrgentDraft.value = false;
-    nextProcessDraft.value = [];
     customerDraft.value = null;
     locationDraft.value = [];
     drawingNoFilter.draft.value = '';
@@ -473,8 +450,6 @@ export function usePartsColumnFilters(
   // 仅作为「扫码同步清空」的目标引用保留，避免破坏 deps.search → 派生 reactive 流。
   const statusDraft = ref<OrderStatus[]>([]);
   const statusUrgentDraft = ref(false);
-  // 下一道工序同步（虽然也走 native，但扫码时清空 search 后保持 draft 与 filtered 一致）
-  const nextProcessDraft = ref<string[]>([]);
 
   return {
     // 文本列
@@ -496,11 +471,6 @@ export function usePartsColumnFilters(
     statusFilteredValue,
     statusFilterActive,
     statusSelectedCount,
-    nextProcessOptions,
-    nextProcessFilteredValue,
-    nextProcessFilterActive,
-    nextProcessSelectedCount,
-    loadNextProcessOptions,
     onNativeFilterChange,
     // 扫码
     serialNoFlash,
@@ -508,7 +478,6 @@ export function usePartsColumnFilters(
     // 兼容（扫码同步草稿，外部不需要直接用）
     statusDraft,
     statusUrgentDraft,
-    nextProcessDraft,
   };
 }
 
