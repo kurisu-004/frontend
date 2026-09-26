@@ -27,12 +27,16 @@ export function useProcessesQuery(params?: MaybeRefOrGetter<ProcessListParams>) 
   // getter；queryFn 从 queryKey[2] 读最新 params（不 snapshot），保证 reactive params
   // 变化时 listProcesses 拿到的是新值（避免首轮 review B-1 提到的「setup 一次性
   // snapshot 把 cleaned 锁死，后端永远收到空 filter」问题）。
+  // 2026-09-26 二改：queryKey[2] 加运行时守卫（非对象回退空对象），避免未来误用
+  // 时 cast 类型与 runtime 不一致导致 listProcesses 收到非法入参。
   const paramsKey = computed(() => qk.processesOptions(toValue(params)));
   return useQuery<ProcessListResultSchema, Error>({
     queryKey: paramsKey,
     queryFn: async ({ queryKey }) => {
-      const p = queryKey[2] as ProcessListParams | null;
-      return processListResultSchema.parse(await listProcesses(p ?? {}));
+      const raw = queryKey[2];
+      const p: ProcessListParams =
+        raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as ProcessListParams) : {};
+      return processListResultSchema.parse(await listProcesses(p));
     },
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: Number.POSITIVE_INFINITY,
