@@ -36,7 +36,8 @@ import {
   defaultStatusesForRole,
   hasManageNoteRole,
 } from '@/utils/deliveryNotePermissions';
-import { listCustomers } from '@/api/customer';
+// 2026-09-26：客户全集改走共享 query useCustomersQuery（CustomerList 写后失效自动 refetch）。
+import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 // 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
 // 函数式 getter 保留调用形态 auth.hasRole('X')。
 import { useAuthStore } from '@/stores/auth';
@@ -172,28 +173,25 @@ const tableRef = ref();
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
 drag.applyDrag(tableRef);
 
-const customers = ref<{ id: string; name: string; path: string; parent_id: string | null }[]>([]);
+// 2026-09-26：客户全集改走共享 query useCustomersQuery（CustomerList 写后
+// invalidateCustomersQuery 自动 refetch）。原 customers ref + loadCustomers()
+// 删除；保留同名 computed 派生 {id, name, parent_id, path} 视图。
+const { data: customersData } = useCustomersQuery();
+const customers = computed<{ id: string; name: string; path: string; parent_id: string | null }[]>(
+  () =>
+    (customersData.value?.items ?? []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      parent_id: c.parent_id ?? null,
+      path: c.parent_name ? `${c.parent_name} / ${c.name}` : c.name,
+    })),
+);
 
 // 2026-09-02 新增：per-row loading 容器（reactive Record 让 :loading 自动响应）
 const deliveringMap = reactive<Record<string, boolean>>({});
 
 /** 一级客户视图：新建草稿弹框专用；list-filter 处仍用全集 */
 const rootCustomers = computed(() => customers.value.filter((c) => c.parent_id === null));
-
-async function loadCustomers() {
-  try {
-    // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
-    const list = (await listCustomers()).items;
-    customers.value = list.map((c) => ({
-      id: c.id,
-      name: c.name,
-      parent_id: c.parent_id ?? null,
-      path: c.parent_name ? `${c.parent_name} / ${c.name}` : c.name,
-    }));
-  } catch {
-    // ignore
-  }
-}
 
 // 2026-08-25 T7：fetcher 给 PagedTable；其它地方仍调 fetchList() 触发刷新
 async function fetcher(params: { page: number; pageSize: number }) {
@@ -229,7 +227,7 @@ function resetToFirstPage() {
 }
 
 onMounted(async () => {
-  await loadCustomers();
+  // 2026-09-26：useCustomersQuery 在 setup 顶层已自动 fetch；loadCustomers() 删除。
   // 2026-07-30 commit 4B：筛选项恢复（与 OutsourceQuoteList 同优先级）
   //   1) URL ?statuses=  → 最高优先
   //   2) restore() 快照里 statuses / customerId / keyword

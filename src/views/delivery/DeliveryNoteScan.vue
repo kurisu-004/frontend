@@ -25,7 +25,9 @@ import { useRouter } from 'vue-router';
 import { ElMessage, ElTable } from 'element-plus';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useDeliveryScanState } from '@/composables/useDeliveryScanState';
-import { listCustomers, type Customer } from '@/api/customer';
+import type { Customer } from '@/api/customer';
+// 2026-09-26：客户全集改走共享 query（CustomerList 写后失效自动 refetch）。
+import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import {
   createDeliveryGroup,
   listDeliveryGroups,
@@ -58,8 +60,10 @@ const scanState = useDeliveryScanState();
 // store proxy 自动解包嵌套 ref —— auth.user 直接是 CurrentUser | null，无需 .value。
 const auth = useAuthStore();
 
-/** 全量客户列表（listCustomers() 返回平铺）。 */
-const allCustomers = ref<Customer[]>([]);
+// 2026-09-26：客户全集改走共享 query useCustomersQuery，自动 fetch；原 ref +
+// onMounted load 删除。query.error 触发 ElMessage 提示（原 try/catch 行为保留）。
+const { data: customersData, error: customersError } = useCustomersQuery();
+const allCustomers = computed<Customer[]>(() => customersData.value?.items ?? []);
 /** 一级客户全集（parent_id === null）。 */
 const rootCustomers = computed<Customer[]>(() =>
   allCustomers.value.filter((c) => c.parent_id === null),
@@ -69,6 +73,13 @@ const allL2Customers = computed<Customer[]>(() => {
   if (!scanState.l1CustomerId.value) return [];
   return allCustomers.value.filter((c) => c.parent_id === scanState.l1CustomerId.value);
 });
+// 2026-09-26：query 错误状态 → ElMessage（沿用 useCustomerTree 同款 watch 桥接）。
+watch(
+  () => customersError.value,
+  (err) => {
+    if (err) ElMessage.error(err.message ?? '加载客户列表失败');
+  },
+);
 
 /** CurrentUser.roles → boolean map（canPrint 用）。 */
 const roleMap = computed<{ MANAGER?: boolean; CLERK?: boolean; INSPECTOR?: boolean }>(() => {
@@ -237,13 +248,7 @@ onMounted(async () => {
   unsubScan = onScan((code) => {
     void submission.handleScan(code);
   });
-  // 拉客户全集
-  try {
-    // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
-    allCustomers.value = (await listCustomers()).items;
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载客户列表失败');
-  }
+  // 2026-09-26：useCustomersQuery 在 setup 顶层自动 fetch；onMounted 无需 await load。
 });
 
 /**

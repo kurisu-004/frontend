@@ -152,7 +152,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue';
+import { computed, h, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { Plus, RefreshLeft, Search } from '@element-plus/icons-vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
@@ -165,7 +165,9 @@ import {
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
-import { listCustomers, type Customer } from '@/api/customer';
+import type { Customer } from '@/api/customer';
+// 2026-09-26：客户全集改走共享 query useCustomersQuery（CustomerList 写后失效自动 refetch）。
+import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import {
   createApplicant,
   listApplicants,
@@ -204,7 +206,16 @@ const drag = useColumnDrag(columnDefs, { listKey: 'applicant_list' });
 const loading = ref(false);
 const saving = ref(false);
 const rows = ref<Applicant[]>([]);
-const customers = ref<Customer[]>([]);
+// 2026-09-26：客户全集改走共享 query，自动 fetch；ref + loadCustomers 删除。
+const { data: customersData, error: customersError } = useCustomersQuery();
+const customers = computed<Customer[]>(() => customersData.value?.items ?? []);
+// 2026-09-26：错误桥接（与 useCustomerTree 同款）；原 try/catch ElMessage 行为保留。
+watch(
+  () => customersError.value,
+  (err) => {
+    if (err) ElMessage.error(err.message ?? '客户列表加载失败');
+  },
+);
 const search = reactive({ customerId: '' as string | '', nameLike: '' });
 // 2026-08-27 T15：列拖动 onMounted 挂 useDraggable 到表头 <tr>（列换序；绑 thead 会变成拖整行，2026-08-27 修正）
 const tableRef = ref();
@@ -229,15 +240,6 @@ async function fetchList(): Promise<void> {
     ElMessage.error((e as Error).message ?? '加载失败');
   } finally {
     loading.value = false;
-  }
-}
-
-async function loadCustomers(): Promise<void> {
-  try {
-    // 全量一级客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
-    customers.value = (await listCustomers()).items;
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '客户列表加载失败');
   }
 }
 
@@ -337,7 +339,7 @@ onMounted(async () => {
   if (persisted) {
     Object.assign(search, persisted.search);
   }
-  await loadCustomers();
+  // 2026-09-26：useCustomersQuery 在 setup 顶层已自动 fetch；loadCustomers() 删除。
   await fetchList();
   // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
   // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。

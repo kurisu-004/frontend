@@ -12,10 +12,13 @@ PR-H 2026-07-29：「已接收历史」tab 已移除 —— 功能由 per-compan
 URL ?tab=sendable|receiving 记忆上次选择；初次进入默认 可发送。
 -->
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { listCustomers, type Customer } from '@/api/customer';
+import type { Customer } from '@/api/customer';
+// 2026-09-26：customers 改走共享 query useCustomersQuery（CustomerList 写后失效自动 refetch）。
+// shelves / processes 保留 Promise.all 拉取（暂未迁共享 query；未来 src/api 接入时再迁）。
+import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import { listShelves } from '@/api/shelves';
 import type { Shelf as ShelfItem } from '@/types/shelf';
 import { listProcesses } from '@/api/process';
@@ -57,20 +60,20 @@ function onTabChange(name: string | number): void {
 // ============================================================
 // 页级共享 lookup（customers 给两个 tab 的 filter dropdown 用；
 // shelves + processes 给接收 tab 的 dialog 用）
+// 2026-09-26：customers 派生自共享 query；shelves / processes 仍 Promise.all 拉取。
 // ============================================================
-const customers = ref<Customer[]>([]);
+const { data: customersData } = useCustomersQuery();
+const customers = computed<Customer[]>(() => customersData.value?.items ?? []);
 const shelves = ref<ShelfItem[]>([]);
 const processes = ref<Process[]>([]);
 
 async function loadLookups(): Promise<void> {
+  // 2026-09-26：customers 不再从此 Promise.all 拉，由 useCustomersQuery 自动 fetch。
   try {
-    const [cs, ss, ps] = await Promise.all([
-      listCustomers(),
+    const [ss, ps] = await Promise.all([
       listShelves({ is_active: true }),
       listProcesses({ limit: 200 }),
     ]);
-    // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
-    customers.value = cs.items;
     shelves.value = ss.items;
     processes.value = ps.items;
   } catch (e) {
