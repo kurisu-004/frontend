@@ -14,7 +14,7 @@ import { computed, ref, type Ref } from 'vue';
 import { ORDER_STATUS_LABEL, type OrderStatus } from '@/types/parts';
 import type { Process } from '@/types/process';
 import { useCustomerTree } from '@/composables/useCustomerTree';
-import { splitLocationSelection, usePartLocationTree } from '@/composables/usePartLocationTree';
+import { splitLocationSelection, usePartLocationTree } from '@/views/parts/list/composables/usePartLocationTree';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
 import type { LocationTreeNode } from '@/types/parts';
