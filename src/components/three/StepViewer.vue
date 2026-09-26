@@ -35,7 +35,7 @@ import { SceneManager } from '@/three/SceneManager';
 import { CubeGizmo } from '@/three/CubeGizmo';
 import { loadStepFromBytes, OcctLoadError, type OcctFormat } from '@/three/OcctStepLoader';
 import type { LoadedShape } from '@/three/types';
-import { useStepViewer } from '@/composables/useStepViewer';
+import { useStepViewer } from './useStepViewer';
 import { detectOcctFormat } from '@/utils/stepViewerFile';
 import StepViewerToolbar from './StepViewerToolbar.vue';
 import StepViewerProgress from './StepViewerProgress.vue';

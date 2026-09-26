@@ -1,10 +1,10 @@
-// src/composables/__tests__/useStepViewer.spec.ts
+// src/components/three/useStepViewer.spec.ts
 //
 // 2026-09-20 新增：STEP 3D 预览器跨页共享状态单测。
 // 验证：模块级 ref 单例（多次 useStepViewer 调用共享同一份状态）、setter 生效、默认值符合预期。
 
 import { describe, it, expect } from 'vitest';
-import { useStepViewer } from '../useStepViewer';
+import { useStepViewer } from './useStepViewer';
 
 describe('useStepViewer', () => {
   it('默认值：gridVisible=true / gizmoVisible=true / activePreset="iso" / currentModelInfo=null', () => {
