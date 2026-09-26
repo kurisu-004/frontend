@@ -15,15 +15,25 @@
 
 import { z } from 'zod';
 
-/** 2026-09-26 新增：客户实体。字段对齐 @/api/customer Customer（雪花 id / name /
- *  parent_id / parent_name / serial_prefix）。serial_prefix 与 parent_name 一级客户
- *  必为 null，前端仅消费 nullable 不强制 None 语义。 */
+/** 2026-09-26 新增：客户实体。字段对齐 backend-rust `CustomerOut`
+ * （`backend-rust/docs/api/customers.md:142-153`，8 字段）：雪花 id / name /
+ * parent_id / parent_name / serial_prefix / version / created_at / updated_at。
+ * serial_prefix 与 parent_name 一级客户必为 null，前端仅消费 nullable 不强制 None
+ * 语义。version 是乐观锁 i32（每次写操作 +1）；created_at / updated_at 是
+ * Asia/Shanghai naive datetime，前端按 string 处理（与项目 Zod 约定一致）。
+ *
+ * 2026-09-26（M-1 修复）：首轮漏列 version / created_at / updated_at 三字段。
+ * zod 默认 `.object()` strip 模式会静默丢弃未声明字段，运行时不会报错，导致
+ * Zod 校验守门失效。补齐与后端契约对齐。 */
 export const customerSchema = z.object({
   id: z.string(),
   name: z.string(),
   parent_id: z.string().nullable(),
   parent_name: z.string().nullable(),
   serial_prefix: z.string().nullable(),
+  version: z.number(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
 export type CustomerSchema = z.infer<typeof customerSchema>;
@@ -38,10 +48,15 @@ export const customerListResultSchema = z.object({
 
 export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
 
-/** 2026-09-26 新增：工序实体。字段对齐 @/types/process Process（id / version / code /
- *  name / category / sort_order / description / requires_approval / color /
- *  created_at / updated_at）。category 用 z.enum 锁死 INHOUSE / OUTSOURCE；color 与
- *  description nullable；时间戳保持 string（与 API 字符串格式对齐）。 */
+/** 2026-09-26 新增：工序实体。字段对齐 backend-rust `ProcessOut`
+ * （`backend-rust/docs/api/production/processes.md:159-173`，11 字段）：id /
+ * code / name / category / sort_order / description / requires_approval / color /
+ * version / created_at / updated_at。category 用 z.enum 锁死 INHOUSE / OUTSOURCE；
+ * color 与 description nullable；时间戳保持 string（与 API 字符串格式对齐）。
+ *
+ * 2026-09-26（M-1 审计）：与 Process.ts 业务类型 + backend-rust ProcessOut 三方
+ * 一致（id / version / code / name / category / sort_order / description /
+ * requires_approval / color / created_at / updated_at 共 11 字段），无需补字段。 */
 export const processSchema = z.object({
   id: z.string(),
   version: z.number(),
