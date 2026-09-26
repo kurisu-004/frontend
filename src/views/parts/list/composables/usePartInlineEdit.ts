@@ -22,6 +22,7 @@ import type { SummaryMethod } from 'element-plus';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { updatePart, type PartUpdatePayload } from '@/api/parts';
 import { updateAssembly } from '@/api/assembly';
+import type { AssemblyUpdatePayload } from '@/types/assembly';
 import { useApplicantSearch } from '@/composables/useApplicantSearch';
 import { qk } from '@/composables/queries/keys';
 import type { PartListItem } from '@/types/parts';
@@ -175,7 +176,20 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
   const saveEditMutation = useMutation<unknown, Error, SaveEditVars>({
     mutationKey: ['parts', 'inline-edit', 'save'],
     mutationFn: ({ row, payload }) => {
-      if (row.row_type === 'ASSEMBLY') return updateAssembly(row.id, payload);
+      if (row.row_type === 'ASSEMBLY') {
+        // 2026-09-27 M2 收尾：M2 revert AssemblyUpdatePayload.unit_price /
+        // total_price 回 number（后端 assembly 域未加
+        // #[serde(with = "rust_decimal::serde::str")]，JSON number），但
+        // EditBuffer / PartUpdatePayload.unit_price / total_price 仍是 string
+        // （后端 parts 域已对齐 serde-with-str）。此处显式 string → number 转换
+        // 避免类型不兼容 + 后端反序列化失败（40001）。
+        const assemblyPayload: AssemblyUpdatePayload = {
+          ...payload,
+          unit_price: payload.unit_price == null ? null : Number(payload.unit_price),
+          total_price: payload.total_price == null ? null : Number(payload.total_price),
+        };
+        return updateAssembly(row.id, assemblyPayload);
+      }
       return updatePart(row.id, payload);
     },
     onSuccess: (_data, { row, payload }) => {

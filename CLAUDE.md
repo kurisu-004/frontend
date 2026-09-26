@@ -51,7 +51,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
      - **此策略仅在「写操作点全集中在某个页面 / 切片」时安全**（如 customers 写点全在 `CustomerList.vue`、processes 写点全在 `ProcessTab.vue`，2026-09-26 grep 确认）。新增写操作点必须同步挂失效，否则缓存与 DB 长期不一致。
   4. **queryFn Zod 校验（`src/composables/queries/schemas.ts`）**
      - 所有共享 useQuery 的 queryFn 必须 `xxxListResultSchema.parse(await xxxAPI())`——守住后端契约漂移。
-     - schemas 与后端契约对齐（后端文档在 `~/Code/hsh-erp-rust/docs/api/`，如 `customers.md:142-153` CustomerOut 8 字段、`production/processes.md:159-173` ProcessOut 11 字段）。
+     - schemas 与后端契约对齐（后端文档在 `~/Code/hsh-erp/backend-rust/docs/api/`，如 `customers.md:142-153` CustomerOut 8 字段、`production/processes.md:159-173` ProcessOut 11 字段）。
      - **Zod 默认 strip 模式会让缺字段静默丢弃，必填字段必须显式声明**（首轮 review M-1：`customerSchema` 漏列 `version` / `created_at` / `updated_at` 会让整份校验形同虚设——`schemas.spec.ts` S4 系列用例是该 regression 的核心 guard）。
      - 链式顺序 trim 在前（沿 2026-09-24 Zod schema-first 约定）。
   5. **reactive params 模式**
