@@ -50,7 +50,7 @@ import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelPa
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
 import { parseDrawingFilename } from '@/utils/drawingFilename';
 import { findElTableTbody } from '@/utils/elTable';
-import { pdfjsLib } from '@/utils/pdfjs';
+import { countPdfPages } from '@/utils/pdfjs';
 import { makeUid, pageUid, parsePageUid, stripExt, todayIso } from './usePartBatchShared';
 
 interface PdfFormState {
@@ -469,20 +469,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       }
     }
     return [...current, file];
-  }
-
-  /** PDF 按页数动态读取（pdfjs-dist）。与 utils/pdfjs.ts 的 countPdfPages 同模式：
-   *  destroy() 在 PDFDocumentLoadingTask 上，不在 PDFDocumentProxy 上（旧实现
-   *  调 doc.destroy() 抛 "doc.destroy is not a function"）。 */
-  async function countPdfPages(file: File): Promise<number> {
-    const buf = await file.arrayBuffer();
-    const task = pdfjsLib.getDocument({ data: buf });
-    try {
-      const doc = await task.promise;
-      return doc.numPages;
-    } finally {
-      await task.destroy();
-    }
   }
 
   async function readExcel(file: File): Promise<BidRow[]> {
