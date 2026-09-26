@@ -16,7 +16,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary"
+          <el-button type="primary" @click="() => refetchProcesses()"
             ><el-icon><Search /></el-icon><span>查询</span></el-button
           >
           <el-button @click="onReset"
@@ -176,7 +176,12 @@
 // 写点（createProcess / updateProcess / softDeleteProcess）包 useMutation +
 // invalidateProcessesQuery(qc) 完成「写后失效 + ElMessage」原子流程。
 // mutation 全局 retry: 0：信任 main.ts 已显式 queries/mutations.retry: 0。
-import { computed, h, onMounted, reactive, ref, watch } from 'vue';
+//
+// 2026-09-26 修复 review B-1：useProcessesQuery 升级为接受 MaybeRefOrGetter
+// 入参，queryKey 走 computed，user 改 search.code_like / category 后 vue-query
+// 自动 refetch；删除外置 watcher（reactives + computed queryKey 已自带响应式）；
+// 「查询」按钮显式 @click 触发 refetch（兼容习惯点查询的用户）。
+import { computed, h, onMounted, reactive, ref } from 'vue';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox, ElTag } from 'element-plus';
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue';
@@ -215,21 +220,16 @@ const queryParams = computed(() => ({
   category: search.category,
   limit: 200,
 }));
-// 2026-09-26：useProcessesQuery 包裹 useQuery 时 params 是 setup 时一次性快照，
-// queryKey 在 setup 后不变；user 改 search.code_like / category 后需要 refetch。
-// 这与原「fetchList 同步刷新」语义等价，且不再有手写的列表赋值（rows 由 query.data 派生）。
-const { data: queryData, isFetching, refetch: refetchProcesses } =
-  // eslint-disable-next-line vue/no-ref-object-destructure -- 故意 snapshot：queryKey 在 setup 后固定，靠下方 watcher 触发 refetch
-  useProcessesQuery(queryParams.value);
+// 2026-09-26（review B-1 修复）：useProcessesQuery 升级为接受 MaybeRefOrGetter，
+// 把 queryParams computed 直接传进去；queryKey 走 computed(toValue(params))，
+// search.code_like / search.category 任一变化 → queryKey 变化 → useQuery
+// 自动 refetch（无需外置 watcher）；queryFn 从 queryKey[2] 读最新 params。
+const { data: queryData, isFetching, refetch: refetchProcesses } = useProcessesQuery(
+  queryParams,
+);
 const rows = computed<Process[]>(() => (queryData.value?.items ?? []) as Process[]);
 const loading = computed<boolean>(() => isFetching.value);
 const saving = ref(false);
-// 2026-09-26：search 变更 → queryKey 失效后下次访问 refetch；这里显式 watch 即触发
-// refetch，确保下拉 filter / 输入代码时即时刷新。原 fetchList 删掉，watcher 不再是
-// 「触发 fetchList」模式，而是「驱动共享 query refetch」。
-watch(queryParams, () => {
-  void refetchProcesses();
-});
 
 // ============ 筛选状态持久化 ============
 const { restore: restoreProcessFilter } = useListStatePersist('process_list', { search });

@@ -10,7 +10,11 @@
 //   - onSuccess: 保留就地 Object.assign(row, ...) 回填（不整表刷新，无闪烁）；
 //   - onError: 命中 40901 BIZ_VERSION_CONFLICT → ElMessage.warning + 整表 invalidate；
 //     其它 → ElMessage.error；
-//   - fetchList dep 移除 —— 40901 触发整表刷新走 invalidate；正常编辑走就地回填。
+//   - fetchList dep 删除（M-2 修复）：40901 触发整表刷新走
+//     qc.invalidateQueries({queryKey: qk.partsPrefix})；正常编辑走就地 Object.assign
+//     回填（不调 fetchList）。原 fetchList dep 是过渡期兼容位，store 装配时
+//     已不再传（usePartsListStore.ts:86-93），本 composable 也不读，留着只是
+//     noise 与潜在类型漂移源。
 
 import { computed, onBeforeUnmount, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -44,10 +48,6 @@ export interface UsePartInlineEditDeps {
    *  items 已改 ComputedRef；按地址读数组 + Object.assign 行对象（行对象引用稳定），
    *  Readonly / Computed 都 OK。 */
   items: ComputedRef<PartListItem[]>;
-  /** 2026-09-26（B 任务）：fetchList dep 已移除 —— 40901 触发整表刷新走
-   *  qc.invalidateQueries({queryKey: qk.partsPrefix})；正常编辑走就地 Object.assign
-   *  回填（不调 fetchList）。保留为可选 dep 是过渡期兼容位，本 composable 不再读。 */
-  fetchList?: () => Promise<void>;
   customerTree: Ref<CustomerCascaderNode[]>;
   /** MANAGER / CLERK 行内编辑可见 */
   canEdit: boolean;

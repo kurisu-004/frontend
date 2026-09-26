@@ -15,8 +15,10 @@
 //   - 共享 qc.invalidateQueries({queryKey: qk.partsPrefix}) 失效整个 parts 域；
 //   - 单件对话框 processes 走共享 useProcessesQuery（与 usePartsColumnFilters 同源，
 //     session 级缓存）；shelves 维持现状（本期不动 shelves 共享 query）；
-//   - fetchList dep 移除 —— mutation onSuccess 不再调 fetchList（queryKey 失效后
-//     下次访问自动 refetch；这与原「fetchList 同步刷新」语义等价）；
+//   - fetchList dep 删除（M-2 修复）：mutation onSuccess 不再调 fetchList
+//     （queryKey 失效后下次访问自动 refetch；这与原「fetchList 同步刷新」语义等价）。
+//     原 fetchList dep 是过渡期兼容位，store 装配时已不再传
+//     （usePartsListStore.ts:77-85），本 composable 也不读；
 //   - 保存原 onSuccess / onError / ElMessage / 20706 兜底行为。
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
@@ -41,11 +43,6 @@ interface TableRef {
 }
 
 export interface UsePartDispatchDeps {
-  /** 2026-09-26（B 任务）：fetchList dep 已移除 —— 写操作完成后走
-   *  qc.invalidateQueries({queryKey: qk.partsPrefix}) 失效整个 parts 域，
-   *  useQuery 下次访问自动 refetch；与原 fetchList 同步刷新语义等价。保留
-   *  deps.fetchList 是过渡期兼容位（仍可被 caller 主动调），但本 composable 不再读。 */
-  fetchList?: () => Promise<void>;
   selectedIds: Set<string>;
   selectedRows: Ref<PartListItem[]>;
   selectedRowTypes: Map<string, SelectedRowType>;
