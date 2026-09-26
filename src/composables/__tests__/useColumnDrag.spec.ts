@@ -5,9 +5,10 @@ import type * as VueDraggablePlus from 'vue-draggable-plus';
 import { useColumnDrag, columnIdentifier } from '../useColumnDrag';
 import type { ColumnDef } from '../useColumnVisibility';
 
-// mock useAuthSession（避免 vue-tsc 报 ref 类型错 + 隔离 localStorage key 后缀）
-vi.mock('../useAuthSession', () => ({
-  useAuthSession: () => ({ user: { value: { id: 'u1' } } }),
+// 2026-09-26：mock 从 useAuthSession 切到 useAuthStore（Pinia 迁移）；
+// store proxy 自动解包嵌套 ref，所以 mock 直接给 plain user 对象（无 .value）。
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({ user: { id: 'u1' } }),
 }));
 
 // mock vue-draggable-plus 里的 useDraggable，捕获 start/destroy 调用

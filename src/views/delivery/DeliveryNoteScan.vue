@@ -32,7 +32,7 @@ import {
   softDeleteDeliveryGroup,
   updateDeliveryGroup,
 } from '@/api/deliveryGroup';
-import { useAuthSession } from '@/composables/useAuthSession';
+import { useAuthStore } from '@/stores/auth';
 import { canPrint } from '@/utils/deliveryNotePermissions';
 import type { DeliveryGroupListOut, DeliveryGroupOut } from '@/types/deliveryGroup';
 import type { ScanNoteSummary } from '@/types/deliveryNote';
@@ -54,7 +54,9 @@ const router = useRouter();
 
 // ============ L1 / 客户全集 ============
 const scanState = useDeliveryScanState();
-const auth = useAuthSession();
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+// store proxy 自动解包嵌套 ref —— auth.user 直接是 CurrentUser | null，无需 .value。
+const auth = useAuthStore();
 
 /** 全量客户列表（listCustomers() 返回平铺）。 */
 const allCustomers = ref<Customer[]>([]);
@@ -70,7 +72,8 @@ const allL2Customers = computed<Customer[]>(() => {
 
 /** CurrentUser.roles → boolean map（canPrint 用）。 */
 const roleMap = computed<{ MANAGER?: boolean; CLERK?: boolean; INSPECTOR?: boolean }>(() => {
-  const r = auth.user.value?.roles ?? [];
+  // 2026-09-26：store 自动解包后 auth.user 直接是 CurrentUser | null，不需要 .value。
+  const r = auth.user?.roles ?? [];
   return {
     MANAGER: r.includes('MANAGER'),
     CLERK: r.includes('CLERK'),

@@ -9,8 +9,8 @@
 //     完全前端 localStorage 闭环。
 //
 // 形态：
-//   - 模块级 composable 单例（与 useBarcodeScanner / useAuthSession 同款风格，
-//     详见 CLAUDE.md §状态管理）。
+//   - 模块级 composable 单例（与 useBarcodeScanner / useAuthStore 同款风格，
+//     详见 CLAUDE.md §状态管理）。2026-09-26：原 useAuthSession 迁到 Pinia store。
 //   - localStorage key = 'delivery_scan_printed_labels_v1'（带 _v1 便于将来
 //     形状变更时灰度切换）；内容形如
 //       { [noteId: string]: { [batchId: string]: true } }

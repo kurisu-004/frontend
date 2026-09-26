@@ -1,5 +1,10 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import type { MenuNode } from '@/types/menu';
+// 2026-09-26：迁移到 Pinia store useAuthStore（src/stores/auth.ts）。原 composable
+// 模块级单例换 store 顶层 import —— store 不 import router（refreshOrLogout 通过
+// 参数接收 router），无循环依赖。useAuthStore() 在 router 守卫里调一次拿当前
+// session state（标量自动解包，函数式 getter 保留调用形态）。
+import { useAuthStore } from '@/stores/auth';
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -441,17 +446,19 @@ function findFirstMenuPath(tree: MenuNode[]): string | null {
 
 // 全局前置守卫
 router.beforeEach(async (to, _from, next) => {
-  const { useAuthSession } = await import('@/composables/useAuthSession');
-  const { isAuthenticated, refreshOrLogout, menus, hasRole, isDummyAuthActive } = useAuthSession();
+  // 2026-09-26：使用 Pinia store useAuthStore() 替代 useAuthSession()。标量 getter
+  // 自动解包（auth.isAuthenticated 不带括号），函数式 getter 保留调用形态
+  // （auth.hasRole(r) 仍带括号）。
+  const auth = useAuthStore();
 
   // 1) 未登录 → /login
   // 2026-08-26 新增：dummy-auth 短路。
   // dummy 模式下不再调 /iam/me（会失败并清掉 fake session），直接走后续菜单校验。
-  if (isDummyAuthActive()) {
+  if (auth.isDummyAuthActive) {
     // dummy 模式：跳过 refreshOrLogout，直接进入 allowRoles + menuCode 检查
   } else if (to.meta.requireAuth || to.matched.some((r) => r.meta.requireAuth)) {
-    if (!isAuthenticated()) {
-      const ok = await refreshOrLogout(router);
+    if (!auth.isAuthenticated) {
+      const ok = await auth.refreshOrLogout(router);
       if (!ok) return;
     }
   }
@@ -459,7 +466,7 @@ router.beforeEach(async (to, _from, next) => {
   // 2) allowRoles 短路：用户拥有任一列出的角色则直接放行，不管 menuCode。
   //    用于 SHELF_ACCOUNT → /scan/* 等"业务上必须能进但 menuCode 校验会卡住"的场景。
   const allowRoles = to.meta.allowRoles ?? [];
-  if (allowRoles.length > 0 && allowRoles.some((r) => hasRole(r))) {
+  if (allowRoles.length > 0 && allowRoles.some((r) => auth.hasRole(r))) {
     return next();
   }
 
@@ -467,8 +474,8 @@ router.beforeEach(async (to, _from, next) => {
   //    单一权限源。降级目标：用户菜单树中第一个可达路径；
   //    若菜单树为空（极端情况）→ /login。
   const code = to.meta.menuCode;
-  if (code && !treeContainsCode(menus(), code)) {
-    const fallback = findFirstMenuPath(menus()) ?? '/login';
+  if (code && !treeContainsCode(auth.menus, code)) {
+    const fallback = findFirstMenuPath(auth.menus) ?? '/login';
     if (fallback === to.fullPath) return next(); // 自环保护，防止未来回归
     return next(fallback);
   }

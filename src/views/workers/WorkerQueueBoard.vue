@@ -58,12 +58,14 @@
 import { computed, onMounted, provide, ref } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
-import { useAuthSession } from '@/composables/useAuthSession';
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+// 标量 getter 去掉括号：auth.activeShelfId() → auth.activeShelfId。
+import { useAuthStore } from '@/stores/auth';
 import { useWorkerQueue } from '@/composables/useWorkerQueue';
 import WorkerColumn from './components/WorkerColumn.vue';
 import PoolDrawer from './components/PoolDrawer.vue';
 
-const auth = useAuthSession();
+const auth = useAuthStore();
 const queue = useWorkerQueue();
 const {
   workers,
@@ -86,7 +88,7 @@ const filteredWorkers = computed(() =>
 );
 
 // 2026-08-26：移除 shelf_id 守卫；空串 fallback 给真后端兜底（fixture 永远 200）。
-const shelfId = computed(() => auth.activeShelfId() ?? '');
+const shelfId = computed(() => auth.activeShelfId ?? '');
 
 // 子组件需要的 3 个 provide 注入：active tab / move 回调 / 当前 shelfId。
 // 注意 provide 非空断言 —— 同一页面里 WorkerColumn / PoolDrawer 必须 inject 同一组，

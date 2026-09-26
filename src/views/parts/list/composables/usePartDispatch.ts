@@ -20,7 +20,8 @@ import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
 import type { PartListItem } from '@/types/parts';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
-import { useAuthSession } from '@/composables/useAuthSession';
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+import { useAuthStore } from '@/stores/auth';
 import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
 import type { SelectedRowType } from './usePartBatchSelection';
 
@@ -274,10 +275,11 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   }
 
   // ============ 召回（2026-08-05）============
-  const { hasRole } = useAuthSession();
+  // 2026-09-26：消费侧禁止解构 store（沿 usePartsListStore 不变量 #3），统一 auth.xxx。
+  const auth = useAuthStore();
   // 2026-08-05 召回权限：与后端 POST /parts/{id}/recall-* 一致
-  const canRecallToPendingAuth = hasRole('MANAGER') || hasRole('CLERK');
-  const canRecallToProgrammingAuth = hasRole('MANAGER') || hasRole('CNC_PROGRAMMER');
+  const canRecallToPendingAuth = auth.hasRole('MANAGER') || auth.hasRole('CLERK');
+  const canRecallToProgrammingAuth = auth.hasRole('MANAGER') || auth.hasRole('CNC_PROGRAMMER');
 
   /** 召回按钮可见性：与后端 `_resolve_target_batch` expect 保持一致。
    *  不显式判定 status=='PROGRAMMING'：PROGRAMMING 是 PROGRAMMING DB status；

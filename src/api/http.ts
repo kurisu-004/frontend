@@ -258,8 +258,10 @@ function readRefreshToken(): string | null {
 }
 
 /**
- * 把新一对 token 写回 localStorage，并通知 useAuthSession 更新 module-level refs。
- * 不直接 import useAuthSession（会引入循环依赖），走 CustomEvent 解耦。
+ * 把新一对 token 写回 localStorage，并通知 useAuthStore 更新 state。
+ * 不直接 import useAuthStore（会引入循环依赖），走 CustomEvent 解耦。
+ * 2026-09-26：监听器从 useAuthSession 模块级 listener 迁到 useAuthStore 的 setup
+ * 回调里；行为一致（refresh 成功后 store 自动同步 user/token/refreshToken）。
  */
 function persistTokens(pair: LoginResponse): void {
   let cur: { token: string; refresh_token: string | null; user: unknown } = {

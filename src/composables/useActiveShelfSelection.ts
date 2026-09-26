@@ -21,7 +21,9 @@
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { listShelves } from '@/api/shelves';
-import { useAuthSession } from '@/composables/useAuthSession';
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+// 标量 getter 去掉括号（auth.boundShelves、auth.user），user.value → auth.user。
+import { useAuthStore } from '@/stores/auth';
 import type { Shelf } from '@/types/shelf';
 
 export interface ShelfOption {
@@ -48,12 +50,14 @@ export interface ActiveShelfSelection {
 }
 
 export function useActiveShelfSelection(): ActiveShelfSelection {
-  const { boundShelves, user } = useAuthSession();
+  // 2026-09-26：消费侧禁止解构 store（沿 usePartsListStore 不变量 #3），统一 auth.xxx。
+  // 标量 getter（boundShelves / user）通过 store proxy 自动解包为值。
+  const auth = useAuthStore();
 
   const selectedShelfId = ref<string | null>(null);
   const options = ref<ShelfOption[]>([]);
 
-  const sessionKey = computed(() => (user.value ? `${SESSION_KEY_PREFIX}${user.value.id}` : null));
+  const sessionKey = computed(() => (auth.user ? `${SESSION_KEY_PREFIX}${auth.user.id}` : null));
 
   function restoreFromSession(): string | null {
     const key = sessionKey.value;
@@ -77,7 +81,7 @@ export function useActiveShelfSelection(): ActiveShelfSelection {
   }
 
   async function initShelves(): Promise<void> {
-    const bound = boundShelves();
+    const bound = auth.boundShelves;
     if (bound.length === 0) {
       // wildcard：候选为空（界面不显示选择器，picker 走通配）
       options.value = [];

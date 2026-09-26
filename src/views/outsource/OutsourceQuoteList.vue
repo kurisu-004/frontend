@@ -14,7 +14,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { RefreshLeft, Search } from '@element-plus/icons-vue';
-import { useAuthSession } from '@/composables/useAuthSession';
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+// store proxy 自动解包嵌套 ref —— auth.user 直接是 CurrentUser | null，无需 .value。
+import { useAuthStore } from '@/stores/auth';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import { listProcesses } from '@/api/process';
 import type { Process } from '@/types/process';
@@ -32,8 +34,8 @@ import OutsourceQuoteCreateDialog from './components/OutsourceQuoteCreateDialog.
 import OutsourceQuoteReviewDialog from './components/OutsourceQuoteReviewDialog.vue';
 import OutsourceQuotePdfPreview from './components/OutsourceQuotePdfPreview.vue';
 
-const { user } = useAuthSession();
-const roleMap = computed(() => rolesArrayToMap(user.value?.roles ?? []));
+const auth = useAuthStore();
+const roleMap = computed(() => rolesArrayToMap(auth.user?.roles ?? []));
 const route = useRoute();
 const { tree: customerTree } = useCustomerTree();
 

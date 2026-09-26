@@ -28,7 +28,8 @@
 //   <ColumnVisibilityPopover :defs="columnDefs" v-model="columnVisibility.currentMap" />
 
 import { onBeforeUnmount, reactive, watch, type VNode } from 'vue';
-import { useAuthSession } from './useAuthSession';
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+import { useAuthStore } from '@/stores/auth';
 
 export interface ColumnDef {
   /** 唯一 key,英文/中文皆可,作为可见性 map 的 key */
@@ -122,10 +123,11 @@ export interface ColumnVisibilityApi {
 function storageKey(listKey: string): string {
   let suffix = 'anon';
   try {
-    const { user } = useAuthSession();
-    if (user.value?.id) suffix = String(user.value.id);
+    // 2026-09-26：useAuthStore().user 在 Pinia store proxy 下自动解包 → 直接拿值。
+    const auth = useAuthStore();
+    if (auth.user?.id) suffix = String(auth.user.id);
   } catch {
-    /* useAuthSession 在 setup 外调用会失败 → 落到 anon */
+    /* useAuthStore 在 setup 外调用会失败 → 落到 anon */
   }
   return `myerp.list.${suffix}.${listKey}_columns`;
 }

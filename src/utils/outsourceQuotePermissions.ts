@@ -53,7 +53,8 @@ export function canSoftDelete(quote: { status: OutsourceQuoteStatus }, role: Rol
   return quote.status === 'DRAFT' || quote.status === 'REJECTED';
 }
 
-/** 工具：把 useAuthSession 风格的 roles 数组转成 RoleLike 字典 */
+/** 工具：把 useAuthStore 风格的 roles 数组转成 RoleLike 字典（2026-09-26 注释同步：
+ *  原 useAuthSession → Pinia store useAuthStore，roles 形态不变（数组）。 */
 export function rolesArrayToMap(roles: readonly string[]): RoleLike {
   return {
     MANAGER: roles.includes('MANAGER'),
