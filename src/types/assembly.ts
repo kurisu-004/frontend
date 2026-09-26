@@ -70,10 +70,11 @@ export interface AssemblyItem {
   // —— 2026-07-24 新增：装配体自身价格 + 送货单字段 ——
   /** 装配体套数（默认 1） */
   quantity: number;
-  /** 装配体单价（Decimal 序列化为 number） */
-  unit_price: number;
-  /** 装配体总价 = quantity * unit_price（后端落库） */
-  total_price: number;
+  /** 装配体单价（2026-09-27 前后端字段对齐：rust_decimal::Decimal +
+   *  serde-with-str 序列化为 string）。 */
+  unit_price: string;
+  /** 装配体总价 = quantity * unit_price（后端落库，string）。 */
+  total_price: string;
   /** 订单号（法拉/路达共用） */
   order_no: string | null;
   /** 订单方系统内部交期 */
@@ -134,9 +135,11 @@ export interface AssemblyCreatePayload {
   children?: AssemblyChildPayload[];
   // —— 2026-07-24 新增：装配体自身价格 + 送货单字段 ——
   quantity?: number;
-  unit_price?: number;
+  /** 2026-09-27 前后端字段对齐：unit_price 改 string（rust_decimal::Decimal +
+   *  serde-with-str 序列化对齐）。 */
+  unit_price?: string;
   /** 不传时由 service 按 unit_price * quantity 计算 */
-  total_price?: number | null;
+  total_price?: string | null;
   order_no?: string | null;
   system_delivery_date?: string | null;
   note?: string | null;
@@ -171,9 +174,11 @@ export interface AssemblyUpdatePayload {
   is_urgent?: boolean | null;
   // —— 2026-07-24 新增 ——
   quantity?: number | null;
-  unit_price?: number | null;
+  /** 2026-09-27 前后端字段对齐：unit_price 改 string（rust_decimal::Decimal +
+   *  serde-with-str 序列化对齐）。 */
+  unit_price?: string | null;
   /** 显式传值时按 caller 写入；不传时按 unit_price * quantity 自动重算 */
-  total_price?: number | null;
+  total_price?: string | null;
   order_no?: string | null;
   system_delivery_date?: string | null;
   note?: string | null;

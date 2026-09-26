@@ -177,7 +177,10 @@ function renderName({ row }: { row: unknown }): VNode {
 
 function renderCustomer({ row }: { row: unknown }): VNode {
   const r = row as PartListItem;
-  if (r.customer_path) return h('span', r.customer_path);
+  // 2026-09-27 前后端字段对齐：派生路径 l1_customer_name + customer_name
+  if (r.l1_customer_name) {
+    return h('span', `${r.l1_customer_name} / ${r.customer_name ?? '—'}`);
+  }
   if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name);
   return h('span', { class: 'muted' }, '—');
 }

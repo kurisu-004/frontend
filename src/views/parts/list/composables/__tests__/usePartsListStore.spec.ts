@@ -6,12 +6,20 @@
 // - mock @/api/parts：listParts 返 2 行 + 调 vi.fn 充当 spy；其余函数 stub。
 // - mock @/components/ColumnFilterPopover.vue：.vue 文件不进 transform 链，需 stub。
 // - 每个用例前 setActivePinia(createPinia()) —— store 必须在 pinia active 时调用。
-// - 未登录态（user=null）下 canEdit === false，price 列被 gate，columnDefs.length === 16。
-//   登录 mock 通过 useAuthStore().$patch({ user: ... }) 注入（2026-09-26：从 useAuthSession
-//   切到 useAuthStore）；本 spec 默认跑未登录态，断言 columnDefs.length === 16。
+// - 未登录态（user=null）下 canEdit === false，price 列被 gate，columnDefs.length === 15。
+//   （2026-09-27 前后端字段对齐：移除「下一道工序」列 → 17 - 1 = 16；未登录态再
+//   减去 2 个 price 列 = 14 → 实际再扣 columnVisibility gate 后稳态是 15。断言按
+//   columnDefs.length === 15 验证）。
+// - 登录 mock 通过 useAuthStore().$patch({ user: ... }) 注入（2026-09-26：从 useAuthSession
+//   切到 useAuthStore）；本 spec 默认跑未登录态，断言 columnDefs.length === 15。
 // - spy table getter：vi.fn 注册 clearSelection / toggleRowSelection，用以验证批量选择流。
 // - 2026-09-26：usePartsListStore 现在依赖 useAuthStore，后者内含 useMutation。需要注册
 //   VueQueryPlugin + QueryClient（mutation observer 需要）；否则会抛 "No QueryClient set"。
+//
+// 2026-09-27 前后端字段对齐：mock 数据改为后端 PartListOut 真实形态 ——
+//   - parent_customer_name → l1_customer_name（重命名）；
+//   - 删 customer_path / next_process_id / next_process_name（list 响应不返）；
+//   - unit_price / total_price：number → string（rust_decimal 序列化对齐）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
@@ -34,19 +42,16 @@ vi.mock('@/api/parts', () => ({
         name: '零件 1',
         applicant_name: null,
         quantity: 1,
-        unit_price: 10,
-        total_price: 10,
+        unit_price: '10.00',
+        total_price: '10.00',
         request_date: '2026-01-01',
         planned_delivery_date: '2026-02-01',
         order_no: null,
         system_delivery_date: null,
         note: null,
         customer_name: null,
-        parent_customer_name: null,
-        customer_path: null,
+        l1_customer_name: null,
         location: null,
-        next_process_id: null,
-        next_process_name: null,
         is_urgent: false,
       },
       {
@@ -59,19 +64,16 @@ vi.mock('@/api/parts', () => ({
         name: '零件 2',
         applicant_name: null,
         quantity: 2,
-        unit_price: 20,
-        total_price: 40,
+        unit_price: '20.00',
+        total_price: '40.00',
         request_date: '2026-01-02',
         planned_delivery_date: '2026-02-02',
         order_no: null,
         system_delivery_date: null,
         note: null,
         customer_name: null,
-        parent_customer_name: null,
-        customer_path: null,
+        l1_customer_name: null,
         location: null,
-        next_process_id: null,
-        next_process_name: null,
         is_urgent: false,
       },
     ],
@@ -143,7 +145,7 @@ function makeRow(id: string, status = 'IN_PROCESS'): PartListItem {
     drawing_no: `D${id}`,
     name: `零件 ${id}`,
     quantity: 1,
-    unit_price: 10,
+    unit_price: '10.00',
     is_urgent: false,
   };
   return row as PartListItem;
@@ -172,7 +174,10 @@ describe('usePartsListStore', () => {
     vi.restoreAllMocks();
   });
 
-  // 用例 1：装配完整性 + 未登录态 columnDefs.length === 16（9 base + 7 tail，price gate）
+  // 用例 1：装配完整性 + 未登录态 columnDefs.length === 15
+  //（2026-09-27 前后端字段对齐：移除「下一道工序」列 → 17 - 1 = 16；
+  // 未登录态 canEdit=false 减去 2 个 price 列 = 14 → 但 baseColumnDefs 9 + tailColumnDefs
+  // 7（删 next_process 后剩 6），故 9 + 0 + 6 = 15）。
   it('assembles six slices + canEdit/isCncProgrammer/columnVisibility/columnDefs', () => {
     const store = usePartsListStore();
     // 六切片
@@ -187,9 +192,9 @@ describe('usePartsListStore', () => {
     expect(typeof store.isCncProgrammer).toBe('boolean');
     expect(store.columnVisibility).toBeDefined();
     expect(Array.isArray(store.columnDefs)).toBe(true);
-    // 未登录态：canEdit === false → price 列 gate → 16 列（9 base + 7 tail）
+    // 未登录态：canEdit === false → price 列 gate → 15 列（9 base + 6 tail）
     expect(store.canEdit).toBe(false);
-    expect(store.columnDefs.length).toBe(16);
+    expect(store.columnDefs.length).toBe(15);
     // registerTableGetter 存在（getTable 是 store 内部闭包，不导出）
     expect(typeof store.registerTableGetter).toBe('function');
   });

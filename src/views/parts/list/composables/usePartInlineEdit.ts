@@ -34,7 +34,9 @@ export interface EditBuffer {
   drawing_no: string;
   applicant_name: string;
   quantity: number;
-  unit_price: number;
+  /** 2026-09-27 前后端字段对齐：unit_price 改 string（与后端 rust_decimal::Decimal
+   *  序列化对齐），不再前端做 Number() 转换。 */
+  unit_price: string;
   request_date: string;
   planned_delivery_date: string;
   system_delivery_date: string | null;
@@ -80,7 +82,8 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     drawing_no: '',
     applicant_name: '',
     quantity: 1,
-    unit_price: 0,
+    // 2026-09-27：unit_price 改 string，初值用 '0' 占位。
+    unit_price: '0',
     request_date: '',
     planned_delivery_date: '',
     system_delivery_date: null,
@@ -255,25 +258,29 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     startEdit(row);
   }
 
-  // 2026-07-24 v2：总价列响应式显示（编辑态用 editBuffer，非编辑态用 row）
+  // 2026-07-24 v2：总价列响应式显示（编辑态用 editBuffer，非编辑态用 row）。
+  // 2026-09-27 前后端字段对齐：unit_price 改 string —— 显示逻辑保留
+  // （编辑态下实时反映 quantity × unit_price 给用户反馈），仅 Number() 转换
+  // 改为 parseFloat 防御非数字字符。合计 / 单行都走同样兜底。
   function displayTotalPrice(row: PartListItem): string {
     if (editingId.value === row.id) {
       const q = Number(editBuffer.quantity ?? row.quantity);
-      const p = Number(editBuffer.unit_price ?? row.unit_price);
+      const p = parseFloat(editBuffer.unit_price ?? row.unit_price ?? '0');
       return Number.isFinite(q) && Number.isFinite(p) ? (q * p).toFixed(2) : '—';
     }
     const q = Number(row.quantity);
-    const p = Number(row.unit_price);
+    const p = parseFloat(row.unit_price ?? '0');
     return Number.isFinite(q) && Number.isFinite(p) ? (q * p).toFixed(2) : '—';
   }
 
-  // 2026-07-24 v2：表格底部合计行（仅总价列求和）
+  // 2026-07-24 v2：表格底部合计行（仅总价列求和）。
+  // 2026-09-27：unit_price 改 string；改走 parseFloat 与编辑态对齐。
   const totalPriceSummary: SummaryMethod<PartListItem> = ({ columns, data }) => {
     return columns.map((col, index) => {
       if (col.label === '总价') {
         const total = data.reduce((sum, row) => {
           const q = Number(row.quantity ?? 0);
-          const p = Number(row.unit_price ?? 0);
+          const p = parseFloat(row.unit_price ?? '0');
           return sum + (Number.isFinite(q) && Number.isFinite(p) ? q * p : 0);
         }, 0);
         return total.toFixed(2);

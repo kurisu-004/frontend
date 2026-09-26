@@ -36,7 +36,7 @@ export function findBySerialNo<T extends { serial_no: string | null }>(
 
 /**
  * 调 `GET /parts/by-serial/{serial_no}`；成功时阻塞弹窗（`ElMessageBox.alert`）
- * 显示该零件的当前位置/持有人/状态/下一工序，提示工人「可能不在本工序」；
+ * 显示该零件的当前位置/持有人/状态，提示工人「可能不在本工序」；
  * 找不到（404 等）→ `ElMessage.warning` 一行。
  *
  * 关键：message 传 VNode（不是拼好的 `lines.join('\n')`）—— Element Plus 对 plain
@@ -65,9 +65,10 @@ export async function findPartBySerialAndPrompt(code: string): Promise<void> {
     { label: '状态', value: part.status },
     { label: '当前所在', value: where },
   ];
-  if (part.next_process_name) {
-    rows.push({ label: '下一工序', value: part.next_process_name });
-  }
+  // 2026-09-27 前后端字段对齐：PartItem.next_process_name 字段随列表响应下线，
+  // 详情出参仍保留（与 PartDetailOut 其它字段同步；process_chain_id 才是后续
+  // 「下一道工序」展示的源头 —— 通过 /process-chains/{id} 解析）。本 helper
+  // 不再渲染「下一工序」行。
   const messageVNode = h(
     'div',
     {

@@ -151,12 +151,22 @@ export function useOutsourceQuoteForm(
   );
 
   /** PR-H 2026-07-28：选择零件后自动填工序（仅当 next_process_id 类别 = OUTSOURCE）。
-   *  其他情况（INHOUSE / NULL）留空并提示。 */
+   *  其他情况（INHOUSE / NULL）留空并提示。
+   *
+   *  2026-09-27 前后端字段对齐：PartListItem.next_process_id 已下线（list
+   *  响应不再返）。picker 端点 `/outsource-quotes/quotable-parts` 当前尚未迁到
+   *  Rust 后端（backend-rust 搜不到该端点），由 listQuotableParts 返回的
+   *  PartListItem[] 中 next_process_id 在前端 schema 不再声明。临时通过
+   *  picker-local 类型扩展访问 —— 后续 picker 接入后端新端点时，需重新设计
+   *  next_process_id 的获取路径（如返回 picker 专用 VO 或落 detail fetch）。 */
   function onCreatePartChange(partId: string): void {
     createForm.process_id = '';
     createForm.outsource_company_id = '';
     if (!partId) return;
-    const part = opts.parts().find((p) => p.id === partId);
+    const rawPart = opts.parts().find((p) => p.id === partId);
+    // 临时：picker-local 类型扩展（见函数头注释）。该 cast 在 backend picker
+    // 端点迁移完成后应去除。
+    const part = rawPart as (typeof rawPart & { next_process_id?: string | null }) | undefined;
     if (!part?.next_process_id) {
       if (part) ElMessage.info('该零件未设置下一工序，请手动选择');
       return;

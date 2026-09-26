@@ -57,12 +57,13 @@
       />
 
       <!--
-        2..19. 18 列数据列（2026-08-27 Task 6 接入，2026-08-27 fix 升级手柄覆盖）
+        2..18. 17 列数据列（2026-08-27 Task 6 接入，2026-08-27 fix 升级手柄覆盖；
+        2026-09-27 前后端字段对齐：删「下一道工序」列 → 18 - 1 = 17）。
         drag.orderedDefs 提供持久化顺序；columnDefs.cellRender / headerRender 工厂
         在 partsListColumnDefs.ts 里持有 filter ref / editingId / editBuffer 等响应式闭包。
         #header 统一模板：headerRender VNode + (无 headerRender 时) d.label 文字 +
         末尾 ColumnDragHandle。手柄始终渲染，因此 9 列 ColumnFilterPopover +
-        2 列 status / next_process badge 都能拖动。
+        1 列 status badge 都能拖动。
         sortablejs 通过 .col-no-drag filter 跳过 type=selection/index/expand 与 fixed 列。
       -->
       <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
@@ -93,8 +94,8 @@
         >
           <!-- 自定义表头（ColumnFilterPopover / 选中计数 badge）+ 默认 label +
             拖动手柄三件套：2026-08-27 fix 把 ColumnDragHandle 提到条件外，
-            此前 v-if/v-else-if 互斥导致 11/18 列（9 列 ColumnFilterPopover +
-            status / next_process badge）走 headerRender 分支后没有手柄，
+            此前 v-if/v-else-if 互斥导致 10/17 列（9 列 ColumnFilterPopover +
+            status badge）走 headerRender 分支后没有手柄，
             sortablejs handle='.col-drag-handle' 抓不到 → 用户无法拖动。
             现在统一一个 #header 模板：headerRender 走其自定义 VNode，
             无 headerRender 时落回 d.label 文字；手柄始终追加在末尾
@@ -209,14 +210,17 @@ defineExpose({ tableRef });
 
 // 2026-08-23：工具栏「重置筛选」按钮 —— 一键清空所有列筛选（文本/日期/status/客户/位置/holder）。
 // 把 el-table.clearFilter 注入 query composable，让 query.resetAllFilters 能不持有
-// tableRef 的情况下清掉原生筛选列（status / next_process）的内部勾选态。
+// tableRef 的情况下清掉原生筛选列（status）的内部勾选态。
 // EP clearFilter 会 emit filter-change，onNativeFilterChange 顺手把 search.* 同步清空。
 //
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver
 // 自愈（覆盖 EP 重建表头 / 数据到达后表头首次渲染）。consumer 0 行 query 代码。
+//
+// 2026-09-27 前后端字段对齐：移除 'next_process' —— 「下一道工序」原生列随字段
+// 同步删除。
 onMounted(() => {
   store.query.registerClearNativeFilters(() => {
-    tableRef.value?.clearFilter(['status', 'next_process']);
+    tableRef.value?.clearFilter(['status']);
   });
   drag.applyDrag(tableRef);
 });

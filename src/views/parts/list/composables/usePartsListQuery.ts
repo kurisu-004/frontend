@@ -73,8 +73,6 @@ export interface PartsSearchState {
    * - undefined ⇒ 任意（cleanParams 不发送该字段）
    */
   systemDeliveryDateIsNull: boolean | undefined;
-  /** 2026-08-01：下一道工序 id 多选（雪花 ID 字符串；空数组=全部） */
-  nextProcessIds: string[];
   /** 2026-08-01：物理位置大类多选（OFFICE/PRODUCTION_SHELF/WORKER/INSPECTION_SHELF/OUTSOURCE_COMPANY；空数组=全部） */
   locations: string[];
   /** 2026-08-05：物理位置具体 holder 多选（货架/工人/外协公司 雪花 ID 字符串；与 `locations` 是 OR 关系；空数组=全部） */
@@ -102,7 +100,6 @@ export function initialPartsSearch(isCncProgrammer: boolean): PartsSearchState {
     systemDeliveryDateTo: '',
     orderNoIsNull: undefined, // 2026-08-11
     systemDeliveryDateIsNull: undefined, // 2026-08-11
-    nextProcessIds: [],
     locations: [],
     holderIds: [],
     rowType: 'ALL',
@@ -192,14 +189,16 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
   // 2026-08-06 bugfix：装配件位置类筛选切换时 el-table remount key。
   // Element Plus 2.14 el-table 的 lazy tree 把「已加载子件」按 row-key 缓存在内部
   // lazyTreeNodeMap；items 整体替换（filter 切换）不会清空该缓存，导致已展开装配件
-  // 仍展示上一次筛选的命中子件。给 ResponsiveList 加 :key 让这四个影响子件显示的
+  // 仍展示上一次筛选的命中子件。给 ResponsiveList 加 :key 让这三个影响子件显示的
   // 筛选变化时整体 remount，强制走 loadChildren 拿到当前 matched_children。
   // 不含 keyword/排序/状态/日期等不影响子件显示的筛选 —— 保留滚动位置与排序高亮。
+  //
+  // 2026-09-27 前后端字段对齐：移除 search.nextProcessIds（原下一道工序筛选随
+  // 「下一道工序」列一并删除），tableKey 减少一维。
   const tableKey = computed(() =>
     [
       search.locations.join(','),
       search.holderIds.join(','),
-      search.nextProcessIds.join(','),
       search.rowType,
     ].join('|'),
   );
@@ -256,10 +255,6 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
       // 注入 / type-only 引用解构等异常路径可能塞入非数组值；buildParams 必须
       // 兜底回 undefined，避免 axios paramsSerializer 抛 TypeError 或把非预期值
       // 发出去（holder_ids 混入非雪花 ID 字符串后端 parse 失败 → 40001）。
-      next_process_ids:
-        Array.isArray(search.nextProcessIds) && search.nextProcessIds.length > 0
-          ? search.nextProcessIds
-          : undefined,
       locations:
         Array.isArray(search.locations) && search.locations.length > 0
           ? search.locations
@@ -268,6 +263,8 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
         Array.isArray(search.holderIds) && search.holderIds.length > 0
           ? search.holderIds
           : undefined,
+      // 2026-09-27 前后端字段对齐：移除 next_process_ids 查询参数 —— 列表响应不再
+      // 返 next_process_id，原生列筛选已删除。
       row_type: search.rowType !== 'ALL' ? search.rowType : undefined,
       sort_by: sortBy.value,
       sort_dir: sortDir.value,
@@ -400,10 +397,12 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
   }
 
   // 2026-08-23：工具栏「重置筛选」一键清空 —— 与 onReset 的「半清空」相反：
-  // 清掉全部列筛选项（文本/日期/isNull/status/客户/下一道工序/所在位置/holder），
-  // 但保留 rowType / 排序 / 分页大小。原生筛选列（status / next_process）的
+  // 清掉全部列筛选项（文本/日期/isNull/status/客户/所在位置/holder），
+  // 但保留 rowType / 排序 / 分页大小。原生筛选列（status）的
   // el-table 内部勾选态通过 clearNativeFilters 回调清掉，EP 会 emit filter-change
-  // 让 onNativeFilterChange 把 search.statuses / isUrgent / nextProcessIds 同步清空。
+  // 让 onNativeFilterChange 把 search.statuses / isUrgent 同步清空。
+  //
+  // 2026-09-27 前后端字段对齐：移除 nextProcessIds 清空（下一道工序筛选随列一并删除）。
   function resetAllFilters(): void {
     search.statuses = [];
     search.isUrgent = null;
@@ -420,7 +419,6 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
     search.systemDeliveryDateFrom = '';
     search.systemDeliveryDateTo = '';
     search.systemDeliveryDateIsNull = undefined;
-    search.nextProcessIds = [];
     search.locations = [];
     search.holderIds = [];
     // rowType / keyword 保留
@@ -470,10 +468,10 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
       persisted.search.systemDeliveryDateFrom ?? search.systemDeliveryDateFrom;
     search.systemDeliveryDateTo =
       persisted.search.systemDeliveryDateTo ?? search.systemDeliveryDateTo;
-    // 2026-08-01：下一道工序 / 物理位置多选恢复（lenient：旧快照缺字段=空数组）
-    search.nextProcessIds = Array.isArray(persisted.search.nextProcessIds)
-      ? persisted.search.nextProcessIds
-      : [];
+    // 2026-08-01：物理位置多选恢复（lenient：旧快照缺字段=空数组）
+    // 2026-09-27 前后端字段对齐：移除 nextProcessIds 恢复（原下一道工序筛选随列删除；
+    // 旧 localStorage 快照中 nextProcessIds 字段残留无害 —— useListFilterPersist
+    // 持久化的 search shape 现在不消费该字段，下次 snapshot 自然丢弃）。
     search.locations = Array.isArray(persisted.search.locations) ? persisted.search.locations : [];
     // 2026-08-05：holder 叶子多选恢复（lenient：旧快照缺字段=空数组）
     search.holderIds = Array.isArray(persisted.search.holderIds) ? persisted.search.holderIds : [];

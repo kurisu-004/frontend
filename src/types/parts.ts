@@ -143,10 +143,11 @@ export interface PartListItem {
   /** 申请人姓名快照 */
   applicant_name: string | null;
   quantity: number;
-  /** 单价 */
-  unit_price: number;
-  /** 总价 = quantity * unit_price（2026-07-24 新增；后端落库字段，UI 直接展示） */
-  total_price: number;
+  /** 单价（2026-09-27 前后端字段对齐：后端 rust_decimal::Decimal + serde-with-str
+   *  序列化为 string，前端透传展示；行内编辑缓冲亦为 string）。 */
+  unit_price: string;
+  /** 总价 = quantity * unit_price（2026-09-27：与 unit_price 同形态，string）。 */
+  total_price: string;
   /** 请购日期 */
   request_date: string;
   planned_delivery_date: string;
@@ -159,8 +160,10 @@ export interface PartListItem {
   delivered_quantity?: number | null;
   note: string | null;
   customer_name: string | null;
-  parent_customer_name: string | null;
-  customer_path: string | null;
+  /** 2026-09-27 前后端字段对齐：原 parent_customer_name rename 为 l1_customer_name
+   *  （与后端 Rust PartListOut 字段一致）。customer_path 派生路径 = l1 + name，
+   *  前端不消费该字段（cellRender 内自行拼接）。 */
+  l1_customer_name: string | null;
   /** 2026-09-16 起为后端派生（min-progress 活跃批次的 location：
    *  OFFICE/PRODUCTION_SHELF/WORKER/INSPECTION_SHELF/OUTSOURCE_COMPANY），无活跃批次为 null。
    *  t_part 瘦身（PR-2 2026-09-16）：原 delivery_note_id / shelf_code / worker_name /
@@ -171,10 +174,6 @@ export interface PartListItem {
   /** 2026-09-16 新增：min-progress 活跃批次 holder 解析名
    *  （货架 code / 工人姓名 / 外协公司名；OFFICE 或无活跃批次为 null）。 */
   holder_name?: string | null;
-  /** PR-H 2026-07-28：下一工序 id（NULL = 未设置；新建外协报价 picker 自动填工序用） */
-  next_process_id: string | null;
-  /** PR-H 2026-07-28：下一工序名 */
-  next_process_name: string | null;
   /** 2026-09-16 新增：工艺链 id（雪花 ID 字符串；null = 未制定工序）。
    *  后端 2026-09-16 起在 GET /parts 列表项与 GET /parts/{id} 详情出参新增；
    *  工序制定页「待制定 / 已制定」分组改由本字段驱动（替代原 step_count 懒加载派生）。 */

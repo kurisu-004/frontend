@@ -9,7 +9,7 @@
 // listRepairingBatches 是单件 lifecycle，但响应形态与品检待办一致）。用 `import type`
 // 顶置避免 inline import 的可读性问题；type-only 导入是擦除的，运行时无循环代价。
 
-import { api, cleanParams } from '@/api/http';
+import { api, cleanParams, normalizeListResult } from '@/api/http';
 import type { OutsourceSendableListResult } from '@/types/outsource';
 import type {
   LocationTreeNode,
@@ -172,8 +172,10 @@ export interface PartCreatePayload {
    */
   applicant_id?: string | null;
   quantity?: number;
-  unit_price?: number;
-  total_price?: number | null;
+  /** 2026-09-27 前后端字段对齐：unit_price 改 string（rust_decimal::Decimal +
+   *  serde-with-str 序列化对齐）；后端会按 Decimal 精度 parse 字符串）。 */
+  unit_price?: string;
+  total_price?: string | null;
   request_date: string;
   planned_delivery_date: string;
   is_urgent?: boolean;
@@ -194,8 +196,10 @@ export interface PartUpdatePayload {
   drawing_no?: string;
   applicant_name?: string;
   quantity?: number;
-  unit_price?: number;
-  total_price?: number | null;
+  /** 2026-09-27 前后端字段对齐：unit_price 改 string（rust_decimal::Decimal +
+   *  serde-with-str 序列化对齐）。 */
+  unit_price?: string;
+  total_price?: string | null;
   request_date?: string;
   planned_delivery_date?: string;
   is_urgent?: boolean;
@@ -259,7 +263,12 @@ export interface PartEvent {
 
 export async function listParts(params: ListPartsParams = {}): Promise<PartListResult> {
   const resp = await api.get<PartListResult>('/parts', { params: cleanParams(params) });
-  return resp.data;
+  // 2026-09-27 前后端字段对齐：listParts 套一层 normalizeListResult 把分页字段
+  // 兜底成 number（与 customer.ts / iam.ts / worker.ts / outsource.ts 现有 4 个
+  // 文件的写法对齐）。后端本 PR 已把 PartListOut.total / limit / offset 切到
+  // JSON number，但 normalizeListResult 仍保留作为防御层（其它 9 个 list 端点
+  // wire-format 行为不一致，列表 wrapper 统一兜底是最稳的解）。
+  return normalizeListResult(resp.data);
 }
 
 /**

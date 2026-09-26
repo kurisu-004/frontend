@@ -54,12 +54,19 @@ const parts = ref<PartListItem[]>([]);
 const allParts = ref<PartListItem[]>([]); // 未去重的全量（create 表单可能用）
 
 /** PR-H 2026-07-28：dedupe picker 行（PR-fix-0.2.0）
- *  折叠同一 (part_id, next_process_id) 的多批次行。 */
+ *  折叠同一 (part_id, next_process_id) 的多批次行。
+ *
+ *  2026-09-27 前后端字段对齐：PartListItem.next_process_id 已下线，picker
+ *  端点 `/outsource-quotes/quotable-parts` 当前尚未迁到 Rust 后端，临时通过
+ *  picker-local 类型扩展访问。后续 picker 接入后端新端点时重新设计。
+ *  当前 dedupe key 退化为 part_id-only（next_process_id 视为未知）。 */
 function dedupeByPartProcess(rows: PartListItem[]): PartListItem[] {
   const seen = new Set<string>();
   const out: PartListItem[] = [];
   for (const r of rows) {
-    const key = `${r.id}::${r.next_process_id ?? 'null'}`;
+    // 临时：picker-local 类型扩展（见 useOutsourceQuoteForm 同款注释）。
+    const nextProcessId = (r as PartListItem & { next_process_id?: string | null }).next_process_id ?? null;
+    const key = `${r.id}::${nextProcessId ?? 'null'}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);
