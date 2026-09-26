@@ -3,7 +3,7 @@
   工序制定页（三栏 splitter 布局：左 PartPicker / 中 DrawingPreview / 右 ProcessStepCardList）。
   2026-09-11 新增。
   2026-09-12 改造：CSS flex → <el-splitter> 三栏可拖拽，宽度持久化到 localStorage
-                   （src/composables/useResizablePane.ts，key='process_design_layout'）。
+                   （views/production/composables/useResizablePane.ts，key='process_design_layout'）。
   2026-09-14 改造：切真接口后，删除「默认选中种子零件」逻辑（fixture-only）；
                    改为「选中第一个零件」或保持空态让用户手动选。composable 内
                    loadParts / loadProcesses / loadFlowForPart 均走 `api`（2026-09-15
@@ -40,7 +40,7 @@ import PartPickerList from './components/PartPickerList.vue';
 import DrawingPreviewPane from './components/DrawingPreviewPane.vue';
 import ProcessStepCardList from './components/ProcessStepCardList.vue';
 import { usePartProcessDesign } from './composables/usePartProcessDesign';
-import { useResizablePane } from '@/composables/useResizablePane';
+import { useResizablePane } from '@/views/production/composables/useResizablePane';
 
 const { parts, loadParts, loadProcesses } = usePartProcessDesign();
 
