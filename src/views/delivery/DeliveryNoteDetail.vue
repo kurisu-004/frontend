@@ -29,7 +29,7 @@ import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionC
 import DeliverySubmitCandidateDialog from '@/components/delivery/DeliverySubmitCandidateDialog.vue';
 import { formatNoteEventLabel } from '@/types/deliveryNote';
 import type { AddPartsItem } from '@/api/deliveryNote';
-import type { BulkPassFailure, BulkPassItem } from '@/composables/useBulkPassInspection';
+import type { BulkPassFailure, BulkPassItem } from '@/views/delivery/composables/useBulkPassInspection';
 import DeliveryNoteHeaderCard from './components/DeliveryNoteHeaderCard.vue';
 import DeliveryNoteLineItemsTable from './components/DeliveryNoteLineItemsTable.vue';
 import DeliveryNoteDispatchControls from './components/DeliveryNoteDispatchControls.vue';

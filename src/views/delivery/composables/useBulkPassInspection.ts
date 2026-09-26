@@ -1,4 +1,4 @@
-// composables/useBulkPassInspection.ts
+// views/delivery/composables/useBulkPassInspection.ts
 //
 // 批量品检通过 composable（2026-08-23 新增；2026-08-25 切 v2 批量端点；
 //   2026-08-28 切 route B 批量端点 + item 改 batch_id-only）。

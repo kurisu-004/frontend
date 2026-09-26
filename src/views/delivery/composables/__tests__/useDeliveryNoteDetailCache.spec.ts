@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useDeliveryNoteDetailCache } from './useDeliveryNoteDetailCache';
+import { useDeliveryNoteDetailCache } from '../useDeliveryNoteDetailCache';
 import type { DeliveryNoteDetailOut } from '@/types/deliveryNote';
 
 function fakeDetail(id: string, version = 1): DeliveryNoteDetailOut {

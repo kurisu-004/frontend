@@ -32,10 +32,10 @@ import { ElMessage, ElTag, ElTable, type TableInstance } from 'element-plus';
 import { Upload } from '@element-plus/icons-vue';
 
 import { useDialogSize } from '@/composables/useDialogSize';
-import { useBulkScanInspect } from '@/composables/useBulkScanInspect';
-import type { BulkScanFailure, BulkScanItem } from '@/composables/useBulkScanInspect';
-import { useBulkPassInspection } from '@/composables/useBulkPassInspection';
-import type { BulkPassItem } from '@/composables/useBulkPassInspection';
+import { useBulkScanInspect } from '@/views/delivery/composables/useBulkScanInspect';
+import type { BulkScanFailure, BulkScanItem } from '@/views/delivery/composables/useBulkScanInspect';
+import { useBulkPassInspection } from '@/views/delivery/composables/useBulkPassInspection';
+import type { BulkPassItem } from '@/views/delivery/composables/useBulkPassInspection';
 import { listShelves } from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';
 import type { BlockedScanItem } from '@/types/deliveryNote';

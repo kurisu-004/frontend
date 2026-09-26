@@ -20,8 +20,8 @@ import { ElMessage, ElTag, ElTable, type TableInstance } from 'element-plus';
 import { Select } from '@element-plus/icons-vue';
 
 import { useDialogSize } from '@/composables/useDialogSize';
-import { useBulkPassInspection } from '@/composables/useBulkPassInspection';
-import type { BulkPassResult } from '@/composables/useBulkPassInspection';
+import { useBulkPassInspection } from '@/views/delivery/composables/useBulkPassInspection';
+import type { BulkPassResult } from '@/views/delivery/composables/useBulkPassInspection';
 import type { DeliveryNoteLineItem } from '@/types/deliveryNote';
 import {
   resolveDraggable,
