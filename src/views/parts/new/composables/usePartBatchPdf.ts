@@ -471,7 +471,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     return [...current, file];
   }
 
-  /** PDF 按页数动态读取（pdfjs-dist）。与 composables/usePdfPageCount.ts 同模式：
+  /** PDF 按页数动态读取（pdfjs-dist）。与 utils/pdfjs.ts 的 countPdfPages 同模式：
    *  destroy() 在 PDFDocumentLoadingTask 上，不在 PDFDocumentProxy 上（旧实现
    *  调 doc.destroy() 抛 "doc.destroy is not a function"）。 */
   async function countPdfPages(file: File): Promise<number> {

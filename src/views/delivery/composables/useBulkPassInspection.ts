@@ -63,7 +63,7 @@ export interface UseBulkPassInspectionReturn {
 /**
  * 纯函数：`BulkPassItem[] → BatchToShipItem[]`，剥掉展示用 `label`。
  *
- * 导出供单测（composables/useBulkPassInspection.spec.ts）覆盖；保持映射规则
+ * 导出供单测（__tests__/useBulkPassInspection.spec.ts）覆盖；保持映射规则
  * 集中在一处，弹窗侧只关心 UI 类型。route B 下不再需要 part_id —— 后端 service
  * 按 batch_id 反查 t_part_batch.part_id。
  * 2026-08-29：透传 version（caller OCC 锚 t_part_batch）。
