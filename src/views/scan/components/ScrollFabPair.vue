@@ -30,7 +30,7 @@
 <script setup lang="ts">
 import { watch, onMounted, onBeforeUnmount, shallowRef } from 'vue';
 import { ArrowUp, ArrowDown } from '@element-plus/icons-vue';
-import { useHoldToScroll } from '@/composables/useHoldToScroll';
+import { useHoldToScroll } from '@/views/scan/composables/useHoldToScroll';
 
 const props = defineProps<{
   target: HTMLElement | null;

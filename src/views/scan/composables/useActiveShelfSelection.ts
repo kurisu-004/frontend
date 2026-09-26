@@ -1,4 +1,4 @@
-// composables/useActiveShelfSelection.ts
+// views/scan/composables/useActiveShelfSelection.ts
 //
 // 2026-07-13 新增：SHELF_ACCOUNT 多货架场景下，扫码台显式选择当前作业货架。
 //

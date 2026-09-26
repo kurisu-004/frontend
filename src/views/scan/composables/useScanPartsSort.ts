@@ -1,4 +1,4 @@
-// composables/useScanPartsSort.ts
+// views/scan/composables/useScanPartsSort.ts
 //
 // 报工台三页（ScanPickParts / ScanReturnParts / ScanInspectParts）共用客户端排序。
 // 替代原来后端 SQL `is_urgent DESC → planned_delivery_date ASC NULLS LAST → id DESC`
