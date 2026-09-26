@@ -36,6 +36,61 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   #3）—— 一律 `const auth = useAuthStore(); auth.xxx` 访问，否则丢失响应式。
   `refreshOrLogout(router)` 接收 router 参数（store 不 import vue-router，避免循环依赖）。
   mutation 全局 retry: 0 见上文 TanStack Query 约定，store 内不写 retry。
+- **TanStack Query 数据获取架构（2026-09-26）**（2026-09-26 新增）：本轮 TanStack Query 化的硬约束。覆盖两层架构（共享基础数据层 + 页面 store）、queryKey 工厂、Zod 守门、reactive params、enabled 闸门、fetchList 别名、mutation 范本、ElMessage 错误桥接、简单 vs 复杂页面判别。
+
+  1. **两层数据获取架构**
+     - **共享基础数据层**（`src/composables/queries/`）：useQuery + `staleTime` / `gcTime` Infinity + 写操作精确失效；全仓唯一 queryKey 来源走 `qk.xxx`。当前覆盖：`useCustomersQuery` / `useProcessesQuery` / `useCustomerTree`（内部转 `useCustomersQuery`，对外 `load()` API 兼容）。
+     - **页面级 store**（`src/views/<域>/<页>/composables/useXxxStore.ts`，如 `usePartsListStore`）：沿用 4 不变量（首调 / onBeforeUnmount `$dispose` / 禁解构 / 不 import vue-router）；持有私有状态（分页 / 筛选 / 勾选 / 对话框）+ 内部 useQuery 列表 + useMutation 写操作 + invalidate 失效同域。
+  2. **queryKey 工厂（`src/composables/queries/keys.ts`）**
+     - 全仓唯一来源：`qk.customersList` / `qk.customersPrefix` / `qk.processesOptions(params)` / `qk.processesList(params)` / `qk.processesPrefix` / `qk.partsList(params)` / `qk.partsPrefix`，as const 锁字面量类型。
+     - **禁止在调用点拼字面量数组**——键类型漂移会让 `invalidateQueries` 精确失效失效。
+     - `<域>Prefix` 用于 `invalidateQueries({ queryKey: qk.<域>Prefix })` 前缀失效，覆盖域内任意 params 形态的 list；具体 list 键（`customersList` / `processesList(params)` / `partsList(params)`）用于 cache identity。
+  3. **基础数据精确失效策略**
+     - `staleTime: Number.POSITIVE_INFINITY` + `gcTime: Number.POSITIVE_INFINITY`（会话级缓存，KB 级基础数据不再主动失效）。
+     - 失效责任完全在写操作侧：每个写 mutation 的 `onSuccess` 必须调 `<域>Prefix` 的 `invalidateQueries`（走 `invalidateCustomersQuery(qc)` / `invalidateProcessesQuery(qc)` 薄封装，返回 `Promise<void>`）。
+     - **此策略仅在「写操作点全集中在某个页面 / 切片」时安全**（如 customers 写点全在 `CustomerList.vue`、processes 写点全在 `ProcessTab.vue`，2026-09-26 grep 确认）。新增写操作点必须同步挂失效，否则缓存与 DB 长期不一致。
+  4. **queryFn Zod 校验（`src/composables/queries/schemas.ts`）**
+     - 所有共享 useQuery 的 queryFn 必须 `xxxListResultSchema.parse(await xxxAPI())`——守住后端契约漂移。
+     - schemas 与后端契约对齐（后端文档在 `~/Code/hsh-erp-rust/docs/api/`，如 `customers.md:142-153` CustomerOut 8 字段、`production/processes.md:159-173` ProcessOut 11 字段）。
+     - **Zod 默认 strip 模式会让缺字段静默丢弃，必填字段必须显式声明**（首轮 review M-1：`customerSchema` 漏列 `version` / `created_at` / `updated_at` 会让整份校验形同虚设——`schemas.spec.ts` S4 系列用例是该 regression 的核心 guard）。
+     - 链式顺序 trim 在前（沿 2026-09-24 Zod schema-first 约定）。
+  5. **reactive params 模式**
+     - useQuery 入参 `params` 必须是 `MaybeRefOrGetter<T>`（不是 snapshot 后的 plain object）。
+     - `queryKey: computed(() => qk.xxx(toValue(params)))`，依赖变化自动 refetch。
+     - `queryFn: async ({ queryKey }) => parseList(await apiFn(queryKey[2]))`——从 queryKey 读最新 params，避免闭包捕获 stale（首轮 review B-1 即此问题）。
+     - 范本：`usePartsListQuery.ts:296-304`、`useProcessesQuery.ts:30-36`。
+  6. **enabled 闸门（restore 模式）**
+     - 页面 store 内 useQuery 默认 `enabled=false`（`restored = ref(false)`），`restoreState()` 末尾 `restored.value = true` 开闸。
+     - 避免「store 实例化即用默认参数自动 fetch + restoreState 后用持久化参数又 fetch」的双 fetch——见 `usePartsListQuery.ts:165-166, 438-496`。
+     - 与 `useCustomersQuery` 区别：customers 所有 caller 都是 setup 顶层立即消费 data，无闸门；parts list caller 要等路由守卫 + URL `?status=` + localStorage 恢复完才允许 fetch。
+  7. **fetchList 别名（过渡期兼容）**
+     - 页面 store 主查询暴露 `fetchList(): Promise<void>` 别名 = `useQuery.refetch` 的 async 包装。
+     - 让外部调用方（`PartsList.vue` 的 `PurchaseOrderImportDialog @success="store.query.fetchList"`、子组件 emit、测试 `await q.fetchList()`）零改动可用。
+     - 测试也通过 fetchList 驱动，无需为新 API 写新 fixture。
+  8. **mutation 范本**
+     - 不写 `retry`（信任 `src/main.ts` 全局 `mutations.retry: 0`）。
+     - `mutationKey: ['<域>', '<action>']` 三层数组。
+     - 写 mutation 的 `onSuccess` 必须失效对应域（`invalidateQueries({ queryKey: qk.<域>Prefix })` 或精确）；行内编辑类 mutation `onSuccess` 仍可走就地回填（`Object.assign(row, ...)`）不整表刷新，仅乐观锁冲突（`code === 40901` `BIZ_VERSION_CONFLICT`）走 `invalidateQueries`——见 `usePartInlineEdit.ts:178-208`。
+
+       ```ts
+       const createMutation = useMutation({
+         mutationKey: ['customers', 'create'],
+         mutationFn: (payload: Parameters<typeof createCustomer>[0]) => createCustomer(payload),
+         onSuccess: async () => {
+           await invalidateCustomersQuery(qc);
+           ElMessage.success('客户已创建');
+         },
+         onError: (e: Error) => ElMessage.error(e.message ?? '保存失败'),
+       });
+       ```
+     - 范本：`src/stores/auth.ts:132`（login mutation，单纯 onSuccess 不挂 invalidate）、`src/views/parts/new/composables/usePartBatchManual.ts:892`（批量录入 mutation，部分失败 / 成功跳转 / ElMessage 放 onSuccess / onError）。
+  9. **ElMessage 错误桥接**
+     - useQuery 的 error 不在 setup 抛错，走 `watch(error, (e) => e && ElMessage.error(...))` 桥接（替代原 `fetchList catch` 内 ElMessage 路径，`usePartsListQuery.ts:334-336`）。
+     - 测试环境用 `vi.mock('element-plus', () => ({ ElMessage: { ...vi.fn() } }))` 桩成 no-op，避免 vitest node env `ElMessage` 内部 `normalizeAppendTo` 触发 `ReferenceError: document is not defined` 污染输出。
+  10. **简单页面 vs 复杂页面**
+      - **简单页面**（一个列表 + 一些筛选，如 `ApplicantList.vue` / `DeliveryNoteList.vue` / `DeliveryNoteScan.vue` / `OutsourceSendReceive.vue` / `PartBatchNew.vue`）：直接在 `<script setup>` 内消费共享 query composable（`useCustomersQuery()` 等），不强建 store。
+      - **复杂页面**（多切片、强耦合状态，如 `PartsList`）：建页面 store（`usePartsListStore`），内部 useQuery + useMutation + invalidate 失效。
+      - 区分标准：是否需要跨切片共享状态 / 是否需要 `$dispose` 防泄漏 / 是否需要 4 不变量约束。
 
 ## 已知风险
 

@@ -18,33 +18,66 @@ import { createPinia, setActivePinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 // 2026-09-15：mock 必须在 import store 之前；vi.mock 顶层 hoist。
+// 2026-09-26（B 任务）：返回 schema 合规 PartListResult（含 limit/offset），让
+// partListResultSchema.parse 通过，避免 ZodError 触发 watch(errorMsg) →
+// ElMessage.error → document is not defined。
 vi.mock('@/api/parts', () => ({
   listParts: vi.fn(async () => ({
     items: [
       {
         id: '1',
+        version: 1,
         row_type: 'PART',
         status: 'IN_PROCESS',
         serial_no: 'SN1',
         drawing_no: 'D1',
         name: '零件 1',
+        applicant_name: null,
         quantity: 1,
         unit_price: 10,
+        total_price: 10,
+        request_date: '2026-01-01',
+        planned_delivery_date: '2026-02-01',
+        order_no: null,
+        system_delivery_date: null,
+        note: null,
+        customer_name: null,
+        parent_customer_name: null,
+        customer_path: null,
+        location: null,
+        next_process_id: null,
+        next_process_name: null,
         is_urgent: false,
       },
       {
         id: '2',
+        version: 1,
         row_type: 'PART',
         status: 'PENDING',
         serial_no: 'SN2',
         drawing_no: 'D2',
         name: '零件 2',
+        applicant_name: null,
         quantity: 2,
         unit_price: 20,
+        total_price: 40,
+        request_date: '2026-01-02',
+        planned_delivery_date: '2026-02-02',
+        order_no: null,
+        system_delivery_date: null,
+        note: null,
+        customer_name: null,
+        parent_customer_name: null,
+        customer_path: null,
+        location: null,
+        next_process_id: null,
+        next_process_name: null,
         is_urgent: false,
       },
     ],
     total: 2,
+    limit: 20,
+    offset: 0,
   })),
   updatePart: vi.fn(),
   placeOnShelf: vi.fn(),
@@ -63,9 +96,38 @@ vi.mock('@/api/iam', () => ({
   me: vi.fn(),
 }));
 
+// 2026-09-26：mock @/api/customer 让 useCustomersQuery（useCustomerTree 内部）
+// 走成功路径，避免 axios 在 node env 网络请求失败触发 watch → ElMessage.error
+// → document is not defined 的 Unhandled Rejection（vitest 不算 fail 但污染
+// 输出，且未来 strict 模式可能 fail）。该 spec 只断言 parts 切片能力，不依赖
+// customer 数据，mock 返回空数组够用。
+vi.mock('@/api/customer', () => ({
+  listCustomers: vi.fn(async () => ({ items: [], total: 0, limit: 20, offset: 0 })),
+  getCustomer: vi.fn(),
+  createCustomer: vi.fn(),
+  updateCustomer: vi.fn(),
+  softDeleteCustomer: vi.fn(),
+}));
+
 // vitest 无 vue 插件，.vue 文件不能进 transform 链 —— factory stub 后该文件不会被加载。
 vi.mock('@/components/ColumnFilterPopover.vue', () => ({
   default: { name: 'ColumnFilterPopoverStub' },
+}));
+
+// 2026-09-26（B 任务）：usePartsListQuery 内 `watch(errorMsg) → ElMessage.error(...)`
+// 是 B 任务新加的桥接（B 任务改 useQuery 后把 ElMessage 从原 fetchList catch 迁移过来）。
+// vitest node env 没有 `document`，ElMessage 内部 `normalizeAppendTo` 会抛
+// `ReferenceError: document is not defined`，被 vitest 报为 Unhandled Rejection
+// 污染输出。该 spec 关注 store 切片装配 + 批量选择 + 列定义，单测不验证 ElMessage
+// 行为（那是组件层职责），统一桩成 no-op。错误链路的语义覆盖走各用例内 spy +
+// assert，未被掩盖。
+vi.mock('element-plus', () => ({
+  ElMessage: {
+    error: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
 }));
 
 import { createApp } from 'vue';
@@ -198,6 +260,26 @@ describe('usePartsListStore', () => {
     expect(store.query.items.length).toBe(2);
     // restoreTableSelection nextTick 后调 clearSelection（store 同步路径上至少 1 次）
     expect(clearSelection).toHaveBeenCalled();
+  });
+
+  // 2026-09-26（B 任务）新增：enabled 闸门 —— store 实例化时不应自动 fetch。
+  // 这是修复「默认参数首屏 + 持久化参数再屏双 fetch」关键设计点的回归保护。
+  it('store 实例化后**不**自动 fetch（enabled 闸门），调 fetchList 后才 fetch', async () => {
+    // 重置 listPartsMock —— beforeEach 已经 setup 但 spec 内 listParts 是 import mock
+    const { listParts } = await import('@/api/parts');
+    const listPartsMock = listParts as unknown as { mock: { calls: unknown[] } };
+    const beforeCalls = listPartsMock.mock.calls.length;
+
+    const store = usePartsListStore();
+    // 不调 restoreState —— restored 保持默认 false。
+    // 等几个微任务循环（确保 useQuery scheduler 跑过 mount + enabled check）
+    await new Promise((r) => setTimeout(r, 20));
+    // store 实例化后 listParts 未被自动调（enabled 闸门关闭）
+    expect(listPartsMock.mock.calls.length).toBe(beforeCalls);
+
+    // 显式 fetchList —— 走 refetch 别名，会调 queryFn
+    await store.query.fetchList();
+    expect(listPartsMock.mock.calls.length).toBe(beforeCalls + 1);
   });
 
   // 用例 6：$dispose 重建 —— 改 batchMode + 加选中 → $dispose → 重新 usePartsListStore → fresh 状态

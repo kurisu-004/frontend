@@ -13,12 +13,14 @@
 import { computed, ref, type Ref } from 'vue';
 import { ORDER_STATUS_LABEL, type OrderStatus } from '@/types/parts';
 import type { Process } from '@/types/process';
-import { listProcesses } from '@/api/process';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import { splitLocationSelection, usePartLocationTree } from '@/composables/usePartLocationTree';
+import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
 import type { LocationTreeNode } from '@/types/parts';
 import type { PartsSearchState } from './usePartsListQuery';
+
+// 2026-09-26（B 任务）移除：原 listProcesses 动态调用已迁 useProcessesQuery，import 不再需要。
 
 /** 2026-08-22：原生 EP :filters 下拉中「仅加急」选项的哨兵值。
  *  status + isUrgent 两条独立筛选被合并到 status 列的同一个 multi-select 下拉中。 */
@@ -372,8 +374,12 @@ export function usePartsColumnFilters(
   );
   const statusSelectedCount = computed(() => deps.search.statuses.length);
 
-  // 下一道工序：独立 ref，onMounted 由 view 调 loadNextProcessOptions 拉一次。
-  const nextProcessList = ref<Process[]>([]);
+  // 下一道工序：2026-09-26（B 任务）切到共享 useProcessesQuery —— A 任务已建，
+  // session 级缓存（staleTime: POSITIVE_INFINITY），自动 fetch，零手动 load。
+  // 原 loadNextProcessOptions 幂等守卫（已有数据不重拉）由 useQuery 缓存层替代，
+  // 外部调用方（PartsList.vue）可安全移除。
+  const procQuery = useProcessesQuery({ limit: 200 });
+  const nextProcessList = computed<Process[]>(() => procQuery.data.value?.items ?? []);
   const nextProcessOptions = computed<{ text: string; value: string }[]>(() =>
     nextProcessList.value.map((p) => ({
       text: `${p.code} / ${p.name}`,
@@ -383,16 +389,12 @@ export function usePartsColumnFilters(
   const nextProcessFilteredValue = computed<string[]>(() => deps.search.nextProcessIds);
   const nextProcessFilterActive = computed(() => deps.search.nextProcessIds.length > 0);
   const nextProcessSelectedCount = computed(() => deps.search.nextProcessIds.length);
+  // 2026-09-26（B 任务）：loadNextProcessOptions 保留为 no-op（PartsList.vue 仍调，
+  // 但内部已迁 useQuery 自动 fetch；保留方法签名维持 caller 零改动）。
   async function loadNextProcessOptions(): Promise<void> {
-    // 幂等：已有数据不重拉
-    if (nextProcessList.value.length > 0) return;
-    try {
-      nextProcessList.value = (await listProcesses({ limit: 200 })).items;
-    } catch {
-      nextProcessList.value = [];
-    }
+    /* no-op：useProcessesQuery 自动 fetch */
   }
-  // 2026-08-22：原生面板打开前选项须就绪；view 在 onMounted 调一次 loadNextProcessOptions。
+  // 2026-08-22：原生面板打开前选项须就绪；现在由 useQuery 自动 fetch。
   // 与下发对话框各自的 processes 缓存相互独立（互不污染）。
 
   // ============ filter-change 翻译 ============

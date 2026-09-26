@@ -174,18 +174,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+// 2026-09-26 改造：列表改走共享 query useCustomersQuery（fetchList / customers ref /
+// loading ref 删除，源改自 query.data / query.isFetching 派生）。3 个写点
+// （createCustomer / updateCustomer / softDeleteCustomer）包 useMutation +
+// onSuccess 失效整个域（invalidateCustomersQuery(qc)）+ ElMessage。
+// 写操作本地避错：mutation onError 已经弹错，onSave / onDelete catch 内不再处理。
+// 全局 mutations.retry: 0 在 main.ts 已显式设置，仓内新增 mutation 不再写 retry。
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { Plus, RefreshLeft, Search } from '@element-plus/icons-vue';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
 import {
-  createCustomer,
-  listCustomers,
-  softDeleteCustomer,
-  updateCustomer,
-  type Customer,
-} from '@/api/customer';
+  invalidateCustomersQuery,
+  useCustomersQuery,
+} from '@/composables/queries/useCustomersQuery';
+import { createCustomer, softDeleteCustomer, updateCustomer, type Customer } from '@/api/customer';
 
 interface TreeNode {
   id: string;
@@ -196,9 +201,20 @@ interface TreeNode {
   children: TreeNode[];
 }
 
-const loading = ref(false);
-const saving = ref(false);
-const customers = ref<Customer[]>([]);
+const qc = useQueryClient();
+
+// ============ 共享 query ============
+const { data: queryData, isFetching, error } = useCustomersQuery();
+const customers = computed<Customer[]>(() => (queryData.value?.items ?? []) as Customer[]);
+const loading = computed<boolean>(() => isFetching.value);
+// 2026-09-26：useQuery 不在 setup 抛错，错误在 query.error 暴露；watch 一次触发
+// ElMessage 与原 fetchList catch 路径等价。
+watch(
+  () => error.value,
+  (err) => {
+    if (err) ElMessage.error(err.message ?? '客户列表加载失败');
+  },
+);
 const search = reactive({ keyword: '' });
 
 // ============ 筛选状态持久化 ============
@@ -253,18 +269,6 @@ const rootOptions = computed(() =>
 // A-Z 单字符序列号前缀候选项（运行时生成，硬编码 26 行太啰嗦）
 const SERIAL_PREFIX_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const serialPrefixOptions = computed<string[]>(() => SERIAL_PREFIX_LETTERS.split(''));
-
-async function fetchList(): Promise<void> {
-  loading.value = true;
-  try {
-    // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
-    customers.value = (await listCustomers()).items;
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '客户列表加载失败');
-  } finally {
-    loading.value = false;
-  }
-}
 
 function applyFilter(): void {
   // 过滤是 computed 自动响应的；这里留 hook 给未来扩展
@@ -325,6 +329,39 @@ const rules: FormRules = {
   ],
 };
 
+// ============ 写 mutation ============
+// 2026-09-26：3 个写操作统一 useMutation + onSuccess 走 invalidateCustomersQuery
+// + ElMessage。mutationKey 保留三层 [domain, action] 与仓内其它 mutation 命名风格一致。
+const saving = ref(false);
+const createMutation = useMutation({
+  mutationKey: ['customers', 'create'],
+  mutationFn: (payload: Parameters<typeof createCustomer>[0]) => createCustomer(payload),
+  onSuccess: async () => {
+    await invalidateCustomersQuery(qc);
+    ElMessage.success('客户已创建');
+  },
+  onError: (e: Error) => ElMessage.error(e.message ?? '保存失败'),
+});
+const updateMutation = useMutation({
+  mutationKey: ['customers', 'update'],
+  mutationFn: (vars: { id: string; payload: Parameters<typeof updateCustomer>[1] }) =>
+    updateCustomer(vars.id, vars.payload),
+  onSuccess: async () => {
+    await invalidateCustomersQuery(qc);
+    ElMessage.success('已保存');
+  },
+  onError: (e: Error) => ElMessage.error(e.message ?? '保存失败'),
+});
+const deleteMutation = useMutation({
+  mutationKey: ['customers', 'delete'],
+  mutationFn: (id: string) => softDeleteCustomer(id),
+  onSuccess: async () => {
+    await invalidateCustomersQuery(qc);
+    ElMessage.success('客户已删除');
+  },
+  onError: (e: Error) => ElMessage.error(e.message ?? '删除失败'),
+});
+
 function onNewRoot(): void {
   mode.value = 'newRoot';
   editing.value = null;
@@ -374,32 +411,28 @@ async function onSave(): Promise<void> {
   }
   saving.value = true;
   try {
-    const payload = {
-      name: form.name.trim(),
-      parent_id: form.parentId || null,
-      // 一级客户：传当前 prefix（可能 null = 让后端报必填校验）；
-      // 叶子客户：service 层会忽略，payload 仍带 null 保持类型一致。
-      serial_prefix: form.serialPrefix || null,
-    };
     if (editing.value) {
       // update 时未传 prefix 即视为不改；只有显式非空才放进 payload
       const updatePayload: Parameters<typeof updateCustomer>[1] = {
-        name: payload.name,
-        parent_id: payload.parent_id,
+        name: form.name.trim(),
+        parent_id: form.parentId || null,
       };
-      if (payload.serial_prefix) {
-        updatePayload.serial_prefix = payload.serial_prefix;
+      if (form.serialPrefix) {
+        updatePayload.serial_prefix = form.serialPrefix;
       }
-      await updateCustomer(editing.value.id, updatePayload);
-      ElMessage.success('已保存');
+      await updateMutation.mutateAsync({ id: editing.value.id, payload: updatePayload });
     } else {
-      await createCustomer(payload);
-      ElMessage.success('已新增');
+      await createMutation.mutateAsync({
+        name: form.name.trim(),
+        parent_id: form.parentId || null,
+        // 一级客户：传当前 prefix（可能 null = 让后端报必填校验）；
+        // 叶子客户：service 层会忽略，payload 仍带 null 保持类型一致。
+        serial_prefix: form.serialPrefix || null,
+      });
     }
     dialogVisible.value = false;
-    await fetchList();
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '保存失败');
+  } catch {
+    // mutation onError 已 ElMessage 提示
   } finally {
     saving.value = false;
   }
@@ -431,11 +464,9 @@ async function onDelete(node: TreeNode): Promise<void> {
     return;
   }
   try {
-    await softDeleteCustomer(node.id);
-    ElMessage.success('已删除');
-    await fetchList();
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '删除失败');
+    await deleteMutation.mutateAsync(node.id);
+  } catch {
+    // mutation onError 已 ElMessage 提示
   }
 }
 
@@ -445,7 +476,7 @@ onMounted(() => {
   if (persisted) {
     Object.assign(search, persisted.search);
   }
-  void fetchList();
+  // useCustomersQuery 在 setup 顶层即自动 fetch；onMounted 不再触发 fetchList
 });
 </script>
 

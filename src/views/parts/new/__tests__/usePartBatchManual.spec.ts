@@ -162,6 +162,9 @@ const Harness = defineComponent({
           parent_id: null,
           parent_name: null,
           serial_prefix: null,
+          // 2026-09-26（M-1 修复）：Customer 补齐 version / created_at / updated_at 后，
+          // 测试 fixture 同步补齐（与 backend-rust CustomerOut 8 字段对齐）。
+          version: 1,
           status: 'ACTIVE',
           created_at: '',
           updated_at: '',

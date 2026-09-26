@@ -41,10 +41,15 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { listCustomers, type Customer } from '@/api/customer';
+import type { Customer } from '@/api/customer';
+// 2026-09-26：客户全集改走共享 query useCustomersQuery（CustomerList 写后失效自动 refetch）。
+// 原 customers ref + loadCustomers() 删除；ComputedRef<Customer[]> 与
+// usePartBatchManual / usePartBatchPdf 的 Ref<Customer[]> 入参在 Vue 3 类型层兼容
+// （ComputedRef 继承 Ref）。
+import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import { useApplicantSearch } from '@/composables/useApplicantSearch';
 import PartBatchManualTab from './components/PartBatchManualTab.vue';
 import PartBatchPdfTab from './components/PartBatchPdfTab.vue';
@@ -55,15 +60,16 @@ const router = useRouter();
 const route = useRoute();
 
 // ============ 客户全集（两 Tab 共用，避免重复拉） ============
-const customers = ref<Customer[]>([]);
-async function loadCustomers(): Promise<void> {
-  try {
-    // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
-    customers.value = (await listCustomers()).items;
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '客户列表加载失败');
-  }
-}
+// 2026-09-26：useCustomersQuery 自动 fetch；下游 composable 通过 .value 读 computed 结果。
+const { data: customersData, error: customersError } = useCustomersQuery();
+const customers = computed<Customer[]>(() => customersData.value?.items ?? []);
+// 错误桥接：query.error 一次 watch → ElMessage（与 useCustomerTree 同款）。
+watch(
+  () => customersError.value,
+  (err) => {
+    if (err) ElMessage.error(err.message ?? '客户列表加载失败');
+  },
+);
 
 // ============ 申请人搜索（两 Tab 共用 cache） ============
 const applicantSearch = useApplicantSearch({
@@ -115,11 +121,6 @@ function onManualPartFormChange(v: Parameters<typeof Object.assign>[1]): void {
 function onManualAsmFormChange(v: Parameters<typeof Object.assign>[1]): void {
   Object.assign(pdf.manualAsmForm, v);
 }
-
-onMounted(() => {
-  void loadCustomers();
-  // sortable 初始化移到 PartBatchPdfTab 自己的 onMounted（ref 现在归子组件所有）
-});
 </script>
 
 <style lang="scss" scoped>

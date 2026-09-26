@@ -32,7 +32,11 @@ import {
   uploadAssemblyPdf,
 } from '@/api/assembly';
 import { api } from '@/api/http';
-import { listCustomers, type Customer } from '@/api/customer';
+import type { Customer } from '@/api/customer';
+// 2026-09-26：客户全集改走共享 query useCustomersQuery（CustomerList 写后失效自动 refetch）。
+// 原 listCustomers() + ref + loadLeafCustomers() 改走 query 派生：leafCustomers 由
+// allCustomers 过滤 parent_id !== null；loadLeafCustomers 保留 API 兼容（→ query.refetch）。
+import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import type { PartFileItem } from '@/types/part_file';
 import type { Applicant } from '@/types/applicant';
 import { useApplicantSearch } from '@/composables/useApplicantSearch';
@@ -231,21 +235,34 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   }
 
   // ============ 客户列表 + 申请人搜索（编辑对话框用）============
-  const leafCustomers = ref<Customer[]>([]);
-  const loadingCustomers = ref(false);
+  // 2026-09-26：客户全集改走共享 query；leafCustomers = 二级客户（parent_id !== null）。
+  // useQuery 自动 fetch + 缓存会话级，写操作完成后 useCustomersQuery 失效自动 refetch；
+  // 错误状态走 query.error 暴露，原 try/catch ElMessage 行为保留。
+  const {
+    data: customersData,
+    isFetching,
+    error: customersError,
+    refetch: refetchCustomers,
+  } = useCustomersQuery();
+  const leafCustomers = computed<Customer[]>(() =>
+    (customersData.value?.items ?? []).filter((c) => c.parent_id !== null),
+  );
+  // 2026-09-26：保留对外 API 兼容 → 派生 isFetching（编辑 dialog 视觉 loading）。
+  // 原 `loadingCustomers` 在仓内无消费方（grep 确认），保留纯信号语义对齐 query 形态。
+  const loadingCustomers: ComputedRef<boolean> = computed<boolean>(() => isFetching.value);
+  // 2026-09-26：保留对外 API（编辑 dialog @open 时调），底层走 query.refetch。
   async function loadLeafCustomers(): Promise<void> {
-    loadingCustomers.value = true;
-    try {
-      // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
-      const all = (await listCustomers()).items;
-      leafCustomers.value = all.filter((c) => c.parent_id !== null);
-    } catch (e) {
-      leafCustomers.value = [];
-      ElMessage.error((e as Error).message ?? '加载客户列表失败');
-    } finally {
-      loadingCustomers.value = false;
-    }
+    await refetchCustomers();
   }
+  // 2026-09-26：useQuery 在 setup 顶层就订阅、自动 fetch；以前 onMounted 触发的
+  // loadLeafCustomers 由编辑 dialog @open 取代，composable 不主动触。watch error
+  // 弹 ElMessage（与 useCustomerTree / DeliveryNoteScan 同款桥接）。
+  watch(
+    () => customersError.value,
+    (err) => {
+      if (err) ElMessage.error(err.message ?? '加载客户列表失败');
+    },
+  );
 
   // 装配体的 applicant 解析到一级客户需 detail.customer_id，
   // 但编辑流中 customer 也允许改，这里保持原行为 fallback null。

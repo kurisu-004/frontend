@@ -15,6 +15,16 @@ export interface Customer {
    * 后端 schema 端为 `str | None`，前端保持 `string | null` 与 schema 一致。
    */
   serial_prefix: string | null;
+  /**
+   * 乐观锁版本号；每次写操作 +1。前端走 OCC 时透传给 update payload（暂未启用，
+   * 仅预留字段）。2026-09-26（M-1 修复）：补齐与 backend-rust `CustomerOut`
+   * （`backend-rust/docs/api/customers.md:142-153`）8 字段对齐。
+   */
+  version: number;
+  /** Asia/Shanghai naive datetime；前端按 string 处理（与项目 Zod 约定一致）。 */
+  created_at: string;
+  /** Asia/Shanghai naive datetime；前端按 string 处理（与项目 Zod 约定一致）。 */
+  updated_at: string;
 }
 
 export interface CustomerCreatePayload {
