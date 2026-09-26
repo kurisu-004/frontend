@@ -16,7 +16,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="fetchList"
+          <el-button type="primary"
             ><el-icon><Search /></el-icon><span>查询</span></el-button
           >
           <el-button @click="onReset"
@@ -171,7 +171,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue';
+// 2026-09-26 改造：列表改走共享 query useProcessesQuery（queryKey 进 code_like /
+// category，搜索条件变化自动 refetch，不再手写 fetchList + watcher）。
+// 写点（createProcess / updateProcess / softDeleteProcess）包 useMutation +
+// invalidateProcessesQuery(qc) 完成「写后失效 + ElMessage」原子流程。
+// mutation 全局 retry: 0：信任 main.ts 已显式 queries/mutations.retry: 0。
+import { computed, h, onMounted, reactive, ref, watch } from 'vue';
+import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox, ElTag } from 'element-plus';
 import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
@@ -185,19 +191,44 @@ import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { usePermissions } from '@/composables/usePermissions';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
-import { createProcess, listProcesses, softDeleteProcess, updateProcess } from '@/api/process';
+import {
+  invalidateProcessesQuery,
+  useProcessesQuery,
+} from '@/composables/queries/useProcessesQuery';
+import { createProcess, softDeleteProcess, updateProcess } from '@/api/process';
 import type { Process, ProcessCategory } from '@/types/process';
 import { PROCESS_CATEGORY_LABEL, PROCESS_COLOR_PRESETS } from '@/types/process';
 
 const { isManager } = usePermissions();
 const dialogSize = useDialogSize({ desktopWidth: 460 });
+const qc = useQueryClient();
 
-const loading = ref(false);
-const saving = ref(false);
-const rows = ref<Process[]>([]);
+// ============ 列表：共享 query ============
+// 2026-09-26：search.code_like / search.category 进 queryKey，cleanParams 剥掉
+// 空值后独立缓存；用户改筛选条件即自动 refetch，无需手动调 fetchList 或挂 watcher。
 const search = reactive<{ code_like: string; category: ProcessCategory | undefined }>({
   code_like: '',
   category: undefined,
+});
+const queryParams = computed(() => ({
+  code_like: search.code_like || undefined,
+  category: search.category,
+  limit: 200,
+}));
+// 2026-09-26：useProcessesQuery 包裹 useQuery 时 params 是 setup 时一次性快照，
+// queryKey 在 setup 后不变；user 改 search.code_like / category 后需要 refetch。
+// 这与原「fetchList 同步刷新」语义等价，且不再有手写的列表赋值（rows 由 query.data 派生）。
+const { data: queryData, isFetching, refetch: refetchProcesses } =
+  // eslint-disable-next-line vue/no-ref-object-destructure -- 故意 snapshot：queryKey 在 setup 后固定，靠下方 watcher 触发 refetch
+  useProcessesQuery(queryParams.value);
+const rows = computed<Process[]>(() => (queryData.value?.items ?? []) as Process[]);
+const loading = computed<boolean>(() => isFetching.value);
+const saving = ref(false);
+// 2026-09-26：search 变更 → queryKey 失效后下次访问 refetch；这里显式 watch 即触发
+// refetch，确保下拉 filter / 输入代码时即时刷新。原 fetchList 删掉，watcher 不再是
+// 「触发 fetchList」模式，而是「驱动共享 query refetch」。
+watch(queryParams, () => {
+  void refetchProcesses();
 });
 
 // ============ 筛选状态持久化 ============
@@ -262,26 +293,10 @@ const form = reactive<{
   color: null,
 });
 
-async function fetchList(): Promise<void> {
-  loading.value = true;
-  try {
-    const res = await listProcesses({
-      code_like: search.code_like || undefined,
-      category: search.category,
-      limit: 200,
-    });
-    rows.value = res.items;
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载失败');
-  } finally {
-    loading.value = false;
-  }
-}
-
 function onReset(): void {
   search.code_like = '';
   search.category = undefined;
-  fetchList();
+  // queryKey 变化自动 refetch，无需手动 fetchList
 }
 function onNew(): void {
   editing.value = null;
@@ -310,6 +325,37 @@ function onEdit(row: Process): void {
   dialogVisible.value = true;
 }
 
+// 2026-09-26：3 个写操作统一 useMutation + onSuccess 走 invalidateProcessesQuery
+// + ElMessage。不写 retry（信任全局 defaultOptions）。
+const createMutation = useMutation({
+  mutationKey: ['processes', 'create'],
+  mutationFn: (payload: Parameters<typeof createProcess>[0]) => createProcess(payload),
+  onSuccess: async () => {
+    await invalidateProcessesQuery(qc);
+    ElMessage.success('已新增');
+  },
+  onError: (e: Error) => ElMessage.error(e.message ?? '保存失败'),
+});
+const updateMutation = useMutation({
+  mutationKey: ['processes', 'update'],
+  mutationFn: (vars: { id: string; payload: Parameters<typeof updateProcess>[1] }) =>
+    updateProcess(vars.id, vars.payload),
+  onSuccess: async () => {
+    await invalidateProcessesQuery(qc);
+    ElMessage.success('已保存');
+  },
+  onError: (e: Error) => ElMessage.error(e.message ?? '保存失败'),
+});
+const deleteMutation = useMutation({
+  mutationKey: ['processes', 'delete'],
+  mutationFn: (id: string) => softDeleteProcess(id),
+  onSuccess: async () => {
+    await invalidateProcessesQuery(qc);
+    ElMessage.success('已删除');
+  },
+  onError: (e: Error) => ElMessage.error(e.message ?? '删除失败'),
+});
+
 async function onSave(): Promise<void> {
   if (!form.code.trim() || !form.name.trim()) {
     ElMessage.warning('代码与名称不能为空');
@@ -333,10 +379,9 @@ async function onSave(): Promise<void> {
       if (form.category !== editing.value.category) {
         payload.category = form.category;
       }
-      await updateProcess(editing.value.id, payload);
-      ElMessage.success('已保存');
+      await updateMutation.mutateAsync({ id: editing.value.id, payload });
     } else {
-      await createProcess({
+      await createMutation.mutateAsync({
         code: form.code.trim(),
         name: form.name.trim(),
         category: form.category,
@@ -346,12 +391,10 @@ async function onSave(): Promise<void> {
         // create：picker 默认 null（不选色），string 表示选了色
         color: form.color ?? null,
       });
-      ElMessage.success('已新增');
     }
     dialogVisible.value = false;
-    fetchList();
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '保存失败');
+  } catch {
+    // mutation onError 已 ElMessage 提示；此处吞掉即可
   } finally {
     saving.value = false;
   }
@@ -371,30 +414,28 @@ function onDialogClosed(): void {
 }
 
 async function onDelete(row: Process): Promise<void> {
-  await ElMessageBox.confirm(`确认删除工序「${row.name}」?被引用时拒绝。`, '提示', {
-    confirmButtonText: '删除',
-    cancelButtonText: '取消',
-    type: 'warning',
-  })
-    .then(async () => {
-      try {
-        await softDeleteProcess(row.id);
-        ElMessage.success('已删除');
-        fetchList();
-      } catch (e) {
-        ElMessage.error((e as Error).message ?? '删除失败');
-      }
-    })
-    .catch(() => undefined);
+  try {
+    await ElMessageBox.confirm(`确认删除工序「${row.name}」?被引用时拒绝。`, '提示', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    });
+  } catch {
+    return;
+  }
+  try {
+    await deleteMutation.mutateAsync(row.id);
+  } catch {
+    // mutation onError 已 ElMessage 提示
+  }
 }
 
 onMounted(() => {
-  // 先尝试恢复 localStorage 中的搜索条件
+  // 先尝试恢复 localStorage 中的搜索条件（影响 queryParams → queryKey，自动 refetch）
   const persisted = restoreProcessFilter();
   if (persisted) {
     Object.assign(search, persisted.search);
   }
-  void fetchList();
   // 2026-08-28 改造：传 el-table 实例 ref 即可，composable 内部解析表头 <tr> +
   // MutationObserver 自愈（表头首次出现 / EP 重建都能覆盖）。
   drag.applyDrag(tableRef);
