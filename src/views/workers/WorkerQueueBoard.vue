@@ -61,7 +61,7 @@ import { ElMessage } from 'element-plus';
 // 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
 // 标量 getter 去掉括号：auth.activeShelfId() → auth.activeShelfId。
 import { useAuthStore } from '@/stores/auth';
-import { useWorkerQueue } from '@/composables/useWorkerQueue';
+import { useWorkerQueue } from '@/views/workers/composables/useWorkerQueue';
 import WorkerColumn from './components/WorkerColumn.vue';
 import PoolDrawer from './components/PoolDrawer.vue';
 
