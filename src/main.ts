@@ -3,12 +3,13 @@ import { createPinia } from 'pinia';
 // 2026-09-24 新增：注册 TanStack Query 仓内首个 QueryClient。
 // 仓内首例 useMutation 出现在 LoginView.vue（2026-09-24 登录页改造）。
 //
-// 全局 mutation 默认 retry: 0：TanStack Query 默认失败重试 3 次（指数退避），
-// 登录失败若重试会导致用户以为"点了没反应"；其它 mutation 失败重试通常也
-// 是浪费（业务错误码不会被重试结果修复）。所以全局关掉。
+// 全局 mutation 默认 retry: 0：TanStack Query v5 官方默认 mutation 不重试
+// （3 次指数退避是 query 的默认行为，不是 mutation 的）；这里显式 retry: 0
+// 是双保险并明示意图。登录失败若重试会让用户以为"点了没反应"；其它 mutation
+// 失败重试通常也是浪费（业务错误码不会被重试结果修复）。
 //
 // queries 默认 retry: 0 + refetchOnWindowFocus: false：
-//   - retry: 0 — 仓内目前没有 useQuery 先例，但避免后续迁移时静默重试；
+//   - retry: 0 — query 默认重试 3 次，关掉避免静默重试；
 //   - refetchOnWindowFocus: false — 默认 true 会让编辑类表单的 GET 在窗口
 //     切换时频繁刷，先关掉避免未来引入即踩坑。
 //

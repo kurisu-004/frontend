@@ -11,6 +11,17 @@
 //   延长 tmp 保留窗口；
 // - mount 时 `useUploadSession.init('parts_new')` + draft 持久化（与 PDF
 //   Tab 共享同一单例 session）。
+//
+// 2026-09-24 接入 auth 范本：Zod schema 校验 + useMutation 提交。
+// - 删 EP FormRules 与 formRef 管道；走 partEntrySchema.safeParse(form) +
+//   formErrors 单字段错误展示（与 LoginView 一致）。
+// - 客户存在性等依赖动态 customers 列表的校验不进 schema，留在 onAddConfirm
+//   业务层写 formErrors（与 auth「业务判断独立于 schema」一致）。
+// - onSubmit → useMutation<PartBatchResult, Error>：mutationFn 仅调内部
+//   submitStagedEntries()（薄封装：dedupe + batchCreateParts），部分失败 /
+//   成功跳转 / ElMessage 走 onSuccess / onError；mutation 失败用 onError
+//   ElMessage.error 反馈（保留原 UX），不写 retry（信任全局默认）。
+// - submitting 类型从 Ref<boolean> → ComputedRef<boolean>（mutation.isPending）。
 
 import {
   computed,
@@ -23,9 +34,14 @@ import {
   type Ref,
 } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { useMutation } from '@tanstack/vue-query';
 import { createApplicant } from '@/api/applicant';
-import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
+import {
+  batchCreateParts,
+  type PartBatchCreatePayload,
+  type PartBatchResult,
+} from '@/api/parts';
 import { getUploadSession } from '@/composables/useUploadSession';
 import {
   usePartsNewDraft,
@@ -51,6 +67,12 @@ import {
   revokeEntryUrls,
   todayIso,
 } from './usePartBatchShared';
+import {
+  partEntrySchema,
+  toFieldErrors,
+  type PartEntryFieldErrors,
+  type PartEntryInput,
+} from '../partEntrySchema';
 
 /** 待新增条目（与原 PartBatchNew.vue:StagedEntry 同形）。 */
 export interface StagedEntry {
@@ -139,9 +161,13 @@ export interface UsePartBatchManualReturn {
   drawingPreviewRow: Ref<StagedEntry | null>;
   previewDialogVisible: Ref<boolean>;
   previewing: Ref<StagedEntry | null>;
-  submitting: Ref<boolean>;
+  // 2026-09-24 重构：submitting 由 useMutation 派生，Ref → ComputedRef。
+  submitting: ComputedRef<boolean>;
+  // 2026-09-24 新增：Zod schema 校验错误聚合（替代 EP FormRules + formRef.validate()）。
+  formErrors: Ref<PartEntryFieldErrors>;
+  // 2026-09-24 新增：单字段校验入口（LoginView 同款）。onBlur / onChange 触发。
+  validateField: (field: keyof PartEntryInput) => void;
   form: FormState;
-  rules: FormRules;
   drawingUploading: Ref<boolean>;
   hydrateRestoredCount: ComputedRef<number>;
   orphanFileRefs: ComputedRef<
@@ -160,13 +186,16 @@ export interface UsePartBatchManualReturn {
   onDrawingItemsChange: (items: CosUploaderItem[]) => void;
   onDrawingAllDone: () => void;
   onDrawingUploadError: (item: CosUploaderItem) => void;
-  onAddConfirm: (formEl?: FormInstance) => Promise<void>;
-  onDialogClosed: (formEl?: FormInstance) => void;
+  // 2026-09-24 重构：onAddConfirm / onDialogClosed 不再吃 FormInstance（zod 化后
+  // formRef.validate / clearValidate 失去存在意义）。
+  onAddConfirm: () => Promise<void>;
+  onDialogClosed: () => void;
   onRowPreview: (row: StagedEntry) => void;
   onEditFromPreview: () => void;
   onRemoveRow: (uid: string) => void;
   onClearAll: () => Promise<void>;
   rowClassName: (ctx: { row: unknown }) => string;
+  // 2026-09-24 重构：onSubmit 走 useMutation，handler 内仅做空守卫 + confirm + mutate()。
   onSubmit: () => Promise<void>;
 }
 
@@ -198,13 +227,17 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
   const staged = ref<StagedEntry[]>([]);
 
   // ============ Dialog 表单 ============
-  // 注意：el-form 的 ref 必须在子组件里声明为本地 ref（ref="formRef" 写在子组件
-  // 模板里时，Vue 会把 el-form 实例写到那个 ref 上 —— 而父组件传下来的 formRef 是
-  // readonly prop，写入会静默失败）。子组件把 formRefLocal.value 通过 onAddConfirm
-  // / onDialogClosed 的形参传回本 composable。
+  // 2026-09-24 改造：EP formRefLocal 机制彻底移除——zod schema-first 后 formRef.validate()
+  // 不再需要；onAddConfirm / onDialogClosed 不再吃 FormInstance 形参。PartBatchManualTab
+  // 顶部的 el-form 不再绑 :rules、不再需要 ref 转发。
   const addDialogVisible = ref(false);
   const dialogSubmitting = ref(false);
   const editingUid = ref<string | null>(null);
+
+  // ============ Zod schema 单字段错误聚合 ============
+  // 2026-09-24：替代 EP FormRules 错误展示位。el-form-item :error="formErrors.xxx" 直接绑。
+  // 提交前整体校验失败时同样写此 ref。
+  const formErrors = ref<PartEntryFieldErrors>({});
 
   // ============ 图纸 COS 上传（2026-09-17 M4）============
   /**
@@ -388,32 +421,18 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     },
   );
 
-  const rules: FormRules = {
-    drawingNo: [{ required: true, message: '请输入图号', trigger: 'blur' }],
-    name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
-    customerId: [
-      {
-        required: true,
-        validator: (_rule, value, callback) => {
-          // cascader emitPath:false 返回选中节点的 id，来自 Customer.id（string）
-          if (value === null || value === undefined || value === '') {
-            callback(new Error('请选择客户'));
-            return;
-          }
-          const c = customers.value.find((x) => String(x.id) === String(value));
-          if (!c) {
-            callback(new Error('客户不存在'));
-            return;
-          }
-          callback();
-        },
-        trigger: 'change',
-      },
-    ],
-    quantity: [{ required: true, message: '请输入数量', trigger: 'blur' }],
-    requestDate: [{ required: true, message: '请选择请购日期', trigger: 'change' }],
-    plannedDeliveryDate: [{ required: true, message: '请选择计划交期', trigger: 'change' }],
-  };
+  // ============ Zod schema 单字段校验 ============
+  // 2026-09-24：替代 EP FormRules + formEl.validate()。直接取 schema.shape[field] 跑
+  // safeParse 拿到单字段错误，与 LoginView.validateField 同款。
+  function validateField(field: keyof PartEntryInput): void {
+    const fieldSchema = partEntrySchema.shape[field];
+    const result = fieldSchema.safeParse(form[field as unknown as keyof FormState]);
+    if (result.success) {
+      delete formErrors.value[field];
+    } else {
+      formErrors.value[field] = result.error.issues[0]?.message;
+    }
+  }
 
   function openAddDialog(): void {
     editingUid.value = null;
@@ -429,6 +448,8 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     const idStr = raw === null || raw === undefined ? '' : String(raw);
     form.applicantId = null;
     form.applicantName = '';
+    // 客户变更清掉旧错误，避免新选的客户被旧「客户不存在」卡住
+    delete formErrors.value.customerId;
     await applicantSearch.loadForCustomer(idStr || null);
   }
 
@@ -614,54 +635,55 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     ElMessage.error(`图纸上传失败：${item.error ?? '未知错误'}`);
   }
 
-  async function onAddConfirm(formEl?: FormInstance): Promise<void> {
-    if (!formEl) return;
+  /**
+   * 「加入列表 / 保存到列表」按钮：Zod 全表单校验 + 业务校验（客户存在性）→ 入队。
+   *
+   * 2026-09-24 重构：删 formEl.validate() / formEl.clearValidate() 管道；改走
+   * partEntrySchema.safeParse(form) → toFieldErrors 写 formErrors ref；
+   * 客户存在性等依赖动态列表的校验不进 schema，留在本层写 formErrors.customerId。
+   * 字段 trim 由 schema 安全处理（safeParse 返回的 result.data 已 trim）。
+   */
+  async function onAddConfirm(): Promise<void> {
     // 2026-09-17 M4：图纸上传中守卫。M3-C 后端要求 binding 与图片必须同时提交；
     // 上传未完成时拒绝 addConfirm，避免 staged 条目带 stale binding。
     if (drawingUploading.value) {
       ElMessage.error('图纸上传中，请稍候');
       return;
     }
-    try {
-      await formEl.validate();
-    } catch {
+
+    // 1) Zod 全表单校验
+    const result = partEntrySchema.safeParse(form);
+    if (!result.success) {
+      formErrors.value = toFieldErrors(result.error.issues);
       return;
     }
-    // cascader value → customerId（Customer.id 为 string，emitPath:false 返回 string）
-    const rawId = form.customerId;
-    if (rawId === null || rawId === '') {
-      ElMessage.error('请选择客户');
+    formErrors.value = {};
+
+    // 2) 业务校验：客户存在性（依赖动态 customers 列表，不进 schema）
+    const rawId = result.data.customerId;
+    const matched = customers.value.find((x) => String(x.id) === String(rawId));
+    if (!matched) {
+      formErrors.value = { ...formErrors.value, customerId: '客户不存在' };
       return;
     }
-    // customerId 是雪花 ID 字符串（CLAUDE.md §3），不再转 Number。
-    // 校验非空：cascader emitPath:false 返 string id，空串说明未选。
-    if (!rawId) {
-      ElMessage.error('请选择客户');
-      return;
-    }
-    // 申请人必填：要么选了已有 applicantId，要么输了字符串（自动新增）
-    const applicantName = form.applicantName.trim();
-    if (!applicantName) {
-      ElMessage.error('请选择或输入申请人');
-      return;
-    }
+
     dialogSubmitting.value = true;
     try {
       const entry: StagedEntry = {
         uid: editingUid.value ?? makeUid(),
-        drawingNo: form.drawingNo.trim(),
-        name: form.name.trim(),
-        applicantName,
+        drawingNo: result.data.drawingNo,
+        name: result.data.name,
+        applicantName: result.data.applicantName,
         applicantId: form.applicantId,
         customerId: rawId,
         customerLabel: findCustomerLabel(customers, rawId),
-        quantity: form.quantity,
-        isUrgent: form.isUrgent,
-        requestDate: form.requestDate,
-        plannedDeliveryDate: form.plannedDeliveryDate,
-        orderNo: form.orderNo || null,
-        systemDeliveryDate: form.systemDeliveryDate || null,
-        note: form.note || null,
+        quantity: result.data.quantity,
+        isUrgent: result.data.isUrgent,
+        requestDate: result.data.requestDate,
+        plannedDeliveryDate: result.data.plannedDeliveryDate,
+        orderNo: result.data.orderNo || null,
+        systemDeliveryDate: result.data.systemDeliveryDate || null,
+        note: result.data.note || null,
         drawingFile: form.drawingFile,
         drawingName: form.drawingName,
         drawingUrl: form.drawingUrl,
@@ -695,7 +717,13 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     }
   }
 
-  function onDialogClosed(formEl?: FormInstance): void {
+  /**
+   * el-dialog @closed 回调：清 form + 校验位 + 上传临时状态。
+   *
+   * 2026-09-24 重构：不再吃 FormInstance；clearValidate 等价物改为 formErrors 重置。
+   * 子组件（PartEntryFormDialog）会先 revoke blob URL / clear uploader queue 再调本函数。
+   */
+  function onDialogClosed(): void {
     // 仅在「取消」关闭时表单上仍残留 url 才需要回收；onAddConfirm 成功后已把 url 转交
     if (form.drawingUrl) {
       try {
@@ -704,16 +732,13 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
         /* ignore */
       }
     }
-    formEl?.clearValidate();
+    formErrors.value = {};
     Object.assign(form, initialForm());
     editingUid.value = null;
     // 2026-09-17 M4：清模块级上传状态。下次打开 dialog 不会继承旧 File 的 sha 记录。
     drawingShaMap.clear();
     drawingUploading.value = false;
     // 2026-09-18 C1：清 drawingClientRefByFile Map（防止 File 引用堆积 → 内存泄漏）。
-    // Map 内每个 File 对象 identity 是当前这次 dialog 选出来的；关闭 dialog 后
-    // 下次打开是新一次 uploader 流程，File 已被 GC 链断开，Map 持有它们等于
-    // 永久泄漏。Map.clear() 让所有引用断开，下一轮 onDrawingUploaded 重新填充。
     drawingClientRefByFile.clear();
   }
 
@@ -750,6 +775,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       drawingUrl: target.drawingUrl,
       drawingBinding: target.drawingBinding,
     });
+    formErrors.value = {};
     addDialogVisible.value = true;
     // 标记该 entry 的 url 已被 dialog 接管；切到 list 时不再 revoke 它
     // 简化处理：编辑模式下，旧 url 仍属于 entry；编辑确认时 onAddConfirm 会先 revokeEntryUrls(staged[idx])，避免泄漏
@@ -789,85 +815,97 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
   }
 
   // ============ 提交 ============
-  const submitting = ref(false);
+  // 2026-09-24 重构：onSubmit → useMutation。
+  //
+  // mutationFn 薄封装：调内部 submitStagedEntries()（原 onSubmit 的主体：dedupe +
+  // batchCreateParts），原样搬；部分失败 / 成功跳转 / 消息走 onSuccess / onError。
+  // 整批 best-effort 的 consumeFiles + draft clear + staged 清空也由 onSuccess 在
+  // 「无失败」分支处理。mutation 失败用 onError ElMessage.error 反馈（保留原 UX）。
 
-  async function onSubmit(): Promise<void> {
-    if (staged.value.length === 0) {
-      ElMessage.warning('没有可提交的待新增零件');
-      return;
-    }
-    if (
-      !(await confirmDangerous(
-        '确认提交',
-        `将向服务端提交 ${staged.value.length} 条新零件，提交后系统按客户自动分配序列号。是否继续？`,
-        { type: 'info', confirmText: '提交', cancelText: '取消' },
-      ))
-    )
-      return;
-    submitting.value = true;
-    try {
-      // 1) 先为每条 entry 处理 applicant_id：
-      //    - 已有 applicantId（用户从下拉挑的）→ 跳过；
-      //    - 在缓存中能按 name 命中 → 复用其 id（2026-09-16 修复，避免
-      //      对已存在的 applicant 重复 POST → 409 Conflict）；
-      //    - 缓存未命中（且缓存对应 L1 root 与本条 L1 一致时才查，避免
-      //      跨 L1 root 误判）→ 调 createApplicant 自动新增。
-      for (const s of staged.value) {
-        if (s.applicantId) continue;
-        const trimmed = s.applicantName.trim();
-        if (!trimmed || !s.customerId) continue;
-        const rootId = resolveRootCustomerId(customers, s.customerId);
-        if (rootId === null) continue;
-        if (applicantSearch.rootCustomerId.value === rootId) {
-          const cached = applicantSearch.applicants.value.find(
-            (a) => a.name === trimmed && a.customer_id === rootId,
-          );
-          if (cached) {
-            s.applicantId = cached.id;
-            continue;
-          }
+  /**
+   * 提交主体（薄封装）：
+   *   1) 遍历 staged，为无 applicantId 的条目处理申请人 dedupe（缓存命中复用 id，
+   *      未命中 → createApplicant 自动新增）；
+   *   2) 构造 payload 调 batchCreateParts（按 customer_id 分组，跨客户混合语义由
+   *      api 层负责）；
+   *   3) 返回 PartBatchResult 交给 onSuccess 分流（部分失败 / 全成功）。
+   *
+   * 此函数不负责：
+   *   - 清 staged / draft / session consumeFiles（放 onSuccess）；
+   *   - 跳转 / ElMessage（放 onSuccess / onError）；
+   *   - 入队前 confirm 确认（放 onSubmit handler）。
+   */
+  async function submitStagedEntries(): Promise<PartBatchResult> {
+    // 1) 先为每条 entry 处理 applicant_id：
+    //    - 已有 applicantId（用户从下拉挑的）→ 跳过；
+    //    - 在缓存中能按 name 命中 → 复用其 id（2026-09-16 修复，避免
+    //      对已存在的 applicant 重复 POST → 409 Conflict）；
+    //    - 缓存未命中（且缓存对应 L1 root 与本条 L1 一致时才查，避免
+    //      跨 L1 root 误判）→ 调 createApplicant 自动新增。
+    for (const s of staged.value) {
+      if (s.applicantId) continue;
+      const trimmed = s.applicantName.trim();
+      if (!trimmed || !s.customerId) continue;
+      const rootId = resolveRootCustomerId(customers, s.customerId);
+      if (rootId === null) continue;
+      if (applicantSearch.rootCustomerId.value === rootId) {
+        const cached = applicantSearch.applicants.value.find(
+          (a) => a.name === trimmed && a.customer_id === rootId,
+        );
+        if (cached) {
+          s.applicantId = cached.id;
+          continue;
         }
-        const created = await createApplicant({
-          name: trimmed,
-          customer_id: String(rootId),
-        });
-        s.applicantId = created.id;
       }
+      const created = await createApplicant({
+        name: trimmed,
+        customer_id: String(rootId),
+      });
+      s.applicantId = created.id;
+    }
 
-      // 2) 构造批量 payload
-      const items: PartBatchCreatePayload[] = staged.value.map((s) => ({
-        name: s.name,
-        drawing_no: s.drawingNo,
-        applicant_name: s.applicantName,
-        // applicant_id 雪花 ID 19 位 → 必须用字符串，避免 JS Number 精度丢失
-        applicant_id: s.applicantId,
-        quantity: s.quantity,
-        request_date: s.requestDate,
-        planned_delivery_date: s.plannedDeliveryDate,
-        is_urgent: s.isUrgent,
-        /** PR-F 2026-07-17：送货单字段 */
-        order_no: s.orderNo,
-        system_delivery_date: s.systemDeliveryDate,
-        note: s.note,
-        // customer_id 雪花 ID 字符串（CLAUDE.md §3）
-        customer_id: s.customerId!,
-        // 2026-09-17 M4：图纸 FileBinding。后端 PartBatchCreatePayload.drawing_file
-        // 必传 FileBindingIn（可选？null 触发后端跳过）；未上传图纸时给 undefined
-        // 让 v2 后端 schema 跳过该字段。
-        drawing_file: s.drawingBinding ?? undefined,
-      }));
-      const res = await batchCreateParts(items);
+    // 2) 构造批量 payload
+    const items: PartBatchCreatePayload[] = staged.value.map((s) => ({
+      name: s.name,
+      drawing_no: s.drawingNo,
+      applicant_name: s.applicantName,
+      // applicant_id 雪花 ID 19 位 → 必须用字符串，避免 JS Number 精度丢失
+      applicant_id: s.applicantId,
+      quantity: s.quantity,
+      request_date: s.requestDate,
+      planned_delivery_date: s.plannedDeliveryDate,
+      is_urgent: s.isUrgent,
+      /** PR-F 2026-07-17：送货单字段 */
+      order_no: s.orderNo,
+      system_delivery_date: s.systemDeliveryDate,
+      note: s.note,
+      // customer_id 雪花 ID 字符串（CLAUDE.md §3）
+      customer_id: s.customerId!,
+      // 2026-09-17 M4：图纸 FileBinding。后端 PartBatchCreatePayload.drawing_file
+      // 必传 FileBindingIn（可选？null 触发后端跳过）；未上传图纸时给 undefined
+      // 让 v2 后端 schema 跳过该字段。
+      drawing_file: s.drawingBinding ?? undefined,
+    }));
+    return batchCreateParts(items);
+  }
+
+  const submitMutation = useMutation<PartBatchResult, Error, undefined>({
+    mutationKey: ['parts', 'manual', 'batch-create'],
+    mutationFn: () => submitStagedEntries(),
+    onSuccess: async (res) => {
       if (res.failed.length > 0) {
         const sample = res.failed
           .slice(0, 5)
           .map((f) => `第 ${f.index + 1} 行：${f.message}`)
           .join('\n');
         const more = res.failed.length > 5 ? `\n...还有 ${res.failed.length - 5} 行失败` : '';
-        ElMessageBox.alert(
+        await ElMessageBox.alert(
           `服务端拒绝了 ${res.failed.length} 行：\n${sample}${more}`,
           '部分行未通过',
           { type: 'warning' },
-        );
+        ).catch(() => {
+          /* 用户点叉忽略 */
+        });
         return;
       }
 
@@ -881,9 +919,9 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
         .map((s) => s.drawingClientRef)
         .filter((r): r is string => !!r);
       if (submittedClientRefs.length > 0) {
-        await session.consumeFiles(submittedClientRefs).catch(() => {
-          /* best-effort；失败不影响提交结果 */
-        });
+        const consume = session.consumeFiles(submittedClientRefs);
+        // best-effort；失败不影响提交结果
+        await consume.catch(() => undefined);
       }
 
       // 释放所有 blob URL
@@ -895,12 +933,31 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       ElMessage.success(`成功新建 ${res.created.length} 条零件`);
       // 跳到零件一览并筛选「待生产」，便于核对刚添加的零件
       router.push({ path: '/parts', query: { status: 'PENDING' } });
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '提交失败');
-    } finally {
-      submitting.value = false;
+    },
+    onError: (err) => {
+      ElMessage.error(err.message ?? '提交失败');
+    },
+  });
+
+  /** onSubmit handler：空守卫 + confirm 确认框 + 触发 mutation。 */
+  async function onSubmit(): Promise<void> {
+    if (staged.value.length === 0) {
+      ElMessage.warning('没有可提交的待新增零件');
+      return;
     }
+    if (
+      !(await confirmDangerous(
+        '确认提交',
+        `将向服务端提交 ${staged.value.length} 条新零件，提交后系统按客户自动分配序列号。是否继续？`,
+        { type: 'info', confirmText: '提交', cancelText: '取消' },
+      ))
+    )
+      return;
+    submitMutation.mutate();
   }
+
+  // submitting 暴露给模板（:disabled / :loading）。从 mutation.isPending 派生。
+  const submitting = computed<boolean>(() => submitMutation.isPending.value);
 
   // 2026-09-18：unmount 时刷新 draft 快照 + 撤销 pending saver。session 不在
   // unmount 销毁 —— 两 Tab 共享同一单例，PDF Tab 仍在活跃时 session 续期
@@ -999,8 +1056,10 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     previewDialogVisible,
     previewing,
     submitting,
+    // 2026-09-24：替代 EP rules；单字段 :error 展示位。
+    formErrors,
+    validateField,
     form,
-    rules,
     // 2026-09-17 M4：图纸上传状态（CosUploader 守卫 + 子组件 disabled 绑定）
     drawingUploading,
     // 2026-09-18 A3：hydrate 结果给 UI 渲染顶部「已恢复 N 条」el-alert +

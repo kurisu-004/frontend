@@ -3,7 +3,7 @@
 
   Tab 1「录入」内容：
   - 待新增零件列表（el-table）
-  - 添加 / 编辑 Dialog
+  - 添加 / 编辑对话框（PartEntryFormDialog）
   - 只读预览 Dialog
   - 图纸预览 Dialog
 
@@ -19,6 +19,10 @@
   - 「#」index 列 + 「操作」fixed 列保留为字面量 <el-table-column>。
   - 列定义 cellRender 全部用 h()（el-button @click.stop 用 stopPropagation 模拟）。
   - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
+
+  2026-09-24 重构：录入对话框整段抽到 PartEntryFormDialog.vue；本组件不再持
+  localForm / formRefLocal / FormRules，只挂载表单壳并透传 emit。校验走父
+  composable 的 partEntrySchema + formErrors（auth 范本）。
 -->
 
 <template>
@@ -177,186 +181,38 @@
     </div>
   </el-card>
 
-  <!-- 添加 / 编辑 Dialog -->
-  <el-dialog
-    :model-value="addDialogVisible"
-    :title="editingUid ? '编辑零件' : '添加零件'"
-    :width="addDlg.width"
-    :top="addDlg.top"
-    :fullscreen="addDlg.fullscreen"
-    :close-on-click-modal="false"
-    @update:model-value="(v: boolean) => !v && closeAddDialog()"
-    @closed="handleDialogClosed"
-  >
-    <el-form
-      ref="formRefLocal"
-      :model="localForm"
-      :rules="rules"
-      label-width="100px"
-      label-position="right"
-    >
-      <div class="form-grid">
-        <div>
-          <el-form-item label="图号" prop="drawingNo">
-            <el-input v-model="localForm.drawingNo" placeholder="例如：LT39822" />
-          </el-form-item>
-        </div>
-        <div>
-          <el-form-item label="名称" prop="name">
-            <el-input v-model="localForm.name" placeholder="请输入品名 / 零件名称" />
-          </el-form-item>
-        </div>
-      </div>
-
-      <div class="form-grid">
-        <div>
-          <el-form-item label="客户" prop="customerId">
-            <el-cascader
-              v-model="localForm.customerId"
-              :options="customerTree"
-              :props="{
-                value: 'id',
-                label: 'name',
-                children: 'children',
-                checkStrictly: true,
-                emitPath: false,
-              }"
-              placeholder="选择一级 / 二级客户"
-              style="width: 100%"
-              clearable
-              @change="onCustomerChange"
-            />
-          </el-form-item>
-        </div>
-        <div>
-          <el-form-item label="申请人" prop="applicantName">
-            <el-autocomplete
-              v-model="localForm.applicantName"
-              value-key="name"
-              :fetch-suggestions="querySearch"
-              :trigger-on-focus="true"
-              :debounce="0"
-              :loading="applicantLoading"
-              :disabled="!localForm.customerId"
-              placeholder="选择或输入申请人姓名（不在表中则提交时自动新增）"
-              style="width: 100%"
-              clearable
-              @select="onApplicantSelect"
-            />
-          </el-form-item>
-        </div>
-      </div>
-
-      <div class="form-grid">
-        <div>
-          <el-form-item label="数量" prop="quantity">
-            <el-input-number
-              v-model="localForm.quantity"
-              :min="1"
-              :step="1"
-              controls-position="right"
-              style="width: 100%"
-            />
-          </el-form-item>
-        </div>
-        <div>
-          <el-form-item label="加急">
-            <el-switch v-model="localForm.isUrgent" />
-          </el-form-item>
-        </div>
-      </div>
-
-      <div class="form-grid">
-        <div>
-          <el-form-item label="请购日期" prop="requestDate">
-            <el-date-picker
-              v-model="localForm.requestDate"
-              type="date"
-              value-format="YYYY-MM-DD"
-              placeholder="请选择"
-              style="width: 100%"
-            />
-          </el-form-item>
-        </div>
-        <div>
-          <el-form-item label="计划交期" prop="plannedDeliveryDate">
-            <el-date-picker
-              v-model="localForm.plannedDeliveryDate"
-              type="date"
-              value-format="YYYY-MM-DD"
-              placeholder="请选择"
-              style="width: 100%"
-            />
-          </el-form-item>
-        </div>
-      </div>
-
-      <!-- 送货单字段（PR-F 2026-07-17） -->
-      <div class="form-grid">
-        <div>
-          <el-form-item label="订单号">
-            <el-input v-model="localForm.orderNo" placeholder="如 6200037950（可选）" />
-          </el-form-item>
-        </div>
-        <div>
-          <el-form-item label="系统交期">
-            <el-date-picker
-              v-model="localForm.systemDeliveryDate"
-              type="date"
-              value-format="YYYY-MM-DD"
-              placeholder="订单方系统内部交期（可选）"
-              style="width: 100%"
-            />
-          </el-form-item>
-        </div>
-      </div>
-
-      <el-form-item label="备注">
-        <el-input v-model="localForm.note" placeholder="文员手填备注（可选，送货单可见）" />
-      </el-form-item>
-
-      <el-form-item label="图纸">
-        <div class="drawing-uploader">
-          <!-- 2026-09-17 M4：图纸上传走 CosUploader（前端直传 COS tmp 区）。
-               - accept=".pdf" + :multiple=false：单 PDF 限；
-               - :max-size-m-b="300"：与 nginx 300m 上限对齐；
-               - 不开 computeHash：sha 由 composable.requestDrawingUpload 内
-                 computeSha256 算一次（避免大 PDF 算两次）；
-               - @change 本地 wrapper trim 旧项只留最新（绕开 el-upload :limit
-                 统计坑：cosUploader.removeItem 不会清 el-upload 内部列表）。
-          -->
-          <CosUploader
-            ref="uploaderRef"
-            :request-upload="requestDrawingUpload"
-            accept=".pdf"
-            :multiple="false"
-            :max-size-m-b="300"
-            tip="仅支持 PDF；提交时自动随表图号列点击预览（待新增一览 → 点图号）。"
-            empty-text="未选择图纸（可选）"
-            @change="handleUploaderChange"
-            @uploaded="onDrawingUploaded"
-            @all-done="onDrawingAllDone"
-            @error="onDrawingUploadError"
-          />
-          <p v-if="editingUid && localForm.drawingName" class="form-hint">
-            当前图纸：{{ localForm.drawingName }}；重新上传将替换。
-          </p>
-        </div>
-      </el-form-item>
-    </el-form>
-
-    <template #footer>
-      <el-button @click="closeAddDialog">取消</el-button>
-      <el-button
-        type="primary"
-        :loading="dialogSubmitting"
-        :disabled="drawingUploading"
-        @click="handleAddConfirm"
-      >
-        {{ editingUid ? '保存到列表' : '加入列表' }}
-      </el-button>
-    </template>
-  </el-dialog>
+  <!-- 2026-09-24 重构：原 dialog 段（含 el-form + 表单字段 + 上传）整体抽到
+       PartEntryFormDialog.vue，本组件只挂壳并透传 emit / form 同步。父组件
+       composable 持有 form / formErrors / handler。 -->
+  <PartEntryFormDialog
+    :visible="addDialogVisible"
+    :editing="editingUid !== null"
+    :form="form"
+    :form-errors="formErrors"
+    :validate-field="validateField"
+    :add-dlg="addDlg"
+    :customer-tree="customerTree"
+    :applicant-loading="applicantLoading"
+    :query-search="querySearch"
+    :dialog-submitting="dialogSubmitting"
+    :drawing-uploading="drawingUploading"
+    :request-drawing-upload="requestDrawingUpload"
+    :drawing-uploaded="onDrawingUploaded"
+    :drawing-items-change="onDrawingItemsChange"
+    :drawing-all-done="onDrawingAllDone"
+    :drawing-upload-error="onDrawingUploadError"
+    :customer-change="onCustomerChange"
+    :applicant-select="onApplicantSelect"
+    @update:form="onManualFormChange"
+    @confirm="onAddConfirm"
+    @close="closeAddDialog"
+    @closed="onDialogClosed"
+    @validateField="validateField"
+    @drawingItemsChange="onDrawingItemsChange"
+    @drawingUploaded="onDrawingUploaded"
+    @drawingAllDone="onDrawingAllDone"
+    @drawingUploadError="onDrawingUploadError"
+  />
 
   <!-- 图纸 PDF 预览 Dialog -->
   <!-- X / Esc / 遮罩 → emit('update:model-value', false)；父组件 addDialogVisible
@@ -413,18 +269,15 @@
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, reactive, ref, toRaw, watch } from 'vue';
-import {
-  ElButton,
-  ElTag,
-  ElTable,
-  type FormInstance,
-  type FormRules,
-  type TableInstance,
-} from 'element-plus';
+// 2026-09-24 重构：原 localForm 双向同步 / formRefLocal / FormRules / handleAddConfirm
+// / handleDialogClosed / handleUploaderChange 等逻辑全部搬到 PartEntryFormDialog.vue。
+// 本组件只剩列表态 + 预览 dialogs + 父组件 v-bind 透传。父 composable 的 handler
+// 直接绑到本组件模板（emit 透传给 dialog 子组件）。
+
+import { h, onMounted, ref } from 'vue';
+import { ElButton, ElTag, type TableInstance } from 'element-plus';
 import { DocumentAdd, Plus, Upload } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
-import CosUploader from '@/components/CosUploader.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import {
@@ -433,21 +286,23 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility';
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import type { StagedEntry, FormState } from '../composables/usePartBatchManual';
+import type { PartEntryFieldErrors, PartEntryInput } from '../partEntrySchema';
 import type {
   CosUploadedItem,
   CosUploaderItem,
   CosUploadSession,
 } from '@/composables/useCosUploader';
-import type { FormState, StagedEntry } from '../composables/usePartBatchManual';
+import type { Applicant } from '@/types/applicant';
+import PartEntryFormDialog from './PartEntryFormDialog.vue';
 
 const props = defineProps<{
   previewDescCol: number;
   addDlg: { width: string | number; top: string; fullscreen: false };
   previewDlg: { width: string | number; top: string; fullscreen: false };
   customerTree: { id: string; name: string; children?: { id: string; name: string }[] }[];
-  applicantCandidates: { id: string; name: string }[];
   applicantLoading: boolean;
-  querySearch: (queryString: string, cb: (items: { id: string; name: string }[]) => void) => void;
+  querySearch: (queryString: string, cb: (items: Applicant[]) => void) => void;
   staged: StagedEntry[];
   addDialogVisible: boolean;
   dialogSubmitting: boolean;
@@ -458,7 +313,9 @@ const props = defineProps<{
   previewing: StagedEntry | null;
   submitting: boolean;
   form: FormState;
-  rules: FormRules;
+  // 2026-09-24 替代 EP FormRules：父 composable formErrors ref。
+  formErrors: PartEntryFieldErrors;
+  validateField: (field: keyof PartEntryInput) => void;
   /** 2026-09-17 M4：图纸上传中标记。「加入列表」按钮 :disabled 用。 */
   drawingUploading: boolean;
   // 2026-09-18 A3：hydrate 结果（顶部 el-alert + 孤儿文件面板）
@@ -484,8 +341,9 @@ const props = defineProps<{
   onDrawingItemsChange: (items: CosUploaderItem[]) => void;
   onDrawingAllDone: () => void;
   onDrawingUploadError: (item: CosUploaderItem) => void;
-  onAddConfirm: (form?: FormInstance) => Promise<void>;
-  onDialogClosed: (form?: FormInstance) => void;
+  // 2026-09-24 重构：onAddConfirm / onDialogClosed 不再吃 FormInstance。
+  onAddConfirm: () => Promise<void>;
+  onDialogClosed: () => void;
   onRowPreview: (row: StagedEntry) => void;
   onEditFromPreview: () => void;
   onRemoveRow: (uid: string) => void;
@@ -494,36 +352,15 @@ const props = defineProps<{
   onSubmit: () => Promise<void>;
 }>();
 
-// PR-2 2026-09-13：父级 form = reactive<FormState>(...)。vue/no-mutating-props
-// 禁止 props.form.x = v。本地 reactive 副本 + watch 双向同步 + emit('update:form')。
-const emit = defineEmits<(e: 'update:form', v: FormState) => void>();
-// 走 as unknown as 两次断言绕开 TS "object literal" 报错（consistent-type-assertions 不触发，因为是 unknown 中转）
-const localForm = reactive({} as unknown as FormState);
-watch(
-  () => props.form,
-  (v) => {
-    Object.assign(localForm, structuredClone(toRaw(v)));
-  },
-  { deep: true, immediate: true },
-);
-watch(
-  localForm,
-  (v) => {
-    emit('update:form', { ...v });
-  },
-  { deep: true },
-);
-
-// 父组件 `v-bind="manual"` 摊开传入本组件需要的所有 props。
-// 2026-08-25 fix：el-form 的 ref 必须用本组件本地 ref —— 之前 `ref="formRef"` 把
-// 表单实例写到父组件传下来的 readonly prop 上静默失败，导致 manual 录入表单
-// 校验永远不触发。formRefLocal 拥有 el-form 实例后，handleAddConfirm /
-// handleDialogClosed 把它作为参数传给 composable 的 onAddConfirm / onDialogClosed。
-const formRefLocal = ref<FormInstance>();
+// PR-2 2026-09-13 兼容：父级 form = reactive<FormState>(...)。PartEntryFormDialog
+// 已经内部持 localForm 并 emit('update:form')。本组件仍要保留这条 emit 通道
+// 透传给 shell（PartBatchNew.vue 的 onManualFormChange），语义不变。
+const emit = defineEmits<{
+  'update:form': [v: FormState];
+}>();
 
 // 2026-08-27 T21：列顺序拖动 + 可见性。
 // 「#」index 列 + 「操作」fixed 列不放进 defs（始终可见、不可拖）。
-// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {
     key: 'drawingNo',
@@ -551,9 +388,7 @@ const columnDefs: ColumnDef[] = [
       return h('span', { class: 'mono' }, r.drawingNo ?? '');
     },
   },
-  // 2026-09-18 A3：图纸上传状态列。drawingClientRef 存在（hydrate 或本批新传）
-  // → 标「已上传」绿 tag；hydrate 时 drawing='need_reselect'（snapshot 有
-  // client_ref 但 session 没命中）→ 标「需重传」黄 tag。两种互斥。
+  // 2026-09-18 A3：图纸上传状态列。
   {
     key: 'drawingUpload',
     label: '图纸上传',
@@ -564,10 +399,6 @@ const columnDefs: ColumnDef[] = [
       if (r.drawingClientRef && r.drawingBinding) {
         return h(ElTag, { type: 'success', size: 'small' }, () => '已上传');
       }
-      // hydrate 时 snapshot 有 client_ref 但 session 缺 → drawingClientRef
-      // 字段保持 undefined（deserializeStaged 内只在 drawing='done' 才写）。
-      // 这里用反向判定：drawingName 残留（hydrate 时从 drawingFilename 写入）
-      // 但 drawingBinding 为 null → 标「需重传」。
       if (r.drawingName && !r.drawingBinding && !r.drawingFile) {
         return h(ElTag, { type: 'warning', size: 'small' }, () => '需重传');
       }
@@ -632,47 +463,8 @@ onMounted(() => {
   drag.applyDrag(tableRef);
 });
 
-// 2026-09-17 M4：图纸上传 CosUploader ref。用于 handleUploaderChange trim +
-// handleDialogClosed 时强制清队列。
-const uploaderRef = ref<InstanceType<typeof CosUploader> | null>(null);
-
-/**
- * 本地 @change wrapper：cosUploader.removeItem 不会清 el-upload 内部列表，
- * `:limit="1"` 会导致永远超限。我们绕开方案：:limit="0"（不限）+ :multiple="false"，
- * 选第 N 个文件后这里 trim：保留最新一条，把前 N-1 条从 cos-uploader 内部移出。
- *
- * 注意：每次 uploaderRef.value?.removeItem(...) 内部会 splice + emit('change')
- * 递归触发本 wrapper，所以要确保只在 items.length > 1 时才进入 trim 循环。
- * removeItem 已发 change 事件，items 引用在新一轮 change 回调中是已被修改的。
- */
-async function handleUploaderChange(items: CosUploaderItem[]): Promise<void> {
-  if (items.length > 1) {
-    // 同步遍历：本次事件触发的 items 已被 cos-uploader 内部 splice 影响。
-    // 我们用 items.length - 1 算 trim 上限（保留最后一项）。
-    const trimCount = items.length - 1;
-    for (let i = 0; i < trimCount; i += 1) {
-      const it = items[i];
-      if (it) {
-        await uploaderRef.value?.removeItem(it.client_ref);
-      }
-    }
-  }
-  // 转 trim 后的最新列表（removeItem 已触发 change，本处 items 已是 trim 后状态）
-  props.onDrawingItemsChange(items);
-}
-
-/** 把本地 formRef 实例传回 composable 的 onAddConfirm。 */
-function handleAddConfirm(): Promise<void> {
-  return props.onAddConfirm(formRefLocal.value);
-}
-/** @closed 触发：composable 需要 form 来 clearValidate()。
- *
- * 2026-09-17 M4：同步调 uploaderRef.clear() 让 cos-uploader 内部清空列表
- * （触发所有已 done 项的 cancel 回调，best-effort 清理 COS tmp 对象）。
- */
-function handleDialogClosed(): void {
-  void uploaderRef.value?.clear();
-  props.onDialogClosed(formRefLocal.value);
+function onManualFormChange(v: FormState): void {
+  emit('update:form', v);
 }
 </script>
 
@@ -783,26 +575,6 @@ function handleDialogClosed(): void {
   margin-left: 6px;
 }
 .orphan-hint {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.drawing-info {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  color: var(--text-regular);
-  font-size: 13px;
-}
-.drawing-name {
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-}
-.drawing-preview {
-  margin-top: 8px;
-}
-.form-hint {
   margin: 6px 0 0;
   color: var(--text-secondary);
   font-size: 12px;

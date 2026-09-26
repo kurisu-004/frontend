@@ -51,7 +51,6 @@
     "eslint-plugin-vue": "^9.33.0",
     "globals": "^15.15.0",
     "happy-dom": "^20.14.5",
-    "less": "^4.9.1",
     "prettier": "^3.9.6",
     "sass": "^1.77.0",
     "typescript": "^5.4.5",
@@ -63,6 +62,9 @@
     "vue-tsc": "^2.0.16"
   },
   "allowScripts": {
-    "cos-js-sdk-v5@1.10.1": true
+    "cos-js-sdk-v5@1.10.1": true,
+    "@parcel/watcher@2.5.6": true,
+    "vue-demi@0.14.10": true,
+    "fsevents@2.3.3": true
   }
 }

@@ -38,7 +38,8 @@
 // 2026-09-24 重构：登录页接入 TanStack Query useMutation + Zod schema 校验。
 //
 // 关键设计：
-//   - useMutation 是仓内首例；retry: 0 必须显式写，避免默认 3 次重试。
+//   - useMutation 官方默认不重试（3 次指数退避是 query 的默认行为，不是 mutation
+//     的）；全局 defaultOptions 也显式 retry: 0 双保险。仓内新增 mutation 不写 retry。
 //   - mutationFn 调 useAuthSession().login() 而非直接 api.post：token 持久化
 //     与 ApiError 规范化都在 useAuthSession 那一层，mutationFn 必须薄。
 //   - Zod schema 把 trim 放在最前；mutationFn 不再做 trim（避免双重 trim）。
@@ -71,7 +72,6 @@ const noRoleError = ref('');
 
 const loginMutation = useMutation<CurrentUser, ApiError, LoginInput>({
   mutationKey: ['auth', 'login'],
-  retry: 0,
   mutationFn: async (creds) => {
     // Zod schema 已在 safeParse 时完成 trim，creds.username 已是 trim 后值。
     // mutationFn 不再二次 trim。

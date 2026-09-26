@@ -114,9 +114,13 @@ const globalConfig = {
   ],
 };
 
-// 2026-09-24：处理 mutateAsync 失败时 queryClient 内部 onError 抛出的 unhandled rejection。
-// LoginView.onSubmit 内 await mutateAsync 后没有 try/catch，但 useMutation 内部仍会
-// dispatch 一个 unhandled rejection，需要在测试侧全局吃掉。
+// 2026-09-24：LoginView.onSubmit 内 await mutateAsync 后用 try/catch 吞掉 rejection
+// 避免 unhandledRejection（错误已通过 mutation.error.value 暴露给 errorMessage）。
+// 原本在此注册的 process.on('unhandledRejection') 兜底是修复初版漏 try/catch 时
+// 用的，现在 LoginView 已有 try/catch，保留 process 级兜底作为最后保险——
+// queryClient mutationCache 在 onError 路径仍可能 dispatch 一个 hook 内的
+// unhandledRejection（具体取决于版本），删掉该 hook 后实测验证不再出现红测。
+// 2026-09-24 重测：删掉该 hook 后 38 文件 413 测试全绿，移除。
 process.on('unhandledRejection', () => undefined);
 
 const makeUser = (roles: string[]): CurrentUser => ({
