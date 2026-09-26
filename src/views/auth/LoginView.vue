@@ -35,26 +35,27 @@
 </template>
 
 <script setup lang="ts">
-// 2026-09-24 重构：登录页接入 TanStack Query useMutation + Zod schema 校验。
+// 2026-09-26 重构：登录页切到 useAuthStore.loginMutation。
+// useMutation 已在 store 内部（auth.loginMutation），LoginView 只持表单 ref +
+// Zod schema + 角色路由跳转。
 //
 // 关键设计：
 //   - useMutation 官方默认不重试（3 次指数退避是 query 的默认行为，不是 mutation
 //     的）；全局 defaultOptions 也显式 retry: 0 双保险。仓内新增 mutation 不写 retry。
-//   - mutationFn 调 useAuthSession().login() 而非直接 api.post：token 持久化
-//     与 ApiError 规范化都在 useAuthSession 那一层，mutationFn 必须薄。
 //   - Zod schema 把 trim 放在最前；mutationFn 不再做 trim（避免双重 trim）。
 //   - LoginCard 只持展示态（不持表单），emit submit 无 payload，父组件
 //     持有 form ref 与 mutation。
 //   - 错误映射：40101（账号或密码错）/ 40105（session 吊销）→ 友好文案；
 //     其它错误 → err.message 或兜底文案。
+//   - **Pinia store 自动解包**：auth.loginMutation.isPending / auth.loginMutation.error
+//     通过 store proxy 访问时已是解包后的值（boolean / ApiError | null），**不写 .value**。
+//     这是与仓内其它 setup store（usePartsListStore）一致的不变量：consumer 走
+//     `auth.xxx` 自动响应 + 自动解包。
 
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { useMutation } from '@tanstack/vue-query';
 import { User, Lock } from '@element-plus/icons-vue';
-import { useAuthSession } from '@/composables/useAuthSession';
-import type { ApiError } from '@/api/http';
-import type { CurrentUser } from '@/types/user';
+import { useAuthStore } from '@/stores/auth';
 import BeianFooter from '@/components/BeianFooter.vue';
 import LoginCard from './LoginCard.vue';
 import { loginSchema, toFieldErrors, type LoginInput, type LoginFieldErrors } from './loginSchema';
@@ -63,46 +64,18 @@ const UserIcon = User;
 const LockIcon = Lock;
 
 const router = useRouter();
-const session = useAuthSession();
+const auth = useAuthStore();
 
 const form = ref<LoginInput>({ username: '', password: '' });
 const errors = ref<LoginFieldErrors>({});
 // 2026-09-24 新增：账号无任何可用角色的独立提示位（业务逻辑判断，不属于 mutation 失败）。
 const noRoleError = ref('');
 
-const loginMutation = useMutation<CurrentUser, ApiError, LoginInput>({
-  mutationKey: ['auth', 'login'],
-  mutationFn: async (creds) => {
-    // Zod schema 已在 safeParse 时完成 trim，creds.username 已是 trim 后值。
-    // mutationFn 不再二次 trim。
-    return session.login(creds.username, creds.password);
-  },
-  onSuccess: (user) => {
-    // 按角色优先级自动跳转（与改造前一致）。
-    if (user.roles.includes('MANAGER')) {
-      router.replace('/dashboard');
-      return;
-    }
-    if (user.roles.includes('CLERK') || user.roles.includes('CNC_PROGRAMMER')) {
-      router.replace('/parts');
-      return;
-    }
-    if (user.roles.includes('INSPECTOR')) {
-      router.replace('/inspection/pending');
-      return;
-    }
-    if (user.roles.includes('SHELF_ACCOUNT')) {
-      router.replace('/scan/badge');
-      return;
-    }
-    noRoleError.value = '账号无任何可用角色';
-  },
-});
-
-const submitting = computed(() => loginMutation.isPending.value);
+// 2026-09-26：loginMutation 进 store 后，isPending / error 已经是解包后的值（boolean / 对象）。
+const submitting = computed(() => auth.loginMutation.isPending);
 const errorMessage = computed(() => {
   if (noRoleError.value) return noRoleError.value;
-  const err = loginMutation.error.value;
+  const err = auth.loginMutation.error;
   if (!err) return '';
   // 40101 BIZ_AUTH_INVALID / 40105 SESSION_REVOKED 统一文案。
   if (err.code === 40101 || err.code === 40105) return '账号或密码错误，请重试';
@@ -131,12 +104,29 @@ const onSubmit = async () => {
   }
   errors.value = {};
   noRoleError.value = '';
-  // mutateAsync 错误已被 useMutation 写入 mutation.error.value（驱动 errorMessage）；
-  // 这里 try/catch 仅用于吞掉 promise rejection，避免 unhandledRejection。
   try {
-    await loginMutation.mutateAsync(result.data);
+    // 2026-09-26：mutateAsync 收 LoginCredentials 对象（{ username, password }）。
+    const u = await auth.loginMutation.mutateAsync(result.data);
+    // 按角色优先级自动跳转（视图关注点，留在 LoginView）。
+    if (u.roles.includes('MANAGER')) {
+      router.replace('/dashboard');
+      return;
+    }
+    if (u.roles.includes('CLERK') || u.roles.includes('CNC_PROGRAMMER')) {
+      router.replace('/parts');
+      return;
+    }
+    if (u.roles.includes('INSPECTOR')) {
+      router.replace('/inspection/pending');
+      return;
+    }
+    if (u.roles.includes('SHELF_ACCOUNT')) {
+      router.replace('/scan/badge');
+      return;
+    }
+    noRoleError.value = '账号无任何可用角色';
   } catch {
-    /* 错误已通过 mutation.error.value 暴露给 LoginCard 的 errorMessage slot */
+    /* 错误已通过 auth.loginMutation.error 暴露给 LoginCard 的 errorMessage slot */
   }
 };
 </script>

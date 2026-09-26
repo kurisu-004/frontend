@@ -19,7 +19,11 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 import App from './App.vue';
 import router from './router';
-import { useAuthSession } from './composables/useAuthSession';
+// 2026-09-26：迁移到 Pinia setup store useAuthStore（src/stores/auth.ts），
+// 替代原 composables/useAuthSession 模块级单例。store 内 loadFromStorage 自执行
+// 首次 useAuthStore() 时恢复 localStorage；CustomEvent listener 在 setup 里挂，
+// 拦截器刷新 token 后会自动同步。
+import { useAuthStore } from './stores/auth';
 import './styles/index.scss';
 
 // Element Plus 命令式 API（ElMessageBox / ElMessage / ElNotification / ElLoading）
@@ -64,8 +68,11 @@ app.use(VueQueryPlugin, { queryClient });
 // 也是 undefined，整段 tree-shake。
 // 必须放在 app.use(router) 之前——router 首次 beforeEach 触发时 user + isDummy 已就位，
 // 守卫短路 refreshOrLogout 不调 /iam/me。
+// 2026-09-26 迁移到 useAuthStore()：调用 initDummyAuth() 注入 fake session + 标记
+// isDummyAuthActive。store 内部保证 VITE_DUMMY_AUTH=true 时才注入；外层判定重复
+// 一遍节省 dev-only 分支的运行开销（条件不满足时函数内立即 return）。
 if (import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true') {
-  useAuthSession().initDummyAuth();
+  useAuthStore().initDummyAuth();
 }
 
 app.use(router);

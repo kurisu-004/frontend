@@ -31,7 +31,7 @@ import { Van } from '@element-plus/icons-vue';
 import { findWorkerByBadge } from '@/api/worker';
 import { listWorkTypes } from '@/api/workType';
 import type { WorkType } from '@/types/workType';
-import { useAuthSession } from '@/composables/useAuthSession';
+import { useAuthStore } from '@/stores/auth';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useScanSession } from '@/composables/useScanSession';
 
@@ -40,11 +40,13 @@ const DRIVER_WORK_TYPE_CODE = '送货司机';
 const router = useRouter();
 const { onScan } = useBarcodeScanner();
 const { setWorker } = useScanSession();
-const { isAuthenticated, refreshOrLogout } = useAuthSession();
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+// 标量 getter 去掉括号：isAuthenticated() → isAuthenticated。
+const auth = useAuthStore();
 
 onMounted(async () => {
-  if (!isAuthenticated()) {
-    await refreshOrLogout(router);
+  if (!auth.isAuthenticated) {
+    await auth.refreshOrLogout(router);
   }
 });
 

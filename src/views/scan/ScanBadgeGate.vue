@@ -25,23 +25,27 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Aim } from '@element-plus/icons-vue';
 import { findWorkerByBadge } from '@/api/worker';
-import { useAuthSession } from '@/composables/useAuthSession';
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+// 标量 getter 去掉括号：isAuthenticated() → isAuthenticated；user 自动解包为对象。
+import { useAuthStore } from '@/stores/auth';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useScanSession } from '@/composables/useScanSession';
 
 const router = useRouter();
 const { onScan } = useBarcodeScanner();
 const { setWorker } = useScanSession();
-const { isAuthenticated, refreshOrLogout, user } = useAuthSession();
+const auth = useAuthStore();
+// 2026-09-26：模板里 v-if="user" 需暴露响应式 user；auth.user 已是解包后的 CurrentUser | null。
+const user = computed(() => auth.user);
 
 onMounted(async () => {
-  if (!isAuthenticated()) {
-    const ok = await refreshOrLogout(router);
+  if (!auth.isAuthenticated) {
+    const ok = await auth.refreshOrLogout(router);
     if (!ok) return;
   }
   // 不再预热 worker 缓存：findWorkerByBadge 改为后端单点 query（POST /workers/verify-badge）。
@@ -66,9 +70,8 @@ onBeforeUnmount(() => {
   unsubscribe();
 });
 
-const { logout } = useAuthSession();
 async function switchAccount(): Promise<void> {
-  await logout();
+  await auth.logout();
   router.replace('/login');
 }
 function goHome(): void {

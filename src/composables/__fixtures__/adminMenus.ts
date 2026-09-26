@@ -18,7 +18,8 @@
 // 待后端菜单树彻底下架 settings_root 后再移除）。
 // floor_group 软删保留（2026-09-16，迁 shelves_list 后无子项；待后端彻底下架再移除 fixture 行；
 // __tests__/adminMenus.spec.ts 断言 floor_group 必须存在，故暂不能删）。
-// 仅 dev dummy-auth 模式使用（initDummyAuth 注入 useAuthSession.user.menus）；
+// 仅 dev dummy-auth 模式使用（initDummyAuth 注入 useAuthStore().user.menus；
+// 原 useAuthSession → Pinia store 迁移）。
 // prod bundle 不引用此文件（无 dead code 风险）。
 //
 // 数据来源：实际生产环境登录响应（USER / 15060779955 的 /iam/login 返回 data.menus）。

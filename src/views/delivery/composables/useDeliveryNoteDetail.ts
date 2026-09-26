@@ -26,7 +26,9 @@ import type {
 import type { OrderStatus } from '@/types/parts';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
 import { canAddRemoveParts, canView, hasManageNoteRole } from '@/utils/deliveryNotePermissions';
-import { useAuthSession } from '@/composables/useAuthSession';
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+// 函数式 getter 保留调用形态 auth.hasRole('X')。
+import { useAuthStore } from '@/stores/auth';
 import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility';
 
 export interface DeliveryNoteRoleMap {
@@ -80,13 +82,14 @@ export interface UseDeliveryNoteDetailReturn {
 }
 
 export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetailReturn {
-  const { hasRole } = useAuthSession();
+  // 2026-09-26：消费侧禁止解构 store（沿 usePartsListStore 不变量 #3），统一 auth.xxx。
+  const auth = useAuthStore();
 
   // ============ 角色矩阵 ============
   const role = computed<DeliveryNoteRoleMap>(() => ({
-    MANAGER: hasRole('MANAGER'),
-    CLERK: hasRole('CLERK'),
-    INSPECTOR: hasRole('INSPECTOR'),
+    MANAGER: auth.hasRole('MANAGER'),
+    CLERK: auth.hasRole('CLERK'),
+    INSPECTOR: auth.hasRole('INSPECTOR'),
   }));
 
   // ============ 主数据 ============

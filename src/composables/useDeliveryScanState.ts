@@ -8,8 +8,8 @@
 //   - 现场扫码台是工位机，单用户长期使用，应在退出页面后保持上次选项。
 //
 // 形态：
-//   - 模块级 composable 单例（同 useBarcodeScanner / useAuthSession / usePrintedLabels
-//     风格，详见 CLAUDE.md §状态管理）。
+//   - 模块级 composable 单例（同 useBarcodeScanner / useAuthStore / usePrintedLabels
+//     风格，详见 CLAUDE.md §状态管理）。2026-09-26：原 useAuthSession 迁到 Pinia store。
 //   - localStorage key = 'delivery_scan_l1_v1'（带 _v1 便于将来形状变更时灰度切换）；
 //     内容 `{ l1CustomerId: string }` JSON 字符串。
 //

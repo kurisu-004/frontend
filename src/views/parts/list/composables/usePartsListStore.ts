@@ -16,7 +16,9 @@
 // 4. 不 import vue-router：route/router 逻辑留壳（store 需在 node 单测无 router 实例化）。
 
 import { defineStore } from 'pinia';
-import { useAuthSession } from '@/composables/useAuthSession';
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+// 函数式 getter 保留调用形态 auth.hasRole('X')，store proxy 自动解包嵌套 ref。
+import { useAuthStore } from '@/stores/auth';
 import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility';
 import { usePartsListQuery } from './usePartsListQuery';
 import { usePartsColumnFilters } from './usePartsColumnFilters';
@@ -39,11 +41,13 @@ export type PartsListTableGetter = () => {
 
 export const usePartsListStore = defineStore('parts-list', () => {
   // ============ 角色 & 默认筛选（从 PartsList.vue 搬入，2026-09-15）============
-  const { hasRole } = useAuthSession();
-  const isCncProgrammer = hasRole('CNC_PROGRAMMER');
+  // 2026-09-26：消费侧禁止解构 store（不变量 #3 沿用），统一 auth.xxx 访问。
+  // 函数式 getter 保留调用形态：auth.hasRole('X') 仍带括号。
+  const auth = useAuthStore();
+  const isCncProgrammer = auth.hasRole('CNC_PROGRAMMER');
   // PR-I 2026-07-20：INSPECTOR 看不到导入 / 批量打印 / 下发按钮
   // 行内编辑权限：与后端 POST /parts/{id}/update 一致（MANAGER / CLERK）
-  const canEdit = hasRole('MANAGER') || hasRole('CLERK');
+  const canEdit = auth.hasRole('MANAGER') || auth.hasRole('CLERK');
 
   // ============ el-table getter：壳在 setup 里注册（PartsTable 组件 ref 在壳模板上）============
   let tableGetter: PartsListTableGetter = () => null;

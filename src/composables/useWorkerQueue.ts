@@ -158,9 +158,11 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
    * 2026-09-25 修正：listProcesses 路径漂移到 /prod/processes；返回类型由 unknown[] 改为
    * Process[]，composable 内不再就地强转（listProcesses.from `@/api/processChain`）。
    * 2026-09-14 review 第 1 轮：
-   * - `shelfId` 由 view 层从 `useAuthSession().activeShelfId()` 注入；null/空串 → 跳过
-   *   二次 GET（rust WorkerPoolState 必填 shelf_id；无激活货架时用占位 '0' 必触发 40001
-   *   BIZ_SHELF_NOT_FOUND，导致所有 worker 的 max_held/current_held/capacity_remaining 退化为 0）。
+   * - `shelfId` 由 view 层从 `useAuthStore().activeShelfId` 注入（2026-09-26：原 useAuthSession
+   *   迁到 Pinia store，标量 getter 去掉括号）；null/空串 → 跳过二次 GET（rust
+   *   WorkerPoolState 必填 shelf_id；无激活货架时用占位 '0' 必触发 40001
+   *   BIZ_SHELF_NOT_FOUND，导致所有 worker 的 max_held/current_held/capacity_remaining
+   *   退化为 0）。
    * - `listProcesses` 改从 `@/api/processChain` 导入（v2，baseURL /api/v2）；不再走
    *   `@/api/process` 的 v1 端点。 */
   async function loadBoard(shelfId: string | null): Promise<void> {

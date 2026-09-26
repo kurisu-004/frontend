@@ -135,7 +135,9 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { Box, Fold, Expand, Refresh, ArrowDown, Lock, SwitchButton } from '@element-plus/icons-vue';
-import { useAuthSession } from '@/composables/useAuthSession';
+// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
+// 标量 getter 去掉括号：menus() → auth.menus；isDummyAuthActive() → auth.isDummyAuthActive。
+import { useAuthStore } from '@/stores/auth';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { me as apiMe, changeMyPassword } from '@/api/iam';
 import MenuTreeItem from '@/layouts/components/MenuTreeItem.vue';
@@ -148,9 +150,9 @@ const router = useRouter();
 
 const isCollapse = ref(false);
 const currentUser = ref<CurrentUser | null>(null);
-const { logout, menus } = useAuthSession();
+const auth = useAuthStore();
 
-const menuList = computed(() => menus());
+const menuList = computed(() => auth.menus);
 
 const userInfo = computed(() => ({
   name: currentUser.value?.full_name || currentUser.value?.username || '未登录',
@@ -194,7 +196,7 @@ const handleUserCmd = async (cmd: string | number | object): Promise<void> => {
         cancelButtonText: '取消',
         type: 'warning',
       });
-      await logout();
+      await auth.logout();
       ElMessage.success('已退出登录');
       router.replace('/login');
     } catch {
@@ -252,7 +254,7 @@ async function submitChangePwd(): Promise<void> {
     });
     showChangePwd.value = false;
     ElMessage.success('密码已修改，请重新登录');
-    await logout();
+    await auth.logout();
     router.replace('/login');
   } catch (e: unknown) {
     ElMessage.error(e instanceof Error ? e.message : '修改密码失败');
@@ -268,10 +270,9 @@ onMounted(async () => {
   // dummy 已经注入完整 CurrentUser（含 menus / roles），无需再向 /iam/me 验证。
   // 三层 prod 保护：
   //   1) isDummyAuthRequested() 在 import.meta.env.DEV=false 时整段 dead code
-  //   2) useAuthSession.isDummyAuthActive() 由 initDummyAuth 注入
+  //   2) useAuthStore.isDummyAuthActive 由 initDummyAuth 注入
   //   3) 后端即便返回 401，拦截器也不会触发 auth:logout（refresh 失败分支不命中）
-  const { isDummyAuthActive } = useAuthSession();
-  if (isDummyAuthActive()) return;
+  if (auth.isDummyAuthActive) return;
   try {
     currentUser.value = await apiMe();
   } catch {

@@ -29,7 +29,8 @@
 // 通过 #default slot 注入，本组件不持有任何业务状态。
 //
 // emit 不带 payload —— 父组件持有 form ref 与 mutation，按 submit 触发器拿 form.value。
-// 这样 LoginCard 不依赖 useAuthSession / vue-query，纯展示组件。
+// 这样 LoginCard 不依赖 useAuthStore / vue-query，纯展示组件。
+// 2026-09-26：原 useAuthSession 已迁到 Pinia store useAuthStore。
 
 interface Props {
   title: string;

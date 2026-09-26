@@ -25,8 +25,10 @@
 // - mount 时（usePartBatchPdf / usePartBatchManual 各自调 `loadDraft(userId)`）。
 //
 // 测试覆盖：序列化往返 + 合并逻辑（mock session）。
+// 2026-09-26：useAuthSession → useAuthStore（Pinia 迁移）；user.value 访问改为
+// store 自动解包后的 user.id。
 
-import { useAuthSession } from '@/composables/useAuthSession';
+import { useAuthStore } from '@/stores/auth';
 import type { SessionFile, UploadSession } from '@/types/upload_session';
 
 // ============================================================
@@ -447,7 +449,7 @@ export function createDraftSaver(
  * 工厂入口：组件 setup 内调用，返回 `{ load, save, clear, saver, userId }`。
  *
  * - `saver` 是 debounced writer，挂到 watch 上即可自动保存；
- * - `userId` 从 useAuthSession 取（雪flake ID 字符串）；
+ * - `userId` 从 useAuthStore 取（雪flake ID 字符串）；
  * - 鉴权未就绪（userId 为 null）时所有操作静默 no-op（caller 不必额外 guard）。
  */
 export function usePartsNewDraft(): {
@@ -457,12 +459,13 @@ export function usePartsNewDraft(): {
   saver: ReturnType<typeof createDraftSaver>;
   userId: string | null;
 } {
-  // useAuthSession 内部维护模块级 user ref；非 setup 上下文调用会抛错，
-  // 工厂入口通常在 setup 内被调，不会撞这条分支。
+  // 2026-09-26：useAuthStore 内部维护 store state user；非 setup 上下文调用会抛错，
+  // 工厂入口通常在 setup 内被调，不会撞这条分支。store proxy 自动解包嵌套 ref，
+  // auth.user 直接是 CurrentUser | null。
   let userId: string | null = null;
   try {
-    const { user } = useAuthSession();
-    userId = user.value?.id ?? null;
+    const auth = useAuthStore();
+    userId = auth.user?.id ?? null;
   } catch {
     /* 非 setup 上下文 → userId 保持 null，所有操作 no-op */
   }

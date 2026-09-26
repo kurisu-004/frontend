@@ -7,11 +7,15 @@
 // - mock @/components/ColumnFilterPopover.vue：.vue 文件不进 transform 链，需 stub。
 // - 每个用例前 setActivePinia(createPinia()) —— store 必须在 pinia active 时调用。
 // - 未登录态（user=null）下 canEdit === false，price 列被 gate，columnDefs.length === 16。
-//   登录 mock 通过 useAuthSession.user.value 注入；本 spec 默认跑未登录态，断言 columnDefs.length === 16。
+//   登录 mock 通过 useAuthStore().$patch({ user: ... }) 注入（2026-09-26：从 useAuthSession
+//   切到 useAuthStore）；本 spec 默认跑未登录态，断言 columnDefs.length === 16。
 // - spy table getter：vi.fn 注册 clearSelection / toggleRowSelection，用以验证批量选择流。
+// - 2026-09-26：usePartsListStore 现在依赖 useAuthStore，后者内含 useMutation。需要注册
+//   VueQueryPlugin + QueryClient（mutation observer 需要）；否则会抛 "No QueryClient set"。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 // 2026-09-15：mock 必须在 import store 之前；vi.mock 顶层 hoist。
 vi.mock('@/api/parts', () => ({
@@ -51,11 +55,20 @@ vi.mock('@/api/parts', () => ({
   getPartLocationTree: vi.fn(async () => ({ items: [] })),
 }));
 
+// 2026-09-26：mock @/api/iam 让 useAuthStore.loginMutation 在测试里跑得通。
+// 该 spec 只断言 parts 切片能力，不调 login mutation，所以 mock 简单返回即可。
+vi.mock('@/api/iam', () => ({
+  login: vi.fn(),
+  logout: vi.fn(),
+  me: vi.fn(),
+}));
+
 // vitest 无 vue 插件，.vue 文件不能进 transform 链 —— factory stub 后该文件不会被加载。
 vi.mock('@/components/ColumnFilterPopover.vue', () => ({
   default: { name: 'ColumnFilterPopoverStub' },
 }));
 
+import { createApp } from 'vue';
 import { usePartsListStore } from '../usePartsListStore';
 import type { PartListItem } from '@/types/parts';
 
@@ -76,7 +89,15 @@ function makeRow(id: string, status = 'IN_PROCESS'): PartListItem {
 
 describe('usePartsListStore', () => {
   beforeEach(() => {
-    setActivePinia(createPinia());
+    // 2026-09-26：usePartsListStore 现在调 useAuthStore() 拿角色；auth store 内
+    // useMutation 需要 QueryClient。这里用 createApp 注册 Pinia + VueQueryPlugin，
+    // 然后 setActivePinia 到该 app 的 pinia，确保后续 useAuthStore() 命中这里。
+    const app = createApp({});
+    app.use(createPinia());
+    app.use(VueQueryPlugin, {
+      queryClient: new QueryClient({ defaultOptions: { mutations: { retry: 0 } } }),
+    });
+    setActivePinia(app.config.globalProperties.$pinia);
     // 2026-09-15：清掉 localStorage 残留，避免 useListFilterPersist 拿到旧快照污染用例。
     try {
       localStorage.clear();
