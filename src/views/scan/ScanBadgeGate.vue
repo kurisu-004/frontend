@@ -13,8 +13,8 @@
       <h1 class="title">工位扫码台</h1>
       <p class="hint">请扫描工牌条码以开始</p>
       <p class="sub-hint">扫描后请等待系统识别...</p>
-      <div v-if="user" class="shelf-info">
-        <span>当前账号: {{ user.full_name }}</span>
+      <div v-if="auth.user" class="shelf-info">
+        <span>当前账号: {{ auth.user.full_name }}</span>
         <el-button link type="warning" @click="switchAccount">切换账号</el-button>
       </div>
       <div class="footer-links">
@@ -25,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue';
+import { onBeforeUnmount, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Aim } from '@element-plus/icons-vue';
@@ -40,8 +40,6 @@ const router = useRouter();
 const { onScan } = useBarcodeScanner();
 const { setWorker } = useScanSession();
 const auth = useAuthStore();
-// 2026-09-26：模板里 v-if="user" 需暴露响应式 user；auth.user 已是解包后的 CurrentUser | null。
-const user = computed(() => auth.user);
 
 onMounted(async () => {
   if (!auth.isAuthenticated) {

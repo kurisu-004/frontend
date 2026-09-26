@@ -1,8 +1,8 @@
 <template>
   <div class="login-page">
     <LoginCard
-      title="myERP"
-      subtitle="零件加工订单管理系统"
+      title="洪升宏ERP"
+      subtitle="AI驱动的现代化生产管理系统"
       :submitting="submitting"
       :error-message="errorMessage"
       @submit="onSubmit"
@@ -27,10 +27,8 @@
           />
         </el-form-item>
       </el-form>
-      <template #footer>
-        <BeianFooter />
-      </template>
     </LoginCard>
+    <BeianFooter />
   </div>
 </template>
 

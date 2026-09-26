@@ -37,6 +37,8 @@ export default [
       '**/*.min.js',
       'src/auto-imports.d.ts', // unplugin-auto-import 生成
       'src/components.d.ts', // unplugin-vue-components 生成
+      // 2026-09-26 新增：orchestrator skill 跑的并行 worktree 目录不在主仓 lint 范围
+      '.claude/worktrees/**',
     ],
   },
 
