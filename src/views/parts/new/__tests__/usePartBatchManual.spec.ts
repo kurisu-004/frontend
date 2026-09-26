@@ -48,11 +48,11 @@ vi.mock('@/api/applicant', () => ({
   createApplicant: mocks.createApplicant,
 }));
 
-vi.mock('@/composables/useUploadSession', () => ({
+vi.mock('@/views/parts/new/composables/useUploadSession', () => ({
   getUploadSession: () => sessionStub,
 }));
 
-vi.mock('@/composables/usePartsNewDraft', () => ({
+vi.mock('@/views/parts/new/composables/usePartsNewDraft', () => ({
   usePartsNewDraft: () => ({
     userId: 'u-test',
     load: () => null,

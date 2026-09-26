@@ -1,4 +1,4 @@
-// composables/usePartsNewDraft.ts
+// views/parts/new/composables/usePartsNewDraft.ts
 //
 // 2026-09-18 新增：parts/new 页面 localStorage 草稿快照。
 //

@@ -32,7 +32,7 @@ import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { useCosUpload, type CosUploadItem } from '@/composables/useCosUpload';
 import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
-import { getUploadSession } from '@/composables/useUploadSession';
+import { getUploadSession } from '@/views/parts/new/composables/useUploadSession';
 import {
   usePartsNewDraft,
   mergeDraftWithSession,
@@ -41,7 +41,7 @@ import {
   type SerializedAssemblyRow,
   type SerializedPdfTab,
   type SerializedStandalonePartRow,
-} from '@/composables/usePartsNewDraft';
+} from '@/views/parts/new/composables/usePartsNewDraft';
 import type { Customer } from '@/api/customer';
 import type { FileBinding, PartFileKind, UploadIntentsOut } from '@/types/part_file';
 import type { SessionFile } from '@/types/upload_session';

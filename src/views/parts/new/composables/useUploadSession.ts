@@ -1,4 +1,4 @@
-// composables/useUploadSession.ts
+// views/parts/new/composables/useUploadSession.ts
 //
 // 2026-09-18 新增：upload session pool 管理 composable（backend-rust 共享 STS）。
 //

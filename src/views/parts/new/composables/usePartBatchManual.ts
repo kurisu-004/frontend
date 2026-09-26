@@ -42,13 +42,13 @@ import {
   type PartBatchCreatePayload,
   type PartBatchResult,
 } from '@/api/parts';
-import { getUploadSession } from '@/composables/useUploadSession';
+import { getUploadSession } from '@/views/parts/new/composables/useUploadSession';
 import {
   usePartsNewDraft,
   mergeDraftWithSession,
   type MergeResult,
   type SerializedStagedEntry,
-} from '@/composables/usePartsNewDraft';
+} from '@/views/parts/new/composables/usePartsNewDraft';
 import type { Applicant } from '@/types/applicant';
 import type { FileBinding } from '@/types/part_file';
 import type { Customer } from '@/api/customer';

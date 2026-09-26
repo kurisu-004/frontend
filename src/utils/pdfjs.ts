@@ -1,7 +1,8 @@
 // utils/pdfjs.ts
 //
 // pdfjs-dist 单点配置：workerSrc + 浏览器缓存穿透 + cMap。
-// PdfViewer.vue / usePdfPageCount.ts 统一从这里拿 pdfjsLib，不要各自 import 'pdfjs-dist'。
+// PdfViewer.vue / parts/new 域（usePartBatchPdf.ts）统一从这里拿 pdfjsLib，
+// 不要各自 import 'pdfjs-dist'。
 //
 // 背景（2026-07-19）：7-17 前生产 nginx 未配 .mjs 的 MIME，pdf worker 以
 // application/octet-stream + Cache-Control: max-age=31536000, immutable 下发，
@@ -44,3 +45,21 @@ export const PDF_CMAP_OPTIONS = {
 } as const;
 
 export { pdfjsLib };
+
+/**
+ * 读取本地 File 的 PDF 页数（2026-09-27 从 composables/usePdfPageCount.ts 下沉到这里）。
+ * 不发起网络请求；损坏 / 加密 / 非 PDF → 抛错（调用方负责 ElMessage 提示）。
+ *
+ * destroy() 必须在 PDFDocumentLoadingTask 上调用，不在 PDFDocumentProxy 上（旧实现
+ * 调 doc.destroy() 抛 "doc.destroy is not a function"）。
+ */
+export async function countPdfPages(file: File): Promise<number> {
+  const buf = await file.arrayBuffer();
+  const task = pdfjsLib.getDocument({ data: buf });
+  try {
+    const doc = await task.promise;
+    return doc.numPages;
+  } finally {
+    await task.destroy();
+  }
+}
