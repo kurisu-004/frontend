@@ -345,7 +345,7 @@ function onSplitConfirm(): void {
   color: var(--text-secondary);
 }
 
-// 2026-08-27 T22：列设置工具条（与 PartListShell 同款）
+// 2026-08-27 T22：列设置工具条（与 ListShell 同款）
 .table-toolbar {
   display: flex;
   justify-content: flex-end;

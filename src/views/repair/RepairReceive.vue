@@ -87,7 +87,7 @@ function confirmCustomer(): void {
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 「操作」列不放进 defs（始终可见且按 tab 显隐）。其余 12 列走 v-for 拖动。
-// 2026-08-27 T16：补 prop / width / minWidth / align / sortable + ElTag 列走 cellRender(PartListShell 同款)。
+// 2026-08-27 T16：补 prop / width / minWidth / align / sortable + ElTag 列走 cellRender(ListShell 同款)。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'serial_no', label: '流水号', prop: 'serial_no', width: 100, sortable: false },

@@ -13,7 +13,7 @@
 // 设计要点：
 // - composable 只持有「数据 + 派生 + UI 状态变量」；dialog 可见性、submitting flag 等
 //   临时 UI 状态由 shell / dialog 组件持有。
-// - fetcher 让 fetch 自然抛出 → 顶层 shell 捕获提示（与 PartListShell 同款 T14p5 模式）。
+// - fetcher 让 fetch 自然抛出 → 顶层 shell 捕获提示（与 ListShell 同款 T14p5 模式）。
 //   但本页不强求该模式——详情页有「加载失败占位」的明确语义，所以 detail.value 失败时为 null。
 
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';

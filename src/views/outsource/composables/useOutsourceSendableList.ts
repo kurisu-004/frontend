@@ -124,7 +124,7 @@ export function useOutsourceSendableList(
   const { dangerous: confirmDangerous } = useConfirm();
 
   // ============ 列表 filter（持久化） ============
-  // 2026-08-31 双实例修复：pageSize 不再持久化（与 PartListShell 一致），
+  // 2026-08-31 双实例修复：pageSize 不再持久化（与 ListShell 一致），
   // 每次进入视图从 <PagedTable :default-page-size="20"> 起算。
   const sendableError = ref<string | null>(null);
   const sendableFilter = reactive({ keyword: '', customer_id: '' });

@@ -213,7 +213,7 @@
       </div>
     </div>
 
-    <!-- 2026-08-27 T23：列设置工具条（与 PartListShell / PartBatchMonitorCard 同款） -->
+    <!-- 2026-08-27 T23：列设置工具条（与 ListShell / PartBatchMonitorCard 同款） -->
     <div class="table-toolbar">
       <ColumnVisibilityPopover
         :defs="columnDefs_source"
@@ -282,7 +282,7 @@
           <span>新增零件</span>
         </el-button>
       </div>
-      <!-- 2026-08-27 T23：列设置工具条（与 PartListShell / PartBatchMonitorCard 同款） -->
+      <!-- 2026-08-27 T23：列设置工具条（与 ListShell / PartBatchMonitorCard 同款） -->
       <div class="table-toolbar">
         <ColumnVisibilityPopover
           :defs="columnDefs_standalone"
@@ -373,7 +373,7 @@
           <span>新增装配件</span>
         </el-button>
       </div>
-      <!-- 2026-08-27 T23：列设置工具条（与 PartListShell / PartBatchMonitorCard 同款） -->
+      <!-- 2026-08-27 T23：列设置工具条（与 ListShell / PartBatchMonitorCard 同款） -->
       <div class="table-toolbar">
         <ColumnVisibilityPopover
           :defs="columnDefs_assembly"

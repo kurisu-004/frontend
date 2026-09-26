@@ -1,4 +1,4 @@
-// src/components/three/useStepViewer.spec.ts
+// src/components/cad-viewer/useStepViewer.spec.ts
 //
 // 2026-09-20 新增：STEP 3D 预览器跨页共享状态单测。
 // 验证：模块级 ref 单例（多次 useStepViewer 调用共享同一份状态）、setter 生效、默认值符合预期。

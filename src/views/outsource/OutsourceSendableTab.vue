@@ -267,7 +267,7 @@ const {
 });
 
 // ============ 列可见性 + 列顺序拖动 ============
-// 2026-08-27 T16：补 prop / minWidth / align + ElTag / 多根 / 分支类型列走 cellRender(PartListShell 同款)。
+// 2026-08-27 T16：补 prop / minWidth / align + ElTag / 多根 / 分支类型列走 cellRender(ListShell 同款)。
 // 「图号」列原本是 <span + el-tag> 双根 → 必须用 <div> 包一层再 h()（cellRender 只接受单 VNode）。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
@@ -399,7 +399,7 @@ const tableRef = ref();
 
 // 持久化恢复（与原 shell onMounted 等价）
 // 2026-08-31 双实例修复：pageSize 不再持久化，每次进入视图从 defaultPageSize（20）起算。
-// 取舍依据与 PartListShell 一致：Vue 3.5 component proxy 会自动 unwrap 暴露的 ref，
+// 取舍依据与 ListShell 一致：Vue 3.5 component proxy 会自动 unwrap 暴露的 ref，
 // `sendablePagedRef.value.pageSize.value = N` 实际写入 number.value 抛 TypeError。
 onMounted(() => {
   // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈

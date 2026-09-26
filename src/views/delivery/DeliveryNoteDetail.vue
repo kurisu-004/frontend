@@ -23,10 +23,10 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 
-import PartPickerDialog from '@/components/delivery/PartPickerDialog.vue';
-import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue';
-import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue';
-import DeliverySubmitCandidateDialog from '@/components/delivery/DeliverySubmitCandidateDialog.vue';
+import PartPickerDialog from './components/PartPickerDialog.vue';
+import PrintPreviewDialog from './components/PrintPreviewDialog.vue';
+import BatchInspectionConfirmDialog from './components/BatchInspectionConfirmDialog.vue';
+import DeliverySubmitCandidateDialog from './components/DeliverySubmitCandidateDialog.vue';
 import { formatNoteEventLabel } from '@/types/deliveryNote';
 import type { AddPartsItem } from '@/api/deliveryNote';
 import type { BulkPassFailure, BulkPassItem } from '@/views/delivery/composables/useBulkPassInspection';

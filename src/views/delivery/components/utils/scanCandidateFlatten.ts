@@ -1,4 +1,4 @@
-// src/components/delivery/utils/scanCandidateFlatten.ts
+// src/views/delivery/components/utils/scanCandidateFlatten.ts
 //
 // 2026-08-31 抽出：DeliveryScanCandidateDialog 的纯函数（flatBatches +
 // filterTargetsByKind）独立成模块，便于单测。SFC 仍负责 el-dialog / el-table 装配。

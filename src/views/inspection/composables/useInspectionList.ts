@@ -4,16 +4,16 @@
 //
 // 持有「业务状态」（search / plannedDateRange / autoRefresh）+ fetcher +
 // restoreFilter；分页状态（items / total / loading / pageSize）由
-// <PartListShell> 内部 usePagedListQuery 持有，视图通过 listRef 拿到。
+// <ListShell> 内部 usePagedListQuery 持有，视图通过 listRef 拿到。
 //
 // 设计要点（2026-08-25）：
-// - fetcher 闭包 self.search / self.plannedDateRange，PartListShell 调用时只传
-//   { page, pageSize }。fetch 抛出后由 PartListShell.safeFetcher 捕获并写到
+// - fetcher 闭包 self.search / self.plannedDateRange，ListShell 调用时只传
+//   { page, pageSize }。fetch 抛出后由 ListShell.safeFetcher 捕获并写到
 //   内部 errorMsg ref，computed emptyText 显示给用户（T14p5）。
 // - 早期版本 try/catch 内吞了 e 再 return { items: [], total: 0 }，导致
 //   errorMsg 写给自己的 ref 但 shell 看不到，用户只能看到静态
 //   "当前无待品检零件"。T14p5 改为「让 fetch 抛出」，把错误回传交给 shell 收口。
-// - pageSize 持久化由 PartListShell 内部 useListStatePersist 收口（key =
+// - pageSize 持久化由 ListShell 内部 useListStatePersist 收口（key =
 //   `inspection_pending_paged`，与本 composable 的 filter 持久化互不冲突）。
 // - 本 composable 仅持久化 search / autoRefresh（key =
 //   `inspection_pending_filter`），plannedDateRange 跟随会话内（与旧 InspectionPending
@@ -32,7 +32,7 @@ export interface UseInspectionListReturn {
   plannedDateRange: Ref<[string, string] | null>;
   /** 自动刷新开关（持久化）；timer 由视图自管 */
   autoRefresh: Ref<boolean>;
-  /** 传给 <PartListShell :fetcher="fetcher">；fetch 失败抛错，由 shell.safeFetcher 接住 */
+  /** 传给 <ListShell :fetcher="fetcher">；fetch 失败抛错，由 shell.safeFetcher 接住 */
   fetcher: (params: PageQueryParams) => Promise<PageResult<PartItem>>;
   /** onMounted 调用一次：从 localStorage 恢复 search / autoRefresh */
   restoreFilter: () => void;
@@ -44,7 +44,7 @@ export function useInspectionList(): UseInspectionListReturn {
   const autoRefresh = ref(false);
 
   async function fetcher(params: PageQueryParams): Promise<PageResult<PartItem>> {
-    // fetch 抛错 → PartListShell.safeFetcher 接住并写到内部 errorMsg，
+    // fetch 抛错 → ListShell.safeFetcher 接住并写到内部 errorMsg，
     // 用户在 el-table 空态能看到原始错误信息（区分「队列空」/「后端挂了」）。
     const resp = await listInspectionBatches({
       keyword: search.keyword.trim() || undefined,
@@ -57,7 +57,7 @@ export function useInspectionList(): UseInspectionListReturn {
     return { items: resp.items, total: resp.total };
   }
 
-  // 持久化 search / autoRefresh（pageSize 由 PartListShell 单独持久化）
+  // 持久化 search / autoRefresh（pageSize 由 ListShell 单独持久化）
   const { restore } = useListStatePersist(
     'inspection_pending_filter',
     { search, autoRefresh },

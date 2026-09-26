@@ -20,7 +20,7 @@
     - reset                                    点「重置」时触发(由父组件决定重置策略)
     - reset-order                              点「重置列顺序」时触发
                                               (由父组件转发给 useColumnDrag.reset()，
-                                              仅 PartListShell 等具备列顺序持久化的壳组件用到)
+                                              仅 ListShell 等具备列顺序持久化的壳组件用到)
 -->
 <template>
   <el-popover
@@ -61,7 +61,7 @@
           >全不选</el-button
         >
         <el-button link size="small" @click="emitReset">重置</el-button>
-        <!-- 2026-08-27 新增：emit reset-order 由 PartListShell 监听并转发给 useColumnDrag.reset() -->
+        <!-- 2026-08-27 新增：emit reset-order 由 ListShell 监听并转发给 useColumnDrag.reset() -->
         <el-button link size="small" @click="emit('resetOrder')">重置列顺序</el-button>
       </div>
     </div>

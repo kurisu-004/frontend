@@ -88,7 +88,7 @@
 import { computed, ref, watch } from 'vue';
 import { Box, CircleCloseFilled, Loading, Select } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import HmiPickerCard from '@/components/HmiPickerCard.vue';
+import HmiPickerCard from './HmiPickerCard.vue';
 import { listProcesses } from '@/api/process';
 import type { Process } from '@/types/process';
 

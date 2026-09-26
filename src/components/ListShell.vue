@@ -1,5 +1,5 @@
 <!--
-  PartListShell.vue — 共用「过滤卡 + 列可见性 + 表格 + 分页 + 加急红底」壳（T14，
+  ListShell.vue — 共用「过滤卡 + 列可见性 + 表格 + 分页 + 加急红底」壳（T14，
   T14p5 修复 fetch 错误回传，T15 接入列顺序拖动）
 
   复用对象：
@@ -15,9 +15,9 @@
   - 视图通过 ref="listRef" 拿到：
       items / total / loading / pageSize / fetch / reset / onRefresh
   - Shell 内部：
-      - 列可见性 / 列顺序拖动 仍在 PartListShell 自管（持久化 key 与视图 filter 互不冲突）
+      - 列可见性 / 列顺序拖动 仍在 ListShell 自管（持久化 key 与视图 filter 互不冲突）
       - 分页 + 拉取 全部下放到子组件 <PagedTable>（其内部 usePagedListQuery 持状态）；
-        PartListShell 不再单独维护一份 usePagedListQuery，避免「两份实例 A/B」撕裂
+        ListShell 不再单独维护一份 usePagedListQuery，避免「两份实例 A/B」撕裂
         el-table 数据源与「共 N 条」展示。
       - safeFetcher 包装 props.fetcher：catch 写 errorMsg ref 后返回空结果，
                     成功清空 errorMsg 并把 total 落到本地 totalRef；
@@ -40,12 +40,12 @@
     共存。Task 3 会逐视图把 inline 列迁到 columnDefs.cellRender / columnDefs.headerRender。
 
   设计要点（2026-08-31 双实例修复）：
-  - 旧实现 PartListShell 自己 usePagedListQuery（实例 A），PagedTable 又自己
+  - 旧实现 ListShell 自己 usePagedListQuery（实例 A），PagedTable 又自己
     usePagedListQuery（实例 B）。el-table :data 绑 PagedTable slot 的 items（实例 B），
     但父视图 fetchList() 调 listRef.fetch() 实际更新的是 A。结果 B 永远空，
     表内「当前无待品检零件」，而 filter 卡「共 N 条」（A.total）显示正确 →
     撕裂的诊断特征。
-  - 新实现：去掉 PartListShell 的 usePagedListQuery，统一从 PagedTable 实例拿 refs。
+  - 新实现：去掉 ListShell 的 usePagedListQuery，统一从 PagedTable 实例拿 refs。
   - PagedTable 已 defineExpose({ items, loading, page, pageSize, fetch, reset })，
     不暴露 total。template 的「共 N 条」靠 safeFetcher 截留 total 到本地 totalRef
     （避免再改 PagedTable.vue / 视图侧代码）。
@@ -83,7 +83,7 @@
     </div>
 
     <!--
-      关键修复：ref="pagedTableRef" 让 PartListShell 拿到 PagedTable 实例；
+      关键修复：ref="pagedTableRef" 让 ListShell 拿到 PagedTable 实例；
       其 defineExpose 的 items / loading / fetch / reset 是 el-table 真正绑定的数据源。
     -->
     <PagedTable ref="pagedTableRef" :fetcher="safeFetcher" :default-page-size="defaultPageSize">
@@ -180,7 +180,7 @@ import {
 } from '@/composables/useColumnVisibility';
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import type {
-  // 2026-08-31：usePagedListQuery 不再由 PartListShell 直接持有（避免双实例撕裂），
+  // 2026-08-31：usePagedListQuery 不再由 ListShell 直接持有（避免双实例撕裂），
   // 但 PageQueryParams / PageResult 仍用作 fetcher 签名类型。
   PageQueryParams,
   PageResult,
@@ -188,7 +188,7 @@ import type {
 
 // 2026-08-31：PagedTable.vue 的 defineExpose({ items, loading, page, pageSize, fetch, reset })
 // 不会被 Vue 的 InstanceType<typeof PagedTable> 透传到 CreateComponentPublicInstance 上，
-// 手动定义一份暴露类型让 PartListShell 透传时类型正确（与 PagedTable 保持同步）。
+// 手动定义一份暴露类型让 ListShell 透传时类型正确（与 PagedTable 保持同步）。
 interface PagedTableExposed<T> {
   items: Ref<T[]>;
   loading: Ref<boolean>;
@@ -216,7 +216,7 @@ const props = withDefaults(
 
 // 2026-08-25 T14p5：fetch 错误回传
 // 旧 monolith 视图在 computed emptyText 里渲染 fetch 错误，方便用户区分
-// 「队列空」与「后端挂了」。T14 PartListShell 静态 emptyText 把这个反馈丢了，
+// 「队列空」与「后端挂了」。T14 ListShell 静态 emptyText 把这个反馈丢了，
 // 这里在 shell 内包装 fetcher：catch → 写 errorMsg，success → 清空；
 // computed emptyText 优先用 errorMsg，否则用 prop。
 //
@@ -261,12 +261,12 @@ const drag = (() => useColumnDrag(props.columnDefs, { listKey: props.listKey }))
 
 // ============ 2026-08-31 双实例修复：让 PagedTable 成为状态唯一来源 ============
 //
-// 原实现：PartListShell 自己 usePagedListQuery<T>(safeFetcher)（实例 A），又通过
+// 原实现：ListShell 自己 usePagedListQuery<T>(safeFetcher)（实例 A），又通过
 // <PagedTable> 间接 new 了一份（实例 B）。el-table :data 绑的是 PagedTable slot-scope
 // 的 items（实例 B），但父视图调 listRef.fetch() 实际更新的是 A。结果 B 永远空，
 // 表内「当前无待品检零件」，filter 卡的「共 N 条」（A.total）反而是对的 → 撕裂。
 //
-// 新实现：去掉 PartListShell 的 usePagedListQuery；通过 ref 拿 PagedTable 实例，
+// 新实现：去掉 ListShell 的 usePagedListQuery；通过 ref 拿 PagedTable 实例，
 // 把 PagedTable 已 defineExpose 的 refs 透传出去。usePagedListQuery 仍 import 是因为
 // 其 PageQueryParams / PageResult 类型仍被 fetcher 签名引用（且为未来 shell 内
 // 调试 / 测试需要保留符号入口，不删除 import 减少 cleanup 风险）。

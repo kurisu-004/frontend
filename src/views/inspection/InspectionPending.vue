@@ -5,12 +5,12 @@
   - 每行两个动作：「品检通过」「指定工序」
   - 指定工序 → 弹出 el-dialog 选择目标 PRODUCTION 货架（el-radio-group）
   - 加急行整行红底 #fde2e2（与 PartsList 同款）
-  - 2026-08-25 T14：filter 卡 + 列可见性 + 表格 + 分页 收口到 <PartListShell>；
+  - 2026-08-25 T14：filter 卡 + 列可见性 + 表格 + 分页 收口到 <ListShell>；
     列定义 / 操作列仍在本文件；状态 / fetcher 走 useInspectionList composable。
 -->
 <template>
   <div class="inspection-pending">
-    <PartListShell
+    <ListShell
       ref="listRef"
       :column-defs="columnDefs"
       :fetcher="fetcher"
@@ -63,9 +63,9 @@
         </el-checkbox>
       </template>
 
-      <!-- 2026-08-27 T15：列定义全部走 columnDefs（PartListShell 自管 v-for 渲染）；
+      <!-- 2026-08-27 T15：列定义全部走 columnDefs（ListShell 自管 v-for 渲染）；
            不再写默认 slot。操作列放在 columnDefs 末尾。 -->
-    </PartListShell>
+    </ListShell>
 
     <!-- 品检通过对话框（2026-07-29：带数量；部分通过后端先拆再过） -->
     <el-dialog
@@ -435,7 +435,7 @@ import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue';
 import { ElButton, ElMessage } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import { RouterLink, useRouter } from 'vue-router';
-import PartListShell from '@/components/PartListShell.vue';
+import ListShell from '@/components/ListShell.vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import { useConfirm } from '@/composables/useConfirm';
 import { useDialogSize } from '@/composables/useDialogSize';
@@ -463,7 +463,7 @@ interface RowState extends PartItem {
 
 // ============ T14：列表状态（filter / fetcher）+ 列可见性 ============
 // 2026-08-27 T15：列定义全部走 columnDefs 配置数组（之前写在 template 默认 slot 的内联列已迁出）。
-// 列可见性由 PartListShell 内部 useColumnVisibility 持有；PartListShell 自管 v-for 渲染，
+// 列可见性由 ListShell 内部 useColumnVisibility 持有；ListShell 自管 v-for 渲染，
 // 自定义单元格通过 cellRender(scope) 注入。操作列也放进 defs，draggable=false 防误拖。
 const router = useRouter();
 
@@ -640,14 +640,14 @@ const columnDefs: ColumnDef[] = [
 
 const { search, plannedDateRange, autoRefresh, fetcher, restoreFilter } = useInspectionList();
 
-// PartListShell 的 ref；扫码匹配遍历当前页 items 用 listRef.value.items.value。
+// ListShell 的 ref；扫码匹配遍历当前页 items 用 listRef.value.items.value。
 const listRef = ref();
 
 function rowClassName({ row }: { row: PartItem; rowIndex: number }): string {
   return row.is_urgent ? 'row-urgent' : '';
 }
 
-// 「刷新」按钮 = 列表回到第 1 页再拉（PartListShell.onRefresh = reset()）
+// 「刷新」按钮 = 列表回到第 1 页再拉（ListShell.onRefresh = reset()）
 async function onRefresh(): Promise<void> {
   await listRef.value?.onRefresh();
 }
@@ -1042,7 +1042,7 @@ async function onFailConfirm(): Promise<void> {
 }
 
 onMounted(() => {
-  // 先尝试恢复 localStorage 中的搜索条件 / 自动刷新（pageSize 由 PartListShell 自行恢复）
+  // 先尝试恢复 localStorage 中的搜索条件 / 自动刷新（pageSize 由 ListShell 自行恢复）
   restoreFilter();
   if (autoRefresh.value) {
     // 重新挂载定时器

@@ -1,4 +1,4 @@
-// src/components/three/__tests__/StepViewer.spec.ts
+// src/components/cad-viewer/__tests__/StepViewer.spec.ts
 //
 // 2026-09-20 新增：StepViewer 壳组件纯函数 / lifecycle 单测。
 //

@@ -47,10 +47,10 @@ import { useDeliveryScanSubmission } from './composables/useDeliveryScanSubmissi
 import DeliveryScanBar from './components/DeliveryScanBar.vue';
 import DeliveryGroupPanel from './components/DeliveryGroupPanel.vue';
 import DeliveryDraftCard from './components/DeliveryDraftCard.vue';
-import BatchInspectionConfirmDialog from '@/components/delivery/BatchInspectionConfirmDialog.vue';
-import PrintPreviewDialog from '@/components/delivery/PrintPreviewDialog.vue';
-import DeliveryScanCandidateDialog from '@/components/delivery/DeliveryScanCandidateDialog.vue';
-import DeliverySubmitCandidateDialog from '@/components/delivery/DeliverySubmitCandidateDialog.vue';
+import BatchInspectionConfirmDialog from './components/BatchInspectionConfirmDialog.vue';
+import PrintPreviewDialog from './components/PrintPreviewDialog.vue';
+import DeliveryScanCandidateDialog from './components/DeliveryScanCandidateDialog.vue';
+import DeliverySubmitCandidateDialog from './components/DeliverySubmitCandidateDialog.vue';
 
 const router = useRouter();
 

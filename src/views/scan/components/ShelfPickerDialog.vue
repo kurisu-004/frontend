@@ -91,7 +91,7 @@
 import { ref, watch } from 'vue';
 import { Box, CircleCloseFilled, Loading, Select } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import HmiPickerCard from '@/components/HmiPickerCard.vue';
+import HmiPickerCard from './HmiPickerCard.vue';
 import { listShelvesForReturn, listShelvesForInspection } from '@/api/shelves';
 import type { ShelfForReturn } from '@/types/shelf';
 

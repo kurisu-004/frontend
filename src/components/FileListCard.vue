@@ -241,7 +241,7 @@ import {
 import type { UploadFile } from 'element-plus';
 import PdfViewer from './PdfViewer.vue';
 // 2026-09-20 PR step-viewer-integration：3D 模型内嵌预览组件 + 文件类型判定
-import StepViewer from './three/StepViewer.vue';
+import StepViewer from './cad-viewer/StepViewer.vue';
 import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
 import { deletePartFile, fetchPartFileContent, getPartFileDownloadUrl } from '@/api/parts/file';
 import { printPartDrawing } from '@/api/parts';

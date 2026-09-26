@@ -528,7 +528,7 @@ function onManualFormChange(v: FormState): void {
   }
 }
 
-// 2026-08-27 T21：列设置工具条（与 PartListShell 同款）
+// 2026-08-27 T21：列设置工具条（与 ListShell 同款）
 .table-toolbar {
   display: flex;
   justify-content: flex-end;

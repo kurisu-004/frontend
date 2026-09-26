@@ -61,7 +61,7 @@ const { restore: restoreSentPartsFilter } = useListStatePersist('outsource_compa
 });
 
 // ============ 列可见性 + 列顺序拖动 ============
-// 2026-08-27 T16：补 prop / minWidth / align + sortable + cellRender(PartListShell 同款)。
+// 2026-08-27 T16：补 prop / minWidth / align + sortable + cellRender(ListShell 同款)。
 // 单元格内含行内编辑 el-input-number / el-switch → 走 cellRender 而非 formatter（formatter 只返回字符串）。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [

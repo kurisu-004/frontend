@@ -773,7 +773,7 @@ async function onConfirm(): Promise<void> {
   color: #909399;
 }
 
-// 2026-08-27 T25：列设置工具条（与 PartListShell 同款）
+// 2026-08-27 T25：列设置工具条（与 ListShell 同款）
 .table-toolbar {
   display: flex;
   justify-content: flex-end;

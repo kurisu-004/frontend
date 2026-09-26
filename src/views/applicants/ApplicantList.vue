@@ -181,7 +181,7 @@ import { formatDateTime } from '@/utils/date';
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 「#」和「操作」列不放进 defs → 始终可见,且不出现在列设置弹窗。
-// 2026-08-27 T15：补 prop / minWidth / align + 文本列走 cellRender(PartListShell 同款)。
+// 2026-08-27 T15：补 prop / minWidth / align + 文本列走 cellRender(ListShell 同款)。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   { key: 'name', label: '姓名', prop: 'name', minWidth: 160, align: 'center' },

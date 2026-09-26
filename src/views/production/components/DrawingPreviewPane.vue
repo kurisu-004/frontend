@@ -90,7 +90,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Loading, Tools } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
-import StepViewer from '@/components/three/StepViewer.vue';
+import StepViewer from '@/components/cad-viewer/StepViewer.vue';
 import type { PartListItem } from '@/types/parts';
 import { usePartFiles } from '../../parts/detail/composables/usePartFiles';
 import { fetchPartFileContent } from '@/api/parts/file';

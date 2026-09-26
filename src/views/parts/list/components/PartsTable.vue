@@ -357,7 +357,7 @@ function onDetail(row: PartListItem): void {
   background-color: #fbcaca !important;
 }
 
-// 2026-08-27 Task 6：列顺序拖动视觉反馈（与 PartListShell 同款藏青/蓝/浅蓝系）。
+// 2026-08-27 Task 6：列顺序拖动视觉反馈（与 ListShell 同款藏青/蓝/浅蓝系）。
 // sortablejs ghost/chosen/drag 三态分别对应：被拖列（半透明）/ 落点（蓝填充）/ 抓取副本（白）。
 :deep(.col-no-drag) {
   cursor: default !important;

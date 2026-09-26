@@ -75,7 +75,7 @@ const existingSet = computed(() => new Set(props.existingBatchIds ?? []));
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 「selection 勾选列」「入单数量」操作列不放进 defs → 始终可见
-// 2026-08-27 T17：补 prop / minWidth / align + 文本列 / ElTag 列走 cellRender(PartListShell 同款)。
+// 2026-08-27 T17：补 prop / minWidth / align + 文本列 / ElTag 列走 cellRender(ListShell 同款)。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs: ColumnDef[] = [
   {

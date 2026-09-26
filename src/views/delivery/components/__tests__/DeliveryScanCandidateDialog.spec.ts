@@ -1,4 +1,4 @@
-// src/components/delivery/__tests__/DeliveryScanCandidateDialog.spec.ts
+// src/views/delivery/components/__tests__/DeliveryScanCandidateDialog.spec.ts
 //
 // 2026-08-31 新增：路线 B 候选弹窗纯函数单测（flatBatches + filterTargetsByKind）。
 // 覆盖：A 单组 / B 单组 / A+B 混合 / 空 targets；filter 仅保留指定 kind + selected。

@@ -206,7 +206,7 @@ export function useOutsourceQuoteTable(
   // 2026-08-31：移除 pageSize 持久化。PagedTable 暴露的 pageSize 是 Ref<number>，
   //   Vue 3.5 component proxy 自动 unwrap → 访问得到裸 number，写入会抛
   //   "Cannot create property 'value' on number 'X'"。pageSize 重置到默认值
-  //   是可接受的 trade-off，与 PartListShell / DeliveryNoteList / UserList 一致。
+  //   是可接受的 trade-off，与 ListShell / DeliveryNoteList / UserList 一致。
   const { restore: restoreQuoteFilter } = useListStatePersist(
     'outsource_quote_list',
     { search, sortBy, sortDir },

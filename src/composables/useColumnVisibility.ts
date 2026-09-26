@@ -51,7 +51,7 @@ export interface ColumnDef {
   type?: 'selection' | 'index' | 'expand' | string;
   /** el-table-column fixed：'left' / 'right' / true 时不可拖动 */
   fixed?: 'left' | 'right' | boolean;
-  /** 2026-08-27 新增：el-table-column 标准属性透传。PartListShell 用 v-for 渲染时
+  /** 2026-08-27 新增：el-table-column 标准属性透传。ListShell 用 v-for 渲染时
    *  从 ColumnDef 上读这些字段，再绑到 <el-table-column>。缺省时回落到 d.key。
    *  这些字段是「column 元数据」，不参与可见性 / 顺序语义。 */
   prop?: string;
@@ -74,7 +74,7 @@ export interface ColumnDef {
   resizable?: boolean;
   className?: string;
   labelClassName?: string;
-  /** 2026-08-27 新增：自定义单元格渲染函数。PartListShell 的 v-for 列模板里
+  /** 2026-08-27 新增：自定义单元格渲染函数。ListShell 的 v-for 列模板里
    *  通过 `<component :is="d.cellRender(scope)" />` 渲染返回值。scope 形参与
    *  el-table-column 默认 slot 保持一致（{ row, column, $index }）。
    *  列元数据为「列定义」的纯数据，所以 row/column 都用 unknown；具体视图在

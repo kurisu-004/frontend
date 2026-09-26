@@ -11,12 +11,12 @@
       调 POST /parts/{id}/release-from-programming（PROGRAMMING → IN_PROCESS）。
   - 加急行整行红底 #fde2e2（与 PartsList / InspectionPending 同款）。
   - 自动刷新（5min）按需勾选。
-  - 2026-08-25 T14：filter 卡 + 列可见性 + 表格 + 分页 收口到 <PartListShell>；
+  - 2026-08-25 T14：filter 卡 + 列可见性 + 表格 + 分页 收口到 <ListShell>；
     列定义 / 操作列仍在本文件；状态 / fetcher 走 usePendingProgrammingList composable。
 -->
 <template>
   <div class="pending-programming">
-    <PartListShell
+    <ListShell
       ref="listRef"
       :column-defs="columnDefs"
       :fetcher="fetcher"
@@ -56,9 +56,9 @@
         </el-checkbox>
       </template>
 
-      <!-- 2026-08-27 T15：列定义全部走 columnDefs（PartListShell 自管 v-for 渲染）；
+      <!-- 2026-08-27 T15：列定义全部走 columnDefs（ListShell 自管 v-for 渲染）；
            不再写默认 slot。操作列放在 columnDefs 末尾。 -->
-    </PartListShell>
+    </ListShell>
 
     <!-- 下发到 CNC 货架 对话框（PROGRAMMING → IN_PROCESS） —— 与 PartDetail 同款 -->
     <el-dialog
@@ -138,7 +138,7 @@ import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue';
 import { ElButton, ElMessage } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import { RouterLink, useRouter } from 'vue-router';
-import PartListShell from '@/components/PartListShell.vue';
+import ListShell from '@/components/ListShell.vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { releaseFromProgramming } from '@/api/parts';
@@ -158,7 +158,7 @@ interface RowState extends PartListItem {
 
 // ============ T14：列表状态（filter / fetcher）+ 列可见性 ============
 // 2026-08-27 T15：列定义全部走 columnDefs 配置数组（之前写在 template 默认 slot 的内联列已迁出）。
-// 列可见性由 PartListShell 内部 useColumnVisibility 持有；PartListShell 自管 v-for 渲染，
+// 列可见性由 ListShell 内部 useColumnVisibility 持有；ListShell 自管 v-for 渲染，
 // 自定义单元格通过 cellRender(scope) 注入。操作列也放进 defs，draggable=false 防误拖。
 const router = useRouter();
 
@@ -283,14 +283,14 @@ const columnDefs: ColumnDef[] = [
 
 const { search, autoRefresh, fetcher, restoreFilter } = usePendingProgrammingList();
 
-// PartListShell 的 ref；后续可按需读 items.value / total.value。
+// ListShell 的 ref；后续可按需读 items.value / total.value。
 const listRef = ref();
 
 function rowClassName({ row }: { row: PartListItem; rowIndex: number }): string {
   return row.is_urgent ? 'row-urgent' : '';
 }
 
-// 「刷新」按钮 = 列表回到第 1 页再拉（PartListShell.onRefresh = reset()）
+// 「刷新」按钮 = 列表回到第 1 页再拉（ListShell.onRefresh = reset()）
 async function onRefresh(): Promise<void> {
   await listRef.value?.onRefresh();
 }
@@ -391,7 +391,7 @@ async function onReleaseConfirm(): Promise<void> {
 }
 
 onMounted(() => {
-  // 先尝试恢复 localStorage 中的搜索条件 / 自动刷新（pageSize 由 PartListShell 自行恢复）
+  // 先尝试恢复 localStorage 中的搜索条件 / 自动刷新（pageSize 由 ListShell 自行恢复）
   restoreFilter();
   if (autoRefresh.value) {
     // 重新挂载定时器
