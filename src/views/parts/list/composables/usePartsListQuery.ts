@@ -2,15 +2,28 @@
 //
 // 2026-08-22 从 PartsList.vue 抽出：列表查询状态机（search/items/total/loading/sort/page）。
 //
+// 2026-09-26 重构（B 任务）：手写状态机 → TanStack Query。
+//   - items / total / loading / errorMsg 派生自 useQuery.data / .isFetching / .error；
+//   - fetchList 保留为 refetch 别名（外部调用方零改动）；
+//   - beforeSearch / afterFetch 横切钩子语义保持：beforeSearch 在 onSearch 同步调，
+//     afterFetch 由 watch(data, ..., { flush: 'post' }) 承接（DOM 更新后触发，
+//     等价于原 fetchList 末尾 nextTick 恢复勾选时机）；
+//   - enabled 闸门：restored 默认 false，restoreState 末尾置 true，**避免 store
+//     实例化即自动 fetch**（与 A 任务 useCustomersQuery 不一样——A 任务所有 caller
+//     都是 useCustomersQuery() 立即消费 data，本任务 caller 要等路由守卫 +
+//     URL status + localStorage 恢复完后才允许 fetch，所以加闸门）。
+//
 // 职责：
-// - 持有 search reactive + items/total/loading/page/pageSize/sort refs；
+// - 持有 search reactive + page/pageSize/sortBy/sortDir ref；
 // - buildParams / fetchList / onSearch / onReset / onSortChange；
 // - restoreState：URL ?status= 注入或 localStorage 恢复；
-// - 横切 beforeSearch / afterFetch：供其他 composable（如 usePartsColumnFilters）在
+// - 横切 beforeSearch / afterFetch：供其他 composable（如 usePartBatchSelection）在
 //   fetch 前后插入逻辑（同步 draft / 调 snapshot / 恢复勾选等）。
 
-import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
+import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { keepPreviousData, useQuery } from '@tanstack/vue-query';
+import { listParts } from '@/api/parts';
 import type { ListPartsParams } from '@/api/parts';
 import {
   ORDER_STATUS_LABEL,
@@ -23,6 +36,8 @@ import {
   type SortDir,
 } from '@/types/parts';
 import { useListFilterPersist } from '@/composables/useListFilterPersist';
+import { qk } from '@/composables/queries/keys';
+import { partListResultSchema, type PartListResultSchema } from '@/composables/queries/schemas';
 
 /** 搜索状态 shape（原 PartsList SearchState 改名 export）。 */
 export interface PartsSearchState {
@@ -98,13 +113,15 @@ export interface UsePartsListQueryOptions {
   isCncProgrammer: boolean;
 }
 
-/** 2026-09-21 显式返回类型。 */
+/** 2026-09-21 显式返回类型。2026-09-26（B 任务）改造：items/total/errorMsg 改为
+ *  ComputedRef（派生自 useQuery.data / .error）；loading 仍是 Ref<boolean>
+ *  （vue-query isFetching 已是 Ref）。 */
 export interface UsePartsListQueryReturn {
   search: PartsSearchState;
-  items: Ref<PartListItem[]>;
-  total: Ref<number>;
+  items: ComputedRef<PartListItem[]>;
+  total: ComputedRef<number>;
   loading: Ref<boolean>;
-  errorMsg: Ref<string | null>;
+  errorMsg: ComputedRef<string | null>;
   page: Ref<number>;
   pageSize: Ref<number>;
   sortBy: Ref<PartSortKey>;
@@ -113,6 +130,8 @@ export interface UsePartsListQueryReturn {
   tableKey: ComputedRef<string>;
   defaultSort: ComputedRef<{ prop: string; order: 'ascending' | 'descending' }>;
   emptyText: ComputedRef<string>;
+  /** 2026-09-26（B 任务）：保留为 useQuery.refetch 的 async 包装——外部 caller
+   *  （PartsList.vue 的 PurchaseOrderImportDialog.success、测试）零改动可用。 */
   fetchList: () => Promise<void>;
   onSearch: () => void;
   onReset: () => void;
@@ -132,14 +151,18 @@ export interface UsePartsListQueryReturn {
 export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQueryReturn {
   // ============ 状态 ============
   const search = reactive<PartsSearchState>(initialPartsSearch(opts.isCncProgrammer));
-  const items = ref<PartListItem[]>([]);
-  const total = ref(0);
-  const loading = ref(false);
-  const errorMsg = ref<string | null>(null);
   const page = ref(1);
   const pageSize = ref(20);
   const sortBy = ref<PartSortKey>('PLANNED_DELIVERY_DATE');
   const sortDir = ref<SortDir>('ASC');
+
+  // 2026-09-26（B 任务）enabled 闸门：restored 默认 false，restoreState 末尾置 true。
+  // 用途：避免 store 实例化即自动 fetch——caller（PartsList onMounted）要先决定：
+  //   - URL ?status= 注入 → 同步改 search.statuses，触发 queryKey 变化，enabled 一开
+  //     就 fetch 一次（首屏带 status）；
+  //   - localStorage 恢复 → 同理先改 search 后再开 enabled。
+  // 不加闸门会让 store 构造时的默认 search 与开闸后的持久化 search 各 fetch 一次。
+  const restored = ref(false);
 
   // ============ 横切钩子 ============
   // 其他 composable 通过 register* 注入 fetch 前后的逻辑。
@@ -189,8 +212,6 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
     order: sortDir.value === 'ASC' ? 'ascending' : 'descending',
   }));
 
-  const emptyText = computed(() => errorMsg.value ?? '暂无符合条件的零件');
-
   // ============ 持久化 ============
   // 2026-08-22：clearPartsFilter 在 PartsList 旧代码里解构了 clear 但从未调用，是死代码
   // （已 grep 确认模板/逻辑均未引用），此处不导出 clear。
@@ -202,7 +223,7 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
       pageSize,
     });
 
-  // ============ buildParams / fetchList ============
+  // ============ buildParams ============
   function buildParams(): ListPartsParams {
     return {
       customer_id: search.customerId || undefined,
@@ -256,26 +277,75 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
     };
   }
 
+  // ============ 主查询 useQuery ============
+  // 2026-09-26（B 任务）：listParts + Zod parse → useQuery。
+  //   - queryKey 走 qk.partsList(buildParams())；buildParams 已经是 buildParams，
+  //     useQuery 用 computed 包一层让响应式依赖（page / sort / search）变化时自动
+  //     refetch（key 工厂内部不再包 computed —— 这里我们直接传 computed 给 queryKey，
+  //     vue-query 支持）；
+  //   - placeholderData: keepPreviousData —— 切页 / 改筛选时保留上一页 items，
+  //     避免表格闪白屏（与原 fetchList 同步设 items 行为一致）；
+  //   - enabled: restored —— 闸门（见上）；
+  //   - queryFn 走 Zod parse 后强类型，响应包络 / 字段漂移会直接抛 ZodError；
+  //   - fetchList 保留为 refetch 别名（见下）。
+  const listQuery = useQuery<
+    PartListResultSchema,
+    Error,
+    PartListResultSchema,
+    ReturnType<typeof qk.partsList>
+  >({
+    queryKey: computed(() => qk.partsList(buildParams())),
+    queryFn: async ({ queryKey }) => {
+      const params = queryKey[2] as ListPartsParams;
+      return partListResultSchema.parse(await listParts(params));
+    },
+    enabled: restored,
+    placeholderData: keepPreviousData,
+  });
+
+  // ============ fetchList 别名 ============
+  // 2026-09-26（B 任务）：保留 fetchList() => Promise<void> 签名作为 refetch 别名。
+  // - PartsList.vue 的 PurchaseOrderImportDialog.success 调 store.query.fetchList；
+  // - usePartInlineEdit / usePartDispatch 写操作成功后调 deps.fetchList 刷新；
+  // - 测试用例 await q.fetchList() 驱动 listParts。
+  // 全部走 refetch，不重新写 queryKey（refetch 用当前 queryKey，符合 caller 期望）。
   async function fetchList(): Promise<void> {
-    loading.value = true;
-    errorMsg.value = null;
-    try {
-      // 动态 import 避免循环依赖（parts.ts → http.ts → 业务模块）
-      const { listParts } = await import('@/api/parts');
-      const resp = await listParts(buildParams());
-      items.value = resp.items;
-      total.value = resp.total;
-      // 批量模式下：剔除已不在当前页的失效勾选 + 恢复 UI（2026-07-22 跨页持久化）
-      afterFetch?.();
-    } catch (e) {
-      items.value = [];
-      total.value = 0;
-      errorMsg.value = (e as Error).message ?? '查询失败';
-      ElMessage.error(errorMsg.value);
-    } finally {
-      loading.value = false;
-    }
+    await listQuery.refetch();
   }
+
+  // ============ 派生：items / total / loading / errorMsg ============
+  // 2026-09-26（B 任务）：全部派生自 listQuery。loading 仍走 isFetching（含初次 fetch
+  // + 后续 refetch）；errorMsg 把 Error.message 字符串化。
+  const items = computed<PartListItem[]>(() => {
+    const data = listQuery.data.value;
+    return data ? (data.items as PartListItem[]) : [];
+  });
+  const total = computed<number>(() => listQuery.data.value?.total ?? 0);
+  const loading = listQuery.isFetching;
+  const errorMsg = computed<string | null>(() => {
+    const e = listQuery.error.value;
+    return e ? e.message : null;
+  });
+
+  // ============ ElMessage 错误展示 ============
+  // 2026-09-26（B 任务）：原 fetchList catch 里 ElMessage.error(errorMsg)。
+  // 改造后由 watch(error) 触发；默认 watch 在 null→new Error 时会触发（vue-query 的
+  // ref 切换可见）。
+  watch(errorMsg, (msg) => {
+    if (msg) ElMessage.error(msg);
+  });
+
+  // ============ afterFetch 钩子 ============
+  // 2026-09-26（B 任务）：原 fetchList 末尾同步调 afterFetch() 恢复勾选。
+  // 改造后用 watch(listQuery.data, ..., { flush: 'post' }) —— data 变化时 DOM
+  // 更新后再触发，等价于原「fetch 完成 + restoreTableSelection 内部 nextTick」时机。
+  watch(
+    () => listQuery.data.value,
+    () => {
+      afterFetch?.();
+    },
+    { flush: 'post' },
+  );
 
   // ============ 事件处理 ============
   const onSearch = (): void => {
@@ -299,7 +369,8 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
     if (!prop || !order) return;
     sortBy.value = PART_SORT_PROP_MAP[prop] ?? 'PLANNED_DELIVERY_DATE';
     sortDir.value = order === 'ascending' ? 'ASC' : 'DESC';
-    void fetchList();
+    // 2026-09-26（B 任务）：原 onSortChange 末尾 void fetchList()；现 queryKey
+    // 变化自动 refetch（vue-query 内置），不再手动调。
   }
 
   // 2026-07-29 PR-fix-0.2.0：重置只清两个查询框 + 三个日期区间 + 两个空白筛选，保留
@@ -362,13 +433,20 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
   // ============ restoreState ============
   // 2026-08-22 拆分：onMounted 的恢复逻辑搬到这里，view 负责触发 fetchList 与 el-table sort()。
   // 优先级：URL ?status=PENDING 注入 > localStorage 恢复。
+  // 2026-09-26（B 任务）：两条分支末尾都 restored = true（开闸），让 useQuery
+  // 在 store 实例化时不会自动 fetch（避免「默认参数首屏 + 持久化参数再屏」双 fetch）。
   function restoreState(queryStatus: unknown): void {
     if (typeof queryStatus === 'string' && queryStatus in ORDER_STATUS_LABEL) {
       search.statuses = [queryStatus as OrderStatus];
+      restored.value = true;
       return;
     }
     const persisted = restoreStatePersist();
-    if (!persisted) return;
+    if (!persisted) {
+      // 没有持久化快照：search / sort 走初始默认值，仅开闸让 useQuery 用默认参数 fetch
+      restored.value = true;
+      return;
+    }
 
     search.keyword = persisted.search.keyword ?? search.keyword;
     // 2026-08-20：drawingNo / name 旧快照缺失走 '' 兜底。
@@ -413,6 +491,8 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
         ? (persisted.sortDir as SortDir)
         : 'ASC';
     pageSize.value = persisted.pageSize;
+    // 持久化恢复完毕，开闸 → useQuery 触发首次 fetch
+    restored.value = true;
   }
 
   return {
@@ -428,7 +508,7 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
     statusOptions,
     tableKey,
     defaultSort,
-    emptyText,
+    emptyText: computed(() => errorMsg.value ?? '暂无符合条件的零件'),
     fetchList,
     onSearch,
     onReset,

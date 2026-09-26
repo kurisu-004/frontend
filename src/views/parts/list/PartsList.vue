@@ -141,6 +141,14 @@
 //
 // 不再 import 任何业务 composable 与 ColumnDef — 全部从 store 取。
 // 移除所有手机适配代码（ResponsiveList 卡片视图、el-drawer 移动筛选抽屉等）。
+//
+// 2026-09-26 重构（B 任务）：壳进一步瘦身 ——
+//   - 删除 suppressPaginationWatch 旗标 + onMounted 显式 fetchList()：
+//     useQuery enabled 闸门在 store.query.restoreState() 末尾置 true，自动 fetch；
+//   - 删除 store.filters.loadNextProcessOptions()（useProcessesQuery 自动 fetch）：
+//     A 任务已把 nextProcessList 切到共享 useQuery；
+//   - 分页 v-model 改动直接改 page / pageSize ref → queryKey 自动 refetch，
+//     唯一需要补的 watcher 是「pageSize 变化且 page>1 → page=1」（保持原语义）。
 
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -171,28 +179,21 @@ const iframeRef = ref<HTMLIFrameElement | null>(null);
 // ============ 采购订单 Excel 导入对话框可见性 ============
 const orderImportVisible = ref(false);
 
-// ============ 分页变化驱动 fetch ============
-// 2026-09-16 修复：EP 2.14.2 弃用 @current-change / @size-change（推荐改用 v-model + watch）。
-// 这里 watch [page, pageSize] 任一变化 → 触发 fetchList；pageSize 变化时先把 page 复位到 1
-// （保持原 onPageSizeChange 语义），page=1 的赋值会让本 watcher 再触发一次，
-// 第二次回调命中 page-only 分支并 fetch。
-// 首屏 fetch 仍由 onMounted 负责，本 watch 用默认 immediate:false，不重复触发。
-//
-// 2026-09-16 续：onMounted 期间 restoreState 可能同步改 pageSize（持久化场景），
-// 触发的 watcher 入队后会与下方 fetchList() 撞车（双 fetch）。suppress 旗标在
-// restoreState + nextTick 期间生效，让 watcher 回调直接 return，再放行 fetch。
-let suppressPaginationWatch = false;
+// ============ pageSize 变化时 page 复位（保持原 onPageSizeChange 语义）============
+// 2026-09-26（B 任务）：原 onMounted 内显式 fetchList + suppressPaginationWatch 整套
+// 已删 —— useQuery 闸门（store.query.restoreState 末尾 enabled=true）接管首屏 fetch。
+// 这里只保留「pageSize 变化且 page>1 → page=1」的语义：page=1 会让 queryKey 自动
+// refetch，无需手动调 fetchList。
+// 注意：template 里 v-model 走 deep proxy 自动解包，store.query.pageSize 已是 number；
+// 但 watch 源必须在 ref / reactive 上才能被 vue 追踪，不能直接 watch 一个 number。
+// 解法：watch 源用 getter 返回 store.query.pageSize（被 vue 标记为响应式追踪对象），
+// 回调拿到 number 类型。
 watch(
-  () => [store.query.page, store.query.pageSize] as const,
-  ([newPage, newSize], [_oldPage, oldSize]) => {
-    if (suppressPaginationWatch) return;
-    if (oldSize === undefined) return;
-    if (newSize !== oldSize && newPage !== 1) {
-      // pageSize 变化但当前不在第 1 页：复位 page；page=1 会触发本 watcher 再回调一次 fetch。
+  () => store.query.pageSize,
+  (newSize, oldSize) => {
+    if (oldSize !== undefined && newSize !== oldSize && store.query.page > 1) {
       store.query.page = 1;
-      return;
     }
-    void store.query.fetchList();
   },
 );
 
@@ -208,18 +209,12 @@ const unsubPartsListScan = onScan((code) => {
 });
 
 onMounted(async () => {
-  // 2026-09-16 续：restoreState 可能同步改 pageSize（持久化场景），watcher 入队后
-  // 回调会与下方 fetchList() 撞车。suppress 旗标在 restoreState + nextTick 期间
-  // 生效，让 watcher 回调直接 return，再放行 fetch。
-  suppressPaginationWatch = true;
-  // 1) 优先从 URL ?status= 注入；否则从 localStorage 恢复
+  // 2026-09-26（B 任务）：
+  // 1) restoreState：URL ?status= 注入或 localStorage 恢复；末尾置 enabled=true。
+  // 2) 首屏 fetch 由 useQuery 闸门自动触发（store.query.fetchList 不再显式调）。
+  // 3) 排序箭头恢复保留（fetchList 删除后这段仍需，elements-plus 的 default-sort 是 one-time）。
   store.query.restoreState(route.query.status);
-  await nextTick();
-  suppressPaginationWatch = false;
-  void store.query.fetchList();
 
-  // 2026-07-29 PR-fix-0.2.0：表头排序箭头要等 el-table 挂载后手动调一次 sort()，
-  // 否则离开页面再回来时 refs 已恢复但表头不显示箭头（:default-sort 是 one-time prop）。
   await nextTick();
   const sortProp = PART_SORT_KEY_TO_PROP[store.query.sortBy] ?? 'planned_delivery_date';
   const sortOrder = store.query.sortDir === 'ASC' ? 'ascending' : 'descending';
@@ -227,9 +222,6 @@ onMounted(async () => {
 
   // 隐藏 iframe 必须在 onBatchPrint 跑之前挂上 ref
   store.print.iframeRef = iframeRef.value;
-
-  // 加载下一道工序选项供原生 :filters 展示
-  void store.filters.loadNextProcessOptions();
 });
 
 onBeforeUnmount(() => {

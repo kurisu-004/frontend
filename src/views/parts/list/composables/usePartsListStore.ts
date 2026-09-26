@@ -75,7 +75,9 @@ export const usePartsListStore = defineStore('parts-list', () => {
     selectedRowTypes: batch.selectedRowTypes,
   });
   const dispatch = usePartDispatch({
-    fetchList: query.fetchList,
+    // 2026-09-26（B 任务）：fetchList dep 已移除 —— 写操作完成后走
+    // qc.invalidateQueries({queryKey: qk.partsPrefix}) 失效整个 parts 域，
+    // useQuery 下次访问自动 refetch；保留为可选 dep 是过渡期兼容位。
     selectedIds: batch.selectedIds,
     selectedRows: batch.selectedRows,
     selectedRowTypes: batch.selectedRowTypes,
@@ -83,7 +85,8 @@ export const usePartsListStore = defineStore('parts-list', () => {
   });
   const edit = usePartInlineEdit({
     items: query.items,
-    fetchList: query.fetchList,
+    // 2026-09-26（B 任务）：fetchList dep 已移除 —— 40901 触发整表刷新走
+    // qc.invalidateQueries；正常编辑走就地 Object.assign 回填（不调 fetchList）。
     customerTree: filters.customerTree,
     canEdit,
     isBatchMode: () => batch.batchMode.value,

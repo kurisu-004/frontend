@@ -67,3 +67,72 @@ export const processListResultSchema = z.object({
 });
 
 export type ProcessListResultSchema = z.infer<typeof processListResultSchema>;
+
+// 2026-09-26 追加：part list schema（B 任务）。
+//
+// 字段对齐 @/types/parts PartListItem。注意点：
+//   - status 是 OrderStatus 字面量联合，用 z.enum 锁死；
+//   - row_type 可选 'PART' | 'ASSEMBLY'，老快照可能缺省（z.enum 须在 z.string 后链）；
+//   - 后端 Rust 当前可能少返部分可选字段（如 batch_id / child_count / has_children），
+//     schema 用 .optional() / .nullable() 全部容忍，避免 Zod parse 失败导致整表白屏。
+//   - id 雪花 ID 字符串；version 是乐观锁 number。
+//   - is_urgent / quantity / unit_price / total_price / sort 时出现 0 是合法值，
+//     不能用 .min(0) / .nonnegative() 等严格限制（已是 number 即可）。
+export const partSchema = z.object({
+  id: z.string(),
+  version: z.number(),
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string(),
+  applicant_name: z.string().nullable(),
+  quantity: z.number(),
+  unit_price: z.number(),
+  total_price: z.number(),
+  request_date: z.string(),
+  planned_delivery_date: z.string(),
+  is_urgent: z.boolean(),
+  status: z.enum([
+    'PENDING',
+    'PROGRAMMING',
+    'IN_PROCESS',
+    'INSPECTION',
+    'READY_TO_SHIP',
+    'DELIVERED',
+    'REPAIRING',
+    'OUTSOURCE',
+    'COMPLETED',
+    'CANCELLED',
+  ]),
+  order_no: z.string().nullable(),
+  system_delivery_date: z.string().nullable(),
+  delivered_quantity: z.number().nullable().optional(),
+  note: z.string().nullable(),
+  customer_name: z.string().nullable(),
+  parent_customer_name: z.string().nullable(),
+  customer_path: z.string().nullable(),
+  location: z.string().nullable(),
+  holder_name: z.string().nullable().optional(),
+  next_process_id: z.string().nullable(),
+  next_process_name: z.string().nullable(),
+  process_chain_id: z.string().nullable().optional(),
+  batch_id: z.string().nullable().optional(),
+  batch_no: z.number().nullable().optional(),
+  batch_quantity: z.number().nullable().optional(),
+  row_type: z.enum(['PART', 'ASSEMBLY']).optional(),
+  has_children: z.boolean().optional(),
+  child_count: z.number().nullable().optional(),
+  created_at: z.string().nullable().optional(),
+  matched_children: z.array(z.unknown()).nullable().optional(),
+});
+
+export type PartSchema = z.infer<typeof partSchema>;
+
+/** 2026-09-26 追加：零件分页列表结果（结构对齐 backend-rust PartListOut + normalizeListResult）。 */
+export const partListResultSchema = z.object({
+  items: z.array(partSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type PartListResultSchema = z.infer<typeof partListResultSchema>;

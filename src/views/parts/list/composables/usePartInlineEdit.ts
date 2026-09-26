@@ -4,13 +4,22 @@
 // + 申请人 autocomplete 集成 + Enter/Esc 键盘监听。
 //
 // 删死代码 `applicantEditingReady`（已 grep 确认模板未用）。
+//
+// 2026-09-26 重构（B 任务）：saveEdit 包 useMutation。
+//   - mutationFn: 根据 row.row_type 分发 updateAssembly / updatePart；
+//   - onSuccess: 保留就地 Object.assign(row, ...) 回填（不整表刷新，无闪烁）；
+//   - onError: 命中 40901 BIZ_VERSION_CONFLICT → ElMessage.warning + 整表 invalidate；
+//     其它 → ElMessage.error；
+//   - fetchList dep 移除 —— 40901 触发整表刷新走 invalidate；正常编辑走就地回填。
 
-import { onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { SummaryMethod } from 'element-plus';
+import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { updatePart, type PartUpdatePayload } from '@/api/parts';
 import { updateAssembly } from '@/api/assembly';
 import { useApplicantSearch } from '@/composables/useApplicantSearch';
+import { qk } from '@/composables/queries/keys';
 import type { PartListItem } from '@/types/parts';
 import type { Applicant } from '@/types/applicant';
 import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
@@ -31,8 +40,14 @@ export interface EditBuffer {
 }
 
 export interface UsePartInlineEditDeps {
-  items: Ref<PartListItem[]>;
-  fetchList: () => Promise<void>;
+  /** 2026-09-26（B 任务）：放宽到 ComputedRef<PartListItem[]> —— usePartsListQuery
+   *  items 已改 ComputedRef；按地址读数组 + Object.assign 行对象（行对象引用稳定），
+   *  Readonly / Computed 都 OK。 */
+  items: ComputedRef<PartListItem[]>;
+  /** 2026-09-26（B 任务）：fetchList dep 已移除 —— 40901 触发整表刷新走
+   *  qc.invalidateQueries({queryKey: qk.partsPrefix})；正常编辑走就地 Object.assign
+   *  回填（不调 fetchList）。保留为可选 dep 是过渡期兼容位，本 composable 不再读。 */
+  fetchList?: () => Promise<void>;
   customerTree: Ref<CustomerCascaderNode[]>;
   /** MANAGER / CLERK 行内编辑可见 */
   canEdit: boolean;
@@ -43,7 +58,8 @@ export interface UsePartInlineEditDeps {
 /** 2026-09-21 显式返回类型。 */
 export interface UsePartInlineEditReturn {
   editingId: Ref<string | null>;
-  savingEdit: Ref<boolean>;
+  /** 2026-09-26（B 任务）：savingEdit 改为 ComputedRef<boolean>（派生自 mutation.isPending）。 */
+  savingEdit: ComputedRef<boolean>;
   editBuffer: EditBuffer;
   startEdit: (row: PartListItem) => void;
   cancelEdit: () => void;
@@ -58,7 +74,7 @@ export interface UsePartInlineEditReturn {
 
 export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEditReturn {
   const editingId = ref<string | null>(null);
-  const savingEdit = ref(false);
+  const qc = useQueryClient();
   const editBuffer = reactive<EditBuffer>({
     name: '',
     drawing_no: '',
@@ -146,6 +162,53 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     editingId.value = null;
   }
 
+  // 2026-09-26（B 任务）：saveEdit 包 useMutation —— mutationFn 根据 row_type 分发
+  // updateAssembly / updatePart；onSuccess 保留就地 Object.assign 回填（无整表刷新）；
+  // onError 40901 BIZ_VERSION_CONFLICT → ElMessage.warning + 整表 invalidate。
+  interface SaveEditVars {
+    row: PartListItem;
+    payload: PartUpdatePayload;
+  }
+  const saveEditMutation = useMutation<unknown, Error, SaveEditVars>({
+    mutationKey: ['parts', 'inline-edit', 'save'],
+    mutationFn: ({ row, payload }) => {
+      if (row.row_type === 'ASSEMBLY') return updateAssembly(row.id, payload);
+      return updatePart(row.id, payload);
+    },
+    onSuccess: (_data, { row, payload }) => {
+      // 就地回填该行（避免整表刷新闪烁）
+      Object.assign(row, {
+        name: payload.name,
+        drawing_no: payload.drawing_no,
+        applicant_name: payload.applicant_name ?? null,
+        quantity: payload.quantity ?? row.quantity,
+        unit_price: payload.unit_price ?? row.unit_price,
+        request_date: payload.request_date ?? row.request_date,
+        planned_delivery_date: payload.planned_delivery_date ?? row.planned_delivery_date,
+        system_delivery_date: payload.system_delivery_date ?? null,
+        order_no: payload.order_no ?? null,
+        note: payload.note ?? null,
+        is_urgent: payload.is_urgent ?? row.is_urgent,
+      });
+      editingId.value = null;
+      ElMessage.success('保存成功');
+    },
+    onError: (e) => {
+      // 40901 = BIZ_VERSION_CONFLICT（乐观锁冲突）；装配件 update 不发 409，
+      // 但保留分支以兼容未来 OCC 接入。
+      if ((e as { code?: number }).code === 40901) {
+        ElMessage.warning('该记录已被他人修改，已为你刷新列表');
+        editingId.value = null;
+        // 整表刷新：让 next useQuery 自动重拉最新数据
+        qc.invalidateQueries({ queryKey: qk.partsPrefix });
+      } else {
+        ElMessage.error(e.message ?? '保存失败');
+      }
+    },
+  });
+
+  const savingEdit = computed<boolean>(() => saveEditMutation.isPending.value);
+
   async function saveEdit(row: PartListItem): Promise<void> {
     const name = editBuffer.name.trim();
     const drawingNo = editBuffer.drawing_no.trim();
@@ -169,58 +232,20 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
       ElMessage.warning('数量必须 ≥ 1');
       return;
     }
-    savingEdit.value = true;
-    try {
-      const payload: PartUpdatePayload = {
-        name,
-        drawing_no: drawingNo,
-        applicant_name: editBuffer.applicant_name.trim(),
-        quantity: editBuffer.quantity,
-        unit_price: editBuffer.unit_price,
-        request_date: editBuffer.request_date,
-        planned_delivery_date: editBuffer.planned_delivery_date,
-        system_delivery_date: editBuffer.system_delivery_date || null,
-        order_no: editBuffer.order_no || null,
-        note: editBuffer.note || null,
-        is_urgent: editBuffer.is_urgent,
-      };
-      // 2026-07-31：装配件字段名相同，按 row.row_type 复用同一 buffer 路由。
-      if (row.row_type === 'ASSEMBLY') {
-        await updateAssembly(row.id, payload);
-      } else {
-        await updatePart(row.id, payload);
-      }
-      // updatePart 返回 PartOut（不含 applicant_name/request_date/unit_price），
-      // updateAssembly 返回 AssemblyDetail（顶层 + 子件）。就地回填该行用 buffer 值，
-      // 避免整表刷新的闪烁。
-      Object.assign(row, {
-        name,
-        drawing_no: drawingNo,
-        applicant_name: payload.applicant_name,
-        quantity: payload.quantity,
-        unit_price: payload.unit_price,
-        request_date: payload.request_date,
-        planned_delivery_date: payload.planned_delivery_date,
-        system_delivery_date: payload.system_delivery_date ?? null,
-        order_no: payload.order_no ?? null,
-        note: payload.note ?? null,
-        is_urgent: payload.is_urgent,
-      });
-      editingId.value = null;
-      ElMessage.success('保存成功');
-    } catch (e) {
-      // 40901 = BIZ_VERSION_CONFLICT（乐观锁冲突）；装配件 update 不发 409，
-      // 但保留分支以兼容未来 OCC 接入。
-      if ((e as { code?: number }).code === 40901) {
-        ElMessage.warning('该记录已被他人修改，已为你刷新列表');
-        editingId.value = null;
-        void deps.fetchList();
-      } else {
-        ElMessage.error((e as Error).message ?? '保存失败');
-      }
-    } finally {
-      savingEdit.value = false;
-    }
+    const payload: PartUpdatePayload = {
+      name,
+      drawing_no: drawingNo,
+      applicant_name: editBuffer.applicant_name.trim(),
+      quantity: editBuffer.quantity,
+      unit_price: editBuffer.unit_price,
+      request_date: editBuffer.request_date,
+      planned_delivery_date: editBuffer.planned_delivery_date,
+      system_delivery_date: editBuffer.system_delivery_date || null,
+      order_no: editBuffer.order_no || null,
+      note: editBuffer.note || null,
+      is_urgent: editBuffer.is_urgent,
+    };
+    saveEditMutation.mutate({ row, payload });
   }
 
   // 2026-07-24：双击行进入编辑（仅 MANAGER/CLERK + 非批量模式）

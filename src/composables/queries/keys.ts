@@ -42,4 +42,8 @@ export const qk = {
   processesPrefix: ['processes'] as const,
   /** 2026-09-26 新增：零件列表键工厂 —— A 任务只对齐键类型，useQuery 由 B 任务实现。 */
   partsList: (params: ListPartsParams) => ['parts', 'list', params] as const,
+  /** 2026-09-26 追加（B 任务）：零件域前缀 —— 下发 / 召回 / 行内编辑完成后
+   *  qc.invalidateQueries({ queryKey: qk.partsPrefix }) 失效整个 parts 域（任意
+   *  listParts 参数形态都会命中）。与 customersPrefix / processesPrefix 同形。 */
+  partsPrefix: ['parts'] as const,
 } as const;
