@@ -1,16 +1,22 @@
 // useCustomerTree.ts
 //
-// 复用两个地方使用的「客户级联树」逻辑：列表页表头 el-cascader + 申请表。
+// 2026-09-26 改造：内部状态改为共享 query useCustomersQuery() 驱动，缓存命中会话级。
+// 对外 API 完全兼容：3 个调用点（RepairReceive.vue / OutsourceQuoteList.vue /
+// usePartsColumnFilters.ts）零改动即可工作。
 //
 // 注意：
-// - 数据只一次性加载（onMounted），不变更；
-// - 返回 cascader 选项数组，匹配 PartBatchNew / AssemblyCreate / AssemblyList
-//   现有的 emitPath:false + checkStrictly:true 用法；
-// - 错误用 Element Plus 全局 ElMessage 提示（沿用项目惯例）。
+//   - 树形转换 + resolveRootCustomerId 逻辑原样保留（拆 L1 root + L2 children）；
+//   - load() 保留为 query.refetch 的 async 包装，对外 API 兼容（虽然新设计下
+//     useQuery 自动 fetch + 手动 invalidateCustomersQuery 才是常规路径）；
+//   - customers 类型由 Ref<Customer[]> 收紧为 ComputedRef<Customer[]>（只读），
+//     所有现存 consumer 只读不写，无破坏；其它返回字段类型不变；
+//   - 错误 UX：useQuery 把失败暴露在 query.error，保留原 useCustomerTree 在 load
+//     失败时弹 ElMessage 的行为——通过 watch 同步触发，避免静默失败。
 
-import { computed, onMounted, ref, type ComputedRef, type Ref } from 'vue';
+import { computed, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { listCustomers, type Customer } from '@/api/customer';
+import type { Customer } from '@/api/customer';
+import { useCustomersQuery } from './queries/useCustomersQuery';
 
 export interface CustomerCascaderNode {
   id: string;
@@ -21,7 +27,7 @@ export interface CustomerCascaderNode {
 
 /** 2026-09-21 显式返回类型。 */
 export interface UseCustomerTreeReturn {
-  customers: Ref<Customer[]>;
+  customers: ComputedRef<Customer[]>;
   tree: ComputedRef<CustomerCascaderNode[]>;
   loading: Ref<boolean>;
   load: () => Promise<void>;
@@ -29,8 +35,20 @@ export interface UseCustomerTreeReturn {
 }
 
 export function useCustomerTree(): UseCustomerTreeReturn {
-  const customers = ref<Customer[]>([]);
-  const loading = ref(false);
+  const query = useCustomersQuery();
+
+  // 2026-09-26：useQuery 自动 fetch，无需 onMounted 手动 load。
+  const customers = computed<Customer[]>(() => query.data.value?.items ?? []);
+  const loading = computed<boolean>(() => query.isFetching.value);
+
+  // 2026-09-26：保留原 ElMessage 错误提示行为。useQuery 不在 setup 抛错，错误态
+  // 在 query.error 暴露，watch 一次触发 → 与旧 load() catch 路径等价。
+  watch(
+    () => query.error.value,
+    (err) => {
+      if (err) ElMessage.error(err.message ?? '客户列表加载失败');
+    },
+  );
 
   const tree = computed<CustomerCascaderNode[]>(() => {
     const all = customers.value;
@@ -50,22 +68,11 @@ export function useCustomerTree(): UseCustomerTreeReturn {
     return found.parent_id ?? found.id;
   }
 
+  /** 2026-09-26：保留对外 API；底层走 query.refetch。
+   *  写操作完成后失效域走 invalidateCustomersQuery(qc)，load() 主要给手动刷新留口。 */
   async function load(): Promise<void> {
-    loading.value = true;
-    try {
-      // 全量客户（v2 backend-rust 返回分页结构，2026-09-15 切到 v2 后用 .items 取数组）
-      customers.value = (await listCustomers()).items;
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '客户列表加载失败');
-      customers.value = [];
-    } finally {
-      loading.value = false;
-    }
+    await query.refetch();
   }
-
-  onMounted(() => {
-    void load();
-  });
 
   return { customers, tree, loading, load, resolveRootCustomerId };
 }

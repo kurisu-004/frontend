@@ -63,6 +63,19 @@ vi.mock('@/api/iam', () => ({
   me: vi.fn(),
 }));
 
+// 2026-09-26：mock @/api/customer 让 useCustomersQuery（useCustomerTree 内部）
+// 走成功路径，避免 axios 在 node env 网络请求失败触发 watch → ElMessage.error
+// → document is not defined 的 Unhandled Rejection（vitest 不算 fail 但污染
+// 输出，且未来 strict 模式可能 fail）。该 spec 只断言 parts 切片能力，不依赖
+// customer 数据，mock 返回空数组够用。
+vi.mock('@/api/customer', () => ({
+  listCustomers: vi.fn(async () => ({ items: [], total: 0, limit: 20, offset: 0 })),
+  getCustomer: vi.fn(),
+  createCustomer: vi.fn(),
+  updateCustomer: vi.fn(),
+  softDeleteCustomer: vi.fn(),
+}));
+
 // vitest 无 vue 插件，.vue 文件不能进 transform 链 —— factory stub 后该文件不会被加载。
 vi.mock('@/components/ColumnFilterPopover.vue', () => ({
   default: { name: 'ColumnFilterPopoverStub' },
