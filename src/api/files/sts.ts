@@ -2,14 +2,19 @@
 //
 // 2026-09-17 新增：python STS 端口 caller。
 //
-// `POST /api/v1/files/sts-tmp-keys` —— 前端直传 COS 临时凭证签发端口（替换原
+// `POST /api/v2/files/sts-tmp-keys` —— 前端直传 COS 临时凭证签发端口（替换原
 // backend-rust `POST /api/v2/part-files/upload-intents`，2026-09-17 起 part-file
 // 域 3 处上传入口统一切到这里）。
 //
-// 走 `apiPrint`（baseURL `/api/v1`）的原因：
-// - python STS 端口物理在 v1，与 `apiPrint` 已有的 4 个打印端点（共享同一组
-//   axios 拦截器 + refreshPromise 模块单例）路径对齐；
-// - 不新建独立 axios 实例，避免重复挂拦截器 / 分散 refresh 雪崩队列。
+// 2026-09-28 修复：python STS 端口裸开鉴权（无 `Depends(auth)`），仅靠部署层
+// nginx + COS CAM policy 纵深防御；前端走 `apiPrint`（baseURL `/api/v1`）会
+// 绕过 backend-rust JWT 鉴权。改为走 `api`（baseURL `/api/v2`），由 rust 端
+// `POST /api/v2/files/sts-tmp-keys` 转发薄壳强制鉴权后再透传到 python：
+// - rust 端 CurrentUser extractor + require_any_role 兜底（Manager / Clerk /
+//   CncProgrammer / Inspector 四角色白名单）；
+// - python 端继续裸开（by design + 部署层隔离），鉴权点全部下沉到 rust；
+// - 前端 envelopeResponseInterceptor 自动解 `{code, message, data}` 信封，
+//   python 信封与 rust 信封同形，调用方拿到的是原始 data，零改动。
 //
 // 单端口 1-key 响应 vs 原 backend-rust bulk：
 // - python STS 一次只签发 1 个 tmp_key（与 file size / hash / filename / purpose
@@ -22,11 +27,12 @@
 // 2026-09-28 重命名：CosUploadSession → CosUploadGrant（语义澄清，组件包与后端
 // Redis session 解耦）。
 //
-// 错误码：python STS 端口当前未实现业务错误码（仅 21502 / 通用 40001 等）；
-// 实际联调首日如发现专用 code，caller 端按 ApiError.code 兜底（详见
+// 错误码：rust 转发层封装 `BIZ_STS_FORWARD_FAILED=20406`（502 BAD_GATEWAY）；
+// python STS 端口当前未实现业务错误码（仅 21502 / 通用 40001 等），实际联调
+// 首日如发现专用 code，caller 端按 ApiError.code 兜底（详见
 // useProcessChainRequiredHandler 模式）。
 
-import { apiPrint } from '@/api/http';
+import { api } from '@/api/http';
 import type {
   BatchGrantStsKeyIn,
   BatchGrantStsTmpKeyOut,
@@ -43,8 +49,9 @@ import type {
  *（`confirmPartFile` / `batchCreateParts`）再携带 `tmp_key` 让后端 head + copy
  * tmp → 正式 CAS key + 落业务表。
  *
- * 走 `apiPrint`（baseURL `/api/v1`），与打印 4 端点共享拦截器与 refreshPromise。
- * 端点路径 `/files/sts-tmp-keys`，不带 `/v1` 前缀（baseURL 已自带）。
+ * 走 `api`（baseURL `/api/v2`，经 rust 鉴权转发），与业务其它端点共享拦截器
+ * 与 refreshPromise。端点路径 `/files/sts-tmp-keys`，不带 `/v2` 前缀（baseURL
+ * 已自带）。rust 端负责 JWT 鉴权，python 信封原样透传。
  *
  * @example
  * ```ts
@@ -58,7 +65,7 @@ import type {
  * ```
  */
 export async function grantStsTmpKey(payload: StsTmpKeysRequest): Promise<StsTmpKeysResponse> {
-  const resp = await apiPrint.post<StsTmpKeysResponse>('/files/sts-tmp-keys', payload);
+  const resp = await api.post<StsTmpKeysResponse>('/files/sts-tmp-keys', payload);
   return resp.data;
 }
 
@@ -75,8 +82,9 @@ export async function grantStsTmpKey(payload: StsTmpKeysRequest): Promise<StsTmp
  *   等长连接设施（详见 plan §3.3 caller 改造）。
  *
  * 仅入参形态与 `grantStsTmpKey` 不同（`files[]` 数组 vs 单文件对象）；底层端点
- * 仍是 `POST /api/v1/files/sts-tmp-keys`，由 pydantic validator 区分单 / 批
- * 入参。走 `apiPrint`（baseURL `/api/v1`）的原因同 `grantStsTmpKey`。
+ * 仍是 `POST /api/v2/files/sts-tmp-keys`（rust 转发薄壳 → python 原端口），由
+ * pydantic validator 在 python 端区分单 / 批入参。走 `api`（baseURL `/api/v2`）
+ * 的原因同 `grantStsTmpKey`（rust 强制鉴权 + 信封透传）。
  *
  * caller 拿到响应后通常这样组装：
  * ```ts
@@ -101,6 +109,6 @@ export async function grantStsTmpKey(payload: StsTmpKeysRequest): Promise<StsTmp
 export async function grantStsTmpKeyFiles(
   payload: BatchGrantStsKeyIn,
 ): Promise<BatchGrantStsTmpKeyOut> {
-  const resp = await apiPrint.post<BatchGrantStsTmpKeyOut>('/files/sts-tmp-keys', payload);
+  const resp = await api.post<BatchGrantStsTmpKeyOut>('/files/sts-tmp-keys', payload);
   return resp.data;
 }
