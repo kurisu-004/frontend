@@ -130,7 +130,9 @@ export interface UseAssemblyDetailReturn {
   fetchData: () => Promise<void>;
   loadLeafCustomers: () => Promise<void>;
   // actions — return Promise<boolean>（true = 业务成功，调用方据此关 dialog）
-  updateAssembly: (payload: AssemblyUpdatePayload) => Promise<boolean>;
+  /** 2026-09-28：入参去掉 `version` —— OCC 锚点由本函数从
+   *  `detail.assembly.version` 注入（展示壳不持 OCC 状态）。 */
+  updateAssembly: (payload: Omit<AssemblyUpdatePayload, 'version'>) => Promise<boolean>;
   cancelAssembly: (serialInput: string) => Promise<boolean>;
   deleteAssembly: (serialInput: string) => Promise<boolean>;
   addChild: () => Promise<boolean>;
@@ -271,14 +273,34 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   });
 
   // ============ 业务操作 ============
-  async function updateAssemblyFn(payload: AssemblyUpdatePayload): Promise<boolean> {
+  /** 2026-09-28 契约修复：在此注入 OCC 锚点 `version`。
+   *  后端 `AssemblyUpdateRequest.version: i32` **无 `#[serde(default)]`**，缺字段时
+   *  axum `Json` extractor 在 service 之前直接拒 → HTTP 422 `missing field version`。
+   *  展示壳（AssemblyEditDialog）只管表单字段，version 属业务层关注点，故在此拼。
+   *  成功路径 `detail.value = updated` 整体替换 → 新 version 天然回写，
+   *  下一次打开对话框用新锚点。 */
+  async function updateAssemblyFn(
+    payload: Omit<AssemblyUpdatePayload, 'version'>,
+  ): Promise<boolean> {
     if (!assemblyId.value) return false;
+    if (!detail.value) {
+      ElMessage.error('装配件信息未加载完成');
+      return false;
+    }
     try {
-      const updated = await updateAssembly(assemblyId.value, payload);
+      const updated = await updateAssembly(assemblyId.value, {
+        ...payload,
+        version: detail.value.assembly.version,
+      });
       detail.value = updated;
       ElMessage.success('已保存');
       return true;
     } catch (e) {
+      if ((e as { code?: number }).code === 40901) {
+        ElMessage.warning('该记录已被他人修改，已为你刷新');
+        await fetchData();
+        return false;
+      }
       ElMessage.error((e as Error).message ?? '保存失败');
       return false;
     }
@@ -318,11 +340,17 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
       return false;
     }
     try {
-      await softDeleteAssembly(a.id);
+      // 2026-09-28 契约修复：软删 OCC 锚点（后端必填 version）。
+      await softDeleteAssembly(a.id, a.version);
       ElMessage.success('已删除');
       router.push('/parts');
       return true;
     } catch (e) {
+      if ((e as { code?: number }).code === 40901) {
+        ElMessage.warning('该记录已被他人修改，请刷新后重试');
+        await fetchData();
+        return false;
+      }
       ElMessage.error((e as Error).message ?? '操作失败');
       return false;
     }

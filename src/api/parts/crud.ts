@@ -192,14 +192,23 @@ export interface PartStatusChangePayload {
 }
 
 export interface PartUpdatePayload {
+  /** 2026-09-28 契约修复：乐观锁必填。后端 `PartUpdateRequest.version: i32` **无
+   *  `#[serde(default)]`**（backend-rust `src/modules/part/dto_crud.rs`），缺字段时
+   *  axum `Json` extractor 在进 handler 前直接拒 → HTTP 422
+   *  `missing field version`（非项目统一信封）。必须取自 `PartItem.version` /
+   *  `PartListItem.version`（= t_part.version）。 */
+  version: number;
   name?: string;
   drawing_no?: string;
   applicant_name?: string;
   quantity?: number;
   /** 2026-09-27 前后端字段对齐：unit_price 改 string（rust_decimal::Decimal +
-   *  serde-with-str 序列化对齐）。 */
+   *  serde-with-str 序列化对齐）。空串会被 `Decimal::from_str("")` 拒（40001），
+   *  调用侧须先归一为 `'0'`。 */
   unit_price?: string;
-  total_price?: string | null;
+  /** 2026-09-28：后端 `part_sql.rs::update_part` **不按 quantity*unit_price 重算**
+   *  （只写 caller 传的值），故改数量/单价时必须由前端算好一并送，否则 DB 总价留旧值。 */
+  total_price?: string;
   request_date?: string;
   planned_delivery_date?: string;
   is_urgent?: boolean;
@@ -207,8 +216,6 @@ export interface PartUpdatePayload {
   order_no?: string | null;
   system_delivery_date?: string | null;
   note?: string | null;
-  /** 雪花 ID 字符串（CLAUDE.md §3） */
-  customer_id?: string;
 }
 
 export interface PartPickUpPayload {
@@ -446,8 +453,11 @@ export async function listPartEvents(id: string): Promise<PartEvent[]> {
   return resp.data;
 }
 
-export async function softDeletePart(id: string): Promise<void> {
-  await api.post(`/parts/${id}/soft-delete`);
+/** 2026-09-28 契约修复：软删入参 `PartSoftDeleteRequest` 的 `version: i32` 同样必填
+ *  （backend-rust `src/modules/part/dto_crud.rs`），此前本函数不发 body → 必 422。
+ *  @param version `PartItem.version`（= t_part.version）；不匹配 → 40901。 */
+export async function softDeletePart(id: string, version: number): Promise<void> {
+  await api.post(`/parts/${id}/soft-delete`, { version });
 }
 
 export async function updatePart(id: string, payload: PartUpdatePayload): Promise<PartItem> {

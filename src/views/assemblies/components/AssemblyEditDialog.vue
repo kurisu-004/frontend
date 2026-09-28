@@ -115,7 +115,7 @@ const props = defineProps<Props>();
 
 const emit = defineEmits<{
   (e: 'update:visible', v: boolean): void;
-  (e: 'submit', payload: AssemblyUpdatePayload): void;
+  (e: 'submit', payload: Omit<AssemblyUpdatePayload, 'version'>): void;
   /** open 时 shell 调 loadLeafCustomers（composable 注入） */
   (e: 'open'): void;
   // PR-2 2026-09-13：本地副本变更同步给父级。
@@ -161,8 +161,12 @@ async function onSubmit(): Promise<void> {
     return;
   }
   // 把表单内部空字符串 / falsy 还原成 payload schema 的 null / undefined 语义。
+  // 2026-09-28 契约修复：emit 类型改 Omit<…, 'version'> —— OCC 锚点是业务层
+  // 关注点（后端 AssemblyUpdateRequest.version 必填、无 serde(default)，缺则 422），
+  // 由 useAssemblyDetail.updateAssemblyFn 从 detail.assembly.version 注入，
+  // 展示壳不持有 version 状态。
   const f = localForm;
-  const payload: AssemblyUpdatePayload = {
+  const payload: Omit<AssemblyUpdatePayload, 'version'> = {
     drawing_no: f.drawing_no,
     name: f.name,
     customer_id: f.customer_id,

@@ -15,6 +15,20 @@
 //     回填（不调 fetchList）。原 fetchList dep 是过渡期兼容位，store 装配时
 //     已不再传（usePartsListStore.ts:86-93），本 composable 也不读，留着只是
 //     noise 与潜在类型漂移源。
+//
+// 2026-09-28 契约修复（修「修改工单报 422 missing field `version`」）：
+//   - 后端 PartUpdateRequest / AssemblyUpdateRequest 的 `version: i32` 均**无
+//     `#[serde(default)]`**，缺字段时 axum `Json` extractor 在 service 之前直接拒
+//     （HTTP 422，非项目统一信封）。前端 payload 此前从不带 version → part 与
+//     assembly 两条分支**恒 422**（行内编辑完全不可用）。
+//   - saveEdit 带 `version: row.version`（OCC 锚点，PartListItem.version 由
+//     partSchema parse 填充）。
+//   - assembly 分支改为条件展开 unit_price / total_price：三态
+//     `Option<Option<Decimal>>` 下发 `null` = 置 NULL，而 t_assembly 这两列
+//     NOT NULL → 23502 → 500（此前被 422 掩盖）。
+//   - onSuccess 回写 `version` + `total_price`：后端每次 UPDATE version + 1，
+//     不回写则同一行第二次保存必撞 40901 假冲突；total_price 由前端派生下发
+//     （后端 update 不按 quantity * unit_price 重算），不回填则单元格显示旧值。
 
 import { computed, onBeforeUnmount, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -165,6 +179,32 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     editingId.value = null;
   }
 
+  // ============ 行内编辑（OCC version + 总价派生）============
+
+  /** 2026-09-28：从 update 响应体里取回写库后的新 `version`。
+   *  part 分支响应 = `PartDetailOut`（`version` 顶层）；assembly 分支响应 =
+   *  `AssemblyDetail`（`version` 在 `.assembly` 下）。mutation 返回类型是
+   *  `unknown`（两条分支响应形态不同），故运行时探测；都不匹配时返回 null，
+   *  调用方保持原 version 不动。 */
+  function readResponseVersion(data: unknown): number | null {
+    if (data == null || typeof data !== 'object') return null;
+    const d = data as { version?: unknown; assembly?: { version?: unknown } };
+    if (typeof d.version === 'number') return d.version;
+    if (typeof d.assembly?.version === 'number') return d.assembly.version;
+    return null;
+  }
+
+  /** 2026-09-28：总价 = quantity * unit_price。
+   *  后端 `part_sql.rs::update_part` / `assembly/service/crud.rs::update_assembly`
+   *  均**不重算**（只写 caller 传的值），故必须前端算。中间量走「分」整数
+   *  避免浮点误差（0.1 * 3 = 0.30000000000000004）。unit_price 为空串 / 非法串时
+   *  归一为 0 —— 空串会让后端 `Decimal::from_str("")` 抛错（40001）。 */
+  function deriveTotalPrice(quantity: number, unitPrice: string): string {
+    const price = parseFloat(unitPrice);
+    const priceCents = Number.isFinite(price) ? Math.round(price * 100) : 0;
+    return (Math.round(quantity * priceCents) / 100).toFixed(2);
+  }
+
   // 2026-09-26（B 任务）：saveEdit 包 useMutation —— mutationFn 根据 row_type 分发
   // updateAssembly / updatePart；onSuccess 保留就地 Object.assign 回填（无整表刷新）；
   // onError 40901 BIZ_VERSION_CONFLICT → ElMessage.warning + 整表 invalidate。
@@ -176,22 +216,33 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     mutationKey: ['parts', 'inline-edit', 'save'],
     mutationFn: ({ row, payload }) => {
       if (row.row_type === 'ASSEMBLY') {
-        // 2026-09-27 M2 收尾：M2 revert AssemblyUpdatePayload.unit_price /
-        // total_price 回 number（后端 assembly 域未加
-        // #[serde(with = "rust_decimal::serde::str")]，JSON number），但
-        // EditBuffer / PartUpdatePayload.unit_price / total_price 仍是 string
-        // （后端 parts 域已对齐 serde-with-str）。此处显式 string → number 转换
-        // 避免类型不兼容 + 后端反序列化失败（40001）。
+        // 2026-09-28 契约修复（此前整条分支恒 422）：
+        // 1) 补 version —— 后端 AssemblyUpdateRequest.version 无 serde(default)，
+        //    缺字段被 axum Json extractor 在 service 之前拒。
+        // 2) unit_price / total_price **绝不能发 null**：后端是三态
+        //    Option<Option<Decimal>>，null 解成 Some(None) → SQL `col = NULL`，
+        //    而 t_assembly 这两列是 NOT NULL → Postgres 23502 → HTTP 500。
+        //    故用条件展开：有值才带 key，「不动」就省略。
+        // 3) M2 收尾遗留：assembly 域未加 serde-with-str，JSON number 形态，
+        //    EditBuffer / PartUpdatePayload 是 string，显式 string → number 转换。
+        const { total_price, unit_price, ...rest } = payload;
         const assemblyPayload: AssemblyUpdatePayload = {
-          ...payload,
-          unit_price: payload.unit_price == null ? null : Number(payload.unit_price),
-          total_price: payload.total_price == null ? null : Number(payload.total_price),
+          ...rest,
+          ...(unit_price == null ? {} : { unit_price: Number(unit_price) }),
+          ...(total_price == null ? {} : { total_price: Number(total_price) }),
         };
         return updateAssembly(row.id, assemblyPayload);
       }
       return updatePart(row.id, payload);
     },
-    onSuccess: (_data, { row, payload }) => {
+    onSuccess: (data, { row, payload }) => {
+      // 2026-09-28 契约修复：回写 version。后端每次 UPDATE 都 `version = version + 1`
+      // （backend-rust part_sql.rs::update_part / assembly repo::update_partial），
+      // 响应体带新值；不回写的话同一行第二次保存必撞 40901 假冲突
+      // （列表不整表刷新，行对象引用不变）。
+      // part 分支响应 = PartDetailOut（.version）；assembly 分支 = AssemblyDetail
+      // （.assembly.version）。两者都是 unknown 兜底，非上述形态时保持原值。
+      const nextVersion = readResponseVersion(data);
       // 就地回填该行（避免整表刷新闪烁）
       Object.assign(row, {
         name: payload.name,
@@ -199,12 +250,16 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
         applicant_name: payload.applicant_name ?? null,
         quantity: payload.quantity ?? row.quantity,
         unit_price: payload.unit_price ?? row.unit_price,
+        // 2026-09-28：总价由 saveEdit 按 quantity * unit_price 算出并下发
+        // （后端不重算），此处同步回填，否则单元格显示旧值。
+        total_price: payload.total_price ?? row.total_price,
         request_date: payload.request_date ?? row.request_date,
         planned_delivery_date: payload.planned_delivery_date ?? row.planned_delivery_date,
         system_delivery_date: payload.system_delivery_date ?? null,
         order_no: payload.order_no ?? null,
         note: payload.note ?? null,
         is_urgent: payload.is_urgent ?? row.is_urgent,
+        ...(nextVersion == null ? {} : { version: nextVersion }),
       });
       editingId.value = null;
       ElMessage.success('保存成功');
@@ -248,12 +303,21 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
       ElMessage.warning('数量必须 ≥ 1');
       return;
     }
+    // 2026-09-28 契约修复：unit_price 空串 / 非法串归一为 '0'（后端
+    // Decimal::from_str("") 会 40001），并按 quantity * unit_price 派生 total_price
+    // 一并下发（后端 update 不重算总价）。
+    const rawPrice = editBuffer.unit_price.trim();
+    const unitPrice = rawPrice !== '' && Number.isFinite(parseFloat(rawPrice)) ? rawPrice : '0';
     const payload: PartUpdatePayload = {
+      // 2026-09-28 契约修复：OCC 锚点（后端 PartUpdateRequest.version 必填，
+      // 缺则 422）。取自 PartListItem.version（= t_part.version，由 partSchema parse）。
+      version: row.version,
       name,
       drawing_no: drawingNo,
       applicant_name: editBuffer.applicant_name.trim(),
       quantity: editBuffer.quantity,
-      unit_price: editBuffer.unit_price,
+      unit_price: unitPrice,
+      total_price: deriveTotalPrice(editBuffer.quantity, unitPrice),
       request_date: editBuffer.request_date,
       planned_delivery_date: editBuffer.planned_delivery_date,
       system_delivery_date: editBuffer.system_delivery_date || null,

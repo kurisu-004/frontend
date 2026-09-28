@@ -157,6 +157,11 @@ export interface AssemblyDetail {
 }
 /** 编辑装配件的 payload（field-level partial；POST /assemblies/{id}/update）。 */
 export interface AssemblyUpdatePayload {
+  /** 2026-09-28 契约修复：乐观锁必填。后端 `AssemblyUpdateRequest.version: i32`
+   *  **无 `#[serde(default)]`**（backend-rust `src/modules/assembly/dto.rs`），
+   *  缺字段时 axum `Json` extractor 直接拒 → HTTP 422 `missing field version`。
+   *  必须取自 `AssemblyItem.version`（= t_assembly.version）。 */
+  version: number;
   drawing_no?: string | null;
   name?: string | null;
   /** 雪花 ID 字符串（CLAUDE.md §3） */
@@ -172,8 +177,21 @@ export interface AssemblyUpdatePayload {
   // —— 2026-07-24 新增 ——
   quantity?: number | null;
   unit_price?: number | null;
-  /** 显式传值时按 caller 写入；不传时按 unit_price * quantity 自动重算 */
-  total_price?: number | null;
+  /**
+   * 2026-09-28 契约修正 + 关键 null 语义警告：
+   * 后端 `AssemblyUpdateRequest.total_price` 是三态 `Option<Option<Decimal>>`
+   * （`deserialize_optional_optional_decimal`），语义为
+   * 「缺省 = 不动 / `null` = 置 NULL / 有值 = 覆盖」，且
+   * `t_assembly.total_price` 是 `NOT NULL` 列 —— 显式发 `null` 会解成
+   * `Some(None)` → SQL `total_price = NULL` → Postgres 23502 → HTTP 500。
+   * **要「不动」就省略该 key，绝不能发 `null`。**
+   *
+   * 同时修正旧注释：后端 `assembly/service/crud.rs::update_assembly` 与
+   * `part/repo/sql/part_sql.rs::update_part` 一样**只写 caller 传的值，
+   * 不会按 unit_price * quantity 自动重算**（该重算仅存在于 create 路径）。
+   * 故改数量/单价时必须由前端算好一并送。
+   */
+  total_price?: number;
   order_no?: string | null;
   system_delivery_date?: string | null;
   note?: string | null;

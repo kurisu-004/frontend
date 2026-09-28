@@ -79,8 +79,11 @@ export async function addAssemblyChild(
   return resp.data;
 }
 
-export async function softDeleteAssembly(id: string): Promise<void> {
-  await api.post(`/assemblies/${id}/soft-delete`);
+/** 2026-09-28 契约修复：软删入参 `{ "version": i32 }` 为 OCC 必填（backend-rust
+ *  `assembly/dto.rs` / `service/crud.rs::soft_delete_assembly_inner`），此前本函数
+ *  不发 body → 必 422。@param version `AssemblyItem.version`；不匹配 → 40901。 */
+export async function softDeleteAssembly(id: string, version: number): Promise<void> {
+  await api.post(`/assemblies/${id}/soft-delete`, { version });
 }
 
 /** 取消装配体（CLERK+）。级联取消所有非终态子件。 */

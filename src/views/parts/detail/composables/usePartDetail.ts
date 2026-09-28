@@ -12,6 +12,14 @@
 //
 // composable 只持有纯业务数据 + 业务函数；dialog 可见性、form 数据 refs 由
 // 各自的子组件或 shell 持有，调用本 composable 的纯函数完成提交。
+//
+// 2026-09-28 契约修复（修「修改工单报 422 missing field `version`」）：
+//   - 后端 `PartUpdateRequest.version` / `PartSoftDeleteRequest.version` 均**无
+//     `#[serde(default)]`**，缺字段时 axum `Json` extractor 在 service 之前直接拒
+//     （HTTP 422，非项目统一信封）。onSave / onDeletePart 此前都不带 version →
+//     详情页保存与删除恒失败。
+//   - OCC 锚点取自 `PartDetailOut.version`；onSave 成功路径整体替换 part.value，
+//     新 version 天然回写。补 40901 分支：他人已改 → 提示 + fetchPart 拉最新值。
 
 import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -195,9 +203,16 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   }
 
   async function onSave(): Promise<void> {
+    // 2026-09-28 契约修复：后端 PartUpdateRequest.version 必填（无 serde(default)），
+    // 缺字段 → HTTP 422 missing field version。OCC 锚点取自 PartDetailOut.version。
+    if (!part.value) {
+      ElMessage.error('零件信息未加载完成');
+      return;
+    }
     saving.value = true;
     try {
       const payload: PartUpdatePayload = {
+        version: part.value.version,
         name: form.name.trim(),
         drawing_no: form.drawing_no.trim(),
         quantity: form.quantity,
@@ -207,11 +222,20 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
         system_delivery_date: form.system_delivery_date || null,
         note: form.note || null,
       };
+      // 响应即最新 PartDetailOut（含 OCC 后的新 version），整体替换 part.value
+      // 天然完成 version 回写，下一次保存用新锚点。
       part.value = await updatePart(partId.value, payload);
       ElMessage.success('保存成功');
       editing.value = false;
     } catch (e) {
-      ElMessage.error((e as Error).message ?? '保存失败');
+      // 40901 VERSION_CONFLICT：他人已改过，本地 form 基于旧 version → 拉最新值
+      if ((e as { code?: number }).code === 40901) {
+        ElMessage.warning('该记录已被他人修改，已为你刷新');
+        editing.value = false;
+        await fetchPart();
+      } else {
+        ElMessage.error((e as Error).message ?? '保存失败');
+      }
     } finally {
       saving.value = false;
     }
@@ -255,12 +279,20 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   }
 
   async function onDeletePart(): Promise<boolean> {
+    // 2026-09-28 契约修复：后端 PartSoftDeleteRequest.version 必填（无
+    // serde(default)），此前不发 body → 必 422。
+    if (!part.value) return false;
     try {
-      await softDeletePart(partId.value);
+      await softDeletePart(partId.value, part.value.version);
       ElMessage.success('已删除');
       router.push('/parts');
       return true;
     } catch (e) {
+      if ((e as { code?: number }).code === 40901) {
+        ElMessage.warning('该记录已被他人修改，请刷新后重试');
+        await fetchPart();
+        return false;
+      }
       ElMessage.error((e as Error).message ?? '操作失败');
       return false;
     }

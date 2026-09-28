@@ -174,7 +174,7 @@ function openEditDialog(): void {
   editVisible.value = true;
 }
 
-async function onEditSubmit(payload: AssemblyUpdatePayload): Promise<void> {
+async function onEditSubmit(payload: Omit<AssemblyUpdatePayload, 'version'>): Promise<void> {
   editSubmitting.value = true;
   try {
     const ok = await updateAssembly(payload);
