@@ -16,6 +16,10 @@ import { createPinia } from 'pinia';
 // plugin 顺序硬约束：VueQueryPlugin 必须在 createPinia 之后、app.mount 之前。
 // 否则 useMutation 会抛 "No QueryClient set"。
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
+// 2026-09-28 新增：仓内首例持久化插件。tagsView store（src/stores/tagsView.ts）
+// 用 persist 块把 visitedViews + cachedViewNames 写入 localStorage，跨刷新保留
+// tab 状态。必须注册到 Pinia 之后 —— 颠倒顺序 plugin 会静默失效。
+import piniaPluginPersistedstate from 'pinia-plugin-persistedstate';
 
 import App from './App.vue';
 import router from './router';
@@ -59,6 +63,12 @@ const queryClient = new QueryClient({
 });
 
 app.use(createPinia());
+// 2026-09-28 新增：注册持久化插件到 Pinia 实例（不是 Vue app）。必须在 createPinia
+// 之后、VueQueryPlugin 之前（plugin 内部依赖 Pinia 实例 + store 首次创建时恢复）。
+// pinia.use 必须在 app.use(pinia) 之后再调，否则插件会进 pinia.toBeInstalled
+// 队列且永不消费。
+const pinia = app.config.globalProperties.$pinia as ReturnType<typeof createPinia>;
+pinia.use(piniaPluginPersistedstate);
 app.use(VueQueryPlugin, { queryClient });
 
 // 2026-08-28 重写：dev-only dummy-auth 注入。
