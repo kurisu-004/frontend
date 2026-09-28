@@ -22,7 +22,7 @@
 //   - 单域 composable 下沉到 views/dashboard/composables/（沿 2026-09-27
 //     composable 归属判别约定），spec 文件同 __tests__/ 子目录。
 
-import { useDebounceFn } from '@vueuse/core';
+import { tryOnScopeDispose, useDebounceFn } from '@vueuse/core';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import { watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -94,10 +94,15 @@ export function useDashboardSnapshot() {
     { maxWait: 1500 },
   );
 
-  onDashboardEvent((ev) => {
+  // 2026-09-28 review 第 1 轮修复：捕获 off + tryOnScopeDispose，确保组件卸载时
+  // 订阅从 eventSubs Set 移除（原 DashboardView.vue onBeforeUnmount offSnap?.() 行为
+  // 在重构中漏掉，会导致每次进入 /dashboard 都累加一个永不清理的 handler，
+  // 闭包持有的 debouncedInvalidate / qc / query 无法 GC）。
+  const offDashboardEvent = onDashboardEvent((ev) => {
     // 【B1 预留】switch (ev.event_type) { ... } 真增量分支预留。
     if (AFFECTS_DASHBOARD.has(ev.event_type)) debouncedInvalidate();
   });
+  tryOnScopeDispose(offDashboardEvent);
 
   // 错误桥接：useQuery 的 error 不在 setup 抛错（沿 2026-09-26 约定 #9）。
   watch(query.error, (e) => {

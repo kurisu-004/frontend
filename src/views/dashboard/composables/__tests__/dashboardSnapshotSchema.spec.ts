@@ -5,7 +5,7 @@
 //
 // 字段来源：
 //   - backend-rust/src/modules/dashboard/vo/snapshot.rs:77-119（DashboardSnapshot 5 顶层 + 4 shelf 字段）
-//   - snapshot.rs:95-119（DashboardItem 17 字段）
+//   - snapshot.rs:95-119（DashboardItem 19 字段，5 必填 + 14 nullable）
 //   - snapshot.rs:122-125（UpcomingDeliveryBucket 2 字段，count i64 → string）
 //
 // 覆盖：
@@ -13,9 +13,13 @@
 //     item + 1 in-process item + 1 delivery bucket）；
 //   - D2：缺必填字段拒绝（id / name / drawing_no / quantity / is_urgent 任一缺失 → 抛错）；
 //   - D3：可选字段（batch_id / serial_no / planned_delivery_date 等）缺省可正常 parse；
-//   - D4：DashboardItem 17 字段全声明 regression guard（与 customerSchema S4 同形态）；
+//   - D4：DashboardItem 19 字段全声明 regression guard（与 customerSchema S4 同形态）；
 //   - D5：UpcomingDeliveryBucket count 是 string（rust_decimal/serde-i64 wire-format）；
-//   - D6：dashboardItemSchema 不在 items 数组内时（裸对象）也接受。
+//   - D6：dashboardItemSchema 不在 items 数组内时（裸对象）也接受；
+//   - D7（2026-09-28 review 第 1 轮修复追加）：DashboardSnapshot /
+//     OnProductionShelfGroup / DashboardItem / UpcomingDeliveryBucket 全字段
+//     存在 guard —— Zod strip 模式会静默丢字段，光测缺失抛错不够，必须正向断言
+//     parsed output keys 与后端 VO 字段一一对应。
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -69,12 +73,43 @@ function makeBaseSnapshot(): Record<string, unknown> {
 }
 
 describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-09-28）', () => {
-  describe('dashboardItemSchema（DashboardItem 17 字段对齐）', () => {
-    it('D6：完整 17 字段 dashboardItemSchema.parse 通过', () => {
+  describe('dashboardItemSchema（DashboardItem 19 字段对齐）', () => {
+    it('D6：完整 19 字段 dashboardItemSchema.parse 通过', () => {
       const parsed = dashboardItemSchema.parse(makeBaseItem());
       expect(parsed.id).toBe('180000000000001');
       expect(parsed.quantity).toBe(10);
       expect(parsed.is_urgent).toBe(false);
+    });
+
+    // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
+    // Zod 默认 strip 模式会让 schema 未声明的字段被静默丢弃，光测缺失抛错不够——
+    // 例如有人误删 customer_id 字段声明，本用例仍绿。前置正断言 keys 与后端 VO
+    // 字段一一对应，是 S4 regression guard 的核心思路。
+    it('D7：DashboardItem 19 字段全在 parsed output 里（strip-mode regression guard）', () => {
+      const parsed = dashboardItemSchema.parse(makeBaseItem());
+      expect(Object.keys(parsed).sort()).toEqual(
+        [
+          'id',
+          'batch_id',
+          'batch_no',
+          'serial_no',
+          'name',
+          'drawing_no',
+          'quantity',
+          'is_urgent',
+          'planned_delivery_date',
+          'picked_up_at',
+          'current_holder_id',
+          'current_holder_kind',
+          'shelf_code',
+          'customer_id',
+          'customer_name',
+          'customer_path',
+          'next_process_id',
+          'next_process_name',
+          'worker_name',
+        ].sort(),
+      );
     });
 
     it('D3：可选字段缺省（batch_id / serial_no / planned_delivery_date 等置 null）仍可 parse', () => {
@@ -144,6 +179,20 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
       expect(parsed.items).toHaveLength(2);
     });
 
+    // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
+    it('D7：OnProductionShelfGroup 4 顶层字段全在 parsed output 里', () => {
+      const parsed = onProductionShelfGroupSchema.parse({
+        shelf_id: '150000000000001',
+        shelf_code: 'A-01',
+        shelf_name: '生产区 A-01',
+        total_count: 3,
+        items: [makeBaseItem()],
+      });
+      expect(Object.keys(parsed).sort()).toEqual(
+        ['shelf_id', 'shelf_code', 'shelf_name', 'total_count', 'items'].sort(),
+      );
+    });
+
     it('缺 total_count → 抛 ZodError', () => {
       expect(() =>
         onProductionShelfGroupSchema.parse({
@@ -160,6 +209,12 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
     it('D5：count 是 string（i64 → rust serde-i64 序列化为字符串）', () => {
       const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: '42' });
       expect(parsed.count).toBe('42');
+    });
+
+    // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
+    it('D7：UpcomingDeliveryBucket 2 字段全在 parsed output 里', () => {
+      const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: '42' });
+      expect(Object.keys(parsed).sort()).toEqual(['count', 'date'].sort());
     });
 
     it('count 传 number → 抛 ZodError', () => {
@@ -179,6 +234,20 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
       expect(parsed.in_process).toHaveLength(1);
       expect(parsed.upcoming_delivery).toHaveLength(1);
       expect(parsed.upcoming_delivery[0]?.count).toBe('5');
+    });
+
+    // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
+    it('D7：DashboardSnapshot 5 顶层字段全在 parsed output 里', () => {
+      const parsed = dashboardSnapshotSchema.parse(makeBaseSnapshot());
+      expect(Object.keys(parsed).sort()).toEqual(
+        [
+          'on_production_shelves',
+          'on_inspection_shelves',
+          'in_process',
+          'upcoming_delivery',
+          'ts',
+        ].sort(),
+      );
     });
 
     it('空数组也接受（snapshot 内无货架 / 无在制）', () => {

@@ -37,7 +37,8 @@ export const qk = {
   customersPrefix: ['customers'] as const,
   processesOptions: (params: ProcessListParams | undefined) =>
     ['processes', 'options', params ?? null] as const,
-  processesList: (params: ListProcessesParams) => ['processes', 'list', params] as const,
+  processesList: (params: ListProcessesParams) =>
+    ['processes', 'list', params] as const,
   processesPrefix: ['processes'] as const,
   /** 2026-09-26 新增：零件列表键工厂 —— A 任务只对齐键类型，useQuery 由 B 任务实现。 */
   partsList: (params: ListPartsParams) => ['parts', 'list', params] as const,

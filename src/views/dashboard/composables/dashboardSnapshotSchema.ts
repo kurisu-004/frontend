@@ -1,8 +1,8 @@
 // 2026-09-28 新增：dashboard 域大屏快照 Zod schema。
 //
 // 字段对齐 backend-rust/src/modules/dashboard/vo/snapshot.rs 的 DashboardSnapshot
-// VO（含 OnProductionShelfGroup / DashboardItem / UpcomingDeliveryBucket 共 17 + 4 + 2 = 23
-// 字段全集）。
+// VO（含 OnProductionShelfGroup / DashboardItem / UpcomingDeliveryBucket 共 19 + 4 + 2 = 25
+// 字段全集；DashboardItem 5 必填 + 14 nullable）。
 //
 // 关键约束（沿 2026-09-26 约定的 queryFn Zod 守门 + 2026-09-24 Zod schema-first）：
 //   - 所有非 Option 字段必填显式声明（Zod 默认 strip 模式会静默丢弃未声明字段，
@@ -16,14 +16,14 @@
 // 数据来源：
 //   - backend-rust/src/modules/dashboard/vo/snapshot.rs:77-119（DashboardSnapshot 5 顶层字段）
 //   - snapshot.rs:86-92（OnProductionShelfGroup 4 字段 + items: Vec<DashboardItem>）
-//   - snapshot.rs:95-119（DashboardItem 17 字段）
+//   - snapshot.rs:95-119（DashboardItem 19 字段，5 必填 + 14 nullable）
 //   - snapshot.rs:122-125（UpcomingDeliveryBucket 2 字段）
 
 import { z } from 'zod';
 
 /** 2026-09-28 新增：单个零件 / 批次行（DashboardItem VO）。
- *  17 字段全部显式声明：4 个非 Option 必填（id / name / drawing_no / quantity /
- *  is_urgent），13 个 Option 字段 nullable()。 */
+ *  19 字段全部显式声明：5 个非 Option 必填（id / name / drawing_no / quantity /
+ *  is_urgent），14 个 Option 字段 nullable()。 */
 export const dashboardItemSchema = z.object({
   id: z.string(),
   // 2026-07-29 批次化：卡片行=批次；quantity 为批次量

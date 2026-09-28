@@ -121,6 +121,9 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
   }
 
   function dispatch(msg: DashboardServerMessage): void {
+    // 2026-09-28 review 第 1 轮修复：显式三分支（plan 3.10 字面要求），保留
+    // snapshot 与 heartbeat 的 no-op 行为不变（HTTP 全量首取已替代 snapshot；
+    // heartbeat 是后端 30s 保活 text 帧，前端无需消费）。
     if (msg.type === 'event') {
       // 【B1 预留】若日后落地真增量（DASHBOARD_ITEM_UPSERT / REMOVE 等），
       // 在此 switch (msg.event_type) 二级分发到 query cache patcher，
@@ -133,16 +136,25 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
           console.error('dashboard event handler error', e);
         }
       }
+    } else if (msg.type === 'snapshot' || msg.type === 'heartbeat') {
+      // snapshot 帧不再分发（HTTP 全量首取已替代）；heartbeat 帧直接忽略。
+      return;
     }
-    // snapshot 帧不再分发（HTTP 全量首取已替代）；heartbeat 帧直接忽略。
   }
 
   // 把 VueUse 'CONNECTING' / 'OPEN' / 'CLOSED' 翻译成 ConnectionStatus（保持
   // 现有 public 类型语义不变，外部 status handler 仍按 'connecting' | 'open' |
   // 'closed' 写 switch）。
-  watch(status, (s) => {
-    if (s === 'CONNECTING') notifyStatus('connecting');
-  });
+  // 2026-09-28 review 第 1 轮修复：加 immediate: true，让模块首次实例化时
+  // 初始 CONNECTING 状态也能触发 status handler（原手写代码在 connect() 顶部
+  // 同步 notifyStatus('connecting')，语义对齐）。
+  watch(
+    status,
+    (s) => {
+      if (s === 'CONNECTING') notifyStatus('connecting');
+    },
+    { immediate: true },
+  );
 
   return {
     eventSubs,
