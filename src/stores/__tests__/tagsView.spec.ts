@@ -231,28 +231,6 @@ describe('useTagsViewStore', () => {
     });
   });
 
-  // ===== updateVisitedView =====
-  describe('updateVisitedView', () => {
-    it('按 path 定位已访问 tab 并同步元数据', () => {
-      const tags = useTagsViewStore();
-      tags.addView(makeView({ path: '/parts', fullPath: '/parts', name: 'PartsList', title: '零件一览' }));
-      tags.updateVisitedView(
-        makeView({ path: '/parts', fullPath: '/parts?status=active', name: 'PartsList', title: '零件一览 (active)' }),
-      );
-      expect(tags.visitedViews).toHaveLength(1);
-      expect(tags.visitedViews[0].fullPath).toBe('/parts?status=active');
-      expect(tags.visitedViews[0].title).toBe('零件一览 (active)');
-    });
-
-    it('path 不存在时 no-op（不入新 entry，仅 update）', () => {
-      const tags = useTagsViewStore();
-      tags.addView(makeView({ path: '/a', fullPath: '/a', name: 'A' }));
-      tags.updateVisitedView(makeView({ path: '/x', fullPath: '/x', name: 'X', title: 'X' }));
-      expect(tags.visitedViews).toHaveLength(1);
-      expect(tags.visitedViews[0].path).toBe('/a');
-    });
-  });
-
   // ===== reset =====
   describe('reset', () => {
     it('清空 visitedViews + cachedViewNames，并触发 localStorage 写入', async () => {

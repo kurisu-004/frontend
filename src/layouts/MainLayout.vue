@@ -219,11 +219,10 @@ const reload = (): void => {
   // （临时从 cachedViewNames 移除当前 name → nextTick 重新 push → keep-alive 重挂
   // 载）。比硬刷新更轻（不丢失其它 tab 的滚动位置 / 状态），且与右键菜单「刷新」
   // 复用同一路径。
-  if (route.meta?.noTagsView === true) {
-    ElMessage.success('刷新成功');
-    router.go(0);
-    return;
-  }
+  //
+  // 2026-09-28 修复：移除 `route.meta?.noTagsView === true` 分支——noTagsView 路由
+  // （如 /login、/404）不在 MainLayout 子树，reload 按钮根本不会被触发；保留分支
+  // 是 dead code + 误导性兜底（无路由能进入这条 if）。
   ElMessage.success('刷新成功');
   void tags.refreshSelectedView(routeToView());
 };

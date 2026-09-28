@@ -50,16 +50,10 @@ export const useTagsViewStore = defineStore(
     const cachedViewNames: Ref<string[]> = ref<string[]>([]);
 
     // ===== getters =====
-    /** 当前激活 tab（用于菜单 active / 高亮判定）。按 path 对比，不看 fullPath，
-     *  保证 /parts?status=A 与 /parts?status=B 共享同一 tab。
-     *
-     *  当前实现保留为占位（永远返回 false）—— 实际判定由 TagsView.vue 通过
-     *  `route.path === view.path` 完成，store 不 import vue-router。
-     *  保留函数形态以备视图层将来要"哪个 tab 是当前 selected"等复合查询。 */
-    function isActive(_view: TagView): boolean {
-      return false;
-    }
-
+    // 2026-09-28 修复：移除 `isActive` 占位 getter（永远返回 false，是 dead code）。
+    // 「当前激活 tab」判定依赖当前 route.path，由 TagsView.vue 通过 `useRoute()`
+    // 完成（store 不 import vue-router，沿 auth store 不变量）。
+    //
     /** affix 判定：仅看字段，不参与删除逻辑（删除路径在 removeView / removeOtherViews
      *  / removeAllViews 内联判定 affix）。 */
     function isAffix(view: TagView): boolean {
@@ -181,21 +175,6 @@ export const useTagsViewStore = defineStore(
     }
 
     /**
-     * 更新已访问 tab 的元数据（title / fullPath 等），按 path 定位。当前主要
-     * 用于路由 query 变化时同步 title；保留为 public 以备未来扩展。
-     */
-    function updateVisitedView(view: TagView): void {
-      const list = visitedViews.value;
-      const existing = list.find((v) => v.path === view.path);
-      if (existing) {
-        existing.fullPath = view.fullPath;
-        existing.title = view.title;
-        existing.icon = view.icon;
-        existing.name = view.name;
-      }
-    }
-
-    /**
      * 清空所有状态（登出时由 auth.logout() 调用）。persist 插件会在同步 mutation
      * 后立即写 localStorage → 下次以游客身份进入应用时看到空 tags 条。
      */
@@ -207,14 +186,12 @@ export const useTagsViewStore = defineStore(
     return {
       visitedViews,
       cachedViewNames,
-      isActive,
       isAffix,
       addView,
       removeView,
       removeOtherViews,
       removeAllViews,
       refreshSelectedView,
-      updateVisitedView,
       reset,
     };
   },
@@ -222,7 +199,7 @@ export const useTagsViewStore = defineStore(
     // 2026-09-28 新增：仓内首例使用 pinia-plugin-persistedstate@^4。plugin 仅在
     // store 首次创建时从 localStorage 恢复一次（行为沿 pinia 文档 §persist 章节）。
     // v4 API 用 `pick`（不是 v3 的 `paths`）—— 仅持久化 visitedViews 与
-    // cachedViewNames，isActive / isAffix 是 computed-style 函数不入 storage。
+    // cachedViewNames，isAffix 是 computed-style 函数不入 storage。
     //
     // 注意：不显式传 `storage` —— plugin 默认走 `window.localStorage`。显式
     // 写 `storage: localStorage` 会在模块顶层求值，破坏 node env 下的 imports

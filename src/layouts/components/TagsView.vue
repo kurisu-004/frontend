@@ -7,9 +7,7 @@
       v-for="view in visitedViews"
       :key="view.path"
       trigger="contextmenu"
-        :disabled="view.affix === true"
       @command="(cmd: MenuCmd) => onContextMenuCmd(cmd, view)"
-      @visible-change="(v: boolean) => onMenuVisibleChange(view, v)"
     >
       <!-- 自定义 tab 视觉壳（不用 el-tag：22px 最小高度 + 内置色彩与本设计相冲） -->
       <div
@@ -121,11 +119,6 @@ function onCloseClick(view: TagView): void {
   closeView(view);
 }
 
-/** 右键菜单事件分发。 */
-function onMenuVisibleChange(_view: TagView, _visible: boolean): void {
-  /* 占位：el-dropdown 可见性回调；当前无需同步状态，留接口备将来扩展。 */
-}
-
 function onContextMenuCmd(cmd: MenuCmd, view: TagView): void {
   switch (cmd) {
     case 'refresh':
@@ -160,9 +153,18 @@ function closeOthers(view: TagView): void {
   tags.removeOtherViews(view);
 }
 
-/** 关闭全部非 affix tab。保留 affix。 */
-function closeAll(_view: TagView): void {
+/** 关闭全部非 affix tab。保留 affix。
+ *
+ *  2026-09-28 修复：vue-element-admin 的「关闭全部」行为是「保留当前激活 tab + 全部
+ *  affix」。store.removeAllViews() 仅负责「保留 affix」，本 view 层负责「若清空后
+ *  没有激活 tab 了，把触发右键的 view 重新 add 回去」（affix 不需要这一步，因为它
+ *  不可能被本流程清掉）。这样 store 保持纯粹（仅按字段判定，不感知当前激活 tab），
+ *  UI 语义落到 UI 层，符合分层不变量。 */
+function closeAll(view: TagView): void {
   tags.removeAllViews();
+  if (visitedViews.value.length === 0) {
+    tags.addView(view);
+  }
 }
 
 /** 关闭当前 tab 后挑下一个 fallback 邻居。removeView 已经把被关 view 从
