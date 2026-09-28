@@ -1,7 +1,10 @@
-// src/composables/cosUploaderPickPlan.ts
+// src/components/cosUploaderPickPlan.ts
 //
 // 2026-09-28 新增：把 CosUploader 组件内 onPick 合批 / 校验逻辑抽成纯函数，
 // 便于在 node 环境独立测试（项目无 happy-dom / @vue/test-utils 依赖）。
+//
+// 2026-09-28 调整：按 composable 归属判别（跨域共享约束）下沉到 components/，
+// 与 CosUploader.vue 同目录；仓内仅 CosUploader.vue 单点消费，不进 composables/。
 //
 // 导出函数：
 // - matchesAccept(file, accept)：解析 ".pdf" / "image/*" / "image/jpeg" / "jpeg" 四种 token 形态

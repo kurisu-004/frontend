@@ -7,7 +7,7 @@
   配套：
   - 类型契约 src/types/cos_upload.ts
   - 底层 composable src/composables/useCosUploader.ts
-  - 选文件纯函数 src/composables/cosUploaderPickPlan.ts
+  - 选文件纯函数 src/components/cosUploaderPickPlan.ts
 
   2026-09-28 整改：el-upload 内部列表泄漏（limit 永久超限）、
               双次 requestUpload（sha256 + allocate 双倍浪费）、
@@ -143,7 +143,7 @@ import {
   type CosUploaderItem,
   type CosUploadSession,
 } from '@/composables/useCosUploader';
-import { planPick } from '@/composables/cosUploaderPickPlan';
+import { planPick } from './cosUploaderPickPlan';
 
 interface Props {
   /** 必填：申请 STS 凭证 + tmp_key。返回 batch session */
@@ -433,8 +433,9 @@ async function onPick(uploadFile: UploadFile, _uploadFiles: UploadFiles): Promis
   const raw = uploadFile.raw as File | undefined;
   if (!raw) return;
   // P0-1 修复：每条路径（不论后续是否成功）立即清空 el-upload 内部幽灵列表。
-  // clearFiles 仅 filter 内部数组、不回调 onChange（EP 2.14.2 use-handlers.mjs:17-23），
-  // 不会触发本函数重入。不能用 handleRemove（会回调 onChange 把删掉的再送回来）。
+  // clearFiles 仅 filter 内部数组、不回调 onChange（EP 2.x use-handlers.mjs:17-23），
+  // 不会触发本函数重入。不用 handleRemove 是因为它会顺带调 onRemove / abort /
+  // revokeFileObjectURL 等无关副作用；clearFiles 仅 filter 内部数组，最干净。
   void uploadRef.value?.clearFiles();
   pickBuffer.push(raw);
   if (flushScheduled) return;
@@ -503,7 +504,7 @@ async function flushPickBuffer(): Promise<void> {
 }
 
 // matchesAccept 仅组件本地使用时被 pickPlan 替代；此处不再保留本地实现，
-// 完整解析逻辑走 src/composables/cosUploaderPickPlan.ts。
+// 完整解析逻辑走 src/components/cosUploaderPickPlan.ts。
 // 2026-09-28：旧版 beforeUpload 恒返回 false（避免 el-upload 自带 action
 // 触发）。2026-09-28 整改后本组件 :auto-upload="false" + 自实现完整上传流程，
 // 已不需要 beforeUpload 钩子，删除避免误导。

@@ -22,7 +22,7 @@
 // - useCosUpload（part-file 专用）：保留，内部仍被 parts-form 等 part-file 视图
 //   消费，并保留 part_file.ts 类型契约；
 // - useCosUploader（通用，**并存而非替代**）：面向未来其它域的通用上传底座，
-//   也将驱动 `src/components/cos-uploader/*` 系列组件；
+//   也将驱动 `src/components/CosUploader.vue`；
 // - 二者状态机 / 重签 / 重试策略一致，差异仅在输入契约（通用 session vs part
 //   域 intents）。
 //

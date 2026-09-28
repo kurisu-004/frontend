@@ -1,4 +1,4 @@
-// src/composables/__tests__/cosUploader.pickPlan.spec.ts
+// src/components/__tests__/cosUploader.pickPlan.spec.ts
 //
 // 2026-09-28 新增：纯函数 planPick / matchesAccept 单测。
 

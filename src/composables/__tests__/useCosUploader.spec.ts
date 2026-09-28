@@ -745,7 +745,7 @@ describe('useCosUploader / applyFreshSession done skip', () => {
     // refresh 返回全新 tmp_key + 健康凭证
     const refetchSession = vi.fn(async () => makeSession(['tmp/refreshed'], expSec + 7200));
 
-    const { startUpload, items: exposedItems } = useCosUploader({
+    const { startUpload } = useCosUploader({
       items: itemsRef,
       refetchSession,
       initialSession,
@@ -764,7 +764,6 @@ describe('useCosUploader / applyFreshSession done skip', () => {
     expect(itemsRef.value[0]!.status).toBe('done');
     expect(itemsRef.value[0]!.tmp_key).toBe('tmp/original');
     expect(refetchSession).toHaveBeenCalledTimes(1);
-    void exposedItems; // 占位让 lint 不抱怨未使用
   });
 });
 
