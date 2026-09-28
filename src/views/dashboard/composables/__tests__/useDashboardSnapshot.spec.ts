@@ -36,6 +36,13 @@ const fetchSnapshotMock = vi.fn();
 let lastEventHandler:
   | ((ev: { type: 'event'; event_type: string; data: Record<string, unknown>; ts: string }) => void)
   | null = null;
+// 2026-09-28 review 第 2 轮修复（N1）：跟踪所有注册的 handler 用于回归保护。
+// useDashboardSnapshot 必须捕获 off + tryOnScopeDispose，否则多次 mount/unmount
+// 会累加永不清理的 handler。原实现 lastEventHandler 单变量无法表达「多次注册」，
+// 改用 Set 记录所有未清理的 handler，U7 用例断言 scope.stop() 后 Set 清零。
+const eventHandlers = new Set<
+  (ev: { type: 'event'; event_type: string; data: Record<string, unknown>; ts: string }) => void
+>();
 const onDashboardEventMock = vi.fn(
   (
     h: (ev: {
@@ -45,9 +52,11 @@ const onDashboardEventMock = vi.fn(
       ts: string;
     }) => void,
   ) => {
+    eventHandlers.add(h);
     lastEventHandler = h;
     return () => {
-      lastEventHandler = null;
+      eventHandlers.delete(h);
+      if (lastEventHandler === h) lastEventHandler = null;
     };
   },
 );
@@ -114,6 +123,7 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     fetchSnapshotMock.mockReset();
     onDashboardEventMock.mockClear();
     lastEventHandler = null;
+    eventHandlers.clear();
     fetchSnapshotMock.mockResolvedValue(makeBaseSnapshot());
 
     testQueryClient = new QueryClient({ defaultOptions: { mutations: { retry: 0 } } });
@@ -247,5 +257,29 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     expect(q!.error.value).not.toBeNull();
     expect(q!.data.value).toBeUndefined();
     scope.stop();
+  });
+
+  it('U7：多次 mount/unmount 不累加 onDashboardEvent handler（2026-09-28 review N1 regression guard）', () => {
+    // 2026-09-28 review 第 2 轮修复（N1）：原 DashboardView.vue 用 onBeforeUnmount
+    // 调 offSnap?.() 清理 onDashboardEvent 订阅；重构迁到 useDashboardSnapshot 时
+    // 漏了清理，每次进入 /dashboard 都往 eventSubs Set 累加一个永不清理的 handler，
+    // 闭包持有的 debouncedInvalidate / qc / query 永远无法 GC。本轮修：捕获 off +
+    // tryOnScopeDispose。本用例是这条修复的回归保护：5 轮 mount/unmount 后 handler
+    // Set 必须清零，否则就是漏了清理逻辑。
+    for (let i = 0; i < 5; i++) {
+      const scope = effectScope();
+      scope.run(() => {
+        testApp.runWithContext(() => useDashboardSnapshot());
+      });
+      // mount 后应该正好 1 个活跃 handler（本次 scope 注册的那个）
+      expect(eventHandlers.size).toBe(1);
+      scope.stop();
+      // unmount 后 tryOnScopeDispose 触发 off → handler Set 清零
+      expect(eventHandlers.size).toBe(0);
+    }
+
+    // 5 轮 mount/unmount 后最终状态：eventHandlers 应该清零
+    expect(eventHandlers.size).toBe(0);
+    expect(onDashboardEventMock).toHaveBeenCalledTimes(5);
   });
 });

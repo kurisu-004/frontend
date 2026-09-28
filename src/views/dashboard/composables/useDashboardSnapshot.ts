@@ -99,7 +99,10 @@ export function useDashboardSnapshot() {
   // 在重构中漏掉，会导致每次进入 /dashboard 都累加一个永不清理的 handler，
   // 闭包持有的 debouncedInvalidate / qc / query 无法 GC）。
   const offDashboardEvent = onDashboardEvent((ev) => {
-    // 【B1 预留】switch (ev.event_type) { ... } 真增量分支预留。
+    // 【B1 预留】真增量分支（switch on ev.event_type 二级分发到 query cache
+    // patcher）落地点。当前架构走「WS 事件 → HTTP 重取」，二级分发只区分
+    // 「影响 dashboard 大屏的事件集」一个维度（AFFECTS_DASHBOARD），所以
+    // if 形态而非 switch。
     if (AFFECTS_DASHBOARD.has(ev.event_type)) debouncedInvalidate();
   });
   tryOnScopeDispose(offDashboardEvent);

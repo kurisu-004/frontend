@@ -118,9 +118,36 @@ afterEach(() => {
 });
 
 describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2026-09-28）', () => {
+  // 2026-09-28 review 第 2 轮修复（N4）：拦截 window.addEventListener 收集
+  // 'auth:tokens-refreshed' listener → afterEach removeEventListener 清残留。
+  // 原实现没清残留，vi.resetModules() 不清 DOM listener，前一条用例挂的
+  // listener 仍累积在 window 上 → dispatchEvent 触发多个用例的 listener
+  // 错位产生 socket 实例，单跑（无残留）直接 FAIL。
+  const refreshListeners: Array<EventListener> = [];
+
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.useRealTimers();
+    refreshListeners.length = 0;
+    const realAdd = window.addEventListener.bind(window);
+    vi.spyOn(window, 'addEventListener').mockImplementation(((
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
+      const result = realAdd(type, listener, options);
+      if (type === 'auth:tokens-refreshed' && typeof listener === 'function') {
+        refreshListeners.push(listener);
+      }
+      return result;
+    }) as typeof window.addEventListener);
+  });
+
+  afterEach(() => {
+    for (const h of refreshListeners.splice(0)) {
+      window.removeEventListener('auth:tokens-refreshed', h);
+    }
+    vi.restoreAllMocks();
   });
 
   it('URL 带 token 拼接：localStorage 有 token 时 ?token=xxx', async () => {
@@ -154,31 +181,42 @@ describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2
     // 2026-09-28 改造核心：刷新 token 不再需要手动 reconnectDashboard。
     // 拦截器 dispatch auth:tokens-refreshed → 模块级 tokenVersion ref bump →
     // URL computed 重算 → VueUse watch(urlRef, open) 自动 close + 重建 socket。
+    //
+    // 2026-09-28 review 第 2 轮修复（N4）：原实现 stub localStorage 永远返 null，
+    // URL 永远不带 token → 单跑时 dispatchEvent 触发 tokenVersion++ → URL 重算
+    // 仍是无 token 形态 → Vue hasChanged 判定 false → watch 不 fire → 1 个实例
+    // → 断言失败。修法：让 stub localStorage 在 dispatchEvent 前后返回不同 token，
+    // 模拟生产场景（拦截器刷新成功 → localStorage 已写入新 token）。
     vi.resetModules();
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
+    let stubToken: string | null = null;
     vi.stubGlobal('localStorage', {
-      getItem: vi.fn(() => null),
+      getItem: vi.fn(() => (stubToken === null ? null : JSON.stringify({ token: stubToken }))),
       setItem: vi.fn(),
       removeItem: vi.fn(),
     });
     const api = await import('./dashboard');
     await bootstrapSocket(api);
 
+    // dispatchEvent 前：无 token → URL 不带 token
     expect(FakeWebSocket.instances).toHaveLength(1);
-    const firstUrl = FakeWebSocket.instances[0]?.url;
+    expect(FakeWebSocket.instances[0]?.url).toBe('ws://localhost:5173/ws/dashboard');
 
-    // 模拟 auth store 刷新成功后 dispatchEvent('auth:tokens-refreshed')
+    // 模拟拦截器刷新成功：localStorage 写入新 token + dispatch 事件
+    stubToken = 'new-jwt-token';
     window.dispatchEvent(new CustomEvent('auth:tokens-refreshed'));
     // 等待 VueUse watch 触发 + Vue 调度队列清空。
     // effectScope(true) detached scope 内的 watch 在 tokenVersion.value++ 后
     // 由 Vue scheduler 在 microtask 队列清空时回调，回调里 close() 老 socket + new WebSocket()。
     await new Promise((r) => setTimeout(r, 50));
 
-    // VueUse watch 检测到 urlRef 变化 → close() 老 socket → open 新 socket
+    // URL 重算读到带 token → VueUse watch fire → new WebSocket
     expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
-    expect(FakeWebSocket.instances[1]?.url).toBe(firstUrl); // 同 URL 但新实例
+    expect(FakeWebSocket.instances[1]?.url).toBe(
+      'ws://localhost:5173/ws/dashboard?token=new-jwt-token',
+    );
   });
 
   it('reconnectDashboard() 显式重连：open() 调用产生新 socket', async () => {

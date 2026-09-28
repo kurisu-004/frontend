@@ -101,7 +101,11 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
     },
     onMessage(_ws, e) {
       try {
-        const msg = JSON.parse(e.data) as DashboardServerMessage;
+        // 2026-09-28 review 第 2 轮修复（N3）：WS 帧壳已在 types/dashboard.ts 用
+        // discriminated union（DashboardEvent | WsSnapshotMsg | WsHeartbeatMsg）
+        // 描述，无需 `as DashboardServerMessage` 强转；TS 在 dispatch 内的
+        // if/else if 分支能按 msg.type 字面量正确 narrow。
+        const msg: DashboardServerMessage = JSON.parse(e.data);
         dispatch(msg);
       } catch (err) {
         // 后端 30s 心跳 {type:'heartbeat'} text 帧正常不抛错；其它解析失败仅记日志。
@@ -121,14 +125,19 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
   }
 
   function dispatch(msg: DashboardServerMessage): void {
+    // 2026-09-28 review 第 2 轮修复（N3）：union 补全后这里用 discriminated union
+    // narrowing；msg.type 字面量在每个分支被精确收窄到对应 interface，
+    // TS 不再把 snapshot/heartbeat 帧硬塞到 DashboardEvent 类型里。
     // 2026-09-28 review 第 1 轮修复：显式三分支（plan 3.10 字面要求），保留
     // snapshot 与 heartbeat 的 no-op 行为不变（HTTP 全量首取已替代 snapshot；
     // heartbeat 是后端 30s 保活 text 帧，前端无需消费）。
     if (msg.type === 'event') {
-      // 【B1 预留】若日后落地真增量（DASHBOARD_ITEM_UPSERT / REMOVE 等），
-      // 在此 switch (msg.event_type) 二级分发到 query cache patcher，
-      // default 仍走事件 invalidate 兜底。当前架构走「WS 事件 → HTTP 重取」，
-      // 二级分发只区分「影响 dashboard 大屏的事件集」一个维度（AFFECTS_DASHBOARD）。
+      // 【B1 预留】未来形态：若日后落地真增量（DASHBOARD_ITEM_UPSERT / REMOVE 等），
+      // 在此分支内加二级分发（例：按 msg.event_type 走 query cache patcher，
+      // default 仍走事件 invalidate 兜底）。当前架构走「WS 事件 → HTTP 重取」，
+      // 二级分发只区分「影响 dashboard 大屏的事件集」一个维度
+      // （AFFECTS_DASHBOARD，详见 useDashboardSnapshot.ts），所以此分支
+      // 仅做 fan-out + 错误隔离，未来 B1 落地时再内嵌二级分发。
       for (const h of eventSubs) {
         try {
           h(msg);
@@ -136,8 +145,12 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
           console.error('dashboard event handler error', e);
         }
       }
-    } else if (msg.type === 'snapshot' || msg.type === 'heartbeat') {
-      // snapshot 帧不再分发（HTTP 全量首取已替代）；heartbeat 帧直接忽略。
+    } else if (msg.type === 'snapshot') {
+      // 2026-09-28 新架构下不再消费首帧 snapshot 业务字段（HTTP 全量首取
+      // 已替代）；保留分支显式 no-op 便于日后落地真增量 patch。
+      return;
+    } else if (msg.type === 'heartbeat') {
+      // 30s 保活 text 帧直接忽略。
       return;
     }
   }

@@ -65,5 +65,28 @@ export interface DashboardEvent {
   ts: string;
 }
 
-export type DashboardServerMessage = DashboardEvent;
+// 2026-09-28 review 第 2 轮修复（N3）：补 WS 协议层三种消息壳 interface，
+// 让 DashboardServerMessage union 是真正的判别联合（discriminated union）。
+//   - WsSnapshotMsg：后端首帧 snapshot，新架构（HTTP 全量首取 + WS 事件 invalidate）
+//     下仅作「连接就绪信号」，不再消费 data 业务字段。
+//   - WsHeartbeatMsg：后端 30s 保活 text 帧，前端无消费者。
+// 原 main `DashboardServerMessage = DashboardSnapshot | DashboardEvent` 在本次
+// 重构后塌缩为单一变体 `DashboardEvent`，dispatch 函数里 `msg.type === 'snapshot'`
+// 与 `msg.type === 'heartbeat'` 分支在 TS narrowing 后是死代码。
+// 补 union 后这三个分支能被 TS 正确 narrow，dispatch 类型谎言解除。
+// 字段对齐 backend-rust `src/modules/ws/hub.rs`（具体字段待后端契约确认；
+// 当前 shell 形态足够支撑 onMessage 三分支 narrow + future schema 校验）。
+
+export interface WsSnapshotMsg {
+  type: 'snapshot';
+  data: unknown;
+  ts: string;
+}
+
+export interface WsHeartbeatMsg {
+  type: 'heartbeat';
+  ts: string | number;
+}
+
+export type DashboardServerMessage = DashboardEvent | WsSnapshotMsg | WsHeartbeatMsg;
 export type ConnectionStatus = 'connecting' | 'open' | 'closed';
