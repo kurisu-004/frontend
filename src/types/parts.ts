@@ -193,7 +193,10 @@ export interface PartListItem {
   /** 2026-07-30：创建时间（装配件行带出） */
   created_at?: string | null;
   /** C2 2026-08-05：装配件携带的「命中子件」；仅当 next_process_ids / locations /
-   *  holder_ids 筛选激活时填充。其余情况为 null。前端 loadChildren 优先消费。 */
+   *  holder_ids 筛选激活时填充。其余情况为 null。前端 loadChildren 优先消费。
+   *（2026-09-28 后端 modules/part/service/crud.rs::list_parts 合并响应不再携带此字段；
+   * PartsTable.loadChildren 永远走 getAssembly(row.id) 兜底。本字段保留 optional + nullable
+   * 仅作向后兼容。） */
   matched_children?: PartListItem[] | null;
 }
 
