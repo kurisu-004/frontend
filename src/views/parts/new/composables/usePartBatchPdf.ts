@@ -26,11 +26,13 @@ import {
   type ShallowRef,
 } from 'vue';
 import type { UseCosUploadReturn } from '@/composables/useCosUpload';
+import { useCosUpload } from '@/composables/useCosUpload';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { CosUploadItem } from '@/composables/useCosUpload';
 import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
+import { grantStsTmpKeyFiles } from '@/api/files/sts';
 // 2026-09-28 删 useUploadSession：mergeDraftWithSession 不再被本文件消费（仅在
 // 已被删除的 onMounted 块中调用）；usePartsNewDraft 仍被 draft composable 调用，
 // 其它类型（Serialized*Row / MergeResult）仍由 serialize* 函数消费。
@@ -42,11 +44,15 @@ import {
   type SerializedPdfTab,
   type SerializedStandalonePartRow,
 } from '@/views/parts/new/composables/usePartsNewDraft';
+import { stsCredentialsToCosCredentials } from '@/views/parts/new/composables/_grantMappers';
+import { PartFileKindToStsPurpose } from '@/types/sts';
 import type { Customer } from '@/api/customer';
-// 2026-09-28：UploadIntentsOut 仅在已被 stub 的 refetchIntents 回调中消费，
-// 本任务先移除 import 避免 lint 报 unused；子任务 #5 重写 grantStsTmpKeyFiles
-// 路径后会重新用上。PartFileKind 仍由其它代码路径使用，保留。
-import type { FileBinding, PartFileKind } from '@/types/part_file';
+import type {
+  FileBinding,
+  PartFileKind,
+  UploadIntentsOut,
+  UploadIntentItemOut,
+} from '@/types/part_file';
 import { computeSha256 } from '@/utils/fileHash';
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser';
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
@@ -1949,20 +1955,124 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         });
       }
 
-      // 步骤 3+4+5：upload-session 共享 STS 单端口签 N 个 key（2026-09-28 stub）
+      // 步骤 3 + 4 + 5：grantStsTmpKeyFiles 单批签名 + useCosUpload 直传
+      // （2026-09-28 子任务 #5：替换原 backend-rust upload-session 共享 STS）
       //
-      // 原实现（2026-09-18）：调 backend-rust `/api/v2/upload-sessions/{id}/files:allocate`
-      // 一次签 N 个 tmp_key + 共享同一 STS 凭证；refetchIntents 回调从 session.renew 重建。
+      // 流程：
+      // 1) 收集 entries → grantStsTmpKeyFiles({scope, files: [...]}]) 单 HTTP +
+      //    单签名批；返回 items[i].tmp_key 与 files[i] 一一对应（下标对齐）；
+      // 2) 给每个 entry 分配 clientRef + tmpKey（caller 侧持有，便于 retryItem
+      //    按 clientRef 反查；useCosUpload.applyFreshIntents 也按 clientRef
+      //    索引命中，所以 refetchIntents 必须复用同一 clientRef）；
+      // 3) 构造 CosUploadItem[] 喂给 useCosUpload；startUpload() 走 cos-js-sdk-v5
+      //    直传 COS tmp 区。
       //
-      // 本任务删除 useUploadSession 后：本块 throw not-implemented，子任务 #5 用
-      // backend-python `/api/v1/files/sts-tmp-keys` 数组入参（grantStsTmpKeyFiles，
-      // 详见 plan §2.1 + §3.4）重写整段——单次 HTTP、单次签名批、单批多个文件。
+      // 与 usePartBatchManual.requestDrawingUpload 的差异：
+      // - 本函数要把 entry.kind 映射成 purpose（drawing / 3d_model）；
+      // - 本函数走 useCosUpload（part-file 专用，UploadIntentsOut 形态）而非
+      //   useCosUploader（CosUploadGrant 形态）。两者都接受 grantStsTmpKeyFiles
+      //   的响应，只需构造时按 schema 字段挑选。
       if (entries.length > 0) {
-        // TODO(2026-09-28): 子任务 #5 用 grantStsTmpKeyFiles 重写此块。
-        // 当前 stub：抛 not-implemented，让上游 onStartUpload catch 后走 idle 兜底。
-        throw new Error(
-          'onStartUpload allocate 暂未实现：useUploadSession 已删除，待子任务 #5 用 grantStsTmpKeyFiles 重写单批签名。',
-        );
+        // 3.1 准备 clientRef + grantStsTmpKeyFiles 入参
+        entries.forEach((e) => {
+          e.clientRef = crypto.randomUUID();
+        });
+        const grants = await grantStsTmpKeyFiles({
+          scope: 'parts_new',
+          files: entries.map((e) => ({
+            purpose: PartFileKindToStsPurpose[e.kind] ?? 'tmp',
+            // 文件名在 entry.file.name 上（ensureFile() 包 File 后保留原 name）
+            filename: e.file.name,
+            content_type: e.contentType,
+          })),
+        });
+        if (grants.items.length !== entries.length) {
+          throw new Error(
+            `grantStsTmpKeyFiles 返回项数（${grants.items.length}）≠ entries 长度（${entries.length}）`,
+          );
+        }
+        // 3.2 把响应回填到 entries[i].tmpKey + 准备 UploadIntentItemOut
+        // （python 端 batch 按 scope 共享同一 STS 凭证，head 取 items[0] 的
+        //  credentials / bucket / region / upload_prefix）
+        const head = grants.items[0]!;
+        const intentsItems: UploadIntentItemOut[] = entries.map((e, idx) => {
+          const sts = grants.items[idx]!;
+          e.tmpKey = sts.tmp_key;
+          return {
+            client_ref: e.clientRef!,
+            tmp_key: sts.tmp_key,
+            // 2026-09-28：python STS 端口无 dedup 语义；固定 false，composable
+            // 永远走直传路径（与原 backend-rust dedup_hit=false 分支同形）。
+            dedup_hit: false,
+          };
+        });
+        const uploadIntents: UploadIntentsOut = {
+          credentials: stsCredentialsToCosCredentials(head),
+          bucket: head.bucket,
+          region: head.region,
+          // upload_prefix 来自 python 端 STS policy resource 限定前缀（展示用；
+          // 上传时 tmp_key 已自含前缀）。fallback 到 head.upload_prefix 直传。
+          tmp_prefix: head.upload_prefix,
+          items: intentsItems,
+        };
+
+        // 3.3 构造 CosUploadItem[] + useCosUpload 单批上传
+        // 这里使用 reqComputeSha256=false 因为 entries[i].sha 已在步骤 2 算好，
+        // 避免 useCosUpload 内部 computeSha256 重复一遍（节省 ~30MB PDF 的 hash
+        // 时间）。
+        cosItemsRef.value = entries.map((e, idx) => {
+          const item = intentsItems[idx]!;
+          return {
+            client_ref: item.client_ref,
+            file: e.file,
+            tmp_key: item.tmp_key,
+            bucket: uploadIntents.bucket,
+            region: uploadIntents.region,
+            tmp_prefix: uploadIntents.tmp_prefix,
+            credentials: uploadIntents.credentials,
+            status: 'pending' as const,
+            progress: 0,
+          };
+        });
+
+        /**
+         * 凭证过期或重签时再调一次 grantStsTmpKeyFiles；client_ref 复用，确保
+         * useCosUpload.applyFreshIntents 按 Map 命中同一 item。tmp_key 由
+         * python 端按 (purpose, filename, content_sha256) 派生，重签漂移时
+         * useCosUpload.applyFreshIntents 内部会强制 reset pending 走重传。
+         */
+        const fetchIntents = async (): Promise<UploadIntentsOut> => {
+          const fresh = await grantStsTmpKeyFiles({
+            scope: 'parts_new',
+            files: entries.map((e) => ({
+              purpose: PartFileKindToStsPurpose[e.kind] ?? 'tmp',
+              filename: e.file.name,
+              content_type: e.contentType,
+            })),
+          });
+          const freshHead = fresh.items[0]!;
+          // 同一序号的 client_ref 复用；让 useCosUpload 按 client_ref 索引命中
+          const freshItems: UploadIntentItemOut[] = fresh.items.map((sts, idx) => ({
+            client_ref: entries[idx]!.clientRef!,
+            tmp_key: sts.tmp_key,
+            dedup_hit: false,
+          }));
+          return {
+            credentials: stsCredentialsToCosCredentials(freshHead),
+            bucket: freshHead.bucket,
+            region: freshHead.region,
+            tmp_prefix: freshHead.upload_prefix,
+            items: freshItems,
+          };
+        };
+
+        const upload = useCosUpload({
+          items: cosItemsRef,
+          refetchIntents: fetchIntents,
+          concurrency: 3,
+        });
+        cosUpload.value = upload;
+        await upload.startUpload();
       }
 
       // 阶段切到 uploaded；失败项由行内 retry 兜底，不阻断 stage

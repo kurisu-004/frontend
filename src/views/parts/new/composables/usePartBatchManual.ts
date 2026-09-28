@@ -41,17 +41,19 @@ import {
   type PartBatchCreatePayload,
   type PartBatchResult,
 } from '@/api/parts';
+import { grantStsTmpKeyFiles } from '@/api/files/sts';
 import {
   usePartsNewDraft,
   type MergeResult,
   type SerializedStagedEntry,
 } from '@/views/parts/new/composables/usePartsNewDraft';
+import { stsToCosUploadGrant } from '@/views/parts/new/composables/_grantMappers';
 import type { Applicant } from '@/types/applicant';
 import type { FileBinding } from '@/types/part_file';
 import type { Customer } from '@/api/customer';
-// 2026-09-28 删 useUploadSession：requestDrawingUpload 改为 throw not-implemented，
-// computeSha256 不再被请求上传路径消费，先移除 import 避免 lint 报 unused。
-// 子任务 #5 重写 grantStsTmpKeyFiles 路径后会重新用上（按文件 computeSha256）。
+// 2026-09-28 子任务 #5：useUploadSession 已删除，requestDrawingUpload 改走
+// grantStsTmpKeyFiles 单批签名路径；CosUploader 契约 (File[]) => Promise<CosUploadGrant>
+// 完全保留，仅 caller 实现从「共享 STS session」变为「批量新签 STS + item 拼 grant」。
 import type {
   CosUploadedItem,
   CosUploaderItem,
@@ -393,37 +395,68 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     // form.applicantName 由 v-model 自动同步为 item.name，无需手动设
   }
 
-  // ============ 图纸 COS 上传（2026-09-17 M4 + 2026-09-18 upload_session → 2026-09-28 stub）============
+  // ============ 图纸 COS 上传（2026-09-17 M4 + 2026-09-18 upload_session → 2026-09-28 grantStsTmpKeyFiles）============
   //
   // CosUploader 走「前端直传 COS tmp 区 → 提交时挂 FileBinding → 后端 batch 事务内
   // head + copy tmp → 正式 CAS key + 插 t_part_file(READY)」两段式链路。
   //
-  // 2026-09-18 原实现：原 grantStsTmpKey（每文件 1-key）替换为 upload session 共享
-  // STS：单次 `session.allocate(files)` 拿整批 tmp_key，凭证过期由 useUploadSession
-  // 定时器自动续期。两 Tab（Manual / PDF）共享同一 `parts_new` scope session。
+  // 2026-09-18 原实现：每文件独立调 grantStsTmpKey（python 单端口 1-key）→ 2026-09-18
+  // 升级为共享 STS session：单次 `session.allocate(files)` 拿整批 tmp_key + 续期定时器
+  // → 2026-09-28 删 useUploadSession 后改回"批调用 grantStsTmpKeyFiles 单签名批"。
   //
-  // 2026-09-28 删除 useUploadSession 后：本任务仅删模块级 Map 单例池 + onMounted 预申请；
-  // requestDrawingUpload 暂时抛 not-implemented，由子任务 #5 用 grantStsTmpKeyFiles
-  // 单端口单批签名重写（详见 plan §3.3 caller 改造）。CosUploader 组件层契约
-  // `props.getUploadGrant: (File[]) => Promise<CosUploadGrant[]>` 不变。
+  // 2026-09-28 子任务 #5：caller 改造为 grantStsTmpKeyFiles 数组入参。
+  // - 入参：files[]（User 选中的图纸文件，按 ElUpload 接受顺序）；
+  // - 调用：POST /api/v1/files/sts-tmp-keys body {scope: 'parts_new', files: [...]}
+  //   单 HTTP + 单签名批；不再有 session / renew / 24h TTL；
+  // - 出参：response.items[i].tmp_key 与 files[i] 一一对应（下标对齐），caller 用
+  //   _grantMappers.stsToCosUploadGrant 拼成 CosUploadGrant 返回给 CosUploader。
+  // - CosUploader 组件层契约 `(files: File[]) => Promise<CosUploadGrant>` 不变。
   //
   // 仍保留的字段：drawingShaMap（onDrawingUploaded 内按 File 身份取 sha）、
-  // drawingClientRefByFile（commit 阶段反查 client_ref）。
+  // drawingClientRefByFile（commit 阶段反查 client_ref，2026-09-18 upload_session 适配
+  // 时引入；2026-09-28 退化为"CosUploader tmp_key → File"反向索引，commit 时不再
+  // 上报 session.consumeFiles）。
 
   /**
-   * 2026-09-28 stub：useUploadSession 删除后 caller 暂时禁用。
-   * 子任务 #5 重写 grantStsTmpKeyFiles 路径，详见 plan §3.3 step requestDrawingUpload。
+   * 2026-09-28 子任务 #5：caller 改为 grantStsTmpKeyFiles 单批签名。
    *
-   * 原契约：校验 + 算 sha + 拿整批 STS 凭证 + N 个 tmp_key，拼成 CosUploadGrant 返回。
-   * 现契约：直接抛 not-implemented。CosUploader 收到 rejection 后把上传标记为失败，
-   * UI 走「重试」按钮兜底（用户暂被要求走详情页补传，链路 A 不受影响）。
+   * 流程：
+   * 1) 把 files 映射成 grantStsTmpKeyFiles 入参（purpose / filename / content_type）；
+   * 2) 单 HTTP 拿回 N 个 STS 凭证 + tmp_key；
+   * 3) 用 _grantMappers.stsToCosUploadGrant 拼成「共享 credentials / bucket /
+   *    region + items[].tmp_key」格式返回给 CosUploader。
+   *
+   * 与 usePartBatchPdf.allocate 的差异：本函数只处理 'drawing' kind（手工录入 Tab
+   * 只挂图纸），kind 写死；PDF Tab 还要按 entry.kind 派生 'drawing' / '3d_model'。
+   *
+   * 本调用点为「单次 getUploadGrant」路径：CosUploader 拿回 grant 后不会主动
+   * refetch（useCosUploader 的 ensureFreshCredentials 仅在 initialGrant 未传时
+   * 才兜底），因此 client_ref 用 crypto.randomUUID() 生成后无需跨 refetch 复用。
    */
   async function requestDrawingUpload(files: File[]): Promise<CosUploadGrant> {
-    // TODO(2026-09-28): 子任务 #5 用 grantStsTmpKeyFiles 重写此函数。
-    void files;
-    throw new Error(
-      'requestDrawingUpload 暂未实现：useUploadSession 已删除，待子任务 #5 用 grantStsTmpKeyFiles 单批签名重写。',
-    );
+    if (files.length === 0) {
+      throw new Error('requestDrawingUpload: files 不能为空');
+    }
+    const grants = await grantStsTmpKeyFiles({
+      scope: 'parts_new',
+      files: files.map((f) => ({
+        purpose: 'drawing',
+        // 与现有 StsTmpKeysRequest 字段一致；python 端 schema 接受此 snake_case。
+        filename: f.name,
+        content_type: f.type || 'application/octet-stream',
+      })),
+    });
+    if (grants.items.length !== files.length) {
+      throw new Error(
+        `grantStsTmpKeyFiles 返回项数（${grants.items.length}）≠ files 长度（${files.length}）`,
+      );
+    }
+    // client_ref 用 crypto.randomUUID() 生成；本调用点不跨 refetch 复用。
+    const clientRefs = files.map(() => crypto.randomUUID());
+    // 共享 STS 凭证：python 端 batch 签发同一 scope 共享一组 credentials / bucket / region
+    // （响应 items[0..N-1] 应一致；任取 items[0] 作为批级元数据载体）。
+    const head = grants.items[0]!;
+    return stsToCosUploadGrant(head, clientRefs);
   }
 
   /**
