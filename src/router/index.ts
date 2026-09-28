@@ -19,6 +19,12 @@ declare module 'vue-router' {
      *  用例：工位扫码台（/scan/*）—— SHELF_ACCOUNT 业务上必须能进，但 SHELF_ACCOUNT
      *  的菜单树不含 scan_badge。allowRoles 检查在 menuCode 检查之前触发。 */
     allowRoles?: string[];
+    /** 2026-09-28 新增：钉在 tagsView 最左侧的常驻 tab，关闭按钮禁用。无 affix 时
+     *  tab 表现与普通 tab 一致（可关闭）。通常配合常驻页面（首页 Dashboard）使用。 */
+    affix?: boolean;
+    /** 2026-09-28 新增：该路由不参与 tagsView（登录页 / 错误页 / MainLayout 之外的
+     *  全屏页面）。tagsView.afterEach 跳过此类路由，避免登录页扫码台成为 tabs。 */
+    noTagsView?: boolean;
   }
 }
 
@@ -28,7 +34,7 @@ const routes: RouteRecordRaw[] = [
     path: '/login',
     name: 'Login',
     component: () => import('@/views/auth/LoginView.vue'),
-    meta: { title: '登录' },
+    meta: { title: '登录', noTagsView: true },
   },
   // MainLayout 子树
   {
@@ -41,7 +47,14 @@ const routes: RouteRecordRaw[] = [
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/dashboard/DashboardView.vue'),
-        meta: { title: '首页', icon: 'House', breadcrumb: [{ label: '首页' }], menuCode: 'home' },
+        meta: {
+          title: '首页',
+          icon: 'House',
+          breadcrumb: [{ label: '首页' }],
+          menuCode: 'home',
+          // 2026-09-28 新增：Dashboard 钉死在 tagsView 最左侧，关闭按钮禁用
+          affix: true,
+        },
       },
       {
         path: 'parts',
@@ -360,7 +373,12 @@ const routes: RouteRecordRaw[] = [
   // 工位扫码台
   {
     path: '/scan',
-    meta: { requireAuth: true, allowRoles: ['SHELF_ACCOUNT'] },
+    meta: {
+      requireAuth: true,
+      allowRoles: ['SHELF_ACCOUNT'],
+      // 2026-09-28 新增：工位扫码台全屏、MainLayout 之外，不进 tagsView
+      noTagsView: true,
+    },
     children: [
       { path: '', redirect: '/scan/badge' },
       {
@@ -400,7 +418,11 @@ const routes: RouteRecordRaw[] = [
   // 逐件扫描 → 确认送货（复用后端 pickup-scan / pickup）。
   {
     path: '/delivery-dispatch',
-    meta: { requireAuth: true },
+    meta: {
+      requireAuth: true,
+      // 2026-09-28 新增：司机送货扫码台全屏、MainLayout 之外，不进 tagsView
+      noTagsView: true,
+    },
     children: [
       { path: '', redirect: '/delivery-dispatch/badge' },
       {
