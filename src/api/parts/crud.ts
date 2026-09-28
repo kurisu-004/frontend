@@ -151,13 +151,14 @@ export interface ListPartsParams {
   /**
    * 2026-08-05：行类型筛选（ALL/PART/ASSEMBLY），默认 ALL。
    * 后端 list_with_filters 默认行为兼容；ALL 时含装配件。
+   *（2026-09-28：后端 modules/part/service/crud.rs::list_parts 真正合并；此前一直忽略此字段）
    */
   row_type?: PartRowTypeFilter;
   sort_by?: PartSortKey;
   sort_dir?: SortDir;
   limit?: number;
   offset?: number;
-  /** 2026-07-30：零件一览合并装配件 */
+  /** 2026-07-30：零件一览合并装配件（2026-09-28：后端真正合并；此前一直忽略） */
   include_assemblies?: boolean;
 }
 
