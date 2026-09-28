@@ -55,7 +55,6 @@ interface Props {
   multiple?: boolean;
   disabled?: boolean;
   tip?: string;
-  emptyText?: string;
   /** 透传 maxSizeMB 仅用于 tip 文案展示；真实校验由父组件 planPick 完成。 */
   maxSizeMB?: number;
 }
@@ -65,7 +64,6 @@ withDefaults(defineProps<Props>(), {
   multiple: true,
   disabled: false,
   tip: '',
-  emptyText: '暂无待上传文件',
   maxSizeMB: undefined,
 });
 

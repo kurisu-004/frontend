@@ -66,6 +66,14 @@ function config({ command, mode }: { command: 'build' | 'serve'; mode: string })
       Components({
         resolvers: [ElementPlusResolver()],
         dts: 'src/components.d.ts',
+        // 2026-09-28 review 跟进（M-2）：unplugin-vue-components 默认递归扫描
+        // src/components/**/*.vue，会把 CosUploader/ 内的子组件 FileList / UploadArea
+        // 也注册成全局组件。这些子组件仅在 index.vue <script setup> 内 import，
+        // 全局可访问会污染组件命名空间（仓内已存在 FileListCard.vue，未来易撞名）。
+        // 用 excludeNames 排除 FileList / UploadArea 两个组件名（unplugin 的
+        // exclude 是 transform 过滤，excludeNames 才是注册过滤；这是该项目仓
+        // 唯一一处 CosUploader 内部子组件名，全列白名单比正则更清晰）。
+        excludeNames: ['FileList', 'UploadArea'],
       }),
       crossOriginIsolation(),
     ],

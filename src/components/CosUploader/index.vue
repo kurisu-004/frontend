@@ -47,7 +47,6 @@
       :multiple="multiple"
       :disabled="disabled"
       :tip="tip"
-      :empty-text="emptyText"
       :max-size-m-b="maxSizeMB"
       @pick="onPick"
     />
@@ -198,9 +197,9 @@ async function refetchGrant(): Promise<CosUploadGrant> {
  *   主动 refetch" 是符合 caller 模式的——caller 一次 getUploadGrant 拿到 grant
  *   后 composable 复用，凭证过期时由 refetchGrant 再拿一次）。
  * - props.computeHash / props.concurrency 用 IIFE 包一层读取放进函数体（参考
- *   PagedTable.vue 注释 PR-2 处理）：vue/no-setup-props-destructure 禁止顶层
- *   直接读 props；composable 这俩字段是构造期快照而非响应式依赖，IIFE 写法
- *   既过 lint 又语义正确。
+ *   PagedTable.vue 注释 PR-2 处理）：vue/no-setup-props-destructure 警告
+ *   `props.xxx` 在 root scope 会失去响应性；composable 这俩字段是构造期快照而非
+ *   响应式依赖，IIFE 既过 lint 又语义正确。
  *
  * 2026-09-28 整改：组件 onPick 拿到 grant 后会调 updateGrant 喂给 composable，
  * 让 ensureFreshCredentials 看到 warm cache 后跳过兜底 refetchGrant，
