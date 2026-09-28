@@ -25,6 +25,10 @@ import type { ApiError } from '@/api/http';
 import type { CurrentUser } from '@/types/user';
 import type { MenuNode } from '@/types/menu';
 import { ADMIN_MENUS } from '@/composables/__fixtures__/adminMenus';
+// 2026-09-28 新增：登出联动清空 tagsView（auth → tagsView 单向引用，tagsView 不
+// 反向 import auth，无循环依赖）。plugin 持久化在 mutation 后会立即把空数组写
+// localStorage['tags_view']，下次启动看到空 tags 条。
+import { useTagsViewStore } from '@/stores/tagsView';
 
 interface StoredSession {
   token: string;
@@ -148,6 +152,9 @@ export const useAuthStore = defineStore('auth', () => {
     refreshTokenValue = null;
     user.value = null;
     localStorage.removeItem('auth_session');
+    // 2026-09-28 新增：联动清空 tagsView（visited + cache）。插件持久化会立即把
+    // 空数组写 localStorage['tags_view']。
+    useTagsViewStore().reset();
   }
 
   /** 异步守卫：拉 /iam/me 验证 token 仍有效；失败则清 session 跳 /login。
