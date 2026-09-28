@@ -46,4 +46,13 @@ export const qk = {
    *  qc.invalidateQueries({ queryKey: qk.partsPrefix }) 失效整个 parts 域（任意
    *  listParts 参数形态都会命中）。与 customersPrefix / processesPrefix 同形。 */
   partsPrefix: ['parts'] as const,
+  /** 2026-09-28 新增：dashboard 域大屏快照键（HTTP 全量首取 + WS 事件 invalidate）。
+   *  与 customersList / processesList 等 list 形态不同 —— dashboard snapshot 是
+   *  全量单条（无 params），HTTP 端点 GET /api/v2/dashboard/snapshot 一次取回
+   *  完整 DashboardSnapshotVO。 */
+  dashboardSnapshot: ['dashboard', 'snapshot'] as const,
+  /** 2026-09-28 新增：dashboard 域前缀 —— WS 事件触发 invalidate 用；
+   *  当前 dashboard 域只有 snapshot 一个 query，Prefix 仅供未来扩展（如分视图
+   *  缓存、按角色拆 queryKey）预留。 */
+  dashboardPrefix: ['dashboard'] as const,
 } as const;

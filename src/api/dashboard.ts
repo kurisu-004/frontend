@@ -1,258 +1,254 @@
-// 大屏 WebSocket：单例连接 + 按频道订阅。
+// dashboard 域 WebSocket 层（2026-09-28 重写）。
 //
-// 用法：
-//   const off = onDashboardSnapshot(snap => ...)
-//   onDashboardEvent(ev => ...)
-//   onDashboardStatus(s => ...)
-//   // 组件卸载时调 off()；off 只取消对应频道订阅，不关闭长连接。
+// 数据流（与 frontend/CLAUDE.md 2026-09-28 新增的「dashboard 域 HTTP 全量 +
+// WS 事件 invalidate」架构对齐）：
+//   1. 消费者通过 useDashboardSnapshot()（views/dashboard/composables/）订阅大屏快照。
+//      该 composable 内部用 TanStack Query 拉一次 GET /api/v2/dashboard/snapshot
+//      取全量（fetchDashboardSnapshot），之后不依赖本模块推送 snapshot。
+//   2. 本模块仍是 WebSocket 单例层：持有唯一长连接 + 按频道分发事件给订阅者。
+//      WS 首帧 snapshot 仍会到达（后端行为不变），但前端消费方已切到 HTTP 全量，
+//      故首帧 snapshot 仅作「连接就绪信号」（通过 onConnected 标记 isReady）。
+//   3. 业务事件（PICKED_UP / RELEASED / PART_TO_SHIP 等）继续通过 onDashboardEvent
+//      派发给 NotificationBanner.vue / useDashboardSnapshot.invalidate 等消费者。
 //
-// 2026-09-15 Phase 5：WS URL 改为 `${proto}://${location.host}/ws/dashboard`（不带
-// `/api/v1` 前缀），与 backend-rust `ws_hub` 模块的 `WsEvent::DashboardEvent`
-// 路由对齐。token 通过 query string 携带（`?token=...`）—— v2 后端 ws_hub 在
-// upgrade 阶段从 query 取 token 校验 Redis session。
+// 实现要点：
+//   - 用 VueUse useWebSocket + createGlobalState 包单例（替代原 258 行手写 socket 管理）；
+//   - URL computed 依赖模块级 tokenVersion ref，'auth:tokens-refreshed' CustomEvent
+//     触发 tokenVersion++ → VueUse watch(urlRef, open) 自动重连；
+//   - autoReconnect 指数退避 1s→10s 封顶，无限重试（对齐原 1s/2s/4s/8s/10s 行为）；
+//   - 不再发送 subscribe/unsubscribe 控制帧 —— 后端 v2 ws_hub 不消费这俩文本帧
+//     （2026-09-25 注释 + 2026-09-28 决策删除），后端默认行为是按连接初始订阅集合
+//     推 snapshot + events，删控制帧后逻辑等价；
+//   - heartbeat 选项不启用 —— VueUse heartbeat 是「客户端主动 ping」，与本场景
+//     「服务端 30s 推 {type:'heartbeat'} text 帧」无关，收到也只在 onMessage
+//     分发层丢包。
 //
-// 【2026-09-25 协议对齐注释】subscribe / unsubscribe 文本帧：服务端当前不消费
-// 这两个文本帧（v2 后端 ws_hub 仅按连接初始订阅集合默认推 snapshot / events），
-// subscribe 仅作为 client-side 控制帧 —— 连接成功后发送是为了在客户端维护
-// 「我已声明订阅」的视图（供日志 / 调试 / 重连后 syncSubscriptions 复用）。
-// sendSubscriptionCommand 调用必须保留，避免大改；行为正确即可。
+// 子任务锚点：本次改造后 dashboard 域 snapshot 数据流是 HTTP 全量首取 + WS 事件
+// invalidate 重取，WS 层不复用 server-pushed snapshot 的业务数据。
 
+import { createGlobalState, useWebSocket } from '@vueuse/core';
+import { computed, ref, watch, type Ref } from 'vue';
+import { api } from '@/api/http';
 import type {
   ConnectionStatus,
   DashboardEvent,
+  DashboardEventType,
   DashboardServerMessage,
-  DashboardSnapshot,
 } from '@/types/dashboard';
+import type { DashboardSnapshotData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
 
-type SnapshotHandler = (snap: DashboardSnapshot) => void;
 type EventHandler = (ev: DashboardEvent) => void;
 type StatusHandler = (status: ConnectionStatus) => void;
 
-type SubscriptionChannel = 'dashboard' | 'events';
-type SubscriptionAction = 'subscribe' | 'unsubscribe';
+/** 指数退避 1s/2s/4s/8s/10s 封顶，无限重试（对齐原手写 retryDelay 行为）。 */
+function reconnectDelay(retries: number): number {
+  return Math.min(1000 * 2 ** (retries - 1), 10000);
+}
 
-// —— 模块级单例状态 ——
-let ws: WebSocket | null = null;
-let closed = false;
-let retryTimer: ReturnType<typeof setTimeout> | null = null;
-let retryDelay = 1000;
+// ============================================================
+// URL 构造（响应式）：tokenVersion 变化触发 VueUse 自动重连
+// ============================================================
 
-const snapSubs = new Set<SnapshotHandler>();
-const eventSubs = new Set<EventHandler>();
-const statusSubs = new Set<StatusHandler>();
+/** 模块级 ref：bump 一次触发 URL 重算 → VueUse watch(urlRef, open) 自动重连。
+ *  listenAuthTokensRefreshed() 首次调用时挂 'auth:tokens-refreshed' CustomEvent
+ *  listener，拦截器刷新成功后 dispatch → tokenVersion++ → 重连。 */
+const tokenVersion: Ref<number> = ref(0);
 
-function url(): string {
+function buildWsUrl(token: string | null): string {
   // 2026-09-15 Phase 5：去掉 /api/v1 前缀；ws_hub（rust）走 /ws/dashboard。
   // 同源策略：浏览器只接触 frontend nginx（dev 5173 / prod 8080 / stage 443），
   // nginx 模板已把 /ws/* 反代到 rust-backend:3000。
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const base = `${proto}://${location.host}/ws/dashboard`;
-  const raw = localStorage.getItem('auth_session');
-  if (raw) {
-    try {
-      const s = JSON.parse(raw);
-      if (s.token) return `${base}?token=${encodeURIComponent(s.token)}`;
-    } catch {
-      /* ignore */
-    }
-  }
-  return base;
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
-function notifyStatus(s: ConnectionStatus): void {
-  for (const h of statusSubs) {
-    try {
-      h(s);
-    } catch (e) {
-      console.error('dashboard status handler error', e);
-    }
-  }
-}
-
-function dispatch(msg: DashboardServerMessage): void {
-  if (msg.type === 'snapshot') {
-    for (const h of snapSubs) {
-      try {
-        h(msg);
-      } catch (e) {
-        console.error('dashboard snapshot handler error', e);
-      }
-    }
-  } else if (msg.type === 'event') {
-    for (const h of eventSubs) {
-      try {
-        h(msg);
-      } catch (e) {
-        console.error('dashboard event handler error', e);
-      }
-    }
-  }
-}
-
-function sendSubscriptionCommand(
-  action: SubscriptionAction,
-  channel: SubscriptionChannel,
-  socket: WebSocket | null = ws,
-): void {
-  if (!socket || socket !== ws || socket.readyState !== WebSocket.OPEN) return;
+function readTokenFromStorage(): string | null {
   try {
-    // 2026-09-25 注释：后端当前不消费此文本帧，仅维护 client-side 订阅视图。
-    // 连接成功后发送 subscribe 是为了日志一致 / 调试用。重连 / 新订阅时
-    // syncSubscriptions 调用是必要的（维护本地 channelHandlers → 订阅意图的映射）。
-    socket.send(JSON.stringify({ type: action, channel }));
-  } catch (e) {
-    console.error('dashboard WS subscription command error', e);
-  }
-}
-
-function syncSubscriptions(socket: WebSocket): void {
-  if (snapSubs.size > 0) {
-    sendSubscriptionCommand('subscribe', 'dashboard', socket);
-  }
-  if (eventSubs.size > 0) {
-    sendSubscriptionCommand('subscribe', 'events', socket);
-  }
-}
-
-function teardown(socket: WebSocket): void {
-  // 拆掉旧 socket 的所有回调后再 close，确保它的 onclose 不会回过头来
-  // 清掉刚建立的新 socket / 触发多余重连（多连接堆叠 → 大屏收到重复推送）。
-  socket.onopen = null;
-  socket.onmessage = null;
-  socket.onerror = null;
-  socket.onclose = null;
-  try {
-    socket.close();
+    const raw = localStorage.getItem('auth_session');
+    if (!raw) return null;
+    const s = JSON.parse(raw) as { token?: string };
+    return s?.token ?? null;
   } catch {
-    /* ignore */
+    return null;
   }
 }
 
-function connect(): void {
-  if (closed) return;
-  // 旧 socket 还在握手（CONNECTING）期间不允许 teardown——close() 会让浏览器报
-  // "WebSocket is closed before the connection is established"。所有调用方共用同一
-  // 单例 URL，等这次握手完成即可，无需 close。
-  if (ws && ws.readyState === WebSocket.CONNECTING) return;
-  // 保证同一时刻只有一条活连接：建新连接前先拆掉旧的。
-  if (ws) {
-    teardown(ws);
-    ws = null;
-  }
-  notifyStatus('connecting');
-  const socket = new WebSocket(url());
-  ws = socket;
-  socket.onopen = () => {
-    if (socket !== ws) return;
-    retryDelay = 1000;
-    notifyStatus('open');
-    // 后端每条新连接默认没有订阅；按当前 handlers 恢复频道。
-    syncSubscriptions(socket);
-  };
-  socket.onmessage = (ev) => {
-    if (socket !== ws) return;
-    try {
-      const msg = JSON.parse(ev.data) as DashboardServerMessage;
-      dispatch(msg);
-    } catch (e) {
-      console.error('dashboard WS parse error', e);
+// createGlobalState 在模块顶层跑 effectScope(true)，useWebSocket 内部的
+// tryOnScopeDispose 注册到 detached scope，永不 dispose → 单例语义正确（组件
+// 卸载不会误关共享 socket，模块顶层无 scope 概念）。
+const useDashboardWebSocketInternal = createGlobalState(() => {
+  const eventSubs = new Set<EventHandler>();
+  const statusSubs = new Set<StatusHandler>();
+
+  // URL computed：依赖 tokenVersion，每次 bump 都重算。
+  const wsUrl = computed(() => {
+    // 显式读 tokenVersion.value 以建立依赖（computed 体内仅访问 token 不会触发 ref 收集）。
+    void tokenVersion.value;
+    return buildWsUrl(readTokenFromStorage());
+  });
+
+  const { status, close, open } = useWebSocket(wsUrl, {
+    autoReconnect: { retries: -1, delay: reconnectDelay },
+    onConnected() {
+      notifyStatus('open');
+    },
+    onDisconnected() {
+      notifyStatus('closed');
+    },
+    onError(_ws, e) {
+      console.error('dashboard WS error', e);
+    },
+    onMessage(_ws, e) {
+      try {
+        // 2026-09-28 review 第 2 轮修复（N3）：WS 帧壳已在 types/dashboard.ts 用
+        // discriminated union（DashboardEvent | WsSnapshotMsg | WsHeartbeatMsg）
+        // 描述，无需 `as DashboardServerMessage` 强转；TS 在 dispatch 内的
+        // if/else if 分支能按 msg.type 字面量正确 narrow。
+        const msg: DashboardServerMessage = JSON.parse(e.data);
+        dispatch(msg);
+      } catch (err) {
+        // 后端 30s 心跳 {type:'heartbeat'} text 帧正常不抛错；其它解析失败仅记日志。
+        console.error('dashboard WS parse error', err);
+      }
+    },
+  });
+
+  function notifyStatus(s: ConnectionStatus): void {
+    for (const h of statusSubs) {
+      try {
+        h(s);
+      } catch (e) {
+        console.error('dashboard status handler error', e);
+      }
     }
-  };
-  socket.onerror = () => {
-    // onclose 紧随其后
-  };
-  socket.onclose = () => {
-    // 陈旧 socket（已被新连接取代）的 onclose 直接忽略，避免误清新 ws / 误重连。
-    if (socket !== ws) return;
-    notifyStatus('closed');
-    ws = null;
-    if (closed) return;
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      connect();
-    }, retryDelay);
-    retryDelay = Math.min(retryDelay * 2, 10000);
-  };
-}
-
-function ensureConnected(): void {
-  if (ws || closed) return;
-  if (retryTimer) {
-    clearTimeout(retryTimer);
-    retryTimer = null;
   }
-  connect();
-}
 
-// ============================================================
-// 公共 API：订阅 / 反订阅
-// ============================================================
+  function dispatch(msg: DashboardServerMessage): void {
+    // 2026-09-28 review 第 2 轮修复（N3）：union 补全后这里用 discriminated union
+    // narrowing；msg.type 字面量在每个分支被精确收窄到对应 interface，
+    // TS 不再把 snapshot/heartbeat 帧硬塞到 DashboardEvent 类型里。
+    // 2026-09-28 review 第 1 轮修复：显式三分支（plan 3.10 字面要求），保留
+    // snapshot 与 heartbeat 的 no-op 行为不变（HTTP 全量首取已替代 snapshot；
+    // heartbeat 是后端 30s 保活 text 帧，前端无需消费）。
+    if (msg.type === 'event') {
+      // 【B1 预留】未来形态：若日后落地真增量（DASHBOARD_ITEM_UPSERT / REMOVE 等），
+      // 在此分支内加二级分发（例：按 msg.event_type 走 query cache patcher，
+      // default 仍走事件 invalidate 兜底）。当前架构走「WS 事件 → HTTP 重取」，
+      // 二级分发只区分「影响 dashboard 大屏的事件集」一个维度
+      // （AFFECTS_DASHBOARD，详见 useDashboardSnapshot.ts），所以此分支
+      // 仅做 fan-out + 错误隔离，未来 B1 落地时再内嵌二级分发。
+      for (const h of eventSubs) {
+        try {
+          h(msg);
+        } catch (e) {
+          console.error('dashboard event handler error', e);
+        }
+      }
+    } else if (msg.type === 'snapshot') {
+      // 2026-09-28 新架构下不再消费首帧 snapshot 业务字段（HTTP 全量首取
+      // 已替代）；保留分支显式 no-op 便于日后落地真增量 patch。
+      return;
+    } else if (msg.type === 'heartbeat') {
+      // 30s 保活 text 帧直接忽略。
+      return;
+    }
+  }
 
-/** 订阅 Dashboard snapshot；最后一个 handler 移除时只取消频道订阅，不断开 socket。 */
-export function onDashboardSnapshot(h: SnapshotHandler): () => void {
-  const wasEmpty = snapSubs.size === 0;
-  snapSubs.add(h);
-  ensureConnected();
-  if (wasEmpty) sendSubscriptionCommand('subscribe', 'dashboard');
-  return () => {
-    if (!snapSubs.delete(h) || snapSubs.size > 0) return;
-    sendSubscriptionCommand('unsubscribe', 'dashboard');
+  // 把 VueUse 'CONNECTING' / 'OPEN' / 'CLOSED' 翻译成 ConnectionStatus（保持
+  // 现有 public 类型语义不变，外部 status handler 仍按 'connecting' | 'open' |
+  // 'closed' 写 switch）。
+  // 2026-09-28 review 第 1 轮修复：加 immediate: true，让模块首次实例化时
+  // 初始 CONNECTING 状态也能触发 status handler（原手写代码在 connect() 顶部
+  // 同步 notifyStatus('connecting')，语义对齐）。
+  watch(
+    status,
+    (s) => {
+      if (s === 'CONNECTING') notifyStatus('connecting');
+    },
+    { immediate: true },
+  );
+
+  return {
+    eventSubs,
+    statusSubs,
+    close,
+    open,
   };
+});
+
+function getSocket(): ReturnType<typeof useDashboardWebSocketInternal> {
+  return useDashboardWebSocketInternal();
 }
 
-/** 订阅业务事件（PICKED_UP / RELEASED），由横幅通知组件消费。 */
+// ============================================================
+// 公共 API：订阅 / 关闭 / 重连（保持既有 contract）
+// ============================================================
+
+/** 订阅业务事件（横幅通知消费 + 大屏 invalidate 触发）。
+ *  频道「events」与「dashboard snapshot」语义对齐：后端每条新连接默认推 events。 */
 export function onDashboardEvent(h: EventHandler): () => void {
-  const wasEmpty = eventSubs.size === 0;
+  const { eventSubs } = getSocket();
   eventSubs.add(h);
-  ensureConnected();
-  if (wasEmpty) sendSubscriptionCommand('subscribe', 'events');
   return () => {
-    if (!eventSubs.delete(h) || eventSubs.size > 0) return;
-    sendSubscriptionCommand('unsubscribe', 'events');
+    eventSubs.delete(h);
   };
 }
 
-/** 订阅连接状态。状态订阅本身只确保长连接存在，不会订阅业务频道。 */
+/** 订阅连接状态。状态订阅本身不影响 socket 生命周期。 */
 export function onDashboardStatus(h: StatusHandler): () => void {
+  const { statusSubs } = getSocket();
   statusSubs.add(h);
-  ensureConnected();
-  return () => statusSubs.delete(h);
+  return () => {
+    statusSubs.delete(h);
+  };
 }
 
-/** 显式关闭长连接（一般不调用，保留供登出/测试使用）。 */
+/** 显式关闭长连接（一般不调用，保留供登出 / 测试使用）。 */
 export function closeDashboard(): void {
-  closed = true;
-  if (retryTimer) clearTimeout(retryTimer);
-  retryTimer = null;
-  if (ws) teardown(ws);
-  ws = null;
-  snapSubs.clear();
-  eventSubs.clear();
-  statusSubs.clear();
+  const { close } = getSocket();
+  close();
 }
 
 /**
- * 强制发起一次重连，主要用于 JWT 刷新。
- *
- * 旧连接会被替换，但当前 snapshot/events 订阅意图会在新连接 onopen 时恢复。
+ * 强制发起一次重连，主要用于 JWT 刷新后手动触发。
+ * 实际线上不需要手动调用 —— 'auth:tokens-refreshed' CustomEvent 监听器会自动
+ * bump tokenVersion 触发 VueUse 重连；此处保留供登出后重新登录等手动场景兜底。
  */
 export function reconnectDashboard(): void {
-  closed = false;
-  if (retryTimer) {
-    clearTimeout(retryTimer);
-    retryTimer = null;
-  }
-  retryDelay = 1000;
-  connect();
+  const { open } = getSocket();
+  open();
 }
 
-// —— JWT 自动刷新后顺势重连，避免陈旧 token 卡住 socket ——
+// ============================================================
+// HTTP 全量首取（2026-09-28 新增，与 WS snapshot 帧并行；WS 首帧不再消费）
+// ============================================================
+
+/** GET /api/v2/dashboard/snapshot —— 拉一次大屏全量快照。
+ *  返回值已由 http.ts 响应拦截器解封（response.data = payload.data），
+ *  即 api.get 返回的 resp.data 已经是 DashboardSnapshotData，不再是 R<T> 信封。 */
+export async function fetchDashboardSnapshot(): Promise<DashboardSnapshotData> {
+  const resp = await api.get<DashboardSnapshotData>('/dashboard/snapshot');
+  return resp.data;
+}
+
+// ============================================================
+// 'auth:tokens-refreshed' CustomEvent 监听 → bump tokenVersion → 自动重连
+// ============================================================
 // 用 module-level flag 保证只注册一次监听（HMR 下模块可能被重复求值）。
 let refreshListenerBound = false;
 if (typeof window !== 'undefined' && !refreshListenerBound) {
   refreshListenerBound = true;
   window.addEventListener('auth:tokens-refreshed', () => {
-    // url() 内每次现读 localStorage，新 token 已就位；强制 socket 切到新握手。
-    reconnectDashboard();
+    // wsUrl computed 每次重新计算时现读 localStorage，新 token 已就位；
+    // bump tokenVersion 让 VueUse watch(urlRef, open) 自动重连。
+    tokenVersion.value++;
   });
 }
+
+// ============================================================
+// 兼容导出（部分 spec 仍可能 import 类型）
+// ============================================================
+// 显式 re-export 事件类型别名方便上层按事件名集合过滤（views/dashboard/
+// composables/useDashboardSnapshot.ts 的 AFFECTS_DASHBOARD 常量会用到类型）。
+export type { DashboardEventType };

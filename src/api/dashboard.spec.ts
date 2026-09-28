@@ -1,3 +1,25 @@
+// src/api/dashboard.spec.ts
+//
+// 2026-09-28 重构：原订阅 / 取消订阅控制帧测试全部删除（subscribe/unsubscribe
+// 帧随控制帧发送逻辑一起删除，2026-09-28 决策）。新增覆盖：
+//   - URL 拼接（带 token）
+//   - auth:tokens-refreshed 事件触发 tokenVersion++ → VueUse 自动重连
+//   - fetchDashboardSnapshot HTTP + Zod parse 集成（mock api.get）
+//   - reconnectDashboard() 公开 API
+// FakeWebSocket 桩保留（VueUse 内部仍是 new WebSocket(url)，实例计数可用）。
+//
+// createGlobalState 惰性语义：模块顶层不创建 socket，仅注册 listener；首次调
+// 用 onDashboardEvent / onDashboardStatus / reconnectDashboard / closeDashboard
+// 才触发 useWebSocket 工厂内部 new WebSocket()。测试通过 onDashboardStatus
+// 触发实例化。
+//
+// happy-dom 环境：VueUse useWebSocket 依赖 document / window（isClient 检查 +
+// autoClose 注册 beforeunload 监听），node env 下 stub document 仍会让 Vue
+// runtime-dom 的 createElement 等 DOM 钩子抛错。切 happy-dom 让 happy-dom 自身
+// 撑起 document / window，我们只 stub WebSocket / localStorage 覆盖目标行为。
+
+// @vitest-environment happy-dom
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 class FakeWebSocket {
@@ -14,7 +36,7 @@ class FakeWebSocket {
   public onopen: (() => void) | null = null;
   public onmessage: ((event: { data: string }) => void) | null = null;
   public onerror: (() => void) | null = null;
-  public onclose: (() => void) | null = null;
+  public onclose: ((event: { code?: number; reason?: string }) => void) | null = null;
 
   public constructor(url: string) {
     this.url = url;
@@ -26,19 +48,67 @@ class FakeWebSocket {
     this.onopen?.();
   }
 
-  public close(): void {
+  /** 模拟服务端关闭（VueUse 会自动 autoReconnect 重连，retried++）。 */
+  public closeWith(ev: { code?: number; reason?: string } = {}): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.();
+    this.onclose?.(ev);
   }
+
+  public close(): void {
+    this.closeWith({});
+  }
+
+  /** 模拟服务端推送业务事件。 */
+  public pushEvent(eventType: string, data: Record<string, unknown> = {}): void {
+    this.onmessage?.({
+      data: JSON.stringify({
+        type: 'event',
+        event_type: eventType,
+        data,
+        ts: '2026-09-28T10:00:00+08:00',
+      }),
+    });
+  }
+}
+
+const httpGetMock = vi.fn();
+
+vi.mock('@/api/http', () => ({
+  api: {
+    get: (...args: unknown[]) => httpGetMock(...args),
+    post: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+  },
+  apiPrint: { get: vi.fn(), post: vi.fn() },
+  cleanParams: (obj?: Record<string, unknown>) => obj ?? {},
+  ApiError: class ApiError extends Error {
+    public readonly code: number;
+    public constructor(code: number, message: string) {
+      super(message);
+      this.code = code;
+    }
+  },
+}));
+
+/** 触发 createGlobalState 工厂 → 内部 useWebSocket.immediate.open() 创建 socket。 */
+async function bootstrapSocket(api: Awaited<ReturnType<typeof loadDashboardApi>>): Promise<void> {
+  api.onDashboardStatus(() => undefined);
 }
 
 async function loadDashboardApi() {
   vi.resetModules();
   FakeWebSocket.instances = [];
+  httpGetMock.mockReset();
   vi.stubGlobal('WebSocket', FakeWebSocket);
+  // happy-dom 默认 host 是 'localhost:3000'，dashboard.ts 读 location.host 拼 URL，
+  // 这里 stub 到 dev 端口保持断言可读。
   vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
-  vi.stubGlobal('localStorage', { getItem: vi.fn(() => null) });
-  vi.stubGlobal('window', { addEventListener: vi.fn() });
+  vi.stubGlobal('localStorage', {
+    getItem: vi.fn(() => null),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+  });
   return import('./dashboard');
 }
 
@@ -47,80 +117,202 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('dashboard WebSocket channel subscriptions', () => {
+describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2026-09-28）', () => {
+  // 2026-09-28 review 第 2 轮修复（N4）：拦截 window.addEventListener 收集
+  // 'auth:tokens-refreshed' listener → afterEach removeEventListener 清残留。
+  // 原实现没清残留，vi.resetModules() 不清 DOM listener，前一条用例挂的
+  // listener 仍累积在 window 上 → dispatchEvent 触发多个用例的 listener
+  // 错位产生 socket 实例，单跑（无残留）直接 FAIL。
+  const refreshListeners: Array<EventListener> = [];
+
   beforeEach(() => {
     FakeWebSocket.instances = [];
+    vi.useRealTimers();
+    refreshListeners.length = 0;
+    const realAdd = window.addEventListener.bind(window);
+    vi.spyOn(window, 'addEventListener').mockImplementation(((
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
+      const result = realAdd(type, listener, options);
+      if (type === 'auth:tokens-refreshed' && typeof listener === 'function') {
+        refreshListeners.push(listener);
+      }
+      return result;
+    }) as typeof window.addEventListener);
   });
 
-  it('subscribes and unsubscribes the dashboard channel without closing the socket', async () => {
-    const api = await loadDashboardApi();
-    const off = api.onDashboardSnapshot(() => undefined);
-    const socket = FakeWebSocket.instances[0];
-
-    socket.open();
-    expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'subscribe', channel: 'dashboard' }),
-    );
-
-    socket.send.mockClear();
-    off();
-
-    expect(socket.readyState).toBe(FakeWebSocket.OPEN);
-    expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'unsubscribe', channel: 'dashboard' }),
-    );
+  afterEach(() => {
+    for (const h of refreshListeners.splice(0)) {
+      window.removeEventListener('auth:tokens-refreshed', h);
+    }
+    vi.restoreAllMocks();
   });
 
-  it('resubscribes a returning dashboard handler on an existing open socket', async () => {
-    const api = await loadDashboardApi();
-    const off = api.onDashboardSnapshot(() => undefined);
-    const socket = FakeWebSocket.instances[0];
-    socket.open();
-    off();
-    socket.send.mockClear();
+  it('URL 带 token 拼接：localStorage 有 token 时 ?token=xxx', async () => {
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((k: string) =>
+        k === 'auth_session' ? JSON.stringify({ token: 'mock-jwt-token' }) : null,
+      ),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    const api = await import('./dashboard');
+    await bootstrapSocket(api);
 
-    api.onDashboardSnapshot(() => undefined);
-
-    expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'subscribe', channel: 'dashboard' }),
-    );
-  });
-
-  it('keeps event subscription independent from dashboard subscription', async () => {
-    const api = await loadDashboardApi();
-    const offEvent = api.onDashboardEvent(() => undefined);
-    const socket = FakeWebSocket.instances[0];
-    socket.open();
-
-    expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'subscribe', channel: 'events' }),
-    );
-    expect(socket.send).not.toHaveBeenCalledWith(
-      JSON.stringify({ type: 'subscribe', channel: 'dashboard' }),
-    );
-
-    socket.send.mockClear();
-    offEvent();
-    expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'unsubscribe', channel: 'events' }),
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]?.url).toBe(
+      'ws://localhost:5173/ws/dashboard?token=mock-jwt-token',
     );
   });
 
-  it('restores active subscriptions after reconnecting', async () => {
+  it('URL 不带 token：localStorage 没 token 时裸路径', async () => {
     const api = await loadDashboardApi();
-    const off = api.onDashboardSnapshot(() => undefined);
-    const oldSocket = FakeWebSocket.instances[0];
-    oldSocket.open();
+    await bootstrapSocket(api);
+    expect(FakeWebSocket.instances[0]?.url).toBe('ws://localhost:5173/ws/dashboard');
+  });
+
+  it('auth:tokens-refreshed 事件 → tokenVersion++ → VueUse 自动重连（实例计数 +1）', async () => {
+    // 2026-09-28 改造核心：刷新 token 不再需要手动 reconnectDashboard。
+    // 拦截器 dispatch auth:tokens-refreshed → 模块级 tokenVersion ref bump →
+    // URL computed 重算 → VueUse watch(urlRef, open) 自动 close + 重建 socket。
+    //
+    // 2026-09-28 review 第 2 轮修复（N4）：原实现 stub localStorage 永远返 null，
+    // URL 永远不带 token → 单跑时 dispatchEvent 触发 tokenVersion++ → URL 重算
+    // 仍是无 token 形态 → Vue hasChanged 判定 false → watch 不 fire → 1 个实例
+    // → 断言失败。修法：让 stub localStorage 在 dispatchEvent 前后返回不同 token，
+    // 模拟生产场景（拦截器刷新成功 → localStorage 已写入新 token）。
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
+    let stubToken: string | null = null;
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(() => (stubToken === null ? null : JSON.stringify({ token: stubToken }))),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    const api = await import('./dashboard');
+    await bootstrapSocket(api);
+
+    // dispatchEvent 前：无 token → URL 不带 token
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]?.url).toBe('ws://localhost:5173/ws/dashboard');
+
+    // 模拟拦截器刷新成功：localStorage 写入新 token + dispatch 事件
+    stubToken = 'new-jwt-token';
+    window.dispatchEvent(new CustomEvent('auth:tokens-refreshed'));
+    // 等待 VueUse watch 触发 + Vue 调度队列清空。
+    // effectScope(true) detached scope 内的 watch 在 tokenVersion.value++ 后
+    // 由 Vue scheduler 在 microtask 队列清空时回调，回调里 close() 老 socket + new WebSocket()。
+    await new Promise((r) => setTimeout(r, 50));
+
+    // URL 重算读到带 token → VueUse watch fire → new WebSocket
+    expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+    expect(FakeWebSocket.instances[1]?.url).toBe(
+      'ws://localhost:5173/ws/dashboard?token=new-jwt-token',
+    );
+  });
+
+  it('reconnectDashboard() 显式重连：open() 调用产生新 socket', async () => {
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    expect(FakeWebSocket.instances).toHaveLength(1);
 
     api.reconnectDashboard();
 
-    const newSocket = FakeWebSocket.instances[1];
-    expect(oldSocket.readyState).toBe(FakeWebSocket.CLOSED);
-    newSocket.open();
-    expect(newSocket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'subscribe', channel: 'dashboard' }),
-    );
+    expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+  });
 
-    off();
+  it('closeDashboard() 关闭长连接：readyState 变 CLOSED', async () => {
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+
+    api.closeDashboard();
+
+    // VueUse close 内部会调 ws.close() → readyState 变 CLOSED
+    expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+  });
+
+  it('onDashboardEvent 接收业务事件分发', async () => {
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const handler = vi.fn();
+    api.onDashboardEvent(handler);
+
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    socket.pushEvent('PART_TO_SHIP', { part_id: '180000000000001' });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const ev = handler.mock.calls[0]?.[0] as { event_type: string; data: Record<string, unknown> };
+    expect(ev.event_type).toBe('PART_TO_SHIP');
+    expect(ev.data.part_id).toBe('180000000000001');
+  });
+
+  it('onDashboardStatus 接收连接状态变更（OPEN / CLOSED）', async () => {
+    const api = await loadDashboardApi();
+    const statusHandler = vi.fn();
+    api.onDashboardStatus(statusHandler);
+    // 这里 onDashboardStatus 自身已经触发 socket 创建
+
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open(); // → 触发 'open'
+
+    expect(statusHandler).toHaveBeenCalledWith('open');
+
+    socket.closeWith({}); // → 触发 'closed'
+    expect(statusHandler).toHaveBeenCalledWith('closed');
+  });
+
+  it('snapshot 帧不再派发到 onDashboardEvent 订阅者（HTTP 全量首取已替代）', async () => {
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const handler = vi.fn();
+    api.onDashboardEvent(handler);
+
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: 'snapshot',
+        data: {
+          on_production_shelves: [],
+          on_inspection_shelves: [],
+          in_process: [],
+          upcoming_delivery: [],
+          ts: 'x',
+        },
+        ts: 'x',
+      }),
+    });
+
+    // snapshot 帧直接忽略，不应再触发 event handler
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('fetchDashboardSnapshot：HTTP GET /api/v2/dashboard/snapshot，返回解封后 data', async () => {
+    const api = await loadDashboardApi();
+    const sample = {
+      on_production_shelves: [],
+      on_inspection_shelves: [],
+      in_process: [],
+      upcoming_delivery: [],
+      ts: '2026-09-28T10:00:00+08:00',
+    };
+    httpGetMock.mockResolvedValue({ data: sample });
+
+    const result = await api.fetchDashboardSnapshot();
+
+    expect(httpGetMock).toHaveBeenCalledWith('/dashboard/snapshot');
+    expect(result).toEqual(sample);
   });
 });
