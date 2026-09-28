@@ -7,7 +7,12 @@
   配套：
   - 类型契约 src/types/cos_upload.ts
   - 底层 composable src/composables/useCosUploader.ts
-  - 文档 docs/06-data-and-excel/cos-upload.md
+  - 选文件纯函数 src/composables/cosUploaderPickPlan.ts
+
+  2026-09-28 整改：el-upload 内部列表泄漏（limit 永久超限）、
+              双次 requestUpload（sha256 + allocate 双倍浪费）、
+              startUpload 重入竞态、confirm 双调用、allDone payload 语义、
+              错误反馈通道统一。
 
   与 FileListCard.vue 的差异：
   - FileListCard 强绑 part-file 域（PartFileItem / PartFileKind），且走 multipart
@@ -18,17 +23,15 @@
 <template>
   <div class="cos-uploader">
     <el-upload
-      :action="undefined"
+      ref="uploadRef"
+      action="#"
       drag
       :multiple="multiple"
       :auto-upload="false"
       :show-file-list="false"
       :accept="accept || undefined"
       :disabled="disabled"
-      :limit="limit || undefined"
       :on-change="onPick"
-      :on-exceed="onExceed"
-      :before-upload="beforeUpload"
     >
       <el-icon class="el-icon--upload"><upload-filled /></el-icon>
       <div class="el-upload__text">拖拽文件到此处，或<em>点击选择</em></div>
@@ -106,18 +109,33 @@
 
 <script setup lang="ts">
 /**
- * 通用 COS 上传 UI 组件（2026-09-17 新增）。
+ * 通用 COS 上传 UI 组件（2026-09-17 新增，2026-09-28 整改）。
  *
  * 内部消费 useCosUploader（src/composables/useCosUploader.ts）实现上传状态机；
  * caller 通过 Props 注入业务端点（requestUpload / confirm / cancel），组件自身
  * 零业务字段，零 part-file / delivery-* / api/* 域特定 import。
  *
  * Props / Events / Exposes 见对应 defineProps / defineEmits / defineExpose。
+ *
+ * 2026-09-28 整改要点（详见文件头注释）：
+ * - 删 el-upload 的 :limit / :before-upload / :on-exceed — el-upload 内部列表
+ *   泄漏（每选一次 push 一条，cosUploader.removeItem 不清内部列表）导致
+ *   :limit 永久超限。改在组件内自实现 limit（planPick）；每次 onPick 立即
+ *   clearFiles() 清空内部幽灵列表。
+ * - onPick 走 microtask 合批：el-upload 的 on-change 在多文件拖拽 / input
+ *   多选时同步触发 N 次。buffer 后 microtask flush 让 N 次合并成一次
+ *   requestUpload，根除「首次 onPick 调一次 + 首次 startUpload 兜底又调一次」
+ *   的双调浪费（300MB PDF sha256 重算 + 后端 allocate 双份 tmp_key）。
+ * - startUpload 重入锁：避免并发调用导致同 item 被多次 uploadOne 触发。
+ * - confirm 双调用防护：uploadedRefs.add 提前到 await 之前，避免并发
+ *   processCompletedItems 双 confirm。
+ * - allDone payload 只包含 confirm 成功的 item — 失败的仍走 error 事件。
+ * - 错误反馈通道统一：组件不直接弹 ElMessage，全部走 emit('pickError'|'error')，
+ *   由 caller 决定怎么展示。
  */
 import { reactive, ref } from 'vue';
-import { ElMessage } from 'element-plus';
 import { Document, DocumentRemove, UploadFilled } from '@element-plus/icons-vue';
-import type { UploadFile, UploadFiles, UploadRawFile } from 'element-plus';
+import type { UploadFile, UploadFiles, UploadInstance } from 'element-plus';
 import {
   buildCosUploadItems,
   useCosUploader,
@@ -125,6 +143,7 @@ import {
   type CosUploaderItem,
   type CosUploadSession,
 } from '@/composables/useCosUploader';
+import { planPick } from '@/composables/cosUploaderPickPlan';
 
 interface Props {
   /** 必填：申请 STS 凭证 + tmp_key。返回 batch session */
@@ -178,15 +197,26 @@ const emit = defineEmits<{
   allDone: [CosUploadedItem[]];
   error: [CosUploaderItem];
   exceed: [File[]];
+  /** 2026-09-28 新增：选文件阶段失败（size/accept/requestUpload/multiple） */
+  pickError: [message: string, file: File];
 }>();
 
 const items = ref<CosUploaderItem[]>([]);
 const retryingRefs = reactive<Record<string, boolean>>({});
+const uploadRef = ref<UploadInstance | null>(null);
 
 /** 已触发 uploaded 事件的 item.client_ref，避免重试 / 二次 confirm 后重复触发 */
 const uploadedRefs = new Set<string>();
 /** 已触发 error 事件的 item.client_ref（confirm 失败或上传抛错） */
 const errorEmittedRefs = new Set<string>();
+
+/** 2026-09-28 新增：startUpload 重入锁 + pending 重跑标记 */
+const isUploading = ref(false);
+const startQueued = ref(false);
+
+/** 2026-09-28 新增：onPick microtask 合批用缓冲与调度标记 */
+const pickBuffer: File[] = [];
+let flushScheduled = false;
 
 /** 字节数 → 人类可读字符串（B / KB / MB / GB）。 */
 function formatSize(n: number): string {
@@ -220,6 +250,10 @@ async function refetchSession(): Promise<CosUploadSession> {
  *   PagedTable.vue 注释 PR-2 处理）：vue/no-setup-props-destructure 禁止顶层
  *   直接读 props；composable 这俩字段是构造期快照而非响应式依赖，IIFE 写法
  *   既过 lint 又语义正确。
+ *
+ * 2026-09-28 整改：组件 onPick 拿到 session 后会调 updateSession 喂给 composable，
+ * 让 ensureFreshCredentials 看到 warm cache 后跳过兜底 refetchSession，
+ * 根除「首次 onPick 调一次 + 首次 startUpload 兜底又调一次」的双调浪费。
  */
 const uploader = useCosUploader({
   items,
@@ -228,12 +262,21 @@ const uploader = useCosUploader({
   concurrency: ((): number => props.concurrency)(),
 });
 
-const { startUpload: startUploadRaw, retryItem: retryItemRaw, allDone, allOk } = uploader;
+const {
+  startUpload: startUploadRaw,
+  retryItem: retryItemRaw,
+  updateSession,
+  allDone,
+  allOk,
+} = uploader;
 
 /**
  * 单文件直传完成后的统一收口：调 caller 的 confirm（若有），成功后 emit
  * 'uploaded'；confirm 抛错则把 item 标 error 并 emit 'error'。已触发过的
  * item 跳过（避免重试后重复触发）。
+ *
+ * 2026-09-28 整改：uploadedRefs.add 提前到 await 之前，防止并发
+ * processCompletedItems 双 confirm；confirm 失败回滚 uploadedRefs + 标 error。
  */
 async function processUploaded(it: CosUploaderItem): Promise<void> {
   const item: CosUploadedItem = {
@@ -244,18 +287,22 @@ async function processUploaded(it: CosUploaderItem): Promise<void> {
     sha256: it.sha256,
   };
   if (props.confirm) {
+    // 2026-09-28：uploadedRefs.add 提前到 await 之前，防止并发 processCompletedItems 双 confirm
+    uploadedRefs.add(it.client_ref);
     try {
       await props.confirm(item);
     } catch (e) {
-      // confirm 失败：标记 error 让 UI 反映失败，触发 error 事件让 caller 决定后续
+      // confirm 失败：回滚 uploadedRefs + 标记 error 让 UI 反映失败
+      uploadedRefs.delete(it.client_ref);
       it.status = 'error';
       it.error = `confirm 失败：${(e as Error).message ?? String(e)}`;
       errorEmittedRefs.add(it.client_ref);
       emit('error', it);
       return;
     }
+  } else {
+    uploadedRefs.add(it.client_ref);
   }
-  uploadedRefs.add(it.client_ref);
   emit('uploaded', item);
 }
 
@@ -263,20 +310,26 @@ async function processUploaded(it: CosUploaderItem): Promise<void> {
  * 整批 upload / retry 行为收口后跑一遍：
  * 1. status=done 且未触发 uploaded 的 item → processUploaded
  * 2. status=error 且未触发 error 的 item → emit 'error'
- * 3. 全部进入终态（done / error） → emit 'all-done'
+ * 3. 全部进入终态（done / error） → emit 'allDone'（payload 仅含 confirm 成功的）
+ *
+ * 2026-09-28 整改：allDone payload 仅含 confirm 成功的 item（status 仍为 done）；
+ * 之前版本无差别 push，导致 caller 收到失败项的 payload 误以为是成功。
  */
 async function processCompletedItems(): Promise<void> {
   const uploadedPayload: CosUploadedItem[] = [];
   for (const it of items.value) {
     if (it.status === 'done' && !uploadedRefs.has(it.client_ref)) {
-      uploadedPayload.push({
-        client_ref: it.client_ref,
-        tmp_key: it.tmp_key,
-        etag: it.etag,
-        file: it.file,
-        sha256: it.sha256,
-      });
       await processUploaded(it);
+      // 2026-09-28：只有 confirm 成功后（status 仍为 done）才入 allDone payload
+      if (it.status === 'done') {
+        uploadedPayload.push({
+          client_ref: it.client_ref,
+          tmp_key: it.tmp_key,
+          etag: it.etag,
+          file: it.file,
+          sha256: it.sha256,
+        });
+      }
     } else if (it.status === 'error' && !errorEmittedRefs.has(it.client_ref)) {
       errorEmittedRefs.add(it.client_ref);
       emit('error', it);
@@ -290,10 +343,29 @@ async function processCompletedItems(): Promise<void> {
   }
 }
 
-/** expose 的 startUpload：包一层处理 confirm / 事件 */
+/**
+ * expose 的 startUpload：包一层处理 confirm / 事件 + 重入锁。
+ *
+ * 2026-09-28 整改：并发 startUpload 仅标记 queued，当前批跑完后再补一轮。
+ * 同一轮 batch 内多次 pick 的多次 startUpload 合并执行（do-while 循环）。
+ */
 async function startUpload(): Promise<void> {
-  await startUploadRaw();
-  await processCompletedItems();
+  // 2026-09-28：重入保护 — 并发 startUpload 仅标记 queued，当前批跑完后再补一轮
+  if (isUploading.value) {
+    startQueued.value = true;
+    return;
+  }
+  isUploading.value = true;
+  try {
+    // 循环直到没有 queued（同一轮 batch 内多次 pick 的多次 startUpload 合并执行）
+    do {
+      startQueued.value = false;
+      await startUploadRaw();
+      await processCompletedItems();
+    } while (startQueued.value);
+  } finally {
+    isUploading.value = false;
+  }
 }
 
 /** expose 的 retryItem：包一层处理 confirm + 触发 retrying 按钮 loading */
@@ -311,6 +383,9 @@ async function retryItem(clientRef: string): Promise<void> {
 /**
  * expose 的 removeItem：若 item.status=done 且 caller 注入了 cancel，先调
  * cancel 再移出；cancel 抛错仅警告不阻塞移除。
+ *
+ * 2026-09-28 整改：cancel 失败的 ElMessage.warning 改为 console.warn — 组件
+ * 不再直接弹 ElMessage，全部走 emit('pickError'|'error') 通道统一。
  */
 async function removeItem(clientRef: string): Promise<void> {
   const idx = items.value.findIndex((it) => it.client_ref === clientRef);
@@ -320,7 +395,8 @@ async function removeItem(clientRef: string): Promise<void> {
     try {
       await props.cancel(it.tmp_key);
     } catch (e) {
-      ElMessage.warning(`清理 tmp 对象失败：${(e as Error).message ?? String(e)}`);
+      // best-effort 清理失败 — 展示组件不直接弹 ElMessage
+      console.warn(`[CosUploader] cancel tmp 失败：${(e as Error).message ?? String(e)}`);
     }
   }
   uploadedRefs.delete(clientRef);
@@ -343,52 +419,97 @@ async function clear(): Promise<void> {
   items.value = [];
   uploadedRefs.clear();
   errorEmittedRefs.clear();
+  emit('change', items.value);
 }
 
 /**
- * 选文件后由 el-upload onChange 回调：
- * 1. maxSizeMB 校验
- * 2. 调 caller 的 requestUpload 拿当前批 session
- * 3. buildCosUploadItems → push 到 items
- * 4. autoUpload=true 时直接 startUpload()
- * 5. emit 'change'
+ * 2026-09-28 整改版 onPick：
+ * - 立即调 uploadRef.clearFiles() 清空 el-upload 内部幽灵列表（limit 永久超限修复）；
+ * - 不立即处理，先把 raw push 到 pickBuffer；microtask 内 flushPickBuffer 合并同 tick 多次 pick
+ *   （el-upload 的 on-change 在多文件拖拽 / input 多选时同步触发 N 次）。
+ * - 不再调 ElMessage，所有失败走 emit('pickError', message, file)。
  */
 async function onPick(uploadFile: UploadFile, _uploadFiles: UploadFiles): Promise<void> {
   const raw = uploadFile.raw as File | undefined;
   if (!raw) return;
-  if (props.maxSizeMB && raw.size > props.maxSizeMB * 1024 * 1024) {
-    ElMessage.error(`文件「${raw.name}」超过 ${props.maxSizeMB} MB 限制`);
-    return;
+  // P0-1 修复：每条路径（不论后续是否成功）立即清空 el-upload 内部幽灵列表。
+  // clearFiles 仅 filter 内部数组、不回调 onChange（EP 2.14.2 use-handlers.mjs:17-23），
+  // 不会触发本函数重入。不能用 handleRemove（会回调 onChange 把删掉的再送回来）。
+  void uploadRef.value?.clearFiles();
+  pickBuffer.push(raw);
+  if (flushScheduled) return;
+  flushScheduled = true;
+  // microtask：收集同一事件循环 tick 内所有 pick 后再 flush，
+  // 让 el-upload N 次同步 on-change 合并成一次 requestUpload（性能优化 + 对齐 useUploadSession 批量语义）
+  void Promise.resolve().then(async () => {
+    flushScheduled = false;
+    await flushPickBuffer();
+  });
+}
+
+/**
+ * microtask flush：合并 pickBuffer 内所有文件，做 size/accept/limit/multiple/requestUpload 全校验，
+ * 一次性拿 session + build items + updateSession + startUpload（带重入锁）。
+ */
+async function flushPickBuffer(): Promise<void> {
+  if (pickBuffer.length === 0) return;
+  const buffer = pickBuffer.splice(0, pickBuffer.length);
+
+  const plan = planPick(
+    buffer,
+    {
+      maxSizeMB: props.maxSizeMB,
+      accept: props.accept,
+      limit: props.limit,
+      multiple: props.multiple,
+    },
+    items.value.length,
+  );
+
+  // emit 各类型拒绝事件
+  if (plan.rejectedByLimit.length > 0) {
+    emit('exceed', plan.rejectedByLimit);
   }
+  for (const r of plan.rejectedBySize) emit('pickError', r.reason, r.file);
+  for (const r of plan.rejectedByAccept) emit('pickError', r.reason, r.file);
+  for (const r of plan.rejectedByMultiple) emit('pickError', r.reason, r.file);
+
+  if (plan.accepted.length === 0) return;
+
   let session: CosUploadSession;
   try {
-    session = await props.requestUpload([raw]);
+    session = await props.requestUpload(plan.accepted);
   } catch (e) {
-    ElMessage.error(`申请上传凭证失败：${(e as Error).message ?? String(e)}`);
+    const msg = (e as Error).message ?? String(e);
+    for (const f of plan.accepted) {
+      emit('pickError', `申请上传凭证失败：${msg}`, f);
+    }
     return;
   }
-  const built = buildCosUploadItems([raw], session, { computeHash: props.computeHash });
+
+  const built = buildCosUploadItems(plan.accepted, session, {
+    computeHash: props.computeHash,
+  });
   items.value.push(...built);
   emit('change', items.value);
+  // 2026-09-28：拿到 session 后立即喂 composable，让 ensureFreshCredentials 看到
+  // warm cache 后跳过兜底 refetch，根除「首次 onPick 调一次 + 首次 startUpload
+  // 兜底又调一次」的双调浪费。
+  updateSession(session);
+
   if (props.autoUpload) {
     await startUpload();
   }
 }
 
-/** el-upload onExceed：超出 limit 时 ElMessage.warning + emit 'exceed' */
-function onExceed(files: File[]): void {
-  const limit = props.limit > 0 ? props.limit : Infinity;
-  ElMessage.warning(`已超出文件数限制（${limit === Infinity ? '∞' : limit}），多余文件已忽略`);
-  emit('exceed', files);
-}
-
-/**
- * el-upload beforeUpload：恒返回 false，避免 el-upload 自带的 action 上传触发
- * （本组件走 :auto-upload="false" + 自己调 useCosUploader.startUpload）。
- */
-function beforeUpload(_raw: UploadRawFile): boolean {
-  return false;
-}
+// matchesAccept 仅组件本地使用时被 pickPlan 替代；此处不再保留本地实现，
+// 完整解析逻辑走 src/composables/cosUploaderPickPlan.ts。
+// 2026-09-28：旧版 beforeUpload 恒返回 false（避免 el-upload 自带 action
+// 触发）。2026-09-28 整改后本组件 :auto-upload="false" + 自实现完整上传流程，
+// 已不需要 beforeUpload 钩子，删除避免误导。
+// 旧版 onExceed：超出 limit 时 ElMessage.warning + emit 'exceed'。
+// 2026-09-28 整改后 limit 走 planPick 自实现，el-upload 不再传 :limit，
+// onExceed 不再被触发。
 
 defineExpose({
   items,

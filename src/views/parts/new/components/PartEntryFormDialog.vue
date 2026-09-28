@@ -168,9 +168,9 @@
                - :max-size-m-b="300"：与 nginx 300m 上限对齐；
                - 不开 computeHash：sha 由 composable.requestDrawingUpload 内
                  computeSha256 算一次（避免大 PDF 算两次）；
-               - @change 本地 wrapper trim 旧项只留最新（绕开 el-upload :limit
-                 统计坑：cosUploader.removeItem 不会清 el-upload 内部列表）。
-          -->
+               - @change 本地 wrapper trim 旧项只留最新；
+               2026-09-28：组件侧 el-upload 内部列表泄漏已修（clearFiles +
+               自实现 limit），trim hack 可保留作为 UX（replace 语义）。 -->
           <CosUploader
             ref="uploaderRef"
             :request-upload="requestDrawingUpload"
@@ -183,6 +183,7 @@
             @uploaded="onDrawingUploadedLocal"
             @all-done="emit('drawingAllDone')"
             @error="onDrawingUploadErrorLocal"
+            @pick-error="onPickErrorLocal"
           />
           <p v-if="editing && localForm.drawingName" class="form-hint">
             当前图纸：{{ localForm.drawingName }}；重新上传将替换。
@@ -214,6 +215,7 @@
 // 仅 update:* 协议事件可含连字符。
 
 import { reactive, ref, toRaw, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import CosUploader from '@/components/CosUploader.vue';
 import type {
   CosUploadedItem,
@@ -291,9 +293,9 @@ watch(
 const uploaderRef = ref<InstanceType<typeof CosUploader> | null>(null);
 
 /**
- * 本地 @change wrapper：cosUploader.removeItem 不会清 el-upload 内部列表，
- * `:limit="1"` 会导致永远超限。我们绕开方案：:limit="0"（不限）+ :multiple="false"，
- * 选第 N 个文件后这里 trim：保留最新一条，把前 N-1 条从 cos-uploader 内部移出。
+ * 本地 @change wrapper：组件侧 :limit="0" + :multiple="false"，配合自实现
+ * planPick 拦截超限（2026-09-28 整改）。trim hack 保留作为 UX（replace 语义）
+ * ——选第 N 个 PDF 后保留最新一条，把前 N-1 条从 cos-uploader 内部移出。
  */
 async function handleUploaderChange(items: CosUploaderItem[]): Promise<void> {
   if (items.length > 1) {
@@ -329,6 +331,17 @@ function onDrawingUploadedLocal(item: CosUploadedItem): void {
 }
 function onDrawingUploadErrorLocal(item: CosUploaderItem): void {
   emit('drawingUploadError', item);
+}
+
+/**
+ * 2026-09-28 新增：pickError 统一展示。caller 侧用 ElMessage 显示组件产出的
+ * 选文件阶段错误消息（size/accept/requestUpload/multiple）。
+ *
+ * 组件自身不再直接弹 ElMessage（沿 P2 错误反馈通道统一约定）：业务侧 handler
+ * 由 caller 决定，本视图用 ElMessage.error 展示。
+ */
+function onPickErrorLocal(message: string, _file: File): void {
+  ElMessage.error(message);
 }
 </script>
 

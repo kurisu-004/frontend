@@ -413,7 +413,7 @@ describe('useCosUploader / applyFreshSession (tmp_key 变化兜底)', () => {
     expect(uploadFileSpy).not.toHaveBeenCalled();
   });
 
-  it('tmp_key 变化 + 之前 done → 强制 reset pending + 用新 tmp_key 重传', async () => {
+  it('tmp_key 变化 + 之前 done → done 项跳过、tmp_key/status/etag 不动（2026-09-28 强化）', async () => {
     const expSec = expiringExpiredTime();
     const session = makeSession(['tmp/old.pdf'], expSec);
     const items = buildCosUploadItems([new File(['x'], 'x.pdf')], session);
@@ -431,13 +431,16 @@ describe('useCosUploader / applyFreshSession (tmp_key 变化兜底)', () => {
     });
     await startUpload();
 
-    expect(itemsRef.value[0]!.tmp_key).toBe('tmp/new.pdf');
-    expect(uploadFileSpy).toHaveBeenCalledTimes(1);
-    expect(uploadFileSpy.mock.calls[0]![0]).toEqual(
-      expect.objectContaining({ Key: 'tmp/new.pdf' }),
-    );
-    expect(itemsRef.value[0]!.status).toBe('error');
-    expect(itemsRef.value[0]!.error).toBe('mock upload fail');
+    // 2026-09-28：done 项永不动 — tmp_key 重签不影响已上传对象，避免静默重传。
+    // 旧版本会把 done reset pending 然后被 targets 重传，导致 COS 桶多 orphan
+    // tmp_key + 浪费 sha256 / upload 流量。新行为见 useCosUploader.ts
+    // applyFreshSession 的 `if (it.status === 'done') return;` 守卫。
+    expect(itemsRef.value[0]!.tmp_key).toBe('tmp/old.pdf');
+    expect(itemsRef.value[0]!.status).toBe('done');
+    expect(itemsRef.value[0]!.progress).toBe(100);
+    expect(itemsRef.value[0]!.etag).toBe('"old-etag"');
+    expect(itemsRef.value[0]!.error).toBeUndefined();
+    expect(uploadFileSpy).not.toHaveBeenCalled();
   });
 
   it('tmp_key 变化 + 之前 error → 强制 reset pending + 清 error', async () => {
@@ -490,14 +493,15 @@ describe('useCosUploader / applyFreshSession (tmp_key 变化兜底)', () => {
     expect(uploadFileSpy).not.toHaveBeenCalled();
   });
 
-  it('旧 tmp_key 存在 + 新 tmp_key 为空 → 强制 mark error（极端兜底）', async () => {
+  it('旧 tmp_key 存在 + 新 tmp_key 为空 + 之前 error → 强制 mark error（极端兜底）', async () => {
     const expSec = expiringExpiredTime();
     const session = makeSession(['tmp/old.pdf'], expSec);
     const items = buildCosUploadItems([new File(['x'], 'x.pdf')], session);
     const itemsRef: Ref<CosUploaderItem[]> = ref(items);
-    itemsRef.value[0]!.status = 'done';
-    itemsRef.value[0]!.progress = 100;
-    itemsRef.value[0]!.etag = '"old"';
+    // 2026-09-28：done 项早返，此分支仅对 error/uploading/hashing 触发。
+    itemsRef.value[0]!.status = 'error';
+    itemsRef.value[0]!.progress = 0;
+    itemsRef.value[0]!.error = '先前失败';
 
     uploadFileSpy.mockResolvedValue(mockSuccess());
     const refetchSession = vi.fn(async () => makeSession([''], expSec + 7200));
@@ -673,5 +677,118 @@ describe('useCosUploader / allDone & allOk', () => {
       initialSession: session,
     });
     expect(allDone.value).toBe(false);
+  });
+});
+
+// ============ tests: updateSession (2026-09-28 新增) ============
+describe('useCosUploader / updateSession', () => {
+  it('updateSession 后 startUpload 不触发 refetchSession（首次双调消除）', async () => {
+    const f1 = new File(['x'], 'x');
+    const session1 = makeSession(['tmp/x']);
+    const items = buildCosUploadItems([f1], session1);
+    const itemsRef: Ref<CosUploaderItem[]> = ref(items);
+
+    uploadFileSpy.mockResolvedValue(mockSuccess());
+
+    const refetchSession = vi.fn(async () => session1);
+    const { startUpload, updateSession } = useCosUploader({
+      items: itemsRef,
+      refetchSession,
+      // 注意：不传 initialSession，模拟组件 onPick → updateSession 路径
+    });
+
+    // 模拟组件 onPick 后喂 session
+    updateSession(session1);
+    await startUpload();
+
+    expect(refetchSession).not.toHaveBeenCalled(); // 关键：warm cache 后不兜底 refetch
+    expect(itemsRef.value[0]!.status).toBe('done');
+  });
+
+  it('updateSession 不改写任何 item 状态（item 列表已知一一对应）', () => {
+    const session = makeSession(['tmp/x']);
+    const items = buildCosUploadItems([new File(['x'], 'x')], session);
+    const itemsRef: Ref<CosUploaderItem[]> = ref(items);
+    itemsRef.value[0]!.status = 'hashing';
+    itemsRef.value[0]!.progress = 50;
+
+    const refetchSession = vi.fn();
+    const { updateSession } = useCosUploader({
+      items: itemsRef,
+      refetchSession,
+    });
+    updateSession(session);
+
+    expect(itemsRef.value[0]!.status).toBe('hashing'); // 不动
+    expect(itemsRef.value[0]!.progress).toBe(50); // 不动
+  });
+});
+
+// ============ tests: applyFreshSession done 跳过 (2026-09-28 强化) ============
+describe('useCosUploader / applyFreshSession done skip', () => {
+  it('refreshSession 后 done 项的 tmp_key 不被改写、不被 reset', async () => {
+    // 用 fake timers 把系统时间从 healthy 推到「即将过期」区间，强制触发
+    // ensureFreshCredentials → refetchSession → applyFreshSession，且过程中
+    // 让 fresh session 携带全新 tmp_key 以验证 done 项不受影响。
+    vi.useFakeTimers();
+    const baseTime = new Date('2026-01-01T00:00:00Z').getTime();
+    vi.setSystemTime(baseTime);
+    const expSec = Math.floor(baseTime / 1000) + 7200; // +2h，healthy
+
+    const f1 = new File(['x'], 'x');
+    const initialSession = makeSession(['tmp/original'], expSec);
+    const items = buildCosUploadItems([f1], initialSession);
+    const itemsRef: Ref<CosUploaderItem[]> = ref(items);
+
+    uploadFileSpy.mockResolvedValue(mockSuccess());
+
+    // refresh 返回全新 tmp_key + 健康凭证
+    const refetchSession = vi.fn(async () => makeSession(['tmp/refreshed'], expSec + 7200));
+
+    const { startUpload, items: exposedItems } = useCosUploader({
+      items: itemsRef,
+      refetchSession,
+      initialSession,
+    });
+
+    await startUpload();
+    expect(itemsRef.value[0]!.status).toBe('done');
+    expect(itemsRef.value[0]!.tmp_key).toBe('tmp/original');
+    expect(refetchSession).not.toHaveBeenCalled();
+
+    // 推到「expSec - 60s」——即 expire 前 1 min（< 5 min 余量）→ 触发 refetch
+    vi.setSystemTime((expSec - 60) * 1000);
+    await startUpload();
+
+    // 关键断言：done 项的 tmp_key 仍是 original，未被 refreshed 覆盖
+    expect(itemsRef.value[0]!.status).toBe('done');
+    expect(itemsRef.value[0]!.tmp_key).toBe('tmp/original');
+    expect(refetchSession).toHaveBeenCalledTimes(1);
+    void exposedItems; // 占位让 lint 不抱怨未使用
+  });
+});
+
+// ============ tests: uploadOne status 防御 (2026-09-28 新增) ============
+describe('useCosUploader / uploadOne status defense', () => {
+  it('uploadOne 在 status !== pending 时不调用 cos.uploadFile', async () => {
+    const f1 = new File(['x'], 'x');
+    const session = makeSession(['tmp/x']);
+    const items = buildCosUploadItems([f1], session);
+    const itemsRef: Ref<CosUploaderItem[]> = ref(items);
+    // 手动把 status 置 uploading 模拟并发 startUpload
+    itemsRef.value[0]!.status = 'uploading';
+
+    uploadFileSpy.mockResolvedValue(mockSuccess());
+
+    const refetchSession = vi.fn(async () => session);
+    const { startUpload } = useCosUploader({
+      items: itemsRef,
+      refetchSession,
+      initialSession: session,
+    });
+    await startUpload();
+
+    expect(uploadFileSpy).not.toHaveBeenCalled(); // 防御生效
+    expect(itemsRef.value[0]!.status).toBe('uploading'); // 不被改写
   });
 });

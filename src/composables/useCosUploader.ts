@@ -212,6 +212,12 @@ export interface UseCosUploaderReturn {
    * - uploading 中的项：忽略（让当前完成后再触发）。
    */
   retryItem: (clientRef: string) => Promise<void>;
+  /**
+   * 2026-09-28 新增：caller 拿到新 session 后立即喂给 composable（等价构造后补
+   * `initialSession`）。组件 onPick 流程在每次拿到 session 后调本方法，避免
+   * 后续 startUpload 兜底 refetch 导致重复申请凭证 / tmp_key。
+   */
+  updateSession: (session: CosUploadSession) => void;
   /** 计算属性：所有项都已进入终态（done 或 error）。 */
   allDone: ComputedRef<boolean>;
   /** 计算属性：所有项都 done（没有任何 error / pending / uploading / hashing）。 */
@@ -271,6 +277,10 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
    * - uploading 中撞到 tmp_key 变化：mark error，避免 in-flight 写到旧 key；
    * - fresh.tmp_key 为空（旧有 → 新无）：mark error「STS 重签后 tmp_key 缺失」。
    *
+   * 2026-09-28 强化：done 项**永不动** — tmp_key 重签不影响已上传对象，避免静默重传。
+   * 之前版本会把 done 项 reset pending 然后被 targets 重传，导致 COS 桶里多一份
+   * orphan tmp_key + 浪费 sha256 / upload 流量。
+   *
    * 与 useCosUpload.applyFreshIntents 的差异：
    * - 本函数按**数组下标**对齐（useCosUpload 按 client_ref 索引 Map）；
    * - 本函数不写 credentials / bucket / region 到 item（item 上没有这些字段），
@@ -280,6 +290,8 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
     sessionCache = fresh;
     const freshItems = fresh.items;
     items.value.forEach((it, idx) => {
+      // 2026-09-28：done 项永不动 — tmp_key 重签不影响已上传对象，避免静默重传
+      if (it.status === 'done') return;
       const fItem = freshItems[idx];
       if (!fItem) {
         // caller 没给对应下标的 fresh item → 该 item 仍持旧 tmp_key，不动
@@ -287,7 +299,8 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
       }
       if (fItem.tmp_key && fItem.tmp_key !== it.tmp_key) {
         it.tmp_key = fItem.tmp_key;
-        if (it.status === 'done' || it.status === 'error') {
+        if (it.status === 'error') {
+          // 之前上传失败的项拿到新 tmp_key → 重置 pending 等 caller 重试
           it.status = 'pending';
           it.progress = 0;
           it.error = undefined;
@@ -344,6 +357,9 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
   async function uploadOne(idx: number): Promise<void> {
     const it = items.value[idx];
     if (!it) return; // 并发期间被 caller 删了
+    // 2026-09-28：纵深防御 — 同一 item 可能被并发 startUpload 多次触发，
+    // 仅 status='pending' 才进上传路径；retryItem 已先把 error 置 pending 再调本函数，兼容。
+    if (it.status !== 'pending') return;
     if (!sessionCache) {
       // 极端：没缓存 session 就走到上传路径。理论上 ensureFreshCredentials 已
       // 兜底，此处再调一次 refetchSession 兜底。
@@ -458,10 +474,28 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
     () => items.value.length > 0 && items.value.every((it) => it.status === 'done'),
   );
 
+  /**
+   * 2026-09-28 新增：caller 拿到新 session 后立即喂给 composable，等价于构造后
+   * 补 `initialSession`。组件 onPick 流程会调本方法，使 `ensureFreshCredentials`
+   * 看到 warm cache 后跳过兜底 refetch，根除「首次 onPick 调一次 requestUpload +
+   * 首次 startUpload 兜底又调一次」的双调浪费（300MB PDF sha256 重算 +
+   * 后端 allocate 双份 tmp_key）。
+   *
+   * 与 `applyFreshSession` 区别：
+   * - updateSession 写的是「本次 onPick 拿到的全新 batch session」，item 列表
+   *   已知一一对应，**不动 item 状态**（tmp_key 已由 buildCosUploadItems 写好）；
+   * - applyFreshSession 写的是「凭证过期后 refetchSession 的结果」，按下标对齐
+   *   + 处理 tmp_key 变化 + 跳过 done 项。
+   */
+  function updateSession(session: CosUploadSession): void {
+    sessionCache = session;
+  }
+
   return {
     items,
     startUpload,
     retryItem,
+    updateSession,
     allDone,
     allOk,
   };
