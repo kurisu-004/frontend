@@ -74,11 +74,23 @@
         </div>
       </el-header>
 
+      <!-- 2026-09-28 新增：tagsView tab 栏（vue-element-admin 风格）。位于 el-header
+           与 el-main 之间，36px 高，CSS-only 横向滚动；右键菜单由 TagsView.vue 内部
+           维护。 -->
+      <TagsView />
+
       <!-- 主要内容区 -->
       <el-main class="main-content">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
-            <component :is="Component" />
+            <!-- 2026-09-28 新增：keep-alive 套在 router-view 上，由 tagsView 的
+       cachedViewNames 控制缓存范围，切换 tab 时保留滚动位置 / 筛选 /
+       未提交表单。Component 解包由 :is 自动处理；refreshSelectedView 通过
+       临时摘 cachedViewNames → nextTick 重新 push 触发重挂载，比 :key 切
+       换整 router-view 更轻（不破坏 transition）。 -->
+            <keep-alive :include="tags.cachedViewNames">
+              <component :is="Component" />
+            </keep-alive>
           </transition>
         </router-view>
       </el-main>
@@ -138,9 +150,13 @@ import { Box, Fold, Expand, Refresh, ArrowDown, Lock, SwitchButton } from '@elem
 // 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
 // 标量 getter 去掉括号：menus() → auth.menus；isDummyAuthActive() → auth.isDummyAuthActive。
 import { useAuthStore } from '@/stores/auth';
+// 2026-09-28 新增：tagsView 全局 store + 展示组件。MainLayout 把 TagsView 挂到
+// el-header 与 el-main 之间，并通过 keep-alive :include 把缓存范围展开到 visitedViews。
+import { useTagsViewStore, type TagView } from '@/stores/tagsView';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { me as apiMe, changeMyPassword } from '@/api/iam';
 import MenuTreeItem from '@/layouts/components/MenuTreeItem.vue';
+import TagsView from '@/layouts/components/TagsView.vue';
 import type { CurrentUser } from '@/types/user';
 
 type UserCmd = 'change-password' | 'logout';
@@ -151,8 +167,24 @@ const router = useRouter();
 const isCollapse = ref(false);
 const currentUser = ref<CurrentUser | null>(null);
 const auth = useAuthStore();
+// 2026-09-28 新增：tagsView store 单一实例（消费侧不解构，沿 auth store 不变量）。
+const tags = useTagsViewStore();
 
 const menuList = computed(() => auth.menus);
+
+/** route → TagView 私有 mapper（与 TagsView.vue 内 mapper 等价；reload 复用）。 */
+function routeToView(): TagView {
+  const nameRaw = route.name as string | symbol | null | undefined;
+  const name = typeof nameRaw === 'string' ? nameRaw : '';
+  return {
+    path: route.path,
+    fullPath: route.fullPath,
+    name,
+    title: (route.meta?.title as string | undefined) ?? '',
+    icon: route.meta?.icon as string | undefined,
+    affix: route.meta?.affix === true,
+  };
+}
 
 const userInfo = computed(() => ({
   name: currentUser.value?.full_name || currentUser.value?.username || '未登录',
@@ -183,8 +215,16 @@ function onMenuSelect(index: string): void {
 const pwdDlg = useDialogSize({ desktopWidth: 420 });
 
 const reload = (): void => {
+  // 2026-09-28 改造：原 router.go(0) 硬刷新整个 app → 改为 tagsView 软刷新
+  // （临时从 cachedViewNames 移除当前 name → nextTick 重新 push → keep-alive 重挂
+  // 载）。比硬刷新更轻（不丢失其它 tab 的滚动位置 / 状态），且与右键菜单「刷新」
+  // 复用同一路径。
+  //
+  // 2026-09-28 修复：移除 `route.meta?.noTagsView === true` 分支——noTagsView 路由
+  // （如 /login、/404）不在 MainLayout 子树，reload 按钮根本不会被触发；保留分支
+  // 是 dead code + 误导性兜底（无路由能进入这条 if）。
   ElMessage.success('刷新成功');
-  router.go(0);
+  void tags.refreshSelectedView(routeToView());
 };
 
 const handleUserCmd = async (cmd: string | number | object): Promise<void> => {
