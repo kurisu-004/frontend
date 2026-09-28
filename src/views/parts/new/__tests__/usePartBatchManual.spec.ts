@@ -20,25 +20,12 @@ const mocks = vi.hoisted(() => ({
   batchCreateParts: vi.fn(),
   createApplicant: vi.fn(),
   routerReplace: vi.fn(),
-  consumeFiles: vi.fn(),
-  markComplete: vi.fn(),
-  sessionInit: vi.fn(),
   confirmDangerous: vi.fn(),
 }));
 
-const sessionStub = {
-  isReady: { value: true },
-  credentials: { value: null },
-  bucket: { value: '' },
-  region: { value: '' },
-  session: { value: { files: [] } },
-  files: { value: [] as { client_ref: string; original_filename: string; file_size: number; content_type: string }[] },
-  init: mocks.sessionInit,
-  allocate: vi.fn(),
-  markComplete: mocks.markComplete,
-  consumeFiles: mocks.consumeFiles,
-  discard: vi.fn(),
-};
+// 2026-09-28 删 useUploadSession：原 usePartBatchManual.spec.ts 的 sessionStub +
+// vi.mock('@/views/parts/new/composables/useUploadSession', ...) 已下线。
+// requestDrawingUpload 改为 throw not-implemented 后，spec 不再需要 session mock。
 
 vi.mock('@/api/parts', () => ({
   batchCreateParts: mocks.batchCreateParts,
@@ -46,10 +33,6 @@ vi.mock('@/api/parts', () => ({
 
 vi.mock('@/api/applicant', () => ({
   createApplicant: mocks.createApplicant,
-}));
-
-vi.mock('@/views/parts/new/composables/useUploadSession', () => ({
-  getUploadSession: () => sessionStub,
 }));
 
 vi.mock('@/views/parts/new/composables/usePartsNewDraft', () => ({
@@ -228,9 +211,6 @@ beforeEach(() => {
   mocks.batchCreateParts.mockReset();
   mocks.createApplicant.mockReset();
   mocks.routerReplace.mockReset();
-  mocks.consumeFiles.mockResolvedValue(undefined);
-    mocks.markComplete.mockResolvedValue(undefined);
-    mocks.sessionInit.mockResolvedValue(undefined);
   mocks.confirmDangerous.mockResolvedValue(true);
   // 默认：applicant 缓存命中，避免 createApplicant 未配置触发 undefined.id
   mocks.createApplicant.mockResolvedValue({ id: 'appl-default' });

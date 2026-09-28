@@ -173,7 +173,7 @@
       <li v-for="f in orphanFileRefs" :key="f.client_ref">
         <code>{{ f.original_filename }}</code>
         <span class="orphan-meta"
-          >（{{ f.kind }} · {{ (f.file_size / 1024).toFixed(1) }} KB · uploaded
+          >（{{ f.kind ?? 'unknown' }} · {{ ((f.file_size ?? 0) / 1024).toFixed(1) }} KB · uploaded
           {{ f.uploaded_at ?? 'unknown' }}）</span
         >
       </li>
@@ -829,13 +829,19 @@ const props = defineProps<{
   canStartUpload: boolean;
   canSubmitCreate: boolean;
   // 2026-09-18 A3：hydrate 结果（顶部 el-alert + 孤儿文件面板）
+  //
+  // 2026-09-28 删 useUploadSession：orphanFileRefs 类型从 SessionFile[] 收到 DraftSessionFile[]
+  // （usePartsNewDraft.ts 内联松散结构类型）。本组件只读 client_ref / original_filename
+  // 等基础字段，optional 字段在 UI 端走 `?? ''` 兜底。子任务 #5 重写后无需回归。
   hydrateRestoredCount: number;
   orphanFileRefs: {
     client_ref: string;
-    kind: string;
-    original_filename: string;
-    file_size: number;
-    uploaded_at: string | null;
+    status?: string;
+    kind?: string;
+    tmp_key?: string;
+    file_size?: number;
+    original_filename?: string;
+    uploaded_at?: string | null;
   }[];
 }>();
 
