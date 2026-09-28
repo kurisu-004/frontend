@@ -56,8 +56,8 @@ import { computeSha256 } from '@/utils/fileHash';
 import type {
   CosUploadedItem,
   CosUploaderItem,
-  CosUploadSession,
-} from '@/composables/useCosUploader';
+  CosUploadGrant,
+} from '@/components/CosUploader/useCosUploader';
 import { useConfirm } from '@/composables/useConfirm';
 import { useDialogSize, type DialogSizeResult } from '@/composables/useDialogSize';
 import {
@@ -181,7 +181,7 @@ export interface UsePartBatchManualReturn {
   openAddDialog: () => void;
   onCustomerChange: (pickedId: unknown) => Promise<void>;
   onApplicantSelect: (item: Record<string, unknown>) => void;
-  requestDrawingUpload: (files: File[]) => Promise<CosUploadSession>;
+  requestDrawingUpload: (files: File[]) => Promise<CosUploadGrant>;
   onDrawingUploaded: (item: CosUploadedItem) => void;
   onDrawingItemsChange: (items: CosUploaderItem[]) => void;
   onDrawingAllDone: () => void;
@@ -474,20 +474,22 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
   // discard 兜底回收（详见 useUploadSession.discard），前端不显式 cancel。
 
   /**
-   * 校验 + 算 sha + 调 session.allocate，拼出 CosUploadSession 返回给组件。
+   * 校验 + 算 sha + 调 session.allocate，拼出 CosUploadGrant 返回给组件。
    *
    * 2026-09-18 改造：原本每文件并发调 grantStsTmpKey；现在改用共享 session pool
    * 一次签整批 tmp_key。新流程：
    * 1) ensure session.init('parts_new') —— mount 时已 init 过；
    * 2) session.allocate([{client_ref, kind, original_filename, file_size,
    *    content_type, content_sha256}]) 拿 N 个 tmp_key；
-   * 3) 把 client_ref + tmp_key + sha 映射回 caller 期待 CosUploadSession.items
+   * 3) 把 client_ref + tmp_key + sha 映射回 caller 期待 CosUploadGrant.items
    *    形态（同时塞 sha 给组件做 confirm 用）。
    *
    * client_ref 由 caller（这里）生成（crypto.randomUUID），便于后续
    * session.markComplete / removeFiles / consumeFiles 反查。
+   *
+   * 2026-09-28 重命名：返回类型 CosUploadSession → CosUploadGrant。
    */
-  async function requestDrawingUpload(files: File[]): Promise<CosUploadSession> {
+  async function requestDrawingUpload(files: File[]): Promise<CosUploadGrant> {
     // 校验 + 算 sha（intents 入参必填；不开组件 computeHash 避免算两次）
     for (const f of files) {
       // accept=".pdf" 拦截 picker，但拖拽可以绕过，组件层兜底再校验一次
@@ -527,8 +529,9 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
       throw new Error('upload session 凭证或桶信息缺失');
     }
 
-    // CosUploader 组件 CosUploadSession.items 需要 client_ref + tmp_key 一一对应；
+    // CosUploader 组件 CosUploadGrant.items 需要 client_ref + tmp_key 一一对应；
     // sha 暂存进 caller 闭包，onDrawingUploaded 时按 File 身份取用。
+    // 2026-09-28 重命名：CosUploadSession → CosUploadGrant。
     return {
       credentials,
       bucket,

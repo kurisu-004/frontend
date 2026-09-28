@@ -291,8 +291,8 @@ import type { PartEntryFieldErrors, PartEntryInput } from '../partEntrySchema';
 import type {
   CosUploadedItem,
   CosUploaderItem,
-  CosUploadSession,
-} from '@/composables/useCosUploader';
+  CosUploadGrant,
+} from '@/components/CosUploader/useCosUploader';
 import type { Applicant } from '@/types/applicant';
 import PartEntryFormDialog from './PartEntryFormDialog.vue';
 
@@ -336,7 +336,8 @@ const props = defineProps<{
   onApplicantSelect: (item: Record<string, unknown>) => void;
   // 2026-09-17 M4：图纸上传回调五件套（替代 beforeDrawingUpload +
   // onDrawingChange + onDrawingRemoveUpload + onDrawingRemove 四件套）。
-  requestDrawingUpload: (files: File[]) => Promise<CosUploadSession>;
+  // 2026-09-28 重命名：CosUploadSession → CosUploadGrant。
+  requestDrawingUpload: (files: File[]) => Promise<CosUploadGrant>;
   onDrawingUploaded: (item: CosUploadedItem) => void;
   onDrawingItemsChange: (items: CosUploaderItem[]) => void;
   onDrawingAllDone: () => void;

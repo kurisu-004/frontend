@@ -11,7 +11,7 @@ declare module 'vue' {
     ColumnDragHandle: typeof import('./components/ColumnDragHandle.vue')['default']
     ColumnFilterPopover: typeof import('./components/ColumnFilterPopover.vue')['default']
     ColumnVisibilityPopover: typeof import('./components/ColumnVisibilityPopover.vue')['default']
-    CosUploader: typeof import('./components/CosUploader.vue')['default']
+    CosUploader: typeof import('./components/CosUploader/index.vue')['default']
     EChart: typeof import('./components/EChart.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']
@@ -81,6 +81,7 @@ declare module 'vue' {
     ElTree: typeof import('element-plus/es')['ElTree']
     ElTreeSelect: typeof import('element-plus/es')['ElTreeSelect']
     ElUpload: typeof import('element-plus/es')['ElUpload']
+    FileList: typeof import('./components/CosUploader/FileList.vue')['default']
     FileListCard: typeof import('./components/FileListCard.vue')['default']
     ListShell: typeof import('./components/ListShell.vue')['default']
     NotificationBanner: typeof import('./components/NotificationBanner.vue')['default']
@@ -91,6 +92,7 @@ declare module 'vue' {
     StepViewer: typeof import('./components/cad-viewer/StepViewer.vue')['default']
     StepViewerProgress: typeof import('./components/cad-viewer/StepViewerProgress.vue')['default']
     StepViewerToolbar: typeof import('./components/cad-viewer/StepViewerToolbar.vue')['default']
+    UploadArea: typeof import('./components/CosUploader/UploadArea.vue')['default']
     UploadStatusCellView: typeof import('./components/UploadStatusCellView.vue')['default']
   }
   export interface ComponentCustomProperties {

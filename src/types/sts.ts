@@ -6,8 +6,10 @@
 // - `POST /api/v1/files/sts-tmp-keys` 的请求 / 响应 shape；
 // - 复用 src/types/cos_upload.ts 的 `CosCredentials` 不可能（python 端多了
 //   `start_time` 字段 + purpose 枚举 + 单端口 1-key response 形态），但**不污染**
-//   cos_upload.ts 的通用契约（它仍然承载 CosCredentials / CosUploadSession 等
+//   cos_upload.ts 的通用契约（它仍然承载 CosCredentials / CosUploadGrant 等
 //   领域无关的最小骨架，caller 在适配层做字段挑选）。
+//   2026-09-28 迁移：cos_upload.ts → components/CosUploader/types.ts；
+//   CosUploadSession → CosUploadGrant（2026-09-28 重命名）。
 //
 // 为什么单独建文件：
 // - 2026-09-17 STS 端口迁移：原 backend-rust `POST /api/v2/part-files/upload-intents`
@@ -59,8 +61,9 @@ export interface StsCredentialsOut {
  *
  *  注意：**单端口只签发 1 个 tmp_key**（与原 backend-rust bulk
  *  `/part-files/upload-intents` 一次签 N 个 key 完全不同）；caller 若要批量
- *  上传，需并发调 N 次本端点，再把 N 个 response 拼成 `CosUploadSession`
+ *  上传，需并发调 N 次本端点，再把 N 个 response 拼成 `CosUploadGrant`
  *  喂给 `useCosUploader` / `useCosUpload`。
+ *  2026-09-28 迁移：CosUploadSession → CosUploadGrant。
  *
  *  字段含义：
  *  - `tmp_key`：COS tmp 区 key（前端直传时填 `cos.uploadFile({ Key })`）；

@@ -15,9 +15,12 @@
 // - python STS 一次只签发 1 个 tmp_key（与 file size / hash / filename / purpose
 //   强绑定，policy resource 也按 1 个 key 写）；
 // - 原 rust `createUploadIntents` 一次签 N 个 key + bulk dedup；
-// - 因此 caller 拿到本响应后需**自行组装** `CosUploadSession.items[]` 数组形态
+// - 因此 caller 拿到本响应后需**自行组装** `CosUploadGrant.items[]` 数组形态
 //   喂给 `useCosUploader` / `useCosUpload`；具体适配逻辑在 3 处 composable
 //   （usePartFileUpload / usePartBatchPdf / usePartBatchManual）内完成。
+//
+// 2026-09-28 重命名：CosUploadSession → CosUploadGrant（语义澄清，组件包与后端
+// Redis session 解耦）。
 //
 // 错误码：python STS 端口当前未实现业务错误码（仅 21502 / 通用 40001 等）；
 // 实际联调首日如发现专用 code，caller 端按 ApiError.code 兜底（详见

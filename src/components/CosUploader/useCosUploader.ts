@@ -1,66 +1,14 @@
-// composables/useCosUploader.ts
+// useCosUploader.ts —— 通用 COS 上传 composable（领域无关版本）
 //
-// 2026-09-17 新增：通用 COS 上传 composable（领域无关版本）。
-//
-// 背景：
-// M3（2026-09-16）落地的 `useCosUpload` 是 part-file 域专用 composable —— 它
-// 输入 `UploadIntentsOut`（part_file.ts 域类型，绑死 tmp_prefix / dedup_hit /
-// kind / filename / file_size / content_sha256 等 part-file 字段）。后续若其它
-// 域（delivery-notes / cnc / assembly 等）也要走"前端 → COS 直传 + 后端
-// head+copy"的同款链路，复用 useCosUpload 就会反向耦合 part-file 域类型，
-// 污染 caller 的领域契约。
-//
-// 本文件抽象出"通用领域无关"的 cos-uploader 状态机：
-// - 输入只接收 `requestUpload: (files) => Promise<CosUploadSession>` 一个
-//   回调，由 caller 自己实现「拿 File 列表 → 调后端 STS 端点 → 拼
-//   CosUploadSession」，composable 不感知任何域字段；
-// - 内部状态机（pending / hashing / uploading / done / error）、并发信号量、
-//   凭证过期重签、tmp_key 变化兜底、retryItem 等策略沿用 useCosUpload 的成熟
-//   实现，避免重复踩坑。
-//
-// 与 useCosUpload 的关系：
-// - useCosUpload（part-file 专用）：保留，内部仍被 parts-form 等 part-file 视图
-//   消费，并保留 part_file.ts 类型契约；
-// - useCosUploader（通用，**并存而非替代**）：面向未来其它域的通用上传底座，
-//   也将驱动 `src/components/CosUploader.vue`；
-// - 二者状态机 / 重签 / 重试策略一致，差异仅在输入契约（通用 session vs part
-//   域 intents）。
-//
-// 设计要点清单：
-// 1. 构造器 `buildCosUploadItems(files, session, opts?)` 把 File[] + session.items
-//    对齐成 `CosUploaderItem[]`，client_ref 由 composable 内部生成（用
-//    crypto.randomUUID 或回退 Date+随机串）—— caller 不必关心。
-// 2. 凭证过期检测：`(Date.now() + 5 * 60_000) >= c.expired_time * 1000` 触发
-//    `refetchSession()` 重签（与 useCosUpload 一致）。
-// 3. applyFreshSession（对应 useCosUpload.applyFreshIntents，函数名改为更普适
-//    的"Session"）：
-//    - tmp_key 不变：仅刷 credentials / bucket / region；
-//    - tmp_key 变化：强制 reset pending（清 progress / etag / error / status=
-//      pending），避免"旧 STS 写旧 key + 新 tmp_key 拿去 confirm"的鬼状态；
-//    - uploading 中撞到 tmp_key 变化：mark error，避免 in-flight 写到旧 key；
-//    - fresh.tmp_key 为空：mark error「STS 重签后 tmp_key 缺失」。
-// 4. COS 实例每批重新 new（避免跨批次串味），与 useCosUpload 同样的
-//    `Protocol: 'https:'` 配置。
-// 5. 并发：简易信号量 `runWithConcurrency(targets, limit)`，worker 函数闭包内
-//    cursor 自增；默认上限 3，对齐 cos-js-sdk-v5 默认 FileParallelLimit。
-// 6. hash 阶段（computeHash=true）：先 await computeSha256 把进度映射到 item
-//    progress 前 30%，再走 uploadOne 把 30%-100% 进度映射给上传；hash 失败
-//    直接 status='error'。
-// 7. 模块级 setup + 闭包，不依赖 Vue 组件实例（与 useCosUpload /
-//    useApplicantSearch 等一致），可脱离组件直接调用（单测、批量上传脚本）。
-//
-// 已知约束：
-// - COS SDK 走 XHR，**只能在浏览器环境跑**；vitest 单测用 mock（不发起真实
-//   HTTP），具体见 src/composables/__tests__/useCosUploader.spec.ts。
-// - 单测环境：vitest 默认 node 环境即可跑（Node 24+ 内置 File / Blob /
-//   crypto.randomUUID），不需要 happy-dom；mock 凭证过期时间用
-//   `vi.useFakeTimers()` + `vi.setSystemTime()`。
-// - COS 桶 CORS 必须配（详见 useCosUpload.ts 注释 / docs/06-data-and-excel/
-//   pdf-and-file.md）；本 composable 不直接读取相关 env，仅复述约束。
-//
-// 类型契约来源：本 composable 完全依赖 `src/types/cos_upload.ts`（2026-09-17
-// commit b9956a5 新增）。该文件与 `src/types/part_file.ts` 的同名词字段完全
-// 一致，但通用组件不反向依赖 part-file 域类型，避免循环依赖。
+// 2026-09-17 新增：通用 COS 上传 composable。
+// 2026-09-28 整改：见 CosUploader.vue 文件头注释（2026-09-28 整改要点）。
+// 2026-09-28 迁移：从 src/composables/useCosUploader.ts 整体迁入
+//   src/components/CosUploader/useCosUploader.ts（CLAUDE.md composable 归属判别：
+//   跨域共享约束收紧到组件包内）。
+// 2026-09-28 重命名：requestUpload → refetchGrant、sessionCache → grantCache、
+//   applyFreshSession → applyFreshGrant、initialSession → initialGrant；
+//   返回类型 CosUploadSession → CosUploadGrant、items 元素类型 →
+//   CosUploadGrantItem。语义澄清：composable 完全不感知 Redis session。
 
 import COS from 'cos-js-sdk-v5';
 import { computed, type ComputedRef, type Ref } from 'vue';
@@ -70,8 +18,8 @@ import type {
   CosUploadedItem,
   CosUploaderItem,
   CosUploaderStatus,
-  CosUploadSession,
-} from '@/types/cos_upload';
+  CosUploadGrant,
+} from './types';
 
 // re-export 契约类型，方便 caller 从 composable 模块单点导入
 export type {
@@ -79,13 +27,13 @@ export type {
   CosUploadedItem,
   CosUploaderItem,
   CosUploaderStatus,
-  CosUploadSession,
+  CosUploadGrant,
 };
 
 /** 内部状态机的类型别名（直接复用 CosUploaderItem['status']）。 */
 export type CosUploaderPhase = CosUploaderItem['status'];
 
-/** 凭证过期提前量：到期前 5 分钟触发 refetchSession。 */
+/** 凭证过期提前量：到期前 5 分钟触发 refetchGrant。 */
 const EXPIRY_AHEAD_MS = 5 * 60_000;
 /** 上传进度取整（百分制）。SDK 给的是 0-1 的小数 percent。 */
 const PROGRESS_ROUND = Math.round;
@@ -107,25 +55,28 @@ function generateClientRef(idx: number): string {
  * 输入项构造器：caller 把 File 列表转成内部 item 数组。
  *
  * 契约：
- * - `files.length === session.items.length`：caller 必须保证二一一对应（多余
+ * - `files.length === grant.items.length`：caller 必须保证二一一对应（多余
  *   或缺失都被截断 / 视为非法，由 caller 保证；本函数不抛错仅按短端处理）。
  * - 每个 item 初始 status='pending', progress=0, error=undefined。
- * - client_ref 由 composable 内部生成，**不**复用 session.items[i].client_ref
+ * - client_ref 由 composable 内部生成，**不**复用 grant.items[i].client_ref
  *   （useCosUpload 的 part-file 域专用版会复用，因为 caller 用 sha+filename
  *   做 dedup；通用版不强假设 caller 的去重语义，让 composable 自己生成即可，
- *   session.items[i].tmp_key 与 item 仍按数组下标一一对应）。
+ *   grant.items[i].tmp_key 与 item 仍按数组下标一一对应）。
+ *
+ * 2026-09-28 迁移：从 buildCosUploadItems 改名为 buildCosUploaderItems —— 更准确
+ * 地表达「构造 uploader 内部 item」的语义（不是构造上传 upload 行为）。
  */
-export function buildCosUploadItems(
+export function buildCosUploaderItems(
   files: File[],
-  session: CosUploadSession,
+  grant: CosUploadGrant,
   opts?: { computeHash?: boolean },
 ): CosUploaderItem[] {
   const computeHash = opts?.computeHash ?? false;
-  const len = Math.min(files.length, session.items.length);
+  const len = Math.min(files.length, grant.items.length);
   const items: CosUploaderItem[] = [];
   for (let i = 0; i < len; i += 1) {
     const file = files[i]!;
-    const it = session.items[i]!;
+    const it = grant.items[i]!;
     items.push({
       client_ref: generateClientRef(i),
       tmp_key: it.tmp_key,
@@ -151,35 +102,39 @@ export interface UseCosUploaderOptions {
    * 凭证过期 / tmp_key 变化时调用，重新申请 STS + tmp_key。
    * 实现示例：
    * ```ts
-   * refetchSession: async () => {
+   * refetchGrant: async () => {
    *   const { credentials, items } = await api.post('/upload/intents', { files: ... })
    *   return { credentials, bucket, region, items }
    * }
    * ```
    * 约定：
-   * - 返回的 session.items[i].client_ref 由 caller 决定，但**与 items.value 中
+   * - 返回的 grant.items[i].client_ref 由 caller 决定，但**与 items.value 中
    *   的 client_ref 不必一致**——本 composable 按数组下标对齐 tmp_key，不按
    *   client_ref 索引（与 useCosUpload 不同，更通用）。
+   *
+   * 2026-09-28 重命名：refetchSession → refetchGrant。语义不变：拿一次性 grant。
    */
-  refetchSession: () => Promise<CosUploadSession>;
+  refetchGrant: () => Promise<CosUploadGrant>;
   /**
-   * 2026-09-17 新增：可选"初始 session"，由 caller 在 buildCosUploadItems
+   * 2026-09-17 新增：可选"初始 grant"，由 caller 在 buildCosUploaderItems
    * 之后、startUpload 之前传入。composable 把它作为"批级凭证源"——首次
    * 上传前用其判断凭证过期、构造 COS 实例；只有凭证真正过期时才会调
-   * refetchSession 重签。
+   * refetchGrant 重签。
    *
-   * 不传：composable 首次 startUpload / retryItem 时会调一次 refetchSession
-   * 拿当前 session（与 useCosUpload 行为略有差异；caller 若希望"凭证健康
-   * 时不调 refetchSession"必须传 initialSession）。
+   * 不传：composable 首次 startUpload / retryItem 时会调一次 refetchGrant
+   * 拿当前 grant（与 useCosUpload 行为略有差异；caller 若希望"凭证健康
+   * 时不调 refetchGrant"必须传 initialGrant）。
    *
-   * 推荐用法（caller 主动持 session，让 composable 不主动查 STS）：
+   * 推荐用法（caller 主动持 grant，让 composable 不主动查 STS）：
    * ```ts
-   * const session = await refetchSession()
-   * const items = buildCosUploadItems(files, session)
-   * const uploader = useCosUploader({ items: ref(items), refetchSession, initialSession: session })
+   * const grant = await refetchGrant()
+   * const items = buildCosUploaderItems(files, grant)
+   * const uploader = useCosUploader({ items: ref(items), refetchGrant, initialGrant: grant })
    * ```
+   *
+   * 2026-09-28 重命名：initialSession → initialGrant。
    */
-  initialSession?: CosUploadSession;
+  initialGrant?: CosUploadGrant;
   /**
    * 是否对每个 item 先跑 computeSha256（默认 false）。
    * - true：item 状态会经历 'hashing'（hash 进度映射 0%-30%）→ 'uploading'
@@ -213,11 +168,11 @@ export interface UseCosUploaderReturn {
    */
   retryItem: (clientRef: string) => Promise<void>;
   /**
-   * 2026-09-28 新增：caller 拿到新 session 后立即喂给 composable（等价构造后补
-   * `initialSession`）。组件 onPick 流程在每次拿到 session 后调本方法，避免
+   * 2026-09-28 新增：caller 拿到新 grant 后立即喂给 composable（等价构造后补
+   * `initialGrant`）。组件 onPick 流程在每次拿到 grant 后调本方法，避免
    * 后续 startUpload 兜底 refetch 导致重复申请凭证 / tmp_key。
    */
-  updateSession: (session: CosUploadSession) => void;
+  updateGrant: (grant: CosUploadGrant) => void;
   /** 计算属性：所有项都已进入终态（done 或 error）。 */
   allDone: ComputedRef<boolean>;
   /** 计算属性：所有项都 done（没有任何 error / pending / uploading / hashing）。 */
@@ -252,21 +207,23 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
   // 2026-09-17 复审加固：concurrency 必须 ≥ 1；undefined 默认 3，0 / 负数兜底提升为 1。
   // 见 UseCosUploaderOptions.concurrency 注释。
   const concurrency = Math.max(1, opts.concurrency ?? 3);
-  const { items, refetchSession, initialSession, computeHash = false } = opts;
+  const { items, refetchGrant, initialGrant, computeHash = false } = opts;
 
   /**
    * 当前批的共享凭证 / bucket / region。
    *
    * 通用版与 useCosUpload 的差异：useCosUpload 把 credentials / bucket / region
    * 直接挂在每个 item 上（part-file 域签名回的对象就这么给的）；通用版只把
-   * 这些"批级元数据"放在 session 顶层、item 上只挂 tmp_key，所以 composable
-   * 必须额外持一份 session 引用。
+   * 这些"批级元数据"放在 grant 顶层、item 上只挂 tmp_key，所以 composable
+   * 必须额外持一份 grant 引用。
    *
-   * 初始化：caller 通过 `initialSession` 显式传入（推荐）；不传则首次
-   * startUpload / retryItem 时由 ensureFreshCredentials 主动调一次 refetchSession
+   * 初始化：caller 通过 `initialGrant` 显式传入（推荐）；不传则首次
+   * startUpload / retryItem 时由 ensureFreshCredentials 主动调一次 refetchGrant
    * 兜底。
+   *
+   * 2026-09-28 重命名：sessionCache → grantCache。
    */
-  let sessionCache: CosUploadSession | null = initialSession ?? null;
+  let grantCache: CosUploadGrant | null = initialGrant ?? null;
 
   /**
    * 把整批 items 的 tmp_key / 等价"批级元数据"刷成新签发的。
@@ -284,10 +241,12 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
    * 与 useCosUpload.applyFreshIntents 的差异：
    * - 本函数按**数组下标**对齐（useCosUpload 按 client_ref 索引 Map）；
    * - 本函数不写 credentials / bucket / region 到 item（item 上没有这些字段），
-   *   仅更新 sessionCache。
+   *   仅更新 grantCache。
+   *
+   * 2026-09-28 重命名：applyFreshSession → applyFreshGrant。
    */
-  function applyFreshSession(fresh: CosUploadSession): void {
-    sessionCache = fresh;
+  function applyFreshGrant(fresh: CosUploadGrant): void {
+    grantCache = fresh;
     const freshItems = fresh.items;
     items.value.forEach((it, idx) => {
       // 2026-09-28：done 项永不动 — tmp_key 重签不影响已上传对象，避免静默重传
@@ -325,26 +284,26 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
    *
    * 判定逻辑：
    * 1. items 为空 → 不刷；
-   * 2. sessionCache 为空（caller 未传 initialSession）→ 调一次 refetchSession
+   * 2. grantCache 为空（caller 未传 initialGrant）→ 调一次 refetchGrant
    *    兜底拿批级凭证（这是与 useCosUpload 的差异点；useCosUpload 直接从
    *    item.credentials 读，无需首次 refetch）；
-   * 3. sessionCache 非空 + 凭证即将过期（< 5 min 余量）→ 调 refetchSession 重签；
-   * 4. sessionCache 非空 + 凭证健康 → 不调。
+   * 3. grantCache 非空 + 凭证即将过期（< 5 min 余量）→ 调 refetchGrant 重签；
+   * 4. grantCache 非空 + 凭证健康 → 不调。
    */
   async function ensureFreshCredentials(): Promise<boolean> {
     const list = items.value;
     if (list.length === 0) return false;
-    const creds = sessionCache?.credentials;
+    const creds = grantCache?.credentials;
     if (!creds) {
-      // 还没缓存过 session → 调一次 refetchSession 拿当前批级凭证
-      const fresh = await refetchSession();
-      applyFreshSession(fresh);
+      // 还没缓存过 grant → 调一次 refetchGrant 拿当前批级凭证
+      const fresh = await refetchGrant();
+      applyFreshGrant(fresh);
       return true;
     }
     const nowMs = Date.now();
     if (!isCredentialExpiring(creds, nowMs)) return false;
-    const fresh = await refetchSession();
-    applyFreshSession(fresh);
+    const fresh = await refetchGrant();
+    applyFreshGrant(fresh);
     return true;
   }
 
@@ -360,15 +319,15 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
     // 2026-09-28：纵深防御 — 同一 item 可能被并发 startUpload 多次触发，
     // 仅 status='pending' 才进上传路径；retryItem 已先把 error 置 pending 再调本函数，兼容。
     if (it.status !== 'pending') return;
-    if (!sessionCache) {
-      // 极端：没缓存 session 就走到上传路径。理论上 ensureFreshCredentials 已
-      // 兜底，此处再调一次 refetchSession 兜底。
-      const fresh = await refetchSession();
-      applyFreshSession(fresh);
+    if (!grantCache) {
+      // 极端：没缓存 grant 就走到上传路径。理论上 ensureFreshCredentials 已
+      // 兜底，此处再调一次 refetchGrant 兜底。
+      const fresh = await refetchGrant();
+      applyFreshGrant(fresh);
     }
-    const creds = sessionCache!.credentials;
-    const bucket = sessionCache!.bucket;
-    const region = sessionCache!.region;
+    const creds = grantCache!.credentials;
+    const bucket = grantCache!.bucket;
+    const region = grantCache!.region;
 
     // 可选 hash 阶段
     if (computeHash) {
@@ -475,27 +434,29 @@ export function useCosUploader(opts: UseCosUploaderOptions): UseCosUploaderRetur
   );
 
   /**
-   * 2026-09-28 新增：caller 拿到新 session 后立即喂给 composable，等价于构造后
-   * 补 `initialSession`。组件 onPick 流程会调本方法，使 `ensureFreshCredentials`
-   * 看到 warm cache 后跳过兜底 refetch，根除「首次 onPick 调一次 requestUpload +
+   * 2026-09-28 新增：caller 拿到新 grant 后立即喂给 composable，等价于构造后
+   * 补 `initialGrant`。组件 onPick 流程会调本方法，使 `ensureFreshCredentials`
+   * 看到 warm cache 后跳过兜底 refetch，根除「首次 onPick 调一次 getUploadGrant +
    * 首次 startUpload 兜底又调一次」的双调浪费（300MB PDF sha256 重算 +
    * 后端 allocate 双份 tmp_key）。
    *
-   * 与 `applyFreshSession` 区别：
-   * - updateSession 写的是「本次 onPick 拿到的全新 batch session」，item 列表
-   *   已知一一对应，**不动 item 状态**（tmp_key 已由 buildCosUploadItems 写好）；
-   * - applyFreshSession 写的是「凭证过期后 refetchSession 的结果」，按下标对齐
+   * 与 `applyFreshGrant` 区别：
+   * - updateGrant 写的是「本次 onPick 拿到的全新 batch grant」，item 列表
+   *   已知一一对应，**不动 item 状态**（tmp_key 已由 buildCosUploaderItems 写好）；
+   * - applyFreshGrant 写的是「凭证过期后 refetchGrant 的结果」，按下标对齐
    *   + 处理 tmp_key 变化 + 跳过 done 项。
+   *
+   * 2026-09-28 重命名：updateSession → updateGrant。
    */
-  function updateSession(session: CosUploadSession): void {
-    sessionCache = session;
+  function updateGrant(grant: CosUploadGrant): void {
+    grantCache = grant;
   }
 
   return {
     items,
     startUpload,
     retryItem,
-    updateSession,
+    updateGrant,
     allDone,
     allOk,
   };
