@@ -29,7 +29,15 @@
 // store 自动解包后的 user.id。
 
 import { useAuthStore } from '@/stores/auth';
-import type { SessionFile, UploadSession } from '@/types/upload_session';
+
+// 2026-09-28 删 useUploadSession + @/types/upload_session：原 SessionFile / UploadSession
+// 类型改为内联松散结构类型，仅保留 merge 函数读到的字段（client_ref / status / kind /
+// tmp_key / file_size / original_filename / uploaded_at / files）。UI 消费端下游
+// orphanFileRefs 也已在本仓库收口到 `Array<{ client_ref; kind; original_filename; file_size;
+// uploaded_at; tmp_key }>`（详见 usePartBatchPdf.ts 接口签名注释）。
+//
+// 子任务 #5 重写 grantStsTmpKeyFiles 路径后，可能引入新的 upload_session 域或基于
+// 单文件 grantStsTmpKey 的本地缓存；届时本结构类型需重新评估字段。
 
 // ============================================================
 // 序列化类型（与后端契约对齐：version=1 即可）
@@ -236,9 +244,31 @@ export interface MergeResult {
   pdfAssemblies: MergedAssembly[];
   manualStaged: MergedStaged[];
   /** session.files 存在但不在快照里的 client_refs（用于「源文件区待认领」展示）。 */
-  orphanFileRefs: SessionFile[];
+  orphanFileRefs: DraftSessionFile[];
   /** 是否真的从草稿恢复（false = 草稿缺失 / 版本不匹配 / user_id 不匹配）。 */
   restored: boolean;
+}
+
+/**
+ * 2026-09-28：upload_session.ts 下线后内联松散结构类型，仅保留 merge 函数读到的字段。
+ * 子任务 #5 重写 grantStsTmpKeyFiles 路径后视新缓存形态再决定是否收紧。
+ */
+export interface DraftSessionFile {
+  client_ref: string;
+  kind?: string;
+  status?: string;
+  tmp_key?: string;
+  file_size?: number;
+  original_filename?: string;
+  uploaded_at?: string | null;
+}
+
+/**
+ * 2026-09-28：mergeDraftWithSession 入参的 session / UploadSession 松散形态。
+ * 仅取 files 字段；其它字段（credentials / bucket / etc.）merge 函数不读。
+ */
+export interface DraftUploadSession {
+  files?: DraftSessionFile[];
 }
 
 // ============================================================
@@ -257,7 +287,7 @@ export interface MergeResult {
  */
 export function mergeDraftWithSession(
   draft: PartsNewDraftPayload | null,
-  session: UploadSession | null,
+  session: DraftUploadSession | null,
 ): MergeResult {
   if (!draft) {
     return {

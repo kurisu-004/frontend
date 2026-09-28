@@ -84,6 +84,32 @@ export interface StsTmpKeysResponse {
   upload_prefix: string;
 }
 
+/**
+ * 2026-09-28 新增：`POST /api/v1/files/sts-tmp-keys` 批量入参契约。
+ *
+ * 上游把 N 个文件一次性塞进 `files[]`，python 端按 (purpose, filename,
+ * content_sha256) 派生唯一 tmp_key 单次签名批；返回的 `items[i].tmp_key`
+ * 与 `files[i]` 一一对应（下标对齐）。
+ *
+ * 由子任务 #5 启用（caller：usePartBatchManual / usePartBatchPdf 双 caller
+ * 全部走 grantStsTmpKeyFiles，单 HTTP + 单签名批，不再每文件 1-key）。
+ */
+export interface BatchGrantStsKeyIn {
+  scope: string;
+  files: StsTmpKeysRequest[];
+}
+
+/**
+ * 2026-09-28 新增：批量 STS 响应契约。
+ *
+ * 与单文件 `StsTmpKeysResponse` 的差异：去掉桶 / region / credentials 等
+ * 单端口共享字段——caller 从 items 中任一项取桶 / region / credentials
+ * 即可（python 端 batch 签发同 scope 共享同一 STS 凭证）。
+ */
+export interface BatchGrantStsTmpKeyOut {
+  items: StsTmpKeysResponse[];
+}
+
 /** PartFileKind → StsPurpose 映射（caller 调用点处理）。
  *  2026-09-17：6 个 part-file 域 kind 全部对齐到 python purpose 枚举；
  *  若以后 part-file 域加新 kind 而 python 端未同步，需在此处加兜底分支。

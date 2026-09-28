@@ -27,7 +27,12 @@
 // useProcessChainRequiredHandler 模式）。
 
 import { apiPrint } from '@/api/http';
-import type { StsTmpKeysRequest, StsTmpKeysResponse } from '@/types/sts';
+import type {
+  BatchGrantStsKeyIn,
+  BatchGrantStsTmpKeyOut,
+  StsTmpKeysRequest,
+  StsTmpKeysResponse,
+} from '@/types/sts';
 
 /**
  * 申请 1 个 STS 临时凭证 + tmp_key。
@@ -54,5 +59,48 @@ import type { StsTmpKeysRequest, StsTmpKeysResponse } from '@/types/sts';
  */
 export async function grantStsTmpKey(payload: StsTmpKeysRequest): Promise<StsTmpKeysResponse> {
   const resp = await apiPrint.post<StsTmpKeysResponse>('/files/sts-tmp-keys', payload);
+  return resp.data;
+}
+
+/**
+ * 批量申请 N 个 STS 临时凭证 + tmp_key（2026-09-28 子任务 #5 启用）。
+ *
+ * 把 N 个文件的入参一次性塞进 `files[]`，python 后端按 (purpose, filename,
+ * content_sha256) 派生唯一 tmp_key 单次签名批；返回的 `items[i].tmp_key`
+ * 与请求 `files[i]` 一一对应（下标对齐）。相比 N 次并发调 `grantStsTmpKey`：
+ *
+ * - 单 HTTP（减少后端签名协调成本）；
+ * - 共享同一 STS 凭证（python 端按 scope 复用同一 STS session）；
+ * - 不再与 backend-rust upload_session 域耦合，无 24h 滑动 TTL / 自动 renew
+ *   等长连接设施（详见 plan §3.3 caller 改造）。
+ *
+ * 仅入参形态与 `grantStsTmpKey` 不同（`files[]` 数组 vs 单文件对象）；底层端点
+ * 仍是 `POST /api/v1/files/sts-tmp-keys`，由 pydantic validator 区分单 / 批
+ * 入参。走 `apiPrint`（baseURL `/api/v1`）的原因同 `grantStsTmpKey`。
+ *
+ * caller 拿到响应后通常这样组装：
+ * ```ts
+ * const grants = await grantStsTmpKeyFiles({
+ *   scope: 'parts_new',
+ *   files: files.map(f => ({
+ *     purpose: 'drawing',
+ *     filename: f.name,
+ *     content_type: f.type || 'application/octet-stream',
+ *   })),
+ * });
+ * // 桶 / region / credentials 共享：从 items[0] 取
+ * const head = grants.items[0]!;
+ * const grant: CosUploadGrant = {
+ *   credentials: toCosCredentials(head.credentials),
+ *   bucket: head.bucket,
+ *   region: head.region,
+ *   items: grants.items.map((it, i) => ({ client_ref: clientRefs[i]!, tmp_key: it.tmp_key })),
+ * };
+ * ```
+ */
+export async function grantStsTmpKeyFiles(
+  payload: BatchGrantStsKeyIn,
+): Promise<BatchGrantStsTmpKeyOut> {
+  const resp = await apiPrint.post<BatchGrantStsTmpKeyOut>('/files/sts-tmp-keys', payload);
   return resp.data;
 }
