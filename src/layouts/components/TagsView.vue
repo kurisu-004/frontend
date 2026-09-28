@@ -155,15 +155,25 @@ function closeOthers(view: TagView): void {
 
 /** 关闭全部非 affix tab。保留 affix。
  *
- *  2026-09-28 修复：vue-element-admin 的「关闭全部」行为是「保留当前激活 tab + 全部
- *  affix」。store.removeAllViews() 仅负责「保留 affix」，本 view 层负责「若清空后
- *  没有激活 tab 了，把触发右键的 view 重新 add 回去」（affix 不需要这一步，因为它
- *  不可能被本流程清掉）。这样 store 保持纯粹（仅按字段判定，不感知当前激活 tab），
- *  UI 语义落到 UI 层，符合分层不变量。 */
+ *  2026-09-28 修复（review 第 2 轮 Major #1）：仿 vue-element-admin closeAllTags——
+ *  removeAllViews 后若当前 route 对应的 tab 被清（含「只剩 affix 而当前是非 affix」
+ *  这一支），导航到 last remaining tab；全清则跳回 '/'（路由会重定向到 dashboard）。
+ *  不再回填「触发右键的 view」——避免「用户当前在 /a，右键非激活 /b 把 B 替换成 a」
+ *  的语义偏差；store 保持纯粹（仅按字段判定，不感知 route），UI 兜底落到 view 层，
+ *  符合分层不变量。导航（router.push）只放在 view 层（沿 hard约束 #8）。 */
 function closeAll(view: TagView): void {
+  // 形参 view 当前不再被消费，但保留签名以与 onContextMenuCmd 对齐（其它分支
+  // 仍需要 view）。标记为有意未使用：void view 让 lint 工具闭嘴。
+  void view;
   tags.removeAllViews();
-  if (visitedViews.value.length === 0) {
-    tags.addView(view);
+  const remaining = visitedViews.value;
+  if (remaining.length === 0) {
+    // 全清（无 affix 也清掉）：跳回 '/'（路由会重定向到 dashboard）
+    router.push('/');
+  } else if (!remaining.some((v) => v.path === route.path)) {
+    // 当前 route 对应的 tab 被清（含「只剩 affix 而当前是非 affix」）：跳到 last
+    const last = remaining[remaining.length - 1];
+    if (last) router.push(last.fullPath);
   }
 }
 
