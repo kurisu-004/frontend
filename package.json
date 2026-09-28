@@ -45,6 +45,7 @@
     "@typescript-eslint/parser": "^8.70.0",
     "@vitejs/plugin-vue": "^6.0.0",
     "@vue/test-utils": "^2.5.1",
+    "@vueuse/core": "^15.0.0",
     "eslint": "^9.39.4",
     "eslint-config-alloy": "^5.1.2",
     "eslint-config-prettier": "^9.1.2",

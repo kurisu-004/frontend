@@ -86,12 +86,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { Tools } from '@element-plus/icons-vue';
-import { onDashboardSnapshot } from '@/api/dashboard';
 import { usePermissions } from '@/composables/usePermissions';
-import type { DashboardPartItem, DashboardShelfGroup, DashboardSnapshot } from '@/types/dashboard';
+import type {
+  DashboardItemData,
+  DashboardShelfGroupData,
+} from '@/views/dashboard/composables/dashboardSnapshotSchema';
+import { useDashboardSnapshot } from '@/views/dashboard/composables/useDashboardSnapshot';
 import { formatDashboardDeliveryDate } from '@/utils/deliveryDate';
 
 const router = useRouter();
@@ -106,20 +109,20 @@ function goPartDetail(id: string): void {
   router.push(`/parts/${id}`);
 }
 
-const shelfGroups = ref<DashboardShelfGroup[]>([]);
-const workerParts = ref<DashboardSnapshot['data']['in_process']>([]);
+// 2026-09-28 改造：原 onDashboardSnapshot(applySnapshot) → useDashboardSnapshot()
+// HTTP 全量首取 + WS 事件 invalidate 重取。snapshot 来自 TanStack Query 的
+// Vue ref，computed 自动解包，模板零改动。
+const { data: snapshot } = useDashboardSnapshot();
 
-let offSnap: (() => void) | null = null;
-
-function applySnapshot(snap: DashboardSnapshot): void {
-  shelfGroups.value = snap.data.on_production_shelves;
-  workerParts.value = snap.data.in_process;
-}
+const shelfGroups = computed<DashboardShelfGroupData[]>(
+  () => snapshot.value?.on_production_shelves ?? [],
+);
+const workerParts = computed<DashboardItemData[]>(() => snapshot.value?.in_process ?? []);
 
 // ============ 货架轮播分页 ============
 const shelfPages = computed(() => {
   const groups = shelfGroups.value;
-  const pages: DashboardShelfGroup[][] = [];
+  const pages: DashboardShelfGroupData[][] = [];
   for (let i = 0; i < groups.length; i += 2) {
     pages.push(groups.slice(i, i + 2));
   }
@@ -130,7 +133,7 @@ const shelfPages = computed(() => {
 interface WorkerGroup {
   key: string;
   worker_name: string | null;
-  items: DashboardPartItem[];
+  items: DashboardItemData[];
 }
 
 const workerGroups = computed(() => {
@@ -145,15 +148,6 @@ const workerGroups = computed(() => {
     }
   }
   return Array.from(map.values());
-});
-
-onMounted(() => {
-  offSnap = onDashboardSnapshot(applySnapshot);
-});
-
-onBeforeUnmount(() => {
-  offSnap?.();
-  offSnap = null;
 });
 </script>
 

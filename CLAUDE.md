@@ -83,6 +83,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
          onError: (e: Error) => ElMessage.error(e.message ?? '保存失败'),
        });
        ```
+
      - 范本：`src/stores/auth.ts:132`（login mutation，单纯 onSuccess 不挂 invalidate）、`src/views/parts/new/composables/usePartBatchManual.ts:892`（批量录入 mutation，部分失败 / 成功跳转 / ElMessage 放 onSuccess / onError）。
   9. **ElMessage 错误桥接**
      - useQuery 的 error 不在 setup 抛错，走 `watch(error, (e) => e && ElMessage.error(...))` 桥接（替代原 `fetchList catch` 内 ElMessage 路径，`usePartsListQuery.ts:334-336`）。
@@ -91,7 +92,17 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
       - **简单页面**（一个列表 + 一些筛选，如 `ApplicantList.vue` / `DeliveryNoteList.vue` / `DeliveryNoteScan.vue` / `OutsourceSendReceive.vue` / `PartBatchNew.vue`）：直接在 `<script setup>` 内消费共享 query composable（`useCustomersQuery()` 等），不强建 store。
       - **复杂页面**（多切片、强耦合状态，如 `PartsList`）：建页面 store（`usePartsListStore`），内部 useQuery + useMutation + invalidate 失效。
       - 区分标准：是否需要跨切片共享状态 / 是否需要 `$dispose` 防泄漏 / 是否需要 4 不变量约束。
+
 - **composable 归属判别（2026-09-27 新增）**：`src/composables/` 仅放跨 ≥3 个顶层域（applicants / assemblies / auth / cnc / customers / dashboard / delivery / delivery-dispatch / inspection / outsource / parts / production / repair / scan / shelves / statistics / users / workers 等）的全局共享 composable。单域 composable 一律就近放到 `views/<域>/composables/`（view 级）或 `components/<域>/`（组件级）。判别标准：在仓内 `rg -l` 统计**排除 composables/ 自身**的 import 引用文件数，跨 ≥3 个顶层域才留全局；只有 1 个域时即便文件很大（如 `useWorkerQueue` 433 行、`useUploadSession` 411 行）也下沉。spec 文件与源文件保持同级 `__tests__/` 目录。
+- **dashboard 域「HTTP 全量 + WS 事件 invalidate」架构（2026-09-28 新增）**：
+  `src/api/dashboard.ts` 是 dashboard 域 WebSocket 层唯一状态源（不再有手写 socket 管理）；数据流是「HTTP 全量首取 + WS 事件 invalidate 重取」，彻底替代原「WS 首帧 snapshot + 永不更新」形态。硬约束如下：
+  1. **数据流**：消费者通过 `useDashboardSnapshot()`（`views/dashboard/composables/useDashboardSnapshot.ts`）订阅大屏快照。composable 内部用 TanStack Query 拉一次 `GET /api/v2/dashboard/snapshot`（`fetchDashboardSnapshot`）取全量数据；之后业务事件通过 `onDashboardEvent` 回调 → `AFFECTS_DASHBOARD` 集合过滤 → `useDebounceFn(500, { maxWait: 1500 })` 防扫码雪崩 → `qc.invalidateQueries({ queryKey: qk.dashboardSnapshot })` 触发重取。WS 首帧 snapshot 仍会到达（后端行为不变），但仅作「连接就绪信号」，不再消费其业务字段。
+  2. **WS 层架构**：`src/api/dashboard.ts` 用 `createGlobalState(() => useWebSocket(urlComputed, { autoReconnect: { retries: -1, delay: n => Math.min(1000 * 2 ** (n-1), 10000) }, onConnected, onDisconnected, onMessage, ... }))` 包单例；模块顶层无 scope，`useWebSocket` 内部 `tryOnScopeDispose` 注册到 `createGlobalState` 的 `effectScope(true)` detached scope，永不 dispose（组件卸载不会误关共享 socket，符合单例语义）。
+  3. **URL 响应式**：`wsUrl = computed(() => { void tokenVersion.value; return buildWsUrl(readTokenFromStorage()); })`，模块级 `tokenVersion = ref(0)`。监听 `window.addEventListener('auth:tokens-refreshed', () => { tokenVersion.value++; })` —— 拦截器刷新 token 后 dispatch 事件 → `tokenVersion++` → URL 重算 → VueUse `watch(urlRef, open)` 自动 close 旧 socket + 新建一个。无需手动调用 `reconnectDashboard`，但 `reconnectDashboard` 仍保留导出作兜底（登出 / 重登场景手动重连用）。
+  4. **B1 预留**：`onMessage` 事件分发处留有 `switch (ev.event_type) { ... }` 骨架注释 —— 若日后落地真增量（DASHBOARD_ITEM_UPSERT / REMOVE 等），在二级 switch 分发到 query cache patcher，`default` 仍走事件 invalidate 兜底。当前架构走「WS 事件 → HTTP 重取」，二级分发只区分「影响 dashboard 大屏的事件集」一个维度（`AFFECTS_DASHBOARD` 常量）。
+  5. **删除 subscribe/unsubscribe 控制帧（2026-09-28 决策）**：后端 v2 ws_hub 不消费这两个文本帧（2026-09-25 注释确认），新连接默认按订阅集合推 snapshot / events。原 `sendSubscriptionCommand` / `syncSubscriptions` 等函数全部删除。`onDashboardSnapshot` 导出同步删除（无消费者）；`onDashboardEvent` / `onDashboardStatus` / `closeDashboard` / `reconnectDashboard` / `fetchDashboardSnapshot`（新增）保留。heartbeat 选项不启用（VueUse heartbeat 是客户端主动 ping，与本场景服务端 30s 推 `{type:'heartbeat'}` text 帧无关）。
+  6. **AFFECTS_DASHBOARD 事件集**：定义在 `views/dashboard/composables/useDashboardSnapshot.ts` 顶部常量（ReadonlySet<DashboardEventType>）。包含 23 个事件（PART_TO_SHIP / PART_TO_INSPECTION / PART_TO_PROCESS / BATCH_TO_SHIP / BATCH_TO_INSPECTION / PART_SOFT_DELETED / PART_DELIVERED / PART_BATCH_SPLIT / PART_BATCH_CANCELLED / PART_SCAN_INSPECT_PASSED / PART_SCAN_INSPECT_FAILED / PART_BATCH_WITH_PDFS_CREATED / PART_PICKED_UP / WORKER_SCAN_RETURNED / WORKER_SCAN_INSPECTED / WORKER_POOL_REFILL_DONE / WORKER_POOL_EMPTY / WORKER_POOL_ADMIN_REMOVED / WORKER_POOL_AUTO_ALLOCATE_DONE / ASSEMBLY_CREATED / ASSEMBLY_DELETED / ASSEMBLY_CANCELLED / ASSEMBLY_UPDATED），排除 DELIVERY_NOTE_* 等不影响大屏 3 切片的写入事件。dashboard 大屏「HTTP 全量首取」会跨域失效场景扩展时，按相同维度增删。
+  7. **dashboard 域 HTTP 端点**：`GET /api/v2/dashboard/snapshot`，返回 `R<DashboardSnapshot>` 信封（已被 http.ts 响应拦截器解封，前端拿到的是裸 `DashboardSnapshotData`）。schema 字段对齐 backend-rust `src/modules/dashboard/vo/snapshot.rs:77-119`（DashboardSnapshot 5 顶层 + OnProductionShelfGroup 4 字段 + DashboardItem 17 字段 + UpcomingDeliveryBucket 2 字段；count 是 i64 字符串）。Zod schema 与派生类型放 `views/dashboard/composables/dashboardSnapshotSchema.ts`（沿 2026-09-26 queryFn Zod 守门约定 #4）。
 
 ## 已知风险
 
