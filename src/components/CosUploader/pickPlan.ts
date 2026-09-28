@@ -1,14 +1,8 @@
-// src/components/cosUploaderPickPlan.ts
+// pickPlan.ts —— 文件校验纯函数
 //
-// 2026-09-28 新增：把 CosUploader 组件内 onPick 合批 / 校验逻辑抽成纯函数，
-// 便于在 node 环境独立测试（项目无 happy-dom / @vue/test-utils 依赖）。
-//
-// 2026-09-28 调整：按 composable 归属判别（跨域共享约束）下沉到 components/，
-// 与 CosUploader.vue 同目录；仓内仅 CosUploader.vue 单点消费，不进 composables/。
-//
-// 导出函数：
-// - matchesAccept(file, accept)：解析 ".pdf" / "image/*" / "image/jpeg" / "jpeg" 四种 token 形态
-// - planPick(buffer, opts, currentCount)：返回四类拒绝列表 + 通过列表，组件 flushPickBuffer 直接消费。
+// 2026-09-28 新增：把 CosUploader 组件内 onPick 合批 / 校验逻辑抽成纯函数。
+// 2026-09-28 迁移：原 src/components/cosUploaderPickPlan.ts 迁入本目录（CLAUDE.md
+// composable 归属判别：单域组件私有逻辑收紧到组件包内）。
 
 export interface PickPlanLimits {
   maxSizeMB?: number;

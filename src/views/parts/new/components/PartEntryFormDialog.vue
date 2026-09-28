@@ -170,10 +170,13 @@
                  computeSha256 算一次（避免大 PDF 算两次）；
                - @change 本地 wrapper trim 旧项只留最新；
                2026-09-28：组件侧 el-upload 内部列表泄漏已修（clearFiles +
-               自实现 limit），trim hack 可保留作为 UX（replace 语义）。 -->
+               自实现 limit），trim hack 可保留作为 UX（replace 语义）。
+               2026-09-28 迁移拆分：组件路径 @/components/CosUploader.vue →
+               @/components/CosUploader/index.vue；prop 名 :request-upload →
+               :get-upload-grant（2026-09-28 重命名）。 -->
           <CosUploader
             ref="uploaderRef"
-            :request-upload="requestDrawingUpload"
+            :get-upload-grant="requestDrawingUpload"
             accept=".pdf"
             :multiple="false"
             :max-size-m-b="300"
@@ -216,12 +219,12 @@
 
 import { reactive, ref, toRaw, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import CosUploader from '@/components/CosUploader.vue';
+import CosUploader from '@/components/CosUploader/index.vue';
 import type {
   CosUploadedItem,
   CosUploaderItem,
-  CosUploadSession,
-} from '@/composables/useCosUploader';
+  CosUploadGrant,
+} from '@/components/CosUploader/useCosUploader';
 import type { FormState } from '../composables/usePartBatchManual';
 import type { PartEntryFieldErrors, PartEntryInput } from '../partEntrySchema';
 import type { Applicant } from '@/types/applicant';
@@ -247,8 +250,9 @@ interface Props {
    *  命名不带 on 前缀（与 script 内 helper 区分，避免 vue/no-dupe-keys）。 */
   customerChange: (pickedId: unknown) => Promise<void>;
   applicantSelect: (item: Record<string, unknown>) => void;
-  /** 2026-09-17 M4：图纸上传五回调。 */
-  requestDrawingUpload: (files: File[]) => Promise<CosUploadSession>;
+  /** 2026-09-17 M4：图纸上传五回调。
+   * 2026-09-28 重命名：返回类型 CosUploadSession → CosUploadGrant。 */
+  requestDrawingUpload: (files: File[]) => Promise<CosUploadGrant>;
   drawingUploaded: (item: CosUploadedItem) => void;
   drawingItemsChange: (items: CosUploaderItem[]) => void;
   drawingAllDone: () => void;
@@ -334,12 +338,14 @@ function onDrawingUploadErrorLocal(item: CosUploaderItem): void {
 }
 
 /**
- * 2026-09-28 新增：pickError 统一展示。caller 侧用 ElMessage 显示组件产出的
- * 选文件阶段错误消息（size/accept/requestUpload/multiple）。
- *
- * 组件自身不再直接弹 ElMessage（沿 P2 错误反馈通道统一约定）：业务侧 handler
- * 由 caller 决定，本视图用 ElMessage.error 展示。
- */
+   * 2026-09-28 新增：pickError 统一展示。caller 侧用 ElMessage 显示组件产出的
+   * 选文件阶段错误消息（size/accept/getUploadGrant/multiple）。
+   *
+   * 组件自身不再直接弹 ElMessage（沿 P2 错误反馈通道统一约定）：业务侧 handler
+   * 由 caller 决定，本视图用 ElMessage.error 展示。
+   *
+   * 2026-09-28 重命名：requestUpload → getUploadGrant。
+   */
 function onPickErrorLocal(message: string, _file: File): void {
   ElMessage.error(message);
 }

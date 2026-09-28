@@ -1,9 +1,11 @@
-// src/components/__tests__/cosUploader.pickPlan.spec.ts
+// src/components/CosUploader/__tests__/pickPlan.spec.ts
 //
 // 2026-09-28 新增：纯函数 planPick / matchesAccept 单测。
+// 2026-09-28 迁移：原 src/components/__tests__/cosUploader.pickPlan.spec.ts 迁入
+// 本目录（CLAUDE.md composable 归属判别：单域组件私有逻辑收紧到组件包内）。
 
 import { describe, expect, it } from 'vitest';
-import { matchesAccept, planPick } from '../cosUploaderPickPlan';
+import { matchesAccept, planPick } from '../pickPlan';
 
 function f(name: string, sizeBytes: number, type = 'application/octet-stream'): File {
   return new File([new Uint8Array(sizeBytes)], name, { type });
