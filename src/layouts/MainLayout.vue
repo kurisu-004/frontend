@@ -1,7 +1,7 @@
 <template>
   <el-container class="main-layout">
     <!-- 左侧菜单栏（始终显示；可折叠到 64px） -->
-    <el-aside :width="isCollapse ? '64px' : '220px'" class="sidebar">
+    <el-aside :width="isCollapse ? '64px' : '165px'" class="sidebar">
       <div class="logo">
         <el-icon class="logo-icon"><Box /></el-icon>
         <span v-show="!isCollapse" class="logo-text">myERP</span>
@@ -195,7 +195,9 @@ function onMenuSelect(index: string): void {
 
 :deep(.el-sub-menu .el-menu-item) {
   background-color: #142d54 !important;
-  min-width: 220px;
+  /* 2026-09-29 收窄：220 → 165（侧栏缩小25%）。子菜单弹出与父侧栏同宽即可，
+     不必比父侧栏宽；原 220 是配合旧父侧栏宽度。 */
+  min-width: 165px;
 }
 
 /* 2026-09-29 重构：align-items: stretch 让 header-middle / header-right 撑满
