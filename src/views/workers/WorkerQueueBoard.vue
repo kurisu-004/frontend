@@ -212,6 +212,10 @@ async function onRefresh() {
 .pool-tabs :deep(.el-tabs__nav-wrap)::after {
   background: transparent;
 }
+/* 2026-09-29：EP 内部结构升级时的兜底，避免 nav-wrap::after 失效时丢失分割线 */
+.pool-tabs :deep(.el-tabs__header) {
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
 .board-splitter {
   flex: 1;
   min-height: 0;
