@@ -404,3 +404,76 @@ export const pendingBatchListResultSchema = z.object({
 });
 
 export type PendingBatchListResultSchema = z.infer<typeof pendingBatchListResultSchema>;
+
+// ============================================================
+// 2026-09-29 修复 dispatch 契约漂移：4 个新 schema 守门 dispatch / bulkDispatch / autoDispatch。
+//
+// 历史教训（2026-09-29 explore 报告）：
+//   1. `bulkDispatchBatches` 旧前端 payload `{ batch_ids, shelf_id, next_process_id }`
+//      与 backend-rust `BulkDispatchRequest { targets: [{ batch_id, target_process_id }] }`
+//      完全错位 —— 即便传 `nextProcessId` 也会被后端 422 拒。
+//   2. `dispatchBatch` URL 漂移：前端 `/batches/{id}/dispatch` vs 后端 `/batches/dispatch`
+//      （batch_id 走 body 不走 URL）；payload `shelf_id/next_process_id` vs `target_process_id/note`。
+//   3. `autoDispatchBatches` 响应：前端读 `res.failed` 但 backend `AutoDispatchResult`
+//      实际只有 `{ succeeded, skipped: [{batch_id, reason}] }` —— `res.failed` 为 undefined，
+//      触发 `Cannot read properties of undefined (reading 'length')`。
+//
+// 字段对齐 backend-rust `src/modules/prod/batch/vo.rs:88-119`（DispatchResult 5 字段、
+// BulkDispatchResult 2 字段、AutoDispatchResult 2 字段 + DispatchFailureItem /
+// AutoDispatchSkippedItem 形态）。
+//
+// 注：DispatchFailureItem（{ batch_id, code, message }）与 AutoDispatchSkippedItem
+// （{ batch_id, reason }）形态不同 —— 前者是业务码 + 抛出，后者是字符串 reason +
+// soft-skip。bulk-dispatch 失败数组在事务回滚模式下恒空（auto-dispatch.md:124），
+// 但保留 schema 以防 backend 后续改为 partial commit。
+// ============================================================
+
+/** `POST /api/v2/prod/batches/dispatch` 出参（rust DispatchResult）。
+ *  5 字段：batch_id / current_process_step_id（Option<i64>，dispatch 路径不解析 step →
+ *  null）/ target_process_id / shelf_id / version。 */
+export const dispatchResultSchema = z.object({
+  batch_id: z.string(),
+  current_process_step_id: z.string().nullable(),
+  target_process_id: z.string(),
+  shelf_id: z.string(),
+  version: z.number(),
+});
+
+export type DispatchResultSchema = z.infer<typeof dispatchResultSchema>;
+
+/** `POST /api/v2/prod/batches/bulk-dispatch` 请求（rust BulkDispatchRequest）。
+ *  targets 数组元素至少 1 条（空数组 → 40001，bulk-dispatch.md:124）。 */
+export const bulkDispatchRequestSchema = z.object({
+  targets: z.array(
+    z.object({
+      batch_id: z.string(),
+      target_process_id: z.string(),
+    }),
+  ),
+});
+
+export type BulkDispatchRequestSchema = z.infer<typeof bulkDispatchRequestSchema>;
+
+/** `POST /api/v2/prod/batches/bulk-dispatch` 出参（rust BulkDispatchResult）。
+ *  succeeded / failed 分别记录成功与失败件；当前实现「任一失败 → 全回滚」，failed
+ *  数组恒空 —— 但 schema 保留以防 backend 后续改为 partial commit。 */
+export const bulkDispatchResultSchema = z.object({
+  succeeded: z.array(dispatchResultSchema),
+  failed: z.array(
+    z.object({ batch_id: z.string(), code: z.number(), message: z.string() }),
+  ),
+});
+
+export type BulkDispatchResultSchema = z.infer<typeof bulkDispatchResultSchema>;
+
+/** `POST /api/v2/prod/batches/auto-dispatch` 出参（rust AutoDispatchResult）。
+ *  succeeded / skipped —— 跳过不影响事务，reason 字符串区分 'NO_PROCESS_CHAIN' /
+ *  'NO_PROCESS_STEP'（auto-dispatch.md:156-161）。旧前端读 `res.failed.length` 抛
+ *  `Cannot read properties of undefined (reading 'length')`，根因即「field 漂移
+ *  未守门」。 */
+export const autoDispatchResultSchema = z.object({
+  succeeded: z.array(dispatchResultSchema),
+  skipped: z.array(z.object({ batch_id: z.string(), reason: z.string() })),
+});
+
+export type AutoDispatchResultSchema = z.infer<typeof autoDispatchResultSchema>;

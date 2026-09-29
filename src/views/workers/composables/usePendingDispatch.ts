@@ -15,6 +15,19 @@
 //
 // composable 归属判别（2026-09-27 CLAUDE.md）：仅 workers 单域使用，下沉到
 // views/workers/composables/。spec 文件与源文件同级 __tests__/ 目录。
+//
+// 2026-09-29 修复 dispatch 契约漂移：
+//   - 3 个 mutation 的 mutationFn 都走 Zod parse 守门（dispatchResultSchema /
+//     bulkDispatchResultSchema / autoDispatchResultSchema），后端 VO 字段漂移立刻
+//     抛 ZodError（mutation.onError 接住后 ElMessage 展示），不再触发运行
+//     `Cannot read properties of undefined (reading 'length')`（首轮 bug 根因）；
+//   - bulkDispatchMutation 入参改为 `{ batchIds, targetProcessId }`，去掉 shelfId /
+//     nextProcessId（后端通过 `target_process_id` + `t_shelf_process` 自动解析货架）；
+//     不再 fallback 到 auto 端点 —— PendingPoolsPanel 拖到工序卡 = 明确「发到此工序」
+//     意图，auto 让位；
+//   - autoDispatchMutation onSuccess 字段名 failed → skipped（backend
+//     `AutoDispatchResult` 实际只有 succeeded + skipped，vo.rs:107-119），reason 字符串
+//     区分 'NO_PROCESS_CHAIN' / 'NO_PROCESS_STEP'（soft-skip 而非抛错）。
 
 import { computed, ref } from 'vue';
 import type { ComputedRef, Ref } from 'vue';
@@ -30,6 +43,11 @@ import {
   type DispatchBatchRequest,
   type DispatchBatchResultDto,
 } from '@/api/pendingBatches';
+import {
+  autoDispatchResultSchema,
+  bulkDispatchResultSchema,
+  dispatchResultSchema,
+} from '@/composables/queries/schemas';
 import { ApiError } from '@/api/http';
 import type { PendingBatchItemDto } from '@/api/workerPool.contract';
 import { invalidatePendingBatchesQuery } from '@/composables/queries/usePendingBatchesQuery';
@@ -68,17 +86,21 @@ export interface UsePendingDispatchReturn {
   setSelectedIds: (ids: string[]) => void;
   /** 清除已选 */
   clearSelection: () => void;
-  /** 单件下发 mutation（mutation.isPending / mutate） */
+  /** 单件下发 mutation（mutation.isPending / mutate）。
+   *  2026-09-29 修复：req 现在只接 `target_process_id` (+ 可选 note)，旧 `shelf_id /
+   *  next_process_id` 已删（对齐 backend DispatchRequest）。 */
   dispatchMutation: ReturnType<
     typeof useMutation<DispatchBatchResultDto, Error, { batchId: string; req: DispatchBatchRequest }>
   >;
   /** 批量下发 mutation（mutation.isPending / mutate）。
-   *  2026-09-29 review 第 1 轮修复：shelfId / nextProcessId 改可选，缺省走 auto 端点。 */
+   *  2026-09-29 修复：入参改为 `{ batchIds, targetProcessId }`，去掉 shelfId /
+   *  nextProcessId（后端通过 target_process_id + t_shelf_process 自动解析货架）。
+   *  不再 fallback 到 auto —— 拖到工序卡即明确「发到此工序」意图。 */
   bulkDispatchMutation: ReturnType<
     typeof useMutation<
       BulkDispatchResultDto,
       Error,
-      { batchIds: string[]; shelfId?: string; nextProcessId?: string }
+      { batchIds: string[]; targetProcessId: string }
     >
   >;
   /** 自动下发 mutation（mutation.isPending / mutate） */
@@ -93,19 +115,21 @@ export interface UsePendingDispatchReturn {
  * 用法：
  *   ```ts
  *   const dispatch = usePendingDispatch({ refreshBoard: async () => queue.loadBoard(shelfId) });
- *   dispatch.dispatchMutation.mutate({ batchId, req: {} });
- *   dispatch.bulkDispatchMutation.mutate({ batchIds });
+ *   dispatch.dispatchMutation.mutate({ batchId, req: { target_process_id: p.process_id } });
+ *   dispatch.bulkDispatchMutation.mutate({ batchIds, targetProcessId: p.process_id });
  *   dispatch.autoDispatchMutation.mutate({ batchIds: [...dispatch.selectedIds.value] });
  *   ```
  *
  * 2026-09-29 review 第 1 轮修复：
  *  - 接受 deps.refreshBoard —— processPools 是模块级 ref，invalidate 失效链触达不到；
- *  - bulkDispatchMutation shelfId / nextProcessId 改为可选，缺省走 autoDispatchBatches
- *    端点（service 端按 process_chain_id 推导 first step），保持 PendingPoolsPanel
- *    单击调用的「最小实现」语义（review C4 / C1）。
- *  - dispatch / bulk / auto 三类 mutation 统一接 handleProcessChainRequired：命中
- *    20706 → 弹「前往制定」确认框 → 跳 /production/process-design?part_id=...（沿
- *    usePartDispatch.ts:140-141 / 158-162 范本）。
+ *  - 三个 mutation 统一接 handleProcessChainRequired：命中 20706 → 弹「前往制定」
+ *    确认框 → 跳 /production/process-design?part_id=...（沿 usePartDispatch.ts:140-141 /
+ *    158-162 范本）。
+ *
+ * 2026-09-29 修复 dispatch 契约漂移：
+ *  - 三个 mutation 的 mutationFn 都走 Zod parse 守门 + 入参形态对齐 backend VO；
+ *  - bulkDispatchMutation 去掉 auto fallback；autoDispatchMutation 字段名
+ *    `failed` → `skipped`。
  */
 export function usePendingDispatch(deps: UsePendingDispatchDeps): UsePendingDispatchReturn {
   const qc = useQueryClient();
@@ -178,6 +202,8 @@ export function usePendingDispatch(deps: UsePendingDispatchDeps): UsePendingDisp
   // ===== mutation 范本（沿 2026-09-26 CLAUDE.md #8）=====
 
   /** 单件下发 —— mutationKey 三层数组；不写 retry（信任全局默认）。
+   *  2026-09-29 修复 dispatch 契约漂移：mutationFn 加 `dispatchResultSchema.parse()`
+   *  守门 —— 后端 VO 字段漂移立刻抛 ZodError，mutation.onError 接管。
    *  2026-09-29 review 第 1 轮修复（C1）：onError 接 handleProcessChainRequired 兜底
    *  20706 —— 命中即弹「前往制定」确认框 → 跳 /production/process-design?part_id=...，
    *  沿 usePartDispatch.ts:140-141 / 158-162 范本。 */
@@ -187,7 +213,8 @@ export function usePendingDispatch(deps: UsePendingDispatchDeps): UsePendingDisp
     { batchId: string; req: DispatchBatchRequest }
   >({
     mutationKey: ['pending-batches', 'dispatch'],
-    mutationFn: ({ batchId, req }) => dispatchBatch(batchId, req),
+    mutationFn: async ({ batchId, req }) =>
+      dispatchResultSchema.parse(await dispatchBatch(batchId, req)),
     onSuccess: async () => {
       await invalidateAll();
       ElMessage.success('已下发批次');
@@ -198,40 +225,39 @@ export function usePendingDispatch(deps: UsePendingDispatchDeps): UsePendingDisp
     },
   });
 
-  /** 批量下发 —— 2026-09-29 review 第 1 轮修复（C4）：shelfId / nextProcessId 改为可选。
-   *  - 两者都给：走 bulkDispatchBatches（精确下发到指定货架 + 工序）；
-   *  - 缺省：走 autoDispatchBatches（service 端按 process_chain_id 推导 first_step，
-   *    与 autoDispatchMutation 一致）—— 让 PendingPoolsPanel「单击调 bulk dispatch」
-   *    的最小实现在没有 shelves / nextProcess 选 UI 时也能工作。
-   *  返回类型归一为 BulkDispatchResultDto（两个端点出参形状一致：succeeded / failed）。 */
+  /** 批量下发 —— 2026-09-29 修复 dispatch 契约漂移：
+   *  - 入参 `{ batchIds, targetProcessId }`（去掉 shelfId / nextProcessId）；
+   *  - mutationFn 走 `bulkDispatchBatches`（targets: BulkDispatchTarget[] 形态）+
+   *    `bulkDispatchResultSchema.parse()` 守门；
+   *  - 不再 fallback 到 auto（拖到工序卡即「发到此工序」意图，auto 让位）；
+   *  - onSuccess 访问 `res.failed` 时加 `?? []` 守门（防后端把 failed 改为 optional，
+   *    也防 Zod 守门失败前 partial response）。 */
   const bulkDispatchMutation = useMutation<
     BulkDispatchResultDto,
     Error,
-    { batchIds: string[]; shelfId?: string; nextProcessId?: string }
+    { batchIds: string[]; targetProcessId: string }
   >({
     mutationKey: ['pending-batches', 'dispatch-bulk'],
-    mutationFn: async ({ batchIds, shelfId, nextProcessId }) => {
-      if (shelfId && nextProcessId) {
-        return bulkDispatchBatches({
-          batch_ids: batchIds,
-          shelf_id: shelfId,
-          next_process_id: nextProcessId,
-        });
-      }
-      // 兜底：缺 shelfId / nextProcessId 时走 auto 端点（service 按 chain 推导）
-      const autoRes = await autoDispatchBatches({ batch_ids: batchIds });
-      return { succeeded: autoRes.succeeded, failed: autoRes.failed };
-    },
+    mutationFn: async ({ batchIds, targetProcessId }) =>
+      bulkDispatchResultSchema.parse(
+        await bulkDispatchBatches({
+          targets: batchIds.map((id) => ({
+            batch_id: id,
+            target_process_id: targetProcessId,
+          })),
+        }),
+      ),
     onSuccess: async (res) => {
       await invalidateAll();
       // 成功后清空多选（沿 usePartDispatch.batchDispatchMutation 行为）
       clearSelection();
       const ok = res.succeeded.length;
-      const failed = res.failed.length;
+      const failed = res.failed?.length ?? 0;
       if (ok > 0) ElMessage.success(`已批量下发 ${ok} 件`);
       if (failed > 0) {
         // 20706 BIZ_PROCESS_CHAIN_REQUIRED → 沿 autoDispatch 同样逐个 handleProcessChainRequired
-        const chainRequired = res.failed.filter((f) => f.code === BIZ_PROCESS_CHAIN_REQUIRED);
+        const chainRequired =
+          res.failed?.filter((f) => f.code === BIZ_PROCESS_CHAIN_REQUIRED) ?? [];
         if (chainRequired.length > 0) {
           for (const f of chainRequired) {
             const partId = partIdByBatchId.value.get(f.batch_id) ?? null;
@@ -242,7 +268,8 @@ export function usePendingDispatch(deps: UsePendingDispatchDeps): UsePendingDisp
             );
           }
         }
-        const otherFailed = res.failed.filter((f) => f.code !== BIZ_PROCESS_CHAIN_REQUIRED);
+        const otherFailed =
+          res.failed?.filter((f) => f.code !== BIZ_PROCESS_CHAIN_REQUIRED) ?? [];
         if (otherFailed.length > 0) {
           const sample = otherFailed
             .slice(0, 3)
@@ -261,38 +288,47 @@ export function usePendingDispatch(deps: UsePendingDispatchDeps): UsePendingDisp
     },
   });
 
-  /** 自动下发 —— service 端按 process_chain_id 推导 first_step + shelf；无链的 batch
-   * 跳过并返回 failed 条目（前端不阻断其他件）。
-   * 2026-09-29 review 第 1 轮修复（C1）：chainRequired 列表逐个 handleProcessChainRequired
-   *  替代原 ElMessage.warning（沿 usePartDispatch.batchDispatchMutation mutationFn
-   *  内 20706 兜底模式）。 */
+  /** 自动下发 —— service 端按 process_chain_id 推导 first_step + target_process；
+   *  无 chain / chain 无 step 的 batch 跳过并返回 skipped 条目（soft-skip，不影响事务）。
+   *
+   *  2026-09-29 修复 dispatch 契约漂移：
+   *  - mutationFn 加 `autoDispatchResultSchema.parse()` 守门；
+   *  - onSuccess 把 `res.failed` 改 `res.skipped`，reason 字段对齐 backend 字符串语义
+   *    （'NO_PROCESS_CHAIN' / 'NO_PROCESS_STEP'，auto-dispatch.md:156-161）；
+   *  - reason='NO_PROCESS_CHAIN' 仍走 handleProcessChainRequired 引导用户去工艺制定页
+   *    （保持与原 20706 一致的 UX，soft-skip 但 UX 不退化）；
+   *  - 其它 reason（当前仅 'NO_PROCESS_STEP'）走通用 toast。 */
   const autoDispatchMutation = useMutation<
     AutoDispatchResultDto,
     Error,
     { batchIds: string[] }
   >({
     mutationKey: ['pending-batches', 'auto-dispatch'],
-    mutationFn: ({ batchIds }) => autoDispatchBatches({ batch_ids: batchIds }),
+    mutationFn: async ({ batchIds }) =>
+      autoDispatchResultSchema.parse(
+        await autoDispatchBatches({ batch_ids: batchIds }),
+      ),
     onSuccess: async (res) => {
       await invalidateAll();
       clearSelection();
       const ok = res.succeeded.length;
-      const failed = res.failed.length;
+      const skipped = res.skipped ?? [];
       if (ok > 0) ElMessage.success(`自动下发成功 ${ok} 件`);
-      if (failed > 0) {
-        // 20706 BIZ_PROCESS_CHAIN_REQUIRED → 逐个弹「前往制定」确认框
-        const chainRequired = res.failed.filter((f) => f.code === BIZ_PROCESS_CHAIN_REQUIRED);
-        for (const f of chainRequired) {
-          const partId = partIdByBatchId.value.get(f.batch_id) ?? null;
+      if (skipped.length > 0) {
+        // 2026-09-29 修复：reason='NO_PROCESS_CHAIN' 走 handleProcessChainRequired
+        // 引导用户去工艺制定页（合成 ApiError(code=20706) 复用既有 20706 兜底逻辑）
+        const chainRequired = skipped.filter((s) => s.reason === 'NO_PROCESS_CHAIN');
+        for (const s of chainRequired) {
+          const partId = partIdByBatchId.value.get(s.batch_id) ?? null;
           await handleProcessChainRequired(
-            new ApiError(f.code, f.message || '请先制定工序链'),
+            new ApiError(BIZ_PROCESS_CHAIN_REQUIRED, '请先制定工序链'),
             partId,
             router,
           );
         }
-        const otherFailed = res.failed.filter((f) => f.code !== BIZ_PROCESS_CHAIN_REQUIRED);
-        if (otherFailed.length > 0) {
-          ElMessage.error(`${otherFailed.length} 件下发失败`);
+        const otherSkipped = skipped.filter((s) => s.reason !== 'NO_PROCESS_CHAIN');
+        if (otherSkipped.length > 0) {
+          ElMessage.warning(`跳过 ${otherSkipped.length} 件（无匹配工序）`);
         }
       }
     },
