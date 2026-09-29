@@ -5,7 +5,7 @@
 //
 // 覆盖：
 //   1. loadParts / loadProcesses：模块级单例 state 填充（含 process_chain_id 透传）
-//   2. upsertSteps：本地立刻更新（不自动 PUT，需手动 save）
+//   2. upsertSteps：本地立刻更新（不自动 POST，需手动 save）
 //   3. loadFlowForPart：有链零件走 GET /process-chains/{chain_id}；二次访问走缓存
 //   4. loadFlowForPart：process_chain_id 为空的零件不发请求，直接缓存空链
 //   5. loadFlowForPart：by-id 20701（链已删/脏数据）视为空链
@@ -14,7 +14,7 @@
 //   8. summaries 聚合正确（含 OUTSOURCE 时 has_outsource_approval === true）
 //   9. newStep 返回默认空白工序
 //  10. clearFlow 把 steps 置空
-//  11. save 走本地 mutate + PUT 整组 + 成功后用 dto.version 覆盖本地
+//  11. save 走本地 mutate + POST 整组 + 成功后用 dto.version 覆盖本地
 //  12. save 成功后回写 part.process_chain_id（首次保存建链 → 待制定迁移已制定）
 //  13. save 失败时 ElMessage.error 被调 + error.value 同步 + dirty 由 UI 维持（不变 composable 内部状态）
 //
@@ -29,14 +29,14 @@
 // save 必须把拍平后的 [sort=0, sort=1] 发到后端，不能把 [0, 0] 发出去触发 20104。
 //
 // 2026-09-16 改造：删除防抖自动保存（scheduleSave）的相关 it 用例；
-// upsertSteps 不再触发 PUT，持久化由公开 save(partId, steps) 显式调用。
+// upsertSteps 不再触发 POST，持久化由公开 save(partId, steps) 显式调用。
 // 同时更新 loadParts → listParts 调用，确保 status='PENDING' 透传（不传 keyword，
 // 走 processChain.listParts 默认 undefined 入参）。
 //
 // 2026-09-16 第 1 轮 review 修复：saveFlow 改为 internal（不 export），外部唯一入口
-// 是公开 save(partId, steps)。两个 it 用例（原 upsertSteps 「显式 saveFlow 才 PUT」
+// 是公开 save(partId, steps)。两个 it 用例（原 upsertSteps 「显式 saveFlow 才 POST」
 // 与「save 失败时 ElMessage.error」）改为断言公开 save；公开 save 内部串行做
-// upsertSteps + saveFlow，行为契约：成功 → mutate + PUT；失败 → mutate + PUT 抛错 +
+// upsertSteps + saveFlow，行为契约：成功 → mutate + POST；失败 → mutate + POST 抛错 +
 // ElMessage.error + error.value。
 //
 // 2026-09-16 process_chain_id FK 翻转（对齐后端 2026-09-16 契约）：
@@ -211,13 +211,13 @@ describe('usePartProcessDesign', () => {
     expect(q.error.value).toBeNull(); // 不应被设为 error
   });
 
-  it('upsertSteps：本地立刻更新（不自动 PUT，需手动 save）', async () => {
-    // 2026-09-16 改造：upsertSteps 不再触发防抖 PUT，断言改为：
+  it('upsertSteps：本地立刻更新（不自动 POST，需手动 save）', async () => {
+    // 2026-09-16 改造：upsertSteps 不再触发防抖 POST，断言改为：
     //   - 本地立刻更新（同步）
-    //   - 不调 upsertProcessChainByPart（即使用 vi.advanceTimersByTime 也无 PUT）
-    //   - 公开 save 显式调用后才 PUT 整组
+    //   - 不调 upsertProcessChainByPart（即使用 vi.advanceTimersByTime 也无 POST）
+    //   - 公开 save 显式调用后才 POST 整组
     // 2026-09-16 第 1 轮 review 修复：saveFlow 已 internal，外部唯一入口是 save；
-    // save 内部串行做 upsertSteps + saveFlow（PUT），所以这里直接断言 save。
+    // save 内部串行做 upsertSteps + saveFlow（POST），所以这里直接断言 save。
     const { usePartProcessDesign } = await import('../composables/usePartProcessDesign');
     const { upsertProcessChainByPart } = await import('@/api/processChain');
     const q = usePartProcessDesign();
@@ -238,12 +238,12 @@ describe('usePartProcessDesign', () => {
     // 本地立刻更新（同步）
     expect(q.getFlowByPartId('5000000000005')!.steps).toHaveLength(2);
 
-    // 2026-09-16：upsertSteps 不自动 PUT；跑 fake timer 也无 PUT
+    // 2026-09-16：upsertSteps 不自动 POST；跑 fake timer 也无 POST
     expect(upsertProcessChainByPart).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2000);
     expect(upsertProcessChainByPart).not.toHaveBeenCalled();
 
-    // 2026-09-16 第 1 轮 review 修复：显式调公开 save 才 PUT（save 内部包了
+    // 2026-09-16 第 1 轮 review 修复：显式调公开 save 才 POST（save 内部包了
     // upsertSteps + saveFlow，对外只暴露这一个入口）
     await q.save('5000000000005', newSteps);
     expect(upsertProcessChainByPart).toHaveBeenCalledTimes(1);

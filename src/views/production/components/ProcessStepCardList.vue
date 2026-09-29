@@ -3,7 +3,7 @@
   工序制定页右栏：拖拽工序卡片列表。
   2026-09-11 新增。
   2026-09-16 改造：删除「dirty=true → 800ms 自动保存」防抖链路，改为显式保存按钮触发。
-  原 watch(steps) 内的 setTimeout(doAutoSave) 让保存按钮永远 disabled（dirty 在 PUT 成功后
+  原 watch(steps) 内的 setTimeout(doAutoSave) 让保存按钮永远 disabled（dirty 在 POST 成功后
   立刻被清零）；现在 watch 只同步 dirty，持久化入口唯一化为 onSave → saveFlow(partId, steps)。
   2026-09-12 改造（第三轮 UI 精修）：
     - 删除 header 中的「外协警示」<el-alert>（S3）
@@ -234,7 +234,7 @@ watch(
   },
 );
 
-/** 步骤本地修改：仅标 dirty（不同步触发 PUT）。2026-09-16 改造：
+/** 步骤本地修改：仅标 dirty（不同步触发 POST）。2026-09-16 改造：
  *  删掉原先的「dirty=true → 800ms 后自动 doAutoSave」防抖链路。
  *  持久化入口唯一化为 onSave 按钮（→ saveFlow），避免保存按钮形同虚设。 */
 watch(
@@ -286,11 +286,11 @@ async function onSave(): Promise<void> {
   saving.value = true;
   try {
     // 2026-09-16 改造：直接走公开 save(partId, steps)（替代原 doAutoSave → upsertSteps →
-    // 防抖 scheduleSave → 800ms 后 PUT 的隐式链路，以及第 1 轮 review 前的
+    // 防抖 scheduleSave → 800ms 后 POST 的隐式链路，以及第 1 轮 review 前的
     // upsertSteps + saveFlow 两步拆分）。save 内部已串行做：① 本地 upsertSteps
-    // mutate → ② PUT 整组 → ③ 成功由本函数清 dirty / 失败保留 dirty。
+    // mutate → ② POST 整组 → ③ 成功由本函数清 dirty / 失败保留 dirty。
     await save(props.partId, steps.value);
-    // 成功：刷新 savedSnapshot 并清 dirty（save 内部已做 mutate + PUT，
+    // 成功：刷新 savedSnapshot 并清 dirty（save 内部已做 mutate + POST，
     // 这里只负责同步本地 dirty 标志位）。
     savedSnapshot.value = JSON.stringify(steps.value);
     dirty.value = false;

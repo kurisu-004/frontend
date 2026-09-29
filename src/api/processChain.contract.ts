@@ -9,6 +9,8 @@
 //   GET  /api/v2/process-chains/{chain_id}         ← getProcessChainById（2026-09-16 新增）
 //   POST /api/v2/process-chains/by-part/{part_id}  ← upsertProcessChainByPart（2026-09-29 由 PUT 改 POST）
 //
+// 2026-09-29 变更：upsertProcessChainByPart 由 PUT 改 POST（统一惯例）
+//
 // 端点形状以 rust 实际为准（process-chain.md）：
 // - i64 主键 → JSON 字符串（雪花 ID 防 JS 精度截断，CLAUDE.md #3）
 // - 单步字段：sort_order / process_id / estimated_minutes / note（无 enabled 标志，rust 缺该字段）
