@@ -19,8 +19,11 @@
   2026-09-29：单调用 + TanStack Query 重构
     - 删除 usePartFiles 三并发（fetchDrawings + fetch3DModels + fetchCadFiles），
       改 usePartFilesListQuery(part?.id) 拉 owner 全量，computed 按 kind 桶
-    - 图纸 Tab 接入真实预签 URL（getPartFileDownloadUrl），不再走 fixture
+    - 图纸 Tab 接入 fetchPartFileContent + URL.createObjectURL,完全镜像 3D Tab 范本
     - 删 FIXTURE_FILES / MockPartFile / sample-drawing.pdf fixture 引用
+  2026-09-29 第二轮：图纸 Tab 从预签 URL 切到 /content 后端代理 blob
+    - 消除 CORS 风险 + 预签 URL TTL 焦虑（FileListCard 下载流仍保留 /url）
+    - 后端 Cache-Control: private, max-age=1200 让浏览器接管 20 min 重复预览
 -->
 <template>
   <el-card shadow="never" class="preview-card">
@@ -37,7 +40,7 @@
       <el-tab-pane label="图纸" name="drawings">
         <div v-if="previewUrlLoading" class="preview-loading">
           <el-icon class="is-loading"><Loading /></el-icon>
-          <span>正在获取预览链接...</span>
+          <span>正在加载预览...</span>
         </div>
         <div v-else-if="previewUrlError" class="preview-error">
           <el-empty :description="previewUrlError" :image-size="60" />
@@ -49,12 +52,12 @@
           <PdfViewer
             v-if="isPdf(selectedFile.file_type)"
             :key="selectedFile.id"
-            :url="selectedPreviewUrl ?? ''"
+            :url="selectedPreviewBlob ?? ''"
           />
           <el-image
             v-else-if="isImage(selectedFile.file_type)"
-            :src="selectedPreviewUrl ?? ''"
-            :preview-src-list="selectedPreviewUrl ? [selectedPreviewUrl] : []"
+            :src="selectedPreviewBlob ?? ''"
+            :preview-src-list="selectedPreviewBlob ? [selectedPreviewBlob] : []"
             fit="contain"
             class="image-preview"
           />
@@ -107,7 +110,7 @@ import type { PartFileItem } from '@/types/part_file';
 // （fetchDrawings + fetch3DModels + fetchCadFiles）。reactive params 自动驱动
 // useQuery 重取；切 part → ownerKey 变化 → 自动 refetch。
 import { usePartFilesListQuery } from '@/composables/queries/usePartFilesListQuery';
-import { fetchPartFileContent, getPartFileDownloadUrl } from '@/api/parts/file';
+import { fetchPartFileContent } from '@/api/parts/file';
 import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
 
 const props = defineProps<{
@@ -133,21 +136,26 @@ const models3d = computed(() => files.value.filter((f) => f.kind === '3D_MODEL')
 // 切 part → files 重算 → drawings 重算 → selectedFile 自动重置。
 const selectedFile = computed<PartFileItem | null>(() => drawings.value[0] ?? null);
 
-// 2026-09-29：图纸 Tab 接预签 URL（getPartFileDownloadUrl 走 COS 临时签名）。
-// selectedFile 变化 → 触发 loadPreviewUrl 拉新 part 的 URL；part 切走时
-// selectedPreviewUrl 自动清空，避免跨 part 渲染旧 URL。
-const selectedPreviewUrl = ref<string | null>(null);
+// 2026-09-29 第二轮：图纸 Tab 接 fetchPartFileContent + URL.createObjectURL
+//（后端代理 blob,与 3D Tab 范本对称）。selectedFile 变化 → 触发 loadPreviewUrl
+// 拉新 part 的 blob URL；part 切走时 revokePreviewBlob 防内存泄漏。
+const selectedPreviewBlob = ref<string | null>(null);
 const previewUrlLoading = ref(false);
 const previewUrlError = ref<string | null>(null);
 
 async function loadPreviewUrl(file: PartFileItem): Promise<void> {
+  // 2026-09-29 改造：图纸 Tab 从预签 URL 切到 /content 后端代理 blob,
+  // 复用 3D Tab 的 URL.createObjectURL 模式 + revoke 防内存泄漏。
+  // 后端 Cache-Control: private, max-age=1200 让浏览器 HTTP 缓存接管
+  // 20 min 内重复预览,与 usePartFilesListQuery staleTime 对称。
+  revokePreviewBlob();
   previewUrlLoading.value = true;
   previewUrlError.value = null;
   try {
-    selectedPreviewUrl.value = await getPartFileDownloadUrl(file.id);
+    const blob = await fetchPartFileContent(file.id);
+    selectedPreviewBlob.value = URL.createObjectURL(blob);
   } catch (e) {
-    previewUrlError.value = (e as Error).message ?? '获取预览链接失败';
-    selectedPreviewUrl.value = null;
+    previewUrlError.value = (e as Error).message ?? '获取预览内容失败';
   } finally {
     previewUrlLoading.value = false;
   }
@@ -157,7 +165,7 @@ watch(
   selectedFile,
   async (f) => {
     if (f) await loadPreviewUrl(f);
-    else selectedPreviewUrl.value = null;
+    else revokePreviewBlob();
   },
   { immediate: true },
 );
@@ -207,6 +215,15 @@ function revokeStepBlob(): void {
   stepFormat.value = undefined;
 }
 
+// 2026-09-29 新增：图纸 Tab blob 释放。语义与 revokeStepBlob 一致，
+// 旧 selectedPreviewBlob（blob URL 字符串）必须 URL.revokeObjectURL 否则内存泄漏。
+function revokePreviewBlob(): void {
+  if (selectedPreviewBlob.value) {
+    URL.revokeObjectURL(selectedPreviewBlob.value);
+    selectedPreviewBlob.value = null;
+  }
+}
+
 function onStepError(msg: string): void {
   ElMessage.error(msg);
 }
@@ -217,6 +234,7 @@ function onStepLoaded(_info: { triangleCount: number; bbox: unknown; stats: unkn
 }
 
 onBeforeUnmount(() => {
+  revokePreviewBlob();
   revokeStepBlob();
 });
 
@@ -297,7 +315,7 @@ function isImage(t: string): boolean {
   justify-content: center;
   height: 200px;
 }
-// 2026-09-29：图纸 Tab 加载 / 错误占位（接预签 URL 时）
+// 2026-09-29：图纸 Tab 加载 / 错误占位（接 fetchPartFileContent blob 时）
 .preview-loading {
   flex: 1;
   display: flex;
