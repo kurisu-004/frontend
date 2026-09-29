@@ -361,6 +361,9 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         location: 'PRODUCTION_SHELF',
         holder_name: 'A-01',
         process_chain_id: '160000000000001',
+        // 2026-09-29 新增：partSchema 必填 has_cnc_program 字段（沿 CLAUDE.md §M-4
+        // strip 陷阱守门）。
+        has_cnc_program: false,
       };
     }
 
@@ -431,6 +434,27 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
     it('S14c：l1_customer_name = "客户甲" 是合法值（二级客户）', () => {
       const parsed = partSchema.parse({ ...makeBasePart(), l1_customer_name: '客户甲' });
       expect(parsed.l1_customer_name).toBe('客户甲');
+    });
+
+    // 2026-09-29 新增：has_cnc_program 守门用例 —— 锁死该字段必填 boolean。
+    // 后端 GET /api/v2/parts/pending-programming 出参与其它 parts list 共享同
+    // PartListItem 形态，has_cnc_program 必须显式声明（与 l1_customer_name 同源
+    // regression guard）。CLAUDE.md §M-4 strip 陷阱：zod 默认 strip 模式下漏列
+    // 字段会让后端真返回的数据在前端拿不到，且 parse 不报错。
+    it('S15a：缺 has_cnc_program → 抛 ZodError', () => {
+      const { has_cnc_program: _, ...rest } = makeBasePart();
+      void _;
+      expect(() => partSchema.parse(rest)).toThrow();
+    });
+
+    it('S15b：has_cnc_program = true 是合法值（已编程状态）', () => {
+      const parsed = partSchema.parse({ ...makeBasePart(), has_cnc_program: true });
+      expect(parsed.has_cnc_program).toBe(true);
+    });
+
+    it('S15c：has_cnc_program = false 是合法值（未编程状态 / 默认）', () => {
+      const parsed = partSchema.parse({ ...makeBasePart(), has_cnc_program: false });
+      expect(parsed.has_cnc_program).toBe(false);
     });
 
     it('partListResultSchema 接受 PartListOut 分页结构（items + 数字分页字段）', () => {

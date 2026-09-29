@@ -369,9 +369,13 @@ export async function releaseFromProgramming(
   return resp.data;
 }
 
-/** 待编程一览：status=PROGRAMMING 的零件列表。 */
+/** 待编程一览：chain 含 CNC 工序的零件列表（默认 has_cnc_program=false 仅未编程；
+ *  has_cnc_program=true 仅已编程；不传 = 全部）。2026-09-29 后端
+ * `GET /api/v2/parts/pending-programming` 出参 PartListItem 新增 `has_cnc_program`
+ * 字段，详情见 backend-rust `docs/api/parts/...`（contract 更新）；前端 ListShell
+ * 通过 `<el-tabs>` 切换 pending / programmed 两个 tab。 */
 export async function listPendingProgramming(
-  params: Omit<ListPartsParams, 'statuses' | 'is_urgent'> = {},
+  params: Omit<ListPartsParams, 'statuses' | 'is_urgent'> & { has_cnc_program?: boolean } = {},
 ): Promise<PartListResult> {
   const resp = await api.get<PartListResult>('/parts/pending-programming', {
     params: cleanParams(params),

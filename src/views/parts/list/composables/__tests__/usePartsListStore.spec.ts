@@ -53,6 +53,8 @@ vi.mock('@/api/parts', () => ({
         l1_customer_name: null,
         location: null,
         is_urgent: false,
+        // 2026-09-29：partSchema 新增 has_cnc_program 必填字段，mock 必须带
+        has_cnc_program: false,
       },
       {
         id: '2',
@@ -75,6 +77,8 @@ vi.mock('@/api/parts', () => ({
         l1_customer_name: null,
         location: null,
         is_urgent: false,
+        // 2026-09-29：partSchema 新增 has_cnc_program 必填字段
+        has_cnc_program: false,
       },
     ],
     total: 2,
@@ -401,6 +405,8 @@ describe('usePartsListStore', () => {
       has_children: true,
       child_count: 3,
       created_at: '2026-09-28 10:00:00',
+      // 2026-09-29 新增：partSchema 必填 has_cnc_program；装配件行同理（沿 chain 派生）
+      has_cnc_program: false,
     };
     const parsed = partSchema.parse(row);
     expect(parsed.row_type).toBe('ASSEMBLY');
@@ -439,6 +445,8 @@ describe('usePartsListStore', () => {
       customer_name: null,
       l1_customer_name: null,
       location: null,
+      // 2026-09-29 新增：has_cnc_program 是必填字段，mock 必须带；旧 fixtures 仍可写 false（未编程状态）
+      has_cnc_program: false,
       // row_type: 故意缺
     });
     expect(parsed.row_type).toBe('PART');

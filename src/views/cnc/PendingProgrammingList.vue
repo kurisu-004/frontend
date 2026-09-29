@@ -1,21 +1,37 @@
 <!--
-  PendingProgrammingList.vue — 待编程一览（status=PROGRAMMING 的零件）
+  PendingProgrammingList.vue — 待编程一览（chain 含 CNC 工序的零件）
 
-  业务背景（2026-07-14 / 2026-07-20）
+  业务背景（2026-07-14 / 2026-07-20 / 2026-09-29）
   ====================
-  - 菜单侧：CNC 编程员专属入口；侧栏只挂「待编程一览」（顶层菜单）。
-  - 数据侧：调 GET /parts/pending-programming（status=PROGRAMMING 已硬编码于后端）。
-  - 两个动作（2026-07-20 移除「文件」按钮 + el-drawer，理由：「df6b4d8 引入的过度设计」）
+  - 菜单侧：CNC 编程员专属入口；侧栏挂「待编程」（production_group children，
+    2026-09-29 由顶级菜单迁入 + title 精简）。
+  - 数据侧：调 GET /parts/pending-programming，传 has_cnc_program 区分
+    待编程（false）/ 已编程（true）。
+  - 两个 Tab（2026-09-29）：「待编程」（chain 有 CNC 但未上传 G 代码） / 「已编程」
+    （G 代码已上传）。默认待编程；activeTab 持久化到 localStorage。
+  - 三个动作：
     * 「详情」 → 跳 /parts/{id}（PartDetail 页内有图纸下载 / G 代码上传 / 设定单上传）
     * 「下发到生产」 → 弹 el-dialog 同时选下一道工序 + 目标 PRODUCTION 货架，
       调 POST /parts/{id}/release-from-programming（PROGRAMMING → IN_PROCESS）。
+      仅历史 PROGRAMMING 状态零件可见下发按钮；新流程下 chain 有 CNC 但 part.status
+      ≠ PROGRAMMING 的零件不展示下发按钮（无 API 可调）。
   - 加急行整行红底 #fde2e2（与 PartsList / InspectionPending 同款）。
   - 自动刷新（5min）按需勾选。
   - 2026-08-25 T14：filter 卡 + 列可见性 + 表格 + 分页 收口到 <ListShell>；
     列定义 / 操作列仍在本文件；状态 / fetcher 走 usePendingProgrammingList composable。
+  - 2026-09-29：filter 卡上方加 <el-tabs>；activeTab 变化触发 listRef.reset()
+    （reset 走 fetch 第 1 页，等价于 onRefresh）。
 -->
 <template>
   <div class="pending-programming">
+    <!-- 2026-09-29 新增：Tab 化 —— 待编程 / 已编程 通过 activeTab + has_cnc_program 区分 -->
+    <div class="tabs-wrap">
+      <el-tabs v-model="activeTab" @tab-change="onTabChange">
+        <el-tab-pane name="pending" label="待编程" />
+        <el-tab-pane name="programmed" label="已编程" />
+      </el-tabs>
+    </div>
+
     <ListShell
       ref="listRef"
       :column-defs="columnDefs"
@@ -134,8 +150,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue';
-import { ElButton, ElMessage } from 'element-plus';
+import { computed, h, onBeforeUnmount, onMounted, ref, watch, type VNode } from 'vue';
+import { ElButton, ElMessage, ElTag } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import { RouterLink, useRouter } from 'vue-router';
 import ListShell from '@/components/ListShell.vue';
@@ -185,8 +201,25 @@ function renderCustomer({ row }: { row: unknown }): VNode {
   return h('span', { class: 'muted' }, '—');
 }
 
+// 2026-09-29 新增：CNC 程序状态列（已编程绿色 / 未编程灰色）。
+// 后端 has_cnc_program 对 chain 无 CNC 的 part 恒为 false（service 层派生），
+// 前端据此无条件渲染无副作用 —— 对非 CNC chain 的 part「未编程」tag 是有意义的
+// 「占位」（提示该 part 不需要 CNC）。
+function renderCncProgram({ row }: { row: unknown }): VNode {
+  const r = row as PartListItem;
+  return h(
+    ElTag,
+    { type: r.has_cnc_program ? 'success' : 'info', size: 'small', effect: 'plain' },
+    () => (r.has_cnc_program ? '已编程' : '未编程'),
+  );
+}
+
 function renderActions({ row }: { row: unknown }): VNode {
   const r = row as RowState;
+  // 2026-09-29：「下发」按钮仅对历史 PROGRAMMING 状态零件展示。新流程下 chain
+  // 含 CNC 但 part.status ≠ PROGRAMMING 的零件不再有对应 API（已编程后由工人在
+  // 「生产队列」直接领取走下发路径）。
+  const showRelease = r.status === 'PROGRAMMING';
   return h('div', null, [
     h(
       ElButton,
@@ -198,23 +231,28 @@ function renderActions({ row }: { row: unknown }): VNode {
       },
       () => '详情',
     ),
-    h(
-      ElButton,
-      {
-        link: true,
-        type: 'success',
-        size: 'small',
-        loading: r._releasing,
-        onClick: () => openReleaseDialog(r),
-      },
-      () => '下发',
-    ),
+    showRelease
+      ? h(
+          ElButton,
+          {
+            link: true,
+            type: 'success',
+            size: 'small',
+            loading: r._releasing,
+            onClick: () => openReleaseDialog(r),
+          },
+          () => '下发',
+        )
+      : null,
   ]);
 }
 
 // ---------- 列定义 ----------
 // 字段顺序 = 初始渲染顺序。fixed / type=expand 不参与拖动；操作列 draggable: false 防误拖。
 // 行为与原内联 <el-table-column> 完全一致：min-width / fixed / show-overflow-tooltip / align / cellRender。
+//
+// 2026-09-29 新增：has_cnc_program 列（CNC 程序）。位置在「客户」列之前；
+// 新列默认可见，沿用 listKey='pending_programming' 复用列可见性持久化。
 const columnDefs: ColumnDef[] = [
   {
     key: 'serial_no',
@@ -264,6 +302,14 @@ const columnDefs: ColumnDef[] = [
     align: 'center',
   },
   {
+    key: 'has_cnc_program',
+    label: 'CNC 程序',
+    columnKey: 'has_cnc_program',
+    minWidth: 110,
+    align: 'center',
+    cellRender: renderCncProgram,
+  },
+  {
     key: 'customer',
     label: '客户',
     columnKey: 'customer',
@@ -284,7 +330,7 @@ const columnDefs: ColumnDef[] = [
   },
 ];
 
-const { search, autoRefresh, fetcher, restoreFilter } = usePendingProgrammingList();
+const { search, autoRefresh, activeTab, fetcher, restoreFilter } = usePendingProgrammingList();
 
 // ListShell 的 ref；后续可按需读 items.value / total.value。
 const listRef = ref();
@@ -302,6 +348,17 @@ async function onRefresh(): Promise<void> {
 async function fetchList(): Promise<void> {
   await listRef.value?.fetch();
 }
+
+// 2026-09-29 新增：Tab 切换 → 重置列表到第 1 页 + 重新拉取。
+// fetcher 内部读 activeTab.value 自动响应，但不会自动 reset —— 这里显式 watch
+// 触发 listRef.reset()（等价于 onRefresh()）。
+function onTabChange(): void {
+  void listRef.value?.onRefresh();
+}
+watch(activeTab, () => {
+  // 兜底：用户若在 mounted 前通过编程方式改 activeTab，watch 仍会触发 reset。
+  void listRef.value?.onRefresh();
+});
 
 // ============ 自动刷新 ============
 let autoRefreshTimer: number | null = null;
@@ -407,6 +464,13 @@ onMounted(() => {
 <style lang="scss" scoped>
 .pending-programming {
   padding: 0;
+}
+// 2026-09-29 新增：tabs 容器样式 —— 列表上方紧凑的 tab 栏
+.tabs-wrap {
+  margin-bottom: 12px;
+  :deep(.el-tabs__header) {
+    margin-bottom: 0;
+  }
 }
 .name-link {
   color: var(--el-color-primary);

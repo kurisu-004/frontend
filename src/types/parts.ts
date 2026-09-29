@@ -171,6 +171,13 @@ export interface PartListItem {
    *  has_been_repaired 等 part 级字段随列下线一并删除，位置展示统一由
    *  location + holder_name 承接。 */
   location: string | null;
+  /** 2026-09-29 新增：是否已上传 CNC 程序（true=已编程 / false=未编程）。
+   *  仅 chain 含 CNC 工序的 part 才有非 false 值；其它 part 恒为 false。
+   *  后端 `GET /api/v2/parts/pending-programming` 出参 PartListItem 必带此字段
+   *  （沿 backend-rust `t_part_cnc_program` 表 EXISTS 判定派生）。本字段为
+   *  「待编程一览 Tab 化」关键依据：ListShell 通过 `has_cnc_program=false/true`
+   *  把「待编程」与「已编程」拆开。 */
+  has_cnc_program: boolean;
   /** 2026-09-16 新增：min-progress 活跃批次 holder 解析名
    *  （货架 code / 工人姓名 / 外协公司名；OFFICE 或无活跃批次为 null）。 */
   holder_name?: string | null;

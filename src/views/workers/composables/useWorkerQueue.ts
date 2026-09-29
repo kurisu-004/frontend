@@ -56,7 +56,9 @@ const error = ref<string | null>(null);
 // 改为在 moveBatchToWorker 内部直接 ElMessage.success（与 moveBatchToPool 失败回滚
 // 时 error.value = ... 的内部 UX 处理风格一致）。
 
-/** 把 PoolBatchItemDto 适配成 UI WorkOrderCard（字段映射）。 */
+/** 把 PoolBatchItemDto 适配成 UI WorkOrderCard（字段映射）。
+ *  2026-09-29：透传 PoolBatchItemDto 新增 has_cnc_program 字段，WorkOrderCard
+ *  卡片 header 渲染「已编程」tag。*/
 function poolItemToCard(it: PoolBatchItemDto): WorkOrderCard {
   return {
     batch_id: it.batch_id,
@@ -73,6 +75,7 @@ function poolItemToCard(it: PoolBatchItemDto): WorkOrderCard {
     customer: it.customer_name ?? null,
     applicant: it.applicant_name ?? null,
     location: it.shelf_code ?? null,
+    has_cnc_program: it.has_cnc_program,
   };
 }
 

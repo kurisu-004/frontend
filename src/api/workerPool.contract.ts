@@ -152,6 +152,14 @@ export interface PoolBatchItemDto {
   note: string | null;
   /** 2026-09-16 PR-3 新增：当前所在工艺链步骤 id（与 PartBatch 同语义；nullable）。 */
   current_process_step_id?: string | null;
+  /**
+   * 2026-09-29 新增：该 batch 对应 part 是否已上传 CNC 程序（G 代码）。
+   * 后端 service 层派生：`t_part_cnc_program` 表 EXISTS 判定。对非 CNC 工序池
+   * 的 batch 恒为 false（无 CNC 链就不需要 G 代码）。前端 UI 据此在 pool 卡片
+   * 渲染「已编程」绿色 tag —— 无条件渲染，无副作用。
+   * 字段对齐 backend-rust `PoolBatchItem` VO（src/modules/worker_pool/...）。
+   */
+  has_cnc_program: boolean;
   version: number;
 }
 

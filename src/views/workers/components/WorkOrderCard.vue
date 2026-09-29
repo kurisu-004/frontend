@@ -1,6 +1,8 @@
 <!-- 2026-08-26 新增：工人队列看板工单卡片。
      Task 2：移除 data-* 属性（来源信息改由父级 vuedraggable @change 提供）。
-     Task 3：紧凑化卡片，详情走 el-tooltip 浮层（header 仅 batch_no + 加急 tag，body 仅一行 part_name · qty · due）。 -->
+     Task 3：紧凑化卡片，详情走 el-tooltip 浮层（header 仅 batch_no + 加急 tag，body 仅一行 part_name · qty · due）。
+     2026-09-29：header 加「已编程」tag（仅当 batch.has_cnc_program === true 时渲染，
+     后端对非 CNC 链恒为 false 故无副作用）。 -->
 <template>
   <el-tooltip placement="top" :show-after="200" :disabled="!hasDetails">
     <template #content>
@@ -30,6 +32,16 @@
       <template #header>
         <div class="card-header">
           <span class="batch-no">{{ batch.batch_no }}</span>
+          <!-- 2026-09-29：CNC 程序标注。无条件渲染逻辑：仅当 batch.has_cnc_program ===
+               true 时显示（v-if 显式判断 false 跳过）。后端 service 层对非 CNC 链
+               派生 = false，故此 tag 仅在 CNC 链已上传 G 代码时显示。 -->
+          <el-tag
+            v-if="batch.has_cnc_program"
+            type="success"
+            size="small"
+            effect="dark"
+            class="cnc-program-tag"
+          >已编程</el-tag>
           <el-tag v-if="batch.is_urgent" type="warning" size="small" effect="dark">加急</el-tag>
         </div>
       </template>
@@ -80,10 +92,15 @@ const hasDetails = computed(
   justify-content: space-between;
   align-items: center;
   font-weight: 600;
+  gap: 4px;
 }
 .batch-no {
   font-family: var(--el-font-family-monospace, monospace);
   font-size: 13px;
+}
+/* 2026-09-29：CNC 编程标签放在加急 tag 之前（绿色 → 黄色，重要程度递减） */
+.cnc-program-tag {
+  margin-left: auto;
 }
 .card-body {
   font-size: 13px;

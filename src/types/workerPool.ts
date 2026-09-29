@@ -41,6 +41,14 @@ export interface WorkOrderCard {
   applicant: string | null;
   /** 所在位置（前端扩展，后端待补） */
   location: string | null;
+  /**
+   * 2026-09-29 新增：该 batch 对应 part 是否已上传 CNC 程序。WorkOrderCard view-model
+   * 透传自 PoolBatchItemDto.has_cnc_program / HeldBatchItemDto.has_cnc_program。
+   * 仅 pool / held 透传 PoolBatchItemDto / HeldBatchItemDto 的对应字段；前端 UI
+   * 在卡片 header 渲染「已编程」绿色 tag。无条件渲染：非 CNC 链 has_cnc_program=false
+   * 也不渲染 tag（后端派生 = false 即跳过 UI）。
+   */
+  has_cnc_program?: boolean;
 }
 
 export interface ProcessPoolView {

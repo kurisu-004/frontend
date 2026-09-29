@@ -143,6 +143,10 @@ export const partSchema = z.object({
   child_count: z.number().nullable().optional(),
   created_at: z.string().nullable().optional(),
   matched_children: z.array(z.unknown()).nullable().optional(),
+  // 2026-09-29 新增：是否已上传 CNC 程序（z.boolean 必填；沿 CLAUDE.md §M-4 strip
+  // 陷阱 —— 后端若漏返该字段 Zod parse 会抛错，守门到位）。仅 chain 含 CNC 工序
+  // 的 part 才有非 false 值；其它 part 恒为 false（后端 service 层派生）。
+  has_cnc_program: z.boolean(),
 });
 
 export type PartSchema = z.infer<typeof partSchema>;
