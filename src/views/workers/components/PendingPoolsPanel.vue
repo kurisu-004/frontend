@@ -6,7 +6,12 @@
 
      2026-09-29：右栏暂只展示自产工序卡（INHOUSE category），与 WorkerQueueBoard 顶
      tabs 仅展示自产工序对齐（任务规约 #2）。PnP 关系由 useWorkerQueue.loadBoard
-     过滤后的 processPools 派生，本组件直接接 props。 -->
+     过滤后的 processPools 派生，本组件直接接 props。
+
+     2026-09-29 修复 dispatch 契约漂移：手动 dispatch 传 `targetProcessId: p.process_id`
+     （来自当前 pool card 的 process_id），不受工艺链约束。后端通过 `target_process_id`
+     + `t_shelf_process` 自动解析货架，不再走旧的 auto-dispatch fallback。onDrop /
+     onClickPool 共用同一入参形态（`{ batchIds, targetProcessId }`）。 -->
 <template>
   <div class="pending-pools-panel">
     <div v-if="pools.length === 0" class="empty">暂无可下发工序</div>
@@ -43,8 +48,9 @@ interface Props {
    *  prop 形态对齐（都用 Ref，不解包），保证消费侧 .value 写法统一。 */
   selectedIds: UsePendingDispatchReturn['selectedIds'];
   selectedCount: number;
-  /** 2026-09-29 review 第 1 轮修复（C4）：单击 / drop 触发 bulkDispatchMutation
-   *  时需要 activeShelfId（由 WorkerQueueBoard 从 auth.activeShelfId 注入）。 */
+  /** shelfId prop 保留（WorkerQueueBoard 仍在 `:shelf-id="shelfId"` 接线，本 plan
+   *  不动 WorkerQueueBoard）—— 但 2026-09-29 修复后不再用于 mutate：后端通过
+   *  `target_process_id` + `t_shelf_process` 自动解析货架。 */
   shelfId: string;
   bulkDispatchMutation: UsePendingDispatchReturn['bulkDispatchMutation'];
 }
@@ -65,15 +71,12 @@ function onDragLeave(processId: string) {
   if (isDropping.value === processId) isDropping.value = null;
 }
 
-/** 单击工序卡 → 对已选 batchIds 触发批量下发。
- *  2026-09-29 review 第 1 轮修复（C4）：bulkDispatchMutation shelfId / nextProcessId
- *  改为可选（usePendingDispatch.ts:201-206 fix），缺省走 auto 端点按 process_chain_id
- *  推导。这里传 shelfId（来自 auth.activeShelfId）、不传 nextProcessId —— 服务端会
- *  按 batch 的 process_chain.first_step 推导，与「自动下发」行为对齐。
- *  pool.process_id 当前未走 nextProcessId（语义上 next 是 process_chain_step.id 而非
- *  process.id；让 service 端按 chain 推导）；后续 PR 提供 shelves / nextProcess 选 UI
- *  时再补全。 */
-function onClickPool(_p: ProcessPoolView) {
+/** 单击工序卡 → 对已选 batchIds 触发批量下发到该工序。
+ *  2026-09-29 修复 dispatch 契约漂移：传 `targetProcessId: p.process_id`
+ *  （来自 pool card 的 process_id），不再传 shelfId（后端自动解析货架）。
+ *  这里把 `_p` 改为 `p`（去掉下划线前缀）—— 现在确实使用 `p.process_id`，无需
+ *  `void p;` 之类 silent-unused 兜底。 */
+function onClickPool(p: ProcessPoolView) {
   const ids = Array.from(props.selectedIds.value);
   if (ids.length === 0) {
     ElMessage.warning('请先选择待下发批次');
@@ -81,12 +84,13 @@ function onClickPool(_p: ProcessPoolView) {
   }
   props.bulkDispatchMutation.mutate({
     batchIds: ids,
-    shelfId: props.shelfId || undefined,
+    targetProcessId: p.process_id,
   });
 }
 
 /** 拖拽 batch → pool（HTML5 native drag-drop）。
- *  2026-09-29 review 第 1 轮修复（C4 + M2）：
+ *  2026-09-29 修复 dispatch 契约漂移：
+ *  - 传 `targetProcessId: p.process_id`（pool card 自带 process_id），不发 shelfId；
  *  - dataTransfer.getData('text/plain') 拿 batch_id（HTML5 native drag 标准传递）；
  *  - consumeBatchSource 同步清理 dndSourceTracker（PendingBatchesPanel dragstart 已
  *    通过 recordBatchSource 写入），让 recordBatchSource / consumeBatchSource 这对
@@ -109,10 +113,9 @@ function onDrop(p: ProcessPoolView, e: DragEvent) {
   // 行为一致）—— 用户已通过拖拽显式表达 dispatch 意图，清掉避免重复触发。
   props.bulkDispatchMutation.mutate({
     batchIds: [batchId],
-    shelfId: props.shelfId || undefined,
+    targetProcessId: p.process_id,
   });
   emit('cleared');
-  void p;
 }
 </script>
 
