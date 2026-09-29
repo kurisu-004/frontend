@@ -12,6 +12,7 @@
   （null → 待制定 / 非 null → 已制定），替代原 step_count 懒加载派生。
   2026-09-29 改造：删除顶部「装配件」section 与装配件 lazy 展开（loadChildren）。后端 GET /parts
   已切到只查 t_part 表，入参不再含 row_type='ASSEMBLY'。所有行按 process_chain_id 进入待制定/已制定分组。
+  2026-09-29 简化：序列号列改 width="80"（最长 F1234-99 ≈75px），名称列 min-width="140" 收紧；列间空白收敛更紧凑。
 -->
 <template>
   <el-card shadow="never" class="picker-card">
@@ -42,8 +43,8 @@
         class="picker-table"
         @row-click="onSelect"
       >
-        <el-table-column prop="serial_no" label="序列号" min-width="110" show-overflow-tooltip />
-        <el-table-column label="名称" min-width="180" show-overflow-tooltip>
+        <el-table-column prop="serial_no" label="序列号" width="80" show-overflow-tooltip />
+        <el-table-column label="名称" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tooltip
               :content="row?.drawing_no ?? ''"
@@ -75,8 +76,8 @@
         class="picker-table"
         @row-click="onSelect"
       >
-        <el-table-column prop="serial_no" label="序列号" min-width="110" show-overflow-tooltip />
-        <el-table-column label="名称" min-width="180" show-overflow-tooltip>
+        <el-table-column prop="serial_no" label="序列号" width="80" show-overflow-tooltip />
+        <el-table-column label="名称" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tooltip
               :content="row?.drawing_no ?? ''"
