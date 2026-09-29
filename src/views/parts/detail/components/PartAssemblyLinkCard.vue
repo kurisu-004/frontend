@@ -25,6 +25,13 @@
       <el-descriptions-item label="总图图号">
         <span class="mono">{{ assemblyDetail.assembly.drawing_no }}</span>
       </el-descriptions-item>
+      <!-- 2026-09-29 修复：加「装配件 ID」展示行方便与 error message 对照。
+           后端 [20301] `assembly {asm_id} 不存在` 的 asm_id 是 part.assembly_id
+           列值（indirection），不是 URL path 里的 part_id。把 ID 显式列在卡片上，
+           用户/QA 排查时不用再去 Network 面板对 URL 与 message 的数字。 -->
+      <el-descriptions-item label="装配件 ID">
+        <span class="mono">{{ assemblyDetail.assembly.id }}</span>
+      </el-descriptions-item>
       <el-descriptions-item label="装配体名称">
         {{ assemblyDetail.assembly.name }}
       </el-descriptions-item>

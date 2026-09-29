@@ -2,9 +2,11 @@
 // 2026-08-25：从原 1165 行 api/parts.ts 拆分到 ./ 子文件；本文件是 ./file 子域。
 // 2026-09-15 Phase 5：打印 2 端点保留 v1（未迁），统一走 `apiPrint`（baseURL `/api/v1`）。
 //
-// 注：图纸上传 / 3D 模型上传 / CNC 程序上传分别在 `api/cnc.ts`（G 代码 / 设定单）
-// 和前端 el-upload 直接走 `api/parts/{id}/...` 端点；本子域仅含返回文件 Blob 的
-// 打印端点。CNC 程序 / 设定单的 list/upload/delete 详见 `api/cnc.ts`。
+// 2026-09-29 修复：兼容 nest 已移除。
+// - 列出文件：listPartFilesByOwner + usePartFilesListQuery（composables/queries/）
+// - 删除文件：本文件 deletePartFile
+// - CNC 程序 / 设定单配对上传：api/cnc.ts::uploadCncPair（走 POST /api/v2/cnc-programs/pairs）
+// - 打印端点（本文件核心）保持不变
 //
 // 2026-09-16 M3 + 2026-09-17 STS 端口迁移：原 createUploadIntents（backend-rust bulk）已下线；
 // 本文件保留 confirmPartFile（场景 B 专用确认端点）配合 grantStsTmpKey
