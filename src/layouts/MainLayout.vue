@@ -128,7 +128,7 @@ function onMenuSelect(index: string): void {
 }
 
 .logo {
-  height: 60px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -208,7 +208,10 @@ function onMenuSelect(index: string): void {
   justify-content: space-between;
   padding: 0 20px;
   border-bottom: 1px solid var(--border-color);
-  height: 60px;
+  /* 2026-09-29 收窄：60 → 48px。tags 容器仍 40px，header-middle flex-end 嵌到底；
+     上方留 8px 呼吸空间（不挤 logo 视觉），active tab margin-bottom: -1px 盖
+     border 数学不变（box-sizing border-box，content 47px + 1px border）。 */
+  height: 48px;
   z-index: 10;
 }
 

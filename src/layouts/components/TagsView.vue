@@ -397,14 +397,11 @@ tryOnScopeDispose(() => {
   }
 
   &.affix {
-    min-width: 0;
-    width: 40px; /* 钉死图标宽度（pinned tab 视觉） */
-    padding: 0;
+    min-width: 40px; /* 2026-09-29 修：保留最小宽度兜底，长标题走 truncate；不再 width: 40px 强制钉死
+                   让 .tag-text（标题文字）可显示。原 .tag-text { display: none } 隐藏 affix 文字的设计
+                   是 Chrome pinned 纯图标形态，但本仓 Dashboard 的 affix tab 期望显示「首页」标题 */
+    padding: 0 12px;
     justify-content: center;
-    /* affix 当前版本没有文本，CSS 层防御 */
-    .tag-text {
-      display: none;
-    }
   }
 }
 </style>
