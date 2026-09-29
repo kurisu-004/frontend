@@ -489,3 +489,52 @@ export const autoDispatchResultSchema = z.object({
 });
 
 export type AutoDispatchResultSchema = z.infer<typeof autoDispatchResultSchema>;
+
+// 2026-09-29 review 第 1 轮新增：worker 持有批次（held）schema（rust HeldBatchItem）。
+//
+// 字段对齐 backend-rust `HeldBatchItem` VO（src/modules/worker_pool/vo/worker_pool.rs
+// HeldBatchItem 结构），与 HeldBatchItemDto 字段一一对应。held_batches 元素 17 字段
+// 全声明（沿 CLAUDE.md §M-4 strip 陷阱 —— zod 默认 strip 模式缺字段会静默丢，
+// 后端漏返字段不会触发 parse 报错，导致前端 UI 显示异常但 queryFn 不抛错）：
+//   batch_id / part_id / batch_no (number) / quantity / serial_no / drawing_no /
+//   name / system_delivery_date / planned_delivery_date / is_urgent /
+//   customer_name / parent_customer_name / applicant_name / location /
+//   shelf_code / note / has_cnc_program (review 第 1 轮新增) / version。
+//
+// 与 PoolBatchItemDto 区别：
+//   - 包含 planned_delivery_date（held 是已下发的批次，期望有计划交期）
+//   - 包含 shelf_code / note / parent_customer_name（held 展示字段更全）
+//   - 没有 shelf_id / shelf_name / customer_path / current_process_step_id
+//     （held 状态下 batch 已在 worker 手中，shelf 字段语义退化）
+//   - 没有 batch_no 类型差异（held 用 number，与 PoolBatchItemDto 同形态）
+//
+// 数据流：`GET /api/v2/prod/worker-pool/state?worker_id=&shelf_id=` 响应中
+// WorkerStateDto.held_batches 元素。本 schema 是 defensive parse 备用，当前
+// queryFn 层未挂 zod 解析（held 数据流通过 useWorkerQueue 适配）；后续如需
+// 在 api 边界挂 zod，可直接套用本 schema。
+// ============================================================
+export const heldBatchItemSchema = z.object({
+  batch_id: z.string(),
+  part_id: z.string(),
+  batch_no: z.number(),
+  quantity: z.number(),
+  serial_no: z.string().nullable(),
+  drawing_no: z.string(),
+  name: z.string(),
+  system_delivery_date: z.string().nullable(),
+  planned_delivery_date: z.string().nullable(),
+  is_urgent: z.boolean(),
+  customer_name: z.string().nullable(),
+  parent_customer_name: z.string().nullable(),
+  applicant_name: z.string().nullable(),
+  location: z.string(),
+  shelf_code: z.string().nullable(),
+  note: z.string().nullable(),
+  // 2026-09-29 review 第 1 轮：与 partSchema.has_cnc_program 同源 regression
+  // guard —— 后端若漏返该字段，Zod parse 立刻抛错。沿 chain 派生（service 层
+  // t_part_file EXISTS），非 CNC 链 part 恒为 false。
+  has_cnc_program: z.boolean(),
+  version: z.number(),
+});
+
+export type HeldBatchItemSchema = z.infer<typeof heldBatchItemSchema>;

@@ -19,12 +19,15 @@
 // - autoRefresh 布尔持久化：onMounted 时视图读 autoRefresh 后再创建 timer。
 //
 // 2026-09-29 改造：
-// - Tab 化：activeTab = 'pending' | 'programmed'（默认 'pending'），持久化 key
-//   `pending_programming_tab`（与 search/autoRefresh 分 key 单独存，方便后续扩展）；
+// - Tab 化：activeTab = 'pending' | 'programmed'（默认 'pending'），与 search /
+//   autoRefresh 共用 key `pending_programming_filter` 一起持久化（见下）；
 // - fetcher 据 activeTab 拼 has_cnc_program：pending=false / programmed=true /
-//   不传=全部（视图只暴露两 tab，不传分支暂未使用）。
+//   不传=全部（视图只暴露两 tab，不传分支暂未使用）；
+// - 2026-09-29 review 第 1 轮：删除 composable 内 no-op watch(activeTab) 块
+//   （之前与视图层 @tab-change="onTabChange" 串行两次触发 listRef.onRefresh，
+//   形成「点一下 Tab 拉两次接口」的双触发 bug）。
 
-import { reactive, ref, watch, type Ref } from 'vue';
+import { reactive, ref, type Ref } from 'vue';
 import { listPendingProgramming } from '@/api/parts';
 import type { PartListItem } from '@/types/parts';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
@@ -48,7 +51,8 @@ export interface UsePendingProgrammingListReturn {
 export function usePendingProgrammingList(): UsePendingProgrammingListReturn {
   const search = reactive({ keyword: '', serialNo: '' });
   const autoRefresh = ref(false);
-  // 2026-09-29：默认 'pending'；持久化 key 单独存（key 见 restoreFilter）。
+  // 2026-09-29：默认 'pending'；与 search / autoRefresh 一起持久化（key 见
+  // restoreFilter 内 useListStatePersist 调用）。
   const activeTab = ref<PendingProgrammingTab>('pending');
 
   async function fetcher(params: PageQueryParams): Promise<PageResult<PartListItem>> {
@@ -74,17 +78,6 @@ export function usePendingProgrammingList(): UsePendingProgrammingListReturn {
     { search, autoRefresh, activeTab },
     { exclude: new Set(['page']) },
   );
-
-  // 2026-09-29：activeTab 切换 → 重置到第 1 页 + 触发重新拉取。
-  // ListShell 暴露的 onRefresh 会同时做这两件事，调用方（视图）直接 watch 即可。
-  // 这里 watch 拿到 activeTab 变化，仅负责更新内部 fetcher 闭包捕获的 activeTab.value
-  // （fetcher 内部读 activeTab.value 是 reactive 自动响应，但显式 watch 便于将来扩展）。
-  // 注意：实际数据重拉由 ListShell 的 key 变化机制或视图显式调 listRef.onRefresh() 触发；
-  // 本 composable 仅负责 fetcher 入参正确。
-  watch(activeTab, () => {
-    // no-op：fetcher 内部读 activeTab.value 是 reactive 自动响应；保留 watch
-    // 是便于未来挂旁路埋点或缓存失效。
-  });
 
   function restoreFilter(): void {
     const s = restore() as

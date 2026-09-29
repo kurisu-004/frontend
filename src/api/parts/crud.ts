@@ -353,10 +353,13 @@ export async function recallToPending(
   return resp.data;
 }
 
-/** PROGRAMMING → IN_PROCESS：编程员上传完 G 代码后下发到生产货架。
- *  历史保留：release-from-programming 端点保留，仅 history PROGRAMMING 状态零件
- *  会走到该路径。新流程下已编程（G 代码已上传）由工人在「生产队列」通过
- *  refillWorkerPool 直接领取，不再经此端点。 */
+/** 释放编程完成 batch 到生产架：PROGRAMMING → IN_PROCESS。
+ *  PROGRAMMING 状态自 2026-09-29 起被标记为废弃（无新进入路径），但本端点保留
+ *  供历史 PROGRAMMING 数据消化。
+ *  调用方：
+ *    1. PendingProgrammingList.vue「下发」按钮（仅历史 PROGRAMMING 数据可见）；
+ *    2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
+ */
 export async function releaseFromProgramming(
   id: number | string,
   shelfId: string,

@@ -44,6 +44,12 @@
 //     意外把 assembly 改回嵌套键（regression），parse 立刻抛错；与 M-1
 //     「缺字段静默 strip」同源问题。）assembly 嵌套键是 detail 端点的旧 bug
 //     形态，锁死 strict 防回归。
+//   - S18（2026-09-29 review 第 1 轮新增）：heldBatchItemSchema 接受 backend-rust
+//     `HeldBatchItem` 完整 18 字段（含 review 第 1 轮新增 has_cnc_program 必填
+//     字段），不抛错。
+//   - S19：heldBatchItemSchema 缺 has_cnc_program → 抛 ZodError（与 partSchema
+//     S15a 同源 regression guard：zod 默认 strip 模式漏列 boolean 字段会让后端
+//     真返回的 has_cnc_program 在前端拿不到且 parse 不报错）。
 //
 // 数据来源：
 //   - backend-rust/docs/api/customers.md:142-153（CustomerOut 8 字段）
@@ -62,6 +68,7 @@ import {
   partSchema,
   partListResultSchema,
   assemblyDetailFlatSchema,
+  heldBatchItemSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -588,6 +595,70 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         },
       };
       expect(() => assemblyDetailFlatSchema.parse(wrapped)).toThrow();
+    });
+  });
+
+  describe('heldBatchItemSchema（2026-09-29 review 第 1 轮新增）', () => {
+    // 后端 `HeldBatchItem` 完整 wire 形态：18 字段全声明
+    // （与 HeldBatchItemDto 字段一一对齐；review 第 1 轮在 17 字段基础上
+    // 新增 has_cnc_program 必填字段）。
+    function makeBaseHeld(): Record<string, unknown> {
+      return {
+        batch_id: '2100000000001',
+        part_id: '1800000000001',
+        batch_no: 1,
+        quantity: 5,
+        serial_no: 'F001-001',
+        drawing_no: 'DWG-001',
+        name: '零件甲',
+        system_delivery_date: '2026-09-30',
+        planned_delivery_date: '2026-10-15',
+        is_urgent: true,
+        customer_name: '法拉电子',
+        parent_customer_name: null,
+        applicant_name: '张三',
+        location: 'WORKER',
+        shelf_code: 'A-01',
+        note: '加急',
+        // 2026-09-29 review 第 1 轮：新增 has_cnc_program 必填字段
+        has_cnc_program: true,
+        version: 3,
+      };
+    }
+
+    it('S18：解析 backend-rust HeldBatchItem 完整 18 字段不抛错', () => {
+      const parsed = heldBatchItemSchema.parse(makeBaseHeld());
+      expect(parsed.batch_id).toBe('2100000000001');
+      expect(parsed.part_id).toBe('1800000000001');
+      expect(parsed.batch_no).toBe(1);
+      expect(parsed.has_cnc_program).toBe(true);
+      expect(parsed.location).toBe('WORKER');
+      expect(parsed.customer_name).toBe('法拉电子');
+      expect(parsed.applicant_name).toBe('张三');
+    });
+
+    it('S19：缺 has_cnc_program → 抛 ZodError（M-1 / S15a 同源 regression guard）', () => {
+      // 背景：与 partSchema S15a 同形态 —— zod 默认 strip 模式漏列 has_cnc_program
+      // 会让后端真返回的「已编程」标记在前端拿不到，且 parse 不报错。本 schema
+      // 把 has_cnc_program 显式声明为 z.boolean() 必填字段，缺字段必须抛错，
+      // 守门到位。WorkerQueueBoard 的 held 列与 pool 列共用 WorkOrderCard 渲染
+      // 「已编程」tag，has_cnc_program 必须透传。
+      const { has_cnc_program: _, ...rest } = makeBaseHeld();
+      void _;
+      expect(() => heldBatchItemSchema.parse(rest)).toThrow();
+    });
+
+    it('S19b：has_cnc_program = false 是合法值（非 CNC 链 / 未编程）', () => {
+      const parsed = heldBatchItemSchema.parse({ ...makeBaseHeld(), has_cnc_program: false });
+      expect(parsed.has_cnc_program).toBe(false);
+    });
+
+    it('S19c：缺 version → 抛 ZodError（与 partSchema S12 同形态 regression guard）', () => {
+      // held 批次乐观锁 version 必填 —— 后端 WorkerTakenItem / HeldBatchItem 都返
+      // t_part_batch.version（OCC 必填）。漏列会让 strip 静默丢。
+      const { version: _, ...rest } = makeBaseHeld();
+      void _;
+      expect(() => heldBatchItemSchema.parse(rest)).toThrow();
     });
   });
 });

@@ -150,7 +150,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, watch, type VNode } from 'vue';
+import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue';
 import { ElButton, ElMessage, ElTag } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import { RouterLink, useRouter } from 'vue-router';
@@ -350,15 +350,16 @@ async function fetchList(): Promise<void> {
 }
 
 // 2026-09-29 新增：Tab 切换 → 重置列表到第 1 页 + 重新拉取。
-// fetcher 内部读 activeTab.value 自动响应，但不会自动 reset —— 这里显式 watch
-// 触发 listRef.reset()（等价于 onRefresh()）。
+// fetcher 内部读 activeTab.value 自动响应，但不会自动 reset —— 这里显式调
+// listRef.reset()（等价于 onRefresh()）。
+//
+// 2026-09-29 review 第 1 轮：移除原 watch(activeTab, () => listRef.onRefresh())
+// 块。@tab-change="onTabChange" 与 watch 串行触发两次刷新（点一下 Tab 拉两次
+// 接口）形成 bug —— watch 是冗余兜底（onMounted 走 restoreFilter + fetchList
+// 路径不依赖 watch；mounted 前的编程式改动 listRef.value 为 null 走 no-op）。
 function onTabChange(): void {
   void listRef.value?.onRefresh();
 }
-watch(activeTab, () => {
-  // 兜底：用户若在 mounted 前通过编程方式改 activeTab，watch 仍会触发 reset。
-  void listRef.value?.onRefresh();
-});
 
 // ============ 自动刷新 ============
 let autoRefreshTimer: number | null = null;

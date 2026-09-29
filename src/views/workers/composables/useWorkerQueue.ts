@@ -85,6 +85,8 @@ function poolItemToCard(it: PoolBatchItemDto): WorkOrderCard {
  *  2026-09-14 follow-up round-2：后端扩 JOIN 把展示字段补齐，HeldBatchItemDto 是全字段
  *  DTO（含 part_name / customer_name / applicant_name / location / shelf_code / note /
  *  parent_customer_name 等），此处不再有字段降级。
+ *  2026-09-29 review 第 1 轮：透传 HeldBatchItemDto 新增 has_cnc_program 字段，
+ *  WorkOrderCard 卡片 header 渲染「已编程」tag（与 pool 列同视觉）。
  *  - `location`：直接取 HeldBatchItemDto.location（enum string，如 'WORKER'），
  *    与 poolItemToCard 不同（pool 用 shelf_code 表示货架 code）；语义清晰区分
  *    「持有方」与「货架 code」，UI tooltip「所在位置」按 enum 显示。 */
@@ -104,6 +106,8 @@ function heldToCard(it: HeldBatchItemDto): WorkOrderCard {
     customer: it.customer_name,
     applicant: it.applicant_name,
     location: it.location,
+    // 2026-09-29 review 第 1 轮：与 poolItemToCard 同源处理，透传 has_cnc_program
+    has_cnc_program: it.has_cnc_program,
   };
 }
 

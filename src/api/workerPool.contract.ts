@@ -62,6 +62,12 @@ export interface PoolCountDto {
  *  - `location` 是 t_part_batch.location enum string
  *    （'OFFICE' / 'PRODUCTION_SHELF' / 'WORKER' / 'INSPECTION_SHELF' / 'OUTSOURCE_COMPANY'）；
  *  - `customer_name` = L2 客户名（叶子），`parent_customer_name` = L1 客户名（一级集团）。
+ *
+ *  2026-09-29 review 第 1 轮：新增 `has_cnc_program: boolean`（与 PoolBatchItemDto
+ *  同源语义 —— 该 batch 对应 part 是否已上传 CNC 程序；后端 service 层派生，
+ *  `t_part_file` 表 EXISTS 判定）。WorkerQueueBoard 的 held 列复用 WorkOrderCard
+ *  渲染「已编程」tag（与 pool 列同视觉），故需要透传该字段。heldToCard 适配同步
+ *  加 has_cnc_program 字段。
  */
 export interface HeldBatchItemDto {
   /** t_part_batch.id，雪花 ID */
@@ -94,6 +100,11 @@ export interface HeldBatchItemDto {
   shelf_code: string | null;
   /** t_part.note */
   note: string | null;
+  /** 2026-09-29 review 第 1 轮新增：该 batch 对应 part 是否已上传 CNC 程序
+   *  （G 代码）。后端 service 层 `t_part_file` 表 EXISTS 派生。对非 CNC 链
+   *  part 恒为 false。UI 在卡片 header 渲染「已编程」绿色 tag —— 仅当 true
+   *  时显示。 */
+  has_cnc_program: boolean;
   /** OCC 乐观锁 version */
   version: number;
 }

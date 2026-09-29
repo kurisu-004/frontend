@@ -35,6 +35,7 @@ const STUB_PROCESSES = [
 ];
 
 // 2026-09-14 follow-up round-2：held_batches 元素升级为 HeldBatchItemDto 全字段。
+// 2026-09-29 review 第 1 轮：HeldBatchItemDto 新增 has_cnc_program 必填字段。
 const STUB_HELD_BY_W001: HeldBatchItemDto[] = [
   {
     batch_id: '2100000000001',
@@ -53,6 +54,8 @@ const STUB_HELD_BY_W001: HeldBatchItemDto[] = [
     location: 'WORKER',
     shelf_code: 'A-01',
     note: '加急',
+    // 2026-09-29 review 第 1 轮：沿 chain 派生（后端 service 层 t_part_file EXISTS）
+    has_cnc_program: true,
     version: 3,
   },
 ];
