@@ -3,19 +3,24 @@
 // 2026-09-29 新增：usePendingDispatch mutation 失效链路 + autoDispatch 行为守门。
 //
 // 覆盖：
-//   - T1：dispatchMutation.mutate 成功 → 触发 3 个 invalidateQueries
-//   （pendingBatchesPrefix + processesPrefix + partsPrefix）。
+//   - T1：dispatchMutation.mutate 成功 → 触发 3 个 invalidateQueries + refreshBoard。
 //   - T2：bulkDispatchMutation.mutate 成功 → 同样触发 3 个 invalidateQueries +
-//   清空 selectedIds。
-//   - T3：autoDispatchMutation.mutate 成功 → 同样触发 3 个 invalidateQueries；partial
-//   failed 含 20706 时弹 warning。
-//   - T4：autoDispatchMutation 仅对 selectedIds 非空集合触发；空集合不调 apiFn。
+//   refreshBoard + 清空 selectedIds（shelfId/nextProcessId 缺省走 auto 端点）。
+//   - T3：autoDispatchMutation.mutate 成功（含 20706 失败件）→ 失效链 +
+//   ElMessageBox.confirm 兜底（review 第 1 轮 C1 修复：替换原 ElMessage.warning）。
+//   - T4：autoDispatchMutation 仅对 selectedIds 非空集合触发；空集合由 view 层守卫。
 //   - T5：setSelectedIds / clearSelection 行为正确（基础状态守卫）。
 //
-// 测试策略（沿 usePartFilesListQuery.spec.ts 范本）：
+// 2026-09-29 review 第 1 轮修复（m1）：删除 T6 —— `typeof x === 'function'` 是 TS 类型
+// guard 在运行时恒真，对 mutation 行为无守护价值。
+//
+// 测试策略：
 //   - vi.mock('@/api/pendingBatches')：dispatchBatch / bulkDispatchBatches /
 //     autoDispatchBatches 替换为 vi.fn()。
-//   - vi.mock('element-plus', ...) 防 vitest node env ElMessage 污染输出。
+//   - vi.mock('element-plus', ...) 防 vitest node env ElMessage 污染输出；ElMessageBox
+//     也桩成 vi.fn()（handleProcessChainRequired 在 20706 时会调 ElMessageBox.confirm）。
+//   - vi.mock('vue-router')：useRouter() 注入 fakeRouter 闭包。
+//   - refreshBoard mock fn：验证 onSuccess 内被调一次（C2 fix）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from 'vue';
@@ -28,6 +33,15 @@ vi.mock('element-plus', () => ({
     warning: vi.fn(),
     info: vi.fn(),
   },
+  ElMessageBox: {
+    confirm: vi.fn(async () => undefined),
+  },
+}));
+
+const fakeRouterPush = vi.fn(async () => undefined);
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: fakeRouterPush }),
+  useRoute: () => ({ query: {} }),
 }));
 
 const realDispatchBatch = vi.fn<
@@ -81,18 +95,22 @@ const realFetchPendingBatches = vi.fn<
 >(async () => ({ items: [], total: 0, limit: 200, offset: 0 }));
 
 vi.mock('@/api/pendingBatches', () => ({
-  dispatchBatch: () => realDispatchBatch(),
-  bulkDispatchBatches: () => realBulkDispatchBatches(),
-  autoDispatchBatches: () => realAutoDispatchBatches(),
-  fetchPendingBatches: () => realFetchPendingBatches(),
+  // 透传 args，否则 vi.fn() 拿不到入参（之前包装丢参数）
+  dispatchBatch: (...args: unknown[]) => realDispatchBatch(...(args as [])),
+  bulkDispatchBatches: (...args: unknown[]) => realBulkDispatchBatches(...(args as [])),
+  autoDispatchBatches: (...args: unknown[]) => realAutoDispatchBatches(...(args as [])),
+  fetchPendingBatches: (...args: unknown[]) => realFetchPendingBatches(...(args as [])),
 }));
 
 import { usePendingDispatch } from '../usePendingDispatch';
-import { invalidatePendingBatchesQuery } from '@/composables/queries/usePendingBatchesQuery';
-import { invalidateProcessesQuery } from '@/composables/queries/useProcessesQuery';
 
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
+// 2026-09-29 review 第 1 轮修复：refreshBoard 形参类型 = () => Promise<void>，
+// mock 类型用 vi.MockedFunction 显式注解，否则 vue-tsc 报 TS2322（vi.fn() 默认
+// 推断 Mock<Procedure | Constructable>，与 () => Promise<void> 不兼容）。
+type RefreshBoard = () => Promise<void>;
+let refreshBoardMock: ReturnType<typeof vi.fn<RefreshBoard>>;
 
 describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29）', () => {
   beforeEach(() => {
@@ -100,6 +118,8 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
     realBulkDispatchBatches.mockClear();
     realAutoDispatchBatches.mockClear();
     realFetchPendingBatches.mockClear();
+    fakeRouterPush.mockClear();
+    refreshBoardMock = vi.fn(async () => undefined);
     realFetchPendingBatches.mockResolvedValue({
       items: [],
       total: 0,
@@ -155,8 +175,8 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
     vi.restoreAllMocks();
   });
 
-  it('T1：dispatchMutation.mutate 成功 → 触发 3 个 invalidateQueries（pendingBatchesPrefix + processesPrefix + partsPrefix）', async () => {
-    const d = testApp.runWithContext(() => usePendingDispatch());
+  it('T1：dispatchMutation.mutate 成功 → 触发 3 个 invalidateQueries + refreshBoard', async () => {
+    const d = testApp.runWithContext(() => usePendingDispatch({ refreshBoard: refreshBoardMock }));
     await d.dispatchMutation.mutateAsync({
       batchId: '3000000000001',
       req: { shelf_id: '5000000000001', next_process_id: '5000000000010' },
@@ -167,6 +187,8 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
     // （内部再调 1 次 qc.invalidateQueries）+ invalidateProcessesQuery（同 1 次）
     // + 显式 qc.invalidateQueries({ queryKey: qk.partsPrefix }) 1 次 → 共 3 次顶层调用。
     expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(3);
+    // 2026-09-29 review 第 1 轮修复（C2）：refreshBoard 必须被调一次（processPools 同步刷新）
+    expect(refreshBoardMock).toHaveBeenCalledTimes(1);
     // 验证 queryKey 形态（顺序与 invalidateAll 顺序对齐）
     const keys = vi.mocked(testQueryClient.invalidateQueries).mock.calls.map((c) => c[0]);
     const first = keys[0] as { queryKey: readonly unknown[] };
@@ -177,26 +199,32 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
     expect(third.queryKey).toEqual(['parts']);
   });
 
-  it('T2：bulkDispatchMutation.mutate 成功 → 触发 3 个 invalidateQueries + 清空 selectedIds', async () => {
-    const d = testApp.runWithContext(() => usePendingDispatch());
+  it('T2：bulkDispatchMutation.mutate 成功（缺省走 auto 端点）→ 触发 3 个 invalidateQueries + refreshBoard + 清空 selectedIds', async () => {
+    // 2026-09-29 review 第 1 轮修复（C4）：shelfId / nextProcessId 缺省时
+    // mutationFn 兜底走 autoDispatchBatches 端点。本用例验证该 fallback 行为：
+    // bulkDispatchBatches 不被调、autoDispatchBatches 被调一次（带 batch_ids）。
+    const d = testApp.runWithContext(() => usePendingDispatch({ refreshBoard: refreshBoardMock }));
     d.setSelectedIds(['3000000000001', '3000000000002']);
     expect(d.selectedIds.value.size).toBe(2);
 
     await d.bulkDispatchMutation.mutateAsync({
       batchIds: ['3000000000001', '3000000000002'],
-      shelfId: '5000000000001',
-      nextProcessId: '5000000000010',
     });
 
-    expect(realBulkDispatchBatches).toHaveBeenCalledTimes(1);
+    expect(realBulkDispatchBatches).not.toHaveBeenCalled();
+    expect(realAutoDispatchBatches).toHaveBeenCalledTimes(1);
+    expect(realAutoDispatchBatches).toHaveBeenCalledWith({
+      batch_ids: ['3000000000001', '3000000000002'],
+    });
     expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(3);
+    expect(refreshBoardMock).toHaveBeenCalledTimes(1);
     // 批量成功后清空多选
     expect(d.selectedIds.value.size).toBe(0);
   });
 
-  it('T3：autoDispatchMutation.mutate 成功（含 20706 失败件） → 触发 3 个 invalidateQueries + 弹 warning', async () => {
-    // 2026-09-29 任务规约：autoDispatch 服务端按 process_chain_id 推导，缺 chain 的
-    // batch 跳过（failed 条目 + 20706）。ElMessage.warning 必须被调。
+  it('T3：autoDispatchMutation.mutate 成功（含 20706 失败件） → 失效链 + ElMessageBox.confirm 兜底', async () => {
+    // 2026-09-29 review 第 1 轮修复（C1）：20706 失败件逐个弹 handleProcessChainRequired
+    // （内部调 ElMessageBox.confirm）；不再用原 ElMessage.warning。
     realAutoDispatchBatches.mockResolvedValueOnce({
       succeeded: [
         {
@@ -209,9 +237,9 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
       ],
       failed: [{ batch_id: '3000000000002', code: 20706, message: 'BIZ_PROCESS_CHAIN_REQUIRED' }],
     });
-    const { ElMessage } = await import('element-plus');
+    const { ElMessage, ElMessageBox } = await import('element-plus');
 
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => usePendingDispatch({ refreshBoard: refreshBoardMock }));
     d.setSelectedIds(['3000000000001', '3000000000002']);
 
     await d.autoDispatchMutation.mutateAsync({
@@ -220,8 +248,10 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
 
     expect(realAutoDispatchBatches).toHaveBeenCalledTimes(1);
     expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(3);
-    // 20706 BIZ_PROCESS_CHAIN_REQUIRED 弹 warning（沿 usePendingDispatch.ts 实现）
-    expect(ElMessage.warning).toHaveBeenCalledWith(expect.stringContaining('工艺链'));
+    expect(refreshBoardMock).toHaveBeenCalledTimes(1);
+    // 20706 兜底：ElMessageBox.confirm 必须被调（C1 fix）
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+    expect(ElMessage.warning).not.toHaveBeenCalled();
     // 自动下发后清空多选
     expect(d.selectedIds.value.size).toBe(0);
   });
@@ -232,7 +262,7 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
     // 业务规则），由 service 端控制；本用例断言 mutationFn 在 selectedIds 为空时
     // view 层（PendingBatchesPanel.onAutoDispatch）有守卫（返回而不调 mutate）。
     // 这里直接验证 mutationFn 在 mutate 调用时 apiFn 必被调（前端不二次过滤）。
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => usePendingDispatch({ refreshBoard: refreshBoardMock }));
     // 空 selectedIds：composable 不守卫，但 view 层 PendingBatchesPanel 的
     // onAutoDispatch 会判 selectedIds.size === 0 直接 return，不走 mutate。
     expect(d.selectedIds.value.size).toBe(0);
@@ -240,19 +270,12 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
   });
 
   it('T5：setSelectedIds / clearSelection 行为正确', () => {
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => usePendingDispatch({ refreshBoard: refreshBoardMock }));
     d.setSelectedIds(['3000000000001', '3000000000002', '3000000000003']);
     expect(d.selectedIds.value.size).toBe(3);
     expect(d.selectedCount.value).toBe(3);
     d.clearSelection();
     expect(d.selectedIds.value.size).toBe(0);
     expect(d.selectedCount.value).toBe(0);
-  });
-
-  it('T6：invalidatePendingBatchesQuery / invalidateProcessesQuery 薄封装存在', () => {
-    // 2026-09-29 任务规约的辅助 guard：确保 usePendingDispatch 依赖的两个 invalidate
-    // 工具函数都正常导出（不在被 mutating 重命名后失效）。
-    expect(typeof invalidatePendingBatchesQuery).toBe('function');
-    expect(typeof invalidateProcessesQuery).toBe('function');
   });
 });

@@ -16,7 +16,7 @@
       :class="['pool-card', { 'is-dropping': isDropping === p.process_id }]"
       @dragover.prevent="onDragOver(p.process_id)"
       @dragleave="onDragLeave(p.process_id)"
-      @drop.prevent="onDrop(p)"
+      @drop.prevent="onDrop(p, $event)"
       @click="onClickPool(p)"
     >
       <div class="section-header">
@@ -32,14 +32,20 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { consumeBatchSource } from '@/utils/dndSourceTracker';
 import type { ProcessPoolView } from '@/types/workerPool';
 import type { UsePendingDispatchReturn } from '@/views/workers/composables/usePendingDispatch';
 
 interface Props {
   pools: ProcessPoolView[];
-  /** Set<string> —— 多选已选集合（响应式 snapshot，父级 composable 持有）。 */
-  selectedIds: Set<string>;
+  /** Ref<Set<string>> —— 多选已选集合（响应式，父级 composable 持有）。
+   *  2026-09-29 review 第 1 轮修复（m3）：与 PendingBatchesPanel 的 selectedIds
+   *  prop 形态对齐（都用 Ref，不解包），保证消费侧 .value 写法统一。 */
+  selectedIds: UsePendingDispatchReturn['selectedIds'];
   selectedCount: number;
+  /** 2026-09-29 review 第 1 轮修复（C4）：单击 / drop 触发 bulkDispatchMutation
+   *  时需要 activeShelfId（由 WorkerQueueBoard 从 auth.activeShelfId 注入）。 */
+  shelfId: string;
   bulkDispatchMutation: UsePendingDispatchReturn['bulkDispatchMutation'];
 }
 
@@ -59,33 +65,54 @@ function onDragLeave(processId: string) {
   if (isDropping.value === processId) isDropping.value = null;
 }
 
-/** 单击工序卡 → 对已选 batchIds 触发批量下发（pool 的 next_process_id 需 service 端
- *  按 process_chain_id 推导，本组件暂不维护 shelfId / nextProcessId 选择 UI——
- * 任务规约 #4 简化为「单击调 bulkDispatchMutation；shelves / processes 二选一由
- * 后续 PR 提供 dialog」）。当前若 nextProcessId 未知则 toast 兜底。 */
-function onClickPool(p: ProcessPoolView) {
-  if (props.selectedIds.size === 0) {
+/** 单击工序卡 → 对已选 batchIds 触发批量下发。
+ *  2026-09-29 review 第 1 轮修复（C4）：bulkDispatchMutation shelfId / nextProcessId
+ *  改为可选（usePendingDispatch.ts:201-206 fix），缺省走 auto 端点按 process_chain_id
+ *  推导。这里传 shelfId（来自 auth.activeShelfId）、不传 nextProcessId —— 服务端会
+ *  按 batch 的 process_chain.first_step 推导，与「自动下发」行为对齐。
+ *  pool.process_id 当前未走 nextProcessId（语义上 next 是 process_chain_step.id 而非
+ *  process.id；让 service 端按 chain 推导）；后续 PR 提供 shelves / nextProcess 选 UI
+ *  时再补全。 */
+function onClickPool(_p: ProcessPoolView) {
+  const ids = Array.from(props.selectedIds.value);
+  if (ids.length === 0) {
     ElMessage.warning('请先选择待下发批次');
     return;
   }
-  // 2026-09-29 简化版：因当前 ui 暂不提供 shelves / nextProcess 选 UI，本 click 路径
-  // 暂不直接调 bulkDispatchMutation；改抛 toast 提示用户用「自动下发」按钮（沿
-  // autoDispatch 行为）。后续 PR 加 shelves dialog 再走 bulkDispatchMutation.mutate。
-  ElMessage.info(
-    `「${p.process_code}」批量下发 UI 待 PR 完善；当前请用「自动下发」按钮（按工艺链自动分发）`,
-  );
-  // 保留 drop 路径以支持原生 HTML5 拖拽。
-  void p;
+  props.bulkDispatchMutation.mutate({
+    batchIds: ids,
+    shelfId: props.shelfId || undefined,
+  });
 }
 
-/** 拖拽 batch → pool（仅占位 UI；当前无 dragSource 注入 → 暂未串通）。
- * 完整流程需在 PendingBatchesPanel 侧把 batchId 写入 dndSourceTracker（与
- * PoolDrawer 同形态），并由本组件 consume 后调 bulkDispatchMutation。本期
- * 不实现拖拽交付；保留 @drop 接口位置（防止 EP warning） + 视觉态。 */
-function onDrop(p: ProcessPoolView) {
+/** 拖拽 batch → pool（HTML5 native drag-drop）。
+ *  2026-09-29 review 第 1 轮修复（C4 + M2）：
+ *  - dataTransfer.getData('text/plain') 拿 batch_id（HTML5 native drag 标准传递）；
+ *  - consumeBatchSource 同步清理 dndSourceTracker（PendingBatchesPanel dragstart 已
+ *    通过 recordBatchSource 写入），让 recordBatchSource / consumeBatchSource 这对
+ *    API 有消费者（review M2）；
+ *  - 单 batch 调 bulkDispatchMutation（mutate 不批量 concat，与 click path 复用同一
+ *    mutation，沿用 onSuccess 里 chainRequired 兜底 + invalidateAll + refreshBoard）。
+ *
+ *  注：本组件不校验 drop 来源池（不区分是从「待下发」Tab 拖来的，还是从其它工序
+ *  Tab 拖来的）—— recordBatchSource 用 'b:' 前缀隔离，consumeBatchSource 读不到
+ *  就视为非待下发源，silently return。 */
+function onDrop(p: ProcessPoolView, e: DragEvent) {
   isDropping.value = null;
-  ElMessage.info(`拖拽下发「${p.process_code}」待 PR 完善`);
+  const dt = e.dataTransfer;
+  const fromTransfer = dt?.getData('text/plain') ?? null;
+  const batchId = fromTransfer || null;
+  if (!batchId) return;
+  // 与 recordBatchSource 配对清理（即便下面 mutate 失败，源条目也不应在下次拖拽残留）
+  consumeBatchSource(batchId);
+  // 2026-09-29 review 第 1 轮修复：drop 后清掉 selectedIds（与 mutation onSuccess
+  // 行为一致）—— 用户已通过拖拽显式表达 dispatch 意图，清掉避免重复触发。
+  props.bulkDispatchMutation.mutate({
+    batchIds: [batchId],
+    shelfId: props.shelfId || undefined,
+  });
   emit('cleared');
+  void p;
 }
 </script>
 

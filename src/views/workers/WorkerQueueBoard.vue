@@ -57,8 +57,9 @@
             <el-splitter-panel size="60%" :min="320">
               <PendingPoolsPanel
                 :pools="processPools"
-                :selected-ids="pendingDispatch.selectedIds.value"
+                :selected-ids="pendingDispatch.selectedIds"
                 :selected-count="pendingDispatch.selectedCount.value"
+                :shelf-id="shelfId"
                 :bulk-dispatch-mutation="pendingDispatch.bulkDispatchMutation"
               />
             </el-splitter-panel>
@@ -104,8 +105,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, provide, ref } from 'vue';
+import { computed, onMounted, provide, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth';
 import { useWorkerQueue } from '@/views/workers/composables/useWorkerQueue';
@@ -117,7 +119,15 @@ import PendingPoolsPanel from './components/PendingPoolsPanel.vue';
 
 const auth = useAuthStore();
 const queue = useWorkerQueue();
-const pendingDispatch = usePendingDispatch();
+const route = useRoute();
+const router = useRouter();
+// 2026-09-29 review 第 1 轮修复（C2）：caller 注入 refreshBoard，dispatch / bulk / auto
+// 三类 mutation onSuccess 都会调一次 —— processPools 是模块级 ref，invalidate 失效链
+// 触达不到，必须显式重新 loadBoard 同步看板计数。
+const refreshBoard = async (): Promise<void> => {
+  await queue.loadBoard(shelfId.value || null);
+};
+const pendingDispatch = usePendingDispatch({ refreshBoard });
 const {
   workers,
   processPools,
@@ -129,8 +139,22 @@ const {
   moveBatchToPool,
 } = queue;
 
-// 2026-09-29：activeTab 默认 = __pending__（首屏即待下发 tab），符合任务规约「待下发 Tab 在最前」。
-const activeTab = ref<string>('__pending__');
+// 2026-09-29 review 第 1 轮修复（M1）：activeTab 默认 = __pending__（首屏即待下发 tab，
+// 符合任务规约「待下发 Tab 在最前」）；URL ?tab=XXX 可覆盖（深链到具体工序），
+// 覆盖优先级 > 默认。worker-queue-board 路由未注册？—— 沿 dashboard 同形态，
+// 是 WorkerQueuePage 父路由的 query 参数。
+const TAB_QUERY_KEY = 'tab';
+const PENDING_TAB = '__pending__';
+function readInitialTab(): string {
+  const q = route.query[TAB_QUERY_KEY];
+  if (typeof q === 'string' && q.length > 0) return q;
+  return PENDING_TAB;
+}
+const activeTab = ref<string>(readInitialTab());
+// activeTab 变更 → 同步写到 URL（replace 不污染 history）。
+watch(activeTab, (next) => {
+  void router.replace({ query: { ...route.query, [TAB_QUERY_KEY]: next } });
+});
 const activePool = computed(
   () => processPools.value.find((p) => p.process_id === activeTab.value) ?? null,
 );
@@ -139,7 +163,8 @@ const filteredWorkers = computed(() =>
 );
 
 const shelfId = computed(() => auth.activeShelfId ?? '');
-
+// 2026-09-29 review 第 1 轮修复（C4）：shelfId 暴露给 PendingPoolsPanel 单击 / drop 走
+// bulkDispatchMutation.mutate 用 —— 与 auth.activeShelfId 同源，单一依赖源。
 provide<ComputedRef<string>>(
   'activeProcessId',
   computed(() => activeTab.value),
@@ -150,8 +175,15 @@ provide<ComputedRef<string>>('shelfId', shelfId);
 
 onMounted(async () => {
   await loadBoard(shelfId.value || null);
-  if (processPools.value[0]) {
-    // 注：activeTab 默认 __pending__ 不动；只有用户后续手动切到具体工序 tab 时才覆盖。
+  // 注：activeTab 默认 __pending__ 不动；loadBoard 后若 URL ?tab 命中具体 process_id
+  // 但该 process 不在 processPools（外协 / 已删除）→ fallback 到第一个自产 process，
+  // 避免 activePool = null 时左栏空、右栏「该工序暂无可用工人」。
+  if (
+    activeTab.value !== PENDING_TAB &&
+    !processPools.value.some((p) => p.process_id === activeTab.value) &&
+    processPools.value[0]
+  ) {
+    activeTab.value = processPools.value[0].process_id;
   }
 });
 

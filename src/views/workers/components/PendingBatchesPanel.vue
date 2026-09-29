@@ -39,6 +39,18 @@
       @selection-change="onSelectionChange"
     >
       <el-table-column type="selection" width="44" />
+      <el-table-column label="拖" width="40" align="center">
+        <template #default="{ row }">
+          <div
+            class="drag-handle"
+            draggable="true"
+            :title="`拖动到右侧工序卡 → batch ${row.batch_id}`"
+            @dragstart="onRowDragStart($event, row.batch_id)"
+          >
+            <el-icon><Rank /></el-icon>
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column prop="batch_no" label="批次号" width="100">
         <template #default="{ row }">
           <span class="batch-no">B{{ row.batch_no }}</span>
@@ -71,6 +83,8 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { Rank } from '@element-plus/icons-vue';
+import { recordBatchSource } from '@/utils/dndSourceTracker';
 import type { PendingBatchItemDto } from '@/api/workerPool.contract';
 import type { UsePendingDispatchReturn } from '@/views/workers/composables/usePendingDispatch';
 
@@ -133,6 +147,18 @@ function onAutoDispatch() {
   if (ids.length === 0) return;
   props.autoDispatchMutation.mutate({ batchIds: ids });
 }
+
+/** 2026-09-29 review 第 1 轮修复（C4 + M2）：行级拖拽源（HTML5 native drag）。
+ *  - dataTransfer.setData('text/plain', batchId)：跨组件的标准传递通道；
+ *  - recordBatchSource(batchId)：与 PendingPoolsPanel.consumeBatchSource 配对，
+ *    让 dndSourceTracker 的 b: 前缀 API 有消费者（review M2）。 */
+function onRowDragStart(e: DragEvent, batchId: string) {
+  if (e.dataTransfer) {
+    e.dataTransfer.setData('text/plain', batchId);
+    e.dataTransfer.effectAllowed = 'move';
+  }
+  recordBatchSource(batchId);
+}
 </script>
 
 <style scoped>
@@ -178,5 +204,22 @@ function onAutoDispatch() {
 .batch-no {
   font-family: var(--el-font-family-monospace, monospace);
   font-size: 13px;
+}
+/* 2026-09-29 review 第 1 轮修复（C4）：拖拽 handle 列视觉态 —— 鼠标 hover/active
+   给出 grab/grabbing 反馈，让用户知道这格可拖。 */
+.drag-handle {
+  cursor: grab;
+  color: var(--el-text-color-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+.drag-handle:hover {
+  color: var(--el-color-primary);
+}
+.drag-handle:active {
+  cursor: grabbing;
 }
 </style>

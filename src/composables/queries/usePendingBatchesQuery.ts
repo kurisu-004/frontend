@@ -63,16 +63,6 @@ export function usePendingBatchesQuery(
   });
 }
 
-/** 2026-09-29 新增：精确失效指定 params 形态的列表（单条 cache identity）。
- *  当前场景下通常与 invalidatePendingBatchesQuery 配合 —— 后者前缀失效覆盖任意
- *  params；本函数仅供调用方需要精确粒度的场景使用。 */
-export function invalidatePendingBatchesListQuery(
-  qc: QueryClient,
-  params: ListPendingBatchesParams,
-): Promise<void> {
-  return qc.invalidateQueries({ queryKey: qk.pendingBatchesList(params) }).then(() => undefined);
-}
-
 /** 2026-09-29 新增：失效整个 pending-batches 域（写操作完成后调）。
  *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。 */
 export function invalidatePendingBatchesQuery(qc: QueryClient): Promise<void> {
