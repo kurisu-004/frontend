@@ -339,7 +339,9 @@ export async function placeOnShelf(
 // 历史沿革：原 sendToProgramming / recallToProgramming 在 2026-07-17 PR-F 引入，
 // 2026-08-05 召回工作增加 recallToProgramming；2026-09-29 业务迁移「待编程 Tab 化」后下线。
 
-/** 2026-08-05 召回：ON_SHELF → PENDING（M）。
+/** 2026-08-05 召回：ON_SHELF 或 PROGRAMMING → PENDING（Manager；PROGRAMMING 为
+ *  历史数据消化场景）。2026-09-29 业务迁移后 PROGRAMMING 状态自该日起被标记为
+ *  废弃（无新进入路径），但本端点保留供历史 PROGRAMMING 批次召回。
  *  `batch_id` 缺省按 expect 唯一批次解析；多在架批次必须指定。 */
 export interface PartRecallPayload {
   batch_id?: string | null;

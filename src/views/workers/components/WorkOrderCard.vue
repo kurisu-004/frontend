@@ -98,10 +98,10 @@ const hasDetails = computed(
   font-family: var(--el-font-family-monospace, monospace);
   font-size: 13px;
 }
-/* 2026-09-29：CNC 编程标签放在加急 tag 之前（绿色 → 黄色，重要程度递减） */
-.cnc-program-tag {
-  margin-left: auto;
-}
+/* 2026-09-29 review 第 1 轮：删除原 `.cnc-program-tag { margin-left: auto; }`
+   —— 父 .card-header 已用 `justify-content: space-between`，再叠 margin-left
+   会导致 batch-no 与 cnc-program-tag 之间出现双倍间隙（视觉偏移）。CNC 编程
+   tag 与加急 tag 现在按正常文档流顺序渲染（绿色 → 黄色，重要程度递减）。 */
 .card-body {
   font-size: 13px;
   line-height: 1.5;
