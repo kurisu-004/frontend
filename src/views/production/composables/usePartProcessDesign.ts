@@ -6,8 +6,9 @@
 // - flows（PartProcessFlow 字典）：懒加载 — 用户选 part 时按需拉取；
 //   2026-09-16 起加载路径由 part.process_chain_id 驱动（见下方第 4 段）；
 //   20701 BIZ_PROCESS_CHAIN_NOT_FOUND → 视为空链，不报错。
-// - upsertSteps / deleteStep / reorderSteps：纯本地 mutation，不自动 PUT。
-// - saveFlow：手动触发的 PUT 整组 upsert（由 ProcessStepCardList 保存按钮触发）。
+// - upsertSteps / deleteStep / reorderSteps：纯本地 mutation，不自动 POST。
+// - saveFlow：手动触发的 POST 整组 upsert（由 ProcessStepCardList 保存按钮触发；
+//   2026-09-29 由 PUT 改 POST 统一惯例，详见 src/api/processChain.ts）。
 //
 // 2026-09-16 process_chain_id FK 翻转（后端 PR 并行）：
 // - 后端 /parts 列表/详情出参新增 process_chain_id（null = 未制定工序）；
@@ -17,11 +18,11 @@
 // - save 成功后把 upsert 响应的链 id 回写到本地零件的 process_chain_id（首次保存建链场景），
 //   该零件立刻从「待制定」移入「已制定」分组（响应式，无需整表刷新）。
 //
-// 2026-09-16 改造：删除 scheduleSave 防抖链路。原先「steps 变更 → 800ms 后自动 PUT」的设计
-// 让保存按钮形同虚设（永远 disabled 因为 dirty 在 PUT 后立刻被清零），改成显式手动保存。
+// 2026-09-16 改造：删除 scheduleSave 防抖链路。原先「steps 变更 → 800ms 后自动 POST」的设计
+// 让保存按钮形同虚设（永远 disabled 因为 dirty 在 POST 后立刻被清零），改成显式手动保存。
 // 持久化入口唯一化为公开方法 save(partId, steps)（由 UI 保存按钮调用）：
 //   ① 本地 upsertSteps mutate
-//   ② 调内部 saveFlow PUT 整组
+//   ② 调内部 saveFlow POST 整组
 //   ③ 成功：清 dirty；失败：保留 steps 与 dirty=true 让用户重试
 // saveFlow 改为 internal（不 export），不再承担「调用前已 upsertSteps」的不成文 invariant。
 //
@@ -30,12 +31,23 @@
 // snapshot 实际是 post-mutation 状态，回滚等于 no-op。新语义「失败保留编辑以便重试」，
 // 直接删掉 snapshot 回滚路径（mutate 已在 try 外做，catch 只重置 saving + 弹错即可）。
 //
+// 2026-09-29 修复：save() 复用 upsertSteps 返回值传递拍平后的 steps 给 saveFlow
+// （方案 A）。根因：newStep() 默认 sort_order=0，用户连续点"添加工序"两次会得到
+// steps=[stepA(sort=0), stepB(sort=0)]。原 save() 串行做
+//   ① upsertSteps(partId, steps)    // 本地拍平 sort_order → 0,1,...
+//   ② await saveFlow(partId, steps) // 却拿原始 steps 发请求，未拍平！
+// 导致 PUT/POST 出去的 payload 仍是 [sort=0, sort=0]，触发后端
+// 20104 「sort_order 重复: 0」校验。修复：拿 upsertSteps 返回值（已是拍平后的
+// 完整 steps），把 `updated.steps` 传给 saveFlow。后端工艺链端点同时由 PUT 改
+// POST 统一惯例（见 src/api/processChain.ts:51-62）。
+//
 // 整组 upsert 约束（2026-09-14 写入注释，CLAUDE.md 习惯）：
-//   rust PUT /process-chains/by-part/{part_id} 是整组替换语义——前端必须发完整 steps 数组
-//   （包括 service-side 已有的 step），否则会被覆盖。所以本地流程编辑后 PUT 时，本地
+//   rust POST /process-chains/by-part/{part_id} 是整组替换语义——前端必须发完整 steps 数组
+//   （包括 service-side 已有的 step），否则会被覆盖。所以本地流程编辑后 POST 时，本地
 //   PartProcessFlow.steps 已是「完整数组 + 用户变更」，直接序列化发走即可。
-//   若本地发现缺 step（如 race：用户编辑期间另一 tab GET 后 PUT 覆盖了本地 cache），
+//   若本地发现缺 step（如 race：用户编辑期间另一 tab GET 后 POST 覆盖了本地 cache），
 //   先 GET 一次拿完整 list 再 merge 用户变更（mergeToFullSteps 函数）。
+//   2026-09-29 备注：HTTP 方法由 PUT 改 POST，整组 upsert 实际是 create-or-replace 语义。
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -58,7 +70,7 @@ const processes = ref<Process[]>([]);
 const flows = ref<Record<string, PartProcessFlow>>({});
 const loadingParts = ref(false);
 const loadingProc = ref(false);
-/** 正在 PUT 整组 upsert 的 partId（用于 UI「保存中」状态）。 */
+/** 正在 POST 整组 upsert 的 partId（用于 UI「保存中」状态）。 */
 const saving = ref<Record<string, boolean>>({});
 const error = ref<string | null>(null);
 
@@ -230,7 +242,7 @@ export function usePartProcessDesign(): UsePartProcessDesignReturn {
     return flows.value[partId] ?? null;
   }
 
-  /** 用一个新 steps[] 覆盖某零件的工序列表；本地立刻更新（不自动 PUT）。
+  /** 用一个新 steps[] 覆盖某零件的工序列表；本地立刻更新（不自动 POST）。
    *  2026-09-16 改造：去掉 scheduleSave 调用。原先每次 upsertSteps 都会触发
    *  800ms 防抖自动保存，导致 ProcessStepCardList 的「保存」按钮永远 disabled。
    *  现在 upsertSteps 是纯本地 mutation，持久化由 saveFlow(partId, steps) 显式触发。 */
@@ -266,8 +278,9 @@ export function usePartProcessDesign(): UsePartProcessDesignReturn {
    *  2026-09-16 第 1 轮 review 修复：旧版本 catch 块注释写「回滚：把 server 返回的快照放回」
    *  是错的——snapshot 在 try 第一行捕获，但此时 upsertSteps 已在调用方（公开 save）
    *  跑过，snapshot 实际是 post-mutation 状态，回滚等于 no-op。新语义「失败保留编辑以便
-   *  重试」，不再做 snapshot 回滚；mutate 在调用方 upsertSteps 完成，本函数只负责 PUT
+   *  重试」，不再做 snapshot 回滚；mutate 在调用方 upsertSteps 完成，本函数只负责 POST
    *  与错误反馈（error.value + ElMessage.error）。
+   *  2026-09-29 变更：HTTP 方法由 PUT 改 POST（统一惯例；详见 src/api/processChain.ts）。
    *  internal：不 export。外部唯一入口是下方公开方法 save(partId, steps)。 */
   async function saveFlow(partId: string, steps: ProcessStep[]): Promise<void> {
     saving.value = { ...saving.value, [partId]: true };
@@ -309,24 +322,30 @@ export function usePartProcessDesign(): UsePartProcessDesignReturn {
     }
   }
 
-  /** 公开持久化入口：本地 mutate → PUT → 成功清 dirty / 失败保留 dirty 让用户重试。
+  /** 公开持久化入口：本地 mutate → POST → 成功清 dirty / 失败保留 dirty 让用户重试。
    *  2026-09-16 第 1 轮 review 修复：旧版 UI 直接调 upsertSteps + saveFlow 两步，
    *  saveFlow 内部又隐式依赖「调用前已 upsertSteps」这个不成文 invariant，是静默错乱
    *  的根源。改成本方法对外只暴露一个语义清晰的入口：save(partId, steps) 一句话完成
    *  「编辑 → 持久化」全流程。
    *  顺序固定为：
-   *   ① upsertSteps(partId, steps) 本地 mutate（更新 sort_order 与 flows 单例）
-   *   ② 调 internal saveFlow PUT 整组
+   *   ① upsertSteps(partId, steps) 本地 mutate（更新 sort_order 与 flows 单例），
+   *     2026-09-29 修复：拿其返回值，把拍平后的 steps 传给 saveFlow，避免 [0,0] 撞 20104
+   *   ② 调 internal saveFlow POST 整组（2026-09-29 由 PUT 改 POST 统一惯例）
    *   ③ 成功：返回；失败：把 saveFlow 抛出的原 error 重抛，dirty 由 UI 维持 true
    *  注意：dirty 重置由 UI（ProcessStepCardList.onSave）控制，不在本 composable 内
    *  触碰脏标记 —— composable 不直接持组件级 ref（dirty 在组件内），UI 拿到的成功
    *  信号是「没抛错」即可清 dirty。 */
   async function save(partId: string, steps: ProcessStep[]): Promise<void> {
     // 步骤 1：本地 mutation（更新 flows.value[partId].steps + sort_order）
-    upsertSteps(partId, steps);
-    // 步骤 2：PUT 整组 upsert 到后端（失败时 saveFlow 已弹 ElMessage.error + 设 error.value，
-    // 这里把原 error 重抛给 UI，由 UI 决定是否再清 dirty —— 失败时不清，保留以便重试）
-    await saveFlow(partId, steps);
+    // 2026-09-29 修复（方案 A）：复用 upsertSteps 返回值，把「已按 index 拍平
+    // sort_order」的步骤传给 saveFlow。旧实现用入参 `steps` 直接传，
+    // 若用户连续 newStep() 两次会得到 [sort=0, sort=0]，触发后端
+    // 20104「sort_order 重复: 0」校验（参顶部 2026-09-29 注释根因）。
+    const updated = upsertSteps(partId, steps);
+    // 步骤 2：POST 整组 upsert 到后端（2026-09-29 由 PUT 改 POST 统一惯例），
+    // 失败时 saveFlow 已弹 ElMessage.error + 设 error.value，
+    // 这里把原 error 重抛给 UI，由 UI 决定是否再清 dirty —— 失败时不清，保留以便重试
+    await saveFlow(partId, updated.steps);
   }
 
   /** 清空某零件的工序（不是删除零件，仅清空流程）。 */

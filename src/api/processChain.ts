@@ -3,20 +3,23 @@
 // 端点（与 backend-rust/src/modules/process_chain/handler.rs 对齐）：
 //   GET  /api/v2/prod/process-chains/by-part/{part_id}  ← getProcessChainByPart（保留可用）
 //   GET  /api/v2/prod/process-chains/{chain_id}         ← getProcessChainById（2026-09-16 新增）
-//   PUT  /api/v2/prod/process-chains/by-part/{part_id}  ← upsertProcessChainByPart
+//   POST /api/v2/prod/process-chains/by-part/{part_id}  ← upsertProcessChainByPart（2026-09-29 由 PUT 改 POST）
 //   GET  /api/v2/prod/processes                         ← listProcesses (转引)
 //   GET  /api/v2/parts                                 ← listParts (转引；2026-09-29 修正：
 //                                                       原误路由 /prod/parts，后端无该端点 → 404；
 //                                                       parts 始终在 part 域，与 /prod/* 无关)
 //
 // 业务端点统一走 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 起）。
-// 整组 upsert 约束：rust PUT /prod/process-chains/by-part/{part_id} 是整组替换语义——
+// 整组 upsert 约束：rust POST /prod/process-chains/by-part/{part_id} 是整组替换语义——
 // 前端必须发完整 steps 数组（包括 service-side 已有的 step），否则会被覆盖。
-// 详见 usePartProcessDesign.ts 的 GET-merge-PUT 模式。
+// 详见 usePartProcessDesign.ts 的 GET-merge-POST 模式。
 //
 // 2026-09-25 修正：补齐 /prod/ 前缀；listProcesses / listParts 用
 // ProcessListResult / PartListResult 类型替代裸 unknown[]。
 // 2026-09-29 修正：listParts 由 /prod/parts 改为 /parts（详见上方注释）。
+// 2026-09-29 修正：upsertProcessChainByPart 由 PUT 改 POST（统一惯例，整组
+// upsert 不是幂等覆盖而是 create-or-replace 语义，更贴 POST；后端契约对齐中，
+// 由 backend-rust implementor 在另一个 worktree 同步落地）。
 
 import { api, cleanParams } from '@/api/http';
 import type { OrderStatus, PartListItem } from '@/types/parts';
@@ -48,14 +51,18 @@ export async function getProcessChainById(chainId: string): Promise<ProcessChain
   return resp.data;
 }
 
-/** PUT /api/v2/prod/process-chains/by-part/{part_id}
+/** POST /api/v2/prod/process-chains/by-part/{part_id}
  *  整组 upsert：替换所有 steps。Manager role 守卫（service 端校验）。
- *  失败 → 后端 20104 / 40901 / 40300 等，前端用 ApiError.code 分流。 */
+ *  失败 → 后端 20104 / 40901 / 40300 等，前端用 ApiError.code 分流。
+ *  2026-09-29 变更：HTTP 方法由 PUT 改 POST（统一惯例，整组 upsert 实质是
+ *  create-or-replace 语义，POST 更贴；PUT 是 HTTP 语义上的幂等覆盖）。
+ *  函数名 / 参数 / 返回类型不变，与后端契约保持向后兼容（contract 已同步
+ *  注释，见 processChain.contract.ts）。 */
 export async function upsertProcessChainByPart(
   partId: string | number,
   body: UpsertProcessChainRequest,
 ): Promise<ProcessChainByPartDto> {
-  const resp = await api.put<ProcessChainByPartDto>(
+  const resp = await api.post<ProcessChainByPartDto>(
     `/prod/process-chains/by-part/${encodeURIComponent(String(partId))}`,
     body,
   );

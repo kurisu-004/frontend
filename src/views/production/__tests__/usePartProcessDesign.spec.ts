@@ -24,6 +24,10 @@
 // - 新增 save 失败 it 用例：mock upsertProcessChainByPart 抛 ApiError(500)，
 //   断言 catch 块 ElMessage.error 被调（mock element-plus stub）。
 //
+// 2026-09-29 修复：save 复用 upsertSteps 返回值传递拍平后的 steps 给 saveFlow
+// （方案 A）。回归测试：连续两次 newStep() → steps 默认 sort_order=0，0 →
+// save 必须把拍平后的 [sort=0, sort=1] 发到后端，不能把 [0, 0] 发出去触发 20104。
+//
 // 2026-09-16 改造：删除防抖自动保存（scheduleSave）的相关 it 用例；
 // upsertSteps 不再触发 PUT，持久化由公开 save(partId, steps) 显式调用。
 // 同时更新 loadParts → listParts 调用，确保 status='PENDING' 透传（不传 keyword，
@@ -398,5 +402,32 @@ describe('usePartProcessDesign', () => {
     expect(q.getFlowByPartId('5000000000005')!.steps).toEqual(targetSteps);
     // 2026-09-16 新增：保存失败不得回写 process_chain_id（零件仍属「待制定」）
     expect(q.parts.value.find((p) => p.id === '5000000000005')!.process_chain_id).toBeNull();
+  });
+
+  it('2026-09-29 修复：连续两次 newStep() 后 save() 发拍平后的 [sort=0,sort=1]（不再发 [0,0] 撞 20104）', async () => {
+    // 回归测试：newStep() 默认 sort_order=0；连续两次 newStep() → steps=[A(sort=0),B(sort=0)]。
+    // 旧 save() 用入参 steps 直接传 → POST payload 仍是 [0,0] → 20104「sort_order 重复: 0」。
+    // 新 save() 必须复用 upsertSteps 返回值（按 index 重写 sort_order），发出去的是
+    // [sort=0, sort=1]，后端 stub 直接看 mock.calls 的 payload sort_order 序列。
+    const { usePartProcessDesign } = await import('../composables/usePartProcessDesign');
+    const { upsertProcessChainByPart } = await import('@/api/processChain');
+    const q = usePartProcessDesign();
+    await q.loadParts();
+    await q.loadProcesses();
+    await q.loadFlowForPart('5000000000005');
+
+    const stepA = q.newStep();
+    const stepB = q.newStep();
+    // 关键前提——两个 sort_order 都是 0（newStep() 默认）
+    expect(stepA.sort_order).toBe(0);
+    expect(stepB.sort_order).toBe(0);
+
+    await q.save('5000000000005', [stepA, stepB]);
+
+    // 断言 POST payload 的 sort_order 是 [0, 1]（已拍平），不是 [0, 0]
+    const calls = vi.mocked(upsertProcessChainByPart).mock.calls;
+    expect(calls).toHaveLength(1);
+    const sentSteps = calls[0]![1].steps;
+    expect(sentSteps.map((s) => s.sort_order)).toEqual([0, 1]);
   });
 });

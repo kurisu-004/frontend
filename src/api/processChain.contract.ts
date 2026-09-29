@@ -7,7 +7,7 @@
 // 端点（与 backend-rust/src/modules/process_chain/handler.rs 对齐）：
 //   GET  /api/v2/process-chains/by-part/{part_id}  ← getProcessChainByPart（保留可用）
 //   GET  /api/v2/process-chains/{chain_id}         ← getProcessChainById（2026-09-16 新增）
-//   PUT  /api/v2/process-chains/by-part/{part_id}  ← upsertProcessChainByPart
+//   POST /api/v2/process-chains/by-part/{part_id}  ← upsertProcessChainByPart（2026-09-29 由 PUT 改 POST）
 //
 // 端点形状以 rust 实际为准（process-chain.md）：
 // - i64 主键 → JSON 字符串（雪花 ID 防 JS 精度截断，CLAUDE.md #3）
@@ -17,7 +17,7 @@
 //   响应里的 `id` 就是新链 id（前端 save 后据此迁移「已制定」分组）
 
 /** 单步工艺（rust ProcessChainStepOut + UpsertChainStep 共用形状）。
- *  `id` 仅 GET 响应携带（PUT 提交时不需；service 软删旧 steps 后 INSERT 新行）。 */
+ *  `id` 仅 GET 响应携带（POST 提交时不需；service 软删旧 steps 后 INSERT 新行）。 */
 export interface ProcessChainStepDto {
   id?: string;
   /** 0-based 顺序；后端按 sort_order ASC, id ASC 排序（process-chain.md §DTO） */
@@ -28,7 +28,7 @@ export interface ProcessChainStepDto {
   estimated_minutes: number;
   /** 单步备注；空串/null 视作 None */
   note?: string | null;
-  /** 乐观锁；GET 响应携带，PUT 不需 */
+  /** 乐观锁；GET 响应携带，POST 不需 */
   version?: number;
 }
 
