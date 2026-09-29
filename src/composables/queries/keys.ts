@@ -16,6 +16,7 @@
 // 与 TanStack Query 的 QueryKey = readonly unknown[] 契约对齐。
 
 import type { ListPartsParams } from '@/api/parts';
+import type { ListPendingBatchesParams } from '@/api/pendingBatches';
 import type { ProcessCategory } from '@/types/process';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
@@ -62,4 +63,13 @@ export const qk = {
    *  qc.invalidateQueries({ queryKey: qk.partFilesPrefix }) 失效整个 part-files
    *  域（任意 ownerId 形态都会命中）。 */
   partFilesPrefix: ['part-files'] as const,
+  /** 2026-09-29 新增：待下发批次列表键工厂 —— list / 单参数形态（沿 processesList 同形）。
+   *  Consumer：usePendingBatchesQuery（在 src/composables/queries/usePendingBatchesQuery.ts）。 */
+  pendingBatchesList: (params: ListPendingBatchesParams) =>
+    ['pending-batches', 'list', params] as const,
+  /** 2026-09-29 新增：pending-batches 域前缀 —— dispatch / bulk / auto 三类 mutation
+   *  完成后调 qc.invalidateQueries({ queryKey: qk.pendingBatchesPrefix }) 失效整个域
+   *  （任意 params 形态的 list 都会命中）。同时触发 processesPrefix + partsPrefix
+   *  跨域失效（usePendingDispatch.ts 集中编排）。 */
+  pendingBatchesPrefix: ['pending-batches'] as const,
 } as const;

@@ -357,3 +357,50 @@ export type AssemblyDetailFlatSchema = z.infer<typeof assemblyDetailFlatSchema>;
  * 走 parseAssemblyDetail 把数组塞进 z.object → ZodError。本 schema 锁死数组形态，
  * 让 mapper（api/assembly.ts::uploadAssemblyPdf）在 api 边界守门。 */
 export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);
+
+// ============================================================
+// 2026-09-29 新增：待下发批次 schema（生产队列「待下发」Tab 共享基础数据层）。
+//
+// 字段对齐 backend-rust `PendingBatchItem` VO（src/modules/prod/batch/vo/pending_batch.rs），
+// 17 字段全声明（缺字段 Zod 默认 strip 静默丢弃 = 守门失效 —— 沿 M-1 regression guard 同源原则）：
+  //   id (batch_id) / part_id / batch_no (string) / quantity / serial_no / name /
+  //   drawing_no / planned_delivery_date / system_delivery_date / customer_name /
+  //   parent_customer_name / applicant_name / is_urgent / note / version /
+  //   current_process_step_id / process_chain_id。
+//
+// batch_no 后端是 string（与 PoolBatchItemDto 的 number 区分），前端 UI 加 'B' 前缀；
+// 日期字段 nullable；note / customer_name / parent_customer_name / applicant_name /
+// serial_no 全部 nullable（与 HeldBatchItemDto 同形态）。
+// ============================================================
+
+export const pendingBatchItemSchema = z.object({
+  batch_id: z.string(),
+  part_id: z.string(),
+  batch_no: z.string(),
+  quantity: z.number(),
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string(),
+  planned_delivery_date: z.string().nullable(),
+  system_delivery_date: z.string().nullable(),
+  customer_name: z.string().nullable(),
+  parent_customer_name: z.string().nullable(),
+  applicant_name: z.string().nullable(),
+  is_urgent: z.boolean(),
+  note: z.string().nullable(),
+  version: z.number(),
+  current_process_step_id: z.string().nullable(),
+  process_chain_id: z.string().nullable(),
+});
+
+export type PendingBatchItemSchema = z.infer<typeof pendingBatchItemSchema>;
+
+/** 2026-09-29 新增：待下发批次列表分页结果（结构对齐 backend-rust PendingBatchListOut）。 */
+export const pendingBatchListResultSchema = z.object({
+  items: z.array(pendingBatchItemSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type PendingBatchListResultSchema = z.infer<typeof pendingBatchListResultSchema>;
