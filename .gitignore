@@ -14,3 +14,7 @@ dist
 # 生成到 public/，vite 直接从根路径 fetch。文件大（22M），不入 git。
 /public/occt-wasm.wasm
 /public/occt-wasm.js
+
+# 2026-09-29 vue-tsc 自动生成的组件类型声明（CI / 本地 build 均会重生成），
+# 不入 git，避免每次增删 EP 组件 + 跑 build 就在工作区/索引里留下 ~70 行的污染 diff。
+/src/components.d.ts
