@@ -12,6 +12,9 @@
 // 覆盖：
 //   - S1：partFileListResultSchema.parse 接受合法 payload（含 12 字段）。
 //   - S2：partFileSchema 拒绝缺 kind 的对象（strip regression guard）。
+//   - S5：partFileListResultSchema.parse 接受 backend-rust 真契约 shape（只 2 字段）。
+//   - S6：partFileListResultSchema.parse 接受带 limit/offset 的扩展 shape（向后兼容）。
+//   - S7：partFileListResultSchema.parse 缺 items → 抛 ZodError。
 //   - T1：usePartFilesListQuery(null) → enabled=false，listPartFilesByOwner 调用 0 次。
 //   - T2：usePartFilesListQuery('id1') → 切到 'id2' → 恰好 1 次 listPartFilesByOwner。
 //   - T3：usePartFilesListQuery('id1') → 调 refetch → 2 次（含首次 + refetch）。
@@ -38,14 +41,15 @@ vi.mock('element-plus', () => ({
   },
 }));
 
+// 2026-09-29 修复 review 第 1 轮 spec 自欺：原 mock 返回 4 字段（含 limit/offset）
+// 完全是 mock 与 schema 共谋的假阳性 —— 真实后端 PartFileListOut 只有 items + total。
+// 现改为真后端契约 2 字段 shape，让 schema 守门有现实意义（缺字段必抛）。
 const realListPartFilesByOwner = vi.fn<
   (partId: string, kind?: string) => Promise<{
     items: unknown[];
     total: number;
-    limit: number;
-    offset: number;
   }>
->(async () => ({ items: [], total: 0, limit: 500, offset: 0 }));
+>(async () => ({ items: [], total: 0 }));
 
 vi.mock('@/api/assembly', () => ({
   // 2026-09-29：listPartFilesByOwner 是 usePartFilesListQuery 的唯一外部依赖。
@@ -148,7 +152,11 @@ describe('partFileSchema / partFileListResultSchema（2026-09-29 新增）', () 
   });
 
   describe('partFileListResultSchema', () => {
-    it('S5：接受 { items, total, limit, offset } 分页结构', () => {
+    it('S5：接受 backend-rust PartFileListOut 真契约 2 字段（items + total）', () => {
+      // 2026-09-29 修复 review 第 1 轮 schema mismatch 的核心反向 guard。
+      // 后端 PartFileListOut 真契约（backend-rust src/modules/part_file/vo/part_file.rs:58-62）
+      // 只返 items + total 两个字段 —— 必须能用 2 字段 shape 通过 schema 校验，
+      // 否则就重现「线上 100% ZodError 崩溃」的 regression。
       const r = partFileListResultSchema.parse({
         items: [
           {
@@ -167,20 +175,43 @@ describe('partFileSchema / partFileListResultSchema（2026-09-29 新增）', () 
           },
         ],
         total: 1,
-        limit: 500,
-        offset: 0,
       });
       expect(r.items).toHaveLength(1);
       expect(r.total).toBe(1);
+      // optional 字段不应出现在 parse 结果里（Zod 默认 strip 模式）
+      expect(r.limit).toBeUndefined();
+      expect(r.offset).toBeUndefined();
     });
 
-    it('S6：缺 total → 抛 ZodError', () => {
+    it('S6：接受带 limit/offset 的扩展 shape（向后兼容）', () => {
+      // 即使后端后续追加分页字段，前端 schema 不应拒收（Zod 允许未知字段 strip）。
+      const r = partFileListResultSchema.parse({
+        items: [],
+        total: 0,
+        limit: 500,
+        offset: 0,
+      });
+      expect(r.items).toHaveLength(0);
+      expect(r.total).toBe(0);
+    });
+
+    it('S7：缺 total → 抛 ZodError', () => {
+      // 必填字段被去掉的 regression guard —— 若 schema 误把 total 标成 optional，
+      // 此用例会失败，必须立刻报警。
       expect(() =>
         partFileListResultSchema.parse({
           items: [],
           // total 缺
-          limit: 500,
-          offset: 0,
+        }),
+      ).toThrow();
+    });
+
+    it('S8：缺 items → 抛 ZodError', () => {
+      // 同 S7 —— items 是必填字段，缺了必须抛错。
+      expect(() =>
+        partFileListResultSchema.parse({
+          // items 缺
+          total: 0,
         }),
       ).toThrow();
     });
@@ -190,11 +221,10 @@ describe('partFileSchema / partFileListResultSchema（2026-09-29 新增）', () 
 describe('usePartFilesListQuery — 单调用 + reactive params + enabled 闸门（2026-09-29）', () => {
   beforeEach(() => {
     realListPartFilesByOwner.mockClear();
+    // 2026-09-29：mock 与真后端 2 字段契约对齐，不再注入 limit/offset。
     realListPartFilesByOwner.mockResolvedValue({
       items: [],
       total: 0,
-      limit: 500,
-      offset: 0,
     });
     testQueryClient = new QueryClient({
       defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },

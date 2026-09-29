@@ -181,13 +181,17 @@ export const partFileSchema = z.object({
 
 export type PartFileSchema = z.infer<typeof partFileSchema>;
 
-/** 2026-09-29 新增：part-file 列表分页结果（与 backend-rust PartFileListOut 对齐：
- *  items / total / limit / offset）。 */
+/** 2026-09-29 新增：part-file 列表分页结果。2026-09-29 修复 review 第 1 轮 schema
+ *  mismatch：后端 backend-rust `src/modules/part_file/vo/part_file.rs:58-62`
+ *  `PartFileListOut` 真契约只返回 `items` + `total` 2 字段，没有 limit/offset。
+ *  原 schema 强校验 limit/offset → 运行时 100% ZodError 崩溃。
+ *  现改为 optional —— 即使后端后续扩展 limit/offset 字段也不会破前端（向后兼容），
+ *  Zod 默认 strip 模式会静默丢弃多余字段，前端不消费也无所谓。 */
 export const partFileListResultSchema = z.object({
   items: z.array(partFileSchema),
   total: z.number(),
-  limit: z.number(),
-  offset: z.number(),
+  limit: z.number().optional(),
+  offset: z.number().optional(),
 });
 
 export type PartFileListResultSchema = z.infer<typeof partFileListResultSchema>;

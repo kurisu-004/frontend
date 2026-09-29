@@ -15,20 +15,19 @@
 //     null/空 → enabled=false + queryFn 二次守卫返回空结果，避免发 ?owner_id= 请求。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/vue-query';
+import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
 import { listPartFilesByOwner } from '@/api/assembly';
 import { partFileListResultSchema, type PartFileListResultSchema } from './schemas';
 import { qk } from './keys';
 
 /** 2026-09-29 新增：usePartFilesListQuery 空结果常量 —— queryFn 二次守卫用。
- *  与 schemas 中 items: [] / total: 0 / limit: 0 / offset: 0 同形，避免
- * listPartFilesByOwner 收到空 ownerId 时发 ?owner_id= 请求让后端 422。 */
+ *  与 backend-rust PartFileListOut 真契约对齐（items + total 必填，limit/offset
+ *  optional），避免 listPartFilesByOwner 收到空 ownerId 时发 ?owner_id= 请求让
+ *  后端 422。 */
 const EMPTY_RESULT: PartFileListResultSchema = {
   items: [],
   total: 0,
-  limit: 0,
-  offset: 0,
 };
 
 /**
@@ -89,7 +88,3 @@ export function invalidatePartFilesListQuery(
 export function invalidatePartFilesListAll(qc: QueryClient): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.partFilesPrefix }).then(() => undefined);
 }
-
-/** 2026-09-29 新增：re-export useQueryClient —— 让 caller 一行 import 拿 client。
- *  仅作为便利性 re-export，运行时同 @tanstack/vue-query 原 export。 */
-export { useQueryClient };
