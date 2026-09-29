@@ -375,7 +375,7 @@
       当前 part.assembly_id + 装配件详情加载状态都列出来，QA 一眼对照。
       生产构建 import.meta.env.DEV = false → 自动消失，无 CSS 体积代价。
     -->
-    <el-card v-if="import.meta.env.DEV" shadow="never" class="debug-card" style="margin-top: 12px">
+    <el-card v-if="isDev" shadow="never" class="debug-card" style="margin-top: 12px">
       <template #header>调试面板（仅 dev）</template>
       <div>端点：GET /api/v2/parts/{{ partId }}/assembly</div>
       <div>当前 part.assembly_id：{{ part?.assembly_id ?? 'null' }}</div>
@@ -418,6 +418,12 @@ import { usePartDetail } from './composables/usePartDetail';
 import type { PartEditForm } from './composables/usePartDetail';
 import { usePartCncGroups } from './composables/usePartCncGroups';
 import { useProcessChain } from './composables/useProcessChain';
+
+// 2026-09-29 修复：Vue SFC template expression 默认 sourceType=script，不接受
+// import.meta。dev 阶段定义 isDev 常量供模板 v-if 引用，避免
+// [plugin:vite:vue] Error parsing JavaScript expression: import.meta may appear
+// only with 'sourceType: "module"' (1:1) 报错。
+const isDev = import.meta.env.DEV;
 
 const route = useRoute();
 const partId = ref<string>(String(route.params.id ?? ''));
