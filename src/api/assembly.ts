@@ -4,9 +4,12 @@
 import { api, cleanParams } from '@/api/http';
 import {
   assemblyDetailFlatSchema,
+  assemblyFileRefSchemaArray,
+  assemblyOutSchema,
   type AssemblyChildOutSchema,
   type AssemblyDetailFlatSchema,
   type AssemblyFileRefSchema,
+  type AssemblyOutSchema,
 } from '@/composables/queries/schemas';
 import type {
   AssemblyCreatePayload,
@@ -33,7 +36,9 @@ import type { PartListItem } from '@/types/parts';
  *   - child_count 由 mapper 注入 = flat.children.length
  *   - customer_name / parent_customer_name / customer_path 暂置 null，
  *     由 useAssemblyDetail composable 在 fetchData 后用 useCustomersQuery 派生补全
- *   - unit_price / total_price nullable 用 '0' 兜底（与 PartListItem string 桥接一致）
+ *   - unit_price / total_price nullable 走 null 兜底（review 第 1 轮 m1/m5）：
+ *     旧实现用 '0' 伪装 number 与 PartListItem string 桥接的过渡形态；
+ *     实际语义「后端未落库」应该是 null，UI 端用 — 占位（el-descriptions 自动处理）。
  *
  * 守门走 Zod parse（assemblyDetailFlatSchema.strict）：后端意外把 assembly 改回嵌套键
  * 会立刻抛 ZodError，避免静默 fail。
@@ -41,33 +46,61 @@ import type { PartListItem } from '@/types/parts';
 export function parseAssemblyDetail(raw: unknown): AssemblyDetail {
   const flat: AssemblyDetailFlatSchema = assemblyDetailFlatSchema.parse(raw);
   return {
-    assembly: {
-      id: flat.id,
-      version: flat.version,
-      serial_no: flat.serial_no,
-      drawing_no: flat.drawing_no,
-      name: flat.name,
-      applicant_name: flat.applicant_name,
-      customer_id: flat.customer_id,
-      customer_name: null,
-      parent_customer_name: null,
-      customer_path: null,
-      request_date: flat.request_date,
-      planned_delivery_date: flat.planned_delivery_date,
-      is_urgent: flat.is_urgent,
-      status: flat.status,
-      child_count: flat.children.length,
-      quantity: flat.quantity,
-      unit_price: flat.unit_price ?? '0',
-      total_price: flat.total_price ?? '0',
-      order_no: flat.order_no,
-      system_delivery_date: flat.system_delivery_date,
-      note: flat.note,
-      created_at: flat.created_at,
-      updated_at: flat.updated_at,
-    },
+    assembly: parseAssemblyOutToItemCore(flat, flat.children.length),
     children: flat.children.map(childToAssemblyChildItem),
     files: flat.files.map(fileToDrawingFileItem),
+  };
+}
+
+/** 2026-09-29 review 第 1 轮 C1 修复：把后端 AssemblyOut 19 字段（write 接口响应 /
+ * list 接口 item）转成前端 AssemblyItem。
+ *
+ * 后端实际响应形态（已核对 backend-rust/src/modules/assembly/handler.rs:168, 211）：
+ *   - POST /api/v2/assemblies/{id}/update → R<AssemblyOut>
+ *   - POST /api/v2/assemblies/{id}/cancel → R<AssemblyOut>
+ *   - GET /api/v2/assemblies → AssemblyListItem（= AssemblyOut）
+ *
+ * 字段对齐：
+ *   - child_count 派生：write 接口不返 children → 用 caller 传的 count（list 调用传
+ *     children.length，update / cancel 调用传 0，由 composable 后续 mutate 校正）
+ *   - customer_name / parent_customer_name / customer_path 三字段后端不返，置 null，
+ *     由 useAssemblyDetail composable 在 fetchData / 写操作成功后用 useCustomersQuery
+ *     派生补全（enrichAssemblyCustomer）。
+ *   - unit_price / total_price nullable → Number() 或 null（不再 '0' 伪装）。
+ *
+ * 走 assemblyOutSchema.parse 守门：后端意外增删字段立刻抛 ZodError。
+ */
+export function parseAssemblyOutToItem(raw: unknown, childCount: number): AssemblyItem {
+  const flat: AssemblyOutSchema = assemblyOutSchema.parse(raw);
+  return parseAssemblyOutToItemCore(flat, childCount);
+}
+
+/** 内部 helper：AssemblyOut → AssemblyItem 字段映射；childCount 由 caller 决定。 */
+function parseAssemblyOutToItemCore(flat: AssemblyOutSchema, childCount: number): AssemblyItem {
+  return {
+    id: flat.id,
+    version: flat.version,
+    serial_no: flat.serial_no,
+    drawing_no: flat.drawing_no,
+    name: flat.name,
+    applicant_name: flat.applicant_name,
+    customer_id: flat.customer_id,
+    customer_name: null,
+    parent_customer_name: null,
+    customer_path: null,
+    request_date: flat.request_date,
+    planned_delivery_date: flat.planned_delivery_date,
+    is_urgent: flat.is_urgent,
+    status: flat.status,
+    child_count: childCount,
+    quantity: flat.quantity,
+    unit_price: flat.unit_price ? Number(flat.unit_price) : null,
+    total_price: flat.total_price ? Number(flat.total_price) : null,
+    order_no: flat.order_no,
+    system_delivery_date: flat.system_delivery_date,
+    note: flat.note,
+    created_at: flat.created_at,
+    updated_at: flat.updated_at,
   };
 }
 
@@ -172,12 +205,16 @@ export async function createAssemblyWithFile(
 /** 详情页上传总装 PDF：拆页 → 自动创建子件。
  *  2026-09-25 修正：v2 后端把 upload-pdf 合并到 `/files` 端点（multipart, field=file），
  *  不再走 `/upload-pdf`。
- *  2026-09-29 修复：响应走 parseAssemblyDetail mapper（详见 getAssembly 注释）。 */
-export async function uploadAssemblyPdf(id: string, file: File): Promise<AssemblyDetail> {
+ *  2026-09-29 review 第 1 轮 C2 修复：后端实际响应是 `R<Vec<AssemblyFileRef>>`
+ *  （handler.rs:244-302），不是 `R<AssemblyDetail>`。旧实现走 parseAssemblyDetail
+ *  把数组塞进 z.object → ZodError，上传功能全废。新实现返 AssemblyFileRef[]，
+ *  call 方（useAssemblyDetail.uploadPdfFn）调 fetchData() 重拉详情用，
+ *  files 列表是中间信号。 */
+export async function uploadAssemblyPdf(id: string, file: File): Promise<AssemblyFileRefSchema[]> {
   const form = new FormData();
   form.append('file', file);
   const resp = await api.post<unknown>(`/assemblies/${id}/files`, form);
-  return parseAssemblyDetail(resp.data);
+  return assemblyFileRefSchemaArray.parse(resp.data);
 }
 
 /** 详情页添加单个子件（无 PDF；如需 PDF 走 uploadPartFile）。
@@ -199,20 +236,24 @@ export async function softDeleteAssembly(id: string, version: number): Promise<v
 }
 
 /** 取消装配体（CLERK+）。级联取消所有非终态子件。
- *  2026-09-29 修复：响应走 parseAssemblyDetail mapper（详见 getAssembly 注释）。 */
-export async function cancelAssembly(id: string): Promise<AssemblyDetail> {
+ *  2026-09-29 review 第 1 轮 C1 修复：后端实际响应是 `R<AssemblyOut>`（19 字段平铺，
+ *  无 children/files），不是 `R<AssemblyDetail>`。旧实现走 parseAssemblyDetail
+ *  必抛 ZodError。返 AssemblyItem（= AssemblyOut），child_count 由 caller 提供。 */
+export async function cancelAssembly(id: string): Promise<AssemblyItem> {
   const resp = await api.post<unknown>(`/assemblies/${id}/cancel`);
-  return parseAssemblyDetail(resp.data);
+  // 取消操作保留子件列表（不在响应里），child_count 由 composable 用现有 detail.children.length。
+  return parseAssemblyOutToItem(resp.data, 0);
 }
 
 /** 编辑装配体元数据（MANAGER + CLERK；仅 PENDING 可编辑）。
- *  2026-09-29 修复：响应走 parseAssemblyDetail mapper（详见 getAssembly 注释）。 */
+ *  2026-09-29 review 第 1 轮 C1 修复：后端实际响应是 `R<AssemblyOut>`（19 字段平铺），
+ *  不是 `R<AssemblyDetail>`。返 AssemblyItem，child_count 由 caller 提供。 */
 export async function updateAssembly(
   id: string,
   payload: AssemblyUpdatePayload,
-): Promise<AssemblyDetail> {
+): Promise<AssemblyItem> {
   const resp = await api.post<unknown>(`/assemblies/${id}/update`, payload);
-  return parseAssemblyDetail(resp.data);
+  return parseAssemblyOutToItem(resp.data, 0);
 }
 
 // ---- 文件相关 ----

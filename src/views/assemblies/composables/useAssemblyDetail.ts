@@ -306,8 +306,11 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
    *  后端 `AssemblyUpdateRequest.version: i32` **无 `#[serde(default)]`**，缺字段时
    *  axum `Json` extractor 在 service 之前直接拒 → HTTP 422 `missing field version`。
    *  展示壳（AssemblyEditDialog）只管表单字段，version 属业务层关注点，故在此拼。
-   *  成功路径 `detail.value = updated` 整体替换 → 新 version 天然回写，
-   *  下一次打开对话框用新锚点。 */
+   *
+   * 2026-09-29 review 第 1 轮 C1 修复：后端 update 响应是 AssemblyOut（19 字段
+   * 平铺，无 children / files），不能整体替换 detail.value。改走就地 mutate：
+   * 把响应字段覆盖到 detail.value.assembly 对应字段，child_count 用现有
+   * detail.value.children.length，customer_* 走 enrichAssemblyCustomer 重算。 */
   async function updateAssemblyFn(
     payload: Omit<AssemblyUpdatePayload, 'version'>,
   ): Promise<boolean> {
@@ -321,9 +324,15 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
         ...payload,
         version: detail.value.assembly.version,
       });
-      // 2026-09-29 修复：mapper 注入的 customer_name 三字段为 null，写后重新 enrich。
-      enrichAssemblyCustomer(updated);
-      detail.value = updated;
+      // 就地 mutate：detail.value.assembly 替换字段 + children / files 沿用。
+      // child_count 用现有 children 数量（响应不带），customer_* 由 enrich 派生。
+      Object.assign(detail.value.assembly, updated, {
+        child_count: detail.value.children.length,
+        customer_name: null,
+        parent_customer_name: null,
+        customer_path: null,
+      });
+      enrichAssemblyCustomer(detail.value);
       ElMessage.success('已保存');
       return true;
     } catch (e) {
@@ -337,6 +346,8 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
   }
 
+  /** 2026-09-29 review 第 1 轮 C1 修复：cancel 响应同 update，AssemblyOut 平铺
+   *  不带 children / files。改为就地 mutate detail.value.assembly。 */
   async function cancelAssemblyFn(serialInput: string): Promise<boolean> {
     if (!detail.value) return false;
     const a = detail.value.assembly;
@@ -350,10 +361,14 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
     try {
       const updated = await cancelAssembly(a.id);
-      // 2026-09-29 修复：mapper 注入的 customer_name 三字段为 null，写后重新 enrich。
-      enrichAssemblyCustomer(updated);
+      Object.assign(detail.value.assembly, updated, {
+        child_count: detail.value.children.length,
+        customer_name: null,
+        parent_customer_name: null,
+        customer_path: null,
+      });
+      enrichAssemblyCustomer(detail.value);
       ElMessage.success('已取消装配件');
-      detail.value = updated;
       return true;
     } catch (e) {
       ElMessage.error((e as Error).message ?? '操作失败');
@@ -407,6 +422,10 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
   }
 
+  /** 2026-09-29 review 第 1 轮 C2 修复：后端 uploadAssemblyPdf 响应是
+   *  `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。响应只携带
+   *  新建的 AssemblyFileRef 列表，detail / children 走 fetchData() 重拉；
+   *  ElMessage 用返回的 files.length 报「自动创建 N 个子件」。 */
   async function uploadPdfFn(file: UploadFile): Promise<boolean> {
     if (!file.raw) return false;
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -415,11 +434,9 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
     if (!assemblyId.value) return false;
     try {
-      const updated = await uploadAssemblyPdf(assemblyId.value, file.raw);
-      // 2026-09-29 修复：mapper 注入的 customer_name 三字段为 null，写后重新 enrich。
-      enrichAssemblyCustomer(updated);
-      detail.value = updated;
-      ElMessage.success(`上传成功：自动创建 ${updated.children.length} 个子件`);
+      const created = await uploadAssemblyPdf(assemblyId.value, file.raw);
+      await fetchData();
+      ElMessage.success(`上传成功：自动创建 ${created.length} 个子件`);
       return true;
     } catch (e) {
       ElMessage.error((e as Error).message ?? '上传总装 PDF 失败');

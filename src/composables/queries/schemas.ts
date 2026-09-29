@@ -186,7 +186,7 @@ export type PartListResultSchema = z.infer<typeof partListResultSchema>;
 // 守门到位（M-1 同源问题：缺字段静默 strip = 校验形同虚设）。
 // ============================================================
 
-/** 装配件实体。字段对齐 backend-rust `AssemblyOut`
+/** 装配件实体。字段集对齐 backend-rust `AssemblyOut`
  * （backend-rust src/modules/assembly/vo/assembly.rs:17-39），19 字段。 */
 export const assemblyOutSchema = z.object({
   id: z.string(),
@@ -275,7 +275,7 @@ export type AssemblyFileRefSchema = z.infer<typeof assemblyFileRefSchema>;
  * 守门到位（M-1 regression guard 同形态）。 */
 export const assemblyDetailFlatSchema = z
   .object({
-    // —— AssemblyOut 19 字段（顺序对齐 vo/assembly.rs:17-39）——
+    // —— AssemblyOut 19 字段（字段集对齐 vo/assembly.rs:17-39）——
     id: z.string(),
     version: z.number(),
     serial_no: z.string().nullable(),
@@ -310,3 +310,11 @@ export const assemblyDetailFlatSchema = z
   .strict();
 
 export type AssemblyDetailFlatSchema = z.infer<typeof assemblyDetailFlatSchema>;
+
+/** 装配件文件出参数组（review 第 1 轮修复 C2）。
+ *
+ * 后端 uploadAssemblyPdf（POST /api/v2/assemblies/{id}/files）实际响应是
+ * `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。前端旧 bug
+ * 走 parseAssemblyDetail 把数组塞进 z.object → ZodError。本 schema 锁死数组形态，
+ * 让 mapper（api/assembly.ts::uploadAssemblyPdf）在 api 边界守门。 */
+export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);

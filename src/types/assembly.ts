@@ -80,14 +80,11 @@ export interface AssemblyItem {
   // —— 2026-07-24 新增：装配体自身价格 + 送货单字段 ——
   /** 装配体套数（默认 1） */
   quantity: number;
-  /** 装配体单价（Decimal 序列化为 number）。
-   *  2026-09-29 修复：detail 端点 `unit_price` 是 string（rust_decimal 序列化为 str），
-   *  mapper 用 `'0'` 兜底保持与列表端点同形态；全局 AssemblyItem.unit_price 改 string
-   *  属独立 cleanup，本 commit 沿用 number + mapper 兜底过渡。 */
-  unit_price: number | string;
-  /** 装配体总价 = quantity * unit_price（后端落库）。
-   *  2026-09-29 修复：同 unit_price 过渡。 */
-  total_price: number | string;
+  /** 装配体单价（后端写接口 AssemblyOut 返 Decimal string，mapper 用
+   *  Number()/null 兜底；null = 后端未落库，UI 用 — 占位）。 */
+  unit_price: number | null;
+  /** 装配体总价 = quantity * unit_price（后端落库；语义同 unit_price）。 */
+  total_price: number | null;
   /** 订单号（法拉/路达共用） */
   order_no: string | null;
   /** 订单方系统内部交期 */

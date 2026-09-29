@@ -182,15 +182,18 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
   // ============ 行内编辑（OCC version + 总价派生）============
 
   /** 2026-09-28：从 update 响应体里取回写库后的新 `version`。
-   *  part 分支响应 = `PartDetailOut`（`version` 顶层）；assembly 分支响应 =
-   *  `AssemblyDetail`（`version` 在 `.assembly` 下）。mutation 返回类型是
-   *  `unknown`（两条分支响应形态不同），故运行时探测；都不匹配时返回 null，
+   *  2026-09-29 review 第 1 轮 C3 修复：两条分支响应顶层都是 `version`，
+   *  - part 分支：`PartDetailOut`（顶层 `version`）
+   *  - assembly 分支：`AssemblyOut` 19 字段平铺（顶层 `version`，不再是
+   *    `AssemblyDetail.assembly.version`）。
+   *  不再做 `.assembly?.version` 探测 —— 旧探测掩盖了 C1 写接口响应不是
+   *  `AssemblyDetail` 的契约错配。mutation 返回类型仍是 `unknown`
+   *  （两条分支响应形态不可对齐），运行时探测；都不匹配时返回 null，
    *  调用方保持原 version 不动。 */
   function readResponseVersion(data: unknown): number | null {
     if (data == null || typeof data !== 'object') return null;
-    const d = data as { version?: unknown; assembly?: { version?: unknown } };
+    const d = data as { version?: unknown };
     if (typeof d.version === 'number') return d.version;
-    if (typeof d.assembly?.version === 'number') return d.assembly.version;
     return null;
   }
 
