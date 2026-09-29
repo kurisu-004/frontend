@@ -4,12 +4,12 @@
 // composable（kind 只决定 owner_part_id 下的 kind 槽位，不影响上传流程）。
 //
 // 流程（与 PartBatchPdfTab 的批量场景 A 几乎一致，但只针对单文件）：
-//   1. computeSha256(file) → 64-char hex
-//   2. grantStsTmpKey({ purpose, filename, content_sha256 }) 拿 STS 凭证 + tmp_key
-//      （python 端 POST /api/v1/files/sts-tmp-keys，2026-09-17 起替换原
-//       backend-rust POST /api/v2/part-files/upload-intents）
+//   1. computeSha256(file) → 64-char hex；parseFileExt(file.name) → ext
+//   2. grantStsTmpKey({ purpose, filename, content_sha256, ext }) 拿 STS 凭证 + tmp_key
+//      （rust 转发薄壳 POST /api/v2/files/sts-tmp-keys，2026-09-29 起
+//       content_sha256 必传完整 64 hex + 新增 ext 必填）
 //   3. 拼装 UploadIntentsOut（part-file 专用形状）喂给 useCosUpload 直传
-//   4. confirmPartFile(ownerPartId, { kind, tmp_key, sha, ... }) → PartFileItem
+//   4. confirmPartFile(ownerPartId, { kind, tmp_key, sha, ..., ext }) → PartFileItem
 //
 // 为什么独立 composable：PartBatchPdfTab 是批量场景 A，确认端点不同
 //（batchCreateParts 而非 confirmPartFile），不适合套同一条 onSubmit 路径。
@@ -27,6 +27,7 @@
 //   后再喂入。refetchIntents 同源调用，凭证过期时重签。
 import { ref, unref, type Ref } from 'vue';
 import { computeSha256 } from '@/utils/fileHash';
+import { parseFileExt } from '@/utils/fileExt';
 import { confirmPartFile } from '@/api/parts/file';
 import { grantStsTmpKey } from '@/api/files/sts';
 import { useCosUpload, type CosUploadItem } from '@/composables/useCosUpload';
@@ -143,8 +144,11 @@ export function usePartFileUpload(opts: UsePartFileUploadOptions): UsePartFileUp
       if (!curOwnerId) {
         throw new Error('usePartFileUpload: ownerPartId 为空，无法补传');
       }
-      // 步骤 1：流式 SHA-256（小写 64-char hex）
+      // 步骤 1：流式 SHA-256（小写 64-char hex）+ 解析 ext
       const sha = await computeSha256(file);
+      // 2026-09-29 新增：必传 ext（小写字母数字 1-7）；utils/fileExt.parseFileExt
+      // 解析失败会抛 Error('invalid ext')，由 upload() catch 转 lastError + 上抛。
+      const ext = parseFileExt(file.name);
 
       // 步骤 2：申请 STS + tmp_key（python 端单端口 1-key）。
       // client_ref 由 caller 用 crypto.randomUUID() 生成；useCosUpload.applyFreshIntents
@@ -157,19 +161,23 @@ export function usePartFileUpload(opts: UsePartFileUploadOptions): UsePartFileUp
        * 复用同一 client_ref 让 useCosUpload.applyFreshIntents 按 Map 找到对应 item。
        *
        * 这里必须嵌套在 upload() 闭包内，因为 refetchIntents 可能在 upload() 返回后
-       * 由 useCosUpload 异步触发——闭包持有 curKind / sha / file 让 refetch 能拿到
-       * 同一组参数（python 端按 (purpose, filename, content_sha256) 派生唯一 tmp_key，
-       * 参数漂移会导致重签后 tmp_key 变化，进而触发 useCosUpload.applyFreshIntents
-       * 的强制重传兜底）。
+       * 由 useCosUpload 异步触发——闭包持有 curKind / sha / ext / file 让 refetch 能
+       * 拿到同一组参数（python 端按 (purpose, filename, content_sha256, ext) 派生唯一
+       * tmp_key，参数漂移会导致重签后 tmp_key 变化，进而触发
+       * useCosUpload.applyFreshIntents 的强制重传兜底）。
+       *
+       * 2026-09-29：content_sha256 传完整 64 hex（不再 .slice(0, 16)）+ 新增
+       * ext 必传字段，与 backend-rust StsTmpKeysRequest 严格对齐。
        */
       const fetchIntents = async (): Promise<UploadIntentsOut> => {
         const sts = await grantStsTmpKey({
           purpose: PartFileKindToStsPurpose[curKind] ?? 'tmp',
           filename: file.name,
           content_type: file.type || 'application/octet-stream',
-          // python schema 约束 16-64 hex；前端算 SHA-256 截前 16 hex（与后端
-          // schema/sts.py StsTmpKeysRequest.content_sha256 字段定义对齐）。
-          content_sha256: sha.slice(0, 16),
+          // 2026-09-29：必传完整 64 hex（rust schema 约束），不再截前 16。
+          content_sha256: sha,
+          // 2026-09-29：必传 ext 字段（utils/fileExt.parseFileExt 解析结果）。
+          ext,
         });
         return wrapSingleIntents(sts, clientRef).intents;
       };
@@ -213,6 +221,7 @@ export function usePartFileUpload(opts: UsePartFileUploadOptions): UsePartFileUp
       }
 
       // 步骤 4：confirmPartFile（场景 B 专用端点，让后端 head + copy + 插表）
+      // 2026-09-29 新增 ext 必传字段，与 rust ConfirmFileIn 对齐。
       const confirmed = await confirmPartFile(curOwnerId, {
         kind: curKind as PartFileKind,
         tmp_key: item.tmp_key,
@@ -220,6 +229,7 @@ export function usePartFileUpload(opts: UsePartFileUploadOptions): UsePartFileUp
         original_filename: file.name,
         file_size: String(file.size),
         content_type: file.type || 'application/octet-stream',
+        ext,
       });
       return confirmed;
     } catch (e) {

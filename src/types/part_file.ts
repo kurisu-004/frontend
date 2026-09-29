@@ -156,7 +156,10 @@ export interface UploadIntentsOut {
   items: UploadIntentItemOut[];
 }
 
-/** `POST /api/v2/parts/{id}/files/confirm` 入参（场景 B）。 */
+/** `POST /api/v2/parts/{id}/files/confirm` 入参（场景 B）。
+ *  2026-09-29 新增：与 rust `ConfirmFileIn` 对齐，新增 `ext: string` 必填字段。
+ *  caller 用 utils/fileExt.parseFileExt 从 original_filename 解析；后端据此做
+ *  CAS path 派生 + 类型校验（与 grant 端口的 ext 共享同一白名单）。 */
 export interface ConfirmFileIn {
   kind: PartFileKind;
   tmp_key: string;
@@ -164,6 +167,8 @@ export interface ConfirmFileIn {
   original_filename: string;
   file_size: string;
   content_type: string;
+  /** 2026-09-29 必填：文件扩展名小写字母数字 1-7 字符（utils/fileExt.parseFileExt 解析）。 */
+  ext: string;
 }
 
 /** 批量建单 item 的文件绑定（场景 A）。

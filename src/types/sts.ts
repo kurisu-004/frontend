@@ -19,11 +19,17 @@
 // - 类型与 cos_upload.ts 的 `CosCredentials` 重名但字段多 1 个（start_time），
 //   不合并是避免对通用组件加领域字段。
 //
-// 字段约束（与 backend-python/schema/sts.py 严格对齐）：
+// 字段约束（与 backend-python/schema/sts.py / backend-rust handler 严格对齐）：
 // - purpose 是有限枚举，便于 policy 跟踪 / 日志分类；
 // - filename 必填且 1..255；
-// - content_sha256 可选（≥ 16 / ≤ 64 hex），前端算 SHA-256 截前 16 hex；
+// - content_sha256 **必填**，完整 64 hex（不再截前 16 hex）；
+// - ext **必填**，小写字母数字 1-7 字符（由 utils/fileExt.parseFileExt 解析）；
 // - expire_seconds 默认 1800、上限 43200（12 小时）。
+//
+// 2026-09-29 升级：rust handler 把 content_sha256 收紧为 required 64 hex + 新增
+// ext required 字段；前端必须在调 grantStsTmpKey* 之前算完整 SHA-256 + 解析 ext。
+// 本文件仅承载类型契约，caller 改造见 composables/usePartFileUpload.ts、
+// views/parts/new/composables/{usePartBatchManual,usePartBatchPdf}.ts。
 
 /** STS 用途枚举（python `Purpose` Literal 一一对应）。
  *  2026-09-17：与 backend-python/schema/sts.py:20-28 严格对齐，新增 / 删减 / 重命名
@@ -33,15 +39,22 @@ export type StsPurpose =
 
 /** `POST /api/v1/files/sts-tmp-keys` 请求 body。
  *  2026-09-17：purpose 是必填枚举；content_sha256 / content_type / expire_seconds
- *  均为可选（python schema 给 default）。 */
+ *  均为可选（python schema 给 default）。
+ *  2026-09-29：rust handler 收紧 → content_sha256 必填完整 64 hex（不再截前 16），
+ *  ext 必填（小写字母数字 1-7 字符）；content_type / expire_seconds 仍可选。 */
 export interface StsTmpKeysRequest {
   purpose: StsPurpose;
   filename: string;
   content_type?: string;
   /** 缺省 1800；范围 [60, 43200]。 */
   expire_seconds?: number;
-  /** 16-64 hex chars；前端算 SHA-256 截前 16 hex。 */
-  content_sha256?: string;
+  /** 2026-09-29 必填：完整 64-char 小写 hex（前端 computeSha256 直传，禁止截断）。
+   *  与 backend-rust StsTmpKeysRequest.content_sha256 严格对齐（required）。 */
+  content_sha256: string;
+  /** 2026-09-29 必填：文件扩展名小写字母数字 1-7 字符。
+   *  caller 用 utils/fileExt.parseFileExt 解析后传入；解析失败抛 Error。
+   *  与 backend-rust StsTmpKeysRequest.ext 严格对齐（required, lowercase, 1-7）。 */
+  ext: string;
 }
 
 /** python 端返回的 STS 凭证（StsCredentialsOut）。

@@ -1,10 +1,12 @@
 // src/api/files/__tests__/sts.spec.ts（2026-09-17 frontend-cos-sts-python，
-// 2026-09-28 切到 api：grantStsTmpKey caller 从 apiPrint 改走 api）
+// 2026-09-28 切到 api：grantStsTmpKey caller 从 apiPrint 改走 api，
+// 2026-09-29 升级：content_sha256 必填完整 64 hex + 新增 ext 必填）
 //
 // 验证 grantStsTmpKey caller：
 // - POST 走 api（baseURL /api/v2），路径 /files/sts-tmp-keys（由 rust 端转发
 //   薄壳鉴权后透传到 python）；
-// - 请求字段映射（purpose / filename / content_sha256 / content_type / expire_seconds）；
+// - 请求字段映射（purpose / filename / content_sha256 / ext / content_type /
+//   expire_seconds）；
 // - 响应字段映射（tmp_key / credentials / bucket / region / endpoint / scheme /
 //   expires_in / upload_prefix + credentials.start_time）；
 // - 端点路径不含 /v2 前缀（baseURL 已自带）；
@@ -71,6 +73,8 @@ describe('grantStsTmpKey', () => {
     await grantStsTmpKey({
       purpose: 'drawing',
       filename: 'a.pdf',
+      content_sha256: 'a'.repeat(64),
+      ext: 'pdf',
     });
 
     expect(postCalls).toHaveBeenCalledTimes(1);
@@ -79,15 +83,16 @@ describe('grantStsTmpKey', () => {
     expect(url).toBe('/files/sts-tmp-keys');
   });
 
-  // (b) 请求字段映射（含 content_sha256 / content_type / expire_seconds）
-  it('请求 body 字段映射严格对齐 python StsTmpKeysRequest', async () => {
+  // (b) 请求字段映射（含 content_sha256 / ext / content_type / expire_seconds）
+  it('请求 body 字段映射严格对齐 rust StsTmpKeysRequest', async () => {
     postCalls.mockResolvedValueOnce({ data: makeResponse() });
 
     const req: StsTmpKeysRequest = {
       purpose: '3d_model',
       filename: 'part.step',
       content_type: 'application/step',
-      content_sha256: 'a'.repeat(16),
+      content_sha256: 'a'.repeat(64),
+      ext: 'step',
       expire_seconds: 3600,
     };
     await grantStsTmpKey(req);
@@ -103,12 +108,13 @@ describe('grantStsTmpKey', () => {
     await grantStsTmpKey({
       purpose: 'drawing',
       filename: 'a.pdf',
+      content_sha256: 'a'.repeat(64),
+      ext: 'pdf',
     });
 
     const [, body] = postCalls.mock.calls[0]!;
     const bodyObj = body as Record<string, unknown>;
     expect(bodyObj.expire_seconds).toBeUndefined();
-    expect(bodyObj.content_sha256).toBeUndefined();
     expect(bodyObj.content_type).toBeUndefined();
   });
 
@@ -135,7 +141,8 @@ describe('grantStsTmpKey', () => {
     const out = await grantStsTmpKey({
       purpose: '3d_model',
       filename: 'b.stp',
-      content_sha256: 'b'.repeat(16),
+      content_sha256: 'b'.repeat(64),
+      ext: 'stp',
     });
 
     // 全部字段一一对照
@@ -166,7 +173,12 @@ describe('grantStsTmpKey', () => {
   ] as const)('purpose = %s 时正常发送', async (purpose) => {
     postCalls.mockResolvedValueOnce({ data: makeResponse() });
 
-    await grantStsTmpKey({ purpose, filename: `${purpose}.bin` });
+    await grantStsTmpKey({
+      purpose,
+      filename: `${purpose}.bin`,
+      content_sha256: 'a'.repeat(64),
+      ext: 'bin',
+    });
 
     const [, body] = postCalls.mock.calls[0]!;
     expect((body as { purpose: string }).purpose).toBe(purpose);

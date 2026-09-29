@@ -33,6 +33,7 @@ import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { CosUploadItem } from '@/composables/useCosUpload';
 import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
 import { grantStsTmpKeyFiles } from '@/api/files/sts';
+import { parseFileExt } from '@/utils/fileExt';
 // 2026-09-28 删 useUploadSession：mergeDraftWithSession 不再被本文件消费（仅在
 // 已被删除的 onMounted 块中调用）；usePartsNewDraft 仍被 draft composable 调用，
 // 其它类型（Serialized*Row / MergeResult）仍由 serialize* 函数消费。
@@ -1954,6 +1955,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
           }
         });
       }
+      // 步骤 2 末尾断言 + 类型收尾（review B.1）：所有 entry 必含 sha，
+      // 类型从 FileUploadEntry[] 收尾为 Required<FileUploadEntry>[]，
+      // 下游 grant / refetch 不再需要 `e.sha!` 非空断言。
+      if (!entries.every((e): e is Required<FileUploadEntry> => !!e.sha)) {
+        throw new Error('所有 entry 在步骤 2 后必须都有 sha');
+      }
 
       // 步骤 3 + 4 + 5：grantStsTmpKeyFiles 单批签名 + useCosUpload 直传
       // （2026-09-28 子任务 #5：替换原 backend-rust upload-session 共享 STS）
@@ -1977,6 +1984,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         entries.forEach((e) => {
           e.clientRef = crypto.randomUUID();
         });
+        // 2026-09-29：rust schema 收紧 content_sha256 为 required 64 hex + 新增
+        // ext 必填；本调用点已在上方步骤 2 算好 entry.sha，再按文件名解析 ext 后
+        // 一起喂 grantStsTmpKeyFiles（hash-wasm 流式 8MB 分块，已防 OOM）。
+        // 步骤 2 末尾断言已收尾 entries 类型为 Required<FileUploadEntry>[]，
+        // entry.sha 在下游是 string（非 string | undefined）。
         const grants = await grantStsTmpKeyFiles({
           scope: 'parts_new',
           files: entries.map((e) => ({
@@ -1984,6 +1996,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
             // 文件名在 entry.file.name 上（ensureFile() 包 File 后保留原 name）
             filename: e.file.name,
             content_type: e.contentType,
+            // 必传完整 64 hex SHA-256（步骤 2 已算好）
+            content_sha256: e.sha,
+            // 必传 ext：utils/fileExt.parseFileExt（小写字母数字 1-7 字符）
+            ext: parseFileExt(e.file.name),
           })),
         });
         if (grants.items.length !== entries.length) {
@@ -2042,12 +2058,18 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
          * useCosUpload.applyFreshIntents 内部会强制 reset pending 走重传。
          */
         const fetchIntents = async (): Promise<UploadIntentsOut> => {
+          // 2026-09-29：refetch 同样必传完整 64 hex SHA-256 + ext。
+          // 复用步骤 2 已算好的 entry.sha + parseFileExt（hash 已确定性，无需重算）。
+          // entries 类型已在步骤 2 末尾收尾为 Required<FileUploadEntry>[]，
+          // 此处 e.sha 是 string，无需非空断言。
           const fresh = await grantStsTmpKeyFiles({
             scope: 'parts_new',
             files: entries.map((e) => ({
               purpose: PartFileKindToStsPurpose[e.kind] ?? 'tmp',
               filename: e.file.name,
               content_type: e.contentType,
+              content_sha256: e.sha,
+              ext: parseFileExt(e.file.name),
             })),
           });
           const freshHead = fresh.items[0]!;
