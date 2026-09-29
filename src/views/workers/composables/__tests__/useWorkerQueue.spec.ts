@@ -26,9 +26,12 @@ import { ApiError } from '@/api/http';
 import type { HeldBatchItemDto, WorkerPoolDto, WorkerStateDto } from '@/api/workerPool.contract';
 
 // stub processes
+// 2026-09-29 任务规约：loadBoard 仅保留 INHOUSE 工序，OUTSOURCE 不进 Tab / worker / pool。
+// STUB_PROCESSES 含 1 OUTSOURCE + 2 INHOUSE，断言 OUTSOURCE 工序完全被过滤。
 const STUB_PROCESSES = [
-  { id: '2000000000001', code: 'CNC-01', name: '粗加工' },
-  { id: '2000000000002', code: 'QC-01', name: '质检' },
+  { id: '2000000000001', code: 'CNC-01', name: '粗加工', category: 'INHOUSE' as const },
+  { id: '2000000000002', code: 'QC-01', name: '质检', category: 'INHOUSE' as const },
+  { id: '2000000000003', code: 'OUT-01', name: '外协车加工', category: 'OUTSOURCE' as const },
 ];
 
 // 2026-09-14 follow-up round-2：held_batches 元素升级为 HeldBatchItemDto 全字段。
@@ -212,6 +215,11 @@ vi.mock('@/api/workerPool', () => ({
   getWorkerPoolByProcess: vi.fn(async (processId: string) => {
     if (processId === '2000000000001') return STUB_POOL_2000000000001;
     if (processId === '2000000000002') return STUB_POOL_2000000000002;
+    // 2026-09-29：OUTSOURCE 工序不应被请求（loadBoard 已 filter INHOUSE），
+    // 若被调起说明过滤失败，此 throw 会让测试立刻报警。
+    if (processId === '2000000000003') {
+      throw new Error('OUTSOURCE process should not be requested');
+    }
     throw new Error('unknown process');
   }),
   getWorkerState: vi.fn(async (params: { worker_id: string }) => {
@@ -483,5 +491,31 @@ describe('useWorkerQueue', () => {
       shelf_id: '5000000000001',
       next_process_id: '2000000000002',
     });
+  });
+
+  // 2026-09-29 任务规约 #2：loadBoard 仅保留 INHOUSE 工序 —— OUTSOURCE 不进 Tab /
+  // worker / pool。STUB_PROCESSES 含 1 OUTSOURCE (2000000000003) + 2 INHOUSE，
+  // 断言：processPools.length === 2、workers.process_ids 不含 OUTSOURCE、mock 抛
+  // 错路径不会被触发。
+  it('loadBoard 仅保留 INHOUSE 工序（2026-09-29 仅自产任务规约 #2）', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    const { getWorkerPoolByProcess } = await import('@/api/workerPool');
+    const q = useWorkerQueue();
+    await q.loadBoard('5000000000001');
+
+    // 仅 2 个 INHOUSE 工序进 processPools
+    expect(q.processPools.value).toHaveLength(2);
+    const poolIds = q.processPools.value.map((p) => p.process_id);
+    expect(poolIds.sort()).toEqual(['2000000000001', '2000000000002']);
+    expect(poolIds).not.toContain('2000000000003');
+
+    // OUTSOURCE ID 从未被请求（mock 接到会 throw，throw 即测试失败 —— 双重保险）
+    const calledWith = vi.mocked(getWorkerPoolByProcess).mock.calls.map((c) => c[0]);
+    expect(calledWith).not.toContain('2000000000003');
+
+    // 工人 process_ids 全部不含 OUTSOURCE
+    for (const w of q.workers.value) {
+      expect(w.process_ids).not.toContain('2000000000003');
+    }
   });
 });

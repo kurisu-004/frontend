@@ -43,3 +43,19 @@ export function consumeWorkerSource(batchId: string): string | undefined {
   sources.delete(`w:${batchId}`);
   return v;
 }
+
+/** 2026-09-29 新增：记录「待下发」批次拖出源（PendingBatchesPanel 接收端使用）。
+ *  与 recordWorkerSource 同 Map 复用；用 'b:' 前缀隔离（与 'w:' / 裸 batchId 三类条目互不冲突）。
+ *  本期 PendingBatchesPanel 暂不接入 vue-draggable-plus（卡片 → 工序 pool 拖拽延后 PR），
+ *  本函数 / consumeBatchSource 先以 API 形态就位 —— 后续 PR 直接复用。 */
+export function recordBatchSource(batchId: string): void {
+  sources.set(`b:${batchId}`, 'pending');
+}
+
+/** 2026-09-29 新增：消费「待下发」批次拖入目标（PendingPoolsPanel 在 @drop 时调用）。
+ *  返回值保留扩展位（目前固定 'pending'，未来可能携带 sourcePanelId）。 */
+export function consumeBatchSource(batchId: string): string | undefined {
+  const v = sources.get(`b:${batchId}`);
+  sources.delete(`b:${batchId}`);
+  return v;
+}

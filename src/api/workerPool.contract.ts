@@ -256,6 +256,61 @@ export interface AutoAllocateRequest {
   fill_ratio: number;
 }
 
+/** 2026-09-29 新增：待下发批次项（rust PendingBatchItem，与 backend-rust
+ *  `prod/batches` 端点 VO 对齐）。PendingBatchItemDto 17 字段：batch_id / part_id /
+ *  batch_no（string，前端展示统一加 'B' 前缀）/ quantity / serial_no / name /
+ *  drawing_no / planned_delivery_date / system_delivery_date / customer_name /
+ *  parent_customer_name / applicant_name / is_urgent / note / version /
+ *  current_process_step_id / process_chain_id。
+ *
+ * 字段语义：
+ *  - batch_no：string 后端（与 PoolBatchItemDto 的 number 区分 —— 待下发是 string 形态，
+ *    按任务规约；前端 UI 加 'B' 前缀即可，WorkOrderCard.batch_no 习惯）。
+ *  - current_process_step_id：当前所在工艺链步骤 ID；nullable —— 未下发过程工艺链的
+ *    batch 没有 step。
+ *  - process_chain_id：所属工艺链 ID；nullable —— 同上。
+ *  - parent_customer_name：L1 客户名（一级集团），与 HeldBatchItemDto / PoolBatchItemDto 同源。
+ *  - note：t_part.note，可能含业务备注（如「加急」）。
+ *  - version：OCC 乐观锁 i32，每次写操作 +1。
+ *
+ * 数据流：本 DTO 是「每个零件一行」的扁平形态（不嵌套 part），与 HeldBatchItemDto 同源
+ * 但字段更全（含 planned_delivery_date / system_delivery_date 必有）；前端 PendingBatchesPanel
+ * 直接消费。 */
+export interface PendingBatchItemDto {
+  /** t_part_batch.id，雪花 ID */
+  batch_id: string;
+  /** t_part.id，雪花 ID */
+  part_id: string;
+  /** t_part_batch.batch_no，字符串形态（后端 VO 与 PoolBatchItemDto number 区分） */
+  batch_no: string;
+  quantity: number;
+  /** t_part.serial_no */
+  serial_no: string | null;
+  /** t_part.name（零件 / 工单名称） */
+  name: string;
+  /** t_part.drawing_no */
+  drawing_no: string;
+  /** t_part.planned_delivery_date（计划交付日，nullable） */
+  planned_delivery_date: string | null;
+  /** t_part.system_delivery_date（系统推算交付日，nullable） */
+  system_delivery_date: string | null;
+  /** L2 客户名（叶子，t_customer L2.name） */
+  customer_name: string | null;
+  /** L1 客户名（一级集团，t_customer L1.name） */
+  parent_customer_name: string | null;
+  /** t_applicant.name */
+  applicant_name: string | null;
+  is_urgent: boolean;
+  /** t_part.note */
+  note: string | null;
+  /** OCC 乐观锁 version */
+  version: number;
+  /** 当前所在工艺链步骤 ID（nullable） */
+  current_process_step_id: string | null;
+  /** 所属工艺链 ID（nullable） */
+  process_chain_id: string | null;
+}
+
 /** `POST /api/v2/admin/worker-pool/auto-allocate` 出参（rust AutoAllocateResult）。 */
 export interface AutoAllocateResultDto {
   process_id: string;

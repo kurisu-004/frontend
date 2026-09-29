@@ -169,9 +169,14 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
     loading.value = true;
     error.value = null;
     try {
-      // 1) 拉所有 process（v2 端点 /api/v2/prod/processes）
+      // 1) 拉所有 process（v2 端点 /api/v2/prod/processes），仅保留自产工序
+      //    （category === 'INHOUSE'）。2026-09-29 任务规约 #2：外协工序不进 Tab /
+      //    不进 worker 列、不进 pool；PendingPoolsPanel 也只展示自产工序卡。
+      //    listProcesses 返回 Process[] 含 category 字段（@/api/processChain 已
+      //    剥 envelope），可直接 filter。
       const procList = await listProcesses({});
-      const processIds: string[] = procList.map((p) => p.id);
+      const inhouseProcs = procList.filter((p) => p.category === 'INHOUSE');
+      const processIds: string[] = inhouseProcs.map((p) => p.id);
 
       // 2) 并发拉各 process 的 pool detail
       const poolResults = await Promise.allSettled(
