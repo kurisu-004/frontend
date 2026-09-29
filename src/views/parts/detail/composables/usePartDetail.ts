@@ -253,6 +253,20 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
 
   const assemblyDetail = ref<AssemblyDetail | null>(null);
   const assemblyLoading = ref(false);
+  /**
+   * 2026-09-29 修复：补 JSDoc 防止「PartDetail 误调 /assemblies/{id}」的误判。
+   *
+   * PartDetail **不**调 `GET /api/v2/assemblies/{part_id}`，而是调
+   * `GET /api/v2/parts/{part_id}/assembly`（`getAssemblyForPart`）。后者由后端
+   * part service 内部按 `part.assembly_id` 间接调 assembly service。
+   *
+   * Network 面板若在 PartDetail 上看到 `/assemblies/{asm_id}` 形式的请求 = 真 bug，
+   * 需立即排查。
+   *
+   * 错误 message 里的数字是 `part.assembly_id` 列值（part 的 indirection），
+   * 不是 URL path 里的 part_id —— 后端按 `assembly_id` 找装配件失败时报
+   * BIZ_ASSEMBLY_NOT_FOUND `assembly {asm_id} 不存在`。
+   */
   async function fetchAssembly(): Promise<void> {
     if (!part.value || part.value.assembly_id == null) {
       assemblyDetail.value = null;
@@ -270,7 +284,13 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
       assemblyDetail.value = fetched;
     } catch (e) {
       assemblyDetail.value = null;
-      ElMessage.error((e as Error).message ?? '加载装配件信息失败');
+      // 2026-09-29 修复：错误信息加端点路径前缀，避免与
+      // `GET /api/v2/assemblies/{asm_id}`（不是这条！）混淆。
+      // 用户报告 [20301] message 里的 id 与 URL path id 不同时，本前缀让
+      // 排查者一眼看出「请求端点是 /parts/{id}/assembly 不是 /assemblies/{id}」。
+      ElMessage.error(
+        `所属装配件加载失败（端点 /api/v2/parts/${part.value.id}/assembly）：${(e as Error).message ?? '未知错误'}`,
+      );
     } finally {
       assemblyLoading.value = false;
     }

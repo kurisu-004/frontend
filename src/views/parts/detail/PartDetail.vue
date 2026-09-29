@@ -367,6 +367,20 @@
         >
       </template>
     </el-dialog>
+
+    <!--
+      2026-09-29 修复：dev-only 调试面板（仅 import.meta.env.DEV 时渲染）。
+      用户报告「PartDetail 详情页有 /assemblies/{part_id} 可疑请求」，实际
+      URL 是 /parts/{part_id}/assembly（视觉混淆），调试面板把端点路径 +
+      当前 part.assembly_id + 装配件详情加载状态都列出来，QA 一眼对照。
+      生产构建 import.meta.env.DEV = false → 自动消失，无 CSS 体积代价。
+    -->
+    <el-card v-if="import.meta.env.DEV" shadow="never" class="debug-card" style="margin-top: 12px">
+      <template #header>调试面板（仅 dev）</template>
+      <div>端点：GET /api/v2/parts/{{ partId }}/assembly</div>
+      <div>当前 part.assembly_id：{{ part?.assembly_id ?? 'null' }}</div>
+      <div>装配件详情：{{ assemblyDetail ? '已加载' : '未加载' }}</div>
+    </el-card>
   </div>
 </template>
 
