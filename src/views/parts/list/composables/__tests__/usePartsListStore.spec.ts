@@ -302,4 +302,145 @@ describe('usePartsListStore', () => {
     expect(store2.batch.batchMode).toBe(false);
     expect(store2.batch.selectedIds.size).toBe(0);
   });
+
+  // ============ 2026-09-28 行类型合并：buildParams 契约 + Zod parse 守门 ============
+  //
+  // 背景：后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts
+  // 接受 `row_type` 与 `include_assemblies` 两参数，三模式合并返回 PartListItem[]，
+  // total = parts_count + assemblies_count，不再携带 matched_children。前端 dropdown
+  // (PartsList.vue:33-49) 切换 rowType 即生效，本组用例验证：
+  //   - buildParams 在 ALL / PART / ASSEMBLY 三态下都正确发出两个新参数；
+  //   - partSchema 能解析带 row_type='ASSEMBLY' 的装配件行（has_children / child_count
+  //     等装配件专属字段合法；part 专属字段可空）；
+  //   - partSchema 在缺失 row_type 时回退默认 'PART'（兼容 pending-programming 等
+  //     旧端点）。
+
+  // 复用 spec 顶部 vi.mock('@/api/parts') 的 listParts 实例；通过 import 拿到 mock。
+  // mock listParts 不会真实走 axios（api/parts/crud.ts listParts 内部的
+  // api.get → axios 才是真实网络出口），所以抓到的 mock.calls 是 buildParams 原始输出。
+  // 注意：mock 不走 cleanParams，所以 row_type=undefined 会在 mock.calls 里看到；
+  // 真实链路 axios 会 strip 它（最终 URL 不含 row_type）。
+
+  it('buildParams emits row_type=undefined + include_assemblies=true when rowType="ALL"', async () => {
+    const { listParts } = await import('@/api/parts');
+    const listPartsMock = listParts as unknown as {
+      mock: { calls: unknown[][] };
+      mockClear: () => void;
+    };
+    listPartsMock.mockClear();
+
+    const store = usePartsListStore();
+    // 默认态 search.rowType === 'ALL'（initialPartsSearch）
+    expect(store.query.search.rowType).toBe('ALL');
+
+    await store.query.fetchList();
+
+    expect(listPartsMock.mock.calls).toHaveLength(1);
+    const params = listPartsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    // buildParams 在 ALL 时把 row_type 显式置 undefined（cleanParams 后会被 strip，
+    // 表示「后端默认 ALL 行为：合并装配件」）。
+    expect(params.row_type).toBeUndefined();
+    expect(params.include_assemblies).toBe(true);
+  });
+
+  it('buildParams sets row_type when rowType="PART" / "ASSEMBLY"', async () => {
+    const { listParts } = await import('@/api/parts');
+    const listPartsMock = listParts as unknown as {
+      mock: { calls: unknown[][] };
+      mockClear: () => void;
+    };
+    listPartsMock.mockClear();
+
+    const store = usePartsListStore();
+
+    // PART
+    store.query.search.rowType = 'PART';
+    await store.query.fetchList();
+    let params = listPartsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(params.row_type).toBe('PART');
+    expect(params.include_assemblies).toBe(true);
+
+    // ASSEMBLY
+    listPartsMock.mockClear();
+    store.query.search.rowType = 'ASSEMBLY';
+    await store.query.fetchList();
+    params = listPartsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(params.row_type).toBe('ASSEMBLY');
+    expect(params.include_assemblies).toBe(true);
+  });
+
+  it('partSchema.parse accepts assembly row (row_type="ASSEMBLY", part-specific fields null)', async () => {
+    // 装配件行：row_type=ASSEMBLY + has_children=true + child_count=3；part 专属字段
+    // （location / holder_name / process_chain_id 等）全部 null —— 后端 modules/part/service/
+    // crud.rs::list_parts 真正合并后，assembly 行就是这种稀疏形态（见 backend-rust
+    // docs/api/parts.md）。
+    const { partSchema } = await import('@/composables/queries/schemas');
+    const row = {
+      id: '190000000000099',
+      version: 1,
+      serial_no: null,
+      name: '装配件甲',
+      drawing_no: 'ASM-DWG-001',
+      applicant_name: null,
+      quantity: 1,
+      unit_price: '0',
+      total_price: '0',
+      request_date: '2026-09-01',
+      planned_delivery_date: '2026-09-30',
+      is_urgent: false,
+      status: 'PENDING',
+      order_no: null,
+      system_delivery_date: null,
+      note: null,
+      customer_name: null,
+      l1_customer_name: null,
+      location: null,
+      holder_name: null,
+      process_chain_id: null,
+      row_type: 'ASSEMBLY',
+      has_children: true,
+      child_count: 3,
+      created_at: '2026-09-28 10:00:00',
+    };
+    const parsed = partSchema.parse(row);
+    expect(parsed.row_type).toBe('ASSEMBLY');
+    expect(parsed.has_children).toBe(true);
+    expect(parsed.child_count).toBe(3);
+    // part 专属字段保持 null（schema 已声明为 nullable）
+    expect(parsed.location).toBeNull();
+    expect(parsed.holder_name).toBeNull();
+    expect(parsed.process_chain_id).toBeNull();
+  });
+
+  it('partSchema.parse defaults row_type="PART" when field missing (legacy /parts/pending-programming shape)', async () => {
+    // 兼容 2026-09-28 之前 GET /parts/pending-programming 等不返 row_type 的旧端点。
+    // 后端真正合并后，list_parts 始终返 row_type='PART' | 'ASSEMBLY'；但 pending-programming
+    // 等保留端点不返。schema 用 .default('PART') 兜底。
+    const { partSchema } = await import('@/composables/queries/schemas');
+    // 注意：故意不传 row_type；location 等 nullable 字段以 null 显式声明（zod
+    // 默认 strip 模式 + nullable 字段必须显式带 key，参见 schemas.spec.ts S14）。
+    const parsed = partSchema.parse({
+      id: '190000000000100',
+      version: 1,
+      serial_no: 'SN-X',
+      name: 'X',
+      drawing_no: 'D-X',
+      applicant_name: null,
+      quantity: 1,
+      unit_price: '0',
+      total_price: '0',
+      request_date: '2026-09-01',
+      planned_delivery_date: '2026-09-30',
+      is_urgent: false,
+      status: 'PENDING',
+      order_no: null,
+      system_delivery_date: null,
+      note: null,
+      customer_name: null,
+      l1_customer_name: null,
+      location: null,
+      // row_type: 故意缺
+    });
+    expect(parsed.row_type).toBe('PART');
+  });
 });

@@ -137,7 +137,8 @@ export const partSchema = z.object({
   batch_id: z.string().nullable().optional(),
   batch_no: z.number().nullable().optional(),
   batch_quantity: z.number().nullable().optional(),
-  row_type: z.enum(['PART', 'ASSEMBLY']).optional(),
+  // 2026-09-28 修复：兼容 /parts/pending-programming 等不返 row_type 的端点（后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts 始终返 'PART' | 'ASSEMBLY'；但 pending-programming / 工艺制定等旧端点仍可能缺该字段）
+  row_type: z.enum(['PART', 'ASSEMBLY']).default('PART'),
   has_children: z.boolean().optional(),
   child_count: z.number().nullable().optional(),
   created_at: z.string().nullable().optional(),

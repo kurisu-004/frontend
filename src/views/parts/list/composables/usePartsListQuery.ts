@@ -265,11 +265,16 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
           : undefined,
       // 2026-09-27 前后端字段对齐：移除 next_process_ids 查询参数 —— 列表响应不再
       // 返 next_process_id，原生列筛选已删除。
+      // 2026-09-28 行类型合并：search.rowType = 'ALL' → row_type undefined（后端默认行为：合并装配件）；
+      // 'PART' / 'ASSEMBLY' → row_type 显式发。后端 modules/part/service/crud.rs::list_parts 接受。
       row_type: search.rowType !== 'ALL' ? search.rowType : undefined,
       sort_by: sortBy.value,
       sort_dir: sortDir.value,
       limit: pageSize.value,
       offset: (page.value - 1) * pageSize.value,
+      // 2026-09-28 后端真正合并：GET /parts 接受 row_type 与 include_assemblies，
+      //（见 backend-rust modules/part/service/crud.rs::list_parts）。前端 dropdown 切换立刻走新行为；
+      // 此前一直忽略此参数（前端默认 true 拼好发出，后端忽略）。
       include_assemblies: true,
     };
   }

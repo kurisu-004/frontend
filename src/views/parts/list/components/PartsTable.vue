@@ -236,6 +236,8 @@ function rowKey(row: PartListItem): string {
 // 2026-07-30：懒加载装配件子件
 // 2026-08-05 C2：优先消费 row.matched_children（位置类筛选激活时后端已带出
 // 命中子件全集），避免每次展开都触发 /assemblies/{id} 详情查询。
+// 2026-09-28 保留作为旧快照兼容兜底；新数据永远走 getAssembly(row.id) —— 后端
+// modules/part/service/crud.rs::list_parts 合并响应不再携带 matched_children 字段。
 async function loadChildren(
   row: PartListItem,
   _treeNode: unknown,
