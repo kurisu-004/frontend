@@ -2,10 +2,15 @@
   <div ref="containerRef" class="tags-view-container">
     <!-- 2026-09-28 新增：vue-element-admin 风格的 tagsView tab 栏。
          横排 flex + CSS-only 横向滚动（隐藏滚动条）。
-         每个 tab 用 el-dropdown trigger="contextmenu" 包裹，触发 4 项右键菜单。 -->
+         每个 tab 用 el-dropdown trigger="contextmenu" 包裹，触发 4 项右键菜单。
+         2026-09-29：el-dropdown 加 class="tag-dropdown [affix]"——el-dropdown 根
+         div（EP 2.14.6 默认根即包裹 trigger 插槽的 div）才是容器的直接子元素，
+         Sortable 只对直接子元素排序。原 draggable:'.tag-item' 让 .tag-item 与
+         .el-dropdown 嵌套，previousElementSibling 算索引全为 0、拖动失效。 -->
     <el-dropdown
       v-for="view in visitedViews"
       :key="view.path"
+      :class="['tag-dropdown', { affix: view.affix === true }]"
       trigger="contextmenu"
       @command="(cmd: MenuCmd) => onContextMenuCmd(cmd, view)"
     >
@@ -63,6 +68,7 @@ import { useRoute, useRouter, type RouteLocationNormalizedLoaded } from 'vue-rou
 import { Close, Refresh, CloseBold, FolderDelete } from '@element-plus/icons-vue';
 import { tryOnScopeDispose } from '@vueuse/core';
 import { useDraggable } from 'vue-draggable-plus';
+import type { MoveEvent } from 'sortablejs';
 // 2026-09-28 新增：tagsView 全局 store。消费侧不解构：tags.xxx 直访响应式。
 import { useTagsViewStore } from '@/stores/tagsView';
 import type { TagView } from '@/stores/tagsView';
@@ -73,21 +79,46 @@ const route = useRoute();
 const router = useRouter();
 const tags = useTagsViewStore();
 
-const visitedViews = computed<TagView[]>(() => tags.visitedViews);
+const visitedViews = computed<TagView[]>({
+  get: () => tags.visitedViews,
+  // 2026-09-29 修复拖动失效：vue-draggable-plus 的 onUpdate 对 ref 型 list 走
+  // `r.value = St([...U(r)], _, x)`（dist/vue-draggable-plus.js:1426-1433）——
+  // 整体赋一个新数组。若不带 setter 则 computed 只读，赋值被 Vue 静默吞掉，
+  // DOM 回退后拖动视觉回弹。Pinia setup store proxy 写穿到内部 ref，persist 插件
+  // 自动落盘 localStorage。
+  set: (next) => {
+    tags.visitedViews = next;
+  },
+});
 
 const containerRef = vueRef<HTMLElement | null>(null);
 
 // 2026-09-29 新增：拖动排序。基于 vue-draggable-plus（package.json:33 已依赖 ^0.6.1）。
-// visitedViews 是 Pinia 响应式数组，v-dp 原地 splice 后 Pinia 自动触发依赖更新 +
+// visitedViews 是 Pinia 响应式数组，v-dp 整体赋值后 Pinia 自动触发依赖更新 +
 // persistedstate 写盘，无需 nextTick + 手动调 reorderViews（该 action 仅为外部代码预留）。
 useDraggable(containerRef, visitedViews, {
   direction: 'horizontal',
   animation: 150,
-  // 只排序带 .tag-item 的子元素；el-dropdown 包裹层被忽略。
-  draggable: '.tag-item',
-  // affix 钉死，不可拖；preventOnFilter=false 保留右键 / 单击穿透。
+  // 2026-09-29 修复：容器直接子元素是 .el-dropdown（EP 2.14.6 el-dropdown 根 div
+  // 包裹 trigger 插槽），不是 .tag-item。Sortable 只对直接子元素排序
+  // （previousElementSibling 算索引）—— .tag-item 在 .el-dropdown 内无兄弟 → 索引
+  // 全 0、拖动全失效。改选 .tag-dropdown（详见模板 el-dropdown :class）。
+  draggable: '.tag-dropdown',
+  // 2026-09-29 保留：affix 钉死。Sortable filter 用 closest 上行匹配事件起点，
+  // 即使内层 .tag-item.affix 命中也走 drag cancelled；单击 / 右键穿透
+  // （preventOnFilter: false）保持原交互。
   filter: '.affix',
   preventOnFilter: false,
+  // 2026-09-29 新增：阻止非 affix tab 拖到 affix 之前。affix 始终位于 visitedViews
+  // 位置 0（store addView 内 unshift）；Sortable 整体赋值 onUpdate 后 affix 可能
+  // 被非 affix 元素挤出。evt.willInsertAfter=true 意为插入到 related 之后（合法），
+  // =false 意为插到 related 之前（非法，挡）。related 比对 (Select) 实际是
+  // wrapper .tag-dropdown，affix 时 .tag-dropdown.affix 类已挂在 wrapper 上。
+  onMove: (evt: MoveEvent): boolean => {
+    const related = evt.related as HTMLElement;
+    if (related.classList?.contains('affix') && !evt.willInsertAfter) return false;
+    return true;
+  },
   // 触摸设备上避免单击被误判为拖动起点
   delayOnTouchOnly: true,
 });
@@ -253,14 +284,19 @@ tryOnScopeDispose(() => {
 <style lang="scss" scoped>
 /* 2026-09-29 重构：Chrome 风格标签条。40px 高容器 + 32px tab 顶部圆角 + 激活态
    坐在容器底边之上 + 关闭按钮 hover 才显 + affix 钉死 40px。z-index: 5 防被 main
-   内容穿透。 */
+   内容穿透。
+
+   2026-09-29 嵌入 header-middle 后改：
+   - 去 border-bottom（MainLayout .header 已提供，避免重复线导致 2px）
+   - width: 100% → flex: 1 1 0; min-width: 0（作为 header-middle 的 flex item
+     撑满剩余宽度） */
 .tags-view-container {
   position: relative;
   z-index: 5;
   height: 40px;
-  width: 100%;
+  flex: 1 1 0;
+  min-width: 0;
   background-color: var(--header-bg);
-  border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: flex-end;   /* tab 贴着底边，「坐在」容器底部边框之上 */
   padding: 0 8px;

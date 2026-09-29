@@ -18,8 +18,42 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
+import type { Ref } from 'vue';
 import { useTagsViewStore } from '@/stores/tagsView';
 import TagsViewComponent from '@/layouts/components/TagsView.vue';
+
+// ===== 顶层 mock：vue-draggable-plus =====
+// 2026-09-29 新增：TagsView.vue 顶层调 useDraggable；mock 替换实现后捕获入参
+// （el / list / opts），用于断言拖动接线 + visitedViews 写穿 Pinia 的语义回归。
+const capture: {
+  el: Ref<HTMLElement | null> | null;
+  list: unknown;
+  opts: Record<string, unknown> | null;
+} = {
+  el: null,
+  list: null,
+  opts: null,
+};
+
+vi.mock('vue-draggable-plus', () => ({
+  useDraggable: (
+    el: Ref<HTMLElement | null>,
+    list: unknown,
+    opts: Record<string, unknown>,
+  ) => {
+    capture.el = el;
+    capture.list = list;
+    capture.opts = opts;
+    return {
+      start: vi.fn(),
+      destroy: vi.fn(),
+      option: vi.fn(),
+      save: vi.fn(),
+      toArray: vi.fn(),
+      closest: vi.fn(),
+    };
+  },
+}));
 
 // ===== 顶层 mock：vue-router =====
 const pushSpy = vi.fn();
@@ -170,5 +204,78 @@ describe('TagsView closeAll 兜底语义（review 第 2 轮 Major #1）', () => 
     expect(tags.visitedViews.map((v) => v.path)).toEqual(['/dashboard']);
     expect(pushSpy).toHaveBeenCalledTimes(1);
     expect(pushSpy).toHaveBeenCalledWith('/dashboard');
+  });
+});
+
+// 2026-09-29 新增：拖动接线回归守门。TagsView.vue 用 vue-draggable-plus 把
+// visitedViews 绑定为可拖拽 list。原版 draggable 选 '.tag-item'（错误——el-dropdown
+// 根 div 才是直接子元素） + visitedViews 是只读 computed，导致拖动全失效。本块 4
+// 用例覆盖三处修复：selector / list 写穿 / onMove affix 守卫。
+describe('TagsView 拖动接线回归（2026-09-29 拖动失效修复守门）', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    attachPinia();
+    pushSpy.mockClear();
+    setupRoute('/');
+    // 每次用例重置 capture（vitest 跨用例共享模块 mock 状态）
+    capture.el = null;
+    capture.list = null;
+    capture.opts = null;
+  });
+
+  it('(a) draggable selector 必须是 .tag-dropdown（不是 .tag-item）', () => {
+    // 2026-09-29：el-dropdown 根 div 才是容器直接子元素；el-dropdown 包裹的
+    // .tag-item 在 Sortable 视图里没有前序兄弟，索引全为 0 → 拖动视觉失效。
+    mount(TagsViewComponent, { global: globalConfig });
+    expect(capture.opts).not.toBeNull();
+    expect(capture.opts!.draggable).toBe('.tag-dropdown');
+  });
+
+  it('(b) list 写穿 Pinia：整体赋值 list.value 后 visitedViews 顺序被同步', () => {
+    // 2026-09-29：原 visitedViews 是只读 computed get，Sortable onUpdate 整体赋值
+    // 被 Vue 静默吞掉。修复后 computed 带 setter，写穿 tags.visitedViews。
+    const tags = useTagsViewStore();
+    tags.addView({ path: '/a', fullPath: '/a', name: 'A', title: 'A' });
+    tags.addView({ path: '/b', fullPath: '/b', name: 'B', title: 'B' });
+    mount(TagsViewComponent, { global: globalConfig });
+
+    // 拖动后 Sortable 整体赋值新顺序：模拟 sort 后列表
+    const list = capture.list as Ref<Record<string, unknown>[]>;
+    list.value = [
+      { path: '/b', fullPath: '/b', name: 'B', title: 'B' },
+      { path: '/a', fullPath: '/a', name: 'A', title: 'A' },
+    ];
+
+    expect(tags.visitedViews.map((v) => v.path)).toEqual(['/b', '/a']);
+  });
+
+  it('(c) onMove affix 守卫：related 是 affix + willInsertAfter=false → false；其它情形 → true', () => {
+    // 2026-09-29：阻止非 affix tab 被拖到 affix 之前（affix 必须钉在位置 0）。
+    mount(TagsViewComponent, { global: globalConfig });
+    const opts = capture.opts as Record<string, unknown>;
+    const onMove = opts.onMove as (evt: {
+      related: { classList: { contains: (c: string) => boolean } };
+      willInsertAfter: boolean;
+    }) => boolean;
+
+    const relatedAffix = { classList: { contains: (c: string) => c === 'affix' } };
+    const relatedNonAffix = { classList: { contains: () => false } };
+
+    // affix 前插 → 拒绝
+    expect(onMove({ related: relatedAffix, willInsertAfter: false })).toBe(false);
+    // affix 后插 → 允许
+    expect(onMove({ related: relatedAffix, willInsertAfter: true })).toBe(true);
+    // 非 affix 前插/后插 → 都允许
+    expect(onMove({ related: relatedNonAffix, willInsertAfter: false })).toBe(true);
+    expect(onMove({ related: relatedNonAffix, willInsertAfter: true })).toBe(true);
+  });
+
+  it('(d) filter 保留为 .affix（钉死 affix 不参与拖动起点）', () => {
+    // 2026-09-29：filter: '.affix' 让 Sortable 在 .affix 上 drag cancelled；内层
+    // .tag-item.affix 也走 closest 上行匹配，preventOnFilter: false 保持单击 / 右键
+    // 穿透。
+    mount(TagsViewComponent, { global: globalConfig });
+    expect(capture.opts!.filter).toBe('.affix');
+    expect(capture.opts!.preventOnFilter).toBe(false);
   });
 });

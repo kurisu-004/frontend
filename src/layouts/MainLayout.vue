@@ -29,9 +29,11 @@
     </el-aside>
 
     <el-container>
-      <!-- 右侧顶部栏 -->
+      <!-- 2026-09-29 重构：el-header 改为三段式（left / middle / right）。
+           header-left 留折叠按钮；header-middle 嵌入 TagsView（40px 容器贴
+           header 下边缘，active tab margin-bottom: -1px 盖住 header border）；
+           header-right 仅放 UserDropdown。面包屑与刷新按钮已移除。 -->
       <el-header class="header">
-        <!-- 桌面布局：左侧 = 折叠按钮 + 面包屑；右侧 = 刷新 + 个人信息 -->
         <div class="header-left">
           <el-button link class="collapse-btn" @click="onNavToggle">
             <el-icon :size="20">
@@ -39,55 +41,26 @@
               <Expand v-else />
             </el-icon>
           </el-button>
+        </div>
 
-          <el-breadcrumb separator="/" class="breadcrumb">
-            <el-breadcrumb-item v-for="(item, idx) in breadcrumbItems" :key="idx" :to="item.to">
-              {{ item.label }}
-            </el-breadcrumb-item>
-          </el-breadcrumb>
+        <div class="header-middle">
+          <TagsView />
         </div>
 
         <div class="header-right">
-          <el-tooltip content="刷新" placement="bottom">
-            <el-button link @click="reload">
-              <el-icon :size="18"><Refresh /></el-icon>
-            </el-button>
-          </el-tooltip>
-
-          <el-dropdown trigger="click" @command="handleUserCmd">
-            <div class="user-info">
-              <el-avatar :size="32" class="user-avatar" />
-              <span class="user-name">{{ userInfo.name }}</span>
-              <el-icon><ArrowDown /></el-icon>
-            </div>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="change-password">
-                  <el-icon><Lock /></el-icon>修改密码
-                </el-dropdown-item>
-                <el-dropdown-item divided command="logout">
-                  <el-icon><SwitchButton /></el-icon>退出登录
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <UserDropdown />
         </div>
       </el-header>
-
-      <!-- 2026-09-28 新增：tagsView tab 栏（vue-element-admin 风格）。位于 el-header
-           与 el-main 之间，36px 高，CSS-only 横向滚动；右键菜单由 TagsView.vue 内部
-           维护。 -->
-      <TagsView />
 
       <!-- 主要内容区 -->
       <el-main class="main-content">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
             <!-- 2026-09-28 新增：keep-alive 套在 router-view 上，由 tagsView 的
-       cachedViewNames 控制缓存范围，切换 tab 时保留滚动位置 / 筛选 /
-       未提交表单。Component 解包由 :is 自动处理；refreshSelectedView 通过
-       临时摘 cachedViewNames → nextTick 重新 push 触发重挂载，比 :key 切
-       换整 router-view 更轻（不破坏 transition）。 -->
+                 cachedViewNames 控制缓存范围，切换 tab 时保留滚动位置 / 筛选 /
+                 未提交表单。Component 解包由 :is 自动处理；refreshSelectedView 通过
+                 临时摘 cachedViewNames → nextTick 重新 push 触发重挂载，比 :key 切
+                 换整 router-view 更轻（不破坏 transition）。 -->
             <keep-alive :include="tags.cachedViewNames">
               <component :is="Component" />
             </keep-alive>
@@ -96,110 +69,38 @@
       </el-main>
     </el-container>
 
-    <!-- 修改密码弹窗 -->
-    <el-dialog
-      v-model="showChangePwd"
-      title="修改密码"
-      :width="pwdDlg.width"
-      :top="pwdDlg.top"
-      @closed="resetPwdForm"
-    >
-      <el-form ref="pwdFormRef" :model="pwdForm" :rules="pwdRules" label-width="90px">
-        <el-form-item label="原密码" prop="oldPassword">
-          <el-input
-            v-model="pwdForm.oldPassword"
-            type="password"
-            show-password
-            placeholder="请输入原密码"
-          />
-        </el-form-item>
-        <el-form-item label="新密码" prop="newPassword">
-          <el-input
-            v-model="pwdForm.newPassword"
-            type="password"
-            show-password
-            placeholder="至少 6 位"
-          />
-        </el-form-item>
-        <el-form-item label="确认新密码" prop="confirmPassword">
-          <el-input
-            v-model="pwdForm.confirmPassword"
-            type="password"
-            show-password
-            placeholder="再次输入新密码"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showChangePwd = false">取消</el-button>
-        <el-button type="primary" :loading="pwdSaving" @click="submitChangePwd">确定</el-button>
-      </template>
-    </el-dialog>
-
     <!-- 全局业务事件横幅：Teleport 到 body，右上角浮层 -->
     <NotificationBanner />
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+// 2026-09-29 精简：移除面包屑、刷新按钮、用户下拉、改密弹窗、currentUser onMounted
+// 全部逻辑，迁出到 UserDropdown.vue + useUserActions.ts。本文件只保留 layout 装配
+// —— 折叠 / 侧栏菜单 / 顶栏三段式 / keep-alive / NotificationBanner。
+import { ref, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import type { FormInstance, FormRules } from 'element-plus';
-import { Box, Fold, Expand, Refresh, ArrowDown, Lock, SwitchButton } from '@element-plus/icons-vue';
+import { Box, Fold, Expand } from '@element-plus/icons-vue';
 // 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
 // 标量 getter 去掉括号：menus() → auth.menus；isDummyAuthActive() → auth.isDummyAuthActive。
 import { useAuthStore } from '@/stores/auth';
 // 2026-09-28 新增：tagsView 全局 store + 展示组件。MainLayout 把 TagsView 挂到
 // el-header 与 el-main 之间，并通过 keep-alive :include 把缓存范围展开到 visitedViews。
-import { useTagsViewStore, type TagView } from '@/stores/tagsView';
-import { useDialogSize } from '@/composables/useDialogSize';
-import { me as apiMe, changeMyPassword } from '@/api/iam';
+import { useTagsViewStore } from '@/stores/tagsView';
 import MenuTreeItem from '@/layouts/components/MenuTreeItem.vue';
 import TagsView from '@/layouts/components/TagsView.vue';
-import type { CurrentUser } from '@/types/user';
-
-type UserCmd = 'change-password' | 'logout';
+import UserDropdown from '@/layouts/components/UserDropdown.vue';
 
 const route = useRoute();
 const router = useRouter();
 
 const isCollapse = ref(false);
-const currentUser = ref<CurrentUser | null>(null);
 const auth = useAuthStore();
 // 2026-09-28 新增：tagsView store 单一实例（消费侧不解构，沿 auth store 不变量）。
 const tags = useTagsViewStore();
 
 const menuList = computed(() => auth.menus);
-
-/** route → TagView 私有 mapper（与 TagsView.vue 内 mapper 等价；reload 复用）。 */
-function routeToView(): TagView {
-  const nameRaw = route.name as string | symbol | null | undefined;
-  const name = typeof nameRaw === 'string' ? nameRaw : '';
-  return {
-    path: route.path,
-    fullPath: route.fullPath,
-    name,
-    title: (route.meta?.title as string | undefined) ?? '',
-    icon: route.meta?.icon as string | undefined,
-    affix: route.meta?.affix === true,
-  };
-}
-
-const userInfo = computed(() => ({
-  name: currentUser.value?.full_name || currentUser.value?.username || '未登录',
-}));
-
 const activeMenu = computed<string>(() => route.path);
-
-const breadcrumbItems = computed<{ label: string; to?: string }[]>(() => {
-  const raw = route.meta?.breadcrumb ?? [];
-  const list = raw.length > 0 ? raw : [{ label: route.meta?.title || '首页' }];
-  return list.map((it, idx, arr) => ({
-    label: it.label,
-    to: idx === arr.length - 1 || !it.path ? undefined : it.path,
-  }));
-});
 
 // 顶栏折叠按钮：切换侧栏宽度
 const onNavToggle = (): void => {
@@ -210,115 +111,6 @@ const onNavToggle = (): void => {
 function onMenuSelect(index: string): void {
   router.push(index);
 }
-
-// 修改密码弹窗尺寸
-const pwdDlg = useDialogSize({ desktopWidth: 420 });
-
-const reload = (): void => {
-  // 2026-09-28 改造：原 router.go(0) 硬刷新整个 app → 改为 tagsView 软刷新
-  // （临时从 cachedViewNames 移除当前 name → nextTick 重新 push → keep-alive 重挂
-  // 载）。比硬刷新更轻（不丢失其它 tab 的滚动位置 / 状态），且与右键菜单「刷新」
-  // 复用同一路径。
-  //
-  // 2026-09-28 修复：移除 `route.meta?.noTagsView === true` 分支——noTagsView 路由
-  // （如 /login、/404）不在 MainLayout 子树，reload 按钮根本不会被触发；保留分支
-  // 是 dead code + 误导性兜底（无路由能进入这条 if）。
-  ElMessage.success('刷新成功');
-  void tags.refreshSelectedView(routeToView());
-};
-
-const handleUserCmd = async (cmd: string | number | object): Promise<void> => {
-  const command = cmd as UserCmd;
-  if (command === 'logout') {
-    try {
-      await ElMessageBox.confirm('确定要退出登录吗？', '提示', {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning',
-      });
-      await auth.logout();
-      ElMessage.success('已退出登录');
-      router.replace('/login');
-    } catch {
-      /* cancelled */
-    }
-  } else if (command === 'change-password') {
-    showChangePwd.value = true;
-  }
-};
-
-// ---- 修改密码 ----
-const showChangePwd = ref(false);
-const pwdSaving = ref(false);
-const pwdFormRef = ref<FormInstance>();
-const pwdForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' });
-
-const validateNewPwd = (_rule: unknown, value: string, callback: (err?: Error) => void): void => {
-  if (!value) return callback(new Error('请输入新密码'));
-  if (value.length < 6) return callback(new Error('新密码至少 6 位'));
-  if (value === pwdForm.oldPassword) return callback(new Error('新密码不能与原密码相同'));
-  // 新密码变化时，若确认框已填，重新触发确认框校验
-  if (pwdForm.confirmPassword) pwdFormRef.value?.validateField('confirmPassword');
-  callback();
-};
-const validateConfirmPwd = (
-  _rule: unknown,
-  value: string,
-  callback: (err?: Error) => void,
-): void => {
-  if (!value) return callback(new Error('请再次输入新密码'));
-  if (value !== pwdForm.newPassword) return callback(new Error('两次输入的新密码不一致'));
-  callback();
-};
-const pwdRules: FormRules = {
-  oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
-  newPassword: [{ validator: validateNewPwd, trigger: 'blur' }],
-  confirmPassword: [{ validator: validateConfirmPwd, trigger: 'blur' }],
-};
-
-function resetPwdForm(): void {
-  pwdForm.oldPassword = '';
-  pwdForm.newPassword = '';
-  pwdForm.confirmPassword = '';
-  pwdFormRef.value?.clearValidate();
-}
-
-async function submitChangePwd(): Promise<void> {
-  const valid = await pwdFormRef.value?.validate().catch(() => false);
-  if (!valid) return;
-  pwdSaving.value = true;
-  try {
-    await changeMyPassword({
-      old_password: pwdForm.oldPassword,
-      new_password: pwdForm.newPassword,
-    });
-    showChangePwd.value = false;
-    ElMessage.success('密码已修改，请重新登录');
-    await auth.logout();
-    router.replace('/login');
-  } catch (e: unknown) {
-    ElMessage.error(e instanceof Error ? e.message : '修改密码失败');
-  } finally {
-    pwdSaving.value = false;
-  }
-}
-
-onMounted(async () => {
-  // 2026-09-11 修复：dev:dummy 模式下跳过 apiMe()。
-  // 此前无脑调 /iam/me，dummy token 'dummy-dev-token' 被后端判无效 → 401 →
-  // catch 里 router.replace('/login')。表现为首次打开任意页都被踢回登录页。
-  // dummy 已经注入完整 CurrentUser（含 menus / roles），无需再向 /iam/me 验证。
-  // 三层 prod 保护：
-  //   1) isDummyAuthRequested() 在 import.meta.env.DEV=false 时整段 dead code
-  //   2) useAuthStore.isDummyAuthActive 由 initDummyAuth 注入
-  //   3) 后端即便返回 401，拦截器也不会触发 auth:logout（refresh 失败分支不命中）
-  if (auth.isDummyAuthActive) return;
-  try {
-    currentUser.value = await apiMe();
-  } catch {
-    router.replace('/login');
-  }
-});
 </script>
 
 <style lang="scss" scoped>
@@ -406,14 +198,15 @@ onMounted(async () => {
   min-width: 220px;
 }
 
+/* 2026-09-29 重构：align-items: stretch 让 header-middle / header-right 撑满
+   60px 高度各自 align 内容。border-bottom 由 header 提供，TagsView 内部去掉
+   重复 border 以保持视觉单一线条（active tab margin-bottom: -1px 盖住）。 */
 .header {
   background-color: var(--header-bg);
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
   padding: 0 20px;
-  /* 2026-09-29 修复：原 box-shadow 向下扩散 4px 覆盖标签条顶部 → 改为 border-bottom
-     形成干净分隔，让 .tags-view-container 视觉上不与 header 重叠。 */
   border-bottom: 1px solid var(--border-color);
   height: 60px;
   z-index: 10;
@@ -422,7 +215,6 @@ onMounted(async () => {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
 }
 
 .collapse-btn {
@@ -435,42 +227,19 @@ onMounted(async () => {
   }
 }
 
-.breadcrumb {
-  font-size: 14px;
-
-  :deep(.el-breadcrumb__item:last-child .el-breadcrumb__inner) {
-    color: var(--primary-color);
-    font-weight: 500;
-  }
+/* 2026-09-29 新增：flex: 1 让 tags 占据折叠按钮与用户组件之间的全部剩余空间；
+   min-width: 0 容许内部 overflow-x 滚动；align-items: flex-end 把 40px 的
+   TagsView 容器贴到 header 下边缘（与原独立行视觉一致）。 */
+.header-middle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-  transition: background 0.2s;
-
-  &:hover {
-    background-color: var(--primary-bg);
-  }
-
-  .user-avatar {
-    background-color: var(--primary-light);
-  }
-
-  .user-name {
-    font-size: 14px;
-    color: var(--text-primary);
-  }
 }
 
 .main-content {

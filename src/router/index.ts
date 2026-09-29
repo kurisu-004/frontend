@@ -10,7 +10,6 @@ declare module 'vue-router' {
   interface RouteMeta {
     title?: string;
     icon?: string;
-    breadcrumb?: Array<{ label: string; path?: string }>;
     requireAuth?: boolean;
     /** 该路由所需的菜单 code；缺省表示不依赖菜单（公开 / 已登录即可）。
      *  守卫会校验"用户的菜单树中是否包含该 code"，单一权限源。 */
@@ -50,7 +49,6 @@ const routes: RouteRecordRaw[] = [
         meta: {
           title: '首页',
           icon: 'House',
-          breadcrumb: [{ label: '首页' }],
           menuCode: 'home',
           // 2026-09-28 新增：Dashboard 钉死在 tagsView 最左侧，关闭按钮禁用
           affix: true,
@@ -64,7 +62,6 @@ const routes: RouteRecordRaw[] = [
           title: '零件一览',
           icon: 'Box',
           menuCode: 'parts_list',
-          breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '零件一览' }],
         },
       },
       {
@@ -74,7 +71,6 @@ const routes: RouteRecordRaw[] = [
         meta: {
           title: '新建零件',
           menuCode: 'parts_new',
-          breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '新建零件' }],
         },
       },
       {
@@ -83,11 +79,6 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/parts/detail/PartDetail.vue'),
         meta: {
           title: '零件详情',
-          breadcrumb: [
-            { label: '订单管理', path: '/parts' },
-            { label: '零件一览', path: '/parts' },
-            { label: '详情' },
-          ],
         },
         props: true,
       },
@@ -99,7 +90,6 @@ const routes: RouteRecordRaw[] = [
           title: '待品检',
           icon: 'CircleCheck',
           menuCode: 'inspection_pending',
-          breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '待品检' }],
         },
       },
       {
@@ -111,7 +101,6 @@ const routes: RouteRecordRaw[] = [
           title: '返修接收',
           icon: 'Tools',
           menuCode: 'repair_receive',
-          breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '返修接收' }],
         },
       },
       {
@@ -124,7 +113,6 @@ const routes: RouteRecordRaw[] = [
           title: '待编程一览',
           icon: 'Cpu',
           menuCode: 'pending_programming',
-          breadcrumb: [{ label: '待编程一览' }],
         },
       },
       {
@@ -141,7 +129,6 @@ const routes: RouteRecordRaw[] = [
           title: '外协厂一览',
           icon: 'OfficeBuilding',
           menuCode: 'outsource_companies_list',
-          breadcrumb: [{ label: '外协管理' }, { label: '外协厂一览' }],
         },
       },
       {
@@ -153,7 +140,6 @@ const routes: RouteRecordRaw[] = [
           title: '报价一览',
           icon: 'Document',
           menuCode: 'outsource_quotes_list',
-          breadcrumb: [{ label: '外协管理' }, { label: '报价一览' }],
         },
       },
       {
@@ -165,7 +151,6 @@ const routes: RouteRecordRaw[] = [
           title: '外协发送/接收',
           icon: 'Promotion',
           menuCode: 'outsource_send_receive_list',
-          breadcrumb: [{ label: '外协管理' }, { label: '外协发送/接收' }],
         },
       },
       {
@@ -186,11 +171,6 @@ const routes: RouteRecordRaw[] = [
           title: '外协对账',
           // 不暴露为独立菜单；通过公司列表的「对账」链接进入。
           menuCode: 'outsource_companies_list',
-          breadcrumb: [
-            { label: '外协管理' },
-            { label: '外协厂一览', path: '/outsource/companies' },
-            { label: '外协对账' },
-          ],
         },
       },
       {
@@ -206,7 +186,6 @@ const routes: RouteRecordRaw[] = [
           title: '送货单',
           icon: 'Document',
           menuCode: 'delivery_notes_manage',
-          breadcrumb: [{ label: '订单管理', path: '/parts' }, { label: '送货单' }],
         },
       },
       {
@@ -216,11 +195,6 @@ const routes: RouteRecordRaw[] = [
         meta: {
           title: '送货单详情',
           menuCode: 'delivery_notes_manage',
-          breadcrumb: [
-            { label: '订单管理', path: '/parts' },
-            { label: '送货单', path: '/delivery-notes' },
-            { label: '详情' },
-          ],
         },
       },
       {
@@ -233,11 +207,6 @@ const routes: RouteRecordRaw[] = [
         meta: {
           title: '扫码建单',
           menuCode: 'delivery_notes_manage',
-          breadcrumb: [
-            { label: '订单管理', path: '/parts' },
-            { label: '送货单', path: '/delivery-notes' },
-            { label: '扫码建单' },
-          ],
         },
       },
       {
@@ -246,11 +215,6 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/assemblies/AssemblyDetail.vue'),
         meta: {
           title: '装配件详情',
-          breadcrumb: [
-            { label: '订单管理', path: '/assemblies' },
-            { label: '装配件一览', path: '/assemblies' },
-            { label: '详情' },
-          ],
         },
         props: true,
       },
@@ -262,7 +226,6 @@ const routes: RouteRecordRaw[] = [
           title: '工人一览',
           icon: 'User',
           menuCode: 'workers_list',
-          breadcrumb: [{ label: '权限管理', path: '/workers' }, { label: '工人一览' }],
         },
       },
       {
@@ -275,10 +238,6 @@ const routes: RouteRecordRaw[] = [
           title: '工序制定',
           icon: 'SetUp',
           menuCode: 'part_process_chain',
-          breadcrumb: [
-            { label: '生产管理', path: '/production/process-design' },
-            { label: '工序制定' },
-          ],
         },
       },
       {
@@ -289,13 +248,6 @@ const routes: RouteRecordRaw[] = [
           title: '生产队列',
           icon: 'Operation',
           menuCode: 'worker_queue',
-          // 2026-09-11 调整：worker_queue 从 auth_group 迁到 production_group，
-          // breadcrumb 第一段跟着改成「生产管理」，path 不动保持 bookmark 可用
-          // 2026-09-11 改名：菜单/页面标题 工人队列调度 → 生产队列
-          breadcrumb: [
-            { label: '生产管理', path: '/production/process-design' },
-            { label: '生产队列' },
-          ],
         },
       },
       {
@@ -306,7 +258,6 @@ const routes: RouteRecordRaw[] = [
           title: '账号管理',
           icon: 'Key',
           menuCode: 'users_list',
-          breadcrumb: [{ label: '权限管理', path: '/users' }, { label: '账号管理' }],
         },
       },
       {
@@ -317,7 +268,6 @@ const routes: RouteRecordRaw[] = [
           title: '货架管理',
           icon: 'Platform',
           menuCode: 'shelves_list',
-          breadcrumb: [{ label: '车间', path: '/shelves' }, { label: '货架管理' }],
         },
       },
       {
@@ -328,7 +278,6 @@ const routes: RouteRecordRaw[] = [
           title: '生产统计',
           icon: 'DataAnalysis',
           menuCode: 'production_stats',
-          breadcrumb: [{ label: '生产统计' }],
         },
       },
       {
@@ -339,7 +288,6 @@ const routes: RouteRecordRaw[] = [
           title: '客户一览',
           icon: 'Connection',
           menuCode: 'customers_list',
-          breadcrumb: [{ label: '客户管理', path: '/customers' }, { label: '客户一览' }],
         },
       },
       {
@@ -350,7 +298,6 @@ const routes: RouteRecordRaw[] = [
           title: '申请人一览',
           icon: 'User',
           menuCode: 'applicants_list',
-          breadcrumb: [{ label: '客户管理', path: '/applicants' }, { label: '申请人一览' }],
         },
       },
       {
@@ -362,10 +309,6 @@ const routes: RouteRecordRaw[] = [
         meta: {
           title: '工序工种',
           menuCode: 'process_work_type',
-          breadcrumb: [
-            { label: '生产管理', path: '/production/process-work-type' },
-            { label: '工序工种' },
-          ],
         },
       },
     ],
