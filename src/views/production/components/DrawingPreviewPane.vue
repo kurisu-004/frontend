@@ -24,6 +24,12 @@
   2026-09-29 第二轮：图纸 Tab 从预签 URL 切到 /content 后端代理 blob
     - 消除 CORS 风险 + 预签 URL TTL 焦虑（FileListCard 下载流仍保留 /url）
     - 后端 Cache-Control: private, max-age=1200 让浏览器接管 20 min 重复预览
+  2026-09-29 第三轮：图纸 / 3D Tab 按需懒加载 + 同文件短路
+    - 选 part / 切 tab 时只拉当前 active tab 对应的 blob（图纸默认 active，
+      3D 仅在切到 models3d 时才拉，3D blob 此前与图纸并发拖慢图纸加载）
+    - loadPreviewUrl / loadFirst3DModel 内部 currentFileId 短路，tab 来回切换
+      同文件不重复 fetch
+    - 切到非 active tab 时 revoke 已有 blob URL，释放内存
 -->
 <template>
   <el-card shadow="never" class="preview-card">
@@ -142,18 +148,26 @@ const selectedFile = computed<PartFileItem | null>(() => drawings.value[0] ?? nu
 const selectedPreviewBlob = ref<string | null>(null);
 const previewUrlLoading = ref(false);
 const previewUrlError = ref<string | null>(null);
+// 2026-09-29 第三轮：跟踪当前 blob URL 对应的 file.id；
+// tab 来回切换且同文件时 loadPreviewUrl/loadFirst3DModel 短路不重复拉
+const currentPreviewFileId = ref<string | null>(null);
+const current3DFileId = ref<string | null>(null);
 
 async function loadPreviewUrl(file: PartFileItem): Promise<void> {
   // 2026-09-29 改造：图纸 Tab 从预签 URL 切到 /content 后端代理 blob,
   // 复用 3D Tab 的 URL.createObjectURL 模式 + revoke 防内存泄漏。
   // 后端 Cache-Control: private, max-age=1200 让浏览器 HTTP 缓存接管
   // 20 min 内重复预览,与 usePartFilesListQuery staleTime 对称。
+  // 2026-09-29 第三轮：同文件短路 —— tab 来回切换时不重复 fetch，
+  // 后端 20min Cache-Control 内的 HTTP 缓存命中由浏览器接管，本地不再多发请求。
+  if (currentPreviewFileId.value === file.id) return;
   revokePreviewBlob();
   previewUrlLoading.value = true;
   previewUrlError.value = null;
   try {
     const blob = await fetchPartFileContent(file.id);
     selectedPreviewBlob.value = URL.createObjectURL(blob);
+    currentPreviewFileId.value = file.id;
   } catch (e) {
     previewUrlError.value = (e as Error).message ?? '获取预览内容失败';
   } finally {
@@ -161,11 +175,18 @@ async function loadPreviewUrl(file: PartFileItem): Promise<void> {
   }
 }
 
+// 2026-09-29 第三轮：图纸 Tab 按需懒加载。
+// 切 part → selectedFile 变 → 重新拉；切 tab → activeTab 非 drawings → 释放；
+// 切回 drawings 且同文件 → loadPreviewUrl 短路不重复拉。
 watch(
-  selectedFile,
-  async (f) => {
-    if (f) await loadPreviewUrl(f);
-    else revokePreviewBlob();
+  [selectedFile, activeTab],
+  async ([f, tab]) => {
+    if (tab === 'drawings') {
+      if (f) await loadPreviewUrl(f);
+      else revokePreviewBlob();
+    } else {
+      revokePreviewBlob();
+    }
   },
   { immediate: true },
 );
@@ -176,30 +197,38 @@ const stepBlobUrl = ref<string | null>(null);
 const stepFormat = ref<'step' | 'stl' | 'brep' | undefined>(undefined);
 const models3dLoading = ref(false);
 
-// 2026-09-29：3D Tab 数据流。
-// 监听 models3d（computed from partFilesQuery.data）变化 → 拉新 part 的第一个
-// occt-wasm 支持的 3D 文件 → 重新走 blob URL 路径。reactive models3d 自动驱动，
-// 旧 part 的 stepBlobUrl 在 watch 入口 revoke（防止内存泄漏）。
+// 2026-09-29 第三轮：3D Tab 按需懒加载。
+// 旧实现 watch(models3d, …, { immediate: true })：默认 activeTab=drawings 时也立刻拉 3D blob，
+// 拖慢图纸加载。改为多源：仅 activeTab=models3d 时才拉，否则 revoke。
 watch(
-  models3d,
-  async (newModels) => {
-    await loadFirst3DModel(newModels);
+  [models3d, activeTab],
+  async ([newModels, tab]) => {
+    if (tab === 'models3d') {
+      await loadFirst3DModel(newModels);
+    } else {
+      revokeStepBlob();
+    }
   },
   { immediate: true },
 );
 
 async function loadFirst3DModel(modelList: PartFileItem[]): Promise<void> {
-  revokeStepBlob();
+  // 2026-09-29 第三轮：先找 target 再 revoke —— 避免「当前已是同文件」时仍多走一次
+  // revoke+重建 blob URL 的抖动；并支持同文件 tab 来回切换短路。
   const target = modelList.find((f) => isOcctSupported(f.file_type));
   if (!target) {
     // 无可预览 3D 模型 → models3d-empty 占位
+    revokeStepBlob();
     return;
   }
+  if (current3DFileId.value === target.id) return; // 2026-09-29 第三轮：同文件短路
+  revokeStepBlob();
   models3dLoading.value = true;
   try {
     const blob = await fetchPartFileContent(target.id);
     stepBlobUrl.value = URL.createObjectURL(blob);
     stepFormat.value = fileTypeToOcctFormat(target.file_type) ?? undefined;
+    current3DFileId.value = target.id;
   } catch (e) {
     ElMessage.error((e as Error).message ?? '加载 3D 模型失败');
   } finally {
@@ -213,6 +242,9 @@ function revokeStepBlob(): void {
     stepBlobUrl.value = null;
   }
   stepFormat.value = undefined;
+  // 2026-09-29 第三轮：清同文件短路标记，保证下一次同文件重新走 loadFirst3DModel 时
+  // 不会因为 current3DFileId 还指向已 revoke 的文件而误判。
+  current3DFileId.value = null;
 }
 
 // 2026-09-29 新增：图纸 Tab blob 释放。语义与 revokeStepBlob 一致，
@@ -222,6 +254,8 @@ function revokePreviewBlob(): void {
     URL.revokeObjectURL(selectedPreviewBlob.value);
     selectedPreviewBlob.value = null;
   }
+  // 2026-09-29 第三轮：清同文件短路标记。
+  currentPreviewFileId.value = null;
 }
 
 function onStepError(msg: string): void {
