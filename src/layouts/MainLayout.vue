@@ -412,7 +412,9 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
-  box-shadow: var(--shadow-sm);
+  /* 2026-09-29 修复：原 box-shadow 向下扩散 4px 覆盖标签条顶部 → 改为 border-bottom
+     形成干净分隔，让 .tags-view-container 视觉上不与 header 重叠。 */
+  border-bottom: 1px solid var(--border-color);
   height: 60px;
   z-index: 10;
 }
@@ -475,6 +477,10 @@ onMounted(async () => {
   background-color: var(--content-bg);
   padding: 16px;
   overflow: auto;
+  /* 2026-09-29 新增：建立独立 stacking context，防止页面内 position: fixed /
+     阴影元素穿透到标签条之上（标签条 z-index: 5，main z-index: 1）。 */
+  position: relative;
+  z-index: 1;
 }
 
 .fade-enter-active,

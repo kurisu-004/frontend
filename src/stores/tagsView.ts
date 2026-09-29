@@ -160,6 +160,22 @@ export const useTagsViewStore = defineStore(
     }
 
     /**
+     * 拖动排序。affix 不可参与（拖动源或目标在 affix 槽位直接放弃），
+     * 同位置或越界视为 no-op。直接 splice visitedViews；持久化插件
+     * 会在 mutation 后立即写 localStorage，刷新后顺序保留。
+     * 2026-09-29 新增：供 vue-draggable-plus onUpdate 与外部程序化排序共用。
+     */
+    function reorderViews(oldIndex: number, newIndex: number): void {
+      const list = visitedViews.value;
+      if (oldIndex === newIndex) return;
+      if (oldIndex < 0 || oldIndex >= list.length) return;
+      if (newIndex < 0 || newIndex >= list.length) return;
+      if (list[oldIndex]?.affix || list[newIndex]?.affix) return;
+      const [moved] = list.splice(oldIndex, 1);
+      list.splice(newIndex, 0, moved);
+    }
+
+    /**
      * 软刷新当前 tab（MainLayout 顶栏「刷新」按钮 / 右键菜单「刷新」共用）。
      * 实现：临时从 cachedViewNames 移除 → nextTick 重新 push，触发 keep-alive
      * 重挂载组件。比 :key 切换 router-view 更轻（不破坏 transition）。
@@ -191,6 +207,7 @@ export const useTagsViewStore = defineStore(
       removeView,
       removeOtherViews,
       removeAllViews,
+      reorderViews,        // 2026-09-29 新增
       refreshSelectedView,
       reset,
     };

@@ -1,5 +1,5 @@
 <template>
-  <div class="tags-view-container">
+  <div ref="containerRef" class="tags-view-container">
     <!-- 2026-09-28 新增：vue-element-admin 风格的 tagsView tab 栏。
          横排 flex + CSS-only 横向滚动（隐藏滚动条）。
          每个 tab 用 el-dropdown trigger="contextmenu" 包裹，触发 4 项右键菜单。 -->
@@ -58,10 +58,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref as vueRef, watch, nextTick as vueNextTick } from 'vue';
 import { useRoute, useRouter, type RouteLocationNormalizedLoaded } from 'vue-router';
 import { Close, Refresh, CloseBold, FolderDelete } from '@element-plus/icons-vue';
 import { tryOnScopeDispose } from '@vueuse/core';
+import { useDraggable } from 'vue-draggable-plus';
 // 2026-09-28 新增：tagsView 全局 store。消费侧不解构：tags.xxx 直访响应式。
 import { useTagsViewStore } from '@/stores/tagsView';
 import type { TagView } from '@/stores/tagsView';
@@ -73,6 +74,23 @@ const router = useRouter();
 const tags = useTagsViewStore();
 
 const visitedViews = computed<TagView[]>(() => tags.visitedViews);
+
+const containerRef = vueRef<HTMLElement | null>(null);
+
+// 2026-09-29 新增：拖动排序。基于 vue-draggable-plus（package.json:33 已依赖 ^0.6.1）。
+// visitedViews 是 Pinia 响应式数组，v-dp 原地 splice 后 Pinia 自动触发依赖更新 +
+// persistedstate 写盘，无需 nextTick + 手动调 reorderViews（该 action 仅为外部代码预留）。
+useDraggable(containerRef, visitedViews, {
+  direction: 'horizontal',
+  animation: 150,
+  // 只排序带 .tag-item 的子元素；el-dropdown 包裹层被忽略。
+  draggable: '.tag-item',
+  // affix 钉死，不可拖；preventOnFilter=false 保留右键 / 单击穿透。
+  filter: '.affix',
+  preventOnFilter: false,
+  // 触摸设备上避免单击被误判为拖动起点
+  delayOnTouchOnly: true,
+});
 
 /** 当前激活 tab 判定：path 比对，不看 fullPath（保留 query 重复打开）。 */
 function isActiveView(view: TagView): boolean {
@@ -204,6 +222,16 @@ onMounted(() => {
     tags.addView(routeToView(route));
   }
   unregister = registerAfterEach();
+  // 2026-09-29 新增：路由切换时把激活 tab 滚入可视区，避免被溢出滚动条隐到容器外。
+  watch(
+    () => route.path,
+    () => {
+      void vueNextTick(() => {
+        const el = containerRef.value?.querySelector('.tag-item.active');
+        el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      });
+    },
+  );
 });
 
 onBeforeUnmount(() => {
@@ -223,17 +251,20 @@ tryOnScopeDispose(() => {
 </script>
 
 <style lang="scss" scoped>
-/* 2026-09-28 新增：tagsView tab 栏样式。36px 高横排 flex，CSS-only 隐藏滚动条。 */
+/* 2026-09-29 重构：Chrome 风格标签条。40px 高容器 + 32px tab 顶部圆角 + 激活态
+   坐在容器底边之上 + 关闭按钮 hover 才显 + affix 钉死 40px。z-index: 5 防被 main
+   内容穿透。 */
 .tags-view-container {
-  height: 36px;
+  position: relative;
+  z-index: 5;
+  height: 40px;
   width: 100%;
   background-color: var(--header-bg);
   border-bottom: 1px solid var(--border-color);
-  box-shadow: var(--shadow-sm);
   display: flex;
-  align-items: center;
+  align-items: flex-end;   /* tab 贴着底边，「坐在」容器底部边框之上 */
   padding: 0 8px;
-  gap: 6px;
+  gap: 4px;
   overflow-x: auto;
   overflow-y: hidden;
   /* Firefox 隐藏滚动条 */
@@ -248,34 +279,41 @@ tryOnScopeDispose(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
-  padding: 0 10px;
+  height: 32px;
+  min-width: 80px;          /* 新增：宽度下限，过短则禁用 */
+  max-width: 200px;         /* 新增：长标题 truncate */
+  padding: 0 12px;
   border: 1px solid var(--border-color);
-  border-radius: 3px;
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
   background-color: #fafbfc;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-regular);
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
-  transition: background-color 0.18s, color 0.18s, border-color 0.18s;
-
-  &:hover {
-    color: var(--primary-color);
-    border-color: var(--primary-light);
-  }
+  position: relative;
+  transition: color 0.18s, border-color 0.18s, background-color 0.18s;
 
   .tag-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     line-height: 1;
   }
 
   .tag-close {
+    flex-shrink: 0;
     font-size: 12px;
     color: var(--text-secondary);
-    margin-left: 2px;
+    margin-left: 0;          /* 原 2px 取消，避免压缩 tag-text 空间 */
     padding: 2px;
-    border-radius: 2px;
-    transition: background-color 0.18s, color 0.18s;
+    border-radius: 50%;       /* 圆形 hover 区 */
+    opacity: 0;              /* 默认隐藏，hover 才显 */
+    transition: opacity 0.18s, background-color 0.18s, color 0.18s;
 
     &:hover {
       background-color: rgba(0, 0, 0, 0.08);
@@ -283,24 +321,39 @@ tryOnScopeDispose(() => {
     }
   }
 
+  &:hover {
+    color: var(--primary-color);
+    border-color: var(--primary-light);
+    .tag-close { opacity: 1; }
+  }
+
   &.active {
     background-color: var(--primary-color);
     color: #fff;
     border-color: var(--primary-color);
+    margin-bottom: -1px;          /* 坐在容器底边之上，盖住底部 1px 边框（Chrome 效果） */
+    box-shadow: 0 -2px 6px rgba(30, 77, 139, 0.18);  /* 轻微抬升阴影 */
 
     .tag-close {
       color: rgba(255, 255, 255, 0.85);
+      opacity: 0.6;              /* 激活态关闭按钮半透，hover 才全显 */
 
       &:hover {
         background-color: rgba(255, 255, 255, 0.18);
         color: #fff;
       }
     }
+
+    &:hover .tag-close { opacity: 1; }
   }
 
   &.affix {
-    /* affix 与 active 视觉一致 —— 用户视角常驻首页；区别仅在「关闭按钮缺席」 */
-    /* 保留 affix class 便于将来扩展（hover 不显示 close icon 已通过 v-if 处理） */
+    min-width: 0;
+    width: 40px;                 /* 钉死图标宽度（pinned tab 视觉） */
+    padding: 0;
+    justify-content: center;
+    /* affix 当前版本没有文本，CSS 层防御 */
+    .tag-text { display: none; }
   }
 }
 </style>
