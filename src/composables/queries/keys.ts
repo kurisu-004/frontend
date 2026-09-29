@@ -18,6 +18,7 @@
 import type { ListPartsParams } from '@/api/parts';
 import type { ListPendingBatchesParams } from '@/api/pendingBatches';
 import type { ProcessCategory } from '@/types/process';
+import type { UnionListParams } from '@/api/com/unionList';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
  *  含 code_like / category / limit / offset 四字段；与 ListProcessesParams 同形，预留扩展分叉。 */
@@ -67,6 +68,20 @@ export const qk = {
    *  Consumer：usePendingBatchesQuery（在 src/composables/queries/usePendingBatchesQuery.ts）。 */
   pendingBatchesList: (params: ListPendingBatchesParams) =>
     ['pending-batches', 'list', params] as const,
+  /** 2026-09-29 新增：com 域 union-list 列表键 —— 零件一览页主查询
+   *  （src/views/parts/list/composables/usePartsListQuery.ts）切换到
+   *  GET /api/v2/com/union-list 后消费此键。params 内 row_type 必填。
+   *  2026-09-29 修订：根命名空间沿用 'parts' 而非 'com'——union-list 端点虽在
+   *  com 域路由下，但 TanStack Query 的 partialMatchKey 仅在同根命名空间内
+   *  前缀匹配；原 ['com', 'union-list', params] 无法被 ['parts'] 前缀命中，
+   *  导致 7 个 part 域 mutation（usePartDispatch / usePendingDispatch /
+   *  usePartInlineEdit 40901 路径）失效后 union-list 缓存持续 stale。
+   *  改用 ['parts', 'union-list', params] 后 qk.partsPrefix 仍是单一失效源。 */
+  unionList: (params: UnionListParams) => ['parts', 'union-list', params] as const,
+  /** 2026-09-29 修订：union-list 缓存身份已与 parts 域合并，unionPrefix 与
+   *  partsPrefix 等价；保留命名仅为未来 com 域自有写操作（如非 part 维度
+   *  union 写入）做扩展位 —— 实际失效调用方继续走 qk.partsPrefix。 */
+  unionPrefix: ['parts', 'union-list'] as const,
   /** 2026-09-29 新增：pending-batches 域前缀 —— dispatch / bulk / auto 三类 mutation
    *  完成后调 qc.invalidateQueries({ queryKey: qk.pendingBatchesPrefix }) 失效整个域
    *  （任意 params 形态的 list 都会命中）。同时触发 processesPrefix + partsPrefix
