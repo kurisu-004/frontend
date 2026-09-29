@@ -242,7 +242,8 @@ type TabKey = 'DRAWING' | '3D_MODEL' | 'CAD_2D' | 'CNC_PAIR';
 const props = defineProps<{
   partId: string;
   partStatus: OrderStatus;
-  // 文件列表（来自 usePartFiles）
+  // 2026-09-29 迁移：文件列表来自 PartDetail.vue 的 usePartFilesListQuery（替代
+  // 原 usePartFiles 三并发），按 kind 在 setup 顶层 computed 桶。
   drawings: PartFileItem[];
   models3d: PartFileItem[];
   cadFiles: PartFileItem[];
