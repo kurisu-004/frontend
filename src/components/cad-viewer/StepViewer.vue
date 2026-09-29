@@ -213,7 +213,20 @@ async function loadFromBlobUrl(url: string): Promise<void> {
         : e instanceof Error
           ? e.message
           : String(e);
-    emit('error', `${props.errorPrefix}: ${msg}`);
+    // 2026-09-29 第三轮：识别 Vite 预构建缓存 hash 与浏览器 IndexedDB 缓存不一致场景，
+    // 附可操作的修复提示，下次撞到用户在 UI 上直接看到修复步骤。
+    // 根因：磁盘 .vite/deps/occt-wasm-*.js hash 与浏览器请求的 occt-wasm-<hash>.js 不匹配
+    //（dev server 中途 npm install / vite.config 改 / 删 .vite/deps 后磁盘 hash 重算，
+    // 浏览器还在请求旧 hash，浏览器缓存策略命中即返回 stale module；非代码 bug）。
+    const isViteCacheIssue =
+      msg.includes('Failed to fetch') ||
+      msg.includes('vite/deps') ||
+      msg.includes('occt-wasm-');
+    const hint = isViteCacheIssue
+      ? '\n（疑似 Vite 预构建缓存 hash 与浏览器缓存不一致：' +
+        'rm -rf node_modules/.vite/deps + 重启 vite + 浏览器硬刷新 Cmd+Shift+R）'
+      : '';
+    emit('error', `${props.errorPrefix}: ${msg}${hint}`);
   } finally {
     loading.value = false;
   }
