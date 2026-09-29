@@ -2,17 +2,122 @@
 // 创建 / 上传文件走 multipart：data 字段为 JSON 字符串，file 字段为 PDF。
 
 import { api, cleanParams } from '@/api/http';
+import {
+  assemblyDetailFlatSchema,
+  type AssemblyChildOutSchema,
+  type AssemblyDetailFlatSchema,
+  type AssemblyFileRefSchema,
+} from '@/composables/queries/schemas';
 import type {
   AssemblyCreatePayload,
   AssemblyCreateResult,
   AssemblyDetail,
+  AssemblyChildItem,
   AssemblyListQuery,
   AssemblyListResult,
   AssemblyItem,
   AssemblyUpdatePayload,
 } from '@/types/assembly';
-import type { PartFileListResult } from '@/types/part_file';
+import type { PartFileListResult, DrawingFileItem } from '@/types/part_file';
 import type { PartListItem } from '@/types/parts';
+
+/**
+ * 2026-09-29 修复：消化 backend-rust `AssemblyDetail` 的 `#[serde(flatten)]` quirk。
+ *
+ * 后端 wire 形态（backend-rust src/modules/assembly/vo/assembly.rs:113-119）：
+ *   { ...AssemblyOut 19 字段, children: [...], files: [...] }
+ *   —— 无 `assembly` 嵌套键，AssemblyOut 19 字段被 `#[serde(flatten)]` 平铺到顶层。
+ *
+ * 前端类型契约保持嵌套 `{assembly, children, files}`（最小爆炸半径），
+ * 本函数在 api 边界把平铺转回嵌套 + 字段对齐：
+ *   - child_count 由 mapper 注入 = flat.children.length
+ *   - customer_name / parent_customer_name / customer_path 暂置 null，
+ *     由 useAssemblyDetail composable 在 fetchData 后用 useCustomersQuery 派生补全
+ *   - unit_price / total_price nullable 用 '0' 兜底（与 PartListItem string 桥接一致）
+ *
+ * 守门走 Zod parse（assemblyDetailFlatSchema.strict）：后端意外把 assembly 改回嵌套键
+ * 会立刻抛 ZodError，避免静默 fail。
+ */
+export function parseAssemblyDetail(raw: unknown): AssemblyDetail {
+  const flat: AssemblyDetailFlatSchema = assemblyDetailFlatSchema.parse(raw);
+  return {
+    assembly: {
+      id: flat.id,
+      version: flat.version,
+      serial_no: flat.serial_no,
+      drawing_no: flat.drawing_no,
+      name: flat.name,
+      applicant_name: flat.applicant_name,
+      customer_id: flat.customer_id,
+      customer_name: null,
+      parent_customer_name: null,
+      customer_path: null,
+      request_date: flat.request_date,
+      planned_delivery_date: flat.planned_delivery_date,
+      is_urgent: flat.is_urgent,
+      status: flat.status,
+      child_count: flat.children.length,
+      quantity: flat.quantity,
+      unit_price: flat.unit_price ?? '0',
+      total_price: flat.total_price ?? '0',
+      order_no: flat.order_no,
+      system_delivery_date: flat.system_delivery_date,
+      note: flat.note,
+      created_at: flat.created_at,
+      updated_at: flat.updated_at,
+    },
+    children: flat.children.map(childToAssemblyChildItem),
+    files: flat.files.map(fileToDrawingFileItem),
+  };
+}
+
+/** 2026-09-29 修复：AssemblyChildOut → AssemblyChildItem 字段对齐。
+ *  PartListItem 必填字段全补齐（applicant_name / quantity / unit_price='0' /
+ *  total_price='0' / request_date / planned_delivery_date / status / order_no /
+ *  system_delivery_date / note=null / customer_name=null / l1_customer_name=null /
+ *  location=null / row_type='PART' / has_children=false），is_urgent 兜底 false。 */
+function childToAssemblyChildItem(c: AssemblyChildOutSchema): AssemblyChildItem {
+  return {
+    id: c.id,
+    version: c.version,
+    serial_no: c.serial_no,
+    drawing_no: c.drawing_no ?? '',
+    name: c.name,
+    applicant_name: c.applicant_name,
+    quantity: c.quantity,
+    unit_price: '0',
+    total_price: '0',
+    request_date: c.request_date,
+    planned_delivery_date: c.planned_delivery_date ?? c.request_date,
+    is_urgent: c.is_urgent,
+    status: c.status,
+    order_no: c.order_no,
+    system_delivery_date: c.system_delivery_date,
+    note: c.note,
+    customer_name: null,
+    l1_customer_name: null,
+    location: null,
+    current_batch_id: c.current_batch_id ?? null,
+    row_type: 'PART',
+    has_children: false,
+    __is_child: true,
+  };
+}
+
+/** 2026-09-29 修复：AssemblyFileRef → DrawingFileItem 字段对齐。
+ *  后端 AssemblyFileRef 只有 id / original_filename / page_count 3 字段，
+ *  DrawingFileItem 是 PartFileItem 的 alias（含 owner_id / kind / file_size 等），
+ *  mapper 仅填已知字段，page_count 是 AssemblyFileRef 专属字段（master PDF 按页
+ *  拆分总页数），不在 PartFileItem 类型里 → 暂存为 object 上一个 extra 字段，
+ *  调用方按需读取（实际消费方 masterFiles / childDrawingMap 仅用 kind / owner_id）。
+ *  此处构造一个最小可用对象，TypeScript 强转兜底。 */
+function fileToDrawingFileItem(f: AssemblyFileRefSchema): DrawingFileItem {
+  return {
+    id: f.id,
+    original_filename: f.original_filename,
+    page_count: f.page_count ?? null,
+  } as unknown as DrawingFileItem;
+}
 
 export async function listAssemblies(q: AssemblyListQuery = {}): Promise<AssemblyListResult> {
   const resp = await api.get<AssemblyListResult>('/assemblies', {
@@ -22,18 +127,24 @@ export async function listAssemblies(q: AssemblyListQuery = {}): Promise<Assembl
 }
 
 export async function getAssembly(id: string): Promise<AssemblyDetail> {
-  const resp = await api.get<AssemblyDetail>(`/assemblies/${id}`);
-  return resp.data;
+  // 2026-09-29 修复：resp.data 类型由 AssemblyDetail 改为 unknown，再走
+  // parseAssemblyDetail mapper 把 backend-rust `#[serde(flatten)]` 平铺形态转回
+  // 前端嵌套契约。Zod parse 守门（assemblyDetailFlatSchema.strict）：后端意外
+  // 把 assembly 改回嵌套键会立刻抛 ZodError。
+  const resp = await api.get<unknown>(`/assemblies/${id}`);
+  return parseAssemblyDetail(resp.data);
 }
 
 /** 按 part_id 反查所属装配体。
  *  2026-09-25 修正：与 backend-rust 新加的 `GET /api/v2/parts/{part_id}/assembly`
  *  端点对齐 —— 后端返 `Option<AssemblyDetail>`（无父装配体时返 null），前端
  *  返回类型由 `AssemblyDetail` 改为 `AssemblyDetail | null`，调用方按 `null`
- *  表示「无父装配体」分支。 */
+ *  表示「无父装配体」分支。
+ *  2026-09-29 修复：走 parseAssemblyDetail mapper（见 getAssembly 注释）。 */
 export async function getAssemblyForPart(partId: string): Promise<AssemblyDetail | null> {
-  const resp = await api.get<AssemblyDetail | null>(`/parts/${partId}/assembly`);
-  return resp.data;
+  const resp = await api.get<unknown>(`/parts/${partId}/assembly`);
+  if (resp.data === null || resp.data === undefined) return null;
+  return parseAssemblyDetail(resp.data);
 }
 
 export async function createAssembly(
@@ -60,12 +171,13 @@ export async function createAssemblyWithFile(
 
 /** 详情页上传总装 PDF：拆页 → 自动创建子件。
  *  2026-09-25 修正：v2 后端把 upload-pdf 合并到 `/files` 端点（multipart, field=file），
- *  不再走 `/upload-pdf`。 */
+ *  不再走 `/upload-pdf`。
+ *  2026-09-29 修复：响应走 parseAssemblyDetail mapper（详见 getAssembly 注释）。 */
 export async function uploadAssemblyPdf(id: string, file: File): Promise<AssemblyDetail> {
   const form = new FormData();
   form.append('file', file);
-  const resp = await api.post<AssemblyDetail>(`/assemblies/${id}/files`, form);
-  return resp.data;
+  const resp = await api.post<unknown>(`/assemblies/${id}/files`, form);
+  return parseAssemblyDetail(resp.data);
 }
 
 /** 详情页添加单个子件（无 PDF；如需 PDF 走 uploadPartFile）。
@@ -86,19 +198,21 @@ export async function softDeleteAssembly(id: string, version: number): Promise<v
   await api.post(`/assemblies/${id}/soft-delete`, { version });
 }
 
-/** 取消装配体（CLERK+）。级联取消所有非终态子件。 */
+/** 取消装配体（CLERK+）。级联取消所有非终态子件。
+ *  2026-09-29 修复：响应走 parseAssemblyDetail mapper（详见 getAssembly 注释）。 */
 export async function cancelAssembly(id: string): Promise<AssemblyDetail> {
-  const resp = await api.post<AssemblyDetail>(`/assemblies/${id}/cancel`);
-  return resp.data;
+  const resp = await api.post<unknown>(`/assemblies/${id}/cancel`);
+  return parseAssemblyDetail(resp.data);
 }
 
-/** 编辑装配体元数据（MANAGER + CLERK；仅 PENDING 可编辑）。 */
+/** 编辑装配体元数据（MANAGER + CLERK；仅 PENDING 可编辑）。
+ *  2026-09-29 修复：响应走 parseAssemblyDetail mapper（详见 getAssembly 注释）。 */
 export async function updateAssembly(
   id: string,
   payload: AssemblyUpdatePayload,
 ): Promise<AssemblyDetail> {
-  const resp = await api.post<AssemblyDetail>(`/assemblies/${id}/update`, payload);
-  return resp.data;
+  const resp = await api.post<unknown>(`/assemblies/${id}/update`, payload);
+  return parseAssemblyDetail(resp.data);
 }
 
 // ---- 文件相关 ----

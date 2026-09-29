@@ -168,11 +168,56 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   const detail = ref<AssemblyDetail | null>(null);
   const loading = ref(false);
 
+  // ============ 客户全集（2026-09-29 修复：提到 enrichAssemblyCustomer 之前）
+  // 2026-09-26：客户全集改走共享 query；leafCustomers = 二级客户（parent_id !== null）。
+  // useQuery 自动 fetch + 缓存会话级，写操作完成后 useCustomersQuery 失效自动 refetch；
+  // 错误状态走 query.error 暴露，原 try/catch ElMessage 行为保留。
+  const {
+    data: customersData,
+    isFetching,
+    error: customersError,
+    refetch: refetchCustomers,
+  } = useCustomersQuery();
+  const leafCustomers = computed<Customer[]>(() =>
+    (customersData.value?.items ?? []).filter((c) => c.parent_id !== null),
+  );
+  // 2026-09-26：保留对外 API 兼容 → 派生 isFetching（编辑 dialog 视觉 loading）。
+  const loadingCustomers: ComputedRef<boolean> = computed<boolean>(() => isFetching.value);
+  // 2026-09-26：保留对外 API（编辑 dialog @open 时调），底层走 query.refetch。
+  async function loadLeafCustomers(): Promise<void> {
+    await refetchCustomers();
+  }
+
+  /** 2026-09-29 修复：按 detail.assembly.customer_id 在 useCustomersQuery
+   *  客户全集中查，补全 customer_name / parent_customer_name / customer_path
+   *  三字段。child_count 已由 mapper 注入。
+   *
+   *  应用点：fetchData / updateAssemblyFn / cancelAssemblyFn / uploadPdfFn。
+   *  写操作后的 enrich 避免刷新前的瞬间空白。 */
+  function enrichAssemblyCustomer(d: AssemblyDetail): void {
+    const customer = (customersData.value?.items ?? []).find(
+      (c) => c.id === d.assembly.customer_id,
+    );
+    if (customer) {
+      d.assembly.customer_name = customer.name;
+      d.assembly.parent_customer_name = customer.parent_name;
+      d.assembly.customer_path = customer.parent_name
+        ? `${customer.parent_name} / ${customer.name}`
+        : customer.name;
+    } else {
+      d.assembly.customer_name = null;
+      d.assembly.parent_customer_name = null;
+      d.assembly.customer_path = null;
+    }
+  }
+
   async function fetchData(): Promise<void> {
     if (!assemblyId.value) return;
     loading.value = true;
     try {
-      detail.value = await getAssembly(assemblyId.value);
+      const fetched = await getAssembly(assemblyId.value);
+      enrichAssemblyCustomer(fetched);
+      detail.value = fetched;
     } catch (e) {
       detail.value = null;
       ElMessage.error((e as Error).message ?? '加载装配件详情失败');
@@ -237,25 +282,9 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   }
 
   // ============ 客户列表 + 申请人搜索（编辑对话框用）============
-  // 2026-09-26：客户全集改走共享 query；leafCustomers = 二级客户（parent_id !== null）。
-  // useQuery 自动 fetch + 缓存会话级，写操作完成后 useCustomersQuery 失效自动 refetch；
-  // 错误状态走 query.error 暴露，原 try/catch ElMessage 行为保留。
-  const {
-    data: customersData,
-    isFetching,
-    error: customersError,
-    refetch: refetchCustomers,
-  } = useCustomersQuery();
-  const leafCustomers = computed<Customer[]>(() =>
-    (customersData.value?.items ?? []).filter((c) => c.parent_id !== null),
-  );
-  // 2026-09-26：保留对外 API 兼容 → 派生 isFetching（编辑 dialog 视觉 loading）。
-  // 原 `loadingCustomers` 在仓内无消费方（grep 确认），保留纯信号语义对齐 query 形态。
-  const loadingCustomers: ComputedRef<boolean> = computed<boolean>(() => isFetching.value);
-  // 2026-09-26：保留对外 API（编辑 dialog @open 时调），底层走 query.refetch。
-  async function loadLeafCustomers(): Promise<void> {
-    await refetchCustomers();
-  }
+  // 2026-09-29 修复：customersData / leafCustomers / loadLeafCustomers 已上移到
+  // 「主数据」之前（enrichAssemblyCustomer 需用 customersData）。
+  // 此处只保留 customersError watch + applicant 搜索。
   // 2026-09-26：useQuery 在 setup 顶层就订阅、自动 fetch；以前 onMounted 触发的
   // loadLeafCustomers 由编辑 dialog @open 取代，composable 不主动触。watch error
   // 弹 ElMessage（与 useCustomerTree / DeliveryNoteScan 同款桥接）。
@@ -292,6 +321,8 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
         ...payload,
         version: detail.value.assembly.version,
       });
+      // 2026-09-29 修复：mapper 注入的 customer_name 三字段为 null，写后重新 enrich。
+      enrichAssemblyCustomer(updated);
       detail.value = updated;
       ElMessage.success('已保存');
       return true;
@@ -319,6 +350,8 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
     try {
       const updated = await cancelAssembly(a.id);
+      // 2026-09-29 修复：mapper 注入的 customer_name 三字段为 null，写后重新 enrich。
+      enrichAssemblyCustomer(updated);
       ElMessage.success('已取消装配件');
       detail.value = updated;
       return true;
@@ -383,6 +416,8 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     if (!assemblyId.value) return false;
     try {
       const updated = await uploadAssemblyPdf(assemblyId.value, file.raw);
+      // 2026-09-29 修复：mapper 注入的 customer_name 三字段为 null，写后重新 enrich。
+      enrichAssemblyCustomer(updated);
       detail.value = updated;
       ElMessage.success(`上传成功：自动创建 ${updated.children.length} 个子件`);
       return true;

@@ -5,6 +5,11 @@
 import type { PartListItem } from '@/types/parts';
 import type { DrawingFileItem } from './file';
 
+// 2026-09-29 修复：装配件详情响应实际 wire 形态是平铺（后端 `#[serde(flatten)]`
+// quirk），前端类型契约保持嵌套 `{assembly, children, files}`（最小爆炸半径），
+// 由 src/api/assembly.ts::parseAssemblyDetail mapper 在 api 边界消化该 quirk。
+// 此处仅追加 AssemblyChildItem 类型 + AssemblyItem 4 派生字段改 optional。
+
 export type AssemblySortKey =
   'PLANNED_DELIVERY_DATE' | 'REQUEST_DATE' | 'CREATED_AT' | 'SERIAL_NO' | 'DRAWING_NO' | 'NAME';
 
@@ -57,23 +62,32 @@ export interface AssemblyItem {
   name: string;
   applicant_name: string | null;
   customer_id: string;
-  customer_name: string | null;
-  parent_customer_name: string | null;
-  customer_path: string | null;
+  // 2026-09-29 修复：detail 端点（backend-rust `AssemblyDetail`）不带这 4 派生字段
+  // （后端 `AssemblyOut` 平铺，无 customer_name / parent_customer_name / customer_path /
+  // child_count），由 mapper 置 null 后由 useAssemblyDetail composable 在 fetchData
+  // 后用 useCustomersQuery 派生补全。list 端点（`AssemblyListItem`）仍冗余返这 4 字段，
+  // 故用 optional 兼容两端点。
+  customer_name?: string | null;
+  parent_customer_name?: string | null;
+  customer_path?: string | null;
+  child_count?: number;
   request_date: string;
   planned_delivery_date: string;
   // PR-2 2026-09-16 t_assembly 瘦身：actual_delivery_date 随后端列下线从出参删除。
   is_urgent: boolean;
   /** PENDING / IN_PROCESS / INSPECTION / READY_TO_SHIP / DELIVERED / COMPLETED / CANCELLED */
   status: AssemblyStatus;
-  child_count: number;
   // —— 2026-07-24 新增：装配体自身价格 + 送货单字段 ——
   /** 装配体套数（默认 1） */
   quantity: number;
-  /** 装配体单价（Decimal 序列化为 number） */
-  unit_price: number;
-  /** 装配体总价 = quantity * unit_price（后端落库） */
-  total_price: number;
+  /** 装配体单价（Decimal 序列化为 number）。
+   *  2026-09-29 修复：detail 端点 `unit_price` 是 string（rust_decimal 序列化为 str），
+   *  mapper 用 `'0'` 兜底保持与列表端点同形态；全局 AssemblyItem.unit_price 改 string
+   *  属独立 cleanup，本 commit 沿用 number + mapper 兜底过渡。 */
+  unit_price: number | string;
+  /** 装配体总价 = quantity * unit_price（后端落库）。
+   *  2026-09-29 修复：同 unit_price 过渡。 */
+  total_price: number | string;
   /** 订单号（法拉/路达共用） */
   order_no: string | null;
   /** 订单方系统内部交期 */
@@ -150,10 +164,39 @@ export interface AssemblyCreateResult {
 }
 
 /** 装配件详情：自身 + 子件 + 文件 */
+// 2026-09-29 修复：children 类型从 PartListItem[] 改为 AssemblyChildItem[]。
+// PartListItem 是列表窄出参（含 holder_name / process_chain_id / batch_id 等列表
+// 专用字段），装配件子件实际只有 13 字段（AssemblyChildOut），且 PartListItem 缺
+// current_batch_id（子件专用）；旧 bug 走类型欺骗 detail.children 当 PartListItem 用。
+// 新类型结构与 PartListItem 同构（同样的列展示需求），但**新增** current_batch_id +
+// __is_child 标记字段，所有 PartListItem 必填字段都补齐（mapper 在 api 边界做对齐）。
 export interface AssemblyDetail {
   assembly: AssemblyItem;
-  children: PartListItem[];
+  children: AssemblyChildItem[];
   files: DrawingFileItem[];
+}
+
+/** 装配件子件展示项（与 PartListItem 同构 + 子件专属字段）。
+ *
+ * 2026-09-29 修复：从 AssemblyDetail.children 的 PartListItem[] 升级而来。
+ * mapper（api/assembly.ts::childToAssemblyChildItem）字段对齐：
+ *   - 子件后端 13 字段 → 14 字段展示项（+ current_batch_id）
+ *   - PartListItem 必填字段全补齐（applicant_name / quantity / unit_price='0' /
+ *     total_price='0' / request_date / planned_delivery_date / status / order_no /
+ *     system_delivery_date / note=null / customer_name=null / l1_customer_name=null
+ *     / location=null / row_type='PART' / has_children=false）
+ *   - __is_child: true literal type 给消费者做窄化判断
+ *
+ * 字段类型语义保持与 PartListItem 一致（string for unit_price/total_price 沿 2026-09-27
+ * 前后端字段对齐约定）；is_urgent 在子件里固定 false（兜底，沿 mapper 实现）。
+ */
+export interface AssemblyChildItem extends PartListItem {
+  /** 2026-09-29 修复：子件当前激活批次 id（后端 AssemblyChildOut.current_batch_id）。
+   *  子件无活跃批次时为 null。PartListItem 同名字段已 optional，保持兼容。 */
+  current_batch_id: string | null;
+  /** literal type 标记：本行是装配件子件（来自 AssemblyDetail.children）。
+   *  消费者用 `row.__is_child === true` 做窄化（如 PartsTable.rowKey 派生 CHILD_${id}）。 */
+  __is_child: true;
 }
 /** 编辑装配件的 payload（field-level partial；POST /assemblies/{id}/update）。 */
 export interface AssemblyUpdatePayload {
