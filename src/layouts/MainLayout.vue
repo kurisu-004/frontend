@@ -11,6 +11,7 @@
         :default-active="activeMenu"
         :collapse="isCollapse"
         :collapse-transition="false"
+        :unique-opened="true"
         background-color="var(--sidebar-bg)"
         text-color="var(--sidebar-text)"
         active-text-color="var(--sidebar-text-active)"
@@ -198,6 +199,10 @@ function onMenuSelect(index: string): void {
   /* 2026-09-29 收窄：220 → 165（侧栏缩小25%）。子菜单弹出与父侧栏同宽即可，
      不必比父侧栏宽；原 220 是配合旧父侧栏宽度。 */
   min-width: 165px;
+  /* 2026-09-29 百叶窗视觉：二级菜单不做水平偏移。EP 默认 .el-menu-item 在 .el-sub-menu
+     下 padding-left 递增（每级 20px），二级即偏 40px；改为 0 让二级与一级图标起点对齐。
+     视觉上更像「分组下的子项」，而非「嵌套列表」。 */
+  padding-left: 0 !important;
 }
 
 /* 2026-09-29 重构：align-items: stretch 让 header-middle / header-right 撑满
