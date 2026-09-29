@@ -58,9 +58,7 @@
     </el-form>
     <template #footer>
       <el-button @click="showChangePwd = false">取消</el-button>
-      <el-button type="primary" :loading="pwdSaving" @click="submitChangePwd">
-        确定
-      </el-button>
+      <el-button type="primary" :loading="pwdSaving" @click="submitChangePwd"> 确定 </el-button>
     </template>
   </el-dialog>
 </template>

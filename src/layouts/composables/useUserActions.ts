@@ -5,9 +5,15 @@
 // 不进 src/composables/。MainLayout.vue 不再持有 currentUser fetch、ElMessageBox 确认、
 // 改密表单状态与表单 ref；仅保留折叠 / 菜单 / tagsView keep-alive。
 //
+// 2026-09-29 review 第 1 轮修复：删除首屏 onMounted `/iam/me` 重复 fetch + dummy
+// 守卫，userName 直接消费 `auth.user`（沿 CLAUDE.md auth store 唯一状态源不变量，
+// `auth.user` 由 login mutation / refreshOrLogout 维护）。composable 从 ~145
+// 行瘦到 ~115 行。token 失效由 http.ts 拦截器 dispatch `auth:tokens-refreshed`
+// → auth store listener → 必要时 router.replace('/login')，原 fetch 失败的
+// `router.replace('/login')` 兜底删除是安全的。
+//
 // 职责：
-//   - currentUser onMounted fetch（dummy-auth 守卫，沿 MainLayout 历史逻辑）
-//   - userName computed（avatar/name 展示）
+//   - userName computed（消费 auth store，avatar/name 展示）
 //   - handleUserCmd(cmd)：logout 弹确认 → auth.logout → 跳 /login；
 //                         change-password → 打开 dialog
 //   - 改密 dialog 全部状态：showChangePwd / pwdForm / pwdRules / pwdFormRef /
@@ -17,14 +23,13 @@
 // 模板里直接 `u.xxx`——composable 返回的是 refs/reactive，解构不丢响应式
 //（对比 Pinia store 的"不解构"不变量仅针对 store proxy）。
 
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { useAuthStore } from '@/stores/auth';
-import { me as apiMe, changeMyPassword } from '@/api/iam';
+import { changeMyPassword } from '@/api/iam';
 import { useDialogSize } from '@/composables/useDialogSize';
-import type { CurrentUser } from '@/types/user';
 
 export type UserCmd = 'change-password' | 'logout';
 
@@ -32,10 +37,9 @@ export function useUserActions() {
   const router = useRouter();
   const auth = useAuthStore();
 
-  // ===== 用户名 =====
-  const currentUser = ref<CurrentUser | null>(null);
+  // ===== 用户名（直接消费 auth store 唯一状态源，2026-09-29 review 修复） =====
   const userName = computed<string>(() => {
-    const u = currentUser.value;
+    const u = auth.user;
     return u?.full_name || u?.username || '未登录';
   });
 
@@ -117,18 +121,11 @@ export function useUserActions() {
     }
   }
 
-  // ===== 首屏 fetch（沿 MainLayout 历史 dummy 守卫） =====
-  onMounted(async () => {
-    // 2026-09-11 修复（沿用原逻辑）：dev:dummy 模式下跳过 apiMe()——dummy token
-    // 'dummy-dev-token' 被后端判无效 → 401 → 此前会被踢回登录页。dummy 已经注入
-    // 完整 CurrentUser，无需再向 /iam/me 验证。
-    if (auth.isDummyAuthActive) return;
-    try {
-      currentUser.value = await apiMe();
-    } catch {
-      router.replace('/login');
-    }
-  });
+  // 2026-09-29 review 第 1 轮修复：删除首屏 onMounted `/iam/me` 重复 fetch + dummy
+  // 守卫；userName 改为直接消费 `auth.user`（沿 auth store 唯一状态源不变量）。
+  // token 失效由 http.ts 拦截器（CLAUDE.md `auth store 架构（2026-09-26）`）
+  // 派发 `auth:tokens-refreshed` → store listener → refreshOrLogout(router) 兜底
+  // 跳 /login；原 fetch 失败的 `router.replace('/login')` 删后仍安全。
 
   return {
     userName,

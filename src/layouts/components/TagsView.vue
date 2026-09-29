@@ -6,7 +6,13 @@
          2026-09-29：el-dropdown 加 class="tag-dropdown [affix]"——el-dropdown 根
          div（EP 2.14.6 默认根即包裹 trigger 插槽的 div）才是容器的直接子元素，
          Sortable 只对直接子元素排序。原 draggable:'.tag-item' 让 .tag-item 与
-         .el-dropdown 嵌套，previousElementSibling 算索引全为 0、拖动失效。 -->
+         .el-dropdown 嵌套，previousElementSibling 算索引全为 0、拖动失效。
+         2026-09-29 review 第 1 轮补注释：el-dropdown 内部组件链为
+         ElDropdown → ElTooltip（renderless）→ ElPopper（renderless）→
+         ElTooltipTrigger → ElPopperTrigger → ElOnlyChild（renderless，
+         cloneVNode 透传子节点）——这条链上无 render 元素产生额外 DOM 节点，
+         最终根 div 即 .el-dropdown（带 class="tag-dropdown [affix]"），
+         故 .tag-dropdown 才是容器 root tag，与上方论证一致。 -->
     <el-dropdown
       v-for="view in visitedViews"
       :key="view.path"
@@ -27,11 +33,7 @@
       >
         <span class="tag-text">{{ view.title }}</span>
         <!-- affix 不显示关闭按钮（vue-element-admin 行为） -->
-        <el-icon
-          v-if="!view.affix"
-          class="tag-close"
-          @click.stop="onCloseClick(view)"
-        >
+        <el-icon v-if="!view.affix" class="tag-close" @click.stop="onCloseClick(view)">
           <Close />
         </el-icon>
       </div>
@@ -44,16 +46,10 @@
           <el-dropdown-item command="close" :disabled="view.affix === true">
             <el-icon><Close /></el-icon>关闭
           </el-dropdown-item>
-          <el-dropdown-item
-            command="close-others"
-            :disabled="isOnlyView(view)"
-          >
+          <el-dropdown-item command="close-others" :disabled="isOnlyView(view)">
             <el-icon><CloseBold /></el-icon>关闭其他
           </el-dropdown-item>
-          <el-dropdown-item
-            command="close-all"
-            :disabled="isOnlyAffix(view)"
-          >
+          <el-dropdown-item command="close-all" :disabled="isOnlyAffix(view)">
             <el-icon><FolderDelete /></el-icon>关闭全部
           </el-dropdown-item>
         </el-dropdown-menu>
@@ -63,7 +59,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref as vueRef, watch, nextTick as vueNextTick } from 'vue';
+import {
+  computed,
+  onMounted,
+  onBeforeUnmount,
+  ref as vueRef,
+  watch,
+  nextTick as vueNextTick,
+} from 'vue';
 import { useRoute, useRouter, type RouteLocationNormalizedLoaded } from 'vue-router';
 import { Close, Refresh, CloseBold, FolderDelete } from '@element-plus/icons-vue';
 import { tryOnScopeDispose } from '@vueuse/core';
@@ -298,7 +301,7 @@ tryOnScopeDispose(() => {
   min-width: 0;
   background-color: var(--header-bg);
   display: flex;
-  align-items: flex-end;   /* tab 贴着底边，「坐在」容器底部边框之上 */
+  align-items: flex-end; /* tab 贴着底边，「坐在」容器底部边框之上 */
   padding: 0 8px;
   gap: 4px;
   overflow-x: auto;
@@ -316,8 +319,8 @@ tryOnScopeDispose(() => {
   align-items: center;
   gap: 4px;
   height: 32px;
-  min-width: 80px;          /* 新增：宽度下限，过短则禁用 */
-  max-width: 200px;         /* 新增：长标题 truncate */
+  min-width: 80px; /* 新增：宽度下限，过短则禁用 */
+  max-width: 200px; /* 新增：长标题 truncate */
   padding: 0 12px;
   border: 1px solid var(--border-color);
   border-top-left-radius: 8px;
@@ -331,7 +334,10 @@ tryOnScopeDispose(() => {
   white-space: nowrap;
   user-select: none;
   position: relative;
-  transition: color 0.18s, border-color 0.18s, background-color 0.18s;
+  transition:
+    color 0.18s,
+    border-color 0.18s,
+    background-color 0.18s;
 
   .tag-text {
     flex: 1;
@@ -345,11 +351,14 @@ tryOnScopeDispose(() => {
     flex-shrink: 0;
     font-size: 12px;
     color: var(--text-secondary);
-    margin-left: 0;          /* 原 2px 取消，避免压缩 tag-text 空间 */
+    margin-left: 0; /* 原 2px 取消，避免压缩 tag-text 空间 */
     padding: 2px;
-    border-radius: 50%;       /* 圆形 hover 区 */
-    opacity: 0;              /* 默认隐藏，hover 才显 */
-    transition: opacity 0.18s, background-color 0.18s, color 0.18s;
+    border-radius: 50%; /* 圆形 hover 区 */
+    opacity: 0; /* 默认隐藏，hover 才显 */
+    transition:
+      opacity 0.18s,
+      background-color 0.18s,
+      color 0.18s;
 
     &:hover {
       background-color: rgba(0, 0, 0, 0.08);
@@ -360,19 +369,21 @@ tryOnScopeDispose(() => {
   &:hover {
     color: var(--primary-color);
     border-color: var(--primary-light);
-    .tag-close { opacity: 1; }
+    .tag-close {
+      opacity: 1;
+    }
   }
 
   &.active {
     background-color: var(--primary-color);
     color: #fff;
     border-color: var(--primary-color);
-    margin-bottom: -1px;          /* 坐在容器底边之上，盖住底部 1px 边框（Chrome 效果） */
-    box-shadow: 0 -2px 6px rgba(30, 77, 139, 0.18);  /* 轻微抬升阴影 */
+    margin-bottom: -1px; /* 坐在容器底边之上，盖住底部 1px 边框（Chrome 效果） */
+    box-shadow: 0 -2px 6px rgba(30, 77, 139, 0.18); /* 轻微抬升阴影 */
 
     .tag-close {
       color: rgba(255, 255, 255, 0.85);
-      opacity: 0.6;              /* 激活态关闭按钮半透，hover 才全显 */
+      opacity: 0.6; /* 激活态关闭按钮半透，hover 才全显 */
 
       &:hover {
         background-color: rgba(255, 255, 255, 0.18);
@@ -380,16 +391,20 @@ tryOnScopeDispose(() => {
       }
     }
 
-    &:hover .tag-close { opacity: 1; }
+    &:hover .tag-close {
+      opacity: 1;
+    }
   }
 
   &.affix {
     min-width: 0;
-    width: 40px;                 /* 钉死图标宽度（pinned tab 视觉） */
+    width: 40px; /* 钉死图标宽度（pinned tab 视觉） */
     padding: 0;
     justify-content: center;
     /* affix 当前版本没有文本，CSS 层防御 */
-    .tag-text { display: none; }
+    .tag-text {
+      display: none;
+    }
   }
 }
 </style>

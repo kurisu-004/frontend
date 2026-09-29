@@ -36,11 +36,7 @@ const capture: {
 };
 
 vi.mock('vue-draggable-plus', () => ({
-  useDraggable: (
-    el: Ref<HTMLElement | null>,
-    list: unknown,
-    opts: Record<string, unknown>,
-  ) => {
+  useDraggable: (el: Ref<HTMLElement | null>, list: unknown, opts: Record<string, unknown>) => {
     capture.el = el;
     capture.list = list;
     capture.opts = opts;
@@ -127,7 +123,12 @@ function attachPinia(): void {
 }
 
 function setupRoute(path: string): void {
-  mockRoute = { path, fullPath: path, meta: {}, name: path.replace(/^\//, '').toUpperCase() || 'ROOT' };
+  mockRoute = {
+    path,
+    fullPath: path,
+    meta: {},
+    name: path.replace(/^\//, '').toUpperCase() || 'ROOT',
+  };
 }
 
 /** 触发第一个 ElDropdown stub 的 close-all command。 */
