@@ -195,3 +195,165 @@ export const partFileListResultSchema = z.object({
 });
 
 export type PartFileListResultSchema = z.infer<typeof partFileListResultSchema>;
+
+// ============================================================
+// 2026-09-29 修复：装配件详情响应 schema（消化 backend-rust
+// `#[serde(flatten)]` quirk）。
+//
+// 后端 `AssemblyDetail` 定义（backend-rust src/modules/assembly/vo/assembly.rs:113-119）：
+//   #[derive(Serialize)]
+//   pub struct AssemblyDetail {
+//       #[serde(flatten)]
+//       pub assembly: AssemblyOut,
+//       pub children: Vec<AssemblyChildOut>,
+//       pub files: Vec<AssemblyFileRef>,
+//   }
+//
+// `#[serde(flatten)]` 把 AssemblyOut 全部字段平铺到顶层，**没有 `assembly` 嵌套键**。
+// 旧 bug：前端 AssemblyDetail 类型契约是嵌套 `{assembly, children, files}` →
+// detail.value.assembly === undefined → AssemblyInfoCard 不渲染 +
+// canUploadTotalPdf/canAddChild computed 抛 TypeError → v-loading watcher 停摆。
+//
+// 本 commit 在 schema 层把后端真实 wire 形态锁死：
+//   - assemblyOutSchema: AssemblyOut 19 字段
+//   - assemblyChildOutSchema: AssemblyChildOut 13 字段
+//   - assemblyFileRefSchema: AssemblyFileRef 3 字段
+//   - assemblyDetailFlatSchema: 19 字段平铺 + children + files（实际 wire 形态）
+//
+// 注意：assemblyDetailFlatSchema 用 `.strict()` 而非默认 strip ——
+// 若后端意外把 assembly 改回嵌套键（regression），Zod parse 会立刻抛错，
+// 守门到位（M-1 同源问题：缺字段静默 strip = 校验形同虚设）。
+// ============================================================
+
+/** 装配件实体。字段集对齐 backend-rust `AssemblyOut`
+ * （backend-rust src/modules/assembly/vo/assembly.rs:17-39），19 字段。 */
+export const assemblyOutSchema = z.object({
+  id: z.string(),
+  version: z.number(),
+  serial_no: z.string().nullable(),
+  drawing_no: z.string(),
+  name: z.string(),
+  applicant_name: z.string().nullable(),
+  customer_id: z.string(),
+  request_date: z.string(),
+  planned_delivery_date: z.string(),
+  is_urgent: z.boolean(),
+  status: z.enum([
+    'PENDING',
+    'IN_PROCESS',
+    'INSPECTION',
+    'READY_TO_SHIP',
+    'DELIVERED',
+    'COMPLETED',
+    'CANCELLED',
+  ]),
+  quantity: z.number(),
+  unit_price: z.string().nullable(),
+  total_price: z.string().nullable(),
+  order_no: z.string().nullable(),
+  system_delivery_date: z.string().nullable(),
+  note: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export type AssemblyOutSchema = z.infer<typeof assemblyOutSchema>;
+
+/** 装配件子件出参。字段对齐 backend-rust `AssemblyChildOut`
+ * （backend-rust src/modules/assembly/vo/assembly.rs:77-95），13 字段。
+ *  注：后端 drawing_no 在 vo 层是 Option（model 层 NOT NULL），按 vo 契约 schema 声明 nullable。
+ *  status 是 Part 业务枚举（10 态），与 partSchema 同源。 */
+export const assemblyChildOutSchema = z.object({
+  id: z.string(),
+  version: z.number(),
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string().nullable(),
+  status: z.enum([
+    'PENDING',
+    'PROGRAMMING',
+    'IN_PROCESS',
+    'INSPECTION',
+    'READY_TO_SHIP',
+    'DELIVERED',
+    'REPAIRING',
+    'OUTSOURCE',
+    'COMPLETED',
+    'CANCELLED',
+  ]),
+  quantity: z.number(),
+  planned_delivery_date: z.string().nullable(),
+  applicant_name: z.string(),
+  request_date: z.string(),
+  order_no: z.string().nullable(),
+  system_delivery_date: z.string().nullable(),
+  is_urgent: z.boolean(),
+  note: z.string().nullable(),
+  current_batch_id: z.string().nullable(),
+});
+
+export type AssemblyChildOutSchema = z.infer<typeof assemblyChildOutSchema>;
+
+/** 装配件关联文件出参。字段对齐 backend-rust `AssemblyFileRef`
+ * （backend-rust src/modules/assembly/vo/assembly.rs:101-107），3 字段。 */
+export const assemblyFileRefSchema = z.object({
+  id: z.string(),
+  original_filename: z.string(),
+  page_count: z.number().nullable(),
+});
+
+export type AssemblyFileRefSchema = z.infer<typeof assemblyFileRefSchema>;
+
+/** 装配件详情（实际 wire 形态）。
+ *
+ * 后端用 `#[serde(flatten)]` 把 AssemblyOut 19 字段平铺到顶层 + children + files。
+ * 这里**显式展开 19 字段**（不用 `.shape` spread，类型不安全），
+ * 后续 mapper（api/assembly.ts::parseAssemblyDetail）把平铺转回嵌套。
+ *
+ * 用 `.strict()` 而非默认 strip：若后端意外把 assembly 改回嵌套键，parse 立刻抛错；
+ * 守门到位（M-1 regression guard 同形态）。 */
+export const assemblyDetailFlatSchema = z
+  .object({
+    // —— AssemblyOut 19 字段（字段集对齐 vo/assembly.rs:17-39）——
+    id: z.string(),
+    version: z.number(),
+    serial_no: z.string().nullable(),
+    drawing_no: z.string(),
+    name: z.string(),
+    applicant_name: z.string().nullable(),
+    customer_id: z.string(),
+    request_date: z.string(),
+    planned_delivery_date: z.string(),
+    is_urgent: z.boolean(),
+    status: z.enum([
+      'PENDING',
+      'IN_PROCESS',
+      'INSPECTION',
+      'READY_TO_SHIP',
+      'DELIVERED',
+      'COMPLETED',
+      'CANCELLED',
+    ]),
+    quantity: z.number(),
+    unit_price: z.string().nullable(),
+    total_price: z.string().nullable(),
+    order_no: z.string().nullable(),
+    system_delivery_date: z.string().nullable(),
+    note: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+    // —— 平铺之外的 children / files ——
+    children: z.array(assemblyChildOutSchema),
+    files: z.array(assemblyFileRefSchema),
+  })
+  .strict();
+
+export type AssemblyDetailFlatSchema = z.infer<typeof assemblyDetailFlatSchema>;
+
+/** 装配件文件出参数组（review 第 1 轮修复 C2）。
+ *
+ * 后端 uploadAssemblyPdf（POST /api/v2/assemblies/{id}/files）实际响应是
+ * `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。前端旧 bug
+ * 走 parseAssemblyDetail 把数组塞进 z.object → ZodError。本 schema 锁死数组形态，
+ * 让 mapper（api/assembly.ts::uploadAssemblyPdf）在 api 边界守门。 */
+export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);

@@ -21,7 +21,7 @@
 //   - OCC 锚点取自 `PartDetailOut.version`；onSave 成功路径整体替换 part.value，
 //     新 version 天然回写。补 40901 分支：他人已改 → 提示 + fetchPart 拉最新值。
 
-import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
+import { computed, reactive, ref, watch, watchEffect, type ComputedRef, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
@@ -40,11 +40,15 @@ import {
   type PartItem,
   type PartUpdatePayload,
 } from '@/api/parts';
-import { getAssemblyForPart } from '@/api/assembly';
+import { enrichAssemblyItem, getAssemblyForPart } from '@/api/assembly';
 import type { AssemblyDetail } from '@/types/assembly';
 import { receiveFromOutsource } from '@/api/parts';
 import { usePermissions } from '@/composables/usePermissions';
 import { useConfirm } from '@/composables/useConfirm';
+// 2026-09-29 review 第 2 轮 MAJOR-1 修复：usePartDetail.fetchAssembly 现在也走
+// 客户 enrich（PartAssemblyLinkCard 客户列展示所需），订阅 useCustomersQuery
+// 共享缓存（staleTime Infinity + 唯一 queryKey，多 subscriber 不触发额外 fetch）。
+import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import {
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TAG_TYPE,
@@ -242,6 +246,11 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   }
 
   // ============ 装配件详情（PartAssemblyLinkCard 用）============
+  // 2026-09-29 review 第 2 轮 MAJOR-1 修复：订阅 useCustomersQuery 拿客户全集，
+  // 用于 enrichAssemblyItem 补全 customer_name / parent_customer_name / customer_path。
+  // staleTime: Infinity + 唯一 queryKey，多 subscriber 不触发额外 fetch（共享缓存）。
+  const { data: customersData } = useCustomersQuery();
+
   const assemblyDetail = ref<AssemblyDetail | null>(null);
   const assemblyLoading = ref(false);
   async function fetchAssembly(): Promise<void> {
@@ -251,7 +260,14 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     }
     assemblyLoading.value = true;
     try {
-      assemblyDetail.value = await getAssemblyForPart(part.value.id);
+      const fetched = await getAssemblyForPart(part.value.id);
+      // 2026-09-29 review 第 2 轮 MAJOR-1：fetched 非 null 时调共享 enrich，
+      // PartAssemblyLinkCard「客户」列才能正确展示。fetched 为 null（零件无
+      // 所属装配件）时直接保留 null。
+      if (fetched) {
+        fetched.assembly = enrichAssemblyItem(fetched.assembly, customersData.value?.items ?? []);
+      }
+      assemblyDetail.value = fetched;
     } catch (e) {
       assemblyDetail.value = null;
       ElMessage.error((e as Error).message ?? '加载装配件信息失败');
@@ -259,6 +275,19 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
       assemblyLoading.value = false;
     }
   }
+
+  // 2026-09-29 review 第 2 轮 MAJOR-2 修复：响应式 customers 缓存到达。
+  // useCustomersQuery 是懒查询（staleTime Infinity），首次进 PartDetail 时
+  // customers 可能未加载完，fetchAssembly 内 enrich 把 customer_* 置 null 后
+  // 不会自动 re-trigger。watchEffect 在 customersData 变化时自动重跑 enrich，
+  // 确保 PartAssemblyLinkCard「客户」列无需刷新就能展示。
+  // 约束：assemblyDetail.value 为 null 时不跑（无父装配体分支）。
+  watchEffect(() => {
+    const items = customersData.value?.items;
+    if (!assemblyDetail.value) return;
+    if (!items) return;
+    assemblyDetail.value.assembly = enrichAssemblyItem(assemblyDetail.value.assembly, items);
+  });
 
   // ============ 取消订单 / 删除（confirm dialog 由 shell 持有 UI 状态）============
   /**

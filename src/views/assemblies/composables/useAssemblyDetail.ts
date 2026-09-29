@@ -19,13 +19,14 @@
 // - 出错统一在 composable 内 ElMessage 提示（fetchData 除外——它把 null 留给 shell）；
 //   子件添加等业务操作返回 false 时不再二次提示。
 
-import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
+import { computed, reactive, ref, watch, watchEffect, type ComputedRef, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { UploadFile, FormRules } from 'element-plus';
 import {
   addAssemblyChild,
   cancelAssembly,
+  enrichAssemblyItem,
   getAssembly,
   softDeleteAssembly,
   updateAssembly,
@@ -168,11 +169,59 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   const detail = ref<AssemblyDetail | null>(null);
   const loading = ref(false);
 
+  // ============ 客户全集（2026-09-29 修复：提到 enrichAssemblyCustomer 之前）
+  // 2026-09-26：客户全集改走共享 query；leafCustomers = 二级客户（parent_id !== null）。
+  // useQuery 自动 fetch + 缓存会话级，写操作完成后 useCustomersQuery 失效自动 refetch；
+  // 错误状态走 query.error 暴露，原 try/catch ElMessage 行为保留。
+  const {
+    data: customersData,
+    isFetching,
+    error: customersError,
+    refetch: refetchCustomers,
+  } = useCustomersQuery();
+  const leafCustomers = computed<Customer[]>(() =>
+    (customersData.value?.items ?? []).filter((c) => c.parent_id !== null),
+  );
+  // 2026-09-26：保留对外 API 兼容 → 派生 isFetching（编辑 dialog 视觉 loading）。
+  const loadingCustomers: ComputedRef<boolean> = computed<boolean>(() => isFetching.value);
+  // 2026-09-26：保留对外 API（编辑 dialog @open 时调），底层走 query.refetch。
+  async function loadLeafCustomers(): Promise<void> {
+    await refetchCustomers();
+  }
+
+  /** 2026-09-29 修复：按 detail.assembly.customer_id 在 useCustomersQuery
+   *  客户全集中查，补全 customer_name / parent_customer_name / customer_path
+   *  三字段。child_count 已由 mapper 注入。
+   *
+   * 2026-09-29 review 第 2 轮 MAJOR-1 / MAJOR-2 修复：
+   * - MAJOR-1：enrich 逻辑提到 @/api/assembly.ts 的 `enrichAssemblyItem` 共享
+   *   纯函数（PartAssemblyLinkCard 经 usePartDetail.fetchAssembly 走同一函数）。
+   * - MAJOR-2：下方新增 `watchEffect` 监听 customersData + detail.value，
+   *   customers 缓存 lazy 到达后自动 re-enrich，无需刷新。 */
+  function enrichAssemblyCustomer(d: AssemblyDetail): void {
+    d.assembly = enrichAssemblyItem(d.assembly, customersData.value?.items ?? []);
+  }
+
+  // 2026-09-29 review 第 2 轮 MAJOR-2 修复：响应式 customers 缓存到达。
+  // useCustomersQuery staleTime: Infinity 是懒查询，首次进详情页时 customers
+  // 可能未加载完（customersData.value 为 undefined），enrich 把 customer_*
+  // 置 null 后不会自动 re-trigger。watchEffect 在 customersData 变化时自动
+  // 重跑 enrich，确保 detail.value.assembly.customer_path 始终反映最新客户名。
+  // 约束：detail.value 为 null 时不跑（避免空 detail 时 enrich 报错）。
+  watchEffect(() => {
+    const items = customersData.value?.items;
+    if (!detail.value) return;
+    if (!items) return;
+    detail.value.assembly = enrichAssemblyItem(detail.value.assembly, items);
+  });
+
   async function fetchData(): Promise<void> {
     if (!assemblyId.value) return;
     loading.value = true;
     try {
-      detail.value = await getAssembly(assemblyId.value);
+      const fetched = await getAssembly(assemblyId.value);
+      enrichAssemblyCustomer(fetched);
+      detail.value = fetched;
     } catch (e) {
       detail.value = null;
       ElMessage.error((e as Error).message ?? '加载装配件详情失败');
@@ -237,25 +286,9 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   }
 
   // ============ 客户列表 + 申请人搜索（编辑对话框用）============
-  // 2026-09-26：客户全集改走共享 query；leafCustomers = 二级客户（parent_id !== null）。
-  // useQuery 自动 fetch + 缓存会话级，写操作完成后 useCustomersQuery 失效自动 refetch；
-  // 错误状态走 query.error 暴露，原 try/catch ElMessage 行为保留。
-  const {
-    data: customersData,
-    isFetching,
-    error: customersError,
-    refetch: refetchCustomers,
-  } = useCustomersQuery();
-  const leafCustomers = computed<Customer[]>(() =>
-    (customersData.value?.items ?? []).filter((c) => c.parent_id !== null),
-  );
-  // 2026-09-26：保留对外 API 兼容 → 派生 isFetching（编辑 dialog 视觉 loading）。
-  // 原 `loadingCustomers` 在仓内无消费方（grep 确认），保留纯信号语义对齐 query 形态。
-  const loadingCustomers: ComputedRef<boolean> = computed<boolean>(() => isFetching.value);
-  // 2026-09-26：保留对外 API（编辑 dialog @open 时调），底层走 query.refetch。
-  async function loadLeafCustomers(): Promise<void> {
-    await refetchCustomers();
-  }
+  // 2026-09-29 修复：customersData / leafCustomers / loadLeafCustomers 已上移到
+  // 「主数据」之前（enrichAssemblyCustomer 需用 customersData）。
+  // 此处只保留 customersError watch + applicant 搜索。
   // 2026-09-26：useQuery 在 setup 顶层就订阅、自动 fetch；以前 onMounted 触发的
   // loadLeafCustomers 由编辑 dialog @open 取代，composable 不主动触。watch error
   // 弹 ElMessage（与 useCustomerTree / DeliveryNoteScan 同款桥接）。
@@ -277,8 +310,11 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
    *  后端 `AssemblyUpdateRequest.version: i32` **无 `#[serde(default)]`**，缺字段时
    *  axum `Json` extractor 在 service 之前直接拒 → HTTP 422 `missing field version`。
    *  展示壳（AssemblyEditDialog）只管表单字段，version 属业务层关注点，故在此拼。
-   *  成功路径 `detail.value = updated` 整体替换 → 新 version 天然回写，
-   *  下一次打开对话框用新锚点。 */
+   *
+   * 2026-09-29 review 第 1 轮 C1 修复：后端 update 响应是 AssemblyOut（19 字段
+   * 平铺，无 children / files），不能整体替换 detail.value。改走就地 mutate：
+   * 把响应字段覆盖到 detail.value.assembly 对应字段，child_count 用现有
+   * detail.value.children.length，customer_* 走 enrichAssemblyCustomer 重算。 */
   async function updateAssemblyFn(
     payload: Omit<AssemblyUpdatePayload, 'version'>,
   ): Promise<boolean> {
@@ -292,7 +328,15 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
         ...payload,
         version: detail.value.assembly.version,
       });
-      detail.value = updated;
+      // 就地 mutate：detail.value.assembly 替换字段 + children / files 沿用。
+      // child_count 用现有 children 数量（响应不带），customer_* 由 enrich 派生。
+      Object.assign(detail.value.assembly, updated, {
+        child_count: detail.value.children.length,
+        customer_name: null,
+        parent_customer_name: null,
+        customer_path: null,
+      });
+      enrichAssemblyCustomer(detail.value);
       ElMessage.success('已保存');
       return true;
     } catch (e) {
@@ -306,6 +350,8 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
   }
 
+  /** 2026-09-29 review 第 1 轮 C1 修复：cancel 响应同 update，AssemblyOut 平铺
+   *  不带 children / files。改为就地 mutate detail.value.assembly。 */
   async function cancelAssemblyFn(serialInput: string): Promise<boolean> {
     if (!detail.value) return false;
     const a = detail.value.assembly;
@@ -319,8 +365,14 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
     try {
       const updated = await cancelAssembly(a.id);
+      Object.assign(detail.value.assembly, updated, {
+        child_count: detail.value.children.length,
+        customer_name: null,
+        parent_customer_name: null,
+        customer_path: null,
+      });
+      enrichAssemblyCustomer(detail.value);
       ElMessage.success('已取消装配件');
-      detail.value = updated;
       return true;
     } catch (e) {
       ElMessage.error((e as Error).message ?? '操作失败');
@@ -374,6 +426,10 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
   }
 
+  /** 2026-09-29 review 第 1 轮 C2 修复：后端 uploadAssemblyPdf 响应是
+   *  `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。响应只携带
+   *  新建的 AssemblyFileRef 列表，detail / children 走 fetchData() 重拉；
+   *  ElMessage 用返回的 files.length 报「自动创建 N 个子件」。 */
   async function uploadPdfFn(file: UploadFile): Promise<boolean> {
     if (!file.raw) return false;
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -382,9 +438,9 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
     if (!assemblyId.value) return false;
     try {
-      const updated = await uploadAssemblyPdf(assemblyId.value, file.raw);
-      detail.value = updated;
-      ElMessage.success(`上传成功：自动创建 ${updated.children.length} 个子件`);
+      const created = await uploadAssemblyPdf(assemblyId.value, file.raw);
+      await fetchData();
+      ElMessage.success(`上传成功：自动创建 ${created.length} 个子件`);
       return true;
     } catch (e) {
       ElMessage.error((e as Error).message ?? '上传总装 PDF 失败');

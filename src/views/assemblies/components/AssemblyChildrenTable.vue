@@ -198,6 +198,10 @@ import { useDialogSize } from '@/composables/useDialogSize';
 import type { PartFileItem } from '@/types/part_file';
 import type { PartListItem } from '@/types/parts';
 import type { OrderStatus } from '@/types/parts';
+// 2026-09-29 修复：children 类型从 PartListItem[] 升级为 AssemblyChildItem[]（消除类型欺骗）。
+// AssemblyChildItem extends PartListItem + current_batch_id + __is_child，结构上
+// 兼容 cellRender 内部 row as PartListItem 断言（PartListItem 是父类型）。
+import type { AssemblyChildItem } from '@/types/assembly';
 import {
   resolveDraggable,
   useColumnVisibility,
@@ -212,7 +216,9 @@ import {
 } from '../composables/useAssemblyDetail';
 
 interface Props {
-  children: PartListItem[] | null;
+  // 2026-09-29 修复：children 类型由 PartListItem[] 改为 AssemblyChildItem[]。
+  // cellRender 内部 row as PartListItem 断言仍兼容（AssemblyChildItem extends PartListItem）。
+  children: AssemblyChildItem[] | null;
   /** 子件 id → DRAWING 文件映射（点子件图号直接预览） */
   childDrawingMap: Record<string, PartFileItem>;
   /** 权限 flag */

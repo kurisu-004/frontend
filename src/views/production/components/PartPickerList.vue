@@ -209,7 +209,9 @@ function rowKey(row: PartListItem): string {
 
 /** 2026-09-12 新增：懒加载装配件子件（复用 PartsTable.vue:297-332 模式）。
  *  mock 阶段 fixture 没有 matched_children，fallback `getAssembly` 会 401；
- *  此时直接 resolve([])，UI 仍展示展开箭头（点开为空），不影响演示。 */
+ *  此时直接 resolve([])，UI 仍展示展开箭头（点开为空），不影响演示。
+ *  2026-09-29 修复：getAssembly 返回的 detail.children 已是 AssemblyChildItem[]，
+ *  mapper 已注入 __is_child / row_type / has_children，直接透传即可。 */
 async function loadChildren(
   row: PartListItem,
   _treeNode: unknown,
@@ -232,13 +234,8 @@ async function loadChildren(
   }
   try {
     const detail = await getAssembly(row.id);
-    const children = (detail.children ?? []).map((child) => ({
-      ...child,
-      __is_child: true,
-      row_type: 'PART' as const,
-      has_children: false,
-    })) as PartListItem[];
-    resolve(children);
+    // 2026-09-29 修复：mapper 已注入 __is_child / row_type / has_children，直接透传。
+    resolve(detail.children ?? []);
   } catch {
     resolve([]);
   }

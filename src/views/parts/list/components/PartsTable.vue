@@ -238,6 +238,10 @@ function rowKey(row: PartListItem): string {
 // 命中子件全集），避免每次展开都触发 /assemblies/{id} 详情查询。
 // 2026-09-28 保留作为旧快照兼容兜底；新数据永远走 getAssembly(row.id) —— 后端
 // modules/part/service/crud.rs::list_parts 合并响应不再携带 matched_children 字段。
+// 2026-09-29 修复：getAssembly 返回的 detail.children 已是 AssemblyChildItem[]，
+// mapper（parseAssemblyDetail → childToAssemblyChildItem）已注入 __is_child: true /
+// row_type: 'PART' / has_children: false。matched_children（旧快照兼容）走老路径
+// 强转补齐，行为不变。
 async function loadChildren(
   row: PartListItem,
   _treeNode: unknown,
@@ -260,13 +264,8 @@ async function loadChildren(
   }
   try {
     const detail = await getAssembly(row.id);
-    const children = (detail.children ?? []).map((child) => ({
-      ...child,
-      __is_child: true,
-      row_type: 'PART' as const,
-      has_children: false,
-    })) as PartListItem[];
-    resolve(children);
+    // 2026-09-29 修复：mapper 已注入 __is_child / row_type / has_children，直接透传。
+    resolve(detail.children ?? []);
   } catch {
     resolve([]);
   }

@@ -82,6 +82,34 @@ function makeRow(overrides: Partial<PartListItem> = {}): PartListItem {
   return row;
 }
 
+/** 2026-09-29 review 第 1 轮 C3 修复：后端 AssemblyOut 真实响应是 19 字段平铺
+ * （无 children / files 嵌套，无 assembly 外层包装）。用 makeRow() 做基础
+ * 字段复用，强制只取 AssemblyOut 19 字段 → mock 形态与 production 完全对齐。 */
+function makeAssemblyOut(overrides: Partial<PartListItem> = {}): Record<string, unknown> {
+  const base = makeRow(overrides);
+  return {
+    id: base.id,
+    version: base.version,
+    serial_no: base.serial_no,
+    drawing_no: base.drawing_no,
+    name: base.name,
+    applicant_name: base.applicant_name,
+    customer_id: '180000000000001',
+    request_date: base.request_date,
+    planned_delivery_date: base.planned_delivery_date,
+    is_urgent: base.is_urgent,
+    status: base.status,
+    quantity: base.quantity,
+    unit_price: base.unit_price,
+    total_price: base.total_price,
+    order_no: base.order_no,
+    system_delivery_date: base.system_delivery_date,
+    note: base.note,
+    created_at: '2026-09-29 10:00:00',
+    updated_at: '2026-09-29 11:00:00',
+  };
+}
+
 // vue-query 的 `useQueryClient()` 走 Vue `inject()` 拿客户端，vitest node env 没有
 // 组件 setup 上下文，必须在 `app.runWithContext(() => ...)` 里调 usePartInlineEdit，
 // 让 Vue 把 currentApp 临时切到本测试 app，inject 才能在 app._context.provides 里
@@ -141,7 +169,9 @@ describe('usePartInlineEdit — OCC version 契约（2026-09-28）', () => {
 
   // R1：assembly 分支同样必须带 version
   it('R1b: assembly 分支 payload 带 version（= row.version）', async () => {
-    updateAssembly.mockResolvedValue({ assembly: { ...makeRow(), version: 4 } });
+    // 2026-09-29 review 第 1 轮 C3 修复：mock 响应形态对齐后端真实契约
+    // AssemblyOut 19 字段平铺（旧实现错误地走 AssemblyDetail 嵌套形态）。
+    updateAssembly.mockResolvedValue(makeAssemblyOut({ version: 4 }));
     const row = makeRow({ row_type: 'ASSEMBLY' });
     const edit = setup([row]);
 
@@ -156,7 +186,7 @@ describe('usePartInlineEdit — OCC version 契约（2026-09-28）', () => {
 
   // R2：assembly 分支不能发 null 价格（t_assembly NOT NULL → 23502 → 500）
   it('R2: assembly 分支不下发 null 价格（三态 Some(None) 会撞 NOT NULL）', async () => {
-    updateAssembly.mockResolvedValue({ assembly: { ...makeRow(), version: 4 } });
+    updateAssembly.mockResolvedValue(makeAssemblyOut({ version: 4 }));
     const row = makeRow({ row_type: 'ASSEMBLY', unit_price: '', total_price: '' });
     const edit = setup([row]);
 
@@ -217,8 +247,10 @@ describe('usePartInlineEdit — OCC version 契约（2026-09-28）', () => {
     expect(edit.editingId.value).toBeNull();
   });
 
-  it('R4b: onSuccess 回写 row.version（assembly 响应 = AssemblyDetail.assembly.version）', async () => {
-    updateAssembly.mockResolvedValue({ assembly: { ...makeRow(), version: 7 } });
+  it('R4b: onSuccess 回写 row.version（assembly 响应 = AssemblyOut.version，平铺）', async () => {
+    // 2026-09-29 review 第 1 轮 C3 修复：mock 响应形态对齐后端真实契约
+    // AssemblyOut 19 字段平铺（顶层 version，不再是 AssemblyDetail.assembly.version）。
+    updateAssembly.mockResolvedValue(makeAssemblyOut({ version: 7 }));
     const row = makeRow({ row_type: 'ASSEMBLY' });
     const edit = setup([row]);
 

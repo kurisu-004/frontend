@@ -34,11 +34,24 @@
 //   - S13：partSchema 缺 total_price → 抛 ZodError。
 //   - S14：partSchema 缺 l1_customer_name → 抛 ZodError（nullable 但必填字段，
 //     与 customerSchema S4 同形态的 regression guard）。
+//   - S15（2026-09-29 修复）：assemblyDetailFlatSchema 接受 backend-rust
+//     `AssemblyDetail` 实际 wire 形态（19 字段平铺 + children + files，
+//     来自 `#[serde(flatten)]` quirk），不抛错。
+//   - S16：assemblyDetailFlatSchema 缺 children → 抛 ZodError（M-1 同形态
+//     regression guard：缺必填字段静默 strip = 校验形同虚设）。
+//   - S17：assemblyDetailFlatSchema 多出 `assembly` 嵌套键 → 抛 ZodError。
+//     （`assemblyDetailFlatSchema` 用 `.strict()` 而非默认 strip —— 若后端
+//     意外把 assembly 改回嵌套键（regression），parse 立刻抛错；与 M-1
+//     「缺字段静默 strip」同源问题。）assembly 嵌套键是 detail 端点的旧 bug
+//     形态，锁死 strict 防回归。
 //
 // 数据来源：
 //   - backend-rust/docs/api/customers.md:142-153（CustomerOut 8 字段）
 //   - backend-rust/docs/api/production/processes.md:159-173（ProcessOut 11 字段）
 //   - backend-rust/docs/api/parts.md（PartListOut / PartListItem 字段）
+//   - backend-rust/src/modules/assembly/vo/assembly.rs:17-119
+//     （AssemblyOut 19 字段 / AssemblyChildOut 13 字段 / AssemblyFileRef 3 字段 /
+//     AssemblyDetail 用 #[serde(flatten)]）
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -48,6 +61,7 @@ import {
   processListResultSchema,
   partSchema,
   partListResultSchema,
+  assemblyDetailFlatSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -432,6 +446,74 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(result.items).toHaveLength(1);
       expect(result.total).toBe(1);
       expect(result.items[0]?.unit_price).toBe('100.50');
+    });
+  });
+
+  describe('assemblyDetailFlatSchema（2026-09-29 修复：消化 #[serde(flatten)] quirk）', () => {
+    // 后端 `AssemblyDetail` wire 形态（19 AssemblyOut 字段平铺 + children + files）：
+    function makeBaseAssemblyDetail(): Record<string, unknown> {
+      return {
+        // —— AssemblyOut 19 字段（顺序对齐 backend-rust vo/assembly.rs:17-39）——
+        id: '190000000000001',
+        version: 1,
+        serial_no: 'ASM-001',
+        drawing_no: 'ASM-DWG-001',
+        name: '总装测试件',
+        applicant_name: '张三',
+        customer_id: '180000000000001',
+        request_date: '2026-09-01',
+        planned_delivery_date: '2026-09-30',
+        is_urgent: false,
+        status: 'PENDING',
+        quantity: 1,
+        unit_price: '100.00',
+        total_price: '100.00',
+        order_no: null,
+        system_delivery_date: null,
+        note: null,
+        created_at: '2026-09-29 10:00:00',
+        updated_at: '2026-09-29 11:00:00',
+        // —— 平铺之外的 children + files ——
+        children: [],
+        files: [],
+      };
+    }
+
+    it('S15：解析 backend-rust AssemblyDetail 平铺形态（19 + children + files）不抛错', () => {
+      const parsed = assemblyDetailFlatSchema.parse(makeBaseAssemblyDetail());
+      // 19 字段平铺 + children + files 全部可见
+      expect(parsed.id).toBe('190000000000001');
+      expect(parsed.drawing_no).toBe('ASM-DWG-001');
+      expect(parsed.children).toEqual([]);
+      expect(parsed.files).toEqual([]);
+      // 关键：parsed 上没有 `assembly` 嵌套键（后端平铺，无嵌套）
+      const asRecord = parsed as unknown as Record<string, unknown>;
+      expect(asRecord.assembly).toBeUndefined();
+    });
+
+    it('S16：缺 children → 抛 ZodError（M-1 同源 regression guard）', () => {
+      // 背景：zod 默认 strip 模式下漏列 children 会让 backend-rust 真返回的 children
+      // 数组在前端拿不到，但 parse 不报错（与 customerSchema S4 同形态）。本 schema
+      // 把 children 显式声明为 z.array() 必填字段，缺字段必须抛错，守门到位。
+      const { children: _omit, ...rest } = makeBaseAssemblyDetail();
+      void _omit;
+      expect(() => assemblyDetailFlatSchema.parse(rest)).toThrow();
+    });
+
+    it('S17：多出 `assembly` 嵌套键 → 抛 ZodError（strict 模式 regression guard）', () => {
+      // 背景：assemblyDetailFlatSchema 用 `.strict()` 而非默认 strip。若后端意外把
+      // assembly 改回嵌套键（regression，回退到旧 bug 形态），parse 立刻抛错；
+      // 守门到位。本用例锁死：嵌套 `assembly` 键出现必须抛错。
+      const wrapped = {
+        ...makeBaseAssemblyDetail(),
+        // 故意添加嵌套 assembly 键 —— 模拟后端 regression 把 19 字段塞进
+        // assembly 嵌套对象（这正是我们要消化的 quirk 反向）。
+        assembly: {
+          id: '190000000000001',
+          drawing_no: 'ASM-DWG-001',
+        },
+      };
+      expect(() => assemblyDetailFlatSchema.parse(wrapped)).toThrow();
     });
   });
 });
