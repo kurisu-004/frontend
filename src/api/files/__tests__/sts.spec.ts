@@ -1,15 +1,17 @@
-// src/api/files/__tests__/sts.spec.ts（2026-09-17 frontend-cos-sts-python）
+// src/api/files/__tests__/sts.spec.ts（2026-09-17 frontend-cos-sts-python，
+// 2026-09-28 切到 api：grantStsTmpKey caller 从 apiPrint 改走 api）
 //
 // 验证 grantStsTmpKey caller：
-// - POST 走 apiPrint（baseURL /api/v1），路径 /files/sts-tmp-keys；
+// - POST 走 api（baseURL /api/v2），路径 /files/sts-tmp-keys（由 rust 端转发
+//   薄壳鉴权后透传到 python）；
 // - 请求字段映射（purpose / filename / content_sha256 / content_type / expire_seconds）；
 // - 响应字段映射（tmp_key / credentials / bucket / region / endpoint / scheme /
 //   expires_in / upload_prefix + credentials.start_time）；
-// - 端点路径不含 /v1 前缀（baseURL 已自带）；
+// - 端点路径不含 /v2 前缀（baseURL 已自带）；
 // - 默认 Content-Type 由 axios 自动选 application/json（不显式覆盖）。
 //
-// 用 vi.mock 拦截 @/api/http 的 apiPrint，断言 method / url / body / 响应形态，
-// 不发起真实 HTTP。api 模块本测试不用，但 mock 模块仍暴露同名导出以避免
+// 用 vi.mock 拦截 @/api/http 的 api，断言 method / url / body / 响应形态，
+// 不发起真实 HTTP。apiPrint 模块本测试不用，但 mock 模块仍暴露同名导出以避免
 // 其他无关 caller 被 vi.mock('api/http') 静默替换时类型报错。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -62,8 +64,8 @@ function makeResponse(overrides: Partial<StsTmpKeysResponse> = {}): StsTmpKeysRe
 }
 
 describe('grantStsTmpKey', () => {
-  // (a) POST 走 apiPrint + 路径对齐
-  it('POST /files/sts-tmp-keys（走 apiPrint，baseURL /api/v1 自带）', async () => {
+  // (a) POST 走 api + 路径对齐
+  it('POST /files/sts-tmp-keys（走 api，baseURL /api/v2 自带）', async () => {
     postCalls.mockResolvedValueOnce({ data: makeResponse() });
 
     await grantStsTmpKey({
@@ -73,7 +75,7 @@ describe('grantStsTmpKey', () => {
 
     expect(postCalls).toHaveBeenCalledTimes(1);
     const [url] = postCalls.mock.calls[0]!;
-    // 不带 /v1 前缀：baseURL /api/v1 由 apiPrint 实例自带。
+    // 不带 /v2 前缀：baseURL /api/v2 由 api 实例自带。
     expect(url).toBe('/files/sts-tmp-keys');
   });
 
