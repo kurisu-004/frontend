@@ -31,6 +31,15 @@ export interface Process {
    * 取 HEAD 的 required 语义：后端始终返回字段（可为 null），前端渲染层视 null 为未设置。
    */
   color: string | null;
+  /**
+   * 2026-09-29 新增：是否为 CNC 工序。后端 `t_process.is_cnc` 列（CNC 编程门控字段）：
+   *   - true：参与「待编程一览」Tab 化（GET /parts/pending-programming 出参
+   *     `PartListItem.has_cnc_program` 字段即按 chain 中是否含 is_cnc=true 的
+   *     工序来派生命中）；
+   *   - false：普通工序，待编程一览不收录该 part。
+   * 后端始终返回字段（沿 `color` 同形态）；前端渲染层用绿色 ElTag 标识。
+   */
+  is_cnc: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -69,6 +78,9 @@ export interface ProcessCreatePayload {
   requires_approval?: boolean;
   /** 2026-09-12 新增：工序卡片颜色（hex8 字符串）；不传 = 后端 NULL */
   color?: string | null;
+  /** 2026-09-29 新增：是否为 CNC 工序。create 时不传 = 后端默认 false。
+   *  业务流程：创建 CNC 工序后，「待编程一览」会收录 chain 含该工序的 part。 */
+  is_cnc?: boolean;
 }
 
 export interface ProcessUpdatePayload {
@@ -85,4 +97,6 @@ export interface ProcessUpdatePayload {
   requires_approval?: boolean;
   /** 2026-09-12 新增：颜色三态更新，语义同 description */
   color?: string | null;
+  /** 2026-09-29 新增：是否 CNC 工序（二态更新；不传 = 不修改） */
+  is_cnc?: boolean;
 }

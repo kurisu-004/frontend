@@ -327,13 +327,19 @@ export async function placeOnShelf(
   return resp.data;
 }
 
-/** PENDING → PROGRAMMING：文员把零件发送至 CNC 编程。 */
-export async function sendToProgramming(id: number | string): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/send-to-programming`);
-  return resp.data;
-}
+// 2026-09-29 清理：删除 `sendToProgramming`（PENDING → PROGRAMMING，PENDING→CNC 编程）
+// 与 `recallToProgramming`（ON_SHELF → PROGRAMMING）。CNC 编程入口已统一迁到
+// 「待编程一览」（cnc/PendingProgrammingList，含 chain 含 CNC 工序的所有 part，
+// 不再依赖 part.status='PROGRAMMING'），后端 `POST /api/v2/parts/{id}/send-to-programming`
+// 与 `/recall-to-programming` 端点 404 下线。原 code 路径下：
+//   - PENDING → PROGRAMMING：文员发编程 → 改走「待编程一览」自动包含 chain 含 CNC 的 PENDING 零件；
+//   - ON_SHELF → PROGRAMMING：M/CNC 召回 → 由工人在「生产队列」+「待品检」手动介入。
+// 若未来需要重新上线，文员可走「下发零件 → 直接下生产货架」 + 工艺链自动判定。
+//
+// 历史沿革：原 sendToProgramming / recallToProgramming 在 2026-07-17 PR-F 引入，
+// 2026-08-05 召回工作增加 recallToProgramming；2026-09-29 业务迁移「待编程 Tab 化」后下线。
 
-/** 2026-08-05 召回：ON_SHELF 或 PROGRAMMING → PENDING（M/C）。
+/** 2026-08-05 召回：ON_SHELF → PENDING（M）。
  *  `batch_id` 缺省按 expect 唯一批次解析；多在架批次必须指定。 */
 export interface PartRecallPayload {
   batch_id?: string | null;
@@ -347,16 +353,10 @@ export async function recallToPending(
   return resp.data;
 }
 
-/** 2026-08-05 召回：ON_SHELF → PROGRAMMING（M/CNC）。 */
-export async function recallToProgramming(
-  id: number | string,
-  payload?: PartRecallPayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/recall-to-programming`, payload ?? {});
-  return resp.data;
-}
-
-/** PROGRAMMING → IN_PROCESS：编程员上传完 G 代码后下发到生产货架。 */
+/** PROGRAMMING → IN_PROCESS：编程员上传完 G 代码后下发到生产货架。
+ *  历史保留：release-from-programming 端点保留，仅 history PROGRAMMING 状态零件
+ *  会走到该路径。新流程下已编程（G 代码已上传）由工人在「生产队列」通过
+ *  refillWorkerPool 直接领取，不再经此端点。 */
 export async function releaseFromProgramming(
   id: number | string,
   shelfId: string,

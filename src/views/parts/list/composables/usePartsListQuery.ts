@@ -81,7 +81,12 @@ export interface PartsSearchState {
   rowType: PartRowTypeFilter;
 }
 
-/** 构造 search 初值（保留 CNC 编程员默认值）。 */
+/** 构造 search 初值（保留 CNC 编程员默认值）。
+ *  2026-09-29：CNC 编程员主入口已迁到「待编程一览」Tab 页（cnc/PendingProgrammingList，
+ *  含 chain 含 CNC 工序的所有 part，不再依赖 status=PROGRAMMING），零件一览作为辅助
+ *  视图，默认筛 ['PENDING', 'IN_PROCESS']（既有库存工序进展 + 待 PENDING 准备下发）
+ *  比单 'PROGRAMMING' 更贴合编程员的「今日工作视图」语义。
+ *  非 CNC 编程员（默认视图）维持 ['IN_PROCESS', 'REPAIRING']（工单视角）。 */
 export function initialPartsSearch(isCncProgrammer: boolean): PartsSearchState {
   return {
     keyword: '',
@@ -89,7 +94,7 @@ export function initialPartsSearch(isCncProgrammer: boolean): PartsSearchState {
     name: '',
     orderNo: '',
     serialNo: '',
-    statuses: isCncProgrammer ? ['PROGRAMMING'] : ['IN_PROCESS', 'REPAIRING'],
+    statuses: isCncProgrammer ? ['PENDING', 'IN_PROCESS'] : ['IN_PROCESS', 'REPAIRING'],
     isUrgent: null,
     customerId: '',
     requestDateFrom: '',

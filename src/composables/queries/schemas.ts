@@ -56,7 +56,12 @@ export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
  *
  * 2026-09-26（M-1 审计）：与 Process.ts 业务类型 + backend-rust ProcessOut 三方
  * 一致（id / version / code / name / category / sort_order / description /
- * requires_approval / color / created_at / updated_at 共 11 字段），无需补字段。 */
+ * requires_approval / color / created_at / updated_at 共 11 字段），无需补字段。
+ *
+ * 2026-09-29 新增：is_cnc 字段（12 字段）。CNC 编程门控：是否参与「待编程一览」
+ * Tab 化（GET /parts/pending-programming 出参 `PartListItem.has_cnc_program` 字段即
+ * 按 chain 中是否含 is_cnc=true 的工序派生命中）。沿 CLAUDE.md §M-4 strip 陷阱
+ * 必填 boolean 显式声明 —— 后端漏返 Zod parse 抛错守门。 */
 export const processSchema = z.object({
   id: z.string(),
   version: z.number(),
@@ -67,6 +72,7 @@ export const processSchema = z.object({
   description: z.string().nullable(),
   requires_approval: z.boolean(),
   color: z.string().nullable(),
+  is_cnc: z.boolean(),
   created_at: z.string(),
   updated_at: z.string(),
 });

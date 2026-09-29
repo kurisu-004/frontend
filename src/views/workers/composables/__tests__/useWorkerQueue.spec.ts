@@ -103,6 +103,8 @@ const STUB_POOL_2000000000001: WorkerPoolDto = {
       is_urgent: true,
       note: null,
       current_process_step_id: '5000000000010',
+      // 2026-09-29 新增：PoolBatchItemDto 必填 has_cnc_program 字段（沿 chain 派生）
+      has_cnc_program: true,
       version: 1,
     },
     {
@@ -125,6 +127,8 @@ const STUB_POOL_2000000000001: WorkerPoolDto = {
       is_urgent: false,
       note: null,
       current_process_step_id: '5000000000011',
+      // 2026-09-29 新增：PoolBatchItemDto 必填 has_cnc_program 字段
+      has_cnc_program: false,
       version: 1,
     },
   ],
@@ -165,6 +169,8 @@ const STUB_POOL_2000000000002: WorkerPoolDto = {
       is_urgent: true,
       note: null,
       current_process_step_id: '5000000000012',
+      // 2026-09-29 新增：PoolBatchItemDto 必填 has_cnc_program 字段
+      has_cnc_program: false,
       version: 2,
     },
   ],

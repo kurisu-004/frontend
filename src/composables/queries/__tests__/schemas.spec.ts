@@ -227,6 +227,8 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         description: '默认描述',
         requires_approval: false,
         color: '#E74C3CFF',
+        // 2026-09-29 新增：is_cnc 必填字段（processSchema 已升级为 12 字段）
+        is_cnc: true,
         created_at: '2026-09-26 10:00:00',
         updated_at: '2026-09-26 11:00:00',
       });
@@ -234,6 +236,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(process.version).toBe(2);
       expect(process.category).toBe('INHOUSE');
       expect(process.color).toBe('#E74C3CFF');
+      expect(process.is_cnc).toBe(true);
     });
 
     it('S7：INHOUSE / OUTSOURCE 两种 category 都接受', () => {
@@ -247,10 +250,12 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         description: null,
         requires_approval: false,
         color: null,
+        is_cnc: false,
         created_at: '',
         updated_at: '',
       });
       expect(inhouse.category).toBe('INHOUSE');
+      expect(inhouse.is_cnc).toBe(false);
 
       const outsource = processSchema.parse({
         id: '2',
@@ -262,6 +267,8 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         description: null,
         requires_approval: true,
         color: null,
+        // 2026-09-29：OUTSOURCE 工序 is_cnc 强制 false（与业务语义对齐）
+        is_cnc: false,
         created_at: '',
         updated_at: '',
       });
@@ -279,6 +286,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         description: null,
         requires_approval: true,
         color: null,
+        is_cnc: false,
         created_at: '',
         updated_at: '',
       });
@@ -298,10 +306,50 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
           description: null,
           requires_approval: false,
           color: null,
+          is_cnc: false,
           created_at: '',
           updated_at: '',
         }),
       ).toThrow();
+    });
+
+    // 2026-09-29 新增：is_cnc 守门用例 —— 与 l1_customer_name / has_cnc_program 同源
+    // regression guard（沿 CLAUDE.md §M-4 strip 陷阱）。
+    it('S8c：缺 is_cnc → 抛 ZodError', () => {
+      const { is_cnc: _, ...rest } = processSchema.parse({
+        id: '5',
+        version: 1,
+        code: 'A',
+        name: 'A',
+        category: 'INHOUSE',
+        sort_order: 0,
+        description: null,
+        requires_approval: false,
+        color: null,
+        is_cnc: false,
+        created_at: '',
+        updated_at: '',
+      });
+      void _;
+      expect(() => processSchema.parse(rest)).toThrow();
+    });
+
+    it('S8d：is_cnc = true 是合法值（CNC 编程工序）', () => {
+      const parsed = processSchema.parse({
+        id: '6',
+        version: 1,
+        code: 'B',
+        name: 'B',
+        category: 'INHOUSE',
+        sort_order: 0,
+        description: null,
+        requires_approval: false,
+        color: null,
+        is_cnc: true,
+        created_at: '',
+        updated_at: '',
+      });
+      expect(parsed.is_cnc).toBe(true);
     });
   });
 
@@ -319,6 +367,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
             description: null,
             requires_approval: false,
             color: null,
+            is_cnc: true,
             created_at: '',
             updated_at: '',
           },
@@ -330,6 +379,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(result.items).toHaveLength(1);
       expect(result.total).toBe(1);
       expect(result.items[0]?.version).toBe(2);
+      expect(result.items[0]?.is_cnc).toBe(true);
     });
   });
 

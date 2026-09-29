@@ -94,6 +94,18 @@
           />
         </template>
       </el-table-column>
+      <!-- 2026-09-29 新增：CNC 工序列（固定在颜色列之前；is_cnc=true 绿色 tag） -->
+      <el-table-column label="CNC" width="80" align="center">
+        <template #default="{ row }">
+          <el-tag
+            v-if="(row as Process).is_cnc"
+            type="success"
+            size="small"
+            effect="dark"
+          >CNC</el-tag>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column v-if="isManager" label="操作" min-width="180" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="onEdit(row as Process)"
@@ -139,6 +151,19 @@
             inactive-text="直接发送"
             inline-prompt
             style="--el-switch-off-color: #67c23a"
+          />
+        </el-form-item>
+        <!-- 2026-09-29 新增：CNC 工序门控。开启后该工序出现在 chain 中时，「待编程一览」
+             Tab 页会收录对应 part；列表列加「CNC」绿色 tag 标识。OUTSOURCE 工序不允许
+             标 CNC（CNC 是车间内自产能力，与外协互斥）。 -->
+        <el-form-item label="CNC 工序">
+          <el-switch
+            v-model="form.is_cnc"
+            :disabled="form.category === 'OUTSOURCE'"
+            active-text="是 CNC"
+            inactive-text="普通工序"
+            inline-prompt
+            style="--el-switch-off-color: #909399"
           />
         </el-form-item>
         <el-form-item label="排序">
@@ -275,6 +300,7 @@ const dialogVisible = ref(false);
 const editing = ref<Process | null>(null);
 const dialogTitle = computed(() => (editing.value ? '编辑工序' : '新增工序'));
 // 2026-09-12 新增：color 字段（后端 tri-state：undefined=leave / null=clear / string=set）
+// 2026-09-29 新增：is_cnc 字段（CNC 编程门控；二态更新 boolean）。
 const form = reactive<{
   code: string;
   name: string;
@@ -283,6 +309,7 @@ const form = reactive<{
   description: string;
   requires_approval: boolean;
   color: string | null;
+  is_cnc: boolean;
 }>({
   code: '',
   name: '',
@@ -291,6 +318,7 @@ const form = reactive<{
   description: '',
   requires_approval: true, // OUTSOURCE 默认；INHOUSE 在保存时由后端强制为 false
   color: null,
+  is_cnc: false, // 2026-09-29 新增；OUTSOURCE 时强制 false
 });
 
 function onReset(): void {
@@ -308,6 +336,7 @@ function onNew(): void {
     description: '',
     requires_approval: true,
     color: null,
+    is_cnc: false,
   });
   dialogVisible.value = true;
 }
@@ -321,6 +350,7 @@ function onEdit(row: Process): void {
     description: row.description ?? '',
     requires_approval: row.requires_approval ?? true,
     color: row.color ?? null,
+    is_cnc: row.is_cnc ?? false,
   });
   dialogVisible.value = true;
 }
@@ -375,6 +405,8 @@ async function onSave(): Promise<void> {
         // color 三态：未改 = 上一次的值（picker 默认保留）；此处显式传当前值，
         // 后端按 string|null 覆盖语义处理；与原值相等也是无副作用的 set。
         color: form.color ?? null,
+        // 2026-09-29 新增：is_cnc 二态更新（与 color 不同 —— 不是三态；不传 = 不修改）
+        is_cnc: form.is_cnc,
       };
       if (form.category !== editing.value.category) {
         payload.category = form.category;
@@ -390,6 +422,8 @@ async function onSave(): Promise<void> {
         requires_approval: form.requires_approval,
         // create：picker 默认 null（不选色），string 表示选了色
         color: form.color ?? null,
+        // 2026-09-29 新增：CNC 编程门控（OUTSOURCE 时强制 false）
+        is_cnc: form.is_cnc,
       });
     }
     dialogVisible.value = false;
@@ -410,6 +444,7 @@ function onDialogClosed(): void {
     description: '',
     requires_approval: true,
     color: null,
+    is_cnc: false,
   });
 }
 

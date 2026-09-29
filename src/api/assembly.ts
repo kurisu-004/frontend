@@ -176,6 +176,10 @@ function childToAssemblyChildItem(c: AssemblyChildOutSchema): AssemblyChildItem 
     current_batch_id: c.current_batch_id ?? null,
     row_type: 'PART',
     has_children: false,
+    // 2026-09-29 新增：PartListItem 必填 has_cnc_program 字段（沿 chain 派生）。
+    // 装配件子件没有 chain 上下文，mapper 一律填 false（语义合理：装配件子件不直接
+    // 走「待编程一览」路径，由父装配件的 chain 决定 has_cnc_program）。
+    has_cnc_program: false,
     __is_child: true,
   };
 }

@@ -77,6 +77,8 @@ function makeRow(overrides: Partial<PartListItem> = {}): PartListItem {
     customer_name: null,
     l1_customer_name: null,
     location: null,
+    // 2026-09-29 新增：PartListItem 必填 has_cnc_program 字段（沿 chain 派生）。
+    has_cnc_program: false,
     ...overrides,
   };
   return row;

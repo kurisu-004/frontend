@@ -160,14 +160,9 @@
               @click="store.dispatch.onRecallToPending(row as PartListItem)"
               >召回(待生产)</el-button
             >
-            <el-button
-              v-if="store.dispatch.canRecallToProgramming(row as PartListItem)"
-              link
-              type="warning"
-              size="small"
-              @click="store.dispatch.onRecallToProgramming(row as PartListItem)"
-              >召回(待编程)</el-button
-            >
+            <!-- 2026-09-29：删除「召回(待编程)」按钮 —— recallToProgramming 后端端点
+                 404 下线，CNC 编程入口已迁到「待编程一览」Tab 页（cnc/PendingProgrammingList），
+                 召回(待编程)动作已无对应 API 可调。 -->
           </template>
         </template>
       </el-table-column>

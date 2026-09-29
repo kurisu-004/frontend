@@ -20,12 +20,17 @@
 //     原 fetchList dep 是过渡期兼容位，store 装配时已不再传
 //     （usePartsListStore.ts:77-85），本 composable 也不读；
 //   - 保存原 onSuccess / onError / ElMessage / 20706 兜底行为。
+//
+// 2026-09-29 清理：「编程中」入口下线 —— 删除 sendToProgramming / recallToProgramming
+// 相关 mutation、function、按钮展示条件。原单件 cnc 模式（dispatchMode='cnc'）与
+// 批量编程 action（batchDispatchAction='programming'）一并移除，批量 action 仅
+// 保留 'shelf'。CNC 编程主入口迁到「待编程一览」Tab 页。
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useQueryClient, useMutation } from '@tanstack/vue-query';
 import { useRouter } from 'vue-router';
-import { placeOnShelf, recallToPending, recallToProgramming, sendToProgramming } from '@/api/parts';
+import { placeOnShelf, recallToPending } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
@@ -49,7 +54,10 @@ export interface UsePartDispatchDeps {
   getTable: () => TableRef | null | undefined;
 }
 
-/** 2026-09-21 显式返回类型。 */
+/** 2026-09-21 显式返回类型。
+ *  2026-09-29：移除 dispatchMode 编程分支（'cnc' 不再使用，固定 'direct'）；移除
+ *  batchDispatchAction 编程分支（'programming' 不再使用，固定 'shelf'）；移除
+ *  canRecallToProgramming / onRecallToProgramming（CNC 编程入口已迁出零件一览）。 */
 export interface UsePartDispatchReturn {
   shelves: Ref<Shelf[]>;
   processes: ComputedRef<Process[]>;
@@ -57,33 +65,28 @@ export interface UsePartDispatchReturn {
   /** 2026-09-26（B 任务）：重新加载 shelves（单件 / 批量下发共用缓存）；
    *  内部暴露以便 caller 在必要时强制刷新（默认 onMounted/onDispatch 时已经按需加载）。 */
   reloadShelves: () => Promise<void>;
+  /** 2026-09-29：单件下发对话框可见性（2026-09-29 后只剩 'direct' 模式，dispatchMode 字段已移除） */
   dispatchVisible: Ref<boolean>;
-  dispatchMode: Ref<'direct' | 'cnc'>;
   dispatchShelfId: Ref<string | null>;
   dispatchNextProcessId: Ref<string | null>;
   dispatchPartId: Ref<string | null>;
   dispatchSubmitting: ComputedRef<boolean>;
-  // 2026-09-21 fix：原 ReturnType<typeof useShelfProcessFilter> 默认泛型落到 Identifiable，
-  // 下游 el-option 访问 .code / .name 编译失败。收紧到 Shelf / Process 业务类型。
   filteredShelves: ComputedRef<readonly Shelf[]>;
   filteredProcesses: ComputedRef<readonly Process[]>;
   onDispatch: (row: PartListItem) => Promise<void>;
   onDispatchClosed: () => void;
   onDispatchConfirm: () => Promise<void>;
+  /** 2026-09-29：批量下发对话框可见性（2026-09-29 后只剩 'shelf' action） */
   batchDispatchVisible: Ref<boolean>;
-  batchDispatchAction: Ref<'shelf' | 'programming'>;
   batchDispatchShelfId: Ref<string | null>;
   batchDispatchNextProcessId: Ref<string | null>;
   batchDispatchSubmitting: ComputedRef<boolean>;
-  // 2026-09-21 fix：同上，单件 / 批量两条 path 同源问题
   batchFilteredShelves: ComputedRef<readonly Shelf[]>;
   batchFilteredProcesses: ComputedRef<readonly Process[]>;
   onOpenBatchDispatch: () => Promise<void>;
   onBatchDispatchConfirm: () => Promise<void>;
   canRecallToPending: (row: PartListItem) => boolean;
-  canRecallToProgramming: (row: PartListItem) => boolean;
   onRecallToPending: (row: PartListItem) => Promise<void>;
-  onRecallToProgramming: (row: PartListItem) => Promise<void>;
 }
 
 export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchReturn {
@@ -116,8 +119,9 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   }
 
   // ============ 单件下发 ============
+  // 2026-09-29：dispatchMode='cnc' 分支删除（sendToProgramming 下线），单件对话框
+  // 仅支持 'direct'（直接下生产货架）。
   const dispatchVisible = ref(false);
-  const dispatchMode = ref<'direct' | 'cnc'>('direct');
   const dispatchShelfId = ref<string | null>(null);
   const dispatchNextProcessId = ref<string | null>(null);
   const dispatchPartId = ref<string | null>(null);
@@ -127,21 +131,6 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     filteredProcesses,
     load: loadShelfProcessMap,
   } = useShelfProcessFilter(shelves, processes, dispatchShelfId, dispatchNextProcessId);
-
-  // 2026-09-26（B 任务）：单件 cnc mutation —— PENDING → PROGRAMMING。
-  // mutationFn / onSuccess / onError 三段对齐原 onDispatchConfirm 内的 cn c 分支。
-  const sendToProgrammingMutation = useMutation<unknown, Error, { partId: string }>({
-    mutationKey: ['parts', 'dispatch', 'send-to-programming'],
-    mutationFn: ({ partId }) => sendToProgramming(partId),
-    onSuccess: () => {
-      ElMessage.success('已发送至 CNC 编程');
-      qc.invalidateQueries({ queryKey: qk.partsPrefix });
-    },
-    onError: async (e, { partId }) => {
-      const handled = await handleProcessChainRequired(e, partId, router);
-      if (!handled) ElMessage.error(e.message ?? '下发失败');
-    },
-  });
 
   // 2026-09-26（B 任务）：单件直发 mutation —— PENDING → ON_SHELF。
   const placeOnShelfMutation = useMutation<
@@ -162,15 +151,12 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     },
   });
 
-  const dispatchSubmitting = computed<boolean>(
-    () => sendToProgrammingMutation.isPending.value || placeOnShelfMutation.isPending.value,
-  );
+  const dispatchSubmitting = computed<boolean>(() => placeOnShelfMutation.isPending.value);
 
   async function onDispatch(row: PartListItem): Promise<void> {
     dispatchPartId.value = row.id;
     dispatchShelfId.value = null;
     dispatchNextProcessId.value = null;
-    dispatchMode.value = 'direct';
     await reloadShelves();
     // processes 走共享 useQuery，自动 fetch，弹窗打开时可能仍在加载；
     // 原代码此处 setTimeout 不存在，弹窗打开即可观察下拉选项（listProcesses 返回
@@ -184,31 +170,24 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     dispatchPartId.value = null;
     dispatchShelfId.value = null;
     dispatchNextProcessId.value = null;
-    dispatchMode.value = 'direct';
   }
 
   async function onDispatchConfirm(): Promise<void> {
     if (!dispatchPartId.value) return;
-    if (dispatchMode.value === 'direct' && (!dispatchShelfId.value || !dispatchNextProcessId.value))
-      return;
-    // mutation 内已 onSuccess 关闭 dialog + ElMessage + invalidate；这里只触发 mutation。
-    if (dispatchMode.value === 'cnc') {
-      sendToProgrammingMutation.mutate({ partId: dispatchPartId.value });
-    } else {
-      placeOnShelfMutation.mutate({
-        partId: dispatchPartId.value,
-        shelfId: dispatchShelfId.value!,
-        nextProcessId: dispatchNextProcessId.value!,
-      });
-    }
+    if (!dispatchShelfId.value || !dispatchNextProcessId.value) return;
+    placeOnShelfMutation.mutate({
+      partId: dispatchPartId.value,
+      shelfId: dispatchShelfId.value,
+      nextProcessId: dispatchNextProcessId.value,
+    });
     // 关闭 dialog 立即可见；mutation 异步进行中。
     dispatchVisible.value = false;
   }
 
   // ============ 批量下发 ============
-  // 状态完全独立于单件下发（batchDispatchShelfId / batchDispatchNextProcessId），避免互相踩。
+  // 2026-09-29：batchDispatchAction 字段删除（'programming' 不再支持），批量只走
+  // placeOnShelf（直接下生产货架）。
   const batchDispatchVisible = ref(false);
-  const batchDispatchAction = ref<'shelf' | 'programming'>('shelf');
   const batchDispatchShelfId = ref<string | null>(null);
   const batchDispatchNextProcessId = ref<string | null>(null);
   const {
@@ -217,14 +196,13 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     load: loadBatchShelfProcessMap,
   } = useShelfProcessFilter(shelves, processes, batchDispatchShelfId, batchDispatchNextProcessId);
 
-  // 2026-09-26（B 任务）：批量下发 mutation —— 内部循环 targets 顺序 await。
-  // 返回 { succeeded, failed } —— 失败件留对话框（onSuccess 据此分支：全成功才关闭）。
-  // mutationKey 共享 ['parts', 'dispatch']，devtools 可聚合观察。
+  // 2026-09-26（B 任务）→ 2026-09-29 简化：批量下发 mutation —— 内部循环 targets 顺序 await，
+  // 全部走 placeOnShelf（不再有 action 分支）。返回 { succeeded, failed } —— 失败件留
+  // 对话框（onSuccess 据此分支：全成功才关闭）。
   interface BatchDispatchVars {
-    action: 'shelf' | 'programming';
     targets: { id: string; label: string }[];
-    shelfId: string | null;
-    nextProcessId: string | null;
+    shelfId: string;
+    nextProcessId: string;
   }
   interface BatchDispatchResult {
     succeeded: { id: string; label: string }[];
@@ -232,18 +210,14 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   }
   const batchDispatchMutation = useMutation<BatchDispatchResult, Error, BatchDispatchVars>({
     mutationKey: ['parts', 'dispatch', 'batch'],
-    mutationFn: async ({ action, targets, shelfId, nextProcessId }) => {
+    mutationFn: async ({ targets, shelfId, nextProcessId }) => {
       const succeeded: BatchDispatchResult['succeeded'] = [];
       const failed: BatchDispatchResult['failed'] = [];
       let processChainRequiredHit = false;
       for (const t of targets) {
         if (processChainRequiredHit) break;
         try {
-          if (action === 'programming') {
-            await sendToProgramming(t.id);
-          } else {
-            await placeOnShelf(t.id, shelfId!, nextProcessId!);
-          }
+          await placeOnShelf(t.id, shelfId, nextProcessId);
           succeeded.push(t);
         } catch (e) {
           const isProcessChain =
@@ -321,7 +295,6 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
       ElMessage.warning('请先选择待下发零件');
       return;
     }
-    batchDispatchAction.value = 'shelf';
     batchDispatchShelfId.value = null;
     batchDispatchNextProcessId.value = null;
     await reloadShelves();
@@ -331,11 +304,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
 
   async function onBatchDispatchConfirm(): Promise<void> {
     if (deps.selectedIds.size === 0) return;
-    if (
-      batchDispatchAction.value === 'shelf' &&
-      (!batchDispatchShelfId.value || !batchDispatchNextProcessId.value)
-    )
-      return;
+    if (!batchDispatchShelfId.value || !batchDispatchNextProcessId.value) return;
     // 快照：迭代过程中会修改 selectedIds/selectedRows
     const targets = deps.selectedRows.value
       .filter((r) => deps.selectedIds.has(r.id))
@@ -346,7 +315,6 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     }
 
     batchDispatchMutation.mutate({
-      action: batchDispatchAction.value,
       targets,
       shelfId: batchDispatchShelfId.value,
       nextProcessId: batchDispatchNextProcessId.value,
@@ -355,10 +323,12 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
 
   // ============ 召回（2026-08-05）============
   // 2026-09-26：消费侧禁止解构 store（沿 usePartsListStore 不变量 #3），统一 auth.xxx。
+  // 2026-09-29：删除 canRecallToProgramming / onRecallToProgramming（CNC 编程入口
+  // 已迁出零件一览，recallToProgramming 后端端点 404 下线）。仅保留
+  // canRecallToPending / onRecallToPending。
   const auth = useAuthStore();
   // 2026-08-05 召回权限：与后端 POST /parts/{id}/recall-* 一致
   const canRecallToPendingAuth = auth.hasRole('MANAGER') || auth.hasRole('CLERK');
-  const canRecallToProgrammingAuth = auth.hasRole('MANAGER') || auth.hasRole('CNC_PROGRAMMER');
 
   /** 召回按钮可见性：与后端 `_resolve_target_batch` expect 保持一致。
    *  不显式判定 status=='PROGRAMMING'：PROGRAMMING 是 PROGRAMMING DB status；
@@ -366,13 +336,8 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   function canRecallToPending(row: PartListItem): boolean {
     if (!canRecallToPendingAuth) return false;
     if (row.row_type === 'ASSEMBLY') return false;
+    // 2026-09-29：history PROGRAMMING 状态零件仍可走「召回(待生产)」路径，与原行为兼容。
     if (row.status === 'PROGRAMMING') return true;
-    return row.status === 'IN_PROCESS' && row.location === 'PRODUCTION_SHELF';
-  }
-
-  function canRecallToProgramming(row: PartListItem): boolean {
-    if (!canRecallToProgrammingAuth) return false;
-    if (row.row_type === 'ASSEMBLY') return false;
     return row.status === 'IN_PROCESS' && row.location === 'PRODUCTION_SHELF';
   }
 
@@ -386,23 +351,6 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     mutationFn: ({ rowId, batchId }) => recallToPending(rowId, { batch_id: batchId }),
     onSuccess: () => {
       ElMessage.success('已召回为待生产');
-      qc.invalidateQueries({ queryKey: qk.partsPrefix });
-    },
-    onError: (e) => {
-      ElMessage.error(e.message ?? '召回失败');
-    },
-  });
-
-  // 2026-09-26（B 任务）：recallToProgramming mutation。
-  const recallToProgrammingMutation = useMutation<
-    unknown,
-    Error,
-    { rowId: string; batchId: string | null }
-  >({
-    mutationKey: ['parts', 'dispatch', 'recall-to-programming'],
-    mutationFn: ({ rowId, batchId }) => recallToProgramming(rowId, { batch_id: batchId }),
-    onSuccess: () => {
-      ElMessage.success('已召回为待编程');
       qc.invalidateQueries({ queryKey: qk.partsPrefix });
     },
     onError: (e) => {
@@ -425,30 +373,14 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     recallToPendingMutation.mutate({ rowId: row.id, batchId: row.batch_id ?? null });
   }
 
-  async function onRecallToProgramming(row: PartListItem): Promise<void> {
-    const label = row.serial_no || row.drawing_no || row.id;
-    try {
-      await ElMessageBox.confirm(`确认召回「${label}」为待编程？`, '召回确认', {
-        type: 'warning',
-        confirmButtonText: '确认召回',
-        cancelButtonText: '取消',
-      });
-    } catch {
-      // 用户取消
-      return;
-    }
-    recallToProgrammingMutation.mutate({ rowId: row.id, batchId: row.batch_id ?? null });
-  }
-
   return {
     // 共享数据
     shelves,
     processes,
     processesLoading,
     reloadShelves,
-    // 单件下发
+    // 单件下发（2026-09-29 后只剩 'direct' 模式，dispatchMode 字段已移除）
     dispatchVisible,
-    dispatchMode,
     dispatchShelfId,
     dispatchNextProcessId,
     dispatchPartId,
@@ -458,9 +390,8 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     onDispatch,
     onDispatchClosed,
     onDispatchConfirm,
-    // 批量下发
+    // 批量下发（2026-09-29 后只剩 'shelf' action，batchDispatchAction 字段已移除）
     batchDispatchVisible,
-    batchDispatchAction,
     batchDispatchShelfId,
     batchDispatchNextProcessId,
     batchDispatchSubmitting,
@@ -468,10 +399,8 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     batchFilteredProcesses,
     onOpenBatchDispatch,
     onBatchDispatchConfirm,
-    // 召回
+    // 召回（2026-09-29：仅保留 recall-to-pending）
     canRecallToPending,
-    canRecallToProgramming,
     onRecallToPending,
-    onRecallToProgramming,
   };
 }

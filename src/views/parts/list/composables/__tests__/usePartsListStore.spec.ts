@@ -88,8 +88,6 @@ vi.mock('@/api/parts', () => ({
   updatePart: vi.fn(),
   placeOnShelf: vi.fn(),
   recallToPending: vi.fn(),
-  recallToProgramming: vi.fn(),
-  sendToProgramming: vi.fn(),
   printPartDrawingBatch: vi.fn(async () => new Blob()),
   getPartLocationTree: vi.fn(async () => ({ items: [] })),
 }));
