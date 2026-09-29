@@ -98,14 +98,19 @@ function onCardToggleSelect(batchId: string) {
   props.setSelectedIds(Array.from(next));
 }
 
-/** 2026-09-29 review 第 1 轮修复（C4 + M2）：行级拖拽源（HTML5 native drag）。
+/** 2026-09-29 review 第 1 轮修复（C4 + M2）：卡片级拖拽源（HTML5 native drag）。
  *  - dataTransfer.setData('text/plain', batchId)：跨组件的标准传递通道；
  *  - recordBatchSource(batchId)：与 PendingPoolsPanel.consumeBatchSource 配对，
- *    让 dndSourceTracker 的 b: 前缀 API 有消费者（review M2）。 */
+ *    让 dndSourceTracker 的 b: 前缀 API 有消费者（review M2）；
+ *  - currentTarget.classList.add('is-dragging')：触发拖拽中半透明态（M-1）。
+ *    dragend 由 PendingBatchCard.onDragEnd 兜底移除。 */
 function onCardDragStart(e: DragEvent, batchId: string) {
   if (e.dataTransfer) {
     e.dataTransfer.setData('text/plain', batchId);
     e.dataTransfer.effectAllowed = 'move';
+  }
+  if (e.currentTarget instanceof HTMLElement) {
+    e.currentTarget.classList.add('is-dragging');
   }
   recordBatchSource(batchId);
 }

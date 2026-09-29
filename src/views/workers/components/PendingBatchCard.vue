@@ -30,10 +30,12 @@
       </div>
     </template>
     <el-card
+      draggable="true"
       :class="['pending-batch-card', { 'is-selected': selected, 'is-urgent': batch.is_urgent }]"
       :data-batch-id="batch.batch_id"
       shadow="hover"
       @dragstart="onDragStart"
+      @dragend="onDragEnd"
     >
       <template #header>
         <div class="card-header">
@@ -100,6 +102,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'toggleSelect', batchId: string): void;
   (e: 'dragstart', evt: DragEvent, batchId: string): void;
+  (e: 'dragend', evt: DragEvent): void;
 }>();
 
 const dueDate = computed<string>(
@@ -123,6 +126,15 @@ function onToggleSelect(): void {
 function onDragStart(e: DragEvent): void {
   emit('dragstart', e, props.batch.batch_id);
 }
+
+// 2026-09-29 review 第 1 轮修复（M-1）：dragend 兜底移除 .is-dragging 半透明态，
+// 避免下次拖拽或释放后残留；e.currentTarget 即 el-card 根 DOM 节点。
+function onDragEnd(e: DragEvent): void {
+  if (e.currentTarget instanceof HTMLElement) {
+    e.currentTarget.classList.remove('is-dragging');
+  }
+  emit('dragend', e);
+}
 </script>
 
 <style scoped>
@@ -132,6 +144,11 @@ function onDragStart(e: DragEvent): void {
   transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
 }
 .pending-batch-card:active {
+  cursor: grabbing;
+}
+/* 2026-09-29 review 第 1 轮修复（M-1）：拖拽中半透明反馈。 */
+.pending-batch-card.is-dragging {
+  opacity: 0.4;
   cursor: grabbing;
 }
 .pending-batch-card.is-urgent {
