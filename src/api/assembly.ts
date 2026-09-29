@@ -11,6 +11,7 @@ import {
   type AssemblyFileRefSchema,
   type AssemblyOutSchema,
 } from '@/composables/queries/schemas';
+import type { Customer } from '@/api/customer';
 import type {
   AssemblyCreatePayload,
   AssemblyCreateResult,
@@ -101,6 +102,48 @@ function parseAssemblyOutToItemCore(flat: AssemblyOutSchema, childCount: number)
     note: flat.note,
     created_at: flat.created_at,
     updated_at: flat.updated_at,
+  };
+}
+
+/**
+ * 2026-09-29 review 第 2 轮 MAJOR-1 修复：把客户字段 enrich 逻辑提到 api 层作
+ * 共享纯函数，让 useAssemblyDetail（详情页）与 usePartDetail（PartDetail 所属
+ * 装配件卡 via getAssemblyForPart）都走同一份补全逻辑。
+ *
+ * 动机：旧实现 enrichAssemblyCustomer 只挂在 useAssemblyDetail composable
+ * 内部，PartAssemblyLinkCard 走 usePartDetail.fetchAssembly → getAssemblyForPart
+ * → parseAssemblyDetail 直接 set assemblyDetail.value，绕过 enrich，导致
+ * 装配件链接卡客户列永远显示 `—`。
+ *
+ * 语义（与旧 enrichAssemblyCustomer 完全一致）：
+ * - customers 中按 item.customer_id 找匹配客户：
+ *   - 找到 → customer_name = name, parent_customer_name = parent_name,
+ *     customer_path = 「父 / 子」或「name」
+ *   - 找不到 → 三字段全置 null（保持 mapper 兜底）
+ *
+ * 纯函数：返回新对象，不 mutate 输入；调用方负责把返回值赋回
+ * `detail.assembly` / `assemblyDetail.assembly`。
+ *
+ * customers 接受空数组（useCustomersQuery 缓存未到达时），找不到客户时三字段
+ * 全置 null——与上游 mapper 默认值一致。
+ */
+export function enrichAssemblyItem(item: AssemblyItem, customers: Customer[]): AssemblyItem {
+  const customer = customers.find((c) => c.id === item.customer_id);
+  if (!customer) {
+    return {
+      ...item,
+      customer_name: null,
+      parent_customer_name: null,
+      customer_path: null,
+    };
+  }
+  return {
+    ...item,
+    customer_name: customer.name,
+    parent_customer_name: customer.parent_name,
+    customer_path: customer.parent_name
+      ? `${customer.parent_name} / ${customer.name}`
+      : customer.name,
   };
 }
 

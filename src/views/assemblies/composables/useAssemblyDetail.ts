@@ -19,13 +19,14 @@
 // - 出错统一在 composable 内 ElMessage 提示（fetchData 除外——它把 null 留给 shell）；
 //   子件添加等业务操作返回 false 时不再二次提示。
 
-import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
+import { computed, reactive, ref, watch, watchEffect, type ComputedRef, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { UploadFile, FormRules } from 'element-plus';
 import {
   addAssemblyChild,
   cancelAssembly,
+  enrichAssemblyItem,
   getAssembly,
   softDeleteAssembly,
   updateAssembly,
@@ -192,24 +193,27 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
    *  客户全集中查，补全 customer_name / parent_customer_name / customer_path
    *  三字段。child_count 已由 mapper 注入。
    *
-   *  应用点：fetchData / updateAssemblyFn / cancelAssemblyFn / uploadPdfFn。
-   *  写操作后的 enrich 避免刷新前的瞬间空白。 */
+   * 2026-09-29 review 第 2 轮 MAJOR-1 / MAJOR-2 修复：
+   * - MAJOR-1：enrich 逻辑提到 @/api/assembly.ts 的 `enrichAssemblyItem` 共享
+   *   纯函数（PartAssemblyLinkCard 经 usePartDetail.fetchAssembly 走同一函数）。
+   * - MAJOR-2：下方新增 `watchEffect` 监听 customersData + detail.value，
+   *   customers 缓存 lazy 到达后自动 re-enrich，无需刷新。 */
   function enrichAssemblyCustomer(d: AssemblyDetail): void {
-    const customer = (customersData.value?.items ?? []).find(
-      (c) => c.id === d.assembly.customer_id,
-    );
-    if (customer) {
-      d.assembly.customer_name = customer.name;
-      d.assembly.parent_customer_name = customer.parent_name;
-      d.assembly.customer_path = customer.parent_name
-        ? `${customer.parent_name} / ${customer.name}`
-        : customer.name;
-    } else {
-      d.assembly.customer_name = null;
-      d.assembly.parent_customer_name = null;
-      d.assembly.customer_path = null;
-    }
+    d.assembly = enrichAssemblyItem(d.assembly, customersData.value?.items ?? []);
   }
+
+  // 2026-09-29 review 第 2 轮 MAJOR-2 修复：响应式 customers 缓存到达。
+  // useCustomersQuery staleTime: Infinity 是懒查询，首次进详情页时 customers
+  // 可能未加载完（customersData.value 为 undefined），enrich 把 customer_*
+  // 置 null 后不会自动 re-trigger。watchEffect 在 customersData 变化时自动
+  // 重跑 enrich，确保 detail.value.assembly.customer_path 始终反映最新客户名。
+  // 约束：detail.value 为 null 时不跑（避免空 detail 时 enrich 报错）。
+  watchEffect(() => {
+    const items = customersData.value?.items;
+    if (!detail.value) return;
+    if (!items) return;
+    detail.value.assembly = enrichAssemblyItem(detail.value.assembly, items);
+  });
 
   async function fetchData(): Promise<void> {
     if (!assemblyId.value) return;
