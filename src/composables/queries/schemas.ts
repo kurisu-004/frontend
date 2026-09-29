@@ -376,7 +376,9 @@ export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);
 export const pendingBatchItemSchema = z.object({
   batch_id: z.string(),
   part_id: z.string(),
-  batch_no: z.string(),
+  // 2026-09-29 修复：后端 VO 实为 i32，但前端 contract 注释误标 string；走 union + transform
+  // 归一成 string 守门（沿 2026-09-26 Zod 守门约定 §4，缺字段静默 strip = 校验失效）。
+  batch_no: z.union([z.string(), z.number()]).transform((v) => String(v)),
   quantity: z.number(),
   serial_no: z.string().nullable(),
   name: z.string(),
