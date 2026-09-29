@@ -5,7 +5,9 @@
 //   GET  /api/v2/prod/process-chains/{chain_id}         ← getProcessChainById（2026-09-16 新增）
 //   PUT  /api/v2/prod/process-chains/by-part/{part_id}  ← upsertProcessChainByPart
 //   GET  /api/v2/prod/processes                         ← listProcesses (转引)
-//   GET  /api/v2/prod/parts                             ← listParts (转引)
+//   GET  /api/v2/parts                                 ← listParts (转引；2026-09-29 修正：
+//                                                       原误路由 /prod/parts，后端无该端点 → 404；
+//                                                       parts 始终在 part 域，与 /prod/* 无关)
 //
 // 业务端点统一走 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 起）。
 // 整组 upsert 约束：rust PUT /prod/process-chains/by-part/{part_id} 是整组替换语义——
@@ -14,6 +16,7 @@
 //
 // 2026-09-25 修正：补齐 /prod/ 前缀；listProcesses / listParts 用
 // ProcessListResult / PartListResult 类型替代裸 unknown[]。
+// 2026-09-29 修正：listParts 由 /prod/parts 改为 /parts（详见上方注释）。
 
 import { api, cleanParams } from '@/api/http';
 import type { OrderStatus, PartListItem } from '@/types/parts';
@@ -76,7 +79,7 @@ export async function listProcesses(
   return resp.data.items;
 }
 
-/** GET /api/v2/prod/parts
+/** GET /api/v2/parts
  *  走 api（baseURL `/api/v2`）。
  *  keyword 模糊过滤图号/名称（PartListQuery.keyword，rust 端 2026-08 已支持）。
  *  status 单值过滤（PartListQuery.status）：rust 端 2026-08 已支持；
@@ -84,6 +87,9 @@ export async function listProcesses(
  *  （v2 PartStatus 枚举与 OrderStatus 一致：PENDING / PROGRAMMING / IN_PROCESS / ...）。
  *  limit=200：v2 不支持 include_assemblies（已删除该参数）；工序制定只需零件本体。
  *  2026-09-25 修正：返回类型由 unknown[] 改为 PartListItem[]（来自 @/types/parts）。
+ *  2026-09-29 修正：URL 由 `/prod/parts` 改为 `/parts` —— 后端 `/api/v2/prod/*`
+ *  只承载生产管理支撑域（workers/process-chains/worker-pool 等），不含 parts；
+ *  parts 始终在 part 域 `/api/v2/parts`（与业务流无关）。原 URL 必 404。
  *  2026-09-16 修复：新增 status 入参（与 src/api/parts/crud.ts:statuses 不复用，
  *  那个是 OrderStatus[] 重复 key，给其它列表页用；这里走单值 status，与后端 PartListQuery.status 对齐）。 */
 export async function listParts(
@@ -94,7 +100,7 @@ export async function listParts(
     total: number;
     limit: number;
     offset: number;
-  }>('/prod/parts', {
+  }>('/parts', {
     params: cleanParams({ keyword: params.keyword, status: params.status, limit: 200 }),
   });
   return resp.data.items;
