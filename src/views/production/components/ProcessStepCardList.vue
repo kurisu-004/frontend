@@ -16,9 +16,8 @@
     - 「重置」按钮去掉文字，改为 RefreshLeft 图标 + el-tooltip（T1）
     - 改回 default button（非 text button，disabled 时更可见）
     - toolbar 单行：总耗时 tag + spacer + 保存 + 重置 icon（T1，20% 右栏 ≈256px 内能放下）
-  2026-09-12 改造（第五轮）：
-    - 装配件（row_type='ASSEMBLY'）选中时，右栏不显示工序卡片，改为「请展开装配件选择其子零件」提示
-    - 总耗时 tag 在装配件选中时不展示（保留 toolbar 但内容清空，避免空白按钮残留）
+  2026-09-29 改造：删除「装配件选中提示」分支（isAssembly hint + assembly-hint CSS）；
+    后端 GET /parts 已切到只查 t_part，UI 不可能再选中装配件。
 
   CLAUDE.md 合规：
   - #10：容器 ref 位于 v-else（空态 vs 列表切换），初始 mount 时为 null → 用 useLazyDraggable。
@@ -58,19 +57,7 @@
       </div>
     </template>
 
-    <!-- 2026-09-12 第五轮：装配件选中时显示「请选择子零件」提示，不显示工序编辑 UI。
-         装配件本身不能指定工序，只能为其子零件制定工序。 -->
-    <div v-if="isAssembly" class="assembly-hint">
-      <el-icon :size="40" color="#909399"><InfoFilled /></el-icon>
-      <p class="assembly-hint-title">装配件不能指定工序</p>
-      <p class="assembly-hint-body">
-        「{{
-          currentPart?.name ?? '该装配件'
-        }}」是装配件（总装图），请在左侧展开后选择其子零件来制定工序。
-      </p>
-    </div>
-
-    <div v-else-if="steps.length === 0" class="empty-state">
+    <div v-if="steps.length === 0" class="empty-state">
       <el-empty description="该零件暂无工序，点击下方方框添加第一道工序" :image-size="80" />
       <!-- 2026-09-12 第三轮：空态也展示占位方框（与有步骤时保持一致入口） -->
       <div class="step-add-placeholder step-add-placeholder--solo" @click="onAdd">
@@ -151,7 +138,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Delete, InfoFilled, Plus, RefreshLeft } from '@element-plus/icons-vue';
+import { Delete, Plus, RefreshLeft } from '@element-plus/icons-vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { ElMessage } from 'element-plus';
 import type { ProcessStep } from '@/types/partProcess';
@@ -161,7 +148,7 @@ const props = defineProps<{
   partId: string | null;
 }>();
 
-const { parts, processes, flows, getFlowByPartId, loadFlowForPart, save, newStep, summaries } =
+const { processes, flows, getFlowByPartId, loadFlowForPart, save, newStep, summaries } =
   usePartProcessDesign();
 
 const steps = ref<ProcessStep[]>([]);
@@ -170,15 +157,7 @@ const dirty = ref(false);
 const saving = ref(false);
 
 // 当前 partId 对应零件的派生
-const currentPart = computed(() =>
-  props.partId ? (parts.value.find((p) => p.id === props.partId) ?? null) : null,
-);
-// 2026-09-12 第五轮：装配配件选中时不显示工序编辑 UI，仅展示「请选择子零件」提示。
-// 装配配件本身不能指定工序，只能为其子零件制定工序。
-const isAssembly = computed(() => currentPart.value?.row_type === 'ASSEMBLY');
-const totalMinutes = computed(() =>
-  props.partId && !isAssembly.value ? summaries(props.partId).total_minutes : 0,
-);
+const totalMinutes = computed(() => (props.partId ? summaries(props.partId).total_minutes : 0));
 // 2026-09-12 第三轮：删除 hasOutsource 派生（不再展示外协警示）。
 // 保留 summaries 调用以确保派生触发；如不再需要可后续清理。
 
@@ -249,11 +228,6 @@ watch(
 function onAdd(): void {
   if (!props.partId) {
     ElMessage.warning('请先选择零件');
-    return;
-  }
-  // 2026-09-12 第五轮：装配件不能指定工序
-  if (isAssembly.value) {
-    ElMessage.warning('装配件不能指定工序，请选择其子零件');
     return;
   }
   steps.value = [...steps.value, newStep()];
@@ -388,30 +362,6 @@ useLazyDraggable(containerRef, steps, {
   height: 100%;
   gap: 16px;
   padding-bottom: 32px;
-}
-// 2026-09-12 第五轮：装配件选中时的提示块（不显示工序编辑 UI）
-.assembly-hint {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  gap: 8px;
-  padding: 32px 16px;
-  text-align: center;
-  color: var(--text-secondary);
-}
-.assembly-hint-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.assembly-hint-body {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.6;
-  max-width: 240px;
 }
 .card-list {
   display: flex;
