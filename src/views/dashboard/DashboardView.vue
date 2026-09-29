@@ -1,501 +1,239 @@
+<!--
+  DashboardView.vue
+  2026-09-29 重做：从车间大屏导向（货架轮播 + 工厂实时态）改为办公桌面屏导向
+  （未来 7 天交期概览 + 最紧急工单 + 图纸预览）。
+
+  信息架构（自上而下）：
+    Header（欢迎语 + 当前日期 + 角色徽章）
+    KPI 横排（4 tile：逾期未交 / 今日到期 / 本周到期 / 紧急工单）
+    双栏布局：左 UpcomingDeliveryChart，右 UrgentOrdersList
+    Footer：FactoryRealtimeStrip（沿旧 in_process 数据，按工人分组 chips）
+
+  数据流：
+    - useDashboardSnapshot() → snapshot.upcoming_delivery（7 天分桶）+ in_process
+    - useDashboardUrgentList() → items（listUnionItems 拉 100 件非终态件）+ urgentCount
+    - useDashboardOverdue(isManager) → overdueCount（Manager-only，闸门按角色）
+    - 行点击 emit row-click(part) → 父组件打开 UrgentOrderDrawer
+-->
 <template>
   <div class="dashboard">
-    <!-- 顶部 2/3：货架轮播（每页 2 个货架卡片并排） -->
-    <section class="shelves-area">
-      <div v-if="shelfGroups.length === 0" class="shelves-empty">暂无货架上的零件</div>
-      <el-carousel
-        v-else
-        class="shelves-carousel"
-        height="100%"
-        :interval="8000"
-        arrow="always"
-        :pause-on-hover="true"
-      >
-        <el-carousel-item v-for="(page, pageIdx) in shelfPages" :key="pageIdx">
-          <div class="shelf-page">
-            <div v-for="g in page" :key="g.shelf_id" class="shelf-card">
-              <div class="shelf-card-head">
-                <span class="shelf-code">{{ g.shelf_code }}</span>
-                <span class="shelf-name">{{ g.shelf_name }}</span>
-                <span class="shelf-count">{{ g.total_count ?? g.items.length }} 件</span>
-              </div>
-              <div class="shelf-card-body">
-                <template v-if="g.items.length > 0">
-                  <div
-                    v-for="item in g.items.slice(0, 10)"
-                    :key="item.batch_id || item.id"
-                    :class="['shelf-item', { urgent: item.is_urgent }]"
-                  >
-                    <span
-                      :class="['item-serial', { 'is-clickable': canOpenPartDetail }]"
-                      :title="canOpenPartDetail ? '查看详情' : ''"
-                      @click="canOpenPartDetail && goPartDetail(item.id)"
-                      >{{ item.serial_no || '—' }}</span
-                    >
-                    <span class="item-name" :title="item.name">{{ item.name }}</span>
-                    <span class="item-process" :title="item.next_process_name || ''">
-                      {{ item.next_process_name || '—' }}
-                    </span>
-                    <span class="item-due">{{
-                      formatDashboardDeliveryDate(item.planned_delivery_date)
-                    }}</span>
-                  </div>
-                </template>
-                <div v-else class="shelf-empty">空</div>
-              </div>
-            </div>
-          </div>
-        </el-carousel-item>
-      </el-carousel>
-    </section>
+    <!-- Header：欢迎语 + 当前日期 + 角色徽章 -->
+    <header class="dashboard-header">
+      <div class="header-left">
+        <span class="header-greeting">{{ greeting }}，{{ userName }}</span>
+        <span class="header-date">{{ todayDisplay }}</span>
+      </div>
+      <div class="header-right">
+        <el-tag v-if="roleTag.label" :type="roleTag.type" size="small" effect="plain">
+          {{ roleTag.label }}
+        </el-tag>
+      </div>
+    </header>
 
-    <!-- 底部 1/3：正在加工（按工人分组，只保留姓名+流水号 chips） -->
-    <section class="inprocess-area">
-      <div class="inprocess-card">
-        <div class="inprocess-head">
-          <span class="inprocess-title"
-            ><el-icon class="title-icon"><Tools /></el-icon>正在加工</span
-          >
-          <span class="inprocess-count">{{ workerParts.length }} 件</span>
-        </div>
-        <div class="inprocess-items">
-          <template v-if="workerGroups.length > 0">
-            <div v-for="group in workerGroups" :key="group.key" class="worker-group">
-              <div class="worker-name">{{ group.worker_name || '未记录' }}</div>
-              <div class="worker-chips">
-                <span
-                  v-for="item in group.items"
-                  :key="item.batch_id || item.id"
-                  :class="[
-                    'worker-chip',
-                    { urgent: item.is_urgent, 'is-clickable': canOpenPartDetail },
-                  ]"
-                  :title="canOpenPartDetail ? '查看详情' : ''"
-                  @click="canOpenPartDetail && goPartDetail(item.id)"
-                >
-                  {{ item.serial_no || '—' }}
-                </span>
-              </div>
-            </div>
-          </template>
-          <div v-else class="inprocess-empty">暂无正在加工的零件</div>
-        </div>
+    <!-- KPI 横排 -->
+    <DashboardKpiTiles
+      :manager="isManager"
+      :overdue-count="overdueCount"
+      :today-count="todayCount"
+      :week-count="weekCount"
+      :urgent-count="urgentCount"
+    />
+
+    <!-- 双栏布局：左 UpcomingDeliveryChart / 右 UrgentOrdersList -->
+    <section class="dashboard-main">
+      <div class="main-left">
+        <UpcomingDeliveryChart :buckets="upcomingBuckets" height="320px" />
+      </div>
+      <div class="main-right">
+        <UrgentOrdersList :items="urgentItems" @row-click="onRowClick" />
       </div>
     </section>
+
+    <!-- Footer：工厂实时态 -->
+    <FactoryRealtimeStrip
+      :items="inProcessItems"
+      :can-open-detail="canOpenPartDetail"
+      @item-click="goPartDetail"
+    />
+
+    <!-- 抽屉：选中的工单详情 + 图纸 -->
+    <UrgentOrderDrawer v-model="drawerVisible" :part="selectedPart" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+// 2026-09-29 重做：完全抛弃车间大屏设计，改为办公桌面屏。
+//
+// 设计要点：
+//   - 三个独立 useQuery + 一个共享 WS 事件订阅：
+//     * useDashboardSnapshot    → snapshot（upcoming_delivery + in_process）
+//     * useDashboardUrgentList  → items（100 件非终态件，按 planned_delivery_date ASC）
+//     * useDashboardOverdue     → overdueCount（Manager-only）
+//     三个 useQuery 通过 useDashboardInvalidation 复用 AFFECTS_DASHBOARD 事件集 +
+//     500ms / 1500ms debounce，避免重复订阅 handler。
+//   - 不写 retry：信任 main.ts 全局 queries.retry: 0（沿 2026-09-26 约定）。
+//   - 行点击 emit → 父组件管 drawer 开关（UrgentOrderDrawer 是受控组件，
+//     v-model + :part）；点击其他区域通过 emit('update:modelValue', false) 关闭。
+//
+// 跨角色权限：
+//   - SHELF_ACCOUNT：isShelfAccount = true → canOpenPartDetail = false → chips 不可点。
+//   - MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER：canOpenPartDetail = true。
+
+import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { Tools } from '@element-plus/icons-vue';
+import { useAuthStore } from '@/stores/auth';
 import { usePermissions } from '@/composables/usePermissions';
-import type {
-  DashboardItemData,
-  DashboardShelfGroupData,
-} from '@/views/dashboard/composables/dashboardSnapshotSchema';
+import type { PartListItem } from '@/types/parts';
 import { useDashboardSnapshot } from '@/views/dashboard/composables/useDashboardSnapshot';
-import { formatDashboardDeliveryDate } from '@/utils/deliveryDate';
+import { useDashboardUrgentList } from '@/views/dashboard/composables/useDashboardUrgentList';
+import { useDashboardOverdue } from '@/views/dashboard/composables/useDashboardOverdue';
+import DashboardKpiTiles from './components/DashboardKpiTiles.vue';
+import UpcomingDeliveryChart from './components/UpcomingDeliveryChart.vue';
+import UrgentOrdersList from './components/UrgentOrdersList.vue';
+import UrgentOrderDrawer from './components/UrgentOrderDrawer.vue';
+import FactoryRealtimeStrip from './components/FactoryRealtimeStrip.vue';
 
 const router = useRouter();
+const auth = useAuthStore();
 const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
 
-// 工控机账号（纯 SHELF_ACCOUNT）禁跳详情；与后端 GET /parts/{id} 读权限对齐
+/** 2026-09-29 新增：工控机账号（纯 SHELF_ACCOUNT）禁跳详情。 */
 const canOpenPartDetail = computed(
   () => isManager.value || isClerk.value || isInspector.value || isCncProgrammer.value,
 );
 
-function goPartDetail(id: string): void {
-  router.push(`/parts/${id}`);
-}
-
-// 2026-09-28 改造：原 onDashboardSnapshot(applySnapshot) → useDashboardSnapshot()
-// HTTP 全量首取 + WS 事件 invalidate 重取。snapshot 来自 TanStack Query 的
-// Vue ref，computed 自动解包，模板零改动。
+// ============ 数据 ============
 const { data: snapshot } = useDashboardSnapshot();
+const { items: urgentItems, urgentCount } = useDashboardUrgentList();
+const { overdueCount } = useDashboardOverdue(isManager);
 
-const shelfGroups = computed<DashboardShelfGroupData[]>(
-  () => snapshot.value?.on_production_shelves ?? [],
-);
-const workerParts = computed<DashboardItemData[]>(() => snapshot.value?.in_process ?? []);
+// upcoming_delivery 数组（来自 snapshot，可能为空数组）
+const upcomingBuckets = computed(() => snapshot.value?.upcoming_delivery ?? []);
 
-// ============ 货架轮播分页 ============
-const shelfPages = computed(() => {
-  const groups = shelfGroups.value;
-  const pages: DashboardShelfGroupData[][] = [];
-  for (let i = 0; i < groups.length; i += 2) {
-    pages.push(groups.slice(i, i + 2));
-  }
-  return pages;
+// in_process 数组（来自 snapshot，按工人分组 chips 用）
+const inProcessItems = computed(() => snapshot.value?.in_process ?? []);
+
+// ============ KPI 派生 ============
+const todayCount = computed<number>(() => {
+  const today = todayIso();
+  return upcomingBuckets.value
+    .filter((b) => b.date === today)
+    .reduce((sum, b) => sum + (Number(b.count) || 0), 0);
 });
 
-// ============ 工人分组 ============
-interface WorkerGroup {
-  key: string;
-  worker_name: string | null;
-  items: DashboardItemData[];
+const weekCount = computed<number>(() =>
+  upcomingBuckets.value.reduce((sum, b) => sum + (Number(b.count) || 0), 0),
+);
+
+// ============ 顶部 header 派生 ============
+function todayIso(): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
-const workerGroups = computed(() => {
-  const map = new Map<string, WorkerGroup>();
-  for (const p of workerParts.value) {
-    const key = String(p.current_holder_id ?? p.worker_name ?? 'unknown');
-    const existing = map.get(key);
-    if (existing) {
-      existing.items.push(p);
-    } else {
-      map.set(key, { key, worker_name: p.worker_name ?? null, items: [p] });
-    }
-  }
-  return Array.from(map.values());
+const todayDisplay = computed(() => {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  return `${yyyy}-${mm}-${dd} · ${weekdays[d.getDay()]}`;
 });
+
+const greeting = computed(() => {
+  const h = new Date().getHours();
+  if (h < 6) return '凌晨好';
+  if (h < 12) return '早上好';
+  if (h < 14) return '中午好';
+  if (h < 18) return '下午好';
+  return '晚上好';
+});
+
+const userName = computed(() => auth.user?.full_name ?? auth.user?.username ?? '用户');
+
+const roleTag = computed<{ label: string; type: 'primary' | 'warning' | 'info' }>(() => {
+  if (isManager.value) return { label: '管理员', type: 'primary' };
+  if (isClerk.value) return { label: '文员', type: 'primary' };
+  if (isInspector.value) return { label: '品检员', type: 'warning' };
+  if (isCncProgrammer.value) return { label: 'CNC 编程', type: 'info' };
+  return { label: '', type: 'info' };
+});
+
+// ============ 抽屉 ============
+const drawerVisible = ref(false);
+const selectedPart = ref<PartListItem | null>(null);
+
+function onRowClick(part: PartListItem): void {
+  selectedPart.value = part;
+  drawerVisible.value = true;
+}
+
+function goPartDetail(partId: string): void {
+  if (!canOpenPartDetail.value) return;
+  void router.push(`/parts/${partId}`);
+}
 </script>
 
 <style lang="scss" scoped>
+// 2026-09-29 重做：移除整个 shelves-area / shelf-card / shelf-item / 1600/2400
+// 媒体查询，改为办公桌面屏布局（grid 列 + flex 行）。
+
 .dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
   height: calc(100vh - 60px);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 12px;
   box-sizing: border-box;
-  gap: 12px;
+  overflow: hidden;
+  background: var(--content-bg);
 }
 
-// ============ 顶部 2/3：货架轮播 ============
-.shelves-area {
-  flex: 2;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.shelves-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  background: #fff;
-  border-radius: 6px;
-  font-size: 14px;
-}
-.shelves-carousel {
-  flex: 1;
-  min-height: 0;
-}
-.shelf-page {
-  display: flex;
-  gap: 12px;
-  height: 100%;
-  padding: 0 4px;
-}
-.shelf-page .shelf-card {
-  flex: 1;
-  min-width: 0;
-}
-.shelf-card {
-  display: flex;
-  flex-direction: column;
-  background: #fff;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  overflow: hidden;
-  min-height: 0;
-}
-.shelf-card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid #eee;
-  background: #fafbfc;
-  flex-shrink: 0;
-}
-.shelf-code {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--primary-color);
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-}
-.shelf-name {
-  font-size: 13px;
-  color: var(--text-secondary);
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.shelf-count {
-  font-size: 12px;
-  color: var(--text-secondary);
-  background: var(--el-color-primary-light-9);
-  color: var(--primary-color);
-  padding: 1px 8px;
-  border-radius: 10px;
-}
-.shelf-card-body {
-  flex: 1;
-  overflow: hidden;
-  padding: 4px 0;
-  min-height: 0;
-}
-.shelf-item {
-  display: grid;
-  grid-template-columns: 96px 1.4fr 1fr 80px; /* 序号 | 名称 | 下一工序 | 交期 */
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: 13px;
-  border-bottom: 1px dashed #f0f0f0;
-  &.urgent {
-    background: #fde2e2;
-  }
-  &:last-child {
-    border-bottom: none;
-  }
-}
-.item-serial {
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text-primary);
-}
-.item-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-}
-.item-process {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--primary-color);
-  font-size: 13px;
-}
-.item-due {
-  color: #888;
-  text-align: right;
-  font-size: 12px;
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-}
-.shelf-empty {
-  padding: 24px 0;
-  text-align: center;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-// ============ 底部 1/3：正在加工（按工人分组） ============
-.inprocess-area {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-.inprocess-card {
-  flex: 1;
-  background: #fff;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-.inprocess-head {
+.dashboard-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
-  border-bottom: 1px solid #eee;
-  background: #fafbfc;
   flex-shrink: 0;
 }
-.inprocess-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-  font-size: 15px;
-}
-.inprocess-count {
-  font-size: 12px;
-  color: var(--primary-color);
-  background: var(--el-color-primary-light-9);
-  padding: 1px 8px;
-  border-radius: 10px;
-}
-.inprocess-items {
-  flex: 1;
+.header-left {
   display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: 8px;
-  padding: 10px 12px;
-  overflow: hidden;
+  align-items: baseline;
+  gap: 12px;
+}
+.header-greeting {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.header-date {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.header-right {
+  display: flex;
+  gap: 6px;
+}
+
+.dashboard-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 12px;
   min-height: 0;
 }
-.worker-group {
+.main-left,
+.main-right {
+  min-height: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  background: #f5f7fa;
-  border-radius: 6px;
-}
-.worker-name {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--text-primary);
-  white-space: nowrap;
-}
-.worker-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.worker-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  background: #fff;
-  border-radius: 4px;
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  &.urgent {
-    background: #fde2e2;
-    color: #f56c6c;
-  }
-}
-.inprocess-empty {
-  width: 100%;
-  text-align: center;
-  color: var(--text-secondary);
-  font-size: 13px;
-  padding: 20px 0;
+  flex-direction: column;
 }
 
-// ============ 序列号可点态（仅非 SHELF_ACCOUNT 账号） ============
-.item-serial.is-clickable,
-.worker-chip.is-clickable {
-  cursor: pointer;
-}
-.item-serial.is-clickable:hover,
-.worker-chip.is-clickable:hover {
-  text-decoration: underline;
-}
-
-// ============ 通用 ============
-
-// ============================================================
-// 车间大屏适配：1080p / 4K
-// 视距 5-8m，ppi ≈ 40。×2 起点保证「抬头就能看清」最小字号 26px。
-// ============================================================
-@media (min-width: 1600px) {
-  .inprocess-title {
-    font-size: 32px;
-  }
-  .shelf-code {
-    font-size: 28px;
-  }
-  .shelf-name {
-    font-size: 26px;
-  }
-  .shelf-count,
-  .inprocess-count {
-    font-size: 22px;
-    padding: 4px 14px;
-  }
-  .shelf-item {
-    font-size: 26px;
-    padding: 14px 20px;
-    gap: 12px;
-    grid-template-columns: 140px 1.4fr 1fr 100px;
-  }
-  .item-serial {
-    font-size: 28px;
-  }
-  .item-process {
-    font-size: 26px;
-  }
-  .item-due {
-    font-size: 24px;
-  }
-  .shelf-empty,
-  .shelves-empty {
-    font-size: 26px;
-  }
-  .worker-group {
-    padding: 10px 20px;
-    gap: 12px;
-    border-radius: 10px;
-  }
-  .worker-name {
-    font-size: 24px;
-  }
-  .worker-chip {
-    font-size: 22px;
-    padding: 4px 12px;
-    border-radius: 6px;
-  }
-  .inprocess-empty {
-    font-size: 24px;
-    padding: 32px 0;
-  }
-}
-
-@media (min-width: 2400px) {
-  .inprocess-title {
-    font-size: 40px;
-  }
-  .shelf-code {
-    font-size: 34px;
-  }
-  .shelf-name {
-    font-size: 32px;
-  }
-  .shelf-count,
-  .inprocess-count {
-    font-size: 28px;
-    padding: 6px 18px;
-  }
-  .shelf-item {
-    font-size: 32px;
-    padding: 18px 28px;
-    gap: 16px;
-    grid-template-columns: 180px 1.4fr 1fr 120px;
-  }
-  .item-serial {
-    font-size: 34px;
-  }
-  .item-process {
-    font-size: 32px;
-  }
-  .item-due {
-    font-size: 30px;
-  }
-  .shelf-empty,
-  .shelves-empty {
-    font-size: 32px;
-  }
-  .worker-group {
-    padding: 14px 28px;
-    gap: 16px;
-    border-radius: 12px;
-  }
-  .worker-name {
-    font-size: 30px;
-  }
-  .worker-chip {
-    font-size: 28px;
-    padding: 6px 16px;
-    border-radius: 8px;
-  }
-  .inprocess-empty {
-    font-size: 30px;
-    padding: 48px 0;
+@media (max-width: 1100px) {
+  .dashboard-main {
+    grid-template-columns: 1fr;
   }
 }
 </style>
