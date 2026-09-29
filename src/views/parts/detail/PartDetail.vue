@@ -842,7 +842,8 @@ watch(
     await fetchPart();
     void fetchEvents();
     void fetchBatches();
-    void fetchCncPrograms();
+    // 2026-09-29 修复：usePartFilesListQuery reactive params 已自动驱动 refetch，
+    // 切 partId → ownerKey 变化 → useQuery 自动重取，无需手写 fetchCncPrograms。
   },
 );
 
@@ -850,9 +851,8 @@ onMounted(() => {
   void fetchPart();
   void fetchEvents();
   void fetchBatches();
-  // 2026-09-29 迁移：partFiles 由 usePartFilesListQuery reactive params 自动驱动，
-  // 切 partId → ownerKey 变化 → useQuery 自动 refetch。无需手写 fetch*。
-  void fetchCncPrograms();
+  // 2026-09-29 修复：usePartFilesListQuery reactive params 已自动驱动 refetch，
+  // 切 partId → ownerKey 变化 → useQuery 自动重取，无需手写 fetchCncPrograms。
 });
 </script>
 

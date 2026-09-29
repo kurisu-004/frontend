@@ -72,7 +72,9 @@ export interface PartFileUrlResult {
 }
 
 /**
- * POST /api/v2/parts/{id}/cnc-pair 响应中的单文件引用（v2 CncFileRef）。
+ * 2026-09-29 修复：原 /api/v2/parts/{id}/cnc-pair 已移除兼容 nest，迁移到
+ * POST /api/v2/cnc-programs/pairs（cnc_program 域 canonical）。
+ * POST /api/v2/cnc-programs/pairs 响应中的单文件引用（v2 CncFileRef）。
  * 2026-09-16 新增：Phase 5 切 v2 后该端点返回 { g_code, setup_sheet } 对象（非数组）。
  */
 export interface CncPairedFileRef {
