@@ -48,6 +48,8 @@ import {
   type SerializedStagedEntry,
 } from '@/views/parts/new/composables/usePartsNewDraft';
 import { stsToCosUploadGrant } from '@/views/parts/new/composables/_grantMappers';
+import { computeSha256 } from '@/utils/fileHash';
+import { parseFileExt } from '@/utils/fileExt';
 import type { Applicant } from '@/types/applicant';
 import type { FileBinding } from '@/types/part_file';
 import type { Customer } from '@/api/customer';
@@ -419,11 +421,16 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
 
   /**
    * 2026-09-28 子任务 #5：caller 改为 grantStsTmpKeyFiles 单批签名。
+   * 2026-09-29：caller 在 grant 之前必传 content_sha256（完整 64 hex）+ ext；
+   * 本函数负责先算 SHA-256 + 解析 ext，再喂 grantStsTmpKeyFiles。
    *
    * 流程：
-   * 1) 把 files 映射成 grantStsTmpKeyFiles 入参（purpose / filename / content_type）；
-   * 2) 单 HTTP 拿回 N 个 STS 凭证 + tmp_key；
-   * 3) 用 _grantMappers.stsToCosUploadGrant 拼成「共享 credentials / bucket /
+   * 1) 对每个 file 跑 computeSha256（流式 hash-wasm 8MB 分块，~30MB PDF 不阻塞 UI）；
+   *    并用 parseFileExt 从文件名取 ext（小写字母数字 1-7）；
+   * 2) 把 files 映射成 grantStsTmpKeyFiles 入参（purpose / filename / content_type /
+   *    content_sha256 / ext）；
+   * 3) 单 HTTP 拿回 N 个 STS 凭证 + tmp_key；
+   * 4) 用 _grantMappers.stsToCosUploadGrant 拼成「共享 credentials / bucket /
    *    region + items[].tmp_key」格式返回给 CosUploader。
    *
    * 与 usePartBatchPdf.allocate 的差异：本函数只处理 'drawing' kind（手工录入 Tab
@@ -432,19 +439,44 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
    * 本调用点为「单次 getUploadGrant」路径：CosUploader 拿回 grant 后不会主动
    * refetch（useCosUploader 的 ensureFreshCredentials 仅在 initialGrant 未传时
    * 才兜底），因此 client_ref 用 crypto.randomUUID() 生成后无需跨 refetch 复用。
+   *
+   * 2026-09-29 升级：算出的 sha + ext 同步写入 drawingShaMap（File→sha），
+   * 让 onDrawingUploaded 不依赖 CosUploader.computeHash 也能拿到 sha 写 binding。
+   * 同时保持 CosUploader :compute-hash="false" 不变（避免大 PDF 算两次 hash）。
    */
   async function requestDrawingUpload(files: File[]): Promise<CosUploadGrant> {
     if (files.length === 0) {
       throw new Error('requestDrawingUpload: files 不能为空');
     }
+    // 2026-09-29：先逐文件算 sha + 解析 ext，再喂 grantStsTmpKeyFiles。
+    // 用 Promise.all 并行 hash。
+    const shaExtPairs = await Promise.all(
+      files.map(async (f) => {
+        const sha = await computeSha256(f);
+        const ext = parseFileExt(f.name);
+        return { sha, ext };
+      }),
+    );
+    // 缓存 sha 到 drawingShaMap（onDrawingUploaded 内按 File 身份取 sha 写 binding）
+    files.forEach((f, idx) => {
+      const pair = shaExtPairs[idx]!;
+      drawingShaMap.set(f, pair.sha);
+    });
     const grants = await grantStsTmpKeyFiles({
       scope: 'parts_new',
-      files: files.map((f) => ({
-        purpose: 'drawing',
-        // 与现有 StsTmpKeysRequest 字段一致；python 端 schema 接受此 snake_case。
-        filename: f.name,
-        content_type: f.type || 'application/octet-stream',
-      })),
+      files: files.map((f, idx) => {
+        const pair = shaExtPairs[idx]!;
+        return {
+          purpose: 'drawing',
+          // 与现有 StsTmpKeysRequest 字段一致；python 端 schema 接受此 snake_case。
+          filename: f.name,
+          content_type: f.type || 'application/octet-stream',
+          // 2026-09-29：必传完整 64 hex SHA-256（rust schema 收紧 required）。
+          content_sha256: pair.sha,
+          // 2026-09-29：必传 ext（utils/fileExt.parseFileExt 解析）。
+          ext: pair.ext,
+        };
+      }),
     });
     if (grants.items.length !== files.length) {
       throw new Error(

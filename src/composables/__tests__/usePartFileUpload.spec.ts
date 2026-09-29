@@ -9,8 +9,8 @@
 // - caller 用 crypto.randomUUID() 生成 client_ref，grantStsTmpKey 单端口 1-key
 //   响应包成 UploadIntentsOut（part-file 专用）后喂 useCosUpload；
 // - COS 上传失败 → status=error，upload() 抛错；
-// - refetchIntents 在凭证过期时按 (purpose, filename, content_sha256.slice(0,16))
-//   再调一次 grantStsTmpKey；
+// - refetchIntents 在凭证过期时按 (purpose, filename, content_sha256, ext)
+//   再调一次 grantStsTmpKey（content_sha256 必传完整 64 hex，不再截前 16）；
 // - ownerPartId / kind 接受 Ref<string> / getter 两种形态；
 // - uploading / lastError 状态在生命周期内同步。
 //
@@ -162,8 +162,10 @@ describe('usePartFileUpload.upload', () => {
       purpose: 'drawing', // DRAWING → 'drawing'
       filename: 'a.pdf',
       content_type: 'application/pdf',
-      // sha 截前 16 hex：a * 64 → a * 16
-      content_sha256: 'a'.repeat(16),
+      // 2026-09-29：必传完整 64 hex（不再 .slice(0, 16)）
+      content_sha256: 'a'.repeat(64),
+      // 2026-09-29：必传 ext 字段（utils/fileExt.parseFileExt 解析）
+      ext: 'pdf',
     });
     // body 不含 owner_part_id / kind / file_size（这些是 backend-rust upload-intents 字段）
     expect((reqArg as Record<string, unknown>).owner_part_id).toBeUndefined();
@@ -188,6 +190,8 @@ describe('usePartFileUpload.upload', () => {
       original_filename: 'a.pdf',
       file_size: '5',
       content_type: 'application/pdf',
+      // 2026-09-29 新增 ext 字段（rust ConfirmFileIn 对齐）
+      ext: 'pdf',
     });
 
     // 返回确认后的 PartFileItem
@@ -242,11 +246,11 @@ describe('usePartFileUpload.upload', () => {
     expect((reqArg as { purpose: string }).purpose).toBe('3d_model');
   });
 
-  it('content_sha256 严格截前 16 hex（python schema 16-64 hex 边界）', async () => {
+  it('content_sha256 必传完整 64 hex（2026-09-29 升级，不再 .slice(0, 16)）', async () => {
     grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
     confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
 
-    // SHA = 64 个不同字符（'0123456789abcdef' 循环 4 次），验证截前 16 位
+    // SHA = 64 个不同字符（'0123456789abcdef' 循环 4 次），验证完整 64 位直传
     const sha64 = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     computeSha256Mock.mockResolvedValueOnce(sha64);
 
@@ -257,8 +261,35 @@ describe('usePartFileUpload.upload', () => {
     await upload(makeFile('a.pdf'));
 
     const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
-    expect((reqArg as { content_sha256: string }).content_sha256).toBe('0123456789abcdef');
-    expect(((reqArg as { content_sha256: string }).content_sha256 ?? '').length).toBe(16);
+    expect((reqArg as { content_sha256: string }).content_sha256).toBe(sha64);
+    expect(((reqArg as { content_sha256: string }).content_sha256 ?? '').length).toBe(64);
+    // ext 必填：a.pdf → 'pdf'
+    expect((reqArg as { ext: string }).ext).toBe('pdf');
+  });
+
+  it('ext 由 utils/fileExt.parseFileExt 解析：文件名大写 / 多 dot 仍取最后一段', async () => {
+    grantStsTmpKeyMock.mockResolvedValueOnce(makeStsResponse());
+    confirmPartFileMock.mockResolvedValueOnce(makeExistingFile());
+
+    const { upload } = usePartFileUpload({
+      ownerPartId: ref<string>('190000000000001'),
+      kind: 'DRAWING',
+    });
+    // 大写扩展名应归一化为小写
+    await upload(makeFile('A.PDF'));
+
+    const [reqArg] = grantStsTmpKeyMock.mock.calls[0]!;
+    expect((reqArg as { ext: string }).ext).toBe('pdf');
+  });
+
+  it('ext 解析失败（无扩展名） → upload 抛错，grantStsTmpKey 不被调用', async () => {
+    // 'noext' 没有 '.'，parseFileExt 抛 Error('invalid ext: noext')
+    const { upload } = usePartFileUpload({
+      ownerPartId: ref<string>('190000000000001'),
+      kind: 'DRAWING',
+    });
+    await expect(upload(makeFile('noext'))).rejects.toThrow(/invalid ext/);
+    expect(grantStsTmpKeyMock).not.toHaveBeenCalled();
   });
 
   it('COS 上传失败 → upload 抛错，lastError / uploading 状态正确', async () => {

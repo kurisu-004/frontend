@@ -43,8 +43,8 @@ import type {
 /**
  * 申请 1 个 STS 临时凭证 + tmp_key。
  *
- * 调用方传入 purpose / filename / content_sha256，python 后端按 (purpose,
- * filename, content_sha256) 派生唯一 tmp_key，返回 STS 凭证四元组 + COS 桶
+ * 调用方传入 purpose / filename / content_sha256 / ext，rust 后端按 (purpose,
+ * filename, content_sha256, ext) 派生唯一 tmp_key，返回 STS 凭证四元组 + COS 桶
  * / region。前端拿到响应后用 `cos-js-sdk-v5` 直传 COS tmp 区，后续业务端点
  *（`confirmPartFile` / `batchCreateParts`）再携带 `tmp_key` 让后端 head + copy
  * tmp → 正式 CAS key + 落业务表。
@@ -53,12 +53,16 @@ import type {
  * 与 refreshPromise。端点路径 `/files/sts-tmp-keys`，不带 `/v2` 前缀（baseURL
  * 已自带）。rust 端负责 JWT 鉴权，python 信封原样透传。
  *
+ * 2026-09-29 升级：content_sha256 必传完整 64 hex（不再截前 16），ext 必传
+ * （utils/fileExt.parseFileExt 解析结果）。
+ *
  * @example
  * ```ts
  * const resp = await grantStsTmpKey({
  *   purpose: 'drawing',
  *   filename: 'a.pdf',
- *   content_sha256: 'a'.repeat(16),
+ *   content_sha256: 'a'.repeat(64),
+ *   ext: 'pdf',
  *   content_type: 'application/pdf',
  * });
  * // resp.tmp_key / resp.credentials / resp.bucket / resp.region 喂给 cos.uploadFile
@@ -73,7 +77,7 @@ export async function grantStsTmpKey(payload: StsTmpKeysRequest): Promise<StsTmp
  * 批量申请 N 个 STS 临时凭证 + tmp_key（2026-09-28 子任务 #5 启用）。
  *
  * 把 N 个文件的入参一次性塞进 `files[]`，python 后端按 (purpose, filename,
- * content_sha256) 派生唯一 tmp_key 单次签名批；返回的 `items[i].tmp_key`
+ * content_sha256, ext) 派生唯一 tmp_key 单次签名批；返回的 `items[i].tmp_key`
  * 与请求 `files[i]` 一一对应（下标对齐）。相比 N 次并发调 `grantStsTmpKey`：
  *
  * - 单 HTTP（减少后端签名协调成本）；
@@ -94,6 +98,8 @@ export async function grantStsTmpKey(payload: StsTmpKeysRequest): Promise<StsTmp
  *     purpose: 'drawing',
  *     filename: f.name,
  *     content_type: f.type || 'application/octet-stream',
+ *     content_sha256: 'a'.repeat(64),
+ *     ext: 'pdf',
  *   })),
  * });
  * // 桶 / region / credentials 共享：从 items[0] 取

@@ -76,6 +76,8 @@ describe('confirmPartFile', () => {
       original_filename: 'a.pdf',
       file_size: '12345',
       content_type: 'application/pdf',
+      // 2026-09-29 新增 ext 必填字段（rust ConfirmFileIn 对齐）
+      ext: 'pdf',
     };
     const resp = await confirmPartFile('190000000000001', payload);
 
