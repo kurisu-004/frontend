@@ -1,3 +1,61 @@
+/** 2026-09-29 新增：生产统计 overview 出参 schema（守门 backend-rust OverviewOut VO）。
+ *
+ * 字段对齐 src/types/statistics.ts::OverviewOut：
+ *   - 顶层 date_from / date_to：日期范围 string（'YYYY-MM-DD'，来自 caller）。
+ *   - 8 个基础统计 number：created_count / completed_count / in_process_count /
+ *     delivered_count / late_orange_count / late_red_count /
+ *     overdue_undelivered_count / repair_part_count。
+ *   - delivered_value：rust_decimal::Decimal + serde-with-str → string，
+ *     与 unit_price / total_price 同形态（不强制 .regex）。
+ *   - 4 个图表：daily_created / daily_completed / delivery_performance /
+ *     status_distribution 数组。
+ *
+ * dashboard 域只消费 overdue_undelivered_count 字段（2026-09-29 重做后
+ * DashboardKpiTiles「逾期未交」tile），但 schema 仍对齐全 VO 字段集（沿
+ * 2026-09-26 约定 #4：基础数据 schema 与后端契约对齐，缺字段静默 strip =
+ * 校验形同虚设 —— 见 M-1 regression guard）。
+ *
+ * 沿用 CLAUDE.md §M-4 strip 陷阱：所有非 Option 字段必填显式声明，调用方
+ * 通过 overviewOutSchema.parse(response) 在 api 边界守门。 */
+export const overviewOutSchema = z.object({
+  date_from: z.string(),
+  date_to: z.string(),
+  created_count: z.number(),
+  completed_count: z.number(),
+  in_process_count: z.number(),
+  delivered_count: z.number(),
+  delivered_value: z.string(),
+  late_orange_count: z.number(),
+  late_red_count: z.number(),
+  overdue_undelivered_count: z.number(),
+  repair_part_count: z.number(),
+  daily_created: z.array(
+    z.object({
+      date: z.string(),
+      count: z.number(),
+    }),
+  ),
+  daily_completed: z.array(
+    z.object({
+      date: z.string(),
+      count: z.number(),
+    }),
+  ),
+  delivery_performance: z.object({
+    on_time: z.number(),
+    orange: z.number(),
+    red: z.number(),
+  }),
+  status_distribution: z.array(
+    z.object({
+      status_value: z.string(),
+      count: z.number(),
+    }),
+  ),
+});
+
+export type OverviewOutSchema = z.infer<typeof overviewOutSchema>;
+
 // 2026-09-26 新增：基础数据查询返回值 Zod 校验。
 //
 // TanStack Query queryFn 在拿到响应后走 zod parse，验证后端返回结构

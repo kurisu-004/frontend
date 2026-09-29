@@ -53,9 +53,18 @@ export const qk = {
    *  全量单条（无 params），HTTP 端点 GET /api/v2/dashboard/snapshot 一次取回
    *  完整 DashboardSnapshotVO。 */
   dashboardSnapshot: ['dashboard', 'snapshot'] as const,
+  /** 2026-09-29 新增：dashboard「紧急工单 Top 列表」queryKey。
+   *  listUnionItems 拉 100 件按 planned_delivery_date ASC 的非终态件，客户端再按
+   *  today+7 过滤取 top 15。命中 useDashboardInvalidation 同套 AFFECTS_DASHBOARD
+   *  事件集后自动 invalidate 重取。 */
+  dashboardUrgentList: ['dashboard', 'urgent-list'] as const,
+  /** 2026-09-29 新增：dashboard「逾期未交 KPI」queryKey。
+   *  fetchOverview 拉当天日期范围内的 overdue_undelivered_count，仅 Manager 角色
+   *  启用（enabled: isManager 闸门），非 Manager 不发请求。 */
+  dashboardOverdue: ['dashboard', 'overdue'] as const,
   /** 2026-09-28 新增：dashboard 域前缀 —— WS 事件触发 invalidate 用；
-   *  当前 dashboard 域只有 snapshot 一个 query，Prefix 仅供未来扩展（如分视图
-   *  缓存、按角色拆 queryKey）预留。 */
+   *  包含 dashboardSnapshot / dashboardUrgentList / dashboardOverdue 三个 query，
+   *  invalidateQueries({ queryKey: qk.dashboardPrefix }) 一键全失效。 */
   dashboardPrefix: ['dashboard'] as const,
   /** 2026-09-29 新增：零件 owner 维度文件列表共享 query 键。
    *  单请求 owner 全量，computed 内按 kind 桶。失效粒度 = owner 维度。 */
