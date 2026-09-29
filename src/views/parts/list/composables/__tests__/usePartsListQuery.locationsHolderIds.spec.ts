@@ -29,50 +29,56 @@
 //     `Option<String>` 逗号解析对齐。
 //
 // 测试策略：
-// - vi.mock('@/api/parts')：listParts 替换为 vi.fn()，捕获入参；其它函数 stub。
-// - 不调 listParts 真实路径（axios 未 mock，但 listParts 是 mock 函数不会发请求）。
-// - usePartsListQuery 走静态 import '@/api/parts'（B 任务改造后），vi.mock factory
-//   拦截静态导入，listParts 替换为 mock。
+// - vi.mock('@/api/com/unionList')：listUnionItems 替换为 vi.fn()，捕获入参；其它函数 stub。
+// - 不调 listUnionItems 真实路径（axios 未 mock，但 listUnionItems 是 mock 函数不会发请求）。
+// - usePartsListQuery 走静态 import '@/api/com/unionList'（2026-09-29 com 域迁移后），
+//   vi.mock factory 拦截静态导入，listUnionItems 替换为 mock。
 //
 // 与现有 usePartsListStore.spec.ts 风格一致，但只覆盖 locations/holder_ids 维度，
 // 不重复 store 装配 + 批量选择流（store spec 已覆盖）。
+//
+// 2026-09-29 迁移：本 spec 原 mock @/api/parts.listParts；usePartsListQuery 主查询
+// 由 GET /parts 切到 GET /com/union-list，listParts 不再被本 composable 调用。
+// 改 mock 目标到 @/api/com/unionList.listUnionItems，类型从 ListPartsParams 改
+// UnionListParams（行为上等价：com 域端点继承原 ListPartsParams 除 row_type /
+// include_assemblies 外的所有字段，cleanParams 链不变）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope } from 'vue';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
-import type { ListPartsParams } from '@/api/parts';
+import type { UnionListParams } from '@/api/com/unionList';
 
-// 必须在 vi.mock 之前导入：listPartsMockImpl 在 factory 内引用 cleanParams。
+// 必须在 vi.mock 之前导入：listUnionItemsMockImpl 在 factory 内引用 cleanParams。
 // vitest 把 vi.mock hoist 到顶部，但 import 按文本顺序解析。
 import { cleanParams, serializeParamsV2 } from '@/api/http';
 import { usePartsListQuery } from '../usePartsListQuery';
 
-// listPartsMock 接收「cleanParams 之后」的 params（与真实 listParts 行为一致：
-// api.get('/parts', { params: cleanParams(params) })），不是 buildParams 原始输出。
+// listUnionItemsMock 接收「cleanParams 之后」的 params（与真实 listUnionItems 行为一致：
+// api.get('/com/union-list', { params: cleanParams(params) })），不是 buildParams 原始输出。
 // 这样 'in params' 这类断言才能反映 axios 实际看到的 URL 参数形态。
-const realListPartsMock = vi.fn<
+const realListUnionItemsMock = vi.fn<
   (
-    params: ListPartsParams,
+    params: UnionListParams,
   ) => Promise<{ items: unknown[]; total: number; limit: number; offset: number }>
 >(async () => ({ items: [], total: 0, limit: 20, offset: 0 }));
 
-function listPartsMockImpl(params: ListPartsParams): Promise<{
+function listUnionItemsMockImpl(params: UnionListParams): Promise<{
   items: unknown[];
   total: number;
   limit: number;
   offset: number;
 }> {
-  return realListPartsMock(cleanParams(params) as ListPartsParams);
+  return realListUnionItemsMock(cleanParams(params) as unknown as UnionListParams);
 }
 
-/** 取 listParts 首次调用的入参（cleanParams 后形态）；vi.fn 元组类型推导过窄时通过 unknown 中转。 */
+/** 取 listUnionItems 首次调用的入参（cleanParams 后形态）；vi.fn 元组类型推导过窄时通过 unknown 中转。 */
 function firstParams(): Record<string, unknown> {
-  const call = realListPartsMock.mock.calls[0];
+  const call = realListUnionItemsMock.mock.calls[0];
   return call[0] as unknown as Record<string, unknown>;
 }
 
-vi.mock('@/api/parts', () => ({
-  listParts: (params: ListPartsParams) => listPartsMockImpl(params),
+vi.mock('@/api/com/unionList', () => ({
+  listUnionItems: (params: UnionListParams) => listUnionItemsMockImpl(params),
 }));
 
 // 2026-09-26（B 任务）：usePartsListQuery 内 `watch(errorMsg) → ElMessage.error(...)`
@@ -103,8 +109,8 @@ let testQueryClient: QueryClient;
 
 describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4 2026-09-17）', () => {
   beforeEach(() => {
-    realListPartsMock.mockClear();
-    realListPartsMock.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+    realListUnionItemsMock.mockClear();
+    realListUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
     testQueryClient = new QueryClient({ defaultOptions: { mutations: { retry: 0 } } });
     testApp = createApp({});
     testApp.use(VueQueryPlugin, { queryClient: testQueryClient });
@@ -125,7 +131,7 @@ describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4
   });
 
   // 用例 1：默认态（locations=[] + holderIds=[]）→ 两组参数都不设置（undefined）
-  // —— buildParams 用「空数组 → undefined」约定；cleanParams 在 listParts 入口 strip undefined。
+  // —— buildParams 用「空数组 → undefined」约定；cleanParams 在 listUnionItems 入口 strip undefined。
   it('默认态：空数组 → locations / holder_ids 均为 undefined（cleanParams 后不发）', async () => {
     const q = testApp.runWithContext(() => usePartsListQuery({ isCncProgrammer: false }));
     expect(q.search.locations).toEqual([]);
@@ -133,7 +139,7 @@ describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4
 
     await q.fetchList();
 
-    expect(realListPartsMock).toHaveBeenCalledTimes(1);
+    expect(realListUnionItemsMock).toHaveBeenCalledTimes(1);
     const params = firstParams();
     expect(params.locations).toBeUndefined();
     expect(params.holder_ids).toBeUndefined();
@@ -445,7 +451,7 @@ describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4
     await new Promise((r) => setTimeout(r, 10));
     // 让 useQuery 进入 ready 状态
     // 直接 mock 调用计数应为 0（即便后续 fetchList 也不会调 queryFn）
-    expect(realListPartsMock).not.toHaveBeenCalled();
+    expect(realListUnionItemsMock).not.toHaveBeenCalled();
     scope.stop();
   });
 
@@ -460,9 +466,9 @@ describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4
     // 显式 fetchList —— refetch 别名；前面已因 enabled=true 自动 fetch 一次，
     // 此处再调一次 → 至少 1 次调用（B2 锁定「fetchList 能驱动 queryFn」这条
     // 契约，具体次数按 vue-query 自身 schedule 而非测试硬约束）。
-    const beforeCalls = realListPartsMock.mock.calls.length;
+    const beforeCalls = realListUnionItemsMock.mock.calls.length;
     await q!.fetchList();
-    expect(realListPartsMock.mock.calls.length).toBeGreaterThan(beforeCalls);
+    expect(realListUnionItemsMock.mock.calls.length).toBeGreaterThan(beforeCalls);
     scope.stop();
   });
 
@@ -480,15 +486,15 @@ describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4
 
     // 先 fetch 一次（默认参数）
     await q!.fetchList();
-    const firstParams = realListPartsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    const firstParams = realListUnionItemsMock.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
     expect(firstParams?.locations).toBeUndefined();
 
     // 改 search 字段（queryKey 响应式变化）
     q!.search.locations = ['PRODUCTION_SHELF'];
     await q!.fetchList();
     // 最近一次调用入参含 locations（buildParams 响应式验证）
-    const calls = realListPartsMock.mock.calls;
-    const lastParams = calls[calls.length - 1]?.[0] as Record<string, unknown>;
+    const calls = realListUnionItemsMock.mock.calls;
+    const lastParams = calls[calls.length - 1]?.[0] as unknown as Record<string, unknown>;
     expect(lastParams?.locations).toEqual(['PRODUCTION_SHELF']);
     scope.stop();
   });
@@ -503,14 +509,14 @@ describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4
     await new Promise((r) => setTimeout(r, 10));
 
     await q!.fetchList();
-    const firstParams = realListPartsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    const firstParams = realListUnionItemsMock.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
     expect(firstParams?.limit).toBe(20);
 
     // 改 pageSize（queryKey 响应式变化）
     q!.pageSize.value = 50;
     await q!.fetchList();
-    const calls = realListPartsMock.mock.calls;
-    const lastParams = calls[calls.length - 1]?.[0] as Record<string, unknown>;
+    const calls = realListUnionItemsMock.mock.calls;
+    const lastParams = calls[calls.length - 1]?.[0] as unknown as Record<string, unknown>;
     expect(lastParams?.limit).toBe(50);
     scope.stop();
   });

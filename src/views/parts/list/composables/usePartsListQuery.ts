@@ -23,8 +23,11 @@
 import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { keepPreviousData, useQuery } from '@tanstack/vue-query';
-import { listParts } from '@/api/parts';
-import type { ListPartsParams } from '@/api/parts';
+// 2026-09-29 迁移：零件一览主查询由 GET /api/v2/parts（listParts）切到
+// GET /api/v2/com/union-list（listUnionItems）。com 域端点接受 row_type 必填，
+// 跨表合并 t_part UNION t_assembly 同时修复 ALL 分页 bug；part 域 /parts 回退到
+// PART-only（processChain.ts 仍在用，本文件不再 import listParts）。
+import { listUnionItems, type UnionListParams } from '@/api/com/unionList';
 import {
   ORDER_STATUS_LABEL,
   PART_SORT_KEY_SET,
@@ -37,7 +40,7 @@ import {
 } from '@/types/parts';
 import { useListFilterPersist } from '@/composables/useListFilterPersist';
 import { qk } from '@/composables/queries/keys';
-import { partListResultSchema, type PartListResultSchema } from '@/composables/queries/schemas';
+import { partListResultSchema, type UnionListResultSchema } from '@/composables/queries/schemas';
 
 /** 搜索状态 shape（原 PartsList SearchState 改名 export）。 */
 export interface PartsSearchState {
@@ -223,7 +226,7 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
     });
 
   // ============ buildParams ============
-  function buildParams(): ListPartsParams {
+  function buildParams(): UnionListParams {
     return {
       customer_id: search.customerId || undefined,
       statuses: search.statuses.length > 0 ? search.statuses : undefined,
@@ -265,23 +268,28 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
           : undefined,
       // 2026-09-27 前后端字段对齐：移除 next_process_ids 查询参数 —— 列表响应不再
       // 返 next_process_id，原生列筛选已删除。
-      // 2026-09-28 行类型合并：search.rowType = 'ALL' → row_type undefined（后端默认行为：合并装配件）；
-      // 'PART' / 'ASSEMBLY' → row_type 显式发。后端 modules/part/service/crud.rs::list_parts 接受。
-      row_type: search.rowType !== 'ALL' ? search.rowType : undefined,
+      // 2026-09-29 com 域新约定：row_type 必填（UnionListParams 类型约束）。
+      //   - ALL      → UNION t_part + t_assembly（带 LIMIT pushdown 修分页 bug）；
+      //   - PART     → 仅 t_part WHERE assembly_id IS NULL；
+      //   - ASSEMBLY → 仅 t_assembly。
+      // 此前老 /parts 端点 ALL 走 `row_type: undefined` 让后端默认合并，本地改为
+      // 显式发送，与 com 域端点契约对齐。
+      row_type: search.rowType,
       sort_by: sortBy.value,
       sort_dir: sortDir.value,
       limit: pageSize.value,
       offset: (page.value - 1) * pageSize.value,
-      // 2026-09-28 后端真正合并：GET /parts 接受 row_type 与 include_assemblies，
-      //（见 backend-rust modules/part/service/crud.rs::list_parts）。前端 dropdown 切换立刻走新行为；
-      // 此前一直忽略此参数（前端默认 true 拼好发出，后端忽略）。
-      include_assemblies: true,
+      // 2026-09-29 com 域迁移：include_assemblies 字段从 UnionListParams 中 Omit 掉
+      // （合并逻辑下沉到 com 域，part 域 /parts 不再接受该字段）。三态合并由 com 域
+      // union-list 端点 row_type 参数统一控制。
     };
   }
 
   // ============ 主查询 useQuery ============
   // 2026-09-26（B 任务）：listParts + Zod parse → useQuery。
-  //   - queryKey 走 qk.partsList(buildParams())；buildParams 已经是 buildParams，
+  // 2026-09-29 迁移：listParts → listUnionItems（GET /com/union-list），
+  // queryKey 改走 qk.unionList(buildParams())。
+  //   - queryKey 走 qk.unionList(buildParams())；buildParams 已经是 buildParams，
   //     useQuery 用 computed 包一层让响应式依赖（page / sort / search）变化时自动
   //     refetch（key 工厂内部不再包 computed —— 这里我们直接传 computed 给 queryKey，
   //     vue-query 支持）；
@@ -289,17 +297,19 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
   //     避免表格闪白屏（与原 fetchList 同步设 items 行为一致）；
   //   - enabled: restored —— 闸门（见上）；
   //   - queryFn 走 Zod parse 后强类型，响应包络 / 字段漂移会直接抛 ZodError；
+  //     partListResultSchema 与 unionListResultSchema（type alias）等形，能解析
+  //     union-list 端点响应（含 row_type='PART' | 'ASSEMBLY' 行）；
   //   - fetchList 保留为 refetch 别名（见下）。
   const listQuery = useQuery<
-    PartListResultSchema,
+    UnionListResultSchema,
     Error,
-    PartListResultSchema,
-    ReturnType<typeof qk.partsList>
+    UnionListResultSchema,
+    ReturnType<typeof qk.unionList>
   >({
-    queryKey: computed(() => qk.partsList(buildParams())),
+    queryKey: computed(() => qk.unionList(buildParams())),
     queryFn: async ({ queryKey }) => {
-      const params = queryKey[2] as ListPartsParams;
-      return partListResultSchema.parse(await listParts(params));
+      const params = queryKey[2] as UnionListParams;
+      return partListResultSchema.parse(await listUnionItems(params));
     },
     enabled: restored,
     placeholderData: keepPreviousData,

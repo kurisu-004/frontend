@@ -29,8 +29,25 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 // 2026-09-26（B 任务）：返回 schema 合规 PartListResult（含 limit/offset），让
 // partListResultSchema.parse 通过，避免 ZodError 触发 watch(errorMsg) →
 // ElMessage.error → document is not defined。
+// 2026-09-29 迁移：usePartsListQuery 主查询改调 listUnionItems（com 域），原
+// @/api/parts.listParts 调用被替换。processChain.ts 仍调 listParts，故保留
+// @/api/parts mock（提供其他 functions stub 即可，主查询不再消费 listParts）。
 vi.mock('@/api/parts', () => ({
-  listParts: vi.fn(async () => ({
+  listParts: vi.fn(),
+  updatePart: vi.fn(),
+  placeOnShelf: vi.fn(),
+  recallToPending: vi.fn(),
+  recallToProgramming: vi.fn(),
+  sendToProgramming: vi.fn(),
+  printPartDrawingBatch: vi.fn(async () => new Blob()),
+  getPartLocationTree: vi.fn(async () => ({ items: [] })),
+}));
+
+// 2026-09-29 新增：usePartsListQuery 主查询切换到 @/api/com/unionList.listUnionItems。
+// 返回与之前 listParts mock 完全一致的 PartListResult-shape 数据，保证 partListResultSchema
+// parse 守门通过（items 含 row_type 字段、unit_price/total_price 是 string）。
+vi.mock('@/api/com/unionList', () => ({
+  listUnionItems: vi.fn(async () => ({
     items: [
       {
         id: '1',
@@ -81,13 +98,6 @@ vi.mock('@/api/parts', () => ({
     limit: 20,
     offset: 0,
   })),
-  updatePart: vi.fn(),
-  placeOnShelf: vi.fn(),
-  recallToPending: vi.fn(),
-  recallToProgramming: vi.fn(),
-  sendToProgramming: vi.fn(),
-  printPartDrawingBatch: vi.fn(async () => new Blob()),
-  getPartLocationTree: vi.fn(async () => ({ items: [] })),
 }));
 
 // 2026-09-26：mock @/api/iam 让 useAuthStore.loginMutation 在测试里跑得通。
@@ -269,22 +279,24 @@ describe('usePartsListStore', () => {
 
   // 2026-09-26（B 任务）新增：enabled 闸门 —— store 实例化时不应自动 fetch。
   // 这是修复「默认参数首屏 + 持久化参数再屏双 fetch」关键设计点的回归保护。
+  // 2026-09-29 迁移：主查询改调 listUnionItems（@/api/com/unionList），断言改为 spy
+  // 该 mock。
   it('store 实例化后**不**自动 fetch（enabled 闸门），调 fetchList 后才 fetch', async () => {
-    // 重置 listPartsMock —— beforeEach 已经 setup 但 spec 内 listParts 是 import mock
-    const { listParts } = await import('@/api/parts');
-    const listPartsMock = listParts as unknown as { mock: { calls: unknown[] } };
-    const beforeCalls = listPartsMock.mock.calls.length;
+    // 重置 listUnionItemsMock —— beforeEach 已经 setup 但 spec 内 listUnionItems 是 import mock
+    const { listUnionItems } = await import('@/api/com/unionList');
+    const listUnionItemsMock = listUnionItems as unknown as { mock: { calls: unknown[] } };
+    const beforeCalls = listUnionItemsMock.mock.calls.length;
 
     const store = usePartsListStore();
     // 不调 restoreState —— restored 保持默认 false。
     // 等几个微任务循环（确保 useQuery scheduler 跑过 mount + enabled check）
     await new Promise((r) => setTimeout(r, 20));
-    // store 实例化后 listParts 未被自动调（enabled 闸门关闭）
-    expect(listPartsMock.mock.calls.length).toBe(beforeCalls);
+    // store 实例化后 listUnionItems 未被自动调（enabled 闸门关闭）
+    expect(listUnionItemsMock.mock.calls.length).toBe(beforeCalls);
 
     // 显式 fetchList —— 走 refetch 别名，会调 queryFn
     await store.query.fetchList();
-    expect(listPartsMock.mock.calls.length).toBe(beforeCalls + 1);
+    expect(listUnionItemsMock.mock.calls.length).toBe(beforeCalls + 1);
   });
 
   // 用例 6：$dispose 重建 —— 改 batchMode + 加选中 → $dispose → 重新 usePartsListStore → fresh 状态
@@ -303,31 +315,27 @@ describe('usePartsListStore', () => {
     expect(store2.batch.selectedIds.size).toBe(0);
   });
 
-  // ============ 2026-09-28 行类型合并：buildParams 契约 + Zod parse 守门 ============
+  // ============ 2026-09-29 com 域 union-list 迁移：buildParams 契约 ============
   //
-  // 背景：后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts
-  // 接受 `row_type` 与 `include_assemblies` 两参数，三模式合并返回 PartListItem[]，
-  // total = parts_count + assemblies_count，不再携带 matched_children。前端 dropdown
-  // (PartsList.vue:33-49) 切换 rowType 即生效，本组用例验证：
-  //   - buildParams 在 ALL / PART / ASSEMBLY 三态下都正确发出两个新参数；
-  //   - partSchema 能解析带 row_type='ASSEMBLY' 的装配件行（has_children / child_count
-  //     等装配件专属字段合法；part 专属字段可空）；
-  //   - partSchema 在缺失 row_type 时回退默认 'PART'（兼容 pending-programming 等
-  //     旧端点）。
+  // 背景：usePartsListQuery 主查询由 GET /parts 迁到 GET /com/union-list。buildParams
+  //   - row_type 必填（不再是 ALL→undefined 兜底），三态直接转写：ALL / PART / ASSEMBLY；
+  //   - include_assemblies 字段已从 UnionListParams Omit 掉，buildParams 不再产生。
+  // 本组用例验证：
+  //   - buildParams 在 ALL / PART / ASSEMBLY 三态下都正确发出 row_type 字段；
+  //   - buildParams 不再发出 include_assemblies（与 UnionListParams 类型一致）。
 
-  // 复用 spec 顶部 vi.mock('@/api/parts') 的 listParts 实例；通过 import 拿到 mock。
-  // mock listParts 不会真实走 axios（api/parts/crud.ts listParts 内部的
-  // api.get → axios 才是真实网络出口），所以抓到的 mock.calls 是 buildParams 原始输出。
-  // 注意：mock 不走 cleanParams，所以 row_type=undefined 会在 mock.calls 里看到；
-  // 真实链路 axios 会 strip 它（最终 URL 不含 row_type）。
+  // 复用 spec 顶部 vi.mock('@/api/com/unionList') 的 listUnionItems 实例；通过
+  // import 拿到 mock。mock 不走真实 axios（listUnionItems 内部的 api.get → axios
+  // 才是真实网络出口），所以抓到的 mock.calls 是 buildParams 原始输出。注意：mock
+  // 不走 cleanParams，所以 row_type 字符串值会原样保留在 mock.calls 里。
 
-  it('buildParams emits row_type=undefined + include_assemblies=true when rowType="ALL"', async () => {
-    const { listParts } = await import('@/api/parts');
-    const listPartsMock = listParts as unknown as {
+  it('buildParams emits row_type="ALL" when rowType="ALL"（com 域 row_type 必填）', async () => {
+    const { listUnionItems } = await import('@/api/com/unionList');
+    const listUnionItemsMock = listUnionItems as unknown as {
       mock: { calls: unknown[][] };
       mockClear: () => void;
     };
-    listPartsMock.mockClear();
+    listUnionItemsMock.mockClear();
 
     const store = usePartsListStore();
     // 默认态 search.rowType === 'ALL'（initialPartsSearch）
@@ -335,38 +343,38 @@ describe('usePartsListStore', () => {
 
     await store.query.fetchList();
 
-    expect(listPartsMock.mock.calls).toHaveLength(1);
-    const params = listPartsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    // buildParams 在 ALL 时把 row_type 显式置 undefined（cleanParams 后会被 strip，
-    // 表示「后端默认 ALL 行为：合并装配件」）。
-    expect(params.row_type).toBeUndefined();
-    expect(params.include_assemblies).toBe(true);
+    expect(listUnionItemsMock.mock.calls).toHaveLength(1);
+    const params = listUnionItemsMock.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    // 2026-09-29 com 域新约定：row_type 必填（不再 ALL→undefined），显式 'ALL'。
+    expect(params.row_type).toBe('ALL');
+    // include_assemblies 已从 UnionListParams Omit，buildParams 不再产生该字段。
+    expect(params.include_assemblies).toBeUndefined();
   });
 
   it('buildParams sets row_type when rowType="PART" / "ASSEMBLY"', async () => {
-    const { listParts } = await import('@/api/parts');
-    const listPartsMock = listParts as unknown as {
+    const { listUnionItems } = await import('@/api/com/unionList');
+    const listUnionItemsMock = listUnionItems as unknown as {
       mock: { calls: unknown[][] };
       mockClear: () => void;
     };
-    listPartsMock.mockClear();
+    listUnionItemsMock.mockClear();
 
     const store = usePartsListStore();
 
     // PART
     store.query.search.rowType = 'PART';
     await store.query.fetchList();
-    let params = listPartsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    let params = listUnionItemsMock.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
     expect(params.row_type).toBe('PART');
-    expect(params.include_assemblies).toBe(true);
+    expect(params.include_assemblies).toBeUndefined();
 
     // ASSEMBLY
-    listPartsMock.mockClear();
+    listUnionItemsMock.mockClear();
     store.query.search.rowType = 'ASSEMBLY';
     await store.query.fetchList();
-    params = listPartsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    params = listUnionItemsMock.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
     expect(params.row_type).toBe('ASSEMBLY');
-    expect(params.include_assemblies).toBe(true);
+    expect(params.include_assemblies).toBeUndefined();
   });
 
   it('partSchema.parse accepts assembly row (row_type="ASSEMBLY", part-specific fields null)', async () => {

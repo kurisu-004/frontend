@@ -157,6 +157,12 @@ export const partListResultSchema = z.object({
 
 export type PartListResultSchema = z.infer<typeof partListResultSchema>;
 
+/** 2026-09-29 新增：com/union-list 列表响应 schema 别名（与 partListResultSchema 同形）。
+ *  union-list 端点返回 items 数组中行 row_type 已是 'PART' | 'ASSEMBLY'（partSchema 已
+ *  用 z.enum 锁字面量 + default('PART') 兜底），所以同一 partListResultSchema 兼容。
+ *  另起类型别名便于 useQuery 类型签名清晰表达「查询的是 com 域端点」。 */
+export type UnionListResultSchema = PartListResultSchema;
+
 /** 2026-09-29 新增：part-file 列表项 schema（与 backend-rust PartFileItem 对齐）。
  *  12 字段显式声明（Zod 默认 strip 模式缺字段会静默丢）：
  *  id / version / owner_id / kind / file_type / original_filename / file_size /
