@@ -375,6 +375,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { PriceTag } from '@element-plus/icons-vue';
+import { useQueryClient } from '@tanstack/vue-query';
 import PartInfoCard from './components/PartInfoCard.vue';
 import BarcodeView from './components/BarcodeView.vue';
 import PartHistoryCard from './components/PartHistoryCard.vue';
@@ -392,9 +393,15 @@ import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import { useConfirm } from '@/composables/useConfirm';
 import { usePermissions } from '@/composables/usePermissions';
 import { usePartFileUpload } from '@/composables/usePartFileUpload';
+// 2026-09-29 迁移：usePartFiles 三并发已迁到 usePartFilesListQuery 单调用，
+// usePartFiles.ts 同步删除。这里用 reactive params 自动驱动 useQuery，
+// 切 part / 上传 / 删除完成后调 invalidatePartFilesListQuery 失效缓存。
+import {
+  usePartFilesListQuery,
+  invalidatePartFilesListQuery,
+} from '@/composables/queries/usePartFilesListQuery';
 import { usePartDetail } from './composables/usePartDetail';
 import type { PartEditForm } from './composables/usePartDetail';
-import { usePartFiles } from './composables/usePartFiles';
 import { usePartCncGroups } from './composables/usePartCncGroups';
 import { useProcessChain } from './composables/useProcessChain';
 
@@ -404,8 +411,20 @@ const partId = ref<string>(String(route.params.id ?? ''));
 // ============ composables ============
 // 2026-09-17 PR-4：删 usePartQuote（外协报价下线，仅保留 /outsource/quote 入口）。
 const detail = usePartDetail(partId);
-const files = usePartFiles(partId);
 const cnc = usePartCncGroups(partId);
+
+// 2026-09-29 迁移：usePartFilesListQuery 单调用替代原 usePartFiles 三并发。
+// reactive params 让 partId 变化自动 refetch；upload/delete 后由
+// invalidatePartFilesListQuery 精确失效。
+const qc = useQueryClient();
+const partFilesQuery = usePartFilesListQuery(() => partId.value);
+const partFiles = computed(() => partFilesQuery.data.value?.items ?? []);
+// 2026-09-29：drawings / models3d / cadFiles 改 computed（替代原 ref + 手写 fetch）。
+// computed 自动响应 partFiles 变化（partFiles 是 computed from useQuery.data，
+// 上传 / 删除后 invalidate → data 重算 → drawings/models3d/cadFiles 自动更新）。
+const drawings = computed(() => partFiles.value.filter((f) => f.kind === 'DRAWING'));
+const models3d = computed(() => partFiles.value.filter((f) => f.kind === '3D_MODEL'));
+const cadFiles = computed(() => partFiles.value.filter((f) => f.kind === 'CAD_2D'));
 
 // 从 composables 解构出来（业务函数 + 状态）
 const {
@@ -448,8 +467,6 @@ const {
   eventLabel,
   eventTagType,
 } = detail;
-
-const { drawings, models3d, cadFiles, fetchDrawings, fetch3DModels, fetchCadFiles } = files;
 
 // 2026-09-16 T3.5：三个 kind 各自的补传 composable（场景 B）。
 // 复用同一 partId（雪花 ID 字符串），kind 是字面量。
@@ -781,12 +798,14 @@ async function handleRelease(payload: {
 }
 
 // ============ 零件文件 tabs 刷新（PartFilesTabsCard 触发）============
-// 2026-09-17 PR-4：tabs 卡把三个 FileListCard 的 refresh 收敛成一个 emit('refresh', kind)。
-// 这里按 kind 转发回 usePartFiles 对应的 fetch*。
-async function onFileTabRefresh(kind: 'DRAWING' | '3D_MODEL' | 'CAD_2D'): Promise<void> {
-  if (kind === 'DRAWING') await fetchDrawings();
-  else if (kind === '3D_MODEL') await fetch3DModels();
-  else await fetchCadFiles();
+// 2026-09-29 迁移：usePartFilesListQuery 单调用后失效整 owner 列表即可，
+// active 消费者（PartFilesTabsCard 内部 tabs + DrawingPreviewPane）都会自动 refetch。
+// 替代原 usePartFiles 三并发 + onFileTabRefresh 按 kind 转 fetch* 的模式。
+async function onFileTabRefresh(_kind: 'DRAWING' | '3D_MODEL' | 'CAD_2D'): Promise<void> {
+  // 2026-09-29：失效整 owner 的 part-files 列表，让 active 消费者（DrawingPreviewPane
+  // + 当前页 PartFilesTabsCard）都自动 refetch。usePartFilesListQuery 的 queryKey 是
+  // owner 维度，invalidate 一次覆盖三 kind。
+  await invalidatePartFilesListQuery(qc, partId.value);
 }
 
 // ============ 切换 partId 时重置 ============
@@ -804,15 +823,11 @@ watch(
     // selectedBatchId，但切 partId 时立刻置空让 PartHistoryCard 立刻恢复展示
     // 全部事件，避免闪旧批次的过滤态）。
     selectedBatchId.value = null;
-    drawings.value = [];
-    models3d.value = [];
-    cadFiles.value = [];
+    // 2026-09-29 迁移：drawings / models3d / cadFiles 改 computed from useQuery，
+    // 切 partId 自动驱动 useQuery 重取（ownerKey 变化），无需手写 fetchDrawings / fetch3DModels / fetchCadFiles。
     await fetchPart();
     void fetchEvents();
     void fetchBatches();
-    void fetchDrawings();
-    void fetch3DModels();
-    void fetchCadFiles();
     void fetchCncPrograms();
   },
 );
@@ -821,9 +836,8 @@ onMounted(() => {
   void fetchPart();
   void fetchEvents();
   void fetchBatches();
-  void fetchDrawings();
-  void fetch3DModels();
-  void fetchCadFiles();
+  // 2026-09-29 迁移：partFiles 由 usePartFilesListQuery reactive params 自动驱动，
+  // 切 partId → ownerKey 变化 → useQuery 自动 refetch。无需手写 fetch*。
   void fetchCncPrograms();
 });
 </script>

@@ -55,4 +55,11 @@ export const qk = {
    *  当前 dashboard 域只有 snapshot 一个 query，Prefix 仅供未来扩展（如分视图
    *  缓存、按角色拆 queryKey）预留。 */
   dashboardPrefix: ['dashboard'] as const,
+  /** 2026-09-29 新增：零件 owner 维度文件列表共享 query 键。
+   *  单请求 owner 全量，computed 内按 kind 桶。失效粒度 = owner 维度。 */
+  partFilesList: (ownerId: string) => ['part-files', 'list', ownerId] as const,
+  /** 2026-09-29 新增：part-files 域前缀 —— 上传 / 删除完成后调用方通过
+   *  qc.invalidateQueries({ queryKey: qk.partFilesPrefix }) 失效整个 part-files
+   *  域（任意 ownerId 形态都会命中）。 */
+  partFilesPrefix: ['part-files'] as const,
 } as const;

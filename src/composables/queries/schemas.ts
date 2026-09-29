@@ -156,3 +156,38 @@ export const partListResultSchema = z.object({
 });
 
 export type PartListResultSchema = z.infer<typeof partListResultSchema>;
+
+/** 2026-09-29 新增：part-file 列表项 schema（与 backend-rust PartFileItem 对齐）。
+ *  12 字段显式声明（Zod 默认 strip 模式缺字段会静默丢）：
+ *  id / version / owner_id / kind / file_type / original_filename / file_size /
+ *  content_type / upload_status / content_sha256 / created_at / paired_file_id。
+ *  kind 锁 z.enum 与 backend-rust PartFileKind 字符串值对齐（DRAWING / 3D_MODEL /
+ *  G_CODE / SETUP_SHEET / ASSEMBLY_MASTER / CAD_2D）；content_sha256 / paired_file_id
+ *  nullable（NULL = 未计算 / 未配对）。 */
+export const partFileSchema = z.object({
+  id: z.string(),
+  version: z.number(),
+  owner_id: z.string(),
+  kind: z.enum(['DRAWING', '3D_MODEL', 'G_CODE', 'SETUP_SHEET', 'ASSEMBLY_MASTER', 'CAD_2D']),
+  file_type: z.string(),
+  original_filename: z.string(),
+  file_size: z.string(),
+  content_type: z.string(),
+  upload_status: z.string(),
+  content_sha256: z.string().nullable(),
+  created_at: z.string(),
+  paired_file_id: z.string().nullable(),
+});
+
+export type PartFileSchema = z.infer<typeof partFileSchema>;
+
+/** 2026-09-29 新增：part-file 列表分页结果（与 backend-rust PartFileListOut 对齐：
+ *  items / total / limit / offset）。 */
+export const partFileListResultSchema = z.object({
+  items: z.array(partFileSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type PartFileListResultSchema = z.infer<typeof partFileListResultSchema>;
