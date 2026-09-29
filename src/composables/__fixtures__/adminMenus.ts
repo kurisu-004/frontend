@@ -1,4 +1,10 @@
 // src/composables/__fixtures__/adminMenus.ts
+// 2026-09-29 同步 backend-rust seeds/menu.sql：
+//   - pending_programming 从顶级菜单迁入 production_group children（sort=25），
+//     title 由「待编程一览」精简为「待编程」；
+//   - inspection_pending 从 order_group children 迁入 production_group children（sort=30）。
+//   - production_group 现含 5 children：process_work_type / part_process_chain /
+//     worker_queue / pending_programming / inspection_pending。
 // 2026-09-16 同步 backend-rust sqlx migration 025：
 //   - 货架（shelves_list）从 floor_group 移到 auth_group，与 users_list / workers_list 同组
 //     （sort_order 30）。业务上货架归属权限管理范畴。
@@ -143,17 +149,6 @@ export const ADMIN_MENUS: MenuNode[] = [
         children: [],
       },
       {
-        id: id(44),
-        version: 0,
-        parent_id: id(4),
-        code: 'inspection_pending',
-        title: '待品检',
-        path: '/inspection/pending',
-        icon: 'CircleCheck',
-        sort_order: 50,
-        children: [],
-      },
-      {
         id: id(45),
         version: 0,
         parent_id: id(4),
@@ -177,22 +172,12 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 5. pending_programming — 待编程一览（顶级，leaf）
-  {
-    id: id(5),
-    version: 0,
-    parent_id: null,
-    code: 'pending_programming',
-    title: '待编程一览',
-    path: '/cnc/pending',
-    icon: 'Cpu',
-    sort_order: 25,
-    children: [],
-  },
-  // 6. production_group — 生产管理（分组，3 children）
+  // 6. production_group — 生产管理（分组，5 children）
   // 2026-09-11 首次落地：worker_queue 从 auth_group 迁出，与 part_process_chain 同组。
   // 2026-09-12 合并 fc99d3b tabbed 页：process_work_type 也挂这里（router /production/process-work-type）。
-  // 介于 pending_programming(25) 和 auth_group(30) 之间；后续「扫工件」「条码打印」等生产侧功能都挂这里。
+  // 2026-09-29 新增：pending_programming（CNC 编程员主入口，从顶级菜单迁入，
+  // title 由「待编程一览」精简为「待编程」）+ inspection_pending（从 order_group 迁入）
+  // 挂这里；「扫工件」「条码打印」等生产侧功能后续都挂这里。
   {
     id: id(10),
     version: 0,
@@ -236,6 +221,35 @@ export const ADMIN_MENUS: MenuNode[] = [
         path: '/workers/queue',
         icon: 'Operation',
         sort_order: 20,
+        children: [],
+      },
+      {
+        // 2026-09-29 新增：从顶级菜单迁入 production_group children。
+        // title 精简为「待编程」（旧 fixture 字面「待编程一览」冗余，与「已编程」Tab
+        // 配合去掉「一览」后缀）。原顶级位置 sort_order=25 沿用，挂到 worker_queue=20 之后。
+        id: id(5),
+        version: 0,
+        parent_id: id(10),
+        code: 'pending_programming',
+        title: '待编程',
+        path: '/cnc/pending',
+        icon: 'Cpu',
+        sort_order: 25,
+        children: [],
+      },
+      {
+        // 2026-09-29 新增：从 order_group children 迁入 production_group children。
+        // 原 order_group 位置 sort_order=50 与业务侧「零件一览/送货/返修」错位；
+        // 待品检本质是车间工序流的入口（INSPECTION → READY_TO_SHIP），归类到
+        // 生产管理更贴合业务语义。挂 pending_programming=25 之后，sort=30。
+        id: id(44),
+        version: 0,
+        parent_id: id(10),
+        code: 'inspection_pending',
+        title: '待品检',
+        path: '/inspection/pending',
+        icon: 'CircleCheck',
+        sort_order: 30,
         children: [],
       },
     ],
