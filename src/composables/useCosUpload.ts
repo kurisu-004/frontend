@@ -106,6 +106,26 @@ const EXPIRY_AHEAD_MS = 5 * 60_000;
 /** 上传进度取整（百分制）。SDK 给的是 0-1 的小数 percent。 */
 const PROGRESS_ROUND = Math.round;
 
+// 2026-09-29 新增：CORS 错误特判（运维必读见本文件 28-46 行注释）
+const CORS_ERROR_PATTERNS: RegExp[] = [
+  /No ['"]?Access-Control-Allow-Origin['"]? header is present/i,
+  /CORS policy:/i,
+  /cross-origin/i,
+  /Failed to load resource.*status of 403/i,
+  /XMLHttpRequest failed/i,
+  /NetworkError/i,
+  /Access to .* has been blocked by CORS policy/i,
+];
+
+function isCorsLikeError(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const err = e as { code?: string; status?: number; message?: string };
+  if (err.status === 0) return true;
+  if (typeof err.code === 'string' && /network|cors/i.test(err.code)) return true;
+  const msg = String(err.message ?? '');
+  return CORS_ERROR_PATTERNS.some((re) => re.test(msg));
+}
+
 export interface UseCosUploadReturn {
   /** items ref（暴露给消费侧做模板绑定）。 */
   items: Ref<CosUploadItem[]>;
@@ -258,7 +278,14 @@ export function useCosUpload(opts: UseCosUploadOptions): UseCosUploadReturn {
     } catch (err) {
       it.status = 'error';
       it.progress = 0;
-      it.error = err instanceof Error ? err.message : String(err);
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      if (isCorsLikeError(err)) {
+        it.error = '上传失败：COS 桶未配置跨域或网络异常，请联系运维检查 CORS 设置';
+        console.warn('[COS] CORS-like upload failure:', rawMsg, err);
+      } else {
+        it.error = rawMsg || '上传失败';
+        console.warn('[COS] upload failed:', rawMsg, err);
+      }
     }
   }
 
