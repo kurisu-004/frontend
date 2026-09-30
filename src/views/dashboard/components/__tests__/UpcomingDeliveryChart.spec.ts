@@ -150,6 +150,11 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     // legend data 顺序：品检前 / 待品检/待送货 / 已送货
     expect(option.legend.data).toEqual(['品检前', '待品检/待送货', '已送货']);
 
+    // 2026-10-01 bugfix 防回归：legend.data 与 series.name 必须逐字相等，
+    // 否则 ECharts 在 setOption / resize 重算 legend 时打印
+    // 「xxx series not exists」警告（控制台 6 条噪音）。
+    expect(option.legend.data).toEqual(option.series.map((s) => s.name));
+
     wrapper.unmount();
   });
 
@@ -172,8 +177,8 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     const option = lastChart!.setOption.mock.calls[0]![0] as {
       series: Array<{ name: string; data: number[] }>;
     };
-    // 顶层 series.name === 'top'
-    const topSeries = option.series.find((s) => s.name === 'top');
+    // 顶层 series.name === '品检前'（2026-10-01：series.name 改为中文 label 对齐 legend.data）
+    const topSeries = option.series.find((s) => s.name === '品检前');
     expect(topSeries).toBeTruthy();
     // data[0] = 1+2+3 = 6
     expect(topSeries?.data[0]).toBe(6);
@@ -198,8 +203,9 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     expect(clickCall).toBeTruthy();
     const clickHandler = clickCall![1] as (p: { seriesName: string; dataIndex: number }) => void;
 
-    // 驱动 click(seriesName='middle', dataIndex=0)
-    clickHandler({ seriesName: 'middle', dataIndex: 0 });
+    // 驱动 click(seriesName='待品检/待送货', dataIndex=0)
+    // 2026-10-01：series.name 改 label (中文)，click 入参同步；emit layer 仍走英文 key。
+    clickHandler({ seriesName: '待品检/待送货', dataIndex: 0 });
 
     const events = wrapper.emitted('barLayerClick');
     expect(events).toBeTruthy();

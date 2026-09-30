@@ -176,8 +176,13 @@ function alignBuckets(
 /** 2026-09-30 新增：ECharts 配置 builder。 */
 function buildOption(buckets: UpcomingDeliveryEntryData[]): EChartsCoreOption {
   const { xLabels, aligned } = alignBuckets(buckets);
+  // 2026-10-01 bugfix：series.name 必须与下方 legend.data (line 206) 逐字相等，
+  // 否则 ECharts 在 setOption / resize 重算 legend 时打印
+  // 「xxx series not exists」警告（控制台 6 条噪音）。图例显示用 label (中文)；
+  // click handler 通过 LAYERS.find((l) => l.label === seriesName) 反查，
+  // emit 时仍用 layer.key 发英文 ID，父组件契约不变。
   const series = LAYERS.map((layer, idx) => ({
-    name: layer.key,
+    name: layer.label,
     type: 'bar' as const,
     stack: 'delivery',
     data: aligned.map((b) => layerCount(b, layer)),
@@ -269,7 +274,8 @@ function initChart(el: HTMLDivElement): void {
   c.on('click', (p: { seriesName?: string; dataIndex?: number }) => {
     const seriesName = p.seriesName;
     const dataIndex = p.dataIndex ?? 0;
-    const layer = LAYERS.find((l) => l.key === seriesName);
+    // 2026-10-01 bugfix：series.name 现在是 label (中文)，反查改用 label。
+    const layer = LAYERS.find((l) => l.label === seriesName);
     if (!layer) return;
     // 取对齐后 lastAligned[dataIndex].date（保证 ISO 形态稳定）
     const bucket = lastAligned[dataIndex];
