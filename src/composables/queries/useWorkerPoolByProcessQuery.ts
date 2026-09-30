@@ -24,10 +24,15 @@
 // 本 query，导致「待下发」首屏（默认激活 tab）为每张 INHOUSE 工序卡各打一个
 // 请求（N+1），而它其实只需要一个聚合计数 badge（现已改走 useWorkerPoolCountsQuery）。
 //
-// 写点：pool 域写操作全仓仅 useWorkerQueue.ts（move / autoAllocate）与
-// usePendingDispatch.ts（dispatch）两处，onSuccess 均调
-// invalidateWorkerPoolByProcessAll(qc) 前缀全失效（move 后无法确定受影响
-// processId —— service 从 batch 当前 step 推导目标工序）。
+// 失效编排点：pool 域的 invalidateWorkerPoolByProcessAll(qc) 目前只在
+// useWorkerQueue.ts（move / autoAllocate）与 usePendingDispatch.ts（dispatch）两处
+// 被调，二者都是前缀全失效（move 后无法确定受影响 processId —— service 从 batch
+// 当前 step 推导目标工序）。
+// ⚠️ 2026-09-30 review 第 2 轮 M-3 更正：**编排点 ≠ 全部写点**。后端候选池 =
+// `status='IN_PROCESS' AND location='PRODUCTION_SHELF'`（worker_pool/repo/sql.rs），
+// 其它域的流转端点（delivery 域 batchToInspection 送检、scan 域 workerScan 放回的
+// 同事务 refill、inspection 域 scanInspect 等）同样会改这个集合却不挂本前缀失效 ——
+// 既存缺口，另单跟踪。后续新增写点须自行判断是否波及 pool by-process。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';

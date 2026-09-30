@@ -129,11 +129,25 @@ export const qk = {
   //     invalidateWorkerPoolCountsQuery(qc) + invalidateWorkerPoolStateAll(qc)
   //     （useWorkerQueue.ts 集中编排）；
   //   - dispatch（含 preview 确认后的真正下发）完成后 usePendingDispatch 集中
-  //     失效四域（pendingBatchesPrefix + partsPrefix +
-  //     workerPoolByProcessPrefix + workerPoolCountsPrefix）。2026-09-30 修复：
-  //     原先含 processesPrefix，下发不改变工序列表故移除。
-  //   - pool 域写操作点全集中在 useWorkerQueue / usePendingDispatch，本件 store
-  //     外无其他写入（2026-09-30 grep 确认），失效可由 prefix 一把全刷。
+  //     失效四域（pendingBatchesPrefix + partsPrefix + workerPoolByProcessPrefix +
+  //     workerPoolCountsPrefix）+ pool state（workerPoolStatePrefix）。2026-09-30
+  //     修复：原先含 processesPrefix，下发不改变工序列表故移除。
+  //   - ⚠️「失效编排点」≠「pool 数据的全部写点」（2026-09-30 review 第 2 轮 H-1 更正）：
+  //     上述两条失效链只覆盖 useWorkerQueue（move / autoAllocate）与
+  //     usePendingDispatch（dispatch）**这两条路径**，prefix 一把全刷也只覆盖它们。
+  //     后端候选池定义 = `status='IN_PROCESS' AND location='PRODUCTION_SHELF'`
+  //     （worker_pool/repo/sql.rs:127,349,545），而其它域的流转端点同样会改这两个
+  //     字段、却**未挂 pool 失效**（既存缺口，2026-09-30 复审发现，另单跟踪）：
+  //       - delivery 域送检 `batchToInspection`（POST /parts/batch-to-inspection，
+  //         useBulkScanInspect.ts:185）—— to_inspection_core 接受
+  //         IN_PROCESS+PRODUCTION_SHELF 为合法起点并迁到 INSPECTION+INSPECTION_SHELF，
+  //         即把批次移出候选池；
+  //       - scan 域工人放回 `workerScan` event_type=RETURNED
+  //         （ScanReturnParts.vue:563）—— service 同事务跑 WorkerPool refill，
+  //         放回即从池里抢批，counts / by-process / state 三域同时变；
+  //       - inspection 域 `scanInspect`（InspectionPending.vue:962）—— 品检流转，
+  //         IN_PROCESS+PRODUCTION_SHELF 起点同样会离开候选池。
+  //     故「pool 域无其它写入」是错的断言；新增写点须自行判断是否波及 pool 三域。
   // ============================================================
 
   /** 全工序 batch 计数（eager 拉取，tab 标题徽标 + 待下发工序卡 badge 数据源）。

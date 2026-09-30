@@ -23,8 +23,14 @@
 //     WorkerQueueBoard.vue 里 shelfId 必须在 useWorkerPoolCountsQuery 之前声明的
 //     TDZ 约束。
 //
-// 写点：pool 域写操作全仓仅 useWorkerQueue.ts + usePendingDispatch.ts 两处
-// （2026-09-30 grep 确认）；后续如新增写点必须挂 invalidateWorkerPoolCountsQuery(qc)。
+// 失效编排点：pool 域的 invalidateWorkerPoolCountsQuery(qc) 目前只在
+// useWorkerQueue.ts（move / autoAllocate）+ usePendingDispatch.ts（dispatch）+
+// WorkerQueueBoard.onRefresh（手动刷新）三处被调。
+// ⚠️ 2026-09-30 review 第 2 轮 M-2 更正：**编排点 ≠ 全部写点**。后端 counts 统计的是
+// `status='IN_PROCESS' AND location='PRODUCTION_SHELF'` 的批次，其它域的流转端点
+// （delivery 域 batchToInspection 送检、scan 域 workerScan 放回的同事务 refill 等）
+// 会把批次移出/移入这个集合却不挂本前缀失效 —— 既存缺口，另单跟踪。
+// 后续如新增写点必须自行判断是否波及 pool counts，并挂 invalidateWorkerPoolCountsQuery(qc)。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { getWorkerPoolCounts } from '@/api/workerPool';
@@ -67,7 +73,8 @@ export function useWorkerPoolCountsQuery() {
 /** 2026-09-30 新增：失效整个 pool counts 域（写操作完成后调）。
  *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。
  *  调用点：usePendingDispatch.invalidateAll + useWorkerQueue 的 move / autoAllocate
- *  mutation onSuccess + WorkerQueueBoard.onRefresh（覆盖全仓写点）。 */
+ *  mutation onSuccess + WorkerQueueBoard.onRefresh（手动刷新）。这四处只覆盖
+ *  workers 域自身的写路径，不等于 pool 数据的所有写点（见文件头 2026-09-30 M-2 更正）。 */
 export function invalidateWorkerPoolCountsQuery(qc: QueryClient): Promise<void> {
   return qc
     .invalidateQueries({ queryKey: qk.workerPoolCountsPrefix })

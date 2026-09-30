@@ -24,7 +24,8 @@
 //   - 2026-09-30：与后端 2026-09-30 重构对齐（详见上方）。
 //   2026-09-29：服务于生产队列「待下发」Tab —— 拉取 status=PENDING 的 part.batch。
 //   所有 mutation 在 usePendingDispatch.ts 内集中调 invalidateQueries 失效
-//   pendingBatchesPrefix + partsPrefix + worker-pool 两域。
+//   pendingBatchesPrefix + partsPrefix + worker-pool 三域（by-process / counts /
+//   state，共 5 个前缀键，见 usePendingDispatch.ts invalidateAll）。
 //   2026-09-30 修复：去掉 processesPrefix —— 下发批次不改变工序列表，失效它只会
 //   重拉会话级缓存的 processes。
 //

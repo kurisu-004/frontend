@@ -23,9 +23,13 @@
 // 2026-09-30：本 query 是 worker 持有数据的**唯一数据源** —— useWorkerQueue 的
 // 模块级 `workerHeld` ref + `loadBoard`（循环裸调 getWorkerState，违反
 // CLAUDE.md 2026-09-30 TanStack 硬约束）已删除，本文件随之成为 held 数据的
-// 单一路径。写点：pool 域写操作（`POST /prod/pool/move`）在 useWorkerQueue.ts
-// onSuccess 调 `invalidateWorkerStateByWorkerAll(qc)`（POOL↔WORKER 双向移动都会
-// 改变 held_batches / current_held，故前缀全刷而非按 worker 精刷）。
+// 单一路径。失效编排点：`POST /prod/pool/move`（useWorkerQueue.ts onSuccess 的
+// invalidatePoolDomains）+ dispatch（usePendingDispatch.invalidateAll）都调
+// `invalidateWorkerStateByWorkerAll(qc)`（POOL↔WORKER 双向移动都会改变
+// held_batches / current_held，故前缀全刷而非按 worker 精刷）。
+// ⚠️ 2026-09-30 review 第 2 轮复扫更正：这两处只是**编排点**，不是 held_batches 的
+// 全部写点 —— scan 域工人放回 `workerScan`（ScanReturnParts.vue:563）service 同事务
+// 跑 WorkerPool refill，会改 held 集合却不挂本前缀失效（既存缺口，另单跟踪）。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
