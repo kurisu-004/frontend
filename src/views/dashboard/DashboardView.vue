@@ -10,10 +10,17 @@
     Footer：FactoryRealtimeStrip（沿旧 in_process 数据，按工人分组 chips）
 
   数据流：
-    - useDashboardSnapshot() → snapshot.upcoming_delivery（7 天分桶）+ in_process
+    - useDashboardSnapshot() → snapshot.upcoming_delivery（14 天分桶，Phase 4 由 7 天扩 14 天）+ in_process
     - useDashboardUrgentList() → items（listUnionItems 拉 100 件非终态件）+ urgentCount
     - useDashboardOverdue(isManager) → overdueCount（Manager-only，闸门按角色）
     - 行点击 emit row-click(part) → 父组件打开 UrgentOrderDrawer
+
+  抽屉协调（2026-09-30 Phase 6）：
+    - UrgentOrderDrawer（右侧）= 工单详情，selectedPart 触发；可由 UrgentOrdersList 行点击
+      或 UpcomingDeliveryListDrawer 行点击（@row-click）触发。
+    - UpcomingDeliveryListDrawer（下方 btt）= 7/14 天交期某日某层工单清单，由
+      UpcomingDeliveryChart 的 @bar-layer-click 触发。
+    - onUpcomingRowClick：用户在下抽屉选工单 → 关闭下抽屉 → 复用 UrgentOrderDrawer 打开右侧详情。
 -->
 <template>
   <div class="dashboard">
@@ -70,6 +77,7 @@
       :date="selectedLayer.date"
       :layer="selectedLayer.layer"
       :statuses="selectedLayer.statuses"
+      @row-click="onUpcomingRowClick"
     />
   </div>
 </template>
@@ -211,6 +219,17 @@ function onBarLayerClick(payload: {
     statuses: payload.statuses,
   };
   upcomingDrawerOpen.value = true;
+}
+
+// 2026-09-30（Phase 6）新增：UpcomingDeliveryListDrawer 行点击 → 关闭下方抽屉
+// 并复用 UrgentOrderDrawer 打开右侧工单详情。两 drawer 协调逻辑全在本函数，
+// UpcomingDeliveryListDrawer 只 emit rowClick(part)，不感知 UrgentOrderDrawer 存在。
+// 不重置 selectedLayer —— 下次用户再点柱状图时 selectedLayer 还在，
+// upcomingDrawerOpen 会按需重新打开（沿用 onBarLayerClick 路径）。
+function onUpcomingRowClick(part: PartListItem): void {
+  upcomingDrawerOpen.value = false;
+  selectedPart.value = part;
+  drawerVisible.value = true;
 }
 </script>
 
