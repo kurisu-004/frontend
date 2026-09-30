@@ -160,6 +160,22 @@
               @click="store.dispatch.onRecallToPending(row as PartListItem)"
               >召回(待生产)</el-button
             >
+            <!--
+              2026-09-30 新增：MANAGER 专属「完成」按钮 —— 强推工单+所有非取消批次为 COMPLETED。
+              守卫 canForceComplete 收口：isManager && 非 ASSEMBLY && 非 COMPLETED && 非 CANCELLED。
+              弹窗 useConfirm.dangerous（warning，含工单号/批次提示/不可撤销）；
+              per-row loading 走 forceCompletingMap reactive。
+              后端 POST /api/v2/parts/{part_id}/force-complete（雪花 ID 严格 string，URL 拼接不经 Number()）。
+            -->
+            <el-button
+              v-if="store.dispatch.canForceComplete(row as PartListItem)"
+              link
+              type="danger"
+              size="small"
+              :loading="store.dispatch.forceCompletingMap[row.id]"
+              @click="store.dispatch.onForceComplete(row as PartListItem)"
+              >完成</el-button
+            >
             <!-- 2026-09-29：删除「召回(待编程)」按钮 —— recallToProgramming 后端端点
                  404 下线，CNC 编程入口已迁到「待编程一览」Tab 页（cnc/PendingProgrammingList），
                  召回(待编程)动作已无对应 API 可调。 -->

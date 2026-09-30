@@ -26,11 +26,11 @@
 // 批量编程 action（batchDispatchAction='programming'）一并移除，批量 action 仅
 // 保留 'shelf'。CNC 编程主入口迁到「待编程一览」Tab 页。
 
-import { computed, ref, type ComputedRef, type Ref } from 'vue';
+import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useQueryClient, useMutation } from '@tanstack/vue-query';
 import { useRouter } from 'vue-router';
-import { placeOnShelf, recallToPending } from '@/api/parts';
+import { placeOnShelf, recallToPending, forceCompletePart } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
@@ -38,6 +38,8 @@ import type { PartListItem } from '@/types/parts';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { qk } from '@/composables/queries/keys';
+import { useConfirm } from '@/composables/useConfirm';
+import { usePermissions } from '@/composables/usePermissions';
 // 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
 import { useAuthStore } from '@/stores/auth';
 import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
@@ -87,6 +89,10 @@ export interface UsePartDispatchReturn {
   onBatchDispatchConfirm: () => Promise<void>;
   canRecallToPending: (row: PartListItem) => boolean;
   onRecallToPending: (row: PartListItem) => Promise<void>;
+  /** 2026-09-30 新增：MANAGER 专属「完成」按钮（强制完成工单+所有非取消批次为 COMPLETED）。 */
+  forceCompletingMap: Record<string, boolean>;
+  canForceComplete: (row: PartListItem) => boolean;
+  onForceComplete: (row: PartListItem) => Promise<void>;
 }
 
 export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchReturn {
@@ -381,6 +387,63 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     recallToPendingMutation.mutate({ rowId: row.id, batchId: row.batch_id ?? null });
   }
 
+  // ============ 强制完成（2026-09-30）============
+  // 系统管理员专属：绕过状态机把工单+所有非取消批次置为 COMPLETED。
+  // 守卫 canForceComplete 收口角色 + row_type + status 三个维度：
+  //   - isManager：仅 MANAGER 可见 / 可点；
+  //   - row.row_type !== 'ASSEMBLY'：装配件无独立批次完成语义（待与后端契约确认）；
+  //   - 非 COMPLETED / 非 CANCELLED：终态不可二次强制完成，避免日志噪声 + 避免
+  //     与既有 cancelPart 路径冲突（取消件不强制回到已完成）。
+  const confirm = useConfirm();
+  const { isManager } = usePermissions();
+
+  function canForceComplete(row: PartListItem): boolean {
+    if (!isManager.value) return false;
+    if (row.row_type === 'ASSEMBLY') return false;
+    if (row.status === 'COMPLETED') return false;
+    if (row.status === 'CANCELLED') return false;
+    return true;
+  }
+
+  // 2026-09-30 新增：per-row loading map（复用 placeOnShelf / recallToPending 的
+  // deliveringMap 同款 reactive<Record<string, boolean>> 模式；本件命名
+  // forceCompletingMap 与按钮文案「完成」对齐）。
+  const forceCompletingMap = reactive<Record<string, boolean>>({});
+
+  const forceCompleteMutation = useMutation<
+    unknown,
+    Error,
+    { partId: string; note: string | null }
+  >({
+    mutationKey: ['parts', 'dispatch', 'force-complete'],
+    mutationFn: ({ partId, note }) => forceCompletePart(partId, { note }),
+    onMutate: ({ partId }) => {
+      forceCompletingMap[partId] = true;
+    },
+    onSettled: (_d, _e, { partId }) => {
+      forceCompletingMap[partId] = false;
+    },
+    onSuccess: () => {
+      ElMessage.success('已强制完成');
+      void qc.invalidateQueries({ queryKey: qk.partsPrefix });
+    },
+    onError: (e: Error) => ElMessage.error(e.message ?? '强制完成失败'),
+  });
+
+  async function onForceComplete(row: PartListItem): Promise<void> {
+    const label = row.serial_no || row.drawing_no || row.order_no || row.id;
+    const batchCount = row.batch_no ?? 1;
+    const ok = await confirm.dangerous(
+      '强制完成工单',
+      `将强制把工单「${label}」及其 ${batchCount} 个批次置为已完成。\n` +
+        `此操作绕过状态机（仅排除已取消批次），要求非 COMPLETED / 非 CANCELLED 状态。\n` +
+        `仅系统管理员可执行，且不可撤销。是否继续？`,
+      { confirmText: '确认完成', cancelText: '取消', type: 'warning' },
+    );
+    if (!ok) return;
+    forceCompleteMutation.mutate({ partId: row.id, note: null });
+  }
+
   return {
     // 共享数据
     shelves,
@@ -410,5 +473,9 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     // 召回（2026-09-29：仅保留 recall-to-pending）
     canRecallToPending,
     onRecallToPending,
+    // 强制完成（2026-09-30：MANAGER 专属）
+    forceCompletingMap,
+    canForceComplete,
+    onForceComplete,
   };
 }

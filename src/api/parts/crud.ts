@@ -355,6 +355,21 @@ export async function recallToPending(
   return resp.data;
 }
 
+// 2026-09-30 新增：系统管理员专属「强制完成」—— 绕过状态机将该工单及所有非取消
+// 批次置为 COMPLETED（与正常 `completePart` DELIVERED → COMPLETED 不同）。仅 MANAGER
+// 角色可见，按钮守卫由 usePartDispatch.canForceComplete 收口。
+export interface ForceCompletePayload {
+  note?: string | null;
+}
+
+export async function forceCompletePart(
+  id: number | string,
+  payload?: ForceCompletePayload,
+): Promise<PartItem> {
+  const resp = await api.post<PartItem>(`/parts/${id}/force-complete`, payload ?? {});
+  return resp.data;
+}
+
 /** 释放编程完成 batch 到生产架：PROGRAMMING → IN_PROCESS。
  *  PROGRAMMING 状态自 2026-09-29 起被标记为废弃（无新进入路径），但本端点保留
  *  供历史 PROGRAMMING 数据消化。
