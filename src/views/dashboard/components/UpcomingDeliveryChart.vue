@@ -4,9 +4,11 @@
 
   数据来源：snapshot.upcoming_delivery: {date, count}[]（date 'YYYY-MM-DD'，count i64 → string）
   视觉规则：
-    - 今天 = 红色柱（var(--el-color-danger)）
-    - 后 1-3 天 = 橙色柱（var(--el-color-warning)）
-    - 后 4-6 天 = 蓝色柱（var(--primary-color)）
+    - 今天 = 红色柱（#f56c6c，EP danger 默认）
+    - 后 1-3 天 = 橙色柱（#e6a23c，EP warning 默认）
+    - 后 4-6 天 = 蓝色柱（#1e4d8b，项目 primary）
+    2026-09-30 bugfix：ECharts canvas 不解析 CSS var()，改用 hex 字面量
+    （与 src/views/statistics/OverviewTab.vue:204,212,232,234 同形态）。
 -->
 <template>
   <div class="chart-wrap">
@@ -27,12 +29,15 @@
 //     补 0 桶 + 默认蓝色，确保柱子始终 7 根。
 //
 // 视觉规则（沿方案 §2）：
-//   - 今天（diff === 0） → 红色（var(--el-color-danger)）
-//   - 后 1-3 天（diff 1..3） → 橙色（var(--el-color-warning)）
-//   - 后 4-6 天（diff 4..6） → 蓝色（var(--primary-color)）
+//   - 今天（diff === 0） → 红色（#f56c6c）
+//   - 后 1-3 天（diff 1..3） → 橙色（#e6a23c）
+//   - 后 4-6 天（diff 4..6） → 蓝色（#1e4d8b）
+// 2026-09-30 bugfix：ECharts canvas renderer 不解析 CSS var()，改 hex 字面量
+// 锁定视觉（与 OverviewTab.vue 同形态）。
 
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import * as echarts from 'echarts/core';
+import 'echarts/theme/v5'; // 2026-09-30 bugfix：与全局 <EChart> 锁定同一主题
 import { BarChart } from 'echarts/charts';
 import { GridComponent, TooltipComponent } from 'echarts/components';
 import { LabelLayout } from 'echarts/features';
@@ -81,12 +86,14 @@ function buildSeries(
     const iso = `${yyyy}-${mm}-${dd}`;
     xLabels.push(formatLabel(iso));
     counts.push(map.get(iso) ?? 0);
+    // 2026-09-30 bugfix：CSS var() 在 ECharts canvas renderer 不被解析，
+    // 柱子会透明不可见。改 hex 字面量（与 OverviewTab.vue 同形态）。
     if (i === 0) {
-      colors.push('var(--el-color-danger)');
+      colors.push('#f56c6c'); // 今天：EP danger 默认红
     } else if (i <= 3) {
-      colors.push('var(--el-color-warning)');
+      colors.push('#e6a23c'); // 后 1-3 天：EP warning 默认橙
     } else {
-      colors.push('var(--primary-color)');
+      colors.push('#1e4d8b'); // 后 4-6 天：项目 primary 藏青
     }
   }
   return { xLabels, counts, colors };
@@ -146,7 +153,9 @@ function buildOption(buckets: UpcomingDeliveryEntryData[]): EChartsCoreOption {
 }
 
 function initChart(el: HTMLDivElement): void {
-  const c = echarts.init(el, undefined, { renderer: 'canvas' });
+  // 2026-09-30 bugfix：与全局 src/components/EChart.vue:83 对齐，
+  // 锁定 v5 主题，避免 ECharts 6 默认主题带来的 subtle 视觉差异。
+  const c = echarts.init(el, 'v5', { renderer: 'canvas' });
   chart.value = c;
   c.setOption(buildOption(props.buckets), true);
   resizeObserver = new ResizeObserver(() => c.resize());

@@ -6,7 +6,7 @@
 // 字段来源：
 //   - backend-rust/src/modules/dashboard/vo/snapshot.rs:77-119（DashboardSnapshot 5 顶层 + 4 shelf 字段）
 //   - snapshot.rs:95-119（DashboardItem 19 字段，5 必填 + 14 nullable）
-//   - snapshot.rs:122-125（UpcomingDeliveryBucket 2 字段，count i64 → string）
+//   - snapshot.rs:122-125（UpcomingDeliveryBucket 2 字段，count i64 JSON integer）
 //
 // 覆盖：
 //   - D1：完整 sample snapshot 通过（含 1 shelf group + 2 items + 1 inspection
@@ -14,7 +14,7 @@
 //   - D2：缺必填字段拒绝（id / name / drawing_no / quantity / is_urgent 任一缺失 → 抛错）；
 //   - D3：可选字段（batch_id / serial_no / planned_delivery_date 等）缺省可正常 parse；
 //   - D4：DashboardItem 19 字段全声明 regression guard（与 customerSchema S4 同形态）；
-//   - D5：UpcomingDeliveryBucket count 是 string（rust_decimal/serde-i64 wire-format）；
+//   - D5：UpcomingDeliveryBucket count 是 number（COUNT(*)::bigint → JSON integer）；
 //   - D6：dashboardItemSchema 不在 items 数组内时（裸对象）也接受；
 //   - D7（2026-09-28 review 第 1 轮修复追加）：DashboardSnapshot /
 //     OnProductionShelfGroup / DashboardItem / UpcomingDeliveryBucket 全字段
@@ -67,7 +67,7 @@ function makeBaseSnapshot(): Record<string, unknown> {
     ],
     on_inspection_shelves: [makeBaseItem({ id: '180000000000002', shelf_code: 'I-01' })],
     in_process: [makeBaseItem({ id: '180000000000003', current_holder_kind: 'worker' })],
-    upcoming_delivery: [{ date: '2026-09-30', count: '5' }],
+    upcoming_delivery: [{ date: '2026-09-30', count: 5 }],
     ts: '2026-09-28T10:00:00+08:00',
   };
 }
@@ -206,23 +206,31 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
   });
 
   describe('upcomingDeliveryBucketSchema', () => {
-    it('D5：count 是 string（i64 → rust serde-i64 序列化为字符串）', () => {
-      const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: '42' });
-      expect(parsed.count).toBe('42');
+    // 2026-09-30 bugfix：count 是 COUNT(*)::bigint → JSON integer，非 snowflake ID
+    // 故不走 serde-i64 字符串化路径（与 customerSchema S4 不同形态）。
+    it('D5：count 是 number（COUNT(*)::bigint → JSON integer）', () => {
+      const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: 42 });
+      expect(parsed.count).toBe(42);
     });
 
     // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
     it('D7：UpcomingDeliveryBucket 2 字段全在 parsed output 里', () => {
-      const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: '42' });
+      const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: 42 });
       expect(Object.keys(parsed).sort()).toEqual(['count', 'date'].sort());
     });
 
-    it('count 传 number → 抛 ZodError', () => {
-      expect(() => upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: 42 })).toThrow();
+    // 2026-09-30 bugfix：原断言把"契约"和"实现"反过来锁了。count 是 number，传入 number 必须通过；
+    // 传 string（前端期望不传）必须拒。
+    it('count 传 number → parse 通过', () => {
+      const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: 42 });
+      expect(parsed.count).toBe(42);
+    });
+    it('count 传 string → 抛 ZodError（防止后端未来回归串行化）', () => {
+      expect(() => upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: '42' })).toThrow();
     });
 
     it('缺 date → 抛 ZodError', () => {
-      expect(() => upcomingDeliveryBucketSchema.parse({ count: '0' })).toThrow();
+      expect(() => upcomingDeliveryBucketSchema.parse({ count: 0 })).toThrow();
     });
   });
 
@@ -233,7 +241,7 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
       expect(parsed.on_inspection_shelves).toHaveLength(1);
       expect(parsed.in_process).toHaveLength(1);
       expect(parsed.upcoming_delivery).toHaveLength(1);
-      expect(parsed.upcoming_delivery[0]?.count).toBe('5');
+      expect(parsed.upcoming_delivery[0]?.count).toBe(5);
     });
 
     // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。

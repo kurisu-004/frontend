@@ -7,7 +7,11 @@
 // 关键约束（沿 2026-09-26 约定的 queryFn Zod 守门 + 2026-09-24 Zod schema-first）：
 //   - 所有非 Option 字段必填显式声明（Zod 默认 strip 模式会静默丢弃未声明字段，
 //     与 customerSchema S4 regression guard 同形态）；
-//   - i64 字段（count）后端 serde-i64 → 字符串，前端 z.string()；
+//   - 数值类 i64（COUNT(*)::bigint 等）保留 JSON integer，前端 z.number()；
+//     仅 snowflake ID（> Number.MAX_SAFE_INTEGER = 2^53-1）走 serde-i64 → string，
+//     与 customerSchema S4 / partSchema S12 同形态。
+//   - 2026-09-30 bugfix：原注释将所有 i64 一刀切走字符串是错的（与 snapshot.rs:124
+//     count: i64 + docs/api/dashboard.md:90「数值类保留 JSON integer」不一致）。
 //   - 链式 trim 在前（沿 2026-09-24 约定）—— 本 VO 无 string trim 需求，仅在
 //     后期如新增字符串字段校验时遵循；
 //   - 不强制长度 / 范围（与 composables/queries/schemas.ts 注释一致：基础数据
@@ -67,11 +71,12 @@ export const onProductionShelfGroupSchema = z.object({
 export type DashboardShelfGroupData = z.infer<typeof onProductionShelfGroupSchema>;
 
 /** 2026-09-28 新增：未来 N 天交付分桶（UpcomingDeliveryBucket VO）。
- *  count 是 i64（后端 serde-i64 → 字符串），前端 z.string() 接收（与
- *  customerSchema S4 / partSchema S12 同形态）。 */
+ *  count 是 COUNT(*)::bigint → JSON integer，前端 z.number() 接收（沿
+ *  backend-rust/docs/api/dashboard.md:90「数值类保留 JSON integer」约定）。
+ *  2026-09-30 bugfix：原误用 z.string()，与后端 VO i64 类型不符。 */
 export const upcomingDeliveryBucketSchema = z.object({
   date: z.string(),
-  count: z.string(),
+  count: z.number(),
 });
 
 export type UpcomingDeliveryEntryData = z.infer<typeof upcomingDeliveryBucketSchema>;
