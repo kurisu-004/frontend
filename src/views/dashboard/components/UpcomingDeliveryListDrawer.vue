@@ -15,12 +15,21 @@
   闸门：父组件 DashboardView `v-if="selectedLayer"` 保证 drawer 首次点击前不挂载，
   useDashboardUpcomingList 的 enabled 闸门天然生效；drawer 自身
   `v-if="statuses.length === 0"` 是 props 异常兜底。
+
+  2026-09-30（Phase 5）改 btt + 行点击 emit：
+    - direction: 'rtl' → 'btt'（bottom-to-top），:size 480 → 60%：让抽屉从屏幕底部
+      弹出，水平宽度撑满，最大高度 60%，与下方 dashboard 双栏布局配合更顺（用户
+      点柱状图看到的是"目标日期的工单清单"，横向表格能展示更全列）。
+    - LAYER_COLOR 同步 Phase 4 三色警示色（#0FFCBE / #FFCC00 / #B4121B）。
+    - 新增 emit('rowClick', part)：用户在抽屉行点击 → 父组件 DashboardView 关闭
+      下方抽屉 → 复用 UrgentOrderDrawer 打开右侧工单详情。两 drawer 协调逻辑
+      全在父组件，本组件不感知 UrgentOrderDrawer 存在（关注点分离）。
 -->
 <template>
   <el-drawer
     :model-value="modelValue"
-    direction="rtl"
-    :size="480"
+    direction="btt"
+    size="60%"
     :with-header="false"
     :append-to-body="true"
     :destroy-on-close="true"
@@ -62,6 +71,7 @@
           stripe
           style="width: 100%"
           empty-text="该日该层无工单"
+          @row-click="onRowClick"
         >
           <el-table-column type="index" label="#" width="44" />
           <el-table-column prop="serial_no" label="流水" width="92">
@@ -152,7 +162,11 @@ const props = defineProps<{
   statuses: readonly OrderStatus[];
 }>();
 
-const emit = defineEmits<(e: 'update:modelValue', v: boolean) => void>();
+const emit = defineEmits<{
+  (e: 'update:modelValue', v: boolean): void;
+  /** 2026-09-30（Phase 5）新增：行点击 → 父组件 DashboardView 关下方抽屉并复用 UrgentOrderDrawer。 */
+  (e: 'rowClick', part: PartListItem): void;
+}>();
 
 /** 2026-09-30 新增：层标签映射（与 UpcomingDeliveryChart.LAYERS.label 对齐）。 */
 const LAYER_LABEL: Record<'top' | 'middle' | 'bottom', string> = {
@@ -161,12 +175,14 @@ const LAYER_LABEL: Record<'top' | 'middle' | 'bottom', string> = {
   bottom: '已送货',
 };
 
-/** 2026-09-30 新增：层颜色映射（与 UpcomingDeliveryChart.LAYERS.color 对齐，
- *  顶部 header 标签背景色取此）。 */
+/** 2026-09-30 新增 + Phase 5 同步 Phase 4 三色警示色（与 UpcomingDeliveryChart.LAYERS.color 对齐，
+ *  顶部 header 标签背景色取此）。
+ *  之前用项目主色三蓝（#1e4d8b / #2c6cb8 / #4a8fd6）—— 与 chart 警示色阶不一致，
+ *  同步切换为警示红 / 警示黄 / 亮青绿，让 header tag 与柱状图色块形成视觉闭环。 */
 const LAYER_COLOR: Record<'top' | 'middle' | 'bottom', string> = {
-  top: '#1e4d8b',
-  middle: '#2c6cb8',
-  bottom: '#4a8fd6',
+  top: '#B4121B',
+  middle: '#FFCC00',
+  bottom: '#0FFCBE',
 };
 
 const layerColor = computed(() => LAYER_COLOR[props.layer]);
@@ -180,6 +196,13 @@ const params = computed(() => {
 });
 
 const { data: rows, isPending, error } = useDashboardUpcomingList(() => toValue(params));
+
+/** 2026-09-30（Phase 5）新增：行点击 → emit rowClick(part) 给父组件 DashboardView。
+ *  父组件会关闭下方抽屉并复用 UrgentOrderDrawer 打开工单详情。本组件不感知
+ *  UrgentOrderDrawer 存在 —— 关注点分离，emit 只传 part payload。 */
+function onRowClick(row: PartListItem): void {
+  emit('rowClick', row);
+}
 
 /** 2026-09-30 新增：客户路径展示 —— l1_customer_name + customer_name（如有）。 */
 function customerPath(item: PartListItem): string {
