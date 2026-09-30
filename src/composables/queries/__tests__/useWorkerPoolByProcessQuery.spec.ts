@@ -3,9 +3,18 @@
 // 2026-09-30 新增：useWorkerPoolByProcessQuery reactive params + enabled 闸门 +
 // queryKey + 失效守门。
 //
+// 2026-09-30 契约漂移修复（后端 worker-pool → pool 收敛）：
+//   - URL `/prod/worker-pool/{pid}` → `/prod/pool/{pid}`；
+//   - `poolBatchItemSchema` 删 `current_process_step_id`（后端 PoolBatchItem 无此字段，
+//     此前 schema 声明它必填 nullable ⇒ parse 100% 失败）；
+//   - 删 `invalidateWorkerPoolByProcessQuery(qc, pid)` 精刷版 —— move 端点改造后
+//     前端无法确定受影响 processId（service 从 batch 当前 step 自推目标工序），
+//     唯一正确策略是 `invalidateWorkerPoolByProcessAll` 前缀全失效。
+//
 // 覆盖：
-//   - S1-S3：workerPoolByProcessSchema / workerBriefSchema / workTypeMaxHeldSchema
+//   - S1-S6：workerPoolByProcessSchema / workerBriefSchema / workTypeMaxHeldSchema
 //     / poolBatchItemSchema 解析后端真实形态 + M-1 regression guard。
+//   - S6：多传 current_process_step_id 不报错（回归 guard，锁死上条修复）。
 //   - T1：传静态 string → getWorkerPoolByProcess 收到该 processId。
 //   - T2：传 Ref<string> → 改 ref.value 后调 refetch，getWorkerPoolByProcess
 //     收到新 processId（核心 reactive params guard，参考 useProcessesQuery T2 范本）。
@@ -14,8 +23,7 @@
 //   - T4：传 getter 函数 → 改 source 后调 refetch，getWorkerPoolByProcess 收到新 processId
 //     （MaybeRefOrGetter 第三分支）。
 //   - T5：queryKey 形态正确（含 reactive processId 内容）。
-//   - T6：invalidateWorkerPoolByProcessQuery(qc, pid) → 该 pid 的 query 失效并重拉。
-//   - T7：invalidateWorkerPoolByProcessAll(qc) → 整个 by-process 域失效。
+//   - T6：invalidateWorkerPoolByProcessAll(qc) → 整个 by-process 域失效并重拉。
 //
 // 测试策略（沿 usePartFilesListQuery.spec.ts 范本）：
 //   - vi.mock('@/api/workerPool')：getWorkerPoolByProcess 替换为 vi.fn()。
@@ -73,7 +81,6 @@ const realGetWorkerPoolByProcess = vi.fn<
       shelf_name: string;
       is_urgent: boolean;
       note: string | null;
-      current_process_step_id: string | null;
       has_cnc_program: boolean;
       version: number;
     }>;
@@ -95,8 +102,7 @@ vi.mock('@/api/workerPool', () => ({
   getWorkerPoolCounts: vi.fn(),
   getWorkerState: vi.fn(),
   refillWorkerPool: vi.fn(),
-  assignWorkerPool: vi.fn(),
-  removeFromWorkerPool: vi.fn(),
+  moveBatch: vi.fn(),
   autoAllocate: vi.fn(),
 }));
 
@@ -108,7 +114,6 @@ import {
 } from '../schemas';
 import {
   invalidateWorkerPoolByProcessAll,
-  invalidateWorkerPoolByProcessQuery,
   useWorkerPoolByProcessQuery,
 } from '../useWorkerPoolByProcessQuery';
 
@@ -205,11 +210,43 @@ describe('workerPoolByProcessSchema / 嵌套 schema（2026-09-30 新增）', () 
       shelf_name: 'A 区货架 1',
       is_urgent: false,
       note: null,
-      current_process_step_id: null,
       version: 1,
     };
     // has_cnc_program 缺
     expect(() => poolBatchItemSchema.parse(base)).toThrow();
+  });
+
+  it('S6：多传 current_process_step_id 不报错（后端已无该字段，schema 不应要求它）', () => {
+    // 回归 guard：修复前 poolBatchItemSchema 声明 `current_process_step_id:
+    // z.string().nullable()` 必填，而后端 PoolBatchItem（vo/worker_pool.rs:14-50）
+    // 根本没有这个字段 ⇒ parse 100% 失败 ⇒ WorkerPoolTab 永久「加载失败」、
+    // 拖拽 pool → worker 链路整体不可用。本用例锁死修复。
+    const parsed = poolBatchItemSchema.parse({
+      batch_id: '3000000000001',
+      part_id: '4000000000001',
+      batch_no: 1,
+      quantity: 5,
+      serial_no: null,
+      name: '法兰盘',
+      drawing_no: 'DWG-A001',
+      system_delivery_date: '2026-09-30',
+      customer_name: '客户A',
+      parent_customer_name: null,
+      customer_path: null,
+      applicant_name: '张三',
+      location: 'PRODUCTION_SHELF',
+      shelf_id: '5000000000001',
+      shelf_code: 'A-01',
+      shelf_name: 'A 区货架 1',
+      is_urgent: false,
+      note: null,
+      current_process_step_id: null,
+      has_cnc_program: true,
+      version: 1,
+    });
+    // Zod 默认 strip：多余字段被丢弃
+    expect(parsed).not.toHaveProperty('current_process_step_id');
+    expect(parsed.shelf_id).toBe('5000000000001');
   });
 });
 
@@ -310,7 +347,7 @@ describe('useWorkerPoolByProcessQuery — reactive params + enabled 闸门 + 失
     scope.stop();
   });
 
-  it('T6：invalidateWorkerPoolByProcessQuery(qc, pid) → 该 pid 的 query 失效并重拉', async () => {
+  it('T6：invalidateWorkerPoolByProcessAll(qc) → 整个域失效并重拉', async () => {
     const scope = effectScope();
     let q: ReturnType<typeof useWorkerPoolByProcessQuery> | undefined;
     scope.run(() => {
@@ -319,14 +356,14 @@ describe('useWorkerPoolByProcessQuery — reactive params + enabled 闸门 + 失
     await q!.refetch();
     const callsBefore = realGetWorkerPoolByProcess.mock.calls.length;
 
-    await invalidateWorkerPoolByProcessQuery(testQueryClient, '2000000000001');
+    await invalidateWorkerPoolByProcessAll(testQueryClient);
     await q!.refetch();
 
     expect(realGetWorkerPoolByProcess.mock.calls.length).toBeGreaterThan(callsBefore);
     scope.stop();
   });
 
-  it('T7：invalidateWorkerPoolByProcessAll(qc) → 整个 by-process 域失效', async () => {
+  it('T7：invalidateWorkerPoolByProcessAll 走 qk.workerPoolByProcessPrefix（共享失效源）', async () => {
     // 验证 prefix 失效与 qk.workerPoolByProcessPrefix 对齐（沿 usePartFilesListQuery
     // T4 范本扩展为 prefix 形态）。
     const spy = vi.spyOn(testQueryClient, 'invalidateQueries');
@@ -334,5 +371,26 @@ describe('useWorkerPoolByProcessQuery — reactive params + enabled 闸门 + 失
     expect(spy).toHaveBeenCalledWith({
       queryKey: ['worker-pool', 'by-process'],
     });
+  });
+
+  it('T8：两个不同 processId 的 query 共享同一前缀（多 tab 缓存互相独立但可一把全刷）', async () => {
+    const scope = effectScope();
+    let q1: ReturnType<typeof useWorkerPoolByProcessQuery> | undefined;
+    let q2: ReturnType<typeof useWorkerPoolByProcessQuery> | undefined;
+    scope.run(() => {
+      q1 = testApp.runWithContext(() => useWorkerPoolByProcessQuery(() => '2000000000001'));
+      q2 = testApp.runWithContext(() => useWorkerPoolByProcessQuery(() => '2000000000002'));
+    });
+    await q1!.refetch();
+    await q2!.refetch();
+    // cache identity 按 processId 区分（不会互相串数据）
+    const keys = testQueryClient.getQueryCache().getAll().map((q) => q.queryKey);
+    expect(keys).toContainEqual(['worker-pool', 'by-process', '2000000000001']);
+    expect(keys).toContainEqual(['worker-pool', 'by-process', '2000000000002']);
+    // 但都能被同一个 prefix 失效
+    const spy = vi.spyOn(testQueryClient, 'invalidateQueries');
+    await invalidateWorkerPoolByProcessAll(testQueryClient);
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['worker-pool', 'by-process'] });
+    scope.stop();
   });
 });

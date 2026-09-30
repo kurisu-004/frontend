@@ -1,8 +1,13 @@
 <!-- 2026-08-26 新增：工人队列看板工单卡片。
-     Task 2：移除 data-* 属性（来源信息改由父级 vuedraggable @change 提供）。
+     Task 2：删除 data-* 属性（来源信息改由父级 vuedraggable @change 提供）。
      Task 3：紧凑化卡片，详情走 el-tooltip 浮层（header 仅 batch_no + 加急 tag，body 仅一行 part_name · qty · due）。
      2026-09-29：header 加「已编程」tag（仅当 batch.has_cnc_program === true 时渲染，
-     后端对非 CNC 链恒为 false 故无副作用）。 -->
+     后端对非 CNC 链恒为 false 故无副作用）。
+     2026-09-30：加 `:data-shelf-id` —— 卡片当前所在货架 ID。PoolDrawer.onDragStart
+     从 evt.item.dataset 读出并记进 dndSourceTracker，供 `POST /prod/pool/move` 构造
+     `from: {kind:'POOL', shelf_id}`。**必须是 batch 真实货架**（候选池跨所有货架，
+     未必等于用户当前激活货架），否则后端返 20122。held 侧该值为空串
+     （holder 是 worker，无货架位置）。 -->
 <template>
   <el-tooltip placement="top" :show-after="200" :disabled="!hasDetails">
     <template #content>
@@ -27,6 +32,7 @@
     <el-card
       :class="['work-order-card', { 'is-urgent': batch.is_urgent }]"
       :data-batch-id="batch.batch_id"
+      :data-shelf-id="batch.shelf_id ?? ''"
       shadow="hover"
     >
       <template #header>

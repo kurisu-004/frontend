@@ -1,5 +1,10 @@
 // 2026-08-26 新增：工人队列调度看板的领域类型定义。
 // 雪花 ID 全部 string（CLAUDE.md #3）；字段命名对齐 Rust 后端 WorkerPoolState / TakenItem。
+//
+// 2026-09-30：删 `AssignRequest` / `ReturnRequest` —— 它们描述的是后端
+// `POST /admin/worker-pool/{assign,remove}` 的旧请求体，已被
+// `POST /prod/pool/move` 的 `MoveRequest`（tagged enum from/to）取代；
+// 类型本体见 src/api/workerPool.contract.ts，无消费者故直接删除。
 
 export interface Worker {
   /** 雪花 ID，string */
@@ -49,6 +54,19 @@ export interface WorkOrderCard {
    * 也不渲染 tag（后端派生 = false 即跳过 UI）。
    */
   has_cnc_program?: boolean;
+  /**
+   * 2026-09-30 新增：该 batch **当前所在货架 ID**（t_part_batch.current_holder_id）。
+   *
+   * 仅 pool 侧（`poolItemToCard` 从 `PoolBatchItemDto.shelf_id`）填充；held 侧
+   * （`heldToCard`）恒为 null —— batch 在 worker 手里，没有"货架位置"。
+   *
+   * 用途：`POST /api/v2/prod/pool/move` 的 `from: {kind:'POOL', shelf_id}` 必须等于
+   * batch 真实所在货架，否则后端返 20122 BIZ_BATCH_LOCATION_MISMATCH（HTTP 409）。
+   * 候选池是**跨所有货架**返回的（`list_candidates_by_process_all_shelves`），batch
+   * 所在货架未必等于用户当前激活货架（`auth.activeShelfId`），所以必须在拖拽开始时
+   * 从卡片 DOM dataset 读出真实值（见 utils/dndSourceTracker.ts::recordPoolSource）。
+   */
+  shelf_id: string | null;
 }
 
 export interface ProcessPoolView {
@@ -56,20 +74,4 @@ export interface ProcessPoolView {
   process_code: string;
   process_name: string;
   batches: WorkOrderCard[];
-}
-
-export interface AssignRequest {
-  worker_id: string;
-  batch_id: string;
-  shelf_id: string;
-  /** 目标工序 ID（用于调度决策） */
-  process_id: string;
-}
-
-export interface ReturnRequest {
-  worker_id: string;
-  batch_id: string;
-  shelf_id: string;
-  /** 撤回后落入的下一道工序 ID（RETURNED 语义） */
-  next_process_id: string;
 }

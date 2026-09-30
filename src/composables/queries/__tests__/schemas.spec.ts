@@ -75,6 +75,15 @@ import {
   workerPoolByProcessSchema,
   workerPoolCountsSchema,
   workerStateSchema,
+  takenItemSchema,
+  refillResultSchema,
+  moveRequestSchema,
+  moveResultSchema,
+  dispatchRequestSchema,
+  dispatchSuccessItemSchema,
+  dispatchResultSchema,
+  autoDispatchRequestSchema,
+  autoDispatchResultSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -668,16 +677,34 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
     });
   });
 
-  describe('worker-pool 域 schema（2026-09-30 新增）', () => {
+  describe('pool 域 schema（2026-09-30 新增 + 契约漂移修复）', () => {
+    // 2026-09-30 契约漂移修复（后端 worker-pool → pool 收敛，见
+    // backend-rust/src/modules/prod/{worker_pool,batch}/）：
+    //   - `poolBatchItemSchema` **删 `current_process_step_id`** —— 后端
+    //     `PoolBatchItem`（vo/worker_pool.rs:14-50）无此字段，此前声明为必填
+    //     nullable ⇒ parse 100% 失败 ⇒ WorkerPoolTab 永久「加载失败」。旧
+    //     S-WP2c / S-WP2d 两条用例随之作废，由 S-WP2e 反向 guard 取代。
+    //   - `workerPoolCountsSchema` **删 `shelf_id`** —— 后端
+    //     `WorkerPoolCountsOut`（worker_pool/dto.rs）只有 counts + total。
+    //   - `workerStateSchema.work_type_code` 由 nullable 收紧为 string —— 后端
+    //     `WorkerPoolState.work_type_code` 是非 Option String（model.rs:122）。
+    //   - 新增 move / refill / dispatch / auto-dispatch-preview 4 组 schema。
+    //
     // 覆盖：
     //   - S-WP1：workerBriefSchema / workTypeMaxHeldSchema / poolBatchItemSchema
     //     / workerPoolByProcessSchema / workerPoolCountsSchema 解析后端真实形态；
     //   - S-WP2：poolBatchItemSchema 缺 has_cnc_program → 抛 ZodError
     //     （M-1 同源 regression guard —— 后端漏返 boolean 字段必须抛错）；
+    //   - S-WP2e：多传 current_process_step_id / shelf_id 不报错（strip 不炸）；
     //   - S-WP3：workerPoolByProcessSchema 缺 items[] → 抛 ZodError；
-    //   - S-WS1：workerStateSchema 解析 held_batches 嵌套 + work_type_code nullable
-    //     字段边界；
-    //   - S-WS2：workerStateSchema 缺 held_batches → 抛 ZodError。
+    //   - S-WS1：workerStateSchema 解析 held_batches 嵌套；
+    //   - S-WS1c：work_type_code = null → 抛 ZodError（非 Option 字段）；
+    //   - S-WS2：workerStateSchema 缺 held_batches → 抛 ZodError；
+    //   - S-MV：moveRequestSchema（tagged enum）/ moveResultSchema（skip_serializing_if
+    //     四字段可缺省）/ takenItemSchema / refillResultSchema；
+    //   - S-DP：dispatchRequestSchema（targets 非空）/ dispatchResultSchema
+    //     （failed 缺省）/ autoDispatchRequestSchema（batch_ids 非空）/
+    //     autoDispatchResultSchema（items[] + 三个 Option<i64> 字段 null 合法）。
 
     function makeBasePoolBatchItem(): Record<string, unknown> {
       return {
@@ -699,20 +726,20 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         shelf_name: 'A 区货架 1',
         is_urgent: true,
         note: null,
-        current_process_step_id: '5000000000010',
         // 2026-09-30 必填 boolean（沿 CLAUDE.md §M-4 strip 陷阱）
         has_cnc_program: true,
         version: 1,
       };
     }
 
-    it('S-WP1：poolBatchItemSchema 解析 backend-rust PoolBatchItem 21 字段不抛错', () => {
+    it('S-WP1：poolBatchItemSchema 解析 backend-rust PoolBatchItem 20 字段不抛错', () => {
       const item = poolBatchItemSchema.parse(makeBasePoolBatchItem());
       expect(item.batch_id).toBe('3000000000001');
       expect(item.has_cnc_program).toBe(true);
-      expect(item.current_process_step_id).toBe('5000000000010');
       // 嵌套字段全部存在
       expect(item.shelf_code).toBe('A-01');
+      // 2026-09-30：shelf_id 是 move 的 `from.shelf_id` 唯一来源，必须透传
+      expect(item.shelf_id).toBe('5000000000001');
       expect(item.is_urgent).toBe(true);
       expect(item.version).toBe(1);
     });
@@ -752,9 +779,8 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(wt.max_held_batches).toBeNull();
     });
 
-    it('S-WP1e：workerPoolCountsSchema 解析 counts[] + shelf_id + total', () => {
+    it('S-WP1e：workerPoolCountsSchema 解析 counts[] + total（后端无 shelf_id 维度）', () => {
       const counts = workerPoolCountsSchema.parse({
-        shelf_id: '5000000000001',
         counts: [
           { process_id: '2000000000001', process_code: 'CNC-01', process_name: '粗加工', count: 5 },
           { process_id: '2000000000002', process_code: 'QC-01', process_name: '质检', count: 2 },
@@ -763,6 +789,19 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       });
       expect(counts.counts).toHaveLength(2);
       expect(counts.total).toBe(7);
+    });
+
+    it('S-WP1f：多传 shelf_id → 被 strip 不抛 ZodError（回归 guard）', () => {
+      // 修复前 schema 声明 `shelf_id: z.string().nullable()` 必填，而后端
+      // WorkerPoolCountsOut 根本没有该字段 ⇒ parse 100% 失败 ⇒ 生产队列 tab
+      // 徽标恒 0。本用例锁死「schema 不要求 shelf_id」。
+      const counts = workerPoolCountsSchema.parse({
+        shelf_id: '5000000000001',
+        counts: [],
+        total: 0,
+      });
+      expect(counts).toEqual({ counts: [], total: 0 });
+      expect(counts).not.toHaveProperty('shelf_id');
     });
 
     it('S-WP2：poolBatchItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 同源 guard）', () => {
@@ -782,25 +821,25 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(parsed.has_cnc_program).toBe(false);
     });
 
-    it('S-WP2c：poolBatchItemSchema 缺 current_process_step_id → 抛 ZodError（M-1 strip 陷阱修复 guard）', () => {
-      // 2026-09-30 review 第 1 轮修复（M-1）：current_process_step_id 是「必填 nullable」字段
-      // （workerPool.contract.ts:165 契约 string | null），不能 `.optional()` —— zod 默认
-      // strip 模式下，`.nullable().optional()` 会让后端真漏返该字段时静默丢（null 与
-      // undefined 同源 strip），导致 UI 拿到的 current_process_step_id 是 undefined 而非 null。
-      // S-WP1 / S-WP3 / S-WP1b 三个用例对该字段没断言，本用例是该 regression 的核心 guard。
-      const { current_process_step_id: _omit, ...rest } = makeBasePoolBatchItem();
-      void _omit;
-      expect(() => poolBatchItemSchema.parse(rest)).toThrow();
-    });
-
-    it('S-WP2d：current_process_step_id = null 是合法值（未下发过工艺链 / 无 step）', () => {
-      // 后端 current_process_step_id 是 Option<String> —— 候选 batch 未下发过工艺链
-      // 时为 null。nullable 必填显式声明（沿 partSchema S14b 同源）。
+    it('S-WP2e：多传 current_process_step_id → 被 strip 不抛 ZodError（回归 guard）', () => {
+      // 2026-09-30 契约漂移修复：后端 `PoolBatchItem`
+      // （src/modules/prod/worker_pool/vo/worker_pool.rs:14-50）**没有**
+      // `current_process_step_id` 字段。此前 contract + schema 都声明了它
+      // （required nullable），导致 `workerPoolByProcessSchema.parse` 永远失败
+      // ⇒ WorkerPoolTab 永久「加载失败」+ 拖拽 pool→worker 链路整体不可用。
+      // 本用例是那次误修的核心反向 guard。
       const parsed = poolBatchItemSchema.parse({
         ...makeBasePoolBatchItem(),
-        current_process_step_id: null,
+        current_process_step_id: '5000000000010',
       });
-      expect(parsed.current_process_step_id).toBeNull();
+      expect(parsed).not.toHaveProperty('current_process_step_id');
+      expect(parsed.shelf_id).toBe('5000000000001');
+    });
+
+    it('S-WP2f：缺 shelf_id → 抛 ZodError（move 的 from.shelf_id 唯一来源，必须显式声明）', () => {
+      const { shelf_id: _omit, ...rest } = makeBasePoolBatchItem();
+      void _omit;
+      expect(() => poolBatchItemSchema.parse(rest)).toThrow();
     });
 
     it('S-WP3：workerPoolByProcessSchema 缺 items → 抛 ZodError（M-1 guard）', () => {
@@ -876,21 +915,39 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(parsed.pool_count_by_process[0]?.pool_count).toBe(5);
     });
 
-    it('S-WS1b：work_type_code = null 是合法值（无工种场景）', () => {
-      // 后端 work_type_code 是 Option<String> —— 工人未指派工种时为 null。
-      // nullable 必填显式声明（沿 §M-4）。
+    it('S-WS1b：work_type_code = 空串是合法值（无工种场景）', () => {
+      // 2026-09-30 契约校正：后端 `pub work_type_code: String`（**非** Option，
+      // model.rs:122）—— 工人未指派工种时退化为空串而非 null
+      // （worker-pool.md:52「前端应展示『工种未设置』占位」）。
       const parsed = workerStateSchema.parse({
         worker_id: '1900000000001',
         worker_name: '新员工',
-        work_type_code: null,
+        work_type_code: '',
         max_held: 0,
         current_held: 0,
         capacity_remaining: 0,
         pool_count_by_process: [],
         held_batches: [],
       });
-      expect(parsed.work_type_code).toBeNull();
+      expect(parsed.work_type_code).toBe('');
       expect(parsed.max_held).toBe(0);
+    });
+
+    it('S-WS1c：work_type_code = null → 抛 ZodError（非 Option 字段，回归 guard）', () => {
+      // 修复前 schema 写 `.nullable()` 是「恰好接受」而非「按契约接受」。后端若哪天真
+      // 返 null，前端应立刻炸出来，而不是静默把 null 当成「无工种」处理。
+      expect(() =>
+        workerStateSchema.parse({
+          worker_id: '1900000000001',
+          worker_name: '新员工',
+          work_type_code: null,
+          max_held: 0,
+          current_held: 0,
+          capacity_remaining: 0,
+          pool_count_by_process: [],
+          held_batches: [],
+        }),
+      ).toThrow();
     });
 
     it('S-WS2：workerStateSchema 缺 held_batches → 抛 ZodError（M-1 guard）', () => {
@@ -908,6 +965,308 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
           // held_batches 缺
         }),
       ).toThrow();
+    });
+
+    // ===== 2026-09-30：move / refill / dispatch / auto-dispatch-preview 新 schema =====
+
+    it('S-MV1：moveRequestSchema 接受 POOL→WORKER（tagged enum from/to）', () => {
+      const parsed = moveRequestSchema.parse({
+        batch_id: '3000000000001',
+        from: { kind: 'POOL', shelf_id: '5000000000001' },
+        to: { kind: 'WORKER', worker_id: '1900000000001' },
+      });
+      expect(parsed.from.kind).toBe('POOL');
+      expect(parsed.to.kind).toBe('WORKER');
+    });
+
+    it('S-MV2：moveRequestSchema 接受 WORKER→POOL（撤回方向）', () => {
+      const parsed = moveRequestSchema.parse({
+        batch_id: '3000000000001',
+        from: { kind: 'WORKER', worker_id: '1900000000001' },
+        to: { kind: 'POOL', shelf_id: '5000000000001' },
+        note: '退换料',
+      });
+      expect(parsed.from.kind).toBe('WORKER');
+      expect(parsed.note).toBe('退换料');
+    });
+
+    it('S-MV3：moveRequestSchema 缺 from.shelf_id → 抛 ZodError（POOL 分支必填）', () => {
+      // 后端 MoveLocation::Pool { shelf_id } 是必填 i64（deserialize_i64）。
+      // 缺它前端就构造不出合法请求 —— schema 提前炸出来。
+      expect(() =>
+        moveRequestSchema.parse({
+          batch_id: '3000000000001',
+          from: { kind: 'POOL' },
+          to: { kind: 'WORKER', worker_id: '1900000000001' },
+        }),
+      ).toThrow();
+    });
+
+    it('S-MV4：moveRequestSchema kind 值非法 → 抛 ZodError（只认 POOL / WORKER）', () => {
+      expect(() =>
+        moveRequestSchema.parse({
+          batch_id: '3000000000001',
+          from: { kind: 'SHELF', shelf_id: '5000000000001' },
+          to: { kind: 'WORKER', worker_id: '1900000000001' },
+        }),
+      ).toThrow();
+    });
+
+    it('S-MV5：moveResultSchema 解析 POOL→WORKER 完整响应', () => {
+      // backend-rust MoveResult（vo/worker_pool.rs:126-152）
+      const parsed = moveResultSchema.parse({
+        batch_id: '3000000000001',
+        from_kind: 'POOL',
+        to_kind: 'WORKER',
+        new_holder_id: '1900000000001',
+        new_location: 'WORKER',
+        version: 2,
+        current_held: 2,
+        max_held: 3,
+        taken: {
+          batch_id: '3000000000001',
+          part_id: '4000000000001',
+          batch_no: 1,
+          quantity: 5,
+          serial_no: null,
+          drawing_no: 'DWG-A001',
+          system_delivery_date: '2026-09-30',
+          planned_delivery_date: null,
+          is_urgent: false,
+          version: 2,
+          has_cnc_program: true,
+        },
+      });
+      expect(parsed.to_kind).toBe('WORKER');
+      expect(parsed.current_held).toBe(2);
+      expect(parsed.taken?.batch_no).toBe(1);
+    });
+
+    it('S-MV6：moveResultSchema 四可选字段全部缺失 → 不抛 ZodError（skip_serializing_if）', () => {
+      // backend-rust 对 current_held / max_held / shelf_id / taken 四个字段都加了
+      // `#[serde(skip_serializing_if = "Option::is_none")]` ⇒ 条件不满足时**整个字段
+      // 从 JSON 中省略**（不是 null）。schema 用 .nullish() 同时兜 undefined / null。
+      const parsed = moveResultSchema.parse({
+        batch_id: '3000000000001',
+        from_kind: 'WORKER',
+        to_kind: 'POOL',
+        new_holder_id: '5000000000001',
+        new_location: 'PRODUCTION_SHELF',
+        version: 3,
+      });
+      expect(parsed.shelf_id).toBeUndefined();
+      expect(parsed.taken).toBeUndefined();
+      expect(parsed.current_held).toBeUndefined();
+    });
+
+    it('S-MV7：moveResultSchema 四可选字段显式为 null → 接受', () => {
+      const parsed = moveResultSchema.parse({
+        batch_id: '3000000000001',
+        from_kind: 'WORKER',
+        to_kind: 'POOL',
+        new_holder_id: '5000000000001',
+        new_location: 'PRODUCTION_SHELF',
+        version: 3,
+        current_held: null,
+        max_held: null,
+        shelf_id: '5000000000001',
+        taken: null,
+      });
+      expect(parsed.shelf_id).toBe('5000000000001');
+      expect(parsed.taken).toBeNull();
+    });
+
+    it('S-MV8：moveResultSchema 缺 new_holder_id → 抛 ZodError（M-1 guard）', () => {
+      expect(() =>
+        moveResultSchema.parse({
+          batch_id: '3000000000001',
+          from_kind: 'POOL',
+          to_kind: 'WORKER',
+          new_location: 'WORKER',
+          version: 2,
+        }),
+      ).toThrow();
+    });
+
+    it('S-MV9：takenItemSchema / refillResultSchema 解析 refill 响应', () => {
+      const r = refillResultSchema.parse({
+        worker_id: '1900000000001',
+        shelf_id: '5000000000001',
+        taken: [
+          {
+            batch_id: '3000000000001',
+            part_id: '4000000000001',
+            batch_no: 1,
+            quantity: 5,
+            serial_no: null,
+            drawing_no: 'DWG-A001',
+            system_delivery_date: null,
+            planned_delivery_date: null,
+            is_urgent: false,
+            version: 2,
+            has_cnc_program: false,
+          },
+        ],
+        pool_empty: false,
+      });
+      expect(r.taken).toHaveLength(1);
+      expect(r.pool_empty).toBe(false);
+    });
+
+    it('S-MV10：takenItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 guard）', () => {
+      // 后端 TakenItem.has_cnc_program 带 `#[serde(default)]` 但仍会序列化，
+      // 漏返说明契约漂移，必须炸。
+      const base: Record<string, unknown> = {
+        batch_id: '3000000000001',
+        part_id: '4000000000001',
+        batch_no: 1,
+        quantity: 5,
+        serial_no: null,
+        drawing_no: 'DWG',
+        system_delivery_date: null,
+        planned_delivery_date: null,
+        is_urgent: false,
+        version: 1,
+      };
+      expect(() => takenItemSchema.parse(base)).toThrow();
+    });
+
+    it('S-DP1：dispatchRequestSchema 接受 targets 数组（bulk-only 形态）', () => {
+      const parsed = dispatchRequestSchema.parse({
+        targets: [
+          { batch_id: '3000000000001', target_process_id: '2000000000001' },
+          { batch_id: '3000000000002', target_process_id: '2000000000002' },
+        ],
+        note: '批量下发',
+      });
+      expect(parsed.targets).toHaveLength(2);
+    });
+
+    it('S-DP2：dispatchRequestSchema 空 targets → 抛 ZodError（后端返 40001 / 422）', () => {
+      expect(() => dispatchRequestSchema.parse({ targets: [] })).toThrow();
+    });
+
+    it('S-DP3：dispatchResultSchema 解析 succeeded[] + failed[]', () => {
+      const parsed = dispatchResultSchema.parse({
+        succeeded: [
+          {
+            batch_id: '3000000000001',
+            current_process_step_id: null,
+            target_process_id: '2000000000001',
+            shelf_id: '5000000000001',
+            version: 2,
+          },
+        ],
+        failed: [],
+      });
+      expect(parsed.succeeded).toHaveLength(1);
+      // dispatch 路径不解析 step → current_process_step_id 恒 null
+      expect(parsed.succeeded[0]?.current_process_step_id).toBeNull();
+      expect(parsed.failed).toEqual([]);
+    });
+
+    it('S-DP4：dispatchResultSchema 缺 failed 字段 → 默认为 []（skip_serializing_if 兜底）', () => {
+      // backend-rust DispatchResult.failed 带 `skip_serializing_if = "Vec::is_empty"`
+      // ⇒ 成功时该字段从 JSON 中整体省略。前端 .default([]) 兜住，
+      // 避免 `res.failed.length` 抛 undefined。
+      const parsed = dispatchResultSchema.parse({
+        succeeded: [
+          {
+            batch_id: '3000000000001',
+            current_process_step_id: null,
+            target_process_id: '2000000000001',
+            shelf_id: '5000000000001',
+            version: 2,
+          },
+        ],
+      });
+      expect(parsed.failed).toEqual([]);
+    });
+
+    it('S-DP5：dispatchSuccessItemSchema 缺 shelf_id → 抛 ZodError（M-1 guard）', () => {
+      // shelf_id 由 service 按 target_process_id 在 t_shelf_process 解析
+      // （sort_order ASC LIMIT 1）—— 缺它说明后端解析失败，应立刻炸出来。
+      expect(() =>
+        dispatchSuccessItemSchema.parse({
+          batch_id: '3000000000001',
+          current_process_step_id: null,
+          target_process_id: '2000000000001',
+          version: 2,
+        }),
+      ).toThrow();
+    });
+
+    it('S-DP6：autoDispatchRequestSchema 空 batch_ids → 抛 ZodError（后端 40001 / 422）', () => {
+      expect(() => autoDispatchRequestSchema.parse({ batch_ids: [] })).toThrow();
+    });
+
+    it('S-DP7：autoDispatchResultSchema 解析只读 preview（items[] 全字段）', () => {
+      const parsed = autoDispatchResultSchema.parse({
+        items: [
+          {
+            batch_id: '3000000000001',
+            part_id: '4000000000001',
+            process_chain_id: '6000000000001',
+            first_process_id: '2000000000001',
+            first_process_code: 'P-AUTO-1',
+            first_process_name: '首道工序',
+            first_shelf_id: '5000000000001',
+            skip_reason: null,
+          },
+        ],
+      });
+      expect(parsed.items).toHaveLength(1);
+      expect(parsed.items[0]?.skip_reason).toBeNull();
+      expect(parsed.items[0]?.first_process_id).toBe('2000000000001');
+    });
+
+    it('S-DP8：autoDispatchItemSchema skip 场景（三个 Option<i64> 字段为 null）', () => {
+      // NO_PROCESS_CHAIN：process_chain_id / first_process_id / first_shelf_id
+      // 三个字段全为 null；first_process_code / first_process_name 是非 Option
+      // String，后端 unwrap_or_default() 兜空串（service.rs:289-290）。
+      const parsed = autoDispatchResultSchema.parse({
+        items: [
+          {
+            batch_id: '3000000000001',
+            part_id: '4000000000001',
+            process_chain_id: null,
+            first_process_id: null,
+            first_process_code: '',
+            first_process_name: '',
+            first_shelf_id: null,
+            skip_reason: 'NO_PROCESS_CHAIN',
+          },
+        ],
+      });
+      expect(parsed.items[0]?.process_chain_id).toBeNull();
+      expect(parsed.items[0]?.first_process_code).toBe('');
+      expect(parsed.items[0]?.skip_reason).toBe('NO_PROCESS_CHAIN');
+    });
+
+    it('S-DP9：autoDispatchItemSchema NO_SHELF 场景（first_process_id 仍非 null）', () => {
+      // backend-rust AutoDispatchItem 字段注释：NO_SHELF 时首道工序存在但未映射
+      // 货架 ⇒ first_process_id 仍 Some，first_shelf_id 为 null。
+      const parsed = autoDispatchResultSchema.parse({
+        items: [
+          {
+            batch_id: '3000000000001',
+            part_id: '4000000000001',
+            process_chain_id: '6000000000001',
+            first_process_id: '2000000000001',
+            first_process_code: 'P-AUTO-1',
+            first_process_name: '首道工序',
+            first_shelf_id: null,
+            skip_reason: 'NO_SHELF',
+          },
+        ],
+      });
+      expect(parsed.items[0]?.first_process_id).toBe('2000000000001');
+      expect(parsed.items[0]?.first_shelf_id).toBeNull();
+      expect(parsed.items[0]?.skip_reason).toBe('NO_SHELF');
+    });
+
+    it('S-DP10：autoDispatchResultSchema 缺 items → 抛 ZodError（M-1 guard）', () => {
+      expect(() => autoDispatchResultSchema.parse({})).toThrow();
     });
   });
 });

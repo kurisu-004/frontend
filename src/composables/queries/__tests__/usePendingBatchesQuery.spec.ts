@@ -3,6 +3,15 @@
 // 2026-09-29 新增：usePendingBatchesQuery 共享基础数据层守门 + reactive params +
 // 失效。
 //
+// 2026-09-30 契约校正（对齐 backend-rust src/modules/prod/batch/vo.rs 实际 serde）：
+//   - `batch_no` 是 `i32`（**非 String**）—— 旧 schema 的 union+transform 归一成
+//     string 是基于「contract 注释误标」的误修，现直接 z.number()；
+//   - `current_process_step_id` / `process_chain_id` 是 `i64` + `serialize_i64`
+//     （DB NULL 走 `.unwrap_or(0)` 兜底，见 vo.rs 字段注释）⇒ **永不返 null**，
+//     语义为 "0" = 未设。旧 schema 写 `.nullable()` 是错的。
+//   - `ListPendingBatchesParams` 删 urgent_only / keyword（后端 ListPendingQuery
+//     只接 limit / offset 两个 Query 参数，旧值只是死参）。
+//
 // 覆盖：
 //   - S1：pendingBatchItemSchema 接受 backend-rust PendingBatchItem 17 字段不抛错。
 //   - S2：pendingBatchItemSchema 缺 version → 抛 ZodError（M-1 strip regression guard）。
@@ -70,7 +79,7 @@ describe('pendingBatchItemSchema / pendingBatchListResultSchema（2026-09-29 新
     const item = pendingBatchItemSchema.parse({
       batch_id: '3000000000001',
       part_id: '4000000000001',
-      batch_no: '1',
+      batch_no: 1,
       quantity: 5,
       serial_no: null,
       name: '法兰盘',
@@ -88,6 +97,60 @@ describe('pendingBatchItemSchema / pendingBatchListResultSchema（2026-09-29 新
     });
     expect(item.batch_id).toBe('3000000000001');
     expect(item.process_chain_id).toBe('6000000000001');
+    // 2026-09-30：batch_no 后端是 i32，不再归一成 string
+    expect(item.batch_no).toBe(1);
+  });
+
+  it('S1b：current_process_step_id / process_chain_id = \'0\' 是合法值（未设语义）', () => {
+    // 后端 DB NULL 走 `.unwrap_or(0)` 兜底并序列化为字符串 "0"（vo.rs 字段注释
+    // 明确「前端按 0 == 未设 step 区分」）⇒ 非 nullable。
+    const item = pendingBatchItemSchema.parse({
+      batch_id: '3000000000001',
+      part_id: '4000000000001',
+      batch_no: 1,
+      quantity: 5,
+      serial_no: null,
+      name: '法兰盘',
+      drawing_no: 'DWG-A001',
+      planned_delivery_date: '2026-10-01',
+      system_delivery_date: null,
+      customer_name: null,
+      parent_customer_name: null,
+      applicant_name: null,
+      is_urgent: false,
+      note: null,
+      version: 1,
+      current_process_step_id: '0',
+      process_chain_id: '0',
+    });
+    expect(item.current_process_step_id).toBe('0');
+    expect(item.process_chain_id).toBe('0');
+  });
+
+  it('S1c：current_process_step_id = null → 抛 ZodError（非 Option 字段）', () => {
+    // 回归 guard：修复前 schema 写 `.nullable()` 是「恰好接受」而非「按契约接受」——
+    // 后端若哪天真返 null，前端应立刻炸出来而不是静默当 0 处理。
+    expect(() =>
+      pendingBatchItemSchema.parse({
+        batch_id: '3000000000001',
+        part_id: '4000000000001',
+        batch_no: 1,
+        quantity: 5,
+        serial_no: null,
+        name: 'x',
+        drawing_no: 'DWG',
+        planned_delivery_date: null,
+        system_delivery_date: null,
+        customer_name: null,
+        parent_customer_name: null,
+        applicant_name: null,
+        is_urgent: false,
+        note: null,
+        version: 1,
+        current_process_step_id: null,
+        process_chain_id: '0',
+      }),
+    ).toThrow();
   });
 
   it('S2：pendingBatchItemSchema 缺 version → 抛 ZodError（M-1 strip regression guard）', () => {
@@ -95,7 +158,7 @@ describe('pendingBatchItemSchema / pendingBatchListResultSchema（2026-09-29 新
       pendingBatchItemSchema.parse({
         batch_id: '3000000000001',
         part_id: '4000000000001',
-        batch_no: '1',
+        batch_no: 1,
         quantity: 5,
         serial_no: null,
         name: 'x',
@@ -108,8 +171,8 @@ describe('pendingBatchItemSchema / pendingBatchListResultSchema（2026-09-29 新
         is_urgent: false,
         note: null,
         // version 缺
-        current_process_step_id: null,
-        process_chain_id: null,
+        current_process_step_id: '0',
+        process_chain_id: '0',
       }),
     ).toThrow();
   });
@@ -119,7 +182,7 @@ describe('pendingBatchItemSchema / pendingBatchListResultSchema（2026-09-29 新
       pendingBatchItemSchema.parse({
         batch_id: '3000000000001',
         part_id: '4000000000001',
-        batch_no: '1',
+        batch_no: 1,
         quantity: 5,
         serial_no: null,
         name: 'x',
@@ -132,7 +195,7 @@ describe('pendingBatchItemSchema / pendingBatchListResultSchema（2026-09-29 新
         is_urgent: false,
         note: null,
         version: 1,
-        current_process_step_id: null,
+        current_process_step_id: '0',
         // process_chain_id 缺
       }),
     ).toThrow();
@@ -184,19 +247,18 @@ describe('usePendingBatchesQuery — reactive params + 失效（2026-09-29）', 
     vi.restoreAllMocks();
   });
 
-  it('T1：传静态对象 → fetchPendingBatches 收到该 params（含 limit）', async () => {
+  it('T1：传静态对象 → fetchPendingBatches 收到该 params（含 limit + offset）', async () => {
     const scope = effectScope();
     let q: ReturnType<typeof usePendingBatchesQuery> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() =>
-        usePendingBatchesQuery({ limit: 200, urgent_only: true }),
-      );
+      // 2026-09-30：后端 ListPendingQuery 只接 limit / offset
+      q = testApp.runWithContext(() => usePendingBatchesQuery({ limit: 200, offset: 0 }));
     });
     await q!.refetch();
     expect(realFetchPendingBatches).toHaveBeenCalled();
     // fetchPendingBatches 收到的是 cleanParams 之后的 params（queryFn 调用形态）。
     expect(lastParams().limit).toBe(200);
-    expect(lastParams().urgent_only).toBe(true);
+    expect(lastParams().offset).toBe(0);
     void cleanParams;
     scope.stop();
   });

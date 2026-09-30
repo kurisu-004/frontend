@@ -63,7 +63,6 @@ interface Props {
   selectedIds: UsePendingDispatchReturn['selectedIds'];
   setSelectedIds: (ids: string[]) => void;
   autoDispatchMutation: UsePendingDispatchReturn['autoDispatchMutation'];
-  bulkDispatchMutation: UsePendingDispatchReturn['bulkDispatchMutation'];
 }
 
 const props = defineProps<Props>();

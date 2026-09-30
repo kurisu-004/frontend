@@ -1,7 +1,12 @@
 // src/composables/queries/useWorkerStateByWorkerQuery.ts
 //
-// 2026-09-30 新增：单 worker state 共享 query（WorkerColumn 自管 workerHeld +
+// 2026-09-30 新增：单 worker state 共享 query（WorkerColumn 自管 held_batches +
 // max_held + current_held 等数据；跨 tab 共享 cache identity）。
+//
+// 2026-09-30 契约漂移修复（后端 worker-pool → pool 收敛）：
+//   - URL `/prod/worker-pool/state` → `/prod/pool/state`；
+//   - `workerStateSchema.work_type_code` 由 `.nullable()` 收紧为 `z.string()` ——
+//     后端 `WorkerPoolState.work_type_code` 是非 Option `String`，无工种时为空串。
 //
 // 设计要点（沿 2026-09-26 TanStack Query 共享基础数据层约定 #5/#6/#7）：
 //   - useQuery + 双 reactive params（workerId + shelfId）；
@@ -10,13 +15,17 @@
 //   - queryFn 从 queryKey[2..3] 读最新 workerId + shelfId（避免闭包捕获 stale）；
 //   - queryFn 走 workerStateSchema.parse 守门（M-1 regression guard）；
 //   - enabled: computed(() => !!(toValue(workerId) && toValue(shelfId))) ——
-//     双参数都必填（rust WorkerPoolState 端点必填 shelf_id）；
+//     双参数都必填（rust `/prod/pool/state` 端点必填 shelf_id）；
 //   - queryFn 内有 workerId + shelfId 二次守卫；
 //   - staleTime / gcTime: POSITIVE_INFINITY —— 会话级缓存；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //
-// 写点：worker-pool state 域写操作全仓仅 useWorkerQueue.ts 一处（assign +
-// remove 两类 mutation onSuccess 调 invalidateWorkerStateByWorkerQuery(qc, wid, sid)）。
+// 2026-09-30：本 query 是 worker 持有数据的**唯一数据源** —— useWorkerQueue 的
+// 模块级 `workerHeld` ref + `loadBoard`（循环裸调 getWorkerState，违反
+// CLAUDE.md 2026-09-30 TanStack 硬约束）已删除，本文件随之成为 held 数据的
+// 单一路径。写点：pool 域写操作（`POST /prod/pool/move`）在 useWorkerQueue.ts
+// onSuccess 调 `invalidateWorkerStateByWorkerAll(qc)`（POOL↔WORKER 双向移动都会
+// 改变 held_batches / current_held，故前缀全刷而非按 worker 精刷）。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
@@ -74,24 +83,11 @@ export function useWorkerStateByWorkerQuery(
   });
 }
 
-/** 2026-09-30 新增：失效指定 workerId + shelfId 的 worker-state 缓存。
- *  调用方：useWorkerQueue.assignWorkerPoolMutation / removeFromWorkerPoolMutation
- *  的 onSuccess（assign / remove 后该 worker 的 held_batches / current_held 必变）。
- *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。 */
-export function invalidateWorkerStateByWorkerQuery(
-  qc: QueryClient,
-  workerId: string,
-  shelfId: string,
-): Promise<void> {
-  return qc
-    .invalidateQueries({ queryKey: qk.workerPoolStateByWorker(workerId, shelfId) })
-    .then(() => undefined);
-}
-
-/** 2026-09-30 新增：失效整个 worker-pool state 域（任意 workerId + shelfId 形态）。
- *  留作未来跨 worker 写操作（如 batch 全员撤回）场景的兜底；
- *  当前调用点：usePendingDispatch.refreshBoard 跨域失效链（dispatch / bulk / auto
- *  后多 worker held_batches / current_held 可能变化，前缀失效最安全）。 */
+/** 2026-09-30：失效整个 pool state 域（任意 workerId + shelfId 形态）。
+ *  **前缀全失效是唯一正确策略** —— `POST /prod/pool/move` 的 `to.kind` 由调用方
+ *  任意 worker 决定（一次 auto-allocate 可同时改多个 worker 的 held_batches），
+ *  且 POOL→WORKER / WORKER→POOL 两个方向都会改动持有集合，无法精刷。
+ *  调用方：useWorkerQueue 的 move / autoAllocate mutation onSuccess。 */
 export function invalidateWorkerStateByWorkerAll(qc: QueryClient): Promise<void> {
   return qc
     .invalidateQueries({ queryKey: qk.workerPoolStatePrefix })

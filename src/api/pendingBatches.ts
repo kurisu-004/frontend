@@ -1,49 +1,54 @@
 // pending-batches 域前端 API（v2，baseURL /api/v2，2026-09-29 新增）。
 //
-// 端点（与 backend-rust/src/modules/prod/batch 模块对齐）：
-//   GET  /api/v2/prod/batches/pending               ← fetchPendingBatches
-//   POST /api/v2/prod/batches/dispatch              ← dispatchBatch（单件下发；
-//                                                    batch_id 走 body 不走 URL）
-//   POST /api/v2/prod/batches/bulk-dispatch         ← bulkDispatchBatches（批量下发，
-//                                                    payload 形态 targets: [...]）
-//   POST /api/v2/prod/batches/auto-dispatch         ← autoDispatchBatches（自动下发，
-//                                                    service 端按 process_chain_id 推导）
+// 2026-09-30 后端重构（本文件同步重写，见
+// backend-rust/src/modules/prod/batch/{mod.rs,dto.rs,vo.rs,service.rs} 与
+// docs/api/production/batches.md）：
+//   - **dispatch 统一 bulk-only**：单条下发即 `targets.length == 1`；旧
+//     `DispatchRequest { batch_id, target_process_id }` 形态已删。
+//   - **bulk-dispatch 端点删除**（router 层不再挂载 ⇒ 404）：批量下发复用
+//     `POST /batches/dispatch` 的 targets 数组。
+//   - **auto-dispatch 改为只读 preview**：不再真正下发，只返回每个 batch 的
+//     「首道工序 + 首货架 + skip_reason」；前端据此构造 dispatch 请求真正下发。
+//   - 响应体：dispatch 出参由单个 `DispatchSuccessItem` 改 `DispatchResult
+//     { succeeded[], failed[] }`（`failed` 当前恒空，任一失败 → service 抛
+//     AppError 全回滚）；auto-dispatch 出参由 `{succeeded, skipped}` 改 `{items[]}`。
 //
-// 2026-09-29 修复 dispatch 契约漂移：
-//   - dispatch / bulk-dispatch 请求 payload 与响应字段对齐 backend VO
-//     （backend-rust src/modules/prod/batch/vo.rs:88-119），URL 漂移修正
-//     （`/{batch_id}/dispatch` → `/dispatch` 连字符 `/dispatch-bulk` → `/bulk-dispatch`）；
-//   - 所有函数体在拿到响应后走 Zod parse 守门（dispatchResultSchema /
-//     bulkDispatchResultSchema / autoDispatchResultSchema），后端契约漂移立刻抛
-//     ZodError 而非运行时 `undefined.length`（首轮 bug 根因）。
+// 端点（与 backend-rust/src/modules/prod/batch/mod.rs:54-58 对齐）：
+//   GET  /api/v2/prod/batches/pending          ← fetchPendingBatches
+//   POST /api/v2/prod/batches/dispatch         ← dispatchBatches（bulk-only）
+//   POST /api/v2/prod/batches/auto-dispatch    ← previewAutoDispatch（只读）
 //
-// 业务端点统一走 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 起）。
-// 2026-09-29 新增：服务于生产队列「待下发」Tab —— 拉取 status=PENDING 且未进入任何工序
-// 的 part.batch，按下发场景（单件 / 批量 / 自动）触发不同 mutation。所有 mutation 在
-// usePendingDispatch.ts 内集中调 invalidateQueries 失效 pendingBatchesPrefix +
-// processesPrefix + partsPrefix 三域，与「跨域写操作精确失效」2026-09-26 约定对齐。
+// 历史变更：
+//   - 2026-09-29 修复 dispatch 契约漂移：URL `/{batch_id}/dispatch` → `/dispatch`；
+//     响应加 Zod parse 守门。
+//   - 2026-09-30：与后端 2026-09-30 重构对齐（详见上方）。
+//   2026-09-29：服务于生产队列「待下发」Tab —— 拉取 status=PENDING 的 part.batch。
+//   所有 mutation 在 usePendingDispatch.ts 内集中调 invalidateQueries 失效
+//   pendingBatchesPrefix + processesPrefix + partsPrefix + worker-pool 两域。
+//
+// 业务端点统一走 `api`（baseURL `/api/v2`）。
 
 import { api, cleanParams } from '@/api/http';
 import type { PendingBatchItemDto } from './workerPool.contract';
 import {
   autoDispatchResultSchema,
-  bulkDispatchResultSchema,
   dispatchResultSchema,
+  type AutoDispatchResultSchema,
+  type DispatchResultSchema,
 } from '@/composables/queries/schemas';
 
-/** `GET /api/v2/prod/batches/pending` 入参形态。
- *  - limit / offset：分页；
- *  - urgent_only：可选筛选加急项；
- *  - keyword：模糊匹配图号 / 名称（与后端 PendingBatchListQuery.keyword 对齐）。 */
+/** `GET /api/v2/prod/batches/pending` 入参形态（rust ListPendingQuery）。
+ *  2026-09-30 修正：后端只接 `limit` / `offset` 两个 Query 参数
+ *  （batch/dto.rs::ListPendingQuery），旧前端的 `urgent_only` / `keyword` 已删
+ *  （后端从不消费，cleanParams 只是把死参发出去）。 */
 export interface ListPendingBatchesParams {
+  /** 默认 200；service 层 clamp(1, 500) */
   limit?: number;
+  /** 默认 0；service 层 max(0) */
   offset?: number;
-  urgent_only?: boolean;
-  keyword?: string;
 }
 
-/** `GET /api/v2/prod/batches/pending` 出参（rust PendingBatchListOut）。
- *  结构对齐 ListOut 信封（items + total + limit + offset）。 */
+/** `GET /api/v2/prod/batches/pending` 出参（rust PendingBatchListOut）。 */
 export interface PendingBatchListDto {
   items: PendingBatchItemDto[];
   total: number;
@@ -51,79 +56,60 @@ export interface PendingBatchListDto {
   offset: number;
 }
 
-/** `POST /api/v2/prod/batches/dispatch` 请求（rust DispatchRequest）。
- *  2026-09-29 修复：必填 `target_process_id`（service 端按 `t_shelf_process` 解析货架）；
- *  旧前端 `shelf_id / next_process_id` 形态已删（backend 实际无此入参）；`note` 可选
- *  落到 `t_part_event.note`。
- *  业务错：20706 BIZ_PROCESS_CHAIN_REQUIRED（无 process_chain_id）、
- *         20120 BIZ_BATCH_INVALID_STATUS（不是 PENDING）、
- *         20508 BIZ_SHELF_PROCESS_NOT_FOUND（target_process 无对应货架）。 */
-export interface DispatchBatchRequest {
-  /** 目标工序 ID（必填；service 按 t_shelf_process 解析货架） */
+/** `POST /api/v2/prod/batches/dispatch` 单条 target（rust DispatchTarget）。 */
+export interface DispatchTarget {
+  batch_id: string;
   target_process_id: string;
-  /** 备注（落到 t_part_event.note） */
+}
+
+/** `POST /api/v2/prod/batches/dispatch` 请求（rust DispatchRequest）。
+ *  2026-09-30：bulk-only 形态 —— 单条下发即 `targets.length == 1`，多条按数组
+ *  顺序执行，任一硬失败 → service 抛 AppError，handler 的 Transaction Drop 回滚
+ *  全部 succeeded 写入。空 targets → 40001 VALIDATION_ERROR（HTTP 422）。
+ *
+ *  不带 shelf_id / version：货架由 service 按 `target_process_id` 在
+ *  `t_shelf_process` 自动解析（sort_order ASC, id ASC LIMIT 1），0 结果 →
+ *  20508 BIZ_SHELF_PROCESS_NOT_FOUND；版本号走 batch 当前 version 隐式 OCC。
+ *
+ *  业务错：20120 BIZ_BATCH_INVALID_STATUS（409，batch 非 PENDING）/
+ *         20121 BIZ_BATCH_NOT_FOUND（404）/ 20508 SHELF_PROCESS_NOT_FOUND（404）/
+ *         40901 VERSION_CONFLICT（409）/ 40300 FORBIDDEN（非 Manager/Clerk）。 */
+export interface DispatchRequest {
+  targets: DispatchTarget[];
+  /** 可选，落到所有 t_part_event.note（bulk 共享） */
   note?: string;
 }
 
-/** `POST /api/v2/prod/batches/dispatch` 出参（rust DispatchResult，
- *  backend-rust vo.rs:88-97）。5 字段：batch_id / current_process_step_id（Option<i64>，
- *  dispatch 路径不解析 step → null）/ target_process_id / shelf_id / version。
- *  旧前端 `part_id` 字段已删（VO 实际不含，dispatch.md:84）。 */
-export interface DispatchBatchResultDto {
-  batch_id: string;
-  current_process_step_id: string | null;
-  target_process_id: string;
-  shelf_id: string;
-  version: number;
-}
-
-/** `POST /api/v2/prod/batches/bulk-dispatch` 单条 target（rust BulkDispatchTarget）。 */
-export interface BulkDispatchTarget {
-  batch_id: string;
-  target_process_id: string;
-}
-
-/** `POST /api/v2/prod/batches/bulk-dispatch` 请求（rust BulkDispatchRequest）。
- *  2026-09-29 修复：旧前端 `{ batch_ids, shelf_id, next_process_id }` 共享形态已删
- *  （业务允许不同 target 走不同 process）；改用 backend `targets: BulkDispatchTarget[]`
- *  形态（bulk-dispatch.md:111-119）。service 端「任一失败 → 全回滚」单事务处理。 */
-export interface BulkDispatchRequest {
-  targets: BulkDispatchTarget[];
-}
-
-/** `POST /api/v2/prod/batches/bulk-dispatch` 出参（rust BulkDispatchResult）。
- *  succeeded / failed 分别记录成功与失败件；当前实现「任一失败 → 全回滚」，失败码
- *  通常由 AppError.code() 抛出（HTTP 4xx/5xx），failed 数组在事务成功提交后一般恒空
- *  —— 但保留 schema 以防 backend 后续改为 partial commit（vo.rs:103-107）。 */
-export interface BulkDispatchResultDto {
-  succeeded: DispatchBatchResultDto[];
-  failed: Array<{ batch_id: string; code: number; message: string }>;
-}
+/** `POST /api/v2/prod/batches/dispatch` 出参（rust DispatchResult）。
+ *  2026-09-30 由「单条 DispatchSuccessItem」改为 `{succeeded[], failed[]}` 列表形态。
+ *  当前实现「任一失败 → 全回滚」，`failed` 恒空且 rust 侧 skip_serializing_if
+ *  会省略空数组 ⇒ 前端 schema 给 `.default([])` 兜底。 */
+export type DispatchBatchResultDto = DispatchResultSchema;
 
 /** `POST /api/v2/prod/batches/auto-dispatch` 请求（rust AutoDispatchRequest）。
- *  service 端按 batch.process_chain_id 推导 first_step → target_process；无 chain
- *  或 chain 无 step 的 batch 跳过并返回 skipped 条目（不影响其他件事务）。 */
-export interface AutoDispatchRequest {
+ *  2026-09-30：字段是 `Option<Vec<i64>>`（`deserialize_i64_vec_opt`）——
+ *  缺省 / null / 空数组三种形态都让后端返 40001，前端须保证非空。 */
+export interface AutoDispatchPreviewRequest {
   batch_ids: string[];
 }
 
-/** `POST /api/v2/prod/batches/auto-dispatch` 跳过条目（rust AutoDispatchSkippedItem）。
- *  2026-09-29 修复：reason 字符串区分 'NO_PROCESS_CHAIN' / 'NO_PROCESS_STEP'；
- *  旧前端 `code + message` 形态已删（auto-dispatch 是 soft-skip 而非抛错，
- *  auto-dispatch.md:156-161）。 */
-export interface AutoDispatchSkippedItem {
-  batch_id: string;
-  /** 'NO_PROCESS_CHAIN' | 'NO_PROCESS_STEP' */
-  reason: string;
-}
-
 /** `POST /api/v2/prod/batches/auto-dispatch` 出参（rust AutoDispatchResult）。
- *  2026-09-29 修复：`failed` 改 `skipped`（auto-dispatch 是 soft-skip 而非抛错，
- *  vo.rs:107-119）。skipped 与 succeeded 互不影响事务。 */
-export interface AutoDispatchResultDto {
-  succeeded: DispatchBatchResultDto[];
-  skipped: AutoDispatchSkippedItem[];
-}
+ *  2026-09-30：由旧 `{succeeded, skipped}` 改为只读预览 `{items[]}`。 */
+export type AutoDispatchPreviewDto = AutoDispatchResultSchema;
+
+/** `AutoDispatchPreviewDto.items[]` 元素（rust AutoDispatchItem）。 */
+export type AutoDispatchPreviewItem = AutoDispatchResultSchema['items'][number];
+
+/** `skip_reason` 字符串 → 中文文案（前端 UI 展示用，后端只给 ASCII 枚举）。
+ *  2026-09-30：后端 auto-dispatch 改为只读 preview 后，「无工序链」不再走
+ *  20706 业务错，而是以 `skip_reason` 形式出现在 items 里
+ *  （batches.md §AutoDispatchResult / batch/service.rs:273-292）。 */
+export const AUTO_DISPATCH_SKIP_REASON_LABELS: Record<string, string> = {
+  NOT_FOUND: '批次不存在或已非 PENDING',
+  NO_PROCESS_CHAIN: '工单未制定工序链',
+  NO_PROCESS_STEP: '工序链无可用步骤',
+  NO_SHELF: '首道工序未配置货架',
+};
 
 /** GET /api/v2/prod/batches/pending —— 拉取待下发批次列表。 */
 export async function fetchPendingBatches(
@@ -135,38 +121,23 @@ export async function fetchPendingBatches(
   return resp.data;
 }
 
-/** POST /api/v2/prod/batches/dispatch —— 单件下发。
- *  2026-09-29 修复：batch_id 走 body 而非 URL；URL `/prod/batches/dispatch`
- *  （旧 `/prod/batches/{batch_id}/dispatch` 与 backend 实际不符，dispatch.md:64-67）。
- *  响应经 `dispatchResultSchema.parse()` 守门 —— 后端字段漂移立刻抛 ZodError。 */
-export async function dispatchBatch(
-  batchId: string,
-  req: DispatchBatchRequest,
-): Promise<DispatchBatchResultDto> {
-  const resp = await api.post<DispatchBatchResultDto>('/prod/batches/dispatch', {
-    batch_id: batchId,
-    ...req,
-  });
+/** POST /api/v2/prod/batches/dispatch —— 下发（bulk-only）。
+ *  2026-09-30：单条与批量合并为同一函数 —— 单条传 `targets.length === 1`。
+ *  响应经 `dispatchResultSchema.parse()` 守门 —— 后端字段漂移立刻抛 ZodError
+ *  而非运行时 `undefined.length`（首轮 bug 根因）。 */
+export async function dispatchBatches(req: DispatchRequest): Promise<DispatchBatchResultDto> {
+  const resp = await api.post<unknown>('/prod/batches/dispatch', req);
   return dispatchResultSchema.parse(resp.data);
 }
 
-/** POST /api/v2/prod/batches/bulk-dispatch —— 批量下发（每条 target 独立 batch + process）。
- *  2026-09-29 修复：URL `/prod/batches/bulk-dispatch`（旧 `/dispatch-bulk` 与 backend
- *  实际不符，bulk-dispatch.md:103-104）；payload 改 `targets: [...]` 形态。
- *  响应经 `bulkDispatchResultSchema.parse()` 守门。 */
-export async function bulkDispatchBatches(
-  req: BulkDispatchRequest,
-): Promise<BulkDispatchResultDto> {
-  const resp = await api.post<BulkDispatchResultDto>('/prod/batches/bulk-dispatch', req);
-  return bulkDispatchResultSchema.parse(resp.data);
-}
-
-/** POST /api/v2/prod/batches/auto-dispatch —— 自动下发（service 端按 process_chain_id 推导）。
- *  响应经 `autoDispatchResultSchema.parse()` 守门 —— `res.failed` 读 undefined 是首轮
- *  `Cannot read properties of undefined (reading 'length')` bug 根因。 */
-export async function autoDispatchBatches(
-  req: AutoDispatchRequest,
-): Promise<AutoDispatchResultDto> {
-  const resp = await api.post<AutoDispatchResultDto>('/prod/batches/auto-dispatch', req);
+/** POST /api/v2/prod/batches/auto-dispatch —— **只读预览**（2026-09-30 语义变更）。
+ *  不写库、不发 WS。返回每个 batch 的「首道工序 + 首货架 + skip_reason」，
+ *  caller 据此构造 `targets: [{batch_id, target_process_id: first_process_id}]`
+ *  调 dispatchBatches 真正下发。
+ *  响应经 `autoDispatchResultSchema.parse()` 守门。 */
+export async function previewAutoDispatch(
+  req: AutoDispatchPreviewRequest,
+): Promise<AutoDispatchPreviewDto> {
+  const resp = await api.post<unknown>('/prod/batches/auto-dispatch', req);
   return autoDispatchResultSchema.parse(resp.data);
 }

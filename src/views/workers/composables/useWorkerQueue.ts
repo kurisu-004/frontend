@@ -1,189 +1,152 @@
-// 2026-09-30 重构：useWorkerQueue composable —— 移除 pool fetches，迁移 3 个 mutation 到
-// useMutation + invalidate helpers；保留 workerHeld 模块级 ref 给 WorkerColumn 跨 tab 共享。
+// src/views/workers/composables/useWorkerQueue.ts
 //
-// 2026-09-30 改造前历史：
+// 生产队列「候选池 ↔ 工人」拖拽移动 + 自动分配 的写操作 composable（TanStack
+// Query 化，CLAUDE.md 2026-09-30 硬约束）。
+//
+// 2026-09-30 重构要点：
+//   - 后端把 `POST /admin/worker-pool/assign`（POOL→WORKER 单边）与
+//     `POST /admin/worker-pool/remove`（WORKER→POOL 单边）合并为通用移动端点
+//     `POST /api/v2/prod/pool/move`（POOL↔WORKER + WORKER→WORKER 三方向）。
+//     本文件原来的 assignMutation + removeMutation 两个 useMutation 收编为
+//     **单个** `moveMutation`，mutationKey 沿两层（'worker-pool' / 'move'）。
+//   - 删 `loadBoard` + 模块级 `workerHeld` ref + `getWorkerState` import：
+//     ① 2026-09-30 前 `loadBoard` 是一段**循环裸调 getWorkerState**（先从
+//        `qc.getQueriesData({queryKey: qk.workerPoolByProcessPrefix})` 收集
+//        worker_id 再 Promise.allSettled 并发拉），违反 CLAUDE.md 2026-09-30
+//        「查询一律 useQuery」硬约束；
+//     ② 且它首屏必然为空 —— 默认激活的是「待下发」tab，`__pending__` 不会拉任何
+//        by-process 详情 ⇒ 收集到的 worker_ids 恒空 ⇒ 早退；
+//     ③ 唯一真实消费者 WorkerColumn 已于 2026-09-30 改为自管
+//        `useWorkerStateByWorkerQuery`（held_batches 直读），workerHeld 是死代码。
+//     删后本文件不再有任何「裸调 api + 模块级 ref」数据源，全页 100% TanStack。
+//   - 删 `UsePendingDispatchDeps.refreshBoard` 依赖注入（随 loadBoard 一起消失）。
+//   - 失效链统一走**前缀全失效**（by-process + counts + state）：move 之后前端
+//     无法确定受影响 processId（service 从 batch 当前 step 自推目标工序，一个
+//     auto-allocate 可同时动多个 worker），精确失效必然漏刷。
+//
+// 历史：
 // - 2026-08-26：阶段一，全部走 fixture。
 // - 2026-09-14：5 个端点切真。
 // - 2026-09-14 follow-up：WorkerStateDto.held_batches 新增；moveBatchToWorker 改用
 //   assignWorkerPool（单 batch 分配）。
-//
-// 2026-09-30 改造要点（沿 2026-09-26 TanStack Query 9 条 + 2026-09-30 硬约束）：
-// - 删 `getWorkerPoolByProcess` import / `listProcesses` import / pool fetch 循环 /
-//   `WorkerPoolDto` import / `WorkerBriefDto` import；
-// - 保留 `getWorkerState` import / `workerHeld` ref（来源改为 TanStack 缓存合并）/ `loading`
-//   ref / `error` ref；
-// - `loadBoard` 简化为「拉所有 worker 的 state」单步 —— 从
-//   qc.getQueriesData({ queryKey: qk.workerPoolByProcessPrefix }) 收集当前 cache 内
-//   所有 inhouse 工序的 worker_id，并发 `getWorkerState` 写 `workerHeld`（兜底：tab 未
-//   激活时 cache 为空，workerHeld 自然为空，符合「切 tab 首次激活才拉」语义）；
-// - 3 个 mutation：useMutation + onSuccess 调 invalidateWorkerPoolByProcessQuery(qc, processId)
-//   + invalidateWorkerPoolCountsQuery(qc) + ElMessage；
-// - moveBatchToWorker / moveBatchToPool / runAutoAllocate 改为 mutation 的 mutateAsync 包装
-//   （保留 Promise<boolean> / Promise<void> 签名以兼容 view 现有调用点）；
-// - error ref 保留：mutation onError 写 error.value = e.message。
-//
-// 模块级单例（仍保留）—— view 端解构后 `useWorkerQueue()` 多次调用拿同一引用，避免
-// 重复订阅造成的资源浪费；worker-pool 域的批量数据（KB 级）不依赖组件实例生命周期。
+// - 2026-09-26：数据获取迁 TanStack Query（assign/remove/auto-allocate 三个
+//   useMutation + invalidate）。
 
 import { ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
-import {
-  assignWorkerPool,
-  autoAllocate,
-  getWorkerState,
-  removeFromWorkerPool,
-} from '@/api/workerPool';
+import { autoAllocate, moveBatch } from '@/api/workerPool';
 import type {
-  AdminAssignRequest,
-  AssignResultDto,
-  AutoAllocateResultDto,
   AutoAllocateRequest,
-  WorkerRemoveRequest,
-  WorkerStateDto,
-  WorkerTakenItemDto,
+  AutoAllocateResultDto,
+  MoveRequest,
+  MoveResultDto,
 } from '@/api/workerPool.contract';
-import type { Worker, WorkOrderCard } from '@/types/workerPool';
-import { qk } from '@/composables/queries/keys';
-import { invalidateWorkerPoolByProcessQuery } from '@/composables/queries/useWorkerPoolByProcessQuery';
+import { moveResultSchema } from '@/composables/queries/schemas';
+import { invalidateWorkerPoolByProcessAll } from '@/composables/queries/useWorkerPoolByProcessQuery';
 import { invalidateWorkerPoolCountsQuery } from '@/composables/queries/useWorkerPoolCountsQuery';
+import { invalidateWorkerStateByWorkerAll } from '@/composables/queries/useWorkerStateByWorkerQuery';
+import type { Worker } from '@/types/workerPool';
 
-// 模块级单例 state
-const workers = ref<Worker[]>([]);
-/** worker_id → 持有的 WorkOrderCard[]。
- *  2026-09-30：来源改为 TanStack 缓存合并 —— WorkerColumn 内
- *  useWorkerStateByWorkerQuery 拉到的 held_batches 也合并进 workerHeld；
- *  loadBoard 内并发 getWorkerState 兜底当前 cache 内所有 inhouse 工序的 worker_id。
- *  不再由 loadBoard 全量刷新（commit 4 起）。 */
-const workerHeld = ref<Record<string, WorkOrderCard[]>>({});
-const loading = ref(false);
-const error = ref<string | null>(null);
-
-/** 2026-09-30：把 HeldBatchItemDto 适配成 UI WorkOrderCard —— 此函数定义在
- *  views/workers/composables/poolItemToCard.ts，本文件不再独立定义；保留单文件内
- *  inline 简版以保 loadBoard 路径不依赖额外 import。
- *  （WorkerColumn 通过 shared poolItemToCard.ts 引入 heldToCard，本 loadBoard 走 inline
- *  版本即可，保持向后兼容。） */
-import { heldToCard as _heldToCard } from './poolItemToCard';
-
-/** 2026-09-21 显式返回类型。
- *  2026-09-30：移除 processPools 字段（WorkerPoolTab + PendingPoolCard 自管
- *  useWorkerPoolByProcessQuery，无 module-level ref 必要）；新增 3 个 mutation 的
- *  mutateAsync 包装（moveBatchToWorker / moveBatchToPool / runAutoAllocate 沿用
- *  原签名以兼容 view 现有调用点）。 */
+/** 2026-09-30：显式返回类型。`loadBoard` / `workerHeld` 已删（见文件头）。
+ *  两个 `moveBatchTo*` 保留 `Promise<boolean>` 签名以兼容 view 现有调用点
+ *  （WorkerColumn.onDragAdd / PoolDrawer.onDragAdd），内部仍是 mutateAsync +
+ *  try/catch 包一层。 */
 export interface UseWorkerQueueReturn {
+  /** 保留导出但已无外部写点（后端 `/prod/workers` CRUD 未上线，前端暂无消费方）。
+   *  本注释防止 reviewer 误删。 */
   workers: Ref<Worker[]>;
-  workerHeld: Ref<Record<string, WorkOrderCard[]>>;
-  loading: Ref<boolean>;
+  /** 2026-09-30：最近一次写操作错误信息（view 层 el-alert 展示）。
+   *  成功时置 null。 */
   error: Ref<string | null>;
-  /** 2026-09-30：简化为「并发拉 cache 内所有 worker 的 state」单步 —— 不再拉 processes +
-   *  worker-pool（这些已迁出到 useProcessesQuery + useWorkerPoolByProcessQuery）。
-   *  返回 Promise<void> 让 caller 可 await 同步看板。 */
-  loadBoard: (shelfId: string | null) => Promise<void>;
-  /** 2026-09-30：mutation 包装（沿 useMutation mutateAsync 形态），保留
-   *  Promise<boolean> 签名以兼容 view 现有调用点（PoolDrawer.vue onDragAdd / 等）。 */
+  /** POOL → WORKER：把候选池批次分配给工人。
+   *  @param batchId      待移动批次
+   *  @param toWorkerId   目标工人
+   *  @param fromShelfId  **batch 真实所在货架**（不是当前激活货架 —— 候选池跨所有
+   *                     货架，填错后端返 20122 BIZ_BATCH_LOCATION_MISMATCH） */
   moveBatchToWorker: (
-    batch_id: string,
-    to_worker_id: string,
-    shelf_id: string,
-    process_id: string,
+    batchId: string,
+    toWorkerId: string,
+    fromShelfId: string,
   ) => Promise<boolean>;
+  /** WORKER → POOL：把工人持有的批次撤回候选池货架。
+   *  @param toShelfId 目标货架（须映射到 batch 当前工序，否则 20507 / HTTP 422） */
   moveBatchToPool: (
-    batch_id: string,
-    from_worker_id: string,
-    shelf_id: string,
-    next_process_id: string,
+    batchId: string,
+    fromWorkerId: string,
+    toShelfId: string,
   ) => Promise<boolean>;
-  runAutoAllocate: (req: {
-    process_id: string;
-    shelf_id: string;
-    mode: 'COUNT' | 'TIME';
-    fill_ratio: number;
-  }) => Promise<void>;
+  /** 按 process + shelf 范围自动为每个匹配 worker 抢批次数/工时。 */
+  runAutoAllocate: (req: AutoAllocateRequest) => Promise<void>;
 }
 
 export function useWorkerQueue(): UseWorkerQueueReturn {
   const qc = useQueryClient();
+  const error = ref<string | null>(null);
 
-  /** 2026-09-30：3 个 mutation 集中编排 invalidate 链 + ElMessage。
-   *  mutationKey 三层数组；不写 retry（信任 main.ts 全局 mutations.retry: 0）。
-   *  写 mutation onSuccess 失效链：
-   *    - moveBatchToWorker.onSuccess(processId) → invalidateWorkerPoolByProcessQuery(qc, processId) +
-   *      invalidateWorkerPoolCountsQuery(qc)
-   *    - moveBatchToPool.onSuccess(processId) → 同上
-   *    - runAutoAllocate.onSuccess(processId) → 同上（auto allocate 跨 worker 但 items 同样变化） */
-  const assignMutation = useMutation<AssignResultDto, Error, AdminAssignRequest & { process_id: string }>({
-    mutationKey: ['worker-pool', 'assign'],
-    mutationFn: async (req) => assignWorkerPool(req),
-    onSuccess: async (res, vars) => {
-      await invalidateWorkerPoolByProcessQuery(qc, vars.process_id);
-      await invalidateWorkerPoolCountsQuery(qc);
-      ElMessage.success(`已分配批次 ${res.taken.batch_no}`);
+  /** 2026-09-30：写操作完成后集中失效 pool 三域（by-process + counts + state）。
+   *  全部走**前缀**失效：move 的目标工序由 service 从 `batch.current_process_step`
+   * 推导，前端无从得知受影响 processId；auto-allocate 更是跨全部 worker。
+   *  返回 Promise 让 mutation onSuccess await 完整失效链再弹 toast。 */
+  async function invalidatePoolDomains(): Promise<void> {
+    await invalidateWorkerPoolByProcessAll(qc);
+    await invalidateWorkerPoolCountsQuery(qc);
+    await invalidateWorkerStateByWorkerAll(qc);
+  }
+
+  /** 2026-09-30：`POST /prod/pool/move` —— 取代旧 assign + remove 两个端点。
+   *  mutationFn 走 `moveResultSchema.parse()` 守门：MoveResult 的
+   *  current_held / max_held / shelf_id / taken 四字段在 rust 侧都带
+   *  `skip_serializing_if`（条件不满足时整个字段从 JSON 省略），schema 用
+   *  `.nullish()` 兜住；契约漂移立刻抛 ZodError 由 onError 接管。 */
+  const moveMutation = useMutation<MoveResultDto, Error, MoveRequest>({
+    mutationKey: ['worker-pool', 'move'],
+    mutationFn: async (req) => moveResultSchema.parse(await moveBatch(req)),
+    onSuccess: async (res) => {
+      await invalidatePoolDomains();
+      error.value = null;
+      ElMessage.success(
+        res.to_kind === 'WORKER'
+          ? `已分配批次 ${res.taken?.batch_no ?? ''}`.trim()
+          : '已撤回批次至候选池',
+      );
     },
     onError: (e: Error) => {
-      error.value = e.message ?? 'assign failed';
-      ElMessage.error(e.message ?? '分配批次失败');
-    },
-  });
-
-  /** 2026-09-30 review 第 1 轮修复（M-2）：Variables 类型独立声明 —— 移除了
-   *  `WorkerRemoveRequest & { process_id: string }` 这种把 phantom 字段塞进 HTTP body
-   * 的反模式。后端 AdminRemoveRequest 没有 process_id（workerPool.contract.ts:195-202），
-   * 前端借 process_id 仅用于 onSuccess 失效缓存。mutationFn 内只透传 WorkerRemoveRequest
-   * 4 字段；onSuccess 解构读 process_id 用于 invalidate。
-   * 不变量（沿 usePartBatchManual.ts:892 范本）：mutationFn 与 onSuccess 解耦，
-   * mutationKey 三层数组。 */
-  const removeMutation = useMutation<
-    WorkerTakenItemDto,
-    Error,
-    WorkerRemoveRequest & { process_id: string }
-  >({
-    mutationKey: ['worker-pool', 'remove'],
-    mutationFn: async (req) =>
-      // 2026-09-30 review 第 1 轮修复（M-2）：显式 4 字段透传，避免 phantom process_id 混入 body。
-      removeFromWorkerPool({
-        worker_id: req.worker_id,
-        batch_id: req.batch_id,
-        shelf_id: req.shelf_id,
-        next_process_id: req.next_process_id,
-      }),
-    onSuccess: async (_res, vars) => {
-      await invalidateWorkerPoolByProcessQuery(qc, vars.process_id);
-      await invalidateWorkerPoolCountsQuery(qc);
-    },
-    onError: (e: Error) => {
-      error.value = e.message ?? 'return failed';
-      ElMessage.error(e.message ?? '撤回批次失败');
+      error.value = e.message ?? '移动批次失败';
+      ElMessage.error(e.message ?? '移动批次失败');
     },
   });
 
   const autoAllocateMutation = useMutation<AutoAllocateResultDto, Error, AutoAllocateRequest>({
     mutationKey: ['worker-pool', 'auto-allocate'],
     mutationFn: async (req) => autoAllocate(req),
-    onSuccess: async (_res, vars) => {
-      await invalidateWorkerPoolByProcessQuery(qc, vars.process_id);
-      await invalidateWorkerPoolCountsQuery(qc);
+    onSuccess: async () => {
+      await invalidatePoolDomains();
+      error.value = null;
     },
     onError: (e: Error) => {
-      error.value = e.message ?? 'auto allocate failed';
+      error.value = e.message ?? '自动分配失败';
       ElMessage.error(e.message ?? '自动分配失败');
     },
   });
 
-  /** 2026-09-30：moveBatchToWorker mutation 包装 —— 保留 Promise<boolean> 签名
-   *  以兼容 view 现有调用点（WorkerColumn onDragAdd → 调用处）。 */
+  /** POOL → WORKER mutation 包装 —— 保留 Promise<boolean> 签名以兼容
+   *  WorkerColumn.onDragAdd 调用点。`from.shelf_id` 必填（空串直接早退，避免
+   *  发出必被后端 20122 拒的请求）。 */
   async function moveBatchToWorker(
-    batch_id: string,
-    to_worker_id: string,
-    shelf_id: string,
-    process_id: string,
+    batchId: string,
+    toWorkerId: string,
+    fromShelfId: string,
   ): Promise<boolean> {
+    if (!fromShelfId) {
+      ElMessage.warning('批次货架信息缺失，无法分配');
+      return false;
+    }
     try {
-      await assignMutation.mutateAsync({
-        worker_id: to_worker_id,
-        batch_id,
-        shelf_id: String(shelf_id),
-        process_id: String(process_id),
+      await moveMutation.mutateAsync({
+        batch_id: batchId,
+        from: { kind: 'POOL', shelf_id: fromShelfId },
+        to: { kind: 'WORKER', worker_id: toWorkerId },
       });
       return true;
     } catch {
@@ -191,20 +154,22 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
     }
   }
 
-  /** 2026-09-30：moveBatchToPool mutation 包装 —— 保留 Promise<boolean> 签名。 */
+  /** WORKER → POOL mutation 包装 —— 保留 Promise<boolean> 签名以兼容
+   *  PoolDrawer.onDragAdd 调用点。 */
   async function moveBatchToPool(
-    batch_id: string,
-    from_worker_id: string,
-    shelf_id: string,
-    next_process_id: string,
+    batchId: string,
+    fromWorkerId: string,
+    toShelfId: string,
   ): Promise<boolean> {
+    if (!toShelfId) {
+      ElMessage.warning('请先选择目标货架');
+      return false;
+    }
     try {
-      await removeMutation.mutateAsync({
-        worker_id: from_worker_id,
-        batch_id,
-        shelf_id: String(shelf_id),
-        next_process_id: String(next_process_id),
-        process_id: next_process_id,
+      await moveMutation.mutateAsync({
+        batch_id: batchId,
+        from: { kind: 'WORKER', worker_id: fromWorkerId },
+        to: { kind: 'POOL', shelf_id: toShelfId },
       });
       return true;
     } catch {
@@ -212,81 +177,18 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
     }
   }
 
-  /** 2026-09-30：runAutoAllocate mutation 包装 —— 保留 Promise<void> 签名。 */
-  async function runAutoAllocate(req: {
-    process_id: string;
-    shelf_id: string;
-    mode: 'COUNT' | 'TIME';
-    fill_ratio: number;
-  }): Promise<void> {
+  /** runAutoAllocate mutation 包装 —— 保留 Promise<void> 签名。 */
+  async function runAutoAllocate(req: AutoAllocateRequest): Promise<void> {
     await autoAllocateMutation.mutateAsync(req);
   }
 
-  /** 2026-09-30 简化：loadBoard 不再拉 processes + 各 worker-pool（迁到共享
-   *  useProcessesQuery / useWorkerPoolByProcessQuery）。改为「拉当前 cache 内所有
-   *  inhouse 工序的 worker 的 state」单步 —— WorkerColumn 内 useWorkerStateByWorkerQuery
-   *  拉到的 held_batches 走 cache identity 直接合并；本 loadBoard 仅做 seed 兜底
-   *  （跨 tab 切换时 WorkerColumn 重建后首次激活前的占位视图）。
-   *
-   *  流程：
-   *  1) 从 qc.getQueriesData({ queryKey: qk.workerPoolByProcessPrefix }) 收集 worker_id
-   *  2) 并发 getWorkerState 写 workerHeld
-   *  3) 不抛错（catch 写 error.value）
-   */
-  async function loadBoard(shelfId: string | null): Promise<void> {
-    if (!shelfId || shelfId.length === 0) {
-      // 无激活货架时清空 workerHeld（与原 loadBoard 「跳过二次 GET」语义一致）
-      workerHeld.value = {};
-      return;
-    }
-    loading.value = true;
-    try {
-      const cached = qc.getQueriesData<{
-        workers: Array<{ worker_id: string }>;
-      }>({ queryKey: qk.workerPoolByProcessPrefix });
-      const workerIds = new Set<string>();
-      for (const [, d] of cached) {
-        if (d?.workers) {
-          for (const w of d.workers) workerIds.add(w.worker_id);
-        }
-      }
-      if (workerIds.size === 0) return;
-      const results = await Promise.allSettled(
-        Array.from(workerIds).map(async (wid) => {
-          try {
-            return await getWorkerState({ worker_id: wid, shelf_id: shelfId });
-          } catch {
-            return null;
-          }
-        }),
-      );
-      let i = 0;
-      for (const wid of workerIds) {
-        const r = results[i++];
-        if (r && r.status === 'fulfilled' && r.value) {
-          const state: WorkerStateDto = r.value;
-          workerHeld.value[wid] = (state.held_batches ?? []).map(_heldToCard);
-        }
-      }
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : 'loadBoard failed';
-    } finally {
-      loading.value = false;
-    }
-  }
-
   return {
-    workers: workers as Ref<Worker[]>,
-    workerHeld: workerHeld as Ref<Record<string, WorkOrderCard[]>>,
-    loading: loading as Ref<boolean>,
-    error: error as Ref<string | null>,
-    loadBoard,
+    // 2026-09-30：模块级 workers ref 已无外部写点 / 无消费方，恒为空数组。
+    // 保留字段仅为不破坏潜在未来 callers（后端 /prod/workers CRUD 上线后接入）。
+    workers: ref<Worker[]>([]) as Ref<Worker[]>,
+    error,
     moveBatchToWorker,
     moveBatchToPool,
     runAutoAllocate,
   };
 }
-
-// 2026-09-30：workers ref 保留导出但不再有外部写点（processPools 已下线，
-// workerHeld 来源改为 cache 合并）。本注释防止 reviewer 误删。
-// 2026-09-30 review 第 1 轮修复（M-3）：删 `void computed;` 占位 + 删 `computed` import。

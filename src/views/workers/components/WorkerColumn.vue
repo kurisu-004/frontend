@@ -3,7 +3,13 @@
      自管 query（POSITIVE_INFINITY 缓存 + 写操作 invalidate），同 workerId + shelfId 跨
      tab 共享 cache identity。
      skeleton / empty 兜底：isLoading 时 max_held / current_held 占位「…」，
-     error 时 el-empty description="加载失败"。 -->
+     error 时 el-empty description="加载失败"。
+
+     2026-09-30：拖拽链路对接后端 `POST /prod/pool/move`（取代 assign/remove 两端点）。
+     - onStart 记 worker 源（PoolDrawer @add 消费）；onAdd 记/取候选池源时改为读
+       `consumePoolSource` 返回的 { processId, shelfId }，其中 **shelfId 必须是
+       batch 真实所在货架**（不能拿当前激活货架凑，候选池跨货架 → 后端 20122）。
+     - moveBatchToWorker 去掉 process_id 形参（后端自推目标工序）。 -->
 <template>
   <el-card class="worker-column" shadow="never">
     <template #header>
@@ -49,8 +55,8 @@ import type { Worker, WorkOrderCard as Card } from '@/types/workerPool';
 import { useWorkerStateByWorkerQuery } from '@/composables/queries/useWorkerStateByWorkerQuery';
 import { heldToCard } from '@/views/workers/composables/poolItemToCard';
 import {
-  consumeProcessSource,
-  recordSource,
+  consumePoolSource,
+  recordWorkerSource,
   type DraggableStartEvent,
 } from '@/utils/dndSourceTracker';
 import WorkOrderCard from './WorkOrderCard.vue';
@@ -139,23 +145,23 @@ useDraggable(containerRef, writableBatches, {
   onAdd: onDragAdd,
 });
 
-// 2026-08-26：page provide 必注入；非空断言（无注入则 dev 立即报错，prod 抛运行时错误）。
+// 2026-09-30：moveBatchToWorker 签名收窄为 (batch_id, to_worker_id, from_shelf_id)
+// —— 不再有 process_id。后端把 `admin/worker-pool/assign` 合并进了通用移动端点
+// `POST /prod/pool/move`，入参是 `MoveRequest { batch_id, from, to, note? }`，
+// 目标工序由 service 从 `batch.current_process_step.process_id` 自推
+// （worker-pool.md:146-147）。inject 缺省用 noop 兜底（provider 缺失时不炸，
+// 与本文件既有 shelfId 注入风格一致）。
 const moveBatchToWorker =
   inject<
-    (
-      batch_id: string,
-      to_worker_id: string,
-      shelf_id: string,
-      process_id: string,
-    ) => Promise<boolean>
-  >('moveBatchToWorker')!;
+    (batch_id: string, to_worker_id: string, from_shelf_id: string) => Promise<boolean>
+  >('moveBatchToWorker', async () => false);
 
+/** 2026-08-26：记录源 worker ID（拖出本工人列的 worker.id），供 PoolDrawer 的
+ *  @add 构造 `from: {kind:'WORKER', worker_id}`。 */
 function onDragStart(evt: DraggableStartEvent) {
-  // 2026-08-26：记录源工序 ID（拖出 PoolDrawer 的 process_id）。
-  // dataset 里的 kebab-case 自动转 camelCase：data-process-id → processId。
   const batchId = evt.item.dataset.batchId;
-  const fromProcessId = evt.from.dataset.processId;
-  if (batchId && fromProcessId) recordSource(batchId, fromProcessId);
+  const fromWorkerId = evt.from.dataset.workerId;
+  if (batchId && fromWorkerId) recordWorkerSource(batchId, fromWorkerId);
 }
 
 /** 2026-08-27 迁移：vue-draggable-plus @add 事件 payload = Sortable.js 原生，
@@ -163,9 +169,13 @@ function onDragStart(evt: DraggableStartEvent) {
 async function onDragAdd(evt: DraggableStartEvent) {
   const batchId = evt.item.dataset.batchId;
   if (!batchId) return;
-  const fromProcessId = consumeProcessSource(batchId);
-  if (!fromProcessId) return;
-  await moveBatchToWorker(batchId, props.worker.id, shelfId.value, fromProcessId);
+  const src = consumePoolSource(batchId);
+  if (!src) return;
+  // 2026-09-30：`from.shelf_id` 取候选池卡片自带的**真实货架**（src.shelfId，来自
+  // PoolDrawer 渲染的 :data-shelf-id），不是当前激活货架 —— 候选池跨所有货架，
+  // 两者可能不一致；填错后端返 20122 BIZ_BATCH_LOCATION_MISMATCH（HTTP 409）。
+  // src.processId 仅用于日志 / 定位，不再作为请求参数。
+  await moveBatchToWorker(batchId, props.worker.id, src.shelfId);
 }
 </script>
 

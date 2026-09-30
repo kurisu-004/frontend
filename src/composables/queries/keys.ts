@@ -103,51 +103,54 @@ export const qk = {
    *  跨域失效（usePendingDispatch.ts 集中编排）。 */
   pendingBatchesPrefix: ['pending-batches'] as const,
   // ============================================================
-  // 2026-09-30 新增：worker-pool 域 queryKey 工厂 —— 生产队列 Tab 懒加载 +
-  // 数据层 TanStack Query 化（CLAUDE.md 2026-09-30 硬约束）的共享基础数据层。
+  // 2026-09-30 新增：pool 域 queryKey 工厂（后端 worker-pool → pool 路径收敛后
+  // 前端同步改名）—— 生产队列 Tab 懒加载 + 数据层 TanStack Query 化
+  // （CLAUDE.md 2026-09-30 硬约束）的共享基础数据层。
   //
   // 三个 list / state query + 对应 prefix：
   //   - workerPoolCounts：全工序 batch 计数（eager，POSITIVE_INFINITY 缓存），
-  //     tab 标题 (N) 徽标数据源，跨 tab 共享（与 worker-pool per-process 解耦）；
-  //   - workerPoolByProcess：单工序 worker-pool 详情（lazy per consumer），
-  //     与 WorkerPoolTab + PendingPoolCard 共享 cache identity（同 processId
-  //     任意 component 实例命中即用）；
-  //   - workerPoolStateByWorker：单 worker state（workerHeld + max_held），
+  //     tab 标题 (N) 徽标 + 「待下发」Tab 工序卡 badge 数据源，跨 tab 共享；
+  //   - workerPoolByProcess：单工序候选池详情（lazy，仅 tab 首次激活时拉），
+  //     与 WorkerPoolTab 共享 cache identity；
+  //   - workerPoolStateByWorker：单 worker state（held_batches + max_held），
   //     WorkerColumn 自管 query 拉取 + 跨 tab 共享。
   //
   // 失效规则（沿 2026-09-26 基础数据精确失效策略 #3）：
-  //   - assignWorkerPool / removeFromWorkerPool / autoAllocate 三类 mutation
-  //     完成后调 invalidateWorkerPoolByProcessQuery(qc, processId) +
-  //     invalidateWorkerPoolCountsQuery(qc)（useWorkerQueue.ts 集中编排）；
-  //   - dispatch / bulk / auto 三类 mutation 完成后 usePendingDispatch 集中
-  //     失效三域（pendingBatchesPrefix + processesPrefix + partsPrefix） +
-  //     refreshBoard 同步看板。
+  //   - moveBatch / autoAllocate 完成后调 invalidateWorkerPoolByProcessAll(qc) +
+  //     invalidateWorkerPoolCountsQuery(qc) + invalidateWorkerPoolStateAll(qc)
+  //     （useWorkerQueue.ts 集中编排）；
+  //   - dispatch（含 preview 确认后的真正下发）完成后 usePendingDispatch 集中
+  //     失效五域（pendingBatchesPrefix + processesPrefix + partsPrefix +
+  //     workerPoolByProcessPrefix + workerPoolCountsPrefix）。
   //   - 写操作点全集中在 useWorkerQueue / usePendingDispatch，本件 store 外
   //     无其他写入（2026-09-30 grep 确认），失效可由 prefix 一把全刷。
   // ============================================================
 
-  /** 2026-09-30 新增：全工序 batch 计数（eager 拉取，tab 标题徽标数据源）。
-   *  入参 `params` 是 MaybeRefOrGetter<{ shelf_id?: string | null }>，reactive
-   *  变化时 queryKey 自动变 → vue-query 自动 refetch。 */
-  workerPoolCounts: (params: { shelf_id?: string | null } | undefined) =>
-    ['worker-pool', 'counts', params ?? null] as const,
-  /** 2026-09-30 新增：worker-pool counts 域前缀 —— 写 mutation 完成后
-   *  qc.invalidateQueries({ queryKey: qk.workerPoolCountsPrefix }) 一键全失效。 */
+  /** 全工序 batch 计数（eager 拉取，tab 标题徽标 + 待下发工序卡 badge 数据源）。
+   *  2026-09-30：去 params 维度 —— 后端 `GET /prod/pool/counts` 的 handler
+   *  （worker_pool/handler.rs:146-153）只有 `State` + `CurrentUser`，**不接 Query
+   *  extractor**；按 process_id GROUP BY 跨所有货架聚合，没有 shelf 维度。
+   *  故本 queryKey 退化为常量键（与 prefix 同形），不再随 activeShelfId 变化而
+   *  refetch —— 也顺带消除了 WorkerQueueBoard 里 shelfId 的 TDZ 隐患。 */
+  workerPoolCounts: ['worker-pool', 'counts'] as const,
+  /** worker-pool counts 域前缀 —— 写 mutation 完成后
+   *  qc.invalidateQueries({ queryKey: qk.workerPoolCountsPrefix }) 一键全失效。
+   *  2026-09-30：与 `workerPoolCounts` 同值（键已是常量，前缀即自身）。 */
   workerPoolCountsPrefix: ['worker-pool', 'counts'] as const,
-  /** 2026-09-30 新增：单工序 worker-pool 详情（lazy per consumer）。
+  /** 单工序候选池详情（lazy，仅 WorkerPoolTab 首次激活时拉）。
    *  processId 空字符串 → 占位 key（enabled=false 拦挡，queryFn 二次守卫）。 */
   workerPoolByProcess: (processId: string) =>
     ['worker-pool', 'by-process', processId] as const,
-  /** 2026-09-30 新增：worker-pool by-process 域前缀 —— 写 mutation 完成后
+  /** worker-pool by-process 域前缀 —— 写 mutation 完成后
    *  qc.invalidateQueries({ queryKey: qk.workerPoolByProcessPrefix }) 一键全失效
    *  （任意 processId 形态都会命中）。 */
   workerPoolByProcessPrefix: ['worker-pool', 'by-process'] as const,
-  /** 2026-09-30 新增：单 worker state（workerHeld + max_held + current_held）。
+  /** 单 worker state（held_batches + max_held + current_held）。
    *  workerId + shelfId 双键 — WorkerColumn 自管 query 拉取 + 跨 tab 共享。
    *  shelf_id 占位空字符串（enabled=false 闸门挡掉无货架激活场景）。 */
   workerPoolStateByWorker: (workerId: string, shelfId: string) =>
     ['worker-pool', 'state', workerId, shelfId] as const,
-  /** 2026-09-30 新增：worker-pool state 域前缀 —— assignWorkerPool /
-   *  removeFromWorkerPool 完成后调（workerHeld 即时刷新）。 */
+  /** worker-pool state 域前缀 —— `POST /prod/pool/move` 完成后调（POOL↔WORKER
+   *  双向移动都会改变 worker 的 held_batches，故按前缀全刷而非按 worker 精刷）。 */
   workerPoolStatePrefix: ['worker-pool', 'state'] as const,
 } as const;

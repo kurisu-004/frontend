@@ -458,24 +458,31 @@ export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);
 // ============================================================
 // 2026-09-29 新增：待下发批次 schema（生产队列「待下发」Tab 共享基础数据层）。
 //
-// 字段对齐 backend-rust `PendingBatchItem` VO（src/modules/prod/batch/vo/pending_batch.rs），
+// 字段对齐 backend-rust `PendingBatchItem` VO（src/modules/prod/batch/vo.rs），
 // 17 字段全声明（缺字段 Zod 默认 strip 静默丢弃 = 守门失效 —— 沿 M-1 regression guard 同源原则）：
-  //   id (batch_id) / part_id / batch_no (string) / quantity / serial_no / name /
+  //   id (batch_id) / part_id / batch_no / quantity / serial_no / name /
   //   drawing_no / planned_delivery_date / system_delivery_date / customer_name /
   //   parent_customer_name / applicant_name / is_urgent / note / version /
   //   current_process_step_id / process_chain_id。
 //
-// batch_no 后端是 string（与 PoolBatchItemDto 的 number 区分），前端 UI 加 'B' 前缀；
-// 日期字段 nullable；note / customer_name / parent_customer_name / applicant_name /
-// serial_no 全部 nullable（与 HeldBatchItemDto 同形态）。
+// batch_no 后端是 i32（前端 UI 加 'B' 前缀展示）；日期字段 nullable；note /
+// customer_name / parent_customer_name / applicant_name / serial_no 全部 nullable
+// （与 HeldBatchItemDto 同形态）。
+//
+// 2026-09-30 契约校正（对齐 batch/vo.rs 实际 serde 声明）：
+//   - `batch_no`：后端是 `pub batch_no: i32`（**非 String**）。旧 schema 走
+//     union + transform 归一成 string 是基于「contract 注释误标」的误修，害得
+//     `PendingBatchItemDto.batch_no` 被迫声明为 string，与后端真实类型不符。
+//     现直接 `z.number()`，contract 侧同步改回 number。
+//   - `current_process_step_id` / `process_chain_id`：后端是 `i64` +
+//     `serialize_i64`（DB NULL 走 `.unwrap_or(0)` 兜底，见 vo.rs 字段注释），
+//     **永不返 null**，语义为 "0" = 未设。旧 schema 写 `.nullable()` 是错的。
 // ============================================================
 
 export const pendingBatchItemSchema = z.object({
   batch_id: z.string(),
   part_id: z.string(),
-  // 2026-09-29 修复：后端 VO 实为 i32，但前端 contract 注释误标 string；走 union + transform
-  // 归一成 string 守门（沿 2026-09-26 Zod 守门约定 §4，缺字段静默 strip = 校验失效）。
-  batch_no: z.union([z.string(), z.number()]).transform((v) => String(v)),
+  batch_no: z.number(),
   quantity: z.number(),
   serial_no: z.string().nullable(),
   name: z.string(),
@@ -488,8 +495,10 @@ export const pendingBatchItemSchema = z.object({
   is_urgent: z.boolean(),
   note: z.string().nullable(),
   version: z.number(),
-  current_process_step_id: z.string().nullable(),
-  process_chain_id: z.string().nullable(),
+  // "0" 语义 = 未设 step（DB NULL 已被后端 unwrap_or(0) 兜底）
+  current_process_step_id: z.string(),
+  // "0" 语义 = 工单未挂工艺链
+  process_chain_id: z.string(),
 });
 
 export type PendingBatchItemSchema = z.infer<typeof pendingBatchItemSchema>;
@@ -505,74 +514,121 @@ export const pendingBatchListResultSchema = z.object({
 export type PendingBatchListResultSchema = z.infer<typeof pendingBatchListResultSchema>;
 
 // ============================================================
-// 2026-09-29 修复 dispatch 契约漂移：4 个新 schema 守门 dispatch / bulkDispatch / autoDispatch。
+// dispatch / auto-dispatch 契约守门 schema。
 //
-// 历史教训（2026-09-29 explore 报告）：
-//   1. `bulkDispatchBatches` 旧前端 payload `{ batch_ids, shelf_id, next_process_id }`
-//      与 backend-rust `BulkDispatchRequest { targets: [{ batch_id, target_process_id }] }`
-//      完全错位 —— 即便传 `nextProcessId` 也会被后端 422 拒。
-//   2. `dispatchBatch` URL 漂移：前端 `/batches/{id}/dispatch` vs 后端 `/batches/dispatch`
-//      （batch_id 走 body 不走 URL）；payload `shelf_id/next_process_id` vs `target_process_id/note`。
-//   3. `autoDispatchBatches` 响应：前端读 `res.failed` 但 backend `AutoDispatchResult`
-//      实际只有 `{ succeeded, skipped: [{batch_id, reason}] }` —— `res.failed` 为 undefined，
-//      触发 `Cannot read properties of undefined (reading 'length')`。
+// 2026-09-30 重写（后端 batch 域重构，见
+// backend-rust/src/modules/prod/batch/{mod.rs,dto.rs,vo.rs,service.rs} 与
+// docs/api/production/batches.md）：
+//   1. **dispatch 统一 bulk-only**：请求 `{targets: [{batch_id, target_process_id}], note?}`，
+//      单条下发即 `targets.length == 1`；旧 `DispatchRequest { batch_id, target_process_id }`
+//      单体形态已删。
+//   2. **bulk-dispatch 端点删除**（router 层不再挂载 ⇒ 404）：批量下发复用
+//      dispatch 的 targets 数组。故 `bulkDispatchRequestSchema` /
+//      `bulkDispatchResultSchema` 一并删除。
+//   3. **dispatch 出参改列表形态**：`DispatchResult { succeeded[], failed[] }`
+//      （旧前端 schema 描述的是单个 `DispatchSuccessItem`，与真实响应错位）。
+//      `failed` 当前恒空（任一失败 → service 抛 AppError 全回滚），且 rust 侧
+//      带 `skip_serializing_if = "Vec::is_empty"` ⇒ 字段会被**整个省略**，
+//      故 schema 用 `.default([])` 兜底。
+//   4. **auto-dispatch 改为只读 preview**：出参由旧 `{succeeded, skipped}` 改为
+//      `{items: [AutoDispatchItem]}`，不再写库。`AutoDispatchItem` 9 字段中
+//      `process_chain_id` / `first_process_id` / `first_shelf_id` 走
+//      `serialize_i64_opt`（None → JSON null），`first_process_code` /
+//      `first_process_name` 是非 Option String（后端 `unwrap_or_default()` 兜空串，
+//      见 service.rs:289-290 / 310），`skip_reason` 非 Option 但可为空串。
 //
-// 字段对齐 backend-rust `src/modules/prod/batch/vo.rs:88-119`（DispatchResult 5 字段、
-// BulkDispatchResult 2 字段、AutoDispatchResult 2 字段 + DispatchFailureItem /
-// AutoDispatchSkippedItem 形态）。
-//
-// 注：DispatchFailureItem（{ batch_id, code, message }）与 AutoDispatchSkippedItem
-// （{ batch_id, reason }）形态不同 —— 前者是业务码 + 抛出，后者是字符串 reason +
-// soft-skip。bulk-dispatch 失败数组在事务回滚模式下恒空（auto-dispatch.md:124），
-// 但保留 schema 以防 backend 后续改为 partial commit。
+// 历史教训（2026-09-29 首轮漂移）：旧前端读 `res.failed.length` 抛
+// `Cannot read properties of undefined (reading 'length')`，根因即「字段漂移 +
+// 未守门」。本次所有形态变更都同步更新 schema 并补 spec 用例。
 // ============================================================
 
-/** `POST /api/v2/prod/batches/dispatch` 出参（rust DispatchResult）。
- *  5 字段：batch_id / current_process_step_id（Option<i64>，dispatch 路径不解析 step →
- *  null）/ target_process_id / shelf_id / version。 */
-export const dispatchResultSchema = z.object({
+/** `POST /api/v2/prod/batches/dispatch` 请求（rust DispatchRequest）。
+ *  targets 至少 1 条（空数组 → 40001 VALIDATION_ERROR / HTTP 422）。 */
+export const dispatchRequestSchema = z.object({
+  targets: z
+    .array(
+      z.object({
+        batch_id: z.string(),
+        target_process_id: z.string(),
+      }),
+    )
+    .min(1),
+  note: z.string().optional(),
+});
+
+export type DispatchRequestSchema = z.infer<typeof dispatchRequestSchema>;
+
+/** `DispatchResult.succeeded[]` 单条（rust DispatchSuccessItem，vo.rs）。 */
+export const dispatchSuccessItemSchema = z.object({
   batch_id: z.string(),
+  /** Option<i64>（dispatch 路径不解析 step → None → JSON null） */
   current_process_step_id: z.string().nullable(),
   target_process_id: z.string(),
+  /** service 按 target_process_id 在 t_shelf_process 解析出的货架（sort_order ASC LIMIT 1） */
   shelf_id: z.string(),
   version: z.number(),
 });
 
+export type DispatchSuccessItemSchema = z.infer<typeof dispatchSuccessItemSchema>;
+
+/** `DispatchResult.failed[]` 单条（rust DispatchFailureItem）。
+ *  当前实现「任一失败 → 全回滚」，该数组恒空（vo.rs 注释：预留 partial commit
+ *  未来扩展），schema 保留以防后端启用 partial commit。 */
+export const dispatchFailureItemSchema = z.object({
+  batch_id: z.string(),
+  code: z.number(),
+  message: z.string(),
+});
+
+export type DispatchFailureItemSchema = z.infer<typeof dispatchFailureItemSchema>;
+
+/** `POST /api/v2/prod/batches/dispatch` 出参（rust DispatchResult）。
+ *  `failed` 用 `.default([])`：rust 侧 `skip_serializing_if = "Vec::is_empty"`
+ *  会把空数组整个从 JSON 中省略。 */
+export const dispatchResultSchema = z.object({
+  /** 成功下发的 batch 列表（顺序与 req.targets 一致） */
+  succeeded: z.array(dispatchSuccessItemSchema),
+  failed: z.array(dispatchFailureItemSchema).default([]),
+});
+
 export type DispatchResultSchema = z.infer<typeof dispatchResultSchema>;
 
-/** `POST /api/v2/prod/batches/bulk-dispatch` 请求（rust BulkDispatchRequest）。
- *  targets 数组元素至少 1 条（空数组 → 40001，bulk-dispatch.md:124）。 */
-export const bulkDispatchRequestSchema = z.object({
-  targets: z.array(
-    z.object({
-      batch_id: z.string(),
-      target_process_id: z.string(),
-    }),
-  ),
+/** `POST /api/v2/prod/batches/auto-dispatch` 请求（rust AutoDispatchRequest）。
+ *  后端是 `Option<Vec<i64>>` + `deserialize_i64_vec_opt`：缺省 / null / 空数组
+ *  三种形态都返 40001，故 schema 锁死非空。 */
+export const autoDispatchRequestSchema = z.object({
+  batch_ids: z.array(z.string()).min(1),
 });
 
-export type BulkDispatchRequestSchema = z.infer<typeof bulkDispatchRequestSchema>;
+export type AutoDispatchRequestSchema = z.infer<typeof autoDispatchRequestSchema>;
 
-/** `POST /api/v2/prod/batches/bulk-dispatch` 出参（rust BulkDispatchResult）。
- *  succeeded / failed 分别记录成功与失败件；当前实现「任一失败 → 全回滚」，failed
- *  数组恒空 —— 但 schema 保留以防 backend 后续改为 partial commit。 */
-export const bulkDispatchResultSchema = z.object({
-  succeeded: z.array(dispatchResultSchema),
-  failed: z.array(
-    z.object({ batch_id: z.string(), code: z.number(), message: z.string() }),
-  ),
+/** `AutoDispatchResult.items[]` 单条（rust AutoDispatchItem，vo.rs）。 */
+export const autoDispatchItemSchema = z.object({
+  batch_id: z.string(),
+  part_id: z.string(),
+  /** Option<i64>：skip_reason = NO_PROCESS_CHAIN 时为 null */
+  process_chain_id: z.string().nullable(),
+  /** Option<i64>：skip_reason = NO_PROCESS_CHAIN / NO_PROCESS_STEP 时为 null；
+   *  NO_SHELF 时仍 Some（首道工序存在但未映射货架） */
+  first_process_id: z.string().nullable(),
+  /** 非 Option String：取不到时后端 `unwrap_or_default()` 兜空串 */
+  first_process_code: z.string(),
+  /** 非 Option String：同上 */
+  first_process_name: z.string(),
+  /** Option<i64>：skip_reason 非 null 时通常为 null */
+  first_shelf_id: z.string().nullable(),
+  /** NOT_FOUND / NO_PROCESS_CHAIN / NO_PROCESS_STEP / NO_SHELF 之一；
+   *  null = 可下发。中文文案映射见 api/pendingBatches.ts::AUTO_DISPATCH_SKIP_REASON_LABELS */
+  skip_reason: z.string().nullable(),
 });
 
-export type BulkDispatchResultSchema = z.infer<typeof bulkDispatchResultSchema>;
+export type AutoDispatchItemSchema = z.infer<typeof autoDispatchItemSchema>;
 
 /** `POST /api/v2/prod/batches/auto-dispatch` 出参（rust AutoDispatchResult）。
- *  succeeded / skipped —— 跳过不影响事务，reason 字符串区分 'NO_PROCESS_CHAIN' /
- *  'NO_PROCESS_STEP'（auto-dispatch.md:156-161）。旧前端读 `res.failed.length` 抛
- *  `Cannot read properties of undefined (reading 'length')`，根因即「field 漂移
- *  未守门」。 */
+ *  **只读预览**：不写库、不发 WS。`items` 按 req.batch_ids 入参顺序稳定排序。
+ *  可下发项 = `skip_reason === null` 且 `first_process_id !== null`。 */
 export const autoDispatchResultSchema = z.object({
-  succeeded: z.array(dispatchResultSchema),
-  skipped: z.array(z.object({ batch_id: z.string(), reason: z.string() })),
+  items: z.array(autoDispatchItemSchema),
 });
 
 export type AutoDispatchResultSchema = z.infer<typeof autoDispatchResultSchema>;
@@ -595,10 +651,9 @@ export type AutoDispatchResultSchema = z.infer<typeof autoDispatchResultSchema>;
 //     （held 状态下 batch 已在 worker 手中，shelf 字段语义退化）
 //   - 没有 batch_no 类型差异（held 用 number，与 PoolBatchItemDto 同形态）
 //
-// 数据流：`GET /api/v2/prod/worker-pool/state?worker_id=&shelf_id=` 响应中
-// WorkerStateDto.held_batches 元素。本 schema 是 defensive parse 备用，当前
-// queryFn 层未挂 zod 解析（held 数据流通过 useWorkerQueue 适配）；后续如需
-// 在 api 边界挂 zod，可直接套用本 schema。
+// 数据流：`GET /api/v2/prod/pool/state?worker_id=&shelf_id=` 响应中
+// WorkerPoolState.held_batches 元素。本 schema 由 `workerStateSchema.held_batches`
+// 消费（useWorkerStateByWorkerQuery 挂 zod 解析）。
 // ============================================================
 export const heldBatchItemSchema = z.object({
   batch_id: z.string(),
@@ -647,10 +702,9 @@ export type HeldBatchItemSchema = z.infer<typeof heldBatchItemSchema>;
 // 严格对齐）。
 // ============================================================
 
-/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/{process_id}` 内嵌的工人
- *  简短记录。4 字段全声明：worker_id / name / work_type_id / work_type_code。
- *  work_type_id 是雪花 ID string；work_type_code 是人类可读 code（如 'CNC'）。
- *  后端 WorkerBrief 结构。 */
+/** 2026-09-30 新增：`GET /api/v2/prod/pool/{process_id}` 内嵌的工人
+ *  简短记录（rust WorkerBrief，vo/worker_pool.rs）。4 字段全声明：
+ *  worker_id / name / work_type_id / work_type_code。 */
 export const workerBriefSchema = z.object({
   worker_id: z.string(),
   name: z.string(),
@@ -660,10 +714,10 @@ export const workerBriefSchema = z.object({
 
 export type WorkerBriefSchema = z.infer<typeof workerBriefSchema>;
 
-/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/{process_id}` 内嵌的工种
- *  + max_held 记录。4 字段：work_type_id / work_type_code / work_type_name /
- *  max_held_batches（nullable —— 未设置时前端渲染「工种 max_held 未设置」占位，
- *  后端 20904 错误语义对齐）。 */
+/** 2026-09-30 新增：`GET /api/v2/prod/pool/{process_id}` 内嵌的工种
+ *  + max_held 记录（rust WorkTypeMaxHeld）。4 字段：work_type_id / work_type_code /
+ *  work_type_name / max_held_batches（nullable —— 未设置时前端渲染「工种 max_held
+ *  未设置」占位，与后端 20904 BIZ_WORK_TYPE_MAX_HELD_NOT_SET 语义对齐）。 */
 export const workTypeMaxHeldSchema = z.object({
   work_type_id: z.string(),
   work_type_code: z.string(),
@@ -673,23 +727,25 @@ export const workTypeMaxHeldSchema = z.object({
 
 export type WorkTypeMaxHeldSchema = z.infer<typeof workTypeMaxHeldSchema>;
 
-/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/{process_id}` 内嵌的候选批次
- *  （PoolBatchItem，与 backend-rust PoolBatchItem VO 字段对齐 —— 21 字段）。
- *
- *  2026-09-29 review 第 1 轮新增字段：`has_cnc_program` 必填 boolean —— 沿
- *  CLAUDE.md §M-4 strip 陷阱守门，后端漏返该字段 Zod parse 立刻抛错。
+/** 2026-09-30 新增：`GET /api/v2/prod/pool/{process_id}` 内嵌的候选批次
+ *  （rust PoolBatchItem，vo/worker_pool.rs:14-50 —— 20 字段）。
  *
  *  字段含义（沿 backend-rust PoolBatchItem）：
- *    - batch_id / part_id / batch_no(number) / quantity / serial_no / drawing_no /
+ *    - batch_id / part_id / batch_no(i32) / quantity / serial_no / drawing_no /
  *      name / system_delivery_date：基础展示字段；
  *    - customer_name / parent_customer_name / customer_path / applicant_name：
  *      客户 + 申请人；
- *    - location / shelf_id / shelf_code / shelf_name：候选池当前货架；
+ *    - location / shelf_id / shelf_code / shelf_name：候选池当前货架
+ *      （`shelf_id` = t_part_batch.current_holder_id，**POOL → WORKER move 的
+ *      `from.shelf_id` 必须取此值**，候选池跨货架，不能拿用户当前激活货架凑）；
  *    - is_urgent / note / version：业务字段；
- *    - current_process_step_id：当前所在工艺链步骤 ID（nullable，与 PartBatch
- *      同语义）；
- *    - has_cnc_program：是否已上传 CNC 程序（沿 chain 派生，service 层
- *      t_part_file EXISTS 判定）。 */
+ *    - has_cnc_program：是否已上传 CNC 程序（service 层 t_part_file EXISTS 判定）——
+ *      必填 boolean，沿 CLAUDE.md §M-4 strip 陷阱守门。
+ *
+ *  2026-09-30 契约漂移修复：**删 `current_process_step_id`**。后端 `PoolBatchItem`
+ *  没有这个字段，此前前端 contract + schema 都声明了它（required nullable），
+ *  导致 `workerPoolByProcessSchema.parse` **永远失败** → WorkerPoolTab 永久
+ *  「加载失败」、拖拽 pool → worker 链路整体不可用。 */
 export const poolBatchItemSchema = z.object({
   batch_id: z.string(),
   part_id: z.string(),
@@ -709,10 +765,6 @@ export const poolBatchItemSchema = z.object({
   shelf_name: z.string(),
   is_urgent: z.boolean(),
   note: z.string().nullable(),
-  // 2026-09-30 review 第 1 轮修复（M-1）：必填 nullable —— 与 partSchema 同源「缺字段必抛错」
-  // 守门。原先 `.nullable().optional()` 让 strip 模式漏列 / 后端漏返时静默丢字段，违反
-  // 「必填 nullable」契约（workerPool.contract.ts:165）。
-  current_process_step_id: z.string().nullable(),
   // 2026-09-30 必填 boolean —— 与 partSchema.has_cnc_program 同源 regression guard。
   has_cnc_program: z.boolean(),
   version: z.number(),
@@ -720,11 +772,11 @@ export const poolBatchItemSchema = z.object({
 
 export type PoolBatchItemSchema = z.infer<typeof poolBatchItemSchema>;
 
-/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/{process_id}` 顶层出参
- *  （ProcessPoolDetail，与 backend-rust ProcessPoolDetail VO 字段对齐）。
- *  6 顶层字段 + total：process_id / process_code / process_name / workers[] /
- *  work_types[] / items[]。workers / work_types / items 三个数组必须全字段
- *  声明（M-1 strip 陷阱 —— 后端漏返任何数组字段会让整个 UI 退化为空）。 */
+/** 2026-09-30 新增：`GET /api/v2/prod/pool/{process_id}` 顶层出参
+ *  （rust ProcessPoolDetail，vo/worker_pool.rs:72-84）。6 顶层字段 + total：
+ *  process_id / process_code / process_name / workers[] / work_types[] / items[]。
+ *  workers / work_types / items 三个数组必须全字段声明（M-1 strip 陷阱 —— 后端漏返
+ *  任何数组字段会让整个 UI 退化为空）。 */
 export const workerPoolByProcessSchema = z.object({
   process_id: z.string(),
   process_code: z.string(),
@@ -737,13 +789,18 @@ export const workerPoolByProcessSchema = z.object({
 
 export type WorkerPoolByProcessSchema = z.infer<typeof workerPoolByProcessSchema>;
 
-/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/counts` 顶层出参
- *  （WorkerPoolCountsOut，与 backend-rust WorkerPoolCountsOut VO 字段对齐）。
- *  2 字段：counts[] + shelf_id。counts 元素（ProcessBatchCount）含 process_id /
- *  process_code / process_name / count。count 是 integer（仓库池中本次工序的
- *  候选 batch 总数）。 */
+/** 2026-09-30 新增：`GET /api/v2/prod/pool/counts` 顶层出参
+ *  （rust WorkerPoolCountsOut，worker_pool/dto.rs —— **只有 2 字段**）。
+ *  counts 元素（ProcessBatchCount）含 process_id / process_code / process_name /
+ *  count；total = counts 求和。含 0 候选批次的工序不出现在 counts 中
+ *  （SQL GROUP BY 不输出 0 行）。
+ *
+ *  2026-09-30 契约漂移修复：**删 `shelf_id`**。后端 `pool_counts` handler
+ *  （handler.rs:146-153）只有 `State` + `CurrentUser`，不接 Query extractor；
+ *  `WorkerPoolCountsOut` 也没有 shelf_id 字段。此前 schema 声明
+ *  `shelf_id: z.string().nullable()` 必填，导致 `workerPoolCountsSchema.parse`
+ *  **永远失败** → 生产队列 tab 徽标恒 0、「待下发」工序卡 badge 恒空。 */
 export const workerPoolCountsSchema = z.object({
-  shelf_id: z.string().nullable(),
   counts: z.array(
     z.object({
       process_id: z.string(),
@@ -757,18 +814,103 @@ export const workerPoolCountsSchema = z.object({
 
 export type WorkerPoolCountsSchema = z.infer<typeof workerPoolCountsSchema>;
 
-/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/state?worker_id=&shelf_id=`
- *  顶层出参（WorkerPoolState，与 backend-rust WorkerPoolState VO 字段对齐）。
- *  8 字段：worker_id / worker_name / work_type_code / max_held / current_held /
+/** `TakenItem`（rust worker_pool/model.rs:13-30）—— 既是 `RefillResult.taken[]`
+ *  元素，也是 `MoveResult.taken`（仅 POOL→WORKER 时填）元素。
+ *  声明在 refillResultSchema / moveResultSchema 之前（z.array(takenItemSchema)
+ *  在模块求值期就要取到该 const，提前声明避免 TDZ）。 */
+export const takenItemSchema = z.object({
+  batch_id: z.string(),
+  part_id: z.string(),
+  batch_no: z.number(),
+  quantity: z.number(),
+  serial_no: z.string().nullable(),
+  drawing_no: z.string(),
+  system_delivery_date: z.string().nullable(),
+  planned_delivery_date: z.string().nullable(),
+  is_urgent: z.boolean(),
+  version: z.number(),
+  // 2026-09-29 后端新增（model.rs:26-29）；serde default 兜底 false。
+  has_cnc_program: z.boolean(),
+});
+
+export type TakenItemSchema = z.infer<typeof takenItemSchema>;
+
+/** 2026-09-30 新增：`POST /api/v2/prod/pool/refill` 出参
+ *  （rust RefillResult，worker_pool/model.rs:101-107）。 */
+export const refillResultSchema = z.object({
+  worker_id: z.string(),
+  shelf_id: z.string(),
+  taken: z.array(takenItemSchema),
+  pool_empty: z.boolean(),
+});
+
+export type RefillResultSchema = z.infer<typeof refillResultSchema>;
+
+/** `POST /api/v2/prod/pool/move` 请求（rust MoveRequest）—— 出入参守门。
+ *  `from` / `to` 是 tagged enum：`{"kind":"POOL","shelf_id"}` /
+ *  `{"kind":"WORKER","worker_id"}`。
+ *
+ *  2026-09-30：旧 `assign`（POOL→WORKER 单边，`{worker_id,batch_id,shelf_id,process_id?}`）
+ *  与 `remove`（WORKER→POOL 单边，`{worker_id,batch_id,shelf_id,next_process_id}`）
+ *  已合并为通用移动端点。`process_id` / `next_process_id` **不再是入参** ——
+ *  service 从 `batch.current_process_step.process_id` 自行推导。 */
+export const moveRequestSchema = z.object({
+  batch_id: z.string(),
+  from: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('POOL'), shelf_id: z.string() }),
+    z.object({ kind: z.literal('WORKER'), worker_id: z.string() }),
+  ]),
+  to: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('POOL'), shelf_id: z.string() }),
+    z.object({ kind: z.literal('WORKER'), worker_id: z.string() }),
+  ]),
+  note: z.string().optional(),
+});
+
+export type MoveRequestSchema = z.infer<typeof moveRequestSchema>;
+
+/** `POST /api/v2/prod/pool/move` 出参（rust MoveResult，vo/worker_pool.rs:126-152）。
+ *  取代旧 `AssignResult`（2026-09-14 引入，仅 POOL→WORKER）。
+ *
+ *  `current_held` / `max_held` / `shelf_id` / `taken` 四个字段在 rust 侧全部带
+ *  `#[serde(skip_serializing_if = "Option::is_none")]` ⇒ 条件不满足时**整个字段
+ *  从 JSON 中省略**（不是 null）。故 schema 用 `.nullish()`（同时接受
+ *  undefined 与 null），不是 `.nullable()`。 */
+export const moveResultSchema = z.object({
+  batch_id: z.string(),
+  from_kind: z.enum(['POOL', 'WORKER']),
+  to_kind: z.enum(['POOL', 'WORKER']),
+  /** 移动后 batch.current_holder_id（POOL 时=shelf_id；WORKER 时=worker_id） */
+  new_holder_id: z.string(),
+  /** 移动后 batch.location（"PRODUCTION_SHELF" / "WORKER"） */
+  new_location: z.string(),
+  version: z.number(),
+  /** 仅 to_kind=WORKER 时填：目标 worker 移动后持有数（含本批次） */
+  current_held: z.number().nullish(),
+  /** 仅 to_kind=WORKER 时填：目标 worker 工种的 max_held_batches */
+  max_held: z.number().nullish(),
+  /** 仅 to_kind=POOL 时填：候选池货架 id */
+  shelf_id: z.string().nullish(),
+  /** 仅 POOL→WORKER 移动时填：从 pool 取出的 batch 详情 */
+  taken: takenItemSchema.nullish(),
+});
+
+export type MoveResultSchema = z.infer<typeof moveResultSchema>;
+
+/** 2026-09-30 新增：`GET /api/v2/prod/pool/state?worker_id=&shelf_id=`
+ *  顶层出参（rust WorkerPoolState，worker_pool/model.rs:118-133 —— 8 字段）：
+ *  worker_id / worker_name / work_type_code / max_held / current_held /
  *  capacity_remaining / pool_count_by_process[] / held_batches[]。
- *  held_batches 元素用 heldBatchItemSchema 复用（2026-09-29 已存在，与
- *  backend-rust HeldBatchItem 严格对齐）。
- *  work_type_code nullable —— 无工种时退化为空工种（worker 是 INACTIVE / 未指派
- *  工种的状态）。 */
+ *  held_batches 元素用 heldBatchItemSchema 复用（与 backend-rust HeldBatchItem
+ *  严格对齐）。
+ *
+ *  2026-09-30 契约漂移修复：`work_type_code` 由 `.nullable()` 收紧为 `z.string()`
+ *  —— 后端是 `pub work_type_code: String`（非 Option），无工种时退化为**空串**而非
+ *  null（见 worker-pool.md:52「前端应展示『工种未设置』占位」）。 */
 export const workerStateSchema = z.object({
   worker_id: z.string(),
   worker_name: z.string(),
-  work_type_code: z.string().nullable(),
+  work_type_code: z.string(),
   max_held: z.number(),
   current_held: z.number(),
   capacity_remaining: z.number(),

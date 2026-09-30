@@ -51,8 +51,7 @@ vi.mock('@/api/workerPool', () => ({
   getWorkerPoolCounts: vi.fn(),
   getWorkerState: vi.fn(),
   refillWorkerPool: vi.fn(),
-  assignWorkerPool: vi.fn(),
-  removeFromWorkerPool: vi.fn(),
+  moveBatch: vi.fn(),
   autoAllocate: vi.fn(),
 }));
 

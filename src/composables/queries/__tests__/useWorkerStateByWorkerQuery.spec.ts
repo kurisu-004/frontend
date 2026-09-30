@@ -3,8 +3,17 @@
 // 2026-09-30 新增：useWorkerStateByWorkerQuery 双 reactive params + enabled 闸门 +
 // queryKey + 失效守门。
 //
+// 2026-09-30 契约漂移修复（后端 worker-pool → pool 收敛）：
+//   - URL `/prod/worker-pool/state` → `/prod/pool/state`；
+//   - `workerStateSchema.work_type_code` 由 `.nullable()` 收紧为 `z.string()` ——
+//     后端 `WorkerPoolState.work_type_code` 是非 Option String（model.rs:122），
+//     无工种时退化为**空串**而非 null；
+//   - 删 `invalidateWorkerStateByWorkerQuery(qc, wid, sid)` 精刷版 —— move 端点改造后
+//     一次写操作可同时改多个 worker 的 held_batches（auto-allocate），唯一正确策略
+//     是 `invalidateWorkerStateByWorkerAll` 前缀全失效。
+//
 // 覆盖：
-//   - S1-S4：workerStateSchema 解析后端真契约 + work_type_code nullable + 缺
+//   - S1-S4：workerStateSchema 解析后端真契约 + work_type_code 空串 + 缺
 //     held_batches 抛 ZodError + 缺 max_held 抛 ZodError。
 //   - T1：传静态 string → getWorkerState 收到 worker_id + shelf_id。
 //   - T2：传 Ref（workerId）+ Ref（shelfId）→ 改任一 ref.value 后调 refetch，
@@ -37,7 +46,7 @@ const realGetWorkerState = vi.fn<
   (params: { worker_id: string; shelf_id: string }) => Promise<{
     worker_id: string;
     worker_name: string;
-    work_type_code: string | null;
+    work_type_code: string;
     max_held: number;
     current_held: number;
     capacity_remaining: number;
@@ -81,15 +90,13 @@ vi.mock('@/api/workerPool', () => ({
   getWorkerPoolCounts: vi.fn(),
   getWorkerPoolByProcess: vi.fn(),
   refillWorkerPool: vi.fn(),
-  assignWorkerPool: vi.fn(),
-  removeFromWorkerPool: vi.fn(),
+  moveBatch: vi.fn(),
   autoAllocate: vi.fn(),
 }));
 
 import { workerStateSchema } from '../schemas';
 import {
   invalidateWorkerStateByWorkerAll,
-  invalidateWorkerStateByWorkerQuery,
   useWorkerStateByWorkerQuery,
 } from '../useWorkerStateByWorkerQuery';
 
@@ -126,9 +133,13 @@ describe('workerStateSchema（2026-09-30 新增）', () => {
     expect(parsed.held_batches).toHaveLength(0);
   });
 
-  it('S2：work_type_code = null 是合法值（无工种场景）', () => {
-    const parsed = workerStateSchema.parse(makeBaseState({ work_type_code: null }));
-    expect(parsed.work_type_code).toBeNull();
+  it('S2：work_type_code = 空串是合法值（无工种场景）', () => {
+    // 2026-09-30 契约校正：后端 `pub work_type_code: String`（非 Option），
+    // 无工种时退化为空串（worker-pool.md:52「前端应展示『工种未设置』占位」），
+    // **不是 null**。修复前 schema 写 `.nullable()` 恰好也接受 null，是「恰好对」
+    // 而非「按契约对」—— 本用例锁死非 nullable 语义。
+    const parsed = workerStateSchema.parse(makeBaseState({ work_type_code: '' }));
+    expect(parsed.work_type_code).toBe('');
   });
 
   it('S3：缺 held_batches → 抛 ZodError（M-1 guard）', () => {
@@ -291,7 +302,7 @@ describe('useWorkerStateByWorkerQuery — 双 reactive params + enabled 闸门 +
     scope.stop();
   });
 
-  it('T6：invalidateWorkerStateByWorkerQuery(qc, wid, sid) → 该 (wid, sid) 的 query 失效并重拉', async () => {
+  it('T6：invalidateWorkerStateByWorkerAll(qc) → 整个 state 域失效并重拉', async () => {
     const scope = effectScope();
     let q: ReturnType<typeof useWorkerStateByWorkerQuery> | undefined;
     scope.run(() => {
@@ -305,18 +316,14 @@ describe('useWorkerStateByWorkerQuery — 双 reactive params + enabled 闸门 +
     await q!.refetch();
     const callsBefore = realGetWorkerState.mock.calls.length;
 
-    await invalidateWorkerStateByWorkerQuery(
-      testQueryClient,
-      '1900000000001',
-      '5000000000001',
-    );
+    await invalidateWorkerStateByWorkerAll(testQueryClient);
     await q!.refetch();
 
     expect(realGetWorkerState.mock.calls.length).toBeGreaterThan(callsBefore);
     scope.stop();
   });
 
-  it('T7：invalidateWorkerStateByWorkerAll(qc) → 整个 state 域失效', async () => {
+  it('T7：invalidateWorkerStateByWorkerAll 走 qk.workerPoolStatePrefix（共享失效源）', async () => {
     const spy = vi.spyOn(testQueryClient, 'invalidateQueries');
     await invalidateWorkerStateByWorkerAll(testQueryClient);
     expect(spy).toHaveBeenCalledWith({
