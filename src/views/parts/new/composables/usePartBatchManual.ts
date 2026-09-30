@@ -153,7 +153,9 @@ export interface UsePartBatchManualReturn {
   customerTree: ComputedRef<
     Array<{ id: string; name: string; children: Array<{ id: string; name: string }> }>
   >;
-  applicantCandidates: Ref<Applicant[]>;
+  // 2026-09-30 hotfix 第 1 轮：applicantCandidates 从返回对象移除，避免
+  // PartBatchManualTab.vue 触发「extraneous non-props attribute」告警（v-bind="manual"
+  // 摊开所有键给子组件，但子组件 declareProps 未声明 applicantCandidates）。
   applicantLoading: Ref<boolean>;
   querySearch: (queryString: string, cb: (items: Applicant[]) => void) => void;
   staged: Ref<StagedEntry[]>;
@@ -993,7 +995,9 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
     // 客户树
     customerTree,
     // applicants
-    applicantCandidates: applicantSearch.applicants,
+    // 2026-09-30 hotfix 第 1 轮：applicantCandidates 从返回对象删除（PartBatchManualTab
+    // 未声明该 prop，v-bind 摊开后 Vue 会触发「extraneous non-props attribute」告警）；
+    // UI 层仅消费 applicantLoading / querySearch（PartEntryFormDialog 用）。
     applicantLoading: applicantSearch.loading,
     querySearch: applicantSearch.querySearch,
     // state
