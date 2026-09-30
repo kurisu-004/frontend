@@ -1,15 +1,20 @@
 // 2026-09-29 新增：dashboard「紧急工单 Top 列表」useQuery composable。
 //
 // 数据流（与方案 §2 数据流对齐）：
-//   1. 调 listUnionItems（com 域跨表合并端点）拉 100 件按 planned_delivery_date ASC
+//   1. 调 listUnionItems（com 域跨表合并端点）拉 100 件按 system_delivery_date ASC
 //      排序的非终态工单（PENDING/PROGRAMMING/IN_PROCESS/INSPECTION/READY_TO_SHIP/
 //      OUTSOURCE/REPAIRING 共 7 个状态，覆盖「还在路上」的工件）；
-//   2. 客户端再过滤 planned_delivery_date <= today+7，取 top 15（dashboard 顶层
-//      视图消费方）—— 后端不支持 planned_delivery_date_from/_to，但 sort_by +
+//   2. 客户端再过滤 system_delivery_date <= today+7，取 top 15（dashboard 顶层
+//      视图消费方）—— 后端不支持 system_delivery_date_from/_to，但 sort_by +
 //      limit=100 已经能覆盖 7 天窗口内绝大多数件；
 //   3. queryFn 走 partListResultSchema.parse(...) 守门（沿 2026-09-26 约定 #4）；
 //   4. 接 useDashboardInvalidation(qk.dashboardUrgentList) 同套 AFFECTS_DASHBOARD
 //      事件集自动失效（与 dashboardSnapshot 共用事件订阅，无重复订阅）。
+//
+// 2026-09-30 业务方确认：排序字段由 PLANNED_DELIVERY_DATE 切换为
+// SYSTEM_DELIVERY_DATE（PartSortKey 已包含该值，无需扩 union），行内展示也用
+//「系统交期」做默认排序与展示；dashboard「紧急工单」语义从「计划临近」改为
+//「系统交期临近」，与生产实况对齐。
 //
 // 设计要点：
 //   - 入参硬编码（非 reactive params）：dashboard 不改筛选条件，原 partsList 那种
@@ -19,8 +24,7 @@
 //     #3），失效责任完全在 WS 事件侧。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //   - 返回 { items, urgentCount, fetchList }：items = 全量 100 件（让 caller
-//     自管过滤 + slice），urgentCount 派生 = items.filter(is_urgent).length
-//     （KPI 块「紧急工单」tile 复用）。
+//     自管过滤 + slice），urgentCount 派生 = items.filter(is_urgent).length。
 
 import { computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -35,7 +39,10 @@ import { useDashboardInvalidation } from './useDashboardInvalidation';
  *
  * 沿 usePartsListQuery 的 listParts 范本（statuses / sort_by / sort_dir / limit /
  * offset 五字段），但 dashboard 不改筛选条件，所以这里直接给常量 —— 避免 reactive
- * 包装产生无意义的 queryKey 重算。 */
+ * 包装产生无意义的 queryKey 重算。
+ *
+ * 2026-09-30 调整：sort_by 由 PLANNED_DELIVERY_DATE 改为 SYSTEM_DELIVERY_DATE
+ * （PartSortKey 已包含该值，见 src/types/parts.ts:95）。 */
 const URGENT_LIST_PARAMS: UnionListParams = {
   row_type: 'ALL',
   statuses: [
@@ -47,7 +54,7 @@ const URGENT_LIST_PARAMS: UnionListParams = {
     'OUTSOURCE',
     'REPAIRING',
   ],
-  sort_by: 'PLANNED_DELIVERY_DATE',
+  sort_by: 'SYSTEM_DELIVERY_DATE',
   sort_dir: 'ASC',
   limit: 100,
   offset: 0,
@@ -80,7 +87,7 @@ export function useDashboardUrgentList() {
     await query.refetch();
   }
 
-  // 错误桥接（沿 2026-09-26 约定 #9）：useQuery 的 error 不在 setup 抛错，
+  // 错误桥接（沿 2026-09-26 约定 #6）：useQuery 的 error 不在 setup 抛错，
   // 走 watch + ElMessage.error 桥接。
   watch(query.error, (e) => {
     if (e) ElMessage.error(e.message ?? '紧急工单加载失败');

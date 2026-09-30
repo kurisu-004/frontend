@@ -79,6 +79,14 @@ export const qk = {
    *  qc.invalidateQueries({ queryKey: qk.partFilesPrefix }) 失效整个 part-files
    *  域（任意 ownerId 形态都会命中）。 */
   partFilesPrefix: ['part-files'] as const,
+  /** 2026-09-30 新增：零件 owner 维度批次列表 query 键（与 partFilesList 同形命名），
+   *  供 dashboard PartPreviewDialog 通用预览用。listPartBatches(partId) 拉 owner 全
+   *  量子表，按 owner 失效。 */
+  partBatchesList: (partId: string) => ['part-batches', 'list', partId] as const,
+  /** 2026-09-30 新增：part-batches 域前缀 —— 拆分 / 取消批次后调用方通过
+   *  qc.invalidateQueries({ queryKey: qk.partBatchesPrefix }) 失效整个 part-batches
+   *  域（任意 partId 形态都会命中）。 */
+  partBatchesPrefix: ['part-batches'] as const,
   /** 2026-09-29 新增：待下发批次列表键工厂 —— list / 单参数形态（沿 processesList 同形）。
    *  Consumer：usePendingBatchesQuery（在 src/composables/queries/usePendingBatchesQuery.ts）。 */
   pendingBatchesList: (params: ListPendingBatchesParams) =>
