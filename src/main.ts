@@ -23,6 +23,10 @@ import piniaPluginPersistedstate from 'pinia-plugin-persistedstate';
 
 import App from './App.vue';
 import router from './router';
+// 2026-09-30 新增：vue-echarts 8.3 全局注册（沿 CLAUDE.md 硬约束：图表统一 vue-echarts）。
+// 注册位置选 pinia 之后、mount 之前；具体顺序在 VueQueryPlugin 之后，
+// 避免任何未来潜在 plugin 顺序耦合。
+import { VChart } from '@/plugins/echarts';
 // 2026-09-26：迁移到 Pinia setup store useAuthStore（src/stores/auth.ts），
 // 替代原 composables/useAuthSession 模块级单例。store 内 loadFromStorage 自执行
 // 首次 useAuthStore() 时恢复 localStorage；CustomEvent listener 在 setup 里挂，
@@ -70,6 +74,12 @@ app.use(createPinia());
 const pinia = app.config.globalProperties.$pinia as ReturnType<typeof createPinia>;
 pinia.use(piniaPluginPersistedstate);
 app.use(VueQueryPlugin, { queryClient });
+
+// 2026-09-30 新增：全局注册 <v-chart>；按需模块已在 plugins/echarts.ts 完成。
+// 注册名用 PascalCase 'VChart'（vue-echarts 官方推荐 + 满足 alloy 的
+// vue/component-definition-name-casing 规则）；模板里 <v-chart> / <VChart>
+// 两种写法都能命中——Vue 模板对组件名自动归一。
+app.component('VChart', VChart);
 
 // 2026-08-28 重写：dev-only dummy-auth 注入。
 // 改走 `import.meta.env.DEV && import.meta.env.VITE_DUMMY_AUTH === 'true'`
