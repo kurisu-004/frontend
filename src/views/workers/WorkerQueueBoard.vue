@@ -124,7 +124,7 @@ const route = useRoute();
 const router = useRouter();
 const qc = useQueryClient();
 
-// 2026-09-30：processes 走共享 useProcessesQuery（POSITIVE_INFINITY 缓存，与仓内
+// 2026-09-30：processes 走共享 useProcessesQuery（30s staleTime 去重缓存，与仓内
 // 多处 caller 共享缓存身份），不再调 listProcesses + module-level ref。
 const procsQuery = useProcessesQuery();
 const inhouseProcs = computed(() =>

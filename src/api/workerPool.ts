@@ -60,7 +60,7 @@ export async function getWorkerState(params: {
  *  **无 query 参数**（后端 `pool_counts` handler 只有 State + CurrentUser，
  *  不接 Query extractor；传 shelf_id 会被 serde 忽略成死参）。
  *  含 0 候选批次的 process 不出现在 counts 中（GROUP BY 不输出 0 行）。
- *  Eager 拉取（POSITIVE_INFINITY 缓存 + 写操作 invalidate）。 */
+ *  Eager 拉取（30s staleTime 去重缓存 + 写操作 invalidate）。 */
 export async function getWorkerPoolCounts(): Promise<WorkerPoolCountsDto> {
   const resp = await api.get<WorkerPoolCountsDto>('/prod/pool/counts');
   return resp.data;

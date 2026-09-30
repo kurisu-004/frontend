@@ -1,6 +1,6 @@
 <!-- 2026-09-30 重构：工人列自管 useWorkerStateByWorkerQuery（数据层 TanStack Query 化）。
      原先 `batches` prop 由父级 useWorkerQueue 聚合后传入；本 commit 起 WorkerColumn 内部
-     自管 query（POSITIVE_INFINITY 缓存 + 写操作 invalidate），同 workerId + shelfId 跨
+     自管 query（30s staleTime 去重缓存 + 写操作 invalidate），同 workerId + shelfId 跨
      tab 共享 cache identity。
      skeleton / empty 兜底：isLoading 时 max_held / current_held 占位「…」，
      error 时 el-empty description="加载失败"。

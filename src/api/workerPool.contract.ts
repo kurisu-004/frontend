@@ -328,7 +328,7 @@ export interface PendingBatchItemDto {
 
 /** `GET /api/v2/prod/pool/counts` 顶层出参（rust WorkerPoolCountsOut，
  *  `src/modules/prod/worker_pool/dto.rs`）。前端 `useWorkerPoolCountsQuery` 共享
- *  query 消费（POSITIVE_INFINITY 缓存，eager 拉取）。tab 标题 (N) 徽标 + 「待下发」
+ *  query 消费（30s staleTime 去重缓存，eager 拉取）。tab 标题 (N) 徽标 + 「待下发」
  *  Tab 工序卡 badge 的唯一数据源。
  *
  *  2026-09-30 契约漂移修复：**删 `shelf_id`**。后端 `WorkerPoolCountsOut` 只有

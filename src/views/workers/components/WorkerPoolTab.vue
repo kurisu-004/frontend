@@ -49,7 +49,7 @@ const props = defineProps<{
 }>();
 
 // 2026-09-30：tab 懒加载数据源 —— useWorkerPoolByProcessQuery 自管 query，
-// 走 qk.workerPoolByProcess(processId) 缓存键。POSITIVE_INFINITY 缓存保证
+// 走 qk.workerPoolByProcess(processId) 缓存键。30s staleTime 去重窗口保证
 // 切回已激活过的 tab 不会重拉；同 processId 的 PendingPoolCard 也走同一键，
 // 共享 cache identity（hit 即不重拉）。
 const query = useWorkerPoolByProcessQuery(() => props.processId);

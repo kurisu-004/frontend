@@ -203,7 +203,7 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   }
 
   // 2026-09-29 review 第 2 轮 MAJOR-2 修复：响应式 customers 缓存到达。
-  // useCustomersQuery staleTime: Infinity 是懒查询，首次进详情页时 customers
+  // useCustomersQuery 是懒查询，首次进详情页时 customers
   // 可能未加载完（customersData.value 为 undefined），enrich 把 customer_*
   // 置 null 后不会自动 re-trigger。watchEffect 在 customersData 变化时自动
   // 重跑 enrich，确保 detail.value.assembly.customer_path 始终反映最新客户名。

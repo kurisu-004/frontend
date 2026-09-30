@@ -4,13 +4,16 @@
 // 必须走这里的 qk.xxx，禁止在调用点拼字面量数组——否则键类型漂移会让
 // invalidateQueries 精确失效失效。
 //
-// 失效规则：
+// 失效规则（2026-09-30 策略变更后）：
 //   - 域内任何写操作（create / update / softDelete）后，调用方通过
-//     qc.invalidateQueries({ queryKey: qk.<domain>Prefix }) 失效整个域；
-//     整域内每个 useQuery 共享 gcTime: POSITIVE_INFINITY，失效只重置 staleTime
-//     状态（始终 fresh），下次访问走 queryFn 重拉——避免对每条数据单独管理 key。
-//   - useQuery 本体 staleTime: POSITIVE_INFINITY + gcTime: POSITIVE_INFINITY
-//     （会话级缓存），基础数据（KB 级）不再主动失效，依赖写入端精确 invalidate。
+//     qc.invalidateQueries({ queryKey: qk.<domain>Prefix }) 失效整个域。
+//   - 共享基础数据层各 useQuery 用**有限** staleTime（30s）/ gcTime（5min），
+//     不再用 POSITIVE_INFINITY 会话级缓存 —— TanStack Query 在本仓是「短时请求去重
+//     层」，不保证新鲜度；超 staleTime 的访问自动 refetch。
+//   - 失效调用点是**优化**（写完立即看到自己那笔），**不是一致性保证**：跨页面写
+//     操作（送检 / worker-scan / 品检流转 / outsource 收发等会改工序候选池成员资格的
+//     流转端点）不要求在每个写点补失效 —— 那需要穷举全仓写点，不可持续。新鲜度由
+//     有限 staleTime + WS 事件 / 显式 refetch 负责（见 CLAUDE.md 缓存时长策略）。
 //
 // 锁字面量类型：所有键数组用 as const，调用方拿到的类型是 readonly tuple，
 // 与 TanStack Query 的 QueryKey = readonly unknown[] 契约对齐。
@@ -105,11 +108,11 @@ export const qk = {
    *  partsPrefix 等价；保留命名仅为未来 com 域自有写操作（如非 part 维度
    *  union 写入）做扩展位 —— 实际失效调用方继续走 qk.partsPrefix。 */
   unionPrefix: ['parts', 'union-list'] as const,
-  /** 2026-09-29 新增：pending-batches 域前缀 —— dispatch / bulk / auto 三类 mutation
-   *  完成后调 qc.invalidateQueries({ queryKey: qk.pendingBatchesPrefix }) 失效整个域
+  /** 2026-09-29 新增：pending-batches 域前缀 —— dispatch 完成后调
+   *  qc.invalidateQueries({ queryKey: qk.pendingBatchesPrefix }) 失效整个域
    *  （任意 params 形态的 list 都会命中）。同时触发 partsPrefix 跨域失效
    *  （usePendingDispatch.ts 集中编排）。2026-09-30 修复：去掉 processesPrefix ——
-   *  下发批次不改变工序列表，失效它只会重拉会话级缓存的 processes。 */
+   *  下发批次不改变工序列表，失效它只会多打一次 processes 请求。 */
   pendingBatchesPrefix: ['pending-batches'] as const,
   // ============================================================
   // 2026-09-30 新增：pool 域 queryKey 工厂（后端 worker-pool → pool 路径收敛后
@@ -117,27 +120,27 @@ export const qk = {
   // （CLAUDE.md 2026-09-30 硬约束）的共享基础数据层。
   //
   // 三个 list / state query + 对应 prefix：
-  //   - workerPoolCounts：全工序 batch 计数（eager，POSITIVE_INFINITY 缓存），
+  //   - workerPoolCounts：全工序 batch 计数（eager，30s staleTime 去重缓存），
   //     tab 标题 (N) 徽标 + 「待下发」Tab 工序卡 badge 数据源，跨 tab 共享；
   //   - workerPoolByProcess：单工序候选池详情（lazy，仅 tab 首次激活时拉），
   //     与 WorkerPoolTab 共享 cache identity；
   //   - workerPoolStateByWorker：单 worker state（held_batches + max_held），
   //     WorkerColumn 自管 query 拉取 + 跨 tab 共享。
   //
-  // 失效规则（沿 2026-09-26 基础数据精确失效策略 #3）：
-  //   - moveBatch / autoAllocate 完成后调 invalidateWorkerPoolByProcessAll(qc) +
-  //     invalidateWorkerPoolCountsQuery(qc) + invalidateWorkerPoolStateAll(qc)
-  //     （useWorkerQueue.ts 集中编排）；
-  //   - dispatch（含 preview 确认后的真正下发）完成后 usePendingDispatch 集中
-  //     失效四域（pendingBatchesPrefix + partsPrefix + workerPoolByProcessPrefix +
-  //     workerPoolCountsPrefix）+ pool state（workerPoolStatePrefix）。2026-09-30
-  //     修复：原先含 processesPrefix，下发不改变工序列表故移除。
-  //   - ⚠️「失效编排点」≠「pool 数据的全部写点」（2026-09-30 review 第 2 轮 H-1 更正）：
-  //     上述两条失效链只覆盖 useWorkerQueue（move / autoAllocate）与
+  // 失效规则（2026-09-30 策略变更后已改写，pool 域不再声称「失效即可保证一致性」）：
+  //   - 已显式挂 pool 失效的写点（**不是**全部写点）：
+  //     - moveBatch / autoAllocate 完成后调 invalidateWorkerPoolByProcessAll(qc) +
+  //       invalidateWorkerPoolCountsQuery(qc) + invalidateWorkerStateByWorkerAll(qc)
+  //       （useWorkerQueue.ts 集中编排）；
+  //     - dispatch（含 preview 确认后的真正下发）完成后 usePendingDispatch 集中
+  //       失效四域（pendingBatchesPrefix + partsPrefix + workerPoolByProcessPrefix +
+  //       workerPoolCountsPrefix）+ pool state（workerPoolStatePrefix）。2026-09-30
+  //       修复：原先含 processesPrefix，下发不改变工序列表故移除。
+  //   - 上述两条失效链只覆盖 useWorkerQueue（move / autoAllocate）与
   //     usePendingDispatch（dispatch）**这两条路径**，prefix 一把全刷也只覆盖它们。
   //     后端候选池定义 = `status='IN_PROCESS' AND location='PRODUCTION_SHELF'`
   //     （worker_pool/repo/sql.rs:127,349,545），而其它域的流转端点同样会改这两个
-  //     字段、却**未挂 pool 失效**（既存缺口，2026-09-30 复审发现，另单跟踪）：
+  //     字段、却**未挂 pool 失效**：
   //       - delivery 域送检 `batchToInspection`（POST /parts/batch-to-inspection，
   //         useBulkScanInspect.ts:185）—— to_inspection_core 接受
   //         IN_PROCESS+PRODUCTION_SHELF 为合法起点并迁到 INSPECTION+INSPECTION_SHELF，
@@ -146,8 +149,15 @@ export const qk = {
   //         （ScanReturnParts.vue:563）—— service 同事务跑 WorkerPool refill，
   //         放回即从池里抢批，counts / by-process / state 三域同时变；
   //       - inspection 域 `scanInspect`（InspectionPending.vue:962）—— 品检流转，
-  //         IN_PROCESS+PRODUCTION_SHELF 起点同样会离开候选池。
-  //     故「pool 域无其它写入」是错的断言；新增写点须自行判断是否波及 pool 三域。
+  //         IN_PROCESS+PRODUCTION_SHELF 起点同样会离开候选池；
+  //       - outsource 域收发（useOutsourceSendableList / usePartDetail 的
+  //         receiveFromOutsource / useOutsourceReceivingList）—— send 移出候选池、
+  //         receive 移入候选池。
+  //   - 2026-09-30 决策：**不再逐个给这些写点补失效**（要求穷举全仓写点，不可持续）。
+  //     改为把 pool 三域的 staleTime / gcTime 收紧到有限值（30s / 5min）——
+  //     工人送检后切回队列页（操作间隔通常 > 1min）自动 refetch，实时性由有限
+  //     staleTime + WS 事件 / 显式 refetch（WorkerQueueBoard.onRefresh）保证。
+  //     上面的失效调用点是「写完立即看到自己那笔」的优化，不是新鲜度保证。
   // ============================================================
 
   /** 全工序 batch 计数（eager 拉取，tab 标题徽标 + 待下发工序卡 badge 数据源）。

@@ -27,7 +27,10 @@
 //   pendingBatchesPrefix + partsPrefix + worker-pool 三域（by-process / counts /
 //   state，共 5 个前缀键，见 usePendingDispatch.ts invalidateAll）。
 //   2026-09-30 修复：去掉 processesPrefix —— 下发批次不改变工序列表，失效它只会
-//   重拉会话级缓存的 processes。
+//   多打一次 processes 请求。
+//   2026-09-30 起这组失效是「写完立即看到自己那笔」的**优化**，不是一致性保证 ——
+//   共享基础数据层 staleTime / gcTime 已改为有限值（30s / 5min），跨页面写操作
+//   （送检 / worker-scan / 品检流转 / outsource 收发）后切回页面会自动 refetch。
 //
 // 业务端点统一走 `api`（baseURL `/api/v2`）。
 

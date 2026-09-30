@@ -47,7 +47,7 @@ import { usePermissions } from '@/composables/usePermissions';
 import { useConfirm } from '@/composables/useConfirm';
 // 2026-09-29 review 第 2 轮 MAJOR-1 修复：usePartDetail.fetchAssembly 现在也走
 // 客户 enrich（PartAssemblyLinkCard 客户列展示所需），订阅 useCustomersQuery
-// 共享缓存（staleTime Infinity + 唯一 queryKey，多 subscriber 不触发额外 fetch）。
+// 共享缓存（唯一 queryKey + 30s staleTime 去重窗口，多 subscriber 不触发额外 fetch）。
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import {
   ORDER_STATUS_LABEL,
@@ -248,7 +248,7 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   // ============ 装配件详情（PartAssemblyLinkCard 用）============
   // 2026-09-29 review 第 2 轮 MAJOR-1 修复：订阅 useCustomersQuery 拿客户全集，
   // 用于 enrichAssemblyItem 补全 customer_name / parent_customer_name / customer_path。
-  // staleTime: Infinity + 唯一 queryKey，多 subscriber 不触发额外 fetch（共享缓存）。
+  // 唯一 queryKey + 30s staleTime 去重窗口，多 subscriber 不触发额外 fetch（共享缓存）。
   const { data: customersData } = useCustomersQuery();
 
   const assemblyDetail = ref<AssemblyDetail | null>(null);
@@ -297,7 +297,7 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   }
 
   // 2026-09-29 review 第 2 轮 MAJOR-2 修复：响应式 customers 缓存到达。
-  // useCustomersQuery 是懒查询（staleTime Infinity），首次进 PartDetail 时
+  // useCustomersQuery 是懒查询，首次进 PartDetail 时
   // customers 可能未加载完，fetchAssembly 内 enrich 把 customer_* 置 null 后
   // 不会自动 re-trigger。watchEffect 在 customersData 变化时自动重跑 enrich，
   // 确保 PartAssemblyLinkCard「客户」列无需刷新就能展示。

@@ -1,6 +1,8 @@
 // useCustomerTree.ts
 //
-// 2026-09-26 改造：内部状态改为共享 query useCustomersQuery() 驱动，缓存命中会话级。
+// 2026-09-26 改造：内部状态改为共享 query useCustomersQuery() 驱动，缓存命中即
+// 直接复用（30s staleTime 去重窗口内切走再切回不重发请求；2026-09-30 起不再用
+// POSITIVE_INFINITY 会话级缓存，见 CLAUDE.md「TanStack Query 缓存时长策略」）。
 // 对外 API 完全兼容：3 个调用点（RepairReceive.vue / OutsourceQuoteList.vue /
 // usePartsColumnFilters.ts）零改动即可工作。
 //

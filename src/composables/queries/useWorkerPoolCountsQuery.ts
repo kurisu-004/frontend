@@ -7,9 +7,10 @@
 //   - useQuery + **常量 queryKey**（无 params 维度）；
 //   - queryFn 走 workerPoolCountsSchema.parse 守门（M-1 regression guard：
 //     缺字段静默 strip = 校验形同虚设）；
-//   - staleTime / gcTime: POSITIVE_INFINITY —— 会话级缓存；
-//   - 写操作（moveBatch / autoAllocate / dispatch 系列）在 useWorkerQueue.ts +
-//     usePendingDispatch.ts 集中失效 workerPoolCountsPrefix；
+//   - staleTime / gcTime: 30_000 / 5 * 60 * 1000 —— 短时请求去重层（2026-09-30 起
+//     不再用 POSITIVE_INFINITY 会话级缓存，理由见 CLAUDE.md「TanStack Query 缓存时长
+//     策略」）：counts 是「切走再切回必看」的数字徽标，30s 窗口保证工人送检后切回
+//     队列页（操作间隔通常 > 1min）自动 refetch，不再显示过期总数；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //
 // 2026-09-30 契约漂移修复（后端 worker-pool → pool 收敛）：
@@ -28,9 +29,13 @@
 // WorkerQueueBoard.onRefresh（手动刷新）三处被调。
 // ⚠️ 2026-09-30 review 第 2 轮 M-2 更正：**编排点 ≠ 全部写点**。后端 counts 统计的是
 // `status='IN_PROCESS' AND location='PRODUCTION_SHELF'` 的批次，其它域的流转端点
-// （delivery 域 batchToInspection 送检、scan 域 workerScan 放回的同事务 refill 等）
-// 会把批次移出/移入这个集合却不挂本前缀失效 —— 既存缺口，另单跟踪。
-// 后续如新增写点必须自行判断是否波及 pool counts，并挂 invalidateWorkerPoolCountsQuery(qc)。
+// （delivery 域 batchToInspection 送检、scan 域 workerScan 放回的同事务 refill、
+// inspection 域 scanInspect、outsource 收发等）会把批次移出/移入这个集合却不挂本前缀
+// 失效 —— 既存缺口。
+// 2026-09-30 策略变更：既然无法穷举全仓写点，本 query 已把 staleTime / gcTime 改为
+// 有限值（30s / 5min，见上）—— 新鲜度不再依赖「失效编排点覆盖全部写点」这个假设，
+// 跨页面写操作之后切回队列页会自动 refetch。上面的编排点清单是**已显式挂失效的写点**
+// （写完立即看到自己那笔的优化），**不是**全部写点。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { getWorkerPoolCounts } from '@/api/workerPool';
@@ -65,8 +70,8 @@ export function useWorkerPoolCountsQuery() {
   return useQuery<WorkerPoolCountsSchema, Error>({
     queryKey: qk.workerPoolCounts,
     queryFn: async () => workerPoolCountsSchema.parse(await getWorkerPoolCounts()),
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
+    staleTime: 30_000,
+    gcTime: 5 * 60 * 1000,
   });
 }
 

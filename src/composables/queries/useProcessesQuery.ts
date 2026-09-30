@@ -2,7 +2,10 @@
 // 供 filter dropdown 使用）。
 //
 // 设计要点：
-//   - 基础数据精确失效策略：与 customers 同 staleTime / gcTime: POSITIVE_INFINITY。
+//   - staleTime / gcTime: 30_000 / 5 * 60 * 1000 —— 与 customers 同值（同属「短时
+//     去重窗口 + 空闲保留」策略，2026-09-30 起不再用 POSITIVE_INFINITY 会话级缓存；
+//     理由见 CLAUDE.md「TanStack Query 缓存时长策略」）：30s 内同一 params 形态命中
+//     缓存不重发，切回页面超 30s 自动 refetch。
 //   - 入参清洗：cleanParams 剥掉 '' / null / [] / undefined 后再进 queryKey，保证
 //     cache identity 仅由「实际有值的字段」决定（listProcesses 默认参数 {} 经
 //     cleanParams 后仍是 {}，但带 code_like='A' 与不带的 cache 应区分）。
@@ -10,10 +13,12 @@
 //     自动响应 ref/computed 变化触发 refetch（无需外部 watcher；与 usePartsListQuery
 //     queryKey computed pattern 一致）。queryFn 从 queryKey[2] 读 params，避免
 //     setup 一次性 snapshot 把 reactive 锁死。
-//   - 写点：processes 写操作全仓仅 ProcessTab.vue 一处（createProcess /
+//   - 写点：已知的工序写点全仓仅 ProcessTab.vue 一处（createProcess /
 //     updateProcess / softDeleteProcess，2026-09-26 grep 确认：3 处调用点都在
-//     src/views/production/components/ProcessTab.vue），后续 C 任务在写成功后挂
-//     invalidateProcessesQuery(qc)。
+//     src/views/production/components/ProcessTab.vue），写成功后由该组件调
+//     invalidateProcessesQuery(qc)。2026-09-30 更正：这只是「已显式挂失效的写点」
+//     清单，**不是**「全部写点」—— 缓存时长已改为有限值（30s / 5min）兜底新鲜度，
+//     不再依赖穷举写点。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
@@ -38,8 +43,8 @@ export function useProcessesQuery(params?: MaybeRefOrGetter<ProcessListParams>) 
         raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as ProcessListParams) : {};
       return processListResultSchema.parse(await listProcesses(p));
     },
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
+    staleTime: 30_000,
+    gcTime: 5 * 60 * 1000,
   });
 }
 

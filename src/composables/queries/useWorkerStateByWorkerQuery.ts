@@ -17,7 +17,10 @@
 //   - enabled: computed(() => !!(toValue(workerId) && toValue(shelfId))) ——
 //     双参数都必填（rust `/prod/pool/state` 端点必填 shelf_id）；
 //   - queryFn 内有 workerId + shelfId 二次守卫；
-//   - staleTime / gcTime: POSITIVE_INFINITY —— 会话级缓存；
+//   - staleTime / gcTime: 30_000 / 5 * 60 * 1000 —— 短时请求去重层（2026-09-30 起
+//     不再用 POSITIVE_INFINITY 会话级缓存，理由见 CLAUDE.md「TanStack Query 缓存时长
+//     策略」）：同 workerId + shelfId 在 30s 内跨 tab 切换命中缓存不重拉；超 30s
+//     切回自动 refetch，工人送检 / 放回后切回队列页能拿到最新 held 集合；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //
 // 2026-09-30：本 query 是 worker 持有数据的**唯一数据源** —— useWorkerQueue 的
@@ -29,7 +32,11 @@
 // held_batches / current_held，故前缀全刷而非按 worker 精刷）。
 // ⚠️ 2026-09-30 review 第 2 轮复扫更正：这两处只是**编排点**，不是 held_batches 的
 // 全部写点 —— scan 域工人放回 `workerScan`（ScanReturnParts.vue:563）service 同事务
-// 跑 WorkerPool refill，会改 held 集合却不挂本前缀失效（既存缺口，另单跟踪）。
+// 跑 WorkerPool refill，会改 held 集合却不挂本前缀失效 —— 既存缺口。
+// 2026-09-30 策略变更：既然无法穷举全仓写点，本 query 已把 staleTime / gcTime 改为
+// 有限值（30s / 5min，见上）—— 新鲜度不再依赖「失效编排点覆盖全部写点」这个假设。
+// 上面的编排点清单是**已显式挂失效的写点**（写完立即看到自己那笔的优化），**不是**
+// 全部写点。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
@@ -82,8 +89,8 @@ export function useWorkerStateByWorkerQuery(
     // 2026-09-30：workerId + shelfId 双参数都必填才发请求（沿 usePartFilesListQuery
     // 范本 #6 扩展为双参数 enabled 闸门）。
     enabled: computed(() => !!(toValue(workerId) && toValue(shelfId))),
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
+    staleTime: 30_000,
+    gcTime: 5 * 60 * 1000,
   });
 }
 

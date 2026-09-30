@@ -148,11 +148,11 @@ export function usePendingDispatch(): UsePendingDispatchReturn {
    *  跨域失效理由：下发后 batch 从 PENDING 进入 IN_PROCESS + 候选池，同一件工单在
    *  零件列表的派生状态也变（next_process_step 推进）。
    *  2026-09-30 修复：移除 processes 域失效。下发批次不可能改变工序列表，而
-   *  `staleTime: POSITIVE_INFINITY` 挡不住显式 `invalidateQueries`（TanStack v5
-   *  预期行为），导致每次下发都重拉一次会话级缓存的 processes（如
-   *  WorkerQueueBoard 的 `useProcessesQuery()` observer）。processes 的合法写点
-   *  只有 ProcessTab.vue 的工序增删改，不在本文件 —— 移除后才符合
-   *  CLAUDE.md 2026-09-26 基础数据精确失效策略 #3 的「写操作点全集中」前提。
+   *  显式 `invalidateQueries` 不会被 staleTime 挡掉（TanStack v5 预期行为），
+   *  每次下发都重拉一次 processes（如 WorkerQueueBoard 的 `useProcessesQuery()`
+   *  observer）纯属浪费。2026-09-30 策略变更后 processes 走 30s staleTime 有限缓存，
+   *  新鲜度不再依赖「写点全集中」这个前提（见 CLAUDE.md「TanStack Query 缓存时长
+   *  策略」）。
    *  返回 Promise 让 2 个 mutation onSuccess 内部 await 完整失效链，避免 query
    *  重叠触发雪崩。 */
   async function invalidateAll(): Promise<void> {

@@ -16,7 +16,10 @@
 //   - queryFn 走 workerPoolByProcessSchema.parse 守门（M-1 regression guard）；
 //   - enabled: computed(() => !!toValue(processId)) —— 无 processId 时不发请求；
 //   - queryFn 内有 processId 二次守卫（enabled 已挡，但留 refetch / call 路径防御）；
-//   - staleTime / gcTime: POSITIVE_INFINITY —— 会话级缓存；
+//   - staleTime / gcTime: 30_000 / 5 * 60 * 1000 —— 短时请求去重层（2026-09-30 起
+//     不再用 POSITIVE_INFINITY 会话级缓存，理由见 CLAUDE.md「TanStack Query 缓存时长
+//     策略」）：同 processId 在 30s 内来回切 tab 命中缓存不重拉；超 30s 切回自动
+//     refetch，工人送检后切回队列页能立刻看到更新后的候选池列表；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //
 // 2026-09-30 消费侧收敛：**唯一 consumer 是 WorkerPoolTab**（el-tab-pane
@@ -31,8 +34,12 @@
 // ⚠️ 2026-09-30 review 第 2 轮 M-3 更正：**编排点 ≠ 全部写点**。后端候选池 =
 // `status='IN_PROCESS' AND location='PRODUCTION_SHELF'`（worker_pool/repo/sql.rs），
 // 其它域的流转端点（delivery 域 batchToInspection 送检、scan 域 workerScan 放回的
-// 同事务 refill、inspection 域 scanInspect 等）同样会改这个集合却不挂本前缀失效 ——
-// 既存缺口，另单跟踪。后续新增写点须自行判断是否波及 pool by-process。
+// 同事务 refill、inspection 域 scanInspect、outsource 收发等）同样会改这个集合却不挂
+// 本前缀失效 —— 既存缺口。
+// 2026-09-30 策略变更：既然无法穷举全仓写点，本 query 已把 staleTime / gcTime 改为
+// 有限值（30s / 5min，见上）—— 新鲜度不再依赖「失效编排点覆盖全部写点」这个假设。
+// 上面的编排点清单是**已显式挂失效的写点**（写完立即看到自己那笔的优化），**不是**
+// 全部写点。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
@@ -77,8 +84,8 @@ export function useWorkerPoolByProcessQuery(
     },
     // 2026-09-30：processId 空 → 不发请求（沿 usePartFilesListQuery 范本 #6）。
     enabled: computed(() => !!toValue(processId)),
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
+    staleTime: 30_000,
+    gcTime: 5 * 60 * 1000,
   });
 }
 

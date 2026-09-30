@@ -9,15 +9,21 @@
 //     / usePartsListQuery 同源范本）；
 //   - queryFn 走 pendingBatchListResultSchema.parse 守门（M-1 regression guard：缺字段
 //     静默 strip = 校验形同虚设）；
-//   - staleTime / gcTime: POSITIVE_INFINITY —— 会话级缓存；写操作（dispatch / bulk /
-//     auto）在 usePendingDispatch.ts 的 invalidateAll() 集中失效 pendingBatchesPrefix +
-//     跨域 partsPrefix + worker-pool 三域（by-process / counts / state，共 5 个前缀键）
-//     （2026-09-30 修复：去掉 processesPrefix —— 下发批次不改变工序列表）；
+//   - staleTime / gcTime: 30_000 / 5 * 60 * 1000 —— 短时请求去重层（2026-09-30 起
+//     不再用 POSITIVE_INFINITY 会话级缓存，理由见 CLAUDE.md「TanStack Query 缓存时长
+//     策略」）：切回「待下发」Tab 超 30s 自动 refetch；已显式挂失效的写点为
+//     usePendingDispatch 的 dispatch 成功后 invalidateAll()（pendingBatchesPrefix +
+//     跨域 partsPrefix + worker-pool 三域 by-process / counts / state，共 5 个前缀键；
+//     2026-09-30 修复已去掉 processesPrefix —— 下发批次不改变工序列表）；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //
-// 写点：pending-batches 域写操作（dispatchBatch / bulkDispatchBatches /
-// autoDispatchBatches）全仓仅 usePendingDispatch.ts 一处（2026-09-29 grep 确认；
-// 后续如新增写点必须挂 invalidatePendingBatchesQuery(qc) 同步失效）。
+// 写点（2026-09-30 订正端点名）：pending-batches 域的**写**端点只剩
+// `dispatchBatches`（bulk-only，单条即 targets.length === 1），前端唯一调用点在
+// usePendingDispatch.ts，成功后调 invalidatePendingBatchesQuery(qc)。
+// 旧注释里的 `bulkDispatchBatches`（端点已删除，router 不再挂载 ⇒ 404）与
+// `autoDispatchBatches`（2026-09-30 已降级为**只读** `previewAutoDispatch`，不写库、
+// 不需要失效）均已不是写点。新鲜度不依赖穷举写点：30s 窗口 + 跨页面写操作后
+// 切回页面自动 refetch 兜底。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
@@ -59,8 +65,8 @@ export function usePendingBatchesQuery(
           : {};
       return pendingBatchListResultSchema.parse(await fetchPendingBatches(p));
     },
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
+    staleTime: 30_000,
+    gcTime: 5 * 60 * 1000,
   });
 }
 
