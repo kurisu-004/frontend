@@ -22,8 +22,9 @@
     "@vueuse/core": "^15.0.0",
     "axios": "^1.18.1",
     "cos-js-sdk-v5": "^1.10.1",
+    "dayjs": "^1.11.20",
     "echarts": "^6.1.0",
-    "element-plus": "^2.7.0",
+    "element-plus": "~2.14.2",
     "hash-wasm": "^4.12.0",
     "jsbarcode": "^3.12.3",
     "occt-wasm": "^5.3.2",
@@ -62,9 +63,12 @@
     "vue-eslint-parser": "^9.4.3",
     "vue-tsc": "^2.0.16"
   },
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "allowScripts": {
     "cos-js-sdk-v5@1.10.1": true,
-    "@parcel/watcher@2.5.6": true,
+    "@parcel/watcher@2.6.0": true,
     "vue-demi@0.14.10": true,
     "fsevents@2.3.3": true
   }
