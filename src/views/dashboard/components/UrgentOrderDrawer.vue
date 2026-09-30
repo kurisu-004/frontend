@@ -13,6 +13,13 @@
     - modelValue：boolean（v-model 双向绑定，控制 drawer 开关）
     - part：PartListItem | null（父组件传入选中行；null 表示未选）
     - @update:modelValue：双向同步
+
+  2026-09-30 调整：
+    - dashboard 不再挂载本组件（业务方改用 PartPreviewDialog 作为统一入口：图纸预览
+      + 批次列表 + 持有者），但本文件保留供外部潜在复用，不删除；
+    - 详情 tab 删除「单价」「总价」两个 .detail-row 块（业务方认为 dashboard
+      不显金额；其他字段保留：图号 / 客户 / 数量 / 订单号 / 请购日期 / 计划交期 /
+      系统交期 / 申请人 / 备注）。
 -->
 <template>
   <el-drawer
@@ -128,14 +135,7 @@
               <dt>申请人</dt>
               <dd>{{ part.applicant_name || '—' }}</dd>
             </div>
-            <div class="detail-row">
-              <dt>单价</dt>
-              <dd>{{ part.unit_price || '—' }}</dd>
-            </div>
-            <div class="detail-row">
-              <dt>总价</dt>
-              <dd>{{ part.total_price || '—' }}</dd>
-            </div>
+            <!-- 2026-09-30 删除「单价」「总价」两个 detail-row（dashboard 不显金额） -->
             <div v-if="part.note" class="detail-row">
               <dt>备注</dt>
               <dd>{{ part.note }}</dd>

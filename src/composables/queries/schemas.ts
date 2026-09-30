@@ -294,6 +294,66 @@ export const partFileListResultSchema = z.object({
 export type PartFileListResultSchema = z.infer<typeof partFileListResultSchema>;
 
 // ============================================================
+// 2026-09-30 新增：part-batch（PartBatch）schema —— 供 dashboard
+// PartPreviewDialog「该工单批次」列表用。
+//
+// 字段对齐 backend-rust `PartBatch` VO（src/api/parts/batch.ts:206-228），17 字段
+// 全声明（沿 CLAUDE.md §M-4 strip 陷阱 —— Zod 默认 strip 模式会让缺字段静默
+// 丢弃，必填字段必须显式声明）。
+//
+// 字段语义：
+//   - id / version / part_id / batch_no / batch_label / quantity：基础标识 + 数量；
+//   - status: string（不锁 enum —— 沿 backend-rust PartBatch.status 类型为 String
+//     与 OrderStatus 语义对齐但前端不强制 lock 字面量集合；后续若收紧再加
+//     z.enum(ORDER_STATUS_VALUES) 转换层）；
+//   - location / current_holder_id / current_holder_display / next_process_name
+//     / delivery_note_id / delivery_note_no / parent_batch_id：nullable 展示字段；
+//   - current_process_step_id: optional + nullable（PR-3 新增，部分老接口可能未
+//     带；新接口必带，前端 display 走 next_process_name 兜底）；
+//   - created_at / updated_at: string 必填（沿 schemas 统一约定）。
+// ============================================================
+
+export const partBatchSchema = z.object({
+  id: z.string(),
+  version: z.number(),
+  part_id: z.string(),
+  batch_no: z.number(),
+  batch_label: z.string(),
+  quantity: z.number(),
+  // 2026-09-30：status 用 z.string() 不锁 enum（与 backend-rust PartBatch.status
+  // String 类型对齐；前端消费走 ORDER_STATUS_LABEL cast OrderStatus，不在 schema
+  // 层强制字面量集合，避免后端扩展时整张 schema 失守）。
+  status: z.string(),
+  location: z.string().nullable(),
+  current_holder_id: z.string().nullable(),
+  current_holder_display: z.string().nullable(),
+  // 2026-09-30：PR-3 新增 optional + nullable 兼容老接口（沿 backend-rust 注释）。
+  current_process_step_id: z.string().nullable().optional(),
+  next_process_name: z.string().nullable(),
+  delivery_note_id: z.string().nullable(),
+  delivery_note_no: z.string().nullable(),
+  parent_batch_id: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export type PartBatchSchema = z.infer<typeof partBatchSchema>;
+
+/** 2026-09-30 新增：part-batch 列表分页结果（结构对齐 backend-rust PartBatchListOut，
+ *  items + total 必填，limit/offset optional —— 与 partFileListResultSchema 同形）。
+ *  2026-09-30 注：listPartBatches(partId) 当前 api wrapper 返回 raw PartBatch[]，
+ *  queryFn 内手动 map 成 { items, total } → schema 守门；schema 形态与 api 形态
+ *  解耦，便于后续后端返回 list out 时 queryFn 零改动（仅去掉 map）。 */
+export const partBatchListResultSchema = z.object({
+  items: z.array(partBatchSchema),
+  total: z.number(),
+  limit: z.number().optional(),
+  offset: z.number().optional(),
+});
+
+export type PartBatchListResultSchema = z.infer<typeof partBatchListResultSchema>;
+
+// ============================================================
 // 2026-09-29 修复：装配件详情响应 schema（消化 backend-rust
 // `#[serde(flatten)]` quirk）。
 //

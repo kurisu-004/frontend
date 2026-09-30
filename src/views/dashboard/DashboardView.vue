@@ -5,54 +5,63 @@
 
   信息架构（自上而下）：
     Header（欢迎语 + 当前日期 + 角色徽章）
-    KPI 横排（4 tile：逾期未交 / 今日到期 / 本周到期 / 紧急工单）
+    KPI 横排（5 tile：逾期未交 / 今日到期 / 本周到期 / 在制 / 在检）
     双栏布局：左 UpcomingDeliveryChart，右 UrgentOrdersList
     Footer：FactoryRealtimeStrip（沿旧 in_process 数据，按工人分组 chips）
 
   数据流：
-    - useDashboardSnapshot() → snapshot.upcoming_delivery（14 天分桶，Phase 4 由 7 天扩 14 天）+ in_process
-    - useDashboardUrgentList() → items（listUnionItems 拉 100 件非终态件）+ urgentCount
+    - useDashboardSnapshot() → snapshot.upcoming_delivery（14 天分桶，Phase 4 由 7 天扩 14 天）
+      + in_process + on_inspection_shelves（在制 / 在检 KPI 派生来源）
+    - useDashboardUrgentList() → items（listUnionItems 拉 100 件非终态件，按 system_delivery_date ASC）
     - useDashboardOverdue(isManager) → overdueCount（Manager-only，闸门按角色）
-    - 行点击 emit row-click(part) → 父组件打开 UrgentOrderDrawer
+    - 行点击 → selectedPart + previewOpen 走 PartPreviewDialog（统一入口，A4 横向
+      预览 + 该工单所有批次 + 持有者）
 
-  抽屉协调（2026-09-30 Phase 6）：
-    - UrgentOrderDrawer（右侧）= 工单详情，selectedPart 触发；可由 UrgentOrdersList 行点击
-      或 UpcomingDeliveryListDrawer 行点击（@row-click）触发。
-    - UpcomingDeliveryListDrawer（下方 btt）= 7/14 天交期某日某层工单清单，由
-      UpcomingDeliveryChart 的 @bar-layer-click 触发。
-    - onUpcomingRowClick：用户在下抽屉选工单 → 关闭下抽屉 → 复用 UrgentOrderDrawer 打开右侧详情。
+  2026-09-30 重构（dashboard 域 Phase 6 末次调整）：
+    - 顶层 layout gap 12 → 16（视觉松绑，避免三块组件粘连）；
+    - .main-left 子项 KpiTiles / Chart / Strip 之间用 gap: 16px（沿外层 gap）；
+    - 移除 urgentCount 派生（KPI 不再消费 useDashboardUrgentList 的「紧急工单」tile）；
+    - 新增 inProcessCount = snapshot.in_process.length、inInspectionCount =
+      snapshot.on_inspection_shelves.length 两个 computed（KPI 「在制」「在检」tile 数据源）；
+    - 移除 <UrgentOrderDrawer> 挂载（业务方改用 PartPreviewDialog；UrgentOrderDrawer
+      文件保留供外部复用）；
+    - 新增 <PartPreviewDialog v-model="previewOpen" :part="selectedPart" />；
+    - onRowClick / onUpcomingRowClick 行为统一改为 selectedPart.value = part;
+      previewOpen.value = true（不再 toggle drawer）；
+    - <UpcomingDeliveryChart> 传 height="100%"（2026-09-30 review 第 1 轮 A.1+B.1
+      修复后）：外层 .main-left > :nth-child(2) flex: 1 1 50% 控制 wrapper 高度，
+      v-chart :style.height='100%' 撑满 wrapper（之前传 '50%' 导致 v-chart 只占
+      wrapper 一半、下方空白）。
 -->
 <template>
   <div class="dashboard">
-    <!-- Header：欢迎语 + 当前日期 + 角色徽章 -->
-    <header class="dashboard-header">
-      <div class="header-left">
-        <span class="header-greeting">{{ greeting }}，{{ userName }}</span>
-        <span class="header-date">{{ todayDisplay }}</span>
-      </div>
-      <div class="header-right">
-        <el-tag v-if="roleTag.label" :type="roleTag.type" size="small" effect="plain">
-          {{ roleTag.label }}
-        </el-tag>
-      </div>
-    </header>
-
-    <!-- KPI 横排 -->
-    <DashboardKpiTiles
-      :manager="isManager"
-      :overdue-count="overdueCount"
-      :today-count="todayCount"
-      :week-count="weekCount"
-      :urgent-count="urgentCount"
-    />
-
     <!-- 双栏布局：左 UpcomingDeliveryChart / 右 UrgentOrdersList -->
     <section class="dashboard-main">
       <div class="main-left">
+        <!-- KPI 横排（5 tile） -->
+        <DashboardKpiTiles
+          :manager="isManager"
+          :overdue-count="overdueCount"
+          :today-count="todayCount"
+          :week-count="weekCount"
+          :in-process-count="inProcessCount"
+          :in-inspection-count="inInspectionCount"
+        />
+        <!-- 2026-09-30 第 1 轮修复（review A.1+B.1）：由 height="50%" 改为
+             height="100%"。原 50% 透传给 v-chart 的 inline style，v-chart 只占
+             wrapper 高度的 50%，下方一半空白。修复方案 A2：wrapper 高度由外层
+             flex chain（.main-left > :nth-child(2) { flex: 1 1 50%; min-height:
+             280px; display: flex }）决定，v-chart 内 height: 100% 撑满 wrapper。 -->
         <UpcomingDeliveryChart
           :buckets="upcomingBuckets"
-          height="320px"
+          height="100%"
           @bar-layer-click="onBarLayerClick"
+        />
+        <!-- Footer：工厂实时态 -->
+        <FactoryRealtimeStrip
+          :items="inProcessItems"
+          :can-open-detail="canOpenPartDetail"
+          @item-click="goPartDetail"
         />
       </div>
       <div class="main-right">
@@ -60,15 +69,11 @@
       </div>
     </section>
 
-    <!-- Footer：工厂实时态 -->
-    <FactoryRealtimeStrip
-      :items="inProcessItems"
-      :can-open-detail="canOpenPartDetail"
-      @item-click="goPartDetail"
-    />
-
-    <!-- 抽屉：选中的工单详情 + 图纸 -->
-    <UrgentOrderDrawer v-model="drawerVisible" :part="selectedPart" />
+    <!-- 2026-09-30 新增：通用图纸预览对话框（A4 横向预览 + 该工单所有批次 + 持有者），
+         dashboard 双路径（UrgentOrdersList 行点击 + UpcomingDeliveryListDrawer 行点击）
+         都进 PartPreviewDialog；UrgentOrderDrawer 文件保留供外部复用，但 dashboard
+         不再挂载。 -->
+    <PartPreviewDialog v-model="previewOpen" :part="selectedPart" />
 
     <!-- 抽屉：7 天交期柱状图按层点击列表 -->
     <UpcomingDeliveryListDrawer
@@ -83,18 +88,20 @@
 </template>
 
 <script setup lang="ts">
-// 2026-09-29 重做：完全抛弃车间大屏设计，改为办公桌面屏。
+// 2026-09-29 重做 + 2026-09-30 重构：完全抛弃车间大屏设计，改为办公桌面屏。
 //
 // 设计要点：
 //   - 三个独立 useQuery + 一个共享 WS 事件订阅：
-//     * useDashboardSnapshot    → snapshot（upcoming_delivery + in_process）
-//     * useDashboardUrgentList  → items（100 件非终态件，按 planned_delivery_date ASC）
+//     * useDashboardSnapshot    → snapshot（upcoming_delivery + in_process +
+//       on_inspection_shelves）
+//     * useDashboardUrgentList  → items（100 件非终态件，按 system_delivery_date ASC，
+//       2026-09-30 调整）
 //     * useDashboardOverdue     → overdueCount（Manager-only）
 //     三个 useQuery 通过 useDashboardInvalidation 复用 AFFECTS_DASHBOARD 事件集 +
 //     500ms / 1500ms debounce，避免重复订阅 handler。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0（沿 2026-09-26 约定）。
-//   - 行点击 emit → 父组件管 drawer 开关（UrgentOrderDrawer 是受控组件，
-//     v-model + :part）；点击其他区域通过 emit('update:modelValue', false) 关闭。
+//   - 行点击 → PartPreviewDialog（v-model + :part，受控组件）；点击其他区域通过
+//     emit('update:modelValue', false) 关闭。UrgentOrderDrawer 不再挂载。
 //
 // 跨角色权限：
 //   - SHELF_ACCOUNT：isShelfAccount = true → canOpenPartDetail = false → chips 不可点。
@@ -102,7 +109,6 @@
 
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { useAuthStore } from '@/stores/auth';
 import { usePermissions } from '@/composables/usePermissions';
 import type { OrderStatus, PartListItem } from '@/types/parts';
 import { useDashboardSnapshot } from '@/views/dashboard/composables/useDashboardSnapshot';
@@ -112,11 +118,10 @@ import DashboardKpiTiles from './components/DashboardKpiTiles.vue';
 import UpcomingDeliveryChart from './components/UpcomingDeliveryChart.vue';
 import UpcomingDeliveryListDrawer from './components/UpcomingDeliveryListDrawer.vue';
 import UrgentOrdersList from './components/UrgentOrdersList.vue';
-import UrgentOrderDrawer from './components/UrgentOrderDrawer.vue';
 import FactoryRealtimeStrip from './components/FactoryRealtimeStrip.vue';
+import PartPreviewDialog from './components/PartPreviewDialog.vue';
 
 const router = useRouter();
-const auth = useAuthStore();
 const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
 
 /** 2026-09-29 新增：工控机账号（纯 SHELF_ACCOUNT）禁跳详情。 */
@@ -126,7 +131,7 @@ const canOpenPartDetail = computed(
 
 // ============ 数据 ============
 const { data: snapshot } = useDashboardSnapshot();
-const { items: urgentItems, urgentCount } = useDashboardUrgentList();
+const { items: urgentItems } = useDashboardUrgentList();
 const { overdueCount } = useDashboardOverdue(isManager);
 
 // upcoming_delivery 数组（来自 snapshot，可能为空数组）
@@ -147,6 +152,14 @@ const weekCount = computed<number>(() =>
   upcomingBuckets.value.reduce((sum, b) => sum + (Number(b.count) || 0), 0),
 );
 
+// 2026-09-30 新增：在制件数 = snapshot.in_process.length（在制 KPI tile 数据源）
+const inProcessCount = computed<number>(() => snapshot.value?.in_process.length ?? 0);
+
+// 2026-09-30 新增：在检件数 = snapshot.on_inspection_shelves.length（在检 KPI tile 数据源）
+const inInspectionCount = computed<number>(() =>
+  snapshot.value?.on_inspection_shelves.length ?? 0,
+);
+
 // ============ 顶部 header 派生 ============
 function todayIso(): string {
   const d = new Date();
@@ -156,41 +169,16 @@ function todayIso(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-const todayDisplay = computed(() => {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-  return `${yyyy}-${mm}-${dd} · ${weekdays[d.getDay()]}`;
-});
-
-const greeting = computed(() => {
-  const h = new Date().getHours();
-  if (h < 6) return '凌晨好';
-  if (h < 12) return '早上好';
-  if (h < 14) return '中午好';
-  if (h < 18) return '下午好';
-  return '晚上好';
-});
-
-const userName = computed(() => auth.user?.full_name ?? auth.user?.username ?? '用户');
-
-const roleTag = computed<{ label: string; type: 'primary' | 'warning' | 'info' }>(() => {
-  if (isManager.value) return { label: '管理员', type: 'primary' };
-  if (isClerk.value) return { label: '文员', type: 'primary' };
-  if (isInspector.value) return { label: '品检员', type: 'warning' };
-  if (isCncProgrammer.value) return { label: 'CNC 编程', type: 'info' };
-  return { label: '', type: 'info' };
-});
-
-// ============ 抽屉 ============
-const drawerVisible = ref(false);
+// ============ 预览对话框 ============
+// 2026-09-30 调整：previewOpen / selectedPart 替换原 drawerVisible（toggle UrgentOrderDrawer）。
+// 两条路径（UrgentOrdersList 行点击 + UpcomingDeliveryListDrawer 行点击）都进
+// PartPreviewDialog，行为统一：selectedPart.value = part; previewOpen.value = true。
+const previewOpen = ref(false);
 const selectedPart = ref<PartListItem | null>(null);
 
 function onRowClick(part: PartListItem): void {
   selectedPart.value = part;
-  drawerVisible.value = true;
+  previewOpen.value = true;
 }
 
 function goPartDetail(partId: string): void {
@@ -221,26 +209,27 @@ function onBarLayerClick(payload: {
   upcomingDrawerOpen.value = true;
 }
 
-// 2026-09-30（Phase 6）新增：UpcomingDeliveryListDrawer 行点击 → 关闭下方抽屉
-// 并复用 UrgentOrderDrawer 打开右侧工单详情。两 drawer 协调逻辑全在本函数，
-// UpcomingDeliveryListDrawer 只 emit rowClick(part)，不感知 UrgentOrderDrawer 存在。
+// 2026-09-30 调整：UpcomingDeliveryListDrawer 行点击 → 关闭下方抽屉并打开
+// PartPreviewDialog。两 drawer/dialog 协调逻辑全在本函数，UpcomingDeliveryListDrawer
+// 只 emit rowClick(part)，不感知 PartPreviewDialog 存在。
 // 不重置 selectedLayer —— 下次用户再点柱状图时 selectedLayer 还在，
 // upcomingDrawerOpen 会按需重新打开（沿用 onBarLayerClick 路径）。
 function onUpcomingRowClick(part: PartListItem): void {
   upcomingDrawerOpen.value = false;
   selectedPart.value = part;
-  drawerVisible.value = true;
+  previewOpen.value = true;
 }
 </script>
 
 <style lang="scss" scoped>
-// 2026-09-29 重做：移除整个 shelves-area / shelf-card / shelf-item / 1600/2400
-// 媒体查询，改为办公桌面屏布局（grid 列 + flex 行）。
+// 2026-09-29 重做 + 2026-09-30 重构：移除整个 shelves-area / shelf-card / shelf-item /
+// 1600/2400 媒体查询，改为办公桌面屏布局（grid 列 + flex 行），gap 12 → 16
+// 让三块组件视觉松绑。
 
 .dashboard {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
   padding: 16px;
   height: calc(100vh - 60px);
   box-sizing: border-box;
@@ -276,11 +265,37 @@ function onUpcomingRowClick(part: PartListItem): void {
 .dashboard-main {
   flex: 1;
   display: grid;
+  // 2026-09-30：grid 列比保持 3fr 2fr（用户「6:4」要求），仅改 main 子项 gap
   grid-template-columns: 3fr 2fr;
-  gap: 12px;
+  gap: 16px;
   min-height: 0;
 }
-.main-left,
+.main-left {
+  // 2026-09-30：main-left 三子项之间用 gap 16px 让 Chart / KpiTiles / Strip 视觉松绑
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+.main-left > :first-child {
+  // KpiTiles 不压缩，由 Chart / Strip 撑满剩余空间
+  flex-shrink: 0;
+}
+.main-left > :nth-child(2) {
+  // Chart 占 50%，可压缩到 min-height: 280px（保证窄屏可读）
+  flex: 1 1 50%;
+  min-height: 280px;
+  min-width: 0;
+  display: flex;
+}
+.main-left > :nth-child(2) > * {
+  flex: 1;
+  min-width: 0;
+}
+.main-left > :last-child {
+  // Strip 不压缩，由 Chart 撑满剩余空间
+  flex: 0 0 auto;
+}
 .main-right {
   min-height: 0;
   display: flex;

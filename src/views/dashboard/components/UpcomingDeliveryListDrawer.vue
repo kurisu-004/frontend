@@ -20,7 +20,8 @@
     - direction: 'rtl' → 'btt'（bottom-to-top），:size 480 → 60%：让抽屉从屏幕底部
       弹出，水平宽度撑满，最大高度 60%，与下方 dashboard 双栏布局配合更顺（用户
       点柱状图看到的是"目标日期的工单清单"，横向表格能展示更全列）。
-    - LAYER_COLOR 同步 Phase 4 三色警示色（#0FFCBE / #FFCC00 / #B4121B）。
+    - 2026-09-30 调整：LAYER_COLOR 同步 EP 预设 hex（success #67c23a / warning
+      #e6a23c / danger #f56c6c），与 UpcomingDeliveryChart.LAYERS.color 保持一致。
     - 新增 emit('rowClick', part)：用户在抽屉行点击 → 父组件 DashboardView 关闭
       下方抽屉 → 复用 UrgentOrderDrawer 打开右侧工单详情。两 drawer 协调逻辑
       全在父组件，本组件不感知 UrgentOrderDrawer 存在（关注点分离）。
@@ -51,15 +52,7 @@
           >
             {{ LAYER_LABEL[layer] }}
           </el-tag>
-          <span class="header-status-count">{{ statuses.length }} 状态</span>
-        </div>
-        <div class="header-row-2">
           <span class="header-total">共 {{ rows.length }} 件</span>
-        </div>
-        <div class="header-row-3">
-          <el-button text size="small" @click="emit('update:modelValue', false)">
-            关闭
-          </el-button>
         </div>
       </div>
 
@@ -79,12 +72,12 @@
               <span class="cell-serial">{{ row.serial_no ?? '—' }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="drawing_no" label="图号" width="96">
+          <el-table-column prop="drawing_no" label="图号" width="200">
             <template #default="{ row }">
               <span class="cell-drawing">{{ row.drawing_no }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="name" label="名称" min-width="120">
+          <el-table-column prop="name" label="名称" min-width="220">
             <template #default="{ row }">
               <span class="cell-name" :title="row.name">{{ row.name }}</span>
             </template>
@@ -175,14 +168,14 @@ const LAYER_LABEL: Record<'top' | 'middle' | 'bottom', string> = {
   bottom: '已送货',
 };
 
-/** 2026-09-30 新增 + Phase 5 同步 Phase 4 三色警示色（与 UpcomingDeliveryChart.LAYERS.color 对齐，
+/** 2026-09-30 新增 + Phase 5 同步 EP 预设 hex（与 UpcomingDeliveryChart.LAYERS.color 对齐，
  *  顶部 header 标签背景色取此）。
- *  之前用项目主色三蓝（#1e4d8b / #2c6cb8 / #4a8fd6）—— 与 chart 警示色阶不一致，
- *  同步切换为警示红 / 警示黄 / 亮青绿，让 header tag 与柱状图色块形成视觉闭环。 */
+ *  用 hex 而非 var() —— el-tag :style 直接吃 hex 字符串，与 chart 内 layer.color
+ *  形态对齐；dashboard 三层视觉闭环 = chart 柱体 + drawer header tag 同色。 */
 const LAYER_COLOR: Record<'top' | 'middle' | 'bottom', string> = {
-  top: '#B4121B',
-  middle: '#FFCC00',
-  bottom: '#0FFCBE',
+  top: '#f56c6c',
+  middle: '#e6a23c',
+  bottom: '#67c23a',
 };
 
 const layerColor = computed(() => LAYER_COLOR[props.layer]);

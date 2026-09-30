@@ -5,10 +5,16 @@
   底层已送货），点击某一层 emit 事件给父组件打开抽屉。
   数据来源：snapshot.upcoming_delivery: {date, count, by_status}[]（by_status
   必填对象，OrderStatus → 件数）。
-  视觉规则（2026-09-30 末次调整）：
-    - 底层（bottom）= #0FFCBE 亮青绿（已送货）
-    - 中层（middle）= #FFCC00 警示黄（待品检 / 待送货）
-    - 顶层（top）= #B4121B 警示红（品检前所有工序异常累积）
+  2026-09-30 视觉规则调整（用 EP 预设色阶）：
+    - 底层（bottom）= #67c23a（EP success green，已送货）
+    - 中层（middle）= #e6a23c（EP warning orange，待品检 / 待送货）
+    - 顶层（top）= #f56c6c（EP danger red，品检前所有工序异常累积）
+    原因：原警示色阶 #0FFCBE / #FFCC00 / #B4121B 偏离 Element Plus 预设色阶；
+    切到 EP 默认 hex 后与项目其它 danger/warning/success 标签色调一致，dashboard
+    视觉闭环更紧。**必须用 hex 而非 var(--el-color-*)** —— ECharts Canvas renderer
+    解析 CSS var() 不可靠，会出现「系列不渲染」或「取色失败」静默 fail。
+  2026-09-30 调整：series 加 barMaxWidth: 18 —— 解决 14 天横向堆叠视觉拥挤；
+  barGap / barCategoryGap 留默认（堆叠条本身已紧密）。
   2026-10-01 重构：参考 echarts 官方 stacked-horizontal-bar 示例，改为横向堆叠；series 加 emphasis.focus='series'。
   2026-09-30（Phase 4 vue-echarts 化）重构：迁 vue-echarts 8.3 <v-chart>，
   移除 echarts.init / ResizeObserver / dispose 自管（vue-echarts 自管生命周期）。
@@ -67,8 +73,9 @@ import type { OrderStatus } from '@/types/parts';
  *  - 底层（bottom）1 状态：DELIVERED（已送货）
  *
  *  COMPLETED / CANCELLED 后端 SQL 沿现状 WHERE 排除，不会出现；不需要进 LAYERS。
- *  Phase 4 调整：颜色用"警示色阶"（红 / 黄 / 亮青绿），更贴合 dashboard
- *  风险语境的视觉直觉；不再用项目主色三蓝（沿 plan §3.2）。 */
+ *  2026-09-30 调整：颜色改 EP 预设 hex（success green #67c23a / warning orange
+ *  #e6a23c / danger red #f56c6c），对齐项目其它 danger/warning/success 标签。
+ *  **必须用 hex 而非 var()** —— ECharts Canvas renderer 解析 var() 不可靠。 */
 interface UpcomingLayer {
   readonly key: 'top' | 'middle' | 'bottom';
   readonly label: string;
@@ -97,24 +104,27 @@ const emit = defineEmits<{
  *  Phase 4 顺序：[bottom, middle, top] —— ECharts 横向堆叠时，series 数组中后入的
  *  series 会渲染在更靠右（视觉顶端）。LAYERS 顺序与系列渲染顺序严格一致，
  *  legend.data 与 series.name 也用 LAYERS.map(l => l.label) 保持字符串对齐
- *  （沿 2026-10-01 bugfix：避免「xxx series not exists」警告）。 */
+ *  （沿 2026-10-01 bugfix：避免「xxx series not exists」警告）。
+ *  2026-09-30 调整：三色切 EP 默认 hex（success #67c23a / warning #e6a23c /
+ *  danger #f56c6c）；hex 而非 var()，因 ECharts Canvas renderer 解析 CSS var()
+ *  不可靠。 */
 const LAYERS: readonly UpcomingLayer[] = [
   {
     key: 'bottom',
     label: '已送货',
-    color: '#0FFCBE',
+    color: '#67c23a',
     statuses: ['DELIVERED'],
   },
   {
     key: 'middle',
     label: '待品检/待送货',
-    color: '#FFCC00',
+    color: '#e6a23c',
     statuses: ['INSPECTION', 'READY_TO_SHIP'],
   },
   {
     key: 'top',
     label: '品检前',
-    color: '#B4121B',
+    color: '#f56c6c',
     statuses: ['PENDING', 'PROGRAMMING', 'IN_PROCESS', 'REPAIRING', 'OUTSOURCE'],
   },
 ] as const;
@@ -189,6 +199,10 @@ const chartOption = computed<EChartsCoreOption>(() => {
     type: 'bar' as const,
     stack: 'delivery',
     data: aligned.map((b) => layerCount(b, layer)),
+    // 2026-09-30 新增：barMaxWidth 限宽 18px —— 14 天横向堆叠视觉拥挤，加 max
+    // 宽度后保持每根柱细瘦、不挡数字标；ECharts stacked bar 不需要 barGap 调
+    // 整（堆叠条本身已经紧密）。
+    barMaxWidth: 18,
     itemStyle: {
       color: layer.color,
       // 2026-09-30 Phase 4：移除 borderRadius —— 横向堆叠时圆角意义不大，
