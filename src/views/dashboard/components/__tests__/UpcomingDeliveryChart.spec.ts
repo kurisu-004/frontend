@@ -253,4 +253,79 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     expect(echartsUseMock).toHaveBeenCalled();
     wrapper.unmount();
   });
+
+  // 2026-10-01 重构：横向堆叠 + emphasis 防回归
+  it('T1：横向堆叠 — xAxis=type:value, yAxis=type:category', async () => {
+    const buckets: UpcomingDeliveryEntryData[] = [
+      makeBucket({
+        date: '2026-10-01',
+        count: 6,
+        by_status: { PENDING: 3, INSPECTION: 2, DELIVERED: 1 },
+      }),
+    ];
+    const wrapper = mount(UpcomingDeliveryChart, {
+      props: { buckets, height: '320px' },
+    });
+
+    await nextTick();
+    await flushPromises();
+
+    const option = lastChart!.setOption.mock.calls[0]![0] as {
+      xAxis: { type: string };
+      yAxis: { type: string };
+    };
+    expect(option.xAxis.type).toBe('value');
+    expect(option.yAxis.type).toBe('category');
+
+    wrapper.unmount();
+  });
+
+  it('T2：series 含 emphasis.focus=series', async () => {
+    const buckets: UpcomingDeliveryEntryData[] = [
+      makeBucket({
+        date: '2026-10-01',
+        count: 6,
+        by_status: { PENDING: 3, INSPECTION: 2, DELIVERED: 1 },
+      }),
+    ];
+    const wrapper = mount(UpcomingDeliveryChart, {
+      props: { buckets, height: '320px' },
+    });
+
+    await nextTick();
+    await flushPromises();
+
+    const option = lastChart!.setOption.mock.calls[0]![0] as {
+      series: Array<{ emphasis?: { focus?: string } }>;
+    };
+    expect(option.series).toHaveLength(3);
+    for (const s of option.series) {
+      expect(s.emphasis?.focus).toBe('series');
+    }
+
+    wrapper.unmount();
+  });
+
+  it('T3：grid.left 预留日期轴宽度（>= 50）', async () => {
+    const buckets: UpcomingDeliveryEntryData[] = [
+      makeBucket({
+        date: '2026-10-01',
+        count: 6,
+        by_status: { PENDING: 3, INSPECTION: 2, DELIVERED: 1 },
+      }),
+    ];
+    const wrapper = mount(UpcomingDeliveryChart, {
+      props: { buckets, height: '320px' },
+    });
+
+    await nextTick();
+    await flushPromises();
+
+    const option = lastChart!.setOption.mock.calls[0]![0] as {
+      grid: { left: number };
+    };
+    expect(option.grid.left).toBeGreaterThanOrEqual(50);
+
+    wrapper.unmount();
+  });
 });

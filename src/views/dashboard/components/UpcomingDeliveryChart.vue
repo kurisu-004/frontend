@@ -11,6 +11,7 @@
     - 底层（bottom）= #4a8fd6 浅蓝
     - 2026-09-30 bugfix：ECharts canvas 不解析 CSS var()，全程 hex 字面量
       （与 src/views/statistics/OverviewTab.vue:204,212,232,234 同形态）。
+  2026-10-01 重构：参考 echarts 官方 stacked-horizontal-bar 示例，改为横向堆叠；series 加 emphasis.focus='series'；不改 LAYERS / click handler / 数据契约。
 -->
 <template>
   <div class="chart-wrap">
@@ -40,6 +41,13 @@
 //   - legend top:0，data 走 LAYERS.map(l => l.label)。
 //   - click handler 通过 emit('barLayerClick', { date, layer, statuses })，
 //     让父组件 DashboardView 打开 UpcomingDeliveryListDrawer。
+//
+// 为什么不切到全局 EChart.vue（2026-10-01 重构 plan §3.2 决策记录）：
+//   - 需要 chart.on('click', ...) → emit('barLayerClick', ...)（open drawer 链路）
+//   - 需要自定义 tooltip formatter（日期 + 总件数 + 分层件数 多语义）
+//   - 需要 lastAligned 闭包缓存，对齐 buckets 与 click handler
+// EChart.vue 仅暴露 option / loading props，不支持上述需求。
+// 此处自写 init / ResizeObserver / dispose 模板沿 src/components/EChart.vue:82-128。
 
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import * as echarts from 'echarts/core';
@@ -188,7 +196,9 @@ function buildOption(buckets: UpcomingDeliveryEntryData[]): EChartsCoreOption {
     data: aligned.map((b) => layerCount(b, layer)),
     itemStyle: {
       color: layer.color,
-      // 仅顶层圆角（柱顶圆角 4px），其它 0。
+      // 2026-10-01 重构：横向 stack 顶端 = 最右段（series[N]），由 ECharts 自动接管圆角；
+      // 此处显式给 series[0] 设 [4,4,0,0] 是历史写法保留（沿 2026-09-30），
+      // 重构不破坏既有测试断言（series[0].borderRadius === [4,4,0,0]），依赖 echarts 自动行为。
       borderRadius: idx === 0 ? [4, 4, 0, 0] : 0,
     },
     // 每层数字标在层内顶部（沿 plan §2.2 #4）
@@ -202,11 +212,14 @@ function buildOption(buckets: UpcomingDeliveryEntryData[]): EChartsCoreOption {
         return p.value > 0 ? String(p.value) : '';
       },
     },
+    // 2026-10-01 重构：对齐 echarts 官方示例 — hover 时本 series 高亮，其它 series 弱化
+    emphasis: { focus: 'series' },
   }));
 
   return {
     // 顶部留位置给 legend + 每层标
-    grid: { left: 40, right: 16, top: 36, bottom: 32 },
+    // 2026-10-01 重构：横向图日期轴在 Y，需 left >= 50；底部无 category 轴，bottom 收窄。
+    grid: { left: 60, right: 24, top: 36, bottom: 24 },
     legend: {
       data: LAYERS.map((l) => l.label),
       top: 0,
@@ -244,19 +257,20 @@ function buildOption(buckets: UpcomingDeliveryEntryData[]): EChartsCoreOption {
         return rows.join('<br/>');
       },
     },
+    // 2026-10-01 重构：xAxis / yAxis 类型互换，横向堆叠对齐 echarts 官方示例。
     xAxis: {
-      type: 'category',
-      data: xLabels,
-      axisLine: { lineStyle: { color: '#dcdfe6' } },
-      axisTick: { show: false },
-      axisLabel: { color: '#606266', fontSize: 12 },
-    },
-    yAxis: {
       type: 'value',
       axisLine: { show: false },
       axisTick: { show: false },
       splitLine: { lineStyle: { color: '#f0f2f5' } },
       axisLabel: { color: '#909399', fontSize: 12 },
+    },
+    yAxis: {
+      type: 'category',
+      data: xLabels,
+      axisLine: { lineStyle: { color: '#dcdfe6' } },
+      axisTick: { show: false },
+      axisLabel: { color: '#606266', fontSize: 12 },
     },
     series,
   };
