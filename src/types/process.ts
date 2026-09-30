@@ -15,7 +15,12 @@ export interface Process {
   name: string;
   category: ProcessCategory;
   sort_order: number;
-  description: string | null;
+  // 2026-09-30 修复：description 改 `string | null | undefined` 对齐后端
+  // ProcessOut (backend-rust src/modules/prod/process/vo/process.rs:15-16) 的
+  // skip_serializing_if 行为 —— 后端 None 时整个字段从 JSON 响应中省略（不是 null），
+  // wire 形态要么 string 要么 absent。原 `string | null` 假设后端始终返字段是错的。
+  // 渲染层已有 `?? null` / `?? '#ddd'` 等 nullish 兜底，向下兼容。
+  description: string | null | undefined;
   /**
    * 外协工序是否需要报价审批（2026-07-28 新增）：
    * - true：走原有报价 + MANAGER 审批 + 发送流程（OUTSOURCE 默认）
@@ -29,8 +34,10 @@ export interface Process {
    * NULL = 未设置（前端视作默认色）。
    * 合并 fc99d3b（required string|null）和 feature/process-design（optional）冲突时，
    * 取 HEAD 的 required 语义：后端始终返回字段（可为 null），前端渲染层视 null 为未设置。
+   *
+   * 2026-09-30 修复：同 description，加 `| undefined` 对齐后端 skip_serializing_if。
    */
-  color: string | null;
+  color: string | null | undefined;
   /**
    * 2026-09-29 新增：是否为 CNC 工序。后端 `t_process.is_cnc` 列（CNC 编程门控字段）：
    *   - true：参与「待编程一览」Tab 化（GET /parts/pending-programming 出参

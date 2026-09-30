@@ -102,7 +102,19 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   //   - 与 usePartsColumnFilters 同源（同一 query key），保证下一次切换时拿到同一份缓存；
   //   - isFetching 通过 processesLoading 暴露（dialog loading / 占位用）。
   const procQuery = useProcessesQuery({ limit: 200 });
-  const processes = computed<Process[]>(() => procQuery.data.value?.items ?? []);
+  // 2026-09-30 修复：Zod processSchema 升级 description / color 为 `.nullable().optional()`
+  // 兼容后端 skip_serializing_if 后，z.infer 派生的 items 元素 key 在 TS 看来是
+  // optional（description?: ...），而 Process business type 是 required —— 用映射显式
+  // 收窄 undefined → null，沿用 usePartProcessDesign.ts:139 `p.color ?? null` 的
+  // 「wire → business type 边界 nullish 归一」约定。值类型本来就接受 undefined（见
+  // src/types/process.ts 注释），这一步只是把 optional key 升格成 required key。
+  const processes = computed<Process[]>(() =>
+    (procQuery.data.value?.items ?? []).map((p) => ({
+      ...p,
+      description: p.description ?? null,
+      color: p.color ?? null,
+    })),
+  );
   const processesLoading = procQuery.isFetching;
 
   /** 2026-09-26（B 任务）：拉取 shelves（模块级缓存：shelves.value.length===0 才拉）。

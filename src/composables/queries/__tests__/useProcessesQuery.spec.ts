@@ -28,6 +28,15 @@
 //   - T5：传 getter 函数 () => params → 改 params 后调 refetch，listProcesses
 //     收到新 params（MaybeRefOrGetter 第三个分支）
 //   - T6：未传参数 → listProcesses 收到 {}（与 T4 等价但走「参数完全缺省」分支）
+//   - T7：queryKey 形态正确（包含 reactive params 内容）—— 后续 invalidateProcessesQuery
+//     失效路径不走它
+//   - T8（2026-09-30 regression guard）：description / color 字段在 JSON 响应中
+//     被后端 skip_serializing_if 省略时仍能 parse —— 该 bug 会让
+//     processListResultSchema.parse 抛 ZodError → useProcessesQuery.data
+//     === undefined → ProcessTab / WorkerQueueBoard / usePartDispatch 全部空。
+//     processSchema 已升级 description/color 为 `.nullable().optional()`。
+//   - T9（2026-09-30 regression guard）：description / color 字段为显式 null
+//     时仍能 parse（向后兼容 schema 升级前的 null 路径）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computed, createApp, effectScope, ref, type Ref } from 'vue';
@@ -235,6 +244,101 @@ describe('useProcessesQuery — reactive params + queryKey 响应式回归保护
     await q!.refetch();
     expect(firstParams().code_like).toBe('A');
     expect(firstParams().limit).toBe(200);
+    scope.stop();
+  });
+
+  it('T8（2026-09-30 regression guard）：description / color 字段在 JSON 响应中被后端 skip_serializing_if 省略 → 仍能 parse', async () => {
+    // 背景（2026-09-30 回归）：后端 ProcessOut
+    // (backend-rust src/modules/prod/process/vo/process.rs:15-20) 对
+    // description (line 15) / color (line 19) 两个 Option<String> 字段加了
+    // #[serde(skip_serializing_if = "Option::is_none")] —— None 时整个字段从 JSON
+    // 响应中省略（不是序列化为 null）。老 schema 只 .nullable() 不 .optional()，
+    // 字段缺失时 Zod 抛 Required error → 整表 parse 失败 → queryFn 抛错 →
+    // data === undefined → ProcessTab.vue 表格空 / WorkerQueueBoard.vue
+    // 没有 INHOUSE 工序 tab / usePartDispatch.ts 工序下拉空（3 处走 Zod parse
+    // 的共用 caller）。processSchema 已升级 description / color 为
+    // `.nullable().optional()`，本用例锁死「字段缺失」场景。
+    //
+    // mockResolvedValue（持久）而非 Once —— useQuery 在 setup 时会自动发起首调，
+    // 紧接的 refetch 是第二调，两次都必须命中我们的 mock；Once 只够一次，会让
+    // refetch 落到 beforeEach 默认的 mockResolvedValue（空 items）→ 误判
+    // data.value.items.length === 0。
+    realListProcessesMock.mockResolvedValue({
+      items: [
+        {
+          id: '170000000000001',
+          version: 1,
+          code: 'CNC',
+          name: '数控加工',
+          category: 'INHOUSE',
+          sort_order: 1,
+          requires_approval: false,
+          is_cnc: true,
+          created_at: '',
+          updated_at: '',
+          // description / color 字段被后端跳过序列化（None），整个 key 不出现
+        },
+      ],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    });
+
+    const scope = effectScope();
+    let q: ReturnType<typeof useProcessesQuery> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useProcessesQuery({ limit: 200 }));
+    });
+
+    await q!.refetch();
+    expect(q!.isError.value).toBe(false);
+    expect(q!.data.value?.items.length).toBe(1);
+    // 字段缺失在 Zod 默认 strip 模式下被吃成 undefined（不是 null）。
+    expect(q!.data.value?.items[0]?.description).toBeUndefined();
+    expect(q!.data.value?.items[0]?.color).toBeUndefined();
+    // 必填字段未被本回归牵连，保持原值。
+    expect(q!.data.value?.items[0]?.is_cnc).toBe(true);
+    scope.stop();
+  });
+
+  it('T9（2026-09-30 regression guard）：description / color 字段显式为 null → 仍能 parse（向后兼容）', async () => {
+    // 背景（2026-09-30）：T8 是 skip_serializing_if 缺字段场景，本用例是显式
+    // null 场景 —— schema 升级不能破坏旧契约：原 .nullable() 接受 null 的行为
+    // 必须保留。.nullable() + .optional() 正交并存后两条路径都通。
+    // 同样用持久 mockResolvedValue 让首调 + refetch 都拿到我们的 null 响应。
+    realListProcessesMock.mockResolvedValue({
+      items: [
+        {
+          id: '170000000000002',
+          version: 1,
+          code: 'OUT',
+          name: '外协',
+          category: 'OUTSOURCE',
+          sort_order: 0,
+          description: null,
+          requires_approval: true,
+          color: null,
+          is_cnc: false,
+          created_at: '',
+          updated_at: '',
+        },
+      ],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    });
+
+    const scope = effectScope();
+    let q: ReturnType<typeof useProcessesQuery> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useProcessesQuery({ limit: 200 }));
+    });
+
+    await q!.refetch();
+    expect(q!.isError.value).toBe(false);
+    expect(q!.data.value?.items.length).toBe(1);
+    expect(q!.data.value?.items[0]?.description).toBeNull();
+    expect(q!.data.value?.items[0]?.color).toBeNull();
     scope.stop();
   });
 });

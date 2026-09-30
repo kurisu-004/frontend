@@ -119,7 +119,26 @@ export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
  * 2026-09-29 新增：is_cnc 字段（12 字段）。CNC 编程门控：是否参与「待编程一览」
  * Tab 化（GET /parts/pending-programming 出参 `PartListItem.has_cnc_program` 字段即
  * 按 chain 中是否含 is_cnc=true 的工序派生命中）。沿 CLAUDE.md §M-4 strip 陷阱
- * 必填 boolean 显式声明 —— 后端漏返 Zod parse 抛错守门。 */
+ * 必填 boolean 显式声明 —— 后端漏返 Zod parse 抛错守门。
+ *
+ * 2026-09-30 修复：description / color 加 `.optional()` 兼容后端 skip_serializing_if。
+ * 后端 `ProcessOut` (backend-rust src/modules/prod/process/vo/process.rs:15-20) 对
+ * description (line 15) 与 color (line 19) 两个 `Option<String>` 字段加了
+ * `#[serde(skip_serializing_if = "Option::is_none")]` —— `None` 时整个字段从
+ * JSON 响应中省略（不是序列化为 `null`）。原 schema 只用 `.nullable()` 不放宽
+ * required，字段缺失时 Zod 抛 `Required` error → queryFn parse 失败 →
+ * data === undefined → 整张 process 列表消费侧退化：ProcessTab.vue 表格空、
+ * WorkerQueueBoard.vue 没有 INHOUSE 工序 tab、usePartDispatch 工序下拉空。
+ * `.nullable()` 与 `.optional()` 是正交维度（前者放宽类型、后者放宽 required），
+ * 必须并存才能同时接受 null 与字段缺失两种形态。3 处走 Zod parse 的 caller
+ * （useProcessesQuery.ts:39 + ProcessTab.vue:252 + WorkerQueueBoard.vue:153 +
+ * usePartDispatch.ts:104 共用同一份 cache）因此受影响；另有 8 处 caller
+ * （PendingProgrammingList.vue:413 / ShelfList.vue:324 /
+ * ProcessPickerDialog.vue:180 / InspectionPending.vue:865 /
+ * OutsourceQuoteList.vue:79 / OutsourceSendReceive.vue:75 /
+ * OutsourceList.vue:341 / PartDetail.vue:579 / usePartProcessDesign.ts:220 /
+ * ProcessWorkTypeMappingTab.vue:108 / RepairStartDialog.vue:87 等）走
+ * `resp.items` 直接消费、不经 Zod，不受本回归影响。 */
 export const processSchema = z.object({
   id: z.string(),
   version: z.number(),
@@ -127,9 +146,12 @@ export const processSchema = z.object({
   name: z.string(),
   category: z.enum(['INHOUSE', 'OUTSOURCE']),
   sort_order: z.number(),
-  description: z.string().nullable(),
+  // 2026-09-30 修复：加 .optional() 兼容后端 skip_serializing_if（None 时整个字段
+  // 从 JSON 响应中省略，不是 null —— 见 processSchema 顶部注释）。
+  description: z.string().nullable().optional(),
   requires_approval: z.boolean(),
-  color: z.string().nullable(),
+  // 2026-09-30 修复：同上，加 .optional() 兼容后端 skip_serializing_if。
+  color: z.string().nullable().optional(),
   is_cnc: z.boolean(),
   created_at: z.string(),
   updated_at: z.string(),
