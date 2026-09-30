@@ -686,7 +686,10 @@ export const poolBatchItemSchema = z.object({
   shelf_name: z.string(),
   is_urgent: z.boolean(),
   note: z.string().nullable(),
-  current_process_step_id: z.string().nullable().optional(),
+  // 2026-09-30 review 第 1 轮修复（M-1）：必填 nullable —— 与 partSchema 同源「缺字段必抛错」
+  // 守门。原先 `.nullable().optional()` 让 strip 模式漏列 / 后端漏返时静默丢字段，违反
+  // 「必填 nullable」契约（workerPool.contract.ts:165）。
+  current_process_step_id: z.string().nullable(),
   // 2026-09-30 必填 boolean —— 与 partSchema.has_cnc_program 同源 regression guard。
   has_cnc_program: z.boolean(),
   version: z.number(),

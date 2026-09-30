@@ -92,11 +92,10 @@
             </span>
           </template>
           <!-- 自产工序 Tab：WorkerPoolTab 自管 useWorkerPoolByProcessQuery，
-               :lazy="true" 保证切到该 tab 才发请求。 -->
-          <WorkerPoolTab
-            :process-id="p.id"
-            :shelf-id="shelfId"
-          />
+               :lazy="true" 保证切到该 tab 才发请求。shelfId 由本组件 provide 注入
+               给内嵌 WorkerColumn / PoolDrawer 消费，WorkerPoolTab 自身不需要
+               （2026-09-30 review 第 1 轮修复 m4 删除 shelfId prop）。 -->
+          <WorkerPoolTab :process-id="p.id" />
         </el-tab-pane>
       </el-tabs>
 

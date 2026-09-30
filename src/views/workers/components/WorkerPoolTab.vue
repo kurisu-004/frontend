@@ -33,16 +33,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, type MaybeRefOrGetter } from 'vue';
+import { computed, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import { useWorkerPoolByProcessQuery } from '@/composables/queries/useWorkerPoolByProcessQuery';
 import { poolItemToCard } from '@/views/workers/composables/poolItemToCard';
 import type { Worker, ProcessPoolView } from '@/types/workerPool';
 import PoolDrawer from './PoolDrawer.vue';
 import WorkerColumn from './WorkerColumn.vue';
 
+// 2026-09-30 review 第 1 轮修复（m4）：删 shelfId prop —— 组件内部无引用，shelfId 由
+// WorkerQueueBoard provide 注入给内嵌的 WorkerColumn / PoolDrawer 消费。本组件走
+// useWorkerPoolByProcessQuery 不依赖 shelfId（端点路径参数只有 process_id）。
 const props = defineProps<{
   processId: string;
-  shelfId: MaybeRefOrGetter<string | null>;
 }>();
 
 // 2026-09-30：tab 懒加载数据源 —— useWorkerPoolByProcessQuery 自管 query，
@@ -50,6 +53,16 @@ const props = defineProps<{
 // 切回已激活过的 tab 不会重拉；同 processId 的 PendingPoolCard 也走同一键，
 // 共享 cache identity（hit 即不重拉）。
 const query = useWorkerPoolByProcessQuery(() => props.processId);
+
+// 2026-09-30 review 第 1 轮修复（m8）：useQuery error → ElMessage 错误桥接
+// （沿 CLAUDE.md #9 usePartsListQuery.ts:334-336 范本）。模板里 v-else-if
+// "加载失败" el-empty 只是 UI 兜底；toast 必须走 ElMessage.error 才让用户看到。
+watch(
+  () => query.error.value,
+  (e) => {
+    if (e) ElMessage.error(e.message ?? '加载工序池失败');
+  },
+);
 
 /** 2026-09-30：聚合 workerId + processId + 工序 code/name → UI Worker 结构。
  *  pool 适配走 poolItemToCard（共享 useWorkerPoolCountsQuery 域内的 batch 适配）。

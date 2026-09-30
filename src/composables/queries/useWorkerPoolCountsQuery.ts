@@ -67,17 +67,11 @@ export function useWorkerPoolCountsQuery(
 }
 
 /** 2026-09-30 新增：失效整个 worker-pool counts 域（写操作完成后调）。
- *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。 */
+ *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。
+ *  调用点：usePendingDispatch.invalidateAll + useWorkerQueue.3 mutations onSuccess
+ *  + WorkerQueueBoard.onRefresh（覆盖全仓写点）。 */
 export function invalidateWorkerPoolCountsQuery(qc: QueryClient): Promise<void> {
   return qc
     .invalidateQueries({ queryKey: qk.workerPoolCountsPrefix })
     .then(() => undefined);
-}
-
-/** 2026-09-30 新增：失效整个 worker-pool counts 域（同 invalidateWorkerPoolCountsQuery
- *  alias —— 仓内写点多了之后保留命名空间清晰度）。
- *  当前调用点：usePendingDispatch.refreshBoard 跨域失效链（dispatch / bulk / auto
- *  后 batch 离开待下发池，进入 worker-pool counts 计数 —— counts 必须 invalidate）。 */
-export function invalidateWorkerPoolCountsAll(qc: QueryClient): Promise<void> {
-  return invalidateWorkerPoolCountsQuery(qc);
 }

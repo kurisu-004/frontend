@@ -25,7 +25,7 @@
 // 模块级单例（仍保留）—— view 端解构后 `useWorkerQueue()` 多次调用拿同一引用，避免
 // 重复订阅造成的资源浪费；worker-pool 域的批量数据（KB 级）不依赖组件实例生命周期。
 
-import { computed, ref, type Ref } from 'vue';
+import { ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import {
@@ -126,9 +126,27 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
     },
   });
 
-  const removeMutation = useMutation<WorkerTakenItemDto, Error, WorkerRemoveRequest & { process_id: string }>({
+  /** 2026-09-30 review 第 1 轮修复（M-2）：Variables 类型独立声明 —— 移除了
+   *  `WorkerRemoveRequest & { process_id: string }` 这种把 phantom 字段塞进 HTTP body
+   * 的反模式。后端 AdminRemoveRequest 没有 process_id（workerPool.contract.ts:195-202），
+   * 前端借 process_id 仅用于 onSuccess 失效缓存。mutationFn 内只透传 WorkerRemoveRequest
+   * 4 字段；onSuccess 解构读 process_id 用于 invalidate。
+   * 不变量（沿 usePartBatchManual.ts:892 范本）：mutationFn 与 onSuccess 解耦，
+   * mutationKey 三层数组。 */
+  const removeMutation = useMutation<
+    WorkerTakenItemDto,
+    Error,
+    WorkerRemoveRequest & { process_id: string }
+  >({
     mutationKey: ['worker-pool', 'remove'],
-    mutationFn: async (req) => removeFromWorkerPool(req),
+    mutationFn: async (req) =>
+      // 2026-09-30 review 第 1 轮修复（M-2）：显式 4 字段透传，避免 phantom process_id 混入 body。
+      removeFromWorkerPool({
+        worker_id: req.worker_id,
+        batch_id: req.batch_id,
+        shelf_id: req.shelf_id,
+        next_process_id: req.next_process_id,
+      }),
     onSuccess: async (_res, vars) => {
       await invalidateWorkerPoolByProcessQuery(qc, vars.process_id);
       await invalidateWorkerPoolCountsQuery(qc);
@@ -271,4 +289,4 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
 
 // 2026-09-30：workers ref 保留导出但不再有外部写点（processPools 已下线，
 // workerHeld 来源改为 cache 合并）。本注释防止 reviewer 误删。
-void computed;
+// 2026-09-30 review 第 1 轮修复（M-3）：删 `void computed;` 占位 + 删 `computed` import。

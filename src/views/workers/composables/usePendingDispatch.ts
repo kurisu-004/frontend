@@ -63,13 +63,15 @@ import {
 import type { ListPendingBatchesParams } from '@/api/pendingBatches';
 
 /** 2026-09-29 review 第 1 轮修复：usePendingDispatch 显式接受 deps，由 caller
- *  （WorkerQueueBoard）注入刷新 processPools 的回调 —— useWorkerQueue.processPools
+ *  （WorkerQueueBoard）注入刷新 workerHeld 的回调 —— useWorkerQueue.workerHeld
  *  是模块级 ref（非 TanStack Query），invalidate 失效链触达不到它，必须依赖
  *  loadBoard(shelfId) 重新拉取 + 聚合（沿 usePartDispatch.batchDispatchMutation
- *  onSuccess 模式）。 */
+ *  onSuccess 模式）。
+ *  2026-09-30 review 第 1 轮修复（m6）：processPools 已下线（commit 3 起，WorkerPoolTab
+ *  + PendingPoolCard 自管 useWorkerPoolByProcessQuery），本注释更新为 workerHeld 单引用。 */
 export interface UsePendingDispatchDeps {
-  /** 重新拉 useWorkerQueue 看板（processPools / workers / workerHeld 三个本地 ref）。
-   *  caller 注入 = async () => queue.loadBoard(activeShelfId ?? null)。 */
+  /** 重新拉 useWorkerQueue 看板的 workerHeld 模块级 ref（同步 TanStack 缓存合并外的
+   *  兜底 seed）。caller 注入 = async () => queue.loadBoard(activeShelfId ?? null)。 */
   refreshBoard: () => Promise<void>;
 }
 
@@ -123,10 +125,12 @@ export interface UsePendingDispatchReturn {
  *   ```
  *
  * 2026-09-29 review 第 1 轮修复：
- *  - 接受 deps.refreshBoard —— processPools 是模块级 ref，invalidate 失效链触达不到；
+ *  - 接受 deps.refreshBoard —— workerHeld 是模块级 ref，invalidate 失效链触达不到；
  *  - 三个 mutation 统一接 handleProcessChainRequired：命中 20706 → 弹「前往制定」
  *    确认框 → 跳 /production/process-design?part_id=...（沿 usePartDispatch.ts:140-141 /
  *    158-162 范本）。
+ * 2026-09-30 review 第 1 轮修复（m6）：原注释提到 processPools 模块级 ref 已下线，
+ *  改为 workerHeld —— 保留 deps.refreshBoard 语义（refresh 唯一未走 TanStack 的本地 ref）。
  *
  * 2026-09-29 修复 dispatch 契约漂移：
  *  - 三个 mutation 的 mutationFn 都走 Zod parse 守门 + 入参形态对齐 backend VO；

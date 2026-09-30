@@ -43,6 +43,7 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
+import { ElMessage } from 'element-plus';
 import { useDraggable } from 'vue-draggable-plus';
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool';
 import { useWorkerStateByWorkerQuery } from '@/composables/queries/useWorkerStateByWorkerQuery';
@@ -63,11 +64,24 @@ const props = defineProps<{
 // 2026-09-30：shelfId 通过 inject('shelfId') 从父级 WorkerQueueBoard 拿
 // （provide 已沿用 2026-08-26 既有约定）。WorkerColumn 自管 useWorkerStateByWorkerQuery
 // 走 qk.workerPoolStateByWorker(worker.id, shelfId) 缓存键，跨 tab 共享。
-const shelfId = inject<ComputedRef<string>>('shelfId')!;
+// 2026-09-30 review 第 1 轮修复（m3）：用 computed default 替代 `!` 非空断言 ——
+// 未注入时拿 computed(() => '')，后续 query.enabled 闸门会短路（useWorkerStateByWorkerQuery
+// 要求非空），workerState 拉不到自然走 error/empty 分支（与「无 active shelfId」语义对齐）。
+const shelfId = inject<ComputedRef<string>>('shelfId', computed(() => ''));
 
 const stateQuery = useWorkerStateByWorkerQuery(
   () => props.worker.id,
   () => shelfId.value,
+);
+
+// 2026-09-30 review 第 1 轮修复（m8）：useWorkerStateByWorkerQuery error → ElMessage 错误
+// 桥接（沿 CLAUDE.md #9 usePartsListQuery.ts:334-336 范本）。模板 v-else-if「加载失败」
+// el-empty 只是 UI 占位，toast 必须走 ElMessage.error 才让用户看到。
+watch(
+  () => stateQuery.error.value,
+  (e) => {
+    if (e) ElMessage.error(e.message ?? '加载工人状态失败');
+  },
 );
 
 /** 2026-09-30：把 useWorkerStateByWorkerQuery.held_batches 适配成 WorkOrderCard[]。

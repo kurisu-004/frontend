@@ -68,7 +68,6 @@ vi.mock('@/api/workerPool', () => ({
 
 import { workerPoolCountsSchema } from '../schemas';
 import {
-  invalidateWorkerPoolCountsAll,
   invalidateWorkerPoolCountsQuery,
   useWorkerPoolCountsQuery,
 } from '../useWorkerPoolCountsQuery';
@@ -226,12 +225,13 @@ describe('useWorkerPoolCountsQuery — reactive params + queryKey 失效守门�
     scope.stop();
   });
 
-  it('T7：invalidateWorkerPoolCountsAll 与 invalidateWorkerPoolCountsQuery 等价（共享失效源）', async () => {
-    // 沿仓内约定：两者均走 qk.workerPoolCountsPrefix，行为对齐
-    // 不变量保证 usePendingDispatch 跨域失效链调 invalidateWorkerPoolCountsAll
-    // 与 useWorkerQueue 单点失效调 invalidateWorkerPoolCountsQuery 不分叉。
+  it('T7：invalidateWorkerPoolCountsQuery 走 qk.workerPoolCountsPrefix（共享失效源）', async () => {
+    // 2026-09-30 review 第 1 轮修复（m2）：原 invalidateWorkerPoolCountsAll alias 已删，
+    // 全仓调用点统一走 invalidateWorkerPoolCountsQuery。不变量保证 usePendingDispatch
+    // 跨域失效链与 useWorkerQueue 单点失效都通过 qk.workerPoolCountsPrefix 命中 counts
+    // 缓存，行为不分叉。
     const spy = vi.spyOn(testQueryClient, 'invalidateQueries');
-    await invalidateWorkerPoolCountsAll(testQueryClient);
+    await invalidateWorkerPoolCountsQuery(testQueryClient);
     expect(spy).toHaveBeenCalledWith({
       queryKey: ['worker-pool', 'counts'],
     });

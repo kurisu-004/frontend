@@ -782,6 +782,27 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(parsed.has_cnc_program).toBe(false);
     });
 
+    it('S-WP2c：poolBatchItemSchema 缺 current_process_step_id → 抛 ZodError（M-1 strip 陷阱修复 guard）', () => {
+      // 2026-09-30 review 第 1 轮修复（M-1）：current_process_step_id 是「必填 nullable」字段
+      // （workerPool.contract.ts:165 契约 string | null），不能 `.optional()` —— zod 默认
+      // strip 模式下，`.nullable().optional()` 会让后端真漏返该字段时静默丢（null 与
+      // undefined 同源 strip），导致 UI 拿到的 current_process_step_id 是 undefined 而非 null。
+      // S-WP1 / S-WP3 / S-WP1b 三个用例对该字段没断言，本用例是该 regression 的核心 guard。
+      const { current_process_step_id: _omit, ...rest } = makeBasePoolBatchItem();
+      void _omit;
+      expect(() => poolBatchItemSchema.parse(rest)).toThrow();
+    });
+
+    it('S-WP2d：current_process_step_id = null 是合法值（未下发过工艺链 / 无 step）', () => {
+      // 后端 current_process_step_id 是 Option<String> —— 候选 batch 未下发过工艺链
+      // 时为 null。nullable 必填显式声明（沿 partSchema S14b 同源）。
+      const parsed = poolBatchItemSchema.parse({
+        ...makeBasePoolBatchItem(),
+        current_process_step_id: null,
+      });
+      expect(parsed.current_process_step_id).toBeNull();
+    });
+
     it('S-WP3：workerPoolByProcessSchema 缺 items → 抛 ZodError（M-1 guard）', () => {
       // items 数组是顶层 6 字段之一，必须显式声明。漏列会让后端真返回的 items
       // 在前端拿不到（候选池退化为空 + UI 不报错）。
