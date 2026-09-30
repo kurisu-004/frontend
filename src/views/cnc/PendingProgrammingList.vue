@@ -1,53 +1,75 @@
 <!--
   PendingProgrammingList.vue — 待编程一览（chain 含 CNC 工序的零件）
 
-  业务背景（2026-07-14 / 2026-07-20 / 2026-09-29）
+  业务背景（2026-07-14 / 2026-07-20 / 2026-09-29 / 2026-10-01）
   ====================
   - 菜单侧：CNC 编程员专属入口；侧栏挂「待编程」（production_group children，
     2026-09-29 由顶级菜单迁入 + title 精简）。
-  - 数据侧：调 GET /parts/pending-programming，传 has_cnc_program 区分
-    待编程（false）/ 已编程（true）。
-  - 两个 Tab（2026-09-29）：「待编程」（chain 有 CNC 但未上传 G 代码） / 「已编程」
-    （G 代码已上传）。默认待编程；activeTab 持久化到 localStorage。
+  - 数据侧：2026-10-01 起调 prod 域 `GET /api/v2/prod/programming/pending`
+    （api/programming.ts::fetchPendingProgramming），传 has_cnc_program 区分
+    待编程（false）/ 已编程（true）。旧 part 域 `GET /parts/pending-programming`
+    恒返空，前端 wrapper（listPendingProgramming）同期删除。
+  - 两个 Tab：待编程（chain 有 CNC 但未上传 G 代码） / 已编程（G 代码已上传）。
+    默认待编程；activeTab 持久化到 localStorage。
   - 三个动作：
     * 「详情」 → 跳 /parts/{id}（PartDetail 页内有图纸下载 / G 代码上传 / 设定单上传）
     * 「下发到生产」 → 弹 el-dialog 同时选下一道工序 + 目标 PRODUCTION 货架，
       调 POST /parts/{id}/release-from-programming（PROGRAMMING → IN_PROCESS）。
-      仅历史 PROGRAMMING 状态零件可见下发按钮；新流程下 chain 有 CNC 但 part.status
-      ≠ PROGRAMMING 的零件不展示下发按钮（无 API 可调）。
+      仅历史 PROGRAMMING 状态零件可见下发按钮；新流程下 chain 有 CNC 但
+      part.status ≠ PROGRAMMING 的零件不展示下发按钮（无 API 可调）。
   - 加急行整行红底 #fde2e2（与 PartsList / InspectionPending 同款）。
   - 自动刷新（5min）按需勾选。
-  - 2026-08-25 T14：filter 卡 + 列可见性 + 表格 + 分页 收口到 <ListShell>；
-    列定义 / 操作列仍在本文件；状态 / fetcher 走 usePendingProgrammingList composable。
-  - 2026-09-29：filter 卡上方加 <el-tabs>；activeTab 变化触发 listRef.reset()
-    （reset 走 fetch 第 1 页，等价于 onRefresh）。
+
+  2026-10-01 架构改造：脱 ListShell + 手写 fetcher，全量走 TanStack Query
+  ====================
+  - 状态 / 查询 / 写操作 / 列可见性 / 下发对话框态全部下沉到 Pinia setup store
+    `usePendingProgrammingStore`（views/cnc/composables/usePendingProgrammingStore.ts），
+    本文件只做「渲染壳」：Tab + filter 卡 + 表格 + 分页 + 下发对话框 UI。
+    消费侧一律 store.query.xxx / store.release.xxx（禁止解构，见 store 不变量 #3）。
+  - **不再用 `<ListShell>`**：ListShell 的分页 / 页大小由内部 PagedTable 自持
+    （src/components/ListShell.vue:89），与 TanStack Query 的 reactive params
+    （page / pageSize 参与 queryKey）会形成**第二个分页状态源** —— 与
+    2026-08-31 修掉的「双实例撕裂」bug（ListShell 实例 A / PagedTable 实例 B
+    更新不同 ref，表格空但「共 N 条」正确）同构。故 filter 卡 / 表格 / 分页
+    全部自建，列渲染模板块照抄 ListShell.vue:107-152（属性一行不减）。
+  - 删掉手动 setInterval 自动刷新定时器（改由 useQuery refetchInterval 承担，
+    且显式 refetchIntervalInBackground: true 保持后台轮询语义）。
+  - 2026-10-01 review 第 1 轮 I-1：搜索框拆「输入态 / 生效态」。filter 卡的
+    el-input v-model 绑 store.query.searchInput（打字 0 请求），@keyup.enter /
+    @clear 调 store.query.onSearch() 才提交进生效态并把页码归 1 —— 与 2026-09-29
+    之前「只在 Enter / 清空 / 刷新时发请求」的行为一致。直接绑生效态会让每个字符
+    换一个 queryKey（每字一次 GET），且打字途中不重置页码。
+  - 持久化 key 全部沿用老值（`pending_programming_filter` 筛选项 /
+    `pending_programming` 列可见性与列顺序），老用户已配好的列不丢。持久化的只有
+    **生效态**（deps 不含 searchInput，否则老快照会被 restore() 的「每个 key 都
+    必须存在」校验整份判废），restoreState() 再把生效态同步回输入态。
 -->
 <template>
   <div class="pending-programming">
     <!-- 2026-09-29 新增：Tab 化 —— 待编程 / 已编程 通过 activeTab + has_cnc_program 区分 -->
     <div class="tabs-wrap">
-      <el-tabs v-model="activeTab" @tab-change="onTabChange">
+      <el-tabs v-model="store.query.activeTab" @tab-change="store.query.onTabChange">
         <el-tab-pane name="pending" label="待编程" />
         <el-tab-pane name="programmed" label="已编程" />
       </el-tabs>
     </div>
 
-    <ListShell
-      ref="listRef"
-      :column-defs="columnDefs"
-      :fetcher="fetcher"
-      list-key="pending_programming"
-      empty-text="当前无待编程零件"
-      :row-class-name="rowClassName"
-    >
-      <template #filter>
+    <!--
+      2026-10-01：filter 卡自建（脱 ListShell）—— 样式与 ListShell.filter-card 同款。
+      v-model 绑 **searchInput（输入态）** 而非 search（生效态）：打字只改输入态，
+      0 请求；@keyup.enter / @clear 调 onSearch() 才把输入态提交进生效态并把页码归 1
+      （review 第 1 轮 I-1）。「刷新」按钮走 fetchList() = refetch 当前生效态，
+      同样不会把没提交的半截字带进请求。
+    -->
+    <el-card shadow="never" class="filter-card">
+      <div class="filter-row">
         <el-input
-          v-model="search.keyword"
+          v-model="store.query.searchInput.keyword"
           placeholder="图号 / 名称（前缀搜索）"
           clearable
           style="width: 260px"
-          @keyup.enter="onRefresh"
-          @clear="onRefresh"
+          @keyup.enter="store.query.onSearch"
+          @clear="store.query.onSearch"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
@@ -55,66 +77,170 @@
         </el-input>
 
         <el-input
-          v-model="search.serialNo"
+          v-model="store.query.searchInput.serialNo"
           placeholder="序列号"
           clearable
           style="width: 180px"
-          @keyup.enter="onRefresh"
-          @clear="onRefresh"
+          @keyup.enter="store.query.onSearch"
+          @clear="store.query.onSearch"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
 
-        <el-checkbox v-model="autoRefresh" @change="onAutoRefreshToggle">
-          自动刷新（5min）
-        </el-checkbox>
-      </template>
+        <el-checkbox v-model="store.query.autoRefresh">自动刷新（5min）</el-checkbox>
 
-      <!-- 2026-08-27 T15：列定义全部走 columnDefs（ListShell 自管 v-for 渲染）；
-           不再写默认 slot。操作列放在 columnDefs 末尾。 -->
-    </ListShell>
+        <el-button @click="store.query.fetchList()">
+          <el-icon><RefreshLeft /></el-icon>
+          <span>刷新</span>
+        </el-button>
+        <span v-if="store.query.total > 0" class="total-hint">共 {{ store.query.total }} 条</span>
+        <!--
+          2026-10-01 review 第 1 轮 M-6：补回旧 ListShell.vue:68-70 的空态 tag
+          （脱壳时漏了）。emptyText 优先透传后端错误信息（store 内
+          errorMsg ?? '当前无待编程零件'），让「队列空」与「后端挂了」在 filter 卡
+          上也一眼可分 —— 表格的 :empty-text 只是兜底。
+        -->
+        <el-tag v-else-if="!store.query.loading" type="info" effect="plain" size="small">
+          {{ store.query.emptyText }}
+        </el-tag>
+      </div>
+    </el-card>
+
+    <div class="table-toolbar">
+      <ColumnVisibilityPopover
+        :defs="store.columnDefs"
+        :model-value="store.columnVisibility.currentMap"
+        @update:model-value="store.columnVisibility.update"
+        @reset="store.columnVisibility.showAll"
+        @resetOrder="store.drag.reset"
+      />
+    </div>
+
+    <!--
+      2026-10-01：列渲染模板块照抄 src/components/ListShell.vue:107-152
+      （含 cellRender / ColumnDragHandle / :label-class-name="drag.dragLabelClass(d)"
+      等全部属性，属性一行不减 —— 列可见性 + 列顺序拖动语义与 ListShell 内一致）。
+      注意 store proxy 自动解包嵌套 ref：orderedDefs 是 ComputedRef，模板里写
+      store.drag.orderedDefs（**不写 .value**，写了拿到 undefined —— 与
+      ListShell 组件内的 drag.orderedDefs.value 写法不同）。
+    -->
+    <el-table
+      ref="tableRef"
+      v-loading="store.query.loading"
+      :data="store.query.items"
+      row-key="id"
+      :empty-text="store.query.emptyText"
+      stripe
+      border
+      size="small"
+      :row-class-name="rowClassName"
+    >
+      <template v-for="d in store.drag.orderedDefs" :key="columnIdentifier(d)">
+        <el-table-column
+          v-if="store.columnVisibility.isVisible(d.key)"
+          :prop="d.prop ?? d.key"
+          :label="d.label"
+          :type="d.type"
+          :width="d.width"
+          :min-width="d.minWidth"
+          :fixed="d.fixed"
+          :sortable="d.sortable"
+          :align="d.align"
+          :header-align="d.headerAlign"
+          :show-overflow-tooltip="d.showOverflowTooltip"
+          :formatter="d.formatter"
+          :index="d.index"
+          :selectable="d.selectable"
+          :filters="d.filters"
+          :filter-multiple="d.filterMultiple"
+          :filter-method="d.filterMethod"
+          :filtered-value="d.filteredValue"
+          :sort-method="d.sortMethod"
+          :sort-by="d.sortBy"
+          :sort-orders="d.sortOrders"
+          :resizable="d.resizable"
+          :class-name="d.className"
+          :label-class-name="store.drag.dragLabelClass(d)"
+          :column-key="d.columnKey ?? d.key"
+        >
+          <template v-if="d.cellRender" #default="scope">
+            <component :is="d.cellRender(scope)" />
+          </template>
+          <!-- 可拖列（非 type / 非 fixed）的表头追加拖动手柄 -->
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+          </template>
+        </el-table-column>
+      </template>
+    </el-table>
+
+    <div class="pagination">
+      <!--
+        2026-10-01 review 第 1 轮 M-5：不传 :page-sizes，沿 EP 默认
+        （[10,20,30,40,50,100]），与旧的 PagedTable.vue:34-43 一致 —— 脱壳时擅自收窄成
+        [10,20,50,100] 属于计划外改动，不在本次任务范围。
+      -->
+      <el-pagination
+        v-model:current-page="store.query.page"
+        v-model:page-size="store.query.pageSize"
+        :total="store.query.total"
+        layout="total, sizes, prev, pager, next, jumper"
+        :pager-count="7"
+        background
+        size="small"
+      />
+    </div>
 
     <!-- 下发到 CNC 货架 对话框（PROGRAMMING → IN_PROCESS） —— 与 PartDetail 同款 -->
     <el-dialog
-      v-model="releaseDialogVisible"
+      v-model="store.release.dialogVisible"
       title="下发到 CNC 货架"
       :width="releaseDlg.width"
       :top="releaseDlg.top"
-      @closed="onReleaseDialogClosed"
+      @closed="store.release.onDialogClosed"
     >
       <el-form label-width="96px">
         <el-form-item label="下一道工序" required>
           <el-select
-            v-model="releaseProcessId"
+            v-model="store.release.processId"
             placeholder="请先选择下一道工序"
             style="width: 100%"
             filterable
             clearable
           >
             <el-option
-              v-for="p in filteredInhouseProcesses"
+              v-for="p in store.release.filteredProcesses"
               :key="p.id"
               :label="`${p.code} / ${p.name}`"
               :value="p.id"
             />
             <template #empty>
-              <span class="muted">没有可用的工序</span>
+              <span class="muted">
+                {{
+                  store.release.processesPending
+                    ? '正在加载工序…'
+                    : store.release.processesError
+                      ? '工序加载失败，请重试'
+                      : '没有可用的工序'
+                }}
+              </span>
             </template>
           </el-select>
         </el-form-item>
         <el-form-item label="目标生产货架" required>
           <el-select
-            v-model="releaseShelfId"
+            v-model="store.release.shelfId"
             placeholder="先选工序；货架候选按映射过滤"
             style="width: 100%"
             filterable
             clearable
-            :disabled="!releaseProcessId"
+            :disabled="!store.release.processId"
           >
             <el-option
-              v-for="s in filteredProductionShelves"
+              v-for="s in store.release.filteredShelves"
               :key="s.id"
               :label="`${s.code} — ${s.name}`"
               :value="s.id"
@@ -123,12 +249,27 @@
               <span>{{ s.code }} — {{ s.name }}</span>
               <span v-if="!s.is_active" class="muted">（已停用）</span>
             </el-option>
+            <!--
+              2026-10-01 review 第 1 轮 M-1：数据源从「点下发才 await 拉完再开弹窗」
+              换成共享 query（setup 期就发）后，冷缓存首访可能空开。空态必须能区分
+              「数据还在路上」与「真的没配映射」—— 后者的文案会引导用户去「货架管理 →
+              工序映射」改配置，数据没到时显示它是主动误导。取舍说明见 store 内
+              processesPending / shelvesPending 的注。
+              2026-10-01 review 第 2 轮 N-1：再补一层「加载失败」—— isPending 在
+              失败时是 false（query-core queryObserver.js:346），不加这一层空态会在
+              接口挂掉时落回下面那句「未映射，请去配置映射」，把网络故障说成配置缺失。
+              失败优先级最高，其次在途，最后才是业务判断。
+            -->
             <template #empty>
               <span class="muted">
                 {{
-                  releaseProcessId
-                    ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
-                    : '请先选择下一道工序'
+                  store.release.shelvesError
+                    ? '生产货架加载失败，请重试'
+                    : store.release.shelvesPending
+                      ? '正在加载生产货架…'
+                      : store.release.processId
+                        ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
+                        : '请先选择下一道工序'
                 }}
               </span>
             </template>
@@ -136,11 +277,11 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="releaseDialogVisible = false">取消</el-button>
+        <el-button @click="store.release.dialogVisible = false">取消</el-button>
         <el-button
           type="primary"
-          :loading="releaseSubmitting"
-          :disabled="!releaseShelfId || !releaseProcessId"
+          :loading="store.release.submitting"
+          :disabled="!store.release.shelfId || !store.release.processId"
           @click="onReleaseConfirm"
           >确认下发</el-button
         >
@@ -150,316 +291,59 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, type VNode } from 'vue';
-import { ElButton, ElMessage, ElTag } from 'element-plus';
-import { Search } from '@element-plus/icons-vue';
-import { RouterLink, useRouter } from 'vue-router';
-import ListShell from '@/components/ListShell.vue';
-import type { ColumnDef } from '@/composables/useColumnVisibility';
+// 2026-10-01 重写：脱 <ListShell> + 手写 fetcher，数据层全部走
+// usePendingProgrammingStore（TanStack Query）。
+//
+// 不变量（与 usePartsListStore 同源）：
+//   1. setup 顶部首调 store（子组件 setup 晚于父组件，天然满足）；
+//   2. onBeforeUnmount 调 store.$dispose()（Pinia 单例，泄漏对话框态到下次进入）；
+//   3. 消费侧禁止解构 store（写 store.query.xxx / store.release.xxx，深代理
+//      自动解包嵌套 ref）；
+//   4. router 由视图持有，store 通过 store.registerRouter 拿跳转能力
+//      （store 不 import vue-router，见 store 不变量 #4）。
+import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { RefreshLeft, Search } from '@element-plus/icons-vue';
+import { useRouter } from 'vue-router';
+import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
+import { columnIdentifier } from '@/composables/useColumnDrag';
+import { resolveDraggable } from '@/composables/useColumnVisibility';
 import { useDialogSize } from '@/composables/useDialogSize';
-import { releaseFromProgramming } from '@/api/parts';
-import { listShelves } from '@/api/shelves';
-import { listProcesses } from '@/api/process';
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
-import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
-import type { PartListItem } from '@/types/parts';
-import type { Shelf } from '@/types/shelf';
-import type { Process } from '@/types/process';
-import { usePendingProgrammingList } from './composables/usePendingProgrammingList';
+import {
+  usePendingProgrammingStore,
+  type PendingProgrammingRow,
+} from './composables/usePendingProgrammingStore';
 
-// ============ 列表状态 ============
-interface RowState extends PartListItem {
-  _releasing?: boolean;
-}
-
-// ============ T14：列表状态（filter / fetcher）+ 列可见性 ============
-// 2026-08-27 T15：列定义全部走 columnDefs 配置数组（之前写在 template 默认 slot 的内联列已迁出）。
-// 列可见性由 ListShell 内部 useColumnVisibility 持有；ListShell 自管 v-for 渲染，
-// 自定义单元格通过 cellRender(scope) 注入。操作列也放进 defs，draggable=false 防误拖。
+const store = usePendingProgrammingStore();
 const router = useRouter();
 
-// ---------- 自定义单元格渲染 ----------
-// 参数 row 在 ColumnDef 接口里是 unknown；cast 到 PartListItem / RowState 以访问业务字段。
-// 保留旧实现的全部行为：muted 灰底占位、router-link、conditional render、按钮组。
-function renderSerialNo({ row }: { row: unknown }): VNode {
-  const r = row as PartListItem;
-  return h('span', { class: { muted: !r.serial_no } }, r.serial_no || '—');
-}
+// 列拖动：把 el-table 实例交给 store 的 drag composable（内部解析表头 <tr> +
+// MutationObserver 自愈，覆盖 EP 重建表头 / 数据到达后表头首次渲染）
+const tableRef = ref();
+onMounted(() => {
+  store.query.restoreState();
+  store.drag.applyDrag(tableRef);
+});
 
-function renderName({ row }: { row: unknown }): VNode {
-  const r = row as PartListItem;
-  return h(RouterLink, { to: `/parts/${r.id}`, class: 'name-link' }, () => r.name);
-}
+// 不变量 #4：把 router 注入 store（操作列「详情」按钮的跳转能力）
+store.registerRouter(() => router);
 
-function renderCustomer({ row }: { row: unknown }): VNode {
-  const r = row as PartListItem;
-  // 2026-09-27 前后端字段对齐：派生路径 l1_customer_name + customer_name
-  if (r.l1_customer_name) {
-    return h('span', `${r.l1_customer_name} / ${r.customer_name ?? '—'}`);
-  }
-  if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name);
-  return h('span', { class: 'muted' }, '—');
-}
+onBeforeUnmount(() => {
+  // 不变量 #2：Pinia 单例，离开页面销毁，下次进入重建 fresh 状态
+  // （query / release 走 plain object slice，$dispose 后不会从 pinia.state hydrate 回来）
+  store.$dispose();
+});
 
-// 2026-09-29 新增：CNC 程序状态列（已编程绿色 / 未编程灰色）。
-// 后端 has_cnc_program 对 chain 无 CNC 的 part 恒为 false（service 层派生），
-// 前端据此无条件渲染无副作用 —— 对非 CNC chain 的 part「未编程」tag 是有意义的
-// 「占位」（提示该 part 不需要 CNC）。
-function renderCncProgram({ row }: { row: unknown }): VNode {
-  const r = row as PartListItem;
-  return h(
-    ElTag,
-    { type: r.has_cnc_program ? 'success' : 'info', size: 'small', effect: 'plain' },
-    () => (r.has_cnc_program ? '已编程' : '未编程'),
-  );
-}
-
-function renderActions({ row }: { row: unknown }): VNode {
-  const r = row as RowState;
-  // 2026-09-29：「下发」按钮仅对历史 PROGRAMMING 状态零件展示。新流程下 chain
-  // 含 CNC 但 part.status ≠ PROGRAMMING 的零件不再有对应 API（已编程后由工人在
-  // 「生产队列」直接领取走下发路径）。
-  const showRelease = r.status === 'PROGRAMMING';
-  return h('div', null, [
-    h(
-      ElButton,
-      {
-        link: true,
-        type: 'primary',
-        size: 'small',
-        onClick: () => router.push(`/parts/${r.id}`),
-      },
-      () => '详情',
-    ),
-    showRelease
-      ? h(
-          ElButton,
-          {
-            link: true,
-            type: 'success',
-            size: 'small',
-            loading: r._releasing,
-            onClick: () => openReleaseDialog(r),
-          },
-          () => '下发',
-        )
-      : null,
-  ]);
-}
-
-// ---------- 列定义 ----------
-// 字段顺序 = 初始渲染顺序。fixed / type=expand 不参与拖动；操作列 draggable: false 防误拖。
-// 行为与原内联 <el-table-column> 完全一致：min-width / fixed / show-overflow-tooltip / align / cellRender。
-//
-// 2026-09-29 新增：has_cnc_program 列（CNC 程序）。位置在「客户」列之前；
-// 新列默认可见，沿用 listKey='pending_programming' 复用列可见性持久化。
-const columnDefs: ColumnDef[] = [
-  {
-    key: 'serial_no',
-    label: '序列号',
-    columnKey: 'serial_no',
-    prop: 'serial_no',
-    minWidth: 110,
-    fixed: 'left',
-    showOverflowTooltip: true,
-    align: 'center',
-    cellRender: renderSerialNo,
-  },
-  {
-    key: 'drawing_no',
-    label: '图号',
-    columnKey: 'drawing_no',
-    prop: 'drawing_no',
-    minWidth: 130,
-    fixed: 'left',
-    showOverflowTooltip: true,
-    align: 'center',
-  },
-  {
-    key: 'name',
-    label: '名称',
-    columnKey: 'name',
-    prop: 'name',
-    minWidth: 200,
-    showOverflowTooltip: true,
-    align: 'center',
-    cellRender: renderName,
-  },
-  {
-    key: 'quantity',
-    label: '数量',
-    columnKey: 'quantity',
-    prop: 'quantity',
-    minWidth: 80,
-    align: 'right',
-  },
-  {
-    key: 'planned_delivery_date',
-    label: '计划交期',
-    columnKey: 'planned_delivery_date',
-    prop: 'planned_delivery_date',
-    minWidth: 120,
-    align: 'center',
-  },
-  {
-    key: 'has_cnc_program',
-    label: 'CNC 程序',
-    columnKey: 'has_cnc_program',
-    minWidth: 110,
-    align: 'center',
-    cellRender: renderCncProgram,
-  },
-  {
-    key: 'customer',
-    label: '客户',
-    columnKey: 'customer',
-    minWidth: 180,
-    showOverflowTooltip: true,
-    align: 'center',
-    cellRender: renderCustomer,
-  },
-  {
-    key: 'actions',
-    label: '操作',
-    columnKey: 'actions',
-    minWidth: 160,
-    fixed: 'right',
-    align: 'center',
-    draggable: false,
-    cellRender: renderActions,
-  },
-];
-
-const { search, autoRefresh, activeTab, fetcher, restoreFilter } = usePendingProgrammingList();
-
-// ListShell 的 ref；后续可按需读 items.value / total.value。
-const listRef = ref();
-
-function rowClassName({ row }: { row: PartListItem; rowIndex: number }): string {
+/** 加急行红底。 */
+function rowClassName({ row }: { row: PendingProgrammingRow; rowIndex: number }): string {
   return row.is_urgent ? 'row-urgent' : '';
 }
 
-// 「刷新」按钮 = 列表回到第 1 页再拉（ListShell.onRefresh = reset()）
-async function onRefresh(): Promise<void> {
-  await listRef.value?.onRefresh();
-}
-
-// 其它地方仍调 fetchList() 触发刷新（包装 listRef.fetch()，保持当前页码）
-async function fetchList(): Promise<void> {
-  await listRef.value?.fetch();
-}
-
-// 2026-09-29 新增：Tab 切换 → 重置列表到第 1 页 + 重新拉取。
-// fetcher 内部读 activeTab.value 自动响应，但不会自动 reset —— 这里显式调
-// listRef.reset()（等价于 onRefresh()）。
-//
-// 2026-09-29 review 第 1 轮：移除原 watch(activeTab, () => listRef.onRefresh())
-// 块。@tab-change="onTabChange" 与 watch 串行触发两次刷新（点一下 Tab 拉两次
-// 接口）形成 bug —— watch 是冗余兜底（onMounted 走 restoreFilter + fetchList
-// 路径不依赖 watch；mounted 前的编程式改动 listRef.value 为 null 走 no-op）。
-function onTabChange(): void {
-  void listRef.value?.onRefresh();
-}
-
-// ============ 自动刷新 ============
-let autoRefreshTimer: number | null = null;
-
-function onAutoRefreshToggle(val: string | number | boolean): void {
-  if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer);
-    autoRefreshTimer = null;
-  }
-  if (val) {
-    autoRefreshTimer = window.setInterval(() => {
-      fetchList();
-    }, 300_000);
-  }
-}
-
-onBeforeUnmount(() => {
-  if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer);
-  }
-});
-
-// ============ 下发到 CNC 货架 对话框 ============
 const releaseDlg = useDialogSize({ desktopWidth: 440 });
-const releaseDialogVisible = ref(false);
-const releaseTarget = ref<RowState | null>(null);
-const releaseShelfId = ref<string | null>(null);
-const releaseProcessId = ref<string | null>(null);
-const releaseSubmitting = ref(false);
-const productionShelves = ref<Shelf[]>([]);
-const processes = ref<Process[]>([]);
-// 2026-07-17：CNC 下发只允许 INHOUSE 工序（外协工序走 send_to_outsource）
-const inhouseProcesses = computed(() => processes.value.filter((p) => p.category === 'INHOUSE'));
-
-// 2026-07-17：useShelfProcessFilter 双向收窄（CNC 下发对话框）
-const {
-  filteredShelves: filteredProductionShelves,
-  filteredProcesses: filteredInhouseProcesses,
-  load: loadReleaseMap,
-} = useShelfProcessFilter(productionShelves, inhouseProcesses, releaseShelfId, releaseProcessId);
-
-async function openReleaseDialog(row: RowState): Promise<void> {
-  releaseTarget.value = row;
-  releaseShelfId.value = null;
-  releaseProcessId.value = null;
-  try {
-    const [shelfResp, procResp] = await Promise.all([
-      productionShelves.value.length === 0
-        ? listShelves({ zone: 'PRODUCTION', is_active: true, limit: 200 })
-        : Promise.resolve(null),
-      processes.value.length === 0 ? listProcesses({ limit: 200 }) : Promise.resolve(null),
-    ]);
-    if (shelfResp) productionShelves.value = shelfResp.items;
-    if (procResp) processes.value = procResp.items;
-    void loadReleaseMap();
-  } catch (e) {
-    ElMessage.error(`加载失败：${(e as Error).message}`);
-  }
-  releaseDialogVisible.value = true;
-}
-
-function onReleaseDialogClosed(): void {
-  releaseTarget.value = null;
-  releaseShelfId.value = null;
-  releaseProcessId.value = null;
-}
 
 async function onReleaseConfirm(): Promise<void> {
-  if (!releaseTarget.value || !releaseShelfId.value || !releaseProcessId.value) return;
-  const row = releaseTarget.value;
-  const shelfCode = productionShelves.value.find((s) => s.id === releaseShelfId.value)?.code ?? '';
-  row._releasing = true;
-  releaseSubmitting.value = true;
-  try {
-    await releaseFromProgramming(row.id, releaseShelfId.value, releaseProcessId.value);
-    ElMessage.success(`零件 ${row.serial_no || row.drawing_no} 已下发到生产货架 ${shelfCode}`);
-    releaseDialogVisible.value = false;
-    await fetchList();
-  } catch (e) {
-    // 2026-09-16 PR-3：20706 BIZ_PROCESS_CHAIN_REQUIRED 兜底 —— 弹「前往制定」框；
-    // 命中后不走普通 ElMessage.error 兜底，避免重复提示。
-    const handled = await handleProcessChainRequired(e, row.id, router);
-    if (!handled) {
-      ElMessage.error(`下发失败：${(e as Error).message}`);
-    }
-  } finally {
-    row._releasing = false;
-    releaseSubmitting.value = false;
-  }
+  await store.release.confirm(router);
 }
-
-onMounted(() => {
-  // 先尝试恢复 localStorage 中的搜索条件 / 自动刷新（pageSize 由 ListShell 自行恢复）
-  restoreFilter();
-  if (autoRefresh.value) {
-    // 重新挂载定时器
-    onAutoRefreshToggle(true);
-  }
-  fetchList();
-});
 </script>
 
 <style lang="scss" scoped>
@@ -473,6 +357,34 @@ onMounted(() => {
     margin-bottom: 0;
   }
 }
+.filter-card {
+  margin-bottom: 12px;
+  :deep(.el-card__body) {
+    padding: 12px 16px;
+  }
+}
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: nowrap;
+}
+.total-hint {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.pagination {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 12px 4px 0;
+}
 .name-link {
   color: var(--el-color-primary);
   text-decoration: none;
@@ -482,5 +394,28 @@ onMounted(() => {
 }
 .muted {
   color: var(--text-secondary);
+}
+// 加急红底（与 PartsList / InspectionPending / ListShell 同款 #fde2e2）
+:deep(.row-urgent) {
+  background: #fde2e2 !important;
+}
+:deep(.row-urgent td) {
+  background: #fde2e2 !important;
+}
+// 2026-08-27 T15：EP thead th 上的 col-no-drag 类让 sortablejs filter 跳过；
+// 同时禁用默认 cursor（不可拖列不放 handle，应显示普通箭头）
+:deep(.col-no-drag) {
+  cursor: default !important;
+}
+// sortablejs 拖动时的视觉反馈（与 EP 主题色协调，藏青/蓝/浅蓝系）
+:deep(.sortable-ghost) {
+  opacity: 0.5;
+  background: #eaf2fb !important;
+}
+:deep(.sortable-chosen) {
+  background: #cce0f4 !important;
+}
+:deep(.sortable-drag) {
+  background: #fff !important;
 }
 </style>

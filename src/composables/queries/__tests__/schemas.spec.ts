@@ -97,6 +97,10 @@ import {
   autoDispatchResultSchema,
   inspectionBatchListItemSchema,
   inspectionBatchListResultSchema,
+  pendingProgrammingItemSchema,
+  pendingProgrammingListResultSchema,
+  shelfSchema,
+  shelfListResultSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -1365,5 +1369,131 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       void _omit;
       expect(() => inspectionBatchListItemSchema.parse(rest)).toThrow();
     });
+  });
+});
+
+// ============================================================
+// 2026-10-01 新增：待编程一览（prod 域 programming）+ 货架（shelves）schema 断言。
+//
+// 数据来源：
+//   - backend-rust `src/modules/prod/programming/mod.rs` 的
+//     `GET /api/v2/prod/programming/pending`（ProgrammingItem 13 字段 +
+//     ProgrammingListOut 4 字段；「待编程一览」页数据源，替代恒返空的
+//     part 域 /parts/pending-programming）。
+//   - @/types/shelf.ts::Shelf 11 字段（货架列表 GET /api/v2/shelves，
+//     共享基础数据层 useProductionShelvesQuery 守门）。
+//
+// 覆盖：
+//   - S24：pendingProgrammingItemSchema 接受完整 13 字段不抛错；客户字段是
+//     parent_customer_name(L1) / customer_name(L2)，与 part 域 l1_customer_name
+//     不同名（本用例把 parent_customer_name 写满并断言读出，防回归成 l1_*）。
+//   - S25：pendingProgrammingItemSchema 缺 has_cnc_program → 抛 ZodError
+//     （M-1 strip regression guard —— 该字段是本页 Tab 化的唯一依据，
+//     静默 strip 会让「已编程 / 未编程」列恒显示错值且不报错）。
+//   - S26：pendingProgrammingItemSchema 缺 version → 抛 ZodError（同源 guard）。
+//   - S27：pendingProgrammingItemSchema 的 id 传 number → 抛 ZodError
+//     （雪花 ID 一律 string，JS Number 会丢精度 —— CLAUDE.md §3）。
+//   - S28：pendingProgrammingListResultSchema 接受分页 4 字段；缺 items → 抛错。
+//   - S29：shelfSchema 接受完整 11 字段（zone=PRODUCTION / location=null）。
+//   - S30：shelfSchema 缺 account_count → 抛 ZodError（M-1 同形态 guard）；
+//     shelfListResultSchema 缺 items → 抛 ZodError。
+// ============================================================
+describe('2026-10-01 新增：programming / shelves schema 契约断言', () => {
+  const validProgrammingItem = {
+    id: '190000000000099',
+    version: 3,
+    serial_no: 'SN-001',
+    name: '法兰盘',
+    drawing_no: 'DWG-A001',
+    quantity: 5,
+    status: 'PROGRAMMING',
+    is_urgent: true,
+    planned_delivery_date: '2026-10-10',
+    system_delivery_date: null,
+    customer_name: '客户A-子',
+    parent_customer_name: '客户A',
+    has_cnc_program: false,
+  };
+
+  const validShelf = {
+    id: '8800000000001',
+    version: 2,
+    code: 'SH-P01',
+    name: '生产架 01',
+    zone: 'PRODUCTION',
+    location: null,
+    is_active: true,
+    account_count: 0,
+    display_order: 1,
+    created_at: '2026-09-01 10:00:00',
+    updated_at: '2026-09-30 11:00:00',
+  };
+
+  it('S24：pendingProgrammingItemSchema 接受完整 13 字段（客户字段是 parent_customer_name）', () => {
+    const parsed = pendingProgrammingItemSchema.parse(validProgrammingItem);
+    expect(parsed.id).toBe('190000000000099');
+    expect(parsed.version).toBe(3);
+    expect(parsed.has_cnc_program).toBe(false);
+    // 客户：L1 = parent_customer_name / L2 = customer_name（不是 l1_customer_name）
+    expect(parsed.parent_customer_name).toBe('客户A');
+    expect(parsed.customer_name).toBe('客户A-子');
+    expect((parsed as Record<string, unknown>).l1_customer_name).toBeUndefined();
+  });
+
+  it('S25：pendingProgrammingItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 guard）', () => {
+    const { has_cnc_program: _omit, ...rest } = validProgrammingItem;
+    void _omit;
+    expect(() => pendingProgrammingItemSchema.parse(rest)).toThrow();
+  });
+
+  it('S26：pendingProgrammingItemSchema 缺 version → 抛 ZodError（M-1 guard）', () => {
+    const { version: _omit, ...rest } = validProgrammingItem;
+    void _omit;
+    expect(() => pendingProgrammingItemSchema.parse(rest)).toThrow();
+  });
+
+  it('S27：pendingProgrammingItemSchema 的 id 传 number → 抛 ZodError（雪花 ID 必须 string）', () => {
+    expect(() =>
+      pendingProgrammingItemSchema.parse({ ...validProgrammingItem, id: 190000000000099 }),
+    ).toThrow();
+  });
+
+  it('S28：pendingProgrammingListResultSchema 接受分页 4 字段；缺 items → 抛 ZodError', () => {
+    const parsed = pendingProgrammingListResultSchema.parse({
+      items: [validProgrammingItem],
+      total: 1,
+      limit: 20,
+      offset: 0,
+    });
+    expect(parsed.items).toHaveLength(1);
+    expect(parsed.total).toBe(1);
+    expect(() =>
+      pendingProgrammingListResultSchema.parse({ total: 1, limit: 20, offset: 0 }),
+    ).toThrow();
+  });
+
+  it('S29：shelfSchema 接受完整 11 字段（zone=PRODUCTION / location=null）', () => {
+    const parsed = shelfSchema.parse(validShelf);
+    expect(parsed.id).toBe('8800000000001');
+    expect(parsed.zone).toBe('PRODUCTION');
+    expect(parsed.location).toBeNull();
+    expect(parsed.is_active).toBe(true);
+    expect(parsed.account_count).toBe(0);
+  });
+
+  it('S30：shelfSchema 缺 account_count → 抛 ZodError；shelfListResultSchema 缺 items → 抛 ZodError', () => {
+    const { account_count: _omit, ...rest } = validShelf;
+    void _omit;
+    expect(() => shelfSchema.parse(rest)).toThrow();
+    expect(() =>
+      shelfListResultSchema.parse({ total: 1, limit: 200, offset: 0 }),
+    ).toThrow();
+    const list = shelfListResultSchema.parse({
+      items: [validShelf],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    });
+    expect(list.items[0]?.code).toBe('SH-P01');
   });
 });

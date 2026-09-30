@@ -117,8 +117,10 @@ export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
  * requires_approval / color / created_at / updated_at 共 11 字段），无需补字段。
  *
  * 2026-09-29 新增：is_cnc 字段（12 字段）。CNC 编程门控：是否参与「待编程一览」
- * Tab 化（GET /parts/pending-programming 出参 `PartListItem.has_cnc_program` 字段即
- * 按 chain 中是否含 is_cnc=true 的工序派生命中）。沿 CLAUDE.md §M-4 strip 陷阱
+ * Tab 化（2026-10-01 起出参是 prod 域 `GET /prod/programming/pending` 的
+ * `ProgrammingItem.has_cnc_program` 字段，即按 chain 中是否含 is_cnc=true 的工序
+ * 派生命中；旧 part 域 `GET /parts/pending-programming` 出参
+ * `PartListItem.has_cnc_program` 同语义）。沿 CLAUDE.md §M-4 strip 陷阱
  * 必填 boolean 显式声明 —— 后端漏返 Zod parse 抛错守门。
  *
  * 2026-09-30 修复：description / color 加 `.optional()` 兼容后端 skip_serializing_if。
@@ -224,7 +226,7 @@ export const partSchema = z.object({
   batch_id: z.string().nullable().optional(),
   batch_no: z.number().nullable().optional(),
   batch_quantity: z.number().nullable().optional(),
-  // 2026-09-28 修复：兼容 /parts/pending-programming 等不返 row_type 的端点（后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts 始终返 'PART' | 'ASSEMBLY'；但 pending-programming / 工艺制定等旧端点仍可能缺该字段）
+  // 2026-09-28 修复：兼容不返 row_type 的端点（后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts 始终返 'PART' | 'ASSEMBLY'；但工艺制定等旧端点仍可能缺该字段）。2026-10-01 备注：唯一曾缺该字段的 pending-programming 端点已下线（「待编程一览」数据源迁到 prod 域 GET /prod/programming/pending，其出参走独立的 pendingProgrammingItemSchema，不复用 partSchema），本 default 保留兼容其余历史端点。
   row_type: z.enum(['PART', 'ASSEMBLY']).default('PART'),
   has_children: z.boolean().optional(),
   child_count: z.number().nullable().optional(),
@@ -572,6 +574,98 @@ export const pendingBatchListResultSchema = z.object({
 });
 
 export type PendingBatchListResultSchema = z.infer<typeof pendingBatchListResultSchema>;
+
+// ============================================================
+// 2026-10-01 新增：待编程一览（prod 域 programming）schema —— 守门
+// `GET /api/v2/prod/programming/pending`。
+//
+// 端点迁移背景：「待编程一览」页数据源从 part 域
+// `GET /parts/pending-programming`（恒返空，2026-10-01 已删前端 wrapper）切到 prod 域
+// `GET /prod/programming/pending`（后端同期新增，backend-rust
+// src/modules/prod/programming/mod.rs）。出参从 PartListItem 换成 ProgrammingItem。
+//
+// ProgrammingItem 13 字段全声明（沿 CLAUDE.md §M-4 strip 陷阱 —— Zod 默认 strip
+// 模式会让缺字段静默丢弃，必填字段漏声明 = 整份校验形同虚设）：
+//   id (雪花 ID string) / version (乐观锁 i32) / serial_no (nullable) /
+//   name / drawing_no / quantity (i32) / status (String，语义同 OrderStatus 但
+//   不锁字面量，与 partBatchSchema.status 同约定) / is_urgent /
+//   planned_delivery_date (string) / system_delivery_date (nullable) /
+//   customer_name (nullable，L2) / parent_customer_name (nullable，L1) /
+//   has_cnc_program (bool 必填 —— 本页 Tab 化关键字段)。
+//
+// ⚠️ 客户字段名与 part 域**不同名**：这里是 parent_customer_name(L1) /
+// customer_name(L2)，而 PartListItem 是 l1_customer_name / customer_name。
+// 两个端点的 rows 不能互相 cast（列渲染已按本页 schema 读 parent_customer_name）。
+// ============================================================
+
+export const pendingProgrammingItemSchema = z.object({
+  id: z.string(),
+  version: z.number(),
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string(),
+  quantity: z.number(),
+  status: z.string(),
+  is_urgent: z.boolean(),
+  planned_delivery_date: z.string(),
+  system_delivery_date: z.string().nullable(),
+  /** L2 客户名（可空） */
+  customer_name: z.string().nullable(),
+  /** L1 客户名（可空） */
+  parent_customer_name: z.string().nullable(),
+  /** 是否已上传 G_CODE（后端 t_part_file EXISTS 派生）—— 必填 boolean，守门到位 */
+  has_cnc_program: z.boolean(),
+});
+
+export type PendingProgrammingItemSchema = z.infer<typeof pendingProgrammingItemSchema>;
+
+/** 2026-10-01 新增：待编程列表分页结果（结构对齐 backend-rust ProgrammingListOut：
+ *  items / total / limit / offset 四字段，后端用 JSON number 返回计数
+ *  ——与 inspectionBatchListResultSchema 的「string 计数」形态不同，本页按 number 声明）。 */
+export const pendingProgrammingListResultSchema = z.object({
+  items: z.array(pendingProgrammingItemSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type PendingProgrammingListResultSchema = z.infer<typeof pendingProgrammingListResultSchema>;
+
+// ============================================================
+// 2026-10-01 新增：货架实体 + 货架列表分页结果 schema（共享基础数据层
+// useProductionShelvesQuery 守门）。
+//
+// 字段对齐 @/types/shelf.ts::Shelf 的 11 字段：id / version / code / name / zone
+// （PRODUCTION | INSPECTION，string 不锁 enum）/ location (nullable) / is_active /
+// account_count / display_order / created_at / updated_at。11 字段全声明
+// （沿 §M-4 strip 陷阱 guard）。入参形态见 @/api/shelves::ListShelvesParams。
+// ============================================================
+
+export const shelfSchema = z.object({
+  id: z.string(),
+  version: z.number(),
+  code: z.string(),
+  name: z.string(),
+  zone: z.string(),
+  location: z.string().nullable(),
+  is_active: z.boolean(),
+  account_count: z.number(),
+  display_order: z.number(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export type ShelfSchema = z.infer<typeof shelfSchema>;
+
+/** 货架列表分页结果（结构对齐 ShelfListResult：items / total / limit / offset）。 */
+export const shelfListResultSchema = z.object({
+  items: z.array(shelfSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type ShelfListResultSchema = z.infer<typeof shelfListResultSchema>;
 
 // ============================================================
 // dispatch / auto-dispatch 契约守门 schema。

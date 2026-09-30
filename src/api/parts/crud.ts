@@ -8,9 +8,12 @@
 // 跨子域类型引用：InspectionBatchListResult 定义在 ./batch（listRepairBatches /
 // listRepairingBatches 是单件 lifecycle，但响应形态与品检待办一致）。用 `import type`
 // 顶置避免 inline import 的可读性问题；type-only 导入是擦除的，运行时无循环代价。
+//
+// 2026-10-01：`listPendingProgramming`（GET /parts/pending-programming，恒返空）已删除，
+// 唯一 caller 是「待编程一览」页，数据源迁到 prod 域 `GET /prod/programming/pending`
+// （api/programming.ts）。本文件不再 import partListResultSchema（随该函数一并移除）。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
-import { partListResultSchema } from '@/composables/queries/schemas';
 import type { OutsourceSendableListResult } from '@/types/outsource';
 import type {
   LocationTreeNode,
@@ -80,7 +83,7 @@ export interface PartListResult {
   offset: number;
   // 2026-09-25 备注：backend-rust PartListOut 当前走 serialize_i64 → JSON 字符串；
   // 本 schema 暂保留 number 类型（决定权在 frontend，是 backend-rust 后续要修的契约点）。
-  // 实际接收响应时由 listParts / listPendingProgramming 等 caller 在响应包装层用
+  // 实际接收响应时由 listParts 等 caller 在响应包装层用
   // @/api/http.normalizeListResult 包一层，把 string 兜底成 number。schema 类型本身
   // 不变，避免大改所有调用方。
 }
@@ -93,12 +96,13 @@ export interface ListPartsParams {
   /**
    * 2026-08-20：图号 / 名称拆为两个独立 ILIKE 子串参数（替换原 keyword 在 /parts 列表的用法）。
    * 两个参数同时设 ⇒ AND 联合（drawing_no ILIKE AND name ILIKE）。
-   * keyword 字段由其他端点（pending-programming / outsource picker）继续使用。
+   * keyword 字段由其他端点（outsource picker；2026-10-01 起「待编程一览」走 prod 域
+   * GET /prod/programming/pending，该端点有自己的入参类型）继续使用。
    */
   drawing_no?: string;
   name?: string;
   /**
-   * 2026-08-20：原 /parts 列表主路径不再使用；保留供 listPendingProgramming / listOutsourceSendable
+   * 2026-08-20：原 /parts 列表主路径不再使用；保留供 listOutsourceSendable
    * 等其他端点继续使用（与后端 PartListQuery.keyword 兼容）。
    */
   keyword?: string;
@@ -388,25 +392,6 @@ export async function releaseFromProgramming(
     next_process_id: nextProcessId,
   });
   return resp.data;
-}
-
-/** 待编程一览：chain 含 CNC 工序的零件列表（默认 has_cnc_program=false 仅未编程；
- *  has_cnc_program=true 仅已编程；不传 = 全部）。2026-09-29 后端
- * `GET /api/v2/parts/pending-programming` 出参 PartListItem 新增 `has_cnc_program`
- * 字段，详情见 backend-rust `docs/api/parts/...`（contract 更新）；前端 ListShell
- * 通过 `<el-tabs>` 切换 pending / programmed 两个 tab。 */
-export async function listPendingProgramming(
-  params: Omit<ListPartsParams, 'statuses' | 'is_urgent'> & { has_cnc_program?: boolean } = {},
-): Promise<PartListResult> {
-  const resp = await api.get<unknown>('/parts/pending-programming', {
-    params: cleanParams(params),
-  });
-  // 2026-09-30 新增：Zod 守门（M-1 同形态）。partListResultSchema 解析后 z.infer 类型
-  // 是 `PartSchema[]`（= partSchema 字段集 ⊇ PartListItem 字段集），schema 形态与
-  // TS 接口形态对齐，cast 到 PartListResult 安全。partSchema 已显式声明
-  // has_cnc_program / unit_price / total_price / l1_customer_name 等必填字段，缺则
-  // 抛错（M-1 同形态 guard，避免缺字段静默 strip）。
-  return partListResultSchema.parse(resp.data) as PartListResult;
 }
 
 export async function pickUpPart(payload: PartPickUpPayload): Promise<PartItem> {
