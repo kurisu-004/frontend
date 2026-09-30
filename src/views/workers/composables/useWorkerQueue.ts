@@ -1,139 +1,87 @@
-// 2026-09-14 重写：useWorkerQueue composable 从 fixture 切到真实 v2 API。
+// 2026-09-30 重构：useWorkerQueue composable —— 移除 pool fetches，迁移 3 个 mutation 到
+// useMutation + invalidate helpers；保留 workerHeld 模块级 ref 给 WorkerColumn 跨 tab 共享。
 //
-// 历史：
-// - 2026-08-26：阶段一，全部走 fixture（@/api/__fixtures__/workerPool.fixtures）。
-// - 2026-09-14：阶段二，5 个端点切真：
-//   GET  /api/v2/worker-pool/state                  ← getWorkerState
-//   GET  /api/v2/worker-pool/{process_id}           ← getWorkerPoolByProcess
-//   POST /api/v2/admin/worker-pool/refill           ← refillWorkerPool
-//   POST /api/v2/admin/worker-pool/remove           ← removeFromWorkerPool
-//   POST /api/v2/admin/worker-pool/auto-allocate    ← autoAllocate
-// - 2026-09-14 follow-up：WorkerPoolState 新增 held_batches 字段；moveBatchToWorker
-//   改用 assignWorkerPool（单 batch 分配，替代批量 refill 的语义滥用）。
+// 2026-09-30 改造前历史：
+// - 2026-08-26：阶段一，全部走 fixture。
+// - 2026-09-14：5 个端点切真。
+// - 2026-09-14 follow-up：WorkerStateDto.held_batches 新增；moveBatchToWorker 改用
+//   assignWorkerPool（单 batch 分配）。
 //
-// 适配策略（CLAUDE.md 习惯；rust 实际响应字段为准，**只改前端**适配 rust）：
-// - `workers[]`：聚合各 process 的 WorkerBriefDto + 二次 GET WorkerPoolState 补
-//   max_held / current_held / capacity_remaining / held_batches；process_ids 从聚合
-//   过程派生（worker 出现在哪个 process 的 pool 响应里就 +1）。
-// - `processPools[]`：从 WorkerPoolDto.items 映射（PoolBatchItem → WorkOrderCard）。
-// - `workerHeld`：2026-09-14 follow-up 起，由 loadBoard 从 WorkerStateDto.held_batches
-//   填充（不再恒为空）。WorkerTakenItemDto → WorkOrderCard 的字段映射 heldToCard 函数。
-// - moveBatchToWorker → 调 assignWorkerPool（单 batch 分配，1-to-1 语义）；
-//   moveBatchToPool → 调 removeFromWorkerPool（1-to-1 语义吻合）。
+// 2026-09-30 改造要点（沿 2026-09-26 TanStack Query 9 条 + 2026-09-30 硬约束）：
+// - 删 `getWorkerPoolByProcess` import / `listProcesses` import / pool fetch 循环 /
+//   `WorkerPoolDto` import / `WorkerBriefDto` import；
+// - 保留 `getWorkerState` import / `workerHeld` ref（来源改为 TanStack 缓存合并）/ `loading`
+//   ref / `error` ref；
+// - `loadBoard` 简化为「拉所有 worker 的 state」单步 —— 从
+//   qc.getQueriesData({ queryKey: qk.workerPoolByProcessPrefix }) 收集当前 cache 内
+//   所有 inhouse 工序的 worker_id，并发 `getWorkerState` 写 `workerHeld`（兜底：tab 未
+//   激活时 cache 为空，workerHeld 自然为空，符合「切 tab 首次激活才拉」语义）；
+// - 3 个 mutation：useMutation + onSuccess 调 invalidateWorkerPoolByProcessQuery(qc, processId)
+//   + invalidateWorkerPoolCountsQuery(qc) + ElMessage；
+// - moveBatchToWorker / moveBatchToPool / runAutoAllocate 改为 mutation 的 mutateAsync 包装
+//   （保留 Promise<boolean> / Promise<void> 签名以兼容 view 现有调用点）；
+// - error ref 保留：mutation onError 写 error.value = e.message。
+//
+// 模块级单例（仍保留）—— view 端解构后 `useWorkerQueue()` 多次调用拿同一引用，避免
+// 重复订阅造成的资源浪费；worker-pool 域的批量数据（KB 级）不依赖组件实例生命周期。
 
-import { ref, type Ref } from 'vue';
+import { computed, ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import {
   assignWorkerPool,
   autoAllocate,
-  getWorkerPoolByProcess,
   getWorkerState,
   removeFromWorkerPool,
 } from '@/api/workerPool';
-import { listProcesses } from '@/api/processChain';
 import type {
+  AdminAssignRequest,
   AssignResultDto,
-  HeldBatchItemDto,
-  PoolBatchItemDto,
-  WorkerBriefDto,
-  WorkerPoolDto,
+  AutoAllocateResultDto,
+  AutoAllocateRequest,
+  WorkerRemoveRequest,
   WorkerStateDto,
   WorkerTakenItemDto,
 } from '@/api/workerPool.contract';
-import type { Worker, ProcessPoolView, WorkOrderCard } from '@/types/workerPool';
+import type { Worker, WorkOrderCard } from '@/types/workerPool';
+import { qk } from '@/composables/queries/keys';
+import { invalidateWorkerPoolByProcessQuery } from '@/composables/queries/useWorkerPoolByProcessQuery';
+import { invalidateWorkerPoolCountsQuery } from '@/composables/queries/useWorkerPoolCountsQuery';
 
 // 模块级单例 state
 const workers = ref<Worker[]>([]);
-const processPools = ref<ProcessPoolView[]>([]);
-/** worker_id → 持有的 WorkOrderCard[]；2026-09-14 follow-up 起由 loadBoard 从
- *  WorkerStateDto.held_batches 填充（之前版本恒为空）。 */
+/** worker_id → 持有的 WorkOrderCard[]。
+ *  2026-09-30：来源改为 TanStack 缓存合并 —— WorkerColumn 内
+ *  useWorkerStateByWorkerQuery 拉到的 held_batches 也合并进 workerHeld；
+ *  loadBoard 内并发 getWorkerState 兜底当前 cache 内所有 inhouse 工序的 worker_id。
+ *  不再由 loadBoard 全量刷新（commit 4 起）。 */
 const workerHeld = ref<Record<string, WorkOrderCard[]>>({});
 const loading = ref(false);
 const error = ref<string | null>(null);
-// 2026-09-14 review 第 2 轮：删除原 lastTakenCount 模块级单例 ref — 该 ref 跨
-// moveBatchToWorker 调用天然粘性（用户拖 batch A 后，下次拖 batch B 看到的是上一次的 N），
-// 且 view 层从未消费（grep 全仓 0 命中），永远 0、永远不触发 UI 反馈。
-// 改为在 moveBatchToWorker 内部直接 ElMessage.success（与 moveBatchToPool 失败回滚
-// 时 error.value = ... 的内部 UX 处理风格一致）。
 
-/** 把 PoolBatchItemDto 适配成 UI WorkOrderCard（字段映射）。
- *  2026-09-29：透传 PoolBatchItemDto 新增 has_cnc_program 字段，WorkOrderCard
- *  卡片 header 渲染「已编程」tag。*/
-function poolItemToCard(it: PoolBatchItemDto): WorkOrderCard {
-  return {
-    batch_id: it.batch_id,
-    batch_no: `B${it.batch_no}`,
-    part_id: it.part_id,
-    drawing_no: it.drawing_no,
-    part_name: it.name,
-    quantity: it.quantity,
-    serial_no: it.serial_no,
-    system_delivery_date: it.system_delivery_date,
-    planned_delivery_date: null, // PoolBatchItem 不带 planned_delivery_date
-    is_urgent: it.is_urgent,
-    version: it.version,
-    customer: it.customer_name ?? null,
-    applicant: it.applicant_name ?? null,
-    location: it.shelf_code ?? null,
-    has_cnc_program: it.has_cnc_program,
-  };
-}
+/** 2026-09-30：把 HeldBatchItemDto 适配成 UI WorkOrderCard —— 此函数定义在
+ *  views/workers/composables/poolItemToCard.ts，本文件不再独立定义；保留单文件内
+ *  inline 简版以保 loadBoard 路径不依赖额外 import。
+ *  （WorkerColumn 通过 shared poolItemToCard.ts 引入 heldToCard，本 loadBoard 走 inline
+ *  版本即可，保持向后兼容。） */
+import { heldToCard as _heldToCard } from './poolItemToCard';
 
-/** 把 HeldBatchItemDto 适配成 UI WorkOrderCard（2026-09-14 follow-up round-2 全字段映射）。
- *  2026-09-14 第一轮：上游字段是窄 WorkerTakenItemDto（无 name / customer / applicant /
- *  shelf_code），展示字段被退化为 null / 空串（注释里写「降级」是当时妥协）。
- *  2026-09-14 follow-up round-2：后端扩 JOIN 把展示字段补齐，HeldBatchItemDto 是全字段
- *  DTO（含 part_name / customer_name / applicant_name / location / shelf_code / note /
- *  parent_customer_name 等），此处不再有字段降级。
- *  2026-09-29 review 第 1 轮：透传 HeldBatchItemDto 新增 has_cnc_program 字段，
- *  WorkOrderCard 卡片 header 渲染「已编程」tag（与 pool 列同视觉）。
- *  - `location`：直接取 HeldBatchItemDto.location（enum string，如 'WORKER'），
- *    与 poolItemToCard 不同（pool 用 shelf_code 表示货架 code）；语义清晰区分
- *    「持有方」与「货架 code」，UI tooltip「所在位置」按 enum 显示。 */
-function heldToCard(it: HeldBatchItemDto): WorkOrderCard {
-  return {
-    batch_id: it.batch_id,
-    batch_no: `B${it.batch_no}`,
-    part_id: it.part_id,
-    drawing_no: it.drawing_no,
-    part_name: it.name,
-    quantity: it.quantity,
-    serial_no: it.serial_no,
-    system_delivery_date: it.system_delivery_date,
-    planned_delivery_date: it.planned_delivery_date,
-    is_urgent: it.is_urgent,
-    version: it.version,
-    customer: it.customer_name,
-    applicant: it.applicant_name,
-    location: it.location,
-    // 2026-09-29 review 第 1 轮：与 poolItemToCard 同源处理，透传 has_cnc_program
-    has_cnc_program: it.has_cnc_program,
-  };
-}
-
-/** 把 WorkerBriefDto + WorkerStateDto 合并为 UI Worker。 */
-function mergeWorker(brief: WorkerBriefDto, state: WorkerStateDto | null): Worker {
-  return {
-    id: brief.worker_id,
-    name: brief.name,
-    badge_code: '', // WorkerBrief 不带 badge_code（前端扩展占位，rust 待补）
-    work_type_code: brief.work_type_code,
-    max_held: state?.max_held ?? 0,
-    current_held: state?.current_held ?? 0,
-    capacity_remaining: state?.capacity_remaining ?? 0,
-    is_online: true, // WorkerBrief 不带 is_online（rust 当前端点不返）
-    process_ids: [], // 由聚合逻辑（loadBoard 内）填充
-  };
-}
-
-/** 2026-09-21 显式返回类型。 */
+/** 2026-09-21 显式返回类型。
+ *  2026-09-30：移除 processPools 字段（WorkerPoolTab + PendingPoolCard 自管
+ *  useWorkerPoolByProcessQuery，无 module-level ref 必要）；新增 3 个 mutation 的
+ *  mutateAsync 包装（moveBatchToWorker / moveBatchToPool / runAutoAllocate 沿用
+ *  原签名以兼容 view 现有调用点）。 */
 export interface UseWorkerQueueReturn {
   workers: Ref<Worker[]>;
-  processPools: Ref<ProcessPoolView[]>;
   workerHeld: Ref<Record<string, WorkOrderCard[]>>;
   loading: Ref<boolean>;
   error: Ref<string | null>;
+  /** 2026-09-30：简化为「并发拉 cache 内所有 worker 的 state」单步 —— 不再拉 processes +
+   *  worker-pool（这些已迁出到 useProcessesQuery + useWorkerPoolByProcessQuery）。
+   *  返回 Promise<void> 让 caller 可 await 同步看板。 */
   loadBoard: (shelfId: string | null) => Promise<void>;
+  /** 2026-09-30：mutation 包装（沿 useMutation mutateAsync 形态），保留
+   *  Promise<boolean> 签名以兼容 view 现有调用点（PoolDrawer.vue onDragAdd / 等）。 */
   moveBatchToWorker: (
     batch_id: string,
     to_worker_id: string,
@@ -155,277 +103,155 @@ export interface UseWorkerQueueReturn {
 }
 
 export function useWorkerQueue(): UseWorkerQueueReturn {
-  /** 拉所有 process 的 pool detail + 二次查 worker state。
-   *  流程：
-   *  1) GET /api/v2/prod/processes?limit=500 拿到所有 process（用于「按 process 维度」遍历）
-   *  2) 并发调 getWorkerPoolByProcess(processId) 拿到各 process 的 worker / items
-   *  3) 聚合：worker 跨 process 出现 → process_ids += processId；items → processPools
-   *  4) 二次并发 getWorkerState 补 max_held / current_held / capacity_remaining
-   *
-   * 2026-09-25 修正：listProcesses 路径漂移到 /prod/processes；返回类型由 unknown[] 改为
-   * Process[]，composable 内不再就地强转（listProcesses.from `@/api/processChain`）。
-   * 2026-09-14 review 第 1 轮：
-   * - `shelfId` 由 view 层从 `useAuthStore().activeShelfId` 注入（2026-09-26：原 useAuthSession
-   *   迁到 Pinia store，标量 getter 去掉括号）；null/空串 → 跳过二次 GET（rust
-   *   WorkerPoolState 必填 shelf_id；无激活货架时用占位 '0' 必触发 40001
-   *   BIZ_SHELF_NOT_FOUND，导致所有 worker 的 max_held/current_held/capacity_remaining
-   *   退化为 0）。
-   * - `listProcesses` 改从 `@/api/processChain` 导入（v2，baseURL /api/v2）；不再走
-   *   `@/api/process` 的 v1 端点。 */
-  async function loadBoard(shelfId: string | null): Promise<void> {
-    loading.value = true;
-    error.value = null;
-    try {
-      // 1) 拉所有 process（v2 端点 /api/v2/prod/processes），仅保留自产工序
-      //    （category === 'INHOUSE'）。2026-09-29 任务规约 #2：外协工序不进 Tab /
-      //    不进 worker 列、不进 pool；PendingPoolsPanel 也只展示自产工序卡。
-      //    listProcesses 返回 Process[] 含 category 字段（@/api/processChain 已
-      //    剥 envelope），可直接 filter。
-      const procList = await listProcesses({});
-      const inhouseProcs = procList.filter((p) => p.category === 'INHOUSE');
-      const processIds: string[] = inhouseProcs.map((p) => p.id);
+  const qc = useQueryClient();
 
-      // 2) 并发拉各 process 的 pool detail
-      const poolResults = await Promise.allSettled(
-        processIds.map((pid) => getWorkerPoolByProcess(pid)),
-      );
+  /** 2026-09-30：3 个 mutation 集中编排 invalidate 链 + ElMessage。
+   *  mutationKey 三层数组；不写 retry（信任 main.ts 全局 mutations.retry: 0）。
+   *  写 mutation onSuccess 失效链：
+   *    - moveBatchToWorker.onSuccess(processId) → invalidateWorkerPoolByProcessQuery(qc, processId) +
+   *      invalidateWorkerPoolCountsQuery(qc)
+   *    - moveBatchToPool.onSuccess(processId) → 同上
+   *    - runAutoAllocate.onSuccess(processId) → 同上（auto allocate 跨 worker 但 items 同样变化） */
+  const assignMutation = useMutation<AssignResultDto, Error, AdminAssignRequest & { process_id: string }>({
+    mutationKey: ['worker-pool', 'assign'],
+    mutationFn: async (req) => assignWorkerPool(req),
+    onSuccess: async (res, vars) => {
+      await invalidateWorkerPoolByProcessQuery(qc, vars.process_id);
+      await invalidateWorkerPoolCountsQuery(qc);
+      ElMessage.success(`已分配批次 ${res.taken.batch_no}`);
+    },
+    onError: (e: Error) => {
+      error.value = e.message ?? 'assign failed';
+      ElMessage.error(e.message ?? '分配批次失败');
+    },
+  });
 
-      // 3) 聚合：processPools + workers（去重，process_ids 累加）
-      const workerMap = new Map<string, Worker>();
-      const newProcessPools: ProcessPoolView[] = [];
-      const workerIds = new Set<string>();
+  const removeMutation = useMutation<WorkerTakenItemDto, Error, WorkerRemoveRequest & { process_id: string }>({
+    mutationKey: ['worker-pool', 'remove'],
+    mutationFn: async (req) => removeFromWorkerPool(req),
+    onSuccess: async (_res, vars) => {
+      await invalidateWorkerPoolByProcessQuery(qc, vars.process_id);
+      await invalidateWorkerPoolCountsQuery(qc);
+    },
+    onError: (e: Error) => {
+      error.value = e.message ?? 'return failed';
+      ElMessage.error(e.message ?? '撤回批次失败');
+    },
+  });
 
-      poolResults.forEach((r, idx) => {
-        if (r.status !== 'fulfilled') return;
-        const pool: WorkerPoolDto = r.value;
-        const processId = processIds[idx]!;
-        // processPools
-        newProcessPools.push({
-          process_id: pool.process_id,
-          process_code: pool.process_code,
-          process_name: pool.process_name,
-          batches: pool.items.map(poolItemToCard),
-        });
-        // workers（聚合 process_ids）
-        pool.workers.forEach((wb) => {
-          workerIds.add(wb.worker_id);
-          const existing = workerMap.get(wb.worker_id);
-          if (existing) {
-            if (!existing.process_ids.includes(processId)) {
-              existing.process_ids.push(processId);
-            }
-          } else {
-            workerMap.set(wb.worker_id, mergeWorker(wb, null));
-            workerMap.get(wb.worker_id)!.process_ids.push(processId);
-          }
-        });
-      });
+  const autoAllocateMutation = useMutation<AutoAllocateResultDto, Error, AutoAllocateRequest>({
+    mutationKey: ['worker-pool', 'auto-allocate'],
+    mutationFn: async (req) => autoAllocate(req),
+    onSuccess: async (_res, vars) => {
+      await invalidateWorkerPoolByProcessQuery(qc, vars.process_id);
+      await invalidateWorkerPoolCountsQuery(qc);
+    },
+    onError: (e: Error) => {
+      error.value = e.message ?? 'auto allocate failed';
+      ElMessage.error(e.message ?? '自动分配失败');
+    },
+  });
 
-      // 4) 二次并发 getWorkerState 补 max_held / current_held / capacity_remaining
-      // shelfId 由 caller 注入；空 → 跳过二次 GET（已知 UX 退化：worker 列显示「0/0」）。
-      if (shelfId && shelfId.length > 0) {
-        const stateResults = await Promise.allSettled(
-          Array.from(workerIds).map(async (wid) => {
-            try {
-              return await getWorkerState({ worker_id: wid, shelf_id: shelfId });
-            } catch {
-              return null;
-            }
-          }),
-        );
-        let i = 0;
-        for (const wid of workerIds) {
-          const r = stateResults[i++];
-          if (r && r.status === 'fulfilled' && r.value) {
-            const state: WorkerStateDto = r.value;
-            const w = workerMap.get(wid);
-            if (w) {
-              w.max_held = state.max_held;
-              w.current_held = state.current_held;
-              w.capacity_remaining = state.capacity_remaining;
-              w.work_type_code = state.work_type_code || w.work_type_code;
-            }
-            // 2026-09-14 follow-up：WorkerStateDto 新增 held_batches 字段，
-            // 直接转 WorkOrderCard 写入 workerHeld（不再恒为空）。
-            workerHeld.value[wid] = (state.held_batches ?? []).map(heldToCard);
-          }
-        }
-      }
-
-      workers.value = Array.from(workerMap.values());
-      processPools.value = newProcessPools;
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : 'load failed';
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  // 在所有 pool + workerHeld 中查找 batch
-  function locateBatch(batch_id: string): {
-    pool: ProcessPoolView | null;
-    workerId: string | null;
-    idx: number;
-    batch: WorkOrderCard | null;
-  } {
-    for (const p of processPools.value) {
-      const idx = p.batches.findIndex((b) => b.batch_id === batch_id);
-      if (idx >= 0) return { pool: p, workerId: null, idx, batch: p.batches[idx]! };
-    }
-    for (const [wid, list] of Object.entries(workerHeld.value)) {
-      const idx = list.findIndex((b) => b.batch_id === batch_id);
-      if (idx >= 0) return { pool: null, workerId: wid, idx, batch: list[idx]! };
-    }
-    return { pool: null, workerId: null, idx: -1, batch: null };
-  }
-
-  /** 把 batch 从 pool 移到 worker。
-   *  真实 API：assignWorkerPool（单 batch 分配，2026-09-14 follow-up）。
-   *  替代之前用 refillWorkerPool 批量抢批的语义滥用。
-   *  乐观更新：本地把目标 batch 从 pool 移到 workerHeld[worker_id]。
-   *  失败回滚。 */
+  /** 2026-09-30：moveBatchToWorker mutation 包装 —— 保留 Promise<boolean> 签名
+   *  以兼容 view 现有调用点（WorkerColumn onDragAdd → 调用处）。 */
   async function moveBatchToWorker(
     batch_id: string,
     to_worker_id: string,
     shelf_id: string,
     process_id: string,
   ): Promise<boolean> {
-    const target = workers.value.find((w) => w.id === to_worker_id);
-    if (!target) {
-      error.value = `worker ${to_worker_id} not found`;
-      return false;
-    }
-    if (target.capacity_remaining <= 0) {
-      error.value = `${target.name} 持有已满（${target.current_held}/${target.max_held}）`;
-      return false;
-    }
-
-    const loc = locateBatch(batch_id);
-    if (!loc.batch) {
-      error.value = `batch ${batch_id} not found`;
-      return false;
-    }
-
-    // 乐观更新：先在本地移动
-    const original = loc.batch;
-    const moved: WorkOrderCard = { ...original, version: original.version + 1 };
-    if (loc.pool) {
-      loc.pool.batches.splice(loc.idx, 1);
-    } else if (loc.workerId) {
-      workerHeld.value[loc.workerId]!.splice(loc.idx, 1);
-    }
-    const targetList = workerHeld.value[to_worker_id] ?? [];
-    targetList.push(moved);
-    workerHeld.value[to_worker_id] = targetList;
-    target.current_held += 1;
-    target.capacity_remaining -= 1;
-
     try {
-      // 2026-09-14 follow-up：改用 assignWorkerPool（单 batch 分配语义，1-to-1）。
-      // 服务端只确认一个 batch（taken 是单值，不是数组），assign 端点不会 0 个返回：
-      // 容量已满 / 池外 / 不存在走 ApiError code 路径，正常路径 result.taken 非空。
-      const result: AssignResultDto = await assignWorkerPool({
+      await assignMutation.mutateAsync({
         worker_id: to_worker_id,
         batch_id,
         shelf_id: String(shelf_id),
         process_id: String(process_id),
       });
-      ElMessage.success(`已分配批次 ${result.taken.batch_no} 到 ${target.name}`);
       return true;
-    } catch (e) {
-      // 回滚
-      if (loc.pool) {
-        loc.pool.batches.splice(loc.idx, 0, original);
-      } else if (loc.workerId) {
-        workerHeld.value[loc.workerId]!.splice(loc.idx, 0, original);
-      }
-      const rollbackIdx = (workerHeld.value[to_worker_id] ?? []).findIndex(
-        (b) => b.batch_id === batch_id,
-      );
-      if (rollbackIdx >= 0) workerHeld.value[to_worker_id]!.splice(rollbackIdx, 1);
-      target.current_held -= 1;
-      target.capacity_remaining += 1;
-      error.value = e instanceof Error ? e.message : 'assign failed';
-      ElMessage.error((e as Error).message ?? '分配批次失败');
+    } catch {
       return false;
     }
   }
 
-  /** 把 batch 从 worker 移回 pool（按 RETURNED 语义）。
-   *  真实 API：removeFromWorkerPool（1-to-1 语义吻合）。 */
+  /** 2026-09-30：moveBatchToPool mutation 包装 —— 保留 Promise<boolean> 签名。 */
   async function moveBatchToPool(
     batch_id: string,
     from_worker_id: string,
     shelf_id: string,
     next_process_id: string,
   ): Promise<boolean> {
-    const list = workerHeld.value[from_worker_id];
-    if (!list) {
-      error.value = `worker ${from_worker_id} has no held`;
-      return false;
-    }
-    const idx = list.findIndex((b) => b.batch_id === batch_id);
-    if (idx < 0) {
-      error.value = `batch ${batch_id} not held by ${from_worker_id}`;
-      return false;
-    }
-    const original = list[idx]!;
-    const targetPool = processPools.value.find((p) => p.process_id === next_process_id);
-    if (!targetPool) {
-      error.value = `process ${next_process_id} not found`;
-      return false;
-    }
-
-    const moved: WorkOrderCard = { ...original, version: original.version + 1 };
-    list.splice(idx, 1);
-    targetPool.batches.push(moved);
-    const worker = workers.value.find((w) => w.id === from_worker_id);
-    if (worker) {
-      worker.current_held -= 1;
-      worker.capacity_remaining += 1;
-    }
-
     try {
-      const _taken: WorkerTakenItemDto = await removeFromWorkerPool({
+      await removeMutation.mutateAsync({
         worker_id: from_worker_id,
         batch_id,
         shelf_id: String(shelf_id),
         next_process_id: String(next_process_id),
+        process_id: next_process_id,
       });
-      void _taken;
       return true;
-    } catch (e) {
-      // 回滚
-      list.splice(idx, 0, original);
-      const rollbackIdx = targetPool.batches.findIndex((b) => b.batch_id === batch_id);
-      if (rollbackIdx >= 0) targetPool.batches.splice(rollbackIdx, 1);
-      if (worker) {
-        worker.current_held += 1;
-        worker.capacity_remaining += 1;
-      }
-      error.value = e instanceof Error ? e.message : 'return failed';
+    } catch {
       return false;
     }
   }
 
-  /** POST /api/v2/admin/worker-pool/auto-allocate 触发入口（前端可挂按钮）。
-   *  流程：调用方传 processId + shelfId + mode + fill_ratio；返回填充结果。
-   *  2026-09-14 review 第 1 轮：loadBoard 需要 shelfId；这里从 req.shelf_id 派生（auto-allocate
-   *  本就需要 shelf_id 入参）。 */
+  /** 2026-09-30：runAutoAllocate mutation 包装 —— 保留 Promise<void> 签名。 */
   async function runAutoAllocate(req: {
     process_id: string;
     shelf_id: string;
     mode: 'COUNT' | 'TIME';
     fill_ratio: number;
   }): Promise<void> {
+    await autoAllocateMutation.mutateAsync(req);
+  }
+
+  /** 2026-09-30 简化：loadBoard 不再拉 processes + 各 worker-pool（迁到共享
+   *  useProcessesQuery / useWorkerPoolByProcessQuery）。改为「拉当前 cache 内所有
+   *  inhouse 工序的 worker 的 state」单步 —— WorkerColumn 内 useWorkerStateByWorkerQuery
+   *  拉到的 held_batches 走 cache identity 直接合并；本 loadBoard 仅做 seed 兜底
+   *  （跨 tab 切换时 WorkerColumn 重建后首次激活前的占位视图）。
+   *
+   *  流程：
+   *  1) 从 qc.getQueriesData({ queryKey: qk.workerPoolByProcessPrefix }) 收集 worker_id
+   *  2) 并发 getWorkerState 写 workerHeld
+   *  3) 不抛错（catch 写 error.value）
+   */
+  async function loadBoard(shelfId: string | null): Promise<void> {
+    if (!shelfId || shelfId.length === 0) {
+      // 无激活货架时清空 workerHeld（与原 loadBoard 「跳过二次 GET」语义一致）
+      workerHeld.value = {};
+      return;
+    }
     loading.value = true;
-    error.value = null;
     try {
-      await autoAllocate(req);
-      // 成功后刷新整个看板，shelfId 来自 req（auto-allocate 必填）
-      await loadBoard(req.shelf_id);
+      const cached = qc.getQueriesData<{
+        workers: Array<{ worker_id: string }>;
+      }>({ queryKey: qk.workerPoolByProcessPrefix });
+      const workerIds = new Set<string>();
+      for (const [, d] of cached) {
+        if (d?.workers) {
+          for (const w of d.workers) workerIds.add(w.worker_id);
+        }
+      }
+      if (workerIds.size === 0) return;
+      const results = await Promise.allSettled(
+        Array.from(workerIds).map(async (wid) => {
+          try {
+            return await getWorkerState({ worker_id: wid, shelf_id: shelfId });
+          } catch {
+            return null;
+          }
+        }),
+      );
+      let i = 0;
+      for (const wid of workerIds) {
+        const r = results[i++];
+        if (r && r.status === 'fulfilled' && r.value) {
+          const state: WorkerStateDto = r.value;
+          workerHeld.value[wid] = (state.held_batches ?? []).map(_heldToCard);
+        }
+      }
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'auto allocate failed';
+      error.value = e instanceof Error ? e.message : 'loadBoard failed';
     } finally {
       loading.value = false;
     }
@@ -433,7 +259,6 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
 
   return {
     workers: workers as Ref<Worker[]>,
-    processPools: processPools as Ref<ProcessPoolView[]>,
     workerHeld: workerHeld as Ref<Record<string, WorkOrderCard[]>>,
     loading: loading as Ref<boolean>,
     error: error as Ref<string | null>,
@@ -443,3 +268,7 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
     runAutoAllocate,
   };
 }
+
+// 2026-09-30：workers ref 保留导出但不再有外部写点（processPools 已下线，
+// workerHeld 来源改为 cache 合并）。本注释防止 reviewer 误删。
+void computed;

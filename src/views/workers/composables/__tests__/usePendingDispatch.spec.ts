@@ -207,7 +207,7 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
     vi.restoreAllMocks();
   });
 
-  it('T1：dispatchMutation.mutate 成功 → 触发 3 个 invalidateQueries + refreshBoard', async () => {
+  it('T1：dispatchMutation.mutate 成功 → 触发 5 个 invalidateQueries + refreshBoard', async () => {
     const d = testApp.runWithContext(() => usePendingDispatch({ refreshBoard: refreshBoardMock }));
     await d.dispatchMutation.mutateAsync({
       batchId: '3000000000001',
@@ -219,9 +219,12 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
     expect(realDispatchBatch).toHaveBeenCalledTimes(1);
     // 2026-09-29：usePendingDispatch.invalidateAll 内调 invalidatePendingBatchesQuery
     // （内部再调 1 次 qc.invalidateQueries）+ invalidateProcessesQuery（同 1 次）
-    // + 显式 qc.invalidateQueries({ queryKey: qk.partsPrefix }) 1 次 → 共 3 次顶层调用。
-    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(3);
-    // 2026-09-29 review 第 1 轮修复（C2）：refreshBoard 必须被调一次（processPools 同步刷新）
+    // + 显式 qc.invalidateQueries({ queryKey: qk.partsPrefix }) 1 次。
+    // 2026-09-30 跨域失效扩：invalidateWorkerPoolByProcessAll（1 次 invalidateQueries，
+    // 走 qk.workerPoolByProcessPrefix）+ invalidateWorkerPoolCountsQuery（同 1 次）→
+    // 共 5 次顶层调用。
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(5);
+    // 2026-09-29 review 第 1 轮修复（C2）：refreshBoard 必须被调一次（workerHeld 同步刷新）
     expect(refreshBoardMock).toHaveBeenCalledTimes(1);
     // 验证 queryKey 形态（顺序与 invalidateAll 顺序对齐）
     const keys = vi.mocked(testQueryClient.invalidateQueries).mock.calls.map((c) => c[0]);
@@ -231,9 +234,13 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
     expect(second.queryKey).toEqual(['processes']);
     const third = keys[2] as { queryKey: readonly unknown[] };
     expect(third.queryKey).toEqual(['parts']);
+    const fourth = keys[3] as { queryKey: readonly unknown[] };
+    expect(fourth.queryKey).toEqual(['worker-pool', 'by-process']);
+    const fifth = keys[4] as { queryKey: readonly unknown[] };
+    expect(fifth.queryKey).toEqual(['worker-pool', 'counts']);
   });
 
-  it('T2：bulkDispatchMutation.mutate 成功（带 targetProcessId）→ 触发 3 个 invalidateQueries + refreshBoard + 清空 selectedIds', async () => {
+  it('T2：bulkDispatchMutation.mutate 成功（带 targetProcessId）→ 触发 5 个 invalidateQueries + refreshBoard + 清空 selectedIds', async () => {
     // 2026-09-29 修复 dispatch 契约漂移：bulkDispatchMutation 入参改为
     // { batchIds, targetProcessId }，去掉 shelfId / nextProcessId + 不再 fallback
     // 到 auto 端点。本用例验证：bulkDispatchBatches 必被调（带 targets 形态），
@@ -255,7 +262,8 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
       ],
     });
     expect(realAutoDispatchBatches).not.toHaveBeenCalled();
-    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(3);
+    // 2026-09-30：跨域失效 5 次（含 worker-pool 2 次）+ refreshBoard 1 次
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(5);
     expect(refreshBoardMock).toHaveBeenCalledTimes(1);
     // 批量成功后清空多选
     expect(d.selectedIds.value.size).toBe(0);
@@ -287,7 +295,8 @@ describe('usePendingDispatch — 失效链路 + autoDispatch 行为（2026-09-29
     });
 
     expect(realAutoDispatchBatches).toHaveBeenCalledTimes(1);
-    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(3);
+    // 2026-09-30：跨域失效 5 次 + refreshBoard 1 次
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(5);
     expect(refreshBoardMock).toHaveBeenCalledTimes(1);
     // 2026-09-29 修复：reason='NO_PROCESS_CHAIN' → 合成 ApiError(20706) →
     // handleProcessChainRequired → ElMessageBox.confirm 必被调一次（C1 fix 沿用）

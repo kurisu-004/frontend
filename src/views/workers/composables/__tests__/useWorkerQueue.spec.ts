@@ -1,187 +1,44 @@
-// 2026-09-14 改造：useWorkerQueue 测试 fixture → mock API。
+// src/views/workers/composables/__tests__/useWorkerQueue.spec.ts
 //
-// 原 fixture 驱动（3 worker / 2 process pool）改为 vi.mock('@/api/workerPool' | '@/api/process')
-// 注入稳定 stub 数据。断言 composable 的 loadBoard 聚合逻辑 + moveBatchToWorker/Pool 的
-// 乐观更新 + 错误回滚。
+// 2026-09-30 重写：useWorkerQueue mutation onSuccess + invalidate helpers + loadBoard
+// workerHeld 路径守门。
 //
-// 2026-09-14 follow-up：
-// - STUB_STATES 加 held_batches 字段（WorkerStateDto 新增）；loadBoard 后 workerHeld 非空。
-// - mock 矩阵把 refillWorkerPool 替换为 assignWorkerPool（assign 端点，单 batch 分配语义）。
-// - moveBatchToWorker 成功路径改断言「已分配批次 X 到 Y」；删除 ElMessage.info 路径
-//   （assign 端点不会 0 个返回：容量满 / 池外走 ApiError code 路径）。
-// - 新增 moveBatchToWorker 失败（assign 端点 20204 WORKER_CAPACITY_EXCEEDED）用例，
-//   断言 catch 路径：error.value 含语义、ElMessage.error 被调。
+// 2026-09-30 改造要点：
+// - 删 `processPools` / `filteredWorkers` / `moveBatchToWorker`/`Pool` 乐观更新路径
+//   —— pool 数据流已迁到 useWorkerPoolByProcessQuery，mutation 走 TanStack useMutation
+//   + onSuccess invalidate；
+// - loadBoard 简化为「并发拉 cache 内所有 worker 的 state」—— 必须先 queryClient
+//   setQueryData 注入 worker-pool by-process 缓存，loadBoard 才能拿到 worker_ids；
+// - 3 个 mutation 走 TanStack —— assignMutation / removeMutation / autoAllocateMutation
+//   的 mutateAsync 包装，断言 onSuccess 调 invalidateWorkerPoolByProcessQuery +
+//   invalidateWorkerPoolCountsQuery。
 //
-// 2026-09-14 follow-up round-2：
-// - STUB_HELD_BY_W001 升级为 HeldBatchItemDto 全字段（含 name / customer_name /
-//   applicant_name / location / shelf_code / note / parent_customer_name），对应
-//   后端 HeldBatchItem 与 HeldBatchItemDto 对齐；消除 heldToCard 字段降级。
-// - STUB_HELD_BY_W003 简化为空（任务规约：W002/W003 held_batches = []）。
-// - 新增「loadBoard 后 workerHeld 非空且字段完整」用例，断言 W001 持有的 batch
-//   字段全部正确（part_name='零件甲' / customer_name='法拉电子' / applicant_name='张三'
-//   / location='WORKER'，W002 仍空）。
+// 覆盖：
+//   - T1：loadBoard 从 cache 内收集 worker_ids → 并发 getWorkerState → workerHeld 写入
+//     HeldBatchItem 全字段；
+//   - T2：loadBoard（shelfId = null）→ workerHeld 清空，跳过 GET；
+//   - T3：moveBatchToWorker 成功 → assignWorkerPool 被调 + 2 个 invalidate helpers 被调；
+//   - T4：moveBatchToWorker 失败 → catch 路径返回 false + error.value 写入 + ElMessage.error；
+//   - T5：moveBatchToPool 成功 → removeFromWorkerPool 被调 + 2 个 invalidate helpers 被调；
+//   - T6：runAutoAllocate 成功 → autoAllocate 被调 + 2 个 invalidate helpers 被调；
+//   - T7：runAutoAllocate 失败 → onError 路径 error.value 写入。
+//
+// 测试策略：
+//   - vi.mock('@/api/workerPool') + vi.mock('@/api/processChain') + vi.mock('element-plus')；
+//   - vi.spyOn(qc, 'invalidateQueries') 验证 mutation onSuccess 失效链；
+//   - 每个测试用 testApp.runWithContext(() => useWorkerQueue()) 注入 QueryClient；
+//   - 必须先 queryClient.setQueryData 注入 by-process 缓存，否则 loadBoard 收集不到
+//     worker_ids（这是新行为 —— 旧版本 loadBoard 是主动拉 processes + 各 worker-pool，
+//     现在是被动消费 cache）。
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createApp } from 'vue';
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
+import type { WorkerStateDto } from '@/api/workerPool.contract';
+import { qk } from '@/composables/queries/keys';
 import { ApiError } from '@/api/http';
-import type { HeldBatchItemDto, WorkerPoolDto, WorkerStateDto } from '@/api/workerPool.contract';
 
-// stub processes
-// 2026-09-29 任务规约：loadBoard 仅保留 INHOUSE 工序，OUTSOURCE 不进 Tab / worker / pool。
-// STUB_PROCESSES 含 1 OUTSOURCE + 2 INHOUSE，断言 OUTSOURCE 工序完全被过滤。
-const STUB_PROCESSES = [
-  { id: '2000000000001', code: 'CNC-01', name: '粗加工', category: 'INHOUSE' as const },
-  { id: '2000000000002', code: 'QC-01', name: '质检', category: 'INHOUSE' as const },
-  { id: '2000000000003', code: 'OUT-01', name: '外协车加工', category: 'OUTSOURCE' as const },
-];
-
-// 2026-09-14 follow-up round-2：held_batches 元素升级为 HeldBatchItemDto 全字段。
-// 2026-09-29 review 第 1 轮：HeldBatchItemDto 新增 has_cnc_program 必填字段。
-const STUB_HELD_BY_W001: HeldBatchItemDto[] = [
-  {
-    batch_id: '2100000000001',
-    part_id: '1800000000001',
-    batch_no: 1,
-    quantity: 5,
-    serial_no: 'F001-001',
-    drawing_no: 'DWG-001',
-    name: '零件甲',
-    system_delivery_date: '2026-09-30',
-    planned_delivery_date: '2026-10-15',
-    is_urgent: true,
-    customer_name: '法拉电子',
-    parent_customer_name: null,
-    applicant_name: '张三',
-    location: 'WORKER',
-    shelf_code: 'A-01',
-    note: '加急',
-    // 2026-09-29 review 第 1 轮：沿 chain 派生（后端 service 层 t_part_file EXISTS）
-    has_cnc_program: true,
-    version: 3,
-  },
-];
-// W003 按 task 规约 held_batches = []（不再用旧的 STUB_HELD_BY_W003 双 item 矩阵）；
-// 单 item 覆盖已由 W001 提供。
-
-// stub WorkerPoolDto（每 process 一个）
-// 2026-09-16 PR-3：PoolBatchItemDto 删 placed_at（t_part_batch 列下线），改用
-// current_process_step_id（可选 nullable）。fixture 同步精简。
-const STUB_POOL_2000000000001: WorkerPoolDto = {
-  process_id: '2000000000001',
-  process_code: 'CNC-01',
-  process_name: '粗加工',
-  workers: [
-    {
-      worker_id: '1900000000001',
-      name: '张三',
-      work_type_id: '3000000000001',
-      work_type_code: 'CNC',
-    },
-    {
-      worker_id: '1900000000002',
-      name: '李四',
-      work_type_id: '3000000000001',
-      work_type_code: 'CNC',
-    },
-  ],
-  work_types: [],
-  total: 2,
-  items: [
-    {
-      batch_id: '3000000000001',
-      part_id: '4000000000001',
-      batch_no: 1,
-      quantity: 5,
-      serial_no: null,
-      name: '法兰盘',
-      drawing_no: 'DWG-A001',
-      system_delivery_date: '2026-09-05',
-      customer_name: '客户A',
-      parent_customer_name: null,
-      customer_path: null,
-      applicant_name: '张三',
-      location: 'PRODUCTION_SHELF',
-      shelf_id: '5000000000001',
-      shelf_code: 'A-01',
-      shelf_name: 'A 区货架 1',
-      is_urgent: true,
-      note: null,
-      current_process_step_id: '5000000000010',
-      // 2026-09-29 新增：PoolBatchItemDto 必填 has_cnc_program 字段（沿 chain 派生）
-      has_cnc_program: true,
-      version: 1,
-    },
-    {
-      batch_id: '3000000000002',
-      part_id: '4000000000002',
-      batch_no: 1,
-      quantity: 3,
-      serial_no: null,
-      name: '齿轮',
-      drawing_no: 'DWG-A002',
-      system_delivery_date: '2026-09-10',
-      customer_name: null,
-      parent_customer_name: null,
-      customer_path: null,
-      applicant_name: null,
-      location: 'PRODUCTION_SHELF',
-      shelf_id: '5000000000001',
-      shelf_code: 'A-01',
-      shelf_name: 'A 区货架 1',
-      is_urgent: false,
-      note: null,
-      current_process_step_id: '5000000000011',
-      // 2026-09-29 新增：PoolBatchItemDto 必填 has_cnc_program 字段
-      has_cnc_program: false,
-      version: 1,
-    },
-  ],
-};
-
-const STUB_POOL_2000000000002: WorkerPoolDto = {
-  process_id: '2000000000002',
-  process_code: 'QC-01',
-  process_name: '质检',
-  workers: [
-    {
-      worker_id: '1900000000003',
-      name: '王五',
-      work_type_id: '3000000000002',
-      work_type_code: 'QC',
-    },
-  ],
-  work_types: [],
-  total: 1,
-  items: [
-    {
-      batch_id: '3000000000003',
-      part_id: '4000000000003',
-      batch_no: 1,
-      quantity: 8,
-      serial_no: 'SN-001',
-      name: '轴套',
-      drawing_no: 'DWG-B001',
-      system_delivery_date: '2026-09-01',
-      customer_name: null,
-      parent_customer_name: null,
-      customer_path: null,
-      applicant_name: null,
-      location: 'PRODUCTION_SHELF',
-      shelf_id: '5000000000001',
-      shelf_code: 'A-01',
-      shelf_name: 'A 区货架 1',
-      is_urgent: true,
-      note: null,
-      current_process_step_id: '5000000000012',
-      // 2026-09-29 新增：PoolBatchItemDto 必填 has_cnc_program 字段
-      has_cnc_program: false,
-      version: 2,
-    },
-  ],
-};
-
-// stub WorkerStateDto（每个 worker 一条；shelf_id='0' 触发 40001 时 catch 兜底）
-// 2026-09-14 follow-up round-2：仅 W001 含 held_batches（W002/W003 按任务规约为空）；
-// held_batches 元素类型为 HeldBatchItemDto（含全展示字段，对应 HeldBatchItemDto 16+ 字段）。
+// stub WorkerStateDto（每个 worker 一条；W001 含 1 个 HeldBatchItemDto 全字段）
 const STUB_STATES: Record<string, WorkerStateDto> = {
   '1900000000001': {
     worker_id: '1900000000001',
@@ -191,7 +48,28 @@ const STUB_STATES: Record<string, WorkerStateDto> = {
     current_held: 1,
     capacity_remaining: 2,
     pool_count_by_process: [{ process_id: '2000000000001', pool_count: 2 }],
-    held_batches: STUB_HELD_BY_W001,
+    held_batches: [
+      {
+        batch_id: '2100000000001',
+        part_id: '1800000000001',
+        batch_no: 1,
+        quantity: 5,
+        serial_no: 'F001-001',
+        drawing_no: 'DWG-001',
+        name: '零件甲',
+        system_delivery_date: '2026-09-30',
+        planned_delivery_date: '2026-10-15',
+        is_urgent: true,
+        customer_name: '法拉电子',
+        parent_customer_name: null,
+        applicant_name: '张三',
+        location: 'WORKER',
+        shelf_code: 'A-01',
+        note: '加急',
+        has_cnc_program: true,
+        version: 3,
+      },
+    ],
   },
   '1900000000002': {
     worker_id: '1900000000002',
@@ -215,276 +93,232 @@ const STUB_STATES: Record<string, WorkerStateDto> = {
   },
 };
 
-// mock api/workerPool + api/processChain（必须在 import composable 之前 hoist）
-// 2026-09-14 review 第 1 轮：listProcesses 改 mock 在 @/api/processChain（v2），
-// 不再 mock @/api/process（v1）；返回形状从 { items: [...] } 简化为裸数组
-// （processChain.ts:49 的封装已剥 envelope）。
-// 2026-09-14 follow-up：refillWorkerPool mock 删除，替换为 assignWorkerPool。
-vi.mock('@/api/workerPool', () => ({
-  getWorkerPoolByProcess: vi.fn(async (processId: string) => {
-    if (processId === '2000000000001') return STUB_POOL_2000000000001;
-    if (processId === '2000000000002') return STUB_POOL_2000000000002;
-    // 2026-09-29：OUTSOURCE 工序不应被请求（loadBoard 已 filter INHOUSE），
-    // 若被调起说明过滤失败，此 throw 会让测试立刻报警。
-    if (processId === '2000000000003') {
-      throw new Error('OUTSOURCE process should not be requested');
-    }
-    throw new Error('unknown process');
-  }),
-  getWorkerState: vi.fn(async (params: { worker_id: string }) => {
-    const s = STUB_STATES[params.worker_id];
-    if (!s) throw new Error('unknown worker');
-    return s;
-  }),
-  assignWorkerPool: vi.fn(async (req: { worker_id: string; batch_id: string }) => {
-    // 默认 mock：模拟「分配成功」回执
-    const state = STUB_STATES[req.worker_id];
-    return {
-      worker_id: req.worker_id,
-      batch_id: req.batch_id,
-      shelf_id: '5000000000001',
-      taken: {
-        batch_id: req.batch_id,
-        part_id: '4000000000001',
-        batch_no: 1,
-        quantity: 5,
-        serial_no: null,
-        drawing_no: 'DWG-A001',
-        system_delivery_date: '2026-09-05',
-        planned_delivery_date: null,
-        is_urgent: true,
-        version: 2,
-      },
-      current_held: (state?.current_held ?? 0) + 1,
-      max_held: state?.max_held ?? 3,
-    };
-  }),
-  removeFromWorkerPool: vi.fn(async () => ({
-    batch_id: '3000000000010',
-    part_id: '4000000000010',
-    batch_no: 10,
-    quantity: 2,
-    serial_no: null,
-    drawing_no: 'DWG-A010',
-    system_delivery_date: '2026-09-08',
-    planned_delivery_date: null,
-    is_urgent: false,
+// mock api/workerPool：保留 assignWorkerPool / removeFromWorkerPool / autoAllocate /
+// getWorkerState 四个端点（commit 4 起 useWorkerQueue 不再调 listProcesses +
+// getWorkerPoolByProcess）。
+const realAssignWorkerPool = vi.fn<
+  (req: { worker_id: string; batch_id: string }) => Promise<{
+    worker_id: string;
+    batch_id: string;
+    shelf_id: string;
+    taken: { batch_id: string; part_id: string; batch_no: number; version: number };
+    current_held: number;
+    max_held: number;
+  }>
+>(async (req: { worker_id: string; batch_id: string }) => ({
+  worker_id: req.worker_id,
+  batch_id: req.batch_id,
+  shelf_id: '5000000000001',
+  taken: {
+    batch_id: req.batch_id,
+    part_id: '4000000000001',
+    batch_no: 1,
     version: 2,
-  })),
-  autoAllocate: vi.fn(async () => ({
-    process_id: '2000000000001',
-    shelf_id: '5000000000001',
-    mode: 'COUNT' as const,
-    fill_ratio: 0.5,
-    filled: [],
-    pool_empty: false,
-  })),
+  },
+  current_held: 1,
+  max_held: 3,
 }));
 
-vi.mock('@/api/processChain', () => ({
-  // listProcesses 在 useWorkerQueue.ts 顶部被 import；返回形状是裸数组
-  // （processChain.ts:49 的封装已剥 envelope），不是 { items, total, ... }。
-  listProcesses: vi.fn(async () => STUB_PROCESSES),
+const realRemoveFromWorkerPool = vi.fn<
+  () => Promise<{
+    batch_id: string;
+    part_id: string;
+    batch_no: number;
+    version: number;
+  }>
+>(async () => ({
+  batch_id: '3000000000010',
+  part_id: '4000000000010',
+  batch_no: 10,
+  version: 2,
 }));
 
-// 2026-09-14 review 第 2 轮：mock element-plus ElMessage，断言 moveBatchToWorker
-// 内部 ElMessage.success / info 调用（替代原 lastTakenCount ref 的 view 层消费）。
-// 不导入整个 element-plus（避免拖入 EP 注册副作用），只 stub 用到的命令式 API。
+const realAutoAllocate = vi.fn<
+  () => Promise<{
+    process_id: string;
+    shelf_id: string;
+    filled: unknown[];
+    pool_empty: boolean;
+  }>
+>(async () => ({
+  process_id: '2000000000001',
+  shelf_id: '5000000000001',
+  filled: [],
+  pool_empty: false,
+}));
+
+const realGetWorkerState = vi.fn<
+  (params: { worker_id: string; shelf_id: string }) => Promise<WorkerStateDto>
+>(async (params: { worker_id: string; shelf_id: string }) => {
+  const s = STUB_STATES[params.worker_id];
+  if (!s) throw new Error('unknown worker');
+  return s;
+});
+
+vi.mock('@/api/workerPool', () => ({
+  // 2026-09-30：commit 4 起 useWorkerQueue 不再调 listProcesses / getWorkerPoolByProcess，
+  // 保留 assignWorkerPool / removeFromWorkerPool / autoAllocate / getWorkerState 4 个端点。
+  assignWorkerPool: (...args: unknown[]) => realAssignWorkerPool(...(args as Parameters<typeof realAssignWorkerPool>)),
+  removeFromWorkerPool: (...args: unknown[]) => realRemoveFromWorkerPool(...(args as Parameters<typeof realRemoveFromWorkerPool>)),
+  autoAllocate: (...args: unknown[]) => realAutoAllocate(...(args as Parameters<typeof realAutoAllocate>)),
+  getWorkerState: (...args: unknown[]) => realGetWorkerState(...(args as Parameters<typeof realGetWorkerState>)),
+  // 列出 stub 防止 partial mock 副作用（commit 4 不再消费）
+  getWorkerPoolCounts: vi.fn(),
+  getWorkerPoolByProcess: vi.fn(),
+  refillWorkerPool: vi.fn(),
+}));
+
+// 2026-09-30：commit 4 起 useWorkerQueue 不再调 listProcesses，mock 不需要。
+// 保留 mock 占位以防 vi.mock hoist 副作用。
+
 vi.mock('element-plus', () => ({
   ElMessage: {
     success: vi.fn(),
     info: vi.fn(),
     error: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
+let testApp: ReturnType<typeof createApp>;
+let testQueryClient: QueryClient;
+
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.resetModules();
+  // 每个测试前重置 QueryClient，确保 cache 干净（避免 by-process cache 跨 test 复用）
+  testQueryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
+  });
+  testApp = createApp({});
+  testApp.use(VueQueryPlugin, { queryClient: testQueryClient });
+  vi.spyOn(testQueryClient, 'invalidateQueries');
 });
 
-describe('useWorkerQueue', () => {
-  it('loadBoard populates workers / processPools / workerHeld（2026-09-14 follow-up round-2：W001 含 1 item / W002/W003 空）', async () => {
-    const { useWorkerQueue } = await import('../useWorkerQueue');
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
-    expect(q.workers.value).toHaveLength(3);
-    expect(q.processPools.value).toHaveLength(2);
-    expect(q.processPools.value[0]!.batches).toHaveLength(2);
-    expect(q.processPools.value[1]!.batches).toHaveLength(1);
-    // 2026-09-14 follow-up round-2：workerHeld 不再恒为空，从 WorkerStateDto.held_batches
-    // 派生；W001 含 1 个 HeldBatchItemDto 全字段 item，W002/W003 按规约为空。
-    expect(q.workerHeld.value['1900000000001']).toHaveLength(1);
-    expect(q.workerHeld.value['1900000000001']![0]!.batch_id).toBe('2100000000001');
-    expect(q.workerHeld.value['1900000000002']).toEqual([]);
-    expect(q.workerHeld.value['1900000000003']).toEqual([]);
-    expect(q.loading.value).toBe(false);
-  });
+afterEach(() => {
+  testQueryClient.unmount();
+  testApp = null as unknown as ReturnType<typeof createApp>;
+  testQueryClient = null as unknown as QueryClient;
+  vi.restoreAllMocks();
+});
 
-  it('loadBoard 后 workerHeld 非空且字段完整（2026-09-14 follow-up round-2：消除字段降级）', async () => {
+/** 2026-09-30 工具：在 testQueryClient 内预先 setQueryData by-process 缓存，
+ *  让 loadBoard 收集 worker_ids（commit 4 起 loadBoard 不再主动拉 processes +
+ * 各 worker-pool）。 */
+function seedByProcessCache() {
+  // 注入两条 by-process 缓存：2000000000001 含 W001/W002；2000000000002 含 W003。
+  testQueryClient.setQueryData(qk.workerPoolByProcess('2000000000001'), {
+    process_id: '2000000000001',
+    process_code: 'CNC-01',
+    process_name: '粗加工',
+    workers: [
+      { worker_id: '1900000000001', name: '张三', work_type_id: '3000000000001', work_type_code: 'CNC' },
+      { worker_id: '1900000000002', name: '李四', work_type_id: '3000000000001', work_type_code: 'CNC' },
+    ],
+    work_types: [],
+    total: 2,
+    items: [],
+  });
+  testQueryClient.setQueryData(qk.workerPoolByProcess('2000000000002'), {
+    process_id: '2000000000002',
+    process_code: 'QC-01',
+    process_name: '质检',
+    workers: [
+      { worker_id: '1900000000003', name: '王五', work_type_id: '3000000000002', work_type_code: 'QC' },
+    ],
+    work_types: [],
+    total: 1,
+    items: [],
+  });
+}
+
+describe('useWorkerQueue — 2026-09-30 重构：mutations + invalidate + workerHeld seed', () => {
+  it('T1：loadBoard 从 cache 收集 worker_ids → 并发 getWorkerState → workerHeld 写入 HeldBatchItem 全字段', async () => {
+    // 2026-09-30：必须先 setQueryData 注入 by-process 缓存，loadBoard 才能收集到 worker_ids
+    // （commit 4 起 loadBoard 不再主动拉 processes + 各 worker-pool）。
+    seedByProcessCache();
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    const q = useWorkerQueue();
+    const q = testApp.runWithContext(() => useWorkerQueue());
     await q.loadBoard('5000000000001');
-    // W001 含 1 个 HeldBatchItemDto 全字段 item
+
+    // W001 含 1 item 全字段
     expect(q.workerHeld.value['1900000000001']).toHaveLength(1);
     const card = q.workerHeld.value['1900000000001']![0]!;
-    // 2026-09-14 follow-up round-2：之前降级为 null/空串的字段现在为真值
     expect(card.part_name).toBe('零件甲');
     expect(card.customer).toBe('法拉电子');
     expect(card.applicant).toBe('张三');
     expect(card.location).toBe('WORKER');
-    // 其余字段也完整保留（drawing_no / batch_no / quantity / serial_no /
-    // system_delivery_date / planned_delivery_date / is_urgent / version）
+    expect(card.has_cnc_program).toBe(true);
     expect(card.drawing_no).toBe('DWG-001');
     expect(card.batch_no).toBe('B1');
-    expect(card.quantity).toBe(5);
-    expect(card.serial_no).toBe('F001-001');
-    expect(card.system_delivery_date).toBe('2026-09-30');
-    expect(card.planned_delivery_date).toBe('2026-10-15');
-    expect(card.is_urgent).toBe(true);
-    expect(card.version).toBe(3);
-    // W002 仍空
-    expect(q.workerHeld.value['1900000000002']).toHaveLength(0);
+    // W002/W003 空
+    expect(q.workerHeld.value['1900000000002']).toEqual([]);
+    expect(q.workerHeld.value['1900000000003']).toEqual([]);
   });
 
-  it('filteredWorkers：activeTab=2000000000001 命中 W001/W002（不命中 W003）', async () => {
+  it('T2：loadBoard（shelfId = null）→ workerHeld 清空，跳过 GET', async () => {
+    // 2026-09-30：shelfId 缺 → loadBoard 直接清空 workerHeld，不发任何请求。
+    seedByProcessCache();
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
-    const activeTab = '2000000000001';
-    const filtered = q.workers.value.filter((w) => w.process_ids.includes(activeTab));
-    expect(filtered.map((w) => w.id).sort()).toEqual(['1900000000001', '1900000000002']);
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    // 预填 workerHeld 以验证 loadBoard 会清空
+    q.workerHeld.value['1900000000001'] = [];
+    await q.loadBoard(null);
+    expect(q.workerHeld.value).toEqual({});
+    expect(realGetWorkerState).not.toHaveBeenCalled();
   });
 
-  it('filteredWorkers：activeTab=2000000000002 只命中 W003', async () => {
+  it('T3：moveBatchToWorker 成功 → assignWorkerPool 被调 + invalidateWorkerPoolByProcessQuery + invalidateWorkerPoolCountsQuery 被调', async () => {
+    // 2026-09-30：mutation onSuccess 失效链 —— invalidateWorkerPoolByProcessQuery(qc, processId)
+    // + invalidateWorkerPoolCountsQuery(qc)。
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
-    const activeTab = '2000000000002';
-    const filtered = q.workers.value.filter((w) => w.process_ids.includes(activeTab));
-    expect(filtered.map((w) => w.id)).toEqual(['1900000000003']);
-  });
-
-  it('filteredWorkers：activeTab=未知 process_id 返回空', async () => {
-    const { useWorkerQueue } = await import('../useWorkerQueue');
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
-    const activeTab = '9999999999999';
-    const filtered = q.workers.value.filter((w) => w.process_ids.includes(activeTab));
-    expect(filtered).toEqual([]);
-  });
-
-  it('WorkerState 合并：W001 max_held=3 / current_held=1 / capacity_remaining=2', async () => {
-    const { useWorkerQueue } = await import('../useWorkerQueue');
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
-    const w1 = q.workers.value.find((w) => w.id === '1900000000001');
-    expect(w1?.max_held).toBe(3);
-    expect(w1?.current_held).toBe(1);
-    expect(w1?.capacity_remaining).toBe(2);
-  });
-
-  it('moveBatchToWorker 调 assignWorkerPool：乐观把 batch 从 pool 移到 workerHeld（2026-09-14 follow-up）', async () => {
-    const { useWorkerQueue } = await import('../useWorkerQueue');
-    const { assignWorkerPool } = await import('@/api/workerPool');
-    const { ElMessage } = await import('element-plus');
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
-
-    const pool = q.processPools.value[0]!;
-    const beforePool = pool.batches.length;
-    const targetWorker = q.workers.value.find((w) => w.id === '1900000000002')!;
-    const beforeHeld = targetWorker.current_held;
-
+    const q = testApp.runWithContext(() => useWorkerQueue());
     const ok = await q.moveBatchToWorker(
       '3000000000001',
       '1900000000002',
       '5000000000001',
       '2000000000001',
     );
-
     expect(ok).toBe(true);
-    expect(pool.batches).toHaveLength(beforePool - 1);
-    // 2026-09-14 follow-up：loadBoard 已填 W002 的 STUB_HELD_BY_W002=[]，乐观更新后多 1 条
-    expect(q.workerHeld.value['1900000000002']).toHaveLength(1);
-    expect(q.workerHeld.value['1900000000002']![0]!.batch_id).toBe('3000000000001');
-    expect(targetWorker.current_held).toBe(beforeHeld + 1);
-    expect(targetWorker.capacity_remaining).toBe(targetWorker.max_held - targetWorker.current_held);
-    // 2026-09-14 follow-up：assignWorkerPool 入参含 batch_id / shelf_id / process_id
-    expect(assignWorkerPool).toHaveBeenCalledWith({
+    expect(realAssignWorkerPool).toHaveBeenCalledTimes(1);
+    expect(realAssignWorkerPool).toHaveBeenCalledWith({
       worker_id: '1900000000002',
       batch_id: '3000000000001',
       shelf_id: '5000000000001',
       process_id: '2000000000001',
     });
-    // 2026-09-14 follow-up：assign 端点只会成功或抛 ApiError，ElMessage.success 用新文案
-    expect(ElMessage.success).toHaveBeenCalledWith('已分配批次 1 到 李四');
-    expect(ElMessage.info).not.toHaveBeenCalled();
+    // 失效链：invalidateWorkerPoolByProcessQuery（调 1 次 invalidateQueries）+ invalidateWorkerPoolCountsQuery（同 1 次）
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(2);
+    const calls = vi.mocked(testQueryClient.invalidateQueries).mock.calls;
+    const first = calls[0]?.[0] as { queryKey: readonly unknown[] };
+    expect(first.queryKey).toEqual(['worker-pool', 'by-process', '2000000000001']);
+    const second = calls[1]?.[0] as { queryKey: readonly unknown[] };
+    expect(second.queryKey).toEqual(['worker-pool', 'counts']);
   });
 
-  it('moveBatchToWorker assign 端点抛 ApiError(20204)：回滚 + ElMessage.error', async () => {
+  it('T4：moveBatchToWorker 失败 → 返回 false + error.value 写入 + ElMessage.error', async () => {
+    // 2026-09-30：mutation onError 路径 —— 写 error.value + ElMessage.error，
+    // moveBatchToWorker 包 try/catch 返回 false（保持原签名兼容 view 调用点）。
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    const { assignWorkerPool } = await import('@/api/workerPool');
     const { ElMessage } = await import('element-plus');
-    // 单测隔离：模拟服务端 20204 WORKER_CAPACITY_EXCEEDED（容量触顶，race 场景：
-    // 前端乐观更新时 capacity_remaining=1，服务端实际已 0/0 触顶）
-    vi.mocked(assignWorkerPool).mockRejectedValueOnce(
+    realAssignWorkerPool.mockRejectedValueOnce(
       new ApiError(20204, 'WORKER_CAPACITY_EXCEEDED'),
     );
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
-
-    const pool = q.processPools.value[0]!;
-    const beforePool = pool.batches.length;
-    const targetWorker = q.workers.value.find((w) => w.id === '1900000000002')!;
-    const beforeHeld = targetWorker.current_held;
-    const beforeCap = targetWorker.capacity_remaining;
-
+    const q = testApp.runWithContext(() => useWorkerQueue());
     const ok = await q.moveBatchToWorker(
       '3000000000001',
       '1900000000002',
       '5000000000001',
       '2000000000001',
     );
-
     expect(ok).toBe(false);
     expect(q.error.value).toContain('WORKER_CAPACITY_EXCEEDED');
-    // 回滚：pool 恢复原 batches；workerHeld 撤销；计数回到原值
-    expect(q.processPools.value[0]!.batches).toHaveLength(beforePool);
-    expect(q.workerHeld.value['1900000000002']).toEqual([]);
-    expect(targetWorker.current_held).toBe(beforeHeld);
-    expect(targetWorker.capacity_remaining).toBe(beforeCap);
-    // 2026-09-14 follow-up：catch 分支必须弹 ElMessage.error（替代原仅 error.value 静默）
     expect(ElMessage.error).toHaveBeenCalledWith('WORKER_CAPACITY_EXCEEDED');
-    expect(ElMessage.success).not.toHaveBeenCalled();
   });
 
-  it('moveBatchToWorker 拒绝：目标 worker capacity 已满（前端预检，2026-09-14 follow-up 保留）', async () => {
+  it('T5：moveBatchToPool 成功 → removeFromWorkerPool 被调 + 2 个 invalidate helpers 被调', async () => {
+    // 2026-09-30：mutation onSuccess 失效链 —— 同 T3。
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
-    // W003 王五 capacity_remaining = 0
-    const ok = await q.moveBatchToWorker(
-      '3000000000001',
-      '1900000000003',
-      '5000000000001',
-      '2000000000001',
-    );
-    expect(ok).toBe(false);
-    expect(q.error.value).toContain('持有已满');
-    expect(q.processPools.value[0]!.batches).toHaveLength(2);
-  });
-
-  it('moveBatchToPool 调 removeFromWorkerPool：从 workerHeld 移到 pool', async () => {
-    const { useWorkerQueue } = await import('../useWorkerQueue');
-    const { removeFromWorkerPool } = await import('@/api/workerPool');
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
-    // 先放一个 batch 到 workerHeld（模拟之前 moveBatchToWorker）
-    await q.moveBatchToWorker('3000000000001', '1900000000002', '5000000000001', '2000000000001');
-    expect(q.workerHeld.value['1900000000002']).toHaveLength(1);
-
-    const beforePool = q.processPools.value[1]!.batches.length;
+    const q = testApp.runWithContext(() => useWorkerQueue());
     const ok = await q.moveBatchToPool(
       '3000000000001',
       '1900000000002',
@@ -492,39 +326,53 @@ describe('useWorkerQueue', () => {
       '2000000000002',
     );
     expect(ok).toBe(true);
-    expect(q.workerHeld.value['1900000000002']).toHaveLength(0);
-    expect(q.processPools.value[1]!.batches.length).toBe(beforePool + 1);
-    expect(removeFromWorkerPool).toHaveBeenCalledWith({
+    expect(realRemoveFromWorkerPool).toHaveBeenCalledTimes(1);
+    expect(realRemoveFromWorkerPool).toHaveBeenCalledWith({
       worker_id: '1900000000002',
       batch_id: '3000000000001',
       shelf_id: '5000000000001',
       next_process_id: '2000000000002',
+      process_id: '2000000000002',
     });
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(2);
+    const calls = vi.mocked(testQueryClient.invalidateQueries).mock.calls;
+    const first = calls[0]?.[0] as { queryKey: readonly unknown[] };
+    expect(first.queryKey).toEqual(['worker-pool', 'by-process', '2000000000002']);
   });
 
-  // 2026-09-29 任务规约 #2：loadBoard 仅保留 INHOUSE 工序 —— OUTSOURCE 不进 Tab /
-  // worker / pool。STUB_PROCESSES 含 1 OUTSOURCE (2000000000003) + 2 INHOUSE，
-  // 断言：processPools.length === 2、workers.process_ids 不含 OUTSOURCE、mock 抛
-  // 错路径不会被触发。
-  it('loadBoard 仅保留 INHOUSE 工序（2026-09-29 仅自产任务规约 #2）', async () => {
+  it('T6：runAutoAllocate 成功 → autoAllocate 被调 + 2 个 invalidate helpers 被调', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    const { getWorkerPoolByProcess } = await import('@/api/workerPool');
-    const q = useWorkerQueue();
-    await q.loadBoard('5000000000001');
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    await q.runAutoAllocate({
+      process_id: '2000000000001',
+      shelf_id: '5000000000001',
+      mode: 'COUNT',
+      fill_ratio: 0.5,
+    });
+    expect(realAutoAllocate).toHaveBeenCalledTimes(1);
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(2);
+    const calls = vi.mocked(testQueryClient.invalidateQueries).mock.calls;
+    const first = calls[0]?.[0] as { queryKey: readonly unknown[] };
+    expect(first.queryKey).toEqual(['worker-pool', 'by-process', '2000000000001']);
+    const second = calls[1]?.[0] as { queryKey: readonly unknown[] };
+    expect(second.queryKey).toEqual(['worker-pool', 'counts']);
+  });
 
-    // 仅 2 个 INHOUSE 工序进 processPools
-    expect(q.processPools.value).toHaveLength(2);
-    const poolIds = q.processPools.value.map((p) => p.process_id);
-    expect(poolIds.sort()).toEqual(['2000000000001', '2000000000002']);
-    expect(poolIds).not.toContain('2000000000003');
-
-    // OUTSOURCE ID 从未被请求（mock 接到会 throw，throw 即测试失败 —— 双重保险）
-    const calledWith = vi.mocked(getWorkerPoolByProcess).mock.calls.map((c) => c[0]);
-    expect(calledWith).not.toContain('2000000000003');
-
-    // 工人 process_ids 全部不含 OUTSOURCE
-    for (const w of q.workers.value) {
-      expect(w.process_ids).not.toContain('2000000000003');
-    }
+  it('T7：runAutoAllocate 失败 → onError 路径 error.value 写入', async () => {
+    // 2026-09-30：mutation 失败 onError 路径 —— error.value + ElMessage.error。
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    realAutoAllocate.mockRejectedValueOnce(
+      new ApiError(20704, 'BIZ_AUTO_ALLOCATE_INVALID_RATIO'),
+    );
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    await expect(
+      q.runAutoAllocate({
+        process_id: '2000000000001',
+        shelf_id: '5000000000001',
+        mode: 'COUNT',
+        fill_ratio: 1.5,
+      }),
+    ).rejects.toThrow();
+    expect(q.error.value).toContain('BIZ_AUTO_ALLOCATE_INVALID_RATIO');
   });
 });

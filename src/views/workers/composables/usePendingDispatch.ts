@@ -52,6 +52,8 @@ import { ApiError } from '@/api/http';
 import type { PendingBatchItemDto } from '@/api/workerPool.contract';
 import { invalidatePendingBatchesQuery } from '@/composables/queries/usePendingBatchesQuery';
 import { invalidateProcessesQuery } from '@/composables/queries/useProcessesQuery';
+import { invalidateWorkerPoolByProcessAll } from '@/composables/queries/useWorkerPoolByProcessQuery';
+import { invalidateWorkerPoolCountsQuery } from '@/composables/queries/useWorkerPoolCountsQuery';
 import { qk } from '@/composables/queries/keys';
 import { usePendingBatchesQuery } from '@/composables/queries/usePendingBatchesQuery';
 import {
@@ -166,15 +168,23 @@ export function usePendingDispatch(deps: UsePendingDispatchDeps): UsePendingDisp
     return m;
   });
 
-  /** 2026-09-29：写操作完成后调，集中失效三域（pending-batches / processes / parts）
-   *  + caller 注入的 refreshBoard（useWorkerQueue.processPools 同步刷新）。
+  /** 2026-09-29：写操作完成后调，集中失效五域（pending-batches / processes / parts /
+   *  worker-pool-by-process / worker-pool-counts） + caller 注入的 refreshBoard。
    *  返回 Promise 让 3 个 mutation onSuccess 内部 await 完整失效链，避免 query 重叠
-   *  触发雪崩。 */
+   *  触发雪崩。
+   *
+   *  2026-09-30 跨域失效扩：dispatch / bulk / auto 后 batch 离开待下发池，进入
+   *  worker-pool —— worker-pool by-process + counts 必须 invalidate（任意 processId
+   *  形态的 items 都可能受影响，前缀失效最安全）。refreshBoard 内部已串 loadBoard
+   *（useWorkerQueue.workerHeld 模块级 ref 同步刷新）。 */
   async function invalidateAll(): Promise<void> {
     await invalidatePendingBatchesQuery(qc);
     await invalidateProcessesQuery(qc);
     await qc.invalidateQueries({ queryKey: qk.partsPrefix }).then(() => undefined);
-    // 2026-09-29 review 第 1 轮修复（C2）：processPools 是模块级 ref（非 TanStack
+    // 2026-09-30：worker-pool 域跨域失效（by-process 任意 processId + counts 全量）
+    await invalidateWorkerPoolByProcessAll(qc);
+    await invalidateWorkerPoolCountsQuery(qc);
+    // 2026-09-29 review 第 1 轮修复（C2）：workerHeld 是模块级 ref（非 TanStack
     // Query），invalidate 失效链触达不到。必须显式调 caller 注入的 loadBoard 刷新。
     await deps.refreshBoard();
   }
