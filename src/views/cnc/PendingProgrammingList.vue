@@ -34,8 +34,15 @@
     全部自建，列渲染模板块照抄 ListShell.vue:107-152（属性一行不减）。
   - 删掉手动 setInterval 自动刷新定时器（改由 useQuery refetchInterval 承担，
     且显式 refetchIntervalInBackground: true 保持后台轮询语义）。
+  - 2026-10-01 review 第 1 轮 I-1：搜索框拆「输入态 / 生效态」。filter 卡的
+    el-input v-model 绑 store.query.searchInput（打字 0 请求），@keyup.enter /
+    @clear 调 store.query.onSearch() 才提交进生效态并把页码归 1 —— 与 2026-09-29
+    之前「只在 Enter / 清空 / 刷新时发请求」的行为一致。直接绑生效态会让每个字符
+    换一个 queryKey（每字一次 GET），且打字途中不重置页码。
   - 持久化 key 全部沿用老值（`pending_programming_filter` 筛选项 /
-    `pending_programming` 列可见性与列顺序），老用户已配好的列不丢。
+    `pending_programming` 列可见性与列顺序），老用户已配好的列不丢。持久化的只有
+    **生效态**（deps 不含 searchInput，否则老快照会被 restore() 的「每个 key 都
+    必须存在」校验整份判废），restoreState() 再把生效态同步回输入态。
 -->
 <template>
   <div class="pending-programming">
@@ -47,11 +54,17 @@
       </el-tabs>
     </div>
 
-    <!-- 2026-10-01：filter 卡自建（脱 ListShell）—— 样式与 ListShell.filter-card 同款 -->
+    <!--
+      2026-10-01：filter 卡自建（脱 ListShell）—— 样式与 ListShell.filter-card 同款。
+      v-model 绑 **searchInput（输入态）** 而非 search（生效态）：打字只改输入态，
+      0 请求；@keyup.enter / @clear 调 onSearch() 才把输入态提交进生效态并把页码归 1
+      （review 第 1 轮 I-1）。「刷新」按钮走 fetchList() = refetch 当前生效态，
+      同样不会把没提交的半截字带进请求。
+    -->
     <el-card shadow="never" class="filter-card">
       <div class="filter-row">
         <el-input
-          v-model="store.query.search.keyword"
+          v-model="store.query.searchInput.keyword"
           placeholder="图号 / 名称（前缀搜索）"
           clearable
           style="width: 260px"
@@ -64,7 +77,7 @@
         </el-input>
 
         <el-input
-          v-model="store.query.search.serialNo"
+          v-model="store.query.searchInput.serialNo"
           placeholder="序列号"
           clearable
           style="width: 180px"
@@ -83,6 +96,15 @@
           <span>刷新</span>
         </el-button>
         <span v-if="store.query.total > 0" class="total-hint">共 {{ store.query.total }} 条</span>
+        <!--
+          2026-10-01 review 第 1 轮 M-6：补回旧 ListShell.vue:68-70 的空态 tag
+          （脱壳时漏了）。emptyText 优先透传后端错误信息（store 内
+          errorMsg ?? '当前无待编程零件'），让「队列空」与「后端挂了」在 filter 卡
+          上也一眼可分 —— 表格的 :empty-text 只是兜底。
+        -->
+        <el-tag v-else-if="!store.query.loading" type="info" effect="plain" size="small">
+          {{ store.query.emptyText }}
+        </el-tag>
       </div>
     </el-card>
 
@@ -156,10 +178,14 @@
     </el-table>
 
     <div class="pagination">
+      <!--
+        2026-10-01 review 第 1 轮 M-5：不传 :page-sizes，沿 EP 默认
+        （[10,20,30,40,50,100]），与旧的 PagedTable.vue:34-43 一致 —— 脱壳时擅自收窄成
+        [10,20,50,100] 属于计划外改动，不在本次任务范围。
+      -->
       <el-pagination
         v-model:current-page="store.query.page"
         v-model:page-size="store.query.pageSize"
-        :page-sizes="[10, 20, 50, 100]"
         :total="store.query.total"
         layout="total, sizes, prev, pager, next, jumper"
         :pager-count="7"
@@ -192,7 +218,9 @@
               :value="p.id"
             />
             <template #empty>
-              <span class="muted">没有可用的工序</span>
+              <span class="muted">
+                {{ store.release.processesPending ? '正在加载工序…' : '没有可用的工序' }}
+              </span>
             </template>
           </el-select>
         </el-form-item>
@@ -215,12 +243,21 @@
               <span>{{ s.code }} — {{ s.name }}</span>
               <span v-if="!s.is_active" class="muted">（已停用）</span>
             </el-option>
+            <!--
+              2026-10-01 review 第 1 轮 M-1：数据源从「点下发才 await 拉完再开弹窗」
+              换成共享 query（setup 期就发）后，冷缓存首访可能空开。空态必须能区分
+              「数据还在路上」与「真的没配映射」—— 后者的文案会引导用户去「货架管理 →
+              工序映射」改配置，数据没到时显示它是主动误导。取舍说明见 store 内
+              processesPending / shelvesPending 的注。
+            -->
             <template #empty>
               <span class="muted">
                 {{
-                  store.release.processId
-                    ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
-                    : '请先选择下一道工序'
+                  store.release.shelvesPending
+                    ? '正在加载生产货架…'
+                    : store.release.processId
+                      ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
+                      : '请先选择下一道工序'
                 }}
               </span>
             </template>

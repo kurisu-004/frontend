@@ -135,15 +135,17 @@ export const qk = {
   //   - shelvesList：共享基础数据层 useProductionShelvesQuery 的键（下发对话框的
   //     目标 PRODUCTION 货架候选）。列表页是页面级 store 内部的 private state，
   //     但**基础数据**（货架几乎不变、跨 3 页共用）按 CLAUDE.md 定位放共享层。
-  //   - shelvesPrefix：货架写操作（新建 / 改名 / 停用）后失效用。当前已知写点
-  //     在 ShelfList.vue（2026-10-01 未挂失效 —— 与跨页面写点策略一致，不穷举；
-  //     30s 有限 staleTime 兜底新鲜度）。保留键供后续接失效。
+  //   - shelvesPrefix：2026-10-01 review 第 1 轮 M-3 删掉了本键（连带
+  //     useProductionShelvesQuery::invalidateProductionShelvesQuery）—— 两者零调用方
+  //     （货架写点在 ShelfList.vue，本轮未挂失效；按 CLAUDE.md「跨页面写操作不做
+  //     穷举失效」策略，30s 有限 staleTime 兜新鲜度）。**将来真有货架写点要挂失效
+  //     时，在这里补 `shelvesPrefix: ['shelves'] as const`** + 在
+  //     useProductionShelvesQuery 补对应薄封装，不要在调用点拼字面量数组。
   // ============================================================
   programmingList: (params: ListPendingProgrammingParams) =>
     ['programming', 'list', params] as const,
   programmingPrefix: ['programming'] as const,
   shelvesList: (params: ListShelvesParams) => ['shelves', 'list', params] as const,
-  shelvesPrefix: ['shelves'] as const,
   // ============================================================
   // 2026-09-30 新增：pool 域 queryKey 工厂（后端 worker-pool → pool 路径收敛后
   // 前端同步改名）—— 生产队列 Tab 懒加载 + 数据层 TanStack Query 化

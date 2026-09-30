@@ -34,15 +34,21 @@ import {
  *
  *  2026-10-01：全部字段可选（后端 `Option<...>` 逐字段接收）。
  *   - `has_cnc_program`：三态。`true` 仅已上传 G_CODE / `false` 仅未上传 /
- *     **省略 = 全部**。⚠️ 传空串会返 400（后端只接 bool），前端必须走 cleanParams
- *     或在 buildParams 里转 undefined（页面 store 已做后者：Tab 值恒为
- *     true / false，不产生空串）。
+ *     **省略 = 全部**。
+ *     后端 `deserialize_bool_opt`（backend-rust
+ *     src/modules/prod/programming/dto.rs）的实际语义，2026-10-01 review 第 1 轮
+ *     M-4 按源码订正（旧注释写「传空串会返 400」是错的）：
+ *       · 缺省 / 空串 / 纯空白串 → `Ok(None)` = **不过滤**，不报错；
+ *       · `true` / `false`（大小写不敏感）→ 正常过滤；
+ *       · 其它字面量（`1` / `yes` / `abc` …）→ 400 VALIDATION_ERROR。
+ *     即空串是安全的，但前端仍统一在 buildParams 里只发真 boolean（`cleanParams`
+ *     也不会把 `false` 当空值剥掉），不依赖后端的空串兜底。
  *   - `keyword`：模糊匹配 name / drawing_no / serial_no（子串）。
  *   - `serial_no`：精确匹配。
  *   - `sort_by`：后端白名单 `CREATED_AT / UPDATED_AT / PLANNED_DELIVERY_DATE /
  *     REQUEST_DATE / SERIAL_NO / DRAWING_NO / NAME`，非法值由后端退化为
  *     `PLANNED_DELIVERY_DATE`（前端只发白名单内值，不依赖该退化行为）。
- *   - `limit`：1..=500，缺省 50（前端 pageSize 恒 10~100，落在区间内）。
+ *   - `limit`：1..=500，缺省 50（前端 pageSize 恒落在 EP 默认的 10..=100 内）。
  *   - `offset`：缺省 0。
  */
 export interface ListPendingProgrammingParams {
@@ -56,11 +62,18 @@ export interface ListPendingProgrammingParams {
 }
 
 /** `GET /api/v2/prod/programming/pending` 出参（rust ProgrammingListOut）。
- *  结构 = `{ items: ProgrammingItem[], total, limit, offset }`。 */
-export type PendingProgrammingListDto = PendingProgrammingListResultSchema;
+ *  结构 = `{ items: ProgrammingItem[], total, limit, offset }`。
+ *  2026-10-01 review 第 1 轮 M-3：原先另导了一个 `PendingProgrammingListDto` 别名，
+ *  全仓零引用（同义于下面 fetchPendingProgramming 的返回类型），已删 —— 避免
+ *  「同一个出参两种叫法」让后来者猜该用哪个。 */
 
 /** GET /api/v2/prod/programming/pending —— 拉取待编程（/ 已编程）零件列表。
- *  响应经 Zod parse 守门（见文件头「Zod 守门理由」）。 */
+ *  响应经 Zod parse 守门（见文件头「Zod 守门理由」）。
+ *
+ *  2026-10-01 review 第 1 轮 M-2：守门**刻意收敛在本层**（形态同
+ *  api/pendingBatches.ts::dispatchBatches）—— 任何调用方都自动受守门，不必各自
+ *  记得 parse；调用方（如 usePendingProgrammingStore 的 queryFn）**不要**再 parse
+ *  一遍，Zod 的 parse 返回深拷贝，重复 parse 等于每屏数据被克隆两遍。 */
 export async function fetchPendingProgramming(
   params: ListPendingProgrammingParams = {},
 ): Promise<PendingProgrammingListResultSchema> {

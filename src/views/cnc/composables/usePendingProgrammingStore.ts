@@ -27,7 +27,8 @@
 //     useMutation + 失效），货架 / 工序下拉走**共享基础数据层**
 //     （useProductionShelvesQuery / useProcessesQuery）；
 //   - queryKey 全走 qk.xxx，queryFn 从 queryKey 读最新 params（不闭包捕获 stale）；
-//   - queryFn Zod 守门 + ElMessage 错误桥接（watch(errorMsg)）；
+//   - Zod 守门在 **api 层**（fetchPendingProgramming 内部 parse，所有调用方都受守门），
+//     queryFn 不重复 parse（见主查询处 M-2 注）；错误经 watch(errorMsg) 桥接 ElMessage；
 //   - enabled 闸门（restored）避免「默认参数首屏 + 持久化参数再屏」双 fetch；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0 / mutations.retry: 0；
 //   - 缓存时长：本页是页面级列表，走 main.ts 全局默认（不在共享层有限缓存
@@ -42,10 +43,9 @@ import type { QueryClient } from '@tanstack/vue-query';
 import { fetchPendingProgramming, type ListPendingProgrammingParams } from '@/api/programming';
 import { releaseFromProgramming } from '@/api/parts';
 import { qk } from '@/composables/queries/keys';
-import {
-  pendingProgrammingListResultSchema,
-  type PendingProgrammingItemSchema,
-  type PendingProgrammingListResultSchema,
+import type {
+  PendingProgrammingItemSchema,
+  PendingProgrammingListResultSchema,
 } from '@/composables/queries/schemas';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
@@ -79,7 +79,15 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   const qc = useQueryClient();
 
   // ============ 私有状态 ============
+  /** 搜索**生效态**（进 queryKey ⇒ 进请求）。持久化到 `pending_programming_filter`。
+   *  ⚠️ 只由 onSearch() / restoreState() 写，**不要**直接绑到视图输入框。 */
   const search = reactive({ keyword: '', serialNo: '' });
+  /** 搜索**输入态**（只被视图 v-model 写，**不进 queryKey**）。
+   *  2026-10-01 review 第 1 轮 I-1：生效态直接绑 v-model 时，每敲一个字符就换一个
+   *  queryKey ⇒ 每个字符一次 GET；且 onSearch 只绑 @keyup.enter / @clear，打字途中
+   *  页码不重置 ⇒ 在第 3 页打字会拉到「第 3 页的筛选结果」（大概率空表）。
+   *  拆成输入态 / 生效态后：打字 0 请求，Enter / 清空才 onSearch 提交一次。 */
+  const searchInput = reactive({ keyword: '', serialNo: '' });
   const activeTab = ref<PendingProgrammingTab>('pending');
   /** 自动刷新开关（5min 轮询，持久化）。原视图用裸 setInterval 维护，2026-10-01
    *  改由 useQuery 的 refetchInterval 承担（见下），这里只保留开关状态。 */
@@ -102,8 +110,13 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     return {
       // Tab 三态映射：pending = 仅未编程 / programmed = 仅已编程
       // （省略 = 全部，本页两个 Tab 不暴露「全部」分支）。
-      // ⚠️ 恒为 boolean，不会产生空串 —— 后端 has_cnc_program 传空串会 400。
+      // ⚠️ 恒为真 boolean（2026-10-01 review 第 1 轮 M-4：后端
+      // deserialize_bool_opt 把空串当「不过滤」而不是 400，详见
+      // api/programming.ts::ListPendingProgrammingParams 的注释）——
+      // 前端仍不发空串，不依赖后端那条兜底。
       has_cnc_program: activeTab.value === 'pending' ? false : true,
+      // ⚠️ 读的是**生效态** search（不是 searchInput）：自动刷新 tick / 刷新按钮
+      // 触发的 refetch 走的是当前 queryKey，输入框里没提交的半截字不该进请求。
       // 空串 / 纯空格 → undefined（cleanParams 只兜 undefined，空串会原样发出）
       keyword: search.keyword.trim() || undefined,
       serial_no: search.serialNo.trim() || undefined,
@@ -123,10 +136,13 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   >({
     queryKey: computed(() => qk.programmingList(buildParams())),
     // queryFn 从 queryKey[2] 读最新 params（不闭包捕获 buildParams 的 snapshot）
-    queryFn: async ({ queryKey }) => {
-      const params = queryKey[2] as ListPendingProgrammingParams;
-      return pendingProgrammingListResultSchema.parse(await fetchPendingProgramming(params));
-    },
+    // 2026-10-01 review 第 1 轮 M-2：守门**收敛在 api 层**
+    // （api/programming.ts::fetchPendingProgramming 内部 parse，形态同
+    //  api/pendingBatches.ts::dispatchBatches ⇒ 任何调用方都受 Zod 守门）。
+    // 此处不再重复 parse —— Zod 的 parse 返回**深拷贝**，重复 parse 等于每屏数据
+    // 被校验 + 克隆两遍（50 行 × 13 字段），纯浪费。
+    queryFn: async ({ queryKey }) =>
+      fetchPendingProgramming(queryKey[2] as ListPendingProgrammingParams),
     enabled: restored,
     placeholderData: keepPreviousData,
     // 自动刷新：原视图的 window.setInterval(5min) 迁移到 refetchInterval。
@@ -178,7 +194,15 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     page.value = 1;
   }
 
+  /** 提交搜索：输入态 → 生效态 + 页码归 1（queryKey 变化自动 refetch）。
+   *  ⚠️ 视图只在 `@keyup.enter` / `@clear` 调它，**不要**绑到输入框的
+   *  `update:modelValue`（那只是打字，会每字一请求，见上方 searchInput 注）。
+   *  - el-input `clearable` 的 ✕ 会先发 `update:modelValue('')` 再发 `@clear`：
+   *    前者只改输入态（0 请求），后者走本函数提交一次 ⇒ **净 1 次请求**，不双发。
+   *  - Object.assign 与 page=1 是同一同步块内完成，`watch(defaultedOptions)` 是
+   *    pre-flush ⇒ computed 只在块末求值一次 ⇒ 单次 setOptions ⇒ 单次 fetch。 */
   function onSearch(): void {
+    Object.assign(search, searchInput);
     page.value = 1;
   }
 
@@ -188,10 +212,23 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   // 用泛型 useListStatePersist 而非 useListFilterPersist：后者的 deps 形状固定为
   // { search, sortBy, sortDir, pageSize }（零件一览遗留），本页持久化的是
   // { search, autoRefresh, activeTab } 三字段（无排序交互 / 排序固定）。
+  //
+  // deps 只放**生效态** search，**不放** searchInput：
+  //   1) useListStatePersist.restore() 会校验「每个 dep key 都必须存在于快照里」，
+  //      少一个就整份返回 null。往 deps 里加 searchInput 会让 2026-10-01 之前
+  //      落盘的快照（只有 search / autoRefresh / activeTab）整体失效 ⇒ 老用户
+  //      搜索条件 + 自动刷新 + Tab 记忆全丢。
+  //   2) 语义上也只该存生效态：存草稿会让下次进页面时输入框显示一个从未生效过的条件。
+  // 副作用（有意为之）：用户打了字没按 Enter 就离开，草稿不保留 —— 恢复出来的是
+  // 上次真正生效过的条件，与列表内容一致。
+  //
+  // 2026-10-01 review 第 1 轮 M-8：删掉原先的 `exclude: new Set(['page'])` —— 它是
+  // 空操作（deps 从来就没有 page），留着会让人误以为分页被显式排除。本页**不持久化
+  // 分页 / 每页条数**（沿 ListShell.vue:50-57 记录的 2026-08-31 决策：放弃 pageSize
+  // 跨会话恢复，进入页面一律默认 20），但**要**持久化 autoRefresh 与 activeTab。
   const { restore: restorePersisted } = useListStatePersist(
     'pending_programming_filter',
     { search, autoRefresh, activeTab },
-    { exclude: new Set(['page']) },
   );
 
   function restoreState(): void {
@@ -209,6 +246,9 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
         activeTab.value = s.activeTab;
       }
     }
+    // 2026-10-01 review 第 1 轮 I-1：把生效态**同步回输入态**，否则输入框空白而
+    // 列表已按恢复出的条件过滤 —— 用户看到的框与表不一致，按回车还会把条件清空。
+    Object.assign(searchInput, search);
     // 开闸 → useQuery 触发首屏 fetch（视图不再显式调 fetchList）
     restored.value = true;
   }
@@ -265,6 +305,18 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   const inhouseProcesses = computed(() =>
     processes.value.filter((p) => p.category === 'INHOUSE'),
   );
+  // 2026-10-01 review 第 1 轮 M-1：两个下拉的**首屏在途态**。数据源从「点下发才
+  // await 拉完再开弹窗」换成共享 query（setup 期就发）后，弹窗可能空开，而空态文案
+  // 「当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置」是**主动
+  // 误导**的（用户会去改映射，其实只是数据还没到）。
+  // 取舍：选「弹窗照开 + 空态区分在途」而不是「settle 前不开弹窗」——
+  //   · 共享层本就是短时请求去重层，30s 内重复进本页命中缓存几乎零延迟，等它反而
+  //     让「点下发 → 弹窗」出现可感知的空档；
+  //   · 仓内其它 dialog（PartDetail / OutsourceSendReceive 等）也是「打开即渲染、
+  //     数据未到就空/骨架」，不额外引入一个 gate；
+  //   · 代价是冷缓存首访可能看到空态，已由下面两个 pending 派生挡住误导文案。
+  const processesPending = processesQuery.isPending;
+  const shelvesPending = shelvesQuery.isPending;
 
   // 2026-07-17：useShelfProcessFilter 双向收窄（货架↔工序映射过滤）。
   // ⚠️ 该 composable 跨 3 页共用（cnc / outsource / inspection / parts-detail），
@@ -375,7 +427,10 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   return {
     // 主查询切片：筛选 / Tab / 分页 + items / total / loading / 错误
     query: {
+      /** 生效态（进 queryKey ⇒ 进请求）。视图不直接绑 v-model，只经 onSearch 写。 */
       search,
+      /** 输入态（视图 el-input 的 v-model 绑这里）；打字 0 请求，提交走 onSearch */
+      searchInput,
       activeTab,
       autoRefresh,
       page,
@@ -388,6 +443,7 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
       /** fetchList 别名（视图「刷新」按钮 / 测试驱动） */
       fetchList,
       onTabChange,
+      /** 提交搜索：searchInput → search + page=1（Enter / @clear 触发） */
       onSearch,
       restoreState,
     },
@@ -401,10 +457,16 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
       /** useShelfProcessFilter 双向收窄后的候选（数据源：共享 query，见上） */
       filteredShelves: filteredProductionShelves,
       filteredProcesses: filteredInhouseProcesses,
+      // 2026-10-01 review 第 1 轮 M-1：下拉空态要能区分「数据在途」与「真的没映射」
+      processesPending,
+      shelvesPending,
       openDialog: openReleaseDialog,
       onDialogClosed: onReleaseDialogClosed,
       confirm: confirmRelease,
-      mutation: releaseMutation,
+      // 2026-10-01 review 第 1 轮 M-3：**不再**对外暴露 releaseMutation。
+      // 行内「下发」按钮的 loading 由 submitting + target 派生即可
+      // （columnDefs 的 isReleasing 闭包），错误提示走 onError 的 ElMessage /
+      // 20706 兜底框，视图与测试都不需要读 mutation 对象 —— 暴露出去只是死 API。
     },
     // 列
     columnDefs,
