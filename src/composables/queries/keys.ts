@@ -20,6 +20,8 @@
 
 import type { ListPartsParams } from '@/api/parts';
 import type { ListPendingBatchesParams } from '@/api/pendingBatches';
+import type { ListPendingProgrammingParams } from '@/api/programming';
+import type { ListShelvesParams } from '@/api/shelves';
 import type { ProcessCategory } from '@/types/process';
 import type { UnionListParams } from '@/api/com/unionList';
 
@@ -114,6 +116,34 @@ export const qk = {
    *  （usePendingDispatch.ts 集中编排）。2026-09-30 修复：去掉 processesPrefix ——
    *  下发批次不改变工序列表，失效它只会多打一次 processes 请求。 */
   pendingBatchesPrefix: ['pending-batches'] as const,
+  // ============================================================
+  // 2026-10-01 新增：programming 域（「待编程一览」页）+ shelves 域（生产货架下拉）
+  // queryKey 工厂。
+  //
+  // programming 域：
+  //   - programmingList：页面级 store usePendingProgrammingStore 的主查询键
+  //     （GET /api/v2/prod/programming/pending，数据源 2026-10-01 由 part 域
+  //     /parts/pending-programming 迁到 prod 域）；
+  //   - programmingPrefix：**唯一写操作** release-from-programming
+  //     （POST /parts/{id}/release-from-programming，仍在 part 域，见
+  //     usePendingProgrammingStore::releaseMutation）成功后走前缀失效，同时失效
+  //     qk.partsPrefix（下发把 part 迁到 IN_PROCESS + 生产货架，零件一览 / 生产队列
+  //     列表都要跟着变）。失效属「写完立即看到自己那笔」的优化，非一致性保证
+  //     （见 CLAUDE.md 缓存时长策略）。
+  //
+  // shelves 域：
+  //   - shelvesList：共享基础数据层 useProductionShelvesQuery 的键（下发对话框的
+  //     目标 PRODUCTION 货架候选）。列表页是页面级 store 内部的 private state，
+  //     但**基础数据**（货架几乎不变、跨 3 页共用）按 CLAUDE.md 定位放共享层。
+  //   - shelvesPrefix：货架写操作（新建 / 改名 / 停用）后失效用。当前已知写点
+  //     在 ShelfList.vue（2026-10-01 未挂失效 —— 与跨页面写点策略一致，不穷举；
+  //     30s 有限 staleTime 兜底新鲜度）。保留键供后续接失效。
+  // ============================================================
+  programmingList: (params: ListPendingProgrammingParams) =>
+    ['programming', 'list', params] as const,
+  programmingPrefix: ['programming'] as const,
+  shelvesList: (params: ListShelvesParams) => ['shelves', 'list', params] as const,
+  shelvesPrefix: ['shelves'] as const,
   // ============================================================
   // 2026-09-30 新增：pool 域 queryKey 工厂（后端 worker-pool → pool 路径收敛后
   // 前端同步改名）—— 生产队列 Tab 懒加载 + 数据层 TanStack Query 化
