@@ -191,7 +191,10 @@ async function loadList(): Promise<void> {
     // current_holder_display 等 PartItem 专属字段在 repair 端点返回数据上是否
     // 实际存在由后端契约决定，回归时再单独处理。
     rows.value = result.items as unknown as PartItem[];
-    total.value = result.total;
+    // 2026-09-30 review 第 1 轮修复：InspectionBatchListResult.total 后端用
+    // serialize_i64 序列化为 JSON string，total 是 Ref<number>，边界 Number()
+    // 转回 number 才能塞进 ref（同 useInspectionList fetcher 同形态）。
+    total.value = Number(result.total);
   } catch (e) {
     ElMessage.error((e as Error).message ?? '列表加载失败');
   } finally {

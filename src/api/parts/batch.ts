@@ -291,9 +291,13 @@ export interface InspectionBatchListItem {
 
 export interface InspectionBatchListResult {
   items: InspectionBatchListItem[];
-  total: number;
-  limit: number;
-  offset: number;
+  // 2026-09-30 review 第 1 轮修复：后端 total/limit/offset 用 serialize_i64
+  // 序列化为 JSON string（与雪花 ID 一致的设计），与 partListResultSchema 不同。
+  // 下游 useInspectionList 在边界 Number(resp.total) 转 number 才能塞进
+  // PageResult<T>.total（也是 project 内 usePagedListQuery 已有 number 化责任）。
+  total: string;
+  limit: string;
+  offset: string;
 }
 
 export async function listInspectionBatches(

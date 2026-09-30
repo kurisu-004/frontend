@@ -1050,12 +1050,18 @@ export const inspectionBatchListItemSchema = z
 
 export type InspectionBatchListItemSchema = z.infer<typeof inspectionBatchListItemSchema>;
 
-/** 品检待办列表分页结果（结构对齐 backend-rust InspectionBatchListOut）。 */
+/** 品检待办列表分页结果（结构对齐 backend-rust InspectionBatchListOut）。
+ *
+ * 2026-09-30 review 第 1 轮修复：后端 total / limit / offset 字段用
+ * `serialize_i64` 序列化为 JSON string（与雪花 ID 一致的设计），前端 schema
+ * 必须按 wire-format 用 z.string() 接收；下游 useInspectionList 在边界
+ * `Number(resp.total)` 转 number 才能塞进 PageResult.total。
+ */
 export const inspectionBatchListResultSchema = z.object({
   items: z.array(inspectionBatchListItemSchema),
-  total: z.number(),
-  limit: z.number(),
-  offset: z.number(),
+  total: z.string(),
+  limit: z.string(),
+  offset: z.string(),
 });
 
 export type InspectionBatchListResultSchema = z.infer<typeof inspectionBatchListResultSchema>;

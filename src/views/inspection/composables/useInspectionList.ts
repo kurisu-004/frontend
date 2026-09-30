@@ -54,7 +54,11 @@ export function useInspectionList(): UseInspectionListReturn {
       limit: params.pageSize,
       offset: (params.page - 1) * params.pageSize,
     });
-    return { items: resp.items, total: resp.total };
+    // 2026-09-30 review 第 1 轮修复：后端 total / limit / offset 序列化为
+    // JSON string（serialize_i64），PageResult.total 是 number；边界 Number()
+    // 转回 number 才能塞进 PageResult.total（与 project 内 usePagedListQuery
+    // 已有 number 化责任同形态）。
+    return { items: resp.items, total: Number(resp.total) };
   }
 
   // 持久化 search / autoRefresh（pageSize 由 ListShell 单独持久化）

@@ -51,8 +51,9 @@
 //     S15a 同源 regression guard：zod 默认 strip 模式漏列 boolean 字段会让后端
 //     真返回的 has_cnc_program 在前端拿不到且 parse 不报错）。
 //   - S20（2026-09-30 新增）：inspectionBatchListItemSchema 接受 backend-rust
-//     `InspectionBatchListItemOut` 完整 25 字段结构（含 l1_customer_name 与
-//     holder_name），不抛错。
+//     `InspectionBatchListItemOut` 完整 27 字段结构（批次 8 + holder 4 +
+//     delivery_note 2 + 工单 10 + 客户 3，含 l1_customer_name 与 holder_name），
+//     不抛错。
 //   - S21：inspectionBatchListResultSchema 接受分页结构（items / total / limit /
 //     offset）。
 //   - S22：inspectionBatchListItemSchema 多出 `id` 字段 → 抛 ZodError（`.strict()`
@@ -1320,7 +1321,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       l1_customer_name: '客户A',
     };
 
-    it('S20：解析 backend-rust InspectionBatchListItemOut 完整 25 字段不抛错', () => {
+    it('S20：解析 backend-rust InspectionBatchListItemOut 完整 27 字段不抛错', () => {
       const parsed = inspectionBatchListItemSchema.parse(validItem);
       expect(parsed.batch_id).toBe('3000000000001');
       expect(parsed.part_id).toBe('4000000000001');
@@ -1332,16 +1333,20 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
     });
 
     it('S21：inspectionBatchListResultSchema 接受分页结构（items/total/limit/offset）', () => {
+      // 2026-09-30 review 第 1 轮修复：后端 total / limit / offset 用
+      // serialize_i64 序列化为 JSON string（与雪花 ID 一致的设计），前端
+      // schema 必须按 wire-format 用 z.string() 接收；用 number 会被 Zod
+      // 拒绝。本测试用 string case 守门防止 schema 退回到 z.number()。
       const parsed = inspectionBatchListResultSchema.parse({
         items: [validItem],
-        total: 1,
-        limit: 20,
-        offset: 0,
+        total: '1',
+        limit: '20',
+        offset: '0',
       });
       expect(parsed.items).toHaveLength(1);
-      expect(parsed.total).toBe(1);
-      expect(parsed.limit).toBe(20);
-      expect(parsed.offset).toBe(0);
+      expect(parsed.total).toBe('1');
+      expect(parsed.limit).toBe('20');
+      expect(parsed.offset).toBe('0');
     });
 
     it('S22：inspectionBatchListItemSchema 多出 id 字段 → 抛 ZodError（.strict() 守门）', () => {

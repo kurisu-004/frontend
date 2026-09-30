@@ -79,7 +79,8 @@
       <div v-if="passTarget" class="fail-summary">
         <div><strong>流水号：</strong>{{ passTarget.serial_no || '—' }}</div>
         <!-- 2026-09-30 修复：InspectionBatchListItem 用 batch_no 而非 batch_label（VO 不带 batch_label 字段） -->
-        <div><strong>批次：</strong>{{ passTarget.batch_no != null ? passTarget.batch_no : '—' }}</div>
+        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <div><strong>批次：</strong>{{ passTarget.batch_no }}</div>
         <div><strong>名称：</strong>{{ passTarget.name }}</div>
       </div>
       <el-form label-width="96px" style="margin-top: 12px">
@@ -127,7 +128,8 @@
       <div v-if="failTarget" class="fail-summary">
         <div><strong>流水号：</strong>{{ failTarget.serial_no || '—' }}</div>
         <!-- 2026-09-30 修复：batch_label → batch_no -->
-        <div><strong>批次：</strong>{{ failTarget.batch_no != null ? failTarget.batch_no : '—' }}</div>
+        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <div><strong>批次：</strong>{{ failTarget.batch_no }}</div>
         <div><strong>图号：</strong>{{ failTarget.drawing_no }}</div>
         <div><strong>名称：</strong>{{ failTarget.name }}</div>
       </div>
@@ -247,7 +249,8 @@
       <div v-if="scanChooserRow" class="fail-summary">
         <div><strong>流水号：</strong>{{ scanChooserRow.serial_no || '—' }}</div>
         <!-- 2026-09-30 修复：batch_label → batch_no -->
-        <div><strong>批次：</strong>{{ scanChooserRow.batch_no != null ? scanChooserRow.batch_no : '—' }}</div>
+        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <div><strong>批次：</strong>{{ scanChooserRow.batch_no }}</div>
         <div><strong>图号：</strong>{{ scanChooserRow.drawing_no }}</div>
         <div><strong>名称：</strong>{{ scanChooserRow.name }}</div>
         <div><strong>数量：</strong>{{ scanChooserRow.quantity }}</div>
@@ -272,7 +275,8 @@
       <div v-if="scanInspectRow" class="fail-summary">
         <div><strong>流水号：</strong>{{ scanInspectRow.serial_no || '—' }}</div>
         <!-- 2026-09-30 修复：batch_label → batch_no -->
-        <div><strong>批次：</strong>{{ scanInspectRow.batch_no != null ? scanInspectRow.batch_no : '—' }}</div>
+        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <div><strong>批次：</strong>{{ scanInspectRow.batch_no }}</div>
         <div><strong>图号：</strong>{{ scanInspectRow.drawing_no }}</div>
         <div><strong>名称：</strong>{{ scanInspectRow.name }}</div>
         <div>
@@ -505,15 +509,18 @@ function renderName({ row }: { row: unknown }): VNode {
 }
 
 function renderBatchLabel({ row }: { row: unknown }): VNode {
+  // 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，TS 类型
+  // 是 number，r.batch_no != null 永远 true，String() 也是防御性但冗余；
+  // Vue 模板渲染会自动 toString。
   const r = row as InspectionBatchListItem;
-  return h('span', { class: 'batch-label' }, r.batch_no != null ? String(r.batch_no) : '—');
+  return h('span', { class: 'batch-label' }, r.batch_no);
 }
 
-function renderSystemDeliveryDate({ row }: { row: unknown }): VNode {
+function renderSystemDeliveryDate(_: { row: unknown }): VNode {
   // 2026-09-30 修复：InspectionBatchListItem 无 system_delivery_date 字段
   // （后端 InspectionBatchListItemOut VO 不含该字段），保留列定义以维持
   // 列可见性持久化（columnKey='system_delivery_date'），函数永远输出 '—'。
-  void row;
+  // 2026-09-30 review 第 1 轮修复：未使用入参改 `_` 命名，丢弃 `void row;`。
   return h('span', { class: 'muted' }, '—');
 }
 
@@ -521,9 +528,11 @@ function renderCustomer({ row }: { row: unknown }): VNode {
   // 2026-09-30 修复：InspectionBatchListItem 用 l1_customer_name + customer_name
   // 派生「父 / 子」展示，与 PendingProgrammingList.renderCustomer 风格统一；
   // 加 null 兜底：l1 && name → "${l1} / ${name}"；仅 name → name；仅 l1 → l1；都缺 → '—'。
+  // 2026-09-30 review 第 1 轮修复：l1_customer_name / customer_name 已是
+  // z.string().nullable()，TS 类型为 string | null，?? null 恒等于自身，直接取字段。
   const r = row as InspectionBatchListItem;
-  const l1 = r.l1_customer_name ?? null;
-  const name = r.customer_name ?? null;
+  const l1 = r.l1_customer_name;
+  const name = r.customer_name;
   if (l1 && name) return h('span', `${l1} / ${name}`);
   if (name) return h('span', name);
   if (l1) return h('span', l1);
