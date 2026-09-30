@@ -237,6 +237,11 @@ const chartOption = computed<EChartsCoreOption>(() => {
         const dataIndex = arr[0]?.dataIndex ?? 0;
         const bucket = aligned[dataIndex];
         const dateLabel = bucket?.date ?? '';
+        // 2026-09-30（review #4）防御性注释：rows.push 拼的是 innerHTML。
+        // 文案源自模块常量（layer.label）+ 后端 ISO 日期串（slice 5 取 MM/DD
+        // 格式）+ 件数 number.toString——禁止插任何用户输入；如未来要展示
+        // 自由文本字段，必须改 echarts tooltip 的 text-only 渲染或先 HTML
+        // escape，否则 XSS。
         const rows: string[] = [`<b>${dateLabel}</b> · 共 ${total} 件`];
         for (const layer of LAYERS) {
           const n = layerCount(bucket ?? { date: '', count: 0, by_status: {} }, layer);
