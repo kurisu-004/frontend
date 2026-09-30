@@ -32,6 +32,14 @@
       修复后）：外层 .main-left > :nth-child(2) flex: 1 1 50% 控制 wrapper 高度，
       v-chart :style.height='100%' 撑满 wrapper（之前传 '50%' 导致 v-chart 只占
       wrapper 一半、下方空白）。
+  2026-09-30 Phase 2 followup #2：.main-left > :last-child 由 flex: 0 0 auto 改为
+  flex: 0 0 20% + min-height: 160px，固定 Strip 卡片占 20% 屏幕高度，与 Chart 各占
+  一半；剩余空间由 Chart 撑满。配合 FactoryRealtimeStrip 内部 el-carousel 轮播
+  承载超出 worker groups（>4 时自动分页）。
+  2026-09-30 Phase 2 followup #4：onUpcomingRowClick 删除 upcomingDrawerOpen.value
+  = false（drawer 保持展开），方便用户在下批连续预览图纸时保持 drawer 上下文。
+  selectedLayer 不重置（已在原代码注释内说明），下次用户再点柱状图 drawer
+  直接展开无须重渲。
 -->
 <template>
   <div class="dashboard">
@@ -215,7 +223,9 @@ function onBarLayerClick(payload: {
 // 不重置 selectedLayer —— 下次用户再点柱状图时 selectedLayer 还在，
 // upcomingDrawerOpen 会按需重新打开（沿用 onBarLayerClick 路径）。
 function onUpcomingRowClick(part: PartListItem): void {
-  upcomingDrawerOpen.value = false;
+  // 2026-09-30 Phase 2 followup #4：drawer 不再关闭，让用户在下批连续预览图纸时
+  // 保持 drawer 上下文。dialog（append-to-body）覆盖在 drawer 之上，关闭 dialog 后
+  // drawer 仍可见。
   selectedPart.value = part;
   previewOpen.value = true;
 }
@@ -293,8 +303,11 @@ function onUpcomingRowClick(part: PartListItem): void {
   min-width: 0;
 }
 .main-left > :last-child {
-  // Strip 不压缩，由 Chart 撑满剩余空间
-  flex: 0 0 auto;
+  // 2026-09-30 Phase 2 followup #2：Strip 固定占屏幕 20% 高度（与 Chart 各占一半）；
+  // min-height: 160px 兜底避免极窄屏塌缩。Strip 内部 worker groups >4 时由
+  // FactoryRealtimeStrip 的 <el-carousel> 轮播承载。
+  flex: 0 0 20%;
+  min-height: 160px;
 }
 .main-right {
   min-height: 0;

@@ -3,12 +3,15 @@
   2026-09-29 新增：dashboard「紧急工单 Top 15」列表。
   2026-09-30 调整：列重排（一级 / 二级客户双列 + 删除「流水」「图号」两列） + 倒计 chip
   改用 system_delivery_date（沿 useDashboardUrgentList.sort_by=SYSTEM_DELIVERY_DATE）。
+  2026-09-30 Phase 2 followup #1：limit 默认值 15 → 30，配合 list-card flex chain 让
+  30 行超出后在 :deep(.el-card__body) overflow-y: auto 容器内自然滚动；后端
+  URGENT_LIST_PARAMS.limit=100 已涵盖 30，零后端改动。
   - 紧急行底色 #fde2e2 沿用旧 DashboardItemData.urgent 约定
   - 行：序号 / 名称 / 一级客户 / 二级客户 / 状态（ElTag）/ 倒计 chip（system_delivery_date）
   - 行可点 → emit row-click(item) 给父组件管 dialog 开关（PartPreviewDialog）
 
   数据来源：useDashboardUrgentList.items（listUnionItems 拉的 100 件非终态工件
-  按 system_delivery_date ASC）。本组件内客户端二次过滤 + slice(0,15)。
+  按 system_delivery_date ASC）。本组件内客户端二次过滤 + slice(0,30)。
 -->
 <template>
   <el-card shadow="never" class="list-card">
@@ -59,10 +62,11 @@
 </template>
 
 <script setup lang="ts">
-// 2026-09-29 新增 + 2026-09-30 调整：dashboard「紧急工单 Top 15」列表展示壳。
+// 2026-09-29 新增 + 2026-09-30 调整 + 2026-09-30 Phase 2 followup #1：
+// dashboard「紧急工单 Top 30」列表展示壳（limit default 15 → 30）。
 //
 // 验收（与方案 §2 对齐）：
-//   - 取 items.filter(p => p.system_delivery_date <= today+7).slice(0, 15)
+//   - 取 items.filter(p => p.system_delivery_date <= today+7).slice(0, 30)
 //   - 紧急行底色 #fde2e2（与旧 DashboardItemData.urgent 约定一致）
 //   - 倒计 chip 走 src/utils/deliveryDate.ts 的 deliveryDaysLeftText /
 //     deliveryUrgencyClass（已有 35-72 行 helpers）
@@ -92,7 +96,7 @@ const props = withDefaults(
     items: PartListItem[];
     limit?: number;
   }>(),
-  { limit: 15 },
+  { limit: 30 },
 );
 
 const emit = defineEmits<(e: 'rowClick', part: PartListItem) => void>();
