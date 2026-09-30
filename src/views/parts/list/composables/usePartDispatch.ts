@@ -102,18 +102,14 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   //   - 与 usePartsColumnFilters 同源（同一 query key），保证下一次切换时拿到同一份缓存；
   //   - isFetching 通过 processesLoading 暴露（dialog loading / 占位用）。
   const procQuery = useProcessesQuery({ limit: 200 });
-  // 2026-09-30 修复：Zod processSchema 升级 description / color 为 `.nullable().optional()`
-  // 兼容后端 skip_serializing_if 后，z.infer 派生的 items 元素 key 在 TS 看来是
-  // optional（description?: ...），而 Process business type 是 required —— 用映射显式
-  // 收窄 undefined → null，沿用 usePartProcessDesign.ts:139 `p.color ?? null` 的
-  // 「wire → business type 边界 nullish 归一」约定。值类型本来就接受 undefined（见
-  // src/types/process.ts 注释），这一步只是把 optional key 升格成 required key。
-  const processes = computed<Process[]>(() =>
-    (procQuery.data.value?.items ?? []).map((p) => ({
-      ...p,
-      description: p.description ?? null,
-      color: p.color ?? null,
-    })),
+  // 2026-09-30 review 第 1 轮清理：去掉原 `.map(p => ({ ...p, description: p.description ?? null, color: p.color ?? null }))`
+  // —— types/process.ts description / color 改为 `string | null | undefined`（对齐后端
+  // skip_serializing_if）后，processSchema (Zod) 派生字段是 optional，而 Process 业务类型
+  // 是 required，TS 结构子类型不匹配。沿 ProcessTab.vue:255 同模式走 `as Process[]` 桥接，
+  // 渲染层（useShelfProcessFilter 等）已有 `?? null` / `?? '#ddd'` 等 nullish 兜底同时覆盖
+  // null + undefined，零行为差异。
+  const processes = computed<Process[]>(
+    () => (procQuery.data.value?.items ?? []) as Process[],
   );
   const processesLoading = procQuery.isFetching;
 

@@ -130,9 +130,10 @@ export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
  * data === undefined → 整张 process 列表消费侧退化：ProcessTab.vue 表格空、
  * WorkerQueueBoard.vue 没有 INHOUSE 工序 tab、usePartDispatch 工序下拉空。
  * `.nullable()` 与 `.optional()` 是正交维度（前者放宽类型、后者放宽 required），
- * 必须并存才能同时接受 null 与字段缺失两种形态。3 处走 Zod parse 的 caller
- * （useProcessesQuery.ts:39 + ProcessTab.vue:252 + WorkerQueueBoard.vue:153 +
- * usePartDispatch.ts:104 共用同一份 cache）因此受影响；另有 8 处 caller
+ * 必须并存才能同时接受 null 与字段缺失两种形态。3 处共用 cache 的 view caller
+ * （数据层 1 处 parse 点 useProcessesQuery.ts:39 + 3 处 view caller：
+ * ProcessTab.vue:255 + WorkerQueueBoard.vue:153 + usePartDispatch.ts:104 共用同一份 cache）
+ * 因此受影响；另有 8 处 caller
  * （PendingProgrammingList.vue:413 / ShelfList.vue:324 /
  * ProcessPickerDialog.vue:180 / InspectionPending.vue:865 /
  * OutsourceQuoteList.vue:79 / OutsourceSendReceive.vue:75 /
