@@ -42,7 +42,11 @@
     <!-- 双栏布局：左 UpcomingDeliveryChart / 右 UrgentOrdersList -->
     <section class="dashboard-main">
       <div class="main-left">
-        <UpcomingDeliveryChart :buckets="upcomingBuckets" height="320px" />
+        <UpcomingDeliveryChart
+          :buckets="upcomingBuckets"
+          height="320px"
+          @bar-layer-click="onBarLayerClick"
+        />
       </div>
       <div class="main-right">
         <UrgentOrdersList :items="urgentItems" @row-click="onRowClick" />
@@ -58,6 +62,15 @@
 
     <!-- 抽屉：选中的工单详情 + 图纸 -->
     <UrgentOrderDrawer v-model="drawerVisible" :part="selectedPart" />
+
+    <!-- 抽屉：7 天交期柱状图按层点击列表 -->
+    <UpcomingDeliveryListDrawer
+      v-if="selectedLayer"
+      v-model="upcomingDrawerOpen"
+      :date="selectedLayer.date"
+      :layer="selectedLayer.layer"
+      :statuses="selectedLayer.statuses"
+    />
   </div>
 </template>
 
@@ -83,12 +96,13 @@ import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { usePermissions } from '@/composables/usePermissions';
-import type { PartListItem } from '@/types/parts';
+import type { OrderStatus, PartListItem } from '@/types/parts';
 import { useDashboardSnapshot } from '@/views/dashboard/composables/useDashboardSnapshot';
 import { useDashboardUrgentList } from '@/views/dashboard/composables/useDashboardUrgentList';
 import { useDashboardOverdue } from '@/views/dashboard/composables/useDashboardOverdue';
 import DashboardKpiTiles from './components/DashboardKpiTiles.vue';
 import UpcomingDeliveryChart from './components/UpcomingDeliveryChart.vue';
+import UpcomingDeliveryListDrawer from './components/UpcomingDeliveryListDrawer.vue';
 import UrgentOrdersList from './components/UrgentOrdersList.vue';
 import UrgentOrderDrawer from './components/UrgentOrderDrawer.vue';
 import FactoryRealtimeStrip from './components/FactoryRealtimeStrip.vue';
@@ -174,6 +188,29 @@ function onRowClick(part: PartListItem): void {
 function goPartDetail(partId: string): void {
   if (!canOpenPartDetail.value) return;
   void router.push(`/parts/${partId}`);
+}
+
+// 2026-09-30 新增：7 天交期柱状图按层点击 → 打开 UpcomingDeliveryListDrawer。
+// selectedLayer 持有 { date, layer, statuses } 三元组，v-if="selectedLayer" 保证
+// drawer 在首次点击前不挂载（useDashboardUpcomingList 的 enabled 闸门天然生效）。
+const upcomingDrawerOpen = ref(false);
+const selectedLayer = ref<{
+  date: string;
+  layer: 'top' | 'middle' | 'bottom';
+  statuses: readonly OrderStatus[];
+} | null>(null);
+
+function onBarLayerClick(payload: {
+  date: string;
+  layer: 'top' | 'middle' | 'bottom';
+  statuses: readonly OrderStatus[];
+}): void {
+  selectedLayer.value = {
+    date: payload.date,
+    layer: payload.layer,
+    statuses: payload.statuses,
+  };
+  upcomingDrawerOpen.value = true;
 }
 </script>
 
