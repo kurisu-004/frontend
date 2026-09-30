@@ -73,10 +73,14 @@ export type DashboardShelfGroupData = z.infer<typeof onProductionShelfGroupSchem
 /** 2026-09-28 新增：未来 N 天交付分桶（UpcomingDeliveryBucket VO）。
  *  count 是 COUNT(*)::bigint → JSON integer，前端 z.number() 接收（沿
  *  backend-rust/docs/api/dashboard.md:90「数值类保留 JSON integer」约定）。
- *  2026-09-30 bugfix：原误用 z.string()，与后端 VO i64 类型不符。 */
+ *  2026-09-30 bugfix：原误用 z.string()，与后端 VO i64 类型不符。
+ *  2026-09-30 新增 by_status：dashboard 7 天柱状图按状态分层堆叠需要每个桶
+ *  提供 OrderStatus → 件数明细（后端 snapshot_counters GROUP BY (date, status)
+ *  二维聚合，BTreeMap<String, i64> 序列化输出）。空 map = 当日 0 件。 */
 export const upcomingDeliveryBucketSchema = z.object({
   date: z.string(),
-  count: z.number(),
+  count: z.number().int().nonnegative(),
+  by_status: z.record(z.string(), z.number().int().nonnegative()),
 });
 
 export type UpcomingDeliveryEntryData = z.infer<typeof upcomingDeliveryBucketSchema>;

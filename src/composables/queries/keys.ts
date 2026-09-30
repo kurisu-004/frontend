@@ -62,6 +62,12 @@ export const qk = {
    *  fetchOverview 拉当天日期范围内的 overdue_undelivered_count，仅 Manager 角色
    *  启用（enabled: isManager 闸门），非 Manager 不发请求。 */
   dashboardOverdue: ['dashboard', 'overdue'] as const,
+  /** 2026-09-30 新增：dashboard「7 天交期柱状图按层点击抽屉」queryKey。
+   *  listUnionItems({ row_type: 'PART', statuses, planned_delivery_date_from =
+   *  to = date, sort_by: 'PLANNED_DELIVERY_DATE', sort_dir: 'ASC', limit: 500,
+   *  offset: 0 }) 拉该日 × 该层状态的所有工单。 */
+  dashboardUpcomingList: (params: { date: string; statuses: string[] }) =>
+    ['dashboard', 'upcoming-list', params] as const,
   /** 2026-09-28 新增：dashboard 域前缀 —— WS 事件触发 invalidate 用；
    *  包含 dashboardSnapshot / dashboardUrgentList / dashboardOverdue 三个 query，
    *  invalidateQueries({ queryKey: qk.dashboardPrefix }) 一键全失效。 */

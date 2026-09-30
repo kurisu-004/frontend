@@ -67,7 +67,7 @@ function makeBaseSnapshot(): Record<string, unknown> {
     ],
     on_inspection_shelves: [makeBaseItem({ id: '180000000000002', shelf_code: 'I-01' })],
     in_process: [makeBaseItem({ id: '180000000000003', current_holder_kind: 'worker' })],
-    upcoming_delivery: [{ date: '2026-09-30', count: 5 }],
+    upcoming_delivery: [{ date: '2026-09-30', count: 5, by_status: { PENDING: 5 } }],
     ts: '2026-09-28T10:00:00+08:00',
   };
 }
@@ -209,28 +209,98 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
     // 2026-09-30 bugfix：count 是 COUNT(*)::bigint → JSON integer，非 snowflake ID
     // 故不走 serde-i64 字符串化路径（与 customerSchema S4 不同形态）。
     it('D5：count 是 number（COUNT(*)::bigint → JSON integer）', () => {
-      const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: 42 });
+      const parsed = upcomingDeliveryBucketSchema.parse({
+        date: '2026-09-30',
+        count: 42,
+        by_status: {},
+      });
       expect(parsed.count).toBe(42);
     });
 
     // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
-    it('D7：UpcomingDeliveryBucket 2 字段全在 parsed output 里', () => {
-      const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: 42 });
-      expect(Object.keys(parsed).sort()).toEqual(['count', 'date'].sort());
+    it('D7：UpcomingDeliveryBucket 3 字段全在 parsed output 里（2026-09-30 加 by_status）', () => {
+      const parsed = upcomingDeliveryBucketSchema.parse({
+        date: '2026-09-30',
+        count: 42,
+        by_status: { PENDING: 10, INSPECTION: 5 },
+      });
+      expect(Object.keys(parsed).sort()).toEqual(['by_status', 'count', 'date'].sort());
     });
 
     // 2026-09-30 bugfix：原断言把"契约"和"实现"反过来锁了。count 是 number，传入 number 必须通过；
     // 传 string（前端期望不传）必须拒。
     it('count 传 number → parse 通过', () => {
-      const parsed = upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: 42 });
+      const parsed = upcomingDeliveryBucketSchema.parse({
+        date: '2026-09-30',
+        count: 42,
+        by_status: {},
+      });
       expect(parsed.count).toBe(42);
     });
     it('count 传 string → 抛 ZodError（防止后端未来回归串行化）', () => {
-      expect(() => upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: '42' })).toThrow();
+      expect(() =>
+        upcomingDeliveryBucketSchema.parse({
+          date: '2026-09-30',
+          count: '42',
+          by_status: {},
+        }),
+      ).toThrow();
     });
 
     it('缺 date → 抛 ZodError', () => {
       expect(() => upcomingDeliveryBucketSchema.parse({ count: 0 })).toThrow();
+    });
+
+    // 2026-09-30 新增（plan §2.7 by_status 必填 / 错类型 / 空对象用例）：
+    // S 套与 customerSchema S4 regression guard 同形态 —— Zod 默认 strip 模式
+    // 会让未声明字段静默丢，必须显式校验。
+    describe('2026-09-30 by_status 必填 / 错类型 / 空对象', () => {
+      it('S1：有效 by_status（含多种状态）→ parse 通过', () => {
+        const parsed = upcomingDeliveryBucketSchema.parse({
+          date: '2026-09-30',
+          count: 6,
+          by_status: { PENDING: 3, INSPECTION: 2, DELIVERED: 1 },
+        });
+        expect(parsed.by_status.PENDING).toBe(3);
+        expect(parsed.by_status.INSPECTION).toBe(2);
+        expect(parsed.by_status.DELIVERED).toBe(1);
+      });
+
+      it('S2：缺 by_status → 抛 ZodError（防止后端漏返）', () => {
+        expect(() =>
+          upcomingDeliveryBucketSchema.parse({ date: '2026-09-30', count: 0 }),
+        ).toThrow();
+      });
+
+      it('S3：by_status value 是 string → 抛 ZodError', () => {
+        expect(() =>
+          upcomingDeliveryBucketSchema.parse({
+            date: '2026-09-30',
+            count: 1,
+            by_status: { PENDING: '3' as unknown as number },
+          }),
+        ).toThrow();
+      });
+
+      it('S4：by_status value 是负数 → 抛 ZodError（z.number().int().nonnegative）', () => {
+        expect(() =>
+          upcomingDeliveryBucketSchema.parse({
+            date: '2026-09-30',
+            count: 1,
+            by_status: { PENDING: -1 },
+          }),
+        ).toThrow();
+      });
+
+      it('S5：by_status 是空对象 {} → parse 通过（合法零桶日终态）', () => {
+        const parsed = upcomingDeliveryBucketSchema.parse({
+          date: '2026-09-30',
+          count: 0,
+          by_status: {},
+        });
+        expect(parsed.by_status).toEqual({});
+        expect(parsed.count).toBe(0);
+      });
     });
   });
 
