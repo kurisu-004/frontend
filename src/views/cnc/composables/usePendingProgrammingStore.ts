@@ -200,7 +200,15 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
    *  - el-input `clearable` 的 ✕ 会先发 `update:modelValue('')` 再发 `@clear`：
    *    前者只改输入态（0 请求），后者走本函数提交一次 ⇒ **净 1 次请求**，不双发。
    *  - Object.assign 与 page=1 是同一同步块内完成，`watch(defaultedOptions)` 是
-   *    pre-flush ⇒ computed 只在块末求值一次 ⇒ 单次 setOptions ⇒ 单次 fetch。 */
+   *    pre-flush ⇒ computed 只在块末求值一次 ⇒ 单次 setOptions ⇒ 单次 fetch。
+   *
+   * 2026-10-01 review 第 2 轮 N-2（把语义钉死，避免后人当 bug 改）：**只有**
+   * Enter 与清空会提交输入态。切 Tab（onTabChange 只做 page=1）、翻页 / 改每页条数、
+   * 点「刷新」（fetchList = refetch 当前 queryKey）、自动刷新 tick（query-core
+   * #executeFetch 复用当前 queryKey，压根不重跑 buildParams）**都不提交**草稿 ——
+   * 它们只重拉「已生效」的条件。这是有意的：草稿未提交前不该被其它动作顺带生效。
+   * 副作用（也是 N-2 留作后续的已知决策）：草稿不持久化，打字未按 Enter 就离开页面
+   * 会丢失；恢复出来的是上次真正生效过的条件，与列表内容自洽。 */
   function onSearch(): void {
     Object.assign(search, searchInput);
     page.value = 1;
@@ -317,6 +325,20 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   //   · 代价是冷缓存首访可能看到空态，已由下面两个 pending 派生挡住误导文案。
   const processesPending = processesQuery.isPending;
   const shelvesPending = shelvesQuery.isPending;
+  // 2026-10-01 review 第 2 轮 N-1：**失败态**也要单独一层。
+  // ⚠️ isPending 在失败时是 false（query-core `queryObserver.js:346`
+  // `isPending = status === 'pending'`，失败后 status 变 'error'）⇒ 只加 pending 分支
+  // 不够：query 挂掉时空态会落回「未映射到任何生产货架，请先配置映射」/「没有可用的
+  // 工序」，用户会去改配置，其实只是接口挂了 —— 与 M-1 想消灭的误导同一性质。
+  // 错误本身有 ElMessage toast 兜底（见下方 watch），但空态文案必须自己说真话。
+  const processesError = computed<string | null>(() => {
+    const e = processesQuery.error.value;
+    return e ? e.message : null;
+  });
+  const shelvesError = computed<string | null>(() => {
+    const e = shelvesQuery.error.value;
+    return e ? e.message : null;
+  });
 
   // 2026-07-17：useShelfProcessFilter 双向收窄（货架↔工序映射过滤）。
   // ⚠️ 该 composable 跨 3 页共用（cnc / outsource / inspection / parts-detail），
@@ -460,6 +482,10 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
       // 2026-10-01 review 第 1 轮 M-1：下拉空态要能区分「数据在途」与「真的没映射」
       processesPending,
       shelvesPending,
+      // 2026-10-01 review 第 2 轮 N-1：再区分「加载失败」—— isPending 在失败时为
+      // false，没有这一层空态会落回「未映射，请去配置映射」的误导文案
+      processesError,
+      shelvesError,
       openDialog: openReleaseDialog,
       onDialogClosed: onReleaseDialogClosed,
       confirm: confirmRelease,

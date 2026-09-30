@@ -19,7 +19,10 @@
 //     T11：restoreState() 后 searchInput 与 search 一致（输入框不留白）。
 //
 // mock 策略：
-//   - vi.mock('@/api/programming')：主查询唯一出口，替换为 vi.fn；
+//   - vi.mock('@/api/http')：只替换其中的 `api.get`（用 importOriginal 保留 cleanParams
+//     / normalizeListResult / ApiError 等真实导出）。**不** mock 掉 '@/api/programming'
+//     整个模块 —— 理由见下方 M-2 注：守门（pendingProgrammingListResultSchema.parse）
+//     已收敛进 api 层，mock 整个 api 模块会把守门链短路，T5 变成在测 mock 自己。
 //   - vi.mock('@/api/parts')：releaseFromProgramming（@/api/parts 聚合导出，mock
 //     工厂只需给出用到的成员）；
 //   - vi.mock('@/api/process') / vi.mock('@/api/shelves')：store 内
@@ -174,7 +177,9 @@ let testQueryClient: QueryClient;
 
 describe('usePendingProgrammingStore', () => {
   beforeEach(() => {
-    apiGetMock.mockClear();
+    // 只用 mockReset：它内部第一行就是 mockClear（@vitest/spy mockReset →
+    // mock.mockClear()），同时清掉 calls 与实现，再由 respondWith 重置默认响应。
+    // 2026-10-01 review 第 2 轮 N-5：原先紧邻的 mockClear() 是死代码，已删。
     apiGetMock.mockReset();
     respondWith({ items: [], total: 0, limit: 20, offset: 0 });
     releaseFromProgrammingMock.mockClear();

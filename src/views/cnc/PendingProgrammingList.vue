@@ -219,7 +219,13 @@
             />
             <template #empty>
               <span class="muted">
-                {{ store.release.processesPending ? '正在加载工序…' : '没有可用的工序' }}
+                {{
+                  store.release.processesPending
+                    ? '正在加载工序…'
+                    : store.release.processesError
+                      ? '工序加载失败，请重试'
+                      : '没有可用的工序'
+                }}
               </span>
             </template>
           </el-select>
@@ -249,15 +255,21 @@
               「数据还在路上」与「真的没配映射」—— 后者的文案会引导用户去「货架管理 →
               工序映射」改配置，数据没到时显示它是主动误导。取舍说明见 store 内
               processesPending / shelvesPending 的注。
+              2026-10-01 review 第 2 轮 N-1：再补一层「加载失败」—— isPending 在
+              失败时是 false（query-core queryObserver.js:346），不加这一层空态会在
+              接口挂掉时落回下面那句「未映射，请去配置映射」，把网络故障说成配置缺失。
+              失败优先级最高，其次在途，最后才是业务判断。
             -->
             <template #empty>
               <span class="muted">
                 {{
-                  store.release.shelvesPending
-                    ? '正在加载生产货架…'
-                    : store.release.processId
-                      ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
-                      : '请先选择下一道工序'
+                  store.release.shelvesError
+                    ? '生产货架加载失败，请重试'
+                    : store.release.shelvesPending
+                      ? '正在加载生产货架…'
+                      : store.release.processId
+                        ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
+                        : '请先选择下一道工序'
                 }}
               </span>
             </template>
