@@ -17,7 +17,7 @@
 //      useWorkerQueue.loadBoard + 模块级 workerHeld 一并删除。
 //
 // 覆盖：
-//   - T1：dispatchMutation 成功 → 请求体 targets 形态 + 6 域 invalidate（无 refreshBoard）。
+//   - T1：dispatchMutation 成功 → 请求体 targets 形态 + 4 域 invalidate（无 refreshBoard）。
 //   - T2：dispatchMutation 成功 → 清空 selectedIds + 成功 toast。
 //   - T3：autoDispatch preview 全部可下发 → 弹确认框 → 确认后调 dispatchBatches
 //     （用 first_process_id 作 target_process_id）。
@@ -145,14 +145,14 @@ import { usePendingDispatch } from '../usePendingDispatch';
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
 
-/** 2026-09-30：invalidateAll() 失效六域的 queryKey 序列断言。 */
-function expectSixDomainsInvalidated(): void {
+/** 2026-09-30：invalidateAll() 失效域的 queryKey 序列断言。
+ *  2026-09-30 修复：去掉 ['processes']（下发不改变工序列表）+ 改名四域。 */
+function expectFourDomainsInvalidated(): void {
   const keys = vi
     .mocked(testQueryClient.invalidateQueries)
     .mock.calls.map((c) => (c[0] as { queryKey: readonly unknown[] }).queryKey);
   expect(keys).toEqual([
     ['pending-batches'],
-    ['processes'],
     ['parts'],
     ['worker-pool', 'by-process'],
     ['worker-pool', 'counts'],
@@ -217,7 +217,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     vi.restoreAllMocks();
   });
 
-  it('T1：dispatchMutation 成功 → 请求体 targets 形态 + 6 域 invalidate', async () => {
+  it('T1：dispatchMutation 成功 → 请求体 targets 形态 + 4 域 invalidate', async () => {
     const d = testApp.runWithContext(() => usePendingDispatch());
     await d.dispatchMutation.mutateAsync({
       batchIds: ['3000000000001', '3000000000002'],
@@ -233,8 +233,8 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     });
     // preview 端点不被「显式下发」路径触碰
     expect(realPreviewAutoDispatch).not.toHaveBeenCalled();
-    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(6);
-    expectSixDomainsInvalidated();
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(5);
+    expectFourDomainsInvalidated();
   });
 
   it('T2：dispatchMutation 成功 → 清空 selectedIds + 成功 toast', async () => {
@@ -274,8 +274,8 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     expect(realDispatchBatches).toHaveBeenCalledWith({
       targets: [{ batch_id: '3000000000001', target_process_id: '2000000000001' }],
     });
-    // 下发成功 → 六域失效
-    expectSixDomainsInvalidated();
+    // 下发成功 → 四域失效
+    expectFourDomainsInvalidated();
   });
 
   it('T4：autoDispatch preview 含 skip 件 → 确认框文案含跳过原因，且只下发可下发项', async () => {

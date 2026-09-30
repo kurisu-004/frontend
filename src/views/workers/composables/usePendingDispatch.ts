@@ -10,7 +10,7 @@
 //     total / isLoading 给 view 层；
 //   - 提供 2 个 mutation：dispatchMutation（单件 / 批量合一）+ autoDispatchMutation
 //     （只读预览 → 用户确认 → 链式调 dispatchMutation 真正下发）；
-//   - mutationFn 走 Zod parse 守门，onSuccess 集中调 invalidateAll() 失效五域
+//   - mutationFn 走 Zod parse 守门，onSuccess 集中调 invalidateAll() 失效四域
 //     （沿 2026-09-26 写操作精确失效约定）；
 //   - 不写 retry（信任 main.ts 全局 mutations.retry: 0）；
 //   - mutationKey 三层数组（['pending-batches', 'dispatch'] / ['pending-batches',
@@ -55,7 +55,6 @@ import {
 import { dispatchResultSchema } from '@/composables/queries/schemas';
 import { ApiError } from '@/api/http';
 import { invalidatePendingBatchesQuery } from '@/composables/queries/usePendingBatchesQuery';
-import { invalidateProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { invalidateWorkerPoolByProcessAll } from '@/composables/queries/useWorkerPoolByProcessQuery';
 import { invalidateWorkerPoolCountsQuery } from '@/composables/queries/useWorkerPoolCountsQuery';
 import { invalidateWorkerStateByWorkerAll } from '@/composables/queries/useWorkerStateByWorkerQuery';
@@ -144,15 +143,20 @@ export function usePendingDispatch(): UsePendingDispatchReturn {
     return m;
   });
 
-  /** 2026-09-30：写操作完成后集中失效五域（pending-batches / processes / parts /
+  /** 2026-09-30：写操作完成后集中失效四域（pending-batches / parts /
    *  pool by-process / pool counts）+ pool state。
    *  跨域失效理由：下发后 batch 从 PENDING 进入 IN_PROCESS + 候选池，同一件工单在
    *  零件列表的派生状态也变（next_process_step 推进）。
+   *  2026-09-30 修复：移除 processes 域失效。下发批次不可能改变工序列表，而
+   *  `staleTime: POSITIVE_INFINITY` 挡不住显式 `invalidateQueries`（TanStack v5
+   *  预期行为），导致每次下发都重拉一次会话级缓存的 processes（如
+   *  WorkerQueueBoard 的 `useProcessesQuery()` observer）。processes 的合法写点
+   *  只有 ProcessTab.vue 的工序增删改，不在本文件 —— 移除后才符合
+   *  CLAUDE.md 2026-09-26 基础数据精确失效策略 #3 的「写操作点全集中」前提。
    *  返回 Promise 让 2 个 mutation onSuccess 内部 await 完整失效链，避免 query
    *  重叠触发雪崩。 */
   async function invalidateAll(): Promise<void> {
     await invalidatePendingBatchesQuery(qc);
-    await invalidateProcessesQuery(qc);
     await qc.invalidateQueries({ queryKey: qk.partsPrefix }).then(() => undefined);
     // 2026-09-30：pool 域三域前缀失效（by-process 任意 processId + counts 全量 +
     // state 任意 worker —— 下发后 batch 进入候选池并被后续 worker 抢走）。

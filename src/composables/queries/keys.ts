@@ -107,8 +107,9 @@ export const qk = {
   unionPrefix: ['parts', 'union-list'] as const,
   /** 2026-09-29 新增：pending-batches 域前缀 —— dispatch / bulk / auto 三类 mutation
    *  完成后调 qc.invalidateQueries({ queryKey: qk.pendingBatchesPrefix }) 失效整个域
-   *  （任意 params 形态的 list 都会命中）。同时触发 processesPrefix + partsPrefix
-   *  跨域失效（usePendingDispatch.ts 集中编排）。 */
+   *  （任意 params 形态的 list 都会命中）。同时触发 partsPrefix 跨域失效
+   *  （usePendingDispatch.ts 集中编排）。2026-09-30 修复：去掉 processesPrefix ——
+   *  下发批次不改变工序列表，失效它只会重拉会话级缓存的 processes。 */
   pendingBatchesPrefix: ['pending-batches'] as const,
   // ============================================================
   // 2026-09-30 新增：pool 域 queryKey 工厂（后端 worker-pool → pool 路径收敛后
@@ -128,8 +129,9 @@ export const qk = {
   //     invalidateWorkerPoolCountsQuery(qc) + invalidateWorkerPoolStateAll(qc)
   //     （useWorkerQueue.ts 集中编排）；
   //   - dispatch（含 preview 确认后的真正下发）完成后 usePendingDispatch 集中
-  //     失效五域（pendingBatchesPrefix + processesPrefix + partsPrefix +
-  //     workerPoolByProcessPrefix + workerPoolCountsPrefix）。
+  //     失效四域（pendingBatchesPrefix + partsPrefix +
+  //     workerPoolByProcessPrefix + workerPoolCountsPrefix）。2026-09-30 修复：
+  //     原先含 processesPrefix，下发不改变工序列表故移除。
   //   - 写操作点全集中在 useWorkerQueue / usePendingDispatch，本件 store 外
   //     无其他写入（2026-09-30 grep 确认），失效可由 prefix 一把全刷。
   // ============================================================
