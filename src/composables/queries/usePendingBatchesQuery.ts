@@ -11,7 +11,7 @@
 //     静默 strip = 校验形同虚设）；
 //   - staleTime / gcTime: POSITIVE_INFINITY —— 会话级缓存；写操作（dispatch / bulk /
 //     auto）在 usePendingDispatch.ts 集中失效 pendingBatchesPrefix + 跨域
-//     processesPrefix + partsPrefix；
+//     partsPrefix（2026-09-30 修复：去掉 processesPrefix —— 下发批次不改变工序列表）；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //
 // 写点：pending-batches 域写操作（dispatchBatch / bulkDispatchBatches /

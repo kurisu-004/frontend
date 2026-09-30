@@ -132,8 +132,8 @@ export const qk = {
   //     失效四域（pendingBatchesPrefix + partsPrefix +
   //     workerPoolByProcessPrefix + workerPoolCountsPrefix）。2026-09-30 修复：
   //     原先含 processesPrefix，下发不改变工序列表故移除。
-  //   - 写操作点全集中在 useWorkerQueue / usePendingDispatch，本件 store 外
-  //     无其他写入（2026-09-30 grep 确认），失效可由 prefix 一把全刷。
+  //   - pool 域写操作点全集中在 useWorkerQueue / usePendingDispatch，本件 store
+  //     外无其他写入（2026-09-30 grep 确认），失效可由 prefix 一把全刷。
   // ============================================================
 
   /** 全工序 batch 计数（eager 拉取，tab 标题徽标 + 待下发工序卡 badge 数据源）。
