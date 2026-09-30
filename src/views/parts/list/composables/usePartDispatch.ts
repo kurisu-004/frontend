@@ -405,9 +405,11 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     return true;
   }
 
-  // 2026-09-30 新增：per-row loading map（复用 placeOnShelf / recallToPending 的
-  // deliveringMap 同款 reactive<Record<string, boolean>> 模式；本件命名
-  // forceCompletingMap 与按钮文案「完成」对齐）。
+  // 2026-09-30 新增：per-row loading map（参考 DeliveryNoteList.deliveringMap
+  // 同款 reactive<Record<string, boolean>> 模式；本件 usePartDispatch 内部首次引入
+  // 该模式——之前 placeOnShelf / recallToPending 仅用 dispatchSubmitting /
+  // batchDispatchSubmitting 单 bool，不存在同款 map。命名 forceCompletingMap
+  // 与按钮文案「完成」对齐）。
   const forceCompletingMap = reactive<Record<string, boolean>>({});
 
   const forceCompleteMutation = useMutation<
@@ -421,7 +423,9 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
       forceCompletingMap[partId] = true;
     },
     onSettled: (_d, _e, { partId }) => {
-      forceCompletingMap[partId] = false;
+      // 2026-09-30 修复：用 delete 而非 = false，避免 map 累积 stale key
+      // （沿 DeliveryNoteList.vue:371 deliveringMap 清理范本）。
+      delete forceCompletingMap[partId];
     },
     onSuccess: () => {
       ElMessage.success('已强制完成');
@@ -431,11 +435,16 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   });
 
   async function onForceComplete(row: PartListItem): Promise<void> {
-    const label = row.serial_no || row.drawing_no || row.order_no || row.id;
-    const batchCount = row.batch_no ?? 1;
+    // 2026-09-30 修复：label fallback 与 onRecallToPending 保持一致
+    // （serial_no || drawing_no || row.id），不引入 order_no —— order_no 是
+    // PR-F 2026-07-17 命名的「送货单号」，非工单号，不应出现在工单级确认文案里。
+    const label = row.serial_no || row.drawing_no || row.id;
+    // 2026-09-30 修复：移除 batchCount —— batch_no 是 per-part 递增的批次序号
+    // （types/parts.ts:191），不是批次数。弹窗文案不再含具体批次数，仅承诺
+    // 「所有非取消批次」，与后端 force-complete 端点语义一致。
     const ok = await confirm.dangerous(
       '强制完成工单',
-      `将强制把工单「${label}」及其 ${batchCount} 个批次置为已完成。\n` +
+      `将强制把工单「${label}」及其所有非取消批次置为已完成。\n` +
         `此操作绕过状态机（仅排除已取消批次），要求非 COMPLETED / 非 CANCELLED 状态。\n` +
         `仅系统管理员可执行，且不可撤销。是否继续？`,
       { confirmText: '确认完成', cancelText: '取消', type: 'warning' },
