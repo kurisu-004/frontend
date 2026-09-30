@@ -602,3 +602,157 @@ export const heldBatchItemSchema = z.object({
 });
 
 export type HeldBatchItemSchema = z.infer<typeof heldBatchItemSchema>;
+
+// ============================================================
+// 2026-09-30 新增：worker-pool 域 4 个 schema（生产队列 Tab 懒加载 +
+// 数据层 TanStack Query 化）。
+//
+// 字段对齐 backend-rust `src/modules/worker_pool/vo/worker_pool.rs`：
+//   - WorkerBrief：4 字段（worker_id / name / work_type_id / work_type_code）
+//   - WorkTypeMaxHeld：4 字段（work_type_id / code / name / max_held_batches nullable）
+//   - PoolBatchItem：21 字段（含 current_process_step_id nullable、has_cnc_program
+//     必填 —— 沿 CLAUDE.md §M-4 strip 陷阱 guard）
+//   - ProcessPoolDetail（workerPoolByProcess）：6 顶层字段（process_id / code /
+//     name / workers[] / work_types[] / items[]）+ total
+//   - WorkerPoolCountsOut：counts[] + total（shelf_id）
+//   - WorkerPoolState：8 字段（含 work_type_code nullable / pool_count_by_process[]
+//     / held_batches[]）
+//
+// 所有非 Option 字段 schema 必填显式声明（沿 CLAUDE.md §M-4 strip 陷阱 ——
+// Zod 默认 strip 模式会让缺字段静默丢失，导致校验形同虚设）。
+// 引用 heldBatchItemSchema 校验 held_batches 元素（与 backend-rust HeldBatchItem
+// 严格对齐）。
+// ============================================================
+
+/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/{process_id}` 内嵌的工人
+ *  简短记录。4 字段全声明：worker_id / name / work_type_id / work_type_code。
+ *  work_type_id 是雪花 ID string；work_type_code 是人类可读 code（如 'CNC'）。
+ *  后端 WorkerBrief 结构。 */
+export const workerBriefSchema = z.object({
+  worker_id: z.string(),
+  name: z.string(),
+  work_type_id: z.string(),
+  work_type_code: z.string(),
+});
+
+export type WorkerBriefSchema = z.infer<typeof workerBriefSchema>;
+
+/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/{process_id}` 内嵌的工种
+ *  + max_held 记录。4 字段：work_type_id / work_type_code / work_type_name /
+ *  max_held_batches（nullable —— 未设置时前端渲染「工种 max_held 未设置」占位，
+ *  后端 20904 错误语义对齐）。 */
+export const workTypeMaxHeldSchema = z.object({
+  work_type_id: z.string(),
+  work_type_code: z.string(),
+  work_type_name: z.string(),
+  max_held_batches: z.number().nullable(),
+});
+
+export type WorkTypeMaxHeldSchema = z.infer<typeof workTypeMaxHeldSchema>;
+
+/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/{process_id}` 内嵌的候选批次
+ *  （PoolBatchItem，与 backend-rust PoolBatchItem VO 字段对齐 —— 21 字段）。
+ *
+ *  2026-09-29 review 第 1 轮新增字段：`has_cnc_program` 必填 boolean —— 沿
+ *  CLAUDE.md §M-4 strip 陷阱守门，后端漏返该字段 Zod parse 立刻抛错。
+ *
+ *  字段含义（沿 backend-rust PoolBatchItem）：
+ *    - batch_id / part_id / batch_no(number) / quantity / serial_no / drawing_no /
+ *      name / system_delivery_date：基础展示字段；
+ *    - customer_name / parent_customer_name / customer_path / applicant_name：
+ *      客户 + 申请人；
+ *    - location / shelf_id / shelf_code / shelf_name：候选池当前货架；
+ *    - is_urgent / note / version：业务字段；
+ *    - current_process_step_id：当前所在工艺链步骤 ID（nullable，与 PartBatch
+ *      同语义）；
+ *    - has_cnc_program：是否已上传 CNC 程序（沿 chain 派生，service 层
+ *      t_part_file EXISTS 判定）。 */
+export const poolBatchItemSchema = z.object({
+  batch_id: z.string(),
+  part_id: z.string(),
+  batch_no: z.number(),
+  quantity: z.number(),
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string(),
+  system_delivery_date: z.string().nullable(),
+  customer_name: z.string().nullable(),
+  parent_customer_name: z.string().nullable(),
+  customer_path: z.string().nullable(),
+  applicant_name: z.string().nullable(),
+  location: z.string(),
+  shelf_id: z.string(),
+  shelf_code: z.string(),
+  shelf_name: z.string(),
+  is_urgent: z.boolean(),
+  note: z.string().nullable(),
+  current_process_step_id: z.string().nullable().optional(),
+  // 2026-09-30 必填 boolean —— 与 partSchema.has_cnc_program 同源 regression guard。
+  has_cnc_program: z.boolean(),
+  version: z.number(),
+});
+
+export type PoolBatchItemSchema = z.infer<typeof poolBatchItemSchema>;
+
+/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/{process_id}` 顶层出参
+ *  （ProcessPoolDetail，与 backend-rust ProcessPoolDetail VO 字段对齐）。
+ *  6 顶层字段 + total：process_id / process_code / process_name / workers[] /
+ *  work_types[] / items[]。workers / work_types / items 三个数组必须全字段
+ *  声明（M-1 strip 陷阱 —— 后端漏返任何数组字段会让整个 UI 退化为空）。 */
+export const workerPoolByProcessSchema = z.object({
+  process_id: z.string(),
+  process_code: z.string(),
+  process_name: z.string(),
+  workers: z.array(workerBriefSchema),
+  work_types: z.array(workTypeMaxHeldSchema),
+  total: z.number(),
+  items: z.array(poolBatchItemSchema),
+});
+
+export type WorkerPoolByProcessSchema = z.infer<typeof workerPoolByProcessSchema>;
+
+/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/counts` 顶层出参
+ *  （WorkerPoolCountsOut，与 backend-rust WorkerPoolCountsOut VO 字段对齐）。
+ *  2 字段：counts[] + shelf_id。counts 元素（ProcessBatchCount）含 process_id /
+ *  process_code / process_name / count。count 是 integer（仓库池中本次工序的
+ *  候选 batch 总数）。 */
+export const workerPoolCountsSchema = z.object({
+  shelf_id: z.string().nullable(),
+  counts: z.array(
+    z.object({
+      process_id: z.string(),
+      process_code: z.string(),
+      process_name: z.string(),
+      count: z.number(),
+    }),
+  ),
+  total: z.number(),
+});
+
+export type WorkerPoolCountsSchema = z.infer<typeof workerPoolCountsSchema>;
+
+/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/state?worker_id=&shelf_id=`
+ *  顶层出参（WorkerPoolState，与 backend-rust WorkerPoolState VO 字段对齐）。
+ *  8 字段：worker_id / worker_name / work_type_code / max_held / current_held /
+ *  capacity_remaining / pool_count_by_process[] / held_batches[]。
+ *  held_batches 元素用 heldBatchItemSchema 复用（2026-09-29 已存在，与
+ *  backend-rust HeldBatchItem 严格对齐）。
+ *  work_type_code nullable —— 无工种时退化为空工种（worker 是 INACTIVE / 未指派
+ *  工种的状态）。 */
+export const workerStateSchema = z.object({
+  worker_id: z.string(),
+  worker_name: z.string(),
+  work_type_code: z.string().nullable(),
+  max_held: z.number(),
+  current_held: z.number(),
+  capacity_remaining: z.number(),
+  pool_count_by_process: z.array(
+    z.object({
+      process_id: z.string(),
+      pool_count: z.number(),
+    }),
+  ),
+  held_batches: z.array(heldBatchItemSchema),
+});
+
+export type WorkerStateSchema = z.infer<typeof workerStateSchema>;

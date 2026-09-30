@@ -69,6 +69,12 @@ import {
   partListResultSchema,
   assemblyDetailFlatSchema,
   heldBatchItemSchema,
+  workerBriefSchema,
+  workTypeMaxHeldSchema,
+  poolBatchItemSchema,
+  workerPoolByProcessSchema,
+  workerPoolCountsSchema,
+  workerStateSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -659,6 +665,228 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       const { version: _, ...rest } = makeBaseHeld();
       void _;
       expect(() => heldBatchItemSchema.parse(rest)).toThrow();
+    });
+  });
+
+  describe('worker-pool 域 schema（2026-09-30 新增）', () => {
+    // 覆盖：
+    //   - S-WP1：workerBriefSchema / workTypeMaxHeldSchema / poolBatchItemSchema
+    //     / workerPoolByProcessSchema / workerPoolCountsSchema 解析后端真实形态；
+    //   - S-WP2：poolBatchItemSchema 缺 has_cnc_program → 抛 ZodError
+    //     （M-1 同源 regression guard —— 后端漏返 boolean 字段必须抛错）；
+    //   - S-WP3：workerPoolByProcessSchema 缺 items[] → 抛 ZodError；
+    //   - S-WS1：workerStateSchema 解析 held_batches 嵌套 + work_type_code nullable
+    //     字段边界；
+    //   - S-WS2：workerStateSchema 缺 held_batches → 抛 ZodError。
+
+    function makeBasePoolBatchItem(): Record<string, unknown> {
+      return {
+        batch_id: '3000000000001',
+        part_id: '4000000000001',
+        batch_no: 1,
+        quantity: 5,
+        serial_no: null,
+        name: '法兰盘',
+        drawing_no: 'DWG-A001',
+        system_delivery_date: '2026-09-30',
+        customer_name: '客户A',
+        parent_customer_name: null,
+        customer_path: null,
+        applicant_name: '张三',
+        location: 'PRODUCTION_SHELF',
+        shelf_id: '5000000000001',
+        shelf_code: 'A-01',
+        shelf_name: 'A 区货架 1',
+        is_urgent: true,
+        note: null,
+        current_process_step_id: '5000000000010',
+        // 2026-09-30 必填 boolean（沿 CLAUDE.md §M-4 strip 陷阱）
+        has_cnc_program: true,
+        version: 1,
+      };
+    }
+
+    it('S-WP1：poolBatchItemSchema 解析 backend-rust PoolBatchItem 21 字段不抛错', () => {
+      const item = poolBatchItemSchema.parse(makeBasePoolBatchItem());
+      expect(item.batch_id).toBe('3000000000001');
+      expect(item.has_cnc_program).toBe(true);
+      expect(item.current_process_step_id).toBe('5000000000010');
+      // 嵌套字段全部存在
+      expect(item.shelf_code).toBe('A-01');
+      expect(item.is_urgent).toBe(true);
+      expect(item.version).toBe(1);
+    });
+
+    it('S-WP1b：workerBriefSchema 解析 4 字段全声明不抛错', () => {
+      const brief = workerBriefSchema.parse({
+        worker_id: '1900000000001',
+        name: '张三',
+        work_type_id: '3000000000001',
+        work_type_code: 'CNC',
+      });
+      expect(brief.worker_id).toBe('1900000000001');
+      expect(brief.work_type_code).toBe('CNC');
+    });
+
+    it('S-WP1c：workerBriefSchema 缺 work_type_code → 抛 ZodError（regression guard）', () => {
+      // worker 4 字段全声明 —— 缺 work_type_code 必须抛错。
+      expect(() =>
+        workerBriefSchema.parse({
+          worker_id: '1900000000001',
+          name: '张三',
+          work_type_id: '3000000000001',
+          // work_type_code 缺
+        }),
+      ).toThrow();
+    });
+
+    it('S-WP1d：workTypeMaxHeldSchema 接受 max_held_batches = null（未设置场景）', () => {
+      // 后端 max_held_batches 是 Option<i32>；nullable 必填显式声明（zod 默认
+      // strip 漏列会让 null 在前端拿不到，且 parse 不报错）。
+      const wt = workTypeMaxHeldSchema.parse({
+        work_type_id: '3000000000001',
+        work_type_code: 'CNC',
+        work_type_name: 'CNC 加工',
+        max_held_batches: null,
+      });
+      expect(wt.max_held_batches).toBeNull();
+    });
+
+    it('S-WP1e：workerPoolCountsSchema 解析 counts[] + shelf_id + total', () => {
+      const counts = workerPoolCountsSchema.parse({
+        shelf_id: '5000000000001',
+        counts: [
+          { process_id: '2000000000001', process_code: 'CNC-01', process_name: '粗加工', count: 5 },
+          { process_id: '2000000000002', process_code: 'QC-01', process_name: '质检', count: 2 },
+        ],
+        total: 7,
+      });
+      expect(counts.counts).toHaveLength(2);
+      expect(counts.total).toBe(7);
+    });
+
+    it('S-WP2：poolBatchItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 同源 guard）', () => {
+      // 与 partSchema.has_cnc_program / heldBatchItemSchema.has_cnc_program 同源：
+      // 后端若漏返 boolean 字段，Zod parse 立刻抛错，WorkOrderCard 的「已编程」tag
+      // 渲染才不会静默退化。
+      const { has_cnc_program: _, ...rest } = makeBasePoolBatchItem();
+      void _;
+      expect(() => poolBatchItemSchema.parse(rest)).toThrow();
+    });
+
+    it('S-WP2b：has_cnc_program = false 是合法值（非 CNC 链 / 未编程）', () => {
+      const parsed = poolBatchItemSchema.parse({
+        ...makeBasePoolBatchItem(),
+        has_cnc_program: false,
+      });
+      expect(parsed.has_cnc_program).toBe(false);
+    });
+
+    it('S-WP3：workerPoolByProcessSchema 缺 items → 抛 ZodError（M-1 guard）', () => {
+      // items 数组是顶层 6 字段之一，必须显式声明。漏列会让后端真返回的 items
+      // 在前端拿不到（候选池退化为空 + UI 不报错）。
+      const { items: _omit, ...rest } = {
+        process_id: '2000000000001',
+        process_code: 'CNC-01',
+        process_name: '粗加工',
+        workers: [],
+        work_types: [],
+        total: 0,
+        items: [] as unknown[],
+      };
+      void _omit;
+      expect(() => workerPoolByProcessSchema.parse(rest)).toThrow();
+    });
+
+    it('S-WP3b：workerPoolByProcessSchema 完整 6 顶层字段 + 嵌套数组解析', () => {
+      const parsed = workerPoolByProcessSchema.parse({
+        process_id: '2000000000001',
+        process_code: 'CNC-01',
+        process_name: '粗加工',
+        workers: [
+          { worker_id: '1900000000001', name: '张三', work_type_id: '3000000000001', work_type_code: 'CNC' },
+        ],
+        work_types: [
+          { work_type_id: '3000000000001', work_type_code: 'CNC', work_type_name: 'CNC 加工', max_held_batches: 3 },
+        ],
+        total: 1,
+        items: [makeBasePoolBatchItem()],
+      });
+      expect(parsed.workers).toHaveLength(1);
+      expect(parsed.items).toHaveLength(1);
+      expect(parsed.total).toBe(1);
+    });
+
+    it('S-WS1：workerStateSchema 解析完整 8 字段（含 held_batches 嵌套）', () => {
+      // 沿 heldBatchItemSchema 守门（与 backend-rust HeldBatchItem 18 字段对齐）。
+      const parsed = workerStateSchema.parse({
+        worker_id: '1900000000001',
+        worker_name: '张三',
+        work_type_code: 'CNC',
+        max_held: 3,
+        current_held: 1,
+        capacity_remaining: 2,
+        pool_count_by_process: [{ process_id: '2000000000001', pool_count: 5 }],
+        held_batches: [
+          {
+            batch_id: '2100000000001',
+            part_id: '1800000000001',
+            batch_no: 1,
+            quantity: 5,
+            serial_no: null,
+            drawing_no: 'DWG-001',
+            name: '零件甲',
+            system_delivery_date: '2026-09-30',
+            planned_delivery_date: '2026-10-15',
+            is_urgent: true,
+            customer_name: '法拉电子',
+            parent_customer_name: null,
+            applicant_name: '张三',
+            location: 'WORKER',
+            shelf_code: 'A-01',
+            note: null,
+            has_cnc_program: true,
+            version: 3,
+          },
+        ],
+      });
+      expect(parsed.held_batches).toHaveLength(1);
+      expect(parsed.held_batches[0]?.has_cnc_program).toBe(true);
+      expect(parsed.pool_count_by_process[0]?.pool_count).toBe(5);
+    });
+
+    it('S-WS1b：work_type_code = null 是合法值（无工种场景）', () => {
+      // 后端 work_type_code 是 Option<String> —— 工人未指派工种时为 null。
+      // nullable 必填显式声明（沿 §M-4）。
+      const parsed = workerStateSchema.parse({
+        worker_id: '1900000000001',
+        worker_name: '新员工',
+        work_type_code: null,
+        max_held: 0,
+        current_held: 0,
+        capacity_remaining: 0,
+        pool_count_by_process: [],
+        held_batches: [],
+      });
+      expect(parsed.work_type_code).toBeNull();
+      expect(parsed.max_held).toBe(0);
+    });
+
+    it('S-WS2：workerStateSchema 缺 held_batches → 抛 ZodError（M-1 guard）', () => {
+      // held_batches 是顶层 8 字段之一，必须显式声明。漏列会让后端真返回的
+      // held_batches 在前端拿不到（WorkerColumn 的 held 列表退化为空 + UI 不报错）。
+      expect(() =>
+        workerStateSchema.parse({
+          worker_id: '1900000000001',
+          worker_name: '张三',
+          work_type_code: 'CNC',
+          max_held: 3,
+          current_held: 1,
+          capacity_remaining: 2,
+          pool_count_by_process: [],
+          // held_batches 缺
+        }),
+      ).toThrow();
     });
   });
 });

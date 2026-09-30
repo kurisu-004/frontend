@@ -330,6 +330,31 @@ export interface PendingBatchItemDto {
   process_chain_id: string | null;
 }
 
+/** 2026-09-30 新增：`GET /api/v2/prod/worker-pool/counts` 顶层出参（rust
+ *  WorkerPoolCountsOut）。前端 `useWorkerPoolCountsQuery` 共享 query 消费
+ *  （POSITIVE_INFINITY 缓存，eager 拉取）。tab 标题 (N) 徽标数据源。
+ *
+ * 字段对齐 backend-rust `src/modules/worker_pool/vo/worker_pool.rs`
+ * WorkerPoolCountsOut：
+ *   - shelf_id：调用方传参（null = 全货架）；
+ *   - counts[]：每个 INHOUSE 工序一条聚合记录；
+ *   - total：counts 求和（冗余字段，前端可选用）。 */
+export interface WorkerPoolCountsDto {
+  shelf_id: string | null;
+  counts: ProcessBatchCountDto[];
+  total: number;
+}
+
+/** 2026-09-30 新增：WorkerPoolCountsDto.counts 元素类型（rust ProcessBatchCount）。
+ *  与 backend-rust ProcessBatchCount VO 字段对齐 —— process_id / code / name +
+ *  count（integer，候选 batch 总数）。 */
+export interface ProcessBatchCountDto {
+  process_id: string;
+  process_code: string;
+  process_name: string;
+  count: number;
+}
+
 /** `POST /api/v2/admin/worker-pool/auto-allocate` 出参（rust AutoAllocateResult）。 */
 export interface AutoAllocateResultDto {
   process_id: string;

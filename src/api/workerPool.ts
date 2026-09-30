@@ -23,6 +23,7 @@ import type {
   AssignResultDto,
   AutoAllocateRequest,
   AutoAllocateResultDto,
+  WorkerPoolCountsDto,
   WorkerPoolDto,
   WorkerRefillRequest,
   WorkerRefillResultDto,
@@ -51,6 +52,22 @@ export async function getWorkerPoolByProcess(processId: string | number): Promis
   const resp = await api.get<WorkerPoolDto>(
     `/prod/worker-pool/${encodeURIComponent(String(processId))}`,
   );
+  return resp.data;
+}
+
+/** 2026-09-30 新增：GET /api/v2/prod/worker-pool/counts
+ *  Manager+Clerk+Inspector（service 守卫）。
+ *  返回全 INHOUSE 工序的候选 batch 计数（每个 process 一条），与现有
+ *  worker-pool/{process_id} 同筛选口径（IN_PROCESS + PRODUCTION_SHELF +
+ *  holder=shelf_id + step.process_id=process_id）。tab 标题 (N) 徽标数据源。
+ *  参数 shelf_id 可选；null = 不传（service 端取所有货架聚合）。
+ *  Eager 拉取（POSITIVE_INFINITY 缓存 + 写操作 invalidate）。 */
+export async function getWorkerPoolCounts(params?: {
+  shelf_id?: string | null;
+}): Promise<WorkerPoolCountsDto> {
+  const resp = await api.get<WorkerPoolCountsDto>('/prod/worker-pool/counts', {
+    params: cleanParams(params ?? {}),
+  });
   return resp.data;
 }
 
