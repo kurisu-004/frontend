@@ -21,7 +21,7 @@
 // - autoRefresh 布尔持久化：onMounted 时视图读 autoRefresh 后再创建 timer。
 
 import { reactive, ref, type Ref } from 'vue';
-import { listInspectionBatches, type PartItem } from '@/api/parts';
+import { listInspectionBatches, type InspectionBatchListItem } from '@/api/parts';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
 import type { PageQueryParams, PageResult } from '@/composables/usePagedListQuery';
 
@@ -33,7 +33,7 @@ export interface UseInspectionListReturn {
   /** 自动刷新开关（持久化）；timer 由视图自管 */
   autoRefresh: Ref<boolean>;
   /** 传给 <ListShell :fetcher="fetcher">；fetch 失败抛错，由 shell.safeFetcher 接住 */
-  fetcher: (params: PageQueryParams) => Promise<PageResult<PartItem>>;
+  fetcher: (params: PageQueryParams) => Promise<PageResult<InspectionBatchListItem>>;
   /** onMounted 调用一次：从 localStorage 恢复 search / autoRefresh */
   restoreFilter: () => void;
 }
@@ -43,7 +43,7 @@ export function useInspectionList(): UseInspectionListReturn {
   const plannedDateRange = ref<[string, string] | null>(null);
   const autoRefresh = ref(false);
 
-  async function fetcher(params: PageQueryParams): Promise<PageResult<PartItem>> {
+  async function fetcher(params: PageQueryParams): Promise<PageResult<InspectionBatchListItem>> {
     // fetch 抛错 → ListShell.safeFetcher 接住并写到内部 errorMsg，
     // 用户在 el-table 空态能看到原始错误信息（区分「队列空」/「后端挂了」）。
     const resp = await listInspectionBatches({

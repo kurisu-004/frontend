@@ -50,6 +50,16 @@
 //   - S19：heldBatchItemSchema 缺 has_cnc_program → 抛 ZodError（与 partSchema
 //     S15a 同源 regression guard：zod 默认 strip 模式漏列 boolean 字段会让后端
 //     真返回的 has_cnc_program 在前端拿不到且 parse 不报错）。
+//   - S20（2026-09-30 新增）：inspectionBatchListItemSchema 接受 backend-rust
+//     `InspectionBatchListItemOut` 完整 25 字段结构（含 l1_customer_name 与
+//     holder_name），不抛错。
+//   - S21：inspectionBatchListResultSchema 接受分页结构（items / total / limit /
+//     offset）。
+//   - S22：inspectionBatchListItemSchema 多出 `id` 字段 → 抛 ZodError（`.strict()`
+//     守门：regression guard — 后端若误把 id 字段加进 inspection 响应，schema
+//     立刻抛错而非默认 strip 静默丢）。
+//   - S23：inspectionBatchListItemSchema 缺 part_id → 抛 ZodError（M-1 同形态
+//     guard：缺核心字段静默 strip = 校验形同虚设）。
 //
 // 数据来源：
 //   - backend-rust/docs/api/customers.md:142-153（CustomerOut 8 字段）
@@ -84,6 +94,8 @@ import {
   dispatchResultSchema,
   autoDispatchRequestSchema,
   autoDispatchResultSchema,
+  inspectionBatchListItemSchema,
+  inspectionBatchListResultSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -1267,6 +1279,86 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
 
     it('S-DP10：autoDispatchResultSchema 缺 items → 抛 ZodError（M-1 guard）', () => {
       expect(() => autoDispatchResultSchema.parse({})).toThrow();
+    });
+  });
+
+  // 2026-09-30 新增：品检待办 inspection 行 / 列表 schema 守门（与
+  // assemblyDetailFlatSchema S15-S17 strict() guard 同形态）。
+  describe('inspectionBatchListItemSchema（2026-09-30 新增）', () => {
+    const validItem = {
+      // 批次字段段
+      batch_id: '3000000000001',
+      batch_no: 1,
+      quantity: 5,
+      status: 'INSPECTION',
+      location: 'INSPECTION_SHELF',
+      version: 2,
+      current_process_step_id: '7000000000001',
+      parent_batch_id: null,
+      // holder 解析段
+      current_holder_id: '5000000000001',
+      holder_name: '品检A-01',
+      next_process_id: null,
+      next_process_name: null,
+      // delivery_note 解析段
+      delivery_note_id: null,
+      delivery_note_no: null,
+      // 工单字段段（t_part）
+      part_id: '4000000000001',
+      serial_no: 'SN-2026-001',
+      drawing_no: 'DWG-A001',
+      name: '零件A',
+      order_no: 'PO-2026-001',
+      planned_delivery_date: '2026-10-01',
+      is_urgent: false,
+      part_version: 1,
+      created_at: '2026-09-30 10:00:00',
+      updated_at: '2026-09-30 11:00:00',
+      // 客户解析段
+      customer_id: '9000000000001',
+      customer_name: '客户A-子',
+      l1_customer_name: '客户A',
+    };
+
+    it('S20：解析 backend-rust InspectionBatchListItemOut 完整 25 字段不抛错', () => {
+      const parsed = inspectionBatchListItemSchema.parse(validItem);
+      expect(parsed.batch_id).toBe('3000000000001');
+      expect(parsed.part_id).toBe('4000000000001');
+      expect(parsed.holder_name).toBe('品检A-01');
+      expect(parsed.l1_customer_name).toBe('客户A');
+      expect(parsed.customer_name).toBe('客户A-子');
+      // 显式无 `id` 字段
+      expect((parsed as Record<string, unknown>).id).toBeUndefined();
+    });
+
+    it('S21：inspectionBatchListResultSchema 接受分页结构（items/total/limit/offset）', () => {
+      const parsed = inspectionBatchListResultSchema.parse({
+        items: [validItem],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      });
+      expect(parsed.items).toHaveLength(1);
+      expect(parsed.total).toBe(1);
+      expect(parsed.limit).toBe(20);
+      expect(parsed.offset).toBe(0);
+    });
+
+    it('S22：inspectionBatchListItemSchema 多出 id 字段 → 抛 ZodError（.strict() 守门）', () => {
+      // backend-rust InspectionBatchListItemOut 不带 id；前端旧实现误用 PartItem 类型
+      // 以为有 id 是 2026-09-30 `/parts/undefined` bug 的根因。.strict() 锁死
+      // 「后端若误把 id 加进响应立刻抛错」，防止回归。
+      expect(() =>
+        inspectionBatchListItemSchema.parse({ ...validItem, id: '4000000000001' }),
+      ).toThrow();
+    });
+
+    it('S23：inspectionBatchListItemSchema 缺 part_id → 抛 ZodError（M-1 guard）', () => {
+      // part_id 是详情跳转（`/parts/${part_id}`）与 onConfirm API 入参的锚字段，
+      // 缺它说明契约漂移，必须立刻炸（与 partSchema S12 缺 unit_price 同形态）。
+      const { part_id: _omit, ...rest } = validItem;
+      void _omit;
+      expect(() => inspectionBatchListItemSchema.parse(rest)).toThrow();
     });
   });
 });

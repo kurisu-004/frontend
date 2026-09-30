@@ -167,7 +167,17 @@
   </div>
 </template>
 
-<script setup lang="ts" generic="T extends { id: string | number }">
+<script setup lang="ts" generic="T extends object = object">
+// 2026-09-30 修复：原约束 `T extends { id: string | number }` 是历史遗留（el-table
+// row selection 默认用 id 字段），但 ListShell 内部不读 T.id 字段，只是把 T
+// 透传给 PagedTableExposed / PagedTable。收紧约束会阻挡无 id 字段的行类型
+// （如 backend-rust InspectionBatchListItemOut 行，无 id 只有 batch_id +
+// part_id）。放宽到 `T extends object = object` 后：
+//   - 现有 PartItem 消费者仍满足（PartItem extends object）；
+//   - 新 InspectionBatchListItem 消费者无需在 boundary cast。
+// PagedTable 自身的 generic "T" 无约束，TypeScript 沿推导。
+//   - ListShell 渲染层 el-table 不读 row.id，只走 cellRender / prop / 自定义列；
+//     cellRender 内部已 cast 为业务类型，类型安全由 cellRender 的 cast 收口。
 import { computed, onMounted, ref, shallowRef, type Ref } from 'vue';
 import { RefreshLeft } from '@element-plus/icons-vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';

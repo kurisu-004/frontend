@@ -7,6 +7,7 @@
 // 运行时不会产生 ESM 循环。
 
 import { api, cleanParams } from '@/api/http';
+import { inspectionBatchListResultSchema } from '@/composables/queries/schemas';
 import type { FileBinding } from '@/types/part_file';
 import type { PartCreatePayload, PartItem } from './crud';
 
@@ -245,9 +246,51 @@ export async function cancelPartBatch(partId: string, batchId: string): Promise<
   return resp.data;
 }
 
-/** 品检待办（批次级；行=批次） */
+/** 品检待办（批次级；行=批次）
+ *
+ * 2026-09-30 修复：原 `items: PartItem[]` 是误类型（PartItem 含 `id` 字段，
+ * 渲染层 `<RouterLink to="/parts/${r.id}">` 因此拼出 `/parts/undefined`）。
+ * 后端 `GET /api/v2/parts/inspection-batches` 实际返回
+ * `InspectionBatchListItemOut[]`（无 `id` 字段，详情跳转锚应改用 `part_id`），
+ * 详见 `backend-rust/docs/api/parts/inspection.md` 第 479 行起字段表。
+ * 字段严格对齐后端 VO。 */
+export interface InspectionBatchListItem {
+  // 批次字段段
+  batch_id: string;
+  batch_no: number;
+  quantity: number;
+  status: string;
+  location: string | null;
+  version: number;
+  current_process_step_id?: string | null;
+  parent_batch_id: string | null;
+  // holder 解析段
+  current_holder_id: string | null;
+  holder_name: string | null;
+  next_process_id: string | null;
+  next_process_name: string | null;
+  // delivery_note 解析段
+  delivery_note_id: string | null;
+  delivery_note_no: string | null;
+  // 工单字段段（t_part）
+  part_id: string;
+  serial_no: string | null;
+  drawing_no: string;
+  name: string;
+  order_no: string | null;
+  planned_delivery_date: string;
+  is_urgent: boolean;
+  part_version: number;
+  created_at: string;
+  updated_at: string;
+  // 客户解析段
+  customer_id: string;
+  customer_name: string | null;
+  l1_customer_name: string | null;
+}
+
 export interface InspectionBatchListResult {
-  items: PartItem[];
+  items: InspectionBatchListItem[];
   total: number;
   limit: number;
   offset: number;
@@ -264,10 +307,13 @@ export async function listInspectionBatches(
     offset?: number;
   } = {},
 ): Promise<InspectionBatchListResult> {
-  const resp = await api.get<InspectionBatchListResult>('/parts/inspection-batches', {
+  const resp = await api.get<unknown>('/parts/inspection-batches', {
     params: cleanParams(params),
   });
-  return resp.data;
+  // 2026-09-30 新增：Zod 守门（M-1 同形态）。item schema 用 .strict()，后端若误把
+  // `id` 字段加进响应（regression）或漏 part_id 等核心字段，立刻抛错而非默认
+  // strip 静默丢；与 schemas.spec.ts S22 / S23 guard 配套。
+  return inspectionBatchListResultSchema.parse(resp.data) as InspectionBatchListResult;
 }
 
 // ============ inspection to-XXX 体系批量（2026-08-28 后端路线 B 重构）==============

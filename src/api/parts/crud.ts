@@ -10,6 +10,7 @@
 // 顶置避免 inline import 的可读性问题；type-only 导入是擦除的，运行时无循环代价。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
+import { partListResultSchema } from '@/composables/queries/schemas';
 import type { OutsourceSendableListResult } from '@/types/outsource';
 import type {
   LocationTreeNode,
@@ -397,10 +398,15 @@ export async function releaseFromProgramming(
 export async function listPendingProgramming(
   params: Omit<ListPartsParams, 'statuses' | 'is_urgent'> & { has_cnc_program?: boolean } = {},
 ): Promise<PartListResult> {
-  const resp = await api.get<PartListResult>('/parts/pending-programming', {
+  const resp = await api.get<unknown>('/parts/pending-programming', {
     params: cleanParams(params),
   });
-  return resp.data;
+  // 2026-09-30 新增：Zod 守门（M-1 同形态）。partListResultSchema 解析后 z.infer 类型
+  // 是 `PartSchema[]`（= partSchema 字段集 ⊇ PartListItem 字段集），schema 形态与
+  // TS 接口形态对齐，cast 到 PartListResult 安全。partSchema 已显式声明
+  // has_cnc_program / unit_price / total_price / l1_customer_name 等必填字段，缺则
+  // 抛错（M-1 同形态 guard，避免缺字段静默 strip）。
+  return partListResultSchema.parse(resp.data) as PartListResult;
 }
 
 export async function pickUpPart(payload: PartPickUpPayload): Promise<PartItem> {

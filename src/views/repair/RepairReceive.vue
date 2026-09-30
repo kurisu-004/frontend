@@ -182,7 +182,15 @@ async function loadList(): Promise<void> {
       activeTab.value === 'delivered'
         ? await listRepairBatches(params)
         : await listRepairingBatches(params);
-    rows.value = result.items;
+    // 2026-09-30 提示：InspectionBatchListResult.items 类型由 PartItem[] 收紧为
+    // InspectionBatchListItem[]（list items 真实形态）。listRepairBatches /
+    // listRepairingBatches 仍返回 InspectionBatchListResult —— 端点 wire-format
+    // 是 BatchOut 而非 InspectionBatchListItemOut，类型契约待单独 plan 验证
+    // （见 src/api/parts/batch.ts:248-254 注释）。此处 cast 为 PartItem[] 是
+    // 「维持原 RepairReceive 渲染层行为不变」的最小改动；customer_path /
+    // current_holder_display 等 PartItem 专属字段在 repair 端点返回数据上是否
+    // 实际存在由后端契约决定，回归时再单独处理。
+    rows.value = result.items as unknown as PartItem[];
     total.value = result.total;
   } catch (e) {
     ElMessage.error((e as Error).message ?? '列表加载失败');

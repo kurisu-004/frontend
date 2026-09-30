@@ -984,3 +984,78 @@ export const workerStateSchema = z.object({
 });
 
 export type WorkerStateSchema = z.infer<typeof workerStateSchema>;
+
+// ============================================================
+// 2026-09-30 新增：品检待办行 + 列表 schema（守门 backend-rust
+// `InspectionBatchListItemOut` / `InspectionBatchListOut`）。
+//
+// 字段对齐 backend-rust docs/api/parts/inspection.md 第 479 行起的字段表：
+//   - 批次字段段（t_part_batch）：batch_id / batch_no / quantity / status /
+//     location / version / current_process_step_id / parent_batch_id
+//   - holder 解析段：current_holder_id / holder_name / next_process_id /
+//     next_process_name
+//   - delivery_note 解析段：delivery_note_id / delivery_note_no
+//   - 工单字段段（t_part）：part_id / serial_no / drawing_no / name /
+//     order_no / planned_delivery_date / is_urgent / part_version /
+//     created_at / updated_at
+//   - 客户解析段：customer_id / customer_name / l1_customer_name
+//
+// status 字段后端 Rust VO 是 String 类型（端点语义锁死 'INSPECTION'），沿
+// schemas 统一约定用 z.string()（与 partBatchSchema.status 同形态），不锁字面量。
+// part_version（= t_part.version）必填；version（= t_part_batch.version）是 caller
+// 调 API 时 OCC 锚点，两个值不同源 schema 必须显式区分。
+//
+// 2026-09-30 守门（M-1 同形态）：item schema 用 `.strict()` —— 后端若误把 `id`
+// 字段加进 inspection 响应（regression），Zod 立刻抛错而不是默认 strip 静默
+// 丢弃（与 assemblyDetailFlatSchema 同形态 guard）。listResult schema 仍走默认
+// strip（多 items 数组，每 item 各自守门）。
+// ============================================================
+
+export const inspectionBatchListItemSchema = z
+  .object({
+    // 批次字段段
+    batch_id: z.string(),
+    batch_no: z.number(),
+    quantity: z.number(),
+    status: z.string(),
+    location: z.string().nullable(),
+    version: z.number(),
+    current_process_step_id: z.string().nullable().optional(),
+    parent_batch_id: z.string().nullable(),
+    // holder 解析段
+    current_holder_id: z.string().nullable(),
+    holder_name: z.string().nullable(),
+    next_process_id: z.string().nullable(),
+    next_process_name: z.string().nullable(),
+    // delivery_note 解析段
+    delivery_note_id: z.string().nullable(),
+    delivery_note_no: z.string().nullable(),
+    // 工单字段段（t_part）
+    part_id: z.string(),
+    serial_no: z.string().nullable(),
+    drawing_no: z.string(),
+    name: z.string(),
+    order_no: z.string().nullable(),
+    planned_delivery_date: z.string(),
+    is_urgent: z.boolean(),
+    part_version: z.number(),
+    created_at: z.string(),
+    updated_at: z.string(),
+    // 客户解析段
+    customer_id: z.string(),
+    customer_name: z.string().nullable(),
+    l1_customer_name: z.string().nullable(),
+  })
+  .strict();
+
+export type InspectionBatchListItemSchema = z.infer<typeof inspectionBatchListItemSchema>;
+
+/** 品检待办列表分页结果（结构对齐 backend-rust InspectionBatchListOut）。 */
+export const inspectionBatchListResultSchema = z.object({
+  items: z.array(inspectionBatchListItemSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type InspectionBatchListResultSchema = z.infer<typeof inspectionBatchListResultSchema>;

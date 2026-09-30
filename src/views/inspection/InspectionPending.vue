@@ -78,7 +78,8 @@
     >
       <div v-if="passTarget" class="fail-summary">
         <div><strong>流水号：</strong>{{ passTarget.serial_no || '—' }}</div>
-        <div><strong>批次：</strong>{{ passTarget.batch_label || '—' }}</div>
+        <!-- 2026-09-30 修复：InspectionBatchListItem 用 batch_no 而非 batch_label（VO 不带 batch_label 字段） -->
+        <div><strong>批次：</strong>{{ passTarget.batch_no != null ? passTarget.batch_no : '—' }}</div>
         <div><strong>名称：</strong>{{ passTarget.name }}</div>
       </div>
       <el-form label-width="96px" style="margin-top: 12px">
@@ -125,7 +126,8 @@
     >
       <div v-if="failTarget" class="fail-summary">
         <div><strong>流水号：</strong>{{ failTarget.serial_no || '—' }}</div>
-        <div><strong>批次：</strong>{{ failTarget.batch_label || '—' }}</div>
+        <!-- 2026-09-30 修复：batch_label → batch_no -->
+        <div><strong>批次：</strong>{{ failTarget.batch_no != null ? failTarget.batch_no : '—' }}</div>
         <div><strong>图号：</strong>{{ failTarget.drawing_no }}</div>
         <div><strong>名称：</strong>{{ failTarget.name }}</div>
       </div>
@@ -244,7 +246,8 @@
     >
       <div v-if="scanChooserRow" class="fail-summary">
         <div><strong>流水号：</strong>{{ scanChooserRow.serial_no || '—' }}</div>
-        <div><strong>批次：</strong>{{ scanChooserRow.batch_label || '—' }}</div>
+        <!-- 2026-09-30 修复：batch_label → batch_no -->
+        <div><strong>批次：</strong>{{ scanChooserRow.batch_no != null ? scanChooserRow.batch_no : '—' }}</div>
         <div><strong>图号：</strong>{{ scanChooserRow.drawing_no }}</div>
         <div><strong>名称：</strong>{{ scanChooserRow.name }}</div>
         <div><strong>数量：</strong>{{ scanChooserRow.quantity }}</div>
@@ -268,7 +271,8 @@
     >
       <div v-if="scanInspectRow" class="fail-summary">
         <div><strong>流水号：</strong>{{ scanInspectRow.serial_no || '—' }}</div>
-        <div><strong>批次：</strong>{{ scanInspectRow.batch_label || '—' }}</div>
+        <!-- 2026-09-30 修复：batch_label → batch_no -->
+        <div><strong>批次：</strong>{{ scanInspectRow.batch_no != null ? scanInspectRow.batch_no : '—' }}</div>
         <div><strong>图号：</strong>{{ scanInspectRow.drawing_no }}</div>
         <div><strong>名称：</strong>{{ scanInspectRow.name }}</div>
         <div>
@@ -420,11 +424,19 @@
       </template>
     </el-dialog>
 
-    <!-- 2026-08-04：扫码命中同一 serial 多批次时复用报工台 BatchPickerDialog -->
+    <!-- 2026-08-04：扫码命中同一 serial 多批次时复用报工台 BatchPickerDialog
+         2026-09-30：batchPickerRows 类型由 PartItem[] 改为 InspectionBatchListItem[]
+         （list items 入口），BatchPickerDialog 当前仍是 hardcoded PartItem[] —— 二者
+         字段交集足够 dialog 内部访问（batch_id / serial_no / drawing_no / batch_no
+         / name / quantity / is_urgent / next_process_name / location）。holderText
+         的 PartItem 专属字段（current_holder_kind / shelf_code / worker_name /
+         outsource_company_name）在 inspection 场景下回退到 default case 显示
+         location 或「未知位置」（dialog 仍能弹出选批次，业务可继续推进）。cast
+         在 boundary 是局部最小改动，不重构 BatchPickerDialog。 -->
     <BatchPickerDialog
       v-model="showBatchPicker"
       :code="batchPickerCode"
-      :rows="batchPickerRows"
+      :rows="(batchPickerRows as unknown as PartItem[])"
       @pick="onBatchPicked"
     />
   </div>
@@ -446,6 +458,7 @@ import {
   getPartBySerial,
   passInspection,
   scanInspect,
+  type InspectionBatchListItem,
   type PartItem,
 } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
@@ -457,7 +470,13 @@ import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import { useInspectionList } from './composables/useInspectionList';
 
 // ============ 状态 ============
-interface RowState extends PartItem {
+// 2026-09-30 修复：原 RowState extends PartItem 是误类型 —— listInspectionBatches
+// 返回的是 InspectionBatchListItem（无 `id` 字段，有 `part_id` / `batch_id`），
+// 而 PartItem 含 `id`（= t_part.id），导致 renderName 拼出 `/parts/undefined`、
+// 详情按钮 router.push 静默失败、3 处 onConfirm 把 undefined 当 part_id 传给
+// 后端触发 4xx。RowState 现继承 InspectionBatchListItem；PartItem 仅在 scan
+// 路径（getPartBySerial 返回）作为兼容形态引用。
+interface RowState extends InspectionBatchListItem {
   _passing?: boolean;
 }
 
@@ -468,38 +487,55 @@ interface RowState extends PartItem {
 const router = useRouter();
 
 // ---------- 自定义单元格渲染 ----------
-// 参数 row 在 ColumnDef 接口里是 unknown；cast 到 PartItem / RowState 以访问业务字段。
-// 保留旧实现的全部行为：muted 灰底占位、router-link、conditional render、按钮组。
+// 参数 row 在 ColumnDef 接口里是 unknown；cast 到 InspectionBatchListItem / RowState
+// 以访问业务字段。保留旧实现的全部行为：muted 灰底占位、router-link、conditional
+// render、按钮组。
+// 2026-09-30 修复：列表行是 InspectionBatchListItem（无 `id` 字段，有 `part_id`），
+// 详情跳转锚改用 `r.part_id`；客户列走 `l1_customer_name + customer_name` 派生；
+// 货架列改用 `holder_name`；批次列改用 `batch_no`；系统交期列在 inspection 数据
+// 上无对应字段，保留列定义但函数永远输出 '—'（列可见性持久化不受影响）。
 function renderSerialNo({ row }: { row: unknown }): VNode {
-  const r = row as PartItem;
+  const r = row as InspectionBatchListItem;
   return h('span', { class: { muted: !r.serial_no } }, r.serial_no || '—');
 }
 
 function renderName({ row }: { row: unknown }): VNode {
-  const r = row as PartItem;
-  return h(RouterLink, { to: `/parts/${r.id}`, class: 'name-link' }, () => r.name);
+  const r = row as InspectionBatchListItem;
+  return h(RouterLink, { to: `/parts/${r.part_id}`, class: 'name-link' }, () => r.name);
 }
 
 function renderBatchLabel({ row }: { row: unknown }): VNode {
-  const r = row as PartItem;
-  return h('span', { class: 'batch-label' }, r.batch_label || '—');
+  const r = row as InspectionBatchListItem;
+  return h('span', { class: 'batch-label' }, r.batch_no != null ? String(r.batch_no) : '—');
 }
 
 function renderSystemDeliveryDate({ row }: { row: unknown }): VNode {
-  const r = row as PartItem;
-  return h('span', { class: { muted: !r.system_delivery_date } }, r.system_delivery_date || '—');
+  // 2026-09-30 修复：InspectionBatchListItem 无 system_delivery_date 字段
+  // （后端 InspectionBatchListItemOut VO 不含该字段），保留列定义以维持
+  // 列可见性持久化（columnKey='system_delivery_date'），函数永远输出 '—'。
+  void row;
+  return h('span', { class: 'muted' }, '—');
 }
 
 function renderCustomer({ row }: { row: unknown }): VNode {
-  const r = row as PartItem;
-  if (r.customer_path) return h('span', r.customer_path);
-  if (r.customer_name) return h('span', { class: 'muted' }, r.customer_name);
+  // 2026-09-30 修复：InspectionBatchListItem 用 l1_customer_name + customer_name
+  // 派生「父 / 子」展示，与 PendingProgrammingList.renderCustomer 风格统一；
+  // 加 null 兜底：l1 && name → "${l1} / ${name}"；仅 name → name；仅 l1 → l1；都缺 → '—'。
+  const r = row as InspectionBatchListItem;
+  const l1 = r.l1_customer_name ?? null;
+  const name = r.customer_name ?? null;
+  if (l1 && name) return h('span', `${l1} / ${name}`);
+  if (name) return h('span', name);
+  if (l1) return h('span', l1);
   return h('span', { class: 'muted' }, '—');
 }
 
 function renderShelfCode({ row }: { row: unknown }): VNode {
-  const r = row as PartItem;
-  if (r.shelf_code) return h('span', `品检 ${r.shelf_code}`);
+  // 2026-09-30 修复：InspectionBatchListItem 用 holder_name 而非 shelf_code
+  // （品检场景下 holder 是品检架，holder_name 是后端 join 后的展示名）。
+  // 列标题「品检货架」语义保留前缀 '品检 '。
+  const r = row as InspectionBatchListItem;
+  if (r.holder_name) return h('span', `品检 ${r.holder_name}`);
   return h('span', { class: 'muted' }, '—');
 }
 
@@ -533,7 +569,7 @@ function renderActions({ row }: { row: unknown }): VNode {
         link: true,
         type: 'primary',
         size: 'small',
-        onClick: () => router.push(`/parts/${r.id}`),
+        onClick: () => router.push(`/parts/${r.part_id}`),
       },
       () => '详情',
     ),
@@ -643,7 +679,7 @@ const { search, plannedDateRange, autoRefresh, fetcher, restoreFilter } = useIns
 // ListShell 的 ref；扫码匹配遍历当前页 items 用 listRef.value.items.value。
 const listRef = ref();
 
-function rowClassName({ row }: { row: PartItem; rowIndex: number }): string {
+function rowClassName({ row }: { row: InspectionBatchListItem; rowIndex: number }): string {
   return row.is_urgent ? 'row-urgent' : '';
 }
 
@@ -692,7 +728,7 @@ const scanChooserOpen = ref(false);
 const scanChooserRow = ref<RowState | null>(null);
 const showBatchPicker = ref(false);
 const batchPickerCode = ref('');
-const batchPickerRows = ref<PartItem[]>([]);
+const batchPickerRows = ref<InspectionBatchListItem[]>([]);
 
 async function onInspectionScan(rawCode: string): Promise<void> {
   const code = rawCode.trim();
@@ -707,7 +743,13 @@ async function onInspectionScan(rawCode: string): Promise<void> {
     return;
   }
   // 快速路径：在当前已加载列表里按 serial_no || drawing_no 匹配（不限状态，按命中的状态分流）
-  const matches = findAllByCode((listRef.value?.items.value ?? []) as unknown as PartItem[], code);
+  // 2026-09-30：列表行类型由 PartItem 改为 InspectionBatchListItem（list items 入口）；
+  // findAllByCode 当前签名仍是 PartItem[]，两者字段交集（serial_no / drawing_no
+  // 等）足够匹配，cast 为 PartItem[] 在 boundary 是安全的。
+  const matches = findAllByCode(
+    (listRef.value?.items.value ?? []) as unknown as PartItem[],
+    code,
+  ) as unknown as InspectionBatchListItem[];
   if (matches.length === 0) {
     // 0 命中 — PENDING / PROGRAMMING / IN_PROCESS+ON_SHELF 永远不会出现在 inspection 一览；
     // 调 getPartBySerial 按 serial_no 查任意状态零件，再按状态路由。
@@ -723,7 +765,9 @@ async function onInspectionScan(rawCode: string): Promise<void> {
   if (matches.length > 1) {
     // 多批次命中 — 复用报工台 BatchPickerDialog
     batchPickerCode.value = code;
-    batchPickerRows.value = matches;
+    // matches 来自 findAllByCode 返回值（其签名是 PartItem[]），此处 cast 为
+    // InspectionBatchListItem[] 以匹配 batchPickerRows 类型（list items 入口）。
+    batchPickerRows.value = matches as unknown as InspectionBatchListItem[];
     showBatchPicker.value = true;
     return;
   }
@@ -735,7 +779,12 @@ async function onInspectionScan(rawCode: string): Promise<void> {
 // - INSPECTION → 原有二选一弹窗（点按钮复用原 pass/fail dialog）
 // - PENDING / PROGRAMMING / IN_PROCESS+PRODUCTION_SHELF → 扫码快捷品检（新弹窗）
 // - 其他（IN_PROCESS+WORKER / READY_TO_SHIP / DELIVERED / REPAIRING / OUTSOURCE）→ 降级提示
-function routeScannedPart(part: PartItem): void {
+// 2026-09-30：参数类型放宽为 `PartItem | InspectionBatchListItem` ——
+//   - 列表命中（matches[i]）是 InspectionBatchListItem；
+//   - getPartBySerial fallback 返回 PartItem；
+//   - BatchPickerDialog @pick 回调（onBatchPicked）也是 PartItem。
+// 两者字段交集（status / serial_no / drawing_no / batch_id 等）足够本函数访问。
+function routeScannedPart(part: PartItem | InspectionBatchListItem): void {
   const row = part as unknown as RowState;
   if (part.status === 'INSPECTION') {
     scanChooserRow.value = row;
@@ -765,7 +814,7 @@ function onScanChooserFail(): void {
   if (row) void openFailDialog(row); // 复用现有 openFailDialog
 }
 
-function onBatchPicked(p: PartItem): void {
+function onBatchPicked(p: PartItem | InspectionBatchListItem): void {
   showBatchPicker.value = false;
   routeScannedPart(p);
 }
@@ -797,7 +846,10 @@ async function onPassConfirm(): Promise<void> {
   if (!row || !passQty.value) return;
   row._passing = true;
   try {
-    await passInspection(row.id, {
+    // 2026-09-30 修复：row.id → row.part_id。InspectionBatchListItem 无 id 字段
+    // （与 t_part 不同的雪花 ID 体系），原实现把 undefined 当 part_id 传给后端
+    // 触发 4xx。这是本次 `/parts/undefined` Vue Router 警告的同源 bug。
+    await passInspection(row.part_id, {
       batch_id: row.batch_id ?? null,
       quantity: passQty.value,
     });
@@ -959,7 +1011,8 @@ async function onScanInspectConfirm(): Promise<void> {
   }
   scanInspectSubmitting.value = true;
   try {
-    await scanInspect(row.id, {
+    // 2026-09-30 修复：row.id → row.part_id（InspectionBatchListItem 无 id）。
+    await scanInspect(row.part_id, {
       target_inspection_shelf_id: scanInspectShelfId.value,
       decision: scanInspectDecision.value,
       shelf_id: scanInspectShelfIdFail.value || undefined,
@@ -1022,7 +1075,8 @@ async function onFailConfirm(): Promise<void> {
   failSubmitting.value = true;
   try {
     // 2026-08-29：回退到 v1 fail-inspection（v2 to-process 不在 Rust 上线范围）。
-    const out = await failInspection(row.id, {
+    // 2026-09-30 修复：row.id → row.part_id（InspectionBatchListItem 无 id）。
+    const out = await failInspection(row.part_id, {
       shelf_id: failShelfId.value,
       next_process_id: failProcessId.value,
       note: failNote.value.trim() || null,
