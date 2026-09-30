@@ -1,6 +1,11 @@
 <!--
   FactoryRealtimeStrip.vue
   2026-09-29 新增：dashboard 底部「工厂实时态」chip strip。
+  2026-09-30 Phase 2 followup #2：worker groups 按 PAGE_SIZE=4 一组切片成 pages，
+  groups.length > 4 时套 <el-carousel>（8s 翻页 + hover 暂停 + 箭头手动切页）；
+  groups.length ≤ 4 时退化为 flex-wrap 排（占满 20% 高度，无需轮播）。
+  el-carousel CSS 由 main.ts 手动 import theme-chalk（unplugin resolver 只扫
+  <template>，carousel-item CSS 由 carousel.css 携带）。
 
   数据来源：snapshot.in_process（dashboard 大屏快照的 in_process 切片，原
   DashboardView.vue:139-151 已有 workerGroups computed 派生逻辑，本组件下沉到
@@ -23,28 +28,60 @@
     </div>
     <div class="strip-body">
       <div v-if="groups.length === 0" class="strip-empty">暂无正在加工的零件</div>
-      <template v-else>
+      <el-carousel
+        v-else-if="groups.length > PAGE_SIZE"
+        class="strip-carousel"
+        height="100%"
+        :interval="8000"
+        arrow="always"
+        :autoplay="true"
+        :pause-on-hover="true"
+        indicator-position="none"
+      >
+        <el-carousel-item v-for="(page, idx) in pagedGroups" :key="idx">
+          <div class="strip-page">
+            <div v-for="g in page" :key="g.key" class="worker-group">
+              <span class="worker-name">{{ g.worker_name ?? '—' }}</span>
+              <div class="worker-chips">
+                <span
+                  v-for="it in g.items"
+                  :key="it.id"
+                  :class="['worker-chip', { urgent: it.is_urgent, clickable: canOpenDetail }]"
+                  :title="canOpenDetail ? '查看详情' : ''"
+                  @click="canOpenDetail && emit('itemClick', it.id)"
+                >
+                  {{ it.serial_no ?? '—' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </el-carousel-item>
+      </el-carousel>
+      <!-- 退化：worker group ≤ 4 个时不轮播，直接 flex-wrap 排 -->
+      <div v-else class="strip-wrap">
         <div v-for="g in groups" :key="g.key" class="worker-group">
-          <div class="worker-name">{{ g.worker_name || '未记录' }}</div>
+          <span class="worker-name">{{ g.worker_name ?? '—' }}</span>
           <div class="worker-chips">
             <span
-              v-for="item in g.items"
-              :key="item.id"
-              :class="['worker-chip', { urgent: item.is_urgent, clickable: canOpenDetail }]"
+              v-for="it in g.items"
+              :key="it.id"
+              :class="['worker-chip', { urgent: it.is_urgent, clickable: canOpenDetail }]"
               :title="canOpenDetail ? '查看详情' : ''"
-              @click="canOpenDetail && emit('itemClick', item.id)"
+              @click="canOpenDetail && emit('itemClick', it.id)"
             >
-              {{ item.serial_no ?? '—' }}
+              {{ it.serial_no ?? '—' }}
             </span>
           </div>
         </div>
-      </template>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-// 2026-09-29 新增：dashboard「工厂实时态」chip strip 展示壳。
+// 2026-09-29 新增 + 2026-09-30 Phase 2 followup #2：dashboard「工厂实时态」chip strip
+// 展示壳。worker groups 按 PAGE_SIZE=4 一组切片成 pages，>4 套 <el-carousel>，
+// ≤4 退化为 flex-wrap。
 //
 // 沿旧 DashboardView.vue:139-151 的 workerGroups computed 派生逻辑（按
 // current_holder_id / worker_name 分组），下沉到组件内部 computed。
@@ -85,6 +122,17 @@ const groups = computed<WorkerGroup[]>(() => {
   }
   return Array.from(map.values());
 });
+
+/** 2026-09-30 Phase 2 followup #2：worker groups 按 PAGE_SIZE=4 一组切片成 pages；
+ *  groups.length ≤ 4 时退化为直接 flex-wrap 排，不进 carousel。 */
+const PAGE_SIZE = 4;
+const pagedGroups = computed<WorkerGroup[][]>(() => {
+  const out: WorkerGroup[][] = [];
+  for (let i = 0; i < groups.value.length; i += PAGE_SIZE) {
+    out.push(groups.value.slice(i, i + PAGE_SIZE));
+  }
+  return out;
+});
 </script>
 
 <style lang="scss" scoped>
@@ -92,6 +140,9 @@ const groups = computed<WorkerGroup[]>(() => {
   background: #fff;
   border-radius: 6px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  // 2026-09-30 Phase 2 followup #2：display:flex + flex-direction:column 让 strip-head /
+  // strip-body 高度可被外层 flex chain 切割；min-height: 0 阻止 flex item 默认
+  // min-content 撑破父容器；overflow: hidden 兜底 carousel 内容溢出。
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -121,13 +172,32 @@ const groups = computed<WorkerGroup[]>(() => {
   padding: 1px 8px;
   border-radius: 10px;
 }
+// 2026-09-30 Phase 2 followup #2：strip-body 取消自身 flex-wrap，改为 carousel / wrap
+// 内层布局；padding: 0 让 carousel 自行控制内容 padding（carousel-item 默认带 2px）。
 .strip-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+.strip-carousel {
+  width: 100%;
+  height: 100%;
+}
+.strip-page {
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
   gap: 8px;
   padding: 10px 14px;
-  min-height: 0;
+  box-sizing: border-box;
+  height: 100%;
+}
+.strip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
 }
 .strip-empty {
   width: 100%;

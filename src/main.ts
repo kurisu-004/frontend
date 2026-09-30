@@ -50,6 +50,14 @@ import 'element-plus/theme-chalk/el-overlay.css';
 // 引入 theme-chalk CSS（与 ElMessage 等命令式 API 同源问题）。
 import 'element-plus/theme-chalk/el-tabs.css';
 import 'element-plus/theme-chalk/el-timeline.css';
+// 2026-09-30 Phase 2 followup #2：FactoryRealtimeStrip 引入 <el-carousel> 承载
+// worker groups >4 时的轮播；unplugin-vue-components resolver 只扫 <template>，
+// theme-chalk CSS 必须手动 import（与上方 ElMessage / ElTabs 同源问题）。EP v2.14.x
+// 的 el-carousel 与 el-carousel-item 样式分文件（unplugin ElementPlusResolver 不自动
+// 按需），必须双 import；漏掉 el-carousel-item.css 会让 carousel-item 节点以 block
+// 默认布局垂直堆叠、不绝对定位，autoplay 翻页不可见（仅首屏露出）。
+import 'element-plus/theme-chalk/el-carousel.css';
+import 'element-plus/theme-chalk/el-carousel-item.css';
 
 // 2026-08-21：Element Plus 全量注册（app.use + 全局图标循环）已移除，改为
 // unplugin-auto-import / unplugin-vue-components 按需自动解析（见 vite.config.ts），
