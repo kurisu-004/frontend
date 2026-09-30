@@ -7,6 +7,10 @@
 //   - U2：modelValue=false → useDashboardUpcomingList enabled=false，listUnionItems 不被调
 //   - U3：rows 非空 → el-table 显示 N 行
 //   - U4：rows 为空 + pending=false → 「该日该层无工单」empty text
+//   - U5：v-model 双向同步 —— update:modelValue 事件正确发出
+// 2026-09-30（Phase 7）追加：vue-echarts 8.3 适配后回归保护：
+//   - U6：el-drawer direction=btt + size=60%（Phase 5 改 btt 防回归）
+//   - U7：el-table 行点击 → emit('rowClick', part)（Phase 5 新增行点击事件防回归）
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
@@ -146,25 +150,49 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
         // 注册全局 stub：vi.mock('element-plus') 替换的 module export 不能被
         // Vue 自动注册到组件表里；这里手动用 kebab-case 注册保证 SFC 模板里
         // 的 <el-tag> / <el-table> 等可以解析。
+        // 2026-09-30（Phase 7）调整：el-drawer / el-table 加 name + props/emits，
+        // 让 wrapper.findComponent({ name: 'ElDrawer' / 'ElTable' }) 能命中
+        // （U6 / U7 依赖此能力）。
         components: {
-          'el-drawer': { template: '<div><slot /></div>' },
-          'el-empty': { template: '<div class="mock-empty"><slot /></div>' },
-          'el-tag': { props: ['type', 'size', 'effect'], template: '<span><slot /></span>' },
+          'el-drawer': {
+            name: 'ElDrawer',
+            props: ['modelValue', 'direction', 'size', 'withHeader', 'appendToBody', 'destroyOnClose'],
+            emits: ['update:modelValue'],
+            template: '<div class="mock-drawer"><slot /></div>',
+          },
+          'el-empty': {
+            name: 'ElEmpty',
+            props: ['imageSize', 'description'],
+            template: '<div class="mock-empty"><slot /></div>',
+          },
+          'el-tag': {
+            name: 'ElTag',
+            props: ['type', 'size', 'effect'],
+            template: '<span class="mock-tag"><slot /></span>',
+          },
           'el-button': {
+            name: 'ElButton',
             props: ['text', 'size'],
-            template: '<button @click="$emit(\'click\')"><slot /></button>',
+            emits: ['click'],
+            template: '<button class="mock-button" @click="$emit(\'click\')"><slot /></button>',
           },
           'el-table': {
-            props: ['data'],
+            name: 'ElTable',
+            props: ['data', 'stripe', 'emptyText'],
+            emits: ['row-click', 'selection-change'],
             template:
               '<div class="mock-table"><div v-for="r in (data || [])" :key="r.id" class="mock-row">{{ r.id }}</div></div>',
           },
           'el-table-column': {
+            name: 'ElTableColumn',
             props: ['prop', 'label', 'width', 'minWidth', 'align', 'type'],
             template: '<div class="mock-column"><slot :row="{}" /></div>',
           },
-          'el-icon': { template: '<i><slot /></i>' },
-          'el-tooltip': { template: '<span><slot /></span>' },
+          'el-icon': { name: 'ElIcon', template: '<i><slot /></i>' },
+          'el-tooltip': {
+            name: 'ElTooltip',
+            template: '<span><slot /></span>',
+          },
         },
       },
     };
@@ -251,6 +279,51 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     const events = wrapper.emitted('update:modelValue');
     expect(events).toBeTruthy();
     expect(events?.[0]).toEqual([false]);
+    wrapper.unmount();
+  });
+
+  // 2026-09-30（Phase 7）新增：Phase 5 把 el-drawer 方向从 rtl 改为 btt + size 480→60%。
+  it('U6：el-drawer direction=btt + size=60%（Phase 5 改动防回归）', async () => {
+    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+
+    const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
+
+    // vi.mock('element-plus') 的 ElDrawer stub 与 makeMountOpts 内全局注册的
+    // el-drawer 行为对齐；这里取全局注册那份（先注册优先）做 props 断言。
+    const drawer = wrapper.findComponent({ name: 'ElDrawer' });
+    expect(drawer.exists()).toBe(true);
+    expect(drawer.props('direction')).toBe('btt');
+    expect(drawer.props('size')).toBe('60%');
+
+    wrapper.unmount();
+  });
+
+  // 2026-09-30（Phase 7）新增：Phase 5 新增行点击 → emit('rowClick', part)。
+  // 通过 stub ElTable 的 vm.$emit('row-click', part) 直接驱动（沿 vue-echarts 8.3 适配思路：
+  // happy-dom 下 .el-table__row click 事件冒泡链路脆弱，直接 emit 最稳）。
+  it('U7：el-table 行点击 → emit rowClick(part)', async () => {
+    const part = makePart({ id: '180000000000001' });
+    listUnionItemsMock.mockResolvedValue({
+      items: [part],
+      total: 1,
+      limit: 500,
+      offset: 0,
+    });
+
+    const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+
+    const elTable = wrapper.findComponent({ name: 'ElTable' });
+    expect(elTable.exists()).toBe(true);
+    // el-table @row-click emit 名 = 'row-click'（kebab-case，vue 事件命名约定）
+    elTable.vm.$emit('row-click', part);
+    await nextTick();
+
+    const events = wrapper.emitted('rowClick');
+    expect(events).toBeTruthy();
+    expect(events?.[0]?.[0]).toMatchObject({ id: '180000000000001' });
+
     wrapper.unmount();
   });
 });

@@ -1,22 +1,65 @@
 // @vitest-environment happy-dom
 // src/views/dashboard/components/__tests__/UpcomingDeliveryChart.spec.ts
 //
-// 2026-09-30 新增：UpcomingDeliveryChart 3 series stack + click emit 回归保护。
+// 2026-09-30 重写：UpcomingDeliveryChart 已迁 vue-echarts 8.3（Phase 4 改造），
+// 原 mock 策略 vi.mock('echarts/core') + lastChart! 探针断言全部失效——
+// vue-echarts 内部走自己的 useChart lifecycle，不暴露 init / setOption / on
+// 给外部探针。本 spec 改为在 mount options 里 stub `v-chart` 组件，断言改读
+// `wrapper.findComponent({ name: 'VChart' }).props('option').*` —— 完全跳过
+// 真实 echarts 渲染（happy-dom 无 canvas），覆盖 Phase 4-6 引入的 vue-echarts 架构变迁：
+//   - <v-chart> 由 main.ts:82 全局注册（test 环境未加载 main.ts → 走 mount stubs 兜底）
+//   - vue-echarts 内部自管 init / ResizeObserver / dispose lifecycle
+//   - chartOption 是 computed，props.option 改 vue-echarts 自管 setOption（不暴露给我们）
+//   - click @click 透传 ECElementEvent payload，seriesName 即 series.name（中文 label）
 //
-// ECharts canvas renderer 在 happy-dom 环境下渲染受 canvas API 缺失影响，
-// 这里采取 mock 策略：mock echarts/core 的 init 返回 fake chart 实例，断言：
-//   - 3 series 全部 stack: 'delivery'
-//   - 顶层 series 圆角 [4,4,0,0]、其它 0
-//   - 颜色按 LAYERS.color（#1e4d8b / #2c6cb8 / #4a8fd6）
-//   - legend data 顺序与 LAYERS.label 一致（品检前 / 待品检/待送货 / 已送货）
-//   - 驱动 chart 内部 click handler → barLayerClick emit payload 正确
+// stub 覆盖策略说明（全局 vs 局部）：
+//   全局：vi.mock('vue-echarts') + 期望 main.ts 加载 → 在测试环境 main.ts 不被加载，
+//   SFC 模板里 <v-chart> 无解析来源，render 失败。
+//   局部（采用）：mount options `global.stubs: { 'v-chart': ... }` 不依赖 main.ts 加载，
+//   直接给模板里 <v-chart> 一个 Vue 组件替身；stub 的 props 列表与真实 VChart 一致，
+//   测试侧 `wrapper.findComponent({ name: 'VChart' }).props('option')` 才能正常返回
+//   SFC 传入的 option 对象。
+//   click 驱动走 `wrapper.findComponent({ name: 'VChart' }).vm.$emit('click', payload)`，
+//   与真 vue-echarts 行为对齐（vue-echarts 内部 chart.on('click', ...) → emit('click', ECElementEvent)）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import type { UpcomingDeliveryEntryData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
 
-/** 2026-09-30 新增：组件对齐 today → today+6；测试用 today = 当前 Date，与组件一致。 */
+import UpcomingDeliveryChart from '../UpcomingDeliveryChart.vue';
+
+/** 2026-09-30 新增：v-chart stub 组件（与真实 vue-echarts 8.3 的 prop/emits 列表对齐）。
+ *  留空 template —— happy-dom 下不必渲染任何东西，仅作为 prop holder 即可。
+ *  真实 vue-echarts 在内部跑 init / setOption / ResizeObserver，本 spec 不关心。 */
+const VChartStub = {
+  name: 'VChart',
+  props: [
+    'option',
+    'theme',
+    'initOptions',
+    'updateOptions',
+    'autoresize',
+    'loading',
+    'loadingType',
+    'loadingOptions',
+    'group',
+    'manualUpdate',
+  ],
+  emits: [
+    'click',
+    'mouseover',
+    'mouseout',
+    'legendselectchanged',
+    'legendselected',
+    'legendunselected',
+    'updated',
+    'finished',
+  ],
+  template: '<div class="mock-vchart" />',
+};
+
+/** 2026-09-30 沿用：组件对齐 today → today+13；测试用 today = 当前 Date。 */
 function todayIso(): string {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -25,64 +68,6 @@ function todayIso(): string {
   const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
-
-interface MockChart {
-  setOption: ReturnType<typeof vi.fn>;
-  on: ReturnType<typeof vi.fn>;
-  resize: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
-}
-
-let lastChart: MockChart | null = null;
-
-const echartsInitMock = vi.fn((_el: HTMLElement, _theme?: string, _opts?: unknown) => {
-  const c: MockChart = {
-    setOption: vi.fn(),
-    on: vi.fn(),
-    resize: vi.fn(),
-    dispose: vi.fn(),
-  };
-  lastChart = c;
-  return c;
-});
-
-const echartsUseMock = vi.fn();
-
-vi.mock('echarts/core', () => ({
-  default: {
-    init: (el: HTMLElement) => echartsInitMock(el),
-    use: (...args: unknown[]) => echartsUseMock(...args),
-  },
-  init: (el: HTMLElement) => echartsInitMock(el),
-  use: (...args: unknown[]) => echartsUseMock(...args),
-}));
-
-vi.mock('echarts/theme/v5', () => ({ default: {} }));
-vi.mock('echarts/charts', () => ({ BarChart: {} }));
-vi.mock('echarts/components', () => ({
-  GridComponent: {},
-  LegendComponent: {},
-  TooltipComponent: {},
-}));
-vi.mock('echarts/features', () => ({ LabelLayout: {} }));
-vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }));
-
-// Mock ResizeObserver（happy-dom 不一定有）
-global.ResizeObserver =
-  global.ResizeObserver ||
-  class {
-    public observe(): void {
-      /* noop */
-    }
-    public unobserve(): void {
-      /* noop */
-    }
-    public disconnect(): void {
-      /* noop */
-    }
-  };
-
-import UpcomingDeliveryChart from '../UpcomingDeliveryChart.vue';
 
 function makeBucket(overrides: Partial<UpcomingDeliveryEntryData> = {}): UpcomingDeliveryEntryData {
   return {
@@ -93,18 +78,40 @@ function makeBucket(overrides: Partial<UpcomingDeliveryEntryData> = {}): Upcomin
   };
 }
 
-describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）', () => {
+interface SeriesShape {
+  name: string;
+  stack?: string;
+  data: number[];
+  itemStyle?: { color?: string; borderRadius?: number | number[] };
+  emphasis?: { focus?: string };
+}
+interface OptionShape {
+  series: SeriesShape[];
+  legend: { data: string[] };
+  xAxis: { type: string };
+  yAxis: { type: string; data?: string[]; inverse?: boolean };
+  grid: { left: number; right?: number; top?: number; bottom?: number };
+}
+
+/** 2026-09-30 新增：从 wrapper 取 VChart 实例的当前 option。 */
+function readOption(wrapper: ReturnType<typeof mount>): OptionShape {
+  const vchart = wrapper.findComponent({ name: 'VChart' });
+  expect(vchart.exists()).toBe(true);
+  const option = vchart.props('option') as OptionShape;
+  expect(option).toBeTruthy();
+  return option;
+}
+
+describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写）', () => {
   beforeEach(() => {
-    echartsInitMock.mockClear();
-    echartsUseMock.mockClear();
-    lastChart = null;
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it('C1：3 series 全部 stack=delivery，颜色按 LAYERS.color（藏青/蓝/浅蓝）', async () => {
+  it('C1：3 series 全部 stack=delivery，颜色按 LAYERS.color（红/黄/亮青绿，自下而上）', async () => {
     const buckets: UpcomingDeliveryEntryData[] = [
       makeBucket({
         date: '2026-10-01',
@@ -114,22 +121,13 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
       props: { buckets, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub } },
     });
 
     await nextTick();
     await flushPromises();
 
-    expect(echartsInitMock).toHaveBeenCalled();
-    const setOptionCall = lastChart!.setOption.mock.calls[0];
-    expect(setOptionCall).toBeTruthy();
-    const option = setOptionCall![0] as {
-      series: Array<{
-        name: string;
-        stack: string;
-        itemStyle: { color: string; borderRadius: number[] };
-      }>;
-      legend: { data: string[] };
-    };
+    const option = readOption(wrapper);
 
     // 3 series 全部 stack='delivery'
     expect(option.series).toHaveLength(3);
@@ -137,18 +135,14 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
       expect(s.stack).toBe('delivery');
     }
 
-    // 颜色顺序：top=#1e4d8b / middle=#2c6cb8 / bottom=#4a8fd6
-    expect(option.series[0]?.itemStyle.color).toBe('#1e4d8b');
-    expect(option.series[1]?.itemStyle.color).toBe('#2c6cb8');
-    expect(option.series[2]?.itemStyle.color).toBe('#4a8fd6');
+    // 颜色顺序：bottom=#0FFCBE（已送货） / middle=#FFCC00（待品检待送货） / top=#B4121B（品检前）
+    // 沿 Phase 4：LAYERS 顺序 [bottom, middle, top]
+    expect(option.series[0]?.itemStyle?.color).toBe('#0FFCBE');
+    expect(option.series[1]?.itemStyle?.color).toBe('#FFCC00');
+    expect(option.series[2]?.itemStyle?.color).toBe('#B4121B');
 
-    // 顶层 borderRadius=[4,4,0,0]，其它 0
-    expect(option.series[0]?.itemStyle.borderRadius).toEqual([4, 4, 0, 0]);
-    expect(option.series[1]?.itemStyle.borderRadius).toBe(0);
-    expect(option.series[2]?.itemStyle.borderRadius).toBe(0);
-
-    // legend data 顺序：品检前 / 待品检/待送货 / 已送货
-    expect(option.legend.data).toEqual(['品检前', '待品检/待送货', '已送货']);
+    // legend data 顺序：已送货 / 待品检/待送货 / 品检前
+    expect(option.legend.data).toEqual(['已送货', '待品检/待送货', '品检前']);
 
     // 2026-10-01 bugfix 防回归：legend.data 与 series.name 必须逐字相等，
     // 否则 ECharts 在 setOption / resize 重算 legend 时打印
@@ -169,14 +163,13 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
       props: { buckets, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub } },
     });
 
     await nextTick();
     await flushPromises();
 
-    const option = lastChart!.setOption.mock.calls[0]![0] as {
-      series: Array<{ name: string; data: number[] }>;
-    };
+    const option = readOption(wrapper);
     // 顶层 series.name === '品检前'（2026-10-01：series.name 改为中文 label 对齐 legend.data）
     const topSeries = option.series.find((s) => s.name === '品检前');
     expect(topSeries).toBeTruthy();
@@ -192,20 +185,16 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
       props: { buckets, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub } },
     });
 
     await nextTick();
     await flushPromises();
 
-    // 拦截 chart.on('click', handler)
-    const onCalls = lastChart!.on.mock.calls;
-    const clickCall = onCalls.find((c) => c[0] === 'click');
-    expect(clickCall).toBeTruthy();
-    const clickHandler = clickCall![1] as (p: { seriesName: string; dataIndex: number }) => void;
-
-    // 驱动 click(seriesName='待品检/待送货', dataIndex=0)
-    // 2026-10-01：series.name 改 label (中文)，click 入参同步；emit layer 仍走英文 key。
-    clickHandler({ seriesName: '待品检/待送货', dataIndex: 0 });
+    // 2026-09-30 新增：直接通过 stub VChart 的 vm.$emit('click', payload) 驱动，
+    // 与 vue-echarts 内部 chart.on('click', ...) → emit('click', ECElementEvent) 行为对齐。
+    const vchart = wrapper.findComponent({ name: 'VChart' });
+    vchart.vm.$emit('click', { seriesName: '待品检/待送货', dataIndex: 0 });
 
     const events = wrapper.emitted('barLayerClick');
     expect(events).toBeTruthy();
@@ -222,35 +211,35 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     const buckets: UpcomingDeliveryEntryData[] = [makeBucket({ date: '2026-10-01', count: 1 })];
     const wrapper = mount(UpcomingDeliveryChart, {
       props: { buckets, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub } },
     });
 
     await nextTick();
     await flushPromises();
 
-    const onCalls = lastChart!.on.mock.calls;
-    const clickCall = onCalls.find((c) => c[0] === 'click');
-    const clickHandler = clickCall![1] as (p: { seriesName: string; dataIndex: number }) => void;
-
-    clickHandler({ seriesName: 'unknown', dataIndex: 0 });
+    const vchart = wrapper.findComponent({ name: 'VChart' });
+    vchart.vm.$emit('click', { seriesName: 'unknown', dataIndex: 0 });
     expect(wrapper.emitted('barLayerClick')).toBeFalsy();
 
     wrapper.unmount();
   });
 
-  it('C5：echarts init 传 v5 theme + canvas renderer', async () => {
+  it('C5：vue-echarts initOptions={renderer:"canvas"} + theme="v5"', async () => {
     const wrapper = mount(UpcomingDeliveryChart, {
       props: { buckets: [makeBucket()], height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub } },
     });
 
     await nextTick();
     await flushPromises();
 
-    expect(echartsInitMock).toHaveBeenCalled();
-    // 组件实际调 echarts.init(el, 'v5', { renderer: 'canvas' })。由于 mock 函数
-    // 类型签名只声明 (el: HTMLElement, ...)，从 vi.fn 类型看只有 [el]；
-    // 但运行时实际有 3 个参数。在测试里直接调一次真实组件行为校验参数更稳。
-    // 这里改为校验组件持有对 echarts core 的引用已注册（use 被调）即可。
-    expect(echartsUseMock).toHaveBeenCalled();
+    const vchart = wrapper.findComponent({ name: 'VChart' });
+    expect(vchart.props('theme')).toBe('v5');
+    // initOptions 在 SFC 模板里直接写 `:init-options="{ renderer: 'canvas' }"`
+    const initOptions = vchart.props('initOptions') as { renderer?: string } | undefined;
+    expect(initOptions).toBeTruthy();
+    expect(initOptions?.renderer).toBe('canvas');
+
     wrapper.unmount();
   });
 
@@ -265,15 +254,13 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
       props: { buckets, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub } },
     });
 
     await nextTick();
     await flushPromises();
 
-    const option = lastChart!.setOption.mock.calls[0]![0] as {
-      xAxis: { type: string };
-      yAxis: { type: string };
-    };
+    const option = readOption(wrapper);
     expect(option.xAxis.type).toBe('value');
     expect(option.yAxis.type).toBe('category');
 
@@ -290,14 +277,13 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
       props: { buckets, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub } },
     });
 
     await nextTick();
     await flushPromises();
 
-    const option = lastChart!.setOption.mock.calls[0]![0] as {
-      series: Array<{ emphasis?: { focus?: string } }>;
-    };
+    const option = readOption(wrapper);
     expect(option.series).toHaveLength(3);
     for (const s of option.series) {
       expect(s.emphasis?.focus).toBe('series');
@@ -316,14 +302,13 @@ describe('UpcomingDeliveryChart — 3 series stack + click emit（2026-09-30）'
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
       props: { buckets, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub } },
     });
 
     await nextTick();
     await flushPromises();
 
-    const option = lastChart!.setOption.mock.calls[0]![0] as {
-      grid: { left: number };
-    };
+    const option = readOption(wrapper);
     expect(option.grid.left).toBeGreaterThanOrEqual(50);
 
     wrapper.unmount();
