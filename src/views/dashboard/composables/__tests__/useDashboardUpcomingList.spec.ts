@@ -58,6 +58,7 @@ vi.mock('@/api/dashboard', () => ({
 }));
 
 import { useDashboardUpcomingList } from '../useDashboardUpcomingList';
+import { qk } from '@/composables/queries/keys';
 
 function makeBasePart(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -106,7 +107,9 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     vi.useRealTimers();
   });
 
-  it('L1：queryKey 形态 = ["dashboard","upcoming-list",{date,statuses}]', () => {
+  it('L1：queryKey 形态 = ["dashboard","upcoming-list",{date,statuses}]', async () => {
+    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+
     const params = ref<{ date: string; statuses: ('PENDING' | 'PROGRAMMING')[] } | null>({
       date: '2026-10-01',
       statuses: ['PENDING', 'PROGRAMMING'],
@@ -116,10 +119,21 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     scope.run(() => {
       testApp.runWithContext(() => useDashboardUpcomingList(() => params.value));
     });
-    scope.stop();
 
-    // queryKey 通过 QueryClient cache key 间接验证：listUnionItems 被调时 params 应在调用里
-    expect(onDashboardEventMock).toHaveBeenCalled(); // WS 订阅挂上
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // 2026-09-30 review 第 1 轮修复：直接通过 QueryClient cache 拉真实 queryKey 断言形态
+    // （不再用 onDashboardEventMock.toHaveBeenCalled 这种「WS 订阅挂上」的名实不符断言）
+    const expectedKey = qk.dashboardUpcomingList({ date: '2026-10-01', statuses: ['PENDING', 'PROGRAMMING'] });
+    const cached = testQueryClient.getQueryCache().find({ queryKey: expectedKey });
+    expect(cached).toBeTruthy();
+    expect(cached?.queryKey).toEqual(expectedKey);
+    // queryKey 必须严格三层：['dashboard', 'upcoming-list', { date, statuses }]
+    expect(cached?.queryKey).toHaveLength(3);
+    expect(cached?.queryKey[0]).toBe('dashboard');
+    expect(cached?.queryKey[1]).toBe('upcoming-list');
+    expect(cached?.queryKey[2]).toEqual({ date: '2026-10-01', statuses: ['PENDING', 'PROGRAMMING'] });
+    scope.stop();
   });
 
   it('L2：params=null 时 enabled=false → listUnionItems 不被调', async () => {
@@ -190,13 +204,18 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     });
 
     const scope = effectScope();
+    let q: ReturnType<typeof useDashboardUpcomingList> | undefined;
     scope.run(() => {
-      testApp.runWithContext(() => useDashboardUpcomingList(() => params.value));
+      q = testApp.runWithContext(() => useDashboardUpcomingList(() => params.value));
     });
 
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(listUnionItemsMock).toHaveBeenCalled();
+    // 2026-09-30 review 第 1 轮修复：必须断言 query.error 被 ZodError 填充，
+    // 否则缺字段时 partListResultSchema.parse 静默通过、整份守门失效
+    // （沿范本 useDashboardUrgentList.spec.ts:248 U5 真实断言形态）。
+    expect(q!.error.value).not.toBeNull();
     scope.stop();
   });
 

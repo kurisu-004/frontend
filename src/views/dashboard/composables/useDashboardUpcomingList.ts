@@ -15,9 +15,10 @@
 //   - staleTime: 30_000：30s 内同 (date, statuses) 命中缓存（避免来回切层 / 切日期
 //     时重复请求）；gcTime: POSITIVE_INFINITY（会话级缓存）。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
-//   - 接 useDashboardInvalidation(qk.dashboardUpcomingList) 复用 AFFECTS_DASHBOARD
-//     事件集，与 dashboardSnapshot / urgentList / overdue 共用同一份事件订阅 +
-//     debounce 闭包（避免 handler 各跑各的 500ms 防抖）。
+//   - 接 useDashboardInvalidation(['dashboard','upcoming-list']) 硬编码前缀：qk.
+//     dashboardUpcomingList(params) 是 exact-match 仅失效当前 (date, statuses) 查询，
+//     WS 事件触发时若用户已切到别的层/日期，被切走的查询不会失效仍 staleTime 30s 内
+//     fresh —— 必须用 prefix-match 失效全 upcoming-list 查询。
 //   - 错误桥接：watch(query.error) → ElMessage.error（沿 2026-09-26 约定 #9）。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';

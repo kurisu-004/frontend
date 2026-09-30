@@ -3,7 +3,7 @@
   2026-09-30 新增：dashboard「7 天交期柱状图按层点击抽屉」。
   沿 UrgentOrderDrawer 范式：<el-drawer direction="rtl" :size="480"
   :with-header="false" :append-to-body="true" :destroy-on-close="true"
-  @update:model-value>。v-if="statuses.length > 0" 让 enabled 闸门天然生效。
+  @update:model-value>。
   Props / Events：
     - modelValue: boolean
     - date: 'YYYY-MM-DD'
@@ -12,6 +12,9 @@
     - @update:modelValue: 双向同步
   渲染：el-table stripe；列复用 UrgentOrdersList.vue:31-49 字段（序号 / 流水 /
   图号 / 名称 / 客户 / 状态 ElTag / 倒计 chip）；loading / error / empty 三态。
+  闸门：父组件 DashboardView `v-if="selectedLayer"` 保证 drawer 首次点击前不挂载，
+  useDashboardUpcomingList 的 enabled 闸门天然生效；drawer 自身
+  `v-if="statuses.length === 0"` 是 props 异常兜底。
 -->
 <template>
   <el-drawer

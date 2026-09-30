@@ -117,6 +117,9 @@ echarts.use([
 const chartRef = ref<HTMLDivElement | null>(null);
 const chart = shallowRef<ECharts | null>(null);
 let resizeObserver: ResizeObserver | null = null;
+/** 2026-09-30 review 第 1 轮修复：closure-scoped 缓存对齐结果，避免 buildOption
+ *  与 click handler 各调一次 alignBuckets。initChart 首次填充 + watch 刷新。 */
+let lastAligned: UpcomingDeliveryEntryData[] = [];
 
 /** 2026-09-29 新增：把 ISO 'YYYY-MM-DD' + 偏移天数转 'MM/DD' 标签。 */
 function formatLabel(iso: string): string {
@@ -260,6 +263,7 @@ function initChart(el: HTMLDivElement): void {
   const c = echarts.init(el, 'v5', { renderer: 'canvas' });
   chart.value = c;
   c.setOption(buildOption(props.buckets), true);
+  lastAligned = alignBuckets(props.buckets).aligned;
   // 2026-09-30 新增：click handler 把 seriesName 反查 LAYERS → emit 给父组件。
   // 父组件管 drawer 状态（沿 useDashboardUpcomingList 的 enabled 闸门）。
   c.on('click', (p: { seriesName?: string; dataIndex?: number }) => {
@@ -267,9 +271,8 @@ function initChart(el: HTMLDivElement): void {
     const dataIndex = p.dataIndex ?? 0;
     const layer = LAYERS.find((l) => l.key === seriesName);
     if (!layer) return;
-    // 取对齐后 aligned[dataIndex].date（保证 ISO 形态稳定）
-    const { aligned } = alignBuckets(props.buckets);
-    const bucket = aligned[dataIndex];
+    // 取对齐后 lastAligned[dataIndex].date（保证 ISO 形态稳定）
+    const bucket = lastAligned[dataIndex];
     if (!bucket) return;
     emit('barLayerClick', {
       date: bucket.date,
@@ -292,6 +295,9 @@ watch(
     const c = chart.value;
     if (!c) return;
     c.setOption(buildOption(next), true);
+    // 2026-09-30 review 第 1 轮修复：buckets 变化时同步刷新 lastAligned 缓存，
+    // 否则 click handler 拿到的仍是旧 buckets 对齐后的数据。
+    lastAligned = alignBuckets(next).aligned;
   },
   { deep: true },
 );
