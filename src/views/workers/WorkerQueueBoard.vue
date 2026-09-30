@@ -6,7 +6,7 @@
            - 其它 process_id：WorkerPoolTab（自管 useWorkerPoolByProcessQuery）
        - 行内每张 tab 走 #label 插槽，标题 = `工序名(N)`（N 来自 useWorkerPoolCountsQuery
          的 counts[process_id].count；首屏即用，不依赖 tab 是否激活）
-       - 每个 tab pane 加 :lazy="true"，body 替换为 <WorkerPoolTab :process-id="p.id" :shelf-id="shelfId" />
+       - 每个 tab pane 加 :lazy="true"，body 替换为 <WorkerPoolTab :process-id="p.id" />
 
   2026-09-30 改造前历史（沿 2026-09-29 review 第 1 轮修复）：
   - 2026-08-26：阶段一，全部走 fixture；DnD 守卫已删。

@@ -332,7 +332,6 @@ describe('useWorkerQueue — 2026-09-30 重构：mutations + invalidate + worker
       batch_id: '3000000000001',
       shelf_id: '5000000000001',
       next_process_id: '2000000000002',
-      process_id: '2000000000002',
     });
     expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(2);
     const calls = vi.mocked(testQueryClient.invalidateQueries).mock.calls;

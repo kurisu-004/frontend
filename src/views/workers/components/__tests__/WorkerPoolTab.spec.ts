@@ -151,7 +151,7 @@ describe('WorkerPoolTab（2026-09-30 新增）', () => {
 
   it('W1：传入 processId → getWorkerPoolByProcess 收到该 processId', async () => {
     const wrapper = mount(WorkerPoolTab, {
-      props: { processId: '2011111111111', shelfId: '5000000000001' },
+      props: { processId: '2011111111111' },
       global: globalConfig,
     });
     await flushPromises();
@@ -162,7 +162,7 @@ describe('WorkerPoolTab（2026-09-30 新增）', () => {
 
   it('W2：resolved 后渲染 el-splitter + PoolDrawer + WorkerColumn', async () => {
     const wrapper = mount(WorkerPoolTab, {
-      props: { processId: '2022222222222', shelfId: '5000000000001' },
+      props: { processId: '2022222222222' },
       global: globalConfig,
     });
     await flushPromises();
@@ -177,7 +177,7 @@ describe('WorkerPoolTab（2026-09-30 新增）', () => {
     // 2026-09-30：用独立 processId 防止 QueryClient 跨 test 缓存复用。
     realGetWorkerPoolByProcess.mockRejectedValueOnce(new Error('network error'));
     const wrapper = mount(WorkerPoolTab, {
-      props: { processId: '2088888888888', shelfId: '5000000000001' },
+      props: { processId: '2088888888888' },
       global: globalConfig,
     });
     await flushPromises();
@@ -198,7 +198,7 @@ describe('WorkerPoolTab（2026-09-30 新增）', () => {
       items: [],
     }));
     const wrapper = mount(WorkerPoolTab, {
-      props: { processId: '2099999999999', shelfId: '5000000000001' },
+      props: { processId: '2099999999999' },
       global: globalConfig,
     });
     await flushPromises();
