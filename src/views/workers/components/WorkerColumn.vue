@@ -1,6 +1,9 @@
-<!-- 2026-08-26 重构：工人列（vuedraggable target）。
-     接收父级 provide 注入：moveBatchToWorker / shelfId。
-     @start 把 from dataset 写到 dndSourceTracker；@change.added 时读 + delete，调 moveBatchToWorker。 -->
+<!-- 2026-09-30 重构：工人列自管 useWorkerStateByWorkerQuery（数据层 TanStack Query 化）。
+     原先 `batches` prop 由父级 useWorkerQueue 聚合后传入；本 commit 起 WorkerColumn 内部
+     自管 query（POSITIVE_INFINITY 缓存 + 写操作 invalidate），同 workerId + shelfId 跨
+     tab 共享 cache identity。
+     skeleton / empty 兜底：isLoading 时 max_held / current_held 占位「…」，
+     error 时 el-empty description="加载失败"。 -->
 <template>
   <el-card class="worker-column" shadow="never">
     <template #header>
@@ -16,16 +19,24 @@
       </div>
       <el-progress
         :percentage="capacityPercent"
-        :format="() => `${worker.current_held}/${worker.max_held}`"
+        :format="() => `${currentHeldDisplay}/${maxHeldDisplay}`"
         :status="capacityStatus"
       />
     </template>
     <div ref="containerRef" class="col-body" :data-worker-id="worker.id">
-      <div v-for="batch in batches" :key="batch.batch_id" class="col-body-item">
-        <WorkOrderCard :batch="batch" />
+      <div v-if="stateQuery.isLoading.value" class="loading-state">
+        <el-skeleton :rows="3" animated />
       </div>
+      <div v-else-if="stateQuery.error.value" class="error-state">
+        <el-empty description="加载失败" :image-size="60" />
+      </div>
+      <template v-else>
+        <div v-for="batch in heldBatches" :key="batch.batch_id" class="col-body-item">
+          <WorkOrderCard :batch="batch" />
+        </div>
+        <el-empty v-if="heldBatches.length === 0" description="暂无持有工单" :image-size="60" />
+      </template>
     </div>
-    <el-empty v-if="batches.length === 0" description="暂无持有工单" :image-size="60" />
   </el-card>
 </template>
 
@@ -34,6 +45,8 @@ import { computed, inject, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
 import { useDraggable } from 'vue-draggable-plus';
 import type { Worker, WorkOrderCard as Card } from '@/types/workerPool';
+import { useWorkerStateByWorkerQuery } from '@/composables/queries/useWorkerStateByWorkerQuery';
+import { heldToCard } from '@/views/workers/composables/poolItemToCard';
 import {
   consumeProcessSource,
   recordSource,
@@ -41,22 +54,67 @@ import {
 } from '@/utils/dndSourceTracker';
 import WorkOrderCard from './WorkOrderCard.vue';
 
+// 2026-09-30 重构：删除 `batches: Card[]` prop —— WorkerColumn 自管 useWorkerStateByWorkerQuery
+// 拉取 held_batches；保留 worker prop。
 const props = defineProps<{
   worker: Worker;
-  batches: Card[];
 }>();
 
-// 2026-08-27 fix：props.batches 是 readonly，useDraggable 内部 splice 会触发
-// Vue readonly warn / 静默失败。包成可写本地 ref + watch 双向同步。
-// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层读 props.batches，
-// 包一层 IIFE 把读取放进函数体。
-const writableBatches = ref<Card[]>([...((): Card[] => props.batches)()]);
+// 2026-09-30：shelfId 通过 inject('shelfId') 从父级 WorkerQueueBoard 拿
+// （provide 已沿用 2026-08-26 既有约定）。WorkerColumn 自管 useWorkerStateByWorkerQuery
+// 走 qk.workerPoolStateByWorker(worker.id, shelfId) 缓存键，跨 tab 共享。
+const shelfId = inject<ComputedRef<string>>('shelfId')!;
+
+const stateQuery = useWorkerStateByWorkerQuery(
+  () => props.worker.id,
+  () => shelfId.value,
+);
+
+/** 2026-09-30：把 useWorkerStateByWorkerQuery.held_batches 适配成 WorkOrderCard[]。
+ *  heldToCard 函数从 useWorkerQueue.ts 拆到 views/workers/composables/poolItemToCard.ts，
+ * 共享给 WorkerPoolTab / PendingPoolCard / WorkerColumn（同 held 数据流）。 */
+const heldBatches = computed<Card[]>(() => {
+  const list = stateQuery.data.value?.held_batches ?? [];
+  return list.map(heldToCard);
+});
+
+/** 2026-09-30：max_held / current_held 显示 —— 加载中占位「…」，resolved 后真实数字。 */
+const maxHeldDisplay = computed<string>(() => {
+  if (stateQuery.isLoading.value) return '…';
+  return String(stateQuery.data.value?.max_held ?? 0);
+});
+const currentHeldDisplay = computed<string>(() => {
+  if (stateQuery.isLoading.value) return '…';
+  return String(stateQuery.data.value?.current_held ?? 0);
+});
+
+const capacityPercent = computed(() => {
+  const maxHeld = stateQuery.data.value?.max_held ?? 0;
+  if (maxHeld === 0) return 0;
+  const currentHeld = stateQuery.data.value?.current_held ?? 0;
+  return Math.round((currentHeld / maxHeld) * 100);
+});
+
+// 注：el-progress 的 status 只接受 '' | 'success' | 'warning' | 'exception'，
+// 没有 'primary'。中段（>=70%）走空串，让 EP 走默认主色（蓝）。
+const capacityStatus = computed<'success' | 'warning' | ''>(() => {
+  const remaining = stateQuery.data.value?.capacity_remaining ?? 0;
+  if (remaining === 0) return 'warning';
+  if (capacityPercent.value >= 70) return '';
+  return 'success';
+});
+
+// 2026-08-27 fix：useDraggable 内部 splice 触发 Vue readonly warn / 静默失败。包本地 ref + watch。
+// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层读 props.batches（已删 props.batches）；
+// 此处仅保留 col-body 拖拽目标，不再注入具体可拖拽数据列表（用户拖出 worker-held 的 batch 后由
+// onDragStart 记录源）。
+const writableBatches = ref<Card[]>([]);
 watch(
-  () => props.batches,
+  heldBatches,
   (next) => {
     writableBatches.value = [...next];
   },
-  { deep: true },
+  { immediate: true },
 );
 const containerRef = ref<HTMLElement | null>(null);
 useDraggable(containerRef, writableBatches, {
@@ -77,20 +135,6 @@ const moveBatchToWorker =
       process_id: string,
     ) => Promise<boolean>
   >('moveBatchToWorker')!;
-const shelfId = inject<ComputedRef<string>>('shelfId')!;
-
-const capacityPercent = computed(() => {
-  if (props.worker.max_held === 0) return 0;
-  return Math.round((props.worker.current_held / props.worker.max_held) * 100);
-});
-
-// 注：el-progress 的 status 只接受 '' | 'success' | 'warning' | 'exception'，
-// 没有 'primary'。中段（>=70%）走空串，让 EP 走默认主色（蓝）。
-const capacityStatus = computed<'success' | 'warning' | ''>(() => {
-  if (props.worker.capacity_remaining === 0) return 'warning';
-  if (capacityPercent.value >= 70) return '';
-  return 'success';
-});
 
 function onDragStart(evt: DraggableStartEvent) {
   // 2026-08-26：记录源工序 ID（拖出 PoolDrawer 的 process_id）。
@@ -143,5 +187,9 @@ async function onDragAdd(evt: DraggableStartEvent) {
   min-height: 100px;
   max-height: 70vh;
   overflow-y: auto;
+}
+.loading-state,
+.error-state {
+  padding: 8px;
 }
 </style>

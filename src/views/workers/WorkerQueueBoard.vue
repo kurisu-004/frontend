@@ -1,21 +1,34 @@
-<!-- 2026-09-29 重构：生产队列页（待下发 Tab + Tab 行上移 + 仅自产 + 数量徽标）。
+<!-- 2026-09-30 重构：tab body 懒加载 + 数据层 TanStack Query 化（CLAUDE.md 2026-09-30 硬约束）。
      主结构：
-       - 顶部 el-tabs（行上移：margin 0；底边线视觉承接，去掉 EP 默认下划线）
+       - 顶部 el-tabs（行上移，底边线视觉承接）
        - 内容区按 activeTab 切换：
            - __pending__：el-splitter 40/60 分栏（PendingBatchesPanel / PendingPoolsPanel）
-           - 其它 process_id：原 PoolDrawer / WorkerColumn 双栏布局
-       - 行内每张 tab 走 #label 插槽，标题 = `工序名(N)`（仅自产 process 自产；loadBoard
-         内已 inhouse 过滤）
+           - 其它 process_id：WorkerPoolTab（自管 useWorkerPoolByProcessQuery）
+       - 行内每张 tab 走 #label 插槽，标题 = `工序名(N)`（N 来自 useWorkerPoolCountsQuery
+         的 counts[process_id].count；首屏即用，不依赖 tab 是否激活）
+       - 每个 tab pane 加 :lazy="true"，body 替换为 <WorkerPoolTab :process-id="p.id" :shelf-id="shelfId" />
 
-  2026-09-29 改造前历史：
+  2026-09-30 改造前历史（沿 2026-09-29 review 第 1 轮修复）：
   - 2026-08-26：阶段一，全部走 fixture；DnD 守卫已删。
   - 2026-09-14：useWorkerQueue 切真 v2。
   - 2026-09-26：消费侧禁止解构 auth store（沿 CLAUDE.md）。
+  - 2026-09-29：提供 selectedIds / mutations 给 PendingBatchesPanel / PendingPoolsPanel 用。
+    复用现有 provide 注入（activeProcessId / moveBatchToWorker / moveBatchToPool /
+    shelfId），新增 selectedIds / setSelectedIds / dispatchMutation /
+    bulkDispatchMutation / autoDispatchMutation 五项。
 
-  2026-09-29：提供 selectedIds / mutations 给 PendingBatchesPanel / PendingPoolsPanel 用。
-  复用现有 provide 注入（activeProcessId / moveBatchToWorker / moveBatchToPool /
-  shelfId），新增 selectedIds / setSelectedIds / dispatchMutation /
-  bulkDispatchMutation / autoDispatchMutation 五项。 -->
+  2026-09-30 改造要点：
+  - 顶部导入 useProcessesQuery / useWorkerPoolCountsQuery / WorkerPoolTab；
+  - 移除 import { listProcesses }（processes 改走共享 useProcessesQuery）；
+  - 移除 processPools 数据源（tab body 自管 query，counts 走共享 query）；
+  - inhouseProcs = computed(() => procsQuery.data.value?.items.filter(p => p.category === 'INHOUSE') ?? [])；
+  - tab badge：poolCount(pid) = countsQuery.data.value?.counts.find(c => c.process_id === pid)?.count ?? '…'；
+  - 每个 el-tab-pane v-for="p in inhouseProcs" 加 :lazy="true"；
+  - PendingPoolsPanel props 改为 :processes="inhouseProcs.map(...)"；
+  - 删除 loadBoard 在 OnMounted 的调用（首屏为 processes + counts 由 TanStack 自动 fetch）；
+  - loading = procsQuery.isLoading || countsQuery.isLoading（仅控制初始 skeleton）；
+  - 保留 ?tab= 深链 + URL sync + fallback（fallback 检测 inhouseProcs 而非 processPools）；
+  - WorkerColumn 已重构为自管 useWorkerStateByWorkerQuery，调用点 :batches="workerHeld[w.id] ?? []" 删除。 -->
 <template>
   <div class="worker-queue-board">
     <el-alert
@@ -27,7 +40,7 @@
       class="error-alert"
     />
 
-    <div v-if="loading && workers.length === 0" class="loading-state">
+    <div v-if="loading" class="loading-state">
       <el-skeleton :rows="5" animated />
     </div>
 
@@ -40,8 +53,8 @@
               <span class="tab-label__count">({{ pendingDispatch.batches.value.length }})</span>
             </span>
           </template>
-          <!-- 待下发 Tab：左栏 el-table 多选 + 右栏自产工序 pool 卡（单击调
-               bulkDispatchMutation；拖拽目标视觉态）。 -->
+          <!-- 待下发 Tab：左栏 el-table 多选 + 右栏自产工序卡（PendingPoolCard 自管
+               useWorkerPoolByProcessQuery）。 -->
           <el-splitter class="board-splitter">
             <el-splitter-panel size="40%" :min="320">
               <PendingBatchesPanel
@@ -56,7 +69,7 @@
             </el-splitter-panel>
             <el-splitter-panel size="60%" :min="320">
               <PendingPoolsPanel
-                :pools="processPools"
+                :processes="inhouseProcessesForPanel"
                 :selected-ids="pendingDispatch.selectedIds"
                 :selected-count="pendingDispatch.selectedCount.value"
                 :shelf-id="shelfId"
@@ -67,33 +80,23 @@
         </el-tab-pane>
 
         <el-tab-pane
-          v-for="p in processPools"
-          :key="p.process_id"
-          :name="p.process_id"
+          v-for="p in inhouseProcs"
+          :key="p.id"
+          :name="p.id"
+          :lazy="true"
         >
           <template #label>
             <span class="tab-label">
-              <span class="tab-label__code">{{ p.process_code }}</span>
-              <span class="tab-label__count">({{ p.batches.length }})</span>
+              <span class="tab-label__code">{{ p.code }}</span>
+              <span class="tab-label__count">({{ poolCount(p.id) }})</span>
             </span>
           </template>
-          <!-- 自产工序 Tab：原 PoolDrawer / WorkerColumn 双栏。 -->
-          <el-splitter class="board-splitter">
-            <el-splitter-panel size="30%" :min="240">
-              <PoolDrawer :pool="activePool" />
-            </el-splitter-panel>
-            <el-splitter-panel size="70%" :min="400">
-              <div class="columns-container">
-                <WorkerColumn
-                  v-for="w in filteredWorkers"
-                  :key="w.id"
-                  :worker="w"
-                  :batches="workerHeld[w.id] ?? []"
-                />
-                <div v-if="filteredWorkers.length === 0" class="no-workers">该工序暂无可用工人</div>
-              </div>
-            </el-splitter-panel>
-          </el-splitter>
+          <!-- 自产工序 Tab：WorkerPoolTab 自管 useWorkerPoolByProcessQuery，
+               :lazy="true" 保证切到该 tab 才发请求。 -->
+          <WorkerPoolTab
+            :process-id="p.id"
+            :shelf-id="shelfId"
+          />
         </el-tab-pane>
       </el-tabs>
 
@@ -105,15 +108,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, provide, ref, watch } from 'vue';
+import { computed, provide, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import { useQueryClient } from '@tanstack/vue-query';
 import { useAuthStore } from '@/stores/auth';
 import { useWorkerQueue } from '@/views/workers/composables/useWorkerQueue';
 import { usePendingDispatch } from '@/views/workers/composables/usePendingDispatch';
-import WorkerColumn from './components/WorkerColumn.vue';
-import PoolDrawer from './components/PoolDrawer.vue';
+import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
+import { useWorkerPoolCountsQuery } from '@/composables/queries/useWorkerPoolCountsQuery';
+import {
+  invalidateWorkerPoolByProcessAll,
+} from '@/composables/queries/useWorkerPoolByProcessQuery';
+import {
+  invalidateWorkerPoolCountsQuery,
+} from '@/composables/queries/useWorkerPoolCountsQuery';
+import WorkerPoolTab from './components/WorkerPoolTab.vue';
 import PendingBatchesPanel from './components/PendingBatchesPanel.vue';
 import PendingPoolsPanel from './components/PendingPoolsPanel.vue';
 
@@ -121,23 +132,46 @@ const auth = useAuthStore();
 const queue = useWorkerQueue();
 const route = useRoute();
 const router = useRouter();
+const qc = useQueryClient();
+
+// 2026-09-30：processes 改走共享 useProcessesQuery（POSITIVE_INFINITY 缓存，与仓内 12 个 caller
+// 共享缓存身份），不再调 listProcesses + module-level ref。
+const procsQuery = useProcessesQuery();
+const inhouseProcs = computed(() =>
+  procsQuery.data.value?.items.filter((p) => p.category === 'INHOUSE') ?? [],
+);
+// 2026-09-30：PendingPoolsPanel props 由 processPools 改为 processes（轻量元数据），
+// WorkerPoolTab + PendingPoolCard 自管 useWorkerPoolByProcessQuery 拉完整数据。
+const inhouseProcessesForPanel = computed(() =>
+  inhouseProcs.value.map((p) => ({ id: p.id, code: p.code, name: p.name })),
+);
+
+// 2026-09-30：tab 标题 (N) 徽标数据源 —— 全工序 batch 计数共享 query（eager 拉取，
+// POSITIVE_INFINITY 缓存）。无 processes 时显示「…」。
+const countsQuery = useWorkerPoolCountsQuery(() => ({ shelf_id: shelfId.value || undefined }));
+function poolCount(pid: string): number | string {
+  if (countsQuery.isLoading.value) return '…';
+  const entry = countsQuery.data.value?.counts.find((c) => c.process_id === pid);
+  return entry?.count ?? 0;
+}
+
 // 2026-09-29 review 第 1 轮修复（C2）：caller 注入 refreshBoard，dispatch / bulk / auto
-// 三类 mutation onSuccess 都会调一次 —— processPools 是模块级 ref，invalidate 失效链
-// 触达不到，必须显式重新 loadBoard 同步看板计数。
+// 三类 mutation onSuccess 都会调一次 —— processPools 已下线（commit 3 起），但 useWorkerQueue
+// 内 workerHeld 模块级 ref 仍由 loadBoard 驱动，故 refreshBoard 继续指向 loadBoard。
 const refreshBoard = async (): Promise<void> => {
   await queue.loadBoard(shelfId.value || null);
 };
 const pendingDispatch = usePendingDispatch({ refreshBoard });
 const {
-  workers,
-  processPools,
-  workerHeld,
-  loading,
+  loading: queueLoading,
   error,
-  loadBoard,
   moveBatchToWorker,
   moveBatchToPool,
 } = queue;
+
+// 2026-09-30：loading 由 procsQuery.isLoading || countsQuery.isLoading 控制初始 skeleton，
+// 不阻塞 tab 切换；queueLoading 仅在 onRefresh 拉 workerHeld 时显示。
+const loading = computed(() => procsQuery.isLoading.value || countsQuery.isLoading.value || queueLoading.value);
 
 // 2026-09-29 review 第 1 轮修复（M1）：activeTab 默认 = __pending__（首屏即待下发 tab，
 // 符合任务规约「待下发 Tab 在最前」）；URL ?tab=XXX 可覆盖（深链到具体工序），
@@ -155,16 +189,13 @@ const activeTab = ref<string>(readInitialTab());
 watch(activeTab, (next) => {
   void router.replace({ query: { ...route.query, [TAB_QUERY_KEY]: next } });
 });
-const activePool = computed(
-  () => processPools.value.find((p) => p.process_id === activeTab.value) ?? null,
-);
-const filteredWorkers = computed(() =>
-  workers.value.filter((w) => w.process_ids.includes(activeTab.value)),
-);
 
 const shelfId = computed(() => auth.activeShelfId ?? '');
 // 2026-09-29 review 第 1 轮修复（C4）：shelfId 暴露给 PendingPoolsPanel 单击 / drop 走
 // bulkDispatchMutation.mutate 用 —— 与 auth.activeShelfId 同源，单一依赖源。
+// 2026-09-30：PendingPoolCard 自管 useWorkerPoolByProcessQuery 不需要 shelfId，
+// 但 PendingPoolsPanel 仍保留 shelfId prop 以保 caller 兼容；shelfId 同时通过
+// provide 注入给 WorkerColumn（自管 useWorkerStateByWorkerQuery）。
 provide<ComputedRef<string>>(
   'activeProcessId',
   computed(() => activeTab.value),
@@ -173,22 +204,30 @@ provide<typeof moveBatchToWorker>('moveBatchToWorker', moveBatchToWorker);
 provide<typeof moveBatchToPool>('moveBatchToPool', moveBatchToPool);
 provide<ComputedRef<string>>('shelfId', shelfId);
 
-onMounted(async () => {
-  await loadBoard(shelfId.value || null);
-  // 注：activeTab 默认 __pending__ 不动；loadBoard 后若 URL ?tab 命中具体 process_id
-  // 但该 process 不在 processPools（外协 / 已删除）→ fallback 到第一个自产 process，
-  // 避免 activePool = null 时左栏空、右栏「该工序暂无可用工人」。
-  if (
-    activeTab.value !== PENDING_TAB &&
-    !processPools.value.some((p) => p.process_id === activeTab.value) &&
-    processPools.value[0]
-  ) {
-    activeTab.value = processPools.value[0].process_id;
-  }
-});
+// 2026-09-30：删除 onMounted 的 loadBoard —— 首屏 processes + counts 由 TanStack 自动 fetch；
+// workerHeld 走 WorkerColumn 内 useWorkerStateByWorkerQuery 自管。
+// 但 fallback 仍依赖 inhouseProcs 解析（从 procsQuery.data.value 派生）；用 watch 在
+// procsQuery.data 解析后跑一次 fallback 检测。
+watch(
+  () => procsQuery.data.value,
+  () => {
+    if (
+      activeTab.value !== PENDING_TAB &&
+      !inhouseProcs.value.some((p) => p.id === activeTab.value) &&
+      inhouseProcs.value[0]
+    ) {
+      activeTab.value = inhouseProcs.value[0].id;
+    }
+  },
+  { immediate: true },
+);
 
 async function onRefresh() {
-  await loadBoard(shelfId.value || null);
+  // 2026-09-30：刷新 — 失效所有 worker-pool 域缓存（counts / by-process / state）
+  // + workerHeld 模块级 ref（loadBoard）。下一帧 tab / WorkerColumn 重新拉数据。
+  await invalidateWorkerPoolCountsQuery(qc);
+  await invalidateWorkerPoolByProcessAll(qc);
+  await queue.loadBoard(shelfId.value || null);
   ElMessage.success('已刷新');
 }
 </script>
