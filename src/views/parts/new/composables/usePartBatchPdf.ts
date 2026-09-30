@@ -23,7 +23,6 @@ import {
   watch,
   type ComputedRef,
   type Ref,
-  type ShallowRef,
 } from 'vue';
 import type { UseCosUploadReturn } from '@/composables/useCosUpload';
 import { useCosUpload } from '@/composables/useCosUpload';
@@ -1371,17 +1370,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     if (!f) return undefined;
     return threeDUploadCells[`3d:${f.uid}`];
   }
-
-  /** 全局上传就绪状态：所有 file cell 都为 done（用于提交按钮 disabled）。 */
-  const allUploadsDone = computed<boolean>(() => {
-    const keys = Object.keys(pdfUploadCells);
-    const tkeys = Object.keys(threeDUploadCells);
-    if (keys.length === 0 && tkeys.length === 0) return true; // 无文件 = 视为就绪
-    return (
-      keys.every((k) => pdfUploadCells[k]?.status === 'done') &&
-      tkeys.every((k) => threeDUploadCells[k]?.status === 'done')
-    );
-  });
 
   /** 当前是否有任何文件上传失败（用于提交按钮 disabled）。 */
   const hasUploadErrors = computed<boolean>(() => {

@@ -1,9 +1,9 @@
-<!-- 2026-09-30 hotfix 第 1 轮 — shelfId 上移修复 TDZ：原 line 192 声明 shelfId =
-     computed(auth.activeShelfId ?? '')，但 line 150 useWorkerPoolCountsQuery 闭包里已经读
+<!-- 2026-09-30 hotfix 第 1 轮 — shelfId 上移修复 TDZ：原声明位 setup 中段，
+     computed(auth.activeShelfId ?? '')，但后续 useWorkerPoolCountsQuery 闭包里已经读
      shelfId.value；setup 阶段 shelfId 未初始化（TDZ）→ 生产队列页 mount 抛
-     ReferenceError。修复：shelfId 上移到 auth 声明之后紧邻位置（line 131），保证
-     所有后续引用（countsQuery / line 161 refreshBoard / line 204 provide / line 229
-     onRefresh）都在声明之后执行。详见 useWorkerPoolCountsQuery 与 CLAUDE.md 2026-09-30
+     ReferenceError。修复：shelfId 上移到 auth 声明之后紧邻位置，保证
+     所有后续引用（countsQuery / refreshBoard / provide / onRefresh）
+     都在声明之后执行。详见 useWorkerPoolCountsQuery 与 CLAUDE.md 2026-09-30
      TanStack Query reactive params 约定 #5。
 
   2026-09-30 重构：tab body 懒加载 + 数据层 TanStack Query 化（CLAUDE.md 2026-09-30 硬约束）。
@@ -137,9 +137,9 @@ import PendingPoolsPanel from './components/PendingPoolsPanel.vue';
 
 const auth = useAuthStore();
 // 2026-09-30 hotfix 第 1 轮：shelfId 上移到 auth 声明之后紧邻位置（修复 TDZ）。
-// 背景：原 line 192 声明 shelfId = computed(() => auth.activeShelfId ?? '')，
-// 但 line 150 的 useWorkerPoolCountsQuery(() => ({ shelf_id: shelfId.value || undefined }))
-// 已用 shelfId.value —— setup 阶段 shelfId 尚未初始化（TDZ），生产队列页 mount 抛
+// 背景：原 shelfId = computed(() => auth.activeShelfId ?? '')
+// 声明位 setup 中段，但 useWorkerPoolCountsQuery(() => ({ shelf_id: shelfId.value || undefined }))
+// 闭包里已用 shelfId.value —— setup 阶段 shelfId 尚未初始化（TDZ），生产队列页 mount 抛
 // ReferenceError。沿 CLAUDE.md 2026-09-30 TanStack Query reactive params 约定 #5
 // （reactive params 必须在 useQuery 调用前声明）。
 const shelfId = computed(() => auth.activeShelfId ?? '');
@@ -206,7 +206,7 @@ watch(activeTab, (next) => {
 
 // 2026-09-29 review 第 1 轮修复（C4）：shelfId 暴露给 PendingPoolsPanel 单击 / drop 走
 // bulkDispatchMutation.mutate 用 —— 与 auth.activeShelfId 同源，单一依赖源。
-// 2026-09-30 hotfix 第 1 轮：shelfId 声明已上移到 auth 之后（line 131），避免
+// 2026-09-30 hotfix 第 1 轮：shelfId 声明已上移到 auth 之后紧邻位置，避免
 // setup 阶段 useWorkerPoolCountsQuery(() => ({ shelf_id: shelfId.value })) 触发 TDZ。
 // 2026-09-30：PendingPoolCard 自管 useWorkerPoolByProcessQuery 不需要 shelfId，
 // 但 PendingPoolsPanel 仍保留 shelfId prop 以保 caller 兼容；shelfId 同时通过
