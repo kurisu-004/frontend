@@ -53,6 +53,10 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   `auth.xxx` 不写 `.value`。**消费侧禁止解构 store**（沿 `usePartsListStore` 不变量
   #3）—— 一律 `const auth = useAuthStore(); auth.xxx` 访问，否则丢失响应式。
   `refreshOrLogout(router)` 接收 router 参数（store 不 import vue-router，避免循环依赖）。
+  `forceLogout(router)`（2026-10-02 新增）是它的**同步**兄弟：`refreshOrLogout` 拉
+  `/iam/me` 复核（给路由守卫的「未登录但可能有 session」恢复路径用），`forceLogout`
+  不联系后端、直接终止本地会话（给「后端已权威判定会话失效」的信号用，如 WS 关闭码
+  `4001`）。两者共用同一段「清 state + removeItem + 派发 + 跳转」实现。
   mutation 全局 retry: 0 见上文 TanStack Query 约定，store 内不写 retry。
 - **auth 转换事件 `auth:session-changed`（2026-10-01 新增）**：长连接层（`src/api/dashboard.ts`
   的 dashboard WS 单例）与 auth 之间的**唯一**通知通道，取代此前只订阅 `auth:tokens-refreshed`
@@ -72,9 +76,11 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   沿用 auth store 条目里既定的 CustomEvent 解耦范式。`auth:tokens-refreshed` 保留不动
   —— 它管 store 自身 state（token / user / refreshToken）同步，与 WS 层是两件事。
   **新增任何改变 token 生命周期的写点时，必须在这 4 处之外同步补派发。**
+  ⚠️ 本表**不覆盖** WS 收到后端关闭码 `4001` 的场景 —— 那条路径由 WS 层反向派发
+  `auth:session-lost`（方向相反），详见下方「dashboard WS 单例」第 4 条。
 
 - **dashboard WS 单例（2026-10-01 重构）**：`src/api/dashboard.ts` 是全仓唯一 WS 入口
-  （`createGlobalState` + VueUse `useWebSocket`），承载 `/ws/dashboard?token=<jwt>`。三条硬约束：
+  （`createGlobalState` + VueUse `useWebSocket`），承载 `/ws/dashboard?token=<jwt>`。四条硬约束：
   1. **URL 用模块级 `shallowRef<string | undefined>` + 显式 `syncWsUrl()`，不用 `computed`。**
      旧 `computed + tokenVersion` 形态会缓存住旧 token（`tokenVersion` 只被刷新事件 bump），
      导致 logout→不刷新页面→重新登录后 WS 仍握吊销 token → `40105` 死循环。
@@ -87,9 +93,85 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
      （首屏 `GET /api/v2/dashboard/snapshot` 之后全靠 WS 事件 invalidate 重取），
      封顶重试会让页面静默停止刷新，比刷屏更糟。诊断须输出四项 app 内可判定信息：
      脱敏 URL（JWT 一律 `token=***`）/ `closeCode` + `reason` / `hadErrorEvent` /
-     `tokenExpired`（`decodeJwt` 读 `exp`）。注意浏览器 WS API **不暴露握手期 HTTP status**
-     —— 后端鉴权失败是 upgrade 前直接回 `401`（不是 WS Close 帧），故 `1006` 无法区分
+     `tokenExpired`（`decodeJwt` 读 `exp`）。排查**先按 closeCode 查第 4 条的关闭码表**；
+     只有 `1006` 才需要再去查握手期 HTTP status —— 浏览器 WS API **不暴露握手期 status**，
+     后端鉴权失败是 upgrade 前直接回 `401`（不是 WS Close 帧），故 `1006` 无法区分
      `401` / `502` / 代理缺失，真实 status 只能看 Network 面板或直连后端 curl。
+  4. **关闭码分流（2026-10-02）**：后端已补完**主动 Close 帧**（此前全仓零
+     `sender.send(Message::Close(..))`，所有断开都是裸 drop，浏览器只见 `1006`），
+     关闭码语义表的唯一权威来源是 `~/Code/hsh-erp/backend-rust/docs/api/websocket.md`：
+     | code | 含义 | 前端行为 |
+     |---|---|---|
+     | `1000` | 正常关闭 | 无需动作；**服务端不主动发**，只会出现在客户端 `close(1000)` 的回声里（`closeDashboard()` / 登出路径） |
+     | `1001` | going away（**后端不主动发**：2026-10-02 起写失败路径改裸断，浏览器侧落 `1006`） | 保留行仅作对照；真收到与 `1006` 同走无限重连 |
+     | `1011` | 内部错误（`snapshot build failed` / `send snapshot failed` / `re-auth unavailable` / `pong timeout`） | 继续无限重试（`snapshot build failed` 一个 reason **刻意偏离**，见下） |
+     | `1012` | 服务重启 | 继续无限重试 |
+     | `4001` | **会话在连接期间失效** | **停重连 + 清 session + 走登出** |
+     | `4003` | 慢消费方（背压超限，丢了 n 条事件） | 继续无限重试 **+ 立即 invalidate 全量 HTTP 重取** |
+     | `1006` | 浏览器侧「异常关闭」兜底（无 Close 帧） | 继续无限重试（原因未知） |
+
+     `4001` 是**唯一**必须终止重连的码：其余全部按第 3 条继续无限重试，理由同上
+     （WS 是 dashboard 唯一更新通道，封顶/放弃重连会让页面静默停止刷新）；而 `4001`
+     再重试多少次都会被判 401，是死路，不分流就是 2026-10-01 修掉的「logout 死循环」
+     bug 的另一面。`onDisconnected` 里 `4001` 分支的行为**顺序**（`src/api/dashboard.ts`）：
+     ① `wsUrl.value = undefined` 停重连（复用第 2 条「无 token 不连」哨兵；
+     触发 `watch(urlRef, open)` → `close()` → `resetRetry()` 掐掉已排队的退避定时器，
+     即便没掐掉 `_init()` 首行的 undefined 守卫也不会 `new WebSocket`）
+     → ② `localStorage.removeItem('auth_session')` 清会话
+     → ③ `window.dispatchEvent(new CustomEvent('auth:session-lost', { detail: { code, reason } }))`。
+
+     `4003` 的**额外**动作（本表唯一非终止性的特例）：后端文档规定「重连 + 全量 HTTP
+     重取」，其成立前提是「重连时自然重新收到首帧 snapshot」—— **该前提对本前端不成立**：
+     重连后的首帧 `snapshot` 在 `api/dashboard.ts` 的 `dispatch()` 里被显式 no-op 丢弃，
+     且 TanStack Query 无轮询（`staleTime: 30_000` 只管「下次取数是否放行」）⇒ 丢掉的
+     n 个事件没有任何补偿通道，「丢 1 个事件 = 对应区块永不刷新」且页面静默无提示。
+     所以 `4003` 分支额外派发 `window` 事件 **`dashboard:full-refetch`**
+     （`CustomEvent<{ code, reason }>`），由
+     `src/views/dashboard/composables/useDashboardInvalidation.ts` 接收 → 对本
+     composable 持有的每个 queryKey **立即 invalidate（不防抖）**。防抖（500ms /
+     maxWait 1500ms）是给「单次扫码连发 3 个事件」防雪崩用的；4003 是「已确定丢了
+     数据」，每多等 500ms 都在展示已知过期的数据，故必须走独立的立即路径。
+     ⚠️ WS 层**禁止** import `@tanstack/vue-query`（api 层引入 TanStack Query 依赖是
+     分层倒置）—— 走 CustomEvent 解耦，接收方那边已经持有 `qk` + `queryClient`。
+     其余关闭码（`1006` / `1011` / `1012`）同样会因断连丢事件，属既有架构的
+     已知缺口（无轮询），刻意不在本表扩范围：只有 `4003` 是后端**明确告知**「永久丢了
+     n 条」的码。
+     `1011` 四个 reason 里**仅** `snapshot build failed` 一个被本前端**刻意偏离**
+     （后端建议「提示用户稍后再试」，理由与第 3 条一致 —— 放弃重连 / 静默停更比
+     「刷屏 + 无提示」更糟，单点后端故障不应该让所有客户端一起失去 dashboard）。
+     `re-auth unavailable`（后端 2026-10-02 新增：Redis 挂 / 连接池耗尽 → `50000`，
+     后端明确写「**不要**清 token」）/ `send snapshot failed` / `pong timeout` 三者
+     后端本就要求走通用重连，前端行为与后端要求**完全一致**，无偏离。
+
+     `auth:session-lost` 与上面 `auth:session-changed` **方向相反，别混淆**：
+     后者由 auth 层派发、语义「token 变了，WS 重算 URL 重连」；前者由 WS 层派发、
+     语义「后端判定会话已死，请上层终止会话」。接收方是 **`src/router/index.ts`**
+     （不是 MainLayout.vue：那只是组件，挂在 `requireAuth` 子树下，`/scan/*` 等
+     MainLayout 之外的全屏路由收不到；router 模块已持有 router + useAuthStore，零新增依赖），
+     动作是 **`auth.forceLogout(router)`**（`src/stores/auth.ts`）→ 清 store 内存 state
+     + `localStorage.removeItem` + 派发 `auth:session-changed(token: null)` +
+     `useTagsViewStore().reset()` + `router.replace('/login')`，**不联系后端**。
+     WS 层**禁止** import `stores/auth` 或 `vue-router`。
+     ⚠️ **不要**在 app 层改回「先 `refreshOrLogout(router)` 复核 `/iam/me`」：WS 层在
+     派发 ② 里已 `removeItem`，而 `http.ts` 请求拦截器只从 localStorage 取 token
+     （`readToken()`，不读 store）⇒ `apiMe()` 不带 `Authorization` ⇒ 后端 middleware
+     必返 `40100` ⇒ 「HTTP 侧仍有效」分支在构造上不可达，还留下一个长达一次 RTT 的
+     「UI 显示已登录、实际已登出」窗口。`refreshOrLogout` 的语义是**给路由守卫用**
+     （`!auth.isAuthenticated` 时的恢复路径），两者不要混用。
+
+     ⚠️ **`4001` 只在已建立的连接上有效 —— 握手阶段拿不到它（2026-10-02 留档，代码改不了）**。
+     后端 `reauth_close_code()` 的分流是：`40100` / `40102` / `40105`（鉴权类）→ `4001`，
+     其余（含 Redis 抖动 `50000`）→ `1011 / re-auth unavailable`。组合本身正确（前端对
+     `1011` 无特判 → 无限重连，与后端「不要清 token」一致）。但残留一条门：**Redis 抖动 +
+     会话已被吊销**时，re-auth 拿到 `50000` ⇒ 后端发 `1011` 而非 `4001` ⇒ 前端重连
+     ⇒ **握手阶段**校验到吊销 ⇒ upgrade 前直接回 `40105` ⇒ 浏览器只见 `1006` ⇒
+     **永远到不了 4001 分支**（只能继续无限重试）。暴露面有界：页面只要发出任何 HTTP
+     请求，`40105` 会触发 `http.ts` 派发 `auth:logout` → 跳登录页；只有在「页面静止 +
+     TanStack Query 无轮询」的空档里，用户会盯着不再刷新的 dashboard + 一串 WS 重试日志。
+     **这是既有架构缺口**（握手阶段的失败从来就是 1006），不是某次改动引入的；会话真死
+     的最终兜底是 **HTTP 侧 `40105` → `auth:logout`**，不是 WS 侧的 `4001`。
+     review 时不要把它误判成新 bug，也不要试图在前端加「握手失败几次就登出」的启发式 ——
+     那会把代理 / 后端故障（`502`、后端不可达，同样是 1006）误当成会话失效。
 
   **dev 环境必须有 `/ws` 反代**（`vite.config.ts` `server.proxy`）。Vite 8 的 dev `upgrade`
   监听器只对**匹配到的 proxy context** 转发 `proxy.ws`，不匹配的路径掉出循环后不写任何

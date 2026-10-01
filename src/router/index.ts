@@ -386,6 +386,40 @@ const routes: RouteRecordRaw[] = [
 
 const router = createRouter({ history: createWebHistory(), routes });
 
+// 2026-10-02 新增：接 dashboard WS 的「会话已死」通知。
+// api/dashboard.ts 收到后端关闭码 4001（会话在连接期间失效）时会派发
+// window 事件 'auth:session-lost'，并已自行清掉 localStorage 会话 + 停掉重连。
+// 本层只做 app 层该做的事：终止会话（清 store 内存 state + tagsView + 跳 /login）。
+//
+// 为什么接收方选 router 模块而不是 MainLayout.vue：
+//   ① 全局一次性注册。MainLayout 是组件（且挂在 requireAuth 子树下），
+//      /scan/* /delivery-dispatch/* 这些 MainLayout 之外的全屏路由收不到；
+//   ② router 模块已持有 router 实例 + 已 import useAuthStore，本处零新增依赖；
+//   ③ store 仍不 import vue-router —— forceLogout(router) 按参数注入（不变式）。
+//
+// 与 'auth:session-changed' 的区别（别混淆）：后者由 auth 层派发、语义是
+// 「token 变了，WS 该重算 URL 重连」；本事件由 WS 层派发、语义是「后端已判定会话
+// 失效，请上层终止会话」，方向相反。二者互不覆盖。
+//
+// 2026-10-02 修复（review Major 1）：动作从 `refreshOrLogout(router)` 复核 HTTP
+// 会话改为 `forceLogout(router)` 无条件终止。原实现的「复核」在构造上必然失败：
+// WS 层派发前已 removeItem('auth_session')，而 http.ts 拦截器只从 localStorage 取
+// token（不读 store）⇒ apiMe() 不带 Authorization ⇒ 后端必返 40100 ⇒ stillValid
+// 分支永不可达，还留下一个长达一次 RTT 的「UI 已登录、实际已登出」窗口。详见
+// src/stores/auth.ts forceLogout 注释。
+//
+// 不设防重入 flag（review Minor 1）：WS 层是 createGlobalState 单例，一个连接最多
+// fire 一次 close，且 4001 派发点只有 onDisconnected 一处 ⇒ 同一页面不会重复派发。
+// （此前「多个 WS 连接同时收到 4001」的说法与事实不符。）真正可能并发的是「4001」
+// 与路由守卫的 refreshOrLogout，但 forceLogout 幂等（每步都是置 null / removeItem /
+// reset / replace），重叠执行无害。
+if (typeof window !== 'undefined') {
+  window.addEventListener('auth:session-lost', () => {
+    const auth = useAuthStore();
+    auth.forceLogout(router);
+  });
+}
+
 /** DFS 在用户的菜单树中查找指定 code。 */
 function treeContainsCode(tree: MenuNode[], code: string): boolean {
   const stack: MenuNode[] = [...tree];

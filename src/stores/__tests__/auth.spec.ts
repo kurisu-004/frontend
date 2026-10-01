@@ -32,6 +32,7 @@ import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/iam';
 import { ApiError } from '@/api/http';
 import type { CurrentUser } from '@/types/user';
 import { useAuthStore } from '../auth';
+import { useTagsViewStore } from '../tagsView';
 import { ADMIN_MENUS } from '@/composables/__fixtures__/adminMenus';
 
 function makeUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
@@ -196,6 +197,87 @@ describe('useAuthStore', () => {
     });
   });
 
+  // ===== forceLogout（2026-10-02 新增，review Major 1 / Minor 2）=====
+  describe('forceLogout', () => {
+    /** 预置一个「已登录 + 有 tag 条」的状态，模拟用户正用着被后端踢下线。 */
+    async function seedSession(auth: ReturnType<typeof useAuthStore>): Promise<void> {
+      vi.mocked(apiLogin).mockResolvedValue({
+        token: 'live-tok',
+        refresh_token: 'live-refresh',
+        user: makeUser(),
+      });
+      await auth.loginMutation.mutateAsync({ username: 'a', password: 'b' });
+      useTagsViewStore().addView({
+        path: '/dashboard',
+        fullPath: '/dashboard',
+        name: 'Dashboard',
+        title: '首页',
+      });
+      expect(auth.isAuthenticated).toBe(true);
+      expect(useTagsViewStore().visitedViews).toHaveLength(1);
+    }
+
+    it('清内存 state + 清 localStorage + 派发 auth:session-changed(null) + 跳 /login', async () => {
+      const auth = useAuthStore();
+      const router = { replace: vi.fn() };
+      await seedSession(auth);
+
+      // listener 在 seedSession 之后挂：登录本身也会派发 auth:session-changed(token)，
+      // 这里只想断言「forceLogout 派发的那一条是 token=null」。
+      const seen: (string | null)[] = [];
+      const onChanged = (e: Event) => {
+        seen.push((e as CustomEvent<{ token: string | null }>).detail.token);
+      };
+      window.addEventListener('auth:session-changed', onChanged);
+
+      try {
+        auth.forceLogout(router);
+
+        expect(auth.token).toBeNull();
+        expect(auth.user).toBeNull();
+        expect(auth.isAuthenticated).toBe(false);
+        expect(localStorage.getItem('auth_session')).toBeNull();
+        // 派发是必须的：WS 层靠它把 URL 置 undefined 停掉重连
+        expect(seen).toEqual([null]);
+        expect(router.replace).toHaveBeenCalledWith('/login');
+      } finally {
+        window.removeEventListener('auth:session-changed', onChanged);
+      }
+    });
+
+    it('连带清空 tagsView（review Minor 2：被踢登录后不该保留旧页签）', async () => {
+      const auth = useAuthStore();
+      const router = { replace: vi.fn() };
+      await seedSession(auth);
+
+      auth.forceLogout(router);
+
+      expect(useTagsViewStore().visitedViews).toEqual([]);
+    });
+
+    it('幂等：可重复调用（与路由守卫的 refreshOrLogout 并发时也不会出问题）', async () => {
+      const auth = useAuthStore();
+      const router = { replace: vi.fn() };
+      await seedSession(auth);
+
+      auth.forceLogout(router);
+      expect(() => auth.forceLogout(router)).not.toThrow();
+
+      expect(auth.token).toBeNull();
+      expect(router.replace).toHaveBeenCalledTimes(2);
+    });
+
+    it('不联系后端（不调 /iam/me）—— 4001 已经是权威判定', async () => {
+      vi.mocked(apiMe).mockClear();
+      const auth = useAuthStore();
+      await seedSession(auth);
+
+      auth.forceLogout({ replace: vi.fn() });
+
+      expect(apiMe).not.toHaveBeenCalled();
+    });
+  });
+
   // ===== refreshOrLogout =====
   describe('refreshOrLogout', () => {
     it('returns true and updates user on success', async () => {
@@ -215,6 +297,18 @@ describe('useAuthStore', () => {
         'auth_session',
         JSON.stringify({ token: 'old', refresh_token: 'r', user: makeUser() }),
       );
+      // 2026-10-02 review Nit 5：顺带锁定 tagsView 清理。refreshOrLogout 的失败分支
+      // 委托给 forceLogout，守卫 / ScanBadgeGate / DispatchBadgeGate 的失败路径因此
+      // 也会清 tag 条（第一轮 Minor 2 的顺带效果）。若将来有人把 reset() 挪出
+      // forceLogout，只有 forceLogout 的直测会红、守卫路径会静默退化 → 这里补断言。
+      useTagsViewStore().addView({
+        path: '/dashboard',
+        fullPath: '/dashboard',
+        name: 'Dashboard',
+        title: '首页',
+      });
+      // 非空前置断言：否则下面的 `toEqual([])` 可能因为 addView 没生效而恒真
+      expect(useTagsViewStore().visitedViews).toHaveLength(1);
       const auth = useAuthStore();
       const router = { replace: vi.fn() };
       const ok = await auth.refreshOrLogout(router);
@@ -222,6 +316,7 @@ describe('useAuthStore', () => {
       expect(auth.token).toBeNull();
       expect(auth.user).toBeNull();
       expect(localStorage.getItem('auth_session')).toBeNull();
+      expect(useTagsViewStore().visitedViews).toEqual([]);
       expect(router.replace).toHaveBeenCalledWith('/login');
     });
   });
