@@ -6,6 +6,23 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 后端主仓已迁到 `~/Code/hsh-erp/backend-rust`（Rust + axum + sqlx）。所有后端契约一律维护在 `~/Code/hsh-erp/backend-rust/docs/api/`（按域切分：`auth.md` / `users.md` / `delivery-notes.md` / `delivery-groups.md` / `websocket.md` / `index.md` 通用约定）。需要查后端接口时直接 `Read` 对应文件，不要翻 `src/modules/*` 源码反推。
 
+**2026-10-02 域拆分：货架↔工序映射归 prod 域**。后端把 `t_shelf_process` 从 `src/modules/shelf/process_mapping/` 搬到 `src/modules/prod/shelf_process/`，3 个端点 URL **硬切、无 alias**（旧路由已从 `src/modules/shelf/handler.rs` 删除）：
+
+| 前端函数（`src/api/shelves.ts`） | 新路径 | 旧路径（已死） |
+|---|---|---|
+| `getShelfProcesses(id)` | `GET /api/v2/prod/shelf-processes/{shelf_id}` | `GET /api/v2/shelves/{id}/processes` → 404 |
+| `setShelfProcesses(id, payload)` | `POST /api/v2/prod/shelf-processes/{shelf_id}` | `POST /api/v2/shelves/{id}/processes` → 404 |
+| `getAllShelfProcessMappings()` | `GET /api/v2/prod/shelf-processes` | `GET /api/v2/shelves/processes` → **400 且响应体不是 `R` 信封**（落进 shelf 域 `/{id}` 路由，`processes` 解析不成 i64 被 axum `Path<i64>` 拒掉，返纯文本） |
+
+请求 / 响应契约**逐字不变**。**货架 CRUD 仍在 `/api/v2/shelves/*`**（未被搬动，`src/api/shelves.ts` 的 4 个 CRUD + 2 个 picker 端点不变）。契约文档：`~/Code/hsh-erp/backend-rust/docs/api/production/shelf-process-mapping.md`（含「前端配套改动清单」一节）；货架 CRUD 文档仍在 `~/Code/hsh-erp/backend-rust/docs/api/shelves.md`。
+
+> 3 个映射函数**刻意留在 `src/api/shelves.ts`**，不新建 `src/api/prod/` 子目录：本仓 `src/api/` 按**前端实体扁平放置**、不按后端模块分层。两组反证：
+>
+> 1. `/prod` 命名空间已被**7 个扁平文件**瓜分（`process.ts` / `worker.ts` / `workType.ts` / `workerPool.ts` / `pendingBatches.ts` / `processChain.ts` / `programming.ts`）。其中 `programming.ts` → `/prod/programming/pending` 与本次的 `/prod/shelf-processes` **完全同构**；`workerPool.ts` → `/prod/pool/*` 更直接反证「文件名 = URL 段」在本仓**从来不是**规则。建 `api/prod/` 只会把 1 个资源塞进第 8 处，或引发搬 7 个文件的巨量 diff。
+> 2. 现有 3 个子目录 `com/` / `files/` / `parts/` **全部镜像独占 URL 命名空间**（`com/unionList.ts` → `/com/union-list`、`files/sts.ts` → `/files/sts-tmp-keys`、`parts/*` → `/parts/*`）。注意 `files/` 只有 1 个文件、1 条端点路径 —— 它成目录**不是因为端点多**，只有 `parts/`（`/parts/*` 端点数确实多到拆出 4 个实现文件 batch / bid / crud / file）才适用「端点多到需拆文件」。**没有** `prod/` 目录。
+>
+> `src/types/shelf.ts` 里 `ShelfProcessMappingItem` / `AllShelfProcessMappingItem` / `ShelfProcessesResult` / `SetShelfProcessesPayload` 同理留在原处（按货架实体归类）。
+
 ## 主题色
 
 藏青 `#1e4d8b` / 蓝 `#2c6cb8` / 浅蓝 `#4a8fd6`，覆盖在 `src/styles/variables.scss` 的 `:root` 块里。

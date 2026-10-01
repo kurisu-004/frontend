@@ -1380,8 +1380,10 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
 //     `GET /api/v2/prod/programming/pending`（ProgrammingItem 13 字段 +
 //     ProgrammingListOut 4 字段；「待编程一览」页数据源，替代恒返空的
 //     part 域 /parts/pending-programming）。
-//   - @/types/shelf.ts::Shelf 11 字段（货架列表 GET /api/v2/shelves，
-//     共享基础数据层 useProductionShelvesQuery 守门）。
+//   - @/types/shelf.ts::Shelf 10 字段（货架列表 GET /api/v2/shelves，
+//     共享基础数据层 useProductionShelvesQuery 守门；2026-10-02 起
+//     account_count 随「用户决定货架列表页不再展示账号数」一并摘除，
+//     后端 ShelfOut 在同 PR 也已删该字段，属另一次独立决策）。
 //
 // 覆盖：
 //   - S24：pendingProgrammingItemSchema 接受完整 13 字段不抛错；客户字段是
@@ -1394,8 +1396,10 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
 //   - S27：pendingProgrammingItemSchema 的 id 传 number → 抛 ZodError
 //     （雪花 ID 一律 string，JS Number 会丢精度 —— CLAUDE.md §3）。
 //   - S28：pendingProgrammingListResultSchema 接受分页 4 字段；缺 items → 抛错。
-//   - S29：shelfSchema 接受完整 11 字段（zone=PRODUCTION / location=null）。
-//   - S30：shelfSchema 缺 account_count → 抛 ZodError（M-1 同形态 guard）；
+//   - S29：shelfSchema 接受完整 10 字段（zone=PRODUCTION / location=null）。
+//   - S30：shelfSchema 缺 zone → 抛 ZodError（M-1 同形态 guard；2026-10-02 起
+//     guard 字段从 account_count 换成 zone —— 前者随「用户决定不再展示账号数」
+//     摘除，但「必填字段缺失必须报错」这个设计意图不变，不能跟着删用例）；
 //     shelfListResultSchema 缺 items → 抛 ZodError。
 // ============================================================
 describe('2026-10-01 新增：programming / shelves schema 契约断言', () => {
@@ -1423,7 +1427,7 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
     zone: 'PRODUCTION',
     location: null,
     is_active: true,
-    account_count: 0,
+    // 2026-10-02 摘除 account_count（用户决定货架列表页不再展示账号数），本 fixture 已是 10 字段。
     display_order: 1,
     created_at: '2026-09-01 10:00:00',
     updated_at: '2026-09-30 11:00:00',
@@ -1472,17 +1476,21 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
     ).toThrow();
   });
 
-  it('S29：shelfSchema 接受完整 11 字段（zone=PRODUCTION / location=null）', () => {
+  it('S29：shelfSchema 接受完整 10 字段（zone=PRODUCTION / location=null）', () => {
     const parsed = shelfSchema.parse(validShelf);
     expect(parsed.id).toBe('8800000000001');
     expect(parsed.zone).toBe('PRODUCTION');
     expect(parsed.location).toBeNull();
     expect(parsed.is_active).toBe(true);
-    expect(parsed.account_count).toBe(0);
+    expect(parsed.display_order).toBe(1);
   });
 
-  it('S30：shelfSchema 缺 account_count → 抛 ZodError；shelfListResultSchema 缺 items → 抛 ZodError', () => {
-    const { account_count: _omit, ...rest } = validShelf;
+  it('S30：shelfSchema 缺 zone → 抛 ZodError；shelfListResultSchema 缺 items → 抛 ZodError', () => {
+    // 2026-10-02：原 guard 字段 account_count 随「用户决定不再展示账号数」摘除，
+    // 换成同为必填的 zone 继续守「必填字段缺失必须抛 ZodError」这条设计意图
+    // （CLAUDE.md 架构条目 §4「Zod 默认 strip 模式会让缺字段静默丢弃」的
+    // regression guard）。
+    const { zone: _omit, ...rest } = validShelf;
     void _omit;
     expect(() => shelfSchema.parse(rest)).toThrow();
     expect(() =>

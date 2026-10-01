@@ -307,7 +307,9 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   const processes = computed<Process[]>(
     () => (processesQuery.data.value?.items ?? []) as Process[],
   );
-  // 2026-10-01：shelfSchema 的 11 字段与 @/types/shelf::Shelf 结构完全一致，无需桥接。
+  // 2026-10-01：shelfSchema 的字段与 @/types/shelf::Shelf 结构完全一致，无需桥接。
+  // 2026-10-02：两侧同步摘除 account_count（用户决定货架列表页不再展示账号数；
+  // 后端 ShelfOut 在同 PR 也已删该字段，是另一次独立决策），仍 10 字段对齐。
   const productionShelves = computed<Shelf[]>(() => shelvesQuery.data.value?.items ?? []);
   // 2026-07-17：CNC 下发只允许 INHOUSE 工序（外协工序走 send_to_outsource）
   const inhouseProcesses = computed(() =>
@@ -367,7 +369,7 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     releaseShelfId.value = null;
     releaseProcessId.value = null;
     releaseDialogVisible.value = true;
-    // 拉全量「货架↔工序」映射（一次 GET /shelves/processes，避免 N+1）
+    // 拉全量「货架↔工序」映射（一次 GET /prod/shelf-processes，避免 N+1）
     void loadReleaseMap();
   }
 
