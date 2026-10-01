@@ -59,9 +59,11 @@ export interface ShelfProcessMappingItem {
 }
 
 /** 全集已映射工序的一行（`GET /prod/shelf-processes` 响应 item）。
- *  对应后端 VO `AllShelfProcessMappingItem`（同上文件 :36-45）—— 与单架 VO 的
+ *  对应后端 VO `AllShelfProcessMappingItem`（同上文件 :43-50）—— 与单架 VO 的
  *  唯一差别就是**不返 sort_order**（全集排序由 service 层 ORDER BY 保证），
- *  故显式 Omit，而不是让单架 VO 的 sort_order 变可选。 */
+ *  故显式 Omit，而不是让单架 VO 的 sort_order 变可选。
+ *  2026-10-02 review 订正：原写 :36-45，实际结构体在 vo.rs:43-50（36-42 是它
+ *  上方的文档注释，:44 才是 `pub struct`）。 */
 export type AllShelfProcessMappingItem = Omit<ShelfProcessMappingItem, 'sort_order'>;
 
 /** `GET /prod/shelf-processes/{shelf_id}` 响应体。

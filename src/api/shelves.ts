@@ -9,17 +9,24 @@
 //     GET  /shelves/processes        → GET  /prod/shelf-processes
 //     GET  /shelves/{id}/processes   → GET  /prod/shelf-processes/{shelf_id}
 //     POST /shelves/{id}/processes   → POST /prod/shelf-processes/{shelf_id}
-//   请求 / 响应契约**逐字不变**（同 commit 的另一半 `ShelfOut.account_count` 摘除
-//   已在前一个 commit 落地），所以本次只改 URL 字符串前缀。
+//   映射端点的请求 / 响应契约**逐字不变**，所以本次只改 URL 字符串前缀。
 //
 //   这 3 个函数（`getAllShelfProcessMappings` / `getShelfProcesses` /
 //   `setShelfProcesses`）**刻意留在本文件**、不新建 `api/prod/` 子目录：本仓
-//   `src/api/` 的组织约定是**按前端实体扁平放置**，不按后端模块分层。实证：
-//   `api/process.ts` → `/prod/processes`、`api/workType.ts` → `/prod/work-types`、
-//   `api/workerPool.ts` → `/prod/pool/*`、`api/pendingBatches.ts` →
-//   `/prod/batches/pending` —— prod 域端点全在扁平文件里；`src/api/` 下的子目录
-//   只有 `com/`（同仓后端 `com` 容器聚合域）、`files/`、`parts/`（part 域端点数
-//   多到需拆文件），**没有** `prod/`。
+//   `src/api/` 的组织约定是**按前端实体扁平放置**，不按后端模块分层。反证有两组：
+//   ① `/prod` 命名空间已被**7 个扁平文件**瓜分（`process.ts` / `worker.ts` /
+//      `workType.ts` / `workerPool.ts` / `pendingBatches.ts` / `processChain.ts` /
+//      `programming.ts`）。其中 `programming.ts` → `/prod/programming/pending` 与
+//      本次的 `/prod/shelf-processes` **完全同构**（文件名 ≠ URL 段）；而
+//      `workerPool.ts` → `/prod/pool/*` 连 URL 段都和文件名不是一个词 —— 可见
+//      「文件名 = URL 段」在本仓**从来不是**规则。建 `api/prod/` 只会把 1 个资源
+//      塞进第 8 处，或引发搬这 7 个文件的巨量 diff。
+//   ② 现有 3 个子目录 `com/` / `files/` / `parts/` 则**全部镜像独占 URL 命名
+//      空间**（`com/unionList.ts` → `/com/union-list`、`files/sts.ts` →
+//      `/files/sts-tmp-keys`、`parts/*` → `/parts/*`）。注意 `files/` 只有 1 个文件、
+//      1 条端点路径，它成目录**不是因为端点多**；只有 `parts/`（`/parts/*` 端点数
+//      确实多到拆出 4 个实现文件 batch / bid / crud / file）才适用「端点多到需拆
+//      文件」。**没有** `prod/` 目录。
 //
 //   ⚠️ 旧路径现在的行为（改动理由，也是「不能留兼容层」的依据）：
 //     - `GET /shelves/processes` → **400，且响应体不是 `R` 信封**。它现在落到
@@ -89,8 +96,13 @@ export async function deactivateShelf(id: string): Promise<Shelf> {
  * 旧实现声明返回 `ShelfWithProcesses {..., processes: [...]}`，那是 v1(Python)
  * 形态 —— 后端 v2 实际返 `{items: [{shelf_id, shelf_code, process_id,
  * process_code, sort_order}]}`，消费侧 `sp.processes` 恒 undefined。
- * 对齐 backend-rust docs/api/production/shelf-process-mapping.md:74-97
+ * 对齐 backend-rust docs/api/production/shelf-process-mapping.md:88-106
+ * （**单架**端点一节：Path + 5 字段响应表，含 sort_order）
  * + src/modules/prod/shelf_process/{dto,vo}.rs。
+ * 2026-10-02 review 订正：原写 `:74-97`，那是**全集**端点（4 字段、**明确不含**
+ * sort_order）的响应表 + 单架端点的标题行 —— 指错了 VO，正好是 BUG-2 那一类
+ * 混淆（`ShelfProcessesResult` 与 `AllShelfProcessMappingItem` 的区别就在
+ * sort_order）。全集形态见下方 getAllShelfProcessMappings 的注释。
  *
  * 2026-10-02 域拆分：URL 从 `/shelves/{id}/processes` 硬切到
  * `/prod/shelf-processes/{shelf_id}`（旧路径 404），响应契约逐字不变。

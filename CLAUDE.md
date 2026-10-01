@@ -16,7 +16,12 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 请求 / 响应契约**逐字不变**。**货架 CRUD 仍在 `/api/v2/shelves/*`**（未被搬动，`src/api/shelves.ts` 的 4 个 CRUD + 2 个 picker 端点不变）。契约文档：`~/Code/hsh-erp/backend-rust/docs/api/production/shelf-process-mapping.md`（含「前端配套改动清单」一节）；货架 CRUD 文档仍在 `~/Code/hsh-erp/backend-rust/docs/api/shelves.md`。
 
-> 3 个映射函数**刻意留在 `src/api/shelves.ts`**，不新建 `src/api/prod/` 子目录：本仓 `src/api/` 按**前端实体扁平放置**、不按后端模块分层（`api/process.ts` → `/prod/processes`、`api/workType.ts` → `/prod/work-types`、`api/workerPool.ts` → `/prod/pool/*`、`api/pendingBatches.ts` → `/prod/batches/pending` 全在扁平文件里；`src/api/` 下子目录只有 `com/` / `files/` / `parts/`，**没有** `prod/`）。`src/types/shelf.ts` 里 `ShelfProcessMappingItem` / `AllShelfProcessMappingItem` / `ShelfProcessesResult` / `SetShelfProcessesPayload` 同理留在原处（按货架实体归类）。
+> 3 个映射函数**刻意留在 `src/api/shelves.ts`**，不新建 `src/api/prod/` 子目录：本仓 `src/api/` 按**前端实体扁平放置**、不按后端模块分层。两组反证：
+>
+> 1. `/prod` 命名空间已被**7 个扁平文件**瓜分（`process.ts` / `worker.ts` / `workType.ts` / `workerPool.ts` / `pendingBatches.ts` / `processChain.ts` / `programming.ts`）。其中 `programming.ts` → `/prod/programming/pending` 与本次的 `/prod/shelf-processes` **完全同构**；`workerPool.ts` → `/prod/pool/*` 更直接反证「文件名 = URL 段」在本仓**从来不是**规则。建 `api/prod/` 只会把 1 个资源塞进第 8 处，或引发搬 7 个文件的巨量 diff。
+> 2. 现有 3 个子目录 `com/` / `files/` / `parts/` **全部镜像独占 URL 命名空间**（`com/unionList.ts` → `/com/union-list`、`files/sts.ts` → `/files/sts-tmp-keys`、`parts/*` → `/parts/*`）。注意 `files/` 只有 1 个文件、1 条端点路径 —— 它成目录**不是因为端点多**，只有 `parts/`（`/parts/*` 端点数确实多到拆出 4 个实现文件 batch / bid / crud / file）才适用「端点多到需拆文件」。**没有** `prod/` 目录。
+>
+> `src/types/shelf.ts` 里 `ShelfProcessMappingItem` / `AllShelfProcessMappingItem` / `ShelfProcessesResult` / `SetShelfProcessesPayload` 同理留在原处（按货架实体归类）。
 
 ## 主题色
 

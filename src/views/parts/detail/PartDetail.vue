@@ -562,7 +562,12 @@ watch(
   },
 );
 
-// ============ 共享 prod/shelf-processes 缓存（release / failInsp / receive 共用）============
+// ============ 共享 shelves / processes 缓存（release / failInsp / receive 共用）============
+// 2026-10-02 订正：本节标题当天曾被 URL 批量同步误改成「共享 prod/shelf-processes
+// 缓存」——错的。`productionShelves` 来自 listShelves({zone:'PRODUCTION'})
+// （`/shelves`），`processes` 来自 listProcesses()（`/prod/processes`），两者都
+// **不是** `/prod/shelf-processes`。那个 URL 是下面两处 useShelfProcessFilter
+// （loadFailInspMap / loadReceiveMap）自己去拉的映射表，缓存归属独立。
 const productionShelves = ref<Shelf[]>([]);
 const processes = ref<Process[]>([]);
 async function ensureShelvesProcesses(): Promise<void> {

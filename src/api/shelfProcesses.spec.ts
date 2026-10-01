@@ -11,10 +11,14 @@
 //   ⇒ 契约必须在前端侧被逐字钉死，不能靠后端自测 + 类型系统兜底。
 //
 // 覆盖对齐 backend-rust docs/api/production/shelf-process-mapping.md（2026-10-02
-//       新建，本域从 docs/api/shelves.md 迁出）+ src/modules/prod/shelf_process/
-//       {dto,vo}.rs —— 2026-10-02 后端域拆分后
-//       映射的 DTO / VO 已整文件搬到 prod 子模块，文件路径随之变；DTO 在
-//       master 上仍可从 src/modules/shelf/dto.rs 找到）：
+//       新建，本域从 docs/api/shelves.md 迁出）+ 源码侧
+//       src/modules/prod/shelf_process/{dto,vo}.rs —— 2026-10-02 后端域拆分后
+//       映射的 DTO / VO 已整文件搬到 prod 子模块，文件路径随之变。
+//       2026-10-02 review 订正：原文「DTO 在 master 上仍可从
+//       src/modules/shelf/dto.rs 找到」**已失效**——后端拆分（同日、晚 71 分钟
+//       落地）把 SetShelfProcessesRequest 搬到了 prod/shelf_process/dto.rs:19，
+//       src/modules/shelf/dto.rs 现在只剩一行迁移说明、已无该 DTO。DTO/VO 现在
+//       均只在 prod/shelf_process/{dto,vo}.rs：
 //   - C0：toShelfProcessesPayload 把下拉多选 id 列表编成 `{items:[{process_id,
 //         sort_order}]}`，sort_order = 数组下标（v1「提交顺序即 sort_order」）。
 //   - C0b：toShelfProcessesPayload 去重 + 按去重后下标重排 sort_order
@@ -311,8 +315,9 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
     // C1 / C1b / C3 / C4 各自已逐字钉死自己那条 URL，本用例是它们的**命名空间
     // 兜底**：逐个收集本模块 3 个函数实际发出的 URL，断言
     //   ① 每条都以 `/prod/shelf-processes` 开头（不容 second namespace 混进来）
-    //   ② 没有一条残留旧 `/shelves/` 前缀 —— 防止后人「顺手」把某个路径抄回去，
-    //      也防止将来新增映射端点时忘了跟随后端搬域。
+    //      —— **这一条才是真正的防线**：它同时挡住了「把旧路径抄回去」和
+    //      「将来新增映射端点忘了跟随后端搬域」两种回归。
+    //   ② 没有一条残留旧 `/shelves/` 前缀（逻辑上是 ① 的蕴含，见下方断言处注释）
     // 不做成「遍历 shelves.ts 源码文本」的静态断言：那会绑死注释里的示例 URL，
     // 反而制造改注释即红的噪声；行为级断言（mock 收到的实际 URL）才是契约本身。
     httpGetMock.mockResolvedValue({ data: { items: [] } });
@@ -332,6 +337,11 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
     expect(urls).toHaveLength(3);
     for (const url of urls) {
       expect(url.startsWith('/prod/shelf-processes')).toBe(true);
+      // ③④ 是 ① 的**逻辑蕴含**，不是独立防线（2026-10-02 review 订正措辞）：
+      // 一旦 ① 成立，`/shelves/` 前缀必不成立、正则也因 `^` 锚定 + 前缀互斥
+      // 必不匹配 → 这两条零增量守卫。保留它们的理由只有可读性：让「旧前缀已被
+      // 显式排除」在测试里**看得见**，而不是让后人误以为删掉会丢覆盖率。
+      // 真正承担「防止后人把路径抄回去」的是 ① 以及 C1/C1b/C3/C4 的逐字 URL 断言。
       expect(url.startsWith('/shelves/')).toBe(false);
       // 旧路径的两种形态逐字排除：全集 `/shelves/processes` 与单架
       // `/shelves/{id}/processes`。
