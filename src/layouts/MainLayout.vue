@@ -2,9 +2,15 @@
   <el-container class="main-layout">
     <!-- 左侧菜单栏（始终显示；可折叠到 64px） -->
     <el-aside :width="isCollapse ? '64px' : '165px'" class="sidebar">
+      <!-- 2026-10-01 换品牌标识：EP <Box> 图标 + myERP 文案 → 正式 logo 图形标
+           （public/logo-mark.svg，母版 public/logo.svg 去掉黑色字标后的纯图形）。
+           用图形标而非完整 lockup 的原因：字标只占整体高度约 9.7%，在 48px 的
+           logo 条内渲染后 cap height 约 4px，任何尺寸下都不可读；且原字标是黑色
+           #010102，落在 #142d54 深底上完全看不见（已用 rsvg-convert 渲染核对）。
+           折叠态 v-show 会把文字移出无障碍树，所以 img 的 alt 不能留空。 -->
       <div class="logo">
-        <el-icon class="logo-icon"><Box /></el-icon>
-        <span v-show="!isCollapse" class="logo-text">myERP</span>
+        <img class="logo-mark" src="/logo-mark.svg" alt="洪升宏" />
+        <span v-show="!isCollapse" class="logo-text">洪升宏</span>
       </div>
 
       <el-menu
@@ -81,7 +87,7 @@
 // —— 折叠 / 侧栏菜单 / 顶栏三段式 / keep-alive / NotificationBanner。
 import { ref, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Box, Fold, Expand } from '@element-plus/icons-vue';
+import { Fold, Expand } from '@element-plus/icons-vue';
 // 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
 // 标量 getter 去掉括号：menus() → auth.menus；isDummyAuthActive() → auth.isDummyAuthActive。
 import { useAuthStore } from '@/stores/auth';
@@ -140,9 +146,16 @@ function onMenuSelect(index: string): void {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background-color: #142d54;
 
-  .logo-icon {
-    font-size: 24px;
-    color: #7eb0e3;
+  /* 2026-10-01：.logo-icon（EP <Box> 的 font-size: 24px + color: #7eb0e3）随
+     图标下线一并删除——<img> 不吃 font-size / currentColor，两条规则都是死的。
+     换成图形标：viewBox 2003.13×1326.84，宽高比 1.51:1，48px 宽 → 32px 高，
+     折叠态 64px 侧栏两侧各余 8px。object-fit: contain 兜住 SVG 根节点
+     width="91.852mm" 解析出的固有尺寸（~347×230px），避免宽高比微差导致拉伸。 */
+  .logo-mark {
+    display: block;
+    width: 48px;
+    height: 32px;
+    object-fit: contain;
   }
 
   .logo-text {

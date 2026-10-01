@@ -1,6 +1,10 @@
 <template>
   <el-card class="login-card">
     <div class="card-header">
+      <!-- 2026-10-01 新增：品牌图形标。路径不写死在壳里，由调用方经 logoSrc 传入
+           （沿用本组件既定的「复用时只改 LoginView，不动 LoginCard」约定）。
+           alt 留空是装饰性图片——产品名由下方 h1 承担。 -->
+      <img v-if="logoSrc" class="card-logo" :src="logoSrc" alt="" />
       <h1>{{ title }}</h1>
       <p v-if="subtitle">{{ subtitle }}</p>
     </div>
@@ -39,6 +43,11 @@ interface Props {
   submitting?: boolean;
   errorMessage?: string;
   disabled?: boolean;
+  // 2026-10-01 新增：品牌图形标 URL（不含字标的纯图形，见 public/logo-mark.svg）。
+  // 选图形标而非完整 lockup：字标是黑色 #010102，本卡片是白底，完整 lockup 里
+  // 「图形 + 字标」会与下方 h1 的产品名重复；且字标仅占整体高度 9.7%，缩到
+  // 卡片内的合理尺寸后不可读。
+  logoSrc?: string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -47,6 +56,7 @@ const props = withDefaults(defineProps<Props>(), {
   submitting: false,
   errorMessage: '',
   disabled: false,
+  logoSrc: '',
 });
 
 const emit = defineEmits<{ submit: [] }>();
@@ -69,6 +79,16 @@ const onSubmit = () => {
 .card-header {
   text-align: center;
   margin-bottom: 28px;
+  /* 2026-10-01 新增：120×80 ≈ 1.5:1，贴合 logo 的 1.51:1 宽高比；
+     object-fit: contain 保证 SVG 根节点 mm 固有尺寸不把图拉变形。
+     卡片高 380px、上 padding 40px，内容宽 308px —— 120px 居中留白充裕。 */
+  .card-logo {
+    display: block;
+    width: 120px;
+    height: 80px;
+    object-fit: contain;
+    margin: 0 auto 16px;
+  }
   h1 {
     margin: 0 0 4px;
     font-size: 22px;

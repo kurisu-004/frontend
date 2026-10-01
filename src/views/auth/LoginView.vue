@@ -1,6 +1,7 @@
 <template>
   <div class="login-page">
     <LoginCard
+      logo-src="/logo-mark.svg"
       title="洪升宏ERP"
       subtitle="AI驱动的现代化生产管理系统"
       :submitting="submitting"
