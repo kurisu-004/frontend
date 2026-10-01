@@ -297,6 +297,18 @@ describe('useAuthStore', () => {
         'auth_session',
         JSON.stringify({ token: 'old', refresh_token: 'r', user: makeUser() }),
       );
+      // 2026-10-02 review Nit 5：顺带锁定 tagsView 清理。refreshOrLogout 的失败分支
+      // 委托给 forceLogout，守卫 / ScanBadgeGate / DispatchBadgeGate 的失败路径因此
+      // 也会清 tag 条（第一轮 Minor 2 的顺带效果）。若将来有人把 reset() 挪出
+      // forceLogout，只有 forceLogout 的直测会红、守卫路径会静默退化 → 这里补断言。
+      useTagsViewStore().addView({
+        path: '/dashboard',
+        fullPath: '/dashboard',
+        name: 'Dashboard',
+        title: '首页',
+      });
+      // 非空前置断言：否则下面的 `toEqual([])` 可能因为 addView 没生效而恒真
+      expect(useTagsViewStore().visitedViews).toHaveLength(1);
       const auth = useAuthStore();
       const router = { replace: vi.fn() };
       const ok = await auth.refreshOrLogout(router);
@@ -304,6 +316,7 @@ describe('useAuthStore', () => {
       expect(auth.token).toBeNull();
       expect(auth.user).toBeNull();
       expect(localStorage.getItem('auth_session')).toBeNull();
+      expect(useTagsViewStore().visitedViews).toEqual([]);
       expect(router.replace).toHaveBeenCalledWith('/login');
     });
   });

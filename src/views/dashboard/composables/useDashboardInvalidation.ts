@@ -141,6 +141,11 @@ export function useDashboardInvalidation(
   //
   // 与 'auth:session-lost' 的区别：那个是「会话已死，终止会话」（接收方在 router
   // 模块），本事件是「会话没死、数据可能缺了，补一次全量重取」（接收方在本文件）。
+  //
+  // 2026-10-02 review Nit 2：本 composable 有 5 个注册点，其中 `PartPreviewDialog`
+  // 传的是 `qk.partBatchesPrefix`（不是 dashboard 域键）。4003 到达时弹窗若开着，
+  // `partBatchesPrefix` 也会被立即 invalidate —— **这是有意的、不是误伤**：该弹窗本就
+  // 复用了同一套 WS 失效管道，其数据同样暴露在「后端宣告丢事件」的丢数风险下。
   if (typeof window !== 'undefined') {
     const onFullRefetch = () => {
       for (const k of keyList) {

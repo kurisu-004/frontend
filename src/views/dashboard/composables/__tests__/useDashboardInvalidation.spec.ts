@@ -14,13 +14,17 @@
 //     （后端 4003 慢消费方丢事件）→ **立即** invalidate，不走 500ms 防抖
 //   - I10：scope.stop() → 'dashboard:full-refetch' listener 一并摘除（防泄漏）
 //
+// 2026-10-02（review Nit 1）：用例内显式 `scope.stop()` 只是正常路径的清理；真正的
+// 安全网是文件级 `makeScope()` 记账 + afterEach 统一 stop —— 断言中途失败时用例末尾的
+// stop() 不会执行，泄漏的 listener 会把「一个真实失败」放大成级联假失败。
+//
 // 2026-10-02：本文件新增 window 事件接入点（4003 全量重取），node 环境下 window
 // 不存在、composable 内的 `typeof window !== 'undefined'` 守卫会静默跳过注册 ⇒ 必须
 // 切 happy-dom 才覆盖得到 I9 / I10。本文件触及的 DOM 只有 window 事件 API。
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp, effectScope } from 'vue';
+import { createApp, effectScope, type EffectScope } from 'vue';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 vi.mock('element-plus', () => ({
@@ -100,6 +104,23 @@ const AFFECTS_DASHBOARD_EVENTS: string[] = [
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
 
+/** 2026-10-02（review Nit 1）：本文件所有用例创建的 effectScope 统一记账。
+ *
+ *  每个 scope 都会注册两处订阅：eventSubs 里的 WS 事件 handler + window 上的
+ *  'dashboard:full-refetch' listener（均走 tryOnScopeDispose 摘除）。用例把
+ *  `scope.stop()` 写在末尾的 `expect()` 之后，一旦断言失败它就不会执行 ⇒ 订阅泄漏到
+ *  后续用例，把「一个真实失败」放大成「后续用例计数对不上」的**级联假失败**，掩盖
+ *  真实原因。这里由文件级 afterEach 兜底 stop 全部 scope：`EffectScope.stop()` 幂等，
+ *  用例内显式 stop 不受影响、也不会重复摘除。 */
+const activeScopes = new Set<EffectScope>();
+
+/** 取代裸 `effectScope()`：建 scope 并登记，供 afterEach 统一清理。 */
+function makeScope(): EffectScope {
+  const scope = effectScope();
+  activeScopes.add(scope);
+  return scope;
+}
+
 describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2026-09-29）', () => {
   beforeEach(() => {
     lastEventHandler = null;
@@ -111,6 +132,11 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   });
 
   afterEach(() => {
+    // 先摘订阅（stop 幂等，重复调用安全），再拆 queryClient
+    for (const scope of Array.from(activeScopes)) {
+      activeScopes.delete(scope);
+      scope.stop();
+    }
     testQueryClient.unmount();
     testApp = null as unknown as ReturnType<typeof createApp>;
     testQueryClient = null as unknown as QueryClient;
@@ -125,7 +151,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   it('I2：AFFECTS_DASHBOARD 内事件触发 invalidate', async () => {
     vi.useFakeTimers();
     const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-    const scope = effectScope();
+    const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardSnapshot));
     });
@@ -149,7 +175,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   it('I3：连续 5 个 AFFECTS_DASHBOARD 事件 → debounce 500ms 内合并为 1 次 invalidate', async () => {
     vi.useFakeTimers();
     const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-    const scope = effectScope();
+    const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardUrgentList));
     });
@@ -174,7 +200,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   it('I4：maxWait 1500ms —— 持续超过 1500ms 强制 flush invalidate', async () => {
     vi.useFakeTimers();
     const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-    const scope = effectScope();
+    const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardSnapshot));
     });
@@ -198,7 +224,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   it('I5：DELIVERY_NOTE_CREATED 不在 AFFECTS_DASHBOARD → 不触发 invalidate', async () => {
     vi.useFakeTimers();
     const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-    const scope = effectScope();
+    const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardSnapshot));
     });
@@ -219,7 +245,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   it('I6：传 QueryKey[] → 遍历每个 key 各 invalidate 一次', async () => {
     vi.useFakeTimers();
     const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-    const scope = effectScope();
+    const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() =>
         useDashboardInvalidation([qk.dashboardSnapshot, qk.dashboardUrgentList]),
@@ -245,7 +271,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     vi.useFakeTimers();
     for (const evType of AFFECTS_DASHBOARD_EVENTS) {
       const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-      const scope = effectScope();
+      const scope = makeScope();
       scope.run(() => {
         testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardSnapshot));
       });
@@ -266,7 +292,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
 
   it('I8：scope.stop() → offDashboardEvent 触发 → handler Set 清零（review N1 guard）', () => {
     for (let i = 0; i < 5; i++) {
-      const scope = effectScope();
+      const scope = makeScope();
       scope.run(() => {
         testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardSnapshot));
       });
@@ -289,7 +315,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   it('I9：window 事件 dashboard:full-refetch → 立即 invalidate（0ms，不等 500ms 防抖）', () => {
     vi.useFakeTimers();
     const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-    const scope = effectScope();
+    const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardSnapshot));
     });
@@ -308,7 +334,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   it('I9b：多 key 形态 → 全量重取时逐 key 各 invalidate 一次', () => {
     vi.useFakeTimers();
     const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-    const scope = effectScope();
+    const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() =>
         useDashboardInvalidation([qk.dashboardSnapshot, qk.dashboardUrgentList]),
@@ -327,7 +353,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     vi.useFakeTimers();
     const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
 
-    const scope = effectScope();
+    const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardSnapshot));
     });

@@ -159,6 +159,12 @@ export const useAuthStore = defineStore('auth', () => {
   });
 
   // ===== actions =====
+  /** 主动登出（用户点「退出」）。
+   *  2026-10-02 review Nit 4：与下面 `forceLogout` 的「清会话」序列**逐字相同**，
+   *  唯一差异是本函数**先 `await apiLogout()` 通知后端**（且不跳 /login —— 路由跳转
+   *  由调用方负责）。之所以不委托 `forceLogout`：`forceLogout` 不接 router、无法
+   *  表达「跳登录页」这一步，`logout()` 又不需要它，强行合并只会多一个 `router`
+   * 可选参数。改这两处之一时**必须同步改另一处**。 */
   async function logout(): Promise<void> {
     await apiLogout();
     token.value = null;

@@ -21,9 +21,10 @@
 //   - 2026-10-02：后端补完主动 Close 帧（此前所有断开都是裸 drop，浏览器只见 1006），
 //     关闭码有语义了。其中 **4001「会话在连接期间失效」是唯一的终止性关闭码**，本层
 //     停重连 + 清 session + 派发 'auth:session-lost' 交 app 层走登出；其余关闭码
-//     （1001 写失败 / 1011 内部错误·Pong 超时 / 1012 服务重启 / 4003 慢消费方 /
-//     1006 裸 drop）仍按无限重试处理，其中 **4003 额外派发 'dashboard:full-refetch'**
-//     要求上层立即全量 HTTP 重取（丢的事件重连补不回来）。关闭码表见后端
+//     （1011 内部错误 / 1012 服务重启 / 4003 慢消费方 / 1006 裸 drop）仍按无限重试
+//     处理，其中 **4003 额外派发 'dashboard:full-refetch'** 要求上层立即全量 HTTP
+//     重取（丢的事件重连补不回来）。1001 后端**不主动发**（写失败路径已改裸断 → 实际
+//     落 1006），保留在码表里仅作对照。关闭码表见后端
 //     ~/Code/hsh-erp/backend-rust/docs/api/websocket.md（唯一权威来源）。
 //   - 不再发送 subscribe/unsubscribe 控制帧 —— 后端 v2 ws_hub 不消费这俩文本帧
 //     （2026-09-25 注释 + 2026-09-28 决策删除），后端默认行为是按连接初始订阅集合
@@ -62,11 +63,14 @@ const FAIL_LOG_THROTTLE_EVERY = 30;
 /** 后端主动关闭码 4001 = 「会话在连接期间失效」（2026-10-02 起前端特殊处理）。
  *
  *  关闭码表的唯一权威来源是后端 `~/Code/hsh-erp/backend-rust/docs/api/websocket.md`：
- *    - 1001 服务端写失败 / 1011 内部错误·Pong 超时 / 1012 服务重启 / 4003 慢消费方
+ *    - 1011 内部错误（`snapshot build failed` / `send snapshot failed` /
+ *      `re-auth unavailable` / `pong timeout`）/ 1012 服务重启 / 4003 慢消费方
  *      → 瞬时或可自愈，**必须继续无限重试**；
  *    - 4001 会话失效 → 重试再多次也一样是 401，属于必须终止的死路；
  *    - 1006 浏览器侧的「异常关闭」兜底码（没收到任何 Close 帧），原因未知，
- *      同样按无限重试处理。 */
+ *      同样按无限重试处理；
+ *    - 1001 保留行仅作对照：后端 2026-10-02 起**不主动发 1001**（写失败路径改为
+ *      裸断，浏览器侧落 1006）。真收到也不需要特判，与 1006 同走无限重连。 */
 const WS_CLOSE_SESSION_LOST = 4001;
 
 /** 后端主动关闭码 4003 = 「慢消费方（广播队列溢出，永久丢了 n 条事件）」。
@@ -191,8 +195,8 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
    *  401 / 502 / 代理没配长得一模一样，这正是当时控制台只刷「dashboard WS error」
    *  而查不出原因的原因。
    *
-   *  2026-10-02 起后端补完主动 Close 帧，close code 本身带语义（1001 写失败 /
-   *  1011 内部错误·Pong 超时 / 1012 服务重启 / 4001 会话失效 / 4003 慢消费方），
+   *  2026-10-02 起后端补完主动 Close 帧，close code 本身带语义（1011 内部错误 /
+   *  1012 服务重启 / 4001 会话失效 / 4003 慢消费方；1001 后端不主动发、仅作对照），
    *  **关闭码表见后端 `~/Code/hsh-erp/backend-rust/docs/api/websocket.md`**：
    *  排查应先按 closeCode 查表。**1006 仍是「原因未知」的兜底** —— 鉴权失败是
    *  upgrade 之前就回 HTTP 401（不是 WS Close 帧），浏览器 WS API 不暴露握手期
@@ -221,7 +225,7 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
         hadErrorEvent,
         tokenExpired: token ? (exp !== null && exp * 1000 <= Date.now()) : null,
         排查提示:
-          '先按 closeCode 查后端 docs/api/websocket.md 关闭码表（1001 写失败 / 1011 内部错误·Pong 超时 / 1012 服务重启 / 4001 会话失效 / 4003 慢消费方）；4003 已额外派发全量重取信号（丢的事件重连补不回来）；仅 1006 才需再查握手期 HTTP status（Network 面板 / 直连后端 curl）',
+          '先按 closeCode 查后端 docs/api/websocket.md 关闭码表（1011 内部错误 / 1012 服务重启 / 4001 会话失效 / 4003 慢消费方；1001 后端不主动发、仅作对照）；4003 已额外派发全量重取信号（丢的事件重连补不回来）；仅 1006 才需再查握手期 HTTP status（Network 面板 / 直连后端 curl）',
       },
     );
   }
@@ -258,7 +262,7 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
         clearStoredSession();
         // ③ 通知 app 层踢去登录页。本模块**不能**反向 import stores/auth（auth ↔ api
         //    循环依赖），沿用 CLAUDE.md 既定 CustomEvent 解耦范式，接收方是
-        //    `src/router/index.ts`（有 useRouter + useAuthStore）→ refreshOrLogout。
+        //    `src/router/index.ts`（持有 router 实例 + useAuthStore）→ forceLogout(router)。
         //    注意与 'auth:session-changed' 的区别：那个是「token 变了，WS 重算 URL
         //    并重连」，本事件是「后端判定会话已死，请上层终止会话」，方向相反。
         window.dispatchEvent(
@@ -284,7 +288,7 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
         // 「会话没死，但数据可能已经缺了，补一次全量重取」。
         //
         // 注意：重连本身仍按通用路径走（下面 reportFailure + autoReconnect），4003
-        // 只是额外挂一个补数据的信号。其余关闭码（1001/1006/1011/1012）同样会因
+        // 只是额外挂一个补数据的信号。其余关闭码（1006/1011/1012）同样会因
         // 断连丢事件，那是既有架构的已知缺口（TanStack Query 无轮询），本轮不扩范围。
         window.dispatchEvent(
           new CustomEvent('dashboard:full-refetch', {
