@@ -428,7 +428,7 @@ describe('useAuthStore', () => {
       seedQuery('workers');
       expect(auth.isAuthenticated).toBe(true);
 
-      // http.ts:425 / :450 的 dispatch（无 detail）
+      // http.ts:428 / :455 的 dispatch（无 detail）
       window.dispatchEvent(new CustomEvent('auth:logout'));
 
       expect(queryCount()).toBe(0);

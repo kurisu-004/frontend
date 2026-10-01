@@ -69,7 +69,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   | `logout()` | 用户点「退出」（先 `await apiLogout()`） | 无（调用方负责） |
   | `forceLogout(router)` | `auth:session-lost` 事件 ← dashboard WS 关闭码 `4001` | `router.replace('/login')` |
   | `refreshOrLogout(router)` catch | 路由守卫 /iam/me 校验失败 | 委托 `forceLogout(router)` |
-  | `auth:logout` 事件订阅 | `src/api/http.ts:425`（40105 SESSION_REVOKED）/ `:450`（refresh 失败） | 无 |
+  | `auth:logout` 事件订阅 | `src/api/http.ts:428`（40105 SESSION_REVOKED）/ `:455`（refresh 失败） | 无 |
 
   分工：`teardownSession()` = 纯收口（无 router、不感知路由）；`forceLogout(router)`
   = 在其之上**追加**一次导航。守卫侧拿到 `refreshOrLogout` 的 false 后必须
@@ -101,7 +101,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   所以**任何实例化 auth store 的 spec 必须 `app.use(VueQueryPlugin)` + 传一个
   `QueryClient`**。
 - **`auth:logout` 是订阅点不是派发点（2026-10-02）**：派发方两处，都在 axios 拦截器
-  —— `src/api/http.ts:425`（40105 SESSION_REVOKED）与 `:450`（refresh 失败）。
+  —— `src/api/http.ts:428`（40105 SESSION_REVOKED）与 `:455`（refresh 失败）。
   订阅方两处，职责**不同**：
   - `src/main.ts` —— **只负责导航** `router.replace('/login')`；
   - `src/stores/auth.ts` —— 清会话状态 + 清 query 缓存（`teardownSession()`）。

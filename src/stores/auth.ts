@@ -9,7 +9,7 @@
 //     依赖），拦截器刷新成功后 dispatch 事件，本 store 在 setup 回调里挂 listener 同步
 //     state。
 //   - 2026-10-02（M-4）新增订阅 'auth:logout'：40105 SESSION_REVOKED 与 refresh 失败
-//     （src/api/http.ts:425 / :450）只负责 dispatch，会话状态（清 token / user /
+//     （src/api/http.ts:428 / :455）只负责 dispatch，会话状态（清 token / user /
 //     localStorage / tagsView / query 缓存）由本 store 的 teardownSession() 单点收口。
 //   - loadFromStorage() 在 setup 回调末尾自执行（首次 useAuthStore() 时触发）；Listener
 //     在 setup 里挂；保证首次实例化就具备 localStorage 恢复 + 事件同步能力。
@@ -154,14 +154,14 @@ export const useAuthStore = defineStore('auth', () => {
    *   3. `refreshOrLogout()` catch —— 路由守卫 /iam/me 校验失败，本身不直接调本函数，
    *      透传 router 给 `forceLogout(router)`，实际执行体在这里；
    *   4. `auth:logout` 事件 —— 40105 SESSION_REVOKED / refresh 失败
-   *      （`src/api/http.ts:425` / `:450` dispatch，listener 在本文件 setup 内挂）。
+   *      （`src/api/http.ts:428` / `:455` dispatch，listener 在本文件 setup 内挂）。
    * 2 与 4 都是 757c024 之后 / M-4 之前就存在的入口，此前都**完全不清 query 缓存**
    * —— 尤其 4（`src/main.ts` 只做导航，状态无人清理）是 M-4 暴露面最大的一条。
    * **新增第 5 条终止路径时，必须改走本函数。**
    */
   function teardownSession(): void {
-    // 幂等短路：auth:logout 可能被 dispatch 多次（并发请求同时命中 http.ts:425 的
-    // 40105 分支与 :450 的 refresh 失败分支），且测试里 listener 会跨 Pinia 实例
+    // 幂等短路：auth:logout 可能被 dispatch 多次（并发请求同时命中 http.ts:428 的
+    // 40105 分支与 :455 的 refresh 失败分支），且测试里 listener 会跨 Pinia 实例
     // 累积。重复清理会重复 dispatch auth:session-changed → WS 侧多余 syncWsUrl()。
     if (!token.value && !user.value) return;
     token.value = null;
@@ -366,7 +366,7 @@ export const useAuthStore = defineStore('auth', () => {
     }) as EventListener);
 
     // 2026-10-02 新增（M-4 第 4 条会话终止路径）：40105 SESSION_REVOKED
-    // （src/api/http.ts:425）与 refresh 失败（:450）dispatch 的 'auth:logout'。
+    // （src/api/http.ts:428）与 refresh 失败（:455）dispatch 的 'auth:logout'。
     // 此前全仓唯一订阅方是 src/main.ts，只做一次导航跳转，会话状态（token / user /
     // localStorage / tagsView / query 缓存）无人清理。
     // 箭头函数包裹：显式忽略 Event 实参（拦截器 dispatch 时不带 detail，直传会 TS2345）。
