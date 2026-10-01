@@ -66,7 +66,6 @@
         :name="s.name"
         :location="s.location || undefined"
         :current-load="s.current_load"
-        :mapped-process-codes="s.mapped_process_codes"
         :is-selected="s.id === selectedId"
         @select="onSelect(s.id)"
       />

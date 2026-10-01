@@ -157,6 +157,8 @@ import {
   deactivateShelf,
   getShelfProcesses,
   setShelfProcesses,
+  toShelfProcessIds,
+  toShelfProcessesPayload,
 } from '@/api/shelves';
 import { listProcesses } from '@/api/process';
 import type { Shelf } from '@/types/shelf';
@@ -200,7 +202,9 @@ const columnDefs: ColumnDef[] = [
         () => ((row as Shelf).display_order > 0 ? String((row as Shelf).display_order) : '未设置'),
       ),
   },
-  { key: 'account_count', label: '账号数', prop: 'account_count', minWidth: 80, align: 'center' },
+  // 2026-10-02 摘除「账号数」列：配套后端删除 ShelfOut.account_count
+  //（用户已拍板舍弃该字段）。列 key 变更后 useColumnVisibility 的 lenient 恢复
+  // 策略会把 localStorage 里残留的 account_count 项忽略掉，无需清缓存。
   {
     key: 'is_active',
     label: '状态',
@@ -270,9 +274,18 @@ async function editShelf(s: Shelf) {
   showCreate.value = true;
   try {
     const sp = await getShelfProcesses(String(s.id));
-    selectedProcessIds.value = sp.processes.map((p) => p.process_id);
-  } catch {
-    selectedProcessIds.value = [];
+    // 2026-10-02 修 BUG-2：后端返 `{items: [...]}`，旧代码读 `sp.processes`
+    // 恒 undefined → `.map` 抛 TypeError → 被下面的裸 catch 吞掉 → 每次打开编辑
+    // 弹窗已选工序必被清空，用户不察觉点保存就静默清空整组映射。
+    // 形态还原（items + sort_order 升序）收口到 api/shelves::toShelfProcessIds，
+    // 由 src/api/shelfProcesses.spec.ts 钉死，避免读形态再漂。
+    selectedProcessIds.value = toShelfProcessIds(sp);
+  } catch (e: unknown) {
+    // 2026-10-02 不再吞异常：加载失败时**保持原状**（不覆盖 selectedProcessIds），
+    // 而不是清空。清空 = 用户没察觉就点保存 = 静默清空整组映射，比报错危险得多；
+    // 保持原状最坏也只是「这次没刷出来」，且用户能从提示知道需要重试。
+    console.error('getShelfProcesses failed', e);
+    ElMessage.warning('工序映射加载失败，请关闭后重试；本次未改动已选工序');
   }
 }
 
@@ -299,7 +312,13 @@ async function saveShelf() {
       });
       shelfId = String(created.id);
     }
-    await setShelfProcesses(shelfId, { process_ids: selectedProcessIds.value });
+    // 2026-10-02 修 BUG-1（用户报的 422）：后端 SetShelfProcessesRequest 的
+    // `items` 必填且无 serde default，旧的 `{process_ids: [...]}` 直接 40001 →
+    // HTTP 422（该功能自 v1 迁 v2 以来从未成功过一次）。
+    // payload 构造收口到 api/shelves::toShelfProcessesPayload（sort_order = 数组
+    // 下标，沿 v1「提交顺序即 sort_order」语义），并由 src/api/shelfProcesses.spec.ts
+    // 逐字钉死形态，避免调用方再编出 v1 形态。
+    await setShelfProcesses(shelfId, toShelfProcessesPayload(selectedProcessIds.value));
     showCreate.value = false;
     await fetchData();
     ElMessage.success('已保存');

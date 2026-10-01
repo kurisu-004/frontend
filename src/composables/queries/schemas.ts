@@ -635,10 +635,14 @@ export type PendingProgrammingListResultSchema = z.infer<typeof pendingProgrammi
 // 2026-10-01 新增：货架实体 + 货架列表分页结果 schema（共享基础数据层
 // useProductionShelvesQuery 守门）。
 //
-// 字段对齐 @/types/shelf.ts::Shelf 的 11 字段：id / version / code / name / zone
+// 字段对齐 @/types/shelf.ts::Shelf 的 10 字段：id / version / code / name / zone
 // （PRODUCTION | INSPECTION，string 不锁 enum）/ location (nullable) / is_active /
-// account_count / display_order / created_at / updated_at。11 字段全声明
+// display_order / created_at / updated_at。10 字段全声明
 // （沿 §M-4 strip 陷阱 guard）。入参形态见 @/api/shelves::ListShelvesParams。
+//
+// 2026-10-02 摘除 account_count：配套后端删除 ShelfOut.account_count（用户已
+// 拍板舍弃该字段）。此前它是被显式声明的必填字段，后端一删这个 schema 会对
+// 真实响应直接抛 ZodError —— 摘字段必须同步改 schema，否则是「修一个崩一片」。
 // ============================================================
 
 export const shelfSchema = z.object({
@@ -649,7 +653,6 @@ export const shelfSchema = z.object({
   zone: z.string(),
   location: z.string().nullable(),
   is_active: z.boolean(),
-  account_count: z.number(),
   display_order: z.number(),
   created_at: z.string(),
   updated_at: z.string(),

@@ -12,7 +12,7 @@
 //   - useQuery + reactive params（MaybeRefOrGetter<ListShelvesParams>）；
 //   - queryKey 走 computed(toValue(params) ?? {}) → params 变化自动 refetch；
 //   - queryFn 从 queryKey[2] 读最新 params（不闭包捕获 stale —— CLAUDE.md
-//     架构条目 #5）+ shelfListResultSchema.parse 守门（§M-4：11 字段全声明，
+//     架构条目 #5）+ shelfListResultSchema.parse 守门（§M-4：10 字段全声明，
 //     缺字段静默 strip = 校验形同虚设）。守门只在这一处：api/shelves.ts::listShelves
 //     返 raw（与 programming 域「守门收敛在 api 层」的形态**不同**，见
 //     2026-10-01 review 第 1 轮 M-2 —— 别在两处都 parse，Zod parse 是深拷贝）；

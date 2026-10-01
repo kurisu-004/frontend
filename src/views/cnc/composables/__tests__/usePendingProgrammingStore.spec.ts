@@ -130,7 +130,24 @@ vi.mock('@/api/process', () => ({
 
 vi.mock('@/api/shelves', () => ({
   listShelves: vi.fn(async () => ({ items: [], total: 0, limit: 200, offset: 0 })),
-  getAllShelfProcessMappings: vi.fn(async () => ({ items: [] })),
+  // 2026-10-02：mock 必须逐字复刻后端 `AllShelfProcessMappingOut`
+  //（backend-rust/src/modules/shelf/vo/process_mapping.rs）—— **扁平行**：
+  // 一行一个 (货架, 工序) 对，同一 shelf_id 会重复出现，且 item 上是 process_id
+  // 单值而非 process_ids 子集数组。
+  // 2026-10-02 之前这里是 `{items: []}`，恰好掩盖了 useShelfProcessFilter 的
+  // 静默清空 bug（空数组下新旧实现都得到空 mapping，测试全绿）—— 契约 mock
+  // 复制产品代码的错误形态，等于给 bug 发免死金牌。回归守卫见
+  // src/composables/__tests__/useShelfProcessFilter.spec.ts。
+  getAllShelfProcessMappings: vi.fn(async () => ({
+    items: [
+      {
+        shelf_id: '8800000000001',
+        shelf_code: 'SH-P01',
+        process_id: '190000000000001',
+        process_code: 'CUT',
+      },
+    ],
+  })),
 }));
 
 import { usePendingProgrammingStore } from '../usePendingProgrammingStore';
