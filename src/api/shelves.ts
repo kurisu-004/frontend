@@ -2,10 +2,10 @@
 
 import { api, cleanParams } from '@/api/http';
 import type {
+  AllShelfProcessMappingItem,
   Shelf,
   ShelfForReturnResult,
   ShelfListResult,
-  ShelfProcessMappingItem,
   ShelfProcessesResult,
   SetShelfProcessesPayload,
 } from '@/types/shelf';
@@ -78,9 +78,20 @@ export async function getShelfProcesses(id: string): Promise<ShelfProcessesResul
  *
  * sort_order 取数组下标：沿 v1(Python) 契约「提交顺序即 sort_order」的语义 —— 前端
  * 没有独立的拖拽排序入口，el-select 多选的选中顺序就是业务上的工序顺序。
+ *
+ * 2026-10-02 review M-3 新增去重：后端 `t_shelf_process` 上有 partial unique index
+ * `uk_t_shelf_process (shelf_id, process_id) WHERE deleted_at IS NULL`
+ * （backend-rust migrations/20260925000000_001_baseline.sql:3545），`items` 里
+ * 一旦出现重复 process_id，`bulk_insert` 就撞唯一索引 → HTTP 500（不是 40001，
+ * 是没人能自解释的 500）。
+ * 今天不可达（`el-select multiple` 产不出重复值），但本函数的立身之本是
+ * 「收口 payload 形态」——将来若改成「已有映射 + 新增勾选」合并提交，重复就会
+ * 真实发生。保留首次出现，`sort_order` 按**去重后**的下标重算（沿用原下标会
+ * 留下空洞，语义上不再是 0..n-1 的连续顺序）。
  */
 export function toShelfProcessesPayload(processIds: readonly string[]): SetShelfProcessesPayload {
-  return { items: processIds.map((process_id, idx) => ({ process_id, sort_order: idx })) };
+  const unique = [...new Set(processIds)];
+  return { items: unique.map((process_id, idx) => ({ process_id, sort_order: idx })) };
 }
 
 /**
@@ -91,14 +102,14 @@ export function toShelfProcessesPayload(processIds: readonly string[]): SetShelf
  * 恒 undefined → TypeError → 被裸 catch 吞掉 → 每次打开编辑弹窗已选工序被清空，
  * 用户不察觉点保存就静默清空整组映射）。收口 + 单测后读形态不可能再漂。
  *
- * 排序：后端已按 `ORDER BY sp.sort_order ASC, sp.id ASC` 返回，这里再显式排一次，
- * 目的是 sort_order 缺失 / 重复时仍得到稳定顺序 —— 顺序不稳定会让用户每次打开
- * 弹窗看到的工序次序不同，保存后又整体重排。
+ * 排序：后端单架端点已按 `ORDER BY sp.sort_order ASC, sp.id ASC` 返回，这里再
+ * 显式排一次。2026-10-02 review M-1：`sort_order` 是**必填**（类型已收紧），原
+ * 先的 `?? 0` 兜底是在给「后端可能不返」这个假设擦屁股，代价是把契约漂移静默
+ * 吞掉。sort_order 重复时靠 `Array.prototype.sort` 的稳定性（ES2019 起规范保证）
+ * 保住后端给的 id ASC 次序，仍然稳定。
  */
 export function toShelfProcessIds(result: ShelfProcessesResult): string[] {
-  return [...result.items]
-    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
-    .map((p) => p.process_id);
+  return [...result.items].sort((a, b) => a.sort_order - b.sort_order).map((p) => p.process_id);
 }
 
 /**
@@ -152,8 +163,9 @@ export async function listShelvesForInspection(): Promise<ShelfForReturnResult> 
  * 2026-10-02 订正：旧注释写的 `{items: [{shelf_id, process_ids}, ...]}`
  * （一架子集一个元素）是 **v1(Python) 形态**，v2 后端返的是**扁平行**——一行一个
  * (货架, 工序) 对，同一 shelf_id 会出现多行：`{items: [{shelf_id, shelf_code,
- * process_id, process_code}]}`（AllShelfProcessMappingItem，注意它**不返**
- * sort_order，排序由 service 层 ORDER BY 保证）。空映射的货架不出现在 items 中。
+ * process_id, process_code}]}`（AllShelfProcessMappingItem —— 已在本文件导出成
+ * `@/types/shelf::AllShelfProcessMappingItem`，注意它**不返** sort_order，排序由
+ * service 层 ORDER BY 保证）。空映射的货架不出现在 items 中。
  *
  * 消费侧 `useShelfProcessFilter` 必须按 shelf_id regroup 扁平行，不能读
  * `item.process_ids`（恒 undefined ⇒ 空集 ⇒ 8 个页面的下拉被静默清空）。
@@ -162,7 +174,7 @@ export async function listShelvesForInspection(): Promise<ShelfForReturnResult> 
  * N+1 次 `GET /shelves/{id}/processes` 调用。
  */
 export interface ShelfProcessMappingsResult {
-  items: Array<Omit<ShelfProcessMappingItem, 'sort_order'>>;
+  items: AllShelfProcessMappingItem[];
 }
 export async function getAllShelfProcessMappings(): Promise<ShelfProcessMappingsResult> {
   const resp = await api.get<ShelfProcessMappingsResult>('/shelves/processes');

@@ -202,9 +202,10 @@ const columnDefs: ColumnDef[] = [
         () => ((row as Shelf).display_order > 0 ? String((row as Shelf).display_order) : '未设置'),
       ),
   },
-  // 2026-10-02 摘除「账号数」列：配套后端删除 ShelfOut.account_count
-  //（用户已拍板舍弃该字段）。列 key 变更后 useColumnVisibility 的 lenient 恢复
-  // 策略会把 localStorage 里残留的 account_count 项忽略掉，无需清缓存。
+  // 2026-10-02 摘除「账号数」列：用户已拍板「舍弃这个字段，前端不再显示」，
+  // 前端类型 / shelfSchema / 本列三处同步摘除（后端 ShelfOut 在同 PR 也已删该
+  // 字段，那是另一次独立决策，不是本列的成因）。列 key 变更后 useColumnVisibility
+  // 的 lenient 恢复策略会把 localStorage 里残留的 account_count 项忽略掉，无需清缓存。
   {
     key: 'is_active',
     label: '状态',
@@ -230,6 +231,12 @@ const saving = ref(false);
 const allProcesses = ref<Process[]>([]);
 const selectedProcessIds = ref<string[]>([]);
 const editingShelf = ref<Shelf | null>(null);
+// 2026-10-02 review I-1 新增：本次编辑弹窗内「已映射工序」是否加载失败。
+// 这是 BUG-2（静默清空整组映射）的**最后一道闸**：@closed → resetForm 已把
+// selectedProcessIds 清成 []，所以「catch 里不覆盖 = 保持原状」在「加载失败后
+// 不关弹窗直接点保存」这条路径上等于「留空」⇒ setShelfProcesses(id, {items: []})
+// ⇒ 整组替换为空。warning 文案只是建议，拦不住保存动作，所以必须用状态位硬拦。
+const processLoadFailed = ref(false);
 // 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP FormInstance；null 初值避免 dialog 关闭态访问 .validate
 const shelfFormRef = ref<FormInstance | null>(null);
 const shelfForm = reactive({
@@ -262,6 +269,10 @@ function resetForm() {
   shelfForm.display_order = 0;
   selectedProcessIds.value = [];
   editingShelf.value = null;
+  // 2026-10-02 review I-1：必须随 resetForm 一起复位。否则「编辑某架加载失败 →
+  // 关闭 → 点新增货架 → 保存」会被上一个编辑会话的失败态误伤（新增路径根本没
+  // 加载过映射，不该被拦）。
+  processLoadFailed.value = false;
 }
 async function editShelf(s: Shelf) {
   // 2026-09-21 收紧：原 `s: any` + `as Shelf` 双层断言合并为单一参数类型
@@ -272,6 +283,8 @@ async function editShelf(s: Shelf) {
   shelfForm.location = s.location ?? '';
   shelfForm.display_order = s.display_order ?? 0;
   showCreate.value = true;
+  // 每次进编辑都重新判定本次映射是否可信（不复用上一次的成功态）。
+  processLoadFailed.value = false;
   try {
     const sp = await getShelfProcesses(String(s.id));
     // 2026-10-02 修 BUG-2：后端返 `{items: [...]}`，旧代码读 `sp.processes`
@@ -284,12 +297,23 @@ async function editShelf(s: Shelf) {
     // 2026-10-02 不再吞异常：加载失败时**保持原状**（不覆盖 selectedProcessIds），
     // 而不是清空。清空 = 用户没察觉就点保存 = 静默清空整组映射，比报错危险得多；
     // 保持原状最坏也只是「这次没刷出来」，且用户能从提示知道需要重试。
+    // 2026-10-02 review I-1 补：置 processLoadFailed，让 saveShelf 能硬拦这次保存
+    // ——「不覆盖」本身并不够，见该 ref 的注释。
     console.error('getShelfProcesses failed', e);
-    ElMessage.warning('工序映射加载失败，请关闭后重试；本次未改动已选工序');
+    processLoadFailed.value = true;
+    ElMessage.warning('工序映射加载失败，本次已禁止保存；请关闭弹窗后重新进入再试');
   }
 }
 
 async function saveShelf() {
+  // 2026-10-02 review I-1：映射加载失败时**整个保存动作**硬拦下（不是「只保存
+  // 基本字段、跳过 setShelfProcesses」）—— 半截保存会造出「名字改了、映射没改」
+  // 的新状态，且用户在成功提示里无从分辨自己改的哪部分生效了。宁可让用户
+  // 关闭重进一次，也不让它在失败态上继续写入。
+  if (processLoadFailed.value) {
+    ElMessage.error('工序映射加载失败，未做任何保存：请关闭弹窗后重新进入再试');
+    return;
+  }
   const valid = await shelfFormRef.value?.validate().catch(() => false);
   if (!valid) return;
   saving.value = true;

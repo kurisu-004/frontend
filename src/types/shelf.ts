@@ -7,8 +7,13 @@ export interface Shelf {
   zone: string; // PRODUCTION | INSPECTION
   location: string | null;
   is_active: boolean;
-  // 2026-10-02 摘除 account_count：配套后端删除 ShelfOut.account_count
-  //（用户已拍板「舍弃这个字段，前端不再显示」），前端类型 / 表格列同步摘除。
+  // 2026-10-02 摘除 account_count：**用户决定货架列表页不再展示账号数**，前端
+  // 类型 / 表格列 / shelfSchema 三处同步摘除（漏改任一处，Zod 守门会对真实响应
+  // 抛 ZodError）。
+  // 注意因果方向：后端 ShelfOut 在同 PR 里也已删除该字段，但那是**另一次独立决策**
+  //，不是「后端删了前端才跟删」。写成「配套后端删除」会让下一个读者反推因果
+  //（以为是后端契约变化倒逼前端），进而在前端已不需要该字段时不敢再摘。
+  // 决策依据一句话：用户已拍板舍弃该字段，前端不再展示。
   /**
    * 物理顺序（0=未设置；manager 在 ShelfList 后台手填）。
    * 共享 HMI 卡片网格 picker 按 (display_order ASC, code ASC) 排。
@@ -37,17 +42,27 @@ export interface ShelfListResult {
 // 因此下面两个接口的类型**只声明后端真实存在的字段**，不再留 v1 影子。
 // ============================================================
 
-/** 单条 shelf ↔ process 映射行（`GET /shelves/{id}/processes` 与
- *  `GET /shelves/processes` 共用同一扁平行形态；后端按 sort_order ASC 返回）。 */
+/** 单架已映射工序的一行（`GET /shelves/{id}/processes` 响应 item）。
+ *  对应后端 VO `ShelfProcessMappingItem`（backend-rust
+ *  `src/modules/prod/shelf_process/vo.rs:17-26`）。
+ *
+ *  2026-10-02 review M-1：`sort_order` 恢复为**必填** —— 单架端点 SQL 是
+ *  `ORDER BY sp.sort_order ASC, sp.id ASC`，该字段从不缺失。此前把它声明成可选
+ *  （为了兼容全集 VO）等于把一个必返字段降级，逼出消费侧 `?? 0` 兜底，掩盖契约
+ *  漂移。全集 VO 单独用 `AllShelfProcessMappingItem` 表达。 */
 export interface ShelfProcessMappingItem {
   shelf_id: string;
   shelf_code: string;
   process_id: string;
   process_code: string;
-  /** 后端 GET 单架接口返该字段；全集接口（AllShelfProcessMappingItem）不返，
-   *  故声明为可选，消费侧按 `?? 0` 兜底。 */
-  sort_order?: number;
+  sort_order: number;
 }
+
+/** 全集已映射工序的一行（`GET /shelves/processes` 响应 item）。
+ *  对应后端 VO `AllShelfProcessMappingItem`（同上文件 :36-45）—— 与单架 VO 的
+ *  唯一差别就是**不返 sort_order**（全集排序由 service 层 ORDER BY 保证），
+ *  故显式 Omit，而不是让单架 VO 的 sort_order 变可选。 */
+export type AllShelfProcessMappingItem = Omit<ShelfProcessMappingItem, 'sort_order'>;
 
 /** `GET /shelves/{id}/processes` 响应体。 */
 export interface ShelfProcessesResult {
@@ -67,6 +82,10 @@ export interface ShelfForReturn {
   id: string;
   code: string;
   name: string;
+  /** 后端 ShelfForReturnItem 第 4 字段。值由端点固定（for-return 只查
+   *  PRODUCTION 区、for-inspection 只查 INSPECTION 区），picker 视图零消费；
+   *  但类型逐字对齐 VO，注释在声称对齐时就不能少列。 */
+  zone: string;
   location: string | null;
   /** 当前在架件数（status=IN_PROCESS + holder=shelf） */
   current_load: number;
@@ -74,9 +93,10 @@ export interface ShelfForReturn {
   is_recommended: boolean;
   // 2026-10-02 摘除 display_order / mapped_process_codes：后端
   // ShelfForReturnItem（backend-rust/src/modules/shelf/vo/shelf.rs:48-57）只有
-  // id / code / name / zone / location / current_load / is_recommended 七字段。
-  // 原来这两个字段是纯类型谎言：mapped_process_codes 恒 undefined ⇒
-  // ShelfPickerDialog 传给 HmiPickerCard 的 chips 恒不渲染；display_order 零消费。
+  // id / code / name / zone / location / current_load / is_recommended 七字段
+  // （zone 已如上补齐）。原来这两个字段是纯类型谎言：mapped_process_codes 恒
+  // undefined ⇒ ShelfPickerDialog 传给 HmiPickerCard 的 chips 恒不渲染；
+  // display_order 零消费。
 }
 
 export interface ShelfForReturnResult {

@@ -61,6 +61,13 @@
           >在架 <strong>{{ currentLoad }}</strong> 件</span
         >
       </div>
+      <!--
+        2026-10-02：这是本组件目前**零调用方**的分支 —— ShelfPickerDialog 不再传
+        mappedProcessCodes（前端已从 ShelfForReturn 摘除该字段，后端
+        ShelfForReturnItem 也从未返它），故本块 + .processes/.process-chip 样式
+        当前不可达。保留而不删：后端哪天给 picker 补上「该架可执行工序」字段，
+        这里直接就能复活，不用重写样式。等后端补字段复活，勿当死代码清理。
+      -->
       <div v-if="mappedProcessCodes && mappedProcessCodes.length" class="processes">
         <el-tag
           v-for="c in mappedProcessCodes"
@@ -113,6 +120,10 @@ const props = defineProps<{
   /** kind='shelf' */
   location?: string;
   currentLoad?: number;
+  /**
+   * 2026-10-02：目前无调用方（后端 ShelfForReturnItem 不返映射工序），保留 prop
+   * 与对应模板分支作为「后端补字段后复活」的落点，见模板处注释。
+   */
   mappedProcessCodes?: readonly string[];
 }>();
 

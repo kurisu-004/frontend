@@ -11,7 +11,14 @@
 //   ⇒ 契约必须在前端侧被逐字钉死，不能靠后端自测 + 类型系统兜底。
 //
 // 覆盖（对齐 backend-rust docs/api/shelves.md:216-270 +
-//       src/modules/shelf/dto.rs:85-96 + src/modules/shelf/vo/process_mapping.rs）：
+//       src/modules/prod/shelf_process/{dto,vo}.rs —— 2026-10-02 后端域拆分后
+//       映射的 DTO / VO 已整文件搬到 prod 子模块，文件路径随之变；DTO 在
+//       master 上仍可从 src/modules/shelf/dto.rs 找到）：
+//   - C0：toShelfProcessesPayload 把下拉多选 id 列表编成 `{items:[{process_id,
+//         sort_order}]}`，sort_order = 数组下标（v1「提交顺序即 sort_order」）。
+//   - C0b：toShelfProcessesPayload 去重 + 按去重后下标重排 sort_order
+//         （review M-3：后端 partial unique index uk_t_shelf_process 遇重复
+//          process_id 直接撞索引 → 500，不是可自解释的 40001）。
 //   - C1：setShelfProcesses 发出的 body 逐字是 `{items:[{process_id, sort_order}]}`
 //         （BUG-1 守卫：旧的 `{process_ids:[...]}` 会让后端 serde missing field
 //          → 40001 VALIDATION_ERROR → HTTP 422，用户 2026-10-02 报的原 bug）。
@@ -22,13 +29,21 @@
 //         （BUG-2 守卫：旧的 `sp.processes` 恒 undefined → .map 抛 TypeError →
 //         被裸 catch 吞掉 → 已选工序被静默清空）。形态还原由 C3b 的纯函数
 //         toShelfProcessIds 逐字钉死。
+//   - C3c：toShelfProcessIds 在 sort_order 重复 / 乱序时仍稳定（review M-1 去掉
+//         `?? 0` 兜底后，稳定性改由 ES2019 规范保证的 sort 稳定性承担）。
 //   - C4：getAllShelfProcessMappings 的 item 是**扁平行**四字段
 //         （BUG-3 守卫：同一 shelf_id 多行，不是 v1 的「一架子集一行」）。
 //
 // mock 手法沿 dashboard.spec.ts 同款：整模块桩掉 `@/api/http`（不 importOriginal），
-// 只保留 `api.get` / `api.post` 两个可断言入口 + cleanParams / ApiError 占位。
-// 不桩 http.ts 原件是因为它在模块求值期就 axios.create + 读 localStorage，
-// vitest node 环境没有 localStorage。
+// 只保留 `api.get` / `api.post` 两个可断言入口 + `cleanParams`（shelves.ts:3 实际
+// import 的就这两个）。
+// 2026-10-02 review M-4 订正注释：原注释称「不桩 http.ts 原件是因为它在模块求值期
+// 就 axios.create + 读 localStorage，vitest node 环境没有 localStorage」——**该
+// 理由不成立**：`axios.create`（http.ts:178）在 node 下无害，localStorage 读取全在
+// 拦截器回调内（http.ts:240/251/273/281），仓内 `src/api/http.spec.ts` 直接
+// `import { serializeParams... } from './http'` 且全绿。真实理由是别的：整模块桩掉
+// 才能对「URL + body」逐字断言（走原件要 mock adapter/拦截器，噪声大且脆弱），
+// 且能顺带证明本文件完全不依赖 http.ts 的任何内部实现。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,13 +55,13 @@ vi.mock('@/api/http', () => ({
     get: (...args: unknown[]) => httpGetMock(...args),
     post: (...args: unknown[]) => httpPostMock(...args),
   },
-  apiPrint: { get: vi.fn(), post: vi.fn() },
+  // 2026-10-02 review M-4：原先还桩了 apiPrint / ApiError 两个死桩 ——
+  // shelves.ts 只 import 了 `api, cleanParams`，这两个从未被读取，删掉避免
+  // 「这里好像依赖它们」的错觉。
   cleanParams: (obj?: Record<string, unknown>) => obj ?? {},
-  ApiError: class ApiError extends Error {},
 }));
 
-//   - C0：toShelfProcessesPayload 把下拉多选 id 列表编成 `{items:[{process_id,
-//         sort_order}]}`，sort_order = 数组下标（v1「提交顺序即 sort_order」）。
+// 2026-10-02 review M-4：原这里有一段重复文件头覆盖清单的 C0 注释，已并入文件头。
 import {
   getAllShelfProcessMappings,
   getShelfProcesses,
@@ -78,6 +93,32 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
     expect(toShelfProcessesPayload([])).toEqual({ items: [] });
     // 反向断言：绝不能出现 v1 的 process_ids 键。
     expect(toShelfProcessesPayload(['a'])).not.toHaveProperty('process_ids');
+  });
+
+  it('C0b：toShelfProcessesPayload 去重，且 sort_order 按去重后下标重排（不留空洞）', () => {
+    // review M-3：后端 t_shelf_process 有 partial unique index
+    // `uk_t_shelf_process (shelf_id, process_id) WHERE deleted_at IS NULL`，
+    // items 里出现重复 process_id ⇒ bulk_insert 撞索引 ⇒ 500。
+    // 今天 el-select multiple 产不出重复值，但本函数的立身之本是收口 payload
+    // 形态 —— 将来「已有映射 + 新增勾选」合并提交时重复就会真实发生。
+    // sort_order 必须按**去重后**的下标重算：沿用原下标会留下空洞（如 0, 2），
+    // 语义上不再是 0..n-1 的连续顺序。
+    expect(toShelfProcessesPayload(['p1', 'p2', 'p1', 'p3', 'p2'])).toEqual({
+      items: [
+        { process_id: 'p1', sort_order: 0 },
+        { process_id: 'p2', sort_order: 1 },
+        { process_id: 'p3', sort_order: 2 },
+      ],
+    });
+    // 保留首次出现：顺序 = 输入里的首次出现序，不是排序后的序。
+    expect(toShelfProcessesPayload(['p3', 'p1', 'p3']).items.map((i) => i.process_id)).toEqual([
+      'p3',
+      'p1',
+    ]);
+    // 全重复 → 退化成单条（而不是发 3 条同 id 去撞索引）。
+    expect(toShelfProcessesPayload(['p1', 'p1', 'p1'])).toEqual({
+      items: [{ process_id: 'p1', sort_order: 0 }],
+    });
   });
 
   it('C1：setShelfProcesses body 逐字是 {items:[{process_id, sort_order}]}', async () => {
@@ -182,6 +223,33 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
     ).toEqual(['p1', 'p2']);
     // 无映射（空 items）→ 空数组（不是 undefined / 不抛错）。
     expect(toShelfProcessIds({ items: [] })).toEqual([]);
+  });
+
+  it('C3c：sort_order 重复 / 乱序时 toShelfProcessIds 仍返回稳定顺序（review M-1 稳定性 guard）', () => {
+    // review M-1 把 sort_order 收紧成必填并删掉 `?? 0` 兜底后，「重复值下顺序仍
+    // 稳定」这条承诺改由 ES2019 起规范保证的 Array.prototype.sort 稳定性承担。
+    // 后端单架端点 SQL 是 `ORDER BY sp.sort_order ASC, sp.id ASC`，同 sort_order
+    // 时输入序即 id ASC 序 —— 所以本用例断言「保留输入相对次序」而不是某个具体
+    // 的二级排序规则（前端不重复实现后端 SQL 的 id 排序）。
+    const row = (process_id: string, sort_order: number) => ({
+      shelf_id: 's1',
+      shelf_code: 'SH-P01',
+      process_id,
+      process_code: process_id.toUpperCase(),
+      sort_order,
+    });
+    // 乱序输入 → 按 sort_order 升序。
+    expect(toShelfProcessIds({ items: [row('c', 2), row('a', 0), row('b', 1)] })).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
+    // sort_order 全部相同（脏数据）→ 保持输入次序，不随机重排。
+    expect(toShelfProcessIds({ items: [row('c', 0), row('a', 0), row('b', 0)] })).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
   });
 
   it('C4：getAllShelfProcessMappings 返回扁平行（同一 shelf_id 多行、每行一个 process_id）', async () => {
