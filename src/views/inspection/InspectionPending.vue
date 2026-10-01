@@ -893,7 +893,6 @@ const inspectionShelves = ref<Shelf[]>([]); // 2026-08-12 PR-I-scan-inspect：�
 const {
   filteredShelves: filteredProductionShelves,
   filteredProcesses,
-  load: loadShelfProcessMap,
 } = useShelfProcessFilter(
   productionShelves,
   processes,
@@ -946,6 +945,10 @@ const scanInspectDecision = ref<'PASS' | 'FAIL'>('PASS');
 const scanInspectSubmitting = ref(false);
 
 // 复用 fail 弹窗的 shelf/process 双向过滤
+// 2026-10-02（Phase C）行为变更：本实例此前**从不**调 load()，自己的 mapping 恒空
+// ⇒ 一直走全量兜底、实际不过滤。迁到共享 query 后两道闸门（同一份 productionShelves /
+// processes）会自动开闸拉映射 —— 本实例的 filteredXxx **首次真正按映射收窄**（即当初
+// 解构 filteredXxx 的原意），影响「扫码品检 → 打回生产架」的目标货架 / 下一道工序下拉。
 const {
   filteredShelves: scanInspectFilteredProductionShelves,
   filteredProcesses: scanInspectFilteredProcesses,
@@ -991,7 +994,8 @@ async function openScanInspectDialog(row: RowState): Promise<void> {
     productionShelves.value.length === 0 ? loadProductionShelves() : Promise.resolve(),
     processes.value.length === 0 ? loadProcesses() : Promise.resolve(),
   ]);
-  void loadShelfProcessMap();
+  // 2026-10-02：不再显式 load() —— 映射由共享 query 跟随 productionShelves /
+  // processes 就绪自动开闸（上面 Promise.all 返回后两源即非空）。
 }
 
 function onScanInspectDialogClosed(): void {
@@ -1055,9 +1059,8 @@ async function openFailDialog(row: RowState): Promise<void> {
     productionShelves.value.length === 0 ? loadProductionShelves() : Promise.resolve(),
     processes.value.length === 0 ? loadProcesses() : Promise.resolve(),
   ]);
-  // 货架 / 工序下拉加载完后异步拉「货架↔工序」映射（loadShelfProcessMap 内部走
-  // GET /prod/shelf-processes）；映射未到位前 filteredXxx 走兜底全量
-  void loadShelfProcessMap();
+  // 2026-10-02：不再显式拉「货架↔工序」映射 —— 上面两个下拉源就绪后共享 query
+  // 自动开闸拉一次（GET /prod/shelf-processes）；映射未到位前 filteredXxx 走兜底全量。
 }
 
 function onFailDialogClosed(): void {

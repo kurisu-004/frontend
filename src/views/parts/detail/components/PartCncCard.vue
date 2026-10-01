@@ -344,26 +344,20 @@ const releaseShelfId = ref<string | null>(null);
 const releaseNextProcessId = ref<string | null>(null);
 const releaseSubmitting = ref(false);
 
-const {
-  filteredShelves: releaseFilteredShelves,
-  filteredProcesses: releaseFilteredProcesses,
-  load: loadReleaseMap,
-} = useShelfProcessFilter(
-  computed(() => props.productionShelves),
-  computed(() => props.processes),
-  releaseShelfId,
-  releaseNextProcessId,
-);
+const { filteredShelves: releaseFilteredShelves, filteredProcesses: releaseFilteredProcesses } =
+  useShelfProcessFilter(
+    computed(() => props.productionShelves),
+    computed(() => props.processes),
+    releaseShelfId,
+    releaseNextProcessId,
+  );
 
-async function openRelease() {
+function openRelease() {
   releaseShelfId.value = null;
   releaseNextProcessId.value = null;
-  try {
-    await loadReleaseMap();
-  } catch {
-    /* filteredXxx 走兜底全量 */
-  }
   releaseVisible.value = true;
+  // 2026-10-02：不再 await load() —— 映射由共享 query 跟随 props.productionShelves /
+  // props.processes 就绪自动开闸；未就绪期间 filteredXxx 走兜底全量（沿旧语义）。
 }
 
 function onReleaseClosed(): void {

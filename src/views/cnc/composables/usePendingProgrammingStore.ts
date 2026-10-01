@@ -348,7 +348,6 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   const {
     filteredShelves: filteredProductionShelves,
     filteredProcesses: filteredInhouseProcesses,
-    load: loadReleaseMap,
   } = useShelfProcessFilter(
     productionShelves,
     inhouseProcesses,
@@ -369,8 +368,9 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     releaseShelfId.value = null;
     releaseProcessId.value = null;
     releaseDialogVisible.value = true;
-    // 拉全量「货架↔工序」映射（一次 GET /prod/shelf-processes，避免 N+1）
-    void loadReleaseMap();
+    // 2026-10-02：不再显式 load() —— 映射改由共享 query 跟随上面两个基础数据 query
+    // 就绪自动开闸（productionShelves / inhouseProcesses 都非空时），实际比旧
+    // 「点下发才拉」更早到位。
   }
 
   function onReleaseDialogClosed(): void {

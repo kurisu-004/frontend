@@ -145,7 +145,6 @@ export function useOutsourceReceivingList(
   const {
     filteredShelves: filteredProductionShelves,
     filteredProcesses: filteredInhouseProcesses,
-    load: loadReceiveMap,
   } = useShelfProcessFilter(
     productionShelves,
     inhouseProcesses,
@@ -170,9 +169,8 @@ export function useOutsourceReceivingList(
     receiveProcess.value = '';
     receiveQuantity.value = row.quantity;
     receiveDialogVisible.value = true;
-    // 2026-07-17：弹窗打开后异步加载映射（仅在 shelves / processes 两个下拉源已就绪
-    // 时有效 —— 映射本身正是 loadReceiveMap 自己去拉的，不能自己要求自己已就绪）
-    void loadReceiveMap();
+    // 2026-10-02：不再显式 load() —— 映射由共享 query 自动跟随 options.shelves /
+    // options.processes 就绪（两个源非空即开闸，闸门推导见 useShelfProcessFilter）。
   }
 
   function onReceiveDialogClosed(): void {

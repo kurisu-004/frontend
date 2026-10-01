@@ -47,7 +47,6 @@ const processes = ref<Process[]>([]);
 const {
   filteredShelves: filteredProductionShelves,
   filteredProcesses,
-  load: loadProcessMap,
 } = useShelfProcessFilter(
   productionShelves,
   processes,
@@ -89,7 +88,8 @@ async function reloadOptions(): Promise<void> {
   productionShelves.value = prod.items;
   inspectionShelves.value = insp.items;
   processes.value = procs.items;
-  await loadProcessMap();
+  // 2026-10-02：不再显式 load() —— 「货架↔工序」映射改由共享 query 自动跟随
+  // productionShelves / processes 就绪（两个源非空即开闸，闸门推导见 useShelfProcessFilter）。
 }
 
 async function onSubmit(): Promise<void> {

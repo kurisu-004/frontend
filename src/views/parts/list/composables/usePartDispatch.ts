@@ -140,11 +140,12 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   const dispatchNextProcessId = ref<string | null>(null);
   const dispatchPartId = ref<string | null>(null);
   // 2026-07-17：useShelfProcessFilter 双向收窄货架/工序下拉
-  const {
-    filteredShelves,
-    filteredProcesses,
-    load: loadShelfProcessMap,
-  } = useShelfProcessFilter(shelves, processes, dispatchShelfId, dispatchNextProcessId);
+  const { filteredShelves, filteredProcesses } = useShelfProcessFilter(
+    shelves,
+    processes,
+    dispatchShelfId,
+    dispatchNextProcessId,
+  );
 
   // 2026-09-26（B 任务）：单件直发 mutation —— PENDING → ON_SHELF。
   const placeOnShelfMutation = useMutation<
@@ -176,8 +177,8 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     // 原代码此处 setTimeout 不存在，弹窗打开即可观察下拉选项（listProcesses 返回
     // 已 cached 时无 loading 感知；uncached 时下拉会闪一下空）。
     dispatchVisible.value = true;
-    // 2026-07-17：弹窗打开后异步加载映射（不阻塞 dialog 出现）
-    void loadShelfProcessMap();
+    // 2026-10-02：不再显式 load() —— 映射由共享 query 跟随 shelves / processes 就绪
+    // 自动开闸（reloadShelves() 返回后 shelves 非空即开闸）。
   }
 
   function onDispatchClosed(): void {
@@ -204,11 +205,13 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   const batchDispatchVisible = ref(false);
   const batchDispatchShelfId = ref<string | null>(null);
   const batchDispatchNextProcessId = ref<string | null>(null);
-  const {
-    filteredShelves: batchFilteredShelves,
-    filteredProcesses: batchFilteredProcesses,
-    load: loadBatchShelfProcessMap,
-  } = useShelfProcessFilter(shelves, processes, batchDispatchShelfId, batchDispatchNextProcessId);
+  const { filteredShelves: batchFilteredShelves, filteredProcesses: batchFilteredProcesses } =
+    useShelfProcessFilter(
+      shelves,
+      processes,
+      batchDispatchShelfId,
+      batchDispatchNextProcessId,
+    );
 
   // 2026-09-26（B 任务）→ 2026-09-29 简化：批量下发 mutation —— 内部循环 targets 顺序 await，
   // 全部走 placeOnShelf（不再有 action 分支）。返回 { succeeded, failed } —— 失败件留
@@ -312,8 +315,9 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     batchDispatchShelfId.value = null;
     batchDispatchNextProcessId.value = null;
     await reloadShelves();
-    void loadBatchShelfProcessMap();
     batchDispatchVisible.value = true;
+    // 2026-10-02：不再显式 load() —— 与单件下发共用同一份共享 query 缓存
+    // （同一常量 queryKey），单件下发先开过闸后本对话框直接命中。
   }
 
   async function onBatchDispatchConfirm(): Promise<void> {

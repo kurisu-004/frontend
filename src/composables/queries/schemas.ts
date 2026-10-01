@@ -674,6 +674,46 @@ export const shelfListResultSchema = z.object({
 export type ShelfListResultSchema = z.infer<typeof shelfListResultSchema>;
 
 // ============================================================
+// 2026-10-02 新增：货架↔工序映射全集 schema（共享基础数据层
+// useShelfProcessMappingsQuery 守门）。
+//
+// 字段对齐 backend-rust `AllShelfProcessMappingItem`
+// （src/modules/prod/shelf_process/vo.rs:43-50 —— :43 是 `pub struct`，它上面
+// 36-41 行是文档注释、42 行是 `#[derive]`），4 字段：
+//   - shelf_id / process_id：`i64` + `serialize_i64` ⇒ 前端收 string（雪花 ID）；
+//   - shelf_code / process_code：非 Option String。
+//
+// ⚠️ 与 `ShelfProcessMappingItem`（单架 VO，5 字段）只差 `sort_order` —— 全集接口
+// **不返** sort_order（排序由 service 层 ORDER BY 保证）。守门时**不要**把 sort_order
+// 声明进来：那会让 parse 在真实响应上 100% 抛错（漏声明的必填字段 = 校验形同虚设，
+// 误声明的多余必填字段 = 校验过严把好数据打死，两者都是契约没对齐）。
+//
+// ⚠️ 4 个字段必须**全部显式声明**（沿 §M-4 strip 陷阱）：Zod 默认 strip 模式下漏声明的
+// 字段会被静默丢弃、parse 不报错。其中 shelf_code / process_code 漏声明的后果最隐蔽
+// —— regroup 出来的 mapping（只读 shelf_id / process_id）在守卫失效时仍然「看起来正常」，
+// 漂移要到 UI 上渲染出空白 chip 才暴露。守门是 BUG-3（把扁平行当「一架子集一行」读 →
+// new Set(undefined) → 8 个页面的货架/工序下拉被静默清空）能长期潜伏的根因对策。
+// ============================================================
+
+export const shelfProcessMappingItemSchema = z.object({
+  shelf_id: z.string(),
+  shelf_code: z.string(),
+  process_id: z.string(),
+  process_code: z.string(),
+});
+
+export type ShelfProcessMappingItemSchema = z.infer<typeof shelfProcessMappingItemSchema>;
+
+/** `GET /api/v2/prod/shelf-processes` 顶层出参（rust AllShelfProcessMappingOut）
+ *  —— 只有 items 一个字段，**没有** total / limit / offset（与 shelfListResultSchema
+ *  那种分页结果不同形）。 */
+export const shelfProcessMappingsResultSchema = z.object({
+  items: z.array(shelfProcessMappingItemSchema),
+});
+
+export type ShelfProcessMappingsResultSchema = z.infer<typeof shelfProcessMappingsResultSchema>;
+
+// ============================================================
 // dispatch / auto-dispatch 契约守门 schema。
 //
 // 2026-09-30 重写（后端 batch 域重构，见

@@ -33,6 +33,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { nextTick, reactive, ref } from 'vue';
+// 2026-10-02 review 第 1 轮 M-3：ShelfList.saveShelf 保存成功后调
+// invalidateShelfProcessMappingsQuery(qc)，qc 走 useQueryClient() 的 inject ——
+// 没装 VueQueryPlugin 会在 setup 阶段就抛错，故本文件必须挂上（并保留可断言的
+// QueryClient 实例，见 beforeEach）。
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 // 供 vi.mock 的 importOriginal 泛型使用（@typescript-eslint/consistent-type-imports
 // 禁止 `import()` 形式类型注解；沿 usePendingDispatch.spec.ts:42 同款）
 import type * as ShelvesModule from '@/api/shelves';
@@ -245,7 +250,11 @@ const EXISTING = {
 };
 
 async function mountShelfList() {
-  const wrapper = mount(ShelfList, { global: globalConfig });
+  // 2026-10-02 review M-3：每例挂自己的 QueryClient（与 main.ts 一致 retries: 0），
+  // 跨例不复用 —— 缓存状态不该在用例之间流动。
+  const wrapper = mount(ShelfList, {
+    global: { ...globalConfig, plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+  });
   await flushPromises();
   return wrapper;
 }
@@ -260,7 +269,12 @@ async function closeDialog(wrapper: Awaited<ReturnType<typeof mountShelfList>>) 
   await flushPromises();
 }
 
+let testQueryClient: QueryClient;
+
 beforeEach(() => {
+  testQueryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
+  });
   listShelvesMock.mockReset();
   createShelfMock.mockReset();
   updateShelfMock.mockReset();
@@ -438,5 +452,25 @@ describe('2026-10-02 review I-1：映射加载失败后保存不得清空整组�
     expect(setShelfProcessesMock).toHaveBeenCalledWith('NEW1', { items: [] });
     expect(elMessage.error).not.toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+
+  it('P6（review M-3）：保存成功后失效共享映射缓存 —— 键走 qk，不在调用点拼字面量', async () => {
+    getShelfProcessesMock.mockResolvedValue(EXISTING);
+    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
+
+    const wrapper = await mountShelfList();
+    const vm = wrapper.vm as unknown as ShelfListVm;
+    await vm.editShelf(SHELF);
+    await flushPromises();
+
+    expect(invalidateSpy).not.toHaveBeenCalled();
+
+    await vm.saveShelf();
+    await flushPromises();
+
+    // 共享映射（qk.shelfProcessMappingsPrefix = ['shelf-process-mappings']）的写点
+    // 全仓只有 setShelfProcesses 这一个、读点有 10 处，补失效成本近乎零：把「改完映射
+    // 重开对话框才可见」升级成「下一次读即见」。键值钉死，防止将来有人改成裸数组。
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['shelf-process-mappings'] });
   });
 });

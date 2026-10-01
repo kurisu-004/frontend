@@ -40,6 +40,7 @@ import { api, cleanParams } from '@/api/http';
 import type {
   AllShelfProcessMappingItem,
   Shelf,
+  ShelfForInspectionResult,
   ShelfForReturnResult,
   ShelfListResult,
   ShelfProcessesResult,
@@ -201,14 +202,43 @@ export async function listShelvesForReturn(nextProcessId: string): Promise<Shelf
 
 /**
  * 2026-07-13 新增：共享 HMI INSPECT 卡片网格 picker 数据源。
- * 后端 `GET /shelves/for-inspection`
- * 返回 active INSPECTION 货架列表（按 current_load ASC 排序）+ 推荐架。
+ * 后端 `GET /shelves/for-inspection` 返回 `zone='INSPECTION' AND is_active=true`
+ * 的货架列表，**不过滤 SHELF_ACCOUNT scope**（品检架全员可见，见后端
+ * docs/api/shelves.md:189-202）。
  *
- * 错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS（没有 INSPECTION 架或用户
- * scope 内无 INSPECTION 架）。
+ * 2026-10-02 三处订正（逐条回后端源码核实，全部只改注释、零行为变化）：
+ *
+ * 1. **排序**：旧注释写「按 current_load ASC 排序」—— **错**。本端点不做任何
+ *    load 维度排序：service 层 `ShelfService::list_for_inspection` 直接复用
+ *    `repo.list_with_filters(None, Some("INSPECTION"), Some(true), MAX_LIMIT, 0)`
+ *    （backend-rust/src/modules/shelf/service/picker.rs:114，该函数体 :98 起），
+ *    该查询**固定**带
+ *    `ORDER BY display_order ASC, id ASC`（repo/sql.rs:158）—— 即「物理顺序 +
+ *    id 兜底」。逐字更正为：**按 display_order ASC, id ASC（物理顺序）**。
+ *    推论：品检架**不保证**「最空的排最前」，前端也不能依赖列表序做任何业务判断。
+ * 2. **推荐架**：旧注释写「+ 推荐架」—— **错**。`ShelfForInspectionItem`
+ *    （vo/shelf.rs:73-81）只有 id / code / name / zone / location / is_active
+ *    **六字段**，根本没有 `is_recommended` 字段，也没有 `recommended_shelf_id`。
+ *    本端点**不存在**任何推荐语义（推荐标记只属于 for-return VO）。
+ * 3. **错误码**：旧注释写「错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS（没有
+ *    INSPECTION 架或用户 scope 内无 INSPECTION 架）」—— **错，双重错**：
+ *      - 20506 不可能由本端点抛出：service 里根本没有任何 20506 分支；
+ *      - 「用户 scope 内无 INSPECTION 架」也不成立：本端点**不过滤 scope**。
+ *    本端点**唯一**的错误是 `require_any_role` 失败 → 40300 FORBIDDEN
+ *    （允许角色 5 个：Manager / Clerk / CncProgrammer / ShelfAccount / Inspector，
+ *    比 for-return 多一个 Inspector——品检员自己要用它）。
+ *    **没有品检架时返 200 + `items: []`，不是错误。**
+ *
+ * 2026-10-02 返回类型订正（本次唯一的代码变更）：旧签名
+ * `Promise<ShelfForReturnResult>` 是**类型谎言** —— 两个端点后端 VO 不同
+ * （见 `@/types/shelf.ts` 里 ShelfForReturn / ShelfForInspection 的对照表）。
+ * 谎报的后果不是抽象层面的洁癖：INSPECT 路径上 `current_load` 恒 undefined，
+ * `HmiPickerCard` 实测渲染出「在架 **undefined** 件」。现返回
+ * `ShelfForInspectionResult`（六字段 VO），让「品检架没有在架数」这件事在类型层
+ * 变成显式事实，由消费侧显式处理。
  */
-export async function listShelvesForInspection(): Promise<ShelfForReturnResult> {
-  const resp = await api.get<ShelfForReturnResult>('/shelves/for-inspection');
+export async function listShelvesForInspection(): Promise<ShelfForInspectionResult> {
+  const resp = await api.get<ShelfForInspectionResult>('/shelves/for-inspection');
   return resp.data;
 }
 
