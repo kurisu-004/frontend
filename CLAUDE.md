@@ -56,8 +56,82 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   `forceLogout(router)`（2026-10-02 新增）是它的**同步**兄弟：`refreshOrLogout` 拉
   `/iam/me` 复核（给路由守卫的「未登录但可能有 session」恢复路径用），`forceLogout`
   不联系后端、直接终止本地会话（给「后端已权威判定会话失效」的信号用，如 WS 关闭码
-  `4001`）。两者共用同一段「清 state + removeItem + 派发 + 跳转」实现。
+  `4001`）。`forceLogout` 的 router 参数**保留**（app 层唯一的导航注入点），
+  `refreshOrLogout` 的失败分支**委托**给它并透传 router。
   mutation 全局 retry: 0 见上文 TanStack Query 约定，store 内不写 retry。
+- **会话终止收口 `teardownSession()`（2026-10-02 新增）**：`src/stores/auth.ts` 里
+  **无 router 参数**的私有函数，是会话终止的**唯一**状态 + 缓存收口点 —— 清
+  `token` / `refreshToken` / `user`（经 `setUser(null)`，连带切 tagsView 归属）/
+  `isDummyAuthActive`、删 `auth_session`、派发 `auth:session-changed(token: null)`、
+  **`queryClient.clear()`**。四条终止路径全部汇到它，**新增第 5 条必须改走本函数**：
+  | 入口 | 触发源 | 导航 |
+  |---|---|---|
+  | `logout()` | 用户点「退出」（先 `await apiLogout()`） | 无（调用方负责） |
+  | `forceLogout(router)` | `auth:session-lost` 事件 ← dashboard WS 关闭码 `4001` | `router.replace('/login')` |
+  | `refreshOrLogout(router)` catch | 路由守卫 /iam/me 校验失败 | 委托 `forceLogout(router)` |
+  | `auth:logout` 事件订阅 | `src/api/http.ts:425`（40105 SESSION_REVOKED）/ `:450`（refresh 失败） | 无 |
+
+  分工：`teardownSession()` = 纯收口（无 router、不感知路由）；`forceLogout(router)`
+  = 在其之上**追加**一次导航。守卫侧拿到 `refreshOrLogout` 的 false 后必须
+  `next(false)` **取消**那条已被取代的导航（不要 `next('/login')` 再导航一次）——
+  守卫是 3 参签名 `(to, _from, next)`，vue-router 的 `guardToPromiseFn` 只在
+  `guard.length < 3` 时自动续 next，3 参守卫里「什么都不调」= 导航永久挂起
+  （prod 守卫 promise 永不 settle，dev 抛 `Invalid navigation guard`）。
+- **`queryClient.clear()` 是跨账号缓存隔离的唯一手段（2026-10-02，M-4）**：全仓
+  queryKey（`src/composables/queries/keys.ts` + 各视图内 query）**都没有 user 维度**，
+  而 `QueryClient` 是 `src/main.ts` 里的单例。登出 → 不刷新页面 → 换账号登录，A 账号
+  按 `can_access_shelf` 收窄的缓存会零网络请求直喂 B 账号。故会话终止时必须
+  `clear()` 全清：
+  - `clear()` **自带 in-flight 取消且是 silent**
+    （`queryCache.js` `clear()` → `remove()` → `query.js` `destroy()` → `this.cancel({ silent: true })`），
+    **禁止**再叠 `cancelQueries()`：默认非 silent 会触发仓内
+    `watch(error) → ElMessage.error` 桥接，登出瞬间刷一屏假错误。
+  - 会话终止是**唯一**全清点：`views/dashboard/composables/` 下 4 个 query 用
+    `gcTime: POSITIVE_INFINITY`（`useDashboardSnapshot` / `useDashboardUrgentList` /
+    `useDashboardOverdue` / `useDashboardUpcomingList`），永不被 GC，只靠这一步兜底。
+- **`useQueryClient()` 必须在 store setup 顶层捕获（2026-10-02）**：`src/stores/auth.ts`
+  的 `queryClient` 在 `defineStore` 回调**第一行**取，不能挪进 `teardownSession()` 惰性取。
+  原因：Pinia 只对 store setup 包 `runWithContext`（`pinia.mjs:1468-1470`），
+  action wrapper（同文件 `:1379-1405`）里**没有**；而 `useQueryClient()` 首行
+  `hasInjectionContext()` 守卫会抛（`useQueryClient.js:26`）。⇒ 任何惰性路径
+  （action 内 / 事件 listener 内）再调都会炸。
+  两侧后果：`src/main.ts` 里 `app.use(VueQueryPlugin, …)` 必须早于**任何** store 实例化
+  （最早的实例化是 dummy 分支的 `useAuthStore()`）；测试侧
+  `useQueryClient()` 只在 store **首次创建**时执行（后续命中 `pinia._s` 早返回），
+  所以**任何实例化 auth store 的 spec 必须 `app.use(VueQueryPlugin)` + 传一个
+  `QueryClient`**。
+- **`auth:logout` 是订阅点不是派发点（2026-10-02）**：派发方两处，都在 axios 拦截器
+  —— `src/api/http.ts:425`（40105 SESSION_REVOKED）与 `:450`（refresh 失败）。
+  订阅方两处，职责**不同**：
+  - `src/main.ts` —— **只负责导航** `router.replace('/login')`；
+  - `src/stores/auth.ts` —— 清会话状态 + 清 query 缓存（`teardownSession()`）。
+    此前只有前者，状态无人清理（`auth.user` / `token` 全留、`isAuthenticated` 仍 true、
+    内存 query 缓存被新账号复用），是 M-4 暴露面最大的一条路径。
+  - ⚠️ 旧注释「拦截器失败分支已经清掉 localStorage」是**事实错误**：`src/api/http.ts`
+    全文件零 QueryClient 引用、也从不删 `auth_session`（它只在 refresh 成功时经
+    `persistTokens()` **写**）。
+- **auth store 写点唯一性（2026-10-02）**：`user.value` 只在 `setUser()` 里赋值
+  （5 个调用方：`loadFromStorage` / `loginMutation.mutationFn`（必须在 `saveToStorage()`
+  **之前**）/ `refreshOrLogout` 成功 / `initDummyAuth` / `auth:tokens-refreshed` 监听）。
+  `setUser` 顺带切 tagsView 的持久化归属 `switchOwner(u?.id ?? null)`，
+  `tagsView.switchOwner` **只经 setUser 调用**（`teardownSession` 不重复调）。
+  另：`isDummyAuthActiveValue` 的复位点**只在** `teardownSession()` 里 —— 此前只在
+  `initDummyAuth()` 置 true、从无复位，dev dummy 模式登出后守卫仍短路放行。
+- **tagsView per-user 持久化（2026-10-02 新增，替代 pinia-plugin-persistedstate）**：
+  `src/stores/tagsView.ts` 改自管 `localStorage`，key 形如
+  **`myerp.tags_view.<userId>`**。行为：同账号重登**恢复**自己的标签栏；换账号
+  **互不可见**；登出（`switchOwner(null)`）只清内存、**不写盘**（写盘等于把存档覆盖成
+  空 = 缺陷没修成）。归属切换的唯一入口是 `switchOwner(userId)`，由 auth store 的
+  `setUser()` 驱动；**store 初始化路径不读 localStorage**（hydrate 只由 `switchOwner`
+  触发，否则 `TagsView.spec.ts` 那类裸 `setActivePinia(createPinia())` 的 spec 会因
+  反查 userId 而被迫 `useAuthStore()` → 撞上 `useQueryClient()` 的 injection 限制）。
+  旧全局 key `tags_view` 在首次 `switchOwner(非 null)` 时一次性迁移并 `removeItem`。
+  **key 命名有意偏离**仓内另两个 per-user 先例（`useListFilterPersist.ts` /
+  `useColumnVisibility.ts` 的 `myerp.list.<userId>.<key>`，userId 在**中间**、带末位
+  `<名>`）：本 store 只有一份数据，末位名冗余；且该 key 此前从未上线，无迁移成本。
+  `pinia-plugin-persistedstate@^4.7.1` 已从 `package.json` 卸载（插件的 `key` 只求值
+  一次、入参是 storeId、且 Pinia store 跨 logout→login 存活，做不到 per-user 隔离）。
+  `reset()`（清空含 affix）保留但当前**无生产调用方** —— 登出走 `switchOwner(null)`。
 - **auth 转换事件 `auth:session-changed`（2026-10-01 新增）**：长连接层（`src/api/dashboard.ts`
   的 dashboard WS 单例）与 auth 之间的**唯一**通知通道，取代此前只订阅 `auth:tokens-refreshed`
   的做法。`CustomEvent<{ token: string | null }>`，`detail.token` 语义：
@@ -69,13 +143,16 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   |---|---|---|
   | `src/api/http.ts` `persistTokens()` | access token 被刷新 | 新 token |
   | `src/stores/auth.ts` `loginMutation.onSuccess` | 登录成功 | 新 token |
-  | `src/stores/auth.ts` `logout()` | 主动登出 | `null` |
-  | `src/stores/auth.ts` `refreshOrLogout()` catch 分支 | 守卫校验失败 | `null` |
+  | `src/stores/auth.ts` `teardownSession()` | 会话终止（**4 条路径的单点**，见上方条目） | `null` |
+
+  （2026-10-02 合并说明：原表把 `logout()` 与 `refreshOrLogout()` catch 分支列成两行，
+  M-4 把两者连同新加的 `forceLogout` / `auth:logout` 事件一起收进 `teardownSession()`，
+  于是 4 个派发点变成 3 个 —— **派发语句本身只有 1 处**。）
 
   派发方**一律不 import** `src/api/dashboard.ts`（否则形成 `auth ↔ api` 循环依赖），
   沿用 auth store 条目里既定的 CustomEvent 解耦范式。`auth:tokens-refreshed` 保留不动
   —— 它管 store 自身 state（token / user / refreshToken）同步，与 WS 层是两件事。
-  **新增任何改变 token 生命周期的写点时，必须在这 4 处之外同步补派发。**
+  **新增任何改变 token 生命周期的写点时，必须在这 3 处之外同步补派发。**
   ⚠️ 本表**不覆盖** WS 收到后端关闭码 `4001` 的场景 —— 那条路径由 WS 层反向派发
   `auth:session-lost`（方向相反），详见下方「dashboard WS 单例」第 4 条。
 
@@ -148,9 +225,11 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
      语义「后端判定会话已死，请上层终止会话」。接收方是 **`src/router/index.ts`**
      （不是 MainLayout.vue：那只是组件，挂在 `requireAuth` 子树下，`/scan/*` 等
      MainLayout 之外的全屏路由收不到；router 模块已持有 router + useAuthStore，零新增依赖），
-     动作是 **`auth.forceLogout(router)`**（`src/stores/auth.ts`）→ 清 store 内存 state
-     + `localStorage.removeItem` + 派发 `auth:session-changed(token: null)` +
-     `useTagsViewStore().reset()` + `router.replace('/login')`，**不联系后端**。
+     动作是 **`auth.forceLogout(router)`**（`src/stores/auth.ts`）→ 调
+     `teardownSession()`（清 store 内存 state + `localStorage.removeItem` + 派发
+     `auth:session-changed(token: null)` + 切 tagsView 归属 + **`queryClient.clear()`**）
+     再 `router.replace('/login')`，**不联系后端**。收口细节见上方「会话终止收口
+     `teardownSession()`」条目。
      WS 层**禁止** import `stores/auth` 或 `vue-router`。
      ⚠️ **不要**在 app 层改回「先 `refreshOrLogout(router)` 复核 `/iam/me`」：WS 层在
      派发 ② 里已 `removeItem`，而 `http.ts` 请求拦截器只从 localStorage 取 token
@@ -166,7 +245,8 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
      会话已被吊销**时，re-auth 拿到 `50000` ⇒ 后端发 `1011` 而非 `4001` ⇒ 前端重连
      ⇒ **握手阶段**校验到吊销 ⇒ upgrade 前直接回 `40105` ⇒ 浏览器只见 `1006` ⇒
      **永远到不了 4001 分支**（只能继续无限重试）。暴露面有界：页面只要发出任何 HTTP
-     请求，`40105` 会触发 `http.ts` 派发 `auth:logout` → 跳登录页；只有在「页面静止 +
+     请求，`40105` 会触发 `http.ts` 派发 `auth:logout` → 跳登录页（并经
+     `teardownSession()` 清会话状态 + query 缓存）；只有在「页面静止 +
      TanStack Query 无轮询」的空档里，用户会盯着不再刷新的 dashboard + 一串 WS 重试日志。
      **这是既有架构缺口**（握手阶段的失败从来就是 1006），不是某次改动引入的；会话真死
      的最终兜底是 **HTTP 侧 `40105` → `auth:logout`**，不是 WS 侧的 `4001`。
@@ -227,7 +307,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
        });
        ```
 
-     - 范本：`src/stores/auth.ts:132`（login mutation，单纯 onSuccess 不挂 invalidate）、`src/views/parts/new/composables/usePartBatchManual.ts:892`（批量录入 mutation，部分失败 / 成功跳转 / ElMessage 放 onSuccess / onError）。
+     - 范本：`src/stores/auth.ts:234`（login mutation，单纯 onSuccess 不挂 invalidate；行号随 M-4 改动位移过，2026-10-02 重新核过）、`src/views/parts/new/composables/usePartBatchManual.ts:892`（批量录入 mutation，部分失败 / 成功跳转 / ElMessage 放 onSuccess / onError）。
   9. **ElMessage 错误桥接**
      - useQuery 的 error 不在 setup 抛错，走 `watch(error, (e) => e && ElMessage.error(...))` 桥接（替代原 `fetchList catch` 内 ElMessage 路径，`usePartsListQuery.ts:334-336`）。
      - 测试环境用 `vi.mock('element-plus', () => ({ ElMessage: { ...vi.fn() } }))` 桩成 no-op，避免 vitest node env `ElMessage` 内部 `normalizeAppendTo` 触发 `ReferenceError: document is not defined` 污染输出。
@@ -237,6 +317,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
    - **跨页面写操作不再使用「精确失效」策略**：会改变工序候选池成员资格的流转端点（送检 `POST /parts/batch-to-inspection`、worker-scan `RETURNED`、scan-inspect、outsource 收发）分布在 delivery / scan / inspection / outsource 多个域，要求在每个写点补失效等于穷举全仓写点，不可持续，因此**不做**这类补齐。数据新鲜度由 **WS 事件**或**显式 refetch**（如 `WorkerQueueBoard.onRefresh`）负责。
    - **现有 `invalidateQueries` 调用点全部保留、一行不删**：它们是「写完立即看到自己那笔」的优化，不是一致性保证。降级的是「依赖精确失效来保证一致性」这个**假设**，不是失效机制本身。
    - 页面级 store（`usePartsListStore` 等）走 `src/main.ts` 全局默认，**不在本条约束范围**；`views/dashboard/` 下的 WS 事件失效域 query 同理，沿用各自既有取值。
+   - ⚠️ **例外仍在**：`views/dashboard/composables/` 下 4 个 query（`useDashboardSnapshot` / `useDashboardUrgentList` / `useDashboardOverdue` / `useDashboardUpcomingList`）用 `gcTime: POSITIVE_INFINITY`，是本条「不再用 POSITIVE_INFINITY」**唯一**的现存例外（它们靠 dashboard WS 事件失效，不靠 GC）。代价是**跨账号泄漏窗口无限大** —— 靠会话终止时的 `queryClient.clear()` 兜底，详见「`queryClient.clear()` 是跨账号缓存隔离的唯一手段」条目。**改这 4 个 query 的 gcTime 前先看那条条目。**
 - **图表统一 vue-echarts 8.3（2026-09-30 起硬约束）**：仓内所有 ECharts 相关业务组件必须走 `vue-echarts`（peer deps `vue@^3.3.0` / `echarts@^6.0.0` 与本仓 `vue@^3.4.0` / `echarts@^6.1.0` 兼容）。模块化注册统一在 `src/plugins/echarts.ts`（按需 `echarts.use([BarChart, ..., CanvasRenderer])` + `import 'echarts/theme/v5'` 锁旧主题，避免拉全量 ~900KB bundle）；`main.ts` 通过 `app.component('VChart', VChart)` 全局注册，业务 SFC 直接写 `<v-chart :option="..." @click="onClick" />`。**禁止**在业务组件内 `import * as echarts from 'echarts/core'`（值导入）+ `echarts.init(el, 'v5', { renderer: 'canvas' })` + ResizeObserver + dispose 自写 mount 生命周期（2026-09-30 重构前 `UpcomingDeliveryChart.vue` 即此模式，已迁出）；**type-only import 不受限**（`import type { ECElementEvent, EChartsCoreOption } from 'echarts/core'` 是合法的，类型擦除不进 bundle）；历史兜底壳 `src/components/EChart.vue` 仅作为 option 全量替换薄壳，不在新代码中扩展其用法。
 
 ## 已知风险

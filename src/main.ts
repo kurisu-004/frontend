@@ -15,11 +15,11 @@ import { createPinia } from 'pinia';
 //
 // plugin 顺序硬约束：VueQueryPlugin 必须在 createPinia 之后、app.mount 之前。
 // 否则 useMutation 会抛 "No QueryClient set"。
+// 2026-10-02（M-4）追加：auth store 在 setup 顶部调 useQueryClient()（会话终止时
+// clear() 缓存），所以本注册还必须早于**任何** store 实例化点 —— 最早的实例化是下面
+// dummy 分支的 useAuthStore()，非 dummy 模式则是 src/router/index.ts 的全局前置
+// 守卫。提前量已足够（createPinia 与本注册之间没有任何 store 访问）。
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
-// 2026-09-28 新增：仓内首例持久化插件。tagsView store（src/stores/tagsView.ts）
-// 用 persist 块把 visitedViews + cachedViewNames 写入 localStorage，跨刷新保留
-// tab 状态。必须注册到 Pinia 之后 —— 颠倒顺序 plugin 会静默失效。
-import piniaPluginPersistedstate from 'pinia-plugin-persistedstate';
 
 import App from './App.vue';
 import router from './router';
@@ -75,12 +75,6 @@ const queryClient = new QueryClient({
 });
 
 app.use(createPinia());
-// 2026-09-28 新增：注册持久化插件到 Pinia 实例（不是 Vue app）。必须在 createPinia
-// 之后、VueQueryPlugin 之前（plugin 内部依赖 Pinia 实例 + store 首次创建时恢复）。
-// pinia.use 必须在 app.use(pinia) 之后再调，否则插件会进 pinia.toBeInstalled
-// 队列且永不消费。
-const pinia = app.config.globalProperties.$pinia as ReturnType<typeof createPinia>;
-pinia.use(piniaPluginPersistedstate);
 app.use(VueQueryPlugin, { queryClient });
 
 // 2026-09-30 新增：全局注册 <v-chart>；按需模块已在 plugins/echarts.ts 完成。
@@ -107,8 +101,16 @@ app.use(router);
 
 // 2026-07-10 起：refresh token 失效 / 40102 兜底都走这个事件统一跳登录页。
 // axios 响应拦截器（http.ts）会 dispatch；这里只负责导航，避免拦截器反向依赖 vue-router。
+//
+// 2026-10-02 订正：本注释原写「拦截器失败分支已经清掉 localStorage；这里只负责跳转」
+// —— 那是**事实错误**：`src/api/http.ts` 全文件零 QueryClient 引用、也从不碰
+// localStorage（它只在 refresh 成功时经 persistTokens() **写** auth_session）。
+// 真实的分工是：
+//   - 会话状态（token / user / auth_session / tagsView / **query 缓存**）由
+//     src/stores/auth.ts 订阅同一个 'auth:logout' 事件 → teardownSession() 收口
+//     （M-4 新增，此前只有本处一个订阅方、状态无人清理）；
+//   - 本 listener 只负责导航。
 window.addEventListener('auth:logout', () => {
-  // 拦截器失败分支已经清掉 localStorage；这里只负责跳转。
   router.replace('/login');
 });
 
