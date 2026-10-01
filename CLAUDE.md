@@ -53,6 +53,10 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   `auth.xxx` 不写 `.value`。**消费侧禁止解构 store**（沿 `usePartsListStore` 不变量
   #3）—— 一律 `const auth = useAuthStore(); auth.xxx` 访问，否则丢失响应式。
   `refreshOrLogout(router)` 接收 router 参数（store 不 import vue-router，避免循环依赖）。
+  `forceLogout(router)`（2026-10-02 新增）是它的**同步**兄弟：`refreshOrLogout` 拉
+  `/iam/me` 复核（给路由守卫的「未登录但可能有 session」恢复路径用），`forceLogout`
+  不联系后端、直接终止本地会话（给「后端已权威判定会话失效」的信号用，如 WS 关闭码
+  `4001`）。两者共用同一段「清 state + removeItem + 派发 + 跳转」实现。
   mutation 全局 retry: 0 见上文 TanStack Query 约定，store 内不写 retry。
 - **auth 转换事件 `auth:session-changed`（2026-10-01 新增）**：长连接层（`src/api/dashboard.ts`
   的 dashboard WS 单例）与 auth 之间的**唯一**通知通道，取代此前只订阅 `auth:tokens-refreshed`
@@ -98,14 +102,15 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
      关闭码语义表的唯一权威来源是 `~/Code/hsh-erp/backend-rust/docs/api/websocket.md`：
      | code | 含义 | 前端行为 |
      |---|---|---|
+     | `1000` | 正常关闭 | 无需动作；**服务端不主动发**，只会出现在客户端 `close(1000)` 的回声里（`closeDashboard()` / 登出路径） |
      | `1001` | 服务端写失败 | 继续无限重试 |
-     | `1011` | 内部错误 / Pong 超时 | 继续无限重试 |
+     | `1011` | 内部错误 / Pong 超时 | 继续无限重试（**刻意偏离**后端「提示用户稍后再试」，见下） |
      | `1012` | 服务重启 | 继续无限重试 |
      | `4001` | **会话在连接期间失效** | **停重连 + 清 session + 走登出** |
-     | `4003` | 慢消费方（背压超限） | 继续无限重试 |
+     | `4003` | 慢消费方（背压超限，丢了 n 条事件） | 继续无限重试 **+ 立即 invalidate 全量 HTTP 重取** |
      | `1006` | 浏览器侧「异常关闭」兜底（无 Close 帧） | 继续无限重试（原因未知） |
 
-     `4001` 是**唯一**必须特殊处理的码：其余全部按第 3 条继续无限重试，理由同上
+     `4001` 是**唯一**必须终止重连的码：其余全部按第 3 条继续无限重试，理由同上
      （WS 是 dashboard 唯一更新通道，封顶/放弃重连会让页面静默停止刷新）；而 `4001`
      再重试多少次都会被判 401，是死路，不分流就是 2026-10-01 修掉的「logout 死循环」
      bug 的另一面。`onDisconnected` 里 `4001` 分支的行为**顺序**（`src/api/dashboard.ts`）：
@@ -115,13 +120,41 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
      → ② `localStorage.removeItem('auth_session')` 清会话
      → ③ `window.dispatchEvent(new CustomEvent('auth:session-lost', { detail: { code, reason } }))`。
 
+     `4003` 的**额外**动作（本表唯一非终止性的特例）：后端文档规定「重连 + 全量 HTTP
+     重取」，其成立前提是「重连时自然重新收到首帧 snapshot」—— **该前提对本前端不成立**：
+     重连后的首帧 `snapshot` 在 `api/dashboard.ts` 的 `dispatch()` 里被显式 no-op 丢弃，
+     且 TanStack Query 无轮询（`staleTime: 30_000` 只管「下次取数是否放行」）⇒ 丢掉的
+     n 个事件没有任何补偿通道，「丢 1 个事件 = 对应区块永不刷新」且页面静默无提示。
+     所以 `4003` 分支额外派发 `window` 事件 **`dashboard:full-refetch`**
+     （`CustomEvent<{ code, reason }>`），由
+     `src/views/dashboard/composables/useDashboardInvalidation.ts` 接收 → 对本
+     composable 持有的每个 queryKey **立即 invalidate（不防抖）**。防抖（500ms /
+     maxWait 1500ms）是给「单次扫码连发 3 个事件」防雪崩用的；4003 是「已确定丢了
+     数据」，每多等 500ms 都在展示已知过期的数据，故必须走独立的立即路径。
+     ⚠️ WS 层**禁止** import `@tanstack/vue-query`（api 层引入 TanStack Query 依赖是
+     分层倒置）—— 走 CustomEvent 解耦，接收方那边已经持有 `qk` + `queryClient`。
+     其余关闭码（`1001` / `1006` / `1011` / `1012`）同样会因断连丢事件，属既有架构的
+     已知缺口（无轮询），刻意不在本表扩范围：只有 `4003` 是后端**明确告知**「永久丢了
+     n 条」的码。
+     `1011` 一行**刻意偏离**后端文档的「提示用户稍后再试」（`snapshot build failed` 时
+     连续重试无意义）：理由与第 3 条一致 —— 放弃重连 / 静默停更比「刷屏 + 无提示」更糟，
+     单点后端故障不应该让所有客户端一起失去 dashboard。
+
      `auth:session-lost` 与上面 `auth:session-changed` **方向相反，别混淆**：
      后者由 auth 层派发、语义「token 变了，WS 重算 URL 重连」；前者由 WS 层派发、
      语义「后端判定会话已死，请上层终止会话」。接收方是 **`src/router/index.ts`**
      （不是 MainLayout.vue：那只是组件，挂在 `requireAuth` 子树下，`/scan/*` 等
      MainLayout 之外的全屏路由收不到；router 模块已持有 router + useAuthStore，零新增依赖），
-     动作是 `auth.refreshOrLogout(router)` → `apiMe()` 失败即清 session +
-     `router.replace('/login')`。WS 层**禁止** import `stores/auth` 或 `vue-router`。
+     动作是 **`auth.forceLogout(router)`**（`src/stores/auth.ts`）→ 清 store 内存 state
+     + `localStorage.removeItem` + 派发 `auth:session-changed(token: null)` +
+     `useTagsViewStore().reset()` + `router.replace('/login')`，**不联系后端**。
+     WS 层**禁止** import `stores/auth` 或 `vue-router`。
+     ⚠️ **不要**在 app 层改回「先 `refreshOrLogout(router)` 复核 `/iam/me`」：WS 层在
+     派发 ② 里已 `removeItem`，而 `http.ts` 请求拦截器只从 localStorage 取 token
+     （`readToken()`，不读 store）⇒ `apiMe()` 不带 `Authorization` ⇒ 后端 middleware
+     必返 `40100` ⇒ 「HTTP 侧仍有效」分支在构造上不可达，还留下一个长达一次 RTT 的
+     「UI 显示已登录、实际已登出」窗口。`refreshOrLogout` 的语义是**给路由守卫用**
+     （`!auth.isAuthenticated` 时的恢复路径），两者不要混用。
 
   **dev 环境必须有 `/ws` 反代**（`vite.config.ts` `server.proxy`）。Vite 8 的 dev `upgrade`
   监听器只对**匹配到的 proxy context** 转发 `proxy.ws`，不匹配的路径掉出循环后不写任何

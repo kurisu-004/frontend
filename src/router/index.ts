@@ -389,42 +389,34 @@ const router = createRouter({ history: createWebHistory(), routes });
 // 2026-10-02 新增：接 dashboard WS 的「会话已死」通知。
 // api/dashboard.ts 收到后端关闭码 4001（会话在连接期间失效）时会派发
 // window 事件 'auth:session-lost'，并已自行清掉 localStorage 会话 + 停掉重连。
-// 本层只做 app 层该做的事：跑一次 refreshOrLogout 复核 HTTP 会话，失败即跳 /login。
+// 本层只做 app 层该做的事：终止会话（清 store 内存 state + tagsView + 跳 /login）。
 //
 // 为什么接收方选 router 模块而不是 MainLayout.vue：
 //   ① 全局一次性注册。MainLayout 是组件（且挂在 requireAuth 子树下），
 //      /scan/* /delivery-dispatch/* 这些 MainLayout 之外的全屏路由收不到；
 //   ② router 模块已持有 router 实例 + 已 import useAuthStore，本处零新增依赖；
-//   ③ store 仍不 import vue-router —— refreshOrLogout(router) 按参数注入（不变式）。
+//   ③ store 仍不 import vue-router —— forceLogout(router) 按参数注入（不变式）。
 //
 // 与 'auth:session-changed' 的区别（别混淆）：后者由 auth 层派发、语义是
 // 「token 变了，WS 该重算 URL 重连」；本事件由 WS 层派发、语义是「后端已判定会话
 // 失效，请上层终止会话」，方向相反。二者互不覆盖。
-let sessionLostChecking = false;
+//
+// 2026-10-02 修复（review Major 1）：动作从 `refreshOrLogout(router)` 复核 HTTP
+// 会话改为 `forceLogout(router)` 无条件终止。原实现的「复核」在构造上必然失败：
+// WS 层派发前已 removeItem('auth_session')，而 http.ts 拦截器只从 localStorage 取
+// token（不读 store）⇒ apiMe() 不带 Authorization ⇒ 后端必返 40100 ⇒ stillValid
+// 分支永不可达，还留下一个长达一次 RTT 的「UI 已登录、实际已登出」窗口。详见
+// src/stores/auth.ts forceLogout 注释。
+//
+// 不设防重入 flag（review Minor 1）：WS 层是 createGlobalState 单例，一个连接最多
+// fire 一次 close，且 4001 派发点只有 onDisconnected 一处 ⇒ 同一页面不会重复派发。
+// （此前「多个 WS 连接同时收到 4001」的说法与事实不符。）真正可能并发的是「4001」
+// 与路由守卫的 refreshOrLogout，但 forceLogout 幂等（每步都是置 null / removeItem /
+// reset / replace），重叠执行无害。
 if (typeof window !== 'undefined') {
   window.addEventListener('auth:session-lost', () => {
-    // 防重入：模块里可能有多个 WS 连接同时收到 4001（首连 + 重连在飞），
-    // 一次只跑一个复核，避免并发放 /iam/me。
-    if (sessionLostChecking) return;
-    sessionLostChecking = true;
     const auth = useAuthStore();
-    void auth
-      .refreshOrLogout(router)
-      .catch(() => false)
-      .then((stillValid) => {
-        sessionLostChecking = false;
-        if (stillValid) {
-          // 边界情况：WS 侧会话被后端回收，但 HTTP 侧 /iam/me 仍有效（TTL 不同步）。
-          // 不跳登录页（用户没做任何错事），但 dashboard WS 已按 4001 停重连，
-          // 要等下一次 auth:session-changed（重新登录）才恢复实时更新 —— 明确告知，
-          // 免得表现为「页面不刷新也看不出原因」。
-          console.warn(
-            '[auth] dashboard WS 收到关闭码 4001，但 /iam/me 仍有效：留在当前页面，dashboard 实时更新已停止',
-          );
-        }
-        // stillValid === false 时 refreshOrLogout 内部已完成：清 session + 派发
-        // auth:session-changed(token=null) + router.replace('/login')，无需额外动作。
-      });
+    auth.forceLogout(router);
   });
 }
 

@@ -10,6 +10,14 @@
 //   - I5：component unmount → offDashboardEvent 触发 → handler Set 清零（review N1 guard）
 //   - I6：传单个 QueryKey → 单次 invalidateQueries({ queryKey: key })
 //   - I7：传 QueryKey[] → 遍历每个 key 各 invalidate 一次
+//   - I9（2026-10-02 review Major 2）：window 事件 'dashboard:full-refetch'
+//     （后端 4003 慢消费方丢事件）→ **立即** invalidate，不走 500ms 防抖
+//   - I10：scope.stop() → 'dashboard:full-refetch' listener 一并摘除（防泄漏）
+//
+// 2026-10-02：本文件新增 window 事件接入点（4003 全量重取），node 环境下 window
+// 不存在、composable 内的 `typeof window !== 'undefined'` 守卫会静默跳过注册 ⇒ 必须
+// 切 happy-dom 才覆盖得到 I9 / I10。本文件触及的 DOM 只有 window 事件 API。
+// @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope } from 'vue';
@@ -268,5 +276,69 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     }
     expect(eventHandlers.size).toBe(0);
     expect(onDashboardEventMock).toHaveBeenCalledTimes(5);
+  });
+
+  // ==========================================================================
+  // I9 / I10：4003「慢消费方」全量重取接入点（2026-10-02 review Major 2）
+  //
+  // 与 I2~I4 的关键差别是**不防抖**：4003 是后端明确告知「广播队列溢出，永久丢了
+  // n 条事件」，重连补不回来（重连后的首帧 snapshot 在 api/dashboard.ts 里被显式
+  // no-op 丢弃），所以每多等 500ms 都在展示已知过期的数据。
+  // ==========================================================================
+
+  it('I9：window 事件 dashboard:full-refetch → 立即 invalidate（0ms，不等 500ms 防抖）', () => {
+    vi.useFakeTimers();
+    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
+    const scope = effectScope();
+    scope.run(() => {
+      testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardSnapshot));
+    });
+    invalidateSpy.mockClear();
+
+    window.dispatchEvent(
+      new CustomEvent('dashboard:full-refetch', { detail: { code: 4003, reason: 'lagged' } }),
+    );
+
+    // 同步就触发 —— 若误走 debouncedInvalidate，这里会是 0 次
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardSnapshot });
+    scope.stop();
+  });
+
+  it('I9b：多 key 形态 → 全量重取时逐 key 各 invalidate 一次', () => {
+    vi.useFakeTimers();
+    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
+    const scope = effectScope();
+    scope.run(() => {
+      testApp.runWithContext(() =>
+        useDashboardInvalidation([qk.dashboardSnapshot, qk.dashboardUrgentList]),
+      );
+    });
+    invalidateSpy.mockClear();
+
+    window.dispatchEvent(new CustomEvent('dashboard:full-refetch', { detail: { code: 4003 } }));
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardSnapshot });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardUrgentList });
+    scope.stop();
+  });
+
+  it('I10：scope.stop() → dashboard:full-refetch listener 摘除（unmount 后不再失效）', () => {
+    vi.useFakeTimers();
+    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
+
+    const scope = effectScope();
+    scope.run(() => {
+      testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardSnapshot));
+    });
+    // 挂载期间收得到
+    window.dispatchEvent(new CustomEvent('dashboard:full-refetch', { detail: { code: 4003 } }));
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+
+    scope.stop();
+    invalidateSpy.mockClear();
+    // 卸载后不该再收（否则每次进 /dashboard 累加一个永不清理的 handler）
+    window.dispatchEvent(new CustomEvent('dashboard:full-refetch', { detail: { code: 4003 } }));
+    expect(invalidateSpy).not.toHaveBeenCalled();
   });
 });

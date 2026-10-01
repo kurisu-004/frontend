@@ -18,6 +18,14 @@
 //   - **close 4001（会话失效）→ 停止重连**：进 60s 也不产生新 WebSocket 实例
 //   - **close 1006 → 仍按退避重连**：防「把所有关闭码都停掉」这种过度处理回归
 //   - **close 4001 → 派发 'auth:session-lost'** + 清 localStorage 会话
+//   - **close 4003（慢消费方丢事件）→ 派发 'dashboard:full-refetch'** 且仍重连
+//     （review Major 2：后端规定动作是「重连 + 全量 HTTP 重取」，而重连后的首帧
+//     snapshot 在本层被 no-op 丢掉 ⇒ 补数据只能靠这个信号）
+//
+// 关闭码 fixture 的 reason 字符串**必须与后端实际发送值一致**（4001 → 'auth expired'、
+// 4003 → 'lagged'，见后端 docs/api/websocket.md 关闭码表）。本 spec 是后人查关闭码表
+// 的第一现场，写一个后端从不发送的 reason 会诱导后来人去 match reason 文案。
+// 2026-10-02 修正：原 4001 用例写的是 'session invalid'（后端从不发这个值）。
 //
 // createGlobalState 惰性语义：模块顶层不创建 socket，仅注册 listener；首次调
 // 用 onDashboardEvent / onDashboardStatus / reconnectDashboard / closeDashboard
@@ -216,7 +224,9 @@ beforeEach(() => {
         type === 'auth:tokens-refreshed' ||
         // 2026-10-02 新增：4001 用例自己也往 window 上挂 'auth:session-lost' 收集器，
         // 挂进来一起记，afterEach 统一清，避免 listener 在用例之间泄漏。
-        type === 'auth:session-lost') &&
+        type === 'auth:session-lost' ||
+        // 2026-10-02 新增：4003 用例挂 'dashboard:full-refetch' 收集器，同上。
+        type === 'dashboard:full-refetch') &&
       typeof listener === 'function'
     ) {
       authEventListeners.push([type, listener]);
@@ -661,7 +671,7 @@ describe('dashboard WS：关闭码 4001（会话失效）停止重连', () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
 
     // 后端主动 Close 帧：会话在连接期间失效（注意不带 error 事件，真实浏览器行为）
-    socket.closeWith({ code: 4001, reason: 'session invalid' });
+    socket.closeWith({ code: 4001, reason: 'auth expired' });
 
     // 停重连的关键时序：VueUse 在 onDisconnected 返回后才 setTimeout(_init, 1s)，
     // 本次写入 undefined 触发的 watch → open() → close() → resetRetry() 要先把
@@ -697,7 +707,7 @@ describe('dashboard WS：关闭码 4001（会话失效）停止重连', () => {
     expect(FakeWebSocket.instances).toHaveLength(3);
   });
 
-  it('close 4001 → 派发 auth:session-lost（供 app 层跑 refreshOrLogout 走登出）', async () => {
+  it('close 4001 → 派发 auth:session-lost（供 app 层 forceLogout 走登出）', async () => {
     const lost = vi.fn();
     // 经文件级 addEventListener spy 记账 → afterEach 统一 removeEventListener。
     window.addEventListener('auth:session-lost', lost);
@@ -707,15 +717,81 @@ describe('dashboard WS：关闭码 4001（会话失效）停止重连', () => {
     const socket = FakeWebSocket.instances[0]!;
     socket.open();
 
-    socket.closeWith({ code: 4001, reason: 'session invalid' });
+    socket.closeWith({ code: 4001, reason: 'auth expired' });
 
     expect(lost).toHaveBeenCalledTimes(1);
     const detail = (lost.mock.calls[0]?.[0] as CustomEvent<{ code: number; reason: string | null }>)
       .detail;
-    expect(detail).toEqual({ code: 4001, reason: 'session invalid' });
+    expect(detail).toEqual({ code: 4001, reason: 'auth expired' });
 
     // 同时清掉 localStorage 会话：后端已判定失效，本地留着只会让下一次握手继续 401。
     const removeItem = localStorage.removeItem as unknown as ReturnType<typeof vi.fn>;
     expect(removeItem).toHaveBeenCalledWith('auth_session');
+  });
+
+  // ==========================================================================
+  // 2026-10-02 修复（review Major 2）：4003「慢消费方」丢事件 → 补一次全量重取
+  //
+  // 后端 websocket.md 关闭码表 4003 行的规定动作是「重连 + 全量 HTTP 重取」，
+  // 且成立前提写的是「重连时自然重新收到首帧 snapshot」。本仓 dashboard 域是
+  // 「HTTP 全量首取 + WS 事件 invalidate 重取」，重连后的首帧 snapshot 被显式
+  // no-op 丢弃（api/dashboard.ts 的 dispatch()）⇒ 该前提不成立，重连补不回来
+  // 丢掉的事件，必须由 WS 层额外派发 'dashboard:full-refetch' 让上层立即 invalidate。
+  // ==========================================================================
+
+  it('close 4003 → 派发 dashboard:full-refetch（丢的事件重连补不回来）', async () => {
+    const fullRefetch = vi.fn();
+    window.addEventListener('dashboard:full-refetch', fullRefetch);
+
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    // 后端广播队列（容量 1024）溢出 → 永久丢了 n 条事件 → 4003 lagged
+    socket.closeWith({ code: 4003, reason: 'lagged' });
+
+    expect(fullRefetch).toHaveBeenCalledTimes(1);
+    const detail = (
+      fullRefetch.mock.calls[0]?.[0] as CustomEvent<{ code: number; reason: string | null }>
+    ).detail;
+    expect(detail).toEqual({ code: 4003, reason: 'lagged' });
+  });
+
+  it('close 4003 → 仍按退避重连（4003 是非终止性码，只补数据不停连接）', async () => {
+    const fullRefetch = vi.fn();
+    window.addEventListener('dashboard:full-refetch', fullRefetch);
+
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.closeWith({ code: 4003, reason: 'lagged' });
+    // 会话没死 ⇒ 停重连就是回归（4001 专属行为，绝不能外溢到 4003）
+    vi.advanceTimersByTime(999);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it('close 1006 / 4001 → 不派发 dashboard:full-refetch（防信号外溢）', async () => {
+    const fullRefetch = vi.fn();
+    window.addEventListener('dashboard:full-refetch', fullRefetch);
+
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    FakeWebSocket.instances[0]!.open();
+    FakeWebSocket.instances[0]!.closeWith({ code: 1006 });
+    // 1006 同样会因断连丢事件，但那是既有架构的已知缺口（无轮询），本轮刻意不扩范围：
+    // 4003 是后端**明确告知**「永久丢了 n 条」的码，只有它配得上「全量重取」这个动作。
+    expect(fullRefetch).not.toHaveBeenCalled();
+
+    // 推进退避建第 2 个连接，再喂 4001（终止性码，同样不该触发全量重取）
+    vi.advanceTimersByTime(1_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    FakeWebSocket.instances[1]!.open();
+    FakeWebSocket.instances[1]!.closeWith({ code: 4001, reason: 'auth expired' });
+    expect(fullRefetch).not.toHaveBeenCalled();
   });
 });

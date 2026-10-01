@@ -10,6 +10,8 @@
 //     state。
 //   - loadFromStorage() 在 setup 回调末尾自执行（首次 useAuthStore() 时触发）；Listener
 //     在 setup 里挂；保证首次实例化就具备 localStorage 恢复 + 事件同步能力。
+//   - 2026-10-02 新增 forceLogout(router)：「后端已权威判定会话失效」时无条件终止本地
+//     会话（不联系后端），refreshOrLogout 的失败分支委托给它。详见函数注释。
 //   - main.ts 在 dummy 模式下先调 useAuthStore().initDummyAuth()，再 app.use(router)，
 //     路由守卫触发时 isDummyAuthActive 已是 true，refreshOrLogout 短路。
 //   - Zod schema（loginSchema）与角色路由跳转仍留 LoginView.vue（视图关注点）。store
@@ -175,7 +177,47 @@ export const useAuthStore = defineStore('auth', () => {
     useTagsViewStore().reset();
   }
 
-  /** 异步守卫：拉 /iam/me 验证 token 仍有效；失败则清 session 跳 /login。
+  /** 2026-10-02 修复（review Major 1）：无条件终止本地会话 + 跳 /login，**不联系后端**。
+   *
+   *  存在理由：dashboard WS 收到关闭码 4001（会话在连接期间失效）时，后端已经是
+   *  权威判定。此前 app 层（src/router/index.ts）收到 'auth:session-lost' 后走
+   *  `refreshOrLogout(router)` 复核 /iam/me，**那次复核在构造上必然失败**：
+   *    - WS 层在派发事件前已 `localStorage.removeItem('auth_session')`（dashboard.ts:245）；
+   *    - http.ts 请求拦截器只从 localStorage 取 token（`readToken()`），不读 store；
+   *    ⇒ `apiMe()` 发出的请求根本不带 Authorization，后端 middleware 直接返
+   *      `40100 UNAUTHORIZED`，`stillValid === true` 是不可达的死分支。
+   *  副作用还有两个：① 「UI 显示已登录、实际已登出」的窗口长达一次 RTT
+   *  （store 内存 token/user 未清，后端不可达时最长 30s axios timeout），期间任何
+   *  用户操作都会发出无 token 请求 → 40100 → 弹「操作失败」；② 多一次必然失败的
+   *  往返，白等一个 RTT 才跳登录页。4001 本身没有「HTTP 侧仍有效」这种边界情况 ——
+   *  真有的话后端会在 re-auth 阶段继续握手成功而不是发 Close 帧。
+   *
+   *  幂等性：可重复调用（登出 → 登出、4001 与路由守卫并发），每步都是「置 null /
+   *  removeItem / reset / replace」，后一次覆盖前一次，无副作用。`router.replace`
+   *  本身幂等。
+   *
+   *  dummy-auth 不需要特判：`initDummyAuth` 只写内存不写 localStorage，
+   *  `syncWsUrl()` 读不到 token → URL 恒为 undefined → 零连接尝试 ⇒ 收不到 4001。
+   *
+   *  router 通过参数注入（store 不 import vue-router，避免循环依赖，不变式）。 */
+  function forceLogout(router: { replace: (p: string) => void }): void {
+    token.value = null;
+    refreshTokenValue = null;
+    user.value = null;
+    localStorage.removeItem('auth_session');
+    // 2026-10-01 新增：同 logout —— session 已死，让 WS 层断开，
+    // 否则它会拿着失效 token 持续重连刷控制台。
+    window.dispatchEvent(
+      new CustomEvent('auth:session-changed', { detail: { token: null } }),
+    );
+    // 2026-10-02 修复（review Minor 2）：联动清空 tagsView（对齐 logout()）。
+    // 此前只有 logout() 清，refreshOrLogout 失败分支不清 —— 「正在用着被踢登录」
+    // 变成常规路径（4001 / 会话过期）后，tag 条会保留旧页签，重新登录后仍在。
+    useTagsViewStore().reset();
+    router.replace('/login');
+  }
+
+  /** 异步守卫：拉 /iam/me 验证 token 仍有效；失败则终止会话跳 /login。
    *  router 通过参数注入（store 不 import vue-router，避免循环依赖）。 */
   async function refreshOrLogout(router: { replace: (p: string) => void }): Promise<boolean> {
     try {
@@ -184,17 +226,10 @@ export const useAuthStore = defineStore('auth', () => {
       u.menus = u.menus ?? [];
       user.value = u;
       return true;
+      // 失败分支统一委托给 forceLogout(router)（2026-10-02 提取），避免两处
+      // 「清 state + removeItem + 派发 + 跳转」各写一份而漂移（review Major 1）。
     } catch {
-      token.value = null;
-      refreshTokenValue = null;
-      user.value = null;
-      localStorage.removeItem('auth_session');
-      // 2026-10-01 新增：同 logout —— session 已死，让 WS 层断开，
-      // 否则它会拿着失效 token 持续重连刷控制台。
-      window.dispatchEvent(
-        new CustomEvent('auth:session-changed', { detail: { token: null } }),
-      );
-      router.replace('/login');
+      forceLogout(router);
       return false;
     }
   }
@@ -256,6 +291,7 @@ export const useAuthStore = defineStore('auth', () => {
     getAuthHeader,
     loginMutation,
     logout,
+    forceLogout,
     refreshOrLogout,
     initDummyAuth,
   };

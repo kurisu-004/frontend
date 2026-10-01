@@ -22,6 +22,9 @@
 //   - tryOnScopeDispose 捕获 off 函数（onDashboardEvent 返回），组件卸载时
 //     释放 eventSubs 订阅，避免「多次 mount / unmount 累加永不清理的 handler」
 //     （沿 2026-09-28 review N1 regression guard）。
+//   - 2026-10-02 新增第二条失效触发源：window 事件 'dashboard:full-refetch'
+//     （WS 层收到后端关闭码 4003 慢消费方 → 丢了 n 条事件且重连补不回来）。
+//     走**不防抖**的立即 invalidate，与事件路径的 500ms debounce 分开。
 
 import { tryOnScopeDispose, useDebounceFn } from '@vueuse/core';
 import { useQueryClient, type QueryKey } from '@tanstack/vue-query';
@@ -122,6 +125,33 @@ export function useDashboardInvalidation(
     if (AFFECTS_DASHBOARD.has(ev.event_type)) debouncedInvalidate();
   });
   tryOnScopeDispose(offDashboardEvent);
+
+  // 2026-10-02 修复（review Major 2）：接收 WS 层派发的 'dashboard:full-refetch'
+  // （后端关闭码 4003 慢消费方，广播队列溢出丢了 n 条事件）。
+  //
+  // 为什么必须由本 composable 接：丢掉的 n 条事件**重连补不回来** —— 新连接的订阅
+  // 集合从重连那一刻起算，而本仓 dashboard 域是「HTTP 全量首取 + WS 事件 invalidate
+  // 重取」，重连后的首帧 snapshot 在 api/dashboard.ts 的 dispatch() 里被显式 no-op
+  // 丢弃，TanStack Query 也没有轮询（staleTime 30s 只管「下次取数是否放行」）。
+  // ⇒ 不补这一次 invalidate，「丢 1 个事件 = 对应区块永不刷新」且页面静默无提示。
+  //
+  // 走**不防抖**的立即路径（与上面的 debouncedInvalidate 并存）：防抖是为「单次扫码
+  // 连续触发 3 个事件」防雪崩，而 4003 是「已经确定丢了数据」，每多等 500ms 都是
+  // 在展示已知过期的数据。
+  //
+  // 与 'auth:session-lost' 的区别：那个是「会话已死，终止会话」（接收方在 router
+  // 模块），本事件是「会话没死、数据可能缺了，补一次全量重取」（接收方在本文件）。
+  if (typeof window !== 'undefined') {
+    const onFullRefetch = () => {
+      for (const k of keyList) {
+        void qc.invalidateQueries({ queryKey: k });
+      }
+    };
+    window.addEventListener('dashboard:full-refetch', onFullRefetch);
+    tryOnScopeDispose(() => {
+      window.removeEventListener('dashboard:full-refetch', onFullRefetch);
+    });
+  }
 
   return qc;
 }

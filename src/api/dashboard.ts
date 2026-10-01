@@ -22,7 +22,8 @@
 //     关闭码有语义了。其中 **4001「会话在连接期间失效」是唯一的终止性关闭码**，本层
 //     停重连 + 清 session + 派发 'auth:session-lost' 交 app 层走登出；其余关闭码
 //     （1001 写失败 / 1011 内部错误·Pong 超时 / 1012 服务重启 / 4003 慢消费方 /
-//     1006 裸 drop）仍按无限重试处理。关闭码表见后端
+//     1006 裸 drop）仍按无限重试处理，其中 **4003 额外派发 'dashboard:full-refetch'**
+//     要求上层立即全量 HTTP 重取（丢的事件重连补不回来）。关闭码表见后端
 //     ~/Code/hsh-erp/backend-rust/docs/api/websocket.md（唯一权威来源）。
 //   - 不再发送 subscribe/unsubscribe 控制帧 —— 后端 v2 ws_hub 不消费这俩文本帧
 //     （2026-09-25 注释 + 2026-09-28 决策删除），后端默认行为是按连接初始订阅集合
@@ -67,6 +68,18 @@ const FAIL_LOG_THROTTLE_EVERY = 30;
  *    - 1006 浏览器侧的「异常关闭」兜底码（没收到任何 Close 帧），原因未知，
  *      同样按无限重试处理。 */
 const WS_CLOSE_SESSION_LOST = 4001;
+
+/** 后端主动关闭码 4003 = 「慢消费方（广播队列溢出，永久丢了 n 条事件）」。
+ *
+ *  与 4001 的处理**不同**：4001 是终止性的（会话没了，重试是死路），4003 必须
+ *  「重连 + 全量 HTTP 重取」（后端 websocket.md 关闭码表 4003 行的规定动作）。
+ *  单纯重连是不够的 —— 本仓 dashboard 域是「HTTP 全量首取 + WS 事件 invalidate
+ *  重取」，**重连后的首帧 snapshot 被本层显式 no-op 丢弃**（见 dispatch() 的
+ *  `msg.type === 'snapshot'` 分支），且 TanStack Query 无轮询、staleTime 30s 只是
+ *  「下次取数是否放行」而不是定时自取 ⇒ 丢掉的 n 个事件没有任何补偿通道，
+ *  「丢 1 个事件 = 对应区块永不刷新」。后端文档里 4003 动作成立的前提是「重连时
+ *  自然重新收到首帧 snapshot」，那个前提对本前端不成立，必须自己补 invalidate。 */
+const WS_CLOSE_LAGGED = 4003;
 
 // ============================================================
 // URL 构造 + token 生命周期
@@ -208,7 +221,7 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
         hadErrorEvent,
         tokenExpired: token ? (exp !== null && exp * 1000 <= Date.now()) : null,
         排查提示:
-          '先按 closeCode 查后端 docs/api/websocket.md 关闭码表（1001 写失败 / 1011 内部错误·Pong 超时 / 1012 服务重启 / 4001 会话失效 / 4003 慢消费方）；仅 1006 才需再查握手期 HTTP status（Network 面板 / 直连后端 curl）',
+          '先按 closeCode 查后端 docs/api/websocket.md 关闭码表（1001 写失败 / 1011 内部错误·Pong 超时 / 1012 服务重启 / 4001 会话失效 / 4003 慢消费方）；4003 已额外派发全量重取信号（丢的事件重连补不回来）；仅 1006 才需再查握手期 HTTP status（Network 面板 / 直连后端 curl）',
       },
     );
   }
@@ -255,6 +268,29 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
         );
         notifyStatus('closed');
         return;
+      }
+      if (ev.code === WS_CLOSE_LAGGED) {
+        // 2026-10-02 修复（review Major 2）：慢消费方丢了 n 条事件，重连本身补不回来
+        // —— 新连接的订阅集合从此刻起算，错过的 n 条永久丢失，而 dashboard 域只认
+        // 「WS 事件 → invalidate → HTTP 重取」，没有别的补偿通道。所以这里补发一次
+        // 「全量重取」信号，由 views 层立即 invalidate 对应 query。
+        //
+        // 本层**不 import useQueryClient**：api 层引入 TanStack Query 依赖是分层倒置
+        // （CLAUDE.md 的 api ↔ stores 解耦范式同源）。沿用既有 CustomEvent 解耦，
+        // 接收方是 useDashboardInvalidation（已持有 qk + queryClient）→ 立即
+        // （不防抖）invalidate。
+        //
+        // 与 'auth:session-lost' 的区别：那个是「会话已死，终止会话」，这个是
+        // 「会话没死，但数据可能已经缺了，补一次全量重取」。
+        //
+        // 注意：重连本身仍按通用路径走（下面 reportFailure + autoReconnect），4003
+        // 只是额外挂一个补数据的信号。其余关闭码（1001/1006/1011/1012）同样会因
+        // 断连丢事件，那是既有架构的已知缺口（TanStack Query 无轮询），本轮不扩范围。
+        window.dispatchEvent(
+          new CustomEvent('dashboard:full-refetch', {
+            detail: { code: ev.code, reason: ev.reason || null },
+          }),
+        );
       }
       // 一次失败会先 fire error 再 fire close，只在 close 侧计一次，避免重复计数。
       reportFailure('close', ev, pendingError);
@@ -439,14 +475,24 @@ if (typeof window !== 'undefined' && !sessionListenerBound) {
 }
 
 // ============================================================
-// 'auth:session-lost' CustomEvent 派发（2026-10-02 新增，方向与上面相反）
+// 本层派发的两个 CustomEvent（2026-10-02 新增，方向与上面相反）
 // ============================================================
-// 上面的事件是「本层**听** auth 层说话」；这里是「本层**告诉** auth 层会话已死」：
-// 收到后端关闭码 4001 时派发，`CustomEvent<{ code: number; reason: string | null }>`。
-// 接收方是 `src/router/index.ts`（有 useRouter + useAuthStore）→ auth.refreshOrLogout(router)
-// → apiMe() 失败即清 session + router.replace('/login')。
-// 之所以绕 app 层而不是本模块直接 import stores/auth：见上方「auth ↔ api 循环依赖」注释。
-// 派发点只有 onDisconnected 的 4001 分支一处（见该函数内注释），无 HMR 重复注册问题。
+// 上面的 'auth:session-changed' 是「本层**听** auth 层说话」；下面两个是
+// 「本层**告诉**上层发生了什么」，派发点都在 onDisconnected，各自一处，无 HMR
+// 重复注册问题。之所以都绕开直接 import：
+//   - 'auth:session-lost' 不 import stores/auth（否则 auth ↔ api 循环依赖）；
+//   - 'dashboard:full-refetch' 不 import @tanstack/vue-query（api 层引入
+//     TanStack Query 依赖是分层倒置）。
+// 两者接收方与语义：
+//   1. 'auth:session-lost'（4001 会话失效，终止性）
+//      `CustomEvent<{ code: number; reason: string | null }>`，接收方是
+//      `src/router/index.ts` → auth.forceLogout(router)（无条件终止会话 +
+//      router.replace('/login')）。语义：**会话没了，别再连**。
+//   2. 'dashboard:full-refetch'（4003 慢消费方丢了 n 条事件，非终止性）
+//      `CustomEvent<{ code: number; reason: string | null }>`，接收方是
+//      `src/views/dashboard/composables/useDashboardInvalidation.ts` → 立即
+//      （不防抖）invalidate 本 composable 持有的全部 queryKey。
+//      语义：**会话还在，但数据可能已经缺了，补一次全量重取**。
 
 // ============================================================
 // 兼容导出（部分 spec 仍可能 import 类型）
