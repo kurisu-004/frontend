@@ -146,6 +146,11 @@ export const qk = {
     ['programming', 'list', params] as const,
   programmingPrefix: ['programming'] as const,
   shelvesList: (params: ListShelvesParams) => ['shelves', 'list', params] as const,
+  /** 2026-10-02 新增：货架↔工序映射全集键（GET /prod/shelf-processes，单条无 params）。
+   *  后端 handler 不接 Query extractor，一次返全部 active 映射的**扁平行**（一行一个
+   *  (货架, 工序) 对），故键退化为常量键（与 workerPoolCounts 同形），不随任何
+   *  候选源变化。10 处 useShelfProcessFilter 实例共用本键 ⇒ 30s 窗口内只发一次请求。 */
+  shelfProcessMappings: ['shelf-process-mappings'] as const,
   // ============================================================
   // 2026-09-30 新增：pool 域 queryKey 工厂（后端 worker-pool → pool 路径收敛后
   // 前端同步改名）—— 生产队列 Tab 懒加载 + 数据层 TanStack Query 化

@@ -567,7 +567,8 @@ watch(
 // 缓存」——错的。`productionShelves` 来自 listShelves({zone:'PRODUCTION'})
 // （`/shelves`），`processes` 来自 listProcesses()（`/prod/processes`），两者都
 // **不是** `/prod/shelf-processes`。那个 URL 是下面两处 useShelfProcessFilter
-// （loadFailInspMap / loadReceiveMap）自己去拉的映射表，缓存归属独立。
+// （failInsp / receive 两套过滤）背后的共享 query（useShelfProcessMappingsQuery）
+// 自己拉的映射表，缓存归属独立。
 const productionShelves = ref<Shelf[]>([]);
 const processes = ref<Process[]>([]);
 async function ensureShelvesProcesses(): Promise<void> {
@@ -615,7 +616,6 @@ const failInspSubmitting = ref(false);
 const {
   filteredShelves: failInspFilteredShelves,
   filteredProcesses: failInspFilteredProcesses,
-  load: loadFailInspMap,
 } = useShelfProcessFilter(
   computed(() => productionShelves.value),
   computed(() => processes.value),
@@ -638,8 +638,9 @@ async function openFailInspDialog() {
   failInspShelfId.value = '';
   failInspNote.value = '';
   await ensureShelvesProcesses();
-  void loadFailInspMap();
   failInspDialogVisible.value = true;
+  // 2026-10-02：不再显式 load() —— 映射由共享 query 跟随 productionShelves /
+  // processes 就绪自动开闸（ensureShelvesProcesses() 返回后两源即非空）。
 }
 function onFailInspDialogClosed() {
   failInspProcessId.value = '';
@@ -670,7 +671,6 @@ const inhouseProcesses = computed(() => processes.value.filter((p) => p.category
 const {
   filteredShelves: receiveFilteredShelves,
   filteredProcesses: receiveFilteredProcesses,
-  load: loadReceiveMap,
 } = useShelfProcessFilter(
   computed(() => productionShelves.value),
   inhouseProcesses,
@@ -692,8 +692,9 @@ async function openReceiveOutsourceDialog() {
   receiveShelfId.value = '';
   receiveProcessId.value = '';
   await ensureShelvesProcesses();
-  void loadReceiveMap();
   receiveOutsourceDialogVisible.value = true;
+  // 2026-10-02：不再显式 load() —— 与 failInsp 同一个共享 query 缓存
+  // （同一常量 queryKey），先开过闸则本对话框直接命中。
 }
 function onReceiveOutsourceDialogClosed() {
   receiveShelfId.value = '';
