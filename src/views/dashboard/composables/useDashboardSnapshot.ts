@@ -16,8 +16,15 @@
 //   3. error 走 watch + ElMessage.error 桥接（沿 2026-09-26 约定 #9）。
 //
 // 设计要点：
-//   - staleTime / gcTime: POSITIVE_INFINITY：会话级缓存，失效责任完全在
-//     useDashboardInvalidation 侧（每个事件命中 AFFECTS_DASHBOARD 即 invalidate）。
+//   - staleTime: 30_000（30s 短时去重窗口）/ gcTime: POSITIVE_INFINITY（会话级缓存）。
+//     2026-10-01 由 staleTime 无限改为 30_000，两条理由：
+//      1) 对齐 CLAUDE.md 2026-09-30「TanStack Query 降级为 30s 短时请求去重层」策略，
+//        也与同目录 useDashboardUpcomingList.ts:80 的既有取值一致；
+//     2) 更实际的原因是 staleTime 无限时**空闲的大屏不产生任何 HTTP 流量**，而
+//        http.ts 的 maybeProactiveRefresh 只在成功响应拦截器里触发 —— 于是 access
+//        token（默认 900s TTL）过期后没人去刷新，WS 只能永远握着一个过期 token 重连
+//        （后端 40102/40105）。30s staleTime 让大屏即便无操作也会周期性重取，
+//        从而带动 token 主动刷新这条链路。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 
 import { useQuery } from '@tanstack/vue-query';
@@ -35,7 +42,7 @@ export function useDashboardSnapshot() {
   const query = useQuery({
     queryKey: qk.dashboardSnapshot,
     queryFn: async () => dashboardSnapshotSchema.parse(await fetchDashboardSnapshot()),
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 30_000,
     gcTime: Number.POSITIVE_INFINITY,
   });
 

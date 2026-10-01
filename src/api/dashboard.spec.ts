@@ -3,10 +3,16 @@
 // 2026-09-28 重构：原订阅 / 取消订阅控制帧测试全部删除（subscribe/unsubscribe
 // 帧随控制帧发送逻辑一起删除，2026-09-28 决策）。新增覆盖：
 //   - URL 拼接（带 token）
-//   - auth:tokens-refreshed 事件触发 tokenVersion++ → VueUse 自动重连
 //   - fetchDashboardSnapshot HTTP + Zod parse 集成（mock api.get）
 //   - reconnectDashboard() 公开 API
 // FakeWebSocket 桩保留（VueUse 内部仍是 new WebSocket(url)，实例计数可用）。
+//
+// 2026-10-01 修复 WS「控制台一直报错」三缺陷后新增覆盖：
+//   - **无 token 时零连接尝试**（旧实现拿裸 URL 握手 → 后端必回 40100，是刷屏源头）
+//   - **'auth:session-changed' 驱动 URL 重算**：换 token → 重连；token=null → 关闭
+//   - **logout → 不刷新页面 → 重新登录** 全链路（登录前零实例，登录后带 token 的实例）
+//   - **失败握手 → 退避重连序列**（1s/2s/4s/8s/10s 封顶，不封顶次数）
+//   - **失败日志降噪**：前 3 次带完整诊断对象，之后每 30 次一行
 //
 // createGlobalState 惰性语义：模块顶层不创建 socket，仅注册 listener；首次调
 // 用 onDashboardEvent / onDashboardStatus / reconnectDashboard / closeDashboard
@@ -58,6 +64,17 @@ class FakeWebSocket {
     this.closeWith({});
   }
 
+  /** 2026-10-01 新增：模拟**握手失败**。
+   *
+   *  浏览器行为是：握手被拒（后端在 upgrade 前直接回 401 / 代理不回响应）时先 fire
+   *  error，再 fire code=1006 的 close，且 close 事件里**没有** status / reason。
+   *  这两个事件成对出现是 onError 只置标记、由 onDisconnected 统一计数出日志的依据。 */
+  public failHandshake(code = 1006): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.onerror?.();
+    this.onclose?.({ code });
+  }
+
   /** 模拟服务端推送业务事件。 */
   public pushEvent(eventType: string, data: Record<string, unknown> = {}): void {
     this.onmessage?.({
@@ -91,12 +108,43 @@ vi.mock('@/api/http', () => ({
   },
 }));
 
+/** 默认 token：多数用例关心的是「有 token 时的行为」。 */
+const DEFAULT_TOKEN = 'mock-jwt-token';
+
+/** 造一个 payload 里带指定 exp 的假 JWT（utils/jwt 的 decodeJwt 只解 payload，
+ *  不验签，所以测试里无需真签名）。 */
+function makeJwtWithExp(expEpochSec: number): string {
+  const payload = btoa(
+    JSON.stringify({
+      sub: '180000000000001',
+      aud: 'hsh-erp-rust',
+      iat: expEpochSec - 900,
+      nbf: expEpochSec - 900,
+      exp: expEpochSec,
+      iss: 'hsh-erp-rust',
+      jti: 'test-jti',
+      typ: 'access',
+    }),
+  )
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  return `header.${payload}.signature`;
+}
+
 /** 触发 createGlobalState 工厂 → 内部 useWebSocket.immediate.open() 创建 socket。 */
 async function bootstrapSocket(api: Awaited<ReturnType<typeof loadDashboardApi>>): Promise<void> {
   api.onDashboardStatus(() => undefined);
 }
 
-async function loadDashboardApi() {
+/** 派发 auth:session-changed 后让 Vue 调度队列 + 微任务跑完
+ *  （VueUse 的 watch(urlRef, open) 走 Vue scheduler，不是 setTimeout）。 */
+async function flushVue(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 50));
+}
+
+async function loadDashboardApi(opts: { token?: string | null } = {}) {
+  const token = opts.token === undefined ? DEFAULT_TOKEN : opts.token;
   vi.resetModules();
   FakeWebSocket.instances = [];
   httpGetMock.mockReset();
@@ -105,117 +153,86 @@ async function loadDashboardApi() {
   // 这里 stub 到 dev 端口保持断言可读。
   vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
   vi.stubGlobal('localStorage', {
-    getItem: vi.fn(() => null),
+    getItem: vi.fn(() => (token === null ? null : JSON.stringify({ token }))),
     setItem: vi.fn(),
     removeItem: vi.fn(),
   });
   return import('./dashboard');
 }
 
+/** 可变 token 的 localStorage 桩：模拟「拦截器刷新 / 登录写入 / 登出删除」三条路径。 */
+function stubMutableToken(initial: string | null): { set: (t: string | null) => void } {
+  let current = initial;
+  vi.stubGlobal('localStorage', {
+    getItem: vi.fn(() => (current === null ? null : JSON.stringify({ token: current }))),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+  });
+  return {
+    set: (t: string | null) => {
+      current = t;
+    },
+  };
+}
+
+// ============================================================================
+// 生命周期钩子（文件级，单一实现）
+//
+// 2026-09-28 review 第 2 轮修复（N4）：dashboard.ts 在模块顶层注册
+// window.addEventListener('auth:session-changed')。vi.resetModules() 不清 DOM
+// listener，前一条用例挂的 listener 会累积在 window 上 → 后续 dispatchEvent
+// 触发多个陈旧模块实例的 syncWsUrl()，各自建连，产生「实例计数对不上 / 串扰」。
+// 2026-10-01：这里改成**文件级唯一**一套钩子。
+//   - 之前把 spy 分散在父 / 子 describe 的 beforeEach 里，vi.spyOn 对已 mock 的
+//     方法会返回同一个 mock，于是子 beforeEach 里 `const realAdd =
+//     window.addEventListener.bind(window)` 拿到的是 mock 自己 → mockImplementation
+//     内自调用 → RangeError: Maximum call stack size exceeded。
+//   - 集中到文件级后每个用例只会安装一次 spy，且只有一处清理点，不存在嵌套。
+// ============================================================================
+
+/** 本轮用例期间注册到 window 上的 auth 事件 listener（用于 afterEach 清理）。 */
+const authEventListeners: Array<[string, EventListener]> = [];
+
+beforeEach(() => {
+  vi.useRealTimers();
+  FakeWebSocket.instances = [];
+  httpGetMock.mockReset();
+  authEventListeners.length = 0;
+
+  const realAdd = window.addEventListener.bind(window);
+  vi.spyOn(window, 'addEventListener').mockImplementation(((
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ) => {
+    const result = realAdd(type, listener, options);
+    if (
+      (type === 'auth:session-changed' || type === 'auth:tokens-refreshed') &&
+      typeof listener === 'function'
+    ) {
+      authEventListeners.push([type, listener]);
+    }
+    return result;
+  }) as typeof window.addEventListener);
+});
+
 afterEach(() => {
+  for (const [type, listener] of authEventListeners.splice(0)) {
+    window.removeEventListener(type, listener);
+  }
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2026-09-28）', () => {
-  // 2026-09-28 review 第 2 轮修复（N4）：拦截 window.addEventListener 收集
-  // 'auth:tokens-refreshed' listener → afterEach removeEventListener 清残留。
-  // 原实现没清残留，vi.resetModules() 不清 DOM listener，前一条用例挂的
-  // listener 仍累积在 window 上 → dispatchEvent 触发多个用例的 listener
-  // 错位产生 socket 实例，单跑（无残留）直接 FAIL。
-  const refreshListeners: Array<EventListener> = [];
-
-  beforeEach(() => {
-    FakeWebSocket.instances = [];
-    vi.useRealTimers();
-    refreshListeners.length = 0;
-    const realAdd = window.addEventListener.bind(window);
-    vi.spyOn(window, 'addEventListener').mockImplementation(((
-      type: string,
-      listener: EventListenerOrEventListenerObject,
-      options?: boolean | AddEventListenerOptions,
-    ) => {
-      const result = realAdd(type, listener, options);
-      if (type === 'auth:tokens-refreshed' && typeof listener === 'function') {
-        refreshListeners.push(listener);
-      }
-      return result;
-    }) as typeof window.addEventListener);
-  });
-
-  afterEach(() => {
-    for (const h of refreshListeners.splice(0)) {
-      window.removeEventListener('auth:tokens-refreshed', h);
-    }
-    vi.restoreAllMocks();
-  });
-
   it('URL 带 token 拼接：localStorage 有 token 时 ?token=xxx', async () => {
-    vi.resetModules();
-    FakeWebSocket.instances = [];
-    vi.stubGlobal('WebSocket', FakeWebSocket);
-    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
-    vi.stubGlobal('localStorage', {
-      getItem: vi.fn((k: string) =>
-        k === 'auth_session' ? JSON.stringify({ token: 'mock-jwt-token' }) : null,
-      ),
-      setItem: vi.fn(),
-      removeItem: vi.fn(),
-    });
-    const api = await import('./dashboard');
+    const api = await loadDashboardApi({ token: DEFAULT_TOKEN });
     await bootstrapSocket(api);
 
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(FakeWebSocket.instances[0]?.url).toBe(
-      'ws://localhost:5173/ws/dashboard?token=mock-jwt-token',
-    );
-  });
-
-  it('URL 不带 token：localStorage 没 token 时裸路径', async () => {
-    const api = await loadDashboardApi();
-    await bootstrapSocket(api);
-    expect(FakeWebSocket.instances[0]?.url).toBe('ws://localhost:5173/ws/dashboard');
-  });
-
-  it('auth:tokens-refreshed 事件 → tokenVersion++ → VueUse 自动重连（实例计数 +1）', async () => {
-    // 2026-09-28 改造核心：刷新 token 不再需要手动 reconnectDashboard。
-    // 拦截器 dispatch auth:tokens-refreshed → 模块级 tokenVersion ref bump →
-    // URL computed 重算 → VueUse watch(urlRef, open) 自动 close + 重建 socket。
-    //
-    // 2026-09-28 review 第 2 轮修复（N4）：原实现 stub localStorage 永远返 null，
-    // URL 永远不带 token → 单跑时 dispatchEvent 触发 tokenVersion++ → URL 重算
-    // 仍是无 token 形态 → Vue hasChanged 判定 false → watch 不 fire → 1 个实例
-    // → 断言失败。修法：让 stub localStorage 在 dispatchEvent 前后返回不同 token，
-    // 模拟生产场景（拦截器刷新成功 → localStorage 已写入新 token）。
-    vi.resetModules();
-    FakeWebSocket.instances = [];
-    vi.stubGlobal('WebSocket', FakeWebSocket);
-    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
-    let stubToken: string | null = null;
-    vi.stubGlobal('localStorage', {
-      getItem: vi.fn(() => (stubToken === null ? null : JSON.stringify({ token: stubToken }))),
-      setItem: vi.fn(),
-      removeItem: vi.fn(),
-    });
-    const api = await import('./dashboard');
-    await bootstrapSocket(api);
-
-    // dispatchEvent 前：无 token → URL 不带 token
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(FakeWebSocket.instances[0]?.url).toBe('ws://localhost:5173/ws/dashboard');
-
-    // 模拟拦截器刷新成功：localStorage 写入新 token + dispatch 事件
-    stubToken = 'new-jwt-token';
-    window.dispatchEvent(new CustomEvent('auth:tokens-refreshed'));
-    // 等待 VueUse watch 触发 + Vue 调度队列清空。
-    // effectScope(true) detached scope 内的 watch 在 tokenVersion.value++ 后
-    // 由 Vue scheduler 在 microtask 队列清空时回调，回调里 close() 老 socket + new WebSocket()。
-    await new Promise((r) => setTimeout(r, 50));
-
-    // URL 重算读到带 token → VueUse watch fire → new WebSocket
-    expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
-    expect(FakeWebSocket.instances[1]?.url).toBe(
-      'ws://localhost:5173/ws/dashboard?token=new-jwt-token',
+      `ws://localhost:5173/ws/dashboard?token=${DEFAULT_TOKEN}`,
     );
   });
 
@@ -314,5 +331,287 @@ describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2
 
     expect(httpGetMock).toHaveBeenCalledWith('/dashboard/snapshot');
     expect(result).toEqual(sample);
+  });
+});
+
+// ============================================================================
+// 2026-10-01：无 token 不连接（WS 控制台刷屏的根因之一）
+// ============================================================================
+
+describe('dashboard WS：无 token 时零连接尝试', () => {
+  it('localStorage 无 token → 一个 WebSocket 都不建（不再拿裸 URL 换 40100）', async () => {
+    // 2026-10-01 回归 guard。旧实现是 buildWsUrl(null) → 裸路径 URL →
+    // 照样 new WebSocket → 后端 handler.rs:85 回 401「缺少 token 查询参数」
+    // → autoReconnect 无限重试 → 控制台永远刷 WS 报错。
+    // 新实现把 URL 置 undefined，VueUse `_init()` 首行守卫直接返回。
+    const api = await loadDashboardApi({ token: null });
+    await bootstrapSocket(api);
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it('无 token 时订阅 onDashboardEvent 也不会建连接', async () => {
+    const api = await loadDashboardApi({ token: null });
+    api.onDashboardEvent(() => undefined);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// 2026-10-01：auth:session-changed 驱动 URL 重算（覆盖 login/logout/token 刷新）
+// ============================================================================
+
+describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => {
+  it('token 被刷新（http.ts persistTokens 派发）→ URL 换新 token 并重连', async () => {
+    const stub = stubMutableToken('old-token');
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
+    const api = await import('./dashboard');
+    await bootstrapSocket(api);
+
+    expect(FakeWebSocket.instances[0]?.url).toBe('ws://localhost:5173/ws/dashboard?token=old-token');
+
+    // 拦截器刷新成功：localStorage 已是新 token + dispatch auth:session-changed
+    stub.set('new-token');
+    window.dispatchEvent(
+      new CustomEvent('auth:session-changed', { detail: { token: 'new-token' } }),
+    );
+    await flushVue();
+
+    expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+    expect(FakeWebSocket.instances[1]?.url).toBe('ws://localhost:5173/ws/dashboard?token=new-token');
+  });
+
+  it('登出（detail.token = null）→ 关闭连接且不再重连', async () => {
+    // 2026-10-01 回归 guard。少了这条，登出后 WS 会继续拿着已被吊销的
+    // session 重连（后端 40105），控制台一直刷错直到关页面。
+    const stub = stubMutableToken('live-token');
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
+    const api = await import('./dashboard');
+    await bootstrapSocket(api);
+
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    stub.set(null);
+    window.dispatchEvent(
+      new CustomEvent('auth:session-changed', { detail: { token: null } }),
+    );
+    await flushVue();
+
+    // 老 socket 被 close
+    expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+    // 且不产生新连接
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it('logout → 不刷新页面 → 重新登录：登录后用新 token 建连', async () => {
+    // 2026-10-01 回归 guard，覆盖「旧实现 computed 缓存住登出前 token」这个 bug：
+    // 旧 URL 不会因 login 更新 → WS 一直拿吊销 token 重连。
+    const stub = stubMutableToken('old-token');
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
+    const api = await import('./dashboard');
+    await bootstrapSocket(api);
+    expect(FakeWebSocket.instances[0]?.url).toContain('token=old-token');
+
+    // logout：store 清 localStorage 后派发 null
+    stub.set(null);
+    window.dispatchEvent(new CustomEvent('auth:session-changed', { detail: { token: null } }));
+    await flushVue();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // login：store 的 loginMutation.onSuccess 写入新 token 后派发
+    stub.set('fresh-token');
+    window.dispatchEvent(
+      new CustomEvent('auth:session-changed', { detail: { token: 'fresh-token' } }),
+    );
+    await flushVue();
+
+    expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+    expect(FakeWebSocket.instances.at(-1)?.url).toBe(
+      'ws://localhost:5173/ws/dashboard?token=fresh-token',
+    );
+  });
+
+  it('token 未变时不重连（syncWsUrl 值相等短路）', async () => {
+    // 防止 refresh 事件高频派发导致无谓 close/reconnect 抖动。
+    const api = await loadDashboardApi({ token: DEFAULT_TOKEN });
+    await bootstrapSocket(api);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    window.dispatchEvent(
+      new CustomEvent('auth:session-changed', { detail: { token: DEFAULT_TOKEN } }),
+    );
+    await flushVue();
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+});
+
+// ============================================================================
+// 2026-10-01：失败握手的退避重连 + 诊断日志降噪
+// ============================================================================
+
+describe('dashboard WS：连接失败的退避重连与诊断', () => {
+  beforeEach(() => {
+    // 只 fake 定时器，Vue scheduler 走 microtask 不受影响。
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  /** 推进 fake timer，让 VueUse 的 autoReconnect setTimeout 链逐个触发。 */
+  function advanceRetries(totalMs: number): void {
+    let elapsed = 0;
+    // 每次推进 1s 粒度足够覆盖 10s 封顶的退避，且不会跨过 setTimeout。
+    while (elapsed < totalMs) {
+      vi.advanceTimersByTime(1_000);
+      elapsed += 1_000;
+    }
+  }
+
+  it('握手失败（error + close 1006）→ 按 1s/2s/4s/8s/10s 退避重连，不封顶次数', async () => {
+    // 2026-10-01 回归 guard：旧实现在 vite 缺 /ws 代理的环境下就是这条路径
+    // （每次 attempt 两条 console.error），是用户报告「控制台一直报 WS 错」的机制。
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // 第 1 次失败 → 1s 后第 2 个实例
+    FakeWebSocket.instances[0]!.failHandshake();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(999);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    // 第 2 次失败 → 2s 后第 3 个
+    FakeWebSocket.instances[1]!.failHandshake();
+    vi.advanceTimersByTime(1_999);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+
+    // 第 3 次 → 4s 后第 4 个
+    FakeWebSocket.instances[2]!.failHandshake();
+    vi.advanceTimersByTime(4_000);
+    expect(FakeWebSocket.instances).toHaveLength(4);
+
+    // 第 4 次 → 8s 后第 5 个
+    FakeWebSocket.instances[3]!.failHandshake();
+    vi.advanceTimersByTime(8_000);
+    expect(FakeWebSocket.instances).toHaveLength(5);
+
+    // 第 5 次 → 10s 后第 6 个（退避封顶）
+    FakeWebSocket.instances[4]!.failHandshake();
+    vi.advanceTimersByTime(10_000);
+    expect(FakeWebSocket.instances).toHaveLength(6);
+
+    // 第 6 次 → 仍是 10s（不封顶：WS 是 dashboard 唯一更新通道，
+    // 放弃重连会让页面静默停止刷新，比刷屏更糟）
+    FakeWebSocket.instances[5]!.failHandshake();
+    advanceRetries(60_000);
+    expect(FakeWebSocket.instances.length).toBeGreaterThan(6);
+  });
+
+  it('失败日志带可诊断字段（脱敏 URL / closeCode / 次数），且不再用 console.error 刷屏', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const api = await loadDashboardApi({ token: 'super-secret-jwt' });
+    await bootstrapSocket(api);
+
+    FakeWebSocket.instances[0]!.failHandshake();
+
+    // 一次失败只出一条日志（error + close 成对到达，不重复计数）
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
+
+    const detail = warn.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(detail.closeCode).toBe(1006);
+    expect(detail.hadErrorEvent).toBe(true);
+    // JWT 必须脱敏（否则会进 nginx access log / 报错截图）
+    expect(String(detail.url)).not.toContain('super-secret-jwt');
+    expect(String(detail.url)).toContain('token=***');
+    expect(String(warn.mock.calls[0]?.[0])).toContain('第 1 次连接失败');
+  });
+
+  it('日志降噪：前 3 次打完整诊断，之后每 30 次才打一行', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+
+    // 前 3 次：每次一条
+    for (let i = 0; i < 3; i += 1) {
+      const socket = FakeWebSocket.instances.at(-1)!;
+      socket.failHandshake();
+      vi.advanceTimersByTime(10_000);
+    }
+    expect(warn).toHaveBeenCalledTimes(3);
+
+    // 第 4~29 次：静默（不刷屏）
+    for (let i = 0; i < 26; i += 1) {
+      FakeWebSocket.instances.at(-1)!.failHandshake();
+      vi.advanceTimersByTime(10_000);
+    }
+    expect(warn).toHaveBeenCalledTimes(3);
+
+    // 第 30 次：恢复一条
+    FakeWebSocket.instances.at(-1)!.failHandshake();
+    vi.advanceTimersByTime(10_000);
+    expect(warn).toHaveBeenCalledTimes(4);
+    expect(String(warn.mock.calls[3]?.[0])).toContain('第 30 次连接失败');
+  });
+
+  it('连接恢复后失败计数归零（下次失败重新从第 1 次打）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+
+    // 攒到 5 次失败（只有前 3 次 + 每 30 次会打，这里都静默）
+    for (let i = 0; i < 5; i += 1) {
+      FakeWebSocket.instances.at(-1)!.failHandshake();
+      vi.advanceTimersByTime(10_000);
+    }
+    expect(warn).toHaveBeenCalledTimes(3);
+
+    // 这次成功握手
+    FakeWebSocket.instances.at(-1)!.open();
+    // 连接被服务端掐断 → 计数应回到 1
+    FakeWebSocket.instances.at(-1)!.failHandshake();
+    expect(warn).toHaveBeenCalledTimes(4);
+    expect(String(warn.mock.calls[3]?.[0])).toContain('第 1 次连接失败');
+  });
+
+  it('token 已过期时诊断里 tokenExpired=true（便于区分 40102 与代理/后端故障）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // 1006 无法区分 401/502/代理缺失（浏览器不暴露握手期 status），
+    // 但「token 是不是已经过期」在 app 内可判定 —— 这是本次加它的唯一目的。
+    const expired = makeJwtWithExp(Math.floor(Date.now() / 1000) - 60);
+    const api = await loadDashboardApi({ token: expired });
+    await bootstrapSocket(api);
+
+    FakeWebSocket.instances[0]!.failHandshake();
+
+    const detail = warn.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(detail.tokenExpired).toBe(true);
+  });
+
+  it('token 仍有效时诊断里 tokenExpired=false', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const valid = makeJwtWithExp(Math.floor(Date.now() / 1000) + 600);
+    const api = await loadDashboardApi({ token: valid });
+    await bootstrapSocket(api);
+
+    FakeWebSocket.instances[0]!.failHandshake();
+
+    const detail = warn.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(detail.tokenExpired).toBe(false);
   });
 });

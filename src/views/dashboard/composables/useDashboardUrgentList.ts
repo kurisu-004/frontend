@@ -20,8 +20,10 @@
 //   - 入参硬编码（非 reactive params）：dashboard 不改筛选条件，原 partsList 那种
 //     reactive 模式不需要；queryKey 用静态常量 qk.dashboardUrgentList 即可。
 //   - enabled 闸门始终 true（dashboard 顶层 fetch，无 restore 语义）。
-//   - staleTime / gcTime: POSITIVE_INFINITY（沿 2026-09-26 共享基础数据层约定
-//     #3），失效责任完全在 WS 事件侧。
+//   - staleTime: 30_000 / gcTime: POSITIVE_INFINITY（2026-10-01 由 staleTime 无限
+//     改 30_000，对齐 CLAUDE.md 2026-09-30 缓存降级策略 + useDashboardUpcomingList
+//     既有取值；同时保证空闲大屏仍有 HTTP 流量带动 http.ts 的 token 主动刷新，
+//     详见 useDashboardSnapshot.ts 同位置长注释）。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //   - 返回 { items, urgentCount, fetchList }：items = 全量 100 件（让 caller
 //     自管过滤 + slice），urgentCount 派生 = items.filter(is_urgent).length。
@@ -68,7 +70,7 @@ export function useDashboardUrgentList() {
   const query = useQuery<UnionListResultSchema, Error>({
     queryKey: qk.dashboardUrgentList,
     queryFn: async () => partListResultSchema.parse(await listUnionItems(URGENT_LIST_PARAMS)),
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 30_000,
     gcTime: Number.POSITIVE_INFINITY,
   });
 

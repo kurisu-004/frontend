@@ -18,8 +18,10 @@
 //   - 失败 graceful：overview 端点需要 MANAGER 角色，非 Manager 调它会被后端 403。
 //     enabled=false 闸门挡掉请求，dashboard 上层只看 error / data 派生显示占位，
 //     不抛错。
-//   - staleTime / gcTime: POSITIVE_INFINITY（沿 2026-09-26 共享基础数据层约定
-//     #3），失效责任完全在 WS 事件侧。
+//   - staleTime: 30_000 / gcTime: POSITIVE_INFINITY（2026-10-01 由 staleTime 无限
+//     改 30_000，对齐 CLAUDE.md 2026-09-30 缓存降级策略 + useDashboardUpcomingList
+//     既有取值；同 useDashboardSnapshot.ts 的理由 —— 空闲大屏需要保持 HTTP 流量
+//     以驱动 http.ts 的 token 主动刷新）。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //   - 返回 { overdueCount, fetchList }：overdueCount 是 number（or 0 when 未启用）；
 //     fetchList 是 refetch 别名（沿 2026-09-26 约定 #7）。
@@ -64,7 +66,7 @@ export function useDashboardOverdue(isManager: ComputedRef<boolean>): UseDashboa
       );
     },
     enabled: isManager,
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 30_000,
     gcTime: Number.POSITIVE_INFINITY,
   });
 

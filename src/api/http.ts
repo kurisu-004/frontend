@@ -280,6 +280,14 @@ function persistTokens(pair: LoginResponse): void {
   cur.user = pair.user;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(cur));
   window.dispatchEvent(new CustomEvent('auth:tokens-refreshed', { detail: pair }));
+  // 2026-10-01 新增：长连接层（api/dashboard.ts 的 WS 单例）的 auth 转换事件。
+  // 刷新后 WS URL 里的 token 必须换成新的，否则下一次重连会拿刚被 refresh
+  // rotation 拉黑的旧 jti 去握手 → 40105 死循环。
+  // 与上面的 'auth:tokens-refreshed' 并存、职责不同：后者给 useAuthStore 同步自身
+  // state（token / user / refreshToken），本事件只给 WS 层重算 URL。
+  window.dispatchEvent(
+    new CustomEvent('auth:session-changed', { detail: { token: pair.token } }),
+  );
 }
 
 // ===== token 自动刷新状态 =====
