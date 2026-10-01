@@ -141,6 +141,9 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, h } from 'vue';
 import { ElMessage, ElTag, ElForm, type FormInstance } from 'element-plus';
+// 2026-10-02 review 第 1 轮 M-3：useQueryClient 只为保存成功后失效共享映射缓存
+// （见 saveShelf 里的 invalidateShelfProcessMappingsQuery 调用点注释）。
+import { useQueryClient } from '@tanstack/vue-query';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import {
@@ -161,9 +164,13 @@ import {
   toShelfProcessesPayload,
 } from '@/api/shelves';
 import { listProcesses } from '@/api/process';
+import { invalidateShelfProcessMappingsQuery } from '@/composables/queries/useShelfProcessMappingsQuery';
 import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
 import { PROCESS_CATEGORY_LABEL } from '@/types/process';
+
+// 2026-10-02 review 第 1 轮 M-3：共享映射 query 的失效入口（写点唯一，见 saveShelf）。
+const qc = useQueryClient();
 
 // ============ 列可见性 + 列顺序拖动 ============
 // 「操作」列不放进 defs → 始终可见。
@@ -343,6 +350,11 @@ async function saveShelf() {
     // 下标，沿 v1「提交顺序即 sort_order」语义），并由 src/api/shelfProcesses.spec.ts
     // 逐字钉死形态，避免调用方再编出 v1 形态。
     await setShelfProcesses(shelfId, toShelfProcessesPayload(selectedProcessIds.value));
+    // 2026-10-02 review 第 1 轮 M-3：保存成功后失效共享映射缓存。本数据的写点全仓
+    // 只有这一个、读点有 10 处（useShelfProcessFilter），不适用 CLAUDE.md「跨页面写
+    // 操作不做穷举失效」策略（那条针对写点散落多域、补齐等于穷举的情形），补失效
+    // 成本近乎零：把「改完映射重开对话框才可见」升级成「下一次读即见」。
+    await invalidateShelfProcessMappingsQuery(qc);
     showCreate.value = false;
     await fetchData();
     ElMessage.success('已保存');

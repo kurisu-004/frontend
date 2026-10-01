@@ -29,12 +29,15 @@
 //     被 computed 收集成依赖 + watch(defaultedOptions) → observer.setOptions → 闸门
 //     真能随候选源就绪自动开合。传裸 ref 也支持，但 getter 形态在调用点更直白。
 //
-// 失效：映射表的写点在「货架管理 → 工序映射」（ShelfList.vue 的 setShelfProcesses），
-// 与 10 处消费页无一在写侧同屏，按 CLAUDE.md「跨页面写操作不做穷举失效」策略**不挂**
-// invalidateQueries —— 30s 有限 staleTime 兜新鲜度（改了映射后重开对话框即可见）。
-// 真要挂时在本文件加薄封装 + 在 qk 补 shelfProcessMappingsPrefix，禁止调用点拼字面量。
+// 失效：映射表的写点全仓**只有 1 个** —— 「货架管理 → 工序映射」
+// （ShelfList.vue 的 setShelfProcesses），读点则有 10 处（全部是
+// useShelfProcessFilter），与写侧无一在写侧同屏。这**不适用** CLAUDE.md「跨页面写
+// 操作不做穷举失效」策略 —— 该策略针对的是「写点散落多域、补齐等于穷举全仓」的情形
+// （送检 / worker-scan / 品检流转 / outsource 收发），本域不存在这个问题，成本近乎为零
+// （2026-10-02 review 第 1 轮 M-3）。故保存成功后调本文件底部的薄封装，把「改了映射
+//  后重开对话框即可见」升级成「下一次读即见」。30s 有限 staleTime 仍是兜底，不变。
 
-import { useQuery } from '@tanstack/vue-query';
+import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { toValue, type MaybeRefOrGetter } from 'vue';
 import { getAllShelfProcessMappings } from '@/api/shelves';
 import {
@@ -68,4 +71,10 @@ export function useShelfProcessMappingsQuery(enabled: MaybeRefOrGetter<boolean> 
     staleTime: 30_000,
     gcTime: 5 * 60 * 1000,
   });
+}
+
+/** 2026-10-02 新增：失效货架↔工序映射域（唯一写点 setShelfProcesses 成功后调）。
+ *  键一律走 qk.shelfProcessMappingsPrefix，禁止调用点拼字面量数组。 */
+export function invalidateShelfProcessMappingsQuery(qc: QueryClient): Promise<void> {
+  return qc.invalidateQueries({ queryKey: qk.shelfProcessMappingsPrefix }).then(() => undefined);
 }

@@ -17,8 +17,12 @@
 //   - Q3：闸门由 ref 开合后自动放行一次请求（getter 形态 enabled 的回归守卫）。
 //   - Q4：守门失败 → query 进 error 态（isError=true，error 里能看到缺哪个字段），
 //     data 保持 undefined —— 消费侧（useShelfProcessFilter）据此 loaded=false 走全量兜底。
-//   - Q5：两个实例（模拟 10 处调用点）共用同一 queryKey ⇒ 只发一次请求（去重收益，
-//     也是「10 处共用一份映射缓存」的契约固化）。
+//   - Q5：**同 tick 内并发挂载**两个实例（模拟 10 处调用点）共用同一 queryKey ⇒ 在飞
+//     请求合并，只发一次（精确表述：并发去重，**不含** staleTime 收益 —— 变异测试
+//     staleTime → 0 本例仍绿，staleTime 那部分由 Q6 证）。
+//   - Q6：卸载（effectScope 停掉）后在 staleTime 窗口内重挂 ⇒ 仍只发一次，缓存条目
+//     跨 observer 生命周期存活（这才是 keys.ts 里「30s 窗口内只发一次请求」那句注释
+//     的实证；变异测试 staleTime 30_000 → 0 本例立刻红）。
 //
 // 测试策略（沿 useWorkerPoolCountsQuery.spec.ts 范本）：
 //   - vi.mock('@/api/shelves')：getAllShelfProcessMappings 替换为可控 vi.fn()；
@@ -89,7 +93,7 @@ function mountQuery(enabled?: Ref<boolean>) {
 
 describe('shelfProcessMappingsResultSchema — 契约守门（2026-10-02）', () => {
   it('S1：真契约（只有 items；元素 4 字段；不返 sort_order）能 parse', () => {
-    // 逐字复刻 backend-rust AllShelfProcessMappingOut（vo.rs:44-56）
+    // 逐字复刻 backend-rust AllShelfProcessMappingOut（vo.rs:52-58，:56 是 pub struct）
     const parsed = shelfProcessMappingsResultSchema.parse({
       items: [
         {
@@ -200,7 +204,11 @@ describe('useShelfProcessMappingsQuery — 常量 queryKey + 闸门 + 守门（2
     expect(getAllShelfProcessMappingsMock).toHaveBeenCalledTimes(1);
   });
 
-  it('Q5：两个实例（模拟 10 处调用点）共用同一 queryKey → 只发一次请求', async () => {
+  it('Q5：两个实例同一 tick 内挂载 → 在飞请求合并，只发一次（并发去重）', async () => {
+    // 精确表述：Q5 证的是「同 tick 并发挂载 → 同一个 in-flight Promise 只发一次」，
+    // **不含** staleTime 收益（staleTime 那部分是 Q6）。review 第 1 轮 M-1 做过变异
+    // 测试：把 staleTime 从 30_000 改成 0 后本例仍绿 —— 因为两个实例是在同一次
+    // notifyManager batch 里挂载，第二个实例直接挂到第一个的 in-flight Promise 上。
     getAllShelfProcessMappingsMock.mockResolvedValue({
       items: [
         {
@@ -222,5 +230,43 @@ describe('useShelfProcessMappingsQuery — 常量 queryKey + 闸门 + 守门（2
     // 两个 observer 看到同一份数据（共用缓存的实质）
     expect(a.data.value?.items[0]?.process_code).toBe('CUT');
     expect(b.data.value?.items[0]?.process_code).toBe('CUT');
+  });
+
+  it('Q6：卸载后在 staleTime 窗口内重挂 → 仍只发一次请求（30s 去重窗口的实证）', async () => {
+    // Q5 之外的真实收益：用户「关掉对话框 → 换一个对话框」（= 组件 unmount → 重新
+    // mount，同一个操作流程内）不该重发。变异测试：staleTime 30_000 → 0 本例立刻红。
+    getAllShelfProcessMappingsMock.mockResolvedValue({
+      items: [
+        {
+          shelf_id: '8800000000001',
+          shelf_code: 'SH-P01',
+          process_id: '190000000000001',
+          process_code: 'CUT',
+        },
+      ],
+    });
+    const a = mountQuery();
+    await vi.waitFor(() => {
+      expect(a.isSuccess.value).toBe(true);
+    });
+    expect(getAllShelfProcessMappingsMock).toHaveBeenCalledTimes(1);
+
+    // 卸载：停掉 effectScope → useBaseQuery 的 onScopeDispose 走 observer.destroy()
+    // → 该 query 的 observer 归零（缓存条目仍在，gcTime 5min 内不回收）。
+    scope.stop();
+    await nextTick();
+
+    // 立即重挂一个新实例：staleTime 30s 未到 ⇒ 命中缓存，不重发请求
+    const scope2 = effectScope();
+    let b: ReturnType<typeof useShelfProcessMappingsQuery> | undefined;
+    scope2.run(() => {
+      b = testApp.runWithContext(() => useShelfProcessMappingsQuery());
+    });
+    await vi.waitFor(() => {
+      expect(b?.isSuccess.value).toBe(true);
+    });
+    expect(getAllShelfProcessMappingsMock).toHaveBeenCalledTimes(1);
+    expect(b?.data.value?.items[0]?.process_code).toBe('CUT');
+    scope2.stop();
   });
 });

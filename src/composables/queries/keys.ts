@@ -149,8 +149,16 @@ export const qk = {
   /** 2026-10-02 新增：货架↔工序映射全集键（GET /prod/shelf-processes，单条无 params）。
    *  后端 handler 不接 Query extractor，一次返全部 active 映射的**扁平行**（一行一个
    *  (货架, 工序) 对），故键退化为常量键（与 workerPoolCounts 同形），不随任何
-   *  候选源变化。10 处 useShelfProcessFilter 实例共用本键 ⇒ 30s 窗口内只发一次请求。 */
+   *  候选源变化。10 处 useShelfProcessFilter 实例共用本键 ⇒ 30s 窗口内只发一次请求
+   *  （该窗口有 Q6「卸载 → 立即重挂仍不重发」的用例实证；Q5 证的只是同 tick 并发
+   *  挂载的在飞请求合并）。 */
   shelfProcessMappings: ['shelf-process-mappings'] as const,
+  /** 2026-10-02 新增：货架↔工序映射域前缀 —— 与 shelfProcessMappings 同值（键已是
+   *  常量，前缀即自身，沿 workerPoolCountsPrefix 同形）。唯一写点
+   *  setShelfProcesses（ShelfList.vue）成功后调 invalidateShelfProcessMappingsQuery(qc)
+   *  —— 本域**不是**「跨页面写操作无法穷举」那种情形：全仓写点只有这一个，10 个读点
+   *  全是 useShelfProcessFilter，补失效的成本近乎零（review 第 1 轮 M-3）。 */
+  shelfProcessMappingsPrefix: ['shelf-process-mappings'] as const,
   // ============================================================
   // 2026-09-30 新增：pool 域 queryKey 工厂（后端 worker-pool → pool 路径收敛后
   // 前端同步改名）—— 生产队列 Tab 懒加载 + 数据层 TanStack Query 化

@@ -17,12 +17,14 @@
 // 收进 queryFn，本文件的 F6 就是那道守门的回归守卫。
 //
 // mock 契约：逐字复刻 backend-rust `AllShelfProcessMappingOut`
-// （src/modules/prod/shelf_process/vo.rs:44-56）—— 只有 items 一个顶层字段（**没有**
+// （src/modules/prod/shelf_process/vo.rs:52-58 —— :56 是 `pub struct`，52-54 行是
+// 文档注释、55 行是 `#[derive]`）—— 只有 items 一个顶层字段（**没有**
 // total / limit / offset），元素 4 字段 shelf_id / shelf_code / process_id / process_code
 // （全集接口**不返** sort_order，排序由 service 层 ORDER BY 保证）。
 //
 // element-plus：CLAUDE.md 架构条目 §9 —— ElMessage 在 vitest node env 会因内部
 // normalizeAppendTo 触发 `ReferenceError: document is not defined`，必须桩成 no-op。
+// 2026-10-02 review 第 1 轮 I-2 补的 ElMessage.error 上报也断在这层桩上（可断言）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope, nextTick, ref, type EffectScope, type Ref } from 'vue';
@@ -78,6 +80,7 @@ vi.mock('@/api/shelves', () => ({
 }));
 
 import { useShelfProcessFilter } from '../useShelfProcessFilter';
+import { qk } from '../queries/keys';
 
 interface Row {
   id: string;
@@ -242,6 +245,7 @@ describe('useShelfProcessFilter — 失败 / 守门兜底', () => {
     // 只能靠人眼在 UI 上看到空白下拉才定位得到。现在 queryFn 里的
     // shelfProcessMappingsResultSchema.parse 会把漂移变成 query error 态 ⇒
     // loaded 保持 false ⇒ filteredXxx 全量兜底（**不会**拿半截数据去过滤）。
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     getAllShelfProcessMappingsMock.mockResolvedValue({
       // 故意漏掉 shelf_code —— 后端若改名 / 漏返就长这样
       items: [{ shelf_id: '8800000000001', process_id: '190000000000001' }],
@@ -258,9 +262,13 @@ describe('useShelfProcessFilter — 失败 / 守门兜底', () => {
     // 守门失败 ⇒ 不过滤（宁可全量也不半截）
     expect(f.filteredProcesses.value).toHaveLength(PROCESSES.length);
     expect(f.processesForShelf('8800000000001')).toBeNull();
+    // review I-2：守门「有牙」也必须**有响**——不能只在 query state 里悄悄失败
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    consoleError.mockRestore();
   });
 
   it('F7：网络失败 → loaded 保持 false，兜底返回全量（不做半截过滤）', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     getAllShelfProcessMappingsMock.mockRejectedValue(new Error('boom'));
     const f = makeFilterReady('8800000000001', null);
 
@@ -273,6 +281,62 @@ describe('useShelfProcessFilter — 失败 / 守门兜底', () => {
     expect(f.loading.value).toBe(false);
     expect(f.filteredProcesses.value).toHaveLength(PROCESSES.length);
     expect(f.processesForShelf('8800000000001')).toBeNull();
+    consoleError.mockRestore();
+  });
+
+  it('F11（review I-1 回归守卫）：refetch 失败 → loaded 仍为 true，过滤照常（下拉不静默变全量）', async () => {
+    // 场景构造（review 指出的最难点）：TanStack v5 在 **refetch 失败**（区别于首调失败）
+    // 时**保留上一次的 data**，只把 status 翻成 'error'。于是 `loaded ← isSuccess`
+    // 会在失败窗口里假翻 false，下拉静默变回全量 —— 相对迁移前「loaded 粘住」的旧行为
+    // 是回归。造这个窗口：先成功一次，再让 mock 改成 reject，然后用
+    // `invalidateQueries` 逼一次 refetch（staleTime 30s 内它是绕过 stale 的唯一入口）。
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const f = makeFilterReady('8800000000001', null);
+    await waitLoaded(f);
+    expect(f.filteredProcesses.value).toHaveLength(2);
+
+    getAllShelfProcessMappingsMock.mockRejectedValue(new Error('refetch boom'));
+    await testQueryClient.invalidateQueries({ queryKey: qk.shelfProcessMappings });
+
+    // 先证明**确实**处在 refetch 失败窗口里，否则本例可能因 invalidate 没触发 refetch
+    // 而「假绿」：query 自身 status=error 而 data 仍在。
+    const cached = testQueryClient.getQueryCache().find({ queryKey: qk.shelfProcessMappings });
+    expect(cached?.state.status).toBe('error');
+    expect(cached?.state.data).toBeDefined();
+    expect(getAllShelfProcessMappingsMock).toHaveBeenCalledTimes(2);
+
+    // 核心断言：手上有映射数据就照常过滤（旧实现与本次修复都该过；若有人把 loaded
+    // 改回 isSuccess，这里 loaded=false ⇒ 工序下拉静默变全量 ⇒ 断言失败）。
+    expect(f.loaded.value).toBe(true);
+    expect(f.filteredProcesses.value.map((p) => p.id)).toEqual([
+      '190000000000001',
+      '190000000000002',
+    ]);
+    expect(f.processesForShelf('8800000000001')).toEqual(
+      new Set(['190000000000001', '190000000000002']),
+    );
+    consoleError.mockRestore();
+  });
+
+  it('F12（review I-2）：同一次失败只上报一次 —— 10 处实例共用一份 query 不会刷 10 个 toast', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { ElMessage } = await import('element-plus');
+    getAllShelfProcessMappingsMock.mockRejectedValue(new Error('boom-f12'));
+
+    // 两个实例 = 10 处调用点的缩影：共用同一 queryKey ⇒ 拿到**同一个** error 实例 ⇒
+    // 上报去重（lastReportedError 按对象身份去重）后只响一次。
+    makeFilterReady('8800000000001', null);
+    makeFilterReady('8800000000002', null);
+
+    await vi.waitFor(() => {
+      expect(getAllShelfProcessMappingsMock).toHaveBeenCalled();
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(ElMessage.error).toHaveBeenCalledTimes(1);
+    expect(ElMessage.error).toHaveBeenCalledWith('工序映射加载失败，货架与工序下拉暂未按映射收窄');
+    consoleError.mockRestore();
   });
 });
 

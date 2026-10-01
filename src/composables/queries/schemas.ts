@@ -678,8 +678,8 @@ export type ShelfListResultSchema = z.infer<typeof shelfListResultSchema>;
 // useShelfProcessMappingsQuery 守门）。
 //
 // 字段对齐 backend-rust `AllShelfProcessMappingItem`
-// （src/modules/prod/shelf_process/vo.rs:43-50 —— 该结构体上一段的 36-42 行是文档注释，
-// :44 才是 `pub struct`），4 字段：
+// （src/modules/prod/shelf_process/vo.rs:43-50 —— :43 是 `pub struct`，它上面
+// 36-41 行是文档注释、42 行是 `#[derive]`），4 字段：
 //   - shelf_id / process_id：`i64` + `serialize_i64` ⇒ 前端收 string（雪花 ID）；
 //   - shelf_code / process_code：非 Option String。
 //
