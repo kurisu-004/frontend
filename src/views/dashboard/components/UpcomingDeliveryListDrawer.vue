@@ -41,7 +41,9 @@
     </div>
 
     <div v-else class="drawer-body">
-      <!-- 顶部 header：日期 · 层标题 · 状态数 + 关闭按钮 -->
+      <!-- 顶部 header：日期 · 层标签 · 共 N 件（2026-10-01 订正：本注释原写
+           「日期 · 层标题 · 状态数 + 关闭按钮」，dddebb7 桌面屏重构已把 header
+           收成单行 header-row-1 并删掉状态数与关闭按钮节点） -->
       <div class="drawer-header">
         <div class="header-row-1">
           <span class="header-date">{{ date }}</span>
@@ -240,23 +242,15 @@ function customerPath(item: PartListItem): string {
   font-size: 13px;
   color: var(--text-primary);
 }
-.header-status-count {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.header-row-2 {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
+// 2026-10-01 清理死样式：.header-status-count / .header-row-2 / .header-row-3
+// 三个选择器在 dddebb7「办公桌面屏重构」把 header 收成单行 header-row-1 时已从
+// 模板中移除对应节点（状态数与关闭按钮不再渲染），样式块漏删。同批修掉的还有
+// __tests__/UpcomingDeliveryListDrawer.spec.ts U1 里断言已删除元素的用例 ——
+// 它长期红灯正是死样式掩盖「测试与模板不同步」的结果。
 .header-total {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
-}
-.header-row-3 {
-  display: flex;
-  justify-content: flex-end;
 }
 .drawer-list {
   flex: 1;

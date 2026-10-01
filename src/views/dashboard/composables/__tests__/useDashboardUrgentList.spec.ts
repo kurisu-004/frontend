@@ -188,7 +188,10 @@ describe('useDashboardUrgentList — items + urgentCount 派生（2026-09-29）'
 
     expect(listUnionItemsMock).toHaveBeenCalled();
     const params = listUnionItemsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(params['sort_by']).toBe('PLANNED_DELIVERY_DATE');
+    // 2026-10-01 修正：本断言原写死 'PLANNED_DELIVERY_DATE'，但 URGENT_LIST_PARAMS
+    // 已于 2026-09-30 改为 'SYSTEM_DELIVERY_DATE'（见 useDashboardUrgentList.ts 的
+    // sort_by 说明：改按系统交期排，PartSortKey 已含该值），测试没跟上 → 长期红灯。
+    expect(params['sort_by']).toBe('SYSTEM_DELIVERY_DATE');
     expect(params['sort_dir']).toBe('ASC');
     expect(params['limit']).toBe(100);
     expect(params['offset']).toBe(0);

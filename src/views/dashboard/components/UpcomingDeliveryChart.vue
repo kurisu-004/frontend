@@ -47,8 +47,13 @@
 //
 // 设计要点：
 //   - 不再直用 echarts/core —— 全部委托给全局 <v-chart>（main.ts:82 注册）。
-//   - LAYERS 颜色与项目主色解耦（项目主色三蓝是为 UI 框架配的，dashboard
-//     "剩余 / 紧急 / 已完成" 语义用 警示红 / 警示黄 / 亮青绿 三色更贴切）。
+//   - LAYERS 颜色走 Element Plus 预设 hex（success #67c23a / warning #e6a23c /
+//     danger #f56c6c），与 UpcomingDeliveryListDrawer 的 LAYER_COLOR 保持一致，
+//     形成「柱状图色块 ↔ 抽屉层标签」的视觉闭环。2026-10-01 订正：本条原写
+//     「警示红 / 警示黄 / 亮青绿」（旧 #f56c6c 之前的 #B4121B/#FFCC00/#0FFCBE 三色），
+//     2026-09-30 已切 EP 预设色阶但此条注释漏更 —— 同批修掉的还有
+//     UpcomingDeliveryChart.spec.ts 里写死旧三色的断言。必须用 hex 而非
+//     var(--el-color-*)：ECharts Canvas renderer 解析 CSS var() 不可靠。
 //   - props.buckets 由父组件 DashboardView 派生（snapshot.upcoming_delivery）。
 //     组件本身不消费 Zod schema —— 守门发生在 useDashboardSnapshot.queryFn 入口，
 //     入参已经是 z.infer 后的强类型 UpcomingDeliveryEntryData[]。
