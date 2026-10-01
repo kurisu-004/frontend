@@ -152,6 +152,22 @@ function config({ command, mode }: { command: 'build' | 'serve'; mode: string })
           changeOrigin: true,
           ws: true,
         },
+        // 2026-10-01 新增：WS 中枢 /ws/* 的 dev 反代。
+        // 起因：dashboard WS 连的是 `${proto}://${location.host}/ws/dashboard`（api/dashboard.ts
+        // 的 buildWsUrl），不带 /api 前缀，因此上面的 '/api' context 匹配不到。Vite 8 的 dev
+        // upgrade 监听器只对匹配到的 proxy context 转发 proxy.ws，不匹配的路径掉出循环后
+        // 不写任何响应 —— 浏览器看到的是「握手无响应」，而 HTTP 首屏快照走 /api 完全正常，
+        // 于是表现为「页面数据正常但控制台一直刷 WS 报错」。
+        // 复验：curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" \
+        //   -H "Sec-WebSocket-Version: 13" \
+        //   -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+        //   "http://127.0.0.1:5173/ws/dashboard"   → 应从「零响应」变为 401（无 token）
+        // 生产 / 预发不走这里：nginx.conf:141-154 已有 `location ^~ /ws/`（同形反代）。
+        '/ws': {
+          target: 'http://127.0.0.1:3000',
+          changeOrigin: true,
+          ws: true,
+        },
       },
     },
   };

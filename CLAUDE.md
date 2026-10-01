@@ -54,6 +54,49 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   #3）—— 一律 `const auth = useAuthStore(); auth.xxx` 访问，否则丢失响应式。
   `refreshOrLogout(router)` 接收 router 参数（store 不 import vue-router，避免循环依赖）。
   mutation 全局 retry: 0 见上文 TanStack Query 约定，store 内不写 retry。
+- **auth 转换事件 `auth:session-changed`（2026-10-01 新增）**：长连接层（`src/api/dashboard.ts`
+  的 dashboard WS 单例）与 auth 之间的**唯一**通知通道，取代此前只订阅 `auth:tokens-refreshed`
+  的做法。`CustomEvent<{ token: string | null }>`，`detail.token` 语义：
+  - `string` → token 已就位（刷新 / 登录），WS 用它重算 URL 并重连；
+  - `null` → session 已终止（登出 / `refreshOrLogout` 失败），WS 主动断开。
+
+  **4 个派发点，覆盖全部 auth 转换，缺一即产生「控制台无限刷 WS 报错」**：
+  | 位置 | 时机 | detail.token |
+  |---|---|---|
+  | `src/api/http.ts` `persistTokens()` | access token 被刷新 | 新 token |
+  | `src/stores/auth.ts` `loginMutation.onSuccess` | 登录成功 | 新 token |
+  | `src/stores/auth.ts` `logout()` | 主动登出 | `null` |
+  | `src/stores/auth.ts` `refreshOrLogout()` catch 分支 | 守卫校验失败 | `null` |
+
+  派发方**一律不 import** `src/api/dashboard.ts`（否则形成 `auth ↔ api` 循环依赖），
+  沿用 auth store 条目里既定的 CustomEvent 解耦范式。`auth:tokens-refreshed` 保留不动
+  —— 它管 store 自身 state（token / user / refreshToken）同步，与 WS 层是两件事。
+  **新增任何改变 token 生命周期的写点时，必须在这 4 处之外同步补派发。**
+
+- **dashboard WS 单例（2026-10-01 重构）**：`src/api/dashboard.ts` 是全仓唯一 WS 入口
+  （`createGlobalState` + VueUse `useWebSocket`），承载 `/ws/dashboard?token=<jwt>`。三条硬约束：
+  1. **URL 用模块级 `shallowRef<string | undefined>` + 显式 `syncWsUrl()`，不用 `computed`。**
+     旧 `computed + tokenVersion` 形态会缓存住旧 token（`tokenVersion` 只被刷新事件 bump），
+     导致 logout→不刷新页面→重新登录后 WS 仍握吊销 token → `40105` 死循环。
+     VueUse `_init()` 每次重试都重读 `urlRef.value`，所以只要在 auth 转换点同步一次即可。
+  2. **`undefined` 是「无 token，不要连」的哨兵值。** 借 VueUse `_init()` 首行
+     `typeof urlRef.value === "undefined"` 守卫实现零连接尝试。**禁止**无 token 时拿裸 URL
+     去握手 —— 后端必回 `40100 缺少 token 查询参数`，是无意义重试刷屏的直接来源。
+  3. **重试不封顶次数**（`autoReconnect.retries: -1`，退避 `1s→10s` 封顶），失败日志按
+     「前 3 次完整诊断 + 之后每 30 次一行」降频。理由：WS 是 dashboard **唯一**更新通道
+     （首屏 `GET /api/v2/dashboard/snapshot` 之后全靠 WS 事件 invalidate 重取），
+     封顶重试会让页面静默停止刷新，比刷屏更糟。诊断须输出四项 app 内可判定信息：
+     脱敏 URL（JWT 一律 `token=***`）/ `closeCode` + `reason` / `hadErrorEvent` /
+     `tokenExpired`（`decodeJwt` 读 `exp`）。注意浏览器 WS API **不暴露握手期 HTTP status**
+     —— 后端鉴权失败是 upgrade 前直接回 `401`（不是 WS Close 帧），故 `1006` 无法区分
+     `401` / `502` / 代理缺失，真实 status 只能看 Network 面板或直连后端 curl。
+
+  **dev 环境必须有 `/ws` 反代**（`vite.config.ts` `server.proxy`）。Vite 8 的 dev `upgrade`
+  监听器只对**匹配到的 proxy context** 转发 `proxy.ws`，不匹配的路径掉出循环后不写任何
+  响应 → 浏览器看到「握手无响应」而 HTTP 首屏快照走 `/api` 完全正常，表现为
+  「页面数据正常但控制台一直刷 WS 报错」。生产 / 预发由 nginx
+  （`nginx.conf` / `nginx.http-only.conf` 的 `location ^~ /ws/`）负责。复验命令见
+  `vite.config.ts` 内注释。
 - **TanStack Query 数据获取架构（2026-09-26）**（2026-09-26 新增）：本轮 TanStack Query 化的硬约束。覆盖两层架构（共享基础数据层 + 页面 store）、queryKey 工厂、Zod 守门、reactive params、enabled 闸门、fetchList 别名、mutation 范本、ElMessage 错误桥接、简单 vs 复杂页面判别。
 
   1. **两层数据获取架构**

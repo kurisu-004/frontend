@@ -143,6 +143,17 @@ export const useAuthStore = defineStore('auth', () => {
       saveToStorage();
       return resp.user;
     },
+    // 2026-10-01 新增：通知长连接层 token 已就位。api/dashboard.ts 的 WS URL 是
+    // 「模块级 shallowRef + auth:session-changed 时 syncWsUrl()」—— 没有这一步，
+    // 登出后不刷新页面直接重新登录，WS 手里还是登出前那个已被吊销的 token，
+    // 会陷入 40105 无限重连（首屏 HTTP 正常、控制台一直刷 WS 报错）。
+    // 不 import api/dashboard（那会形成 auth ↔ api 循环依赖），走 CustomEvent 解耦。
+    onSuccess: () => {
+      // 登录响应体里的 token 已经由 mutationFn 写进 localStorage，syncWsUrl 会现读。
+      window.dispatchEvent(
+        new CustomEvent('auth:session-changed', { detail: { token: token.value } }),
+      );
+    },
   });
 
   // ===== actions =====
@@ -152,6 +163,13 @@ export const useAuthStore = defineStore('auth', () => {
     refreshTokenValue = null;
     user.value = null;
     localStorage.removeItem('auth_session');
+    // 2026-10-01 新增：登出后必须让 WS 层主动断开。detail.token = null →
+    // syncWsUrl() 把 URL 置为 undefined → VueUse open() 先 close() 再因
+    // `_init()` 见 url undefined 直接返回。少了这一步，WS 会拿着刚被吊销的
+    // session 持续重连直到页面关闭。
+    window.dispatchEvent(
+      new CustomEvent('auth:session-changed', { detail: { token: null } }),
+    );
     // 2026-09-28 新增：联动清空 tagsView（visited + cache）。插件持久化会立即把
     // 空数组写 localStorage['tags_view']。
     useTagsViewStore().reset();
@@ -171,6 +189,11 @@ export const useAuthStore = defineStore('auth', () => {
       refreshTokenValue = null;
       user.value = null;
       localStorage.removeItem('auth_session');
+      // 2026-10-01 新增：同 logout —— session 已死，让 WS 层断开，
+      // 否则它会拿着失效 token 持续重连刷控制台。
+      window.dispatchEvent(
+        new CustomEvent('auth:session-changed', { detail: { token: null } }),
+      );
       router.replace('/login');
       return false;
     }

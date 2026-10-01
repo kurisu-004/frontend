@@ -135,11 +135,15 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       expect(s.stack).toBe('delivery');
     }
 
-    // 颜色顺序：bottom=#0FFCBE（已送货） / middle=#FFCC00（待品检待送货） / top=#B4121B（品检前）
+    // 颜色顺序：bottom=#67c23a（已送货） / middle=#e6a23c（待品检/待送货） / top=#f56c6c（品检前）
     // 沿 Phase 4：LAYERS 顺序 [bottom, middle, top]
-    expect(option.series[0]?.itemStyle?.color).toBe('#0FFCBE');
-    expect(option.series[1]?.itemStyle?.color).toBe('#FFCC00');
-    expect(option.series[2]?.itemStyle?.color).toBe('#B4121B');
+    // 2026-10-01 修正：本断言原写死旧「警示三色」（#0FFCBE / #FFCC00 / #B4121B），
+    // 但源码 LAYERS.color 早已随 UpcomingDeliveryListDrawer 的 LAYER_COLOR 一起换成
+    // Element Plus 预设 hex 以形成视觉闭环，测试没跟上 → 长期红灯。同步更新为现值。
+    // 不变量是「三层三色且与抽屉 LAYER_COLOR 一致」，hex 本身随设计调整可以变。
+    expect(option.series[0]?.itemStyle?.color).toBe('#67c23a');
+    expect(option.series[1]?.itemStyle?.color).toBe('#e6a23c');
+    expect(option.series[2]?.itemStyle?.color).toBe('#f56c6c');
 
     // legend data 顺序：已送货 / 待品检/待送货 / 品检前
     expect(option.legend.data).toEqual(['已送货', '待品检/待送货', '品检前']);
