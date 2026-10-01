@@ -9,6 +9,10 @@
   - 取消按钮保留（工人可放弃放回/送检）
   - 空状态可配置「返回上级」动作：调用方传 emptyActionLabel 则按钮显示，点击触发 empty-action 事件
 
+  ⚠️ 2026-10-02 已知缺陷（用户决定本轮只修类型与注释，**不动 UI**）：INSPECT 卡会
+  渲染「在架 undefined 件」—— 后端 for-inspection VO 不含 current_load，而
+  HmiPickerCard 的 .load 块无 v-if 守卫。详见下方 currentLoadOf 的注释。
+
   props:
     modelValue: boolean                       // 弹窗可见
     nextProcessId: string                     // RETURN 必填（用于查 /shelves/for-return）
@@ -65,7 +69,7 @@
         :code="s.code"
         :name="s.name"
         :location="s.location || undefined"
-        :current-load="s.current_load"
+        :current-load="currentLoadOf(s)"
         :is-selected="s.id === selectedId"
         @select="onSelect(s.id)"
       />
@@ -92,7 +96,7 @@ import { Box, CircleCloseFilled, Loading, Select } from '@element-plus/icons-vue
 import { ElMessage } from 'element-plus';
 import HmiPickerCard from './HmiPickerCard.vue';
 import { listShelvesForReturn, listShelvesForInspection } from '@/api/shelves';
-import type { ShelfForReturn } from '@/types/shelf';
+import type { ShelfPickerItem } from '@/types/shelf';
 
 const props = withDefaults(
   defineProps<{
@@ -120,8 +124,34 @@ const emit = defineEmits<{
 
 const loading = ref(false);
 const errorMessage = ref<string | null>(null);
-const shelves = ref<ShelfForReturn[]>([]);
+// 2026-10-02：`ShelfForReturn[]` → `ShelfPickerItem[]`（= ShelfForReturn |
+// ShelfForInspection 联合）。原因：本 dialog 一份模板同时服务 RETURN / INSPECT 两个
+// 端点，而后端两个 VO **形状不同** —— INSPECT 的 `ShelfForInspectionItem`
+// （vo/shelf.rs:73-81）没有 current_load / is_recommended。旧声明 `ShelfForReturn[]`
+// 等于逼着品检路径读一个后端不返的字段。
+const shelves = ref<ShelfPickerItem[]>([]);
 const selectedId = ref<string | null>(null);
+
+/**
+ * 取卡片要显示的「在架件数」。
+ *
+ * ⚠️ **INSPECT 卡会渲染「在架 undefined 件」，这是已知缺陷，用户决定本轮不修**
+ * （2026-10-02）。缘由：`GET /shelves/for-inspection` 后端不做在架数聚合
+ * （`ShelfForInspectionItem` 只有 6 字段，见 `@/types/shelf.ts` 的对照表），
+ * 而 `HmiPickerCard` 的 `.load` 块**无 `v-if` 守卫**（HmiPickerCard.vue:58-63），
+ * 无条件渲染 `在架 {{ currentLoad }} 件`。
+ *
+ * 本函数的**唯一**职责是让这个洞在类型层显形（用 `in` 收窄，模板零断言）：
+ *   - 视觉结果与修复前**逐字一致** —— 品检架走 `undefined` 分支，传给
+ *     `currentLoad?: number` 的仍是 `undefined`（该 prop 无 default），与修复前
+ *     `s.current_load` 恒 undefined 的效果完全等价。故本轮**不动 UI**。
+ *   - 要真修需**后端**在 for-inspection 补 current_load 聚合（加 ORDER BY / JOIN
+ *     统计，或从 for-return 复用带 load 的查询）；纯前端无法推导在架数。
+ *   - 修好后本函数退化为恒返回 `s.current_load`，调用点无需再改。
+ */
+function currentLoadOf(s: ShelfPickerItem): number | undefined {
+  return 'current_load' in s ? s.current_load : undefined;
+}
 
 watch(
   () => [props.modelValue, props.nextProcessId, props.kind] as const,
@@ -166,7 +196,10 @@ async function loadInspection(): Promise<void> {
   try {
     const result = await listShelvesForInspection();
     shelves.value = result.items;
-    // 不自动选中推荐架（与 RETURN 一致，2026-07-17 移除）
+    // 2026-10-02 订正：原注释写「不自动选中推荐架（与 RETURN 一致）」——**品检
+    // 路径从来没有推荐架可选**。`ShelfForInspectionItem` 无 is_recommended 字段
+    // （见 @/types/shelf.ts 的两 VO 对照表），后端 service 也不标推荐。本行现在
+    // 记录的是「该端点不存在推荐语义，故无自动选中可谈」，而不是「与 RETURN 对齐」。
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     errorMessage.value = msg || '加载失败';

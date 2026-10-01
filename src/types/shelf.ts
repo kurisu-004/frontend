@@ -81,8 +81,28 @@ export interface SetShelfProcessesPayload {
 }
 
 // ============================================================
-// 共享 HMI RETURN 卡片网格 picker（2026-07-10）
+// 共享 HMI 卡片网格 picker 的两个 VO（2026-07-10 建 RETURN，2026-07-13 加 INSPECT）
+//
+// ⚠️ 2026-10-02 关键澄清：`for-return` 与 `for-inspection` 是**两个不同后端 VO**，
+// 形状不同，**不能共用一个类型**。此前 `listShelvesForInspection()` 的返回类型谎报成
+// `ShelfForReturnResult`（`src/api/shelves.ts`），于是 INSPECT 路径上
+// `current_load` / `is_recommended` 恒为 undefined —— `HmiPickerCard` 渲染出
+// 「在架 undefined 件」。拆类型的目的就是让这个洞在编译期暴露出来。
+//
+//   | 字段                            | for-return | for-inspection |
+//   |---------------------------------|------------|----------------|
+//   | id/code/name/zone/location      | ✓          | ✓              |
+//   | current_load（当前在架件数）      | ✓          | ✗ **没有**     |
+//   | is_recommended（系统推荐标记）   | ✓          | ✗ **没有**     |
+//   | is_active                       | ✗          | ✓              |
+//
+// 后端 VO 逐字对齐 backend-rust `src/modules/shelf/vo/shelf.rs`：
+//   ShelfForReturnItem :50-59（七字段）/ ShelfForInspectionItem :73-81（六字段），
+//   两侧的 Out 信封都**只有** items 一个字段（无分页、无 recommended_shelf_id）。
 // ============================================================
+
+/** `GET /shelves/for-return` 响应 item。
+ *  对应后端 VO `ShelfForReturnItem`（vo/shelf.rs:50-59）。 */
 export interface ShelfForReturn {
   id: string;
   code: string;
@@ -92,12 +112,14 @@ export interface ShelfForReturn {
    *  但类型逐字对齐 VO，注释在声称对齐时就不能少列。 */
   zone: string;
   location: string | null;
-  /** 当前在架件数（status=IN_PROCESS + holder=shelf） */
+  /** 当前在架件数（status=IN_PROCESS + holder=shelf）。
+   *  ⚠️ 只有 for-return VO 有这个字段，for-inspection 没有 —— 见本节顶部对照表。 */
   current_load: number;
-  /** 系统推荐标记；picker 弹窗时默认高亮 + 「完成」一键接受 */
+  /** 系统推荐标记；picker 弹窗时默认高亮 + 「完成」一键接受。
+   *  ⚠️ 同上，**只有 for-return 有**。（2026-07-17 起前端不再据此自动高亮。） */
   is_recommended: boolean;
   // 2026-10-02 摘除 display_order / mapped_process_codes：后端
-  // ShelfForReturnItem（backend-rust/src/modules/shelf/vo/shelf.rs:48-57）只有
+  // ShelfForReturnItem（backend-rust/src/modules/shelf/vo/shelf.rs:50-59）只有
   // id / code / name / zone / location / current_load / is_recommended 七字段
   // （zone 已如上补齐）。原来这两个字段是纯类型谎言：mapped_process_codes 恒
   // undefined ⇒ ShelfPickerDialog 传给 HmiPickerCard 的 chips 恒不渲染；
@@ -109,3 +131,30 @@ export interface ShelfForReturnResult {
   // 2026-10-02 摘除 recommended_shelf_id：全仓零消费，且后端把推荐标记放在每个
   // item 的 is_recommended 上（ShelfForReturnOut 只有 items 一个字段）。
 }
+
+/** `GET /shelves/for-inspection` 响应 item。
+ *  对应后端 VO `ShelfForInspectionItem`（vo/shelf.rs:73-81）—— 与 for-return VO
+ *  **不是同一个结构体**，逐字只列这 6 个字段（字段顺序照抄后端）。
+ *  这里**不**声明 current_load / is_recommended：后端不返它们。 */
+export interface ShelfForInspection {
+  id: string;
+  code: string;
+  name: string;
+  zone: string;
+  location: string | null;
+  /** 恒为 true —— 端点查询条件就是 `is_active = true`；保留字段只为逐字对齐 VO。 */
+  is_active: boolean;
+}
+
+export interface ShelfForInspectionResult {
+  items: ShelfForInspection[];
+}
+
+/** `ShelfPickerDialog` 卡片网格的**元素级联合**：两个 VO 都可能出现在同一张网格里
+ *  （dialog 的 `kind` prop 决定走哪个端点）。公共字段 id / code / name / zone /
+ *  location 在两侧都有，消费侧读这些零成本；差异字段 current_load 需要消费侧
+ *  显式收窄（`'current_load' in s`），否则拿不到类型。
+ *
+ *  2026-10-02 新增：拆出 `ShelfForInspection` 后 dialog 必须接这个联合类型 ——
+ *  继续声明 `ShelfForReturn[]` 就等于让品检路径继续依赖一个后端不返的字段。 */
+export type ShelfPickerItem = ShelfForReturn | ShelfForInspection;
