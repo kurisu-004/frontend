@@ -72,9 +72,11 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   沿用 auth store 条目里既定的 CustomEvent 解耦范式。`auth:tokens-refreshed` 保留不动
   —— 它管 store 自身 state（token / user / refreshToken）同步，与 WS 层是两件事。
   **新增任何改变 token 生命周期的写点时，必须在这 4 处之外同步补派发。**
+  ⚠️ 本表**不覆盖** WS 收到后端关闭码 `4001` 的场景 —— 那条路径由 WS 层反向派发
+  `auth:session-lost`（方向相反），详见下方「dashboard WS 单例」第 4 条。
 
 - **dashboard WS 单例（2026-10-01 重构）**：`src/api/dashboard.ts` 是全仓唯一 WS 入口
-  （`createGlobalState` + VueUse `useWebSocket`），承载 `/ws/dashboard?token=<jwt>`。三条硬约束：
+  （`createGlobalState` + VueUse `useWebSocket`），承载 `/ws/dashboard?token=<jwt>`。四条硬约束：
   1. **URL 用模块级 `shallowRef<string | undefined>` + 显式 `syncWsUrl()`，不用 `computed`。**
      旧 `computed + tokenVersion` 形态会缓存住旧 token（`tokenVersion` 只被刷新事件 bump），
      导致 logout→不刷新页面→重新登录后 WS 仍握吊销 token → `40105` 死循环。
@@ -87,9 +89,39 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
      （首屏 `GET /api/v2/dashboard/snapshot` 之后全靠 WS 事件 invalidate 重取），
      封顶重试会让页面静默停止刷新，比刷屏更糟。诊断须输出四项 app 内可判定信息：
      脱敏 URL（JWT 一律 `token=***`）/ `closeCode` + `reason` / `hadErrorEvent` /
-     `tokenExpired`（`decodeJwt` 读 `exp`）。注意浏览器 WS API **不暴露握手期 HTTP status**
-     —— 后端鉴权失败是 upgrade 前直接回 `401`（不是 WS Close 帧），故 `1006` 无法区分
+     `tokenExpired`（`decodeJwt` 读 `exp`）。排查**先按 closeCode 查第 4 条的关闭码表**；
+     只有 `1006` 才需要再去查握手期 HTTP status —— 浏览器 WS API **不暴露握手期 status**，
+     后端鉴权失败是 upgrade 前直接回 `401`（不是 WS Close 帧），故 `1006` 无法区分
      `401` / `502` / 代理缺失，真实 status 只能看 Network 面板或直连后端 curl。
+  4. **关闭码分流（2026-10-02）**：后端已补完**主动 Close 帧**（此前全仓零
+     `sender.send(Message::Close(..))`，所有断开都是裸 drop，浏览器只见 `1006`），
+     关闭码语义表的唯一权威来源是 `~/Code/hsh-erp/backend-rust/docs/api/websocket.md`：
+     | code | 含义 | 前端行为 |
+     |---|---|---|
+     | `1001` | 服务端写失败 | 继续无限重试 |
+     | `1011` | 内部错误 / Pong 超时 | 继续无限重试 |
+     | `1012` | 服务重启 | 继续无限重试 |
+     | `4001` | **会话在连接期间失效** | **停重连 + 清 session + 走登出** |
+     | `4003` | 慢消费方（背压超限） | 继续无限重试 |
+     | `1006` | 浏览器侧「异常关闭」兜底（无 Close 帧） | 继续无限重试（原因未知） |
+
+     `4001` 是**唯一**必须特殊处理的码：其余全部按第 3 条继续无限重试，理由同上
+     （WS 是 dashboard 唯一更新通道，封顶/放弃重连会让页面静默停止刷新）；而 `4001`
+     再重试多少次都会被判 401，是死路，不分流就是 2026-10-01 修掉的「logout 死循环」
+     bug 的另一面。`onDisconnected` 里 `4001` 分支的行为**顺序**（`src/api/dashboard.ts`）：
+     ① `wsUrl.value = undefined` 停重连（复用第 2 条「无 token 不连」哨兵；
+     触发 `watch(urlRef, open)` → `close()` → `resetRetry()` 掐掉已排队的退避定时器，
+     即便没掐掉 `_init()` 首行的 undefined 守卫也不会 `new WebSocket`）
+     → ② `localStorage.removeItem('auth_session')` 清会话
+     → ③ `window.dispatchEvent(new CustomEvent('auth:session-lost', { detail: { code, reason } }))`。
+
+     `auth:session-lost` 与上面 `auth:session-changed` **方向相反，别混淆**：
+     后者由 auth 层派发、语义「token 变了，WS 重算 URL 重连」；前者由 WS 层派发、
+     语义「后端判定会话已死，请上层终止会话」。接收方是 **`src/router/index.ts`**
+     （不是 MainLayout.vue：那只是组件，挂在 `requireAuth` 子树下，`/scan/*` 等
+     MainLayout 之外的全屏路由收不到；router 模块已持有 router + useAuthStore，零新增依赖），
+     动作是 `auth.refreshOrLogout(router)` → `apiMe()` 失败即清 session +
+     `router.replace('/login')`。WS 层**禁止** import `stores/auth` 或 `vue-router`。
 
   **dev 环境必须有 `/ws` 反代**（`vite.config.ts` `server.proxy`）。Vite 8 的 dev `upgrade`
   监听器只对**匹配到的 proxy context** 转发 `proxy.ws`，不匹配的路径掉出循环后不写任何

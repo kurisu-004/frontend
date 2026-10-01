@@ -14,6 +14,11 @@
 //   - **失败握手 → 退避重连序列**（1s/2s/4s/8s/10s 封顶，不封顶次数）
 //   - **失败日志降噪**：前 3 次带完整诊断对象，之后每 30 次一行
 //
+// 2026-10-02 后端补完主动 Close 帧（此前全仓零发送，浏览器只见 1006）后新增覆盖：
+//   - **close 4001（会话失效）→ 停止重连**：进 60s 也不产生新 WebSocket 实例
+//   - **close 1006 → 仍按退避重连**：防「把所有关闭码都停掉」这种过度处理回归
+//   - **close 4001 → 派发 'auth:session-lost'** + 清 localStorage 会话
+//
 // createGlobalState 惰性语义：模块顶层不创建 socket，仅注册 listener；首次调
 // 用 onDashboardEvent / onDashboardStatus / reconnectDashboard / closeDashboard
 // 才触发 useWebSocket 工厂内部 new WebSocket()。测试通过 onDashboardStatus
@@ -207,7 +212,11 @@ beforeEach(() => {
   ) => {
     const result = realAdd(type, listener, options);
     if (
-      (type === 'auth:session-changed' || type === 'auth:tokens-refreshed') &&
+      (type === 'auth:session-changed' ||
+        type === 'auth:tokens-refreshed' ||
+        // 2026-10-02 新增：4001 用例自己也往 window 上挂 'auth:session-lost' 收集器，
+        // 挂进来一起记，afterEach 统一清，避免 listener 在用例之间泄漏。
+        type === 'auth:session-lost') &&
       typeof listener === 'function'
     ) {
       authEventListeners.push([type, listener]);
@@ -613,5 +622,100 @@ describe('dashboard WS：连接失败的退避重连与诊断', () => {
 
     const detail = warn.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(detail.tokenExpired).toBe(false);
+  });
+});
+
+// ============================================================================
+// 2026-10-02：后端补完主动 Close 帧后的关闭码分流
+//
+// 后端 ws_hub 从「零发送 Close 帧（所有断开都是裸 drop，浏览器只见 1006）」改成
+// 主动发 Close 帧，带上语义关闭码（关闭码表见后端 docs/api/websocket.md）：
+//   1001 写失败 / 1011 内部错误·Pong 超时 / 1012 服务重启 / 4003 慢消费方
+//     → 瞬时或可自愈，**必须继续无限重试**（WS 是 dashboard 唯一更新通道）；
+//   4001 会话在连接期间失效
+//     → 唯一终止性关闭码。再重试多少次都是 401，属于死路。
+//
+// 没有这个分流时 4001 会退化成「无限重试 → 每次握手又被判 401 → 控制台刷屏」，
+// 即 2026-10-01 刚修掉的 logout 死循环 bug 的另一面。
+// ============================================================================
+
+describe('dashboard WS：关闭码 4001（会话失效）停止重连', () => {
+  beforeEach(() => {
+    // 同样只 fake 定时器：VueUse 的 watch(urlRef, open) 走 Vue scheduler（微任务），
+    // 不会被 fake；重连的 setTimeout 链则完全被 fake 住，才能断言「60s 内不建连」。
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  /** 冲刷 Vue 微任务队列（`Promise.then` 链），让 watch(urlRef, open) 真正跑一遍。 */
+  async function flushMicrotasks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('close 4001 → 不再产生新 WebSocket 实例（停止重连，进 60s 也不连）', async () => {
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // 后端主动 Close 帧：会话在连接期间失效（注意不带 error 事件，真实浏览器行为）
+    socket.closeWith({ code: 4001, reason: 'session invalid' });
+
+    // 停重连的关键时序：VueUse 在 onDisconnected 返回后才 setTimeout(_init, 1s)，
+    // 本次写入 undefined 触发的 watch → open() → close() → resetRetry() 要先把
+    // 那个定时器掐掉，所以要冲一次微任务。
+    await flushMicrotasks();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // 退避封顶只有 10s，这里推进 60s：若哨兵失效，1s/2s/4s/8s/10s 各建一个新实例。
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it('close 1006 → 仍按退避重连（防回归：别把正常网络抖动也停掉）', async () => {
+    // 1006 是「原因未知的异常关闭」兜底码（没收到任何 Close 帧），后端故障 / 代理
+    // 掐断 / 休眠唤醒都会落到它。它必须继续无限重试，否则 dashboard 静默停止刷新。
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.closeWith({ code: 1006 });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // 第 1 次重试退避 1s
+    vi.advanceTimersByTime(999);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    // 继续第 2 次（2s）——证明是「一直重连」而不是「碰巧连了一次」
+    FakeWebSocket.instances[1]!.closeWith({ code: 1006 });
+    vi.advanceTimersByTime(2_000);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+  });
+
+  it('close 4001 → 派发 auth:session-lost（供 app 层跑 refreshOrLogout 走登出）', async () => {
+    const lost = vi.fn();
+    // 经文件级 addEventListener spy 记账 → afterEach 统一 removeEventListener。
+    window.addEventListener('auth:session-lost', lost);
+
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.closeWith({ code: 4001, reason: 'session invalid' });
+
+    expect(lost).toHaveBeenCalledTimes(1);
+    const detail = (lost.mock.calls[0]?.[0] as CustomEvent<{ code: number; reason: string | null }>)
+      .detail;
+    expect(detail).toEqual({ code: 4001, reason: 'session invalid' });
+
+    // 同时清掉 localStorage 会话：后端已判定失效，本地留着只会让下一次握手继续 401。
+    const removeItem = localStorage.removeItem as unknown as ReturnType<typeof vi.fn>;
+    expect(removeItem).toHaveBeenCalledWith('auth_session');
   });
 });

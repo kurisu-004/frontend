@@ -386,6 +386,48 @@ const routes: RouteRecordRaw[] = [
 
 const router = createRouter({ history: createWebHistory(), routes });
 
+// 2026-10-02 新增：接 dashboard WS 的「会话已死」通知。
+// api/dashboard.ts 收到后端关闭码 4001（会话在连接期间失效）时会派发
+// window 事件 'auth:session-lost'，并已自行清掉 localStorage 会话 + 停掉重连。
+// 本层只做 app 层该做的事：跑一次 refreshOrLogout 复核 HTTP 会话，失败即跳 /login。
+//
+// 为什么接收方选 router 模块而不是 MainLayout.vue：
+//   ① 全局一次性注册。MainLayout 是组件（且挂在 requireAuth 子树下），
+//      /scan/* /delivery-dispatch/* 这些 MainLayout 之外的全屏路由收不到；
+//   ② router 模块已持有 router 实例 + 已 import useAuthStore，本处零新增依赖；
+//   ③ store 仍不 import vue-router —— refreshOrLogout(router) 按参数注入（不变式）。
+//
+// 与 'auth:session-changed' 的区别（别混淆）：后者由 auth 层派发、语义是
+// 「token 变了，WS 该重算 URL 重连」；本事件由 WS 层派发、语义是「后端已判定会话
+// 失效，请上层终止会话」，方向相反。二者互不覆盖。
+let sessionLostChecking = false;
+if (typeof window !== 'undefined') {
+  window.addEventListener('auth:session-lost', () => {
+    // 防重入：模块里可能有多个 WS 连接同时收到 4001（首连 + 重连在飞），
+    // 一次只跑一个复核，避免并发放 /iam/me。
+    if (sessionLostChecking) return;
+    sessionLostChecking = true;
+    const auth = useAuthStore();
+    void auth
+      .refreshOrLogout(router)
+      .catch(() => false)
+      .then((stillValid) => {
+        sessionLostChecking = false;
+        if (stillValid) {
+          // 边界情况：WS 侧会话被后端回收，但 HTTP 侧 /iam/me 仍有效（TTL 不同步）。
+          // 不跳登录页（用户没做任何错事），但 dashboard WS 已按 4001 停重连，
+          // 要等下一次 auth:session-changed（重新登录）才恢复实时更新 —— 明确告知，
+          // 免得表现为「页面不刷新也看不出原因」。
+          console.warn(
+            '[auth] dashboard WS 收到关闭码 4001，但 /iam/me 仍有效：留在当前页面，dashboard 实时更新已停止',
+          );
+        }
+        // stillValid === false 时 refreshOrLogout 内部已完成：清 session + 派发
+        // auth:session-changed(token=null) + router.replace('/login')，无需额外动作。
+      });
+  });
+}
+
 /** DFS 在用户的菜单树中查找指定 code。 */
 function treeContainsCode(tree: MenuNode[], code: string): boolean {
   const stack: MenuNode[] = [...tree];
