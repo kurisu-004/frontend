@@ -293,7 +293,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
   8. **mutation 范本**
      - 不写 `retry`（信任 `src/main.ts` 全局 `mutations.retry: 0`）。
      - `mutationKey: ['<域>', '<action>']` 三层数组。
-     - 写 mutation 的 `onSuccess` 应失效对应域（`invalidateQueries({ queryKey: qk.<域>Prefix })` 或精确）——「写完立即看到自己那笔」的优化，非一致性保证（见「缓存时长策略」条目）；行内编辑类 mutation `onSuccess` 仍可走就地回填（`Object.assign(row, ...)`）不整表刷新，仅乐观锁冲突（`code === 40901` `BIZ_VERSION_CONFLICT`）走 `invalidateQueries`——见 `usePartInlineEdit.ts:178-208`。
+     - 写 mutation 的 `onSuccess` 应失效对应域（`invalidateQueries({ queryKey: qk.<域>Prefix })` 或精确）——「写完立即看到自己那笔」的优化，非一致性保证（见「缓存时长策略」条目）；行内编辑类 mutation `onSuccess` 仍可走就地回填（`Object.assign(row, ...)`）不整表刷新，仅乐观锁冲突（`code === 40901` `BIZ_VERSION_CONFLICT`）走 `invalidateQueries`——见 `usePartInlineEdit.ts:211-277`（行号 2026-10-02 重新核过：doc 注释起于 211、`Object.assign(row, …)` 在 250、`qc.invalidateQueries` 在 277）。
 
        ```ts
        const createMutation = useMutation({
@@ -309,7 +309,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
      - 范本：`src/stores/auth.ts:234`（login mutation，单纯 onSuccess 不挂 invalidate；行号随 M-4 改动位移过，2026-10-02 重新核过）、`src/views/parts/new/composables/usePartBatchManual.ts:892`（批量录入 mutation，部分失败 / 成功跳转 / ElMessage 放 onSuccess / onError）。
   9. **ElMessage 错误桥接**
-     - useQuery 的 error 不在 setup 抛错，走 `watch(error, (e) => e && ElMessage.error(...))` 桥接（替代原 `fetchList catch` 内 ElMessage 路径，`usePartsListQuery.ts:334-336`）。
+     - useQuery 的 error 不在 setup 抛错，走 `watch(error, (e) => e && ElMessage.error(...))` 桥接（替代原 `fetchList catch` 内 ElMessage 路径，`usePartsListQuery.ts:348-352`，行号 2026-10-02 重新核过：`watch(errorMsg, …)` 起于 351、`ElMessage.error` 在 352）。
      - 测试环境用 `vi.mock('element-plus', () => ({ ElMessage: { ...vi.fn() } }))` 桩成 no-op，避免 vitest node env `ElMessage` 内部 `normalizeAppendTo` 触发 `ReferenceError: document is not defined` 污染输出。
 - **TanStack Query 缓存时长策略（2026-09-30 起）**：TanStack Query 在本仓的定位降级为「**短时请求去重层**」，**不承担数据新鲜度保证**。这一条与上条「TanStack Query 数据获取架构」的关系：架构条目里的 queryKey 工厂 / Zod 守门 / reactive params / enabled 闸门 / fetchList 别名 / mutation 范本 / ElMessage 桥接全部继续有效，**只有**缓存时长与「失效保证一致性」这一假设被本条取代。
    - **共享基础数据层**（`src/composables/queries/`）一律用**有限的** `staleTime` / `gcTime`，**不再用 `POSITIVE_INFINITY`**。当前统一取值 `staleTime: 30_000`（30s 短时去重窗口）/ `gcTime: 5 * 60 * 1000`（空闲缓存保留，必须 `>= staleTime`）：30s 内切 tab / 切日期 / 反复进详情命中缓存不重发；超 30s 的访问自动 refetch。覆盖 `useCustomersQuery` / `useProcessesQuery` / `usePendingBatchesQuery` / `useWorkerPoolCountsQuery` / `useWorkerPoolByProcessQuery` / `useWorkerStateByWorkerQuery`。
