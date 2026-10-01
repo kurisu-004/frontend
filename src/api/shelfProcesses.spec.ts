@@ -47,8 +47,8 @@
 // import 的就这两个）。
 // 2026-10-02 review M-4 订正注释：原注释称「不桩 http.ts 原件是因为它在模块求值期
 // 就 axios.create + 读 localStorage，vitest node 环境没有 localStorage」——**该
-// 理由不成立**：`axios.create`（http.ts:178）在 node 下无害，localStorage 读取全在
-// 拦截器回调内（http.ts:240/251/273/281），仓内 `src/api/http.spec.ts` 直接
+// 理由不成立**：`axios.create`（http.ts:181）在 node 下无害，localStorage 读取全在
+// 拦截器回调内（http.ts:243/254/276/284），仓内 `src/api/http.spec.ts` 直接
 // `import { serializeParams... } from './http'` 且全绿。真实理由是别的：整模块桩掉
 // 才能对「URL + body」逐字断言（走原件要 mock adapter/拦截器，噪声大且脆弱），
 // 且能顺带证明本文件完全不依赖 http.ts 的任何内部实现。
