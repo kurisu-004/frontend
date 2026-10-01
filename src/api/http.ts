@@ -16,6 +16,9 @@
 //    /api/v2/iam/refresh 用，避免响应拦截器里的 40102 → refresh 链路递归触发。
 //    失败兜底：refresh 失败 → dispatchEvent('auth:logout')，由 main.ts 监听后
 //    router.replace('/login')。session 失效的统一入口。
+//    2026-10-02 补注：`auth:logout` 有**两个**订阅方、职责不同 —— main.ts 只做
+//    导航，stores/auth.ts 清会话状态 + queryClient.clear()。本文件是**派发方**，
+//    详见 CLAUDE.md「`auth:logout` 是订阅点不是派发点」条目。
 //
 // 5) 【2026-09-15 新增】`apiPrint`（baseURL `/api/v1`）：v1 Python FastAPI 上 4 个
 //    打印端点的专用客户端，**与业务 `api` 共享同一组拦截器**——token / refresh / 信封
@@ -447,6 +450,8 @@ function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
       return await client.request(retryCfg);
     } catch (refreshErr) {
       // refresh 失败：触发全局登出事件，main.ts 监听后 router.replace('/login')
+      // 2026-10-02 补注：另有第二个订阅方 stores/auth.ts（清会话状态 + queryClient.clear()），
+      // 详见 CLAUDE.md「`auth:logout` 是订阅点不是派发点」条目。
       window.dispatchEvent(new CustomEvent('auth:logout'));
       throw refreshErr;
     }

@@ -1,9 +1,13 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import type { MenuNode } from '@/types/menu';
 // 2026-09-26：迁移到 Pinia store useAuthStore（src/stores/auth.ts）。原 composable
-// 模块级单例换 store 顶层 import —— store 不 import router（refreshOrLogout 通过
-// 参数接收 router），无循环依赖。useAuthStore() 在 router 守卫里调一次拿当前
-// session state（标量自动解包，函数式 getter 保留调用形态）。
+// 模块级单例换 store 顶层 import —— store 不 import router（refreshOrLogout 与
+// forceLogout 都通过参数接收 router），无循环依赖。useAuthStore() 在 router 守卫里
+// 调一次拿当前 session state（标量自动解包，函数式 getter 保留调用形态）。
+// 2026-10-02（M-4）：两条终止路径的分工是「auth.teardownSession() 纯收口（无 router）
+// + forceLogout(router) 在其之上追加导航」；本模块调 forceLogout(router) 的两处
+// （'auth:session-lost' listener、全局前置守卫的 refreshOrLogout 失败分支）都依赖
+// 它顺带完成导航。
 import { useAuthStore } from '@/stores/auth';
 
 declare module 'vue-router' {
@@ -458,7 +462,17 @@ router.beforeEach(async (to, _from, next) => {
   } else if (to.meta.requireAuth || to.matched.some((r) => r.meta.requireAuth)) {
     if (!auth.isAuthenticated) {
       const ok = await auth.refreshOrLogout(router);
-      if (!ok) return;
+      // 2026-10-02 修缺陷 A：此处原来只写 `if (!ok) return;`，**从不调 next()**。
+      // 本守卫是 3 参签名 `(to, _from, next)`，vue-router 的 guardToPromiseFn 只在
+      // `guard.length < 3` 时自动续 next（node_modules/vue-router/dist/
+      // devtools-EWN81iOl.mjs:757），dev 分支还会对「promise 已 resolve 但 next 没被
+      // 调用」直接 `Promise.reject(new Error("Invalid navigation guard"))`（同文件
+      // :763/:770）⇒ 表现是 prod 导航永久挂起、dev 抛错。
+      // 必须是 `next(false)` 而不是 `next('/login')`：`refreshOrLogout` 的失败分支
+      // 已委托 `forceLogout(router)`，导航**已在 store 内**用 router.replace('/login')
+      // 完成；这里再导航一次会与 replace 打架（且守卫返回值语义与 next 语义不可混用，
+      // 故本守卫全程保持 3 参 + next 形态）。
+      if (!ok) return next(false);
     }
   }
 

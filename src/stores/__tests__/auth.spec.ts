@@ -3,21 +3,28 @@
 // 2026-09-26 新增：useAuthStore (Pinia setup store) 单测。
 //
 // 覆盖（按 PLAN.md §6.1）：
-//   - initDummyAuth 注入（VITE_DUMMY_AUTH=true / 未设 / 'false'）
-//   - loadFromStorage 自执行恢复（localStorage 有 session → state 填好）
+//   - initDummyAuth 注入（VITE_DUMMY_AUTH=true / 未设 / 'false'）+ 缺陷 C 复位护栏
+//   - loadFromStorage 自执行恢复（localStorage 有 session → state 填好 + tagsView hydrate）
 //   - login 成功写 state + saveToStorage
 //   - login 失败（40101 ApiError）通过 loginMutation.error 暴露
 //   - logout 清 state + localStorage
+//   - forceLogout 4 条既有用例（757c024 引入，本次签名不变、全部保留）
 //   - refreshOrLogout 成功 / 失败两条路径
-//   - auth:tokens-refreshed CustomEvent 同步 state
+//   - auth:tokens-refreshed CustomEvent 同步 state + switchOwner 同 owner 早退护栏
+//   - 2026-10-02（M-4）：4 条会话终止路径都清 TanStack Query 内存缓存（含
+//     gcTime 永不过期的 query、跨账号闭环、tagsView per-user 隔离）
 //
-// 测试基础设施：每个用例前重置 Pinia + 注册 VueQueryPlugin（mutation 需要
-// QueryClient，否则 useMutation 会抛 "No QueryClient set"）。
+// 测试基础设施：每个用例前重置 Pinia + 注册 VueQueryPlugin。**两个原因**：
+//   1. 2026-09-26：mutation 需要 QueryClient，否则 useMutation 抛 "No QueryClient set"；
+//   2. 2026-10-02（M-4）：store setup 顶部调 useQueryClient()，且它**只在 store 首次
+//      创建时**执行（后续 useAuthStore() 命中 pinia._s 缓存直接返回）⇒ 每个用例必须
+//      重建 pinia + plugin，漏了会在首次 useAuthStore() 处抛
+//      "vue-query hooks can only be used inside setup()..."。
 // 用 vi.stubEnv / vi.unstubAllEnvs 切 VITE_DUMMY_AUTH。
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp } from 'vue';
+import { createApp, nextTick } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
@@ -34,6 +41,9 @@ import type { CurrentUser } from '@/types/user';
 import { useAuthStore } from '../auth';
 import { useTagsViewStore } from '../tagsView';
 import { ADMIN_MENUS } from '@/composables/__fixtures__/adminMenus';
+
+/** 2026-10-02：提成具名变量供「会话终止后 query 缓存为空」的断言用。 */
+let testQueryClient: QueryClient;
 
 function makeUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
   return {
@@ -53,12 +63,11 @@ describe('useAuthStore', () => {
     localStorage.clear();
     vi.unstubAllEnvs();
     // 2026-09-26：每个用例重建 Pinia + VueQueryPlugin。useMutation 需要 QueryClient
-    // 否则会抛 "No QueryClient set"。
+    // 否则会抛 "No QueryClient set"；2026-10-02 起 setup 顶部的 useQueryClient() 也需要它。
     const app = createApp({});
     app.use(createPinia());
-    app.use(VueQueryPlugin, {
-      queryClient: new QueryClient({ defaultOptions: { mutations: { retry: 0 } } }),
-    });
+    testQueryClient = new QueryClient({ defaultOptions: { mutations: { retry: 0 } } });
+    app.use(VueQueryPlugin, { queryClient: testQueryClient });
     setActivePinia(app.config.globalProperties.$pinia);
     vi.mocked(apiLogin).mockReset();
     vi.mocked(apiLogout).mockReset();
@@ -99,6 +108,35 @@ describe('useAuthStore', () => {
       expect(auth.token).toBeNull();
       expect(auth.user).toBeNull();
     });
+
+    // 2026-10-02（缺陷 B）：loadFromStorage → setUser → tagsView.switchOwner(u.id) 是
+    // 「同账号重登恢复标签栏」能生效的时序前提：hydrate 必须发生在 setup 末尾的
+    // loadFromStorage 链路里，而不是等某个后续事件。
+    it("restores tagsView from the restored user's own key (myerp.tags_view.<id>)", () => {
+      localStorage.setItem(
+        'myerp.tags_view.u1',
+        JSON.stringify({
+          visitedViews: [
+            {
+              path: '/parts',
+              fullPath: '/parts?status=active',
+              name: 'PartsList',
+              title: '零件一览',
+            },
+          ],
+          cachedViewNames: ['PartsList'],
+        }),
+      );
+      localStorage.setItem(
+        'auth_session',
+        JSON.stringify({ token: 'stored-tok', refresh_token: 'r', user: makeUser({ id: 'u1' }) }),
+      );
+      useAuthStore();
+      const tags = useTagsViewStore();
+      expect(tags.visitedViews).toHaveLength(1);
+      expect(tags.visitedViews[0].path).toBe('/parts');
+      expect(tags.cachedViewNames).toEqual(['PartsList']);
+    });
   });
 
   // ===== initDummyAuth =====
@@ -136,6 +174,32 @@ describe('useAuthStore', () => {
       auth.initDummyAuth();
       expect(auth.isAuthenticated).toBe(false);
       expect(auth.isDummyAuthActive).toBe(false);
+      infoSpy.mockRestore();
+    });
+
+    // 2026-10-02（缺陷 C）「isDummyAuthActiveValue 永不复位」的回归护栏。此前该 ref
+    // 只在 initDummyAuth() 置 true、从无复位点 ⇒ dev dummy 模式登出后路由守卫仍走
+    // dummy 短路，等于永远登不出「开发模式」。M-4 已在 teardownSession() 里补上
+    // `isDummyAuthActiveValue.value = false`，但那行此前没有任何 spec 断言 ——
+    // 将来有人删掉，本 spec 仍全绿。
+    //
+    // 走真实路径：只 stub VITE_DUMMY_AUTH 一个变量就让 isDummyAuthRequested() 返回 true
+    // （见本 describe 上面第一条既有用例：它同样只 stub 这一个变量就注入成功 ⇒ 测试
+    // 环境下 import.meta.env.DEV 为 true，DEV 那一半条件天然满足，无需额外 stub）。
+    it('logout 后 isDummyAuthActive 翻回 false（缺陷 C 回归护栏）', async () => {
+      vi.stubEnv('VITE_DUMMY_AUTH', 'true');
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+      const auth = useAuthStore();
+      auth.initDummyAuth();
+      expect(auth.isDummyAuthActive).toBe(true);
+      expect(auth.token).toBe('dummy-dev-token');
+
+      vi.mocked(apiLogout).mockResolvedValue(undefined);
+      await auth.logout();
+
+      expect(auth.isDummyAuthActive).toBe(false);
+      expect(auth.token).toBeNull();
+      expect(auth.user).toBeNull();
       infoSpy.mockRestore();
     });
   });
@@ -321,8 +385,157 @@ describe('useAuthStore', () => {
     });
   });
 
+  // ===== 2026-10-02（M-4）：会话终止清理 query 缓存 =====
+  describe('会话终止清理 query 缓存（M-4）', () => {
+    /** 往 query 缓存塞一条数据（无 observer → inactive，gcTime 生效）。 */
+    function seedQuery(key: string, gcTime?: number): void {
+      const queryKey = ['seed', key];
+      testQueryClient.setQueryData(queryKey, { key, items: ['a'] });
+      if (gcTime !== undefined) {
+        testQueryClient.getQueryCache().find({ queryKey })!.setOptions({ gcTime });
+      }
+    }
+
+    function queryCount(): number {
+      return testQueryClient.getQueryCache().getAll().length;
+    }
+
+    /** 登录一个账号并返回 store（顺带保证 token/user 就位）。 */
+    async function loginAs(
+      user: CurrentUser,
+      token = 't',
+    ): Promise<ReturnType<typeof useAuthStore>> {
+      vi.mocked(apiLogin).mockResolvedValue({ token, refresh_token: 'r', user });
+      const auth = useAuthStore();
+      await auth.loginMutation.mutateAsync({ username: user.username, password: 'b' });
+      return auth;
+    }
+
+    it('logout() 清空内存 query 缓存', async () => {
+      const auth = await loginAs(makeUser());
+      seedQuery('customers');
+      expect(queryCount()).toBe(1);
+
+      vi.mocked(apiLogout).mockResolvedValue(undefined);
+      await auth.logout();
+
+      expect(queryCount()).toBe(0);
+      expect(auth.isAuthenticated).toBe(false);
+    });
+
+    it('auth:logout 事件（40105 / refresh 失败路径）同样清缓存并终止认证态', async () => {
+      const auth = await loginAs(makeUser());
+      seedQuery('workers');
+      expect(auth.isAuthenticated).toBe(true);
+
+      // http.ts:428 / :455 的 dispatch（无 detail）
+      window.dispatchEvent(new CustomEvent('auth:logout'));
+
+      expect(queryCount()).toBe(0);
+      // 守第 4 条路径：会话状态也必须被清（此前只有 src/main.ts 跳登录页，
+      // isAuthenticated 仍为 true → 路由守卫继续放行 requireAuth 路由）
+      expect(auth.isAuthenticated).toBe(false);
+      expect(auth.user).toBeNull();
+      expect(localStorage.getItem('auth_session')).toBeNull();
+    });
+
+    it('forceLogout(router) 清空内存 query 缓存（757c024 新增的第 4 条终止路径）', async () => {
+      const auth = await loginAs(makeUser());
+      seedQuery('parts');
+      expect(queryCount()).toBe(1);
+
+      auth.forceLogout({ replace: vi.fn() });
+
+      expect(queryCount()).toBe(0);
+      expect(auth.isAuthenticated).toBe(false);
+    });
+
+    it('refreshOrLogout 失败后：缓存清空 + token/user 置空 + auth_session 已删', async () => {
+      localStorage.setItem(
+        'auth_session',
+        JSON.stringify({ token: 'old', refresh_token: 'r', user: makeUser() }),
+      );
+      const auth = useAuthStore();
+      seedQuery('shelf-processes');
+      vi.mocked(apiMe).mockRejectedValue(new ApiError(40102, 'expired'));
+
+      const ok = await auth.refreshOrLogout({ replace: vi.fn() });
+
+      expect(ok).toBe(false);
+      expect(queryCount()).toBe(0);
+      expect(auth.token).toBeNull();
+      expect(auth.user).toBeNull();
+      expect(localStorage.getItem('auth_session')).toBeNull();
+    });
+
+    it('gcTime: POSITIVE_INFINITY 的 query（dashboard 系）也被 clear 兜底清掉', async () => {
+      const auth = await loginAs(makeUser());
+      seedQuery('dashboard-snapshot', Number.POSITIVE_INFINITY);
+      expect(queryCount()).toBe(1);
+
+      vi.mocked(apiLogout).mockResolvedValue(undefined);
+      await auth.logout();
+
+      // 正常 GC 策略下这条永远不会被淘汰，只能靠会话终止时的 clear()
+      expect(queryCount()).toBe(0);
+    });
+
+    it('换账号闭环：logout → 换账号登录后不残留上一账号缓存（不产生新请求）', async () => {
+      const auth = await loginAs(makeUser({ id: 'A', username: 'alice' }));
+      // 模拟账号 A 打开货架页：按 can_access_shelf 收窄的映射数据进 query 缓存
+      testQueryClient.setQueryData(['shelf-process-mappings'], {
+        items: [{ shelf_id: 's1', process_ids: [1, 2] }],
+        total: 1,
+      });
+      expect(queryCount()).toBe(1);
+
+      vi.mocked(apiLogout).mockResolvedValue(undefined);
+      await auth.logout();
+      expect(queryCount()).toBe(0);
+
+      // 换账号 B 登录（不刷新页面）
+      await loginAs(
+        makeUser({
+          id: 'B',
+          username: 'bob',
+          roles: ['SHELF_ACCOUNT'],
+          shelf_ids: ['s2'],
+        }),
+        't2',
+      );
+      expect(auth.user?.id).toBe('B');
+
+      // 关键断言：新账号看到的货架↔工序映射缓存已被清空。真正证明「不发生缓存复用」
+      // 的就是这一条 —— clear() 之后任何读点都必须重新取数，不可能从内存缓存里直接
+      // 拿到账号 A 的那份。全仓 queryKey 均无 user 维度（src/composables/queries/keys.ts），
+      // 所以「按 key 前缀失效」救不了，只能全清。
+      expect(testQueryClient.getQueryData(['shelf-process-mappings'])).toBeUndefined();
+      expect(queryCount()).toBe(0);
+    });
+
+    it('B 隔离：登出清内存但不写盘 —— 账号 A 的标签栏存档仍在自己的 key 里', async () => {
+      const auth = await loginAs(makeUser({ id: 'A' }));
+      const tags = useTagsViewStore();
+      tags.addView({ path: '/parts', fullPath: '/parts', name: 'PartsList', title: '零件一览' });
+      // 等一 tick 让 store 内部 watch 落盘
+      await nextTick();
+      await new Promise<void>((r) => setTimeout(r, 0));
+      expect(localStorage.getItem('myerp.tags_view.A')).not.toBeNull();
+
+      vi.mocked(apiLogout).mockResolvedValue(undefined);
+      await auth.logout();
+
+      // 内存清空（不串号）……
+      expect(tags.visitedViews).toHaveLength(0);
+      // ……但存档不丢：同账号下次登录还能恢复
+      expect(localStorage.getItem('myerp.tags_view.A')).not.toBeNull();
+      const persisted = JSON.parse(localStorage.getItem('myerp.tags_view.A') || '{}');
+      expect(persisted.visitedViews).toHaveLength(1);
+    });
+  });
+
   // ===== CustomEvent auth:tokens-refreshed =====
-  describe("auth:tokens-refreshed CustomEvent (http.ts interceptor)", () => {
+  describe('auth:tokens-refreshed CustomEvent (http.ts interceptor)', () => {
     it('syncs state when interceptor dispatches refreshed tokens', () => {
       const auth = useAuthStore();
       window.dispatchEvent(
@@ -345,6 +558,36 @@ describe('useAuthStore', () => {
       }).not.toThrow();
       // state 不变
       expect(auth.token).toBeNull();
+    });
+
+    // 2026-10-02（缺陷 B 回归护栏）：tagsView `switchOwner` 的「同 owner 早退」是
+    // 「token 刷新不丢标签栏」的唯一保证 —— auth:tokens-refreshed 走 setUser(user) →
+    // switchOwner(同 id) 早退（不清内存、不重新 hydrate），否则每刷新一次 token 都会把
+    // 内存标签栏清成空再从 localStorage 重填（表现为用户可见的标签栏闪空）。
+    // 该早退此前无 spec 断言，删掉 switchOwner 首行 `if (userId === ownerId) return`
+    // 仍然全绿。
+    it('同 user 的 token 刷新不清空 tagsView（switchOwner 同 owner 早退）', () => {
+      const auth = useAuthStore();
+      const tags = useTagsViewStore();
+      tags.switchOwner('u1');
+      tags.addView({
+        path: '/parts',
+        fullPath: '/parts?status=active',
+        name: 'Parts',
+        title: '零件',
+      });
+      expect(tags.visitedViews.map((v) => v.path)).toEqual(['/parts']);
+
+      // 同 user（makeUser() 默认 id = 'u1'）的 token 刷新事件
+      window.dispatchEvent(
+        new CustomEvent('auth:tokens-refreshed', {
+          detail: { token: 'tok-after-refresh', refresh_token: 'r', user: makeUser() },
+        }),
+      );
+
+      expect(auth.token).toBe('tok-after-refresh');
+      // 关键断言：标签栏没被 hydrate 成空
+      expect(tags.visitedViews.map((v) => v.path)).toEqual(['/parts']);
     });
   });
 

@@ -459,7 +459,12 @@ export async function fetchDashboardSnapshot(): Promise<DashboardSnapshotData> {
 // 派发方共 3 处，覆盖全部 token 生命周期：
 //   - api/http.ts    persistTokens()：access token 被刷新（原本就 dispatch）
 //   - stores/auth.ts loginMutation.onSuccess：登录成功写入新 token
-//   - stores/auth.ts logout()：登出，detail.token = null → WS 主动断开
+//   - stores/auth.ts teardownSession()：会话终止，detail.token = null → WS 主动断开
+//     （2026-10-02 订正：本行原写 logout()，是事实错误 —— M-4 已把派发语句从
+//      logout() 移进 teardownSession()，logout / forceLogout / refreshOrLogout
+//      失败分支 / auth:logout 事件共 4 条终止路径全部汇入该函数（全文件唯一一处
+//      detail: { token: null } 派发）。上方「3 处」计数不变：3 个派发点 ⇒ 1 条
+//      派发语句，与 CLAUDE.md「auth:session-changed」表一致。）
 // 沿用 CLAUDE.md 既定解耦：事件派发方不 import 本模块，本模块也不 import
 // stores/auth（避免 auth ↔ api 循环依赖）。
 // 仍然只保留 auth:tokens-refreshed 供 useAuthStore 同步自身 state —— 那是另一件事
