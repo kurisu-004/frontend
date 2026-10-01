@@ -562,7 +562,7 @@ watch(
   },
 );
 
-// ============ 共享 shelves/processes 缓存（release / failInsp / receive 共用）============
+// ============ 共享 prod/shelf-processes 缓存（release / failInsp / receive 共用）============
 const productionShelves = ref<Shelf[]>([]);
 const processes = ref<Process[]>([]);
 async function ensureShelvesProcesses(): Promise<void> {

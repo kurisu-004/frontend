@@ -42,7 +42,7 @@ export interface ShelfListResult {
 // 因此下面两个接口的类型**只声明后端真实存在的字段**，不再留 v1 影子。
 // ============================================================
 
-/** 单架已映射工序的一行（`GET /shelves/{id}/processes` 响应 item）。
+/** 单架已映射工序的一行（`GET /prod/shelf-processes/{shelf_id}` 响应 item）。
  *  对应后端 VO `ShelfProcessMappingItem`（backend-rust
  *  `src/modules/prod/shelf_process/vo.rs:17-26`）。
  *
@@ -58,18 +58,21 @@ export interface ShelfProcessMappingItem {
   sort_order: number;
 }
 
-/** 全集已映射工序的一行（`GET /shelves/processes` 响应 item）。
+/** 全集已映射工序的一行（`GET /prod/shelf-processes` 响应 item）。
  *  对应后端 VO `AllShelfProcessMappingItem`（同上文件 :36-45）—— 与单架 VO 的
  *  唯一差别就是**不返 sort_order**（全集排序由 service 层 ORDER BY 保证），
  *  故显式 Omit，而不是让单架 VO 的 sort_order 变可选。 */
 export type AllShelfProcessMappingItem = Omit<ShelfProcessMappingItem, 'sort_order'>;
 
-/** `GET /shelves/{id}/processes` 响应体。 */
+/** `GET /prod/shelf-processes/{shelf_id}` 响应体。
+ *  2026-10-02 域拆分：URL 硬切自 `/shelves/{id}/processes`（旧路径已 404），响应体不变。
+ */
 export interface ShelfProcessesResult {
   items: ShelfProcessMappingItem[];
 }
 
-/** `POST /shelves/{id}/processes` 请求体（整组替换；items 可为 [] = 清空映射）。
+/** `POST /prod/shelf-processes/{shelf_id}` 请求体（整组替换；items 可为 [] = 清空映射）。
+ *  2026-10-02 域拆分：URL 硬切自 `/shelves/{id}/processes`（旧写路径已 404），请求体不变。
  *  sort_order 语义沿 v1 契约「提交顺序即 sort_order」。 */
 export interface SetShelfProcessesPayload {
   items: Array<{ process_id: string; sort_order: number }>;

@@ -2,7 +2,7 @@
 //
 // 2026-10-02 新增：BUG-3 的直接回归守卫。
 //
-// 背景：`GET /shelves/processes`（全集）返回**扁平行**（一行一个 (货架, 工序) 对，
+// 背景：`GET /prod/shelf-processes`（全集）返回**扁平行**（一行一个 (货架, 工序) 对，
 // 同一 shelf_id 多行），而旧实现按 v1(Python) 的「一架子集一行」读
 // `item.process_ids` —— 该字段恒 undefined → `new Set(undefined)` = 空集 →
 // 同一 shelf 的多行互相覆盖成空集 → `loaded=true` 之后 filteredProcesses /

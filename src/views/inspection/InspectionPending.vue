@@ -1055,7 +1055,7 @@ async function openFailDialog(row: RowState): Promise<void> {
     productionShelves.value.length === 0 ? loadProductionShelves() : Promise.resolve(),
     processes.value.length === 0 ? loadProcesses() : Promise.resolve(),
   ]);
-  // shelves/processes 加载完后异步拉映射；映射未到位前 filteredXxx 走兜底全量
+  // prod/shelf-processes 加载完后异步拉映射；映射未到位前 filteredXxx 走兜底全量
   void loadShelfProcessMap();
 }
 

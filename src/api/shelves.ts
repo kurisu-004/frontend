@@ -1,4 +1,33 @@
 // 货架 API（走 @/api/http 统一 axios 客户端）。
+//
+// 2026-10-02 新增：货架↔工序映射 3 个端点已迁 prod 域，本文件的「为什么它们还在这」
+//
+//   后端把 `t_shelf_process` 从 `src/modules/shelf/process_mapping/` 搬到
+//   `src/modules/prod/shelf_process/`（新模块），3 个端点 URL **硬切**到
+//   `/api/v2/prod/shelf-processes/*`（**无 alias**，旧路由已从
+//   `src/modules/shelf/handler.rs` 彻底删除）：
+//     GET  /shelves/processes        → GET  /prod/shelf-processes
+//     GET  /shelves/{id}/processes   → GET  /prod/shelf-processes/{shelf_id}
+//     POST /shelves/{id}/processes   → POST /prod/shelf-processes/{shelf_id}
+//   请求 / 响应契约**逐字不变**（同 commit 的另一半 `ShelfOut.account_count` 摘除
+//   已在前一个 commit 落地），所以本次只改 URL 字符串前缀。
+//
+//   这 3 个函数（`getAllShelfProcessMappings` / `getShelfProcesses` /
+//   `setShelfProcesses`）**刻意留在本文件**、不新建 `api/prod/` 子目录：本仓
+//   `src/api/` 的组织约定是**按前端实体扁平放置**，不按后端模块分层。实证：
+//   `api/process.ts` → `/prod/processes`、`api/workType.ts` → `/prod/work-types`、
+//   `api/workerPool.ts` → `/prod/pool/*`、`api/pendingBatches.ts` →
+//   `/prod/batches/pending` —— prod 域端点全在扁平文件里；`src/api/` 下的子目录
+//   只有 `com/`（同仓后端 `com` 容器聚合域）、`files/`、`parts/`（part 域端点数
+//   多到需拆文件），**没有** `prod/`。
+//
+//   ⚠️ 旧路径现在的行为（改动理由，也是「不能留兼容层」的依据）：
+//     - `GET /shelves/processes` → **400，且响应体不是 `R` 信封**。它现在落到
+//       shelf 域的 `/{id}` 路由上，`processes` 解析不成 i64 被 axum 的
+//       `Path<i64>` 拒掉，返回纯文本 → 走 `@/api/http` 的统一信封错误解析会抛
+//       解析异常而不是给出可展示的业务码。
+//     - `GET|POST /shelves/{id}/processes` → **404**（写路径 404 = 保存功能全废）。
+//   两条都不能静默兼容：保留旧调用只会把「后端 404 / 400 裸文本」原样带到用户面前。
 
 import { api, cleanParams } from '@/api/http';
 import type {
@@ -60,10 +89,14 @@ export async function deactivateShelf(id: string): Promise<Shelf> {
  * 旧实现声明返回 `ShelfWithProcesses {..., processes: [...]}`，那是 v1(Python)
  * 形态 —— 后端 v2 实际返 `{items: [{shelf_id, shelf_code, process_id,
  * process_code, sort_order}]}`，消费侧 `sp.processes` 恒 undefined。
- * 对齐 backend-rust docs/api/shelves.md:216-240 + vo/process_mapping.rs。
+ * 对齐 backend-rust docs/api/production/shelf-process-mapping.md:74-97
+ * + src/modules/prod/shelf_process/{dto,vo}.rs。
+ *
+ * 2026-10-02 域拆分：URL 从 `/shelves/{id}/processes` 硬切到
+ * `/prod/shelf-processes/{shelf_id}`（旧路径 404），响应契约逐字不变。
  */
 export async function getShelfProcesses(id: string): Promise<ShelfProcessesResult> {
-  const resp = await api.get<ShelfProcessesResult>(`/shelves/${id}/processes`);
+  const resp = await api.get<ShelfProcessesResult>(`/prod/shelf-processes/${id}`);
   return resp.data;
 }
 
@@ -95,7 +128,8 @@ export function toShelfProcessesPayload(processIds: readonly string[]): SetShelf
 }
 
 /**
- * 2026-10-02 修：把 `GET /shelves/{id}/processes` 的响应还原成下拉多选 id 列表。
+ * 2026-10-02 修：把 `GET /prod/shelf-processes/{shelf_id}` 的响应还原成下拉多选
+ * id 列表。
  *
  * 抽成纯函数同 toShelfProcessesPayload 的动机：BUG-2 的本质是「调用方读错响应
  * 形态」（旧代码 `sp.processes.map(...)` —— 后端返 `{items:[...]}`，`processes`
@@ -121,12 +155,14 @@ export function toShelfProcessIds(result: ShelfProcessesResult): string[] {
  *   HTTP 422（用户 2026-10-02 报的就是这个；该功能自 v1 迁 v2 起从未成功过）。
  * - 响应：`data` 为 null（整组替换无回显），故返回 Promise<void>，不再谎称
  *   返回 ShelfWithProcesses。
+ * - 2026-10-02 域拆分：URL 从 `/shelves/{id}/processes` 硬切到
+ *   `/prod/shelf-processes/{shelf_id}`（旧写路径 404），请求体契约逐字不变。
  */
 export async function setShelfProcesses(
   id: string,
   payload: SetShelfProcessesPayload,
 ): Promise<void> {
-  await api.post(`/shelves/${id}/processes`, payload);
+  await api.post(`/prod/shelf-processes/${id}`, payload);
 }
 
 /**
@@ -134,7 +170,15 @@ export async function setShelfProcesses(
  * 后端 `GET /shelves/for-return?next_process_id=...`
  * 返回候选架列表（按 current_load ASC 排序）+ 系统推荐架 id。
  *
- * 错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS（没有 active 架映射该 process）
+ * 2026-10-02 订正错误码注释：原注释写「错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS
+ * （没有 active 架映射该 process）」，**这条已经错了**——后端同日从
+ * `list_for_return` 删掉了 `next_process_id` 的存在性校验（原返 20104 / 20801），
+ * 20506 从此不可能由本端点抛出。本端点现在对 `next_process_id` 任何取值都返 200，
+ * 唯一错误是 40300 FORBIDDEN（角色不在 Manager / Clerk / ShelfAccount /
+ * CncProgrammer 之内）。没有候选架时返 200 + `items: []`，不是错误。
+ * 「货架是否映射了该 process」的语义由 worker-scan 后端强校验
+ * （20507 BIZ_SHELF_PROCESS_NOT_MAPPED）承担，不再由本 picker 端点负责。
+ * 纯注释订正，零行为变化。
  */
 export async function listShelvesForReturn(nextProcessId: string): Promise<ShelfForReturnResult> {
   const resp = await api.get<ShelfForReturnResult>('/shelves/for-return', {
@@ -158,7 +202,8 @@ export async function listShelvesForInspection(): Promise<ShelfForReturnResult> 
 
 /**
  * 2026-07-17 新增：批量取所有 active 货架的工序映射。
- * 后端 `GET /shelves/processes`
+ * 后端 `GET /prod/shelf-processes`（2026-10-02 域拆分硬切，原
+ * `GET /shelves/processes` —— 旧路径现在是 400 裸文本非 `R` 信封，见文件头）
  *
  * 2026-10-02 订正：旧注释写的 `{items: [{shelf_id, process_ids}, ...]}`
  * （一架子集一个元素）是 **v1(Python) 形态**，v2 后端返的是**扁平行**——一行一个
@@ -171,12 +216,12 @@ export async function listShelvesForInspection(): Promise<ShelfForReturnResult> 
  * `item.process_ids`（恒 undefined ⇒ 空集 ⇒ 8 个页面的下拉被静默清空）。
  *
  * 给 `useShelfProcessFilter` composable 一次性消费，避免弹窗打开时
- * N+1 次 `GET /shelves/{id}/processes` 调用。
+ * N+1 次 `GET /prod/shelf-processes/{shelf_id}` 调用。
  */
 export interface ShelfProcessMappingsResult {
   items: AllShelfProcessMappingItem[];
 }
 export async function getAllShelfProcessMappings(): Promise<ShelfProcessMappingsResult> {
-  const resp = await api.get<ShelfProcessMappingsResult>('/shelves/processes');
+  const resp = await api.get<ShelfProcessMappingsResult>('/prod/shelf-processes');
   return resp.data;
 }

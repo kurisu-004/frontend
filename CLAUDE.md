@@ -6,6 +6,18 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 后端主仓已迁到 `~/Code/hsh-erp/backend-rust`（Rust + axum + sqlx）。所有后端契约一律维护在 `~/Code/hsh-erp/backend-rust/docs/api/`（按域切分：`auth.md` / `users.md` / `delivery-notes.md` / `delivery-groups.md` / `websocket.md` / `index.md` 通用约定）。需要查后端接口时直接 `Read` 对应文件，不要翻 `src/modules/*` 源码反推。
 
+**2026-10-02 域拆分：货架↔工序映射归 prod 域**。后端把 `t_shelf_process` 从 `src/modules/shelf/process_mapping/` 搬到 `src/modules/prod/shelf_process/`，3 个端点 URL **硬切、无 alias**（旧路由已从 `src/modules/shelf/handler.rs` 删除）：
+
+| 前端函数（`src/api/shelves.ts`） | 新路径 | 旧路径（已死） |
+|---|---|---|
+| `getShelfProcesses(id)` | `GET /api/v2/prod/shelf-processes/{shelf_id}` | `GET /api/v2/shelves/{id}/processes` → 404 |
+| `setShelfProcesses(id, payload)` | `POST /api/v2/prod/shelf-processes/{shelf_id}` | `POST /api/v2/shelves/{id}/processes` → 404 |
+| `getAllShelfProcessMappings()` | `GET /api/v2/prod/shelf-processes` | `GET /api/v2/shelves/processes` → **400 且响应体不是 `R` 信封**（落进 shelf 域 `/{id}` 路由，`processes` 解析不成 i64 被 axum `Path<i64>` 拒掉，返纯文本） |
+
+请求 / 响应契约**逐字不变**。**货架 CRUD 仍在 `/api/v2/shelves/*`**（未被搬动，`src/api/shelves.ts` 的 4 个 CRUD + 2 个 picker 端点不变）。契约文档：`~/Code/hsh-erp/backend-rust/docs/api/production/shelf-process-mapping.md`（含「前端配套改动清单」一节）；货架 CRUD 文档仍在 `~/Code/hsh-erp/backend-rust/docs/api/shelves.md`。
+
+> 3 个映射函数**刻意留在 `src/api/shelves.ts`**，不新建 `src/api/prod/` 子目录：本仓 `src/api/` 按**前端实体扁平放置**、不按后端模块分层（`api/process.ts` → `/prod/processes`、`api/workType.ts` → `/prod/work-types`、`api/workerPool.ts` → `/prod/pool/*`、`api/pendingBatches.ts` → `/prod/batches/pending` 全在扁平文件里；`src/api/` 下子目录只有 `com/` / `files/` / `parts/`，**没有** `prod/`）。`src/types/shelf.ts` 里 `ShelfProcessMappingItem` / `AllShelfProcessMappingItem` / `ShelfProcessesResult` / `SetShelfProcessesPayload` 同理留在原处（按货架实体归类）。
+
 ## 主题色
 
 藏青 `#1e4d8b` / 蓝 `#2c6cb8` / 浅蓝 `#4a8fd6`，覆盖在 `src/styles/variables.scss` 的 `:root` 块里。

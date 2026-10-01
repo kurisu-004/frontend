@@ -170,7 +170,7 @@ export function useOutsourceReceivingList(
     receiveProcess.value = '';
     receiveQuantity.value = row.quantity;
     receiveDialogVisible.value = true;
-    // 2026-07-17：弹窗打开后异步加载映射（仅在 shelves/processes 已就绪时有效）
+    // 2026-07-17：弹窗打开后异步加载映射（仅在 prod/shelf-processes 已就绪时有效）
     void loadReceiveMap();
   }
 

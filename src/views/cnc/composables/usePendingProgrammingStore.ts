@@ -369,7 +369,7 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     releaseShelfId.value = null;
     releaseProcessId.value = null;
     releaseDialogVisible.value = true;
-    // 拉全量「货架↔工序」映射（一次 GET /shelves/processes，避免 N+1）
+    // 拉全量「货架↔工序」映射（一次 GET /prod/shelf-processes，避免 N+1）
     void loadReleaseMap();
   }
 

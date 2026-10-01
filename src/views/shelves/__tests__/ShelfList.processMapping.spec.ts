@@ -5,8 +5,8 @@
 // 回归守卫 —— 「已映射工序加载失败后点保存，映射不得被清空」。
 //
 // 背景：ShelfList.vue 的编辑弹窗走
-//   点「编辑」→ GET /shelves/{id}/processes → 填 el-select multiple → 点「保存」
-//     → POST /shelves/{id}/processes（**整组替换**，items: [] 即清空）
+//   点「编辑」→ GET /prod/shelf-processes/{shelf_id} → 填 el-select multiple → 点「保存」
+//     → POST /prod/shelf-processes/{shelf_id}（**整组替换**，items: [] 即清空）
 // 而 `@closed="resetForm"`（ShelfList.vue:77）会在弹窗关闭时把 selectedProcessIds
 // 清成 []。于是「catch 里不覆盖 = 保持原状」在「加载失败后不关弹窗直接点保存」这条
 // 路径上等于「留空」⇒ setShelfProcesses(id, {items: []}) ⇒ 该货架全部工序映射被清空。
@@ -224,7 +224,7 @@ const SHELF: Shelf = {
   updated_at: '2026-09-30 11:00:00',
 };
 
-/** 后端 GET /shelves/{id}/processes 的真实响应形态（sort_order 必返）。 */
+/** 后端 GET /prod/shelf-processes/{shelf_id} 的真实响应形态（sort_order 必返）。 */
 const EXISTING = {
   items: [
     {

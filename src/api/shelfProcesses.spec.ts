@@ -10,8 +10,9 @@
 //   于是前端自测也绿。两个绿拼起来，功能却从未成功过一次。
 //   ⇒ 契约必须在前端侧被逐字钉死，不能靠后端自测 + 类型系统兜底。
 //
-// 覆盖（对齐 backend-rust docs/api/shelves.md:216-270 +
-//       src/modules/prod/shelf_process/{dto,vo}.rs —— 2026-10-02 后端域拆分后
+// 覆盖对齐 backend-rust docs/api/production/shelf-process-mapping.md（2026-10-02
+//       新建，本域从 docs/api/shelves.md 迁出）+ src/modules/prod/shelf_process/
+//       {dto,vo}.rs —— 2026-10-02 后端域拆分后
 //       映射的 DTO / VO 已整文件搬到 prod 子模块，文件路径随之变；DTO 在
 //       master 上仍可从 src/modules/shelf/dto.rs 找到）：
 //   - C0：toShelfProcessesPayload 把下拉多选 id 列表编成 `{items:[{process_id,
@@ -33,6 +34,9 @@
 //         `?? 0` 兜底后，稳定性改由 ES2019 规范保证的 sort 稳定性承担）。
 //   - C4：getAllShelfProcessMappings 的 item 是**扁平行**四字段
 //         （BUG-3 守卫：同一 shelf_id 多行，不是 v1 的「一架子集一行」）。
+//   - C5：prod 域拆分硬切后的 URL 回归守卫 —— 3 个映射端点的 URL 必须全部落在
+//         `/prod/shelf-processes*` 命名空间内，旧 `/shelves/*/processes` 路径一个
+//         都不许再出现（完整缘由见 C5 用例内注释）。
 //
 // mock 手法沿 dashboard.spec.ts 同款：整模块桩掉 `@/api/http`（不 importOriginal），
 // 只保留 `api.get` / `api.post` 两个可断言入口 + `cleanParams`（shelves.ts:3 实际
@@ -132,9 +136,9 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
     });
 
     expect(httpPostMock).toHaveBeenCalledTimes(1);
-    // 逐字断言整个调用元组：URL + body。URL 断言刻意锁死当前路径
-    // （硬切到 /api/v2/prod/shelf-processes 是后端域拆分子任务的事，本 PR 不动）。
-    expect(httpPostMock).toHaveBeenCalledWith('/shelves/207145107692978177/processes', {
+    // 逐字断言整个调用元组：URL + body。URL 断言刻意锁死当前路径，2026-10-02
+    // 随后端 prod 域拆分硬切成 /prod/shelf-processes/{shelf_id}（旧路径 404）。
+    expect(httpPostMock).toHaveBeenCalledWith('/prod/shelf-processes/207145107692978177', {
       items: [
         { process_id: '190000000000001', sort_order: 0 },
         { process_id: '190000000000002', sort_order: 1 },
@@ -153,7 +157,7 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
 
     await setShelfProcesses('8800000000001', { items: [] });
 
-    expect(httpPostMock).toHaveBeenCalledWith('/shelves/8800000000001/processes', { items: [] });
+    expect(httpPostMock).toHaveBeenCalledWith('/prod/shelf-processes/8800000000001', { items: [] });
   });
 
   it('C2：setShelfProcesses 返回 Promise<void>（后端 data 为 null，不返回对象）', async () => {
@@ -190,7 +194,7 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
 
     const sp = await getShelfProcesses('8800000000001');
 
-    expect(httpGetMock).toHaveBeenCalledWith('/shelves/8800000000001/processes');
+    expect(httpGetMock).toHaveBeenCalledWith('/prod/shelf-processes/8800000000001');
     // BUG-2 守卫：消费侧读 sp.items，不是 sp.processes。
     expect(sp.items).toHaveLength(2);
     expect(sp.items.map((p) => p.process_id)).toEqual(['190000000000001', '190000000000002']);
@@ -280,7 +284,7 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
 
     const r = await getAllShelfProcessMappings();
 
-    expect(httpGetMock).toHaveBeenCalledWith('/shelves/processes');
+    expect(httpGetMock).toHaveBeenCalledWith('/prod/shelf-processes');
     // BUG-3 守卫：item 上是 process_id 单值，不是 v1 的 process_ids 数组子集。
     expect(r.items).toHaveLength(3);
     expect(r.items[0]).not.toHaveProperty('process_ids');
@@ -290,5 +294,48 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
       process_id: '190000000000001',
       process_code: 'CUT',
     });
+  });
+
+  it('C5：3 个映射端点的 URL 全部落在 /prod/shelf-processes* 命名空间，旧路径已死', async () => {
+    // 2026-10-02 新增（后端 prod 域拆分硬切的回归守卫）。
+    //
+    // 缘由：后端把 `t_shelf_process` 搬到 `src/modules/prod/shelf_process/`，
+    // 3 个端点 URL **硬切**到 `/api/v2/prod/shelf-processes/*` 且**无 alias** ——
+    // 旧路由已从 `src/modules/shelf/handler.rs` 彻底删除。旧路径现在的行为：
+    //   - `GET /shelves/processes`      → 400，且响应体不是 `R` 信封
+    //     （落到 shelf 域 `/{id}` 路由，`processes` 解析不成 i64 被 axum
+    //     `Path<i64>` 拒掉，返回纯文本 → 前端统一信封错误解析会抛解析异常）
+    //   - `GET|POST /shelves/{id}/processes` → 404（写路径 404 = 保存功能全废）
+    // 两条都不会给出可展示的业务码，**没有静默降级的可能**。
+    //
+    // C1 / C1b / C3 / C4 各自已逐字钉死自己那条 URL，本用例是它们的**命名空间
+    // 兜底**：逐个收集本模块 3 个函数实际发出的 URL，断言
+    //   ① 每条都以 `/prod/shelf-processes` 开头（不容 second namespace 混进来）
+    //   ② 没有一条残留旧 `/shelves/` 前缀 —— 防止后人「顺手」把某个路径抄回去，
+    //      也防止将来新增映射端点时忘了跟随后端搬域。
+    // 不做成「遍历 shelves.ts 源码文本」的静态断言：那会绑死注释里的示例 URL，
+    // 反而制造改注释即红的噪声；行为级断言（mock 收到的实际 URL）才是契约本身。
+    httpGetMock.mockResolvedValue({ data: { items: [] } });
+    httpPostMock.mockResolvedValue({ data: null });
+
+    await getAllShelfProcessMappings();
+    await getShelfProcesses('8800000000001');
+    await setShelfProcesses('8800000000001', {
+      items: [{ process_id: '190000000000001', sort_order: 0 }],
+    });
+
+    const urls = [
+      ...httpGetMock.mock.calls.map((c) => c[0] as string),
+      ...httpPostMock.mock.calls.map((c) => c[0] as string),
+    ];
+    // 三个函数各发一次，不多不少。
+    expect(urls).toHaveLength(3);
+    for (const url of urls) {
+      expect(url.startsWith('/prod/shelf-processes')).toBe(true);
+      expect(url.startsWith('/shelves/')).toBe(false);
+      // 旧路径的两种形态逐字排除：全集 `/shelves/processes` 与单架
+      // `/shelves/{id}/processes`。
+      expect(url).not.toMatch(/^\/shelves\/(processes|.*\/processes)$/);
+    }
   });
 });

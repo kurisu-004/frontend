@@ -9,7 +9,8 @@
 //   )
 //   await load()   // 弹窗打开时调用一次
 //
-// 后端走 `GET /shelves/processes` 一次取所有 active 映射（避免 N+1）。
+// 后端走 `GET /prod/shelf-processes` 一次取所有 active 映射（避免 N+1；
+// 2026-10-02 域拆分硬切自 `/shelves/processes`，旧路径现在是 400 裸文本非 `R` 信封）。
 // watch 会自动在 shelfId / processId 变化时双向 refilter，
 // 并在选了不兼容的对端时清空对端 + ElMessage.warning 提示。
 //
@@ -47,7 +48,7 @@ export function useShelfProcessFilter<S extends Identifiable, P extends Identifi
     loading.value = true;
     try {
       const r = await getAllShelfProcessMappings();
-      // 2026-10-02 修 BUG-3：后端 GET /shelves/processes 返**扁平行**（一行一个
+      // 2026-10-02 修 BUG-3：后端 GET /prod/shelf-processes 返**扁平行**（一行一个
       // (货架, 工序) 对，同一 shelf_id 多行），不是 v1(Python) 的「一架子集一行」。
       // 旧实现 `m.set(item.shelf_id, new Set(item.process_ids))` 里 process_ids
       // 恒 undefined → new Set(undefined) 得空集 → 同一 shelf 的多行互相覆盖成
