@@ -37,7 +37,7 @@
             :label="`${p.serial_no ?? '—'} | ${p.drawing_no ?? ''} | ${p.name}`"
             :value="p.id"
           />
-          <!-- 2026-09-16 PR-2：label 尾部 shelf_code 随 PartListItem 瘦身删除（v2 从未提供） -->
+          <!-- 2026-10-03：shelf_code 现由 QuotablePart 正式提供，随 label 一起展示 -->
         </el-select>
       </el-form-item>
       <el-form-item label="工序" prop="process_id">
@@ -106,14 +106,14 @@
 import { useDialogSize } from '@/composables/useDialogSize';
 import type { FormInstance, FormRules } from 'element-plus';
 import type { CreateQuoteForm } from '../composables/useOutsourceQuoteForm';
-import type { PartListItem } from '@/types/parts';
+import type { QuotablePart } from '@/types/outsource';
 import type { Process } from '@/types/process';
 
 defineProps<{
   modelValue: boolean;
   form: CreateQuoteForm;
   rules: FormRules;
-  parts: readonly PartListItem[];
+  parts: readonly QuotablePart[];
   processes: readonly Process[];
   companies: readonly { id: string; name: string }[];
   companiesLoading: boolean;

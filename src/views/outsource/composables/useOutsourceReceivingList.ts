@@ -94,12 +94,15 @@ export function useOutsourceReceivingList(
   async function receivingFetcher(params: { page: number; pageSize: number }) {
     receivingError.value = null;
     try {
-      const items = await listOutsourceInFlight({
+      // 2026-10-03 修正：后端已从「裸数组」改为分页信封（outsource 域
+      // `OutsourceInFlightListOut`），此前把 {items,total,limit,offset} 当数组用
+      // → items.length undefined → 「待接收」tab 表格空白且分页恒 1 页。
+      const r = await listOutsourceInFlight({
         keyword: receivingFilter.keyword || undefined,
         limit: params.pageSize,
         offset: (params.page - 1) * params.pageSize,
       });
-      return { items, total: items.length };
+      return { items: r.items, total: r.total };
     } catch (e) {
       receivingError.value = (e as Error).message ?? '加载待接收列表失败';
       ElMessage.error(receivingError.value);

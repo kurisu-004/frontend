@@ -221,8 +221,6 @@ import {
   useOutsourceSendableList,
   type SendableItem,
 } from './composables/useOutsourceSendableList';
-import type { ApprovedQuoteForSendItem } from '@/types/outsource';
-import type { DirectOutsourceCandidateItem } from '@/types/directOutsource';
 
 const props = defineProps<{
   customers: readonly Customer[];
@@ -367,14 +365,11 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const r = row as SendableItem;
       if (r.send_mode === 'DIRECT') {
-        // 2026-08-27 T16：SendableItem 是 discriminated union，DirectOutsourceCandidateItem / ApprovedQuoteForSendItem
-        // 之间无字段重叠 → 走 unknown 二次 cast 满足 TS2352。
-        const direct = r as unknown as DirectOutsourceCandidateItem;
-        const directLabel = direct.company_options.map((c) => c.name).join(' / ') || '—';
-        return h('span', null, directLabel);
+        // DIRECT 行的公司名从 `company_options` 拼（APPROVAL 行为空数组，
+        // 走下面的 outsource_company_name 单值）。
+        return h('span', null, r.company_options.map((c) => c.name).join(' / ') || '—');
       }
-      const approved = r as unknown as ApprovedQuoteForSendItem;
-      return h('span', null, approved.outsource_company_name || '—');
+      return h('span', null, r.outsource_company_name || '—');
     },
   },
   {
@@ -385,8 +380,7 @@ const columnDefs: ColumnDef[] = [
     cellRender: ({ row }) => {
       const r = row as SendableItem;
       if (r.send_mode === 'DIRECT') return h('span', null, '—');
-      const approved = r as unknown as ApprovedQuoteForSendItem;
-      return h('span', null, String(approved.price));
+      return h('span', null, String(r.price));
     },
   },
 ];
