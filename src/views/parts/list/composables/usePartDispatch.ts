@@ -25,6 +25,12 @@
 // 相关 mutation、function、按钮展示条件。原单件 cnc 模式（dispatchMode='cnc'）与
 // 批量编程 action（batchDispatchAction='programming'）一并移除，批量 action 仅
 // 保留 'shelf'。CNC 编程主入口迁到「待编程一览」Tab 页。
+//
+// 2026-10-02 已知缺口（待后端补 `GET /parts` 列表项的活跃批次 id 后单独修）：
+// place-on-shelf / recall-to-pending 迁 prod 域后以**批次**为锚，而本页数据源是
+// `GET /parts` 列表项 —— 该 VO 不带活跃批次 id（`batch_id` 仅外协报价选件场景填充），
+// 页面无从构造端点锚点。此处不静默用 part_id 顶替（会打成「批次不存在」），
+// 而是直接抛错提示，让用户知道是数据缺口而不是随机失败。
 
 import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -43,6 +49,10 @@ import { usePermissions } from '@/composables/usePermissions';
 // 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
 import { useAuthStore } from '@/stores/auth';
 import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
+
+/** 2026-10-02：列表行缺活跃批次 id 时的统一提示（见文件头「已知缺口」）。 */
+const PLACE_ON_SHELF_NO_BATCH_HINT = '该零件的批次信息缺失，无法下发（列表接口未返回批次）';
+const RECALL_NO_BATCH_HINT = '该零件的批次信息缺失，无法召回（列表接口未返回批次）';
 import type { SelectedRowType } from './usePartBatchSelection';
 
 interface TableRef {
@@ -108,10 +118,9 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   //   - 与 usePartsColumnFilters 同源（同一 query key），保证下一次切换时拿到同一份缓存；
   //   - isFetching 通过 processesLoading 暴露（dialog loading / 占位用）。
   const procQuery = useProcessesQuery({ limit: 200 });
-  // 2026-09-30 review 第 1 轮清理：去掉原 `.map(p => ({ ...p, description: p.description ?? null, color: p.color ?? null }))`
-  // —— types/process.ts description / color 改为 `string | null | undefined`（对齐后端
-  // skip_serializing_if）后，processSchema (Zod) 派生字段是 optional，而 Process 业务类型
-  // 是 required，TS 结构子类型不匹配。沿 ProcessTab.vue:255 同模式走 `as Process[]` 桥接，
+  // description / color 对齐后端 skip_serializing_if 后是 `string | null | undefined`，
+  // processSchema (Zod) 派生字段是 optional，而 Process 业务类型是 required，TS 结构
+  // 子类型不匹配。沿 ProcessTab.vue 同模式走 `as Process[]` 桥接，
   // 渲染层（useShelfProcessFilter 等）已有 `?? null` / `?? '#ddd'` 等 nullish 兜底同时覆盖
   // null + undefined，零行为差异。
   const processes = computed<Process[]>(
@@ -139,6 +148,9 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   const dispatchShelfId = ref<string | null>(null);
   const dispatchNextProcessId = ref<string | null>(null);
   const dispatchPartId = ref<string | null>(null);
+  /** 2026-10-02：place-on-shelf 的批次锚点。零件一览行只有在外协报价选件场景才带
+   *  `batch_id`（`GET /parts` 列表项不含活跃批次 id），故此处可能为 null。 */
+  const dispatchBatchId = ref<string | null>(null);
   // 2026-07-17：useShelfProcessFilter 双向收窄货架/工序下拉
   const { filteredShelves, filteredProcesses } = useShelfProcessFilter(
     shelves,
@@ -148,14 +160,18 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   );
 
   // 2026-09-26（B 任务）：单件直发 mutation —— PENDING → ON_SHELF。
+  // 2026-10-02：place-on-shelf 迁 prod 域并以批次为锚（batch_id 是路径参数），
+  // 故 vars 同时带 partId（工艺链兜底跳转用）与 batchId（端点锚点）。
   const placeOnShelfMutation = useMutation<
     unknown,
     Error,
-    { partId: string; shelfId: string; nextProcessId: string }
+    { partId: string; batchId: string | null; shelfId: string; nextProcessId: string }
   >({
     mutationKey: ['parts', 'dispatch', 'place-on-shelf'],
-    mutationFn: ({ partId, shelfId, nextProcessId }) =>
-      placeOnShelf(partId, shelfId, nextProcessId),
+    mutationFn: ({ batchId, shelfId, nextProcessId }) => {
+      if (!batchId) throw new Error(PLACE_ON_SHELF_NO_BATCH_HINT);
+      return placeOnShelf(batchId, { shelf_id: shelfId, next_process_id: nextProcessId });
+    },
     onSuccess: () => {
       ElMessage.success('下发成功');
       qc.invalidateQueries({ queryKey: qk.partsPrefix });
@@ -170,6 +186,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
 
   async function onDispatch(row: PartListItem): Promise<void> {
     dispatchPartId.value = row.id;
+    dispatchBatchId.value = row.batch_id ?? null;
     dispatchShelfId.value = null;
     dispatchNextProcessId.value = null;
     await reloadShelves();
@@ -183,6 +200,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
 
   function onDispatchClosed(): void {
     dispatchPartId.value = null;
+    dispatchBatchId.value = null;
     dispatchShelfId.value = null;
     dispatchNextProcessId.value = null;
   }
@@ -192,6 +210,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     if (!dispatchShelfId.value || !dispatchNextProcessId.value) return;
     placeOnShelfMutation.mutate({
       partId: dispatchPartId.value,
+      batchId: dispatchBatchId.value,
       shelfId: dispatchShelfId.value,
       nextProcessId: dispatchNextProcessId.value,
     });
@@ -217,7 +236,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   // 全部走 placeOnShelf（不再有 action 分支）。返回 { succeeded, failed } —— 失败件留
   // 对话框（onSuccess 据此分支：全成功才关闭）。
   interface BatchDispatchVars {
-    targets: { id: string; label: string }[];
+    targets: { id: string; label: string; batchId: string | null }[];
     shelfId: string;
     nextProcessId: string;
   }
@@ -234,7 +253,8 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
       for (const t of targets) {
         if (processChainRequiredHit) break;
         try {
-          await placeOnShelf(t.id, shelfId, nextProcessId);
+          if (!t.batchId) throw new Error(PLACE_ON_SHELF_NO_BATCH_HINT);
+          await placeOnShelf(t.batchId, { shelf_id: shelfId, next_process_id: nextProcessId });
           succeeded.push(t);
         } catch (e) {
           const isProcessChain =
@@ -326,7 +346,11 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     // 快照：迭代过程中会修改 selectedIds/selectedRows
     const targets = deps.selectedRows.value
       .filter((r) => deps.selectedIds.has(r.id))
-      .map((r) => ({ id: r.id, label: r.serial_no || r.drawing_no || r.id }));
+      .map((r) => ({
+        id: r.id,
+        label: r.serial_no || r.drawing_no || r.id,
+        batchId: r.batch_id ?? null,
+      }));
     if (targets.length === 0) {
       ElMessage.warning('当前页没有已选零件，请翻到已选页或重新选择');
       return;
@@ -366,7 +390,12 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     { rowId: string; batchId: string | null }
   >({
     mutationKey: ['parts', 'dispatch', 'recall-to-pending'],
-    mutationFn: ({ rowId, batchId }) => recallToPending(rowId, { batch_id: batchId }),
+    // 2026-10-02：recall-to-pending 迁 prod 域并以批次为锚（batch_id 是路径参数，
+    // 缺省按活跃批次猜唯一者的旧语义已下线）。
+    mutationFn: ({ batchId }) => {
+      if (!batchId) throw new Error(RECALL_NO_BATCH_HINT);
+      return recallToPending(batchId);
+    },
     onSuccess: () => {
       ElMessage.success('已召回为待生产');
       qc.invalidateQueries({ queryKey: qk.partsPrefix });

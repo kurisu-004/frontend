@@ -78,8 +78,7 @@
     >
       <div v-if="passTarget" class="fail-summary">
         <div><strong>流水号：</strong>{{ passTarget.serial_no || '—' }}</div>
-        <!-- 2026-09-30 修复：InspectionBatchListItem 用 batch_no 而非 batch_label（VO 不带 batch_label 字段） -->
-        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <!-- InspectionBatchListItem 用 batch_no 而非 batch_label（VO 不带 batch_label 字段） -->
         <div><strong>批次：</strong>{{ passTarget.batch_no }}</div>
         <div><strong>名称：</strong>{{ passTarget.name }}</div>
       </div>
@@ -127,8 +126,7 @@
     >
       <div v-if="failTarget" class="fail-summary">
         <div><strong>流水号：</strong>{{ failTarget.serial_no || '—' }}</div>
-        <!-- 2026-09-30 修复：batch_label → batch_no -->
-        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <!-- batch_no 是 z.number() 非 nullable，模板直接渲染即可 -->
         <div><strong>批次：</strong>{{ failTarget.batch_no }}</div>
         <div><strong>图号：</strong>{{ failTarget.drawing_no }}</div>
         <div><strong>名称：</strong>{{ failTarget.name }}</div>
@@ -248,8 +246,7 @@
     >
       <div v-if="scanChooserRow" class="fail-summary">
         <div><strong>流水号：</strong>{{ scanChooserRow.serial_no || '—' }}</div>
-        <!-- 2026-09-30 修复：batch_label → batch_no -->
-        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <!-- batch_no 是 z.number() 非 nullable，模板直接渲染即可 -->
         <div><strong>批次：</strong>{{ scanChooserRow.batch_no }}</div>
         <div><strong>图号：</strong>{{ scanChooserRow.drawing_no }}</div>
         <div><strong>名称：</strong>{{ scanChooserRow.name }}</div>
@@ -274,8 +271,7 @@
     >
       <div v-if="scanInspectRow" class="fail-summary">
         <div><strong>流水号：</strong>{{ scanInspectRow.serial_no || '—' }}</div>
-        <!-- 2026-09-30 修复：batch_label → batch_no -->
-        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <!-- batch_no 是 z.number() 非 nullable，模板直接渲染即可 -->
         <div><strong>批次：</strong>{{ scanInspectRow.batch_no }}</div>
         <div><strong>图号：</strong>{{ scanInspectRow.drawing_no }}</div>
         <div><strong>名称：</strong>{{ scanInspectRow.name }}</div>
@@ -458,10 +454,10 @@ import { useDialogSize } from '@/composables/useDialogSize';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 import {
-  failInspection,
   getPartBySerial,
-  passInspection,
   scanInspect,
+  toProcess,
+  toShip,
   type InspectionBatchListItem,
   type PartItem,
 } from '@/api/parts';
@@ -509,27 +505,21 @@ function renderName({ row }: { row: unknown }): VNode {
 }
 
 function renderBatchLabel({ row }: { row: unknown }): VNode {
-  // 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，TS 类型
-  // 是 number，r.batch_no != null 永远 true，String() 也是防御性但冗余；
-  // Vue 模板渲染会自动 toString。
+  // batch_no 是 z.number() 非 nullable（TS 类型即 number），Vue 渲染时会自动 toString。
   const r = row as InspectionBatchListItem;
   return h('span', { class: 'batch-label' }, r.batch_no);
 }
 
 function renderSystemDeliveryDate(_: { row: unknown }): VNode {
-  // 2026-09-30 修复：InspectionBatchListItem 无 system_delivery_date 字段
-  // （后端 InspectionBatchListItemOut VO 不含该字段），保留列定义以维持
-  // 列可见性持久化（columnKey='system_delivery_date'），函数永远输出 '—'。
-  // 2026-09-30 review 第 1 轮修复：未使用入参改 `_` 命名，丢弃 `void row;`。
+  // InspectionBatchListItem 无 system_delivery_date 字段（后端 VO 不含该字段），
+  // 保留列定义以维持列可见性持久化（columnKey='system_delivery_date'），永远输出 '—'。
   return h('span', { class: 'muted' }, '—');
 }
 
 function renderCustomer({ row }: { row: unknown }): VNode {
-  // 2026-09-30 修复：InspectionBatchListItem 用 l1_customer_name + customer_name
-  // 派生「父 / 子」展示，与 PendingProgrammingList.renderCustomer 风格统一；
-  // 加 null 兜底：l1 && name → "${l1} / ${name}"；仅 name → name；仅 l1 → l1；都缺 → '—'。
-  // 2026-09-30 review 第 1 轮修复：l1_customer_name / customer_name 已是
-  // z.string().nullable()，TS 类型为 string | null，?? null 恒等于自身，直接取字段。
+  // InspectionBatchListItem 用 l1_customer_name + customer_name 派生「父 / 子」展示，
+  // 与 PendingProgrammingList.renderCustomer 风格统一；两者都是 z.string().nullable()，
+  // TS 类型为 string | null。l1 && name → "父 / 子"；仅 name → name；仅 l1 → l1；都缺 → '—'。
   const r = row as InspectionBatchListItem;
   const l1 = r.l1_customer_name;
   const name = r.customer_name;
@@ -855,18 +845,26 @@ async function onPassConfirm(): Promise<void> {
   if (!row || !passQty.value) return;
   row._passing = true;
   try {
-    // 2026-09-30 修复：row.id → row.part_id。InspectionBatchListItem 无 id 字段
-    // （与 t_part 不同的雪花 ID 体系），原实现把 undefined 当 part_id 传给后端
-    // 触发 4xx。这是本次 `/parts/undefined` Vue Router 警告的同源 bug。
-    await passInspection(row.part_id, {
-      batch_id: row.batch_id ?? null,
+    // 2026-10-02：品检通过改打 v2 `POST /prod/batches/{batch_id}/to-ship`
+    // （INSPECTION → READY_TO_SHIP，事件 INSPECTED）。此前本按钮打的是
+    // `POST /parts/{part_id}/pass-inspection` —— 那是 v1 Python 遗留路径，v2 从未
+    // 注册该路由，点按钮恒 404（路由匹配先于鉴权，可与 401 区分）。
+    // OCC 锚 t_part_batch.version：version 取列表行的批次版本（InspectionBatchListItem.version）。
+    await toShip(row.batch_id, {
+      version: row.version,
       quantity: passQty.value,
     });
     ElMessage.success(`零件 ${row.serial_no || row.drawing_no} 品检通过 × ${passQty.value}`);
     passDialogVisible.value = false;
     await fetchList();
   } catch (e) {
-    ElMessage.error(`品检通过失败：${(e as Error).message}`);
+    // 40901：批次已被他人改动（version 不匹配）→ 提示 + 重拉，让用户看到最新数量。
+    if ((e as { code?: number }).code === 40901) {
+      ElMessage.warning('该批次已被他人修改，请刷新后重试');
+      await fetchList();
+    } else {
+      ElMessage.error(`品检通过失败：${(e as Error).message}`);
+    }
   } finally {
     row._passing = false;
   }
@@ -1024,14 +1022,16 @@ async function onScanInspectConfirm(): Promise<void> {
   }
   scanInspectSubmitting.value = true;
   try {
-    // 2026-09-30 修复：row.id → row.part_id（InspectionBatchListItem 无 id）。
-    await scanInspect(row.part_id, {
+    // 2026-10-02：批次锚定 `POST /prod/batches/{batch_id}/scan-inspect`；
+    // payload 逐字对齐后端 `ScanInspectRequest`：pass / target_inspection_shelf_id /
+    // version 必填（此前发的 `decision` 键后端不认 + 缺 version，恒 422）。
+    await scanInspect(row.batch_id, {
       target_inspection_shelf_id: scanInspectShelfId.value,
-      decision: scanInspectDecision.value,
+      pass: scanInspectDecision.value === 'PASS',
+      version: row.version,
       shelf_id: scanInspectShelfIdFail.value || undefined,
       next_process_id: scanInspectProcessId.value || undefined,
       note: scanInspectNote.value.trim() || null,
-      batch_id: row.batch_id ?? null,
       quantity: scanInspectQty.value ?? null,
     });
     ElMessage.success(
@@ -1087,22 +1087,31 @@ async function onFailConfirm(): Promise<void> {
     return; // 用户取消
   failSubmitting.value = true;
   try {
-    // 2026-08-29：回退到 v1 fail-inspection（v2 to-process 不在 Rust 上线范围）。
-    // 2026-09-30 修复：row.id → row.part_id（InspectionBatchListItem 无 id）。
-    const out = await failInspection(row.part_id, {
+    // 2026-10-02：品检打回（指定工序）改打 v2 `POST /prod/batches/{batch_id}/to-process`
+    // （INSPECTION → IN_PROCESS，事件 INSPECTION_FAILED）。此前本按钮打的是
+    // `POST /parts/{part_id}/fail-inspection` —— v1 Python 遗留路径，v2 未注册，恒 404。
+    // 返修中批次（is_repairing）后端返 20118 返修守卫，走通用 catch 弹后端原文。
+    // 返回值是 `{ part, new_batch_id }`（不是裸 PartItem），故取 out.part 做提示。
+    const out = await toProcess(row.batch_id, {
       shelf_id: failShelfId.value,
       next_process_id: failProcessId.value,
+      version: row.version,
       note: failNote.value.trim() || null,
-      batch_id: row.batch_id ?? null,
       quantity: failQty.value ?? null,
     });
     ElMessage.success(
-      `零件 ${out.serial_no || out.drawing_no} 已指定下一道工序 ${processCode}，放到生产货架 ${shelfCode}`,
+      `零件 ${out.part.serial_no || out.part.drawing_no} 已指定下一道工序 ${processCode}，放到生产货架 ${shelfCode}`,
     );
     failDialogVisible.value = false;
     await fetchList();
   } catch (e) {
-    ElMessage.error(`指定工序失败：${(e as Error).message}`);
+    // 40901：批次已被他人改动（version 不匹配）→ 提示 + 重拉。
+    if ((e as { code?: number }).code === 40901) {
+      ElMessage.warning('该批次已被他人修改，请刷新后重试');
+      await fetchList();
+    } else {
+      ElMessage.error(`指定工序失败：${(e as Error).message}`);
+    }
   } finally {
     failSubmitting.value = false;
   }

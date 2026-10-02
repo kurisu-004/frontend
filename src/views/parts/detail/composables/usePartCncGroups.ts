@@ -50,7 +50,12 @@ export interface UsePartCncGroupsReturn {
   onDownloadCnc: (p: PartFileItem) => Promise<void>;
   onDeleteCnc: (id: string, version: number) => Promise<void>;
   onPairUpload: (rawGcodes: File[], setupFile: File) => Promise<boolean>;
-  onReleaseToShelf: (shelfId: string, processId: string) => Promise<boolean>;
+  /** 2026-10-02：端点迁 prod 域后以批次为锚，故第一形参是 batchId（可空 = 未选中批次）。 */
+  onReleaseToShelf: (
+    batchId: string | null,
+    shelfId: string,
+    processId: string,
+  ) => Promise<boolean>;
   fileList: (
     current: UploadFile[],
     file: UploadFile,
@@ -208,10 +213,22 @@ export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
    *
    * 2026-09-16 PR-3：releaseFromProgramming 后端新增 20706 校验；命中时
    * 弹「前往制定」确认框并跳工艺制定页，不走普通 ElMessage.error 兜底。
+   *
+   * 2026-10-02：release-from-programming 迁 prod 域并以批次为锚
+   * （`POST /prod/batches/{batch_id}/release-from-programming`），batchId 由
+   * PartDetail 用三卡联动已选中的批次传入；未选中时直接失败，不用 part_id 顶替。
    */
-  async function onReleaseToShelf(shelfId: string, processId: string): Promise<boolean> {
+  async function onReleaseToShelf(
+    batchId: string | null,
+    shelfId: string,
+    processId: string,
+  ): Promise<boolean> {
+    if (!batchId) {
+      ElMessage.error('请先在批次列表中选中要下发的批次');
+      return false;
+    }
     try {
-      await releaseFromProgramming(partId.value, shelfId, processId);
+      await releaseFromProgramming(batchId, shelfId, processId);
       ElMessage.success('已下发到生产货架');
       return true;
     } catch (e) {

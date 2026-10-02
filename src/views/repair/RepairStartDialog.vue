@@ -2,15 +2,19 @@
 /**
  * 一步式返修下发 dialog（PR-M 2026-08-04 续）
  *
- * 调 POST /parts/{id}/repair-dispatch：
+ * 调 POST /prod/batches/{batch_id}/repair-dispatch：
  * DELIVERED / INSPECTION / READY_TO_SHIP → REPAIRING → ON_SHELF / INSPECTION
  * 原子完成；中间状态 REPAIRING 不落库。
+ * （2026-10-02 由 POST /parts/{part_id}/repair-dispatch 迁来：返修下发是批次动作。）
  *
  * UI 结构（el-tabs 双子 Tab）：
  * - 「下发到生产架」：先选工序，后选该工序映射的生产区货架
  * - 「送检到品检架」：直接选 INSPECTION 区货架
  *
- * 顶部「返修数量」输入框（quantity < batch.quantity 触发 _maybe_split 拆批）
+ * 2026-10-03：本对话框只做**整批**返修下发。后端 `RepairDispatchRequest` 无
+ * quantity 字段（serde 未开 deny_unknown_fields，多带数量会被静默忽略）⇒ 操作员
+ * 填「3/10」也会整批 10 件下发。返修部分数量须先 `splitPartBatch` 拆出子批次、
+ * 再对子批次下发，故此处不提供数量控件。
  */
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -19,13 +23,16 @@ import { repairDispatch } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import { listProcesses } from '@/api/process';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
-import type { PartItem } from '@/api/parts';
+import type { InspectionBatchListItem } from '@/api/parts';
 import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
 
 const props = defineProps<{
   modelValue: boolean;
-  target: PartItem | null;
+  /** 目标**批次**行（listRepairBatches / listRepairingBatches 的列表项）。
+   *  必须是批次类型而不是 PartItem：`version` 在这里当 t_part_batch.version 发出去
+   *  作 repair-dispatch 的 OCC 锚，`batch_id` 是路径参数，两者都是批次语义。 */
+  target: InspectionBatchListItem | null;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [v: boolean];
@@ -33,7 +40,6 @@ const emit = defineEmits<{
 }>();
 
 const actionTab = ref<'dispatch' | 'inspect'>('dispatch');
-const quantity = ref<number>(1);
 const processId = ref<string>('');
 const shelfId = ref<string>('');
 const inspShelfId = ref<string>('');
@@ -44,10 +50,7 @@ const productionShelves = ref<Shelf[]>([]);
 const inspectionShelves = ref<Shelf[]>([]);
 const processes = ref<Process[]>([]);
 
-const {
-  filteredShelves: filteredProductionShelves,
-  filteredProcesses,
-} = useShelfProcessFilter(
+const { filteredShelves: filteredProductionShelves, filteredProcesses } = useShelfProcessFilter(
   productionShelves,
   processes,
   computed({
@@ -65,11 +68,11 @@ const {
 );
 
 watch(
-  () => [props.modelValue, props.target?.id] as const,
+  // batch_id 是批次行的身份（批次列表项无 id 字段）。
+  () => [props.modelValue, props.target?.batch_id] as const,
   async ([v]) => {
     if (v) {
       actionTab.value = 'dispatch';
-      quantity.value = props.target?.quantity ?? 1;
       processId.value = props.target?.next_process_id ?? '';
       shelfId.value = '';
       inspShelfId.value = '';
@@ -93,7 +96,7 @@ async function reloadOptions(): Promise<void> {
 }
 
 async function onSubmit(): Promise<void> {
-  if (!props.target || !quantity.value) return;
+  if (!props.target) return;
   const isInspect = actionTab.value === 'inspect';
   if (isInspect) {
     if (!inspShelfId.value) return;
@@ -103,11 +106,20 @@ async function onSubmit(): Promise<void> {
   const submitting = isInspect ? submittingInspect : submittingDispatch;
   submitting.value = true;
   try {
-    await repairDispatch(props.target.id, {
+    // 2026-10-02：返修下发迁 prod 域并以批次为锚 —— `POST /prod/batches/{batch_id}/repair-dispatch`，
+    // `batch_id` 从 body 删除（已是路径参数），`version` 必填（OCC 锚 t_part_batch）。
+    // body 只带后端 RepairDispatchRequest 认识的字段：多带 quantity 会被 serde 静默
+    // 忽略（结果是整批返修），所以这里一个数量字段都不发。
+    if (!props.target.batch_id) {
+      // 类型上 batch_id 必填，但返修两个端点的 wire-format 尚未单独验证（见
+      // RepairReceive 的 cast 注），保留这层运行期兜底：空 id 打过去必 404。
+      ElMessage.error('该行缺少批次信息，无法下发');
+      return;
+    }
+    await repairDispatch(props.target.batch_id, {
       shelf_id: isInspect ? inspShelfId.value : shelfId.value,
+      version: props.target.version,
       next_process_id: !isInspect ? processId.value || null : null,
-      batch_id: props.target.batch_id ?? null,
-      quantity: quantity.value < (props.target.quantity ?? 1) ? quantity.value : null,
     });
     const label = props.target.serial_no || props.target.drawing_no;
     ElMessage.success(`返修完成 · ${label} 已${isInspect ? '送检' : '下发'}`);
@@ -135,27 +147,15 @@ function onCancel(): void {
   >
     <div v-if="target" class="summary">
       <div><strong>流水号：</strong>{{ target.serial_no || '—' }}</div>
-      <div><strong>批次：</strong>{{ target.batch_label || '—' }}</div>
+      <div><strong>批次：</strong>#{{ target.batch_no }}</div>
       <div><strong>图号：</strong>{{ target.drawing_no }}</div>
       <div><strong>名称：</strong>{{ target.name }}</div>
-      <div><strong>总数：</strong>{{ target.quantity }}</div>
+      <div>
+        <strong>总数：</strong>{{ target.quantity }}
+        <span class="muted">（整批返修，这批全部回返修）</span>
+      </div>
       <!-- 2026-09-16 PR-2：has_been_repaired 随 t_part 瘦身下线，「此前已返修」提示删除 -->
     </div>
-
-    <el-form label-width="84px" style="margin-top: 12px">
-      <el-form-item label="返修数量">
-        <el-input-number
-          v-model="quantity"
-          :min="1"
-          :max="target?.quantity ?? 1"
-          :precision="0"
-          style="width: 160px"
-        />
-        <span v-if="target" class="muted" style="margin-left: 8px">
-          / {{ target.quantity }}（留部分返修请改小）
-        </span>
-      </el-form-item>
-    </el-form>
 
     <el-tabs v-model="actionTab" style="margin-top: 8px">
       <el-tab-pane label="下发到生产架" name="dispatch">

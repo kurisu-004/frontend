@@ -22,7 +22,7 @@
 import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { listOutsourceInFlight } from '@/api/outsource';
-import { receiveFromOutsource, toInspection } from '@/api/parts';
+import { receiveFromOutsource, receiveFromOutsourceToInspection } from '@/api/parts';
 import { useConfirm } from '@/composables/useConfirm';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
@@ -211,24 +211,23 @@ export function useOutsourceReceivingList(
       const qty =
         receiveQuantity.value === receiveTarget.value.quantity ? null : receiveQuantity.value;
       if (receiveBranch.value === 'production') {
-        await receiveFromOutsource(receiveTarget.value.part_id, {
+        // 2026-10-02：回收端点迁 prod 域并以批次为锚（batch_id 已是路径参数），
+        // version 取列表行的批次版本（OCC 必填）。
+        await receiveFromOutsource(receiveTarget.value.batch_id, {
           shelf_id: receiveShelf.value,
           next_process_id: receiveProcess.value,
-          batch_id: receiveTarget.value.batch_id,
+          version: receiveTarget.value.version,
           quantity: qty,
         });
         ElMessage.success('已下发到生产货架');
       } else {
-        // 2026-08-28 路线 B：OUTSOURCE → INSPECTION 走 toInspection（仅送检，不自动 PASS）。
-        // 后续由品检员手动 toShip。
-        // 2026-09-01：toInspection 已回退 v1（Python FastAPI
-        //   /parts/{id}/receive-from-outsource-to-inspection），
-        //   payload 字段名 `shelf_id`，无 `version`（OCC 锚由 v1 service 层按
-        //   t_part_batch 处理，无需前端传）。
-        await toInspection(receiveTarget.value.part_id, {
+        // OUTSOURCE → INSPECTION 走 receive-from-outsource-to-inspection（仅送检，
+        // 不自动 PASS），后续由品检员手动品检通过。
+        // 2026-10-02：该端点随批次路由迁 prod 域并以批次为锚，函数名改为
+        // receiveFromOutsourceToInspection（与「送检」端点 toInspection 区分）。
+        await receiveFromOutsourceToInspection(receiveTarget.value.batch_id, {
           shelf_id: receiveShelf.value,
-          batch_id: receiveTarget.value.batch_id,
-          quantity: qty,
+          version: receiveTarget.value.version,
         });
         ElMessage.success('已送检，等待品检');
       }

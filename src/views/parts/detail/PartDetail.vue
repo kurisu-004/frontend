@@ -98,7 +98,8 @@
       时间线卡（2026-09-17 PR-4）：批次列表 + 历史 + 工序链 三列联动。
       - PartBatchMonitorCard 行选中 → onBatchSelect → 写入 selectedBatchId
       - selectedBatchId 同步驱动：PartHistoryCard 过滤 / ProcessChainCard
-        高亮 current_process_step_id 对应步骤。
+        高亮 current_process_step_id 对应步骤
+      - 无人点过时由 useDefaultBatchSelection 兜底选中（优先带工序链定位的批次）
       - 2026-09-17 UI 调整第 2 轮：去掉外层 header；批次监控移到历史 +
         工序链下方（同行撑满），避免两列等高造成批次表区域浪费。
     -->
@@ -116,6 +117,7 @@
         <ProcessChainCard
           :steps="processChain.steps.value"
           :current-step-id="currentStepId"
+          :selected-batch-id="selectedBatchId"
           :loading="processChain.loading.value"
           :processes-lookup="processesLookup"
         />
@@ -400,7 +402,7 @@ import ProcessChainCard from './components/ProcessChainCard.vue';
 import type { PartBatch } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';
-import { listProcesses } from '@/api/process';
+import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import type { Process } from '@/types/process';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
@@ -418,6 +420,7 @@ import { usePartDetail } from './composables/usePartDetail';
 import type { PartEditForm } from './composables/usePartDetail';
 import { usePartCncGroups } from './composables/usePartCncGroups';
 import { useProcessChain } from './composables/useProcessChain';
+import { useDefaultBatchSelection } from './composables/useDefaultBatchSelection';
 
 // 2026-09-29 修复：Vue SFC template expression 默认 sourceType=script，不接受
 // import.meta。dev 阶段定义 isDev 常量供模板 v-if 引用，避免
@@ -550,8 +553,14 @@ const currentStepId = computed<string | null>(() => processChain.currentStepId.v
 
 // 2026-09-17 PR-4：part.process_chain_id 变化时拉链（首次 part 加载 + 后续
 // 工艺变更）。useProcessChain 内部已 watch partId 清空状态；这里只触发拉取。
-// 2026-09-17 review 第 1 轮修复：chain 变化前先重置 selectedBatchId，避免旧批次 id
-// 在 chain 未拉完前被 currentStepId 派生计算时引用到错误的 step。
+// chain 变化前先重置 selectedBatchId，避免旧批次 id 在 chain 未拉完前被
+// currentStepId 派生计算时引用到错误的 step。
+// ⚠️ 既有健壮性缺口（登记不改逻辑）：这里只置空 selectedBatchId，**不重取 batches**
+// ⇒ 若现有 batches 里没有「带 current_process_step_id」的批次，
+// useDefaultBatchSelection 的兜底也补不出选中项，工序链时间轴会继续整条全灰。
+// 当前不可达：PartDetail 内没有工序链编辑器，process_chain_id 变化只可能由切
+// partId 触发，而切 partId 的路由 watcher 会同步 `fetchBatches()`。
+// 将来本页加入链编辑能力时必须在这里同时补 refetch。
 watch(
   () => part.value?.process_chain_id,
   (id) => {
@@ -562,15 +571,36 @@ watch(
   },
 );
 
+// 兜底选中：selectedBatchId 唯一写入来源是「点批次行」，没人点过就恒为 null ⇒
+// currentStepId 恒 null ⇒ 工序链时间轴整条全灰、「当前」徽标永不出现。
+// 判据（优先带 current_process_step_id 的批次，否则回落第一条）与「不覆盖用户
+// 已有选择」的语义住在 useDefaultBatchSelection 里（可单测，不埋在 .vue shell）。
+// 连带影响：PartHistoryCard 跟随 selectedBatchId 过滤，进页面即落到该批次的事件
+// 视图；再点一次该行（onBatchSelect(null)）可切回全量事件。
+useDefaultBatchSelection(batches, selectedBatchId);
+
 // ============ 共享 shelves / processes 缓存（release / failInsp / receive 共用）============
-// 2026-10-02 订正：本节标题当天曾被 URL 批量同步误改成「共享 prod/shelf-processes
-// 缓存」——错的。`productionShelves` 来自 listShelves({zone:'PRODUCTION'})
-// （`/shelves`），`processes` 来自 listProcesses()（`/prod/processes`），两者都
-// **不是** `/prod/shelf-processes`。那个 URL 是下面两处 useShelfProcessFilter
+// `productionShelves` 来自 listShelves({zone:'PRODUCTION'})（`/shelves`）；
+// `processes` 来自共享 query useProcessesQuery（`/prod/processes`）——
+// 两者都**不是** `/prod/shelf-processes`，那个 URL 是下面两处 useShelfProcessFilter
 // （failInsp / receive 两套过滤）背后的共享 query（useShelfProcessMappingsQuery）
 // 自己拉的映射表，缓存归属独立。
 const productionShelves = ref<Shelf[]>([]);
-const processes = ref<Process[]>([]);
+// 2026-10-02：processes 从「弹窗打开时才拉的本地 ref」改为订阅共享 query。
+// 旧实现只在 openFailInspDialog / openReceiveOutsourceDialog 里调
+// ensureShelvesProcesses()，而 onMounted 不调 ⇒ 一进页面字典恒空 ⇒ 工序链时间轴
+// 只能回退渲染裸 process_id（用户报的第二个 UI 缺陷）。共享 query 在 setup 期即开闸，
+// 字典随 useQuery 到达自动就位。
+const processesQuery = useProcessesQuery({ limit: 200 });
+// `as Process[]` 桥接：processSchema 派生的 description / color 是 optional
+// （对齐后端 skip_serializing_if），而 Process 业务类型是 required，TS 结构不匹配。
+// 沿 usePendingProgrammingStore / usePartDispatch 同模式桥接；本页消费方
+// （ProcessChainCard 字典 / useShelfProcessFilter / el-option）只读 id / code /
+// name / category，对 optional 字段无依赖，零行为差异。
+const processes = computed<Process[]>(
+  () => (processesQuery.data.value?.items ?? []) as Process[],
+);
+
 async function ensureShelvesProcesses(): Promise<void> {
   if (productionShelves.value.length === 0) {
     try {
@@ -580,18 +610,13 @@ async function ensureShelvesProcesses(): Promise<void> {
       /* ignore */
     }
   }
-  if (processes.value.length === 0) {
-    try {
-      const resp = await listProcesses({ limit: 200 });
-      processes.value = resp.items;
-    } catch {
-      /* ignore */
-    }
-  }
+  // processes 走共享 query，无需在此拉取 —— 参数恒定（{ limit: 200 }）时 queryKey
+  // 命中同一份缓存，本页与 usePartDispatch / usePendingProgrammingStore 共用一次请求。
+  // 工序制定的各 Tab 不在内：它传的是带 code_like / category 的 reactive params，
+  // queryKey 不同，各发各的。
 }
 
 // 2026-09-17 PR-4：ProcessChainCard 需要 { process_id → { code, name } } 字典。
-// processes 由 ensureShelvesProcesses 缓存（failInsp / receive / 配对下发共用），
 // 这里派生 O(1) 查找表，避免在 ProcessChainCard 内 v-for .find。
 const processesLookup = computed<Record<string, { code: string; name: string }>>(() => {
   const map: Record<string, { code: string; name: string }> = {};
@@ -639,8 +664,8 @@ async function openFailInspDialog() {
   failInspNote.value = '';
   await ensureShelvesProcesses();
   failInspDialogVisible.value = true;
-  // 2026-10-02：不再显式 load() —— 映射由共享 query 跟随 productionShelves /
-  // processes 就绪自动开闸（ensureShelvesProcesses() 返回后两源即非空）。
+  // 映射（货架↔工序）由共享 query 跟随 productionShelves / processes 就绪自动开闸；
+  // processes 已是共享 query 的响应式派生，弹窗打开即已就位。
 }
 function onFailInspDialogClosed() {
   failInspProcessId.value = '';
@@ -652,6 +677,9 @@ async function onFailInspectionConfirm() {
   failInspSubmitting.value = true;
   try {
     const ok = await onFailInspection({
+      // 2026-10-02：to-process 以批次为锚，锚点用三卡联动已选中的批次 ——
+      // 多批次 part 上比「找第一个 INSPECTION 批次」更准。
+      batchId: selectedBatchId.value,
       shelfId: failInspShelfId.value,
       processId: failInspProcessId.value,
       note: failInspNote.value.trim() || null,
@@ -693,8 +721,7 @@ async function openReceiveOutsourceDialog() {
   receiveProcessId.value = '';
   await ensureShelvesProcesses();
   receiveOutsourceDialogVisible.value = true;
-  // 2026-10-02：不再显式 load() —— 与 failInsp 同一个共享 query 缓存
-  // （同一常量 queryKey），先开过闸则本对话框直接命中。
+  // 与 failInsp 共用同一份共享 query 缓存（同一常量 queryKey），先开过闸则直接命中。
 }
 function onReceiveOutsourceDialogClosed() {
   receiveShelfId.value = '';
@@ -705,6 +732,8 @@ async function onReceiveConfirm() {
   receiveSubmitting.value = true;
   try {
     const ok = await onReceiveFromOutsource({
+      // 2026-10-02：receive-from-outsource 迁 prod 域后以批次为锚。
+      batchId: selectedBatchId.value ?? '',
       shelfId: receiveShelfId.value,
       processId: receiveProcessId.value,
     });
@@ -815,7 +844,12 @@ async function handleRelease(payload: {
   processId: string;
   resolve: (ok: boolean) => void;
 }) {
-  const ok = await onReleaseToShelf(payload.shelfId, payload.processId);
+  // 2026-10-02：端点迁 prod 域后以批次为锚，锚点用三卡联动已选中的批次。
+  const ok = await onReleaseToShelf(
+    selectedBatchId.value,
+    payload.shelfId,
+    payload.processId,
+  );
   if (ok) {
     await fetchPart();
     void fetchEvents();

@@ -280,9 +280,11 @@ export const partFileSchema = z.object({
 
 export type PartFileSchema = z.infer<typeof partFileSchema>;
 
-/** 2026-09-29 新增：part-file 列表分页结果。2026-09-29 修复 review 第 1 轮 schema
- *  mismatch：后端 backend-rust `src/modules/part_file/vo/part_file.rs:58-62`
- *  `PartFileListOut` 真契约只返回 `items` + `total` 2 字段，没有 limit/offset。
+/** part-file 列表分页结果。
+ *
+ * limit / offset 声明成 optional 的原因（后端契约对齐）：backend-rust
+ * `src/modules/part_file/vo/part_file.rs:58-62` 的 `PartFileListOut` 真契约只返回
+ * `items` + `total` 2 字段，没有 limit/offset。
  *  原 schema 强校验 limit/offset → 运行时 100% ZodError 崩溃。
  *  现改为 optional —— 即使后端后续扩展 limit/offset 字段也不会破前端（向后兼容），
  *  Zod 默认 strip 模式会静默丢弃多余字段，前端不消费也无所谓。 */
@@ -516,7 +518,7 @@ export const assemblyDetailFlatSchema = z
 
 export type AssemblyDetailFlatSchema = z.infer<typeof assemblyDetailFlatSchema>;
 
-/** 装配件文件出参数组（review 第 1 轮修复 C2）。
+/** 装配件文件出参数组。
  *
  * 后端 uploadAssemblyPdf（POST /api/v2/assemblies/{id}/files）实际响应是
  * `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。前端旧 bug
@@ -599,6 +601,8 @@ export type PendingBatchListResultSchema = z.infer<typeof pendingBatchListResult
 //   planned_delivery_date (string) / system_delivery_date (nullable) /
 //   customer_name (nullable，L2) / parent_customer_name (nullable，L1) /
 //   has_cnc_program (bool 必填 —— 本页 Tab 化关键字段)。
+// 另声明 1 个**后端当前不返**的期许字段 batch_id ⇒ 本 schema 共 14 个 key
+// （字段自身的注释解释了它为什么必须是 optional）。
 //
 // ⚠️ 客户字段名与 part 域**不同名**：这里是 parent_customer_name(L1) /
 // customer_name(L2)，而 PartListItem 是 l1_customer_name / customer_name。
@@ -622,6 +626,18 @@ export const pendingProgrammingItemSchema = z.object({
   parent_customer_name: z.string().nullable(),
   /** 是否已上传 G_CODE（后端 t_part_file EXISTS 派生）—— 必填 boolean，守门到位 */
   has_cnc_program: z.boolean(),
+  /** 批次 id（雪花 ID 字符串）。release-from-programming 端点以批次为锚，
+   *  缺它就下发不了。**后端当前不返该字段**，故声明成 nullable + optional：
+   *  一旦后端补上，操作列的「下发」按钮会自动从 disabled 恢复可用，无需改前端。
+   *
+   *  ⚠️ 这是「已知缺口 + 期许字段」，不是当前契约，放在 schema 里（而不是视图层的
+   *  行类型）是因为 strip 只发生在这一层：z.infer 派生的类型要与真正到达视图层的
+   *  运行时对象同源，否则视图层会拿到一个类型上存在、运行时恒为 undefined 的字段。
+   *  代价是本 schema 是 strip 模式的 `z.object`（非 `.strict()`）：若后端最终用别的
+   *  名字下发（`batch_ids` 复数 / 嵌套结构），Zod 会**静默丢弃**它 ⇒ 按钮恒 disabled，
+   *  而 tooltip 会继续宣称「待编程列表接口未返回批次 id」，那句话此时是假话。
+   *  **后端确定字段名后必须同步改这一行**（改名，或按新结构补声明）。 */
+  batch_id: z.string().nullable().optional(),
 });
 
 export type PendingProgrammingItemSchema = z.infer<typeof pendingProgrammingItemSchema>;
@@ -840,7 +856,7 @@ export const autoDispatchResultSchema = z.object({
 
 export type AutoDispatchResultSchema = z.infer<typeof autoDispatchResultSchema>;
 
-// 2026-09-29 review 第 1 轮新增：worker 持有批次（held）schema（rust HeldBatchItem）。
+// worker 持有批次（held）schema（rust HeldBatchItem）。
 //
 // 字段对齐 backend-rust `HeldBatchItem` VO（src/modules/worker_pool/vo/worker_pool.rs
 // HeldBatchItem 结构），与 HeldBatchItemDto 字段一一对应。held_batches 元素 17 字段
@@ -849,7 +865,7 @@ export type AutoDispatchResultSchema = z.infer<typeof autoDispatchResultSchema>;
 //   batch_id / part_id / batch_no (number) / quantity / serial_no / drawing_no /
 //   name / system_delivery_date / planned_delivery_date / is_urgent /
 //   customer_name / parent_customer_name / applicant_name / location /
-//   shelf_code / note / has_cnc_program (review 第 1 轮新增) / version。
+//   shelf_code / note / has_cnc_program / version。
 //
 // 与 PoolBatchItemDto 区别：
 //   - 包含 planned_delivery_date（held 是已下发的批次，期望有计划交期）
@@ -879,8 +895,8 @@ export const heldBatchItemSchema = z.object({
   location: z.string(),
   shelf_code: z.string().nullable(),
   note: z.string().nullable(),
-  // 2026-09-29 review 第 1 轮：与 partSchema.has_cnc_program 同源 regression
-  // guard —— 后端若漏返该字段，Zod parse 立刻抛错。沿 chain 派生（service 层
+  // 与 partSchema.has_cnc_program 同源 regression guard —— 后端若漏返该字段，
+  // Zod parse 立刻抛错。沿 chain 派生（service 层
   // t_part_file EXISTS），非 CNC 链 part 恒为 false。
   has_cnc_program: z.boolean(),
   version: z.number(),
@@ -1219,10 +1235,9 @@ export type InspectionBatchListItemSchema = z.infer<typeof inspectionBatchListIt
 
 /** 品检待办列表分页结果（结构对齐 backend-rust InspectionBatchListOut）。
  *
- * 2026-09-30 review 第 1 轮修复：后端 total / limit / offset 字段用
- * `serialize_i64` 序列化为 JSON string（与雪花 ID 一致的设计），前端 schema
- * 必须按 wire-format 用 z.string() 接收；下游 useInspectionList 在边界
- * `Number(resp.total)` 转 number 才能塞进 PageResult.total。
+ * 后端 total / limit / offset 用 `serialize_i64` 序列化为 JSON string（与雪花 ID
+ * 一致的设计），前端 schema 必须按 wire-format 用 z.string() 接收；下游
+ * useInspectionList 在边界 `Number(resp.total)` 转 number 才能塞进 PageResult.total。
  */
 export const inspectionBatchListResultSchema = z.object({
   items: z.array(inspectionBatchListItemSchema),
