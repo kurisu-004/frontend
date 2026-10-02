@@ -1232,3 +1232,103 @@ export const inspectionBatchListResultSchema = z.object({
 });
 
 export type InspectionBatchListResultSchema = z.infer<typeof inspectionBatchListResultSchema>;
+
+// ============================================================
+// 2026-10-02 新增：工种 + 工种↔工序映射 schema（守门 backend-rust
+// `WorkTypeOut` / `WorkTypeListOut` / `WorkTypeProcessMappingItem` /
+// `WorkTypeProcessMappingOut`）。
+//
+// 契约依据：
+//   - backend-rust `src/modules/prod/work_type/vo/work_type.rs`（WorkTypeOut /
+//     WorkTypeListOut）；
+//   - backend-rust `src/modules/prod/work_type/vo/process_mapping.rs`
+//     （WorkTypeProcessMappingItem / WorkTypeProcessMappingOut）；
+//   - 契约文档 `docs/api/production/work-type-process-mapping.md`（映射两个端点）
+//     与 `docs/api/production/work-types.md`（工种 CRUD）。
+//
+// 为什么现在才加守门：ProcessWorkTypeMappingTab.vue 此前**零 schema、零 queryKey**
+// 直接裸调 listWorkTypes / getWorkTypeProcesses，于是 v1 影子类型
+// （`WorkTypeWithProcesses.processes`）的错误读法与错误 payload 都能编译通过并
+// 上线 —— 线上症状是「点工种报 undefined.map」+「保存发 {process_ids} 静默清空
+// 整组映射」。本次把「响应形态」与「请求形态」两侧都钉死。
+//
+// ⚠️ 陷阱对照（写这个域时容易照抄错）：`WorkTypeListOut.total` / `limit` /
+// `offset` 在 Rust 里是**裸 `i64`，没有 `#[serde(serialize_with = "serialize_i64")]`**
+// ⇒ wire 形态是 **JSON number**，必须用 `z.number()`。这与
+// `inspectionBatchListResultSchema`（那边**有** serialize_i64 ⇒ 必须 `z.string()`）
+// **方向相反**，不要照抄那一个。
+// ============================================================
+
+/** 工种条目（对齐 backend-rust `WorkTypeOut` 11 字段，**全部显式声明**）。
+ *
+ * 逐条依据 `vo/work_type.rs`：
+ *   - id：i64 + `serialize_i64` ⇒ JSON string（雪花 ID 不可用 JS Number，会丢精度）；
+ *   - code / name：String；
+ *   - description：Option<String>，**无** skip_serializing_if ⇒ 键恒在，null 即空；
+ *   - sort_order：i32（数字）；
+ *   - max_held_batches：Option<i32>（null = 不限）；
+ *   - process_ids：Vec<String>（该工种已映射的工序 id，**已映射**的字符串数组，
+ *     空数组 = 未映射任何工序）。由 service 层用单条 SQL 批量补全（防 N+1），
+ *     list / detail 两个端点都带。**显式声明是必须的**：Zod 默认 strip 模式下漏声明
+ *     ⇒ 静默丢弃（本域此前就在 @/types/workType.ts 漏了它，types 与 VO 不同步）。
+ *   - version：i32（乐观锁）；
+ *   - created_at / updated_at：NaiveDateTime ⇒ JSON string。
+ *
+ * 不加 `.strict()`：与 partBatchSchema / customerSchema 等列表行 schema 同策略 ——
+ * 行级 .strict() 会在后端加**任何一个**新字段时把整表打挂（inspection 域
+ * `is_repairing` 事故就是这个形状），而本域的写点全在本仓内、契约漂移由本注释 +
+ * 单测守着。
+ */
+export const workTypeSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  sort_order: z.number(),
+  max_held_batches: z.number().nullable(),
+  process_ids: z.array(z.string()),
+  version: z.number(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export type WorkTypeSchema = z.infer<typeof workTypeSchema>;
+
+/** 工种列表分页结果（对齐 backend-rust `WorkTypeListOut`）。
+ *  ⚠️ total / limit / offset 是**裸 i64**（无 serialize_i64）⇒ `z.number()`，
+ *  与 inspectionBatchListResultSchema 的 `z.string()` 方向相反，见文件头警告。 */
+export const workTypeListResultSchema = z.object({
+  items: z.array(workTypeSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type WorkTypeListResultSchema = z.infer<typeof workTypeListResultSchema>;
+
+/** 工种↔工序映射行（对齐 backend-rust `WorkTypeProcessMappingItem`）。
+ *  4 字段**全必填**：
+ *   - work_type_id：i64 + serialize_i64 ⇒ JSON string；
+ *   - process_id：i64 + serialize_i64 ⇒ JSON string；
+ *   - process_code：String，JOIN t_process 取；
+ *   - sort_order：i32（非空；后端 SQL `ORDER BY sp.sort_order ASC, sp.id ASC`）。
+ *
+ * 不声明 `process_name`：后端不返该键（旧 `WorkTypeProcessLink.process_name` 是
+ * v1 影子字段）。 */
+export const workTypeProcessMappingItemSchema = z.object({
+  work_type_id: z.string(),
+  process_id: z.string(),
+  process_code: z.string(),
+  sort_order: z.number(),
+});
+
+export type WorkTypeProcessMappingItemSchema = z.infer<typeof workTypeProcessMappingItemSchema>;
+
+/** `GET /prod/work-types/{id}/processes` 的响应（对齐 `WorkTypeProcessMappingOut`）。
+ *  **只有 `items` 一个键，无分页信封** —— 该端点不接 limit/offset，一次返全部。
+ *  （读形态的还原逻辑收口在 `toWorkTypeProcessIds`，见 src/api/workType.ts。） */
+export const workTypeProcessesResultSchema = z.object({
+  items: z.array(workTypeProcessMappingItemSchema),
+});
+
+export type WorkTypeProcessesResultSchema = z.infer<typeof workTypeProcessesResultSchema>;
