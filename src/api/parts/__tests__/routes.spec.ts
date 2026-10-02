@@ -173,6 +173,39 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(body).not.toHaveProperty('batch_id');
     expect(body.version).toBe(1);
   });
+
+  // 2026-10-03：钉住 repair-dispatch / start-repair 的 body 键集合 = 后端 DTO 认识的
+  // 字段子集。api 层不做键改名/增删（payload 原样透传），所以这条断言实际锁的是
+  // 「前端不会主动发后端 DTO 之外的键」：两个 DTO 都没有 quantity（start-repair 连
+  // shelf_id 都没有），而 serde 未开 deny_unknown_fields ⇒ 多带的键被静默忽略，
+  // 端点仍整批生效，操作员却以为只返修了自己填的数量。
+  it('R2b：repair-dispatch / start-repair 的 body 不含 quantity（后端 DTO 无此字段）', async () => {
+    httpPostMock.mockReset();
+    httpPostMock.mockResolvedValue({ data: {} });
+    await repairDispatch(BATCH, {
+      shelf_id: 's',
+      version: 1,
+      next_process_id: 'p',
+      reason: 'r',
+      note: 'n',
+    });
+    const [, dispatchBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(Object.keys(dispatchBody).sort()).toEqual([
+      'next_process_id',
+      'note',
+      'reason',
+      'shelf_id',
+      'version',
+    ]);
+    expect(dispatchBody).not.toHaveProperty('quantity');
+
+    httpPostMock.mockReset();
+    httpPostMock.mockResolvedValue({ data: {} });
+    await startPartRepair(BATCH, { version: 1, reason: 'r', note: 'n' });
+    const [, startBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(Object.keys(startBody).sort()).toEqual(['note', 'reason', 'version']);
+    expect(startBody).not.toHaveProperty('quantity');
+  });
 });
 
 describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () => {

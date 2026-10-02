@@ -804,8 +804,13 @@ export async function listRepairingBatches(
 
 /** PR-M 2026-08-04 续：一步式返修下发（DELIVERED → REPAIRING → ON_SHELF/INSPECTION）。
  *
- *  2026-10-02 迁 prod 域：批次锚定，`batch_id` 已是路径参数（部分返修由 quantity 表达），
- *  `version` 必填（OCC 锚 t_part_batch）。 */
+ *  2026-10-02 迁 prod 域：批次锚定，`batch_id` 已是路径参数（从 body 删除），
+ *  `version` 必填（OCC 锚 t_part_batch）。
+ *  ⚠️ 该 DTO **无 quantity**（后端 `RepairDispatchRequest` 只有 batch_id / version /
+ *  shelf_id / next_process_id / reason / note 六个字段，且 serde 未开
+ *  `deny_unknown_fields` ⇒ 多带的键被**静默忽略**）：本端点是**整批返修**，
+ *  传任何数量都不会生效。返修部分数量只能先 `splitPartBatch` 拆出子批次、
+ *  再对子批次调本端点。 */
 export interface RepairDispatchPayload {
   shelf_id: string;
   /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
@@ -814,8 +819,6 @@ export interface RepairDispatchPayload {
   next_process_id?: string | null;
   reason?: string | null;
   note?: string | null;
-  /** 部分数量（可选；缺省 = 批次全量） */
-  quantity?: number | null;
 }
 export async function repairDispatch(
   batchId: string,
