@@ -3,7 +3,11 @@
      2026-10-02：卡片渲染收敛到 BatchCard.vue（全看板唯一批次卡片），DTO 适配走
      poolItemToCard.pendingBatchToCard；拖拽从 HTML5 native drag 切到
      vue-draggable-plus，与工序池 / 工人列统一为同一套 Sortable 链路。本文件只持有
-     工具条 / footer / 拖拽源配置。 -->
+     工具条 / footer / 拖拽源配置。
+     2026-10-02：源容器顺带承担「拖入高亮」的事件源 —— Sortable 的 _onMove 只从被
+     拖起的容器（源）取 options.onMove，投放目标（工序卡）侧永不触发，故由本容器读
+     evt.related.dataset.processId 上报，父级 WorkerQueueBoard 转成 PendingPoolsPanel
+     的 hoveredProcessId。 -->
 <template>
   <div class="pending-batches-panel">
     <div class="toolbar">
@@ -75,6 +79,15 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+
+/** 2026-10-02：拖拽悬停的工序 id（null = 未悬停在任何工序卡上）。
+ *  payload 契约：Sortable 的 MoveEvent.related = 悬停到的**目标容器元素本身**
+ *  （工序卡内 `draggable: '.never'` 匹配不到任何子元素 ⇒ Sortable 找不到落点元素，
+ *  related 退化为容器本身），其 dataset.processId 即工序 id。
+ *  事件名取 camelCase（与 BatchCard 的 toggleSelect 同形）；模板侧写
+ *  `@hover-process`，编译产物同为 `onHoverProcess`，两端互通。 */
+const emit = defineEmits<(e: 'hoverProcess', processId: string | null) => void>();
+
 // 解构 props.selectedIds 时 .value 拿响应式 Set（与父级 composable.selectedIds 同源）
 const selectedIdsValue = computed<Set<string>>(() => props.selectedIds.value);
 
@@ -105,6 +118,16 @@ useLazyDraggable(cardsRef, sortableCards, {
   sort: false,
   animation: 150,
   ghostClass: 'sortable-ghost',
+  // 2026-10-02：拖入工序卡高亮。onMove 只挂在**源**（本容器）上才收得到 —— Sortable
+  // 的 _onMove 读 `fromEl.options.onMove`。返回值 void 即可，只有返回 false 才阻止放置。
+  onMove: (evt) => {
+    const related = evt?.related as HTMLElement | undefined;
+    emit('hoverProcess', related?.dataset?.processId ?? null);
+  },
+  // 清高亮：end 只派发给源，且「落在工序卡上」与「拖拽中途取消」都会走到 ⇒ 不会残留。
+  onEnd: () => {
+    emit('hoverProcess', null);
+  },
 });
 
 const isAllSelected = computed(() => {

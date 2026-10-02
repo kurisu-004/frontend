@@ -28,6 +28,9 @@
 //   - T7：用户取消确认框 → 不发 dispatch 请求（preview 是只读的，无需回滚）。
 //   - T8：preview 多首道工序 → 按 first_process_id 拆成多次 dispatch。
 //   - T9：setSelectedIds / clearSelection 行为正确（基础状态守卫）。
+//   - T10：不再接受 deps（旧 refreshBoard 注入链已删）。
+//   - T11：dispatchMutation 失败 → 报错 toast + 只失效 pending-batches 域
+//     （Sortable 乐观删除的回滚路径，多选保持不动）。
 //
 // 测试策略：
 //   - vi.mock('@/api/pendingBatches')：dispatchBatches / previewAutoDispatch /
@@ -393,5 +396,28 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     // 兜底。若未来有人再加回来，本用例会失败。
     const d = testApp.runWithContext(() => usePendingDispatch());
     expect(d).not.toHaveProperty('bulkDispatchMutation');
+  });
+
+  it('T11：dispatch 失败 → 报错 toast + 重拉待下发列表（拖拽乐观删除的回滚）', async () => {
+    // 2026-10-02 回归 guard：待下发池改 vue-draggable-plus 后，Sortable 的内置
+    // onRemove 会在目标 onAdd 之前就把被拖卡片从待下发列表**乐观地** splice 掉。
+    // 下发失败时若不重拉，卡片凭空消失、且刷新前无法找回 ⇒ onError 必须
+    // invalidate 待下发域（不失效其余三域：只有 pending-batches 被本地动过）。
+    const { ElMessage } = await import('element-plus');
+    realDispatchBatches.mockRejectedValueOnce(new Error('BIZ_BATCH_ALREADY_DISPATCHED'));
+
+    const d = testApp.runWithContext(() => usePendingDispatch());
+    d.setSelectedIds(['3000000000001']);
+    await d.dispatchMutation
+      .mutateAsync({ batchIds: ['3000000000001'], targetProcessId: '2000000000001' })
+      .catch(() => undefined);
+
+    expect(ElMessage.error).toHaveBeenCalledWith('BIZ_BATCH_ALREADY_DISPATCHED');
+    const keys = vi
+      .mocked(testQueryClient.invalidateQueries)
+      .mock.calls.map((c) => (c[0] as { queryKey: readonly unknown[] }).queryKey);
+    expect(keys).toEqual([['pending-batches']]);
+    // 失败不动多选：用户的选择不该被一次失败清空
+    expect(d.selectedIds.value.size).toBe(1);
   });
 });

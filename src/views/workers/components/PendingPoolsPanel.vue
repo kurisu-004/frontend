@@ -9,7 +9,9 @@
      t_shelf_process 解析，前端不传）。
 
      2026-10-02：processes 元素新增 `color`（工序色，透传给卡片的左边框）；布局由
-     单列改 flex-wrap 网格，与左栏待下发池同款；删死 prop selectedCount（模板从未消费）。 -->
+     单列改 flex-wrap 网格，与左栏待下发池同款；删死 prop selectedCount（模板从未消费）。
+     2026-10-02 增 `hoveredProcessId`：拖拽悬停高亮态的透传口，逐卡折算成
+     PendingPoolCard 的 dropping。 -->
 <template>
   <div class="pending-pools-panel">
     <div v-if="processes.length === 0" class="empty">暂无可下发工序</div>
@@ -20,6 +22,7 @@
       :count="p.count"
       :selected-ids="selectedIds"
       :dispatch-mutation="dispatchMutation"
+      :dropping="p.id === hoveredProcessId"
     />
   </div>
 </template>
@@ -43,6 +46,10 @@ defineProps<{
   selectedIds: UsePendingDispatchReturn['selectedIds'];
   /** 下发 mutation 透传给 PendingPoolCard。 */
   dispatchMutation: UsePendingDispatchReturn['dispatchMutation'];
+  /** 2026-10-02：当前被拖拽悬停的工序 id（父级 WorkerQueueBoard 持有，源面板
+   *  PendingBatchesPanel 的 onMove 上报）。命中该 id 的工序卡渲染 .is-dropping 高亮，
+   *  null = 无悬停目标、全部不亮。 */
+  hoveredProcessId?: string | null;
 }>();
 </script>
 

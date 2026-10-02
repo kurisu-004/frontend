@@ -70,6 +70,7 @@
                 :selected-ids="pendingDispatch.selectedIds"
                 :set-selected-ids="pendingDispatch.setSelectedIds"
                 :auto-dispatch-mutation="pendingDispatch.autoDispatchMutation"
+                @hover-process="hoveredProcessId = $event"
               />
             </el-splitter-panel>
             <el-splitter-panel size="60%" :min="320">
@@ -77,6 +78,7 @@
                 :processes="inhouseProcessesForPanel"
                 :selected-ids="pendingDispatch.selectedIds"
                 :dispatch-mutation="pendingDispatch.dispatchMutation"
+                :hovered-process-id="hoveredProcessId"
               />
             </el-splitter-panel>
           </el-splitter>
@@ -166,6 +168,13 @@ const inhouseProcessesForPanel = computed(() =>
 
 const pendingDispatch = usePendingDispatch();
 const { error, moveBatchToWorker, moveBatchToPool } = queue;
+
+/** 2026-10-02：拖拽悬停的工序 id（null = 未悬停在任何工序卡上）—— 工序卡
+ *  `.is-dropping` 高亮的唯一状态源。
+ *  Sortable 的 onMove 只派发给**源**（待下发批次列表），投放目标侧收不到 ⇒ 状态落在
+ *  两个面板的共同父级，由源面板 emit 上报、逐级透传到 PendingPoolCard 的 dropping
+ *  prop。放在本组件而不是 usePendingDispatch：它是纯视觉反馈，不属于「下发」域。 */
+const hoveredProcessId = ref<string | null>(null);
 
 // 2026-09-30：loading 由 procsQuery.isLoading || countsQuery.isLoading 控制初始
 // skeleton，不阻塞 tab 切换。（旧 queueLoading 随 loadBoard 一并删除。）

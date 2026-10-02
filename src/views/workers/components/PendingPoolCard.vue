@@ -18,15 +18,20 @@
           批次卡同款网格节奏；
        2. **左边框取工序色**（process.color，未设置时回落主色）—— 工序卡是下发的
           视觉归属标识，与左侧批次卡的「加急橙」左边框占同一视觉位；
-       3. **拖拽改 vue-draggable-plus**：本卡片根 div 即 Sortable 投放目标容器，
-          用**二参重载**（不传 list）—— 传了 list 会带上一整套内置 handler，反过来
-          污染目标状态；且内置 onAdd 会把拖入的 DOM 节点塞进本容器却不受 Vue 管理。
-          成功态反馈只能挂目标的 onAdd（跨容器 drop 时目标的 onEnd 永不触发）。 -->
+     3. **拖拽改 vue-draggable-plus**：本卡片根 div 即 Sortable 投放目标容器，
+        用**二参重载**（不传 list）—— 传了 list 会带上一整套内置 handler，反过来
+        污染目标状态；且内置 onAdd 会把拖入的 DOM 节点塞进本容器却不受 Vue 管理。
+        成功态反馈只能挂目标的 onAdd（跨容器 drop 时目标的 onEnd 永不触发）；
+     4. **拖入高亮（.is-dropping）由父级驱动**：Sortable 的 _onMove 只从**被拖起的
+        那个容器**（源，即待下发批次列表）的 options.onMove 取回调，投放目标的 onMove
+        一次都不触发 ⇒ 高亮态由源面板 onMove 上报 process.id、经 WorkerQueueBoard 落到
+        本组件的 `dropping` prop。根 div 的 data-process-id 就是这条链路的识别标记。 -->
 <template>
   <div
     ref="dropRef"
-    :class="['pool-card', { 'is-dropping': isDropping }]"
+    :class="['pool-card', { 'is-dropping': props.dropping }]"
     :style="{ borderLeftColor: accent }"
+    :data-process-id="props.process.id"
     @click="onClick"
   >
     <div class="row">
@@ -58,17 +63,18 @@ interface Props {
   selectedIds: Ref<Set<string>>;
   /** 下发 mutation（来自 usePendingDispatch.dispatchMutation）。 */
   dispatchMutation: UsePendingDispatchReturn['dispatchMutation'];
+  /** 2026-10-02：拖拽悬停高亮态，由父级（PendingPoolsPanel ← WorkerQueueBoard）
+   *  透传。Sortable 只从源的 options.onMove 派发，投放目标自身收不到 onMove ⇒
+   *  本组件不持有该状态，只按 prop 渲染 .is-dropping。 */
+  dropping?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { dropping: false });
 
 /** 2026-10-02：左侧 4px 竖条色 = 工序色。工序色是 el-color-picker color-format="hex8"
  *  产出的 `#RRGGBBAA`（9 字符），CSS border-left-color 直接吃，不做任何字符串加工；
  *  后端 color 为 NULL（未设置）时回落主色。 */
 const accent = computed<string>(() => props.process.color ?? 'var(--el-color-primary)');
-
-// 2026-10-02：拖拽 hover 视觉态，改由 Sortable 事件驱动。
-const isDropping = ref(false);
 
 const dropRef = ref<HTMLElement | null>(null);
 /** 2026-10-02：Sortable 投放目标（二参重载，不传 list）。本卡片根 div 无条件渲染，
@@ -77,23 +83,14 @@ const dropRef = ref<HTMLElement | null>(null);
  *    本容器拖出，但外部投放仍可被 Sortable 的 _onDragOver 接受；
  *  - 成功态只能挂 onAdd：跨容器 drop 时目标的 onEnd 永不触发（end 只派发给源）。
  *
- *  ⚠️ 已知缺口：Sortable 的 _onMove 只从**被拖起的那个容器**（源）的 options.onMove
- *  取回调，目标的 onMove 一次都不触发 ⇒ 下面 onMove 里置的 isDropping=true 实际走不到，
- *  「拖入高亮」不会出现在真机上。当前配置下 isDropping 恒 false（onAdd / onSort 复位
- *  是幂等的），宁可少一个视觉反馈也不引入「拖开后高亮残留」的脏状态。要真正点亮高亮
- *  需把驱动改挂到源（PendingBatchesPanel）的 onMove 并跨组件传态，属跨组件联动。 */
+ *  这里**不挂 onMove / onSort**：Sortable 的 _onMove 取的是 `fromEl.options.onMove`
+ *  （源的实例），投放目标侧挂了在真机上永不触发，留着只会让人误以为高亮已接通。 */
 useDraggable(dropRef, {
   group: { name: 'pending-batches', put: true, pull: false },
   sort: false,
   draggable: '.never',
   animation: 150,
-  onMove: () => {
-    isDropping.value = true;
-  },
   onAdd: onDrop,
-  onSort: () => {
-    isDropping.value = false;
-  },
 });
 
 /** 单击工序卡 → 对已选 batchIds 下发到该工序。
@@ -113,12 +110,14 @@ function onClick() {
 
 /** 2026-10-02：拖入批次 → 下发（Sortable 目标端 onAdd）。
  *  - batch_id 取 `evt.item.dataset.batchId`（卡片上的 data-batch-id），**不取
- *    `evt.data`**：源容器混入非可拖子节点时 evt.data 不可靠；且节点即使已被 Sortable
+ *    `evt.data`：源容器混入非可拖子节点时 evt.data 不可靠；且节点即使已被 Sortable
  *    从 DOM 摘掉，dataset 仍可读；
  *  - 拖拽 = 只发被拖的那一件，**不读 selectedIds**（多选集合只属于单击路径）；
- *  - evt.item 可能缺失（Sortable 在目标无有效落点时不派发 item），兜一句短路。 */
+ *  - evt.item 可能缺失（Sortable 在目标无有效落点时不派发 item），兜一句短路。
+ *
+ *  高亮的清理由源侧 onEnd 负责（end 只派发给源，跨容器 drop 时本目标的 onEnd 永不
+ *  触发，故此处不能也不该复位 dropping）。 */
 function onDrop(evt: DraggableEvent) {
-  isDropping.value = false;
   const item = evt?.item;
   if (!item) return;
   const batchId = item.dataset.batchId;
@@ -128,6 +127,7 @@ function onDrop(evt: DraggableEvent) {
     targetProcessId: props.process.id,
   });
 }
+
 </script>
 
 <style scoped>
