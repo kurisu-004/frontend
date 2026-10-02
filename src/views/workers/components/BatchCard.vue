@@ -105,7 +105,10 @@ const props = withDefaults(
     /** 勾选态（父级持有的已选集合决定，组件自身不存勾选状态）。 */
     selected?: boolean;
     /** 左侧 4px 竖条颜色（CSS 颜色值，含 '#RRGGBBAA'）。null/undefined = 回落到
-     *  is_urgent 橙色，不着色时透明。 */
+     *  is_urgent 橙色，不着色时透明。
+     *  全仓暂无调用方传这个 prop，当前生效的只有「is_urgent 回落」这一级；带工序色
+     *  左边框的 PendingPoolCard 是另一个组件、自己用 inline :style 着色，两者不共用
+     *  机制。本 prop 保留作为统一卡片的公开 API。 */
     accentColor?: string | null;
   }>(),
   {
@@ -121,7 +124,7 @@ defineOptions({ name: 'BatchCard', inheritAttrs: false });
 
 /** 左侧竖条色：显式 accentColor 优先，其次加急橙色（沿用旧卡片的 #e6a23c，
  *  即 --el-color-warning），都不满足则透明。 */
-const accentVar = computed<string>(
+const accentVar = computed(
   () => props.accentColor ?? (props.batch.is_urgent ? 'var(--el-color-warning)' : 'transparent'),
 );
 
@@ -185,10 +188,16 @@ function onToggleSelect(): void {
   background: var(--el-color-primary-light-9);
   box-shadow: 0 0 0 1px var(--el-color-primary);
 }
+/* 2026-10-02：勾选角标绝对定位在 left/top 4px，而 EP 2.14.6 的 .el-checkbox--small
+   把 height 直接钉死成 24px（不走 --el-checkbox-height 变量），y 4..28 会探进第 2 行
+   （y 8..26）2px。scoped 编译后本选择器带 [data-v-*]、优先级高于 EP 的
+   .el-checkbox--small，故在这里压回与行高一致的 18px。 */
 .card-check {
+  --el-checkbox-height: 18px;
   position: absolute;
   left: 4px;
   top: 4px;
+  height: 18px;
 }
 .row {
   display: flex;

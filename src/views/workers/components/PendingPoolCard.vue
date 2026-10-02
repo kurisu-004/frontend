@@ -108,6 +108,11 @@ function onClick() {
   });
 }
 
+/** sortablejs 派发的 add 事件体最小投影：sortablejs 1.15.2 构造 CustomEvent 时
+ *  会挂上 `originalEvent`（原生事件本体），vue-draggable-plus 的 handler 组合原样
+ *  透传同一个对象；@types/sortablejs 的 SortableEvent 未声明该字段，故本地补投影。 */
+type AddEvent = DraggableEvent & { originalEvent?: Event };
+
 /** 2026-10-02：拖入批次 → 下发（Sortable 目标端 onAdd）。
  *  - batch_id 取 `evt.item.dataset.batchId`（卡片上的 data-batch-id），**不取
  *    `evt.data`：源容器混入非可拖子节点时 evt.data 不可靠；且节点即使已被 Sortable
@@ -115,9 +120,29 @@ function onClick() {
  *  - 拖拽 = 只发被拖的那一件，**不读 selectedIds**（多选集合只属于单击路径）；
  *  - evt.item 可能缺失（Sortable 在目标无有效落点时不派发 item），兜一句短路。
  *
+ *  投放确认守卫：onAdd 何时触发完全由库决定，判据只有一条「被拖节点的原父容器 ≠
+ *  当前父容器」（sortablejs `_onDrop` 的 `C !== I` 分支），库里**没有**「释放在目标
+ *  外就回滚」的能力。指针 dragover 进本卡时 Sortable 会把被拖卡片**真实插入**本容器
+ *  占位，而指针随后移出或用户按 Esc 都没有 handler 撤回占位 —— 于是用户以为放弃了，
+ *  下发却照发。故判据改用 `originalEvent`（原生事件本体）自证落点：
+ *   - 按 Esc / 原生拖拽自行终止 ⇒ 触发的是 `dragend`（该监听挂在被拖节点上，
+ *     `drop` 压根不触发），第一道守卫挡掉；
+ *   - 指针在卡片间隙 / 面板空白 / 工具条 / tab 条上松手 ⇒ 触发 `drop`，但 Sortable 的
+ *     drop 监听挂在 document 上（`_onDragStart` 内 `D(document, 'drop', o)`），
+ *     冒泡到 document 时 `target` 仍是浏览器算出的指针下最深元素，不在本卡内 ⇒
+ *     第二道守卫挡掉；
+ *   - 正常在卡内松手 ⇒ `drop` + target 在本卡内 ⇒ 放行。
+ *
  *  高亮的清理由源侧 onEnd 负责（end 只派发给源，跨容器 drop 时本目标的 onEnd 永不
  *  触发，故此处不能也不该复位 dropping）。 */
 function onDrop(evt: DraggableEvent) {
+  // 释放在本卡之外（含 Esc 取消）⇒ 视为放弃投放，不下发
+  const orig = (evt as AddEvent).originalEvent;
+  if (orig?.type !== 'drop') return;
+  const rootEl = dropRef.value;
+  const target = orig.target as Node | null;
+  if (!rootEl || !target || !rootEl.contains(target)) return;
+
   const item = evt?.item;
   if (!item) return;
   const batchId = item.dataset.batchId;
@@ -127,7 +152,6 @@ function onDrop(evt: DraggableEvent) {
     targetProcessId: props.process.id,
   });
 }
-
 </script>
 
 <style scoped>
@@ -168,8 +192,10 @@ function onDrop(evt: DraggableEvent) {
   display: flex;
   align-items: center;
   min-width: 0;
-  /* 3 行统一 18px 行高：3×18 + 2×2 gap + 上下各 8 padding + 上下各 1px 边框
-     = 76px ≤ 96px 固定高，余量 20px 吸收字体渲染的行高波动。 */
+  /* 3 行统一 18px 行高，但第 2 行的行高由 el-tag size="small" 决定（EP 把
+     .el-tag--small 钉成 24px，flex 行内实际高 24px）：18 + 24 + 18 + 2×2 gap
+     + 上下各 8 padding + 上下各 1px 边框 = 82px ≤ 96px 固定高，余量 14px 吸收
+     字体渲染的行高波动。 */
   line-height: 18px;
   font-size: 12px;
 }

@@ -25,6 +25,8 @@
 //   - P6 同步改写：onAdd 收到的 item 缺 data-batch-id（或 item 本身缺失）→ 不 mutate。
 //   - P7 / P8：2026-10-02 拖入高亮跨组件联动在本卡片侧的契约锚点 —— 根 div 的
 //     data-process-id（源侧 onMove 靠它识别悬停目标）与 dropping prop → .is-dropping。
+//   - P9：2026-10-02 投放确认守卫 —— onAdd 只认「原生 drop 且落点在本卡内」，
+//     dragend（Esc 取消）与 target 在本卡外都不得 mutate。
 //
 // 测试策略（沿 LoginView.spec.ts 范本）：
 //   - vue-test-utils mount + globalConfig.plugins: [[VueQueryPlugin, { queryClient }]]；
@@ -153,6 +155,21 @@ function capturedOnAdd(): (evt: unknown) => void {
   return captured.calls[0].options.onAdd as (evt: unknown) => void;
 }
 
+/** 2026-10-02：构造一个「释放在本卡内」的原生 drop 事件投影。
+ *  Sortable 派发 add 时把原生事件本体原样挂在 originalEvent 上（vue-draggable-plus
+ *  的 handler 组合也透传同一个对象），组件据其 type + target 自证落点。
+ *  这里的 originalEvent 只能由测试自造：vi.mock('vue-draggable-plus') 下没有真实
+ *  Sortable，也就没有真实的 document 级 drop 监听。 */
+function insideDrop(target: Element): { type: string; target: Element } {
+  return { type: 'drop', target };
+}
+
+/** 2026-10-02：Esc 取消 / 原生拖拽自行终止 ⇒ Sortable 走 _onDrop(dragend)，
+ *  此时 onAdd 照样派发（判据只有「父容器变了」），必须由组件的守卫挡掉。 */
+function dragEndEvt(target: Element): { type: string; target: Element } {
+  return { type: 'dragend', target };
+}
+
 describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
   beforeEach(() => {
     realGetWorkerPoolByProcess.mockClear();
@@ -225,7 +242,10 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
     await flushPromises();
     // batch_id 读自被拖节点的 data-batch-id（BatchCard 根 div 上恒渲染），**不读
     // evt.data**：源列表混入非可拖子节点时 data 不可靠。
-    capturedOnAdd()({ item: { dataset: { batchId: '3000000000009' } } });
+    capturedOnAdd()({
+      item: { dataset: { batchId: '3000000000009' } },
+      originalEvent: insideDrop(wrapper.find('.pool-card').element),
+    });
     // 拖拽只发被拖的那一件，**不读 selectedIds**（多选集合只属于单击路径）。
     expect(mutate).toHaveBeenCalledTimes(1);
     expect(mutate).toHaveBeenCalledWith({
@@ -239,7 +259,10 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
     const mutate = vi.fn();
     const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
     await flushPromises();
-    capturedOnAdd()({ item: { dataset: {} } });
+    capturedOnAdd()({
+      item: { dataset: {} },
+      originalEvent: insideDrop(wrapper.find('.pool-card').element),
+    });
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -248,7 +271,10 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
     const mutate = vi.fn();
     const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
     await flushPromises();
-    capturedOnAdd()({ item: { dataset: { batchId: '' } } });
+    capturedOnAdd()({
+      item: { dataset: { batchId: '' } },
+      originalEvent: insideDrop(wrapper.find('.pool-card').element),
+    });
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -257,7 +283,38 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
     const mutate = vi.fn();
     const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
     await flushPromises();
+    // 既无 item 也无 originalEvent ⇒ 投放确认守卫直接短路，返回前不得抛
     expect(() => capturedOnAdd()({})).not.toThrow();
+    expect(mutate).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('P9：originalEvent.type === dragend（Esc 取消 / 外放）→ 不触发 mutate', async () => {
+    // 回归 guard：拖到工序卡上（Sortable 已把卡片真实插入目标当占位）后按 Esc，
+    // 浏览器触发的是 dragend（该监听挂在被拖节点上，drop 根本不触发），但 _onDrop
+    // 仍会因「父容器变了」派发 add ⇒ 组件必须自己挡掉，否则下发一件用户没确认的批次。
+    const mutate = vi.fn();
+    const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
+    await flushPromises();
+    capturedOnAdd()({
+      item: { dataset: { batchId: '3000000000009' } },
+      originalEvent: dragEndEvt(wrapper.find('.pool-card').element),
+    });
+    expect(mutate).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('P9b：originalEvent.type === drop 但 target 不在本卡内 → 不触发 mutate', async () => {
+    // 回归 guard：指针滑到 8px 卡片间隙 / 面板空白 / 工具条上松手。Sortable 的 drop
+    // 监听挂在 document 上（冒泡），originalEvent.target 是浏览器算出的指针下最深
+    // 元素，不在 .pool-card 内 ⇒ 视为放弃投放。
+    const mutate = vi.fn();
+    const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
+    await flushPromises();
+    capturedOnAdd()({
+      item: { dataset: { batchId: '3000000000009' } },
+      originalEvent: insideDrop(document.createElement('div')),
+    });
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });

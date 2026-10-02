@@ -95,10 +95,13 @@ const selectedIdsValue = computed<Set<string>>(() => props.selectedIds.value);
 const cards = computed<BatchCardModel[]>(() => props.batches.map(pendingBatchToCard));
 
 const cardsRef = ref<HTMLElement | null>(null);
-// 2026-10-02：Sortable 会 splice 这个数组，必须用本地可写副本（props.batches 来自
-// TanStack query，只读）。拖拽跨容器落下时 Sortable 的内置 onRemove 会**乐观地**把
-// 卡片从本列表移除，失败回滚由 usePendingDispatch 的 dispatchMutation.onError
-// 重拉待下发列表承担。
+/** 2026-10-02：传给 useLazyDraggable 的本地副本，**不是渲染源**（模板 v-for 走
+ *  props.batches 派生的 cards）。它存在的唯一理由是让 vue-draggable-plus 往本实例注入
+ *  源端内置 handler —— 三参重载（el + list + options）下库才会挂上内部 onAdd /
+ *  onRemove / onEnd 等，其中内部 onRemove 的第一句
+ *  `from.insertBefore(item, from.children[oldIndex])` 负责**把被拖节点放回源容器**。
+ *  ⚠️ 不要「简化」成二参重载（不传 list）：源端就没有内置 handler，被拖节点会永久卡
+ *  在目标工序卡里，而且它不在 vnode 树中，Vue 后续重渲染也清不掉。 */
 const sortableCards = ref<BatchCardModel[]>([]);
 watch(
   cards,
@@ -107,9 +110,10 @@ watch(
   },
   { immediate: true },
 );
-// 2026-10-02：下发目标改由 PendingPoolCard 上的 Sortable 容器接（vue-draggable-plus
-// 二参重载）。故本容器 put: false（不接收外部投放）、pull: true（只允许拖出去）、
-// sort: false（池内不重排，待下发列表的顺序由后端排定）。
+// 2026-10-02：下发目标由 PendingPoolCard 上的 Sortable 容器接（**二参重载**，目标端
+// 不注入内置 handler，避免把拖入的 DOM 节点塞进目标却不交给 Vue 管）。本容器
+// put: false（不接收外部投放）、pull: true（只允许拖出去）、sort: false（池内不重排，
+// 待下发列表的顺序由后端排定）。
 // 用 useLazyDraggable 而非裸 useDraggable：本容器位于 v-if / v-else-if / v-else
 // 分支内，挂载瞬间 ref 必为 null。
 useLazyDraggable(cardsRef, sortableCards, {
@@ -121,8 +125,14 @@ useLazyDraggable(cardsRef, sortableCards, {
   // 2026-10-02：拖入工序卡高亮。onMove 只挂在**源**（本容器）上才收得到 —— Sortable
   // 的 _onMove 读 `fromEl.options.onMove`。返回值 void 即可，只有返回 false 才阻止放置。
   onMove: (evt) => {
-    const related = evt?.related as HTMLElement | undefined;
+    const related = evt?.related;
     emit('hoverProcess', related?.dataset?.processId ?? null);
+  },
+  // 拖拽一开始就不该有任何高亮：Sortable 的 isOwner 分支在「指针仍在源容器内、被拖
+  // 节点尚未被移出」时不派发 onMove（本容器 sort:false ⇒ canSort 为假，revert 也不
+  // 成立），此时若不主动清零，从工序卡 A 拖回待下发池的途中 A 的高亮会一直亮到 onEnd。
+  onStart: () => {
+    emit('hoverProcess', null);
   },
   // 清高亮：end 只派发给源，且「落在工序卡上」与「拖拽中途取消」都会走到 ⇒ 不会残留。
   onEnd: () => {
@@ -218,6 +228,12 @@ function onAutoDispatch() {
 /* BatchCard 自身固定 200px 宽，此处只锁死不伸缩，避免拉伸破坏网格对齐。 */
 .pending-cards :deep(.batch-card) {
   flex: 0 0 200px;
+}
+/* 2026-10-02：待下发池的拖拽反馈。src/styles/ 下没有全局 .sortable-ghost 规则，
+   仓内各处都在自己的 scoped style 里 :deep 定义 —— 漏掉就等于拖起来毫无视觉反馈。
+   半透明度对齐旧实现（原生 DnD 时代 .is-dragging { opacity: 0.4 }）。 */
+:deep(.sortable-ghost) {
+  opacity: 0.4;
 }
 .footer {
   margin-top: 12px;

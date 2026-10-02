@@ -17,11 +17,12 @@
 //   - B10：根 div 恒渲染 data-batch-id（拖放链路读 batch_id 的锚点）；
 //   - B11：is-selected 类只在 selectable 场景成立（工序池 / 工人列的卡片没有勾选语义）；
 //   - B12：batch_no 为空 → tooltip 的批次号行不渲染（顺带覆盖 tooltip 的 v-if）。
+//   - B13：accentColor 三级优先级（显式值 > 加急橙 > transparent）。
 //
 // 环境限制（2026-10-02 记档）：vitest 下 Vue 的 useCssVars 是空实现 ⇒ 模板里
-// `v-bind(accentVar)` 产出的 CSS 变量不落 DOM，**左边框色不可断言**。故 accentColor
-// 的优先级（显式值 > 加急橙 > 透明）不在本 spec 覆盖范围内，只测可测的 class /
-// props 形态。
+// `v-bind(accentVar)` 产出的 CSS 变量不落 DOM，**样式层的左边框色不可断言**。
+// 但 script-setup 的 ref 在 dev 构建下留在 `wrapper.vm.$.setupState` 上，故
+// accentColor 的优先级改从 `setupState.accentVar` 断言（等价于模板拿到的那个值）。
 //
 // 测试策略：
 //   - vue-test-utils mount + EP 组件 stub（el-tooltip / el-checkbox）；
@@ -117,6 +118,12 @@ function mountCard(
     attrs,
     global: globalConfig,
   });
+}
+
+/** 2026-10-02：读 script-setup 暴露到 setupState 上的 accentVar（proxyRefs 已解包，
+ *  拿到的就是模板 `v-bind(accentVar)` 实际使用的那个字符串）。 */
+function accentVarOf(wrapper: ReturnType<typeof mountCard>): unknown {
+  return (wrapper.vm.$ as unknown as { setupState: Record<string, unknown> }).setupState.accentVar;
 }
 
 describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
@@ -298,5 +305,22 @@ describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
     expect(wrapper.find('.card-tooltip').exists()).toBe(true);
     expect(wrapper.find('.card-tooltip').text()).toContain('客户(L1)');
     wrapper.unmount();
+  });
+
+  it('B13：accentColor 三级优先级：显式值 > 加急橙 > 透明', () => {
+    // 显式 accentColor 压过加急回落
+    const explicit = mountCard(makeBatch({ is_urgent: true }), { accentColor: '#1e4d8b' });
+    expect(accentVarOf(explicit)).toBe('#1e4d8b');
+    explicit.unmount();
+
+    // 不传 → 回落加急橙（旧卡片的 #e6a23c = --el-color-warning）
+    const urgent = mountCard(makeBatch({ is_urgent: true }));
+    expect(accentVarOf(urgent)).toBe('var(--el-color-warning)');
+    urgent.unmount();
+
+    // 既不传也不加急 → 透明（只留 4px 透明占位，不与相邻卡片粘连）
+    const plain = mountCard(makeBatch({ is_urgent: false }));
+    expect(accentVarOf(plain)).toBe('transparent');
+    plain.unmount();
   });
 });

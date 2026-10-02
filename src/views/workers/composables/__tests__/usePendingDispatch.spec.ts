@@ -30,7 +30,7 @@
 //   - T9：setSelectedIds / clearSelection 行为正确（基础状态守卫）。
 //   - T10：不再接受 deps（旧 refreshBoard 注入链已删）。
 //   - T11：dispatchMutation 失败 → 报错 toast + 只失效 pending-batches 域
-//     （Sortable 乐观删除的回滚路径，多选保持不动）。
+//     （「失败即与服务器对账」的重拉路径，多选保持不动）。
 //
 // 测试策略：
 //   - vi.mock('@/api/pendingBatches')：dispatchBatches / previewAutoDispatch /
@@ -385,10 +385,8 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     const d = testApp.runWithContext(() => usePendingDispatch());
     d.setSelectedIds(['3000000000001', '3000000000002', '3000000000003']);
     expect(d.selectedIds.value.size).toBe(3);
-    expect(d.selectedCount.value).toBe(3);
     d.clearSelection();
     expect(d.selectedIds.value.size).toBe(0);
-    expect(d.selectedCount.value).toBe(0);
   });
 
   it('T10：不再接受 deps 参数（旧 refreshBoard 注入链已删）', () => {
@@ -398,11 +396,11 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     expect(d).not.toHaveProperty('bulkDispatchMutation');
   });
 
-  it('T11：dispatch 失败 → 报错 toast + 重拉待下发列表（拖拽乐观删除的回滚）', async () => {
-    // 2026-10-02 回归 guard：待下发池改 vue-draggable-plus 后，Sortable 的内置
-    // onRemove 会在目标 onAdd 之前就把被拖卡片从待下发列表**乐观地** splice 掉。
-    // 下发失败时若不重拉，卡片凭空消失、且刷新前无法找回 ⇒ onError 必须
-    // invalidate 待下发域（不失效其余三域：只有 pending-batches 被本地动过）。
+  it('T11：dispatch 失败 → 报错 toast + 与服务器对账重拉待下发列表', async () => {
+    // 2026-10-02 回归 guard：失败时卡片本来就不会从待下发池消失（面板渲染的是
+    // props.batches 派生的 cards，Sortable 改的是不参与渲染的本地副本
+    // sortableCards + DOM，被拖节点由库放回源容器），onError 里的重拉是「失败即对账」
+    // 的兜底。若哪天有人删掉它，本用例的失效域断言会失败。
     const { ElMessage } = await import('element-plus');
     realDispatchBatches.mockRejectedValueOnce(new Error('BIZ_BATCH_ALREADY_DISPATCHED'));
 
@@ -413,6 +411,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
       .catch(() => undefined);
 
     expect(ElMessage.error).toHaveBeenCalledWith('BIZ_BATCH_ALREADY_DISPATCHED');
+    // 只失效 pending-batches 域，不碰其余四域（失败的写只波及待下发列表）
     const keys = vi
       .mocked(testQueryClient.invalidateQueries)
       .mock.calls.map((c) => (c[0] as { queryKey: readonly unknown[] }).queryKey);

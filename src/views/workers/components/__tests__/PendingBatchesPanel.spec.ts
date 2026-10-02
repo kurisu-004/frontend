@@ -12,6 +12,7 @@
 //   - H2：onMove 的 evt.related = 悬停的工序卡根 div → emit hover-process(该工序 id)。
 //   - H3：onMove 的 related 缺 dataset.processId / 为 null → emit hover-process(null)。
 //   - H4：onEnd → emit hover-process(null)（落在工序卡上 / 中途取消都会走，不会残留）。
+//   - H4b：onStart → emit hover-process(null)（拖拽一开始就不该有高亮）。
 //   - H5：渲染 batch 列表（BatchCard）+ 全选 / 自动下发工具条基本接线。
 //
 // 测试策略：
@@ -68,7 +69,10 @@ const ElTooltipStub = defineComponent({
 
 const ElCheckboxStub = defineComponent({
   name: 'ElCheckboxStub',
-  props: { modelValue: { type: [Boolean, String, Number], default: false }, indeterminate: Boolean },
+  props: {
+    modelValue: { type: [Boolean, String, Number], default: false },
+    indeterminate: Boolean,
+  },
   emits: ['change', 'update:modelValue'],
   setup(props, { emit, slots }) {
     return () =>
@@ -239,10 +243,26 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
     wrapper.unmount();
   });
 
+  it('H4b：onStart → emit hover-process(null)（拖拽一开始就不该留高亮）', async () => {
+    // 回归 guard：Sortable 的 isOwner 分支在「指针仍在源容器内、被拖节点尚未被移出」
+    // 时不派发 onMove（本容器 sort:false ⇒ canSort 为假）⇒ 从工序卡 A 拖回待下发池
+    // 的途中 A 的高亮无人清零，只能靠 onStart 主动清。
+    const wrapper = mountPanel();
+    await flushPromises();
+    const options = capturedOptions();
+    (options.onMove as (evt: unknown) => void)({ related: fakeProcessCardEl('2000000000001') });
+    (options.onStart as (evt: unknown) => void)({});
+    expect(wrapper.emitted('hoverProcess')).toEqual([['2000000000001'], [null]]);
+    wrapper.unmount();
+  });
+
   it('H5：渲染 batch 列表（BatchCard）+ 勾选 / 自动下发基本接线', async () => {
     const setSelectedIds = vi.fn();
     const wrapper = mountPanel(
-      [makeDto({ batch_id: '3000000000009' }), makeDto({ batch_id: '3000000000010', name: '齿轮' })],
+      [
+        makeDto({ batch_id: '3000000000009' }),
+        makeDto({ batch_id: '3000000000010', name: '齿轮' }),
+      ],
       { setSelectedIds },
     );
     await flushPromises();
