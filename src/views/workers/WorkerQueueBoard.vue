@@ -7,6 +7,15 @@
          全部带 :lazy="true" ⇒ 切到该 tab 才 mount 才发 `GET /prod/pool/{pid}`
      tab 标题 `(N)` 徽标数据源 = useWorkerPoolCountsQuery（单请求跨货架聚合）。
 
+     2026-10-02 卡片统一（详见文末变更记录）：
+       - 原先待下发池与工序池 / 工人列分用的两张旧卡片合并为全看板唯一的 BatchCard，
+         工序池 / 工人列 / 待下发池三处共用，DTO 差异收在
+         views/workers/composables/poolItemToCard.ts 适配层；
+       - 全站拖拽统一 vue-draggable-plus（含「待下发 → 工序卡」这条下发链路，
+         从原生 HTML5 DnD 改为 Sortable）；
+       - 右侧工序卡与左侧批次卡同款 200×96 盒模型 + 工序色左边框 + flex 网格；
+       - 左侧待下发池 / 工序 tab 的工序池改为「固定一屏 + 内部滚动」。
+
      2026-09-30 三项修复（详见文末变更记录）：
        1. 对齐后端 `worker-pool` → `pool` 路径收敛（全部 URL 前缀 `/prod/worker-pool`
           → `/prod/pool`；assign + remove 合并为 `/prod/pool/move`）；
@@ -67,7 +76,6 @@
               <PendingPoolsPanel
                 :processes="inhouseProcessesForPanel"
                 :selected-ids="pendingDispatch.selectedIds"
-                :selected-count="pendingDispatch.selectedCount.value"
                 :dispatch-mutation="pendingDispatch.dispatchMutation"
               />
             </el-splitter-panel>
@@ -143,12 +151,15 @@ function poolCount(pid: string): number | string {
 /** 2026-09-30：「待下发」Tab 工序卡 props —— 轻量元数据 + 聚合计数徽标。
  *  **不拉 per-process 详情**：改前每张卡自管 useWorkerPoolByProcessQuery，进页面
  *  即打 N 个 `GET /prod/pool/{pid}`（N = INHOUSE 工序数），与「切 tab 懒加载」
- *  的设计意图相反。现徽标直接复用上面已 eager 拉取的 counts。 */
+ *  的设计意图相反。现徽标直接复用上面已 eager 拉取的 counts。
+ *  2026-10-02：补 `color`（工序色，PendingPoolCard 用作左边框）。Process.color
+ *  已在 useProcessesQuery 的返回里，零新增请求。 */
 const inhouseProcessesForPanel = computed(() =>
   inhouseProcs.value.map((p) => ({
     id: p.id,
     code: p.code,
     name: p.name,
+    color: p.color ?? null,
     count: poolCount(p.id),
   })),
 );
@@ -226,6 +237,21 @@ async function onRefresh() {
 .pool-tabs {
   margin: 0;
   border-bottom: 1px solid var(--el-border-color-lighter);
+  /* 2026-10-02：需求「待下发池与工序池显示高度固定为一个屏幕」的高度链起点。
+     EP 2.14.6 的 .el-tabs 是 display:flex / .el-tabs--top 是 column / .el-tabs__content
+     是 flex-grow:1 + overflow:hidden —— 只要本页 .worker-queue-board 把 .pool-tabs
+     撑开，下游 el-splitter（height:100%）与 splitter-panel（无 CSS 规则，靠
+     align-items:stretch 拿确定高度）就能逐级传递。 */
+  flex: 1;
+  min-height: 0;
+}
+/* .el-tabs__content 自带 padding:15px，min-height:0 让内部 el-tab-pane 可以收缩，
+   否则 height:100% 会在内容盒上加 padding 溢出。 */
+.pool-tabs :deep(.el-tabs__content) {
+  min-height: 0;
+}
+.pool-tabs :deep(.el-tab-pane) {
+  height: 100%;
 }
 .pool-tabs :deep(.el-tabs__nav-wrap)::after {
   background: transparent;

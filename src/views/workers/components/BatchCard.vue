@@ -115,7 +115,7 @@ const props = withDefaults(
   },
 );
 
-const emit = defineEmits<(e: 'toggle-select') => void>();
+const emit = defineEmits<(e: 'toggleSelect') => void>();
 
 defineOptions({ name: 'BatchCard', inheritAttrs: false });
 
@@ -142,10 +142,7 @@ const hasDetails = computed<boolean>(
 
 // 勾选态翻转：不带 payload，batch_id 由消费侧从 `batch.batch_id` 读。
 function onToggleSelect(): void {
-  // 2026-10-02：emit 名取 kebab-case（与 DOM 事件命名习惯一致、父级 @toggle-select
-  // 直写），仓内其余组件用 camelCase；此处单行豁免，不改全仓 lint 配置。
-  // eslint-disable-next-line vue/custom-event-name-casing
-  emit('toggle-select');
+  emit('toggleSelect');
 }
 </script>
 
@@ -178,10 +175,13 @@ function onToggleSelect(): void {
 .batch-card.is-selectable {
   cursor: grab;
 }
-/* 2026-10-02：沿用旧 PendingBatchCard 的选中态规则（主色描边 + 浅主色底 + 外发光），
-   仅在 selectable 场景启用 —— 工序池 / 工人列的卡片没有勾选语义。 */
+/* 2026-10-02：沿用旧卡片的选中态规则（主色描边 + 浅主色底 + 外发光），仅在
+   selectable 场景启用 —— 工序池 / 工人列的卡片没有勾选语义。
+   只覆盖上/右/下三边：左边框是加急橙（accentVar）的语义位，勾选态不能吃掉它。 */
 .batch-card.is-selected {
-  border-color: var(--el-color-primary);
+  border-top-color: var(--el-color-primary);
+  border-right-color: var(--el-color-primary);
+  border-bottom-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
   box-shadow: 0 0 0 1px var(--el-color-primary);
 }

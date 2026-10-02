@@ -5,10 +5,9 @@
 // 折中：@start 时（DOM dataset 还完整）把源信息写到模块级 Map；@add 时读 + delete。
 //
 // 模块级单例：WorkerColumn 与 PoolDrawer 共用同一份 Map。
-// 用前缀隔离三类条目（同 batchId 不会冲突）：
+// 用前缀隔离两类条目（同 batchId 不会冲突）：
 //   - 裸 batchId     → 候选池源（recordPoolSource / consumePoolSource）
 //   - 'w:' + batchId → 工人持有源（recordWorkerSource / consumeWorkerSource）
-//   - 'b:' + batchId → 待下发源（recordBatchSource / consumeBatchSource）
 //
 // 2026-08-27：把 vue-draggable-plus Sortable.js 原生事件子集（onStart/onAdd 共有：
 // item + from）抽成本接口，WorkerColumn / PoolDrawer 共用，避免重复声明。
@@ -67,21 +66,5 @@ export function recordWorkerSource(batchId: string, fromWorkerId: string): void 
 export function consumeWorkerSource(batchId: string): string | undefined {
   const v = sources.get(`w:${batchId}`);
   sources.delete(`w:${batchId}`);
-  return v;
-}
-
-/** 2026-09-29 新增：记录「待下发」批次拖出源（PendingBatchesPanel 接收端使用）。
- *  与 recordWorkerSource 同 Map 复用；用 'b:' 前缀隔离（与 'w:' / 裸 batchId 三类条目互不冲突）。
- *  PendingBatchesPanel 走 HTML5 native drag（不用 Sortable），但同样在 dragstart
- *  记源、drop 时消费，保持 API 形态一致。 */
-export function recordBatchSource(batchId: string): void {
-  sources.set(`b:${batchId}`, 'pending');
-}
-
-/** 2026-09-29 新增：消费「待下发」批次拖入目标（PendingPoolCard 在 @drop 时调用）。
- *  返回值保留扩展位（目前固定 'pending'）。 */
-export function consumeBatchSource(batchId: string): string | undefined {
-  const v = sources.get(`b:${batchId}`);
-  sources.delete(`b:${batchId}`);
   return v;
 }

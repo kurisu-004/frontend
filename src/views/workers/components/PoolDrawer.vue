@@ -23,9 +23,17 @@
         <el-tag size="small" type="info">{{ pool.batches.length }}</el-tag>
       </div>
       <div ref="containerRef" class="section-body pool-cards" :data-process-id="pool.process_id">
-        <div v-for="batch in pool.batches" :key="batch.batch_id" class="pool-cards-item">
-          <WorkOrderCard :batch="batch" />
-        </div>
+        <!-- 2026-10-02：卡片渲染收敛到 BatchCard.vue，包装层删除。Sortable 容器的
+             直接子元素必须**全是可拖项** —— 混入 header / 空态会让
+             oldIndex ≠ oldDraggableIndex，污染后续所有事件。data-shelf-id 经
+             BatchCard 的 fallthrough attrs 落到卡片根 div（BatchCard 是
+             inheritAttrs: false + v-bind="$attrs"）。 -->
+        <BatchCard
+          v-for="batch in pool.batches"
+          :key="batch.batch_id"
+          :batch="batch"
+          :data-shelf-id="batch.shelf_id ?? ''"
+        />
       </div>
     </div>
     <div v-else class="pool-empty">无工序数据</div>
@@ -43,7 +51,7 @@ import {
   recordPoolSource,
   type DraggableStartEvent,
 } from '@/utils/dndSourceTracker';
-import WorkOrderCard from './WorkOrderCard.vue';
+import BatchCard from './BatchCard.vue';
 
 const props = defineProps<{
   pool: ProcessPoolView | null;
@@ -91,7 +99,8 @@ const shelfId = inject<ComputedRef<string>>('shelfId', computed(() => ''));
  *  `POST /prod/pool/move` 的 `from: {kind:'POOL', shelf_id}` 需与
  *  batch.current_holder_id 严格一致，否则后端 20122。而 `GET /prod/pool/{pid}` 是
  *  跨所有货架返回候选批次的，batch 货架未必等于当前激活货架 —— 所以从卡片自身的
- *  `data-shelf-id` dataset 读（WorkOrderCard.vue 渲染），不能用 shelfId.value。 */
+ *  `data-shelf-id` dataset 读（模板上以 fallthrough attrs 传进 BatchCard），不能用
+ *  shelfId.value。 */
 function onDragStart(evt: DraggableStartEvent) {
   // dataset 里的 kebab-case 自动转 camelCase：data-process-id → processId。
   const batchId = evt.item.dataset.batchId;
@@ -119,15 +128,24 @@ async function onDragAdd(evt: DraggableStartEvent) {
 </script>
 
 <style scoped>
+/* 2026-10-02：需求「工序 tab 左侧的工序池显示高度固定为一个屏幕」的高度链落点 ——
+   抽屉本身不再滚（overflow: hidden），只有卡片区 .pool-cards 内部滚动，
+   .section-header（工序 code + name + 数量徽标）常驻可见。 */
 .pool-drawer {
   width: 100%;
   height: 100%;
   padding: 12px;
   box-sizing: border-box;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .pool-section {
   margin-bottom: 24px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .section-header {
   display: flex;
@@ -137,6 +155,7 @@ async function onDragAdd(evt: DraggableStartEvent) {
   padding: 8px;
   background: var(--el-fill-color-light);
   border-radius: 4px;
+  flex-shrink: 0;
 }
 .process-code {
   font-weight: 600;
@@ -152,12 +171,20 @@ async function onDragAdd(evt: DraggableStartEvent) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  min-height: 60px;
+  padding: 4px 0;
+  align-content: flex-start;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.pool-cards :deep(.batch-card) {
+  flex: 0 0 200px;
 }
 .pool-empty {
   padding: 24px;
   text-align: center;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+  flex-shrink: 0;
 }
 </style>

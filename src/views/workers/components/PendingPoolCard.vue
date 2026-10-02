@@ -4,7 +4,7 @@
 
      2026-09-30 懒加载关键改动：**本卡片不再自管 useWorkerPoolByProcessQuery**。
      改前：卡片为了渲染右上角 badge（`items.length`）而发 `GET /prod/pool/{pid}`，
-     而本卡片位于**默认首屏激活的「待下发」tab** 内、且 `v-for` 全部 INHOUSE 工序
+     而本卡片位于**默认首屏激活的「待下发」tab**内、且 `v-for` 全部 INHOUSE 工序
      ⇒ 进页面即打出 N 个 per-process 详情请求（N+1），与「切到 tab 才懒加载」的
      设计意图完全相反。
      改后：badge 直接取 `useWorkerPoolCountsQuery` 的聚合计数（单请求，本页已 eager
@@ -13,33 +13,44 @@
      ⇒ 进入页面的请求数恒为 3：`GET /prod/processes` + `GET /prod/pool/counts` +
      `GET /prod/batches/pending`。
 
-     拖拽：dataTransfer.getData('text/plain') 拿 batch_id → 同样调 dispatchMutation。 -->
+     2026-10-02 三项变更：
+       1. **盒模型对齐 BatchCard**（固定 200×96 + 4px 左边框 + 8px 圆角），与左侧
+          批次卡同款网格节奏；
+       2. **左边框取工序色**（process.color，未设置时回落主色）—— 工序卡是下发的
+          视觉归属标识，与左侧批次卡的「加急橙」左边框占同一视觉位；
+       3. **拖拽改 vue-draggable-plus**：本卡片根 div 即 Sortable 投放目标容器，
+          用**二参重载**（不传 list）—— 传了 list 会带上一整套内置 handler，反过来
+          污染目标状态；且内置 onAdd 会把拖入的 DOM 节点塞进本容器却不受 Vue 管理。
+          成功态反馈只能挂目标的 onAdd（跨容器 drop 时目标的 onEnd 永不触发）。 -->
 <template>
   <div
+    ref="dropRef"
     :class="['pool-card', { 'is-dropping': isDropping }]"
-    @dragover.prevent="onDragOver"
-    @dragleave="onDragLeave"
-    @drop.prevent="onDrop"
+    :style="{ borderLeftColor: accent }"
     @click="onClick"
   >
-    <div class="section-header">
+    <div class="row">
       <span class="process-code">{{ props.process.code }}</span>
+    </div>
+    <div class="row">
       <span class="process-name">{{ props.process.name }}</span>
       <el-tag size="small" type="info">{{ props.count }}</el-tag>
     </div>
-    <div class="section-body">点击下发或拖入批次到此工序</div>
+    <div class="row">
+      <span class="pool-hint">点击下发 / 拖入批次</span>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, type Ref } from 'vue';
+import { computed, ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { consumeBatchSource } from '@/utils/dndSourceTracker';
+import { useDraggable, type DraggableEvent } from 'vue-draggable-plus';
 import type { UsePendingDispatchReturn } from '@/views/workers/composables/usePendingDispatch';
 
 interface Props {
   /** 单工序的轻量元数据（来自 useProcessesQuery.items.filter(INHOUSE)）。 */
-  process: { id: string; code: string; name: string };
+  process: { id: string; code: string; name: string; color?: string | null | undefined };
   /** 该工序候选批次徽标 —— 由父级 WorkerQueueBoard 从 useWorkerPoolCountsQuery 的
    *  `counts[].count` 透传（`number` 或加载中占位 `'…'`）。本卡片不自行请求。 */
   count: number | string;
@@ -51,16 +62,39 @@ interface Props {
 
 const props = defineProps<Props>();
 
-// 2026-09-30：拖拽 hover 视觉态（从原 PendingPoolsPanel 迁入）。
+/** 2026-10-02：左侧 4px 竖条色 = 工序色。工序色是 el-color-picker color-format="hex8"
+ *  产出的 `#RRGGBBAA`（9 字符），CSS border-left-color 直接吃，不做任何字符串加工；
+ *  后端 color 为 NULL（未设置）时回落主色。 */
+const accent = computed<string>(() => props.process.color ?? 'var(--el-color-primary)');
+
+// 2026-10-02：拖拽 hover 视觉态，改由 Sortable 事件驱动。
 const isDropping = ref(false);
 
-function onDragOver() {
-  isDropping.value = true;
-}
-
-function onDragLeave() {
-  isDropping.value = false;
-}
+const dropRef = ref<HTMLElement | null>(null);
+/** 2026-10-02：Sortable 投放目标（二参重载，不传 list）。本卡片根 div 无条件渲染，
+ *  mount 即非 null，直接用 useDraggable（不需要 useLazyDraggable 的延后绑定）。
+ *  - `draggable: '.never'`：容器内没有任何匹配 `.never` 的子元素 ⇒ 卡片自身不可从
+ *    本容器拖出，但外部投放仍可被 Sortable 的 _onDragOver 接受；
+ *  - 成功态只能挂 onAdd：跨容器 drop 时目标的 onEnd 永不触发（end 只派发给源）。
+ *
+ *  ⚠️ 已知缺口：Sortable 的 _onMove 只从**被拖起的那个容器**（源）的 options.onMove
+ *  取回调，目标的 onMove 一次都不触发 ⇒ 下面 onMove 里置的 isDropping=true 实际走不到，
+ *  「拖入高亮」不会出现在真机上。当前配置下 isDropping 恒 false（onAdd / onSort 复位
+ *  是幂等的），宁可少一个视觉反馈也不引入「拖开后高亮残留」的脏状态。要真正点亮高亮
+ *  需把驱动改挂到源（PendingBatchesPanel）的 onMove 并跨组件传态，属跨组件联动。 */
+useDraggable(dropRef, {
+  group: { name: 'pending-batches', put: true, pull: false },
+  sort: false,
+  draggable: '.never',
+  animation: 150,
+  onMove: () => {
+    isDropping.value = true;
+  },
+  onAdd: onDrop,
+  onSort: () => {
+    isDropping.value = false;
+  },
+});
 
 /** 单击工序卡 → 对已选 batchIds 下发到该工序。
  *  selectedIds 空 → ElMessage.warning 兜底；非空 → dispatchMutation.mutate。
@@ -77,20 +111,18 @@ function onClick() {
   });
 }
 
-/** 2026-09-30：拖拽 batch → pool（HTML5 native drag-drop）。
- *  - dataTransfer.getData('text/plain') 拿 batch_id（HTML5 native drag 标准传递）；
- *  - consumeBatchSource 同步清理 dndSourceTracker（PendingBatchesPanel dragstart 已
- *    通过 recordBatchSource 写入），让 recordBatchSource / consumeBatchSource 这对
- *    API 有消费者；
- *  - 单 batch 调 dispatchMutation（与 click path 复用同一 mutation，沿用 onSuccess
- *    的 invalidateAll 失效链 + 成功 toast）。 */
-function onDrop(e: DragEvent) {
+/** 2026-10-02：拖入批次 → 下发（Sortable 目标端 onAdd）。
+ *  - batch_id 取 `evt.item.dataset.batchId`（卡片上的 data-batch-id），**不取
+ *    `evt.data`**：源容器混入非可拖子节点时 evt.data 不可靠；且节点即使已被 Sortable
+ *    从 DOM 摘掉，dataset 仍可读；
+ *  - 拖拽 = 只发被拖的那一件，**不读 selectedIds**（多选集合只属于单击路径）；
+ *  - evt.item 可能缺失（Sortable 在目标无有效落点时不派发 item），兜一句短路。 */
+function onDrop(evt: DraggableEvent) {
   isDropping.value = false;
-  const dt = e.dataTransfer;
-  const fromTransfer = dt?.getData('text/plain') ?? null;
-  const batchId = fromTransfer || null;
+  const item = evt?.item;
+  if (!item) return;
+  const batchId = item.dataset.batchId;
   if (!batchId) return;
-  consumeBatchSource(batchId);
   props.dispatchMutation.mutate({
     batchIds: [batchId],
     targetProcessId: props.process.id,
@@ -99,44 +131,62 @@ function onDrop(e: DragEvent) {
 </script>
 
 <style scoped>
+/* 2026-10-02：盒模型与 BatchCard 对齐（200×96 / 4px 左边框 / 8px 圆角），
+   让待下发池与工序卡共用同一条网格基线。 */
 .pool-card {
-  cursor: pointer;
-  padding: 12px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 200px;
+  height: 96px;
+  padding: 8px 10px;
+  overflow: hidden;
+  /* 左边框在模板上以 :style borderLeftColor 单独着色，这里只给透明占位 */
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
-  background: var(--el-fill-color-blank);
+  border-left: 4px solid transparent;
+  border-radius: 8px;
+  background: var(--el-bg-color);
+  cursor: pointer;
   transition:
     border-color 0.2s,
-    background 0.2s;
+    background 0.2s,
+    box-shadow 0.2s;
 }
 .pool-card:hover {
-  border-color: var(--el-color-primary-light-5);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
+/* 2026-10-02：拖入高亮只覆盖上/右/下三边 —— 左边框是工序色的语义位，用
+   border-color 简写会连带干掉它。 */
 .pool-card.is-dropping {
-  border-color: var(--el-color-primary);
+  border-top-color: var(--el-color-primary);
+  border-right-color: var(--el-color-primary);
+  border-bottom-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
 }
-.section-header {
+.row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 8px;
-  background: var(--el-fill-color-light);
-  border-radius: 4px;
+  min-width: 0;
+  /* 3 行统一 18px 行高：3×18 + 2×2 gap + 上下各 8 padding + 上下各 1px 边框
+     = 76px ≤ 96px 固定高，余量 20px 吸收字体渲染的行高波动。 */
+  line-height: 18px;
+  font-size: 12px;
 }
 .process-code {
   font-weight: 600;
   font-family: var(--el-font-family-monospace, monospace);
 }
 .process-name {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
   flex: 1;
-}
-.section-body {
-  font-size: 12px;
+  min-width: 0;
   color: var(--el-text-color-secondary);
-  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pool-hint {
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
 }
 </style>

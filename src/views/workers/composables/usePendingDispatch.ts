@@ -202,12 +202,16 @@ export function usePendingDispatch(): UsePendingDispatchReturn {
         );
       }
     },
-    onError: (e: Error) => {
+    onError: async (e: Error) => {
       // 2026-09-30：后端 batch 域错误码表已无 20706（`docs/api/production/batches.md`
       // §错误码速查：40001 / 20120 / 20121 / 20508 / 40901 / 40300），dispatch 不再抛
       // 工序链缺失错 —— 统一走「自动下发 preview 的 skip_reason = NO_PROCESS_CHAIN」
       // 路径引导。故此处只报原始错误消息。
       ElMessage.error(e.message ?? '下发失败');
+      // 2026-10-02：待下发池改用 vue-draggable-plus 拖到工序卡，Sortable 的内置
+      // onRemove 会在用户回调之前就**乐观地**把被拖卡片从待下发列表 splice 掉。
+      // 下发失败时必须重拉待下发列表把卡片放回来，否则卡片凭空消失。
+      await invalidatePendingBatchesQuery(qc);
     },
   });
 
