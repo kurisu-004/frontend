@@ -1046,12 +1046,10 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
     });
 
     it('S-MV5：moveResultSchema 解析 POOL→WORKER 完整响应', () => {
-      // backend-rust MoveResult（vo/worker_pool.rs:126-152）
-      // 2026-10-03 修复：POOL→WORKER 方向后端**也会**填 shelf_id（值 = 请求里的
-      // from.shelf_id），且必须是字符串（雪花 ID 走字符串序列化器）。修 bug 前该字段
-      // 被序列化成 JSON number，真实响应一来就被 moveResultSchema 拒收、生产队列页弹
-      // 原始 ZodError JSON —— 本 fixture 当时漏了它，测试才一直是绿的。这里补上字段
-      // 与断言，把「这个方向也会返回 shelf_id 且是字符串」锁成契约。
+      // backend-rust `MoveResult`（vo/worker_pool.rs）
+      // 2026-10-03 补齐：POOL→WORKER 方向后端**也会**填 shelf_id（值 = 请求里的
+      // from.shelf_id），且必须是字符串（雪花 ID 走字符串序列化器）；本 fixture 与
+      // 断言把它锁成契约 —— 缺字段或序列化成 number 都会让本用例红。
       const parsed = moveResultSchema.parse({
         batch_id: '3000000000001',
         from_kind: 'POOL',
@@ -1153,7 +1151,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(r.pool_empty).toBe(false);
     });
 
-    it('S-MV10：moveResultSchema shelf_id 为 number → 抛 ZodError（雪花 ID 精度，不可放宽）', () => {
+    it('S-MV10：moveResultSchema shelf_id 为 number → 抛 ZodError（ID 契约只走字符串序列化器）', () => {
       // 2026-10-03 锁死「shelf_id 只接受字符串」这个决定，防止日后有人为了「兼容」
       // 把 schema 放宽成同时接受 number：
       //   1. 货架雪花 ID 是 18~19 位，远超 Number.MAX_SAFE_INTEGER（2^53-1）；
@@ -1189,7 +1187,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
             has_cnc_program: true,
           },
         }),
-      ).toThrow();
+      ).toThrow(/shelf_id/);
     });
 
     it('S-MV11：takenItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 guard）', () => {
