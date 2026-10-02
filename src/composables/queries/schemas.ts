@@ -1502,7 +1502,7 @@ const outsourceCompanyOptionSchema = z.object({
   name: z.string(),
 });
 
-/** `GET /api/v2/outsource-sendable` 单行（后端 `OutsourceSendableItem`）—— 25 字段。
+/** `GET /api/v2/outsource-sendable` 单行（后端 `OutsourceSendableItem`）—— 23 字段。
  *
  *  ⚠️ URL 已从 `/parts/outsource-sendable` 迁到 outsource 域顶层（2026-10-03）。
  *  ⚠️ `quote_id`（2026-10-03 新增）是发送端点必传二选一的判据：APPROVAL 行有值、
@@ -1516,7 +1516,11 @@ export const outsourceSendableItemSchema = z.object({
   part_serial_no: z.string().nullable(),
   part_drawing_no: z.string().nullable(),
   part_name: z.string().nullable(),
-  /** 可发送数量（行=批次：等于 batch_quantity） */
+  /** 可发送数量（行=批次：恒等于 batch_quantity）。
+   *  ⚠️ 刻意放宽成 nullable：后端 VO 是非空 `i32`，但 `src/types/outsource.ts` 的
+   *  `OutsourceSendableItem.quantity` 是历史遗留的 `number | null`，收窄会引发
+   *  消费侧类型摩擦。放宽方向安全（不会误拒合法响应），代价是无法拦下「后端某天
+   *  把这一列变成可空」——那属于展示层要处理的降级，不是守门该拦的契约破坏。 */
   quantity: z.number().nullable(),
   batch_id: z.string(),
   batch_no: z.number(),

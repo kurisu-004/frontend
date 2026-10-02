@@ -102,7 +102,9 @@ describe('A 组：4 个 list 端点 URL 逐字钉死', () => {
     expect(await fetchedPath(() => listOutsourceSendable())).toBe('/outsource-sendable');
   });
 
-  it('A5：反断言 —— 已下线的两条旧 URL 不得复活', async () => {
+  // ⚠️ 这 4 条在逻辑上**被 A3 / A4 蕴含**（那两条已把 URL 逐字钉死），不可能独立失败 ——
+  // 记在这里只是把「旧路径不得复活」写成可读的意图，不作独立守卫计功。
+  it('A5：反断言 —— 已下线的两条旧 URL 不得复活（被 A3 / A4 蕴含）', async () => {
     expect(await fetchedPath(() => listOutsourceInFlight())).not.toContain('/parts/');
     expect(await fetchedPath(() => listOutsourceSendable())).not.toContain('/parts/');
     // 引号级别的硬钉：谁把字面量改回去，这里直接红。
@@ -223,10 +225,14 @@ describe('B 组：3 个写端点的 body 键契约', () => {
 // E 组：schema 守门有效性回归锁。
 //
 // ⚠️ Zod 默认 `z.object()` 是 **strip** 模式：schema 里没声明的字段会被**静默丢弃**、
-// parse 不报错 —— 守门形同虚设（CLAUDE.md §M-4）。所以每条 item schema 都必须
+// parse 不报错 —— 守门形同虚设。所以每条 item schema 都必须
 // 「一份合法 fixture parse 通过」+「缺必填字段 / 类型错时 parse 抛错」双向锁死。
-// 下面 4 份 fixture 是各后端 VO 的完整字段集，**故意写全**：少写一个字段，
-// 对应的「缺必填字段应抛错」用例就会红。
+//
+// 下面 4 份 fixture 是各后端 VO 的**完整字段集**（sent-parts 18 / quotable 14 /
+// in-flight 15 / sendable 23，合计 70 字段），逐字照抄 VO 结构。
+// 「fixture 写全」本身不构成守卫 —— 多出来的键会被 strip 静默吞掉、parse 不报错；
+// 真正把「schema 声明的字段集 == fixture 字段集」钉死的是 E7 的键集断言。
+// 漏声明字段的「缺必填应抛错」用例只抽了每个 schema 的代表字段，覆盖面靠 E7。
 // ============================================================
 
 const sentPartFixture = {
@@ -438,6 +444,16 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
         offset: 0,
       }),
     ).toThrow();
+    // source_status 的两个合法值（PENDING / IN_PROCESS）由 E1 与 E5 覆盖正向，
+    // 这里补非法值 —— 只测 send_mode 的话，source_status 退化成 z.string() 不会被发现。
+    expect(() =>
+      outsourceSendableListResultSchema.parse({
+        items: [{ ...sendableFixture, source_status: 'FINISHED' }],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      }),
+    ).toThrow();
     expect(() =>
       outsourceSendableListResultSchema.parse({
         items: [{ ...sendableFixture, status_label: 'pending' }],
@@ -500,5 +516,99 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
     // 这正是故障 ③ 的形态：把分页信封当数组用。守门必须在 API 边界就拒绝。
     expect(() => outsourceInFlightListResultSchema.parse([inFlightFixture])).toThrow();
     expect(() => outsourceQuotablePartListResultSchema.parse([quotablePartFixture])).toThrow();
+  });
+
+  // 「fixture 写全」本身不构成守卫：Zod strip 会把 schema 没声明的键静默吞掉，
+  // parse 照过不误 —— 漏声明一个字段，除了多出来的那个键消失，没有任何症状。
+  // 这条把「schema 声明的字段集 == 后端 VO 字段集」变成可执行断言：
+  //   · schema 少声明 → parse 结果少键 → 与 fixture 键集不等 → 红
+  //   · schema 多声明 → parse 结果多键 → 与 fixture 键集不等 → 红
+  // 70 个字段（18 + 14 + 15 + 23）一次性锁住。
+  it('E7：parse 后的行键集与后端 VO 字段集逐字段相等（漏声明 / 多声明都红）', () => {
+    const cases = [
+      {
+        name: 'sent-parts（18 字段）',
+        schema: outsourceSentPartListResultSchema,
+        fixture: sentPartFixture,
+        vo: 18,
+      },
+      {
+        name: 'quotable（14 字段）',
+        schema: outsourceQuotablePartListResultSchema,
+        fixture: quotablePartFixture,
+        vo: 14,
+      },
+      {
+        name: 'in-flight（15 字段）',
+        schema: outsourceInFlightListResultSchema,
+        fixture: inFlightFixture,
+        vo: 15,
+      },
+      {
+        name: 'sendable（23 字段）',
+        schema: outsourceSendableListResultSchema,
+        fixture: sendableFixture,
+        vo: 23,
+      },
+    ];
+    for (const { name, schema, fixture, vo } of cases) {
+      const parsed = schema.parse({ items: [fixture], total: 1, limit: 50, offset: 0 }).items[0]!;
+      // 键数与 fixture 注释里声明的 VO 字段数一致（fixture 自身漂移也会红）。
+      expect(Object.keys(fixture).length, `${name} fixture 字段数`).toBe(vo);
+      expect(Object.keys(parsed).sort(), `${name} 键集`).toEqual(Object.keys(fixture).sort());
+    }
+  });
+});
+
+// ============================================================
+// F 组：守门**挂在 API 边界** —— 从 api helper 走进去，喂坏响应，期待 reject。
+//
+// 为什么必须走 helper 而不是直接测 schema：E 组全是在隔离环境里 import 真 schema
+// 直接 parse，锁的是「schema 自身行为」；它证明不了 `.parse()` 真的接在
+// `listOutsourceInFlight` 的返回路径上。把 helper 里的 `.parse()` 整段删掉
+// （只留 `normalizeListResult(...)`）时 E 组仍全绿 —— 守门被拆掉而测试无感。
+// F 组每条都从 helper 进、期待 rejected promise，把「守门在 API 边界」钉成可执行断言。
+//
+// 坏响应取两种最有代表性的形态：
+//   ① 裸数组（故障 ③ 的真实形态：把分页信封当数组用）
+//   ② 信封在但行是空对象（后端 VO 换字段 / 字段名漂移的形态）
+// ============================================================
+
+/** 让下一次读请求返回指定的响应体。 */
+function respondWith(data: unknown): void {
+  httpGetMock.mockReset();
+  httpGetMock.mockResolvedValue({ data });
+}
+
+describe('F 组：4 个 list helper 真的在 API 边界 reject 坏响应', () => {
+  it('F1：裸数组响应 → 4 个 helper 全部 reject（不把数组当信封吐出去）', async () => {
+    respondWith([inFlightFixture]);
+    await expect(listOutsourceInFlight()).rejects.toThrow();
+    respondWith([sendableFixture]);
+    await expect(listOutsourceSendable()).rejects.toThrow();
+    respondWith([quotablePartFixture]);
+    await expect(listQuotableParts()).rejects.toThrow();
+    respondWith([sentPartFixture]);
+    await expect(listCompanySentParts(COMPANY)).rejects.toThrow();
+  });
+
+  it('F2：信封在但行是空对象 → 4 个 helper 全部 reject（漏声明字段不会被静默放过）', async () => {
+    respondWith({ items: [{}], total: 1, limit: 50, offset: 0 });
+    await expect(listOutsourceInFlight()).rejects.toThrow();
+    await expect(listOutsourceSendable()).rejects.toThrow();
+    await expect(listQuotableParts()).rejects.toThrow();
+    await expect(listCompanySentParts(COMPANY)).rejects.toThrow();
+  });
+
+  // 正向对照：合法信封必须**放行**。没有这条，F 组可能整体因为桩坏掉而恒绿。
+  it('F3：合法分页信封 → 4 个 helper 全部 resolve 且透传 items/total', async () => {
+    respondWith({ items: [inFlightFixture], total: 1, limit: 20, offset: 0 });
+    await expect(listOutsourceInFlight()).resolves.toMatchObject({ total: 1 });
+    respondWith({ items: [sendableFixture], total: 1, limit: 20, offset: 0 });
+    await expect(listOutsourceSendable()).resolves.toMatchObject({ total: 1 });
+    respondWith({ items: [quotablePartFixture], total: 1, limit: 500, offset: 0 });
+    await expect(listQuotableParts()).resolves.toMatchObject({ total: 1 });
+    respondWith({ items: [sentPartFixture], total: 1, limit: 50, offset: 0 });
+    await expect(listCompanySentParts(COMPANY)).resolves.toMatchObject({ total: 1 });
   });
 });

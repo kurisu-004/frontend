@@ -83,7 +83,12 @@ export interface UseOutsourceSendableListOptions {
  *     沿用旧名必然 422）。列表行上的 `next_process_id` 字段名不变，只是 body 键改名。
  *  2. 发送模式由 `quote_id` / `direct` **必传其一**表达，两者都不传后端返 400：
  *     APPROVAL → `quote_id` 有值 + `direct: null`；DIRECT → `direct: true` + `quote_id: null`。
- *  3. `quantity: null` = 整批；非 null = 部分发送（后端拆批，源批次留余量）。
+ *  3. `quantity` 两条发送路径的口径**不同但语义等价**，都不是「部分发送」的错写法：
+ *     单件路径把「等于 batch_quantity」归一成 `null`；扫码批量路径原样传队列里的
+ *     `quantity`（入队时取自 `batch_quantity`，恒等于整批量）。后端
+ *     `resolve_partial_quantity` 把 `q == batch_quantity` 与 `q == null` 同归整批，
+ *     所以两条路径都发整批。真正的部分发送只在用户把发送数量调到小于
+ *     `batch_quantity` 时才发生（单件路径经 `sendQuantity`，批量路径经队列项）。
  *
  *  单件发送与扫码批量发送共用本函数 —— 两条路径曾各写一份 payload，是这次
  *  「改了一处漏另一处」的高风险面。 */
@@ -107,19 +112,25 @@ function buildSendPayload(args: {
   };
 }
 
+/** `<PagedTable>` 模板 ref 暴露出来的成员（本 composable 实际用到的部分）。
+ *
+ *  2026-10-03 提取成具名类型：`ref()` 无初值会推断成 `Ref<any>`，此前
+ *  `sendablePagedRef` 就没写标注，于是 `sendablePagedRef.value?.items.value`
+ *  这类把已解包成员当 ref 再读一层的错误**不会报 TS 错**（`any` 上任何属性访问都
+ *  合法），运行时恒得 undefined。显式标注后同类回归直接变成编译错误。 */
+export interface SendablePagedTableExpose {
+  total?: number;
+  /** 组件 public instance 上是**已解包**的数组（不是 Ref，见 handleScannedSerialForSend） */
+  items?: SendableItem[];
+  fetch?: () => Promise<void>;
+  reset?: () => Promise<void>;
+}
+
 /** 2026-09-21 显式返回类型。 */
 export interface UseOutsourceSendableListReturn {
   sendableError: Ref<string | null>;
   sendableFilter: { keyword: string; customer_id: string };
-  sendablePagedRef: Ref<
-    | {
-        total?: number;
-        items?: SendableItem[];
-        fetch?: () => Promise<void>;
-        reset?: () => Promise<void>;
-      }
-    | undefined
-  >;
+  sendablePagedRef: Ref<SendablePagedTableExpose | undefined>;
   sendQueue: Ref<SendQueueItem[]>;
   batchSending: Ref<boolean>;
   scanInput: Ref<string>;
@@ -164,7 +175,7 @@ export function useOutsourceSendableList(
   // 每次进入视图从 <PagedTable :default-page-size="20"> 起算。
   const sendableError = ref<string | null>(null);
   const sendableFilter = reactive({ keyword: '', customer_id: '' });
-  const sendablePagedRef = ref();
+  const sendablePagedRef = ref<SendablePagedTableExpose>();
 
   // 可发送 tab 持久化（2026-07-30 commit 4B）；2026-08-25 T7：page 不再持久化
   const persist = useListStatePersist('outsource_send_receive_sendable', { sendableFilter });
@@ -186,17 +197,19 @@ export function useOutsourceSendableList(
     }
   }
 
+  // 2026-10-03：ref 有类型标注后，这三处的 `fetch` / `reset` 可选性变成编译期可见 ——
+  // 模板 ref 在组件挂载前是 undefined，方法本身也只在 PagedTable 暴露时才存在。
   async function refreshSendable(): Promise<void> {
-    await sendablePagedRef.value?.fetch();
+    await sendablePagedRef.value?.fetch?.();
   }
 
   function onSendableSearch(): void {
-    void sendablePagedRef.value?.reset();
+    void sendablePagedRef.value?.reset?.();
   }
   function onSendableReset(): void {
     sendableFilter.keyword = '';
     sendableFilter.customer_id = '';
-    void sendablePagedRef.value?.reset();
+    void sendablePagedRef.value?.reset?.();
   }
 
   // ============ 加急行红底 ============
@@ -314,12 +327,12 @@ export function useOutsourceSendableList(
     }
     // 必须在当前可发送列表里（status_label === 'sendable'）
     // 2026-08-25 T7：sendableItems 已迁到 PagedTable；通过暴露的 items 读取当前页。
-    // ⚠️ 2026-10-03 修正：读 `.items` 而**不是** `.items.value` —— 模板 ref 拿到的是
-    // 组件 public instance，Vue 的 proxyRefs 会把 `defineExpose` 出来的 ref 解包成数组，
-    // 多读一层 `.value` 恒得 undefined ⇒ sendableList 恒为 [] ⇒ 扫码入队这条路
-    // 永远走不到「已加入发送队列」（只弹「当前不在可发送列表」）。
-    // 该行此前被 `ref()` 的 `any` 推断掩盖（`sendablePagedRef` 无类型标注 ⇒ 不报 TS 错）。
-    const sendableList = (sendablePagedRef.value?.items ?? []) as SendableItem[];
+    // ⚠️ 读 `.items` 而**不是** `.items.value`：模板 ref 拿到的是组件 public
+    // instance，Vue 的 proxyRefs 已把 `defineExpose` 出来的 ref 解包成数组，多读一层
+    // `.value` 恒得 undefined ⇒ sendableList 恒为 [] ⇒ 扫码入队这条路永远走不到
+    // 「已加入发送队列」（只弹「当前不在可发送列表」）。`SendablePagedTableExpose.items`
+    // 声明的是数组而非 Ref，正是为了让这行写成 `.items.value` 时直接编译不过。
+    const sendableList = sendablePagedRef.value?.items ?? [];
     const match = sendableList.find(
       (it) => it.part_id === part.id && it.status_label === 'sendable',
     );
