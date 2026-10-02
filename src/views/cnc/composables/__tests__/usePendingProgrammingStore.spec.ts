@@ -44,6 +44,7 @@
 //   - vi.stubGlobal('localStorage', 内存版)：node 环境无 localStorage，装最小实现
 //     才能跑通 useListStatePersist 的落盘 / 恢复路径。
 
+import { ElMessage } from 'element-plus';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
@@ -332,8 +333,11 @@ describe('usePendingProgrammingStore', () => {
     expect(store.query.items[0]?.parent_customer_name).toBe('客户A');
   });
 
-  // ============ T6：release 成功 → 失效 programmingPrefix + partsPrefix ============
-  it('T6：confirmRelease 成功 → onSuccess 失效 programmingPrefix 与 partsPrefix', async () => {
+  // ============ T6：release → 端点以批次为锚，待编程行缺批次 id 时不调后端 ============
+  // 2026-10-02：release-from-programming 迁 prod 域并锚定 batch_id，而本页数据源
+  // `GET /prod/programming/pending` 的行不携带批次 id ⇒ 拿不到锚点。行为是
+  // 「弹错误 + 不发请求」（不用 part_id 顶替，那会打成「批次不存在」）。
+  it('T6：confirmRelease 在行缺批次 id 时不发请求、不失效、不关对话框', async () => {
     respondWith({
       items: [makeItem()],
       total: 1,
@@ -347,25 +351,21 @@ describe('usePendingProgrammingStore', () => {
     await store.query.fetchList();
 
     store.release.target = store.query.items[0] ?? null;
+    store.release.dialogVisible = true;
     store.release.shelfId = '8800000000001';
     store.release.processId = '7700000000001';
-    // router 桩：store 只用 push（20706 兜底跳工序制定页），结构化注入见
-    // PendingProgrammingRouter 类型注
     await store.release.confirm({ push: vi.fn() });
 
-    expect(releaseFromProgrammingMock).toHaveBeenCalledWith(
-      '190000000000099',
-      '8800000000001',
-      '7700000000001',
-    );
+    expect(releaseFromProgrammingMock).not.toHaveBeenCalled();
     const invalidatedKeys = invalidateSpy.mock.calls.map(
       (c) => (c[0] as { queryKey?: unknown } | undefined)?.queryKey,
     );
-    expect(invalidatedKeys).toContainEqual(qk.programmingPrefix);
-    expect(invalidatedKeys).toContainEqual(qk.partsPrefix);
-    // 成功后关对话框
-    expect(store.release.dialogVisible).toBe(false);
+    expect(invalidatedKeys).not.toContainEqual(qk.programmingPrefix);
+    expect(invalidatedKeys).not.toContainEqual(qk.partsPrefix);
+    // 失败路径不关对话框，submitting 复位
+    expect(store.release.dialogVisible).toBe(true);
     expect(store.release.submitting).toBe(false);
+    expect(ElMessage.error).toHaveBeenCalled();
   });
 
   // ============ 自动刷新开关（轮询间隔本身在 node 环境不可断言）============

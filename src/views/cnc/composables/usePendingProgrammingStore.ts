@@ -41,7 +41,6 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import type { QueryClient } from '@tanstack/vue-query';
 
 import { fetchPendingProgramming, type ListPendingProgrammingParams } from '@/api/programming';
-import { releaseFromProgramming } from '@/api/parts';
 import { qk } from '@/composables/queries/keys';
 import type {
   PendingProgrammingItemSchema,
@@ -74,6 +73,9 @@ export interface PendingProgrammingRouter {
 /** 列可见性 / 列顺序的 localStorage key —— 沿用 2026-09-29 的老值。
  *  ⚠️ 不要改：改 key 会让老用户已配好的列可见性 / 列顺序快照全丢。 */
 export const PENDING_PROGRAMMING_LIST_KEY = 'pending_programming';
+
+/** 2026-10-02：待编程列表行缺批次 id 时的提示（见 releaseMutation 注释）。 */
+const RELEASE_NO_BATCH_HINT = '待编程列表未返回批次信息，无法下发（列表接口需补批次 id）';
 
 export const usePendingProgrammingStore = defineStore('pending-programming', () => {
   const qc = useQueryClient();
@@ -386,8 +388,13 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     { partId: string; shelfId: string; nextProcessId: string; router: PendingProgrammingRouter }
   >({
     mutationKey: ['programming', 'release-from-programming'],
-    mutationFn: ({ partId, shelfId, nextProcessId }) =>
-      releaseFromProgramming(partId, shelfId, nextProcessId),
+    // 2026-10-02 已知缺口：release-from-programming 迁 prod 域并以批次为锚，而本页
+    // 数据源 `GET /prod/programming/pending` 的行不携带批次 id，拿不到锚点。此时直接
+    // 失败并说明原因，不用 part_id 顶替（那会打成「批次不存在」）。待后端在该列表项
+    // 补上批次 id 后，把本 throw 换成传 batchId 即可。
+    mutationFn: () => {
+      throw new Error(RELEASE_NO_BATCH_HINT);
+    },
     onSuccess: async () => {
       // 失效本域（待编程列表）+ parts 域（下发改了 part 的 status / 货架归属）
       await invalidateProgrammingQuery(qc);

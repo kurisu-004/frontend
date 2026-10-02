@@ -2,6 +2,11 @@
 // 2026-09-15 Phase 5：业务全切 v2，统一走 `api`（baseURL `/api/v2`）。
 // 2026-08-25：从原 1165 行 api/parts.ts 拆分到 ./ 子文件；本文件是 ./batch 子域。
 //
+// 2026-10-02：批次的**写**端点（split / cancel）与品检 / 返修集合读、批量送检 /
+// 批量品检通过，整体从 part 域迁入 prod 域（`/prod/batches/*`）—— 它们的操作对象是
+// 批次（t_part_batch），不是 part。批次集合读 `GET /parts/{part_id}/batches` 留在
+// part 域（操作对象是「某个 part 的批次集合」）。
+//
 // 跨子域类型引用：PartItem / PartCreatePayload 定义在 ./crud；本文件所有批量响应
 // （DTO / 失败明细）都涉及单件 DTO 与单件创建 payload，因此仅 type-only 导入，
 // 运行时不会产生 ESM 循环。
@@ -234,21 +239,39 @@ export interface PartBatch {
   updated_at: string;
 }
 
+/** 2026-10-02：批次**写**端点整体迁 prod 域并锚定批次 ——
+ *  `POST /parts/{part_id}/batches/split` → `POST /prod/batches/{batch_id}/split`、
+ *  `POST /parts/{part_id}/batches/{batch_id}/cancel` → `POST /prod/batches/{batch_id}/cancel`。
+ *  `batch_id` 从 body 删除（已是路径参数），`version` 必填（OCC 锚 t_part_batch）。
+ *  批次**读**（`GET /parts/{part_id}/batches`）留在 part 域不动 —— 它的操作对象是
+ *  「某个 part 的批次集合」而不是单个批次，判据同 `POST /parts/{id}/cancel`。 */
 export async function listPartBatches(partId: string): Promise<PartBatch[]> {
   const resp = await api.get<PartBatch[]>(`/parts/${partId}/batches`);
   return resp.data;
 }
 
+/** 拆批：后端 `SplitBatchRequest { version, quantity, note? }`（batch_id 已是路径）。 */
 export async function splitPartBatch(
-  partId: string,
-  payload: { batch_id: string; quantity: number },
+  batchId: string,
+  payload: { quantity: number; version: number; note?: string | null },
 ): Promise<PartBatch[]> {
-  const resp = await api.post<PartBatch[]>(`/parts/${partId}/batches/split`, payload);
+  const resp = await api.post<PartBatch[]>(
+    `/prod/batches/${encodeURIComponent(batchId)}/split`,
+    payload,
+  );
   return resp.data;
 }
 
-export async function cancelPartBatch(partId: string, batchId: string): Promise<PartBatch[]> {
-  const resp = await api.post<PartBatch[]>(`/parts/${partId}/batches/${batchId}/cancel`);
+/** 取消批次：后端 `CancelBatchRequest { version, reason? }`（batch_id 已是路径）。 */
+export async function cancelPartBatch(
+  batchId: string,
+  version: number,
+  reason?: string | null,
+): Promise<PartBatch[]> {
+  const resp = await api.post<PartBatch[]>(
+    `/prod/batches/${encodeURIComponent(batchId)}/cancel`,
+    { version, reason },
+  );
   return resp.data;
 }
 
@@ -256,11 +279,10 @@ export async function cancelPartBatch(partId: string, batchId: string): Promise<
  *
  * 2026-09-30 修复：原 `items: PartItem[]` 是误类型（PartItem 含 `id` 字段，
  * 渲染层 `<RouterLink to="/parts/${r.id}">` 因此拼出 `/parts/undefined`）。
- * 后端 `GET /api/v2/parts/inspection-batches` 实际返回
- * `InspectionBatchListItemOut[]`（无 `id` 字段，详情跳转锚应改用 `part_id`），
- * 详见 `backend-rust/docs/api/parts/inspection.md` 第 511 行起字段表
- * （行号 2026-10-02 review 第 1 轮订正：原写 479，是文档扩写前的旧位置，与
- *  `src/composables/queries/schemas.ts` 品检 schema 块的 511 保持一致）。
+ * 后端集合读端点（2026-10-02 迁 prod 域：`GET /api/v2/prod/batches/inspection`）
+ * 实际返回 `InspectionBatchListItemOut[]`（无 `id` 字段，详情跳转锚应改用 `part_id`），
+ * 详见后端 `docs/api/` 品检域字段表（同时被 `GET /prod/batches/repair` 与
+ * `GET /prod/batches/repairing` 复用 —— 三个端点共用同一个 VO）。
  * 字段严格对齐后端 VO。 */
 export interface InspectionBatchListItem {
   // 批次字段段
@@ -326,7 +348,9 @@ export async function listInspectionBatches(
     offset?: number;
   } = {},
 ): Promise<InspectionBatchListResult> {
-  const resp = await api.get<unknown>('/parts/inspection-batches', {
+  // 2026-10-02 迁 prod 域：与 `GET /prod/batches/pending` 并列，
+  // `/parts/inspection-batches` → `/prod/batches/inspection`。
+  const resp = await api.get<unknown>('/prod/batches/inspection', {
     params: cleanParams(params),
   });
   // 2026-09-30 新增：Zod 守门（M-1 同形态）。item schema 用 .strict()，后端若误把
@@ -337,7 +361,7 @@ export async function listInspectionBatches(
 
 // ============ inspection to-XXX 体系批量（2026-08-28 后端路线 B 重构）==============
 
-/** v2 `POST /parts/batch-to-inspection` 入参项。
+/** `POST /prod/batches/to-inspection` 入参项（2026-10-02 由 /parts/batch-to-inspection 迁入）。
  *
  * 字段名 / 可选性与后端 `BatchToInspectionItem` 对齐；`batch_id` 必填，雪花 ID 字符串。
  * `part_id` **不再需要** —— 后端 service 按 `batch_id` 反查 `t_part_batch.part_id`。
@@ -388,11 +412,12 @@ export interface BatchToInspectionOutFE {
 export async function batchToInspection(
   payload: BatchToInspectionRequest,
 ): Promise<BatchToInspectionOutFE> {
-  const resp = await api.post<BatchToInspectionOutFE>('/parts/batch-to-inspection', payload);
+  const resp = await api.post<BatchToInspectionOutFE>('/prod/batches/to-inspection', payload);
   return resp.data;
 }
 
-/** v2 `POST /parts/batch-to-ship` 入参项（与 BatchToInspectionItem 同形）。
+/** `POST /prod/batches/to-ship` 入参项（2026-10-02 由 /parts/batch-to-ship 迁入；
+ *  与 BatchToInspectionItem 同形）。
  * 2026-08-29：新增 `version` 必填，caller OCC 锚 t_part_batch。 */
 export interface BatchToShipItem {
   batch_id: string;
@@ -426,6 +451,6 @@ export interface BatchToShipOutFE {
 }
 
 export async function batchToShip(payload: BatchToShipRequest): Promise<BatchToShipOutFE> {
-  const resp = await api.post<BatchToShipOutFE>('/parts/batch-to-ship', payload);
+  const resp = await api.post<BatchToShipOutFE>('/prod/batches/to-ship', payload);
   return resp.data;
 }

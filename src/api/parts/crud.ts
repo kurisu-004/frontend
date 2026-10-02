@@ -315,21 +315,26 @@ export async function changePartStatus(
   return resp.data;
 }
 
+// 2026-10-02：以下 lifecycle 端点的操作对象是**批次**（t_part_batch），路由锚点
+// 统一迁到 prod 域 `POST /api/v2/prod/batches/{batch_id}/<action>`，故第一形参一律是
+// batchId，payload 里的 batch_id 一并删除（它已是路径参数）。part 域只留
+// 「多批次动作 + part 级动作」（cancel / force-complete / soft-delete / batches 读）。
+
 export interface PlaceOnShelfPayload {
   shelf_id: string;
   /** 下一道工序 id（必填） */
   next_process_id: string;
+  note?: string | null;
 }
 
 export async function placeOnShelf(
-  id: number | string,
-  shelfId: string,
-  nextProcessId: string,
+  batchId: string,
+  payload: PlaceOnShelfPayload,
 ): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/place-on-shelf`, {
-    shelf_id: shelfId,
-    next_process_id: nextProcessId,
-  });
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/place-on-shelf`,
+    payload,
+  );
   return resp.data;
 }
 
@@ -348,16 +353,22 @@ export async function placeOnShelf(
 /** 2026-08-05 召回：ON_SHELF 或 PROGRAMMING → PENDING（Manager；PROGRAMMING 为
  *  历史数据消化场景）。2026-09-29 业务迁移后 PROGRAMMING 状态自该日起被标记为
  *  废弃（无新进入路径），但本端点保留供历史 PROGRAMMING 批次召回。
- *  `batch_id` 缺省按 expect 唯一批次解析；多在架批次必须指定。 */
+ *
+ *  2026-10-02 迁 prod 域：召回是批次级动作（ON_SHELF/PROGRAMMING 都是批次状态），
+ *  路径锚点改为 `{batch_id}`，故 `batch_id` 是路径参数、不再是可选项
+ *  ——「缺省按 expect 唯一批次解析」的旧语义已随端点下线。 */
 export interface PartRecallPayload {
-  batch_id?: string | null;
+  note?: string | null;
 }
 
 export async function recallToPending(
-  id: number | string,
+  batchId: string,
   payload?: PartRecallPayload,
 ): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/recall-to-pending`, payload ?? {});
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/recall-to-pending`,
+    payload ?? {},
+  );
   return resp.data;
 }
 
@@ -381,20 +392,32 @@ export async function forceCompletePart(
  *  供历史 PROGRAMMING 数据消化。
  *  调用方：
  *    1. PendingProgrammingList.vue「下发」按钮（仅历史 PROGRAMMING 数据可见）；
- *    2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
- */
+ *  2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
+ *
+ *  2026-10-02 迁 prod 域：PROGRAMMING 是批次状态，锚点改 `{batch_id}`。 */
 export async function releaseFromProgramming(
-  id: number | string,
+  batchId: string,
   shelfId: string,
   nextProcessId: string,
 ): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/release-from-programming`, {
-    shelf_id: shelfId,
-    next_process_id: nextProcessId,
-  });
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/release-from-programming`,
+    {
+      shelf_id: shelfId,
+      next_process_id: nextProcessId,
+    },
+  );
   return resp.data;
 }
 
+/** 2026-10-02 已知缺口（v1 遗留，待单独修）：本函数**本次不改**。
+ *
+ *  后端 v2 的领取端点是批次锚定的 `POST /api/v2/prod/batches/{batch_id}/pick-up`，
+ *  而本函数打的是 `/parts/pick-up`（1 段，v1 形状），payload
+ *  `PartPickUpPayload { serial_no, shelf_id, badge_code, batch_id?, quantity? }`
+ *  与 v2 `PickUpRequest { version, worker_id, shelf_id, note }` 不同构：v1 是
+ *  「扫序列号 + 工牌」，v2 是「按批次 + OCC + 工人」。两者映射是业务决策、不是机械
+ *  路径迁移，故本次只登记不改，调用方（ScanPickParts.vue）同步保持原样。 */
 export async function pickUpPart(payload: PartPickUpPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>('/parts/pick-up', payload);
   return resp.data;
@@ -406,9 +429,10 @@ export async function scanPart(payload: PartScanPayload): Promise<PartItem> {
 }
 
 /**
- * 2026-09-15 Phase 5 新增：扫码台 RETURN / INSPECT 二合一入口。
+ * 扫码台 RETURN / INSPECT 二合一入口。
  *
- * 后端 `POST /api/v2/parts/worker-scan`（rust modules/part/handler.rs::worker_scan）：
+ * 后端 `POST /api/v2/prod/batches/worker-scan`（rust prod 域 batch 域 worker_scan：
+ * 2026-10-02 由 `POST /api/v2/parts/worker-scan` 迁来）：
  *  - event_type=RETURNED  → mark_returned（IN_PROCESS+WORKER → ON_SHELF/PROCESS）
  *  - event_type=INSPECTED → mark_inspected（INSPECTION → INSPECTED/INSPECTION_FAILED）
  *
@@ -461,7 +485,10 @@ export interface WorkerScanOut {
 }
 
 export async function workerScan(payload: WorkerScanPayload): Promise<WorkerScanOut> {
-  const resp = await api.post<WorkerScanOut>('/parts/worker-scan', payload);
+  // 2026-10-02 迁 prod 域：工人报工的对象是批次（一笔事务改 2 个批次），路径由
+  // `POST /parts/worker-scan` 改为 `POST /prod/batches/worker-scan`。**无 Path
+  // extractor**，body 逐字不变（`serial_no` 主键 + `batch_id` 可选消歧）。
+  const resp = await api.post<WorkerScanOut>('/prod/batches/worker-scan', payload);
   return resp.data;
 }
 
@@ -482,156 +509,208 @@ export async function updatePart(id: string, payload: PartUpdatePayload): Promis
   return resp.data;
 }
 
-// ============ inspection 单件 v1 体系（inspection 页面专用，回滚自 to-XXX）==============
-
-/** 无 body 流转端点的可选批次参数（单件接口使用）。 */
-export interface BatchActionPayload {
-  batch_id?: string | null;
-  quantity?: number | null;
-}
-
-/** INSPECTION → READY_TO_SHIP：品检合格（可选批次/部分数量）。
- * 事件类型 INSPECTED。
- *
- * 2026-09-15 Phase 5：原 v1 `POST /parts/{id}/pass-inspection` 已统一切 v2。 */
-export async function passInspection(id: string, payload?: BatchActionPayload): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/pass-inspection`, payload ?? undefined);
-  return resp.data;
-}
+// ============ inspection 体系（2026-08-28 后端路线 B 重构）==============
+//
+// 2026-10-02：品检流转端点整体迁 prod 域并锚定批次 —— 路径
+// `POST /api/v2/parts/{part_id}/<action>` → `POST /api/v2/prod/batches/{batch_id}/<action>`，
+// `batch_id` 从 body 删除（已是路径参数），OCC 锚 `t_part_batch.version`。
+// 另：`pass-inspection` / `fail-inspection` 两条 v1 Python 遗留路由在 v2 从未注册
+// （「待品检」页点这两个按钮报 404 的根因），本文件不再声明对应封装 ——
+// 品检通过走 `toShip`、品检打回走 `toProcess`。
 
 /** 扫码快捷品检（PENDING/PROGRAMMING/IN_PROCESS+PRODUCTION_SHELF → INSPECTION）。
- * 事件类型 INSPECTED（PASS）/ INSPECTION_FAILED（FAIL）。
+ * 事件类型 INSPECTED（pass=true）/ INSPECTION_FAILED（pass=false）。
  *
- * 2026-09-15 Phase 5：原 v1 `POST /parts/{id}/scan-inspect` 改走 v2 `POST /parts/{id}/scan-inspect`；
- * payload schema 与后端 v2 `ScanInspectRequest` 对齐（target_inspection_shelf_id 必填）。
- * 注：单段「送检」在 v2 不单独走 `toInspection`，所有 INSPECT 都走 scan-inspect 一体化。 */
+ * payload 与后端 v2 `ScanInspectRequest` 对齐：`pass` / `target_inspection_shelf_id` /
+ * `version` 三者必填（后端无 `#[serde(default)]`，缺任一 → HTTP 422），`shelf_id` /
+ * `next_process_id` 仅 pass=false 分支必填。 */
 export interface ScanInspectPayload {
   /** 必填；目标品检架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
   target_inspection_shelf_id: string;
-  /** 必填；PASS = 走 INSPECTED / FAIL = 走 INSPECTION_FAILED。 */
-  decision: 'PASS' | 'FAIL';
-  /** 仅 FAIL 必填；打回的目标生产货架 id。 */
+  /** 必填；true = 走 INSPECTED（品检通过）/ false = 走 INSPECTION_FAILED（打回）。 */
+  pass: boolean;
+  /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
+  version: number;
+  /** 仅 pass=false 必填；打回的目标生产货架 id。 */
   shelf_id?: string;
-  /** 仅 FAIL 必填；下一道工序 id。 */
+  /** 仅 pass=false 必填；下一道工序 id。 */
   next_process_id?: string;
   /** 可选；品检备注（≤ 500 字符）。 */
   note?: string | null;
-  /** 可选；目标批次 id；缺省按状态唯一批次解析。 */
-  batch_id?: string | null;
   /** 可选；缺省 = 批次全量。 */
   quantity?: number | null;
 }
 
-export async function scanInspect(id: string, payload: ScanInspectPayload): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/scan-inspect`, payload);
-  return resp.data;
-}
-
-// ============ inspection to-XXX 体系（2026-08-28 后端路线 B 重构）==============
-
-/** 单件送检（OUTSOURCE → INSPECTION，保留路线 B 端点以兼容外协接收 tab）。
- *
- * 2026-09-15 Phase 5：原 v1 `POST /parts/{id}/receive-from-outsource-to-inspection`
- * 路由保留并切到 v2 — v2 业务端点覆盖该路径，schema 仍为 `shelf_id`（不是
- * `target_inspection_shelf_id`）。payload 字段差异：v2 schema 无 `version`，
- * OCC 由 service 层按 t_part_batch 处理。 */
-export interface ToInspectionPayload {
-  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。v2 schema 名 `shelf_id`。 */
-  shelf_id: string;
-  /** 选填；缺省按状态唯一批次解析；多批次歧义时建议显式传。 */
-  batch_id?: string | null;
-  /** 选填；缺省 = 批次全量。 */
-  quantity?: number | null;
-}
-
-export async function toInspection(id: string, payload: ToInspectionPayload): Promise<PartItem> {
+export async function scanInspect(
+  batchId: string,
+  payload: ScanInspectPayload,
+): Promise<PartItem> {
   const resp = await api.post<PartItem>(
-    `/parts/${encodeURIComponent(id)}/receive-from-outsource-to-inspection`,
+    `/prod/batches/${encodeURIComponent(batchId)}/scan-inspect`,
     payload,
   );
   return resp.data;
 }
 
-/** 单件通过品检（INSPECTION → READY_TO_SHIP，可选自动拆批）。
- * 2026-09-15 Phase 5：原 v2 `POST /parts/{id}/to-ship` 继续走 v2 业务 `api`。
- * payload 必填：batch_id + version 必传（caller OCC 锚 t_part_batch）。 */
+/** 外协回收直送品检（OUTSOURCE → INSPECTION，外协接收 tab 的「品检」分支）。
+ *
+ * 2026-10-02 改名：原名 `toInspection` 打的是
+ * `POST /parts/{id}/receive-from-outsource-to-inspection`，与「送检」端点
+ * `POST /prod/batches/{batch_id}/to-inspection`（本文件下方 `toInspection`）是两个
+ * 不同端点，同名极易误用，故按端点语义改名。schema 仍为 `shelf_id`（不是
+ * `target_inspection_shelf_id`）。 */
+export interface ReceiveFromOutsourceToInspectionPayload {
+  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
+  shelf_id: string;
+  /** 必填；t_part_batch.version（OCC 锚）。 */
+  version: number;
+  /** 可选；回收后自动通过品检。 */
+  auto_pass_inspection?: boolean;
+  note?: string | null;
+}
+
+export async function receiveFromOutsourceToInspection(
+  batchId: string,
+  payload: ReceiveFromOutsourceToInspectionPayload,
+): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/receive-from-outsource-to-inspection`,
+    payload,
+  );
+  return resp.data;
+}
+
+/** 单件送检（多状态 → INSPECTION）。后端 `ToInspectionRequest`：
+ *  `target_inspection_shelf_id` / `version` 必填，`quantity` / `note` 选填。
+ *  ⚠️ 与上面的 `receiveFromOutsourceToInspection`（外协回收直送品检）不是同一端点。 */
+export interface ToInspectionPayload {
+  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
+  target_inspection_shelf_id: string;
+  /** 必填；t_part_batch.version（OCC 锚）。 */
+  version: number;
+  quantity?: number | null;
+  note?: string | null;
+}
+
+export async function toInspection(
+  batchId: string,
+  payload: ToInspectionPayload,
+): Promise<{ part: PartItem; new_batch_id: string | null }> {
+  const resp = await api.post<{ part: PartItem; new_batch_id: string | null }>(
+    `/prod/batches/${encodeURIComponent(batchId)}/to-inspection`,
+    payload,
+  );
+  return resp.data;
+}
+
+/** 品检通过（INSPECTION → READY_TO_SHIP，可选自动拆批）。
+ *  后端 `ToShipRequest`：`version` 必填（OCC 锚 t_part_batch），
+ *  `quantity` / `note` 选填。`new_batch_id` 非 null = 部分数量触发拆批，
+ *  值是 remainder 批次 id（≠ 入参 batchId），调用方应据此刷新批次列表。 */
 export interface ToShipPayload {
-  /** 必填；雪花 ID 字符串。 */
-  batch_id: string;
-  /** 必填；2026-08-29：t_part_batch.version。 */
+  /** 必填；t_part_batch.version。 */
   version: number;
   quantity?: number | null;
   note?: string | null;
 }
 
 export async function toShip(
-  id: string,
+  batchId: string,
   payload: ToShipPayload,
 ): Promise<{ part: PartItem; new_batch_id: string | null }> {
   const resp = await api.post<{ part: PartItem; new_batch_id: string | null }>(
-    `/parts/${id}/to-ship`,
+    `/prod/batches/${encodeURIComponent(batchId)}/to-ship`,
     payload,
   );
   return resp.data;
 }
 
-/** 单件品检打回（INSPECTION → IN_PROCESS，指定 shelf + next_process）。
- * 事件类型 INSPECTION_FAILED。
- *
- * 2026-09-15 Phase 5：原 v1 `POST /parts/{id}/fail-inspection` 路由保留并切 v2。
- * v2 业务端点覆盖该路径，schema 与 v1 一致（无 `version`，OCC 由 service 层处理）。 */
-export interface FailInspectionPayload {
+/** 品检打回 / 指定下一道工序（INSPECTION → IN_PROCESS）。事件类型 INSPECTION_FAILED。
+ *  后端 `ToProcessRequest`：`shelf_id` / `next_process_id` / `version` 三者必填
+ *  （缺任一 → HTTP 422），`quantity` / `note` 选填。
+ *  返修中批次（`is_repairing = true`）后端返 20118 返修守卫，走通用 catch 弹原文。 */
+export interface ToProcessPayload {
+  /** 必填；打回的目标生产货架 id。 */
   shelf_id: string;
-  /** 下一道工序 id（必填；保留为该 part 的下道工序，工人可直接领取） */
+  /** 必填；下一道工序 id。 */
   next_process_id: string;
-  /** 品检员填的不合格原因等（写入 t_part_event.note，事件历史一览可见） */
-  note?: string | null;
-  /** 2026-07-29：目标批次 id；缺省取唯一 INSPECTION 批次 */
-  batch_id?: string | null;
-  /** 2026-07-29：部分数量；缺省 = 批次全量 */
+  /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
+  version: number;
+  /** 可选；部分数量；缺省 = 批次全量。 */
   quantity?: number | null;
+  /** 可选；品检员填的不合格原因等（写入 t_part_event.note，事件历史一览可见）。 */
+  note?: string | null;
 }
 
-export async function failInspection(
-  id: string,
-  payload: FailInspectionPayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/fail-inspection`, payload);
+export async function toProcess(
+  batchId: string,
+  payload: ToProcessPayload,
+): Promise<{ part: PartItem; new_batch_id: string | null }> {
+  const resp = await api.post<{ part: PartItem; new_batch_id: string | null }>(
+    `/prod/batches/${encodeURIComponent(batchId)}/to-process`,
+    payload,
+  );
   return resp.data;
 }
 
-/** READY_TO_SHIP → DELIVERED：发货（文员/管理员手动）。 */
-export async function deliverPart(id: string): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/deliver`);
+/** READY_TO_SHIP → DELIVERED：发货（文员/管理员手动）。
+ *  2026-10-02 迁 prod 域：批次锚定 + `version` 必填（OCC 锚 t_part_batch）。 */
+export interface DeliverPayload {
+  version: number;
+  note?: string | null;
+}
+
+export async function deliverPart(batchId: string, payload: DeliverPayload): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/deliver`,
+    payload,
+  );
   return resp.data;
 }
 
 /** 扫码台：司机确认发货（PR-C 2026-07-10）。
- * 2026-09-15 Phase 5：原 v1 `POST /parts/scan/deliver-part` 切到 v2。 */
+ *  2026-10-02 迁 prod 域：`POST /parts/scan/deliver-part` → `POST /prod/batches/scan/deliver`。
+ *  body 不变 —— 服务端按 serial_no + status 解析目标批次，无 path 参数。 */
 export interface ScanDeliverPartPayload {
   part_id: string;
   worker_badge_code: string;
 }
 
 export async function scanDeliverPart(payload: ScanDeliverPartPayload): Promise<PartItem> {
-  const resp = await api.post<PartItem>('/parts/scan/deliver-part', payload);
+  const resp = await api.post<PartItem>('/prod/batches/scan/deliver', payload);
   return resp.data;
 }
 
-/** DELIVERED → COMPLETED：确认完成，释放流水号。 */
-export async function completePart(id: string): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/complete`);
+/** DELIVERED → COMPLETED：确认完成，释放流水号。
+ *  2026-10-02 迁 prod 域：批次锚定 + `version` 必填（OCC 锚 t_part_batch）。 */
+export interface CompletePayload {
+  version: number;
+  note?: string | null;
+}
+
+export async function completePart(batchId: string, payload: CompletePayload): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/complete`,
+    payload,
+  );
   return resp.data;
 }
 
 /** → REPAIRING：开始返修（INSPECTION/READY_TO_SHIP/DELIVERED 进入）。
- *  2026-08-04 PR-M：支持 batch_id + quantity（部分返修先拆再转）。 */
+ *  2026-10-02 迁 prod 域：批次锚定，`batch_id` 已是路径参数（部分返修由 quantity 表达）。 */
 export interface StartRepairPayload {
-  batch_id?: string | null;
-  quantity?: number | null;
+  version: number;
+  reason?: string | null;
+  note?: string | null;
 }
-export async function startPartRepair(id: string, payload?: StartRepairPayload): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/start-repair`, payload ?? undefined);
+export async function startPartRepair(
+  batchId: string,
+  payload: StartRepairPayload,
+): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/start-repair`,
+    payload,
+  );
   return resp.data;
 }
 
@@ -639,19 +718,27 @@ export async function startPartRepair(id: string, payload?: StartRepairPayload):
  *
  * - shelf.zone=PRODUCTION → REPAIRING → ON_SHELF（需 next_process_id）
  * - shelf.zone=INSPECTION → REPAIRING → INSPECTION（无需 next_process_id）
+ *
+ * 2026-10-02 迁 prod 域：批次锚定；`shelf_id` 从 query 参数移入 body
+ * （后端 `CompleteRepairRequest` 是 body DTO，旧实现的 `params: { shelf_id }`
+ *  与之不同构）。
  */
 export interface CompleteRepairPayload {
-  batch_id?: string | null;
+  /** 必填；目标货架 id（zone 决定落 ON_SHELF 还是 INSPECTION）。 */
+  shelf_id: string;
+  /** 必填；t_part_batch.version（OCC 锚）。 */
+  version: number;
   next_process_id?: string | null;
+  note?: string | null;
 }
 export async function completePartRepair(
-  id: string,
-  shelfId: string,
-  payload?: CompleteRepairPayload,
+  batchId: string,
+  payload: CompleteRepairPayload,
 ): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/complete-repair`, payload ?? undefined, {
-    params: { shelf_id: shelfId },
-  });
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/complete-repair`,
+    payload,
+  );
   return resp.data;
 }
 
@@ -679,7 +766,9 @@ export async function listRepairBatches(
     offset?: number;
   } = {},
 ): Promise<InspectionBatchListResult> {
-  const resp = await api.get<unknown>('/parts/repair-batches', {
+  // 2026-10-02 迁 prod 域：与已有的 `GET /prod/batches/pending` 并列，
+  // 路径 `/parts/repair-batches` → `/prod/batches/repair`（无 path 参数）。
+  const resp = await api.get<unknown>('/prod/batches/repair', {
     params: cleanParams(params),
   });
   return inspectionBatchListResultSchema.parse(resp.data) as InspectionBatchListResult;
@@ -700,26 +789,36 @@ export async function listRepairingBatches(
     offset?: number;
   } = {},
 ): Promise<InspectionBatchListResult> {
-  const resp = await api.get<unknown>('/parts/repairing-batches', {
+  // 2026-10-02 迁 prod 域：`/parts/repairing-batches` → `/prod/batches/repairing`。
+  const resp = await api.get<unknown>('/prod/batches/repairing', {
     params: cleanParams(params),
   });
   return inspectionBatchListResultSchema.parse(resp.data) as InspectionBatchListResult;
 }
 
-/** PR-M 2026-08-04 续：一步式返修下发（DELIVERED → REPAIRING → ON_SHELF/INSPECTION）。 */
+/** PR-M 2026-08-04 续：一步式返修下发（DELIVERED → REPAIRING → ON_SHELF/INSPECTION）。
+ *
+ *  2026-10-02 迁 prod 域：批次锚定，`batch_id` 已是路径参数（部分返修由 quantity 表达），
+ *  `version` 必填（OCC 锚 t_part_batch）。 */
 export interface RepairDispatchPayload {
   shelf_id: string;
+  /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
+  version: number;
   /** 下一道工序（可选；缺省沿用 REPAIRING 携带的下一工序，PRODUCTION 区会校验映射） */
   next_process_id?: string | null;
-  batch_id?: string | null;
+  reason?: string | null;
+  note?: string | null;
   /** 部分数量（可选；缺省 = 批次全量） */
   quantity?: number | null;
 }
 export async function repairDispatch(
-  id: string,
+  batchId: string,
   payload: RepairDispatchPayload,
 ): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/repair-dispatch`, payload);
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/repair-dispatch`,
+    payload,
+  );
   return resp.data;
 }
 
@@ -782,32 +881,29 @@ export interface SendToOutsourcePayload {
   /**
    * 乐观锁版本号；与目标批次 TPartBatch.version 必须一致，否则返 BIZ_VERSION_CONFLICT 409。
    * 前端从 OutsourceSendableItem.version（批次级 version）取值后传入。
-   * 2026-07-28 新增。
-   * 2026-07-29 PR-fix-0.2.0 批次化：改为批次 version。
    */
   version: number;
-  /**
-   * 2026-07-29 PR-fix-0.2.0 批次化：可发送批次 id（雪花 ID 字符串）。
-   * 选填 —— 缺省时后端用 _resolve_target_batch 在该 part 的活跃批次里自动选唯一者；
-   * 多批次工单建议显式传入，避免歧义。Picker 选中行时建议把 row.batch_id 一起回传。
-   */
-  batch_id?: string;
   /**
    * 2026-07-30：部分发送数量；≤ 批次量，缺省 = 批次全量。
    */
   quantity?: number | null;
+  note?: string | null;
 }
 
 /**
  * PENDING / IN_PROCESS → OUTSOURCE：把零件发送给外协公司。
  * 后端会校验公司存在 + 启用 + 工序 OUTSOURCE + 公司映射了该工序。
+ *
+ * 2026-10-02 迁 prod 域：发送对象是批次，第一形参由 partId 改 batchId
+ * （原 payload 的 `batch_id` 随之删除 —— 它已是路径参数，「缺省按活跃批次猜唯一者」
+ * 的旧语义不再存在）。
  */
 export async function sendToOutsource(
-  partId: string,
+  batchId: string,
   payload: SendToOutsourcePayload,
 ): Promise<PartItem> {
   const resp = await api.post<PartItem>(
-    `/parts/${encodeURIComponent(partId)}/send-to-outsource`,
+    `/prod/batches/${encodeURIComponent(batchId)}/send-to-outsource`,
     payload,
   );
   return resp.data;
@@ -841,21 +937,25 @@ export interface ReceiveFromOutsourcePayload {
   shelf_id: string;
   /** 下一道工序 id（雪花 ID 字符串；JS Number 会丢精度） */
   next_process_id: string;
-  /** 2026-07-30：目标批次 id；缺省按状态唯一批次解析 */
-  batch_id?: string | null;
+  /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
+  version: number;
   /** 2026-07-30：部分接收数量；缺省 = 批次全量 */
   quantity?: number | null;
+  note?: string | null;
 }
 
 /**
  * OUTSOURCE → IN_PROCESS：从外协回收，下发到生产货架继续加工。
+ *
+ * 2026-10-02 迁 prod 域：批次锚定（第一形参 batchId），`batch_id` 从 body 删除。
+ * 后端 `receive_from_outsource` 复用 `PlaceOnShelfRequest`，故 `version` 必填。
  */
 export async function receiveFromOutsource(
-  partId: string,
+  batchId: string,
   payload: ReceiveFromOutsourcePayload,
 ): Promise<PartItem> {
   const resp = await api.post<PartItem>(
-    `/parts/${encodeURIComponent(partId)}/receive-from-outsource`,
+    `/prod/batches/${encodeURIComponent(batchId)}/receive-from-outsource`,
     payload,
   );
   return resp.data;

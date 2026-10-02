@@ -458,10 +458,10 @@ import { useDialogSize } from '@/composables/useDialogSize';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 import {
-  failInspection,
   getPartBySerial,
-  passInspection,
   scanInspect,
+  toProcess,
+  toShip,
   type InspectionBatchListItem,
   type PartItem,
 } from '@/api/parts';
@@ -855,18 +855,26 @@ async function onPassConfirm(): Promise<void> {
   if (!row || !passQty.value) return;
   row._passing = true;
   try {
-    // 2026-09-30 修复：row.id → row.part_id。InspectionBatchListItem 无 id 字段
-    // （与 t_part 不同的雪花 ID 体系），原实现把 undefined 当 part_id 传给后端
-    // 触发 4xx。这是本次 `/parts/undefined` Vue Router 警告的同源 bug。
-    await passInspection(row.part_id, {
-      batch_id: row.batch_id ?? null,
+    // 2026-10-02：品检通过改打 v2 `POST /prod/batches/{batch_id}/to-ship`
+    // （INSPECTION → READY_TO_SHIP，事件 INSPECTED）。此前本按钮打的是
+    // `POST /parts/{part_id}/pass-inspection` —— 那是 v1 Python 遗留路径，v2 从未
+    // 注册该路由，点按钮恒 404（路由匹配先于鉴权，可与 401 区分）。
+    // OCC 锚 t_part_batch.version：version 取列表行的批次版本（InspectionBatchListItem.version）。
+    await toShip(row.batch_id, {
+      version: row.version,
       quantity: passQty.value,
     });
     ElMessage.success(`零件 ${row.serial_no || row.drawing_no} 品检通过 × ${passQty.value}`);
     passDialogVisible.value = false;
     await fetchList();
   } catch (e) {
-    ElMessage.error(`品检通过失败：${(e as Error).message}`);
+    // 40901：批次已被他人改动（version 不匹配）→ 提示 + 重拉，让用户看到最新数量。
+    if ((e as { code?: number }).code === 40901) {
+      ElMessage.warning('该批次已被他人修改，请刷新后重试');
+      await fetchList();
+    } else {
+      ElMessage.error(`品检通过失败：${(e as Error).message}`);
+    }
   } finally {
     row._passing = false;
   }
@@ -1024,14 +1032,16 @@ async function onScanInspectConfirm(): Promise<void> {
   }
   scanInspectSubmitting.value = true;
   try {
-    // 2026-09-30 修复：row.id → row.part_id（InspectionBatchListItem 无 id）。
-    await scanInspect(row.part_id, {
+    // 2026-10-02：批次锚定 `POST /prod/batches/{batch_id}/scan-inspect`；
+    // payload 逐字对齐后端 `ScanInspectRequest`：pass / target_inspection_shelf_id /
+    // version 必填（此前发的 `decision` 键后端不认 + 缺 version，恒 422）。
+    await scanInspect(row.batch_id, {
       target_inspection_shelf_id: scanInspectShelfId.value,
-      decision: scanInspectDecision.value,
+      pass: scanInspectDecision.value === 'PASS',
+      version: row.version,
       shelf_id: scanInspectShelfIdFail.value || undefined,
       next_process_id: scanInspectProcessId.value || undefined,
       note: scanInspectNote.value.trim() || null,
-      batch_id: row.batch_id ?? null,
       quantity: scanInspectQty.value ?? null,
     });
     ElMessage.success(
@@ -1087,22 +1097,31 @@ async function onFailConfirm(): Promise<void> {
     return; // 用户取消
   failSubmitting.value = true;
   try {
-    // 2026-08-29：回退到 v1 fail-inspection（v2 to-process 不在 Rust 上线范围）。
-    // 2026-09-30 修复：row.id → row.part_id（InspectionBatchListItem 无 id）。
-    const out = await failInspection(row.part_id, {
+    // 2026-10-02：品检打回（指定工序）改打 v2 `POST /prod/batches/{batch_id}/to-process`
+    // （INSPECTION → IN_PROCESS，事件 INSPECTION_FAILED）。此前本按钮打的是
+    // `POST /parts/{part_id}/fail-inspection` —— v1 Python 遗留路径，v2 未注册，恒 404。
+    // 返修中批次（is_repairing）后端返 20118 返修守卫，走通用 catch 弹后端原文。
+    // 返回值是 `{ part, new_batch_id }`（不是裸 PartItem），故取 out.part 做提示。
+    const out = await toProcess(row.batch_id, {
       shelf_id: failShelfId.value,
       next_process_id: failProcessId.value,
+      version: row.version,
       note: failNote.value.trim() || null,
-      batch_id: row.batch_id ?? null,
       quantity: failQty.value ?? null,
     });
     ElMessage.success(
-      `零件 ${out.serial_no || out.drawing_no} 已指定下一道工序 ${processCode}，放到生产货架 ${shelfCode}`,
+      `零件 ${out.part.serial_no || out.part.drawing_no} 已指定下一道工序 ${processCode}，放到生产货架 ${shelfCode}`,
     );
     failDialogVisible.value = false;
     await fetchList();
   } catch (e) {
-    ElMessage.error(`指定工序失败：${(e as Error).message}`);
+    // 40901：批次已被他人改动（version 不匹配）→ 提示 + 重拉。
+    if ((e as { code?: number }).code === 40901) {
+      ElMessage.warning('该批次已被他人修改，请刷新后重试');
+      await fetchList();
+    } else {
+      ElMessage.error(`指定工序失败：${(e as Error).message}`);
+    }
   } finally {
     failSubmitting.value = false;
   }

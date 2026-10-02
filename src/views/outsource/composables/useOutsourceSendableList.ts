@@ -233,12 +233,10 @@ export function useOutsourceSendableList(
         outsource_company_id: companyId,
         next_process_id: target.next_process_id,
         version: target.version,
-        // 2026-07-29 PR-fix-0.2.0 批次化：显式携带 batch_id，
-        // 多批次工单下避免 _resolve_target_batch fallback 选错批次。
-        batch_id: target.batch_id,
         quantity: sendQuantity.value === target.batch_quantity ? null : sendQuantity.value,
       };
-      await sendPartToOutsource(target.part_id, payload);
+      // 2026-10-02：发送端点迁 prod 域并以批次为锚，batch_id 已是路径参数。
+      await sendPartToOutsource(target.batch_id, payload);
       ElMessage.success('已发送至外协');
       sendDialogVisible.value = false;
       await refreshSendable();
@@ -368,11 +366,10 @@ export function useOutsourceSendableList(
           outsource_company_id: item.outsource_company_id,
           next_process_id: item.process_id,
           version: item.version,
-          // 2026-07-29 PR-fix-0.2.0 批次化：显式携带 batch_id。
-          batch_id: item.batch_id,
           quantity: item.quantity,
         };
-        await sendPartToOutsource(item.part.id, payload);
+        // 2026-10-02：发送端点迁 prod 域并以批次为锚，batch_id 已是路径参数。
+        await sendPartToOutsource(item.batch_id, payload);
         okCount++;
         // 成功后从队列移除
         sendQueue.value.splice(i, 1);

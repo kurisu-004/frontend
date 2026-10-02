@@ -652,6 +652,9 @@ async function onFailInspectionConfirm() {
   failInspSubmitting.value = true;
   try {
     const ok = await onFailInspection({
+      // 2026-10-02：to-process 以批次为锚，锚点用三卡联动已选中的批次 ——
+      // 多批次 part 上比「找第一个 INSPECTION 批次」更准。
+      batchId: selectedBatchId.value,
       shelfId: failInspShelfId.value,
       processId: failInspProcessId.value,
       note: failInspNote.value.trim() || null,
@@ -705,6 +708,8 @@ async function onReceiveConfirm() {
   receiveSubmitting.value = true;
   try {
     const ok = await onReceiveFromOutsource({
+      // 2026-10-02：receive-from-outsource 迁 prod 域后以批次为锚。
+      batchId: selectedBatchId.value ?? '',
       shelfId: receiveShelfId.value,
       processId: receiveProcessId.value,
     });
@@ -815,7 +820,12 @@ async function handleRelease(payload: {
   processId: string;
   resolve: (ok: boolean) => void;
 }) {
-  const ok = await onReleaseToShelf(payload.shelfId, payload.processId);
+  // 2026-10-02：端点迁 prod 域后以批次为锚，锚点用三卡联动已选中的批次。
+  const ok = await onReleaseToShelf(
+    selectedBatchId.value,
+    payload.shelfId,
+    payload.processId,
+  );
   if (ok) {
     await fetchPart();
     void fetchEvents();

@@ -2,9 +2,10 @@
 /**
  * 一步式返修下发 dialog（PR-M 2026-08-04 续）
  *
- * 调 POST /parts/{id}/repair-dispatch：
+ * 调 POST /prod/batches/{batch_id}/repair-dispatch：
  * DELIVERED / INSPECTION / READY_TO_SHIP → REPAIRING → ON_SHELF / INSPECTION
  * 原子完成；中间状态 REPAIRING 不落库。
+ * （2026-10-02 由 POST /parts/{part_id}/repair-dispatch 迁来：返修下发是批次动作。）
  *
  * UI 结构（el-tabs 双子 Tab）：
  * - 「下发到生产架」：先选工序，后选该工序映射的生产区货架
@@ -103,10 +104,18 @@ async function onSubmit(): Promise<void> {
   const submitting = isInspect ? submittingInspect : submittingDispatch;
   submitting.value = true;
   try {
-    await repairDispatch(props.target.id, {
+    // 2026-10-02：返修下发迁 prod 域并以批次为锚 —— `POST /prod/batches/{batch_id}/repair-dispatch`，
+    // `batch_id` 从 body 删除（已是路径参数），`version` 必填（OCC 锚 t_part_batch）。
+    // ⚠️ target 的声明类型是 PartItem，但实际来源是 listRepairBatches / listRepairingBatches
+    // 的行（InspectionBatchListItem），故 `version` 运行时是**批次**版本、正是本端点要的锚。
+    if (!props.target.batch_id) {
+      ElMessage.error('该行缺少批次信息，无法下发');
+      return;
+    }
+    await repairDispatch(props.target.batch_id, {
       shelf_id: isInspect ? inspShelfId.value : shelfId.value,
+      version: props.target.version,
       next_process_id: !isInspect ? processId.value || null : null,
-      batch_id: props.target.batch_id ?? null,
       quantity: quantity.value < (props.target.quantity ?? 1) ? quantity.value : null,
     });
     const label = props.target.serial_no || props.target.drawing_no;

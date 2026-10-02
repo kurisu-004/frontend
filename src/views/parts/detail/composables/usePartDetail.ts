@@ -27,12 +27,12 @@ import { ElMessage } from 'element-plus';
 import {
   cancelPart,
   cancelPartBatch,
-  failInspection,
   getPart,
   listPartBatches,
   listPartEvents,
   softDeletePart,
   splitPartBatch,
+  toProcess,
   toShip,
   updatePart,
   type PartBatch,
@@ -117,12 +117,19 @@ export interface UsePartDetailReturn {
   onCancelOrder: () => Promise<boolean>;
   onDeletePart: () => Promise<boolean>;
   onPassInspection: () => Promise<boolean>;
+  /** 品检打回（to-process）。`batchId` 为空时直接失败 —— v2 端点以批次为锚，
+   *  不再支持「缺省按唯一 INSPECTION 批次解析」。 */
   onFailInspection: (payload: {
+    batchId: string | null;
     shelfId: string;
     processId: string;
     note: string | null;
   }) => Promise<boolean>;
-  onReceiveFromOutsource: (payload: { shelfId: string; processId: string }) => Promise<boolean>;
+  onReceiveFromOutsource: (payload: {
+    batchId: string;
+    shelfId: string;
+    processId: string;
+  }) => Promise<boolean>;
   onSplitBatch: (batch: PartBatch, quantity: number) => Promise<PartBatch[] | null>;
   onCancelBatch: (batch: PartBatch) => Promise<PartBatch[] | null>;
   statusLabel: (s: OrderStatus) => string;
@@ -366,8 +373,8 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     });
     if (!ok) return false;
     try {
-      await toShip(partId.value, {
-        batch_id: inspectionBatch.id,
+      // 2026-10-02：批次锚定 `POST /prod/batches/{batch_id}/to-ship`（batch_id 已是路径）。
+      await toShip(inspectionBatch.id, {
         version: inspectionBatch.version,
         quantity: null,
       });
@@ -388,18 +395,30 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   }
 
   // ============ 指定工序（failInsp dialog 由 shell 持有 UI 状态）============
-  // 2026-08-28 路线 B：failInspection 改走 v2 to-process（INSPECTION → IN_PROCESS）。
-  // 2026-08-29：回退到 v1 `failInspection`（v2 to-process 不在 Rust 上线范围）；
-  // batch_id 漏传是已知缺口，不在本任务修复。
+  // 2026-10-02：打回改打 v2 `POST /prod/batches/{batch_id}/to-process`（INSPECTION →
+  // IN_PROCESS，事件 INSPECTION_FAILED）。batchId 由调用方（PartDetail）传入 ——
+  // 复用批次卡三卡联动锚的选中批次，多批次 part 上比「找第一个 INSPECTION 批次」更准；
+  // version 取该批次的 t_part_batch.version（后端必填，缺 → 422）。
   async function onFailInspection(payload: {
+    batchId: string | null;
     shelfId: string;
     processId: string;
     note: string | null;
   }): Promise<boolean> {
+    if (!payload.batchId) {
+      ElMessage.error('请先在批次列表中选中要打回的批次');
+      return false;
+    }
+    const batch = batches.value.find((b) => b.id === payload.batchId);
+    if (!batch) {
+      ElMessage.error('未找到选中的批次，请刷新后重试');
+      return false;
+    }
     try {
-      await failInspection(partId.value, {
+      await toProcess(batch.id, {
         shelf_id: payload.shelfId,
         next_process_id: payload.processId,
+        version: batch.version,
         note: payload.note,
       });
       ElMessage.success('已指定下一道工序');
@@ -407,20 +426,35 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
       void fetchEvents();
       return true;
     } catch (e) {
-      ElMessage.error(`指定工序失败：${(e as Error).message}`);
+      // 40901：批次 version 不匹配（与 onPassInspection 同款兜底）
+      if ((e as { code?: number }).code === 40901) {
+        ElMessage.warning('该批次已被他人修改，请刷新后重试');
+        void fetchBatches();
+      } else {
+        ElMessage.error(`指定工序失败：${(e as Error).message}`);
+      }
       return false;
     }
   }
 
   // ============ 外协回收（receive dialog 由 shell 持有 UI 状态）============
   async function onReceiveFromOutsourceFn(payload: {
+    batchId: string;
     shelfId: string;
     processId: string;
   }): Promise<boolean> {
+    // 2026-10-02：批次锚定 + version 必填（后端 receive_from_outsource 复用
+    // PlaceOnShelfRequest）。version 取调用方指定批次的 t_part_batch.version。
+    const batch = batches.value.find((b) => b.id === payload.batchId);
+    if (!batch) {
+      ElMessage.error('未找到要回收的批次，请刷新后重试');
+      return false;
+    }
     try {
-      await receiveFromOutsource(partId.value, {
+      await receiveFromOutsource(batch.id, {
         shelf_id: payload.shelfId,
         next_process_id: payload.processId,
+        version: batch.version,
       });
       ElMessage.success('外协已回收');
       await fetchPart();
@@ -449,9 +483,11 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
 
   async function onSplitBatch(batch: PartBatch, quantity: number): Promise<PartBatch[] | null> {
     try {
-      const newBatches = await splitPartBatch(partId.value, {
-        batch_id: batch.id,
+      // 2026-10-02：批次锚定 `POST /prod/batches/{batch_id}/split`；
+      // version 取被拆批次的 t_part_batch.version（OCC 必填）。
+      const newBatches = await splitPartBatch(batch.id, {
         quantity,
+        version: batch.version,
       });
       ElMessage.success('拆分成功');
       await fetchPart();
@@ -465,7 +501,9 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
 
   async function onCancelBatch(batch: PartBatch): Promise<PartBatch[] | null> {
     try {
-      const newBatches = await cancelPartBatch(partId.value, batch.id);
+      // 2026-10-02：批次锚定 `POST /prod/batches/{batch_id}/cancel`（part 域的
+      // `POST /parts/{id}/cancel` 是「取消该 part 全部活跃批次」，两者不要混）。
+      const newBatches = await cancelPartBatch(batch.id, batch.version);
       ElMessage.success('批次已取消');
       await fetchPart();
       void fetchEvents();
