@@ -5,6 +5,12 @@
 // `POST /admin/worker-pool/{assign,remove}` 的旧请求体，已被
 // `POST /prod/pool/move` 的 `MoveRequest`（tagged enum from/to）取代；
 // 类型本体见 src/api/workerPool.contract.ts，无消费者故直接删除。
+//
+// 2026-10-02 新增 `BatchCardModel`：生产队列看板唯一批次卡片 view-model
+// （BatchCard.vue 的 props 类型）。工序池 / 工人列 / 待下发池三处 wire DTO
+// （PoolBatchItemDto / HeldBatchItemDto / PendingBatchItemDto）字段集各不相同，
+// 统一经 views/workers/composables/poolItemToCard.ts 适配成本类型，
+// 组件层不再感知 DTO 差异。
 
 export interface Worker {
   /** 雪花 ID，string */
@@ -25,40 +31,44 @@ export interface Worker {
   process_ids: string[];
 }
 
-export interface WorkOrderCard {
-  /** 雪花 ID，string */
+export interface BatchCardModel {
+  /** t_part_batch.id，雪花 ID，string */
   batch_id: string;
-  batch_no: string;
+  /** t_part.id，雪花 ID，string */
   part_id: string;
-  drawing_no: string;
+  /** 展示串，已带 B 前缀（如 'B1024'）——适配层拼，组件直接渲染 */
+  batch_no: string;
+  /** t_part.name（零件 / 工单名称）—— 卡片 header 展示的就是它 */
   part_name: string;
-  quantity: number;
+  /** t_part.drawing_no 图号 */
+  drawing_no: string;
+  /** t_part.serial_no，可空 */
   serial_no: string | null;
-  /** ISO date string, e.g. '2026-09-05' */
+  /** t_part_batch.quantity 批次数量 */
+  quantity: number;
+  /** t_part.system_delivery_date，ISO 'YYYY-MM-DD' —— 卡片 body 唯一交期字段 */
   system_delivery_date: string | null;
+  /** t_part.planned_delivery_date，ISO 'YYYY-MM-DD' —— 只进 tooltip（候选池 DTO 不带该字段，恒 null） */
   planned_delivery_date: string | null;
+  /** 加急标记：决定左侧竖条默认色 + body「加急」tag */
   is_urgent: boolean;
-  /** OCC 乐观锁 version */
-  version: number;
-  /** 客户名称（前端扩展，后端待补） */
-  customer: string | null;
-  /** 申请人（前端扩展，后端待补） */
-  applicant: string | null;
-  /** 所在位置（前端扩展，后端待补） */
+  /** 该批次对应 part 是否已上传 CNC 程序（G 代码，后端 EXISTS 派生）—— body「已编程」tag */
+  has_cnc_program: boolean;
+  /** L1 客户名（一级集团，t_customer L1.name） */
+  customer_l1: string | null;
+  /** L2 客户名（叶子，t_customer L2.name） */
+  customer_l2: string | null;
+  /** t_applicant.name 申请人 */
+  applicant_name: string | null;
+  /** t_part.note 业务备注 */
+  note: string | null;
+  /** 所在位置：工序池 = 货架 code；工人持有 = location enum；待下发 = null（尚未落位） */
   location: string | null;
   /**
-   * 2026-09-29 新增：该 batch 对应 part 是否已上传 CNC 程序。WorkOrderCard view-model
-   * 透传自 PoolBatchItemDto.has_cnc_program / HeldBatchItemDto.has_cnc_program。
-   * 仅 pool / held 透传 PoolBatchItemDto / HeldBatchItemDto 的对应字段；前端 UI
-   * 在卡片 header 渲染「已编程」绿色 tag。无条件渲染：非 CNC 链 has_cnc_program=false
-   * 也不渲染 tag（后端派生 = false 即跳过 UI）。
-   */
-  has_cnc_program?: boolean;
-  /**
-   * 2026-09-30 新增：该 batch **当前所在货架 ID**（t_part_batch.current_holder_id）。
+   * 该 batch **当前所在货架 ID**（t_part_batch.current_holder_id）。
    *
-   * 仅 pool 侧（`poolItemToCard` 从 `PoolBatchItemDto.shelf_id`）填充；held 侧
-   * （`heldToCard`）恒为 null —— batch 在 worker 手里，没有"货架位置"。
+   * 仅工序池侧（`poolItemToCard` 从 `PoolBatchItemDto.shelf_id`）填充；工人持有侧
+   * 与待下发侧恒为 null —— batch 在 worker 手里、或尚未下发，没有"货架位置"。
    *
    * 用途：`POST /api/v2/prod/pool/move` 的 `from: {kind:'POOL', shelf_id}` 必须等于
    * batch 真实所在货架，否则后端返 20122 BIZ_BATCH_LOCATION_MISMATCH（HTTP 409）。
@@ -73,5 +83,5 @@ export interface ProcessPoolView {
   process_id: string;
   process_code: string;
   process_name: string;
-  batches: WorkOrderCard[];
+  batches: BatchCardModel[];
 }

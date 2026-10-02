@@ -109,6 +109,9 @@ const poolView = computed<ProcessPoolView | null>(() => {
   padding: 40px;
 }
 .board-splitter {
+  /* 2026-10-02 记档：父级 .el-tab-pane 是块容器（EP 2.14.6 的 el-tabs.css 里没有
+     .el-tab-pane 规则），故下面这两行 flex/min-height 实际不生效；撑满高度的是
+     EP 自带的 `.el-splitter { height: 100% }`。留着只是历史惯性，不要以为高度靠它们。 */
   flex: 1;
   min-height: 0;
   border: 1px solid var(--el-border-color);

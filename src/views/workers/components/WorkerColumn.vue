@@ -37,9 +37,9 @@
         <el-empty description="加载失败" :image-size="60" />
       </div>
       <template v-else>
-        <div v-for="batch in heldBatches" :key="batch.batch_id" class="col-body-item">
-          <WorkOrderCard :batch="batch" />
-        </div>
+        <!-- 2026-10-02：卡片渲染收敛到 BatchCard.vue，包装层删除 —— 本容器是
+             Sortable 拖拽源，直接子元素必须全是可拖项。 -->
+        <BatchCard v-for="batch in heldBatches" :key="batch.batch_id" :batch="batch" />
         <el-empty v-if="heldBatches.length === 0" description="暂无持有工单" :image-size="60" />
       </template>
     </div>
@@ -51,7 +51,7 @@ import { computed, inject, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useDraggable } from 'vue-draggable-plus';
-import type { Worker, WorkOrderCard as Card } from '@/types/workerPool';
+import type { Worker, BatchCardModel as Card } from '@/types/workerPool';
 import { useWorkerStateByWorkerQuery } from '@/composables/queries/useWorkerStateByWorkerQuery';
 import { heldToCard } from '@/views/workers/composables/poolItemToCard';
 import {
@@ -59,7 +59,7 @@ import {
   recordWorkerSource,
   type DraggableStartEvent,
 } from '@/utils/dndSourceTracker';
-import WorkOrderCard from './WorkOrderCard.vue';
+import BatchCard from './BatchCard.vue';
 
 // 2026-09-30 重构：删除 `batches: Card[]` prop —— WorkerColumn 自管 useWorkerStateByWorkerQuery
 // 拉取 held_batches；保留 worker prop。
@@ -90,9 +90,9 @@ watch(
   },
 );
 
-/** 2026-09-30：把 useWorkerStateByWorkerQuery.held_batches 适配成 WorkOrderCard[]。
+/** 2026-10-02：把 useWorkerStateByWorkerQuery.held_batches 适配成 BatchCardModel[]。
  *  heldToCard 函数从 useWorkerQueue.ts 拆到 views/workers/composables/poolItemToCard.ts，
- * 共享给 WorkerPoolTab / PendingPoolCard / WorkerColumn（同 held 数据流）。 */
+ *  共享给 WorkerPoolTab / PoolDrawer / WorkerColumn（同 held 数据流）。 */
 const heldBatches = computed<Card[]>(() => {
   const list = stateQuery.data.value?.held_batches ?? [];
   return list.map(heldToCard);
@@ -165,7 +165,7 @@ function onDragStart(evt: DraggableStartEvent) {
 }
 
 /** 2026-08-27 迁移：vue-draggable-plus @add 事件 payload = Sortable.js 原生，
- *  item 为被拖入的 HTMLElement；通过 WorkOrderCard 上的 :data-batch-id 反查 batch_id。 */
+ *  item 为被拖入的 HTMLElement；通过 BatchCard 上的 :data-batch-id 反查 batch_id。 */
 async function onDragAdd(evt: DraggableStartEvent) {
   const batchId = evt.item.dataset.batchId;
   if (!batchId) return;
@@ -183,6 +183,21 @@ async function onDragAdd(evt: DraggableStartEvent) {
 .worker-column {
   width: 280px;
   flex-shrink: 0;
+  /* 2026-10-02：显式声明纵向 flex（EP 2.14 的 .el-card 本身已是 display:flex +
+     flex-direction:column，此处显式写出来是为了让下方高度链不依赖 EP 内部实现）。
+     高度由外层 .columns-container 的 align-items: stretch 撑开，随 splitter 拖动走。 */
+  display: flex;
+  flex-direction: column;
+}
+/* 2026-10-02：.col-body 的 flex: 1 需要父级 .el-card__body 是纵向 flex 容器才生效
+   （EP 只给了它 flex-grow:1 + overflow:auto，自身高度由内容决定）。padding 由默认的
+   var(--el-card-padding)=20px 收到 10px，与 .columns-container 的 12px 内边距对齐。 */
+.worker-column :deep(.el-card__body) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  padding: 10px;
 }
 .col-header {
   display: flex;
@@ -207,9 +222,11 @@ async function onDragAdd(evt: DraggableStartEvent) {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
+/* 2026-10-02：高度改跟 splitter 走（flex: 1 + min-height: 0），不再用 70vh 魔法数 ——
+   固定尺寸卡片必须随 splitter 拖动实时改变可视区高度。 */
 .col-body {
+  flex: 1;
   min-height: 100px;
-  max-height: 70vh;
   overflow-y: auto;
 }
 .loading-state,

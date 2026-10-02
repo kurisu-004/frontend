@@ -75,8 +75,6 @@ export interface UsePendingDispatchReturn {
   isLoading: Ref<boolean>;
   /** 多选卡已选 batchId 集合 */
   selectedIds: Ref<Set<string>>;
-  /** 已选件数（derived） */
-  selectedCount: ComputedRef<number>;
   /** 多选切换（view 层 el-table @selection-change → 全量替换） */
   setSelectedIds: (ids: string[]) => void;
   /** 清除已选 */
@@ -127,7 +125,6 @@ export function usePendingDispatch(): UsePendingDispatchReturn {
 
   // ===== 多选状态 =====
   const selectedIds = ref<Set<string>>(new Set());
-  const selectedCount = computed<number>(() => selectedIds.value.size);
   function setSelectedIds(ids: string[]): void {
     selectedIds.value = new Set(ids);
   }
@@ -202,12 +199,18 @@ export function usePendingDispatch(): UsePendingDispatchReturn {
         );
       }
     },
-    onError: (e: Error) => {
+    onError: async (e: Error) => {
       // 2026-09-30：后端 batch 域错误码表已无 20706（`docs/api/production/batches.md`
       // §错误码速查：40001 / 20120 / 20121 / 20508 / 40901 / 40300），dispatch 不再抛
       // 工序链缺失错 —— 统一走「自动下发 preview 的 skip_reason = NO_PROCESS_CHAIN」
       // 路径引导。故此处只报原始错误消息。
       ElMessage.error(e.message ?? '下发失败');
+      // 2026-10-02：失败即与服务器对账一次。下发失败时卡片本来就不会从待下发池
+      // 消失 —— 面板渲染的是 props.batches 派生的 cards，Sortable 改的是不参与渲染
+      // 的本地副本 sortableCards + DOM（被拖节点由库放回源容器），屏幕上的卡片纹丝
+      // 不动。这里额外重拉一次是兜底：若列表已与服务器漂移（并发下发 / 状态被别处
+      // 改过），不该留到下一次自然刷新才发现。
+      await invalidatePendingBatchesQuery(qc);
     },
   });
 
@@ -301,7 +304,6 @@ export function usePendingDispatch(): UsePendingDispatchReturn {
     total,
     isLoading,
     selectedIds,
-    selectedCount,
     setSelectedIds,
     clearSelection,
     dispatchMutation,

@@ -16,6 +16,7 @@
 //   - T1：mount 时不抛任何 setup 异常（通用冒烟 + TDZ 回归 guard）。
 //   - T2：进页面只发 3 类请求，**不发** per-process 详情（N+1 懒加载核心 guard）。
 //   - T3：getWorkerPoolCounts 零参调用（后端无 shelf 维度）。
+//   - T4：拖入高亮的跨面板接线（源面板 emit → 板级 ref → 工序池面板 prop）。
 //
 // 测试策略：
 //   - vue-test-utils mount + globalConfig.plugins: [[VueQueryPlugin, { queryClient }]]；
@@ -188,19 +189,34 @@ vi.mock('@/composables/queries/useProcessesQuery', () => ({
 }));
 
 // 子组件 stub —— 避免引入 el-table / el-tabs 真实组件在 happy-dom 下的复杂性。
+// 2026-10-02：PendingBatchesPanel / PendingPoolsPanel 两个 stub 补上「拖入高亮」
+// 链路的接缝（前者可 emit hoverProcess、后者回显 hoveredProcessId），让 T4 能在
+// 组件级守住 WorkerQueueBoard 这一段的接线；两侧组件内部逻辑分别由
+// PendingBatchesPanel.spec.ts / PendingPoolsPanel.spec.ts 覆盖。
 vi.mock('../components/PendingBatchesPanel.vue', () => ({
   default: defineComponent({
     name: 'PendingBatchesPanelStub',
-    setup() {
-      return () => h('div', { class: 'pending-batches-stub' });
+    emits: ['hoverProcess'],
+    setup(_, { emit }) {
+      return () =>
+        h(
+          'div',
+          {
+            class: 'pending-batches-stub',
+            onClick: () => emit('hoverProcess', '2000000000001'),
+          },
+          'mock-pending-batches',
+        );
     },
   }),
 }));
 vi.mock('../components/PendingPoolsPanel.vue', () => ({
   default: defineComponent({
     name: 'PendingPoolsPanelStub',
-    setup() {
-      return () => h('div', { class: 'pending-pools-stub' });
+    props: { hoveredProcessId: { type: String, default: null } },
+    setup(props) {
+      return () =>
+        h('div', { class: 'pending-pools-stub' }, `mock-hover:${String(props.hoveredProcessId)}`);
     },
   }),
 }));
@@ -333,6 +349,29 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     expect(realGetWorkerPoolCounts).toHaveBeenCalled();
     // 一个参数都不能有
     expect(realGetWorkerPoolCounts.mock.calls[0]).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('T4：拖入高亮的跨面板接线（源面板 emit → 板级 ref → 工序池面板 prop）', async () => {
+    // 2026-10-02 回归 guard：Sortable 的 onMove 只派发给**源**（待下发批次列表），
+    // 工序卡（投放目标）侧收不到 ⇒ 高亮态必须由源上报、经板级状态落到工序池面板。
+    // 任一环断掉都表现为「拖入工序卡不高亮」且全链路无报错，故在此守住本组件这一段。
+    activeShelfIdRef.value = '5000000000001';
+    const wrapper = mount(WorkerQueueBoard, {
+      global: {
+        plugins: [
+          [VueQueryPlugin, { queryClient: testQueryClient }],
+        ],
+      },
+    });
+    await flushPromises();
+    const pools = () => wrapper.find('.pending-pools-stub').text();
+    // 初始无悬停目标
+    expect(pools()).toBe('mock-hover:null');
+
+    // 源面板上报某个工序 id → 板级状态透传到工序池面板
+    await wrapper.find('.pending-batches-stub').trigger('click');
+    expect(pools()).toBe('mock-hover:2000000000001');
     wrapper.unmount();
   });
 });

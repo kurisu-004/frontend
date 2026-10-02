@@ -6,7 +6,8 @@
 // new Sortable(null, opts)（:1486）→ 抛 "el must be an HTMLElement, not [object Null]"。
 //
 // 本 composable 强制 immediate: false 跳过挂载期自动绑定，改由 watch 在 elRef
-// 转为非 null 时调 start(el)。elRef 换成新节点时同样会重绑（start 内部先 destroy 再 new）。
+// 转为非 null 时调 start(el)、转回 null 时调 destroy()。
+// elRef 换成新节点时同样会重绑（start 内部先 destroy 再 new）。
 //
 // 适用：容器在 v-if 内（PoolDrawer）、el-dialog destroy-on-close 后重建的 tbody
 //      （PrintPreviewDialog）、EP 表格 tbody 需查询才拿得到（usePartBatchPdf）。
@@ -30,7 +31,14 @@ export function useLazyDraggable<T>(
   watch(
     elRef,
     (el) => {
+      // 2026-10-02 补 else 分支：el 变 null = 容器已卸载（v-if 分支切走 / el-dialog
+      // destroy-on-close 重建），必须 destroy。组件本身没卸载时 useDraggable 内部挂在
+      // 组件上的 onBeforeUnmount(destroy) 不会跑，旧 Sortable 实例 + 已脱离文档的节点
+      // 会被组件闭包一直持有到组件卸载为止。
+      // elRef 换成新节点时 watch 再走非 null 分支，start() 内部本来就先 destroy 再 new，
+      // 故重绑语义不变。
       if (el) inner.start(el);
+      else inner.destroy();
     },
     { flush: 'post' },
   );

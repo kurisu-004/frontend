@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { nextTick, ref } from 'vue';
 
 // vi.mock 会被提升到 import 之上，工厂里不能引用普通 const（TDZ），必须用 vi.hoisted。
-const { startSpy, capturedOptions } = vi.hoisted(() => ({
+const { startSpy, destroySpy, capturedOptions } = vi.hoisted(() => ({
   startSpy: vi.fn(),
+  destroySpy: vi.fn(),
   capturedOptions: [] as Record<string, unknown>[],
 }));
 
@@ -14,7 +15,7 @@ vi.mock('vue-draggable-plus', () => ({
       start: startSpy,
       pause: vi.fn(),
       resume: vi.fn(),
-      destroy: vi.fn(),
+      destroy: destroySpy,
       option: vi.fn(),
       save: vi.fn(),
       toArray: vi.fn(),
@@ -27,6 +28,7 @@ import { useLazyDraggable } from '../useLazyDraggable';
 
 beforeEach(() => {
   startSpy.mockClear();
+  destroySpy.mockClear();
   capturedOptions.length = 0;
 });
 
@@ -93,5 +95,27 @@ describe('useLazyDraggable', () => {
     elRef.value = null;
     await nextTick();
     expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  it('elRef 被置回 null 时 destroy()（容器卸载 ⇒ 旧 Sortable 实例必须释放）', async () => {
+    // 回归 guard：容器在 v-if 分支内被卸载时，组件本身往往还活着 ⇒ useDraggable 内部
+    // 挂在组件上的 onBeforeUnmount(destroy) 不会跑。没有这里的 else 分支，旧实例与
+    // 已脱离文档的节点会被组件闭包一直持有。
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub
+    const elRef = ref<HTMLElement | null>({} as HTMLElement);
+    useLazyDraggable(elRef, ref<number[]>([]));
+    await nextTick();
+    expect(destroySpy).not.toHaveBeenCalled();
+
+    elRef.value = null;
+    await nextTick();
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+    // 重建（v-if 切回 / el-dialog 重新打开）仍走 start()，重绑语义不变
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub
+    const reopened = {} as HTMLElement;
+    elRef.value = reopened;
+    await nextTick();
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).toHaveBeenCalledWith(reopened);
   });
 });

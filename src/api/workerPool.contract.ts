@@ -67,7 +67,7 @@ export interface PoolCountDto {
  *
  *  2026-09-29：`has_cnc_program: boolean`（与 PoolBatchItemDto 同源语义 —— 该 batch
  *  对应 part 是否已上传 CNC 程序；后端 `t_part_file` EXISTS 派生）。WorkerQueueBoard
- *  的 held 列复用 WorkOrderCard 渲染「已编程」tag，故需透传。
+ *  的 held 列复用 BatchCard 渲染「已编程」tag，故需透传。
  */
 export interface HeldBatchItemDto {
   /** t_part_batch.id，雪花 ID */

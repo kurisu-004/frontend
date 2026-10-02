@@ -679,7 +679,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       // 背景：与 partSchema S15a 同形态 —— zod 默认 strip 模式漏列 has_cnc_program
       // 会让后端真返回的「已编程」标记在前端拿不到，且 parse 不报错。本 schema
       // 把 has_cnc_program 显式声明为 z.boolean() 必填字段，缺字段必须抛错，
-      // 守门到位。WorkerQueueBoard 的 held 列与 pool 列共用 WorkOrderCard 渲染
+      // 守门到位。WorkerQueueBoard 的 held 列与 pool 列共用 BatchCard 渲染
       // 「已编程」tag，has_cnc_program 必须透传。
       const { has_cnc_program: _, ...rest } = makeBaseHeld();
       void _;
@@ -829,7 +829,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
 
     it('S-WP2：poolBatchItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 同源 guard）', () => {
       // 与 partSchema.has_cnc_program / heldBatchItemSchema.has_cnc_program 同源：
-      // 后端若漏返 boolean 字段，Zod parse 立刻抛错，WorkOrderCard 的「已编程」tag
+      // 后端若漏返 boolean 字段，Zod parse 立刻抛错，BatchCard 的「已编程」tag
       // 渲染才不会静默退化。
       const { has_cnc_program: _, ...rest } = makeBasePoolBatchItem();
       void _;
