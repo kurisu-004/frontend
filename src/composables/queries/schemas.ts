@@ -1092,7 +1092,7 @@ export const moveRequestSchema = z.object({
 
 export type MoveRequestSchema = z.infer<typeof moveRequestSchema>;
 
-/** `POST /api/v2/prod/pool/move` 出参（rust MoveResult，vo/worker_pool.rs:126-152）。
+/** `POST /api/v2/prod/pool/move` 出参（rust MoveResult，vo/worker_pool.rs）。
  *  取代旧 `AssignResult`（2026-09-14 引入，仅 POOL→WORKER）。
  *
  *  `current_held` / `max_held` / `shelf_id` / `taken` 四个字段在 rust 侧全部带
@@ -1112,7 +1112,8 @@ export const moveResultSchema = z.object({
   current_held: z.number().nullish(),
   /** 仅 to_kind=WORKER 时填：目标 worker 工种的 max_held_batches */
   max_held: z.number().nullish(),
-  /** 仅 to_kind=POOL 时填：候选池货架 id */
+  /** 货架雪花 ID（禁 number，走字符串序列化器）：POOL→WORKER 填 `from.shelf_id`、
+   *  WORKER→POOL 填 `to.shelf_id`、WORKER→WORKER 不填（字段整体省略）。 */
   shelf_id: z.string().nullish(),
   /** 仅 POOL→WORKER 移动时填：从 pool 取出的 batch 详情 */
   taken: takenItemSchema.nullish(),

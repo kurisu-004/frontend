@@ -1046,7 +1046,10 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
     });
 
     it('S-MV5：moveResultSchema 解析 POOL→WORKER 完整响应', () => {
-      // backend-rust MoveResult（vo/worker_pool.rs:126-152）
+      // backend-rust `MoveResult`（vo/worker_pool.rs）
+      // 2026-10-03 补齐：POOL→WORKER 方向后端**也会**填 shelf_id（值 = 请求里的
+      // from.shelf_id），且必须是字符串（雪花 ID 走字符串序列化器）；本 fixture 与
+      // 断言把它锁成契约 —— 缺字段或序列化成 number 都会让本用例红。
       const parsed = moveResultSchema.parse({
         batch_id: '3000000000001',
         from_kind: 'POOL',
@@ -1056,6 +1059,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         version: 2,
         current_held: 2,
         max_held: 3,
+        shelf_id: '5000000000001',
         taken: {
           batch_id: '3000000000001',
           part_id: '4000000000001',
@@ -1072,6 +1076,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       });
       expect(parsed.to_kind).toBe('WORKER');
       expect(parsed.current_held).toBe(2);
+      expect(parsed.shelf_id).toBe('5000000000001');
       expect(parsed.taken?.batch_no).toBe(1);
     });
 
@@ -1146,7 +1151,46 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(r.pool_empty).toBe(false);
     });
 
-    it('S-MV10：takenItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 guard）', () => {
+    it('S-MV10：moveResultSchema shelf_id 为 number → 抛 ZodError（ID 契约只走字符串序列化器）', () => {
+      // 2026-10-03 锁死「shelf_id 只接受字符串」这个决定，防止日后有人为了「兼容」
+      // 把 schema 放宽成同时接受 number：
+      //   1. 货架雪花 ID 是 18~19 位，远超 Number.MAX_SAFE_INTEGER（2^53-1）；
+      //   2. 后端一旦序列化成 JSON number，浏览器 JSON.parse 在读到它的那一刻精度就
+      //      永久丢了 —— 前端拿到的是四舍五入后的错值，不是原 ID（下面这个字面量在
+      //      JS 里就已经是丢过精度的值，说的就是这件事）；
+      //   3. 所以放宽成 union 只会把一个静默损坏的 ID 焊进类型系统，比直接抛错更危险
+      //      —— 抛错至少让契约漂移立刻可见。
+      // 正确做法是后端把 ID 序列化成字符串。
+      expect(() =>
+        moveResultSchema.parse({
+          batch_id: '3000000000001',
+          from_kind: 'POOL',
+          to_kind: 'WORKER',
+          new_holder_id: '1900000000001',
+          new_location: 'WORKER',
+          version: 2,
+          current_held: 2,
+          max_held: 3,
+          // eslint-disable-next-line @typescript-eslint/no-loss-of-precision -- 故意写超 MAX_SAFE_INTEGER 的字面量，演示 number 形态必然丢精度
+          shelf_id: 1590000000000000001,
+          taken: {
+            batch_id: '3000000000001',
+            part_id: '4000000000001',
+            batch_no: 1,
+            quantity: 5,
+            serial_no: null,
+            drawing_no: 'DWG-A001',
+            system_delivery_date: '2026-09-30',
+            planned_delivery_date: null,
+            is_urgent: false,
+            version: 2,
+            has_cnc_program: true,
+          },
+        }),
+      ).toThrow(/shelf_id/);
+    });
+
+    it('S-MV11：takenItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 guard）', () => {
       // 后端 TakenItem.has_cnc_program 带 `#[serde(default)]` 但仍会序列化，
       // 漏返说明契约漂移，必须炸。
       const base: Record<string, unknown> = {
