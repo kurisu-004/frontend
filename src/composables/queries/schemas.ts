@@ -644,7 +644,7 @@ export type PendingProgrammingItemSchema = z.infer<typeof pendingProgrammingItem
 
 /** 2026-10-01 新增：待编程列表分页结果（结构对齐 backend-rust ProgrammingListOut：
  *  items / total / limit / offset 四字段，后端用 JSON number 返回计数
- *  ——与 inspectionBatchListResultSchema 的「string 计数」形态不同，本页按 number 声明）。 */
+ *  ——与 repairBatchListResultSchema 的「string 计数」形态不同，本页按 number 声明）。 */
 export const pendingProgrammingListResultSchema = z.object({
   items: z.array(pendingProgrammingItemSchema),
   total: z.number(),
@@ -1150,8 +1150,16 @@ export const workerStateSchema = z.object({
 export type WorkerStateSchema = z.infer<typeof workerStateSchema>;
 
 // ============================================================
-// 2026-09-30 新增：品检待办行 + 列表 schema（守门 backend-rust
+// 2026-09-30 新增：返修集合读行 + 列表 schema（守门 backend-rust
 // `InspectionBatchListItemOut` / `InspectionBatchListOut`）。
+//
+// 2026-10-03 改名：本 schema 组的消费者已从「品检 / 返修 / 返修中 3 个共用端点」
+// 收窄为**仅** `GET /prod/batches/repair` 与 `GET /prod/batches/repairing` 两条返修
+// 端点（待品检端点 `GET /prod/batches/inspection` 同期换成 13 字段的精简 VO，见
+// 本节末尾的 `inspectionQueueListItemSchema`）。名字里的 "inspection" 此刻已经
+// 指向错误的端点，故连同 `InspectionBatchListItemSchema` /
+// `InspectionBatchListResultSchema` 导出类型一起改名；**字段一个都没动** —— 两条
+// 返修端点的 VO 后端原样未变。
 //
 // 字段对齐 backend-rust docs/api/parts/inspection.md 第 511 行起的
 // `InspectionBatchListItemOut` 字段表：
@@ -1165,42 +1173,37 @@ export type WorkerStateSchema = z.infer<typeof workerStateSchema>;
 //     created_at / updated_at
 //   - 客户解析段：customer_id / customer_name / l1_customer_name
 //
-// status 字段后端 Rust VO 是 String 类型（端点语义锁死 'INSPECTION'），沿
-// schemas 统一约定用 z.string()（与 partBatchSchema.status 同形态），不锁字面量。
+// status 字段后端 Rust VO 是 String 类型（repair 端点语义锁死 'DELIVERED'、
+// repairing 端点恒为 'IN_PROCESS'，见 backend-rust docs/api/parts/lifecycle.md），
+// 沿 schemas 统一约定用 z.string()（与 partBatchSchema.status 同形态），不锁字面量。
 // part_version（= t_part.version）必填；version（= t_part_batch.version）是 caller
 // 调 API 时 OCC 锚点，两个值不同源 schema 必须显式区分。
 //
-// 2026-10-02 补 `is_repairing`（契约漂移修复 —「待品检」整页白屏的根因）：
-//   后端 migration 005 把 `REPAIRING` 从 `PartStatus` 枚举降级为
-//   `t_part_batch.is_repairing` 标记列，Rust VO `src/modules/part/vo/inspection.rs:44`
-//   恒定输出 `is_repairing: bool`（**无 Option / 无 serde(default) / 无
-//   skip_serializing_if** ⇒ 任何端点响应都必带该键）。本 schema 当时是
-//   `.strict()` 且未声明该键 ⇒ zod 抛 `unrecognized_keys: is_repairing`；
-//   zod 的数组元素校验会把一页内所有失败项汇成单个 ZodError，所以**任一行**是
-//   返修批次就导致整页不可用（useInspectionList fetcher 不 catch，
-//   ListShell 的 safeFetcher 又把原始 Zod 消息当空态文案渲染 + total 打成 0）。
-//   ⚠️ 后端 doc（inspection.md:552-559）截至 2026-10-02 仍写「本 VO 的 3 个共用
-//   端点**都不新增** is_repairing 字段」——**该段文档与 VO 源码不一致**，以
-//   `vo/inspection.rs:44` 为准（doc 待后端补齐，不在本前端仓范围内）。
-//   **保留 `.strict()`**：去掉它会退回「缺字段静默 strip 静默失效」这个
-//   .strict() 当初要防的失败模式（仓内 CLAUDE.md 明列的 strip 陷阱）。
+// is_repairing 必填显式声明（契约漂移的历史教训）：后端 migration 005 把 `REPAIRING`
+//   从 `PartStatus` 枚举降级为 `t_part_batch.is_repairing` 标记列，Rust VO
+//   恒定输出该键（**无 Option / 无 serde(default) / 无 skip_serializing_if**）。
+//   本 schema 是 `.strict()` 且当时漏声明该键 ⇒ zod 抛 `unrecognized_keys:
+//   is_repairing`；zod 的数组元素校验会把一页内所有失败项汇成单个 ZodError，
+//   所以**任一行**是返修批次就导致整页不可用。**保留 `.strict()`**：去掉它会退回
+//   「缺字段静默 strip ⇒ 校验形同虚设」这个 .strict() 当初要防的失败模式
+//   （仓内 CLAUDE.md 明列的 strip 陷阱）。
 //
 // 2026-09-30 守门（M-1 同形态）：item schema 用 `.strict()` —— 后端若误把 `id`
-// 字段加进 inspection 响应（regression），Zod 立刻抛错而不是默认 strip 静默
-// 丢弃（与 assemblyDetailFlatSchema 同形态 guard）。listResult schema 仍走默认
-// strip（多 items 数组，每 item 各自守门）。
+// 字段加进返修响应（regression），Zod 立刻抛错而不是默认 strip 静默丢弃（与
+// assemblyDetailFlatSchema 同形态 guard）。listResult schema 仍走默认 strip
+// （多 items 数组，每 item 各自守门）。
 // ============================================================
 
-export const inspectionBatchListItemSchema = z
+export const repairBatchListItemSchema = z
   .object({
     // 批次字段段
     batch_id: z.string(),
     batch_no: z.number(),
     quantity: z.number(),
     status: z.string(),
-    // 2026-10-02 契约对齐：后端 vo/inspection.rs:44 恒输出该键（REPAIRING 状态
-    // 已降级为 boolean 标记列）。漏声明 ⇒ .strict() 抛 unrecognized_keys ⇒ 整页
-    // 白屏。用 z.boolean() 不锁字面量 false：返修中批次本身就是 true。
+    // REPAIRING 状态已降级为 boolean 标记列（migration 005），后端 VO 恒输出该键。
+    // 漏声明 ⇒ .strict() 抛 unrecognized_keys ⇒ 整页白屏。用 z.boolean() 不锁字面量
+    // false：返修中批次本身就是 true。
     is_repairing: z.boolean(),
     location: z.string().nullable(),
     version: z.number(),
@@ -1232,22 +1235,82 @@ export const inspectionBatchListItemSchema = z
   })
   .strict();
 
-export type InspectionBatchListItemSchema = z.infer<typeof inspectionBatchListItemSchema>;
+export type RepairBatchListItemSchema = z.infer<typeof repairBatchListItemSchema>;
 
-/** 品检待办列表分页结果（结构对齐 backend-rust InspectionBatchListOut）。
+/** 返修集合读分页结果（结构对齐 backend-rust InspectionBatchListOut）。
  *
  * 后端 total / limit / offset 用 `serialize_i64` 序列化为 JSON string（与雪花 ID
- * 一致的设计），前端 schema 必须按 wire-format 用 z.string() 接收；下游
- * useInspectionList 在边界 `Number(resp.total)` 转 number 才能塞进 PageResult.total。
+ * 一致的设计），前端 schema 必须按 wire-format 用 z.string() 接收；消费方
+ * （`src/views/repair/RepairReceive.vue`）在边界 `Number(resp.total)` 转 number
+ * 才能塞进分页组件的 total。
  */
-export const inspectionBatchListResultSchema = z.object({
-  items: z.array(inspectionBatchListItemSchema),
+export const repairBatchListResultSchema = z.object({
+  items: z.array(repairBatchListItemSchema),
   total: z.string(),
   limit: z.string(),
   offset: z.string(),
 });
 
-export type InspectionBatchListResultSchema = z.infer<typeof inspectionBatchListResultSchema>;
+export type RepairBatchListResultSchema = z.infer<typeof repairBatchListResultSchema>;
+
+// ============================================================
+// 2026-10-03 新增：待品检队列行 + 列表 schema（守门
+// `GET /api/v2/prod/batches/inspection` 的**精简 13 字段 VO**）。
+//
+// 为什么与上面的返修 VO 分家：待品检页最终只显示 7 个数据列（序列号 / 图号 / 名称 /
+// 批次 / 数量 / 系统交期 / 客户），后端同期为本端点新建了只覆盖这些列 + 3 个写端点
+// 锚字段的精简 VO。`GET /prod/batches/repair` 与 `GET /prod/batches/repairing` 继续
+// 用原 28 字段 VO（上面那套 `repairBatchListItemSchema`），两端点的行对象**不可互相
+// cast** —— 少了 status / location / holder_name 等键。
+//
+// key 集合**恰为 13 个**，且用 `.strict()`：多一个键即抛 `unrecognized_keys`。
+//   1. 列表页的 7 个数据列：batch_no / serial_no / drawing_no / name / quantity /
+//      system_delivery_date / customer_name（+ l1_customer_name 供客户列派生「父 / 子」）；
+//   2. 写端点与跳转锚：batch_id（`POST /prod/batches/{batch_id}/…` 路径参数 +
+//      扫码选行标识）、part_id（`/parts/{part_id}` 详情跳转）、version
+//      （`t_part_batch.version`，OCC 锚）、customer_id（客户表头筛选）、is_urgent
+//      （加急红底）。
+//
+// 2026-10-03 契约要点：
+//   - `system_delivery_date` 是本 VO 相对旧 VO 的**净增字段**（旧待品检 VO 不含它，
+//     前端只能恒显 '—'）；wire 上是 `YYYY-MM-DD` 字符串，DB NULL → JSON null，故
+//     `z.string().nullable()`，不锁字面量。
+//   - batch_id / part_id / customer_id 是**雪花 ID 字符串**（`serialize_i64`，禁止
+//     Number() —— 会丢精度）；batch_no / quantity / version 是 i32 → `z.number()`。
+//   - `total` / `limit` / `offset` 同样是 `serialize_i64` ⇒ JSON **string**，与
+//     `pendingProgrammingListResultSchema`（裸 i64 ⇒ number）方向相反，别照抄。
+//     消费方在边界 `Number(resp.total)` 转 number 才能塞进分页组件的 total。
+// ============================================================
+
+export const inspectionQueueListItemSchema = z
+  .object({
+    batch_id: z.string(),
+    batch_no: z.number(),
+    quantity: z.number(),
+    version: z.number(),
+    part_id: z.string(),
+    serial_no: z.string().nullable(),
+    drawing_no: z.string(),
+    name: z.string(),
+    system_delivery_date: z.string().nullable(),
+    is_urgent: z.boolean(),
+    customer_id: z.string(),
+    customer_name: z.string().nullable(),
+    l1_customer_name: z.string().nullable(),
+  })
+  .strict();
+
+export type InspectionQueueListItemSchema = z.infer<typeof inspectionQueueListItemSchema>;
+
+/** 待品检队列分页结果（items / total / limit / offset 四字段，计数为 JSON string）。 */
+export const inspectionQueueListResultSchema = z.object({
+  items: z.array(inspectionQueueListItemSchema),
+  total: z.string(),
+  limit: z.string(),
+  offset: z.string(),
+});
+
+export type InspectionQueueListResultSchema = z.infer<typeof inspectionQueueListResultSchema>;
 
 // ============================================================
 // 2026-10-02 新增：工种 + 工种↔工序映射 schema（守门 backend-rust
@@ -1271,7 +1334,7 @@ export type InspectionBatchListResultSchema = z.infer<typeof inspectionBatchList
 // ⚠️ 陷阱对照（写这个域时容易照抄错）：`WorkTypeListOut.total` / `limit` /
 // `offset` 在 Rust 里是**裸 `i64`，没有 `#[serde(serialize_with = "serialize_i64")]`**
 // ⇒ wire 形态是 **JSON number**，必须用 `z.number()`。这与
-// `inspectionBatchListResultSchema`（那边**有** serialize_i64 ⇒ 必须 `z.string()`）
+// `repairBatchListResultSchema`（那边**有** serialize_i64 ⇒ 必须 `z.string()`）
 // **方向相反**，不要照抄那一个。
 // ============================================================
 
@@ -1312,7 +1375,7 @@ export type WorkTypeSchema = z.infer<typeof workTypeSchema>;
 
 /** 工种列表分页结果（对齐 backend-rust `WorkTypeListOut`）。
  *  ⚠️ total / limit / offset 是**裸 i64**（无 serialize_i64）⇒ `z.number()`，
- *  与 inspectionBatchListResultSchema 的 `z.string()` 方向相反，见文件头警告。 */
+ *  与 repairBatchListResultSchema 的 `z.string()` 方向相反，见文件头警告。 */
 export const workTypeListResultSchema = z.object({
   items: z.array(workTypeSchema),
   total: z.number(),

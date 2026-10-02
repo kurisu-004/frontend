@@ -39,7 +39,7 @@
 //         声明，漏一个就静默丢；这条用例是「漏声明必须变红」的证据）。
 //   - T9（Zod 守门）：映射响应缺 sort_order → parse 抛错 → data undefined。
 //   - T10：total / limit / offset 是**裸 i64** ⇒ 必须是 JSON number（与
-//         inspectionBatchListResultSchema 的 z.string() 方向相反，照抄就红）。
+//         repairBatchListResultSchema 的 z.string() 方向相反，照抄就红）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computed, createApp, effectScope, ref, type Ref } from 'vue';
@@ -281,7 +281,7 @@ describe('useWorkTypesQuery — reactive params + Zod 守门（2026-10-02）', (
   });
 
   it('T10：total / limit / offset 是裸 i64 → 必须是 JSON number（z.number()）', async () => {
-    // ⚠️ 与 inspectionBatchListResultSchema（那边**有** serialize_i64 ⇒ z.string()）
+    // ⚠️ 与 repairBatchListResultSchema（那边**有** serialize_i64 ⇒ z.string()）
     // 方向相反。照抄那一个会让本域整列表不可用。
     realListWorkTypesMock.mockResolvedValue({
       items: [validWorkType()],

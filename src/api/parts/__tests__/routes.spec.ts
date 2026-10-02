@@ -38,7 +38,12 @@ vi.mock('@/api/http', () => ({
 
 vi.mock('@/composables/queries/schemas', () => ({
   // 集合读端点本函数内会 Zod parse；URL 守卫不需要真实 schema，原样回传给调用方即可。
-  inspectionBatchListResultSchema: { parse: (v: unknown) => v },
+  // 2026-10-03：待品检端点换 13 字段精简 VO 后，两个 VO 的守门 schema 也分家了
+  // （repairBatchListResultSchema 服务返修两条端点，inspectionQueueListResultSchema
+  // 服务待品检端点），mock 必须同时给出两者，缺一个 vitest 就会报
+  // 「No xxx export is defined on the mock」。
+  repairBatchListResultSchema: { parse: (v: unknown) => v },
+  inspectionQueueListResultSchema: { parse: (v: unknown) => v },
 }));
 
 import {
@@ -250,4 +255,78 @@ describe('2026-10-02：留在 part 域的路径一个都不许动', () => {
   it('R6：批次集合读仍按 part 锚定（操作对象是「某 part 的批次集合」）', async () => {
     expect(await fetchedPath(() => listPartBatches('42'))).toBe('/parts/42/batches');
   });
+});
+
+describe('2026-10-03：待品检端点的 Query 参数集（VO 收口的另一半）', () => {
+  /** 发一次 listInspectionBatches 并取回实际打到 axios 的 params。 */
+  async function inspectionQueryParams(
+    run: () => Promise<unknown>,
+  ): Promise<Record<string, unknown>> {
+    httpGetMock.mockReset();
+    httpGetMock.mockResolvedValue({ data: { items: [], total: '0', limit: '200', offset: '0' } });
+    await run();
+    const config = httpGetMock.mock.calls[0]![1] as { params: Record<string, unknown> };
+    return config.params;
+  }
+
+  it('R7：新参数集（三个 ILIKE + 客户 + 系统交期 + 排序 + 分页）逐个落到 axios params', async () => {
+    const params = await inspectionQueryParams(() =>
+      listInspectionBatches({
+        drawing_no: 'A',
+        name: 'B',
+        serial_no: 'C',
+        customer_id: '9000000000001',
+        system_delivery_date_from: '2026-10-01',
+        system_delivery_date_to: '2026-10-31',
+        sort_by: 'NAME',
+        sort_dir: 'ASC',
+        limit: 20,
+        offset: 40,
+      }),
+    );
+    expect(params).toEqual({
+      drawing_no: 'A',
+      name: 'B',
+      serial_no: 'C',
+      customer_id: '9000000000001',
+      system_delivery_date_from: '2026-10-01',
+      system_delivery_date_to: '2026-10-31',
+      sort_by: 'NAME',
+      sort_dir: 'ASC',
+      limit: 20,
+      offset: 40,
+    });
+  });
+
+  // 「空筛选 → undefined → 不上 wire」这一层的真 wire 形态守卫：store spec 里
+  // buildParams 那半（params.xxx === undefined）因 @/api/parts 被 mock 掉而验不到 wire。
+  // 入参刻意把 6 个筛选键显式写成 undefined —— 那正是 buildParams 空筛选下的产出，
+  // 走的是 cleanParams 真正要 strip 的那条路径（不写这几个键则该层根本没被触发）。
+  it('R7b：筛选键为 undefined 时不出现在 axios params 上', async () => {
+    const params = await inspectionQueryParams(() =>
+      listInspectionBatches({
+        drawing_no: undefined,
+        name: undefined,
+        serial_no: undefined,
+        customer_id: undefined,
+        system_delivery_date_from: undefined,
+        system_delivery_date_to: undefined,
+        sort_by: 'SYSTEM_DELIVERY_DATE',
+        sort_dir: 'ASC',
+        limit: 20,
+        offset: 0,
+      }),
+    );
+    expect(params).toEqual({
+      sort_by: 'SYSTEM_DELIVERY_DATE',
+      sort_dir: 'ASC',
+      limit: 20,
+      offset: 0,
+    });
+  });
+
+  // 2026-10-03：原 R8「废弃的 keyword / planned_delivery_date_* 绝不出现在 axios
+  // params 上」随 api 层的过渡剥离逻辑（DEPRECATED_INSPECTION_QUERY_KEYS）一起删除 ——
+  // 三个键已从 ListInspectionQueueParams 类型上消失，待品检页也已改传新参数集，
+  // api 层不再需要「拦住页面层误传」这层防御。
 });

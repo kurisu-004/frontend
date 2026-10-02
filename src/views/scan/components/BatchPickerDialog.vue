@@ -11,6 +11,8 @@
 
   单行点选即关弹窗（不可改）。卡片按批次号升序展示；显示 batch_no / 数量 /
   当前 holder 文本 / 下一工序。点击 emit('pick')，调用方按业务需要驱动后续动作。
+  2026-10-03：行 VO 形态不同时（3 个判据键全不在的窄 VO）meta 行会整行隐藏而不是留一行
+  空文案，详见 holderText 的注释（那里按调用方逐一列了 3 种形态）。
 -->
 
 <template>
@@ -45,8 +47,10 @@
           <span class="name">{{ b.name }}</span>
           <span class="qty">× {{ b.quantity }}</span>
         </div>
-        <div class="batch-meta">
-          <span class="holder">
+        <!-- 2026-10-03：整行按「有没有可显示的信息」条件渲染。holderText 返回空串
+             （窄 VO 一个 holder 键都没有）且无下一工序时不留空行。 -->
+        <div v-if="holderText(b) || b.next_process_name" class="batch-meta">
+          <span v-if="holderText(b)" class="holder">
             <el-icon><Box /></el-icon>
             <span>{{ holderText(b) }}</span>
           </span>
@@ -86,7 +90,28 @@ const sortedRows = computed(() =>
   }),
 );
 
-/** 显示卡片当前 holder：kind='shelf' 取货架码，'worker' 取工人名，'outsource_company' 取公司名 */
+/** 显示卡片当前 holder：kind='shelf' 取货架码，'worker' 取工人名，'outsource_company' 取公司名。
+ *
+ *  2026-10-03 新增空串分支。本组件是跨域共享组件，5 个调用方实际传了 3 种 VO 形态：
+ *  - `views/scan/` 三页（ScanReturnParts / ScanPickParts / ScanInspectParts）传后端
+ *    `PartListItem`（对应两个 api 函数原样透传 `resp.data`，不过 Zod 故不 strip）。该 VO 的
+ *    3 个判据键里**只有 `location` 存在**（`current_holder_kind` / `current_holder_display`
+ *    根本不在该 VO 内，它用的是 `holder_name`），且 `location: Option<String>` 没挂
+ *    `skip_serializing_if` ⇒ **键恒在**，只是值可合法为 null；
+ *  - `views/delivery/PartPickerDialog` 传 15 字段的 `DeliveryNoteCandidatePart`
+ *    （在调用点 cast 成 `PartItem[]`），3 个判据键**一个都没有**；
+ *  - `views/inspection/InspectionPending` 传 13 字段的 `InspectionQueueItem`，同样一个都没有。
+ *
+ *  「一个都没有」⇒ 返回空串，模板把 meta 行整行隐藏。后两种形态在本次改造前恒显兜底文案
+ *  「未知位置」，是无信息量的纯观感噪音：**delivery 域卡片因此少掉那一行是本次一并接受的
+ *  观感变化（有意为之，不是漏了）**；inspection 域则正是本次改造要达成的效果。`views/scan/`
+ *  命中 `location` 键 ⇒ 卡片与改造前完全一致。
+ *
+ *  判据刻意用「键在不在」（`in`）而不是「值是否 null」：`location` 值可合法为 null
+ *  （尚未上架的 PENDING 批次），那种场景必须继续显示「未知位置」，否则 views/scan/ 的既有
+ *  卡片会少一行信息。代价是这个判据**依赖后端不给 `location` 加 `skip_serializing_if`** ——
+ *  一旦加上，键会消失、报工台卡片静默少掉这一行，且仓内没有任何测试能提前发现
+ *  （测试 fixture 自己显式带上了这些键）。 */
 function holderText(p: PartItem): string {
   switch (p.current_holder_kind) {
     case 'shelf':
@@ -96,6 +121,9 @@ function holderText(p: PartItem): string {
     case 'outsource_company':
       return p.outsource_company_name ? `外协 ${p.outsource_company_name}` : '外协 —';
     default:
+      if (!('current_holder_kind' in p || 'current_holder_display' in p || 'location' in p)) {
+        return '';
+      }
       return p.current_holder_display ?? p.location ?? '未知位置';
   }
 }

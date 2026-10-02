@@ -19,7 +19,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
-import type { InspectionBatchListItem } from '@/api/parts';
+import type { RepairBatchListItem } from '@/api/parts';
 import RepairStartDialog from '../RepairStartDialog.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -116,7 +116,7 @@ const ElButtonStub = defineComponent({
   },
 });
 
-function makeTarget(over: Partial<InspectionBatchListItem> = {}): InspectionBatchListItem {
+function makeTarget(over: Partial<RepairBatchListItem> = {}): RepairBatchListItem {
   return {
     batch_id: '190000000000123',
     batch_no: 7,
@@ -149,7 +149,7 @@ function makeTarget(over: Partial<InspectionBatchListItem> = {}): InspectionBatc
   };
 }
 
-async function mountDialog(target: InspectionBatchListItem) {
+async function mountDialog(target: RepairBatchListItem) {
   mocks.repairDispatch.mockReset();
   mocks.repairDispatch.mockResolvedValue({});
   mocks.listShelves.mockResolvedValue({ items: mocks.shelves });

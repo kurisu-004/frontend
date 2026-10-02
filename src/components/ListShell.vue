@@ -174,7 +174,7 @@
 // （如 backend-rust InspectionBatchListItemOut 行，无 id 只有 batch_id +
 // part_id）。放宽到 `T extends object = object` 后：
 //   - 现有 PartItem 消费者仍满足（PartItem extends object）；
-//   - 新 InspectionBatchListItem 消费者无需在 boundary cast。
+//   - 新 InspectionQueueItem 消费者无需在 boundary cast。
 // PagedTable 自身的 generic "T" 无约束，TypeScript 沿推导。
 //   - ListShell 渲染层 el-table 不读 row.id，只走 cellRender / prop / 自定义列；
 //     cellRender 内部已 cast 为业务类型，类型安全由 cellRender 的 cast 收口。
