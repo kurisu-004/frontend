@@ -15,13 +15,24 @@
 // 必须读 parent_customer_name，拿 PartListItem 的 cast 复用旧代码会渲染出「—」。
 
 import { h, type VNode } from 'vue';
-import { ElButton, ElTag } from 'element-plus';
+import { ElButton, ElTag, ElTooltip } from 'element-plus';
 import { RouterLink } from 'vue-router';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { PendingProgrammingItemSchema } from '@/composables/queries/schemas';
 
 /** 行类型 = 待编程列表项（prod 域 ProgrammingItem）。 */
 export type PendingProgrammingRow = PendingProgrammingItemSchema;
+
+/** 2026-10-03：行缺批次 id 时的下发提示。release-from-programming 以批次为锚，
+ *  而 `GET /prod/programming/pending` 的行不携带 batch_id ⇒ 拿不到锚点。
+ *  常量住本文件（操作列 tooltip 与 store 的 mutation 守卫共用同一句文案），
+ *  放 store 里会与本模块构成循环 import。 */
+export const RELEASE_NO_BATCH_HINT = '待编程列表接口未返回批次 id，下发暂不可用';
+
+/** 该行能否下发：必须带批次 id。 */
+export function canReleaseRow(row: PendingProgrammingRow): boolean {
+  return Boolean(row.batch_id);
+}
 
 /** 工厂入参：全部由 store 内部函数注入（deps 形态 —— 闭包不直接持有 store，
  *  便于单测与复用；沿 partsListColumnDefs 的 deps 约定）。 */
@@ -83,6 +94,26 @@ export function buildPendingProgrammingColumnDefs(
   function renderActions({ row }: { row: unknown }): VNode {
     const r = row as PendingProgrammingRow;
     const showRelease = r.status === 'PROGRAMMING';
+    // 行缺批次 id ⇒ 端点拿不到锚点，此时 disabled + tooltip 把缺口摆在点击前
+    // （否则用户要填完整表单才发现这条路走不通）。ElTooltip 不能直接以 disabled
+    // 元素作触发器（EP 官方 FAQ：disabled 表单元素不派发鼠标事件），故包一层 span。
+    const releaseButton = h(
+      ElButton,
+      {
+        link: true,
+        type: 'success',
+        size: 'small',
+        loading: isReleasing(r.id),
+        disabled: !canReleaseRow(r),
+        onClick: () => openReleaseDialog(r),
+      },
+      () => '下发',
+    );
+    const releaseNode = canReleaseRow(r)
+      ? releaseButton
+      : h(ElTooltip, { content: RELEASE_NO_BATCH_HINT, placement: 'top' }, () =>
+          h('span', null, [releaseButton]),
+        );
     return h('div', null, [
       h(
         ElButton,
@@ -94,19 +125,7 @@ export function buildPendingProgrammingColumnDefs(
         },
         () => '详情',
       ),
-      showRelease
-        ? h(
-            ElButton,
-            {
-              link: true,
-              type: 'success',
-              size: 'small',
-              loading: isReleasing(r.id),
-              onClick: () => openReleaseDialog(r),
-            },
-            () => '下发',
-          )
-        : null,
+      showRelease ? releaseNode : null,
     ]);
   }
 

@@ -13,7 +13,7 @@
 //   - T6：release 成功 → onSuccess 失效 programmingPrefix（+ partsPrefix）。
 //   - T7：autoRefresh 开关 + restoreState 持久化恢复（search / autoRefresh / activeTab）。
 //   - T8：$dispose 重建 store → 对话框态 / 页码 / Tab 归零（Pinia hydrate 泄漏 guard）。
-//   - 2026-10-01 review 第 1 轮 I-1 追加（搜索输入态 / 生效态拆分）：
+//   - 搜索输入态 / 生效态拆分：
 //     T9：改 searchInput **不发请求**；onSearch() 才提交并带新值（page 归 1）。
 //     T10：清空（searchInput 置空 + onSearch）净发 **1 次**请求（不双发）。
 //     T11：restoreState() 后 searchInput 与 search 一致（输入框不留白）。
@@ -32,7 +32,7 @@
 //     watch(errorMsg) → ElMessage.error 在 vitest node env 会因 ElMessage 内部
 //     normalizeAppendTo 触发 ReferenceError: document is not defined（CLAUDE.md
 //     TanStack Query 架构条目 #9），必须桩成 no-op。
-//     2026-10-01 review 第 1 轮 M-7：ElButton / ElTag 也要列出来 —— store 经
+//     ElButton / ElTag / ElTooltip 也要列出来 —— store 经
 //     ../pendingProgrammingColumnDefs 把这两个组件拉进了模块图（renderActions /
 //     renderCncProgram 在 cellRender 里用），本文件 mock 掉 element-plus 后它们
 //     会是 undefined。今天不炸只因没有用例调 cellRender；将来加一个「渲染行」的
@@ -102,7 +102,7 @@ const { apiGetMock } = vi.hoisted(() => ({
   >(async () => ({ data: { items: [], total: 0, limit: 20, offset: 0 } })),
 }));
 
-// 2026-10-01 review 第 1 轮 M-2：**mock 边界下移到 axios 层**。
+// **mock 边界下移到 axios 层**。
 // Zod 守门（pendingProgrammingListResultSchema.parse）已收敛进 api 层
 // （fetchPendingProgramming 内部，形态同 api/pendingBatches.ts::dispatchBatches），
 // 若还 mock 掉 '@/api/programming' 整个模块，守门链被短路 —— T5（响应缺字段 →
@@ -197,7 +197,6 @@ describe('usePendingProgrammingStore', () => {
   beforeEach(() => {
     // 只用 mockReset：它内部第一行就是 mockClear（@vitest/spy mockReset →
     // mock.mockClear()），同时清掉 calls 与实现，再由 respondWith 重置默认响应。
-    // 2026-10-01 review 第 2 轮 N-5：原先紧邻的 mockClear() 是死代码，已删。
     apiGetMock.mockReset();
     respondWith({ items: [], total: 0, limit: 20, offset: 0 });
     releaseFromProgrammingMock.mockClear();
@@ -409,7 +408,7 @@ describe('usePendingProgrammingStore', () => {
     expect(store2.query.activeTab).toBe('pending');
   });
 
-  // ============ I-1（2026-10-01 review 第 1 轮）：搜索输入态 / 生效态拆分 ============
+  // ============ 搜索输入态 / 生效态拆分 ============
 
   /** 等一轮微任务 + timer，让 vue-query 的 pre-flush watch 跑完 setOptions。 */
   const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 20));

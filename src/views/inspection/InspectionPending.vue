@@ -78,8 +78,7 @@
     >
       <div v-if="passTarget" class="fail-summary">
         <div><strong>流水号：</strong>{{ passTarget.serial_no || '—' }}</div>
-        <!-- 2026-09-30 修复：InspectionBatchListItem 用 batch_no 而非 batch_label（VO 不带 batch_label 字段） -->
-        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <!-- InspectionBatchListItem 用 batch_no 而非 batch_label（VO 不带 batch_label 字段） -->
         <div><strong>批次：</strong>{{ passTarget.batch_no }}</div>
         <div><strong>名称：</strong>{{ passTarget.name }}</div>
       </div>
@@ -127,8 +126,7 @@
     >
       <div v-if="failTarget" class="fail-summary">
         <div><strong>流水号：</strong>{{ failTarget.serial_no || '—' }}</div>
-        <!-- 2026-09-30 修复：batch_label → batch_no -->
-        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <!-- batch_no 是 z.number() 非 nullable，模板直接渲染即可 -->
         <div><strong>批次：</strong>{{ failTarget.batch_no }}</div>
         <div><strong>图号：</strong>{{ failTarget.drawing_no }}</div>
         <div><strong>名称：</strong>{{ failTarget.name }}</div>
@@ -248,8 +246,7 @@
     >
       <div v-if="scanChooserRow" class="fail-summary">
         <div><strong>流水号：</strong>{{ scanChooserRow.serial_no || '—' }}</div>
-        <!-- 2026-09-30 修复：batch_label → batch_no -->
-        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <!-- batch_no 是 z.number() 非 nullable，模板直接渲染即可 -->
         <div><strong>批次：</strong>{{ scanChooserRow.batch_no }}</div>
         <div><strong>图号：</strong>{{ scanChooserRow.drawing_no }}</div>
         <div><strong>名称：</strong>{{ scanChooserRow.name }}</div>
@@ -274,8 +271,7 @@
     >
       <div v-if="scanInspectRow" class="fail-summary">
         <div><strong>流水号：</strong>{{ scanInspectRow.serial_no || '—' }}</div>
-        <!-- 2026-09-30 修复：batch_label → batch_no -->
-        <!-- 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，去掉冗余 != null 兜底 -->
+        <!-- batch_no 是 z.number() 非 nullable，模板直接渲染即可 -->
         <div><strong>批次：</strong>{{ scanInspectRow.batch_no }}</div>
         <div><strong>图号：</strong>{{ scanInspectRow.drawing_no }}</div>
         <div><strong>名称：</strong>{{ scanInspectRow.name }}</div>
@@ -509,27 +505,21 @@ function renderName({ row }: { row: unknown }): VNode {
 }
 
 function renderBatchLabel({ row }: { row: unknown }): VNode {
-  // 2026-09-30 review 第 1 轮修复：batch_no 是 z.number() 非 nullable，TS 类型
-  // 是 number，r.batch_no != null 永远 true，String() 也是防御性但冗余；
-  // Vue 模板渲染会自动 toString。
+  // batch_no 是 z.number() 非 nullable（TS 类型即 number），Vue 渲染时会自动 toString。
   const r = row as InspectionBatchListItem;
   return h('span', { class: 'batch-label' }, r.batch_no);
 }
 
 function renderSystemDeliveryDate(_: { row: unknown }): VNode {
-  // 2026-09-30 修复：InspectionBatchListItem 无 system_delivery_date 字段
-  // （后端 InspectionBatchListItemOut VO 不含该字段），保留列定义以维持
-  // 列可见性持久化（columnKey='system_delivery_date'），函数永远输出 '—'。
-  // 2026-09-30 review 第 1 轮修复：未使用入参改 `_` 命名，丢弃 `void row;`。
+  // InspectionBatchListItem 无 system_delivery_date 字段（后端 VO 不含该字段），
+  // 保留列定义以维持列可见性持久化（columnKey='system_delivery_date'），永远输出 '—'。
   return h('span', { class: 'muted' }, '—');
 }
 
 function renderCustomer({ row }: { row: unknown }): VNode {
-  // 2026-09-30 修复：InspectionBatchListItem 用 l1_customer_name + customer_name
-  // 派生「父 / 子」展示，与 PendingProgrammingList.renderCustomer 风格统一；
-  // 加 null 兜底：l1 && name → "${l1} / ${name}"；仅 name → name；仅 l1 → l1；都缺 → '—'。
-  // 2026-09-30 review 第 1 轮修复：l1_customer_name / customer_name 已是
-  // z.string().nullable()，TS 类型为 string | null，?? null 恒等于自身，直接取字段。
+  // InspectionBatchListItem 用 l1_customer_name + customer_name 派生「父 / 子」展示，
+  // 与 PendingProgrammingList.renderCustomer 风格统一；两者都是 z.string().nullable()，
+  // TS 类型为 string | null。l1 && name → "父 / 子"；仅 name → name；仅 l1 → l1；都缺 → '—'。
   const r = row as InspectionBatchListItem;
   const l1 = r.l1_customer_name;
   const name = r.customer_name;

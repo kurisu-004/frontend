@@ -55,6 +55,7 @@ import {
   deliverPart,
   listRepairBatches,
   listRepairingBatches,
+  pickUpPart,
   placeOnShelf,
   recallToPending,
   receiveFromOutsource,
@@ -65,6 +66,7 @@ import {
   scanInspect,
   sendToOutsource,
   startPartRepair,
+  toInspection,
   toProcess,
   toShip,
   workerScan,
@@ -154,6 +156,13 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
       `/prod/batches/${BATCH}/split`,
     );
     expect(await postedPath(() => cancelPartBatch(BATCH, 1))).toBe(`/prod/batches/${BATCH}/cancel`);
+    // 单件送检（本次新建的 URL）。别与 receiveFromOutsourceToInspection 混：
+    // 那个是 /receive-from-outsource-to-inspection，外协回收直送品检。
+    expect(
+      await postedPath(() =>
+        toInspection(BATCH, { target_inspection_shelf_id: 's', version: 1 }),
+      ),
+    ).toBe(`/prod/batches/${BATCH}/to-inspection`);
   });
 
   it('R2：批次锚定后 batch_id 不再进 body（它是路径参数）', async () => {
@@ -183,6 +192,16 @@ describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () =
     expect(
       await postedPath(() => scanDeliverPart({ part_id: '1', worker_badge_code: 'B1' })),
     ).toBe('/prod/batches/scan/deliver');
+  });
+
+  // 已知缺口守卫：pickUpPart 是**唯一**刻意留在 part 域的写端点（后端 v2 的领取端点
+  // 是批次锚定的 /prod/batches/{batch_id}/pick-up，v1 的「扫序列号 + 工牌」与 v2 的
+  // 「按批次 + OCC + 工人」不同构，迁移是业务决策）。钉住「它还打着 /parts/pick-up」，
+  // 这样将来真去迁的时候这条断言会先红，强迫同步改 payload 与调用方。
+  it('R4b：pickUpPart 仍打 v1 遗留的 /parts/pick-up（已知缺口守卫）', async () => {
+    expect(
+      await postedPath(() => pickUpPart({ serial_no: 'S1', shelf_id: 's', badge_code: 'B1' })),
+    ).toBe('/parts/pick-up');
   });
 });
 

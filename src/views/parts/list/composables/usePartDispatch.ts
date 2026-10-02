@@ -118,10 +118,9 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   //   - 与 usePartsColumnFilters 同源（同一 query key），保证下一次切换时拿到同一份缓存；
   //   - isFetching 通过 processesLoading 暴露（dialog loading / 占位用）。
   const procQuery = useProcessesQuery({ limit: 200 });
-  // 2026-09-30 review 第 1 轮清理：去掉原 `.map(p => ({ ...p, description: p.description ?? null, color: p.color ?? null }))`
-  // —— types/process.ts description / color 改为 `string | null | undefined`（对齐后端
-  // skip_serializing_if）后，processSchema (Zod) 派生字段是 optional，而 Process 业务类型
-  // 是 required，TS 结构子类型不匹配。沿 ProcessTab.vue:255 同模式走 `as Process[]` 桥接，
+  // description / color 对齐后端 skip_serializing_if 后是 `string | null | undefined`，
+  // processSchema (Zod) 派生字段是 optional，而 Process 业务类型是 required，TS 结构
+  // 子类型不匹配。沿 ProcessTab.vue 同模式走 `as Process[]` 桥接，
   // 渲染层（useShelfProcessFilter 等）已有 `?? null` / `?? '#ddd'` 等 nullish 兜底同时覆盖
   // null + undefined，零行为差异。
   const processes = computed<Process[]>(

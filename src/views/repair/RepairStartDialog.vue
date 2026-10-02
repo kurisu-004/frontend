@@ -20,13 +20,16 @@ import { repairDispatch } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import { listProcesses } from '@/api/process';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
-import type { PartItem } from '@/api/parts';
+import type { InspectionBatchListItem } from '@/api/parts';
 import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
 
 const props = defineProps<{
   modelValue: boolean;
-  target: PartItem | null;
+  /** 目标**批次**行（listRepairBatches / listRepairingBatches 的列表项）。
+   *  必须是批次类型而不是 PartItem：`version` 在这里当 t_part_batch.version 发出去
+   *  作 repair-dispatch 的 OCC 锚，`batch_id` 是路径参数，两者都是批次语义。 */
+  target: InspectionBatchListItem | null;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [v: boolean];
@@ -66,7 +69,8 @@ const {
 );
 
 watch(
-  () => [props.modelValue, props.target?.id] as const,
+  // batch_id 是批次行的身份（批次列表项无 id 字段）。
+  () => [props.modelValue, props.target?.batch_id] as const,
   async ([v]) => {
     if (v) {
       actionTab.value = 'dispatch';
@@ -106,9 +110,9 @@ async function onSubmit(): Promise<void> {
   try {
     // 2026-10-02：返修下发迁 prod 域并以批次为锚 —— `POST /prod/batches/{batch_id}/repair-dispatch`，
     // `batch_id` 从 body 删除（已是路径参数），`version` 必填（OCC 锚 t_part_batch）。
-    // ⚠️ target 的声明类型是 PartItem，但实际来源是 listRepairBatches / listRepairingBatches
-    // 的行（InspectionBatchListItem），故 `version` 运行时是**批次**版本、正是本端点要的锚。
     if (!props.target.batch_id) {
+      // 类型上 batch_id 必填，但返修两个端点的 wire-format 尚未单独验证（见
+      // RepairReceive 的 cast 注），保留这层运行期兜底：空 id 打过去必 404。
       ElMessage.error('该行缺少批次信息，无法下发');
       return;
     }
@@ -144,7 +148,7 @@ function onCancel(): void {
   >
     <div v-if="target" class="summary">
       <div><strong>流水号：</strong>{{ target.serial_no || '—' }}</div>
-      <div><strong>批次：</strong>{{ target.batch_label || '—' }}</div>
+      <div><strong>批次：</strong>#{{ target.batch_no }}</div>
       <div><strong>图号：</strong>{{ target.drawing_no }}</div>
       <div><strong>名称：</strong>{{ target.name }}</div>
       <div><strong>总数：</strong>{{ target.quantity }}</div>

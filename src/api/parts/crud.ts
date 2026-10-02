@@ -410,14 +410,14 @@ export async function releaseFromProgramming(
   return resp.data;
 }
 
-/** 2026-10-02 已知缺口（v1 遗留，待单独修）：本函数**本次不改**。
+/** 已知缺口（v1 遗留，待单独修）：本函数打的是 `/parts/pick-up`（1 段，v1 形状）。
  *
  *  后端 v2 的领取端点是批次锚定的 `POST /api/v2/prod/batches/{batch_id}/pick-up`，
- *  而本函数打的是 `/parts/pick-up`（1 段，v1 形状），payload
- *  `PartPickUpPayload { serial_no, shelf_id, badge_code, batch_id?, quantity? }`
+ *  payload `PartPickUpPayload { serial_no, shelf_id, badge_code, batch_id?, quantity? }`
  *  与 v2 `PickUpRequest { version, worker_id, shelf_id, note }` 不同构：v1 是
  *  「扫序列号 + 工牌」，v2 是「按批次 + OCC + 工人」。两者映射是业务决策、不是机械
- *  路径迁移，故本次只登记不改，调用方（ScanPickParts.vue）同步保持原样。 */
+ *  路径迁移，故只登记不改，调用方（ScanPickParts.vue）同步保持原样。
+ *  路径被 `src/api/parts/__tests__/routes.spec.ts` 的 R4b 钉住（防顺手改成半迁移）。 */
 export async function pickUpPart(payload: PartPickUpPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>('/parts/pick-up', payload);
   return resp.data;
@@ -668,9 +668,13 @@ export async function deliverPart(batchId: string, payload: DeliverPayload): Pro
   return resp.data;
 }
 
-/** 扫码台：司机确认发货（PR-C 2026-07-10）。
+/** 扫码台：司机确认发货。
  *  2026-10-02 迁 prod 域：`POST /parts/scan/deliver-part` → `POST /prod/batches/scan/deliver`。
- *  body 不变 —— 服务端按 serial_no + status 解析目标批次，无 path 参数。 */
+ *  body 不变 —— 服务端按 serial_no + status 解析目标批次，无 path 参数。
+ *  ⚠️ 已知缺口（2026-10-03 登记，未修）：后端 `ScanDeliverPartRequest` 的字段是
+ *  `part_serial_no` / `worker_badge_code`，与下面的 `part_id` 不同名 ⇒ 该请求恒 422。
+ *  本函数当前零生产调用方（死代码），改成 part_serial_no 并接上调用方时一并处理。
+ *  与 pickUpPart 的 v1 遗留路径是同批登记的两处缺口。 */
 export interface ScanDeliverPartPayload {
   part_id: string;
   worker_badge_code: string;
@@ -697,7 +701,9 @@ export async function completePart(batchId: string, payload: CompletePayload): P
 }
 
 /** → REPAIRING：开始返修（INSPECTION/READY_TO_SHIP/DELIVERED 进入）。
- *  2026-10-02 迁 prod 域：批次锚定，`batch_id` 已是路径参数（部分返修由 quantity 表达）。 */
+ *  2026-10-02 迁 prod 域：批次锚定，`batch_id` 已是路径参数。
+ *  ⚠️ 该 DTO **无 quantity**（后端 `StartRepairRequest` 只有 version / reason / note）：
+ *  要返修部分数量必须先 split 出子批次，再对子批次调本端点。 */
 export interface StartRepairPayload {
   version: number;
   reason?: string | null;
