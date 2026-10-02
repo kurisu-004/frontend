@@ -72,16 +72,22 @@ vi.mock('@/api/customer', () => ({
   softDeleteCustomer: vi.fn(),
 }));
 
-const listShelvesMock = vi.fn(
-  async (_params?: unknown) => ({ items: [], total: 0, limit: 200, offset: 0 }),
-);
+const listShelvesMock = vi.fn(async (_params?: unknown) => ({
+  items: [],
+  total: 0,
+  limit: 200,
+  offset: 0,
+}));
 vi.mock('@/api/shelves', () => ({
   listShelves: (params: unknown) => listShelvesMock(params),
 }));
 
-const listProcessesMock = vi.fn(
-  async (_params?: unknown) => ({ items: [], total: 0, limit: 200, offset: 0 }),
-);
+const listProcessesMock = vi.fn(async (_params?: unknown) => ({
+  items: [],
+  total: 0,
+  limit: 200,
+  offset: 0,
+}));
 vi.mock('@/api/process', () => ({
   listProcesses: (params: unknown) => listProcessesMock(params),
 }));
