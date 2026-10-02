@@ -17,6 +17,11 @@
 //      后端返 200 + 「已保存」，用户完全无从察觉映射被清掉。
 // 修法：onSave 开头用 query 的 `isError` / `!data` 硬拦 + 按钮 disabled。
 //
+// 2026-10-02 追加 P8/P9：独立 describe「右侧勾选区的渲染守卫与遮罩判据」承载渲染与
+// 遮罩用例 —— P8 钉 `v-if="selectedWT"`（渲染层），P9a/P9b/P9c 钉遮罩的绑定值（判据层，
+// 判别力集中在 P9c）。与 P1~P7 的写路径守卫是两个独立缺陷：前者防「保存时把映射清空」，
+// 后者防「未选工种时右侧一直转圈」；三组只共用这份脚手架（EP 模板桩 + api 桩）。
+//
 // 为什么直接调 vm.onSelectWT / vm.onSave 而不点 DOM 按钮：
 //   表格行点击最终就是调 onSelectWT(row)，但要让它可点就得复刻 Element Plus 的
 //   el-table ↔ el-table-column 插槽作用域协议（column 的 `{row}` 是 EP 从 table
@@ -30,10 +35,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
+import type { Directive } from 'vue';
 // 供 vi.mock 的 importOriginal 泛型使用（@typescript-eslint/consistent-type-imports
 // 禁止 `import()` 形式类型注解）
 import type * as WorkTypeModule from '@/api/workType';
 import type { WorkType } from '@/types/workType';
+import { qk } from '@/composables/queries/keys';
 
 const elMessage = vi.hoisted(() => ({
   error: vi.fn(),
@@ -77,13 +84,30 @@ vi.mock('@/api/process', () => ({
 
 import ProcessWorkTypeMappingTab from '../components/ProcessWorkTypeMappingTab.vue';
 
+// ---------------------------------------------------------------- v-loading 桩
+// 2026-10-02 修：本桩把模板里 `v-loading` 的**每次求值**写进宿主元素的 data-loading
+// 属性 —— 遮罩判据无论写成什么都不留痕就等于没测（P9b/P9c 直接断具体元素的绑定值，
+// P9a 断整棵树有没有遮罩处于点亮态）。两个挂载点（左表 el-table / 右侧
+// el-checkbox-group）走同一套钩子，不分场景。
+//
+// ⚠️ 指令挂在**组件** vnode 上，靠 Vue 把 dirs 转移到组件的**元素根**上。所以
+//   下方 el-table / el-checkbox-group 桩的 template 必须保持**单根元素**：改成多根
+//   （Fragment）会触发「Runtime directive used on component with non-element root
+//   node」告警并让指令静默失效。好在失效是响的 —— P9a/b/c 会因 attributes 取不到
+//   而红，不会变成假绿。
+const loadingDirective: Directive<HTMLElement, boolean> = {
+  mounted(el, binding) {
+    el.dataset.loading = String(binding.value);
+  },
+  updated(el, binding) {
+    el.dataset.loading = String(binding.value);
+  },
+};
+
 // ---------------------------------------------------------------- EP 模板桩
 const globalConfig = {
-  stubs: {
-    // v-loading（EP 指令）在模板里以 v-loading 形式出现，这里给个 no-op 免得刷警告
-  },
   directives: {
-    loading: {},
+    loading: loadingDirective,
   },
   components: {
     'el-button': {
@@ -417,5 +441,87 @@ describe('2026-10-02：映射加载失败后保存不得清空整组映射（Pro
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['work-types', 'processes'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['work-types'] });
+  });
+});
+
+// 2026-10-02 修：P8/P9 从「映射加载失败后保存不得清空整组映射」移出 —— 那组 describe
+// 讲的是**写路径**（保存会不会把映射清掉），这里讲的是**渲染与遮罩**（右侧勾选区该在
+// 什么时候出现、遮罩该在什么时候亮），塞在同一标题下会让后来者误以为遮罩用例是写路径
+// 守卫的一部分。
+describe('2026-10-02：右侧勾选区的渲染守卫与遮罩判据（ProcessWorkTypeMappingTab）', () => {
+  it('P8：未选工种时不渲染勾选区；选中工种后才渲染（v-if 渲染守卫）', async () => {
+    // 钉死 `el-checkbox-group` 上的 `v-if="selectedWT"`。未选工种时标题已经是
+    // 「请选择工种」，此时摆一屏全量工序复选框是纯误导；这条 v-if 是遮罩判据之外的
+    // 第二道防线。
+    const wrapper = await mountTab();
+
+    expect(wrapper.find('.mock-checkbox-group').exists()).toBe(false);
+
+    const vm = wrapper.vm as unknown as TabVm;
+    vm.onSelectWT(WT);
+    await flushPromises();
+
+    expect(wrapper.find('.mock-checkbox-group').exists()).toBe(true);
+  });
+
+  it('P9a：未选工种时整棵树里没有任何遮罩处于点亮态', async () => {
+    // 症状级断言：未选工种时勾选区压根不渲染（P8 钉的 v-if），此刻整棵树里若还有
+    // 任何一处遮罩处于点亮态，就是「首次进 Tab 右侧顶着一个永不消失的转圈遮罩」的原
+    // 症状复现。定位说明：本条**对模板表达式无判别力** —— 未选工种时勾选区的绑定值在
+    // 结构上就不可观察（它没渲染），而剩下的唯一观测点是左表 el-table 的
+    // wtQuery.isFetching，不在本 Tab 遮罩判据的范围内。判据层的判别力全在 P9c。
+    const wrapper = await mountTab();
+
+    expect(wrapper.findAll('[data-loading="true"]')).toHaveLength(0);
+  });
+
+  it('P9b：选中工种 + 映射请求在飞（尚无 data）→ 勾选区遮罩绑定值为 true', async () => {
+    // 钉「该转圈时要转」：切工种后首屏请求挂起期间必须上遮罩，否则用户看到的是
+    // 一屏空勾选框，会以为这个工种没配任何工序。
+    // 定位：此窗口 isFetching 与 isPending 同为 true，本条对二者**无判别力**，
+    // 只防「一律 false / 写死常量」式退化；判别力在 P9c。
+    getWorkTypeProcessesMock.mockImplementation(() => new Promise(() => undefined));
+    const wrapper = await mountTab();
+    const vm = wrapper.vm as unknown as TabVm;
+
+    vm.onSelectWT(WT);
+    await flushPromises();
+
+    expect(wrapper.find('.mock-checkbox-group').attributes('data-loading')).toBe('true');
+  });
+
+  it('P9c：已有数据 + 后台 refetch 在飞 → 遮罩仍为 true，结束后回落 false', async () => {
+    // 这条是遮罩判据的核心守卫。已有 data 时的后台 refetch 满足 isFetching=true 而
+    // 「尚无 data」判据为 false —— 只有按「真有请求在飞」表达才覆盖得到这个窗口
+    // （保存后失效触发的 refetch、同工种失败重试、staleTime 到期重取都走这里）。
+    // 变异验证：把模板里勾选区的绑定换成首屏未完成判据，本条即红（期望 true 实得 false）。
+    const wrapper = await mountTab();
+    const vm = wrapper.vm as unknown as TabVm;
+    vm.onSelectWT(WT);
+    await flushPromises();
+
+    const group = () => wrapper.find('.mock-checkbox-group');
+    expect(group().attributes('data-loading')).toBe('false');
+
+    let release: (v: typeof EXISTING) => void = () => undefined;
+    getWorkTypeProcessesMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    // 键走 qk 工厂（不在测试里拼字面量）。invalidateQueries 会 await refetch 完成，
+    // 所以这里先拿住 promise、不断言它 settle。
+    const refetching = testQueryClient.invalidateQueries({
+      queryKey: qk.workTypeProcesses(WT.id),
+    });
+    await flushPromises();
+    expect(group().attributes('data-loading')).toBe('true');
+
+    release(EXISTING);
+    await refetching;
+    await flushPromises();
+    expect(group().attributes('data-loading')).toBe('false');
   });
 });
