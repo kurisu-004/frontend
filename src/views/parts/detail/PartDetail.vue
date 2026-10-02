@@ -400,7 +400,7 @@ import ProcessChainCard from './components/ProcessChainCard.vue';
 import type { PartBatch } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';
-import { listProcesses } from '@/api/process';
+import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import type { Process } from '@/types/process';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
@@ -562,15 +562,44 @@ watch(
   },
 );
 
+// 2026-10-02：兜底选中第一条批次。
+// 缺陷：selectedBatchId 初值 null 且只有点批次行才写入 ⇒ 一进页面恒为 null ⇒
+// useProcessChain.currentStepId 恒 null ⇒ currentIndex = -1 ⇒ 工序链时间轴
+// 全灰、`.current-step` 永不命中（用户报的第三个 UI 缺陷）。
+// 判据是「selectedBatchId 仍为 null」：用户手动 toggle 取消选中（onBatchSelect(null)）
+// 不会引发 batches 引用变化，故不会被自动选回；切 partId 时上面那个 watch 把它
+// 重置为 null，紧接着 batches 到达由本 watch 兜底重选。
+watch(
+  () => batches.value,
+  (list) => {
+    if (selectedBatchId.value === null && list.length > 0) {
+      selectedBatchId.value = list[0]!.id;
+    }
+  },
+);
+
 // ============ 共享 shelves / processes 缓存（release / failInsp / receive 共用）============
-// 2026-10-02 订正：本节标题当天曾被 URL 批量同步误改成「共享 prod/shelf-processes
-// 缓存」——错的。`productionShelves` 来自 listShelves({zone:'PRODUCTION'})
-// （`/shelves`），`processes` 来自 listProcesses()（`/prod/processes`），两者都
-// **不是** `/prod/shelf-processes`。那个 URL 是下面两处 useShelfProcessFilter
+// `productionShelves` 来自 listShelves({zone:'PRODUCTION'})（`/shelves`）；
+// `processes` 来自共享 query useProcessesQuery（`/prod/processes`）——
+// 两者都**不是** `/prod/shelf-processes`，那个 URL 是下面两处 useShelfProcessFilter
 // （failInsp / receive 两套过滤）背后的共享 query（useShelfProcessMappingsQuery）
 // 自己拉的映射表，缓存归属独立。
 const productionShelves = ref<Shelf[]>([]);
-const processes = ref<Process[]>([]);
+// 2026-10-02：processes 从「弹窗打开时才拉的本地 ref」改为订阅共享 query。
+// 旧实现只在 openFailInspDialog / openReceiveOutsourceDialog 里调
+// ensureShelvesProcesses()，而 onMounted 不调 ⇒ 一进页面字典恒空 ⇒ 工序链时间轴
+// 只能回退渲染裸 process_id（用户报的第二个 UI 缺陷）。共享 query 在 setup 期即开闸，
+// 字典随 useQuery 到达自动就位。
+const processesQuery = useProcessesQuery({ limit: 200 });
+// `as Process[]` 桥接：processSchema 派生的 description / color 是 optional
+// （对齐后端 skip_serializing_if），而 Process 业务类型是 required，TS 结构不匹配。
+// 沿 usePendingProgrammingStore / usePartDispatch 同模式桥接；本页消费方
+// （ProcessChainCard 字典 / useShelfProcessFilter / el-option）只读 id / code /
+// name / category，对 optional 字段无依赖，零行为差异。
+const processes = computed<Process[]>(
+  () => (processesQuery.data.value?.items ?? []) as Process[],
+);
+
 async function ensureShelvesProcesses(): Promise<void> {
   if (productionShelves.value.length === 0) {
     try {
@@ -580,18 +609,11 @@ async function ensureShelvesProcesses(): Promise<void> {
       /* ignore */
     }
   }
-  if (processes.value.length === 0) {
-    try {
-      const resp = await listProcesses({ limit: 200 });
-      processes.value = resp.items;
-    } catch {
-      /* ignore */
-    }
-  }
+  // processes 走共享 query，无需在此拉取 —— 参数恒定的 queryKey 命中同一份缓存，
+  // 多个订阅者（usePartDispatch / PendingProgrammingStore / 工序制定各 Tab）共用一次请求。
 }
 
 // 2026-09-17 PR-4：ProcessChainCard 需要 { process_id → { code, name } } 字典。
-// processes 由 ensureShelvesProcesses 缓存（failInsp / receive / 配对下发共用），
 // 这里派生 O(1) 查找表，避免在 ProcessChainCard 内 v-for .find。
 const processesLookup = computed<Record<string, { code: string; name: string }>>(() => {
   const map: Record<string, { code: string; name: string }> = {};
@@ -639,8 +661,8 @@ async function openFailInspDialog() {
   failInspNote.value = '';
   await ensureShelvesProcesses();
   failInspDialogVisible.value = true;
-  // 2026-10-02：不再显式 load() —— 映射由共享 query 跟随 productionShelves /
-  // processes 就绪自动开闸（ensureShelvesProcesses() 返回后两源即非空）。
+  // 映射（货架↔工序）由共享 query 跟随 productionShelves / processes 就绪自动开闸；
+  // processes 已是共享 query 的响应式派生，弹窗打开即已就位。
 }
 function onFailInspDialogClosed() {
   failInspProcessId.value = '';
@@ -696,8 +718,7 @@ async function openReceiveOutsourceDialog() {
   receiveProcessId.value = '';
   await ensureShelvesProcesses();
   receiveOutsourceDialogVisible.value = true;
-  // 2026-10-02：不再显式 load() —— 与 failInsp 同一个共享 query 缓存
-  // （同一常量 queryKey），先开过闸则本对话框直接命中。
+  // 与 failInsp 共用同一份共享 query 缓存（同一常量 queryKey），先开过闸则直接命中。
 }
 function onReceiveOutsourceDialogClosed() {
   receiveShelfId.value = '';
