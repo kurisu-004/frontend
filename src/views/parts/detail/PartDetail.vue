@@ -555,6 +555,12 @@ const currentStepId = computed<string | null>(() => processChain.currentStepId.v
 // 工艺变更）。useProcessChain 内部已 watch partId 清空状态；这里只触发拉取。
 // chain 变化前先重置 selectedBatchId，避免旧批次 id 在 chain 未拉完前被
 // currentStepId 派生计算时引用到错误的 step。
+// ⚠️ 既有健壮性缺口（登记不改逻辑）：这里只置空 selectedBatchId，**不重取 batches**
+// ⇒ 若现有 batches 里没有「带 current_process_step_id」的批次，
+// useDefaultBatchSelection 的兜底也补不出选中项，工序链时间轴会继续整条全灰。
+// 当前不可达：PartDetail 内没有工序链编辑器，process_chain_id 变化只可能由切
+// partId 触发，而切 partId 的路由 watcher 会同步 `fetchBatches()`。
+// 将来本页加入链编辑能力时必须在这里同时补 refetch。
 watch(
   () => part.value?.process_chain_id,
   (id) => {

@@ -26,7 +26,10 @@ export type PendingProgrammingRow = PendingProgrammingItemSchema;
 /** 2026-10-03：行缺批次 id 时的下发提示。release-from-programming 以批次为锚，
  *  而 `GET /prod/programming/pending` 的行不携带 batch_id ⇒ 拿不到锚点。
  *  常量住本文件（操作列 tooltip 与 store 的 mutation 守卫共用同一句文案），
- *  放 store 里会与本模块构成循环 import。 */
+ *  放 store 里会与本模块构成循环 import。
+ *  ⚠️ 后端若换了字段名下发（`batch_ids` 复数 / 嵌套），schema 里的期许字段
+ *  `batch_id` 会因 strip 而恒为 undefined ⇒ 按钮恒 disabled，这句文案同时变成假话。
+ *  届时必须与 `pendingProgrammingItemSchema` 的 `batch_id` 一并改名。 */
 export const RELEASE_NO_BATCH_HINT = '待编程列表接口未返回批次 id，下发暂不可用';
 
 /** 该行能否下发：必须带批次 id。 */

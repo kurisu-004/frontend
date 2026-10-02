@@ -27,7 +27,12 @@ export function pickDefaultBatch(batches: PartBatch[]): PartBatch | null {
 }
 
 /** batches 到达时给 selectedBatchId 兜底；不覆盖用户已有的选择。
- *  immediate：调用时若已有批次（缓存已就位）也立即兜底一次。 */
+ *  immediate：实例化时若 batches 里已经有数据也立即兜底一次。
+ *  ⚠️ 2026-10-03 订正：唯一的生产调用点在 PartDetail 的 setup 顶层，而 batches
+ *  来自 usePartDetail 的局部 ref（初值 `[]`）⇒ 实例化瞬间任何 fetch 都还没 resolve，
+ *  immediate 分支恒拿到空数组（零副作用），真正起作用的只有 batches 后续到达时的
+ *  那次触发。也就是说 immediate 目前只对「实例化时数据已就位」的调用方有意义
+ *  （单测 / 将来复用）。 */
 export function useDefaultBatchSelection(
   batches: Ref<PartBatch[]>,
   selectedBatchId: Ref<string | null>,

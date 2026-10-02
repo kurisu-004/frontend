@@ -187,14 +187,15 @@ async function loadList(): Promise<void> {
       activeTab.value === 'delivered'
         ? await listRepairBatches(params)
         : await listRepairingBatches(params);
-    // 2026-09-30 提示：InspectionBatchListResult.items 类型由 PartItem[] 收紧为
-    // InspectionBatchListItem[]（list items 真实形态）。listRepairBatches /
-    // listRepairingBatches 仍返回 InspectionBatchListResult —— 端点 wire-format
-    // 是 BatchOut 而非 InspectionBatchListItemOut，类型契约待单独 plan 验证
-    // （见 src/api/parts/batch.ts:248-254 注释）。此处 cast 为 PartItem[] 是
-    // 「维持原 RepairReceive 渲染层行为不变」的最小改动；customer_path /
-    // current_holder_display 等 PartItem 专属字段在 repair 端点返回数据上是否
-    // 实际存在由后端契约决定，回归时再单独处理。
+    // 2026-09-30 提示：InspectionBatchListResult.items 的类型由 PartItem[] 收紧为
+    // InspectionBatchListItem[]（list items 真实形态）。此处仍 cast 成 PartItem[] 是
+    // 「维持 RepairReceive 渲染层行为不变」的最小改动：按后端契约，返修两个端点与
+    // `GET /prod/batches/inspection` **共用同一个 VO `InspectionBatchListItemOut`**
+    // （见 @/api/parts/crud.ts 的 listRepairBatches 注释），
+    // 也就是说 customer_path / current_holder_display 等 PartItem 专属字段在返修端点
+    // 的返回数据上并不存在，渲染层沿用 PartItem 属于待收敛的历史遗留。
+    // 收口方案：rows 重新 typed 成 InspectionBatchListItem[] 并逐列核对
+    // （含 row-key：批次列表项无 id，得改用 batch_id），本轮不动，单独排期。
     rows.value = result.items as unknown as PartItem[];
     // InspectionBatchListResult.total 后端用 serialize_i64 序列化为 JSON string，
     // total 是 Ref<number>，边界 Number() 转回 number 才能塞进 ref（同 useInspectionList
@@ -249,8 +250,7 @@ async function switchTab(tab: TabKey): Promise<void> {
 function onClickStartRepair(row: unknown): void {
   // 2026-10-03：dialog 的 target 收窄成 InspectionBatchListItem —— 它的 `version`
   // 是**批次** version（repair-dispatch 的 OCC 锚）、`batch_id` 是端点路径参数。
-  // 渲染层 rows 仍声明为 PartItem[]（见 fetch 处的 cast 注，端点 wire-format 待
-  // 单独验证），转换集中在这一个边界上。
+  // 渲染层 rows 仍是 PartItem[]（见 loadList 处的 cast 注），转换集中在这一个边界上。
   startDialog.value = { open: true, target: row as unknown as InspectionBatchListItem };
 }
 async function onDialogConfirm(): Promise<void> {

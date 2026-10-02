@@ -601,6 +601,8 @@ export type PendingBatchListResultSchema = z.infer<typeof pendingBatchListResult
 //   planned_delivery_date (string) / system_delivery_date (nullable) /
 //   customer_name (nullable，L2) / parent_customer_name (nullable，L1) /
 //   has_cnc_program (bool 必填 —— 本页 Tab 化关键字段)。
+// 另声明 1 个**后端当前不返**的期许字段 batch_id ⇒ 本 schema 共 14 个 key
+// （字段自身的注释解释了它为什么必须是 optional）。
 //
 // ⚠️ 客户字段名与 part 域**不同名**：这里是 parent_customer_name(L1) /
 // customer_name(L2)，而 PartListItem 是 l1_customer_name / customer_name。
@@ -626,7 +628,15 @@ export const pendingProgrammingItemSchema = z.object({
   has_cnc_program: z.boolean(),
   /** 批次 id（雪花 ID 字符串）。release-from-programming 端点以批次为锚，
    *  缺它就下发不了。**后端当前不返该字段**，故声明成 nullable + optional：
-   *  一旦后端补上，操作列的「下发」按钮会自动从 disabled 恢复可用，无需改前端。 */
+   *  一旦后端补上，操作列的「下发」按钮会自动从 disabled 恢复可用，无需改前端。
+   *
+   *  ⚠️ 这是「已知缺口 + 期许字段」，不是当前契约，放在 schema 里（而不是视图层的
+   *  行类型）是因为 strip 只发生在这一层：z.infer 派生的类型要与真正到达视图层的
+   *  运行时对象同源，否则视图层会拿到一个类型上存在、运行时恒为 undefined 的字段。
+   *  代价是本 schema 是 strip 模式的 `z.object`（非 `.strict()`）：若后端最终用别的
+   *  名字下发（`batch_ids` 复数 / 嵌套结构），Zod 会**静默丢弃**它 ⇒ 按钮恒 disabled，
+   *  而 tooltip 会继续宣称「待编程列表接口未返回批次 id」，那句话此时是假话。
+   *  **后端确定字段名后必须同步改这一行**（改名，或按新结构补声明）。 */
   batch_id: z.string().nullable().optional(),
 });
 
