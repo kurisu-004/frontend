@@ -23,7 +23,7 @@ import { repairDispatch } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import { listProcesses } from '@/api/process';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
-import type { InspectionBatchListItem } from '@/api/parts';
+import type { RepairBatchListItem } from '@/api/parts';
 import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
 
@@ -32,7 +32,7 @@ const props = defineProps<{
   /** 目标**批次**行（listRepairBatches / listRepairingBatches 的列表项）。
    *  必须是批次类型而不是 PartItem：`version` 在这里当 t_part_batch.version 发出去
    *  作 repair-dispatch 的 OCC 锚，`batch_id` 是路径参数，两者都是批次语义。 */
-  target: InspectionBatchListItem | null;
+  target: RepairBatchListItem | null;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [v: boolean];

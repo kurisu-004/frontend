@@ -292,24 +292,10 @@ describe('2026-10-03：待品检端点的 Query 参数集（VO 收口的另一�
     });
   });
 
-  it('R8：已废弃的 keyword / planned_delivery_date_* 绝不出现在 axios params 上', async () => {
-    // 后端 2026-10-03 起不再接受这 3 个键（日期筛选改筛系统交期，keyword 拆成
-    // drawing_no / name / serial_no 三个独立子串）。`src/views/inspection/` 的旧
-    // fetcher 仍在传它们，而那属页面层改造范围 —— api 边界的剥离逻辑保证它们
-    // 永远不发到 wire 上（后端 Query DTO 一旦开 deny_unknown_fields 就会 400）。
-    const params = await inspectionQueryParams(() =>
-      listInspectionBatches({
-        drawing_no: 'A',
-        keyword: '废弃',
-        planned_delivery_date_from: '2026-10-01',
-        planned_delivery_date_to: '2026-10-31',
-      }),
-    );
-    expect(params).toEqual({ drawing_no: 'A' });
-    expect(params).not.toHaveProperty('keyword');
-    expect(params).not.toHaveProperty('planned_delivery_date_from');
-    expect(params).not.toHaveProperty('planned_delivery_date_to');
-  });
+  // 2026-10-03：原 R8「废弃的 keyword / planned_delivery_date_* 绝不出现在 axios
+  // params 上」随 api 层的过渡剥离逻辑（DEPRECATED_INSPECTION_QUERY_KEYS）一起删除 ——
+  // 三个键已从 ListInspectionQueueParams 类型上消失，待品检页也已改传新参数集，
+  // api 层不再需要「拦住页面层误传」这层防御。
 });
 
 describe('2026-10-02：留在 part 域的路径一个都不许动', () => {

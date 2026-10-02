@@ -279,7 +279,7 @@ export async function cancelPartBatch(
 /** 返修集合读行（批次级；行 = 批次）—— 服务 `GET /api/v2/prod/batches/repair`（已送货）
  *  与 `GET /api/v2/prod/batches/repairing`（返修中）两条端点。
  *
- *  2026-10-03 改名：原名 `InspectionBatchListItem` 是在「品检 / 返修 / 返修中 3 个
+ *  2026-10-03 改名：原名里带 "Inspection" 是在「品检 / 返修 / 返修中 3 个
  *  端点共用同一个 Rust VO」时期起的名。待品检端点同期换成 13 字段精简 VO（见下方
  *  `InspectionQueueItem`）后，名字里的 "Inspection" 指向错误的端点，故改名。**字段
  *  一个都没动**，两条返修端点的 VO 后端原样未变。
@@ -334,38 +334,6 @@ export interface RepairBatchListResult {
   limit: string;
   offset: string;
 }
-
-/** @deprecated 2026-10-03 过渡别名，**请勿在新代码使用**。
- *
- *  存在理由只有一个：待品检端点换 13 字段 VO、返修端点留 28 字段 VO 之后，
- *  `src/views/inspection/`（旧待品检页 + 其 fetcher）与 `src/views/repair/`
- *  （RepairStartDialog 及其 spec）这 4 处仍以 `InspectionBatchListItem` 旧名引用本
- *  类型，而本任务禁止改动它们。待页面层改造（让待品检页脱离 ListShell）落地后，
- *  应把这两处分别改成 `InspectionQueueItem` 与 `RepairBatchListItem`，然后删除本别名。
- *
- *  形态是「新 VO 的 12 个必填 + 返修 VO 的字段全部可选」的并集：既接得住
- *  `InspectionQueueItem`（待品检 fetcher 把 rows 赋给 `PageResult<本类型>`），
- *  也接得住 RepairStartDialog.spec 里那份 28 字段的返修行对象字面量。
- *  `system_delivery_date` 可选是因为返修 VO 不含该键（返修行对象字面量没有它），
- *  而待品检 VO 恒带它（含 null）。 */
-export interface InspectionBatchListItem extends Partial<RepairBatchListItem> {
-  batch_id: string;
-  batch_no: number;
-  quantity: number;
-  version: number;
-  part_id: string;
-  serial_no: string | null;
-  drawing_no: string;
-  name: string;
-  is_urgent: boolean;
-  customer_id: string;
-  customer_name: string | null;
-  l1_customer_name: string | null;
-  system_delivery_date?: string | null;
-}
-
-/** @deprecated 2026-10-03：请改用 `RepairBatchListResult`。同 `InspectionBatchListItem`。 */
-export type InspectionBatchListResult = RepairBatchListResult;
 
 /** 待品检队列行（批次级；行 = 批次）—— 服务 `GET /api/v2/prod/batches/inspection`。
  *
@@ -430,36 +398,6 @@ export interface ListInspectionQueueParams {
   sort_dir?: SortDir;
   limit?: number;
   offset?: number;
-
-  // ── 以下 3 个键 2026-10-03 起后端**不再接受**，此处仅作类型过渡，见下方
-  // `DEPRECATED_INSPECTION_QUERY_KEYS` 的剥离逻辑。子任务 #3 重写待品检页 fetcher
-  // 后即可整段删除。
-  /** @deprecated 后端已废弃（旧语义：同时匹配图号 / 名称 / 序列号 / 订单号）。 */
-  keyword?: string;
-  /** @deprecated 后端已废弃（改筛 `system_delivery_date_from`）。 */
-  planned_delivery_date_from?: string;
-  /** @deprecated 后端已废弃（改筛 `system_delivery_date_to`）。 */
-  planned_delivery_date_to?: string;
-}
-
-/** 后端 2026-10-03 起不再接受的 3 个 Query 键。
- *
- *  保留原因：`src/views/inspection/composables/useInspectionList.ts`（旧待品检页
- *  fetcher，属页面层改造范围）仍在传它们，而本任务禁止改动该文件。api 边界一律
- *  剥离，绝不发到 wire 上 —— 后端 Query DTO 若将来开 `deny_unknown_fields`，带着
- *  这三个键的请求会直接 400。 */
-const DEPRECATED_INSPECTION_QUERY_KEYS = [
-  'keyword',
-  'planned_delivery_date_from',
-  'planned_delivery_date_to',
-] as const satisfies ReadonlyArray<keyof ListInspectionQueueParams>;
-
-function stripDeprecatedInspectionQueryKeys(
-  params: ListInspectionQueueParams,
-): ListInspectionQueueParams {
-  const out: ListInspectionQueueParams = { ...params };
-  for (const key of DEPRECATED_INSPECTION_QUERY_KEYS) delete out[key];
-  return out;
 }
 
 /** 待品检队列（`GET /api/v2/prod/batches/inspection`，判据 `status='INSPECTION'`）。
@@ -475,7 +413,7 @@ export async function listInspectionBatches(
   params: ListInspectionQueueParams = {},
 ): Promise<InspectionQueueListResult> {
   const resp = await api.get<unknown>('/prod/batches/inspection', {
-    params: cleanParams(stripDeprecatedInspectionQueryKeys(params)),
+    params: cleanParams(params),
   });
   return inspectionQueueListResultSchema.parse(resp.data) as InspectionQueueListResult;
 }
