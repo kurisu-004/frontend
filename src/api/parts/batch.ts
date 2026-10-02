@@ -212,6 +212,12 @@ export interface PartBatch {
   batch_label: string;
   quantity: number;
   status: string;
+  /** 2026-10-02 新增：是否返修中。来源 backend-rust
+   *  `src/modules/part/vo/part.rs:327`（`PartBatchListItemOut`，由
+   *  `GET /api/v2/parts/{id}/batches` 返回）。与 `InspectionBatchListItemOut.is_repairing`
+   *  同源同语义：后端 2026-10-01 review 第 1 轮 M5（migration 005）把 `REPAIRING`
+   *  从 `PartStatus` 枚举降级为 `t_part_batch.is_repairing` 标记列。 */
+  is_repairing: boolean;
   location: string | null;
   current_holder_id: string | null;
   current_holder_display: string | null;
@@ -252,7 +258,9 @@ export async function cancelPartBatch(partId: string, batchId: string): Promise<
  * 渲染层 `<RouterLink to="/parts/${r.id}">` 因此拼出 `/parts/undefined`）。
  * 后端 `GET /api/v2/parts/inspection-batches` 实际返回
  * `InspectionBatchListItemOut[]`（无 `id` 字段，详情跳转锚应改用 `part_id`），
- * 详见 `backend-rust/docs/api/parts/inspection.md` 第 479 行起字段表。
+ * 详见 `backend-rust/docs/api/parts/inspection.md` 第 511 行起字段表
+ * （行号 2026-10-02 review 第 1 轮订正：原写 479，是文档扩写前的旧位置，与
+ *  `src/composables/queries/schemas.ts` 品检 schema 块的 511 保持一致）。
  * 字段严格对齐后端 VO。 */
 export interface InspectionBatchListItem {
   // 批次字段段
@@ -260,6 +268,13 @@ export interface InspectionBatchListItem {
   batch_no: number;
   quantity: number;
   status: string;
+  /** 2026-10-02 新增：是否返修中。来源 backend-rust
+   *  `src/modules/part/vo/inspection.rs:44`（`InspectionBatchListItemOut`）。
+   *  后端 2026-10-01 review 第 1 轮 M5（migration 005，**BREAKING**）把 `REPAIRING`
+   *  从 `PartStatus` 枚举**降级**为 `t_part_batch.is_repairing` 标记列，本字段是
+   *  「返修中」的唯一表达 —— 返修中批次的 `status` 恒为 `IN_PROCESS`。
+   *  恒定输出（无 Option / 无 serde(default) / 无 skip_serializing_if）。 */
+  is_repairing: boolean;
   location: string | null;
   version: number;
   current_process_step_id?: string | null;

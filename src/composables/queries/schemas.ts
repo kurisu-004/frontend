@@ -107,14 +107,14 @@ export const customerListResultSchema = z.object({
 export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
 
 /** 2026-09-26 新增：工序实体。字段对齐 backend-rust `ProcessOut`
- * （`backend-rust/docs/api/production/processes.md:159-173`，11 字段）：id /
- * code / name / category / sort_order / description / requires_approval / color /
- * version / created_at / updated_at。category 用 z.enum 锁死 INHOUSE / OUTSOURCE；
- * color 与 description nullable；时间戳保持 string（与 API 字符串格式对齐）。
+ * （`backend-rust/docs/api/production/processes.md:159-173`）：id / code / name /
+ * category / sort_order / description / requires_approval / color / is_cnc /
+ * version / created_at / updated_at（**12 字段**）。category 用 z.enum 锁死 INHOUSE /
+ * OUTSOURCE；color 与 description nullable；时间戳保持 string（与 API 字符串格式
+ * 对齐）。
  *
  * 2026-09-26（M-1 审计）：与 Process.ts 业务类型 + backend-rust ProcessOut 三方
- * 一致（id / version / code / name / category / sort_order / description /
- * requires_approval / color / created_at / updated_at 共 11 字段），无需补字段。
+ * 一致（is_cnc 落地后共 12 字段），无需补字段。
  *
  * 2026-09-29 新增：is_cnc 字段（12 字段）。CNC 编程门控：是否参与「待编程一览」
  * Tab 化（2026-10-01 起出参是 prod 域 `GET /prod/programming/pending` 的
@@ -326,6 +326,13 @@ export const partBatchSchema = z.object({
   // String 类型对齐；前端消费走 ORDER_STATUS_LABEL cast OrderStatus，不在 schema
   // 层强制字面量集合，避免后端扩展时整张 schema 失守）。
   status: z.string(),
+  // 2026-10-02 契约对齐：后端 `PartBatchListItemOut`
+  // （backend-rust src/modules/part/vo/part.rs:327，migration 005 起恒输出）新增
+  // `is_repairing: bool` —— `REPAIRING` 状态已从 `PartStatus` 枚举降级为
+  // `t_part_batch.is_repairing` 标记列，返修中的批次 `status` 恒为 `IN_PROCESS`。
+  // 本 schema **不是** `.strict()`，此前正是「Zod 默认 strip 模式让缺字段静默丢弃」
+  // 这个坑的活样本：后端已返回的该键被静默 strip 掉，下游拿不到「是否返修中」。
+  is_repairing: z.boolean(),
   location: z.string().nullable(),
   current_holder_id: z.string().nullable(),
   current_holder_display: z.string().nullable(),
@@ -522,10 +529,10 @@ export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);
 //
 // 字段对齐 backend-rust `PendingBatchItem` VO（src/modules/prod/batch/vo.rs），
 // 17 字段全声明（缺字段 Zod 默认 strip 静默丢弃 = 守门失效 —— 沿 M-1 regression guard 同源原则）：
-  //   id (batch_id) / part_id / batch_no / quantity / serial_no / name /
-  //   drawing_no / planned_delivery_date / system_delivery_date / customer_name /
-  //   parent_customer_name / applicant_name / is_urgent / note / version /
-  //   current_process_step_id / process_chain_id。
+//   id (batch_id) / part_id / batch_no / quantity / serial_no / name /
+//   drawing_no / planned_delivery_date / system_delivery_date / customer_name /
+//   parent_customer_name / applicant_name / is_urgent / note / version /
+//   current_process_step_id / process_chain_id。
 //
 // batch_no 后端是 i32（前端 UI 加 'B' 前缀展示）；日期字段 nullable；note /
 // customer_name / parent_customer_name / applicant_name / serial_no 全部 nullable
@@ -1129,9 +1136,10 @@ export type WorkerStateSchema = z.infer<typeof workerStateSchema>;
 // 2026-09-30 新增：品检待办行 + 列表 schema（守门 backend-rust
 // `InspectionBatchListItemOut` / `InspectionBatchListOut`）。
 //
-// 字段对齐 backend-rust docs/api/parts/inspection.md 第 479 行起的字段表：
+// 字段对齐 backend-rust docs/api/parts/inspection.md 第 511 行起的
+// `InspectionBatchListItemOut` 字段表：
 //   - 批次字段段（t_part_batch）：batch_id / batch_no / quantity / status /
-//     location / version / current_process_step_id / parent_batch_id
+//     is_repairing / location / version / current_process_step_id / parent_batch_id
 //   - holder 解析段：current_holder_id / holder_name / next_process_id /
 //     next_process_name
 //   - delivery_note 解析段：delivery_note_id / delivery_note_no
@@ -1144,6 +1152,21 @@ export type WorkerStateSchema = z.infer<typeof workerStateSchema>;
 // schemas 统一约定用 z.string()（与 partBatchSchema.status 同形态），不锁字面量。
 // part_version（= t_part.version）必填；version（= t_part_batch.version）是 caller
 // 调 API 时 OCC 锚点，两个值不同源 schema 必须显式区分。
+//
+// 2026-10-02 补 `is_repairing`（契约漂移修复 —「待品检」整页白屏的根因）：
+//   后端 migration 005 把 `REPAIRING` 从 `PartStatus` 枚举降级为
+//   `t_part_batch.is_repairing` 标记列，Rust VO `src/modules/part/vo/inspection.rs:44`
+//   恒定输出 `is_repairing: bool`（**无 Option / 无 serde(default) / 无
+//   skip_serializing_if** ⇒ 任何端点响应都必带该键）。本 schema 当时是
+//   `.strict()` 且未声明该键 ⇒ zod 抛 `unrecognized_keys: is_repairing`；
+//   zod 的数组元素校验会把一页内所有失败项汇成单个 ZodError，所以**任一行**是
+//   返修批次就导致整页不可用（useInspectionList fetcher 不 catch，
+//   ListShell 的 safeFetcher 又把原始 Zod 消息当空态文案渲染 + total 打成 0）。
+//   ⚠️ 后端 doc（inspection.md:552-559）截至 2026-10-02 仍写「本 VO 的 3 个共用
+//   端点**都不新增** is_repairing 字段」——**该段文档与 VO 源码不一致**，以
+//   `vo/inspection.rs:44` 为准（doc 待后端补齐，不在本前端仓范围内）。
+//   **保留 `.strict()`**：去掉它会退回「缺字段静默 strip 静默失效」这个
+//   .strict() 当初要防的失败模式（仓内 CLAUDE.md 明列的 strip 陷阱）。
 //
 // 2026-09-30 守门（M-1 同形态）：item schema 用 `.strict()` —— 后端若误把 `id`
 // 字段加进 inspection 响应（regression），Zod 立刻抛错而不是默认 strip 静默
@@ -1158,6 +1181,10 @@ export const inspectionBatchListItemSchema = z
     batch_no: z.number(),
     quantity: z.number(),
     status: z.string(),
+    // 2026-10-02 契约对齐：后端 vo/inspection.rs:44 恒输出该键（REPAIRING 状态
+    // 已降级为 boolean 标记列）。漏声明 ⇒ .strict() 抛 unrecognized_keys ⇒ 整页
+    // 白屏。用 z.boolean() 不锁字面量 false：返修中批次本身就是 true。
+    is_repairing: z.boolean(),
     location: z.string().nullable(),
     version: z.number(),
     current_process_step_id: z.string().nullable().optional(),
@@ -1205,3 +1232,103 @@ export const inspectionBatchListResultSchema = z.object({
 });
 
 export type InspectionBatchListResultSchema = z.infer<typeof inspectionBatchListResultSchema>;
+
+// ============================================================
+// 2026-10-02 新增：工种 + 工种↔工序映射 schema（守门 backend-rust
+// `WorkTypeOut` / `WorkTypeListOut` / `WorkTypeProcessMappingItem` /
+// `WorkTypeProcessMappingOut`）。
+//
+// 契约依据：
+//   - backend-rust `src/modules/prod/work_type/vo/work_type.rs`（WorkTypeOut /
+//     WorkTypeListOut）；
+//   - backend-rust `src/modules/prod/work_type/vo/process_mapping.rs`
+//     （WorkTypeProcessMappingItem / WorkTypeProcessMappingOut）；
+//   - 契约文档 `docs/api/production/work-type-process-mapping.md`（映射两个端点）
+//     与 `docs/api/production/work-types.md`（工种 CRUD）。
+//
+// 为什么现在才加守门：ProcessWorkTypeMappingTab.vue 此前**零 schema、零 queryKey**
+// 直接裸调 listWorkTypes / getWorkTypeProcesses，于是 v1 影子类型
+// （`WorkTypeWithProcesses.processes`）的错误读法与错误 payload 都能编译通过并
+// 上线 —— 线上症状是「点工种报 undefined.map」+「保存发 {process_ids} 静默清空
+// 整组映射」。本次把「响应形态」与「请求形态」两侧都钉死。
+//
+// ⚠️ 陷阱对照（写这个域时容易照抄错）：`WorkTypeListOut.total` / `limit` /
+// `offset` 在 Rust 里是**裸 `i64`，没有 `#[serde(serialize_with = "serialize_i64")]`**
+// ⇒ wire 形态是 **JSON number**，必须用 `z.number()`。这与
+// `inspectionBatchListResultSchema`（那边**有** serialize_i64 ⇒ 必须 `z.string()`）
+// **方向相反**，不要照抄那一个。
+// ============================================================
+
+/** 工种条目（对齐 backend-rust `WorkTypeOut` **10 字段**，**全部显式声明**）。
+ *
+ * 逐条依据 `vo/work_type.rs`：
+ *   - id：i64 + `serialize_i64` ⇒ JSON string（雪花 ID 不可用 JS Number，会丢精度）；
+ *   - code / name：String；
+ *   - description：Option<String>，**无** skip_serializing_if ⇒ 键恒在，null 即空；
+ *   - sort_order：i32（数字）；
+ *   - max_held_batches：Option<i32>（null = 不限）；
+ *   - process_ids：Vec<String>（该工种已映射的工序 id，**已映射**的字符串数组，
+ *     空数组 = 未映射任何工序）。由 service 层用单条 SQL 批量补全（防 N+1），
+ *     list / detail 两个端点都带。**显式声明是必须的**：Zod 默认 strip 模式下漏声明
+ *     ⇒ 静默丢弃（本域此前就在 @/types/workType.ts 漏了它，types 与 VO 不同步）。
+ *   - version：i32（乐观锁）；
+ *   - created_at / updated_at：NaiveDateTime ⇒ JSON string。
+ *
+ * 不加 `.strict()`：与 partBatchSchema / customerSchema 等列表行 schema 同策略 ——
+ * 行级 .strict() 会在后端加**任何一个**新字段时把整表打挂（inspection 域
+ * `is_repairing` 事故就是这个形状），而本域的写点全在本仓内、契约漂移由本注释 +
+ * 单测守着。
+ */
+export const workTypeSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  sort_order: z.number(),
+  max_held_batches: z.number().nullable(),
+  process_ids: z.array(z.string()),
+  version: z.number(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export type WorkTypeSchema = z.infer<typeof workTypeSchema>;
+
+/** 工种列表分页结果（对齐 backend-rust `WorkTypeListOut`）。
+ *  ⚠️ total / limit / offset 是**裸 i64**（无 serialize_i64）⇒ `z.number()`，
+ *  与 inspectionBatchListResultSchema 的 `z.string()` 方向相反，见文件头警告。 */
+export const workTypeListResultSchema = z.object({
+  items: z.array(workTypeSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type WorkTypeListResultSchema = z.infer<typeof workTypeListResultSchema>;
+
+/** 工种↔工序映射行（对齐 backend-rust `WorkTypeProcessMappingItem`）。
+ *  4 字段**全必填**：
+ *   - work_type_id：i64 + serialize_i64 ⇒ JSON string；
+ *   - process_id：i64 + serialize_i64 ⇒ JSON string；
+ *   - process_code：String，JOIN t_process 取；
+ *   - sort_order：i32（非空；后端 SQL `ORDER BY sp.sort_order ASC, sp.id ASC`）。
+ *
+ * 不声明 `process_name`：后端不返该键（旧 `WorkTypeProcessLink.process_name` 是
+ * v1 影子字段）。 */
+export const workTypeProcessMappingItemSchema = z.object({
+  work_type_id: z.string(),
+  process_id: z.string(),
+  process_code: z.string(),
+  sort_order: z.number(),
+});
+
+export type WorkTypeProcessMappingItemSchema = z.infer<typeof workTypeProcessMappingItemSchema>;
+
+/** `GET /prod/work-types/{id}/processes` 的响应（对齐 `WorkTypeProcessMappingOut`）。
+ *  **只有 `items` 一个键，无分页信封** —— 该端点不接 limit/offset，一次返全部。
+ *  （读形态的还原逻辑收口在 `toWorkTypeProcessIds`，见 src/api/workType.ts。） */
+export const workTypeProcessesResultSchema = z.object({
+  items: z.array(workTypeProcessMappingItemSchema),
+});
+
+export type WorkTypeProcessesResultSchema = z.infer<typeof workTypeProcessesResultSchema>;

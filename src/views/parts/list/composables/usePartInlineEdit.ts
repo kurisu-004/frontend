@@ -7,12 +7,13 @@
 //
 // 2026-09-26 重构（B 任务）：saveEdit 包 useMutation。
 //   - mutationFn: 根据 row.row_type 分发 updateAssembly / updatePart；
-//   - onSuccess: 保留就地 Object.assign(row, ...) 回填（不整表刷新，无闪烁）；
+//   - onSuccess: 失效 parts 域（整表 refetch；同域 usePartDispatch 的失效**目标**相同，
+//     写法不同 —— 它不 await、且 ElMessage 在 invalidate 之前，本处 await 在前）；
 //   - onError: 命中 40901 BIZ_VERSION_CONFLICT → ElMessage.warning + 整表 invalidate；
 //     其它 → ElMessage.error；
 //   - fetchList dep 删除（M-2 修复）：40901 触发整表刷新走
-//     qc.invalidateQueries({queryKey: qk.partsPrefix})；正常编辑走就地 Object.assign
-//     回填（不调 fetchList）。原 fetchList dep 是过渡期兼容位，store 装配时
+//     qc.invalidateQueries({queryKey: qk.partsPrefix})；正常编辑走同一条失效路径。
+//     原 fetchList dep 是过渡期兼容位，store 装配时
 //     已不再传（usePartsListStore.ts:86-93），本 composable 也不读，留着只是
 //     noise 与潜在类型漂移源。
 //
@@ -26,9 +27,35 @@
 //   - assembly 分支改为条件展开 unit_price / total_price：三态
 //     `Option<Option<Decimal>>` 下发 `null` = 置 NULL，而 t_assembly 这两列
 //     NOT NULL → 23502 → 500（此前被 422 掩盖）。
-//   - onSuccess 回写 `version` + `total_price`：后端每次 UPDATE version + 1，
-//     不回写则同一行第二次保存必撞 40901 假冲突；total_price 由前端派生下发
-//     （后端 update 不按 quantity * unit_price 重算），不回填则单元格显示旧值。
+//
+// 2026-10-02 根因修复（「编辑后控制台刷 Set operation on key "version" failed:
+// target is readonly」+「改完不重新拉数据，必须手动刷新」）：
+//   本文件此前在 onSuccess 里做**就地回填** `Object.assign(row, {...})`（含
+//   version / total_price 回写），并在注释里论证「不整表刷新，无闪烁」。该论证
+//   建立在一个**事实错误**的前提上 —— 「行对象引用稳定 ⇒ 可写」。实际上
+//   `deps.items` 的数据源是 @tanstack/vue-query 的 useQuery data，vue-query 对它
+//   套了 `readonly(state)` 深只读代理（node_modules/@tanstack/vue-query/build/
+//   modern/useBaseQuery.js:77-78，本仓未开 shallow: true）。Vue 3.5 的
+//   `ReadonlyReactiveHandler.set` 对**每个** key 都 warn 并丢弃（无 hadKey 豁免），
+//   ⇒ Object.assign 的 13 个 key 一个都写不进去，`version` 只是最后一条 warn。
+//   已排除 Zod / Object.freeze / deepReadonly 等其它 readonly 来源（全仓零命中）。
+//   雪上加霜的是 onSuccess **没有任何失效 / refetch / setQueryData**：就地回填
+//   与 refetch 两条路同时断掉，所以用户必须手动刷新才能看到自己的修改。
+//   修法：删掉注定 100% 失效的就地回填（它还掩盖了「onSuccess 缺失效」这个真正
+//   的 bug），onSuccess 改走 `qc.invalidateQueries({queryKey: qk.partsPrefix})`
+//   —— 与同域 `usePartDispatch.ts:159-162` 的 mutation onSuccess 走**同一条失效链**
+//   （同一个 `qk.partsPrefix` 键、同一个后台 refetch 语义），但**刻意不逐字照抄**：
+//   参照物那边 `onSuccess: () => { ElMessage.success(); qc.invalidateQueries(...) }`
+//   既不 await 也把提示排在失效之前；本处反过来（先 await invalidate、后提示）
+//   是更好的形态 —— await 期间 `saveEditMutation.isPending` 恒为 true，
+//   保存按钮的 loading 与 onEditEnter 的 savingEdit 守卫在整个 pending 窗口内
+//   都有效，杜绝了重复提交（见 onEditEnter）。
+//   `qk.partsPrefix` = ['parts']，本页主查询键 `qk.unionList(params)` =
+//   ['parts','union-list',params] 前缀命中，键不用动；query 处于 active 状态，
+//   invalidate 走后台 refetch，data 不清空，无白屏闪烁。
+//   失效后 refetch 回来的行自带后端 +1 的新 `version`，故 2026-09-28 起那条
+//   「不回写 version 则同一行第二次保存必撞 40901 假冲突」的隐患**由失效覆盖**，
+//   readResponseVersion 随之成为死代码删除。
 
 import { computed, onBeforeUnmount, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -62,8 +89,15 @@ export interface EditBuffer {
 
 export interface UsePartInlineEditDeps {
   /** 2026-09-26（B 任务）：放宽到 ComputedRef<PartListItem[]> —— usePartsListQuery
-   *  items 已改 ComputedRef；按地址读数组 + Object.assign 行对象（行对象引用稳定），
-   *  Readonly / Computed 都 OK。 */
+   *  items 已改 ComputedRef。
+   *  2026-10-02 订正旧注释：原文写「按地址读数组 + Object.assign 行对象（行对象
+   *  引用稳定），Readonly / Computed 都 OK」—— **这句是错的**，「引用稳定 ≠ 可写」。
+   *  数据源是 @tanstack/vue-query 的 useQuery data，vue-query 对它套了
+   *  `readonly(state)` **深**只读代理（本仓未开 `shallow: true`），
+   *  ⇒ 数组本身可读（`.find` / `.length` 正常）但**行对象上任何 key 都写不进**，
+   *  Vue 会对每次写操作发 `[Vue warn] Set operation on key ... target is readonly`。
+   *  本 composable 2026-10-02 起不再就地写行对象，写完一律走
+   *  `qc.invalidateQueries({queryKey: qk.partsPrefix})` 让后端数据回流。 */
   items: ComputedRef<PartListItem[]>;
   customerTree: Ref<CustomerCascaderNode[]>;
   /** MANAGER / CLERK 行内编辑可见 */
@@ -181,22 +215,6 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
 
   // ============ 行内编辑（OCC version + 总价派生）============
 
-  /** 2026-09-28：从 update 响应体里取回写库后的新 `version`。
-   *  2026-09-29 review 第 1 轮 C3 修复：两条分支响应顶层都是 `version`，
-   *  - part 分支：`PartDetailOut`（顶层 `version`）
-   *  - assembly 分支：`AssemblyOut` 19 字段平铺（顶层 `version`，不再是
-   *    `AssemblyDetail.assembly.version`）。
-   *  不再做 `.assembly?.version` 探测 —— 旧探测掩盖了 C1 写接口响应不是
-   *  `AssemblyDetail` 的契约错配。mutation 返回类型仍是 `unknown`
-   *  （两条分支响应形态不可对齐），运行时探测；都不匹配时返回 null，
-   *  调用方保持原 version 不动。 */
-  function readResponseVersion(data: unknown): number | null {
-    if (data == null || typeof data !== 'object') return null;
-    const d = data as { version?: unknown };
-    if (typeof d.version === 'number') return d.version;
-    return null;
-  }
-
   /** 2026-09-28：总价 = quantity * unit_price。
    *  后端 `part_sql.rs::update_part` / `assembly/service/crud.rs::update_assembly`
    *  均**不重算**（只写 caller 传的值），故必须前端算。中间量走「分」整数
@@ -209,8 +227,14 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
   }
 
   // 2026-09-26（B 任务）：saveEdit 包 useMutation —— mutationFn 根据 row_type 分发
-  // updateAssembly / updatePart；onSuccess 保留就地 Object.assign 回填（无整表刷新）；
-  // onError 40901 BIZ_VERSION_CONFLICT → ElMessage.warning + 整表 invalidate。
+  // updateAssembly / updatePart。
+  // 2026-10-02：onSuccess 由「就地 Object.assign 回填」改为「失效 parts 域」。
+  // 起因见文件头：deps.items 是 vue-query 深只读代理，就地写 100% 失效（每次还
+  // 刷一条 [Vue warn]），而当时 onSuccess 又没有失效/refetch/setQueryData，
+  // 导致「改完必须手动刷新」。失效目标与同域 usePartDispatch.ts:159-162 一致，但
+  // 写法刻意不同（那边不 await、提示在前）—— 理由见文件头 2026-10-02 段。
+  // 失效后 refetch 回来的行自带后端 +1 的新 version 与新 total_price，
+  // 2026-09-28 起「不回写 version 则第二次保存假冲突」的隐患由失效覆盖。
   interface SaveEditVars {
     row: PartListItem;
     payload: PartUpdatePayload;
@@ -238,32 +262,18 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
       }
       return updatePart(row.id, payload);
     },
-    onSuccess: (data, { row, payload }) => {
-      // 2026-09-28 契约修复：回写 version。后端每次 UPDATE 都 `version = version + 1`
-      // （backend-rust part_sql.rs::update_part / assembly repo::update_partial），
-      // 响应体带新值；不回写的话同一行第二次保存必撞 40901 假冲突
-      // （列表不整表刷新，行对象引用不变）。
-      // part 分支响应 = PartDetailOut（.version）；assembly 分支 = AssemblyDetail
-      // （.assembly.version）。两者都是 unknown 兜底，非上述形态时保持原值。
-      const nextVersion = readResponseVersion(data);
-      // 就地回填该行（避免整表刷新闪烁）
-      Object.assign(row, {
-        name: payload.name,
-        drawing_no: payload.drawing_no,
-        applicant_name: payload.applicant_name ?? null,
-        quantity: payload.quantity ?? row.quantity,
-        unit_price: payload.unit_price ?? row.unit_price,
-        // 2026-09-28：总价由 saveEdit 按 quantity * unit_price 算出并下发
-        // （后端不重算），此处同步回填，否则单元格显示旧值。
-        total_price: payload.total_price ?? row.total_price,
-        request_date: payload.request_date ?? row.request_date,
-        planned_delivery_date: payload.planned_delivery_date ?? row.planned_delivery_date,
-        system_delivery_date: payload.system_delivery_date ?? null,
-        order_no: payload.order_no ?? null,
-        note: payload.note ?? null,
-        is_urgent: payload.is_urgent ?? row.is_urgent,
-        ...(nextVersion == null ? {} : { version: nextVersion }),
-      });
+    onSuccess: async () => {
+      // 2026-10-02 根因修复：失效整个 parts 域，让后端数据回流。
+      // 键：qk.partsPrefix = ['parts']，本页主查询键 qk.unionList(params) =
+      // ['parts','union-list',params] 前缀命中（前缀匹配），**键不用动**。
+      // query 处于 active 状态 ⇒ invalidate 走后台 refetch，data 不会先被清空，
+      // 页面无白屏闪烁（与「不整表刷新」的原诉求不冲突）。
+      // 失效同时解决了三件事：
+      //   ① 行内修改可见（此前两条路都断，用户必须手动刷新）；
+      //   ② version 回流（后端每次 UPDATE version + 1）——不回写则同一行第二次
+      //      保存必撞 40901 假冲突；
+      //   ③ total_price 回流（由前端派生下发、后端不重算）。
+      await qc.invalidateQueries({ queryKey: qk.partsPrefix });
       editingId.value = null;
       ElMessage.success('保存成功');
     },
@@ -379,6 +389,13 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     const target = e.target as HTMLElement | null;
     if (target && ENTER_BLACKLIST.some((sel) => target.closest(sel))) return;
     e.preventDefault();
+    // 2026-10-02 review 第 1 轮（MINOR-3）：**Enter 路径也要有 savingEdit 守卫**。
+    // 保存按钮有 `:loading="savingEdit"` 保护（按钮进入 loading 即 disabled），但
+    // Enter 是 document 级监听、不受按钮 disabled 约束。onSuccess 里 await 了
+    // invalidateQueries，pending 窗口因此比旧实现宽得多；狂按 Enter 会并发发出
+    // 第二次 save（带**同一 version**）→ 后端 OCC 判 40901 → 弹「该记录已被他人
+    // 修改」的假冲突，而实际上只是用户自己按快了点。
+    if (savingEdit.value) return;
     const row = deps.items.value.find((r) => r.id === editingId.value);
     if (row) void saveEdit(row);
   }

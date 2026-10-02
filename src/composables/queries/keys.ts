@@ -22,6 +22,9 @@ import type { ListPartsParams } from '@/api/parts';
 import type { ListPendingBatchesParams } from '@/api/pendingBatches';
 import type { ListPendingProgrammingParams } from '@/api/programming';
 import type { ListShelvesParams } from '@/api/shelves';
+// 2026-10-02：工种列表入参形态在 api/workType.ts 定义（api 层是 wire 契约的唯一定义
+// 处，沿 ListShelvesParams / ListPendingBatchesParams 的既有做法），本文件只引用。
+import type { WorkTypeListParams } from '@/api/workType';
 import type { ProcessCategory } from '@/types/process';
 import type { UnionListParams } from '@/api/com/unionList';
 
@@ -44,8 +47,7 @@ export const qk = {
   customersPrefix: ['customers'] as const,
   processesOptions: (params: ProcessListParams | undefined) =>
     ['processes', 'options', params ?? null] as const,
-  processesList: (params: ListProcessesParams) =>
-    ['processes', 'list', params] as const,
+  processesList: (params: ListProcessesParams) => ['processes', 'list', params] as const,
   processesPrefix: ['processes'] as const,
   /** 2026-09-26 新增：零件列表键工厂 —— A 任务只对齐键类型，useQuery 由 B 任务实现。 */
   partsList: (params: ListPartsParams) => ['parts', 'list', params] as const,
@@ -160,6 +162,33 @@ export const qk = {
    *  全是 useShelfProcessFilter，补失效的成本近乎零（review 第 1 轮 M-3）。 */
   shelfProcessMappingsPrefix: ['shelf-process-mappings'] as const,
   // ============================================================
+  // 2026-10-02 新增：work-types 域（工种 + 工种↔工序映射）queryKey 工厂。
+  //
+  // 本域此前**零 Zod 守门、零 queryKey**（ProcessWorkTypeMappingTab.vue 直接裸调
+  // listWorkTypes / listProcesses / getWorkTypeProcesses），这正是线上三个症状
+  // （Tab 点工种报 undefined.map / 保存发错 payload 静默清空映射 / 保存后不刷新）
+  // 能长期存在的原因。迁移到共享基础数据层后：
+  //   - workTypesList(params)：**参数键**。消费方 useWorkTypesQuery（工序映射 Tab
+  //     的左表「工种」列表，limit=200 全量）。带 params 是因为后端 list 端点接
+  //     `code_like` / `limit` / `offset` Query extractor（WorkTypeListOut 有分页信封），
+  //     键必须随 params 变化才能拿到不同 cache identity。
+  //   - workTypesPrefix：域前缀失效。消费方 = useWorkTypesQuery 的
+  //     invalidateWorkTypesQuery —— 唯一写点 setWorkTypeProcesses（保存映射）会改
+  //     `WorkTypeOut.process_ids`（后端 list 端点批量补全该字段），所以保存成功后
+  //     必须连带失效工种列表，否则左表展示的映射数/勾选态是旧快照。
+  //   - workTypeProcesses(workTypeId)：**参数键**。消费方
+  //     useWorkTypeProcessesQuery（工序映射 Tab 右表的「该工种已映射工序」）。
+  //     参数是 work_type_id —— 该端点按工种分片返回，键必须带 id，否则切工种时
+  //     命中上一个工种的缓存。
+  //   - workTypeProcessesPrefix：域前缀失效（同上，写点只有一个，成本近乎零，
+  //     不适用 CLAUDE.md「跨页面写操作不做穷举失效」策略——那针对的是写点散落
+  //     多域的情形）。
+  // ============================================================
+  workTypesList: (params: WorkTypeListParams) => ['work-types', 'list', params] as const,
+  workTypesPrefix: ['work-types'] as const,
+  workTypeProcesses: (workTypeId: string) => ['work-types', 'processes', workTypeId] as const,
+  workTypeProcessesPrefix: ['work-types', 'processes'] as const,
+  // ============================================================
   // 2026-09-30 新增：pool 域 queryKey 工厂（后端 worker-pool → pool 路径收敛后
   // 前端同步改名）—— 生产队列 Tab 懒加载 + 数据层 TanStack Query 化
   // （CLAUDE.md 2026-09-30 硬约束）的共享基础数据层。
@@ -218,8 +247,7 @@ export const qk = {
   workerPoolCountsPrefix: ['worker-pool', 'counts'] as const,
   /** 单工序候选池详情（lazy，仅 WorkerPoolTab 首次激活时拉）。
    *  processId 空字符串 → 占位 key（enabled=false 拦挡，queryFn 二次守卫）。 */
-  workerPoolByProcess: (processId: string) =>
-    ['worker-pool', 'by-process', processId] as const,
+  workerPoolByProcess: (processId: string) => ['worker-pool', 'by-process', processId] as const,
   /** worker-pool by-process 域前缀 —— 写 mutation 完成后
    *  qc.invalidateQueries({ queryKey: qk.workerPoolByProcessPrefix }) 一键全失效
    *  （任意 processId 形态都会命中）。 */
