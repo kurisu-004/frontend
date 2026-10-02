@@ -453,7 +453,7 @@ export function useDeliveryScanSubmission(
     submitDialogVisible.value = false;
     const d = submitTarget.value;
     if (!d) return;
-    // 2026-08-24：passInspection 改变了 line_items 状态 → invalidate 后重拉最新 version。
+    // 弹窗内的批量品检通过改变了 line_items 状态 → invalidate 后重拉最新 version。
     detailCache.invalidate(d.id);
     try {
       const detail = await detailCache.get(d.id, getNote);

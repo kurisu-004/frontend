@@ -355,10 +355,9 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   }
 
   // ============ 品检通过 ============
-  // 2026-08-25 T10p5：恢复 confirmDangerous 二次确认（拆分前 PartDetail.vue 的行为）。
-  // 2026-08-28 路线 B：passInspection → toShip（INSPECTION → READY_TO_SHIP）。
-  // 2026-08-29：caller OCC 锚 t_part_batch —— 从 batches 找 INSPECTION 状态批次，
-  // 必传 batch_id + version；40901 提示用户刷新。
+  // 走 `POST /prod/batches/{batch_id}/to-ship`（INSPECTION → READY_TO_SHIP，事件
+  // INSPECTED），二次确认沿用 confirmDangerous。OCC 锚 t_part_batch.version：
+  // 从 batches 找 INSPECTION 状态批次，取其 id + version；40901 提示用户刷新。
   async function onPassInspection(): Promise<boolean> {
     if (!part.value) return false;
     const inspectionBatch = batches.value.find((b) => b.status === 'INSPECTION');
