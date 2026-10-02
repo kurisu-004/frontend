@@ -189,8 +189,16 @@ export interface PartListItem {
    *  后端 2026-09-16 起在 GET /parts 列表项与 GET /parts/{id} 详情出参新增；
    *  工序制定页「待制定 / 已制定」分组改由本字段驱动（替代原 step_count 懒加载派生）。 */
   process_chain_id?: string | null;
-  /** 2026-07-29 PR-fix-0.2.0 批次化字段：仅 /outsource-quotes/quotable-parts 走批次时填充 */
+  /** 2026-07-29 PR-fix-0.2.0 批次化字段：活跃批次 id（雪花 ID 字符串）。
+   *  2026-10-03 订正：原注释写的 `/outsource-quotes/quotable-parts` 在 Rust 后端**根本
+   *  不存在**。当前真实情况：`/com/union-list` 与 `GET /parts` **不返** batch_id
+   *  （恒 undefined），只有 `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台
+   *  PICK_UP 列表，2026-10-03 后端补上同源的 batch_version）返。故零件一览 / 工单合列表
+   *  的批次锚点缺失是已知数据缺口，调用方须显式报错，不可用 part_id 顶替。 */
   batch_id?: string | null;
+  /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与 batch_id 同源，
+   *  填充端点同上（pickable-by-work-type）。 */
+  batch_version?: number | null;
   /** 2026-07-29 PR-fix-0.2.0 批次化字段：批次号（per-part 递增） */
   batch_no?: number | null;
   /** 2026-07-29 PR-fix-0.2.0 批次化字段：批次数量（picker 选中后可挂在报价上） */

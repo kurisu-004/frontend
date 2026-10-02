@@ -224,6 +224,20 @@ export const partSchema = z.object({
   holder_name: z.string().nullable().optional(),
   process_chain_id: z.string().nullable().optional(),
   batch_id: z.string().nullable().optional(),
+  /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与上面的 batch_id 同源。
+   *
+   *  后端**仅** `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）
+   *  填这两个字段（此前该端点的 SELECT 根本不返回批次 id，扫码台只能显示行、拿不到
+   *  批次锚点）；`/parts`、`/com/union-list` 等列表不返 ⇒ 恒 undefined。领取端点
+   *  `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参取自 batch_version，
+   *  缺失时扫码台走显式报错（「批次信息缺失」）。
+   *
+   *  ⚠️ **改名义务**（沿用本仓既有惯例，参照本文件 pendingProgrammingItemSchema 的
+   *  batch_id 登记）：本 schema 是 strip 模式的 `z.object`（非 `.strict()`），
+   *  若后端换字段名（`batch_ids` 复数 / 嵌套结构），Zod 会**静默丢弃** ⇒ batch_id /
+   *  batch_version 同时恒为 undefined，表现是扫码台报「批次信息缺失」而看不出是契约
+   *  漂移。**后端换名时必须同步改这两行 + `PartItem` 类型 + 扫码台的缺字段守卫。** */
+  batch_version: z.number().nullable().optional(),
   batch_no: z.number().nullable().optional(),
   batch_quantity: z.number().nullable().optional(),
   // 2026-09-28 修复：兼容不返 row_type 的端点（后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts 始终返 'PART' | 'ASSEMBLY'；但工艺制定等旧端点仍可能缺该字段）。2026-10-01 备注：唯一曾缺该字段的 pending-programming 端点已下线（「待编程一览」数据源迁到 prod 域 GET /prod/programming/pending，其出参走独立的 pendingProgrammingItemSchema，不复用 partSchema），本 default 保留兼容其余历史端点。

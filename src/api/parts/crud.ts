@@ -75,6 +75,11 @@ export interface PartItem {
   batch_id?: string | null;
   batch_no?: number | null;
   batch_label?: string | null;
+  /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与 batch_id 同源。
+   *  **仅 `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）填**，
+   *  其它端点恒 undefined。`POST /prod/batches/{batch_id}/pick-up` 的 `version`
+   *  入参即取自本字段，缺失时扫码台走显式报错（不静默用 part_id 顶替）。 */
+  batch_version?: number | null;
 }
 
 export interface PartListResult {
@@ -194,9 +199,9 @@ export interface PartCreatePayload {
   customer_id: string;
 }
 
-export interface PartStatusChangePayload {
-  status: OrderStatus;
-}
+// 2026-10-03 清理：`changePartStatus`（`POST /parts/{id}/change-status`）与
+// `PartStatusChangePayload` 删除 —— 后端全仓零注册该路由（`src/` 与 `tests/` 均无），
+// 且前端零调用方，留着只会被误当成可用端点。
 
 export interface PartUpdatePayload {
   /** 2026-09-28 契约修复：乐观锁必填。后端 `PartUpdateRequest.version: i32` **无
@@ -225,14 +230,19 @@ export interface PartUpdatePayload {
   note?: string | null;
 }
 
+/** 2026-10-03 迁 prod 域：领取入参对齐后端 v2 `PickUpRequest`。与 v1 的
+ *  `{ serial_no, shelf_id, badge_code, batch_id?, quantity? }` 不再同构 ——
+ *  v1 是「扫序列号 + 工牌」，v2 是「按批次 + OCC + 工人」。 */
 export interface PartPickUpPayload {
-  serial_no: string;
+  /** 必填；t_part_batch.version（OCC），从列表项的 batch_version 取 */
+  version: number;
+  /** 必填；雪花 ID 字符串；不是工牌码 */
+  worker_id: string;
+  /** 必填；雪花 ID 字符串 */
   shelf_id: string;
-  badge_code: string;
-  /** 2026-07-29 批次化：目标批次 id（扫码台卡片回传） */
-  batch_id?: string | null;
-  /** 领取数量；缺省 = 批次全量 */
-  quantity?: number | null;
+  /** 2026-10-03 部分领取：缺省 = 整批。**必须发字符串**（后端 deserialize_i64_opt 只吃 JSON string，发 number 会 422） */
+  quantity?: string | null;
+  note?: string | null;
 }
 
 export interface PartScanPayload {
@@ -307,14 +317,6 @@ export async function createPart(payload: PartCreatePayload): Promise<PartItem> 
   return resp.data;
 }
 
-export async function changePartStatus(
-  id: string,
-  payload: PartStatusChangePayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/change-status`, payload);
-  return resp.data;
-}
-
 // 2026-10-02：以下 lifecycle 端点的操作对象是**批次**（t_part_batch），路由锚点
 // 统一迁到 prod 域 `POST /api/v2/prod/batches/{batch_id}/<action>`，故第一形参一律是
 // batchId，payload 里的 batch_id 一并删除（它已是路径参数）。part 域只留
@@ -324,6 +326,16 @@ export interface PlaceOnShelfPayload {
   shelf_id: string;
   /** 下一道工序 id（必填） */
   next_process_id: string;
+  /** 批次 OCC：t_part_batch.version，取列表项的 `batch_version`；后端必填，缺失 422。
+   *
+   *  已知缺口（2026-10-03 登记，未修）：后端 `PlaceOnShelfRequest.version: i32`
+   *  **无 `#[serde(default)]`**，缺字段时 axum `Json` extractor 在进 handler 前直接拒
+   *  → HTTP 422。唯一调用方是「零件一览」下发的 `usePartDispatch`，其数据源
+   *  `GET /parts` 不返活跃批次的 version（该文件文件头已登记同源缺口：连 batch_id
+   *  都是靠显式报错挡住的），本轮范围不含 `views/parts/list/**` ⇒ 这里先声明成可选
+   *  让编译通过，**下一轮随 `batch_version` 补齐后必须改成必填**。
+   *  URL 由 `src/api/parts/__tests__/routes.spec.ts` 的 R1 钉住。 */
+  version?: number;
   note?: string | null;
 }
 
@@ -358,6 +370,12 @@ export async function placeOnShelf(
  *  路径锚点改为 `{batch_id}`，故 `batch_id` 是路径参数、不再是可选项
  *  ——「缺省按 expect 唯一批次解析」的旧语义已随端点下线。 */
 export interface PartRecallPayload {
+  /** 批次 OCC：t_part_batch.version，取列表项的 `batch_version`；后端必填，缺失 422。
+   *  已知缺口（2026-10-03 登记，未修）同 `PlaceOnShelfPayload.version`：后端
+   *  `RecallToPendingRequest { version, note? }` 的 `version` 无 `#[serde(default)]`，
+   *  而调用方 `usePartDispatch` 的数据源 `GET /parts` 拿不到批次 version，本轮
+   *  范围不含 `views/parts/list/**` ⇒ 先可选，下一轮随 `batch_version` 补齐后改必填。 */
+  version?: number;
   note?: string | null;
 }
 
@@ -394,32 +412,46 @@ export async function forceCompletePart(
  *    1. PendingProgrammingList.vue「下发」按钮（仅历史 PROGRAMMING 数据可见）；
  *  2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
  *
- *  2026-10-02 迁 prod 域：PROGRAMMING 是批次状态，锚点改 `{batch_id}`。 */
+ *  2026-10-02 迁 prod 域：PROGRAMMING 是批次状态，锚点改 `{batch_id}`。
+ *  2026-10-03：后端该端点复用 `PlaceOnShelfRequest`，其 `version` 同样必填（无
+ *  `#[serde(default)]`，缺字段 422）⇒ 本函数补第 4 形参 `version` 并透传，
+ *  这是「待编程下发不再恒 422」的必要一步。
+ *  已知缺口（2026-10-03 登记，未修）：调用方 `usePartCncGroups.onReleaseToShelf`
+ *  （零件详情页 CNC 卡片）属本轮范围外的 `views/parts/detail/**`，尚未接线 ⇒
+ *  形参声明为可选，不传时请求仍 422；下一轮随批次行 `batch_version` 补齐后改必填。 */
 export async function releaseFromProgramming(
   batchId: string,
   shelfId: string,
   nextProcessId: string,
+  version?: number,
 ): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/release-from-programming`,
     {
       shelf_id: shelfId,
       next_process_id: nextProcessId,
+      version,
     },
   );
   return resp.data;
 }
 
-/** 已知缺口（v1 遗留，待单独修）：本函数打的是 `/parts/pick-up`（1 段，v1 形状）。
- *
- *  后端 v2 的领取端点是批次锚定的 `POST /api/v2/prod/batches/{batch_id}/pick-up`，
- *  payload `PartPickUpPayload { serial_no, shelf_id, badge_code, batch_id?, quantity? }`
- *  与 v2 `PickUpRequest { version, worker_id, shelf_id, note }` 不同构：v1 是
- *  「扫序列号 + 工牌」，v2 是「按批次 + OCC + 工人」。两者映射是业务决策、不是机械
- *  路径迁移，故只登记不改，调用方（ScanPickParts.vue）同步保持原样。
- *  路径被 `src/api/parts/__tests__/routes.spec.ts` 的 R4b 钉住（防顺手改成半迁移）。 */
-export async function pickUpPart(payload: PartPickUpPayload): Promise<PartItem> {
-  const resp = await api.post<PartItem>('/parts/pick-up', payload);
+/** 扫码台 PICK_UP：批次锚定领取。
+ *  2026-10-03 由 v1 遗留的 `POST /parts/pick-up` 迁到 prod 域
+ *  `POST /api/v2/prod/batches/{batch_id}/pick-up`：批次 id 升为路径参数（不再进 body），
+ *  body 只剩 OCC 锚 + 领取人 + 数量。三个反直觉约束，调用方必须遵守：
+ *  - `version` 是普通 number（后端 `i32`，无自定义 deserializer），**不要**转字符串；
+ *  - `worker_id` 是**工人雪花 ID 字符串**，不是 v1 的 `badge_code` 工牌码（后端按 worker
+ *    记录归属，不认工牌码）；
+ *  - `quantity` **必须发 JSON 字符串**（后端 `deserialize_i64_opt` 的实现是先
+ *    `Option::<String>::deserialize` 再 `parse::<i64>()`，发 number 会被 axum `Json`
+ *    extractor 拒成 422）；缺省 / null = 整批，小于总量时后端自动拆批。
+ *  响应仍是 part 级 `R<PartOut>`，调用方按整批刷新列表即可。 */
+export async function pickUpPart(batchId: string, payload: PartPickUpPayload): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/pick-up`,
+    payload,
+  );
   return resp.data;
 }
 
@@ -541,10 +573,7 @@ export interface ScanInspectPayload {
   quantity?: number | null;
 }
 
-export async function scanInspect(
-  batchId: string,
-  payload: ScanInspectPayload,
-): Promise<PartItem> {
+export async function scanInspect(batchId: string, payload: ScanInspectPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/scan-inspect`,
     payload,
@@ -670,13 +699,13 @@ export async function deliverPart(batchId: string, payload: DeliverPayload): Pro
 
 /** 扫码台：司机确认发货。
  *  2026-10-02 迁 prod 域：`POST /parts/scan/deliver-part` → `POST /prod/batches/scan/deliver`。
- *  body 不变 —— 服务端按 serial_no + status 解析目标批次，无 path 参数。
- *  ⚠️ 已知缺口（2026-10-03 登记，未修）：后端 `ScanDeliverPartRequest` 的字段是
- *  `part_serial_no` / `worker_badge_code`，与下面的 `part_id` 不同名 ⇒ 该请求恒 422。
- *  本函数当前零生产调用方（死代码），改成 part_serial_no 并接上调用方时一并处理。
- *  与 pickUpPart 的 v1 遗留路径是同批登记的两处缺口。 */
+ *  body 不变 —— 服务端按序列号 + status 解析目标批次，无 path 参数。
+ *  2026-10-03 契约修复：字段名对齐后端 `ScanDeliverPartRequest`（`part_serial_no` /
+ *  `worker_badge_code`）—— 此前前端发的是 `part_id`，与后端不同名且后端无
+ *  `#[serde(default)]` ⇒ 该请求恒 422。本函数当前仍零生产调用方（死代码），
+ *  接上调用方时直接用本签名。 */
 export interface ScanDeliverPartPayload {
-  part_id: string;
+  part_serial_no: string;
   worker_badge_code: string;
 }
 
