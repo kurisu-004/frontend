@@ -17,10 +17,14 @@
 //     （`POST /parts/{id}/cancel` / `force-complete` / `soft-delete`、批次集合读
 //     `GET /parts/{id}/batches`）。本文件末尾有反断言守住这批「不该动」的路径。
 //
-// 2026-10-03 补：迁完 pick-up 后，part 域已无任何写端点，故本文件**同时钉 body 形态**
-//   —— R2b / R2c / R4 / R4b 四条都断言 body（原先只钉 URL，字段名与 number/string
-//   之差的契约缺口正是这么漏出去的）。另：`changePartStatus`
-//   （`POST /parts/{id}/change-status`，后端零注册）已随无用封装删除，无反断言需求。
+// 2026-10-03 补：本文件**同时钉 body 形态** —— R2b / R2c / R4 / R4b 四条都断言 body
+//   （原先只钉 URL，字段名与 number/string 之差的契约缺口正是这么漏出去的）。
+//   pick-up 迁出后，**批次锚定的写端点已全部离开 part 域**；part 域仍留 part 级 /
+//   多批次写端点（create / update / cancel / force-complete / soft-delete / scan），
+//   上面「判据」一节列的就是它们，R6 反断言守住批次集合读那一类。
+//   另：`changePartStatus`（`POST /parts/{id}/change-status`）已随无用封装删除 ——
+//   在后端仓 `src/` 与 `tests/` 全仓 grep 过 `change-status`，零路由注册、零测试引用，
+//   前端侧亦零调用方，故无反断言需求。
 //
 // mock 手法沿 src/api/shelfProcesses.spec.ts 同款：整模块桩掉 `@/api/http`
 // （不 importOriginal），只留可断言的 api.get / api.post 入口。
@@ -210,24 +214,36 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
   // 2026-10-03：place-on-shelf / recall-to-pending / release-from-programming 三个后端
   // DTO 都把 `version`（t_part_batch.version）列为必填且无 `#[serde(default)]`
   // ⇒ 缺字段 422。api 层只做透传，本条钉的是「调用方给了 version 就逐字进 body」。
+  // 断言强度对齐 R2b / R4b：钉全量键集（防多余字段混入）+ 钉 version 形态是 number
+  // （后端 i32 无自定义 deserializer，发字符串会 422）+ 负向钉 batch_id 不进 body
+  // （已是路径参数）。三条端点同规格，不给「某个字段先炸时给出已守住的假信心」。
   it('R2c：三个 place-on-shelf 系端点的 body 透传 version', async () => {
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
     await placeOnShelf(BATCH, { shelf_id: 's', next_process_id: 'p', version: 3 });
     const [, onShelfBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(Object.keys(onShelfBody).sort()).toEqual(['next_process_id', 'shelf_id', 'version']);
+    expect(typeof onShelfBody.version).toBe('number');
     expect(onShelfBody.version).toBe(3);
+    expect(onShelfBody).not.toHaveProperty('batch_id');
 
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
     await recallToPending(BATCH, { version: 3 });
     const [, recallBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(Object.keys(recallBody).sort()).toEqual(['version']);
+    expect(typeof recallBody.version).toBe('number');
     expect(recallBody.version).toBe(3);
+    expect(recallBody).not.toHaveProperty('batch_id');
 
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
     await releaseFromProgramming(BATCH, 's', 'p', 3);
     const [, releaseBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(Object.keys(releaseBody).sort()).toEqual(['next_process_id', 'shelf_id', 'version']);
+    expect(typeof releaseBody.version).toBe('number');
     expect(releaseBody).toEqual({ shelf_id: 's', next_process_id: 'p', version: 3 });
+    expect(releaseBody).not.toHaveProperty('batch_id');
   });
 });
 

@@ -226,17 +226,16 @@ export const partSchema = z.object({
   batch_id: z.string().nullable().optional(),
   /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与上面的 batch_id 同源。
    *
-   *  后端**仅** `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）
-   *  填这两个字段（此前该端点的 SELECT 根本不返回批次 id，扫码台只能显示行、拿不到
-   *  批次锚点）；`/parts`、`/com/union-list` 等列表不返 ⇒ 恒 undefined。领取端点
-   *  `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参取自 batch_version，
-   *  缺失时扫码台走显式报错（「批次信息缺失」）。
+   *  **本 schema 不服务扫码台。** 它的生产消费方只有 `partListResultSchema`（下方）→
+   *  `useDashboardUpcomingList`，数据源是 `GET /parts` / `GET /com/union-list`，
+   *  两个端点的行单位是 part、后端刻意不填批次锚点（一个 part 的活跃批次可能不止
+   *  一个，填任一都是错锚点）⇒ batch_id / batch_version 在本 schema 上**恒为
+   *  undefined**，保留声明只为类型与后端 VO 对齐，不承担任何扫码台职责。
    *
-   *  ⚠️ **改名义务**（沿用本仓既有惯例，参照本文件 pendingProgrammingItemSchema 的
-   *  batch_id 登记）：本 schema 是 strip 模式的 `z.object`（非 `.strict()`），
-   *  若后端换字段名（`batch_ids` 复数 / 嵌套结构），Zod 会**静默丢弃** ⇒ batch_id /
-   *  batch_version 同时恒为 undefined，表现是扫码台报「批次信息缺失」而看不出是契约
-   *  漂移。**后端换名时必须同步改这两行 + `PartItem` 类型 + 扫码台的缺字段守卫。** */
+   *  扫码台 PICK_UP 走 `listPartsByWorkTypeAllShelves` 的**裸 `api.get<PartItem[]>`**，
+   *  **不过本 schema**（该端点才填 batch_id / batch_version）。那条路径上的改名义务
+   *  登记在 `src/api/parts/crud.ts` 的 `PartItem.batch_id` / `batch_version` 注释上
+   *  —— 换名时两处都要改，本条注释只描述本 schema 的取值现状。 */
   batch_version: z.number().nullable().optional(),
   batch_no: z.number().nullable().optional(),
   batch_quantity: z.number().nullable().optional(),
