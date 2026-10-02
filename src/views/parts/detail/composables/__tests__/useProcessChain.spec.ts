@@ -14,7 +14,7 @@
 // node env 不需要 axios / ElMessage。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { nextTick, ref } from 'vue';
 
 import type { PartBatch, PartItem } from '@/api/parts';
 
@@ -25,6 +25,7 @@ vi.mock('@/api/processChain', () => ({
 }));
 
 import { useProcessChain } from '../useProcessChain';
+import { useDefaultBatchSelection } from '../useDefaultBatchSelection';
 
 function makeBatch(over: Partial<PartBatch> = {}): PartBatch {
   return {
@@ -162,5 +163,42 @@ describe('2026-10-02：useProcessChain currentStepId 派生', () => {
     const chain = useProcessChain(partId, part, batches, selectedBatchId);
     await expect(chain.fetchProcessChain()).resolves.toBeUndefined();
     expect(chain.steps.value).toEqual([]);
+  });
+
+  // 2026-10-03：兜底选中与本派生量串起来的端到端守卫。
+  // 单独测两层各自都对、拼起来仍可能全灰（兜底选中的批次没绑工序链步骤 ⇒
+  // currentStepId null ⇒ 时间轴无高亮），所以这条把「兜底选中 → currentStepId →
+  // steps 索引命中」整条链走一遍。
+  it('S7：兜底选中带工序链定位的批次 → currentIndex >= 0（时间轴必出高亮）', async () => {
+    getProcessChainByIdMock.mockResolvedValue({
+      id: 'chain-1',
+      name: '默认工艺',
+      note: null,
+      version: 1,
+      created_at: '2026-10-01 08:00:00',
+      updated_at: '2026-10-01 08:00:00',
+      steps: [
+        { id: 'step-1', sort_order: 0, process_id: 'p1', estimated_minutes: 10 },
+        { id: 'step-2', sort_order: 1, process_id: 'p2', estimated_minutes: 20 },
+      ],
+    });
+
+    const partId = ref('42');
+    const part = ref<PartItem | null>(makePart('chain-1'));
+    // 列表按 batch_no ASC：最老那条没绑步骤（初始批次 / 已取消批次恒 null）
+    const batches = ref<PartBatch[]>([
+      makeBatch({ id: 'b1', batch_no: 1, current_process_step_id: null }),
+      makeBatch({ id: 'b2', batch_no: 2, current_process_step_id: 'step-2' }),
+    ]);
+    const selectedBatchId = ref<string | null>(null);
+
+    const chain = useProcessChain(partId, part, batches, selectedBatchId);
+    useDefaultBatchSelection(batches, selectedBatchId);
+    await chain.fetchProcessChain();
+    await nextTick();
+
+    expect(selectedBatchId.value).toBe('b2');
+    expect(chain.currentStepId.value).toBe('step-2');
+    expect(chain.steps.value.findIndex((s) => s.id === chain.currentStepId.value)).toBeGreaterThanOrEqual(0);
   });
 });

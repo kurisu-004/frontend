@@ -13,7 +13,11 @@
 // 覆盖：
 //   - C1：传 processesLookup → 渲染工序名而非 process_id；字典缺失时回退 id 且带 title。
 //   - C2：currentStepId 命中 → 该节点带 current-step + 「当前」徽标，前置节点为「已完成」。
-//   - C3：currentStepId 未命中 → 无节点带 current-step，且出现「未绑定工序链步骤」提示。
+//   - C3：未选中批次 → 无节点带 current-step，提示「未选中批次，请点击批次行」。
+//   - C3b：批次已选中但没绑工序链步骤（currentStepId=null 且 selectedBatchId 非空）
+//          → 提示「所选批次未绑定工序链步骤」。两种成因在 currentStepId 上无法区分
+//          （都是 null），所以判据必须是选中态。
+//   - C3c：批次已选中、currentStepId 非空但不在链上 → 同上文案。
 //   - C4：steps 为空 → 空态「暂无工序链」，不出提示条。
 //
 // 挂载手法沿 src/views/auth/__tests__/LoginCard.spec.ts：仓内日常开发走
@@ -107,12 +111,14 @@ const LOOKUP = {
 function mountCard(props: {
   steps?: ProcessChainStepDto[];
   currentStepId?: string | null;
+  selectedBatchId?: string | null;
   processesLookup?: Record<string, { code: string; name: string }>;
 }) {
   return mount(ProcessChainCard, {
     props: {
       steps: props.steps ?? STEPS,
       currentStepId: props.currentStepId ?? null,
+      selectedBatchId: props.selectedBatchId ?? null,
       loading: false,
       ...(props.processesLookup === undefined ? {} : { processesLookup: props.processesLookup }),
     },
@@ -153,12 +159,34 @@ describe('ProcessChainCard', () => {
     expect(items[2]!.text()).not.toContain('当前');
   });
 
-  it('C3：currentStepId 未命中 → 无节点高亮，且显式提示「未绑定工序链步骤」', () => {
-    const wrapper = mountCard({ currentStepId: null, processesLookup: LOOKUP });
+  it('C3：未选中批次 → 无节点高亮，提示「未选中批次，请点击批次行」', () => {
+    const wrapper = mountCard({ currentStepId: null, selectedBatchId: null, processesLookup: LOOKUP });
     expect(wrapper.findAll('.current-step')).toHaveLength(0);
     const alert = wrapper.find('.el-alert-stub');
     expect(alert.exists()).toBe(true);
-    expect(alert.text()).toContain('所选批次未绑定工序链步骤');
+    expect(alert.text()).toContain('未选中批次，请点击批次行');
+  });
+
+  it('C3b：批次已选中但没绑工序链步骤（currentStepId=null）→ 提示「未绑定工序链步骤」', () => {
+    // 初始批次（PENDING）/ 已取消批次的 current_process_step_id 恒为 null，
+    // 兜底选中它们时就会落进这一支，文案不能谎称「未选中批次」。
+    const wrapper = mountCard({
+      currentStepId: null,
+      selectedBatchId: 'b1',
+      processesLookup: LOOKUP,
+    });
+    expect(wrapper.findAll('.current-step')).toHaveLength(0);
+    expect(wrapper.find('.el-alert-stub').text()).toContain('所选批次未绑定工序链步骤');
+  });
+
+  it('C3c：批次已选中、currentStepId 非空但不在链上 → 同「未绑定工序链步骤」', () => {
+    const wrapper = mountCard({
+      currentStepId: 'step-404',
+      selectedBatchId: 'b1',
+      processesLookup: LOOKUP,
+    });
+    expect(wrapper.findAll('.current-step')).toHaveLength(0);
+    expect(wrapper.find('.el-alert-stub').text()).toContain('所选批次未绑定工序链步骤');
   });
 
   it('C4：steps 为空 → 空态文案，且不出现提示条', () => {

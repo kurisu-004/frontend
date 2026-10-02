@@ -98,7 +98,8 @@
       时间线卡（2026-09-17 PR-4）：批次列表 + 历史 + 工序链 三列联动。
       - PartBatchMonitorCard 行选中 → onBatchSelect → 写入 selectedBatchId
       - selectedBatchId 同步驱动：PartHistoryCard 过滤 / ProcessChainCard
-        高亮 current_process_step_id 对应步骤。
+        高亮 current_process_step_id 对应步骤
+      - 无人点过时由 useDefaultBatchSelection 兜底选中（优先带工序链定位的批次）
       - 2026-09-17 UI 调整第 2 轮：去掉外层 header；批次监控移到历史 +
         工序链下方（同行撑满），避免两列等高造成批次表区域浪费。
     -->
@@ -116,6 +117,7 @@
         <ProcessChainCard
           :steps="processChain.steps.value"
           :current-step-id="currentStepId"
+          :selected-batch-id="selectedBatchId"
           :loading="processChain.loading.value"
           :processes-lookup="processesLookup"
         />
@@ -418,6 +420,7 @@ import { usePartDetail } from './composables/usePartDetail';
 import type { PartEditForm } from './composables/usePartDetail';
 import { usePartCncGroups } from './composables/usePartCncGroups';
 import { useProcessChain } from './composables/useProcessChain';
+import { useDefaultBatchSelection } from './composables/useDefaultBatchSelection';
 
 // 2026-09-29 修复：Vue SFC template expression 默认 sourceType=script，不接受
 // import.meta。dev 阶段定义 isDev 常量供模板 v-if 引用，避免
@@ -550,8 +553,8 @@ const currentStepId = computed<string | null>(() => processChain.currentStepId.v
 
 // 2026-09-17 PR-4：part.process_chain_id 变化时拉链（首次 part 加载 + 后续
 // 工艺变更）。useProcessChain 内部已 watch partId 清空状态；这里只触发拉取。
-// 2026-09-17 review 第 1 轮修复：chain 变化前先重置 selectedBatchId，避免旧批次 id
-// 在 chain 未拉完前被 currentStepId 派生计算时引用到错误的 step。
+// chain 变化前先重置 selectedBatchId，避免旧批次 id 在 chain 未拉完前被
+// currentStepId 派生计算时引用到错误的 step。
 watch(
   () => part.value?.process_chain_id,
   (id) => {
@@ -562,21 +565,13 @@ watch(
   },
 );
 
-// 2026-10-02：兜底选中第一条批次。
-// 缺陷：selectedBatchId 初值 null 且只有点批次行才写入 ⇒ 一进页面恒为 null ⇒
-// useProcessChain.currentStepId 恒 null ⇒ currentIndex = -1 ⇒ 工序链时间轴
-// 全灰、`.current-step` 永不命中（用户报的第三个 UI 缺陷）。
-// 判据是「selectedBatchId 仍为 null」：用户手动 toggle 取消选中（onBatchSelect(null)）
-// 不会引发 batches 引用变化，故不会被自动选回；切 partId 时上面那个 watch 把它
-// 重置为 null，紧接着 batches 到达由本 watch 兜底重选。
-watch(
-  () => batches.value,
-  (list) => {
-    if (selectedBatchId.value === null && list.length > 0) {
-      selectedBatchId.value = list[0]!.id;
-    }
-  },
-);
+// 兜底选中：selectedBatchId 唯一写入来源是「点批次行」，没人点过就恒为 null ⇒
+// currentStepId 恒 null ⇒ 工序链时间轴整条全灰、「当前」徽标永不出现。
+// 判据（优先带 current_process_step_id 的批次，否则回落第一条）与「不覆盖用户
+// 已有选择」的语义住在 useDefaultBatchSelection 里（可单测，不埋在 .vue shell）。
+// 连带影响：PartHistoryCard 跟随 selectedBatchId 过滤，进页面即落到该批次的事件
+// 视图；再点一次该行（onBatchSelect(null)）可切回全量事件。
+useDefaultBatchSelection(batches, selectedBatchId);
 
 // ============ 共享 shelves / processes 缓存（release / failInsp / receive 共用）============
 // `productionShelves` 来自 listShelves({zone:'PRODUCTION'})（`/shelves`）；
@@ -609,8 +604,10 @@ async function ensureShelvesProcesses(): Promise<void> {
       /* ignore */
     }
   }
-  // processes 走共享 query，无需在此拉取 —— 参数恒定的 queryKey 命中同一份缓存，
-  // 多个订阅者（usePartDispatch / PendingProgrammingStore / 工序制定各 Tab）共用一次请求。
+  // processes 走共享 query，无需在此拉取 —— 参数恒定（{ limit: 200 }）时 queryKey
+  // 命中同一份缓存，本页与 usePartDispatch / usePendingProgrammingStore 共用一次请求。
+  // 工序制定的各 Tab 不在内：它传的是带 code_like / category 的 reactive params，
+  // queryKey 不同，各发各的。
 }
 
 // 2026-09-17 PR-4：ProcessChainCard 需要 { process_id → { code, name } } 字典。

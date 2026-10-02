@@ -6,11 +6,12 @@
   - 当前选中 batch 的 current_process_step_id 对应的 step 高亮
     （< currentIndex → success，= currentIndex → primary，> currentIndex → info）
   - 工序名优先走 processesLookup[process_id].name，回退 step.process_id（带 title 兜底）
-  - currentIndex < 0（未选中批次 / 批次未绑定步骤）时 header 下显式提示，不静默全灰
+  - currentIndex < 0（未选中批次 / 批次未绑定步骤）时 header 下按成因给不同提示
   - 加载状态由 useProcessChain.fetchProcessChain 控制
 
-  数据流：useProcessChain → steps / currentStepId / loading → 本组件
-  processesLookup 由父级（shell 订阅共享 useProcessesQuery）注入，O(1) 字典构造。
+  数据流：useProcessChain → steps / currentStepId / loading → 本组件；
+  selectedBatchId 由父级（shell 的三卡联动锚）注入，只用于挑提示文案；
+  processesLookup 同样由父级注入（订阅共享 useProcessesQuery），O(1) 字典构造。
 -->
 <template>
   <el-card v-loading="loading" shadow="never" class="chain-card">
@@ -25,16 +26,17 @@
     </template>
 
     <!--
-      2026-10-02：currentIndex === -1（未选中批次，或该批次未绑定工序链步骤）时，
-      header 明说原因，不再让整条时间轴静默全灰 —— 用户看不出是「没数据」还是
-      「没选中」。
+      currentIndex < 0 时 header 明说原因，不让整条时间轴静默全灰 —— 用户分不出
+      「没数据」还是「没选中」。两种成因的判据是**选中态**（selectedBatchId），不是
+      currentStepId：批次已选中但没绑工序链步骤时 currentStepId 同样是 null，两者
+      用 currentStepId 分不开。
     -->
     <el-alert
       v-if="steps.length > 0 && currentIndex < 0"
       type="info"
       :closable="false"
       class="chain-hint"
-      title="所选批次未绑定工序链步骤"
+      :title="hintText"
     />
 
     <el-timeline v-if="steps.length > 0">
@@ -71,6 +73,10 @@ import type { ProcessChainStepDto } from '@/api/processChain.contract';
 const props = defineProps<{
   steps: ProcessChainStepDto[];
   currentStepId: string | null;
+  /** 三卡联动的选中批次 id（null = 未选中 / 用户已取消）。只用于挑提示文案：
+   *  批次选中但 currentStepId 为空（批次没绑工序链步骤）与「压根没选中批次」
+   *  在 currentStepId 上长得一样，必须靠它区分。 */
+  selectedBatchId: string | null;
   loading: boolean;
   /**
    * 工序字典查找表：process_id → { code, name }。
@@ -84,6 +90,11 @@ const currentIndex = computed<number>(() => {
   if (!props.currentStepId) return -1;
   return props.steps.findIndex((s) => s.id === props.currentStepId);
 });
+
+/** 不高亮的原因分两种说法：没选中批次 vs 选中的批次没绑工序链步骤。 */
+const hintText = computed<string>(() =>
+  props.selectedBatchId ? '所选批次未绑定工序链步骤' : '未选中批次，请点击批次行',
+);
 
 function stepName(processId: string): string {
   return props.processesLookup?.[processId]?.name ?? processId;

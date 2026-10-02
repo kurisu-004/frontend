@@ -45,9 +45,9 @@ import type { AssemblyDetail } from '@/types/assembly';
 import { receiveFromOutsource } from '@/api/parts';
 import { usePermissions } from '@/composables/usePermissions';
 import { useConfirm } from '@/composables/useConfirm';
-// 2026-09-29 review 第 2 轮 MAJOR-1 修复：usePartDetail.fetchAssembly 现在也走
-// 客户 enrich（PartAssemblyLinkCard 客户列展示所需），订阅 useCustomersQuery
-// 共享缓存（唯一 queryKey + 30s staleTime 去重窗口，多 subscriber 不触发额外 fetch）。
+// fetchAssembly 走客户 enrich（PartAssemblyLinkCard 客户列展示所需），数据源是
+// useCustomersQuery 共享缓存（唯一 queryKey + 30s staleTime 去重窗口，多 subscriber
+// 不触发额外 fetch）。
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import {
   ORDER_STATUS_LABEL,
@@ -253,8 +253,8 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   }
 
   // ============ 装配件详情（PartAssemblyLinkCard 用）============
-  // 2026-09-29 review 第 2 轮 MAJOR-1 修复：订阅 useCustomersQuery 拿客户全集，
-  // 用于 enrichAssemblyItem 补全 customer_name / parent_customer_name / customer_path。
+  // 订阅 useCustomersQuery 拿客户全集，用于 enrichAssemblyItem 补全
+  // customer_name / parent_customer_name / customer_path。
   // 唯一 queryKey + 30s staleTime 去重窗口，多 subscriber 不触发额外 fetch（共享缓存）。
   const { data: customersData } = useCustomersQuery();
 
@@ -282,9 +282,8 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     assemblyLoading.value = true;
     try {
       const fetched = await getAssemblyForPart(part.value.id);
-      // 2026-09-29 review 第 2 轮 MAJOR-1：fetched 非 null 时调共享 enrich，
-      // PartAssemblyLinkCard「客户」列才能正确展示。fetched 为 null（零件无
-      // 所属装配件）时直接保留 null。
+      // fetched 非 null 时调共享 enrich，PartAssemblyLinkCard「客户」列才能正确展示。
+      // fetched 为 null（零件无所属装配件）时直接保留 null。
       if (fetched) {
         fetched.assembly = enrichAssemblyItem(fetched.assembly, customersData.value?.items ?? []);
       }
@@ -303,8 +302,7 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     }
   }
 
-  // 2026-09-29 review 第 2 轮 MAJOR-2 修复：响应式 customers 缓存到达。
-  // useCustomersQuery 是懒查询，首次进 PartDetail 时
+  // 响应式 customers 缓存到达时的补跑：useCustomersQuery 是懒查询，首次进 PartDetail 时
   // customers 可能未加载完，fetchAssembly 内 enrich 把 customer_* 置 null 后
   // 不会自动 re-trigger。watchEffect 在 customersData 变化时自动重跑 enrich，
   // 确保 PartAssemblyLinkCard「客户」列无需刷新就能展示。
@@ -398,6 +396,7 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   // IN_PROCESS，事件 INSPECTION_FAILED）。batchId 由调用方（PartDetail）传入 ——
   // 复用批次卡三卡联动锚的选中批次，多批次 part 上比「找第一个 INSPECTION 批次」更准；
   // version 取该批次的 t_part_batch.version（后端必填，缺 → 422）。
+  // 锚点批次的状态由本函数自守（见下方守卫），不信任 shell 的按钮可见性判据。
   async function onFailInspection(payload: {
     batchId: string | null;
     shelfId: string;
@@ -411,6 +410,16 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     const batch = batches.value.find((b) => b.id === payload.batchId);
     if (!batch) {
       ElMessage.error('未找到选中的批次，请刷新后重试');
+      return false;
+    }
+    // 状态守卫：shell 的「指定工序」按钮按 **part 级** part.status === 'INSPECTION'
+    // 决定可见性，而 to-process 是 **batch 级** 状态机（INSPECTION → IN_PROCESS）。
+    // 多批次工单里 part.status 命中不代表选中批次也在品检中（最老批次可能还是
+    // PENDING），硬发只会被后端状态机拒，用户只看到一条原文错误、看不出用的哪个批次。
+    if (batch.status !== 'INSPECTION') {
+      ElMessage.warning(
+        `批次 ${batch.batch_label} 当前为 ${statusLabelOf(batch.status)}，不在品检中；请先在批次列表选中要打回的批次`,
+      );
       return false;
     }
     try {
