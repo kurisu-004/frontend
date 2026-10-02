@@ -189,11 +189,14 @@ function onToggleSelect(): void {
   box-shadow: 0 0 0 1px var(--el-color-primary);
 }
 /* 2026-10-02：勾选角标绝对定位在 left/top 4px，而 EP 2.14.6 的 .el-checkbox--small
-   把 height 直接钉死成 24px（不走 --el-checkbox-height 变量），y 4..28 会探进第 2 行
-   （y 8..26）2px。scoped 编译后本选择器带 [data-v-*]、优先级高于 EP 的
-   .el-checkbox--small，故在这里压回与行高一致的 18px。 */
-.card-check {
-  --el-checkbox-height: 18px;
+   直接把 height 钉死成 24px（不吃 --el-checkbox-height 变量，基类 .el-checkbox 的
+   var 兜底形同虚设），y 4..28 会探进第 2 行（y 8..26）2px。
+   选择器必须挂到父级 .batch-card 上：scoped 编译后是
+   `.batch-card .card-check[data-v-*]` = (0,3,0)，确定性压过 EP 的
+   `.el-checkbox.el-checkbox--small` = (0,2,0)，与样式表注入顺序无关。
+   只写 `.card-check`（编译后 (0,2,0)）与 EP 是平局，胜负取决于打包产物的注入顺序、
+   不可靠；也不用 !important。 */
+.batch-card .card-check {
   position: absolute;
   left: 4px;
   top: 4px;

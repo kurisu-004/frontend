@@ -41,8 +41,11 @@
     <!-- 2026-10-02：Sortable 拖拽源。直接子元素**只能**是 v-for 出来的 BatchCard
          （el-tooltip 不产生包裹元素，BatchCard 根 div 就是直接子节点）—— 混入
          header / 空态会让 oldIndex ≠ oldDraggableIndex，污染后续所有事件。
-         工具条 / footer 是本容器的兄弟节点，天然不在拖拽列表内。 -->
-    <div v-else ref="cardsRef" class="pending-cards">
+         工具条 / footer 是本容器的兄弟节点，天然不在拖拽列表内。
+         data-pending-pool 是「本容器 = 待下发池」的契约标记：投放目标侧
+         （PendingPoolCard.onDrop）据此做来源白名单，因为 Sortable 的 put: true
+         布尔形态不做 group 名比对、任何 Sortable 来源都会被 onAdd 接受。 -->
+    <div v-else ref="cardsRef" class="pending-cards" data-pending-pool="1">
       <BatchCard
         v-for="card in cards"
         :key="card.batch_id"
@@ -128,9 +131,9 @@ useLazyDraggable(cardsRef, sortableCards, {
     const related = evt?.related;
     emit('hoverProcess', related?.dataset?.processId ?? null);
   },
-  // 拖拽一开始就不该有任何高亮：Sortable 的 isOwner 分支在「指针仍在源容器内、被拖
-  // 节点尚未被移出」时不派发 onMove（本容器 sort:false ⇒ canSort 为假，revert 也不
-  // 成立），此时若不主动清零，从工序卡 A 拖回待下发池的途中 A 的高亮会一直亮到 onEnd。
+  // 2026-10-02：拖拽开始即清零 —— 防御性复位。onStart 每次拖拽只触发一次、且必然先于
+  // 本次拖拽的首次 onMove，所以它不针对任何具体残留场景；保留它只为覆盖「onEnd 尚未
+  // 触发」的窗口（下一次拖拽开始时若上一次的高亮还挂着，立刻清掉），成本一次 emit。
   onStart: () => {
     emit('hoverProcess', null);
   },

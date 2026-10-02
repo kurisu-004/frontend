@@ -9,10 +9,12 @@
 //
 // 覆盖：
 //   - H1：Sortable 配置挂在源容器上（三参重载：el + list + options）。
+//   - H1b：源容器带 data-pending-pool 标记（投放侧来源白名单的锚点，见 PendingPoolCard）。
 //   - H2：onMove 的 evt.related = 悬停的工序卡根 div → emit hover-process(该工序 id)。
 //   - H3：onMove 的 related 缺 dataset.processId / 为 null → emit hover-process(null)。
 //   - H4：onEnd → emit hover-process(null)（落在工序卡上 / 中途取消都会走，不会残留）。
-//   - H4b：onStart → emit hover-process(null)（拖拽一开始就不该有高亮）。
+//   - H4b：onStart → emit hover-process(null)（防御性复位：拖拽开始即清零，覆盖 onEnd
+//     尚未触发的窗口；不是某条具体残留场景的回归守卫）。
 //   - H5：渲染 batch 列表（BatchCard）+ 全选 / 自动下发工具条基本接线。
 //
 // 测试策略：
@@ -212,6 +214,19 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
     wrapper.unmount();
   });
 
+  it('H1b：拖拽源容器带 data-pending-pool 标记（投放侧来源白名单的锚点）', async () => {
+    // PendingPoolCard.onDrop 用 evt.from.dataset.pendingPool 判来源：Sortable 的
+    // `put: true` 布尔形态不做 group 名比对，任何 Sortable 来源都会被 onAdd 接受。
+    // 本用例钉住标记的存在 —— 标记一旦从模板上被删掉，来源白名单会静默变成
+    // 「拒收一切投放」，而该失败点只落在 PendingPoolCard 侧，很难定位。
+    const wrapper = mountPanel();
+    await flushPromises();
+    const el = wrapper.find('.pending-cards');
+    expect(el.exists()).toBe(true);
+    expect((el.element as HTMLElement).dataset.pendingPool).toBe('1');
+    wrapper.unmount();
+  });
+
   it('H2：onMove 悬停到工序卡 → emit hover-process(该工序 id)', async () => {
     const wrapper = mountPanel();
     await flushPromises();
@@ -243,16 +258,16 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
     wrapper.unmount();
   });
 
-  it('H4b：onStart → emit hover-process(null)（拖拽一开始就不该留高亮）', async () => {
-    // 回归 guard：Sortable 的 isOwner 分支在「指针仍在源容器内、被拖节点尚未被移出」
-    // 时不派发 onMove（本容器 sort:false ⇒ canSort 为假）⇒ 从工序卡 A 拖回待下发池
-    // 的途中 A 的高亮无人清零，只能靠 onStart 主动清。
+  it('H4b：onStart 单独触发 → emit hover-process(null)（防御性复位）', async () => {
+    // 这是**防御性复位**的契约锚点，不是某条具体残留场景的回归守卫：onStart 每次
+    // 拖拽只触发一次，且必然先于本次拖拽的首次 onMove，所以真实拖拽里不可能出现
+    // 「onMove 在前、onStart 在后」的顺序。「从工序卡 A 拖回待下发池」这条路径上
+    // isOwner 的 revert 分支自己就会派发 onMove(related=源容器) ⇒ 高亮本来就会被清。
+    // 它的价值只在覆盖「onEnd 尚未触发」的窗口，成本一次 emit。
     const wrapper = mountPanel();
     await flushPromises();
-    const options = capturedOptions();
-    (options.onMove as (evt: unknown) => void)({ related: fakeProcessCardEl('2000000000001') });
-    (options.onStart as (evt: unknown) => void)({});
-    expect(wrapper.emitted('hoverProcess')).toEqual([['2000000000001'], [null]]);
+    (capturedOptions().onStart as (evt: unknown) => void)({});
+    expect(wrapper.emitted('hoverProcess')).toEqual([[null]]);
     wrapper.unmount();
   });
 

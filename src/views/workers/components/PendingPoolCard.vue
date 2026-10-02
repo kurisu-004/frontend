@@ -120,28 +120,55 @@ type AddEvent = DraggableEvent & { originalEvent?: Event };
  *  - 拖拽 = 只发被拖的那一件，**不读 selectedIds**（多选集合只属于单击路径）；
  *  - evt.item 可能缺失（Sortable 在目标无有效落点时不派发 item），兜一句短路。
  *
- *  投放确认守卫：onAdd 何时触发完全由库决定，判据只有一条「被拖节点的原父容器 ≠
- *  当前父容器」（sortablejs `_onDrop` 的 `C !== I` 分支），库里**没有**「释放在目标
- *  外就回滚」的能力。指针 dragover 进本卡时 Sortable 会把被拖卡片**真实插入**本容器
- *  占位，而指针随后移出或用户按 Esc 都没有 handler 撤回占位 —— 于是用户以为放弃了，
- *  下发却照发。故判据改用 `originalEvent`（原生事件本体）自证落点：
- *   - 按 Esc / 原生拖拽自行终止 ⇒ 触发的是 `dragend`（该监听挂在被拖节点上，
- *     `drop` 压根不触发），第一道守卫挡掉；
- *   - 指针在卡片间隙 / 面板空白 / 工具条 / tab 条上松手 ⇒ 触发 `drop`，但 Sortable 的
- *     drop 监听挂在 document 上（`_onDragStart` 内 `D(document, 'drop', o)`），
- *     冒泡到 document 时 `target` 仍是浏览器算出的指针下最深元素，不在本卡内 ⇒
- *     第二道守卫挡掉；
- *   - 正常在卡内松手 ⇒ `drop` + target 在本卡内 ⇒ 放行。
+ *  投放确认守卫：onAdd 何时触发完全由库决定，库给的头号判据只有一条「被拖节点当前的
+ *  父容器 ≠ 拖起它的那一个容器」（Sortable `_onDrop` 里的 `rootEl !== parentEl` 分支），
+ *  库里**没有**「释放在目标外就回滚」的能力。指针 dragover 进本卡时 Sortable 会把被拖
+ *  卡片**真实插入**本容器占位，而指针随后移出或用户按 Esc 都没有 handler 撤回占位 ——
+ *  于是用户以为放弃了，下发却照发。故判据改用 `originalEvent`（原生事件本体）
+ *  自证落点，三条路径各由不同的守卫挡：
+ *   - 按 Esc / 原生拖拽自行终止 ⇒ 触发的是 `dragend`（该监听挂在被拖节点上，`drop`
+ *     压根不派发；Sortable 的 `handleEvent` 把 `drop` 与 `dragend` 归到同一个
+ *     `_onDrop`），第一道守卫挡掉；
+ *   - 指针在卡片间隙 / 面板空白 / 工具条 / tab 条上松手 ⇒ 这些区域不在任何 Sortable
+ *     容器内，没人对其 `dragover` 调 `preventDefault` ⇒ 按 HTML 规范浏览器不派发
+ *     `drop`、改派 `dragend` ⇒ 同样被**第一道**守卫挡掉；
+ *   - `drop` 落在**另一个** Sortable 容器内（典型：指针从本卡回到待下发池
+ *     `.pending-cards` 后松手 —— 那里是已注册的 Sortable，`dragover` 被
+ *     `preventDefault` ⇒ 真的派发 `drop` 并冒泡到 document，可 target 在本卡之外）
+ *     ⇒ 兜底的第二道守卫挡掉。
+ *
+ *  覆盖面限制：本守卫只覆盖**桌面鼠标的原生 DnD 路径**。触屏（`pointerType ===
+ *  'touch'` ⇒ Sortable 走 fallback 模拟）或将来任一调用点开 `forceFallback` 时，完成
+ *  事件是 `touchend` / `mouseup` 而非 `drop` ⇒ 第一道守卫会把所有投放一并丢弃 ⇒
+ *  表现为「触屏上拖得动、亮得起来、松手没反应」。该半可用状态是本次切 Sortable 新引入
+ *  的（改造前用 HTML5 原生 DnD，触屏上本就不可拖），故只在此声明，不做
+ *  `elementFromPoint` 之类的扩展。
+ *
+ *  来源白名单：Sortable 的 `checkPut` 在**布尔形态**（`put: true`）下直接
+ *  `return true`，不做 group 名比对 ⇒ 将来页面上若出现第二个 Sortable 列表，从它那里
+ *  拖一张卡进本工序卡同样会触发 onAdd ⇒ 违反「只有待下发池能投放到工序卡」。来源校验
+ *  只能在本组件做：待下发池容器在模板上标了 `data-pending-pool="1"`。
  *
  *  高亮的清理由源侧 onEnd 负责（end 只派发给源，跨容器 drop 时本目标的 onEnd 永不
  *  触发，故此处不能也不该复位 dropping）。 */
 function onDrop(evt: DraggableEvent) {
   // 释放在本卡之外（含 Esc 取消）⇒ 视为放弃投放，不下发
   const orig = (evt as AddEvent).originalEvent;
-  if (orig?.type !== 'drop') return;
+  if (orig?.type !== 'drop') {
+    warnDropped('完成事件不是 drop', orig);
+    return;
+  }
   const rootEl = dropRef.value;
   const target = orig.target as Node | null;
-  if (!rootEl || !target || !rootEl.contains(target)) return;
+  if (!rootEl || !target || !rootEl.contains(target)) {
+    warnDropped('落点不在本卡内', orig);
+    return;
+  }
+  // 来源必须是待下发池（Sortable 的 put: true 不做来源白名单，见上方注释）
+  if (!evt.from?.dataset?.pendingPool) {
+    warnDropped('来源不是待下发池', orig);
+    return;
+  }
 
   const item = evt?.item;
   if (!item) return;
@@ -151,6 +178,17 @@ function onDrop(evt: DraggableEvent) {
     batchIds: [batchId],
     targetProcessId: props.process.id,
   });
+}
+
+/** 2026-10-02：守卫生效时的 dev-only 诊断。三道守卫全是**静默 return**，而
+ *  vue-draggable-plus 一旦升级就可能换掉 `originalEvent` 字段或事件名，届时所有拖拽
+ *  下发会无声失效、控制台一片干净 ⇒ 这里在 dev 把命中的守卫与 `orig.type` 打出来，
+ *  日后一眼定位。生产不打：守卫生效是正常路径，量级随拖拽次数。 */
+function warnDropped(guard: string, orig?: Event): void {
+  if (!import.meta.env.DEV) return;
+  console.warn(
+    `[PendingPoolCard] 投放被守卫「${guard}」丢弃：originalEvent.type=${orig?.type ?? '(无 originalEvent)'}`,
+  );
 }
 </script>
 
@@ -192,9 +230,9 @@ function onDrop(evt: DraggableEvent) {
   display: flex;
   align-items: center;
   min-width: 0;
-  /* 3 行统一 18px 行高，但第 2 行的行高由 el-tag size="small" 决定（EP 把
-     .el-tag--small 钉成 24px，flex 行内实际高 24px）：18 + 24 + 18 + 2×2 gap
-     + 上下各 8 padding + 上下各 1px 边框 = 82px ≤ 96px 固定高，余量 14px 吸收
+  /* 3 行统一 18px 行高，但第 2 行的行高由 el-tag size="small" 决定（EP 2.14.6 把
+     .el-tag--small 钉成 height:20px，flex 行内实际高 20px）：18 + 20 + 18 + 2×2 gap
+     + 上下各 8 padding + 上下各 1px 边框 = 78px ≤ 96px 固定高，余量 18px 吸收
      字体渲染的行高波动。 */
   line-height: 18px;
   font-size: 12px;
