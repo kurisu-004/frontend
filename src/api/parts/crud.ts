@@ -15,7 +15,6 @@
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
 import { inspectionBatchListResultSchema } from '@/composables/queries/schemas';
-import type { OutsourceSendableListResult } from '@/types/outsource';
 import type {
   LocationTreeNode,
   OrderStatus,
@@ -103,8 +102,8 @@ export interface ListPartsParams {
   drawing_no?: string;
   name?: string;
   /**
-   * 2026-08-20：原 /parts 列表主路径不再使用；保留供 listOutsourceSendable
-   * 等其他端点继续使用（与后端 PartListQuery.keyword 兼容）。
+   * 2026-08-20：原 /parts 列表主路径不再使用；保留供按图号/名称/单号分列搜索之外的
+   * 老式关键字搜索继续使用（与后端 PartListQuery.keyword 兼容）。
    */
   keyword?: string;
   /** 2026-07-22：订单号独立搜索（ILIKE 包含 %kw%）。 */
@@ -541,10 +540,7 @@ export interface ScanInspectPayload {
   quantity?: number | null;
 }
 
-export async function scanInspect(
-  batchId: string,
-  payload: ScanInspectPayload,
-): Promise<PartItem> {
+export async function scanInspect(batchId: string, payload: ScanInspectPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/scan-inspect`,
     payload,
@@ -882,18 +878,34 @@ export async function listPartsHeldByWorker(workerId: string): Promise<PartItem[
 // ============================================================
 // 外协流程（2026-07-15 新增；属单件 lifecycle，归 ./crud）
 // ============================================================
+/** `POST /prod/batches/{batch_id}/send-to-outsource` 入参。
+ *
+ *  2026-10-03 契约对齐：**`next_process_id` 改名为 `process_id`**（后端 DTO 就是
+ *  `process_id`；沿用旧名必然 422）。注意这只是 **body 里的键**改名，列表行上的
+ *  字段名 `next_process_id`（`OutsourceSendableItem`）不变。
+ *
+ *  模式由 `quote_id` / `direct` 二选一表达，**两者都不传后端返 400**：
+ *  - APPROVAL（需审批报价）：传 `quote_id`（来自 `OutsourceSendableItem.quote_id`）；
+ *  - DIRECT（免审批直发）：传 `direct: true` + `quote_id: null`，后端自动建一条
+ *    `price=0` 的 APPROVED 占位报价。
+ */
 export interface SendToOutsourcePayload {
   /** 外协公司 id（雪花 ID 字符串） */
   outsource_company_id: string;
   /** 外协工序 id（雪花 ID 字符串；JS Number 会丢精度） */
-  next_process_id: string;
+  process_id: string;
   /**
    * 乐观锁版本号；与目标批次 TPartBatch.version 必须一致，否则返 BIZ_VERSION_CONFLICT 409。
    * 前端从 OutsourceSendableItem.version（批次级 version）取值后传入。
    */
   version: number;
+  /** APPROVAL 模式必传（来自 OutsourceSendableItem.quote_id）；DIRECT 传 null */
+  quote_id?: string | null;
+  /** DIRECT 模式传 true；APPROVAL 传 null */
+  direct?: boolean | null;
   /**
-   * 2026-07-30：部分发送数量；≤ 批次量，缺省 = 批次全量。
+   * 部分发送数量；≤ 批次量，null 或 == batch_quantity = 整批。
+   * 部分发送后源批次留余量、仍可再次发送。
    */
   quantity?: number | null;
   note?: string | null;
@@ -918,37 +930,24 @@ export async function sendToOutsource(
   return resp.data;
 }
 
-/**
- * 统一外协可发送一览（2026-07-28 新增；取代旧 listDirectOutsourceCandidates /
- * listApprovedForSend 两个端点）：
- * 合并 APPROVAL（需审批 + 有报价）和 DIRECT（无需审批可直发）两类，
- * 每行带 send_mode + source_status 字段。
- */
-export async function listOutsourceSendable(
-  params: {
-    keyword?: string;
-    customer_id?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
-): Promise<OutsourceSendableListResult> {
-  const resp = await api.get<OutsourceSendableListResult>('/parts/outsource-sendable', {
-    params: cleanParams(params),
-  });
-  return resp.data;
-}
-
-// 2026-09-25 清理：listDirectOutsourceCandidates 函数（@deprecated 状态）删除。
-// 自 2026-07-28 起由 listOutsourceSendable 取代；全仓零调用方。@/types/directOutsource.ts
-// 类型文件保留作为归档备查（导出符号未被引用），如未来彻底不再需要可一并删除。
+// 2026-10-03：`listOutsourceSendable` 迁至 `src/api/outsource.ts`（URL 同步从
+// `/parts/outsource-sendable` 迁到 outsource 域顶层 `/outsource-sendable`）。
 
 export interface ReceiveFromOutsourcePayload {
   shelf_id: string;
-  /** 下一道工序 id（雪花 ID 字符串；JS Number 会丢精度） */
+  /** 下一道工序 id（雪花 ID 字符串；JS Number 会丢精度）。
+   *  ⚠️ 这个键后端**没有**随 send-to-outsource 一起改名，仍是 `next_process_id`
+   *  （与 `SendToOutsourcePayload.process_id` 刻意不同名）。 */
   next_process_id: string;
   /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
   version: number;
-  /** 2026-07-30：部分接收数量；缺省 = 批次全量 */
+  /**
+   * 部分接收数量；null 或 == 当前剩余待收量 = 整批。
+   * 2026-10-03 修正：后端此前静默忽略该字段（前端填了数量却整批回收），
+   * 现已真正实现。拆批后新子批次回生产架，源批次保留余量且**仍在外协厂**
+   * （开口 shipment 仍是 OUTSOURCING）—— 所以部分接收后「待接收」列表里仍会
+   *  出现那批余量，这是正确行为，前端不要做「部分接收后该行消失」的假设。
+   */
   quantity?: number | null;
   note?: string | null;
 }

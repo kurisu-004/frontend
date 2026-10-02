@@ -1348,3 +1348,205 @@ export const workTypeProcessesResultSchema = z.object({
 });
 
 export type WorkTypeProcessesResultSchema = z.infer<typeof workTypeProcessesResultSchema>;
+
+// ============================================================
+// 2026-10-03 新增：外协域 4 个 list 端点的 Zod 守门 schema。
+//
+// 为什么补这一段：外协域此前是全仓少数**没有** Zod 守门的模块 —— api helper 把
+// `api.get` 的结果原样喂给 `el-table` / PagedTable，形状不符时收不到数组就**静默空白**
+// 而不是报错。3 个线上故障都是这么悄悄上线的（对账页 404、quotable-parts 400、
+// 收发两 tab 全空白）。本段把守门补到 API 边界（`src/api/outsource.ts` 里 `.parse()`），
+// 形状漂移立即抛 ZodError。
+//
+// 共同的 strip 陷阱约定（沿 CLAUDE.md §M-4）：每个 item schema **逐字段显式声明**，
+// 一条不漏。Zod 默认 `z.object()` 是 strip 模式，漏声明的字段会被静默丢弃、parse
+// 不报错 —— 守门形同虚设。雪花 id 一律 `z.string()`（后端 `serialize_i64`），
+// 不用 `z.coerce.string()` / `z.number()` 掩盖类型漂移；Decimal 一律 `z.string()`；
+// datetime 一律 `z.string()`。
+// ============================================================
+
+/** `GET /api/v2/outsource-companies/{company_id}/sent-parts` 单行
+ *  （后端 `OutsourceSentPartItem`）—— 18 字段。
+ *
+ *  ⚠️ 主键是 `shipment_id`（不是 `id`）：行编辑端点
+ *  `POST /outsource-shipments/{shipment_id}/reconcile-update` 以它为锚。
+ *  ⚠️ `total_price` / `is_urgent` 由后端直出（2026-10-03 契约对齐），
+ *  声明为必填 —— 漏声明会让对账页「总价」列恒空、加急红底恒不生效。 */
+export const outsourceSentPartItemSchema = z.object({
+  shipment_id: z.string(),
+  /** shipment.version（对账行编辑的 OCC 锚，与 in-flight 的批次 version 不是一回事） */
+  version: z.number(),
+  quote_id: z.string(),
+  part_id: z.string(),
+  part_drawing_no: z.string().nullable(),
+  part_name: z.string().nullable(),
+  customer_path: z.string().nullable(),
+  /** 历史 shipment 可能无批次（后端 left join 落空） */
+  batch_no: z.number().nullable(),
+  process_id: z.string(),
+  process_name: z.string().nullable(),
+  quantity: z.number(),
+  /** Decimal 字符串；DIRECT 直发自动建的占位报价为 "0" */
+  unit_price: z.string(),
+  /** Decimal 字符串；总价列的单一真源（后端算好，不在前端二次推导） */
+  total_price: z.string(),
+  sent_at: z.string(),
+  received_at: z.string().nullable(),
+  /**
+   * 三个字面量穷举自 `t_outsource_shipment.status` 的 DB CHECK 约束
+   * （`ck_t_outsource_shipment_status`）：OUTSOURCING（在外协厂）/ RECEIVED（已回收）
+   * / CANCELLED（已取消）。后端 VO 声明成 `String`，故枚举值以约束为准而非 VO 类型 ——
+   * 只写前两个会让已取消的 shipment 在对账页整页 parse 失败。
+   */
+  status: z.enum(['OUTSOURCING', 'RECEIVED', 'CANCELLED']),
+  is_billed: z.boolean(),
+  is_urgent: z.boolean(),
+});
+
+export type OutsourceSentPartItemSchema = z.infer<typeof outsourceSentPartItemSchema>;
+
+/** `GET /api/v2/outsource-companies/{company_id}/sent-parts` 顶层
+ *  （后端 `OutsourceSentPartListOut`）：items / total / limit / offset 四字段。 */
+export const outsourceSentPartListResultSchema = z.object({
+  items: z.array(outsourceSentPartItemSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type OutsourceSentPartListResultSchema = z.infer<typeof outsourceSentPartListResultSchema>;
+
+/** `GET /api/v2/outsource-quotes/quotable-parts` 单行（后端 `QuotablePart`）—— 14 字段。
+ *
+ *  ⚠️ 行粒度 = 一个 (零件, OUTSOURCE 工序) 组合一行（后端已 DISTINCT ON 去重）：
+ *  同一零件挂 N 个外协工序就出 N 行，前端**不得**再做 part_id 级去重（那会把多工序
+ *  候选砍成 1 行，非首选工序的零件彻底无法报价）。
+ *  ⚠️ `next_process_id` / `next_process_name` 是正式字段（后端 VO 显式声明），
+ *  不再需要前端做 picker-local 类型扩展才能读到。 */
+export const quotablePartSchema = z.object({
+  id: z.string(),
+  serial_no: z.string().nullable(),
+  drawing_no: z.string(),
+  name: z.string(),
+  is_urgent: z.boolean(),
+  /** Decimal 字符串（客户下单单价） */
+  unit_price: z.string(),
+  customer_id: z.string(),
+  customer_name: z.string().nullable(),
+  l1_customer_name: z.string().nullable(),
+  customer_path: z.string().nullable(),
+  shelf_id: z.string(),
+  shelf_code: z.string(),
+  next_process_id: z.string(),
+  next_process_name: z.string(),
+});
+
+export type QuotablePartSchema = z.infer<typeof quotablePartSchema>;
+
+/** `GET /api/v2/outsource-quotes/quotable-parts` 顶层（后端 `QuotablePartListOut`）。
+ *  ⚠️ 2026-10-03 起是**分页信封**，不再是裸数组 —— 报价一览页的 picker 恒空故障
+ *  （端点不存在 ⇒ 请求被 `quote_router` 的 `/{id}` 吞成 400）就是拿信封当数组用的直接后果。 */
+export const outsourceQuotablePartListResultSchema = z.object({
+  items: z.array(quotablePartSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type OutsourceQuotablePartListResultSchema = z.infer<
+  typeof outsourceQuotablePartListResultSchema
+>;
+
+/** `GET /api/v2/outsource-shipments/in-flight` 单行（后端 `OutsourceInFlightItem`）—— 15 字段。
+ *
+ *  ⚠️ URL 已从 `/parts/outsource-in-flight` 迁到 outsource 域（2026-10-03），
+ *  旧路径的 handler 返的是通用零件列表 `PartListItem`，与本 VO 完全不同构。
+ *  ⚠️ `quantity` 是**当前批次剩余待收量**（部分接收后源批次留余量），不是发出量。
+ *  ⚠️ `version` 是 `t_part_batch.version`（`receive-from-outsource` 的 OCC 锚），
+ *  **不是** shipment 的 version。 */
+export const outsourceInFlightItemSchema = z.object({
+  part_id: z.string(),
+  batch_id: z.string(),
+  batch_no: z.number(),
+  quantity: z.number(),
+  serial_no: z.string().nullable(),
+  drawing_no: z.string().nullable(),
+  name: z.string().nullable(),
+  is_urgent: z.boolean(),
+  customer_path: z.string().nullable(),
+  next_process_id: z.string().nullable(),
+  next_process_name: z.string().nullable(),
+  outsource_company_id: z.string(),
+  outsource_company_name: z.string().nullable(),
+  /** 开口 shipment 的发出时间 */
+  sent_at: z.string(),
+  version: z.number(),
+});
+
+export type OutsourceInFlightItemSchema = z.infer<typeof outsourceInFlightItemSchema>;
+
+/** `GET /api/v2/outsource-shipments/in-flight` 顶层（后端 `OutsourceInFlightListOut`）。
+ *  ⚠️ 同 quotable-parts：分页信封，不是裸数组。 */
+export const outsourceInFlightListResultSchema = z.object({
+  items: z.array(outsourceInFlightItemSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type OutsourceInFlightListResultSchema = z.infer<typeof outsourceInFlightListResultSchema>;
+
+/** 可发送行的公司下拉项（DIRECT 模式的选择源）。 */
+const outsourceCompanyOptionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+/** `GET /api/v2/outsource-sendable` 单行（后端 `OutsourceSendableItem`）—— 25 字段。
+ *
+ *  ⚠️ URL 已从 `/parts/outsource-sendable` 迁到 outsource 域顶层（2026-10-03）。
+ *  ⚠️ `quote_id`（2026-10-03 新增）是发送端点必传二选一的判据：APPROVAL 行有值、
+ *  DIRECT 行为 null。漏声明它 ⇒ 前端组不出 payload ⇒ 每行都返 400。 */
+export const outsourceSendableItemSchema = z.object({
+  /** t_part_batch.version（批次级 OCC，发送时回传） */
+  version: z.number(),
+  send_mode: z.enum(['APPROVAL', 'DIRECT']),
+  source_status: z.enum(['PENDING', 'IN_PROCESS']),
+  part_id: z.string(),
+  part_serial_no: z.string().nullable(),
+  part_drawing_no: z.string().nullable(),
+  part_name: z.string().nullable(),
+  /** 可发送数量（行=批次：等于 batch_quantity） */
+  quantity: z.number().nullable(),
+  batch_id: z.string(),
+  batch_no: z.number(),
+  batch_quantity: z.number(),
+  planned_delivery_date: z.string().nullable(),
+  is_urgent: z.boolean(),
+  customer_path: z.string().nullable(),
+  next_process_id: z.string(),
+  next_process_name: z.string().nullable(),
+  shelf_code: z.string().nullable(),
+  /** APPROVAL 单值；DIRECT 为 null（用 company_options） */
+  outsource_company_id: z.string().nullable(),
+  outsource_company_name: z.string().nullable(),
+  /** DIRECT 时为该 part 可用的全部公司；APPROVAL 时为空数组 */
+  company_options: z.array(outsourceCompanyOptionSchema),
+  /** APPROVAL 为该报价的 Decimal 字符串；DIRECT 为 null */
+  price: z.string().nullable(),
+  /** 发送端点的报价 id；APPROVAL 必传、DIRECT 为 null */
+  quote_id: z.string().nullable(),
+  status_label: z.literal('sendable'),
+});
+
+export type OutsourceSendableItemSchema = z.infer<typeof outsourceSendableItemSchema>;
+
+/** `GET /api/v2/outsource-sendable` 顶层（后端 `OutsourceSendableListOut`）。 */
+export const outsourceSendableListResultSchema = z.object({
+  items: z.array(outsourceSendableItemSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendableListResultSchema>;
