@@ -17,9 +17,9 @@
 //      后端返 200 + 「已保存」，用户完全无从察觉映射被清掉。
 // 修法：onSave 开头用 query 的 `isError` / `!data` 硬拦 + 按钮 disabled。
 //
-// 2026-10-02 追加 P8/P9：独立 describe「未选工种时的渲染与遮罩守卫」承载渲染与遮罩
-// 用例 —— P8 钉 `v-if="selectedWT"`（渲染层），P9a/P9b/P9c 钉勾选区 `v-loading` 的
-// 绑定值（判据层）。与 P1~P7 的写路径守卫是两个独立缺陷：前者防「保存时把映射清空」，
+// 2026-10-02 追加 P8/P9：独立 describe「右侧勾选区的渲染守卫与遮罩判据」承载渲染与
+// 遮罩用例 —— P8 钉 `v-if="selectedWT"`（渲染层），P9a/P9b/P9c 钉遮罩的绑定值（判据层，
+// 判别力集中在 P9c）。与 P1~P7 的写路径守卫是两个独立缺陷：前者防「保存时把映射清空」，
 // 后者防「未选工种时右侧一直转圈」；三组只共用这份脚手架（EP 模板桩 + api 桩）。
 //
 // 为什么直接调 vm.onSelectWT / vm.onSave 而不点 DOM 按钮：
@@ -85,32 +85,24 @@ vi.mock('@/api/process', () => ({
 import ProcessWorkTypeMappingTab from '../components/ProcessWorkTypeMappingTab.vue';
 
 // ---------------------------------------------------------------- v-loading 桩
-// 2026-10-02 修：本桩从 no-op 换成**记录绑定值**的实现。此前是 `loading: {}`，模板里
-// 遮罩判据无论写成什么都不留痕 ⇒ 「未选工种时右侧永久转圈」那条修复等于裸奔（把绑定
-// 换成首屏未完成判据，本文件用例照样全绿）。桩把每次求值同时写进两处：
-//   ① 宿主元素的 data-loading 属性 —— P9b/P9c 直接断具体元素的绑定值；
-//   ② loadingLog —— P9a 断「整棵树里没有任何遮罩被点亮」。
-// 两个挂载点（左表 el-table / 右侧 el-checkbox-group）走同一套钩子，不分场景。
-const loadingLog: { el: HTMLElement; value: unknown }[] = [];
-
+// 2026-10-02 修：本桩把模板里 `v-loading` 的**每次求值**写进宿主元素的 data-loading
+// 属性 —— 遮罩判据无论写成什么都不留痕就等于没测（P9b/P9c 直接断具体元素的绑定值，
+// P9a 断整棵树有没有遮罩处于点亮态）。两个挂载点（左表 el-table / 右侧
+// el-checkbox-group）走同一套钩子，不分场景。
+//
+// ⚠️ 指令挂在**组件** vnode 上，靠 Vue 把 dirs 转移到组件的**元素根**上。所以
+//   下方 el-table / el-checkbox-group 桩的 template 必须保持**单根元素**：改成多根
+//   （Fragment）会触发「Runtime directive used on component with non-element root
+//   node」告警并让指令静默失效。好在失效是响的 —— P9a/b/c 会因 attributes 取不到
+//   而红，不会变成假绿。
 const loadingDirective: Directive<HTMLElement, boolean> = {
   mounted(el, binding) {
     el.dataset.loading = String(binding.value);
-    loadingLog.push({ el, value: binding.value });
   },
   updated(el, binding) {
     el.dataset.loading = String(binding.value);
-    loadingLog.push({ el, value: binding.value });
   },
 };
-
-/** 当前处于点亮态（最新一次求值为 true）的遮罩宿主，带 className 便于失败时定位。
- *  按元素取最新一次求值而非看历史 —— 挂载瞬间的在飞状态会被随后的 updated 覆盖掉。 */
-function litLoadingTargets(): string[] {
-  const current = new Map<HTMLElement, unknown>();
-  for (const c of loadingLog) current.set(c.el, c.value);
-  return [...current.entries()].filter(([, v]) => v === true).map(([el]) => el.className);
-}
 
 // ---------------------------------------------------------------- EP 模板桩
 const globalConfig = {
@@ -207,7 +199,6 @@ beforeEach(() => {
   getWorkTypeProcessesMock.mockReset();
   setWorkTypeProcessesMock.mockReset();
   listProcessesMock.mockReset();
-  loadingLog.length = 0;
   elMessage.error.mockReset();
   elMessage.success.mockReset();
   elMessage.warning.mockReset();
@@ -454,9 +445,10 @@ describe('2026-10-02：映射加载失败后保存不得清空整组映射（Pro
 });
 
 // 2026-10-02 修：P8/P9 从「映射加载失败后保存不得清空整组映射」移出 —— 那组 describe
-// 讲的是**写路径**（保存会不会把映射清掉），这里讲的是**渲染与遮罩**（右侧会不会一直
-// 转圈），塞在同一标题下会让后来者误以为遮罩用例是写路径守卫的一部分。
-describe('2026-10-02：未选工种时的渲染与遮罩守卫（ProcessWorkTypeMappingTab）', () => {
+// 讲的是**写路径**（保存会不会把映射清掉），这里讲的是**渲染与遮罩**（右侧勾选区该在
+// 什么时候出现、遮罩该在什么时候亮），塞在同一标题下会让后来者误以为遮罩用例是写路径
+// 守卫的一部分。
+describe('2026-10-02：右侧勾选区的渲染守卫与遮罩判据（ProcessWorkTypeMappingTab）', () => {
   it('P8：未选工种时不渲染勾选区；选中工种后才渲染（v-if 渲染守卫）', async () => {
     // 钉死 `el-checkbox-group` 上的 `v-if="selectedWT"`。未选工种时标题已经是
     // 「请选择工种」，此时摆一屏全量工序复选框是纯误导；这条 v-if 是遮罩判据之外的
@@ -472,22 +464,22 @@ describe('2026-10-02：未选工种时的渲染与遮罩守卫（ProcessWorkType
     expect(wrapper.find('.mock-checkbox-group').exists()).toBe(true);
   });
 
-  it('P9a：未选工种时整棵树里没有任何遮罩被点亮（右侧不转圈）', async () => {
-    // 观察点的选择（为什么这条不直接断勾选区的 data-loading）：勾选区带
-    // `v-if="selectedWT"`，未选工种时**压根不渲染** ⇒ 它的绑定值在结构上就不可观察，
-    // 这正是 P8 存在的原因。所以这条只能断症状：整棵树里不得有任何一处遮罩求值为
-    // true，否则「未选工种时右侧顶着一个永不消失的转圈遮罩」就是原症状复现。
-    // （顺带记录此时左表 el-table 的取值：wtQuery 首屏已 resolve ⇒ false。）
+  it('P9a：未选工种时整棵树里没有任何遮罩处于点亮态', async () => {
+    // 症状级断言：未选工种时勾选区压根不渲染（P8 钉的 v-if），此刻整棵树里若还有
+    // 任何一处遮罩处于点亮态，就是「首次进 Tab 右侧顶着一个永不消失的转圈遮罩」的原
+    // 症状复现。定位说明：本条**对模板表达式无判别力** —— 未选工种时勾选区的绑定值在
+    // 结构上就不可观察（它没渲染），而剩下的唯一观测点是左表 el-table 的
+    // wtQuery.isFetching，不在本 Tab 遮罩判据的范围内。判据层的判别力全在 P9c。
     const wrapper = await mountTab();
 
-    expect(wrapper.find('.mock-checkbox-group').exists()).toBe(false);
-    expect(litLoadingTargets()).toEqual([]);
-    expect(wrapper.find('.mock-table').attributes('data-loading')).toBe('false');
+    expect(wrapper.findAll('[data-loading="true"]')).toHaveLength(0);
   });
 
   it('P9b：选中工种 + 映射请求在飞（尚无 data）→ 勾选区遮罩绑定值为 true', async () => {
     // 钉「该转圈时要转」：切工种后首屏请求挂起期间必须上遮罩，否则用户看到的是
     // 一屏空勾选框，会以为这个工种没配任何工序。
+    // 定位：此窗口 isFetching 与 isPending 同为 true，本条对二者**无判别力**，
+    // 只防「一律 false / 写死常量」式退化；判别力在 P9c。
     getWorkTypeProcessesMock.mockImplementation(() => new Promise(() => undefined));
     const wrapper = await mountTab();
     const vm = wrapper.vm as unknown as TabVm;
