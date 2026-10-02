@@ -35,9 +35,12 @@
               >保存映射</el-button
             >
           </div>
+          <!-- 2026-10-02 修：判据取 isFetching（非 isPending）+ v-if 未选工种不渲染。
+               详见文件下方「2026-10-02 修：未选工种时右侧永久 loading」块。 -->
           <el-checkbox-group
+            v-if="selectedWT"
             v-model="selectedProcessIds"
-            v-loading="mappingQuery.isPending.value"
+            v-loading="mappingQuery.isFetching.value"
             class="proc-group"
           >
             <el-checkbox
@@ -250,6 +253,27 @@ async function onSave(): Promise<void> {
   }
 }
 
+// ============================================================
+// 2026-10-02 修：未选工种时右侧永久 loading
+//
+// 现象：首次进入本 Tab（还没点任何工种）时，右侧勾选区顶着一个转圈遮罩永不消失。
+// 根因：右侧 `v-loading` 判的是 `mappingQuery.isPending`，而 mappingQuery 的
+//   `enabled` 是 `() => !!workTypeId`（未选工种 ⇒ 零请求）。TanStack Query v5 下
+//   一个从未发起过请求的 query，`status` 停在 `'pending'`、`fetchStatus` 是
+//   `'idle'` ⇒ `isPending` 恒 true，而 `isFetching` 恒 false。
+// 修：两处，缺一不可。
+//   ① 遮罩判据改 `isFetching`（同文件左表工种表本来就是这个写法）：它的语义是
+//      「真有请求在飞」，未选工种时为 false、选中工种后飞到完成为 true。与左表对齐。
+//   ② `el-checkbox-group` 加 `v-if="selectedWT"`：未选工种时标题已经是「请选择工种」，
+//      此时渲染一屏全量工序复选框本身就是误导（看着像「这个工种能执行全部工序」）。
+//      ① 是判据层修复、② 是渲染层第二道防线：即便日后有人把 isFetching 改回
+//      isPending，未选工种时也压根不会渲染出被遮罩的元素。
+//
+// ⚠️ 保存按钮的 `:disabled="... || mappingQuery.isPending.value"` 与 onSave 开头
+//   的 `if (mappingQuery.isPending.value) 早退` **刻意保持 isPending 不动**：那两处
+//   的语义是「尚无 data ⇒ 不知道现状 ⇒ 绝不允许写」（防整组替换把映射静默清空），
+//   与遮罩「是否在加载」不是同一件事。改成 isFetching 会在「加载失败后重试」这类
+//   有旧 data 的场景下放行写入，重新打开数据被清空的缺口。
 // ============================================================
 // 2026-10-02 变更日志（迁移到共享基础数据层 + 修三个线上 bug）
 //

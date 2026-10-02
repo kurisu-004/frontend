@@ -17,6 +17,10 @@
 //      后端返 200 + 「已保存」，用户完全无从察觉映射被清掉。
 // 修法：onSave 开头用 query 的 `isError` / `!data` 硬拦 + 按钮 disabled。
 //
+// 2026-10-02 追加 P8：同文件的**渲染守卫**用例（未选工种时右侧不渲染勾选区）。
+// 与 P1~P7 的写路径守卫是两个独立缺陷 —— 前者防「保存时把映射清空」，后者防
+// 「未选工种时右侧一直转圈」；两者只共用这份脚手架（EP 模板桩 + api 桩）。
+//
 // 为什么直接调 vm.onSelectWT / vm.onSave 而不点 DOM 按钮：
 //   表格行点击最终就是调 onSelectWT(row)，但要让它可点就得复刻 Element Plus 的
 //   el-table ↔ el-table-column 插槽作用域协议（column 的 `{row}` 是 EP 从 table
@@ -417,5 +421,22 @@ describe('2026-10-02：映射加载失败后保存不得清空整组映射（Pro
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['work-types', 'processes'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['work-types'] });
+  });
+
+  it('P8：未选工种时不渲染勾选区；选中工种后才渲染（v-if 渲染守卫）', async () => {
+    // 钉死 `el-checkbox-group` 上的 `v-if="selectedWT"`。未选工种时标题已经是
+    // 「请选择工种」，此时摆一屏全量工序复选框 + 永久 loading 遮罩是纯误导；
+    // 这条 v-if 是 loading 判据（isFetching）之外的第二道防线，删掉它遮罩 bug 就会
+    // 以「遮罩盖在看不见的语境上」的形式回归。断言只认渲染与否，不认遮罩样式 ——
+    // `v-loading` 在本 spec 里是 no-op 指令桩，测不了遮罩本身。
+    const wrapper = await mountTab();
+
+    expect(wrapper.find('.mock-checkbox-group').exists()).toBe(false);
+
+    const vm = wrapper.vm as unknown as TabVm;
+    vm.onSelectWT(WT);
+    await flushPromises();
+
+    expect(wrapper.find('.mock-checkbox-group').exists()).toBe(true);
   });
 });
