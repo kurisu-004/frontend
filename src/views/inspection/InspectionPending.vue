@@ -835,7 +835,7 @@ function onScanChooserFail(): void {
 
 function onBatchPicked(row: PartItem): void {
   // BatchPickerDialog 的 pick emit 声明成 PartItem，实际传进来的是本页的
-  // InspectionQueueItem（与 BatchPickerDialog props 处那次单向 cast 同源）。
+  // InspectionQueueItem（与模板里那对往返 cast 的出口那一侧同源）。
   showBatchPicker.value = false;
   scanChooserRow.value = row as unknown as InspectionQueueItem;
   scanChooserOpen.value = true;

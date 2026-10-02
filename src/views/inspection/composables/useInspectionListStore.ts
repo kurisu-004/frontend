@@ -188,8 +188,8 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   }
 
   // ============ 切片：filters（表头筛选状态机）============
-  // 声明在 query 切片之前：resetAllFilters 要拿它把「已确认值 + 未确认草稿 + popover
-  // 打开态」一起清掉（见该函数），而 filters 的 deps 只有 search 与上面这个 onSearch。
+  // 声明在 query 切片的 onSearch 之后：resetAllFilters 要拿它把「已确认值 + 未确认草稿 +
+  // popover 打开态」一起清掉（见该函数），而 filters 的 deps 只有 search 与 onSearch。
   const filters = useInspectionColumnFilters({ search, onSearch });
 
   // 工具栏「重置筛选」委托给 5 个筛选状态机的 reset：每个 reset 同时清「已确认值
