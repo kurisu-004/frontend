@@ -51,7 +51,7 @@ import { computed, inject, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useDraggable } from 'vue-draggable-plus';
-import type { Worker, WorkOrderCard as Card } from '@/types/workerPool';
+import type { Worker, BatchCardModel as Card } from '@/types/workerPool';
 import { useWorkerStateByWorkerQuery } from '@/composables/queries/useWorkerStateByWorkerQuery';
 import { heldToCard } from '@/views/workers/composables/poolItemToCard';
 import {

@@ -37,7 +37,7 @@ import { computed, inject, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
-import type { ProcessPoolView, WorkOrderCard as Card } from '@/types/workerPool';
+import type { ProcessPoolView, BatchCardModel as Card } from '@/types/workerPool';
 import {
   consumeWorkerSource,
   recordPoolSource,

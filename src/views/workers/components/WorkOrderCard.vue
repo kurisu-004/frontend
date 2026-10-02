@@ -7,7 +7,10 @@
      从 evt.item.dataset 读出并记进 dndSourceTracker，供 `POST /prod/pool/move` 构造
      `from: {kind:'POOL', shelf_id}`。**必须是 batch 真实货架**（候选池跨所有货架，
      未必等于用户当前激活货架），否则后端返 20122。held 侧该值为空串
-     （holder 是 worker，无货架位置）。 -->
+     （holder 是 worker，无货架位置）。
+     2026-10-02：props 类型随 types/workerPool.ts 换成 BatchCardModel，tooltip 与
+     hasDetails 里的 `customer` / `applicant` 同步改读 `customer_l2` /
+     `applicant_name`（与适配层取值一一对应，渲染结果不变）。 -->
 <template>
   <el-tooltip placement="top" :show-after="200" :disabled="!hasDetails">
     <template #content>
@@ -18,11 +21,11 @@
         <div v-if="batch.serial_no">
           <span class="tt-label">序列号</span><span>{{ batch.serial_no }}</span>
         </div>
-        <div v-if="batch.customer">
-          <span class="tt-label">客户</span><span>{{ batch.customer }}</span>
+        <div v-if="batch.customer_l2">
+          <span class="tt-label">客户</span><span>{{ batch.customer_l2 }}</span>
         </div>
-        <div v-if="batch.applicant">
-          <span class="tt-label">申请人</span><span>{{ batch.applicant }}</span>
+        <div v-if="batch.applicant_name">
+          <span class="tt-label">申请人</span><span>{{ batch.applicant_name }}</span>
         </div>
         <div v-if="batch.location">
           <span class="tt-label">所在位置</span><span>{{ batch.location }}</span>
@@ -65,7 +68,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { WorkOrderCard as Card } from '@/types/workerPool';
+import type { BatchCardModel as Card } from '@/types/workerPool';
 
 const props = defineProps<{ batch: Card }>();
 
@@ -75,8 +78,8 @@ const dueDate = computed(
 
 const hasDetails = computed(
   () =>
-    !!props.batch.customer ||
-    !!props.batch.applicant ||
+    !!props.batch.customer_l2 ||
+    !!props.batch.applicant_name ||
     !!props.batch.location ||
     !!props.batch.serial_no,
 );
