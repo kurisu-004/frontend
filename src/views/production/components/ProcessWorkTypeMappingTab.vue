@@ -35,8 +35,8 @@
               >保存映射</el-button
             >
           </div>
-          <!-- 2026-10-02 修：判据取 isFetching（非 isPending）+ v-if 未选工种不渲染。
-               详见文件下方「2026-10-02 修：未选工种时右侧永久 loading」块。 -->
+          <!-- 2026-10-02 修：勾选区的遮罩判据与渲染守卫，理由与取舍见文件下方
+               「2026-10-02 修：未选工种时右侧永久 loading」块。 -->
           <el-checkbox-group
             v-if="selectedWT"
             v-model="selectedProcessIds"
@@ -261,13 +261,20 @@ async function onSave(): Promise<void> {
 //   `enabled` 是 `() => !!workTypeId`（未选工种 ⇒ 零请求）。TanStack Query v5 下
 //   一个从未发起过请求的 query，`status` 停在 `'pending'`、`fetchStatus` 是
 //   `'idle'` ⇒ `isPending` 恒 true，而 `isFetching` 恒 false。
-// 修：两处，缺一不可。
-//   ① 遮罩判据改 `isFetching`（同文件左表工种表本来就是这个写法）：它的语义是
-//      「真有请求在飞」，未选工种时为 false、选中工种后飞到完成为 true。与左表对齐。
+// 修：判据层与渲染层各修一处（任一处单独都能消除「未选工种时永久遮罩」的症状，
+//   同时做是防回归的双保险）。
+//   ① 遮罩判据是「真有请求在飞」（同文件左表工种表用的是这个判据）：未选工种时为
+//      false、选中工种后飞到完成为 true。与左表对齐。
 //   ② `el-checkbox-group` 加 `v-if="selectedWT"`：未选工种时标题已经是「请选择工种」，
 //      此时渲染一屏全量工序复选框本身就是误导（看着像「这个工种能执行全部工序」）。
-//      ① 是判据层修复、② 是渲染层第二道防线：即便日后有人把 isFetching 改回
-//      isPending，未选工种时也压根不会渲染出被遮罩的元素。
+//      ① 是判据层修复、② 是渲染层防线：即便日后有人动了 ① 的判据，未选工种时也压根
+//      不会渲染出被遮罩的元素。
+//  ③（2026-10-02 留档）遮罩覆盖**所有**有请求在飞的时刻，包括保存成功后 onSuccess
+//      失效两个域触发的后台 refetch（此时勾选区会短暂再上一次遮罩）。这是有意为之：
+//      EP 的 .el-loading-mask 会拦下指针，正好堵住「refetch 在飞时改勾选、watcher 到点
+//      用新基线覆盖用户编辑」的窗口；refetch 结束遮罩即消。同理，它也让「切工种请求在飞」
+//      这一段有明确的加载反馈 —— 这段窗口是 isPending 语义读不到、判据必须落在
+//      isFetching 上的原因（回归守卫见 ProcessWorkTypeMappingTab.spec.ts 的 P9b/P9c）。
 //
 // ⚠️ 保存按钮的 `:disabled="... || mappingQuery.isPending.value"` 与 onSave 开头
 //   的 `if (mappingQuery.isPending.value) 早退` **刻意保持 isPending 不动**：那两处
