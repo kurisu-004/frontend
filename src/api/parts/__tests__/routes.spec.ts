@@ -38,7 +38,12 @@ vi.mock('@/api/http', () => ({
 
 vi.mock('@/composables/queries/schemas', () => ({
   // 集合读端点本函数内会 Zod parse；URL 守卫不需要真实 schema，原样回传给调用方即可。
-  inspectionBatchListResultSchema: { parse: (v: unknown) => v },
+  // 2026-10-03：待品检端点换 13 字段精简 VO 后，两个 VO 的守门 schema 也分家了
+  // （repairBatchListResultSchema 服务返修两条端点，inspectionQueueListResultSchema
+  // 服务待品检端点），mock 必须同时给出两者，缺一个 vitest 就会报
+  // 「No xxx export is defined on the mock」。
+  repairBatchListResultSchema: { parse: (v: unknown) => v },
+  inspectionQueueListResultSchema: { parse: (v: unknown) => v },
 }));
 
 import {
@@ -243,6 +248,67 @@ describe('2026-10-02：集合读迁入 prod 域（3 条）', () => {
     expect(await fetchedPath(() => listInspectionBatches())).toBe('/prod/batches/inspection');
     expect(await fetchedPath(() => listRepairBatches())).toBe('/prod/batches/repair');
     expect(await fetchedPath(() => listRepairingBatches())).toBe('/prod/batches/repairing');
+  });
+});
+
+describe('2026-10-03：待品检端点的 Query 参数集（VO 收口的另一半）', () => {
+  /** 发一次 listInspectionBatches 并取回实际打到 axios 的 params。 */
+  async function inspectionQueryParams(
+    run: () => Promise<unknown>,
+  ): Promise<Record<string, unknown>> {
+    httpGetMock.mockReset();
+    httpGetMock.mockResolvedValue({ data: { items: [], total: '0', limit: '200', offset: '0' } });
+    await run();
+    const config = httpGetMock.mock.calls[0]![1] as { params: Record<string, unknown> };
+    return config.params;
+  }
+
+  it('R7：新参数集（三个 ILIKE + 客户 + 系统交期 + 排序 + 分页）逐个落到 axios params', async () => {
+    const params = await inspectionQueryParams(() =>
+      listInspectionBatches({
+        drawing_no: 'A',
+        name: 'B',
+        serial_no: 'C',
+        customer_id: '9000000000001',
+        system_delivery_date_from: '2026-10-01',
+        system_delivery_date_to: '2026-10-31',
+        sort_by: 'NAME',
+        sort_dir: 'ASC',
+        limit: 20,
+        offset: 40,
+      }),
+    );
+    expect(params).toEqual({
+      drawing_no: 'A',
+      name: 'B',
+      serial_no: 'C',
+      customer_id: '9000000000001',
+      system_delivery_date_from: '2026-10-01',
+      system_delivery_date_to: '2026-10-31',
+      sort_by: 'NAME',
+      sort_dir: 'ASC',
+      limit: 20,
+      offset: 40,
+    });
+  });
+
+  it('R8：已废弃的 keyword / planned_delivery_date_* 绝不出现在 axios params 上', async () => {
+    // 后端 2026-10-03 起不再接受这 3 个键（日期筛选改筛系统交期，keyword 拆成
+    // drawing_no / name / serial_no 三个独立子串）。`src/views/inspection/` 的旧
+    // fetcher 仍在传它们，而那属页面层改造范围 —— api 边界的剥离逻辑保证它们
+    // 永远不发到 wire 上（后端 Query DTO 一旦开 deny_unknown_fields 就会 400）。
+    const params = await inspectionQueryParams(() =>
+      listInspectionBatches({
+        drawing_no: 'A',
+        keyword: '废弃',
+        planned_delivery_date_from: '2026-10-01',
+        planned_delivery_date_to: '2026-10-31',
+      }),
+    );
+    expect(params).toEqual({ drawing_no: 'A' });
+    expect(params).not.toHaveProperty('keyword');
+    expect(params).not.toHaveProperty('planned_delivery_date_from');
+    expect(params).not.toHaveProperty('planned_delivery_date_to');
   });
 });
 

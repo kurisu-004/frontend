@@ -5,8 +5,9 @@
 // 所有 ID 在前端是字符串（雪花 ID 经后端 IdStr 序列化）。
 // 2026-08-25：从原 1165 行 api/parts.ts 拆分到 ./ 子文件；本文件是 ./crud 子域。
 //
-// 跨子域类型引用：InspectionBatchListResult 定义在 ./batch（listRepairBatches /
-// listRepairingBatches 是单件 lifecycle，但响应形态与品检待办一致）。用 `import type`
+// 跨子域类型引用：RepairBatchListResult 定义在 ./batch（listRepairBatches /
+// listRepairingBatches 是单件 lifecycle，但响应形态一致 —— 两条端点共用后端
+// `InspectionBatchListItemOut`）。用 `import type`
 // 顶置避免 inline import 的可读性问题；type-only 导入是擦除的，运行时无循环代价。
 //
 // 2026-10-01：`listPendingProgramming`（GET /parts/pending-programming，恒返空）已删除，
@@ -14,7 +15,7 @@
 // （api/programming.ts）。本文件不再 import partListResultSchema（随该函数一并移除）。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
-import { inspectionBatchListResultSchema } from '@/composables/queries/schemas';
+import { repairBatchListResultSchema } from '@/composables/queries/schemas';
 import type { OutsourceSendableListResult } from '@/types/outsource';
 import type {
   LocationTreeNode,
@@ -25,7 +26,7 @@ import type {
   PartSortKey,
   SortDir,
 } from '@/types/parts';
-import type { InspectionBatchListResult } from './batch';
+import type { RepairBatchListResult } from './batch';
 
 export interface PartItem {
   id: string;
@@ -750,17 +751,15 @@ export async function completePartRepair(
 
 /** 返修接收 Tab·已送货（DELIVERED 批次；PR-M 2026-08-04）。
  *
- * 2026-08-25 注：返回类型 InspectionBatchListResult 定义在 ./batch（listRepairBatches
- * 是单件 lifecycle 端点，但响应形态与品检待办一致）；用 type-only 跨子域引用。
+ * 2026-08-25 注：返回类型 RepairBatchListResult 定义在 ./batch（listRepairBatches
+ * 是单件 lifecycle 端点，但与 listRepairingBatches 共用同一个后端 VO
+ * `InspectionBatchListItemOut`）；用 type-only 跨子域引用。
  *
- * 2026-10-02 补 Zod 守门：此前是 `return resp.data` 零校验，与同形态的
- * listInspectionBatches（./batch:333）不一致。三个端点
- * （inspection-batches / repair-batches / repairing-batches）**共用同一个 Rust VO**
- * `InspectionBatchListItemOut`（backend-rust vo/inspection.rs 头注明确写了这点），
- * 所以共用同一个 schema 是契约事实、不是复用偷懒。零守门的代价是这次踩到的坑：
- * `is_repairing`（2026-10-01 后端 M5 恒输出）没被 schema 声明时，
- * `listInspectionBatches` 整页抛 unrecognized_keys 白屏，而本函数会**静默**把
- * 多出来的键丢掉 —— 同一个契约漂移在两个调用点表现完全相反，最难排查。
+ * 2026-10-02 补 Zod 守门：此前是 `return resp.data` 零校验。两条返修端点共用
+ * `repairBatchListResultSchema`（./batch 的 listInspectionBatches 同期换成 13 字段
+ * 精简 VO 后，品检 / 返修不再是同一个 VO，也不再是同一个 schema —— 行对象不可互相
+ * cast）。零守门的代价是踩过的坑：`is_repairing`（后端恒输出）没被 schema 声明时，
+ * 本函数会**静默**把多出来的键丢掉，页面照常渲染、只是列全空。
  * 守门只在这一处（不在 useXxxQuery 里再 parse —— Zod parse 是深拷贝，两处都做
  * 等于白拷一次）。 */
 export async function listRepairBatches(
@@ -771,19 +770,19 @@ export async function listRepairBatches(
     limit?: number;
     offset?: number;
   } = {},
-): Promise<InspectionBatchListResult> {
+): Promise<RepairBatchListResult> {
   // 2026-10-02 迁 prod 域：与已有的 `GET /prod/batches/pending` 并列，
   // 路径 `/parts/repair-batches` → `/prod/batches/repair`（无 path 参数）。
   const resp = await api.get<unknown>('/prod/batches/repair', {
     params: cleanParams(params),
   });
-  return inspectionBatchListResultSchema.parse(resp.data) as InspectionBatchListResult;
+  return repairBatchListResultSchema.parse(resp.data) as RepairBatchListResult;
 }
 
 /** 返修接收 Tab·返修中（PR-M 2026-08-04）。
  *
- * 2026-10-02 补 Zod 守门，理由同 listRepairBatches（共用 InspectionBatchListItemOut VO
- * + 本函数此前零校验）。注意本端点的过滤判据 2026-10-01 起已从
+ * 2026-10-02 补 Zod 守门，理由同 listRepairBatches（共用后端 VO + 本函数此前零
+ * 校验）。注意本端点的过滤判据 2026-10-01 起已从
  * `status='REPAIRING'` 改为 `is_repairing = true`（migration 005）——
  * 响应行的 `status` 恒为 `IN_PROCESS`，**不要**再靠 status 判「返修中」。 */
 export async function listRepairingBatches(
@@ -794,12 +793,12 @@ export async function listRepairingBatches(
     limit?: number;
     offset?: number;
   } = {},
-): Promise<InspectionBatchListResult> {
+): Promise<RepairBatchListResult> {
   // 2026-10-02 迁 prod 域：`/parts/repairing-batches` → `/prod/batches/repairing`。
   const resp = await api.get<unknown>('/prod/batches/repairing', {
     params: cleanParams(params),
   });
-  return inspectionBatchListResultSchema.parse(resp.data) as InspectionBatchListResult;
+  return repairBatchListResultSchema.parse(resp.data) as RepairBatchListResult;
 }
 
 /** PR-M 2026-08-04 续：一步式返修下发（DELIVERED → REPAIRING → ON_SHELF/INSPECTION）。
