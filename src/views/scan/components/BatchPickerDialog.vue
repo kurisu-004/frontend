@@ -11,6 +11,8 @@
 
   单行点选即关弹窗（不可改）。卡片按批次号升序展示；显示 batch_no / 数量 /
   当前 holder 文本 / 下一工序。点击 emit('pick')，调用方按业务需要驱动后续动作。
+  2026-10-03：行 VO 形态不同时（宽 VO 有 holder 字段、窄 VO 没有）meta 行会整行
+  隐藏而不是留一行空文案，详见 holderText 的注释。
 -->
 
 <template>
@@ -45,8 +47,10 @@
           <span class="name">{{ b.name }}</span>
           <span class="qty">× {{ b.quantity }}</span>
         </div>
-        <div class="batch-meta">
-          <span class="holder">
+        <!-- 2026-10-03：整行按「有没有可显示的信息」条件渲染。holderText 返回空串
+             （窄 VO 一个 holder 键都没有）且无下一工序时不留空行。 -->
+        <div v-if="holderText(b) || b.next_process_name" class="batch-meta">
+          <span v-if="holderText(b)" class="holder">
             <el-icon><Box /></el-icon>
             <span>{{ holderText(b) }}</span>
           </span>
@@ -86,7 +90,17 @@ const sortedRows = computed(() =>
   }),
 );
 
-/** 显示卡片当前 holder：kind='shelf' 取货架码，'worker' 取工人名，'outsource_company' 取公司名 */
+/** 显示卡片当前 holder：kind='shelf' 取货架码，'worker' 取工人名，'outsource_company' 取公司名。
+ *
+ *  2026-10-03 新增空串分支：本组件是跨域共享组件，`views/scan/` 与
+ *  `views/delivery/` 的调用方传 28 字段 VO（`location` / `current_holder_display`
+ *  **键恒在**），而「待品检一览」页传 13 字段的 `InspectionQueueItem` —— 它一个
+ *  holder 键都没有，走 default 分支只能落到兜底文案，于是每张卡片多一行
+ *  无信息量的「未知位置」。窄 VO 直接返回空串，让模板整行隐藏 meta。
+ *
+ *  判据刻意用「键在不在」（`in`）而不是「值是否 null」：28 字段 VO 的 location
+ *  值可合法为 null（尚未上架的 PENDING 批次），那种场景必须继续显示「未知位置」，
+ *  否则 views/scan / views/delivery 的既有卡片会少一行信息。 */
 function holderText(p: PartItem): string {
   switch (p.current_holder_kind) {
     case 'shelf':
@@ -96,6 +110,9 @@ function holderText(p: PartItem): string {
     case 'outsource_company':
       return p.outsource_company_name ? `外协 ${p.outsource_company_name}` : '外协 —';
     default:
+      if (!('current_holder_kind' in p || 'current_holder_display' in p || 'location' in p)) {
+        return '';
+      }
       return p.current_holder_display ?? p.location ?? '未知位置';
   }
 }

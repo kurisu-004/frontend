@@ -93,6 +93,7 @@ vi.mock('@/api/process', () => ({
 }));
 
 import { useInspectionListStore } from '../useInspectionListStore';
+import { qk } from '@/composables/queries/keys';
 import { INSPECTION_SORT_KEY_TO_PROP } from '@/types/inspection';
 import type { InspectionQueueItem } from '@/api/parts';
 
@@ -121,17 +122,18 @@ const LIST_RESULT = {
   offset: '0',
 };
 
-function setupApp(): void {
+/** 返回本用例用的 QueryClient —— 失效调用点要 spy 它的 invalidateQueries。 */
+function setupApp(): QueryClient {
   const app = createApp({});
   app.use(createPinia());
-  // retry: 0 与 src/main.ts 的全局默认对齐 —— 不对齐的话查询失败会按 v5 默认重试 3 次
-  // （指数退避），错误态几秒后才可见，「watch → ElMessage.error」用例就测不到。
-  app.use(VueQueryPlugin, {
-    queryClient: new QueryClient({
-      defaultOptions: { queries: { retry: 0 }, mutations: { retry: 0 } },
-    }),
+  const queryClient = new QueryClient({
+    // retry: 0 与 src/main.ts 的全局默认对齐 —— 不对齐的话查询失败会按 v5 默认重试 3 次
+    // （指数退避），错误态几秒后才可见，「watch → ElMessage.error」用例就测不到。
+    defaultOptions: { queries: { retry: 0 }, mutations: { retry: 0 } },
   });
+  app.use(VueQueryPlugin, { queryClient });
   setActivePinia(app.config.globalProperties.$pinia);
+  return queryClient;
 }
 
 /** 等 useQuery 的 scheduler 跑过一轮（与零件一览那份 spec 同款：20ms 微任务窗口）。 */
@@ -140,9 +142,10 @@ function tick(): Promise<void> {
 }
 
 describe('useInspectionListStore', () => {
+  let qc: QueryClient;
   beforeEach(() => {
     vi.clearAllMocks();
-    setupApp();
+    qc = setupApp();
     listInspectionBatchesMock.mockResolvedValue(LIST_RESULT);
     try {
       localStorage.clear();
@@ -257,7 +260,12 @@ describe('useInspectionListStore', () => {
     await tick();
     listInspectionBatchesMock.mockClear();
 
-    // 默认态：只发排序 + 分页，不发 5 个筛选键。
+    // 默认态：只发排序 + 分页，不带 5 个筛选键。
+    // ⚠️ 本用例只断到 **buildParams 层**：本 spec `vi.mock('@/api/parts')`，
+    // `listInspectionBatches` 是被 mock 掉的，`cleanParams` 那层「undefined 键不上
+    // wire」根本不会执行 —— `params.xxx === undefined` ≠ 「axios 没发这个键」。
+    // 真 wire 形态（`toEqual` 逐键比对 axios 收到的 params）在
+    // `src/api/parts/__tests__/routes.spec.ts` 的 R7 用例里验。
     store.query.search.drawingNo = '   ';
     store.query.pageSize = 20;
     await store.query.fetchList();
@@ -328,6 +336,9 @@ describe('useInspectionListStore', () => {
     expect(listInspectionBatchesMock).not.toHaveBeenCalled();
 
     // 显式 fetchList 仍可用（refetch 别名，不重写 queryKey）。
+    // ⚠️ 前提：refetch **绕过 enabled**（TanStack 的既有语义），所以这一步发请求
+    // 并不意味着闸门漏了 —— 闸门管的是「queryKey 变化触发的自动 fetch」。
+    // 这正是 fetchList 存在的意义：视图 / 测试要能在闸门关着时手动取一次数据。
     await store.query.fetchList();
     expect(listInspectionBatchesMock).toHaveBeenCalledTimes(1);
 
@@ -394,17 +405,29 @@ describe('useInspectionListStore', () => {
   });
 
   // ============ resetAllFilters ============
-  it('resetAllFilters 清全部列筛选 + 回第 1 页，保留排序与分页大小', async () => {
+  it('resetAllFilters 清已确认筛选 + 未确认草稿 + popover 打开态，回第 1 页，保留排序与分页大小', async () => {
     const store = useInspectionListStore();
-    store.query.search.drawingNo = 'A';
-    store.query.search.name = 'B';
-    store.query.search.serialNo = 'C';
-    store.query.search.customerId = '9000000000001';
-    store.query.search.systemDeliveryDateFrom = '2026-10-01';
-    store.query.search.systemDeliveryDateTo = '2026-10-31';
+    // 先各 confirm 一遍（把 search 写成非空），再手动制造「未确认草稿 + 弹窗开着」。
+    store.filters.serialNoFilter.draft = 'C';
+    store.filters.serialNoFilter.confirm();
+    store.filters.drawingNoFilter.draft = 'A';
+    store.filters.drawingNoFilter.confirm();
+    store.filters.nameFilter.draft = 'B';
+    store.filters.nameFilter.confirm();
+    store.filters.customerFilter.draft = '9000000000001';
+    store.filters.customerFilter.confirm();
+    store.filters.systemDateFilter.range = ['2026-10-01', '2026-10-31'];
+    store.filters.systemDateFilter.confirm();
     store.query.sortBy = 'QUANTITY';
     store.query.page = 4;
     store.query.pageSize = 50;
+    // 三个「未确认」现场：草稿有值、弹窗开着（用户正在输、还没点确定）。
+    store.filters.drawingNoFilter.draft = 'DRAFT-DWG';
+    store.filters.drawingNoFilter.visible = true;
+    store.filters.customerFilter.draft = '9999999999999';
+    store.filters.customerFilter.visible = true;
+    store.filters.systemDateFilter.range = ['2026-12-01', '2026-12-31'];
+    store.filters.systemDateFilter.visible = true;
 
     store.query.resetAllFilters();
 
@@ -418,10 +441,40 @@ describe('useInspectionListStore', () => {
     // 排序与分页大小保留（排序是「视图」不是「筛选」）。
     expect(store.query.sortBy).toBe('QUANTITY');
     expect(store.query.pageSize).toBe(50);
+    // 半截草稿与 popover 打开态也要清 —— 否则用户下次在弹窗里点「确定」
+    // 会把重置前的旧草稿又写回 search。
+    expect(store.filters.drawingNoFilter.draft).toBe('');
+    expect(store.filters.drawingNoFilter.visible).toBe(false);
+    expect(store.filters.customerFilter.draft).toBeNull();
+    expect(store.filters.customerFilter.visible).toBe(false);
+    expect(store.filters.systemDateFilter.range).toBeNull();
+    expect(store.filters.systemDateFilter.visible).toBe(false);
   });
 
-  // ============ 表头筛选状态机（两段式 + 区间直写）============
-  it('表头筛选 confirm 写 search 并回第 1 页；reset 清空', () => {
+  // ============ 列可见性（lenient 恢复）============
+  it('列可见性 lenient 恢复：只有旧快照的 batch_label 时，批次列（现 key=batch_no）仍默认可见', () => {
+    // 批次列的 key 由 batch_label 改成 batch_no（VO 收口），旧 localStorage 快照里
+    // 存的是 batch_label。useColumnVisibility 的 lenient 策略只覆盖 defs 里存在的
+    // key ⇒ 旧快照中不存在的 batch_no 落回 defaultVisible（true）。
+    localStorage.setItem(
+      'myerp.list.anon.inspection_pending_columns',
+      JSON.stringify({ batch_label: false, name: false }),
+    );
+    const store = useInspectionListStore();
+    // 旧快照里存在的 key 被采纳（name 被隐藏）。
+    expect(store.columnVisibility.isVisible('name')).toBe(false);
+    // 旧快照里不存在的 key 回到默认可见 —— 这条是「改 key 不丢列」的回归守卫。
+    expect(store.columnVisibility.isVisible('batch_no')).toBe(true);
+    // showAll / update 联动：showAll 后旧 key 也一并可见。
+    store.columnVisibility.showAll();
+    expect(store.columnVisibility.isVisible('name')).toBe(true);
+    store.columnVisibility.update({ batch_no: false, name: true });
+    expect(store.columnVisibility.isVisible('batch_no')).toBe(false);
+    expect(store.columnVisibility.isVisible('name')).toBe(true);
+  });
+
+  // ============ 表头筛选状态机（全部 draft → confirm）============
+  it('5 个表头筛选都走 draft → confirm：选值不写 search，点确定才写并回第 1 页', () => {
     const store = useInspectionListStore();
     store.query.page = 3;
 
@@ -436,16 +489,27 @@ describe('useInspectionListStore', () => {
     expect(store.query.search.serialNo).toBe('');
     expect(store.filters.serialNoFilter.active).toBe(false);
 
-    // 系统交期区间：computed 直写 search（无 draft），confirm 只触发查询。
-    store.filters.systemDateRange = ['2026-10-01', '2026-10-31'];
+    // 系统交期区间同样是 draft → confirm（2026-10-03 从「computed 直写 search」改过来）：
+    // 关键断言是「写 range 不写 search」—— 直写形态会在用户还停在第 3 页时就用
+    // 「旧 page=3 + 新筛选」发一次（多半 0 行、闪空态），点确定后又发第二次。
+    store.filters.systemDateFilter.range = ['2026-10-01', '2026-10-31'];
+    expect(store.query.search.systemDeliveryDateFrom).toBe('');
+    expect(store.query.search.systemDeliveryDateTo).toBe('');
+    expect(store.filters.systemDateFilter.active).toBe(false);
+
+    store.query.page = 3;
+    store.filters.systemDateFilter.confirm();
     expect(store.query.search.systemDeliveryDateFrom).toBe('2026-10-01');
     expect(store.query.search.systemDeliveryDateTo).toBe('2026-10-31');
     expect(store.filters.systemDateFilter.active).toBe(true);
-    store.filters.systemDateFilter.confirm();
     expect(store.query.page).toBe(1);
+    // sync 把已确认值回写草稿（二次打开 popover 看到原状）。
+    store.filters.systemDateFilter.sync();
+    expect(store.filters.systemDateFilter.range).toEqual(['2026-10-01', '2026-10-31']);
     store.filters.systemDateFilter.reset();
     expect(store.query.search.systemDeliveryDateFrom).toBe('');
     expect(store.filters.systemDateFilter.active).toBe(false);
+    expect(store.filters.systemDateFilter.range).toBeNull();
 
     // 客户：draft → confirm，且雪花 ID 保持字符串。
     store.filters.customerFilter.draft = '9000000000001';
@@ -461,6 +525,11 @@ describe('useInspectionListStore', () => {
     const store = useInspectionListStore();
     store.registerActions({ onPass: vi.fn(), onOpenFail: vi.fn(), onDetail: vi.fn() });
     toShipMock.mockResolvedValue({ part: {}, new_batch_id: null });
+    // 写完要失效本域。断的是「invalidateQueries 被以 qk 工厂的域前缀调过」——
+    // 断言一个永远非空的 computed（items）什么也证明不了。
+    // 之所以可断：queryKey 前缀是 qk 工厂的产物（不在调用点拼字面量），spy 拿到的
+    // 第一个参数就是它本身。
+    const spy = vi.spyOn(qc, 'invalidateQueries');
 
     await store.mutations.toShipMutation.mutateAsync({
       batchId: '190000000000001',
@@ -471,8 +540,7 @@ describe('useInspectionListStore', () => {
 
     expect(toShipMock).toHaveBeenCalledWith('190000000000001', { version: 7, quantity: 4 });
     expect(ElMessage.success).toHaveBeenCalledWith('零件 SN-A 品检通过 × 4');
-    // 写完失效本域（queryKey 前缀走 qk 工厂，不拼字面量）。
-    expect(store.query.items).toBeDefined();
+    expect(spy).toHaveBeenCalledWith({ queryKey: qk.inspectionPrefix });
   });
 
   it('品检通过遇到 40901 走 warning + 重拉，不弹通用 error', async () => {
@@ -542,6 +610,33 @@ describe('useInspectionListStore', () => {
       note: null,
       quantity: null,
     });
+  });
+
+  it('扫码快捷品检遇到 40901 同样走 warning + 重拉（与 toShip / toProcess 同款）', async () => {
+    const { ElMessage } = await import('element-plus');
+    const store = useInspectionListStore();
+    listInspectionBatchesMock.mockClear();
+    scanInspectMock.mockRejectedValue(Object.assign(new Error('版本冲突'), { code: 40901 }));
+
+    await expect(
+      store.mutations.scanInspectMutation.mutateAsync({
+        batchId: 'B1',
+        targetInspectionShelfId: 'IS1',
+        pass: true,
+        version: 7,
+        shelfId: null,
+        nextProcessId: null,
+        note: null,
+        quantity: null,
+        label: 'SN-A',
+      }),
+    ).rejects.toThrow('版本冲突');
+
+    // 40901 的文案必须比通用「快捷品检失败：版本冲突」有指导性，且重拉列表。
+    expect(ElMessage.warning).toHaveBeenCalledWith('该批次已被他人修改，请刷新后重试');
+    expect(ElMessage.error).not.toHaveBeenCalled();
+    await tick();
+    expect(listInspectionBatchesMock).toHaveBeenCalled();
   });
 
   // ============ 不变量 #2：$dispose 重建 ============

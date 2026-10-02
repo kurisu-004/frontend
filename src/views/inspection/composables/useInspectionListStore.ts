@@ -187,6 +187,27 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     page.value = 1;
   }
 
+  // ============ 切片：filters（表头筛选状态机）============
+  // 声明在 query 切片之前：resetAllFilters 要拿它把「已确认值 + 未确认草稿 + popover
+  // 打开态」一起清掉（见该函数），而 filters 的 deps 只有 search 与上面这个 onSearch。
+  const filters = useInspectionColumnFilters({ search, onSearch });
+
+  // 工具栏「重置筛选」委托给 5 个筛选状态机的 reset：每个 reset 同时清「已确认值
+  // （写回 search）」「未确认草稿（draft）」「popover 打开态（visible）」。只清 search
+  // 是不够的 —— popover 正开着时点重置，active 会转 false 但草稿还在，用户下次在弹窗里
+  // 点「确定」又把旧值写回去。
+  //
+  // **保留**排序与分页大小（与 usePartsListStore.resetAllFilters 的取舍一致：排序是
+  // 「视图」不是「筛选」，连带清掉会让用户每次重置都要重新点一次表头）。
+  function resetAllFilters(): void {
+    filters.serialNoFilter.reset();
+    filters.drawingNoFilter.reset();
+    filters.nameFilter.reset();
+    filters.systemDateFilter.reset();
+    filters.customerFilter.reset();
+    page.value = 1;
+  }
+
   function onSortChange({
     prop,
     order,
@@ -201,20 +222,13 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     // 不手动 fetchList：queryKey 变了，useQuery 自己会 refetch。
   }
 
-  /** 工具栏「重置筛选」：清全部列筛选 + 回第 1 页，**保留**排序与分页大小
-   *  （与 usePartsListQuery.resetAllFilters 的取舍一致：排序是「视图」不是「筛选」，
-   *  连带清掉会让用户每次重置都要重新点一次表头）。 */
-  function resetAllFilters(): void {
-    search.serialNo = '';
-    search.drawingNo = '';
-    search.name = '';
-    search.customerId = '';
-    search.systemDeliveryDateFrom = '';
-    search.systemDeliveryDateTo = '';
-    page.value = 1;
-  }
-
   // 持久化：筛选 / 排序 / 分页大小（**不**持久化 page —— 恢复时可能停在一个不存在的页）。
+  //
+  // 为什么这个 key 不会与列可见性 / 列顺序快照互相污染：三处 localStorage key 形态不同
+  // （`inspection_pending_filter` vs `inspection_pending_columns` vs
+  // `inspection_pending_columnOrder`），而 `useListFilterPersist.restore()` 还有一道
+  // 「每个 dep key 都必须存在于快照，缺一即整份丢弃返回 null」的全键存在性校验 ——
+  // 即使将来某个 key 改名撞车，也会退化成「不恢复」而不是把别的快照当筛选读进来。
   const { restore: restorePersist } = useListFilterPersist<InspectionSearchState>(
     'inspection_pending_filter',
     { search, sortBy, sortDir, pageSize },
@@ -274,9 +288,6 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     resetAllFilters,
     restoreState,
   };
-
-  // ============ 切片：filters（表头筛选状态机）============
-  const filters = useInspectionColumnFilters({ search, onSearch });
 
   // ============ 切片：mutations（品检流转写操作）============
   /** 行内按钮 loading 态锚：正在提交品检通过的行 batch_id。
@@ -361,7 +372,15 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
         vars.pass ? `零件 ${vars.label} 快捷品检通过` : `零件 ${vars.label} 已快捷打回`,
       );
     },
-    onError: (e: Error) => {
+    onError: async (e: Error & { code?: number }) => {
+      // 40901：批次已被他人改动（OCC version 不匹配）—— 与 toShip / toProcess 同款分支。
+      // 扫码快捷品检尤其需要它：版本锚错（见 InspectionPending.vue 里 PartItem.version
+      // 的说明）时后端必回 40901，走通用分支只会显示无指导性的「快捷品检失败：批次已被他人修改」。
+      if (e?.code === 40901) {
+        ElMessage.warning('该批次已被他人修改，请刷新后重试');
+        await fetchList();
+        return;
+      }
       ElMessage.error(`快捷品检失败：${e?.message ?? '未知错误'}`);
     },
   });
@@ -398,15 +417,11 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   const processes = computed<Process[]>(
     () => (processesQuery.data.value?.items ?? []) as Process[],
   );
-  const optionsLoading = computed<boolean>(
-    () => inspectionShelvesQuery.isFetching.value || processesQuery.isFetching.value,
-  );
 
   const options = {
     inspectionShelves,
     productionShelves,
     processes,
-    optionsLoading,
   };
 
   // ============ 切片：columnDefs + columnVisibility ============

@@ -223,8 +223,9 @@ export const qk = {
   //       - scan 域工人放回 `workerScan` event_type=RETURNED
   //         （ScanReturnParts.vue:563）—— service 同事务跑 WorkerPool refill，
   //         放回即从池里抢批，counts / by-process / state 三域同时变；
-  //       - inspection 域 `scanInspect`（InspectionPending.vue:962）—— 品检流转，
-  //         IN_PROCESS+PRODUCTION_SHELF 起点同样会离开候选池；
+  //       - inspection 域 `scanInspect`（`useInspectionListStore` 的
+  //         `scanInspectMutation`）—— 品检流转，IN_PROCESS+PRODUCTION_SHELF
+  //         起点同样会离开候选池；
   //       - outsource 域收发（useOutsourceSendableList / usePartDetail 的
   //         receiveFromOutsource / useOutsourceReceivingList）—— send 移出候选池、
   //         receive 移入候选池。

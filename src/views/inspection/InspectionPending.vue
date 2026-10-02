@@ -403,11 +403,12 @@
     </el-dialog>
 
     <!-- 扫码命中同一 serial 多批次时复用报工台 BatchPickerDialog。
-         2026-10-03：rows 改传 `InspectionQueueItem[]`，在 props 边界做**一次**
-         `as unknown as PartItem[]` 转换（BatchPickerDialog 的 props 类型写死 PartItem[]，
-         且其 holderText 依赖 shelf_code / worker_name 等返修/扫码台专属字段，
-         在本页恒走 default 分支）。旧版是「返修 VO 别名 ↔ PartItem」双向双 cast，
-         现只剩这一处单向转换。 -->
+         2026-10-03：这是一对**往返** cast —— props 入口 `InspectionQueueItem[]`
+         → `PartItem[]`、pick 出口 `PartItem` → `InspectionQueueItem`，因为
+         BatchPickerDialog 的 props / emits 类型都写死了 PartItem。cast 存在是因为
+         该组件是跨域共享组件、不该为接一个窄 VO 而改签名。
+         holderText 在本页恒返回空串（13 字段 VO 无任何 holder 键）⇒ 卡片不再显示
+         「未知位置」那一行，见 BatchPickerDialog.holderText 的注释。 -->
     <BatchPickerDialog
       v-model="showBatchPicker"
       :code="batchPickerCode"
@@ -445,6 +446,7 @@ import { INSPECTION_SORT_KEY_TO_PROP } from '@/types/inspection';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import InspectionTable from './components/InspectionTable.vue';
 import { useInspectionListStore } from './composables/useInspectionListStore';
+import { resolveScanRouteStatus } from './composables/resolveScanRouteStatus';
 
 // 不变量 #1：壳 setup 顶部首调 store。
 const store = useInspectionListStore();
@@ -719,7 +721,8 @@ async function onScanInspectConfirm(): Promise<void> {
       pass: scanInspectDecision.value === 'PASS',
       // ⚠️ PartItem.version 是 t_part.version，不是 t_part_batch.version —— 批次锚
       // 端点要的是后者。part 级端点拿不到批次版本，故这里按 part 版本发（与 2026-09-30
-      // 版的既有行为一致），后端 40901 会被 onError 转成「批次已被他人修改」提示。
+      // 版的既有行为一致）；后端返 40901 时由 scanInspectMutation.onError 转成
+      // 「该批次已被他人修改，请刷新后重试」（同 toShip / toProcess 的分支）。
       version: row.version,
       shelfId: scanInspectShelfIdFail.value || null,
       nextProcessId: scanInspectProcessId.value || null,
@@ -770,7 +773,10 @@ async function onInspectionScan(rawCode: string): Promise<void> {
     passDialogVisible.value ||
     failDialogVisible.value ||
     scanChooserOpen.value ||
-    scanInspectDialogVisible.value
+    scanInspectDialogVisible.value ||
+    // 批次选择弹窗也要守：它开着时再扫一次码会直接改写 batchPickerRows / batchPickerCode，
+    // 用户在旧候选集上做的选择会张冠李戴（2026-10-03 补齐，此前漏守）。
+    showBatchPicker.value
   ) {
     return;
   }
@@ -796,24 +802,17 @@ async function onInspectionScan(rawCode: string): Promise<void> {
   scanChooserOpen.value = true;
 }
 
-/** getPartBySerial fallback 专用分流（part 级形态，有真实 status / location）：
- *  - INSPECTION：走到这里说明该批次被当前筛选 / 分页挡在列表外（页内命中已由上面的
- *    快路径处理）。**不能**像 2026-09-30 版那样直接弹二选一 —— 那是拿 part 级形态
- *    冒充批次行，`batch_id` 为 undefined，品检通过 / 指定工序都会打成
- *    `/prod/batches/undefined/...` 的必失败请求。这里明确提示用户调整筛选范围；
- *  - PENDING / PROGRAMMING / IN_PROCESS+PRODUCTION_SHELF → 扫码快捷品检弹窗；
- *  - 其他（IN_PROCESS+WORKER / READY_TO_SHIP / DELIVERED / REPAIRING / OUTSOURCE）
- *    → 降级为「显示当前位置」提示。 */
+/** getPartBySerial fallback 专用分流。判据已抽成纯函数
+ *  `resolveScanRouteStatus`（`composables/resolveScanRouteStatus.ts`，穷举单测在
+ *  `composables/__tests__/resolveScanRouteStatus.spec.ts`）—— 本页 4 个弹窗 + 扫码
+ *  订阅 + timer 挂载成本过高，判据本身是本次唯一改了用户可见行为的地方，值得单独测。 */
 function routeScannedPart(part: PartItem): void {
-  if (part.status === 'INSPECTION') {
+  const route = resolveScanRouteStatus(part.status, part.location);
+  if (route === 'inspection-out-of-range') {
     ElMessage.warning('该零件在品检中，但不在当前筛选 / 分页范围内；请调整筛选或翻页后操作');
     return;
   }
-  if (
-    part.status === 'PENDING' ||
-    part.status === 'PROGRAMMING' ||
-    (part.status === 'IN_PROCESS' && part.location === 'PRODUCTION_SHELF')
-  ) {
+  if (route === 'scan-inspect') {
     openScanInspectDialog(part);
     return;
   }

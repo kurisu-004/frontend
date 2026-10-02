@@ -11,13 +11,14 @@
 //   - 序列号 → search.serialNo            （draft → confirm 两段式）
 //   - 图号   → search.drawingNo           （draft → confirm 两段式）
 //   - 名称   → search.name                （draft → confirm 两段式）
-//   - 系统交期 → search.systemDeliveryDateFrom / To（computed range model 直写，无 draft）
+//   - 系统交期 → search.systemDeliveryDateFrom / To（draft → confirm 两段式）
 //   - 客户   → search.customerId          （ElTreeSelect 单选，draft → confirm）
 //
 // 两段式（draft → confirm）的原因：popover 里的输入是「草稿」，只有点「确定」才写进
-// search 并触发一次查询；直接 v-model 绑 search 会每敲一个字符发一次请求。
+// search 并触发一次查询；直接 v-model 绑 search 会每敲一个字符发一次请求，日期区间
+// 则会让「旧页码 + 新筛选」先闪一次空态再发第二次。
 
-import { computed, ref, type ComputedRef, type Ref, type WritableComputedRef } from 'vue';
+import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
 
@@ -54,7 +55,10 @@ interface TextFilter {
 
 interface DateRangeFilter {
   visible: Ref<boolean>;
+  /** popover 内的**未确认草稿**（ElDatePicker 的 v-model 载体）。确认后才写进 search。 */
+  range: Ref<[string, string] | null>;
   active: ComputedRef<boolean>;
+  sync: () => void;
   confirm: () => void;
   reset: () => void;
 }
@@ -81,15 +85,9 @@ export interface UseInspectionColumnFiltersReturn {
   nameFilter: TextFilter;
   /** 系统交期区间 popover 状态机。 */
   systemDateFilter: DateRangeFilter;
-  /** 系统交期区间的 v-model 载体（computed getter/setter 直写 search，无 draft）。
-   *  单独导出是为了让列定义的 ElDatePicker 直接绑它 —— 见 `inspectionColumnDefs.ts`。 */
-  systemDateRange: WritableComputedRef<[string, string] | null>;
   customerFilter: CustomerFilter;
   /** 客户树（共享 `useCustomersQuery` 缓存，ElTreeSelect 的 data）。 */
   customerTree: ComputedRef<CustomerCascaderNode[]>;
-  customerLoading: ReturnType<typeof useCustomerTree>['loading'];
-  /** 选中叶子客户 → 其 L1 根客户 id（后端拿 L1 会展开成 L1+L2 全集）。 */
-  resolveRootCustomerId: (pickedId: string | null) => string | null;
 }
 
 export function useInspectionColumnFilters(
@@ -97,7 +95,9 @@ export function useInspectionColumnFilters(
 ): UseInspectionColumnFiltersReturn {
   // 客户树走共享基础数据层（useCustomerTree → useCustomersQuery，30s staleTime），
   // 与零件一览页共用同一份缓存。
-  const { tree: customerTree, loading: customerLoading, resolveRootCustomerId } = useCustomerTree();
+  // 2026-10-03：只取 tree —— 本页的 confirmCustomerFilter 刻意**不**用
+  // resolveRootCustomerId（见该函数注释），loading 也没有消费方，故两者不导出。
+  const { tree: customerTree } = useCustomerTree();
 
   // ============ 文本列（序列号 / 图号 / 名称）============
   function makeTextFilter(field: TextField): TextFilter {
@@ -126,41 +126,49 @@ export function useInspectionColumnFilters(
   const drawingNoFilter = makeTextFilter('drawingNo');
   const nameFilter = makeTextFilter('name');
 
-  // ============ 系统交期区间（无 draft：range model 直写 search）============
+  // ============ 系统交期区间（draft → confirm 两段式）============
   // 2026-10-03：日期筛选从「计划交期」改「系统交期」—— 计划交期列随 VO 收口删除，
-  // 继续筛一个用户看不到的列没有意义。区间只有起止两格、没有「文本草稿」这层中间态，
-  // 所以直接用 computed 的 get/set 双向桥（照 usePartsColumnFilters 的 makeRangeModel）。
-  const systemDateRange = computed<[string, string] | null>({
-    get: () =>
-      deps.search.systemDeliveryDateFrom || deps.search.systemDeliveryDateTo
-        ? ([deps.search.systemDeliveryDateFrom, deps.search.systemDeliveryDateTo] as [
-            string,
-            string,
-          ])
-        : null,
-    set: (val) => {
-      deps.search.systemDeliveryDateFrom = val?.[0] ?? '';
-      deps.search.systemDeliveryDateTo = val?.[1] ?? '';
-    },
-  });
+  // 继续筛一个用户看不到的列没有意义。
+  //
+  // 为什么也走 draft（此前是 computed 直写 search、无 draft）：区间同样是一次
+  // 「选完点确定」的动作，直写 search 会让「旧 page=3 + 新筛选」先发一次
+  // （多半 0 行、闪一个空态），点确定后又发一次 —— 与本页另外三个文本筛选的
+  // draft→confirm 单发行为不对称。`views/parts/list` 的同名筛选仍是直写形态，
+  // 那是另一个页面，本次不动。
+  const systemDateRange = ref<[string, string] | null>(null);
 
   const systemDatePopoverVisible = ref(false);
   const systemDateFilterActive = computed(
     () => deps.search.systemDeliveryDateFrom !== '' || deps.search.systemDeliveryDateTo !== '',
   );
+  /** popover 打开时把已确认值回写草稿，保证二次打开看到原状。 */
+  function syncSystemDateRange(): void {
+    systemDateRange.value =
+      deps.search.systemDeliveryDateFrom || deps.search.systemDeliveryDateTo
+        ? ([deps.search.systemDeliveryDateFrom, deps.search.systemDeliveryDateTo] as [
+            string,
+            string,
+          ])
+        : null;
+  }
   function resetSystemDate(): void {
     systemDateRange.value = null;
+    deps.search.systemDeliveryDateFrom = '';
+    deps.search.systemDeliveryDateTo = '';
     systemDatePopoverVisible.value = false;
     deps.onSearch();
   }
-  /** 值已由 ElDatePicker 直接写进 search，这里只关 popover + 触发查询。 */
   function confirmSystemDate(): void {
+    deps.search.systemDeliveryDateFrom = systemDateRange.value?.[0] ?? '';
+    deps.search.systemDeliveryDateTo = systemDateRange.value?.[1] ?? '';
     systemDatePopoverVisible.value = false;
     deps.onSearch();
   }
   const systemDateFilter: DateRangeFilter = {
     visible: systemDatePopoverVisible,
+    range: systemDateRange,
     active: systemDateFilterActive,
+    sync: syncSystemDateRange,
     confirm: confirmSystemDate,
     reset: resetSystemDate,
   };
@@ -201,10 +209,7 @@ export function useInspectionColumnFilters(
     drawingNoFilter,
     nameFilter,
     systemDateFilter,
-    systemDateRange,
     customerFilter,
     customerTree,
-    customerLoading,
-    resolveRootCustomerId,
   };
 }

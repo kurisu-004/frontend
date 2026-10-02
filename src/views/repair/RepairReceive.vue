@@ -198,8 +198,7 @@ async function loadList(): Promise<void> {
     // （含 row-key：批次列表项无 id，得改用 batch_id），本轮不动，单独排期。
     rows.value = result.items as unknown as PartItem[];
     // 返修 list 结果的 total 后端用 serialize_i64 序列化为 JSON string，
-    // total 是 Ref<number>，边界 Number() 转回 number 才能塞进 ref（同 useInspectionList
-    // fetcher 同形态）。
+    // total 是 Ref<number>，边界 Number() 转回 number 才能塞进 ref。
     total.value = Number(result.total);
   } catch (e) {
     ElMessage.error((e as Error).message ?? '列表加载失败');

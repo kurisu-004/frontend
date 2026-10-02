@@ -233,15 +233,16 @@ export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): 
             'onUpdate:visible': (v: boolean) => {
               filters.systemDateFilter.visible.value = v;
             },
+            onShow: filters.systemDateFilter.sync,
             onConfirm: filters.systemDateFilter.confirm,
             onReset: filters.systemDateFilter.reset,
           },
           {
             default: () =>
               h(ElDatePicker, {
-                modelValue: filters.systemDateRange.value,
+                modelValue: filters.systemDateFilter.range.value,
                 'onUpdate:modelValue': (v: [string, string] | null) => {
-                  filters.systemDateRange.value = v;
+                  filters.systemDateFilter.range.value = v;
                 },
                 type: 'daterange',
                 valueFormat: 'YYYY-MM-DD',

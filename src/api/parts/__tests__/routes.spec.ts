@@ -251,6 +251,12 @@ describe('2026-10-02：集合读迁入 prod 域（3 条）', () => {
   });
 });
 
+describe('2026-10-02：留在 part 域的路径一个都不许动', () => {
+  it('R6：批次集合读仍按 part 锚定（操作对象是「某 part 的批次集合」）', async () => {
+    expect(await fetchedPath(() => listPartBatches('42'))).toBe('/parts/42/batches');
+  });
+});
+
 describe('2026-10-03：待品检端点的 Query 参数集（VO 收口的另一半）', () => {
   /** 发一次 listInspectionBatches 并取回实际打到 axios 的 params。 */
   async function inspectionQueryParams(
@@ -292,14 +298,35 @@ describe('2026-10-03：待品检端点的 Query 参数集（VO 收口的另一�
     });
   });
 
+  // 「空筛选 → undefined → 不上 wire」这一层的真 wire 形态守卫：store spec 里
+  // buildParams 那半（params.xxx === undefined）因 @/api/parts 被 mock 掉而验不到 wire。
+  // 入参刻意把 6 个筛选键显式写成 undefined —— 那正是 buildParams 空筛选下的产出，
+  // 走的是 cleanParams 真正要 strip 的那条路径（不写这几个键则该层根本没被触发）。
+  it('R7b：筛选键为 undefined 时不出现在 axios params 上', async () => {
+    const params = await inspectionQueryParams(() =>
+      listInspectionBatches({
+        drawing_no: undefined,
+        name: undefined,
+        serial_no: undefined,
+        customer_id: undefined,
+        system_delivery_date_from: undefined,
+        system_delivery_date_to: undefined,
+        sort_by: 'SYSTEM_DELIVERY_DATE',
+        sort_dir: 'ASC',
+        limit: 20,
+        offset: 0,
+      }),
+    );
+    expect(params).toEqual({
+      sort_by: 'SYSTEM_DELIVERY_DATE',
+      sort_dir: 'ASC',
+      limit: 20,
+      offset: 0,
+    });
+  });
+
   // 2026-10-03：原 R8「废弃的 keyword / planned_delivery_date_* 绝不出现在 axios
   // params 上」随 api 层的过渡剥离逻辑（DEPRECATED_INSPECTION_QUERY_KEYS）一起删除 ——
   // 三个键已从 ListInspectionQueueParams 类型上消失，待品检页也已改传新参数集，
   // api 层不再需要「拦住页面层误传」这层防御。
-});
-
-describe('2026-10-02：留在 part 域的路径一个都不许动', () => {
-  it('R6：批次集合读仍按 part 锚定（操作对象是「某 part 的批次集合」）', async () => {
-    expect(await fetchedPath(() => listPartBatches('42'))).toBe('/parts/42/batches');
-  });
 });
