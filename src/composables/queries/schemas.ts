@@ -326,6 +326,13 @@ export const partBatchSchema = z.object({
   // String 类型对齐；前端消费走 ORDER_STATUS_LABEL cast OrderStatus，不在 schema
   // 层强制字面量集合，避免后端扩展时整张 schema 失守）。
   status: z.string(),
+  // 2026-10-02 契约对齐：后端 `PartBatchListItemOut`
+  // （backend-rust src/modules/part/vo/part.rs:327，migration 005 起恒输出）新增
+  // `is_repairing: bool` —— `REPAIRING` 状态已从 `PartStatus` 枚举降级为
+  // `t_part_batch.is_repairing` 标记列，返修中的批次 `status` 恒为 `IN_PROCESS`。
+  // 本 schema **不是** `.strict()`，此前正是「Zod 默认 strip 模式让缺字段静默丢弃」
+  // 这个坑的活样本：后端已返回的该键被静默 strip 掉，下游拿不到「是否返修中」。
+  is_repairing: z.boolean(),
   location: z.string().nullable(),
   current_holder_id: z.string().nullable(),
   current_holder_display: z.string().nullable(),
@@ -522,10 +529,10 @@ export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);
 //
 // 字段对齐 backend-rust `PendingBatchItem` VO（src/modules/prod/batch/vo.rs），
 // 17 字段全声明（缺字段 Zod 默认 strip 静默丢弃 = 守门失效 —— 沿 M-1 regression guard 同源原则）：
-  //   id (batch_id) / part_id / batch_no / quantity / serial_no / name /
-  //   drawing_no / planned_delivery_date / system_delivery_date / customer_name /
-  //   parent_customer_name / applicant_name / is_urgent / note / version /
-  //   current_process_step_id / process_chain_id。
+//   id (batch_id) / part_id / batch_no / quantity / serial_no / name /
+//   drawing_no / planned_delivery_date / system_delivery_date / customer_name /
+//   parent_customer_name / applicant_name / is_urgent / note / version /
+//   current_process_step_id / process_chain_id。
 //
 // batch_no 后端是 i32（前端 UI 加 'B' 前缀展示）；日期字段 nullable；note /
 // customer_name / parent_customer_name / applicant_name / serial_no 全部 nullable
@@ -1129,9 +1136,10 @@ export type WorkerStateSchema = z.infer<typeof workerStateSchema>;
 // 2026-09-30 新增：品检待办行 + 列表 schema（守门 backend-rust
 // `InspectionBatchListItemOut` / `InspectionBatchListOut`）。
 //
-// 字段对齐 backend-rust docs/api/parts/inspection.md 第 479 行起的字段表：
+// 字段对齐 backend-rust docs/api/parts/inspection.md 第 511 行起的
+// `InspectionBatchListItemOut` 字段表：
 //   - 批次字段段（t_part_batch）：batch_id / batch_no / quantity / status /
-//     location / version / current_process_step_id / parent_batch_id
+//     is_repairing / location / version / current_process_step_id / parent_batch_id
 //   - holder 解析段：current_holder_id / holder_name / next_process_id /
 //     next_process_name
 //   - delivery_note 解析段：delivery_note_id / delivery_note_no
@@ -1144,6 +1152,21 @@ export type WorkerStateSchema = z.infer<typeof workerStateSchema>;
 // schemas 统一约定用 z.string()（与 partBatchSchema.status 同形态），不锁字面量。
 // part_version（= t_part.version）必填；version（= t_part_batch.version）是 caller
 // 调 API 时 OCC 锚点，两个值不同源 schema 必须显式区分。
+//
+// 2026-10-02 补 `is_repairing`（契约漂移修复 —「待品检」整页白屏的根因）：
+//   后端 migration 005 把 `REPAIRING` 从 `PartStatus` 枚举降级为
+//   `t_part_batch.is_repairing` 标记列，Rust VO `src/modules/part/vo/inspection.rs:44`
+//   恒定输出 `is_repairing: bool`（**无 Option / 无 serde(default) / 无
+//   skip_serializing_if** ⇒ 任何端点响应都必带该键）。本 schema 当时是
+//   `.strict()` 且未声明该键 ⇒ zod 抛 `unrecognized_keys: is_repairing`；
+//   zod 的数组元素校验会把一页内所有失败项汇成单个 ZodError，所以**任一行**是
+//   返修批次就导致整页不可用（useInspectionList fetcher 不 catch，
+//   ListShell 的 safeFetcher 又把原始 Zod 消息当空态文案渲染 + total 打成 0）。
+//   ⚠️ 后端 doc（inspection.md:552-559）截至 2026-10-02 仍写「本 VO 的 3 个共用
+//   端点**都不新增** is_repairing 字段」——**该段文档与 VO 源码不一致**，以
+//   `vo/inspection.rs:44` 为准（doc 待后端补齐，不在本前端仓范围内）。
+//   **保留 `.strict()`**：去掉它会退回「缺字段静默 strip 静默失效」这个
+//   .strict() 当初要防的失败模式（仓内 CLAUDE.md 明列的 strip 陷阱）。
 //
 // 2026-09-30 守门（M-1 同形态）：item schema 用 `.strict()` —— 后端若误把 `id`
 // 字段加进 inspection 响应（regression），Zod 立刻抛错而不是默认 strip 静默
@@ -1158,6 +1181,10 @@ export const inspectionBatchListItemSchema = z
     batch_no: z.number(),
     quantity: z.number(),
     status: z.string(),
+    // 2026-10-02 契约对齐：后端 vo/inspection.rs:44 恒输出该键（REPAIRING 状态
+    // 已降级为 boolean 标记列）。漏声明 ⇒ .strict() 抛 unrecognized_keys ⇒ 整页
+    // 白屏。用 z.boolean() 不锁字面量 false：返修中批次本身就是 true。
+    is_repairing: z.boolean(),
     location: z.string().nullable(),
     version: z.number(),
     current_process_step_id: z.string().nullable().optional(),

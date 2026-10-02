@@ -478,9 +478,9 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       // 后端 rust_decimal::Decimal + serde-with-str 序列化产生任意精度字符串
       expect(partSchema.parse({ ...makeBasePart(), unit_price: '0' }).unit_price).toBe('0');
       expect(partSchema.parse({ ...makeBasePart(), unit_price: '0.00' }).unit_price).toBe('0.00');
-      expect(
-        partSchema.parse({ ...makeBasePart(), unit_price: '9999999.9999' }).unit_price,
-      ).toBe('9999999.9999');
+      expect(partSchema.parse({ ...makeBasePart(), unit_price: '9999999.9999' }).unit_price).toBe(
+        '9999999.9999',
+      );
     });
 
     it('S12：缺 unit_price → 抛 ZodError（regression guard）', () => {
@@ -881,10 +881,20 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
         process_code: 'CNC-01',
         process_name: '粗加工',
         workers: [
-          { worker_id: '1900000000001', name: '张三', work_type_id: '3000000000001', work_type_code: 'CNC' },
+          {
+            worker_id: '1900000000001',
+            name: '张三',
+            work_type_id: '3000000000001',
+            work_type_code: 'CNC',
+          },
         ],
         work_types: [
-          { work_type_id: '3000000000001', work_type_code: 'CNC', work_type_name: 'CNC 加工', max_held_batches: 3 },
+          {
+            work_type_id: '3000000000001',
+            work_type_code: 'CNC',
+            work_type_name: 'CNC 加工',
+            max_held_batches: 3,
+          },
         ],
         total: 1,
         items: [makeBasePoolBatchItem()],
@@ -1296,6 +1306,8 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       batch_no: 1,
       quantity: 5,
       status: 'INSPECTION',
+      // 2026-10-02 契约对齐：后端 vo/inspection.rs:44 恒输出该键
+      is_repairing: false,
       location: 'INSPECTION_SHELF',
       version: 2,
       current_process_step_id: '7000000000001',
@@ -1325,7 +1337,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       l1_customer_name: '客户A',
     };
 
-    it('S20：解析 backend-rust InspectionBatchListItemOut 完整 27 字段不抛错', () => {
+    it('S20：解析 backend-rust InspectionBatchListItemOut 完整 28 字段不抛错', () => {
       const parsed = inspectionBatchListItemSchema.parse(validItem);
       expect(parsed.batch_id).toBe('3000000000001');
       expect(parsed.part_id).toBe('4000000000001');
@@ -1366,6 +1378,24 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       // part_id 是详情跳转（`/parts/${part_id}`）与 onConfirm API 入参的锚字段，
       // 缺它说明契约漂移，必须立刻炸（与 partSchema S12 缺 unit_price 同形态）。
       const { part_id: _omit, ...rest } = validItem;
+      void _omit;
+      expect(() => inspectionBatchListItemSchema.parse(rest)).toThrow();
+    });
+
+    it('S24（2026-10-02 regression guard）：is_repairing = true 也能 parse（不得锁成字面量 false）', () => {
+      // 「待品检」整页白屏的根因守卫：2026-10-01 后端 M5（migration 005）把 `REPAIRING`
+      // 降级为 `t_part_batch.is_repairing` 标记列，vo/inspection.rs:44 **恒定**输出该
+      // 键。schema 漏声明 ⇒ .strict() 抛 unrecognized_keys ⇒ 一页里只要有一行是
+      // 返修批次就整页 parse 失败（zod 把数组内所有失败项汇成单个 ZodError）。
+      // 本用例锁死两件事：
+      //   ① true 必须能过 —— 防止有人「先写 z.literal(false) 消警告」把真实数据挡掉；
+      //   ② 字段被显式保留在 parse 结果里（Zod 默认 strip 会让**已声明**字段也只在
+      //      schema 声明后才留下，删声明 ⇒ 下面两行断言同时变 undefined 而变红）。
+      const parsed = inspectionBatchListItemSchema.parse({ ...validItem, is_repairing: true });
+      expect(parsed.is_repairing).toBe(true);
+      expect(parsed.status).toBe('INSPECTION');
+      // 缺 is_repairing 同样必须抛错：后端恒输出，缺失即契约漂移。
+      const { is_repairing: _omit, ...rest } = validItem;
       void _omit;
       expect(() => inspectionBatchListItemSchema.parse(rest)).toThrow();
     });
@@ -1493,9 +1523,7 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
     const { zone: _omit, ...rest } = validShelf;
     void _omit;
     expect(() => shelfSchema.parse(rest)).toThrow();
-    expect(() =>
-      shelfListResultSchema.parse({ total: 1, limit: 200, offset: 0 }),
-    ).toThrow();
+    expect(() => shelfListResultSchema.parse({ total: 1, limit: 200, offset: 0 })).toThrow();
     const list = shelfListResultSchema.parse({
       items: [validShelf],
       total: 1,

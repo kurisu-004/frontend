@@ -14,6 +14,7 @@
 // （api/programming.ts）。本文件不再 import partListResultSchema（随该函数一并移除）。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
+import { inspectionBatchListResultSchema } from '@/composables/queries/schemas';
 import type { OutsourceSendableListResult } from '@/types/outsource';
 import type {
   LocationTreeNode,
@@ -657,7 +658,18 @@ export async function completePartRepair(
 /** 返修接收 Tab·已送货（DELIVERED 批次；PR-M 2026-08-04）。
  *
  * 2026-08-25 注：返回类型 InspectionBatchListResult 定义在 ./batch（listRepairBatches
- * 是单件 lifecycle 端点，但响应形态与品检待办一致）；用 type-only 跨子域引用。 */
+ * 是单件 lifecycle 端点，但响应形态与品检待办一致）；用 type-only 跨子域引用。
+ *
+ * 2026-10-02 补 Zod 守门：此前是 `return resp.data` 零校验，与同形态的
+ * listInspectionBatches（./batch:333）不一致。三个端点
+ * （inspection-batches / repair-batches / repairing-batches）**共用同一个 Rust VO**
+ * `InspectionBatchListItemOut`（backend-rust vo/inspection.rs 头注明确写了这点），
+ * 所以共用同一个 schema 是契约事实、不是复用偷懒。零守门的代价是这次踩到的坑：
+ * `is_repairing`（2026-10-01 后端 M5 恒输出）没被 schema 声明时，
+ * `listInspectionBatches` 整页抛 unrecognized_keys 白屏，而本函数会**静默**把
+ * 多出来的键丢掉 —— 同一个契约漂移在两个调用点表现完全相反，最难排查。
+ * 守门只在这一处（不在 useXxxQuery 里再 parse —— Zod parse 是深拷贝，两处都做
+ * 等于白拷一次）。 */
 export async function listRepairBatches(
   params: {
     keyword?: string;
@@ -667,13 +679,18 @@ export async function listRepairBatches(
     offset?: number;
   } = {},
 ): Promise<InspectionBatchListResult> {
-  const resp = await api.get<InspectionBatchListResult>('/parts/repair-batches', {
+  const resp = await api.get<unknown>('/parts/repair-batches', {
     params: cleanParams(params),
   });
-  return resp.data;
+  return inspectionBatchListResultSchema.parse(resp.data) as InspectionBatchListResult;
 }
 
-/** 返修接收 Tab·返修中（REPAIRING 批次；PR-M 2026-08-04）。 */
+/** 返修接收 Tab·返修中（PR-M 2026-08-04）。
+ *
+ * 2026-10-02 补 Zod 守门，理由同 listRepairBatches（共用 InspectionBatchListItemOut VO
+ * + 本函数此前零校验）。注意本端点的过滤判据 2026-10-01 起已从
+ * `status='REPAIRING'` 改为 `is_repairing = true`（migration 005）——
+ * 响应行的 `status` 恒为 `IN_PROCESS`，**不要**再靠 status 判「返修中」。 */
 export async function listRepairingBatches(
   params: {
     keyword?: string;
@@ -683,10 +700,10 @@ export async function listRepairingBatches(
     offset?: number;
   } = {},
 ): Promise<InspectionBatchListResult> {
-  const resp = await api.get<InspectionBatchListResult>('/parts/repairing-batches', {
+  const resp = await api.get<unknown>('/parts/repairing-batches', {
     params: cleanParams(params),
   });
-  return resp.data;
+  return inspectionBatchListResultSchema.parse(resp.data) as InspectionBatchListResult;
 }
 
 /** PR-M 2026-08-04 续：一步式返修下发（DELIVERED → REPAIRING → ON_SHELF/INSPECTION）。 */
