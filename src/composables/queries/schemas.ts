@@ -107,14 +107,14 @@ export const customerListResultSchema = z.object({
 export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
 
 /** 2026-09-26 新增：工序实体。字段对齐 backend-rust `ProcessOut`
- * （`backend-rust/docs/api/production/processes.md:159-173`，11 字段）：id /
- * code / name / category / sort_order / description / requires_approval / color /
- * version / created_at / updated_at。category 用 z.enum 锁死 INHOUSE / OUTSOURCE；
- * color 与 description nullable；时间戳保持 string（与 API 字符串格式对齐）。
+ * （`backend-rust/docs/api/production/processes.md:159-173`）：id / code / name /
+ * category / sort_order / description / requires_approval / color / is_cnc /
+ * version / created_at / updated_at（**12 字段**）。category 用 z.enum 锁死 INHOUSE /
+ * OUTSOURCE；color 与 description nullable；时间戳保持 string（与 API 字符串格式
+ * 对齐）。
  *
  * 2026-09-26（M-1 审计）：与 Process.ts 业务类型 + backend-rust ProcessOut 三方
- * 一致（id / version / code / name / category / sort_order / description /
- * requires_approval / color / created_at / updated_at 共 11 字段），无需补字段。
+ * 一致（is_cnc 落地后共 12 字段），无需补字段。
  *
  * 2026-09-29 新增：is_cnc 字段（12 字段）。CNC 编程门控：是否参与「待编程一览」
  * Tab 化（2026-10-01 起出参是 prod 域 `GET /prod/programming/pending` 的
@@ -1259,7 +1259,7 @@ export type InspectionBatchListResultSchema = z.infer<typeof inspectionBatchList
 // **方向相反**，不要照抄那一个。
 // ============================================================
 
-/** 工种条目（对齐 backend-rust `WorkTypeOut` 11 字段，**全部显式声明**）。
+/** 工种条目（对齐 backend-rust `WorkTypeOut` **10 字段**，**全部显式声明**）。
  *
  * 逐条依据 `vo/work_type.rs`：
  *   - id：i64 + `serialize_i64` ⇒ JSON string（雪花 ID 不可用 JS Number，会丢精度）；

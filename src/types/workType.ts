@@ -70,7 +70,7 @@ export interface WorkTypeProcessLink {
  * 该端点不接 limit/offset，一次返全部；doc :56 / :112）。
  *
  * ⚠️ 旧实现声明的 `WorkTypeWithProcesses`（extends WorkType + `processes: []`）是
- * v1(Python) 影子类型：响应里既没有 `processes` 也没有 WorkType 的 11 个字段。
+ * v1(Python) 影子类型：响应里既没有 `processes` 也没有 WorkType 的 10 个字段。
  * 线上症状 = 工序管理「工序映射」Tab 点工种后 `Cannot read properties of undefined
  * (reading 'map')`（`detail.processes.map(...)`，TypeError 抛在 try 内被 catch 吞掉
  * 后原样 ElMessage.error 弹出 = 用户看到的 toast）。该影子类型已删除。

@@ -19,7 +19,7 @@
 //   - reactive params：params 接受 MaybeRefOrGetter，queryKey 走
 //     computed(toValue(params))，queryFn **从 queryKey[2] 读 params**（不闭包
 //     捕获 stale —— CLAUDE.md 范本 #5 / useProcessesQuery:37-45）；
-//   - queryFn 走 workTypeListResultSchema.parse 守门（M-1 strip 陷阱：本域 11 个
+//   - queryFn 走 workTypeListResultSchema.parse 守门（M-1 strip 陷阱：本域 10 个
 //     字段全显式声明，含此前 @/types/workType.ts 漏掉的 process_ids）；
 //   - staleTime / gcTime: 30_000 / 5 * 60 * 1000（CLAUDE.md「缓存时长策略」：
 //     共享基础数据层一律有限缓存；工种/映射表几乎不变，30s 足以去掉同一次操作
@@ -31,10 +31,15 @@
 // 失效编排：映射的写点全仓**只有 1 个**（setWorkTypeProcesses，就在同一个 Tab 里），
 // 不适用 CLAUDE.md「跨页面写操作不做穷举失效」策略（那针对写点散落多域、补齐等于
 // 穷举全仓的情形）。保存成功后失效**两个域**：
-//   - workTypeProcessesPrefix：让右表勾选态立即反映服务端；
-//   - workTypesPrefix：**必须一起失效** —— 后端 `WorkTypeOut.process_ids` 由 list
-//     端点批量补全（vo/work_type.rs:20），映射一改左表展示的映射集合就变了；
-//     只失效第一个域会留下「左表旧快照 + 右表已新」的分裂状态。
+//   - workTypeProcessesPrefix：让右表勾选态立即反映服务端（这一条是**当前可见**的
+//     修复 —— 不失效则保存后勾选区与基线对不上）；
+//   - workTypesPrefix：**缓存一致性维护位**，不是当前可见 bug 的修复。后端
+//     `WorkTypeOut.process_ids` 由 list 端点批量补全（vo/work_type.rs:20），所以
+//     映射一改，缓存里那份工种列表的该字段确实过期了；但唯一的消费者
+//     （ProcessWorkTypeMappingTab）左表**只渲染 code / name**，画面不会有任何变化。
+//     保留它是为了不让失效链依赖「左表恰好不读 process_ids」这个脆弱前提 ——
+//     将来左表加列（典型如「已映射 N 道工序」）时不会立刻暴出「左表旧 + 右表新」
+//     的分裂。成本是每次保存多一次 invalidate（30s staleTime 下通常不真发请求）。
 //   30s 有限 staleTime 仍是兜底，不变。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';

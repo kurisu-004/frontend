@@ -15,7 +15,7 @@
 //   - S4：customerSchema 缺 version → 抛 ZodError（核心 regression guard：
 //     首轮漏列 version 字段会导致 backend-rust 真返回被 strip 掉，仍 parse 成功）。
 //   - S5：customerListResultSchema 接受分页结构（items / total / limit / offset）。
-//   - S6：processSchema.parse 接受 backend-rust ProcessOut 11 字段结构。
+//   - S6：processSchema.parse 接受 backend-rust ProcessOut 12 字段结构。
 //   - S7：processSchema 对 INHOUSE / OUTSOURCE 两种 category 都接受。
 //   - S8：processSchema 对 description = null / color = null 接受（OUTSOURCE
 //     允许 null）。
@@ -51,7 +51,7 @@
 //     S15a 同源 regression guard：zod 默认 strip 模式漏列 boolean 字段会让后端
 //     真返回的 has_cnc_program 在前端拿不到且 parse 不报错）。
 //   - S20（2026-09-30 新增）：inspectionBatchListItemSchema 接受 backend-rust
-//     `InspectionBatchListItemOut` 完整 27 字段结构（批次 8 + holder 4 +
+//     `InspectionBatchListItemOut` 完整 28 字段结构（批次 9 + holder 4 +
 //     delivery_note 2 + 工单 10 + 客户 3，含 l1_customer_name 与 holder_name），
 //     不抛错。
 //   - S21：inspectionBatchListResultSchema 接受分页结构（items / total / limit /
@@ -61,10 +61,16 @@
 //     立刻抛错而非默认 strip 静默丢）。
 //   - S23：inspectionBatchListItemSchema 缺 part_id → 抛 ZodError（M-1 同形态
 //     guard：缺核心字段静默 strip = 校验形同虚设）。
+//   - S23b（2026-10-02 新增 regression guard）：is_repairing = true 也能 parse
+//     （不得被人「先写 z.literal(false) 消警告」把真实返修数据挡掉），且缺
+//     is_repairing 必抛错（后端 vo/inspection.rs:44 恒输出该键）。
+//     编号说明：本用例原编 S24，与下面「2026-10-01 新增：programming / shelves」
+//     describe 块里既有的 S24（pendingProgrammingItemSchema 13 字段）撞号，
+//     2026-10-02 review 第 1 轮改为 S23b（沿本文件 S11b / S12b / S19b 等后缀惯例）。
 //
 // 数据来源：
 //   - backend-rust/docs/api/customers.md:142-153（CustomerOut 8 字段）
-//   - backend-rust/docs/api/production/processes.md:159-173（ProcessOut 11 字段）
+//   - backend-rust/docs/api/production/processes.md:159-173（ProcessOut 12 字段）
 //   - backend-rust/docs/api/parts.md（PartListOut / PartListItem 字段）
 //   - backend-rust/src/modules/assembly/vo/assembly.rs:17-119
 //     （AssemblyOut 19 字段 / AssemblyChildOut 13 字段 / AssemblyFileRef 3 字段 /
@@ -255,7 +261,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
   });
 
   describe('processSchema', () => {
-    it('S6：解析 backend-rust ProcessOut 完整 11 字段不抛错', () => {
+    it('S6：解析 backend-rust ProcessOut 完整 12 字段不抛错', () => {
       const process = processSchema.parse({
         id: '170000000000001',
         version: 2,
@@ -1382,7 +1388,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(() => inspectionBatchListItemSchema.parse(rest)).toThrow();
     });
 
-    it('S24（2026-10-02 regression guard）：is_repairing = true 也能 parse（不得锁成字面量 false）', () => {
+    it('S23b（2026-10-02 regression guard）：is_repairing = true 也能 parse（不得锁成字面量 false）', () => {
       // 「待品检」整页白屏的根因守卫：2026-10-01 后端 M5（migration 005）把 `REPAIRING`
       // 降级为 `t_part_batch.is_repairing` 标记列，vo/inspection.rs:44 **恒定**输出该
       // 键。schema 漏声明 ⇒ .strict() 抛 unrecognized_keys ⇒ 一页里只要有一行是

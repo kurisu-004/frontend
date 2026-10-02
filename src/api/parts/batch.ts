@@ -258,7 +258,9 @@ export async function cancelPartBatch(partId: string, batchId: string): Promise<
  * 渲染层 `<RouterLink to="/parts/${r.id}">` 因此拼出 `/parts/undefined`）。
  * 后端 `GET /api/v2/parts/inspection-batches` 实际返回
  * `InspectionBatchListItemOut[]`（无 `id` 字段，详情跳转锚应改用 `part_id`），
- * 详见 `backend-rust/docs/api/parts/inspection.md` 第 479 行起字段表。
+ * 详见 `backend-rust/docs/api/parts/inspection.md` 第 511 行起字段表
+ * （行号 2026-10-02 review 第 1 轮订正：原写 479，是文档扩写前的旧位置，与
+ *  `src/composables/queries/schemas.ts` 品检 schema 块的 511 保持一致）。
  * 字段严格对齐后端 VO。 */
 export interface InspectionBatchListItem {
   // 批次字段段

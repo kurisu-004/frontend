@@ -68,7 +68,9 @@ vi.mock('@/api/workType', async (importOriginal) => ({
 }));
 
 // 工序走共享 useProcessesQuery，queryFn 走 processListResultSchema.parse 守门 ——
-// 所以这里的 mock 必须是**后端真实形态**（11 字段），不能是「够用就行」的半截对象。
+// 所以这里的 mock 必须是**后端真实形态**（ProcessOut 12 字段，2026-10-02 review 第 1
+// 轮订正：原注释写 11 是抄自 schemas.ts 的旧误数，漏了 is_cnc），不能是「够用就行」
+// 的半截对象。
 vi.mock('@/api/process', () => ({
   listProcesses: (...args: unknown[]) => listProcessesMock(...args),
 }));
@@ -325,6 +327,79 @@ describe('2026-10-02：映射加载失败后保存不得清空整组映射（Pro
       items: [{ process_id: '190000000000001', sort_order: 0 }],
     });
     consoleError.mockRestore();
+  });
+
+  it('P6（2026-10-02 review 第 1 轮 MINOR-2）：A 加载成功 → 切 B 且 B 加载失败 → 勾选不残留 A', async () => {
+    // 覆盖「失败态下残留上一个工种的勾选」这条路径。P1 只覆盖**全新 mount**（selectedWT
+    // 为 null，勾选本来就是空），压根没经过 A→B 这段状态迁移。
+    // 现象：onSelectWT 切到 B 时 B 的请求在飞 —— 标题已经写「B」，勾选框里却还是 A 的
+    // 两道工序。写路径已被 onSave 硬闸 + 按钮 disabled 双重封死（不丢数据），但把
+    // 未知态渲染成「另一个工种的真实映射」本身就是误导。修法是 onSelectWT 在 **id
+    // 变化**时清零勾选。
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const WT_B: WorkType = { ...WT, id: '8800000000002', code: 'PAINTER', name: '漆工' };
+    listWorkTypesMock.mockResolvedValue({
+      items: [WT, WT_B],
+      total: 2,
+      limit: 200,
+      offset: 0,
+    });
+
+    const wrapper = await mountTab();
+    const vm = wrapper.vm as unknown as TabVm;
+
+    // A 加载成功：勾选被服务端基线填上
+    vm.onSelectWT(WT);
+    await flushPromises();
+    expect(vm.selectedProcessIds).toEqual(['190000000000001', '190000000000002']);
+    expect(vm.dirty).toBe(false);
+
+    // 切 B，且 B 的加载失败
+    getWorkTypeProcessesMock.mockRejectedValue(new Error('500 boom'));
+    vm.onSelectWT(WT_B);
+    await flushPromises();
+
+    // 核心断言：**不得**残留 A 的勾选
+    expect(vm.selectedProcessIds).toEqual([]);
+
+    // 写路径仍然封死（不因清零而放松任何一道闸）
+    await vm.onSave();
+    await flushPromises();
+    expect(setWorkTypeProcessesMock).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it('P7（2026-10-02 review 第 1 轮 MINOR-1）：B 加载**中**点保存 → 早退且文案说「加载中」', async () => {
+    // 区分两种「不知道现状」：加载中 vs 加载失败。合并成一句「加载失败…请重新选择
+    // 该工种」在「其实只是还在加载」时是假提示。
+    // 构造：让 B 的请求挂起（永不 resolve），isPending 恒 true。
+    const WT_B: WorkType = { ...WT, id: '8800000000002', code: 'PAINTER', name: '漆工' };
+    listWorkTypesMock.mockResolvedValue({
+      items: [WT, WT_B],
+      total: 2,
+      limit: 200,
+      offset: 0,
+    });
+
+    const wrapper = await mountTab();
+    const vm = wrapper.vm as unknown as TabVm;
+
+    vm.onSelectWT(WT);
+    await flushPromises();
+    expect(vm.selectedProcessIds).toEqual(['190000000000001', '190000000000002']);
+
+    // B 加载中：onSelectWT 已把勾选清零，baseline 也是 [] ⇒ dirty 恒 false。
+    // 按钮的 disabled 判据已把 isPending 计入，这里直接调 onSave 是为了覆盖
+    // 「按钮 disabled 与 onSave 之间状态翻转」的兜底分支。
+    getWorkTypeProcessesMock.mockImplementation(() => new Promise(() => undefined));
+    vm.onSelectWT(WT_B);
+    await flushPromises();
+
+    await vm.onSave();
+    await flushPromises();
+
+    expect(setWorkTypeProcessesMock).not.toHaveBeenCalled();
+    expect(elMessage.error).toHaveBeenCalledWith('工序映射仍在加载中，未做任何保存：请稍候再试');
   });
 
   it('P5：保存成功后失效 work-types 域（键走 qk，不在调用点拼字面量）', async () => {

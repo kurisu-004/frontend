@@ -30,7 +30,7 @@
               type="primary"
               size="small"
               :loading="saveMutation.isPending.value"
-              :disabled="!dirty || mappingQuery.isError.value"
+              :disabled="!dirty || mappingQuery.isError.value || mappingQuery.isPending.value"
               @click="onSave"
               >保存映射</el-button
             >
@@ -139,6 +139,14 @@ const mappingTitle = computed(() =>
 
 function onSelectWT(row: WorkType): void {
   const sameWorkType = selectedWT.value?.id === row.id;
+  // 2026-10-02 review 第 1 轮（MINOR-2）：**切到别的工种时立刻清零勾选**。
+  // 下方 watcher 判据是 `!data → return`（这是对的：用 isError 当守卫会漏掉「失败后
+  // 重试成功那一次」同步），代价是 A→B 加载失败时勾选区**残留 A 的勾**，标题却写着
+  // B —— 纯显示不一致。写路径已被 onSave 硬闸 + 按钮 disabled 双重封死（不丢数据），
+  // 但「不知道现状」时展示别人的勾选本身就是误导，故在切换点清零。
+  // ⚠️ 只在 **id 变化**时清零：同工种重复点击是「重试」（见下），此时清零会把
+  // 用户在重试前看到的内容也抹掉，与 P4 用例的期望直接冲突。
+  if (!sameWorkType) selectedProcessIds.value = [];
   selectedWT.value = row;
   // 2026-10-02：**同一工种重复点击 = 用户在重试**。
   // queryKey 不变时 vue-query 不会自动重发（error 态的 query 不会自愈，也不在
@@ -187,10 +195,14 @@ const saveMutation = useMutation<
   mutationKey: ['work-types', 'set-processes'],
   mutationFn: ({ workTypeId, payload }) => setWorkTypeProcesses(workTypeId, payload),
   onSuccess: async () => {
-    // 2026-10-02：两个域都要失效。workTypesPrefix **不可省** ——
+    // 2026-10-02：两个域都失效。workTypesPrefix 是**缓存一致性维护位**，不是当前
+    // 可见 bug 的修复 —— 左表只渲染 code / name（见模板），且全仓**只有**本 Tab 一个
+    // useWorkTypesQuery 消费者，映射一改左表画面不会有任何变化。之所以仍然失效：
     // 后端 WorkTypeOut.process_ids 由 list 端点批量补全（vo/work_type.rs:20），
-    // 映射一改左表展示的映射集合就变了；只失效映射域会留下「左表旧快照 + 右表
-    // 已新」的分裂状态。
+    // 缓存里躺着的确实是过期数据；将来左表一旦加列（如「已映射 N 道工序」）就会
+    // 立刻暴出「左表旧快照 + 右表已新」的分裂。留着它成本是每次保存多一次
+    // 后台 refetch（30s staleTime 下通常不真发请求），换来的是这条失效链不依赖
+    // 「左表恰好不读 process_ids」这个脆弱前提。
     await invalidateWorkTypeProcessesQuery(qc);
     await invalidateWorkTypesQuery(qc);
     ElMessage.success('已保存');
@@ -206,9 +218,21 @@ const saveMutation = useMutation<
  * 真实映射，且后端返回 200 + 「已保存」提示 —— 用户完全无从察觉数据被清掉。
  * 所以「不知道现状」时**绝不允许写**：isError 或 data 为空一律早退。
  * 用 query 自带的错误态表达「未成功加载」，不再手写 processLoadFailed ref ——
- * query 的 error 态就是那个语义（手写状态位还得手动复位，是 P4 那类回归的来源）。 */
+ * query 的 error 态就是那个语义（手写状态位还得手动复位，是 P4 那类回归的来源）。
+ *
+ * 2026-10-02 review 第 1 轮（MINOR-1）：**加载中**与**加载失败**拆成两条早退。
+ * 合并写会误导：A 加载完成后点 B，B 的请求在飞的那一瞬 `data` 为 undefined
+ * （新 queryKey 无缓存）⇒ baseline 落到 `[]` 而勾选还带着 A 的内容 ⇒ dirty=true、
+ * isError=false、isPending=true。按钮现已把 isPending 一并计入 disabled（见模板），
+ * 所以这条分支正常不可达；保留它是给「按钮 disabled 与 onSave 之间状态翻转」留的
+ * 兜底，而文案必须说清是哪一种 —— 早先统一弹「加载失败…请重新选择该工种」，
+ * 在「其实只是还在加载」时是假提示。 */
 async function onSave(): Promise<void> {
   if (!selectedWT.value) return;
+  if (mappingQuery.isPending.value) {
+    ElMessage.error('工序映射仍在加载中，未做任何保存：请稍候再试');
+    return;
+  }
   if (mappingQuery.isError.value || !mappingQuery.data.value) {
     ElMessage.error('工序映射加载失败，未做任何保存：请重新选择该工种后再试');
     return;

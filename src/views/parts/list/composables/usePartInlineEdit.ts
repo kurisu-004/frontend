@@ -7,7 +7,8 @@
 //
 // 2026-09-26 重构（B 任务）：saveEdit 包 useMutation。
 //   - mutationFn: 根据 row.row_type 分发 updateAssembly / updatePart；
-//   - onSuccess: 失效 parts 域（整表 refetch，与同域 usePartDispatch 逐字对齐）；
+//   - onSuccess: 失效 parts 域（整表 refetch；同域 usePartDispatch 的失效**目标**相同，
+//     写法不同 —— 它不 await、且 ElMessage 在 invalidate 之前，本处 await 在前）；
 //   - onError: 命中 40901 BIZ_VERSION_CONFLICT → ElMessage.warning + 整表 invalidate；
 //     其它 → ElMessage.error；
 //   - fetchList dep 删除（M-2 修复）：40901 触发整表刷新走
@@ -42,7 +43,13 @@
 //   与 refetch 两条路同时断掉，所以用户必须手动刷新才能看到自己的修改。
 //   修法：删掉注定 100% 失效的就地回填（它还掩盖了「onSuccess 缺失效」这个真正
 //   的 bug），onSuccess 改走 `qc.invalidateQueries({queryKey: qk.partsPrefix})`
-//   —— 与同域 `usePartDispatch.ts:159-162` 的 mutation onSuccess 结构逐字对齐。
+//   —— 与同域 `usePartDispatch.ts:159-162` 的 mutation onSuccess 走**同一条失效链**
+//   （同一个 `qk.partsPrefix` 键、同一个后台 refetch 语义），但**刻意不逐字照抄**：
+//   参照物那边 `onSuccess: () => { ElMessage.success(); qc.invalidateQueries(...) }`
+//   既不 await 也把提示排在失效之前；本处反过来（先 await invalidate、后提示）
+//   是更好的形态 —— await 期间 `saveEditMutation.isPending` 恒为 true，
+//   保存按钮的 loading 与 onEditEnter 的 savingEdit 守卫在整个 pending 窗口内
+//   都有效，杜绝了重复提交（见 onEditEnter）。
 //   `qk.partsPrefix` = ['parts']，本页主查询键 `qk.unionList(params)` =
 //   ['parts','union-list',params] 前缀命中，键不用动；query 处于 active 状态，
 //   invalidate 走后台 refetch，data 不清空，无白屏闪烁。
@@ -224,7 +231,8 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
   // 2026-10-02：onSuccess 由「就地 Object.assign 回填」改为「失效 parts 域」。
   // 起因见文件头：deps.items 是 vue-query 深只读代理，就地写 100% 失效（每次还
   // 刷一条 [Vue warn]），而当时 onSuccess 又没有失效/refetch/setQueryData，
-  // 导致「改完必须手动刷新」。结构与同域 usePartDispatch.ts:159-162 逐字对齐。
+  // 导致「改完必须手动刷新」。失效目标与同域 usePartDispatch.ts:159-162 一致，但
+  // 写法刻意不同（那边不 await、提示在前）—— 理由见文件头 2026-10-02 段。
   // 失效后 refetch 回来的行自带后端 +1 的新 version 与新 total_price，
   // 2026-09-28 起「不回写 version 则第二次保存假冲突」的隐患由失效覆盖。
   interface SaveEditVars {
@@ -381,6 +389,13 @@ export function usePartInlineEdit(deps: UsePartInlineEditDeps): UsePartInlineEdi
     const target = e.target as HTMLElement | null;
     if (target && ENTER_BLACKLIST.some((sel) => target.closest(sel))) return;
     e.preventDefault();
+    // 2026-10-02 review 第 1 轮（MINOR-3）：**Enter 路径也要有 savingEdit 守卫**。
+    // 保存按钮有 `:loading="savingEdit"` 保护（按钮进入 loading 即 disabled），但
+    // Enter 是 document 级监听、不受按钮 disabled 约束。onSuccess 里 await 了
+    // invalidateQueries，pending 窗口因此比旧实现宽得多；狂按 Enter 会并发发出
+    // 第二次 save（带**同一 version**）→ 后端 OCC 判 40901 → 弹「该记录已被他人
+    // 修改」的假冲突，而实际上只是用户自己按快了点。
+    if (savingEdit.value) return;
     const row = deps.items.value.find((r) => r.id === editingId.value);
     if (row) void saveEdit(row);
   }
