@@ -1192,7 +1192,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       ).toThrow();
     });
 
-    it('S-MV10：takenItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 guard）', () => {
+    it('S-MV11：takenItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 guard）', () => {
       // 后端 TakenItem.has_cnc_program 带 `#[serde(default)]` 但仍会序列化，
       // 漏返说明契约漂移，必须炸。
       const base: Record<string, unknown> = {
