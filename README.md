@@ -17,7 +17,7 @@
 ```bash
 cd frontend
 npm install
-npm run dev          # 开发 http://localhost:5173（v1 FastAPI 代理 :8000）
+npm run dev          # 开发 http://localhost:5173（/api + /ws 代理到 Rust :3000）
 npm run dev:dummy    # dummy-auth 模式：跳过登录，注入 dev-admin 会话
 npm run typecheck    # vue-tsc 类型检查
 npm run build        # 构建（vue-tsc --noEmit && vite build）
@@ -32,7 +32,7 @@ npm run test         # vitest run（全部单测）
 
 ```
 src/
-├── api/             # 接口 & mock（.ts，按域切分；v1 / apiV2 双 axios 实例）
+├── api/             # 接口 & mock（.ts，按域切分；api / refreshClient / apiPrint 三个 axios 实例）
 ├── components/      # 跨业务域通用组件（13+ 个）
 ├── composables/     # 模块级单例 composable（30+ 个）
 ├── constants/       # 静态映射（partStatus / batch / bid / crud / file）
@@ -69,13 +69,20 @@ src/
 
 ## 后端联调
 
-本地前端同时对接 **v1 FastAPI（:8000）** 与 **v2 Rust（:3000）** 两个后端：
+后端是单进程 **Rust（axum，:3000）**，`/api/v2/*` 与 `/ws/*` 全部由它提供：
 
-- `/api/v1/*` —— `vite.config.ts` 代理到 `http://127.0.0.1:8000`，由 `api` axios 实例消费；auth 域当前走 v1（2026-08-26 回滚）。
-- `/api/v2/*` + `/ws/*` —— 由 `apiV2` axios 实例消费（**仅 14 个端点**服务于 `DeliveryNoteScan` 扫码建单页及其间接依赖，详见 `docs/02-architecture/api-contract.md`）。
-- 生产 / staging 通过 nginx 反代（`/api/v1` → backend-python :8000，`/api/v2` + `/ws` → rust-backend :3000），前端不直接接触后端端口。
+- `/api/v2/*` —— `api` 与 `refreshClient` 两个 axios 实例消费（`refreshClient` 是 refresh
+  端点用的裸实例，不带业务拦截器），dev 由 `vite.config.ts` 代理到 `http://127.0.0.1:3000`。
+- `/ws/*` —— dashboard 长连接（`src/api/dashboard.ts` 单例），dev 必须有 `/ws` 反代：
+  Vite 的 dev upgrade 监听器只对匹配到的 proxy context 转发，缺了表现为「页面数据正常
+  但控制台一直刷 WS 报错」。
+- `/api/v1/*` —— **仅打印链路**的 4 个端点（零件图纸 PDF 单件 / 批量、送货单 PDF、标签 Excel）
+  走 `apiPrint` 实例。已知缺口：dev **没有** `/api/v1` 代理规则（`/api` context 会把它吃掉打到
+  Rust :3000，而 Rust 没有 `/api/v1` nest），故打印功能本地联调需自行起 v1 服务；
+  生产由 `nginx.conf` 的 `location /api/v1` 兜。
 
-启动 v1 + v2 一体的本地全栈见仓库根 `docker-compose-local.yml`（`docker compose -f docker-compose-local.yml up -d --build`）。
+生产 / staging 通过 nginx 反代，前端不直接接触后端端口。启动本地全栈见仓库根
+`docker-compose-local.yml`（`docker compose -f docker-compose-local.yml up -d --build`）。
 
 ## 已知安全风险提示
 
