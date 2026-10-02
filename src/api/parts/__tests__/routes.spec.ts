@@ -100,9 +100,9 @@ beforeEach(() => {
 
 describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () => {
   it('R1：lifecycle 流转端点全部落在 /prod/batches/{batch_id}/<action>', async () => {
-    expect(await postedPath(() => placeOnShelf(BATCH, { shelf_id: 's', next_process_id: 'p' }))).toBe(
-      `/prod/batches/${BATCH}/place-on-shelf`,
-    );
+    expect(
+      await postedPath(() => placeOnShelf(BATCH, { shelf_id: 's', next_process_id: 'p' })),
+    ).toBe(`/prod/batches/${BATCH}/place-on-shelf`);
     expect(await postedPath(() => recallToPending(BATCH))).toBe(
       `/prod/batches/${BATCH}/recall-to-pending`,
     );
@@ -124,9 +124,9 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(await postedPath(() => startPartRepair(BATCH, { version: 1 }))).toBe(
       `/prod/batches/${BATCH}/start-repair`,
     );
-    expect(
-      await postedPath(() => completePartRepair(BATCH, { shelf_id: 's', version: 1 })),
-    ).toBe(`/prod/batches/${BATCH}/complete-repair`);
+    expect(await postedPath(() => completePartRepair(BATCH, { shelf_id: 's', version: 1 }))).toBe(
+      `/prod/batches/${BATCH}/complete-repair`,
+    );
     expect(
       await postedPath(() =>
         receiveFromOutsource(BATCH, { shelf_id: 's', next_process_id: 'p', version: 1 }),
@@ -139,14 +139,12 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     ).toBe(`/prod/batches/${BATCH}/receive-from-outsource-to-inspection`);
     expect(
       await postedPath(() =>
-        sendToOutsource(BATCH, { outsource_company_id: 'c', next_process_id: 'p', version: 1 }),
+        sendToOutsource(BATCH, { outsource_company_id: 'c', process_id: 'p', version: 1 }),
       ),
     ).toBe(`/prod/batches/${BATCH}/send-to-outsource`);
-    expect(
-      await postedPath(() =>
-        repairDispatch(BATCH, { shelf_id: 's', version: 1 }),
-      ),
-    ).toBe(`/prod/batches/${BATCH}/repair-dispatch`);
+    expect(await postedPath(() => repairDispatch(BATCH, { shelf_id: 's', version: 1 }))).toBe(
+      `/prod/batches/${BATCH}/repair-dispatch`,
+    );
     expect(
       await postedPath(() =>
         scanInspect(BATCH, { target_inspection_shelf_id: 's', pass: true, version: 1 }),
@@ -159,9 +157,7 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     // 单件送检（本次新建的 URL）。别与 receiveFromOutsourceToInspection 混：
     // 那个是 /receive-from-outsource-to-inspection，外协回收直送品检。
     expect(
-      await postedPath(() =>
-        toInspection(BATCH, { target_inspection_shelf_id: 's', version: 1 }),
-      ),
+      await postedPath(() => toInspection(BATCH, { target_inspection_shelf_id: 's', version: 1 })),
     ).toBe(`/prod/batches/${BATCH}/to-inspection`);
   });
 
@@ -206,6 +202,60 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(Object.keys(startBody).sort()).toEqual(['note', 'reason', 'version']);
     expect(startBody).not.toHaveProperty('quantity');
   });
+
+  // 2026-10-03 契约对齐：send-to-outsource 的 body 键是 `process_id`（**不是**
+  // `next_process_id`）—— 沿用旧名必然 422（后端 DTO 是 process_id，serde 未开
+  // deny_unknown_fields 时旧名被静默忽略、必填 process_id 落空 → 422）。
+  // 注意对比：receive-from-outsource 的键**仍是** `next_process_id`（后端没跟着改），
+  // 两个端点刻意不同名，这条断言同时把两者钉住防止「顺手统一」。
+  it('R2c：send-to-outsource 用 process_id，receive-from-outsource 仍用 next_process_id', async () => {
+    httpPostMock.mockReset();
+    httpPostMock.mockResolvedValue({ data: {} });
+    await sendToOutsource(BATCH, {
+      outsource_company_id: 'c',
+      process_id: 'p',
+      version: 1,
+      quote_id: 'q',
+      direct: null,
+    });
+    const [, sendBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(sendBody.process_id).toBe('p');
+    expect(sendBody).not.toHaveProperty('next_process_id');
+    // APPROVAL 路径：带 quote_id，direct 显式为 null（api 层纯透传，不注入不兜底）
+    expect(sendBody.quote_id).toBe('q');
+    expect(sendBody.direct).toBeNull();
+
+    // DIRECT 路径：direct: true + quote_id: null
+    httpPostMock.mockReset();
+    httpPostMock.mockResolvedValue({ data: {} });
+    await sendToOutsource(BATCH, {
+      outsource_company_id: 'c',
+      process_id: 'p',
+      version: 1,
+      quote_id: null,
+      direct: true,
+      quantity: 3,
+    });
+    const [, directBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(directBody.direct).toBe(true);
+    expect(directBody.quote_id).toBeNull();
+    // 部分发送数量透传（后端拆批，源批次留余量）
+    expect(directBody.quantity).toBe(3);
+
+    // 接收端点：键名未跟着 send 改，且部分接收的 quantity 现在后端真的认了
+    httpPostMock.mockReset();
+    httpPostMock.mockResolvedValue({ data: {} });
+    await receiveFromOutsource(BATCH, {
+      shelf_id: 's',
+      next_process_id: 'p',
+      version: 1,
+      quantity: 2,
+    });
+    const [, recvBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(recvBody.next_process_id).toBe('p');
+    expect(recvBody).not.toHaveProperty('process_id');
+    expect(recvBody.quantity).toBe(2);
+  });
 });
 
 describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () => {
@@ -215,16 +265,16 @@ describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () =
         workerScan({ serial_no: 'S1', badge_code: 'B1', event_type: 'RETURNED', shelf_id: 's' }),
       ),
     ).toBe('/prod/batches/worker-scan');
-    expect(await postedPath(() => batchToInspection({ target_inspection_shelf_id: 's', items: [] }))).toBe(
-      '/prod/batches/to-inspection',
-    );
+    expect(
+      await postedPath(() => batchToInspection({ target_inspection_shelf_id: 's', items: [] })),
+    ).toBe('/prod/batches/to-inspection');
     expect(await postedPath(() => batchToShip({ items: [] }))).toBe('/prod/batches/to-ship');
   });
 
   it('R4：司机扫码发货（2 段、首段静态 scan）', async () => {
-    expect(
-      await postedPath(() => scanDeliverPart({ part_id: '1', worker_badge_code: 'B1' })),
-    ).toBe('/prod/batches/scan/deliver');
+    expect(await postedPath(() => scanDeliverPart({ part_id: '1', worker_badge_code: 'B1' }))).toBe(
+      '/prod/batches/scan/deliver',
+    );
   });
 
   // 已知缺口守卫：pickUpPart 是**唯一**刻意留在 part 域的写端点（后端 v2 的领取端点
