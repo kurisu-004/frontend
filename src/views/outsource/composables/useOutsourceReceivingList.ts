@@ -11,9 +11,13 @@
 //   - useShelfProcessFilter 双向收窄（仅 production 分支）
 //
 // 不持有：
-//   - customers（页级共享 lookup，由 shell 持有并下传）
 //   - activeTab（页级 shell 持有）
 //   - 发送 tab 相关状态
+//
+// 2026-10-04：receivingFilter 不再有 customer_id。「待接收」列表接口
+// （GET /outsource-shipments/in-flight）的查询参数只有 keyword / limit / offset，
+// 客户筛选从未真正进过请求，是个只改 state、不生效的死筛选（后端本轮不补该参数），
+// 故前端连 UI 带 state 一起删干净。
 //
 // 子组件约定：
 //   - OutsourceReceivingTab 通过 props 读 receivingFilter / receiveDialogXxx，
@@ -56,7 +60,7 @@ export interface ReceivingPagedTableExpose {
 /** 2026-09-21 显式返回类型。 */
 export interface UseOutsourceReceivingListReturn {
   receivingError: Ref<string | null>;
-  receivingFilter: { keyword: string; customer_id: string };
+  receivingFilter: { keyword: string };
   receivingPagedRef: Ref<ReceivingPagedTableExpose | undefined>;
   receiveDialogVisible: Ref<boolean>;
   receiveTarget: Ref<OutsourceInFlightItem | null>;
@@ -94,7 +98,7 @@ export function useOutsourceReceivingList(
   // 2026-08-31 双实例修复：pageSize 不再持久化（与 ListShell 一致），
   // 每次进入视图从 <PagedTable :default-page-size="20"> 起算。
   const receivingError = ref<string | null>(null);
-  const receivingFilter = reactive({ keyword: '', customer_id: '' });
+  const receivingFilter = reactive({ keyword: '' });
   const receivingPagedRef = ref<ReceivingPagedTableExpose>();
 
   // 待接收 tab 持久化（2026-07-30 commit 4B）；2026-08-25 T7：page 不再持久化
@@ -133,7 +137,6 @@ export function useOutsourceReceivingList(
   }
   function onReceivingReset(): void {
     receivingFilter.keyword = '';
-    receivingFilter.customer_id = '';
     void receivingPagedRef.value?.reset();
   }
 

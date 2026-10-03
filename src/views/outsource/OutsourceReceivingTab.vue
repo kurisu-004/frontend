@@ -4,8 +4,11 @@
   本组件 = 业务逻辑持有者 + UI 渲染 + receive dialog 渲染。
   - 业务状态：useOutsourceReceivingList()（含 filter / receive dialog 状态）
   - 列可见性：useColumnVisibility
-  - 父组件提供：customers（L1 全量）+ shelves + processes（接收 dialog 用）
+  - 父组件提供：shelves + processes（接收 dialog 用）
   - 通过 defineExpose 把 refresh() 暴露给 shell 用于「发送成功后联动刷新」。
+
+  2026-10-04：删掉「客户（L1）」筛选。待接收列表接口的查询参数只有 keyword /
+  limit / offset，该下拉只改本地 state、请求永不携带，是个死筛选。
 -->
 <template>
   <div class="receiving-tab">
@@ -17,19 +20,6 @@
         style="width: 280px"
         @keyup.enter="onReceivingSearch"
       />
-      <el-select
-        v-model="receivingFilter.customer_id"
-        clearable
-        placeholder="客户（L1）"
-        style="width: 220px"
-      >
-        <el-option
-          v-for="c in customers.filter((x) => x.parent_id === null)"
-          :key="c.id"
-          :label="c.name"
-          :value="c.id"
-        />
-      </el-select>
       <el-button type="primary" @click="onReceivingSearch">查询</el-button>
       <el-button @click="onReceivingReset">重置</el-button>
       <span v-if="receivingPagedRef?.total && receivingPagedRef.total > 0" class="total-hint"
@@ -137,7 +127,6 @@ import {
   type ColumnDef,
 } from '@/composables/useColumnVisibility';
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
-import type { Customer } from '@/api/customer';
 import type { Shelf as ShelfItem } from '@/types/shelf';
 import type { Process } from '@/types/process';
 import type { OutsourceInFlightItem } from '@/types/outsource';
@@ -145,7 +134,6 @@ import OutsourceReceiveDialog from './components/OutsourceReceiveDialog.vue';
 import { useOutsourceReceivingList } from './composables/useOutsourceReceivingList';
 
 const props = defineProps<{
-  customers: readonly Customer[];
   shelves: readonly ShelfItem[];
   processes: readonly Process[];
 }>();
@@ -253,9 +241,12 @@ onMounted(() => {
   // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
   drag.applyDrag(tableRef);
 
-  const persisted = restore();
-  if (persisted && persisted.receivingFilter) {
-    Object.assign(receivingFilter, persisted.receivingFilter as Partial<typeof receivingFilter>);
+  const persisted = restore() as { receivingFilter?: { keyword?: string } } | null | undefined;
+  // 2026-10-04 改为逐字段显式赋值：useListStatePersist.restore() 的严格校验只看 dep 的
+  // **顶层** key（receivingFilter 仍在快照里），老快照携带的已下线字段会被整包回灌成
+  // 没人读的死字段。显式赋值顺手把它们丢掉，非字符串值同样回退到默认值。
+  if (typeof persisted?.receivingFilter?.keyword === 'string') {
+    receivingFilter.keyword = persisted.receivingFilter.keyword;
   }
 });
 
