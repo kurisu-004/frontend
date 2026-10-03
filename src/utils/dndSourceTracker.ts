@@ -20,10 +20,10 @@
 // 是**跨所有货架**返回候选批次的，batch 所在货架未必等于用户当前激活货架
 // （auth.activeShelfId），所以必须在 @start 时把卡片自带的 `data-shelf-id` 一起记下。
 //
-// 2026-10-03 review 第 2 轮修复：本模块除「源信息」外还承载投放链上另一个必须两处
-// 同步的 Sortable 侧语义 —— `restoreNodeToSource`（把被拖节点放回源容器）。放在这里
-// 是因为它与 `DraggableStartEvent` 投影同属 WorkerColumn / PoolDrawer 共用的那份
-// Sortable 契约面，拆成两个模块只会让「两处都挂」的前提更难守住。
+// 本模块除「源信息」外还承载投放链上另一个必须两处同步的 Sortable 侧语义 ——
+// `restoreNodeToSource`（把被拖节点放回源容器）。放在这里是因为它与
+// `DraggableStartEvent` 投影同属 WorkerColumn / PoolDrawer 共用的那份 Sortable
+// 契约面，拆成两个模块只会让「两处都挂」的前提更难守住。
 
 /** vue-draggable-plus onStart / onAdd / onRemove 事件最小子集（Sortable.js 原生）。
  *  拿不到 Vue 包装层；@add 事件需要 evt.item.dataset.batchId 反查源。
@@ -34,16 +34,24 @@ export interface DraggableStartEvent {
   oldIndex?: number;
 }
 
-/** 2026-10-03 review 第 2 轮修复：把被拖节点放回源容器的原位。
+/** 把被拖节点放回源容器的原位。
  *
  *  用途：投放类容器走 `useLazyDraggable` 的**二参形态**（不传 list），库不再往本实例
  *  挂内建 `onRemove` —— 而内建那份的第一句正是 `from.insertBefore(item,
  *  from.children[oldIndex])`，即**无论投放成败都先把节点物理放回源容器**。少了它，
- *  投放失败（20204 容量超限 / 20104 工种不符 / 20507 货架未映射 / 409 OCC）后卡片会
- *  留在落点列，且 `invalidateQueries` 救不回来：失败时源列与落点列的 query 数据都没变，
- *  Vue 的 keyed diff 只 patchElement、永远不会去删一个不在 vdom 里的外来节点 ⇒
- *  幻影节点逐次累积。本函数是那段内建实现的等价物，**必须挂在每个既是源又是落点的
- *  投放容器上**（WorkerColumn / PoolDrawer 两处，缺一处就漏一种来源）。
+ *  被拖节点会留在落点列，且 `invalidateQueries` 补不回来：失败时（20204 容量超限 /
+ *  20104 工种不符 / 20507 货架未映射 / 409 OCC）源列与落点列的 query 数据都没变，
+ *  Vue 的 keyed diff 对这个外来节点连 patchElement 都做不到；成功时源列数据虽已变、
+ *  keyed diff 会卸载那张卡，但**只删得掉该 vnode 的 DOM footprint**，footprint 之外的
+ *  节点同样删不掉 ⇒ 幻影节点逐次累积。本函数是那段内建实现的等价物，**必须挂在每个既是
+ *  源又是落点的投放容器上**（WorkerColumn / PoolDrawer 两处，缺一处就漏一种来源）。
+ *
+ *  前提不变式：**可拖项组件的根必须是单个元素**（`BatchCard` 的 `.batch-card` 根
+ *  div）。根若是 Fragment，Vue 会在两侧插锚点，锚点跟着留在源容器而节点被搬走；本函数
+ *  按 `from.children[oldIndex]` 放回时元素序列已位移，节点被插到**自己那对锚点范围之外**，
+ *  之后 Vue 卸载走 `removeFragment()` 只删锚点、够不到节点 ⇒ 每次投放残留一个幻影卡片
+ *  （卡片停在原位、刷新浏览器才恢复）。守卫见
+ *  `src/components/__tests__/BatchCardDndFootprint.spec.ts`。
  *
  *  下标语义：`oldIndex` 是 **DOM 下标**（Sortable 报的另一个字段 `oldDraggableIndex`
  *  只数可拖子元素，与之不是同一套计数）。成功路径会多这一次瞬时移回，随后 query

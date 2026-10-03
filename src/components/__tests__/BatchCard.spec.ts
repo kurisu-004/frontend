@@ -22,6 +22,12 @@
 //   - B11：is-selected 类只在 selectable 场景成立（工序池 / 工人列的卡片没有勾选语义）；
 //   - B12：batch_no 为空 → tooltip 的批次号行不渲染（顺带覆盖 tooltip 的 v-if）。
 //   - B13：accentColor 三级优先级（显式值 > 加急橙 > transparent）。
+//   - B14：**源码契约**（读 BatchCard.vue 原文，不挂载组件）—— `.is-selected` 规则必须
+//         用 `border-color` 简写给四边统一上色，且不得出现 `border-top-color` /
+//         `border-right-color` / `border-bottom-color` 单边上色。左边框恒为 4px，只染
+//         其余三边时勾选态的左边框只剩 1px 外圈撑着，视觉上比其它三边细一圈。
+//         B11 只断言类名、抓不到这类样式回归，故单列一条源码契约（与
+//         src/styles/__tests__/elementPlusManualImportStyles.spec.ts 同款做法）。
 //
 // 环境限制（2026-10-02 记档）：vitest 下 Vue 的 useCssVars 是空实现 ⇒ 模板里
 // `v-bind(accentVar)` 产出的 CSS 变量不落 DOM，**样式层的左边框色不可断言**。
@@ -37,8 +43,29 @@
 import { describe, expect, it } from 'vitest';
 import { defineComponent, h, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import BatchCard from '../BatchCard.vue';
 import type { BatchCardModel } from '@/types/batchCard';
+
+/** 组件源码原文（仅供 B14 的样式契约断言用；渲染类断言一律走挂载，不读源码）。
+ *  注意用 `import.meta.url` 字符串而不是 `new URL(...)`：本 spec 跑在 happy-dom 下，
+ *  裸 `new URL` 命中的是 happy-dom 的 URL 实现，node 的 fileURLToPath 认不出来。 */
+const BATCH_CARD_SRC = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../BatchCard.vue'),
+  'utf8',
+);
+
+/** 取出 `selector { … }` 这条规则的花括号内原文。取不到（选择器被改名/删除）返回空串，
+ *  由用例断言负责报错 —— 刻意不抛，免得选择器拼错时栈里看不到是哪个断言。 */
+function cssRuleBody(src: string, selector: string): string {
+  const at = src.indexOf(`${selector} {`);
+  if (at < 0) return '';
+  const bodyStart = at + selector.length + 2;
+  const end = src.indexOf('}', bodyStart);
+  return src.slice(bodyStart, end < 0 ? src.length : end);
+}
 
 /** el-tooltip stub：default slot = 卡片本体，content slot = 详情浮层。
  *  两者各包一层带类名的 div，单测才能把「body 渲染了什么」与「tooltip 渲染了什么」
@@ -336,6 +363,20 @@ describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
     const plain = mountCard(makeBatch({ is_urgent: false }));
     expect(accentVarOf(plain)).toBe('transparent');
     plain.unmount();
+  });
+
+  it('B14：勾选态四边统一主色描边（源码契约，不用单边 border-*-color）', () => {
+    const rule = cssRuleBody(BATCH_CARD_SRC, '.batch-card.is-selected');
+    // 选择器本身必须还在，否则下面的断言会因为空串而假绿
+    expect(rule).not.toBe('');
+    // `border-color` 简写不重置 border-width / border-style：左边框仍是 4px，四边同色
+    expect(rule).toContain('border-color: var(--el-color-primary)');
+    // 单边上色会让 4px 左边框在勾选态只剩 1px 外圈撑着，比其它三边细一圈
+    for (const single of ['border-top-color', 'border-right-color', 'border-bottom-color']) {
+      expect(rule).not.toContain(single);
+    }
+    // 加急语义的承载物（橙色 tag）仍在 body 里
+    expect(BATCH_CARD_SRC).toContain('tag--urgent');
   });
 
   // ===== 2026-10-03：共享化后的扩展字段（extra 扩展槽 / version OCC 锚） =====
