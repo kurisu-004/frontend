@@ -164,7 +164,11 @@ vi.mock('@/api/process', () => ({
 // 2026-09-30：loadBoard / workerHeld / loading 已随 TanStack 硬约束清理删除 ——
 // 本 mock 只保留 WorkerQueueBoard 实际消费的面（error + 三个 move 包装）。
 // 2026-10-03：补 moveBatchBetweenWorkers（WORKER→WORKER，WorkerColumn 落点消费）。
-const moveBatchBetweenWorkersMock = vi.fn(async () => true);
+// 走 vi.hoisted：vi.mock 工厂被提升到模块顶部求值，直接闭包引用下面模块体里的
+// const 会在工厂被提前求值时命中 TDZ（同文件里 realGetWorkerPoolCounts 等同理）。
+const { moveBatchBetweenWorkersMock } = vi.hoisted(() => ({
+  moveBatchBetweenWorkersMock: vi.fn(async () => true),
+}));
 vi.mock('@/views/workers/composables/useWorkerQueue', () => ({
   useWorkerQueue: () => ({
     moveBatchToWorker: vi.fn(),

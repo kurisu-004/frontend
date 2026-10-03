@@ -57,12 +57,15 @@ export function consumePoolSource(batchId: string): PoolDragSource | undefined {
   return v;
 }
 
-/** 记录卡片从某 worker 列拖出（PoolDrawer 接收端使用）。 */
+/** 记录卡片从某 worker 列拖出。落点可能是工序池（撤回批次）也可能是另一个工人列
+ *  （转交批次），两者消费同一个工人源条目、各取其一（Sortable 的 onAdd 只在落点
+ *  容器触发，源列拿不到事件；两张 Map 又按 `w:` 前缀与裸 batchId 隔离，不存在互抢）。 */
 export function recordWorkerSource(batchId: string, fromWorkerId: string): void {
   sources.set(`w:${batchId}`, fromWorkerId);
 }
 
-/** 读 + 删：卡片从某 worker 列拖出。PoolDrawer 在 @add 时调用。 */
+/** 读 + 删：卡片从某 worker 列拖出。消费方两处 —— PoolDrawer（@add 撤回候选池）
+ *  与 WorkerColumn（@add 转交给另一名工人），各取其一。 */
 export function consumeWorkerSource(batchId: string): string | undefined {
   const v = sources.get(`w:${batchId}`);
   sources.delete(`w:${batchId}`);

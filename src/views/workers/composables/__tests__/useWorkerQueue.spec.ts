@@ -174,6 +174,9 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
     expect(ok).toBe(false);
     expect(realMoveBatch).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('批次货架信息缺失，无法分配');
+    // 早退同样必须失效：mutation 没发出，但 Sortable 已把卡片 DOM 搬进目标列，
+    // 不重拉就留下一张服务器并不承认的卡。
+    expectPoolDomainInvalidated();
   });
 
   it('T3：moveBatchToWorker 失败 → 返回 false + error.value 写入 + ElMessage.error', async () => {
@@ -201,6 +204,7 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
   });
 
   it('T5：moveBatchToPool toShelfId 为空 → 早退 false + warning，零请求', async () => {
+    // 同 T2：撤回目标货架为空时 mutation 不发出，但 DOM 已被搬进池子 ⇒ 也要失效。
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useWorkerQueue());
@@ -208,6 +212,7 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
     expect(ok).toBe(false);
     expect(realMoveBatch).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('请先选择目标货架');
+    expectPoolDomainInvalidated();
   });
 
   it('T6：runAutoAllocate 成功 → autoAllocate 被调 + pool 三域前缀失效', async () => {

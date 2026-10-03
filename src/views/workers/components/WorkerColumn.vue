@@ -20,10 +20,14 @@
         list 就是渲染源」，而本容器的渲染源是 query 派生的 heldBatches —— 传任何
         list 副本都只是往一个没人看的数组里 splice。详见 useLazyDraggable 的文件头
         注释（那里记录了「纯投放信号源」这条不变量的完整推导）。
-     3. Sortable 容器只包卡片：loading / error / 空态三种状态移出容器（Sortable 容
-        器的直接子元素必须全是可拖项）。
+     3. Sortable 容器只包卡片：loading / error 两种状态移出容器（Sortable 容器的直接
+        子元素必须全是可拖项），空态**不能**移出 —— 容器不渲染就没有 Sortable 实例，
+        空工人列会直接失去投放资格（POOL→WORKER 的主场景恰恰是往空闲工人派活）。
+        空态改用 pointer-events:none 的兄弟覆盖层承担，视觉不变、落点判定不受影响。
      4. .col-body 补卡片网格（flex-wrap + gap 8px + :deep(.batch-card) 锁 200px），
-        与工序池 / 待下发池同一条网格基线。 -->
+        与工序池 / 待下发池同一条网格基线；列宽按该基线反算到 432px（见样式区）。
+     5. onMove 拒掉同容器内原地重排（二参形态下库不挂 onUpdate，重排后无人回滚，
+        详见 onMove 的接入处注释）。 -->
 <template>
   <el-card class="worker-column" shadow="never">
     <template #header>
@@ -50,17 +54,17 @@
       <div v-else-if="stateQuery.error.value" class="error-state">
         <el-empty description="加载失败" :image-size="60" />
       </div>
-      <el-empty
-        v-else-if="heldBatches.length === 0"
-        class="col-empty"
-        description="暂无持有工单"
-        :image-size="60"
-      />
-      <!-- 2026-10-03：Sortable 投放目标容器的直接子元素**只有卡片**。
-           loading / error / 空态三种状态一律移出容器（此前混在容器里），它们不是
-           可拖项，留在里面会让 Sortable 的 DOM 下标与「可拖项下标」错位。 -->
-      <div v-else ref="containerRef" class="col-body" :data-worker-id="worker.id">
+      <!-- 2026-10-03：.col-body **无条件渲染**，不再挂在 v-else 上。空工人列必须一直是
+           合法的 Sortable 落点 —— 容器不渲染 ⇒ useLazyDraggable 的 watch 走 destroy 分支 ⇒
+           该列没有任何 Sortable 实例 ⇒「把批次派给当前没持有批次的工人」放不进去（卡片弹回
+           源容器），而这正是 POOL→WORKER 的主场景、也是 WORKER→WORKER 的常见落点。
+           代价控制：loading / error 仍走 v-if / v-else-if 两级互斥分支（不进容器），
+           空态由下面的兄弟覆盖层承担（pointer-events:none，不吃落点判定）。 -->
+      <div ref="containerRef" class="col-body" :data-worker-id="worker.id">
         <BatchCard v-for="batch in heldBatches" :key="batch.batch_id" :batch="batch" />
+      </div>
+      <div v-if="showEmpty" class="col-empty">
+        <el-empty description="暂无持有工单" :image-size="60" />
       </div>
     </div>
   </el-card>
@@ -70,6 +74,7 @@
 import { computed, inject, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
+import type { MoveEvent } from 'sortablejs';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { Worker } from '@/types/workerPool';
 import type { BatchCardModel as Card } from '@/types/batchCard';
@@ -123,6 +128,12 @@ const heldBatches = computed<Card[]>(() => {
   return list.map(heldToCard);
 });
 
+/** 空态覆盖层的显示条件。空态**不能**把 .col-body 顶掉（那会让空列失去 Sortable
+ *  落点），只作为 pointer-events:none 的兄弟覆盖层叠在容器上方。 */
+const showEmpty = computed<boolean>(
+  () => !stateQuery.isLoading.value && !stateQuery.error.value && heldBatches.value.length === 0,
+);
+
 /** 2026-09-30：max_held / current_held 显示 —— 加载中占位「…」，resolved 后真实数字。 */
 const maxHeldDisplay = computed<string>(() => {
   if (stateQuery.isLoading.value) return '…';
@@ -150,22 +161,42 @@ const capacityStatus = computed<'success' | 'warning' | ''>(() => {
 });
 
 // 2026-10-03：Sortable 用**二参重载**（不传 list）—— 本容器是纯投放目标，DOM
-// 一律由 query refetch 后的 Vue 渲染覆盖，库的内建 onAdd / onRemove（它们会把被拖
-// 节点按 list 数组 splice 进去）不该介入；配合上面的「直接子元素只有卡片」，容器里
-// 也不会混入 header / 空态把 DOM 下标与可拖项下标搅浑。
-// 代价：列内不再支持拖拽重排（本列每次落位都是一次写操作 + 一次失效，重排无语义）。
-// 用 useLazyDraggable 而非裸 useDraggable：容器在 v-else 分支内，挂载瞬间 ref 必为
-// null，裸 useDraggable 会在 onMounted 里 new Sortable(null) 抛错。
-// 每次拖拽（成功或失败）都必须有一次 invalidate 把 DOM 搬位对账回来 —— 成功走
-// useWorkerQueue 的 onSuccess，失败走它的 onError，两条路都失效 pool 三域。
+// 一律由 query refetch 后的 Vue 渲染覆盖，库的内建 onAdd / onRemove（它们把
+// oldDraggableIndex 当 list 数组下标 splice 进去）不该介入；完整推导见
+// useLazyDraggable 的文件头注释。
+// 每次拖拽（成功 / 失败 / 参数早退）都必须有一次 invalidate 把 Sortable 搬走的 DOM
+// 对账回真相：三条出口都在 useWorkerQueue 内（moveMutation 的 onSuccess / onError，
+// 以及两个包装的入参早退分支），都走 invalidatePoolDomains。
+// 走 useLazyDraggable 而非裸 useDraggable：统一由它强制 immediate:false + 在
+// flush:'post' 的 watch 里绑定，el 换节点时自动重绑、置 null 时自动 destroy。
 const containerRef = ref<HTMLElement | null>(null);
 useLazyDraggable(containerRef, {
   group: 'work-orders',
   animation: 150,
   ghostClass: 'sortable-ghost',
+  onMove: rejectInPlaceReorder,
   onStart: onDragStart,
   onAdd: onDragAdd,
 });
+
+/** 2026-10-03：拒掉同容器内的原地重排。
+ *
+ *  为什么需要：二参形态下库不挂内建 onUpdate，本容器也没有可写的 list，重排一旦发生
+ *  就没有任何人回滚 DOM 顺序，要等下一次 query 重拉才复原 —— 中间那段是纯幽灵顺序。
+ *
+ *  为什么用 onMove 而不是 `sort: false`：`sort` 是**落点**侧的分流开关
+ *  （dist 的 `_onDragOver` 读 `Me === s ? f || (a = O !== T) : …`，`f` 取自
+ *  `this.options.sort`），而本看板各容器的 group 都是同一个字符串 'work-orders'
+ *  ⇒ `Me === s` 恒真 ⇒ 落点侧 `sort:false` 会让**每一次**投放都在下一次 dragover
+ *  被 revert 回源容器，等于把整个看板的投放打死。onMove 逐次否决「落点 == 节点当前
+ *  所在容器」这一种情形，跨容器投放完全不受影响。
+ *
+ *  onMove 只从**源**容器的 options 读取（dist 的 `Xe` 取 `fromEl[q].options.onMove`），
+ *  本容器既是源也是落点，挂在这一处即覆盖「列内重排」与「被别的列投进来」两种情形；
+ *  从工序池拖出的投放由 PoolDrawer 侧的同名守卫负责。 */
+function rejectInPlaceReorder(evt: MoveEvent): boolean {
+  return evt.dragged.parentNode !== evt.to;
+}
 
 // 2026-09-30：moveBatchToWorker 签名收窄为 (batch_id, to_worker_id, from_shelf_id)
 // —— 不再有 process_id。后端把 `admin/worker-pool/assign` 合并进了通用移动端点
@@ -225,7 +256,13 @@ async function onDragAdd(evt: DraggableStartEvent) {
 
 <style scoped>
 .worker-column {
-  width: 280px;
+  /* 2026-10-03：432px 来自下方两列网格的算式 —— 200px 卡片 × 2 + 8px gap
+     + .el-card__body padding 10px × 2 + el-card 边框 1px × 2 = 430px，取 432 留 2px 余量。
+     卡片 200px 是全看板硬约定（工序池 / 待下发池同一张卡），两列换行只能靠加宽列，不能
+     压卡片；低于 430 时 flex-wrap 一行都换不出来，净效果是每行白多 8px 纵向间隙。
+     一屏可见列数变少（~3.5 → ~2.5）由 .columns-container 的 overflow-x: auto 横向滚动
+     兜底，不隐藏任何工人。 */
+  width: 432px;
   flex-shrink: 0;
   /* 2026-10-02：显式声明纵向 flex（EP 2.14 的 .el-card 本身已是 display:flex +
      flex-direction:column，此处显式写出来是为了让下方高度链不依赖 EP 内部实现）。
@@ -266,10 +303,11 @@ async function onDragAdd(evt: DraggableStartEvent) {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
-/* 2026-10-03：状态区（loading / error / 空态）与 Sortable 容器拆成兄弟两层。
+/* 2026-10-03：状态区（loading / error / 空态）与 Sortable 容器拆成兄弟三层。
    .col-content 承接 .el-card__body 的 flex:1 + min-height:0（高度链终点），
-   下面的状态节点与 .col-body 在它内部按 v-if/v-else 互斥出现。 */
+   并作为空态覆盖层的定位上下文；下面的状态节点与 .col-body 在它内部各按 v-if 出现。 */
 .col-content {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -280,9 +318,10 @@ async function onDragAdd(evt: DraggableStartEvent) {
 .col-body {
   /* 2026-10-03：卡片网格（与 PoolDrawer 的 .pool-cards、PendingBatchesPanel 的
      .pending-cards 同一条基线：gap 8px + align-content: flex-start）。此前是普通块
-     容器，200px 定宽卡片逐行堆叠、行与行之间没有统一间隙。列宽 280px 减去
-     .el-card__body 的 10px×2 padding 后约 258px，两张 200px 卡 + 8px 间隙放不下，
-     实际仍是一行一张 —— 先把网格基线立起来，列宽一旦放宽即自动两列。 */
+     容器，200px 定宽卡片逐行堆叠、行与行之间没有统一间隙。列宽按该基线反算（见
+     .worker-column 的算式注释），432px 恰好放得下两列。min-height:100px 是空列时的
+     落点面积下限：flex:1 已经能撑满 .col-content，这行保证 .el-card__body 高度被内容
+     决定时（列内无卡 + 父级未定高）也留得下一块可感知的投放区。 */
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -295,11 +334,19 @@ async function onDragAdd(evt: DraggableStartEvent) {
 .col-body :deep(.batch-card) {
   flex: 0 0 200px;
 }
-/* 空态居中：.col-content 是纵向 flex 容器，横向对齐靠 align-self（默认 stretch 会把
-   el-empty 拉满整列宽），纵向居中靠 auto 外边距。 */
+/* 2026-10-03：空态是 .col-body 的**兄弟覆盖层**，不是容器内的子节点 ——
+   ① 容器内混入非可拖子元素会让 Sortable 的可拖项下标与 DOM 下标错位；
+   ② 容器不渲染会让空列失去 Sortable 实例，POOL→WORKER 的主场景直接放不进去。
+   pointer-events:none 是关键：不写它，el-empty 的插画 DOM 会吃掉落点判定，
+   拖到「空列中央」和拖到容器外的空白区变得等价。
+   居中靠 flex 自身（align-items/justify-content），不再依赖外边距。 */
 .col-empty {
-  align-self: center;
-  margin: auto 0;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
 .loading-state,
 .error-state {

@@ -14,8 +14,12 @@
 //     且不发 POOL→WORKER。此即「主症状」的修复点：此前只有 W2 一条路径。
 //   - W4：拖回自己那一列 → 两个包装都不调（不构成一次移动）。
 //   - W5：既无候选池源也无工人源 → 两个包装都不调。
-//   - W6：空态 el-empty **不在** Sortable 容器内（容器直接子元素必须全是可拖项）。
+//   - W6：空态 el-empty 是 .col-body 的**兄弟覆盖层**：容器仍在（非空/空态都要存在，
+//     空列是 POOL→WORKER 的主落点），且容器内没有任何非可拖子元素。
 //   - W7：卡片渲染在 .col-body 容器内，容器带 data-worker-id（拖拽源的识别锚点）。
+//   - W8：空列也把 Sortable 绑到了 .col-body 上（start(el) 收到的就是该节点）——
+//     容器不渲染 ⇒ watch 走 destroy 分支 ⇒ 空列没有任何 Sortable 实例，拖不进去。
+//   - W9：onMove 守卫 —— 落点 == 节点当前所在容器（原地重排）拒掉，跨容器放行。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -29,13 +33,16 @@
 //     el-empty / el-tooltip）+ vi.mock('element-plus') 把 ElMessage 桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, ref, type ComputedRef, type PropType } from 'vue';
+import { defineComponent, h, nextTick, ref, type ComputedRef, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
+import type { MoveEvent } from 'sortablejs';
 import type { HeldBatchItemDto } from '@/api/workerPool.contract';
 import type { Worker } from '@/types/workerPool';
 
 const captured = vi.hoisted(() => ({
   calls: [] as { list: unknown; options: Record<string, unknown> }[],
+  /** useLazyDraggable 在 flush:'post' 的 watch 里调 start(el)，这里收容器节点。 */
+  starts: [] as unknown[],
 }));
 
 vi.mock('vue-draggable-plus', () => ({
@@ -48,7 +55,7 @@ vi.mock('vue-draggable-plus', () => ({
     return {
       option: () => undefined,
       destroy: () => undefined,
-      start: () => undefined,
+      start: (el?: unknown) => captured.starts.push(el),
       pause: () => undefined,
       resume: () => undefined,
     };
@@ -244,9 +251,18 @@ function dragEvent(dataset: { batchId: string }, fromDataset: Record<string, str
   return { item, from };
 }
 
+/** 造一个 onMove 载荷：dragged 的父容器 = draggedEl 当前所在容器，to = 落点容器。 */
+function moveEvent(draggedEl: HTMLElement, draggedIn: HTMLElement, to: HTMLElement): MoveEvent {
+  draggedIn.appendChild(draggedEl);
+  // 载荷只用到 dragged / to 两个字段（Sortable 的 MoveEvent 其余字段与守卫无关），
+  // 故只投影这两个，避免测试与库的完整事件体耦合。
+  return { dragged: draggedEl, to } as unknown as MoveEvent;
+}
+
 describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
   beforeEach(() => {
     captured.calls.length = 0;
+    captured.starts.length = 0;
   });
 
   it('W1：Sortable 用二参重载，不传 list（渲染源与 list 不同源）', () => {
@@ -332,13 +348,24 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W6：空态 el-empty 不在 Sortable 容器内（容器直接子元素必须全是可拖项）', () => {
+  it('W6：空态 el-empty 是 .col-body 的兄弟覆盖层，容器本身仍在', () => {
     const wrapper = mountColumn([]);
-    // 空态时容器根本不渲染：Sortable 拿不到一个装满非可拖子元素的容器
-    expect(wrapper.find('.col-body').exists()).toBe(false);
-    expect(wrapper.find('.el-empty-stub').exists()).toBe(true);
-    // 空态必须仍占满可视区（否则列底会塌成一条缝）
-    expect(wrapper.find('.col-content').exists()).toBe(true);
+    // 回归 guard：空工人列是 POOL→WORKER 的主落点。容器一旦不渲染，空列就没有任何
+    // Sortable 实例，「给空闲工人派活」根本放不进去（卡片弹回源容器）。
+    const col = wrapper.find('.col-body');
+    expect(col.exists()).toBe(true);
+    expect((col.element as HTMLElement).dataset.workerId).toBe(SELF_WORKER.id);
+    // 容器内不得混入任何非可拖子元素（空态 ⇒ 零子元素）
+    expect(col.element.children).toHaveLength(0);
+    // 空态插画仍渲染，且必须是容器的兄弟节点而非后代
+    const empty = wrapper.find('.el-empty-stub');
+    expect(empty.exists()).toBe(true);
+    expect(empty.element.closest('.col-body')).toBeNull();
+    const overlay = wrapper.find('.col-empty');
+    expect(overlay.exists()).toBe(true);
+    expect(overlay.element.parentElement?.classList.contains('col-content')).toBe(true);
+    // 覆盖层的另一半保证（pointer-events:none 不吃落点判定）在样式区，单测环境不注入
+    // scoped 样式、无法断言，靠 W8 守住「容器确实有 Sortable 实例」这一侧。
     wrapper.unmount();
   });
 
@@ -355,6 +382,34 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     for (const child of Array.from(col.element.children)) {
       expect(child.matches('.batch-card, .el-tooltip-stub')).toBe(true);
     }
+    wrapper.unmount();
+  });
+
+  it('W8：空列也把 Sortable 绑在 .col-body 上（start 收到的就是该容器节点）', async () => {
+    // 回归 guard：useLazyDraggable 在 flush:'post' 的 watch 里 start(el) / destroy()。
+    // 容器若在空态下不渲染，watch 走 destroy 分支 ⇒ 该列一个 Sortable 实例都没有 ⇒
+    // 拖到空列 = 无落点，拖拽被取消、卡片弹回源容器。
+    const wrapper = mountColumn([]);
+    await nextTick();
+    const col = wrapper.find('.col-body');
+    expect(col.exists()).toBe(true);
+    expect(captured.starts).toContain(col.element);
+    wrapper.unmount();
+  });
+
+  it('W9：onMove 守卫 —— 原地重排拒掉，跨容器投放放行', () => {
+    const wrapper = mountColumn([makeHeld()]);
+    const onMove = capturedOptions().onMove as (e: unknown) => boolean;
+    const selfCol = wrapper.find('.col-body').element as HTMLElement;
+    const otherCol = document.createElement('div');
+    const card = document.createElement('div');
+
+    // ① 卡片还在本列内、落点也是本列 ⇒ 原地重排（无人回滚的幽灵顺序）⇒ 拒
+    expect(onMove(moveEvent(card, selfCol, selfCol))).toBe(false);
+    // ② 卡片在本列、落点是别的列 ⇒ 放行（POOL/其他工人 → 本列）
+    expect(onMove(moveEvent(card, selfCol, otherCol))).toBe(true);
+    // ③ 卡片已在别的列、落点回本列 ⇒ 放行（拖出去再拖回来必须能落位）
+    expect(onMove(moveEvent(card, otherCol, selfCol))).toBe(true);
     wrapper.unmount();
   });
 });

@@ -107,12 +107,14 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
    *  `skip_serializing_if`（条件不满足时整个字段从 JSON 省略），schema 用
    *  `.nullish()` 兜住；契约漂移立刻抛 ZodError 由 onError 接管。
    *
-   *  2026-10-03：onError 也失效 pool 三域。**失败即与服务器对账一次**——本域的
+   * 2026-10-03：onError 也失效 pool 三域。**失败即与服务器对账一次**——本域的
    *  Sortable 容器退化为「纯投放信号源」：拖拽时 Sortable 已经把被拖节点**物理搬进**
    *  落点容器，而 DOM 一律要靠 query refetch 后的 Vue 渲染覆盖回来。成功路径有
    *  invalidate 兜底，失败路径若只弹 toast 不重拉，那次错位的 DOM 就永远留在屏幕上
    *  （A 列少一张 / B 列多一张），用户只能手点「刷新」。高频触发场景：工人容量超限
-   *  20204、工种不含该批次工序、撤回目标货架未映射该工序 20507、OCC 409。 */
+   *  20204、工种不含该批次工序、撤回目标货架未映射该工序 20507、OCC 409。
+   *  包装层两个入参早退分支（from.shelf_id / to.shelf_id 为空）也各失效一次 ——
+   *  mutation 压根没发出，但 DOM 已经被搬走了，同样需要重拉才能把屏幕拉回真相。 */
   const moveMutation = useMutation<MoveResultDto, Error, MoveRequest>({
     mutationKey: ['worker-pool', 'move'],
     mutationFn: async (req) => moveResultSchema.parse(await moveBatch(req)),
@@ -152,8 +154,9 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
   }
 
   /** POOL → WORKER mutation 包装 —— 保留 Promise<boolean> 签名以兼容
-   *  WorkerColumn.onDragAdd 调用点。`from.shelf_id` 必填（空串直接早退，避免
-   *  发出必被后端 20122 拒的请求）。 */
+   * WorkerColumn.onDragAdd 调用点。`from.shelf_id` 必填（空串直接早退，避免
+   * 发出必被后端 20122 拒的请求）。早退同样失效：Sortable 已经把卡片 DOM 搬进
+   * 目标列，此时不重拉，屏幕上就留下一张服务器并不承认的卡。 */
   async function moveBatchToWorker(
     batchId: string,
     toWorkerId: string,
@@ -161,6 +164,7 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
   ): Promise<boolean> {
     if (!fromShelfId) {
       ElMessage.warning('批次货架信息缺失，无法分配');
+      await invalidatePoolDomains();
       return false;
     }
     try {
@@ -176,7 +180,8 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
   }
 
   /** WORKER → POOL mutation 包装 —— 保留 Promise<boolean> 签名以兼容
-   *  PoolDrawer.onDragAdd 调用点。 */
+   * PoolDrawer.onDragAdd 调用点。目标货架为空早退时同样失效（与 POOL→WORKER 同理：
+   * DOM 已被搬进池子，不重拉就留着幻影）。 */
   async function moveBatchToPool(
     batchId: string,
     fromWorkerId: string,
@@ -184,6 +189,7 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
   ): Promise<boolean> {
     if (!toShelfId) {
       ElMessage.warning('请先选择目标货架');
+      await invalidatePoolDomains();
       return false;
     }
     try {

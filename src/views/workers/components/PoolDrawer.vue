@@ -4,8 +4,9 @@
      @start 把候选池源信息（含 batch 真实 shelf_id）写到 dndSourceTracker；
      @add 时调 moveBatchToPool 撤回批次。
      2026-10-03：Sortable 走二参重载（不传 list），本容器退化为「纯投放目标」——
-     DOM 搬位一律靠 move 的失效链重拉回来（成功走 onSuccess、失败走 onError，两条
-     路都失效 pool 三域）。完整推导见 useLazyDraggable 的文件头注释。
+     DOM 搬位一律靠 move 的失效链重拉回来（成功走 onSuccess、失败走 onError、目标
+     货架缺失的早退走包装内的显式失效，三条路都失效 pool 三域）。完整推导见
+     useLazyDraggable 的文件头注释。
 
      2026-09-30：
      - moveBatchToPool 签名去掉 next_process_id（后端 `POST /prod/pool/move` 的
@@ -46,6 +47,7 @@
 import { computed, inject, ref } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
+import type { MoveEvent } from 'sortablejs';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { ProcessPoolView } from '@/types/workerPool';
 import {
@@ -68,18 +70,31 @@ defineProps<{
 // 「工人列 → 工序池」的回退拖拽永久失效）。改用 useLazyDraggable 延后绑定。
 // 2026-10-03：走**二参重载**（不传 list）—— 本容器与 WorkerColumn 一样是纯投放目标：
 // Sortable 搬进来的 DOM 一律由 query refetch 后的 Vue 渲染覆盖，库的内建 onAdd /
-// onRemove（往 list 数组 splice）在这里只会往一个与渲染源不同源的数组里写。
-// 内建 onRemove 的 `from.children[oldIndex]` 还是按 DOM 下标回插，容器里混入
-// header / 空态就会让下标与可拖项错位 —— 二参形态下这套 handler 整个不挂载。
-// 代价：池内不再支持拖拽重排（候选池顺序由后端排定，本就无重排语义）。
+// onRemove 唯一的实际动作是把 `newDraggableIndex` / `oldDraggableIndex`（Sortable 报的
+// **可拖项**下标）当 list 数组下标 splice 进去（`Dt(list, oldDraggableIndex)` 即
+// `list.splice(oldDraggableIndex, 1)`），那只有在「list 与可拖子元素一一对应且同序」时
+// 才成立。本容器的渲染源是 pool.batches、此前传入的 writablePoolBatches 只是它的镜像，
+// 对不齐 ⇒ 内建 splice 写进一个 Vue 根本不读的数组。二参形态下这套 handler 整个不挂载。
+// 同理不接 onUpdate：池内重排无人回滚（候选池顺序由后端排定，本就无重排语义），
+// 改由下面的 onMove 守卫直接拒掉。
 const containerRef = ref<HTMLElement | null>(null);
 useLazyDraggable(containerRef, {
   group: 'work-orders',
   animation: 150,
   ghostClass: 'sortable-ghost',
+  onMove: rejectInPlaceReorder,
   onStart: onDragStart,
   onAdd: onDragAdd,
 });
+
+/** 2026-10-03：拒掉池内原地重排（理由与 WorkerColumn 的同名守卫一致：不接 onUpdate
+ *  时重排会留下无人回滚的幽灵 DOM 顺序；`sort: false` 是落点侧开关，本看板各容器
+ *  共用同一个 group 字符串，落点侧关掉它会把跨容器投放一起打死）。
+ *  onMove 只从**源**容器的 options 读取，所以从池里拖出的投放由这里负责，从工人列
+ *  拖出的投放由 WorkerColumn 负责 —— 两处都要挂，缺一处就漏一种来源的池内重排。 */
+function rejectInPlaceReorder(evt: MoveEvent): boolean {
+  return evt.dragged.parentNode !== evt.to;
+}
 
 // 2026-09-30：page provide 必注入；moveBatchToPool 签名收窄为
 // (batch_id, from_worker_id, to_shelf_id) —— 不再有 next_process_id（后端
