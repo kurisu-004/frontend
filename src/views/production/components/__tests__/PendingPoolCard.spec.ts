@@ -31,6 +31,17 @@
 //     （Node.contains 覆盖后代）；来源必须是待下发池（`data-pending-pool` 标记，
 //     Sortable 的 put: true 不做来源白名单）。
 //
+// 2026-10-04（拖拽投放加二次确认弹窗）：
+//   - onAdd 回调变 async：三道守卫 + item/batchId 提取仍在第一个 await 之前同步跑完，
+//     守卫命中即静默 return、不弹框；守卫全过才弹确认框，用户取消 ⇒ 不 mutate。
+//   - 连带影响：驱动 onAdd 后必须 `await flushPromises()`（或直接 await 回调返回的
+//     Promise）再断言 mutate，否则断言会落在 mutate 之前的微任务窗口上（假红 / 假绿）。
+//   - P6c / P10b 原先断言「同步不抛」，async 化后异常会变成 unhandled rejection 而非
+//     同步 throw ⇒ 改为 `await expect(...).resolves.toBeUndefined()`（真断言 Promise 兑现）。
+//   - P11：投放命中 ⇒ 弹一次确认框，message 含该工序 code + name，确认后才 mutate；
+//   - P12：确认框 reject（用户取消）⇒ 不 mutate、不发任何请求；
+//   - P13：三道守卫任一命中 ⇒ **不弹**确认框（ElMessageBox.confirm 未被调用）。
+//
 // 测试策略（沿 LoginView.spec.ts 范本）：
 //   - vue-test-utils mount + globalConfig.plugins: [[VueQueryPlugin, { queryClient }]]；
 //   - vi.mock('@/api/workerPool') + vi.mock('element-plus') + vi.mock('vue-draggable-plus')。
@@ -46,6 +57,10 @@ vi.mock('element-plus', () => ({
     error: vi.fn(),
     warning: vi.fn(),
     info: vi.fn(),
+  },
+  ElMessageBox: {
+    // 默认 resolve（= 用户点确认），beforeEach 会复位
+    confirm: vi.fn(async () => undefined),
   },
 }));
 
@@ -154,10 +169,10 @@ function mountCard(
 }
 
 /** 取出本卡 Sortable 配置的 onAdd（本 spec 只 mount 单卡 ⇒ 只有 1 条捕获记录，
- *  即该投放目标容器）。 */
-function capturedOnAdd(): (evt: unknown) => void {
+ *  即该投放目标容器）。2026-10-04：onAdd 已是 async（确认框），故返回 Promise 版签名。 */
+function capturedOnAdd(): (evt: unknown) => Promise<void> {
   expect(captured.calls).toHaveLength(1);
-  return captured.calls[0].options.onAdd as (evt: unknown) => void;
+  return captured.calls[0].options.onAdd as (evt: unknown) => Promise<void>;
 }
 
 /** 2026-10-02：构造一个「释放在本卡内」的原生 drop 事件投影。
@@ -192,9 +207,13 @@ function foreignSource(): HTMLElement {
 }
 
 describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     realGetWorkerPoolByProcess.mockClear();
     captured.calls.length = 0;
+    const { ElMessageBox } = await import('element-plus');
+    vi.mocked(ElMessageBox.confirm).mockClear();
+    // 默认 = 用户点确认（拖拽投放的二次确认框默认放行，让存量投放用例维持原语义）
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue(undefined as never);
   });
 
   it('P1：mount 不发任何 per-process 详情请求（懒加载核心 guard）', async () => {
@@ -272,6 +291,8 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
       from: poolSource(),
       originalEvent: insideDrop(wrapper.find('.pool-card').element),
     });
+    // 2026-10-04：onAdd 变 async（确认框），mutate 发生在 await 之后 ⇒ 必须放完微任务
+    await flushPromises();
     // 拖拽只发被拖的那一件，**不读 selectedIds**（多选集合只属于单击路径）。
     expect(mutate).toHaveBeenCalledTimes(1);
     expect(mutate).toHaveBeenCalledWith({
@@ -294,6 +315,7 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
       // 第 2 行的 .row（内含 el-tag），是典型的「松手落在标签上」落点
       originalEvent: insideDrop(wrapper.findAll('.pool-card .row')[1].element),
     });
+    await flushPromises();
     expect(mutate).toHaveBeenCalledTimes(1);
     expect(mutate).toHaveBeenCalledWith({
       batchIds: ['3000000000009'],
@@ -311,6 +333,8 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
       from: poolSource(),
       originalEvent: insideDrop(wrapper.find('.pool-card').element),
     });
+    // 2026-10-04：放完微任务再断言，避免「短路点被挪到 await 之后」这类回归被漏掉
+    await flushPromises();
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -324,6 +348,7 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
       from: poolSource(),
       originalEvent: insideDrop(wrapper.find('.pool-card').element),
     });
+    await flushPromises();
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -333,7 +358,9 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
     const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
     await flushPromises();
     // 既无 item 也无 originalEvent ⇒ 投放确认守卫直接短路，返回前不得抛
-    expect(() => capturedOnAdd()({})).not.toThrow();
+    // 2026-10-04：onAdd 变 async 后「不抛」要断言 Promise 兑现（异常会走 unhandled
+    // rejection 而不是同步 throw，原先的 not.toThrow() 已成空断言）
+    await expect(capturedOnAdd()({})).resolves.toBeUndefined();
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -353,6 +380,7 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
       from: poolSource(),
       originalEvent: dragEndEvt(wrapper.find('.pool-card').element),
     });
+    await flushPromises();
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -370,6 +398,7 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
       from: poolSource(),
       originalEvent: insideDrop(document.createElement('div')),
     });
+    await flushPromises();
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -389,6 +418,7 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
       // 其余判据全部通过：drop 事件 + 落点在本卡内 ⇒ 只有来源这一条能挡住
       originalEvent: insideDrop(wrapper.find('.pool-card').element),
     });
+    await flushPromises();
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -397,12 +427,93 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
     const mutate = vi.fn();
     const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
     await flushPromises();
-    expect(() =>
+    // 2026-10-04：async 化后「不抛」改断言 Promise 兑现（理由同 P6c）
+    await expect(
       capturedOnAdd()({
         item: { dataset: { batchId: '3000000000009' } },
         originalEvent: insideDrop(wrapper.find('.pool-card').element),
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
+    expect(mutate).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('P11：投放命中 → 弹一次确认框（文案含工序 code + name），确认后才 mutate', async () => {
+    // 需求 guard：手动拖批次到工序卡是不可逆写操作、手滑高发，mutate 前必须有一次确认。
+    // 弹窗只报工序名（卡片 DOM 上只有 data-batch-id，批次号 / 零件名在另一面板的
+    // batches 里，接线成本不值）。
+    const { ElMessageBox } = await import('element-plus');
+    const mutate = vi.fn();
+    const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
+    await flushPromises();
+    const root = wrapper.find('.pool-card').element;
+    const dropped = capturedOnAdd()({
+      item: { dataset: { batchId: '3000000000009' } },
+      from: poolSource(),
+      originalEvent: insideDrop(root),
+    });
+    // 确认框未决 ⇒ 还没下发
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+    const [message, title] = vi.mocked(ElMessageBox.confirm).mock.calls[0]!;
+    expect(title).toBe('确认下发');
+    expect(message).toContain('CNC-01');
+    expect(message).toContain('粗加工');
+    expect(mutate).not.toHaveBeenCalled();
+    await dropped;
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledWith({
+      batchIds: ['3000000000009'],
+      targetProcessId: '2000000000001',
+    });
+    wrapper.unmount();
+  });
+
+  it('P12：确认框 reject（用户取消）→ 不 mutate、不发任何请求', async () => {
+    const { ElMessageBox } = await import('element-plus');
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel' as never);
+    const mutate = vi.fn();
+    const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
+    await flushPromises();
+    await capturedOnAdd()({
+      item: { dataset: { batchId: '3000000000009' } },
+      from: poolSource(),
+      originalEvent: insideDrop(wrapper.find('.pool-card').element),
+    });
+    await flushPromises();
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+    expect(mutate).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('P13：三道守卫任一命中 → 不弹确认框（静默丢弃，不打扰用户）', async () => {
+    // 守卫是「这次根本不算投放」，此时弹框等于让用户为一个不会发生的下发做决策
+    //（按 Esc 取消后还得再点一次「取消」才能消掉弹窗）⇒ 守卫必须整体前置于 await。
+    const { ElMessageBox } = await import('element-plus');
+    const mutate = vi.fn();
+    const wrapper = mountCard(ref<Set<string>>(new Set<string>()), 7, mutate);
+    await flushPromises();
+    const onAdd = capturedOnAdd();
+    const root = wrapper.find('.pool-card').element;
+    // 第一道：完成事件不是 drop（Esc 取消 / 非 Sortable 区域松手）
+    onAdd({
+      item: { dataset: { batchId: '3000000000009' } },
+      from: poolSource(),
+      originalEvent: dragEndEvt(root),
+    });
+    // 第二道：落点不在本卡内
+    onAdd({
+      item: { dataset: { batchId: '3000000000009' } },
+      from: poolSource(),
+      originalEvent: insideDrop(document.createElement('div')),
+    });
+    // 第三道：来源不是待下发池
+    onAdd({
+      item: { dataset: { batchId: '3000000000009' } },
+      from: foreignSource(),
+      originalEvent: insideDrop(root),
+    });
+    await flushPromises();
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled();
     expect(mutate).not.toHaveBeenCalled();
     wrapper.unmount();
   });

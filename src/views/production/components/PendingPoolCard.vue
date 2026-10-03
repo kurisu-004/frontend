@@ -25,7 +25,17 @@
      4. **拖入高亮（.is-dropping）由父级驱动**：Sortable 的 _onMove 只从**被拖起的
         那个容器**（源，即待下发批次列表）的 options.onMove 取回调，投放目标的 onMove
         一次都不触发 ⇒ 高亮态由源面板 onMove 上报 process.id、经 WorkerQueueBoard 落到
-        本组件的 `dropping` prop。根 div 的 data-process-id 就是这条链路的识别标记。 -->
+        本组件的 `dropping` prop。根 div 的 data-process-id 就是这条链路的识别标记。
+
+     2026-10-04 拖入下发加二次确认：手动把批次拖到工序卡是「不可逆写操作 + 手滑高发」
+     （指针划过即亮、稍一松手即下发），故 mutate 之前弹一次确认框。弹窗**只报工序名**：
+     被拖卡片的 DOM 上只有 data-batch-id，零件名 / 批次号在另一面板的 batches 里，
+     为此把批次详情接进投放卡并不划算。确认框**只挂在拖拽路径**上，单击工序卡的既有
+     下发语义（多选集合 + 空选兜底）完全不动。弹窗的异步性不影响节点归位：拖拽源
+     PendingBatchesPanel 走的是 vue-draggable-plus **三参重载**（传了 list），库内建
+     onRemove 的第一句 `from.insertBefore(item, from.children[oldIndex])` 在同一个
+     _onDrop 里、目标 onAdd 返回后**同步**把被拖节点放回源容器 ⇒ 本组件不必自备
+     onRemove 回滚。 -->
 <template>
   <div
     ref="dropRef"
@@ -51,6 +61,7 @@
 import { computed, ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useDraggable, type DraggableEvent } from 'vue-draggable-plus';
+import { useConfirm } from '@/composables/useConfirm';
 import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
 
 interface Props {
@@ -77,6 +88,10 @@ const props = withDefaults(defineProps<Props>(), { dropping: false });
 const accent = computed<string>(() => props.process.color ?? 'var(--el-color-primary)');
 
 const dropRef = ref<HTMLElement | null>(null);
+
+/** 2026-10-04：拖入下发的二次确认。按钮文案与 usePendingDispatch 的自动下发确认框
+ *  统一（「下发 / 取消」），两处下发入口在用户心智里是同一个动作。 */
+const { dangerous: confirmDangerous } = useConfirm();
 /** 2026-10-02：Sortable 投放目标（二参重载，不传 list）。本卡片根 div 无条件渲染，
  *  mount 即非 null，直接用 useDraggable（不需要 useLazyDraggable 的延后绑定）。
  *  - `draggable: '.never'`：容器内没有任何匹配 `.never` 的子元素 ⇒ 卡片自身不可从
@@ -150,8 +165,16 @@ type AddEvent = DraggableEvent & { originalEvent?: Event };
  *  只能在本组件做：待下发池容器在模板上标了 `data-pending-pool="1"`。
  *
  *  高亮的清理由源侧 onEnd 负责（end 只派发给源，跨容器 drop 时本目标的 onEnd 永不
- *  触发，故此处不能也不该复位 dropping）。 */
-function onDrop(evt: DraggableEvent) {
+ *  触发，故此处不能也不该复位 dropping）。
+ *
+ *  2026-10-04 二次确认：三道守卫与 item / batchId 提取全部**同步**跑在第一个 await
+ *  之前 —— 它们是「这次根本不算投放」的静默短路，不该被一个弹窗拦在中间（用户按了 Esc
+ *  却还要再点一次「取消」才能消掉弹窗）。守卫全过才弹确认框，取消即不发请求。
+ *
+ *  async 化不引入 DOM 回滚义务：拖拽源走三参重载（传了 list），库内建 onRemove 的
+ *  第一句 `from.insertBefore(item, from.children[oldIndex])` 在同一个 _onDrop 里、
+ *  目标 onAdd 返回后**同步**执行 ⇒ 确认框 await 期间被拖节点早已归位。 */
+async function onDrop(evt: DraggableEvent) {
   // 释放在本卡之外（含 Esc 取消）⇒ 视为放弃投放，不下发
   const orig = (evt as AddEvent).originalEvent;
   if (orig?.type !== 'drop') {
@@ -174,6 +197,12 @@ function onDrop(evt: DraggableEvent) {
   if (!item) return;
   const batchId = item.dataset.batchId;
   if (!batchId) return;
+  const confirmed = await confirmDangerous(
+    '确认下发',
+    `确认将批次下发到工序「${props.process.code} ${props.process.name}」？`,
+    { type: 'warning', confirmText: '下发', cancelText: '取消' },
+  );
+  if (!confirmed) return;
   props.dispatchMutation.mutate({
     batchIds: [batchId],
     targetProcessId: props.process.id,
