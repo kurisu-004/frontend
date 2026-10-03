@@ -606,7 +606,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
   }
 
-  /** 回填作用域：不传 = 全表（`rebuildFromUploads` 用）；传 = 只回填本次新建的行。 */
+  /** 回填作用域。契约（2026-10-03）：**传了就必须显式给全两侧**，某一侧没给就
+   *  按「空集合」处理、绝不退回全量；只有**完全不传**才是「全表」语义。 */
   interface ExcelFillTarget {
     parts?: StandalonePartRow[];
     assemblies?: AssemblyRow[];
@@ -618,15 +619,23 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    *  数据源是 composable 级 `excelByDrawingNo`。没有 Excel 数据时静默返回（不抛错、不提示）
    *  —— 「没传 Excel」是完全正常的用法，不该打扰用户。
    *
-   *  `target` 缺省是全表，但**建行入口一律显式传入本次新建的行**：全表重扫会把用户
-   *  在其它行上手改过的数量 / 单价 / 交期 / 申请人一起覆盖回 Excel 值（分厂有
-   *  `!customer_id` 守卫所以幸免），而「建行」这个动作与那些行无关，不该动它们。
-   *  只有 `rebuildFromUploads` 适合全表：它本就整体替换了 `standaloneParts` 并清空
-   *  `assemblies`，表内全是刚解析出来的新行。 */
+   *  `target` **不传** = 全表（只有 `rebuildFromUploads` 走这条：它本就整体替换了
+   *  `standaloneParts` 并清空 `assemblies`，表内全是刚解析出来的新行，不存在「用户
+   *  手改过的既有行」需要保护）。`target` **已传** = 只回填它显式给出的集合，
+   *  **没给的一侧按空集合处理，绝不退回全量**：全表重扫会把用户在另一侧（独立零件表
+   *  ↔ 装配件表）手改过的数量 / 单价 / 总价 / 交期 / 申请人一起覆盖回 Excel 值
+   *  （分厂有 `!customer_id` 守卫所以幸免），而「建行」这个动作与那些行无关。
+   *  ⇒ 4 个建行入口（合并成零件 / 合并成装配件 / 手动新增零件 / 手动新增装配件）
+   *  一律显式传入本次新建的行，且**只给本次涉及的那一侧**。 */
   function applyExcelToAll(target?: ExcelFillTarget): void {
     const excelMap = excelByDrawingNo.value;
     if (!excelMap) return;
-    for (const r of target?.parts ?? standaloneParts.value) {
+    // 2026-10-03：作用域在进循环前一次性定死 —— 不传 = 两张表全量；传了 = 只用它
+    //  给出的集合（缺侧即空）。先算成两个局部变量，是为了让「传了作用域就绝不兜回
+    //  全量」这件事在代码里一眼可读，且不可能再被 `??` 悄悄改回隐式回落。
+    const parts = target ? (target.parts ?? []) : standaloneParts.value;
+    const asms = target ? (target.assemblies ?? []) : assemblies.value;
+    for (const r of parts) {
       const matched = excelMap.get(r.drawing_no);
       if (!matched) continue;
       r.applicant_name = matched.applicantName || r.applicant_name;
@@ -647,7 +656,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         }
       }
     }
-    for (const a of target?.assemblies ?? assemblies.value) {
+    for (const a of asms) {
       // 2026-10-03：顶层命中源改为**装配件自身图号** `a.drawing_no`。子件图号是前端按
       // 「首页原图号 / 原图号-02」合成的（见 mergeSelectedAsAssembly /
       // confirmManualAssembly），其中只有第 1 页那个恰好等于装配件自身图号，`-02 / -03`

@@ -11,6 +11,8 @@
 //     （子页不该吃整套数量 / 单价）；
 //   - 4 个建行入口（合并成零件 / 合并成装配件 / 手动新增零件 / 手动新增装配件）
 //     都回填，但**只作用于本次新建的行** —— 再建一行不得撤销其它行上用户的手改值。
+//     这条约束**同集合与跨集合都要锁**：建装配件不得重刷独立零件表，建零件不得重刷
+//     装配件表（独立的 describe 见下方「跨集合作用域」）。
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -519,6 +521,230 @@ describe('usePartBatchPdf：Excel 回填（业务口径：整套 vs 子件）', 
       expect(c.quantity).toBe(1);
       expect(c.unit_price).toBeNull();
       expect(c.total_price).toBeNull();
+    }
+
+    w.unmount();
+  });
+});
+
+// ============ 跨集合作用域回归（2026-10-03 review 第 3 轮）============
+//
+// 上面的两条「手改值不被撤销」只覆盖**同集合**（改零件 + 建零件 / 改装配件 + 建装配件），
+// 跨集合（改零件 + 建装配件 / 改装配件 + 建零件）零覆盖 —— 于是 `applyExcelToAll` 里
+// `target?.parts ?? standaloneParts.value` 的隐式回落活了下来：建行入口只给一侧时，
+// 另一侧的 `target?.xxx` 是 `undefined`，`??` 便退回全量，把另一侧用户手改过的值
+// 悄悄刷回 Excel 值（分厂靠 `!customer_id` 守卫幸免）。本组用例把 4 个建行入口
+// 对「另一侧」的污染方向逐个锁死。
+describe('usePartBatchPdf：跨集合作用域（建行不得污染另一张表）', () => {
+  it('改独立零件 → mergeSelectedAsAssembly 建装配件：独立行手改值原样保留，新装配件照常回填', async () => {
+    // 3 页 PDF ×2：合并前者 2 页得到独立零件行，再合并后者 2 页得到装配件
+    mocks.pageCount = 3;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setupMany(api, { pdfNames: [PART_PDF, ASM_PDF], withExcel: true });
+    selectPages(api, 'pdf-1001', 2);
+    await api.mergeSelectedAsPart();
+
+    const edited = api.standaloneParts.value[0];
+    if (!edited) throw new Error('未生成独立零件行');
+    // 先确认它确实被 Excel 回填过，否则下面「保持不变」是空断言
+    expect(edited.drawing_no).toBe(EXCEL_ROW_PART.drawingNo);
+    expect(edited.quantity).toBe(EXCEL_ROW_PART.quantity);
+    expect(edited.unit_price).toBe(EXCEL_ROW_PART.unitPrice);
+    expect(edited.total_price).toBe(EXCEL_ROW_PART.totalPrice);
+    expect(edited.applicant_name).toBe(EXCEL_ROW_PART.applicantName);
+    expect(edited.planned_delivery_date).toBe(plusDays(TODAY, EXCEL_ROW_PART.deliveryDays));
+
+    // 用户手改：数量 / 含税单价 / 含税总价 / 计划交期 / 申请人（分厂不动，见浏览器实测）
+    edited.quantity = 99;
+    edited.unit_price = 888;
+    edited.total_price = 87912;
+    edited.planned_delivery_date = '2030-01-01';
+    edited.applicant_name = '张三';
+
+    // 跨集合动作：本次只建装配件
+    selectPages(api, 'pdf-1002', 2);
+    await api.mergeSelectedAsAssembly();
+
+    // 独立零件表一个字段都不许被这次「建装配件」动过
+    expect(edited.quantity).toBe(99);
+    expect(edited.unit_price).toBe(888);
+    expect(edited.total_price).toBe(87912);
+    expect(edited.planned_delivery_date).toBe('2030-01-01');
+    expect(edited.applicant_name).toBe('张三');
+
+    // 而本次新建的装配件仍被正常回填（证明不是把回填整个关掉了）
+    const fresh = api.assemblies.value[0];
+    if (!fresh) throw new Error('未生成装配件');
+    expect(fresh.drawing_no).toBe(EXCEL_ROW_ASM.drawingNo);
+    expect(fresh.customer_id).toBe('c-liuchang');
+    expect(fresh.customer_name).toBe(EXCEL_ROW_ASM.deptName);
+    expect(fresh.applicant_name).toBe(EXCEL_ROW_ASM.applicantName);
+    expect(fresh.quantity).toBe(EXCEL_ROW_ASM.quantity);
+    expect(fresh.planned_delivery_date).toBe(plusDays(TODAY, EXCEL_ROW_ASM.deliveryDays));
+    expect(fresh.children).toHaveLength(2);
+    for (const c of fresh.children) {
+      expect(c.planned_delivery_date).toBe(fresh.planned_delivery_date);
+      expect(c.quantity).toBe(1);
+      expect(c.unit_price).toBeNull();
+      expect(c.total_price).toBeNull();
+    }
+
+    w.unmount();
+  });
+
+  it('改装配件顶层与子件 → mergeSelectedAsPart 建零件：装配件手改值原样保留，新零件照常回填', async () => {
+    // 2 页 PDF ×2：合并前者 2 页得到装配件，再合并后者 2 页得到独立零件
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setupMany(api, { pdfNames: [ASM_PDF, PART_PDF], withExcel: true });
+    selectPages(api, 'pdf-1001', 2);
+    await api.mergeSelectedAsAssembly();
+
+    const edited = api.assemblies.value[0];
+    if (!edited) throw new Error('未生成装配件');
+    // 先确认它确实被 Excel 回填过，否则下面「保持不变」是空断言
+    expect(edited.quantity).toBe(EXCEL_ROW_ASM.quantity);
+    expect(edited.applicant_name).toBe(EXCEL_ROW_ASM.applicantName);
+    expect(edited.planned_delivery_date).toBe(plusDays(TODAY, EXCEL_ROW_ASM.deliveryDays));
+    const firstChild = edited.children[0];
+    if (!firstChild) throw new Error('未生成子件');
+    expect(firstChild.planned_delivery_date).toBe(edited.planned_delivery_date);
+
+    // 用户手改顶层套数 / 计划交期 / 申请人，并单独改一个子件的交期
+    edited.quantity = 66;
+    edited.planned_delivery_date = '2029-12-31';
+    edited.applicant_name = '张三';
+    firstChild.planned_delivery_date = '2029-11-11';
+
+    // 跨集合动作：本次只建独立零件
+    selectPages(api, 'pdf-1002', 2);
+    await api.mergeSelectedAsPart();
+
+    // 装配件表（含子件）一个字段都不许被这次「建零件」动过
+    expect(edited.quantity).toBe(66);
+    expect(edited.planned_delivery_date).toBe('2029-12-31');
+    expect(edited.applicant_name).toBe('张三');
+    expect(firstChild.planned_delivery_date).toBe('2029-11-11');
+
+    // 而本次新建的独立零件仍被正常回填（证明不是把回填整个关掉了）
+    const fresh = api.standaloneParts.value[0];
+    if (!fresh) throw new Error('未生成独立零件行');
+    expect(fresh.drawing_no).toBe(EXCEL_ROW_PART.drawingNo);
+    expect(fresh.customer_id).toBe('c-duqi');
+    expect(fresh.customer_name).toBe(EXCEL_ROW_PART.deptName);
+    expect(fresh.applicant_name).toBe(EXCEL_ROW_PART.applicantName);
+    expect(fresh.quantity).toBe(EXCEL_ROW_PART.quantity);
+    expect(fresh.unit_price).toBe(EXCEL_ROW_PART.unitPrice);
+    expect(fresh.total_price).toBe(EXCEL_ROW_PART.totalPrice);
+    expect(fresh.planned_delivery_date).toBe(plusDays(TODAY, EXCEL_ROW_PART.deliveryDays));
+
+    w.unmount();
+  });
+
+  it('改装配件顶层与子件 → confirmManualPart 建零件：装配件手改值原样保留，新零件照常回填', async () => {
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setupMany(api, { pdfNames: [ASM_PDF, PART_PDF], withExcel: true });
+    selectPages(api, 'pdf-1001', 2);
+    await api.mergeSelectedAsAssembly();
+
+    const edited = api.assemblies.value[0];
+    if (!edited) throw new Error('未生成装配件');
+    expect(edited.quantity).toBe(EXCEL_ROW_ASM.quantity);
+    expect(edited.applicant_name).toBe(EXCEL_ROW_ASM.applicantName);
+    const firstChild = edited.children[0];
+    if (!firstChild) throw new Error('未生成子件');
+    expect(firstChild.planned_delivery_date).toBe(edited.planned_delivery_date);
+
+    edited.quantity = 66;
+    edited.planned_delivery_date = '2029-12-31';
+    edited.applicant_name = '张三';
+    firstChild.planned_delivery_date = '2029-11-11';
+
+    // 跨集合动作：手动新增一个独立零件
+    api.manualPartForm.drawing_no = EXCEL_ROW_PART.drawingNo;
+    api.manualPartForm.name = '断路器开关链接头';
+    api.manualPartForm.file = pdfFile('manual-part.pdf');
+    await api.confirmManualPart();
+
+    expect(edited.quantity).toBe(66);
+    expect(edited.planned_delivery_date).toBe('2029-12-31');
+    expect(edited.applicant_name).toBe('张三');
+    expect(firstChild.planned_delivery_date).toBe('2029-11-11');
+
+    const fresh = api.standaloneParts.value[0];
+    if (!fresh) throw new Error('未生成手动零件行');
+    expect(fresh.customer_id).toBe('c-duqi');
+    expect(fresh.applicant_name).toBe(EXCEL_ROW_PART.applicantName);
+    expect(fresh.quantity).toBe(EXCEL_ROW_PART.quantity);
+    expect(fresh.unit_price).toBe(EXCEL_ROW_PART.unitPrice);
+    expect(fresh.total_price).toBe(EXCEL_ROW_PART.totalPrice);
+    expect(fresh.planned_delivery_date).toBe(plusDays(TODAY, EXCEL_ROW_PART.deliveryDays));
+
+    w.unmount();
+  });
+
+  it('改独立零件 → confirmManualAssembly 建装配件：独立行手改值原样保留，新装配件照常回填', async () => {
+    // 单页 PDF ×2 → rebuildFromUploads 直接生成 2 个独立零件行（都已被 Excel 回填）
+    mocks.pageCount = 1;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setupMany(api, { pdfNames: [PART_PDF, ASM_PDF], withExcel: true });
+    expect(api.standaloneParts.value).toHaveLength(2);
+    const edited = api.standaloneParts.value[0];
+    const alsoEdited = api.standaloneParts.value[1];
+    if (!edited || !alsoEdited) throw new Error('未生成独立零件行');
+    // 先确认两行确实被 Excel 回填过，否则下面「保持不变」是空断言
+    expect(edited.drawing_no).toBe(EXCEL_ROW_PART.drawingNo);
+    expect(edited.quantity).toBe(EXCEL_ROW_PART.quantity);
+    expect(alsoEdited.drawing_no).toBe(EXCEL_ROW_ASM.drawingNo);
+    expect(alsoEdited.quantity).toBe(EXCEL_ROW_ASM.quantity);
+
+    // 用户在两张独立行上都手改
+    edited.quantity = 99;
+    edited.unit_price = 888;
+    edited.total_price = 87912;
+    edited.planned_delivery_date = '2030-01-01';
+    edited.applicant_name = '张三';
+    alsoEdited.quantity = 77;
+    alsoEdited.applicant_name = '李四';
+
+    // 跨集合动作：手动新增一个装配件（1 页 → 单个子件）
+    api.manualAsmForm.drawing_no = EXCEL_ROW_ASM.drawingNo;
+    api.manualAsmForm.name = '扁条收框档条';
+    api.manualAsmForm.file = pdfFile('manual-asm.pdf');
+    await api.confirmManualAssembly();
+
+    expect(edited.quantity).toBe(99);
+    expect(edited.unit_price).toBe(888);
+    expect(edited.total_price).toBe(87912);
+    expect(edited.planned_delivery_date).toBe('2030-01-01');
+    expect(edited.applicant_name).toBe('张三');
+    expect(alsoEdited.quantity).toBe(77);
+    expect(alsoEdited.applicant_name).toBe('李四');
+
+    const fresh = api.assemblies.value[0];
+    if (!fresh) throw new Error('未生成手动装配件');
+    expect(fresh.customer_id).toBe('c-liuchang');
+    expect(fresh.applicant_name).toBe(EXCEL_ROW_ASM.applicantName);
+    expect(fresh.quantity).toBe(EXCEL_ROW_ASM.quantity);
+    expect(fresh.planned_delivery_date).toBe(plusDays(TODAY, EXCEL_ROW_ASM.deliveryDays));
+    expect(fresh.children).toHaveLength(1);
+    for (const c of fresh.children) {
+      expect(c.planned_delivery_date).toBe(fresh.planned_delivery_date);
+      expect(c.quantity).toBe(1);
+      expect(c.unit_price).toBeNull();
     }
 
     w.unmount();
