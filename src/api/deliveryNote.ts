@@ -278,19 +278,20 @@ export interface PrintNoteResult {
 }
 
 export interface PrintNotePayload {
-  /** 2026-08-02 新增：批次 id 顺序（与预览组件产出对齐；空 = 走默认 DB 顺序） */
+  /** 2026-08-02 新增：批次 id 顺序（与预览组件产出对齐；空 = 走默认 DB 顺序）。
+   *  口径：每个 part 恰好一个代表批次 id（同 part 多批次折叠后的最小 id），
+   *  多发非代表 id 或漏发代表 id 后端都判 422。 */
   custom_order?: string[];
-  /** 2026-08-04 新增：装配件子件合并为一行（数量 1，单位套，总装图信息）；
-   * false = 散件逐行（默认）。 */
+  /** 2026-08-04 新增：装配件子件合并为一行（数量由后端按子件齐套情况算，
+   * 单位套，总装图信息）；false = 散件逐行（默认）。 */
   merge_assemblies?: boolean;
-  /** 2026-08-04 扩展：装配件合并行每套 override 数量（assembly_id 雪花 ID 字符串 → 套数，≥ 1） */
-  merge_quantities?: Record<string, number>;
 }
 
 /** 2026-08-07：标签导出专用（送货单 /print 不支持部分导出）。 */
 export interface PrintLabelsPayload extends PrintNotePayload {
   /** 只打这些批次行（line_items[].id）；省略 = 全部。
-   *  合并模式下需由调用方把装配件父行展开为组内子件 id。 */
+   *  必须与 `custom_order` 同口径（每个 part 的代表批次 id）：后端先按 custom_order
+   *  裁到代表批次再做成员校验，多发非代表 id 会判「不属于本单」。 */
   line_item_ids?: string[];
 }
 

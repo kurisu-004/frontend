@@ -8,7 +8,9 @@
   - 行可拖动：vue-draggable-plus（包 Sortable.js）绑到 el-table 渲染出的 tbody
   - 用户拖动只影响预览副本；详情页 ``note.line_items`` 不变
   - 单上有装配件子件时显示「合并为一套 / 分开打印所有子件」radio；合并模式预览折叠
-    子件为父行；导出时把父行 round-trip 展开为组内 batch id 连续。
+    子件为父行；导出时把父行 round-trip 展开为组内各 part 的代表批次 id 连续。
+  - 装配件套数全由后端算（shippable_sets），前端只读展示、不让用户填；后端没给这个数
+    （字段整体缺失）时渲染「—」而不是「0 套」—— 两者业务含义相反（见 utils/assemblySets）。
   - ``mode`` prop 双模式：
       · 'note'  = 只导送货单
       · 'label' = 只导标签，支持勾选部分行；列首加 el-table 原生 selection 列
@@ -32,6 +34,7 @@ import {
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import { assemblyTotalSetsOfGroup, shippableSetsOfGroup } from '../utils/assemblySets';
 
 const props = withDefaults(
   defineProps<{
@@ -75,14 +78,29 @@ interface PreviewAssemblyRow {
   applicant_name: string;
   drawing_no: string;
   name: string;
-  quantity: number;
+  /** 2026-10-04：本单可出货套数（后端算，前端只读）；后端没给这个字段时 null → 渲染「—」 */
+  quantity: number | null;
   unit: string;
+  /** 2026-10-04：装配件工单总套数（数量列 tooltip 的对照值）；后端没给时 null */
+  assembly_quantity: number | null;
+  /** 2026-10-04：组内每个 part 的代表批次 id（custom_order / line_item_ids 的唯一来源） */
+  memberIds: string[];
 }
 type PreviewRow = DeliveryNoteLineItem | PreviewAssemblyRow;
 
+/** 2026-10-04 新增：雪花 id 比较。后端把 id 序列化成 string（> 2^53，转 number 会丢
+ *  精度），故按 BigInt 比数值；非纯数字串降级字典序，保证本函数不抛。
+ *  不可退化成 Number(a) < Number(b)：两个仅在 2^53 之后有差别的 19 位 id 转 number
+ *  后相等，会让代表批次永远不换、静默选错。 */
+function idLessThan(a: string, b: string): boolean {
+  if (/^\d+$/.test(a) && /^\d+$/.test(b)) return BigInt(a) < BigInt(b);
+  return a < b;
+}
+
 // 2026-08-07：同 part 多批次折叠（_split 产生同 part 同送货单）。
-// 永远开启，先于装配体折叠：每 part 仅产出一行，quantity 求和；
-// 行 id = 首个出现的 batch id（= 后端代表批次 id 约定）。
+// 永远开启，先于装配体折叠：每 part 仅产出一行，quantity 求和。
+// 行 id = 该 part 下 id 最小的批次 = 后端 custom_order 认可的代表批次（代表口径 = 最小 id）；
+// 显式取 min 令前端不依赖 line_items 的返回顺序。
 // 与 DeliveryNoteLineItem 1:1 → DeliveryNoteLineItem（保留原 part_id 用于 asm 折叠判断）。
 function foldSamePart(items: DeliveryNoteLineItem[]): DeliveryNoteLineItem[] {
   const qty = new Map<string, number>();
@@ -90,13 +108,15 @@ function foldSamePart(items: DeliveryNoteLineItem[]): DeliveryNoteLineItem[] {
   const order: string[] = [];
   for (const li of items) {
     const pid = String(li.part_id);
-    if (qty.has(pid)) {
-      qty.set(pid, qty.get(pid)! + li.quantity);
+    const cur = rep.get(pid);
+    if (cur === undefined) {
+      rep.set(pid, li);
+      order.push(pid);
+      qty.set(pid, li.quantity);
       continue;
     }
-    qty.set(pid, li.quantity);
-    rep.set(pid, li);
-    order.push(pid);
+    qty.set(pid, qty.get(pid)! + li.quantity);
+    if (idLessThan(li.id, cur.id)) rep.set(pid, li);
   }
   return order.map((pid) => ({ ...rep.get(pid)!, quantity: qty.get(pid)! }));
 }
@@ -127,8 +147,15 @@ const previewRows = computed<PreviewRow[]>(() => {
       applicant_name: siblings[0]?.applicant_name ?? '',
       drawing_no: li.assembly_drawing_no ?? '',
       name: li.assembly_name ?? '',
-      quantity: 1,
+      // 2026-10-04：两个套数字段都是后端算的只读值，口径见 utils/assemblySets。
+      // quantity = 本单可出货套数（shippable_sets，后端整体没给时 null → 渲染「—」，
+      // 不可兜成 0：「没给数」与「凑不齐整套」业务含义相反）；
+      // assembly_quantity = 装配件工单总套数（tooltip 的对照值）。
+      quantity: shippableSetsOfGroup(siblings),
       unit: '套',
+      assembly_quantity: assemblyTotalSetsOfGroup(siblings),
+      // 组内各 part 的代表批次 id 在建行时定死：导出与预览共用同一份，不再二次折叠
+      memberIds: siblings.map((s) => String(s.id)),
     });
     insertedAsm.add(li.assembly_id);
   });
@@ -216,8 +243,8 @@ const columnDefs: ColumnDef[] = [
     },
   },
 ];
-// 「数量」列不进 defs：el-input-number 受控 v-model=r.quantity（asm 行） + 文本回退（普通行），
-// 不便走 cellRender（多分支 + EP 组件 + 受控 modelValue）。
+// 「数量」列不进 defs：装配件父行渲染「可出货套数 + tooltip」而普通行是纯文本，
+// 两套渲染不便走 cellRender。
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'print_preview_dialog' });
 const drag = useColumnDrag(columnDefs, { listKey: 'print_preview_dialog' });
 
@@ -260,6 +287,22 @@ function isAsmRow(r: unknown): r is PreviewAssemblyRow {
   return typeof r === 'object' && r !== null && (r as PreviewAssemblyRow).is_asm_row === true;
 }
 
+/** 2026-10-04 新增：预览行 → 它代表的批次 id 列表（后端 custom_order / line_item_ids 的
+ *  唯一口径），只读行上已定死的 id，不在此处二次推导。
+ *  - 散件行：previewRows 已按 part 折叠，每行即一个 part 的代表批次 → 行自身 id；
+ *  - 装配件父行：memberIds = 该套装下每个 part 各一个代表 id（合并不打散子件，后端据此
+ *    归「套」）。 */
+function repIdsOfRow(r: PreviewRow): string[] {
+  if (isAsmRow(r)) return r.memberIds;
+  return [String(r.id)];
+}
+
+/** 2026-10-04 新增：装配件父行数量列的 tooltip：工单总套数 vs 本单可出货套数。
+ *  任一项后端没给数都显示「—」。 */
+function asmQtyTitle(r: PreviewAssemblyRow): string {
+  return `工单总套数 ${r.assembly_quantity ?? '—'} 套；本单可出货 ${r.quantity ?? '—'} 套`;
+}
+
 // 2026-08-07：标签模式全选 / 反选
 async function selectAll(): Promise<void> {
   await nextTick();
@@ -295,59 +338,20 @@ async function onConfirm(): Promise<void> {
   if (!props.note) return;
   loading.value = true;
   try {
-    // 2026-08-24 bugfix：custom_order / line_item_ids 都必须覆盖 line_items[*].id
-    // 全部批次（后端 rep-id 校验 21113）。rows 经过 foldSamePart 折叠后每个 part 仅产
-    // 出代表 batch id，会漏掉同 part 多批次 / 装配件子件多批次——这里查全量必须用原始
-    // line_items，不能用折叠后的 flat。
-    const allItems = props.note.line_items;
-    let custom_order: string[];
-    let mergeFlag = false;
-    let merge_quantities: Record<string, number> | undefined;
-    if (mergeMode.value === 'merge') {
-      // 合并模式：父行 → 组内 batch id 连续；散件行原样
-      custom_order = [];
-      merge_quantities = {};
-      rows.value.forEach((r) => {
-        if (isAsmRow(r)) {
-          merge_quantities![r.assembly_id] = r.quantity;
-          allItems
-            .filter((li) => li.assembly_id === r.assembly_id)
-            .forEach((c) => custom_order.push(String(c.id)));
-        } else {
-          allItems
-            .filter((li) => li.part_id === (r as DeliveryNoteLineItem).part_id)
-            .forEach((c) => custom_order.push(String(c.id)));
-        }
-      });
-      mergeFlag = true;
-    } else {
-      custom_order = [];
-      rows.value.forEach((r) => {
-        allItems
-          .filter((li) => li.part_id === (r as DeliveryNoteLineItem).part_id)
-          .forEach((c) => custom_order.push(String(c.id)));
-      });
-    }
+    // custom_order / line_item_ids 口径 = 每个 part 一个代表批次 id（同 part 多批次
+    // 折叠后的最小 id）：后端据此校验，多发非代表 id 或漏发代表 id 都判 422。
+    // 代表 id 已随行定死（装配件父行存 memberIds、散件行即自身 id），这里只按当前
+    // 预览顺序展开。
+    const custom_order = rows.value.flatMap((r) => repIdsOfRow(r));
+    const mergeFlag = mergeMode.value === 'merge';
 
     if (isLabelMode.value) {
-      // 2026-08-07：label 模式 → 展开勾选行成子件 batch id（与 custom_order 同一口径）
-      // 2026-08-24：同上面 custom_order 一样改用 allItems，否则 line_item_ids 也漏批次。
-      const line_item_ids: string[] = [];
-      selectedRows.value.forEach((r) => {
-        if (isAsmRow(r)) {
-          allItems
-            .filter((li) => li.assembly_id === r.assembly_id)
-            .forEach((c) => line_item_ids.push(String(c.id)));
-        } else {
-          allItems
-            .filter((li) => li.part_id === (r as DeliveryNoteLineItem).part_id)
-            .forEach((c) => line_item_ids.push(String(c.id)));
-        }
-      });
+      // 勾选行 → 代表批次 id 子集（custom_order 仍覆盖全部行，两者正交：
+      // 顺序 × 成员，后端先按 custom_order 排序再按 line_item_ids 裁成员）
+      const line_item_ids = selectedRows.value.flatMap((r) => repIdsOfRow(r));
       const { blob, filename } = await printNoteLabels(props.note.id, {
         custom_order,
         merge_assemblies: mergeFlag,
-        merge_quantities,
         line_item_ids,
       });
       triggerBrowserDownload(blob, filename);
@@ -356,7 +360,6 @@ async function onConfirm(): Promise<void> {
       const { blob, filename } = await printNote(props.note.id, {
         custom_order,
         merge_assemblies: mergeFlag,
-        merge_quantities,
       });
       triggerBrowserDownload(blob, filename);
     }
@@ -443,19 +446,13 @@ async function onConfirm(): Promise<void> {
           </template>
         </el-table-column>
       </template>
-      <!-- 「数量」列不进 defs：asm 行 el-input-number + 普通行文本 双分支不便走 cellRender -->
+      <!-- 「数量」列不进 defs：装配件父行是「套数 + tooltip」，普通行是纯文本。
+           装配件父行后端没给数时渲染「—」（不写 0），单位同步省略。 -->
       <el-table-column label="数量" min-width="120" align="right">
         <template #default="{ row }">
-          <el-input-number
-            v-if="isAsmRow(row)"
-            v-model="row.quantity"
-            :min="1"
-            :max="999"
-            :precision="0"
-            size="small"
-            controls-position="right"
-            style="width: 110px"
-          />
+          <span v-if="isAsmRow(row)" class="asm-qty" :title="asmQtyTitle(row)">
+            {{ row.quantity ?? '—' }}<span v-if="row.quantity !== null" class="unit">套</span>
+          </span>
           <span v-else>{{ row.quantity }}</span>
         </template>
       </el-table-column>
@@ -463,8 +460,11 @@ async function onConfirm(): Promise<void> {
 
     <template #footer>
       <el-button @click="onCancel">取消</el-button>
+      <!-- 2026-10-04：data-role 供组件级用例定位「导出」按钮（footer 里按钮数随
+           label / note 两态与模式切换而变，按位置取按钮是脆的） -->
       <el-button
         type="primary"
+        data-role="export"
         :loading="loading"
         :disabled="!rows.length || (isLabelMode && !selectedRows.length)"
         @click="onConfirm"
@@ -517,5 +517,10 @@ async function onConfirm(): Promise<void> {
 }
 .asm-tag {
   margin-right: 4px;
+}
+/* 2026-10-04：装配件父行数量 = 后端算出的可出货套数，只读展示。
+   后端没给数时渲染「—」，样式与普通行一致，无需额外修饰。 */
+.asm-qty .unit {
+  color: var(--text-secondary);
 }
 </style>
