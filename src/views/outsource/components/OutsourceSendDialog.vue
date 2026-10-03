@@ -44,7 +44,7 @@
           </el-select>
         </el-descriptions-item>
         <el-descriptions-item label="外协工序">{{
-          target.next_process_name ?? '—'
+          target.current_process_name ?? '—'
         }}</el-descriptions-item>
         <el-descriptions-item label="单价">
           {{ target.send_mode === 'DIRECT' ? '—' : `${target.price} 元` }}

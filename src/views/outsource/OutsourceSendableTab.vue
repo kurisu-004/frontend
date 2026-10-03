@@ -349,12 +349,12 @@ const columnDefs: ColumnDef[] = [
     align: 'center',
   },
   {
-    key: 'next_process_name',
-    label: '下一道工序',
+    key: 'current_process_name',
+    label: '当前工序',
     minWidth: 140,
     showOverflowTooltip: true,
     align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as SendableItem).next_process_name || '—'),
+    cellRender: ({ row }) => h('span', null, (row as SendableItem).current_process_name || '—'),
   },
   {
     key: 'outsource_company_name',

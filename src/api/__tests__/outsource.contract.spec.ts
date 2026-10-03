@@ -270,10 +270,6 @@ const quotablePartFixture = {
   customer_name: '二级客户',
   l1_customer_name: '一级客户',
   customer_path: '一级客户/二级客户',
-  shelf_id: 'SH1',
-  shelf_code: 'C2',
-  next_process_id: 'PR1',
-  next_process_name: '外协工序',
 };
 
 const inFlightFixture = {
@@ -309,8 +305,8 @@ const sendableFixture = {
   planned_delivery_date: '2026-10-20',
   is_urgent: false,
   customer_path: '一级客户/二级客户',
-  next_process_id: 'PR1',
-  next_process_name: '外协工序',
+  current_process_id: 'PR1',
+  current_process_name: '外协工序',
   shelf_code: 'C2',
   outsource_company_id: 'C1',
   outsource_company_name: '外协厂',
@@ -343,8 +339,8 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
         total: 1,
         limit: 500,
         offset: 0,
-      }).items[0]!.next_process_id,
-    ).toBe('PR1');
+      }).items[0]!.customer_path,
+    ).toBe('一级客户/二级客户');
     expect(
       outsourceInFlightListResultSchema.parse({
         items: [inFlightFixture],
@@ -364,7 +360,7 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
   });
 
   // 逐条锁「漏声明 ⇒ 静默 strip」这个坑：每个 schema 抽 2 个代表性必填字段
-  // （含新加的 total_price / is_urgent / quote_id / next_process_id）。
+  // （含新加的 total_price / is_urgent / quote_id / customer_id）。
   it('E2：缺必填字段 → parse 抛错（不会静默放过）', () => {
     expect(() =>
       outsourceSentPartListResultSchema.parse({
@@ -384,7 +380,7 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
     ).toThrow();
     expect(() =>
       outsourceQuotablePartListResultSchema.parse({
-        items: [omit(quotablePartFixture, 'next_process_id')],
+        items: [omit(quotablePartFixture, 'customer_id')],
         total: 1,
         limit: 50,
         offset: 0,
@@ -529,7 +525,7 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
   //   · schema 多声明一个 **optional** 字段 → 键集断言**看不见**（Zod 对输入中缺省的
   //     optional 键不写入输出，parse 结果与 fixture 键集仍相等）。该失败模式本身无害
   //     —— 多一个 optional 声明不会误拒任何响应，也不会有字段被静默吞掉。
-  // 70 个字段（18 + 14 + 15 + 23）一次性锁住。
+  // 66 个字段（18 + 10 + 15 + 23）一次性锁住。
   it('E7：parse 后的行键集与后端 VO 字段集逐字段相等（少声明 / 多声明必填字段都红）', () => {
     const cases = [
       {
@@ -539,10 +535,10 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
         vo: 18,
       },
       {
-        name: 'quotable（14 字段）',
+        name: 'quotable（10 字段）',
         schema: outsourceQuotablePartListResultSchema,
         fixture: quotablePartFixture,
-        vo: 14,
+        vo: 10,
       },
       {
         name: 'in-flight（15 字段）',

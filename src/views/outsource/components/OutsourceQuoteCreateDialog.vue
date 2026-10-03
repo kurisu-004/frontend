@@ -25,26 +25,27 @@
           :model-value="form.part_id"
           filterable
           style="width: 100%"
-          placeholder="可选报价零件（在外协工序货架上的在制件；按图号/名称筛选）"
+          placeholder="可选报价零件（有待下发批次的在制件；按图号/名称筛选）"
           @update:model-value="
             (v: string | number | boolean | undefined) => $emit('update:part-id', String(v ?? ''))
           "
           @change="(v: string) => $emit('partChange', v)"
         >
           <!--
-            2026-10-03：picker 数据源的行粒度是「一个 (零件, OUTSOURCE 工序) 组合一行」
-            （后端 DISTINCT ON 去重），同一 part_id 可以出多行。
-            - :key 走 quotablePartRowKey 组合键，否则同零件多行会出重复 key。
-            - label 尾部带出 货架 · 下一工序，否则多行 label 完全相同，操作员无从分辨。
-            - :value 仍是裸 part_id：el-select 的 model（form.part_id）也是裸 part_id，
-              改成组合键会让 select 匹配不到 option、把雪花 id 直接显示在框里。
-              代价是同零件多行时「选中后按第一行渲染 label」，故自动填工序一侧
-              （onCreatePartChange）遇到多行不猜，改为提示手动选工序。
+            2026-10-03：picker 候选源改成「有活跃 PENDING 批次的在制件」，行粒度是
+            **一个零件一行**（不再按 OUTSOURCE 工序货架展开），所以：
+            - :key 直接用 p.id —— 此前同零件多行需要组合键，现在行不再重复；
+            - label 不带货架 / 工序尾段 —— VO 已经没有这四个字段（见
+              `QuotablePart` 注释），且候选语义是「还没下发的零件」而非「在某个外协
+              工序货架上」，带出来反而误导。
+            副作用：picker 无法推断报价工序，工序必须在下面的下拉里手选。改前
+            el-select 的 :value 是裸 part_id，同零件多行时会出现「label 暗示工序 A、
+            实际手选工序 B」的串号隐患；改成一零件一行后该隐患自动消失。
           -->
           <el-option
             v-for="p in parts"
-            :key="quotablePartRowKey(p)"
-            :label="`${p.serial_no ?? '—'} | ${p.drawing_no ?? ''} | ${p.name} | ${p.shelf_code} · ${p.next_process_name}`"
+            :key="p.id"
+            :label="`${p.serial_no ?? '—'} | ${p.drawing_no ?? ''} | ${p.name}`"
             :value="p.id"
           />
         </el-select>
@@ -114,7 +115,7 @@
 <script setup lang="ts">
 import { useDialogSize } from '@/composables/useDialogSize';
 import type { FormInstance, FormRules } from 'element-plus';
-import { quotablePartRowKey, type CreateQuoteForm } from '../composables/useOutsourceQuoteForm';
+import type { CreateQuoteForm } from '../composables/useOutsourceQuoteForm';
 import type { QuotablePart } from '@/types/outsource';
 import type { Process } from '@/types/process';
 

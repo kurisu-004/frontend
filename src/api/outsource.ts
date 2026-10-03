@@ -182,13 +182,12 @@ export async function softDeleteOutsourceQuote(id: string): Promise<void> {
 }
 
 /**
- * 新建报价 picker 的可选零件（PR-H 2026-07-28）：
- * 仅返回「位于绑定了外协工序的货架上」的零件。
+ * 新建报价 picker 的可选零件。
  *
- * 2026-10-03 契约对齐：出参从**裸数组**改为分页信封 `QuotablePartListOut`；行粒度
- * 是「一个 (零件, OUTSOURCE 工序) 组合一行」（后端已 DISTINCT ON 去重，前端不要再
- * 按 part_id 去重）；`next_process_id` 升为正式字段，创建报价的工序自动填不再需要
- * picker-local 类型扩展。
+ * 2026-10-03 契约对齐：出参是分页信封 `QuotablePartListOut`；筛选条件是「有活跃
+ * `status='PENDING'` 批次的在制件」（报价是给还没下发的零件提前锁价），行粒度是
+ * **一个零件一行**，VO 不再带 `shelf_*` / `next_process_*` ⇒ 前端无从推断报价工序，
+ * 工序由操作员在独立的工序下拉里手选。
  */
 export async function listQuotableParts(
   params: { keyword?: string; limit?: number; offset?: number } = {},
@@ -273,13 +272,16 @@ export async function listOutsourceInFlight(
 }
 
 /**
- * 统一外协可发送一览（「可发送」tab 数据源）：合并 APPROVAL（需审批 + 有报价）
- * 与 DIRECT（无需审批可直发）两类候选，每行带 send_mode + source_status。
+ * 统一外协可发送一览（「可发送」tab 数据源）：合并 APPROVAL（工序需审批 + 已有
+ * 已审批报价）与 DIRECT（工序免审批）两类候选，每行带 send_mode + source_status。
  * GET /outsource-sendable
  *
  * 2026-10-03：URL 从 `/parts/outsource-sendable` 迁到 outsource 域顶层，函数从
  * `src/api/parts/crud.ts` 迁入本文件（该列表与批次 lifecycle 写端点不同域：
  * 读侧是外协域，写的 `send-to-outsource` 才是 prod/batches 域）。出参保持分页信封。
+ * 工序归属字段已由 `next_process_id` / `next_process_name` 更名为
+ * `current_process_id` / `current_process_name`（判据改成
+ * `t_part_batch.current_process_id`，兼容没制定过工序链的旧零件）。
  */
 export async function listOutsourceSendable(
   params: {

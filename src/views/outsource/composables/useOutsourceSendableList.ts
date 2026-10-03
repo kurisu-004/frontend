@@ -79,8 +79,9 @@ export interface UseOutsourceSendableListOptions {
 /** 组装 `POST /prod/batches/{batch_id}/send-to-outsource` 的 body。
  *
  *  2026-10-03 契约对齐，三处要点：
- *  1. 工序键是 **`process_id`**，不是 `next_process_id`（后端 DTO 就是 `process_id`，
- *     沿用旧名必然 422）。列表行上的 `next_process_id` 字段名不变，只是 body 键改名。
+ *  1. 工序键是 **`process_id`**，不是 `current_process_id`（后端 DTO 就是 `process_id`，
+ *     沿用行字段名必然 422）。列表行上的字段是 `current_process_id`（批次当前所属的
+ *     外协工序），只是 body 键叫 `process_id`。
  *  2. 发送模式由 `quote_id` / `direct` **必传其一**表达，两者都不传后端返 400：
  *     APPROVAL → `quote_id` 有值 + `direct: null`；DIRECT → `direct: true` + `quote_id: null`。
  *  3. `quantity` 两条发送路径的口径**不同但语义等价**，都不是「部分发送」的错写法：
@@ -94,7 +95,7 @@ export interface UseOutsourceSendableListOptions {
  *  「改了一处漏另一处」的高风险面。 */
 function buildSendPayload(args: {
   outsource_company_id: string;
-  /** 源行的 `next_process_id`（外协工序 id） */
+  /** 源行的 `current_process_id`（外协工序 id） */
   process_id: string;
   version: number;
   /** 源行的 `quote_id`（DIRECT 行为 null） */
@@ -288,7 +289,7 @@ export function useOutsourceSendableList(
     try {
       const payload: SendToOutsourcePayload = buildSendPayload({
         outsource_company_id: companyId,
-        process_id: target.next_process_id,
+        process_id: target.current_process_id,
         version: target.version,
         quote_id: target.quote_id,
         direct: target.send_mode === 'DIRECT',
@@ -376,8 +377,8 @@ export function useOutsourceSendableList(
       },
       outsource_company_id: companyId,
       outsource_company_name: companyName,
-      process_id: match.next_process_id ?? '',
-      process_name: match.next_process_name ?? '',
+      process_id: match.current_process_id ?? '',
+      process_name: match.current_process_name ?? '',
       price: match.send_mode === 'DIRECT' ? null : Number(match.price),
       version: match.version,
       // 2026-07-29 PR-fix-0.2.0 批次化：携带 batch_id 供发送时回传

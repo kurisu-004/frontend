@@ -4,8 +4,9 @@
 //
 // 为什么必须有：`POST /prod/batches/{batch_id}/send-to-outsource` 的 2026-10-03
 // 契约有三条硬要求，违反任一条都是**静默失败**（serde 未开 deny_unknown_fields）：
-//   1. 工序键是 `process_id`，不是 `next_process_id` —— 沿用旧名后端 DTO 收不到、
-//      必填字段落空 → 422（线上故障：外协发送 100% 失败）。
+//   1. 工序键是 `process_id`，不是 `current_process_id` —— 沿用行字段名后端 DTO 收不到、
+//      必填字段落空 → 422（线上故障：外协发送 100% 失败）。行字段本身已从
+//      `next_process_id` 更名为 `current_process_id`（批次当前所属的外协工序）。
 //   2. `quote_id`（APPROVAL）与 `direct: true`（DIRECT）**必传其一**，都不传 → 400。
 //      此前前端两个键都不发 ⇒ 全部行都打回 400。
 //   3. `quantity: null` = 整批，非 null = 部分发送（后端拆批，源批次留余量）。
@@ -72,8 +73,8 @@ function approvalRow(overrides: Partial<SendableItem> = {}): SendableItem {
     planned_delivery_date: '2026-10-20',
     is_urgent: false,
     customer_path: '一级/二级',
-    next_process_id: 'PR1',
-    next_process_name: '外协工序',
+    current_process_id: 'PR1',
+    current_process_name: '外协工序',
     shelf_code: 'C2',
     outsource_company_id: 'C1',
     outsource_company_name: '外协厂',
@@ -129,6 +130,7 @@ describe('单件发送 onConfirmSend', () => {
     expect(lastBatchId()).toBe('BA1');
     expect(body.process_id).toBe('PR1');
     expect(body).not.toHaveProperty('next_process_id');
+    expect(body).not.toHaveProperty('current_process_id');
     expect(body.quote_id).toBe('Q1');
     expect(body.direct).toBeNull();
     expect(body.outsource_company_id).toBe('C1');
@@ -149,8 +151,9 @@ describe('单件发送 onConfirmSend', () => {
     expect(body.process_id).toBe('PR1');
   });
 
-  // 工序键改名的回归锁：payload 里**任何位置**都不许再出现 next_process_id。
-  it('S3：两条模式的 payload 都不含 next_process_id（键名回归锁）', async () => {
+  // 工序键的回归锁：payload 里**任何位置**都不许再出现行字段名（next_process_id /
+  // current_process_id）—— body 键只叫 process_id。
+  it('S3：两条模式的 payload 键集恒为 6 个（键名回归锁）', async () => {
     const approval = useOutsourceSendableList();
     approval.sendTarget.value = approvalRow();
     approval.sendQuantity.value = 10;
@@ -246,6 +249,7 @@ describe('扫码批量发送 onConfirmBatchSend', () => {
     expect(body.direct).toBeNull();
     expect(body.process_id).toBe('PR1');
     expect(body).not.toHaveProperty('next_process_id');
+    expect(body).not.toHaveProperty('current_process_id');
   });
 
   it('S8：DIRECT 行入队 → direct: true、quote_id 为 null', async () => {
