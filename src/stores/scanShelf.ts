@@ -186,9 +186,8 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
   }
 
   return {
-    /** 当前作业架 id。**只读** —— 没有选架入口就没有写入方，2026-10-04 已删掉可写
-     *  setter 与 `reset()`（两者当时都无生产调用方；会话终止也不需要它们，见
-     *  `loadedForUserId` 的换账号逻辑）。 */
+    /** 当前作业架 id。**只读** —— 没有选架入口就没有写入方。会话终止也不需要显式
+     *  清理：`loadedForUserId` 与当前 `auth.user.id` 不一致即触发重载（见 initShelves）。 */
     selectedShelfId: computed(() => selectedShelfIdValue.value),
     options: computed(() => optionsValue.value),
     selectedZone,

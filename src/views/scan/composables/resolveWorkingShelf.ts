@@ -40,8 +40,8 @@ export function workingShelfProblem(): string | null {
       : '当前账号未绑定作业货架，请联系管理员在「账号管理」为本账号绑定生产货架';
   }
   if (scanShelf.selectedZone === 'INSPECTION') {
-    // 2026-10-04 订正：原文案写「请改选生产货架」，但页面上**没有选架入口**
-    // （`ScanActionPicker` 顶部无选择器），工人无处可改。改为陈述事实 + 指管理员。
+    // 文案不能说「请改选生产货架」：页面上没有选架入口，工人无处可改。只能陈述事实 +
+    // 指管理员 —— 这也是 store 头注释里写明「多架 / 错绑都没有 UI 出路」的原因。
     return '本账号当前绑定的货架在品检区，缺少生产区作业货架，请联系管理员为本账号绑定生产货架';
   }
   if (scanShelf.selectedZone === null) {

@@ -285,8 +285,9 @@ const { worker, requireWorker, reset: resetScanSession } = useScanSession();
 const { onScan } = useBarcodeScanner();
 const { emitHeldChanged } = useScanBus();
 // 2026-07-13：跨架列表展示用 listPartsByWorkTypeAllShelves（后端按 user.shelf_ids 收口）；
-// shelf_id 提交取「当前作业架」，来自 useScanShelfStore（单架 = 唯一架 id；
-// 多架 = 工人此前选定的架；wildcard / 多架未选 → 无作业架，见 resolveWorkingShelfId）。
+// shelf_id 提交取「当前作业架」，来自 useScanShelfStore：单架 = 唯一架 id；多架 =
+// sessionStorage 里此前落盘、且仍在本次候选集内的那个架（典型成因是账号原本单架、
+// 后来管理员加了第二架）；wildcard / 多架无可用架 → 无作业架，见 resolveWorkingShelfId。
 const scanShelf = useScanShelfStore();
 
 const parts = ref<ScanPartRowSchema[]>([]);
@@ -473,8 +474,8 @@ async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
   await scrollCardIntoView(key);
   if (!worker.value) return;
   // 2026-09-16 PR-2：part 级 current_holder_id 随 t_part 瘦身下线，shelf_id 统一
-  // 取「当前作业架」（单架 = 唯一架 id；多架 = 工人此前选定的架）。拿不到（如
-  // wildcard 账号）就报错提示，**不发**空 shelf_id（后端必填 i64，省略会被 axum
+  // 取「当前作业架」（判定见文件头 scanShelf 处的说明）。拿不到（如 wildcard 账号）
+  // 就报错提示，**不发**空 shelf_id（后端必填 i64，省略会被 axum
   // `Json` extractor 拒成裸 HTTP 422、不是项目统一信封）。
   const useShelfId = resolveWorkingShelfId();
   if (!useShelfId) return;
