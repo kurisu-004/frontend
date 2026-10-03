@@ -159,10 +159,14 @@ export interface PartListItem {
   /** PR-F 2026-07-17：送货单字段 */
   order_no: string | null;
   system_delivery_date: string | null;
-  /** 2026-10-03 订正：已送数量 = 未软删批次中 status ∈ (DELIVERED, COMPLETED) 的
-   *  quantity 之和。**后端当前只有 `com/union-list` 与 `GET /parts` 两个端点填**
-   *  （partSchema 被 5 个端点共用，其余 3 个不返该键）；装配件行在该 VO 恒 null ——
-   *  装配件的「已送」语义按套计，与零件按件计不同源，故后端刻意不填。 */
+  /** 2026-10-03 订正：已送数量。零件行 = 未软删批次中 status ∈ (DELIVERED,
+   *  COMPLETED) 的 quantity 之和，按「件」计；装配件行**也填**，但语义是已送
+   *  「套数」= MIN(子件已送 × 装配套数 / 子件总量)，无子件为 0。
+   *
+   *  **填充端点只有 `GET /com/union-list` 与 `GET /parts`**；复用同一 VO 的其余 5 个
+   *  端点（`GET /parts/pending-programming` / `GET /parts/by-work-type/{id}` /
+   *  `GET /parts/by-worker/{id}` / `GET /parts/pickable-by-work-type/{id}` /
+   *  `POST /assemblies/{id}/children`）恒 null。故本字段必须 optional + 可空。 */
   delivered_quantity?: number | null;
   note: string | null;
   customer_name: string | null;

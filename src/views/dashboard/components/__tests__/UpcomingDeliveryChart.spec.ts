@@ -7,7 +7,7 @@
 // 给外部探针。本 spec 改为在 mount options 里 stub `v-chart` 组件，断言改读
 // `wrapper.findComponent({ name: 'VChart' }).props('option').*` —— 完全跳过
 // 真实 echarts 渲染（happy-dom 无 canvas），覆盖 Phase 4-6 引入的 vue-echarts 架构变迁：
-//   - <v-chart> 由 main.ts:82 全局注册（test 环境未加载 main.ts → 走 mount stubs 兜底）
+//   - <v-chart> 由 main.ts 全局注册（test 环境未加载 main.ts → 走 mount stubs 兜底）
 //   - vue-echarts 内部自管 init / ResizeObserver / dispose lifecycle
 //   - chartOption 是 computed，props.option 改 vue-echarts 自管 setOption（不暴露给我们）
 //   - click @click 透传 ECElementEvent payload，seriesName 即 series.name（中文 label）
@@ -157,12 +157,12 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
   });
 
   it('C2：layer.key=top 时，top series.data[0] = bucket.by_status 求和', async () => {
-    // 顶层 statuses = [PENDING, PROGRAMMING, IN_PROCESS, REPAIRING, OUTSOURCE]
+    // 顶层 statuses = [PENDING, PROGRAMMING, IN_PROCESS, OUTSOURCE]
     const buckets: UpcomingDeliveryEntryData[] = [
       makeBucket({
         date: todayIso(),
         count: 10,
-        by_status: { PENDING: 1, PROGRAMMING: 2, IN_PROCESS: 3, REPAIRING: 0, OUTSOURCE: 0 },
+        by_status: { PENDING: 1, PROGRAMMING: 2, IN_PROCESS: 3, OUTSOURCE: 0 },
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {

@@ -8,12 +8,12 @@
 //   - 错误桥接（useQuery error → ElMessage.error）保留在本 composable；
 //     useDashboardInvalidation 不挂 ElMessage（事件订阅与错误桥接职责分离）。
 //
-// 数据流（沿 2026-09-28 dashboard 域架构）：
+// 数据流：
 //   1. setup 顶层 useQuery 拉一次 GET /api/v2/dashboard/snapshot 全量数据，
 //      queryFn 走 dashboardSnapshotSchema.parse(...) 守门；
 //   2. 业务事件通过 useDashboardInvalidation 共享事件集 + debounce + invalidate
 //      触发 qk.dashboardSnapshot 重取；
-//   3. error 走 watch + ElMessage.error 桥接（沿 2026-09-26 约定 #9）。
+//   3. error 走 watch + ElMessage.error 桥接。
 //
 // 设计要点：
 //   - staleTime: 30_000（30s 短时去重窗口）/ gcTime: POSITIVE_INFINITY（会话级缓存）。
@@ -46,7 +46,7 @@ export function useDashboardSnapshot() {
     gcTime: Number.POSITIVE_INFINITY,
   });
 
-  // 错误桥接：useQuery 的 error 不在 setup 抛错（沿 2026-09-26 约定 #9）。
+  // 错误桥接：useQuery 的 error 不在 setup 抛错。
   watch(query.error, (e) => {
     if (e) ElMessage.error(e.message ?? '大屏数据加载失败');
   });

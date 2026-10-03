@@ -13,8 +13,7 @@
 //     qc.invalidateQueries；支持多 key（dashboardUrgentList + dashboardSnapshot）
 //     与单 key（dashboardOverdue 仅 Manager 启用，但 invalidate 仍走同一套）。
 //   - tryOnScopeDispose 捕获 off 函数（onDashboardEvent 返回），组件卸载时
-//     释放 eventSubs 订阅，避免「多次 mount / unmount 累加永不清理的 handler」
-//     （沿 2026-09-28 review N1 regression guard）。
+//     释放 eventSubs 订阅，避免「多次 mount / unmount 累加永不清理的 handler」。
 //   - 2026-10-02 新增第二条失效触发源：window 事件 'dashboard:full-refetch'
 //     （WS 层收到后端关闭码 4003 慢消费方 → 丢了 n 条事件且重连补不回来）。
 //     走**不防抖**的立即 invalidate，与事件路径的 500ms debounce 分开。

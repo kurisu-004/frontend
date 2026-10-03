@@ -1,9 +1,6 @@
 <!--
   UpcomingDeliveryListDrawer.vue
   dashboard「交期分桶柱状图按层点击抽屉」。
-  沿 UrgentOrderDrawer 范式：<el-drawer direction="rtl" :size="480"
-  :with-header="false" :append-to-body="true" :destroy-on-close="true"
-  @update:model-value>。
   Props / Events：
     - modelValue: boolean
     - date: 'YYYY-MM-DD'

@@ -1,7 +1,7 @@
 // src/views/dashboard/composables/__tests__/dashboardSnapshotSchema.spec.ts
 //
 // 2026-09-28 新增：dashboard 大屏快照 Zod schema 与 backend-rust DashboardSnapshot VO
-// 对齐回归保护（沿 2026-09-26 约定 #4 与 schemas.spec.ts S4 系列同形态）。
+// 对齐回归保护（与 schemas.spec.ts S4 系列同形态）。
 //
 // 字段来源：
 //   - backend-rust/src/modules/dashboard/vo/snapshot.rs:77-119（DashboardSnapshot 5 顶层 + 4 shelf 字段）
@@ -16,7 +16,7 @@
 //   - D4：DashboardItem 19 字段全声明 regression guard（与 customerSchema S4 同形态）；
 //   - D5：UpcomingDeliveryBucket count 是 number（COUNT(*)::bigint → JSON integer）；
 //   - D6：dashboardItemSchema 不在 items 数组内时（裸对象）也接受；
-//   - D7（2026-09-28 review 第 1 轮修复追加）：DashboardSnapshot /
+//   - D7：DashboardSnapshot /
 //     OnProductionShelfGroup / DashboardItem / UpcomingDeliveryBucket 全字段
 //     存在 guard —— Zod strip 模式会静默丢字段，光测缺失抛错不够，必须正向断言
 //     parsed output keys 与后端 VO 字段一一对应。
@@ -81,7 +81,7 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
       expect(parsed.is_urgent).toBe(false);
     });
 
-    // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
+    // D7 全字段 guard：
     // Zod 默认 strip 模式会让 schema 未声明的字段被静默丢弃，光测缺失抛错不够——
     // 例如有人误删 customer_id 字段声明，本用例仍绿。前置正断言 keys 与后端 VO
     // 字段一一对应，是 S4 regression guard 的核心思路。
@@ -179,7 +179,7 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
       expect(parsed.items).toHaveLength(2);
     });
 
-    // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
+    // D7 全字段 guard：Zod strip 会静默丢未声明字段，正向断言 keys 才能兜住误删。
     it('D7：OnProductionShelfGroup 4 顶层字段全在 parsed output 里', () => {
       const parsed = onProductionShelfGroupSchema.parse({
         shelf_id: '150000000000001',
@@ -217,7 +217,7 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
       expect(parsed.count).toBe(42);
     });
 
-    // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
+    // D7 全字段 guard：Zod strip 会静默丢未声明字段，正向断言 keys 才能兜住误删。
     it('D7：UpcomingDeliveryBucket 3 字段全在 parsed output 里（2026-09-30 加 by_status）', () => {
       const parsed = upcomingDeliveryBucketSchema.parse({
         date: '2026-09-30',
@@ -314,7 +314,7 @@ describe('dashboardSnapshotSchema — DashboardSnapshot VO 契约对齐（2026-0
       expect(parsed.upcoming_delivery[0]?.count).toBe(5);
     });
 
-    // 2026-09-28 review 第 1 轮修复追加：D7 全字段 guard。
+    // D7 全字段 guard：Zod strip 会静默丢未声明字段，正向断言 keys 才能兜住误删。
     it('D7：DashboardSnapshot 5 顶层字段全在 parsed output 里', () => {
       const parsed = dashboardSnapshotSchema.parse(makeBaseSnapshot());
       expect(Object.keys(parsed).sort()).toEqual(

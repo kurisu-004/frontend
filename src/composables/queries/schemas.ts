@@ -220,8 +220,9 @@ export const partSchema = z.object({
   ]),
   order_no: z.string().nullable(),
   system_delivery_date: z.string().nullable(),
-  // 2026-10-03：已送数量。partSchema 被 5 个端点共用，其中多数不返该列，故必须
-  // nullable + optional（不能改必填）。仅 com/union-list 与 GET /parts 填。
+  // 2026-10-03：已送数量。复用同一 VO 的 7 个端点里只有 com/union-list 与
+  // GET /parts 填（装配件行也填，语义是已送套数），其余 5 个端点恒 null ⇒ 必须
+  // nullable + optional（不能改成必填，否则那 5 个端点的响应 parse 当场抛错）。
   delivered_quantity: z.number().nullable().optional(),
   note: z.string().nullable(),
   customer_name: z.string().nullable(),

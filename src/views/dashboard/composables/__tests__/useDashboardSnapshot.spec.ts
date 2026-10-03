@@ -36,7 +36,7 @@ const fetchSnapshotMock = vi.fn();
 let lastEventHandler:
   | ((ev: { type: 'event'; event_type: string; data: Record<string, unknown>; ts: string }) => void)
   | null = null;
-// 2026-09-28 review 第 2 轮修复（N1）：跟踪所有注册的 handler 用于回归保护。
+// 跟踪所有注册的 handler 用于回归保护。
 // useDashboardSnapshot 必须捕获 off + tryOnScopeDispose，否则多次 mount/unmount
 // 会累加永不清理的 handler。原实现 lastEventHandler 单变量无法表达「多次注册」，
 // 改用 Set 记录所有未清理的 handler，U7 用例断言 scope.stop() 后 Set 清零。
@@ -259,8 +259,8 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     scope.stop();
   });
 
-  it('U7：多次 mount/unmount 不累加 onDashboardEvent handler（2026-09-28 review N1 regression guard）', () => {
-    // 2026-09-28 review 第 2 轮修复（N1）：原 DashboardView.vue 用 onBeforeUnmount
+  it('U7：多次 mount/unmount 不累加 onDashboardEvent handler', () => {
+    // 原 DashboardView.vue 用 onBeforeUnmount
     // 调 offSnap?.() 清理 onDashboardEvent 订阅；重构迁到 useDashboardSnapshot 时
     // 漏了清理，每次进入 /dashboard 都往 eventSubs Set 累加一个永不清理的 handler，
     // 闭包持有的 debouncedInvalidate / qc / query 永远无法 GC。本轮修：捕获 off +

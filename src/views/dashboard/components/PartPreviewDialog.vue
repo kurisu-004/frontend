@@ -25,7 +25,7 @@
     - 批次：usePartBatchesQuery(() => part?.id ?? null)（新增 composable，与
       usePartFilesListQuery 范式严格对齐）→ batches = data.items[]；
       error 走 watch(error, e => e && ElMessage.error(e.message)) 桥接
-      （沿 2026-09-26 约定 #9）；loading 走 el-table v-loading。
+      桥接；loading 走 el-table v-loading。
 -->
 <template>
   <el-dialog
@@ -127,7 +127,7 @@
 //     4. onBeforeUnmount URL.revokeObjectURL 释放 blob（防内存泄漏，沿
 //        DrawingPreviewPane.vue 范式）。
 //   - 批次流同形：usePartBatchesQuery(() => part?.id ?? null)；batches = data.items。
-//     error 走 watch + ElMessage.error 桥接（沿 2026-09-26 约定 #9）；loading 走
+//     error 走 watch + ElMessage.error 桥接；loading 走
 //     el-table v-loading。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 
@@ -223,13 +223,13 @@ const batchesQuery = usePartBatchesQuery(() => props.part?.id ?? null);
 const batches = computed<PartBatchSchema[]>(() => batchesQuery.data.value?.items ?? []);
 const batchesLoading = computed(() => batchesQuery.isFetching.value);
 
-// 错误桥接（沿 2026-09-26 约定 #9）：useQuery 的 error 不在 setup 抛错，
+// 错误桥接：useQuery 的 error 不在 setup 抛错，
 // 走 watch + ElMessage.error 桥接。
 watch(batchesQuery.error, (e) => {
   if (e) ElMessage.error(e.message ?? '批次加载失败');
 });
 
-// 2026-09-30 第 1 轮修复（review A.2）：dialog 打开期间如果其它终端 / 操作员
+// 2026-09-30 新增：dialog 打开期间如果其它终端 / 操作员
 // 拆分或取消批次（PART_BATCH_SPLIT / PART_BATCH_CANCELLED 等），usePartBatchesQuery
 // 的 staleTime 20min 内不会自动 refetch，dialog 批次列表会过时。挂
 // useDashboardInvalidation 订阅 dashboard 同套 AFFECTS_DASHBOARD 事件集（含

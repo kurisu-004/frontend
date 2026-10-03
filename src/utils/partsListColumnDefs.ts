@@ -464,17 +464,18 @@ export function buildPartsListColumnDefs(deps: {
       },
     },
 
-    // 9. 已送数量（装配件行恒为 '—'）
+    // 9. 已送数量
     //
-    // 2026-10-03 订正：兜底值由 0 改 '—'。后端 `GET /api/v2/parts` 的 PartListItem
-    // 当前**不返** delivered_quantity（该列只有 `com/union-list` 填），把「后端未返」
-    // 渲染成 0 会被读成「一件都没交」，是静默错值；`??` 只在 nullish 时兜底，
-    // 后端补齐后会自动回真数字，不需要改这里。
+    // 2026-10-03：`GET /parts` 已填 delivered_quantity，PART 行 = 未软删批次中
+    // status ∈ (DELIVERED, COMPLETED) 的 quantity 之和。兜底值取 '—' 而非 0 ——
+    // 「后端未返」渲染成 0 会被读成「一件都没交」，是静默错值；`??` 只在 nullish
+    // 时兜底，后端补齐后会自动回真数字。
     //
-    // 待办：后端给 `GET /parts` 补上该字段后，删掉下面的 ASSEMBLY '—' 短路 ——
-    // 短路存在的原因是本列只渲染在 `GET /parts`（该端点无装配件行），且装配件按
-    // 「套」计、零件按「件」计，单位不同不宜并排；后端补齐后两个端点都有该列，
-    // 短路就成了「装配件永远看不到已送数」的假缺口。
+    // **`GET /parts` 已填，下面的兜底仍是必需的**：复用同一 VO 的其余 5 个端点
+    // （parts/pending-programming / parts/by-work-type/{id} / parts/by-worker/{id} /
+    // parts/pickable-by-work-type/{id} / assemblies/{id}/children）恒返 null。
+    // ASSEMBLY '—' 短路同理是兜底而非已知现状：装配件行的已送数换算成「套」、
+    // 零件行按「件」计，单位不同不宜在同一列并排，故装配件走 '—'。
     {
       key: 'delivered_quantity',
       label: '已送数量',

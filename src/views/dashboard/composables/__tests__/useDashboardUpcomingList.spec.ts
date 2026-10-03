@@ -122,8 +122,8 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
 
     await new Promise((resolve) => setTimeout(resolve, 30));
 
-    // 2026-09-30 review 第 1 轮修复：直接通过 QueryClient cache 拉真实 queryKey 断言形态
-    // （不再用 onDashboardEventMock.toHaveBeenCalled 这种「WS 订阅挂上」的名实不符断言）
+    // 直接通过 QueryClient cache 拉真实 queryKey 断言形态（不用 onDashboardEventMock
+    // .toHaveBeenCalled 这种「WS 订阅挂上」的名实不符断言）
     const expectedKey = qk.dashboardUpcomingList({ date: '2026-10-01', statuses: ['PENDING', 'PROGRAMMING'] });
     const cached = testQueryClient.getQueryCache().find({ queryKey: expectedKey });
     expect(cached).toBeTruthy();
