@@ -120,6 +120,13 @@ import {
   pendingProgrammingListResultSchema,
   shelfSchema,
   shelfListResultSchema,
+  outsourcePoolCountsSchema,
+  outsourcePoolCountsResultSchema,
+  outsourcePoolCompanySchema,
+  outsourcePoolByProcessSchema,
+  outsourcePoolByProcessResultSchema,
+  outsourcePoolStateSchema,
+  outsourcePoolStateResultSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -1715,5 +1722,342 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
       offset: 0,
     });
     expect(list.items[0]?.code).toBe('SH-P01');
+  });
+});
+
+// ============================================================
+// 2026-10-03 新增：外协看板 pool 域 3 个只读端点的 schema 守门断言。
+//
+// 数据来源：后端 `vo/pool.rs` 契约（`GET /outsource-pool/counts` /
+// `GET /outsource-pool/{process_id}` / `GET /outsource-pool/state`）—— 3 个端点响应
+// 都是**裸对象**（无分页信封），与上面 4 个 outsource list 端点不同构，故独立成组。
+//
+// 覆盖：
+//   - S-OP1~4：counts（5 字段行 + 4 字段顶层）。
+//   - S-OP5~10：by-process（22 字段行 + 6 字段顶层 + 公司列 3 字段）。
+//   - S-OP11~17：state（21 字段行 + 5 字段顶层）。
+//   - S-OP18：两个恒定字面量字段（status_label / location）锁死。
+//
+// 本组的三条硬约定（每条都有专门的「反例必须抛错」用例锁住）：
+//   ① 雪花 i64 全字段 `z.string()`（裸数字必被拒）—— JS Number 会丢精度；
+//   ② Decimal / datetime 全字段 `z.string()`（数字必被拒）；
+//   ③ `receive_next_process_id` **非 nullable**，`null` 必被拒（后端 `.unwrap_or(0)`
+//      兜底成 `"0"`，写成 `.nullable()` 会把合法响应当契约漂移整列炸掉）。
+//
+// 守门有效性的核心断言在 S-OP6 / S-OP12：「parse 后行键集 == fixture 键集」+「fixture
+// 字段数 == 后端 VO 字段数」。Zod 默认 strip 会把 schema 没声明的键静默吞掉、parse 照
+// 过不误 —— 漏声明一个字段除了那一个键消失没有任何症状，只有键集断言能发现。
+// ============================================================
+describe('2026-10-03 新增：外协看板 pool 域 schema 契约断言', () => {
+  /** `GET /outsource-pool/counts` 单行（5 字段）。 */
+  const poolCountFixture = {
+    process_id: '2000000000001',
+    process_code: 'OUT-01',
+    process_name: '外协粗加工',
+    sendable_count: 4,
+    in_flight_count: 2,
+  };
+
+  /** `GET /outsource-pool/{process_id}` 的候选批次行（22 字段，APPROVAL 形态）。 */
+  const poolItemFixture = {
+    version: 3,
+    send_mode: 'APPROVAL',
+    source_status: 'IN_PROCESS',
+    part_id: '4000000000001',
+    part_serial_no: 'SN-001',
+    part_drawing_no: 'DWG-A001',
+    part_name: '法兰盘',
+    quantity: 10,
+    batch_id: '3000000000001',
+    batch_no: 1,
+    batch_quantity: 10,
+    planned_delivery_date: '2026-10-20',
+    is_urgent: true,
+    customer_path: '一级客户 / 二级客户',
+    shelf_code: 'C2',
+    outsource_company_id: '9000000000001',
+    outsource_company_name: '外协厂甲',
+    quote_id: '8000000000001',
+    company_options: [],
+    price: '30.00',
+    can_send: true,
+    status_label: 'sendable',
+  };
+
+  /** `GET /outsource-pool/state` 单行（21 字段）。 */
+  const poolStateItemFixture = {
+    batch_id: '3000000000001',
+    part_id: '4000000000001',
+    batch_no: 2,
+    quantity: 8,
+    serial_no: 'SN-001',
+    drawing_no: 'DWG-A001',
+    name: '法兰盘',
+    system_delivery_date: '2026-10-08',
+    planned_delivery_date: '2026-10-20',
+    is_urgent: false,
+    customer_name: '二级客户',
+    parent_customer_name: '一级客户',
+    applicant_name: '张三',
+    location: 'OUTSOURCE_COMPANY',
+    note: '加急',
+    version: 5,
+    sent_at: '2026-10-01 08:00:00',
+    price: '12.50',
+    receive_next_process_id: '2000000000002',
+    receive_next_process_name: '半成品检验',
+    chain_resolvable: true,
+  };
+
+  it('S-OP1：counts 顶层 4 字段裸对象（无分页信封）parse 通过', () => {
+    const parsed = outsourcePoolCountsResultSchema.parse({
+      counts: [poolCountFixture],
+      sendable_total: 4,
+      in_flight_total: 2,
+      total: 6,
+    });
+    expect(parsed.counts).toHaveLength(1);
+    expect(parsed.sendable_total).toBe(4);
+    expect(parsed.in_flight_total).toBe(2);
+    expect(parsed.total).toBe(6);
+    // 无货工序（counts 空数组）同样是合法响应
+    expect(
+      outsourcePoolCountsResultSchema.parse({
+        counts: [],
+        sendable_total: 0,
+        in_flight_total: 0,
+        total: 0,
+      }).counts,
+    ).toEqual([]);
+  });
+
+  it('S-OP2：counts 行 5 字段全声明，键集与 fixture 逐字段相等（漏声明即红）', () => {
+    const parsed = outsourcePoolCountsSchema.parse(poolCountFixture);
+    expect(Object.keys(poolCountFixture)).toHaveLength(5);
+    expect(Object.keys(parsed).sort()).toEqual(Object.keys(poolCountFixture).sort());
+    expect(parsed.process_id).toBe('2000000000001');
+    expect(parsed.sendable_count).toBe(4);
+    expect(parsed.in_flight_count).toBe(2);
+  });
+
+  it('S-OP3：counts 缺 sendable_count / in_flight_count / 任一 total → 抛 ZodError', () => {
+    for (const key of ['sendable_count', 'in_flight_count'] as const) {
+      const { [key]: _omit, ...rest } = poolCountFixture;
+      void _omit;
+      expect(() => outsourcePoolCountsSchema.parse(rest)).toThrow();
+    }
+    for (const key of ['sendable_total', 'in_flight_total', 'total'] as const) {
+      const { [key]: _omit, ...rest } = {
+        sendable_total: 0,
+        in_flight_total: 0,
+        total: 0,
+      };
+      void _omit;
+      expect(() => outsourcePoolCountsResultSchema.parse(rest)).toThrow();
+    }
+  });
+
+  it('S-OP4：counts 的 process_id 传裸数字 → 抛 ZodError（雪花 ID 必须 string）', () => {
+    // 后端 `#[serde(serialize_with = "serialize_i64")]`；前端用 z.coerce.string() /
+    // z.number() 掩盖漂移会让 > 2^53 的 id 静默丢精度，故方向锁死。
+    expect(() =>
+      outsourcePoolCountsSchema.parse({ ...poolCountFixture, process_id: 2000000000001 }),
+    ).toThrow();
+  });
+
+  it('S-OP5：by-process 顶层 6 字段（companies 空 / items 空）parse 通过', () => {
+    const parsed = outsourcePoolByProcessResultSchema.parse({
+      process_id: '2000000000001',
+      process_code: 'OUT-01',
+      process_name: '外协粗加工',
+      companies: [],
+      total: 0,
+      items: [],
+    });
+    expect(parsed.companies).toEqual([]);
+    expect(parsed.items).toEqual([]);
+    // 公司列：无在途批次的活跃公司也在列（held_count = 0）
+    expect(
+      outsourcePoolCompanySchema.parse({
+        company_id: '9000000000001',
+        name: '外协厂甲',
+        held_count: 0,
+      }).held_count,
+    ).toBe(0);
+  });
+
+  it('S-OP6：by-process 行 22 字段全声明，键集与 fixture 逐字段相等（漏声明即红）', () => {
+    const parsed = outsourcePoolByProcessSchema.parse(poolItemFixture);
+    expect(Object.keys(poolItemFixture)).toHaveLength(22);
+    expect(Object.keys(parsed).sort()).toEqual(Object.keys(poolItemFixture).sort());
+    expect(parsed.can_send).toBe(true);
+    expect(parsed.quote_id).toBe('8000000000001');
+    expect(parsed.price).toBe('30.00');
+  });
+
+  it('S-OP7：by-process 行缺 version / can_send / quote_id → 抛 ZodError（M-1 guard）', () => {
+    // version 是发送端点的 OCC 锚、can_send 是后端派生的可发送判据、quote_id 是
+    // APPROVAL 模式发送必传二选一的判据 —— 任一漏声明都会让看板行为静默走歪。
+    for (const key of ['version', 'can_send', 'quote_id', 'status_label'] as const) {
+      const { [key]: _omit, ...rest } = poolItemFixture;
+      void _omit;
+      expect(() => outsourcePoolByProcessSchema.parse(rest)).toThrow();
+    }
+  });
+
+  it('S-OP8：by-process 行的 Decimal / 雪花 ID 传数字 → 抛 ZodError', () => {
+    // price 是 Decimal 字符串
+    expect(() => outsourcePoolByProcessSchema.parse({ ...poolItemFixture, price: 30 })).toThrow();
+    // 雪花 ID（part_id / batch_id / outsource_company_id）传裸数字
+    for (const key of ['part_id', 'batch_id', 'outsource_company_id'] as const) {
+      expect(() =>
+        outsourcePoolByProcessSchema.parse({ ...poolItemFixture, [key]: 123 }),
+      ).toThrow();
+    }
+    // company_options[].id 同样是雪花 ID 字符串
+    expect(() =>
+      outsourcePoolByProcessSchema.parse({
+        ...poolItemFixture,
+        company_options: [{ id: 9000000000001, name: '外协厂甲' }],
+      }),
+    ).toThrow();
+  });
+
+  it('S-OP9：DIRECT 行（company_options 有值 / quote_id 与 price 为 null）parse 通过', () => {
+    const parsed = outsourcePoolByProcessSchema.parse({
+      ...poolItemFixture,
+      send_mode: 'DIRECT',
+      source_status: 'PENDING',
+      outsource_company_id: null,
+      outsource_company_name: null,
+      quote_id: null,
+      company_options: [{ id: '9000000000001', name: '外协厂甲' }],
+      price: null,
+      can_send: true,
+    });
+    expect(parsed.company_options).toEqual([{ id: '9000000000001', name: '外协厂甲' }]);
+    expect(parsed.quote_id).toBeNull();
+    expect(parsed.price).toBeNull();
+  });
+
+  it('S-OP10：by-process 顶层传裸数组 → 抛 ZodError（防「信封退化成数组」）', () => {
+    expect(() => outsourcePoolByProcessResultSchema.parse([poolItemFixture])).toThrow();
+    // 空对象（后端 VO 换字段 / 字段名漂移的形态）同样必须被拒
+    expect(() =>
+      outsourcePoolByProcessResultSchema.parse({ process_id: '2000000000001' }),
+    ).toThrow();
+  });
+
+  it('S-OP11：state 顶层 5 字段（items 空）parse 通过', () => {
+    const parsed = outsourcePoolStateResultSchema.parse({
+      outsource_company_id: '9000000000001',
+      outsource_company_name: '外协厂甲',
+      process_id: '2000000000001',
+      current_held: 0,
+      items: [],
+    });
+    expect(parsed.current_held).toBe(0);
+    expect(parsed.outsource_company_name).toBe('外协厂甲');
+  });
+
+  it('S-OP12：state 行 21 字段全声明，键集与 fixture 逐字段相等（漏声明即红）', () => {
+    const parsed = outsourcePoolStateSchema.parse(poolStateItemFixture);
+    expect(Object.keys(poolStateItemFixture)).toHaveLength(21);
+    expect(Object.keys(parsed).sort()).toEqual(Object.keys(poolStateItemFixture).sort());
+    expect(parsed.sent_at).toBe('2026-10-01 08:00:00');
+    expect(parsed.price).toBe('12.50');
+    expect(parsed.chain_resolvable).toBe(true);
+    expect(parsed.receive_next_process_id).toBe('2000000000002');
+  });
+
+  // ⚠️ 本域最易写错的一处：receive_next_process_id 非 nullable。后端沿
+  // `PendingBatchItemOut::current_process_step_id` 的 `.unwrap_or(0)` 口径把 NULL
+  // 兜成 "0"；写成 z.string().nullable() 会让「无下一道工序」的合法行整列 parse 失败。
+  it('S-OP13：receive_next_process_id = null → 抛 ZodError（"0" 兜底口径守卫）', () => {
+    expect(() =>
+      outsourcePoolStateSchema.parse({ ...poolStateItemFixture, receive_next_process_id: null }),
+    ).toThrow();
+    // 顶层同理：outsource_company_id / process_id 由查询参数确定，非空
+    expect(() =>
+      outsourcePoolStateResultSchema.parse({
+        outsource_company_id: null,
+        outsource_company_name: '外协厂甲',
+        process_id: '2000000000001',
+        current_held: 0,
+        items: [],
+      }),
+    ).toThrow();
+  });
+
+  it('S-OP14：「无下一道工序」形态（"0" + 工序名为 null + chain_resolvable=false）parse 通过', () => {
+    // 与 S-OP13 配对的正向用例：兜底值 "0" 是**合法**响应，必须放行。
+    const parsed = outsourcePoolStateSchema.parse({
+      ...poolStateItemFixture,
+      receive_next_process_id: '0',
+      receive_next_process_name: null,
+      chain_resolvable: false,
+    });
+    expect(parsed.receive_next_process_id).toBe('0');
+    expect(parsed.receive_next_process_name).toBeNull();
+    expect(parsed.chain_resolvable).toBe(false);
+  });
+
+  it('S-OP15：state 行缺 chain_resolvable / sent_at / receive_next_process_id → 抛 ZodError', () => {
+    // chain_resolvable 是「能否免填工序」的判据、sent_at 是对账锚、receive_next_*
+    // 是接收入参来源 —— 任一漏声明都会让接收对话框行为走歪且无报错。
+    for (const key of [
+      'chain_resolvable',
+      'sent_at',
+      'receive_next_process_id',
+      'price',
+    ] as const) {
+      const { [key]: _omit, ...rest } = poolStateItemFixture;
+      void _omit;
+      expect(() => outsourcePoolStateSchema.parse(rest)).toThrow();
+    }
+  });
+
+  it('S-OP16：state 行的 price 传数字 / sent_at 传 Date 对象 → 抛 ZodError', () => {
+    // price 是 Decimal 字符串（DIRECT 直发的占位报价为 "0"）
+    expect(() =>
+      outsourcePoolStateSchema.parse({ ...poolStateItemFixture, price: 12.5 }),
+    ).toThrow();
+    // datetime 一律 naive 字符串（后端 NaiveDateTime）
+    expect(() =>
+      outsourcePoolStateSchema.parse({
+        ...poolStateItemFixture,
+        sent_at: new Date('2026-10-01T08:00:00Z'),
+      }),
+    ).toThrow();
+    // 雪花 ID（batch_id / part_id）传裸数字
+    expect(() =>
+      outsourcePoolStateSchema.parse({ ...poolStateItemFixture, batch_id: 1 }),
+    ).toThrow();
+  });
+
+  it('S-OP17：state 顶层传裸数组 / 空对象 → 抛 ZodError', () => {
+    expect(() => outsourcePoolStateResultSchema.parse([poolStateItemFixture])).toThrow();
+    expect(() => outsourcePoolStateResultSchema.parse({})).toThrow();
+    // current_held 漏声明必须被拒（= items.length 是前端渲染列头计数的依据）
+    expect(() =>
+      outsourcePoolStateResultSchema.parse({
+        outsource_company_id: '9000000000001',
+        outsource_company_name: '外协厂甲',
+        process_id: '2000000000001',
+        items: [],
+      }),
+    ).toThrow();
+  });
+
+  it('S-OP18：两个恒定字面量字段锁死（status_label / location）', () => {
+    expect(() =>
+      outsourcePoolByProcessSchema.parse({ ...poolItemFixture, status_label: 'pending' }),
+    ).toThrow();
+    expect(() =>
+      outsourcePoolStateSchema.parse({
+        ...poolStateItemFixture,
+        location: 'PRODUCTION_SHELF',
+      }),
+    ).toThrow();
   });
 });

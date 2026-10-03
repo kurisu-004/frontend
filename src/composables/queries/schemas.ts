@@ -1664,3 +1664,173 @@ export const outsourceSendableListResultSchema = z.object({
 });
 
 export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendableListResultSchema>;
+
+// ============================================================
+// 2026-10-03 新增：外协看板 pool 域 3 个只读端点的 Zod 守门 schema。
+//
+// 为什么补这一段：「外协发送/接收」页要从表格页重构成看板（每工序一个 tab，tab 内
+// 左「可发送候选批次」右「外协公司列」），数据源是后端新增的 3 个 pool 端点。它们与
+// 上面 4 个 list 端点**不共用**任何 VO：pool 的行是「候选批次 × 工序 / 公司 × 工序」
+// 的组合粒度，且多了后端派生的 `can_send` 与 `chain_resolvable` 两个判据字段。
+//
+// 命名偏离说明：本域 3 个端点**无分页**（响应是裸对象，一次全量），故顶层 schema 收
+// 尾用 `ResultSchema` 而非上面 4 个的 `ListResultSchema`；行 schema 沿
+// `outsourceXxxItemSchema` 风格命名。`xxxSchema` 与 `xxxResultSchema` 成对导出，
+// 前者守行、后者守顶层。
+//
+// 字段对齐后端 `vo/pool.rs` 的三条序列化约定（与本文件既有外协 schema 逐字一致）：
+//   - 雪花 i64 **全字段 `z.string()`**：后端 `#[serde(serialize_with =
+//     "serialize_i64")]`（JS Number 会丢精度）；不用 `z.coerce.string()` /
+//     `z.number()` 掩盖类型漂移；
+//   - Decimal 与 datetime **全字段 `z.string()`**（Decimal 保留精度，datetime 是
+//     naive 字符串）；
+//   - 计数（`sendable_count` / `in_flight_count` / `sendable_total` /
+//     `in_flight_total` / `total` / `held_count` / `current_held`）是**裸 i64**
+//     ⇒ `z.number()`，方向与雪花 ID 相反（与 workerPoolCountsSchema 同口径）。
+//
+// `receive_next_process_id` 的 `"0"` 兜底口径：该字段**非 nullable** —— 后端沿
+// `PendingBatchItemOut::current_process_step_id` 的 `Option<i64> → i64`
+// （`.unwrap_or(0)`）写法，NULL 落成 `"0"`。写成 `z.string().nullable()` 会让
+// 「无下一道工序」这一合法响应当成契约漂移整列炸掉，故此处必须 `z.string()`。
+//
+// 必填字段**逐个显式声明**的原因（Zod strip 陷阱，CLAUDE.md §4）：`z.object()` 默认
+// 是 strip 模式，漏声明的字段被静默丢弃、parse 照过不误 —— 守门形同虚设、契约漂移
+// 静默通过。`__tests__/schemas.spec.ts` 的 outsource-pool 段用「合法 fixture parse
+// 通过 + 缺键 / 类型错必须抛错 + parse 后键集与 fixture 键集逐字段相等」三条锁死它。
+// ============================================================
+
+/** `GET /api/v2/outsource-pool/counts` 单行（后端 `OutsourcePoolCount`）—— 5 字段。
+ *  `process_id` 是雪花 ID 字符串；两个计数是裸 i64 数字。 */
+export const outsourcePoolCountsSchema = z.object({
+  process_id: z.string(),
+  process_code: z.string(),
+  process_name: z.string(),
+  sendable_count: z.number(),
+  in_flight_count: z.number(),
+});
+
+export type OutsourcePoolCountsSchema = z.infer<typeof outsourcePoolCountsSchema>;
+
+/** `GET /api/v2/outsource-pool/counts` 顶层 —— 4 字段裸对象（**无分页信封**）。
+ *  `total === sendable_total + in_flight_total`（后端算好，前端不二次求和）。 */
+export const outsourcePoolCountsResultSchema = z.object({
+  counts: z.array(outsourcePoolCountsSchema),
+  sendable_total: z.number(),
+  in_flight_total: z.number(),
+  total: z.number(),
+});
+
+export type OutsourcePoolCountsResultSchema = z.infer<typeof outsourcePoolCountsResultSchema>;
+
+/** `GET /api/v2/outsource-pool/{process_id}` 的公司列行（后端 `OutsourcePoolCompany`）
+ *  —— 3 字段。该工序映射的**全部活跃**公司都在列上，`held_count` 可为 0。 */
+export const outsourcePoolCompanySchema = z.object({
+  company_id: z.string(),
+  name: z.string(),
+  held_count: z.number(),
+});
+
+export type OutsourcePoolCompanySchema = z.infer<typeof outsourcePoolCompanySchema>;
+
+/** `GET /api/v2/outsource-pool/{process_id}` 的候选批次行（后端
+ *  `OutsourcePoolItem`）—— 22 字段。行粒度 = 「可发送候选批次 × 该外协工序」。
+ *
+ *  与 `outsourceSendableItemSchema`（23 字段）的差异只有一处实质字段：本 VO **多了
+ *  `can_send`**（后端派生的可发送判据，替代前端原先自己算的 `canSend()`）。另：本
+ *  VO 契约不含 `next_process_id` / `next_process_name`。同名字段的 nullability 沿
+ *  `outsourceSendableItemSchema` 逐字沿用（同一套 SQL 派生列）。
+ *
+ *  `quantity` 收紧成**非空** number：后端 `OutsourceSendableItem::quantity` 是非空
+ *  `i32`，`outsourceSendableItemSchema` 放宽成 `.nullable()` 只是为了迁就历史 TS
+ *  类型 `number | null`；本域类型是新增的，没有那份历史包袱，守门按后端真形态收紧。 */
+export const outsourcePoolByProcessSchema = z.object({
+  version: z.number(),
+  send_mode: z.enum(['APPROVAL', 'DIRECT']),
+  source_status: z.enum(['PENDING', 'IN_PROCESS']),
+  part_id: z.string(),
+  part_serial_no: z.string().nullable(),
+  part_drawing_no: z.string().nullable(),
+  part_name: z.string().nullable(),
+  quantity: z.number(),
+  batch_id: z.string(),
+  batch_no: z.number(),
+  batch_quantity: z.number(),
+  planned_delivery_date: z.string().nullable(),
+  is_urgent: z.boolean(),
+  customer_path: z.string().nullable(),
+  shelf_code: z.string().nullable(),
+  /** APPROVAL 单值；DIRECT 为 null（用 company_options） */
+  outsource_company_id: z.string().nullable(),
+  outsource_company_name: z.string().nullable(),
+  /** 发送端点的报价 id；APPROVAL 必传、DIRECT 为 null */
+  quote_id: z.string().nullable(),
+  /** DIRECT 时为该批次可用的全部公司；APPROVAL 时为空数组 */
+  company_options: z.array(outsourceCompanyOptionSchema),
+  /** APPROVAL 为该报价的 Decimal 字符串；DIRECT 为 null */
+  price: z.string().nullable(),
+  /** 后端派生的可发送判据（APPROVAL 或 DIRECT 有 company_options） */
+  can_send: z.boolean(),
+  status_label: z.literal('sendable'),
+});
+
+export type OutsourcePoolByProcessSchema = z.infer<typeof outsourcePoolByProcessSchema>;
+
+/** `GET /api/v2/outsource-pool/{process_id}` 顶层 —— 6 字段裸对象（**无分页信封**）。 */
+export const outsourcePoolByProcessResultSchema = z.object({
+  process_id: z.string(),
+  process_code: z.string(),
+  process_name: z.string(),
+  companies: z.array(outsourcePoolCompanySchema),
+  total: z.number(),
+  items: z.array(outsourcePoolByProcessSchema),
+});
+
+export type OutsourcePoolByProcessResultSchema = z.infer<typeof outsourcePoolByProcessResultSchema>;
+
+/** `GET /api/v2/outsource-pool/state` 单行（后端 `OutsourcePoolStateItem`）—— 21 字段。
+ *
+ *  `location` 锁成字面量：在途批次必然在外协公司手上（恒 `"OUTSOURCE_COMPANY"`），
+ *  与 `status_label` 同策略 —— 值恒定就锁死，后端哪天改了值立刻炸而不是静默进 UI。
+ *  `receive_next_process_id` 非 nullable（`"0"` = 无，见本段头部兜底口径说明）。 */
+export const outsourcePoolStateSchema = z.object({
+  batch_id: z.string(),
+  part_id: z.string(),
+  batch_no: z.number(),
+  quantity: z.number(),
+  serial_no: z.string().nullable(),
+  drawing_no: z.string(),
+  name: z.string(),
+  /** DB NULL ⇒ JSON null（列表渲染 '—'） */
+  system_delivery_date: z.string().nullable(),
+  planned_delivery_date: z.string().nullable(),
+  is_urgent: z.boolean(),
+  customer_name: z.string().nullable(),
+  parent_customer_name: z.string().nullable(),
+  applicant_name: z.string().nullable(),
+  location: z.literal('OUTSOURCE_COMPANY'),
+  note: z.string().nullable(),
+  /** t_part_batch.version（接收时的 OCC 锚） */
+  version: z.number(),
+  /** 发出时间（naive datetime 字符串） */
+  sent_at: z.string(),
+  /** Decimal 字符串（DIRECT 直发的占位报价为 "0"） */
+  price: z.string(),
+  receive_next_process_id: z.string(),
+  receive_next_process_name: z.string().nullable(),
+  /** true = 工序链已知且指针未漂移（可免填工序）；false = 必须手填工序 + 货架 */
+  chain_resolvable: z.boolean(),
+});
+
+export type OutsourcePoolStateSchema = z.infer<typeof outsourcePoolStateSchema>;
+
+/** `GET /api/v2/outsource-pool/state` 顶层 —— 5 字段裸对象（**无分页信封**）。
+ *  `current_held == items.length`。公司名 / 工序 id 都由查询参数确定 ⇒ 非空。 */
+export const outsourcePoolStateResultSchema = z.object({
+  outsource_company_id: z.string(),
+  outsource_company_name: z.string(),
+  process_id: z.string(),
+  current_held: z.number(),
+  items: z.array(outsourcePoolStateSchema),
+});
+
+export type OutsourcePoolStateResultSchema = z.infer<typeof outsourcePoolStateResultSchema>;
