@@ -78,6 +78,17 @@
 //     **string**（serialize_i64），用 number 会被拒。
 //   - S-IQ4：缺 batch_id / part_id / version 抛错（M-1 guard：三者是写端点路径参数
 //     与 OCC 锚，缺任一个都意味着前端拼不出请求）。
+//   - S-SP1（2026-10-04 新增，报工台）：scanPartRowSchema 接受后端 `PartListItem`
+//     完整 34 字段（含 `location` / `holder_name` 等恒 null 的派生键与
+//     `batch_id` / `batch_version` 批次锚点），不抛错。
+//   - S-SP2：`planned_delivery_date` / `request_date` 的后端占位符 `'1970-01-01'`
+//     被 transform 归一成 `null`（否则报工台三页会显示「已逾期 2 万多天」红字），
+//     其它日期字符串原样透传。
+//   - S-SP3：缺 `batch_id` / `batch_version` / `location` 任一 → 抛 ZodError
+//     （M-1 guard 的核心：这三个键被 strip 掉的后果分别是取件报「批次锚点缺失」、
+//     报工台卡片少一行 holder 信息，且都不报错）。
+//   - S-SP4：scanPartListResultSchema 是**分页信封** —— 接受 items / total / limit /
+//     offset；把裸数组喂进去抛错（这正是本次线上故障的形态）。
 //
 // 数据来源：
 //   - backend-rust/docs/api/customers.md:142-153（CustomerOut 8 字段）
@@ -120,6 +131,8 @@ import {
   pendingProgrammingListResultSchema,
   shelfSchema,
   shelfListResultSchema,
+  scanPartRowSchema,
+  scanPartListResultSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -1715,5 +1728,102 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
       offset: 0,
     });
     expect(list.items[0]?.code).toBe('SH-P01');
+  });
+});
+
+// 2026-10-04 新增：报工台三页（取件 / 放回 / 送检）列表行 schema 契约断言。
+//
+// 服务对象：`GET /api/v2/parts/pickable-by-work-type/{work_type_id}` 与
+// `GET /api/v2/parts/by-worker/{worker_id}`，行 VO = backend-rust
+// `src/modules/part/vo/part.rs` 的 `PartListItem`（34 字段），外层是 `PartListOut`
+// 分页信封。fixture 按两个 service 构造行的真实口径填（占位值 1970-01-01 /
+// is_urgent=false / applicant_name="" / customer_id="0" / status="IN_PROCESS" /
+// version=0 / location=null）。
+describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSchema 契约断言', () => {
+  const validScanRow = {
+    id: '190000000000001',
+    serial_no: 'SN-001',
+    name: 'DWG-A001',
+    drawing_no: 'DWG-A001',
+    applicant_name: '',
+    quantity: 5,
+    request_date: '1970-01-01',
+    planned_delivery_date: '1970-01-01',
+    customer_id: '0',
+    assembly_id: null,
+    status: 'IN_PROCESS',
+    is_urgent: false,
+    order_no: null,
+    system_delivery_date: null,
+    note: null,
+    unit_price: '0',
+    total_price: '0',
+    version: 0,
+    created_at: '1970-01-01T00:00:00',
+    created_by: null,
+    updated_at: '1970-01-01T00:00:00',
+    updated_by: null,
+    deleted_at: null,
+    process_chain_id: null,
+    customer_name: null,
+    l1_customer_name: null,
+    location: null,
+    holder_name: null,
+    row_type: 'PART',
+    has_children: false,
+    child_count: null,
+    has_cnc_program: false,
+    batch_id: '190000000000009',
+    batch_version: 4,
+  };
+
+  it('S-SP1：接受 PartListItem 完整 34 字段（派生键恒 null、批次锚点有值）', () => {
+    const parsed = scanPartRowSchema.parse(validScanRow);
+    expect(parsed.id).toBe('190000000000001');
+    expect(parsed.batch_id).toBe('190000000000009');
+    expect(parsed.batch_version).toBe(4);
+    // 后端刻意不返的键不在 schema 里 ⇒ parse 后不应凭空出现
+    expect('next_process_id' in parsed).toBe(false);
+    expect('shelf_code' in parsed).toBe(false);
+  });
+
+  it('S-SP2：占位符 1970-01-01 归一成 null；真实日期原样透传', () => {
+    const parsed = scanPartRowSchema.parse(validScanRow);
+    expect(parsed.planned_delivery_date).toBeNull();
+    expect(parsed.request_date).toBeNull();
+    const real = scanPartRowSchema.parse({
+      ...validScanRow,
+      planned_delivery_date: '2026-10-20',
+      request_date: '2026-09-01',
+    });
+    expect(real.planned_delivery_date).toBe('2026-10-20');
+    expect(real.request_date).toBe('2026-09-01');
+  });
+
+  it('S-SP3：缺 batch_id / batch_version / location 各自抛 ZodError（M-1 guard）', () => {
+    const { batch_id: _b, batch_version: _bv, location: _loc, ...rest } = validScanRow;
+    void _b;
+    void _bv;
+    void _loc;
+    expect(() => scanPartRowSchema.parse(rest)).toThrow();
+    const { batch_id: _b2, ...rest2 } = validScanRow;
+    void _b2;
+    expect(() => scanPartRowSchema.parse(rest2)).toThrow();
+    const { location: _loc3, ...rest3 } = validScanRow;
+    void _loc3;
+    expect(() => scanPartRowSchema.parse(rest3)).toThrow();
+  });
+
+  it('S-SP4：外层是分页信封 —— 裸数组被拒（本次线上故障的形态）', () => {
+    const envelope = scanPartListResultSchema.parse({
+      items: [validScanRow],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    });
+    expect(envelope.items).toHaveLength(1);
+    expect(envelope.total).toBe(1);
+    expect(() => scanPartListResultSchema.parse([validScanRow])).toThrow();
+    expect(() => scanPartListResultSchema.parse({ items: [validScanRow], total: 1 })).toThrow();
   });
 });

@@ -403,10 +403,12 @@
     </el-dialog>
 
     <!-- 扫码命中同一 serial 多批次时复用报工台 BatchPickerDialog。
-         2026-10-03：这是一对**往返** cast —— props 入口 `InspectionQueueItem[]`
-         → `PartItem[]`、pick 出口 `PartItem` → `InspectionQueueItem`，因为
-         BatchPickerDialog 的 props / emits 类型都写死了 PartItem。cast 存在是因为
-         该组件是跨域共享组件、不该为接一个窄 VO 而改签名。
+         2026-10-04：入口 props 已是 BatchPickerDialog 的结构最小型 `BatchPickerRow[]`
+         （全字段 optional），本页的 13 字段 `InspectionQueueItem` 在结构上就满足它 ⇒
+         `:rows` 那处 cast 保留无害（不删是为了不碰共享组件的类型面）。
+         **只有出口 `pick` 的载荷仍是 `PartItem`**（跨 3 域共用的 emit 契约），所以
+         `onBatchPicked` 按 `PartItem` 声明、再窄化回 `InspectionQueueItem` 才是必需
+         的那一侧 cast。cast 存在是因为该组件是跨域共享组件、不该为接一个窄 VO 而改签名。
          holderText 在本页恒返回空串（13 字段 VO 无任何 holder 键）⇒ 卡片不再显示
          「未知位置」那一行，见 BatchPickerDialog.holderText 的注释。 -->
     <BatchPickerDialog
@@ -757,9 +759,11 @@ const batchPickerCode = ref('');
 const batchPickerRows = ref<InspectionQueueItem[]>([]);
 
 /** 当前页按 serial_no / drawing_no 精确命中。
- *  不用 `findAllByCode`：它的签名是 `PartItem[]`（报工台 / 返修页的行类型），
- *  与 13 字段的 InspectionQueueItem 无结构交集，沿用要 `as unknown as PartItem[]`
- *  往返双 cast。语义与 findAllByCode 逐字一致。 */
+ *  2026-10-04 订正：`findAllByCode`（`src/utils/scanHelpers.ts`）是泛型
+ *  `T extends { serial_no: string | null; drawing_no: string }`，本页的 13 字段
+ *  `InspectionQueueItem` 在结构上满足它，直接调用不需要任何 cast。
+ *  保留本域的 `findQueueRowsByCode` 是为了不改动本域代码逻辑（跨域共享 helper 的
+ *  泛型化由报工台那次改动带动），判据与 `findAllByCode` 逐字等价。 */
 function findQueueRowsByCode(rows: InspectionQueueItem[], code: string): InspectionQueueItem[] {
   return rows.filter(
     (r) => (r.serial_no !== null && r.serial_no === code) || r.drawing_no === code,

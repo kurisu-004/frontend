@@ -250,10 +250,11 @@ export const partSchema = z.object({
    *  这一层契约守门（区别于 pendingProgrammingItemSchema：那边的读点是**按钮可用性
    *  判据**，缺键会静默让全表下发按钮恒 disabled，是真症状）。
    *
-   *  扫码台 PICK_UP 走 `listPartsByWorkTypeAllShelves` 的**裸 `api.get<PartItem[]>`**，
-   *  **不过本 schema**（该端点才填 batch_id / batch_version）。那条路径上的改名义务
-   *  登记在 `src/api/parts/crud.ts` 的 `PartItem.batch_id` / `batch_version` 注释上
-   *  —— 换名时两处都要改，本条注释只描述本 schema 的取值现状。 */
+   *  扫码台 PICK_UP 的数据源 `listPartsByWorkTypeAllShelves` **不过本 schema**：它的行
+   *  由后端填了批次锚点，走本文件末尾的 `scanPartRowSchema`（那边 `batch_id` /
+   *  `batch_version` 是必填 + 可空）。两条路径的改名义务都登记在
+   *  `src/api/parts/crud.ts` 的 `PartItem.batch_id` / `batch_version` 注释上，
+   *  本条注释只描述本 schema 的取值现状。 */
   batch_version: z.number().nullable().optional(),
   batch_no: z.number().nullable().optional(),
   batch_quantity: z.number().nullable().optional(),
@@ -1664,3 +1665,175 @@ export const outsourceSendableListResultSchema = z.object({
 });
 
 export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendableListResultSchema>;
+
+// ============================================================
+// 2026-10-04 新增：报工台三页（取件 / 放回 / 送检）列表行的 Zod 守门 schema。
+//
+// 这两个端点返回的是**分页信封**（`items` / `total` / `limit` / `offset`），
+// **不是裸数组**：后端 handler 签名是 `Result<Json<R<PartListOut>>, AppError>`，
+// `PartListOut` 定义在 backend-rust `src/modules/part/vo/part.rs`。
+// 把信封当数组消费（`parts.value = await listX()` 然后 `parts.length`）会连锁炸三处：
+//   1. `parts.value` 变成对象，`{{ parts.length }}` 渲染成 undefined（计数恒空）；
+//   2. `src/views/scan/composables/useScanPartsSort.ts` 里的 `[...list].sort()` 抛
+//      `TypeError: list is not iterable` —— 抛点在 computed 内，模板
+//      `v-for="p in sortedParts"` 随之渲染失败，**取件 / 放回 / 送检三页同时白屏**；
+//   3. `HeldPartsBadge.vue` 的 `v-for="p in parts"` 迭代对象值，同样坏。
+// 本 schema 存在的理由就是把这个形状钉死：形状不符立即抛 ZodError，而不是静默空屏。
+//
+// 行 VO = `PartListItem`（**不是** `PartDetailOut`）。字段清单逐条镜像
+// backend-rust `src/modules/part/vo/part.rs` 的 `pub struct PartListItem`：
+//   - 全部字段声明为**必填**，可空的一律 `.nullable()`：该 VO 的字段没有挂
+//     `skip_serializing_if`（`#[serde(default)]` 只影响反序列化），键恒在。写成
+//     `.optional()` 会让「后端漏发字段」静默通过（Zod 默认 strip 模式）——
+//     这正是 §M-4 strip 陷阱要求必填显式声明的原因。
+//   - 雪花 id 一律 `z.string()`（后端 `serialize_i64` / `serialize_i64_opt` → JSON
+//     string），禁止 `z.number()` / `Number()`（会丢精度）。
+//   - `unit_price` / `total_price` 是 `z.string()`：后端 `rust_decimal::Decimal` +
+//     `serde-with-str`，不锁字面量形态。
+//   - **不声明** `next_process_id`（后端列表刻意不给，见 VO 内该字段的注释）、
+//     `customer_path` / `shelf_code` / `next_process_name` / `last_inspection_fail_note` /
+//     `current_holder_*` / `worker_name` / `outsource_company_name` —— VO 里根本没有这些键。
+//   - **不声明** `batch_no` / `batch_label`（2026-10-04 补登记）：后端 `PartListItem`
+//     没有这两个键（2026-10-04 实测 204 行真实响应：键集恒为 34 个，`batch_no` 不在其中），
+//     所以 `BatchPickerDialog` 模板的 `v-for="b in sortedRows"` 行内
+//     `批次{{ b.batch_no ?? 1 }}` 对报工台三域恒显「批次 1」、`sortedRows` 的批次号升序
+//     对这三域是恒等操作。
+//     ⚠️ 这**不是「后端 VO 一贯如此」**：另两域的行 VO 都有批次号
+//     （`DeliveryNoteCandidatePart.batch_no` / `InspectionQueueItem.batch_no`），
+//     报工台是唯一缺的。**要显示批次号必须后端先给 `PartListItem` 补字段**；补了之后
+//     本 schema 不改，键仍会被 strip 掉、UI 仍不显示 —— 这是「不声明」清单的登记意义。
+//   - `location` 必须显式声明（`z.string().nullable()`）：`BatchPickerDialog.holderText`
+//     的判据是「键在不在」(`'location' in p`)，Zod strip 会把未声明的键删掉 ⇒
+//     报工台卡片静默少掉 holder 那一行。
+//   - `planned_delivery_date` / `request_date` 用字段级 transform 把后端占位符
+//     `'1970-01-01'` 归一成 `null`（见下方两个字段的注释）。
+//
+// ⚠️ 与同文件 `partSchema` 的分工：`partSchema` 服务 `GET /com/union-list` 等
+// part 级行（后端刻意不填批次锚点）；本 schema 服务报工台两个端点，其中取件端点的
+// 行单位是批次、`batch_id` / `batch_version` 有值，放回/送检端点恒为 null。两者不可互换。
+// ============================================================
+
+/**
+ * 2026-10-04：报工台三页的列表行（后端 `PartListItem`，34 字段全声明）。
+ *
+ * 它是**分页信封里的 items 元素**（外层见 `scanPartListResultSchema`），不是裸数组：
+ * 把信封当数组消费时 `parts.length` 恒 undefined，`useScanPartsSort` 的 `[...list]`
+ * 抛 `TypeError: list is not iterable`（抛点在 computed 内）⇒ 取件 / 放回 / 送检
+ * 三页的 `v-for` 同时渲染失败。
+ */
+export const scanPartRowSchema = z.object({
+  id: z.string(),
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string(),
+  /** 报工台两个端点的 service 把该字段写死空串（取行 SQL 不投影申请人） */
+  applicant_name: z.string(),
+  quantity: z.number(),
+  /**
+   * 2026-10-04：后端 service 构造行时把 `request_date` 硬编码成 `1970-01-01`
+   * （占位，取行 SQL 不投影该列）。归一成 `null`，避免这个哨兵值被下游当成
+   * 「1970 年下单」的真日期消费。只在**恰好等于** `'1970-01-01'` 时归一，
+   * 其它日期字符串原样透传（后端将来补上真投影就自动恢复）。
+   */
+  request_date: z
+    .string()
+    .transform((v) => (v === '1970-01-01' ? null : v))
+    .nullable(),
+  /**
+   * 2026-10-04：同上，`planned_delivery_date` 恒为占位符 `1970-01-01`。归一成
+   * `null` 的直接收益：报工台三页的 `DeliveryDateChip` 不再显示
+   * 「01/01 · 已逾期 2 万多天」的红色错值（`formatDeliveryDate` / `deliveryUrgencyClass`
+   * 拿到 null 后返空串 / 空 class），三页模板的 chip 外层再各自按「两个日期都为 null」
+   * 加 `v-if`，空 chip 外壳也不渲染。
+   */
+  planned_delivery_date: z
+    .string()
+    .transform((v) => (v === '1970-01-01' ? null : v))
+    .nullable(),
+  /** ⚠️ 报工台两个 service 写死 0（占位）；声明成 string 是因为 wire 上是雪花 ID 字符串 */
+  customer_id: z.string(),
+  assembly_id: z.string().nullable(),
+  /** ⚠️ 两个 service 写死 `'IN_PROCESS'`；用 `z.string()` 不锁字面量（同 partBatchSchema 约定） */
+  status: z.string(),
+  /** ⚠️ 两个 service 写死 false（取行 SQL 不投影该列）；保留字段，将来后端补投影即自动生效 */
+  is_urgent: z.boolean(),
+  order_no: z.string().nullable(),
+  /** 两个 service 写死 None */
+  system_delivery_date: z.string().nullable(),
+  note: z.string().nullable(),
+  /** Decimal 字符串；报工台两个 service 写死 `"0"` */
+  unit_price: z.string(),
+  /** Decimal 字符串；同上 */
+  total_price: z.string(),
+  /**
+   * ⚠️ **part 级** `t_part.version`，不是批次 OCC 版本；报工台两个 service 写死 0
+   * （取行 SQL 不投影 `p.version`）。批次乐观锁只认下面的 `batch_version`。
+   */
+  version: z.number(),
+  /** 两个 service 写死 epoch（`from_timestamp_opt(0, 0)`） */
+  created_at: z.string(),
+  created_by: z.string().nullable(),
+  updated_at: z.string(),
+  updated_by: z.string().nullable(),
+  deleted_at: z.string().nullable(),
+  process_chain_id: z.string().nullable(),
+  customer_name: z.string().nullable(),
+  l1_customer_name: z.string().nullable(),
+  /**
+   * 必填 + 可空（不是 `.optional()`）：`PartListItem.location` 没挂
+   * `skip_serializing_if` ⇒ 键恒在。`BatchPickerDialog.holderText` 用
+   * `'location' in p` 判「这个 VO 有没有 holder 信息」，strip 掉该键会让报工台
+   * 卡片静默少一行。值仍恒为 null（这两个 service 不做 batch enrichment）。
+   */
+  location: z.string().nullable(),
+  /** 派生持有人名；这两个 service 不 enrich ⇒ 恒 null */
+  holder_name: z.string().nullable(),
+  /** `From<TPart>` 派生为 `Some("PART")`；显式声明避免被 strip 掉影响行类型判别 */
+  row_type: z.string().nullable(),
+  has_children: z.boolean(),
+  child_count: z.number().nullable(),
+  has_cnc_program: z.boolean(),
+  /**
+   * 批次雪花 id（`serialize_i64_opt` → JSON string）。**全仓仅
+   * `GET /parts/pickable-by-work-type/{work_type_id}` 填**（取件页发
+   * `POST /prod/batches/{batch_id}/pick-up` 的路径参数 + OCC 锚）；
+   * `GET /parts/by-worker/{id}` 恒 null。
+   *
+   * 声明成**必填 + 可空**（不是 `.optional()`）：该字段无 `skip_serializing_if`
+   * ⇒ 键恒在。写成 `.optional()` 会让「后端某天删掉这两个键」静默通过，取件时
+   * 才在 `ScanPickParts` 的批次锚点守卫上炸出一句与真因不匹配的提示。
+   */
+  batch_id: z.string().nullable(),
+  /**
+   * 批次乐观锁版本号（`t_part_batch.version`），作 pick-up 的 `version` 入参。
+   * 必填理由与改名义务同 `batch_id`。
+   */
+  batch_version: z.number().nullable(),
+});
+
+export type ScanPartRowSchema = z.infer<typeof scanPartRowSchema>;
+
+/**
+ * 2026-10-04：报工台两个列表端点（`GET /parts/pickable-by-work-type/{work_type_id}`、
+ * `GET /parts/by-worker/{worker_id}`）的出参 —— **分页信封，不是裸数组**（后端
+ * `PartListOut`，`envelopeResponseInterceptor` 之后 `resp.data` 就是这个对象）。
+ *
+ * 消费形态：调用方必须取 `.items` 当数组用。把信封当数组用的症状是
+ * `parts.length` 恒 undefined（计数恒空）+ `useScanPartsSort` 的 `[...list]` 抛
+ * `TypeError: list is not iterable` ⇒ 报工台三页（取件 / 放回 / 送检）渲染全崩。
+ *
+ * ⚠️ `total` / `limit` / `offset` 是裸 i64 ⇒ JSON **number**（后端 2026-09-27
+ * part 域对齐时改的，与 `repairBatchListResultSchema` 的 string 计数方向相反）。
+ *
+ * 后端两个 service 都是 `limit.unwrap_or(50).clamp(1, 200)`：不传 limit 时**默认只返
+ * 50 条**，而调用方若把它当「全部」就会静默截断。报工台三页 + HeldPartsBadge 统一
+ * 显式传 `limit: 200`（clamp 上限）取全。
+ */
+export const scanPartListResultSchema = z.object({
+  items: z.array(scanPartRowSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type ScanPartListResultSchema = z.infer<typeof scanPartListResultSchema>;

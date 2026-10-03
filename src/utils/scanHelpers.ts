@@ -9,8 +9,16 @@ import { getPartBySerial, type PartItem } from '@/api/parts';
  * 在给定的行列表里按 serial_no || drawing_no 找全部匹配。
  * 同一工件的多个批次（`t_part_batch` 拆分后）会得到多个匹配行——返回数组，
  * 调用方按 0 / 1 / 多分三路。
+ *
+ * 泛型 `T extends { serial_no: string | null; drawing_no: string }`（与同文件
+ * `findBySerialNo` 同款）：报工台三页的行类型是 `scanPartRowSchema`（后端
+ * `PartListItem` + Zod 推断），返修页是 `PartItem`，两者都只用到这两个键，
+ * 不该为了调一个纯 filter 就要求整行满足 `PartItem` 的必填字段集。
  */
-export function findAllByCode(rows: PartItem[], code: string): PartItem[] {
+export function findAllByCode<T extends { serial_no: string | null; drawing_no: string }>(
+  rows: T[],
+  code: string,
+): T[] {
   return rows.filter(
     (p) => (p.serial_no && p.serial_no === code) || (p.drawing_no && p.drawing_no === code),
   );

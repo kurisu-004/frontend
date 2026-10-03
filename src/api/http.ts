@@ -147,12 +147,17 @@ export function serializeParamsV2(params: Record<string, unknown>): string {
 /**
  * 把后端 list 响应统一规整成 number 类型的分页字段（2026-09-25 新增）。
  *
- * 后端 v2 不同域的 list 端点分页字段类型不一致：
- * - `PartListOut`（parts 域）走 `serialize_i64` → JSON 字符串；
+ * 后端 v2 各域 list 端点的分页字段类型不统一，本函数是唯一的收口点，调用处一律
+ * 拿 number 用：
+ * - `PartListOut`（part 域）的 `total` / `limit` / `offset` 是裸 i64 → JSON number
+ *   （backend-rust `vo/part.rs::PartListOut` 三个字段无 `serialize_with`；同 VO 里
+ *   走 `serialize_i64` 的是雪花 ID 字段，不是这三个计数）；
+ * - `InspectionQueueListOut`（待品检）等端点的同名计数是 `serialize_i64` → JSON 字符串；
  * - `UserListOut` / `WorkerListOut` / `CustomerListOut` / `OutsourceCompanyListOut` /
  *   `OutsourceQuoteListOut` / `ShelfListOut` / `DeliveryNoteListOut` /
  *   `DeliveryGroupListOut` / `ProcessListOut` 用裸 i64 number。
  *
+ * 因此三个计数**无条件**过 `Number()`：对 number 是恒等，对 string 是兜底归一。
  * 调用方拿到响应后用本函数包一层，调用处就能稳定用 `Number` 比较 / 算术运算
  * 而不必关心后端实际是 string 还是 number。**不修改 schema 类型本身**，仅
  * 在响应包装层做归一化（`items` 保持原样）。
