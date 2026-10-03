@@ -13,9 +13,9 @@
 //
 // 为什么单独建文件：
 // - 2026-09-17 STS 端口迁移：原 backend-rust `POST /api/v2/part-files/upload-intents`
-//   是 part-file 域专用（带 dedup_hit / existing_file），本次切到 python
-//   `POST /api/v2/files/sts-tmp-keys` 后**单端口 1-key 响应 + 7 个 purpose 枚举**
-//   与 part-file 域解耦，新业务域（外协 / 品检 / 扫码台）也能复用；
+//   是 part-file 域专用（带 dedup_hit / existing_file），本次切到 rust 转发薄壳 →
+//   python 的 `POST /api/v2/files/sts-tmp-keys` 后**单端口 1-key 响应 + 7 个 purpose
+//   枚举**与 part-file 域解耦，新业务域（外协 / 品检 / 扫码台）也能复用；
 // - 类型与 cos_upload.ts 的 `CosCredentials` 重名但字段多 1 个（start_time），
 //   不合并是避免对通用组件加领域字段。
 //

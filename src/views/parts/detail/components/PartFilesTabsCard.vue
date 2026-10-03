@@ -5,8 +5,10 @@
   - 4 个 tab：DRAWING / 3D_MODEL / CAD_2D / CNC_PAIR
   - 前 3 个走 FileListCard（kind 区分）
   - 第 4 个 CNC_PAIR 走 PartCncCard
-  - 「打印图纸」入口收敛在 FileListCard 自身 header（:show-print="canPrintDrawing"，
-    DRAWING tab 生效）；本卡 footer 不再复制一份入口。
+  - 「打印图纸」可见入口只有一处：本卡 footer 的「打印图纸（含条形码）」按钮（DRAWING
+    tab，v-if=canPrintDrawing），点击后经 ref 调 FileListCard 暴露的 print() 转发，
+    打印逻辑仍只有 FileListCard 一份。内层 FileListCard 传 :bare-mode，header 整块
+    不渲染，所以 :show-print="canPrintDrawing" 不会再渲染出第二个按钮。
   - footer：选中 files 行时显示「删除选中」
   - 文件上传 / 删除 api-upload / api-delete 等签名与 FileListCard 现有契约一致
 
@@ -18,7 +20,7 @@
   - onDeleteSelected 按 selectedFile 完整对象的 version 调 deletePartFile
     （FileListCard 暂未接通 @select，先按 id 查 filesForActiveTab）。
 
-  2026-09-17 UI 调整第 2 轮：按钮迁移到最外层 footer + 内层 card 视觉平。
+  2026-09-17 UI 调整：按钮迁移到最外层 footer + 内层 card 视觉平。
   - 内层 FileListCard / PartCncCard 传 :hide-header-actions="true"，避免与外
     层 footer 重复按钮。
   - FileListCard 暴露 print / triggerUpload；PartCncCard 暴露
@@ -337,8 +339,8 @@ function onFileDeleted(_kind: TabKey, id: string): void {
 
 async function onDeleteSelected(): Promise<void> {
   if (!selectedFileId.value) return;
-  // 2026-09-17 review 第 1 轮修复：从 filesForActiveTab 回查完整 PartFileItem，
-  // 用 item.version 调 v2 软删（OCC version 必传）；硬传 0 会 409。
+  // 从 filesForActiveTab 回查完整 PartFileItem，用 item.version 调 v2 软删
+  // （OCC version 必传）；硬传 0 会 409。
   const item = filesForActiveTab.value.find((f) => f.id === selectedFileId.value);
   if (!item) {
     // 选中态已与列表不同步（refresh 中间态），安全降级
@@ -422,15 +424,14 @@ const uploading = computed<boolean>(() => fileListCardRef.value?.uploading ?? fa
   :deep(.el-card__body) {
     padding: 16px 20px;
   }
-  // 2026-09-17 review 第 1 轮修复：把 el-tabs header 底边距显式置 0，
-  // 保证 card header 行高（40px）与其它卡片对齐；覆盖 EP 默认
-  // .el-tabs__header { margin-bottom: 16px }。与下方 .inline-tabs 块
-  // 内容重复但写在卡片层做兜底，删 .inline-tabs 也不退化。
+  // 把 el-tabs header 底边距显式置 0，保证 card header 行高（40px）与其它卡片
+  // 对齐；覆盖 EP 默认 .el-tabs__header { margin-bottom: 16px }。与下方
+  // .inline-tabs 块内容重复但写在卡片层做兜底，删 .inline-tabs 也不退化。
   :deep(.el-tabs__header) {
     margin-bottom: 0;
   }
-  // 2026-09-17 UI 调整第 2 轮：内层 FileListCard / PartCncCard 视觉平，
-  // 去 border / shadow / header background，让它们看起来像 body 区域而非嵌套卡片。
+  // 内层 FileListCard / PartCncCard 视觉平，去 border / shadow / header background，
+  // 让它们看起来像 body 区域而非嵌套卡片。
   // 内层卡仍有自己的 padding（fil-grid 需要），保留内层 __body padding 不动。
   :deep(.el-card.files-card),
   :deep(.el-card.cnc-card) {

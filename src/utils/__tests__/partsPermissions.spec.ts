@@ -4,8 +4,9 @@
 // 必须与后端 rust v2 转发端点的 require_any_role 白名单逐角色对齐
 // （MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER 放行）。
 //
-// 用 it.each 覆盖每个角色的正负两侧，防止将来有人把闸门改回 `!isInspector`
-// 之类的近似式（那会让 INSPECTOR 看不到按钮、货架账号点下去 403）。
+// 用 it.each 覆盖每个角色的正负两侧：正向锁住白名单角色表，负向锁住「值为 false
+// 即不可见」。防止闸门被写成按单一角色排除的近似式（那会让 INSPECTOR 看不到按钮、
+// 货架账号点下去 403）。
 
 import { describe, expect, it } from 'vitest';
 import { canPrintPartDrawing, type PartRoleMapLike } from '../partsPermissions';
@@ -18,6 +19,17 @@ describe('canPrintPartDrawing', () => {
     ['CNC_PROGRAMMER', { CNC_PROGRAMMER: true }],
   ])('%s 可见入口（后端放行）', (_role, map) => {
     expect(canPrintPartDrawing(map)).toBe(true);
+  });
+
+  // 负向逐角色：白名单里每个角色的值为 false 时不可见，锁住「读值不读键存在性」
+  // （写成 `'MANAGER' in role` 之类的存在性判断会让这些用例全红）。
+  it.each<[string, PartRoleMapLike]>([
+    ['MANAGER', { MANAGER: false }],
+    ['CLERK', { CLERK: false }],
+    ['INSPECTOR', { INSPECTOR: false }],
+    ['CNC_PROGRAMMER', { CNC_PROGRAMMER: false }],
+  ])('%s 为 false 时不可见', (_role, map) => {
+    expect(canPrintPartDrawing(map)).toBe(false);
   });
 
   it('空角色集（未登录 / 无角色）不可见', () => {

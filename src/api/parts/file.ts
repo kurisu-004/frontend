@@ -41,8 +41,8 @@ export async function printPartDrawing(partId: string): Promise<Blob> {
  * 2026-10-03：端点由 rust 鉴权后转发 python（`POST /api/v2/parts/print-drawing-batch`）。
  * timeout 12 分钟：N 个 part 拼 PDF 耗时可达分钟级，**必须严格大于 rust 打印档的 660s**
  * 并留余量。两级超时串联时若浏览器先到点，只会抛一个无信息量的 ECONNABORTED，把 rust
- * 侧的真实诊断（python 的 502，或 rust 自己超时回的 408）整个吃掉，排查时看不到任何
- * 服务端信号。
+ * 侧的真实诊断（转发层 600s 转发超时的 502 + 20407，或打印档 660s 请求中间件的
+ * 408 + 40800）整个吃掉，排查时看不到任何服务端信号。
  */
 export async function printPartDrawingBatch(
   partIds: string[],

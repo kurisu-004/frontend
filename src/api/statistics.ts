@@ -1,7 +1,7 @@
 // 后端生产统计 API（走 @/api/http 统一 axios 客户端）。
 //
 // 后端约束：
-// - MANAGER-only（后端 statistics 域 router 级 require_role(MANAGER)）；
+// - MANAGER-only（后端 statistics 域 handler 层逐端点 require_role(Role::Manager)）；
 // - 入参 date_from / date_to 必填 'YYYY-MM-DD'；其他字段无；
 // - 出参 schema 详见 types/statistics.ts。
 //
