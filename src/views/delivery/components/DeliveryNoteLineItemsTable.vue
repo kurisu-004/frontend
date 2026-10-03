@@ -173,9 +173,14 @@ function renderName({ row }: { row: unknown }): ReturnType<typeof h> {
 function renderQuantity({ row }: { row: unknown }): ReturnType<typeof h> {
   const r = row as AssemblyTreeRow;
   if (r.is_asm_row) {
-    return h('div', null, [h('strong', null, '1'), h('span', { class: 'muted' }, '套')]);
+    // 2026-10-04：装配件父行数量 = 后端算出的本单可出货套数（与打印预览同源同值），
+    // 后端没给数时显示「—」；不可兜成 0（「没给数」≠「凑不齐整套」）。
+    return h('div', null, [
+      h('strong', null, r.quantity ?? '—'),
+      h('span', { class: 'muted' }, '套'),
+    ]);
   }
-  return h('span', null, r.quantity);
+  return h('span', null, r.quantity ?? '—');
 }
 function renderStatus({ row }: { row: unknown }): ReturnType<typeof h> {
   const r = row as AssemblyTreeRow;

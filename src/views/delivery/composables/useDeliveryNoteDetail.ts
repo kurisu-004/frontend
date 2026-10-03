@@ -29,6 +29,7 @@ import { canAddRemoveParts, canView, hasManageNoteRole } from '@/utils/deliveryN
 // 读 auth 只走 Pinia store（useAuthStore），不解构（见 CLAUDE.md §auth）。
 import { useAuthStore } from '@/stores/auth';
 import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility';
+import { shippableSetsOfGroup } from '../utils/assemblySets';
 
 export interface DeliveryNoteRoleMap {
   MANAGER: boolean;
@@ -37,7 +38,12 @@ export interface DeliveryNoteRoleMap {
 }
 
 /** 装配件父行 + 子件行的扁平 + 嵌套结构（供 el-table tree-props 渲染）。 */
-export interface AssemblyTreeRow extends DeliveryNoteLineItem {
+export interface AssemblyTreeRow extends Omit<DeliveryNoteLineItem, 'quantity'> {
+  /**
+   * 数量：散件行 = 批次数量；装配件父行 = 本单可出货套数（与打印预览的「合并一套」父行
+   * 同口径同数值）。后端没给 shippable_sets 时为 null，模板渲染「—」——不可兜成 0。
+   */
+  quantity: number | null;
   is_asm_row?: boolean;
   has_children?: boolean;
   children?: DeliveryNoteLineItem[];
@@ -181,7 +187,9 @@ export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetai
         applicant_name: children[0]?.applicant_name ?? '',
         customer_name: children[0]?.customer_name ?? '',
         customer_path: children[0]?.customer_path ?? '',
-        quantity: 1,
+        // 2026-10-04：父行数量 = 本单可出货套数（后端算，与打印预览同源同值），
+        // 后端没给数时 null → 表格渲染「—」。口径见 utils/assemblySets。
+        quantity: shippableSetsOfGroup(children),
         unit: '套',
         note: '',
         is_urgent: children.some((c) => c.is_urgent),

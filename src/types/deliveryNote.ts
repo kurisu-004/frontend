@@ -74,10 +74,12 @@ export interface DeliveryNoteLineItem {
   assembly_order_no: string | null;
 
   // 2026-10-04 新增：装配件套数（仅子件行填；散件为 null）。套数由后端算，前端只读
-  // 展示（打印预览的「合并一套」父行数量列），不参与任何请求 payload。
-  /** 装配件工单总套数（该装配体整单要做的套数，与本单无关） */
+  // 展示（详情页装配件父行 + 打印预览「合并一套」父行），不参与任何请求 payload。
+  // 读取口径（min / 缺失兜底）见 views/delivery/utils/assemblySets.ts。
+  /** 装配件工单总套数（该装配体整单要做的套数，与本单无关）；组内各子件行重复同一值 */
   assembly_quantity?: number | null;
-  /** 本单可出货套数 = 组内子件凑得齐的套数；子件不齐整套时为 0 */
+  /** 该装配件在本单可出货的套数：note 级聚合值，同一 assembly_id 的每个子件行填同一值；
+   *  子件在本单凑不齐整套时为 0 套。后端整体没给此字段时为 null（前端渲染「—」） */
   shippable_sets?: number | null;
 }
 

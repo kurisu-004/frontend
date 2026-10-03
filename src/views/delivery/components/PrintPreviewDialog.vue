@@ -9,7 +9,8 @@
   - 用户拖动只影响预览副本；详情页 ``note.line_items`` 不变
   - 单上有装配件子件时显示「合并为一套 / 分开打印所有子件」radio；合并模式预览折叠
     子件为父行；导出时把父行 round-trip 展开为组内各 part 的代表批次 id 连续。
-  - 装配件套数全由后端算（shippable_sets），前端只读展示、不让用户填。
+  - 装配件套数全由后端算（shippable_sets），前端只读展示、不让用户填；后端没给这个数
+    （字段整体缺失）时渲染「—」而不是「0 套」—— 两者业务含义相反（见 utils/assemblySets）。
   - ``mode`` prop 双模式：
       · 'note'  = 只导送货单
       · 'label' = 只导标签，支持勾选部分行；列首加 el-table 原生 selection 列
@@ -33,6 +34,7 @@ import {
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
+import { assemblyTotalSetsOfGroup, shippableSetsOfGroup } from '../utils/assemblySets';
 
 const props = withDefaults(
   defineProps<{
@@ -76,16 +78,20 @@ interface PreviewAssemblyRow {
   applicant_name: string;
   drawing_no: string;
   name: string;
-  /** 2026-10-04：本单可出货套数（后端按子件齐套情况算），只读展示 */
-  quantity: number;
+  /** 2026-10-04：本单可出货套数（后端算，前端只读）；后端没给这个字段时 null → 渲染「—」 */
+  quantity: number | null;
   unit: string;
-  /** 2026-10-04：装配件工单总套数（数量列 tooltip 的对照值） */
+  /** 2026-10-04：装配件工单总套数（数量列 tooltip 的对照值）；后端没给时 null */
   assembly_quantity: number | null;
+  /** 2026-10-04：组内每个 part 的代表批次 id（custom_order / line_item_ids 的唯一来源） */
+  memberIds: string[];
 }
 type PreviewRow = DeliveryNoteLineItem | PreviewAssemblyRow;
 
-/** 雪花 id 比较：后端序列化成 string（> 2^53，number 会丢精度），故按 BigInt 比。
- *  非纯数字串（后端不该出现）降级字典序，保证本函数不抛。 */
+/** 2026-10-04 新增：雪花 id 比较。后端把 id 序列化成 string（> 2^53，转 number 会丢
+ *  精度），故按 BigInt 比数值；非纯数字串降级字典序，保证本函数不抛。
+ *  不可退化成 Number(a) < Number(b)：两个仅在 2^53 之后有差别的 19 位 id 转 number
+ *  后相等，会让代表批次永远不换、静默选错。 */
 function idLessThan(a: string, b: string): boolean {
   if (/^\d+$/.test(a) && /^\d+$/.test(b)) return BigInt(a) < BigInt(b);
   return a < b;
@@ -141,13 +147,15 @@ const previewRows = computed<PreviewRow[]>(() => {
       applicant_name: siblings[0]?.applicant_name ?? '',
       drawing_no: li.assembly_drawing_no ?? '',
       name: li.assembly_name ?? '',
-      // 2026-10-04：套数由后端算，前端只读展示。
-      // quantity = 本单可出货套数（取组内最小值：被最稀缺子件卡住的那一套数）；
-      // assembly_quantity = 装配件工单总套数（各子件行重复同一值，取首个有值的）。
-      quantity: Math.min(...siblings.map((s) => s.shippable_sets ?? 0)),
+      // 2026-10-04：两个套数字段都是后端算的只读值，口径见 utils/assemblySets。
+      // quantity = 本单可出货套数（shippable_sets，后端整体没给时 null → 渲染「—」，
+      // 不可兜成 0：「没给数」与「凑不齐整套」业务含义相反）；
+      // assembly_quantity = 装配件工单总套数（tooltip 的对照值）。
+      quantity: shippableSetsOfGroup(siblings),
       unit: '套',
-      assembly_quantity:
-        siblings.find((s) => s.assembly_quantity != null)?.assembly_quantity ?? null,
+      assembly_quantity: assemblyTotalSetsOfGroup(siblings),
+      // 组内各 part 的代表批次 id 在建行时定死：导出与预览共用同一份，不再二次折叠
+      memberIds: siblings.map((s) => String(s.id)),
     });
     insertedAsm.add(li.assembly_id);
   });
@@ -279,19 +287,20 @@ function isAsmRow(r: unknown): r is PreviewAssemblyRow {
   return typeof r === 'object' && r !== null && (r as PreviewAssemblyRow).is_asm_row === true;
 }
 
-/** 预览行 → 它代表的批次 id 列表（后端 custom_order / line_item_ids 的唯一口径）。
+/** 2026-10-04 新增：预览行 → 它代表的批次 id 列表（后端 custom_order / line_item_ids 的
+ *  唯一口径），只读行上已定死的 id，不在此处二次推导。
  *  - 散件行：previewRows 已按 part 折叠，每行即一个 part 的代表批次 → 行自身 id；
- *  - 装配件父行：该套装下每个 part 各一个代表 id（合并不打散子件，后端据此归「套」）。 */
-function repIdsOfRow(r: PreviewRow, reps: DeliveryNoteLineItem[]): string[] {
-  if (isAsmRow(r)) {
-    return reps.filter((li) => li.assembly_id === r.assembly_id).map((li) => String(li.id));
-  }
+ *  - 装配件父行：memberIds = 该套装下每个 part 各一个代表 id（合并不打散子件，后端据此
+ *    归「套」）。 */
+function repIdsOfRow(r: PreviewRow): string[] {
+  if (isAsmRow(r)) return r.memberIds;
   return [String(r.id)];
 }
 
-/** 装配件父行数量列的 tooltip：工单总套数 vs 本单可出货套数。 */
+/** 2026-10-04 新增：装配件父行数量列的 tooltip：工单总套数 vs 本单可出货套数。
+ *  任一项后端没给数都显示「—」。 */
 function asmQtyTitle(r: PreviewAssemblyRow): string {
-  return `工单总套数 ${r.assembly_quantity ?? '—'} 套；本单可出货 ${r.quantity} 套`;
+  return `工单总套数 ${r.assembly_quantity ?? '—'} 套；本单可出货 ${r.quantity ?? '—'} 套`;
 }
 
 // 2026-08-07：标签模式全选 / 反选
@@ -331,15 +340,15 @@ async function onConfirm(): Promise<void> {
   try {
     // custom_order / line_item_ids 口径 = 每个 part 一个代表批次 id（同 part 多批次
     // 折叠后的最小 id）：后端据此校验，多发非代表 id 或漏发代表 id 都判 422。
-    // reps 同时是 custom_order 的排序源与 line_item_ids 的成员集合。
-    const reps = foldSamePart(props.note.line_items);
-    const custom_order = rows.value.flatMap((r) => repIdsOfRow(r, reps));
+    // 代表 id 已随行定死（装配件父行存 memberIds、散件行即自身 id），这里只按当前
+    // 预览顺序展开。
+    const custom_order = rows.value.flatMap((r) => repIdsOfRow(r));
     const mergeFlag = mergeMode.value === 'merge';
 
     if (isLabelMode.value) {
       // 勾选行 → 代表批次 id 子集（custom_order 仍覆盖全部行，两者正交：
       // 顺序 × 成员，后端先按 custom_order 排序再按 line_item_ids 裁成员）
-      const line_item_ids = selectedRows.value.flatMap((r) => repIdsOfRow(r, reps));
+      const line_item_ids = selectedRows.value.flatMap((r) => repIdsOfRow(r));
       const { blob, filename } = await printNoteLabels(props.note.id, {
         custom_order,
         merge_assemblies: mergeFlag,
@@ -437,12 +446,12 @@ async function onConfirm(): Promise<void> {
           </template>
         </el-table-column>
       </template>
-      <!-- 「数量」列不进 defs：装配件父行是「套数 + tooltip」，普通行是纯文本 -->
+      <!-- 「数量」列不进 defs：装配件父行是「套数 + tooltip」，普通行是纯文本。
+           装配件父行后端没给数时渲染「—」（不写 0），单位同步省略。 -->
       <el-table-column label="数量" min-width="120" align="right">
         <template #default="{ row }">
           <span v-if="isAsmRow(row)" class="asm-qty" :title="asmQtyTitle(row)">
-            {{ row.quantity }}
-            <span class="unit">套</span>
+            {{ row.quantity ?? '—' }}<span v-if="row.quantity !== null" class="unit">套</span>
           </span>
           <span v-else>{{ row.quantity }}</span>
         </template>
@@ -506,10 +515,8 @@ async function onConfirm(): Promise<void> {
 .asm-tag {
   margin-right: 4px;
 }
-/* 2026-10-04：装配件父行数量 = 后端算出的可出货套数，只读展示 */
-.asm-qty {
-  cursor: default;
-}
+/* 2026-10-04：装配件父行数量 = 后端算出的可出货套数，只读展示。
+   后端没给数时渲染「—」，样式与普通行一致，无需额外修饰。 */
 .asm-qty .unit {
   color: var(--text-secondary);
 }
