@@ -29,7 +29,14 @@ export type PendingProgrammingRow = PendingProgrammingItemSchema;
  *  放 store 里会与本模块构成循环 import。
  *  ⚠️ 后端若换了字段名下发（`batch_ids` 复数 / 嵌套），schema 里的期许字段
  *  `batch_id` 会因 strip 而恒为 undefined ⇒ 按钮恒 disabled，这句文案同时变成假话。
- *  届时必须与 `pendingProgrammingItemSchema` 的 `batch_id` 一并改名。 */
+ *  届时必须与 `pendingProgrammingItemSchema` 的 `batch_id` 一并改名。
+ *
+ *  同批改名的**另一条**锚点：扫码台 PICK_UP 领取也依赖后端下发批次锚点
+ *  （`ScanPickParts` → `POST /prod/batches/{batch_id}/pick-up`，`version` 取
+ *  `batch_version`）。那条路径**不过任何 Zod schema**（裸 `api.get<PartItem[]>`），
+ *  所以它连 strip 保护都没有 —— 后端换名时症状是扫码台弹「批次信息缺失」而非
+ *  本页的按钮 disabled。改名义务登记在 `src/api/parts/crud.ts` 的
+ *  `PartItem.batch_id` / `batch_version` 注释上，两处必须同批改。 */
 export const RELEASE_NO_BATCH_HINT = '待编程列表接口未返回批次 id，下发暂不可用';
 
 /** 该行能否下发：必须带批次 id。 */
@@ -50,9 +57,7 @@ export interface PendingProgrammingColumnDeps {
   isReleasing: (id: string) => boolean;
 }
 
-export function buildPendingProgrammingColumnDefs(
-  deps: PendingProgrammingColumnDeps,
-): ColumnDef[] {
+export function buildPendingProgrammingColumnDefs(deps: PendingProgrammingColumnDeps): ColumnDef[] {
   const { openReleaseDialog, navigateToPart, isReleasing } = deps;
 
   // ---------- 自定义单元格渲染 ----------

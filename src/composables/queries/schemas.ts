@@ -224,6 +224,19 @@ export const partSchema = z.object({
   holder_name: z.string().nullable().optional(),
   process_chain_id: z.string().nullable().optional(),
   batch_id: z.string().nullable().optional(),
+  /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与上面的 batch_id 同源。
+   *
+   *  **本 schema 不服务扫码台。** 它的生产消费方只有 `partListResultSchema`（下方）→
+   *  `useDashboardUpcomingList`，数据源是 `GET /parts` / `GET /com/union-list`，
+   *  两个端点的行单位是 part、后端刻意不填批次锚点（一个 part 的活跃批次可能不止
+   *  一个，填任一都是错锚点）⇒ batch_id / batch_version 在本 schema 上**恒为
+   *  undefined**，保留声明只为类型与后端 VO 对齐，不承担任何扫码台职责。
+   *
+   *  扫码台 PICK_UP 走 `listPartsByWorkTypeAllShelves` 的**裸 `api.get<PartItem[]>`**，
+   *  **不过本 schema**（该端点才填 batch_id / batch_version）。那条路径上的改名义务
+   *  登记在 `src/api/parts/crud.ts` 的 `PartItem.batch_id` / `batch_version` 注释上
+   *  —— 换名时两处都要改，本条注释只描述本 schema 的取值现状。 */
+  batch_version: z.number().nullable().optional(),
   batch_no: z.number().nullable().optional(),
   batch_quantity: z.number().nullable().optional(),
   // 2026-09-28 修复：兼容不返 row_type 的端点（后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts 始终返 'PART' | 'ASSEMBLY'；但工艺制定等旧端点仍可能缺该字段）。2026-10-01 备注：唯一曾缺该字段的 pending-programming 端点已下线（「待编程一览」数据源迁到 prod 域 GET /prod/programming/pending，其出参走独立的 pendingProgrammingItemSchema，不复用 partSchema），本 default 保留兼容其余历史端点。

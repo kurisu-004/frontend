@@ -75,6 +75,31 @@ export interface PartItem {
   batch_id?: string | null;
   batch_no?: number | null;
   batch_label?: string | null;
+  /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与 batch_id 同源。
+   *  填充口径：backend `feat/batch-id-vo`（commit `87e033b`）上**仅**
+   *  `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）填，
+   *  其它端点恒 undefined（该分支刻意不填：一个 part 的活跃批次可能不止一个）。
+   *  ⚠️ **该分支尚未合入 backend `master`**（核查时 master HEAD `5c24b9a`：master 的
+   *  `PartListItem` 无 `batch_version`，且本端点背后的 service
+   *  `list_pickable_by_work_type` 压根不 select `b.id` —— 行元组里没有批次 id、
+   *  `PartListItem::from(TPart{ … })` 也不含 batch 字段）
+   *  ⇒ 对当前 master，本字段与上面的 `batch_id` **恒为 undefined**。
+   *  部署顺序依赖与错序后果见本文件 `pickUpPart` 的「跨仓部署顺序依赖」段。
+   *  `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参即取自本字段，缺失时
+   *  扫码台走显式报错（不静默用 part_id 顶替）。
+   *
+   *  ⚠️ **改名义务**（沿用本仓既有惯例，参照
+   *  `src/composables/queries/schemas.ts` 里 pendingProgrammingItemSchema 的
+   *  batch_id 登记）：**扫码台这条路径没有任何 Zod 闸门** ——
+   *  `listPartsByWorkTypeAllShelves`（本文件下方）是裸 `api.get<PartItem[]>`，
+   *  不过 partSchema 也不经过任何 `.parse()`。所以后端换字段名（`batch_ids` 复数 /
+   *  嵌套结构）时**没有 strip 兜底、也没有 ZodError 兜底**，字段会直接以 undefined
+   *  流到视图层，唯一症状是 `ScanPickParts` 弹「批次信息缺失」——那句文案同时变成
+   *  假话，看不出是契约漂移。
+   *  **后端换名时必须同步改：本注释所在的 `PartItem.batch_id` 与 `batch_version`
+   *  两行 + `ScanPickParts.vue` 的 `PICK_UP_NO_BATCH_HINT` 缺字段守卫 +
+   *  `src/composables/queries/schemas.ts` 的 partSchema 同名字段。** */
+  batch_version?: number | null;
 }
 
 export interface PartListResult {
@@ -194,9 +219,9 @@ export interface PartCreatePayload {
   customer_id: string;
 }
 
-export interface PartStatusChangePayload {
-  status: OrderStatus;
-}
+// 2026-10-03 清理：`changePartStatus`（`POST /parts/{id}/change-status`）与
+// `PartStatusChangePayload` 删除 —— 后端全仓零注册该路由（`src/` 与 `tests/` 均无），
+// 且前端零调用方，留着只会被误当成可用端点。
 
 export interface PartUpdatePayload {
   /** 2026-09-28 契约修复：乐观锁必填。后端 `PartUpdateRequest.version: i32` **无
@@ -225,14 +250,19 @@ export interface PartUpdatePayload {
   note?: string | null;
 }
 
+/** 2026-10-03 迁 prod 域：领取入参对齐后端 v2 `PickUpRequest`。与 v1 的
+ *  `{ serial_no, shelf_id, badge_code, batch_id?, quantity? }` 不再同构 ——
+ *  v1 是「扫序列号 + 工牌」，v2 是「按批次 + OCC + 工人」。 */
 export interface PartPickUpPayload {
-  serial_no: string;
+  /** 必填；t_part_batch.version（OCC），从列表项的 batch_version 取 */
+  version: number;
+  /** 必填；雪花 ID 字符串；不是工牌码 */
+  worker_id: string;
+  /** 必填；雪花 ID 字符串 */
   shelf_id: string;
-  badge_code: string;
-  /** 2026-07-29 批次化：目标批次 id（扫码台卡片回传） */
-  batch_id?: string | null;
-  /** 领取数量；缺省 = 批次全量 */
-  quantity?: number | null;
+  /** 2026-10-03 部分领取：缺省 = 整批。**必须发字符串**（后端 deserialize_i64_opt 只吃 JSON string，发 number 会 422） */
+  quantity?: string | null;
+  note?: string | null;
 }
 
 export interface PartScanPayload {
@@ -307,14 +337,6 @@ export async function createPart(payload: PartCreatePayload): Promise<PartItem> 
   return resp.data;
 }
 
-export async function changePartStatus(
-  id: string,
-  payload: PartStatusChangePayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(`/parts/${id}/change-status`, payload);
-  return resp.data;
-}
-
 // 2026-10-02：以下 lifecycle 端点的操作对象是**批次**（t_part_batch），路由锚点
 // 统一迁到 prod 域 `POST /api/v2/prod/batches/{batch_id}/<action>`，故第一形参一律是
 // batchId，payload 里的 batch_id 一并删除（它已是路径参数）。part 域只留
@@ -324,6 +346,21 @@ export interface PlaceOnShelfPayload {
   shelf_id: string;
   /** 下一道工序 id（必填） */
   next_process_id: string;
+  /** 批次 OCC：t_part_batch.version，取列表项的 `batch_version`；后端必填，缺失 422。
+   *
+   *  已知缺口（2026-10-03 登记，未修）：后端 `PlaceOnShelfRequest.version: i32`
+   *  **无 `#[serde(default)]`**，缺字段时 axum `Json` extractor 在进 handler 前直接拒
+   *  → HTTP 422。调用方是「零件一览」下发的 `usePartDispatch`（单件 + 批量两条
+   *  path），属本轮范围外的 `views/parts/list/**`，那里已用显式报错挡住（该文件
+   *  文件头登记了同源缺口：连 batch_id 都取不到），故这里先声明成可选让编译通过。
+   *
+   *  ⚠️ **解阻塞需要后端改，前端接线解不开**：数据源 `GET /parts` 的行单位是 part，
+   *  后端**刻意不填**批次锚点（一个 part 的活跃批次可能不止一个，填任一都是错锚点）
+   *  ⇒ 必须后端为该端点（或另开「按 part 取活跃批次锚点」的只读端点）提供锚点，
+   *  且 `batch_id` 与 `batch_version` 需**同时**补 —— 只补 batch_id 仍是 422。
+   *  后端提供前保持可选；提供后**必须**改成必填并同步接线 `usePartDispatch`。
+   *  URL 由 `src/api/parts/__tests__/routes.spec.ts` 的 R1 钉住，body 透传由 R2c 钉住。 */
+  version?: number;
   note?: string | null;
 }
 
@@ -358,6 +395,13 @@ export async function placeOnShelf(
  *  路径锚点改为 `{batch_id}`，故 `batch_id` 是路径参数、不再是可选项
  *  ——「缺省按 expect 唯一批次解析」的旧语义已随端点下线。 */
 export interface PartRecallPayload {
+  /** 批次 OCC：t_part_batch.version，取列表项的 `batch_version`；后端必填，缺失 422。
+   *  已知缺口（2026-10-03 登记，未修）同 `PlaceOnShelfPayload.version`：后端
+   *  `RecallToPendingRequest { version, note? }` 的 `version` 无 `#[serde(default)]`，
+   *  而调用方 `usePartDispatch`（召回 mutation）属本轮范围外的 `views/parts/list/**`。
+   *  解阻塞同样**需要后端**先为 `GET /parts` 提供 `batch_id` + `batch_version`
+   *  （两者必须同时补，只补 batch_id 仍 422）；在此之前保持可选。 */
+  version?: number;
   note?: string | null;
 }
 
@@ -394,32 +438,95 @@ export async function forceCompletePart(
  *    1. PendingProgrammingList.vue「下发」按钮（仅历史 PROGRAMMING 数据可见）；
  *  2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
  *
- *  2026-10-02 迁 prod 域：PROGRAMMING 是批次状态，锚点改 `{batch_id}`。 */
+ *  2026-10-02 迁 prod 域：PROGRAMMING 是批次状态，锚点改 `{batch_id}`。
+ *  2026-10-03：后端该端点复用 `PlaceOnShelfRequest`，其 `version` 同样必填（无
+ *  `#[serde(default)]`，缺字段 422）⇒ 本函数补第 4 形参 `version` 并透传，
+ *  这是「待编程下发不再恒 422」的必要一步。
+ *
+ *  已知缺口（2026-10-03 登记，未修）：**上面两个调用方都还没接线 `version`**，
+ *  形参声明为可选，不传时请求仍 422：
+ *    1. `usePartCncGroups.onReleaseToShelf`（零件详情页 CNC 卡片）—— 属本轮范围外的
+ *       `views/parts/detail/**`；其数据源是零件详情，拿不到批次 version。
+ *    2. `usePendingProgrammingStore` 的 release mutation（`PendingProgrammingList.vue`
+ *       「下发」按钮背后）—— 当前 `mutationFn` 是恒 `throw` 的占位，等批次锚点。
+ *       ⚠️ 这条的**后端前提尚未合入**：后端给 `ProgrammingItemOut` 补 `batch_id` /
+ *       `batch_version` 的改动在分支 `feat/batch-id-vo`（commit `87e033b`）上，
+ *       **backend `master` 的 `ProgrammingItemOut` 仍无 `batch_id` 字段**
+ *       （已核：master `src/modules/prod/programming/vo.rs` 零命中，master HEAD
+ *       `5c24b9a`）。⇒ 这**不是纯前端任务**，接线前必须先确认后端已合入，否则
+ *       `batch_id` 仍 `undefined`、按钮点了必然失败。schema 侧
+ *       `pendingProgrammingItemSchema.batch_id` 已在位（后端合入后即可用），接线时
+ *       把 store 的 `mutationFn` 从 `throw` 换成真实调用并传 `batch_version` 即可。
+ *       接线那一轮还须同步改 `pendingProgrammingColumnDefs.ts` 的用户可见文案
+ *       （`RELEASE_NO_BATCH_HINT` 与其上方注释）—— 它们现在写的「列表不携带
+ *       batch_id」对当前 master 是**真话**，后端合入后才变成假话。
+ *  两条都接线后，本形参**必须**改成必填。 */
 export async function releaseFromProgramming(
   batchId: string,
   shelfId: string,
   nextProcessId: string,
+  version?: number,
 ): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/release-from-programming`,
     {
       shelf_id: shelfId,
       next_process_id: nextProcessId,
+      version,
     },
   );
   return resp.data;
 }
 
-/** 已知缺口（v1 遗留，待单独修）：本函数打的是 `/parts/pick-up`（1 段，v1 形状）。
+/** 扫码台 PICK_UP：批次锚定领取。
+ *  2026-10-03 由 v1 遗留的 `POST /parts/pick-up` 迁到 prod 域
+ *  `POST /api/v2/prod/batches/{batch_id}/pick-up`：批次 id 升为路径参数（不再进 body），
+ *  body 只剩 OCC 锚 + 领取人 + 数量。三个反直觉约束，调用方必须遵守：
+ *  - `version` 是普通 number（后端 `i32`，无自定义 deserializer），**不要**转字符串；
+ *  - `worker_id` 是**工人雪花 ID 字符串**，不是 v1 的 `badge_code` 工牌码（后端按 worker
+ *    记录归属，不认工牌码）；
+ *  - `quantity` **必须发 JSON 字符串**（后端 `deserialize_i64_opt` 的实现是先
+ *    `Option::<String>::deserialize` 再 `parse::<i64>()`，发 number 会被 axum `Json`
+ *    extractor 拒成 422）；缺省 / null = 整批，小于总量时后端自动拆批。
+ *  响应仍是 part 级 `R<PartOut>`，调用方按整批刷新列表即可。
  *
- *  后端 v2 的领取端点是批次锚定的 `POST /api/v2/prod/batches/{batch_id}/pick-up`，
- *  payload `PartPickUpPayload { serial_no, shelf_id, badge_code, batch_id?, quantity? }`
- *  与 v2 `PickUpRequest { version, worker_id, shelf_id, note }` 不同构：v1 是
- *  「扫序列号 + 工牌」，v2 是「按批次 + OCC + 工人」。两者映射是业务决策、不是机械
- *  路径迁移，故只登记不改，调用方（ScanPickParts.vue）同步保持原样。
- *  路径被 `src/api/parts/__tests__/routes.spec.ts` 的 R4b 钉住（防顺手改成半迁移）。 */
-export async function pickUpPart(payload: PartPickUpPayload): Promise<PartItem> {
-  const resp = await api.post<PartItem>('/parts/pick-up', payload);
+ *  ⚠️ **跨仓部署顺序依赖（2026-10-03 登记）：本函数依赖两个尚未合入 backend `master`
+ *  的后端分支，部署必须按「先后端、后本前端」的顺序，否则会出现静默数据损坏。**
+ *  （核查时 backend master HEAD = `5c24b9a`；下面两条都实测过。）
+ *
+ *  1. **部分领取依赖 `feat/pickup-partial-split`**（部分领取 + 自动拆批）。
+ *     master 的 `PickUpRequest` **没有 `quantity` 字段**，且 `prod/batch/dto.rs` 里
+ *     真实 `#[serde(deny_unknown_fields)]` 属性数为 **0**（后端在同文件 doc 里写明
+ *     这是**刻意**的：「那会让任何多余字段直接 422，迁移面远大于收益」）⇒ serde
+ *     **静默丢弃**未知字段。同时 master 的 `pick_up` service 硬编码
+ *     `quantity: Some(batch.quantity)`，即**恒整批**。
+ *     ⇒ **错序部署的后果**：调用方无条件发 `quantity`（见 `ScanPickParts.vue`），
+ *     工人选 4 / 共 10 时后端静默丢弃、领走全部 10，而 UI 仍弹「已领取 × 4」。
+ *     **没有 422、没有报错、没有测试能发现** —— 比 404 更难定位（本仓已被「点按钮
+ *     才发现 404」咬过一次，见 `__tests__/routes.spec.ts` 的建档理由）。
+ *  2. **批次锚点依赖 `feat/batch-id-vo`**（两个只读列表端点补 batch_id /
+ *     batch_version）。master 上本端点路由
+ *     `GET /parts/pickable-by-work-type/{work_type_id}` 背后的 service
+ *     `list_pickable_by_work_type`（`modules/part/service/phase1/work_type.rs`）
+ *     **压根不投影 `b.id`** —— 取行 SQL 只 select `b.quantity` /
+ *     `b.current_process_id`，行元组是 `Vec<(i64, String, String, i32, Option<i64>)>`
+ *     （无批次 id），映射走 `PartListItem::from(TPart{ … })` 手写字面量，而该 `From`
+ *     实现不含任何 batch 字段（master 的 `PartListItem` 也没有 `batch_version`）
+ *     ⇒ `batch_id` / `batch_version` 恒为 `None`。
+ *     ⚠️ 勿与**兄弟端点**混淆：同文件 `list_by_work_type`（路由
+ *     `GET /parts/by-work-type/{work_type_id}`）里确实有 `b.id AS bid` + `let _ = bid;`
+ *     —— 那是**另一个函数**的代码，与本端点无关。
+ *     ⇒ **错序部署的后果**：扫码台领料 100% 走不通，每笔都撞
+ *     `PICK_UP_NO_BATCH_HINT`（「批次信息缺失」）。这一条是**响亮失败**、守卫在正确
+ *     工作（`ScanPickParts` 不静默用 part_id 顶替），属可接受的降级；与上一条的
+ *     静默损坏相比风险低一个量级，但同样必须先合后端。
+ *
+ *  两条后端分支都合入 master 后，本段可整段删除。 */
+export async function pickUpPart(batchId: string, payload: PartPickUpPayload): Promise<PartItem> {
+  const resp = await api.post<PartItem>(
+    `/prod/batches/${encodeURIComponent(batchId)}/pick-up`,
+    payload,
+  );
   return resp.data;
 }
 
@@ -666,14 +773,13 @@ export async function deliverPart(batchId: string, payload: DeliverPayload): Pro
 }
 
 /** 扫码台：司机确认发货。
- *  2026-10-02 迁 prod 域：`POST /parts/scan/deliver-part` → `POST /prod/batches/scan/deliver`。
- *  body 不变 —— 服务端按 serial_no + status 解析目标批次，无 path 参数。
- *  ⚠️ 已知缺口（2026-10-03 登记，未修）：后端 `ScanDeliverPartRequest` 的字段是
- *  `part_serial_no` / `worker_badge_code`，与下面的 `part_id` 不同名 ⇒ 该请求恒 422。
- *  本函数当前零生产调用方（死代码），改成 part_serial_no 并接上调用方时一并处理。
- *  与 pickUpPart 的 v1 遗留路径是同批登记的两处缺口。 */
+ *  `POST /prod/batches/scan/deliver`（prod 域，静态双段路径，无 path 参数 ——
+ *  服务端按序列号 + status 自行解析目标批次）。
+ *  字段名对齐后端 `ScanDeliverPartRequest`：`part_serial_no` / `worker_badge_code`
+ *  均必填且无 `#[serde(default)]`，对不上就是 422。
+ *  2026-10-03：本函数仍零生产调用方（死代码），接上调用方时直接用本签名。 */
 export interface ScanDeliverPartPayload {
-  part_id: string;
+  part_serial_no: string;
   worker_badge_code: string;
 }
 

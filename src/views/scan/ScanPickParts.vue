@@ -7,13 +7,18 @@
   1. 拉取 worker.work_type_id 映射下、当前货架上的零件列表（listPartsByWorkTypeAllShelves）
   2. 工人点选一个零件 → 进入「等待扫码」状态
   3. 扫码枪输入 serial_no；前端校验必须等于选中零件.serial_no；不等则拒绝
-  4. 通过则调 POST /parts/pick-up（v2 B 方案手动 pick-up 兜底）；成功后自动回到列表
+  4. 通过则弹「数量」对话框；确认后调 POST /prod/batches/{batch_id}/pick-up
 
-  2026-09-15 Phase 5：
-  - 业务全切 v2（pickUpPart 现在走 `/api/v2/parts/pick-up`）
-  - 保留 listPartsByWorkTypeAllShelves 作为 PICK_UP 主路径（v2 兼容）
-  - 新增 worker-scan API（RETURNED event_type）作为放回一体化入口（ScanReturnParts 使用），
-    本页 PICK_UP 不直接调 worker-scan，仍走 pickUpPart（B 方案手动 pick-up）
+  2026-10-03 迁 v2 批次锚定端点（pickUpPart 由 v1 遗留的 /parts/pick-up 迁入 prod 域）：
+  - 批次 id 走**路径参数**，body 只剩 `{ version, worker_id, shelf_id, quantity?, note? }`：
+    `version` 取列表项 `batch_version`（t_part_batch.version，OCC 锚）、
+    `worker_id` 是工人雪花 ID（**不是** badge_code）、`quantity` **必须发字符串**
+    （后端只解 JSON string，发 number 直接 422）。
+  - 数量对话框不再是死 UI：v2 端点支持部分领取，缺省 quantity 才 = 整批。
+  - 列表行缺 batch_id / batch_version 时走显式报错（`PICK_UP_NO_BATCH_HINT`），
+    **不静默用 part_id 顶替**（那会打成后端「批次不存在」，掩盖真实原因）。
+  - 本页 PICK_UP 不直接调 worker-scan（该端点服务 RETURNED / INSPECTED 事件），
+    仍走 pickUpPart 这条手动领取路径。
 -->
 
 <template>
@@ -509,6 +514,11 @@ onBeforeUnmount(() => {
   if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
 });
 
+/** 2026-10-03：列表行缺批次锚点（batch_id / batch_version）时的统一提示。
+ *  与「零件一览」的 `PLACE_ON_SHELF_NO_BATCH_HINT` 同范式：显式报错让用户知道是
+ *  数据缺口，而不是让它变成后端一句含糊的「批次不存在」。 */
+const PICK_UP_NO_BATCH_HINT = '该零件的批次信息缺失，无法领取（列表接口未返回批次）';
+
 async function onQtyConfirm(qty: number): Promise<void> {
   showQtyDialog.value = false;
   if (!selectedPart.value || !worker.value) return;
@@ -519,15 +529,26 @@ async function onQtyConfirm(qty: number): Promise<void> {
     ElMessage.error('未找到零件所在货架信息');
     return;
   }
+  // 2026-10-03 迁 v2 批次锚定：batch_id 升为路径参数、version 为 OCC 锚，两者都取自
+  // 列表项（后端 2026-10-03 起在 pickable-by-work-type 补上）。缺任一即契约/数据缺口，
+  // **不用 part_id 顶替**（顶替会打成后端「批次不存在」，把真因盖掉）。
+  const batchId = selectedPart.value.batch_id;
+  const batchVersion = selectedPart.value.batch_version;
+  if (!batchId || batchVersion === null || batchVersion === undefined) {
+    ElMessage.error(PICK_UP_NO_BATCH_HINT);
+    return;
+  }
   selectedQty.value = qty;
   submitting.value = true;
   try {
-    await pickUpPart({
-      serial_no: code,
+    await pickUpPart(batchId, {
+      // 普通 number：后端 i32，无自定义 deserializer。
+      version: batchVersion,
+      // 工人雪花 ID 字符串（后端按 worker 记录归属，不认 badge_code）。
+      worker_id: String(worker.value.id),
       shelf_id: useShelfId,
-      badge_code: worker.value.badge_code,
-      batch_id: selectedPart.value.batch_id ?? null,
-      quantity: qty,
+      // 部分领取；必须发字符串（后端 deserialize_i64_opt 只解 JSON string）。
+      quantity: String(qty),
     });
     ElMessage.success(`已领取: ${code} × ${qty}`);
     selectedPart.value = null;
