@@ -79,9 +79,11 @@ export interface PartItem {
    *  填充口径：backend `feat/batch-id-vo`（commit `87e033b`）上**仅**
    *  `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）填，
    *  其它端点恒 undefined（该分支刻意不填：一个 part 的活跃批次可能不止一个）。
-   *  ⚠️ **该分支尚未合入 backend `master`**（核查时 master HEAD `5c24b9a`，master 的
-   *  `PartListItem` 无 `batch_version`、`pickable-by-work-type` 用 `let _ = bid;`
-   *  丢弃批次 id）⇒ 对当前 master，本字段与上面的 `batch_id` **恒为 undefined**。
+   *  ⚠️ **该分支尚未合入 backend `master`**（核查时 master HEAD `5c24b9a`：master 的
+   *  `PartListItem` 无 `batch_version`，且本端点背后的 service
+   *  `list_pickable_by_work_type` 压根不 select `b.id` —— 行元组里没有批次 id、
+   *  `PartListItem::from(TPart{ … })` 也不含 batch 字段）
+   *  ⇒ 对当前 master，本字段与上面的 `batch_id` **恒为 undefined**。
    *  部署顺序依赖与错序后果见本文件 `pickUpPart` 的「跨仓部署顺序依赖」段。
    *  `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参即取自本字段，缺失时
    *  扫码台走显式报错（不静默用 part_id 顶替）。
@@ -503,9 +505,17 @@ export async function releaseFromProgramming(
  *     **没有 422、没有报错、没有测试能发现** —— 比 404 更难定位（本仓已被「点按钮
  *     才发现 404」咬过一次，见 `__tests__/routes.spec.ts` 的建档理由）。
  *  2. **批次锚点依赖 `feat/batch-id-vo`**（两个只读列表端点补 batch_id /
- *     batch_version）。master 的 `pickable-by-work-type` 会**显式丢弃**批次 id ——
- *     `work_type.rs` 里 SQL 投影了 `b.id AS bid`，DTO 映射却是 `let _ = bid;`；master
- *     的 `PartListItem` 也无 `batch_version` 字段。
+ *     batch_version）。master 上本端点路由
+ *     `GET /parts/pickable-by-work-type/{work_type_id}` 背后的 service
+ *     `list_pickable_by_work_type`（`modules/part/service/phase1/work_type.rs`）
+ *     **压根不投影 `b.id`** —— 取行 SQL 只 select `b.quantity` /
+ *     `b.current_process_id`，行元组是 `Vec<(i64, String, String, i32, Option<i64>)>`
+ *     （无批次 id），映射走 `PartListItem::from(TPart{ … })` 手写字面量，而该 `From`
+ *     实现不含任何 batch 字段（master 的 `PartListItem` 也没有 `batch_version`）
+ *     ⇒ `batch_id` / `batch_version` 恒为 `None`。
+ *     ⚠️ 勿与**兄弟端点**混淆：同文件 `list_by_work_type`（路由
+ *     `GET /parts/by-work-type/{work_type_id}`）里确实有 `b.id AS bid` + `let _ = bid;`
+ *     —— 那是**另一个函数**的代码，与本端点无关。
  *     ⇒ **错序部署的后果**：扫码台领料 100% 走不通，每笔都撞
  *     `PICK_UP_NO_BATCH_HINT`（「批次信息缺失」）。这一条是**响亮失败**、守卫在正确
  *     工作（`ScanPickParts` 不静默用 part_id 顶替），属可接受的降级；与上一条的
