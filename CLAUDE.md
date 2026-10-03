@@ -125,11 +125,12 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 ### 拖拽投放（Sortable）
 
-看板类页面的跨容器拖拽用 `vue-draggable-plus`。两条已踩过的坑：
+看板类页面的跨容器拖拽用 `vue-draggable-plus`。三条已踩过的坑：
 
 - **投放容器一律用二参重载** `useDraggable(el, options)`，**不传 list**。传 list 会挂上库的内建 handler（`list.value.splice(...)`），而库假定 list 就是渲染源 ⇒ Sortable 改的数组与 Vue 渲染的数组不同源。容器在 `v-if` 内时用 `src/composables/useLazyDraggable.ts`（它把首次绑定延后到 el ref 解析之后，并强制 `immediate: false`）。
-- **不传 list 就必须自己补 `onRemove` 做 DOM 回滚。** 内建 handler 的第一句是 `from.insertBefore(item, from.children[oldIndex])`（把 Sortable 搬过的节点放回源容器），改二参后这层消失；而 **`invalidate` 补不回来** —— 投放失败时源/落点两侧 query 数据都没变，Vue 的 keyed diff 只 `patchElement`，永远不会删一个不在 vdom 里的外来节点 ⇒ 失败后卡片永久留在错误列并累积。用 `dndSourceTracker.ts` 的 `restoreNodeToSource`。同时加 `sort: false` 关掉容器内重排（该选项只在「落点实例 === 拖拽起点实例」时被读，跨实例投放走 group 的 checkPull/checkPut，不受影响）。
+- **不传 list 就必须自己补 `onRemove` 做 DOM 回滚。** 内建 handler 的第一句是 `from.insertBefore(item, from.children[oldIndex])`（把 Sortable 搬过的节点放回源容器），改二参后这层消失；而 **`invalidate` 补不回来** —— Sortable 已经把节点搬到源容器 DOM 之外，`invalidate` 只重新渲染 vdom 里已有的东西。失败时两侧 query 数据都没变，keyed diff 对这个外来节点连 `patchElement` 都做不到，卡片永久留在错误列并累积；成功时源列数据虽已变、keyed diff 会卸载那张卡，但**卸载只删得掉该 vnode 的 DOM footprint**，footprint 之外的节点同样删不掉。用 `dndSourceTracker.ts` 的 `restoreNodeToSource`。同时加 `sort: false` 关掉容器内重排（该选项只在「落点实例 === 拖拽起点实例」时被读，跨实例投放走 group 的 checkPull/checkPut，不受影响）。
 - **Sortable 容器的直接子元素必须全是可拖项**（混入 header / 空态会让 `oldIndex` 与可拖项下标错位）。空态用**兄弟覆盖层**（`position:absolute; inset:0; pointer-events:none`）承载，别用 `v-if` 把容器整个摘掉 —— 空容器必须仍是合法投放目标（给空闲工人派活是主场景）。
+- **可拖元素 == vnode 的 DOM footprint ⇒ 卡片类组件的根必须是单个元素。** 根一旦是多根 vnode（Fragment），Vue 会在两侧插锚点（`el-tooltip` 包根就是这个形状：`ElPopper` 的 render 是 `renderSlot`，外加默认 `teleported: true` 留 2 个 teleport 占位注释），锚点跟着留在源容器而卡片元素被搬走；`restoreNodeToSource` 按 `from.children[oldIndex]` 放回时元素序列已位移，卡片被插到**自己那对锚点范围之外**，之后 Vue 卸载走 `removeFragment()` 只删锚点、够不到卡片 ⇒ 每投放一次残留一个幻影卡片（徽标 / 计数照常更新，刷新浏览器才恢复）。同一条约束的另一面：**dev 构建保留模板注释，根元素上方不许有任何注释或元素**，否则组件同样变成多根。`BatchCard` 因此把 `el-tooltip` 放在根内部的触发区 `.card-body` 上，`data-*` / `v-bind="$attrs"` 全部留在根 div。守卫：`src/components/__tests__/BatchCardDndFootprint.spec.ts`。
 
 ## 已知风险
 

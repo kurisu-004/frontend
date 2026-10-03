@@ -23,104 +23,122 @@
        header 底边框，96px 固定高度放不下；且根元素要同时当 Sortable 的可拖项（需要
        干净的 DOM 根 + `data-*` dataset 供 PoolDrawer/WorkerColumn 读 batch_id /
        shelf_id）、承父级透传的 `data-*`（故 `inheritAttrs: false` + `v-bind="$attrs"`）、
-       以及手写 hover 抬升 box-shadow。 -->
+       以及手写 hover 抬升 box-shadow。
+     - 2026-10-04 硬不变式：**根必须是单个元素**，且该元素就是 vnode 的全部 DOM
+       footprint。Sortable 搬的是 `evt.item` 这一个节点，Vue 卸载时也只认
+       `vnode.el`：根一旦是多根 vnode（Fragment），Vue 会在两侧插锚点，锚点跟着留在
+       容器里而卡片元素被搬走，投放后按原下标放回会落到锚点范围之外，卸载走
+       `removeFragment()` 够不到卡片 ⇒ 每次投放残留一个幻影节点。el-tooltip 因此只包
+       根内部的触发区 `.card-body`；已知取舍是鼠标停在左上角勾选框那一小块
+       （20×18px）不弹 tooltip。守卫：src/components/__tests__/BatchCardDndFootprint.spec.ts。 -->
 <template>
-  <el-tooltip placement="top" :show-after="200" :disabled="!hasDetails">
-    <template #content>
-      <div class="card-tooltip">
-        <div v-if="batch.drawing_no">
-          <span class="tt-label">图号</span><span>{{ batch.drawing_no }}</span>
+  <div
+    v-bind="$attrs"
+    :class="['batch-card', { 'is-selectable': selectable, 'is-selected': selectable && selected }]"
+    :data-batch-id="batch.batch_id"
+  >
+    <!-- 2026-10-04：上面这个 div 是**唯一**根节点，也是本 vnode 的全部 DOM footprint
+         —— Sortable 搬的就是它、Vue 卸载时删的也是它。两条约束：
+         ① 根不能是 Fragment（多根 vnode 会在两侧插锚点，锚点留在容器里而卡片元素被搬走，
+            投放后按原下标放回会落到锚点范围之外，卸载走 removeFragment() 够不到卡片
+            ⇒ 每次投放残留一个幻影卡片，卡片停在原位、刷新浏览器才恢复）；
+         ② 根上方的 template 里**不许有任何注释或元素** —— dev 构建保留注释，一个顶层注释
+            就会让本组件变成多根、同样踩 ①。
+         故 el-tooltip 只包根内部的触发区 .card-body，不包根。
+         守卫见 src/components/__tests__/BatchCardDndFootprint.spec.ts。 -->
+    <!-- 勾选角标：只有待下发池需要多选下发，故由 selectable 开关控制显隐。
+         绝对定位在卡片左上角（left 4px / top 4px），第 1 行让位 20px。
+         它在触发区（.card-body）之外 ⇒ 鼠标停在这一小块（20×18px）不弹 tooltip。 -->
+    <el-checkbox
+      v-if="selectable"
+      class="card-check"
+      size="small"
+      :model-value="selected"
+      @change="onToggleSelect"
+      @click.stop
+    />
+    <el-tooltip placement="top" :show-after="200" :disabled="!hasDetails">
+      <template #content>
+        <div class="card-tooltip">
+          <div v-if="batch.drawing_no">
+            <span class="tt-label">图号</span><span>{{ batch.drawing_no }}</span>
+          </div>
+          <!-- 序列号 / 批次号在 200px 宽的 body 里会被截断，tooltip 里必须再列一遍完整值。 -->
+          <div v-if="batch.serial_no">
+            <span class="tt-label">序列号</span><span>{{ batch.serial_no }}</span>
+          </div>
+          <div v-if="batch.batch_no">
+            <span class="tt-label">批次号</span><span>{{ batch.batch_no }}</span>
+          </div>
+          <div v-if="batch.customer_l1">
+            <span class="tt-label">客户(L1)</span><span>{{ batch.customer_l1 }}</span>
+          </div>
+          <div v-if="batch.customer_l2">
+            <span class="tt-label">客户(L2)</span><span>{{ batch.customer_l2 }}</span>
+          </div>
+          <div v-if="batch.applicant_name">
+            <span class="tt-label">申请人</span><span>{{ batch.applicant_name }}</span>
+          </div>
+          <div v-if="batch.planned_delivery_date">
+            <span class="tt-label">计划交期</span><span>{{ batch.planned_delivery_date }}</span>
+          </div>
+          <div v-if="batch.location">
+            <span class="tt-label">所在位置</span><span>{{ batch.location }}</span>
+          </div>
+          <div v-if="batch.note">
+            <span class="tt-label">备注</span><span>{{ batch.note }}</span>
+          </div>
+          <!-- 2026-10-03：领域扩展槽（外协看板在用）逐行渲染，每行独立 v-if ——
+               槽内字段全部可选且 nullable，不填就当没这行，tooltip 与生产队列
+               域下逐行一致。can_auto_receive 用显式 === false / === true 判定：
+               它是「接收能否免填工序/货架」的**否定语义**，只渲染 false 一侧会让
+               「可自动」与「未知」无法区分。 -->
+          <div v-if="batch.extra?.outsource_company_name">
+            <span class="tt-label">外协公司</span
+            ><span>{{ batch.extra.outsource_company_name }}</span>
+          </div>
+          <div v-if="batch.extra?.outsource_process_name">
+            <span class="tt-label">外协工序</span
+            ><span>{{ batch.extra.outsource_process_name }}</span>
+          </div>
+          <div v-if="batch.extra?.price">
+            <span class="tt-label">单价</span><span>{{ batch.extra.price }}</span>
+          </div>
+          <div v-if="batch.extra?.sent_at">
+            <span class="tt-label">发出时间</span><span>{{ batch.extra.sent_at }}</span>
+          </div>
+          <div v-if="batch.extra?.can_auto_receive === false">
+            <span class="tt-label">接收</span><span>需手填工序 / 货架</span>
+          </div>
+          <div v-else-if="batch.extra?.can_auto_receive === true">
+            <span class="tt-label">接收</span><span>可自动带出工序 / 货架</span>
+          </div>
         </div>
-        <!-- 序列号 / 批次号在 200px 宽的 body 里会被截断，tooltip 里必须再列一遍完整值。 -->
-        <div v-if="batch.serial_no">
-          <span class="tt-label">序列号</span><span>{{ batch.serial_no }}</span>
+      </template>
+      <!-- tooltip 触发区 = 整块卡面。它是 el-tooltip 默认 slot 里**唯一**的合法子节点
+           （ElOnlyChild 多个合法子节点会 debugWarn），且必须吃满根的可用高度。 -->
+      <div class="card-body">
+        <div :class="['row', { 'row--shifted': selectable }]">
+          <span class="part-name" :title="batch.part_name">{{ batch.part_name }}</span>
         </div>
-        <div v-if="batch.batch_no">
-          <span class="tt-label">批次号</span><span>{{ batch.batch_no }}</span>
+        <div class="row">
+          <span class="serial-no">{{ batch.serial_no ?? '—' }}</span>
+          <span class="tags">
+            <span v-if="batch.is_urgent" class="tag tag--urgent">加急</span>
+            <span v-if="batch.has_cnc_program" class="tag tag--cnc">已编程</span>
+          </span>
         </div>
-        <div v-if="batch.customer_l1">
-          <span class="tt-label">客户(L1)</span><span>{{ batch.customer_l1 }}</span>
+        <div class="row">
+          <span class="qty">×{{ batch.quantity }}</span>
+          <span class="dot">·</span>
+          <span class="due">{{ batch.system_delivery_date ?? '—' }}</span>
         </div>
-        <div v-if="batch.customer_l2">
-          <span class="tt-label">客户(L2)</span><span>{{ batch.customer_l2 }}</span>
-        </div>
-        <div v-if="batch.applicant_name">
-          <span class="tt-label">申请人</span><span>{{ batch.applicant_name }}</span>
-        </div>
-        <div v-if="batch.planned_delivery_date">
-          <span class="tt-label">计划交期</span><span>{{ batch.planned_delivery_date }}</span>
-        </div>
-        <div v-if="batch.location">
-          <span class="tt-label">所在位置</span><span>{{ batch.location }}</span>
-        </div>
-        <div v-if="batch.note">
-          <span class="tt-label">备注</span><span>{{ batch.note }}</span>
-        </div>
-        <!-- 2026-10-03：领域扩展槽（外协看板在用）逐行渲染，每行独立 v-if ——
-             槽内字段全部可选且 nullable，不填就当没这行，tooltip 与生产队列
-             域下逐行一致。can_auto_receive 用显式 === false / === true 判定：
-             它是「接收能否免填工序/货架」的**否定语义**，只渲染 false 一侧会让
-             「可自动」与「未知」无法区分。 -->
-        <div v-if="batch.extra?.outsource_company_name">
-          <span class="tt-label">外协公司</span
-          ><span>{{ batch.extra.outsource_company_name }}</span>
-        </div>
-        <div v-if="batch.extra?.outsource_process_name">
-          <span class="tt-label">外协工序</span
-          ><span>{{ batch.extra.outsource_process_name }}</span>
-        </div>
-        <div v-if="batch.extra?.price">
-          <span class="tt-label">单价</span><span>{{ batch.extra.price }}</span>
-        </div>
-        <div v-if="batch.extra?.sent_at">
-          <span class="tt-label">发出时间</span><span>{{ batch.extra.sent_at }}</span>
-        </div>
-        <div v-if="batch.extra?.can_auto_receive === false">
-          <span class="tt-label">接收</span><span>需手填工序 / 货架</span>
-        </div>
-        <div v-else-if="batch.extra?.can_auto_receive === true">
-          <span class="tt-label">接收</span><span>可自动带出工序 / 货架</span>
+        <div class="row">
+          <span class="batch-no">{{ batch.batch_no }}</span>
         </div>
       </div>
-    </template>
-    <div
-      v-bind="$attrs"
-      :class="[
-        'batch-card',
-        { 'is-selectable': selectable, 'is-selected': selectable && selected },
-      ]"
-      :data-batch-id="batch.batch_id"
-    >
-      <!-- 勾选角标：只有待下发池需要多选下发，故由 selectable 开关控制显隐。
-           绝对定位在卡片左上角（left 4px / top 4px），第 1 行让位 20px。 -->
-      <el-checkbox
-        v-if="selectable"
-        class="card-check"
-        size="small"
-        :model-value="selected"
-        @change="onToggleSelect"
-        @click.stop
-      />
-      <div :class="['row', { 'row--shifted': selectable }]">
-        <span class="part-name" :title="batch.part_name">{{ batch.part_name }}</span>
-      </div>
-      <div class="row">
-        <span class="serial-no">{{ batch.serial_no ?? '—' }}</span>
-        <span class="tags">
-          <span v-if="batch.is_urgent" class="tag tag--urgent">加急</span>
-          <span v-if="batch.has_cnc_program" class="tag tag--cnc">已编程</span>
-        </span>
-      </div>
-      <div class="row">
-        <span class="qty">×{{ batch.quantity }}</span>
-        <span class="dot">·</span>
-        <span class="due">{{ batch.system_delivery_date ?? '—' }}</span>
-      </div>
-      <div class="row">
-        <span class="batch-no">{{ batch.batch_no }}</span>
-      </div>
-    </div>
-  </el-tooltip>
+    </el-tooltip>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -197,7 +215,6 @@ function onToggleSelect(): void {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 2px;
   width: 200px;
   height: 96px;
   padding: 8px 10px;
@@ -220,15 +237,27 @@ function onToggleSelect(): void {
 .batch-card.is-selectable {
   cursor: grab;
 }
-/* 2026-10-02：沿用旧卡片的选中态规则（主色描边 + 浅主色底 + 外发光），仅在
-   selectable 场景启用 —— 工序池 / 工人列的卡片没有勾选语义。
-   只覆盖上/右/下三边：左边框是加急橙（accentVar）的语义位，勾选态不能吃掉它。 */
+/* 2026-10-04 勾选态（仅 selectable 场景 —— 工序池 / 工人列的卡片没有勾选语义）：主色描边
+   + 浅主色底 + 外发光。`border-color` 简写只重置四边的**颜色**，不碰 border-style /
+   border-width，故这里真正达成的是四边**同色**、左边框仍保留 4px 竖条粗度（勾选态只
+   染色、不重置宽度）。
+   加急语义由 body 内的橙色「加急」tag 承载，不依赖左边框着色。
+   回归守卫见 src/components/__tests__/BatchCard.spec.ts 的源码契约用例。 */
 .batch-card.is-selected {
-  border-top-color: var(--el-color-primary);
-  border-right-color: var(--el-color-primary);
-  border-bottom-color: var(--el-color-primary);
+  border-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
   box-shadow: 0 0 0 1px var(--el-color-primary);
+}
+/* 2026-10-04：tooltip 触发区 = 整块卡面（el-tooltip 的默认 slot，只包这一层）。
+   行高 / gap 的 96px 算式不变，只是承载 4 行的那层从根挪到这里：
+   4×18 + 3×2 gap + 上下各 8 padding + 上下各 1px 边框 = 96px。flex:1 保证它吃满
+   根的可用高度（触发区塌成 0 高度 tooltip 就永不出现）。 */
+.card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 /* 2026-10-02：勾选角标绝对定位在 left/top 4px，而 EP 2.14.6 的 .el-checkbox--small
    直接把 height 钉死成 24px（不吃 --el-checkbox-height 变量，基类 .el-checkbox 的

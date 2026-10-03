@@ -56,11 +56,19 @@ import {
  *
  *  代价与补齐（投放类容器必须自己补齐两件事）：
  *   ① **DOM 放回**：内建 onRemove 的 `Tt(from, item, oldIndex)` 随二参形态一起
- *      消失。少了它，投放失败时节点留在落点列，而 invalidateQueries **救不回来** ——
- *      失败时源列与落点列的 query 数据都没变，Vue 的 keyed diff 只 patchElement，
- *      永远不会去删一个不在 vdom 里的外来节点。补法见
- *      `src/utils/dndSourceTracker.ts` 的 `restoreNodeToSource`，每个既是源又是落点
- *      的投放容器都要挂（WorkerColumn / PoolDrawer 两处）。
+ *      消失。少了它，被拖节点会留在落点列，而 invalidateQueries **补不回来** ——
+ *      成功与失败两条路径都中招，只是表现不同：失败时源列与落点列的 query 数据都没变，
+ *      Vue 的 keyed diff 对这个外来节点连 patchElement 都做不到（它不在 vdom 里），
+ *      节点就永久留在错误列并累积；成功时源列数据确实变了、keyed diff 会卸载那张卡，
+ *      但它**只删得掉该 vnode 的 DOM footprint**，footprint 之外的节点同样删不掉。
+ *      补法见 `src/utils/dndSourceTracker.ts` 的 `restoreNodeToSource`，每个既是源又是
+ *      落点的投放容器都要挂（WorkerColumn / PoolDrawer 两处）。
+ *      ⚠️ 放回只解决「节点还挂在源容器」，还差一条前提：**可拖项组件的根必须是单个
+ *      元素**。根若是 Fragment，Vue 会在两侧插锚点；锚点跟着留在源容器而节点被搬走，
+ *      `Tt` / `restoreNodeToSource` 按 `from.children[oldIndex]` 放回时元素序列已位移，
+ *      节点被插到**自己那对锚点范围之外**，之后 Vue 卸载走 `removeFragment()` 只删锚点、
+ *      够不到节点 ⇒ 每投放一次残留一个幻影卡片。硬不变式与守卫见 CLAUDE.md
+ *      「拖拽投放（Sortable）」一节。
  *   ② **容器内重排**：内建 onUpdate 消失后同容器内重排无人回滚 DOM 顺序。本项目
  *      UI 本就无重排语义（每次落位都是「一次写操作 + 一次失效」），故用 Sortable
  *      的 `sort: false` 直接关掉；该选项只在「落点实例 === 拖拽起点实例」（容器内
