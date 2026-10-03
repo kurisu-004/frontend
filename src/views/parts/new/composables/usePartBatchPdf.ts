@@ -385,6 +385,13 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   // PDF / Excel 文件列表（el-upload 控件绑定）
   const pdfFiles = ref<UploadFile[]>([]);
   const excelFiles = ref<UploadFile[]>([]);
+  // 2026-10-03：Excel 解析结果上提为 composable 状态。
+  // 此前它是 `rebuildFromUploads` 内的局部变量，解析完即丢 → 只有「首次解析」这一次调用点
+  // 能回填；之后用户合并页（mergeSelectedAsPart / mergeSelectedAsAssembly）、手动新增
+  // （confirmManualPart / confirmManualAssembly）新建的行全都拿不到 Excel 数据。
+  // 它的生命周期必须跟着「已上传的 Excel 文件」走：Excel 被移除 / 提交后清空时置 null，
+  // 避免用陈旧数据回填新行。
+  const excelByDrawingNo = shallowRef<Map<string, BidRow> | null>(null);
   // PR-H 2026-07-28：3D 模型批量上传（.step / .stp / .iges / .igs / .stl / .obj / .3mf）
   const threeDModelFiles = ref<UploadFile[]>([]);
   const pdfBuildingTree = ref(false);
@@ -450,6 +457,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
   function onExcelRemove(file: UploadFile): void {
     excelFiles.value = excelFiles.value.filter((f) => f.uid !== file.uid);
+    // 2026-10-03：Excel 文件被移除 → 解析结果同步作废（否则会用已不在列表里的
+    // Excel 数据继续回填新建行）。
+    excelByDrawingNo.value = null;
   }
   // PR-H 2026-07-28：3D 模型上传钩子
   function onThreeDModelChange(file: UploadFile): void {
@@ -522,13 +532,14 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
     pdfBuildingTree.value = true;
     try {
-      // 解析 Excel（可选）
-      let excelByDrawingNo: Map<string, BidRow> | null = null;
+      // 解析 Excel（可选）。2026-10-03：结果写进 composable 级 excelByDrawingNo，
+      // 让后续「合并页 / 手动新增」新建的行也能回填（见该 ref 声明处注释）。
+      excelByDrawingNo.value = null;
       if (excelFiles.value.length > 0) {
         const raw = excelFiles.value[0].raw as File | undefined;
         if (raw) {
           const rows = await readExcel(raw);
-          excelByDrawingNo = new Map(rows.map((r) => [r.drawingNo, r]));
+          excelByDrawingNo.value = new Map(rows.map((r) => [r.drawingNo, r]));
         }
       }
 
@@ -570,7 +581,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       standaloneParts.value = rows;
       assemblies.value = [];
       selectedPages.value = new Set();
-      if (excelByDrawingNo) applyExcelToAll(excelByDrawingNo);
+      if (excelByDrawingNo.value) applyExcelToAll();
       // PR-H 2026-07-28：按 drawing_no 把 3D 模型挂到对应独立零件 / 装配件子件行
       linkThreeDModelsToRows();
 
@@ -590,10 +601,16 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
 
   /** 用 Excel 行覆盖表内字段（applicant / quantity / planned_delivery_date + 分厂 L2 + 单价）。
-   *  2026-07-30 起不再覆盖 is_urgent（批量 PDF 导入默认全部不加急，由用户手动 switch）。 */
-  function applyExcelToAll(excelByDrawingNo: Map<string, BidRow>): void {
+   *  2026-07-30 起不再覆盖 is_urgent（批量 PDF 导入默认全部不加急，由用户手动 switch）。
+   *
+   *  2026-10-03：改为无参，读 composable 级 `excelByDrawingNo`。没有 Excel 数据时静默
+   *  返回（不抛错、不提示）—— 它现在是 5 个建行入口都会调用的收尾动作，「没传 Excel」
+   *  是完全正常的用法，不该打扰用户。 */
+  function applyExcelToAll(): void {
+    const excelMap = excelByDrawingNo.value;
+    if (!excelMap) return;
     for (const r of standaloneParts.value) {
-      const matched = excelByDrawingNo.get(r.drawing_no);
+      const matched = excelMap.get(r.drawing_no);
       if (!matched) continue;
       r.applicant_name = matched.applicantName || r.applicant_name;
       r.quantity = matched.quantity || r.quantity;
@@ -614,32 +631,44 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       }
     }
     for (const a of assemblies.value) {
-      // 顶层分厂 / 申请人：用第一个能在 Excel 查到的 child 的行（child 不再各自持有这两个字段）
-      const firstHit = a.children
-        .map((c) => excelByDrawingNo.get(c.drawing_no))
+      // 2026-10-03：顶层命中源改为**装配件自身图号** `a.drawing_no`。子件图号是前端按
+      // 「首页原图号 / 原图号-02」合成的（见 mergeSelectedAsAssembly /
+      // confirmManualAssembly），其中只有第 1 页那个恰好等于装配件自身图号，`-02 / -03`
+      // 这些在 Excel 的「物料编号」列里根本不存在 —— 顶层回填认自身图号才是稳的。
+      // 保留 child 命中作为回退：Excel 里「逐个子件各占一行」的历史数据，其子件图号就是
+      // 物料编号本身，仍应命中。
+      const ownHit = excelMap.get(a.drawing_no);
+      const childHit = a.children
+        .map((c) => excelMap.get(c.drawing_no))
         .find((m): m is BidRow => !!m);
-      if (firstHit) {
+      const hit = ownHit ?? childHit;
+      if (hit) {
+        // 分厂 / 申请人由顶层统一持有（子件不再各自持有这两个字段）
         if (!a.customer_id) {
-          const l2Id = resolveL2CustomerId(firstHit.deptName);
+          const l2Id = resolveL2CustomerId(hit.deptName);
           if (l2Id) {
             a.customer_id = l2Id;
             const c = customers.value.find((x) => x.id === l2Id);
             a.customer_name = c?.name ?? '';
           }
         }
-        a.applicant_name = firstHit.applicantName || a.applicant_name;
+        a.applicant_name = hit.applicantName || a.applicant_name;
+        // 数量 = **整套数量**（业务口径：Excel 的数量是整套的数量）
+        a.quantity = hit.quantity || a.quantity;
+        if (hit.plannedDeliveryDate) a.planned_delivery_date = hit.plannedDeliveryDate;
       }
-      // 子件继承 quantity / urgent / planned_delivery_date / 单价 / 总价
-      for (const c of a.children) {
-        const matched = excelByDrawingNo.get(c.drawing_no);
-        if (!matched) continue;
-        c.quantity = matched.quantity || c.quantity;
-        // 2026-07-30：子件不再从应标 Excel 继承 is_urgent。
-        if (matched.plannedDeliveryDate) c.planned_delivery_date = matched.plannedDeliveryDate;
-        // PR-H 2026-07-28：含税单价 / 总价
-        if (matched.unitPrice != null) c.unit_price = matched.unitPrice;
-        if (matched.totalPrice != null) c.total_price = matched.totalPrice;
+      // 2026-10-03 子件口径（业务口径：分厂 / 申请人 / 计划交期是整套共享的，
+      // 子件数量需手填、子件不需要单价）：
+      //   - 只继承计划交期，且必须在顶层填完之后（顶层没命中 Excel 时不继承）；
+      //   - quantity 保持 makeAssemblyChild 的默认值 1；
+      //   - unit_price / total_price 保持默认 null。
+      // 单价留空不是漏填：AssemblyRow / AssemblyChildRow 接口都没有这两个字段，
+      // 后端 `POST /parts/batch` 的 item DTO 也不收，装配件整套的含税单价在本仓无处
+      // 落库，子件单价列只能留空手填。
+      if (a.planned_delivery_date) {
+        for (const c of a.children) c.planned_delivery_date = a.planned_delivery_date;
       }
+      // 2026-07-30：子件不从应标 Excel 继承 is_urgent（同独立零件，默认全部不加急）。
     }
   }
 
@@ -987,6 +1016,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
     // 移除原 standalone 行（如果存在）
     clearSelection();
+    // 2026-10-03：新建行也要走一次 Excel 回填（Excel 数据在 composable 级状态里活着）。
+    applyExcelToAll();
     ElMessage.success(`已合并 ${pageIndices.length} 页 → 独立零件`);
   }
 
@@ -1047,6 +1078,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       children,
     });
     clearSelection();
+    // 2026-10-03：新建行也要走一次 Excel 回填（Excel 数据在 composable 级状态里活着）。
+    applyExcelToAll();
     ElMessage.success(`已合并 ${pageIndices.length} 页 → 装配件`);
   }
 
@@ -1218,6 +1251,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       }),
     );
     manualPartDialogVisible.value = false;
+    // 2026-10-03：新建行也要走一次 Excel 回填。
+    applyExcelToAll();
     ElMessage.success('已新增零件');
   }
 
@@ -1315,6 +1350,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       children,
     });
     manualAsmDialogVisible.value = false;
+    // 2026-10-03：新建行也要走一次 Excel 回填。
+    applyExcelToAll();
     ElMessage.success(`已新增装配件（共 ${totalPages} 子件）`);
   }
 
@@ -2234,6 +2271,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       selectedPages.value.clear();
       pdfFiles.value = [];
       excelFiles.value = [];
+      // 2026-10-03：Excel 文件已清空 → 解析结果同步作废（下一批是新数据）。
+      excelByDrawingNo.value = null;
       threeDModelFiles.value = [];
       Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
       Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
