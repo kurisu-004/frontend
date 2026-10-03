@@ -458,7 +458,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   function onExcelRemove(file: UploadFile): void {
     excelFiles.value = excelFiles.value.filter((f) => f.uid !== file.uid);
     // 2026-10-03：Excel 文件被移除 → 解析结果同步作废（否则会用已不在列表里的
-    // Excel 数据继续回填新建行）。
+    // Excel 数据继续回填新建行）。这里可以无条件作废：excel 的 el-upload 没开
+    // `multiple`，列表里只可能有 1 个文件，移除的就是 `rebuildFromUploads` 读的那个
+    // （`excelFiles.value[0]`）。
     excelByDrawingNo.value = null;
   }
   // PR-H 2026-07-28：3D 模型上传钩子
@@ -581,7 +583,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       standaloneParts.value = rows;
       assemblies.value = [];
       selectedPages.value = new Set();
-      if (excelByDrawingNo.value) applyExcelToAll();
+      // 全表回填：重新解析已整体替换 standaloneParts 并清空 assemblies，此刻表内
+      // 每一行都是刚解析出来的新行，不存在「用户手改过的既有行」需要保护。
+      applyExcelToAll();
       // PR-H 2026-07-28：按 drawing_no 把 3D 模型挂到对应独立零件 / 装配件子件行
       linkThreeDModelsToRows();
 
@@ -600,16 +604,27 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
   }
 
+  /** 回填作用域：不传 = 全表（`rebuildFromUploads` 用）；传 = 只回填本次新建的行。 */
+  interface ExcelFillTarget {
+    parts?: StandalonePartRow[];
+    assemblies?: AssemblyRow[];
+  }
+
   /** 用 Excel 行覆盖表内字段（applicant / quantity / planned_delivery_date + 分厂 L2 + 单价）。
    *  2026-07-30 起不再覆盖 is_urgent（批量 PDF 导入默认全部不加急，由用户手动 switch）。
    *
-   *  2026-10-03：改为无参，读 composable 级 `excelByDrawingNo`。没有 Excel 数据时静默
-   *  返回（不抛错、不提示）—— 它现在是 5 个建行入口都会调用的收尾动作，「没传 Excel」
-   *  是完全正常的用法，不该打扰用户。 */
-  function applyExcelToAll(): void {
+   *  数据源是 composable 级 `excelByDrawingNo`。没有 Excel 数据时静默返回（不抛错、不提示）
+   *  —— 「没传 Excel」是完全正常的用法，不该打扰用户。
+   *
+   *  `target` 缺省是全表，但**建行入口一律显式传入本次新建的行**：全表重扫会把用户
+   *  在其它行上手改过的数量 / 单价 / 交期 / 申请人一起覆盖回 Excel 值（分厂有
+   *  `!customer_id` 守卫所以幸免），而「建行」这个动作与那些行无关，不该动它们。
+   *  只有 `rebuildFromUploads` 适合全表：它本就整体替换了 `standaloneParts` 并清空
+   *  `assemblies`，表内全是刚解析出来的新行。 */
+  function applyExcelToAll(target?: ExcelFillTarget): void {
     const excelMap = excelByDrawingNo.value;
     if (!excelMap) return;
-    for (const r of standaloneParts.value) {
+    for (const r of target?.parts ?? standaloneParts.value) {
       const matched = excelMap.get(r.drawing_no);
       if (!matched) continue;
       r.applicant_name = matched.applicantName || r.applicant_name;
@@ -630,7 +645,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         }
       }
     }
-    for (const a of assemblies.value) {
+    for (const a of target?.assemblies ?? assemblies.value) {
       // 2026-10-03：顶层命中源改为**装配件自身图号** `a.drawing_no`。子件图号是前端按
       // 「首页原图号 / 原图号-02」合成的（见 mergeSelectedAsAssembly /
       // confirmManualAssembly），其中只有第 1 页那个恰好等于装配件自身图号，`-02 / -03`
@@ -659,12 +674,15 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       }
       // 2026-10-03 子件口径（业务口径：分厂 / 申请人 / 计划交期是整套共享的，
       // 子件数量需手填、子件不需要单价）：
-      //   - 只继承计划交期，且必须在顶层填完之后（顶层没命中 Excel 时不继承）；
+      //   - 计划交期：顶层填完后同步给全部子件，保证「整套一个交期」。交期既可能来自
+      //     Excel，也可能来自用户在顶层手改（`onAsmPlannedChange`），两种来源都会同步
+      //     下来；子件单独改过的交期会被顶层值覆盖，与该 handler 的简单覆盖语义一致。
       //   - quantity 保持 makeAssemblyChild 的默认值 1；
       //   - unit_price / total_price 保持默认 null。
-      // 单价留空不是漏填：AssemblyRow / AssemblyChildRow 接口都没有这两个字段，
-      // 后端 `POST /parts/batch` 的 item DTO 也不收，装配件整套的含税单价在本仓无处
-      // 落库，子件单价列只能留空手填。
+      // 单价留空不是漏填，而是整套含税单价在本仓无处落库：`AssemblyRow` 没有
+      // unit_price / total_price 字段，后端 `POST /parts/batch` 的 item DTO 也不收
+      // （`PartBatchCreateItemFE` 无这两项）⇒ 装配件整套的单价提交时必然丢弃。子件
+      // 虽然有这两个字段（`AssemblyChildRow`）和表格里的手填列，提交时同样被丢弃。
       if (a.planned_delivery_date) {
         for (const c of a.children) c.planned_delivery_date = a.planned_delivery_date;
       }
@@ -982,15 +1000,14 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     const src = allPdfs.value.find((s) => s.uid === pdfUid);
     if (!src) return;
 
+    let created: StandalonePartRow;
     if (pageIndices.length === src.totalPages) {
       // 全部页 → 直接复用原 PDF，无合成
-      standaloneParts.value.push(
-        makeStandaloneRow({
-          pdfSourceUid: pdfUid,
-          drawing_no: parseDrawingFilename(src.filename).drawingNo || '',
-          name: parseDrawingFilename(src.filename).partName || '',
-        }),
-      );
+      created = makeStandaloneRow({
+        pdfSourceUid: pdfUid,
+        drawing_no: parseDrawingFilename(src.filename).drawingNo || '',
+        name: parseDrawingFilename(src.filename).partName || '',
+      });
     } else {
       // 部分页 → pdf-lib 合成
       const merged = await mergePages(src.raw, pageIndices);
@@ -1004,20 +1021,20 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         synthesizedFrom: [{ pdfUid, pageIndices }],
         originPdfUid: pdfUid,
       });
-      standaloneParts.value.push(
-        makeStandaloneRow({
-          pdfSourceUid: newUid,
-          pageCount: pageIndices.length,
-          mergedFrom: pageIndices.map((i) => ({ pdfUid, pageIndex: i })),
-          drawing_no: parseDrawingFilename(src.filename).drawingNo || '',
-          name: parseDrawingFilename(src.filename).partName || '',
-        }),
-      );
+      created = makeStandaloneRow({
+        pdfSourceUid: newUid,
+        pageCount: pageIndices.length,
+        mergedFrom: pageIndices.map((i) => ({ pdfUid, pageIndex: i })),
+        drawing_no: parseDrawingFilename(src.filename).drawingNo || '',
+        name: parseDrawingFilename(src.filename).partName || '',
+      });
     }
+    standaloneParts.value.push(created);
     // 移除原 standalone 行（如果存在）
     clearSelection();
-    // 2026-10-03：新建行也要走一次 Excel 回填（Excel 数据在 composable 级状态里活着）。
-    applyExcelToAll();
+    // 2026-10-03：只回填本次新建的这一行 —— 全表重扫会把用户在其他行上手改过的
+    // 数量 / 单价 / 交期 / 申请人覆盖回 Excel 值。
+    applyExcelToAll({ parts: [created] });
     ElMessage.success(`已合并 ${pageIndices.length} 页 → 独立零件`);
   }
 
@@ -1059,7 +1076,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         name: name,
       });
     });
-    assemblies.value.push({
+    const created: AssemblyRow = {
       uid: asmUid,
       pdfSourceUid: pdfUid,
       drawing_no: parsed.drawingNo || '',
@@ -1076,10 +1093,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       masterPageIndex: null,
       quantity: 1,
       children,
-    });
+    };
+    assemblies.value.push(created);
     clearSelection();
-    // 2026-10-03：新建行也要走一次 Excel 回填（Excel 数据在 composable 级状态里活着）。
-    applyExcelToAll();
+    // 2026-10-03：只回填本次新建的这一个装配件（含其子件交期同步），不动其它装配件。
+    applyExcelToAll({ assemblies: [created] });
     ElMessage.success(`已合并 ${pageIndices.length} 页 → 装配件`);
   }
 
@@ -1243,16 +1261,15 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       totalPages: 1,
       synthesized: false,
     });
-    standaloneParts.value.push(
-      makeStandaloneRow({
-        pdfSourceUid: pdfUid,
-        drawing_no: manualPartForm.drawing_no.trim(),
-        name: manualPartForm.name.trim(),
-      }),
-    );
+    const created = makeStandaloneRow({
+      pdfSourceUid: pdfUid,
+      drawing_no: manualPartForm.drawing_no.trim(),
+      name: manualPartForm.name.trim(),
+    });
+    standaloneParts.value.push(created);
     manualPartDialogVisible.value = false;
-    // 2026-10-03：新建行也要走一次 Excel 回填。
-    applyExcelToAll();
+    // 2026-10-03：只回填本次新建的这一行（Excel 数据在 composable 级状态里活着）。
+    applyExcelToAll({ parts: [created] });
     ElMessage.success('已新增零件');
   }
 
@@ -1331,7 +1348,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         }),
       );
     }
-    assemblies.value.push({
+    const created: AssemblyRow = {
       uid: asmUid,
       pdfSourceUid: pdfUid,
       drawing_no: manualAsmForm.drawing_no.trim(),
@@ -1348,10 +1365,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       masterPageIndex: totalPages > 1 ? 0 : null,
       quantity: 1,
       children,
-    });
+    };
+    assemblies.value.push(created);
     manualAsmDialogVisible.value = false;
-    // 2026-10-03：新建行也要走一次 Excel 回填。
-    applyExcelToAll();
+    // 2026-10-03：只回填本次新建的这一个装配件（含其子件交期同步），不动其它装配件。
+    applyExcelToAll({ assemblies: [created] });
     ElMessage.success(`已新增装配件（共 ${totalPages} 子件）`);
   }
 

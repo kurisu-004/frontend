@@ -7,7 +7,10 @@
 //     数量和单价是整套的；子件数量手填、子件不需要单价）；
 //   - 独立零件（单页 PDF）维持原状：数量 / 单价 / 总价 / 交期 / 分厂 / 申请人全回填；
 //   - Excel 解析结果活过 rebuildFromUploads（合并不再是无源之水）；
-//   - splitStandalonePart 把多页拆回子页时**不**回填（子页不该吃整套数量 / 单价）。
+//   - splitStandalonePart 把多页拆回子页时**不**回填，且之后再建行也不会被回填
+//     （子页不该吃整套数量 / 单价）；
+//   - 4 个建行入口（合并成零件 / 合并成装配件 / 手动新增零件 / 手动新增装配件）
+//     都回填，但**只作用于本次新建的行** —— 再建一行不得撤销其它行上用户的手改值。
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -166,12 +169,14 @@ function harnessMount() {
   return mount(Harness);
 }
 
+/** 最小合法 PDF 字节（`%PDF`），只用于让上传链路拿到一个 File 实例。 */
+function pdfFile(name: string): File {
+  return new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], name, { type: 'application/pdf' });
+}
+
 /** 组一个 el-upload 的 UploadFile（只需 uid / name / raw）。 */
 function uploadFile(uid: number, name: string): UploadFile {
-  const raw = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], name, {
-    type: 'application/pdf',
-  });
-  return { uid, name, status: 'success', raw } as unknown as UploadFile;
+  return { uid, name, status: 'success', raw: pdfFile(name) } as unknown as UploadFile;
 }
 
 /** 真实 fixture 的历史价确认单，作为 excelFiles 的 raw。 */
@@ -196,6 +201,17 @@ async function setup(
 ): Promise<void> {
   api.pdfForm.customerL1Id = 'c-root';
   api.pdfFiles.value = [uploadFile(1001, opts.pdfName)];
+  if (opts.withExcel) api.excelFiles.value = [excelUploadFile()];
+  await api.rebuildFromUploads();
+}
+
+/** 同 `setup`，但一次传多个 PDF（uid 从 1001 递增 → 解析后是 `pdf-1001` / `pdf-1002`…）。 */
+async function setupMany(
+  api: UsePartBatchPdfReturn,
+  opts: { pdfNames: string[]; withExcel: boolean },
+): Promise<void> {
+  api.pdfForm.customerL1Id = 'c-root';
+  api.pdfFiles.value = opts.pdfNames.map((n, i) => uploadFile(1001 + i, n));
   if (opts.withExcel) api.excelFiles.value = [excelUploadFile()];
   await api.rebuildFromUploads();
 }
@@ -316,13 +332,14 @@ describe('usePartBatchPdf：Excel 回填（业务口径：整套 vs 子件）', 
     w.unmount();
   });
 
-  it('splitStandalonePart 不触发 Excel 回填：拆出的子页不继承整套数量 / 单价', async () => {
+  it('splitStandalonePart 拆出的子页不继承整套数量 / 单价，且后续再建行也不会被回填', async () => {
     mocks.pageCount = 3;
     const w = harnessMount();
     await flushPromises();
     const api = need();
 
-    await setup(api, { pdfName: PART_PDF, withExcel: true });
+    // 两个 3 页 PDF：先合并前者 2 页 → 拆分，再拿后者合并一次（验证跨动作不回填）
+    await setupMany(api, { pdfNames: [PART_PDF, ASM_PDF], withExcel: true });
     selectPages(api, 'pdf-1001', 2);
     await api.mergeSelectedAsPart();
     const merged = api.standaloneParts.value[0];
@@ -331,14 +348,177 @@ describe('usePartBatchPdf：Excel 回填（业务口径：整套 vs 子件）', 
 
     api.splitStandalonePart(merged);
 
-    const rows = api.standaloneParts.value;
-    expect(rows).toHaveLength(2);
-    for (const r of rows) {
+    // 快照（不是数组引用本身）：下面的建行会往同一个数组 push 新行
+    const splitRows = [...api.standaloneParts.value];
+    expect(splitRows).toHaveLength(2);
+    for (const r of splitRows) {
       expect(r.quantity).toBe(1);
       expect(r.unit_price).toBeNull();
       expect(r.total_price).toBeNull();
       expect(r.planned_delivery_date).toBe('');
       expect(r.customer_id).toBe('');
+    }
+    // 拆出的第 0 页图号恰好等于 Excel 的物料编号 —— 若回填是「全表重扫」，
+    // 下面这次建行就会把它改成整套数量 / 单价。故必须再触发一次建行来锁死。
+    expect(splitRows[0]?.drawing_no).toBe(EXCEL_ROW_PART.drawingNo);
+
+    selectPages(api, 'pdf-1002', 2);
+    await api.mergeSelectedAsPart();
+
+    expect(api.standaloneParts.value).toHaveLength(3);
+    for (const r of splitRows) {
+      expect(r.quantity).toBe(1);
+      expect(r.unit_price).toBeNull();
+      expect(r.total_price).toBeNull();
+      expect(r.planned_delivery_date).toBe('');
+      expect(r.customer_id).toBe('');
+    }
+    // 新行该回填的照常回填（证明不是把回填整体关掉了）
+    const fresh = api.standaloneParts.value[2];
+    if (!fresh) throw new Error('未生成第三行');
+    expect(fresh.quantity).toBe(EXCEL_ROW_ASM.quantity);
+    expect(fresh.unit_price).toBe(EXCEL_ROW_ASM.unitPrice);
+
+    w.unmount();
+  });
+
+  it('回填只作用于本次新建的行：再合并一次不会撤销既有独立行上的手改值', async () => {
+    mocks.pageCount = 1;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setupMany(api, { pdfNames: [PART_PDF, ASM_PDF], withExcel: true });
+    selectPages(api, 'pdf-1001', 1);
+    await api.mergeSelectedAsPart();
+    const edited = api.standaloneParts.value[0];
+    if (!edited) throw new Error('未生成独立零件行');
+    // 先确认它确实被 Excel 回填过，否则下面「保持不变」是空断言
+    expect(edited.quantity).toBe(EXCEL_ROW_PART.quantity);
+    expect(edited.applicant_name).toBe(EXCEL_ROW_PART.applicantName);
+
+    // 用户手改：数量 / 单价 / 总价 / 交期 / 申请人
+    edited.quantity = 99;
+    edited.unit_price = 999;
+    edited.total_price = 999 * 99;
+    edited.planned_delivery_date = '2030-01-01';
+    edited.applicant_name = '张三';
+
+    selectPages(api, 'pdf-1002', 1);
+    await api.mergeSelectedAsPart();
+
+    expect(edited.quantity).toBe(99);
+    expect(edited.unit_price).toBe(999);
+    expect(edited.total_price).toBe(999 * 99);
+    expect(edited.planned_delivery_date).toBe('2030-01-01');
+    expect(edited.applicant_name).toBe('张三');
+    // 而本次新建的行该回填的仍然回填了
+    const fresh = api.standaloneParts.value[1];
+    if (!fresh) throw new Error('未生成第二行');
+    expect(fresh.quantity).toBe(EXCEL_ROW_ASM.quantity);
+    expect(fresh.unit_price).toBe(EXCEL_ROW_ASM.unitPrice);
+    expect(fresh.applicant_name).toBe(EXCEL_ROW_ASM.applicantName);
+
+    w.unmount();
+  });
+
+  it('回填只作用于本次新建的行：再合并一次装配件不会撤销既有装配件上的手改值', async () => {
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setupMany(api, { pdfNames: [ASM_PDF, PART_PDF], withExcel: true });
+    selectPages(api, 'pdf-1001', 2);
+    await api.mergeSelectedAsAssembly();
+    const edited = api.assemblies.value[0];
+    if (!edited) throw new Error('未生成装配件');
+    expect(edited.quantity).toBe(EXCEL_ROW_ASM.quantity);
+
+    // 用户手改顶层数量 / 交期 / 申请人，并单独改一个子件的交期
+    edited.quantity = 99;
+    edited.planned_delivery_date = '2030-01-01';
+    edited.applicant_name = '张三';
+    const firstChild = edited.children[0];
+    if (!firstChild) throw new Error('未生成子件');
+    firstChild.planned_delivery_date = '2030-02-02';
+
+    selectPages(api, 'pdf-1002', 2);
+    await api.mergeSelectedAsAssembly();
+
+    expect(edited.quantity).toBe(99);
+    expect(edited.planned_delivery_date).toBe('2030-01-01');
+    expect(edited.applicant_name).toBe('张三');
+    expect(firstChild.planned_delivery_date).toBe('2030-02-02');
+    // 本次新建的装配件照常回填，且子件交期与顶层一致
+    const fresh = api.assemblies.value[1];
+    if (!fresh) throw new Error('未生成第二个装配件');
+    expect(fresh.quantity).toBe(EXCEL_ROW_PART.quantity);
+    expect(fresh.customer_id).toBe('c-duqi');
+    for (const c of fresh.children) {
+      expect(c.planned_delivery_date).toBe(fresh.planned_delivery_date);
+      expect(c.quantity).toBe(1);
+      expect(c.unit_price).toBeNull();
+    }
+
+    w.unmount();
+  });
+
+  it('confirmManualPart：手动新增的零件同样走 Excel 回填', async () => {
+    // 2 页 PDF 不预生成任何行 → 表内为空，手动新增是唯一的行来源
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: ASM_PDF, withExcel: true });
+    expect(api.standaloneParts.value).toHaveLength(0);
+
+    api.manualPartForm.drawing_no = EXCEL_ROW_PART.drawingNo;
+    api.manualPartForm.name = '断路器开关链接头';
+    api.manualPartForm.file = pdfFile('manual-part.pdf');
+    await api.confirmManualPart();
+
+    const row = api.standaloneParts.value[0];
+    if (!row) throw new Error('未生成手动零件行');
+    expect(row.customer_id).toBe('c-duqi');
+    expect(row.applicant_name).toBe(EXCEL_ROW_PART.applicantName);
+    expect(row.quantity).toBe(EXCEL_ROW_PART.quantity);
+    expect(row.unit_price).toBe(EXCEL_ROW_PART.unitPrice);
+    expect(row.total_price).toBe(EXCEL_ROW_PART.totalPrice);
+    expect(row.planned_delivery_date).toBe(plusDays(TODAY, EXCEL_ROW_PART.deliveryDays));
+    expect(row.is_urgent).toBe(false);
+
+    w.unmount();
+  });
+
+  it('confirmManualAssembly：手动新增的装配件顶层回填、子件只共享交期', async () => {
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: ASM_PDF, withExcel: true });
+    expect(api.assemblies.value).toHaveLength(0);
+
+    api.manualAsmForm.drawing_no = EXCEL_ROW_ASM.drawingNo;
+    api.manualAsmForm.name = '扁条收框档条';
+    api.manualAsmForm.file = pdfFile('manual-asm.pdf');
+    await api.confirmManualAssembly();
+
+    const asm = api.assemblies.value[0];
+    if (!asm) throw new Error('未生成手动装配件');
+    expect(asm.drawing_no).toBe(EXCEL_ROW_ASM.drawingNo);
+    expect(asm.customer_id).toBe('c-liuchang');
+    expect(asm.applicant_name).toBe(EXCEL_ROW_ASM.applicantName);
+    expect(asm.quantity).toBe(EXCEL_ROW_ASM.quantity);
+    expect(asm.planned_delivery_date).toBe(plusDays(TODAY, EXCEL_ROW_ASM.deliveryDays));
+    expect(asm.children).toHaveLength(2);
+    for (const c of asm.children) {
+      expect(c.planned_delivery_date).toBe(asm.planned_delivery_date);
+      expect(c.quantity).toBe(1);
+      expect(c.unit_price).toBeNull();
+      expect(c.total_price).toBeNull();
     }
 
     w.unmount();

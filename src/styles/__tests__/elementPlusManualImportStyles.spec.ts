@@ -18,6 +18,11 @@
 // 「这些样式的传递闭包」覆盖。闭包**运行时读** `node_modules/element-plus/es/components/
 // <name>/style/css.mjs` 里的 `import "../../<x>/style/css.mjs"` 行递归求解 —— 不自造映射
 // 表，EP 升级改了闭包本守卫会跟着变。
+//
+// 覆盖面盲区（已知、本轮不扩范围）：本守卫只扫 `src/**/*.vue`。`.ts` 文件里为 `h()`
+// 渲染函数手动 import EP 组件是同一类问题（`src/utils/inspectionColumnDefs.ts` /
+// `src/utils/partsListColumnDefs.ts` / `src/views/cnc/pendingProgrammingColumnDefs.ts`
+// 都是），今天靠消费它们的 `.vue` 顺带注入样式、视觉正常，故未纳入扫描。
 
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -36,7 +41,8 @@ const IMPERATIVE_APIS = new Set(['ElMessage', 'ElMessageBox', 'ElNotification', 
 interface Violation {
   /** 相对 src/ 的路径（正斜杠）。 */
   file: string;
-  /** 裸 `from 'element-plus'` 那一行在文件里的行号（1-based）。 */
+  /** 文件里**第一条**裸 `from 'element-plus'` 值 import 所在行（1-based），后续同类
+   *  import 不覆盖它 —— 报错文案里作为「去这个文件的哪一行看」的锚点。 */
   line: number;
   /** 该文件未覆盖样式的 kebab 组件名。 */
   missing: string[];
@@ -121,8 +127,22 @@ function styleClosure(names: string[], seen = new Set<string>()): Set<string> {
   return out;
 }
 
+/** 把注释逐字符替换成空格（换行保留）—— 行号、列号全部不变，正则只在这些位置上
+ *  「看不见」注释。
+ *
+ *  匹配前必须剥：样式 import 一旦被注释掉（`// import '.../select/style/css';`），
+ *  裸文本正则照样会命中注释里的字面量，把「注释掉的 import」误判成「已覆盖」而放行。
+ *
+ *  这里是刻意的粗粒度剥除（不区分字符串里的 `//`）：本守卫只匹配 import 说明符，
+ *  这些字面量在 .vue 文件里不会出现在字符串或正则量词内部，误伤面为零。 */
+function stripComments(src: string): string {
+  const blank = (m: string): string => m.replace(/[^\n]/g, ' ');
+  return src.replace(/\/\*[\s\S]*?\*\//g, blank).replace(/\/\/.*$/gm, blank);
+}
+
 function scanFile(full: string): Violation | null {
-  const src = readFileSync(full, 'utf8');
+  // 先剥注释再匹配：注释掉的 import 不算真的 import。
+  const src = stripComments(readFileSync(full, 'utf8'));
   const rel = relative(SRC, full).split(sep).join('/');
 
   // 1. 裸 'element-plus' 的命名 import（跳过整条 import 就是 type-only 的）
@@ -130,7 +150,7 @@ function scanFile(full: string): Violation | null {
   let line = 0;
   for (const m of src.matchAll(/import\s+(type\s+)?\{([^}]*)\}\s+from\s+'element-plus'/g)) {
     if (m[1]) continue;
-    line = src.slice(0, m.index).split('\n').length;
+    if (line === 0) line = src.slice(0, m.index).split('\n').length;
     for (const spec of (m[2] as string).split(',')) {
       const name = spec.trim();
       // 内联 `type Xxx` 也是纯类型（UploadFile / TableInstance / FormInstance / FormRules…）
@@ -186,5 +206,32 @@ describe('手动 import 的 EP 组件必须自带样式 import', () => {
       );
     }
     expect(effective.length).toBe(0);
+  });
+
+  // 豁免表是「按组件名」放行的，所以某个已豁免文件将来新引入的未覆盖组件照样会红。
+  // 唯一的慢性风险是反向的：某文件补齐样式后忘了删表项 → 该名字静默长期豁免。
+  // 这条断言把「补齐」和「删表项」绑成一次改动。
+  it('豁免表无陈旧登记：登记的每个名字仍须是该文件实际未覆盖的组件', () => {
+    const stale: string[] = [];
+    const byFile = new Map(violations.map((v) => [v.file, v]));
+    for (const file of Object.keys(EXEMPT)) {
+      const v = byFile.get(file);
+      // 文件已完全合规 → 整条登记都过期
+      if (!v) {
+        stale.push(`src/${file} → 登记的 ${EXEMPT[file].join('、')}（该文件已不再违规）`);
+        continue;
+      }
+      for (const name of EXEMPT[file]) {
+        if (!v.missing.includes(name)) stale.push(`src/${file} → ${name}`);
+      }
+    }
+    if (stale.length > 0) {
+      throw new Error(
+        `EXEMPT 表里有 ${stale.length} 条陈旧登记（对应组件已覆盖样式，登记变成永久豁免）：\n` +
+          stale.map((s) => `  ${s}`).join('\n') +
+          '\n修复：删掉 EXEMPT 里对应的条目。',
+      );
+    }
+    expect(stale.length).toBe(0);
   });
 });
