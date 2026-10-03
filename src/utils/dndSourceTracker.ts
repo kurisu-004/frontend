@@ -19,12 +19,41 @@
 // 20122 BIZ_BATCH_LOCATION_MISMATCH（HTTP 409）。而 `GET /prod/pool/{process_id}`
 // 是**跨所有货架**返回候选批次的，batch 所在货架未必等于用户当前激活货架
 // （auth.activeShelfId），所以必须在 @start 时把卡片自带的 `data-shelf-id` 一起记下。
+//
+// 2026-10-03 review 第 2 轮修复：本模块除「源信息」外还承载投放链上另一个必须两处
+// 同步的 Sortable 侧语义 —— `restoreNodeToSource`（把被拖节点放回源容器）。放在这里
+// 是因为它与 `DraggableStartEvent` 投影同属 WorkerColumn / PoolDrawer 共用的那份
+// Sortable 契约面，拆成两个模块只会让「两处都挂」的前提更难守住。
 
-/** vue-draggable-plus onStart / onAdd 事件最小子集（Sortable.js 原生）。
- *  拿不到 Vue 包装层；@add 事件需要 evt.item.dataset.batchId 反查源。 */
+/** vue-draggable-plus onStart / onAdd / onRemove 事件最小子集（Sortable.js 原生）。
+ *  拿不到 Vue 包装层；@add 事件需要 evt.item.dataset.batchId 反查源。
+ *  `oldIndex` 只有 onRemove 用得上（DOM 下标，见 restoreNodeToSource）。 */
 export interface DraggableStartEvent {
   item: HTMLElement;
   from: HTMLElement;
+  oldIndex?: number;
+}
+
+/** 2026-10-03 review 第 2 轮修复：把被拖节点放回源容器的原位。
+ *
+ *  用途：投放类容器走 `useLazyDraggable` 的**二参形态**（不传 list），库不再往本实例
+ *  挂内建 `onRemove` —— 而内建那份的第一句正是 `from.insertBefore(item,
+ *  from.children[oldIndex])`，即**无论投放成败都先把节点物理放回源容器**。少了它，
+ *  投放失败（20204 容量超限 / 20104 工种不符 / 20507 货架未映射 / 409 OCC）后卡片会
+ *  留在落点列，且 `invalidateQueries` 救不回来：失败时源列与落点列的 query 数据都没变，
+ *  Vue 的 keyed diff 只 patchElement、永远不会去删一个不在 vdom 里的外来节点 ⇒
+ *  幻影节点逐次累积。本函数是那段内建实现的等价物，**必须挂在每个既是源又是落点的
+ *  投放容器上**（WorkerColumn / PoolDrawer 两处，缺一处就漏一种来源）。
+ *
+ *  下标语义：`oldIndex` 是 **DOM 下标**（Sortable 报的另一个字段 `oldDraggableIndex`
+ *  只数可拖子元素，与之不是同一套计数）。成功路径会多这一次瞬时移回，随后 query
+ *  refetch 的渲染结果与它无关。
+ *
+ *  越界 / 缺失：`from.children[oldIndex]` 取到 undefined 时按 null 处理，等价
+ *  appendChild —— 与库内建实现（直接把 undefined 传给 insertBefore）行为一致。 */
+export function restoreNodeToSource(evt: DraggableStartEvent): void {
+  const { from, item, oldIndex } = evt;
+  from.insertBefore(item, oldIndex == null ? null : from.children[oldIndex]);
 }
 
 /** 2026-09-30 新增：候选池拖拽源信息（recordPoolSource / consumePoolSource 的载荷）。

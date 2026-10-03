@@ -17,9 +17,13 @@
 //   - W6：空态 el-empty 是 .col-body 的**兄弟覆盖层**：容器仍在（非空/空态都要存在，
 //     空列是 POOL→WORKER 的主落点），且容器内没有任何非可拖子元素。
 //   - W7：卡片渲染在 .col-body 容器内，容器带 data-worker-id（拖拽源的识别锚点）。
-//   - W8：空列也把 Sortable 绑到了 .col-body 上（start(el) 收到的就是该节点）——
+//   - W8：空列也把 Sortable 绑到了 .col-body 上（start(el) 收到的就是该容器节点）——
 //     容器不渲染 ⇒ watch 走 destroy 分支 ⇒ 空列没有任何 Sortable 实例，拖不进去。
-//   - W9：onMove 守卫 —— 落点 == 节点当前所在容器（原地重排）拒掉，跨容器放行。
+//   - W9：options 带 sort: false 且**不带** onMove（容器内重排由 Sortable 的 sort
+//     开关关掉，不靠 onMove 守卫）。
+//   - W10：options 带 onRemove，且把被拖节点放回 `from.children[oldIndex]`（DOM 下标）。
+//     二参形态下库不挂内建 onRemove，缺了它投放失败时幻影节点留在落点列、invalidate
+//     清不掉。断言必须落在「放回原下标位置」而不仅是「函数存在」。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -35,7 +39,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, ref, type ComputedRef, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
-import type { MoveEvent } from 'sortablejs';
 import type { HeldBatchItemDto } from '@/api/workerPool.contract';
 import type { Worker } from '@/types/workerPool';
 
@@ -251,14 +254,6 @@ function dragEvent(dataset: { batchId: string }, fromDataset: Record<string, str
   return { item, from };
 }
 
-/** 造一个 onMove 载荷：dragged 的父容器 = draggedEl 当前所在容器，to = 落点容器。 */
-function moveEvent(draggedEl: HTMLElement, draggedIn: HTMLElement, to: HTMLElement): MoveEvent {
-  draggedIn.appendChild(draggedEl);
-  // 载荷只用到 dragged / to 两个字段（Sortable 的 MoveEvent 其余字段与守卫无关），
-  // 故只投影这两个，避免测试与库的完整事件体耦合。
-  return { dragged: draggedEl, to } as unknown as MoveEvent;
-}
-
 describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
   beforeEach(() => {
     captured.calls.length = 0;
@@ -397,19 +392,48 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W9：onMove 守卫 —— 原地重排拒掉，跨容器投放放行', () => {
+  it('W9：容器内重排由 sort:false 关掉，不用 onMove 守卫', () => {
     const wrapper = mountColumn([makeHeld()]);
-    const onMove = capturedOptions().onMove as (e: unknown) => boolean;
-    const selfCol = wrapper.find('.col-body').element as HTMLElement;
-    const otherCol = document.createElement('div');
-    const card = document.createElement('div');
+    const options = capturedOptions();
+    // 本 UI 每次落位都是「一次写操作 + 一次失效」，无重排语义；二参形态下库不挂内建
+    // onUpdate，重排后无人回滚 DOM 顺序，故用 Sortable 的 sort 开关直接关掉。
+    expect(options.sort).toBe(false);
+    // onMove 只从**源**实例读取，本列作为落点时读的是对方实例的 ⇒ 挂在源侧覆盖不了
+    // 「别的列拖进本列时的容器内重排」，不是正确工具，不该再出现。
+    expect(options.onMove).toBeUndefined();
+    wrapper.unmount();
+  });
 
-    // ① 卡片还在本列内、落点也是本列 ⇒ 原地重排（无人回滚的幽灵顺序）⇒ 拒
-    expect(onMove(moveEvent(card, selfCol, selfCol))).toBe(false);
-    // ② 卡片在本列、落点是别的列 ⇒ 放行（POOL/其他工人 → 本列）
-    expect(onMove(moveEvent(card, selfCol, otherCol))).toBe(true);
-    // ③ 卡片已在别的列、落点回本列 ⇒ 放行（拖出去再拖回来必须能落位）
-    expect(onMove(moveEvent(card, otherCol, selfCol))).toBe(true);
+  it('W10：onRemove 把被拖节点放回 from.children[oldIndex]（二参形态的 DOM 放回补齐）', () => {
+    const wrapper = mountColumn([makeHeld()]);
+    const onRemove = capturedOptions().onRemove as (e: unknown) => void;
+    // 回归 guard（2026-10-03 review 第 2 轮 P0）：传 list 时库的内建 onRemove 第一句
+    // 就是 from.insertBefore(item, from.children[oldIndex])，投放成败都先把节点放回源列。
+    // 改二参形态后内建 handler 整个不挂 ⇒ 投放失败（20204 容量超限最常见）时卡片留在
+    // 落点列，而 invalidate 救不回来：两侧 query 数据都没变，Vue 的 keyed diff 只
+    // patchElement，永远不删不在 vdom 里的外来节点。
+    expect(typeof onRemove).toBe('function');
+
+    // 造出「源列 [A, 卡片, C] → Sortable 已把卡片搬进落点列」的现场
+    const source = document.createElement('div');
+    const a = document.createElement('div');
+    a.id = 'a';
+    const card = document.createElement('div');
+    card.id = 'card';
+    const c = document.createElement('div');
+    c.id = 'c';
+    const target = document.createElement('div');
+    source.append(a, c);
+    target.appendChild(card);
+
+    // 卡片原下标 = 1（[A, card, C]）；节点已被摘走，from.children[1] 现在是 C
+    onRemove({ item: card, from: source, oldIndex: 1 });
+
+    // 放回原位：父节点是源列，顺序 A → 卡片 → C
+    expect(card.parentElement).toBe(source);
+    expect(Array.from(source.children).map((el) => el.id)).toEqual(['a', 'card', 'c']);
+    // 落点列已被清空，不留幻影节点
+    expect(target.children).toHaveLength(0);
     wrapper.unmount();
   });
 });

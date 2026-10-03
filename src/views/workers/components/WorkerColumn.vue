@@ -20,14 +20,17 @@
         list 就是渲染源」，而本容器的渲染源是 query 派生的 heldBatches —— 传任何
         list 副本都只是往一个没人看的数组里 splice。详见 useLazyDraggable 的文件头
         注释（那里记录了「纯投放信号源」这条不变量的完整推导）。
+        ⚠️ 二参形态下内建 onRemove 的**DOM 放回**也随之消失，必须由 options.onRemove
+        补回（restoreNodeToSource），否则投放失败时幻影节点留在落点列且 invalidate
+        清不掉。
      3. Sortable 容器只包卡片：loading / error 两种状态移出容器（Sortable 容器的直接
         子元素必须全是可拖项），空态**不能**移出 —— 容器不渲染就没有 Sortable 实例，
         空工人列会直接失去投放资格（POOL→WORKER 的主场景恰恰是往空闲工人派活）。
         空态改用 pointer-events:none 的兄弟覆盖层承担，视觉不变、落点判定不受影响。
      4. .col-body 补卡片网格（flex-wrap + gap 8px + :deep(.batch-card) 锁 200px），
         与工序池 / 待下发池同一条网格基线；列宽按该基线反算到 432px（见样式区）。
-     5. onMove 拒掉同容器内原地重排（二参形态下库不挂 onUpdate，重排后无人回滚，
-        详见 onMove 的接入处注释）。 -->
+     5. sort: false 关闭列内原地重排（二参形态下库不挂 onUpdate，重排后无人回滚；
+        详见 useLazyDraggable 调用处的注释）。 -->
 <template>
   <el-card class="worker-column" shadow="never">
     <template #header>
@@ -74,7 +77,6 @@
 import { computed, inject, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { MoveEvent } from 'sortablejs';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { Worker } from '@/types/workerPool';
 import type { BatchCardModel as Card } from '@/types/batchCard';
@@ -84,6 +86,7 @@ import {
   consumePoolSource,
   consumeWorkerSource,
   recordWorkerSource,
+  restoreNodeToSource,
   type DraggableStartEvent,
 } from '@/utils/dndSourceTracker';
 import BatchCard from '@/components/BatchCard.vue';
@@ -160,43 +163,34 @@ const capacityStatus = computed<'success' | 'warning' | ''>(() => {
   return 'success';
 });
 
-// 2026-10-03：Sortable 用**二参重载**（不传 list）—— 本容器是纯投放目标，DOM
-// 一律由 query refetch 后的 Vue 渲染覆盖，库的内建 onAdd / onRemove（它们把
-// oldDraggableIndex 当 list 数组下标 splice 进去）不该介入；完整推导见
-// useLazyDraggable 的文件头注释。
-// 每次拖拽（成功 / 失败 / 参数早退）都必须有一次 invalidate 把 Sortable 搬走的 DOM
-// 对账回真相：三条出口都在 useWorkerQueue 内（moveMutation 的 onSuccess / onError，
-// 以及两个包装的入参早退分支），都走 invalidatePoolDomains。
+// 2026-10-03：Sortable 用**二参重载**（不传 list）—— 本容器是纯投放目标，库的内建
+// onAdd / onRemove 不该介入（它们把 oldDraggableIndex 当 list 数组下标 splice 进去，
+// 而本容器的渲染源是 query 派生的 heldBatches）；完整推导见 useLazyDraggable 的
+// 文件头注释。
+// 每次拖拽（成功 / 失败 / 参数早退）都要有一次 invalidate 与服务器对账：三条出口都在
+// useWorkerQueue 内（moveMutation 的 onSuccess / onError，以及两个包装的入参早退分支），
+// 都走 invalidatePoolDomains（早退那次包了 try/catch，见该文件的说明）。它负责的是
+// 徽标数字与跨域计数 —— 卡片节点本身的归位不靠它，见下一段。
+// onRemove 补内建那份的**DOM 放回**（二参形态下库不挂它）：投放失败时若不把节点放回
+// 源列，invalidate 也救不回来 —— 失败时两侧 query 数据都没变，Vue 的 keyed diff 只
+// patchElement，永远不删不在 vdom 里的外来节点。细节见 restoreNodeToSource 的注释。
+// sort: false 关闭**容器内重排**：本 UI 每次落位都是「一次写操作 + 一次失效」，无重排
+// 语义，重排后无人回滚 DOM 顺序。Sortable 只在「落点实例 === 拖拽起点实例」时才读
+// 这个选项（跨实例投放走 group 的 checkPull / checkPut 分流，不看它），所以它不会
+// 影响跨容器投放 —— 仓内 PendingBatchesPanel → PendingPoolCard 就是同 group 跨实例
+// 投进一个 sort:false 落点的既有先例。
 // 走 useLazyDraggable 而非裸 useDraggable：统一由它强制 immediate:false + 在
 // flush:'post' 的 watch 里绑定，el 换节点时自动重绑、置 null 时自动 destroy。
 const containerRef = ref<HTMLElement | null>(null);
 useLazyDraggable(containerRef, {
   group: 'work-orders',
+  sort: false,
   animation: 150,
   ghostClass: 'sortable-ghost',
-  onMove: rejectInPlaceReorder,
   onStart: onDragStart,
   onAdd: onDragAdd,
+  onRemove: restoreNodeToSource,
 });
-
-/** 2026-10-03：拒掉同容器内的原地重排。
- *
- *  为什么需要：二参形态下库不挂内建 onUpdate，本容器也没有可写的 list，重排一旦发生
- *  就没有任何人回滚 DOM 顺序，要等下一次 query 重拉才复原 —— 中间那段是纯幽灵顺序。
- *
- *  为什么用 onMove 而不是 `sort: false`：`sort` 是**落点**侧的分流开关
- *  （dist 的 `_onDragOver` 读 `Me === s ? f || (a = O !== T) : …`，`f` 取自
- *  `this.options.sort`），而本看板各容器的 group 都是同一个字符串 'work-orders'
- *  ⇒ `Me === s` 恒真 ⇒ 落点侧 `sort:false` 会让**每一次**投放都在下一次 dragover
- *  被 revert 回源容器，等于把整个看板的投放打死。onMove 逐次否决「落点 == 节点当前
- *  所在容器」这一种情形，跨容器投放完全不受影响。
- *
- *  onMove 只从**源**容器的 options 读取（dist 的 `Xe` 取 `fromEl[q].options.onMove`），
- *  本容器既是源也是落点，挂在这一处即覆盖「列内重排」与「被别的列投进来」两种情形；
- *  从工序池拖出的投放由 PoolDrawer 侧的同名守卫负责。 */
-function rejectInPlaceReorder(evt: MoveEvent): boolean {
-  return evt.dragged.parentNode !== evt.to;
-}
 
 // 2026-09-30：moveBatchToWorker 签名收窄为 (batch_id, to_worker_id, from_shelf_id)
 // —— 不再有 process_id。后端把 `admin/worker-pool/assign` 合并进了通用移动端点

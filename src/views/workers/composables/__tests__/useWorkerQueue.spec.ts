@@ -31,9 +31,10 @@
 //   - T10：moveBatchBetweenWorkers 成功 → moveBatch 收到 WORKER→WORKER 形态
 //     （from/to 都是 worker_id）+ pool 三域前缀失效。
 //   - T11：moveBatchBetweenWorkers 失败 → 返回 false **且仍失效 pool 三域**。
-//     回归 guard：Sortable 已把被拖节点物理搬进落点列，失败不重拉 = 屏幕上永久错位。
+//     回归 guard：失败也必须对账，失效负责的是徽标 / 池计数这类只有重拉才对得上的数据。
 //   - T12：move 失败（POOL→WORKER）同样失效 pool 三域（同上因的另一条路径）。
 //   - T13：导出面含 moveBatchBetweenWorkers（WorkerColumn 靠 inject key 消费它）。
+//   - T2b：早退路径裸 await 失效，invalidateQueries 抛错被吞、不冒未捕获 rejection。
 //
 // 测试策略：
 //   - vi.mock('@/api/workerPool') + vi.mock('element-plus')；
@@ -174,9 +175,25 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
     expect(ok).toBe(false);
     expect(realMoveBatch).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('批次货架信息缺失，无法分配');
-    // 早退同样必须失效：mutation 没发出，但 Sortable 已把卡片 DOM 搬进目标列，
-    // 不重拉就留下一张服务器并不承认的卡。
+    // 早退同样必须失效：mutation 没发出，这次投放对服务器没有任何影响，把 pool 三域
+    // 与服务器对账一次（徽标 / 池计数）。卡片节点本身的归位由**源侧**的 onRemove
+    // （restoreNodeToSource）负责，不靠这次失效。
     expectPoolDomainInvalidated();
+  });
+
+  it('T2b：早退路径的失效抛错不冒成未捕获 rejection（仍返回 false）', async () => {
+    // 回归 guard：早退分支是**裸 await** invalidatePoolDomains（不在 mutation 的
+    // onSuccess / onError 里，没有框架兜底），invalidateQueries 一旦 reject 就是
+    // unhandledRejection。必须吞掉并照常返回 false + warning。
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    const { ElMessage } = await import('element-plus');
+    vi.mocked(testQueryClient.invalidateQueries).mockRejectedValueOnce(
+      new Error('invalidate boom'),
+    );
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    const ok = await q.moveBatchToWorker('3000000000001', '1900000000002', '');
+    expect(ok).toBe(false);
+    expect(ElMessage.warning).toHaveBeenCalledWith('批次货架信息缺失，无法分配');
   });
 
   it('T3：moveBatchToWorker 失败 → 返回 false + error.value 写入 + ElMessage.error', async () => {
@@ -204,7 +221,8 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
   });
 
   it('T5：moveBatchToPool toShelfId 为空 → 早退 false + warning，零请求', async () => {
-    // 同 T2：撤回目标货架为空时 mutation 不发出，但 DOM 已被搬进池子 ⇒ 也要失效。
+    // 同 T2：撤回目标货架为空时 mutation 不发出，这次投放对服务器无影响，仍要失效
+    // 对账一次（且同样包 try/catch，见 T2b）。
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useWorkerQueue());
@@ -283,10 +301,11 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
   });
 
   it('T11：moveBatchBetweenWorkers 失败 → 返回 false，但**仍然失效** pool 三域', async () => {
-    // 回归 guard（主症状链的另一半）：Sortable 拖拽时已经把被拖节点物理搬进落点列，
-    // DOM 只能靠 query refetch 后的 Vue 渲染覆盖回来。失败路径若只弹 toast 不重拉，
-    // 屏幕上就会永久留下「目标列凭空多一张、源列少一张」的错位（全局
-    // refetchOnWindowFocus=false，只能手点刷新恢复）。
+    // 回归 guard（主症状链的另一半）：失败也必须与服务器对账一次。失效负责的是
+    // 徽标数字与池计数（`current_held` / `capacity_remaining` / 池批次数只有重拉才对
+    // 得上，本地 DOM 改动碰不到它们），且全局 refetchOnWindowFocus=false，不重拉就
+    // 一直显示旧数字。卡片节点本身的归位由**源侧**的 onRemove（restoreNodeToSource）
+    // 在 drop 事件里完成，不依赖这次失效。
     const { useWorkerQueue } = await import('../useWorkerQueue');
     realMoveBatch.mockRejectedValueOnce(new ApiError(20204, 'WORKER_CAPACITY_EXCEEDED'));
     const q = testApp.runWithContext(() => useWorkerQueue());

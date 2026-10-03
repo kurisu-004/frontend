@@ -93,28 +93,45 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
 
   /** 2026-09-30：写操作完成后集中失效 pool 三域（by-process + counts + state）。
    *  全部走**前缀**失效：move 的目标工序由 service 从 `batch.current_process_step`
-   * 推导，前端无从得知受影响 processId；auto-allocate 更是跨全部 worker。
-   *  返回 Promise 让 mutation onSuccess await 完整失效链再弹 toast。 */
+   *  推导，前端无从得知受影响 processId；auto-allocate 更是跨全部 worker。
+   *  返回 Promise 让 mutation onSuccess await 完整失效链再弹 toast。
+   *  ⚠️ 在 mutation 的 onSuccess / onError 里调用时异常由 mutation 框架 catch；
+   *  但两个包装函数的入参早退分支是**裸 await**，那条路上必须自己兜（见
+   *  reconcileAfterEarlyReturn），否则 invalidateQueries 一抛就是未捕获 rejection。 */
   async function invalidatePoolDomains(): Promise<void> {
     await invalidateWorkerPoolByProcessAll(qc);
     await invalidateWorkerPoolCountsQuery(qc);
     await invalidateWorkerStateByWorkerAll(qc);
   }
 
-  /** 2026-09-30：`POST /prod/pool/move` —— 取代旧 assign + remove 两个端点。
+  /** 2026-10-03 review 第 2 轮修复：入参早退路径的失效兜底。
+   *  早退意味着「投放已经发生、写操作没发生」：卡片被拖到落点列却没有对应的 move。
+   *  屏幕与服务器的偏差由**源侧**的 onRemove（restoreNodeToSource，把节点放回源列）
+   *  抹平，那才是这条路径的必需项；这里失效一次是防御性的对账，代价是早退本来就
+   *  只在「卡片缺货架 / 未选目标货架」这两种罕见入参下发生。
+   *  异常必须在此吞掉：早退的用户可见反馈已由调用方给的 ElMessage.warning 承担，
+   *  invalidateQueries 抛错不该再冒一个 unhandledrejection。 */
+  async function reconcileAfterEarlyReturn(): Promise<void> {
+    try {
+      await invalidatePoolDomains();
+    } catch {
+      // 失效失败无可展示动作；下一次写操作 / WS 事件会重拉。
+    }
+  }
+
+  /** 2026-09-30：`POST /prod/pool/move` —— 取代旧 assign + remove 两端点。
    *  mutationFn 走 `moveResultSchema.parse()` 守门：MoveResult 的
    *  current_held / max_held / shelf_id / taken 四字段在 rust 侧都带
    *  `skip_serializing_if`（条件不满足时整个字段从 JSON 省略），schema 用
    *  `.nullish()` 兜住；契约漂移立刻抛 ZodError 由 onError 接管。
    *
-   * 2026-10-03：onError 也失效 pool 三域。**失败即与服务器对账一次**——本域的
-   *  Sortable 容器退化为「纯投放信号源」：拖拽时 Sortable 已经把被拖节点**物理搬进**
-   *  落点容器，而 DOM 一律要靠 query refetch 后的 Vue 渲染覆盖回来。成功路径有
-   *  invalidate 兜底，失败路径若只弹 toast 不重拉，那次错位的 DOM 就永远留在屏幕上
-   *  （A 列少一张 / B 列多一张），用户只能手点「刷新」。高频触发场景：工人容量超限
+   * 2026-10-03：onError 也失效 pool 三域。**失败即与服务器对账一次** —— 本域的
+   *  Sortable 容器退化为「纯投放信号源」：投放后 DOM 一律要靠 query refetch 之后的
+   *  Vue 渲染与服务器对齐（徽标数字 `current_held` / `capacity_remaining` / 池计数
+   *  同样只有重拉才对得上，本地 DOM 改动碰不到它们）。高频失败场景：工人容量超限
    *  20204、工种不含该批次工序、撤回目标货架未映射该工序 20507、OCC 409。
-   *  包装层两个入参早退分支（from.shelf_id / to.shelf_id 为空）也各失效一次 ——
-   *  mutation 压根没发出，但 DOM 已经被搬走了，同样需要重拉才能把屏幕拉回真相。 */
+   *  ⚠️ 卡片节点本身的归位不靠这次失效：源侧的 onRemove（restoreNodeToSource）
+   *  已在 drop 事件里把它放回源列，invalidate 只负责把徽标与跨域计数拉齐。 */
   const moveMutation = useMutation<MoveResultDto, Error, MoveRequest>({
     mutationKey: ['worker-pool', 'move'],
     mutationFn: async (req) => moveResultSchema.parse(await moveBatch(req)),
@@ -155,8 +172,8 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
 
   /** POOL → WORKER mutation 包装 —— 保留 Promise<boolean> 签名以兼容
    * WorkerColumn.onDragAdd 调用点。`from.shelf_id` 必填（空串直接早退，避免
-   * 发出必被后端 20122 拒的请求）。早退同样失效：Sortable 已经把卡片 DOM 搬进
-   * 目标列，此时不重拉，屏幕上就留下一张服务器并不承认的卡。 */
+   * 发出必被后端 20122 拒的请求）。早退也走一次失效对账，且包 try/catch 防止
+   * 未捕获 rejection（见 reconcileAfterEarlyReturn）。 */
   async function moveBatchToWorker(
     batchId: string,
     toWorkerId: string,
@@ -164,7 +181,7 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
   ): Promise<boolean> {
     if (!fromShelfId) {
       ElMessage.warning('批次货架信息缺失，无法分配');
-      await invalidatePoolDomains();
+      await reconcileAfterEarlyReturn();
       return false;
     }
     try {
@@ -180,8 +197,8 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
   }
 
   /** WORKER → POOL mutation 包装 —— 保留 Promise<boolean> 签名以兼容
-   * PoolDrawer.onDragAdd 调用点。目标货架为空早退时同样失效（与 POOL→WORKER 同理：
-   * DOM 已被搬进池子，不重拉就留着幻影）。 */
+   * PoolDrawer.onDragAdd 调用点。目标货架为空早退时同样走一次失效对账 + try/catch
+   * （与 POOL→WORKER 同款）。 */
   async function moveBatchToPool(
     batchId: string,
     fromWorkerId: string,
@@ -189,7 +206,7 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
   ): Promise<boolean> {
     if (!toShelfId) {
       ElMessage.warning('请先选择目标货架');
-      await invalidatePoolDomains();
+      await reconcileAfterEarlyReturn();
       return false;
     }
     try {
