@@ -37,7 +37,6 @@
 //   - 删 `UsePendingDispatchDeps`（refreshBoard 依赖注入）—— 随
 //     useWorkerQueue.loadBoard + 模块级 workerHeld 一并删除，invalidateAll 不再有
 //     「触达不到的非 TanStack 数据源」要兜底。
-//   - 删 `dispatchResultSchema` 双重 parse（api 层已 parse 过一次）。
 
 import { computed, ref } from 'vue';
 import type { ComputedRef, Ref } from 'vue';

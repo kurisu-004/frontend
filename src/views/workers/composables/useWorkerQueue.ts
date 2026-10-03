@@ -125,13 +125,16 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
    *  `skip_serializing_if`（条件不满足时整个字段从 JSON 省略），schema 用
    *  `.nullish()` 兜住；契约漂移立刻抛 ZodError 由 onError 接管。
    *
-   * 2026-10-03：onError 也失效 pool 三域。**失败即与服务器对账一次** —— 本域的
-   *  Sortable 容器退化为「纯投放信号源」：投放后 DOM 一律要靠 query refetch 之后的
-   *  Vue 渲染与服务器对齐（徽标数字 `current_held` / `capacity_remaining` / 池计数
-   *  同样只有重拉才对得上，本地 DOM 改动碰不到它们）。高频失败场景：工人容量超限
-   *  20204、工种不含该批次工序、撤回目标货架未映射该工序 20507、OCC 409。
-   *  ⚠️ 卡片节点本身的归位不靠这次失效：源侧的 onRemove（restoreNodeToSource）
-   *  已在 drop 事件里把它放回源列，invalidate 只负责把徽标与跨域计数拉齐。 */
+   * 2026-10-03：onError 也失效 pool 三域。本域 Sortable 容器是「纯投放信号源」，
+   * 投放结果一律以 query refetch 之后的 Vue 渲染为准。
+   * 失败路径这次失效是**防御性对账**、不是必需项：失败时服务器没有任何变化，重拉只会
+   * 拿回同一份数据，徽标数字与跨域计数本来就是对的。真正有实质价值的是「本端副本已
+   * 过期」那类失败 —— 409 OCC（40901，他人并发改动）与 20122（from 与 batch 实际
+   * 位置不符）：本端看到的批次状态已经旧了，只能靠重拉纠正。其余高频失败是服务端规则
+   * 拒绝、本端数据本就正确（工人容量超限 20204、工种不含该批次工序 20104、撤回目标
+   * 货架未映射该工序 20507）。
+   * ⚠️ 卡片节点本身的归位不靠这次失效：源侧的 onRemove（restoreNodeToSource）
+   * 已在 drop 事件里把它放回源列，invalidate 只负责把徽标与跨域计数拉齐。 */
   const moveMutation = useMutation<MoveResultDto, Error, MoveRequest>({
     mutationKey: ['worker-pool', 'move'],
     mutationFn: async (req) => moveResultSchema.parse(await moveBatch(req)),

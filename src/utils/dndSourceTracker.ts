@@ -49,8 +49,9 @@ export interface DraggableStartEvent {
  *  只数可拖子元素，与之不是同一套计数）。成功路径会多这一次瞬时移回，随后 query
  *  refetch 的渲染结果与它无关。
  *
- *  越界 / 缺失：`from.children[oldIndex]` 取到 undefined 时按 null 处理，等价
- *  appendChild —— 与库内建实现（直接把 undefined 传给 insertBefore）行为一致。 */
+ *  越界 / 缺失：`from.children[oldIndex]` 取到 undefined 时不做 undefined → null 转换，
+ *  是把 undefined 原样交给 `insertBefore`，在语义上等价于 null（等价 appendChild）——
+ *  与库内建实现行为一致。 */
 export function restoreNodeToSource(evt: DraggableStartEvent): void {
   const { from, item, oldIndex } = evt;
   from.insertBefore(item, oldIndex == null ? null : from.children[oldIndex]);
