@@ -344,3 +344,156 @@ export interface QuotablePartListResult {
   limit: number;
   offset: number;
 }
+
+// ============================================================
+// 外协看板 pool 域（2026-10-03 新增）
+//
+// 3 个只读端点，供「外协发送/接收」看板按「工序 tab × 左侧可发送候选批次 × 右侧
+// 外协公司列」消费（形态照抄生产队列 /workers/queue）：
+//   - GET /outsource-pool/counts                  → 各工序可发送 / 在途计数（tab 徽标）
+//   - GET /outsource-pool/{process_id}            → 单工序的候选批次 × 公司列
+//   - GET /outsource-pool/state?outsource_company_id=&process_id=
+//                                                 → 单公司 × 单工序的在途批次
+//
+// 与本文件既有 `OutsourceXxxListResult` 的两点结构性差异（写端点读取时按此判断）：
+//   1. 响应是**裸对象**而非分页信封（无 limit / offset）—— 三个 Result 类型都只有
+//      一次全量，没有分页参数；
+//   2. 雪花 i64 全部以 JSON **字符串**出现（JS Number 会丢精度）；Decimal 与
+//      datetime 同样是字符串。计数（sendable_count / in_flight_count /
+//      sendable_total / in_flight_total / total / held_count / current_held）是裸 i64
+//      数字，方向与雪花 ID 相反。
+// ============================================================
+
+/** `GET /outsource-pool/counts` 单行（每个有货的工序一行）。 */
+export interface OutsourcePoolCount {
+  /** 工序 id（雪花 ID 字符串） */
+  process_id: string;
+  process_code: string;
+  process_name: string;
+  /** 该工序当前可发送批次数 */
+  sendable_count: number;
+  /** 该工序在外协公司手上的在途批次数 */
+  in_flight_count: number;
+}
+
+/** `GET /outsource-pool/counts` 顶层。
+ *  `counts` 只含 `sendable_count + in_flight_count > 0` 的工序（按 process_id 升序）。 */
+export interface OutsourcePoolCountsResult {
+  counts: OutsourcePoolCount[];
+  sendable_total: number;
+  in_flight_total: number;
+  /** = sendable_total + in_flight_total */
+  total: number;
+}
+
+/** `GET /outsource-pool/{process_id}` 的外协公司列（该工序映射的**全部活跃**公司，
+ *  在途为 0 的公司也在列 —— 看板右侧恒展示整列，不按 held_count 过滤）。 */
+export interface OutsourcePoolCompany {
+  /** 外协公司 id（雪花 ID 字符串） */
+  company_id: string;
+  name: string;
+  /** 该公司 × 该工序当前在途批次数 */
+  held_count: number;
+}
+
+/** `GET /outsource-pool/{process_id}` 的候选批次行 —— 行粒度是
+ *  「可发送候选批次 × 该外协工序」，字段语义与 `OutsourceSendableItem` 同源。
+ *  与 `OutsourceSendableItem` 的两处差异：
+ *   1. 新增 `can_send`（后端派生的可发送判据，替代前端原先的 `canSend()` 计算）；
+ *   2. 契约不含 `next_process_id` / `next_process_name`，**理由**：发送的目标工序 =
+ *      当前 tab 的工序 id（`send-to-outsource` 的 `process_id` 入参），对本看板冗余；
+ *      接收侧的目标工序由 state 端点的 `receive_next_process_id` /
+ *      `receive_next_process_name` 提供。两侧字段集一致，无需后端补字段 ——
+ *      下次有人「对齐」时勿把这两个字段加回来。
+ *  `company_options` 沿用 `OutsourceCompanyOption`（DIRECT 模式的公司下拉源）。 */
+export interface OutsourcePoolItem {
+  /** t_part_batch.version（批次级 OCC，发送时回传） */
+  version: number;
+  send_mode: OutsourceSendMode;
+  source_status: OutsourceSourceStatus;
+  part_id: string;
+  part_serial_no: string | null;
+  part_drawing_no: string | null;
+  part_name: string | null;
+  /** 可发送数量（行=批次：恒等于 batch_quantity） */
+  quantity: number;
+  batch_id: string;
+  batch_no: number;
+  batch_quantity: number;
+  planned_delivery_date: string | null;
+  is_urgent: boolean;
+  customer_path: string | null;
+  shelf_code: string | null;
+  /** APPROVAL 单值；DIRECT 为 null（用 company_options） */
+  outsource_company_id: string | null;
+  outsource_company_name: string | null;
+  /** 发送端点的报价 id；APPROVAL 必传、DIRECT 为 null */
+  quote_id: string | null;
+  /** DIRECT 时为该批次可用的全部公司；APPROVAL 时为空数组 */
+  company_options: OutsourceCompanyOption[];
+  /** APPROVAL 为该报价的 Decimal 字符串；DIRECT 为 null */
+  price: string | null;
+  /** 后端派生的可发送判据（APPROVAL 或 DIRECT 有 company_options）。
+   *  替代前端原先的 `canSend()` 判定，避免前端两处各算一遍导致口径分叉。 */
+  can_send: boolean;
+  status_label: 'sendable';
+}
+
+/** `GET /outsource-pool/{process_id}` 顶层（单工序的完整看板数据）。 */
+export interface OutsourcePoolDetailResult {
+  process_id: string;
+  process_code: string;
+  process_name: string;
+  companies: OutsourcePoolCompany[];
+  total: number;
+  items: OutsourcePoolItem[];
+}
+
+/** `GET /outsource-pool/state` 单行（一个在途批次）。
+ *  字段族与 `OutsourceInFlightItem` 同源，差异是把「下一道工序」拆成
+ *  `receive_next_process_*` + 派生的 `chain_resolvable`。 */
+export interface OutsourcePoolStateItem {
+  batch_id: string;
+  part_id: string;
+  batch_no: number;
+  /** 当前批次剩余待收量（部分接收后源批次留余量） */
+  quantity: number;
+  serial_no: string | null;
+  drawing_no: string;
+  name: string;
+  /** 系统交期（DB NULL ⇒ JSON null） */
+  system_delivery_date: string | null;
+  planned_delivery_date: string | null;
+  is_urgent: boolean;
+  /** L2 客户名 */
+  customer_name: string | null;
+  /** L1 客户名 */
+  parent_customer_name: string | null;
+  applicant_name: string | null;
+  /** 恒为 `"OUTSOURCE_COMPANY"`（在途批次必然在外协公司手上） */
+  location: 'OUTSOURCE_COMPANY';
+  note: string | null;
+  /** t_part_batch.version —— 接收时的 OCC 锚 */
+  version: number;
+  /** 发出时间（naive datetime 字符串） */
+  sent_at: string;
+  /** Decimal 字符串（DIRECT 直发的占位报价为 "0"） */
+  price: string;
+  /** 接收后应落入的下一道工序（雪花 ID 字符串）。
+   *  **非 nullable**：`"0"` = 无下一道工序（后端沿 `PendingBatchItemOut` 的
+   *  `.unwrap_or(0)` 兜底口径）。 */
+  receive_next_process_id: string;
+  receive_next_process_name: string | null;
+  /** true = 工序链已知且指针未漂移（前端可免填工序）；false = 链缺失或指针漂移
+   *  （前端必须让用户手填工序 + 货架）。 */
+  chain_resolvable: boolean;
+}
+
+/** `GET /outsource-pool/state` 顶层。`current_held == items.length`。 */
+export interface OutsourcePoolStateResult {
+  outsource_company_id: string;
+  outsource_company_name: string;
+  process_id: string;
+  current_held: number;
+  items: OutsourcePoolStateItem[];
+}
