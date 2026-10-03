@@ -938,20 +938,6 @@ export async function getPartBySerial(serialNo: string): Promise<PartItem> {
 }
 
 /**
- * 扫码台 PICK_UP 列表：列出指定工种在指定货架上可领的零件。
- * 排序：加急优先 → 临期优先 → id 降序。
- */
-export async function listPartsByWorkType(
-  workTypeId: string,
-  shelfId: string,
-): Promise<PartItem[]> {
-  const resp = await api.get<PartItem[]>(`/parts/by-work-type/${encodeURIComponent(workTypeId)}`, {
-    params: { shelf_id: shelfId },
-  });
-  return resp.data;
-}
-
-/**
  * 共享 HMI PICK_UP 跨架列表（2026-07-10）。
  * `GET /parts/pickable-by-work-type/{work_type_id}`
  *
