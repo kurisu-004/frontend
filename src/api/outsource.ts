@@ -307,15 +307,18 @@ export async function listOutsourceSendable(
 //   1. 响应是**裸对象**（无分页信封、无 limit/offset）⇒ 不走 `normalizeListResult`
 //      （它只重整 items/total/limit/offset 四键，对裸对象无意义）；count 字段本就是
 //      裸 i64 数字，与雪花 ID 的字符串方向相反。
-//   2. 守门在 API 边界做**第一层**，调用方的 queryFn 还会再 parse 一次（第二层）——
-//      queryFn 那次是 CLAUDE.md 对共享 query 的硬要求，两层都在、不是重复劳动：
-//      本层挡边界漂移，queryFn 那层保证经任何旁路调用进 queryFn 的数据同样被守。
+//   2. 守门在 API 边界做**第一层**，调用方的 queryFn 还会再 parse 一次（第二层）。
+//      本层是沿本文件另外 4 个 list helper 的既有做法在边界挡一次漂移（那 4 个的
+//      消费方是页面级 composable、queryFn 里不再 parse）；queryFn 那次是 CLAUDE.md §4
+//      对共享 useQuery 的硬要求（worker-pool 三个 query 同款）。本域 3 个 helper 目前
+//      **只被 `useOutsourcePool*Query` 消费**，故两层在运行路径上实际重叠。
 //
 // ⚠️ 本段 3 个 helper 的 `schema.parse(...) as XxxResult` 里的 `as` 是**已知不提供
 // schema↔类型一致性保证**的（`as` 允许向更宽方向断言：TS 接口若比 schema 更宽松、
-// 如某字段被写成 `| null`，编译器不会报错）。一致性由
-// `src/composables/queries/__tests__/schemas.spec.ts` 的 outsource-pool 段
-// 「parse 后键集 == fixture 键集」断言兜住 —— 改 schema 字段集时那条用例会红。
+// 如某字段被写成 `| null`，编译器不会报错）。行 schema 与顶层 result schema 两侧的键集
+// 一致性都由 `src/composables/queries/__tests__/schemas.spec.ts` 的 outsource-pool 段
+// 「parse 后键集 == fixture 键集」断言兜住（3 个行 schema + 3 个顶层 result schema 各
+// 一组）—— 漏声明 / 多声明带默认值都会让那组用例会红。
 // ============================================================
 
 /**

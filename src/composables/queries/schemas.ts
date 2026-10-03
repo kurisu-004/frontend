@@ -1678,8 +1678,8 @@ export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendable
 // `outsourceXxxItemSchema` 风格命名。`xxxSchema` 与 `xxxResultSchema` 成对导出，
 // 前者守行、后者守顶层。
 //
-// 字段形态取自后端 outsource-pool 域的端点契约（后端并行任务 2026-10-03 同批交付，
-// 代码尚未合入本仓 —— 本段只引用契约，未与后端实现逐字核验过）。三条序列化约定
+// 字段形态取自后端 outsource-pool 域的端点契约（后端并行任务，截至 2026-10-03 尚未
+// 合入本仓 —— 本段只引用契约，未与后端实现逐字核验过）。三条序列化约定
 // （与本文件既有外协 schema 逐字一致）：
 //   - 雪花 i64 **全字段 `z.string()`**：后端 `#[serde(serialize_with =
 //     "serialize_i64")]`（JS Number 会丢精度）；不用 `z.coerce.string()` /
@@ -1690,15 +1690,21 @@ export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendable
 //     `in_flight_total` / `total` / `held_count` / `current_held`）是**裸 i64**
 //     ⇒ `z.number()`，方向与雪花 ID 相反（与 workerPoolCountsSchema 同口径）。
 //
-// `receive_next_process_id` 的 `"0"` 兜底口径：该字段**非 nullable** —— 后端沿
-// `PendingBatchItemOut::current_process_step_id` 的 `Option<i64> → i64`
-// （`.unwrap_or(0)`）写法，NULL 落成 `"0"`。写成 `z.string().nullable()` 会让
-// 「无下一道工序」这一合法响应当成契约漂移整列炸掉，故此处必须 `z.string()`。
+// `current_process_step_id` / `receive_next_process_id` 的 `"0"` 兜底口径：这两个字段
+// **非 nullable**，理由有据 —— 后端已合入的 `PendingBatchItem`
+// （`src/modules/prod/batch/vo.rs`）在 `current_process_step_id` 字段上逐字写着
+// 「**NULL 兜底语义**：DB 列 NULL 时 row → vo 投影为 0（`Option<i64> → i64` 走
+// `.unwrap_or(0)`）；前端按 `0 == "未设 step"`、`> 0 == "已设 step"` 区分」，且该字段
+// 带 `#[serde(serialize_with = "serialize_i64")]`。即后端投影层已把 NULL 吃成 0，序列化
+// 又是字符串 ⇒「无值」在 JSON 上是 `"0"` 而**不是** `null`。pool 域的
+// `receive_next_process_id` 沿同一口径。写成 `z.string().nullable()` 会让「未设 step /
+// 无下一道工序」这一合法响应当成契约漂移整列炸掉，故此处必须 `z.string()`。
 //
 // 必填字段**逐个显式声明**的原因（Zod strip 陷阱，CLAUDE.md §4）：`z.object()` 默认
 // 是 strip 模式，漏声明的字段被静默丢弃、parse 照过不误 —— 守门形同虚设、契约漂移
 // 静默通过。`__tests__/schemas.spec.ts` 的 outsource-pool 段用「合法 fixture parse
-// 通过 + 缺键 / 类型错必须抛错 + parse 后键集与 fixture 键集逐字段相等」三条锁死它。
+// 通过 + 缺键 / 类型错必须抛错 + parse 后键集与 fixture 键集逐字段相等」三条锁死它
+// （行 schema 与顶层 result schema 两侧各一组）。
 // ============================================================
 
 /** `GET /api/v2/outsource-pool/counts` 单行（后端 `OutsourcePoolCount`）—— 5 字段。

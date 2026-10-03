@@ -13,10 +13,11 @@
 //     `['outsource-pool', 'by-process', processId]`：[0] 根命名空间 / [1] 端点名 /
 //     [2] 唯一入参；键工厂是全仓唯一来源，调用点不拼字面量数组；
 //   - 守门走 outsourcePoolByProcessResultSchema.parse；api 层
-//     `listOutsourcePoolByProcess` 已 parse 过一次，这里**再一次** —— 是刻意的双重
-//     parse：api 层沿本仓既有 outsource helper 做法挡边界漂移，queryFn 那次是
-//     CLAUDE.md §4「共享 useQuery 的 queryFn 必须 parse(await api())」的硬要求
-//     （worker-pool 三个 query 同款），两层都不可省。
+//     `listOutsourcePoolByProcess` 已 parse 过一次，这里**再一次**：api 层那一次是沿
+//     本仓既有 outsource helper 做法在边界挡漂移，queryFn 那一次是 CLAUDE.md §4
+//     「共享 useQuery 的 queryFn 必须 parse(await api())」的硬要求（worker-pool 三个
+//     query 同款）。`listOutsourcePoolByProcess` 目前只被本 query 消费，故两次 parse
+//     在运行路径上重叠；api 层保留是为了与本文件另外 4 个 list helper 同形。
 //   - enabled: computed(() => !!toValue(processId)) —— 无工序时零网络请求（tab 未激活
 //     / 加载中）；
 //   - queryFn 内二次守卫：enabled 只挡自动触发，显式 `refetch()` 会绕过它，不留守卫

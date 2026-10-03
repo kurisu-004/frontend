@@ -230,7 +230,8 @@ export const qk = {
   //       - outsource 域收发（useOutsourceSendableList / usePartDetail 的
   //         receiveFromOutsource / useOutsourceReceivingList）—— send 移出候选池、
   //         receive 移入候选池；**仍未挂 worker-pool 三域失效**（既存缺口）。
-  //         2026-10-03 起该页改看板、数据源换成 outsource-pool 三域；看板侧收发
+  //         2026-10-03 起该页改看板（UI 属并行任务，看板侧消费 outsource-pool
+  //         三键）、数据源换成 outsource-pool 三域；看板侧收发
   //         mutation（useOutsourceBoardMove，并行任务待落地）挂 outsource-pool
   //         三键 + qk.partsPrefix 失效。
   //   - 2026-09-30 决策：**不再逐个给这些写点补失效**（要求穷举全仓写点，不可持续）。

@@ -16,10 +16,11 @@
 //     / [1] 端点名 / [2] 外协公司 id / [3] 工序 id。键工厂是全仓唯一来源，调用点不
 //     拼字面量数组；
 //   - 守门走 outsourcePoolStateResultSchema.parse；api 层
-//     `listOutsourcePoolState` 已 parse 过一次，这里**再一次** —— 是刻意的双重
-//     parse：api 层沿本仓既有 outsource helper 做法挡边界漂移，queryFn 那次是
-//     CLAUDE.md §4「共享 useQuery 的 queryFn 必须 parse(await api())」的硬要求
-//     （worker-pool 三个 query 同款），两层都不可省。
+//     `listOutsourcePoolState` 已 parse 过一次，这里**再一次**：api 层那一次是沿本仓
+//     既有 outsource helper 做法在边界挡漂移，queryFn 那一次是 CLAUDE.md §4「共享
+//     useQuery 的 queryFn 必须 parse(await api())」的硬要求（worker-pool 三个 query
+//     同款）。`listOutsourcePoolState` 目前只被本 query 消费，故两次 parse 在运行路径上
+//     重叠；api 层保留是为了与本文件另外 4 个 list helper 同形。
 //   - enabled: computed(() => !!(toValue(companyId) && toValue(processId))) ——
 //     **两个 query 参数都必填**，缺任一个零网络请求（否则后端直接拒，且会打出
 //     空参数请求）；
