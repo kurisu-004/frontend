@@ -9,9 +9,10 @@
   - 取消按钮保留（工人可放弃放回/送检）
   - 空状态可配置「返回上级」动作：调用方传 emptyActionLabel 则按钮显示，点击触发 empty-action 事件
 
-  2026-10-04：两个端点的 `current_load` 都是「可能缺省」—— for-inspection 的聚合由
-  后端同轮补，老后端上跑时缺省。dialog 因此**不假设**它在，交给 `HmiPickerCard` 的
-  `currentLoad != null` 守卫决定要不要渲染「在架 N 件」。
+  2026-10-04：两个端点的 `current_load` 都按「可能缺省」处理 —— for-inspection 的在架数
+  聚合后端**计划**补、当前 VO 仍无该字段（老后端上跑时缺省）。dialog 因此**不假设**它在，
+  交给 `HmiPickerCard` 的 `currentLoad !== undefined && currentLoad !== null` 守卫决定要不要
+  渲染「在架 N 件」。
 
   props:
     modelValue: boolean                       // 弹窗可见

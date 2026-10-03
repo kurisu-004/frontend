@@ -7,16 +7,16 @@
 // 都返回全新实例**。/scan/action 与 /scan/pick 是兄弟路由，`router.push` 卸载前者
 // 即销毁其实例，于是取件页读到的作业架恒为 null、守卫 100% 触发、请求根本没发出；
 // 旧形态下仓内零测试覆盖它，所以这个 bug 能一直活着。改成 store 后跨路由存活，
-// 但「三个分支各自的判定」仍需要钉死，故补这份用例。
+// 但「三个分支各自的判定」+ 换账号 / 部分缺页这些边界仍需要钉死，故补这份用例。
 //
 // 覆盖：
-//   - 单架：自动选唯一架并落 sessionStorage
-//   - 多架：从 sessionStorage 读回；存储值必须仍在绑定集内（越界的被丢弃 → 不自动选，
-//     这是「不让已解绑架的旧选择静默落到别的架上」的唯一防线）
+//   - 单架：自动选唯一架并落 sessionStorage（当前唯一的 sessionStorage 写入点）
+//   - 多架：从 sessionStorage 读回；存储值必须仍在**本次候选集**内（越界的被丢弃 →
+//     不自动选，这是「不让已解绑 / 未解析出的旧选择静默落到别的架上」的唯一防线）
 //   - wildcard（未绑任何架）：候选空 + 不选 + 不打 listShelves
 //   - 幂等：同账号重复 initShelves 不重打 listShelves；换账号强制重载（不继承旧账号选择）
-//   - 可写 computed：写 selectedShelfId 落 sessionStorage（v-model / 选择器形态）
-//   - reset 清内存 + 删 sessionStorage
+//   - await 期间换账号：本次结果作废，不拿旧账号的绑定集去 markLoaded
+//   - selectedShelfId 只读（页面上没有选架入口 ⇒ 没有写入方）
 //   - listShelves 失败时按绑定 id 兜底候选
 //
 // 测试基础设施：
@@ -42,7 +42,7 @@ vi.mock('@/api/shelves', () => ({
 import { listShelves } from '@/api/shelves';
 import { useScanShelfStore } from '../scanShelf';
 import type { CurrentUser } from '@/types/user';
-import type { Shelf } from '@/types/shelf';
+import type { Shelf, ShelfListResult } from '@/types/shelf';
 
 const SESSION_KEY_PREFIX = 'active_shelf_selection:';
 
@@ -128,7 +128,7 @@ describe('useScanShelfStore', () => {
     expect(scanShelf.showShelfSelector).toBe(false);
   });
 
-  it('T2：多架从 sessionStorage 读回，且必须仍在绑定集内', async () => {
+  it('T2：多架从 sessionStorage 读回，且必须仍在候选集内', async () => {
     bootstrap(makeUser('u1', ['8800000000001', '8800000000002']));
     mockShelves([
       { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
@@ -190,7 +190,7 @@ describe('useScanShelfStore', () => {
     expect(sessionStorage.getItem(`${SESSION_KEY_PREFIX}u1`)).toBe('8800000000001');
   });
 
-  it('T5：写 selectedShelfId 即落 sessionStorage（选择器 / v-model 形态）；reset 清干净', async () => {
+  it('T5：多架不自动选、也不写 sessionStorage；selectedShelfId 是只读的', async () => {
     bootstrap(makeUser('u1', ['8800000000001', '8800000000002']));
     mockShelves([
       { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
@@ -199,19 +199,17 @@ describe('useScanShelfStore', () => {
 
     const scanShelf = useScanShelfStore();
     await scanShelf.initShelves();
+
+    // 多架 + 没有选架入口 ⇒ 系统不选、也不落盘（没有写入方）
     expect(scanShelf.selectedShelfId).toBeNull();
+    expect(sessionStorage.getItem(`${SESSION_KEY_PREFIX}u1`)).toBeNull();
 
-    scanShelf.selectedShelfId = '8800000000002';
-
-    expect(scanShelf.selectedShelfId).toBe('8800000000002');
-    expect(scanShelf.selectedZone).toBe('INSPECTION');
-    expect(sessionStorage.getItem(`${SESSION_KEY_PREFIX}u1`)).toBe('8800000000002');
-
-    scanShelf.reset();
+    // 只读：没有 setSelected / reset 这类写入口（2026-10-04 删除，两者在删除时都无
+    // 生产调用方）。这里用赋值断言「写了不生效」，钉住「别再把写路径加回来」。
+    (scanShelf as { selectedShelfId: string | null }).selectedShelfId = '8800000000002';
 
     expect(scanShelf.selectedShelfId).toBeNull();
-    expect(scanShelf.options).toEqual([]);
-    expect(scanShelf.initialized).toBe(false);
+    expect(scanShelf.selectedZone).toBeNull();
     expect(sessionStorage.getItem(`${SESSION_KEY_PREFIX}u1`)).toBeNull();
   });
 
@@ -227,5 +225,74 @@ describe('useScanShelfStore', () => {
       { id: '8800000000001', code: 'shelf#8800000000001', zone: 'PRODUCTION' },
     ]);
     expect(scanShelf.selectedShelfId).toBe('8800000000001');
+  });
+
+  it('T7：存储值在绑定集内、但货架端点没返到它 → 不选（判候选集而非绑定集）', async () => {
+    // 账号绑 3 架、货架端点只返回 2 架 —— `limit: 200` 「取全」假设不成立时的形态。
+    // 要落进多架分支必须 details ≥ 2，故用 3 架绑定、缺 1 架。
+    bootstrap(makeUser('u1', ['8800000000001', '8800000000002', '8800000000003']));
+    mockShelves([
+      { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
+      { id: '8800000000002', code: 'SH-P02', zone: 'PRODUCTION' },
+    ]);
+    sessionStorage.setItem(`${SESSION_KEY_PREFIX}u1`, '8800000000003');
+
+    const scanShelf = useScanShelfStore();
+    await scanShelf.initShelves();
+
+    expect(scanShelf.options.map((o) => o.id)).toEqual(['8800000000001', '8800000000002']);
+    // 选 3 号会得到「selectedShelfId 有值、selectedZone 为 null」的坏状态，守卫文案也会
+    // 误报成因 ⇒ 必须落到「未选」。
+    expect(scanShelf.selectedShelfId).toBeNull();
+    expect(scanShelf.selectedZone).toBeNull();
+  });
+
+  it('T8：await listShelves 期间换账号 → 本次结果作废，不按旧账号 markLoaded', async () => {
+    bootstrap(makeUser('u1', ['8800000000001']));
+    // 手动控制 listShelves 的落地时刻，好把「请求在飞」和「换账号」排出先后
+    let release: (v: ShelfListResult) => void = () => {};
+    vi.mocked(listShelves).mockReturnValue(
+      new Promise<ShelfListResult>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    const scanShelf = useScanShelfStore();
+    const pending = scanShelf.initShelves();
+
+    // 请求在飞时换成 u2
+    switchSession(makeUser('u2', ['8800000000009']));
+    release({
+      items: [
+        {
+          id: '8800000000001',
+          code: 'SH-P01',
+          name: 'SH-P01',
+          version: 1,
+          location: null,
+          is_active: true,
+          display_order: 0,
+          zone: 'PRODUCTION',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    });
+    await pending;
+
+    // u1 的候选不得落到 options 上，也不得把「已加载」记在 u1 名下（否则 u2 的 init
+    // 会被幂等闸门挡掉、永远拿不到自己的候选）。
+    expect(scanShelf.options).toEqual([]);
+    expect(scanShelf.initialized).toBe(false);
+
+    mockShelves([{ id: '8800000000009', code: 'SH-P09', zone: 'PRODUCTION' }]);
+    await scanShelf.initShelves();
+
+    expect(listShelves).toHaveBeenCalledTimes(2);
+    expect(scanShelf.selectedShelfId).toBe('8800000000009');
+    expect(sessionStorage.getItem(`${SESSION_KEY_PREFIX}u2`)).toBe('8800000000009');
   });
 });

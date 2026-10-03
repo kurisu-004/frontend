@@ -339,8 +339,10 @@ onBeforeMount(async () => {
   // ⚠️ 读 `selectedShelfId` 必须在这句 await **之后** —— 未加载时它恒为 null，正是
   // 2026-09-16 以来「未找到零件所在货架信息」100% 触发的形态（旧代码读的是一个每次
   // 调用都新建的 composable 实例，跨路由必丢状态）。
-  await scanShelf.initShelves();
-  await refresh();
+  // 两件事并发：货架请求挂掉时（api timeout 30s）零件列表不必陪着一起等。
+  // 安全依据：作业架只在**用户交互之后**被读（applyScanSelection / onQtyConfirm），
+  // 那两个处理器都在本 await 完成之后才可能被触发；模板不读任何货架值。
+  await Promise.all([scanShelf.initShelves(), refresh()]);
 });
 
 async function refresh(): Promise<void> {
@@ -472,7 +474,8 @@ async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
   if (!worker.value) return;
   // 2026-09-16 PR-2：part 级 current_holder_id 随 t_part 瘦身下线，shelf_id 统一
   // 取「当前作业架」（单架 = 唯一架 id；多架 = 工人此前选定的架）。拿不到（如
-  // wildcard 账号）就报错提示，**不发**空 shelf_id（后端必填 i64，省略得 422）。
+  // wildcard 账号）就报错提示，**不发**空 shelf_id（后端必填 i64，省略会被 axum
+  // `Json` extractor 拒成裸 HTTP 422、不是项目统一信封）。
   const useShelfId = resolveWorkingShelfId();
   if (!useShelfId) return;
   showQtyDialog.value = true;

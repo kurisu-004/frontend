@@ -26,7 +26,7 @@ vi.mock('@/api/shelves', () => ({
 
 import { listShelves } from '@/api/shelves';
 import { useScanShelfStore } from '@/stores/scanShelf';
-import { resolveWorkingShelfId } from '../resolveWorkingShelf';
+import { resolveWorkingShelfId, workingShelfProblem } from '../resolveWorkingShelf';
 import type { CurrentUser } from '@/types/user';
 import type { Shelf } from '@/types/shelf';
 
@@ -75,6 +75,7 @@ describe('resolveWorkingShelfId', () => {
     localStorage.clear();
     sessionStorage.clear();
     vi.mocked(ElMessage.error).mockClear();
+    vi.mocked(ElMessage.warning).mockClear();
     vi.mocked(listShelves).mockClear();
   });
 
@@ -111,7 +112,7 @@ describe('resolveWorkingShelfId', () => {
     );
   });
 
-  it('G4：选中的架在品检区 → 返回 null（发出去后端必 20501）', async () => {
+  it('G4：选中的架在品检区 → 返回 null，且文案不叫工人「改选」（页面上没有选架入口）', async () => {
     bootstrap(makeUser(['8800000000002']));
     mockShelves([{ id: '8800000000002', code: 'SH-I02', zone: 'INSPECTION' }]);
     const scanShelf = useScanShelfStore();
@@ -119,7 +120,30 @@ describe('resolveWorkingShelfId', () => {
 
     expect(resolveWorkingShelfId()).toBeNull();
     expect(ElMessage.error).toHaveBeenCalledWith(
-      '当前选中的货架在品检区，不能作为作业货架，请改选生产货架',
+      '本账号当前绑定的货架在品检区，缺少生产区作业货架，请联系管理员为本账号绑定生产货架',
     );
+  });
+
+  it('G5：zone 未知 → 返回 null，且不冒充成「品检区」也不冒充成「生产区」', async () => {
+    bootstrap(makeUser(['8800000000001']));
+    // 后端真返回一个既非 PRODUCTION 也非 INSPECTION 的 zone
+    mockShelves([{ id: '8800000000001', code: 'SH-X01', zone: 'STAGING' }]);
+    await useScanShelfStore().initShelves();
+
+    expect(resolveWorkingShelfId()).toBeNull();
+    expect(ElMessage.error).toHaveBeenCalledWith(
+      '无法识别当前货架所属区域，不能作为作业货架，请联系管理员核对本账号的货架绑定',
+    );
+  });
+
+  it('G6：workingShelfProblem 只返回文案不弹提示（供进页提示自选级别）', async () => {
+    bootstrap(makeUser([]));
+    await useScanShelfStore().initShelves();
+
+    expect(workingShelfProblem()).toBe(
+      '当前账号未绑定作业货架，请联系管理员在「账号管理」为本账号绑定生产货架',
+    );
+    expect(ElMessage.error).not.toHaveBeenCalled();
+    expect(ElMessage.warning).not.toHaveBeenCalled();
   });
 });

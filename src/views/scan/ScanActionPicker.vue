@@ -14,8 +14,10 @@
   （B 方案手动 pick-up 兜底）。送货入口已移到 MANAGER/INSPECTOR 的「送货」菜单
   （/delivery-dispatch），扫码台不再有 DELIVER 操作。
 
-  注：HMI 账号已不再与货架一一对应，故不再显示「当前货架」选择器；
-  具体作业货架由下游各流程的 ShelfPickerDialog / 零件持有者决定。
+  作业货架（取件 / 送检两页提交 `shelf_id` 用的那个）来自 useScanShelfStore，**不在本页
+  选择**：本页只读 `scanShelf.options` 的 zone 并集来决定按钮显隐；多架账号的作业架由
+  管理员收窄绑定确定。⚠️ 送检页的 ShelfPickerDialog 给的是**目标品检架**
+  （worker-scan 的 target_inspection_shelf_id），不是作业架，别把两者当同一个东西。
 -->
 
 <template>

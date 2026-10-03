@@ -1,23 +1,26 @@
 // src/stores/scanShelf.ts
 //
-// 2026-10-04 新增：Pinia setup store，承载报工台的「当前作业架」。
-// 从 views/scan/composables/useActiveShelfSelection.ts 整体搬入（后者已随之删除），
-// 搬运的理由与 2026-09-26 auth store 从模块级单例迁 Pinia 同类：跨路由要共享的状态
-// 不能住在「每次调用返回全新实例」的 composable 里。
+// 2026-10-04 新增：Pinia setup store，承载报工台的「当前作业架」—— 取件 / 送检两页
+// 提交时 `shelf_id` 的唯一来源。
 //
-// 故障缘由（本次要拦住的回归）：原 composable 的 ref 写在函数体内，`/scan/action`
-// 与 `/scan/pick` 是兄弟路由 —— `router.push('/scan/pick')` 卸载前者、连同其实例，
-// 于是 `ScanPickParts` 里 `selectedShelfId` 恒 null，取件页守卫 100% 触发
-// 「未找到零件所在货架信息」，请求根本没发出；`/scan/action` 写进 sessionStorage 的
-// 选择也没有任何读者（`restoreFromSession` 只在 initShelves 内被调）。改成 store 后
-// 状态跨路由存活，且每个消费点都在**读值前** await `initShelves()`。
+// 为什么是 store 而不是页面级 composable：跨路由要共享的状态不能住在「每次调用返回
+// 全新实例」的 composable 里。`/scan/action` 与 `/scan/pick` / `/scan/inspect` 是兄弟
+// 路由，`router.push` 会卸载前者并连同其实例销毁，于是取件页读到的 `selectedShelfId`
+// 恒 null、守卫 100% 触发、请求根本没发出。store 跨路由存活，且消费点一律在**读值前**
+// `await initShelves()`。
 //
-// 设计目标（语义自 2026-07-13 起未变）：
-// - 单架 SHELF_ACCOUNT：自动选唯一架；不需要工人手动选。
-// - 多架 SHELF_ACCOUNT（≥ 2 架同/异 zone）：不自动选。
-// - wildcard SHELF_ACCOUNT（未绑任何 active 架）：候选为空、不选。
-// - 选择跨页持久化：sessionStorage（不是 localStorage）—— 跨账号切换会自动失效；
-//   key 含 user id 防账号互窜。
+// 语义：
+// - 单架 SHELF_ACCOUNT：自动选唯一架，不需要工人手动选。
+// - 多架 SHELF_ACCOUNT（≥ 2 架）：不自动选。⚠️ 多架账号在页面上**没有选架入口**
+//   （`/scan/action` 只渲染取件 / 放回 / 送检三个动作按钮）⇒ 提交前会被
+//   `resolveWorkingShelfId` 拦下，唯一的出路是找管理员把绑定收窄成唯一作业架。
+//   「补选架 UI」是产品决策，不在本仓实现范围内 —— 本 store 与守卫文案都按「无入口」
+//   这个既成事实书写，不假设工人能自己改选。
+// - wildcard SHELF_ACCOUNT（未绑任何 active 架）：候选为空、不选（picker 走通配）。
+// - 候选集与选中值落 sessionStorage（key 含 user id，跨账号自动隔离）。当前唯一的写入
+//   点是单架账号的自动选中；多架分支只读不写。
+// - 换账号：store 跨「登出 → 换账号登录（不刷新页面）」存活，靠 `loadedForUserId` 与
+//   当前 `auth.user.id` 比对强制重载，不让 A 账号的选择被 B 账号继承。
 //
 // 消费侧禁止解构 store：统一 `const scanShelf = useScanShelfStore(); scanShelf.xxx`
 // （标量 getter 不带括号，函数式 getter 带括号；沿 auth store 不变量）。
@@ -82,13 +85,16 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
     return optionsValue.value.find((o) => o.id === id) ?? null;
   });
 
+  /** null = 未选 / 该架不在 options 内 / zone 不是两个已知值之一，三者不可区分。 */
   const selectedZone = computed<'PRODUCTION' | 'INSPECTION' | null>(() => {
     const opt = selectedOption.value;
     if (!opt) return null;
     return opt.zone === 'PRODUCTION' || opt.zone === 'INSPECTION' ? opt.zone : null;
   });
 
-  // 多架（≥ 2 候选） + 当前没自动选 → 显示选择器
+  /** 多架且当前没自动选 —— 即「账号绑定不唯一、且系统给不出作业架」的状态。
+   *  2026-10-04：无生产消费方（页面上没有选架入口，见文件头）；保留为该状态的显式
+   *  表达，也是将来若补选架 UI 时唯一需要的判定。 */
   const showShelfSelector = computed<boolean>(
     () => optionsValue.value.length >= 2 && selectedShelfIdValue.value === null,
   );
@@ -96,19 +102,16 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
   // ===== actions =====
   /**
    * 加载候选架并决定当前作业架。消费点**必须 await 它再读值** —— 未 await 就读
-   * `selectedShelfId` 拿到的是 null，正是本次修的故障形态。
+   * `selectedShelfId` 拿到的是 null，提交守卫会把它误报成「账号没绑货架」。
    *
    * 幂等：同一账号已加载过就直接返回（`force` 除外），因此取件 / 送检 / 操作选择
    * 三页各自 onBeforeMount 调一次不会重复请求。
-   *
-   * 换账号：Pinia store 跨「登出 → 换账号登录（不刷新页面）」存活，而 sessionStorage
-   * 的 key 含 user id —— 故把加载归属的账号 id 记在 `loadedForUserId`，账号一变就
-   * 重新加载（读新账号自己的 sessionStorage），不让 A 账号的选择被 B 账号继承。
    */
   async function initShelves(options?: { force?: boolean }): Promise<void> {
     const userId = auth.user?.id ?? null;
     if (!options?.force && initialized.value && loadedForUserId.value === userId) return;
 
+    // 本次加载归属的账号快照：`bound` 与 await 后的复核都用它，不读可能已变的 auth。
     const bound = auth.boundShelves;
     if (bound.length === 0) {
       // wildcard：候选为空（界面不显示选择器，picker 走通配）
@@ -119,16 +122,21 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
       return;
     }
 
-    // 拉所有 active 架（limit 200 足够车间用；超过说明架构问题）
     let shelves: Shelf[] = [];
     try {
+      // 2026-10-04：`limit: 200` 是「取全」的假设，车间货架数是否真的不超过它未经验证。
+      // 超出时未解析出的绑定架不会进 `options`，多架分支因此不认存储值里的那个 id，
+      // 最终按「没选出作业架」处理 —— 不会拿一个未解析的架当作业架发出去。
       shelves = (await listShelves({ is_active: true, limit: 200 })).items;
     } catch {
       shelves = [];
     }
+    // 2026-10-04：await 期间可能已登出 / 换账号。此处若继续，就会拿 A 账号的绑定集
+    // 去 markLoaded(userId)，把 B 账号的读取判成「已加载」而永不重拉。返回即可 ——
+    // 下一次 initShelves 会因 `loadedForUserId !== userId` 正常重载。
+    if (auth.user?.id !== userId) return;
 
     // 把 user.shelf_ids 转成详情列表（保持 user.shelf_ids 顺序）
-    const boundSet = new Set(bound);
     const details: ShelfOption[] = [];
     for (const sid of bound) {
       const s = shelves.find((x) => String(x.id) === String(sid));
@@ -151,16 +159,19 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
 
     // 决定 selectedShelfId
     if (details.length === 1) {
-      // 单架：自动选
+      // 单架：自动选（当前唯一的 sessionStorage 写入点）
       selectedShelfIdValue.value = details[0].id;
       persistToSession(selectedShelfIdValue.value);
     } else if (details.length >= 2) {
-      // 多架：先看 sessionStorage 是否有之前的选择（且仍在 options 内）
+      // 多架：只认「解析得出、且确实在本次候选集内」的存储值。判 `details` 而非
+      // `auth.boundShelves`：绑定集里可能有 listShelves 没返到的架（见上面 limit 注释），
+      // 拿它当作业架会得到「selectedShelfId 有值但 selectedZone 为 null」——既发不出
+      // 请求，守卫文案也会说错成因。
       const stored = restoreFromSession();
-      if (stored && boundSet.has(stored)) {
+      if (stored && details.some((o) => o.id === stored)) {
         selectedShelfIdValue.value = stored;
       } else {
-        // 不自动选；让用户在 action picker 顶部选
+        // 不自动选：本仓没有选架入口，多架账号只能由管理员收窄绑定（见文件头）。
         selectedShelfIdValue.value = null;
       }
     } else {
@@ -169,32 +180,16 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
     markLoaded(userId);
   }
 
-  /** 显式清空选择（账号切换 / 重置用）。 */
-  function reset(): void {
-    selectedShelfIdValue.value = null;
-    optionsValue.value = [];
-    initialized.value = false;
-    loadedForUserId.value = null;
-    persistToSession(null);
-  }
-
-  /** 显式写当前作业架（选择器 / 测试写回），同步落 sessionStorage。 */
-  function setSelected(id: string | null): void {
-    selectedShelfIdValue.value = id;
-    persistToSession(id);
-  }
-
   function markLoaded(userId: string | null): void {
     initialized.value = true;
     loadedForUserId.value = userId;
   }
 
   return {
-    /** 当前作业架 id；可写（写入走 setSelected，同时落 sessionStorage）。 */
-    selectedShelfId: computed({
-      get: () => selectedShelfIdValue.value,
-      set: (v: string | null) => setSelected(v),
-    }),
+    /** 当前作业架 id。**只读** —— 没有选架入口就没有写入方，2026-10-04 已删掉可写
+     *  setter 与 `reset()`（两者当时都无生产调用方；会话终止也不需要它们，见
+     *  `loadedForUserId` 的换账号逻辑）。 */
+    selectedShelfId: computed(() => selectedShelfIdValue.value),
     options: computed(() => optionsValue.value),
     selectedZone,
     showShelfSelector,
@@ -202,6 +197,5 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
      *  拿它是为了判断「深链进入时到底有没有货架可读」而不必自己再调一次）。 */
     initialized: computed(() => initialized.value),
     initShelves,
-    reset,
   };
 });

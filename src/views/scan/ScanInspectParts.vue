@@ -271,7 +271,10 @@ import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useScanShelfStore } from '@/stores/scanShelf';
-import { resolveWorkingShelfId } from '@/views/scan/composables/resolveWorkingShelf';
+import {
+  resolveWorkingShelfId,
+  workingShelfProblem,
+} from '@/views/scan/composables/resolveWorkingShelf';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
 import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
@@ -345,8 +348,16 @@ onBeforeMount(async () => {
   if (!requireWorker(router)) return;
   // 2026-10-04：确保「当前作业架」已加载（深链 / 刷新直进本页时 store 尚无候选集）；
   // 提交时才读值，见 submitInspect 的守卫。store 内部按账号幂等。
-  await scanShelf.initShelves();
-  await refresh();
+  // 与 refresh() 并发：货架端点抖动时（api timeout 30s）持有件列表不必陪着一起等。
+  // 安全依据：作业架只在**用户交互之后**被读（下见 applyScanSelection 的提前拦截、
+  // 以及 submitInspect 的最终守卫），两者都在本 await 完成之后才可能被触发；
+  // 模板不读任何货架值。
+  await Promise.all([scanShelf.initShelves(), refresh()]);
+  // 2026-10-04 提前提示：作业架不可用时本页**一次都提交不出去**（每条提交路径都要过
+  // resolveWorkingShelfId），不必等工人走完「选件 → 扫码 → 选品检架」才被拦。
+  // 用 warning 而非 error：这里只是告知，不阻断本页的浏览与预览。
+  const problem = workingShelfProblem();
+  if (problem) ElMessage.warning(`${problem}；本页的送检操作暂不可用`);
 });
 
 // --- 扫码：扫描直接选中 + 滚动居中 + 打开品检货架选择弹窗；不在列表则提示当前位置 ---
@@ -363,6 +374,11 @@ async function scrollCardIntoView(batchKey: string): Promise<void> {
 
 /** INSPECT tail：选中 + 清 awaitingScan + 滚动 + 开品检货架选择弹窗 */
 async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
+  // 2026-10-04 提前拦截：作业架不可用时开品检架弹窗纯属让工人白做一遍（选完还得被
+  // submitInspect 的守卫打回），所以在**改任何状态、开任何弹窗之前**就拦。
+  // 与 pendingShelfId 的时序无冲突：pendingShelfId 只在 onShelfConfirm 里赋值，
+  // 而本分支直接 return，弹窗根本不会开。
+  if (!resolveWorkingShelfId()) return;
   selectedPart.value = p;
   selectedQty.value = p.quantity;
   awaitingScan.value = false;
@@ -525,8 +541,10 @@ async function onShelfConfirm(shelfId: string): Promise<void> {
  *     发品检架必得 20501「shelf ... 不存在或非 PRODUCTION 区」；
  *   - target_inspection_shelf_id = picker 选的品检架（INSPECTION 区）
  *     —— 后端另有一道 `target.zone != "INSPECTION"` → 20511 守卫。
- * 作业架缺失时**不发请求**（shelf_id 是无 default 的必填 i64，省略得 422，填品检架
- * 得 20501，两个都是工人看不懂的烂错误），改为就地提示。
+ * 作业架缺失时**不发请求**：`shelf_id` 是无 default 的必填 i64，省略会被 axum
+ * `Json` extractor 在 service 之前拒掉（裸 HTTP 422、响应体不是项目统一信封，本仓
+ * `ApiError` 拿不到 code），填品检架则得 20501 —— 两个都是工人看不懂的烂错误，
+ * 改为就地提示。
  */
 async function submitInspect(): Promise<void> {
   if (!selectedPart.value || !worker.value) {

@@ -92,18 +92,15 @@ export async function deactivateShelf(id: string): Promise<Shelf> {
 }
 
 /**
- * 2026-10-02 修：读取单架已映射工序。
+ * 读取单架已映射工序。
  *
- * 旧实现声明返回 `ShelfWithProcesses {..., processes: [...]}`，那是 v1(Python)
- * 形态 —— 后端 v2 实际返 `{items: [{shelf_id, shelf_code, process_id,
- * process_code, sort_order}]}`，消费侧 `sp.processes` 恒 undefined。
- * 对齐 backend-rust docs/api/production/shelf-process-mapping.md:88-106
- * （**单架**端点一节：Path + 5 字段响应表，含 sort_order）
- * + src/modules/prod/shelf_process/{dto,vo}.rs。
- * 2026-10-02 review 订正：原写 `:74-97`，那是**全集**端点（4 字段、**明确不含**
- * sort_order）的响应表 + 单架端点的标题行 —— 指错了 VO，正好是 BUG-2 那一类
- * 混淆（`ShelfProcessesResult` 与 `AllShelfProcessMappingItem` 的区别就在
- * sort_order）。全集形态见下方 getAllShelfProcessMappings 的注释。
+ * 后端 v2 返 `{items: [{shelf_id, shelf_code, process_id, process_code,
+ * sort_order}]}`（契约见 `docs/api/production/shelf-process-mapping.md` 的
+ * 「单架端点」一节 + `src/modules/prod/shelf_process/` 的 dto / vo）——
+ * **不是** v1(Python) 的 `ShelfWithProcesses {..., processes: [...]}`，消费侧
+ * `sp.processes` 恒 undefined。
+ * 全集端点（`getAllShelfProcessMappings`）是**另一个** VO：4 字段、**明确不含**
+ * `sort_order`，所以本函数的响应类型与它不能共用。
  *
  * 2026-10-02 域拆分：URL 从 `/shelves/{id}/processes` 硬切到
  * `/prod/shelf-processes/{shelf_id}`（旧路径 404），响应契约逐字不变。
@@ -181,7 +178,7 @@ export async function setShelfProcesses(
 /**
  * 共享 HMI RETURN 卡片网格 picker 数据源。
  * 后端 `GET /shelves/for-return?next_process_id=...`
- * 返回候选架列表（按 current_load ASC 排序，同 load 时按 display_order ASC）；
+ * 返回候选架列表（按 current_load 升序，同 load 时按 display_order ASC, id ASC）；
  * 「推荐架」不是独立字段，而是每条 item 上的 `is_recommended`（load 最小那条为 true）。
  *
  * 2026-10-02 订正错误码注释：原注释写「错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS
@@ -202,36 +199,28 @@ export async function listShelvesForReturn(nextProcessId: string): Promise<Shelf
 }
 
 /**
- * 2026-07-13 新增：共享 HMI INSPECT 卡片网格 picker 数据源。
+ * 共享 HMI INSPECT 卡片网格 picker 数据源。
  * 后端 `GET /shelves/for-inspection` 返回 `zone='INSPECTION' AND is_active=true`
- * 的货架列表，**不过滤 SHELF_ACCOUNT scope**（品检架全员可见，见后端
- * docs/api/shelves.md:189-202）。
+ * 的货架列表，**不过滤 SHELF_ACCOUNT scope**（品检架全员可见，见
+ * `docs/api/shelves.md` 的 for-inspection 一节）。
  *
- * 2026-10-02 三处订正（逐条回后端源码核实，全部只改注释、零行为变化）：
+ * 三条要点（2026-10-02 逐条回后端核实）：
  *
- * 1. **排序**：旧注释写「按 current_load ASC 排序」—— **错**。本端点不做任何
- *    load 维度排序：service 层 `ShelfService::list_for_inspection` 直接复用
- *    `repo.list_with_filters(None, Some("INSPECTION"), Some(true), MAX_LIMIT, 0)`
- *    （backend-rust/src/modules/shelf/service/picker.rs:114，该函数体 :98 起），
- *    该查询**固定**带
- *    `ORDER BY display_order ASC, id ASC`（repo/sql.rs:158）—— 即「物理顺序 +
- *    id 兜底」。逐字更正为：**按 display_order ASC, id ASC（物理顺序）**。
- *    推论：品检架**不保证**「最空的排最前」，前端也不能依赖列表序做任何业务判断。
- * 2. **推荐架**：旧注释写「+ 推荐架」—— **错**。`ShelfForInspectionItem`
- *    没有 `is_recommended` 字段，也没有 `recommended_shelf_id`。本端点**不存在**任何
- *    推荐语义（推荐标记只属于 for-return VO）。
- * 3. **错误码**：旧注释写「错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS（没有
- *    INSPECTION 架或用户 scope 内无 INSPECTION 架）」—— **错，双重错**：
- *      - 20506 不可能由本端点抛出：service 里根本没有任何 20506 分支；
- *      - 「用户 scope 内无 INSPECTION 架」也不成立：本端点**不过滤 scope**。
- *    本端点**唯一**的错误是 `require_any_role` 失败 → 40300 FORBIDDEN
+ * 1. **排序**：本端点不做任何 load 维度排序 —— service 层
+ *    `ShelfService::list_for_inspection` 复用 `list_with_filters` 且固定带
+ *    `ORDER BY display_order ASC, id ASC`，即「物理顺序 + id 兜底」。推论：品检架
+ *    **不保证**「最空的排最前」，前端不能依赖列表序做任何业务判断。
+ * 2. **推荐架**：`ShelfForInspectionItem` 没有 `is_recommended` 字段，也没有
+ *    `recommended_shelf_id`。本端点**不存在**任何推荐语义（推荐标记只属于
+ *    for-return VO）。
+ * 3. **错误码**：本端点**唯一**的错误是 `require_any_role` 失败 → 40300 FORBIDDEN
  *    （允许角色 5 个：Manager / Clerk / CncProgrammer / ShelfAccount / Inspector，
  *    比 for-return 多一个 Inspector——品检员自己要用它）。
  *    **没有品检架时返 200 + `items: []`，不是错误。**
  *
  * 返回类型是 `ShelfForInspectionResult`（独立类型，不是 for-return 那份 —— 两个后端
- * VO 不同，见 `@/types/shelf.ts` 的对照表）。品检架的 `current_load` 由后端同轮补
- * 聚合、且声明为可选：老后端上跑时该字段缺省，消费侧（`ShelfPickerDialog` →
+ * VO 不同，见 `@/types/shelf.ts` 的对照表）。品检架的 `current_load` 后端**计划**补
+ * 聚合、当前 VO 仍无该字段，故声明为可选：老后端上跑时消费侧（`ShelfPickerDialog` →
  * `HmiPickerCard`）缺省就不渲染「在架 N 件」。
  */
 export async function listShelvesForInspection(): Promise<ShelfForInspectionResult> {

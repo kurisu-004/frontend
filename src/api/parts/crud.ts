@@ -556,14 +556,20 @@ export async function scanPart(payload: PartScanPayload): Promise<PartItem> {
  *    （INSPECTION 区，后端另有一道 `zone != INSPECTION` → 20511 守卫）
  *  - batch_id?: 可选；多批次歧义时显式指定
  *
- * 失败抛 ApiError：
+ * 失败抛 ApiError（契约依据 `docs/api/parts/inspection.md` 的 worker-scan 段）：
  *  - 20103 INVALID_TRANSITION：状态机迁移非法
  *  - 20202 WORKER_INACTIVE：工牌未识别 / 已停用
  *  - 20501 BIZ_SHELF_NOT_FOUND：shelf_id 不存在 / 非 PRODUCTION 区
  *  - 20511 BIZ_SHELF_NOT_INSPECTION_ZONE：target_inspection_shelf_id 非 INSPECTION 区
- *  - 40001 VALIDATION_ERROR：next_process_id / target_inspection_shelf_id 缺或非法，
- *    以及 shelf_id 缺省（必填 i64，无 default）
+ *  - 20507 BIZ_SHELF_PROCESS_NOT_MAPPED：RETURNED 时 shelf_id 未映射 next_process_id
+ *  - 40001 VALIDATION_ERROR：next_process_id / target_inspection_shelf_id 缺或非法
+ *  - 40301 SHELF_MISMATCH：shelf_id / target_inspection_shelf_id 不在本账号绑定集内
  *  - 20401 / 20403 等
+ *  - ⚠️ **shelf_id 缺省不走 40001**：`shelf_id` 是无 `#[serde(default)]` 的必填
+ *    `i64`，缺字段由 axum `Json` extractor 在 service 之前直接拒 ⇒ **裸 HTTP 422、
+ *    响应体不是项目统一 `R` 信封**（docs 明写「非项目统一信封」）⇒ 本仓 `ApiError`
+ *    拿不到 code，拦截器的错误文案兜不到业务语义。省略它等于给工人一条看不懂的
+ *    裸 422，故消费侧（`resolveWorkingShelfId`）在发请求前就拦住。
  */
 export interface WorkerScanPayload {
   serial_no: string;
