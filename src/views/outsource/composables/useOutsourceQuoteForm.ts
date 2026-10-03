@@ -26,9 +26,26 @@ import {
   submitOutsourceQuote,
 } from '@/api/outsource';
 import { useConfirm } from '@/composables/useConfirm';
-import { OUTSOURCE_QUOTE_STATUS_LABEL, type OutsourceQuote } from '@/types/outsource';
-import type { PartListItem } from '@/types/parts';
+import {
+  OUTSOURCE_QUOTE_STATUS_LABEL,
+  type OutsourceQuote,
+  type QuotablePart,
+} from '@/types/outsource';
 import type { Process } from '@/types/process';
+
+/**
+ * `QuotablePart` 行的唯一键 = `part_id` + 下一工序 id。
+ *
+ * 2026-10-03：picker 数据源的行粒度是「一个 (零件, OUTSOURCE 工序) 组合一行」
+ * （后端 `DISTINCT ON (part_id, next_process_id)`），**同一 `part_id` 可以出多行**
+ * （零件同时挂在两个外协工序货架 / 处在两个外协工序阶段）。只用于 picker 的
+ * `v-for :key` —— el-option 的 `:value` 必须是裸 part_id（select 的 model 也是它）。
+ *
+ * 分隔符用 `::`：雪花 id 是十进制数字串，不可能含 `:`，拼接无歧义。
+ */
+export function quotablePartRowKey(p: QuotablePart): string {
+  return `${p.id}::${p.next_process_id}`;
+}
 
 /** 新建报价表单（reactive） */
 export interface CreateQuoteForm {
@@ -41,7 +58,7 @@ export interface CreateQuoteForm {
 
 export interface UseOutsourceQuoteFormOptions {
   /** 页级共享 lookup（仅在 props 变化时赋进来；本地维护 reactive 镜像） */
-  parts: () => readonly PartListItem[];
+  parts: () => readonly QuotablePart[];
   processes: () => readonly Process[];
   /** 创建 / 审批 / 删除 成功后由 caller 触发表格刷新 */
   refresh: () => Promise<void> | void;
@@ -150,25 +167,30 @@ export function useOutsourceQuoteForm(
     },
   );
 
-  /** PR-H 2026-07-28：选择零件后自动填工序（仅当 next_process_id 类别 = OUTSOURCE）。
-   *  其他情况（INHOUSE / NULL）留空并提示。
+  /** 选择零件后自动填工序（仅当该零件的 next_process 类别 = OUTSOURCE），
+   *  其他情况（INHOUSE / 空 / 同零件多行）留空并提示。
    *
-   *  2026-09-27 前后端字段对齐：PartListItem.next_process_id 已下线（list
-   *  响应不再返）。picker 端点 `/outsource-quotes/quotable-parts` 当前尚未迁到
-   *  Rust 后端（backend-rust 搜不到该端点），由 listQuotableParts 返回的
-   *  PartListItem[] 中 next_process_id 在前端 schema 不再声明。临时通过
-   *  picker-local 类型扩展访问 —— 后续 picker 接入后端新端点时，需重新设计
-   *  next_process_id 的获取路径（如返回 picker 专用 VO 或落 detail fetch）。 */
+   *  2026-10-03 两处调整：
+   *  1. `next_process_id` 由 `GET /outsource-quotes/quotable-parts` 的 `QuotablePart`
+   *     正式提供（后端 VO 显式声明），不再需要 picker-local 类型扩展。
+   *  2. picker 行粒度是「一个 (零件, OUTSOURCE 工序) 组合一行」，同一 part_id 可出
+   *     多行；el-select 的 value 只能是裸 part_id（否则 model 匹配不到 option、
+   *     框里显示雪花 id），所以**拿不到操作员点的是哪一行**。此时不猜：任取一行
+   *     填工序会静默建出错工序的报价，代价远大于让操作员多选一次。 */
   function onCreatePartChange(partId: string): void {
     createForm.process_id = '';
     createForm.outsource_company_id = '';
     if (!partId) return;
-    const rawPart = opts.parts().find((p) => p.id === partId);
-    // 临时：picker-local 类型扩展（见函数头注释）。该 cast 在 backend picker
-    // 端点迁移完成后应去除。
-    const part = rawPart as (typeof rawPart & { next_process_id?: string | null }) | undefined;
-    if (!part?.next_process_id) {
-      if (part) ElMessage.info('该零件未设置下一工序，请手动选择');
+    const rows = opts.parts().filter((p) => p.id === partId);
+    // 查不到（lookup 尚未装载完）→ 静默留空，工序可手动选。
+    if (rows.length === 0) return;
+    if (rows.length > 1) {
+      ElMessage.info('该零件对应多个外协工序，请手动选择工序');
+      return;
+    }
+    const part = rows[0]!;
+    if (!part.next_process_id) {
+      ElMessage.info('该零件未设置下一工序，请手动选择');
       return;
     }
     // 仅当 next_process 类别 = OUTSOURCE 时自动填

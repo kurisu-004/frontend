@@ -1,14 +1,19 @@
 // 外协公司 (OutsourceCompany) API 封装。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
+import {
+  outsourceInFlightListResultSchema,
+  outsourceQuotablePartListResultSchema,
+  outsourceSendableListResultSchema,
+  outsourceSentPartListResultSchema,
+} from '@/composables/queries/schemas';
 import type {
-  ApprovedForSendListResult,
   OutsourceCompany,
   OutsourceCompanyCreatePayload,
   OutsourceCompanyListResult,
   OutsourceCompanyUpdatePayload,
   OutsourceCompanyWithProcesses,
-  OutsourceInFlightItem,
+  OutsourceInFlightListResult,
   OutsourceQuote,
   OutsourceQuoteApprovePayload,
   OutsourceQuoteCreatePayload,
@@ -17,12 +22,13 @@ import type {
   OutsourceQuoteStatus,
   OutsourceQuoteUpdatePayload,
   OutsourceReconciliationUpdatePayload,
+  OutsourceSendableListResult,
   OutsourceSentPartListResult,
   OutsourceSentPartSortKey,
+  QuotablePartListResult,
   SetOutsourceCompanyProcessesPayload,
 } from '@/types/outsource';
 import type { SortDir } from '@/types/parts';
-import type { PartListItem } from '@/types/parts';
 
 export async function listOutsourceCompanies(
   params: {
@@ -169,36 +175,32 @@ export async function softDeleteOutsourceQuote(id: string): Promise<void> {
   await api.post(`/outsource-quotes/${encodeURIComponent(id)}/soft-delete`);
 }
 
-export async function listApprovedForSend(
-  params: {
-    keyword?: string;
-    customer_id?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
-): Promise<ApprovedForSendListResult> {
-  const resp = await api.get<ApprovedForSendListResult>('/outsource-quotes/approved-for-send', {
-    params: cleanParams(params),
-  });
-  return resp.data;
-}
-
 /**
- * 新建报价 picker 默认筛选（PR-H 2026-07-28）：
+ * 新建报价 picker 的可选零件（PR-H 2026-07-28）：
  * 仅返回「位于绑定了外协工序的货架上」的零件。
- * 返回 PartListItem 列表（包含 next_process_id / next_process_name，用于自动填工序）。
+ *
+ * 2026-10-03 契约对齐：出参从**裸数组**改为分页信封 `QuotablePartListOut`；行粒度
+ * 是「一个 (零件, OUTSOURCE 工序) 组合一行」（后端已 DISTINCT ON 去重，前端不要再
+ * 按 part_id 去重）；`next_process_id` 升为正式字段，创建报价的工序自动填不再需要
+ * picker-local 类型扩展。
  */
 export async function listQuotableParts(
-  params: { keyword?: string; limit?: number } = {},
-): Promise<PartListItem[]> {
-  const resp = await api.get<PartListItem[]>('/outsource-quotes/quotable-parts', {
+  params: { keyword?: string; limit?: number; offset?: number } = {},
+): Promise<QuotablePartListResult> {
+  const resp = await api.get<unknown>('/outsource-quotes/quotable-parts', {
     params: cleanParams(params),
   });
-  return resp.data;
+  // 2026-10-03 修正：Zod 守门 + 形态对齐。此前按 PartListItem[] 消费，而真实响应是
+  // 分页信封 —— `raw.length` 恒 undefined，picker 恒空且不报错。
+  return outsourceQuotablePartListResultSchema.parse(
+    // 兜底后端未来把 i64（total/limit/offset）序列化成字符串的漂移，与本文件
+    // listOutsourceCompanies / listOutsourceQuotes 同款处理。
+    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
+  ) as QuotablePartListResult;
 }
 
 /**
- * 外协对账一览（2026-07-28 新增）：列出发送给某外协公司的所有零件 + 当前状态。
+ * 外协对账一览：列出发送给某外协公司的所有零件 + 当前状态。
  * 用于与外协公司发来的对账单核对。
  */
 export async function listCompanySentParts(
@@ -215,11 +217,14 @@ export async function listCompanySentParts(
     offset?: number;
   } = {},
 ): Promise<OutsourceSentPartListResult> {
-  const resp = await api.get<OutsourceSentPartListResult>(
+  const resp = await api.get<unknown>(
     `/outsource-companies/${encodeURIComponent(companyId)}/sent-parts`,
     { params: cleanParams(params) },
   );
-  return resp.data;
+  // 2026-10-03 修正：Zod 守门（此前无守门 ⇒ 路由漏注册返 404 时列表静默空白）。
+  return outsourceSentPartListResultSchema.parse(
+    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
+  ) as OutsourceSentPartListResult;
 }
 
 /**
@@ -237,9 +242,12 @@ export async function reconcileUpdateShipment(
 }
 
 /**
- * 外协中批次列表（2026-07-30 新增）：列出所有已发送但尚未回收的外协批次。
- * GET /parts/outsource-in-flight
- * 注意：后端返回 plain list（无 total），分页 total 取列表长度。
+ * 外协中批次列表（「待接收」tab 数据源）。
+ * GET /outsource-shipments/in-flight
+ *
+ * 2026-10-03 契约对齐：URL 从 `/parts/outsource-in-flight` 迁到 outsource 域
+ * （旧路径返的是通用零件列表 `PartListItem`，与本 VO 不同构）；出参从裸数组改为
+ * 分页信封 `OutsourceInFlightListOut`。
  */
 export async function listOutsourceInFlight(
   params: {
@@ -247,9 +255,40 @@ export async function listOutsourceInFlight(
     limit?: number;
     offset?: number;
   } = {},
-): Promise<OutsourceInFlightItem[]> {
-  const resp = await api.get<OutsourceInFlightItem[]>('/parts/outsource-in-flight', {
+): Promise<OutsourceInFlightListResult> {
+  const resp = await api.get<unknown>('/outsource-shipments/in-flight', {
     params: cleanParams(params),
   });
-  return resp.data;
+  // 2026-10-03 修正：Zod 守门 + 形态对齐（此前按数组消费信封 ⇒ items.length
+  // undefined ⇒ 「待接收」tab 表格空白且分页失效）。
+  return outsourceInFlightListResultSchema.parse(
+    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
+  ) as OutsourceInFlightListResult;
+}
+
+/**
+ * 统一外协可发送一览（「可发送」tab 数据源）：合并 APPROVAL（需审批 + 有报价）
+ * 与 DIRECT（无需审批可直发）两类候选，每行带 send_mode + source_status。
+ * GET /outsource-sendable
+ *
+ * 2026-10-03：URL 从 `/parts/outsource-sendable` 迁到 outsource 域顶层，函数从
+ * `src/api/parts/crud.ts` 迁入本文件（该列表与批次 lifecycle 写端点不同域：
+ * 读侧是外协域，写的 `send-to-outsource` 才是 prod/batches 域）。出参保持分页信封。
+ */
+export async function listOutsourceSendable(
+  params: {
+    keyword?: string;
+    customer_id?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<OutsourceSendableListResult> {
+  const resp = await api.get<unknown>('/outsource-sendable', {
+    params: cleanParams(params),
+  });
+  // 2026-10-03 修正：Zod 守门（此前无守门 ⇒ 旧 URL 返的通用零件列表被直接喂给
+  // 「可发送」表格，列全空且不报错）。
+  return outsourceSendableListResultSchema.parse(
+    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
+  ) as OutsourceSendableListResult;
 }

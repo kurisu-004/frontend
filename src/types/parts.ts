@@ -235,6 +235,8 @@ export type PartEventType =
   | 'REPAIR_COMPLETED'
   | 'SENT_TO_OUTSOURCE'
   | 'RECEIVED_FROM_OUTSOURCE'
+  // 2026-10-03 新增：外协直送品检。外协件不走普通送检、直接进品检架时落这条事件。
+  | 'RECEIVED_TO_INSPECTION'
   | 'QUOTE_CREATED'
   | 'QUOTE_APPROVED'
   | 'CANCELLED'
@@ -257,6 +259,7 @@ export const PART_EVENT_LABEL: Record<PartEventType, string> = {
   REPAIR_COMPLETED: '返修完成',
   SENT_TO_OUTSOURCE: '发送至外协',
   RECEIVED_FROM_OUTSOURCE: '外协回收',
+  RECEIVED_TO_INSPECTION: '外协回收送检',
   QUOTE_CREATED: '创建外协报价',
   QUOTE_APPROVED: '报价审核通过',
   CANCELLED: '取消',
@@ -283,6 +286,9 @@ export const PART_EVENT_TAG_TYPE: Record<
   REPAIR_COMPLETED: 'success',
   SENT_TO_OUTSOURCE: 'warning',
   RECEIVED_FROM_OUTSOURCE: 'success',
+  // 与 RECEIVED_FROM_OUTSOURCE 同为外协回收后的正向流转，用 success 区分于
+  // INSPECTION（primary，普通送检）。
+  RECEIVED_TO_INSPECTION: 'success',
   QUOTE_CREATED: 'info',
   QUOTE_APPROVED: 'success',
   CANCELLED: 'danger',

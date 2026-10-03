@@ -37,13 +37,27 @@ export interface UseOutsourceReceivingListOptions {
   processes: Ref<readonly Process[]>;
 }
 
+/** `<PagedTable>` 模板 ref 暴露出来的成员（本 composable 实际用到的部分）。
+ *
+ *  与 useOutsourceSendableList 的同名接口同款取舍：`ref()` 无初值会推断成 `Ref<any>`，
+ *  成员名写错 / 把已解包成员当 ref 再读一层都不会报 TS 错。成员一律必填 ——
+ *  `PagedTable.vue` 的 `defineExpose` 无条件解构出这些成员，ref 的 `value` 一旦就位
+ *  必然齐全；写可选会逼调用点写 `?.()`，把「成员缺失」吞成静默 no-op。必填声明换来
+ *  的是赋值点检查（往 ref 塞缺成员的对象直接编译报错）。
+ *
+ *  ⚠️ 与 `defineExpose` 无编译期关联：模板用字符串 ref（`ref="receivingPagedRef"`），
+ *  Vue 按名字在运行时回填，组件侧改成员名不会被这里拦下。 */
+export interface ReceivingPagedTableExpose {
+  total?: number;
+  fetch: () => Promise<void>;
+  reset: () => Promise<void>;
+}
+
 /** 2026-09-21 显式返回类型。 */
 export interface UseOutsourceReceivingListReturn {
   receivingError: Ref<string | null>;
   receivingFilter: { keyword: string; customer_id: string };
-  receivingPagedRef: Ref<
-    { total?: number; fetch?: () => Promise<void>; reset?: () => Promise<void> } | undefined
-  >;
+  receivingPagedRef: Ref<ReceivingPagedTableExpose | undefined>;
   receiveDialogVisible: Ref<boolean>;
   receiveTarget: Ref<OutsourceInFlightItem | null>;
   receiveSubmitting: Ref<boolean>;
@@ -81,7 +95,7 @@ export function useOutsourceReceivingList(
   // 每次进入视图从 <PagedTable :default-page-size="20"> 起算。
   const receivingError = ref<string | null>(null);
   const receivingFilter = reactive({ keyword: '', customer_id: '' });
-  const receivingPagedRef = ref();
+  const receivingPagedRef = ref<ReceivingPagedTableExpose>();
 
   // 待接收 tab 持久化（2026-07-30 commit 4B）；2026-08-25 T7：page 不再持久化
   const persist = useListStatePersist('outsource_send_receive_receiving', { receivingFilter });
@@ -94,12 +108,15 @@ export function useOutsourceReceivingList(
   async function receivingFetcher(params: { page: number; pageSize: number }) {
     receivingError.value = null;
     try {
-      const items = await listOutsourceInFlight({
+      // 2026-10-03 修正：后端已从「裸数组」改为分页信封（outsource 域
+      // `OutsourceInFlightListOut`），此前把 {items,total,limit,offset} 当数组用
+      // → items.length undefined → 「待接收」tab 表格空白且分页恒 1 页。
+      const r = await listOutsourceInFlight({
         keyword: receivingFilter.keyword || undefined,
         limit: params.pageSize,
         offset: (params.page - 1) * params.pageSize,
       });
-      return { items, total: items.length };
+      return { items: r.items, total: r.total };
     } catch (e) {
       receivingError.value = (e as Error).message ?? '加载待接收列表失败';
       ElMessage.error(receivingError.value);

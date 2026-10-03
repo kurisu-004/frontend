@@ -20,12 +20,11 @@ import { useAuthStore } from '@/stores/auth';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import { listProcesses } from '@/api/process';
 import type { Process } from '@/types/process';
-import type { OutsourceQuote } from '@/types/outsource';
+import type { OutsourceQuote, QuotablePart } from '@/types/outsource';
 import { listPartFilesByOwner } from '@/api/assembly';
 import { listQuotableParts } from '@/api/outsource';
 import { api } from '@/api/http';
 import type { PartFileItem } from '@/types/part_file';
-import type { PartListItem } from '@/types/parts';
 import { canCreate, rolesArrayToMap } from '@/utils/outsourceQuotePermissions';
 import { useOutsourceQuoteTable } from './composables/useOutsourceQuoteTable';
 import { useOutsourceQuoteForm } from './composables/useOutsourceQuoteForm';
@@ -50,46 +49,34 @@ const table = useOutsourceQuoteTable({ roleMap });
 // 表格刷新由 form composable 内部需要时调（创建 / 审批成功）
 // ============================================================
 const processes = ref<Process[]>([]);
-const parts = ref<PartListItem[]>([]);
-const allParts = ref<PartListItem[]>([]); // 未去重的全量（create 表单可能用）
-
-/** PR-H 2026-07-28：dedupe picker 行（PR-fix-0.2.0）
- *  折叠同一 (part_id, next_process_id) 的多批次行。
- *
- *  2026-09-27 前后端字段对齐：PartListItem.next_process_id 已下线，picker
- *  端点 `/outsource-quotes/quotable-parts` 当前尚未迁到 Rust 后端，临时通过
- *  picker-local 类型扩展访问。后续 picker 接入后端新端点时重新设计。
- *  当前 dedupe key 退化为 part_id-only（next_process_id 视为未知）。 */
-function dedupeByPartProcess(rows: PartListItem[]): PartListItem[] {
-  const seen = new Set<string>();
-  const out: PartListItem[] = [];
-  for (const r of rows) {
-    // 临时：picker-local 类型扩展（见 useOutsourceQuoteForm 同款注释）。
-    const nextProcessId = (r as PartListItem & { next_process_id?: string | null }).next_process_id ?? null;
-    const key = `${r.id}::${nextProcessId ?? 'null'}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(r);
-  }
-  return out;
-}
+// 2026-10-03：picker 候选源。后端已按 (零件, OUTSOURCE 工序) 去重，前端不再二次
+// dedupe，所以「全量」与「去重后」是同一份数据 —— 合并为单个 ref，dialog 与
+// form composable 共读。
+const parts = ref<QuotablePart[]>([]);
 
 async function loadLookups(): Promise<void> {
+  // 2026-10-03：拆成两段独立 try —— 此前一个 try 包两个 await，quotable-parts 失败
+  // 会把已成功的 processes 结果一起废掉（且报错文案笼统，操作员分不清是哪个下拉空了）。
   try {
     const ps = await listProcesses({ limit: 200 });
     processes.value = ps.items.filter((p) => p.category === 'OUTSOURCE');
-    // PR-H 2026-07-28：新建报价 picker 改为「仅显示外协工序货架上的零件」
-    // PR-fix-0.2.0 dedup：行=批次折叠到 (part_id, next_process_id)。
-    const raw = await listQuotableParts({ limit: 500 });
-    allParts.value = raw;
-    parts.value = dedupeByPartProcess(raw);
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '下拉数据加载失败');
+    ElMessage.error((e as Error).message ?? '工序数据加载失败');
+  }
+  try {
+    // PR-H 2026-07-28：新建报价 picker 改为「仅显示外协工序货架上的零件」。
+    // 2026-10-03：出参改分页信封（读 `.items`）；行粒度已是「(零件, OUTSOURCE 工序)
+    // 组合一行」（后端 DISTINCT ON 去重），故不再需要前端 dedupe —— 按 part_id 去重
+    // 反而会把非首选工序的候选砍掉。
+    const r = await listQuotableParts({ limit: 500 });
+    parts.value = r.items;
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '可报价零件加载失败');
   }
 }
 
 const form = useOutsourceQuoteForm({
-  parts: () => allParts.value,
+  parts: () => parts.value,
   processes: () => processes.value,
   refresh: table.refresh,
 });

@@ -376,13 +376,19 @@ async function saveEdit(row: OutsourceSentPartItem): Promise<void> {
       is_billed: editBuffer.is_billed,
     };
     await reconcileUpdateShipment(row.shipment_id, payload);
-    // 就地回填该行（避免整表刷新闪烁）；total_price 由 displayTotalPrice 实时算
+    // 就地回填该行（避免整表刷新闪烁）。
+    // ⚠️ total_price 必须**一起**回填：displayTotalPrice 在非编辑态只读 row.total_price
+    // （后端是单一真源），不回填就会让刚保存完的这一行显示旧总价，直到下次 refetch。
+    // 这里本地算一次只是「保存后立即可见」的过渡值，下一次取数仍以后端为准。
+    const nextQty = payload.quantity ?? row.quantity;
+    const nextPrice =
+      payload.unit_price !== null && payload.unit_price !== undefined
+        ? String(payload.unit_price)
+        : row.unit_price;
     Object.assign(row, {
-      unit_price:
-        payload.unit_price !== null && payload.unit_price !== undefined
-          ? String(payload.unit_price)
-          : row.unit_price,
-      quantity: payload.quantity ?? row.quantity,
+      unit_price: nextPrice,
+      quantity: nextQty,
+      total_price: (Number(nextPrice) * Number(nextQty)).toFixed(2),
       is_billed: payload.is_billed ?? row.is_billed,
       version: row.version + 1,
     });
@@ -395,19 +401,31 @@ async function saveEdit(row: OutsourceSentPartItem): Promise<void> {
   }
 }
 
-// 总价列响应式显示（编辑态用 editBuffer 实时算，非编辑态用行数据）
+/**
+ * 总价列的显示源（2026-10-03 改为「后端 total_price 优先」）。
+ *
+ * 取舍：`total_price` 由后端直出（`OutsourceSentPartItem.total_price`），它是总价列的
+ * **单一真源** —— 未编辑的行直接展示后端值，前端不再二次推导（两份算法一旦漂移，
+ * 对账单上的数字就会和后端算的不一致）。
+ *
+ * 唯一的例外是行内编辑态：此时后端值尚未更新（`reconcile-update` 要等 Enter 才提交），
+ * 所以当编辑缓冲里的 `unit_price` / `quantity` 与行内原值**确实不同**时用缓冲实时重算，
+ * 让操作员在敲数字的过程中就看到总价变化；缓冲与原值一致（刚双击进入编辑态、还没动）
+ * 时仍走 `row.total_price`，避免 `q * p` 的浮点误差与后端 Decimal 串出现末位对不上。
+ */
 function displayTotalPrice(row: OutsourceSentPartItem): string {
   if (editingId.value === row.shipment_id) {
-    const q = Number(editBuffer.quantity ?? row.quantity ?? 0);
-    const p = Number(editBuffer.unit_price ?? row.unit_price ?? 0);
-    return Number.isFinite(q) && Number.isFinite(p) && q > 0 ? (q * p).toFixed(2) : '—';
+    const bufPrice = editBuffer.unit_price;
+    const bufQty = editBuffer.quantity;
+    const priceChanged = bufPrice !== null && bufPrice !== Number(row.unit_price);
+    const qtyChanged = bufQty !== null && bufQty !== row.quantity;
+    if (priceChanged || qtyChanged) {
+      const p = Number(bufPrice ?? row.unit_price ?? 0);
+      const q = Number(bufQty ?? row.quantity ?? 0);
+      return Number.isFinite(q) && Number.isFinite(p) && q > 0 && p > 0 ? (q * p).toFixed(2) : '—';
+    }
   }
-  if (row.total_price !== null && row.total_price !== undefined) {
-    return row.total_price;
-  }
-  const q = Number(row.quantity ?? 0);
-  const p = Number(row.unit_price ?? 0);
-  return Number.isFinite(q) && Number.isFinite(p) && q > 0 && p > 0 ? (q * p).toFixed(2) : '—';
+  return row.total_price;
 }
 
 // 状态列：OUTSOURCING / RECEIVED
@@ -430,13 +448,14 @@ function rowClassName({ row }: { row: OutsourceSentPartItem }): string {
 }
 
 // 表格底部合计行（总价列求和 + 第一列显示当前页总数）
+// 2026-10-03：求和口径与「总价」列对齐 —— 逐行读 row.total_price（后端单一真源），
+// 不再前端重算 q * p，否则列与合计行会因 Decimal 末位舍入对不上。
 const totalPriceSummary: SummaryMethod<OutsourceSentPartItem> = ({ columns, data }) => {
   return columns.map((col, index) => {
     if (col.label === '总价') {
       const sum = data.reduce((acc, row) => {
-        const q = Number(row.quantity ?? 0);
-        const p = Number(row.unit_price ?? 0);
-        return acc + (Number.isFinite(q) && Number.isFinite(p) ? q * p : 0);
+        const t = Number(row.total_price);
+        return acc + (Number.isFinite(t) ? t : 0);
       }, 0);
       return sum.toFixed(2);
     }

@@ -155,39 +155,8 @@ export interface OutsourceQuoteRejectPayload {
   review_note: string;
 }
 
-/** 「外协发送」列表（ApprovedQuoteForSendItem）—— 2026-07-28 后已被
- * OutsourceSendableItem 取代；保留以兼容旧 API。
- */
-export interface ApprovedQuoteForSendItem {
-  /** 乐观锁版本号（零件 TPart.version）；发送时必须随 SendToOutsourcePayload.version 一同传入（2026-07-28 OCC） */
-  version: number;
-  part_id: string;
-  part_serial_no: string | null;
-  part_drawing_no: string | null;
-  part_name: string | null;
-  quantity: number | null;
-  planned_delivery_date: string | null;
-  is_urgent: boolean;
-  customer_path: string | null;
-  next_process_id: string | null;
-  next_process_name: string | null;
-  outsource_company_id: string;
-  outsource_company_name: string | null;
-  process_id: string;
-  process_name: string | null;
-  price: string;
-  status_label: 'sendable';
-}
-
-export interface ApprovedForSendListResult {
-  items: ApprovedQuoteForSendItem[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
 // ============================================================
-// 统一外协可发送一览（2026-07-28 新增，取代 ApprovedQuoteForSendItem / DirectOutsourceCandidateItem）
+// 统一外协可发送一览（2026-07-28 新增）
 // ============================================================
 
 /** 发送模式：APPROVAL 需审批，DIRECT 无需审批可直发 */
@@ -235,6 +204,10 @@ export interface OutsourceSendableItem {
   company_options: OutsourceCompanyOption[];
   /** APPROVAL 时为该报价的 Decimal 字符串；DIRECT 为 null（直发无报价） */
   price: string | null;
+  /** 2026-10-03 新增：APPROVAL 模式回指的报价 id（雪花 ID 字符串）；DIRECT 为 null。
+   *  发送端点要求 `quote_id` 与 `direct` 必传其一，两者都不传返 400 —— 前端由本字段
+   *  判定模式并组装 payload，字段缺失会把每一行都打回 400。 */
+  quote_id: string | null;
   status_label: 'sendable';
 }
 
@@ -269,7 +242,9 @@ export interface OutsourceSentPartItem {
   quantity: number;
   /** Decimal 字符串；DIRECT 直发自动创建的报价为 "0" */
   unit_price: string;
-  /** Decimal 字符串；unit_price × quantity */
+  /** Decimal 字符串；unit_price × quantity。
+   *  2026-10-03 起后端直出，本字段是对账页「总价」列的**单一真源** —— 非编辑态
+   *  直接展示；仅当行进入编辑态且单价/数量被改过时才由前端用编辑缓冲重算。 */
   total_price: string;
   sent_at: string;
   received_at: string | null;
@@ -306,24 +281,65 @@ export interface OutsourceInFlightItem {
   part_id: string;
   batch_id: string;
   batch_no: number;
+  /** 当前批次**剩余待收量**（部分接收后源批次留余量，本值随之变小），
+   *  不是 shipment 的发出量。 */
   quantity: number;
   serial_no: string | null;
   drawing_no: string | null;
   name: string | null;
+  is_urgent: boolean;
   customer_path: string | null;
   next_process_id: string | null;
   next_process_name: string | null;
-  outsource_company_id: string | null;
+  outsource_company_id: string;
   outsource_company_name: string | null;
-  sent_at: string | null;
-  /** 批次 version（OCC） */
+  /** 开口 shipment 的发出时间（ISO datetime） */
+  sent_at: string;
+  /** t_part_batch.version —— `receive-from-outsource` 的 OCC 锚（**不是** shipment 的
+   *  version；部分接收拆批后源批次 version 会自增，列表每次重取都要带最新值）。 */
   version: number;
-  /** 2026-08-04 新增：所属零件加急标记（前端加急红底用） */
-  is_urgent: boolean;
 }
 
 export interface OutsourceInFlightListResult {
   items: OutsourceInFlightItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+// ============================================================
+// 可报价零件 picker（2026-10-03 契约对齐）
+// ============================================================
+
+/** `GET /outsource-quotes/quotable-parts` 单行。
+ *
+ *  行粒度是「一个 (零件, OUTSOURCE 工序) 组合一行」—— 后端已 DISTINCT ON 去重，
+ *  所以同一零件挂多个外协工序时会出多行，前端**不要**再做 part_id 级去重。
+ *  与 `PartListItem` 的关键差异：显式带 `next_process_id` / `next_process_name`
+ *  （自动填工序所依赖的字段），另有 picker 专用的 `shelf_id` / `shelf_code`。 */
+export interface QuotablePart {
+  id: string;
+  serial_no: string | null;
+  drawing_no: string;
+  name: string;
+  is_urgent: boolean;
+  /** Decimal 字符串（客户下单单价，非外协报价单价） */
+  unit_price: string;
+  customer_id: string;
+  /** L2 客户名 */
+  customer_name: string | null;
+  /** L1 客户名 */
+  l1_customer_name: string | null;
+  customer_path: string | null;
+  shelf_id: string;
+  shelf_code: string;
+  /** 正式字段（后端 VO 显式声明），非必为 OUTSOURCE 类别之外的值 */
+  next_process_id: string;
+  next_process_name: string;
+}
+
+export interface QuotablePartListResult {
+  items: QuotablePart[];
   total: number;
   limit: number;
   offset: number;
