@@ -233,6 +233,13 @@ export function useOutsourceSendableList(
   const sendQuantity = ref<number>(0);
   const sendSubmitting = ref(false);
 
+  /** 两条发送入口（行按钮 `OutsourceSendableTab`、扫码 `handleScannedSerialForSend`）
+   *  唯一的可发送判据 —— 2026-10-03 起扫码路径也必须过它。
+   *
+   *  2026-10-03 契约下 DIRECT 行「工序未映射任何活跃公司」时后端**仍返回该行**
+   *  （`company_options: []`），前端据此置灰；批次的批次状态 / 货架位置 / 工序类别
+   *  其实都是对的，所以提示文案不能只写「状态不满足」——那会把排查方向从
+   *  `t_outsource_company_process` 映射表引向状态机。 */
   function canSend(item: SendableItem): boolean {
     if (item.status_label !== 'sendable') return false;
     if (item.send_mode === 'DIRECT') {
@@ -244,7 +251,10 @@ export function useOutsourceSendableList(
 
   function openSend(item: SendableItem): void {
     if (!canSend(item)) {
-      ElMessage.warning('该零件当前状态不满足发送条件');
+      // 2026-10-03：与行按钮 tooltip 同一套措辞（含「未映射启用的外协公司」一档）。
+      ElMessage.warning(
+        '该零件当前状态 / 位置 / 工序不满足发送条件，或该外协工序未映射启用的外协公司',
+      );
       return;
     }
     sendTarget.value = item;
@@ -351,6 +361,21 @@ export function useOutsourceSendableList(
       );
       return;
     }
+    // 2026-10-03 新增：命中 match 后先过 `canSend`，让扫码路径与行按钮路径
+    // （`OutsourceSendableTab` 的 `v-if="!canSend(row)"` 置灰）共用同一判据。
+    // 上面 find 已按 `status_label === 'sendable'` 过滤，所以这道闸门唯一可达的
+    // 分支是「DIRECT 且 `company_options` 为空」—— 后端把这一档写成**一级场景**
+    // （vo/sendable.rs：空数组时该行仍返回，明写不要在 SQL 里滤掉，好让操作员
+    // 看得见「送不出去」）。此前扫码路径只拦 `length > 1`，空数组一路落到入队 ⇒
+    // `outsource_company_id` 拿到空串 ⇒ 批量发送打后端时 `i64` 反序列化失败、返
+    // 422 纯文本（非业务信封），操作员只看到一串无信息量的批量失败。
+    if (!canSend(match)) {
+      const processLabel = match.current_process_name || match.current_process_id;
+      ElMessage.warning(
+        `${part.serial_no ?? trimmed} 无法直接发送：外协工序「${processLabel}」未映射任何启用的外协公司，请先配置该工序的公司映射`,
+      );
+      return;
+    }
     // 直接发送 + 多公司 → 强制用户先选公司（不让扫码盲目入队）
     if (match.send_mode === 'DIRECT' && match.company_options.length > 1) {
       sendTarget.value = match;
@@ -360,6 +385,8 @@ export function useOutsourceSendableList(
       return;
     }
     // 直接发送 + 单公司 或 APPROVAL → 直接入队
+    // （DIRECT 时 `company_options` 非空由上面的 canSend 闸门保证，下面的 `?? ''`
+    //  只是类型兜底，不会真的产出空串。）
     const companyId: string =
       match.send_mode === 'DIRECT'
         ? (match.company_options[0]?.id ?? '')

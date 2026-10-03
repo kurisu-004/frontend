@@ -15,6 +15,8 @@
 // 是本仓已付出过代价的形态。现在两者共用 buildSendPayload，本文件对**两条路径**都断言。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+// 断言提示文案要用的 ElMessage（下列 vi.mock 已把它桩成 no-op，import 拿到的是桩）。
+import { ElMessage } from 'element-plus';
 
 // node env 下真实 ElMessage 会因 `document is not defined` 污染输出（CLAUDE.md 约定）。
 vi.mock('element-plus', () => ({
@@ -216,6 +218,17 @@ describe('单件发送 onConfirmSend', () => {
 });
 
 describe('扫码批量发送 onConfirmBatchSend', () => {
+  /** 把 row 摆进「当前页」：handleScannedSerialForSend 只在当前页里找 match。 */
+  function stubCurrentPage(inst: UseOutsourceSendableListReturn, row: SendableItem): void {
+    // items 传**裸数组**：模板 ref 拿到的是组件 public instance，Vue 已把
+    // defineExpose 出来的 ref 解包过一层（`.items.value` 恒 undefined）。
+    inst.sendablePagedRef.value = {
+      items: [row],
+      fetch: vi.fn(async () => {}),
+      reset: vi.fn(async () => {}),
+    };
+  }
+
   /** 走一遍扫码入队流程，返回带队列的 composable 实例。 */
   async function enqueueVia(row: SendableItem): Promise<UseOutsourceSendableListReturn> {
     getPartBySerialMock.mockResolvedValue({
@@ -225,14 +238,7 @@ describe('扫码批量发送 onConfirmBatchSend', () => {
       name: row.part_name,
     });
     const inst = useOutsourceSendableList();
-    // 让当前页可读出该行（handleScannedSerialForSend 只在当前页里找 match）。
-    // items 传**裸数组**：模板 ref 拿到的是组件 public instance，Vue 已把
-    // defineExpose 出来的 ref 解包过一层（`.items.value` 恒 undefined）。
-    inst.sendablePagedRef.value = {
-      items: [row],
-      fetch: vi.fn(async () => {}),
-      reset: vi.fn(async () => {}),
-    };
+    stubCurrentPage(inst, row);
     await inst.handleScannedSerialForSend('SN-1');
     expect(inst.sendQueue.value).toHaveLength(1);
     return inst;
@@ -261,6 +267,34 @@ describe('扫码批量发送 onConfirmBatchSend', () => {
     const body = lastBody();
     expect(body.direct).toBe(true);
     expect(body.quote_id).toBeNull();
+  });
+
+  // 后端把「DIRECT 且 company_options 为空」写成一级场景（该行仍返回，前端置灰），
+  // 扫码路径必须与行按钮共用 canSend：否则空数组会入队、`outsource_company_id` 拿到
+  // 空串，批量发送时后端 `i64` 反序列化失败、返 422 纯文本（非业务信封）。
+  it('S11：DIRECT 且 company_options 为空 → 不入队、不弹发送框、发请求', async () => {
+    getPartBySerialMock.mockResolvedValue({
+      id: 'P1',
+      serial_no: 'SN-1',
+      drawing_no: 'DWG-1',
+      name: '零件甲',
+    });
+    const warn = vi.mocked(ElMessage.warning);
+    warn.mockClear();
+
+    const inst = useOutsourceSendableList();
+    stubCurrentPage(inst, directRow({ company_options: [] }));
+    await inst.handleScannedSerialForSend('SN-1');
+
+    expect(inst.sendQueue.value).toHaveLength(0);
+    // 多公司分支会弹选择框；不可发送的行不该走到那一步
+    expect(inst.sendDialogVisible.value).toBe(false);
+    // 提示必须指向真实原因（外协工序未映射公司），不是「状态不满足」那种含糊说法
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('外协公司'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('外协工序'));
+
+    await inst.onConfirmBatchSend();
+    expect(sendToOutsourceMock).not.toHaveBeenCalled();
   });
 });
 

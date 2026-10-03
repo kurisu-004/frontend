@@ -172,7 +172,7 @@
             <template #default="{ row }">
               <el-tooltip
                 v-if="!canSend(row as SendableItem)"
-                content="该零件当前状态 / 位置 / 工序不满足发送条件"
+                content="该零件当前状态 / 位置 / 工序不满足发送条件，或该外协工序未映射启用的外协公司"
                 placement="top"
               >
                 <el-button size="small" disabled>发送</el-button>

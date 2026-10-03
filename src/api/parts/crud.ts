@@ -1013,14 +1013,17 @@ export async function listPartsHeldByWorker(
 // ============================================================
 /** `POST /prod/batches/{batch_id}/send-to-outsource` 入参。
  *
- *  2026-10-03 契约对齐：**`next_process_id` 改名为 `process_id`**（后端 DTO 就是
- *  `process_id`；沿用旧名必然 422）。注意这只是 **body 里的键**改名，列表行上的
- *  字段名 `next_process_id`（`OutsourceSendableItem`）不变。
+ *  2026-10-03 契约对齐：**body 里的 `next_process_id` 改名为 `process_id`**（后端 DTO
+ *  就是 `process_id`；沿用旧名必然 422）。列表行上的字段也已在同一天更名为
+ *  `current_process_id` / `current_process_name`（见 `src/types/outsource.ts`）——
+ *  两者刻意不同名：body 键沿用后端 DTO，行字段是批次当前所属工序。
  *
  *  模式由 `quote_id` / `direct` 二选一表达，**两者都不传后端返 400**：
  *  - APPROVAL（需审批报价）：传 `quote_id`（来自 `OutsourceSendableItem.quote_id`）；
  *  - DIRECT（免审批直发）：传 `direct: true` + `quote_id: null`，后端自动建一条
- *    `price=0` 的 APPROVED 占位报价。
+ *    `price=0` 的 APPROVED 占位报价。DIRECT 行的 `outsource_company_id` 取自
+ *    `company_options`，该工序未映射任何活跃公司时后端仍返回该行但数组为空
+ *    ⇒ 前端必须先过 `canSend` 再入队/提交，否则空串会让后端 `i64` 反序列化失败。
  */
 export interface SendToOutsourcePayload {
   /** 外协公司 id（雪花 ID 字符串） */
