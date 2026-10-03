@@ -219,6 +219,7 @@
        是 readonly prop，本地 @update 把关动作转给 composable 提供的 closeXxx()。 -->
   <el-dialog
     :model-value="drawingPreviewVisible"
+    class="pdf-preview-dialog"
     :title="`图纸预览 — ${drawingPreviewRow?.drawingNo ?? ''}`"
     fullscreen
     destroy-on-close
@@ -257,7 +258,19 @@
         previewing.plannedDeliveryDate
       }}</el-descriptions-item>
       <el-descriptions-item label="图纸" :span="2">
-        <PdfViewer v-if="previewing.drawingUrl" :url="previewing.drawingUrl" :page="1" />
+        <!-- 2026-10-03 修缺陷：此处原内嵌 PdfViewer。el-descriptions-item 渲染成 <td>，
+             处在 720px 预览弹窗的 auto 高度链里，结构上给不出确定高度 —— PdfViewer 的
+             flex 高度链（.pdf-viewer{height:100%} → .canvas-wrap{flex:1} → .pdf-viewport）
+             塌成 0，canvas 被 overflow:hidden 裁掉，画面全白。改为跳本文件已有的
+             全屏图纸预览 dialog（挂 .pdf-preview-dialog，高度契约见 styles/index.scss）。 -->
+        <el-button
+          v-if="previewing.drawingUrl"
+          type="primary"
+          size="small"
+          @click="openDrawingPreview(previewing)"
+        >
+          查看图纸
+        </el-button>
         <span v-else class="muted">未上传</span>
       </el-descriptions-item>
     </el-descriptions>

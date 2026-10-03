@@ -103,3 +103,35 @@ a {
 .el-table__row.current-row > td.el-table__cell {
   background-color: #cce0f4 !important;
 }
+
+/* PdfViewer 承载弹窗的高度契约（2026-10-03 修缺陷：预览画面全白）。
+   PdfViewer 内部是 .pdf-viewer{height:100%} → .canvas-wrap{flex:1} → .pdf-viewport{flex:1;overflow:hidden}
+   的 flex 高度链，要求宿主有确定高度。而 EP 的 .el-dialog__body 是 display:block + height:auto，
+   直接子元素的 height:100% 会退化成 auto，链塌成 0，position:absolute 的 canvas 被 overflow:hidden 裁掉 ——
+   表现是「工具栏在、下面纯白」。故凡用 el-dialog 承载 PdfViewer 处必须挂 .pdf-preview-dialog。
+   注意 el-dialog 与 el-drawer 不对称：EP 的 .el-drawer__body 自带 flex:1，故 el-drawer 无需这条。
+
+   纵向溢出取 auto 而非 hidden（2026-10-03）：滚动兜底必须留着。本规则同时管着
+   PDF / 图片 / 非 PDF / 加载中四个分支，只有 PDF 分支自带滚动容器（.pdf-viewport），
+   其余三个分支的内容高度是自定的（.image-preview-wrap 的 min-height: calc(100vh - 80px)、
+   多行标题），hidden 会把它们裁掉且无从滚动。 */
+.pdf-preview-dialog.el-dialog.is-fullscreen {
+  display: flex;
+  flex-direction: column;
+  /* is-fullscreen 已把 dialog 高度钉到视口，而 header 是 0 0 auto、body 是 1 1 auto +
+     min-height:0，两者之和恒等于可用高度，故正常路径不出现这条滚动条；留 auto 只是给
+     「内容确实装不下」留出路（hidden 下只剩裁切）。 */
+  overflow-y: auto;
+}
+.pdf-preview-dialog.el-dialog.is-fullscreen > .el-dialog__header {
+  flex: 0 0 auto;
+}
+.pdf-preview-dialog.el-dialog.is-fullscreen > .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* 横向显式 hidden：按规范只写 overflow-y 时 overflow-x 会从 visible 计算成 auto，
+     宽于视口的画布会因此多出一条用不上的横向滚动条。 */
+  overflow: hidden auto;
+}

@@ -146,6 +146,7 @@
     <!-- 预览弹窗（全屏）：PDF 用 PdfViewer；图片用 el-image；3D 模型走 StepViewer；其它走下载提示 -->
     <el-dialog
       v-model="previewVisible"
+      class="pdf-preview-dialog"
       :title="previewTitle"
       fullscreen
       :close-on-click-modal="false"

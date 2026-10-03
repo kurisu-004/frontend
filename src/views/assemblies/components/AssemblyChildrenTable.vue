@@ -123,6 +123,7 @@
   <!-- 子件图号直接预览 PDF（全屏） -->
   <el-dialog
     :model-value="drawingPreviewVisible"
+    class="pdf-preview-dialog"
     :title="drawingPreviewFile?.original_filename ?? '图纸预览'"
     fullscreen
     :close-on-click-modal="false"
