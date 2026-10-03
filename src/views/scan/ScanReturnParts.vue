@@ -286,6 +286,7 @@ import { useScanSession } from '@/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
+import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
 import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
@@ -432,7 +433,7 @@ async function refresh(): Promise<void> {
     parts.value = res.items;
     total.value = res.total;
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载持有零件列表失败');
+    ElMessage.error(scanListErrorText(e, '加载持有零件列表失败'));
     parts.value = [];
     total.value = 0;
   } finally {

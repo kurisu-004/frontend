@@ -11,6 +11,11 @@
 
   单行点选即关弹窗（不可改）。卡片按批次号升序展示；显示 batch_no / 数量 /
   当前 holder 文本 / 下一工序。点击 emit('pick')，调用方按业务需要驱动后续动作。
+  ⚠️ 「按批次号升序 / 显示 batch_no」**只对 `views/delivery` 与 `views/inspection`
+  两域成立**：它们的行 VO 带 `batch_no`。`views/scan/` 三域的行是后端 `PartListItem`
+  （无 `batch_no` 键，且经 `scanPartRowSchema` 后该键被 strip）⇒ 这三域的卡片恒显
+  「批次 1」、排序恒为恒等操作。要让报工台也显示批次号，须后端给 `PartListItem`
+  补该字段并在 schema 里声明，详见该 schema 头部的「不声明」清单。
   2026-10-03：行 VO 形态不同时（3 个判据键全不在的窄 VO）meta 行会整行隐藏而不是留一行
   空文案，详见 holderText 的注释（那里按调用方逐一列了 3 种形态）。
 -->
@@ -156,7 +161,12 @@ function holderText(p: BatchPickerRow): string {
 function onPick(row: BatchPickerRow): void {
   // pick 出口仍是跨 3 域共用的 `PartItem`：另两个域的 handler（`onBatchPicked` /
   // `onPickerBatchPicked`）按 `PartItem` 声明，改 emit 载荷会牵动它们的签名。
-  // 各域调用点自己负责把这一行认回本域的行类型。
+  // 各域调用点自己负责把这一行认回本域的行类型（报工台三页入口各做一次
+  // `as unknown as ScanPartRowSchema`）。
+  // 2026-10-04 登记的改进方向：若将来「改 emit 载荷要连带改另两域 handler 签名」
+  // 这条约束解除，优先上 `<script setup generic="T extends BatchPickerRow">` +
+  // `pick: [row: T]`，让出口载荷跟随调用方的行类型（报工台三页的 cast 随之消失），
+  // 而不是继续在调用点加 cast。
   emit('pick', row as unknown as PartItem);
   emit('update:modelValue', false);
 }

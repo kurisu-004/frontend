@@ -126,11 +126,13 @@ export interface PartListResult {
   total: number;
   limit: number;
   offset: number;
-  // 2026-09-25 备注：backend-rust PartListOut 当前走 serialize_i64 → JSON 字符串；
-  // 本 schema 暂保留 number 类型（决定权在 frontend，是 backend-rust 后续要修的契约点）。
+  // 2026-10-04 订正：分页字段的口径以 backend-rust `vo/part.rs::PartListOut` 为准 ——
+  // `total` / `limit` / `offset` 是**裸 i64（无 serialize_with）→ JSON number**；
+  // 走 `serialize_i64` → JSON string 的是雪花 ID 字段，不是这三个计数。
   // 实际接收响应时由 listParts 等 caller 在响应包装层用
-  // @/api/http.normalizeListResult 包一层，把 string 兜底成 number。schema 类型本身
-  // 不变，避免大改所有调用方。
+  // @/api/http.normalizeListResult 包一层（对 number 是恒等、对 string 是兜底归一），
+  // 调用处就不必关心后端实际给的是 string 还是 number。schema 类型本身保持 number，
+  // 避免大改所有调用方。
 }
 
 /** 雪花 ID 字符串（CLAUDE.md §3 — 19 位 > JS Number.MAX_SAFE_INTEGER） */

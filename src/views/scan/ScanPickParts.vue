@@ -269,6 +269,7 @@ import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useActiveShelfSelection } from '@/views/scan/composables/useActiveShelfSelection';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
+import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
 import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
@@ -351,7 +352,11 @@ async function refresh(): Promise<void> {
     parts.value = res.items;
     total.value = res.total;
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载列表失败');
+    ElMessage.error(scanListErrorText(e, '加载列表失败'));
+    // 2026-10-04 补：与另两页 / 徽章的 catch 对齐 —— 刷新失败时列表与计数一起归零，
+    // 否则「共 N 件」会停在上一次成功加载的 total 上、与已清空的列表对不上。
+    parts.value = [];
+    total.value = 0;
   } finally {
     loadingList.value = false;
   }

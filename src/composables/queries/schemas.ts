@@ -1693,6 +1693,13 @@ export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendable
 //   - **不声明** `next_process_id`（后端列表刻意不给，见 VO 内该字段的注释）、
 //     `customer_path` / `shelf_code` / `next_process_name` / `last_inspection_fail_note` /
 //     `current_holder_*` / `worker_name` / `outsource_company_name` —— VO 里根本没有这些键。
+//   - **不声明** `batch_no` / `batch_label`（2026-10-04 补登记）：后端 `PartListItem`
+//     没有这两个键，所以 `BatchPickerDialog` 模板的 `批次{{ row.batch_no ?? 1 }}` 对
+//     报工台三域恒显「批次 1」、`sortedRows` 的批次号升序对这三域是恒等操作。
+//     ⚠️ 这**不是「后端 VO 一贯如此」**：另两域的行 VO 都有批次号
+//     （`DeliveryNoteCandidatePart.batch_no` / `InspectionQueueItem.batch_no`），
+//     报工台是唯一缺的。**要显示批次号必须后端先给 `PartListItem` 补字段**；补了之后
+//     本 schema 不改，键仍会被 strip 掉、UI 仍不显示 —— 这是「不声明」清单的登记意义。
 //   - `location` 必须显式声明（`z.string().nullable()`）：`BatchPickerDialog.holderText`
 //     的判据是「键在不在」(`'location' in p`)，Zod strip 会把未声明的键删掉 ⇒
 //     报工台卡片静默少掉 holder 那一行。

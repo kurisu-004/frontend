@@ -106,6 +106,7 @@ import { Box, Loading, Refresh, User, WarningFilled } from '@element-plus/icons-
 import { listPartsHeldByWorker } from '@/api/parts';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
+import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
 
 const props = withDefaults(
   defineProps<{
@@ -143,7 +144,7 @@ async function fetchHeld(): Promise<void> {
     parts.value = res.items;
     total.value = res.total;
   } catch (e) {
-    errorMsg.value = (e as Error).message ?? '加载失败';
+    errorMsg.value = scanListErrorText(e, '加载失败');
     parts.value = [];
     total.value = 0;
   } finally {
