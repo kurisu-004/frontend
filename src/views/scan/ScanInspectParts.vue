@@ -77,7 +77,9 @@
           <el-icon :size="24"><Box /></el-icon>
           <span class="parts-header-text">我的持有零件</span>
           <el-tag type="info" effect="plain" size="large" class="count-tag">
-            共 {{ parts.length }} 件
+            共 {{ total }} 件<template v-if="total > parts.length"
+              >（显示前 {{ parts.length }} 件）</template
+            >
           </el-tag>
           <el-button :icon="Refresh" circle size="small" @click="refresh" />
         </div>
@@ -86,11 +88,8 @@
         <div v-if="selectedPart && awaitingScan" class="confirm-bar pending-scan">
           <el-icon :size="20" color="#e6a23c"><Aim /></el-icon>
           <span class="confirm-text">
-            已选 <strong>{{ selectedPart.serial_no || selectedPart.drawing_no }}</strong>
-            <el-tag v-if="selectedPart.batch_no" type="info" size="small" effect="plain">
-              批次{{ selectedPart.batch_no }}
-            </el-tag>
-            · {{ selectedPart.name }} · 送检数量 {{ selectedPart.quantity }}
+            已选 <strong>{{ selectedPart.serial_no || selectedPart.drawing_no }}</strong> ·
+            {{ selectedPart.name }} · 送检数量 {{ selectedPart.quantity }}
             · 请<strong>扫描该零件条码</strong>确认送检
           </span>
           <el-button size="small" @click="cancelSelect">取消选择</el-button>
@@ -128,9 +127,6 @@
               <!-- 1) 序列号 + 交期 高优行 -->
               <div class="part-line-top">
                 <span class="serial-no">{{ p.serial_no || p.drawing_no }}</span>
-                <el-tag v-if="p.batch_no" type="info" size="small" effect="plain"
-                  >批次{{ p.batch_no }}</el-tag
-                >
                 <el-tag
                   v-if="p.is_urgent"
                   type="danger"
@@ -139,28 +135,24 @@
                   class="urgent-pulse"
                   >加急</el-tag
                 >
+                <!-- 2026-10-04：planned_delivery_date 的后端占位符 '1970-01-01'
+                     已在 scanPartRowSchema 归一成 null；两个日期都为 null 时整个
+                     chip 不渲染（否则只剩一个日历图标的空壳）。 -->
                 <DeliveryDateChip
+                  v-if="p.planned_delivery_date || p.system_delivery_date"
                   :planned-delivery-date="p.planned_delivery_date"
                   :system-delivery-date="p.system_delivery_date"
                 />
               </div>
 
-              <!-- 2) 名称 + 客户 -->
+              <!-- 2) 名称 -->
               <div class="part-line-name">
                 <span class="part-name">{{ p.name }}</span>
-                <span v-if="p.customer_path" class="customer">· {{ p.customer_path }}</span>
               </div>
 
-              <!-- 3) 数量 + 货架码 + 下一工序 -->
+              <!-- 3) 数量 -->
               <div class="part-line-bottom">
                 <span class="qty">× {{ p.quantity }}</span>
-                <span class="shelf-code-wrap">
-                  <el-icon><Box /></el-icon>
-                  <span>{{ p.shelf_code || '未上架' }}</span>
-                </span>
-                <span v-if="p.next_process_name" class="next-process">
-                  · 下一工序：{{ p.next_process_name }}
-                </span>
               </div>
             </div>
           </el-card>
@@ -284,6 +276,7 @@ import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
 import { listPartsHeldByWorker, workerScan, type PartItem } from '@/api/parts';
+import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import ShelfPickerDialog from '@/views/scan/components/ShelfPickerDialog.vue';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
@@ -294,11 +287,13 @@ const { worker, requireWorker, reset: resetScanSession } = useScanSession();
 const { onScan } = useBarcodeScanner();
 const { emitHeldChanged } = useScanBus();
 
-const parts = ref<PartItem[]>([]);
+const parts = ref<ScanPartRowSchema[]>([]);
+// 后端信封里的总条数（可能大于已加载的 parts.length —— 见 refresh 里的 limit 说明）
+const total = ref(0);
 // 「系统交期」硬优先级 + 原 is_urgent / planned_delivery_date 排序；详见 composable 注释
 const sortedParts = useScanPartsSort(parts);
 const loadingList = ref(false);
-const selectedPart = ref<PartItem | null>(null);
+const selectedPart = ref<ScanPartRowSchema | null>(null);
 // 点选卡片后进入「待扫码确认」状态；扫到匹配条码才弹送检货架 picker
 const awaitingScan = ref(false);
 
@@ -308,7 +303,7 @@ const submitting = ref(false);
 // --- 预览状态 ---
 const showPreview = ref(false);
 const previewLoading = ref(false);
-const previewPart = ref<PartItem | null>(null);
+const previewPart = ref<ScanPartRowSchema | null>(null);
 const previewFile = ref<PartFileItem | null>(null);
 const previewBlobUrl = ref<string>('');
 // 防竞态：每次开预览自增，老请求响应直接丢弃
@@ -338,7 +333,7 @@ const pendingShelfId = ref<string>('');
 // --- 多批次扫码命中弹窗 ---
 const showBatchPicker = ref(false);
 const batchPickerCode = ref('');
-const batchPickerRows = ref<PartItem[]>([]);
+const batchPickerRows = ref<ScanPartRowSchema[]>([]);
 
 onBeforeMount(async () => {
   if (!requireWorker(router)) return;
@@ -358,7 +353,7 @@ async function scrollCardIntoView(batchKey: string): Promise<void> {
 }
 
 /** INSPECT tail：选中 + 清 awaitingScan + 滚动 + 开品检货架选择弹窗 */
-async function applyScanSelection(p: PartItem): Promise<void> {
+async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
   selectedPart.value = p;
   selectedQty.value = p.quantity;
   awaitingScan.value = false;
@@ -385,8 +380,11 @@ async function onScanToSelect(rawCode: string): Promise<void> {
 }
 
 function onBatchPicked(p: PartItem): void {
+  // 2026-10-04：BatchPickerDialog 的 pick emit 载荷是跨 3 域共用的 PartItem 契约
+  // （本组件的 props 才是本域最小结构型 BatchPickerRow），本页实际传进去的行是
+  // scanPartRowSchema ⇒ 入口做一次窄化转换。
   showBatchPicker.value = false;
-  void applyScanSelection(p);
+  void applyScanSelection(p as unknown as ScanPartRowSchema);
 }
 
 // 全局扫码订阅：扫描直接触发 onScanToSelect
@@ -403,10 +401,15 @@ async function refresh(): Promise<void> {
   if (!worker.value?.id) return;
   loadingList.value = true;
   try {
-    parts.value = await listPartsHeldByWorker(String(worker.value.id));
+    // 2026-10-04：端点返回分页信封，取 `.items`；显式传 limit=200（后端 clamp
+    // 上限）取全 —— 不传时后端默认只返 50 条，持有件列表会静默截断。
+    const res = await listPartsHeldByWorker(String(worker.value.id), { limit: 200 });
+    parts.value = res.items;
+    total.value = res.total;
   } catch (e) {
     ElMessage.error((e as Error).message ?? '加载持有零件列表失败');
     parts.value = [];
+    total.value = 0;
   } finally {
     loadingList.value = false;
   }
@@ -416,13 +419,13 @@ async function refresh(): Promise<void> {
 const selectedQty = ref<number | undefined>(undefined);
 
 /** 2026-07-29 批次化：行=批次，选中比较按 batch_id */
-function sameBatch(a: PartItem | null, b: PartItem): boolean {
+function sameBatch(a: ScanPartRowSchema | null, b: ScanPartRowSchema): boolean {
   if (!a) return false;
   if (a.batch_id && b.batch_id) return a.batch_id === b.batch_id;
   return a.id === b.id;
 }
 
-function onSelect(p: PartItem): void {
+function onSelect(p: ScanPartRowSchema): void {
   if (submitting.value) return;
   // 取消选中（已选同一件 → 反选）
   if (sameBatch(selectedPart.value, p)) {
@@ -435,7 +438,7 @@ function onSelect(p: PartItem): void {
 }
 
 // --- 预览 ---
-async function onPreview(p: PartItem): Promise<void> {
+async function onPreview(p: ScanPartRowSchema): Promise<void> {
   previewPart.value = p;
   showPreview.value = true;
   previewLoading.value = true;
@@ -778,10 +781,6 @@ function backToBadge(): void {
   font-weight: 500;
   color: #303133;
 }
-.customer {
-  color: #909399;
-  font-size: 13px;
-}
 
 .part-line-bottom {
   display: flex;
@@ -795,15 +794,6 @@ function backToBadge(): void {
   color: #e6a23c;
   font-weight: 700;
   font-size: 15px;
-}
-.shelf-code-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: #909399;
-}
-.next-process {
-  color: #67c23a;
 }
 
 .is-loading {

@@ -4,7 +4,9 @@
   扫码台「已持有 N 件」徽章卡 + 右侧抽屉（2026-07-17 改造）。
 
   行为：
-  - 顶栏触发按钮：「已持有 N 件」(N=0 时灰色；N>=1 时主色 + 计数 badge)
+  - 顶栏触发按钮：「已持有 N 件」(N = 已加载条数；N=0 时灰色；N>=1 时主色 + 计数 badge)。
+    2026-10-04：列表端点返回分页信封，N 取 `.items.length`（已加载），抽屉里另标
+    「共 M 件」= 信封 total；两者不等即表示受后端 limit 截断（不再谎称是全部）。
   - 点击打开 el-drawer（右侧 rtl，size=400px），列出当前 worker 持有件
   - 监听 useScanBus 的 heldVersion：领取/放回/送检后自动刷新
   - autoOpenOnChange=true 时：持有件变化后自动打开 drawer，让工人确认领取结果
@@ -43,7 +45,11 @@
         <span class="held-subtitle">
           <el-icon><User /></el-icon>
           <span>{{ workerId ? '当前工人' : '未识别' }}</span>
-          <span class="held-count-inline">共 {{ count }} 件</span>
+          <span class="held-count-inline"
+            >已加载 {{ count }} 件<template v-if="total > count"
+              >（共 {{ total }} 件）</template
+            ></span
+          >
         </span>
         <el-button size="small" link :loading="loading" @click="fetchHeld">
           <el-icon><Refresh /></el-icon>
@@ -74,15 +80,12 @@
             <span class="held-drawing">{{ p.drawing_no }}</span>
           </div>
           <div class="held-row-name">{{ p.name }}</div>
-          <div class="held-row-sub">
-            <el-tag v-if="p.next_process_name" size="small" type="info" effect="plain">
-              下一工序：{{ p.next_process_name }}
-            </el-tag>
-            <el-tag v-else size="small" type="warning" effect="plain"> 未选工序 </el-tag>
-            <el-tag v-if="p.shelf_code" size="small" effect="plain">
-              货架 {{ p.shelf_code }}
-            </el-tag>
-            <span v-if="p.is_urgent" class="urgent-tag">加急</span>
+          <!-- 2026-10-04：本行 VO 是后端 PartListItem，没有 next_process_name /
+               shelf_code 键（后端列表刻意不返 next_process_id，也没有货架码派生），
+               「下一工序 / 货架」两个 tag 恒不显示、「未选工序」恒显示，是假话 ⇒ 删除。
+               加急是本行唯一还有意义的副信息，没有它时整块不渲染。 -->
+          <div v-if="p.is_urgent" class="held-row-sub">
+            <span class="urgent-tag">加急</span>
           </div>
         </div>
       </div>
@@ -101,7 +104,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Box, Loading, Refresh, User, WarningFilled } from '@element-plus/icons-vue';
 import { listPartsHeldByWorker } from '@/api/parts';
-import type { PartItem } from '@/api/parts';
+import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 
 const props = withDefaults(
@@ -120,7 +123,9 @@ const props = withDefaults(
 const { onHeldChanged } = useScanBus();
 
 const drawerVisible = ref(false);
-const parts = ref<PartItem[]>([]);
+const parts = ref<ScanPartRowSchema[]>([]);
+// 后端信封里的总条数；count 是「已加载」的条数，两者不等说明列表被 limit 截断
+const total = ref(0);
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
 let offBus: (() => void) | null = null;
@@ -132,10 +137,15 @@ async function fetchHeld(): Promise<void> {
   loading.value = true;
   errorMsg.value = null;
   try {
-    parts.value = await listPartsHeldByWorker(props.workerId);
+    // 2026-10-04：端点返回分页信封，取 `.items`；显式传 limit=200（后端 clamp
+    // 上限）取全 —— 不传时后端默认只返 50 条，徽章计数会静默少报。
+    const res = await listPartsHeldByWorker(props.workerId, { limit: 200 });
+    parts.value = res.items;
+    total.value = res.total;
   } catch (e) {
     errorMsg.value = (e as Error).message ?? '加载失败';
     parts.value = [];
+    total.value = 0;
   } finally {
     loading.value = false;
   }

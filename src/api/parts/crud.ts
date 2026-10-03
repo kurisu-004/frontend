@@ -15,7 +15,11 @@
 // （api/programming.ts）。本文件不再 import partListResultSchema（随该函数一并移除）。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
-import { repairBatchListResultSchema } from '@/composables/queries/schemas';
+import {
+  repairBatchListResultSchema,
+  scanPartListResultSchema,
+  type ScanPartListResultSchema,
+} from '@/composables/queries/schemas';
 import type {
   LocationTreeNode,
   OrderStatus,
@@ -74,7 +78,10 @@ export interface PartItem {
   /** 2026-07-29 批次化；2026-10-03 订正填充口径：**全仓仅
    *  `GET /api/v2/parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）
    *  填**，其余复用本 VO 的端点恒 null（后端刻意不填，理由见下面 `batch_version`
-   *  的注释）。「品检待办」不走本 VO（它有自己的出参），故不再算作填充方。 */
+   *  的注释）。「品检待办」不走本 VO（它有自己的出参），故不再算作填充方。
+   *  2026-10-04 补：取件路径上这两个字段的**运行时守门**是
+   *  `src/composables/queries/schemas.ts` 的 `scanPartRowSchema`（两个报工台列表
+   *  函数的出参都走它 `.parse()`）；改名义务集中登记在下面 `batch_version` 段。 */
   batch_id?: string | null;
   batch_no?: number | null;
   batch_label?: string | null;
@@ -100,20 +107,17 @@ export interface PartItem {
    *  keyword_pat / customer_id / limit / offset），出参也是自有 VO
    *  （`QuotablePartListOut` / `OutsourceSendableListOut` / …），既不复用
    *  `PartListFilters` 也不经过本 VO。
-   *  `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参即取自本字段，缺失时
-   *  扫码台走显式报错（不静默用 part_id 顶替）。
+   *    `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参即取自本字段，缺失时
+   *    扫码台走显式报错（不静默用 part_id 顶替）。
    *
-   *  ⚠️ **改名义务**（沿用本仓既有惯例，参照
-   *  `src/composables/queries/schemas.ts` 里 pendingProgrammingItemSchema 的
-   *  batch_id 登记）：**扫码台这条路径没有任何 Zod 闸门** ——
-   *  `listPartsByWorkTypeAllShelves`（本文件下方）是裸 `api.get<PartItem[]>`，
-   *  不过 partSchema 也不经过任何 `.parse()`。所以后端换字段名（`batch_ids` 复数 /
-   *  嵌套结构）时**没有 strip 兜底、也没有 ZodError 兜底**，字段会直接以 undefined
-   *  流到视图层，唯一症状是 `ScanPickParts` 弹「批次信息缺失」——那句文案同时变成
-   *  假话，看不出是契约漂移。
-   *  **后端换名时必须同步改：本注释所在的 `PartItem.batch_id` 与 `batch_version`
-   *  两行 + `ScanPickParts.vue` 的 `PICK_UP_NO_BATCH_HINT` 缺字段守卫 +
-   *  `src/composables/queries/schemas.ts` 的 partSchema 同名字段。** */
+   *    ⚠️ **改名义务**（沿用本仓既有惯例）：后端换字段名（`batch_ids` 复数 / 嵌套结构）
+   *    时，**取件这条路径的运行时守门在 `src/composables/queries/schemas.ts` 的
+   *    `scanPartRowSchema`**（本 VO 的 `batch_id` / `batch_version` 都声明成
+   *    必填 + 可空，不声明成 `.optional()`）—— 键消失会让 Zod parse 当场抛错，
+   *    而不是让字段以 undefined 流到视图层、只弹一句「批次锚点缺失」这种看不出
+   *    真因的提示。**后端换名时必须同步改：本注释所在的 `PartItem.batch_id` 与
+   *    `batch_version` 两行 + `scanPartRowSchema` 的同名字段 +
+   *    `ScanPickParts.vue` 的 `PICK_UP_NO_BATCH_HINT` 缺字段守卫。** */
   batch_version?: number | null;
 }
 
@@ -949,26 +953,56 @@ export async function listPartsByWorkType(
 
 /**
  * 共享 HMI PICK_UP 跨架列表（2026-07-10）。
- * 列出**所有**生产货架上、该工种可领的零件。
- * 排序与 `listPartsByWorkType` 一致。
- * 2026-09-16 PR-2：出参不再含 part 级 current_holder_id（t_part 瘦身），
- * 扫码提交货架由 useActiveShelfSelection 的选中架兜底。
+ * `GET /parts/pickable-by-work-type/{work_type_id}`
+ *
+ * 2026-10-04 契约修正：返回的是**分页信封**（后端 `PartListOut`：items / total /
+ * limit / offset），不是裸数组；行 VO 是 `PartListItem`（**不是** `PartDetailOut`）。
+ * 调用方必须取 `.items`，否则 `useScanPartsSort` 的 `[...list]` 抛 TypeError，
+ * 取件页整页渲染失败。
+ *
+ * 分页参数（后端 `PickableByWorkTypeQuery` = `ByWorkTypeQuery`）：
+ *   - `limit`：后端 `unwrap_or(50).clamp(1, 200)` —— **不传默认只返 50 条**，
+ *     当「全部」用会静默截断；要拿全就显式传 200（clamp 上限）。
+ *   - `offset`：`unwrap_or(0).max(0)`。
+ *
+ * ⚠️ 行 VO 里有一批 service 层写死的占位值（`planned_delivery_date` / `request_date`
+ * 写死 `1970-01-01`、`is_urgent` 写死 false、`applicant_name` 写死空串、
+ * `system_delivery_date` 恒 null、`customer_id` 写死 0、`status` 写死 `IN_PROCESS`、
+ * `version` 写死 0），两个日期占位符在 `scanPartRowSchema` 的 transform 里归一成
+ * `null`。详见该 schema 的注释。
  */
-export async function listPartsByWorkTypeAllShelves(workTypeId: string): Promise<PartItem[]> {
-  const resp = await api.get<PartItem[]>(
+export async function listPartsByWorkTypeAllShelves(
+  workTypeId: string,
+  params: { limit?: number; offset?: number } = {},
+): Promise<ScanPartListResultSchema> {
+  const resp = await api.get<unknown>(
     `/parts/pickable-by-work-type/${encodeURIComponent(workTypeId)}`,
+    { params: cleanParams(params) },
   );
-  return resp.data;
+  return scanPartListResultSchema.parse(
+    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
+  );
 }
 
 /**
- * 扫码台 RETURN 列表：列出某工人当前持有的所有零件（2026-07-10 新流程）。
- * 排序：加急优先 → 临期优先 → id 降序。
- * 入参 workerId 是雪花 ID 字符串。
+ * 扫码台 RETURN / INSPECT 列表：列出某工人当前持有的所有零件。
+ * `GET /parts/by-worker/{worker_id}`（入参 workerId 是雪花 ID 字符串）
+ *
+ * 2026-10-04 契约修正：同 `listPartsByWorkTypeAllShelves`，返回分页信封
+ * `PartListOut`、行 VO 是 `PartListItem`；`limit` / `offset` 语义同上（后端
+ * `ByWorkerQuery`，默认 50、上限 200）。该端点**不填**批次锚点（`batch_id` /
+ * `batch_version` 恒 null），与取件端点相反。
  */
-export async function listPartsHeldByWorker(workerId: string): Promise<PartItem[]> {
-  const resp = await api.get<PartItem[]>(`/parts/by-worker/${encodeURIComponent(workerId)}`);
-  return resp.data;
+export async function listPartsHeldByWorker(
+  workerId: string,
+  params: { limit?: number; offset?: number } = {},
+): Promise<ScanPartListResultSchema> {
+  const resp = await api.get<unknown>(`/parts/by-worker/${encodeURIComponent(workerId)}`, {
+    params: cleanParams(params),
+  });
+  return scanPartListResultSchema.parse(
+    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
+  );
 }
 
 // ============================================================

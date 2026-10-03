@@ -84,7 +84,9 @@
           <el-icon :size="24"><Box /></el-icon>
           <span class="parts-header-text">可领件列表</span>
           <el-tag type="info" effect="plain" size="large" class="count-tag">
-            共 {{ parts.length }} 件
+            共 {{ total }} 件<template v-if="total > parts.length"
+              >（显示前 {{ parts.length }} 件）</template
+            >
           </el-tag>
           <el-button :icon="Refresh" circle size="small" @click="refresh" />
         </div>
@@ -92,13 +94,9 @@
         <div v-if="selectedPart" class="confirm-bar">
           <el-icon :size="20" color="#409eff" class="is-loading"><Aim /></el-icon>
           <span class="confirm-text">
-            已选 <strong>{{ selectedPart.serial_no || selectedPart.drawing_no }}</strong>
-            <el-tag v-if="selectedPart.batch_no" type="info" size="small" effect="plain">
-              批次{{ selectedPart.batch_no }}
-            </el-tag>
-            · {{ selectedPart.name }} · 当前所在 {{ selectedPart.shelf_code || '?' }} · 数量
-            {{ selectedPart.quantity }}
-            · 请扫描该零件的序列号条码确认
+            已选 <strong>{{ selectedPart.serial_no || selectedPart.drawing_no }}</strong> ·
+            {{ selectedPart.name }} · 数量 {{ selectedPart.quantity }} ·
+            请扫描该零件的序列号条码确认
           </span>
           <el-button size="small" @click="cancelSelect">取消选择</el-button>
         </div>
@@ -114,7 +112,6 @@
               {
                 'is-selected': sameBatch(selectedPart, p),
                 'is-urgent': p.is_urgent,
-                'is-inspection-failed': !!p.last_inspection_fail_note,
               },
             ]"
             @click="onSelect(p)"
@@ -136,9 +133,6 @@
               <!-- 1) 序列号 + 交期 高优行 -->
               <div class="part-line-top">
                 <span class="serial-no">{{ p.serial_no || p.drawing_no }}</span>
-                <el-tag v-if="p.batch_no" type="info" size="small" effect="plain"
-                  >批次{{ p.batch_no }}</el-tag
-                >
                 <el-tag
                   v-if="p.is_urgent"
                   type="danger"
@@ -147,40 +141,25 @@
                   class="urgent-pulse"
                   >加急</el-tag
                 >
-                <el-tag
-                  v-if="p.last_inspection_fail_note"
-                  type="warning"
-                  size="small"
-                  effect="dark"
-                  class="fail-pulse"
-                  >品检打回</el-tag
-                >
+                <!-- 2026-10-04：后端这两个 service 把 planned_delivery_date 写死
+                     '1970-01-01'（占位），已在 scanPartRowSchema 的 transform 里
+                     归一成 null；两个日期都为 null 时整个 chip 不渲染（否则会留下
+                     一个只含日历图标的空壳）。 -->
                 <DeliveryDateChip
+                  v-if="p.planned_delivery_date || p.system_delivery_date"
                   :planned-delivery-date="p.planned_delivery_date"
                   :system-delivery-date="p.system_delivery_date"
                 />
               </div>
 
-              <!-- 2) 名称 + 客户 -->
+              <!-- 2) 名称 -->
               <div class="part-line-name">
                 <span class="part-name">{{ p.name }}</span>
-                <span v-if="p.customer_path" class="customer">· {{ p.customer_path }}</span>
               </div>
 
-              <!-- 2.5) 2026-07-21：品检打回备注（仅 last_inspection_fail_note 非空时显示） -->
-              <div v-if="p.last_inspection_fail_note" class="inspection-fail-note">
-                <el-icon class="fail-note-icon"><Warning /></el-icon>
-                <span class="fail-note-label">品检备注</span>
-                <span class="fail-note-text">{{ p.last_inspection_fail_note }}</span>
-              </div>
-
-              <!-- 3) 数量 + 货架码 -->
+              <!-- 3) 数量 -->
               <div class="part-line-bottom">
                 <span class="qty">× {{ p.quantity }}</span>
-                <span class="shelf-code-wrap">
-                  <el-icon><Box /></el-icon>
-                  <span>{{ p.shelf_code || '未上架' }}</span>
-                </span>
               </div>
             </div>
           </el-card>
@@ -294,6 +273,7 @@ import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
 import { listPartsByWorkTypeAllShelves, pickUpPart, type PartItem } from '@/api/parts';
+import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
@@ -308,25 +288,27 @@ const { emitHeldChanged } = useScanBus();
 const shelfSel = useActiveShelfSelection();
 
 const shelfId = ref<string>('');
-const parts = ref<PartItem[]>([]);
+const parts = ref<ScanPartRowSchema[]>([]);
+// 后端信封里的总条数（可能大于已加载的 parts.length —— 见 refresh 里的 limit 说明）
+const total = ref(0);
 // 「系统交期」硬优先级 + 原 is_urgent / planned_delivery_date 排序；详见 composable 注释
 const sortedParts = useScanPartsSort(parts);
 
 const contentRef = ref<HTMLElement | null>(null);
 const loadingList = ref(false);
-const selectedPart = ref<PartItem | null>(null);
+const selectedPart = ref<ScanPartRowSchema | null>(null);
 const submitting = ref(false);
 const showQtyDialog = ref(false);
 
 // --- 多批次扫码命中弹窗状态 ---
 const showBatchPicker = ref(false);
 const batchPickerCode = ref('');
-const batchPickerRows = ref<PartItem[]>([]);
+const batchPickerRows = ref<ScanPartRowSchema[]>([]);
 
 // --- 预览状态 ---
 const showPreview = ref(false);
 const previewLoading = ref(false);
-const previewPart = ref<PartItem | null>(null);
+const previewPart = ref<ScanPartRowSchema | null>(null);
 const previewFile = ref<PartFileItem | null>(null);
 const previewBlobUrl = ref<string>('');
 // 防竞态：每次开预览自增，老请求响应直接丢弃
@@ -362,9 +344,12 @@ async function refresh(): Promise<void> {
   if (!worker.value?.work_type_id) return;
   loadingList.value = true;
   try {
-    // 跨架列表（后端 api/v1/part.py::list_pickable_parts_by_work_type_all_shelves
-    // 已按 user.shelf_ids 收口；scoped SHELF_ACCOUNT 只看到自己绑定的架上的件）
-    parts.value = await listPartsByWorkTypeAllShelves(worker.value.work_type_id);
+    // 跨架列表（后端已按 user.shelf_ids 收口；scoped SHELF_ACCOUNT 只看到自己绑定的
+    // 架上的件）。2026-10-04：端点返回分页信封，取 `.items`；显式传 limit=200（后端
+    // clamp 上限）取全 —— 不传时后端默认只返 50 条，列表会静默截断。
+    const res = await listPartsByWorkTypeAllShelves(worker.value.work_type_id, { limit: 200 });
+    parts.value = res.items;
+    total.value = res.total;
   } catch (e) {
     ElMessage.error((e as Error).message ?? '加载列表失败');
   } finally {
@@ -375,13 +360,13 @@ async function refresh(): Promise<void> {
 const selectedQty = ref<number | undefined>(undefined);
 
 /** 2026-07-29 批次化：行=批次，选中比较按 batch_id（无批次信息退回 part id） */
-function sameBatch(a: PartItem | null, b: PartItem): boolean {
+function sameBatch(a: ScanPartRowSchema | null, b: ScanPartRowSchema): boolean {
   if (!a) return false;
   if (a.batch_id && b.batch_id) return a.batch_id === b.batch_id;
   return a.id === b.id;
 }
 
-function onSelect(p: PartItem): void {
+function onSelect(p: ScanPartRowSchema): void {
   if (submitting.value) return;
   // 取消选中（已选同一件 → 反选）
   if (sameBatch(selectedPart.value, p)) {
@@ -399,7 +384,7 @@ function cancelSelect(): void {
 }
 
 // --- 预览 ---
-async function onPreview(p: PartItem): Promise<void> {
+async function onPreview(p: ScanPartRowSchema): Promise<void> {
   previewPart.value = p;
   showPreview.value = true;
   previewLoading.value = true;
@@ -472,7 +457,7 @@ async function scrollCardIntoView(batchKey: string): Promise<void> {
 }
 
 /** PICK tail：选中 + 滚动 + 校验 shelf_id + 开数量弹窗 */
-async function applyScanSelection(p: PartItem): Promise<void> {
+async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
   selectedPart.value = p;
   selectedQty.value = p.quantity;
   const key = String(p.batch_id || p.id);
@@ -506,8 +491,11 @@ async function onScanToSelect(rawCode: string): Promise<void> {
 }
 
 function onBatchPicked(p: PartItem): void {
+  // 2026-10-04：BatchPickerDialog 的 pick emit 载荷是跨 3 域共用的 PartItem 契约
+  // （本组件的 props 才是本域最小结构型 BatchPickerRow），本页实际传进去的行是
+  // scanPartRowSchema ⇒ 入口做一次窄化转换。
   showBatchPicker.value = false;
-  void applyScanSelection(p);
+  void applyScanSelection(p as unknown as ScanPartRowSchema);
 }
 
 const unsub = onScan((code) => {
@@ -739,24 +727,6 @@ function backToBadge(): void {
   box-shadow: 0 0 0 2px #67c23a inset;
 }
 
-/* 2026-07-21：品检打回件 —— 橙色边框 + 浅橙背景；与加急红、加急选中绿视觉区分 */
-.part-row.is-inspection-failed {
-  background: #fdf6ec;
-  border-color: #e6a23c;
-  border-left-color: #e6a23c;
-}
-.part-row.is-inspection-failed.is-selected {
-  background: #fdf6ec;
-  border-color: #67c23a;
-  box-shadow: 0 0 0 2px #67c23a inset;
-}
-/* 加急 + 品检打回同时命中 → 加急样式优先（红底），但保留橙色左边框作为"打回"标识 */
-.part-row.is-urgent.is-inspection-failed {
-  background: #fef0f0;
-  border-color: #f56c6c;
-  border-left: 4px solid #e6a23c;
-}
-
 .part-row-main {
   display: flex;
   flex-direction: column;
@@ -797,10 +767,6 @@ function backToBadge(): void {
   font-weight: 500;
   color: #303133;
 }
-.customer {
-  color: #909399;
-  font-size: 13px;
-}
 
 .part-line-bottom {
   display: flex;
@@ -814,12 +780,6 @@ function backToBadge(): void {
   color: #409eff;
   font-weight: 700;
   font-size: 15px;
-}
-.shelf-code-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: #909399;
 }
 
 .is-loading {
@@ -845,48 +805,6 @@ function backToBadge(): void {
 }
 .urgent-pulse {
   animation: urgentPulse 1.2s ease-in-out infinite;
-}
-
-/* 2026-07-21：品检打回备注卡片 —— 浅橙底 + 深橙文字（与「快要到期」chip 同色系） */
-.inspection-fail-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: 4px;
-  padding: 6px 10px;
-  background: rgba(230, 162, 60, 0.1);
-  border: 1px solid #faecd8;
-  border-radius: 4px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: #8a5a1f;
-  word-break: break-all;
-}
-.inspection-fail-note .fail-note-icon {
-  color: #e6a23c;
-  font-size: 14px;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.inspection-fail-note .fail-note-label {
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.inspection-fail-note .fail-note-text {
-  flex: 1;
-  min-width: 0;
-}
-@keyframes failPulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.7;
-  }
-}
-.fail-pulse {
-  animation: failPulse 1.6s ease-in-out infinite;
 }
 
 .preview-loading {
