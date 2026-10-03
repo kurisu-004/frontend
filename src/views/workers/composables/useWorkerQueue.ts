@@ -24,6 +24,12 @@
 //     无法确定受影响 processId（service 从 batch 当前 step 自推目标工序，一个
 //     auto-allocate 可同时动多个 worker），精确失效必然漏刷。
 //
+// 2026-10-03 补齐 WORKER→WORKER 方向：此前 moveMutation 存在但只有 POOL→WORKER
+// 与 WORKER→POOL 两个包装函数，工人之间转交（把 A 手中的批次拖到 B 手中）在前端
+// **零实现** —— 拖拽落点列的 onDragAdd 拿不到工人源就早退，不发请求也不失效，
+// 表现为「B 列凭空多一张卡、A 列永久少一张」；且全局 refetchOnWindowFocus=false，
+// 只能手点刷新恢复。
+//
 // 历史：
 // - 2026-08-26：阶段一，全部走 fixture。
 // - 2026-09-14：5 个端点切真。
@@ -69,6 +75,14 @@ export interface UseWorkerQueueReturn {
   /** WORKER → POOL：把工人持有的批次撤回候选池货架。
    *  @param toShelfId 目标货架（须映射到 batch 当前工序，否则 20507 / HTTP 422） */
   moveBatchToPool: (batchId: string, fromWorkerId: string, toShelfId: string) => Promise<boolean>;
+  /** 2026-10-03 新增 WORKER → WORKER：把一名工人手中的批次转交给另一名。
+   *  落点列的 onDragAdd 在「拿不到候选池源」时走这条路径（从自己那一列拖回自己
+   *  不发请求，故本函数不校验 from ≠ to，调用方负责）。 */
+  moveBatchBetweenWorkers: (
+    batchId: string,
+    fromWorkerId: string,
+    toWorkerId: string,
+  ) => Promise<boolean>;
   /** 按 process + shelf 范围自动为每个匹配 worker 抢批次数/工时。 */
   runAutoAllocate: (req: AutoAllocateRequest) => Promise<void>;
 }
@@ -91,22 +105,26 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
    *  mutationFn 走 `moveResultSchema.parse()` 守门：MoveResult 的
    *  current_held / max_held / shelf_id / taken 四字段在 rust 侧都带
    *  `skip_serializing_if`（条件不满足时整个字段从 JSON 省略），schema 用
-   *  `.nullish()` 兜住；契约漂移立刻抛 ZodError 由 onError 接管。 */
+   *  `.nullish()` 兜住；契约漂移立刻抛 ZodError 由 onError 接管。
+   *
+   *  2026-10-03：onError 也失效 pool 三域。**失败即与服务器对账一次**——本域的
+   *  Sortable 容器退化为「纯投放信号源」：拖拽时 Sortable 已经把被拖节点**物理搬进**
+   *  落点容器，而 DOM 一律要靠 query refetch 后的 Vue 渲染覆盖回来。成功路径有
+   *  invalidate 兜底，失败路径若只弹 toast 不重拉，那次错位的 DOM 就永远留在屏幕上
+   *  （A 列少一张 / B 列多一张），用户只能手点「刷新」。高频触发场景：工人容量超限
+   *  20204、工种不含该批次工序、撤回目标货架未映射该工序 20507、OCC 409。 */
   const moveMutation = useMutation<MoveResultDto, Error, MoveRequest>({
     mutationKey: ['worker-pool', 'move'],
     mutationFn: async (req) => moveResultSchema.parse(await moveBatch(req)),
     onSuccess: async (res) => {
       await invalidatePoolDomains();
       error.value = null;
-      ElMessage.success(
-        res.to_kind === 'WORKER'
-          ? `已分配批次 ${res.taken?.batch_no ?? ''}`.trim()
-          : '已撤回批次至候选池',
-      );
+      ElMessage.success(moveSuccessText(res));
     },
-    onError: (e: Error) => {
+    onError: async (e: Error) => {
       error.value = e.message ?? '移动批次失败';
       ElMessage.error(e.message ?? '移动批次失败');
+      await invalidatePoolDomains();
     },
   });
 
@@ -122,6 +140,16 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
       ElMessage.error(e.message ?? '自动分配失败');
     },
   });
+
+  /** 2026-10-03：成功 toast 文案按方向分。WORKER→WORKER 不带批次号：后端
+   *  `MoveResult.taken` 只在 POOL→WORKER 时填（契约见 api/workerPool.contract.ts），
+   *  转交方向拿不到 batch_no，硬拼只会得到一个空的「已转交批次 」。 */
+  function moveSuccessText(res: MoveResultDto): string {
+    if (res.from_kind === 'WORKER' && res.to_kind === 'WORKER') return '已在工人之间转交批次';
+    return res.to_kind === 'WORKER'
+      ? `已分配批次 ${res.taken?.batch_no ?? ''}`.trim()
+      : '已撤回批次至候选池';
+  }
 
   /** POOL → WORKER mutation 包装 —— 保留 Promise<boolean> 签名以兼容
    *  WorkerColumn.onDragAdd 调用点。`from.shelf_id` 必填（空串直接早退，避免
@@ -170,6 +198,28 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
     }
   }
 
+  /** 2026-10-03：WORKER → WORKER mutation 包装（工人之间转交）。与上面两个包装
+   *  共用同一个 moveMutation，故失效链 / toast / 错误桥接完全同构。
+   *  from 与 to 都是 worker_id：`from` 由拖拽源的 WorkerColumn.onDragStart 记进
+   *  dndSourceTracker（与「撤回候选池」共用工人源），`to` 是落点列自己的 worker.id。
+   *  不校验 from ≠ to —— 拖回自己那一列不构成一次移动，由调用方早退。 */
+  async function moveBatchBetweenWorkers(
+    batchId: string,
+    fromWorkerId: string,
+    toWorkerId: string,
+  ): Promise<boolean> {
+    try {
+      await moveMutation.mutateAsync({
+        batch_id: batchId,
+        from: { kind: 'WORKER', worker_id: fromWorkerId },
+        to: { kind: 'WORKER', worker_id: toWorkerId },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** runAutoAllocate mutation 包装 —— 保留 Promise<void> 签名。 */
   async function runAutoAllocate(req: AutoAllocateRequest): Promise<void> {
     await autoAllocateMutation.mutateAsync(req);
@@ -187,6 +237,7 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
     error,
     moveBatchToWorker,
     moveBatchToPool,
+    moveBatchBetweenWorkers,
     runAutoAllocate,
   };
 }

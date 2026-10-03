@@ -137,8 +137,8 @@ const qc = useQueryClient();
 // 2026-09-30：processes 走共享 useProcessesQuery（30s staleTime 去重缓存，与仓内
 // 多处 caller 共享缓存身份），不再调 listProcesses + module-level ref。
 const procsQuery = useProcessesQuery();
-const inhouseProcs = computed(() =>
-  procsQuery.data.value?.items.filter((p) => p.category === 'INHOUSE') ?? [],
+const inhouseProcs = computed(
+  () => procsQuery.data.value?.items.filter((p) => p.category === 'INHOUSE') ?? [],
 );
 
 // 2026-09-30：tab 标题 (N) 徽标 + 「待下发」工序卡徽标的**唯一数据源**
@@ -167,7 +167,7 @@ const inhouseProcessesForPanel = computed(() =>
 );
 
 const pendingDispatch = usePendingDispatch();
-const { error, moveBatchToWorker, moveBatchToPool } = queue;
+const { error, moveBatchToWorker, moveBatchToPool, moveBatchBetweenWorkers } = queue;
 
 /** 2026-10-02：拖拽悬停的工序 id（null = 未悬停在任何工序卡上）—— 工序卡
  *  `.is-dropping` 高亮的唯一状态源。
@@ -201,6 +201,8 @@ watch(activeTab, (next) => {
 
 provide<typeof moveBatchToWorker>('moveBatchToWorker', moveBatchToWorker);
 provide<typeof moveBatchToPool>('moveBatchToPool', moveBatchToPool);
+// 2026-10-03 新增：WorkerColumn 落点消费（把 A 手中的批次拖到 B 手中 = WORKER→WORKER）。
+provide<typeof moveBatchBetweenWorkers>('moveBatchBetweenWorkers', moveBatchBetweenWorkers);
 provide<ComputedRef<string>>('shelfId', shelfId);
 
 // 2026-09-30：workerHeld 的唯一消费者 WorkerColumn 已自管

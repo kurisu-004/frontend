@@ -1,3 +1,7 @@
+// 2026-10-03 记录：mock 需同时吃三参（el + list + options）与二参（el + options）
+// 两种重载 —— 二参形态是生产队列域投放类容器的新用法（不传 list ⇒ 库不挂内建
+// onAdd / onRemove），三参形态的行重排调用方（usePartBatchPdf / PrintPreviewDialog /
+// ProcessStepCardList / PendingBatchesPanel）继续可用。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { nextTick, ref } from 'vue';
 
@@ -9,8 +13,12 @@ const { startSpy, destroySpy, capturedOptions } = vi.hoisted(() => ({
 }));
 
 vi.mock('vue-draggable-plus', () => ({
-  useDraggable: (_el: unknown, _list: unknown, options: Record<string, unknown>) => {
-    capturedOptions.push(options);
+  // 复刻 vue-draggable-plus 的重载判定：第 2 参的 .value 是数组 ⇒ 三参（list）形态，
+  // 否则二参（options）形态。两种形态都必须把「真正的 options」记下来。
+  useDraggable: (_el: unknown, listOrOptions: unknown, maybeOptions?: unknown) => {
+    const candidate = (listOrOptions as { value?: unknown }) ?? {};
+    const hasList = Array.isArray(candidate.value ?? listOrOptions);
+    capturedOptions.push((hasList ? maybeOptions : listOrOptions) as Record<string, unknown>);
     return {
       start: startSpy,
       pause: vi.fn(),
@@ -83,6 +91,34 @@ describe('useLazyDraggable', () => {
 
     expect(startSpy).toHaveBeenCalledTimes(2);
     expect(startSpy).toHaveBeenLastCalledWith(second);
+  });
+
+  it('二参重载（不传 list）→ options 原样透传 + immediate 仍被强制关掉', () => {
+    // 不传 list 时 vue-draggable-plus 不挂内建 handler，容器退化为「纯投放信号源」。
+    useLazyDraggable(ref<HTMLElement | null>(null), {
+      group: 'work-orders',
+      animation: 150,
+      onAdd: vi.fn(),
+    });
+    expect(capturedOptions).toHaveLength(1);
+    expect(capturedOptions[0]).toMatchObject({
+      group: 'work-orders',
+      animation: 150,
+      immediate: false,
+    });
+    expect(typeof capturedOptions[0].onAdd).toBe('function');
+  });
+
+  it('二参重载 + elRef 转非 null → 照常 start(el)', async () => {
+    const elRef = ref<HTMLElement | null>(null);
+    useLazyDraggable(elRef, { group: 'work-orders' });
+    await nextTick();
+    expect(startSpy).not.toHaveBeenCalled();
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- 测试 stub：HTMLElement 在 node 环境无 DOM
+    const el = {} as HTMLElement;
+    elRef.value = el;
+    await nextTick();
+    expect(startSpy).toHaveBeenCalledWith(el);
   });
 
   it('elRef 被置回 null 时不调 start()', async () => {

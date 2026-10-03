@@ -28,6 +28,12 @@
 //   - T6：runAutoAllocate 成功 → autoAllocate 被调 + pool 三域前缀失效。
 //   - T7：runAutoAllocate 失败 → onError 路径 error.value 写入。
 //   - T8：请求体**不含** process_id / next_process_id（后端已无此入参，服务端自推）。
+//   - T10：moveBatchBetweenWorkers 成功 → moveBatch 收到 WORKER→WORKER 形态
+//     （from/to 都是 worker_id）+ pool 三域前缀失效。
+//   - T11：moveBatchBetweenWorkers 失败 → 返回 false **且仍失效 pool 三域**。
+//     回归 guard：Sortable 已把被拖节点物理搬进落点列，失败不重拉 = 屏幕上永久错位。
+//   - T12：move 失败（POOL→WORKER）同样失效 pool 三域（同上因的另一条路径）。
+//   - T13：导出面含 moveBatchBetweenWorkers（WorkerColumn 靠 inject key 消费它）。
 //
 // 测试策略：
 //   - vi.mock('@/api/workerPool') + vi.mock('element-plus')；
@@ -92,8 +98,7 @@ const realAutoAllocate = vi.fn<() => Promise<AutoAllocateResultDto>>(async () =>
 
 vi.mock('@/api/workerPool', () => ({
   // 2026-09-30：assignWorkerPool / removeFromWorkerPool 已删，合并为 moveBatch
-  moveBatch: (...args: unknown[]) =>
-    realMoveBatch(...(args as Parameters<typeof realMoveBatch>)),
+  moveBatch: (...args: unknown[]) => realMoveBatch(...(args as Parameters<typeof realMoveBatch>)),
   autoAllocate: (...args: unknown[]) =>
     realAutoAllocate(...(args as Parameters<typeof realAutoAllocate>)),
   // 列出 stub 防止 partial mock 副作用（useWorkerQueue 不消费这 3 个）
@@ -220,9 +225,7 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
 
   it('T7：runAutoAllocate 失败 → onError 路径 error.value 写入', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    realAutoAllocate.mockRejectedValueOnce(
-      new ApiError(20704, 'BIZ_AUTO_ALLOCATE_INVALID_RATIO'),
-    );
+    realAutoAllocate.mockRejectedValueOnce(new ApiError(20704, 'BIZ_AUTO_ALLOCATE_INVALID_RATIO'));
     const q = testApp.runWithContext(() => useWorkerQueue());
     await expect(
       q.runAutoAllocate({
@@ -255,5 +258,51 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
     const q = testApp.runWithContext(() => useWorkerQueue()) as unknown as Record<string, unknown>;
     expect(q).not.toHaveProperty('loadBoard');
     expect(q).not.toHaveProperty('workerHeld');
+  });
+
+  // ===== 2026-10-03：WORKER→WORKER 方向 + 失败也失效 =====
+
+  it('T10：moveBatchBetweenWorkers 成功 → moveBatch 收到 WORKER→WORKER 形态 + 三域失效', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    const ok = await q.moveBatchBetweenWorkers('3000000000001', '1900000000001', '1900000000002');
+    expect(ok).toBe(true);
+    expect(realMoveBatch).toHaveBeenCalledTimes(1);
+    // from / to 两侧都是 WORKER 形态（tagged enum 的 worker_id 分支）
+    expect(realMoveBatch).toHaveBeenCalledWith({
+      batch_id: '3000000000001',
+      from: { kind: 'WORKER', worker_id: '1900000000001' },
+      to: { kind: 'WORKER', worker_id: '1900000000002' },
+    });
+    expectPoolDomainInvalidated();
+  });
+
+  it('T11：moveBatchBetweenWorkers 失败 → 返回 false，但**仍然失效** pool 三域', async () => {
+    // 回归 guard（主症状链的另一半）：Sortable 拖拽时已经把被拖节点物理搬进落点列，
+    // DOM 只能靠 query refetch 后的 Vue 渲染覆盖回来。失败路径若只弹 toast 不重拉，
+    // 屏幕上就会永久留下「目标列凭空多一张、源列少一张」的错位（全局
+    // refetchOnWindowFocus=false，只能手点刷新恢复）。
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    realMoveBatch.mockRejectedValueOnce(new ApiError(20204, 'WORKER_CAPACITY_EXCEEDED'));
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    const ok = await q.moveBatchBetweenWorkers('3000000000001', '1900000000001', '1900000000002');
+    expect(ok).toBe(false);
+    expect(q.error.value).toContain('WORKER_CAPACITY_EXCEEDED');
+    expectPoolDomainInvalidated();
+  });
+
+  it('T12：POOL→WORKER 失败同样失效 pool 三域（撤回 / 转交 / 分配三条路径同构）', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    realMoveBatch.mockRejectedValueOnce(new ApiError(20507, 'BIZ_SHELF_PROCESS_NOT_MAPPED'));
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    const ok = await q.moveBatchToWorker('3000000000001', '1900000000002', '5000000000001');
+    expect(ok).toBe(false);
+    expectPoolDomainInvalidated();
+  });
+
+  it('T13：导出面含 moveBatchBetweenWorkers（WorkerColumn 靠 inject key 消费）', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    expect(typeof q.moveBatchBetweenWorkers).toBe('function');
   });
 });
