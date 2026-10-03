@@ -222,17 +222,25 @@ describe('RepairReceive — 「返修中」判据必须读 is_repairing（2026-1
     const wrapper = await mountReceive();
     const cellRender = statusCellRender(wrapper);
 
-    expect(renderStatusCell(cellRender({ row: makeBatch() }))).toEqual({
-      type: 'danger',
-      text: '生产中',
-    });
     expect(
       renderStatusCell(cellRender({ row: makeBatch({ is_repairing: false, status: 'DELIVERED' }) })),
     ).toEqual({ type: 'success', text: '已送货' });
-    // 非返修、非已送货的普通在制行仍是 info。
+    // 非返修、非已送货的普通在制行仍是 info，且标签回落到 ORDER_STATUS_LABEL。
     expect(
-      renderStatusCell(cellRender({ row: makeBatch({ is_repairing: false, status: 'IN_PROCESS' }) })).type,
-    ).toBe('info');
+      renderStatusCell(cellRender({ row: makeBatch({ is_repairing: false, status: 'IN_PROCESS' }) })),
+    ).toEqual({ type: 'info', text: '生产中' });
+    wrapper.unmount();
+  });
+
+  it('R2b：is_repairing=true 的行标签出「返修中」而不是 status 的「生产中」', async () => {
+    const wrapper = await mountReceive();
+    const cellRender = statusCellRender(wrapper);
+
+    // 「返修中」Tab 里的行标签必须与 tab 名一致：标「生产中」语义相反。
+    expect(renderStatusCell(cellRender({ row: makeBatch({ status: 'IN_PROCESS' }) }))).toEqual({
+      type: 'danger',
+      text: '返修中',
+    });
     wrapper.unmount();
   });
 

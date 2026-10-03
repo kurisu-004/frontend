@@ -396,14 +396,14 @@ describe('usePartsListQuery — locations / holder_ids 过滤参数契约（PR-4
     const params = cleanParams({
       locations: ['PRODUCTION_SHELF', 'WORKER'], // 两元素 → 1 个 %2C
       holder_ids: ['1700000000000000001', '1700000000000000002'], // 两元素 → 1 个 %2C
-      statuses: ['IN_PROCESS', 'REPAIRING'], // 两元素 → 1 个 %2C
+      statuses: ['IN_PROCESS', 'OUTSOURCE'], // 两元素 → 1 个 %2C
       customer_id: '190000000000100',
     });
     const wire = serializeParamsV2(params);
     expect(wire).toBe(
       'locations=PRODUCTION_SHELF%2CWORKER' +
         '&holder_ids=1700000000000000001%2C1700000000000000002' +
-        '&statuses=IN_PROCESS%2CREPAIRING' +
+        '&statuses=IN_PROCESS%2COUTSOURCE' +
         '&customer_id=190000000000100',
     );
     // 关键：所有白名单数组字段（locations / holder_ids / statuses）都用 %2C

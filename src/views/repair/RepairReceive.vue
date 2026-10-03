@@ -124,9 +124,10 @@ const columnDefs: ColumnDef[] = [
       // /prod/batches/repairing 返回行的 status **恒为 IN_PROCESS**（返修只是
       // t_part_batch 上的一枚标记），原先的 `status === 'REPAIRING'` 恒 false，
       // 于是「返修中」Tab 的红色 tag 永远不出现。
+      // 标签文本同样走 is_repairing：tab 名是「返修中」，标「生产中」语义相反。
       const t = isRepairing(r) ? 'danger' : r.status === 'DELIVERED' ? 'success' : 'info';
       return h(ElTag, { type: t, effect: 'plain', size: 'small' }, () =>
-        ORDER_STATUS_LABEL[r.status as OrderStatus] ?? r.status,
+        isRepairing(r) ? '返修中' : (ORDER_STATUS_LABEL[r.status as OrderStatus] ?? r.status),
       );
     },
   },
