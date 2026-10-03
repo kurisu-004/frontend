@@ -3,13 +3,12 @@
 // 扫码建单页 L1 客户选择持久化（2026-08-23 新增）。
 //
 // 背景：
-//   - DeliveryNoteScan.vue 旧实现 l1CustomerId 是裸 ref，每次离开页面再
-//     回来都要重选（原实现 :67 注释也明确写了「本次不做 URL 持久化」）。
+//   - 扫码建单页的 l1CustomerId 若只存组件内 ref，离开页面再回来都要重选。
 //   - 现场扫码台是工位机，单用户长期使用，应在退出页面后保持上次选项。
 //
 // 形态：
 //   - 模块级 composable 单例（同 useBarcodeScanner / useAuthStore / usePrintedLabels
-//     风格，详见 CLAUDE.md §状态管理）。2026-09-26：原 useAuthSession 迁到 Pinia store。
+//     风格，详见 CLAUDE.md §状态管理）。
 //   - localStorage key = 'delivery_scan_l1_v1'（带 _v1 便于将来形状变更时灰度切换）；
 //     内容 `{ l1CustomerId: string }` JSON 字符串。
 //

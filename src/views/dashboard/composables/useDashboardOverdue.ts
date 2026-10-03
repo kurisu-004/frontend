@@ -1,13 +1,12 @@
 // 2026-09-29 新增：dashboard「逾期未交 KPI」useQuery composable。
 //
-// 数据流（与方案 §2 数据流对齐）：
+// 数据流：
 //   1. 调 fetchOverview({ date_from: todayIso, date_to: todayIso }) 拉当天日期范围
 //      的生产统计概览；后端返回 overdue_undelivered_count（已过期未交付的件，
 //      即 planned_delivery_date < today 且状态非 DELIVERED/COMPLETED/CANCELLED）
 //   2. enabled 闸门：isManager 为 true 才发请求；非 Manager 不发请求（dashboard
 //      「逾期未交」tile 渲染「需 Manager 权限」占位）
-//   3. queryFn 走 overviewOutSchema.parse(...) 守门（沿 2026-09-26 约定 #4 +
-//      2026-09-29 新增 overviewOutSchema）
+//   3. queryFn 走 overviewOutSchema.parse(...) 守门
 //   4. 接 useDashboardInvalidation(qk.dashboardOverdue) 同套 AFFECTS_DASHBOARD
 //      事件集自动失效（与 dashboardSnapshot / dashboardUrgentList 共用事件订阅，
 //     无重复订阅）
@@ -24,7 +23,7 @@
 //     以驱动 http.ts 的 token 主动刷新）。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //   - 返回 { overdueCount, fetchList }：overdueCount 是 number（or 0 when 未启用）；
-//     fetchList 是 refetch 别名（沿 2026-09-26 约定 #7）。
+//     fetchList 是 refetch 别名。
 
 import { computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -47,7 +46,7 @@ function todayIso(): string {
 export interface UseDashboardOverdueReturn {
   /** overdue_undelivered_count 数字；isManager=false 或未就绪 → 0 */
   overdueCount: ComputedRef<number>;
-  /** refetch 别名（沿 2026-09-26 约定 #7） */
+  /** refetch 别名 */
   fetchList: () => Promise<void>;
   /** useQuery 实例，caller 可读 isFetching / error */
   query: ReturnType<typeof useQuery<OverviewOutSchema, Error>>;
@@ -78,7 +77,7 @@ export function useDashboardOverdue(isManager: ComputedRef<boolean>): UseDashboa
     await query.refetch();
   }
 
-  // 错误桥接（沿 2026-09-26 约定 #9）。
+  // 错误桥接：watch(error) → ElMessage.error。
   watch(query.error, (e) => {
     if (e) ElMessage.error(e.message ?? '逾期未交统计加载失败');
   });

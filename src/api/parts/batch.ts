@@ -219,10 +219,9 @@ export interface PartBatch {
   batch_label: string;
   quantity: number;
   status: string;
-  /** 是否返修中。来源 backend-rust `src/modules/part/vo/part.rs:327`
-   *  （`PartBatchListItemOut`，由 `GET /api/v2/parts/{id}/batches` 返回）。
-   *  与 `InspectionBatchListItemOut.is_repairing` 同源同语义：后端 migration 005
-   *  已把 `REPAIRING` 从 `PartStatus` 枚举降级为 `t_part_batch.is_repairing` 标记列。 */
+  /** 是否返修中。「返修中」的唯一表达：本字段来自 `t_part_batch.is_repairing` 标记列，
+   *  返修中批次的 `status` 恒为 `IN_PROCESS`（`GET /api/v2/parts/{id}/batches` 返回）。
+   *  与 `InspectionBatchListItemOut.is_repairing` 同源同语义。 */
   is_repairing: boolean;
   location: string | null;
   current_holder_id: string | null;
@@ -291,10 +290,9 @@ export interface RepairBatchListItem {
   batch_no: number;
   quantity: number;
   status: string;
-  /** 是否返修中。后端 migration 005（**BREAKING**）把 `REPAIRING` 从 `PartStatus`
-   *  枚举**降级**为 `t_part_batch.is_repairing` 标记列，本字段是「返修中」的唯一
-   *  表达 —— 返修中批次的 `status` 恒为 `IN_PROCESS`，**不要**再靠 status 判定。
-   *  恒定输出（无 Option / 无 serde(default) / 无 skip_serializing_if）。 */
+  /** 是否返修中。「返修中」的唯一表达 —— 返修中批次的 `status` 恒为 `IN_PROCESS`，
+   *  判定必须读本字段而不是 status。恒定输出（无 Option / 无 serde(default) /
+   *  无 skip_serializing_if）。 */
   is_repairing: boolean;
   location: string | null;
   version: number;

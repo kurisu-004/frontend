@@ -61,16 +61,17 @@ export const qk = {
    *  全量单条（无 params），HTTP 端点 GET /api/v2/dashboard/snapshot 一次取回
    *  完整 DashboardSnapshotVO。 */
   dashboardSnapshot: ['dashboard', 'snapshot'] as const,
-  /** 2026-09-29 新增：dashboard「紧急工单 Top 列表」queryKey。
-   *  listUnionItems 拉 100 件按 planned_delivery_date ASC 的非终态件，客户端再按
-   *  today+7 过滤取 top 15。命中 useDashboardInvalidation 同套 AFFECTS_DASHBOARD
-   *  事件集后自动 invalidate 重取。 */
+  /** dashboard「交期工单」queryKey。
+   *  listUnionItems 拉 100 件按 system_delivery_date ASC 的非终态件，客户端再按
+   *  system_delivery_date <= today+6 过滤并分 urgent / partial 两桶（各取 top 30）。
+   *  命中 useDashboardInvalidation 同套 AFFECTS_DASHBOARD 事件集后自动 invalidate
+   *  重取。 */
   dashboardUrgentList: ['dashboard', 'urgent-list'] as const,
   /** 2026-09-29 新增：dashboard「逾期未交 KPI」queryKey。
    *  fetchOverview 拉当天日期范围内的 overdue_undelivered_count，仅 Manager 角色
    *  启用（enabled: isManager 闸门），非 Manager 不发请求。 */
   dashboardOverdue: ['dashboard', 'overdue'] as const,
-  /** 2026-09-30 新增：dashboard「7 天交期柱状图按层点击抽屉」queryKey。
+  /** dashboard「交期分桶柱状图按层点击抽屉」queryKey。
    *  listUnionItems({ row_type: 'PART', statuses, planned_delivery_date_from =
    *  to = date, sort_by: 'PLANNED_DELIVERY_DATE', sort_dir: 'ASC', limit: 500,
    *  offset: 0 }) 拉该日 × 该层状态的所有工单。 */
@@ -139,12 +140,11 @@ export const qk = {
   //   - shelvesList：共享基础数据层 useProductionShelvesQuery 的键（下发对话框的
   //     目标 PRODUCTION 货架候选）。列表页是页面级 store 内部的 private state，
   //     但**基础数据**（货架几乎不变、跨 3 页共用）按 CLAUDE.md 定位放共享层。
-  //   - shelvesPrefix：2026-10-01 review 第 1 轮 M-3 删掉了本键（连带
-  //     useProductionShelvesQuery::invalidateProductionShelvesQuery）—— 两者零调用方
-  //     （货架写点在 ShelfList.vue，本轮未挂失效；按 CLAUDE.md「跨页面写操作不做
-  //     穷举失效」策略，30s 有限 staleTime 兜新鲜度）。**将来真有货架写点要挂失效
-  //     时，在这里补 `shelvesPrefix: ['shelves'] as const`** + 在
-  //     useProductionShelvesQuery 补对应薄封装，不要在调用点拼字面量数组。
+  //   - shelvesPrefix：**当前不存在**，因为货架域零失效调用方（货架写点在
+  //     ShelfList.vue，未挂失效）。按 CLAUDE.md「跨页面写操作不做穷举失效」策略，
+  //     30s 有限 staleTime 兜新鲜度。将来真有货架写点要挂失效时，在这里补
+  //     `shelvesPrefix: ['shelves'] as const`** + 在 useProductionShelvesQuery 补
+  //     对应薄封装，不要在调用点拼字面量数组。
   // ============================================================
   programmingList: (params: ListPendingProgrammingParams) =>
     ['programming', 'list', params] as const,
@@ -161,7 +161,7 @@ export const qk = {
    *  常量，前缀即自身，沿 workerPoolCountsPrefix 同形）。唯一写点
    *  setShelfProcesses（ShelfList.vue）成功后调 invalidateShelfProcessMappingsQuery(qc)
    *  —— 本域**不是**「跨页面写操作无法穷举」那种情形：全仓写点只有这一个，10 个读点
-   *  全是 useShelfProcessFilter，补失效的成本近乎零（review 第 1 轮 M-3）。 */
+   *  全是 useShelfProcessFilter，补失效的成本近乎零。 */
   shelfProcessMappingsPrefix: ['shelf-process-mappings'] as const,
   // ============================================================
   // 2026-10-02 新增：work-types 域（工种 + 工种↔工序映射）queryKey 工厂。
@@ -215,14 +215,14 @@ export const qk = {
   //   - 上述两条失效链只覆盖 useWorkerQueue（move / autoAllocate）与
   //     usePendingDispatch（dispatch）**这两条路径**，prefix 一把全刷也只覆盖它们。
   //     后端候选池定义 = `status='IN_PROCESS' AND location='PRODUCTION_SHELF'`
-  //     （worker_pool/repo/sql.rs:127,349,545），而其它域的流转端点同样会改这两个
+  //     （worker_pool/repo/sql.rs），而其它域的流转端点同样会改这两个
   //     字段、却**未挂 pool 失效**：
-  //       - delivery 域送检 `batchToInspection`（POST /parts/batch-to-inspection，
-  //         useBulkScanInspect.ts:185）—— to_inspection_core 接受
+  //       - delivery 域送检 `batchToInspection`（POST /prod/batches/to-inspection，
+  //         useBulkScanInspect）—— to_inspection_core 接受
   //         IN_PROCESS+PRODUCTION_SHELF 为合法起点并迁到 INSPECTION+INSPECTION_SHELF，
   //         即把批次移出候选池；
   //       - scan 域工人放回 `workerScan` event_type=RETURNED
-  //         （ScanReturnParts.vue:563）—— service 同事务跑 WorkerPool refill，
+  //         （ScanReturnParts）—— service 同事务跑 WorkerPool refill，
   //         放回即从池里抢批，counts / by-process / state 三域同时变；
   //       - inspection 域 `scanInspect`（`useInspectionListStore` 的
   //         `scanInspectMutation`）—— 品检流转，IN_PROCESS+PRODUCTION_SHELF
@@ -243,7 +243,7 @@ export const qk = {
 
   /** 全工序 batch 计数（eager 拉取，tab 标题徽标 + 待下发工序卡 badge 数据源）。
    *  2026-09-30：去 params 维度 —— 后端 `GET /prod/pool/counts` 的 handler
-   *  （worker_pool/handler.rs:146-153）只有 `State` + `CurrentUser`，**不接 Query
+   *  （worker_pool/handler.rs）只有 `State` + `CurrentUser`，**不接 Query
    *  extractor**；按 process_id GROUP BY 跨所有货架聚合，没有 shelf 维度。
    *  故本 queryKey 退化为常量键（与 prefix 同形），不再随 activeShelfId 变化而
    *  refetch —— 也顺带消除了 WorkerQueueBoard 里 shelfId 的 TDZ 隐患。 */

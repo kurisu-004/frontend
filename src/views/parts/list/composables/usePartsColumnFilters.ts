@@ -26,6 +26,7 @@ import { splitLocationSelection, usePartLocationTree } from '@/views/parts/list/
 import type { CustomerCascaderNode } from '@/composables/useCustomerTree';
 import type { LocationTreeNode } from '@/types/parts';
 import type { PartsSearchState } from './usePartsListQuery';
+import { PARTS_STATUS_FILTER_WHITELIST } from './usePartsListQuery';
 
 // 2026-09-26（B 任务）移除：原 listProcesses 动态调用已迁 useProcessesQuery，import 不再需要。
 
@@ -358,9 +359,13 @@ export function usePartsColumnFilters(
   };
 
   // ============ 原生列：状态 + 下一道工序 ============
-  // 状态：与 ORDER_STATUS_LABEL 同源 + 末尾追加「仅加急」哨兵值。
+  // 状态：PARTS_STATUS_FILTER_WHITELIST 派生 + 末尾追加「仅加急」哨兵值。
+  // 2026-10-03：候选源从 ORDER_STATUS_LABEL 改为白名单 —— 表头原生筛选是 statuses 的
+  // 第二个写入口，与搜索栏下拉同一条链路（onNativeFilterChange 直写
+  // deps.search.statuses 并下发），停用面必须一起收口，否则两处候选集不一致、
+  // 「返修中」仍能从这里被选中写进查询参数。
   const statusNativeOptions: { text: string; value: string }[] = [
-    ...(Object.keys(ORDER_STATUS_LABEL) as OrderStatus[]).map((v) => ({
+    ...PARTS_STATUS_FILTER_WHITELIST.map((v) => ({
       text: ORDER_STATUS_LABEL[v],
       value: v,
     })),

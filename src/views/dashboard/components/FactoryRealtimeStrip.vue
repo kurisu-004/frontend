@@ -7,9 +7,8 @@
   el-carousel CSS 由 main.ts 手动 import theme-chalk（unplugin resolver 只扫
   <template>，carousel-item CSS 由 carousel.css 携带）。
 
-  数据来源：snapshot.in_process（dashboard 大屏快照的 in_process 切片，原
-  DashboardView.vue:139-151 已有 workerGroups computed 派生逻辑，本组件下沉到
-  内部 computed）。
+  数据来源：snapshot.in_process（dashboard 快照的 in_process 切片），按
+  current_holder_id / worker_name 分组的 workerGroups computed 收在本组件内部。
 
   视觉：
     - 按 current_holder_id / worker_name 分组
@@ -79,12 +78,9 @@
 </template>
 
 <script setup lang="ts">
-// 2026-09-29 新增 + 2026-09-30 Phase 2 followup #2：dashboard「工厂实时态」chip strip
-// 展示壳。worker groups 按 PAGE_SIZE=4 一组切片成 pages，>4 套 <el-carousel>，
-// ≤4 退化为 flex-wrap。
-//
-// 沿旧 DashboardView.vue:139-151 的 workerGroups computed 派生逻辑（按
-// current_holder_id / worker_name 分组），下沉到组件内部 computed。
+// dashboard「工厂实时态」chip strip 展示壳。worker groups 按 PAGE_SIZE=4 一组
+// 切片成 pages，>4 套 <el-carousel>，≤4 退化为 flex-wrap。分组派生（按
+// current_holder_id / worker_name）在组件内部 computed。
 //
 // emit item-click(partId) 给父组件跳详情；权限守门（canOpenDetail）由父组件
 // 计算并通过 props 传入；本组件自身不 import usePermissions（沿 §composition

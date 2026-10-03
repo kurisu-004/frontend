@@ -1,25 +1,26 @@
-// 2026-09-30 新增：dashboard「7 天交期柱状图按层点击抽屉」useQuery composable。
+// dashboard「交期分桶柱状图按层点击抽屉」useQuery composable。
 //
-// 数据流（与方案 §2.4 对齐）：
+// 数据流：
 //   1. 入参 reactive { date: 'YYYY-MM-DD', statuses: OrderStatus[] }：
 //      - 仅在 drawer 打开时 caller 传非 null 启用闸门；
 //      - 切层 / 切换日期时 key 变化自动 refetch。
 //   2. queryFn 调 listUnionItems 拉该日 × 该层状态所有工单（按 planned_delivery_date
 //      ASC 排序，最多 500 件 —— 单日 8 状态合计远小于 500 上限，作为防御性兜底）；
-//   3. queryFn 走 partListResultSchema.parse(...) 守门（沿 2026-09-26 约定 #4）。
+//   3. queryFn 走 partListResultSchema.parse(...) 守门。
 //
-// 设计要点（沿 2026-09-26 TanStack Query 共享基础数据层 + 2026-09-29 useDashboardUrgentList）：
+// 设计要点（与 useDashboardUrgentList 同形）：
 //   - reactive params 模式：queryKey = computed(() => qk.xxx(toValue(params)))，
-//     queryFn 从 queryKey[2] 读最新 params（避免闭包 stale —— 沿 2026-09-26 约定 #5）。
+//     queryFn 从 queryKey[2] 读最新 params（避免闭包 stale）。
 //   - enabled 闸门：!!p && p.statuses.length > 0 —— drawer 未打开或空 statuses 时不发。
 //   - staleTime: 30_000：30s 内同 (date, statuses) 命中缓存（避免来回切层 / 切日期
 //     时重复请求）；gcTime: POSITIVE_INFINITY（会话级缓存）。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
-//   - 接 useDashboardInvalidation(['dashboard','upcoming-list']) 硬编码前缀：qk.
-//     dashboardUpcomingList(params) 是 exact-match 仅失效当前 (date, statuses) 查询，
-//     WS 事件触发时若用户已切到别的层/日期，被切走的查询不会失效仍 staleTime 30s 内
-//     fresh —— 必须用 prefix-match 失效全 upcoming-list 查询。
-//   - 错误桥接：watch(query.error) → ElMessage.error（沿 2026-09-26 约定 #9）。
+//   - 失效键用字面量前缀 ['dashboard','upcoming-list']，**不用**
+//     qk.dashboardUpcomingList(p)：后者是带 params 的精确键，只能失效当前
+//     (date, statuses) 那一条；而 params 随用户切层 / 切日期不断变化，WS 事件到达时
+//     「需要重取」的是整个 upcoming-list 维度（此前挂载过、现已切走的那些查询同样
+//     过期）。要失效的是维度而非某条查询，故用前缀匹配。
+//   - 错误桥接：watch(query.error) → ElMessage.error。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -56,7 +57,7 @@ export function useDashboardUpcomingList(
   const query = useQuery<PartListResultSchema, Error>({
     queryKey: computed(() => qk.dashboardUpcomingList(queryKeyParams.value!)),
     queryFn: async () => {
-      // 从 queryKey 读最新 params（沿 2026-09-26 约定 #5 reactive params 范式），
+      // 从 queryKey 读最新 params（reactive params 范式），
       // 避免闭包捕获 stale。
       const p = queryKeyParams.value;
       if (!p) throw new Error('useDashboardUpcomingList: params is null at fetch time');
@@ -81,18 +82,14 @@ export function useDashboardUpcomingList(
     gcTime: Number.POSITIVE_INFINITY,
   });
 
-  // 派生（沿 2026-09-29 useDashboardUrgentList 风格）：
-  //   - data = query.data.value?.items as PartListItem[]（partSchema.matched_children
-  //     z.array(z.unknown()) 与 PartListItem.matched_children 形态差异，消费侧只读
-  //     boolean / string 字段，强转安全）；
+  // 派生：
+  //   - data：partSchema 的 z.infer 与 PartListItem 已直接对齐，无需强转；
   //   - isPending / error 派生让 caller 模板里写 isPending.value 即可。
-  const data = computed<PartListItem[]>(
-    () => (query.data.value?.items ?? []) as unknown as PartListItem[],
-  );
+  const data = computed<PartListItem[]>(() => query.data.value?.items ?? []);
   const isPending = computed<boolean>(() => query.isPending.value);
   const error = computed<Error | null>(() => query.error.value);
 
-  // 错误桥接（沿 2026-09-26 约定 #9）：watch(query.error) → ElMessage.error。
+  // 错误桥接：watch(query.error) → ElMessage.error。
   watch(query.error, (e) => {
     if (e) ElMessage.error(e.message ?? '交期明细加载失败');
   });

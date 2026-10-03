@@ -1,14 +1,11 @@
 // views/delivery/composables/useBulkPassInspection.ts
 //
-// 批量品检通过 composable（2026-08-23 新增；2026-08-25 切 v2 批量端点；
-//   2026-08-28 切 route B 批量端点 + item 改 batch_id-only）。
+// 批量品检通过 composable。
 //
 // 用途：
 //   - 扫码建单页 / 送货单详情页的「批量通过品检」确认对话框共享本 composable。
-//   - 2026-08-28 起：单次调用 `api.batchToShip`（POST /parts/batch-to-ship，2026-09-15 Phase 5
-//     业务全切 v2 后由 `api` 直接接 baseURL `/api/v2`），路线 B 把 INSPECTION → READY_TO_SHIP
-//     整批过品；per-item 失败走响应 data.failed[]。
-//     后端无批量端点的 fallback 路径已下线（v2 端点是硬依赖）。
+//   - 单次调用 `api.batchToShip`（`POST /prod/batches/to-ship`），把 INSPECTION →
+//     READY_TO_SHIP 整批过品；per-item 失败走响应 data.failed[]。
 //
 // 设计：
 //   - BulkPassItem 用 batch_id 标识（不再依赖 part_id；后端 service 按 batch_id
@@ -77,9 +74,9 @@ export function toBatchPassItems(items: BulkPassItem[]): BatchToShipItem[] {
 }
 
 /**
- * 纯函数：v2 batch-to-ship 响应 → composable 契约 BulkPassResult。
+ * 纯函数：batch-to-ship 响应 → composable 契约 BulkPassResult。
  *
- * 规则（2026-08-28 修正为按位置反查）：
+ * 规则（按位置反查）：
  *   - `passed[]`：后端 `ToXxxOut` **不序列化 batch_id**（只有 `part` + `new_batch_id`，
  *     见 inspection.md「ToXxxOut 字段」表），原先按 `s.batch_id` 反查恒为 undefined。
  *     改按位置对齐：后端顺序处理 items，`submitted[]` 与「请求 items 扣掉 failed[] 之后

@@ -3,18 +3,18 @@
 // 2026-09-29 新增：useDashboardInvalidation WS 事件 → invalidate 回归保护。
 //
 // 覆盖：
-//   - I1：22 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
+//   - I1：23 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
 //   - I2：连续 5 个 AFFECTS_DASHBOARD 事件 → debounce 500ms 内合并 → 1 次 invalidate
 //   - I3：maxWait 1500ms flush —— 持续超过 1500ms 必须强制 invalidate
 //   - I4：非 AFFECTS_DASHBOARD 事件（如 DELIVERY_NOTE_CREATED）不触发 invalidate
-//   - I5：component unmount → offDashboardEvent 触发 → handler Set 清零（review N1 guard）
+//   - I5：component unmount → offDashboardEvent 触发 → handler Set 清零
 //   - I6：传单个 QueryKey → 单次 invalidateQueries({ queryKey: key })
 //   - I7：传 QueryKey[] → 遍历每个 key 各 invalidate 一次
-//   - I9（2026-10-02 review Major 2）：window 事件 'dashboard:full-refetch'
+//   - I9（2026-10-02 新增）：window 事件 'dashboard:full-refetch'
 //     （后端 4003 慢消费方丢事件）→ **立即** invalidate，不走 500ms 防抖
 //   - I10：scope.stop() → 'dashboard:full-refetch' listener 一并摘除（防泄漏）
 //
-// 2026-10-02（review Nit 1）：用例内显式 `scope.stop()` 只是正常路径的清理；真正的
+// 2026-10-02 取舍：用例内显式 `scope.stop()` 只是正常路径的清理；真正的
 // 安全网是文件级 `makeScope()` 记账 + afterEach 统一 stop —— 断言中途失败时用例末尾的
 // stop() 不会执行，泄漏的 listener 会把「一个真实失败」放大成级联假失败。
 //
@@ -74,7 +74,7 @@ vi.mock('@/api/dashboard', () => ({
 import { useDashboardInvalidation, AFFECTS_DASHBOARD_SIZE } from '../useDashboardInvalidation';
 import { qk } from '@/composables/queries/keys';
 
-// 22 个 AFFECTS_DASHBOARD 事件类型白名单（与 useDashboardInvalidation.ts 同源）
+// 23 个 AFFECTS_DASHBOARD 事件类型白名单（与 useDashboardInvalidation.ts 同源）
 const AFFECTS_DASHBOARD_EVENTS: string[] = [
   'PART_TO_SHIP',
   'PART_TO_INSPECTION',
@@ -104,7 +104,7 @@ const AFFECTS_DASHBOARD_EVENTS: string[] = [
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
 
-/** 2026-10-02（review Nit 1）：本文件所有用例创建的 effectScope 统一记账。
+/** 2026-10-02：本文件所有用例创建的 effectScope 统一记账。
  *
  *  每个 scope 都会注册两处订阅：eventSubs 里的 WS 事件 handler + window 上的
  *  'dashboard:full-refetch' listener（均走 tryOnScopeDispose 摘除）。用例把
@@ -143,7 +143,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     vi.useRealTimers();
   });
 
-  it('I1：AFFECTS_DASHBOARD 集合大小为 23（与方案 §WS 失效联动对齐）', () => {
+  it('I1：AFFECTS_DASHBOARD 集合大小为 23（与 useDashboardInvalidation 同源）', () => {
     expect(AFFECTS_DASHBOARD_SIZE).toBe(23);
     expect(AFFECTS_DASHBOARD_EVENTS).toHaveLength(23);
   });
@@ -290,7 +290,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     }
   });
 
-  it('I8：scope.stop() → offDashboardEvent 触发 → handler Set 清零（review N1 guard）', () => {
+  it('I8：scope.stop() → offDashboardEvent 触发 → handler Set 清零', () => {
     for (let i = 0; i < 5; i++) {
       const scope = makeScope();
       scope.run(() => {
@@ -305,7 +305,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
   });
 
   // ==========================================================================
-  // I9 / I10：4003「慢消费方」全量重取接入点（2026-10-02 review Major 2）
+  // I9 / I10：4003「慢消费方」全量重取接入点（2026-10-02 新增）
   //
   // 与 I2~I4 的关键差别是**不防抖**：4003 是后端明确告知「广播队列溢出，永久丢了
   // n 条事件」，重连补不回来（重连后的首帧 snapshot 在 api/dashboard.ts 里被显式

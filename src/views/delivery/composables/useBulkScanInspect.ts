@@ -1,12 +1,11 @@
 // views/delivery/composables/useBulkScanInspect.ts
 //
-// 批量一键送检 composable（2026-08-25 新增；2026-08-28 切 route B + item 改 batch_id-only）。
+// 批量一键送检 composable。
 //
 // 用途：
 //   - 扫码建单页「批量一键送检」确认对话框（BatchSubmitInspectionConfirmDialog）共享本 composable。
-//   - 单次调用 `api.batchToInspection`（POST /parts/batch-to-inspection，2026-09-15 Phase 5
-//     业务全切 v2 后由 `api` 直接接 baseURL `/api/v2`），共享品检架 + per-item 数量；route B
-//     把 PENDING/PROGRAMMING/IN_PROCESS → INSPECTION。
+//   - 单次调用 `api.batchToInspection`（`POST /prod/batches/to-inspection`），共享品检架
+//     + per-item 数量，把 PENDING/PROGRAMMING/IN_PROCESS → INSPECTION。
 //   - 1 次 round-trip，per-item 失败走响应 data.failed[]。
 //
 // 设计：
@@ -116,9 +115,9 @@ export function toBatchScanItems(items: BulkScanItem[]): BatchToInspectionItem[]
 }
 
 /**
- * 纯函数：v2 batch-to-inspection 响应 → composable 契约 BulkScanResult。
+ * 纯函数：batch-to-inspection 响应 → composable 契约 BulkScanResult。
  *
- * 规则（2026-08-28 修正为按位置反查）：
+ * 规则（按位置反查）：
  *   - `submitted[]`：后端 `ToXxxOut` **不序列化 batch_id**（只有 `part` + `new_batch_id`，
  *     见 inspection.md「ToXxxOut 字段」表），原先按 `s.batch_id` 反查恒为 undefined。
  *     改按位置对齐：后端顺序处理 items，`submitted[]` 与「请求 items 扣掉 failed[] 之后

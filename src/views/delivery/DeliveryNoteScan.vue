@@ -56,8 +56,7 @@ const router = useRouter();
 
 // ============ L1 / 客户全集 ============
 const scanState = useDeliveryScanState();
-// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
-// store proxy 自动解包嵌套 ref —— auth.user 直接是 CurrentUser | null，无需 .value。
+// 读 auth 只走 Pinia store（useAuthStore），不解构（见 CLAUDE.md §auth）。
 const auth = useAuthStore();
 
 // 2026-09-26：客户全集改走共享 query useCustomersQuery，自动 fetch；原 ref +

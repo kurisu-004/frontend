@@ -10,8 +10,6 @@
 //   - 数值类 i64（COUNT(*)::bigint 等）保留 JSON integer，前端 z.number()；
 //     仅 snowflake ID（> Number.MAX_SAFE_INTEGER = 2^53-1）走 serde-i64 → string，
 //     与 customerSchema S4 / partSchema S12 同形态。
-//   - 2026-09-30 bugfix：原注释将所有 i64 一刀切走字符串是错的（与 snapshot.rs:124
-//     count: i64 + docs/api/dashboard.md:90「数值类保留 JSON integer」不一致）。
 //   - 链式 trim 在前（沿 2026-09-24 约定）—— 本 VO 无 string trim 需求，仅在
 //     后期如新增字符串字段校验时遵循；
 //   - 不强制长度 / 范围（与 composables/queries/schemas.ts 注释一致：基础数据
@@ -73,10 +71,9 @@ export type DashboardShelfGroupData = z.infer<typeof onProductionShelfGroupSchem
 /** 2026-09-28 新增：未来 N 天交付分桶（UpcomingDeliveryBucket VO）。
  *  count 是 COUNT(*)::bigint → JSON integer，前端 z.number() 接收（沿
  *  backend-rust/docs/api/dashboard.md:90「数值类保留 JSON integer」约定）。
- *  2026-09-30 bugfix：原误用 z.string()，与后端 VO i64 类型不符。
- *  2026-09-30 新增 by_status：dashboard 7 天柱状图按状态分层堆叠需要每个桶
- *  提供 OrderStatus → 件数明细（后端 snapshot_counters GROUP BY (date, status)
- *  二维聚合，BTreeMap<String, i64> 序列化输出）。空 map = 当日 0 件。 */
+ *  by_status：柱状图按状态分层堆叠需要每个桶提供 OrderStatus → 件数明细（后端
+ *  snapshot_counters GROUP BY (date, status) 二维聚合，BTreeMap<String, i64>
+ *  序列化输出）。空 map = 当日 0 件。 */
 export const upcomingDeliveryBucketSchema = z.object({
   date: z.string(),
   count: z.number().int().nonnegative(),

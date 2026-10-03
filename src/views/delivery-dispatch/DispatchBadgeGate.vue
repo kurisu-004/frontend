@@ -40,8 +40,7 @@ const DRIVER_WORK_TYPE_CODE = '送货司机';
 const router = useRouter();
 const { onScan } = useBarcodeScanner();
 const { setWorker } = useScanSession();
-// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
-// 标量 getter 去掉括号：isAuthenticated() → isAuthenticated。
+// 读 auth 只走 Pinia store（useAuthStore），不解构（见 CLAUDE.md §auth）。
 const auth = useAuthStore();
 
 onMounted(async () => {

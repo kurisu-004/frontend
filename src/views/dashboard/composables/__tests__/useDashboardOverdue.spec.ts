@@ -8,7 +8,7 @@
 //   - O3：fetchList 在 Manager=false 时是 no-op（不抛错）
 //   - O4：queryFn 走 overviewOutSchema.parse(...) 守门 —— 缺 overdue_undelivered_count
 //        抛 ZodError
-//   - O5：error → ElMessage.error 桥接（沿 2026-09-26 约定 #9）
+//   - O5：error → ElMessage.error 桥接
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computed, createApp, effectScope } from 'vue';

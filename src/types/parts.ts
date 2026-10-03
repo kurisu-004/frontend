@@ -15,7 +15,12 @@ export type PartCategory = '紧固件' | '轴承' | '传动件' | '电气件' | 
 export type PartStatus = '启用' | '停用';
 export type WarehouseStatus = '未入库' | '部分入库' | '已入库';
 
-/** 后端订单状态枚举（数据大屏用） */
+/** 后端订单状态枚举（数据大屏用）。
+ *
+ *  2026-10-03 取舍登记：`REPAIRING` 成员保留，尽管后端 2026-10-01 起不再产生该状态
+ *  （返修语义由 `t_part_batch.is_repairing` 布尔列承载，返修批次的 status 恒为
+ *  IN_PROCESS）。未 apply 存量洗数据 migration 的环境仍可能返出 REPAIRING 行，
+ *  删掉成员会让类型层与 Zod 枚举一起收窄、老环境直接解析失败。 */
 export type OrderStatus =
   | 'PENDING'
   | 'PROGRAMMING'
@@ -154,7 +159,15 @@ export interface PartListItem {
   /** PR-F 2026-07-17：送货单字段 */
   order_no: string | null;
   system_delivery_date: string | null;
-  /** 已送数量：未软删批次中 status ∈ (DELIVERED, COMPLETED) 的 quantity 之和；装配件行恒为 null */
+  /** 2026-10-03 订正：已送数量（语义以后端 VO 注释为准）。零件行 = 未软删批次中
+   *  status ∈ (DELIVERED, COMPLETED) 的 quantity 之和，按「件」计；装配件行**也填**，
+   *  语义是已送「套数」= MIN(子件已送件数 × 装配件套数 / 子件总量) —— PG 整数除法
+   *  截断，子件总量为 0 者不参与，无子件为 0。
+   *
+   *  **填充端点只有 `GET /com/union-list` 与 `GET /parts`**；复用同一 VO 的其余 5 个
+   *  端点（`GET /parts/pending-programming` / `GET /parts/by-work-type/{id}` /
+   *  `GET /parts/by-worker/{id}` / `GET /parts/pickable-by-work-type/{id}` /
+   *  `POST /assemblies/{id}/children`）恒 null。故本字段必须 optional + 可空。 */
   delivered_quantity?: number | null;
   note: string | null;
   customer_name: string | null;
@@ -213,12 +226,6 @@ export interface PartListItem {
   child_count?: number | null;
   /** 2026-07-30：创建时间（装配件行带出） */
   created_at?: string | null;
-  /** C2 2026-08-05：装配件携带的「命中子件」；仅当 next_process_ids / locations /
-   *  holder_ids 筛选激活时填充。其余情况为 null。前端 loadChildren 优先消费。
-   *（2026-09-28 后端 modules/part/service/crud.rs::list_parts 合并响应不再携带此字段；
-   * PartsTable.loadChildren 永远走 getAssembly(row.id) 兜底。本字段保留 optional + nullable
-   * 仅作向后兼容。） */
-  matched_children?: PartListItem[] | null;
 }
 
 /** 零件一览「所在位置」树节点（GET /parts/location-tree）。 */

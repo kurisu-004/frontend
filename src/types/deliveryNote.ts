@@ -223,9 +223,9 @@ export interface ScanAvailableBatch {
   batch_id: string;
   /** 该批次当前数量。 */
   quantity: number;
-  /** 批次状态（如 PENDING / PROGRAMMING / IN_PROCESS / REPAIRING）。 */
+  /** 批次状态（如 PENDING / PROGRAMMING / IN_PROCESS）。 */
   status: string;
-  /** 2026-08-29：批次乐观锁版本；转发到 batch-to-* 必须带。 */
+  /** 批次乐观锁版本；转发到 batch-to-* 必须带。 */
   version: number;
 }
 
@@ -296,9 +296,7 @@ export interface ScanRecentItem {
 export interface ScanNoteSummary {
   id: string;
   delivery_note_no: string;
-  /** 乐观锁 version；后端 ScanDeliveryNoteSummaryDto 已返（hsh-erp-rust dto.rs:478），
-   *  前端早先漏声明，导致 removeParts 只能另开 noteVersions 旁路。
-   *  2026-08-23 补声明后，前端可直读 d.version。 */
+  /** 乐观锁 version；removeParts 直接读本字段，不再另开旁路。 */
   version: number;
   /** note.customer_id 是 L1 root；与 parts.customer_id = L2 leaf 不同 */
   customer_id: string;
@@ -353,43 +351,9 @@ export interface ScanDeliveryReq {
   code: string;
 }
 
-// ============ 扫码阻塞响应类型（2026-08-23 新增）==============
 /**
- * 后端 21418 / 21405 错误响应的 data.failures[] 元素结构。
- *
- * 2026-09-25 修正：原注释指向 ~/Code/hsh-erp-rust/... 已过期（仓库已迁移到
- * backend-rust 子模块），canonical 路径改为 `backend-rust/src/shared/error.rs::BizWithFailures`。
- *
- * v2 当前后端 data.failures 仅含 `serial_no` / `name` / `reason`；扩展前
- * `part_id` / `batch_id` / `drawing_no` / `status` 这些可选字段始终 undefined。
- * 前端先以可选字段写，扩展前「一键通过品检」按钮检测到 part_id 缺失时 disabled
- * + tooltip 提示「需要后端扩展」。
- */
-export interface BlockedScanItem {
-  /** 后端扩展后必有；扩展前 undefined。雪花 ID 用 string（与全仓约定一致，见 BulkPassItem.part_id）。 */
-  part_id?: string;
-  /** 后端扩展后必有；扩展前 undefined。 */
-  batch_id?: string | null;
-  /** serial_no 通常必有；21418 后端有，21405 message 解析也有。 */
-  serial_no: string;
-  /** 后端扩展后才有；扩展前 undefined。 */
-  drawing_no?: string;
-  /** 名称（必填，弹窗列表展示）。 */
-  name: string;
-  /** 后端扩展后才有；扩展前从 reason 字符串解析（如 status=IN_PROCESS → 'IN_PROCESS'）。 */
-  status?: string;
-  /**
-   * 兜底字段，可能取值：
-   * - `status=XXX` → 未送检 / 阻塞类
-   * - `on note DN-XXXX` → 已挂别的 active 单
-   */
-  reason: string;
-}
-
-/**
- * 2026-08-28 后端路线 B：scan 路径仅 21421 BIZ_DELIVERY_BATCH_STATE_INVALID
- * 表示 C 组状态短路（DELIVERED / OUTSOURCE / IN_PROCESS 工人持有 / COMPLETED / CANCELLED）。
- * 原 21405 / 21418 不再由 scan 触发，由 add-parts 等保留使用。
+ * scan 路径仅 21421 BIZ_DELIVERY_BATCH_STATE_INVALID 表示 C 组状态短路
+ * （DELIVERED / OUTSOURCE / IN_PROCESS 工人持有 / COMPLETED / CANCELLED）。
  */
 export const BLOCK_SCAN_CODES = [21421] as const;
 

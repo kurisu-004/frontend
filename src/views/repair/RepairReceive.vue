@@ -3,8 +3,10 @@
  * 返修接收 (Repair Receive) 主页面（PR-M 2026-08-04 续）
  *
  * 双 Tab:
- * - 「已送货」(DELIVERED)：操作栏点「返修」→ 弹一步式 dialog（含数量 + 工序 + 货架）
- * - 「返修中」(REPAIRING)：纯查询，无操作按钮
+ * - 「已送货」(DELIVERED)：操作栏点「返修」→ 弹一步式 dialog（含工序 + 货架）
+ * - 「返修中」(is_repairing = true)：纯查询，无操作按钮。
+ *   返修是 t_part_batch 上的一枚布尔标记，批次 status 恒为 IN_PROCESS，
+ *   任何「是否返修中」判定都读 is_repairing（见 isRepairing）。
  *
  * 表格风格复用零件一览：el-table + 列显隐 + 排序 + 加急红底 + 客户 el-tree-select 筛选。
  *
@@ -28,6 +30,7 @@ import {
 } from '@/composables/useColumnVisibility';
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
+import { ORDER_STATUS_LABEL, type OrderStatus } from '@/types/parts';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import RepairStartDialog from './RepairStartDialog.vue';
@@ -116,9 +119,16 @@ const columnDefs: ColumnDef[] = [
     label: '状态',
     width: 120,
     cellRender: ({ row }) => {
-      const r = row as PartItem;
-      const t = r.status === 'DELIVERED' ? 'success' : r.status === 'REPAIRING' ? 'danger' : 'info';
-      return h(ElTag, { type: t, effect: 'plain', size: 'small' }, () => r.status);
+      const r = row as RepairBatchListItem;
+      // 2026-10-03 修 bug：判据取 is_repairing 布尔列，不取 status ——
+      // /prod/batches/repairing 返回行的 status **恒为 IN_PROCESS**（返修只是
+      // t_part_batch 上的一枚标记），原先的 `status === 'REPAIRING'` 恒 false，
+      // 于是「返修中」Tab 的红色 tag 永远不出现。
+      // 标签文本同样走 is_repairing：tab 名是「返修中」，标「生产中」语义相反。
+      const t = isRepairing(r) ? 'danger' : r.status === 'DELIVERED' ? 'success' : 'info';
+      return h(ElTag, { type: t, effect: 'plain', size: 'small' }, () =>
+        isRepairing(r) ? '返修中' : (ORDER_STATUS_LABEL[r.status as OrderStatus] ?? r.status),
+      );
     },
   },
   {
@@ -245,6 +255,13 @@ async function switchTab(tab: TabKey): Promise<void> {
   page.value = 1;
 }
 
+/** 「该批次是否返修中」的唯一判据：`t_part_batch.is_repairing` 布尔列。
+ *  批次行的 `status` 恒为 IN_PROCESS（返修只是标记列，不改 status），
+ *  故任何「返修中」判定都必须走本函数。 */
+function isRepairing(row: RepairBatchListItem): boolean {
+  return row.is_repairing === true;
+}
+
 // —— 操作按钮 ——
 function onClickStartRepair(row: unknown): void {
   // 2026-10-03：dialog 的 target 收窄成 RepairBatchListItem —— 它的 `version`
@@ -258,8 +275,13 @@ async function onDialogConfirm(): Promise<void> {
 
 // —— 扫描处理 ——
 async function handleScan(code: string): Promise<void> {
+  // 2026-10-03 修 bug：返修中 Tab 的命中判据同样取 is_repairing 布尔列 ——
+  // 原 `status === 'REPAIRING'` 恒 false，扫中列表里的返修批次会直接掉进
+  // findPartBySerialAndPrompt 兜底（弹「该零件位置」而不是认到当前 Tab 的行）。
   const found = findAllByCode(rows.value, code).filter((r) =>
-    activeTab.value === 'delivered' ? r.status === 'DELIVERED' : r.status === 'REPAIRING',
+    activeTab.value === 'delivered'
+      ? r.status === 'DELIVERED'
+      : isRepairing(r as unknown as RepairBatchListItem),
   );
   if (found.length >= 1) {
     if (activeTab.value === 'delivered') {

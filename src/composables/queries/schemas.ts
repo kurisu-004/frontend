@@ -11,12 +11,12 @@
  *     status_distribution 数组。
  *
  * dashboard 域只消费 overdue_undelivered_count 字段（2026-09-29 重做后
- * DashboardKpiTiles「逾期未交」tile），但 schema 仍对齐全 VO 字段集（沿
- * 2026-09-26 约定 #4：基础数据 schema 与后端契约对齐，缺字段静默 strip =
- * 校验形同虚设 —— 见 M-1 regression guard）。
+ * DashboardKpiTiles「逾期未交」tile），但 schema 仍对齐全 VO 字段集：基础数据
+ * schema 与后端契约对齐，缺字段静默 strip = 校验形同虚设。
  *
- * 沿用 CLAUDE.md §M-4 strip 陷阱：所有非 Option 字段必填显式声明，调用方
- * 通过 overviewOutSchema.parse(response) 在 api 边界守门。 */
+ * 所有非 Option 字段必填显式声明（见 CLAUDE.md「TanStack Query」的 Zod 守门条目；
+ * `__tests__/schemas.spec.ts` 的 S4 系列用例是这条的回归保护），调用方通过
+ * overviewOutSchema.parse(response) 在 api 边界守门。 */
 export const overviewOutSchema = z.object({
   date_from: z.string(),
   date_to: z.string(),
@@ -202,6 +202,10 @@ export const partSchema = z.object({
   request_date: z.string(),
   planned_delivery_date: z.string(),
   is_urgent: z.boolean(),
+  // 2026-10-03 取舍登记：REPAIRING 作为**枚举成员**保留，尽管后端 2026-10-01 起不再
+  // 产生该状态（返修改用 t_part_batch.is_repairing 布尔列）。未 apply 存量洗数据
+  // migration 的环境仍可能返出 REPAIRING 行，删掉成员会让 partSchema.parse 抛错
+  // ⇒ 整页白屏。「能否作为筛选参数下发」由 PARTS_STATUS_FILTER_WHITELIST 单独管。
   status: z.enum([
     'PENDING',
     'PROGRAMMING',
@@ -216,6 +220,10 @@ export const partSchema = z.object({
   ]),
   order_no: z.string().nullable(),
   system_delivery_date: z.string().nullable(),
+  // 2026-10-03：已送数量。复用同一 VO 的 7 个端点里只有 com/union-list 与
+  // GET /parts 填（装配件行也填，语义是已送「套数」，公式与两条边界见
+  // types/parts.ts::PartListItem.delivered_quantity），其余 5 个端点恒 null ⇒ 必须
+  // nullable + optional（不能改成必填，否则那 5 个端点的响应 parse 当场抛错）。
   delivered_quantity: z.number().nullable().optional(),
   note: z.string().nullable(),
   customer_name: z.string().nullable(),
@@ -263,7 +271,6 @@ export const partSchema = z.object({
   has_children: z.boolean().optional(),
   child_count: z.number().nullable().optional(),
   created_at: z.string().nullable().optional(),
-  matched_children: z.array(z.unknown()).nullable().optional(),
   // 2026-09-29 新增：是否已上传 CNC 程序（z.boolean 必填；沿 CLAUDE.md §M-4 strip
   // 陷阱 —— 后端若漏返该字段 Zod parse 会抛错，守门到位）。仅 chain 含 CNC 工序
   // 的 part 才有非 false 值；其它 part 恒为 false（后端 service 层派生）。
@@ -1701,9 +1708,10 @@ export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendable
 // `receive_next_process_id` 沿同一口径。写成 `z.string().nullable()` 会让「未设 step /
 // 无下一道工序」这一合法响应当成契约漂移整列炸掉，故此处必须 `z.string()`。
 //
-// 必填字段**逐个显式声明**的原因（Zod strip 陷阱，CLAUDE.md §4）：`z.object()` 默认
-// 是 strip 模式，漏声明的字段被静默丢弃、parse 照过不误 —— 守门形同虚设、契约漂移
-// 静默通过。`__tests__/schemas.spec.ts` 的 outsource-pool 段用「合法 fixture parse
+// 必填字段**逐个显式声明**的原因（Zod strip 陷阱，见 CLAUDE.md「TanStack Query」
+// 的 Zod 守门条目）：`z.object()` 默认是 strip 模式，漏声明的字段被静默丢弃、
+// parse 照过不误 —— 守门形同虚设、契约漂移静默通过。
+// `__tests__/schemas.spec.ts` 的 outsource-pool 段用「合法 fixture parse
 // 通过 + 缺键 / 类型错必须抛错 + parse 后键集与 fixture 键集逐字段相等」三条锁死它
 // （行 schema 与顶层 result schema 两侧各一组）。
 // ============================================================

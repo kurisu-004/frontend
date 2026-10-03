@@ -464,7 +464,18 @@ export function buildPartsListColumnDefs(deps: {
       },
     },
 
-    // 9. 已送数量（装配件行恒为 '—'）
+    // 9. 已送数量
+    //
+    // 2026-10-03：`GET /parts` 已填 delivered_quantity，PART 行 = 未软删批次中
+    // status ∈ (DELIVERED, COMPLETED) 的 quantity 之和。兜底值取 '—' 而非 0 ——
+    // 「后端未返」渲染成 0 会被读成「一件都没交」，是静默错值；`??` 只在 nullish
+    // 时兜底，后端补齐后会自动回真数字。
+    //
+    // **`GET /parts` 已填，下面的兜底仍是必需的**：复用同一 VO 的其余 5 个端点
+    // （parts/pending-programming / parts/by-work-type/{id} / parts/by-worker/{id} /
+    // parts/pickable-by-work-type/{id} / assemblies/{id}/children）恒返 null。
+    // ASSEMBLY '—' 短路同理是兜底而非已知现状：装配件行的已送数是「套数」、
+    // 零件行按「件」计，单位不同不宜在同一列并排，故装配件走 '—'。
     {
       key: 'delivered_quantity',
       label: '已送数量',
@@ -477,7 +488,9 @@ export function buildPartsListColumnDefs(deps: {
         if (r.row_type === 'ASSEMBLY') {
           return h('span', { class: 'muted' }, '—');
         }
-        return h('span', null, r.delivered_quantity ?? 0);
+        return r.delivered_quantity == null
+          ? h('span', { class: 'muted' }, '—')
+          : h('span', null, r.delivered_quantity);
       },
     },
   ];
