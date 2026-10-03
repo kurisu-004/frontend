@@ -10,8 +10,9 @@
     - layer: 'top' | 'middle' | 'bottom'
     - statuses: OrderStatus[]
     - @update:modelValue: 双向同步
-  渲染：el-table stripe；列复用 UrgentOrdersList.vue:31-49 字段（序号 / 流水 /
-  图号 / 名称 / 客户 / 状态 ElTag / 倒计 chip）；loading / error / empty 三态。
+  渲染：el-table stripe；列 = # / 流水(serial_no) / 图号(drawing_no) / 名称 /
+  客户(l1_customer_name + customer_name 拼接) / 状态 ElTag / 倒计
+  (planned_delivery_date，出逾期/临近配色)；loading / error / empty 三态。
   闸门：父组件 DashboardView `v-if="selectedLayer"` 保证 drawer 首次点击前不挂载，
   useDashboardUpcomingList 的 enabled 闸门天然生效；drawer 自身
   `v-if="statuses.length === 0"` 是 props 异常兜底。
@@ -41,9 +42,6 @@
     </div>
 
     <div v-else class="drawer-body">
-      <!-- 顶部 header：日期 · 层标签 · 共 N 件（2026-10-01 订正：本注释原写
-           「日期 · 层标题 · 状态数 + 关闭按钮」，dddebb7 桌面屏重构已把 header
-           收成单行 header-row-1 并删掉状态数与关闭按钮节点） -->
       <div class="drawer-header">
         <div class="header-row-1">
           <span class="header-date">{{ date }}</span>
@@ -129,8 +127,9 @@
 //   3. rows = query.data.items（500 件上限防御性兜底；实际单日 × 8 状态远小于此）。
 //
 // 视觉：
-//   - 顶部 header：日期 + 层标题（el-tag 用项目主色背景）+ 状态数 + 共 N 件 + 关闭按钮
-//   - 列表：el-table stripe；列复用 UrgentOrdersList.vue:31-49 字段
+//   - 顶部 header：单行放 日期 + 层标题(el-tag 用项目主色背景) + 共 N 件
+//   - 列表：el-table stripe；列 = # / 流水 / 图号 / 名称 / 客户(一二级拼接) / 状态 ElTag /
+//     倒计（planned_delivery_date 的倒计文案，逾期/临近配色）
 //   - loading / error / empty 三态
 //   - v-if="statuses.length === 0" 兜底：父组件 onBarLayerClick 写入后 statuses
 //     一定有元素；此处防御 props 异常时给空状态提示。

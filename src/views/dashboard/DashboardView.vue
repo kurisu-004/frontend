@@ -275,8 +275,9 @@ function onUpcomingRowClick(part: PartListItem): void {
 .dashboard-main {
   flex: 1;
   display: grid;
-  // 2026-09-30：grid 列比保持 3fr 2fr（用户「6:4」要求），仅改 main 子项 gap
-  grid-template-columns: 3fr 2fr;
+  // 2026-10-03：列比保持 3fr 2fr（用户「6:4」要求），但下限钉死 minmax(0, …)。
+  // 裸 fr 的下限是 auto（= min-content），左栏内容宽会反向决定右栏 track；钉死后右栏恒取 2/5。
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   gap: 16px;
   min-height: 0;
 }
