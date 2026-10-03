@@ -114,16 +114,24 @@ function buildSendPayload(args: {
 
 /** `<PagedTable>` 模板 ref 暴露出来的成员（本 composable 实际用到的部分）。
  *
- *  2026-10-03 提取成具名类型：`ref()` 无初值会推断成 `Ref<any>`，此前
- *  `sendablePagedRef` 就没写标注，于是 `sendablePagedRef.value?.items.value`
- *  这类把已解包成员当 ref 再读一层的错误**不会报 TS 错**（`any` 上任何属性访问都
- *  合法），运行时恒得 undefined。显式标注后同类回归直接变成编译错误。 */
+ *  提取成具名类型的两个原因：
+ *  1. `ref()` 无初值会推断成 `Ref<any>`，于是 `sendablePagedRef.value?.items.value`
+ *     这类把已解包成员当 ref 再读一层的错误**不报 TS 错**（`any` 上任何属性访问都合法），
+ *     运行时恒得 undefined。显式标注后同类回归直接变成编译错误。
+ *  2. 成员一律声明为**必填**：`PagedTable.vue` 的 `defineExpose` 无条件解构出这些成员，
+ *     ref 的 `value` 一旦就位它们必然齐全。写可选（`?`）会逼调用点写 `?.()`，把「成员
+ *     缺失」这个本该响的 TypeError 吞成静默 no-op。必填声明换来的是**赋值点检查** ——
+ *     往这个 ref 塞一个缺成员的对象（测试桩、换组件）直接编译报错。
+ *
+ *  ⚠️ 本接口是**手写**的运行时形状声明，与 `PagedTable` 的 `defineExpose` 之间没有编译期
+ *  关联：模板用的是字符串 ref（`ref="sendablePagedRef"`），Vue 按名字在运行时回填。
+ *  所以「PagedTable 改了成员名」不会被这里拦下，那属于组件侧的独立契约问题。 */
 export interface SendablePagedTableExpose {
   total?: number;
   /** 组件 public instance 上是**已解包**的数组（不是 Ref，见 handleScannedSerialForSend） */
-  items?: SendableItem[];
-  fetch?: () => Promise<void>;
-  reset?: () => Promise<void>;
+  items: SendableItem[];
+  fetch: () => Promise<void>;
+  reset: () => Promise<void>;
 }
 
 /** 2026-09-21 显式返回类型。 */
@@ -197,19 +205,19 @@ export function useOutsourceSendableList(
     }
   }
 
-  // 2026-10-03：ref 有类型标注后，这三处的 `fetch` / `reset` 可选性变成编译期可见 ——
-  // 模板 ref 在组件挂载前是 undefined，方法本身也只在 PagedTable 暴露时才存在。
+  // ref 的 `value` 在 <PagedTable> 挂载前是 undefined（故对 value 用可选链），
+  // 成员本身必填（见 SendablePagedTableExpose）—— 成员缺失要响，不要静默 no-op。
   async function refreshSendable(): Promise<void> {
-    await sendablePagedRef.value?.fetch?.();
+    await sendablePagedRef.value?.fetch();
   }
 
   function onSendableSearch(): void {
-    void sendablePagedRef.value?.reset?.();
+    void sendablePagedRef.value?.reset();
   }
   function onSendableReset(): void {
     sendableFilter.keyword = '';
     sendableFilter.customer_id = '';
-    void sendablePagedRef.value?.reset?.();
+    void sendablePagedRef.value?.reset();
   }
 
   // ============ 加急行红底 ============

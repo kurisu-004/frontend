@@ -167,13 +167,16 @@ describe('displayTotalPrice：总价列的显示源', () => {
     expect(vm.displayTotalPrice(row({ total_price: '30.50' }))).toBe('30.50');
   });
 
+  // fixture 的 total_price 必须**故意不等于** q × p（10.00 × 3 = 30.00，这里给 30.50）。
+  // 否则本条恒真：自洽的 fixture 下「读后端值」与「前端重算碰巧相等」不可区分，
+  // 而后者正是这里要防的浮点末位漂移。
   it('P3：编辑态 + 缓冲与原值一致 → 仍走后端值（避免浮点误差与 Decimal 末位对不上）', async () => {
     const { vm } = await setup();
-    const r = row();
+    const r = row({ total_price: '30.50' });
     vm.editingId = r.shipment_id;
     vm.editBuffer.unit_price = Number(r.unit_price);
     vm.editBuffer.quantity = r.quantity;
-    expect(vm.displayTotalPrice(r)).toBe(r.total_price);
+    expect(vm.displayTotalPrice(r)).toBe('30.50');
   });
 
   it('P4：编辑态 + 改了数量 → 用缓冲实时重算（操作员敲数字时能看到总价变化）', async () => {
@@ -206,16 +209,18 @@ describe('displayTotalPrice：总价列的显示源', () => {
   });
 
   // 缓冲被改成非正数时不能算出「-30.00」或除零噪声，直接给占位符。
+  // 恢复合法值后回到后端值 —— 同样是 total_price ≠ q × p 的 fixture（30.50 vs 30.00），
+  // 否则后半段与「读后端值」不可区分。
   it('P7：编辑态缓冲非法（非正数量 / 非有限值）→ 显示占位符而不是算出的垃圾数', async () => {
     const { vm } = await setup();
-    const r = row();
+    const r = row({ total_price: '30.50' });
     vm.editingId = r.shipment_id;
     vm.editBuffer.unit_price = Number(r.unit_price);
     vm.editBuffer.quantity = 0;
     expect(vm.displayTotalPrice(r)).toBe('—');
     vm.editBuffer.unit_price = Number(r.unit_price);
     vm.editBuffer.quantity = r.quantity;
-    expect(vm.displayTotalPrice(r)).toBe(r.total_price);
+    expect(vm.displayTotalPrice(r)).toBe('30.50');
   });
 });
 
