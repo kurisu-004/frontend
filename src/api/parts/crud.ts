@@ -74,10 +74,11 @@ export interface PartItem {
    * 其它端点为 null。
    */
   last_inspection_fail_note?: string | null;
-  /** 2026-07-29 批次化；2026-10-03 订正填充口径：**全仓仅
-   *  `GET /api/v2/parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）
-   *  填**，其余复用本 VO 的端点恒 null（后端刻意不填，理由见下面 `batch_version`
-   *  的注释）。「品检待办」不走本 VO（它有自己的出参），故不再算作填充方。
+  /** 2026-07-29 批次化；2026-10-04 订正填充口径：**报工台两个列表端点都填** ——
+   *  `GET /api/v2/parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）与
+   *  `GET /api/v2/parts/by-worker/{worker_id}`（放回 / 送检 / HeldPartsBadge）；其余复用
+   *  本 VO 的端点恒 null（后端刻意不填，理由见下面 `batch_version` 的注释）。
+   *  「品检待办」不走本 VO（它有自己的出参），故不再算作填充方。
    *  2026-10-04 补：取件路径上这两个字段的**运行时守门**是
    *  `src/composables/queries/schemas.ts` 的 `scanPartRowSchema`（两个报工台列表
    *  函数的出参都走它 `.parse()`）；改名义务集中登记在下面 `batch_version` 段。 */
@@ -85,22 +86,20 @@ export interface PartItem {
   batch_no?: number | null;
   batch_label?: string | null;
   /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与 batch_id 同源。
-   *  **填充口径：全仓仅 `GET /api/v2/parts/pickable-by-work-type/{work_type_id}`
-   *  （扫码台 PICK_UP 列表）填**，该端点的行本来就是批次行 —— 后端取行 SQL 投影
-   *  `b.id` / `b.version` 并显式覆写 `PartListItem.batch_id` / `batch_version`
-   *  （`modules/part/service/phase1/work_type.rs::list_pickable_by_work_type`），
-   *  候选口径 = `b.status='IN_PROCESS' AND b.location='PRODUCTION_SHELF' AND
+   *  **填充口径：报工台两个列表端点都填** —— `GET /api/v2/parts/pickable-by-work-type/
+   *  {work_type_id}`（扫码台 PICK_UP 列表）与 `GET /api/v2/parts/by-worker/{worker_id}`
+   *  （放回 / 送检 / HeldPartsBadge）。这两个端点的行本来就是批次行 —— 后端取行 SQL
+   *  投影 `b.id` / `b.version` 并显式覆写 `PartListItem.batch_id` / `batch_version`。
+   *  取件端点的候选口径 = `b.status='IN_PROCESS' AND b.location='PRODUCTION_SHELF' AND
    *  货架 active 且 zone='PRODUCTION'` 且落在该工种↔工序映射上。
    *  ⚠️ **本 VO 的 `version` 字段不是批次版本**：它是 part 级 `t_part.version`，
-   *  而 pickable 端点的取行 SQL 压根不投影 `p.version` ⇒ 该端点上**恒为 0**（后端
+   *  而报工台两个取行 SQL 压根不投影 `p.version` ⇒ 该 VO 上**恒为 0**（后端
    *  有意占位）。批次 OCC 只认本字段，**不要拿 `version` 当批次版本用**。
    *
    *  其余复用 `PartListItem` 的端点**恒为 null**（后端刻意不填：part 级行的单位是
-   *  part，一个 part 的活跃批次可能不止一个，填任意一个都是**错锚点**）。已核
-   *  backend master `3609a85`，全仓 7 处复用该 VO = 1 处填（上面的 pickable）
-   *  + 6 处恒 null，后者逐个是：`GET /parts` / `GET /com/union-list` /
-   *  `GET /parts/pending-programming` / `GET /parts/by-work-type/{id}` /
-   *  `GET /parts/by-worker/{id}` / `POST /assemblies/{id}/children`（唯一一处单条
+   *  part，一个 part 的活跃批次可能不止一个，填任意一个都是**错锚点**）。复用该 VO
+   *  的端点里恒 null 的逐个是：`GET /parts` / `GET /com/union-list` /
+   *  `GET /parts/by-work-type/{id}` / `POST /assemblies/{id}/children`（唯一一处单条
    *  返回本 VO 的端点）。⚠️ **别把 outsource-* 算进来**：它们是自有 repo 的自有
    *  SQL（`OutsourceRepoTrait::quotable_list` / `sendable_list`，入参形态也不同——
    *  keyword_pat / customer_id / limit / offset），出参也是自有 VO

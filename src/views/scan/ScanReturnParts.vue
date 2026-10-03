@@ -3,7 +3,11 @@
 
   /scan/return —— 扫码台 RETURN 流程（2026-07-10 PR-E，2026-09-15 Phase 5 切 v2）
   1. onBeforeMount 调 GET /parts/by-worker/{worker_id} 列出当前 worker 持有件
-  2. 工人点选一件 → 弹「下一道工序」picker（el-radio-group）
+  2. 工人点选一件 → 按行 VO 的 `chain_state` 分流（2026-10-04，工序链适配）：
+       - NEXT（链内有下一道）→ 拉候选货架取推荐架，开 ReturnConfirmDialog 单确认，
+         不再让工人选工序、不再点货架
+       - TAIL（当前是链内最后一道）→ 先提示「加工完成后请送检」，再回退手选工序
+       - NONE（无链 / 链已软删 / 指针漂移）→ 原路径：弹「下一道工序」picker
   3. 选完工序 → 弹 ShelfPickerDialog（共享 HMI 卡片网格）
   4. 2026-09-15 Phase 5：提交改走 POST /parts/worker-scan（event_type=RETURNED），
      单一端点扫 RETURN；旧 POST /parts/scan?event_type=RETURNED 保留 v1 兼容，
@@ -92,7 +96,7 @@
             {{ selectedPart.name }} · 归还数量 {{ selectedPart.quantity }} · 下一工序：{{
               selectedNextProcessName || '未选'
             }}
-            · 待选货架
+            · {{ confirmShelfText }}
           </span>
           <el-button size="small" @click="cancelSelect">取消选择</el-button>
         </div>
@@ -174,15 +178,30 @@
     />
 
     <!-- 下一道工序选择对话框（2026-07-17 升级为大卡 + INHOUSE/OUTSOURCE tabs）。
-         2026-10-04：不再传 current-process-id / exclude-process-ids —— 行 VO 是后端
-         `PartListItem`，**刻意不返** `next_process_id`，原来那两个绑定恒读到
-         undefined（等价于组件默认值 null / []，行为不变）。 -->
+         2026-10-04：仍不传 current-process-id / exclude-process-ids —— 行 VO 的
+         `chain_next_process_id` 是**下一道**的 id，填进「当前工序」槽位会让 dialog
+         把下一道预填成选中项，工人直接点「下一步 · 选货架」就等于没得选；这两个绑定
+         保持组件默认值（null / []）= 不预填、全部可选。
+         链已知分支（chain_state=NEXT）下本 dialog 根本不开，由 ReturnConfirmDialog
+         直接落下一道工序；只有「手动选择工序」与 NONE / TAIL 分支才会进来。 -->
     <ProcessPickerDialog
       v-if="showProcessDialog"
       v-model="showProcessDialog"
       kind="return"
       @confirm="onProcessPicked"
       @cancel="onProcessCancel"
+    />
+
+    <!-- 链已知（chain_state=NEXT）单确认弹窗：下一工序 + 目标货架由后端派生好，
+         工人只做「确认放回 / 手动选择工序 / 取消」三选一。 -->
+    <ReturnConfirmDialog
+      v-if="showChainConfirm"
+      v-model="showChainConfirm"
+      :process-label="selectedNextProcessName"
+      :shelf-label="chainShelfCode"
+      @confirm="onChainConfirm"
+      @manual="onChainManual"
+      @cancel="onChainCancel"
     />
 
     <!-- 共享 HMI RETURN 货架选择卡片网格 picker -->
@@ -292,12 +311,15 @@ import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
 import { listPartsHeldByWorker, workerScan, type PartItem } from '@/api/parts';
+import { listShelvesForReturn } from '@/api/shelves';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import ShelfPickerDialog from '@/views/scan/components/ShelfPickerDialog.vue';
 import ProcessPickerDialog from '@/views/scan/components/ProcessPickerDialog.vue';
+import ReturnConfirmDialog from '@/views/scan/components/ReturnConfirmDialog.vue';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
 import type { Process } from '@/types/process';
+import type { ShelfForReturn } from '@/types/shelf';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 
 const router = useRouter();
@@ -352,6 +374,24 @@ const showShelfPicker = ref(false);
 const showQtyDialog = ref(false);
 const pendingShelfId = ref<string>('');
 
+// --- 2026-10-04 工序链已知分支：下一工序 + 推荐货架都已派生，只差一次确认 ---
+// chainShelfId 存的是「还没提交」的推荐架：与 pendingShelfId 分开是因为后者一写就代表
+// 「本次放回就放这个架」，而这里只是候选。`cancelSelect()` 会把两者一起清掉，保证
+// 下次选件时确认框不会带着上一次的货架。
+const showChainConfirm = ref(false);
+const chainShelfId = ref<string>('');
+const chainShelfCode = ref<string>('');
+// 防竞态（照 onPreview 的 previewToken 同款）：`openChainConfirm` 里有一次
+// `listShelvesForReturn` 往返，这期间工人可能点另一张卡 / 再扫一次码 ⇒ 每次进
+// `openChainConfirm` 自增 token，响应回来对不上就直接丢弃，避免旧响应把新一轮
+// 选件的 selectedPart 覆盖掉、开出一个工序/货架都对不上的确认框。
+let chainToken = 0;
+
+/** 确认栏的货架段：链已知分支已派生出目标货架就直接显示；否则仍是「待选货架」。 */
+const confirmShelfText = computed<string>(() =>
+  chainShelfCode.value ? `目标货架 ${chainShelfCode.value}` : '待选货架',
+);
+
 // --- 多批次扫码命中弹窗 ---
 const showBatchPicker = ref(false);
 const batchPickerCode = ref('');
@@ -369,14 +409,43 @@ async function scrollCardIntoView(batchKey: string): Promise<void> {
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-/** RETURN tail：选中 + 清空 next_process_id（必须由弹窗显式选）+ 滚动 + 开工序选择弹窗 */
+/** 扫码命中：选中 + 滚动居中，再按 chain_state 分流放回流程 */
 async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
   selectedPart.value = p;
   selectedQty.value = p.quantity;
   selectedNextProcessId.value = '';
+  selectedNextProcessName.value = '';
   const key = String(p.batch_id || p.id);
   await scrollCardIntoView(key);
-  showProcessDialog.value = true;
+  await enterReturnFlow(p);
+}
+
+/**
+ * 2026-10-04 新增：按 chain_state 分流放回流程（点选与扫码两个入口共用这一个）。
+ *
+ * - `TAIL`：当前工序是链内最后一道 → 先提示「加工完成后请送检」，**再**打开工序选择
+ *   弹窗。不把「下一道 = 送检」判死：链是管理员配的，工人对「这一步是不是真的走完」
+ *   有最终发言权（临时插单 / 改道），提示 + 手选并存。
+ * - `NEXT`：链内且有下一道 → 拉候选货架取推荐架，直接开单确认弹窗，工人不选工序、
+ *   不点货架（见 openChainConfirm）。
+ * - `NONE`：无链 / 链已软删 / 当前工序不在链内（指针漂移）→ 走原三步路径。
+ */
+async function enterReturnFlow(p: ScanPartRowSchema): Promise<void> {
+  if (p.chain_state === 'TAIL') {
+    const cur = p.chain_current_process_name;
+    ElMessage.warning(
+      cur
+        ? `「${cur}」为最后一道工序，加工完成后请送检。`
+        : '当前为最后一道工序，加工完成后请送检。',
+    );
+    showProcessDialog.value = true;
+    return;
+  }
+  if (p.chain_state === 'NEXT') {
+    await openChainConfirm(p);
+    return;
+  }
+  showProcessDialog.value = true; // NONE：无链 / 漂移，现状不变
 }
 
 async function onScanToSelect(rawCode: string): Promise<void> {
@@ -385,6 +454,7 @@ async function onScanToSelect(rawCode: string): Promise<void> {
   if (
     submitting.value ||
     showProcessDialog.value ||
+    showChainConfirm.value ||
     showShelfPicker.value ||
     showQtyDialog.value ||
     showBatchPicker.value
@@ -462,7 +532,8 @@ function onSelect(p: ScanPartRowSchema): void {
   selectedPart.value = p;
   selectedQty.value = p.quantity;
   selectedNextProcessId.value = '';
-  showProcessDialog.value = true;
+  selectedNextProcessName.value = '';
+  void enterReturnFlow(p);
 }
 
 // --- 预览 ---
@@ -537,9 +608,110 @@ function onProcessCancel(): void {
   cancelSelect();
 }
 
+// ============================================================
+// 2026-10-04 工序链已知分支：NEXT → 派生下一工序 + 推荐架 → 单确认放回
+// ============================================================
+
+/**
+ * 清掉链派生的半截状态（推荐架 + 派生出来的下一工序），**保留选中件本身**。
+ *
+ * 为什么不整段 `cancelSelect()`：落回手选工序时选中件必须留着，否则工人选完工序、
+ * 选完架后 `onShelfConfirm` / `submitReturn` 会因 `!selectedPart` 直接 bail（弹一句
+ * 「选择已重置」），整条手选路径走不通。要清的是「链给出的答案」，不是「选中的件」。
+ */
+function clearChainDerived(): void {
+  chainShelfId.value = '';
+  chainShelfCode.value = '';
+  selectedNextProcessId.value = '';
+  selectedNextProcessName.value = '';
+}
+
+/** 落回「手选工序」的统一出口：清掉链派生的答案后打开工序选择弹窗。 */
+function fallBackToManualProcess(): void {
+  clearChainDerived();
+  showProcessDialog.value = true;
+}
+
+/**
+ * 链已知（`chain_state === 'NEXT'`）：拉候选货架取推荐架，开 `ReturnConfirmDialog`。
+ *
+ * 三条边界（都不抛给视图层，全部落回手选工序，保证工人永远有出路）：
+ *   1. `chain_next_process_id === '0'` —— NONE / TAIL 的兜底值，不是真 id。发过去
+ *      必得空列表，白跑一趟，直接落回手选。
+ *   2. `items` 为空 —— 该工序没配货架（worker-scan 的 20507 BIZ_SHELF_PROCESS_NOT_MAPPED
+ *      的前置形态）。这时点确认只会换一个报错码，不如先让工人改选工序。
+ *   3. 请求失败 / 下一工序名解析不出 —— 提示 + 落回手选。
+ */
+async function openChainConfirm(p: ScanPartRowSchema): Promise<void> {
+  const myToken = ++chainToken;
+  const nextProcessId = p.chain_next_process_id;
+  if (!nextProcessId || nextProcessId === '0' || !p.chain_next_process_name) {
+    ElMessage.warning('未找到下一道工序，请手动选择工序');
+    fallBackToManualProcess();
+    return;
+  }
+
+  let shelf: ShelfForReturn | undefined;
+  try {
+    const result = await listShelvesForReturn(nextProcessId);
+    if (myToken !== chainToken) return;
+    // 推荐架由后端标在每条 item 上（for-return 的 load 最小那条）；全都没标推荐时
+    // 取第一条，保证仍有确定的目标架而不是把工人晾在确认框前。
+    shelf = result.items.find((s) => s.is_recommended) ?? result.items[0];
+  } catch (e) {
+    if (myToken !== chainToken) return;
+    ElMessage.error((e as Error).message ?? '加载候选货架失败');
+    fallBackToManualProcess();
+    return;
+  }
+
+  if (!shelf) {
+    ElMessage.warning('该工序暂无可用货架，请手动选择工序');
+    fallBackToManualProcess();
+    return;
+  }
+
+  selectedNextProcessId.value = nextProcessId;
+  // 链上派生的只有工序名（无 code），与手选路径的「code + name」标签形态对齐不了；
+  // 这里只显示名字，确认栏与成功提示都靠它。
+  selectedNextProcessName.value = p.chain_next_process_name;
+  chainShelfId.value = shelf.id;
+  chainShelfCode.value = shelf.code;
+  showChainConfirm.value = true;
+}
+
+/** 确认框「确认放回」：写死目标架后走与货架点选同一条提交路径。 */
+async function onChainConfirm(): Promise<void> {
+  showChainConfirm.value = false;
+  if (!chainShelfId.value) {
+    ElMessage.warning('选择已重置，请重新选择零件');
+    cancelSelect();
+    return;
+  }
+  pendingShelfId.value = chainShelfId.value;
+  await submitReturn();
+}
+
+/** 确认框「手动选择工序」：落回原三步路径（工序选择 → 货架点选）。 */
+function onChainManual(): void {
+  showChainConfirm.value = false;
+  clearChainDerived();
+  showProcessDialog.value = true;
+}
+
+/** 确认框「取消」：整次放回作废。 */
+function onChainCancel(): void {
+  showChainConfirm.value = false;
+  cancelSelect();
+}
+
 /**
  * 工人选了无映射架的工序 → ShelfPickerDialog 返空 → 点「重新选择工序」按钮。
  * 关闭 shelf picker，重新弹工艺序 picker 让工人换一个。
+ *
+ * 2026-10-04：只服务 NONE / TAIL / 「手动选择工序」这三条**手选**路径。链已知
+ * （NEXT）分支里这条恢复路径已被 `openChainConfirm` 内部吸收（候选架为空时它自己
+ * 落回手选，不会开本 dialog），所以 NEXT 下本函数不会被触发。
  */
 function onShelfEmpty(): void {
   showShelfPicker.value = false;
@@ -608,7 +780,17 @@ function cancelSelect(): void {
   selectedPart.value = null;
   selectedQty.value = undefined;
   selectedNextProcessId.value = '';
+  selectedNextProcessCode.value = '';
+  selectedNextProcessName.value = '';
   pendingShelfId.value = '';
+  // 2026-10-04：链确认框的 state 一并清掉，否则下次选件时确认框 / 确认栏会带着
+  // 上一次的推荐架（worker-scan 提交的是 pendingShelfId，两者不是同一个值域，
+  // 混着留迟早放错架）。同时作废在途的候选货架请求：反选 / 取消时那一趟请求的
+  // 响应回来已无主，不丢弃就会为「已取消的件」弹出一个工序货架都对不上的确认框。
+  chainToken++;
+  showChainConfirm.value = false;
+  chainShelfId.value = '';
+  chainShelfCode.value = '';
 }
 
 function backToAction(): void {

@@ -192,7 +192,7 @@ describe('A 组：报工台两个读端点的 URL 与 query 逐字钉死', () =>
 // +「缺分页字段 / 类型错 / 裸数组时 parse 抛错」双向锁死。
 //
 // 下面 2 份 fixture 是后端 `PartListItem`（backend-rust
-// `src/modules/part/vo/part.rs::PartListItem`）的**完整 34 字段集**，逐字照抄 VO 结构。
+// `src/modules/part/vo/part.rs::PartListItem`）的**完整 38 字段集**，逐字照抄 VO 结构。
 // 「fixture 写全」本身不构成守卫 —— 多出来的键会被 strip 静默吞掉、parse 不报错；
 // 真正把「schema 声明的字段集 == VO 字段集」钉死的是 E7 的键集断言。
 // ============================================================
@@ -207,7 +207,8 @@ describe('A 组：报工台两个读端点的 URL 与 query 逐字钉死', () =>
  * `is_urgent` 写死 false / 单价总价写死 0 / part 级 `version` 写死 0 /
  * `created_at` 是 epoch；派生字段（客户名 / 位置 / 持有人）恒 null，
  * `row_type` 恒 `'PART'`（`From<TPart>` 派生）。雪花 id 全是 JSON string。
- * 唯独 `batch_id` / `batch_version` 有值 —— 全仓只有取件端点填批次锚点。
+ * 批次锚点（`batch_id` / `batch_version`）与工序链派生四件套都有值 —— 2026-10-04 起
+ * 报工台两个端点都填这两组字段。
  */
 const pickRowFixture = {
   id: '190000000000101',
@@ -234,6 +235,10 @@ const pickRowFixture = {
   updated_by: null,
   deleted_at: null,
   process_chain_id: null,
+  chain_state: 'NEXT',
+  chain_next_process_id: '190000000000131',
+  chain_next_process_name: 'CUT-01 下料',
+  chain_current_process_name: 'SAW-02 锯切',
   customer_name: null,
   l1_customer_name: null,
   location: null,
@@ -246,12 +251,18 @@ const pickRowFixture = {
   batch_version: 3,
 };
 
-/** 放回 / 送检行 fixture（`GET /parts/by-worker/{worker_id}`）：与取件行同 VO，唯批次锚点恒 null。 */
+/** 放回 / 送检行 fixture（`GET /parts/by-worker/{worker_id}`）：与取件行同 VO，38 字段同集。
+ *  差别在两组派生字段的取值：批次锚点同样有值；链位置取 `TAIL`（当前工序是链内最后
+ *  一道 ⇒ 下一道工序 id 落兜底值 `'0'`、下一道工序名为 null）。 */
 const heldRowFixture = {
   ...pickRowFixture,
   id: '190000000000102',
-  batch_id: null,
-  batch_version: null,
+  batch_id: '190000000000112',
+  batch_version: 4,
+  chain_state: 'TAIL',
+  chain_next_process_id: '0',
+  chain_next_process_name: null,
+  chain_current_process_name: 'CUT-01 下料',
 };
 
 // ============================================================
@@ -268,10 +279,15 @@ const heldRowFixture = {
 // 不是照源码推出来的。取值口径（雪花 id 形态 / Decimal 字符串 / 两个日期占位符 /
 // 批次锚点有无）与真实响应完全一致，可直接与后端日志对账。
 //
+// ⚠️ 工序链派生四件套（`chain_state` / `chain_next_process_id` / `chain_next_process_name`
+// / `chain_current_process_name`）与放回行的批次锚点是后端**同期新增**的列（2026-10-04
+// 与前端并行推进），这两组值按后端 VO 的填充口径手写，不是实测转录 —— 其余 30 多个字段
+// 仍是逐字实测样本。后端上线后应重新采集这两个样本替换。
+//
 // 采集方式：e2e seed 一个 MANAGER 账号 → `POST /iam/login` 取 token → 带
 // `Authorization: Bearer` 打两个 GET（`?limit=200&offset=0`）→ 落盘响应体。
 // 取件路径 200 行 / 放回路径 4 行**逐行** `scanPartRowSchema.parse()` 全部通过（0 失败），
-// 且 204 行的键集**完全一致**（34 键，无一行缺键、无一个键被 strip）。
+// 且 204 行的键集**完全一致**（无一行缺键、无一个键被 strip）。
 // ============================================================
 
 /** 取件行真实样本：`GET /parts/pickable-by-work-type/{work_type_id}` 的 `data.items[0]`，逐字转录。 */
@@ -300,6 +316,10 @@ const wirePickRow = {
   updated_by: null,
   deleted_at: null,
   process_chain_id: null,
+  chain_state: 'NEXT',
+  chain_next_process_id: '226157188099403264',
+  chain_next_process_name: 'CNC-03 精铣',
+  chain_current_process_name: 'SAW-01 下料',
   customer_name: null,
   l1_customer_name: null,
   location: null,
@@ -338,6 +358,10 @@ const wireHeldRow = {
   updated_by: null,
   deleted_at: null,
   process_chain_id: null,
+  chain_state: 'TAIL',
+  chain_next_process_id: '0',
+  chain_next_process_name: null,
+  chain_current_process_name: 'CUT-01 下料',
   customer_name: null,
   l1_customer_name: null,
   location: null,
@@ -346,8 +370,8 @@ const wireHeldRow = {
   has_children: false,
   child_count: null,
   has_cnc_program: false,
-  batch_id: null,
-  batch_version: null,
+  batch_id: '228801248771809280',
+  batch_version: 2,
 };
 
 describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效性', () => {
@@ -399,13 +423,13 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
     expect(real.request_date).toBe('2026-01-05');
   });
 
-  // 取件行（批次锚点有值）与放回 / 送检行（恒 null）是同一 VO 的两种填充口径。
-  // 只测一种会让另一种在生产里炸 —— 放回 / 送检两页正靠 null 判定「无批次锚点」。
-  it('E5：取件行与放回行（批次锚点有值 / 恒 null）都 parse 通过', () => {
+  // 取件行与放回 / 送检行是同一 VO：2026-10-04 起两个端点的批次锚点都有值
+  // （放回页的 worker-scan 要用 batch_id 定位批次），差别只在工序链派生四件套的取值。
+  it('E5：取件行与放回行的批次锚点都 parse 通过且有值（两个端点都填）', () => {
     expect(scanPartRowSchema.parse(pickRowFixture).batch_id).toBe('190000000000111');
     expect(scanPartRowSchema.parse(pickRowFixture).batch_version).toBe(3);
-    expect(scanPartRowSchema.parse(heldRowFixture).batch_id).toBeNull();
-    expect(scanPartRowSchema.parse(heldRowFixture).batch_version).toBeNull();
+    expect(scanPartRowSchema.parse(heldRowFixture).batch_id).toBe('190000000000112');
+    expect(scanPartRowSchema.parse(heldRowFixture).batch_version).toBe(4);
     expect(
       scanPartListResultSchema.parse({
         items: [pickRowFixture, heldRowFixture],
@@ -447,8 +471,8 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
   //   · schema 多声明一个 **optional** 字段 → 键集断言看不见（Zod 对输入中缺省的
   //     optional 键不写入输出）。该失败模式本身无害（不会误拒任何响应，也不会有字段
   //     被静默吞掉），故不为它额外设计断言。
-  it('E7：parse 后的行键集与后端 PartListItem 的 34 字段逐字段相等', () => {
-    expect(Object.keys(pickRowFixture).length, 'fixture 字段数（后端 VO 漂移也会红）').toBe(34);
+  it('E7：parse 后的行键集与后端 PartListItem 的 38 字段逐字段相等', () => {
+    expect(Object.keys(pickRowFixture).length, 'fixture 字段数（后端 VO 漂移也会红）').toBe(38);
     expect(Object.keys(scanPartRowSchema.parse(pickRowFixture)).sort()).toEqual(
       Object.keys(pickRowFixture).sort(),
     );
@@ -477,7 +501,57 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
       expect(Object.keys(parsed), `${key} 不得成为保留键`).not.toContain(key);
       expect(parsed, `${key} 不得被保留`).not.toHaveProperty(key);
     }
-    expect(Object.keys(parsed)).toHaveLength(34);
+    expect(Object.keys(parsed)).toHaveLength(38);
+  });
+
+  // 2026-10-04 工序链派生四件套的守门：放回页按 chain_state 三态分流（NEXT 免选工序
+  // 直接单确认 / TAIL 先提示送检再回退手选 / NONE 走原三步），字段一旦缺失或形态错，
+  // 症状是「该弹的链提示一句都不弹」且看不出真因，所以逐条锁死。
+  it('E9：工序链四件套三态都能 parse，且缺键 / 错形态当场抛 ZodError', () => {
+    // NEXT：有下一道，id / name 都有值
+    const next = scanPartRowSchema.parse(pickRowFixture);
+    expect(next.chain_state).toBe('NEXT');
+    expect(next.chain_next_process_id).toBe('190000000000131');
+    expect(next.chain_next_process_name).toBe('CUT-01 下料');
+    // TAIL：链内最后一道 ⇒ id 落兜底值 '0'、下一道工序名 null（键仍在）
+    const tail = scanPartRowSchema.parse(heldRowFixture);
+    expect(tail.chain_state).toBe('TAIL');
+    expect(tail.chain_next_process_id).toBe('0');
+    expect(tail.chain_next_process_name).toBeNull();
+    expect(tail.chain_current_process_name).toBe('CUT-01 下料');
+    // NONE：无链 / 软删 / 指针漂移
+    expect(
+      scanPartRowSchema.parse({
+        ...heldRowFixture,
+        chain_state: 'NONE',
+        chain_next_process_id: '0',
+        chain_next_process_name: null,
+        chain_current_process_name: null,
+      }).chain_state,
+    ).toBe('NONE');
+
+    // 缺任一键 → 抛（声明成必填就是为了这个：键消失不能让 parse 当场放过）
+    for (const key of [
+      'chain_state',
+      'chain_next_process_id',
+      'chain_next_process_name',
+      'chain_current_process_name',
+    ]) {
+      const row: Record<string, unknown> = { ...pickRowFixture };
+      delete row[key];
+      expect(() => scanPartRowSchema.parse(row), `缺 ${key} 必须抛`).toThrow(ZodError);
+    }
+    // 形态错：枚举外的字面量 / 数字 id 都不放行
+    expect(() => scanPartRowSchema.parse({ ...pickRowFixture, chain_state: 'MIDDLE' })).toThrow(
+      ZodError,
+    );
+    expect(() =>
+      scanPartRowSchema.parse({ ...pickRowFixture, chain_next_process_id: 190000000000131 }),
+    ).toThrow(ZodError);
+    // null 只允许落在两个 name 上：id / state 缺值就是契约破了
+    expect(() =>
+      scanPartRowSchema.parse({ ...pickRowFixture, chain_next_process_id: null }),
+    ).toThrow(ZodError);
   });
 });
 
@@ -496,9 +570,9 @@ describe('W 组：真实 wire 样本（2026-10-04 实测响应）过守门', () 
       ['放回 by-worker', wireHeldRow],
     ] as const) {
       const parsed = scanPartRowSchema.parse(row);
-      // 实测两个端点的行都恰好 34 键；键集不等说明 schema 多声明（strip 掉了后端的键）
+      // 实测两个端点的行键数一致；键集不等说明 schema 多声明（strip 掉了后端的键）
       // 或少声明（后端的键没进 parse 结果），两种都是契约漂移。
-      expect(Object.keys(row), `${label} 真实样本键数`).toHaveLength(34);
+      expect(Object.keys(row), `${label} 真实样本键数`).toHaveLength(38);
       expect(Object.keys(parsed).sort(), `${label} 键集`).toEqual(Object.keys(row).sort());
     }
   });
@@ -517,20 +591,19 @@ describe('W 组：真实 wire 样本（2026-10-04 实测响应）过守门', () 
     expect(held.planned_delivery_date).toBeNull();
   });
 
-  // 实测的批次锚点口径（与 VO 文档一致，两条路径方向相反）：
-  //   取件行 batch_id 是 18 位雪花字符串 / batch_version 是 JSON number；
-  //   放回行两者恒 null。放回 / 送检两页正靠 null 判定「无批次锚点」。
-  it('W3：真实样本的批次锚点 —— 取件行有值（string + number），放回行恒 null', () => {
+  // 实测的批次锚点口径：两个端点同形态 —— batch_id 是 18 位雪花字符串（JSON string）、
+  // batch_version 是 JSON number。放回 / 送检两页也要用它（worker-scan 的 batch_id 入参）。
+  it('W3：真实样本的批次锚点 —— 两个端点都填（string + number）', () => {
     const pick = scanPartRowSchema.parse(wirePickRow);
-    expect(typeof pick.batch_id, '取件 batch_id 必为 string（serialize_i64_opt）').toBe('string');
+    expect(typeof pick.batch_id, 'batch_id 必为 string（serialize_i64_opt）').toBe('string');
     expect(pick.batch_id).toBe('226157188089905152');
-    expect(typeof pick.batch_version, '取件 batch_version 必为 number（i32，无序列化器）').toBe(
+    expect(typeof pick.batch_version, 'batch_version 必为 number（i32，无序列化器）').toBe(
       'number',
     );
     expect(pick.batch_version).toBe(6);
     const held = scanPartRowSchema.parse(wireHeldRow);
-    expect(held.batch_id).toBeNull();
-    expect(held.batch_version).toBeNull();
+    expect(held.batch_id).toBe('228801248771809280');
+    expect(held.batch_version).toBe(2);
   });
 
   // 实测的雪花 id / Decimal 形态：id 与 customer_id 都是 JSON string（customer_id 虽是
@@ -571,6 +644,22 @@ describe('W 组：真实 wire 样本（2026-10-04 实测响应）过守门', () 
       offset: 0,
     });
     expect(held.total).toBe(4);
+  });
+
+  // 工序链四件套在两个端点上的形态：id 是 string、两个 name 可空、state 锁三值枚举。
+  // 放回页的分流（NEXT 免选工序 / TAIL 提示送检 / NONE 走原路径）全靠 chain_state，
+  // 这条把它的取值形态钉成可执行断言。
+  it('W6：真实样本的工序链四件套形态（id 为 string；TAIL 的 id 落 0、下一道名为 null）', () => {
+    const pick = scanPartRowSchema.parse(wirePickRow);
+    expect(pick.chain_state).toBe('NEXT');
+    expect(typeof pick.chain_next_process_id).toBe('string');
+    expect(pick.chain_next_process_id).toBe('226157188099403264');
+    expect(pick.chain_next_process_name).toBe('CNC-03 精铣');
+    const held = scanPartRowSchema.parse(wireHeldRow);
+    expect(held.chain_state).toBe('TAIL');
+    expect(held.chain_next_process_id).toBe('0');
+    expect(held.chain_next_process_name).toBeNull();
+    expect(held.chain_current_process_name).toBe('CUT-01 下料');
   });
 });
 
@@ -621,7 +710,7 @@ describe('F 组：两个 list helper 真的在 API 边界 reject 坏响应', () 
     expect(Array.isArray(held.items)).toBe(true);
     expect(typeof held.total).toBe('number');
     expect(held.total).toBe(2);
-    expect(held.items[0]!.batch_id).toBeNull();
+    expect(held.items[0]!.batch_id).toBe('190000000000112');
   });
 
   // F3 的加强：证明 helper 的返回**不是** `resp.data` 原样透传 —— 计数过

@@ -2165,7 +2165,7 @@ describe('2026-10-03 新增：外协看板 pool 域 schema 契约断言', () => 
 //
 // 服务对象：`GET /api/v2/parts/pickable-by-work-type/{work_type_id}` 与
 // `GET /api/v2/parts/by-worker/{worker_id}`，行 VO = backend-rust
-// `src/modules/part/vo/part.rs` 的 `PartListItem`（34 字段），外层是 `PartListOut`
+// `src/modules/part/vo/part.rs` 的 `PartListItem`（38 字段），外层是 `PartListOut`
 // 分页信封。fixture 按两个 service 构造行的真实口径填（占位值 1970-01-01 /
 // is_urgent=false / applicant_name="" / customer_id="0" / status="IN_PROCESS" /
 // version=0 / location=null）。
@@ -2195,6 +2195,10 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     updated_by: null,
     deleted_at: null,
     process_chain_id: null,
+    chain_state: 'NEXT',
+    chain_next_process_id: '190000000000021',
+    chain_next_process_name: 'CUT-01 下料',
+    chain_current_process_name: 'SAW-02 锯切',
     customer_name: null,
     l1_customer_name: null,
     location: null,
@@ -2207,11 +2211,12 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     batch_version: 4,
   };
 
-  it('S-SP1：接受 PartListItem 完整 34 字段（派生键恒 null、批次锚点有值）', () => {
+  it('S-SP1：接受 PartListItem 完整 38 字段（派生键恒 null、批次锚点与链四件套有值）', () => {
     const parsed = scanPartRowSchema.parse(validScanRow);
     expect(parsed.id).toBe('190000000000001');
     expect(parsed.batch_id).toBe('190000000000009');
     expect(parsed.batch_version).toBe(4);
+    expect(parsed.chain_state).toBe('NEXT');
     // 后端刻意不返的键不在 schema 里 ⇒ parse 后不应凭空出现
     expect('next_process_id' in parsed).toBe(false);
     expect('shelf_code' in parsed).toBe(false);
@@ -2255,5 +2260,30 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     expect(envelope.total).toBe(1);
     expect(() => scanPartListResultSchema.parse([validScanRow])).toThrow();
     expect(() => scanPartListResultSchema.parse({ items: [validScanRow], total: 1 })).toThrow();
+  });
+
+  // 放回页按 chain_state 三态分流，四个链字段任一缺键都会让「该弹的链提示」静默消失
+  // （strip 后视图层读到 undefined，症状与「本来无链」完全一样）。所以必填声明必须
+  // 有守卫，否则后端漏发时无人拦。
+  it('S-SP5：工序链四件套逐个必填 —— 缺任一键都抛 ZodError', () => {
+    for (const key of [
+      'chain_state',
+      'chain_next_process_id',
+      'chain_next_process_name',
+      'chain_current_process_name',
+    ]) {
+      const row: Record<string, unknown> = { ...validScanRow };
+      delete row[key];
+      expect(() => scanPartRowSchema.parse(row), `缺 ${key} 必须抛`).toThrow();
+    }
+    // TAIL 态的兜底值：id 落 '0'（非可空）、下一道工序名 null
+    const tail = scanPartRowSchema.parse({
+      ...validScanRow,
+      chain_state: 'TAIL',
+      chain_next_process_id: '0',
+      chain_next_process_name: null,
+    });
+    expect(tail.chain_next_process_id).toBe('0');
+    expect(tail.chain_next_process_name).toBeNull();
   });
 });
