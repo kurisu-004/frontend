@@ -227,21 +227,12 @@ export const ADMIN_MENUS: MenuNode[] = [
         children: [],
       },
       {
-        id: id(102),
-        version: 0,
-        parent_id: id(10),
-        code: 'worker_queue',
-        title: '生产队列',
-        path: '/production/worker-queue',
-        icon: 'Operation',
-        sort_order: 20,
-        children: [],
-      },
-      {
         // 2026-09-29 新增：从顶级菜单迁入 production_group children。
         // title 精简为「待编程」（旧 fixture 字面「待编程一览」冗余，与「已编程」Tab
         // 配合去掉「一览」后缀）。2026-10-04 sort_order 25 → 15，对齐 backend-rust seed
-        // （排在 part_process_chain=10 之后、worker_queue=20 之前）。
+        // （排在 part_process_chain=10 之后、worker_queue=20 之前）；同一次修订把本块
+        // 上移到 part_process_chain 之后 —— 数组物理顺序须与 sort_order 升序一致，
+        // MenuTreeItem 直接 v-for children，渲染链路上没有排序。
         id: id(5),
         version: 0,
         parent_id: id(10),
@@ -250,6 +241,17 @@ export const ADMIN_MENUS: MenuNode[] = [
         path: '/cnc/pending',
         icon: 'Cpu',
         sort_order: 15,
+        children: [],
+      },
+      {
+        id: id(102),
+        version: 0,
+        parent_id: id(10),
+        code: 'worker_queue',
+        title: '生产队列',
+        path: '/production/worker-queue',
+        icon: 'Operation',
+        sort_order: 20,
         children: [],
       },
       {
@@ -270,7 +272,7 @@ export const ADMIN_MENUS: MenuNode[] = [
         // 2026-09-29 新增：从 order_group children 迁入 production_group children。
         // 原 order_group 位置 sort_order=50 与业务侧「零件一览/送货/返修」错位；
         // 待品检本质是车间工序流的入口（INSPECTION → READY_TO_SHIP），归类到
-        // 生产管理更贴合业务语义。挂 pending_programming=25 之后，sort=30。
+        // 生产管理更贴合业务语义。挂 pending_programming=15 之后，sort=30。
         id: id(44),
         version: 0,
         parent_id: id(10),

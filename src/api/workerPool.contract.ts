@@ -26,7 +26,7 @@
 // - `Option<T>` 字段在 rust 侧未加 skip_serializing_if 时序列化为 `null`；加了则
 //   **整个字段从 JSON 中省略** —— 前端契约按「可能缺省」标注（`?` / `| undefined`）。
 
-/** `GET /api/v2/prod/pool/state` 出参（rust WorkerPoolState，model.rs:118-133）。
+/** `GET /api/v2/prod/pool/state` 出参（rust WorkerPoolState，model.rs）。
  *  pool_count_by_process 仅含该 worker 工种映射到的工序；空工种时退化为 []。 */
 export interface WorkerStateDto {
   worker_id: string;
@@ -238,7 +238,7 @@ export interface TakenItemDto {
   has_cnc_program: boolean;
 }
 
-/** `POST /api/v2/prod/pool/refill` 出参（rust RefillResult，model.rs:101-107）。 */
+/** `POST /api/v2/prod/pool/refill` 出参（rust RefillResult，model.rs）。 */
 export interface WorkerRefillResultDto {
   worker_id: string;
   shelf_id: string;

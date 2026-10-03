@@ -40,9 +40,9 @@
 // invalidatePoolDomains）+ dispatch（usePendingDispatch.invalidateAll）都调
 // `invalidateWorkerStateByWorkerAll(qc)`（POOL↔WORKER 双向移动都会改变
 // held_batches / current_held，故前缀全刷而非按 worker 精刷）。
-// ⚠️ 2026-09-30 review 第 2 轮复扫更正：这两处只是**编排点**，不是 held_batches 的
-// 全部写点 —— scan 域工人放回 `workerScan` service 同事务
-// 跑 WorkerPool refill，会改 held 集合却不挂本前缀失效 —— 既存缺口。
+// ⚠️ 2026-09-30：上面两处只是**编排点**，不是 held_batches 的全部写点 —— scan 域
+// 工人放回（`workerScan` service）同事务跑 WorkerPool refill，会改 held 集合却不挂
+// 本前缀失效 —— 既存缺口。
 // 2026-09-30 策略变更：既然无法穷举全仓写点，本 query 已把 staleTime / gcTime 改为
 // 有限值（30s / 5min，见上）—— 新鲜度不再依赖「失效编排点覆盖全部写点」这个假设。
 // 上面的编排点清单是**已显式挂失效的写点**（写完立即看到自己那笔的优化），**不是**

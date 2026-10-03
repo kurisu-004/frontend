@@ -110,9 +110,10 @@ const props = defineProps<{
 // 维度，同一 worker 跨 tab / 跨货架共享同一 cache identity。
 const stateQuery = useWorkerStateByWorkerQuery(() => props.worker.id);
 
-// 2026-09-30 review 第 1 轮修复（m8）：useWorkerStateByWorkerQuery error → ElMessage 错误
-// 桥接（沿 CLAUDE.md #9 usePartsListQuery.ts:334-336 范本）。模板 v-else-if「加载失败」
-// el-empty 只是 UI 占位，toast 必须走 ElMessage.error 才让用户看到。
+// 2026-09-30：useWorkerStateByWorkerQuery error → ElMessage 错误桥接（沿 CLAUDE.md
+// TanStack Query 一节的「ElMessage 错误桥接」条目与 usePartsListQuery 的写法）。
+// 模板 v-else-if「加载失败」el-empty 只是 UI 占位，toast 必须走 ElMessage.error
+// 才让用户看到。
 watch(
   () => stateQuery.error.value,
   (e) => {

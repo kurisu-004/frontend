@@ -104,7 +104,7 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
     await invalidateWorkerStateByWorkerAll(qc);
   }
 
-  /** 2026-10-03 review 第 2 轮修复：入参早退路径的失效兜底。
+  /** 2026-10-03：入参早退路径的失效兜底。
    *  早退意味着「投放已经发生、写操作没发生」：卡片被拖到落点列却没有对应的 move。
    *  屏幕与服务器的偏差由**源侧**的 onRemove（restoreNodeToSource，把节点放回源列）
    *  抹平，那才是这条路径的必需项；这里失效一次是防御性的对账，代价是早退本来就

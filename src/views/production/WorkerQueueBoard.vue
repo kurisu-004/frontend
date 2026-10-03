@@ -188,9 +188,8 @@ const hoveredProcessId = ref<string | null>(null);
 // skeleton，不阻塞 tab 切换。（旧 queueLoading 随 loadBoard 一并删除。）
 const loading = computed(() => procsQuery.isLoading.value || countsQuery.isLoading.value);
 
-// 2026-09-29 review 第 1 轮修复（M1）：activeTab 默认 = __pending__（首屏即待下发 tab，
-// 符合任务规约「待下发 Tab 在最前」）；URL ?tab=XXX 可覆盖（深链到具体工序），
-// 覆盖优先级 > 默认。
+// 2026-09-29：activeTab 默认 = __pending__（首屏即待下发 tab，符合任务规约「待下发 Tab
+// 在最前」）；URL ?tab=XXX 可覆盖（深链到具体工序），覆盖优先级 > 默认。
 const TAB_QUERY_KEY = 'tab';
 const PENDING_TAB = '__pending__';
 function readInitialTab(): string {

@@ -46,9 +46,7 @@ import type {
  *  capacity_remaining 全部与货架无关。
  *  无工种时退化为空 pool_count_by_process + max_held=0，service 不报错。
  *  业务错：20201 BIZ_WORKER_NOT_FOUND。 */
-export async function getWorkerState(params: {
-  worker_id: string;
-}): Promise<WorkerStateDto> {
+export async function getWorkerState(params: { worker_id: string }): Promise<WorkerStateDto> {
   const resp = await api.get<WorkerStateDto>('/prod/pool/state', {
     params: cleanParams(params),
   });
