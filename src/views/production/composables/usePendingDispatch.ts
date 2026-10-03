@@ -37,6 +37,10 @@
 //   - 删 `UsePendingDispatchDeps`（refreshBoard 依赖注入）—— 随
 //     useWorkerQueue.loadBoard + 模块级 workerHeld 一并删除，invalidateAll 不再有
 //     「触达不到的非 TanStack 数据源」要兜底。
+//
+// 2026-10-04 变更：auto-dispatch 的「全部可下发项都被跳过」分支里，未制定工序链
+//   （NO_PROCESS_CHAIN）的项**一次操作只弹一次**「前往制定」引导框，件数写进弹窗
+//   文案；弹窗深链只带第一件的 part_id。
 
 import { computed, ref } from 'vue';
 import type { ComputedRef, Ref } from 'vue';
@@ -220,7 +224,7 @@ export function usePendingDispatch(): UsePendingDispatchReturn {
    *      `dispatchMutation.mutateAsync` 真正下发；
    *   ③ `skip_reason === 'NO_PROCESS_CHAIN'` 的项仍走 handleProcessChainRequired
    *      引导去工艺制定页（后端 batch 域不再抛 20706，此处合成 ApiError 复用
-   *      既有兜底逻辑，保持 UX 不退化）。
+   *      既有兜底逻辑，保持 UX 不退化），一次操作只弹一次引导框。
    *
    *  全部可下发项都被跳过（items 内无 skip_reason===null）时不再弹确认框，直接
    *  提示原因 —— 避免给用户一个「确认了却什么都不会发生」的空确认框。 */
@@ -238,10 +242,18 @@ export function usePendingDispatch(): UsePendingDispatchReturn {
         if (dispatchable.length === 0) {
           clearSelection();
           const noChain = skipped.filter((s) => s.skip_reason === 'NO_PROCESS_CHAIN');
-          for (const s of noChain) {
-            const partId = partIdByBatchId.value.get(s.batch_id) ?? null;
+          // 未制定工序链的件只弹一次「前往制定」引导框：一次操作一个弹窗（与外协发送 /
+          // 零件列表的「命中一次即 break」单次弹窗范式一致），多件时件数写进弹窗文案。
+          // 深链只带第一件的 part_id —— 多件无链分属不同零件时，用户在弹窗点「取消」
+          // 即留在原地，不会被误跳到另一零件的工艺链页。
+          const firstNoChain = noChain[0];
+          if (firstNoChain) {
+            const partId = partIdByBatchId.value.get(firstNoChain.batch_id) ?? null;
             await handleProcessChainRequired(
-              new ApiError(BIZ_PROCESS_CHAIN_REQUIRED, '请先制定工序链'),
+              new ApiError(
+                BIZ_PROCESS_CHAIN_REQUIRED,
+                noChain.length > 1 ? `${noChain.length} 件工单未制定工序链` : '请先制定工序链',
+              ),
               partId,
               router,
             );
