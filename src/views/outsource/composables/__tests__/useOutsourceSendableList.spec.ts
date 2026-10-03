@@ -5,14 +5,14 @@
 // 为什么必须有：`POST /prod/batches/{batch_id}/send-to-outsource` 的 2026-10-03
 // 契约有三条硬要求，违反任一条都是**静默失败**（serde 未开 deny_unknown_fields）：
 //   1. 工序键是 `process_id`，不是 `current_process_id` —— 沿用行字段名后端 DTO 收不到、
-//      必填字段落空 → 422（线上故障：外协发送 100% 失败）。行字段本身已从
-//      `next_process_id` 更名为 `current_process_id`（批次当前所属的外协工序）。
+//      必填字段落空 → 422（线上故障：外协发送 100% 失败）。行字段是
+//      `current_process_id`（批次当前所属的外协工序），body 键另叫 `process_id`。
 //   2. `quote_id`（APPROVAL）与 `direct: true`（DIRECT）**必传其一**，都不传 → 400。
-//      此前前端两个键都不发 ⇒ 全部行都打回 400。
+//      两个键都不发的 payload 会被后端全量打回。
 //   3. `quantity: null` = 整批，非 null = 部分发送（后端拆批，源批次留余量）。
 //
-// 两条发送路径（单件确认 / 扫码批量）此前各写一份 payload 字典 —— 「改一处漏另一处」
-// 是本仓已付出过代价的形态。现在两者共用 buildSendPayload，本文件对**两条路径**都断言。
+// 两条发送路径（单件确认 / 扫码批量）共用 buildSendPayload —— 「改一处漏另一处」
+// 是本仓已付出过代价的形态，本文件对**两条路径**都断言。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 // 断言提示文案要用的 ElMessage（下列 vi.mock 已把它桩成 no-op，import 拿到的是桩）。
@@ -55,6 +55,7 @@ vi.mock('@/composables/useProcessChainRequiredHandler', () => ({
 import {
   useOutsourceSendableList,
   type SendableItem,
+  type SendQueueItem,
   type UseOutsourceSendableListReturn,
 } from '../useOutsourceSendableList';
 
@@ -110,6 +111,33 @@ function lastBody(): Record<string, unknown> {
 
 function lastBatchId(): string {
   return sendToOutsourceMock.mock.calls[0]![0] as string;
+}
+
+/** 队列项工厂。`outsource_company_id` 留空即「空公司项」，其余字段与真实入队结果对齐。 */
+function queueItem(
+  overrides: Omit<Partial<SendQueueItem>, 'part'> & { part?: Partial<SendQueueItem['part']> } = {},
+): SendQueueItem {
+  const { part, ...rest } = overrides;
+  return {
+    part: {
+      id: 'P1',
+      serial_no: 'SN-1',
+      drawing_no: 'DWG-1',
+      name: '零件甲',
+      ...part,
+    },
+    outsource_company_id: 'C1',
+    outsource_company_name: '外协厂',
+    process_id: 'PR1',
+    process_name: '外协工序',
+    price: null,
+    version: 7,
+    batch_id: 'BA1',
+    quantity: 10,
+    quote_id: null,
+    direct: true,
+    ...rest,
+  };
 }
 
 beforeEach(() => {
@@ -276,7 +304,7 @@ describe('扫码批量发送 onConfirmBatchSend', () => {
   // 后端把「DIRECT 且 company_options 为空」写成一级场景（该行仍返回，前端置灰），
   // 扫码路径必须与行按钮共用 canSend：否则空数组会入队、`outsource_company_id` 拿到
   // 空串，批量发送时后端 `i64` 反序列化失败、返 422 纯文本（非业务信封）。
-  it('S11：DIRECT 且 company_options 为空 → 不入队、不弹发送框、发请求', async () => {
+  it('S11：DIRECT 且 company_options 为空 → 不入队、不弹发送框、不发请求', async () => {
     getPartBySerialMock.mockResolvedValue({
       id: 'P1',
       serial_no: 'SN-1',
@@ -350,6 +378,35 @@ describe('扫码批量发送 onConfirmBatchSend', () => {
     expect(inst.sendQueue.value).toHaveLength(1);
     expect(vi.mocked(ElMessage.error).mock.calls[0]![0] as string).toContain('缺外协公司');
   });
+
+  // 2026-10-03：混合队列的下标管理回归锁。批量循环里空公司项走 `continue`（**不**
+  // `splice`），而发送成功项走 `splice` + `i--` —— 两者混在同一队列时，下标一旦
+  // 算错就会漏发或把失败项标到别的行上。S13 只覆盖「队列里只有空公司项」这一种
+  // 退化形态（循环里 `splice` 一次都没发生），覆盖不到这里。
+  it('S14：混合队列 [正常项, 空公司项] → 只发正常项，剩 1 项且标 _failed', async () => {
+    const inst = useOutsourceSendableList();
+    inst.sendQueue.value = [
+      queueItem({ part: { serial_no: 'SN-A' }, batch_id: 'BA-A' }),
+      queueItem({
+        part: { id: 'P2', serial_no: 'SN-E', drawing_no: 'DWG-E', name: '零件乙' },
+        batch_id: 'BA-E',
+        outsource_company_id: '',
+        outsource_company_name: '',
+      }),
+    ];
+
+    await inst.onConfirmBatchSend();
+
+    // 正常项照发（1 次，不是 0 次也不是 2 次）
+    expect(sendToOutsourceMock).toHaveBeenCalledTimes(1);
+    expect(lastBatchId()).toBe('BA-A');
+    // 剩下的必须是那个空公司项本身，且带失败标记 —— 说明 continue 后下标接着走、
+    // 没有把失败项错标到已被 splice 掉的行位上
+    expect(inst.sendQueue.value).toHaveLength(1);
+    expect(inst.sendQueue.value[0]!.part.serial_no).toBe('SN-E');
+    expect(inst.sendQueue.value[0]!._failed).toBe(true);
+    expect(vi.mocked(ElMessage.success).mock.calls[0]![0] as string).toContain('成功发送 1 件');
+  });
 });
 
 describe('canSend', () => {
@@ -366,5 +423,31 @@ describe('canSend', () => {
     const inst = useOutsourceSendableList();
     expect(inst.canSend(directRow({ company_options: [] }))).toBe(false);
     expect(inst.canSend(directRow({ company_options: [{ id: 'C1', name: '外协厂' }] }))).toBe(true);
+  });
+});
+
+describe('openSend', () => {
+  // 「不可发送的行永远打不开发送 dialog」是真行为，值得独立成锁：openSend 的
+  // `!canSend` 分支是唯一挡在「空 company_options 入队 → 批量发时 422 纯文本」前的
+  // 行级闸门（行按钮路径对不可发送的行是置灰，但 openSend 本身也必须守住）。
+  it('S15：不可发送的行（DIRECT + 空 company_options）→ 只弹一次 warning，dialog 不开', () => {
+    const inst = useOutsourceSendableList();
+    const warn = vi.mocked(ElMessage.warning);
+
+    inst.openSend(directRow({ company_options: [] }));
+
+    expect(inst.sendDialogVisible.value).toBe(false);
+    expect(inst.sendTarget.value).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('S16：可发送的行 → dialog 打开，DIRECT 默认选中第一家映射公司', () => {
+    const inst = useOutsourceSendableList();
+
+    inst.openSend(directRow());
+
+    expect(inst.sendDialogVisible.value).toBe(true);
+    expect(inst.sendTarget.value).not.toBeNull();
+    expect(inst.sendSelectedCompanyId.value).toBe('C1');
   });
 });

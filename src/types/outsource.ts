@@ -197,10 +197,9 @@ export interface OutsourceSendableItem {
   planned_delivery_date: string | null;
   is_urgent: boolean;
   customer_path: string | null;
-  /** 2026-10-03 更名（原 `next_process_id`）：批次**当前所属**的外协工序，
-   *  权威依据是 `t_part_batch.current_process_id`（工序候选池的归属判据），
-   *  语义是「该发给谁」而非「下一道工序」。发往该工序的 body 键名仍叫
-   *  `process_id`（后端 `SendToOutsourceRequest` 没跟着改）。 */
+  /** 批次**当前所属**的外协工序（不是「下一道工序」），权威依据是
+   *  `t_part_batch.current_process_id`（工序候选池的归属判据）。发往该工序的
+   *  body 键名另叫 `process_id`（后端 `SendToOutsourceRequest` 不叫这个）。 */
   current_process_id: string;
   /** 同 `current_process_id` 的展示名 */
   current_process_name: string | null;

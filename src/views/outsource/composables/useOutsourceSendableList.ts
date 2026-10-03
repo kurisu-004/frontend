@@ -258,7 +258,10 @@ export function useOutsourceSendableList(
 
   function openSend(item: SendableItem): void {
     if (!canSend(item)) {
-      // 2026-10-03：与行按钮 tooltip 逐字同一套措辞；置灰的唯一成因是「工序未映射公司」。
+      // 2026-10-03：行按钮路径对不可发送的行是置灰（`OutsourceSendableTab` 里
+      // `v-if="!canSend(row)"` 的 tooltip 分支），这个 warning 兜的是「绕过按钮直接
+      // 调 openSend」的口子。它没有行级上下文可写（拿不到序列号 / 工序名），所以文案
+      // 与行按钮 tooltip、扫码提示各按自己的上下文写，不要求逐字同步。
       ElMessage.warning('该外协工序未映射启用的外协公司，请先配置该工序的公司映射');
       return;
     }
@@ -366,7 +369,7 @@ export function useOutsourceSendableList(
       // 所以「未命中」至少有三义，必须都写进文案，否则操作员会把**分页漏页**误当成
       // 状态/报价问题，从错误方向排查。
       ElMessage.warning(
-        `${part.serial_no ?? trimmed} 不在当前页可发送列表（可能不在当前页、状态不满足，或没有 APPROVED 报价）`,
+        `${part.serial_no ?? trimmed} 不在当前页的可发送列表（可能已翻到其他页、状态不满足，或没有 APPROVED 报价）`,
       );
       return;
     }
@@ -394,8 +397,14 @@ export function useOutsourceSendableList(
       return;
     }
     // 直接发送 + 单公司 或 APPROVAL → 直接入队
-    // （DIRECT 时 `company_options` 非空由上面的 canSend 闸门保证，下面的 `?? ''`
-    //  只是类型兜底，不会真的产出空串。）
+    // `companyId` 处的两个 `?? ''` 都只是类型兜底，不会真的产出空串，两条路径各有依据：
+    //   - DIRECT：`company_options` 非空由 `canSend` 闸门保证（该判据唯一可达的 false
+    //     分支就是「DIRECT + 空 company_options」，扫码路径已先行拦掉）；
+    //   - APPROVAL：`outsource_company_id` 非空是**后端投影的不变量** ——
+    //     `SENDABLE_PROJECTION_FULL` 取 `q.outsource_company_id`（LEFT JOIN
+    //     `t_outsource_quote`），而 `send_mode = 'APPROVAL'` 的判定就是 `q.id` 命中，
+    //     命中的报价必带公司（字段表见 `docs/api/outsource-sendable.md`）⇒ quote 命中
+    //     即有值。前端这边没有任何检查兜着这档，不要把它当成「也该拦一下」的地方。
     const companyId: string =
       match.send_mode === 'DIRECT'
         ? (match.company_options[0]?.id ?? '')
@@ -467,10 +476,17 @@ export function useOutsourceSendableList(
       if (processChainRequiredHit) break;
       // 2026-10-03 纵深防御：入队时的 `canSend` 闸门已挡住空公司，这里再兜一层 ——
       // 空串会让后端 `i64` 反序列化失败、返 422 纯文本（非业务信封），操作员拿到的只是
-      // 一串无信息量的批量失败。本地拦下并点名根因（该工序没映射公司），失败项保留在
-      // 队列里可重试。不 `splice`：本项留在队列，for 的下标自然接着走。
+      // 一串无信息量的批量失败。本地拦下并点名根因。失败项留在队列里（批量部分成功时
+      // 队列状态可见），但**重试不会自愈**：队列项是入队时的快照，补好公司映射后
+      // 重发仍会拿同一个空串再失败一次，正确做法是重新扫码入队。
+      // 不 `splice`：本项留在队列，for 的下标自然接着走。
       if (!item.outsource_company_id) {
-        const msg = '队列项缺外协公司（该外协工序未映射启用的外协公司）';
+        // 按 `direct` 分开点名成因：空公司项实际只可能来自 DIRECT 路径（APPROVAL 的
+        // 非空由后端投影不变量保证），写成一句通用文案的话，将来 APPROVAL 也可能产出
+        // 空串时，文案会把排查方向指向错误的根因。
+        const msg = item.direct
+          ? '队列项缺外协公司（该外协工序未映射启用的外协公司）'
+          : '队列项缺外协公司（APPROVAL 行没有外协公司，属后端投影异常）';
         errors.push({ serial: item.part.serial_no || item.part.drawing_no, msg, idx: i });
         sendQueue.value[i]._failed = true;
         sendQueue.value[i]._failMsg = msg;

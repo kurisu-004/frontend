@@ -276,12 +276,11 @@ export async function listOutsourceInFlight(
  * 已审批报价）与 DIRECT（工序免审批）两类候选，每行带 send_mode + source_status。
  * GET /outsource-sendable
  *
- * 2026-10-03：URL 从 `/parts/outsource-sendable` 迁到 outsource 域顶层，函数从
- * `src/api/parts/crud.ts` 迁入本文件（该列表与批次 lifecycle 写端点不同域：
- * 读侧是外协域，写的 `send-to-outsource` 才是 prod/batches 域）。出参保持分页信封。
- * 工序归属字段已由 `next_process_id` / `next_process_name` 更名为
- * `current_process_id` / `current_process_name`（判据改成
- * `t_part_batch.current_process_id`，兼容没制定过工序链的旧零件）。
+ * 2026-10-03：URL 是 outsource 域顶层的 `/outsource-sendable`，函数落在本文件
+ * （该列表与批次 lifecycle 写端点不同域：读侧是外协域，写的 `send-to-outsource`
+ * 才是 prod/batches 域）。出参是分页信封。
+ * 工序归属字段是 `current_process_id` / `current_process_name`，判据取
+ * `t_part_batch.current_process_id`（兼容没制定过工序链的旧零件）。
  */
 export async function listOutsourceSendable(
   params: {

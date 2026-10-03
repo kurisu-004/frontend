@@ -149,10 +149,9 @@ export function useOutsourceQuoteForm(
 
   /** 选择零件后重置工序与公司，让操作员在独立的工序下拉里重新选。
    *
-   *  2026-10-03 契约对齐：`GET /outsource-quotes/quotable-parts` 的行粒度改成
-   *  「一个零件一行」，VO 不再带工序 / 货架字段 ⇒ **没有任何数据通路**能推断出该
-   *  零件该报哪道工序（此前的「自动填工序」只能靠已下线的 `next_process_id`）。
-   *  工序一律手选。
+   *  2026-10-03 契约对齐：`GET /outsource-quotes/quotable-parts` 的行粒度是
+   *  「一个零件一行」，VO 不带工序 / 货架字段 ⇒ **没有任何数据通路**能推断出该
+   *  零件该报哪道工序，工序一律手选。
    *
    *  清空两步是必须的：`process_id` 不清会沿用上一零件的工序（`el-select` 的
    *  `:value` 只按 part_id 匹配，改零件不会自动清它），`outsource_company_id` 不清

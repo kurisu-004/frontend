@@ -1618,10 +1618,10 @@ const outsourceCompanyOptionSchema = z.object({
 
 /** `GET /api/v2/outsource-sendable` 单行（后端 `OutsourceSendableItem`）—— 23 字段。
  *
- *  ⚠️ URL 已从 `/parts/outsource-sendable` 迁到 outsource 域顶层（2026-10-03）。
- *  ⚠️ `current_process_id` / `current_process_name`（2026-10-03 更名，原名
- *  `next_process_*`）：批次**当前所属**的外协工序，权威依据是
- *  `t_part_batch.current_process_id`，语义是「该发给谁」而非「下一道工序」。
+ *  ⚠️ URL 是 outsource 域顶层的 `/api/v2/outsource-sendable`。
+ *  ⚠️ `current_process_id` / `current_process_name`：批次**当前所属**的外协工序，
+ *     权威依据是 `t_part_batch.current_process_id`，语义是「该发给谁」而非
+ *     「下一道工序」（键名沿用 `next_process_*` 是历史遗留，别按名字猜语义）。
  *  ⚠️ `quote_id`（2026-10-03 新增）是发送端点必传二选一的判据：APPROVAL 行有值、
  *  DIRECT 行为 null。漏声明它 ⇒ 前端组不出 payload ⇒ 每行都返 400。 */
 export const outsourceSendableItemSchema = z.object({

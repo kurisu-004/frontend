@@ -1,16 +1,11 @@
 // src/views/outsource/composables/__tests__/useOutsourceQuoteForm.spec.ts
 //
-// 2026-10-03 契约对齐后重写：新建报价 picker 的候选源改成「有活跃 PENDING 批次的
-// 在制件」，行粒度是**一个零件一行**，VO 不再带工序 / 货架字段。原先锁的
-// 「选中零件 → 自动填工序」通路（`QuotablePart.next_process_id`）随之下线，改锁
-// 「换零件必清空工序与公司」—— 这两步清空是必须保留的：`process_id` 不清会沿用上一
-// 零件的工序（el-select 的 :value 只按 part_id 匹配，改零件不会自动清它），
-// `outsource_company_id` 不清会残留一个与新工序无隶属关系的公司。
-//
-// 顺带记一笔：改前 picker 同零件可出多行，而 el-select 的 :value 是裸 part_id，
-// 于是 label 暗示工序 A、实际手选工序 B 的串号隐患一直存在（登记在
-// OutsourceQuoteCreateDialog.vue 与 useOutsourceQuoteForm.ts 的注释里）。改成一
-// 零件一行后该隐患自动消失，无需额外处理。
+// 2026-10-03 契约对齐后重写：新建报价 picker 的候选源是「有活跃 PENDING 批次的
+// 在制件」，行粒度是**一个零件一行**，VO 不带工序 / 货架字段 ⇒ picker 无从推断报价
+// 工序（无数据通路）。本文件锁「换零件必清空工序与公司」—— 这两步清空是必须保留的：
+// `process_id` 不清会沿用上一零件的工序（el-select 的 :value 只按 part_id 匹配，
+// 改零件不会自动清它），`outsource_company_id` 不清会残留一个与新工序无隶属关系的
+// 公司。零件唯一化让「label 暗示工序 A、实际手选工序 B」的串号隐患不复存在。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
