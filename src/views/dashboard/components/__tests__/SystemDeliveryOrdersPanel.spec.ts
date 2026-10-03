@@ -265,7 +265,8 @@ describe('SystemDeliveryOrdersPanel — 变体文案与红底归属', () => {
     expect(filled.find('.list-subtitle').text()).toBe('存在已交批次 · 7 天内');
     filled.unmount();
 
-    // 后端尚未填充 delivered_quantity 时 partial 走空态（兼容性验收项）。
+    // 本用例只覆盖「无条目」这一条空态路径。字段缺失（delivered_quantity 为
+    // null）如何渲染由 systemDeliveryOrders.spec.ts 的 W3 系列断言。
     const empty = mountPanel('partial', []);
     expect(empty.findAll('.list-rows .row')).toHaveLength(0);
     expect(empty.find('.mock-empty').text()).toBe('暂无部分已交工单');

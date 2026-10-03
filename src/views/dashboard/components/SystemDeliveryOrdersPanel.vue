@@ -12,6 +12,7 @@
       行高会随内容抖动）。系统交期只出日期，逾期红 / 临近橙仍由 deliveryUrgencyClass 驱动。
     - 数量列：urgent 出纯总量；partial 出「已交 / 总量」，已交部分走主题色，
       并包 el-tooltip 显式标注单位与含义（装配件行「套」、零件行「件」）。
+      partial 的两个数字不做静默截断 —— 轨宽按 4 位 ×2 留足，溢出会带省略号可见。
 
   布局：行宽分三档，用容器查询而非视口媒体查询（见 .list-rows 的 container-type）。
   `.urgent` 红底**只** urgent 变体有 —— 「紧急」语义与 partial 不共表。
@@ -140,7 +141,10 @@ function deliveredTooltip(item: PartListItem): string {
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
-  min-height: 200px;
+  // 160 而非更高的兜底：右栏两卡均分 + 16px gap ⇒ 内容硬地板 = 160×2 + 16 = 336px。
+  // .dashboard 是 overflow: hidden 且不滚，地板超出可视区就会把第二张卡整块裁掉，
+  // 故这里取能覆盖视口高 ≳400px 的下限，更矮的视口交给 .el-main 的纵向滚动兜底。
+  min-height: 160px;
   :deep(.el-card__header) {
     padding: 10px 14px;
     background: #fafbfc;
@@ -193,13 +197,18 @@ function deliveredTooltip(item: PartListItem): string {
 .row {
   display: grid;
   // 2026-10-03：6 列 = 序列号 | 名称 | 数量 | 二级客户 | 状态 | 系统交期。
-  // 定宽依据取真实数据：serial_no 恒 5 字符、二级客户 ≤5 字符、交期恒 MM/DD；
-  // 名称 p90 20 字符，容器 > 560px 时给满 200px。数量列三档统一 56px —— partial 变体
-  // 渲染「20 / 64」需要 ~36px，urgent 变体的纯数字用不满但两 variant 必须同轨，否则
-  // 同一容器下换 variant 整行错位。多出的宽度由二级客户列的 minmax(0, 1fr) 吸收。
-  // 状态列按 el-tag--small 最坏宽度定轨（ORDER_STATUS_LABEL 恒 3 个汉字 ≈ 52px），
-  // 本档留 4px 余量。二级客户吃剩余空间，窄屏截断由 ellipsis + tooltip 兜。
-  grid-template-columns: 56px 200px 56px minmax(0, 1fr) 56px 56px;
+  // 定宽依据取真实数据：serial_no 恒 5 字符（12px 等宽 = 36px）、二级客户 ≤5 字符、
+  // 交期恒 MM/DD（36px）；名称 p90 20 字符，容器 > 560px 时给满 200px。状态列按
+  // el-tag--small 最坏宽度定轨（ORDER_STATUS_LABEL 恒 3 个汉字 ≈ 52px）。二级客户吃
+  // 剩余空间，窄屏截断由 ellipsis + tooltip 兜。
+  //
+  // 数量列 80px 的由来（partial 档「已交 / 总量」是最不可截的信息）：三档统一 80px
+  // —— urgent 出纯数字用不满，但两 variant 必须同轨，否则同一容器下换 variant 整行
+  // 错位。12px 等宽最坏平台 7.2px/字符（SF Mono 0.6em；Consolas 0.55em 更窄），
+  // 「1791 / 1791」= 9 字符 + 分隔符两侧各 2px = 68.8px，留 11px 余量。数量实测
+  // 可达 4 位（本仓 fixture 即 quantity: 1791），5 位起会触 ellipsis —— 故
+  // .row-qty--partial 刻意不用 flex，ellipsis 生效时至少是可见截断而非静默切断。
+  grid-template-columns: 56px 200px 80px minmax(0, 1fr) 56px 56px;
   gap: 6px;
   align-items: center;
   padding: 8px 10px;
@@ -246,10 +255,13 @@ function deliveredTooltip(item: PartListItem): string {
   white-space: nowrap;
 }
 .row-qty--partial {
-  display: flex;
-  justify-content: flex-end;
-  align-items: baseline;
-  gap: 2px;
+  // 刻意**不用** display:flex —— text-overflow: ellipsis 对 flex 容器不生效，溢出
+  // 会变成从字符中间静默切断（连省略号都没有），而这一列正是 partial 变体的全部信息。
+  // 保持普通 span（.row-qty 的 overflow/ellipsis 直接生效），分隔符间距改用 sep 的
+  // margin 表达 —— 视觉与原先 flex + gap: 2px 等价（都是分隔符两侧各 2px）。
+  .row-qty-sep {
+    margin: 0 2px;
+  }
 }
 .row-qty-done {
   color: var(--primary-color);
@@ -279,17 +291,26 @@ function deliveredTooltip(item: PartListItem): string {
 }
 @container sysdeliveryrow (max-width: 560px) {
   .row {
-    // 状态列 56px：el-tag 无 overflow，轨宽不得小于其最坏宽度 52px，留 4px 余量。
-    grid-template-columns: 48px 150px 56px minmax(0, 1fr) 56px 52px;
+    // 名称列 120px：数量列从 56 加宽到 80 后，本档下缘（容器 441px）留给二级客户的
+    // 余量只剩 15px ≈ 半 个汉字。名称让到 120px（≈9 个汉字，仍短于 p90 20 字符，
+    // 靠 tooltip 兜），把二级客户抬回 35px。状态列 56px = el-tag--small 最坏宽度
+    // 52px + 4px 余量。
+    grid-template-columns: 48px 120px 80px minmax(0, 1fr) 56px 52px;
   }
 }
 @container sysdeliveryrow (max-width: 440px) {
   .row {
-    // 2026-10-03：极窄档名称列让出宽度给二级客户，取 clamp(76px, 24cqi, 110px)。
-    // 本档容器实测 340~440px，24cqi 即 82~106px —— 两端 clamp 上下限是越界保护，
-    // 本档取不到。状态列 52px = el-tag--small 最坏宽度（3 个汉字：36+7×2+1×2），
-    // 零余量但不裁字。
-    grid-template-columns: 44px clamp(76px, 24cqi, 110px) 56px minmax(0, 1fr) 52px 48px;
+    // 极窄档（本档容器实测 320~440px）。名称列取 clamp(48px, 16cqi, 88px)：本档
+    // 的宽度预算要同时喂饱 80px 的数量列和 1fr 的二级客户列，名称是三列里唯一
+    // 「让位代价最低」的 —— 它截断后有 tooltip，且同一信息在行点击后的
+    // PartPreviewDialog 里完整可读。
+    //   容器 340（视口 1101）→ 名称 54.5 + 二级客户 19.9；容器 412（视口 1280）
+    //   → 名称 65.9 + 二级客户 80.1；容器 440（视口 1350）→ 70.4 + 103.6。
+    //   clamp 上下限本档都取不到，是越界保护。
+    // 序列号 40px（5 字符需 36px）/ 交期 44px（MM/DD 需 36px）—— 两列都只比内容
+    // 宽几像素，是本档仅剩的余量来源。状态列 52px = el-tag--small 最坏宽度，零余量
+    // 但不裁字。
+    grid-template-columns: 40px clamp(48px, 16cqi, 88px) 80px minmax(0, 1fr) 52px 44px;
   }
 }
 </style>

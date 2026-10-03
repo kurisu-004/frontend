@@ -21,6 +21,9 @@
 
   2026-10-03 新增右栏第二块面板「部分已交」：.main-right 两卡均分高度
   （flex: 1 1 0 + min-height 兜底），面板头 flex-shrink: 0 防被压扁。
+  两卡 min-height 各 160px ⇒ 右栏内容硬地板 160×2 + 16 gap = 336px；视口高
+  低于约 400px 时地板会超出可视区，多出来的部分由外层 .el-main 纵向滚动兜底
+  （MainLayout 的 .main-content 带 overflow: auto）。
 -->
 <template>
   <div class="dashboard">
@@ -265,13 +268,18 @@ function onUpcomingRowClick(part: PartListItem): void {
 
 @media (max-width: 1100px) {
   .dashboard {
-    // 单列下两块内容纵向堆叠，总高必然超过一屏 —— 改为内容撑高 + 纵向滚动。
-    // 保持「定高 + overflow: hidden」会把第二行整块裁掉。
+    // 单列下两块内容纵向堆叠，总高必然超过一屏 —— 改为内容撑高，滚动交给外层
+    // .el-main（MainLayout 的 .main-content 带 overflow: auto）。保持「定高 +
+    // overflow: hidden」会把第二行整块裁掉；这里也不能自己再挂 overflow-y，
+    // auto 高度的盒子上它是永不触发的死规则，留着只会让「谁在滚」读起来含混。
     height: auto;
     min-height: calc(100vh - 60px);
-    overflow-y: auto;
   }
   .dashboard-main {
+    // 撑高必须显式解掉 flex 压缩：默认 flex: 1（= 1 1 0%），在 height: auto 的
+    // flex 容器里 flex-basis 0 会让它的高度退化成 min-height（0），内容被压扁、
+    // 「撑高」名不副实。
+    flex: 0 0 auto;
     grid-template-columns: 1fr;
     // 两栏各占一行、按内容定高。行高若交给 1fr，auto 高度的 grid 行里
     // 「flex-basis: 0 的子项」高度会退化成 min-height，两块面板被压成两条细缝。
