@@ -474,8 +474,9 @@ export async function forceCompletePart(
  *        批次卡里**手选**批次再下发（`onReleaseToShelf` 的 batchId 形参由
  *        PartDetail.vue 传入），`usePartDetail` 已持有 batches 列表。两处同款先例
  *        都在同一个文件里：`onReceiveFromOutsourceFn`（按调用方给的 batchId 去
- *        batches 里取 version + 40901 兜底，形态与本处最贴近）、
- *        `onPassInspection`（按批次状态在 batches 里找目标再取其 id + version）。
+ *        batches 里取 version，形态与本处最贴近）、`onPassInspection`（按批次状态在
+ *        batches 里找目标再取其 id + version，并有 40901 code 分流 → warning + 重取
+ *        batches）。
  *      ⇒ 剩下的是**纯前端改动**（`onReleaseToShelf` 形参加 version + PartDetail 调用点
  *        从 batches 里按 selectedBatchId 取 version），落在 `views/parts/detail/**`，
  *        不在本轮范围。接线时顺带按上述先例处理批次被并发改动的情形（40901 提示刷新
