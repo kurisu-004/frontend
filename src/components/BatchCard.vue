@@ -34,10 +34,7 @@
 <template>
   <div
     v-bind="$attrs"
-    :class="[
-      'batch-card',
-      { 'is-selectable': selectable, 'is-selected': selectable && selected },
-    ]"
+    :class="['batch-card', { 'is-selectable': selectable, 'is-selected': selectable && selected }]"
     :data-batch-id="batch.batch_id"
   >
     <!-- 2026-10-04：上面这个 div 是**唯一**根节点，也是本 vnode 的全部 DOM footprint
