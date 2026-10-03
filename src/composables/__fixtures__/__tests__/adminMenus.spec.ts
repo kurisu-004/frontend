@@ -83,4 +83,20 @@ describe('ADMIN_MENUS', () => {
       expect(n.id.length).toBeGreaterThanOrEqual(15);
     }
   });
+
+  // 2026-10-04 新增：数组物理顺序必须与 sort_order 升序一致。MenuTreeItem 直接
+  // `v-for="child in menu.children"`，渲染链路上没有任何排序 ⇒ 渲染顺序 == 数组顺序，
+  // dummy 模式的侧栏会照数组顺序出。真实模式的菜单由后端按 sort_order 出，两边不一致
+  // 就意味着「dev 看到的菜单顺序 ≠ 生产」。本条守的就是这个不变量：改某个子项的
+  // sort_order 时若忘了重排数组，本用例会红。
+  it('group children are in ascending sort_order (array order == render order)', () => {
+    const groups = flatten(ADMIN_MENUS).filter((n) => n.children.length > 0);
+    expect(groups.length).toBeGreaterThan(0);
+    for (const g of groups) {
+      const sorts = g.children.map((c) => c.sort_order);
+      expect(sorts, `${g.code} 的 children 未按 sort_order 升序：${sorts.join(',')}`).toEqual(
+        [...sorts].sort((a, b) => a - b),
+      );
+    }
+  });
 });

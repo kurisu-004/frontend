@@ -435,7 +435,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
   it('W11：onRemove 把被拖节点放回 from.children[oldIndex]（二参形态的 DOM 放回补齐）', () => {
     const wrapper = mountColumn([makeHeld()]);
     const onRemove = capturedOptions().onRemove as (e: unknown) => void;
-    // 回归 guard（2026-10-03 review 第 2 轮 P0）：传 list 时库的内建 onRemove 第一句
+    // 回归 guard（2026-10-03）：传 list 时库的内建 onRemove 第一句
     // 就是 from.insertBefore(item, from.children[oldIndex])，投放成败都先把节点放回源列。
     // 改二参形态后内建 handler 整个不挂 ⇒ 投放失败（20204 容量超限最常见）时卡片留在
     // 落点列，而 invalidate 救不回来：两侧 query 数据都没变，Vue 的 keyed diff 只
