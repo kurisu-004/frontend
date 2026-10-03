@@ -606,16 +606,24 @@ export type PendingBatchListResultSchema = z.infer<typeof pendingBatchListResult
 // `GET /prod/programming/pending`（后端同期新增，backend-rust
 // src/modules/prod/programming/mod.rs）。出参从 PartListItem 换成 ProgrammingItem。
 //
-// ProgrammingItem 13 字段全声明（沿 CLAUDE.md §M-4 strip 陷阱 —— Zod 默认 strip
+// ProgrammingItem 15 字段全声明（沿 CLAUDE.md §M-4 strip 陷阱 —— Zod 默认 strip
 // 模式会让缺字段静默丢弃，必填字段漏声明 = 整份校验形同虚设）：
-//   id (雪花 ID string) / version (乐观锁 i32) / serial_no (nullable) /
+//   id (雪花 ID string) / version (part 级乐观锁 i32) / serial_no (nullable) /
 //   name / drawing_no / quantity (i32) / status (String，语义同 OrderStatus 但
 //   不锁字面量，与 partBatchSchema.status 同约定) / is_urgent /
 //   planned_delivery_date (string) / system_delivery_date (nullable) /
 //   customer_name (nullable，L2) / parent_customer_name (nullable，L1) /
-//   has_cnc_program (bool 必填 —— 本页 Tab 化关键字段)。
-// 另声明 1 个**后端当前不返**的期许字段 batch_id ⇒ 本 schema 共 14 个 key
-// （字段自身的注释解释了它为什么必须是 optional）。
+//   has_cnc_program (bool 必填 —— 本页 Tab 化关键字段) /
+//   batch_id (nullable) / batch_version (nullable) —— 2026-10-03 后端补齐的批次锚点。
+// ⚠️ 后端这两个 key **恒返**（`Option` 走 `serialize_i64_opt` → null，无
+// `skip_serializing_if`），即契约上它们是「必填 + 可空」；前端仍声明成
+// `nullable().optional()`，是为了让不携带批次锚点的手工构造行（单测 fixture 等）
+// 仍能通过类型检查。**读取侧一律按「可能缺失」处理**（`Boolean(row.batch_id)` /
+// `row.batch_version ?? null`），不因 optional 就假设一定有值。
+// ⚠️ 本 schema 仍保持 strip 模式的 `z.object`（非 `.strict()`），所以**后端改字段名
+// 不会被 Zod 报错**、只会被静默丢弃。批次锚点这两个字段的改名义务双向登记在
+// `src/views/cnc/pendingProgrammingColumnDefs.ts` 的 RELEASE_* 常量注释上，后端换名时
+// 两处必须同批改。
 //
 // ⚠️ 客户字段名与 part 域**不同名**：这里是 parent_customer_name(L1) /
 // customer_name(L2)，而 PartListItem 是 l1_customer_name / customer_name。
@@ -639,18 +647,21 @@ export const pendingProgrammingItemSchema = z.object({
   parent_customer_name: z.string().nullable(),
   /** 是否已上传 G_CODE（后端 t_part_file EXISTS 派生）—— 必填 boolean，守门到位 */
   has_cnc_program: z.boolean(),
-  /** 批次 id（雪花 ID 字符串）。release-from-programming 端点以批次为锚，
-   *  缺它就下发不了。**后端当前不返该字段**，故声明成 nullable + optional：
-   *  一旦后端补上，操作列的「下发」按钮会自动从 disabled 恢复可用，无需改前端。
-   *
-   *  ⚠️ 这是「已知缺口 + 期许字段」，不是当前契约，放在 schema 里（而不是视图层的
-   *  行类型）是因为 strip 只发生在这一层：z.infer 派生的类型要与真正到达视图层的
-   *  运行时对象同源，否则视图层会拿到一个类型上存在、运行时恒为 undefined 的字段。
-   *  代价是本 schema 是 strip 模式的 `z.object`（非 `.strict()`）：若后端最终用别的
-   *  名字下发（`batch_ids` 复数 / 嵌套结构），Zod 会**静默丢弃**它 ⇒ 按钮恒 disabled，
-   *  而 tooltip 会继续宣称「待编程列表接口未返回批次 id」，那句话此时是假话。
-   *  **后端确定字段名后必须同步改这一行**（改名，或按新结构补声明）。 */
+  /** 批次 id（雪花 ID 字符串，nullable）。**2026-10-03 后端已返**：取该 part 的
+   *  `status='PROGRAMMING' AND deleted_at IS NULL` 批次中 `id` 最大者（后端
+   *  ProgrammingItemOut::batch_id），无 PROGRAMMING 批次时为 null ⇒ 该行不可下发。
+   *  只认 PROGRAMMING 是因为本行唯一写出口 release-from-programming 硬要求源状态
+   *  是 PROGRAMMING，给别的状态等于给前端一个必然 20103 的锚点。
+   *  ⚠️ 改名义务：本字段与下面 batch_version 一起被
+   *  `src/views/cnc/pendingProgrammingColumnDefs.ts` 双向登记（strip 模式下后端换名
+   *  只会静默丢字段、不会报错，换名时那侧的用户可见文案会同时失真）。 */
   batch_id: z.string().nullable().optional(),
+  /** 批次乐观锁版本号（`t_part_batch.version`，nullable）。2026-10-03 与 batch_id
+   *  同批下发、**同生共死**（batch_id 为 null 时后端也必为 null），作
+   *  release-from-programming 的 OCC 版本回传 —— 后端 `PlaceOnShelfRequest.version`
+   *  是**必填** i32（无 `#[serde(default)]`，缺字段 422），拿 part 级 version 顶替
+   *  会打成版本冲突。同 batch_id：改名义务同批。 */
+  batch_version: z.number().nullable().optional(),
 });
 
 export type PendingProgrammingItemSchema = z.infer<typeof pendingProgrammingItemSchema>;

@@ -15,8 +15,13 @@
     `worker_id` 是工人雪花 ID（**不是** badge_code）、`quantity` **必须发字符串**
     （后端只解 JSON string，发 number 直接 422）。
   - 数量对话框不再是死 UI：v2 端点支持部分领取，缺省 quantity 才 = 整批。
+  - 本页依赖的两处后端能力均已合入 backend `master`（2026-10-03：部分领取 +
+    拆批、`pickable-by-work-type` 返 `batch_id` / `batch_version`），即流程可跑通。
   - 列表行缺 batch_id / batch_version 时走显式报错（`PICK_UP_NO_BATCH_HINT`），
     **不静默用 part_id 顶替**（那会打成后端「批次不存在」，掩盖真实原因）。
+    ⚠️ 这条守卫是**防线**而非常态：正常路径上 `GET /parts/pickable-by-work-type` 恒返
+    这两个字段（后端对 part 级行一律不填，只对这个「行单位就是批次」的端点填），所以
+    弹这条提示基本等于「后端没给锚点」，值得当异常上报。
   - 本页 PICK_UP 不直接调 worker-scan（该端点服务 RETURNED / INSPECTED 事件），
     仍走 pickUpPart 这条手动领取路径。
 -->

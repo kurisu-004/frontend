@@ -435,32 +435,34 @@ export async function forceCompletePart(
  *  PROGRAMMING 状态自 2026-09-29 起被标记为废弃（无新进入路径），但本端点保留
  *  供历史 PROGRAMMING 数据消化。
  *  调用方：
- *    1. PendingProgrammingList.vue「下发」按钮（仅历史 PROGRAMMING 数据可见）；
- *  2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
+ *    1. usePendingProgrammingStore 的 release mutation（「待编程一览」页操作列
+ *       「下发」按钮，仅历史 PROGRAMMING 数据可见）；
+ *    2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
  *
  *  2026-10-02 迁 prod 域：PROGRAMMING 是批次状态，锚点改 `{batch_id}`。
  *  2026-10-03：后端该端点复用 `PlaceOnShelfRequest`，其 `version` 同样必填（无
- *  `#[serde(default)]`，缺字段 422）⇒ 本函数补第 4 形参 `version` 并透传，
- *  这是「待编程下发不再恒 422」的必要一步。
+ *  `#[serde(default)]`，缺字段 422）⇒ 本函数补第 4 形参 `version` 并透传。
+ *  后端同日给 `ProgrammingItemOut` 补上 `batch_id` / `batch_version`（取该 part 的
+ *  PROGRAMMING 活跃批次，无则 null），调用方 1 据此完成接线。
  *
- *  已知缺口（2026-10-03 登记，未修）：**上面两个调用方都还没接线 `version`**，
- *  形参声明为可选，不传时请求仍 422：
- *    1. `usePartCncGroups.onReleaseToShelf`（零件详情页 CNC 卡片）—— 属本轮范围外的
- *       `views/parts/detail/**`；其数据源是零件详情，拿不到批次 version。
- *    2. `usePendingProgrammingStore` 的 release mutation（`PendingProgrammingList.vue`
- *       「下发」按钮背后）—— 当前 `mutationFn` 是恒 `throw` 的占位，等批次锚点。
- *       ⚠️ 这条的**后端前提尚未合入**：后端给 `ProgrammingItemOut` 补 `batch_id` /
- *       `batch_version` 的改动在分支 `feat/batch-id-vo`（commit `87e033b`）上，
- *       **backend `master` 的 `ProgrammingItemOut` 仍无 `batch_id` 字段**
- *       （已核：master `src/modules/prod/programming/vo.rs` 零命中，master HEAD
- *       `5c24b9a`）。⇒ 这**不是纯前端任务**，接线前必须先确认后端已合入，否则
- *       `batch_id` 仍 `undefined`、按钮点了必然失败。schema 侧
- *       `pendingProgrammingItemSchema.batch_id` 已在位（后端合入后即可用），接线时
- *       把 store 的 `mutationFn` 从 `throw` 换成真实调用并传 `batch_version` 即可。
- *       接线那一轮还须同步改 `pendingProgrammingColumnDefs.ts` 的用户可见文案
- *       （`RELEASE_NO_BATCH_HINT` 与其上方注释）—— 它们现在写的「列表不携带
- *       batch_id」对当前 master 是**真话**，后端合入后才变成假话。
- *  两条都接线后，本形参**必须**改成必填。 */
+ *  已知缺口（2026-10-03 更新，**只剩调用方 2**：调用方 2 仍未传 `version`，
+ *  该路径上的请求仍 422。`version` 声明为可选正是为它留位，调用方 2 接上后
+ *  本形参**必须**改成必填）：
+ *    - `usePartCncGroups.onReleaseToShelf`（零件详情页 CNC 卡片，
+ *      `views/parts/detail/**`，2026-10-03 未动）。它**不是**被后端锚点卡住：
+ *      - `GET /api/v2/parts/{id}`（`PartDetailOut`）确实**不**含 batch_id /
+ *        batch_version，它唯一的批次字段 `current_batch_id` 语义是「当前
+ *        **INSPECTION** 批次 id」（service `find_current_inspection_batch_id`，
+ *        非品检态恒 null），对 PROGRAMMING 批次无效；
+ *      - 但 `GET /api/v2/parts/{id}/batches`（`PartBatchListItemOut`）的**每个
+ *        批次项都带 `version`**（t_part_batch.version），而该流程本来就是让用户在
+ *        批次卡里**手选**批次再下发（`onReleaseToShelf` 的 batchId 形参由
+ *        PartDetail.vue 传入），`usePartDetail` 已持有 batches 列表（仓内
+ *        `onToShip` 已有「从 batches 里按状态找批次并取其 id + version」的先例）。
+ *      ⇒ 剩下的是**纯前端改动**（`onReleaseToShelf` 形参加 version + PartDetail 调用点
+ *        从 batches 里按 selectedBatchId 取 version），落在 `views/parts/detail/**`，
+ *        不在本轮范围。接线时顺带按上面 `onToShip` 的先例处理批次被并发改动的情形。 */
+
 export async function releaseFromProgramming(
   batchId: string,
   shelfId: string,

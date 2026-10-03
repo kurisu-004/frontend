@@ -10,7 +10,10 @@
 //         （避免「默认参数首屏 + 持久化参数再屏」双 fetch）。
 //   - T5：Zod 守门 —— mock 返回缺 has_cnc_program 的响应 → query 进 error 态
 //         （errorMsg 非空，items 为空）。
-//   - T6：release 成功 → onSuccess 失效 programmingPrefix（+ partsPrefix）。
+//   - T6：release 走批次锚点端点（2026-10-03 接线）—— T6 正常下发（四参含
+//         batch_version + 失效 programmingPrefix / partsPrefix + 关对话框）、
+//         T6b 行无 PROGRAMMING 批次（按钮 disabled + 只报错不发请求）、
+//         T6c 端点报错（错误透传 + 不关对话框 + 不失效）。
 //   - T7：autoRefresh 开关 + restoreState 持久化恢复（search / autoRefresh / activeTab）。
 //   - T8：$dispose 重建 store → 对话框态 / 页码 / Tab 归零（Pinia hydrate 泄漏 guard）。
 //   - 搜索输入态 / 生效态拆分：
@@ -83,7 +86,6 @@ vi.stubGlobal('localStorage', {
   },
 });
 
-
 /** 主查询 mock 的返回形态：items 收 unknown[]（用例里要喂「缺字段」等非法 payload）。 */
 interface PendingProgrammingResponse {
   items: unknown[];
@@ -116,13 +118,17 @@ vi.mock('@/api/http', async (importOriginal) => {
   return { ...actual, api: { ...actual.api, get: apiGetMock } };
 });
 
+// 2026-10-03：签名随接线同步成 4 参 —— release-from-programming 迁 prod 域后以批次
+// 为锚（batch_id 走 path），且后端 PlaceOnShelfRequest.version 是**必填** i32
+// （无 serde(default)，缺字段 422），第 4 参即批次 OCC 版本。写成必选是为了让
+// 「漏传 version」在测试里立刻炸（接线前的 3 参 mock 会让漏传静默通过）。
 const releaseFromProgrammingMock = vi.fn<
-  (id: string, shelfId: string, nextProcessId: string) => Promise<unknown>
+  (id: string, shelfId: string, nextProcessId: string, version: number) => Promise<unknown>
 >(async () => ({}));
 
 vi.mock('@/api/parts', () => ({
-  releaseFromProgramming: (id: string, shelfId: string, nextProcessId: string) =>
-    releaseFromProgrammingMock(id, shelfId, nextProcessId),
+  releaseFromProgramming: (id: string, shelfId: string, nextProcessId: string, version: number) =>
+    releaseFromProgrammingMock(id, shelfId, nextProcessId, version),
 }));
 
 vi.mock('@/api/process', () => ({
@@ -152,10 +158,17 @@ vi.mock('@/api/shelves', () => ({
 }));
 
 import { usePendingProgrammingStore } from '../usePendingProgrammingStore';
-import type { PendingProgrammingRow } from '../../pendingProgrammingColumnDefs';
+import {
+  canReleaseRow,
+  RELEASE_MISSING_BATCH_ANCHOR_HINT,
+  type PendingProgrammingRow,
+} from '../../pendingProgrammingColumnDefs';
 import { qk } from '@/composables/queries/keys';
 
-/** 造一行合法的 ProgrammingItem（13 字段齐全 —— 缺字段会被 Zod 守门拦掉）。 */
+/** 造一行合法的 ProgrammingItem（13 字段齐全 —— 缺字段会被 Zod 守门拦掉）。
+ *  ⚠️ 批次锚点（batch_id / batch_version）**故意不给默认值**：2026-10-03 起后端按
+ *  「无 PROGRAMMING 批次 → null」下发，用例要断言下发路径时必须显式给出（见下方
+ *  BATCH_ANCHOR），不给默认值才能让「漏配锚点」的用例真的走到守门分支。 */
 function makeItem(overrides: Partial<PendingProgrammingRow> = {}): PendingProgrammingRow {
   return {
     id: '190000000000099',
@@ -174,6 +187,12 @@ function makeItem(overrides: Partial<PendingProgrammingRow> = {}): PendingProgra
     ...overrides,
   };
 }
+
+/** 2026-10-03：可下发的批次锚点（后端 ProgrammingItemOut 的两个新增字段）。
+ *  batch_version 刻意取 7 而非与行内 part 级 version 同值 1 —— 行级 `version` 是
+ *  t_part.version，**与批次 OCC 无关**，两者取值相同会让「误传 part 级 version」的
+ *  错误实现也能通过断言。 */
+const BATCH_ANCHOR = { batch_id: '190000000000123', batch_version: 7 } as const;
 
 /** 主查询已发出的请求次数（api.get 调用数）。 */
 function callCount(): number {
@@ -332,13 +351,99 @@ describe('usePendingProgrammingStore', () => {
     expect(store.query.items[0]?.parent_customer_name).toBe('客户A');
   });
 
-  // ============ T6：release → 端点以批次为锚，待编程行缺批次 id 时不调后端 ============
-  // 2026-10-02：release-from-programming 迁 prod 域并锚定 batch_id，而本页数据源
-  // `GET /prod/programming/pending` 的行不携带批次 id ⇒ 拿不到锚点。行为是
-  // 「弹错误 + 不发请求」（不用 part_id 顶替，那会打成「批次不存在」）。
-  it('T6：confirmRelease 在行缺批次 id 时不发请求、不失效、不关对话框', async () => {
+  // ============ T6：release 接上批次锚点端点（2026-10-03 接线后的行为）============
+  // 后端 ProgrammingItemOut 2026-10-03 补上 batch_id / batch_version，store 的
+  // mutationFn 从恒 throw 换成真调 releaseFromProgramming(batch_id, shelf_id,
+  // next_process_id, batch_version)。三条用例分别守「正常下发」「无可下发批次」
+  // 「端点报错」。
+  it('T6：批次锚点齐全 → 按 (batch_id, shelf, process, batch_version) 四参下发，成功后失效两域 + 关对话框', async () => {
     respondWith({
-      items: [makeItem()],
+      items: [makeItem(BATCH_ANCHOR)],
+      total: 1,
+      limit: 20,
+      offset: 0,
+    });
+    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
+
+    const store = usePendingProgrammingStore();
+    store.query.restoreState();
+    await store.query.fetchList();
+
+    const row = store.query.items[0];
+    expect(row).toBeDefined();
+    // 列表层守门：批次锚点原样透传到行（batch_id 是 JSON string 雪花 ID，
+    // batch_version 是 number —— 后端不把它序列化成长字符串）
+    expect(row?.batch_id).toBe(BATCH_ANCHOR.batch_id);
+    expect(row?.batch_version).toBe(BATCH_ANCHOR.batch_version);
+    // 锚点齐全 ⇒ 按钮可点（canReleaseRow 是操作列 disabled 的唯一判据）
+    expect(canReleaseRow(row!)).toBe(true);
+
+    store.release.target = row ?? null;
+    store.release.dialogVisible = true;
+    store.release.shelfId = '8800000000001';
+    store.release.processId = '7700000000001';
+    await store.release.confirm({ push: vi.fn() });
+
+    // 端点参数：批次 id 走 path（后端 POST /prod/batches/{batch_id}/…），
+    // 第 4 参是批次 OCC 版本（**不是**行级 part version）
+    expect(releaseFromProgrammingMock).toHaveBeenCalledTimes(1);
+    expect(releaseFromProgrammingMock).toHaveBeenCalledWith(
+      BATCH_ANCHOR.batch_id,
+      '8800000000001',
+      '7700000000001',
+      BATCH_ANCHOR.batch_version,
+    );
+    // 写后失效：本域（待编程列表）+ parts 域（下发改了 part 状态 / 货架归属）
+    const invalidatedKeys = invalidateSpy.mock.calls.map(
+      (c) => (c[0] as { queryKey?: unknown } | undefined)?.queryKey,
+    );
+    expect(invalidatedKeys).toContainEqual(qk.programmingPrefix);
+    expect(invalidatedKeys).toContainEqual(qk.partsPrefix);
+    expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('已下发到生产货架'));
+    // 成功才关对话框
+    expect(store.release.dialogVisible).toBe(false);
+    expect(store.release.submitting).toBe(false);
+  });
+
+  it('T6b：行无 PROGRAMMING 批次 → 按钮保持 disabled；即便绕过 UI 也只报错、不发请求', async () => {
+    respondWith({
+      items: [makeItem({ batch_id: null, batch_version: null })],
+      total: 1,
+      limit: 20,
+      offset: 0,
+    });
+    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
+
+    const store = usePendingProgrammingStore();
+    store.query.restoreState();
+    await store.query.fetchList();
+
+    const row = store.query.items[0];
+    // 缺口对用户可见：操作列按钮 disabled（正常路径上根本点不到这里）
+    expect(canReleaseRow(row!)).toBe(false);
+    // store 内是第二层防线（防御对话框被复用 / 行数据过期）：不发请求、报明确原因。
+    // 不用 part_id 顶替 —— 那会打成后端「batch 不存在」，把真因盖掉。
+    store.release.target = row ?? null;
+    store.release.dialogVisible = true;
+    store.release.shelfId = '8800000000001';
+    store.release.processId = '7700000000001';
+    await store.release.confirm({ push: vi.fn() });
+
+    expect(releaseFromProgrammingMock).not.toHaveBeenCalled();
+    expect(ElMessage.error).toHaveBeenCalledWith(RELEASE_MISSING_BATCH_ANCHOR_HINT);
+    const invalidatedKeys = invalidateSpy.mock.calls.map(
+      (c) => (c[0] as { queryKey?: unknown } | undefined)?.queryKey,
+    );
+    expect(invalidatedKeys).not.toContainEqual(qk.programmingPrefix);
+    expect(invalidatedKeys).not.toContainEqual(qk.partsPrefix);
+    expect(store.release.dialogVisible).toBe(true);
+    expect(store.release.submitting).toBe(false);
+  });
+
+  it('T6c：端点报错 → ElMessage.error 透传后端 msg、对话框不关、不失效', async () => {
+    releaseFromProgrammingMock.mockRejectedValueOnce(new Error('批次版本冲突'));
+    respondWith({
+      items: [makeItem(BATCH_ANCHOR)],
       total: 1,
       limit: 20,
       offset: 0,
@@ -355,16 +460,16 @@ describe('usePendingProgrammingStore', () => {
     store.release.processId = '7700000000001';
     await store.release.confirm({ push: vi.fn() });
 
-    expect(releaseFromProgrammingMock).not.toHaveBeenCalled();
+    expect(releaseFromProgrammingMock).toHaveBeenCalledTimes(1);
+    expect(ElMessage.error).toHaveBeenCalledWith('批次版本冲突');
+    // 失败不动缓存、不关对话框（用户改完选择可直接重试）
     const invalidatedKeys = invalidateSpy.mock.calls.map(
       (c) => (c[0] as { queryKey?: unknown } | undefined)?.queryKey,
     );
     expect(invalidatedKeys).not.toContainEqual(qk.programmingPrefix);
     expect(invalidatedKeys).not.toContainEqual(qk.partsPrefix);
-    // 失败路径不关对话框，submitting 复位
     expect(store.release.dialogVisible).toBe(true);
     expect(store.release.submitting).toBe(false);
-    expect(ElMessage.error).toHaveBeenCalled();
   });
 
   // ============ 自动刷新开关（轮询间隔本身在 node 环境不可断言）============
@@ -383,7 +488,11 @@ describe('usePendingProgrammingStore', () => {
     store.$dispose();
     localStorage.setItem(
       'myerp.list.anon.pending_programming_filter',
-      JSON.stringify({ search: { keyword: '法兰', serialNo: '' }, autoRefresh: true, activeTab: 'programmed' }),
+      JSON.stringify({
+        search: { keyword: '法兰', serialNo: '' },
+        autoRefresh: true,
+        activeTab: 'programmed',
+      }),
     );
 
     const store2 = usePendingProgrammingStore();
