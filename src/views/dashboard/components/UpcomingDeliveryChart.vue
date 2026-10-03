@@ -65,7 +65,7 @@ import type { UpcomingDeliveryEntryData } from '@/views/dashboard/composables/da
 import type { OrderStatus } from '@/types/parts';
 
 /** 3 层状态分组。
- *  - 顶层（top）5 状态：PENDING / PROGRAMMING / IN_PROCESS / REPAIRING / OUTSOURCE（品检前）
+ *  - 顶层（top）4 状态：PENDING / PROGRAMMING / IN_PROCESS / OUTSOURCE（品检前）
  *  - 中层（middle）2 状态：INSPECTION / READY_TO_SHIP（待品检 / 待送货）
  *  - 底层（bottom）1 状态：DELIVERED（已送货）
  *

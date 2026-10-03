@@ -173,6 +173,10 @@ describe('useDashboardUrgentList — items 派生', () => {
     expect(statuses).toContain('IN_PROCESS');
     expect(statuses).not.toContain('DELIVERED'); // 终态不在列表内
     expect(statuses).not.toContain('CANCELLED');
+    // 2026-10-01 起后端不再产生 REPAIRING（返修改用批次 is_repairing 布尔列），
+    // 传它是恒匹配 0 行的死字面量。
+    expect(statuses).not.toContain('REPAIRING');
+    expect(statuses).toHaveLength(6);
     scope.stop();
   });
 

@@ -15,7 +15,12 @@ export type PartCategory = '紧固件' | '轴承' | '传动件' | '电气件' | 
 export type PartStatus = '启用' | '停用';
 export type WarehouseStatus = '未入库' | '部分入库' | '已入库';
 
-/** 后端订单状态枚举（数据大屏用） */
+/** 后端订单状态枚举（数据大屏用）。
+ *
+ *  2026-10-03 取舍登记：`REPAIRING` 成员保留，尽管后端 2026-10-01 起不再产生该状态
+ *  （返修语义由 `t_part_batch.is_repairing` 布尔列承载，返修批次的 status 恒为
+ *  IN_PROCESS）。未 apply 存量洗数据 migration 的环境仍可能返出 REPAIRING 行，
+ *  删掉成员会让类型层与 Zod 枚举一起收窄、老环境直接解析失败。 */
 export type OrderStatus =
   | 'PENDING'
   | 'PROGRAMMING'

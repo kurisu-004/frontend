@@ -2,9 +2,9 @@
 /**
  * 一步式返修下发 dialog（PR-M 2026-08-04 续）
  *
- * 调 POST /prod/batches/{batch_id}/repair-dispatch：
- * DELIVERED / INSPECTION / READY_TO_SHIP → REPAIRING → ON_SHELF / INSPECTION
- * 原子完成；中间状态 REPAIRING 不落库。
+ * 调 POST /prod/batches/{batch_id}/repair-dispatch：把 DELIVERED / INSPECTION /
+ * READY_TO_SHIP 的批次原子流转到 ON_SHELF / INSPECTION，并置 t_part_batch.is_repairing
+ * 标记列（返修中只由该布尔列表达，不存在 REPAIRING 中间状态）。
  * （2026-10-02 由 POST /parts/{part_id}/repair-dispatch 迁来：返修下发是批次动作。）
  *
  * UI 结构（el-tabs 双子 Tab）：

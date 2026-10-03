@@ -3,7 +3,7 @@
 // 数据流：
 //   1. 调 listUnionItems（com 域跨表合并端点）拉 100 件按 system_delivery_date ASC
 //      排序的非终态工单（PENDING/PROGRAMMING/IN_PROCESS/INSPECTION/READY_TO_SHIP/
-//      OUTSOURCE/REPAIRING 共 7 个状态，覆盖「还在路上」的工件）；
+//      OUTSOURCE 共 6 个状态，覆盖「还在路上」的工件）；
 //   2. 客户端按 system_delivery_date <= today+6 取窗口内工单，并按「有无已交批次」
 //      分成 urgent / partial 两桶（splitForDashboard，src/utils/systemDeliveryOrders.ts）
 //      —— 后端不支持 system_delivery_date_from/_to，但 sort_by + limit=100 已经能
@@ -51,7 +51,6 @@ const URGENT_LIST_PARAMS: UnionListParams = {
     'INSPECTION',
     'READY_TO_SHIP',
     'OUTSOURCE',
-    'REPAIRING',
   ],
   sort_by: 'SYSTEM_DELIVERY_DATE',
   sort_dir: 'ASC',

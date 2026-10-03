@@ -84,12 +84,35 @@ export interface PartsSearchState {
   rowType: PartRowTypeFilter;
 }
 
+/** 零件一览「状态」筛选下拉的候选白名单。
+ *
+ *  2026-10-03：后端 2026-10-01 起不再产生 `REPAIRING` 状态 —— 返修语义改由
+ *  `t_part_batch.is_repairing` 布尔列承载（返修工单本身的 status 仍是 IN_PROCESS），
+ *  migration 006 已把存量 REPAIRING 行洗成 IN_PROCESS。故 REPAIRING 不能再作为
+ *  `statuses` 查询参数发出去：`statuses` 在后端两个端点都是裸逗号串零校验 +
+ *  `= ANY` 文本比较，传它不会降级也不会 400，只会恒匹配 0 行。
+ *
+ *  取舍：`OrderStatus` / Zod 枚举 / ORDER_STATUS_LABEL **仍保留** REPAIRING 成员 ——
+ *  未 apply migration 006 的环境若存在存量行，删掉枚举成员会让 `partSchema.parse`
+ *  抛错、整页白屏。本常量只管「哪些值允许作为筛选条件」。 */
+export const PARTS_STATUS_FILTER_WHITELIST: readonly OrderStatus[] = [
+  'PENDING',
+  'PROGRAMMING',
+  'IN_PROCESS',
+  'INSPECTION',
+  'READY_TO_SHIP',
+  'DELIVERED',
+  'OUTSOURCE',
+  'COMPLETED',
+  'CANCELLED',
+];
+
 /** 构造 search 初值（保留 CNC 编程员默认值）。
  *  2026-09-29：CNC 编程员主入口已迁到「待编程一览」Tab 页（cnc/PendingProgrammingList，
  *  含 chain 含 CNC 工序的所有 part，不再依赖 status=PROGRAMMING），零件一览作为辅助
  *  视图，默认筛 ['PENDING', 'IN_PROCESS']（既有库存工序进展 + 待 PENDING 准备下发）
  *  比单 'PROGRAMMING' 更贴合编程员的「今日工作视图」语义。
- *  非 CNC 编程员（默认视图）维持 ['IN_PROCESS', 'REPAIRING']（工单视角）。 */
+ *  非 CNC 编程员（默认视图）维持 ['IN_PROCESS']（工单视角）。 */
 export function initialPartsSearch(isCncProgrammer: boolean): PartsSearchState {
   return {
     keyword: '',
@@ -97,7 +120,7 @@ export function initialPartsSearch(isCncProgrammer: boolean): PartsSearchState {
     name: '',
     orderNo: '',
     serialNo: '',
-    statuses: isCncProgrammer ? ['PENDING', 'IN_PROCESS'] : ['IN_PROCESS', 'REPAIRING'],
+    statuses: isCncProgrammer ? ['PENDING', 'IN_PROCESS'] : ['IN_PROCESS'],
     isUrgent: null,
     customerId: '',
     requestDateFrom: '',
@@ -190,8 +213,13 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
   }
 
   // ============ 派生 ============
+  // 2026-10-03：下拉候选改成显式白名单，不再从 ORDER_STATUS_LABEL 派生 ——
+  // 后端 2026-10-01 起不再产生 REPAIRING 状态（返修改用 t_part_batch.is_repairing
+  // 布尔列），从 label 映射派生会让「返修中」继续出现在可筛选项里，而它恒匹配 0 行。
+  // ORDER_STATUS_LABEL 仍保留 REPAIRING 成员作解析容错：老 URL / 老 localStorage 快照
+  // 里出现该值时按白名单过滤掉，而不是直接崩。
   const statusOptions: { value: OrderStatus; label: string }[] = (
-    Object.keys(ORDER_STATUS_LABEL) as OrderStatus[]
+    PARTS_STATUS_FILTER_WHITELIST as readonly OrderStatus[]
   ).map((v) => ({ value: v, label: ORDER_STATUS_LABEL[v] }));
 
   // 2026-08-06 bugfix：装配件位置类筛选切换时 el-table remount key。
@@ -454,7 +482,11 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
   // 2026-09-26（B 任务）：两条分支末尾都 restored = true（开闸），让 useQuery
   // 在 store 实例化时不会自动 fetch（避免「默认参数首屏 + 持久化参数再屏」双 fetch）。
   function restoreState(queryStatus: unknown): void {
-    if (typeof queryStatus === 'string' && queryStatus in ORDER_STATUS_LABEL) {
+    if (
+      typeof queryStatus === 'string' &&
+      queryStatus in ORDER_STATUS_LABEL &&
+      PARTS_STATUS_FILTER_WHITELIST.includes(queryStatus as OrderStatus)
+    ) {
       search.statuses = [queryStatus as OrderStatus];
       restored.value = true;
       return;
@@ -473,9 +505,15 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
     search.orderNo = persisted.search.orderNo ?? search.orderNo;
     // 2026-07-31：序列号独立搜索字段恢复
     search.serialNo = persisted.search.serialNo ?? search.serialNo;
-    search.statuses = Array.isArray(persisted.search.statuses)
-      ? persisted.search.statuses
-      : search.statuses;
+    // 按白名单收敛：老用户浏览器里持久化的 'REPAIRING' 不能复活并继续发给后端
+    //（恒匹配 0 行的死字面量）。全被过滤掉时退回初始默认，避免发出空 statuses。
+    const persistedStatuses = Array.isArray(persisted.search.statuses)
+      ? (persisted.search.statuses as OrderStatus[]).filter((v) =>
+          PARTS_STATUS_FILTER_WHITELIST.includes(v),
+        )
+      : [];
+    search.statuses =
+      persistedStatuses.length > 0 ? persistedStatuses : initialPartsSearch(opts.isCncProgrammer).statuses;
     search.isUrgent = persisted.search.isUrgent ?? search.isUrgent;
     search.customerId = persisted.search.customerId ?? search.customerId;
     search.requestDateFrom = persisted.search.requestDateFrom ?? search.requestDateFrom;

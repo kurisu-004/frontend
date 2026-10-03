@@ -202,6 +202,10 @@ export const partSchema = z.object({
   request_date: z.string(),
   planned_delivery_date: z.string(),
   is_urgent: z.boolean(),
+  // 2026-10-03 取舍登记：REPAIRING 作为**枚举成员**保留，尽管后端 2026-10-01 起不再
+  // 产生该状态（返修改用 t_part_batch.is_repairing 布尔列）。未 apply 存量洗数据
+  // migration 的环境仍可能返出 REPAIRING 行，删掉成员会让 partSchema.parse 抛错
+  // ⇒ 整页白屏。「能否作为筛选参数下发」由 PARTS_STATUS_FILTER_WHITELIST 单独管。
   status: z.enum([
     'PENDING',
     'PROGRAMMING',
