@@ -76,9 +76,15 @@ export interface PartItem {
   batch_no?: number | null;
   batch_label?: string | null;
   /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与 batch_id 同源。
-   *  **仅 `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）填**，
-   *  其它端点恒 undefined。`POST /prod/batches/{batch_id}/pick-up` 的 `version`
-   *  入参即取自本字段，缺失时扫码台走显式报错（不静默用 part_id 顶替）。
+   *  填充口径：backend `feat/batch-id-vo`（commit `87e033b`）上**仅**
+   *  `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）填，
+   *  其它端点恒 undefined（该分支刻意不填：一个 part 的活跃批次可能不止一个）。
+   *  ⚠️ **该分支尚未合入 backend `master`**（核查时 master HEAD `5c24b9a`，master 的
+   *  `PartListItem` 无 `batch_version`、`pickable-by-work-type` 用 `let _ = bid;`
+   *  丢弃批次 id）⇒ 对当前 master，本字段与上面的 `batch_id` **恒为 undefined**。
+   *  部署顺序依赖与错序后果见本文件 `pickUpPart` 的「跨仓部署顺序依赖」段。
+   *  `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参即取自本字段，缺失时
+   *  扫码台走显式报错（不静默用 part_id 顶替）。
    *
    *  ⚠️ **改名义务**（沿用本仓既有惯例，参照
    *  `src/composables/queries/schemas.ts` 里 pendingProgrammingItemSchema 的
@@ -441,10 +447,17 @@ export async function forceCompletePart(
  *       `views/parts/detail/**`；其数据源是零件详情，拿不到批次 version。
  *    2. `usePendingProgrammingStore` 的 release mutation（`PendingProgrammingList.vue`
  *       「下发」按钮背后）—— 当前 `mutationFn` 是恒 `throw` 的占位，等批次锚点。
- *       这条**解阻塞条件已具备**：后端已给 `ProgrammingItemOut` 补上 `batch_id` 与
- *       `batch_version`（与扫码台 pickable-by-work-type 同一轮加的），schema 侧
- *       `pendingProgrammingItemSchema.batch_id` 已在位；接线时本形参直接可用，
- *       只需把 store 的 `mutationFn` 从 `throw` 换成真实调用并传 `batch_version`。
+ *       ⚠️ 这条的**后端前提尚未合入**：后端给 `ProgrammingItemOut` 补 `batch_id` /
+ *       `batch_version` 的改动在分支 `feat/batch-id-vo`（commit `87e033b`）上，
+ *       **backend `master` 的 `ProgrammingItemOut` 仍无 `batch_id` 字段**
+ *       （已核：master `src/modules/prod/programming/vo.rs` 零命中，master HEAD
+ *       `5c24b9a`）。⇒ 这**不是纯前端任务**，接线前必须先确认后端已合入，否则
+ *       `batch_id` 仍 `undefined`、按钮点了必然失败。schema 侧
+ *       `pendingProgrammingItemSchema.batch_id` 已在位（后端合入后即可用），接线时
+ *       把 store 的 `mutationFn` 从 `throw` 换成真实调用并传 `batch_version` 即可。
+ *       接线那一轮还须同步改 `pendingProgrammingColumnDefs.ts` 的用户可见文案
+ *       （`RELEASE_NO_BATCH_HINT` 与其上方注释）—— 它们现在写的「列表不携带
+ *       batch_id」对当前 master 是**真话**，后端合入后才变成假话。
  *  两条都接线后，本形参**必须**改成必填。 */
 export async function releaseFromProgramming(
   batchId: string,
@@ -473,7 +486,32 @@ export async function releaseFromProgramming(
  *  - `quantity` **必须发 JSON 字符串**（后端 `deserialize_i64_opt` 的实现是先
  *    `Option::<String>::deserialize` 再 `parse::<i64>()`，发 number 会被 axum `Json`
  *    extractor 拒成 422）；缺省 / null = 整批，小于总量时后端自动拆批。
- *  响应仍是 part 级 `R<PartOut>`，调用方按整批刷新列表即可。 */
+ *  响应仍是 part 级 `R<PartOut>`，调用方按整批刷新列表即可。
+ *
+ *  ⚠️ **跨仓部署顺序依赖（2026-10-03 登记）：本函数依赖两个尚未合入 backend `master`
+ *  的后端分支，部署必须按「先后端、后本前端」的顺序，否则会出现静默数据损坏。**
+ *  （核查时 backend master HEAD = `5c24b9a`；下面两条都实测过。）
+ *
+ *  1. **部分领取依赖 `feat/pickup-partial-split`**（部分领取 + 自动拆批）。
+ *     master 的 `PickUpRequest` **没有 `quantity` 字段**，且 `prod/batch/dto.rs` 里
+ *     真实 `#[serde(deny_unknown_fields)]` 属性数为 **0**（后端在同文件 doc 里写明
+ *     这是**刻意**的：「那会让任何多余字段直接 422，迁移面远大于收益」）⇒ serde
+ *     **静默丢弃**未知字段。同时 master 的 `pick_up` service 硬编码
+ *     `quantity: Some(batch.quantity)`，即**恒整批**。
+ *     ⇒ **错序部署的后果**：调用方无条件发 `quantity`（见 `ScanPickParts.vue`），
+ *     工人选 4 / 共 10 时后端静默丢弃、领走全部 10，而 UI 仍弹「已领取 × 4」。
+ *     **没有 422、没有报错、没有测试能发现** —— 比 404 更难定位（本仓已被「点按钮
+ *     才发现 404」咬过一次，见 `__tests__/routes.spec.ts` 的建档理由）。
+ *  2. **批次锚点依赖 `feat/batch-id-vo`**（两个只读列表端点补 batch_id /
+ *     batch_version）。master 的 `pickable-by-work-type` 会**显式丢弃**批次 id ——
+ *     `work_type.rs` 里 SQL 投影了 `b.id AS bid`，DTO 映射却是 `let _ = bid;`；master
+ *     的 `PartListItem` 也无 `batch_version` 字段。
+ *     ⇒ **错序部署的后果**：扫码台领料 100% 走不通，每笔都撞
+ *     `PICK_UP_NO_BATCH_HINT`（「批次信息缺失」）。这一条是**响亮失败**、守卫在正确
+ *     工作（`ScanPickParts` 不静默用 part_id 顶替），属可接受的降级；与上一条的
+ *     静默损坏相比风险低一个量级，但同样必须先合后端。
+ *
+ *  两条后端分支都合入 master 后，本段可整段删除。 */
 export async function pickUpPart(batchId: string, payload: PartPickUpPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/pick-up`,
