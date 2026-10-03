@@ -1,30 +1,26 @@
 <!--
   UpcomingDeliveryChart.vue
-  2026-09-29 新增：未来 7 天交期分桶柱状图（ECharts 核心 API 直接用，不引入 vue-echarts）。
-  2026-09-30 重构：单 series 改为 3 series 分层堆叠（顶层品检前 / 中层待品检待送货 /
-  底层已送货），点击某一层 emit 事件给父组件打开抽屉。
+  dashboard「交期分桶」横向堆叠柱状图，时间窗 14 天（today → today+13）。
+  3 series 分层（底层已送货 / 中层待品检待送货 / 顶层品检前），点击某一层 emit
+  barLayerClick 给父组件打开抽屉。
+
   数据来源：snapshot.upcoming_delivery: {date, count, by_status}[]（by_status
   必填对象，OrderStatus → 件数）。
-  2026-09-30 视觉规则调整（用 EP 预设色阶）：
-    - 底层（bottom）= #67c23a（EP success green，已送货）
-    - 中层（middle）= #e6a23c（EP warning orange，待品检 / 待送货）
-    - 顶层（top）= #f56c6c（EP danger red，品检前所有工序异常累积）
-    原因：原警示色阶 #0FFCBE / #FFCC00 / #B4121B 偏离 Element Plus 预设色阶；
-    切到 EP 默认 hex 后与项目其它 danger/warning/success 标签色调一致，dashboard
-    视觉闭环更紧。**必须用 hex 而非 var(--el-color-*)** —— ECharts Canvas renderer
-    解析 CSS var() 不可靠，会出现「系列不渲染」或「取色失败」静默 fail。
-  2026-09-30 调整：series 加 barMaxWidth: 18 —— 解决 14 天横向堆叠视觉拥挤；
-  barGap / barCategoryGap 留默认（堆叠条本身已紧密）。
-  2026-10-01 重构：参考 echarts 官方 stacked-horizontal-bar 示例，改为横向堆叠；series 加 emphasis.focus='series'。
-  2026-09-30（Phase 4 vue-echarts 化）重构：迁 vue-echarts 8.3 <v-chart>，
-  移除 echarts.init / ResizeObserver / dispose 自管（vue-echarts 自管生命周期）。
-  - 时间窗从 7 天扩到 14 天（today → today+13），让 ops 看到两周趋势。
-  - LAYERS 顺序调整为 [bottom, middle, top] —— 视觉从下到上按"完成度递增"
-    （已送货 → 待品检待送货 → 品检前），配 yAxis.inverse=true 让 today 在顶。
-  - 移除 series.itemStyle.borderRadius（横向堆叠时圆角意义不大）。
-  - 保留：横向堆叠 + emphasis.focus='series' + theme='v5' + renderer='canvas'。
-  - click 通过 @click emit 透传（vue-echarts 的 @click payload 与 chart.on('click', ...)
-    形态一致 —— seriesName / dataIndex / value 等字段由 ECElementEvent 提供）。
+
+  视觉 / 实现规则：
+  - 颜色走 EP 预设 hex（success #67c23a / warning #e6a23c / danger #f56c6c），
+    与 UpcomingDeliveryListDrawer 的 LAYER_COLOR 一致，形成「柱色 ↔ 抽屉层标签」
+    闭环。**必须用 hex 而非 var(--el-color-*)** —— ECharts Canvas renderer 解析
+    CSS var() 不可靠，会出现「系列不渲染」或「取色失败」静默 fail。
+  - 横向堆叠 + series barMaxWidth: 18（14 天视觉不拥挤）；barGap / barCategoryGap
+    留默认（堆叠条本身已紧密）；不设 itemStyle.borderRadius（横向堆叠圆角意义不大）。
+  - LAYERS 顺序 [bottom, middle, top] —— 视觉从下到上按「完成度递增」（已送货 →
+    待品检待送货 → 品检前），配 yAxis.inverse=true 让 today 在顶。
+  - 走 vue-echarts 8.3 的全局 <v-chart>（theme v5 + renderer canvas + autoresize），
+    不自管 echarts.init / ResizeObserver / dispose。
+  - series 加 emphasis.focus='series'，hover 时本层高亮、其余弱化。
+  - click 通过 @click emit 透传（payload 形态与 chart.on('click', ...) 一致 ——
+    seriesName / dataIndex / value 等字段由 ECElementEvent 提供）。
 -->
 <template>
   <div class="chart-wrap">
@@ -42,17 +38,13 @@
 </template>
 
 <script setup lang="ts">
-// 2026-09-29 新增 + 2026-09-30 重构 + 2026-09-30 Phase 4 迁 vue-echarts 8.3：
-// dashboard「未来 14 天交期」柱状图组件。
+// dashboard「交期分桶」柱状图组件。
 //
 // 设计要点：
-//   - 不再直用 echarts/core —— 全部委托给全局 <v-chart>（main.ts:82 注册）。
+//   - 不直用 echarts/core —— 全部委托给全局 <v-chart>。
 //   - LAYERS 颜色走 Element Plus 预设 hex（success #67c23a / warning #e6a23c /
 //     danger #f56c6c），与 UpcomingDeliveryListDrawer 的 LAYER_COLOR 保持一致，
-//     形成「柱状图色块 ↔ 抽屉层标签」的视觉闭环。2026-10-01 订正：本条原写
-//     「警示红 / 警示黄 / 亮青绿」（旧 #f56c6c 之前的 #B4121B/#FFCC00/#0FFCBE 三色），
-//     2026-09-30 已切 EP 预设色阶但此条注释漏更 —— 同批修掉的还有
-//     UpcomingDeliveryChart.spec.ts 里写死旧三色的断言。必须用 hex 而非
+//     形成「柱状图色块 ↔ 抽屉层标签」的视觉闭环。必须用 hex 而非
 //     var(--el-color-*)：ECharts Canvas renderer 解析 CSS var() 不可靠。
 //   - props.buckets 由父组件 DashboardView 派生（snapshot.upcoming_delivery）。
 //     组件本身不消费 Zod schema —— 守门发生在 useDashboardSnapshot.queryFn 入口，
@@ -64,7 +56,7 @@
 //     dataIndex 即 yAxis category 索引；反查 LAYERS.find(l => l.label === seriesName)
 //     得到 layer，emit 时仍用 layer.key（英文 ID）以保父组件契约不变。
 //   - vue-echarts autoresize prop 自管 ResizeObserver，无需手写 observe / disconnect。
-//   - 主题仍锁 v5（沿 src/components/EChart.vue:83 + 2026-09-30 bugfix）。
+//   - 主题锁 v5。
 
 import { computed } from 'vue';
 import type { ECElementEvent } from 'echarts/core';
@@ -72,14 +64,14 @@ import type { EChartsCoreOption } from 'echarts/core';
 import type { UpcomingDeliveryEntryData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
 import type { OrderStatus } from '@/types/parts';
 
-/** 2026-09-30 重构 + Phase 4 调整：3 层状态分组。
+/** 3 层状态分组。
  *  - 顶层（top）5 状态：PENDING / PROGRAMMING / IN_PROCESS / REPAIRING / OUTSOURCE（品检前）
  *  - 中层（middle）2 状态：INSPECTION / READY_TO_SHIP（待品检 / 待送货）
  *  - 底层（bottom）1 状态：DELIVERED（已送货）
  *
  *  COMPLETED / CANCELLED 后端 SQL 沿现状 WHERE 排除，不会出现；不需要进 LAYERS。
- *  2026-09-30 调整：颜色改 EP 预设 hex（success green #67c23a / warning orange
- *  #e6a23c / danger red #f56c6c），对齐项目其它 danger/warning/success 标签。
+ *  颜色走 EP 预设 hex（success green #67c23a / warning orange #e6a23c /
+ *  danger red #f56c6c），对齐项目其它 danger/warning/success 标签。
  *  **必须用 hex 而非 var()** —— ECharts Canvas renderer 解析 var() 不可靠。 */
 interface UpcomingLayer {
   readonly key: 'top' | 'middle' | 'bottom';
@@ -104,15 +96,12 @@ const emit = defineEmits<{
   }];
 }>();
 
-/** 2026-09-30 新增 + Phase 4 调整：3 层状态分组实例（必须在 defineProps/defineEmits 之后，
- *  沿 vue/define-macros-order ESLint 约定）。
- *  Phase 4 顺序：[bottom, middle, top] —— ECharts 横向堆叠时，series 数组中后入的
- *  series 会渲染在更靠右（视觉顶端）。LAYERS 顺序与系列渲染顺序严格一致，
- *  legend.data 与 series.name 也用 LAYERS.map(l => l.label) 保持字符串对齐
- *  （沿 2026-10-01 bugfix：避免「xxx series not exists」警告）。
- *  2026-09-30 调整：三色切 EP 默认 hex（success #67c23a / warning #e6a23c /
- *  danger #f56c6c）；hex 而非 var()，因 ECharts Canvas renderer 解析 CSS var()
- *  不可靠。 */
+/** 3 层状态分组实例（必须在 defineProps/defineEmits 之后，沿 vue/define-macros-order
+ *  ESLint 约定）。
+ *  顺序 [bottom, middle, top] —— ECharts 横向堆叠时，series 数组中后入的 series 会
+ *  渲染在更靠右（视觉顶端）。LAYERS 顺序与系列渲染顺序严格一致，legend.data 与
+ *  series.name 也用 LAYERS.map(l => l.label) 保持字符串对齐（否则 ECharts 在
+ *  setOption / resize 重算 legend 时打印「xxx series not exists」警告）。 */
 const LAYERS: readonly UpcomingLayer[] = [
   {
     key: 'bottom',
@@ -134,12 +123,12 @@ const LAYERS: readonly UpcomingLayer[] = [
   },
 ] as const;
 
-/** 2026-09-29 新增：把 ISO 'YYYY-MM-DD' + 偏移天数转 'MM/DD' 标签。 */
+/** 把 ISO 'YYYY-MM-DD' 转 'MM/DD' 标签。 */
 function formatLabel(iso: string): string {
   return iso.slice(5).replace(/-/g, '/');
 }
 
-/** 2026-09-30 新增 + Phase 4 调整：补全 14 天 ISO 序列（today → today+13）。 */
+/** 补全 14 天 ISO 序列（today → today+13）。 */
 function nextFourteenDays(): string[] {
   const out: string[] = [];
   for (let i = 0; i < 14; i++) {
@@ -154,7 +143,7 @@ function nextFourteenDays(): string[] {
   return out;
 }
 
-/** 2026-09-30 新增：从 bucket 派生某层 count = 该层 statuses 的 by_status 求和。
+/** 从 bucket 派生某层 count = 该层 statuses 的 by_status 求和。
  *  by_status 是后端 BTreeMap<String, i64> 序列化输出；缺 key 视为 0 件。 */
 function layerCount(bucket: UpcomingDeliveryEntryData, layer: UpcomingLayer): number {
   let n = 0;
@@ -165,7 +154,7 @@ function layerCount(bucket: UpcomingDeliveryEntryData, layer: UpcomingLayer): nu
   return n;
 }
 
-/** 2026-09-30 新增 + Phase 4 调整：把 buckets 按 14 天对齐，缺失日期补 0 桶。 */
+/** 把 buckets 按 14 天对齐，缺失日期补 0 桶。 */
 function alignBuckets(
   buckets: UpcomingDeliveryEntryData[],
 ): { xLabels: string[]; aligned: UpcomingDeliveryEntryData[] } {
@@ -186,16 +175,14 @@ function alignBuckets(
   return { xLabels, aligned };
 }
 
-/** 2026-09-30 新增 + Phase 4 vue-echarts 化：单一对齐数据 computed，
- *  chartOption 与 onChartClick 共享，避免重复跑 alignBuckets（沿 2026-09-30
- *  原 lastAligned 闭包缓存的语义）。 */
+/** 单一对齐数据 computed，chartOption 与 onChartClick 共享，避免重复跑 alignBuckets。 */
 const alignedData = computed(() => alignBuckets(props.buckets));
 
-/** 2026-09-30 新增 + Phase 4 vue-echarts 化：ECharts 配置 builder 转 computed。
- *  依赖 props.buckets，vue-echarts 内部 watch 自动 setOption（notMerge: true）。 */
+/** ECharts 配置 builder 转 computed。依赖 props.buckets，vue-echarts 内部 watch
+ *  自动 setOption（notMerge: true）。 */
 const chartOption = computed<EChartsCoreOption>(() => {
   const { xLabels, aligned } = alignedData.value;
-  // 2026-10-01 bugfix + Phase 4 沿用：series.name 必须与 legend.data 逐字相等，
+  // series.name 必须与 legend.data 逐字相等，
   // 否则 ECharts 在 setOption / resize 重算 legend 时打印
   // 「xxx series not exists」警告（图例显示用 label 中文；click handler 通过
   // LAYERS.find((l) => l.label === seriesName) 反查，emit 时仍用 layer.key 发英文 ID）。
@@ -204,16 +191,13 @@ const chartOption = computed<EChartsCoreOption>(() => {
     type: 'bar' as const,
     stack: 'delivery',
     data: aligned.map((b) => layerCount(b, layer)),
-    // 2026-09-30 新增：barMaxWidth 限宽 18px —— 14 天横向堆叠视觉拥挤，加 max
-    // 宽度后保持每根柱细瘦、不挡数字标；ECharts stacked bar 不需要 barGap 调
-    // 整（堆叠条本身已经紧密）。
+    // barMaxWidth 限宽 18px —— 14 天横向堆叠视觉拥挤，加 max 宽度后保持每根柱
+    // 细瘦、不挡数字标；ECharts stacked bar 不需要 barGap 调整（堆叠条本身已经紧密）。
     barMaxWidth: 18,
-    itemStyle: {
-      color: layer.color,
-      // 2026-09-30 Phase 4：移除 borderRadius —— 横向堆叠时圆角意义不大，
-      // ECharts 内部已对 stack 顶段（视觉最右段）自动接管视觉对齐。
-    },
-    // 每层数字标在层内顶部（沿 plan §2.2 #4）
+    // 不设 itemStyle.borderRadius —— 横向堆叠时圆角意义不大，ECharts 内部已对
+    // stack 顶段（视觉最右段）自动接管视觉对齐。
+    itemStyle: { color: layer.color },
+    // 每层数字标在层内顶部
     label: {
       show: true,
       position: 'insideTop',
@@ -229,8 +213,8 @@ const chartOption = computed<EChartsCoreOption>(() => {
   }));
 
   return {
-    // 顶部留位置给 legend + 每层标
-    // 2026-10-01 重构：横向图日期轴在 Y，需 left >= 50；底部无 category 轴，bottom 收窄。
+    // 顶部留位置给 legend + 每层标；日期轴在 Y，left 需留够标签宽度，底部无 category
+    // 轴故 bottom 收窄。
     grid: { left: 60, right: 24, top: 36, bottom: 24 },
     legend: {
       data: LAYERS.map((l) => l.label),
@@ -256,7 +240,7 @@ const chartOption = computed<EChartsCoreOption>(() => {
         const dataIndex = arr[0]?.dataIndex ?? 0;
         const bucket = aligned[dataIndex];
         const dateLabel = bucket?.date ?? '';
-        // 2026-09-30（review #4）防御性注释：rows.push 拼的是 innerHTML。
+        // 防御性注释：rows.push 拼的是 innerHTML。
         // 文案源自模块常量（layer.label）+ 后端 ISO 日期串（slice 5 取 MM/DD
         // 格式）+ 件数 number.toString——禁止插任何用户输入；如未来要展示
         // 自由文本字段，必须改 echarts tooltip 的 text-only 渲染或先 HTML
@@ -273,8 +257,7 @@ const chartOption = computed<EChartsCoreOption>(() => {
         return rows.join('<br/>');
       },
     },
-    // 2026-10-01 重构 + Phase 4：横向图 xAxis=value / yAxis=category，
-    // yAxis.inverse=true 让 today 在顶（与原 7 天 rtl 排序保持一致的视觉顺序）。
+    // 横向图 xAxis=value / yAxis=category，yAxis.inverse=true 让 today 在顶。
     xAxis: {
       type: 'value',
       axisLine: { show: false },
@@ -294,15 +277,14 @@ const chartOption = computed<EChartsCoreOption>(() => {
   };
 });
 
-/** 2026-09-30 新增 + Phase 4 vue-echarts 化：click handler 把 seriesName 反查
- *  LAYERS → emit 给父组件。父组件管 drawer 状态（沿 useDashboardUpcomingList
- *  的 enabled 闸门）。
+/** click handler 把 seriesName 反查 LAYERS → emit 给父组件。父组件管 drawer 状态
+ *  （沿 useDashboardUpcomingList 的 enabled 闸门）。
  *  vue-echarts 的 @click payload 与 chart.on('click', ...) 形态一致 —— 即
  *  ECElementEvent —— 含 seriesName / dataIndex / value / name 等。 */
 function onChartClick(p: ECElementEvent): void {
   const seriesName = p.seriesName;
   const dataIndex = p.dataIndex ?? 0;
-  // series.name 是 label (中文)，反查改用 label（沿 2026-10-01 bugfix）。
+  // series.name 是 label（中文），反查用 label。
   const layer = LAYERS.find((l) => l.label === seriesName);
   if (!layer) return;
   // 取对齐后 aligned[dataIndex].date（保证 ISO 形态稳定）。

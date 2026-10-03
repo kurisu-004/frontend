@@ -215,10 +215,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     // 表头日期
     expect(wrapper.find('.header-date').exists()).toBe(true);
     expect(wrapper.find('.header-date').text()).toBe('2026-10-01');
-    // 表头件数（2026-10-01 修正：原断言找 '.header-status-count' + '2 状态'，但
-    // dddebb7「办公桌面屏重构」把 header 收成单行 header-row-1（日期 · 层标签 ·
-    // 共 N 件），该元素连同 header-row-2 / header-row-3 一起从模板移除，只剩死样式，
-    // 测试没跟上 → 长期红灯。改为断言现存的 .header-total，mock 1 条 → 「共 1 件」）
+    // 表头件数：header 是单行（日期 · 层标签 · 共 N 件），mock 1 条 → 「共 1 件」
     expect(wrapper.find('.header-total').exists()).toBe(true);
     expect(wrapper.find('.header-total').text()).toBe('共 1 件');
     // layer='top' → LAYER_LABEL='品检前'

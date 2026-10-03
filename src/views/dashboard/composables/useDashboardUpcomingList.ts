@@ -1,6 +1,6 @@
-// 2026-09-30 新增：dashboard「7 天交期柱状图按层点击抽屉」useQuery composable。
+// dashboard「交期分桶柱状图按层点击抽屉」useQuery composable。
 //
-// 数据流（与方案 §2.4 对齐）：
+// 数据流：
 //   1. 入参 reactive { date: 'YYYY-MM-DD', statuses: OrderStatus[] }：
 //      - 仅在 drawer 打开时 caller 传非 null 启用闸门；
 //      - 切层 / 切换日期时 key 变化自动 refetch。
@@ -15,10 +15,11 @@
 //   - staleTime: 30_000：30s 内同 (date, statuses) 命中缓存（避免来回切层 / 切日期
 //     时重复请求）；gcTime: POSITIVE_INFINITY（会话级缓存）。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
-//   - 接 useDashboardInvalidation(['dashboard','upcoming-list']) 硬编码前缀：qk.
-//     dashboardUpcomingList(params) 是 exact-match 仅失效当前 (date, statuses) 查询，
-//     WS 事件触发时若用户已切到别的层/日期，被切走的查询不会失效仍 staleTime 30s 内
-//     fresh —— 必须用 prefix-match 失效全 upcoming-list 查询。
+//   - 失效键用字面量前缀 ['dashboard','upcoming-list']，**不用**
+//     qk.dashboardUpcomingList(p)：后者是带 params 的精确键，只能失效当前
+//     (date, statuses) 那一条；而 params 随用户切层 / 切日期不断变化，WS 事件到达时
+//     「需要重取」的是整个 upcoming-list 维度（此前挂载过、现已切走的那些查询同样
+//     过期）。要失效的是维度而非某条查询，故用前缀匹配。
 //   - 错误桥接：watch(query.error) → ElMessage.error（沿 2026-09-26 约定 #9）。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';

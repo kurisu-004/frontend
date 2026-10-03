@@ -212,9 +212,8 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(listUnionItemsMock).toHaveBeenCalled();
-    // 2026-09-30 review 第 1 轮修复：必须断言 query.error 被 ZodError 填充，
-    // 否则缺字段时 partListResultSchema.parse 静默通过、整份守门失效
-    // （沿范本 useDashboardUrgentList.spec.ts:248 U5 真实断言形态）。
+    // 必须断言 query.error 被 ZodError 填充，否则缺字段时
+    // partListResultSchema.parse 静默通过、整份守门失效。
     expect(q!.error.value).not.toBeNull();
     scope.stop();
   });

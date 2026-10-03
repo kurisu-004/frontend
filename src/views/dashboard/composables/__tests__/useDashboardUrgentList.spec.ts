@@ -1,11 +1,10 @@
 // src/views/dashboard/composables/__tests__/useDashboardUrgentList.spec.ts
 //
-// 2026-09-29 新增：useDashboardUrgentList 派生数据回归保护。
+// useDashboardUrgentList 派生数据回归保护。
 //
 // 覆盖：
 //   - U1：listUnionItems 返回 100 件 → items 派生 = 100 件
-//   - U2：urgentCount 派生 = items.filter(p => p.is_urgent).length
-//   - U3：fetchList 是 refetch async 包装（alias 沿 2026-09-26 约定 #7）
+//   - U3：fetchList 是 refetch async 包装
 //   - U4：listUnionItems 入参硬编码（statuses / sort_by / sort_dir / limit / offset）
 //   - U5：queryFn 走 partListResultSchema.parse(...) 守门 —— 缺必填字段抛错
 
@@ -99,7 +98,7 @@ function makeResultWithParts(parts: Record<string, unknown>[]): Record<string, u
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
 
-describe('useDashboardUrgentList — items + urgentCount 派生（2026-09-29）', () => {
+describe('useDashboardUrgentList — items 派生', () => {
   beforeEach(() => {
     listUnionItemsMock.mockReset();
     onDashboardEventMock.mockClear();
@@ -130,30 +129,6 @@ describe('useDashboardUrgentList — items + urgentCount 派生（2026-09-29）'
     await q!.fetchList();
 
     expect(q!.items.value).toHaveLength(100);
-    scope.stop();
-  });
-
-  it('U2：urgentCount 派生 = items.filter(is_urgent).length（100 件中 12 件紧急）', async () => {
-    const parts: Record<string, unknown>[] = [];
-    for (let i = 0; i < 100; i++) {
-      parts.push(
-        makeBasePart({
-          id: `1800000000${String(i).padStart(5, '0')}`,
-          // 每 100/12 ≈ 8 件设紧急 → 12 件标记
-          is_urgent: i % 8 === 0,
-        }),
-      );
-    }
-    listUnionItemsMock.mockResolvedValue(makeResultWithParts(parts));
-
-    const scope = effectScope();
-    let q: ReturnType<typeof useDashboardUrgentList> | undefined;
-    scope.run(() => {
-      q = testApp.runWithContext(() => useDashboardUrgentList());
-    });
-    await q!.fetchList();
-
-    expect(q!.urgentCount.value).toBe(13); // i=0,8,16,24,32,40,48,56,64,72,80,88,96
     scope.stop();
   });
 
@@ -188,9 +163,6 @@ describe('useDashboardUrgentList — items + urgentCount 派生（2026-09-29）'
 
     expect(listUnionItemsMock).toHaveBeenCalled();
     const params = listUnionItemsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    // 2026-10-01 修正：本断言原写死 'PLANNED_DELIVERY_DATE'，但 URGENT_LIST_PARAMS
-    // 已于 2026-09-30 改为 'SYSTEM_DELIVERY_DATE'（见 useDashboardUrgentList.ts 的
-    // sort_by 说明：改按系统交期排，PartSortKey 已含该值），测试没跟上 → 长期红灯。
     expect(params['sort_by']).toBe('SYSTEM_DELIVERY_DATE');
     expect(params['sort_dir']).toBe('ASC');
     expect(params['limit']).toBe(100);

@@ -61,16 +61,17 @@ export const qk = {
    *  全量单条（无 params），HTTP 端点 GET /api/v2/dashboard/snapshot 一次取回
    *  完整 DashboardSnapshotVO。 */
   dashboardSnapshot: ['dashboard', 'snapshot'] as const,
-  /** 2026-09-29 新增：dashboard「紧急工单 Top 列表」queryKey。
-   *  listUnionItems 拉 100 件按 planned_delivery_date ASC 的非终态件，客户端再按
-   *  today+7 过滤取 top 15。命中 useDashboardInvalidation 同套 AFFECTS_DASHBOARD
-   *  事件集后自动 invalidate 重取。 */
+  /** dashboard「交期工单」queryKey。
+   *  listUnionItems 拉 100 件按 system_delivery_date ASC 的非终态件，客户端再按
+   *  system_delivery_date <= today+6 过滤并分 urgent / partial 两桶（各取 top 30）。
+   *  命中 useDashboardInvalidation 同套 AFFECTS_DASHBOARD 事件集后自动 invalidate
+   *  重取。 */
   dashboardUrgentList: ['dashboard', 'urgent-list'] as const,
   /** 2026-09-29 新增：dashboard「逾期未交 KPI」queryKey。
    *  fetchOverview 拉当天日期范围内的 overdue_undelivered_count，仅 Manager 角色
    *  启用（enabled: isManager 闸门），非 Manager 不发请求。 */
   dashboardOverdue: ['dashboard', 'overdue'] as const,
-  /** 2026-09-30 新增：dashboard「7 天交期柱状图按层点击抽屉」queryKey。
+  /** dashboard「交期分桶柱状图按层点击抽屉」queryKey。
    *  listUnionItems({ row_type: 'PART', statuses, planned_delivery_date_from =
    *  to = date, sort_by: 'PLANNED_DELIVERY_DATE', sort_dir: 'ASC', limit: 500,
    *  offset: 0 }) 拉该日 × 该层状态的所有工单。 */

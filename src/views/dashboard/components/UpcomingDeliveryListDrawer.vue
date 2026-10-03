@@ -1,6 +1,6 @@
 <!--
   UpcomingDeliveryListDrawer.vue
-  2026-09-30 新增：dashboard「7 天交期柱状图按层点击抽屉」。
+  dashboard「交期分桶柱状图按层点击抽屉」。
   沿 UrgentOrderDrawer 范式：<el-drawer direction="rtl" :size="480"
   :with-header="false" :append-to-body="true" :destroy-on-close="true"
   @update:model-value>。
@@ -17,15 +17,16 @@
   useDashboardUpcomingList 的 enabled 闸门天然生效；drawer 自身
   `v-if="statuses.length === 0"` 是 props 异常兜底。
 
-  2026-09-30（Phase 5）改 btt + 行点击 emit：
-    - direction: 'rtl' → 'btt'（bottom-to-top），:size 480 → 60%：让抽屉从屏幕底部
-      弹出，水平宽度撑满，最大高度 60%，与下方 dashboard 双栏布局配合更顺（用户
-      点柱状图看到的是"目标日期的工单清单"，横向表格能展示更全列）。
-    - 2026-09-30 调整：LAYER_COLOR 同步 EP 预设 hex（success #67c23a / warning
-      #e6a23c / danger #f56c6c），与 UpcomingDeliveryChart.LAYERS.color 保持一致。
-    - 新增 emit('rowClick', part)：用户在抽屉行点击 → 父组件 DashboardView 关闭
-      下方抽屉 → 复用 UrgentOrderDrawer 打开右侧工单详情。两 drawer 协调逻辑
-      全在父组件，本组件不感知 UrgentOrderDrawer 存在（关注点分离）。
+  抽屉形态：direction 'btt'（bottom-to-top）+ :size 60% —— 从屏幕底部弹出、水平
+  宽度撑满、最大高度 60%，与 dashboard 双栏布局配合（点柱状图看到的是「目标日期的
+  工单清单」，横向表格能展示更全列）。
+
+  LAYER_COLOR 走 EP 预设 hex（success #67c23a / warning #e6a23c / danger #f56c6c），
+  与 UpcomingDeliveryChart.LAYERS.color 一致。
+
+  emit('rowClick', part)：行点击 → 父组件打开 PartPreviewDialog 预览该工单。抽屉
+  **不自行关闭**（dialog append-to-body 覆盖在抽屉之上，关掉 dialog 后抽屉仍可见，
+  方便连续预览）。本组件不感知 PartPreviewDialog 存在，emit 只传 part payload。
 -->
 <template>
   <el-drawer
@@ -118,9 +119,9 @@
 </template>
 
 <script setup lang="ts">
-// 2026-09-30 新增：dashboard「7 天交期柱状图按层点击抽屉」展示壳。
+// dashboard「交期分桶柱状图按层点击抽屉」展示壳。
 //
-// 数据流（与 plan §2.3 对齐）：
+// 数据流：
 //   1. props.modelValue=true 时 useDashboardUpcomingList 的 enabled 闸门打开
 //      （params getter 返回 { date, statuses } 非 null）；
 //   2. params 变化（切层 / 切日期）→ queryKey 变化 → 自动 refetch；
@@ -158,7 +159,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void;
-  /** 2026-09-30（Phase 5）新增：行点击 → 父组件 DashboardView 关下方抽屉并复用 UrgentOrderDrawer。 */
+  /** 行点击 → 父组件 DashboardView 打开 PartPreviewDialog 预览该工单。 */
   (e: 'rowClick', part: PartListItem): void;
 }>();
 
@@ -191,9 +192,9 @@ const params = computed(() => {
 
 const { data: rows, isPending, error } = useDashboardUpcomingList(() => toValue(params));
 
-/** 2026-09-30（Phase 5）新增：行点击 → emit rowClick(part) 给父组件 DashboardView。
- *  父组件会关闭下方抽屉并复用 UrgentOrderDrawer 打开工单详情。本组件不感知
- *  UrgentOrderDrawer 存在 —— 关注点分离，emit 只传 part payload。 */
+/** 行点击 → emit rowClick(part) 给父组件 DashboardView（父组件负责打开
+ *  PartPreviewDialog）。本组件不感知该 dialog 存在 —— 关注点分离，emit 只传
+ *  part payload。 */
 function onRowClick(row: PartListItem): void {
   emit('rowClick', row);
 }
@@ -241,11 +242,6 @@ function customerPath(item: PartListItem): string {
   font-size: 13px;
   color: var(--text-primary);
 }
-// 2026-10-01 清理死样式：.header-status-count / .header-row-2 / .header-row-3
-// 三个选择器在 dddebb7「办公桌面屏重构」把 header 收成单行 header-row-1 时已从
-// 模板中移除对应节点（状态数与关闭按钮不再渲染），样式块漏删。同批修掉的还有
-// __tests__/UpcomingDeliveryListDrawer.spec.ts U1 里断言已删除元素的用例 ——
-// 它长期红灯正是死样式掩盖「测试与模板不同步」的结果。
 .header-total {
   font-size: 14px;
   font-weight: 600;

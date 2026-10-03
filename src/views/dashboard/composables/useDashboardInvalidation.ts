@@ -1,21 +1,14 @@
-// 2026-09-29 新增：dashboard 域 WS 事件 → invalidate 共享 composable。
+// dashboard 域 WS 事件 → invalidate 共享 composable。
 //
-// 重构动机（与方案 §「WS 失效联动」对齐）：
-//   原 useDashboardSnapshot.ts:38-108 的 AFFECTS_DASHBOARD 事件集 + debounce 500ms +
-//   maxWait 1500ms + qc.invalidateQueries 逻辑被本 composable 抽出。原文件实现只
-//   失效 qk.dashboardSnapshot 一个 key；dashboard 重做后新增 useDashboardUrgentList
-//   / useDashboardOverdue 两个 useQuery 同样需要同套 AFFECTS_DASHBOARD 失效联动，
-//   通过 useDashboardInvalidation 复用同一份事件订阅 + 防抖闭包，避免双订阅
-//   handler 各自跑 debounce、合并失效成本翻倍。
+// 存在理由：dashboard 域有 4 个 useQuery（snapshot / urgentList / overdue /
+// upcomingList），它们需要同一份 AFFECTS_DASHBOARD 事件订阅 + 同一份防抖闭包。
+// 拆成共享 composable 而不是各 query 自带 handler，避免同一批 WS 事件触发多次
+// debounce 定时器、合并失效成本翻倍。
 //
-// 设计要点（沿 2026-09-26 TanStack Query 共享基础数据层约定 #5/#6 + 原
-// useDashboardSnapshot 实现）：
-//   - AFFECTS_DASHBOARD 集合维护 dashboard 域「需要重取数据」的事件白名单；
-//     DELIVERY_NOTE_* 6 个事件不进集合（dashboard 重做后仅显示紧急工单 / 7 天
-//     分桶 / 工厂实时态三类切片，送货单写入不影响这些视图）。
+// 设计要点：
+//   - AFFECTS_DASHBOARD 集合维护 dashboard 域「需要重取数据」的事件白名单。
 //   - useDebounceFn 500ms 防扫码雪崩；maxWait 1500ms 保证长间隔下也能 flush，
-//     避免用户连续操作多轮时第一轮事件迟迟不重取（与 useDashboardSnapshot 原
-//     实现行为完全等价）。
+//     避免用户连续操作多轮时第一轮事件迟迟不重取。
 //   - 接收单个 queryKey 或 queryKey 数组，统一在 debouncedInvalidate 内遍历
 //     qc.invalidateQueries；支持多 key（dashboardUrgentList + dashboardSnapshot）
 //     与单 key（dashboardOverdue 仅 Manager 启用，但 invalidate 仍走同一套）。
@@ -31,15 +24,14 @@ import { useQueryClient, type QueryKey } from '@tanstack/vue-query';
 import { onDashboardEvent } from '@/api/dashboard';
 import type { DashboardEventType } from '@/types/dashboard';
 
-/** 2026-09-29 新增：影响 dashboard 域数据的 WS 事件集合。
+/** 影响 dashboard 域数据的 WS 事件集合。
+ *  dashboard 三类核心切片（交期工单面板 / 交期分桶 / 工厂实时态）的写入事件都
+ *  收敛到这个白名单：零件状态翻转 / 批次事件 / 扫码事件 / 批量创建 / worker pool
+ *  状态 / 装配体事件。
  *
- * 沿用 useDashboardSnapshot.ts 原 22 个事件（AFFECTS_DASHBOARD）全集。
- * dashboard 重做后三类核心切片（紧急工单 / 7 天分桶 / 工厂实时态）的写入事件
- * 都收敛到这个白名单：零件状态翻转 / 批次事件 / 扫码事件 / 批量创建 / worker
- * pool 状态 / 装配体事件。
- *
- * DELIVERY_NOTE_*（送货单写入）不进集合 —— dashboard 视图不展示送货单，送货单
- * 写完后只让「送货单列表页」自己失效即可，与 dashboard 域解耦。 */
+ *  DELIVERY_NOTE_*（送货单入单 / 提交 / 打印）不进集合 —— 交付事实由
+ *  PART_DELIVERED 承载（每交一个批次发一次），入单 / 提交 / 打印都不改交付事实，
+ *  故不影响 dashboard 任何切片。 */
 const AFFECTS_DASHBOARD: ReadonlySet<DashboardEventType> = new Set<DashboardEventType>([
   // 零件状态翻转（pull/process step / batch 流）
   'PART_TO_SHIP',
@@ -75,11 +67,11 @@ const AFFECTS_DASHBOARD: ReadonlySet<DashboardEventType> = new Set<DashboardEven
   'ASSEMBLY_UPDATED',
 ]);
 
-/** 2026-09-29 新增：dashboard 域失效事件数量（与 useDashboardInvalidation.spec.ts
- *  的 T1 用例对齐；保持单一来源） */
+/** dashboard 域失效事件数量（与 useDashboardInvalidation.spec.ts 的 T1 用例对齐；
+ *  保持单一来源） */
 export const AFFECTS_DASHBOARD_SIZE = AFFECTS_DASHBOARD.size;
 
-/** 2026-09-29 新增：dashboard 域 WS 事件 → invalidate 共享 composable。
+/** dashboard 域 WS 事件 → invalidate 共享 composable。
  *
  * 用法：组件 setup 顶层调用一次即可，把需要失效的 queryKey / queryKey[] 传进来。
  * 多个 useQuery 共享同一份 AFFECTS_DASHBOARD 集合 + debounce 闭包（避免 handler
@@ -118,16 +110,16 @@ export function useDashboardInvalidation(
     { maxWait: 1500 },
   );
 
-  // 2026-09-28 review N1 regression：捕获 off + tryOnScopeDispose，确保组件卸载时
-  // 订阅从 eventSubs Set 移除（否则每次进入 /dashboard 都累加一个永不清理的
-  // handler，闭包持有的 debouncedInvalidate / qc 无法 GC）。
+  // 捕获 off + tryOnScopeDispose，确保组件卸载时订阅从 eventSubs Set 移除（否则每次
+  // 进入 /dashboard 都累加一个永不清理的 handler，闭包持有的 debouncedInvalidate /
+  // qc 无法 GC）。
   const offDashboardEvent = onDashboardEvent((ev) => {
     if (AFFECTS_DASHBOARD.has(ev.event_type)) debouncedInvalidate();
   });
   tryOnScopeDispose(offDashboardEvent);
 
-  // 2026-10-02 修复（review Major 2）：接收 WS 层派发的 'dashboard:full-refetch'
-  // （后端关闭码 4003 慢消费方，广播队列溢出丢了 n 条事件）。
+  // 第二条失效触发源：接收 WS 层派发的 'dashboard:full-refetch'（后端关闭码 4003
+  // 慢消费方，广播队列溢出丢了 n 条事件）。
   //
   // 为什么必须由本 composable 接：丢掉的 n 条事件**重连补不回来** —— 新连接的订阅
   // 集合从重连那一刻起算，而本仓 dashboard 域是「HTTP 全量首取 + WS 事件 invalidate
@@ -142,8 +134,8 @@ export function useDashboardInvalidation(
   // 与 'auth:session-lost' 的区别：那个是「会话已死，终止会话」（接收方在 router
   // 模块），本事件是「会话没死、数据可能缺了，补一次全量重取」（接收方在本文件）。
   //
-  // 2026-10-02 review Nit 2：本 composable 有 5 个注册点，其中 `PartPreviewDialog`
-  // 传的是 `qk.partBatchesPrefix`（不是 dashboard 域键）。4003 到达时弹窗若开着，
+  // 本 composable 有 5 个注册点，其中 `PartPreviewDialog` 传的是
+  // `qk.partBatchesPrefix`（不是 dashboard 域键）。4003 到达时弹窗若开着，
   // `partBatchesPrefix` 也会被立即 invalidate —— **这是有意的、不是误伤**：该弹窗本就
   // 复用了同一套 WS 失效管道，其数据同样暴露在「后端宣告丢事件」的丢数风险下。
   if (typeof window !== 'undefined') {

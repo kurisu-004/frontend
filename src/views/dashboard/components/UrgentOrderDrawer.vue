@@ -6,20 +6,19 @@
     - 顶部 header：序号 + 图号 + 名称 + 客户路径 + 状态 ElTag + 大号倒计 chip
     - 主体 el-tabs 三 tab：图纸 / 详情 / 事件（事件 tab 占位）
     - 图纸 tab：调 usePartFilesListQuery(part.id) 拉 part 全量文件 → 过滤
-      kind='DRAWING' → 第一张 PDF/图片展示（沿 DrawingPreviewPane.vue:130-192
-      loadPreviewUrl 范式），blob URL 在 onBeforeUnmount URL.revokeObjectURL 释放
+      kind='DRAWING' → 第一张 PDF/图片展示，blob URL 在 onBeforeUnmount
+      URL.revokeObjectURL 释放
 
   Props / Events：
     - modelValue：boolean（v-model 双向绑定，控制 drawer 开关）
     - part：PartListItem | null（父组件传入选中行；null 表示未选）
     - @update:modelValue：双向同步
 
-  2026-09-30 调整：
-    - dashboard 不再挂载本组件（业务方改用 PartPreviewDialog 作为统一入口：图纸预览
-      + 批次列表 + 持有者），但本文件保留供外部潜在复用，不删除；
-    - 详情 tab 删除「单价」「总价」两个 .detail-row 块（业务方认为 dashboard
-      不显金额；其他字段保留：图号 / 客户 / 数量 / 订单号 / 请购日期 / 计划交期 /
-      系统交期 / 申请人 / 备注）。
+  详情 tab 保留字段：图号 / 客户 / 数量 / 订单号 / 请购日期 / 计划交期 / 系统交期 /
+  申请人 / 备注（不显金额）。
+
+  dashboard 不再挂载本组件 —— 统一入口是 PartPreviewDialog（图纸预览 + 批次列表 +
+  持有者）；本文件保留供外部复用。
 -->
 <template>
   <el-drawer
@@ -135,7 +134,6 @@
               <dt>申请人</dt>
               <dd>{{ part.applicant_name || '—' }}</dd>
             </div>
-            <!-- 2026-09-30 删除「单价」「总价」两个 detail-row（dashboard 不显金额） -->
             <div v-if="part.note" class="detail-row">
               <dt>备注</dt>
               <dd>{{ part.note }}</dd>
@@ -230,7 +228,7 @@ const selectedFile = computed<PartFileSchema | null>(() => {
   return drawings[0] ?? null;
 });
 
-// ============ PDF / 图片 blob URL（沿 DrawingPreviewPane.vue:148-176 范式） ============
+// ============ PDF / 图片 blob URL ============
 const previewBlob = ref<string | null>(null);
 const previewLoading = ref(false);
 const currentPreviewFileId = ref<string | null>(null);
