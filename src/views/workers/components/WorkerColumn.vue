@@ -51,7 +51,8 @@ import { computed, inject, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useDraggable } from 'vue-draggable-plus';
-import type { Worker, BatchCardModel as Card } from '@/types/workerPool';
+import type { Worker } from '@/types/workerPool';
+import type { BatchCardModel as Card } from '@/types/batchCard';
 import { useWorkerStateByWorkerQuery } from '@/composables/queries/useWorkerStateByWorkerQuery';
 import { heldToCard } from '@/views/workers/composables/poolItemToCard';
 import {
@@ -59,7 +60,7 @@ import {
   recordWorkerSource,
   type DraggableStartEvent,
 } from '@/utils/dndSourceTracker';
-import BatchCard from './BatchCard.vue';
+import BatchCard from '@/components/BatchCard.vue';
 
 // 2026-09-30 重构：删除 `batches: Card[]` prop —— WorkerColumn 自管 useWorkerStateByWorkerQuery
 // 拉取 held_batches；保留 worker prop。
@@ -73,7 +74,10 @@ const props = defineProps<{
 // 2026-09-30 review 第 1 轮修复（m3）：用 computed default 替代 `!` 非空断言 ——
 // 未注入时拿 computed(() => '')，后续 query.enabled 闸门会短路（useWorkerStateByWorkerQuery
 // 要求非空），workerState 拉不到自然走 error/empty 分支（与「无 active shelfId」语义对齐）。
-const shelfId = inject<ComputedRef<string>>('shelfId', computed(() => ''));
+const shelfId = inject<ComputedRef<string>>(
+  'shelfId',
+  computed(() => ''),
+);
 
 const stateQuery = useWorkerStateByWorkerQuery(
   () => props.worker.id,
@@ -151,10 +155,9 @@ useDraggable(containerRef, writableBatches, {
 // 目标工序由 service 从 `batch.current_process_step.process_id` 自推
 // （worker-pool.md:146-147）。inject 缺省用 noop 兜底（provider 缺失时不炸，
 // 与本文件既有 shelfId 注入风格一致）。
-const moveBatchToWorker =
-  inject<
-    (batch_id: string, to_worker_id: string, from_shelf_id: string) => Promise<boolean>
-  >('moveBatchToWorker', async () => false);
+const moveBatchToWorker = inject<
+  (batch_id: string, to_worker_id: string, from_shelf_id: string) => Promise<boolean>
+>('moveBatchToWorker', async () => false);
 
 /** 2026-08-26：记录源 worker ID（拖出本工人列的 worker.id），供 PoolDrawer 的
  *  @add 构造 `from: {kind:'WORKER', worker_id}`。 */

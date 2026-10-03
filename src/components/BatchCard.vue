@@ -1,18 +1,24 @@
-<!-- src/views/workers/components/BatchCard.vue
+<!-- src/components/BatchCard.vue
      2026-10-02 新增：生产队列看板**唯一**批次卡片组件，工序池（PoolDrawer）、工人列
      （WorkerColumn）、待下发池（PendingBatchesPanel）三处共用。三个 wire DTO 经
      views/workers/composables/poolItemToCard.ts 统一适配成 BatchCardModel，组件只认
      该类型、不感知 DTO 差异。
 
+     2026-10-03 升为**全仓共享组件**（原 views/workers/components/BatchCard.vue）：
+     外协看板复用同一张卡。新增两处扩展，**都不动 body**：
+     - `version`（OCC 锚）：卡片不渲染它，消费侧（外协收发的两个写端点）从 model 读；
+     - `extra`（领域扩展槽）：只进 tooltip，逐行 `v-if`，任何域不填就当没这行。
+
      - 固定 200×96：生产队列是「一屏看尽可能多批次」的密集看板，卡片尺寸必须恒定，
        否则批次一多就出现参差瀑布流、扫视时无法建立行对齐的视觉预期。四个必备字段
        （零件名 / 序列号 / 数量+交期 / 批次号）竖排 4 行恰好塞进 96px（4×18 行高 +
        3×2 gap + 上下各 8 padding + 上下各 1px 边框 = 96px，正好塞满）。
-     - body 只放 4 个字段：header 是批次对应的 part 名称（识别批次的主线索），body
-       给「这批是什么 / 有多少 / 什么时候要 / 哪一批」；图号、客户、申请人、计划交期、
-       所在位置、备注都是低频查阅项，全部进 tooltip —— hover 才展开，不占常态可视面积。
-       body 的交期只取 system_delivery_date（系统交期是唯一有承诺口径的日期），
-       planned_delivery_date 只进 tooltip。
+     - body 只放 4 个字段，**高度是硬预算**（见下方 .row 的行高注释）：新增信息一律进
+       tooltip，加第 5 行会直接撑破 96px 固定高。header 是批次对应的 part 名称（识别
+       批次的主线索），body 给「这批是什么 / 有多少 / 什么时候要 / 哪一批」；图号、客户、
+       申请人、计划交期、所在位置、备注都是低频查阅项，全部进 tooltip —— hover 才展开，
+       不占常态可视面积。body 的交期只取 system_delivery_date（系统交期是唯一有承诺口径
+       的日期），planned_delivery_date 只进 tooltip。
      - 根元素用普通 div 而非 el-card：el-card 自带 `--el-card-padding: 20px` 与
        header 底边框，96px 固定高度放不下；且根元素要同时当 Sortable 的可拖项（需要
        干净的 DOM 根 + `data-*` dataset 供 PoolDrawer/WorkerColumn 读 batch_id /
@@ -49,6 +55,31 @@
         </div>
         <div v-if="batch.note">
           <span class="tt-label">备注</span><span>{{ batch.note }}</span>
+        </div>
+        <!-- 2026-10-03：领域扩展槽（外协看板在用）逐行渲染，每行独立 v-if ——
+             槽内字段全部可选且 nullable，不填就当没这行，tooltip 与生产队列
+             域下逐行一致。can_auto_receive 用显式 === false / === true 判定：
+             它是「接收能否免填工序/货架」的**否定语义**，只渲染 false 一侧会让
+             「可自动」与「未知」无法区分。 -->
+        <div v-if="batch.extra?.outsource_company_name">
+          <span class="tt-label">外协公司</span
+          ><span>{{ batch.extra.outsource_company_name }}</span>
+        </div>
+        <div v-if="batch.extra?.outsource_process_name">
+          <span class="tt-label">外协工序</span
+          ><span>{{ batch.extra.outsource_process_name }}</span>
+        </div>
+        <div v-if="batch.extra?.price">
+          <span class="tt-label">单价</span><span>{{ batch.extra.price }}</span>
+        </div>
+        <div v-if="batch.extra?.sent_at">
+          <span class="tt-label">发出时间</span><span>{{ batch.extra.sent_at }}</span>
+        </div>
+        <div v-if="batch.extra?.can_auto_receive === false">
+          <span class="tt-label">接收</span><span>需手填工序 / 货架</span>
+        </div>
+        <div v-else-if="batch.extra?.can_auto_receive === true">
+          <span class="tt-label">接收</span><span>可自动带出工序 / 货架</span>
         </div>
       </div>
     </template>
@@ -94,7 +125,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { BatchCardModel } from '@/types/workerPool';
+import type { BatchCardModel } from '@/types/batchCard';
 
 const props = withDefaults(
   defineProps<{
@@ -129,19 +160,30 @@ const accentVar = computed(
 );
 
 /** tooltip 是否有可展示的详情：body 只放 4 个字段，其余全靠 tooltip，
- *  一个详情都没有时干脆不弹（避免空浮层）。 */
-const hasDetails = computed<boolean>(
-  () =>
-    !!props.batch.drawing_no ||
-    !!props.batch.serial_no ||
-    !!props.batch.batch_no ||
-    !!props.batch.customer_l1 ||
-    !!props.batch.customer_l2 ||
-    !!props.batch.applicant_name ||
-    !!props.batch.planned_delivery_date ||
-    !!props.batch.location ||
-    !!props.batch.note,
-);
+ *  一个详情都没有时干脆不弹（避免空浮层）。`extra` 单独探测：槽对象本身存在
+ *  不代表有内容（`{}` / 全 null），故按字段逐个判空；`can_auto_receive` 是三态
+ *  布尔，只认 true / false 两侧，null 与 undefined 视作「没有这条信息」。 */
+const hasDetails = computed<boolean>(() => {
+  const batch = props.batch;
+  const extra = batch.extra;
+  return (
+    !!batch.drawing_no ||
+    !!batch.serial_no ||
+    !!batch.batch_no ||
+    !!batch.customer_l1 ||
+    !!batch.customer_l2 ||
+    !!batch.applicant_name ||
+    !!batch.planned_delivery_date ||
+    !!batch.location ||
+    !!batch.note ||
+    !!extra?.outsource_company_name ||
+    !!extra?.outsource_process_name ||
+    !!extra?.price ||
+    !!extra?.sent_at ||
+    extra?.can_auto_receive === true ||
+    extra?.can_auto_receive === false
+  );
+});
 
 // 勾选态翻转：不带 payload，batch_id 由消费侧从 `batch.batch_id` 读。
 function onToggleSelect(): void {

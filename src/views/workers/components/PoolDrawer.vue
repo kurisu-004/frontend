@@ -45,13 +45,14 @@ import { computed, inject, ref, watch } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
-import type { ProcessPoolView, BatchCardModel as Card } from '@/types/workerPool';
+import type { ProcessPoolView } from '@/types/workerPool';
+import type { BatchCardModel as Card } from '@/types/batchCard';
 import {
   consumeWorkerSource,
   recordPoolSource,
   type DraggableStartEvent,
 } from '@/utils/dndSourceTracker';
-import BatchCard from './BatchCard.vue';
+import BatchCard from '@/components/BatchCard.vue';
 
 const props = defineProps<{
   pool: ProcessPoolView | null;
@@ -87,13 +88,16 @@ useLazyDraggable(containerRef, writablePoolBatches, {
 // `POST /prod/pool/move` 的 `to` 是 `MoveLocation` tagged enum，POOL 分支只认
 // shelf_id；目标工序由 service 从 batch 当前 step 自推，见 worker-pool.md:101-176）。
 const moveBatchToPool =
-  inject<
-    (batch_id: string, from_worker_id: string, to_shelf_id: string) => Promise<boolean>
-  >('moveBatchToPool')!;
+  inject<(batch_id: string, from_worker_id: string, to_shelf_id: string) => Promise<boolean>>(
+    'moveBatchToPool',
+  )!;
 // 2026-09-30：shelfId 仍是 WORKER→POOL 的 `to.shelf_id`（撤回目标货架）。
 // 后端校验该货架必须映射到 batch 当前工序，否则 20507 BIZ_SHELF_PROCESS_NOT_MAPPED
 // （HTTP 422）—— 用当前激活货架是唯一合理默认（用户视角「放回我正在看的货架」）。
-const shelfId = inject<ComputedRef<string>>('shelfId', computed(() => ''));
+const shelfId = inject<ComputedRef<string>>(
+  'shelfId',
+  computed(() => ''),
+);
 
 /** 2026-09-30：记录「候选池 → 工人」拖拽源。**必须带 batch 的真实 shelf_id**：
  *  `POST /prod/pool/move` 的 `from: {kind:'POOL', shelf_id}` 需与
