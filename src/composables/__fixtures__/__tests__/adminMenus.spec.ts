@@ -84,12 +84,23 @@ describe('ADMIN_MENUS', () => {
     }
   });
 
-  // 2026-10-04 新增：数组物理顺序必须与 sort_order 升序一致。MenuTreeItem 直接
-  // `v-for="child in menu.children"`，渲染链路上没有任何排序 ⇒ 渲染顺序 == 数组顺序，
-  // dummy 模式的侧栏会照数组顺序出。真实模式的菜单由后端按 sort_order 出，两边不一致
-  // 就意味着「dev 看到的菜单顺序 ≠ 生产」。本条守的就是这个不变量：改某个子项的
-  // sort_order 时若忘了重排数组，本用例会红。
-  it('group children are in ascending sort_order (array order == render order)', () => {
+  // 2026-10-04 新增：菜单树的**数组物理顺序**必须与 sort_order 升序一致，两层都查 ——
+  // ① 顶层 ADMIN_MENUS；② 每个分组的 children。
+  // 为什么这是硬约束：MenuTreeItem 与 MainLayout 都是直接 `v-for` 数组、渲染链路上
+  // 没有任何排序 ⇒ 渲染顺序 == 数组顺序；真实模式的菜单由后端 `ORDER BY m.sort_order,
+  // m.code` 出（backend-rust src/modules/iam/repo/sql/menu.rs）。两层任一处失序，
+  // dummy 模式的侧栏顺序就 ≠ 生产。
+  // 本条守的就是这个不变量：改任一节点的 sort_order 时若忘了重排数组，本用例会红。
+  // 两层都带「收集到非空集合」的兜底 —— 否则过滤条件写错会让 for 循环空转、用例永真。
+  it('menu tree is in ascending sort_order (top level + group children)', () => {
+    // ① 顶层
+    expect(ADMIN_MENUS.length).toBeGreaterThan(0);
+    const topSorts = ADMIN_MENUS.map((n) => n.sort_order);
+    expect(topSorts, `顶层未按 sort_order 升序：${topSorts.join(',')}`).toEqual(
+      [...topSorts].sort((a, b) => a - b),
+    );
+
+    // ② 各分组 children（软删空分组 children=[]，无顺序可言，天然被 for 跳过）
     const groups = flatten(ADMIN_MENUS).filter((n) => n.children.length > 0);
     expect(groups.length).toBeGreaterThan(0);
     for (const g of groups) {

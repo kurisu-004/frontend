@@ -373,7 +373,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     expect(overlay.exists()).toBe(true);
     expect(overlay.element.parentElement?.classList.contains('col-content')).toBe(true);
     // 覆盖层的另一半保证（pointer-events:none 不吃落点判定）在样式区，单测环境不注入
-    // scoped 样式、无法断言，靠 W8 守住「容器确实有 Sortable 实例」这一侧。
+    // scoped 样式、无法断言，靠 W9 守住「容器确实有 Sortable 实例」这一侧。
     wrapper.unmount();
   });
 

@@ -76,7 +76,32 @@ export const ADMIN_MENUS: MenuNode[] = [
     sort_order: 12,
     children: [],
   },
-  // 3. customer_management — 客户管理（分组，2 children）
+  // 3. scan_badge — 扫码台（顶级，leaf）
+  // 2026-09-16 新增（从 floor_group 升级为顶级菜单，backend-rust 025 同步提升）。
+  // 为什么排在这个位置：sort_order=13 紧跟 production_stats=12、customer_management=15
+  // 之前；而后端菜单查询是 `ORDER BY m.sort_order, m.code`（backend-rust
+  // src/modules/iam/repo/sql/menu.rs），真实模式侧栏恒按 sort_order 出。MenuTreeItem
+  // 与 MainLayout 都是直接 v-for 数组、渲染链路上没有排序 ⇒ **数组物理顺序必须与
+  // sort_order 升序一致**，否则 dummy 模式的侧栏顺序 ≠ 生产。本条与同文件其它顶级
+  // 条目、以及各分组 children 都受 adminMenus.spec.ts 的「menu tree is in ascending
+  // sort_order」不变量用例守护。
+  // path=/scan/badge（router/index.ts 子路由 'badge'；父路由 /scan 路径仅承载
+  // redirect，不暴露菜单）。router 早已就绪（5 个子路由共用 scan_badge menuCode）。
+  // icon=Operation：表达「操作台/工位」语义；与 production_group 主图标同名是历史
+  // 既有约定（auth_group 内 Platform / work_types_list User 等也复用同名），侧栏
+  // 仍靠 title 区分。Cellphone 暂不引入 ICON_MAP（菜单图标导入白名单收敛约束）。
+  {
+    id: id(12),
+    version: 0,
+    parent_id: null,
+    code: 'scan_badge',
+    title: '扫码台',
+    path: '/scan/badge',
+    icon: 'Operation',
+    sort_order: 13,
+    children: [],
+  },
+  // 4. customer_management — 客户管理（分组，2 children）
   {
     id: id(3),
     version: 0,
@@ -111,7 +136,7 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 4. order_group — 订单管理（分组，6 children）
+  // 5. order_group — 订单管理（分组，6 children）
   {
     id: id(4),
     version: 0,
@@ -385,24 +410,6 @@ export const ADMIN_MENUS: MenuNode[] = [
     path: null,
     icon: 'Tools',
     sort_order: 40,
-    children: [],
-  },
-  // 2026-09-16 新增顶级菜单：scan_badge 扫码台（从 floor_group 升级，sort_order=13
-  // 紧跟 production_stats=12 之后、customer_management=15 之前）。path=/scan/badge
-  // （router/index.ts:382 子路由 'badge'；父路由 /scan 路径仅承载 redirect，不暴露菜单）。
-  // backend-rust 025 同步提升；router 早已就绪（5 个子路由共用 scan_badge menuCode）。
-  // icon=Operation：表达「操作台/工位」语义；与 production_group 主图标同名是历史
-  // 既有约定（auth_group 内 Platform / work_types_list User 等也复用同名），侧栏
-  // 仍靠 title 区分。Cellphone 暂不引入 ICON_MAP（菜单图标导入白名单收敛约束）。
-  {
-    id: id(12),
-    version: 0,
-    parent_id: null,
-    code: 'scan_badge',
-    title: '扫码台',
-    path: '/scan/badge',
-    icon: 'Operation',
-    sort_order: 13,
     children: [],
   },
   // 10. settings_root — 设置（分组，3 children）
