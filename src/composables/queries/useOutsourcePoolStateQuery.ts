@@ -20,7 +20,7 @@
 //     既有 outsource helper 做法在边界挡漂移，queryFn 那一次是 CLAUDE.md §4「共享
 //     useQuery 的 queryFn 必须 parse(await api())」的硬要求（worker-pool 三个 query
 //     同款）。`listOutsourcePoolState` 目前只被本 query 消费，故两次 parse 在运行路径上
-//     重叠；api 层保留是为了与本文件另外 4 个 list helper 同形。
+//     重叠；api 层保留是为了与 `api/outsource.ts` 另外 4 个 list helper 同形。
 //   - enabled: computed(() => !!(toValue(companyId) && toValue(processId))) ——
 //     **两个 query 参数都必填**，缺任一个零网络请求（否则后端直接拒，且会打出
 //     空参数请求）；

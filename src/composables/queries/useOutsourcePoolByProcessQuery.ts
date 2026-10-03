@@ -17,7 +17,7 @@
 //     本仓既有 outsource helper 做法在边界挡漂移，queryFn 那一次是 CLAUDE.md §4
 //     「共享 useQuery 的 queryFn 必须 parse(await api())」的硬要求（worker-pool 三个
 //     query 同款）。`listOutsourcePoolByProcess` 目前只被本 query 消费，故两次 parse
-//     在运行路径上重叠；api 层保留是为了与本文件另外 4 个 list helper 同形。
+//     在运行路径上重叠；api 层保留是为了与 `api/outsource.ts` 另外 4 个 list helper 同形。
 //   - enabled: computed(() => !!toValue(processId)) —— 无工序时零网络请求（tab 未激活
 //     / 加载中）；
 //   - queryFn 内二次守卫：enabled 只挡自动触发，显式 `refetch()` 会绕过它，不留守卫

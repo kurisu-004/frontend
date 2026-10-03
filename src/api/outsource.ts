@@ -317,7 +317,7 @@ export async function listOutsourceSendable(
 // schema↔类型一致性保证**的（`as` 允许向更宽方向断言：TS 接口若比 schema 更宽松、
 // 如某字段被写成 `| null`，编译器不会报错）。行 schema 与顶层 result schema 两侧的键集
 // 一致性都由 `src/composables/queries/__tests__/schemas.spec.ts` 的 outsource-pool 段
-// 「parse 后键集 == fixture 键集」断言兜住（3 个行 schema + 3 个顶层 result schema 各
+// 「parse 后键集 == fixture 键集」断言兜住（4 个行 schema + 3 个顶层 result schema 各
 // 一组）—— 漏声明 / 多声明带默认值都会让那组用例会红。
 // ============================================================
 

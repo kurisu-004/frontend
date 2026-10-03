@@ -1691,7 +1691,7 @@ export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendable
 //     ⇒ `z.number()`，方向与雪花 ID 相反（与 workerPoolCountsSchema 同口径）。
 //
 // `current_process_step_id` / `receive_next_process_id` 的 `"0"` 兜底口径：这两个字段
-// **非 nullable**，理由有据 —— 后端已合入的 `PendingBatchItem`
+// **非 nullable**，理由有据 —— 后端仓已合入的 `PendingBatchItem`
 // （`src/modules/prod/batch/vo.rs`）在 `current_process_step_id` 字段上逐字写着
 // 「**NULL 兜底语义**：DB 列 NULL 时 row → vo 投影为 0（`Option<i64> → i64` 走
 // `.unwrap_or(0)`）；前端按 `0 == "未设 step"`、`> 0 == "已设 step"` 区分」，且该字段

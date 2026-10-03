@@ -9,11 +9,12 @@
 //   - queryFn 走 outsourcePoolCountsResultSchema.parse 守门（Zod 默认 strip 模式下
 //     漏声明字段会被静默丢弃、parse 照过不误 ⇒ 逐字段显式声明，见 schemas.ts 同段
 //     注释与 `__tests__/schemas.spec.ts` 的 outsource-pool 段）；
-//   - 守门在 api 边界与 queryFn **各一次**：api 层那一次是沿本文件既有 outsource helper
+//   - 守门在 api 边界与 queryFn **各一次**：api 层那一次是沿本仓既有 outsource helper
 //     做法在边界挡漂移（parse 结果再 `as` 成 TS 类型），queryFn 那一次是 CLAUDE.md §4
 //     「共享 useQuery 的 queryFn 必须 xxxListResultSchema.parse(await xxxAPI())」的硬要求
 //     （worker-pool 三个 query 同款）。`listOutsourcePoolCounts` 目前只被本 query 消费，
-//     故两次 parse 在运行路径上重叠；api 层保留是为了与本文件另外 4 个 list helper 同形。
+//     故两次 parse 在运行路径上重叠；api 层保留是为了与 `api/outsource.ts` 另外 4 个
+//     list helper 同形。
 //   - 无 enabled 闸门：本 query 无入参，恒可发请求（闸门是「参数缺失时不发」的场景专用；
 //     页面级「等路由守卫 + 恢复完再开闸」的 restore 模式不在本层，见 CLAUDE.md §6）；
 //   - staleTime / gcTime: 30_000 / 5 * 60 * 1000 —— 短时请求去重层（CLAUDE.md

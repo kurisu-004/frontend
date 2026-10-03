@@ -1740,6 +1740,7 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
 //   - S-OP11~17：state（21 字段行 + 5 字段顶层）。
 //   - S-OP18：两个恒定字面量字段（status_label / location）锁死。
 //   - S-OP19~21：三个**顶层** result schema 的键集断言（与 S-OP2 / S-OP6 / S-OP12 同款）。
+//   - S-OP22：公司列行（`outsourcePoolCompanySchema`，3 字段）的键集断言（同款）。
 //
 // 本组的三条硬约定（每条都有专门的「反例必须抛错」用例锁住）：
 //   ① 雪花 i64 全字段 `z.string()`（裸数字必被拒）—— JS Number 会丢精度；
@@ -1747,8 +1748,9 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
 //   ③ `receive_next_process_id` **非 nullable**，`null` 必被拒（后端 `.unwrap_or(0)`
 //      兜底成 `"0"`，写成 `.nullable()` 会把合法响应当契约漂移整列炸掉）。
 //
-// 守门有效性的核心断言在 S-OP2 / S-OP6 / S-OP12（行）与 S-OP19 / S-OP20 / S-OP21
-// （顶层）：「parse 后键集 == fixture 键集」+「fixture 字段数 == 后端 VO 字段数」。
+// 守门有效性的核心断言在 S-OP2 / S-OP6 / S-OP12 / S-OP22（4 个行 schema）与 S-OP19 /
+// S-OP20 / S-OP21（3 个顶层）：「parse 后键集 == fixture 键集」+「fixture 字段数 ==
+// 后端 VO 字段数」。
 // Zod 默认 strip 会把 schema 没声明的键静默吞掉、parse 照过不误 —— 漏声明一个字段除了
 // 那一个键消失没有任何症状，只有键集断言能发现；反向（schema 多声明一个带 `.default()`
 // 的字段，键被补进 parse 结果）同样只有键集断言能发现。
@@ -1789,6 +1791,13 @@ describe('2026-10-03 新增：外协看板 pool 域 schema 契约断言', () => 
     status_label: 'sendable',
   };
 
+  /** `GET /outsource-pool/{process_id}` 的公司列行（3 字段，在途 2 批）。 */
+  const poolCompanyFixture = {
+    company_id: '9000000000001',
+    name: '外协厂甲',
+    held_count: 2,
+  };
+
   /** `GET /outsource-pool/state` 单行（21 字段）。 */
   const poolStateItemFixture = {
     batch_id: '3000000000001',
@@ -1827,7 +1836,7 @@ describe('2026-10-03 新增：外协看板 pool 域 schema 契约断言', () => 
     process_id: '2000000000001',
     process_code: 'OUT-01',
     process_name: '外协粗加工',
-    companies: [{ company_id: '9000000000001', name: '外协厂甲', held_count: 2 }],
+    companies: [poolCompanyFixture],
     total: 1,
     items: [poolItemFixture],
   };
@@ -2104,8 +2113,8 @@ describe('2026-10-03 新增：外协看板 pool 域 schema 契约断言', () => 
   //   - 漏声明 fixture 有的字段（键从 parse 结果消失）→ 红；
   //   - 多声明一个 `.default()` 字段（键被补进 parse 结果）→ 红。
   // 拦不到的方向：多声明一个**裸 `.optional()`** 字段 —— Zod 的 optional 不在输出里
-  // 补键，键集不变。这是键集断言的固有上限，3 个行 schema 的键集断言（S-OP2 / S-OP6 /
-  // S-OP12）同样拦不到，两者强度一致。
+  // 补键，键集不变。这是键集断言的固有上限，4 个行 schema 的键集断言（S-OP2 / S-OP6 /
+  // S-OP12 / S-OP22）同样拦不到，两者强度一致。
   it('S-OP19：counts 顶层 4 字段全声明，键集与 fixture 逐字段相等（漏声明即红）', () => {
     const parsed = outsourcePoolCountsResultSchema.parse(poolCountsResultFixture);
     expect(Object.keys(poolCountsResultFixture)).toHaveLength(4);
@@ -2122,5 +2131,19 @@ describe('2026-10-03 新增：外协看板 pool 域 schema 契约断言', () => 
     const parsed = outsourcePoolStateResultSchema.parse(poolStateResultFixture);
     expect(Object.keys(poolStateResultFixture)).toHaveLength(5);
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(poolStateResultFixture).sort());
+  });
+
+  // 2026-10-03 review 第 3 轮补：outsourcePoolCompanySchema 原先只在 S-OP5 里做了一次
+  // 正向 parse + 取 held_count，是本域唯一没有键集断言的行 schema —— 从它删掉 `name` /
+  // `held_count` 的必填声明时 parse 照过不误、UI 静默拿 undefined。补齐到与 S-OP2 /
+  // S-OP6 / S-OP12 同款。方向说明见上方 S-OP19~21 的注释：键集断言拦得住「漏声明」与
+  // 「多声明带 .default()」，拦不住「多声明裸 .optional()」，与既有各组强度一致。
+  it('S-OP22：公司列行 3 字段全声明，键集与 fixture 逐字段相等（漏声明即红）', () => {
+    const parsed = outsourcePoolCompanySchema.parse(poolCompanyFixture);
+    expect(Object.keys(poolCompanyFixture)).toHaveLength(3);
+    expect(Object.keys(parsed).sort()).toEqual(Object.keys(poolCompanyFixture).sort());
+    expect(parsed.company_id).toBe('9000000000001');
+    expect(parsed.name).toBe('外协厂甲');
+    expect(parsed.held_count).toBe(2);
   });
 });
