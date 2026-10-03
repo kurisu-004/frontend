@@ -23,8 +23,10 @@
 //     （用 first_process_id 作 target_process_id）。
 //   - T4：autoDispatch preview 含 skip 件 → 确认框文案含跳过原因 + 确认后只下发可下发项。
 //   - T5：autoDispatch preview 全部不可下发 → **不弹确认框** + ElMessage.warning。
-//   - T6：autoDispatch preview 全部 NO_PROCESS_CHAIN → 走 handleProcessChainRequired
-//     （合成 ApiError(20706) → ElMessageBox.confirm 引导去工艺制定页）。
+//   - T6：autoDispatch preview 多件 NO_PROCESS_CHAIN → **只弹一次** handleProcessChainRequired
+//     引导框（合成 ApiError(20706) → ElMessageBox.confirm），文案带件数、深链只带
+//     第一件的 part_id、零下发请求。
+//   - T6b：引导框被用户取消 → 仍只弹一次、不跳页、不发下发请求。
 //   - T7：用户取消确认框 → 不发 dispatch 请求（preview 是只读的，无需回滚）。
 //   - T8：preview 多首道工序 → 按 first_process_id 拆成多次 dispatch。
 //   - T9：setSelectedIds / clearSelection 行为正确（基础状态守卫）。
@@ -38,6 +40,8 @@
 //   - vi.mock('element-plus', ...) 防 vitest node env ElMessage 污染输出；ElMessageBox
 //     桩成 vi.fn()（自动下发确认框 + handleProcessChainRequired 都会调）。
 //   - vi.mock('vue-router')：useRouter() 注入 fakeRouter 闭包。
+//   - 2026-10-04 新增：T6 / T6b 用 qc.setQueryData 预置待下发列表（引导框 part_id
+//     深链的唯一数据源是批次列表的 batch_id → part_id 反查表），使深链可断言。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from 'vue';
@@ -144,6 +148,7 @@ vi.mock('@/api/pendingBatches', async (importOriginal) => ({
 }));
 
 import { usePendingDispatch } from '../usePendingDispatch';
+import { qk } from '@/composables/queries/keys';
 
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
@@ -177,6 +182,30 @@ function makeOkPreviewItem(
     first_process_name: firstProcessId ? '首道工序' : '',
     first_shelf_id: firstProcessId ? '5000000000001' : null,
     skip_reason: skipReason,
+  };
+}
+
+/** 2026-10-04 新增：待下发列表行 fixture（只填 usePendingDispatch 反查表要用的
+ *  batch_id / part_id，其余字段占位满足 pendingBatchItemSchema 的必填声明）。 */
+function makePendingBatchItem(batchId: string, partId: string) {
+  return {
+    batch_id: batchId,
+    part_id: partId,
+    batch_no: 1,
+    quantity: 1,
+    serial_no: 'SN-1',
+    name: '零件',
+    drawing_no: 'D-1',
+    planned_delivery_date: null,
+    system_delivery_date: null,
+    customer_name: null,
+    parent_customer_name: null,
+    applicant_name: null,
+    is_urgent: false,
+    note: null,
+    version: 1,
+    current_process_step_id: '0',
+    process_chain_id: '0',
   };
 }
 
@@ -329,20 +358,74 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     expect(d.selectedIds.value.size).toBe(0);
   });
 
-  it('T6：preview 全部 NO_PROCESS_CHAIN → 走 handleProcessChainRequired 引导', async () => {
+  it('T6：preview 多件 NO_PROCESS_CHAIN → 只弹一次引导框，文案带件数、深链只带第一件 part_id', async () => {
     // 后端 batch 域不再抛 20706（错误码表已无此项），改以 skip_reason soft-skip
     // 呈现；前端合成 ApiError(20706) 复用既有 handleProcessChainRequired 兜底，
-    // 保持「引导去工艺制定页」的 UX 不退化。
+    // 保持「引导去工艺制定页」的 UX 不退化。一次操作只弹一次 —— 多选 N 件未制定
+    // 工序链的工单不该弹 N 个一模一样的弹窗。
     const { ElMessageBox } = await import('element-plus');
-    realPreviewAutoDispatch.mockResolvedValueOnce({
-      items: [makeOkPreviewItem('3000000000001', null, 'NO_PROCESS_CHAIN')],
+    const noChain = [
+      makeOkPreviewItem('3000000000001', null, 'NO_PROCESS_CHAIN'),
+      makeOkPreviewItem('3000000000002', null, 'NO_PROCESS_CHAIN'),
+      makeOkPreviewItem('3000000000003', null, 'NO_PROCESS_CHAIN'),
+    ];
+    realPreviewAutoDispatch.mockResolvedValueOnce({ items: noChain });
+    // 预置待下发列表：引导框的 part_id 深链来自批次列表的 batch_id → part_id 反查表
+    testQueryClient.setQueryData(qk.pendingBatchesList({ limit: 200 }), {
+      items: [
+        makePendingBatchItem('3000000000001', '4000000000001'),
+        makePendingBatchItem('3000000000002', '4000000000002'),
+        makePendingBatchItem('3000000000003', '4000000000003'),
+      ],
+      total: 3,
+      limit: 200,
+      offset: 0,
     });
     const d = testApp.runWithContext(() => usePendingDispatch());
 
-    await d.autoDispatchMutation.mutateAsync({ batchIds: ['3000000000001'] });
+    await d.autoDispatchMutation.mutateAsync({
+      batchIds: ['3000000000001', '3000000000002', '3000000000003'],
+    });
 
-    // ElMessageBox.confirm 被「前往制定」引导框调一次（无下发确认框）
+    // 3 件未制定工序链 ⇒ 引导框只弹一次（无下发确认框）
     expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+    const message = vi.mocked(ElMessageBox.confirm).mock.calls[0]?.[0] as string;
+    expect(message).toContain('3 件工单未制定工序链');
+    // 深链只带第一件的 part_id，最多跳一次页
+    expect(fakeRouterPush).toHaveBeenCalledTimes(1);
+    expect(fakeRouterPush).toHaveBeenCalledWith('/production/process-design?part_id=4000000000001');
+    expect(realDispatchBatches).not.toHaveBeenCalled();
+  });
+
+  it('T6b：引导框被用户取消 → 仍只弹一次、不跳页、不发下发请求', async () => {
+    const { ElMessageBox } = await import('element-plus');
+    realPreviewAutoDispatch.mockResolvedValueOnce({
+      items: [
+        makeOkPreviewItem('3000000000001', null, 'NO_PROCESS_CHAIN'),
+        makeOkPreviewItem('3000000000002', null, 'NO_PROCESS_CHAIN'),
+        makeOkPreviewItem('3000000000003', null, 'NO_PROCESS_CHAIN'),
+      ],
+    });
+    testQueryClient.setQueryData(qk.pendingBatchesList({ limit: 200 }), {
+      items: [
+        makePendingBatchItem('3000000000001', '4000000000001'),
+        makePendingBatchItem('3000000000002', '4000000000002'),
+        makePendingBatchItem('3000000000003', '4000000000003'),
+      ],
+      total: 3,
+      limit: 200,
+      offset: 0,
+    });
+    vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel' as never);
+    const d = testApp.runWithContext(() => usePendingDispatch());
+
+    await d.autoDispatchMutation.mutateAsync({
+      batchIds: ['3000000000001', '3000000000002', '3000000000003'],
+    });
+
+    // 取消后不再弹下一个：一次操作一次弹窗
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+    expect(fakeRouterPush).not.toHaveBeenCalled();
     expect(realDispatchBatches).not.toHaveBeenCalled();
   });
 
