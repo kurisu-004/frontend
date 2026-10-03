@@ -28,6 +28,13 @@
 //   - T6：runAutoAllocate 成功 → autoAllocate 被调 + pool 三域前缀失效。
 //   - T7：runAutoAllocate 失败 → onError 路径 error.value 写入。
 //   - T8：请求体**不含** process_id / next_process_id（后端已无此入参，服务端自推）。
+//   - T10：moveBatchBetweenWorkers 成功 → moveBatch 收到 WORKER→WORKER 形态
+//     （from/to 都是 worker_id）+ pool 三域前缀失效。
+//   - T11：moveBatchBetweenWorkers 失败 → 返回 false **且仍失效 pool 三域**。
+//     回归 guard：失败也必须对账，失效负责的是徽标 / 池计数这类只有重拉才对得上的数据。
+//   - T12：move 失败（POOL→WORKER）同样失效 pool 三域（同上因的另一条路径）。
+//   - T13：导出面含 moveBatchBetweenWorkers（WorkerColumn 靠 inject key 消费它）。
+//   - T2b：早退路径裸 await 失效，invalidateQueries 抛错被吞、不冒未捕获 rejection。
 //
 // 测试策略：
 //   - vi.mock('@/api/workerPool') + vi.mock('element-plus')；
@@ -92,8 +99,7 @@ const realAutoAllocate = vi.fn<() => Promise<AutoAllocateResultDto>>(async () =>
 
 vi.mock('@/api/workerPool', () => ({
   // 2026-09-30：assignWorkerPool / removeFromWorkerPool 已删，合并为 moveBatch
-  moveBatch: (...args: unknown[]) =>
-    realMoveBatch(...(args as Parameters<typeof realMoveBatch>)),
+  moveBatch: (...args: unknown[]) => realMoveBatch(...(args as Parameters<typeof realMoveBatch>)),
   autoAllocate: (...args: unknown[]) =>
     realAutoAllocate(...(args as Parameters<typeof realAutoAllocate>)),
   // 列出 stub 防止 partial mock 副作用（useWorkerQueue 不消费这 3 个）
@@ -169,6 +175,25 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
     expect(ok).toBe(false);
     expect(realMoveBatch).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('批次货架信息缺失，无法分配');
+    // 早退同样必须失效：mutation 没发出，这次投放对服务器没有任何影响，把 pool 三域
+    // 与服务器对账一次（徽标 / 池计数）。卡片节点本身的归位由**源侧**的 onRemove
+    // （restoreNodeToSource）负责，不靠这次失效。
+    expectPoolDomainInvalidated();
+  });
+
+  it('T2b：早退路径的失效抛错不冒成未捕获 rejection（仍返回 false）', async () => {
+    // 回归 guard：早退分支是**裸 await** invalidatePoolDomains（不在 mutation 的
+    // onSuccess / onError 里，没有框架兜底），invalidateQueries 一旦 reject 就是
+    // unhandledRejection。必须吞掉并照常返回 false + warning。
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    const { ElMessage } = await import('element-plus');
+    vi.mocked(testQueryClient.invalidateQueries).mockRejectedValueOnce(
+      new Error('invalidate boom'),
+    );
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    const ok = await q.moveBatchToWorker('3000000000001', '1900000000002', '');
+    expect(ok).toBe(false);
+    expect(ElMessage.warning).toHaveBeenCalledWith('批次货架信息缺失，无法分配');
   });
 
   it('T3：moveBatchToWorker 失败 → 返回 false + error.value 写入 + ElMessage.error', async () => {
@@ -196,6 +221,8 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
   });
 
   it('T5：moveBatchToPool toShelfId 为空 → 早退 false + warning，零请求', async () => {
+    // 同 T2：撤回目标货架为空时 mutation 不发出，这次投放对服务器无影响，仍要失效
+    // 对账一次（且同样包 try/catch，见 T2b）。
     const { useWorkerQueue } = await import('../useWorkerQueue');
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useWorkerQueue());
@@ -203,6 +230,7 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
     expect(ok).toBe(false);
     expect(realMoveBatch).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('请先选择目标货架');
+    expectPoolDomainInvalidated();
   });
 
   it('T6：runAutoAllocate 成功 → autoAllocate 被调 + pool 三域前缀失效', async () => {
@@ -220,9 +248,7 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
 
   it('T7：runAutoAllocate 失败 → onError 路径 error.value 写入', async () => {
     const { useWorkerQueue } = await import('../useWorkerQueue');
-    realAutoAllocate.mockRejectedValueOnce(
-      new ApiError(20704, 'BIZ_AUTO_ALLOCATE_INVALID_RATIO'),
-    );
+    realAutoAllocate.mockRejectedValueOnce(new ApiError(20704, 'BIZ_AUTO_ALLOCATE_INVALID_RATIO'));
     const q = testApp.runWithContext(() => useWorkerQueue());
     await expect(
       q.runAutoAllocate({
@@ -255,5 +281,52 @@ describe('useWorkerQueue — 2026-09-30 move 端点收编（assign+remove → mo
     const q = testApp.runWithContext(() => useWorkerQueue()) as unknown as Record<string, unknown>;
     expect(q).not.toHaveProperty('loadBoard');
     expect(q).not.toHaveProperty('workerHeld');
+  });
+
+  // ===== 2026-10-03：WORKER→WORKER 方向 + 失败也失效 =====
+
+  it('T10：moveBatchBetweenWorkers 成功 → moveBatch 收到 WORKER→WORKER 形态 + 三域失效', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    const ok = await q.moveBatchBetweenWorkers('3000000000001', '1900000000001', '1900000000002');
+    expect(ok).toBe(true);
+    expect(realMoveBatch).toHaveBeenCalledTimes(1);
+    // from / to 两侧都是 WORKER 形态（tagged enum 的 worker_id 分支）
+    expect(realMoveBatch).toHaveBeenCalledWith({
+      batch_id: '3000000000001',
+      from: { kind: 'WORKER', worker_id: '1900000000001' },
+      to: { kind: 'WORKER', worker_id: '1900000000002' },
+    });
+    expectPoolDomainInvalidated();
+  });
+
+  it('T11：moveBatchBetweenWorkers 失败 → 返回 false，但**仍然失效** pool 三域', async () => {
+    // 回归 guard（主症状链的另一半）：失败也必须与服务器对账一次。失效负责的是
+    // 徽标数字与池计数（`current_held` / `capacity_remaining` / 池批次数只有重拉才对
+    // 得上，本地 DOM 改动碰不到它们），且全局 refetchOnWindowFocus=false，不重拉就
+    // 一直显示旧数字。卡片节点本身的归位由**源侧**的 onRemove（restoreNodeToSource）
+    // 在 drop 事件里完成，不依赖这次失效。
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    realMoveBatch.mockRejectedValueOnce(new ApiError(20204, 'WORKER_CAPACITY_EXCEEDED'));
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    const ok = await q.moveBatchBetweenWorkers('3000000000001', '1900000000001', '1900000000002');
+    expect(ok).toBe(false);
+    expect(q.error.value).toContain('WORKER_CAPACITY_EXCEEDED');
+    expectPoolDomainInvalidated();
+  });
+
+  it('T12：POOL→WORKER 失败同样失效 pool 三域（撤回 / 转交 / 分配三条路径同构）', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    realMoveBatch.mockRejectedValueOnce(new ApiError(20507, 'BIZ_SHELF_PROCESS_NOT_MAPPED'));
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    const ok = await q.moveBatchToWorker('3000000000001', '1900000000002', '5000000000001');
+    expect(ok).toBe(false);
+    expectPoolDomainInvalidated();
+  });
+
+  it('T13：导出面含 moveBatchBetweenWorkers（WorkerColumn 靠 inject key 消费）', async () => {
+    const { useWorkerQueue } = await import('../useWorkerQueue');
+    const q = testApp.runWithContext(() => useWorkerQueue());
+    expect(typeof q.moveBatchBetweenWorkers).toBe('function');
   });
 });

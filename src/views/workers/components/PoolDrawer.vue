@@ -3,6 +3,12 @@
 
      @start 把候选池源信息（含 batch 真实 shelf_id）写到 dndSourceTracker；
      @add 时调 moveBatchToPool 撤回批次。
+     2026-10-03：Sortable 走二参重载（不传 list），本容器退化为「纯投放目标」——
+     徽标与跨域计数靠 move 的失效链与服务器对账（成功走 onSuccess、失败走 onError、
+     目标货架缺失的早退走包装内的显式失效，三条路都失效 pool 三域）。二参形态下内建
+     onRemove 的 DOM 放回也随之消失（卡片节点归位靠它、不靠失效），由
+     options.onRemove（restoreNodeToSource）补回。完整推导见 useLazyDraggable 的
+     文件头注释。
 
      2026-09-30：
      - moveBatchToPool 签名去掉 next_process_id（后端 `POST /prod/pool/move` 的
@@ -24,10 +30,9 @@
       </div>
       <div ref="containerRef" class="section-body pool-cards" :data-process-id="pool.process_id">
         <!-- 2026-10-02：卡片渲染收敛到 BatchCard.vue，包装层删除。Sortable 容器的
-             直接子元素必须**全是可拖项** —— 混入 header / 空态会让
-             oldIndex ≠ oldDraggableIndex，污染后续所有事件。data-shelf-id 经
-             BatchCard 的 fallthrough attrs 落到卡片根 div（BatchCard 是
-             inheritAttrs: false + v-bind="$attrs"）。 -->
+             直接子元素必须**全是可拖项**（空态 div 是本容器的兄弟节点，不在其中）。
+             data-shelf-id 经 BatchCard 的 fallthrough attrs 落到卡片根 div
+             （BatchCard 是 inheritAttrs: false + v-bind="$attrs"）。 -->
         <BatchCard
           v-for="batch in pool.batches"
           :key="batch.batch_id"
@@ -41,45 +46,53 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref, watch } from 'vue';
+import { computed, inject, ref } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
-import type { ProcessPoolView, BatchCardModel as Card } from '@/types/workerPool';
+import type { ProcessPoolView } from '@/types/workerPool';
 import {
   consumeWorkerSource,
   recordPoolSource,
+  restoreNodeToSource,
   type DraggableStartEvent,
 } from '@/utils/dndSourceTracker';
-import BatchCard from './BatchCard.vue';
+import BatchCard from '@/components/BatchCard.vue';
 
-const props = defineProps<{
+// 2026-10-03：不接变量 —— 模板直接用 pool（script setup 模板自动解包 props），
+// 脚本侧已无 props 读取（旧的 writablePoolBatches 镜像随二参重载一起删掉）。
+defineProps<{
   pool: ProcessPoolView | null;
 }>();
 
-// 同 WorkerColumn 的 fix 模式：props.pool.batches readonly，本地 ref + watch。
-// 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止顶层读 props.pool，
-// 包一层 IIFE 把读取放进函数体。
-const writablePoolBatches = ref<Card[]>((() => (props.pool ? [...props.pool.batches] : []))());
-watch(
-  () => props.pool?.batches,
-  (next) => {
-    writablePoolBatches.value = next ? [...next] : [];
-  },
-  { deep: true, immediate: false },
-);
 // 2026-08-27 fix：containerRef 在 <div v-if="pool"> 内，而父级 activePool 在
 // WorkerQueueBoard 的 onMounted 里 await loadBoard() 解析前恒为 null，所以组件挂载
 // 瞬间 containerRef 必为 null。原 composable 默认 immediate:true 会在 onMounted 里
 // new Sortable(null) 抛错，且此后不再重绑（此前解构了 start 却从未调用，导致
 // 「工人列 → 工序池」的回退拖拽永久失效）。改用 useLazyDraggable 延后绑定。
+// 2026-10-03：走**二参重载**（不传 list）—— 本容器与 WorkerColumn 一样是纯投放目标：
+// 库的内建 onAdd / onRemove 会把 `newDraggableIndex` / `oldDraggableIndex`（Sortable 报的
+// **可拖项**下标）当 list 数组下标 splice 进去（`Dt(list, oldDraggableIndex)` 即
+// `list.splice(oldDraggableIndex, 1)`），那只有在「list 与可拖子元素一一对应且同序」时
+// 才成立。本容器的渲染源是 pool.batches、此前传入的 writablePoolBatches 只是它的镜像，
+// 对不齐 ⇒ 内建 splice 写进一个 Vue 根本不读的数组。二参形态下这套 handler 整个不挂载。
+// 代价：内建 onRemove 的**DOM 放回**（`from.insertBefore(item, from.children[oldIndex])`，
+// 无论成败都先把节点物理放回源容器）也一并消失 → 必须由 options.onRemove 补回，
+// 否则投放失败（20507 货架未映射等）时卡片永久留在池里、invalidate 也清不掉（失败时
+// 两侧 query 数据都没变，Vue 只会复用既有元素）。细节见 restoreNodeToSource 的注释。
+// WorkerColumn 侧同样必挂：两个容器互为源与落点。
+// sort: false 关闭**池内重排**（候选池顺序由后端排定，本就无重排语义；二参形态下
+// 重排后也无人回滚）。Sortable 只在「落点实例 === 拖拽起点实例」时才读这个选项，
+// 跨实例投放走 group 的 checkPull / checkPut 分流、不看它，故不影响投放。
 const containerRef = ref<HTMLElement | null>(null);
-useLazyDraggable(containerRef, writablePoolBatches, {
+useLazyDraggable(containerRef, {
   group: 'work-orders',
+  sort: false,
   animation: 150,
   ghostClass: 'sortable-ghost',
   onStart: onDragStart,
   onAdd: onDragAdd,
+  onRemove: restoreNodeToSource,
 });
 
 // 2026-09-30：page provide 必注入；moveBatchToPool 签名收窄为
@@ -87,13 +100,16 @@ useLazyDraggable(containerRef, writablePoolBatches, {
 // `POST /prod/pool/move` 的 `to` 是 `MoveLocation` tagged enum，POOL 分支只认
 // shelf_id；目标工序由 service 从 batch 当前 step 自推，见 worker-pool.md:101-176）。
 const moveBatchToPool =
-  inject<
-    (batch_id: string, from_worker_id: string, to_shelf_id: string) => Promise<boolean>
-  >('moveBatchToPool')!;
+  inject<(batch_id: string, from_worker_id: string, to_shelf_id: string) => Promise<boolean>>(
+    'moveBatchToPool',
+  )!;
 // 2026-09-30：shelfId 仍是 WORKER→POOL 的 `to.shelf_id`（撤回目标货架）。
 // 后端校验该货架必须映射到 batch 当前工序，否则 20507 BIZ_SHELF_PROCESS_NOT_MAPPED
 // （HTTP 422）—— 用当前激活货架是唯一合理默认（用户视角「放回我正在看的货架」）。
-const shelfId = inject<ComputedRef<string>>('shelfId', computed(() => ''));
+const shelfId = inject<ComputedRef<string>>(
+  'shelfId',
+  computed(() => ''),
+);
 
 /** 2026-09-30：记录「候选池 → 工人」拖拽源。**必须带 batch 的真实 shelf_id**：
  *  `POST /prod/pool/move` 的 `from: {kind:'POOL', shelf_id}` 需与

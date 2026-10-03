@@ -17,6 +17,8 @@
 //   - T2：进页面只发 3 类请求，**不发** per-process 详情（N+1 懒加载核心 guard）。
 //   - T3：getWorkerPoolCounts 零参调用（后端无 shelf 维度）。
 //   - T4：拖入高亮的跨面板接线（源面板 emit → 板级 ref → 工序池面板 prop）。
+//   - T5：provide 三个 move 包装（含 2026-10-03 新增的 WORKER→WORKER 包装）——
+//     WorkerColumn 落点全靠 inject 拿包装，漏 provide 就退化为「不发请求」。
 //
 // 测试策略：
 //   - vue-test-utils mount + globalConfig.plugins: [[VueQueryPlugin, { queryClient }]]；
@@ -89,15 +91,17 @@ vi.mock('element-plus', () => ({
 }));
 
 // 2026-09-30：getWorkerPoolCounts 零参 mock（后端端点无 Query extractor）。
-const realGetWorkerPoolCounts = vi.fn<() => Promise<{
-  counts: Array<{
-    process_id: string;
-    process_code: string;
-    process_name: string;
-    count: number;
-  }>;
-  total: number;
-}>>(async () => ({ counts: [], total: 0 }));
+const realGetWorkerPoolCounts = vi.fn<
+  () => Promise<{
+    counts: Array<{
+      process_id: string;
+      process_code: string;
+      process_name: string;
+      count: number;
+    }>;
+    total: number;
+  }>
+>(async () => ({ counts: [], total: 0 }));
 
 // 2026-09-30 懒加载 guard：per-process 详情**不应**在进页面时被请求。
 const realGetWorkerPoolByProcess = vi.fn<(processId: string) => Promise<unknown>>(
@@ -158,11 +162,18 @@ vi.mock('@/api/process', () => ({
 }));
 
 // 2026-09-30：loadBoard / workerHeld / loading 已随 TanStack 硬约束清理删除 ——
-// 本 mock 只保留 WorkerQueueBoard 实际消费的 3 个字段（error + 两个 move 包装）。
+// 本 mock 只保留 WorkerQueueBoard 实际消费的面（error + 三个 move 包装）。
+// 2026-10-03：补 moveBatchBetweenWorkers（WORKER→WORKER，WorkerColumn 落点消费）。
+// 走 vi.hoisted：vi.mock 工厂被提升到模块顶部求值，直接闭包引用下面模块体里的
+// const 会在工厂被提前求值时命中 TDZ（同文件里 realGetWorkerPoolCounts 等同理）。
+const { moveBatchBetweenWorkersMock } = vi.hoisted(() => ({
+  moveBatchBetweenWorkersMock: vi.fn(async () => true),
+}));
 vi.mock('@/views/workers/composables/useWorkerQueue', () => ({
   useWorkerQueue: () => ({
     moveBatchToWorker: vi.fn(),
     moveBatchToPool: vi.fn(),
+    moveBatchBetweenWorkers: moveBatchBetweenWorkersMock,
     error: ref<string | null>(null),
   }),
 }));
@@ -268,9 +279,7 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     try {
       const wrapper = mount(WorkerQueueBoard, {
         global: {
-          plugins: [
-            [VueQueryPlugin, { queryClient: testQueryClient }],
-          ],
+          plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]],
         },
       });
       await flushPromises();
@@ -293,9 +302,7 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     activeShelfIdRef.value = '5000000000001';
     const wrapper = mount(WorkerQueueBoard, {
       global: {
-        plugins: [
-          [VueQueryPlugin, { queryClient: testQueryClient }],
-        ],
+        plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]],
       },
     });
     await flushPromises();
@@ -318,9 +325,7 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     activeShelfIdRef.value = '5000000000001';
     const wrapper = mount(WorkerQueueBoard, {
       global: {
-        plugins: [
-          [VueQueryPlugin, { queryClient: testQueryClient }],
-        ],
+        plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]],
       },
     });
     await flushPromises();
@@ -338,9 +343,7 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     activeShelfIdRef.value = '5000000000001';
     const wrapper = mount(WorkerQueueBoard, {
       global: {
-        plugins: [
-          [VueQueryPlugin, { queryClient: testQueryClient }],
-        ],
+        plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]],
       },
     });
     await flushPromises();
@@ -352,6 +355,22 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     wrapper.unmount();
   });
 
+  it('T5：provide 三个 move 包装（含 WORKER→WORKER 包装）', async () => {
+    // 回归 guard：WorkerColumn 的 onDragAdd 只 inject、不 import，漏 provide 时 inject
+    // 拿到 noop 兜底 ⇒「工人之间转交」表现为拖了没反应，且控制台一条报错都没有。
+    activeShelfIdRef.value = '5000000000001';
+    const wrapper = mount(WorkerQueueBoard, {
+      global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+    });
+    await flushPromises();
+    const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
+    expect(typeof provides.moveBatchToWorker).toBe('function');
+    expect(typeof provides.moveBatchToPool).toBe('function');
+    expect(provides.moveBatchBetweenWorkers).toBe(moveBatchBetweenWorkersMock);
+    expect(typeof provides.shelfId).toBe('object');
+    wrapper.unmount();
+  });
+
   it('T4：拖入高亮的跨面板接线（源面板 emit → 板级 ref → 工序池面板 prop）', async () => {
     // 2026-10-02 回归 guard：Sortable 的 onMove 只派发给**源**（待下发批次列表），
     // 工序卡（投放目标）侧收不到 ⇒ 高亮态必须由源上报、经板级状态落到工序池面板。
@@ -359,9 +378,7 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     activeShelfIdRef.value = '5000000000001';
     const wrapper = mount(WorkerQueueBoard, {
       global: {
-        plugins: [
-          [VueQueryPlugin, { queryClient: testQueryClient }],
-        ],
+        plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]],
       },
     });
     await flushPromises();

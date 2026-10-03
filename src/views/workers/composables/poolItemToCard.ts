@@ -13,13 +13,15 @@
 //     供 PoolDrawer.onDragStart 读）；工人持有 / 待下发恒 null。
 //   - `location` 语义按来源区分：工序池 = 货架 code，工人持有 = location enum，
 //     待下发 = null（尚未落位）。
+//   - `version` 三个 DTO 都带（OCC 乐观锁锚），统一直填；卡片不渲染它，
+//     消费侧的外协收发写端点要拿它做版本校验。
 
 import type {
   HeldBatchItemDto,
   PendingBatchItemDto,
   PoolBatchItemDto,
 } from '@/api/workerPool.contract';
-import type { BatchCardModel } from '@/types/workerPool';
+import type { BatchCardModel } from '@/types/batchCard';
 
 /** 工序池候选批次 → 卡片 model。字段取自 `GET /api/v2/prod/pool/{process_id}`。 */
 export function poolItemToCard(it: PoolBatchItemDto): BatchCardModel {
@@ -42,6 +44,7 @@ export function poolItemToCard(it: PoolBatchItemDto): BatchCardModel {
     note: it.note,
     location: it.shelf_code,
     shelf_id: it.shelf_id,
+    version: it.version,
   };
 }
 
@@ -68,6 +71,7 @@ export function heldToCard(it: HeldBatchItemDto): BatchCardModel {
     location: it.location,
     // batch 在 worker 手里（current_holder_id = worker_id），没有货架位置
     shelf_id: null,
+    version: it.version,
   };
 }
 
@@ -94,5 +98,6 @@ export function pendingBatchToCard(it: PendingBatchItemDto): BatchCardModel {
     // 待下发批次尚未落位（未进任何货架）
     location: null,
     shelf_id: null,
+    version: it.version,
   };
 }

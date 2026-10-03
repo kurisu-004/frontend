@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
-// src/views/workers/components/__tests__/BatchCard.spec.ts
+// src/components/__tests__/BatchCard.spec.ts
 //
 // 2026-10-02 新增：BatchCard.vue 组件 spec —— 生产队列看板**唯一**批次卡片的
 // 渲染契约。组件零 DTO 依赖、零网络请求，全部断言都是纯渲染 / 事件 / class 形态。
+//
+// 2026-10-03：随组件升为全仓共享组件迁到 src/components/（BatchCard.spec 从
+// views/workers/components/__tests__ 一并搬家，断言逐条保留），并补 C 系列用例：
+// `extra` 领域扩展槽（只进 tooltip、逐行判空）与 `version`（不渲染、仅随 model 透传）。
 //
 // 覆盖：
 //   - B1：header 渲染 part_name + :title（长名被 ellipsis 截断，title 兜底）；
@@ -34,7 +38,7 @@ import { describe, expect, it } from 'vitest';
 import { defineComponent, h, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
 import BatchCard from '../BatchCard.vue';
-import type { BatchCardModel } from '@/types/workerPool';
+import type { BatchCardModel } from '@/types/batchCard';
 
 /** el-tooltip stub：default slot = 卡片本体，content slot = 详情浮层。
  *  两者各包一层带类名的 div，单测才能把「body 渲染了什么」与「tooltip 渲染了什么」
@@ -124,6 +128,16 @@ function mountCard(
  *  拿到的就是模板 `v-bind(accentVar)` 实际使用的那个字符串）。 */
 function accentVarOf(wrapper: ReturnType<typeof mountCard>): unknown {
   return (wrapper.vm.$ as unknown as { setupState: Record<string, unknown> }).setupState.accentVar;
+}
+
+/** tooltip 区域的纯文本（断言「用户真正看到的内容」；html() 会带源码注释文字）。 */
+function tooltipTextOf(wrapper: ReturnType<typeof mountCard>): string {
+  return wrapper.find('.el-tooltip-stub__content').text();
+}
+
+/** body 区域的纯文本（body 是 4 行硬预算，改动后逐行内容都要能断言）。 */
+function bodyTextOf(wrapper: ReturnType<typeof mountCard>): string {
+  return wrapper.find('.el-tooltip-stub__body').text();
 }
 
 describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
@@ -322,5 +336,150 @@ describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
     const plain = mountCard(makeBatch({ is_urgent: false }));
     expect(accentVarOf(plain)).toBe('transparent');
     plain.unmount();
+  });
+
+  // ===== 2026-10-03：共享化后的扩展字段（extra 扩展槽 / version OCC 锚） =====
+
+  it('C1：body 恒 4 行 —— extra 全部渲染进 tooltip，一行都不许挤进 body', () => {
+    // 卡片 200×96 是硬预算（4×18 行高 + 3×2 gap + 上下各 8 padding + 上下各 1px
+    // 边框 = 96px，无余量）。外协信息若有一条漏进 body，卡片就会溢出裁切。
+    const wrapper = mountCard(
+      makeBatch({
+        version: 7,
+        extra: {
+          outsource_company_name: '宏远外协',
+          outsource_process_name: '外协热处理',
+          price: '12.50',
+          sent_at: '2026-10-01 09:30',
+          can_auto_receive: false,
+        },
+      }),
+    );
+    expect(wrapper.findAll('.el-tooltip-stub__body .row')).toHaveLength(4);
+    const body = bodyTextOf(wrapper);
+    for (const leaked of ['宏远外协', '外协热处理', '12.50', '2026-10-01 09:30']) {
+      expect(body).not.toContain(leaked);
+      expect(tooltipTextOf(wrapper)).toContain(leaked);
+    }
+    wrapper.unmount();
+  });
+
+  it('C2：extra 五个字段各出一行中文标签', () => {
+    const wrapper = mountCard(
+      makeBatch({
+        extra: {
+          outsource_company_name: '宏远外协',
+          outsource_process_name: '外协热处理',
+          price: '12.50',
+          sent_at: '2026-10-01 09:30',
+          can_auto_receive: false,
+        },
+      }),
+    );
+    const text = tooltipTextOf(wrapper);
+    expect(text).toContain('外协公司');
+    expect(text).toContain('外协工序');
+    expect(text).toContain('单价');
+    expect(text).toContain('发出时间');
+    // can_auto_receive=false 是**否定语义**，必须给可读文案而不是空值占位
+    expect(text).toContain('接收');
+    expect(text).toContain('需手填工序');
+    wrapper.unmount();
+  });
+
+  it('C3：can_auto_receive=true → 渲染「可自动带出」；null / undefined → 整行不渲染', () => {
+    const auto = mountCard(makeBatch({ extra: { can_auto_receive: true } }));
+    expect(tooltipTextOf(auto)).toContain('可自动带出');
+    auto.unmount();
+
+    // 三态布尔的「未知」侧：既不报可自动、也不报需手填
+    const unknown = mountCard(makeBatch({ extra: { can_auto_receive: null } }));
+    expect(tooltipTextOf(unknown)).not.toContain('接收');
+    unknown.unmount();
+
+    const absent = mountCard(makeBatch({ extra: {} }));
+    expect(tooltipTextOf(absent)).not.toContain('接收');
+    absent.unmount();
+  });
+
+  it('C4：extra 为 undefined → tooltip 与生产队列域下逐行一致（无任何外协标签）', () => {
+    // 回归 guard：共享组件不能因为扩了槽就让既有域的 tooltip 多出空行 / 空标签。
+    const withExtra = mountCard();
+    const plain = mountCard(makeBatch({ extra: undefined }));
+    expect(tooltipTextOf(plain)).toBe(tooltipTextOf(withExtra));
+    for (const label of ['外协公司', '外协工序', '单价', '发出时间', '接收']) {
+      expect(tooltipTextOf(plain)).not.toContain(label);
+    }
+    withExtra.unmount();
+    plain.unmount();
+  });
+
+  it('C5：extra 逐行判空（部分填、其余 null 不留空标签）', () => {
+    const wrapper = mountCard(
+      makeBatch({
+        extra: {
+          outsource_company_name: '宏远外协',
+          outsource_process_name: null,
+          price: null,
+          sent_at: undefined,
+          can_auto_receive: null,
+        },
+      }),
+    );
+    const text = tooltipTextOf(wrapper);
+    expect(text).toContain('外协公司');
+    for (const label of ['外协工序', '单价', '发出时间', '接收']) {
+      expect(text).not.toContain(label);
+    }
+    wrapper.unmount();
+  });
+
+  it('C6：hasDetails 把 extra 算进去 —— 只有 extra 内容时 tooltip 仍能弹', () => {
+    // 空槽 {} / 全 null 不算「有详情」：否则会弹出一个只有空白的浮层。
+    const onlyExtra = mountCard(
+      makeBatch({
+        drawing_no: '',
+        serial_no: null,
+        batch_no: '',
+        customer_l1: null,
+        customer_l2: null,
+        applicant_name: null,
+        planned_delivery_date: null,
+        location: null,
+        note: null,
+        extra: { outsource_company_name: '宏远外协' },
+      }),
+    );
+    expect(onlyExtra.findComponent(ElTooltipStub).props('disabled')).toBe(false);
+    onlyExtra.unmount();
+
+    const emptySlot = mountCard(
+      makeBatch({
+        drawing_no: '',
+        serial_no: null,
+        batch_no: '',
+        customer_l1: null,
+        customer_l2: null,
+        applicant_name: null,
+        planned_delivery_date: null,
+        location: null,
+        note: null,
+        extra: {},
+      }),
+    );
+    expect(emptySlot.findComponent(ElTooltipStub).props('disabled')).toBe(true);
+    emptySlot.unmount();
+  });
+
+  it('C7：version 只作为 model 字段透传，卡片不渲染也不影响任何既有渲染', () => {
+    const withVersion = mountCard(makeBatch({ version: 9 }));
+    const withoutVersion = mountCard(makeBatch({ version: undefined }));
+    // 渲染结果逐字一致：OCC 锚是消费侧（外协收发写端点）的事，卡片不感知
+    expect(bodyTextOf(withVersion)).toBe(bodyTextOf(withoutVersion));
+    expect(tooltipTextOf(withVersion)).toBe(tooltipTextOf(withoutVersion));
+    // model 上确实带着（消费侧从 props.batch.version 读，不是从 DOM 挖）
+    expect((withVersion.props('batch') as BatchCardModel).version).toBe(9);
+    withVersion.unmount();
+    withoutVersion.unmount();
   });
 });
