@@ -299,7 +299,7 @@ describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
     wrapper.unmount();
   });
 
-  it('P8b：delivered_quantity 缺失（后端未上线该列）时数量列出「0 / 总量」，不崩', () => {
+  it('P8b：delivered_quantity 为 null（复用同一 VO 的其余端点恒返 null）时数量列出「0 / 总量」，不崩', () => {
     const wrapper = mountPanel('partial', [makePart({ quantity: 64 })]);
     expect(wrapper.find('.row-qty').text()).toBe('0/64');
     wrapper.unmount();

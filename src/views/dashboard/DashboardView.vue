@@ -21,9 +21,13 @@
 
   2026-10-03 新增右栏第二块面板「部分已交」：.main-right 两卡均分高度
   （flex: 1 1 0 + min-height 兜底），面板头 flex-shrink: 0 防被压扁。
-  两卡 min-height 各 160px ⇒ 右栏内容硬地板 160×2 + 16 gap = 336px；视口高
-  低于约 400px 时地板会超出可视区，多出来的部分由外层 .el-main 纵向滚动兜底
-  （MainLayout 的 .main-content 带 overflow: auto）。
+  两卡 min-height 各 160px ⇒ 右栏内容硬地板 160×2 + 16 gap = 336px；加上
+  .dashboard 自身的 92px（上下 padding 32 + 行间 gap 16 + KPI 行预留 44；KPI 行
+  实际更高时阈值按比例上移），视口高 ≲ 428px 时地板会超出可视区。
+  兜底只在单列分支成立：≤1100px 时 .dashboard 改 height: auto，超出部分由外层
+  .el-main 纵向滚动（MainLayout 的 .main-content 带 overflow: auto）；**双列下没有
+  滚动路径** —— .dashboard 是定高 + overflow: hidden，.el-main 拿到的是定高子元素、
+  永不滚动，超出部分直接被裁掉。
 -->
 <template>
   <div class="dashboard">

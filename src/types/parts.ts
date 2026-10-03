@@ -159,9 +159,10 @@ export interface PartListItem {
   /** PR-F 2026-07-17：送货单字段 */
   order_no: string | null;
   system_delivery_date: string | null;
-  /** 2026-10-03 订正：已送数量。零件行 = 未软删批次中 status ∈ (DELIVERED,
-   *  COMPLETED) 的 quantity 之和，按「件」计；装配件行**也填**，但语义是已送
-   *  「套数」= MIN(子件已送 × 装配套数 / 子件总量)，无子件为 0。
+  /** 2026-10-03 订正：已送数量（语义以后端 VO 注释为准）。零件行 = 未软删批次中
+   *  status ∈ (DELIVERED, COMPLETED) 的 quantity 之和，按「件」计；装配件行**也填**，
+   *  语义是已送「套数」= MIN(子件已送件数 × 装配件套数 / 子件总量) —— PG 整数除法
+   *  截断，子件总量为 0 者不参与，无子件为 0。
    *
    *  **填充端点只有 `GET /com/union-list` 与 `GET /parts`**；复用同一 VO 的其余 5 个
    *  端点（`GET /parts/pending-programming` / `GET /parts/by-work-type/{id}` /

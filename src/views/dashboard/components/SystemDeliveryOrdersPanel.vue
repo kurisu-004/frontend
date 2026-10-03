@@ -142,8 +142,11 @@ function deliveredTooltip(item: PartListItem): string {
   flex-direction: column;
   flex: 1 1 0;
   // 160 而非更高的兜底：右栏两卡均分 + 16px gap ⇒ 内容硬地板 = 160×2 + 16 = 336px。
-  // .dashboard 是 overflow: hidden 且不滚，地板超出可视区就会把第二张卡整块裁掉，
-  // 故这里取能覆盖视口高 ≳400px 的下限，更矮的视口交给 .el-main 的纵向滚动兜底。
+  // 再加 .dashboard 自身的 92px（上下 padding 32 + 行间 gap 16 + KPI 行预留 44；
+  // KPI 行实际更高时阈值按比例上移）⇒ 视口高 ≲ 428px 时地板就超出可视区。
+  // **双列下没有滚动路径**：.dashboard 是定高 + overflow: hidden，.el-main 拿到的
+  // 是定高子元素、永不滚动，超出部分直接被裁掉。.el-main 的纵向滚动兜底只在
+  // ≤1100px 的单列分支（.dashboard 改 height: auto）成立。
   min-height: 160px;
   :deep(.el-card__header) {
     padding: 10px 14px;
@@ -205,9 +208,16 @@ function deliveredTooltip(item: PartListItem): string {
   // 数量列 80px 的由来（partial 档「已交 / 总量」是最不可截的信息）：三档统一 80px
   // —— urgent 出纯数字用不满，但两 variant 必须同轨，否则同一容器下换 variant 整行
   // 错位。12px 等宽最坏平台 7.2px/字符（SF Mono 0.6em；Consolas 0.55em 更窄），
-  // 「1791 / 1791」= 9 字符 + 分隔符两侧各 2px = 68.8px，留 11px 余量。数量实测
-  // 可达 4 位（本仓 fixture 即 quantity: 1791），5 位起会触 ellipsis —— 故
+  // 「1791 / 1791」= 9 字符 + 分隔符两侧各 2px = 68.8px，留 11px 余量（8 字符的
+  // 「1791 / 100」= 61.6px 更宽裕）。数量实测可达 4 位（本仓 fixture 即
+  // quantity: 1791），要两侧都 5 位（总字符 ≥ 11、≈ 83px）才触 ellipsis —— 故
   // .row-qty--partial 刻意不用 flex，ellipsis 生效时至少是可见截断而非静默切断。
+  //
+  // 2026-10-03 记账：56→80 的 24px 全部由 1fr（二级客户）让出，本档（>560px）该列
+  // 相对上一版均匀少 24px；本档下缘（容器 560.4px，刚越过 560px 分界）1fr =
+  // 62.4px，12px 字号仍容 5 个汉字，不产生可见截断。视口 1650→1651 处 1fr 从
+  // 154px 掉到 62.4px（上一版 148→86.4px，幅度 61.6px；本版幅度 91.6px），是三档
+  // 分档机制的固有产物，不是回归。
   grid-template-columns: 56px 200px 80px minmax(0, 1fr) 56px 56px;
   gap: 6px;
   align-items: center;
@@ -292,21 +302,25 @@ function deliveredTooltip(item: PartListItem): string {
 @container sysdeliveryrow (max-width: 560px) {
   .row {
     // 名称列 120px：数量列从 56 加宽到 80 后，本档下缘（容器 441px）留给二级客户的
-    // 余量只剩 15px ≈ 半 个汉字。名称让到 120px（≈9 个汉字，仍短于 p90 20 字符，
-    // 靠 tooltip 兜），把二级客户抬回 35px。状态列 56px = el-tag--small 最坏宽度
-    // 52px + 4px 余量。
+    // 余量只剩 5px（不足半个汉字）。名称让到 120px（≈9 个汉字，仍短于 p90 20 字符，
+    // 靠 tooltip 兜），把二级客户抬回 35px（上一版同点位 29px，本档 1fr 恒 +6px）。
+    // 状态列 56px = el-tag--small 最坏宽度 52px + 4px 余量。
     grid-template-columns: 48px 120px 80px minmax(0, 1fr) 56px 52px;
   }
 }
 @container sysdeliveryrow (max-width: 440px) {
   .row {
-    // 极窄档（本档容器实测 320~440px）。名称列取 clamp(48px, 16cqi, 88px)：本档
+    // 极窄档（本档容器对应视口 1101~1350、实测 340~440px；再窄就折叠成单列、
+    // 容器 869px 直接吃满档）。名称列取 clamp(48px, 16cqi, 88px)：本档
     // 的宽度预算要同时喂饱 80px 的数量列和 1fr 的二级客户列，名称是三列里唯一
     // 「让位代价最低」的 —— 它截断后有 tooltip，且同一信息在行点击后的
     // PartPreviewDialog 里完整可读。
-    //   容器 340（视口 1101）→ 名称 54.5 + 二级客户 19.9；容器 412（视口 1280）
-    //   → 名称 65.9 + 二级客户 80.1；容器 440（视口 1350）→ 70.4 + 103.6。
+    //   1fr（二级客户）实测：容器 340（视口 1101）→ 19.9；容器 412（视口 1280）
+    //   → 80.1；容器 440（视口 1350）→ 103.6（对应名称列 54.5 / 65.9 / 70.4）。
     //   clamp 上下限本档都取不到，是越界保护。
+    // 本档相对上一版是**变宽**的（1fr +11~+19px）：上一版名称列是
+    // clamp(76px, 24cqi, 110px)，本版收到 clamp(48px, 16cqi, 88px) 省下的宽度
+    // 多过数量列 56→80 吃掉的 24px —— 三档里只有 >560px 那一档的 1fr 变窄。
     // 序列号 40px（5 字符需 36px）/ 交期 44px（MM/DD 需 36px）—— 两列都只比内容
     // 宽几像素，是本档仅剩的余量来源。状态列 52px = el-tag--small 最坏宽度，零余量
     // 但不裁字。

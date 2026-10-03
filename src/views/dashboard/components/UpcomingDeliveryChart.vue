@@ -70,9 +70,9 @@ import type { OrderStatus } from '@/types/parts';
  *  - 底层（bottom）1 状态：DELIVERED（已送货）
  *
  *  COMPLETED / CANCELLED 后端 SQL 沿现状 WHERE 排除，不会出现；不需要进 LAYERS。
- *  REPAIRING 后端 2026-10-01 起不再产生，也不进 LAYERS —— statuses 会随柱状图点击
- *  经抽屉下发给 listUnionItems，后端对它零校验 + `= ANY` 文本比较，传它不报错但恒
- *  匹配 0 行（点了顶层柱会看到空抽屉）。
+ *  REPAIRING 后端 2026-10-01 起不再产生，也不进 LAYERS —— 保留它不会降级也不会 400
+ *  （statuses 在后端零校验 + `= ANY` 文本比较），但会恒匹配 0 行，即点了顶层柱看到
+ *  空抽屉。
  *  颜色走 EP 预设 hex（success green #67c23a / warning orange #e6a23c /
  *  danger red #f56c6c），对齐项目其它 danger/warning/success 标签。
  *  **必须用 hex 而非 var()** —— ECharts Canvas renderer 解析 var() 不可靠。 */
