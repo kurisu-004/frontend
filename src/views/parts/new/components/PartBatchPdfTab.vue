@@ -710,6 +710,27 @@ import {
   ElTag,
 } from 'element-plus';
 import type { UploadFile } from 'element-plus';
+// 2026-10-03 补 Element Plus 样式副作用 import（修 el-select 错位 + 点不中）：
+// unplugin-vue-components 的 ElementPlusResolver 只负责**模板**里用到的标签；脚本作用域里
+// 已经显式绑定了同名组件时它认为「本文件已自行负责」，直接跳过 → 不再注入对应的
+// `element-plus/es/components/<name>/style/css` 副作用 import。
+// 本文件的 9 个 EP 组件（autocomplete / date-picker / input / input-number / link /
+// option / select / switch / tag）都因为要传 `h()` 渲染函数而必须显式 import，于是模板
+// 版本也一并拿不到 resolver 的样式注入 —— 整条路由的 EP CSS 只剩同路由别的文件顺带
+// 注入那点（属巧合，不是设计；`/parts/new` 是全仓唯一用 el-select 的路由，于是
+// el-select / el-option 的 CSS 一个字节都没加载）。
+// 漏注入的表现：`.el-select__wrapper` 退回 display:block（正确应为 inline-flex +
+// position:relative），placeholder 与 caret 掉到原生 input 下方/第三行、被下一行单元格
+// 内容盖住 → 用户看到「标签右边一个空框、选择一级客户掉行」，且点 caret 落不到 popper。
+// 各入口的传递闭包按 node_modules 实际内容核对：select 带 option / option-group / tag /
+// scrollbar / popper，autocomplete 带 input，date-picker 带 date-picker-panel，
+// input-number 带 input —— 上列 9 个组件被全覆盖。
+import 'element-plus/es/components/select/style/css';
+import 'element-plus/es/components/autocomplete/style/css';
+import 'element-plus/es/components/date-picker/style/css';
+import 'element-plus/es/components/input-number/style/css';
+import 'element-plus/es/components/switch/style/css';
+import 'element-plus/es/components/link/style/css';
 import {
   Document,
   MagicStick,
