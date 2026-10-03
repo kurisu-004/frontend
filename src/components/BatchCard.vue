@@ -215,7 +215,6 @@ function onToggleSelect(): void {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 2px;
   width: 200px;
   height: 96px;
   padding: 8px 10px;
@@ -238,9 +237,10 @@ function onToggleSelect(): void {
 .batch-card.is-selectable {
   cursor: grab;
 }
-/* 勾选态（仅 selectable 场景 —— 工序池 / 工人列的卡片没有勾选语义）：主色描边 + 浅主色
-   底 + 外发光。`border-color` 简写只重置四边的**颜色**，不碰 border-style / border-width，
-   故左边框仍是 4px、只是染上主色 —— 四边描边粗细一致、读起来才是同一个框。
+/* 2026-10-04 勾选态（仅 selectable 场景 —— 工序池 / 工人列的卡片没有勾选语义）：主色描边
+   + 浅主色底 + 外发光。`border-color` 简写只重置四边的**颜色**，不碰 border-style /
+   border-width，故这里真正达成的是四边**同色**、左边框仍保留 4px 竖条粗度（勾选态只
+   染色、不重置宽度）。
    加急语义由 body 内的橙色「加急」tag 承载，不依赖左边框着色。
    回归守卫见 src/components/__tests__/BatchCard.spec.ts 的源码契约用例。 */
 .batch-card.is-selected {

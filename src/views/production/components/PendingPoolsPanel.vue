@@ -109,8 +109,11 @@ const isEmpty = computed(() => props.processes.length === 0);
   box-sizing: border-box;
   overflow-y: auto;
 }
-/* 组内沿用 200px 卡片 + 8px gap 的网格。 */
+/* 组内沿用 200px 卡片 + 8px gap 的网格。flex-shrink: 0：面板是纵向滚动列，组一旦被压扁，
+   200px 固定高的卡片就会互相重叠。当前靠 flex item 的 content-based 最小尺寸兜住不收缩，
+   显式写死是防它哪天不成立。 */
 .pool-group {
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
