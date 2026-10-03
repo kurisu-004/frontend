@@ -1,5 +1,5 @@
-// 送货分组 API 封装（Rust v2 P1；baseURL /api/v2，2026-09-15 Phase 5 业务全切 v2）。
-// 端点清单（与 hsh-erp-rust 的 delivery_groups router 对应）：
+// 送货分组 API 封装（baseURL /api/v2）。
+// 端点清单：
 //   GET    /delivery-groups?customer_id=...        - listDeliveryGroups
 //   POST   /delivery-groups                        - createDeliveryGroup
 //   POST   /delivery-groups/{id}/update            - updateDeliveryGroup
@@ -12,7 +12,7 @@
 //   40901 BIZ_DELIVERY_VERSION_CONFLICT             409 — version 不匹配
 //   20104 BIZ_DELIVERY_NOT_FOUND                    404 — 分组不存在（已并发删）
 //
-// 业务统一走 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 起）。
+// 全部走 `api`（baseURL `/api/v2`）。
 
 import { api } from '@/api/http';
 import type {

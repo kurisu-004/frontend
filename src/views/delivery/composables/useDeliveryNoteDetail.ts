@@ -26,8 +26,7 @@ import type {
 import type { OrderStatus } from '@/types/parts';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
 import { canAddRemoveParts, canView, hasManageNoteRole } from '@/utils/deliveryNotePermissions';
-// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
-// 函数式 getter 保留调用形态 auth.hasRole('X')。
+// 读 auth 只走 Pinia store（useAuthStore），不解构（见 CLAUDE.md §auth）。
 import { useAuthStore } from '@/stores/auth';
 import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility';
 

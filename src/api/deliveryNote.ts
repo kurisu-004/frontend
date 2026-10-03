@@ -1,6 +1,7 @@
-// 送货单管理 API 封装（2026-09-15 Phase 5：业务全切 v2，打印 4 端点保留 v1）。
+// 送货单管理 API 封装。
 //
-// 端点清单（路径与 Rust hsh-erp-rust / Python FastAPI 完全一致，仅 baseURL 不同）：
+// 端点清单（业务端点统一走 `api`（baseURL `/api/v2`），打印 2 端点走 `apiPrint`
+// （baseURL `/api/v1`））：
 //   [v2] GET    /delivery-notes                       - listNotes
 //   [v2] GET    /delivery-notes/pickup-pending        - listPickupPending
 //   [v2] GET    /delivery-notes/candidate-parts       - listCandidateParts
@@ -21,8 +22,6 @@
 //   [v2] GET    /delivery-notes/batch-detail          - batchGetNotes
 //   [v2] POST   /delivery-notes/{id}/attach-batches   - attachBatches
 //
-// 2026-09-15 Phase 5：原 v1/v2 区分合并——业务端点统一走 `api`（baseURL `/api/v2`），
-// 打印 2 端点走 `apiPrint`（baseURL `/api/v1`）。
 // 全部雪花 ID 入参为 string（CLAUDE.md §3 JS Number 丢精度）。
 
 import { api, apiPrint } from '@/api/http';
@@ -263,8 +262,8 @@ export async function updateNote(
 /**
  * 程序化下载送货单 XLSX（Axios blob + onDownloadProgress）。
  *
- * - 2026-09-15 Phase 5：走 `apiPrint`（baseURL `/api/v1`，v1 Python FastAPI），
- *   该端点未迁 v2。其它拦截器（token / refresh / 信封）与 `api` 共享。
+ * - 走 `apiPrint`（baseURL `/api/v1`）—— 打印端点与其它业务端点不同 baseURL；
+ *   拦截器（token / refresh / 信封）与 `api` 共享。
  * - `onDownloadProgress` 通过 `Content-Length` 给出 total，前端据此算出百分比。
  * - 拿到完整 Blob 后再用 `URL.createObjectURL` + `<a download>` 触发浏览器保存。
  */
@@ -358,14 +357,11 @@ function parseFilename(header: string | undefined): string | null {
  *
  * 批次 3 分组（A 直接入单 / B 候选送检 / C 短路报错）：
  *   - A 组（READY_TO_SHIP / INSPECTION）→ added_batches
- *   - B 组（PENDING / PROGRAMMING / IN_PROCESS 非工人持有 / REPAIRING）→ unresolved_targets
+ *   - B 组（PENDING / PROGRAMMING / IN_PROCESS 非工人持有）→ unresolved_targets
  *   - C 组（DELIVERED / OUTSOURCE / IN_PROCESS 工人持有 / COMPLETED / CANCELLED）→ 21421 硬错误
  *
- * 工人持有以 `t_part_batch.location='WORKER'` 判定（不用 current_holder_id，因为该列在
- * 货架上存的是 shelf.id）。旧 21405 / 21418 错误码已不再由 scan 触发。
- * 2026-09-16 PR-2：current_holder_id 列已下线（t_part 瘦身 / Rust v2 迁移 027，
- * 物理位置 / 持有者 / 上架时间全部归 t_part_batch），批次级 current_holder_id 保留；
- * 本判定走 batch.location 不再涉及该列下线讨论。
+ * 工人持有以 `t_part_batch.location='WORKER'` 判定（不用 current_holder_id ——
+ * 物理位置 / 持有者 / 上架时间全部归 t_part_batch，该列在货架上存的是 shelf.id）。
  */
 export async function scanDelivery(code: string): Promise<ScanDeliveryOut> {
   const resp = await api.post<ScanDeliveryOut>('/delivery-notes/scan', { code });

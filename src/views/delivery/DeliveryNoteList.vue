@@ -38,8 +38,7 @@ import {
 } from '@/utils/deliveryNotePermissions';
 // 2026-09-26：客户全集改走共享 query useCustomersQuery（CustomerList 写后失效自动 refetch）。
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
-// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
-// 函数式 getter 保留调用形态 auth.hasRole('X')。
+// 读 auth 只走 Pinia store（useAuthStore），不解构（见 CLAUDE.md §auth）。
 import { useAuthStore } from '@/stores/auth';
 import {
   useColumnVisibility,

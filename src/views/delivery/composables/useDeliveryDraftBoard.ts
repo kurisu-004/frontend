@@ -1,6 +1,6 @@
 // composables/useDeliveryDraftBoard.ts
 //
-// 草稿卡片列表的业务状态 + 业务函数（2026-08-25 T11 从 DeliveryNoteScan.vue 抽出）。
+// 草稿卡片列表的业务状态 + 业务函数（从 DeliveryNoteScan.vue 抽出）。
 //
 // 持有：
 //   - drafts / draftDetails / draftsLoading / draftsCount
@@ -66,8 +66,7 @@ export interface DraftTableInstance {
 }
 
 /**
- * 同 serial_no 多 batch 折叠为一行（参考 PrintPreviewDialog.vue:91 foldSamePart，
- * 但分组 key 从 part_id 换成 serial_no）。
+ * 同 serial_no 的多 batch 折叠为一行（分组 key = serial_no）。
  */
 function foldBySerial(
   items: DeliveryNoteLineItem[],
@@ -156,10 +155,9 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
 
   // ============ 折叠数据缓存（per-note computed；保 data 引用稳定）============
   /**
-   * EP table 在 :data 引用变化时（store/index.mjs:27-37 的 setData 命中
-   * dataInstanceChanged）会自动 clearSelection()。原实现模板内联调用
-   * foldBySerial(...) → 每次重渲染都产生新数组 → 勾选立刻被清，与
-   * selectedByNote 写入触发的重渲染形成死循环。
+   * EP el-table 在 :data 引用变化时会自动 clearSelection()（内部 setData 命中
+   * dataInstanceChanged）。若在模板内联调 foldBySerial(...) → 每次重渲染都产生新数组
+   * → 勾选立刻被清，与 selectedByNote 写入触发的重渲染形成死循环。
    *
    * 按 note_id 缓存 computed：当 draftDetails[noteId] 与 printedLabelStore
    * 均未变时复用同一引用，视图重渲染不再误清勾选；数据真正变化（扫码刷新 /

@@ -1,21 +1,21 @@
 <!--
-  route B 候选批次一键送检确认对话框（2026-08-28 后端路线 B 重构新增）。
+  route B 候选批次一键送检确认对话框。
 
   用途：扫码建单页遇到 CANDIDATES_AVAILABLE / PARTIAL_ADDED outcome 时弹出。
   父组件 DeliveryNoteScan 在 useDeliveryScanSubmission 命中后设置 candidateTargets /
   candidateDialogVisible，本对话框渲染未送检工单列表，让用户选一个共享品检架后
-  一键调用 useBulkScanInspect().run()（POST /parts/batch-to-inspection）。
+  一键调用 useBulkScanInspect().run()（`POST /prod/batches/to-inspection`）。
   全部 / 部分成功 → emit('done') → 父级用 originalScanCode 重扫（B 组升 A 后入单）。
 
   设计要点：
   - 与 BatchSubmitInspectionConfirmDialog 风格一致（el-dialog + #footer slot），但更轻量：
-    route B 不再含 per-row 数量编辑 / 「同时过检」分支（route B inspection 不支持 FAIL）。
-  - 2026-08-28 fix：dev-stage 的 el-input + 数字 regex 替换为 el-select + listShelves
-    拉 INSPECTION zone active 货架列表（与 InspectionPending 同款），避免手敲 ID。
-  - items 字段：仅 batch_id + quantity + label（route B 字段收敛）。
-  - 2026-08-31 扩展：合并 A 组（attachable_batches，「加入」送货单）+ B 组
-    （available_batches，「送检」后入单），onConfirm 分流：ATTACHABLE 走
-    attach-batches，INSPECTABLE 走 batch-to-inspection。默认全勾（用户取消即部分处理）。
+    route B 不含 per-row 数量编辑 / 「同时过检」分支（route B inspection 不支持 FAIL）。
+  - 品检架选择用 el-select + listShelves 拉 INSPECTION zone active 货架列表
+    （与 InspectionPending 同款），不手敲 ID。
+  - items 字段：仅 batch_id + quantity + label。
+  - A 组（attachable_batches，「加入」送货单）与 B 组（available_batches，「送检」后入单）
+    合并渲染，onConfirm 分流：ATTACHABLE 走 attach-batches，INSPECTABLE 走
+    batch-to-inspection。默认全勾（用户取消即部分处理）。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';

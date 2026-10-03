@@ -426,7 +426,7 @@ export function useDeliveryScanSubmission(
   /**
    * 提交失败处理：
    *   - 21403 BIZ_VERSION_CONFLICT → 提示并刷新 detail 让 version 同步（与
-   *     DeliveryNoteDetail.vue:99 路径对齐）。
+   *     useDeliveryNoteActions 的冲突处理同口径）。
    *   - 其他 → toast error。
    */
   function onSubmitDraftError(e: unknown): void {

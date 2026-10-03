@@ -1,15 +1,16 @@
 <!--
-  送货单打印预览对话框（2026-08-02 新增；2026-08-04 装配件合并；2026-08-07 拆双模式）。
+  送货单打印预览对话框。
 
   设计要点：
-  - 列：勾选（仅 label 模式）/ 序号（拖动 handle + 数字）/ 订单号 / 分厂 / 申请人 / 图号 / 名称 / 数量
+  - 列：勾选（仅 label 模式）/ 序号（拖动 handle + 数字）/ 订单号 / 分厂 / 申请人 /
+    图号 / 名称 / 数量
   - 初始顺序 = 详情页当前 ``note.line_items`` 的内存顺序（含用户列头排序的结果）
   - 行可拖动：vue-draggable-plus（包 Sortable.js）绑到 el-table 渲染出的 tbody
   - 用户拖动只影响预览副本；详情页 ``note.line_items`` 不变
-  - 2026-08-04：单上有装配件子件时显示「合并为一套 / 分开打印所有子件」radio；
-    合并模式预览折叠子件为父行；导出时把父行 round-trip 展开为组内 batch id 连续。
-  - 2026-08-07：新增 ``mode`` prop：
-      · 'note'  = 只导送货单（不串联标签下载，旧 PR-C5 行为已剥离）
+  - 单上有装配件子件时显示「合并为一套 / 分开打印所有子件」radio；合并模式预览折叠
+    子件为父行；导出时把父行 round-trip 展开为组内 batch id 连续。
+  - ``mode`` prop 双模式：
+      · 'note'  = 只导送货单
       · 'label' = 只导标签，支持勾选部分行；列首加 el-table 原生 selection 列
   - 取消 → 关闭对话框
 -->
@@ -134,10 +135,9 @@ const previewRows = computed<PreviewRow[]>(() => {
   return result;
 });
 
-// 2026-08-27 fix：tbodyRef 在 setup 时为 null（弹窗未打开），且 <el-dialog destroy-on-close>
-// 关闭时销毁 slot、reopen 时 <tbody> 是新元素。此前用 useDraggable 会在挂载时
-// new Sortable(null) 抛错（旧注释里「useDraggable 自动忽略」的说法是错的）。
-// 改用 useLazyDraggable：refreshTbodyRef() 写 ref 即自动重绑，无需手动 start()。
+// tbodyRef 在 setup 时为 null（弹窗未打开），且 <el-dialog destroy-on-close> 关闭时
+// 销毁 slot、reopen 时 <tbody> 是新元素 ⇒ 必须用 useLazyDraggable：它把首次绑定延后到
+// el ref 解析之后，refreshTbodyRef() 写 ref 即自动重绑，无需手动 start()。
 useLazyDraggable(tbodyRef, rows, {
   handle: '.drag-handle',
   draggable: 'tr',
@@ -352,7 +352,7 @@ async function onConfirm(): Promise<void> {
       });
       triggerBrowserDownload(blob, filename);
     } else {
-      // 2026-08-07：note 模式 → 仅导送货单，不再串联标签下载
+      // note 模式 → 仅导送货单，不串联标签下载
       const { blob, filename } = await printNote(props.note.id, {
         custom_order,
         merge_assemblies: mergeFlag,
