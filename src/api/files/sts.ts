@@ -7,9 +7,9 @@
 // 域 3 处上传入口统一切到这里）。
 //
 // 2026-09-28 修复：python STS 端口裸开鉴权（无 `Depends(auth)`），仅靠部署层
-// nginx + COS CAM policy 纵深防御；前端走 `apiPrint`（baseURL `/api/v1`）会
-// 绕过 backend-rust JWT 鉴权。改为走 `api`（baseURL `/api/v2`），由 rust 端
-// `POST /api/v2/files/sts-tmp-keys` 转发薄壳强制鉴权后再透传到 python：
+// 隔离 + COS CAM policy 纵深防御；浏览器直连会绕过 backend-rust JWT 鉴权。走
+// `api`（baseURL `/api/v2`），由 rust 端 `POST /api/v2/files/sts-tmp-keys` 转发薄壳
+// 强制鉴权后再透传到 python：
 // - rust 端 CurrentUser extractor + require_any_role 兜底（Manager / Clerk /
 //   CncProgrammer / Inspector 四角色白名单）；
 // - python 端继续裸开（by design + 部署层隔离），鉴权点全部下沉到 rust；

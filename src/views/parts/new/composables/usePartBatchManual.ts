@@ -410,7 +410,7 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
   //
   // 2026-09-28 子任务 #5：caller 改造为 grantStsTmpKeyFiles 数组入参。
   // - 入参：files[]（User 选中的图纸文件，按 ElUpload 接受顺序）；
-  // - 调用：POST /api/v1/files/sts-tmp-keys body {scope: 'parts_new', files: [...]}
+  // - 调用：POST /api/v2/files/sts-tmp-keys body {scope: 'parts_new', files: [...]}
   //   单 HTTP + 单签名批；不再有 session / renew / 24h TTL；
   // - 出参：response.items[i].tmp_key 与 files[i] 一一对应（下标对齐），caller 用
   //   _grantMappers.stsToCosUploadGrant 拼成 CosUploadGrant 返回给 CosUploader。

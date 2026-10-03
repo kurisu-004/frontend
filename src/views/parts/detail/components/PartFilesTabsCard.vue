@@ -5,9 +5,10 @@
   - 4 个 tab：DRAWING / 3D_MODEL / CAD_2D / CNC_PAIR
   - 前 3 个走 FileListCard（kind 区分）
   - 第 4 个 CNC_PAIR 走 PartCncCard
-  - 「打印图纸」入口收敛在 FileListCard 自身 header（:show-print="!isInspector"，
-    DRAWING tab 生效）；本卡 footer 不再复制一份入口（2026-09-17 review 第 1 轮
-    修复重复按钮）。
+  - 「打印图纸」可见入口只有一处：本卡 footer 的「打印图纸（含条形码）」按钮（DRAWING
+    tab，v-if=canPrintDrawing），点击后经 ref 调 FileListCard 暴露的 print() 转发，
+    打印逻辑仍只有 FileListCard 一份。内层 FileListCard 传 :bare-mode，header 整块
+    不渲染，所以 :show-print="canPrintDrawing" 不会再渲染出第二个按钮。
   - footer：选中 files 行时显示「删除选中」
   - 文件上传 / 删除 api-upload / api-delete 等签名与 FileListCard 现有契约一致
 
@@ -16,21 +17,18 @@
     不暴露 row-select 事件，本组件通过监听 @uploaded / @deleted 维护瞬态；
     后续如需 click-to-select，由 FileListCard 加 @select 事件或在本卡外层
     套 click 拦截。删除选中按钮仅在该状态下显示。
-  2026-09-17 review 第 1 轮修复：移除 footer 重复的「打印图纸」按钮 + 改
-    onDeleteSelected 用 selectedFile 完整对象的 version 调 deletePartFile
-    （方案 B，FileListCard 暂未接通 @select，先按 id 查 filesForActiveTab）。
+  - onDeleteSelected 按 selectedFile 完整对象的 version 调 deletePartFile
+    （FileListCard 暂未接通 @select，先按 id 查 filesForActiveTab）。
 
-  2026-09-17 UI 调整第 2 轮：按钮迁移到最外层 footer + 内层 card 视觉平。
+  2026-09-17 UI 调整：按钮迁移到最外层 footer + 内层 card 视觉平。
   - 内层 FileListCard / PartCncCard 传 :hide-header-actions="true"，避免与外
     层 footer 重复按钮。
   - FileListCard 暴露 print / triggerUpload；PartCncCard 暴露
     openPairUpload / openRelease —— 通过 ref 调，footer 统一收纳入口。
   - 内层 el-card 用 :deep() 去 border / shadow / background，看起来像普通
     body 区域而非嵌套卡片。
-  2026-09-17 review 第 2 轮：内层 card header 完全去掉（用户原文「body 部分
-  就直接是图纸、3D 模型等文件，不要再套一层 card」），改传 :bare-mode="true"。
-  - FileListCard / PartCncCard 各自加 bareMode prop；bareMode 下整块
-    `<template #header>` v-if 不渲染。
+  2026-09-17 UI 调整：内层 card header 完全去掉，PartCncCard / FileListCard
+  各自加 bareMode prop，bareMode 下整块 `<template #header>` 不渲染。
   - FileListCard bareMode 下独立挂一个 display:none 的 <el-upload>，
     保证 triggerUpload() 仍可调 input[type=file].click()（走 el-upload 内
     部 input 复用 onPick 签名）。
@@ -63,7 +61,7 @@
         kind="DRAWING"
         :show-upload="canManageDrawings"
         :show-delete="canManageDrawings"
-        :show-print="!isInspector"
+        :show-print="canPrintDrawing"
         :hide-header-actions="true"
         :bare-mode="true"
         :api-upload="drawingUpload"
@@ -141,7 +139,7 @@
           <!-- DRAWING tab：打印图纸 + 上传图纸 -->
           <template v-if="activeTab === 'DRAWING'">
             <el-button
-              v-if="!isInspector"
+              v-if="canPrintDrawing"
               type="success"
               plain
               :loading="printing"
@@ -230,6 +228,8 @@ import { FolderOpened, Printer, Upload } from '@element-plus/icons-vue';
 import FileListCard from '@/components/FileListCard.vue';
 import PartCncCard from './PartCncCard.vue';
 import { deletePartFile } from '@/api/parts/file';
+import { usePermissions } from '@/composables/usePermissions';
+import { canPrintPartDrawing } from '@/utils/partsPermissions';
 import type { PartFileItem } from '@/types/part_file';
 import type { CncSetupGroup } from '../composables/usePartCncGroups';
 import type { Process } from '@/types/process';
@@ -252,7 +252,6 @@ const props = defineProps<{
   canManage3DModels: boolean;
   canManageCncFiles: boolean;
   canManageSetupSheet: boolean;
-  isInspector: boolean;
   // 上传函数（来自 shell 的 usePartFileUpload 适配签名）
   drawingUpload: (ownerId: string, file: File) => Promise<PartFileItem>;
   model3dUpload: (ownerId: string, file: File) => Promise<PartFileItem>;
@@ -282,6 +281,21 @@ const emit = defineEmits<{
 }>();
 
 const activeTab = ref<TabKey>('DRAWING');
+
+// 2026-10-03：打印图纸入口的角色闸门与后端 rust v2 转发端点的白名单对齐——放行
+// MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER，排除 SHELF_ACCOUNT（判定纯函数在
+// utils/partsPermissions）。只用 `!isInspector` 判会让 INSPECTOR 看不到按钮、
+// SHELF_ACCOUNT 看得到却吃 403，两头都跟后端对不上。4 条腿的角色统一自取
+// usePermissions，不走 prop 注入，避免同一个 auth store 被两条路径读取后静默失真。
+const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
+const canPrintDrawing = computed<boolean>(() =>
+  canPrintPartDrawing({
+    INSPECTOR: isInspector.value,
+    MANAGER: isManager.value,
+    CLERK: isClerk.value,
+    CNC_PROGRAMMER: isCncProgrammer.value,
+  }),
+);
 
 // 2026-09-17 UI 调整：ref 拿 FileListCard / PartCncCard 实例，footer 按钮
 // 通过 expose 出的方法触发，避免重复渲染按钮 + 重复维护上传/打印签名。
@@ -325,8 +339,8 @@ function onFileDeleted(_kind: TabKey, id: string): void {
 
 async function onDeleteSelected(): Promise<void> {
   if (!selectedFileId.value) return;
-  // 2026-09-17 review 第 1 轮修复：从 filesForActiveTab 回查完整 PartFileItem，
-  // 用 item.version 调 v2 软删（OCC version 必传）；硬传 0 会 409。
+  // 从 filesForActiveTab 回查完整 PartFileItem，用 item.version 调 v2 软删
+  // （OCC version 必传）；硬传 0 会 409。
   const item = filesForActiveTab.value.find((f) => f.id === selectedFileId.value);
   if (!item) {
     // 选中态已与列表不同步（refresh 中间态），安全降级
@@ -410,15 +424,14 @@ const uploading = computed<boolean>(() => fileListCardRef.value?.uploading ?? fa
   :deep(.el-card__body) {
     padding: 16px 20px;
   }
-  // 2026-09-17 review 第 1 轮修复：把 el-tabs header 底边距显式置 0，
-  // 保证 card header 行高（40px）与其它卡片对齐；覆盖 EP 默认
-  // .el-tabs__header { margin-bottom: 16px }。与下方 .inline-tabs 块
-  // 内容重复但写在卡片层做兜底，删 .inline-tabs 也不退化。
+  // 把 el-tabs header 底边距显式置 0，保证 card header 行高（40px）与其它卡片
+  // 对齐；覆盖 EP 默认 .el-tabs__header { margin-bottom: 16px }。与下方
+  // .inline-tabs 块内容重复但写在卡片层做兜底，删 .inline-tabs 也不退化。
   :deep(.el-tabs__header) {
     margin-bottom: 0;
   }
-  // 2026-09-17 UI 调整第 2 轮：内层 FileListCard / PartCncCard 视觉平，
-  // 去 border / shadow / header background，让它们看起来像 body 区域而非嵌套卡片。
+  // 内层 FileListCard / PartCncCard 视觉平，去 border / shadow / header background，
+  // 让它们看起来像 body 区域而非嵌套卡片。
   // 内层卡仍有自己的 padding（fil-grid 需要），保留内层 __body padding 不动。
   :deep(.el-card.files-card),
   :deep(.el-card.cnc-card) {

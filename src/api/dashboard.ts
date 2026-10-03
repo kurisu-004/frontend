@@ -113,7 +113,7 @@ const WS_CLOSE_LAGGED = 4003;
 const wsUrl: ShallowRef<string | undefined> = shallowRef(undefined);
 
 function buildWsUrl(token: string): string {
-  // 2026-09-15 Phase 5：去掉 /api/v1 前缀；ws_hub（rust）走 /ws/dashboard。
+  // ws_hub（rust）走 /ws/dashboard。
   // 同源策略：浏览器只接触 frontend nginx（dev 5173 / prod 8080 / stage 443）。
   // dev 由 vite.config.ts server.proxy 的 '/ws' 反代到 3000；nginx 模板
   // （nginx.conf / nginx.http-only.conf 的 `location ^~ /ws/`）负责 prod/stage。

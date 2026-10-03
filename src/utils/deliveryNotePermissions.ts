@@ -3,7 +3,7 @@
 // 形态对齐 frontend/src/utils/outsourceQuotePermissions.ts。
 // 这里只放「状态/角色矩阵」的纯函数；视图层把 user.roles 传进来即可。
 //
-// 角色矩阵（与 api/v1/delivery_note.py 对齐）：
+// 角色矩阵（与后端 rust 送货单白名单一致）：
 //   - CLERK + MANAGER + INSPECTOR：list / detail / events / add / remove / submit /
 //     recall / soft-delete / print
 //   - 任意已登录（含 SHELF_ACCOUNT）：pickup-pending list / detail / events / scan / pickup

@@ -76,7 +76,6 @@
       :can-manage-3-d-models="canManage3DModels"
       :can-manage-cnc-files="canManageCncFiles"
       :can-manage-setup-sheet="canManageSetupSheet"
-      :is-inspector="isInspectorRaw"
       :drawing-upload="drawingUpload"
       :model3d-upload="model3dUpload"
       :cad-upload="cadUpload"
@@ -407,7 +406,6 @@ import type { Process } from '@/types/process';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import { useConfirm } from '@/composables/useConfirm';
-import { usePermissions } from '@/composables/usePermissions';
 import { usePartFileUpload } from '@/composables/usePartFileUpload';
 // 2026-09-29 迁移：usePartFiles 三并发已迁到 usePartFilesListQuery 单调用，
 // usePartFiles.ts 同步删除。这里用 reactive params 自动驱动 useQuery，
@@ -869,10 +867,6 @@ async function onFileTabRefresh(_kind: 'DRAWING' | '3D_MODEL' | 'CAD_2D'): Promi
 }
 
 // ============ 切换 partId 时重置 ============
-const { isInspector } = usePermissions();
-// PartFilesTabsCard 需要 !isInspector 决定 DRAWING tab 的「打印图纸」按钮可见性。
-const isInspectorRaw = computed(() => isInspector.value);
-
 watch(
   () => route.params.id,
   async (id) => {

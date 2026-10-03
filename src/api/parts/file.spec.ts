@@ -7,9 +7,9 @@
 // - deletePartFile POST /api/v2/part-files/{id}/delete，body 强制 { version }（OCC）；
 // - getPartFileContentUrl 返回相对 URL `/part-files/{id}/content`（不含鉴权头，让
 //   调用方 axios 走拦截器注入 Bearer token）；
-// - printPartDrawing / printPartDrawingBatch 走 v1（baseURL /api/v1）保持不变。
+// - printPartDrawing / printPartDrawingBatch 也走 api（路径与 rust v2 转发端点同名）。
 //
-// 用 vi.mock 拦截 @/api/http 的 api / apiPrint，断言 method / url / body 形态，
+// 用 vi.mock 拦截 @/api/http 的 api，断言 method / url / body 形态，
 // 不发起真实 HTTP。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,10 +19,6 @@ const getCalls = vi.fn();
 
 vi.mock('@/api/http', () => ({
   api: {
-    post: (...args: unknown[]) => postCalls(...args),
-    get: (...args: unknown[]) => getCalls(...args),
-  },
-  apiPrint: {
     post: (...args: unknown[]) => postCalls(...args),
     get: (...args: unknown[]) => getCalls(...args),
   },
@@ -93,9 +89,8 @@ describe('confirmPartFile', () => {
   });
 });
 
-describe('printPartDrawing (v1 legacy)', () => {
-  // 2026-09-15 Phase 5：保留 v1 走 apiPrint；M3 范围不动。
-  it('GET /api/v1/parts/{id}/print-drawing，responseType: blob', async () => {
+describe('printPartDrawing', () => {
+  it('GET /api/v2/parts/{id}/print-drawing（rust 转发 python），responseType: blob', async () => {
     const fakeBlob = new Blob(['pdf-bytes'], { type: 'application/pdf' });
     getCalls.mockResolvedValueOnce({ data: fakeBlob });
 
@@ -109,8 +104,8 @@ describe('printPartDrawing (v1 legacy)', () => {
   });
 });
 
-describe('printPartDrawingBatch (v1 legacy)', () => {
-  it('POST /api/v1/parts/print-drawing-batch，timeout 10min', async () => {
+describe('printPartDrawingBatch', () => {
+  it('POST /api/v2/parts/print-drawing-batch（rust 转发 python），timeout 12min（须大于 rust 660s）', async () => {
     const fakeBlob = new Blob(['merged'], { type: 'application/pdf' });
     postCalls.mockResolvedValueOnce({ data: fakeBlob });
 
@@ -124,7 +119,10 @@ describe('printPartDrawingBatch (v1 legacy)', () => {
       assembly_ids: ['190000000000002'],
     });
     expect((config as Record<string, unknown>).responseType).toBe('blob');
-    expect((config as Record<string, unknown>).timeout).toBe(10 * 60 * 1000);
+    // 2026-10-03：提到 12min —— 必须大于 rust 打印档的 660s，否则浏览器先超时会吃掉
+    // 服务端的真实原因（python 502 / rust 自己的 408）。
+    expect((config as Record<string, unknown>).timeout).toBe(12 * 60 * 1000);
+    expect((config as Record<string, unknown>).timeout as number).toBeGreaterThan(660 * 1000);
     expect(blob).toBe(fakeBlob);
   });
 });

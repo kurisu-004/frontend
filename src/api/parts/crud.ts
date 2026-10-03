@@ -1,7 +1,6 @@
 // 后端零件 API 封装 —— 单件 CRUD + 生命周期（生产/扫码/品检/外协/返修/打印等）。
-// 2026-09-15 Phase 5：业务全切 v2，`api`（baseURL `/api/v2`）默认客户端。
-// 打印 2 端点（print-drawing / print-drawing-batch）保留 v1，走 `apiPrint`，
-// 在 ./file.ts 单独声明，本文件不重复 export。
+// 全部走 `api`（baseURL `/api/v2`）。打印 2 端点（print-drawing / print-drawing-batch）
+// 在 ./file.ts 单独声明，同走 `api`（由 rust 鉴权后转发 python），本文件不重复 export。
 // 所有 ID 在前端是字符串（雪花 ID 经后端 IdStr 序列化）。
 // 2026-08-25：从原 1165 行 api/parts.ts 拆分到 ./ 子文件；本文件是 ./crud 子域。
 //
