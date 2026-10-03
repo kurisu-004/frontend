@@ -15,7 +15,7 @@
   - 取消 / 删除共用确认对话框（留在 shell；逻辑简短）
   - 调 composable 的业务函数；按返回值决定是否关 dialog
 
-  数据来源：GET /api/v1/assemblies/:id
+  数据来源：GET /api/v2/assemblies/:id
 -->
 <template>
   <div v-loading="loading" class="assembly-detail">

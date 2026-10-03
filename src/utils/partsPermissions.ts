@@ -17,12 +17,13 @@ export interface PartRoleMapLike {
   CLERK?: boolean;
   INSPECTOR?: boolean;
   CNC_PROGRAMMER?: boolean;
-  /** 不在放行集合内；显式列出来是为了让调用方能直接把整份角色 map 传进来，
-   *  而不必为了「多一个键」去断言类型。 */
-  SHELF_ACCOUNT?: boolean;
 }
 
-/** 单件图纸打印入口是否可见（后端放行 4 角色，排除 SHELF_ACCOUNT）。 */
+/** 单件图纸打印入口是否可见（后端放行 4 角色）。
+ *
+ *  SHELF_ACCOUNT 不在放行集合内——这个接口只认上面 4 个键，所以「排除 SHELF_ACCOUNT」
+ *  的负向保障就是它压根不是一个键：纯货架账号传进来只会得到全 undefined / 全 false，
+ *  自然落到 false 分支。 */
 export function canPrintPartDrawing(role: PartRoleMapLike): boolean {
   return Boolean(role.MANAGER || role.CLERK || role.INSPECTOR || role.CNC_PROGRAMMER);
 }

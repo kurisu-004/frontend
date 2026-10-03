@@ -23,7 +23,8 @@ import type { ConfirmFileIn, PartFileItem, PartFileUrlResult } from '@/types/par
  * 注：返回的是文件 blob，调用方需自行用 iframe / window 触发打印。
  *
  * 2026-10-03：端点由 rust 鉴权后转发 python（`GET /api/v2/parts/{id}/print-drawing`），
- * 前端走 `api`，文件名仍靠 `Content-Disposition`。
+ * 前端走 `api`。响应是 PDF blob，**文件名不消费**——单件打印由调用方把 blob 塞进隐藏
+ * iframe 内联渲染，不落盘，因此用不到 `Content-Disposition`。
  */
 export async function printPartDrawing(partId: string): Promise<Blob> {
   const resp = await api.get<Blob>(`/parts/${encodeURIComponent(partId)}/print-drawing`, {
@@ -38,7 +39,10 @@ export async function printPartDrawing(partId: string): Promise<Blob> {
  * 前端拿到 Blob 后用单 iframe 一次 print()，避免 N 次打印弹窗。
  *
  * 2026-10-03：端点由 rust 鉴权后转发 python（`POST /api/v2/parts/print-drawing-batch`）。
- * timeout 10 分钟：N 个 part 拼 PDF 耗时可达分钟级，与 rust 侧该路径的 660s 读超时对齐。
+ * timeout 12 分钟：N 个 part 拼 PDF 耗时可达分钟级，**必须严格大于 rust 打印档的 660s**
+ * 并留余量。两级超时串联时若浏览器先到点，只会抛一个无信息量的 ECONNABORTED，把 rust
+ * 侧的真实诊断（python 的 502，或 rust 自己超时回的 408）整个吃掉，排查时看不到任何
+ * 服务端信号。
  */
 export async function printPartDrawingBatch(
   partIds: string[],
@@ -47,7 +51,7 @@ export async function printPartDrawingBatch(
   const resp = await api.post<Blob>(
     '/parts/print-drawing-batch',
     { part_ids: partIds, assembly_ids: assemblyIds },
-    { responseType: 'blob', timeout: 10 * 60 * 1000 },
+    { responseType: 'blob', timeout: 12 * 60 * 1000 },
   );
   return resp.data;
 }

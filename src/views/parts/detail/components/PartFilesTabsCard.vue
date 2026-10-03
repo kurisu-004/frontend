@@ -6,8 +6,7 @@
   - 前 3 个走 FileListCard（kind 区分）
   - 第 4 个 CNC_PAIR 走 PartCncCard
   - 「打印图纸」入口收敛在 FileListCard 自身 header（:show-print="canPrintDrawing"，
-    DRAWING tab 生效）；本卡 footer 不再复制一份入口（2026-09-17 review 第 1 轮
-    修复重复按钮）。
+    DRAWING tab 生效）；本卡 footer 不再复制一份入口。
   - footer：选中 files 行时显示「删除选中」
   - 文件上传 / 删除 api-upload / api-delete 等签名与 FileListCard 现有契约一致
 
@@ -16,9 +15,8 @@
     不暴露 row-select 事件，本组件通过监听 @uploaded / @deleted 维护瞬态；
     后续如需 click-to-select，由 FileListCard 加 @select 事件或在本卡外层
     套 click 拦截。删除选中按钮仅在该状态下显示。
-  2026-09-17 review 第 1 轮修复：移除 footer 重复的「打印图纸」按钮 + 改
-    onDeleteSelected 用 selectedFile 完整对象的 version 调 deletePartFile
-    （方案 B，FileListCard 暂未接通 @select，先按 id 查 filesForActiveTab）。
+  - onDeleteSelected 按 selectedFile 完整对象的 version 调 deletePartFile
+    （FileListCard 暂未接通 @select，先按 id 查 filesForActiveTab）。
 
   2026-09-17 UI 调整第 2 轮：按钮迁移到最外层 footer + 内层 card 视觉平。
   - 内层 FileListCard / PartCncCard 传 :hide-header-actions="true"，避免与外
@@ -27,10 +25,8 @@
     openPairUpload / openRelease —— 通过 ref 调，footer 统一收纳入口。
   - 内层 el-card 用 :deep() 去 border / shadow / background，看起来像普通
     body 区域而非嵌套卡片。
-  2026-09-17 review 第 2 轮：内层 card header 完全去掉（用户原文「body 部分
-  就直接是图纸、3D 模型等文件，不要再套一层 card」），改传 :bare-mode="true"。
-  - FileListCard / PartCncCard 各自加 bareMode prop；bareMode 下整块
-    `<template #header>` v-if 不渲染。
+  2026-09-17 UI 调整：内层 card header 完全去掉，PartCncCard / FileListCard
+  各自加 bareMode prop，bareMode 下整块 `<template #header>` 不渲染。
   - FileListCard bareMode 下独立挂一个 display:none 的 <el-upload>，
     保证 triggerUpload() 仍可调 input[type=file].click()（走 el-upload 内
     部 input 复用 onPick 签名）。
@@ -254,8 +250,6 @@ const props = defineProps<{
   canManage3DModels: boolean;
   canManageCncFiles: boolean;
   canManageSetupSheet: boolean;
-  /** 2026-10-03：只作为 canPrintDrawing 的 INSPECTOR 一腿输入（角色源同 auth store）。 */
-  isInspector: boolean;
   // 上传函数（来自 shell 的 usePartFileUpload 适配签名）
   drawingUpload: (ownerId: string, file: File) => Promise<PartFileItem>;
   model3dUpload: (ownerId: string, file: File) => Promise<PartFileItem>;
@@ -288,13 +282,13 @@ const activeTab = ref<TabKey>('DRAWING');
 
 // 2026-10-03：打印图纸入口的角色闸门与后端 rust v2 转发端点的白名单对齐——放行
 // MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER，排除 SHELF_ACCOUNT（判定纯函数在
-// utils/partsPermissions，角色统一取自 usePermissions）。只用 `!isInspector` 判会让
-// INSPECTOR 看不到按钮、SHELF_ACCOUNT 看得到却吃 403，两头都跟后端对不上。
-// INSPECTOR 一腿沿用 PartDetail 注入的 isInspector prop（同一 auth 角色源），其余三腿本卡自取。
-const { isManager, isClerk, isCncProgrammer } = usePermissions();
+// utils/partsPermissions）。只用 `!isInspector` 判会让 INSPECTOR 看不到按钮、
+// SHELF_ACCOUNT 看得到却吃 403，两头都跟后端对不上。4 条腿的角色统一自取
+// usePermissions，不走 prop 注入，避免同一个 auth store 被两条路径读取后静默失真。
+const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
 const canPrintDrawing = computed<boolean>(() =>
   canPrintPartDrawing({
-    INSPECTOR: props.isInspector,
+    INSPECTOR: isInspector.value,
     MANAGER: isManager.value,
     CLERK: isClerk.value,
     CNC_PROGRAMMER: isCncProgrammer.value,

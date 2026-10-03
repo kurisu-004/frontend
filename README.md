@@ -68,7 +68,7 @@ src/
 
 ## 后端联调
 
-后端是单进程 **Rust（axum，:3000）**，`/api/v2/*` 与 `/ws/*` 全部由它提供：
+后端对外是**单入口 Rust（axum，:3000）**，`/api/v2/*` 与 `/ws/*` 全部由它提供：
 
 - `/api/v2/*` —— `api` 与 `refreshClient` 两个 axios 实例消费（`refreshClient` 是 refresh
   端点用的裸实例，不带业务拦截器），dev 由 `vite.config.ts` 代理到 `http://127.0.0.1:3000`。
@@ -77,7 +77,10 @@ src/
   但控制台一直刷 WS 报错」。
 - Python 后端只在 compose 内网经 rust 转发触达，浏览器不直连：4 个打印端点（零件图纸
   PDF 单件 / 批量、送货单 PDF、标签 Excel）与 COS STS 临时凭证签发都由 rust 鉴权后转发。
-  dev 与生产同构——两端都只暴露 `/api/v2`，nginx 也不再有指向 Python 的 `/api/` 反代。
+  前端只用 `/api/v2`——dev 的 proxy context 是 `/api`、生产走 nginx，两边都落到 rust，
+  nginx 不再有指向 Python 的 `/api/` 反代。
+  例外是本地联调：`docker-compose-local.yml` 仍把 Python 的 8000 直连映射到宿主机
+  （`${BACKEND_HOST_PORT:-8000}:8000`）方便直调；生产 / staging 不经 nginx 暴露该端口。
 
 生产 / staging 通过 nginx 反代，前端不直接接触后端端口。启动本地全栈见仓库根
 `docker-compose-local.yml`（`docker compose -f docker-compose-local.yml up -d --build`）。

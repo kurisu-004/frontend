@@ -105,7 +105,7 @@ describe('printPartDrawing', () => {
 });
 
 describe('printPartDrawingBatch', () => {
-  it('POST /api/v2/parts/print-drawing-batch（rust 转发 python），timeout 10min', async () => {
+  it('POST /api/v2/parts/print-drawing-batch（rust 转发 python），timeout 12min（须大于 rust 660s）', async () => {
     const fakeBlob = new Blob(['merged'], { type: 'application/pdf' });
     postCalls.mockResolvedValueOnce({ data: fakeBlob });
 
@@ -119,7 +119,10 @@ describe('printPartDrawingBatch', () => {
       assembly_ids: ['190000000000002'],
     });
     expect((config as Record<string, unknown>).responseType).toBe('blob');
-    expect((config as Record<string, unknown>).timeout).toBe(10 * 60 * 1000);
+    // 2026-10-03：提到 12min —— 必须大于 rust 打印档的 660s，否则浏览器先超时会吃掉
+    // 服务端的真实原因（python 502 / rust 自己的 408）。
+    expect((config as Record<string, unknown>).timeout).toBe(12 * 60 * 1000);
+    expect((config as Record<string, unknown>).timeout as number).toBeGreaterThan(660 * 1000);
     expect(blob).toBe(fakeBlob);
   });
 });

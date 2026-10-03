@@ -13,7 +13,7 @@
 
   流程（两个 Tab 各自独立）：
     - Tab 1「录入」：点空白区 / 「+ 添加零件」 → 弹 Dialog 填一条零件 → 入队
-      → 点行查看 / 提交 N 条 → POST /api/v1/parts/batch
+      → 点行查看 / 提交 N 条 → POST /api/v2/parts/batch
     - Tab 2「PDF 批量上传」：拖 PDF + 可选 Excel + 可选 3D 模型 → 按文件名解析图号 →
       单页直接进独立零件 / 多页走源文件区选页合并 → 提交
 

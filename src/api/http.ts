@@ -28,9 +28,11 @@
 //    - POST /delivery-notes/{id}/print-labels    ← printNoteLabels
 //    - GET  /parts/{id}/print-drawing            ← printPartDrawing
 //    - POST /parts/print-drawing-batch           ← printPartDrawingBatch
-//    响应是文件 blob（不是信封），文件名靠 `Content-Disposition`；这些路径在 rust 侧
-//    放宽了读超时（批量拼接 PDF 耗时可达分钟级），前端批量端点单独把 axios timeout
-//    提到 10 分钟与之对齐。
+//    响应都是文件 blob（不是信封）。送货单那 2 个额外从 `Content-Disposition` 取下载
+//    文件名（api/deliveryNote.ts 的 parseFilename）；零件图纸那 2 个不读文件名——单件
+//    走 iframe 内联渲染、批量直接进打印对话框，都不落盘。
+//    这 4 条路径在 rust 侧放宽了读超时（打印档 660s，批量拼接 PDF 耗时可达分钟级），
+//    前端批量端点的 axios timeout 必须严格大于它，理由见 api/parts/file.ts。
 
 import type { AxiosError } from 'axios';
 import axios, {
