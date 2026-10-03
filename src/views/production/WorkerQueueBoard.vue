@@ -2,10 +2,16 @@
      自 2026-09-30 起的结构：
        - 顶部 el-tabs（行上移，底边线视觉承接）
        - 首个固定 tab「待下发」(name = __pending__)：el-splitter 40/60 分栏
-         （左 PendingBatchesPanel 待下发批次列表 / 右 PendingPoolsPanel 自产工序卡）
+          （左 PendingBatchesPanel 待下发批次列表 / 右 PendingPoolsPanel 工序卡）
        - 后续每张 INHOUSE 工序一个 tab，body = <WorkerPoolTab :process-id="p.id" />，
          全部带 :lazy="true" ⇒ 切到该 tab 才 mount 才发 `GET /prod/pool/{pid}`
      tab 标题 `(N)` 徽标数据源 = useWorkerPoolCountsQuery（单请求跨货架聚合）。
+
+     2026-10-04 「待下发」右栏纳入外协工序（详见文末变更记录）：
+       - 右栏工序卡数据源由「只含 INHOUSE」放宽到「全部工序」，并在 props 上透传
+         category，由 PendingPoolsPanel 客户端分两组渲染、中间一条分割线；
+       - 顶部工序 tab 与深链校正 watch 仍只认自产工序，本次不动；
+       - procsQuery 显式 limit=200，避免工序总数超默认 limit 时外协工序被截断。
 
      2026-10-02 卡片统一（详见文末变更记录）：
        - 原先待下发池与工序池 / 工人列分用的两张旧卡片合并为全看板唯一的 BatchCard，
@@ -59,8 +65,9 @@
               <span class="tab-label__count">({{ pendingDispatch.batches.value.length }})</span>
             </span>
           </template>
-          <!-- 待下发 Tab：左栏 el-table 多选 + 右栏自产工序卡（PendingPoolCard
-               零请求，徽标由 counts 透传）。 -->
+          <!-- 待下发 Tab：左栏 el-table 多选 + 右栏工序卡（PendingPoolCard
+               零请求，徽标由 counts 透传；2026-10-04 起右栏含外协工序，
+               自产在上、外协在下，中间一条分割线）。 -->
           <el-splitter class="board-splitter">
             <el-splitter-panel size="40%" :min="320">
               <PendingBatchesPanel
@@ -75,7 +82,7 @@
             </el-splitter-panel>
             <el-splitter-panel size="60%" :min="320">
               <PendingPoolsPanel
-                :processes="inhouseProcessesForPanel"
+                :processes="panelProcesses"
                 :selected-ids="pendingDispatch.selectedIds"
                 :dispatch-mutation="pendingDispatch.dispatchMutation"
                 :hovered-process-id="hoveredProcessId"
@@ -144,7 +151,10 @@ const qc = useQueryClient();
 
 // 2026-09-30：processes 走共享 useProcessesQuery（30s staleTime 去重缓存，与仓内
 // 多处 caller 共享缓存身份），不再调 listProcesses + module-level ref。
-const procsQuery = useProcessesQuery();
+// 2026-10-04 显式 limit=200：右栏「待下发」工序卡要含外协工序，而工序总数超 200
+// 时仍会被静默截断（后端 clamp 上限 500，取 200 是在「全量够用」与响应体积之间
+// 的折中）。仍是**一个**请求，「进页面请求数恒为 3」的不变式不变。
+const procsQuery = useProcessesQuery({ limit: 200 });
 const inhouseProcs = computed(
   () => procsQuery.data.value?.items.filter((p) => p.category === 'INHOUSE') ?? [],
 );
@@ -163,14 +173,18 @@ function poolCount(pid: string): number | string {
  *  即打 N 个 `GET /prod/pool/{pid}`（N = INHOUSE 工序数），与「切 tab 懒加载」
  *  的设计意图相反。现徽标直接复用上面已 eager 拉取的 counts。
  *  2026-10-02：补 `color`（工序色，PendingPoolCard 用作左边框）。Process.color
- *  已在 useProcessesQuery 的返回里，零新增请求。 */
-const inhouseProcessesForPanel = computed(() =>
-  inhouseProcs.value.map((p) => ({
+ *  已在 useProcessesQuery 的返回里，零新增请求。
+ *  2026-10-04：改遍历**全部**工序（不再只取 INHOUSE），并透传 `category`
+ *  交给 PendingPoolsPanel 分组 —— 外协工序同样作为下发目标参与点击/拖入。
+ *  顶部工序 tab 仍只含自产工序（`inhouseProcs`），本次只扩右栏这一片。 */
+const panelProcesses = computed(() =>
+  (procsQuery.data.value?.items ?? []).map((p) => ({
     id: p.id,
     code: p.code,
     name: p.name,
     color: p.color ?? null,
     count: poolCount(p.id),
+    category: p.category,
   })),
 );
 
