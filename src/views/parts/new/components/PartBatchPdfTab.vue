@@ -603,6 +603,7 @@
        openPdfPreview / closePdfPreview。 -->
   <el-dialog
     :model-value="pdfPreviewVisible"
+    class="pdf-preview-dialog"
     :title="pdfPreviewing?.title ?? 'PDF 预览'"
     fullscreen
     destroy-on-close

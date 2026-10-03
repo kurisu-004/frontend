@@ -211,6 +211,7 @@
     <!-- 图纸 / 图片 全屏预览 -->
     <el-dialog
       v-model="showPreview"
+      class="pdf-preview-dialog"
       :title="previewTitle"
       fullscreen
       :close-on-click-modal="false"

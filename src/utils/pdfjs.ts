@@ -11,12 +11,24 @@
 // pdfjs 退化到主线程 fake worker）。在 workerSrc 后追加版本查询参数改变缓存键，
 // 强制浏览器重新请求拿到修正后的响应。今后若再遇类似缓存中毒，递增下面的版本串即可。
 //
-// cMap（2026-07-22）：中文 / 日文 PDF 渲染时，pdfjs 找不到字体 CMap 会打印
+// cMap（2026-10-03 修缺陷重写）：中文 / 日文 PDF 渲染时，pdfjs 找不到字体 CMap 会打印
 // "UnknownErrorException: Ensure that the `cMapUrl` API parameter is provided."
-// 并把字符画成方块。打包时把 pdfjs-dist/cmaps/*.bcmap 全部 `?url` 拷进 assets，
-// 取第一个的目录前缀作为 cMapUrl，PdfViewer.vue 在
-// getDocument({ cMapUrl, cMapPacked: true }) 时引用。
-// （直接 `import ... from 'pdfjs-dist/cmaps/?url'` 对目录无效，Rolldown 不解析。）
+// 并把字符画成方块。此前打包靠 `import.meta.glob('/node_modules/pdfjs-dist/cmaps/*.bcmap',
+// { query: '?url' })` 收集 URL 再取首项的目录前缀，有两个只在 build 后才爆发的失效点：
+//   ① `?url` 导入同样过 Vite 的 shouldInline()，即受 build.assetsInlineLimit
+//      （默认 4096 字节）约束 —— 低于阈值的资源被内联成 base64 data URI 而非落文件。
+//      cmaps/ 下 168 个 .bcmap 有 134 个 < 4096；而字典序第一个 `78-EUC-H.bcmap`
+//      只有 2404 字节，恰好属于被内联的那批 ⇒ 取到的「首项」本身就是一整条 base64
+//      data URI，再按 `/[^/]+$/` 截前缀得到的仍是垃圾。
+//   ② 侥幸落成文件的那批，Vite 会按内容加 hash（Adobe-GB1-UCS2-<hash>.bcmap），而 pdfjs
+//      不查 manifest：worker 的 fetchBuiltInCMap 把 `<name>.bcmap` 发回主线程，
+//      BaseBinaryDataFactory 按 `cMapUrl + filename` 直接 fetch，按原名请求必然 404。
+// 两者叠加的后果是「矢量线条照常画、整份 PDF 的文字（尺寸标注 / 标题栏 / 中文标签）
+// 整体消失且界面不报错」—— pdfjs 的 loadFont 对 translateFont 的 rejection 只 warn
+// 后塞一个 ErrorFont 兜底。
+// 现改为显式路径常量：dev 由 Vite dev server 直接服务 node_modules 下的原名文件，
+// build 由 scripts/pdfjsCmapsPlugin.ts 的 emitFile 产出 dist/cmaps/<原名>.bcmap（无 hash）。
+// 三处（此常量 / 该插件 / nginx 的 `location ^~ /cmaps/`）必须同步改。
 
 import * as pdfjsLib from 'pdfjs-dist';
 import PdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -25,18 +37,17 @@ const PDF_WORKER_CACHE_BUST = 'v=20260719';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `${PdfWorkerUrl}?${PDF_WORKER_CACHE_BUST}`;
 
-// `import.meta.glob` 把 pdfjs-dist 内置的 cMap 二进制全部以 ?url 拷进 Vite assets。
-// 返回 map<相对路径, url>；取任一项 URL，按目录前缀截出 cMapUrl（pdfjs 自行拼文件名）。
-// 注：glob 路径必须以 `/` 或 `./` 开头，否则 Vite dev server 报
-// "Invalid glob ... It must start with '/' or './'"。用 resolve.sync 算出绝对路径。
-const cMapUrls = import.meta.glob('/node_modules/pdfjs-dist/cmaps/*.bcmap', {
-  eager: true,
-  query: '?url',
-  import: 'default',
-}) as Record<string, string>;
-const firstCMapUrl = Object.values(cMapUrls)[0];
-/** 形如 `/assets/cmaps-xxxx/`，pdfjs 后续会拼具体文件名。 */
-export const PDF_CMAP_URL = firstCMapUrl ? firstCMapUrl.replace(/[^/]+$/, '') : '';
+/**
+ * 选 cMap 的 base 路径（2026-10-03）。抽成纯函数只为让 dev / build 两条分支都能被
+ * 单测直接覆盖：import.meta.env.DEV 在 vitest 里恒为 true，只断言导出常量的
+ * PDF_CMAP_URL 只能验到 dev 那一条，build 分支回归时不会有任何测试失败。
+ */
+export function cMapBaseUrl(isDev: boolean, baseUrl: string): string {
+  return `${baseUrl}${isDev ? 'node_modules/pdfjs-dist/cmaps/' : 'cmaps/'}`;
+}
+
+/** 形如 `/cmaps/`（build）/ `/node_modules/pdfjs-dist/cmaps/`（dev），pdfjs 后续自己拼 `<name>.bcmap`。 */
+export const PDF_CMAP_URL = cMapBaseUrl(import.meta.env.DEV, import.meta.env.BASE_URL);
 
 /** 在 getDocument 时传入，启用 cMap 渲染。 */
 export const PDF_CMAP_OPTIONS = {

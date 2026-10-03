@@ -4,6 +4,12 @@ import AutoImport from 'unplugin-auto-import/vite';
 import Components from 'unplugin-vue-components/vite';
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers';
 import { fileURLToPath, URL } from 'node:url';
+// 2026-10-03 修缺陷新增：把 pdfjs-dist/cmaps/*.bcmap 以原名（无内容 hash）产出到
+// dist/cmaps/。pdfjs 自行按 `cMapUrl + <name>.bcmap` 拼 URL、不查 manifest，而走资源图
+// 的 `?url` 导入既会被 assetsInlineLimit 内联成 data URI、落文件时又会被加 hash，
+// 两条路都拿不到原名文件（详见该模块内注释）。dev 不受影响，由 dev server 直接服务
+// node_modules 下的原名文件。
+import { pdfjsCmapsPlugin } from './scripts/pdfjsCmapsPlugin.ts';
 
 // 2026-09-20 新增：COOP/COEP dev middleware。
 //
@@ -76,6 +82,7 @@ function config({ command, mode }: { command: 'build' | 'serve'; mode: string })
         excludeNames: ['FileList', 'UploadArea'],
       }),
       crossOriginIsolation(),
+      pdfjsCmapsPlugin(),
     ],
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },

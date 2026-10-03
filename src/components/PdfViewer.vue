@@ -17,11 +17,18 @@
     - +/- 按钮（zoomIn / zoomOut）仍触发 render() 重渲染（用户主动意图，不算抖动）。
   2026-09-12 第四轮改造（T3）：高度链修复。
     - .pdf-viewer 加 height: 100% + flex: 1 / 去掉 min-height: 400px
-      （同时声明 height/flex：flex 父容器用 flex:1，block 父容器用 height:100%）
     - .canvas-wrap 加 flex: 1 / min-height: 0（已在第三轮加过 flex: 1）
     - .pdf-toolbar 加 flex-shrink: 0
     - DrawingPreviewPane.vue 的 .file-preview 改为 display:flex/flex-direction:column（让 PdfViewer 在此成为 flex item）
     - 完整高度链：preview-card (flex:1) → preview-tabs (flex:1) → file-preview (flex:1, flex col) → pdf-viewer (flex:1) → canvas-wrap (flex:1) → viewport (flex:1) 撑满父容器
+  2026-10-03 修缺陷：这条高度链要求宿主容器有确定高度，而 el-dialog 不是这样的宿主。
+    EP 的 .el-dialog__body 只有 color / font-size / text-align，display:block + height:auto，
+    直接子元素的 height:100% 会退化成 auto → 整条链塌成 0 → position:absolute 的 canvas
+    被 .pdf-viewport 的 overflow:hidden 裁掉，表现为「工具栏在、下面纯白」。
+    承载契约：fullscreen 的 el-dialog 必须挂 .pdf-preview-dialog（全局规则见
+    src/styles/index.scss，把 dialog 变成 column flex 并给 body flex:1 + min-height:0）；
+    el-drawer 无需（.el-drawer__body 自带 flex:1）；自带确定高度的宿主（如
+    DrawingPreviewPane 的 .file-preview flex 链）天然满足契约。
   CLAUDE.md #6：仍走 @/utils/pdfjs，不直接 import pdfjs-dist。
 -->
 <template>
@@ -320,16 +327,17 @@ onBeforeUnmount(() => {
 
 <style lang="scss" scoped>
 // 2026-09-12 第四轮（T3）：完整高度链让 viewport 撑满父容器
-//   preview-card (flex:1) → .pdf-viewer (height:100%) → .canvas-wrap (flex:1) → .pdf-viewport (flex:1)
-// 关键：.pdf-viewer 必须声明 height: 100% 才能继承自上而下的高度链；
+//   宿主（确定高度）→ .pdf-viewer (height:100%) → .canvas-wrap (flex:1) → .pdf-viewport (flex:1)
+// 关键：.pdf-viewer 必须声明 height: 100%，且宿主必须给确定高度（见文件头「承载契约」）。
 //       min-height: 0 允许 flex 子项收缩到 0（避免内容撑爆）。
 .pdf-viewer {
   display: flex;
   flex-direction: column;
   gap: 8px;
   // 2026-09-12 第四轮：同时声明 height:100% 和 flex:1
-  //   - flex 父容器（如 DrawingPreviewPane 的 .file-preview 现在是 flex column）→ flex:1 生效
-  //   - block 父容器 + definite height（如 FileListCard 的 el-dialog body）→ height:100% 生效
+  //   - flex 宿主（如 DrawingPreviewPane 的 .file-preview、.pdf-preview-dialog 下的 body）
+  //     → flex:1 生效
+  //   - block 宿主：height:100% 仅在宿主有确定高度时生效
   height: 100%;
   flex: 1 1 auto;
   min-height: 0; /* ← 去掉 400px 下限 */
