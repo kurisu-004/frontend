@@ -266,7 +266,8 @@ import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useActiveShelfSelection } from '@/views/scan/composables/useActiveShelfSelection';
+import { useScanShelfStore } from '@/stores/scanShelf';
+import { resolveWorkingShelfId } from '@/views/scan/composables/resolveWorkingShelf';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
 import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
@@ -284,11 +285,10 @@ const { worker, requireWorker, reset: resetScanSession } = useScanSession();
 const { onScan } = useBarcodeScanner();
 const { emitHeldChanged } = useScanBus();
 // 2026-07-13：跨架列表展示用 listPartsByWorkTypeAllShelves（后端按 user.shelf_ids 收口）；
-// shelfId 提交兜底用 useActiveShelfSelection.selectedShelfId（多架场景工人已在 action picker
-// 顶部选好当前作业架；单架时直接 = 唯一架 id；wildcard 时为 null）。
-const shelfSel = useActiveShelfSelection();
+// shelf_id 提交取「当前作业架」，来自 useScanShelfStore（单架 = 唯一架 id；
+// 多架 = 工人此前选定的架；wildcard / 多架未选 → 无作业架，见 resolveWorkingShelfId）。
+const scanShelf = useScanShelfStore();
 
-const shelfId = ref<string>('');
 const parts = ref<ScanPartRowSchema[]>([]);
 // 后端信封里的总条数（可能大于已加载的 parts.length —— 见 refresh 里的 limit 说明）
 const total = ref(0);
@@ -333,11 +333,13 @@ function isHeic(t: string): boolean {
 
 onBeforeMount(async () => {
   if (!requireWorker(router)) return;
-  // 多架 SHELF_ACCOUNT：worker 已在 ScanActionPicker 顶部选好当前作业架；
-  // 单架时直接 = shelfSel.selectedShelfId（唯一架）；
-  // wildcard 时为 null —— 2026-09-16 PR-2 起 part 级 current_holder_id 随
-  // t_part 瘦身下线，wildcard 无选中架时由下方守卫报错提示。
-  shelfId.value = shelfSel.selectedShelfId.value ?? '';
+  // 2026-10-04：先确保候选架已加载，再在提交时读作业架。
+  // 本页与 /scan/action 是兄弟路由，候选集由 useScanShelfStore（Pinia 单例）跨路由
+  // 存活；store 内部按账号幂等，直接进本页（深链 / 刷新）时这一句才真的去拉货架。
+  // ⚠️ 读 `selectedShelfId` 必须在这句 await **之后** —— 未加载时它恒为 null，正是
+  // 2026-09-16 以来「未找到零件所在货架信息」100% 触发的形态（旧代码读的是一个每次
+  // 调用都新建的 composable 实例，跨路由必丢状态）。
+  await scanShelf.initShelves();
   await refresh();
 });
 
@@ -469,13 +471,10 @@ async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
   await scrollCardIntoView(key);
   if (!worker.value) return;
   // 2026-09-16 PR-2：part 级 current_holder_id 随 t_part 瘦身下线，shelf_id 统一
-  // 取 useActiveShelfSelection 的当前作业架（单架 = 唯一架 id；多架 = 工人已选架；
-  // wildcard 未选架为 '' → 下方守卫报错）。
-  const useShelfId = shelfId.value;
-  if (!useShelfId) {
-    ElMessage.error('未找到零件所在货架信息');
-    return;
-  }
+  // 取「当前作业架」（单架 = 唯一架 id；多架 = 工人此前选定的架）。拿不到（如
+  // wildcard 账号）就报错提示，**不发**空 shelf_id（后端必填 i64，省略得 422）。
+  const useShelfId = resolveWorkingShelfId();
+  if (!useShelfId) return;
   showQtyDialog.value = true;
 }
 
@@ -527,11 +526,8 @@ async function onQtyConfirm(qty: number): Promise<void> {
   if (!selectedPart.value || !worker.value) return;
   const code = selectedPart.value.serial_no || selectedPart.value.drawing_no || '';
   // 2026-09-16 PR-2：同 applyScanSelection，shelf_id 只取当前作业架。
-  const useShelfId = shelfId.value;
-  if (!useShelfId) {
-    ElMessage.error('未找到零件所在货架信息');
-    return;
-  }
+  const useShelfId = resolveWorkingShelfId();
+  if (!useShelfId) return;
   // 2026-10-03 迁 v2 批次锚定：batch_id 升为路径参数、version 为 OCC 锚，两者都取自
   // 列表项（后端 2026-10-03 起在 pickable-by-work-type 补上）。缺任一即契约/数据缺口，
   // **不用 part_id 顶替**（顶替会打成后端「批次不存在」，把真因盖掉）。

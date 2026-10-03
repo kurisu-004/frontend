@@ -88,11 +88,13 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Avatar, Back, Box, Check, Refresh } from '@element-plus/icons-vue';
 import { ACTION_LABEL, useScanSession, type WorkAction } from '@/composables/useScanSession';
-import { useActiveShelfSelection } from '@/views/scan/composables/useActiveShelfSelection';
+import { useScanShelfStore } from '@/stores/scanShelf';
 
 const router = useRouter();
 const { worker, setAction, reset, requireWorker } = useScanSession();
-const shelfSel = useActiveShelfSelection();
+// 2026-10-04：候选架状态由 useScanShelfStore（Pinia 单例）承载 —— 本页与取件 / 送检
+// 是兄弟路由，候选集与当前作业架必须跨路由存活，且取件页读它时要 await initShelves。
+const scanShelf = useScanShelfStore();
 
 const shelfLoading = ref(true);
 
@@ -101,7 +103,7 @@ const shelfLoading = ref(true);
 // - 含 INSPECTION → INSPECT
 const boundZones = computed<Set<string>>(() => {
   const s = new Set<string>();
-  for (const o of shelfSel.options.value) {
+  for (const o of scanShelf.options) {
     if (o.zone === 'PRODUCTION' || o.zone === 'INSPECTION') {
       s.add(o.zone);
     }
@@ -114,8 +116,9 @@ const showInspect = computed<boolean>(() => boundZones.value.has('INSPECTION'));
 
 onBeforeMount(async () => {
   if (!requireWorker(router)) return;
-  // 拉候选架（绑定架详情；wildcard → 空；多架 → 等用户选）
-  await shelfSel.initShelves();
+  // 拉候选架（绑定架详情；wildcard → 空；多架 → 不自动选）。store 内部按账号幂等，
+  // 已加载过则不再重打 listShelves。
+  await scanShelf.initShelves();
   shelfLoading.value = false;
 });
 

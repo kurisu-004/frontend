@@ -85,20 +85,25 @@ export interface SetShelfProcessesPayload {
 //
 // ⚠️ 2026-10-02 关键澄清：`for-return` 与 `for-inspection` 是**两个不同后端 VO**，
 // 形状不同，**不能共用一个类型**。此前 `listShelvesForInspection()` 的返回类型谎报成
-// `ShelfForReturnResult`（`src/api/shelves.ts`），于是 INSPECT 路径上
-// `current_load` / `is_recommended` 恒为 undefined —— `HmiPickerCard` 渲染出
-// 「在架 undefined 件」。拆类型的目的就是让这个洞在编译期暴露出来。
+// `ShelfForReturnResult`（`src/api/shelves.ts`），品检路径因此会去读一个后端不返的
+// 字段。拆类型的目的就是让这种错位在编译期暴露出来。
 //
 //   | 字段                            | for-return | for-inspection |
 //   |---------------------------------|------------|----------------|
 //   | id/code/name/zone/location      | ✓          | ✓              |
-//   | current_load（当前在架件数）      | ✓          | ✗ **没有**     |
+//   | current_load（当前在架件数）      | ✓          | ✓ 后端 2026-10-04 补 |
 //   | is_recommended（系统推荐标记）   | ✓          | ✗ **没有**     |
 //   | is_active                       | ✗          | ✓              |
 //
+// ⚠️ current_load 一列两侧现已一致，但**部署顺序不保证一致**：for-inspection 的聚合是
+// 后端同轮补的，老后端上跑时该字段缺省。故 `ShelfForInspection.current_load` 声明成
+// 可选，消费侧（`ShelfPickerDialog`）不假设它在，由 `HmiPickerCard` 的 `currentLoad !=
+// null` 守卫决定是否渲染 —— 后端补不补都不会渲染出「在架 undefined 件」。
+//
 // 后端 VO 逐字对齐 backend-rust `src/modules/shelf/vo/shelf.rs`：
-//   ShelfForReturnItem :50-59（七字段）/ ShelfForInspectionItem :73-81（六字段），
-//   两侧的 Out 信封都**只有** items 一个字段（无分页、无 recommended_shelf_id）。
+//   ShelfForReturnItem（七字段）/ ShelfForInspectionItem（六字段 + 本轮补的
+//   current_load = 七字段），两侧的 Out 信封都**只有** items 一个字段（无分页、
+//   无 recommended_shelf_id）。
 // ============================================================
 
 /** `GET /shelves/for-return` 响应 item。
@@ -112,11 +117,14 @@ export interface ShelfForReturn {
    *  但类型逐字对齐 VO，注释在声称对齐时就不能少列。 */
   zone: string;
   location: string | null;
-  /** 当前在架件数（status=IN_PROCESS + holder=shelf）。
-   *  ⚠️ 只有 for-return VO 有这个字段，for-inspection 没有 —— 见本节顶部对照表。 */
+  /** 当前在架**件数**（不是批数）：后端 `LEFT JOIN t_part_batch` 聚合 ——
+   *  `status IN ('PENDING','IN_PROCESS','INSPECTION','OUTSOURCE')` 的批次
+   *  `SUM(quantity)`，按 `current_holder_id` 分组；LEFT JOIN 保留 0 负载架
+   *  （空架 = 0）。口径覆盖待加工 / 加工中 / 品检中 / 外协中四种占架状态。
+   *  （返修批次 status 即 IN_PROCESS，`is_repairing` 是独立标记列，不另计。）*/
   current_load: number;
   /** 系统推荐标记；picker 弹窗时默认高亮 + 「完成」一键接受。
-   *  ⚠️ 同上，**只有 for-return 有**。（2026-07-17 起前端不再据此自动高亮。） */
+   *  ⚠️ **只有 for-return 有**。（2026-07-17 起前端不再据此自动高亮。） */
   is_recommended: boolean;
   // 2026-10-02 摘除 display_order / mapped_process_codes：后端
   // ShelfForReturnItem（backend-rust/src/modules/shelf/vo/shelf.rs:50-59）只有
@@ -133,9 +141,9 @@ export interface ShelfForReturnResult {
 }
 
 /** `GET /shelves/for-inspection` 响应 item。
- *  对应后端 VO `ShelfForInspectionItem`（vo/shelf.rs:73-81）—— 与 for-return VO
- *  **不是同一个结构体**，逐字只列这 6 个字段（字段顺序照抄后端）。
- *  这里**不**声明 current_load / is_recommended：后端不返它们。 */
+ *  对应后端 VO `ShelfForInspectionItem` —— 与 for-return VO **不是同一个结构体**，
+ *  字段顺序照抄后端。
+ *  `is_recommended` 恒不存在（推荐语义只属于 for-return）。 */
 export interface ShelfForInspection {
   id: string;
   code: string;
@@ -144,6 +152,10 @@ export interface ShelfForInspection {
   location: string | null;
   /** 恒为 true —— 端点查询条件就是 `is_active = true`；保留字段只为逐字对齐 VO。 */
   is_active: boolean;
+  /** 在架件数，口径与 `ShelfForReturn.current_load` 一致（见上方对照表）。
+   *  **可选**：后端 2026-10-04 才给 for-inspection 补这层聚合，未部署时该字段缺省。
+   *  消费侧不假设它存在 —— `HmiPickerCard` 收到 undefined 就不渲染「在架 N 件」。 */
+  current_load?: number;
 }
 
 export interface ShelfForInspectionResult {
@@ -152,9 +164,9 @@ export interface ShelfForInspectionResult {
 
 /** `ShelfPickerDialog` 卡片网格的**元素级联合**：两个 VO 都可能出现在同一张网格里
  *  （dialog 的 `kind` prop 决定走哪个端点）。公共字段 id / code / name / zone /
- *  location 在两侧都有，消费侧读这些零成本；差异字段 current_load 需要消费侧
- *  显式收窄（`'current_load' in s`），否则拿不到类型。
+ *  location / current_load 在两侧都有（后者品检侧可选，见 ShelfForInspection），
+ *  消费侧读这些零成本。
  *
  *  2026-10-02 新增：拆出 `ShelfForInspection` 后 dialog 必须接这个联合类型 ——
- *  继续声明 `ShelfForReturn[]` 就等于让品检路径继续依赖一个后端不返的字段。 */
+ *  继续声明 `ShelfForReturn[]` 就等于让品检路径依赖 for-return 独有的 is_recommended。 */
 export type ShelfPickerItem = ShelfForReturn | ShelfForInspection;

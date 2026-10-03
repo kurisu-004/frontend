@@ -547,25 +547,34 @@ export async function scanPart(payload: PartScanPayload): Promise<PartItem> {
  *  - serial_no: 序列号
  *  - badge_code: 工牌码
  *  - event_type: 'RETURNED' | 'INSPECTED'
- *  - shelf_id: 目标货架雪花 ID 字符串（RETURNED=生产架 / INSPECTED=品检架）
+ *  - shelf_id: **工人当前所在的补料生产架**（PRODUCTION 区），雪花 ID 字符串；
+ *    两个 event_type 都用它 —— 后端 service 开头**无条件**做
+ *    `get_by_id_zone(shelf_id, "PRODUCTION")`，与 event_type 无关（误填品检架得
+ *    20501）。放回时它是「放回的目标架」，送检时它是「补料架」。
  *  - next_process_id?: 仅 RETURNED 必填；工人手动输入下一道工序
- *  - target_inspection_shelf_id?: 仅 INSPECTED 必填；品检架 id
+ *  - target_inspection_shelf_id?: 仅 INSPECTED 必填；**送检目标品检架**
+ *    （INSPECTION 区，后端另有一道 `zone != INSPECTION` → 20511 守卫）
  *  - batch_id?: 可选；多批次歧义时显式指定
  *
  * 失败抛 ApiError：
  *  - 20103 INVALID_TRANSITION：状态机迁移非法
  *  - 20202 WORKER_INACTIVE：工牌未识别 / 已停用
+ *  - 20501 BIZ_SHELF_NOT_FOUND：shelf_id 不存在 / 非 PRODUCTION 区
+ *  - 20511 BIZ_SHELF_NOT_INSPECTION_ZONE：target_inspection_shelf_id 非 INSPECTION 区
+ *  - 40001 VALIDATION_ERROR：next_process_id / target_inspection_shelf_id 缺或非法，
+ *    以及 shelf_id 缺省（必填 i64，无 default）
  *  - 20401 / 20403 等
  */
 export interface WorkerScanPayload {
   serial_no: string;
   badge_code: string;
   event_type: 'RETURNED' | 'INSPECTED';
-  /** 雪花 ID 字符串（CLAUDE.md §3）；RETURNED=生产架 / INSPECTED=品检架 */
+  /** 雪花 ID 字符串（CLAUDE.md §3）；工人当前所在的补料生产架（PRODUCTION 区），
+   *  **两个 event_type 同义** —— 不要当成送检目标品检架（那是下面的字段）。 */
   shelf_id: string;
   /** 仅 RETURNED 必填 */
   next_process_id?: string | null;
-  /** 仅 INSPECTED 必填 */
+  /** 仅 INSPECTED 必填；送检目标品检架（INSPECTION 区） */
   target_inspection_shelf_id?: string | null;
   /** 可选；多批次歧义时显式指定 */
   batch_id?: string | null;

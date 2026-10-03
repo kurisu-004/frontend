@@ -181,7 +181,8 @@ export async function setShelfProcesses(
 /**
  * 共享 HMI RETURN 卡片网格 picker 数据源。
  * 后端 `GET /shelves/for-return?next_process_id=...`
- * 返回候选架列表（按 current_load ASC 排序）+ 系统推荐架 id。
+ * 返回候选架列表（按 current_load ASC 排序，同 load 时按 display_order ASC）；
+ * 「推荐架」不是独立字段，而是每条 item 上的 `is_recommended`（load 最小那条为 true）。
  *
  * 2026-10-02 订正错误码注释：原注释写「错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS
  * （没有 active 架映射该 process）」，**这条已经错了**——后端同日从
@@ -217,9 +218,8 @@ export async function listShelvesForReturn(nextProcessId: string): Promise<Shelf
  *    id 兜底」。逐字更正为：**按 display_order ASC, id ASC（物理顺序）**。
  *    推论：品检架**不保证**「最空的排最前」，前端也不能依赖列表序做任何业务判断。
  * 2. **推荐架**：旧注释写「+ 推荐架」—— **错**。`ShelfForInspectionItem`
- *    （vo/shelf.rs:73-81）只有 id / code / name / zone / location / is_active
- *    **六字段**，根本没有 `is_recommended` 字段，也没有 `recommended_shelf_id`。
- *    本端点**不存在**任何推荐语义（推荐标记只属于 for-return VO）。
+ *    没有 `is_recommended` 字段，也没有 `recommended_shelf_id`。本端点**不存在**任何
+ *    推荐语义（推荐标记只属于 for-return VO）。
  * 3. **错误码**：旧注释写「错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS（没有
  *    INSPECTION 架或用户 scope 内无 INSPECTION 架）」—— **错，双重错**：
  *      - 20506 不可能由本端点抛出：service 里根本没有任何 20506 分支；
@@ -229,13 +229,10 @@ export async function listShelvesForReturn(nextProcessId: string): Promise<Shelf
  *    比 for-return 多一个 Inspector——品检员自己要用它）。
  *    **没有品检架时返 200 + `items: []`，不是错误。**
  *
- * 2026-10-02 返回类型订正（本次唯一的代码变更）：旧签名
- * `Promise<ShelfForReturnResult>` 是**类型谎言** —— 两个端点后端 VO 不同
- * （见 `@/types/shelf.ts` 里 ShelfForReturn / ShelfForInspection 的对照表）。
- * 谎报的后果不是抽象层面的洁癖：INSPECT 路径上 `current_load` 恒 undefined，
- * `HmiPickerCard` 实测渲染出「在架 **undefined** 件」。现返回
- * `ShelfForInspectionResult`（六字段 VO），让「品检架没有在架数」这件事在类型层
- * 变成显式事实，由消费侧显式处理。
+ * 返回类型是 `ShelfForInspectionResult`（独立类型，不是 for-return 那份 —— 两个后端
+ * VO 不同，见 `@/types/shelf.ts` 的对照表）。品检架的 `current_load` 由后端同轮补
+ * 聚合、且声明为可选：老后端上跑时该字段缺省，消费侧（`ShelfPickerDialog` →
+ * `HmiPickerCard`）缺省就不渲染「在架 N 件」。
  */
 export async function listShelvesForInspection(): Promise<ShelfForInspectionResult> {
   const resp = await api.get<ShelfForInspectionResult>('/shelves/for-inspection');

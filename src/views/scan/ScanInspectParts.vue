@@ -270,6 +270,8 @@ import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
+import { useScanShelfStore } from '@/stores/scanShelf';
+import { resolveWorkingShelfId } from '@/views/scan/composables/resolveWorkingShelf';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
 import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
@@ -287,6 +289,9 @@ const router = useRouter();
 const { worker, requireWorker, reset: resetScanSession } = useScanSession();
 const { onScan } = useBarcodeScanner();
 const { emitHeldChanged } = useScanBus();
+// 2026-10-04：worker-scan 的 shelf_id 是「工人当前所在的补料生产架」，与「送检目标
+// 品检架」（pendingShelfId，来自 ShelfPickerDialog）是两个字段、两套语义。
+const scanShelf = useScanShelfStore();
 
 const parts = ref<ScanPartRowSchema[]>([]);
 // 后端信封里的总条数（可能大于已加载的 parts.length —— 见 refresh 里的 limit 说明）
@@ -338,6 +343,9 @@ const batchPickerRows = ref<ScanPartRowSchema[]>([]);
 
 onBeforeMount(async () => {
   if (!requireWorker(router)) return;
+  // 2026-10-04：确保「当前作业架」已加载（深链 / 刷新直进本页时 store 尚无候选集）；
+  // 提交时才读值，见 submitInspect 的守卫。store 内部按账号幂等。
+  await scanShelf.initShelves();
   await refresh();
 });
 
@@ -511,21 +519,29 @@ async function onShelfConfirm(shelfId: string): Promise<void> {
 
 /** 实际提交：worker-scan（event_type=INSPECTED）。
  *
- * 入参 schema：serial_no + badge_code + shelf_id + target_inspection_shelf_id
- * （INSPECTED 必填）+ batch_id。可选 next_process_id（INSPECTED 忽略）。
+ * 2026-10-04 修正两处货架语义（原实现把同一个品检架同时发给两个字段）：
+ *   - shelf_id = 当前作业架（工人所在的补料生产架，PRODUCTION 区）
+ *     —— 后端 worker_scan 开头无条件 `get_by_id_zone(shelf_id, "PRODUCTION")`，
+ *     发品检架必得 20501「shelf ... 不存在或非 PRODUCTION 区」；
+ *   - target_inspection_shelf_id = picker 选的品检架（INSPECTION 区）
+ *     —— 后端另有一道 `target.zone != "INSPECTION"` → 20511 守卫。
+ * 作业架缺失时**不发请求**（shelf_id 是无 default 的必填 i64，省略得 422，填品检架
+ * 得 20501，两个都是工人看不懂的烂错误），改为就地提示。
  */
 async function submitInspect(): Promise<void> {
   if (!selectedPart.value || !worker.value) {
     ElMessage.warning('选择已重置，请重新选择零件');
     return;
   }
+  const workingShelfId = resolveWorkingShelfId();
+  if (!workingShelfId) return;
   submitting.value = true;
   try {
     await workerScan({
       serial_no: selectedPart.value.serial_no ?? '',
       badge_code: worker.value.badge_code ?? '',
       event_type: 'INSPECTED',
-      shelf_id: pendingShelfId.value,
+      shelf_id: workingShelfId,
       target_inspection_shelf_id: pendingShelfId.value,
       batch_id: selectedPart.value.batch_id ?? null,
     });

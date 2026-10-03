@@ -20,7 +20,7 @@
 
     # kind='shelf' 时必填
     location?: string                                货架物理位置
-    currentLoad?: number                             在架件数
+    currentLoad?: number                             在架件数；不传 / undefined 则整块不渲染
     mappedProcessCodes?: readonly string[]           货架映射工序 chips
 
   emits:
@@ -55,7 +55,9 @@
     <!-- 货架卡：在架件数 + 映射工序 chips -->
     <template v-if="kind === 'shelf'">
       <div v-if="location" class="location">{{ location }}</div>
-      <div class="load">
+      <!-- 2026-10-04 加 v-if 守卫：currentLoad 缺省（后端该端点未下发在架数聚合）
+           时整块不渲染 —— 缺省渲染出来是「在架 undefined 件」，对工人是噪音。 -->
+      <div v-if="currentLoad !== undefined && currentLoad !== null" class="load">
         <el-icon><Box /></el-icon>
         <span
           >在架 <strong>{{ currentLoad }}</strong> 件</span
@@ -119,6 +121,8 @@ const props = defineProps<{
 
   /** kind='shelf' */
   location?: string;
+  /** 在架件数。undefined = 该端点没下发在架数（如老后端的 for-inspection），
+   *  此时 `.load` 块整块不渲染（2026-10-04 加的守卫）。 */
   currentLoad?: number;
   /**
    * 2026-10-02：目前无调用方（后端 ShelfForReturnItem 不返映射工序），保留 prop
