@@ -1013,10 +1013,12 @@ export async function listPartsHeldByWorker(
 // ============================================================
 /** `POST /prod/batches/{batch_id}/send-to-outsource` 入参。
  *
- *  2026-10-03 契约对齐：**body 里的 `next_process_id` 改名为 `process_id`**（后端 DTO
- *  就是 `process_id`；沿用旧名必然 422）。列表行上的字段也已在同一天更名为
- *  `current_process_id` / `current_process_name`（见 `src/types/outsource.ts`）——
- *  两者刻意不同名：body 键沿用后端 DTO，行字段是批次当前所属工序。
+ *  2026-10-03 登记的字段名要点：
+ *  - body 键是 `process_id`（后端 DTO 原名如此，且**必填无默认值**；发成别的键名
+ *    得到的是 422 纯文本，不是业务信封，别按业务错误码排查）。
+ *  - 列表行字段是 `current_process_id` / `current_process_name`
+ *    （`src/types/outsource.ts`，批次当前所属的外协工序）。
+ *  两者刻意不同名：body 键跟后端 DTO，行字段描述批次本身的位置。
  *
  *  模式由 `quote_id` / `direct` 二选一表达，**两者都不传后端返 400**：
  *  - APPROVAL（需审批报价）：传 `quote_id`（来自 `OutsourceSendableItem.quote_id`）；

@@ -236,10 +236,17 @@ export function useOutsourceSendableList(
   /** 两条发送入口（行按钮 `OutsourceSendableTab`、扫码 `handleScannedSerialForSend`）
    *  唯一的可发送判据 —— 2026-10-03 起扫码路径也必须过它。
    *
-   *  2026-10-03 契约下 DIRECT 行「工序未映射任何活跃公司」时后端**仍返回该行**
-   *  （`company_options: []`），前端据此置灰；批次的批次状态 / 货架位置 / 工序类别
-   *  其实都是对的，所以提示文案不能只写「状态不满足」——那会把排查方向从
-   *  `t_outsource_company_process` 映射表引向状态机。 */
+   *  两档判据：
+   *  1. `status_label` —— Zod 已把它锁成 `z.literal('sendable')`（值恒定就锁死），
+   *     所以这行在列表数据上不可达，留着是纵深防御；
+   *  2. DIRECT 行 `company_options.length >= 1` —— **可达且是置灰的唯一成因**：
+   *     该外协工序未映射任何活跃公司时后端**仍返回该行**（`company_options: []`，
+   *     好让操作员看得见「送不出去」）。批次的批次状态 / 货架位置 / 工序类别其实
+   *     都是对的，所以置灰文案不能写「状态不满足」——那会把排查方向从
+   *     `t_outsource_company_process` 映射表引向状态机。
+   *
+   *  将来判据整体挪到后端时改读 `OutsourcePoolItem.can_send`（后端已派生该字段，
+   *  见 `src/types/outsource.ts` 的 `OutsourcePoolItem`），届时删掉上面两档推导。 */
   function canSend(item: SendableItem): boolean {
     if (item.status_label !== 'sendable') return false;
     if (item.send_mode === 'DIRECT') {
@@ -251,10 +258,8 @@ export function useOutsourceSendableList(
 
   function openSend(item: SendableItem): void {
     if (!canSend(item)) {
-      // 2026-10-03：与行按钮 tooltip 同一套措辞（含「未映射启用的外协公司」一档）。
-      ElMessage.warning(
-        '该零件当前状态 / 位置 / 工序不满足发送条件，或该外协工序未映射启用的外协公司',
-      );
+      // 2026-10-03：与行按钮 tooltip 逐字同一套措辞；置灰的唯一成因是「工序未映射公司」。
+      ElMessage.warning('该外协工序未映射启用的外协公司，请先配置该工序的公司映射');
       return;
     }
     sendTarget.value = item;
@@ -349,15 +354,19 @@ export function useOutsourceSendableList(
     // ⚠️ 读 `.items` 而**不是** `.items.value`：模板 ref 拿到的是组件 public
     // instance，Vue 的 proxyRefs 已把 `defineExpose` 出来的 ref 解包成数组，多读一层
     // `.value` 恒得 undefined ⇒ sendableList 恒为 [] ⇒ 扫码入队这条路永远走不到
-    // 「已加入发送队列」（只弹「当前不在可发送列表」）。`SendablePagedTableExpose.items`
-    // 声明的是数组而非 Ref，正是为了让这行写成 `.items.value` 时直接编译不过。
+    // 「已加入发送队列」（只会弹「不在当前页可发送列表」）。
+    // `SendablePagedTableExpose.items` 声明的是数组而非 Ref，正是为了让这行写成
+    // `.items.value` 时直接编译不过。
     const sendableList = sendablePagedRef.value?.items ?? [];
     const match = sendableList.find(
       (it) => it.part_id === part.id && it.status_label === 'sendable',
     );
     if (!match) {
+      // 2026-10-03 订正：此处 `find` **只搜当前页**（PagedTable 暴露的 items），
+      // 所以「未命中」至少有三义，必须都写进文案，否则操作员会把**分页漏页**误当成
+      // 状态/报价问题，从错误方向排查。
       ElMessage.warning(
-        `${part.serial_no ?? trimmed} 当前不在可发送列表（可能状态不满足或没有 APPROVED 报价）`,
+        `${part.serial_no ?? trimmed} 不在当前页可发送列表（可能不在当前页、状态不满足，或没有 APPROVED 报价）`,
       );
       return;
     }
@@ -366,7 +375,7 @@ export function useOutsourceSendableList(
     // 上面 find 已按 `status_label === 'sendable'` 过滤，所以这道闸门唯一可达的
     // 分支是「DIRECT 且 `company_options` 为空」—— 后端把这一档写成**一级场景**
     // （vo/sendable.rs：空数组时该行仍返回，明写不要在 SQL 里滤掉，好让操作员
-    // 看得见「送不出去」）。此前扫码路径只拦 `length > 1`，空数组一路落到入队 ⇒
+    // 看得见「送不出去」）。没有这道闸门，空数组一路落到入队 ⇒
     // `outsource_company_id` 拿到空串 ⇒ 批量发送打后端时 `i64` 反序列化失败、返
     // 422 纯文本（非业务信封），操作员只看到一串无信息量的批量失败。
     if (!canSend(match)) {
@@ -456,6 +465,17 @@ export function useOutsourceSendableList(
     for (let i = 0; i < sendQueue.value.length; i++) {
       const item = sendQueue.value[i];
       if (processChainRequiredHit) break;
+      // 2026-10-03 纵深防御：入队时的 `canSend` 闸门已挡住空公司，这里再兜一层 ——
+      // 空串会让后端 `i64` 反序列化失败、返 422 纯文本（非业务信封），操作员拿到的只是
+      // 一串无信息量的批量失败。本地拦下并点名根因（该工序没映射公司），失败项保留在
+      // 队列里可重试。不 `splice`：本项留在队列，for 的下标自然接着走。
+      if (!item.outsource_company_id) {
+        const msg = '队列项缺外协公司（该外协工序未映射启用的外协公司）';
+        errors.push({ serial: item.part.serial_no || item.part.drawing_no, msg, idx: i });
+        sendQueue.value[i]._failed = true;
+        sendQueue.value[i]._failMsg = msg;
+        continue;
+      }
       try {
         const payload: SendToOutsourcePayload = buildSendPayload({
           outsource_company_id: item.outsource_company_id,

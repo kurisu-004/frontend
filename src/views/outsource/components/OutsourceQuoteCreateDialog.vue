@@ -52,9 +52,9 @@
       </el-form-item>
       <el-form-item label="工序" prop="process_id">
         <!--
-          2026-10-03 登记（前端兜不了底的风险，验收标准 8 已定「工序 el-select 不动」）：
-          picker 不再携带工序线索后，本下拉列的是**全部** `category === 'OUTSOURCE'`
-          的工序，而后端 `create_quote` 只校验「零件存在 / 公司 active / 工序存在且是
+          2026-10-03 登记（前端兜不了底的风险）：工序下拉**保持列出全部**
+          `category === 'OUTSOURCE'` 的工序 —— picker 不携带工序线索，没有可据以收窄的
+          数据通路，而后端 `create_quote` 只校验「零件存在 / 公司 active / 工序存在且是
           OUTSOURCE」，**不校验 (part, process) 隶属关系，也不校验该公司是否映射该工序**。
           于是配错的报价能一路走到 APPROVED，却在可发送列表里永远匹配不上
           （sendable 按 `batch.current_process_id = quote.process_id` 匹配）

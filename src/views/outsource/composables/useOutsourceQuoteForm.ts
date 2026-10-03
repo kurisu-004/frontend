@@ -161,10 +161,11 @@ export function useOutsourceQuoteForm(
    *  入参保留是为对齐 dialog 的 `partChange` 事件载荷（当前无需读取）。 */
   function onCreatePartChange(_partId: string): void {
     createForm.process_id = '';
-    // 2026-10-03 登记：下一行与 `process_id` 的 watch（上面）重复，**看着冗余但不可删**
-    //  —— watch 只在 `process_id` 从非空变空时才触发，而换零件时它本来已是 ''（或本次
-    //  赋的 ''），watch 不跑 ⇒ 没有这一行，上一条报价选过的公司会跨零件残留。
-    // `useOutsourceQuoteForm.spec.ts` 的 Q2 正是靠它才绿。
+    // 2026-10-03 登记：与 `createForm.process_id` 的 watch 看似重复，**不可删** ——
+    // watch 只在值**发生变化**时才跑回调，而换零件时 `process_id` 往往已经是 `''`
+    // （或本次赋的仍是 `''`），`'' → ''` 不构成变化 ⇒ watch 不触发；没有这一行，
+    // 上一条报价选过的公司会跨零件残留。`useOutsourceQuoteForm.spec.ts` 的 Q2 正是
+    // 靠它才绿。
     createForm.outsource_company_id = '';
   }
 

@@ -118,6 +118,10 @@ beforeEach(() => {
   getPartBySerialMock.mockReset();
   listOutsourceSendableMock.mockReset();
   listOutsourceSendableMock.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  // ElMessage 桩统一在这里清：用例断言「弹了几次 / 弹了什么」时不跨用例串味
+  for (const m of [ElMessage.success, ElMessage.error, ElMessage.warning, ElMessage.info]) {
+    vi.mocked(m).mockClear();
+  }
 });
 
 describe('单件发送 onConfirmSend', () => {
@@ -280,7 +284,6 @@ describe('扫码批量发送 onConfirmBatchSend', () => {
       name: '零件甲',
     });
     const warn = vi.mocked(ElMessage.warning);
-    warn.mockClear();
 
     const inst = useOutsourceSendableList();
     stubCurrentPage(inst, directRow({ company_options: [] }));
@@ -289,12 +292,63 @@ describe('扫码批量发送 onConfirmBatchSend', () => {
     expect(inst.sendQueue.value).toHaveLength(0);
     // 多公司分支会弹选择框；不可发送的行不该走到那一步
     expect(inst.sendDialogVisible.value).toBe(false);
-    // 提示必须指向真实原因（外协工序未映射公司），不是「状态不满足」那种含糊说法
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('外协公司'));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('外协工序'));
+    // 提示必须指向真实原因（外协工序未映射公司），不是「状态不满足」那种含糊说法。
+    // 只弹一条 warning，且两个领域名词必须**同在一条**里 —— 分成两次 stringContaining
+    // 断言的话，「先弹一条 A、再弹一条 B」也能骗过断言。
+    expect(warn).toHaveBeenCalledTimes(1);
+    const warnedText = warn.mock.calls[0]![0] as string;
+    expect(warnedText).toContain('外协工序');
+    expect(warnedText).toContain('外协公司');
 
     await inst.onConfirmBatchSend();
     expect(sendToOutsourceMock).not.toHaveBeenCalled();
+  });
+
+  // find 只搜当前页 ⇒ 「未命中」可能只是被翻到了别的页。提示必须先讲清这一点，
+  // 否则操作员会把分页漏页误当成状态/报价问题，从错误方向排查。
+  it('S12：当前页没有该零件 → 提示点明「当前页」这层含义', async () => {
+    getPartBySerialMock.mockResolvedValue({
+      id: 'P-OTHER-PAGE',
+      serial_no: 'SN-9',
+      drawing_no: 'DWG-9',
+      name: '零件乙',
+    });
+    const warn = vi.mocked(ElMessage.warning);
+
+    const inst = useOutsourceSendableList();
+    stubCurrentPage(inst, approvalRow());
+    await inst.handleScannedSerialForSend('SN-9');
+
+    expect(inst.sendQueue.value).toHaveLength(0);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0] as string).toContain('当前页');
+  });
+
+  // 纵深防御：入队的 canSend 闸门已挡住空公司，这里锁住批量侧的兜底 ——
+  // 空串打过去只会拿到 422 纯文本，操作员看不到根因。
+  it('S13：队列项外协公司为空 → 批量发送本地拦下、点名根因、不发请求', async () => {
+    const inst = useOutsourceSendableList();
+    inst.sendQueue.value = [
+      {
+        part: { id: 'P1', serial_no: 'SN-1', drawing_no: 'DWG-1', name: '零件甲' },
+        outsource_company_id: '',
+        outsource_company_name: '',
+        process_id: 'PR1',
+        process_name: '外协工序',
+        price: null,
+        version: 7,
+        batch_id: 'BA1',
+        quantity: 10,
+        quote_id: null,
+        direct: true,
+      },
+    ];
+
+    await inst.onConfirmBatchSend();
+
+    expect(sendToOutsourceMock).not.toHaveBeenCalled();
+    expect(inst.sendQueue.value).toHaveLength(1);
+    expect(vi.mocked(ElMessage.error).mock.calls[0]![0] as string).toContain('缺外协公司');
   });
 });
 
