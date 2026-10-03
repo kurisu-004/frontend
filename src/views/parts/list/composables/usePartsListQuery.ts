@@ -284,8 +284,8 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
       order_no_is_null: search.orderNoIsNull === true ? true : undefined,
       system_delivery_date_is_null: search.systemDeliveryDateIsNull === true ? true : undefined,
       // 2026-08-05：下一道工序 / 物理位置多选筛选。
-      // 雪花 ID 一律以字符串直接传给后端（CLAUDE.md §3）——禁止 Number()，
-      // 否则 19 位 ID 在 JS Number（MAX_SAFE_INTEGER≈9.007e15）丢精度，IN 永不命中。
+      // 雪花 ID 一律以字符串直接传给后端（19 位 > Number.MAX_SAFE_INTEGER，禁止
+      // Number()，否则 IN 条件永不命中）。
       // 空数组 = undefined（不发参数，保留现有清空过滤行为）。
       // 2026-09-17 PR-4：Array.isArray 防御性守卫——localStorage 反序列化 / 跨 caller
       // 注入 / type-only 引用解构等异常路径可能塞入非数组值；buildParams 必须

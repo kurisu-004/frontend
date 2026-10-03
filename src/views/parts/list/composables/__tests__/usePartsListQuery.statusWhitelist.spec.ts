@@ -13,9 +13,15 @@
 //   3) 两条「外部输入」恢复分支：`?status=REPAIRING` 的 URL 注入，以及老浏览器
 //      localStorage 里已持久化的 ['REPAIRING'] 快照。
 //
-// 本 spec 覆盖 2) 与 3) 的四条路径，外加一条易漏的边界：白名单把 statuses 全过滤
-// 空时必须退回初始默认，而不是发出空 `statuses`（空数组在 buildParams 里会被转成
-// undefined = 不筛选 = 全量返回，与用户「我选了返修中」的预期完全相反）。
+// 本 spec 逐条钉住上面三个写入口，外加两条易漏边界：
+//   1) 搜索栏状态下拉的候选项（`q.statusOptions`）—— W6；
+//   2) 表头原生筛选的候选项（`statusNativeOptions`）—— 同一份 search.statuses 的
+//      第二个写入口，W7 直接 mount usePartsColumnFilters 断它；
+//   3) 两条「外部输入」恢复分支：`?status=REPAIRING` 的 URL 注入（W2），以及老
+//      浏览器 localStorage 里已持久化的 ['REPAIRING'] 快照（W3）；
+//   - 白名单把 statuses 全过滤空时必须退回初始默认，而不是发出空 `statuses`
+//     （空数组在 buildParams 里会被转成 undefined = 不筛选 = 全量返回，与用户
+//     「我选了返修中」的预期完全相反）—— W4 / W5。
 //
 // 环境用 happy-dom：第 3 类路径要写真实 localStorage 快照，node env 无 localStorage。
 // localStorage key 由 useListStatePersist 的 storageKey 生成，形如
@@ -29,7 +35,13 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 import type { UnionListParams } from '@/api/com/unionList';
 
 import { cleanParams } from '@/api/http';
-import { initialPartsSearch, usePartsListQuery, type PartsSearchState } from '../usePartsListQuery';
+import {
+  initialPartsSearch,
+  PARTS_STATUS_FILTER_WHITELIST,
+  usePartsListQuery,
+  type PartsSearchState,
+} from '../usePartsListQuery';
+import { URGENT_FILTER_VALUE, usePartsColumnFilters } from '../usePartsColumnFilters';
 
 const realListUnionItemsMock = vi.fn<
   (params: UnionListParams) => Promise<{ items: unknown[]; total: number; limit: number; offset: number }>
@@ -49,6 +61,12 @@ vi.mock('element-plus', () => ({
     warning: vi.fn(),
     info: vi.fn(),
   },
+}));
+
+// W7 挂 usePartsColumnFilters 会经 useCustomerTree 触发一条客户列表 useQuery，桩成
+// 空列表避免 spec 发真实请求（location 树是懒加载，onShow 才 load，挂载不发）。
+vi.mock('@/api/customer', () => ({
+  listCustomers: vi.fn(async () => ({ items: [], total: 0, limit: 200, offset: 0 })),
 }));
 
 const PERSIST_KEY = 'myerp.list.anon.parts_list_filter';
@@ -99,14 +117,16 @@ describe('usePartsListQuery — statuses 白名单（REPAIRING 停用）', () =>
     expect(initialPartsSearch(true).statuses).not.toContain('REPAIRING');
   });
 
-  it('W2：?status=REPAIRING 恢复分支 → 过滤掉并退回 URL 分支之外（不发 REPAIRING）', async () => {
+  it('W2：?status=REPAIRING 恢复分支 → 丢弃该值并落到持久化快照（不发 REPAIRING）', async () => {
     writeSnapshot({ statuses: ['PENDING'] }); // 保证有持久化快照可退回
     const q = testApp.runWithContext(() => usePartsListQuery({ isCncProgrammer: false }));
     q.restoreState('REPAIRING');
 
-    expect(q.search.statuses).not.toContain('REPAIRING');
+    // 断成确切值而不是 not.toContain：statuses 被整个过滤成空数组时
+    // not.toContain 同样会通过（空集恒不含 REPAIRING），守不住「退回到快照」。
+    expect(q.search.statuses).toEqual(['PENDING']);
     await q.fetchList();
-    expect(JSON.stringify(realListUnionItemsMock.mock.calls[0]?.[0])).not.toContain('REPAIRING');
+    expect(firstWire().statuses).toEqual(['PENDING']);
   });
 
   it('W2b：?status=PENDING 白名单内的值照常注入（守住 W2 不是「一律不恢复」）', async () => {
@@ -145,5 +165,31 @@ describe('usePartsListQuery — statuses 白名单（REPAIRING 停用）', () =>
     q.restoreState(undefined);
 
     expect(q.search.statuses).toEqual(['PENDING', 'IN_PROCESS']);
+  });
+
+  it('W6：搜索栏下拉候选项（statusOptions）逐项等于白名单，不含 REPAIRING', () => {
+    const q = testApp.runWithContext(() => usePartsListQuery({ isCncProgrammer: false }));
+    const values = q.statusOptions.map((o) => o.value);
+
+    // 断长度 + 断全等，避免「白名单被清空」时 not.toContain 恒真通过
+    expect(values).toHaveLength(PARTS_STATUS_FILTER_WHITELIST.length);
+    expect(values).toEqual([...PARTS_STATUS_FILTER_WHITELIST]);
+    expect(values).not.toContain('REPAIRING');
+  });
+
+  it('W7：表头原生筛选候选项（statusNativeOptions）同样白名单化，只多出「仅加急」哨兵', () => {
+    const f = testApp.runWithContext(() =>
+      usePartsColumnFilters({
+        search: initialPartsSearch(false),
+        onSearch: () => {},
+        snapshot: () => {},
+      }),
+    );
+    const values = f.statusNativeOptions.map((o) => o.value);
+
+    expect(values).not.toContain('REPAIRING');
+    // 白名单 9 项 + 末尾「仅加急」哨兵：同一条链路上的两个写入口必须同源，
+    // 任一侧漏改都会让 REPAIRING 从另一侧复活。
+    expect(values).toEqual([...PARTS_STATUS_FILTER_WHITELIST, URGENT_FILTER_VALUE]);
   });
 });

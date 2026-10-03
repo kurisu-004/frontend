@@ -11,12 +11,12 @@
  *     status_distribution 数组。
  *
  * dashboard 域只消费 overdue_undelivered_count 字段（2026-09-29 重做后
- * DashboardKpiTiles「逾期未交」tile），但 schema 仍对齐全 VO 字段集（沿
- * 2026-09-26 约定 #4：基础数据 schema 与后端契约对齐，缺字段静默 strip =
- * 校验形同虚设 —— 见 M-1 regression guard）。
+ * DashboardKpiTiles「逾期未交」tile），但 schema 仍对齐全 VO 字段集：基础数据
+ * schema 与后端契约对齐，缺字段静默 strip = 校验形同虚设。
  *
- * 沿用 CLAUDE.md §M-4 strip 陷阱：所有非 Option 字段必填显式声明，调用方
- * 通过 overviewOutSchema.parse(response) 在 api 边界守门。 */
+ * 所有非 Option 字段必填显式声明（见 CLAUDE.md「TanStack Query」的 Zod 守门条目；
+ * `__tests__/schemas.spec.ts` 的 S4 系列用例是这条的回归保护），调用方通过
+ * overviewOutSchema.parse(response) 在 api 边界守门。 */
 export const overviewOutSchema = z.object({
   date_from: z.string(),
   date_to: z.string(),
@@ -1708,9 +1708,10 @@ export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendable
 // `receive_next_process_id` 沿同一口径。写成 `z.string().nullable()` 会让「未设 step /
 // 无下一道工序」这一合法响应当成契约漂移整列炸掉，故此处必须 `z.string()`。
 //
-// 必填字段**逐个显式声明**的原因（Zod strip 陷阱，CLAUDE.md §4）：`z.object()` 默认
-// 是 strip 模式，漏声明的字段被静默丢弃、parse 照过不误 —— 守门形同虚设、契约漂移
-// 静默通过。`__tests__/schemas.spec.ts` 的 outsource-pool 段用「合法 fixture parse
+// 必填字段**逐个显式声明**的原因（Zod strip 陷阱，见 CLAUDE.md「TanStack Query」
+// 的 Zod 守门条目）：`z.object()` 默认是 strip 模式，漏声明的字段被静默丢弃、
+// parse 照过不误 —— 守门形同虚设、契约漂移静默通过。
+// `__tests__/schemas.spec.ts` 的 outsource-pool 段用「合法 fixture parse
 // 通过 + 缺键 / 类型错必须抛错 + parse 后键集与 fixture 键集逐字段相等」三条锁死它
 // （行 schema 与顶层 result schema 两侧各一组）。
 // ============================================================
