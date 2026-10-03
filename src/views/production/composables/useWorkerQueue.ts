@@ -201,7 +201,17 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
 
   /** WORKER → POOL mutation 包装 —— 保留 Promise<boolean> 签名以兼容
    * PoolDrawer.onDragAdd 调用点。目标货架为空早退时同样走一次失效对账 + try/catch
-   * （与 POOL→WORKER 同款）。 */
+   * （与 POOL→WORKER 同款）。
+   *
+   * 2026-10-04 记档（结构性不可用，暂无正解）：调用方传的 `toShelfId` 来自
+   * WorkerQueueBoard provide 的 `auth.activeShelfId = boundShelves[0]`，而后端只给
+   * 「SHELF_ACCOUNT + scope_type='shelf'」的角色行返 shelf_ids ⇒ 对 MANAGER / CLERK /
+   * INSPECTOR 恒为 null ⇒ 三类角色走这条路必然命中下面 `!toShelfId` 早退分支弹
+   * 「请先选择目标货架」，撤回功能对它们结构性不可用。
+   * 货架参数不能省：后端对 `to.shelf_id` 是**真实使用**的（须命中 t_shelf_process
+   * 映射，否则 20507 / HTTP 422），与 state 端点那种「只填前端零消费字段」的性质
+   * 不同。待办：补显式「当前货架」选择器，或
+   * `/shelves/for-return?next_process_id=` picker。 */
   async function moveBatchToPool(
     batchId: string,
     fromWorkerId: string,

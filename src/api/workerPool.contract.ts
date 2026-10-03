@@ -1,7 +1,7 @@
 // 2026-09-14 新增：pool 域前端契约（types only，无 runtime）。
 //
 // 端点（与 backend-rust/src/modules/prod/worker_pool 对齐，baseURL `/api/v2`）：
-//   GET  /api/v2/prod/pool/state?worker_id=&shelf_id=  ← getWorkerState
+//   GET  /api/v2/prod/pool/state?worker_id=           ← getWorkerState
 //   GET  /api/v2/prod/pool/counts                     ← getWorkerPoolCounts
 //   GET  /api/v2/prod/pool/{process_id}               ← getWorkerPoolByProcess
 //   POST /api/v2/prod/pool/refill                     ← refillWorkerPool
@@ -39,6 +39,8 @@ export interface WorkerStateDto {
   current_held: number;
   /** max(0, max_held - current_held) */
   capacity_remaining: number;
+  /** 2026-10-04：shelf_id 已是可选 query（前端不传）—— 此时该字段为空数组。
+   *  该字段是后端唯一消费 shelf_id 的出参，前端零消费。 */
   pool_count_by_process: PoolCountDto[];
   /** 2026-09-14 新增；2026-09-14 follow-up round-2 升级为 HeldBatchItemDto
    *  （展示字段全字段，对应 rust 端 JOIN t_part / t_customer / t_applicant / t_shelf

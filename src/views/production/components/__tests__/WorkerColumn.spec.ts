@@ -37,7 +37,7 @@
 //     el-empty / el-tooltip）+ vi.mock('element-plus') 把 ElMessage 桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, ref, type ComputedRef, type PropType } from 'vue';
+import { defineComponent, h, nextTick, ref, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
 import type { HeldBatchItemDto } from '@/api/workerPool.contract';
 import type { Worker } from '@/types/workerPool';
@@ -229,8 +229,9 @@ function mountColumn(
     props: { worker: SELF_WORKER },
     global: {
       components: globalConfig.components,
+      // 2026-10-04：不再 provide shelfId —— 组件已删掉 inject('shelfId')，
+      // state query 只按 workerId 取数（桩 query，见上方 vi.mock）。
       provide: {
-        shelfId: ref('5000000000001') as unknown as ComputedRef<string>,
         moveBatchToWorker: vi.fn(async () => true),
         moveBatchBetweenWorkers: vi.fn(async () => true),
         ...provided,

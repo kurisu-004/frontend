@@ -260,10 +260,12 @@ export const qk = {
    *  （任意 processId 形态都会命中）。 */
   workerPoolByProcessPrefix: ['worker-pool', 'by-process'] as const,
   /** 单 worker state（held_batches + max_held + current_held）。
-   *  workerId + shelfId 双键 — WorkerColumn 自管 query 拉取 + 跨 tab 共享。
-   *  shelf_id 占位空字符串（enabled=false 闸门挡掉无货架激活场景）。 */
-  workerPoolStateByWorker: (workerId: string, shelfId: string) =>
-    ['worker-pool', 'state', workerId, shelfId] as const,
+   *  2026-10-04：**单键**（workerId 唯一维度）—— WorkerColumn 自管 query 拉取，
+   *  同一 worker 在不同 tab / 不同货架视图下共享同一 cache identity。
+   *  后端 `GET /prod/pool/state` 的出参（held_batches / max_held / current_held /
+   *  capacity_remaining）本就不含货架维度，shelf_id 唯一影响的 pool_count_by_process
+   *  前端零消费，故不进键。 */
+  workerPoolStateByWorker: (workerId: string) => ['worker-pool', 'state', workerId] as const,
   /** worker-pool state 域前缀 —— `POST /prod/pool/move` 完成后调（POOL↔WORKER
    *  双向移动都会改变 worker 的 held_batches，故按前缀全刷而非按 worker 精刷）。 */
   workerPoolStatePrefix: ['worker-pool', 'state'] as const,

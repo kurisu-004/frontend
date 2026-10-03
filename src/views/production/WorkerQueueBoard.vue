@@ -93,7 +93,8 @@
           </template>
           <!-- 自产工序 Tab：WorkerPoolTab 自管 useWorkerPoolByProcessQuery，
                :lazy="true" 保证切到该 tab 才发请求。shelfId 由本组件 provide 注入
-               给内嵌 WorkerColumn / PoolDrawer 消费，WorkerPoolTab 自身不需要。 -->
+               给内嵌 PoolDrawer 消费（WORKER→POOL 撤回目标货架），WorkerPoolTab
+               与 WorkerColumn 自身都不需要。 -->
           <WorkerPoolTab :process-id="p.id" />
         </el-tab-pane>
       </el-tabs>
@@ -124,10 +125,17 @@ import PendingBatchesPanel from './components/PendingBatchesPanel.vue';
 import PendingPoolsPanel from './components/PendingPoolsPanel.vue';
 
 const auth = useAuthStore();
-// shelfId 通过 provide 注入给 WorkerColumn（其自管 useWorkerStateByWorkerQuery，
-// 需要 shelfId 作为 queryKey 之一）与 PoolDrawer（WORKER→POOL 的 `to.shelf_id`）。
-// 注意：2026-09-30 前它还被 useWorkerPoolCountsQuery 的 params 闭包读取，是
-// TDZ hotfix 的根源；counts 端点去掉 shelf 维度后该依赖已消失。
+// 2026-10-04：shelfId 现在**只服务 PoolDrawer 的 WORKER→POOL 撤回目标货架**；
+// 工人列的 state query 已不依赖它（`useWorkerStateByWorkerQuery` 去掉 shelf 维度）。
+//
+// ⚠️ 该值取自 `auth.activeShelfId = boundShelves[0]`，而后端只给「SHELF_ACCOUNT +
+// scope_type='shelf'」的角色行返 shelf_ids ⇒ 对 MANAGER / CLERK / INSPECTOR 恒为
+// null ⇒ shelfId 恒 `''`。后果：「把批次撤回候选池」对这三类角色结构性不可用 ——
+// PoolDrawer 落点校验会弹「请先选择目标货架」，用户无法完成撤回。
+// 之所以不能像 state 端点那样把货架参数删掉：后端对 `to.shelf_id` 是**真实使用**的
+// —— 目标货架必须命中 t_shelf_process 映射，否则 20507 / HTTP 422，货架语义无法从
+// 请求里省掉。正解是补一个显式「当前货架」选择器，或一个
+// `/shelves/for-return?next_process_id=` picker（下轮再做）。
 const shelfId = computed(() => auth.activeShelfId ?? '');
 const queue = useWorkerQueue();
 const route = useRoute();
