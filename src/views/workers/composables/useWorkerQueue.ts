@@ -64,18 +64,10 @@ export interface UseWorkerQueueReturn {
    *  @param toWorkerId   目标工人
    *  @param fromShelfId  **batch 真实所在货架**（不是当前激活货架 —— 候选池跨所有
    *                     货架，填错后端返 20122 BIZ_BATCH_LOCATION_MISMATCH） */
-  moveBatchToWorker: (
-    batchId: string,
-    toWorkerId: string,
-    fromShelfId: string,
-  ) => Promise<boolean>;
+  moveBatchToWorker: (batchId: string, toWorkerId: string, fromShelfId: string) => Promise<boolean>;
   /** WORKER → POOL：把工人持有的批次撤回候选池货架。
    *  @param toShelfId 目标货架（须映射到 batch 当前工序，否则 20507 / HTTP 422） */
-  moveBatchToPool: (
-    batchId: string,
-    fromWorkerId: string,
-    toShelfId: string,
-  ) => Promise<boolean>;
+  moveBatchToPool: (batchId: string, fromWorkerId: string, toShelfId: string) => Promise<boolean>;
   /** 按 process + shelf 范围自动为每个匹配 worker 抢批次数/工时。 */
   runAutoAllocate: (req: AutoAllocateRequest) => Promise<void>;
 }
@@ -184,7 +176,12 @@ export function useWorkerQueue(): UseWorkerQueueReturn {
 
   return {
     // 2026-09-30：模块级 workers ref 已无外部写点 / 无消费方，恒为空数组。
-    // 保留字段仅为不破坏潜在未来 callers（后端 /prod/workers CRUD 上线后接入）。
+    // 2026-10-03 订正：此前注「后端 /prod/workers CRUD 上线后接入」是失实表述 ——
+    // 后端 CRUD 早已上线（GET/POST `/prod/workers`、`POST /{id}/update`、
+    // `/{id}/deactivate`、`/{id}/reactivate`），且已被工人一览页经
+    // `src/api/worker.ts::listWorkers` / `createWorker` 消费。本 ref 之所以空，是
+    // **useWorkerQueue 自身**的消费方被移除，与后端无关。保留字段仅为不破坏潜在
+    // 未来 callers。
     workers: ref<Worker[]>([]) as Ref<Worker[]>,
     error,
     moveBatchToWorker,

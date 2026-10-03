@@ -226,11 +226,13 @@ export const partSchema = z.object({
   batch_id: z.string().nullable().optional(),
   /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与上面的 batch_id 同源。
    *
-   *  **本 schema 不服务扫码台。** 它的生产消费方只有 `partListResultSchema`（下方）→
-   *  `useDashboardUpcomingList`，数据源是 `GET /parts` / `GET /com/union-list`，
-   *  两个端点的行单位是 part、后端刻意不填批次锚点（一个 part 的活跃批次可能不止
-   *  一个，填任一都是错锚点）⇒ batch_id / batch_version 在本 schema 上**恒为
-   *  undefined**，保留声明只为类型与后端 VO 对齐，不承担任何扫码台职责。
+   *  **本 schema 不服务扫码台。** 它的生产消费方是 `partListResultSchema`（下方）→
+   *  `usePartsListQuery`（零件一览，`GET /com/union-list`）与 dashboard 的
+   *  `useDashboardUrgentList` / `useDashboardUpcomingList`（同端点）。这些行的单位是
+   *  part、后端**刻意不填**批次锚点（一个 part 的活跃批次可能不止一个，填任一都是
+   *  错锚点）⇒ batch_id / batch_version 在本 schema 上**恒为 null**（后端 VO 无
+   *  `skip_serializing_if`，键在、值为 null，不是 undefined）。保留声明只为类型与
+   *  后端 VO 对齐，不承担任何扫码台职责。
    *
    *  扫码台 PICK_UP 走 `listPartsByWorkTypeAllShelves` 的**裸 `api.get<PartItem[]>`**，
    *  **不过本 schema**（该端点才填 batch_id / batch_version）。那条路径上的改名义务
