@@ -9,9 +9,10 @@
   - 取消按钮保留（工人可放弃放回/送检）
   - 空状态可配置「返回上级」动作：调用方传 emptyActionLabel 则按钮显示，点击触发 empty-action 事件
 
-  ⚠️ 2026-10-02 已知缺陷（用户决定本轮只修类型与注释，**不动 UI**）：INSPECT 卡会
-  渲染「在架 undefined 件」—— 后端 for-inspection VO 不含 current_load，而
-  HmiPickerCard 的 .load 块无 v-if 守卫。详见下方 currentLoadOf 的注释。
+  2026-10-04：两个端点的 `current_load` 都按「可能缺省」处理 —— for-inspection 的在架数
+  聚合后端**计划**补、当前 VO 仍无该字段（老后端上跑时缺省）。dialog 因此**不假设**它在，
+  交给 `HmiPickerCard` 的 `currentLoad !== undefined && currentLoad !== null` 守卫决定要不要
+  渲染「在架 N 件」。
 
   props:
     modelValue: boolean                       // 弹窗可见
@@ -124,33 +125,17 @@ const emit = defineEmits<{
 
 const loading = ref(false);
 const errorMessage = ref<string | null>(null);
-// 2026-10-02：`ShelfForReturn[]` → `ShelfPickerItem[]`（= ShelfForReturn |
+// 2026-10-04：`ShelfForReturn[]` → `ShelfPickerItem[]`（= ShelfForReturn |
 // ShelfForInspection 联合）。原因：本 dialog 一份模板同时服务 RETURN / INSPECT 两个
-// 端点，而后端两个 VO **形状不同** —— INSPECT 的 `ShelfForInspectionItem`
-// （vo/shelf.rs:73-81）没有 current_load / is_recommended。旧声明 `ShelfForReturn[]`
-// 等于逼着品检路径读一个后端不返的字段。
+// 端点，而后端两个 VO **形状不同** —— 品检 VO 没有 is_recommended。旧声明
+// `ShelfForReturn[]` 等于逼着品检路径读一个后端不返的字段。
 const shelves = ref<ShelfPickerItem[]>([]);
 const selectedId = ref<string | null>(null);
 
-/**
- * 取卡片要显示的「在架件数」。
- *
- * ⚠️ **INSPECT 卡会渲染「在架 undefined 件」，这是已知缺陷，用户决定本轮不修**
- * （2026-10-02）。缘由：`GET /shelves/for-inspection` 后端不做在架数聚合
- * （`ShelfForInspectionItem` 只有 6 字段，见 `@/types/shelf.ts` 的对照表），
- * 而 `HmiPickerCard` 的 `.load` 块**无 `v-if` 守卫**（HmiPickerCard.vue:58-63），
- * 无条件渲染 `在架 {{ currentLoad }} 件`。
- *
- * 本函数的**唯一**职责是让这个洞在类型层显形（用 `in` 收窄，模板零断言）：
- *   - 视觉结果与修复前**逐字一致** —— 品检架走 `undefined` 分支，传给
- *     `currentLoad?: number` 的仍是 `undefined`（该 prop 无 default），与修复前
- *     `s.current_load` 恒 undefined 的效果完全等价。故本轮**不动 UI**。
- *   - 要真修需**后端**在 for-inspection 补 current_load 聚合（加 ORDER BY / JOIN
- *     统计，或从 for-return 复用带 load 的查询）；纯前端无法推导在架数。
- *   - 修好后本函数退化为恒返回 `s.current_load`，调用点无需再改。
- */
+/** 取卡片要显示的「在架件数」；后端没下发该字段时返回 undefined，由 HmiPickerCard
+ *  的守卫决定不渲染（不渲染优于渲染成「在架 undefined 件」）。 */
 function currentLoadOf(s: ShelfPickerItem): number | undefined {
-  return 'current_load' in s ? s.current_load : undefined;
+  return s.current_load;
 }
 
 watch(

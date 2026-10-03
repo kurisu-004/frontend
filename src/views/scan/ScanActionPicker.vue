@@ -14,8 +14,12 @@
   （B 方案手动 pick-up 兜底）。送货入口已移到 MANAGER/INSPECTOR 的「送货」菜单
   （/delivery-dispatch），扫码台不再有 DELIVER 操作。
 
-  注：HMI 账号已不再与货架一一对应，故不再显示「当前货架」选择器；
-  具体作业货架由下游各流程的 ShelfPickerDialog / 零件持有者决定。
+  作业货架（取件 / 送检两页提交 `shelf_id` 用的那个）来自 useScanShelfStore，**不在本页
+  选择**：本页只读 `scanShelf.options` 的 zone 并集来决定按钮显隐；多架账号的作业架由
+  管理员收窄绑定确定。⚠️ 送检页的 ShelfPickerDialog 给的是**目标品检架**
+  （worker-scan 的 target_inspection_shelf_id），不是作业架，别把两者当同一个东西。
+  zone 一个都认不出来时三个按钮全隐藏（zone 未解析，见 store 的 initShelves 兜底），
+  此时给出 `noActionReason` 文案，不让工人对着空网格猜。
 -->
 
 <template>
@@ -42,6 +46,9 @@
       <h2 class="state-title">请选择报工操作</h2>
       <div v-if="shelfLoading" style="text-align: center; padding: 40px 0; color: #909399">
         加载货架信息...
+      </div>
+      <div v-else-if="noActionReason" style="text-align: center; padding: 40px 0; color: #909399">
+        {{ noActionReason }}
       </div>
       <div v-else :class="['action-grid', { 'action-grid--two': !showInspect }]">
         <el-button
@@ -88,11 +95,13 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Avatar, Back, Box, Check, Refresh } from '@element-plus/icons-vue';
 import { ACTION_LABEL, useScanSession, type WorkAction } from '@/composables/useScanSession';
-import { useActiveShelfSelection } from '@/views/scan/composables/useActiveShelfSelection';
+import { useScanShelfStore } from '@/stores/scanShelf';
 
 const router = useRouter();
 const { worker, setAction, reset, requireWorker } = useScanSession();
-const shelfSel = useActiveShelfSelection();
+// 2026-10-04：候选架状态由 useScanShelfStore（Pinia 单例）承载 —— 本页与取件 / 送检
+// 是兄弟路由，候选集与当前作业架必须跨路由存活，且取件页读它时要 await initShelves。
+const scanShelf = useScanShelfStore();
 
 const shelfLoading = ref(true);
 
@@ -101,7 +110,7 @@ const shelfLoading = ref(true);
 // - 含 INSPECTION → INSPECT
 const boundZones = computed<Set<string>>(() => {
   const s = new Set<string>();
-  for (const o of shelfSel.options.value) {
+  for (const o of scanShelf.options) {
     if (o.zone === 'PRODUCTION' || o.zone === 'INSPECTION') {
       s.add(o.zone);
     }
@@ -111,11 +120,23 @@ const boundZones = computed<Set<string>>(() => {
 const showPickUp = computed<boolean>(() => boundZones.value.has('PRODUCTION'));
 const showReturn = computed<boolean>(() => boundZones.value.has('PRODUCTION'));
 const showInspect = computed<boolean>(() => boundZones.value.has('INSPECTION'));
+const hasAnyAction = computed<boolean>(
+  () => showPickUp.value || showReturn.value || showInspect.value,
+);
+/** 三个按钮全隐藏时的原因说明。零按钮 + 零文案会让工人以为页面坏了：候选为空（wildcard）
+ *  与「候选有但 zone 一个都认不出来」（含 store 兜底填 UNKNOWN 的情形）都走这里。 */
+const noActionReason = computed<string | null>(() => {
+  if (shelfLoading.value || hasAnyAction.value) return null;
+  return scanShelf.options.length === 0
+    ? '本账号未绑定货架，请联系管理员在「账号管理」为本账号绑定货架'
+    : '本账号绑定的货架所属区域无法识别，请联系管理员核对本账号的货架绑定';
+});
 
 onBeforeMount(async () => {
   if (!requireWorker(router)) return;
-  // 拉候选架（绑定架详情；wildcard → 空；多架 → 等用户选）
-  await shelfSel.initShelves();
+  // 拉候选架（绑定架详情；wildcard → 空；多架 → 不自动选）。store 内部按账号幂等，
+  // 已加载过则不再重打 listShelves。
+  await scanShelf.initShelves();
   shelfLoading.value = false;
 });
 
