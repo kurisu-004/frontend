@@ -1885,9 +1885,9 @@ export type OutsourcePoolStateResultSchema = z.infer<typeof outsourcePoolStateRe
 //     `customer_path` / `shelf_code` / `next_process_name` / `last_inspection_fail_note` /
 //     `current_holder_*` / `worker_name` / `outsource_company_name` —— VO 里根本没有这些键。
 //   - **不声明** `batch_no` / `batch_label`（2026-10-04 补登记）：后端 `PartListItem`
-//     没有这两个键（2026-10-04 实采样本的键数与下方声明数一致，均为 38，`batch_no`
-//     不在其中），
-//     所以 `BatchPickerDialog` 模板的 `v-for="b in sortedRows"` 行内
+//     没有这两个键（2026-10-04 采集的报工台响应样本里同样没有；样本里哪部分是实测转录、
+//     哪部分是按契约手写，见 `src/api/parts/__tests__/scan-list.contract.spec.ts` 的 W 组
+//     说明），所以 `BatchPickerDialog` 模板的 `v-for="b in sortedRows"` 行内
 //     `批次{{ b.batch_no ?? 1 }}` 对报工台三域恒显「批次 1」、`sortedRows` 的批次号升序
 //     对这三域是恒等操作。
 //     ⚠️ 这**不是「后端 VO 一贯如此」**：另两域的行 VO 都有批次号
