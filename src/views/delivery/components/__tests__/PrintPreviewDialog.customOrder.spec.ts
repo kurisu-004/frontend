@@ -225,10 +225,9 @@ async function mountDialog(
   return wrapper;
 }
 
-/** 点 footer 的「导出」按钮（桩按钮里最后一个 button）。 */
+/** 点 footer 的「导出」按钮（按 data-role 定位，不依赖它在 footer 里的位置）。 */
 async function clickExport(wrapper: VueWrapper): Promise<void> {
-  const btns = wrapper.findAll('button');
-  await btns[btns.length - 1]!.trigger('click');
+  await wrapper.find('button[data-role="export"]').trigger('click');
   await flushPromises();
 }
 

@@ -460,8 +460,11 @@ async function onConfirm(): Promise<void> {
 
     <template #footer>
       <el-button @click="onCancel">取消</el-button>
+      <!-- 2026-10-04：data-role 供组件级用例定位「导出」按钮（footer 里按钮数随
+           label / note 两态与模式切换而变，按位置取按钮是脆的） -->
       <el-button
         type="primary"
+        data-role="export"
         :loading="loading"
         :disabled="!rows.length || (isLabelMode && !selectedRows.length)"
         @click="onConfirm"

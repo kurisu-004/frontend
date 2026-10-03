@@ -103,7 +103,7 @@ import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import { resolveDraggable, type ColumnDef } from '@/composables/useColumnVisibility';
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
-import type { DeliveryNoteDetailOut } from '@/types/deliveryNote';
+import type { DeliveryNoteDetailOut, DeliveryNoteLineItem } from '@/types/deliveryNote';
 import type { AssemblyTreeRow } from '../composables/useDeliveryNoteDetail';
 
 interface Props {
@@ -175,12 +175,15 @@ function renderQuantity({ row }: { row: unknown }): ReturnType<typeof h> {
   if (r.is_asm_row) {
     // 2026-10-04：装配件父行数量 = 后端算出的本单可出货套数（与打印预览同源同值），
     // 后端没给数时显示「—」；不可兜成 0（「没给数」≠「凑不齐整套」）。
+    // 单位随数走：没数就没有单位，否则渲染成「— 套」（口径同打印预览的数量列）。
     return h('div', null, [
       h('strong', null, r.quantity ?? '—'),
-      h('span', { class: 'muted' }, '套'),
+      r.quantity !== null ? h('span', { class: 'muted' }, '套') : null,
     ]);
   }
-  return h('span', null, r.quantity ?? '—');
+  // 散件行是真正的 DeliveryNoteLineItem（quantity 必填 number，没有缺失态），
+  // 所以不写 `?? '—'`：那个分支不可达，留着只会把将来的类型错误悄悄吞掉。
+  return h('span', null, (row as DeliveryNoteLineItem).quantity);
 }
 function renderStatus({ row }: { row: unknown }): ReturnType<typeof h> {
   const r = row as AssemblyTreeRow;
