@@ -1694,8 +1694,10 @@ export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendable
 //     `customer_path` / `shelf_code` / `next_process_name` / `last_inspection_fail_note` /
 //     `current_holder_*` / `worker_name` / `outsource_company_name` —— VO 里根本没有这些键。
 //   - **不声明** `batch_no` / `batch_label`（2026-10-04 补登记）：后端 `PartListItem`
-//     没有这两个键，所以 `BatchPickerDialog` 模板的 `批次{{ row.batch_no ?? 1 }}` 对
-//     报工台三域恒显「批次 1」、`sortedRows` 的批次号升序对这三域是恒等操作。
+//     没有这两个键（2026-10-04 实测 204 行真实响应：键集恒为 34 个，`batch_no` 不在其中），
+//     所以 `BatchPickerDialog` 模板的 `v-for="b in sortedRows"` 行内
+//     `批次{{ b.batch_no ?? 1 }}` 对报工台三域恒显「批次 1」、`sortedRows` 的批次号升序
+//     对这三域是恒等操作。
 //     ⚠️ 这**不是「后端 VO 一贯如此」**：另两域的行 VO 都有批次号
 //     （`DeliveryNoteCandidatePart.batch_no` / `InspectionQueueItem.batch_no`），
 //     报工台是唯一缺的。**要显示批次号必须后端先给 `PartListItem` 补字段**；补了之后

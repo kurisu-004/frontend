@@ -21,6 +21,12 @@
 //      既有 spec 全绿而线上三页全崩。
 //   本文件 A 组补 ①、E 组补 schema 侧的「键集逐字段相等」、F 组补 ②。
 //
+//   2026-10-04 追加 W 组（真实 wire 样本）：E 组的两份 fixture 与 `scanPartRowSchema`
+//   **同源**（都照后端 VO 源码手写），只能证明「schema 接受自己那份手写形状」，证明不了
+//   「schema 接受真实响应」。schema 误拒合法响应的产线症状是「列表数据格式异常，请截图
+//   上报」—— 与本次「加载不出」不同，它把排查方向指歪。W 组用实测响应体转录的样本
+//   补上这一维（详见 W 组上方注释）。
+//
 // mock 手法沿 src/api/__tests__/outsource.contract.spec.ts 同款：整模块桩掉 `@/api/http`
 // （不 importOriginal），只留 api.get / api.post / cleanParams / normalizeListResult。
 //
@@ -248,6 +254,102 @@ const heldRowFixture = {
   batch_version: null,
 };
 
+// ============================================================
+// W 组：**真实 wire 样本**（2026-10-04 实测）—— 与 E 组的 fixture 是两种不同性质的证据。
+//
+// E 组那两份 fixture 是**照后端 VO 源码手写**的，而 `scanPartRowSchema` 同样是照那份
+// 源码手写的 ⇒ 两者同源。这批用例只能证明「schema 接受自己那份手写形状」，**证明不了
+// 「schema 接受后端真实吐出的形状」**：把 schema 的某个声明改错（多声明一个必填键、
+// 把 Decimal 当 number、把 `serialize_i64` 当 number），E 组全绿而线上三页全部报
+// 「列表数据格式异常，请截图上报」。
+//
+// W 组补的就是这一维：下面两个对象是 `GET /parts/pickable-by-work-type/208472998548602880`
+// 与 `GET /parts/by-worker/208473192891678720` 的**响应体逐字转录**（dev 库，2026-10-04），
+// 不是照源码推出来的。取值口径（雪花 id 形态 / Decimal 字符串 / 两个日期占位符 /
+// 批次锚点有无）与真实响应完全一致，可直接与后端日志对账。
+//
+// 采集方式：e2e seed 一个 MANAGER 账号 → `POST /iam/login` 取 token → 带
+// `Authorization: Bearer` 打两个 GET（`?limit=200&offset=0`）→ 落盘响应体。
+// 取件路径 200 行 / 放回路径 4 行**逐行** `scanPartRowSchema.parse()` 全部通过（0 失败），
+// 且 204 行的键集**完全一致**（34 键，无一行缺键、无一个键被 strip）。
+// ============================================================
+
+/** 取件行真实样本：`GET /parts/pickable-by-work-type/{work_type_id}` 的 `data.items[0]`，逐字转录。 */
+const wirePickRow = {
+  id: '226157188085710848',
+  serial_no: 'F2256',
+  name: 'E42BD20009014101',
+  drawing_no: 'E42BD20009014101',
+  applicant_name: '',
+  quantity: 2,
+  request_date: '1970-01-01',
+  planned_delivery_date: '1970-01-01',
+  customer_id: '0',
+  assembly_id: null,
+  status: 'IN_PROCESS',
+  is_urgent: false,
+  order_no: null,
+  system_delivery_date: null,
+  note: null,
+  unit_price: '0',
+  total_price: '0',
+  version: 0,
+  created_at: '1970-01-01T00:00:00',
+  created_by: null,
+  updated_at: '1970-01-01T00:00:00',
+  updated_by: null,
+  deleted_at: null,
+  process_chain_id: null,
+  customer_name: null,
+  l1_customer_name: null,
+  location: null,
+  holder_name: null,
+  row_type: 'PART',
+  has_children: false,
+  child_count: null,
+  has_cnc_program: false,
+  batch_id: '226157188089905152',
+  batch_version: 6,
+};
+
+/** 放回 / 送检行真实样本：`GET /parts/by-worker/{worker_id}` 的 `data.items[0]`，逐字转录。 */
+const wireHeldRow = {
+  id: '228801248768294912',
+  serial_no: 'F2475',
+  name: 'E42703FZJ294500',
+  drawing_no: 'E42703FZJ294500',
+  applicant_name: '',
+  quantity: 2,
+  request_date: '1970-01-01',
+  planned_delivery_date: '1970-01-01',
+  customer_id: '0',
+  assembly_id: null,
+  status: 'IN_PROCESS',
+  is_urgent: false,
+  order_no: null,
+  system_delivery_date: null,
+  note: null,
+  unit_price: '0',
+  total_price: '0',
+  version: 0,
+  created_at: '1970-01-01T00:00:00',
+  created_by: null,
+  updated_at: '1970-01-01T00:00:00',
+  updated_by: null,
+  deleted_at: null,
+  process_chain_id: null,
+  customer_name: null,
+  l1_customer_name: null,
+  location: null,
+  holder_name: null,
+  row_type: 'PART',
+  has_children: false,
+  child_count: null,
+  has_cnc_program: false,
+  batch_id: null,
+  batch_version: null,
+};
+
 describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效性', () => {
   it('E1：合法 fixture 组成完整信封 parse 通过（34 字段行 + 四个分页键）', () => {
     const parsed = scanPartListResultSchema.parse({
@@ -376,6 +478,99 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
       expect(parsed, `${key} 不得被保留`).not.toHaveProperty(key);
     }
     expect(Object.keys(parsed)).toHaveLength(34);
+  });
+});
+
+// ============================================================
+// W 组：真实 wire 样本回归锁（样本见上方 `wirePickRow` / `wireHeldRow` 的来源注释）。
+//
+// 这组与 E 组的关系：E 组锁「schema 对自己那份手写 fixture 的行为」，W 组锁「schema 对
+// 后端真实吐出的字节形状的行为」。后者才是线上三页会不会报「列表数据格式异常」的决定项。
+// ============================================================
+describe('W 组：真实 wire 样本（2026-10-04 实测响应）过守门', () => {
+  // 实测结论：两个端点共 204 行逐行 parse 全部通过。这条把「取件 / 放回 两条真实路径
+  // 的行都被真 schema 接受」钉成可执行断言 —— 之前它只存在于一次人工核对里。
+  it('W1：两条路径的真实行都 parse 通过，且键集与真实响应完全相等（无键被 strip）', () => {
+    for (const [label, row] of [
+      ['取件 pickable-by-work-type', wirePickRow],
+      ['放回 by-worker', wireHeldRow],
+    ] as const) {
+      const parsed = scanPartRowSchema.parse(row);
+      // 实测两个端点的行都恰好 34 键；键集不等说明 schema 多声明（strip 掉了后端的键）
+      // 或少声明（后端的键没进 parse 结果），两种都是契约漂移。
+      expect(Object.keys(row), `${label} 真实样本键数`).toHaveLength(34);
+      expect(Object.keys(parsed).sort(), `${label} 键集`).toEqual(Object.keys(row).sort());
+    }
+  });
+
+  // 两个 transform 的实测值：真实响应里两个日期**恒为占位符字符串 '1970-01-01'**
+  // （不是 null、不是缺键）—— 归一后必须变 null，否则 DeliveryDateChip 会显示
+  // 「01/01 · 已逾期 2 万多天」。反之字段本身仍必填（键恒在，值为字符串）。
+  it('W2：真实样本的两个日期是占位符字符串，归一后为 null', () => {
+    expect(wirePickRow.request_date).toBe('1970-01-01');
+    expect(wirePickRow.planned_delivery_date).toBe('1970-01-01');
+    const pick = scanPartRowSchema.parse(wirePickRow);
+    expect(pick.request_date).toBeNull();
+    expect(pick.planned_delivery_date).toBeNull();
+    const held = scanPartRowSchema.parse(wireHeldRow);
+    expect(held.request_date).toBeNull();
+    expect(held.planned_delivery_date).toBeNull();
+  });
+
+  // 实测的批次锚点口径（与 VO 文档一致，两条路径方向相反）：
+  //   取件行 batch_id 是 18 位雪花字符串 / batch_version 是 JSON number；
+  //   放回行两者恒 null。放回 / 送检两页正靠 null 判定「无批次锚点」。
+  it('W3：真实样本的批次锚点 —— 取件行有值（string + number），放回行恒 null', () => {
+    const pick = scanPartRowSchema.parse(wirePickRow);
+    expect(typeof pick.batch_id, '取件 batch_id 必为 string（serialize_i64_opt）').toBe('string');
+    expect(pick.batch_id).toBe('226157188089905152');
+    expect(typeof pick.batch_version, '取件 batch_version 必为 number（i32，无序列化器）').toBe(
+      'number',
+    );
+    expect(pick.batch_version).toBe(6);
+    const held = scanPartRowSchema.parse(wireHeldRow);
+    expect(held.batch_id).toBeNull();
+    expect(held.batch_version).toBeNull();
+  });
+
+  // 实测的雪花 id / Decimal 形态：id 与 customer_id 都是 JSON string（customer_id 虽是
+  // 写死 0 也照样被 serialize_i64 编成 "0"，不是数字 0），Decimal 是字符串 "0"。
+  // 这几条把「后端哪天摘掉 serialize_i64 / rust_decimal::serde::str」的漂移变成红灯。
+  it('W4：真实样本的雪花 id 与 Decimal 形态（id/customer_id 为 string，Decimal 为 string）', () => {
+    const pick = scanPartRowSchema.parse(wirePickRow);
+    expect(typeof pick.id).toBe('string');
+    expect(typeof pick.customer_id).toBe('string');
+    expect(pick.customer_id).toBe('0');
+    expect(typeof pick.unit_price).toBe('string');
+    expect(typeof pick.total_price).toBe('string');
+    expect(pick.unit_price).toBe('0');
+    expect(pick.total_price).toBe('0');
+    // 反向锁：把真实样本的形态改坏必须被拒（证明 W1 不是恒真断言）。
+    expect(() => scanPartRowSchema.parse({ ...wirePickRow, id: 226157188085710848 })).toThrow(
+      ZodError,
+    );
+    expect(() => scanPartRowSchema.parse({ ...wireHeldRow, total_price: 0 })).toThrow(ZodError);
+  });
+
+  // 整信封走一遍：实测信封的四个计数在 wire 上就是 JSON number（不是字符串），
+  // 经 `normalizeListResult` 的 Number() 之后再过 schema。
+  it('W5：真实信封（items/total/limit/offset）过守门，计数是 number', () => {
+    const parsed = scanPartListResultSchema.parse({
+      items: [wirePickRow],
+      total: 274,
+      limit: 200,
+      offset: 0,
+    });
+    expect(typeof parsed.total).toBe('number');
+    expect(parsed.total).toBe(274);
+    expect(parsed.items).toHaveLength(1);
+    const held = scanPartListResultSchema.parse({
+      items: [wireHeldRow],
+      total: 4,
+      limit: 200,
+      offset: 0,
+    });
+    expect(held.total).toBe(4);
   });
 });
 
