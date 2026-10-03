@@ -72,11 +72,8 @@ export function useDashboardUrgentList() {
   });
 
   // 派生：items = 全量 100 件数组，消费方（DashboardView）走 splitForDashboard 分桶。
-  // partSchema 与 PartListItem 有若干字段的 nullability 形态不 1:1 对齐，故强转；
-  // 消费侧只读 boolean / string / number 字段，不递归匹配子件。
-  const items = computed<PartListItem[]>(
-    () => (query.data.value?.items ?? []) as unknown as PartListItem[],
-  );
+  // partSchema 的 z.infer 与 PartListItem 已直接对齐，无需强转。
+  const items = computed<PartListItem[]>(() => query.data.value?.items ?? []);
 
   // fetchList 别名 = refetch 的 async 包装。外部 caller 与测试 await q.fetchList() 零改动可用。
   async function fetchList(): Promise<void> {

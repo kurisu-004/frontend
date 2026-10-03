@@ -244,15 +244,10 @@ function rowKey(row: PartListItem): string {
   return `PART_${row.id}`;
 }
 
-// 2026-07-30：懒加载装配件子件
-// 2026-08-05 C2：优先消费 row.matched_children（位置类筛选激活时后端已带出
-// 命中子件全集），避免每次展开都触发 /assemblies/{id} 详情查询。
-// 2026-09-28 保留作为旧快照兼容兜底；新数据永远走 getAssembly(row.id) —— 后端
-// modules/part/service/crud.rs::list_parts 合并响应不再携带 matched_children 字段。
-// 2026-09-29 修复：getAssembly 返回的 detail.children 已是 AssemblyChildItem[]，
-// mapper（parseAssemblyDetail → childToAssemblyChildItem）已注入 __is_child: true /
-// row_type: 'PART' / has_children: false。matched_children（旧快照兼容）走老路径
-// 强转补齐，行为不变。
+// 2026-07-30：懒加载装配件子件。子件统一走 getAssembly(row.id) —— 返回的
+// detail.children 已是 AssemblyChildItem[]，mapper（parseAssemblyDetail →
+// childToAssemblyChildItem）已注入 __is_child: true / row_type: 'PART' /
+// has_children: false，直接透传。
 async function loadChildren(
   row: PartListItem,
   _treeNode: unknown,
@@ -260,17 +255,6 @@ async function loadChildren(
 ): Promise<void> {
   if (row.row_type !== 'ASSEMBLY') {
     resolve([]);
-    return;
-  }
-  if (row.matched_children) {
-    resolve(
-      row.matched_children.map((c) => ({
-        ...c,
-        __is_child: true,
-        row_type: 'PART' as const,
-        has_children: false,
-      })),
-    );
     return;
   }
   try {

@@ -198,7 +198,7 @@ export function usePartsListQuery(opts: UsePartsListQueryOptions): UsePartsListQ
   // Element Plus 2.14 el-table 的 lazy tree 把「已加载子件」按 row-key 缓存在内部
   // lazyTreeNodeMap；items 整体替换（filter 切换）不会清空该缓存，导致已展开装配件
   // 仍展示上一次筛选的命中子件。给 ResponsiveList 加 :key 让这三个影响子件显示的
-  // 筛选变化时整体 remount，强制走 loadChildren 拿到当前 matched_children。
+  // 筛选变化时整体 remount，强制走 loadChildren 重新拉当前子件列表。
   // 不含 keyword/排序/状态/日期等不影响子件显示的筛选 —— 保留滚动位置与排序高亮。
   //
   // 2026-09-27 前后端字段对齐：移除 search.nextProcessIds（原下一道工序筛选随

@@ -216,6 +216,8 @@ export const partSchema = z.object({
   ]),
   order_no: z.string().nullable(),
   system_delivery_date: z.string().nullable(),
+  // 2026-10-03：已送数量。partSchema 被 5 个端点共用，其中多数不返该列，故必须
+  // nullable + optional（不能改必填）。仅 com/union-list 与 GET /parts 填。
   delivered_quantity: z.number().nullable().optional(),
   note: z.string().nullable(),
   customer_name: z.string().nullable(),
@@ -263,7 +265,6 @@ export const partSchema = z.object({
   has_children: z.boolean().optional(),
   child_count: z.number().nullable().optional(),
   created_at: z.string().nullable().optional(),
-  matched_children: z.array(z.unknown()).nullable().optional(),
   // 2026-09-29 新增：是否已上传 CNC 程序（z.boolean 必填；沿 CLAUDE.md §M-4 strip
   // 陷阱 —— 后端若漏返该字段 Zod parse 会抛错，守门到位）。仅 chain 含 CNC 工序
   // 的 part 才有非 false 值；其它 part 恒为 false（后端 service 层派生）。

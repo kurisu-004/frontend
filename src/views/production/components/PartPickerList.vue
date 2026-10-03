@@ -6,7 +6,6 @@
     - 删除 <el-card #header>（标题信息降级为 section 上方小节文字）
     - 单表 → 双表（pendingParts / designedParts 拆开；2026-09-16 起按 process_chain_id 分组）
     - 序列号 + 名称两列；图号作 hover tooltip（CLAUDE.md #11 加 :disabled 守卫）
-    - 树表 lazy load 复用 PartsTable.vue:291-295 / 297-332 模式（rowKey 前缀化 + matched_children 优先 / getAssembly fallback）
     - 子件 row 点击 → emit('select') → 父组件切换 selectedPartId（CLAUDE.md #11 row 空值守卫）
   2026-09-16：「待制定 / 已制定」分组改为 part.process_chain_id 驱动
   （null → 待制定 / 非 null → 已制定），替代原 step_count 懒加载派生。

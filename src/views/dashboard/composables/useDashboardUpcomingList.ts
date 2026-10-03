@@ -82,14 +82,10 @@ export function useDashboardUpcomingList(
     gcTime: Number.POSITIVE_INFINITY,
   });
 
-  // 派生（沿 2026-09-29 useDashboardUrgentList 风格）：
-  //   - data = query.data.value?.items as PartListItem[]（partSchema.matched_children
-  //     z.array(z.unknown()) 与 PartListItem.matched_children 形态差异，消费侧只读
-  //     boolean / string 字段，强转安全）；
+  // 派生：
+  //   - data：partSchema 的 z.infer 与 PartListItem 已直接对齐，无需强转；
   //   - isPending / error 派生让 caller 模板里写 isPending.value 即可。
-  const data = computed<PartListItem[]>(
-    () => (query.data.value?.items ?? []) as unknown as PartListItem[],
-  );
+  const data = computed<PartListItem[]>(() => query.data.value?.items ?? []);
   const isPending = computed<boolean>(() => query.isPending.value);
   const error = computed<Error | null>(() => query.error.value);
 
