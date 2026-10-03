@@ -11,8 +11,9 @@
 //   过滤项：statuses / customer_id / date range 等），keyword 参数为可选（view 不用就忽略）。
 // - keyword 改变时 onSearch() 同时把 page 重置 1，pageSize 改变时同样；这是「搜了就要看第一页」
 //   的标准语义。
-// - reset() 把 page 回到 1 并清空 keyword，且**保证重新拉一次数据**（页码 / keyword 本已是
-//   目标值时靠内部 reloadToken 触发，详见文件头 2026-10-04 段）；保留 async 签名以兼容
+// - reset() 把 page 回到 1 并清空 keyword，并在 page / keyword 本已是目标值时靠内部
+//   reloadToken 补出一次触发（前提：同一 tick 内 pageSize 也不变，否则会被 suppressSetupChange
+//   守卫整条吞掉，边界见文件头 2026-10-04 段）；保留 async 签名以兼容
 //   view 端 `await pagedRef.value?.reset()`。
 // - fetch 失败时不抛（view 自行 try/catch），但 loading 永远会清掉。
 //
@@ -28,16 +29,28 @@
 // 不能简单用 boolean ignoreFirst 旗标：因为 defaultPageSize=20 与 initialPageSize=20 相同时，
 //   Vue 不会触发 watcher（值未变），ignoreFirst 仍为 true，会误吞第一次用户交互。
 //
-// 2026-10-04 新增 reloadToken：reset() 必须无条件重新拉一次。
+// 2026-10-04 新增 reloadToken：让 reset() 在「同值赋值」场景下也能重新拉一次。
 // 背景：view 的真实筛选条件（customer_id / status / date range 等）放在 **view 本地
 // reactive** 里，只在 fetcher 闭包中读（PagedTable 的既定设计），本 composable 的 watcher
 // 看不见它们 —— 所以 reset() 的「重新拉」唯一可依赖的信号就是自己手里这三个 ref。
 // 而 Vue 只在值真的变化时才触发 watcher：当 page 已是 1 且 keyword 已是 '' 时，
 // `page.value = 1` / `keyword.value = ''` 都是同值赋值，一次回调都不入队 ⇒ 点「重置」
-// 零请求、列表永远停在旧结果（全仓 12 个 reset() 调用点的语义都是「要重新拉」，
+// 零请求、列表永远停在旧结果（全仓所有 reset() 调用点的语义都是「要重新拉」，
 // 无一依赖「reset 不发请求」）。reloadToken 是模块内私有的单调递增计数器，
-// 拼进 watch 的 getter 数组末尾当作第 4 个信号：它变 → watcher 必被触发 → 恰好一次 fetch。
+// 拼进 watch 的 getter 数组末尾当第 4 个信号：它变 → watcher 必被触发 → 恰好一次 fetch。
 // 回调里仍只解构前 3 项（守卫逻辑按 page / pageSize / keyword 三元组判定，与 token 无关）。
+//
+// ⚠️ 生效前提，勿当无条件保证：上面这条兜底只在「page / keyword / pageSize 三者在这次
+// reset 里都没变」时兑现。suppressSetupChange 守卫对 reloadToken 完全无感知 —— 它只比对
+// page / pageSize / keyword 的新旧值，而 Vue 的 oldValue 取自上一次**回调**的入参，同一 tick
+// 内的中间态不会成为 oldValue。于是只要 reset() 与 pageSize 变更落在同一 tick、且守卫的 6 个
+// 条件恰好全中（典型组合：reset() 与 PagedTable setup 期写 defaultPageSize 同 tick；或先
+// page=2 / pageSize=50 再 reset() 同 tick），回调就会 return ⇒ 那一次零请求。
+// 当前全仓 reset() 调用点都是交互 handler（@click / @keyup.enter / @clear / ListShell 自带
+// 「刷新」），构造不出该组合，故维持现状不改守卫。若将来有人在 setup / onMounted /
+// restoreState 里调 reset()（例如想拿 reset 兜首屏拉取），必须先把守卫改成能感知 token
+// （回调解构第 4 项并比较新旧 token，或补一条 oldToken === newToken 才不抑制），
+// 否则那次 reset 不会发请求。
 
 import { ref, watch, type Ref } from 'vue';
 
@@ -114,6 +127,7 @@ export function usePagedListQuery<T>(
       // 跳过 PagedTable.vue setup 内应用 defaultPageSize 触发的首次 watcher：
       // pageSize 从 initialPageSize 变为其它、其它维度未变 → 这是 setup 内的同步赋值，
       // consumer 的 onMounted 显式 fetch() 是真正的首屏拉取入口。
+      // 守卫对 reloadToken 无感知：同 tick 内若还有 reset()，会被这一条一起吞掉（边界见文件头）。
       if (
         oldSize === initialPageSize &&
         newSize !== initialPageSize &&
@@ -145,8 +159,9 @@ export function usePagedListQuery<T>(
     page.value = 1;
     keyword.value = '';
     // 2026-10-04 新增：page / keyword 可能本已是目标值（同值赋值不触发 watcher），
-    // 用 token 兜底保证「reset 一定要重新拉一次」。同一 tick 内多次 reset 会被 Vue
-    // 批处理合并成一次 watcher 回调 ⇒ 仍然只发一次 fetch。
+    // 用 token 兜底让「reset 要重新拉」在这两个值未变时仍能成立（同 tick 内 pageSize 也变
+    // 时会被 suppressSetupChange 守卫吞掉，边界见文件头 2026-10-04 段）。同一 tick 内多次
+    // reset 会被 Vue 批处理合并成一次 watcher 回调 ⇒ 仍然只发一次 fetch。
     reloadToken.value++;
     return Promise.resolve();
   }

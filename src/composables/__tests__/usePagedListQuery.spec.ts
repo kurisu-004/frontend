@@ -8,7 +8,9 @@
 //     所以「重新拉」唯一可依赖的信号就是自己手里的 ref —— 而 Vue 同值赋值不触发 watcher，
 //     「已在第 1 页 + keyword 已空」时一次请求都不发（线上现象：点重置无反应、列表永远
 //     停在旧结果）。三种情形（page≠1 / page===1 且 keyword 有值 / page===1 且 keyword 已空）
-//     都必须恰好发一次。
+//     都必须恰好发一次。作用域限于「同一 tick 内 pageSize 也没变」—— 同 tick 内若还有
+//     pageSize 变更（如与 PagedTable setup 期写 defaultPageSize 撞一起），会被
+//     suppressSetupChange 守卫整条吞掉，边界见 usePagedListQuery.ts 文件头 2026-10-04 段。
 //   ② PagedTable 在 setup 内同步写 defaultPageSize 触发的首次 watcher 必须仍被抑制
 //     （首屏拉取入口是 consumer 显式 fetch()，不是这次 watcher），且 onSearch 仍只改 ref。
 //

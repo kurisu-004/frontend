@@ -16,7 +16,7 @@
 //
 // 2026-10-04：receivingFilter 不再有 customer_id。「待接收」列表接口
 // （GET /outsource-shipments/in-flight）的查询参数只有 keyword / limit / offset，
-// 客户筛选从未真正进过请求，是个只改 state、不生效的死筛选（后端本轮不补该参数），
+// 当前不支持按客户筛选，那个下拉从未真正进过请求，是个只改 state、不生效的死筛选，
 // 故前端连 UI 带 state 一起删干净。
 //
 // 子组件约定：

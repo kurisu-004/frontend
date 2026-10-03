@@ -8,7 +8,7 @@
   - 通过 defineExpose 把 refresh() 暴露给 shell 用于「发送成功后联动刷新」。
 
   2026-10-04：删掉「客户（L1）」筛选。待接收列表接口的查询参数只有 keyword /
-  limit / offset，该下拉只改本地 state、请求永不携带，是个死筛选。
+  limit / offset，当前不支持按客户筛选；那个下拉只改本地 state、请求永不携带，是个死筛选。
 -->
 <template>
   <div class="receiving-tab">
