@@ -1678,7 +1678,9 @@ export type OutsourceSendableListResultSchema = z.infer<typeof outsourceSendable
 // `outsourceXxxItemSchema` 风格命名。`xxxSchema` 与 `xxxResultSchema` 成对导出，
 // 前者守行、后者守顶层。
 //
-// 字段对齐后端 `vo/pool.rs` 的三条序列化约定（与本文件既有外协 schema 逐字一致）：
+// 字段形态取自后端 outsource-pool 域的端点契约（后端并行任务 2026-10-03 同批交付，
+// 代码尚未合入本仓 —— 本段只引用契约，未与后端实现逐字核验过）。三条序列化约定
+// （与本文件既有外协 schema 逐字一致）：
 //   - 雪花 i64 **全字段 `z.string()`**：后端 `#[serde(serialize_with =
 //     "serialize_i64")]`（JS Number 会丢精度）；不用 `z.coerce.string()` /
 //     `z.number()` 掩盖类型漂移；
@@ -1737,8 +1739,12 @@ export type OutsourcePoolCompanySchema = z.infer<typeof outsourcePoolCompanySche
  *
  *  与 `outsourceSendableItemSchema`（23 字段）的差异只有一处实质字段：本 VO **多了
  *  `can_send`**（后端派生的可发送判据，替代前端原先自己算的 `canSend()`）。另：本
- *  VO 契约不含 `next_process_id` / `next_process_name`。同名字段的 nullability 沿
- *  `outsourceSendableItemSchema` 逐字沿用（同一套 SQL 派生列）。
+ *  VO 契约不含 `next_process_id` / `next_process_name` —— 理由：发送的目标工序 =
+ *  当前 tab 的工序 id（`send-to-outsource` 的 `process_id` 入参），对本看板冗余；
+ *  接收侧的目标工序由 state 端点的 `receive_next_process_id` /
+ *  `receive_next_process_name` 提供。两侧字段集一致，无需后端补字段。
+ *  同名字段的 nullability 沿 `outsourceSendableItemSchema` 逐字沿用（同一套 SQL
+ *  派生列）。
  *
  *  `quantity` 收紧成**非空** number：后端 `OutsourceSendableItem::quantity` 是非空
  *  `i32`，`outsourceSendableItemSchema` 放宽成 `.nullable()` 只是为了迁就历史 TS

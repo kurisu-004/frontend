@@ -12,9 +12,11 @@
 //     `queryKey[2]` 这个下标来自 `qk.outsourcePoolByProcess` 的返回值
 //     `['outsource-pool', 'by-process', processId]`：[0] 根命名空间 / [1] 端点名 /
 //     [2] 唯一入参；键工厂是全仓唯一来源，调用点不拼字面量数组；
-//   - 守门走 outsourcePoolByProcessResultSchema.parse —— api 层
-//     `listOutsourcePoolByProcess` 已 parse 过一次，这里**只做一次**（queryFn 不重复
-//     parse，沿 usePendingDispatch 删双重 parse 的做法）；
+//   - 守门走 outsourcePoolByProcessResultSchema.parse；api 层
+//     `listOutsourcePoolByProcess` 已 parse 过一次，这里**再一次** —— 是刻意的双重
+//     parse：api 层沿本仓既有 outsource helper 做法挡边界漂移，queryFn 那次是
+//     CLAUDE.md §4「共享 useQuery 的 queryFn 必须 parse(await api())」的硬要求
+//     （worker-pool 三个 query 同款），两层都不可省。
 //   - enabled: computed(() => !!toValue(processId)) —— 无工序时零网络请求（tab 未激活
 //     / 加载中）；
 //   - queryFn 内二次守卫：enabled 只挡自动触发，显式 `refetch()` 会绕过它，不留守卫
@@ -24,9 +26,10 @@
 //   - 不写 retry：信任 src/main.ts 全局 queries.retry: 0。
 //
 // 失效编排点与**前缀全失效**的理由：invalidateOutsourcePoolByProcessAll(qc) 由看板侧
-// 的外协收发 mutation（useOutsourceBoardMove）onSuccess 调。**前缀全刷是唯一正确
-// 策略** —— 发送的目标工序由当前 tab 决定、后端不自推，mutation 回调里可能拿不到
-// 受影响的 processId；且一次发送会让「候选批次列表」和「公司列持有数」同时变。
+// 的外协收发 mutation（useOutsourceBoardMove，并行任务，本仓尚无调用方）onSuccess 调。
+// **前缀全刷是唯一正确策略** —— 发送的目标工序由当前 tab 决定、后端不自推，mutation
+// 回调里可能拿不到受影响的 processId；且一次发送会让「候选批次列表」和「公司列持有数」
+// 同时变。
 // ⚠️ 编排点 ≠ 全部写点：除看板自身的收发外没有其它写端点能改「可发送候选」这个集合
 // （接收是往公司列加行、不产生新候选），但按 CLAUDE.md「跨页面写操作不做穷举失效」
 // 策略，这里只保证「写完立即看到自己那笔」。
@@ -84,7 +87,7 @@ export function useOutsourcePoolByProcessQuery(
 /** 2026-10-03 新增：失效整个 outsource-pool by-process 域（任意 processId 形态）。
  *  **前缀全失效是唯一正确策略** —— 发送的目标工序由当前 tab 决定、后端不自推，
  *  mutation 回调里可能拿不到受影响 processId，故无法精刷。
- *  调用方：看板侧 useOutsourceBoardMove 的收发 mutation onSuccess。 */
+ *  调用方：看板侧 useOutsourceBoardMove（并行任务，待落地）的收发 mutation onSuccess。 */
 export function invalidateOutsourcePoolByProcessAll(qc: QueryClient): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.outsourcePoolByProcessPrefix }).then(() => undefined);
 }

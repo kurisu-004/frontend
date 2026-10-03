@@ -15,9 +15,11 @@
 //     `['outsource-pool', 'state', outsourceCompanyId, processId]` —— [0] 根命名空间
 //     / [1] 端点名 / [2] 外协公司 id / [3] 工序 id。键工厂是全仓唯一来源，调用点不
 //     拼字面量数组；
-//   - 守门走 outsourcePoolStateResultSchema.parse —— api 层
-//     `listOutsourcePoolState` 已 parse 过一次，这里**只做一次**（queryFn 不重复
-//     parse，沿 usePendingDispatch 删双重 parse 的做法）；
+//   - 守门走 outsourcePoolStateResultSchema.parse；api 层
+//     `listOutsourcePoolState` 已 parse 过一次，这里**再一次** —— 是刻意的双重
+//     parse：api 层沿本仓既有 outsource helper 做法挡边界漂移，queryFn 那次是
+//     CLAUDE.md §4「共享 useQuery 的 queryFn 必须 parse(await api())」的硬要求
+//     （worker-pool 三个 query 同款），两层都不可省。
 //   - enabled: computed(() => !!(toValue(companyId) && toValue(processId))) ——
 //     **两个 query 参数都必填**，缺任一个零网络请求（否则后端直接拒，且会打出
 //     空参数请求）；
@@ -28,9 +30,9 @@
 //   - 不写 retry：信任 src/main.ts 全局 queries.retry: 0。
 //
 // 失效编排点与**前缀全失效**的理由：invalidateOutsourcePoolStateAll(qc) 由看板侧的
-// 外协收发 mutation（useOutsourceBoardMove）onSuccess 调。**前缀全刷是唯一正确策略**
-// —— 一次发送/接收会同时改多个公司列的 `current_held`（发送释放源公司的持有、接收把
-//  批次落到目标公司），无法定位到 (公司, 工序) 这一对。
+// 外协收发 mutation（useOutsourceBoardMove，并行任务，本仓尚无调用方）onSuccess 调。
+// **前缀全刷是唯一正确策略** —— 一次发送/接收会同时改多个公司列的 `current_held`
+// （发送释放源公司的持有、接收把批次落到目标公司），无法定位到 (公司, 工序) 这一对。
 // ⚠️ 编排点 ≠ 全部写点：与 CLAUDE.md「跨页面写操作不做穷举失效」策略一致，这里只
 // 保证「写完立即看到自己那笔」。
 
@@ -94,7 +96,7 @@ export function useOutsourcePoolStateQuery(
 /** 2026-10-03 新增：失效整个 outsource-pool state 域（任意 (公司, 工序) 形态）。
  *  **前缀全失效是唯一正确策略** —— 一次发送/接收会同时改多个公司列的持有集合
  *  （发送释放源公司、接收写入目标公司），无法精刷到某一对参数。
- *  调用方：看板侧 useOutsourceBoardMove 的收发 mutation onSuccess。 */
+ *  调用方：看板侧 useOutsourceBoardMove（并行任务，待落地）的收发 mutation onSuccess。 */
 export function invalidateOutsourcePoolStateAll(qc: QueryClient): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.outsourcePoolStatePrefix }).then(() => undefined);
 }

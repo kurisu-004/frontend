@@ -17,7 +17,7 @@
 //
 // 测试策略（沿 useWorkerPoolByProcessQuery.spec.ts 范本）：
 //   - vi.mock('@/api/outsource')：listOutsourcePoolByProcess 替换为 vi.fn()，返回值沿
-//     后端 `vo/pool.rs` 真契约（6 顶层字段裸对象：process_id / process_code /
+//     outsource-pool 域端点契约（6 顶层字段裸对象：process_id / process_code /
 //     process_name / companies[] / total / items[]，无分页信封）；
 //   - vi.mock('element-plus', () => ({ ElMessage: { ...vi.fn() } }))。
 

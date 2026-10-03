@@ -352,14 +352,16 @@ export interface QuotablePartListResult {
 // 外协公司列」消费（形态照抄生产队列 /workers/queue）：
 //   - GET /outsource-pool/counts                  → 各工序可发送 / 在途计数（tab 徽标）
 //   - GET /outsource-pool/{process_id}            → 单工序的候选批次 × 公司列
-//   - GET /outsource-pool/state?company_id&process_id → 单公司 × 单工序的在途批次
+//   - GET /outsource-pool/state?outsource_company_id=&process_id=
+//                                                 → 单公司 × 单工序的在途批次
 //
 // 与本文件既有 `OutsourceXxxListResult` 的两点结构性差异（写端点读取时按此判断）：
 //   1. 响应是**裸对象**而非分页信封（无 limit / offset）—— 三个 Result 类型都只有
 //      一次全量，没有分页参数；
 //   2. 雪花 i64 全部以 JSON **字符串**出现（JS Number 会丢精度）；Decimal 与
-//      datetime 同样是字符串。计数（sendable_count / held_count / current_held /
-//      total）是裸 i64 数字，方向与雪花 ID 相反。
+//      datetime 同样是字符串。计数（sendable_count / in_flight_count /
+//      sendable_total / in_flight_total / total / held_count / current_held）是裸 i64
+//      数字，方向与雪花 ID 相反。
 // ============================================================
 
 /** `GET /outsource-pool/counts` 单行（每个有货的工序一行）。 */
@@ -398,7 +400,11 @@ export interface OutsourcePoolCompany {
  *  「可发送候选批次 × 该外协工序」，字段语义与 `OutsourceSendableItem` 同源。
  *  与 `OutsourceSendableItem` 的两处差异：
  *   1. 新增 `can_send`（后端派生的可发送判据，替代前端原先的 `canSend()` 计算）；
- *   2. 契约不含 `next_process_id` / `next_process_name`。
+ *   2. 契约不含 `next_process_id` / `next_process_name`，**理由**：发送的目标工序 =
+ *      当前 tab 的工序 id（`send-to-outsource` 的 `process_id` 入参），对本看板冗余；
+ *      接收侧的目标工序由 state 端点的 `receive_next_process_id` /
+ *      `receive_next_process_name` 提供。两侧字段集一致，无需后端补字段 ——
+ *      下次有人「对齐」时勿把这两个字段加回来。
  *  `company_options` 沿用 `OutsourceCompanyOption`（DIRECT 模式的公司下拉源）。 */
 export interface OutsourcePoolItem {
   /** t_part_batch.version（批次级 OCC，发送时回传） */

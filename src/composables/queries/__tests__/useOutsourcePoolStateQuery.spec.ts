@@ -16,8 +16,8 @@
 //   - T9：坏响应（行字段缺失）→ query 进 error 态（Zod 守门挂在通路上）。
 //
 // 测试策略（沿 useWorkerStateByWorkerQuery.spec.ts 范本）：
-//   - vi.mock('@/api/outsource')：listOutsourcePoolState 替换为 vi.fn()，返回值沿后端
-//     `vo/pool.rs` 真契约（5 顶层字段裸对象，**无分页信封**）；
+//   - vi.mock('@/api/outsource')：listOutsourcePoolState 替换为 vi.fn()，返回值沿
+//     outsource-pool 域端点契约（5 顶层字段裸对象，**无分页信封**）；
 //   - vi.mock('element-plus', () => ({ ElMessage: { ...vi.fn() } }))。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

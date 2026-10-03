@@ -13,7 +13,7 @@
 //
 // 测试策略（沿 useWorkerPoolCountsQuery.spec.ts 范本）：
 //   - vi.mock('@/api/outsource')：listOutsourcePoolCounts 替换为 vi.fn()，返回值沿
-//     后端 `vo/pool.rs` 真契约（counts[] + sendable_total + in_flight_total + total，
+//     outsource-pool 域端点契约（counts[] + sendable_total + in_flight_total + total，
 //     **裸对象无分页信封**）；
 //   - vi.mock('element-plus', () => ({ ElMessage: { ...vi.fn() } }))：防 vitest
 //     node env 中 ElMessage 内部 normalizeAppendTo 触发 ReferenceError。
@@ -166,8 +166,9 @@ describe('useOutsourcePoolCountsQuery — 常量 queryKey + 失效守门（2026-
   });
 
   it('T6：invalidateOutsourcePoolCountsQuery 走 qk.outsourcePoolCountsPrefix（共享失效源）', async () => {
-    // 不变量：看板侧 useOutsourceBoardMove 的收发失效链与任何未来的失效点都通过
-    // qk.outsourcePoolCountsPrefix 命中 counts 缓存，行为不分叉。
+    // 不变量：失效唯一入口是 qk.outsourcePoolCountsPrefix —— 看板侧收发 mutation
+    // （useOutsourceBoardMove，并行任务待落地）与任何未来的失效点都经它命中 counts
+    // 缓存，行为不分叉。
     const spy = vi.spyOn(testQueryClient, 'invalidateQueries');
     await invalidateOutsourcePoolCountsQuery(testQueryClient);
     expect(spy).toHaveBeenCalledWith({ queryKey: ['outsource-pool', 'counts'] });

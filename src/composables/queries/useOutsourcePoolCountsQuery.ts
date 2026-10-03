@@ -9,8 +9,10 @@
 //   - queryFn 走 outsourcePoolCountsResultSchema.parse 守门（Zod 默认 strip 模式下
 //     漏声明字段会被静默丢弃、parse 照过不误 ⇒ 逐字段显式声明，见 schemas.ts 同段
 //     注释与 `__tests__/schemas.spec.ts` 的 outsource-pool 段）；
-//   - **守门只在 api 层做一次**（`listOutsourcePoolCounts` 内部已 parse），queryFn
-//     不重复 parse（沿 usePendingDispatch 删双重 parse 的做法）；
+//   - 守门在 api 边界与 queryFn **各一次**，是刻意的双重 parse：api 层沿本文件既有
+//     outsource helper 做法挡边界漂移（parse 结果再 `as` 成 TS 类型），queryFn 那次
+//     是 CLAUDE.md §4「共享 useQuery 的 queryFn 必须 xxxListResultSchema.parse(
+//     await xxxAPI())」的硬要求，worker-pool 三个 query 同款；两者都不可省。
 //   - 无 enabled 闸门：本 query 无入参，恒可发请求（闸门是「参数缺失时不发」的场景专用；
 //     页面级「等路由守卫 + 恢复完再开闸」的 restore 模式不在本层，见 CLAUDE.md §6）；
 //   - staleTime / gcTime: 30_000 / 5 * 60 * 1000 —— 短时请求去重层（CLAUDE.md
@@ -19,8 +21,8 @@
 //     refetch（收发完成后徽标数字不会停在旧值）；
 //   - 不写 retry：信任 src/main.ts 全局 queries.retry: 0。
 //
-// 失效编排点：invalidateOutsourcePoolCountsQuery(qc) 由看板侧的外协收发 mutation
-// （useOutsourceBoardMove）onSuccess 调。
+// 失效编排点（待落地）：invalidateOutsourcePoolCountsQuery(qc) 由看板侧的外协收发
+// mutation（useOutsourceBoardMove，并行任务，本仓尚无调用方）onSuccess 调。
 // ⚠️ **编排点 ≠ 全部写点**：本域计数反映的是「可发送候选 + 在途持有」两个集合的
 // 并集，除看板自身的收发外没有其它写端点能改它们；但按 CLAUDE.md「跨页面写操作不做
 // 穷举失效」策略，这里只保证「写完立即看到自己那笔」，新鲜度仍以 30s 有限 staleTime
@@ -58,7 +60,7 @@ export function useOutsourcePoolCountsQuery() {
 
 /** 2026-10-03 新增：失效 outsource-pool counts（外协发送/接收完成后调）。
  *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。
- *  调用点：看板侧 useOutsourceBoardMove 的收发 mutation onSuccess。 */
+ *  调用方：看板侧 useOutsourceBoardMove（并行任务，待落地）的收发 mutation onSuccess。 */
 export function invalidateOutsourcePoolCountsQuery(qc: QueryClient): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.outsourcePoolCountsPrefix }).then(() => undefined);
 }

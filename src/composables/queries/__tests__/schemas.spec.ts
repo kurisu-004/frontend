@@ -1728,9 +1728,11 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
 // ============================================================
 // 2026-10-03 新增：外协看板 pool 域 3 个只读端点的 schema 守门断言。
 //
-// 数据来源：后端 `vo/pool.rs` 契约（`GET /outsource-pool/counts` /
+// 数据来源：后端 outsource-pool 域的端点契约（`GET /outsource-pool/counts` /
 // `GET /outsource-pool/{process_id}` / `GET /outsource-pool/state`）—— 3 个端点响应
 // 都是**裸对象**（无分页信封），与上面 4 个 outsource list 端点不同构，故独立成组。
+// 该域后端代码属并行任务、尚未合入本仓，故本组断言只能证明「fixture ↔ schema」自洽，
+// 不能证明「schema ↔ 后端实现」已核验；后者待后端合入后逐字重核一次。
 //
 // 覆盖：
 //   - S-OP1~4：counts（5 字段行 + 4 字段顶层）。
@@ -1847,7 +1849,11 @@ describe('2026-10-03 新增：外协看板 pool 域 schema 契约断言', () => 
       expect(() => outsourcePoolCountsSchema.parse(rest)).toThrow();
     }
     for (const key of ['sendable_total', 'in_flight_total', 'total'] as const) {
+      // counts 键必须留在对象里：顶层 schema 的 4 个字段各自独立缺一即红，少了 counts
+      // 会让本组三条断言全部因同一个缺键而抛 —— 把某个 total 改成 .optional() /
+      // .default(0) 也照样绿，属空断言。
       const { [key]: _omit, ...rest } = {
+        counts: [],
         sendable_total: 0,
         in_flight_total: 0,
         total: 0,

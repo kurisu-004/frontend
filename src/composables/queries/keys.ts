@@ -228,9 +228,11 @@ export const qk = {
   //         `scanInspectMutation`）—— 品检流转，IN_PROCESS+PRODUCTION_SHELF
   //         起点同样会离开候选池；
   //       - outsource 域收发（useOutsourceSendableList / usePartDetail 的
-  //         receiveFromOutsource / useOutsourceReceivingList）—— 2026-10-03 起已由
-  //         useOutsourceBoardMove 挂 outsource-pool 三域失效，其写入侧的批次状态变化
-  //         由 qk.partsPrefix 覆盖（收发改的是 t_part 的派生 status）。
+  //         receiveFromOutsource / useOutsourceReceivingList）—— send 移出候选池、
+  //         receive 移入候选池；**仍未挂 worker-pool 三域失效**（既存缺口）。
+  //         2026-10-03 起该页改看板、数据源换成 outsource-pool 三域；看板侧收发
+  //         mutation（useOutsourceBoardMove，并行任务待落地）挂 outsource-pool
+  //         三键 + qk.partsPrefix 失效。
   //   - 2026-09-30 决策：**不再逐个给这些写点补失效**（要求穷举全仓写点，不可持续）。
   //     改为把 pool 三域的 staleTime / gcTime 收紧到有限值（30s / 5min）——
   //     工人送检后切回队列页（操作间隔通常 > 1min）自动 refetch，实时性由有限
@@ -291,16 +293,17 @@ export const qk = {
   //   - 键的根只要求「同根前缀匹配」才有意义。本域与既有 `outsource` 域的读端点
   //     （`/outsource-sendable` / `/outsource-shipments/in-flight` /
   //     `/outsource-companies/*`）**没有共享写点**：那 4 个 list 端点所在的收发页面
-  //     2026-10-03 起被本看板取代，而看板自己的写操作只有外协发送 / 接收，两者都是
+  //     2026-10-03 起改看板（UI 属并行任务，看板侧消费本域三键）、数据源换成本域；
+  //     而看板自己的写操作只有外协发送 / 接收，两者都是
   //     `POST /prod/batches/{batch_id}/send-to-outsource` /
   //     `receive-from-outsource`（prod/batches 域），不写 outsource 域的表。
   //   - 反过来，挂到 `outsource` 前缀下会让将来任何一次「outsource 域一把全刷」把
   //     看板三个 tab 的数据全部连带重拉（`in_flight_count` 随收发变动，量级不小）。
   //   - 命名空间与后端 URL 段逐字对齐（`/outsource-pool/*`），便于按 URL 反查键。
   //
-  // 失效编排点：外协收发的写操作由 `useOutsourceBoardMove`（看板侧的收发 mutation）
-  // 集中编排，onSuccess 失效本域三键 + `qk.partsPrefix` —— 发送/接收改的是 t_part 的
-  // 派生 status，零件一览 / 批次列表要跟着变。
+  // 失效编排点（待落地）：看板侧收发 mutation `useOutsourceBoardMove`（并行任务，本仓
+  // 尚无调用方）落地后由其 onSuccess 集中失效本域三键 + `qk.partsPrefix` ——
+  // 发送/接收改的是 t_part 的派生 status，零件一览 / 批次列表要跟着变。
   // ⚠️ 编排点 ≠ 全部写点：与 CLAUDE.md「跨页面写操作不做穷举失效」一致，本域的
   // 新鲜度由 30s 有限 staleTime + 看板自身的显式 refetch 兜底。
   // ============================================================
