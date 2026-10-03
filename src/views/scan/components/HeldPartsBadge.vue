@@ -74,7 +74,15 @@
       </div>
 
       <div v-else class="held-list" :style="{ maxHeight: maxListHeight }">
-        <div v-for="p in parts" :key="p.id" :class="['held-row', { 'is-urgent': p.is_urgent }]">
+        <!-- 2026-10-04：key 用 `p.batch_id || p.id`（与报工台三页列表同口径）。
+             后端把 by-worker 端点的 `batch_id` 填上后，同一 part 的多个批次会在
+             抽屉里撞 part id ⇒ Vue duplicate-key（整列表只渲染一行且控制台告警）。
+             批次锚点缺失（老数据 / 后端回退）时退回 part id。 -->
+        <div
+          v-for="p in parts"
+          :key="p.batch_id || p.id"
+          :class="['held-row', { 'is-urgent': p.is_urgent }]"
+        >
           <div class="held-row-main">
             <span class="held-serial">{{ p.serial_no || '—' }}</span>
             <span class="held-drawing">{{ p.drawing_no }}</span>

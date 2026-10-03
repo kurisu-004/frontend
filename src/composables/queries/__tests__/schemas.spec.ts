@@ -2165,7 +2165,7 @@ describe('2026-10-03 新增：外协看板 pool 域 schema 契约断言', () => 
 //
 // 服务对象：`GET /api/v2/parts/pickable-by-work-type/{work_type_id}` 与
 // `GET /api/v2/parts/by-worker/{worker_id}`，行 VO = backend-rust
-// `src/modules/part/vo/part.rs` 的 `PartListItem`（34 字段），外层是 `PartListOut`
+// `src/modules/part/vo/part.rs` 的 `PartListItem`（38 字段），外层是 `PartListOut`
 // 分页信封。fixture 按两个 service 构造行的真实口径填（占位值 1970-01-01 /
 // is_urgent=false / applicant_name="" / customer_id="0" / status="IN_PROCESS" /
 // version=0 / location=null）。
@@ -2195,6 +2195,10 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     updated_by: null,
     deleted_at: null,
     process_chain_id: null,
+    chain_state: 'NEXT',
+    chain_next_process_id: '190000000000021',
+    chain_next_process_name: 'CUT-01 下料',
+    chain_current_process_name: 'SAW-02 锯切',
     customer_name: null,
     l1_customer_name: null,
     location: null,
@@ -2207,11 +2211,12 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     batch_version: 4,
   };
 
-  it('S-SP1：接受 PartListItem 完整 34 字段（派生键恒 null、批次锚点有值）', () => {
+  it('S-SP1：接受 PartListItem 完整 38 字段（派生键恒 null、批次锚点与链四件套有值）', () => {
     const parsed = scanPartRowSchema.parse(validScanRow);
     expect(parsed.id).toBe('190000000000001');
     expect(parsed.batch_id).toBe('190000000000009');
     expect(parsed.batch_version).toBe(4);
+    expect(parsed.chain_state).toBe('NEXT');
     // 后端刻意不返的键不在 schema 里 ⇒ parse 后不应凭空出现
     expect('next_process_id' in parsed).toBe(false);
     expect('shelf_code' in parsed).toBe(false);
@@ -2255,5 +2260,46 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     expect(envelope.total).toBe(1);
     expect(() => scanPartListResultSchema.parse([validScanRow])).toThrow();
     expect(() => scanPartListResultSchema.parse({ items: [validScanRow], total: 1 })).toThrow();
+  });
+
+  // 2026-10-04 工序链四件套按「带默认值的必输出键」声明（取舍理由见 schemas.ts
+  // scanPartRowSchema.chain_state 的注释）：**缺键降级、不抛**。这条断言守的就是那个
+  // 降级承诺 —— 后端没上线 / 漏发这四个键时，parse 必须通过（否则取件 / 放回 / 送检
+  // 三页列表全空，报工台停工），且落到的默认值必须正好是「没有下一道」的语义。
+  it('S-SP5：工序链四件套缺键 → 降级到「无链」语义而不是抛错', () => {
+    const { chain_state: _s, ...noState } = validScanRow;
+    void _s;
+    // chain_state 用 nullish（不是 .default('NONE')）：保留「键缺失 ⇒ undefined」这个
+    // 信号，消费侧据此 warn 一次；不锁枚举：后端加第四个取值也只是降级。
+    const noStateParsed = scanPartRowSchema.parse(noState);
+    expect(noStateParsed.chain_state).toBeUndefined();
+    // 后端将来新增第四个取值（纯后端单方面改动）不得让 parse 抛错
+    const unknownState = scanPartRowSchema.parse({ ...validScanRow, chain_state: 'SKIP' });
+    expect(unknownState.chain_state).toBe('SKIP');
+
+    // 另三个键的默认值对齐后端兜底口径：id 落 '0'（消费侧见到 '0' 必须短路，不发
+    // for-return 请求）、两个 name 落 null。
+    const bare: Record<string, unknown> = { ...validScanRow };
+    for (const key of [
+      'chain_state',
+      'chain_next_process_id',
+      'chain_next_process_name',
+      'chain_current_process_name',
+    ]) {
+      delete bare[key];
+    }
+    const bareParsed = scanPartRowSchema.parse(bare);
+    expect(bareParsed.chain_state).toBeUndefined();
+    expect(bareParsed.chain_next_process_id).toBe('0');
+    expect(bareParsed.chain_next_process_name).toBeNull();
+    expect(bareParsed.chain_current_process_name).toBeNull();
+
+    // 但键在、值形态错（雪花 id 退化成 number）仍要抛 —— 默认值只兜「缺键」，不兜「坏形态」
+    expect(() =>
+      scanPartRowSchema.parse({ ...validScanRow, chain_next_process_id: 190000000000021 }),
+    ).toThrow();
+    expect(() =>
+      scanPartRowSchema.parse({ ...validScanRow, chain_next_process_id: null }),
+    ).toThrow();
   });
 });
