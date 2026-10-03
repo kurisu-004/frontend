@@ -1,7 +1,6 @@
 // 送货单管理 API 封装。
 //
-// 端点清单（业务端点统一走 `api`（baseURL `/api/v2`），打印 2 端点走 `apiPrint`
-// （baseURL `/api/v1`））：
+// 端点清单（全部走 `api`，baseURL `/api/v2`；4 个打印端点由 rust 鉴权后转发 python）：
 //   [v2] GET    /delivery-notes                       - listNotes
 //   [v2] GET    /delivery-notes/pickup-pending        - listPickupPending
 //   [v2] GET    /delivery-notes/candidate-parts       - listCandidateParts
@@ -16,15 +15,15 @@
 //   [v2] POST   /delivery-notes/{id}/pickup-scan      - pickupScan
 //   [v2] POST   /delivery-notes/{id}/pickup           - pickup
 //   [v2] POST   /delivery-notes/{id}/soft-delete      - softDeleteNote
-//   [v1] POST   /delivery-notes/{id}/print            - printNote           (apiPrint)
-//   [v1] POST   /delivery-notes/{id}/print-labels     - printNoteLabels     (apiPrint)
+//   [v2] POST   /delivery-notes/{id}/print            - printNote           (转发 python)
+//   [v2] POST   /delivery-notes/{id}/print-labels     - printNoteLabels     (转发 python)
 //   [v2] POST   /delivery-notes/scan                  - scanDelivery
 //   [v2] GET    /delivery-notes/batch-detail          - batchGetNotes
 //   [v2] POST   /delivery-notes/{id}/attach-batches   - attachBatches
 //
 // 全部雪花 ID 入参为 string（CLAUDE.md §3 JS Number 丢精度）。
 
-import { api, apiPrint } from '@/api/http';
+import { api } from '@/api/http';
 import type {
   AttachBatchItem,
   AttachBatchesOut,
@@ -41,7 +40,8 @@ import type {
 } from '@/types/deliveryNote';
 
 // v2 后端 DeliveryNoteListQuery.statuses 字段类型：单值 string（逗号分隔或单值），
-// 由调用方按需传入；serializer 走 serializeParamsV1（数组重复 key）——前端仍传数组。
+// 由调用方按需传入；序列化由 `api` 实例的 serializeParamsV2 统一处理——`statuses`
+// 在 CSV 白名单内，数组会编码成逗号分隔单值。
 // v2 后端在 controller 层接收 Option<List<String>> / Option<String> 双形态。
 export interface ListNotesParams {
   statuses?: DeliveryNoteStatus[];
@@ -262,8 +262,8 @@ export async function updateNote(
 /**
  * 程序化下载送货单 XLSX（Axios blob + onDownloadProgress）。
  *
- * - 走 `apiPrint`（baseURL `/api/v1`）—— 打印端点与其它业务端点不同 baseURL；
- *   拦截器（token / refresh / 信封）与 `api` 共享。
+ * - 走 `api`（baseURL `/api/v2`）：端点由 rust 鉴权后转发 python 生成，拦截器
+ *   （token / refresh / 信封）与其它业务端点同一套。
  * - `onDownloadProgress` 通过 `Content-Length` 给出 total，前端据此算出百分比。
  * - 拿到完整 Blob 后再用 `URL.createObjectURL` + `<a download>` 触发浏览器保存。
  */
@@ -299,9 +299,8 @@ export async function printNote(
   payload: PrintNotePayload = {},
   onProgress?: (p: PrintNoteProgress) => void,
 ): Promise<PrintNoteResult> {
-  // 2026-09-15 Phase 5：打印端点改走 apiPrint（baseURL `/api/v1`）。
   // 2026-08-02 改 POST + body（携带 custom_order；GET 无法带 array body）
-  const resp = await apiPrint.post<Blob>(
+  const resp = await api.post<Blob>(
     `/delivery-notes/${encodeURIComponent(noteId)}/print`,
     payload,
     {
@@ -317,15 +316,13 @@ export async function printNote(
 
 /** 2026-08-05 PR-C5：打印标签 Excel（与 printNote 配对，触发浏览器二次下载）。
  * 2026-08-07 升级：可传 ``line_item_ids`` 只打勾选行。
- * 同一 payload 保证行口径与送货单完全一致。
- *
- * 2026-09-15 Phase 5：打印端点改走 apiPrint（baseURL `/api/v1`）。 */
+ * 同一 payload 保证行口径与送货单完全一致。 */
 export async function printNoteLabels(
   noteId: string,
   payload: PrintLabelsPayload = {},
   onProgress?: (p: PrintNoteProgress) => void,
 ): Promise<PrintNoteResult> {
-  const resp = await apiPrint.post<Blob>(
+  const resp = await api.post<Blob>(
     `/delivery-notes/${encodeURIComponent(noteId)}/print-labels`,
     payload,
     {

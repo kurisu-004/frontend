@@ -110,7 +110,6 @@ vi.mock('@/api/http', () => ({
     put: vi.fn(),
     delete: vi.fn(),
   },
-  apiPrint: { get: vi.fn(), post: vi.fn() },
   cleanParams: (obj?: Record<string, unknown>) => obj ?? {},
   ApiError: class ApiError extends Error {
     public readonly code: number;

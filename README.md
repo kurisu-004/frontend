@@ -32,7 +32,7 @@ npm run test         # vitest run（全部单测）
 
 ```
 src/
-├── api/             # 接口 & mock（.ts，按域切分；api / refreshClient / apiPrint 三个 axios 实例）
+├── api/             # 接口 & mock（.ts，按域切分；api / refreshClient 两个 axios 实例）
 ├── components/      # 跨业务域通用组件（13+ 个）
 ├── composables/     # 模块级单例 composable（30+ 个）
 ├── constants/       # 静态映射（partStatus / batch / bid / crud / file）
@@ -59,7 +59,6 @@ src/
 │   ├── statistics/  # 生产统计
 │   ├── production/  # 工序制定 + 工序工种
 │   ├── assemblies/  # 装配件详情（路由并入 /parts）
-│   ├── print-templates/  # 打印模板编辑器（基于 @amdosion/vue3-print）
 │   ├── Dashboard.vue
 │   └── WorkerList.vue
 ├── App.vue
@@ -76,10 +75,9 @@ src/
 - `/ws/*` —— dashboard 长连接（`src/api/dashboard.ts` 单例），dev 必须有 `/ws` 反代：
   Vite 的 dev upgrade 监听器只对匹配到的 proxy context 转发，缺了表现为「页面数据正常
   但控制台一直刷 WS 报错」。
-- `/api/v1/*` —— **仅打印链路**的 4 个端点（零件图纸 PDF 单件 / 批量、送货单 PDF、标签 Excel）
-  走 `apiPrint` 实例。已知缺口：dev **没有** `/api/v1` 代理规则（`/api` context 会把它吃掉打到
-  Rust :3000，而 Rust 没有 `/api/v1` nest），故打印功能本地联调需自行起 v1 服务；
-  生产由 `nginx.conf` 的 `location /api/v1` 兜。
+- Python 后端只在 compose 内网经 rust 转发触达，浏览器不直连：4 个打印端点（零件图纸
+  PDF 单件 / 批量、送货单 PDF、标签 Excel）与 COS STS 临时凭证签发都由 rust 鉴权后转发。
+  dev 与生产同构——两端都只暴露 `/api/v2`，nginx 也不再有指向 Python 的 `/api/` 反代。
 
 生产 / staging 通过 nginx 反代，前端不直接接触后端端口。启动本地全栈见仓库根
 `docker-compose-local.yml`（`docker compose -f docker-compose-local.yml up -d --build`）。

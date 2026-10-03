@@ -1,6 +1,7 @@
 // 后端零件 API 封装 —— 文件 / 打印相关端点（图纸双面打印 PDF 生成）。
 // 2026-08-25：从原 1165 行 api/parts.ts 拆分到 ./ 子文件；本文件是 ./file 子域。
-// 2026-09-15 Phase 5：打印 2 端点保留 v1（未迁），统一走 `apiPrint`（baseURL `/api/v1`）。
+// 打印 2 端点走 `api`（baseURL `/api/v2`）：由 rust 鉴权后转发 python 生成 PDF，
+// 前端路径与响应消费方式（blob + 隐藏 iframe 打印）不变。
 //
 // 2026-09-29 修复：兼容 nest 已移除。
 // - 列出文件：listPartFilesByOwner + usePartFilesListQuery（composables/queries/）
@@ -12,7 +13,7 @@
 // 本文件保留 confirmPartFile（场景 B 专用确认端点）配合 grantStsTmpKey
 // （python STS 单端口，详见 @/api/files/sts）。
 
-import { api, apiPrint } from '@/api/http';
+import { api } from '@/api/http';
 import type { ConfirmFileIn, PartFileItem, PartFileUrlResult } from '@/types/part_file';
 
 /**
@@ -21,10 +22,11 @@ import type { ConfirmFileIn, PartFileItem, PartFileUrlResult } from '@/types/par
  *
  * 注：返回的是文件 blob，调用方需自行用 iframe / window 触发打印。
  *
- * 2026-09-15 Phase 5：走 `apiPrint`（baseURL `/api/v1`，v1 Python FastAPI 保留）。
+ * 2026-10-03：端点由 rust 鉴权后转发 python（`GET /api/v2/parts/{id}/print-drawing`），
+ * 前端走 `api`，文件名仍靠 `Content-Disposition`。
  */
 export async function printPartDrawing(partId: string): Promise<Blob> {
-  const resp = await apiPrint.get<Blob>(`/parts/${encodeURIComponent(partId)}/print-drawing`, {
+  const resp = await api.get<Blob>(`/parts/${encodeURIComponent(partId)}/print-drawing`, {
     responseType: 'blob',
   });
   return resp.data;
@@ -32,16 +34,17 @@ export async function printPartDrawing(partId: string): Promise<Blob> {
 
 /**
  * 批量生成多个零件的双面打印 PDF 并合并为一个 PDF（2026-07-17 接入）。
- * 后端把 N 个 part 的双面 PDF 用 pypdf.PdfWriter 顺序拼接成单文件返回。
+ * 后端把 N 个 part 的双面 PDF 顺序拼接成单文件返回。
  * 前端拿到 Blob 后用单 iframe 一次 print()，避免 N 次打印弹窗。
  *
- * 2026-09-15 Phase 5：走 `apiPrint`（baseURL `/api/v1`，v1 Python FastAPI 保留）。
+ * 2026-10-03：端点由 rust 鉴权后转发 python（`POST /api/v2/parts/print-drawing-batch`）。
+ * timeout 10 分钟：N 个 part 拼 PDF 耗时可达分钟级，与 rust 侧该路径的 660s 读超时对齐。
  */
 export async function printPartDrawingBatch(
   partIds: string[],
   assemblyIds?: string[],
 ): Promise<Blob> {
-  const resp = await apiPrint.post<Blob>(
+  const resp = await api.post<Blob>(
     '/parts/print-drawing-batch',
     { part_ids: partIds, assembly_ids: assemblyIds },
     { responseType: 'blob', timeout: 10 * 60 * 1000 },

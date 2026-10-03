@@ -1,18 +1,21 @@
 // 统一 HTTP 客户端（axios 封装）。
 //
-// 五件事：
-// 1) 业务 `api` baseURL = `/api/v2`：2026-09-15 Phase 5 一次性切 v2（backend-rust 主仓）；
-//    v1 Python FastAPI 仅保留 4 个打印端点（见下文 `apiPrint`）。
-// 2) 请求拦截：自动从 localStorage['auth_session'] 取 token，挂 `Authorization: Bearer <token>`。
-// 3) 响应拦截：
+// 全站只有一条 API 前缀 `/api/v2`（backend-rust），所有端点都走 `api` 实例。Python
+// 只在 compose 内网经 rust 转发触达，浏览器不再直连任何 Python 端口（nginx 也不暴露）。
+//
+// 1) 请求拦截：自动从 localStorage['auth_session'] 取 token，挂 `Authorization: Bearer <token>`。
+// 2) 响应拦截：
 //    a) 解 `{code, message, data}` 信封 → 调用方拿到的是原始 data。
 //    b) token 自动刷新：
 //       - reactive：收到 40102（access 过期）→ 调 /iam/refresh 换新 token → 重试原请求；
 //       - proactive：每次成功响应都看一眼 exp，剩余 < 5min 就后台 fire-and-forget 刷新。
 //    c) 雪崩防御：模块级 refreshPromise 队列，并发 40102 只触发一次 /iam/refresh。
 //    d) code !== 0 → 抛 `ApiError(code, message)`，调用方用 try/catch 即可拿到业务错误码。
+//    e) blob 错误体分支：`responseType: 'blob'` 的端点（4 个打印端点）错误 body 也是
+//       Blob，必须先读成文本再 JSON.parse，否则 isEnvelope 判 false → 打印端点的 40102
+//       自动 refresh 静默失效（直接抛 network error）。
 //
-// 4) `refreshClient`：无任何拦截器的裸 axios 实例（baseURL `/api/v2`），专门给
+// 3) `refreshClient`：无任何拦截器的裸 axios 实例（baseURL `/api/v2`），专门给
 //    /api/v2/iam/refresh 用，避免响应拦截器里的 40102 → refresh 链路递归触发。
 //    失败兜底：refresh 失败 → dispatchEvent('auth:logout')，由 main.ts 监听后
 //    router.replace('/login')。session 失效的统一入口。
@@ -20,37 +23,14 @@
 //    导航，stores/auth.ts 清会话状态 + queryClient.clear()。本文件是**派发方**，
 //    详见 CLAUDE.md「`auth:logout` 是订阅点不是派发点」条目。
 //
-// 5) 【2026-09-15 新增】`apiPrint`（baseURL `/api/v1`）：v1 Python FastAPI 上 4 个
-//    打印端点的专用客户端，**与业务 `api` 共享同一组拦截器**——token / refresh / 信封
-//    解封 / 40102 自动 refresh 全套复用。
+// 4) 打印端点（4 个，2026-10-03 起由 rust 鉴权后转发 python，前端路径与调用签名不变）：
 //    - POST /delivery-notes/{id}/print           ← printNote
 //    - POST /delivery-notes/{id}/print-labels    ← printNoteLabels
 //    - GET  /parts/{id}/print-drawing            ← printPartDrawing
 //    - POST /parts/print-drawing-batch           ← printPartDrawingBatch
-//    业务端点全部走 `api`（v2），仅这 4 个打印端点走 `apiPrint`（v1）。
-//
-// 【历史迁移】
-// - 2026-08-21：首次引入 `apiV2`（baseURL `/api/v2`），与 `api` 并存（v1 业务为主，少量 v2）。
-// - 2026-09-14：auth 域切 v2（`apiV2` / `refreshClientV2`）。
-// - 2026-09-15 Phase 5：业务全切 v2 → 删除 `apiV2` / `refreshClientV2`，合入 `api` /
-//   `refreshClient`（baseURL `/api/v2`）；新增 `apiPrint`（baseURL `/api/v1`）专供
-//   4 个打印端点。
-// - 2026-09-15 hotfix：Phase 5 误合并 `serializeParamsV2` 引入 regression——v2 端点
-//   `GET /api/v2/parts?statuses=...` 用重复 key 形式后端 axum 解析失败返 400。
-//   恢复 2026-08-29 的 CSV 白名单拆分：`api` / `refreshClient` 绑 `serializeParamsV2`
-//   （白名单 `statuses` 等数组 → CSV 单值）；`apiPrint` 维持 `serializeParamsV1`
-//   （FastAPI 期望重复 key）。
-//
-// 【2026-08-29 拆分 → Phase 5 误合并 → 2026-09-15 hotfix 还原】
-//   - v1 FastAPI 期望所有数组 → 重复 key 形式 `?k=a&k=b`；
-//   - v2 Rust axum `statuses`（Vec<String>）期望 CSV 单值 `?statuses=a,b`（axum 的
-//     Query 反序列化器对 Vec<T> 默认按 `,` 分隔，对 `?k=a&k=b` 行为依赖实现）。
-//   两边语义不一致，**不能合并**——CSV 白名单机制恢复（ARRAY_AS_CSV_KEYS 白名单 +
-//   serializeParamsWith 共用实现 + serializeParamsV1/V2 两条具名导出）。
-// - 2026-09-17 PR-4 同步：backend-rust PartListQuery 加 `locations` / `holder_ids`
-//   两个 `Option<String>`（逗号分隔单值）。前端 wire-format 必须同步：把这两个
-//   key 加入 `ARRAY_AS_CSV_KEYS` 白名单，编码 `?locations=A%2CB&holder_ids=X%2CY`。
-//   与 `statuses` 同走 CSV 单值路径。详见 `ARRAY_AS_CSV_KEYS` 注释。
+//    响应是文件 blob（不是信封），文件名靠 `Content-Disposition`；这些路径在 rust 侧
+//    放宽了读超时（批量拼接 PDF 耗时可达分钟级），前端批量端点单独把 axios timeout
+//    提到 10 分钟与之对齐。
 
 import type { AxiosError } from 'axios';
 import axios, {
@@ -62,11 +42,11 @@ import axios, {
 import { decodeJwt } from '@/utils/jwt';
 import { refreshTokens, type LoginResponse } from '@/api/iam';
 
-// 2026-09-21 params 收紧：serializeParamsWith / serializeParamsV1 / serializeParamsV2 /
-// serializeParams 别名的 params 由 `any` 收紧为 `Record<string, unknown>`，与 axios 自身
-// `paramsSerializer: (params: any) => string` 的契约解耦（axios 是 JS 不查，
-// 但 TS 端能收窄就收窄）。Array.isArray 后 val 仍是 unknown，需要逐元素 `as string`
-// 才能喂 encodeURIComponent——集中在这条注释提示，不再每处重复。
+// 2026-09-21 params 收紧：serializeParamsWith / serializeParamsV2 的 params 由 `any`
+// 收紧为 `Record<string, unknown>`，与 axios 自身 `paramsSerializer: (params: any) =>
+// string` 的契约解耦（axios 是 JS 不查，但 TS 端能收窄就收窄）。Array.isArray 后 val
+// 仍是 unknown，需要逐元素 `as string` 才能喂 encodeURIComponent——集中在这条注释
+// 提示，不再每处重复。
 //
 // cleanParams 是已知例外：泛型 `<T extends Record<string, unknown>>` 会让
 // ListPartsParams / AssemblyListQuery / ListUsersParams / ListShelvesParams /
@@ -75,28 +55,15 @@ import { refreshTokens, type LoginResponse } from '@/api/iam';
 // `<T extends Record<string, any>>` 不动；本轮统一收紧跳过此函数。
 
 /**
- * v2 后端期望多值筛选走 CSV 单值形式（`?statuses=A,B`）的 key 白名单。
+ * 后端期望多值筛选走 CSV 单值形式（`?statuses=A,B`）的 key 白名单。
  *
- * 2026-09-15 Phase 5 误合并后回归：原 `serializeParamsV2`（CSV 白名单）被删除，
- * 统一用 `serializeParamsV1`（数组重复 key）→ 前端 `GET /api/v2/parts?statuses=A&statuses=B`
- * 后端 axum 解析失败返 400 Bad Request，UI 打开 /parts 直接白屏。本 hotfix 恢复 CSV
- * 白名单机制：`statuses`（及未来其它 v2 多值筛选字段）数组 → CSV 单值，
- * 其它数组仍走重复 key（v1 端点 + v2 未列入白名单的数组字段都靠这条分支）。
+ * 依据是 rust axum 的 Query 反序列化：`statuses` / `locations` / `holder_ids` 在
+ * `PartListQuery` 里是逗号分隔的单值字段（`statuses` 为 Vec<String>，另两个为
+ * `Option<String>`）。发重复 key（`?statuses=A&statuses=B`）时 axum 取不到期望形态，
+ * 直接返 400（40001 VALIDATION_ERROR），UI 打开 /parts 会白屏。CSV 编码
+ * `?statuses=A%2CB` / `?locations=A%2CB` / `?holder_ids=X%2CY` 才是正确 wire-format。
  *
- * 2026-09-17 PR-4 同步：backend-rust PartListQuery 加 `locations` + `holder_ids`
- * 两个 `Option<String>`（逗号分隔字符串，与 `statuses` 同形）。前端不加入白名单会
- * 触发 backend axum 解析失败：`?locations=A&locations=B` → Query<String> 单值
- * 解析失败（axum::extract::Query<Option<String>> 只取第一个值或报错）；CSV
- * 编码 `?locations=A%2CB` 才是正确 wire-format。`holder_ids` 同理（后端
- * service 层把 CSV 拆 Vec<i64>，parse 失败 → 40001 VALIDATION_ERROR）。
- *
- * 历史脉络（不要回退）：
- * - 2026-08-29 拆分原因：v1 Python FastAPI 期望所有数组 → 重复 key，v2 Rust axum 的
- *   `statuses` 期望 CSV 单值（axum Query 反序列化器对 Vec<T> 默认按 `,` 分隔，对 `?k=a&k=b`
- *   形式的反序列化行为依赖实现，可能只取首元素或报错，必须按后端期望的格式发）。
- * - 当前 v2 schema 决定保留 `statuses` 为多值（Vec<String>），所以 CSV 白名单机制恢复。
- * - 2026-09-17 PR-4：locations / holder_ids 加入白名单，wire-format 与 backend
- *   PartListQuery 单值 String 解析对齐。
+ * 白名单外的数组字段仍走重复 key（后端按 Vec 参数解析时兼容 `?k=a&k=b`）。
  */
 const ARRAY_AS_CSV_KEYS = new Set<string>(['statuses', 'locations', 'holder_ids']);
 
@@ -116,7 +83,7 @@ function serializeParamsWith(params: Record<string, unknown>, csvKeys: Set<strin
           `${encodeURIComponent(key)}=${val.map((v) => encodeURIComponent(v as string)).join('%2C')}`,
         );
       } else {
-        // 重复 key：每个元素独立 push（v1 端点 / v2 非白名单数组字段）
+        // 重复 key：每个元素独立 push（未列入 CSV 白名单的数组字段）
         for (const v of val) {
           parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v as string)}`);
         }
@@ -128,18 +95,9 @@ function serializeParamsWith(params: Record<string, unknown>, csvKeys: Set<strin
   return parts.join('&');
 }
 
-/** v1 专用 query 序列化器：所有数组走重复 key 形式 `?k=a&k=b`。
- *  专供 `apiPrint`（baseURL `/api/v1`）使用，匹配 Python FastAPI Query 解析语义。 */
-export function serializeParamsV1(params: Record<string, unknown>): string {
-  return serializeParamsWith(params, new Set());
-}
-
-/** v2 专用 query 序列化器：白名单内 key（`statuses` / `locations` / `holder_ids`
- *  等）走 CSV 单值 `?k=a%2Cb`，其它数组维持重复 key。专供 `api` / `refreshClient`
- *  （baseURL `/api/v2`）使用，匹配 Rust axum Query 反序列化对 Vec<T> 的 CSV 期望。
- *
- *  2026-09-17 PR-4 同步：locations / holder_ids 加入 `ARRAY_AS_CSV_KEYS`，与
- *  backend-rust `PartListQuery`（`Option<String>` 逗号分隔）解析对齐。 */
+/** v2 query 序列化器：白名单内 key（`statuses` / `locations` / `holder_ids`）数组
+ *  → CSV 单值 `?k=a%2Cb`，其它数组维持重复 key。`api` / `refreshClient`
+ *  （baseURL `/api/v2`）都用它，匹配 rust axum Query 反序列化的 CSV 期望。 */
 export function serializeParamsV2(params: Record<string, unknown>): string {
   return serializeParamsWith(params, ARRAY_AS_CSV_KEYS);
 }
@@ -176,18 +134,13 @@ export function normalizeListResult<T>(resp: {
   };
 }
 
-/** @deprecated 等价于 serializeParamsV1。2026-08-29 起作为 alias 保留，供历史
- *  import 不至于崩；新代码请用具名 V1 / V2。 */
-export const serializeParams: (params: Record<string, unknown>) => string = serializeParamsV1;
-
 const STORAGE_KEY = 'auth_session';
 
-// ===== 业务客户端（v2，2026-09-15 起为默认）=====
+// ===== 业务客户端（v2）=====
 export const api = axios.create({
   baseURL: '/api/v2',
   // 不显式设 Content-Type：axios 会按 body 类型自动选 application/json / multipart/form-data。
   // paramsSerializer 走 V2：白名单 key（statuses 等）数组 → CSV 单值；其它数组 → 重复 key。
-  // 2026-09-15 Phase 5 曾误用 V1，导致 v2 axum 反序列化 `?statuses=A&statuses=B` 失败返 400。
   timeout: 30_000,
   paramsSerializer: serializeParamsV2,
 });
@@ -202,28 +155,9 @@ export const api = axios.create({
 export const refreshClient = axios.create({
   baseURL: '/api/v2',
   timeout: 30_000,
-  // 业务 v2 客户端，与 `api` 保持一致序列化策略（虽然 /iam/refresh 通常无 query，
+  // 与 `api` 保持一致序列化策略（虽然 /iam/refresh 通常无 query，
   // 但万一 future 加 query 参数就走 V2 不踩坑）
   paramsSerializer: serializeParamsV2,
-});
-
-// ===== 打印专用客户端（v1，2026-09-15 Phase 5 新增）=====
-/**
- * 打印 4 端点专用客户端（baseURL `/api/v1`）：与业务 `api` 共享同一组拦截器
- * （token / refresh / 信封解封 / 40102 自动 refresh）。仅 4 个打印端点走它：
- *   - POST /delivery-notes/{id}/print           ← printNote
- *   - POST /delivery-notes/{id}/print-labels    ← printNoteLabels
- *   - GET  /parts/{id}/print-drawing            ← printPartDrawing
- *   - POST /parts/print-drawing-batch           ← printPartDrawingBatch
- *
- * 为什么不并入 `api`：v1 Python 仍维护这 4 端点；后续若打印也迁 v2 再统一。
- * 为什么不另外写一份拦截器：与 `api` 共用模块单例 `refreshPromise`，并发撞 40102
- * 只触发一次 /iam/refresh；打印流与业务流是同 token / 同 user，refresh 共享无副作用。
- */
-export const apiPrint = axios.create({
-  baseURL: '/api/v1',
-  timeout: 30_000,
-  paramsSerializer: serializeParamsV1,
 });
 
 interface ApiEnvelope<T> {
@@ -361,7 +295,7 @@ function maybeProactiveRefresh(): void {
   });
 }
 
-// ===== 拦截器（具名，api / apiPrint 复用）=====
+// ===== 拦截器（具名）=====
 
 /** 请求拦截：挂 Authorization。 */
 function authRequestInterceptor(config: InternalAxiosRequestConfig): InternalAxiosRequestConfig {
@@ -396,9 +330,8 @@ function envelopeResponseInterceptor(response: AxiosResponse): AxiosResponse {
  * 错误拦截工厂：blob body 解析 → 40102 自动 refresh + 重试 → refresh 失败
  * dispatch auth:logout。
  *
- * 用工厂 + 闭包持有 client，是为了让 api / apiPrint 各自 `client.request(retryCfg)`
- * 在自己实例上重试，不被另一实例的拦截器链干扰。refreshPromise 等雪崩状态
- * 仍是模块单例，两实例并发撞 40102 只触发一次 /iam/refresh。
+ * 用工厂 + 闭包持有 client，是为了让重试走 `client.request(retryCfg)` 而不是模块级
+ * `api`，调用方即使换实例接线也不会让重试落到另一条拦截器链上。
  */
 function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
   return async (error: AxiosError) => {
@@ -425,7 +358,7 @@ function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
     const cfg = error.config as
       (InternalAxiosRequestConfig & { _isRetryAfterRefresh?: boolean }) | undefined;
 
-    // 40105 SESSION_REVOKED（v2 才有）：JWT 签名仍有效，但 Redis session:tok:<sha256>
+    // 40105 SESSION_REVOKED：JWT 签名仍有效，但 Redis session:tok:<sha256>
     // 已被吊销（其它设备 logout / 改密 / 管理员停用）。refresh 也救不回（同一 session
     // 索引会被连带清掉），直接 dispatch auth:logout 跳登录，不再走下方 40102 的
     // reactive refresh 分支。
@@ -451,7 +384,7 @@ function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
         },
         _isRetryAfterRefresh: true,
       } as InternalAxiosRequestConfig & { _isRetryAfterRefresh?: boolean };
-      // 用闭包持有的 client 重试——api 实例回到 api.request，apiPrint 回到 apiPrint.request
+      // 用闭包持有的 client 重试，避免递归回本拦截器
       return await client.request(retryCfg);
     } catch (refreshErr) {
       // refresh 失败：触发全局登出事件，main.ts 监听后 router.replace('/login')
@@ -463,14 +396,9 @@ function makeEnvelopeErrorInterceptor(client: AxiosInstance) {
   };
 }
 
-// 业务 v2 与打印 v1 共享同一组拦截器（refreshPromise 模块单例防雪崩）
+// 全站唯一带拦截器的实例（refreshPromise 模块单例防雪崩）
 api.interceptors.request.use(authRequestInterceptor);
 api.interceptors.response.use(envelopeResponseInterceptor, makeEnvelopeErrorInterceptor(api));
-apiPrint.interceptors.request.use(authRequestInterceptor);
-apiPrint.interceptors.response.use(
-  envelopeResponseInterceptor,
-  makeEnvelopeErrorInterceptor(apiPrint),
-);
 
 /** 业务异常：code !== 0 时抛出；调用方用 try/catch + (e as ApiError).code 取错误码。 */
 export class ApiError extends Error {

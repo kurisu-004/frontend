@@ -1,5 +1,5 @@
 // src/api/files/__tests__/sts.spec.ts（2026-09-17 frontend-cos-sts-python，
-// 2026-09-28 切到 api：grantStsTmpKey caller 从 apiPrint 改走 api，
+// 2026-09-28 切到 api：grantStsTmpKey caller 改由 rust 转发后端点，
 // 2026-09-29 升级：content_sha256 必填完整 64 hex + 新增 ext 必填）
 //
 // 验证 grantStsTmpKey caller：
@@ -13,8 +13,7 @@
 // - 默认 Content-Type 由 axios 自动选 application/json（不显式覆盖）。
 //
 // 用 vi.mock 拦截 @/api/http 的 api，断言 method / url / body / 响应形态，
-// 不发起真实 HTTP。apiPrint 模块本测试不用，但 mock 模块仍暴露同名导出以避免
-// 其他无关 caller 被 vi.mock('api/http') 静默替换时类型报错。
+// 不发起真实 HTTP。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,10 +22,6 @@ const getCalls = vi.fn();
 
 vi.mock('@/api/http', () => ({
   api: {
-    post: (...args: unknown[]) => postCalls(...args),
-    get: (...args: unknown[]) => getCalls(...args),
-  },
-  apiPrint: {
     post: (...args: unknown[]) => postCalls(...args),
     get: (...args: unknown[]) => getCalls(...args),
   },

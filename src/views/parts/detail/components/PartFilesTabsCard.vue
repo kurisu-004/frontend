@@ -5,7 +5,7 @@
   - 4 个 tab：DRAWING / 3D_MODEL / CAD_2D / CNC_PAIR
   - 前 3 个走 FileListCard（kind 区分）
   - 第 4 个 CNC_PAIR 走 PartCncCard
-  - 「打印图纸」入口收敛在 FileListCard 自身 header（:show-print="!isInspector"，
+  - 「打印图纸」入口收敛在 FileListCard 自身 header（:show-print="canPrintDrawing"，
     DRAWING tab 生效）；本卡 footer 不再复制一份入口（2026-09-17 review 第 1 轮
     修复重复按钮）。
   - footer：选中 files 行时显示「删除选中」
@@ -63,7 +63,7 @@
         kind="DRAWING"
         :show-upload="canManageDrawings"
         :show-delete="canManageDrawings"
-        :show-print="!isInspector"
+        :show-print="canPrintDrawing"
         :hide-header-actions="true"
         :bare-mode="true"
         :api-upload="drawingUpload"
@@ -141,7 +141,7 @@
           <!-- DRAWING tab：打印图纸 + 上传图纸 -->
           <template v-if="activeTab === 'DRAWING'">
             <el-button
-              v-if="!isInspector"
+              v-if="canPrintDrawing"
               type="success"
               plain
               :loading="printing"
@@ -230,6 +230,8 @@ import { FolderOpened, Printer, Upload } from '@element-plus/icons-vue';
 import FileListCard from '@/components/FileListCard.vue';
 import PartCncCard from './PartCncCard.vue';
 import { deletePartFile } from '@/api/parts/file';
+import { usePermissions } from '@/composables/usePermissions';
+import { canPrintPartDrawing } from '@/utils/partsPermissions';
 import type { PartFileItem } from '@/types/part_file';
 import type { CncSetupGroup } from '../composables/usePartCncGroups';
 import type { Process } from '@/types/process';
@@ -252,6 +254,7 @@ const props = defineProps<{
   canManage3DModels: boolean;
   canManageCncFiles: boolean;
   canManageSetupSheet: boolean;
+  /** 2026-10-03：只作为 canPrintDrawing 的 INSPECTOR 一腿输入（角色源同 auth store）。 */
   isInspector: boolean;
   // 上传函数（来自 shell 的 usePartFileUpload 适配签名）
   drawingUpload: (ownerId: string, file: File) => Promise<PartFileItem>;
@@ -282,6 +285,21 @@ const emit = defineEmits<{
 }>();
 
 const activeTab = ref<TabKey>('DRAWING');
+
+// 2026-10-03：打印图纸入口的角色闸门与后端 rust v2 转发端点的白名单对齐——放行
+// MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER，排除 SHELF_ACCOUNT（判定纯函数在
+// utils/partsPermissions，角色统一取自 usePermissions）。只用 `!isInspector` 判会让
+// INSPECTOR 看不到按钮、SHELF_ACCOUNT 看得到却吃 403，两头都跟后端对不上。
+// INSPECTOR 一腿沿用 PartDetail 注入的 isInspector prop（同一 auth 角色源），其余三腿本卡自取。
+const { isManager, isClerk, isCncProgrammer } = usePermissions();
+const canPrintDrawing = computed<boolean>(() =>
+  canPrintPartDrawing({
+    INSPECTOR: props.isInspector,
+    MANAGER: isManager.value,
+    CLERK: isClerk.value,
+    CNC_PROGRAMMER: isCncProgrammer.value,
+  }),
+);
 
 // 2026-09-17 UI 调整：ref 拿 FileListCard / PartCncCard 实例，footer 按钮
 // 通过 expose 出的方法触发，避免重复渲染按钮 + 重复维护上传/打印签名。
