@@ -155,6 +155,9 @@ const displayItems = computed<PartListItem[]>(() => {
   flex-direction: column;
   // 2026-10-03：行宽分档以「卡片正文宽」为口径，故用容器查询而不是视口媒体查询 ——
   // 同一视口下正文宽还会随左侧栏展开/收起与 1100px 单列折叠变化。
+  // 三档与视口的实测对应（侧栏展开 165px）：容器 ≤440px ← 视口 1101~1349、
+  // 441~560px ← 视口 1350~1650、>560px ← 视口 ≥1651；视口 ≤1100 折叠成单列
+  // （容器 869px）直接吃满档。名称列依次 82~106px / 150px / 200px。
   container-type: inline-size;
   container-name: urgentrow;
 }
@@ -162,8 +165,9 @@ const displayItems = computed<PartListItem[]>(() => {
   display: grid;
   // 2026-10-03：6 列 = 序列号 | 名称 | 数量 | 二级客户 | 状态 | 系统交期。
   // 定宽依据取真实数据（100 行 / 7 天窗口）：serial_no 恒 5 字符、quantity ≤4 位、
-  // 二级客户 ≤5 字符、交期恒 MM/DD；名称 p90 20 字符，容器 ≥560px 时给满 200px。
-  // 二级客户吃剩余空间（minmax(0, 1fr)），窄屏截断由 ellipsis + tooltip 兜。
+  // 二级客户 ≤5 字符、交期恒 MM/DD；名称 p90 20 字符，容器 > 560px 时给满 200px。
+  // 状态列按 el-tag--small 最坏宽度定轨（ORDER_STATUS_LABEL 恒 3 个汉字 ≈ 52px），
+  // 本档留 4px 余量。二级客户吃剩余空间（minmax(0, 1fr)），窄屏截断由 ellipsis + tooltip 兜。
   grid-template-columns: 56px 200px 40px minmax(0, 1fr) 56px 56px;
   gap: 6px;
   align-items: center;
@@ -228,14 +232,17 @@ const displayItems = computed<PartListItem[]>(() => {
 }
 @container urgentrow (max-width: 560px) {
   .row {
-    grid-template-columns: 48px 150px 36px minmax(0, 1fr) 52px 52px;
+    // 状态列保持 56px 不再收窄：el-tag 无 overflow，轨宽一旦小于其最坏宽度就会溢进 gap。
+    grid-template-columns: 48px 150px 36px minmax(0, 1fr) 56px 52px;
   }
 }
 @container urgentrow (max-width: 440px) {
   .row {
-    // 24cqi：容器 342px 时约 82px、容器 440px 时封顶 110px，名称列在极窄档
-    // 让出宽度给二级客户。
-    grid-template-columns: 44px clamp(76px, 24cqi, 110px) 32px minmax(0, 1fr) 48px 48px;
+    // 2026-10-03：极窄档名称列让出宽度给二级客户，取 clamp(76px, 24cqi, 110px)。
+    // 本档容器实测 340~440px，24cqi 即 82~106px —— 两端 clamp 上下限是越界保护，
+    // 本档取不到。状态列 52px = el-tag--small 最坏宽度（3 个汉字：36+7×2+1×2），
+    // 零余量但不裁字（实测 tag scrollWidth == clientWidth）。
+    grid-template-columns: 44px clamp(76px, 24cqi, 110px) 32px minmax(0, 1fr) 52px 48px;
   }
 }
 </style>

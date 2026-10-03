@@ -276,11 +276,7 @@ function onUpcomingRowClick(part: PartListItem): void {
   flex: 1;
   display: grid;
   // 2026-10-03：列比保持 3fr 2fr（用户「6:4」要求），但下限钉死 minmax(0, …)。
-  // 裸 fr 的下限是 auto（= min-content），左栏内容一宽就把 track 顶大：1280 视口下
-  // .main-left 实测被内容撑到 1389px 却只分到 1051px 的 track，溢出部分把右栏顶到
-  // 屏外只剩 280px，右栏宽度随左栏内容抖动。钉死后右栏恒定拿 2/5（实测各视口
-  // 1280→414 / 1440→478 / 1920→670 / 2560→926 px），左栏三子块 scrollWidth 均
-  // 等于 clientWidth（无裁切）。
+  // 裸 fr 的下限是 auto（= min-content），左栏内容宽会反向决定右栏 track；钉死后右栏恒取 2/5。
   grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   gap: 16px;
   min-height: 0;

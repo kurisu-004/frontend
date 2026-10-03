@@ -22,7 +22,7 @@
 //     断言子元素个数与顺序；tooltip 文案改从 stub 的 content prop 断言（等价于真实
 //     ElTooltip 收到的入参）。
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { defineComponent, h, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
 import UrgentOrdersList from '../UrgentOrdersList.vue';
@@ -77,16 +77,6 @@ const ElEmptyStub = defineComponent({
     return () => h('div', { class: 'mock-empty' }, props.description);
   },
 });
-
-// 组件自身不 import element-plus（无 ElMessage 路径），模块级 mock 只是为了让
-// 「el-* 只能来自 stub」这件事在文件里自解释；真正生效的是下面的 global 注册。
-vi.mock('element-plus', () => ({
-  ElTooltip: ElTooltipStub,
-  ElTag: ElTagStub,
-  ElCard: ElCardStub,
-  ElIcon: ElIconStub,
-  ElEmpty: ElEmptyStub,
-}));
 
 const globalConfig = {
   components: {
@@ -221,15 +211,16 @@ describe('UrgentOrdersList — 6 列渲染契约（2026-10-03）', () => {
   });
 
   it('R6：过滤口径 —— system_delivery_date 为 null 的剔除，超 7 天窗口的剔除', () => {
-    const inWindow = makePart({ id: '1', system_delivery_date: isoOffset(6) });
-    const noDue = makePart({ id: '2', system_delivery_date: null });
-    const outOfWindow = makePart({ id: '3', system_delivery_date: isoOffset(7) });
+    // 三条 fixture 的 serial_no 各不相同，断言「活下来的是哪一行」才有效。
+    const inWindow = makePart({ id: '1', serial_no: 'IN-WIN', system_delivery_date: isoOffset(6) });
+    const noDue = makePart({ id: '2', serial_no: 'NO-DUE', system_delivery_date: null });
+    const outOfWindow = makePart({ id: '3', serial_no: 'LATE', system_delivery_date: isoOffset(7) });
 
     const wrapper = mountList([inWindow, noDue, outOfWindow]);
     const rows = wrapper.findAll('.list-rows .row');
 
     expect(rows).toHaveLength(1);
-    expect(rows[0].find('.row-serial').text()).toBe('F1016');
+    expect(rows[0].find('.row-serial').text()).toBe('IN-WIN');
     // 全部被滤掉 → empty 分支
     const empty = mountList([noDue, outOfWindow]);
     expect(empty.findAll('.list-rows .row')).toHaveLength(0);
