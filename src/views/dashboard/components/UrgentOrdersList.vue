@@ -155,9 +155,11 @@ const displayItems = computed<PartListItem[]>(() => {
   flex-direction: column;
   // 2026-10-03：行宽分档以「卡片正文宽」为口径，故用容器查询而不是视口媒体查询 ——
   // 同一视口下正文宽还会随左侧栏展开/收起与 1100px 单列折叠变化。
-  // 三档与视口的实测对应（侧栏展开 165px）：容器 ≤440px ← 视口 1101~1349、
-  // 441~560px ← 视口 1350~1650、>560px ← 视口 ≥1651；视口 ≤1100 折叠成单列
-  // （容器 869px）直接吃满档。名称列依次 82~106px / 150px / 200px。
+  // 三档与视口的实测对应（侧栏展开 165px、无滚动条占位）：容器 ≤440px ← 视口
+  // 1101~1350、441~560px ← 视口 1351~1650、>560px ← 视口 ≥1651；视口 ≤1100 折叠成单列
+  // （容器 869px）直接吃满档。经典滚动条平台（.el-card__body overflow-y:auto，30 行时
+  // 出滚动条）容器再窄 ~15px，侧栏折叠同理 ⇒ 这几个边界只是路标，档位以容器宽为准。
+  // 名称列依次 82~106px / 150px / 200px。
   container-type: inline-size;
   container-name: urgentrow;
 }
@@ -232,7 +234,7 @@ const displayItems = computed<PartListItem[]>(() => {
 }
 @container urgentrow (max-width: 560px) {
   .row {
-    // 状态列保持 56px 不再收窄：el-tag 无 overflow，轨宽一旦小于其最坏宽度就会溢进 gap。
+    // 状态列 56px：el-tag 无 overflow，轨宽不得小于其最坏宽度 52px，留 4px 余量。
     grid-template-columns: 48px 150px 36px minmax(0, 1fr) 56px 52px;
   }
 }
@@ -241,7 +243,7 @@ const displayItems = computed<PartListItem[]>(() => {
     // 2026-10-03：极窄档名称列让出宽度给二级客户，取 clamp(76px, 24cqi, 110px)。
     // 本档容器实测 340~440px，24cqi 即 82~106px —— 两端 clamp 上下限是越界保护，
     // 本档取不到。状态列 52px = el-tag--small 最坏宽度（3 个汉字：36+7×2+1×2），
-    // 零余量但不裁字（实测 tag scrollWidth == clientWidth）。
+    // 零余量但不裁字。
     grid-template-columns: 44px clamp(76px, 24cqi, 110px) 32px minmax(0, 1fr) 52px 48px;
   }
 }
