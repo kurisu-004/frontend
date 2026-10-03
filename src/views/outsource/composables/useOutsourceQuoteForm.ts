@@ -4,7 +4,7 @@
 //
 // 职责：
 // - 新建报价 dialog state：showCreate / createForm / createRules / createFormRef +
-//   companies / companiesLoading / onCreatePartChange（按工序级联刷新公司列表） +
+//   companies / companiesLoading / onCreatePartChange（换零件时清空工序与公司） +
 //   watch process_id 级联 + onCreate（创建草稿）
 // - 审批 dialog state：showApprove / showReject / reviewNote / activeQuote +
 //   openApprove / openReject / onApprove / onReject
@@ -12,8 +12,10 @@
 // - 提交审核（无 dialog）：onSubmit
 //
 // 不持有：
-// - parts / processes / customers（页级共享 lookup，由 shell 装载并下传）
 // - 表格列表状态（由 useOutsourceQuoteTable 持有）
+// - 页级 lookup（processes / parts）：2026-10-03 起本 composable 不再需要它们
+//   （工序改为操作员在 dialog 里手选，见 onCreatePartChange），二者由 shell 直供
+//   OutsourceQuoteCreateDialog。
 
 import { reactive, ref, watch, type Ref } from 'vue';
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
@@ -26,26 +28,7 @@ import {
   submitOutsourceQuote,
 } from '@/api/outsource';
 import { useConfirm } from '@/composables/useConfirm';
-import {
-  OUTSOURCE_QUOTE_STATUS_LABEL,
-  type OutsourceQuote,
-  type QuotablePart,
-} from '@/types/outsource';
-import type { Process } from '@/types/process';
-
-/**
- * `QuotablePart` 行的唯一键 = `part_id` + 下一工序 id。
- *
- * 2026-10-03：picker 数据源的行粒度是「一个 (零件, OUTSOURCE 工序) 组合一行」
- * （后端 `DISTINCT ON (part_id, next_process_id)`），**同一 `part_id` 可以出多行**
- * （零件同时挂在两个外协工序货架 / 处在两个外协工序阶段）。只用于 picker 的
- * `v-for :key` —— el-option 的 `:value` 必须是裸 part_id（select 的 model 也是它）。
- *
- * 分隔符用 `::`：雪花 id 是十进制数字串，不可能含 `:`，拼接无歧义。
- */
-export function quotablePartRowKey(p: QuotablePart): string {
-  return `${p.id}::${p.next_process_id}`;
-}
+import { OUTSOURCE_QUOTE_STATUS_LABEL, type OutsourceQuote } from '@/types/outsource';
 
 /** 新建报价表单（reactive） */
 export interface CreateQuoteForm {
@@ -57,9 +40,6 @@ export interface CreateQuoteForm {
 }
 
 export interface UseOutsourceQuoteFormOptions {
-  /** 页级共享 lookup（仅在 props 变化时赋进来；本地维护 reactive 镜像） */
-  parts: () => readonly QuotablePart[];
-  processes: () => readonly Process[];
   /** 创建 / 审批 / 删除 成功后由 caller 触发表格刷新 */
   refresh: () => Promise<void> | void;
 }
@@ -167,41 +147,25 @@ export function useOutsourceQuoteForm(
     },
   );
 
-  /** 选择零件后自动填工序（仅当该零件的 next_process 类别 = OUTSOURCE），
-   *  其他情况（INHOUSE / 空 / 同零件多行）留空并提示。
+  /** 选择零件后重置工序与公司，让操作员在独立的工序下拉里重新选。
    *
-   *  2026-10-03 两处调整：
-   *  1. `next_process_id` 由 `GET /outsource-quotes/quotable-parts` 的 `QuotablePart`
-   *     正式提供（后端 VO 显式声明），不再需要 picker-local 类型扩展。
-   *  2. picker 行粒度是「一个 (零件, OUTSOURCE 工序) 组合一行」，同一 part_id 可出
-   *     多行；el-select 的 value 只能是裸 part_id（否则 model 匹配不到 option、
-   *     框里显示雪花 id），所以**拿不到操作员点的是哪一行**。此时不猜：任取一行
-   *     填工序会静默建出错工序的报价，代价远大于让操作员多选一次。 */
-  function onCreatePartChange(partId: string): void {
+   *  2026-10-03 契约对齐：`GET /outsource-quotes/quotable-parts` 的行粒度是
+   *  「一个零件一行」，VO 不带工序 / 货架字段 ⇒ **没有任何数据通路**能推断出该
+   *  零件该报哪道工序，工序一律手选。
+   *
+   *  清空两步是必须的：`process_id` 不清会沿用上一零件的工序（`el-select` 的
+   *  `:value` 只按 part_id 匹配，改零件不会自动清它），`outsource_company_id` 不清
+   *  则会残留一个与新工序无隶属关系的公司。
+   *
+   *  入参保留是为对齐 dialog 的 `partChange` 事件载荷（当前无需读取）。 */
+  function onCreatePartChange(_partId: string): void {
     createForm.process_id = '';
+    // 2026-10-03 登记：与 `createForm.process_id` 的 watch 看似重复，**不可删** ——
+    // watch 只在值**发生变化**时才跑回调，而换零件时 `process_id` 往往已经是 `''`
+    // （或本次赋的仍是 `''`），`'' → ''` 不构成变化 ⇒ watch 不触发；没有这一行，
+    // 上一条报价选过的公司会跨零件残留。`useOutsourceQuoteForm.spec.ts` 的 Q2 正是
+    // 靠它才绿。
     createForm.outsource_company_id = '';
-    if (!partId) return;
-    const rows = opts.parts().filter((p) => p.id === partId);
-    // 查不到（lookup 尚未装载完）→ 静默留空，工序可手动选。
-    if (rows.length === 0) return;
-    if (rows.length > 1) {
-      ElMessage.info('该零件对应多个外协工序，请手动选择工序');
-      return;
-    }
-    const part = rows[0]!;
-    if (!part.next_process_id) {
-      ElMessage.info('该零件未设置下一工序，请手动选择');
-      return;
-    }
-    // 仅当 next_process 类别 = OUTSOURCE 时自动填
-    const proc = opts.processes().find((p) => p.id === part.next_process_id);
-    if (proc && proc.category === 'OUTSOURCE') {
-      createForm.process_id = part.next_process_id;
-      // 触发 loadCompaniesByProcess 级联加载公司
-      void loadCompaniesByProcess(part.next_process_id);
-    } else {
-      ElMessage.info('该零件的下一工序不是外协工序，请手动选择');
-    }
   }
 
   async function onCreate(): Promise<void> {

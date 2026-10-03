@@ -1012,14 +1012,19 @@ export async function listPartsHeldByWorker(
 // ============================================================
 /** `POST /prod/batches/{batch_id}/send-to-outsource` 入参。
  *
- *  2026-10-03 契约对齐：**`next_process_id` 改名为 `process_id`**（后端 DTO 就是
- *  `process_id`；沿用旧名必然 422）。注意这只是 **body 里的键**改名，列表行上的
- *  字段名 `next_process_id`（`OutsourceSendableItem`）不变。
+ *  2026-10-03 登记的字段名要点：
+ *  - body 键是 `process_id`（后端 DTO 原名如此，且**必填无默认值**；发成别的键名
+ *    得到的是 422 纯文本，不是业务信封，别按业务错误码排查）。
+ *  - 列表行字段是 `current_process_id` / `current_process_name`
+ *    （`src/types/outsource.ts`，批次当前所属的外协工序）。
+ *  两者刻意不同名：body 键跟后端 DTO，行字段描述批次本身的位置。
  *
  *  模式由 `quote_id` / `direct` 二选一表达，**两者都不传后端返 400**：
  *  - APPROVAL（需审批报价）：传 `quote_id`（来自 `OutsourceSendableItem.quote_id`）；
  *  - DIRECT（免审批直发）：传 `direct: true` + `quote_id: null`，后端自动建一条
- *    `price=0` 的 APPROVED 占位报价。
+ *    `price=0` 的 APPROVED 占位报价。DIRECT 行的 `outsource_company_id` 取自
+ *    `company_options`，该工序未映射任何活跃公司时后端仍返回该行但数组为空
+ *    ⇒ 前端必须先过 `canSend` 再入队/提交，否则空串会让后端 `i64` 反序列化失败。
  */
 export interface SendToOutsourcePayload {
   /** 外协公司 id（雪花 ID 字符串） */

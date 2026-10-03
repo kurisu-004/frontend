@@ -25,31 +25,42 @@
           :model-value="form.part_id"
           filterable
           style="width: 100%"
-          placeholder="可选报价零件（在外协工序货架上的在制件；按图号/名称筛选）"
+          placeholder="可选报价零件（有待下发批次的在制件；按图号/名称筛选）"
           @update:model-value="
             (v: string | number | boolean | undefined) => $emit('update:part-id', String(v ?? ''))
           "
           @change="(v: string) => $emit('partChange', v)"
         >
           <!--
-            2026-10-03：picker 数据源的行粒度是「一个 (零件, OUTSOURCE 工序) 组合一行」
-            （后端 DISTINCT ON 去重），同一 part_id 可以出多行。
-            - :key 走 quotablePartRowKey 组合键，否则同零件多行会出重复 key。
-            - label 尾部带出 货架 · 下一工序，否则多行 label 完全相同，操作员无从分辨。
-            - :value 仍是裸 part_id：el-select 的 model（form.part_id）也是裸 part_id，
-              改成组合键会让 select 匹配不到 option、把雪花 id 直接显示在框里。
-              代价是同零件多行时「选中后按第一行渲染 label」，故自动填工序一侧
-              （onCreatePartChange）遇到多行不猜，改为提示手动选工序。
+            2026-10-03：picker 候选源是「有活跃 PENDING 批次的在制件」，行粒度是
+            **一个零件一行**（按零件唯一，不按 OUTSOURCE 工序货架展开），所以：
+            - :key 直接用 p.id —— 同零件不会出多行，无需组合键；
+            - label 不带货架 / 工序尾段 —— VO 已经没有这四个字段（见
+              `QuotablePart` 注释），且候选语义是「还没下发的零件」而非「在某个外协
+              工序货架上」，带出来反而误导。
+            副作用：picker 不携带工序线索，工序必须在「工序」下拉里手选；零件唯一化
+            也顺带消除了「label 暗示工序 A、实际手选工序 B」的串号隐患。
           -->
           <el-option
             v-for="p in parts"
-            :key="quotablePartRowKey(p)"
-            :label="`${p.serial_no ?? '—'} | ${p.drawing_no ?? ''} | ${p.name} | ${p.shelf_code} · ${p.next_process_name}`"
+            :key="p.id"
+            :label="`${p.serial_no ?? '—'} | ${p.drawing_no ?? ''} | ${p.name}`"
             :value="p.id"
           />
         </el-select>
       </el-form-item>
       <el-form-item label="工序" prop="process_id">
+        <!--
+          2026-10-03 登记（前端兜不了底的风险）：工序下拉**保持列出全部**
+          `category === 'OUTSOURCE'` 的工序 —— picker 不携带工序线索，没有可据以收窄的
+          数据通路，而后端 `create_quote` 只校验「零件存在 / 公司 active / 工序存在且是
+          OUTSOURCE」，**不校验 (part, process) 隶属关系，也不校验该公司是否映射该工序**。
+          于是配错的报价能一路走到 APPROVED，却在可发送列表里永远匹配不上
+          （sendable 按 `batch.current_process_id = quote.process_id` 匹配）
+          ⇒ 静默沉没的报价，无任何报错指向根因。
+          这是后端契约的既定取舍，此处只登记，别在别处再加「按零件过滤工序」之类的
+          前端补丁 —— picker VO 没有工序字段，无数据通路。
+        -->
         <el-select
           :model-value="form.process_id"
           filterable
@@ -114,7 +125,7 @@
 <script setup lang="ts">
 import { useDialogSize } from '@/composables/useDialogSize';
 import type { FormInstance, FormRules } from 'element-plus';
-import { quotablePartRowKey, type CreateQuoteForm } from '../composables/useOutsourceQuoteForm';
+import type { CreateQuoteForm } from '../composables/useOutsourceQuoteForm';
 import type { QuotablePart } from '@/types/outsource';
 import type { Process } from '@/types/process';
 

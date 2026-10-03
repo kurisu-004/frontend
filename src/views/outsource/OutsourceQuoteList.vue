@@ -45,13 +45,12 @@ const table = useOutsourceQuoteTable({ roleMap });
 
 // ============================================================
 // 表单 composable（create / approve / reject / delete / submit）
-// 页级 parts / processes lookup 由 shell 装载，下放给 form composable。
-// 表格刷新由 form composable 内部需要时调（创建 / 审批成功）
+// 2026-10-03：form composable 不再吃页级 lookup（parts / processes）—— 报价工序
+// 改由操作员在 dialog 的工序下拉里手选，无需从零件反推。表格刷新由 form composable
+// 内部需要时调（创建 / 审批成功）。
 // ============================================================
 const processes = ref<Process[]>([]);
-// 2026-10-03：picker 候选源。后端已按 (零件, OUTSOURCE 工序) 去重，前端不再二次
-// dedupe，所以「全量」与「去重后」是同一份数据 —— 合并为单个 ref，dialog 与
-// form composable 共读。
+// 2026-10-03：picker 候选源 —— 「有活跃 PENDING 批次的零件」，一零件一行。
 const parts = ref<QuotablePart[]>([]);
 
 async function loadLookups(): Promise<void> {
@@ -64,10 +63,7 @@ async function loadLookups(): Promise<void> {
     ElMessage.error((e as Error).message ?? '工序数据加载失败');
   }
   try {
-    // PR-H 2026-07-28：新建报价 picker 改为「仅显示外协工序货架上的零件」。
-    // 2026-10-03：出参改分页信封（读 `.items`）；行粒度已是「(零件, OUTSOURCE 工序)
-    // 组合一行」（后端 DISTINCT ON 去重），故不再需要前端 dedupe —— 按 part_id 去重
-    // 反而会把非首选工序的候选砍掉。
+    // picker 候选源：有活跃 PENDING 批次的在制件（一零件一行），出参是分页信封。
     const r = await listQuotableParts({ limit: 500 });
     parts.value = r.items;
   } catch (e) {
@@ -76,8 +72,6 @@ async function loadLookups(): Promise<void> {
 }
 
 const form = useOutsourceQuoteForm({
-  parts: () => parts.value,
-  processes: () => processes.value,
   refresh: table.refresh,
 });
 

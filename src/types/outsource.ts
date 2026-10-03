@@ -171,11 +171,15 @@ export interface OutsourceCompanyOption {
   name: string;
 }
 
-/** 外协可发送一览的统一返回项 */
+/** 外协可发送一览的统一返回项。
+ *  2026-10-03：行粒度是「一个批次一行」，工序归属取 `t_part_batch.current_process_id`。 */
 export interface OutsourceSendableItem {
   /** 乐观锁版本号（OCC；前端发送时回传）。
    *  2026-07-29 PR-fix-0.2.0：批次化后改为 TPartBatch.version（批次级 OCC） */
   version: number;
+  /** 2026-10-03 语义：由外协工序的 `requires_approval` 决定（false → DIRECT，
+   *  true → APPROVAL），不再看「有没有已审批报价」；`requires_approval = true` 但
+   *  无已审批报价的行后端**不返回**，故本列表行数会随报价齐备度变化。 */
   send_mode: OutsourceSendMode;
   source_status: OutsourceSourceStatus;
   part_id: string;
@@ -193,9 +197,13 @@ export interface OutsourceSendableItem {
   planned_delivery_date: string | null;
   is_urgent: boolean;
   customer_path: string | null;
-  next_process_id: string;
-  next_process_name: string | null;
-  /** PR-H 2026-07-28：源货架 code（绑了外协工序的货架，如 C2） */
+  /** 批次**当前所属**的外协工序（不是「下一道工序」），权威依据是
+   *  `t_part_batch.current_process_id`（工序候选池的归属判据）。发往该工序的
+   *  body 键名另叫 `process_id`（后端 `SendToOutsourceRequest` 不叫这个）。 */
+  current_process_id: string;
+  /** 同 `current_process_id` 的展示名 */
+  current_process_name: string | null;
+  /** PR-H 2026-07-28：源货架 code（如 C2） */
   shelf_code: string | null;
   /** APPROVAL 单值；DIRECT 为 null（用 company_options） */
   outsource_company_id: string | null;
@@ -311,12 +319,14 @@ export interface OutsourceInFlightListResult {
 // 可报价零件 picker（2026-10-03 契约对齐）
 // ============================================================
 
-/** `GET /outsource-quotes/quotable-parts` 单行。
+/** `GET /outsource-quotes/quotable-parts` 单行 —— 10 字段。
  *
- *  行粒度是「一个 (零件, OUTSOURCE 工序) 组合一行」—— 后端已 DISTINCT ON 去重，
- *  所以同一零件挂多个外协工序时会出多行，前端**不要**再做 part_id 级去重。
- *  与 `PartListItem` 的关键差异：显式带 `next_process_id` / `next_process_name`
- *  （自动填工序所依赖的字段），另有 picker 专用的 `shelf_id` / `shelf_code`。 */
+ *  2026-10-03 契约对齐：行粒度是「**一个零件一行**」，筛选条件是「有活跃
+ *  `status='PENDING'` 批次的零件」（报价是给还没下发的在制件提前锁价），不再按
+ *  OUTSOURCE 工序货架展开。故 VO 删掉 `shelf_id` / `shelf_code` / `next_process_id` /
+ *  `next_process_name` 四个与「货架上的某道工序」绑定的字段。
+ *  代价：picker 不再能推断报价工序，新建报价的工序由操作员在独立的工序下拉里选
+ *  （数据源是全部外协工序）。 */
 export interface QuotablePart {
   id: string;
   serial_no: string | null;
@@ -331,11 +341,6 @@ export interface QuotablePart {
   /** L1 客户名 */
   l1_customer_name: string | null;
   customer_path: string | null;
-  shelf_id: string;
-  shelf_code: string;
-  /** 正式字段（后端 VO 显式声明），非必为 OUTSOURCE 类别之外的值 */
-  next_process_id: string;
-  next_process_name: string;
 }
 
 export interface QuotablePartListResult {
@@ -400,7 +405,7 @@ export interface OutsourcePoolCompany {
  *  「可发送候选批次 × 该外协工序」，字段语义与 `OutsourceSendableItem` 同源。
  *  与 `OutsourceSendableItem` 的两处差异：
  *   1. 新增 `can_send`（后端派生的可发送判据，替代前端原先的 `canSend()` 计算）；
- *   2. 契约不含 `next_process_id` / `next_process_name`，**理由**：发送的目标工序 =
+ *   2. 契约不含 `current_process_id` / `current_process_name`，**理由**：发送的目标工序 =
  *      当前 tab 的工序 id（`send-to-outsource` 的 `process_id` 入参），对本看板冗余；
  *      接收侧的目标工序由 state 端点的 `receive_next_process_id` /
  *      `receive_next_process_name` 提供。两侧字段集一致，无需后端补字段 ——

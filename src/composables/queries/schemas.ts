@@ -1535,13 +1535,13 @@ export const outsourceSentPartListResultSchema = z.object({
 
 export type OutsourceSentPartListResultSchema = z.infer<typeof outsourceSentPartListResultSchema>;
 
-/** `GET /api/v2/outsource-quotes/quotable-parts` 单行（后端 `QuotablePart`）—— 14 字段。
+/** `GET /api/v2/outsource-quotes/quotable-parts` 单行（后端 `QuotablePart`）—— 10 字段。
  *
- *  ⚠️ 行粒度 = 一个 (零件, OUTSOURCE 工序) 组合一行（后端已 DISTINCT ON 去重）：
- *  同一零件挂 N 个外协工序就出 N 行，前端**不得**再做 part_id 级去重（那会把多工序
- *  候选砍成 1 行，非首选工序的零件彻底无法报价）。
- *  ⚠️ `next_process_id` / `next_process_name` 是正式字段（后端 VO 显式声明），
- *  不再需要前端做 picker-local 类型扩展才能读到。 */
+ *  ⚠️ 行粒度 = **一个零件一行**，筛选条件是「有活跃 `status='PENDING'` 批次的零件」
+ *  （报价是给还没下发的在制件提前锁价），不再按 OUTSOURCE 工序货架展开，故 VO 删掉
+ *  `shelf_id` / `shelf_code` / `next_process_id` / `next_process_name`。
+ *  ⚠️ 正因为不再携带工序，picker 侧**没有**「选中零件 → 自动填工序」这条数据通路，
+ *  新建报价的工序必须由操作员在独立的工序下拉里选。 */
 export const quotablePartSchema = z.object({
   id: z.string(),
   serial_no: z.string().nullable(),
@@ -1554,10 +1554,6 @@ export const quotablePartSchema = z.object({
   customer_name: z.string().nullable(),
   l1_customer_name: z.string().nullable(),
   customer_path: z.string().nullable(),
-  shelf_id: z.string(),
-  shelf_code: z.string(),
-  next_process_id: z.string(),
-  next_process_name: z.string(),
 });
 
 export type QuotablePartSchema = z.infer<typeof quotablePartSchema>;
@@ -1623,12 +1619,17 @@ const outsourceCompanyOptionSchema = z.object({
 
 /** `GET /api/v2/outsource-sendable` 单行（后端 `OutsourceSendableItem`）—— 23 字段。
  *
- *  ⚠️ URL 已从 `/parts/outsource-sendable` 迁到 outsource 域顶层（2026-10-03）。
+ *  ⚠️ URL 是 outsource 域顶层的 `/api/v2/outsource-sendable`。
+ *  ⚠️ `current_process_id` / `current_process_name`：批次**当前所属**的外协工序，
+ *     权威依据是 `t_part_batch.current_process_id`，语义是「该发给谁」而非
+ *     「下一道工序」（键名沿用 `next_process_*` 是历史遗留，别按名字猜语义）。
  *  ⚠️ `quote_id`（2026-10-03 新增）是发送端点必传二选一的判据：APPROVAL 行有值、
  *  DIRECT 行为 null。漏声明它 ⇒ 前端组不出 payload ⇒ 每行都返 400。 */
 export const outsourceSendableItemSchema = z.object({
   /** t_part_batch.version（批次级 OCC，发送时回传） */
   version: z.number(),
+  /** 2026-10-03 语义：由外协工序的 `requires_approval` 决定（false → DIRECT，
+   *  true → APPROVAL）；`requires_approval = true` 但无已审批报价的行后端不返回。 */
   send_mode: z.enum(['APPROVAL', 'DIRECT']),
   source_status: z.enum(['PENDING', 'IN_PROCESS']),
   part_id: z.string(),
@@ -1647,8 +1648,8 @@ export const outsourceSendableItemSchema = z.object({
   planned_delivery_date: z.string().nullable(),
   is_urgent: z.boolean(),
   customer_path: z.string().nullable(),
-  next_process_id: z.string(),
-  next_process_name: z.string().nullable(),
+  current_process_id: z.string(),
+  current_process_name: z.string().nullable(),
   shelf_code: z.string().nullable(),
   /** APPROVAL 单值；DIRECT 为 null（用 company_options） */
   outsource_company_id: z.string().nullable(),
@@ -1755,7 +1756,7 @@ export type OutsourcePoolCompanySchema = z.infer<typeof outsourcePoolCompanySche
  *
  *  与 `outsourceSendableItemSchema`（23 字段）的差异只有一处实质字段：本 VO **多了
  *  `can_send`**（后端派生的可发送判据，替代前端原先自己算的 `canSend()`）。另：本
- *  VO 契约不含 `next_process_id` / `next_process_name` —— 理由：发送的目标工序 =
+ *  VO 契约不含 `current_process_id` / `current_process_name` —— 理由：发送的目标工序 =
  *  当前 tab 的工序 id（`send-to-outsource` 的 `process_id` 入参），对本看板冗余；
  *  接收侧的目标工序由 state 端点的 `receive_next_process_id` /
  *  `receive_next_process_name` 提供。两侧字段集一致，无需后端补字段。
