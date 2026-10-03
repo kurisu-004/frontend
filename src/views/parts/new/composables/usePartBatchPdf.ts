@@ -457,10 +457,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
   function onExcelRemove(file: UploadFile): void {
     excelFiles.value = excelFiles.value.filter((f) => f.uid !== file.uid);
-    // 2026-10-03：Excel 文件被移除 → 解析结果同步作废（否则会用已不在列表里的
-    // Excel 数据继续回填新建行）。这里可以无条件作废：excel 的 el-upload 没开
-    // `multiple`，列表里只可能有 1 个文件，移除的就是 `rebuildFromUploads` 读的那个
-    // （`excelFiles.value[0]`）。
+    // 2026-10-03：Excel 文件被移除 → 解析快照同步作废（否则会用已不在列表里的
+    // Excel 数据继续回填新建行）。无条件作废的依据是快照只来自 rebuildFromUploads
+    // 读到的 `excelFiles.value[0]`：el-upload 未开 `multiple` 也拦不住再次选文件，
+    // onExcelChange 走 fileList 的追加语义，列表可能多于 1 个，而快照只对应该次
+    // 解析时的第 1 个文件；移除后第 1 个文件可能已换人、甚至列表已空，旧快照无从
+    // 校验。取舍：宁可清空导致「少填」，也不要沿用旧快照错填。
     excelByDrawingNo.value = null;
   }
   // PR-H 2026-07-28：3D 模型上传钩子
