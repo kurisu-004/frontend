@@ -465,6 +465,16 @@ export function buildPartsListColumnDefs(deps: {
     },
 
     // 9. 已送数量（装配件行恒为 '—'）
+    //
+    // 2026-10-03 订正：兜底值由 0 改 '—'。后端 `GET /api/v2/parts` 的 PartListItem
+    // 当前**不返** delivered_quantity（该列只有 `com/union-list` 填），把「后端未返」
+    // 渲染成 0 会被读成「一件都没交」，是静默错值；`??` 只在 nullish 时兜底，
+    // 后端补齐后会自动回真数字，不需要改这里。
+    //
+    // 待办：后端给 `GET /parts` 补上该字段后，删掉下面的 ASSEMBLY '—' 短路 ——
+    // 短路存在的原因是本列只渲染在 `GET /parts`（该端点无装配件行），且装配件按
+    // 「套」计、零件按「件」计，单位不同不宜并排；后端补齐后两个端点都有该列，
+    // 短路就成了「装配件永远看不到已送数」的假缺口。
     {
       key: 'delivered_quantity',
       label: '已送数量',
@@ -477,7 +487,9 @@ export function buildPartsListColumnDefs(deps: {
         if (r.row_type === 'ASSEMBLY') {
           return h('span', { class: 'muted' }, '—');
         }
-        return h('span', null, r.delivered_quantity ?? 0);
+        return r.delivered_quantity == null
+          ? h('span', { class: 'muted' }, '—')
+          : h('span', null, r.delivered_quantity);
       },
     },
   ];
