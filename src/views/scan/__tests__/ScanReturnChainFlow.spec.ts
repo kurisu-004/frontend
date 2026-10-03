@@ -8,27 +8,33 @@
 // 再让他点一遍工序 + 点一遍货架就是纯重复劳动。改动后按 chain_state 三态分流：
 //
 //   NEXT（链内有下一道）→ 不开工序选择弹窗，拉候选货架取推荐架，直接开单确认弹窗；
-//   TAIL（链内最后一道）→ 先 warning「加工完成后请送检」，再回退手选工序；
-//   NONE（无链 / 软删 / 指针漂移）→ 行为与改动前逐字一致。
+//   TAIL（链内最后一道）→ 工序选择弹窗内常驻提示「加工完成后请送检」，工人手选工序；
+//   NONE（无链 / 软删 / 指针漂移 / 未知取值）→ 行为与改动前逐字一致。
 //
-// 这批用例守三件容易静默坏掉的事：
+// 这批用例守四件容易静默坏掉的事：
 //   1. 分流判据写错（拿 chain_state 之外的东西判 / 三态写串）—— 症状是链已知时仍弹
 //      工序选择，且**没有任何报错**；或 TAIL 被当成 NEXT 让工人「再放回一次」；
 //   2. 兜底出口被删掉 —— 候选架为空 / 推荐架缺失 / 链字段异常时工人被卡死在
 //      「该工序暂无可用货架」上，没有任何路可走；
 //   3. 确认放回提交的参数不是派生出来的值（工序 id / 货架 id 串了）—— 工件会落到
-//      没配该工序的架上（后端 20507），返工成本由现场承担。
+//      没配该工序的架上（后端 20507），返工成本由现场承担；
+//   4. 候选货架请求在途时切到另一件 —— 旧响应回来会与新弹窗并存，工人一点就把**当前
+//      这件**记到**上一件**的工序 / 货架上（后端要么 20507，要么静默记错，现场无从
+//      察觉）。这是 HMI 触屏下最危险的一条，改动前的用例只覆盖了「反选同一件」。
 //
 // 桩的取舍：
 //   - `@/api/parts` / `@/api/shelves` 整模块桩掉：本页与 api 层是「直接 await + 手写
 //     ref」范式（报工台域不用 TanStack Query），不桩就真发请求。
 //   - `element-plus` 桩成 `{ ElMessage: { ...vi.fn() } }`：按 CLAUDE.md 约定。本页
-//     所有提示（送检 warning / 无货架 warning / 提交成功失败）都走 ElMessage，桩掉才能
-//     断言提示文案；node/happy-dom 下真实 ElMessage 也会污染输出。
-//   - 三个弹窗：ProcessPickerDialog / ShelfPickerDialog 桩成带标记 class 的空壳（它们
+//     所有提示（无货架 warning / 提交成功失败）都走 ElMessage，桩掉才能断言提示文案；
+//     node/happy-dom 下真实 ElMessage 也会污染输出。
+//   - `@/composables/useBarcodeScanner` 桩掉并把注册的 handler 抓出来：扫码是本页
+//     与点选并行的第二个入口（`applyScanSelection`），不桩就得模拟键盘时序。
+//   - 两个弹窗：ProcessPickerDialog / ShelfPickerDialog 桩成带标记 class 的空壳（它们
 //     各自要打 `listProcesses` / `listShelvesForReturn`，且内部 HmiPickerCard 与本组断言
-//     无关）；ReturnConfirmDialog **用真组件**（它是本次分流的主角，文案与三个出口
-//     都要验）。
+//     无关）；ProcessPickerDialog 的空壳额外把 `hint` 透出成 data-*，用来验链尾送检
+//     提醒进了弹窗。ReturnConfirmDialog **用真组件**（它是本次分流的主角，文案与三个
+//     出口都要验）。
 //   - `PdfViewer` 桩掉：它 import pdfjs-dist，与放回分流无关，却会把单测拖进 pdf worker。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,6 +47,7 @@ const h = vi.hoisted(() => ({
   workerScan: vi.fn(),
   listShelvesForReturn: vi.fn(),
   replace: vi.fn(),
+  scanHandlers: [] as ((code: string) => void)[],
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 
@@ -57,14 +64,27 @@ vi.mock('element-plus', () => ({ ElMessage: h.ElMessage }));
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ replace: h.replace }) }));
 
+// 真实实现是 window.keydown 单例；这里只保留「注册 handler」这一半，让用例能直接
+// 触发一次扫码。onScan 的返回值（退订函数）也要给，否则组件卸载时会炸。
+vi.mock('@/composables/useBarcodeScanner', () => ({
+  useBarcodeScanner: () => ({
+    onScan: (fn: (code: string) => void) => {
+      h.scanHandlers.push(fn);
+      return () => {};
+    },
+  }),
+}));
+
 vi.mock('@/components/PdfViewer.vue', () => ({
   default: { name: 'PdfViewerStub', template: '<div class="stub-pdf" />' },
 }));
 
 import ScanReturnParts from '../ScanReturnParts.vue';
 import ReturnConfirmDialog from '../components/ReturnConfirmDialog.vue';
+import { SCAN_LIST_CONTRACT_DRIFT_TEXT } from '@/views/scan/composables/scanListErrorMessage';
 import { useScanSession } from '@/composables/useScanSession';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
+import { ZodError } from 'zod';
 
 const WORKER = {
   id: '190000000000900',
@@ -123,6 +143,23 @@ function row(over: Partial<ScanPartRowSchema> = {}): ScanPartRowSchema {
   };
 }
 
+/** 模拟「后端漏发链四件套」的行：真路径上 scanPartRowSchema 把四键补成默认值
+ *  （chain_state 留 undefined / 另三个取后端兜底），这里把键整个删掉，验证页面读到
+ *  undefined 时的降级行为。 */
+function rowWithoutChainFields(over: Partial<ScanPartRowSchema> = {}): ScanPartRowSchema {
+  const full = row(over);
+  const bare: Record<string, unknown> = { ...full };
+  for (const key of [
+    'chain_state',
+    'chain_next_process_id',
+    'chain_next_process_name',
+    'chain_current_process_name',
+  ]) {
+    delete bare[key];
+  }
+  return bare as unknown as ScanPartRowSchema;
+}
+
 const RECOMMENDED = {
   id: '190000000000301',
   code: 'A-03',
@@ -143,6 +180,18 @@ const OTHER_SHELF = {
   is_recommended: false,
 };
 
+/** 让下一次 listShelvesForReturn 挂起，返回「手动放行在途响应」的函数。
+ *  竞态用例要的就是「请求在途 ⇒ 页面上一个弹窗都没有、卡片完全可点」这个窗口。 */
+function deferShelves(): (v: { items: (typeof RECOMMENDED)[] }) => void {
+  let settle: (v: { items: (typeof RECOMMENDED)[] }) => void = () => {};
+  h.listShelvesForReturn.mockReturnValue(
+    new Promise<{ items: (typeof RECOMMENDED)[] }>((res) => {
+      settle = res;
+    }),
+  );
+  return settle;
+}
+
 const stubs = {
   // 三个弹窗的壳：el-dialog 渲染 default + footer 两个 slot，el-button 的原生 click
   // 由 attrs 透传到 <button>（本页的按钮点击断言就靠它）。
@@ -159,11 +208,12 @@ const stubs = {
   'el-image': { name: 'ElImageStub', template: '<div />' },
   'el-badge': { name: 'ElBadgeStub', template: '<div><slot /></div>' },
   // 本组只关心分流，手选路径的两个弹窗换成带标记的空壳（省掉 listProcesses /
-  // HmiPickerCard 的依赖），标记 class 就是断言锚点。
+  // HmiPickerCard 的依赖），标记 class 就是断言锚点；ProcessPickerDialog 额外把
+  // `hint` 透出成 data-*，用来验链尾送检提醒确实进了弹窗。
   ProcessPickerDialog: {
     name: 'ProcessPickerDialogStub',
-    props: ['modelValue'],
-    template: '<div class="stub-process-picker" />',
+    props: ['modelValue', 'hint'],
+    template: '<div class="stub-process-picker" :data-hint="hint ?? \'\'" />',
   },
   ShelfPickerDialog: {
     name: 'ShelfPickerDialogStub',
@@ -193,10 +243,23 @@ function dialogText(w: Awaited<ReturnType<typeof mountPage>>): string {
   return w.findComponent(ReturnConfirmDialog).text();
 }
 
+/** 工序选择弹窗弹出的横幅文案（链尾送检提醒传进来的 hint）。 */
+function processHint(w: Awaited<ReturnType<typeof mountPage>>): string {
+  return w.find('.stub-process-picker').attributes('data-hint') ?? '';
+}
+
 async function clickConfirmBar(w: Awaited<ReturnType<typeof mountPage>>, text: string) {
   const btn = w.findAll('button').find((b) => b.text() === text);
   if (!btn) throw new Error(`找不到按钮「${text}」`);
   await btn.trigger('click');
+  await flushPromises();
+}
+
+/** 触发一次扫码（走 useBarcodeScanner 桩注册的 handler，即页面的 onScanToSelect）。 */
+async function scan(w: Awaited<ReturnType<typeof mountPage>>, code: string): Promise<void> {
+  const last = h.scanHandlers.at(-1);
+  if (!last) throw new Error('页面没有注册扫码 handler');
+  last(code);
   await flushPromises();
 }
 
@@ -209,6 +272,7 @@ beforeEach(() => {
   h.ElMessage.warning.mockReset();
   h.ElMessage.info.mockReset();
   h.replace.mockReset();
+  h.scanHandlers.length = 0;
   // 扫码 session 是模块级单例：每个用例都要有工人，否则 onBeforeMount 的
   // requireWorker 守卫直接把本站重定向走。
   useScanSession().setWorker(WORKER);
@@ -241,7 +305,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(h.workerScan).not.toHaveBeenCalled();
   });
 
-  it('NEXT + 确认放回：workerScan 收到派生的 next_process_id 与推荐架 id，成功后件从列表消失', async () => {
+  it('NEXT + 确认放回：workerScan 收到派生的 next_process_id 与推荐架 id，成功后选中态与确认框被清空', async () => {
     h.listShelvesForReturn.mockResolvedValue({ items: [RECOMMENDED] });
     const w = await mountPage([
       row({
@@ -264,7 +328,9 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
       batch_id: '190000000000111',
     });
     expect(h.ElMessage.success).toHaveBeenCalledTimes(1);
-    // 提交后重新拉列表：后端把该件移走 ⇒ 页面上不再有选中态，确认框也收掉
+    // 提交后重新拉列表。断言的是**状态收敛**而不是「件从列表消失」：本组把
+    // listPartsHeldByWorker 桩成恒返同一行，列表里那件一直在，真正该验的是放回成功后
+    // 选中态与确认框都被清掉（不清的话确认栏会留着上一件的工序名 / 货架名）。
     expect(w.find('.confirm-bar').exists()).toBe(false);
     expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
     expect(h.listPartsHeldByWorker.mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -310,8 +376,13 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(h.workerScan).not.toHaveBeenCalled();
   });
 
-  it('NEXT + 候选架请求失败：error 后回退手选工序', async () => {
-    h.listShelvesForReturn.mockRejectedValue(new Error('40300 无权限'));
+  // 2026-10-04：契约漂移（ZodError）时不得把后端原文 / Zod 的 issues JSON 弹给工人 ——
+  // 走同页 refresh 的 scanListErrorText 收口（人话给工人、细节给 console）。
+  it('NEXT + 候选架请求契约漂移（ZodError）：给工人固定人话 + 细节进 console，回退手选工序', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    h.listShelvesForReturn.mockRejectedValue(
+      new ZodError([{ code: 'custom', path: [], message: 'boom' }]),
+    );
     const w = await mountPage([
       row({
         chain_state: 'NEXT',
@@ -321,12 +392,32 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     ]);
     await clickFirstPart(w);
 
-    expect(h.ElMessage.error).toHaveBeenCalledWith('40300 无权限');
+    expect(h.ElMessage.error).toHaveBeenCalledWith(SCAN_LIST_CONTRACT_DRIFT_TEXT);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
     expect(w.find('.stub-process-picker').exists()).toBe(true);
     expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
   });
 
-  it('TAIL：先 warning「加工完成后请送检」（点名当前工序），再开工序选择弹窗', async () => {
+  // 无 message 的异常走 fallback：候选架请求失败也要有一句能读懂的话，而不是「undefined」
+  // （scanListErrorText 只在 message 缺失时回落 fallback，message 为空串时逐字透传）。
+  it('NEXT + 候选架请求抛无 message 的异常：回退手选工序并给 fallback 文案', async () => {
+    h.listShelvesForReturn.mockRejectedValue({});
+    const w = await mountPage([
+      row({
+        chain_state: 'NEXT',
+        chain_next_process_id: '190000000000131',
+        chain_next_process_name: 'CUT-01 下料',
+      }),
+    ]);
+    await clickFirstPart(w);
+
+    expect(h.ElMessage.error).toHaveBeenCalledWith('加载候选货架失败');
+    expect(w.find('.stub-process-picker').exists()).toBe(true);
+    expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
+  });
+
+  it('TAIL：工序选择弹窗内常驻「加工完成后请送检」提示（点名当前工序）', async () => {
     const w = await mountPage([
       row({
         chain_state: 'TAIL',
@@ -337,10 +428,10 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     ]);
     await clickFirstPart(w);
 
-    expect(h.ElMessage.warning).toHaveBeenCalledWith(
-      '「CUT-01 下料」为最后一道工序，加工完成后请送检。',
-    );
     expect(w.find('.stub-process-picker').exists()).toBe(true);
+    // 提示必须是**弹窗内的常驻横幅**，不是 toast：后开的 el-dialog 遮罩必然盖住先发的
+    // ElMessage，工人在产线屏幕前看不到那句 3 秒后自动消失的提示。
+    expect(processHint(w)).toBe('「CUT-01 下料」为最后一道工序，加工完成后请送检。');
     expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
     // TAIL 没有下一道 ⇒ 一次货架请求都不该发
     expect(h.listShelvesForReturn).not.toHaveBeenCalled();
@@ -357,15 +448,16 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     ]);
     await clickFirstPart(w);
 
-    expect(h.ElMessage.warning).toHaveBeenCalledWith('当前为最后一道工序，加工完成后请送检。');
+    expect(processHint(w)).toBe('当前为最后一道工序，加工完成后请送检。');
     expect(w.find('.stub-process-picker').exists()).toBe(true);
   });
 
-  it('NONE：不发货架请求，直接走原三步路径（工序选择 → 货架点选）', async () => {
+  it('NONE：不发货架请求、不带横幅，直接走原三步路径（工序选择 → 货架点选）', async () => {
     const w = await mountPage([row({ chain_state: 'NONE', chain_next_process_id: '0' })]);
     await clickFirstPart(w);
 
     expect(w.find('.stub-process-picker').exists()).toBe(true);
+    expect(processHint(w)).toBe('');
     expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
     expect(h.listShelvesForReturn).not.toHaveBeenCalled();
     expect(h.ElMessage.warning).not.toHaveBeenCalled();
@@ -408,16 +500,11 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(h.workerScan).not.toHaveBeenCalled();
   });
 
-  // 竞态守卫：`openChainConfirm` 里有一次货架请求往返，这期间工人可以点同一张卡反选。
-  // 不丢弃在途响应的话，它回来会为「已经被取消的件」弹出一个确认框 —— 点确认后
+  // 竞态守卫（反选）：`openChainConfirm` 里有一次货架请求往返，这期间工人可以点同一张
+  // 卡反选。不丢弃在途响应的话，它回来会为「已经被取消的件」弹出一个确认框 —— 点确认后
   // submitReturn 因 selectedPart 为空 bail，工人看到的是一个点不动的死框。
   it('候选架在途时反选同一件：在途响应被丢弃，不弹确认框', async () => {
-    let settle: (v: { items: (typeof RECOMMENDED)[] }) => void = () => {};
-    h.listShelvesForReturn.mockReturnValue(
-      new Promise<{ items: (typeof RECOMMENDED)[] }>((res) => {
-        settle = res;
-      }),
-    );
+    const settle = deferShelves();
     const w = await mountPage([
       row({
         chain_state: 'NEXT',
@@ -439,5 +526,135 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(w.find('.stub-process-picker').exists()).toBe(false);
     expect(w.find('.confirm-bar').exists()).toBe(false);
     expect(h.workerScan).not.toHaveBeenCalled();
+  });
+
+  // 竞态守卫（切到另一件，HMI 触屏下最危险的一条）：NEXT 件 A 的候选架请求在途时，
+  // **页面上没有任何弹窗、卡片完全可点**，工人点（防抖挡不住的 impatient 双击 / 扫码枪
+  // 补扫）另一件 NONE 的 B。若作废点只放在 openChainConfirm 入口，A 的响应会带着
+  // A 的工序与推荐架回来，而此时 showProcessDialog（B 的手选工序弹窗）已经开着 ——
+  // 两个弹窗并存，工人点「确认放回」提交的是 **B 的 serial_no / batch_id + A 的
+  // next_process_id / shelf_id**。后端要么 20507 报错，要么该架恰好也映射了 A 的工序
+  // ⇒ B 被静默记到 A 的工序上，现场无从察觉。
+  it('NEXT 件候选架在途时点选 NONE 件：在途响应被丢弃，只留 B 的工序选择弹窗', async () => {
+    const settle = deferShelves();
+    const w = await mountPage([
+      row({
+        serial_no: 'F-A',
+        batch_id: '1900000000001A1',
+        chain_state: 'NEXT',
+        chain_next_process_id: '190000000000131',
+        chain_next_process_name: 'CUT-01 下料',
+      }),
+      row({ serial_no: 'F-B', batch_id: '1900000000001B1', chain_state: 'NONE' }),
+    ]);
+
+    // 点 A：候选架请求挂起
+    await w.findAll('.part-row')[0]!.trigger('click');
+    await flushPromises();
+    expect(h.listShelvesForReturn).toHaveBeenCalledTimes(1);
+    expect(w.find('.stub-process-picker').exists()).toBe(false);
+    expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
+
+    // 窗口内点 B（同步开工序选择弹窗，不发请求）
+    await w.findAll('.part-row')[1]!.trigger('click');
+    await flushPromises();
+    expect(w.find('.stub-process-picker').exists()).toBe(true);
+
+    // A 的响应这时才回来
+    settle({ items: [RECOMMENDED] });
+    await flushPromises();
+
+    // A 的答案不得落地：没有确认框，确认栏不显示 A 的目标货架
+    expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
+    expect(w.find('.confirm-bar').text()).not.toContain('目标货架');
+    expect(w.find('.confirm-bar').text()).not.toContain('CUT-01');
+    expect(processHint(w)).toBe('');
+    expect(h.workerScan).not.toHaveBeenCalled();
+  });
+
+  // 同一条竞态的扫码入口：applyScanSelection → enterReturnFlow 是同一个分流，
+  // 自增点也必须覆盖它（扫码枪连扫 / 补扫在 HMI 上比双击更常见）。
+  it('NEXT 件候选架在途时扫码命中 NONE 件：在途响应被丢弃', async () => {
+    const settle = deferShelves();
+    const w = await mountPage([
+      row({
+        serial_no: 'F-A',
+        batch_id: '1900000000001A1',
+        chain_state: 'NEXT',
+        chain_next_process_id: '190000000000131',
+        chain_next_process_name: 'CUT-01 下料',
+      }),
+      row({ serial_no: 'F-B', batch_id: '1900000000001B1', chain_state: 'NONE' }),
+    ]);
+
+    await w.findAll('.part-row')[0]!.trigger('click');
+    await flushPromises();
+    expect(h.listShelvesForReturn).toHaveBeenCalledTimes(1);
+
+    await scan(w, 'F-B');
+    expect(w.find('.stub-process-picker').exists()).toBe(true);
+
+    settle({ items: [RECOMMENDED] });
+    await flushPromises();
+
+    expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
+    expect(w.find('.confirm-bar').text()).not.toContain('目标货架');
+    expect(h.workerScan).not.toHaveBeenCalled();
+  });
+
+  // 扫码入口的链分流本身（applyScanSelection → enterReturnFlow）：扫码命中 NEXT 件也走
+  // 单确认框，不弹工序选择。此前这条链零覆盖。
+  it('扫码命中 NEXT 件：走单确认框，不弹工序选择弹窗', async () => {
+    h.listShelvesForReturn.mockResolvedValue({ items: [RECOMMENDED] });
+    const w = await mountPage([
+      row({
+        serial_no: 'F-A',
+        chain_state: 'NEXT',
+        chain_next_process_id: '190000000000131',
+        chain_next_process_name: 'CUT-01 下料',
+      }),
+    ]);
+
+    await scan(w, 'F-A');
+
+    expect(h.listShelvesForReturn).toHaveBeenCalledWith('190000000000131');
+    expect(w.find('.stub-process-picker').exists()).toBe(false);
+    expect(dialogText(w)).toContain('下一道工序为 CUT-01 下料，请将工件放到 A-03 货架');
+  });
+
+  // 2026-10-04 工序链四件套按「带默认值的必输出键」声明（理由见 schemas.ts
+  // scanPartRowSchema.chain_state 的注释）：后端漏发这四个键时**页面必须仍可用** ——
+  // 走 NONE 旧路径（弹工序选择），而不是在 API 边界抛 ZodError 让报工台三页全空。
+  // 可诊断性由一次性 console.warn 补回（人话给工人、细节给 console）。
+  it('后端漏发链四件套：页面仍可用（走 NONE 旧路径），且 console.warn 报过一次', async () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const w = await mountPage([rowWithoutChainFields()]);
+
+    await clickFirstPart(w);
+
+    expect(w.find('.stub-process-picker').exists()).toBe(true);
+    expect(processHint(w)).toBe('');
+    expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
+    // 只 warn 一次：列表一次最多 200 行，逐行 warn 会把真正的报错埋掉
+    expect(consoleWarn).toHaveBeenCalledTimes(1);
+    expect(consoleWarn.mock.calls[0]!.join(' ')).toContain('chain_state');
+    consoleWarn.mockRestore();
+    expect(h.workerScan).not.toHaveBeenCalled();
+  });
+
+  // 后端新增第四个 chain_state 取值（纯后端单方面改动）也只能降级、不能停工：
+  // 未知字面量按 NONE 处理并 warn 一次。守卫这条的是「不锁 z.enum」这个决定。
+  it('chain_state 是未知取值：按 NONE 降级 + warn 一次，不崩页', async () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const w = await mountPage([
+      row({ chain_state: 'SKIP' as unknown as string, chain_next_process_id: '190000000000131' }),
+    ]);
+
+    await clickFirstPart(w);
+
+    expect(w.find('.stub-process-picker').exists()).toBe(true);
+    expect(consoleWarn).toHaveBeenCalledTimes(1);
+    consoleWarn.mockRestore();
+    expect(h.listShelvesForReturn).not.toHaveBeenCalled();
   });
 });

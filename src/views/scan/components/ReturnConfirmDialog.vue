@@ -23,8 +23,8 @@
 
   props:
     modelValue: boolean    // 弹窗可见
-    processLabel: string   // 下一道工序标签，如「CUT-01 下料」
-    shelfLabel: string     // 目标货架 code，如「A-03」
+    processLabel: string   // 下一道工序标签，如「CUT-01 下料」（**必填**，不许空串）
+    shelfLabel: string     // 目标货架 code，如「A-03」（**必填**，不许空串）
   emits:
     update:modelValue(v: boolean)
     confirm()             // 确认放回：写 pendingShelfId 后直接提交
@@ -52,7 +52,7 @@
       <el-button type="default" plain size="large" class="manual-btn" @click="onManual">
         手动选择工序
       </el-button>
-      <el-button type="primary" size="large" class="confirm-btn" @click="onConfirm">
+      <el-button type="primary" size="large" class="confirm-btn" :loading="busy" @click="onConfirm">
         确认放回
       </el-button>
     </template>
@@ -60,19 +60,20 @@
 </template>
 
 <script setup lang="ts">
-withDefaults(
-  defineProps<{
-    modelValue: boolean;
-    /** 下一道工序标签，如「CUT-01 下料」；无值时传空串（文案会留空，由调用方兜底） */
-    processLabel?: string;
-    /** 目标货架 code，如「A-03」 */
-    shelfLabel?: string;
-  }>(),
-  {
-    processLabel: '',
-    shelfLabel: '',
-  },
-);
+import { ref, watch } from 'vue';
+
+/** 下一道工序标签与目标货架 code 都声明成**必填**：主文案是工人照着执行的唯一依据，
+ *  任一为空都渲染成「下一道工序为 ，请将工件放到  货架」这种病句，而文案本身没有任何
+ *  兜底句式能救。唯一的消费方 `ScanReturnParts.vue` 保证两值非空（解析不出时它根本不
+ *  开本窗，见 `openChainConfirm` 的三条兜底），所以「不许为空」提到编译期而不是靠
+ *  运行时默认值兜。 */
+const props = defineProps<{
+  modelValue: boolean;
+  /** 下一道工序标签，如「CUT-01 下料」 */
+  processLabel: string;
+  /** 目标货架 code，如「A-03」 */
+  shelfLabel: string;
+}>();
 
 const emit = defineEmits<{
   'update:modelValue': [v: boolean];
@@ -84,7 +85,21 @@ const emit = defineEmits<{
   cancel: [];
 }>();
 
+/** 已抛 confirm、等待父组件关窗期间的闩锁。父组件用 v-if 挂载本组件，点完即卸载，
+ *  物理双击本落不到同一按钮上；闩锁是廉价纵深防御 —— HMI 上这是唯一一个「一下就能触发
+ *  写操作」的大按钮，重复提交会让同一件放回两次（后端第二次必得 20507）。 */
+const busy = ref(false);
+
+watch(
+  () => props.modelValue,
+  (v) => {
+    if (!v) busy.value = false;
+  },
+);
+
 function onConfirm(): void {
+  if (busy.value) return;
+  busy.value = true;
   emit('confirm');
 }
 

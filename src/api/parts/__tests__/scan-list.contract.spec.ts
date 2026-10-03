@@ -21,11 +21,11 @@
 //      既有 spec 全绿而线上三页全崩。
 //   本文件 A 组补 ①、E 组补 schema 侧的「键集逐字段相等」、F 组补 ②。
 //
-//   2026-10-04 追加 W 组（真实 wire 样本）：E 组的两份 fixture 与 `scanPartRowSchema`
+//   2026-10-04 追加 W 组（wire 样本）：E 组的两份 fixture 与 `scanPartRowSchema`
 //   **同源**（都照后端 VO 源码手写），只能证明「schema 接受自己那份手写形状」，证明不了
 //   「schema 接受真实响应」。schema 误拒合法响应的产线症状是「列表数据格式异常，请截图
-//   上报」—— 与本次「加载不出」不同，它把排查方向指歪。W 组用实测响应体转录的样本
-//   补上这一维（详见 W 组上方注释）。
+//   上报」—— 与本次「加载不出」不同，它把排查方向指歪。W 组用 2026-10-04 实采的
+//   响应体样本补上这一维（每个样本哪部分是实测、哪部分是按契约手写，见 W 组上方注释）。
 //
 // mock 手法沿 src/api/__tests__/outsource.contract.spec.ts 同款：整模块桩掉 `@/api/http`
 // （不 importOriginal），只留 api.get / api.post / cleanParams / normalizeListResult。
@@ -266,7 +266,7 @@ const heldRowFixture = {
 };
 
 // ============================================================
-// W 组：**真实 wire 样本**（2026-10-04 实测）—— 与 E 组的 fixture 是两种不同性质的证据。
+// W 组：**wire 样本**（2026-10-04）—— 与 E 组的 fixture 是两种不同性质的证据。
 //
 // E 组那两份 fixture 是**照后端 VO 源码手写**的，而 `scanPartRowSchema` 同样是照那份
 // 源码手写的 ⇒ 两者同源。这批用例只能证明「schema 接受自己那份手写形状」，**证明不了
@@ -274,23 +274,28 @@ const heldRowFixture = {
 // 把 Decimal 当 number、把 `serialize_i64` 当 number），E 组全绿而线上三页全部报
 // 「列表数据格式异常，请截图上报」。
 //
-// W 组补的就是这一维：下面两个对象是 `GET /parts/pickable-by-work-type/208472998548602880`
-// 与 `GET /parts/by-worker/208473192891678720` 的**响应体逐字转录**（dev 库，2026-10-04），
-// 不是照源码推出来的。取值口径（雪花 id 形态 / Decimal 字符串 / 两个日期占位符 /
-// 批次锚点有无）与真实响应完全一致，可直接与后端日志对账。
+// W 组补的就是这一维：下面两个对象转录自 `GET /parts/pickable-by-work-type/208472998548602880`
+// 与 `GET /parts/by-worker/208473192891678720` 的响应体（dev 库，2026-10-04 采集）。
 //
-// ⚠️ 工序链派生四件套（`chain_state` / `chain_next_process_id` / `chain_next_process_name`
-// / `chain_current_process_name`）与放回行的批次锚点是后端**同期新增**的列（2026-10-04
-// 与前端并行推进），这两组值按后端 VO 的填充口径手写，不是实测转录 —— 其余 30 多个字段
-// 仍是逐字实测样本。后端上线后应重新采集这两个样本替换。
+// ⚠️ **每个样本里哪部分是实测、哪部分是按后端契约手写，必须说清**（否则这个「唯一真值
+// 维度」的守卫会自我否定 —— 拿手写的值当实测证据，下一个读代码的人会以为它验过）：
+//   · **实测转录**：基础字段 30 余个（雪花 id 形态 / Decimal 字符串 / 两个日期占位符 /
+//     取件行的批次锚点 / `process_chain_id` 等），采集方式是 e2e seed 一个 MANAGER 账号
+//     → `POST /iam/login` 取 token → 带 `Authorization: Bearer` 打两个 GET
+//     （`?limit=200&offset=0`）→ 落盘响应体。
+//   · **按契约手写**（2026-10-04 与前端并行推进的后端改动当时尚未上线，无法实测）：
+//     工序链派生四件套（两个样本都有）与放回行的批次锚点。手写依据是后端 VO 的填充
+//     口径，**后端上线后必须重新采集这两个样本替换**。
+//   · `process_chain_id`：两个样本里的 null 是采集时的实际值；放回端点此后会改为投影
+//     `t_part.process_chain_id`（链四件套正是沿它派生），届时该值可能非 null。字段声明是
+//     nullable，两种取值都过守门，故不必为此重采 —— 但重采时别把这个 null 当成「后端
+//     刻意不填」的依据。
 //
-// 采集方式：e2e seed 一个 MANAGER 账号 → `POST /iam/login` 取 token → 带
-// `Authorization: Bearer` 打两个 GET（`?limit=200&offset=0`）→ 落盘响应体。
-// 取件路径 200 行 / 放回路径 4 行**逐行** `scanPartRowSchema.parse()` 全部通过（0 失败），
-// 且 204 行的键集**完全一致**（无一行缺键、无一个键被 strip）。
-// ============================================================
+// 「204 行逐行 parse 全通过 / 键集完全一致」这类结论**只对实测转录的那部分字段成立**，
+// 本文件不把它当整体结论引用。
 
-/** 取件行真实样本：`GET /parts/pickable-by-work-type/{work_type_id}` 的 `data.items[0]`，逐字转录。 */
+/** 取件行样本：`GET /parts/pickable-by-work-type/{work_type_id}` 的 `data.items[0]`。
+ *  基础字段实测转录；链四件套按后端契约手写（见 W 组上方注释）。 */
 const wirePickRow = {
   id: '226157188085710848',
   serial_no: 'F2256',
@@ -332,7 +337,8 @@ const wirePickRow = {
   batch_version: 6,
 };
 
-/** 放回 / 送检行真实样本：`GET /parts/by-worker/{worker_id}` 的 `data.items[0]`，逐字转录。 */
+/** 放回 / 送检行样本：`GET /parts/by-worker/{worker_id}` 的 `data.items[0]`。
+ *  基础字段实测转录；链四件套与批次锚点按后端契约手写（见 W 组上方注释）。 */
 const wireHeldRow = {
   id: '228801248768294912',
   serial_no: 'F2475',
@@ -504,10 +510,10 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
     expect(Object.keys(parsed)).toHaveLength(38);
   });
 
-  // 2026-10-04 工序链派生四件套的守门：放回页按 chain_state 三态分流（NEXT 免选工序
-  // 直接单确认 / TAIL 先提示送检再回退手选 / NONE 走原三步），字段一旦缺失或形态错，
-  // 症状是「该弹的链提示一句都不弹」且看不出真因，所以逐条锁死。
-  it('E9：工序链四件套三态都能 parse，且缺键 / 错形态当场抛 ZodError', () => {
+  // 2026-10-04 工序链四件套的守门。放回页按 chain_state 三态分流（NEXT 免选工序
+  // 直接单确认 / TAIL 常驻送检提示 / 其余按 NONE 走原三步）。声明口径是
+  // **「带默认值的必输出键」**：缺键降级、坏形态抛（取舍理由见 schemas.ts 该字段注释）。
+  it('E9：工序链四件套三态都能 parse，缺键降级、坏形态抛 ZodError', () => {
     // NEXT：有下一道，id / name 都有值
     const next = scanPartRowSchema.parse(pickRowFixture);
     expect(next.chain_state).toBe('NEXT');
@@ -530,25 +536,33 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
       }).chain_state,
     ).toBe('NONE');
 
-    // 缺任一键 → 抛（声明成必填就是为了这个：键消失不能让 parse 当场放过）
+    // 缺键 → **不抛**，落到「没有下一道」的默认值。守的正是这条降级承诺：后端未上线 /
+    // 漏发时，报工台三页必须照常可用（旧路径），而不是在 API 边界抛 ZodError 全页空。
+    const bare: Record<string, unknown> = { ...pickRowFixture };
     for (const key of [
       'chain_state',
       'chain_next_process_id',
       'chain_next_process_name',
       'chain_current_process_name',
     ]) {
-      const row: Record<string, unknown> = { ...pickRowFixture };
-      delete row[key];
-      expect(() => scanPartRowSchema.parse(row), `缺 ${key} 必须抛`).toThrow(ZodError);
+      delete bare[key];
     }
-    // 形态错：枚举外的字面量 / 数字 id 都不放行
-    expect(() => scanPartRowSchema.parse({ ...pickRowFixture, chain_state: 'MIDDLE' })).toThrow(
-      ZodError,
+    const bareParsed = scanPartRowSchema.parse(bare);
+    expect(bareParsed.chain_state).toBeUndefined();
+    expect(bareParsed.chain_next_process_id).toBe('0');
+    expect(bareParsed.chain_next_process_name).toBeNull();
+    expect(bareParsed.chain_current_process_name).toBeNull();
+    // 枚举外的字面量也放行：后端加第四个 chain_state 是纯后端单方面改动，消费侧窄化
+    // 成 NONE 并 warn 一次（见 ScanReturnParts.enterReturnFlow）。
+    expect(scanPartRowSchema.parse({ ...pickRowFixture, chain_state: 'SKIP' }).chain_state).toBe(
+      'SKIP',
     );
+
+    // 但键在、值形态错仍然抛（默认值只兜「缺键」，不兜「坏形态」）：雪花 id 退化成 number
+    // / null 都不是合法 wire 形态。
     expect(() =>
       scanPartRowSchema.parse({ ...pickRowFixture, chain_next_process_id: 190000000000131 }),
     ).toThrow(ZodError);
-    // null 只允许落在两个 name 上：id / state 缺值就是契约破了
     expect(() =>
       scanPartRowSchema.parse({ ...pickRowFixture, chain_next_process_id: null }),
     ).toThrow(ZodError);
@@ -556,23 +570,23 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
 });
 
 // ============================================================
-// W 组：真实 wire 样本回归锁（样本见上方 `wirePickRow` / `wireHeldRow` 的来源注释）。
+// W 组：wire 样本回归锁（样本见上方 `wirePickRow` / `wireHeldRow` 的来源注释）。
 //
 // 这组与 E 组的关系：E 组锁「schema 对自己那份手写 fixture 的行为」，W 组锁「schema 对
-// 后端真实吐出的字节形状的行为」。后者才是线上三页会不会报「列表数据格式异常」的决定项。
+// 采集到的字节形状的行为」。后者才是线上三页会不会报「列表数据格式异常」的决定项。
+// ⚠️ 样本是「整行键集齐」的单点样本：它的作用是锁住**已采集到的那个形状**，不是「全部行
+// 逐行验过」（每个样本哪部分是实测、哪部分是手写，见上方注释）。
 // ============================================================
-describe('W 组：真实 wire 样本（2026-10-04 实测响应）过守门', () => {
-  // 实测结论：两个端点共 204 行逐行 parse 全部通过。这条把「取件 / 放回 两条真实路径
-  // 的行都被真 schema 接受」钉成可执行断言 —— 之前它只存在于一次人工核对里。
-  it('W1：两条路径的真实行都 parse 通过，且键集与真实响应完全相等（无键被 strip）', () => {
+describe('W 组：wire 样本过守门（实测转录部分 + 按契约手写的链字段）', () => {
+  // 把「样本的键集 == schema 的键集」变成可执行断言：键集不等说明 schema 多声明
+  // （strip 掉了后端的键）或少声明（后端的键没进 parse 结果），两种都是契约漂移。
+  it('W1：两条路径的样本行都 parse 通过，且键集与样本完全相等（无键被 strip）', () => {
     for (const [label, row] of [
       ['取件 pickable-by-work-type', wirePickRow],
       ['放回 by-worker', wireHeldRow],
     ] as const) {
       const parsed = scanPartRowSchema.parse(row);
-      // 实测两个端点的行键数一致；键集不等说明 schema 多声明（strip 掉了后端的键）
-      // 或少声明（后端的键没进 parse 结果），两种都是契约漂移。
-      expect(Object.keys(row), `${label} 真实样本键数`).toHaveLength(38);
+      expect(Object.keys(row), `${label} 样本键数`).toHaveLength(38);
       expect(Object.keys(parsed).sort(), `${label} 键集`).toEqual(Object.keys(row).sort());
     }
   });
@@ -591,8 +605,9 @@ describe('W 组：真实 wire 样本（2026-10-04 实测响应）过守门', () 
     expect(held.planned_delivery_date).toBeNull();
   });
 
-  // 实测的批次锚点口径：两个端点同形态 —— batch_id 是 18 位雪花字符串（JSON string）、
-  // batch_version 是 JSON number。放回 / 送检两页也要用它（worker-scan 的 batch_id 入参）。
+  // 批次锚点口径（取件行实测；放回行按契约手写，形态同取件行）：batch_id 是 18 位雪花
+  // 字符串（JSON string）、batch_version 是 JSON number。放回 / 送检两页也要用它
+  // （worker-scan 的 batch_id 入参）。
   it('W3：真实样本的批次锚点 —— 两个端点都填（string + number）', () => {
     const pick = scanPartRowSchema.parse(wirePickRow);
     expect(typeof pick.batch_id, 'batch_id 必为 string（serialize_i64_opt）').toBe('string');
@@ -646,10 +661,10 @@ describe('W 组：真实 wire 样本（2026-10-04 实测响应）过守门', () 
     expect(held.total).toBe(4);
   });
 
-  // 工序链四件套在两个端点上的形态：id 是 string、两个 name 可空、state 锁三值枚举。
-  // 放回页的分流（NEXT 免选工序 / TAIL 提示送检 / NONE 走原路径）全靠 chain_state，
-  // 这条把它的取值形态钉成可执行断言。
-  it('W6：真实样本的工序链四件套形态（id 为 string；TAIL 的 id 落 0、下一道名为 null）', () => {
+  // 工序链四件套在两个端点上的形态（**按契约手写**，后端上线后重采）：id 是 string、两个
+  // name 可空、state 是三态字符串。放回页的分流（NEXT 免选工序 / TAIL 常驻送检提示 /
+  // 未知取值按 NONE 降级）全靠 chain_state，这条把取值形态钉成可执行断言。
+  it('W6：样本的工序链四件套形态（id 为 string；TAIL 的 id 落 0、下一道名为 null）', () => {
     const pick = scanPartRowSchema.parse(wirePickRow);
     expect(pick.chain_state).toBe('NEXT');
     expect(typeof pick.chain_next_process_id).toBe('string');

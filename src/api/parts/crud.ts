@@ -991,8 +991,11 @@ export async function listPartsByWorkTypeAllShelves(
  *
  * 2026-10-04 契约修正：同 `listPartsByWorkTypeAllShelves`，返回分页信封
  * `PartListOut`、行 VO 是 `PartListItem`；`limit` / `offset` 语义同上（后端
- * `ByWorkerQuery`，默认 50、上限 200）。该端点**不填**批次锚点（`batch_id` /
- * `batch_version` 恒 null），与取件端点相反。
+ * `ByWorkerQuery`，默认 50、上限 200）。该端点**也填**批次锚点（`batch_id` /
+ * `batch_version`，与取件端点同口径，见上面 `PartItem` 处的填充口径登记）与工序链
+ * 派生四件套（`chain_state` / `chain_next_process_id` / `chain_next_process_name` /
+ * `chain_current_process_name`）—— 后两组的取值口径与 schema 侧的降级理由见
+ * `src/composables/queries/schemas.ts::scanPartRowSchema`。
  */
 export async function listPartsHeldByWorker(
   workerId: string,

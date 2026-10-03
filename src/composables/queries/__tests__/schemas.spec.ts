@@ -2262,28 +2262,44 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     expect(() => scanPartListResultSchema.parse({ items: [validScanRow], total: 1 })).toThrow();
   });
 
-  // 放回页按 chain_state 三态分流，四个链字段任一缺键都会让「该弹的链提示」静默消失
-  // （strip 后视图层读到 undefined，症状与「本来无链」完全一样）。所以必填声明必须
-  // 有守卫，否则后端漏发时无人拦。
-  it('S-SP5：工序链四件套逐个必填 —— 缺任一键都抛 ZodError', () => {
+  // 2026-10-04 工序链四件套按「带默认值的必输出键」声明（取舍理由见 schemas.ts
+  // scanPartRowSchema.chain_state 的注释）：**缺键降级、不抛**。这条断言守的就是那个
+  // 降级承诺 —— 后端没上线 / 漏发这四个键时，parse 必须通过（否则取件 / 放回 / 送检
+  // 三页列表全空，报工台停工），且落到的默认值必须正好是「没有下一道」的语义。
+  it('S-SP5：工序链四件套缺键 → 降级到「无链」语义而不是抛错', () => {
+    const { chain_state: _s, ...noState } = validScanRow;
+    void _s;
+    // chain_state 用 nullish（不是 .default('NONE')）：保留「键缺失 ⇒ undefined」这个
+    // 信号，消费侧据此 warn 一次；不锁枚举：后端加第四个取值也只是降级。
+    const noStateParsed = scanPartRowSchema.parse(noState);
+    expect(noStateParsed.chain_state).toBeUndefined();
+    // 后端将来新增第四个取值（纯后端单方面改动）不得让 parse 抛错
+    const unknownState = scanPartRowSchema.parse({ ...validScanRow, chain_state: 'SKIP' });
+    expect(unknownState.chain_state).toBe('SKIP');
+
+    // 另三个键的默认值对齐后端兜底口径：id 落 '0'（消费侧见到 '0' 必须短路，不发
+    // for-return 请求）、两个 name 落 null。
+    const bare: Record<string, unknown> = { ...validScanRow };
     for (const key of [
       'chain_state',
       'chain_next_process_id',
       'chain_next_process_name',
       'chain_current_process_name',
     ]) {
-      const row: Record<string, unknown> = { ...validScanRow };
-      delete row[key];
-      expect(() => scanPartRowSchema.parse(row), `缺 ${key} 必须抛`).toThrow();
+      delete bare[key];
     }
-    // TAIL 态的兜底值：id 落 '0'（非可空）、下一道工序名 null
-    const tail = scanPartRowSchema.parse({
-      ...validScanRow,
-      chain_state: 'TAIL',
-      chain_next_process_id: '0',
-      chain_next_process_name: null,
-    });
-    expect(tail.chain_next_process_id).toBe('0');
-    expect(tail.chain_next_process_name).toBeNull();
+    const bareParsed = scanPartRowSchema.parse(bare);
+    expect(bareParsed.chain_state).toBeUndefined();
+    expect(bareParsed.chain_next_process_id).toBe('0');
+    expect(bareParsed.chain_next_process_name).toBeNull();
+    expect(bareParsed.chain_current_process_name).toBeNull();
+
+    // 但键在、值形态错（雪花 id 退化成 number）仍要抛 —— 默认值只兜「缺键」，不兜「坏形态」
+    expect(() =>
+      scanPartRowSchema.parse({ ...validScanRow, chain_next_process_id: 190000000000021 }),
+    ).toThrow();
+    expect(() =>
+      scanPartRowSchema.parse({ ...validScanRow, chain_next_process_id: null }),
+    ).toThrow();
   });
 });

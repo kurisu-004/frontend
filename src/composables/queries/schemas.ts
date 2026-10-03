@@ -1885,7 +1885,8 @@ export type OutsourcePoolStateResultSchema = z.infer<typeof outsourcePoolStateRe
 //     `customer_path` / `shelf_code` / `next_process_name` / `last_inspection_fail_note` /
 //     `current_holder_*` / `worker_name` / `outsource_company_name` —— VO 里根本没有这些键。
 //   - **不声明** `batch_no` / `batch_label`（2026-10-04 补登记）：后端 `PartListItem`
-//     没有这两个键（实测 204 行真实响应：键集恒为 38 个，`batch_no` 不在其中），
+//     没有这两个键（2026-10-04 实采样本的键数与下方声明数一致，均为 38，`batch_no`
+//     不在其中），
 //     所以 `BatchPickerDialog` 模板的 `v-for="b in sortedRows"` 行内
 //     `批次{{ b.batch_no ?? 1 }}` 对报工台三域恒显「批次 1」、`sortedRows` 的批次号升序
 //     对这三域是恒等操作。
@@ -1900,7 +1901,8 @@ export type OutsourcePoolStateResultSchema = z.infer<typeof outsourcePoolStateRe
 //     `'1970-01-01'` 归一成 `null`（见下方两个字段的注释）。
 //   - `chain_state` / `chain_next_process_id` / `chain_next_process_name` /
 //     `chain_current_process_name` 是**工序链派生四件套**，报工台两个端点都填
-//     （见各字段处的注释）；放回页的放回分流只读它们。
+//     （见各字段处的注释）；放回页的放回分流只读它们。四件套按「带默认值的必输出键」
+//     声明（缺键降级而非抛错），理由见字段注释。
 //
 // ⚠️ 与同文件 `partSchema` 的分工：`partSchema` 服务 `GET /com/union-list` 等
 // part 级行（后端刻意不填批次锚点）；本 schema 服务报工台两个端点，两者的行单位都是
@@ -1971,8 +1973,11 @@ export const scanPartRowSchema = z.object({
   updated_by: z.string().nullable(),
   deleted_at: z.string().nullable(),
   /**
-   * 2026-10-04：报工台两个端点的行恒为 null（取行 SQL 不投影 `t_part.process_chain_id`）。
-   * 行级的**链位置**语义一律读下面 `chain_state` 四件套，不要用本字段。
+   * 2026-10-04：取件端点（`pickable-by-work-type`）的取行 SQL 不投影该列，恒为 null；
+   * 放回端点（`by-worker`）会投影 `t_part.process_chain_id` —— 工序链四件套正是后端沿
+   * 它解析链后派生的，未制定工序时为 null。
+   * 行级的**链位置**语义一律读下面 `chain_state` 四件套，不要直接用本字段判「是不是最后
+   * 一道」：本字段只回答「这个件有没有链」，不回答「链上的下一步是谁」。
    */
   process_chain_id: z.string().nullable(),
   /**
@@ -1983,8 +1988,8 @@ export const scanPartRowSchema = z.object({
    *     `'NONE'` = 无链 / 链已软删 / 当前工序不在链内（指针漂移）；
    *     `'NEXT'` = 当前工序在链内且**有下一道**；
    *     `'TAIL'` = 当前工序是链内**最后一道**。
-   *   放回页据此分流：`NEXT` 免去工序选择 + 货架点选（直接单确认），`TAIL` 先提示
-   *   「加工完成后请送检」再回退手选工序，`NONE` 保持原三步路径。
+   *   放回页据此分流：`NEXT` 免去工序选择 + 货架点选（直接单确认），`TAIL` 在工序选择
+   *   弹窗内常驻提示「加工完成后请送检」再让工人手选，`NONE` 走原三步路径。
    * - `chain_next_process_id`：**非可空字符串**（雪花 id 经 serialize_i64 → JSON
    *   string）。`'0'` 是 `NONE` / `TAIL` 的兜底值、**不是**真 id —— 消费侧见到 `'0'`
    *   必须短路，不发给 `/shelves/for-return`（发过去必得空列表，白跑一趟）。
@@ -1992,17 +1997,32 @@ export const scanPartRowSchema = z.object({
    * - `chain_current_process_name`：当前工序名，解析不出时为 null（`TAIL` 分支用它
    *   点名「该去送检的是哪一道」，无值时退通用文案）。
    *
-   * 四个字段一律**必填声明**（可能为空的一律 `.nullable()`，不做 `.optional()` 兼容）：
-   * VO 没挂 `skip_serializing_if` ⇒ 键恒在。Zod 默认 strip 模式下漏声明会静默丢键，
-   * 而视图层读到 `undefined` 会让「本来无链」与「后端漏发链字段」落进同一分支 ——
-   * 后者该弹的「下一道工序为 xxx，请将工件放到 xx 货架」一句都不会出现，工人只会看到
-   * 「该工序暂无可用货架」，排查方向被带偏。声明成必填后键消失会让 `.parse()` 当场抛，
-   * 而不是让字段以 undefined 流到视图层只弹一句看不出真因的提示。
+   * ⚠️ **四件套一律声明成「带默认值的必输出键」，缺键降级而不抛**（本仓同题先例：
+   * `src/types/shelf.ts::ShelfForInspection.current_load` 处理「两仓并行、后端可能
+   * 尚未上线」用的就是这条路 —— 声明成可选 + 消费侧守卫，注释写明「后端补不补都不会
+   * 渲染出坏值」）。取舍理由是**失败模式的严重性不对称**：
+   *   · 声明成必填（`z.enum` / 非空 `z.string`）时，后端先上线就是
+   *     `scanPartListResultSchema.parse()` 在 API 边界抛错 ⇒ `listPartsHeldByWorker` /
+   *     `listPartsByWorkTypeAllShelves` 全部 reject ⇒ 取件 / 放回 / 送检三页列表空 +
+   *     `HeldPartsBadge` 抽屉空 = **报工台整体停工**；而后端将来新增第四个 chain_state
+   *     取值（哪怕只是加个 `'SKIP'`）是**纯后端单方面改动**就能触发的同类事故。
+   *   · 降级后的失败只是「链提示不弹，工人多点两下选工序」—— NONE 旧路径依然正确，
+   *     仅 UX 降级。HMI 场景必须选后者。
+   *
+   * `chain_state` 声明成 `z.string().nullish()`（不是 `z.enum`、也不是 `.default('NONE')`）：
+   *   · 不锁枚举 ⇒ 后端加取值只是降级，不会让报工台停工；
+   *   · 不用 `.default('NONE')` ⇒ 保留「键缺失 ⇒ undefined」这个信号。若用 default，
+   *     「后端漏发」与「后端真返 NONE」被抹平成同一个值，缺可观测性（下面的一次性
+   *     `console.warn` 就再也发不出来）。消费侧（放回页 `enterReturnFlow`）统一窄化：
+   *     `'NEXT'` / `'TAIL'` 走链分支，其余（含 undefined / null / 未知字面量）一律按
+   *     `'NONE'` 处理并 `console.warn` 一次。
+   * 另外三个键的默认值对齐后端的兜底口径（`'0'` / null），让消费侧的「不是真 id 就
+   * 短路」判据在漏发时同样成立。
    */
-  chain_state: z.enum(['NONE', 'NEXT', 'TAIL']),
-  chain_next_process_id: z.string(),
-  chain_next_process_name: z.string().nullable(),
-  chain_current_process_name: z.string().nullable(),
+  chain_state: z.string().nullish(),
+  chain_next_process_id: z.string().default('0'),
+  chain_next_process_name: z.string().nullable().default(null),
+  chain_current_process_name: z.string().nullable().default(null),
   customer_name: z.string().nullable(),
   l1_customer_name: z.string().nullable(),
   /**

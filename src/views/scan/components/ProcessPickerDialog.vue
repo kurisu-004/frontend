@@ -11,6 +11,7 @@
     modelValue: boolean                 弹窗可见
     kind?: 'return' | 'inspection'      picker 用途（影响 title / empty 文案 / 下一步按钮）
     currentProcessId?: string | null    工件 next_process_id，预填为推荐
+    hint?: string                       常驻横幅提示（缺省不渲染）
   emits:
     update:modelValue(v: boolean)
     confirm(processId: string)
@@ -25,6 +26,19 @@
     :close-on-press-escape="false"
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
+    <!-- 2026-10-04 新增 hint：调用方要在弹窗里传达的**常驻**信息（放回页链尾
+         「加工完成后请送检」）。不用 ElMessage.toast 传 —— Element Plus 的弹层
+         z-index 由 PopupManager 递增分配，后开的 el-dialog 遮罩必然盖住先发的 toast，
+         工人在全屏遮罩前看不到那句 3 秒后自动消失的提示。横幅放在 loading / error /
+         tabs 三种状态之上，任何状态下都可见。 -->
+    <el-alert
+      v-if="hint"
+      class="picker-hint"
+      type="warning"
+      :closable="false"
+      show-icon
+      :title="hint"
+    />
     <div v-if="loading" class="loading-state">
       <el-icon :size="36" class="is-loading"><Loading /></el-icon>
       <p>正在加载工序列表...</p>
@@ -101,11 +115,14 @@ const props = withDefaults(
     currentProcessId?: string | null;
     /** 不可选的工序 id 列表（被排除的卡片显示为禁用 + hint） */
     excludeProcessIds?: string[];
+    /** 常驻横幅提示（el-alert）；缺省 / 空串不渲染。两个 kind 都可用，与用途无关。 */
+    hint?: string;
   }>(),
   {
     kind: 'return',
     currentProcessId: null,
     excludeProcessIds: () => [],
+    hint: '',
   },
 );
 
@@ -218,6 +235,10 @@ function onCancel(): void {
 </script>
 
 <style lang="scss" scoped>
+.picker-hint {
+  margin-bottom: 12px;
+  font-size: 16px;
+}
 .process-tabs {
   // 抵消 el-dialog 默认内边距，让 tabs 内容贴边
   margin: -16px -8px;
