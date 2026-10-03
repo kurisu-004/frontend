@@ -83,6 +83,9 @@ export function workingShelfNotice(): string | null {
  * 取当前作业架 id；不可用时弹错误提示并返回 null（调用点必须 return，不许带空
  * `shelf_id` 发请求）。可用但命中 `workingShelfNotice` 的状态弹 warning 后照常返回 id。
  *
+ * 两种提示的重复策略不同：error 是「这次提交被拦」⇒ 每次都弹；warning 是「工人该知情」
+ * ⇒ 同一份候选集内只弹一次（避免一次提交流程弹两条，见下方 notice 去重注释）。
+ *
  * 调用前必须已 `await useScanShelfStore().initShelves()`（同 `workingShelfProblem`）。
  */
 export function resolveWorkingShelfId(): string | null {
@@ -93,6 +96,13 @@ export function resolveWorkingShelfId(): string | null {
     return null;
   }
   const notice = workingShelfNotice();
-  if (notice) ElMessage.warning(notice);
+  // 2026-10-04：一条提交流程要过本函数两遍（取件页「扫码选中」+「提交确认」，送检页
+  // 「扫码选中」+「提交」），提示不按候选集去重就是同一次操作弹两条一模一样的 warning。
+  // 去重状态住在 store 上（`markNoticeShown`），随 markLoaded 复位 ⇒ 换账号 / 换绑定 /
+  // 强制重载后会重新提示一次（同一份候选集内只提示一次，不随每件零件刷屏）。
+  if (notice && !scanShelf.noticeShown) {
+    scanShelf.markNoticeShown();
+    ElMessage.warning(notice);
+  }
   return scanShelf.selectedShelfId;
 }

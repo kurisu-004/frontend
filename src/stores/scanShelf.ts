@@ -26,6 +26,10 @@
 // - 重载闸门是「账号 id + 绑定集」的指纹（`loadSignature`）：换账号必须重载（不让 A 账号
 //   的选择被 B 账号继承），**同账号换绑定**（管理员改绑定、`/iam/me` 刷新带回新的
 //   `shelf_ids`）同样重载。
+// - 候选解析不出来时（货架端点失败 / 返回不全）按绑定 id 兜底、zone 填 'UNKNOWN' ⇒ 作业架
+//   不可用，守卫会拦（页面上没有选架入口，也没有别的出口）。**兜底不置幂等闸门**，只记
+//   一段冷却窗（`FALLBACK_RETRY_COOLDOWN_MS`）⇒ 端点恢复后「再进一次页面」即可自愈，
+//   不必 F5；但也别把端点打满，所以窗内不重试。
 //
 // 消费侧禁止解构 store：统一 `const scanShelf = useScanShelfStore(); scanShelf.xxx`
 // （标量 getter 不带括号，函数式 getter 带括号；沿 auth store 不变量）。
@@ -44,6 +48,11 @@ export interface ShelfOption {
 
 const SESSION_KEY_PREFIX = 'active_shelf_selection:';
 
+/** 兜底后不重打货架端点的冷却时长。2026-10-04：调用方只有三个页面的 onBeforeMount
+ *  （取件 / 送检 / 操作选择），请求速率本就由人的切页节奏决定、封不了顶；这段窗口只是
+ *  挡住「一次端点抖动被连着几页各打一次」这种放大，窗外立刻恢复自动重试。 */
+const FALLBACK_RETRY_COOLDOWN_MS = 10_000;
+
 export const useScanShelfStore = defineStore('scanShelf', () => {
   const auth = useAuthStore();
 
@@ -52,7 +61,8 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
   const selectedShelfIdValue = ref<string | null>(null);
   /** 用户能选的候选（绑定架详情；wildcard → 空数组）。 */
   const optionsValue = ref<ShelfOption[]>([]);
-  /** 候选架是否已加载过（幂等闸门，避免每次进路由都重打 listShelves）。 */
+  /** 候选架是否已加载过（幂等闸门，避免每次进路由都重打 listShelves）。走兜底分支
+   *  时**刻意不置位**（见 fallbackAt）—— 那一批候选不可用，不该让它挡住重试。 */
   const initialized = ref(false);
   /** initialized 成立时的「账号 + 绑定集」指纹。比对 userId 是不够的：管理员可以在
    *  不换人的情况下改绑定（/iam/me 刷新把新的 shelf_ids 带回来，user.id 不变），只比
@@ -61,6 +71,12 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
   /** 当前作业架是否沿用了 sessionStorage 里上次会话落盘的值（仅多架账号可能为 true）。
    *  单架账号的自动选是**唯一确定**的选择，不置位 —— 否则每次提交都提示，变成噪音。 */
   const restoredFromSessionValue = ref(false);
+  /** 「沿用上次会话」的提示是否已弹过。2026-10-04：一次提交流程要过两遍守卫
+   *  （扫码选中 + 提交确认），而提示是「每次提交提醒工人知情」，不是「每次调用提醒」
+   *  —— 不去重就是同一次操作弹两条一模一样的 warning。随 markLoaded 复位。 */
+  const noticeShownValue = ref(false);
+  /** 兜底那一刻的时刻与它归属的签名（null = 本会话还没走过兜底）。 */
+  const fallbackAtValue = ref<{ signature: string; at: number } | null>(null);
 
   // ===== sessionStorage =====
   const sessionKey = computed<string | null>(() =>
@@ -120,7 +136,8 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
    * `selectedShelfId` 拿到的是 null，提交守卫会把它误报成「账号没绑货架」。
    *
    * 幂等：同一账号 + 同一绑定集已加载过就直接返回（`force` 除外），因此取件 / 送检 /
-   * 操作选择三页各自 onBeforeMount 调一次不会重复请求。
+   * 操作选择三页各自 onBeforeMount 调一次不会重复请求。走兜底的批次**不**置这个闸门，
+   * 改用 `FALLBACK_RETRY_COOLDOWN_MS` 冷却窗（见下方兜底分支）。
    */
   async function initShelves(options?: { force?: boolean }): Promise<void> {
     const userId = auth.user?.id ?? null;
@@ -128,7 +145,15 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
     // 不读可能已变的 auth。
     const bound = auth.boundShelves;
     const signature = loadSignature(userId, bound);
-    if (!options?.force && initialized.value && loadedSignature.value === signature) return;
+    if (!options?.force) {
+      if (initialized.value && loadedSignature.value === signature) return;
+      // 同一签名的兜底还在冷却窗内 ⇒ 不重打货架端点（车间网络差时不至于每页都重试）。
+      // 窗外的兜底**不拦**这里，让本次真的重试 —— 见 initShelves 的兜底分支。
+      const fb = fallbackAtValue.value;
+      if (fb && fb.signature === signature && Date.now() - fb.at < FALLBACK_RETRY_COOLDOWN_MS) {
+        return;
+      }
+    }
     restoredFromSessionValue.value = false;
 
     if (bound.length === 0) {
@@ -142,9 +167,14 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
 
     let shelves: Shelf[] = [];
     try {
-      // 2026-10-04：`limit: 200` 是「取全」的假设，车间货架数是否真的不超过它未经验证。
-      // 超出时未解析出的绑定架不会进 `options`，多架分支因此不认存储值里的那个 id，
-      // 最终按「没选出作业架」处理 —— 不会拿一个未解析的架当作业架发出去。
+      // 2026-10-04：`limit: 200` 是「取全」的假设，车间货架数是否真的不超过它未经验证
+      // （`docs/api/shelves.md` 的上限是 500）。超出时未解析出的绑定架不会进 `options`，
+      // 多架分支因此不认存储值里的那个 id，最终按「没选出作业架」处理 —— 不会拿一个未解析
+      // 的架当作业架发出去。
+      // ⚠️ 单架账号同样中招，且此时是**长期**拦截而非抖动：`details.length === 0` 落进兜底
+      // ⇒ UNKNOWN ⇒ 守卫拦下。车间 active 货架一旦超过 200，被绑在第 201 名之后的工位会
+      // 一直停在拦截态（要管理员收窄绑定才行）。真要根治得后端给 zone 视图，本 store
+      // 只能如实拦下。
       shelves = (await listShelves({ is_active: true, limit: 200 })).items;
     } catch {
       shelves = [];
@@ -163,18 +193,33 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
       }
     }
     optionsValue.value = details;
-    // 兜底：货架端点失败 / 不全时按绑定 id 补候选，但 **zone 不猜**。猜 PRODUCTION 会让
+    // 兜底：货架端点失败 / 返回不全时按绑定 id 补候选，但 **zone 不猜**。猜 PRODUCTION 会让
     // 品检架被当成生产架放行（`selectedZone` 变 PRODUCTION ⇒ 守卫三条分支全过 ⇒ 带着猜
     // 出来的架发请求，得后端 20501），正是本 store 要消灭的那类烂错误。zone 填
     // 'UNKNOWN' ⇒ `selectedZone` 为 null ⇒ 守卫的「无法识别所属区域」分支拦下。
     // zone 的权威来源只有货架端点与 `/iam/me`，要消除这个 UNKNOWN 得后端在那两处直给。
+    //
+    // 2026-10-04：兜底**不置幂等闸门**，改记一条冷却窗（`fallbackAtValue`）。这一批候选
+    // 是猜不出 zone 的，拿它当「已加载」就把该账号钉死在 UNKNOWN 上 —— 端点抖一下就得
+    // F5 才能恢复，而页面上没有选架入口、也没有别的出路。冷却窗只挡住「窗内重打端点」，
+    // 窗外下一次进路由自动重试，于是恢复手段是「再进一次页面」而不是刷新。
     if (details.length === 0) {
       for (const sid of bound) {
         details.push({ id: String(sid), code: `shelf#${sid}`, zone: 'UNKNOWN' });
       }
       optionsValue.value = details;
+      fallbackAtValue.value = { signature, at: Date.now() };
+      decideShelf(details);
+      return;
     }
+    decideShelf(details);
+    markLoaded(signature);
+  }
 
+  /** 按候选集决定 `selectedShelfId` / `restoredFromSession`。**不碰幂等闸门** ——
+   *  置闸门由调用方按分支决定（兜底那一支刻意不置，见上）。拆成独立函数只为让两条
+   *  分支共用同一段判定。 */
+  function decideShelf(details: ShelfOption[]): void {
     // 决定 selectedShelfId
     if (details.length === 1) {
       // 单架：自动选（当前唯一的 sessionStorage 写入点）
@@ -198,13 +243,20 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
     } else {
       selectedShelfIdValue.value = null;
     }
-    markLoaded(signature);
   }
 
   /** 本次加载归属的指纹：账号 id + 绑定集（排序后拼接，顺序变化不算换绑定）。
    *  2026-10-04：只比 userId 会漏掉「同账号换绑定」—— `/iam/me` 刷新带回新的
-   *  `shelf_ids` 而 `user.id` 不变，闸门会把旧候选挡在门外，最坏是给已解绑的架发请求
-   *  （后端 40301 SHELF_MISMATCH 兜底，非数据损坏）。 */
+   *  `shelf_ids` 而 `user.id` 不变，闸门会把旧候选挡在门外，最坏是给已解绑的架发请求。
+   *  那一下后端收不收，两页的答案**不一样**（引 docs，不引源码符号）：
+   *  - 送检页的 worker-scan **有** scope 校验（`shelf_id` / `target_inspection_shelf_id`
+   *    必须在 `current.shelf_ids` 内或 `current.shelf_wildcard`）⇒ 未授权货架返
+   *    `40301 SHELF_MISMATCH`（`docs/api/parts/inspection.md`）；
+   *  - 取件页的 pick-up **没有** scope 校验（`docs/api/parts/lifecycle.md` 的 pick-up
+   *    错误码表是 20101 / 20109 / 20119 / 40901 / 20111，不含 40301）⇒ 已解绑但
+   *    active / PRODUCTION 的架 id 会被照收。好在 pick-up 既不与批次的
+   *    `current_holder_id` 对账、也不把 `shelf_id` 落库（同文档的 pick-up 载荷与事件
+   *    两节都没有货架字段）⇒ 最坏是作业架错，不是错位记账。 */
   function loadSignature(userId: string | null, bound: string[]): string {
     return `${userId ?? ''}|${[...bound].sort().join(',')}`;
   }
@@ -212,6 +264,9 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
   function markLoaded(signature: string): void {
     initialized.value = true;
     loadedSignature.value = signature;
+    // 候选换了，「沿用上次会话」就该重新提示一次；上一条兜底记录也一并作废。
+    noticeShownValue.value = false;
+    fallbackAtValue.value = null;
   }
 
   return {
@@ -223,9 +278,17 @@ export const useScanShelfStore = defineStore('scanShelf', () => {
     showShelfSelector,
     /** 候选架是否已为**当前账号 + 当前绑定集**加载过（只读；消费方通常只需
      *  `await initShelves()`，拿它是为了判断「深链进入时到底有没有货架可读」而不必自己
-     *  再调一次）。 */
+     *  再调一次）。兜底那次加载**不置位**（见 initShelves 兜底分支）—— 那批候选的 zone
+     *  全是 UNKNOWN、本就不可用，判成「没加载」反而让「有没有货架可读」答得更准。 */
     initialized: computed(() => initialized.value),
     restoredFromSession,
+    /** 「沿用上次会话」这条提示本份候选集内是否已弹过（只读）。 */
+    noticeShown: computed(() => noticeShownValue.value),
     initShelves,
+    /** 标记提示已弹（随候选集更换自动复位）。**只管提示去重，不碰 `selectedShelfId`** ——
+     *  选架仍无任何写入口（见文件头「无选架入口」）。 */
+    markNoticeShown() {
+      noticeShownValue.value = true;
+    },
   };
 });

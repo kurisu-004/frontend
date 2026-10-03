@@ -211,4 +211,32 @@ describe('resolveWorkingShelfId', () => {
     );
     expect(ElMessage.warning).not.toHaveBeenCalled();
   });
+
+  it('G11：沿用提示同一份候选集内只弹一次（一次提交流程要过两遍守卫）', async () => {
+    bootstrap(makeUser(['8800000000001', '8800000000002']));
+    mockShelves([
+      { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
+      { id: '8800000000002', code: 'SH-P02', zone: 'PRODUCTION' },
+    ]);
+    sessionStorage.setItem('active_shelf_selection:u1', '8800000000002');
+    await useScanShelfStore().initShelves();
+
+    // 取件页「扫码选中」+「提交确认」、送检页「扫码选中」+「提交」各过一次守卫 ⇒
+    // 不去重就是同一次操作弹两条一模一样的 warning
+    expect(resolveWorkingShelfId()).toBe('8800000000002');
+    expect(resolveWorkingShelfId()).toBe('8800000000002');
+    expect(ElMessage.warning).toHaveBeenCalledTimes(1);
+    // warning 去重不该影响放行：两次都拿到 id
+    expect(ElMessage.error).not.toHaveBeenCalled();
+  });
+
+  it('G12：阻断问题的 error 每次都弹（与 warning 去重策略不同）', async () => {
+    bootstrap(makeUser([]));
+    await useScanShelfStore().initShelves();
+
+    expect(resolveWorkingShelfId()).toBeNull();
+    expect(resolveWorkingShelfId()).toBeNull();
+    // 「这次提交被拦」是逐次事实，压掉第二条工人会以为第二次成了
+    expect(ElMessage.error).toHaveBeenCalledTimes(2);
+  });
 });

@@ -101,6 +101,8 @@ describe('useScanShelfStore', () => {
   beforeEach(() => {
     sessionStorage.clear();
     localStorage.clear();
+    // 恢复 T12 之类用例挂的 Date.now 探针；`vi.mock` 的模块桩不受影响
+    vi.restoreAllMocks();
     vi.mocked(listShelves).mockReset();
   });
 
@@ -211,6 +213,8 @@ describe('useScanShelfStore', () => {
     // 页面上没有选架入口 ⇒ 不该有 `setWorkingShelf` 这类写入口，将来加了必被这里拦下。
     // 赋值试探测的是 Vue computed 的框架行为（Pinia 侧只 warn 不抛），加一个 action 照样
     // 绿，还会往测试输出里打一行 Vue warn。设计约束见 store 文件头的「无选架入口」一节。
+    // 2026-10-04 增补 `markNoticeShown`：它是提示去重的标记位，**不碰 selectedShelfId**，
+    // 与「选架写入口」不同类；判据是下面紧跟的 `selectedShelfId` 断言仍为 null。
     expect(
       Object.keys(scanShelf)
         .filter((k) => !/^[$_]/.test(k))
@@ -218,6 +222,8 @@ describe('useScanShelfStore', () => {
     ).toEqual([
       'initShelves',
       'initialized',
+      'markNoticeShown',
+      'noticeShown',
       'options',
       'restoredFromSession',
       'selectedShelfId',
@@ -230,6 +236,23 @@ describe('useScanShelfStore', () => {
     expect(sessionStorage.getItem(`${SESSION_KEY_PREFIX}u1`)).toBeNull();
   });
 
+  it('T5b：markNoticeShown 只管提示去重，不碰作业架（选架仍无写入口）', async () => {
+    bootstrap(makeUser('u1', ['8800000000001', '8800000000002']));
+    mockShelves([
+      { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
+      { id: '8800000000002', code: 'SH-P02', zone: 'PRODUCTION' },
+    ]);
+
+    const scanShelf = useScanShelfStore();
+    await scanShelf.initShelves();
+
+    expect(scanShelf.selectedShelfId).toBeNull();
+    scanShelf.markNoticeShown();
+    expect(scanShelf.noticeShown).toBe(true);
+    // 多了一个 action 之后，选架依然没有写入口
+    expect(scanShelf.selectedShelfId).toBeNull();
+  });
+
   it('T6：listShelves 失败时按绑定 id 兜底候选，但 zone 不猜（UNKNOWN）', async () => {
     bootstrap(makeUser('u1', ['8800000000001']));
     vi.mocked(listShelves).mockRejectedValue(new Error('boom'));
@@ -237,9 +260,11 @@ describe('useScanShelfStore', () => {
     const scanShelf = useScanShelfStore();
     await scanShelf.initShelves();
 
-    // 兜底的目的是「不让一次货架端点抖动把整个扫码台废掉」：仍给出唯一候选并自动选中。
-    // 但 zone 无从得知 ⇒ 留 UNKNOWN ⇒ selectedZone 为 null，守卫的「无法识别所属区域」
-    // 分支会拦下。猜 PRODUCTION 会让品检架被当成生产架放行，最后落到后端 20501。
+    // 兜底如实描述这一批候选的处境：仍给出唯一候选并自动选中，但 zone 无从得知 ⇒
+    // UNKNOWN ⇒ selectedZone 为 null ⇒ 守卫的「无法识别所属区域」分支拦下，工人提交不出去。
+    // 猜 PRODUCTION 会让品检架被当成生产架放行，最后落到后端 20501。
+    // ⚠️ 兜底**换不来可用性**：页面上没有选架入口，「这批候选不可用」对工人就是死路 ——
+    // 能恢复的只有「端点好了之后再进一次页面」（见 T12），不是这次兜底本身。
     expect(scanShelf.options).toEqual([
       { id: '8800000000001', code: 'shelf#8800000000001', zone: 'UNKNOWN' },
     ]);
@@ -387,5 +412,81 @@ describe('useScanShelfStore', () => {
     expect(listShelves).toHaveBeenCalledTimes(3);
     expect(scanShelf.options.map((o) => o.id)).toEqual(['8800000000002']);
     expect(scanShelf.selectedShelfId).toBe('8800000000002');
+  });
+
+  it('T12：兜底不置幂等闸门 —— 冷却窗内不重打端点，窗外再进一次路由自动自愈', async () => {
+    bootstrap(makeUser('u1', ['8800000000001']));
+    // 冷却窗用真实 Date.now 算，手拨时钟而不是等 10s
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    vi.mocked(listShelves).mockRejectedValue(new Error('boom'));
+    const scanShelf = useScanShelfStore();
+    await scanShelf.initShelves();
+
+    // 兜底的候选不可用（zone 猜不出来），而且**不能**当成「已加载」把该账号钉死
+    expect(scanShelf.selectedZone).toBeNull();
+    expect(scanShelf.initialized).toBe(false);
+
+    // 冷却窗内再进一次路由（取件 ⇄ 送检切页）：不重打货架端点，也不清掉这批候选
+    await scanShelf.initShelves();
+    expect(listShelves).toHaveBeenCalledTimes(1);
+    expect(scanShelf.selectedZone).toBeNull();
+
+    // 端点恢复 + 窗外：再进一次路由自动重试并自愈，不靠 F5
+    now += 11_000;
+    mockShelves([{ id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' }]);
+    await scanShelf.initShelves();
+
+    expect(listShelves).toHaveBeenCalledTimes(2);
+    expect(scanShelf.selectedZone).toBe('PRODUCTION');
+    expect(scanShelf.initialized).toBe(true);
+
+    // 自愈之后幂等闸门重新生效
+    await scanShelf.initShelves();
+    expect(listShelves).toHaveBeenCalledTimes(2);
+  });
+
+  it('T12b：兜底后强制重载（force）立刻重打端点，不等冷却窗', async () => {
+    bootstrap(makeUser('u1', ['8800000000001']));
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    vi.mocked(listShelves).mockRejectedValue(new Error('boom'));
+    const scanShelf = useScanShelfStore();
+    await scanShelf.initShelves();
+
+    // 时钟没动（仍在冷却窗内），但 force 显式表达了「现在就重来」
+    mockShelves([{ id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' }]);
+    await scanShelf.initShelves({ force: true });
+
+    expect(listShelves).toHaveBeenCalledTimes(2);
+    expect(scanShelf.selectedZone).toBe('PRODUCTION');
+  });
+
+  it('T13：noticeShown 只在候选集真换了的时候复位（提示去重的生命周期）', async () => {
+    bootstrap(makeUser('u1', ['8800000000001']));
+    mockShelves([{ id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' }]);
+
+    const scanShelf = useScanShelfStore();
+    await scanShelf.initShelves();
+    expect(scanShelf.noticeShown).toBe(false);
+
+    scanShelf.markNoticeShown();
+    expect(scanShelf.noticeShown).toBe(true);
+
+    // 被幂等闸门挡掉的重入**不复位**（同一份候选集，提示过一次就够了）
+    await scanShelf.initShelves();
+    expect(scanShelf.noticeShown).toBe(true);
+
+    // 换绑定 ⇒ 真的重载 ⇒ 复位：换了一个架就该让工人重新知情一次
+    switchSession(makeUser('u1', ['8800000000001', '8800000000002']));
+    mockShelves([
+      { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
+      { id: '8800000000002', code: 'SH-P02', zone: 'PRODUCTION' },
+    ]);
+    await scanShelf.initShelves();
+
+    expect(scanShelf.noticeShown).toBe(false);
   });
 });
