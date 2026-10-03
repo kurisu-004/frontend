@@ -181,15 +181,12 @@ export async function setShelfProcesses(
  * 返回候选架列表（按 current_load 升序，同 load 时按 display_order ASC, id ASC）；
  * 「推荐架」不是独立字段，而是每条 item 上的 `is_recommended`（load 最小那条为 true）。
  *
- * 2026-10-02 订正错误码注释：原注释写「错误：20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS
- * （没有 active 架映射该 process）」，**这条已经错了**——后端同日从
- * `list_for_return` 删掉了 `next_process_id` 的存在性校验（原返 20104 / 20801），
- * 20506 从此不可能由本端点抛出。本端点现在对 `next_process_id` 任何取值都返 200，
- * 唯一错误是 40300 FORBIDDEN（角色不在 Manager / Clerk / ShelfAccount /
- * CncProgrammer 之内）。没有候选架时返 200 + `items: []`，不是错误。
- * 「货架是否映射了该 process」的语义由 worker-scan 后端强校验
- * （20507 BIZ_SHELF_PROCESS_NOT_MAPPED）承担，不再由本 picker 端点负责。
- * 纯注释订正，零行为变化。
+ * 错误面（2026-10-02 回后端逐条核实）：本端点对 `next_process_id` 的任何取值都返 200，
+ * **不会**抛 20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS —— 后端已从 `list_for_return` 删掉
+ * `next_process_id` 的存在性校验（那个校验的码是 20104 / 20801）。唯一错误是 40300
+ * FORBIDDEN（角色不在 Manager / Clerk / ShelfAccount / CncProgrammer 之内）。没有候选架时
+ * 返 200 + `items: []`，不是错误。「货架是否映射了该 process」的语义由 worker-scan 后端
+ * 强校验（20507 BIZ_SHELF_PROCESS_NOT_MAPPED）承担，不由本 picker 端点负责。
  */
 export async function listShelvesForReturn(nextProcessId: string): Promise<ShelfForReturnResult> {
   const resp = await api.get<ShelfForReturnResult>('/shelves/for-return', {

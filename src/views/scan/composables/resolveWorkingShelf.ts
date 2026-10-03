@@ -11,6 +11,9 @@
 // 契约依据（backend-rust `docs/api/`，本仓规约：引 docs，不引源码符号）：
 // - `docs/api/parts/lifecycle.md` 的 `POST /api/v2/prod/batches/{batch_id}/pick-up`：
 //   `shelf_id` 必填，且要求「当前批次所在货架（zone=PRODUCTION 且 active）」；
+//   ⚠️ service 只校验「存在 + active + zone 相等」三件事，**不**与批次的
+//   `current_holder_id` 对账 —— 传一个同区但没有这批件的架，后端照样放行。所以这里的
+//   `shelf_id` 只能由前端尽量取对，没有服务端替身兜底。
 // - `docs/api/parts/inspection.md` 的 `POST /api/v2/prod/batches/worker-scan`：
 //   `shelf_id` 两个 event_type 同义，均要求 PRODUCTION 区（违反 → `20501`），
 //   与 `event_type` 无关；
@@ -24,6 +27,9 @@ import { useScanShelfStore } from '@/stores/scanShelf';
 
 /**
  * 当前作业架是否可用于提交；不可用时返回给工人看的文案（可用返回 null）。
+ *
+ * 只覆盖「一定会提交失败 / 会拿错架发出去」的三种状态：多架未选、选中品检架、zone 未解析。
+ * 「不该拦、但该让工人知道」的状态（多架沿用上次会话的架）走 `workingShelfNotice`。
  *
  * **只读不弹提示**，供调用方自选提示级别与时机（提交前用
  * `resolveWorkingShelfId`；进页提示用本函数）。
@@ -46,23 +52,47 @@ export function workingShelfProblem(): string | null {
   }
   if (scanShelf.selectedZone === null) {
     // zone 既不是 PRODUCTION 也不是 INSPECTION：既不能按「品检区」也不能按「生产区」
-    // 下结论，更不能乐观放行（放行 = 把一个未验证的架当生产架发出去）。单列一条。
+    // 下结论，更不能乐观放行（放行 = 把一个未验证的架当生产架发出去）。两种成因在
+    // `selectedZone` 上不可区分：后端真返了一个未知 zone，或货架端点失败 / 不全导致
+    // store 兜底填了 UNKNOWN（见 store 的 initShelves）。单列一条。
     return '无法识别当前货架所属区域，不能作为作业货架，请联系管理员核对本账号的货架绑定';
   }
   return null;
 }
 
 /**
+ * 「不该拦、但该让工人知道」的一条提示；没有则返回 null。
+ *
+ * 场景：多架账号沿用了 sessionStorage 里上次会话落盘的架。零件列表是**跨架**的，
+ * 工人完全可能站在另一个架上作业，而系统无从判断对错（页面上没有选架入口，拦下就是
+ * 死路）⇒ 只提示，不拦。单架账号的自动选不产生本提示（那是唯一确定的选择，逐次提示
+ * 只会变成噪音）。
+ *
+ * **只读不弹提示**，与 `workingShelfProblem` 同一约定。
+ */
+export function workingShelfNotice(): string | null {
+  const scanShelf = useScanShelfStore();
+  // 有阻断问题时不必再叠提示：那条已经把操作拦住了。
+  if (workingShelfProblem()) return null;
+  if (!scanShelf.restoredFromSession) return null;
+  const code = scanShelf.options.find((o) => o.id === scanShelf.selectedShelfId)?.code;
+  return `当前作业货架沿用上次会话的 ${code ?? scanShelf.selectedShelfId}，如需更换请联系管理员`;
+}
+
+/**
  * 取当前作业架 id；不可用时弹错误提示并返回 null（调用点必须 return，不许带空
- * `shelf_id` 发请求）。
+ * `shelf_id` 发请求）。可用但命中 `workingShelfNotice` 的状态弹 warning 后照常返回 id。
  *
  * 调用前必须已 `await useScanShelfStore().initShelves()`（同 `workingShelfProblem`）。
  */
 export function resolveWorkingShelfId(): string | null {
+  const scanShelf = useScanShelfStore();
   const problem = workingShelfProblem();
   if (problem) {
     ElMessage.error(problem);
     return null;
   }
-  return useScanShelfStore().selectedShelfId;
+  const notice = workingShelfNotice();
+  if (notice) ElMessage.warning(notice);
+  return scanShelf.selectedShelfId;
 }

@@ -6,6 +6,9 @@
 // 「worker-scan 省略 shelf_id → 422」与「填品检架 → 20501」，都是工人看不懂的
 // 烂错误。守卫一旦放行了不该放行的组合，这两个故障就回来了。
 //
+// 本文件是**共用**守卫的单测：取件（/scan/pick）与送检（/scan/inspect）import 的都是
+// 这个 composable（仓内没有两页各自的页面级 spec），故这里的每条用例对两页同时生效。
+//
 // ElMessage 按仓内既有做法桩成 no-op（node/happy-dom 下真实 ElMessage 走
 // normalizeAppendTo 会污染输出，见 CLAUDE.md 的 ElMessage 错误桥接条目）。
 // @vitest-environment happy-dom
@@ -26,7 +29,12 @@ vi.mock('@/api/shelves', () => ({
 
 import { listShelves } from '@/api/shelves';
 import { useScanShelfStore } from '@/stores/scanShelf';
-import { resolveWorkingShelfId, workingShelfProblem } from '../resolveWorkingShelf';
+import {
+  resolveWorkingShelfId,
+  workingShelfNotice,
+  workingShelfProblem,
+} from '../resolveWorkingShelf';
+
 import type { CurrentUser } from '@/types/user';
 import type { Shelf } from '@/types/shelf';
 
@@ -144,6 +152,63 @@ describe('resolveWorkingShelfId', () => {
       '当前账号未绑定作业货架，请联系管理员在「账号管理」为本账号绑定生产货架',
     );
     expect(ElMessage.error).not.toHaveBeenCalled();
+    expect(ElMessage.warning).not.toHaveBeenCalled();
+  });
+
+  it('G7：单架账号但货架端点失败 → zone 未解析 → 拦下，不拿猜出来的架发请求', async () => {
+    bootstrap(makeUser(['8800000000001']));
+    // store 按绑定 id 兜底出候选，但 zone 无从得知（UNKNOWN）
+    vi.mocked(listShelves).mockRejectedValueOnce(new Error('boom'));
+    await useScanShelfStore().initShelves();
+
+    expect(resolveWorkingShelfId()).toBeNull();
+    expect(ElMessage.error).toHaveBeenCalledWith(
+      '无法识别当前货架所属区域，不能作为作业货架，请联系管理员核对本账号的货架绑定',
+    );
+  });
+
+  it('G8：多架沿用上次会话的架 → 照常放行，但 warning 告知沿用来源', async () => {
+    bootstrap(makeUser(['8800000000001', '8800000000002']));
+    mockShelves([
+      { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
+      { id: '8800000000002', code: 'SH-P02', zone: 'PRODUCTION' },
+    ]);
+    sessionStorage.setItem('active_shelf_selection:u1', '8800000000002');
+    await useScanShelfStore().initShelves();
+
+    // 不拦：页面上没有选架入口，拦了就是死路
+    expect(resolveWorkingShelfId()).toBe('8800000000002');
+    expect(ElMessage.error).not.toHaveBeenCalled();
+    expect(ElMessage.warning).toHaveBeenCalledWith(
+      '当前作业货架沿用上次会话的 SH-P02，如需更换请联系管理员',
+    );
+    expect(workingShelfNotice()).toBe('当前作业货架沿用上次会话的 SH-P02，如需更换请联系管理员');
+  });
+
+  it('G9：单架自动选不提示「沿用上次会话」（否则每次提交都是噪音）', async () => {
+    bootstrap(makeUser(['8800000000001']));
+    mockShelves([{ id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' }]);
+    await useScanShelfStore().initShelves();
+
+    expect(resolveWorkingShelfId()).toBe('8800000000001');
+    expect(ElMessage.warning).not.toHaveBeenCalled();
+    expect(workingShelfNotice()).toBeNull();
+  });
+
+  it('G10：有阻断问题时不再叠「沿用」提示（一次只说一句）', async () => {
+    bootstrap(makeUser(['8800000000001', '8800000000002']));
+    mockShelves([
+      { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
+      { id: '8800000000002', code: 'SH-I02', zone: 'INSPECTION' },
+    ]);
+    sessionStorage.setItem('active_shelf_selection:u1', '8800000000002');
+    await useScanShelfStore().initShelves();
+
+    expect(resolveWorkingShelfId()).toBeNull();
+    expect(workingShelfNotice()).toBeNull();
+    expect(ElMessage.error).toHaveBeenCalledWith(
+      '本账号当前绑定的货架在品检区，缺少生产区作业货架，请联系管理员为本账号绑定生产货架',
+    );
     expect(ElMessage.warning).not.toHaveBeenCalled();
   });
 });

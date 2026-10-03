@@ -90,7 +90,7 @@ export interface SetShelfProcessesPayload {
 //   | 字段                            | for-return | for-inspection |
 //   |---------------------------------|------------|----------------|
 //   | id/code/name/zone/location      | ✓          | ✓              |
-//   | current_load（当前在架件数）      | ✓          | ✓ **后端计划补**（见下） |
+//   | current_load（当前在架件数）      | ✓          | ✗ 后端计划补（见下） |
 //   | is_recommended（系统推荐标记）   | ✓          | ✗ **没有**     |
 //   | is_active                       | ✗          | ✓              |
 //

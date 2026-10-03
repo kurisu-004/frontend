@@ -4,7 +4,8 @@
   /scan/pick —— 扫码台 PICK_UP 流程（2026-09-15 Phase 5）
 
   流程：
-  1. 拉取 worker.work_type_id 映射下、当前货架上的零件列表（listPartsByWorkTypeAllShelves）
+  1. 拉取 worker.work_type_id 映射下、该账号可及的全部货架上的零件列表
+     （listPartsByWorkTypeAllShelves，后端按 user.shelf_ids 收口）
   2. 工人点选一个零件 → 进入「等待扫码」状态
   3. 扫码枪输入 serial_no；前端校验必须等于选中零件.serial_no；不等则拒绝
   4. 通过则弹「数量」对话框；确认后调 POST /prod/batches/{batch_id}/pick-up
@@ -267,7 +268,10 @@ import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useScanShelfStore } from '@/stores/scanShelf';
-import { resolveWorkingShelfId } from '@/views/scan/composables/resolveWorkingShelf';
+import {
+  resolveWorkingShelfId,
+  workingShelfProblem,
+} from '@/views/scan/composables/resolveWorkingShelf';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
 import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
@@ -286,8 +290,10 @@ const { onScan } = useBarcodeScanner();
 const { emitHeldChanged } = useScanBus();
 // 2026-07-13：跨架列表展示用 listPartsByWorkTypeAllShelves（后端按 user.shelf_ids 收口）；
 // shelf_id 提交取「当前作业架」，来自 useScanShelfStore：单架 = 唯一架 id；多架 =
-// sessionStorage 里此前落盘、且仍在本次候选集内的那个架（典型成因是账号原本单架、
-// 后来管理员加了第二架）；wildcard / 多架无可用架 → 无作业架，见 resolveWorkingShelfId。
+// sessionStorage 里上次会话落盘、且仍在本次候选集内的那个架（典型成因是账号原本单架、
+// 后来管理员加了第二架）—— 沿用来的架系统判不出对错，提交前会提示一句
+// 「沿用上次会话的 {code}」（workingShelfNotice）；wildcard / 多架无可用架 → 无作业架，
+// 见 resolveWorkingShelfId。
 const scanShelf = useScanShelfStore();
 
 const parts = ref<ScanPartRowSchema[]>([]);
@@ -335,15 +341,19 @@ function isHeic(t: string): boolean {
 onBeforeMount(async () => {
   if (!requireWorker(router)) return;
   // 2026-10-04：先确保候选架已加载，再在提交时读作业架。
-  // 本页与 /scan/action 是兄弟路由，候选集由 useScanShelfStore（Pinia 单例）跨路由
-  // 存活；store 内部按账号幂等，直接进本页（深链 / 刷新）时这一句才真的去拉货架。
-  // ⚠️ 读 `selectedShelfId` 必须在这句 await **之后** —— 未加载时它恒为 null，正是
-  // 2026-09-16 以来「未找到零件所在货架信息」100% 触发的形态（旧代码读的是一个每次
-  // 调用都新建的 composable 实例，跨路由必丢状态）。
+  // 候选集由 useScanShelfStore（Pinia 单例）跨路由存活；store 内部按账号 + 绑定集幂等，
+  // 直接进本页（深链 / 刷新）时这一句才真的去拉货架。
+  // ⚠️ 读 `selectedShelfId` 必须在这句 await **之后** —— 深链 / 刷新直进本页时 store 尚无
+  // 候选集，未加载时 `selectedShelfId` 恒为 null，守卫会把它误报成「账号没绑货架」。
   // 两件事并发：货架请求挂掉时（api timeout 30s）零件列表不必陪着一起等。
   // 安全依据：作业架只在**用户交互之后**被读（applyScanSelection / onQtyConfirm），
   // 那两个处理器都在本 await 完成之后才可能被触发；模板不读任何货架值。
   await Promise.all([scanShelf.initShelves(), refresh()]);
+  // 2026-10-04 提前提示：作业架不可用时本页一次都提交不出去（每条提交路径都要过
+  // resolveWorkingShelfId），不必等工人走完「选件 → 扫码」才被拦。用 warning 而非
+  // error：这里只是告知，不阻断本页的浏览与预览。
+  const shelfProblem = workingShelfProblem();
+  if (shelfProblem) ElMessage.warning(`${shelfProblem}；本页的取件操作暂不可用`);
 });
 
 async function refresh(): Promise<void> {
