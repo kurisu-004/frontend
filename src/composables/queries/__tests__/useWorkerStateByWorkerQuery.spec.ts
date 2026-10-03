@@ -1,6 +1,9 @@
 // src/composables/queries/__tests__/useWorkerStateByWorkerQuery.spec.ts
 //
-// 2026-09-30 新增：useWorkerStateByWorkerQuery 双 reactive params + enabled 闸门 +
+// 2026-10-04：shelfId 维度整体移除（后端 shelf_id 降为可选且只影响前端零消费的
+// pool_count_by_process；`auth.activeShelfId` 对 MANAGER/CLERK/INSPECTOR 恒空会让
+// enabled 恒 false ⇒ 持有列表静默假空）。mock 签名与 queryKey 断言同步改成单参数。
+// 2026-09-30 新增：useWorkerStateByWorkerQuery reactive params + enabled 闸门 +
 // queryKey + 失效守门。
 //
 // 2026-09-30 契约漂移修复（后端 worker-pool → pool 收敛）：
@@ -15,13 +18,14 @@
 // 覆盖：
 //   - S1-S4：workerStateSchema 解析后端真契约 + work_type_code 空串 + 缺
 //     held_batches 抛 ZodError + 缺 max_held 抛 ZodError。
-//   - T1：传静态 string → getWorkerState 收到 worker_id + shelf_id。
-//   - T2：传 Ref（workerId）+ Ref（shelfId）→ 改任一 ref.value 后调 refetch，
-//     getWorkerState 收到新参数对（核心 reactive params 双参数 guard）。
-//   - T3：workerId = null → enabled=false，queryFn 不被调用（核心闸门 guard）。
-//   - T4：shelfId = null（workerId 有效） → enabled=false，queryFn 不被调用
-//     （双参数闸门：workerId 满足但 shelfId 不满足 → 仍不发起请求）。
-//   - T5：queryKey 形态正确（含 workerId + shelfId 内容）。
+//   - T1：传静态 string → getWorkerState 收到 worker_id。
+//   - T2：传 Ref<workerId> → 改 ref.value 后调 refetch，getWorkerState 收到新
+//     worker_id（reactive params guard）。
+//   - T4：workerId = null → enabled=false，getWorkerState 调用 0 次（闸门 guard；
+//     「持有列表恒空」修复的核心回归点）。
+//   - T5：queryKey 形态 = ['worker-pool','state',workerId]，**不含货架维度**。
+//   - T6 / T7：invalidateWorkerStateByWorkerAll 前缀失效后重拉 + 确实走
+//     qk.workerPoolStatePrefix。
 //
 // 测试策略（沿 usePartFilesListQuery.spec.ts 范本）：
 //   - vi.mock('@/api/workerPool')：getWorkerState 替换为 vi.fn()。
@@ -43,7 +47,7 @@ vi.mock('element-plus', () => ({
 // 2026-09-30：mock 沿 backend-rust WorkerPoolState 真契约 —— 8 顶层字段 + 嵌套
 // pool_count_by_process[] + held_batches[]。held_batches 元素用最小 HeldBatchItem 形态。
 const realGetWorkerState = vi.fn<
-  (params: { worker_id: string; shelf_id: string }) => Promise<{
+  (params: { worker_id: string }) => Promise<{
     worker_id: string;
     worker_name: string;
     work_type_code: string;
@@ -72,7 +76,7 @@ const realGetWorkerState = vi.fn<
       version: number;
     }>;
   }>
->(async (params: { worker_id: string; shelf_id: string }) => ({
+>(async (params: { worker_id: string }) => ({
   worker_id: params.worker_id,
   worker_name: '工人甲',
   work_type_code: 'CNC',
@@ -84,8 +88,7 @@ const realGetWorkerState = vi.fn<
 }));
 
 vi.mock('@/api/workerPool', () => ({
-  getWorkerState: (params: { worker_id: string; shelf_id: string }) =>
-    realGetWorkerState(params),
+  getWorkerState: (params: { worker_id: string }) => realGetWorkerState(params),
   // 2026-09-30：其它 workerPool 函数在本测试用不到，列出 stub 防止 partial mock 副作用。
   getWorkerPoolCounts: vi.fn(),
   getWorkerPoolByProcess: vi.fn(),
@@ -100,10 +103,10 @@ import {
   useWorkerStateByWorkerQuery,
 } from '../useWorkerStateByWorkerQuery';
 
-function lastParams(): { worker_id: string; shelf_id: string } | undefined {
+function lastParams(): { worker_id: string } | undefined {
   const calls = realGetWorkerState.mock.calls;
   const last = calls[calls.length - 1];
-  return last?.[0] as { worker_id: string; shelf_id: string } | undefined;
+  return last?.[0] as { worker_id: string } | undefined;
 }
 
 let testApp: ReturnType<typeof createApp>;
@@ -173,21 +176,19 @@ describe('workerStateSchema（2026-09-30 新增）', () => {
   });
 });
 
-describe('useWorkerStateByWorkerQuery — 双 reactive params + enabled 闸门 + 失效（2026-09-30）', () => {
+describe('useWorkerStateByWorkerQuery — reactive params + enabled 闸门 + 失效（2026-10-04）', () => {
   beforeEach(() => {
     realGetWorkerState.mockClear();
-    realGetWorkerState.mockImplementation(
-      async (params: { worker_id: string; shelf_id: string }) => ({
-        worker_id: params.worker_id,
-        worker_name: '工人甲',
-        work_type_code: 'CNC',
-        max_held: 3,
-        current_held: 0,
-        capacity_remaining: 3,
-        pool_count_by_process: [],
-        held_batches: [],
-      }),
-    );
+    realGetWorkerState.mockImplementation(async (params: { worker_id: string }) => ({
+      worker_id: params.worker_id,
+      worker_name: '工人甲',
+      work_type_code: 'CNC',
+      max_held: 3,
+      current_held: 0,
+      capacity_remaining: 3,
+      pool_count_by_process: [],
+      held_batches: [],
+    }));
     testQueryClient = new QueryClient({
       defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
     });
@@ -202,64 +203,43 @@ describe('useWorkerStateByWorkerQuery — 双 reactive params + enabled 闸门 +
     vi.restoreAllMocks();
   });
 
-  it('T1：传静态 string → getWorkerState 收到 worker_id + shelf_id', async () => {
+  it('T1：传静态 string → getWorkerState 收到 worker_id', async () => {
     const scope = effectScope();
     let q: ReturnType<typeof useWorkerStateByWorkerQuery> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() =>
-        useWorkerStateByWorkerQuery(
-          () => '1900000000001',
-          () => '5000000000001',
-        ),
-      );
+      q = testApp.runWithContext(() => useWorkerStateByWorkerQuery(() => '1900000000001'));
     });
     await q!.refetch();
     expect(realGetWorkerState).toHaveBeenCalled();
     expect(lastParams()?.worker_id).toBe('1900000000001');
-    expect(lastParams()?.shelf_id).toBe('5000000000001');
     scope.stop();
   });
 
-  it('T2：传 Ref<workerId> + Ref<shelfId> → 改任一 ref.value 后调 refetch，getWorkerState 收到新参数对', async () => {
-    // 背景（沿 useProcessesQuery T2 范本扩展为双参数 reactive guard）。
+  it('T2：传 Ref<workerId> → 改 ref.value 后调 refetch，getWorkerState 收到新 worker_id', async () => {
+    // 背景（沿 useProcessesQuery T2 范本）：reactive params guard。
     const widRef: Ref<string | null> = ref('1900000000001');
-    const sidRef: Ref<string | null> = ref('5000000000001');
     const scope = effectScope();
     let q: ReturnType<typeof useWorkerStateByWorkerQuery> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() =>
-        useWorkerStateByWorkerQuery(
-          () => widRef.value,
-          () => sidRef.value,
-        ),
-      );
+      q = testApp.runWithContext(() => useWorkerStateByWorkerQuery(() => widRef.value));
     });
     await q!.refetch();
     expect(lastParams()?.worker_id).toBe('1900000000001');
-    expect(lastParams()?.shelf_id).toBe('5000000000001');
 
-    // 改 widRef
     widRef.value = '1900000000002';
     await q!.refetch();
     expect(lastParams()?.worker_id).toBe('1900000000002');
-    expect(lastParams()?.shelf_id).toBe('5000000000001');
-
-    // 改 sidRef
-    sidRef.value = '5000000000002';
-    await q!.refetch();
-    expect(lastParams()?.worker_id).toBe('1900000000002');
-    expect(lastParams()?.shelf_id).toBe('5000000000002');
     scope.stop();
   });
 
-  it('T3：workerId = null → enabled=false → getWorkerState 调用 0 次', async () => {
-    // 核心闸门 guard：workerId null 必须不发请求（避免后端 422）。
+  it('T4：workerId = null → enabled=false → getWorkerState 调用 0 次', async () => {
+    // 闸门 guard：workerId 缺失必须不发请求。这是修复「持有列表恒空」的核心回归点 ——
+    // 此前 enabled 额外要求 shelfId 非空，而 auth.activeShelfId 对
+    // MANAGER / CLERK / INSPECTOR 恒 null ⇒ 恒不满足 ⇒ 静默假空。
     const scope = effectScope();
     let q: ReturnType<typeof useWorkerStateByWorkerQuery> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() =>
-        useWorkerStateByWorkerQuery(() => null, () => '5000000000001'),
-      );
+      q = testApp.runWithContext(() => useWorkerStateByWorkerQuery(() => null));
     });
     await new Promise((r) => setTimeout(r, 10));
     expect(realGetWorkerState).not.toHaveBeenCalled();
@@ -267,38 +247,22 @@ describe('useWorkerStateByWorkerQuery — 双 reactive params + enabled 闸门 +
     scope.stop();
   });
 
-  it('T4：shelfId = null（workerId 有效） → enabled=false → getWorkerState 调用 0 次', async () => {
-    // 双参数闸门：workerId 满足但 shelfId 不满足 → 仍不发起请求
-    // （避免后端 40001 BIZ_SHELF_NOT_FOUND）。
-    const scope = effectScope();
-    let q: ReturnType<typeof useWorkerStateByWorkerQuery> | undefined;
-    scope.run(() => {
-      q = testApp.runWithContext(() =>
-        useWorkerStateByWorkerQuery(() => '1900000000001', () => null),
-      );
-    });
-    await new Promise((r) => setTimeout(r, 10));
-    expect(realGetWorkerState).not.toHaveBeenCalled();
-    expect(q!.data.value).toBeUndefined();
-    scope.stop();
-  });
-
-  it('T5：queryKey 形态正确（含 workerId + shelfId 内容）', async () => {
+  it('T5：queryKey 形态 = [\'worker-pool\',\'state\',workerId]，不含货架维度', async () => {
+    // 2026-10-04 回归 guard：shelfId 维度已整体移除。若有人把 shelfId 加回键里，
+    // 键长会变 4 段、且同一 worker 会被按架切成不同 cache identity。
     const widSource = ref<string>('1900000000001');
-    const sidSource = ref<string>('5000000000001');
     const scope = effectScope();
     let q: ReturnType<typeof useWorkerStateByWorkerQuery> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() =>
-        useWorkerStateByWorkerQuery(
-          () => widSource.value,
-          () => sidSource.value,
-        ),
-      );
+      q = testApp.runWithContext(() => useWorkerStateByWorkerQuery(() => widSource.value));
     });
     await q!.refetch();
+    const keys = testQueryClient
+      .getQueryCache()
+      .getAll()
+      .map((entry) => entry.queryKey);
+    expect(keys).toContainEqual(['worker-pool', 'state', '1900000000001']);
     expect(lastParams()?.worker_id).toBe('1900000000001');
-    expect(lastParams()?.shelf_id).toBe('5000000000001');
     scope.stop();
   });
 
@@ -306,12 +270,7 @@ describe('useWorkerStateByWorkerQuery — 双 reactive params + enabled 闸门 +
     const scope = effectScope();
     let q: ReturnType<typeof useWorkerStateByWorkerQuery> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() =>
-        useWorkerStateByWorkerQuery(
-          () => '1900000000001',
-          () => '5000000000001',
-        ),
-      );
+      q = testApp.runWithContext(() => useWorkerStateByWorkerQuery(() => '1900000000001'));
     });
     await q!.refetch();
     const callsBefore = realGetWorkerState.mock.calls.length;

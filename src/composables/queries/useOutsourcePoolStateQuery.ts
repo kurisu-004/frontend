@@ -1,7 +1,7 @@
 // src/composables/queries/useOutsourcePoolStateQuery.ts
 //
 // 2026-10-03 新增：外协看板「单公司 × 单工序在途批次」共享 query（右侧外协公司列的
-// 展开内容 —— 看板形态照抄生产队列 /workers/queue 的 WorkerColumn）。
+// 展开内容 —— 看板形态照抄生产队列 /production/worker-queue 的 WorkerColumn）。
 //
 // 设计要点（沿 CLAUDE.md「TanStack Query 数据获取架构」约定）：
 //   - useQuery + **双** reactive params（outsourceCompanyId + processId）：公司列是

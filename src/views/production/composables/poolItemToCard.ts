@@ -1,4 +1,4 @@
-// src/views/workers/composables/poolItemToCard.ts
+// src/views/production/composables/poolItemToCard.ts
 //
 // 2026-10-02 重构：三个 wire DTO → `BatchCardModel` 的统一适配层。工序池
 // （PoolBatchItemDto）、工人持有（HeldBatchItemDto）、待下发（PendingBatchItemDto）

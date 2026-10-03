@@ -33,9 +33,9 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('delivery_notes_manage');
     expect(codes).toContain('workers_list');
     expect(codes).toContain('users_list');
-    // 2026-08-26 补回：router /workers/queue 无 allowRoles 短路，dummy 模式必须有此 code
+    // 2026-08-26 补回：router /production/worker-queue 无 allowRoles 短路，dummy 模式必须有此 code
     expect(codes).toContain('worker_queue');
-    // 2026-09-11：worker_queue 仍必须在菜单树中（router /workers/queue 无 allowRoles 短路）
+    // 2026-09-11：worker_queue 仍必须在菜单树中（router /production/worker-queue 无 allowRoles 短路）
     expect(codes).toContain('shelves_list');
     expect(codes).toContain('customers_list');
     expect(codes).toContain('applicants_list');
@@ -81,6 +81,33 @@ describe('ADMIN_MENUS', () => {
     for (const n of all) {
       expect(typeof n.id).toBe('string');
       expect(n.id.length).toBeGreaterThanOrEqual(15);
+    }
+  });
+
+  // 2026-10-04 新增：菜单树的**数组物理顺序**必须与 sort_order 升序一致，两层都查 ——
+  // ① 顶层 ADMIN_MENUS；② 每个分组的 children。
+  // 为什么这是硬约束：MenuTreeItem 与 MainLayout 都是直接 `v-for` 数组、渲染链路上
+  // 没有任何排序 ⇒ 渲染顺序 == 数组顺序；真实模式的菜单由后端 `ORDER BY m.sort_order,
+  // m.code` 出（backend-rust src/modules/iam/repo/sql/menu.rs）。两层任一处失序，
+  // dummy 模式的侧栏顺序就 ≠ 生产。
+  // 本条守的就是这个不变量：改任一节点的 sort_order 时若忘了重排数组，本用例会红。
+  // 两层都带「收集到非空集合」的兜底 —— 否则过滤条件写错会让 for 循环空转、用例永真。
+  it('menu tree is in ascending sort_order (top level + group children)', () => {
+    // ① 顶层
+    expect(ADMIN_MENUS.length).toBeGreaterThan(0);
+    const topSorts = ADMIN_MENUS.map((n) => n.sort_order);
+    expect(topSorts, `顶层未按 sort_order 升序：${topSorts.join(',')}`).toEqual(
+      [...topSorts].sort((a, b) => a - b),
+    );
+
+    // ② 各分组 children（软删空分组 children=[]，无顺序可言，天然被 for 跳过）
+    const groups = flatten(ADMIN_MENUS).filter((n) => n.children.length > 0);
+    expect(groups.length).toBeGreaterThan(0);
+    for (const g of groups) {
+      const sorts = g.children.map((c) => c.sort_order);
+      expect(sorts, `${g.code} 的 children 未按 sort_order 升序：${sorts.join(',')}`).toEqual(
+        [...sorts].sort((a, b) => a - b),
+      );
     }
   });
 });

@@ -1,4 +1,4 @@
-// src/views/workers/composables/__tests__/usePendingDispatch.spec.ts
+// src/views/production/composables/__tests__/usePendingDispatch.spec.ts
 //
 // 2026-09-29 新增；2026-09-30 重写（后端 batch 域重构对齐）。
 //

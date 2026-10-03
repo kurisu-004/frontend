@@ -929,9 +929,10 @@ export type AutoDispatchResultSchema = z.infer<typeof autoDispatchResultSchema>;
 //     （held 状态下 batch 已在 worker 手中，shelf 字段语义退化）
 //   - 没有 batch_no 类型差异（held 用 number，与 PoolBatchItemDto 同形态）
 //
-// 数据流：`GET /api/v2/prod/pool/state?worker_id=&shelf_id=` 响应中
-// WorkerPoolState.held_batches 元素。本 schema 由 `workerStateSchema.held_batches`
-// 消费（useWorkerStateByWorkerQuery 挂 zod 解析）。
+// 数据流：`GET /api/v2/prod/pool/state?worker_id=` 响应中 WorkerPoolState.held_batches
+// 元素。2026-10-04：shelf_id 已是可选 query（前端不传）—— 不影响本 schema 的任何字段，
+// held 元素本身与货架无关。本 schema 由 `workerStateSchema.held_batches` 消费
+// （useWorkerStateByWorkerQuery 挂 zod 解析）。
 // ============================================================
 export const heldBatchItemSchema = z.object({
   batch_id: z.string(),

@@ -349,7 +349,7 @@ export interface QuotablePartListResult {
 // 外协看板 pool 域（2026-10-03 新增）
 //
 // 3 个只读端点，供「外协发送/接收」看板按「工序 tab × 左侧可发送候选批次 × 右侧
-// 外协公司列」消费（形态照抄生产队列 /workers/queue）：
+// 外协公司列」消费（形态照抄生产队列 /production/worker-queue）：
 //   - GET /outsource-pool/counts                  → 各工序可发送 / 在途计数（tab 徽标）
 //   - GET /outsource-pool/{process_id}            → 单工序的候选批次 × 公司列
 //   - GET /outsource-pool/state?outsource_company_id=&process_id=

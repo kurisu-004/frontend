@@ -223,9 +223,9 @@ const routes: RouteRecordRaw[] = [
         props: true,
       },
       {
-        path: 'workers',
+        path: 'production/worker-list',
         name: 'WorkerList',
-        component: () => import('@/views/workers/WorkerList.vue'),
+        component: () => import('@/views/production/WorkerList.vue'),
         meta: {
           title: '工人一览',
           icon: 'User',
@@ -245,9 +245,9 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        path: 'workers/queue',
+        path: 'production/worker-queue',
         name: 'WorkerQueueBoard',
-        component: () => import('@/views/workers/WorkerQueueBoard.vue'),
+        component: () => import('@/views/production/WorkerQueueBoard.vue'),
         meta: {
           title: '生产队列',
           icon: 'Operation',

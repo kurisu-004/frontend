@@ -51,7 +51,7 @@
 import { computed, ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useDraggable, type DraggableEvent } from 'vue-draggable-plus';
-import type { UsePendingDispatchReturn } from '@/views/workers/composables/usePendingDispatch';
+import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
 
 interface Props {
   /** 单工序的轻量元数据（来自 useProcessesQuery.items.filter(INHOUSE)）。 */

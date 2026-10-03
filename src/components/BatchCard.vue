@@ -1,7 +1,7 @@
 <!-- src/components/BatchCard.vue
      2026-10-02 新增：生产队列看板**唯一**批次卡片组件，工序池（PoolDrawer）、工人列
      （WorkerColumn）、待下发池（PendingBatchesPanel）三处共用。三个 wire DTO 经
-     views/workers/composables/poolItemToCard.ts 统一适配成 BatchCardModel，组件只认
+     views/production/composables/poolItemToCard.ts 统一适配成 BatchCardModel，组件只认
      该类型、不感知 DTO 差异。
 
      2026-10-03 升为**全仓共享组件**（原 views/workers/components/BatchCard.vue）：

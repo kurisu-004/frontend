@@ -1,4 +1,4 @@
-// src/views/workers/composables/usePendingDispatch.ts
+// src/views/production/composables/usePendingDispatch.ts
 //
 // 2026-09-29 新增：生产队列「待下发」Tab 视图层 composable。
 // 2026-09-30 重写：对齐后端 `src/modules/prod/batch` 2026-09-30 重构

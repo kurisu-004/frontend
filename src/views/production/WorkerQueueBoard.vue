@@ -1,4 +1,4 @@
-<!-- 生产队列看板（路由 /workers/queue，menuCode worker_queue）。
+<!-- 生产队列看板（路由 /production/worker-queue，menuCode worker_queue）。
      自 2026-09-30 起的结构：
        - 顶部 el-tabs（行上移，底边线视觉承接）
        - 首个固定 tab「待下发」(name = __pending__)：el-splitter 40/60 分栏
@@ -10,7 +10,7 @@
      2026-10-02 卡片统一（详见文末变更记录）：
        - 原先待下发池与工序池 / 工人列分用的两张旧卡片合并为全看板唯一的 BatchCard，
          工序池 / 工人列 / 待下发池三处共用，DTO 差异收在
-         views/workers/composables/poolItemToCard.ts 适配层；
+         views/production/composables/poolItemToCard.ts 适配层；
        - 全站拖拽统一 vue-draggable-plus（含「待下发 → 工序卡」这条下发链路，
          从原生 HTML5 DnD 改为 Sortable）；
        - 右侧工序卡与左侧批次卡同款 200×96 盒模型 + 工序色左边框 + flex 网格；
@@ -93,7 +93,8 @@
           </template>
           <!-- 自产工序 Tab：WorkerPoolTab 自管 useWorkerPoolByProcessQuery，
                :lazy="true" 保证切到该 tab 才发请求。shelfId 由本组件 provide 注入
-               给内嵌 WorkerColumn / PoolDrawer 消费，WorkerPoolTab 自身不需要。 -->
+               给内嵌 PoolDrawer 消费（WORKER→POOL 撤回目标货架），WorkerPoolTab
+               与 WorkerColumn 自身都不需要。 -->
           <WorkerPoolTab :process-id="p.id" />
         </el-tab-pane>
       </el-tabs>
@@ -112,8 +113,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useQueryClient } from '@tanstack/vue-query';
 import { useAuthStore } from '@/stores/auth';
-import { useWorkerQueue } from '@/views/workers/composables/useWorkerQueue';
-import { usePendingDispatch } from '@/views/workers/composables/usePendingDispatch';
+import { useWorkerQueue } from '@/views/production/composables/useWorkerQueue';
+import { usePendingDispatch } from '@/views/production/composables/usePendingDispatch';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { useWorkerPoolCountsQuery } from '@/composables/queries/useWorkerPoolCountsQuery';
 import { invalidateWorkerPoolByProcessAll } from '@/composables/queries/useWorkerPoolByProcessQuery';
@@ -124,10 +125,17 @@ import PendingBatchesPanel from './components/PendingBatchesPanel.vue';
 import PendingPoolsPanel from './components/PendingPoolsPanel.vue';
 
 const auth = useAuthStore();
-// shelfId 通过 provide 注入给 WorkerColumn（其自管 useWorkerStateByWorkerQuery，
-// 需要 shelfId 作为 queryKey 之一）与 PoolDrawer（WORKER→POOL 的 `to.shelf_id`）。
-// 注意：2026-09-30 前它还被 useWorkerPoolCountsQuery 的 params 闭包读取，是
-// TDZ hotfix 的根源；counts 端点去掉 shelf 维度后该依赖已消失。
+// 2026-10-04：shelfId 现在**只服务 PoolDrawer 的 WORKER→POOL 撤回目标货架**；
+// 工人列的 state query 已不依赖它（`useWorkerStateByWorkerQuery` 去掉 shelf 维度）。
+//
+// ⚠️ 该值取自 `auth.activeShelfId = boundShelves[0]`，而后端只给「SHELF_ACCOUNT +
+// scope_type='shelf'」的角色行返 shelf_ids ⇒ 对 MANAGER / CLERK / INSPECTOR 恒为
+// null ⇒ shelfId 恒 `''`。后果：「把批次撤回候选池」对这三类角色结构性不可用 ——
+// PoolDrawer 落点校验会弹「请先选择目标货架」，用户无法完成撤回。
+// 之所以不能像 state 端点那样把货架参数删掉：后端对 `to.shelf_id` 是**真实使用**的
+// —— 目标货架必须命中 t_shelf_process 映射，否则 20507 / HTTP 422，货架语义无法从
+// 请求里省掉。正解是补一个显式「当前货架」选择器，或一个
+// `/shelves/for-return?next_process_id=` picker（下轮再做）。
 const shelfId = computed(() => auth.activeShelfId ?? '');
 const queue = useWorkerQueue();
 const route = useRoute();
@@ -180,9 +188,8 @@ const hoveredProcessId = ref<string | null>(null);
 // skeleton，不阻塞 tab 切换。（旧 queueLoading 随 loadBoard 一并删除。）
 const loading = computed(() => procsQuery.isLoading.value || countsQuery.isLoading.value);
 
-// 2026-09-29 review 第 1 轮修复（M1）：activeTab 默认 = __pending__（首屏即待下发 tab，
-// 符合任务规约「待下发 Tab 在最前」）；URL ?tab=XXX 可覆盖（深链到具体工序），
-// 覆盖优先级 > 默认。
+// 2026-09-29：activeTab 默认 = __pending__（首屏即待下发 tab，符合任务规约「待下发 Tab
+// 在最前」）；URL ?tab=XXX 可覆盖（深链到具体工序），覆盖优先级 > 默认。
 const TAB_QUERY_KEY = 'tab';
 const PENDING_TAB = '__pending__';
 function readInitialTab(): string {

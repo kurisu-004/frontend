@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/workers/components/__tests__/WorkerColumn.spec.ts
+// src/views/production/components/__tests__/WorkerColumn.spec.ts
 //
 // 2026-10-03 新增：WorkerColumn.vue 的拖拽落点分发 + Sortable 接线回归 guard。
 // 本 spec 守的是用户报的那个 bug（批次移到工人手中后该工人卡片显示不正确）的整条
@@ -17,11 +17,14 @@
 //   - W6：空态 el-empty 是 .col-body 的**兄弟覆盖层**：容器仍在（非空/空态都要存在，
 //     空列是 POOL→WORKER 的主落点），且容器内没有任何非可拖子元素。
 //   - W7：卡片渲染在 .col-body 容器内，容器带 data-worker-id（拖拽源的识别锚点）。
-//   - W8：空列也把 Sortable 绑到了 .col-body 上（start(el) 收到的就是该容器节点）——
+//   - W8：state query 的调用点**只传 workerId 一个实参**（2026-10-04 新增）—— 桩不受
+//     真实签名约束，接线层没有类型锚，必须在实参元组上断言，否则 shelfId 这类
+//     第二维度被悄悄加回时无一条用例会红。
+//   - W9：空列也把 Sortable 绑到了 .col-body 上（start(el) 收到的就是该容器节点）——
 //     容器不渲染 ⇒ watch 走 destroy 分支 ⇒ 空列没有任何 Sortable 实例，拖不进去。
-//   - W9：options 带 sort: false 且**不带** onMove（容器内重排由 Sortable 的 sort
+//   - W10：options 带 sort: false 且**不带** onMove（容器内重排由 Sortable 的 sort
 //     开关关掉，不靠 onMove 守卫）。
-//   - W10：options 带 onRemove，且把被拖节点放回 `from.children[oldIndex]`（DOM 下标）。
+//   - W11：options 带 onRemove，且把被拖节点放回 `from.children[oldIndex]`（DOM 下标）。
 //     二参形态下库不挂内建 onRemove，缺了它投放失败时幻影节点留在落点列、invalidate
 //     清不掉。断言必须落在「放回原下标位置」而不仅是「函数存在」。
 //
@@ -30,14 +33,15 @@
 //     无头环境无法模拟 Sortable 的 _onDragOver，options 回调就是组件与库之间唯一的
 //     契约面）；
 //   - vi.mock('@/composables/queries/useWorkerStateByWorkerQuery') 桩掉数据源
-//     （held_batches / max_held / current_held 全在本 spec 自造）；
+//     （held_batches / max_held / current_held 全在本 spec 自造），并记录实参元组
+//     供 W8 断言调用点只传 workerId（工厂不受真实签名约束，桩必须自带这个锚）；
 //   - dndSourceTracker 用**真实实现**：onStart 记、onAdd 取的读写配对本身就是被测行为
 //     的一半，桩掉它等于把要守的东西一起桩掉；
 //   - EP 组件 stub（el-card / el-avatar / el-tag / el-progress / el-skeleton /
 //     el-empty / el-tooltip）+ vi.mock('element-plus') 把 ElMessage 桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, ref, type ComputedRef, type PropType } from 'vue';
+import { defineComponent, h, nextTick, ref, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
 import type { HeldBatchItemDto } from '@/api/workerPool.contract';
 import type { Worker } from '@/types/workerPool';
@@ -84,14 +88,21 @@ interface FakeWorkerState {
 
 const stateRef = vi.hoisted(() => ({
   data: null as { value: FakeWorkerState | undefined } | null,
+  /** 2026-10-04：桩记录的入参元组。vi.mock 工厂不受真实签名约束，组件若把 shelfId
+   *  之类的第二维度加回来（或改回 inject）不会有任何类型报错，只有这里的实参个数
+   *  断言能让它变红。 */
+  args: [] as unknown[][],
 }));
 
 vi.mock('@/composables/queries/useWorkerStateByWorkerQuery', () => ({
-  useWorkerStateByWorkerQuery: () => ({
-    data: stateRef.data,
-    isLoading: ref(false),
-    error: ref<Error | null>(null),
-  }),
+  useWorkerStateByWorkerQuery: (...args: unknown[]) => {
+    stateRef.args.push(args);
+    return {
+      data: stateRef.data,
+      isLoading: ref(false),
+      error: ref<Error | null>(null),
+    };
+  },
 }));
 
 import WorkerColumn from '../WorkerColumn.vue';
@@ -229,8 +240,9 @@ function mountColumn(
     props: { worker: SELF_WORKER },
     global: {
       components: globalConfig.components,
+      // 2026-10-04：不再 provide shelfId —— 组件已删掉 inject('shelfId')，
+      // state query 只按 workerId 取数（桩 query，见上方 vi.mock）。
       provide: {
-        shelfId: ref('5000000000001') as unknown as ComputedRef<string>,
         moveBatchToWorker: vi.fn(async () => true),
         moveBatchBetweenWorkers: vi.fn(async () => true),
         ...provided,
@@ -258,6 +270,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
   beforeEach(() => {
     captured.calls.length = 0;
     captured.starts.length = 0;
+    stateRef.args.length = 0;
   });
 
   it('W1：Sortable 用二参重载，不传 list（渲染源与 list 不同源）', () => {
@@ -360,7 +373,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     expect(overlay.exists()).toBe(true);
     expect(overlay.element.parentElement?.classList.contains('col-content')).toBe(true);
     // 覆盖层的另一半保证（pointer-events:none 不吃落点判定）在样式区，单测环境不注入
-    // scoped 样式、无法断言，靠 W8 守住「容器确实有 Sortable 实例」这一侧。
+    // scoped 样式、无法断言，靠 W9 守住「容器确实有 Sortable 实例」这一侧。
     wrapper.unmount();
   });
 
@@ -380,7 +393,22 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W8：空列也把 Sortable 绑在 .col-body 上（start 收到的就是该容器节点）', async () => {
+  it('W8：state query 只接 workerId 一个维度（无 shelfId 第二参）', () => {
+    // 2026-10-04 接线 guard：本组件的 query 调用点与 composable 签名之间没有任何
+    // 类型锚（桩是零参的），历史上 shelfId 就是在这里悄悄加回去的 —— 而
+    // auth.activeShelfId 对 MANAGER / CLERK / INSPECTOR 恒空 ⇒ enabled 恒 false
+    // ⇒ 持有列表静默显示「暂无持有工单」+ 0/0。断言落在**实参元组**上。
+    const wrapper = mountColumn();
+    expect(stateRef.args).toHaveLength(1);
+    expect(stateRef.args[0]).toHaveLength(1);
+    // 唯一实参是返回 worker.id 的 getter，调用它应拿到本列 worker 的 id
+    const only = stateRef.args[0][0];
+    expect(typeof only).toBe('function');
+    expect((only as () => string)()).toBe(SELF_WORKER.id);
+    wrapper.unmount();
+  });
+
+  it('W9：空列也把 Sortable 绑在 .col-body 上（start 收到的就是该容器节点）', async () => {
     // 回归 guard：useLazyDraggable 在 flush:'post' 的 watch 里 start(el) / destroy()。
     // 容器若在空态下不渲染，watch 走 destroy 分支 ⇒ 该列一个 Sortable 实例都没有 ⇒
     // 拖到空列 = 无落点，拖拽被取消、卡片弹回源容器。
@@ -392,7 +420,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W9：容器内重排由 sort:false 关掉，不用 onMove 守卫', () => {
+  it('W10：容器内重排由 sort:false 关掉，不用 onMove 守卫', () => {
     const wrapper = mountColumn([makeHeld()]);
     const options = capturedOptions();
     // 本 UI 每次落位都是「一次写操作 + 一次失效」，无重排语义；二参形态下库不挂内建
@@ -404,10 +432,10 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W10：onRemove 把被拖节点放回 from.children[oldIndex]（二参形态的 DOM 放回补齐）', () => {
+  it('W11：onRemove 把被拖节点放回 from.children[oldIndex]（二参形态的 DOM 放回补齐）', () => {
     const wrapper = mountColumn([makeHeld()]);
     const onRemove = capturedOptions().onRemove as (e: unknown) => void;
-    // 回归 guard（2026-10-03 review 第 2 轮 P0）：传 list 时库的内建 onRemove 第一句
+    // 回归 guard（2026-10-03）：传 list 时库的内建 onRemove 第一句
     // 就是 from.insertBefore(item, from.children[oldIndex])，投放成败都先把节点放回源列。
     // 改二参形态后内建 handler 整个不挂 ⇒ 投放失败（20204 容量超限最常见）时卡片留在
     // 落点列，而 invalidate 救不回来：两侧 query 数据都没变，Vue 的 keyed diff 只

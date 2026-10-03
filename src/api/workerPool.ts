@@ -8,7 +8,7 @@
 //   （POOL ↔ WORKER + WORKER ↔ WORKER 三方向）。
 //
 // 端点（与 backend-rust/src/modules/prod/worker_pool/handler.rs 对齐）：
-//   GET  /api/v2/prod/pool/state?worker_id=&shelf_id=  ← getWorkerState
+//   GET  /api/v2/prod/pool/state?worker_id=           ← getWorkerState
 //   GET  /api/v2/prod/pool/counts                     ← getWorkerPoolCounts
 //   GET  /api/v2/prod/pool/{process_id}               ← getWorkerPoolByProcess
 //   POST /api/v2/prod/pool/refill                     ← refillWorkerPool
@@ -39,14 +39,14 @@ import type {
   WorkerStateDto,
 } from './workerPool.contract';
 
-/** GET /api/v2/prod/pool/state?worker_id=&shelf_id=
+/** GET /api/v2/prod/pool/state?worker_id=
  *  无 role guard（worker 自查 + admin 监控共用）。
+ *  2026-10-04：去掉 `shelf_id` query —— 后端已把它降为可选，且它只用于填
+ *  `pool_count_by_process`（前端零消费）；held_batches / max_held / current_held /
+ *  capacity_remaining 全部与货架无关。
  *  无工种时退化为空 pool_count_by_process + max_held=0，service 不报错。
  *  业务错：20201 BIZ_WORKER_NOT_FOUND。 */
-export async function getWorkerState(params: {
-  worker_id: string;
-  shelf_id: string;
-}): Promise<WorkerStateDto> {
+export async function getWorkerState(params: { worker_id: string }): Promise<WorkerStateDto> {
   const resp = await api.get<WorkerStateDto>('/prod/pool/state', {
     params: cleanParams(params),
   });

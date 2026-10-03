@@ -11,7 +11,7 @@
 //
 // 字段来源：三个 wire DTO（`PoolBatchItemDto` / `HeldBatchItemDto` /
 // `PendingBatchItemDto`）字段集各不相同，统一经各域自持的适配层
-// （`views/workers/composables/poolItemToCard.ts`）转换成本类型，组件零 DTO 依赖。
+// （`views/production/composables/poolItemToCard.ts`）转换成本类型，组件零 DTO 依赖。
 
 /** 2026-10-03 新增：批次卡片的**领域扩展槽**，只进 tooltip，不占 body 的 4 行预算。
  *

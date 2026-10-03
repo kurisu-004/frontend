@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/workers/components/__tests__/PendingPoolsPanel.spec.ts
+// src/views/production/components/__tests__/PendingPoolsPanel.spec.ts
 //
 // 2026-10-02 新增：PendingPoolsPanel.vue 组件 spec —— 自产工序卡列。组件本身无逻辑，
 // 只有一个值得守的映射：**hoveredProcessId → 逐张 PendingPoolCard 的 dropping**。
@@ -22,7 +22,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref, type Ref } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import PendingPoolsPanel from '../PendingPoolsPanel.vue';
-import type { UsePendingDispatchReturn } from '@/views/workers/composables/usePendingDispatch';
+import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
 
 vi.mock('vue-draggable-plus', () => ({
   useDraggable: () => ({

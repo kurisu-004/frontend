@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-// src/views/workers/components/__tests__/PoolDrawer.spec.ts
+// src/views/production/components/__tests__/PoolDrawer.spec.ts
 //
-// 2026-10-03 review 第 2 轮新增：PoolDrawer 的 Sortable 接线 guard。
+// 2026-10-03 新增：PoolDrawer 的 Sortable 接线 guard。
 // 本组件此前**零测试**，而「DOM 放回必须 WorkerColumn / PoolDrawer 两处都挂」正是
 // 二参重载方案的唯一正确性前提 —— 少挂一处就漏一种来源的投放失败（幻影节点留在池里
 // 或工人列里，invalidate 清不掉），且这种缺陷在真机上表现为「同一位置两张同批次卡」
@@ -165,7 +165,7 @@ function workerDragEvent(
   return { item, from };
 }
 
-describe('PoolDrawer（2026-10-03 review 第 2 轮 Sortable 接线）', () => {
+describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
   beforeEach(() => {
     captured.calls.length = 0;
     captured.starts.length = 0;

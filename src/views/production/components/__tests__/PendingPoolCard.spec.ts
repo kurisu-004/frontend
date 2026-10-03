@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/workers/components/__tests__/PendingPoolCard.spec.ts
+// src/views/production/components/__tests__/PendingPoolCard.spec.ts
 //
 // 2026-09-30 新增：PendingPoolCard 组件 spec —— 单击下发 / 拖拽交互。
 // 2026-09-30 重写（懒加载 + 后端 dispatch bulk-only 收敛）：
@@ -95,7 +95,7 @@ vi.mock('@/api/workerPool', () => ({
 }));
 
 import PendingPoolCard from '../PendingPoolCard.vue';
-import type { UsePendingDispatchReturn } from '@/views/workers/composables/usePendingDispatch';
+import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
 
 // Element Plus 子组件 stub。
 const ElTagStub = defineComponent({

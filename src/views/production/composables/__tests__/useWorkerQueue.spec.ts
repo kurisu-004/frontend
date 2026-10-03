@@ -1,4 +1,4 @@
-// src/views/workers/composables/__tests__/useWorkerQueue.spec.ts
+// src/views/production/composables/__tests__/useWorkerQueue.spec.ts
 //
 // 2026-09-30 重写：后端 `POST /admin/worker-pool/{assign,remove}` 合并为通用移动端点
 // `POST /prod/pool/move`（POOL↔WORKER + WORKER→WORKER 三方向）后，本 composable

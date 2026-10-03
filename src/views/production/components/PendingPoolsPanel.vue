@@ -28,7 +28,7 @@
 </template>
 
 <script setup lang="ts">
-import type { UsePendingDispatchReturn } from '@/views/workers/composables/usePendingDispatch';
+import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
 import PendingPoolCard from './PendingPoolCard.vue';
 
 defineProps<{

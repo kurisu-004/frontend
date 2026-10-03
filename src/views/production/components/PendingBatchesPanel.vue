@@ -67,8 +67,8 @@ import { computed, ref, watch } from 'vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { PendingBatchItemDto } from '@/api/workerPool.contract';
 import type { BatchCardModel } from '@/types/batchCard';
-import { pendingBatchToCard } from '@/views/workers/composables/poolItemToCard';
-import type { UsePendingDispatchReturn } from '@/views/workers/composables/usePendingDispatch';
+import { pendingBatchToCard } from '@/views/production/composables/poolItemToCard';
+import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
 import BatchCard from '@/components/BatchCard.vue';
 
 interface Props {

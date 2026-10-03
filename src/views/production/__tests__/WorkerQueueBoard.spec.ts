@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/workers/__tests__/WorkerQueueBoard.spec.ts
+// src/views/production/__tests__/WorkerQueueBoard.spec.ts
 //
 // 2026-09-30 hotfix 第 1 轮：WorkerQueueBoard.vue TDZ regression guard。
 //
@@ -23,8 +23,8 @@
 // 测试策略：
 //   - vue-test-utils mount + globalConfig.plugins: [[VueQueryPlugin, { queryClient }]]；
 //   - vi.mock('@/api/workerPool') + vi.mock('@/stores/auth') + vi.mock('element-plus') +
-//     vi.mock('@/views/workers/composables/useWorkerQueue') +
-//     vi.mock('@/views/workers/composables/usePendingDispatch') +
+//     vi.mock('@/views/production/composables/useWorkerQueue') +
+//     vi.mock('@/views/production/composables/usePendingDispatch') +
 //     vi.mock('@/composables/queries/useProcessesQuery') +
 //     vi.mock 子组件 PendingBatchesPanel / PendingPoolsPanel / WorkerPoolTab；
 //   - vi.mock('@/api/process') 兜底 useProcessesQuery 内部 import；
@@ -169,7 +169,7 @@ vi.mock('@/api/process', () => ({
 const { moveBatchBetweenWorkersMock } = vi.hoisted(() => ({
   moveBatchBetweenWorkersMock: vi.fn(async () => true),
 }));
-vi.mock('@/views/workers/composables/useWorkerQueue', () => ({
+vi.mock('@/views/production/composables/useWorkerQueue', () => ({
   useWorkerQueue: () => ({
     moveBatchToWorker: vi.fn(),
     moveBatchToPool: vi.fn(),
@@ -178,7 +178,7 @@ vi.mock('@/views/workers/composables/useWorkerQueue', () => ({
   }),
 }));
 
-vi.mock('@/views/workers/composables/usePendingDispatch', () => ({
+vi.mock('@/views/production/composables/usePendingDispatch', () => ({
   usePendingDispatch: () => ({
     batches: ref([]),
     total: ref(50),

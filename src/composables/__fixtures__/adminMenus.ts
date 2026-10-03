@@ -1,10 +1,17 @@
 // src/composables/__fixtures__/adminMenus.ts
+// 2026-10-04 同步 backend-rust seeds/menu.sql：
+//   - workers_list 从 auth_group children 迁入 production_group children，
+//     path /workers → /production/worker-list，sort_order 10 → 25；
+//   - worker_queue path /workers/queue → /production/worker-queue；
+//   - 顺带修既有漂移：pending_programming sort_order 25 → 15（后端 seed 早已改成 15，
+//     fixture 漏跟，不修则 25 槽位与 workers_list 撞车）。
+//   - production_group 现含 6 children：process_work_type=5 / part_process_chain=10 /
+//     pending_programming=15 / worker_queue=20 / workers_list=25 / inspection_pending=30；
+//     auth_group 现含 2 children（users_list + shelves_list）。
 // 2026-09-29 同步 backend-rust seeds/menu.sql：
-//   - pending_programming 从顶级菜单迁入 production_group children（sort=25），
+//   - pending_programming 从顶级菜单迁入 production_group children，
 //     title 由「待编程一览」精简为「待编程」；
 //   - inspection_pending 从 order_group children 迁入 production_group children（sort=30）。
-//   - production_group 现含 5 children：process_work_type / part_process_chain /
-//     worker_queue / pending_programming / inspection_pending。
 // 2026-09-16 同步 backend-rust sqlx migration 025：
 //   - 货架（shelves_list）从 floor_group 移到 auth_group，与 users_list / workers_list 同组
 //     （sort_order 30）。业务上货架归属权限管理范畴。
@@ -69,7 +76,32 @@ export const ADMIN_MENUS: MenuNode[] = [
     sort_order: 12,
     children: [],
   },
-  // 3. customer_management — 客户管理（分组，2 children）
+  // 3. scan_badge — 扫码台（顶级，leaf）
+  // 2026-09-16 新增（从 floor_group 升级为顶级菜单，backend-rust 025 同步提升）。
+  // 为什么排在这个位置：sort_order=13 紧跟 production_stats=12、customer_management=15
+  // 之前；而后端菜单查询是 `ORDER BY m.sort_order, m.code`（backend-rust
+  // src/modules/iam/repo/sql/menu.rs），真实模式侧栏恒按 sort_order 出。MenuTreeItem
+  // 与 MainLayout 都是直接 v-for 数组、渲染链路上没有排序 ⇒ **数组物理顺序必须与
+  // sort_order 升序一致**，否则 dummy 模式的侧栏顺序 ≠ 生产。本条与同文件其它顶级
+  // 条目、以及各分组 children 都受 adminMenus.spec.ts 的「menu tree is in ascending
+  // sort_order」不变量用例守护。
+  // path=/scan/badge（router/index.ts 子路由 'badge'；父路由 /scan 路径仅承载
+  // redirect，不暴露菜单）。router 早已就绪（5 个子路由共用 scan_badge menuCode）。
+  // icon=Operation：表达「操作台/工位」语义；与 production_group 主图标同名是历史
+  // 既有约定（auth_group 内 Platform / work_types_list User 等也复用同名），侧栏
+  // 仍靠 title 区分。Cellphone 暂不引入 ICON_MAP（菜单图标导入白名单收敛约束）。
+  {
+    id: id(12),
+    version: 0,
+    parent_id: null,
+    code: 'scan_badge',
+    title: '扫码台',
+    path: '/scan/badge',
+    icon: 'Operation',
+    sort_order: 13,
+    children: [],
+  },
+  // 4. customer_management — 客户管理（分组，2 children）
   {
     id: id(3),
     version: 0,
@@ -104,7 +136,7 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 4. order_group — 订单管理（分组，6 children）
+  // 5. order_group — 订单管理（分组，6 children）
   {
     id: id(4),
     version: 0,
@@ -172,12 +204,19 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 6. production_group — 生产管理（分组，5 children）
+  // 6. production_group — 生产管理（分组，6 children）
   // 2026-09-11 首次落地：worker_queue 从 auth_group 迁出，与 part_process_chain 同组。
   // 2026-09-12 合并 fc99d3b tabbed 页：process_work_type 也挂这里（router /production/process-work-type）。
   // 2026-09-29 新增：pending_programming（CNC 编程员主入口，从顶级菜单迁入，
   // title 由「待编程一览」精简为「待编程」）+ inspection_pending（从 order_group 迁入）
   // 挂这里；「扫工件」「条码打印」等生产侧功能后续都挂这里。
+  // 2026-10-04 同步 backend-rust seeds/menu.sql：workers_list 从 auth_group 迁入
+  // （path /workers → /production/worker-list，sort 10 → 25，接在 worker_queue=20 之后、
+  // inspection_pending=30 之前）；worker_queue 的 path 同步为 /production/worker-queue。
+  // 2026-10-04 顺带修既有漂移：pending_programming 的 sort_order 25 → 15（后端 seed
+  // 早已按 review 意见改成 15，fixture 漏跟；不修则 25 槽位与 workers_list 撞车）。
+  // 本组子项最终 sort：process_work_type=5 / part_process_chain=10 / pending_programming=15 /
+  // worker_queue=20 / workers_list=25 / inspection_pending=30。
   {
     id: id(10),
     version: 0,
@@ -213,20 +252,12 @@ export const ADMIN_MENUS: MenuNode[] = [
         children: [],
       },
       {
-        id: id(102),
-        version: 0,
-        parent_id: id(10),
-        code: 'worker_queue',
-        title: '生产队列',
-        path: '/workers/queue',
-        icon: 'Operation',
-        sort_order: 20,
-        children: [],
-      },
-      {
         // 2026-09-29 新增：从顶级菜单迁入 production_group children。
         // title 精简为「待编程」（旧 fixture 字面「待编程一览」冗余，与「已编程」Tab
-        // 配合去掉「一览」后缀）。原顶级位置 sort_order=25 沿用，挂到 worker_queue=20 之后。
+        // 配合去掉「一览」后缀）。2026-10-04 sort_order 25 → 15，对齐 backend-rust seed
+        // （排在 part_process_chain=10 之后、worker_queue=20 之前）；同一次修订把本块
+        // 上移到 part_process_chain 之后 —— 数组物理顺序须与 sort_order 升序一致，
+        // MenuTreeItem 直接 v-for children，渲染链路上没有排序。
         id: id(5),
         version: 0,
         parent_id: id(10),
@@ -234,6 +265,31 @@ export const ADMIN_MENUS: MenuNode[] = [
         title: '待编程',
         path: '/cnc/pending',
         icon: 'Cpu',
+        sort_order: 15,
+        children: [],
+      },
+      {
+        id: id(102),
+        version: 0,
+        parent_id: id(10),
+        code: 'worker_queue',
+        title: '生产队列',
+        path: '/production/worker-queue',
+        icon: 'Operation',
+        sort_order: 20,
+        children: [],
+      },
+      {
+        // 2026-10-04：从 auth_group children 迁入 production_group children。
+        // path /workers → /production/worker-list（与 router 子路由 'production/worker-list'
+        // 对齐）；sort_order 10 → 25，接在 worker_queue=20 之后、inspection_pending=30 之前。
+        id: id(61),
+        version: 0,
+        parent_id: id(10),
+        code: 'workers_list',
+        title: '工人一览',
+        path: '/production/worker-list',
+        icon: 'User',
         sort_order: 25,
         children: [],
       },
@@ -241,7 +297,7 @@ export const ADMIN_MENUS: MenuNode[] = [
         // 2026-09-29 新增：从 order_group children 迁入 production_group children。
         // 原 order_group 位置 sort_order=50 与业务侧「零件一览/送货/返修」错位；
         // 待品检本质是车间工序流的入口（INSPECTION → READY_TO_SHIP），归类到
-        // 生产管理更贴合业务语义。挂 pending_programming=25 之后，sort=30。
+        // 生产管理更贴合业务语义。挂 pending_programming=15 之后，sort=30。
         id: id(44),
         version: 0,
         parent_id: id(10),
@@ -254,9 +310,11 @@ export const ADMIN_MENUS: MenuNode[] = [
       },
     ],
   },
-  // 7. auth_group — 权限管理（分组，3 children）
+  // 7. auth_group — 权限管理（分组，2 children）
   // 2026-09-11：worker_queue 迁到 production_group。
-  // 2026-09-16：shelves_list 从 floor_group 迁入；本分组现含 workers_list + users_list + shelves_list。
+  // 2026-09-16：shelves_list 从 floor_group 迁入。
+  // 2026-10-04：workers_list 迁到 production_group（业务侧归类随菜单分组调整），
+  // 本分组现只余 users_list + shelves_list。
   {
     id: id(6),
     version: 0,
@@ -267,17 +325,6 @@ export const ADMIN_MENUS: MenuNode[] = [
     icon: 'Key',
     sort_order: 30,
     children: [
-      {
-        id: id(61),
-        version: 0,
-        parent_id: id(6),
-        code: 'workers_list',
-        title: '工人一览',
-        path: '/workers',
-        icon: 'User',
-        sort_order: 10,
-        children: [],
-      },
       {
         id: id(62),
         version: 0,
@@ -363,24 +410,6 @@ export const ADMIN_MENUS: MenuNode[] = [
     path: null,
     icon: 'Tools',
     sort_order: 40,
-    children: [],
-  },
-  // 2026-09-16 新增顶级菜单：scan_badge 扫码台（从 floor_group 升级，sort_order=13
-  // 紧跟 production_stats=12 之后、customer_management=15 之前）。path=/scan/badge
-  // （router/index.ts:382 子路由 'badge'；父路由 /scan 路径仅承载 redirect，不暴露菜单）。
-  // backend-rust 025 同步提升；router 早已就绪（5 个子路由共用 scan_badge menuCode）。
-  // icon=Operation：表达「操作台/工位」语义；与 production_group 主图标同名是历史
-  // 既有约定（auth_group 内 Platform / work_types_list User 等也复用同名），侧栏
-  // 仍靠 title 区分。Cellphone 暂不引入 ICON_MAP（菜单图标导入白名单收敛约束）。
-  {
-    id: id(12),
-    version: 0,
-    parent_id: null,
-    code: 'scan_badge',
-    title: '扫码台',
-    path: '/scan/badge',
-    icon: 'Operation',
-    sort_order: 13,
     children: [],
   },
   // 10. settings_root — 设置（分组，3 children）

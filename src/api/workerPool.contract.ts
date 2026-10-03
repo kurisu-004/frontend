@@ -1,7 +1,7 @@
 // 2026-09-14 新增：pool 域前端契约（types only，无 runtime）。
 //
 // 端点（与 backend-rust/src/modules/prod/worker_pool 对齐，baseURL `/api/v2`）：
-//   GET  /api/v2/prod/pool/state?worker_id=&shelf_id=  ← getWorkerState
+//   GET  /api/v2/prod/pool/state?worker_id=           ← getWorkerState
 //   GET  /api/v2/prod/pool/counts                     ← getWorkerPoolCounts
 //   GET  /api/v2/prod/pool/{process_id}               ← getWorkerPoolByProcess
 //   POST /api/v2/prod/pool/refill                     ← refillWorkerPool
@@ -16,22 +16,22 @@
 //   - 删 WorkerPoolCountsDto.shelf_id：后端 WorkerPoolCountsOut
 //     （src/modules/prod/worker_pool/dto.rs）只有 counts + total 两字段。
 //   - 删 PoolBatchItemDto.current_process_step_id：后端 PoolBatchItem
-//     （src/modules/prod/worker_pool/vo/worker_pool.rs:14-50）无此字段。
+//     （src/modules/prod/worker_pool/vo/worker_pool.rs）无此字段。
 //   - WorkerStateDto.work_type_code 收紧为 string：后端 WorkerPoolState
-//     （model.rs:122）是 `String` 而非 `Option<String>`，无工种时为空串。
+//     （model.rs）是 `String` 而非 `Option<String>`，无工种时为空串。
 //
 // 端点形状以 rust 实际为准：
-// - i64 主键 → JSON 字符串（雪花 ID 防 JS 精度截断，CLAUDE.md #3）
+// - i64 主键 → JSON 字符串（雪花 ID 防 JS 精度截断）
 // - role 守卫下沉到 service（manager / manager+clerk+inspector），前端靠 token 拦截
 // - `Option<T>` 字段在 rust 侧未加 skip_serializing_if 时序列化为 `null`；加了则
 //   **整个字段从 JSON 中省略** —— 前端契约按「可能缺省」标注（`?` / `| undefined`）。
 
-/** `GET /api/v2/prod/pool/state` 出参（rust WorkerPoolState，model.rs:118-133）。
+/** `GET /api/v2/prod/pool/state` 出参（rust WorkerPoolState，model.rs）。
  *  pool_count_by_process 仅含该 worker 工种映射到的工序；空工种时退化为 []。 */
 export interface WorkerStateDto {
   worker_id: string;
   worker_name: string;
-  /** 后端为非 Option String（model.rs:122）—— 无工种时为空串，不返 null。 */
+  /** 后端为非 Option String（model.rs）—— 无工种时为空串，不返 null。 */
   work_type_code: string;
   /** work_type.max_held_batches；未设置时 0 */
   max_held: number;
@@ -39,10 +39,12 @@ export interface WorkerStateDto {
   current_held: number;
   /** max(0, max_held - current_held) */
   capacity_remaining: number;
+  /** 2026-10-04：shelf_id 已是可选 query（前端不传）—— 此时该字段为空数组。
+   *  该字段是后端唯一消费 shelf_id 的出参，前端零消费。 */
   pool_count_by_process: PoolCountDto[];
   /** 2026-09-14 新增；2026-09-14 follow-up round-2 升级为 HeldBatchItemDto
    *  （展示字段全字段，对应 rust 端 JOIN t_part / t_customer / t_applicant / t_shelf
-   *   后的 HeldBatchItem，model.rs:62-98）。 */
+   *   后的 HeldBatchItem，model.rs）。 */
   held_batches: HeldBatchItemDto[];
 }
 
@@ -53,7 +55,7 @@ export interface PoolCountDto {
 }
 
 /** 2026-09-14 follow-up round-2 新增：`WorkerStateDto.held_batches` 元素类型
- *  （rust `HeldBatchItem`，model.rs:62-98）。包含前端 heldToCard 渲染所需的全部
+ *  （rust `HeldBatchItem`，model.rs）。包含前端 heldToCard 渲染所需的全部
  *  展示字段，消除之前 WorkerTakenItemDto 字段过窄导致的「name / customer_name /
  *  applicant_name / location / shelf_code 等核心展示字段被降级为 null / 空串」的
  *  UX 退化问题。
@@ -132,7 +134,7 @@ export interface WorkTypeMaxHeldDto {
  *  改由前端按事件 `created_at` 自派生或后端后续补字段。
  *
  *  2026-09-30：删 `current_process_step_id` —— 后端 VO
- *  （src/modules/prod/worker_pool/vo/worker_pool.rs:14-50）根本没有这个字段。
+ *  （src/modules/prod/worker_pool/vo/worker_pool.rs）根本没有这个字段。
  *  此前前端 contract + Zod schema 都声明了它，导致 `workerPoolByProcessSchema.parse`
  *  **永远失败** → WorkerPoolTab 永久「加载失败」。 */
 export interface PoolBatchItemDto {
@@ -216,7 +218,7 @@ export interface MoveRequest {
   note?: string;
 }
 
-/** 2026-09-30：`TakenItem`（rust worker_pool/model.rs:13-30）。
+/** 2026-09-30：`TakenItem`（rust worker_pool/model.rs）。
  *  既是 `RefillResult.taken[]` 的元素类型，也是 `MoveResult.taken`（仅 POOL→WORKER
  *  时填）的元素类型。 */
 export interface TakenItemDto {
@@ -232,11 +234,11 @@ export interface TakenItemDto {
   /** 移动 / 抢批后 batch.version + 1 */
   version: number;
   /** 是否已上传 G 代码（与候选池视图 / take_one_from_pool 同源 EXISTS 判定）。
-   *  2026-09-29 后端新增（model.rs:26-29，serde default 兜底 false）。 */
+   *  2026-09-29 后端新增（model.rs，serde default 兜底 false）。 */
   has_cnc_program: boolean;
 }
 
-/** `POST /api/v2/prod/pool/refill` 出参（rust RefillResult，model.rs:101-107）。 */
+/** `POST /api/v2/prod/pool/refill` 出参（rust RefillResult，model.rs）。 */
 export interface WorkerRefillResultDto {
   worker_id: string;
   shelf_id: string;
@@ -365,7 +367,7 @@ export interface AutoAllocateRequest {
 }
 
 /** `POST /api/v2/prod/pool/auto-allocate` 出参（rust AutoAllocateResult，
- *  vo/worker_pool.rs:96-118）。 */
+ *  vo/worker_pool.rs）。 */
 export interface AutoAllocateResultDto {
   process_id: string;
   shelf_id: string;

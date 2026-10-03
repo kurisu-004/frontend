@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/workers/components/__tests__/PendingBatchesPanel.spec.ts
+// src/views/production/components/__tests__/PendingBatchesPanel.spec.ts
 //
 // 2026-10-02 新增：PendingBatchesPanel.vue 组件 spec —— 待下发批次列（Sortable
 // 拖拽**源**）。聚焦新增的「拖入工序卡高亮」事件源：Sortable 的 _onMove 只从被拖起
@@ -30,7 +30,7 @@ import { defineComponent, h, ref, type PropType } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import PendingBatchesPanel from '../PendingBatchesPanel.vue';
 import type { PendingBatchItemDto } from '@/api/workerPool.contract';
-import type { UsePendingDispatchReturn } from '@/views/workers/composables/usePendingDispatch';
+import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
 
 const captured = vi.hoisted(() => ({
   calls: [] as { list: unknown; options: Record<string, unknown> }[],

@@ -1,9 +1,16 @@
 <!-- 2026-09-30 重构：工人列自管 useWorkerStateByWorkerQuery（数据层 TanStack Query 化）。
      原先 `batches` prop 由父级 useWorkerQueue 聚合后传入；本 commit 起 WorkerColumn 内部
-     自管 query（30s staleTime 去重缓存 + 写操作 invalidate），同 workerId + shelfId 跨
-     tab 共享 cache identity。
+     自管 query（30s staleTime 去重缓存 + 写操作 invalidate），同一 workerId 跨 tab 共享
+     cache identity。
      skeleton / empty 兜底：isLoading 时 max_held / current_held 占位「…」，
      error 时 el-empty description="加载失败"。
+
+     2026-10-04：删掉 inject('shelfId')，state query 只按 workerId 取数。原先 shelfId
+     接在 `auth.activeShelfId` 上，而该值只对 SHELF_ACCOUNT + 货架 scope 的角色非空 ——
+     本页目标角色（MANAGER / CLERK / INSPECTOR）恒为 null ⇒ query 的 enabled 恒 false
+     ⇒ 持有列表稳定显示「暂无持有工单」+ 0/0（静默假空），且 invalidateQueries 默认
+     refetchType:'active' 遇 disabled query 也不补刷。后端 `GET /prod/pool/state` 已把
+     shelf_id 降为可选，且它唯一影响的 pool_count_by_process 前端零消费。
 
      2026-09-30：拖拽链路对接后端 `POST /prod/pool/move`（取代 assign/remove 两端点）。
      - onStart 记 worker 源（落点的 @add 消费）；onAdd 记/取候选池源时改为读
@@ -75,13 +82,12 @@
 
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue';
-import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { Worker } from '@/types/workerPool';
 import type { BatchCardModel as Card } from '@/types/batchCard';
 import { useWorkerStateByWorkerQuery } from '@/composables/queries/useWorkerStateByWorkerQuery';
-import { heldToCard } from '@/views/workers/composables/poolItemToCard';
+import { heldToCard } from '@/views/production/composables/poolItemToCard';
 import {
   consumePoolSource,
   consumeWorkerSource,
@@ -97,25 +103,17 @@ const props = defineProps<{
   worker: Worker;
 }>();
 
-// 2026-09-30：shelfId 通过 inject('shelfId') 从父级 WorkerQueueBoard 拿
-// （provide 已沿用 2026-08-26 既有约定）。WorkerColumn 自管 useWorkerStateByWorkerQuery
-// 走 qk.workerPoolStateByWorker(worker.id, shelfId) 缓存键，跨 tab 共享。
-// 2026-09-30 review 第 1 轮修复（m3）：用 computed default 替代 `!` 非空断言 ——
-// 未注入时拿 computed(() => '')，后续 query.enabled 闸门会短路（useWorkerStateByWorkerQuery
-// 要求非空），workerState 拉不到自然走 error/empty 分支（与「无 active shelfId」语义对齐）。
-const shelfId = inject<ComputedRef<string>>(
-  'shelfId',
-  computed(() => ''),
-);
+// 2026-10-04：**不再 inject('shelfId')** —— 该 query 的 shelf 维度已整体移除
+// （后端 `/prod/pool/state` 的 shelf_id 降为可选且只影响前端零消费的
+// pool_count_by_process；`auth.activeShelfId` 对 MANAGER / CLERK / INSPECTOR 恒空，
+// 接上会让 enabled 恒 false、持有列表静默假空）。queryKey 现在只有 workerId 一个
+// 维度，同一 worker 跨 tab / 跨货架共享同一 cache identity。
+const stateQuery = useWorkerStateByWorkerQuery(() => props.worker.id);
 
-const stateQuery = useWorkerStateByWorkerQuery(
-  () => props.worker.id,
-  () => shelfId.value,
-);
-
-// 2026-09-30 review 第 1 轮修复（m8）：useWorkerStateByWorkerQuery error → ElMessage 错误
-// 桥接（沿 CLAUDE.md #9 usePartsListQuery.ts:334-336 范本）。模板 v-else-if「加载失败」
-// el-empty 只是 UI 占位，toast 必须走 ElMessage.error 才让用户看到。
+// 2026-09-30：useWorkerStateByWorkerQuery error → ElMessage 错误桥接（沿 CLAUDE.md
+// TanStack Query 一节的「ElMessage 错误桥接」条目与 usePartsListQuery 的写法）。
+// 模板 v-else-if「加载失败」el-empty 只是 UI 占位，toast 必须走 ElMessage.error
+// 才让用户看到。
 watch(
   () => stateQuery.error.value,
   (e) => {
@@ -124,7 +122,7 @@ watch(
 );
 
 /** 2026-10-02：把 useWorkerStateByWorkerQuery.held_batches 适配成 BatchCardModel[]。
- *  heldToCard 函数从 useWorkerQueue.ts 拆到 views/workers/composables/poolItemToCard.ts，
+ *  heldToCard 函数从 useWorkerQueue.ts 拆到 views/production/composables/poolItemToCard.ts，
  *  共享给 WorkerPoolTab / PoolDrawer / WorkerColumn（同 held 数据流）。 */
 const heldBatches = computed<Card[]>(() => {
   const list = stateQuery.data.value?.held_batches ?? [];
@@ -196,8 +194,7 @@ useLazyDraggable(containerRef, {
 // —— 不再有 process_id。后端把 `admin/worker-pool/assign` 合并进了通用移动端点
 // `POST /prod/pool/move`，入参是 `MoveRequest { batch_id, from, to, note? }`，
 // 目标工序由 service 从 `batch.current_process_step.process_id` 自推
-// （worker-pool.md:146-147）。inject 缺省用 noop 兜底（provider 缺失时不炸，
-// 与本文件既有 shelfId 注入风格一致）。
+// （worker-pool.md）。inject 缺省用 noop 兜底（provider 缺失时不炸）。
 const moveBatchToWorker = inject<
   (batch_id: string, to_worker_id: string, from_shelf_id: string) => Promise<boolean>
 >('moveBatchToWorker', async () => false);
