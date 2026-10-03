@@ -1573,7 +1573,8 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
 //     后端 ShelfOut 在同 PR 也已删该字段，属另一次独立决策）。
 //
 // 覆盖：
-//   - S24：pendingProgrammingItemSchema 接受完整 13 字段不抛错；客户字段是
+//   - S24：pendingProgrammingItemSchema 接受完整 15 字段不抛错（13 基础 + 2026-10-03
+//     后端补的批次锚点 batch_id / batch_version，fixture 显式给 null）；客户字段是
 //     parent_customer_name(L1) / customer_name(L2)，与 part 域 l1_customer_name
 //     不同名（本用例把 parent_customer_name 写满并断言读出，防回归成 l1_*）。
 //   - S25：pendingProgrammingItemSchema 缺 has_cnc_program → 抛 ZodError
@@ -1604,6 +1605,12 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
     customer_name: '客户A-子',
     parent_customer_name: '客户A',
     has_cnc_program: false,
+    // 2026-10-03 m1：后端 ProgrammingItemOut 的批次锚点两字段**无**
+    // `skip_serializing_if` ⇒ 恒返（无 PROGRAMMING 批次时为 null），schema 因此声明成
+    // 「必填 + 可空」。fixture 必须显式给 null，否则 parse 直接抛
+    // invalid_type（这正是 m1 想要的守门强度）。
+    batch_id: null,
+    batch_version: null,
   };
 
   const validShelf = {
@@ -1620,7 +1627,7 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
     updated_at: '2026-09-30 11:00:00',
   };
 
-  it('S24：pendingProgrammingItemSchema 接受完整 13 字段（客户字段是 parent_customer_name）', () => {
+  it('S24：pendingProgrammingItemSchema 接受完整 15 字段（客户字段是 parent_customer_name）', () => {
     const parsed = pendingProgrammingItemSchema.parse(validProgrammingItem);
     expect(parsed.id).toBe('190000000000099');
     expect(parsed.version).toBe(3);
@@ -1629,6 +1636,26 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
     expect(parsed.parent_customer_name).toBe('客户A');
     expect(parsed.customer_name).toBe('客户A-子');
     expect((parsed as Record<string, unknown>).l1_customer_name).toBeUndefined();
+  });
+
+  // 2026-10-03 m1 regression guard：批次锚点两字段是「必填 + 可空」，不是
+  // `.optional()`。后端无 `skip_serializing_if` ⇒ 恒返（无批次时为 null）；一旦
+  // 有人为省事退回 `.optional()`，下面两条会红 ——
+  //   ① 有值时必须解析出来（不因 strip 丢字段）；
+  //   ② **缺键时必须抛错**（静默通过会让全表下发按钮恒 disabled 且无任何报错）。
+  it('S24b：批次锚点有值时解析出来；缺键时抛 ZodError（防退回 .optional()）', () => {
+    const withAnchor = pendingProgrammingItemSchema.parse({
+      ...validProgrammingItem,
+      batch_id: '190000000000123',
+      batch_version: 7,
+    });
+    expect(withAnchor.batch_id).toBe('190000000000123');
+    expect(withAnchor.batch_version).toBe(7);
+
+    const { batch_id: _omitId, batch_version: _omitVer, ...noAnchor } = validProgrammingItem;
+    void _omitId;
+    void _omitVer;
+    expect(() => pendingProgrammingItemSchema.parse(noAnchor)).toThrow();
   });
 
   it('S25：pendingProgrammingItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 guard）', () => {

@@ -95,9 +95,11 @@ export interface PartItem {
    *  + 6 处恒 null，后者逐个是：`GET /parts` / `GET /com/union-list` /
    *  `GET /parts/pending-programming` / `GET /parts/by-work-type/{id}` /
    *  `GET /parts/by-worker/{id}` / `POST /assemblies/{id}/children`（唯一一处单条
-   *  返回本 VO 的端点）。⚠️ **别把 outsource-* 算进来**：它们复用的是 part 域的
-   *  **SQL 过滤条件**（`PartListFilters`），出参是自己的 VO
-   *  （`QuotablePartListOut` / `OutsourceSendableListOut` / …），不经过本 VO。
+   *  返回本 VO 的端点）。⚠️ **别把 outsource-* 算进来**：它们是自有 repo 的自有
+   *  SQL（`OutsourceRepoTrait::quotable_list` / `sendable_list`，入参形态也不同——
+   *  keyword_pat / customer_id / limit / offset），出参也是自有 VO
+   *  （`QuotablePartListOut` / `OutsourceSendableListOut` / …），既不复用
+   *  `PartListFilters` 也不经过本 VO。
    *  `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参即取自本字段，缺失时
    *  扫码台走显式报错（不静默用 part_id 顶替）。
    *
@@ -470,11 +472,14 @@ export async function forceCompletePart(
  *      - 但 `GET /api/v2/parts/{id}/batches`（`PartBatchListItemOut`）的**每个
  *        批次项都带 `version`**（t_part_batch.version），而该流程本来就是让用户在
  *        批次卡里**手选**批次再下发（`onReleaseToShelf` 的 batchId 形参由
- *        PartDetail.vue 传入），`usePartDetail` 已持有 batches 列表（仓内
- *        `onToShip` 已有「从 batches 里按状态找批次并取其 id + version」的先例）。
+ *        PartDetail.vue 传入），`usePartDetail` 已持有 batches 列表。两处同款先例
+ *        都在同一个文件里：`onReceiveFromOutsourceFn`（按调用方给的 batchId 去
+ *        batches 里取 version + 40901 兜底，形态与本处最贴近）、
+ *        `onPassInspection`（按批次状态在 batches 里找目标再取其 id + version）。
  *      ⇒ 剩下的是**纯前端改动**（`onReleaseToShelf` 形参加 version + PartDetail 调用点
  *        从 batches 里按 selectedBatchId 取 version），落在 `views/parts/detail/**`，
- *        不在本轮范围。接线时顺带按上面 `onToShip` 的先例处理批次被并发改动的情形。 */
+ *        不在本轮范围。接线时顺带按上述先例处理批次被并发改动的情形（40901 提示刷新
+ *        + 重取 batches）。 */
 
 export async function releaseFromProgramming(
   batchId: string,
@@ -505,10 +510,8 @@ export async function releaseFromProgramming(
  *    extractor 拒成 422）；缺省 / null = 整批，小于总量时后端自动拆批。
  *  响应仍是 part 级 `R<PartOut>`，调用方按整批刷新列表即可。
  *
- *  2026-10-03：本函数依赖的两处后端能力（部分领取 + 自动拆批、pickable 列表的
- *  批次锚点）当日均已合入 backend `master`（HEAD `3609a85`）⇒ 调用方无条件发
- *  `quantity`、直接读列表项 `batch_id` / `batch_version` 都是安全的，不再有
- *  跨仓部署顺序依赖。 */
+ *  当前**无跨仓部署顺序依赖**（2026-10-03 核）：调用方可以无条件发 `quantity`、
+ *  也可以直接读列表项的 `batch_id` / `batch_version` —— 后端这两处能力均已具备。 */
 export async function pickUpPart(batchId: string, payload: PartPickUpPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/pick-up`,

@@ -165,10 +165,11 @@ import {
 } from '../../pendingProgrammingColumnDefs';
 import { qk } from '@/composables/queries/keys';
 
-/** 造一行合法的 ProgrammingItem（13 字段齐全 —— 缺字段会被 Zod 守门拦掉）。
- *  ⚠️ 批次锚点（batch_id / batch_version）**故意不给默认值**：2026-10-03 起后端按
- *  「无 PROGRAMMING 批次 → null」下发，用例要断言下发路径时必须显式给出（见下方
- *  BATCH_ANCHOR），不给默认值才能让「漏配锚点」的用例真的走到守门分支。 */
+/** 造一行合法的 ProgrammingItem（15 字段齐全 —— 缺字段会被 Zod 守门拦掉）。
+ *  ⚠️ 批次锚点（batch_id / batch_version）默认给 **null**（= 后端「无 PROGRAMMING
+ *  批次」的诚实形态，且 schema 声明成必填 + 可空、缺键会 parse 失败）；要断言下发
+ *  路径的用例必须显式覆盖成 BATCH_ANCHOR，不给默认值才能让「漏配锚点」的用例真的
+ *  走到守门分支。 */
 function makeItem(overrides: Partial<PendingProgrammingRow> = {}): PendingProgrammingRow {
   return {
     id: '190000000000099',
@@ -184,6 +185,8 @@ function makeItem(overrides: Partial<PendingProgrammingRow> = {}): PendingProgra
     customer_name: '客户A-子',
     parent_customer_name: '客户A',
     has_cnc_program: false,
+    batch_id: null,
+    batch_version: null,
     ...overrides,
   };
 }

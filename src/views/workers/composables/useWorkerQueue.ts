@@ -53,7 +53,8 @@ import type { Worker } from '@/types/workerPool';
  *  （WorkerColumn.onDragAdd / PoolDrawer.onDragAdd），内部仍是 mutateAsync +
  *  try/catch 包一层。 */
 export interface UseWorkerQueueReturn {
-  /** 保留导出但已无外部写点（后端 `/prod/workers` CRUD 未上线，前端暂无消费方）。
+  /** 保留导出但已无外部写点/消费方（本 ref 自 2026-09-30 起恒为空数组，与后端
+   *  `/prod/workers` CRUD 是否上线无关 —— CRUD 早已上线并由工人一览页消费）。
    *  本注释防止 reviewer 误删。 */
   workers: Ref<Worker[]>;
   /** 2026-09-30：最近一次写操作错误信息（view 层 el-alert 展示）。

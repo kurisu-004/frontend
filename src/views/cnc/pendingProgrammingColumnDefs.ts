@@ -23,25 +23,29 @@ import type { PendingProgrammingItemSchema } from '@/composables/queries/schemas
 /** 行类型 = 待编程列表项（prod 域 ProgrammingItem）。 */
 export type PendingProgrammingRow = PendingProgrammingItemSchema;
 
-/** 批次锚点的**改名义务**登记（2026-10-03 改写：此前登记的是「后端还没定字段名」，
- *  现已定死，登记内容随之从「等后端改名」变成「换名时同批改哪三处」）。
- *  字段名已由后端定死：`GET /api/v2/prod/programming/pending` 的
- * `ProgrammingItemOut` 于 2026-10-03 补 `batch_id` / `batch_version`（雪花 ID 走
- * JSON string；`batch_id` = 该 part 的 PROGRAMMING 活跃批次中 `id` 最大者，
- * 无则 null）。本页的下发按钮可用性、store 的 release mutation 锚点都建在这两个
- * 字段上，而后端 VO 未加 `skip_serializing_if` ⇒ 两 key 恒返。
- *  ⚠️ 若后端日后换名（如 `batch_ids` 复数 / 嵌套结构），本文件的用户可见文案
- *  （下面两个常量）会**同时失真**，而 Zod strip 模式不会报错、只会静默丢字段 ⇒
- *  症状是「按钮恒 disabled 且 tooltip 说『没有编程中的批次』」。必须同批改三处：
- *    1. 本文件的 `canReleaseRow` + 两个文案常量；
- *    2. `src/composables/queries/schemas.ts::pendingProgrammingItemSchema`
- *       的 `batch_id` / `batch_version` 声明（该侧也登记了本文件，双向登记）；
- *    3. 扫码台 PICK_UP 领取的同名锚点（`ScanPickParts` →
- *       `POST /prod/batches/{batch_id}/pick-up`，`version` 取 `batch_version`）——
- *       那条路径**不过任何 Zod schema**（裸 `api.get<PartItem[]>`），连 strip 保护
- *       都没有，后端换名时症状是扫码台弹「批次信息缺失」而非本页按钮 disabled。
- *       它的锚点注释登记在 `src/api/parts/crud.ts` 的 `PartItem.batch_id` /
- *       `batch_version` 上。 */
+// ============================================================================
+// 批次锚点的**改名义务**登记（2026-10-03 改写：此前登记的是「后端还没定字段名」，
+// 现已定死，登记内容随之从「等后端改名」变成「换名时同批改哪三处」）。
+// 字段名已由后端定死：`GET /api/v2/prod/programming/pending` 的
+// `ProgrammingItemOut` 于 2026-10-03 补 `batch_id` / `batch_version`（雪花 ID 走
+// JSON string；`batch_id` = 该 part 的 PROGRAMMING 活跃批次中 `id` 最大者，
+// 无则 null）。本页的下发按钮可用性、store 的 release mutation 锚点都建在这两个
+// 字段上，而后端 VO 未加 `skip_serializing_if` ⇒ 两 key 恒返。
+// ⚠️ 若后端日后换名（如 `batch_ids` 复数 / 嵌套结构），本文件的用户可见文案
+// （下面两个常量）会**同时失真**，而 Zod strip 模式不会报错、只会静默丢字段 ⇒
+// 症状是「按钮恒 disabled 且 tooltip 说『没有编程中的批次』」。必须同批改三处：
+//   1. 本文件的 `canReleaseRow` + 两个文案常量；
+//   2. `src/composables/queries/schemas.ts::pendingProgrammingItemSchema`
+//      的 `batch_id` / `batch_version` 声明（该侧也登记了本文件，双向登记）；
+//   3. 扫码台 PICK_UP 领取的同名锚点（`ScanPickParts` →
+//      `POST /prod/batches/{batch_id}/pick-up`，`version` 取 `batch_version`）——
+//      那条路径**不过任何 Zod schema**（裸 `api.get<PartItem[]>`），连 strip 保护
+//      都没有，后端换名时症状是扫码台弹「批次锚点缺失」而非本页按钮 disabled。
+//      它的锚点注释登记在 `src/api/parts/crud.ts` 的 `PartItem.batch_id` /
+//      `batch_version` 上。
+// （2026-10-03：用 `//` 块而非 JSDoc —— 这段登记是模块级约定，不宿主于任何单个
+//  导出物；写成 `/** */` 会在 IDE 里成为悬空的孤立注释，挂在谁身上都是假宿主。）
+// ============================================================================
 
 /** 2026-10-03：**行无批次锚点 → 「下发」按钮 disabled 时的 tooltip 文案。
  *  行缺 `batch_id` 的真实含义是「该 part 没有 `status='PROGRAMMING'` 的活跃批次」

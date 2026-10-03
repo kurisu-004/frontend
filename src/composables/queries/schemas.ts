@@ -234,6 +234,22 @@ export const partSchema = z.object({
    *  `skip_serializing_if`，键在、值为 null，不是 undefined）。保留声明只为类型与
    *  后端 VO 对齐，不承担任何扫码台职责。
    *
+   *  ⚠️ 2026-10-03 已知不对称：本 VO 同样恒返两键（`PartListItem` 的两个字段也都
+   *  没有 `skip_serializing_if`），按 `pendingProgrammingItemSchema` 的同款理由本该
+   *  也声明成必填 + 可空。**本轮未改**：实测改必填会让 16 个用例 / 5 个 spec 的
+   *  fixture 变红（schemas / usePartsListStore / useDashboardUrgentList /
+   *  useDashboardUpcomingList / UpcomingDeliveryListDrawer），且这几个 spec 的
+   *  fixture 是共享对象，改动面超出「注释订正」的合理半径。补齐留待单独一轮。
+   *
+   *  这个失守的**症状边界要说清**（别误读成「无读点」）：`batch_id` 在本 schema 上
+   *  **有**前端读点 —— `usePartDispatch.ts:353`（批量下发的 targets）与 `:421`
+   *  （单件召回）读 union-list 行的 `batch_id`。但后端刻意不填 ⇒ 读到的**恒为
+   *  null** ⇒ 这两处恒走 `PLACE_ON_SHELF_NO_BATCH_HINT` / `RECALL_NO_BATCH_HINT`
+   *  显式报错分支（2026-10-02 登记的已知缺口，见 usePartDispatch 文件头）。所以
+   *  缺键与否**不改变运行时行为**，`.optional()` 真正丢掉的是「后端删键时报错」
+   *  这一层契约守门（区别于 pendingProgrammingItemSchema：那边的读点是**按钮可用性
+   *  判据**，缺键会静默让全表下发按钮恒 disabled，是真症状）。
+   *
    *  扫码台 PICK_UP 走 `listPartsByWorkTypeAllShelves` 的**裸 `api.get<PartItem[]>`**，
    *  **不过本 schema**（该端点才填 batch_id / batch_version）。那条路径上的改名义务
    *  登记在 `src/api/parts/crud.ts` 的 `PartItem.batch_id` / `batch_version` 注释上
@@ -656,14 +672,19 @@ export const pendingProgrammingItemSchema = z.object({
    *  是 PROGRAMMING，给别的状态等于给前端一个必然 20103 的锚点。
    *  ⚠️ 改名义务：本字段与下面 batch_version 一起被
    *  `src/views/cnc/pendingProgrammingColumnDefs.ts` 双向登记（strip 模式下后端换名
-   *  只会静默丢字段、不会报错，换名时那侧的用户可见文案会同时失真）。 */
-  batch_id: z.string().nullable().optional(),
+   *  只会静默丢字段、不会报错，换名时那侧的用户可见文案会同时失真）。
+   *  ⚠️ 声明成**必填 + 可空**（不是 `.optional()`）：后端 `ProgrammingItemOut`
+   *  的两字段都无 `skip_serializing_if`（`batch_id` 走 `serialize_i64_opt`、
+   *  `batch_version` 只有 `#[serde(default)]`，后者只影响反序列化）⇒ 两 key 恒返。
+   *  写成 `.optional()` 会让「后端哪天删掉这两个键」**静默通过**（Zod 不报错）⇒
+   *  全表按钮恒 disabled，正是本字段要守门的症状。 */
+  batch_id: z.string().nullable(),
   /** 批次乐观锁版本号（`t_part_batch.version`，nullable）。2026-10-03 与 batch_id
    *  同批下发、**同生共死**（batch_id 为 null 时后端也必为 null），作
    *  release-from-programming 的 OCC 版本回传 —— 后端 `PlaceOnShelfRequest.version`
    *  是**必填** i32（无 `#[serde(default)]`，缺字段 422），拿 part 级 version 顶替
-   *  会打成版本冲突。同 batch_id：改名义务同批。 */
-  batch_version: z.number().nullable().optional(),
+   *  会打成版本冲突。同 batch_id：必填理由与改名义务同批。 */
+  batch_version: z.number().nullable(),
 });
 
 export type PendingProgrammingItemSchema = z.infer<typeof pendingProgrammingItemSchema>;
