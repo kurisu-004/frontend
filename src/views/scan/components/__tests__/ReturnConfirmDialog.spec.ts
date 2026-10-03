@@ -10,8 +10,9 @@
 //   2. 三个 footer 按钮对应三条**不同**的流程出口：确认放回（提交）/ 手动选择工序
 //      （回落手选）/ 取消（整次作废）。把「手动选择工序」误接成 cancel 的后果是
 //      工人想改判却把整次选择清空，只能重新扫工牌 + 重新选件。
-//   3. 两个结构性决策：右上角 × 禁用（:show-close="false"）、确认按钮的重复提交闩锁。
-//      两者都是「删掉也不会让任何用例变红」的那类改动，本文件把它们钉住。
+//   3. 两个结构性决策：右上角 × 禁用（:show-close="false"）、确认按钮的重复提交闩锁
+//      （闩锁本身 + 关窗复位）。两者都是「删掉也不会让任何用例变红」的那类改动，
+//      本文件把它们钉住。
 //   4. 组件零 api/store 依赖，props 进、events 出，全渲染即可覆盖。
 
 import { describe, expect, it } from 'vitest';
@@ -117,5 +118,20 @@ describe('ReturnConfirmDialog / 文案与三出口', () => {
     expect(w.emitted('confirm')).toBeUndefined();
     expect(w.emitted('manual')).toBeUndefined();
     expect(w.emitted('update:modelValue')).toEqual([[false]]);
+  });
+
+  // 闩锁的复位条件：modelValue 转 false。当前唯一调用方用 v-if 挂载本组件，关闭即卸载，
+  // 这条复位在它那条路径上不会触发（见 ReturnConfirmDialog.vue 的注释）。本条按「常驻
+  // 挂载」的前提钉住它：漏掉复位 ⇒ 闩锁跨次打开粘住 true，确认按钮一直转 loading。
+  it('modelValue 转 false 后闩锁复位（常驻挂载下也不会卡在 loading）', async () => {
+    const w = render();
+    await buttonByText(w, '确认放回').trigger('click');
+    expect(buttonByText(w, '确认放回').attributes('data-loading')).toBe('true');
+
+    await w.setProps({ modelValue: false });
+
+    expect(buttonByText(w, '确认放回').attributes('data-loading')).toBe('false');
+    await buttonByText(w, '确认放回').trigger('click');
+    expect(w.emitted('confirm')).toHaveLength(2);
   });
 });

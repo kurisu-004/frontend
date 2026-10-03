@@ -192,6 +192,17 @@ function deferShelves(): (v: { items: (typeof RECOMMENDED)[] }) => void {
   return settle;
 }
 
+/** 同上，挂在 workerScan（提交）上：产出 `submitting === true` 那个窗口。 */
+function deferScan(): () => void {
+  let settle: () => void = () => {};
+  h.workerScan.mockReturnValue(
+    new Promise<void>((res) => {
+      settle = () => res(undefined);
+    }),
+  );
+  return settle;
+}
+
 const stubs = {
   // 三个弹窗的壳：el-dialog 渲染 default + footer 两个 slot，el-button 的原生 click
   // 由 attrs 透传到 <button>（本页的按钮点击断言就靠它）。
@@ -200,7 +211,14 @@ const stubs = {
     props: ['modelValue', 'title', 'width'],
     template: '<div class="mock-dialog" :data-title="title"><slot /><slot name="footer" /></div>',
   },
-  'el-button': { name: 'ElButtonStub', template: '<button><slot /></button>' },
+  'el-button': {
+    name: 'ElButtonStub',
+    // disabled 显式声明成 prop 并透出成 data-*：留在 attrs 里时 Vue 会把它当 DOM prop
+    // 落到根 <button>（el.disabled = x），attributes('disabled') 拿到的是 null，断言不到
+    // 状态。data-* 透出是本目录 stub 的统一口径（同 ProcessPickerDialog.spec 的 el-alert）。
+    props: { disabled: Boolean },
+    template: '<button :data-disabled="String(disabled)"><slot /></button>',
+  },
   'el-card': { name: 'ElCardStub', template: '<div class="mock-card"><slot /></div>' },
   'el-tag': { name: 'ElTagStub', template: '<span class="mock-tag"><slot /></span>' },
   'el-icon': { name: 'ElIconStub', template: '<i class="mock-icon"><slot /></i>' },
@@ -236,6 +254,21 @@ async function mountPage(items: ScanPartRowSchema[]) {
 /** 点第一张零件卡（列表行单位是批次，`.part-row` 是 el-card 落下来的 class）。 */
 async function clickFirstPart(w: Awaited<ReturnType<typeof mountPage>>): Promise<void> {
   await w.findAll('.part-row')[0]!.trigger('click');
+  await flushPromises();
+}
+
+/** 按序列号点零件卡。列表渲染顺序走的是客户端排序（id 降序，见 useScanPartsSort），
+ *  不等于 mock 返回的行序，所以按序号取卡而不是按下标。 */
+async function clickPartBySerial(
+  w: Awaited<ReturnType<typeof mountPage>>,
+  serial: string,
+): Promise<void> {
+  const card = w.findAll('.part-row').find((c) => c.text().includes(serial));
+  if (!card) {
+    const seen = w.findAll('.part-row').map((c) => c.find('.serial-no').text());
+    throw new Error(`列表里没有序列号 ${serial} 的行，实际：${seen.join(' / ')}`);
+  }
+  await card.trigger('click');
   await flushPromises();
 }
 
@@ -500,6 +533,40 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(h.workerScan).not.toHaveBeenCalled();
   });
 
+  // 提交在途时确认栏的「取消选择」置灰：放回请求已发出，此时清选中态会让工人看到
+  // 「我明明取消了，怎么还放回去了」。onCancelSelect 的守卫照旧拦着（真 el-button 上
+  // disabled 根本不派发 click，stub 上会派发并被守卫挡下 —— 两条路径都不清）。
+  it('提交在途：确认栏「取消选择」置灰且点了不生效，提交成功后照常清空', async () => {
+    const settleScan = deferScan();
+    h.listShelvesForReturn.mockResolvedValue({ items: [RECOMMENDED] });
+    const w = await mountPage([
+      row({
+        chain_state: 'NEXT',
+        chain_next_process_id: '190000000000131',
+        chain_next_process_name: 'CUT-01 下料',
+      }),
+    ]);
+    await clickFirstPart(w);
+
+    await clickConfirmBar(w, '确认放回');
+
+    const cancelBtn = w
+      .find('.confirm-bar')
+      .findAll('button')
+      .find((b) => b.text() === '取消选择');
+    expect(cancelBtn, '确认栏里没有「取消选择」按钮').toBeDefined();
+    expect(cancelBtn!.attributes('data-disabled')).toBe('true');
+    // stub 上 disabled 仍会派发 click：守卫必须把这次取消吃掉
+    await cancelBtn!.trigger('click');
+    await flushPromises();
+    expect(w.find('.confirm-bar').exists()).toBe(true);
+    expect(h.workerScan).toHaveBeenCalledTimes(1);
+
+    settleScan();
+    await flushPromises();
+    expect(w.find('.confirm-bar').exists()).toBe(false);
+  });
+
   // 竞态守卫（反选）：`openChainConfirm` 里有一次货架请求往返，这期间工人可以点同一张
   // 卡反选。不丢弃在途响应的话，它回来会为「已经被取消的件」弹出一个确认框 —— 点确认后
   // submitReturn 因 selectedPart 为空 bail，工人看到的是一个点不动的死框。
@@ -626,35 +693,77 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
   // scanPartRowSchema.chain_state 的注释）：后端漏发这四个键时**页面必须仍可用** ——
   // 走 NONE 旧路径（弹工序选择），而不是在 API 边界抛 ZodError 让报工台三页全空。
   // 可诊断性由一次性 console.warn 补回（人话给工人、细节给 console）。
-  it('后端漏发链四件套：页面仍可用（走 NONE 旧路径），且 console.warn 报过一次', async () => {
+  //
+  // 「只报一次」这条必须给**两行坏数据、依次选两次**才有牙：单行单次时 narrowChainState
+  // 恰好被调 1 次，去重标志在不在结果都一样。列表一次最多 200 行、逐行 warn 会把真正的
+  // 报错埋掉 ⇒ 「整个页面实例只报一次」是需求，两次窄化只报一次才是它的守卫。
+  it('后端漏发链四件套：页面仍可用（走 NONE 旧路径），且整个页面实例只 console.warn 一次', async () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const w = await mountPage([rowWithoutChainFields()]);
+    try {
+      // id / batch_id 两行都不同：同 batch 会被 onSelect 当成「反选同一件」而根本不再
+      // 走 enterReturnFlow，第二行就白给了。
+      const w = await mountPage([
+        rowWithoutChainFields({
+          serial_no: 'F-101',
+          id: '190000000000201',
+          batch_id: '190000000000201',
+        }),
+        rowWithoutChainFields({
+          serial_no: 'F-202',
+          id: '190000000000101',
+          batch_id: '190000000000101',
+        }),
+      ]);
 
-    await clickFirstPart(w);
+      // 依次选中两件坏数据行 ⇒ narrowChainState 被调两次
+      await clickPartBySerial(w, 'F-101');
+      await clickPartBySerial(w, 'F-202');
 
-    expect(w.find('.stub-process-picker').exists()).toBe(true);
-    expect(processHint(w)).toBe('');
-    expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
-    // 只 warn 一次：列表一次最多 200 行，逐行 warn 会把真正的报错埋掉
-    expect(consoleWarn).toHaveBeenCalledTimes(1);
-    expect(consoleWarn.mock.calls[0]!.join(' ')).toContain('chain_state');
-    consoleWarn.mockRestore();
+      expect(w.find('.stub-process-picker').exists()).toBe(true);
+      expect(processHint(w)).toBe('');
+      expect(w.findComponent(ReturnConfirmDialog).exists()).toBe(false);
+      // 列表一次最多 200 行，逐行 warn 会把真正的报错埋掉 ⇒ 两次窄化只报一次
+      expect(consoleWarn).toHaveBeenCalledTimes(1);
+      expect(consoleWarn.mock.calls[0]!.join(' ')).toContain('chain_state');
+    } finally {
+      consoleWarn.mockRestore();
+    }
     expect(h.workerScan).not.toHaveBeenCalled();
   });
 
   // 后端新增第四个 chain_state 取值（纯后端单方面改动）也只能降级、不能停工：
-  // 未知字面量按 NONE 处理并 warn 一次。守卫这条的是「不锁 z.enum」这个决定。
-  it('chain_state 是未知取值：按 NONE 降级 + warn 一次，不崩页', async () => {
+  // 未知字面量按 NONE 处理并整页只 warn 一次。守卫这条的是「不锁 z.enum」这个决定，
+  // 两件坏行、选两次 —— 同上，单次窄化验证不了「一次」。
+  it('chain_state 是未知取值：按 NONE 降级 + 两件只 warn 一次，不崩页', async () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const w = await mountPage([
-      row({ chain_state: 'SKIP' as unknown as string, chain_next_process_id: '190000000000131' }),
-    ]);
+    try {
+      const w = await mountPage([
+        row({
+          serial_no: 'F-301',
+          id: '190000000000301',
+          batch_id: '190000000000301',
+          chain_state: 'SKIP' as unknown as string,
+          chain_next_process_id: '190000000000131',
+        }),
+        row({
+          serial_no: 'F-302',
+          id: '190000000000302',
+          batch_id: '190000000000302',
+          chain_state: 'SKIP' as unknown as string,
+          chain_next_process_id: '190000000000131',
+        }),
+      ]);
 
-    await clickFirstPart(w);
+      await clickPartBySerial(w, 'F-301');
+      await clickPartBySerial(w, 'F-302');
 
-    expect(w.find('.stub-process-picker').exists()).toBe(true);
-    expect(consoleWarn).toHaveBeenCalledTimes(1);
-    consoleWarn.mockRestore();
-    expect(h.listShelvesForReturn).not.toHaveBeenCalled();
+      expect(w.find('.stub-process-picker').exists()).toBe(true);
+      expect(h.workerScan).not.toHaveBeenCalled();
+      expect(h.listShelvesForReturn).not.toHaveBeenCalled();
+      // 未知取值不做 NEXT 处理 ⇒ 一次货架请求都不发（连降级路径的派生答案都拿不到）
+      expect(consoleWarn).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleWarn.mockRestore();
+    }
   });
 });

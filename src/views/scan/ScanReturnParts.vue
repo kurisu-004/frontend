@@ -99,7 +99,11 @@
             }}
             · {{ confirmShelfText }}
           </span>
-          <el-button size="small" @click="onCancelSelect">取消选择</el-button>
+          <!-- 2026-10-04：提交在途时置灰，不是不置灰也点不动（onCancelSelect 的守卫照旧
+               拦着，只是把「按了没反应」变成「按不了」，HMI 上工人不会以为按钮坏了）。 -->
+          <el-button size="small" :disabled="submitting" @click="onCancelSelect"
+            >取消选择</el-button
+          >
         </div>
 
         <div class="parts-list">

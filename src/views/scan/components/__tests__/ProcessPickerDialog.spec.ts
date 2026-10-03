@@ -91,4 +91,18 @@ describe('ProcessPickerDialog / hint 常驻横幅', () => {
     expect(w.find('.mock-alert').exists()).toBe(true);
     expect(w.find('.error-state').exists()).toBe(true);
   });
+
+  // 三态里的 loading 一态：listProcesses 挂着不返回的那段时间，弹窗里只有 loading 文案，
+  // 横幅照样在（提醒属于弹窗，不属于列表）。少了这条，横幅被挪进 tabs / loading 分支时
+  // 只有「加载失败」那一条会红。
+  it('工序列表加载中横幅仍在（提醒不依赖列表加载完成）', async () => {
+    h.listProcesses.mockReturnValue(new Promise(() => {}));
+    const w = render({ hint: '「CUT-01 下料」为最后一道工序，加工完成后请送检。' });
+    await flushPromises();
+
+    expect(w.find('.loading-state').exists()).toBe(true);
+    expect(w.find('.mock-alert').attributes('data-title')).toBe(
+      '「CUT-01 下料」为最后一道工序，加工完成后请送检。',
+    );
+  });
 });

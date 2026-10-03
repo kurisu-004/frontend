@@ -90,6 +90,10 @@ const emit = defineEmits<{
  *  写操作」的大按钮，重复提交会让同一件放回两次（后端第二次必得 20507）。 */
 const busy = ref(false);
 
+/** 关窗时复位闩锁。当前唯一调用方用 v-if 挂载本组件（见 ScanReturnParts.vue），
+ *  modelValue 转 false 时组件已经卸载、busy 随实例一起销毁 ⇒ 这条复位在当前路径上
+ *  不会触发。保留它是为了让本组件在 v-show / 常驻挂载下同样成立：没有它，闩锁会跨次
+ *  打开粘住 true，下次打开时确认按钮一直转 loading、点了没反应。 */
 watch(
   () => props.modelValue,
   (v) => {
