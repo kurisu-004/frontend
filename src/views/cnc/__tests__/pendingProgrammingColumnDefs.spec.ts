@@ -36,6 +36,10 @@ function makeRow(over: Partial<PendingProgrammingRow> = {}): PendingProgrammingR
     customer_name: '客户A-子',
     parent_customer_name: '客户A',
     has_cnc_program: false,
+    // 2026-10-03 m1：批次锚点在 schema 里是「必填 + 可空」，手工构造行必须显式给值。
+    // 默认 null = 后端「无 PROGRAMMING 批次」的诚实形态（A1 断的就是这个形态）。
+    batch_id: null,
+    batch_version: null,
     ...over,
   };
 }
@@ -77,6 +81,18 @@ describe('pendingProgrammingColumnDefs 操作列「下发」按钮', () => {
     const button = childAt(span, 0);
     expect(button.type).toBe(ElButton);
     expect(button.props?.disabled).toBe(true);
+  });
+
+  // 2026-10-03 m4：A1 上面那条 `toBe(RELEASE_NO_BATCH_HINT)` 是**自反断言**（常量对
+  // 常量）—— 改错文案它照样绿，而 2026-10-03 的 V3 恰好改了这句文案。故补一条断
+  // **字面量**的用例把文案钉死：tooltip 面向用户，它一旦又开始归因「接口未返回
+  // 批次」就与后端现状（`ProgrammingItemOut` 恒返 batch_id / batch_version）矛盾。
+  it('A1b：tooltip 文案说「没有编程中的批次」而非归因接口（防 V3 文案回退）', () => {
+    expect(RELEASE_NO_BATCH_HINT).toBe('该行没有处于「编程中」的批次，无法下发');
+    const node = renderActions(makeRow());
+    const content = childAt(node, 1).props?.content as string;
+    expect(content).not.toContain('接口未返回');
+    expect(content).not.toContain('未返回批次');
   });
 
   it('A2：行带 batch_id → 按钮可用，不套 tooltip', () => {

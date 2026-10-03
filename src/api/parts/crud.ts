@@ -71,20 +71,35 @@ export interface PartItem {
    * 其它端点为 null。
    */
   last_inspection_fail_note?: string | null;
-  /** 2026-07-29 批次化：批次级列表（扫码台/品检待办）填充；quantity 为批次量 */
+  /** 2026-07-29 批次化；2026-10-03 订正填充口径：**全仓仅
+   *  `GET /api/v2/parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）
+   *  填**，其余复用本 VO 的端点恒 null（后端刻意不填，理由见下面 `batch_version`
+   *  的注释）。「品检待办」不走本 VO（它有自己的出参），故不再算作填充方。 */
   batch_id?: string | null;
   batch_no?: number | null;
   batch_label?: string | null;
   /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与 batch_id 同源。
-   *  填充口径：backend `feat/batch-id-vo`（commit `87e033b`）上**仅**
-   *  `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）填，
-   *  其它端点恒 undefined（该分支刻意不填：一个 part 的活跃批次可能不止一个）。
-   *  ⚠️ **该分支尚未合入 backend `master`**（核查时 master HEAD `5c24b9a`：master 的
-   *  `PartListItem` 无 `batch_version`，且本端点背后的 service
-   *  `list_pickable_by_work_type` 压根不 select `b.id` —— 行元组里没有批次 id、
-   *  `PartListItem::from(TPart{ … })` 也不含 batch 字段）
-   *  ⇒ 对当前 master，本字段与上面的 `batch_id` **恒为 undefined**。
-   *  部署顺序依赖与错序后果见本文件 `pickUpPart` 的「跨仓部署顺序依赖」段。
+   *  **填充口径：全仓仅 `GET /api/v2/parts/pickable-by-work-type/{work_type_id}`
+   *  （扫码台 PICK_UP 列表）填**，该端点的行本来就是批次行 —— 后端取行 SQL 投影
+   *  `b.id` / `b.version` 并显式覆写 `PartListItem.batch_id` / `batch_version`
+   *  （`modules/part/service/phase1/work_type.rs::list_pickable_by_work_type`），
+   *  候选口径 = `b.status='IN_PROCESS' AND b.location='PRODUCTION_SHELF' AND
+   *  货架 active 且 zone='PRODUCTION'` 且落在该工种↔工序映射上。
+   *  ⚠️ **本 VO 的 `version` 字段不是批次版本**：它是 part 级 `t_part.version`，
+   *  而 pickable 端点的取行 SQL 压根不投影 `p.version` ⇒ 该端点上**恒为 0**（后端
+   *  有意占位）。批次 OCC 只认本字段，**不要拿 `version` 当批次版本用**。
+   *
+   *  其余复用 `PartListItem` 的端点**恒为 null**（后端刻意不填：part 级行的单位是
+   *  part，一个 part 的活跃批次可能不止一个，填任意一个都是**错锚点**）。已核
+   *  backend master `3609a85`，全仓 7 处复用该 VO = 1 处填（上面的 pickable）
+   *  + 6 处恒 null，后者逐个是：`GET /parts` / `GET /com/union-list` /
+   *  `GET /parts/pending-programming` / `GET /parts/by-work-type/{id}` /
+   *  `GET /parts/by-worker/{id}` / `POST /assemblies/{id}/children`（唯一一处单条
+   *  返回本 VO 的端点）。⚠️ **别把 outsource-* 算进来**：它们是自有 repo 的自有
+   *  SQL（`OutsourceRepoTrait::quotable_list` / `sendable_list`，入参形态也不同——
+   *  keyword_pat / customer_id / limit / offset），出参也是自有 VO
+   *  （`QuotablePartListOut` / `OutsourceSendableListOut` / …），既不复用
+   *  `PartListFilters` 也不经过本 VO。
    *  `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参即取自本字段，缺失时
    *  扫码台走显式报错（不静默用 part_id 顶替）。
    *
@@ -435,32 +450,38 @@ export async function forceCompletePart(
  *  PROGRAMMING 状态自 2026-09-29 起被标记为废弃（无新进入路径），但本端点保留
  *  供历史 PROGRAMMING 数据消化。
  *  调用方：
- *    1. PendingProgrammingList.vue「下发」按钮（仅历史 PROGRAMMING 数据可见）；
- *  2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
+ *    1. usePendingProgrammingStore 的 release mutation（「待编程一览」页操作列
+ *       「下发」按钮，仅历史 PROGRAMMING 数据可见）；
+ *    2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
  *
  *  2026-10-02 迁 prod 域：PROGRAMMING 是批次状态，锚点改 `{batch_id}`。
  *  2026-10-03：后端该端点复用 `PlaceOnShelfRequest`，其 `version` 同样必填（无
- *  `#[serde(default)]`，缺字段 422）⇒ 本函数补第 4 形参 `version` 并透传，
- *  这是「待编程下发不再恒 422」的必要一步。
+ *  `#[serde(default)]`，缺字段 422）⇒ 本函数补第 4 形参 `version` 并透传。
+ *  后端同日给 `ProgrammingItemOut` 补上 `batch_id` / `batch_version`（取该 part 的
+ *  PROGRAMMING 活跃批次，无则 null），调用方 1 据此完成接线。
  *
- *  已知缺口（2026-10-03 登记，未修）：**上面两个调用方都还没接线 `version`**，
- *  形参声明为可选，不传时请求仍 422：
- *    1. `usePartCncGroups.onReleaseToShelf`（零件详情页 CNC 卡片）—— 属本轮范围外的
- *       `views/parts/detail/**`；其数据源是零件详情，拿不到批次 version。
- *    2. `usePendingProgrammingStore` 的 release mutation（`PendingProgrammingList.vue`
- *       「下发」按钮背后）—— 当前 `mutationFn` 是恒 `throw` 的占位，等批次锚点。
- *       ⚠️ 这条的**后端前提尚未合入**：后端给 `ProgrammingItemOut` 补 `batch_id` /
- *       `batch_version` 的改动在分支 `feat/batch-id-vo`（commit `87e033b`）上，
- *       **backend `master` 的 `ProgrammingItemOut` 仍无 `batch_id` 字段**
- *       （已核：master `src/modules/prod/programming/vo.rs` 零命中，master HEAD
- *       `5c24b9a`）。⇒ 这**不是纯前端任务**，接线前必须先确认后端已合入，否则
- *       `batch_id` 仍 `undefined`、按钮点了必然失败。schema 侧
- *       `pendingProgrammingItemSchema.batch_id` 已在位（后端合入后即可用），接线时
- *       把 store 的 `mutationFn` 从 `throw` 换成真实调用并传 `batch_version` 即可。
- *       接线那一轮还须同步改 `pendingProgrammingColumnDefs.ts` 的用户可见文案
- *       （`RELEASE_NO_BATCH_HINT` 与其上方注释）—— 它们现在写的「列表不携带
- *       batch_id」对当前 master 是**真话**，后端合入后才变成假话。
- *  两条都接线后，本形参**必须**改成必填。 */
+ *  已知缺口（2026-10-03 更新，**只剩调用方 2**：调用方 2 仍未传 `version`，
+ *  该路径上的请求仍 422。`version` 声明为可选正是为它留位，调用方 2 接上后
+ *  本形参**必须**改成必填）：
+ *    - `usePartCncGroups.onReleaseToShelf`（零件详情页 CNC 卡片，
+ *      `views/parts/detail/**`，2026-10-03 未动）。它**不是**被后端锚点卡住：
+ *      - `GET /api/v2/parts/{id}`（`PartDetailOut`）确实**不**含 batch_id /
+ *        batch_version，它唯一的批次字段 `current_batch_id` 语义是「当前
+ *        **INSPECTION** 批次 id」（service `find_current_inspection_batch_id`，
+ *        非品检态恒 null），对 PROGRAMMING 批次无效；
+ *      - 但 `GET /api/v2/parts/{id}/batches`（`PartBatchListItemOut`）的**每个
+ *        批次项都带 `version`**（t_part_batch.version），而该流程本来就是让用户在
+ *        批次卡里**手选**批次再下发（`onReleaseToShelf` 的 batchId 形参由
+ *        PartDetail.vue 传入），`usePartDetail` 已持有 batches 列表。两处同款先例
+ *        都在同一个文件里：`onReceiveFromOutsourceFn`（按调用方给的 batchId 去
+ *        batches 里取 version，形态与本处最贴近）、`onPassInspection`（按批次状态在
+ *        batches 里找目标再取其 id + version，并有 40901 code 分流 → warning + 重取
+ *        batches）。
+ *      ⇒ 剩下的是**纯前端改动**（`onReleaseToShelf` 形参加 version + PartDetail 调用点
+ *        从 batches 里按 selectedBatchId 取 version），落在 `views/parts/detail/**`，
+ *        不在本轮范围。接线时顺带按上述先例处理批次被并发改动的情形（40901 提示刷新
+ *        + 重取 batches）。 */
+
 export async function releaseFromProgramming(
   batchId: string,
   shelfId: string,
@@ -490,38 +511,8 @@ export async function releaseFromProgramming(
  *    extractor 拒成 422）；缺省 / null = 整批，小于总量时后端自动拆批。
  *  响应仍是 part 级 `R<PartOut>`，调用方按整批刷新列表即可。
  *
- *  ⚠️ **跨仓部署顺序依赖（2026-10-03 登记）：本函数依赖两个尚未合入 backend `master`
- *  的后端分支，部署必须按「先后端、后本前端」的顺序，否则会出现静默数据损坏。**
- *  （核查时 backend master HEAD = `5c24b9a`；下面两条都实测过。）
- *
- *  1. **部分领取依赖 `feat/pickup-partial-split`**（部分领取 + 自动拆批）。
- *     master 的 `PickUpRequest` **没有 `quantity` 字段**，且 `prod/batch/dto.rs` 里
- *     真实 `#[serde(deny_unknown_fields)]` 属性数为 **0**（后端在同文件 doc 里写明
- *     这是**刻意**的：「那会让任何多余字段直接 422，迁移面远大于收益」）⇒ serde
- *     **静默丢弃**未知字段。同时 master 的 `pick_up` service 硬编码
- *     `quantity: Some(batch.quantity)`，即**恒整批**。
- *     ⇒ **错序部署的后果**：调用方无条件发 `quantity`（见 `ScanPickParts.vue`），
- *     工人选 4 / 共 10 时后端静默丢弃、领走全部 10，而 UI 仍弹「已领取 × 4」。
- *     **没有 422、没有报错、没有测试能发现** —— 比 404 更难定位（本仓已被「点按钮
- *     才发现 404」咬过一次，见 `__tests__/routes.spec.ts` 的建档理由）。
- *  2. **批次锚点依赖 `feat/batch-id-vo`**（两个只读列表端点补 batch_id /
- *     batch_version）。master 上本端点路由
- *     `GET /parts/pickable-by-work-type/{work_type_id}` 背后的 service
- *     `list_pickable_by_work_type`（`modules/part/service/phase1/work_type.rs`）
- *     **压根不投影 `b.id`** —— 取行 SQL 只 select `b.quantity` /
- *     `b.current_process_id`，行元组是 `Vec<(i64, String, String, i32, Option<i64>)>`
- *     （无批次 id），映射走 `PartListItem::from(TPart{ … })` 手写字面量，而该 `From`
- *     实现不含任何 batch 字段（master 的 `PartListItem` 也没有 `batch_version`）
- *     ⇒ `batch_id` / `batch_version` 恒为 `None`。
- *     ⚠️ 勿与**兄弟端点**混淆：同文件 `list_by_work_type`（路由
- *     `GET /parts/by-work-type/{work_type_id}`）里确实有 `b.id AS bid` + `let _ = bid;`
- *     —— 那是**另一个函数**的代码，与本端点无关。
- *     ⇒ **错序部署的后果**：扫码台领料 100% 走不通，每笔都撞
- *     `PICK_UP_NO_BATCH_HINT`（「批次信息缺失」）。这一条是**响亮失败**、守卫在正确
- *     工作（`ScanPickParts` 不静默用 part_id 顶替），属可接受的降级；与上一条的
- *     静默损坏相比风险低一个量级，但同样必须先合后端。
- *
- *  两条后端分支都合入 master 后，本段可整段删除。 */
+ *  当前**无跨仓部署顺序依赖**（2026-10-03 核）：调用方可以无条件发 `quantity`、
+ *  也可以直接读列表项的 `batch_id` / `batch_version` —— 后端这两处能力均已具备。 */
 export async function pickUpPart(batchId: string, payload: PartPickUpPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/pick-up`,

@@ -128,7 +128,8 @@ export const qk = {
   //     （GET /api/v2/prod/programming/pending，数据源 2026-10-01 由 part 域
   //     /parts/pending-programming 迁到 prod 域）；
   //   - programmingPrefix：**唯一写操作** release-from-programming
-  //     （POST /parts/{id}/release-from-programming，仍在 part 域，见
+  //     （2026-10-02 迁 prod 域、批次锚定：
+  //     POST /api/v2/prod/batches/{batch_id}/release-from-programming，见
   //     usePendingProgrammingStore::releaseMutation）成功后走前缀失效，同时失效
   //     qk.partsPrefix（下发把 part 迁到 IN_PROCESS + 生产货架，零件一览 / 生产队列
   //     列表都要跟着变）。失效属「写完立即看到自己那笔」的优化，非一致性保证

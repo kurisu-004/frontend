@@ -14,9 +14,11 @@
   - 三个动作：
     * 「详情」 → 跳 /parts/{id}（PartDetail 页内有图纸下载 / G 代码上传 / 设定单上传）
     * 「下发到生产」 → 弹 el-dialog 同时选下一道工序 + 目标 PRODUCTION 货架，
-      调 POST /parts/{id}/release-from-programming（PROGRAMMING → IN_PROCESS）。
-      仅历史 PROGRAMMING 状态零件可见下发按钮；新流程下 chain 有 CNC 但
-      part.status ≠ PROGRAMMING 的零件不展示下发按钮（无 API 可调）。
+      调 POST /api/v2/prod/batches/{batch_id}/release-from-programming
+      （PROGRAMMING → IN_PROCESS；2026-10-02 由 part 域迁 prod 域并改为批次锚定，
+      批次 id + OCC 版本取列表项的 batch_id / batch_version）。
+      仅历史 PROGRAMMING 状态、且有 PROGRAMMING 活跃批次的行可见下发按钮；新流程下
+      chain 有 CNC 但 part.status ≠ PROGRAMMING 的零件不展示下发按钮（无 API 可调）。
   - 加急行整行红底 #fde2e2（与 PartsList / InspectionPending 同款）。
   - 自动刷新（5min）按需勾选。
 

@@ -41,6 +41,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import type { QueryClient } from '@tanstack/vue-query';
 
 import { fetchPendingProgramming, type ListPendingProgrammingParams } from '@/api/programming';
+import { releaseFromProgramming } from '@/api/parts';
 import { qk } from '@/composables/queries/keys';
 import type {
   PendingProgrammingItemSchema,
@@ -55,7 +56,7 @@ import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
 import {
   buildPendingProgrammingColumnDefs,
-  RELEASE_NO_BATCH_HINT,
+  RELEASE_MISSING_BATCH_ANCHOR_HINT,
   type PendingProgrammingRow,
 } from '../pendingProgrammingColumnDefs';
 import type { Process } from '@/types/process';
@@ -230,19 +231,18 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   //
   // 本页**不持久化分页 / 每页条数**（沿 ListShell.vue 记录的 2026-08-31 决策：放弃
   // pageSize 跨会话恢复，进入页面一律默认 20），但**要**持久化 autoRefresh 与 activeTab。
-  const { restore: restorePersisted } = useListStatePersist(
-    'pending_programming_filter',
-    { search, autoRefresh, activeTab },
-  );
+  const { restore: restorePersisted } = useListStatePersist('pending_programming_filter', {
+    search,
+    autoRefresh,
+    activeTab,
+  });
 
   function restoreState(): void {
-    const s = restorePersisted() as
-      | {
-          search?: Partial<{ keyword: string; serialNo: string }>;
-          autoRefresh?: boolean;
-          activeTab?: PendingProgrammingTab;
-        }
-      | null;
+    const s = restorePersisted() as {
+      search?: Partial<{ keyword: string; serialNo: string }>;
+      autoRefresh?: boolean;
+      activeTab?: PendingProgrammingTab;
+    } | null;
     if (s) {
       if (s.search) Object.assign(search, s.search);
       if (typeof s.autoRefresh === 'boolean') autoRefresh.value = s.autoRefresh;
@@ -307,9 +307,7 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   // 后端 ShelfOut 在同 PR 也已删该字段，是另一次独立决策），仍 10 字段对齐。
   const productionShelves = computed<Shelf[]>(() => shelvesQuery.data.value?.items ?? []);
   // 2026-07-17：CNC 下发只允许 INHOUSE 工序（外协工序走 send_to_outsource）
-  const inhouseProcesses = computed(() =>
-    processes.value.filter((p) => p.category === 'INHOUSE'),
-  );
+  const inhouseProcesses = computed(() => processes.value.filter((p) => p.category === 'INHOUSE'));
   // 两个下拉的**首屏在途态**。数据源是共享 query（setup 期就发，不等弹窗打开），
   // 弹窗可能空开，而空态文案「当前工序未映射到任何生产货架，请先在「货架管理 →
   // 工序映射」配置」是**主动误导**的（用户会去改映射，其实只是数据还没到）。
@@ -342,12 +340,7 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   const {
     filteredShelves: filteredProductionShelves,
     filteredProcesses: filteredInhouseProcesses,
-  } = useShelfProcessFilter(
-    productionShelves,
-    inhouseProcesses,
-    releaseShelfId,
-    releaseProcessId,
-  );
+  } = useShelfProcessFilter(productionShelves, inhouseProcesses, releaseShelfId, releaseProcessId);
 
   // 旧视图在 openReleaseDialog 的 try/catch 里弹「加载失败：xxx」；数据源迁到
   // useQuery 后错误不再抛到对话框打开逻辑，改由 watch 桥接（沿 CLAUDE.md
@@ -374,25 +367,42 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   }
 
   // ============ 下发 mutation（PROGRAMMING → IN_PROCESS）============
+  // 2026-10-03 接上真实端点：批次 id 走 URL path、OCC 版本走 body（后端
+  // `PlaceOnShelfRequest.version` 是**必填** i32，无 `#[serde(default)]`，缺则 422），
+  // 两个值都取自 releaseTarget 行上的 `batch_id` / `batch_version`
+  // （后端 `ProgrammingItemOut` 于 2026-10-03 补齐这两个字段）。
   const releaseMutation = useMutation<
     unknown,
     Error,
-    { partId: string; shelfId: string; nextProcessId: string; router: PendingProgrammingRouter }
+    {
+      partId: string;
+      batchId: string | null;
+      batchVersion: number | null;
+      shelfId: string;
+      nextProcessId: string;
+      router: PendingProgrammingRouter;
+    }
   >({
     mutationKey: ['programming', 'release-from-programming'],
-    // 已知缺口：release-from-programming 迁 prod 域并以批次为锚，而本页数据源
-    // `GET /prod/programming/pending` 的行不携带批次 id，拿不到锚点。此时直接失败
-    // 并说明原因，不用 part_id 顶替（那会打成「批次不存在」）。
-    // 缺口对用户可见：操作列「下发」按钮在行缺 batch_id 时是 disabled 的（带 tooltip
-    // 说明），走不到这一步。
-    // ⚠️ 下面的 onSuccess / releasedMessage() 目前是死代码：mutationFn 恒抛。
-    // 后端在该列表项补上 batch_id 后，把 mutationFn 换成
-    // `releaseFromProgramming(target.batch_id, …)` 即可自动复活，onSuccess 无需改动。
-    mutationFn: () => {
-      throw new Error(RELEASE_NO_BATCH_HINT);
+    // 锚点缺失时**不发请求**并报明确原因，不用 part_id 顶替（那会打成后端
+    // 「batch 不存在」，把真因盖掉）。范式沿 usePartDispatch::placeMutation 的
+    // `if (!batchId) throw new Error(*_NO_BATCH_HINT)`。
+    // 两个字段是同一层防线：batch_id 决定端点能不能寻址，batch_version 是 OCC 锚，
+    // 缺任一都会让请求必失败（后者是 422 / 版本冲突，不是可恢复的业务错误）。
+    mutationFn: ({ batchId, batchVersion, shelfId, nextProcessId }) => {
+      if (!batchId || batchVersion === null || batchVersion === undefined) {
+        throw new Error(RELEASE_MISSING_BATCH_ANCHOR_HINT);
+      }
+      return releaseFromProgramming(batchId, shelfId, nextProcessId, batchVersion);
     },
     onSuccess: async () => {
-      // 失效本域（待编程列表）+ parts 域（下发改了 part 的 status / 货架归属）
+      // 失效本域（待编程列表）+ parts 域（下发改了 part 的 status / 货架归属；
+      // union-list 与 GET /parts 复用同一根命名空间，qk.partsPrefix 一次覆盖）。
+      // ⚠️ 释放后批次落入 IN_PROCESS + PRODUCTION_SHELF，即**进入工人候选池**
+      // （后端候选池口径 status='IN_PROCESS' AND location='PRODUCTION_SHELF'），
+      // pool 域（workerPoolCounts / workerPoolByProcess）也因此变陈旧。此处**不**
+      // 补挂 pool 失效：按 CLAUDE.md「跨页面写操作不做穷举失效，30s 有限 staleTime
+      // + 显式刷新兜新鲜度」的既定策略，生产队列页本就不靠本 mutation 的失效。
       await invalidateProgrammingQuery(qc);
       await qc.invalidateQueries({ queryKey: qk.partsPrefix });
       ElMessage.success(releasedMessage());
@@ -418,7 +428,10 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   }
 
   /** 视图「确认下发」按钮：校验选择 → 跑 mutation → 成功后关对话框。
-   *  router 由视图传入（store 不 import vue-router，不变量 #4）。 */
+   *  router 由视图传入（store 不 import vue-router，不变量 #4）。
+   *  ⚠️ 批次锚点在这里（同步）从 releaseTarget 快照进 mutation 变量，而不是让
+   *  mutationFn 回头读 ref：mutateAsync 到 mutationFn 之间隔着微任务，期间的
+   *  任何对话框状态变化都会让它读到已被清空的值。 */
   async function confirmRelease(router: PendingProgrammingRouter): Promise<void> {
     const target = releaseTarget.value;
     if (!target || !releaseShelfId.value || !releaseProcessId.value) return;
@@ -426,6 +439,8 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     try {
       await releaseMutation.mutateAsync({
         partId: target.id,
+        batchId: target.batch_id ?? null,
+        batchVersion: target.batch_version ?? null,
         shelfId: releaseShelfId.value,
         nextProcessId: releaseProcessId.value,
         router,

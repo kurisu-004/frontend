@@ -26,11 +26,21 @@
 // 批量编程 action（batchDispatchAction='programming'）一并移除，批量 action 仅
 // 保留 'shelf'。CNC 编程主入口迁到「待编程一览」Tab 页。
 //
-// 2026-10-02 已知缺口（待后端补 `GET /parts` 列表项的活跃批次 id 后单独修）：
-// place-on-shelf / recall-to-pending 迁 prod 域后以**批次**为锚，而本页数据源是
-// `GET /parts` 列表项 —— 该 VO 不带活跃批次 id（`batch_id` 仅外协报价选件场景填充），
-// 页面无从构造端点锚点。此处不静默用 part_id 顶替（会打成「批次不存在」），
-// 而是直接抛错提示，让用户知道是数据缺口而不是随机失败。
+// 2026-10-02 已知缺口（**2026-10-03 订正，仍未修**）：place-on-shelf /
+// recall-to-pending 迁 prod 域后以**批次**为锚，而本页拿不到批次锚点：
+//   - 数据源：零件一览页自 2026-09-29 起读 `GET /api/v2/com/union-list`
+//     （`usePartsListQuery` 内的 `listUnionItems`，queryKey `qk.unionList`），
+//     出参复用 part 域 `PartListItem`（union-list 与 `GET /parts` 是同一个 VO）。
+//   - 后端已明确**不会**给这类 part 级行填批次 id：`PartListItem.batch_id` /
+//     `batch_version` 的填充口径是「仅 pickable-by-work-type 填，其余路径恒 null」
+//     （backend-rust `PartListItem` 字段注释）。理由是 part 级行的单位是 part，
+//     而一个 part 的活跃批次可能不止一个，填任意一个都是**错锚点** —— 拿它发写请求
+//     会在 422 / 版本冲突之外制造更难定位的错批次流转。⇒ 这是后端的**有意决策**，
+//     不是「等后端补字段」。
+//   - 因此解阻塞需要**新的后端决策**（给 part 级列表提供一个批次锚点，或让该操作走
+//     按批次寻址的路径），**不是**前端接线就能解决的。
+// 在此之前保持既有行为：不用 part_id 顶替（会打成后端「批次不存在」），直接抛
+// *_NO_BATCH_HINT 显式报错，让用户知道是数据缺口而不是随机失败。
 
 import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -123,9 +133,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   // 子类型不匹配。沿 ProcessTab.vue 同模式走 `as Process[]` 桥接，
   // 渲染层（useShelfProcessFilter 等）已有 `?? null` / `?? '#ddd'` 等 nullish 兜底同时覆盖
   // null + undefined，零行为差异。
-  const processes = computed<Process[]>(
-    () => (procQuery.data.value?.items ?? []) as Process[],
-  );
+  const processes = computed<Process[]>(() => (procQuery.data.value?.items ?? []) as Process[]);
   const processesLoading = procQuery.isFetching;
 
   /** 2026-09-26（B 任务）：拉取 shelves（模块级缓存：shelves.value.length===0 才拉）。
@@ -225,12 +233,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   const batchDispatchShelfId = ref<string | null>(null);
   const batchDispatchNextProcessId = ref<string | null>(null);
   const { filteredShelves: batchFilteredShelves, filteredProcesses: batchFilteredProcesses } =
-    useShelfProcessFilter(
-      shelves,
-      processes,
-      batchDispatchShelfId,
-      batchDispatchNextProcessId,
-    );
+    useShelfProcessFilter(shelves, processes, batchDispatchShelfId, batchDispatchNextProcessId);
 
   // 2026-09-26（B 任务）→ 2026-09-29 简化：批量下发 mutation —— 内部循环 targets 顺序 await，
   // 全部走 placeOnShelf（不再有 action 分支）。返回 { succeeded, failed } —— 失败件留
@@ -323,9 +326,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     },
   });
 
-  const batchDispatchSubmitting = computed<boolean>(
-    () => batchDispatchMutation.isPending.value,
-  );
+  const batchDispatchSubmitting = computed<boolean>(() => batchDispatchMutation.isPending.value);
 
   async function onOpenBatchDispatch(): Promise<void> {
     if (deps.selectedIds.size === 0) {
