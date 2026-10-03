@@ -1,4 +1,4 @@
-<!-- 生产队列看板（路由 /workers/queue，menuCode worker_queue）。
+<!-- 生产队列看板（路由 /production/worker-queue，menuCode worker_queue）。
      自 2026-09-30 起的结构：
        - 顶部 el-tabs（行上移，底边线视觉承接）
        - 首个固定 tab「待下发」(name = __pending__)：el-splitter 40/60 分栏
@@ -10,7 +10,7 @@
      2026-10-02 卡片统一（详见文末变更记录）：
        - 原先待下发池与工序池 / 工人列分用的两张旧卡片合并为全看板唯一的 BatchCard，
          工序池 / 工人列 / 待下发池三处共用，DTO 差异收在
-         views/workers/composables/poolItemToCard.ts 适配层；
+         views/production/composables/poolItemToCard.ts 适配层；
        - 全站拖拽统一 vue-draggable-plus（含「待下发 → 工序卡」这条下发链路，
          从原生 HTML5 DnD 改为 Sortable）；
        - 右侧工序卡与左侧批次卡同款 200×96 盒模型 + 工序色左边框 + flex 网格；
@@ -112,8 +112,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useQueryClient } from '@tanstack/vue-query';
 import { useAuthStore } from '@/stores/auth';
-import { useWorkerQueue } from '@/views/workers/composables/useWorkerQueue';
-import { usePendingDispatch } from '@/views/workers/composables/usePendingDispatch';
+import { useWorkerQueue } from '@/views/production/composables/useWorkerQueue';
+import { usePendingDispatch } from '@/views/production/composables/usePendingDispatch';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { useWorkerPoolCountsQuery } from '@/composables/queries/useWorkerPoolCountsQuery';
 import { invalidateWorkerPoolByProcessAll } from '@/composables/queries/useWorkerPoolByProcessQuery';

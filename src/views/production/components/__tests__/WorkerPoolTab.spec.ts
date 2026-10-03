@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/workers/components/__tests__/WorkerPoolTab.spec.ts
+// src/views/production/components/__tests__/WorkerPoolTab.spec.ts
 //
 // 2026-09-30 新增：WorkerPoolTab 组件 spec —— 验证 tab body 懒加载 +
 // 数据层 TanStack Query 化（自管 useWorkerPoolByProcessQuery + skeleton/empty 兜底）。

@@ -33,9 +33,9 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('delivery_notes_manage');
     expect(codes).toContain('workers_list');
     expect(codes).toContain('users_list');
-    // 2026-08-26 补回：router /workers/queue 无 allowRoles 短路，dummy 模式必须有此 code
+    // 2026-08-26 补回：router /production/worker-queue 无 allowRoles 短路，dummy 模式必须有此 code
     expect(codes).toContain('worker_queue');
-    // 2026-09-11：worker_queue 仍必须在菜单树中（router /workers/queue 无 allowRoles 短路）
+    // 2026-09-11：worker_queue 仍必须在菜单树中（router /production/worker-queue 无 allowRoles 短路）
     expect(codes).toContain('shelves_list');
     expect(codes).toContain('customers_list');
     expect(codes).toContain('applicants_list');

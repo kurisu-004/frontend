@@ -36,7 +36,7 @@
 import { computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useWorkerPoolByProcessQuery } from '@/composables/queries/useWorkerPoolByProcessQuery';
-import { poolItemToCard } from '@/views/workers/composables/poolItemToCard';
+import { poolItemToCard } from '@/views/production/composables/poolItemToCard';
 import type { Worker, ProcessPoolView } from '@/types/workerPool';
 import PoolDrawer from './PoolDrawer.vue';
 import WorkerColumn from './WorkerColumn.vue';

@@ -1,4 +1,4 @@
-// src/views/workers/composables/useWorkerQueue.ts
+// src/views/production/composables/useWorkerQueue.ts
 //
 // 生产队列「候选池 ↔ 工人」拖拽移动 + 自动分配 的写操作 composable（TanStack
 // Query 化，CLAUDE.md 2026-09-30 硬约束）。

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/workers/components/__tests__/WorkerColumn.spec.ts
+// src/views/production/components/__tests__/WorkerColumn.spec.ts
 //
 // 2026-10-03 新增：WorkerColumn.vue 的拖拽落点分发 + Sortable 接线回归 guard。
 // 本 spec 守的是用户报的那个 bug（批次移到工人手中后该工人卡片显示不正确）的整条

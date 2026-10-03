@@ -81,7 +81,7 @@ import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { Worker } from '@/types/workerPool';
 import type { BatchCardModel as Card } from '@/types/batchCard';
 import { useWorkerStateByWorkerQuery } from '@/composables/queries/useWorkerStateByWorkerQuery';
-import { heldToCard } from '@/views/workers/composables/poolItemToCard';
+import { heldToCard } from '@/views/production/composables/poolItemToCard';
 import {
   consumePoolSource,
   consumeWorkerSource,
@@ -124,7 +124,7 @@ watch(
 );
 
 /** 2026-10-02：把 useWorkerStateByWorkerQuery.held_batches 适配成 BatchCardModel[]。
- *  heldToCard 函数从 useWorkerQueue.ts 拆到 views/workers/composables/poolItemToCard.ts，
+ *  heldToCard 函数从 useWorkerQueue.ts 拆到 views/production/composables/poolItemToCard.ts，
  *  共享给 WorkerPoolTab / PoolDrawer / WorkerColumn（同 held 数据流）。 */
 const heldBatches = computed<Card[]>(() => {
   const list = stateQuery.data.value?.held_batches ?? [];

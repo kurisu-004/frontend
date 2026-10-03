@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/workers/components/__tests__/PoolDrawer.spec.ts
+// src/views/production/components/__tests__/PoolDrawer.spec.ts
 //
 // 2026-10-03 review 第 2 轮新增：PoolDrawer 的 Sortable 接线 guard。
 // 本组件此前**零测试**，而「DOM 放回必须 WorkerColumn / PoolDrawer 两处都挂」正是

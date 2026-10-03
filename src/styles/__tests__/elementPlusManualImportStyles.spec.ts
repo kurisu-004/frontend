@@ -80,7 +80,7 @@ const EXEMPT: Record<string, string[]> = {
   'views/statistics/WorkerDetailTab.vue': ['el-tag'],
   'views/statistics/WorkerStatsTab.vue': ['el-progress', 'el-tag'],
   'views/users/UserList.vue': ['el-tag', 'el-form'],
-  'views/workers/WorkerList.vue': ['el-tag', 'el-table'],
+  'views/production/WorkerList.vue': ['el-tag', 'el-table'],
 };
 
 /** 递归收集 .vue，跳过 node_modules / __tests__ / .git。 */
