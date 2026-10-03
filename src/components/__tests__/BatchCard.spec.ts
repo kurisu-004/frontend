@@ -21,7 +21,8 @@
 //   - B10：根 div 恒渲染 data-batch-id（拖放链路读 batch_id 的锚点）；
 //   - B11：is-selected 类只在 selectable 场景成立（工序池 / 工人列的卡片没有勾选语义）；
 //   - B12：batch_no 为空 → tooltip 的批次号行不渲染（顺带覆盖 tooltip 的 v-if）。
-//   - B13：accentColor 三级优先级（显式值 > 加急橙 > transparent）。
+//   - B13：accentColor 三级优先级（显式值 > 加急橙 > 中性边框色；2026-10-04 起最末一级
+//         由 transparent 改为 var(--el-border-color-lighter)，否则 4px 左边框整条不可见）。
 //   - B14：**源码契约**（读 BatchCard.vue 原文，不挂载组件）—— `.is-selected` 规则必须
 //         用 `border-color` 简写给四边统一上色，且不得出现 `border-top-color` /
 //         `border-right-color` / `border-bottom-color` 单边上色。左边框恒为 4px，只染
@@ -348,7 +349,7 @@ describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
     wrapper.unmount();
   });
 
-  it('B13：accentColor 三级优先级：显式值 > 加急橙 > 透明', () => {
+  it('B13：accentColor 三级优先级：显式值 > 加急橙 > 中性边框色', () => {
     // 显式 accentColor 压过加急回落
     const explicit = mountCard(makeBatch({ is_urgent: true }), { accentColor: '#1e4d8b' });
     expect(accentVarOf(explicit)).toBe('#1e4d8b');
@@ -359,9 +360,10 @@ describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
     expect(accentVarOf(urgent)).toBe('var(--el-color-warning)');
     urgent.unmount();
 
-    // 既不传也不加急 → 透明（只留 4px 透明占位，不与相邻卡片粘连）
+    // 既不传也不加急 → 中性边框色（2026-10-04：原本是 transparent，4px 左边框整条
+    // 不可见，非加急卡片看起来「缺了一条左边框」）
     const plain = mountCard(makeBatch({ is_urgent: false }));
-    expect(accentVarOf(plain)).toBe('transparent');
+    expect(accentVarOf(plain)).toBe('var(--el-border-color-lighter)');
     plain.unmount();
   });
 

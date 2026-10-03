@@ -154,7 +154,7 @@ const props = withDefaults(
     /** 勾选态（父级持有的已选集合决定，组件自身不存勾选状态）。 */
     selected?: boolean;
     /** 左侧 4px 竖条颜色（CSS 颜色值，含 '#RRGGBBAA'）。null/undefined = 回落到
-     *  is_urgent 橙色，不着色时透明。
+     *  is_urgent 橙色；两者都不满足时回落到中性边框色（不是透明，见 accentVar）。
      *  全仓暂无调用方传这个 prop，当前生效的只有「is_urgent 回落」这一级；带工序色
      *  左边框的 PendingPoolCard 是另一个组件、自己用 inline :style 着色，两者不共用
      *  机制。本 prop 保留作为统一卡片的公开 API。 */
@@ -172,9 +172,15 @@ const emit = defineEmits<(e: 'toggleSelect') => void>();
 defineOptions({ name: 'BatchCard', inheritAttrs: false });
 
 /** 左侧竖条色：显式 accentColor 优先，其次加急橙色（沿用旧卡片的 #e6a23c，
- *  即 --el-color-warning），都不满足则透明。 */
+ *  即 --el-color-warning），都不满足则回落到中性边框色。
+ *  2026-10-04：这一级原本是 transparent —— 4px 左边框整条不可见，非加急卡片看上去
+ *  「缺了一条左边框」（工序池 / 工人列的卡片全是这一档，整列都在发飘）。改用与另外
+ *  三边同色的 --el-border-color-lighter：左边框恒定可见，语义色（工序色 / 加急橙）
+ *  仍能盖在上面。 */
 const accentVar = computed(
-  () => props.accentColor ?? (props.batch.is_urgent ? 'var(--el-color-warning)' : 'transparent'),
+  () =>
+    props.accentColor ??
+    (props.batch.is_urgent ? 'var(--el-color-warning)' : 'var(--el-border-color-lighter)'),
 );
 
 /** tooltip 是否有可展示的详情：body 只放 4 个字段，其余全靠 tooltip，
@@ -219,9 +225,11 @@ function onToggleSelect(): void {
   height: 96px;
   padding: 8px 10px;
   overflow: hidden;
-  /* 200px 含 4px 左边框（border-box），四周圆角裁掉竖条与边框的直角 */
+  /* 200px 含 4px 左边框（border-box），四周圆角裁掉竖条与边框的直角。
+     左边框的底色与另外三边同色：v-bind(accentVar) 只负责把语义色（工序色 / 加急橙）
+     盖上去，即使那层 CSS 变量没绑上（样式不进 DOM 的环境）左边框也不会整条消失。 */
   border: 1px solid var(--el-border-color-lighter);
-  border-left: 4px solid transparent;
+  border-left: 4px solid var(--el-border-color-lighter);
   border-radius: 8px;
   background: var(--el-bg-color);
   border-left-color: v-bind(accentVar);
