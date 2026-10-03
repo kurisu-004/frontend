@@ -58,7 +58,7 @@ function onTabChange(name: string | number): void {
 }
 
 // ============================================================
-// 页级共享 lookup（customers 给两个 tab 的 filter dropdown 用；
+// 页级共享 lookup（customers 给「可发送」tab 的 filter dropdown 用；
 // shelves + processes 给接收 tab 的 dialog 用）
 // 2026-09-26：customers 派生自共享 query；shelves / processes 仍 Promise.all 拉取。
 // ============================================================
@@ -123,12 +123,7 @@ function onSendableTabSent(): void {
 
         <!-- ====================== Tab 2: 待接收 ====================== -->
         <el-tab-pane name="receiving" label="待接收">
-          <OutsourceReceivingTab
-            ref="receivingTabRef"
-            :customers="customers"
-            :shelves="shelves"
-            :processes="processes"
-          />
+          <OutsourceReceivingTab ref="receivingTabRef" :shelves="shelves" :processes="processes" />
         </el-tab-pane>
       </el-tabs>
     </el-card>
