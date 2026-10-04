@@ -1,5 +1,6 @@
 // 装配体 REST API（走 @/api/http 统一 axios 客户端）。
-// 创建 / 上传文件走 multipart：data 字段为 JSON 字符串，file 字段为 PDF。
+// multipart 的文件字段名**按端点不同**：创建端点 `POST /assemblies` 认 `files`
+// （复数），详情页补传端点 `POST /assemblies/{id}/files` 认 `file`（单数）。
 
 import { api, cleanParams } from '@/api/http';
 import {
@@ -237,14 +238,21 @@ export async function createAssembly(
   return resp.data;
 }
 
-/** 一次性创建：上传总装 PDF + 子件一并生成。 */
+/** 一次性创建：上传总装 PDF + 子件一并生成。
+ *
+ *  2026-10-05：multipart 的文件字段名由 `file` 改为 `files`。后端 `POST /assemblies`
+ *  的 multipart 解析只认 `files`；传 `file` **不报错**，文件被静默丢弃（建出一个没有
+ *  总装图的装配件），所以这个字段名必须与后端一致。
+ *
+ *  当前全仓零调用点（装配件建单链路尚未接入 Tab 2），改动零风险。
+ */
 export async function createAssemblyWithFile(
   payload: AssemblyCreatePayload,
   pdfFile: File,
 ): Promise<AssemblyCreateResult> {
   const form = new FormData();
   form.append('data', JSON.stringify(payload));
-  form.append('file', pdfFile);
+  form.append('files', pdfFile);
   const resp = await api.post<AssemblyCreateResult>('/assemblies', form);
   return resp.data;
 }

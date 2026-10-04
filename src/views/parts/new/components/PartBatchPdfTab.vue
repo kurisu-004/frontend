@@ -389,6 +389,7 @@
                   <el-input-number
                     v-model="c.unit_price"
                     :min="0"
+                    :max="MONEY_MAX"
                     :precision="2"
                     :step="1"
                     size="small"
@@ -406,6 +407,7 @@
                   <el-input-number
                     v-model="c.total_price"
                     :min="0"
+                    :max="MONEY_MAX"
                     :precision="2"
                     :step="1"
                     size="small"
@@ -733,6 +735,8 @@ const props = defineProps<{
   onThreeDModelRemove: (file: UploadFile) => void;
   rebuildFromUploads: () => Promise<void>;
   onUnitPriceChange: (row: StandalonePartRow, v: number | undefined) => void;
+  /** 2026-10-05 新增：装配件顶层整套含税单价（联动 total_price = 单价 × 套数）。 */
+  onAsmUnitPriceChange: (row: AssemblyRow, v: number | undefined) => void;
   onChildUnitPriceChange: (c: AssemblyChildRow, v: number | undefined) => void;
   onL2Change: (row: { customer_id: string; customer_name?: string }, v: string) => void;
   onAsmPlannedChange: (asmRow: AssemblyRow, v: string) => void;
@@ -874,6 +878,12 @@ function onRetryRowThreeD(row: { pdfSourceUid: string; three_d_index: number | n
 // 「选择 / 拖拽手柄 / 操作(fixed) / expand」列不进 defs，保留为字面量 <el-table-column>。
 // 3 个表各自 listKey 独立，互不污染。
 //
+// 2026-10-05：金额列的 `ElInputNumber` 上限。后端金额列是 `NUMERIC(12,2)`（整数部分
+// 10 位），`ElInputNumber` 的 `precision: 2` 只管小数位、不管量级，填到 1e10 会在建单
+// 时被 per-item savepoint 判失败（用户看到的是一条 DB 错误）。与同行「数量 / 套数」的
+// `max: 9999` 同理，两处金额列统一带上。
+const MONEY_MAX = 9999999999.99;
+//
 // ---- Source table（PDF 源文件区；selection + 2 列 + fixed='right' 操作）----
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
 const columnDefs_source: ColumnDef[] = [
@@ -1007,6 +1017,7 @@ const columnDefs_standalone: ColumnDef[] = [
           r.unit_price = v ?? null;
         },
         min: 0,
+        max: MONEY_MAX,
         precision: 2,
         step: 1,
         size: 'small',
@@ -1031,6 +1042,7 @@ const columnDefs_standalone: ColumnDef[] = [
           r.total_price = v ?? null;
         },
         min: 0,
+        max: MONEY_MAX,
         precision: 2,
         step: 1,
         size: 'small',
@@ -1298,6 +1310,55 @@ const columnDefs_assembly: ColumnDef[] = [
         size: 'small',
         controlsPosition: 'right',
         style: 'width: 85px',
+      });
+    },
+  },
+  {
+    key: 'unit_price',
+    label: '含税单价',
+    prop: 'unit_price',
+    minWidth: 120,
+    align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as AssemblyRow;
+      return h(ElInputNumber, {
+        modelValue: r.unit_price,
+        'onUpdate:modelValue': (v: number | undefined) => {
+          r.unit_price = v ?? null;
+        },
+        min: 0,
+        max: MONEY_MAX,
+        precision: 2,
+        step: 1,
+        size: 'small',
+        controlsPosition: 'right',
+        placeholder: '可填',
+        style: 'width: 110px',
+        onChange: (v: number | undefined) => props.onAsmUnitPriceChange(r, v),
+      });
+    },
+  },
+  {
+    key: 'total_price',
+    label: '含税价格',
+    prop: 'total_price',
+    minWidth: 120,
+    align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as AssemblyRow;
+      return h(ElInputNumber, {
+        modelValue: r.total_price,
+        'onUpdate:modelValue': (v: number | undefined) => {
+          r.total_price = v ?? null;
+        },
+        min: 0,
+        max: MONEY_MAX,
+        precision: 2,
+        step: 1,
+        size: 'small',
+        controlsPosition: 'right',
+        placeholder: '可填',
+        style: 'width: 110px',
       });
     },
   },

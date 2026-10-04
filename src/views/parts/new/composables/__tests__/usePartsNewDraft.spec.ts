@@ -388,6 +388,8 @@ describe('mergeDraftWithSession', () => {
             is_urgent: false,
             masterPageIndex: null,
             quantity: 1,
+            unit_price: 95,
+            total_price: 190,
             drawing_client_ref: 'r-asm',
             children: [
               {

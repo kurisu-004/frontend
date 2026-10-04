@@ -4,6 +4,11 @@
 
 import type { PartListItem } from '@/types/parts';
 import type { DrawingFileItem } from './file';
+// 2026-10-05：创建响应返的是**后端 wire 形态**（`AssemblyOut` / `AssemblyChildOut`），
+// `createAssembly` / `createAssemblyWithFile` 拿到 `resp.data` 后**不经过任何 mapper**
+// ⇒ 不能声明成 FE 展示型（`AssemblyItem.unit_price` 是 number、且多 4 个派生字段）。
+// 这里 type-only 引 Zod schema 的 infer，字段集由 schema 单点定义。
+import type { AssemblyChildOutSchema, AssemblyOutSchema } from '@/composables/queries/schemas';
 
 // 2026-09-29 修复：装配件详情响应实际 wire 形态是平铺（后端 `#[serde(flatten)]`
 // quirk），前端类型契约保持嵌套 `{assembly, children, files}`（最小爆炸半径），
@@ -124,6 +129,17 @@ export interface AssemblyChildPayload {
   name: string;
   quantity?: number;
   applicant_name?: string | null;
+  /** 子件含税单价（2 位小数字符串）。后端是 rust `rust_decimal` + `serde-with-str`，
+   *  **只认 JSON 字符串**，发 number 会被拒或丢精度。
+   *
+   *  2026-10-05：**截至本提交后端还没收这一项** —— `AssemblyChildRequest` 只有
+   *  `name / drawing_no / planned_delivery_date / quantity`，serde 无
+   *  `deny_unknown_fields` ⇒ 现在多发会被**静默忽略**。子件是 `t_part` 行（`assembly_id`
+   *  指向父装配件），价格列在 `t_part` 上，insert 时传 `None` 由 SQL `COALESCE` 落 0。
+   *  字段先备好，等后端给装配件子件补齐价格入参后才真正生效。 */
+  unit_price?: string;
+  /** 子件含税总价（2 位小数字符串）。字符串约束与生效状态同 `unit_price`。 */
+  total_price?: string | null;
 }
 
 /** 创建装配件的 JSON body（不含文件；文件单独 multipart 传） */
@@ -145,19 +161,27 @@ export interface AssemblyCreatePayload {
   children?: AssemblyChildPayload[];
   // —— 2026-07-24 新增：装配体自身价格 + 送货单字段 ——
   quantity?: number;
-  unit_price?: number;
-  /** 不传时由 service 按 unit_price * quantity 计算 */
-  total_price?: number | null;
+  // 2026-10-05：单价 / 总价由 number 改 string —— 后端是 rust `rust_decimal::Decimal`
+  // + `serde-with-str`，**只认字符串**，发 JSON number 会被拒或丢精度。
+  unit_price?: string;
+  /** 缺省 / null = 落 0：service 是 `req.total_price.or(Some(Decimal::ZERO))` 纯透传，
+   *  **不**按 `unit_price × quantity` 重算 ⇒ 总额要前端算好一并发，只发单价会落 0。 */
+  total_price?: string | null;
   order_no?: string | null;
   system_delivery_date?: string | null;
   note?: string | null;
 }
 
-/** 创建结果（创建响应需要完整数据；子件用 PartListItem 即可，详情页用窄版） */
+/** `POST /assemblies` 创建响应（后端 wire 形态，不经 mapper）。
+ *
+ *  2026-10-05 订正：后端返 `{ assembly, created_children }`（`AssemblyCreateResult
+ *  { assembly: AssemblyOut, created_children: Vec<AssemblyChildOut> }`），既没有
+ *  `children` 也没有 `files`（文件要另走 `/assemblies/{id}/files`）。
+ *  字段集直接取 `AssemblyOut` / `AssemblyChildOut` 的 Zod infer。
+ */
 export interface AssemblyCreateResult {
-  assembly: AssemblyItem;
-  children: PartListItem[];
-  files: DrawingFileItem[];
+  assembly: AssemblyOutSchema;
+  created_children: AssemblyChildOutSchema[];
 }
 
 /** 装配件详情：自身 + 子件 + 文件 */
