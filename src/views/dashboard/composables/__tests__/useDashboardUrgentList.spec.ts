@@ -5,8 +5,15 @@
 // 覆盖：
 //   - U1：listUnionItems 返回 100 件 → items 派生 = 100 件
 //   - U3：fetchList 是 refetch async 包装
-//   - U4：listUnionItems 入参硬编码（statuses / sort_by / sort_dir / limit / offset）
+//   - U4：listUnionItems 入参硬编码（row_type='PART_FLAT' / statuses / sort_by / sort_dir /
+//     limit / offset）
 //   - U5：queryFn 走 partListResultSchema.parse(...) 守门 —— 缺必填字段抛错
+//   （2026-10-05 新增）
+//   - U7：请求带 system_delivery_date_from = 今日 ISO / _to = 今日+6 ISO（窗口两端
+//     都有下界，没有下界时逾期件会占满 limit 100 把窗口内的件挤掉），
+//     且 planned_delivery_date_from/_to 根本不出现
+//   - U8：queryKey 含 today（gcTime 无限 + refetchOnWindowFocus false，today 不进键
+//     则跨零点吃昨天窗口的缓存）
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope } from 'vue';
@@ -57,6 +64,7 @@ vi.mock('@/api/dashboard', () => ({
 }));
 
 import { useDashboardUrgentList } from '../useDashboardUrgentList';
+import { qk } from '@/composables/queries/keys';
 import { partListResultSchema } from '@/composables/queries/schemas';
 
 function makeBasePart(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -93,6 +101,17 @@ function makeResultWithParts(parts: Record<string, unknown>[]): Record<string, u
     limit: 100,
     offset: 0,
   };
+}
+
+/** 相对今天偏移 n 天的本地 ISO（'YYYY-MM-DD'）—— 与 systemDeliveryOrders 同算法。 */
+function isoOffset(n: number): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + n);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 let testApp: ReturnType<typeof createApp>;
@@ -167,7 +186,7 @@ describe('useDashboardUrgentList — items 派生', () => {
     expect(params['sort_dir']).toBe('ASC');
     expect(params['limit']).toBe(100);
     expect(params['offset']).toBe(0);
-    expect(params['row_type']).toBe('ALL');
+    expect(params['row_type']).toBe('PART_FLAT');
     const statuses = params['statuses'] as string[];
     expect(statuses).toContain('PENDING');
     expect(statuses).toContain('IN_PROCESS');
@@ -235,5 +254,53 @@ describe('useDashboardUrgentList — items 派生', () => {
     expect(parsed.items).toHaveLength(1);
     expect(parsed.items[0]?.id).toBe('180000000000001');
     expect(parsed.items[0]?.has_cnc_program).toBe(false);
+  });
+
+  // ==========================================================================
+  // 2026-10-05：行源切 PART_FLAT + 交期窗口两端下发 + today 进 queryKey
+  // ==========================================================================
+
+  it('U7：请求带 system_delivery_date 窗口两端（下界 = 今天），且不夹带 planned 窗口参数', async () => {
+    listUnionItemsMock.mockResolvedValue(makeResultWithParts([]));
+
+    const scope = effectScope();
+    let q: ReturnType<typeof useDashboardUrgentList> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useDashboardUrgentList());
+    });
+    await q!.fetchList();
+
+    const params = listUnionItemsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    // 下界是关键：没有下界时逾期件（任意过去日期）在 ASC 排序里占满 limit 100，
+    // 7 天窗口内的一件都挤不进 Top 30。
+    expect(params['system_delivery_date_from']).toBe(isoOffset(0));
+    expect(params['system_delivery_date_to']).toBe(isoOffset(6));
+    // 两组窗口参数互斥：同时发会被后端 AND 成交集
+    expect(params).not.toHaveProperty('planned_delivery_date_from');
+    expect(params).not.toHaveProperty('planned_delivery_date_to');
+    scope.stop();
+  });
+
+  it('U8：queryKey 含 today —— 键与请求的窗口下界同源（reactive params 范式）', async () => {
+    listUnionItemsMock.mockResolvedValue(makeResultWithParts([]));
+
+    const scope = effectScope();
+    let q: ReturnType<typeof useDashboardUrgentList> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useDashboardUrgentList());
+    });
+    await q!.fetchList();
+
+    const today = isoOffset(0);
+    // 键形态 = ['dashboard','urgent-list', today]
+    const cached = testQueryClient.getQueryCache().find({ queryKey: qk.dashboardUrgentList(today) });
+    expect(cached).toBeTruthy();
+    expect(cached?.queryKey).toEqual(['dashboard', 'urgent-list', today]);
+    // 前缀键与工厂键同根：WS 事件按前缀能一把命中（跨零点前后的两条都命中）
+    expect(cached?.queryKey.slice(0, 2)).toEqual([...qk.dashboardUrgentListPrefix]);
+    // queryFn 从 queryKey 读 today（不是闭包捕获的另一个值）
+    const params = listUnionItemsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(params['system_delivery_date_from']).toBe(cached?.queryKey[2]);
+    scope.stop();
   });
 });

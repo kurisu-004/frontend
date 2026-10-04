@@ -16,7 +16,7 @@
 //   - P6：两个 variant 的标题 / 副标题 / 空态文案
 //   - P7：urgent 变体有 `.urgent` 红底行、partial 变体没有
 //   - P8：partial 数量列出「20 / 64」，已交部分单独成节点（走主题色的入口）
-//   - P9：partial 数量列 tooltip 显式标单位（装配件行「套」/ 零件行「件」）
+//   - P9：partial 数量列 tooltip 单位恒「件」（行源 = t_part 全表行，无装配件父行）
 //   - P10：limit 上限截断（Top N 与实际渲染行数一致）
 //   - P11：点行 → emit rowClick(item)
 //
@@ -305,7 +305,9 @@ describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
     wrapper.unmount();
   });
 
-  it('P9：数量列 tooltip 显式标单位 —— 零件行「件」、装配件行「套」', () => {
+  it('P9：数量列 tooltip 单位恒「件」（行源 = t_part 全表行，2026-10-05 起无「套」分支）', () => {
+    // 行源切 PART_FLAT 后不存在 ASSEMBLY 行，单位恒「件」：即便 props 里的历史
+    // row_type='ASSEMBLY' fixture 也不得再出「套」——那会让文案与真实行源对不上。
     const part = mountPanel('partial', [
       makePart({ delivered_quantity: 20, quantity: 64, row_type: 'PART' }),
     ]);
@@ -318,10 +320,12 @@ describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
       '已送 20 件 / 总量 64 件',
     );
     expect(assembly.findAllComponents(ElTooltipStub)[1]?.props('content')).toBe(
-      '已送 3 套 / 总量 8 套',
+      '已送 3 件 / 总量 8 件',
     );
     // 浮层也被 stub 渲染进 DOM，text 可直接断言
     expect(part.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 20 件 / 总量 64 件');
+    expect(assembly.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 3 件 / 总量 8 件');
+    expect(assembly.text()).not.toContain('套');
     assembly.unmount();
     part.unmount();
   });

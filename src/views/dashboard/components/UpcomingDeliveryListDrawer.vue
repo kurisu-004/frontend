@@ -24,6 +24,12 @@
   - 客户列 / 倒计列的取字段 helper 一律收「字段值」而不是整行，模板侧不留
     `as PartListItem` 强转（el-table 列 slot 的 row 是 DefaultRow，见函数注释）。
 
+  统计口径与条目（2026-10-05）：抽屉是柱状图的下钻，行源与柱高同源 ——
+  t_part 全表行，含装配件的子零件、不含装配件父行，行单位恒「件」。故一个装配件
+  （4 个子零件）+ 5 个独立零件 = 柱高 9 = 抽屉 9 行（子零件各占一行，抽屉里**不**出现
+  装配件父行，也无装配件标识列 / 树形 / 标签）。头部件数取服务端 total，被 limit
+  截断时追加「仅显示前 N 条」。
+
   抽屉形态：direction 'btt'（bottom-to-top）+ :size 60% —— 从屏幕底部弹出、水平
   宽度撑满、最大高度 60%，与 dashboard 双栏布局配合（点柱状图看到的是「目标日期的
   工单清单」，横向表格能展示更全列）。
@@ -62,7 +68,13 @@
           </el-tag>
           <!-- 2026-10-04：口径小标签，让抽屉自解释当前统计口径（跟柱状图开关同步） -->
           <el-tag size="small" effect="plain" type="info">{{ basisLabel }}</el-tag>
-          <span class="header-total">共 {{ rows.length }} 件</span>
+          <span class="header-total">共 {{ total }} 件</span>
+          <!--
+            2026-10-05：件数渲染 total（服务端匹配总数）而非 rows.length —— 端点 limit
+            被后端 clamp(1, 200)，rows.length 只是「本页拿回来的条数」，拿它当件数会在
+            条数触顶时谎报。被截断时追加提示，否则用户以为抽屉里的就是全部。
+          -->
+          <span v-if="isTruncated" class="header-truncated">仅显示前 {{ rows.length }} 条</span>
         </div>
       </div>
 
@@ -137,10 +149,12 @@
 //   1. props.modelValue=true 时 useDashboardUpcomingList 的 enabled 闸门打开
 //      （params getter 返回 { date, statuses, basis } 非 null）；
 //   2. params 变化（切层 / 切日期 / 切口径）→ queryKey 变化 → 自动 refetch；
-//   3. rows = query.data.items（500 件上限防御性兜底；实际单日 × 8 状态远小于此）。
+//   3. rows = query.data.items（请求 limit=500，端点侧 clamp 到 200 ⇒ 最多 200 行；
+//      单日 × 8 状态实际远小于此）；total = 服务端匹配总数，header 件数按它渲染。
 //
 // 视觉：
 //   - 顶部 header：单行放 日期 + 层标题(el-tag 用项目主色背景) + 口径标签 + 共 N 件
+//     （N = total；被服务端 limit 截断时追加「仅显示前 N 条」）
 //   - 列表：el-table stripe；列 = # / 流水 / 图号 / 名称 / 客户(一二级拼接) / 状态 ElTag /
 //     倒计（**当前口径**交期字段的倒计文案，逾期/临近配色）
 //   - loading / error / empty 三态
@@ -230,7 +244,11 @@ const params = computed(() => {
   };
 });
 
-const { data: rows, isPending, error } = useDashboardUpcomingList(() => toValue(params));
+const { data: rows, total, isPending, error } = useDashboardUpcomingList(() => toValue(params));
+
+/** 2026-10-05：total 超过实际取回条数 = 服务端截断（limit 被后端 clamp 到 200），
+ *  头部件数与提示条的开关。total <= rows.length 时不渲染任何额外提示。 */
+const isTruncated = computed(() => total.value > rows.value.length);
 
 /** 行点击 → emit rowClick(part) 给父组件 DashboardView（父组件负责打开
  *  PartPreviewDialog）。本组件不感知该 dialog 存在 —— 关注点分离，emit 只传
@@ -287,6 +305,10 @@ function customerPath(l1Name: string | null, customerName: string | null): strin
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+}
+.header-truncated {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 .drawer-list {
   flex: 1;

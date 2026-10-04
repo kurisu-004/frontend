@@ -4,12 +4,22 @@
 //   1. 入参 reactive { date: 'YYYY-MM-DD', statuses: OrderStatus[], basis }：
 //      - 仅在 drawer 打开时 caller 传非 null 启用闸门；
 //      - 切层 / 切换日期 / 切统计口径时 key 变化自动 refetch。
-//   2. queryFn 调 listUnionItems 拉该日 × 该层状态所有工单，最多 500 件（单日 8 状态
-//      合计远小于 500 上限，作为防御性兜底）；日期窗口与排序字段**按 basis 二选一**：
+//   2. queryFn 调 listUnionItems 拉该日 × 该层状态的工单行；日期窗口与排序字段
+//      **按 basis 二选一**：
 //      - planned → planned_delivery_date_from/to = date, sort_by 'PLANNED_DELIVERY_DATE'
 //      - system  → system_delivery_date_from/to  = date, sort_by 'SYSTEM_DELIVERY_DATE'
 //      两组窗口参数互斥、绝不同时发（同时发会被后端 AND 成交集，抽屉恒空）。
 //   3. queryFn 走 partListResultSchema.parse(...) 守门。
+//
+// 行源口径（2026-10-05）：row_type='PART_FLAT' —— t_part 全表行，**含装配件的子零件、
+// 不含装配件父行**，行单位恒为「件」。与柱状图 `upcoming_delivery[].count` 的
+// `COUNT(*) FROM t_part`（`t_assembly` 全模块零引用）同源 ⇒ 点某根柱后抽屉列出的
+// 条数与柱高口径一致：一个装配件（4 个子零件）+ 5 个独立零件，柱高 9，抽屉 9 行
+// （装配件那 4 个子零件各占一行，不显示装配件父行、不加树形、不加装配件标识）。
+//
+// 条数与展示条数是两个值：端点 limit 被后端 clamp(1, 200)，所以抽屉最多拿回 200 行
+// 而 total 可能是更大的数。**头部件数渲染 total**（`total` 派生见下），被截断时由
+// 组件追加「仅显示前 N 条」提示 —— 用 rows.length 当件数会在 200 行为上限时谎报。
 //
 // 设计要点（与 useDashboardUrgentList 同形）：
 //   - reactive params 模式：queryKey = computed(() => qk.xxx(toValue(params)))，
@@ -104,7 +114,7 @@ export function useDashboardUpcomingList(
       };
       return partListResultSchema.parse(
         await listUnionItems({
-          row_type: 'PART',
+          row_type: 'PART_FLAT',
           statuses: p.statuses,
           ...windowParams,
           sort_dir: 'ASC',
@@ -123,8 +133,10 @@ export function useDashboardUpcomingList(
 
   // 派生：
   //   - data：partSchema 的 z.infer 与 PartListItem 已直接对齐，无需强转；
+  //   - total：服务端匹配总数（不受 limit 截断影响），头部件数按它渲染；
   //   - isPending / error 派生让 caller 模板里写 isPending.value 即可。
   const data = computed<PartListItem[]>(() => query.data.value?.items ?? []);
+  const total = computed<number>(() => query.data.value?.total ?? 0);
   const isPending = computed<boolean>(() => query.isPending.value);
   const error = computed<Error | null>(() => query.error.value);
 
@@ -135,6 +147,7 @@ export function useDashboardUpcomingList(
 
   return {
     data,
+    total,
     isPending,
     error,
     refetch: () => query.refetch(),

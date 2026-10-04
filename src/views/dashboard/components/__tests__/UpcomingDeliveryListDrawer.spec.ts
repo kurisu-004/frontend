@@ -17,6 +17,10 @@
 // 2099 年的远期值：deliveryDaysLeftText 对 >3 天的远期返回空串，倒计时稳定回落到
 // MM/DD，断言不随「测试运行当天」漂移。
 //
+// 2026-10-05 追加「头部件数不谎报」覆盖（U11 / U12）：件数取服务端 total，被
+// 服务端 limit 截断（total > 取回条数）时追加「仅显示前 N 条」提示，未截断时
+// 不渲染任何提示。
+//
 // 2026-10-04 纯测试基建修复（零生产代码改动）：原 ElTable stub 只按 :data 数行、
 // 根本不渲染默认 slot，等于整张表一个单元格都不渲染 —— 任何列级断言在这样一张空表上
 // 都无从谈起。修法照抄真实 Element Plus 的做法：stub 的 ElTable 按 :data 渲染
@@ -451,5 +455,46 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     await nextTick();
     expect(systemWrapper.text()).toContain('系统交期');
     systemWrapper.unmount();
+  });
+
+  // ==========================================================================
+  // 2026-10-05：头部件数按 total 渲染 + 被 limit 截断时出提示
+  // ==========================================================================
+
+  it('U11：total(9) > 取回条数(2) → 头部件数是 9 且追加「仅显示前 2 条」', async () => {
+    // 端点 limit 被后端 clamp(1, 200)，rows.length 只是本页拿回来的条数。
+    listUnionItemsMock.mockResolvedValue({
+      items: [makePart({ id: '180000000000001' }), makePart({ id: '180000000000002' })],
+      total: 9,
+      limit: 500,
+      offset: 0,
+    });
+
+    const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+
+    expect(wrapper.findAll('.mock-row')).toHaveLength(2);
+    expect(wrapper.find('.header-total').text()).toBe('共 9 件');
+    expect(wrapper.find('.header-truncated').exists()).toBe(true);
+    expect(wrapper.find('.header-truncated').text()).toBe('仅显示前 2 条');
+    wrapper.unmount();
+  });
+
+  it('U12：total === rows.length → 只出「共 N 件」，不渲染截断提示', async () => {
+    listUnionItemsMock.mockResolvedValue({
+      items: [makePart({ id: '180000000000001' }), makePart({ id: '180000000000002' })],
+      total: 2,
+      limit: 500,
+      offset: 0,
+    });
+
+    const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+
+    expect(wrapper.find('.header-total').text()).toBe('共 2 件');
+    expect(wrapper.find('.header-truncated').exists()).toBe(false);
+    wrapper.unmount();
   });
 });

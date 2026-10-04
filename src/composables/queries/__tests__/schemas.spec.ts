@@ -37,6 +37,10 @@
 //   - S15（2026-09-29 修复）：assemblyDetailFlatSchema 接受 backend-rust
 //     `AssemblyDetail` 实际 wire 形态（19 字段平铺 + children + files，
 //     来自 `#[serde(flatten)]` quirk），不抛错。
+//   - S15c（partSchema 系列）：has_cnc_program = false 也能 parse。
+//   - S15d~S15f（2026-10-05 新增，partSchema 系列）：assembly_id 接受 null（独立
+//     零件行）/ 父装配件 id 字符串（装配件子件行）/ 缺键（GET /parts 家族不填该列）——
+//     该键 wire 上恒在，漏声明会被 zod strip 静默丢弃。
 //   - S16：assemblyDetailFlatSchema 缺 children → 抛 ZodError（M-1 同形态
 //     regression guard：缺必填字段静默 strip = 校验形同虚设）。
 //   - S17：assemblyDetailFlatSchema 多出 `assembly` 嵌套键 → 抛 ZodError。
@@ -598,6 +602,28 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(result.items).toHaveLength(1);
       expect(result.total).toBe(1);
       expect(result.items[0]?.unit_price).toBe('100.50');
+    });
+
+    // 2026-10-05 新增：assembly_id 守门用例。wire 上 union-list 的 PART / PART_FLAT
+    // 段恒返该键（独立零件为 null、子件为父装配件 id 字符串），zod 默认 strip 漏列它
+    // 时 parse 不报错、后续消费者以为「所有行都没有父装配件」—— 故必须显式声明。
+    it('S15d：assembly_id = null 是合法值（独立零件行）', () => {
+      const parsed = partSchema.parse({ ...makeBasePart(), assembly_id: null });
+      expect(parsed.assembly_id).toBeNull();
+    });
+
+    it('S15e：assembly_id = 父装配件 id 字符串是合法值（装配件子件行）', () => {
+      const parsed = partSchema.parse({ ...makeBasePart(), assembly_id: '190000000000001' });
+      expect(parsed.assembly_id).toBe('190000000000001');
+    });
+
+    it('S15f：缺 assembly_id 也合法（复用同一 VO 的 GET /parts 家族不填该列）', () => {
+      const { assembly_id: _, ...rest } = makeBasePart() as Record<string, unknown> & {
+        assembly_id?: string;
+      };
+      void _;
+      const parsed = partSchema.parse(rest);
+      expect(parsed.assembly_id).toBeUndefined();
     });
   });
 

@@ -5,16 +5,20 @@
 //
 // 覆盖：
 //   - W1：窗口上限 = today+6（today+6 命中、today+7 排除）
+//   - W1b：窗口下界 = today（today 命中、昨天排除；逾期件不进这两块面板）
 //   - W2：system_delivery_date 为 null 一律剔除
 //   - W3：delivered_quantity = 0 与字段缺失（undefined）都归 urgent
 //   - W4：delivered_quantity > 0 归 partial
 //   - W5：两个桶各自 slice(0, limit)，互不串味
 //   - W6：分桶**不重排**（输入的 ASC 顺序原样保留）
+//   - W8：窗口两端与 useDashboardUrgentList 下发的请求参数同源（同一模块派生）
 
 import { describe, expect, it } from 'vitest';
 import {
   DELIVERY_WINDOW_DAYS,
   deliveryWindowCutoffIso,
+  deliveryWindowEndIso,
+  deliveryWindowStartIso,
   inDeliveryWindow,
   splitForDashboard,
 } from '../systemDeliveryOrders';
@@ -65,6 +69,36 @@ describe('deliveryWindowCutoffIso / inDeliveryWindow（窗口边界）', () => {
 
     expect(inDeliveryWindow(makePart({ system_delivery_date: isoOffset(6) }))).toBe(true);
     expect(inDeliveryWindow(makePart({ system_delivery_date: isoOffset(7) }))).toBe(false);
+  });
+
+  it('W1b：下界 = today（今天命中、前天与昨天排除），端点两端齐飞', () => {
+    // 下界的意义与 urgentList 的请求参数同源：服务端已按 [today, today+6] 过滤，
+    // 客户端镜像同一窗口，逾期件不会靠「过去日期 ASC 排最前」挤进这两块面板。
+    expect(deliveryWindowStartIso()).toBe(isoOffset(0));
+    expect(inDeliveryWindow(makePart({ system_delivery_date: isoOffset(0) }))).toBe(true);
+    expect(inDeliveryWindow(makePart({ system_delivery_date: isoOffset(-1) }))).toBe(false);
+    expect(inDeliveryWindow(makePart({ system_delivery_date: isoOffset(-2) }))).toBe(false);
+
+    const items = [
+      makePart({ id: '1', serial_no: 'OVERDUE', system_delivery_date: isoOffset(-1) }),
+      makePart({ id: '2', serial_no: 'TODAY', system_delivery_date: isoOffset(0) }),
+      makePart({ id: '3', serial_no: 'NONE', system_delivery_date: null }),
+      makePart({ id: '4', serial_no: 'CUTOFF', system_delivery_date: isoOffset(6) }),
+      makePart({ id: '5', serial_no: 'LATE', system_delivery_date: isoOffset(7) }),
+    ];
+    const { urgent, partial } = splitForDashboard(items, { urgentLimit: 30, partialLimit: 30 });
+    expect(urgent.map((p) => p.serial_no)).toEqual(['TODAY', 'CUTOFF']);
+    expect(partial).toHaveLength(0);
+  });
+
+  it('W8：窗口两端同源 —— deliveryWindowEndIso(start) 与 deliveryWindowCutoffIso() 一致', () => {
+    // useDashboardUrgentList 的 system_delivery_date_from/_to 直接取这两个导出，
+    // 客户端 inDeliveryWindow 取同两个导出 ⇒ 不会出现「两处各写一遍 today+6」。
+    const start = deliveryWindowStartIso();
+    expect(deliveryWindowEndIso(start)).toBe(deliveryWindowCutoffIso());
+    expect(deliveryWindowEndIso(start)).toBe(isoOffset(DELIVERY_WINDOW_DAYS - 1));
+    // 跨月边界：月末起算 +6 天仍在同一个月 / 跨月都只依赖 Date 归一，不写死月长
+    expect(deliveryWindowEndIso('2026-01-31')).toBe('2026-02-06');
   });
 
   it('W2：system_delivery_date 为 null 一律剔除（无交期不进任何桶）', () => {

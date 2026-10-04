@@ -8,10 +8,12 @@
 //   - L2：params=null 时 enabled=false，listUnionItems 不被调
 //   - L3：params.statuses 空数组时 enabled=false（防御性）
 //   - L4：成功路径走 partListResultSchema.parse(...) 守门
-//   - L5：listUnionItems 入参硬编码 row_type='PART' / sort_by / sort_dir / limit / offset
+//   - L5：listUnionItems 入参硬编码 row_type='PART_FLAT' / sort_by / sort_dir / limit / offset
 //   （2026-10-04 新增）L7：system 口径发 system_delivery_date_from/to +
 //     sort_by='SYSTEM_DELIVERY_DATE'，且 planned 那组参数**根本不在请求里**；
 //     L8：切 basis 换键自动 refetch
+//   （2026-10-05 新增）L9：暴露 total（服务端匹配总数，与取回条数解耦）
+//     L10：未落数据前 total 派生为 0
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope, ref } from 'vue';
@@ -237,7 +239,7 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     scope.stop();
   });
 
-  it('L5：planned 口径入参 = row_type=PART / sort_by=PLANNED_DELIVERY_DATE / limit=500', async () => {
+  it('L5：planned 口径入参 = row_type=PART_FLAT / sort_by=PLANNED_DELIVERY_DATE / limit=500', async () => {
     listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
 
     const params = ref<{
@@ -259,7 +261,7 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
 
     expect(listUnionItemsMock).toHaveBeenCalled();
     const args = listUnionItemsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(args['row_type']).toBe('PART');
+    expect(args['row_type']).toBe('PART_FLAT');
     expect(args['sort_by']).toBe('PLANNED_DELIVERY_DATE');
     expect(args['sort_dir']).toBe('ASC');
     expect(args['limit']).toBe(500);
@@ -329,8 +331,8 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     // 而且这个 bug 表现为「点得到柱但列不出工单」，排查成本很高。
     expect(args).not.toHaveProperty('planned_delivery_date_from');
     expect(args).not.toHaveProperty('planned_delivery_date_to');
-    // 两口径共用的字段不变
-    expect(args['row_type']).toBe('PART');
+    // 两口径共用的字段不变（row_type 恒 PART_FLAT：行源 = t_part 全表行）
+    expect(args['row_type']).toBe('PART_FLAT');
     expect(args['sort_dir']).toBe('ASC');
     expect(args['limit']).toBe(500);
     expect(args['offset']).toBe(0);
@@ -381,6 +383,54 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
         }),
       }),
     ).toBeTruthy();
+    scope.stop();
+  });
+
+  // ==========================================================================
+  // 2026-10-05：行源切 PART_FLAT + 暴露 total（头部件数不再拿 rows.length 顶替）
+  // ==========================================================================
+
+  it('L9：暴露 total —— 服务端匹配总数与取回条数解耦（9 件只回 2 条时 total 为 9）', async () => {
+    // 端点 limit 被后端 clamp(1, 200)，rows.length 恒 ≤ 200；头部件数必须按
+    // 服务端 total 渲染，否则条数触顶时谎报件数。
+    listUnionItemsMock.mockResolvedValue({
+      items: [makeBasePart({ id: '180000000000001' }), makeBasePart({ id: '180000000000002' })],
+      total: 9,
+      limit: 500,
+      offset: 0,
+    });
+
+    const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>({
+      date: '2026-10-01',
+      statuses: ['PENDING'],
+      basis: 'planned',
+    });
+
+    const scope = effectScope();
+    let q: ReturnType<typeof useDashboardUpcomingList> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useDashboardUpcomingList(() => params.value));
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(q!.data.value).toHaveLength(2);
+    expect(q!.total.value).toBe(9);
+    scope.stop();
+  });
+
+  it('L10：请求未落数据前 total 派生为 0（不返 undefined，抽屉头不显示 NaN）', async () => {
+    const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>(null);
+
+    const scope = effectScope();
+    let q: ReturnType<typeof useDashboardUpcomingList> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useDashboardUpcomingList(() => params.value));
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(q!.total.value).toBe(0);
     scope.stop();
   });
 });
