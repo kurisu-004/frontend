@@ -12,6 +12,9 @@
 //   - W5：两个桶各自 slice(0, limit)，互不串味
 //   - W6：分桶**不重排**（输入的 ASC 顺序原样保留）
 //   - W8：窗口两端与 useDashboardUrgentList 下发的请求参数同源（同一模块派生）
+//   - W9：splitForDashboard 的窗口由调用方传入的 startIso 决定（不现取 today）——
+//     固定历史起点下 start+6 命中、start+7 排除，客户端窗口与服务端请求窗口由此同刻
+//   - W9b：固定日期 2026-10-05 起算的窗口端点算术
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -86,14 +89,19 @@ describe('deliveryWindowCutoffIso / inDeliveryWindow（窗口边界）', () => {
       makePart({ id: '4', serial_no: 'CUTOFF', system_delivery_date: isoOffset(6) }),
       makePart({ id: '5', serial_no: 'LATE', system_delivery_date: isoOffset(7) }),
     ];
-    const { urgent, partial } = splitForDashboard(items, { urgentLimit: 30, partialLimit: 30 });
+    const { urgent, partial } = splitForDashboard(
+      items,
+      { urgentLimit: 30, partialLimit: 30 },
+      deliveryWindowStartIso(),
+    );
     expect(urgent.map((p) => p.serial_no)).toEqual(['TODAY', 'CUTOFF']);
     expect(partial).toHaveLength(0);
   });
 
   it('W8：窗口两端同源 —— deliveryWindowEndIso(start) 与 deliveryWindowCutoffIso() 一致', () => {
     // useDashboardUrgentList 的 system_delivery_date_from/_to 直接取这两个导出，
-    // 客户端 inDeliveryWindow 取同两个导出 ⇒ 不会出现「两处各写一遍 today+6」。
+    // 客户端 splitForDashboard 收同一个 startIso 再派上界 ⇒ 不会出现「两处各写一遍
+    // today+6」，也不会各取一次 today 而错开一天。
     const start = deliveryWindowStartIso();
     expect(deliveryWindowEndIso(start)).toBe(deliveryWindowCutoffIso());
     expect(deliveryWindowEndIso(start)).toBe(isoOffset(DELIVERY_WINDOW_DAYS - 1));
@@ -107,9 +115,51 @@ describe('deliveryWindowCutoffIso / inDeliveryWindow（窗口边界）', () => {
     const { urgent, partial } = splitForDashboard(
       [makePart({ id: '1', system_delivery_date: null })],
       { urgentLimit: 30, partialLimit: 30 },
+      deliveryWindowStartIso(),
     );
     expect(urgent).toHaveLength(0);
     expect(partial).toHaveLength(0);
+  });
+
+  it('W9：窗口由传入的 startIso 决定（固定历史日期，start+6 命中、start+7 排除）', () => {
+    // 这条钉的是「客户端窗口与服务端窗口同刻」：startIso 就是 useDashboardUrgentList
+    // 下发给服务端 from 的那个值，两端口径若各取一次 today，跨零点后会差一天，且丢掉的
+    // 恰好是「昨天」（与「面板不含逾期」重合 ⇒ 漂移是静默的）。
+    // 起点刻意取**固定的历史日期**而不是「今天 - N 天」：只有 startIso 恒不等于 today，
+    // 「函数内部改回现取 today」才会被钉红（若起点恰好落在今天，两种实现结果相同，
+    // 断言就失去鉴别力）。
+    const startIso = '2020-06-01';
+    const items = [
+      makePart({ id: '1', serial_no: 'EDGE_IN', system_delivery_date: '2020-06-07' }),
+      makePart({ id: '2', serial_no: 'EDGE_OUT', system_delivery_date: '2020-06-08' }),
+    ];
+    const { urgent, partial } = splitForDashboard(
+      items,
+      { urgentLimit: 30, partialLimit: 30 },
+      startIso,
+    );
+    expect(urgent.map((p) => p.serial_no)).toEqual(['EDGE_IN']);
+    expect(partial).toHaveLength(0);
+    // 上界确实由 startIso 派生（+6 天），不是别的常数
+    expect(deliveryWindowEndIso(startIso)).toBe('2020-06-07');
+  });
+
+  it('W9b：固定日期 2026-10-05 起算 —— start+6 = 2026-10-11 命中、start+7 = 2026-10-12 排除', () => {
+    // 窗口算术的固定读数（与运行日无关）。注意鉴别力在 W9：本条起点与「今天」是否相同
+    // 会影响结论，只在非该日起算的运行日才有反例价值。
+    const startIso = '2026-10-05';
+    const items = [
+      makePart({ id: '1', serial_no: 'EDGE_IN', system_delivery_date: '2026-10-11' }),
+      makePart({ id: '2', serial_no: 'EDGE_OUT', system_delivery_date: '2026-10-12' }),
+    ];
+    const { urgent, partial } = splitForDashboard(
+      items,
+      { urgentLimit: 30, partialLimit: 30 },
+      startIso,
+    );
+    expect(urgent.map((p) => p.serial_no)).toEqual(['EDGE_IN']);
+    expect(partial).toHaveLength(0);
+    expect(deliveryWindowEndIso(startIso)).toBe('2026-10-11');
   });
 });
 
@@ -120,7 +170,11 @@ describe('splitForDashboard（按「有无已交批次」分桶）', () => {
       makePart({ id: '2', serial_no: 'ABSENT' }),
       makePart({ id: '3', serial_no: 'NULL', delivered_quantity: null }),
     ];
-    const { urgent, partial } = splitForDashboard(items, { urgentLimit: 30, partialLimit: 30 });
+    const { urgent, partial } = splitForDashboard(
+      items,
+      { urgentLimit: 30, partialLimit: 30 },
+      deliveryWindowStartIso(),
+    );
 
     expect(partial).toHaveLength(0);
     expect(urgent.map((p) => p.serial_no)).toEqual(['ZERO', 'ABSENT', 'NULL']);
@@ -132,7 +186,11 @@ describe('splitForDashboard（按「有无已交批次」分桶）', () => {
       makePart({ id: '2', serial_no: 'HALF', delivered_quantity: 20, quantity: 64 }),
       makePart({ id: '3', serial_no: 'ALL', delivered_quantity: 64, quantity: 64 }),
     ];
-    const { urgent, partial } = splitForDashboard(items, { urgentLimit: 30, partialLimit: 30 });
+    const { urgent, partial } = splitForDashboard(
+      items,
+      { urgentLimit: 30, partialLimit: 30 },
+      deliveryWindowStartIso(),
+    );
 
     expect(urgent.map((p) => p.serial_no)).toEqual(['CLEAN']);
     expect(partial.map((p) => p.serial_no)).toEqual(['HALF', 'ALL']);
@@ -147,7 +205,11 @@ describe('splitForDashboard（按「有无已交批次」分桶）', () => {
         makePart({ id: `p${i}`, serial_no: `P${i}`, delivered_quantity: 5 }),
       ),
     ];
-    const { urgent, partial } = splitForDashboard(items, { urgentLimit: 2, partialLimit: 3 });
+    const { urgent, partial } = splitForDashboard(
+      items,
+      { urgentLimit: 2, partialLimit: 3 },
+      deliveryWindowStartIso(),
+    );
 
     expect(urgent.map((p) => p.serial_no)).toEqual(['U0', 'U1']);
     expect(partial.map((p) => p.serial_no)).toEqual(['P0', 'P1', 'P2']);
@@ -171,14 +233,20 @@ describe('splitForDashboard（按「有无已交批次」分桶）', () => {
         delivered_quantity: 9,
       }),
     ];
-    const { urgent, partial } = splitForDashboard(items, { urgentLimit: 30, partialLimit: 30 });
+    const { urgent, partial } = splitForDashboard(
+      items,
+      { urgentLimit: 30, partialLimit: 30 },
+      deliveryWindowStartIso(),
+    );
 
     expect(urgent.map((p) => p.serial_no)).toEqual(['A', 'C']);
     expect(partial.map((p) => p.serial_no)).toEqual(['B', 'D']);
   });
 
   it('W7：空输入 → 两桶皆空（面板走空态分支）', () => {
-    expect(splitForDashboard([], { urgentLimit: 30, partialLimit: 30 })).toEqual({
+    expect(
+      splitForDashboard([], { urgentLimit: 30, partialLimit: 30 }, deliveryWindowStartIso()),
+    ).toEqual({
       urgent: [],
       partial: [],
     });

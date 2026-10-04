@@ -13,7 +13,7 @@
 //     都有下界，没有下界时逾期件会占满 limit 100 把窗口内的件挤掉），
 //     且 planned_delivery_date_from/_to 根本不出现
 //   - U8：queryKey 含 today（gcTime 无限 + refetchOnWindowFocus false，today 不进键
-//     则跨零点吃昨天窗口的缓存）
+//     则跨零点吃昨天窗口的缓存）；键 / 请求参数 / 对外暴露的 windowStartIso 同刻相等
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope } from 'vue';
@@ -281,7 +281,7 @@ describe('useDashboardUrgentList — items 派生', () => {
     scope.stop();
   });
 
-  it('U8：queryKey 含 today —— 键与请求的窗口下界同源（reactive params 范式）', async () => {
+  it('U8：queryKey 含 today —— 键、请求参数与 windowStartIso 窗口下界同刻相等', async () => {
     listUnionItemsMock.mockResolvedValue(makeResultWithParts([]));
 
     const scope = effectScope();
@@ -300,9 +300,13 @@ describe('useDashboardUrgentList — items 派生', () => {
     expect(cached?.queryKey).toEqual(['dashboard', 'urgent-list', today]);
     // 前缀键与工厂键同根：WS 事件按前缀能一把命中（跨零点前后的两条都命中）
     expect(cached?.queryKey.slice(0, 2)).toEqual([...qk.dashboardUrgentListPrefix]);
-    // queryFn 从 queryKey 读 today（不是闭包捕获的另一个值）
+    // 键、queryFn 用的 today、对外暴露的 windowStartIso 三者是同一个瞬间捕获的同一个值：
+    // 消费方把它传给 splitForDashboard 即可让客户端窗口与服务端请求窗口同刻。
+    // 这里断言的是**同刻相等**，不是「同源」—— 同一天内两次取 Date() 结果必然相同，
+    // 跨零点才显形，而跨零点不重挂载就不换窗（故这条不可能区分 queryFn 是否现取 today）。
     const params = listUnionItemsMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(params['system_delivery_date_from']).toBe(cached?.queryKey[2]);
+    expect(q!.windowStartIso).toBe(cached?.queryKey[2]);
     scope.stop();
   });
 });

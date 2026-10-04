@@ -153,7 +153,7 @@ const deliveryBasis = ref<DeliveryBasis>('planned');
 const { data: snapshot, isPlaceholderData: snapshotStale } = useDashboardSnapshot(
   () => deliveryBasis.value,
 );
-const { items: urgentItems } = useDashboardUrgentList();
+const { items: urgentItems, windowStartIso } = useDashboardUrgentList();
 const { overdueCount } = useDashboardOverdue(isManager);
 
 // upcoming_delivery 数组（来自 snapshot，可能为空数组）
@@ -164,8 +164,9 @@ const inProcessItems = computed(() => snapshot.value?.in_process ?? []);
 
 // 右栏两块面板的分桶结果。共用同一份 items，只 filter + slice，零新增请求；
 // 交付动作发 PART_DELIVERED（已在本域 AFFECTS_DASHBOARD 事件集内）→ 自动失效重取。
+// windowStartIso 原样透传 ⇒ 客户端窗口与服务端请求窗口锁同一瞬间，不会差一天。
 const deliveryBuckets = computed(() =>
-  splitForDashboard(urgentItems.value, { urgentLimit: 30, partialLimit: 30 }),
+  splitForDashboard(urgentItems.value, { urgentLimit: 30, partialLimit: 30 }, windowStartIso),
 );
 
 // ============ KPI 派生 ============

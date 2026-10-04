@@ -72,10 +72,13 @@
             2026-10-05：件数渲染 total（服务端匹配总数）而非 rows.length —— limit 与
             端点页长上限一致，rows.length 只是「本页拿回来的条数」，拿它当件数会在
             条数触顶时谎报。被截断时追加提示，否则用户以为抽屉里的就是全部。
-            2026-10-05 补：换键期间（切 basis / 切日期 / 切层）query.data 尚未落地，
-            此时不渲染件数 —— pending 期渲染「共 0 件」会被读成一个权威计数。
+            两个开关必须同时盯着：
+            - isPending：换键期间（切 basis / 切日期 / 切层）query.data 尚未落地，
+              此时不渲染件数 —— pending 期渲染「共 0 件」会被读成一个权威计数；
+            - error：请求失败后 isPending 归 false、total 回落 0，同样会渲染出「共 0 件」
+              与下方红色错误块并存，自相矛盾（真相是「没拿到数据」而不是「0 件」）。
           -->
-          <span v-if="!isPending" class="header-total">共 {{ total }} 件</span>
+          <span v-if="!isPending && !error" class="header-total">共 {{ total }} 件</span>
           <span v-if="isTruncated" class="header-truncated">仅显示前 {{ rows.length }} 条</span>
         </div>
       </div>
@@ -156,7 +159,9 @@
 //
 // 视觉：
 //   - 顶部 header：单行放 日期 + 层标题(el-tag 用项目主色背景) + 口径标签 + 共 N 件
-//     （N = total；换键 pending 期间整块不渲染，避免「共 0 件」被读成权威计数；
+//     （N = total；首次加载 pending 期与请求失败期整块不渲染，避免「共 0 件」被读成
+//      权威计数；后台 refetch 期（isPending=false、isFetching=true）**照常渲染**，
+//      因为此刻数字是当前且正确的，整段闪烁反而是大屏噪音；
 //      被服务端 limit 截断时追加「仅显示前 N 条」）
 //   - 列表：el-table stripe；列 = # / 流水 / 图号 / 名称 / 客户(一二级拼接) / 状态 ElTag /
 //     倒计（**当前口径**交期字段的倒计文案，逾期/临近配色）

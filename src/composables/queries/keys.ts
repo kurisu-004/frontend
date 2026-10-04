@@ -78,6 +78,9 @@ export const qk = {
    *  **today 必须进键**：本 query 的 gcTime 是 POSITIVE_INFINITY（dashboard 域例外，
    *  靠 WS 事件失效），若 today 不进键，跨零点后新窗口的请求会命中「昨天的窗口」
    *  缓存并常驻（全局 refetchOnWindowFocus: false，无焦点重取可救）。
+   *  2026-10-05：键里的 date 由 useDashboardUrgentList 在 setup 里捕获一次（同值同时
+   *  喂给 splitForDashboard 作客户端窗口下界）⇒ 重新挂载后一定是新窗口的键，但常驻
+   *  页面跨零点后不会自动换窗（无定时 tick 驱动重算）。
    *  失效走 dashboardUrgentListPrefix（见下），不用本键。 */
   dashboardUrgentList: (date: string) => ['dashboard', 'urgent-list', date] as const,
   /** 2026-10-05 新增：urgent-list 域前缀 —— 专供 WS 事件失效用。键已含 today 维度，

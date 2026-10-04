@@ -20,9 +20,14 @@
 // 2026-10-05 追加「头部件数不谎报」覆盖（U11 / U12）：件数取服务端 total，被
 // 服务端 limit 截断（total > 取回条数）时追加「仅显示前 N 条」提示，未截断时
 // 不渲染任何提示。
-// 2026-10-05 追加 U13：换键（切 basis / 切日期 / 切层）后新键尚无数据、isPending 为
-// true 时，头部**不渲染件数** —— 此时渲染「共 0 件」会被读成一个权威计数（该 query 无
-// placeholderData，pending 期 query.data 恒 undefined）。
+// 2026-10-05 追加 U13：首次加载（query.data 未落地、isPending 为 true）时，头部**不
+// 渲染件数** —— 此时渲染「共 0 件」会被读成一个权威计数（该 query 无 placeholderData）。
+// 换键（切 basis / 切日期 / 切层）走同一分支、同样 isPending，不必单列用例。
+// 2026-10-05 追加 U14 / U15：
+//   - U14：请求失败后 isPending 归 false、total 回落 0，头部同样不得渲染「共 0 件」；
+//   - U15：后台 refetch 期（isPending=false、isFetching=true、data 仍在）头部**照常**
+//     渲染件数 —— 该开关盯的是 isPending，不是 isFetching，否则 30s stale 后的后台重取
+//     会让头部计数整段闪烁。
 //
 // 2026-10-04 纯测试基建修复（零生产代码改动）：原 ElTable stub 只按 :data 数行、
 // 根本不渲染默认 slot，等于整张表一个单元格都不渲染 —— 任何列级断言在这样一张空表上
@@ -144,6 +149,7 @@ vi.mock('@/api/dashboard', () => ({
 }));
 
 import UpcomingDeliveryListDrawer from '../UpcomingDeliveryListDrawer.vue';
+import { qk } from '@/composables/queries/keys';
 
 function makePart(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -179,7 +185,12 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     listUnionItemsMock.mockReset();
     onDashboardEventMock.mockClear();
     lastEventHandler = null;
-    testQueryClient = new QueryClient({ defaultOptions: { mutations: { retry: 0 } } });
+    // 2026-10-05：queries.retry: 0 与生产 main.ts 的全局默认对齐。插件自建 client 时
+    // 用的是库默认（queries.retry: 3 + 指数退避），错误态用例会等 1s+2s+4s 才落 error
+    // 态，既慢又不确定；显式关掉后错误态一次请求即定型。
+    testQueryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
+    });
   });
 
   afterEach(() => {
@@ -209,8 +220,12 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
         ...overrides,
       },
       global: {
-        plugins: [VueQueryPlugin],
-        provide: { VUE_QUERY_CLIENT: testQueryClient },
+        // 2026-10-05：client 随插件一起传。原先写 `plugins: [VueQueryPlugin]` +
+        // `provide: { VUE_QUERY_CLIENT }`，后者对本插件无效（vue-query 读的是 provide
+        // 之前就建好的插件私有 client），于是 testQueryClient 的缓存 / defaultOptions
+        // 全是空壳，组件实际跑在另一个 client 上。现形态下 testQueryClient.getQueryCache()
+        // 能看到组件建的 query，spec 也才能驱动 invalidate（U14 依赖这点）。
+        plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]],
         // 注册全局 stub：vi.mock('element-plus') 替换的 module export 不能被
         // Vue 自动注册到组件表里；这里手动用 kebab-case 注册保证 SFC 模板里
         // 的 <el-tag> / <el-table> 等可以解析。
@@ -468,7 +483,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     listUnionItemsMock.mockResolvedValue({
       items: [makePart({ id: '180000000000001' }), makePart({ id: '180000000000002' })],
       total: 9,
-      limit: 500,
+      limit: 200,
       offset: 0,
     });
 
@@ -487,7 +502,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     listUnionItemsMock.mockResolvedValue({
       items: [makePart({ id: '180000000000001' }), makePart({ id: '180000000000002' })],
       total: 2,
-      limit: 500,
+      limit: 200,
       offset: 0,
     });
 
@@ -500,10 +515,12 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     wrapper.unmount();
   });
 
-  it('U13：换键 pending 期头部不渲染件数（不把「共 0 件」当权威计数抛出去）', async () => {
+  it('U13：首次加载 pending 期头部不渲染件数（不把「共 0 件」当权威计数抛出去）', async () => {
     // 挂起一个永不 settle 的请求 ⇒ query.data 恒 undefined、isPending 恒 true
     // （该 query 无 placeholderData）。此时 total 派生为 0，渲染出来会被读成
     // 「服务端确认 0 件」，而真相是「还没拿到数据」。
+    // 用例名只钉「首次加载」这一种形态：换键（切 basis / 切日期 / 切层）走的是同一个
+    // 分支且同样 isPending（该 query 无 placeholderData ⇒ 新键无 data），不必单列。
     listUnionItemsMock.mockReturnValue(new Promise(() => {}));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
@@ -513,6 +530,58 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     // pending 期也没有截断提示可判（0 > 0 不成立），两侧都不出现
     expect(wrapper.find('.header-truncated').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('共 0 件');
+    wrapper.unmount();
+  });
+
+  it('U14：请求失败 → 不渲染「共 0 件」，只出错误块（0 件 ≠ 没拿到数据）', async () => {
+    // 失败后 isPending 归 false、total 回落 0。若头部只盯 isPending，会渲染出
+    // 「共 0 件」与下方红色错误块并存，自相矛盾且会被读成服务端确认了 0 件。
+    listUnionItemsMock.mockRejectedValue(new Error('boom'));
+
+    const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+
+    expect(wrapper.find('.list-error').exists()).toBe(true);
+    expect(wrapper.find('.list-error').text()).toContain('boom');
+    expect(wrapper.find('.header-total').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('共 0 件');
+    // total 回落 0 时截断提示同样不该出现（0 > 0 不成立）
+    expect(wrapper.find('.header-truncated').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('U15：后台 refetch 期（isPending=false / isFetching=true）头部照常渲染件数', async () => {
+    // 已有数据 + 同键 invalidate 触发的后台 refetch：此时 query 已有 data、status 不是
+    // pending，只有 fetchStatus 是 fetching。头部件数必须留着 —— 数字是当前且正确的，
+    // 整段闪烁反而是大屏噪音。若把 composable 的 isPending 误接成 isFetching，本条红。
+    listUnionItemsMock.mockResolvedValue({
+      items: [makePart({ id: '180000000000001' }), makePart({ id: '180000000000002' })],
+      total: 2,
+      limit: 200,
+      offset: 0,
+    });
+
+    const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+    expect(wrapper.find('.header-total').text()).toBe('共 2 件');
+
+    // 换成永不 settle 的实现 + 失效该 query ⇒ 进入「有旧数据、正在后台重取」的状态
+    listUnionItemsMock.mockReturnValue(new Promise(() => {}));
+    void testQueryClient.invalidateQueries({ queryKey: qk.dashboardPrefix });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await nextTick();
+
+    const query = testQueryClient.getQueryCache().getAll()[0];
+    // 前置校验：确实处在 fetching + 有 data 的组合，否则本条是空断言
+    expect(query?.state.fetchStatus).toBe('fetching');
+    expect(query?.state.data).toBeTruthy();
+    expect(query?.state.status).not.toBe('pending');
+
+    expect(wrapper.find('.header-total').exists()).toBe(true);
+    expect(wrapper.find('.header-total').text()).toBe('共 2 件');
+    expect(wrapper.findAll('.mock-row')).toHaveLength(2);
     wrapper.unmount();
   });
 });

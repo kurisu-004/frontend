@@ -18,13 +18,19 @@
 // system_delivery_date_from/_to 交给服务端。只有 sort_by SYSTEM_DELIVERY_DATE ASC +
 // limit 100 而没有下界时，逾期件（任意过去日期）在升序里排在最前，会把 100 条名额
 // 全部占满，窗口内的一件都挤不进 Top 30。加下界后这 100 条全部落在窗口内。
-// 客户端 inDeliveryWindow 保留同窗口判断（服务端与客户端同源于 systemDeliveryOrders，
-// 不是两套各自写的规则）。
+// 客户端 splitForDashboard 用返回的同一个 windowStartIso 重过同一窗口（服务端与客户端
+// 同源于 systemDeliveryOrders，不是两套各自写的规则）。
 //
 // today 必须进 queryKey（2026-10-05）：本 query 的 gcTime 是 POSITIVE_INFINITY
 // （dashboard 域例外，靠 WS 事件失效），today 不进键则跨零点后新窗口的请求会命中
 // 「昨天的窗口」缓存并常驻（全局 refetchOnWindowFocus: false，没有焦点重取可救）。
 // 同理 queryFn 从 queryKey 读 today（reactive params 范式），不闭包捕获。
+//
+// **保护边界**（2026-10-05）：today 在 setup 里捕获一次，queryKey 依赖它 ⇒ 常驻大屏跨过
+// 零点后窗口不会自动前移，要重新挂载本页才切到新窗口（没有定时 tick 驱动重算）。键里
+// 留着 today 的作用是「重新挂载时不吃到昨天窗口的缓存」，不是「到点自动换窗」。窗口一旦
+// 前移，服务端 from/to 与客户端 splitForDashboard 的窗口同刻切换（两者共用
+// windowStartIso），因此面板永远不会出现两端窗口错位一天。
 //
 // 设计要点：
 //   - 入参硬编码（除 today 外的筛选条件全部硬编码）：dashboard 不改筛选条件，原
@@ -36,8 +42,9 @@
 //     HTTP 流量带动 http.ts 的 token 主动刷新，详见 useDashboardSnapshot.ts 同位置
 //     长注释。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
-//   - 返回 { items, fetchList }：items = 窗口内至多 100 件（服务端 limit 截断），让
-//     caller 走 splitForDashboard 自行分桶 + slice。
+//   - 返回 { items, fetchList, query, windowStartIso }：items = 窗口内至多 100 件（服务端
+//     limit 截断），让 caller 走 splitForDashboard 自行分桶 + slice；windowStartIso 是本次
+//     挂载捕获的窗口下界，必须原样传给 splitForDashboard。
 
 import { computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -83,8 +90,11 @@ export function useDashboardUrgentList() {
   // today 进了 queryKey，前缀一把命中全部日期形态（含昨天窗口那条）。
   useDashboardInvalidation(qk.dashboardUrgentListPrefix);
 
-  // 窗口下界 = 本地今天；与 queryKey 同一来源，queryFn 从 queryKey 读，不闭包捕获。
-  const queryKey = computed(() => qk.dashboardUrgentList(deliveryWindowStartIso()));
+  // 窗口下界 = 本地今天，**setup 里捕获一次**：queryKey 与返回给消费方的 windowStartIso
+  // 必须是同一个瞬间捕获的同一个值 —— queryFn 从 queryKey 读它（reactive params 范式），
+  // 消费方 splitForDashboard 再拿同一个值派生上界，两端口径才不会各取一次 today 后漂移。
+  const windowStartIso = deliveryWindowStartIso();
+  const queryKey = computed(() => qk.dashboardUrgentList(windowStartIso));
 
   const query = useQuery<UnionListResultSchema, Error>({
     queryKey,
@@ -105,7 +115,7 @@ export function useDashboardUrgentList() {
   });
 
   // 派生：items = 服务端按 [today, today+6] 窗口过滤后、limit 截断到至多 100 件的数组，
-  // 消费方（DashboardView）走 splitForDashboard 分桶。
+  // 消费方（DashboardView）带 windowStartIso 走 splitForDashboard 分桶。
   // partSchema 的 z.infer 与 PartListItem 已直接对齐，无需强转。
   const items = computed<PartListItem[]>(() => query.data.value?.items ?? []);
 
@@ -123,5 +133,10 @@ export function useDashboardUrgentList() {
     items,
     fetchList,
     query,
+    /**
+     * 窗口下界（本次挂载捕获的那一个值）。消费方 splitForDashboard 必须把它当第三参
+     * 传回去，让客户端窗口与服务端请求窗口锁同一瞬间。
+     */
+    windowStartIso,
   };
 }
