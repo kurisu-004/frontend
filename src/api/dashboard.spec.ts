@@ -347,8 +347,31 @@ describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2
 
     const result = await api.fetchDashboardSnapshot();
 
-    expect(httpGetMock).toHaveBeenCalledWith('/dashboard/snapshot');
+    // 2026-10-04：端点新增可选查询参数 basis，不传参时 params 为空对象
+    // （cleanParams 剔掉 undefined）⇒ 请求串与加参数前逐字一致。
+    expect(httpGetMock).toHaveBeenCalledWith('/dashboard/snapshot', { params: {} });
     expect(result).toEqual(sample);
+  });
+
+  // 2026-10-04 新增：交期统计口径进查询串（planned / system），未传 basis 时被剔掉。
+  it('fetchDashboardSnapshot：basis 进查询串，未传的 basis 被剔掉', async () => {
+    const api = await loadDashboardApi();
+    const sample = {
+      on_production_shelves: [],
+      on_inspection_shelves: [],
+      in_process: [],
+      upcoming_delivery: [],
+      ts: '2026-09-28T10:00:00+08:00',
+    };
+    httpGetMock.mockResolvedValue({ data: sample });
+
+    await api.fetchDashboardSnapshot({ basis: 'system' });
+    expect(httpGetMock).toHaveBeenCalledWith('/dashboard/snapshot', {
+      params: { basis: 'system' },
+    });
+
+    await api.fetchDashboardSnapshot({ basis: undefined });
+    expect(httpGetMock).toHaveBeenLastCalledWith('/dashboard/snapshot', { params: {} });
   });
 });
 

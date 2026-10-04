@@ -38,12 +38,13 @@
 
 import { createGlobalState, useWebSocket } from '@vueuse/core';
 import { shallowRef, watch, type ShallowRef } from 'vue';
-import { api } from '@/api/http';
+import { api, cleanParams } from '@/api/http';
 import type {
   ConnectionStatus,
   DashboardEvent,
   DashboardEventType,
   DashboardServerMessage,
+  DeliveryBasis,
 } from '@/types/dashboard';
 import type { DashboardSnapshotData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
 import { decodeJwt } from '@/utils/jwt';
@@ -444,11 +445,25 @@ export function reconnectDashboard(): void {
 // HTTP 全量首取（2026-09-28 新增，与 WS snapshot 帧并行；WS 首帧不再消费）
 // ============================================================
 
+/** 2026-10-04 新增：GET /dashboard/snapshot 的可选查询参数。
+ *  全部 optional —— 缺省调用（不传参）与后端契约对齐：basis 缺省 planned（计划交期）。
+ *  窗口长度（未来 14 天）不开放给前端，继续由后端缺省值决定。 */
+export interface FetchDashboardSnapshotParams {
+  /** 交期统计口径：planned（计划交期）/ system（系统交期）。 */
+  basis?: DeliveryBasis;
+}
+
 /** GET /api/v2/dashboard/snapshot —— 拉一次大屏全量快照。
  *  返回值已由 http.ts 响应拦截器解封（response.data = payload.data），
- *  即 api.get 返回的 resp.data 已经是 DashboardSnapshotData，不再是 R<T> 信封。 */
-export async function fetchDashboardSnapshot(): Promise<DashboardSnapshotData> {
-  const resp = await api.get<DashboardSnapshotData>('/dashboard/snapshot');
+ *  即 api.get 返回的 resp.data 已经是 DashboardSnapshotData，不再是 R<T> 信封。
+ *  2026-10-04：接受可选查询参数 basis；该字段 optional，cleanParams 会把 undefined
+ *  剔掉 ⇒ 不传参时请求串与加参数前逐字一致。 */
+export async function fetchDashboardSnapshot(
+  params: FetchDashboardSnapshotParams = {},
+): Promise<DashboardSnapshotData> {
+  const resp = await api.get<DashboardSnapshotData>('/dashboard/snapshot', {
+    params: cleanParams(params),
+  });
   return resp.data;
 }
 

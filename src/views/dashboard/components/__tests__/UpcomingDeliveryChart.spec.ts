@@ -21,6 +21,12 @@
 //   SFC 传入的 option 对象。
 //   click 驱动走 `wrapper.findComponent({ name: 'VChart' }).vm.$emit('click', payload)`，
 //   与真 vue-echarts 行为对齐（vue-echarts 内部 chart.on('click', ...) → emit('click', ECElementEvent)）。
+//
+// 2026-10-04 追加「交期统计口径」覆盖（B1~B6）：切换控件渲染 / basis prop 驱动选中态
+// （受控）/ 切换 emit update:basis / 口径提示文案随 basis 变（el-tooltip 承载 + 键盘
+// 可达 + 无方向性断言）/ legend 钉 left: 0 / 口径占位提示层随 stale 显隐。
+// 口径开关用 EP_STUBS 局部 stub（沿用本文件 v-chart 策略，不 mock element-plus 模块）：
+// 口径不参与渲染，断言集中在 props/emits 与提示文案上。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -57,6 +63,31 @@ const VChartStub = {
     'finished',
   ],
   template: '<div class="mock-vchart" />',
+};
+
+/** 2026-10-04 新增：口径开关的 Element Plus 组件替身。
+ *  与主注册无关，测试环境不加载 main.ts ⇒ <el-radio-group> 无解析来源，故在 mount
+ *  的 global.stubs 里显式提供（沿用本文件 v-chart 的局部 stub 策略，不 mock
+ *  element-plus 模块）。el-radio-group 只当 props/emits 载体，模板不渲染真实控件。 */
+const EP_STUBS = {
+  'el-radio-group': {
+    name: 'ElRadioGroup',
+    props: ['modelValue', 'size', 'ariaLabel'],
+    emits: ['update:modelValue', 'change'],
+    template: '<div class="mock-radio-group"><slot /></div>',
+  },
+  'el-radio-button': {
+    name: 'ElRadioButton',
+    props: ['value', 'label', 'disabled'],
+    template: '<label class="mock-radio-button"><slot /></label>',
+  },
+  // 2026-10-04：口径提示改用 el-tooltip 承载（原 span + title 只有鼠标可达）。
+  // stub 只当 content prop 的载体，模板直接渲染 slot，不模拟浮层。
+  'el-tooltip': {
+    name: 'ElTooltip',
+    props: ['content', 'placement', 'trigger'],
+    template: '<span class="mock-tooltip"><slot /></span>',
+  },
 };
 
 /** 2026-09-30 沿用：组件对齐 today → today+13；测试用 today = 当前 Date。 */
@@ -120,8 +151,8 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, height: '320px' },
-      global: { stubs: { 'v-chart': VChartStub } },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
     await nextTick();
@@ -166,8 +197,8 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, height: '320px' },
-      global: { stubs: { 'v-chart': VChartStub } },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
     await nextTick();
@@ -188,8 +219,8 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       makeBucket({ date: todayIso(), count: 5, by_status: { PENDING: 5 } }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, height: '320px' },
-      global: { stubs: { 'v-chart': VChartStub } },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
     await nextTick();
@@ -214,8 +245,8 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
   it('C4：未知 seriesName → 不 emit（防御性）', async () => {
     const buckets: UpcomingDeliveryEntryData[] = [makeBucket({ date: '2026-10-01', count: 1 })];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, height: '320px' },
-      global: { stubs: { 'v-chart': VChartStub } },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
     await nextTick();
@@ -230,8 +261,8 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
 
   it('C5：vue-echarts initOptions={renderer:"canvas"} + theme="v5"', async () => {
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets: [makeBucket()], height: '320px' },
-      global: { stubs: { 'v-chart': VChartStub } },
+      props: { buckets: [makeBucket()], basis: 'planned' as const, stale: false, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
     await nextTick();
@@ -257,8 +288,8 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, height: '320px' },
-      global: { stubs: { 'v-chart': VChartStub } },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
     await nextTick();
@@ -280,8 +311,8 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, height: '320px' },
-      global: { stubs: { 'v-chart': VChartStub } },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
     await nextTick();
@@ -305,8 +336,8 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, height: '320px' },
-      global: { stubs: { 'v-chart': VChartStub } },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
     await nextTick();
@@ -314,6 +345,133 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
 
     const option = readOption(wrapper);
     expect(option.grid.left).toBeGreaterThanOrEqual(50);
+
+    wrapper.unmount();
+  });
+
+  // ==========================================================================
+  // 2026-10-04：交期统计口径开关（右上角浮层，受控 prop + update:basis emit）
+  // ==========================================================================
+
+  /** 口径用例共用的 mount：桶数据随便给一个，切口径不改渲染逻辑。 */
+  function mountChart(basis: 'planned' | 'system') {
+    const buckets: UpcomingDeliveryEntryData[] = [
+      makeBucket({ date: todayIso(), count: 4, by_status: { PENDING: 4 } }),
+    ];
+    return mount(UpcomingDeliveryChart, {
+      props: { buckets, basis, stale: false, height: '320px' },
+      global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
+    });
+  }
+
+  it('B1：口径开关渲染 —— 2 个 el-radio-button（value=planned / system）+ a11y label', async () => {
+    const wrapper = mountChart('planned');
+    await nextTick();
+
+    const group = wrapper.findComponent({ name: 'ElRadioGroup' });
+    expect(group.exists()).toBe(true);
+    expect(group.props('modelValue')).toBe('planned');
+    expect(group.props('ariaLabel')).toBe('交期统计口径');
+
+    const buttons = wrapper.findAllComponents({ name: 'ElRadioButton' });
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]?.props('value')).toBe('planned');
+    expect(buttons[1]?.props('value')).toBe('system');
+    // 文案用默认 slot 给（EP ≥2.6 的 value 当值、label 只作展示文本的老写法已废弃）
+    expect(buttons[0]?.text()).toBe('计划交期');
+    expect(buttons[1]?.text()).toBe('系统交期');
+
+    wrapper.unmount();
+  });
+
+  it('B2：选中态由 basis prop 驱动（组件不持状态）', async () => {
+    const wrapper = mountChart('system');
+    await nextTick();
+
+    const group = wrapper.findComponent({ name: 'ElRadioGroup' });
+    expect(group.props('modelValue')).toBe('system');
+
+    // 父组件改 prop → 选中态跟随（受控组件的核心行为）
+    await wrapper.setProps({ basis: 'planned' });
+    expect(group.props('modelValue')).toBe('planned');
+
+    wrapper.unmount();
+  });
+
+  it('B3：切换开关 → emit update:basis（非法值收敛回 planned）', async () => {
+    const wrapper = mountChart('planned');
+    await nextTick();
+
+    const group = wrapper.findComponent({ name: 'ElRadioGroup' });
+    group.vm.$emit('change', 'system');
+    await nextTick();
+    expect(wrapper.emitted('update:basis')?.[0]).toEqual(['system']);
+
+    // 组件不直接改自身状态：emit 之外没有任何本地切换动作
+    group.vm.$emit('change', 'bogus');
+    await nextTick();
+    expect(wrapper.emitted('update:basis')?.[1]).toEqual(['planned']);
+
+    wrapper.unmount();
+  });
+
+  it('B4：口径提示文案随 basis 变化（el-tooltip 承载，且不含「合计更少」方向性断言）', async () => {
+    const wrapper = mountChart('planned');
+    await nextTick();
+
+    const tooltip = () => wrapper.findComponent({ name: 'ElTooltip' });
+    const hint = () => wrapper.find('.basis-hint');
+    expect(hint().exists()).toBe(true);
+    // 键盘可达：触发元素必须可聚焦，且 tooltip trigger 含 focus（EP 默认只 hover）。
+    expect(hint().attributes('tabindex')).toBe('0');
+    expect(tooltip().props('trigger')).toEqual(['hover', 'focus']);
+    // 读屏用户直接读 aria-label，无需等浮层。
+    expect(hint().attributes('aria-label')).toBe('计划交期口径：按计划交期分桶，工单全部计入');
+    expect(tooltip().props('content')).toBe('计划交期口径：按计划交期分桶，工单全部计入');
+
+    await wrapper.setProps({ basis: 'system' });
+    const systemHint = '系统交期口径：未填写系统交期的工单整件不计入，合计与计划交期口径不同';
+    expect(tooltip().props('content')).toBe(systemHint);
+    expect(hint().attributes('aria-label')).toBe(systemHint);
+    // 两个口径用的是同一个日期窗口、只是打在不同列上，合计无可比大小关系，
+    // 文案里不得出现「少于 / 小于 / ≤」这类可被反例击穿的方向性断言。
+    expect(systemHint).not.toMatch(/少于|小于|≤|不超过/);
+
+    wrapper.unmount();
+  });
+
+  it('B5：legend 钉 left: 0（图例左侧起排，右上角留给口径开关浮层）', async () => {
+    const wrapper = mountChart('planned');
+    await nextTick();
+    await flushPromises();
+
+    const option = readOption(wrapper) as OptionShape & {
+      legend: { data: string[]; left?: number; top?: number };
+    };
+    expect(option.legend.left).toBe(0);
+    expect(option.legend.top).toBe(0);
+
+    wrapper.unmount();
+  });
+
+  it('B6：口径占位提示层 —— stale=true 盖「口径切换中」，false 不渲染', async () => {
+    const wrapper = mountChart('planned');
+    await nextTick();
+    // 数据已就绪（图上数字与开关一致）→ 提示层不出现。
+    expect(wrapper.find('.chart-pending').exists()).toBe(false);
+
+    // 父组件切口径后 snapshot 处于 keepPreviousData 换键期（isPlaceholderData=true）：
+    // 图上还是上一口径的数字，必须有一层提示挡住「开关已切、数字没切」的误读。
+    await wrapper.setProps({ stale: true });
+    const pending = wrapper.find('.chart-pending');
+    expect(pending.exists()).toBe(true);
+    expect(pending.text()).toBe('口径切换中…');
+    // role="status" 是给读屏用户的（提示文本变化时朗读）；「不吃点击」是 CSS
+    // pointer-events，happy-dom 无布局引擎算不出，这条只能靠代码评审守住。
+    expect(pending.attributes('role')).toBe('status');
+
+    await wrapper.setProps({ stale: false });
+    expect(wrapper.find('.chart-pending').exists()).toBe(false);
 
     wrapper.unmount();
   });

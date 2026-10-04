@@ -16,9 +16,19 @@
 //   - U4：事件集过滤 —— DELIVERY_NOTE_CREATED（不在 AFFECTS_DASHBOARD）→ 不触发 invalidate；
 //   - U5：Zod parse 失败 → query.error 非空；
 //   - U6：vi.mock('element-plus') 桩成 no-op，避免 vitest node env document 抛错。
+// 2026-10-04（交期口径切换）追加：
+//   - U8：basis 进 queryKey —— 两条口径各自一份 cache identity，键 = ['dashboard',
+//     'snapshot', basis]；
+//   - U9：切 basis 触发自动 refetch，且请求带上新 basis；
+//   - U10：WS 事件失效的是**前缀**（qk.dashboardSnapshotPrefix）—— 切到 system 后
+//     派事件，planned 那条缓存也被标脏（用户切回去时不能吃到旧数）；
+//   - U11：切口径的请求在途期间 data 沿用上一份快照 + isFetching/isPlaceholderData
+//     均为 true（大屏不闪空，同时给调用方出「数字还是旧的」提示的信号）；
+//   - U12：同键后台 refetch（WS 事件驱动）isFetching=true 但 isPlaceholderData=false
+//     —— 提示层的信号只能取后者，否则大屏会在无人操作时反复播报假状态。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp, effectScope } from 'vue';
+import { createApp, effectScope, nextTick, ref } from 'vue';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 vi.mock('element-plus', () => ({
@@ -62,7 +72,8 @@ const onDashboardEventMock = vi.fn(
 );
 
 vi.mock('@/api/dashboard', () => ({
-  fetchDashboardSnapshot: () => fetchSnapshotMock(),
+  // 透传入参：口径切换用例要断言 basis 真的进了请求（mock 收到什么就是发什么）。
+  fetchDashboardSnapshot: (params?: unknown) => fetchSnapshotMock(params),
   onDashboardEvent: (
     h: (ev: {
       type: 'event';
@@ -74,6 +85,8 @@ vi.mock('@/api/dashboard', () => ({
 }));
 
 import { useDashboardSnapshot } from '../useDashboardSnapshot';
+import { qk } from '@/composables/queries/keys';
+import type { DeliveryBasis } from '@/types/dashboard';
 
 function makeBaseSnapshot(): Record<string, unknown> {
   return {
@@ -142,7 +155,7 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     const scope = effectScope();
     let q: ReturnType<typeof useDashboardSnapshot> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() => useDashboardSnapshot());
+      q = testApp.runWithContext(() => useDashboardSnapshot('planned'));
     });
     await q!.refetch();
 
@@ -159,7 +172,7 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     const scope = effectScope();
     let q: ReturnType<typeof useDashboardSnapshot> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() => useDashboardSnapshot());
+      q = testApp.runWithContext(() => useDashboardSnapshot('planned'));
     });
     await q!.refetch();
     fetchSnapshotMock.mockClear();
@@ -187,7 +200,7 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     const scope = effectScope();
     let q: ReturnType<typeof useDashboardSnapshot> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() => useDashboardSnapshot());
+      q = testApp.runWithContext(() => useDashboardSnapshot('planned'));
     });
     await q!.refetch();
     fetchSnapshotMock.mockClear();
@@ -217,7 +230,7 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     const scope = effectScope();
     let q: ReturnType<typeof useDashboardSnapshot> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() => useDashboardSnapshot());
+      q = testApp.runWithContext(() => useDashboardSnapshot('planned'));
     });
     await q!.refetch();
     fetchSnapshotMock.mockClear();
@@ -244,7 +257,7 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     const scope = effectScope();
     let q: ReturnType<typeof useDashboardSnapshot> | undefined;
     scope.run(() => {
-      q = testApp.runWithContext(() => useDashboardSnapshot());
+      q = testApp.runWithContext(() => useDashboardSnapshot('planned'));
     });
 
     // 等待 refetch + parse 失败（vue-query 在 microtask 链里抛）
@@ -269,7 +282,7 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     for (let i = 0; i < 5; i++) {
       const scope = effectScope();
       scope.run(() => {
-        testApp.runWithContext(() => useDashboardSnapshot());
+        testApp.runWithContext(() => useDashboardSnapshot('planned'));
       });
       // mount 后应该正好 1 个活跃 handler（本次 scope 注册的那个）
       expect(eventHandlers.size).toBe(1);
@@ -281,5 +294,164 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     // 5 轮 mount/unmount 后最终状态：eventHandlers 应该清零
     expect(eventHandlers.size).toBe(0);
     expect(onDashboardEventMock).toHaveBeenCalledTimes(5);
+  });
+
+  // ==========================================================================
+  // 2026-10-04：交期统计口径（planned / system）—— 口径进键，切口径即换键 refetch
+  // ==========================================================================
+
+  it('U8：queryKey 含 basis 维度 —— 两条口径各自一份 cache identity', async () => {
+    const basis = ref<DeliveryBasis>('planned');
+    const scope = effectScope();
+    scope.run(() => {
+      testApp.runWithContext(() => useDashboardSnapshot(basis));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    basis.value = 'system';
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const cache = testQueryClient.getQueryCache();
+    // 键严格四层：['dashboard', 'snapshot', basis]
+    const planned = cache.find({ queryKey: qk.dashboardSnapshot('planned') });
+    const system = cache.find({ queryKey: qk.dashboardSnapshot('system') });
+    expect(planned).toBeTruthy();
+    expect(system).toBeTruthy();
+    expect(planned?.queryKey).toEqual(['dashboard', 'snapshot', 'planned']);
+    expect(system?.queryKey).toEqual(['dashboard', 'snapshot', 'system']);
+    scope.stop();
+  });
+
+  it('U9：切 basis → 自动 refetch，且请求带上新 basis', async () => {
+    const basis = ref<DeliveryBasis>('planned');
+    const scope = effectScope();
+    let q: ReturnType<typeof useDashboardSnapshot> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useDashboardSnapshot(basis));
+    });
+    await q!.refetch();
+    expect(fetchSnapshotMock).toHaveBeenCalledWith({ basis: 'planned' });
+    fetchSnapshotMock.mockClear();
+
+    basis.value = 'system';
+    // 不调 refetch —— 换键本身就该触发一次自动请求（这正是「切口径自动跟随」的实现）
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(fetchSnapshotMock).toHaveBeenCalledWith({ basis: 'system' });
+    expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
+    scope.stop();
+  });
+
+  it('U10：WS 事件失效前缀 —— 切到 system 后 planned 那条（非当前口径）也被标脏', async () => {
+    vi.useFakeTimers();
+    const basis = ref<DeliveryBasis>('planned');
+    const scope = effectScope();
+    scope.run(() => {
+      testApp.runWithContext(() => useDashboardSnapshot(basis));
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    basis.value = 'system';
+    await vi.advanceTimersByTimeAsync(30);
+
+    const cache = testQueryClient.getQueryCache();
+    const planned = cache.find({ queryKey: qk.dashboardSnapshot('planned') });
+    expect(planned).toBeTruthy();
+    expect(planned?.state.isInvalidated).toBe(false);
+    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
+    fetchSnapshotMock.mockClear();
+
+    lastEventHandler!({ type: 'event', event_type: 'PART_TO_SHIP', data: {}, ts: 'x' });
+    await vi.advanceTimersByTimeAsync(500);
+
+    // 关键断言 1：失效键是**前缀**，一次命中 planned / system 两条。
+    // 若误用带 basis 的精确键，用户切回 planned 时会直接吃到事件前的旧快照。
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardSnapshotPrefix });
+    // 关键断言 2：planned 当前无观察者（已切到 system）⇒ 不会被 refetch、标脏状态保留，
+    // 这正是「前缀把非当前口径那条也失效了」的可观测证据。
+    expect(planned?.state.isInvalidated).toBe(true);
+    // 当前口径那条被立即重取
+    expect(fetchSnapshotMock).toHaveBeenCalledWith({ basis: 'system' });
+    scope.stop();
+  });
+
+  // ==========================================================================
+  // 2026-10-04：切口径期间保持上一份快照（大屏不闪空）
+  // ==========================================================================
+
+  it('U11：切 basis 的请求在途期间 data 仍是上一份快照，且 isFetching=true', async () => {
+    const basis = ref<DeliveryBasis>('planned');
+    const scope = effectScope();
+    let q: ReturnType<typeof useDashboardSnapshot> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useDashboardSnapshot(basis));
+    });
+    await q!.refetch();
+    expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
+    expect(q!.isFetching.value).toBe(false);
+
+    // 让新口径的请求挂在未决状态上（模拟慢响应）。
+    let releaseSystem: (v: unknown) => void = () => {};
+    fetchSnapshotMock.mockImplementationOnce(
+      () => new Promise((resolve) => { releaseSystem = resolve; }),
+    );
+
+    basis.value = 'system';
+    await nextTick();
+
+    // 关键：DashboardView 的 7 个派生量（全从这一个 ref 出）都依赖 data 非空。
+    // 不配 keepPreviousData 的话此刻 data 会是 undefined —— 柱状图 14 根柱清零、
+    // 今日/两周到期归零，连与口径无关的在制/在检 KPI 也一起归零，整块大屏闪空。
+    expect(q!.data.value).toBeDefined();
+    expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
+    // 数字暂时还是旧口径的 —— 调用方据此出提示（DashboardView 把这个信号接到
+    // UpcomingDeliveryChart 的 :stale，图上盖一层 .chart-pending）。
+    expect(q!.isFetching.value).toBe(true);
+    expect(q!.isPlaceholderData.value).toBe(true);
+
+    releaseSystem({ ...makeBaseSnapshot(), ts: '2026-10-04T10:00:00+08:00' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(q!.isFetching.value).toBe(false);
+    expect(q!.isPlaceholderData.value).toBe(false);
+    expect(q!.data.value?.ts).toBe('2026-10-04T10:00:00+08:00');
+    scope.stop();
+  });
+
+  it('U12：同键后台 refetch（WS 事件）isFetching=true 但 isPlaceholderData=false', async () => {
+    vi.useFakeTimers();
+    const basis = ref<DeliveryBasis>('planned');
+    const scope = effectScope();
+    let q: ReturnType<typeof useDashboardSnapshot> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useDashboardSnapshot(basis));
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
+    expect(q!.isPlaceholderData.value).toBe(false);
+
+    // 挂起一次响应，模拟慢的后台 refetch。
+    let release: (v: unknown) => void = () => {};
+    fetchSnapshotMock.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+
+    // 派一个真实 WS 事件 → useDashboardInvalidation 500ms debounce → invalidate →
+    // **同一个 queryKey** 的后台 refetch。图上数字此刻是当前且正确的（仍是 planned），
+    // 不该被提示层说成「口径切换中」。
+    lastEventHandler!({ type: 'event', event_type: 'PART_TO_SHIP', data: {}, ts: 'x' });
+    await vi.advanceTimersByTimeAsync(500);
+
+    // 鉴别点：isFetching 已经是 true（正是把它当提示信号会踩的坑），但
+    // isPlaceholderData 保持 false ⇒ 提示层不出现，用户什么都没切也不会看到假状态。
+    expect(q!.isFetching.value).toBe(true);
+    expect(q!.isPlaceholderData.value).toBe(false);
+    expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
+
+    release({ ...makeBaseSnapshot(), ts: '2026-09-28T10:00:00+08:00' });
+    await vi.advanceTimersByTimeAsync(30);
+
+    expect(q!.isFetching.value).toBe(false);
+    expect(q!.isPlaceholderData.value).toBe(false);
+    scope.stop();
   });
 });

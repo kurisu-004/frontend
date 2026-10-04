@@ -6,13 +6,23 @@
     - date: 'YYYY-MM-DD'
     - layer: 'top' | 'middle' | 'bottom'
     - statuses: OrderStatus[]
+    - basis: 'planned' | 'system'（2026-10-04 新增，交期统计口径）
     - @update:modelValue: 双向同步
   渲染：el-table stripe；列 = # / 流水(serial_no) / 图号(drawing_no) / 名称 /
   客户(l1_customer_name + customer_name 拼接) / 状态 ElTag / 倒计
-  (planned_delivery_date，出逾期/临近配色)；loading / error / empty 三态。
+  （按 basis 取 planned_delivery_date 或 system_delivery_date，出逾期/临近配色）；
+  loading / error / empty 三态。
   闸门：父组件 DashboardView `v-if="selectedLayer"` 保证 drawer 首次点击前不挂载，
   useDashboardUpcomingList 的 enabled 闸门天然生效；drawer 自身
   `v-if="statuses.length === 0"` 是 props 异常兜底。
+
+  口径（2026-10-04 新增）：抽屉是柱状图的下钻，日期窗口与倒计列都必须跟柱状图当前
+  口径一致，否则会出现「点的是系统交期的柱、列里却显示计划交期倒计」的自相矛盾。
+  - 组件不持口径状态：props.basis 进，透传给 useDashboardUpcomingList；
+  - header 挂一枚口径小标签，让抽屉自解释当前口径；
+  - 倒计列读 rowDeliveryDate(计划交期, 系统交期) 统一取字段，模板里不写三元；
+  - 客户列 / 倒计列的取字段 helper 一律收「字段值」而不是整行，模板侧不留
+    `as PartListItem` 强转（el-table 列 slot 的 row 是 DefaultRow，见函数注释）。
 
   抽屉形态：direction 'btt'（bottom-to-top）+ :size 60% —— 从屏幕底部弹出、水平
   宽度撑满、最大高度 60%，与 dashboard 双栏布局配合（点柱状图看到的是「目标日期的
@@ -50,6 +60,8 @@
           >
             {{ LAYER_LABEL[layer] }}
           </el-tag>
+          <!-- 2026-10-04：口径小标签，让抽屉自解释当前统计口径（跟柱状图开关同步） -->
+          <el-tag size="small" effect="plain" type="info">{{ basisLabel }}</el-tag>
           <span class="header-total">共 {{ rows.length }} 件</span>
         </div>
       </div>
@@ -82,8 +94,8 @@
           </el-table-column>
           <el-table-column label="客户" min-width="120">
             <template #default="{ row }">
-              <span class="cell-customer" :title="customerPath(row as PartListItem)">
-                {{ customerPath(row as PartListItem) || '—' }}
+              <span class="cell-customer" :title="customerPath(row.l1_customer_name, row.customer_name)">
+                {{ customerPath(row.l1_customer_name, row.customer_name) || '—' }}
               </span>
             </template>
           </el-table-column>
@@ -96,10 +108,13 @@
           </el-table-column>
           <el-table-column label="倒计" width="84" align="right">
             <template #default="{ row }">
-              <span :class="['cell-due', deliveryUrgencyClass(row.planned_delivery_date)]">
+              <span
+                :class="['cell-due', deliveryUrgencyClass(rowDeliveryDate(row.planned_delivery_date, row.system_delivery_date))]"
+              >
                 {{
-                  deliveryDaysLeftText(row.planned_delivery_date) ||
-                    formatDeliveryDate(row.planned_delivery_date)
+                  deliveryDaysLeftText(
+                    rowDeliveryDate(row.planned_delivery_date, row.system_delivery_date),
+                  ) || formatDeliveryDate(rowDeliveryDate(row.planned_delivery_date, row.system_delivery_date))
                 }}
               </span>
             </template>
@@ -120,14 +135,14 @@
 //
 // 数据流：
 //   1. props.modelValue=true 时 useDashboardUpcomingList 的 enabled 闸门打开
-//      （params getter 返回 { date, statuses } 非 null）；
-//   2. params 变化（切层 / 切日期）→ queryKey 变化 → 自动 refetch；
+//      （params getter 返回 { date, statuses, basis } 非 null）；
+//   2. params 变化（切层 / 切日期 / 切口径）→ queryKey 变化 → 自动 refetch；
 //   3. rows = query.data.items（500 件上限防御性兜底；实际单日 × 8 状态远小于此）。
 //
 // 视觉：
-//   - 顶部 header：单行放 日期 + 层标题(el-tag 用项目主色背景) + 共 N 件
+//   - 顶部 header：单行放 日期 + 层标题(el-tag 用项目主色背景) + 口径标签 + 共 N 件
 //   - 列表：el-table stripe；列 = # / 流水 / 图号 / 名称 / 客户(一二级拼接) / 状态 ElTag /
-//     倒计（planned_delivery_date 的倒计文案，逾期/临近配色）
+//     倒计（**当前口径**交期字段的倒计文案，逾期/临近配色）
 //   - loading / error / empty 三态
 //   - v-if="statuses.length === 0" 兜底：父组件 onBarLayerClick 写入后 statuses
 //     一定有元素；此处防御 props 异常时给空状态提示。
@@ -146,12 +161,15 @@ import {
   type OrderStatus,
   type PartListItem,
 } from '@/types/parts';
+import { DELIVERY_BASIS_LABEL, type DeliveryBasis } from '@/types/dashboard';
 
 const props = defineProps<{
   modelValue: boolean;
   date: string;
   layer: 'top' | 'middle' | 'bottom';
   statuses: readonly OrderStatus[];
+  /** 2026-10-04 新增：交期统计口径（必填，唯一状态源在父组件 DashboardView）。 */
+  basis: DeliveryBasis;
 }>();
 
 const emit = defineEmits<{
@@ -179,12 +197,37 @@ const LAYER_COLOR: Record<'top' | 'middle' | 'bottom', string> = {
 
 const layerColor = computed(() => LAYER_COLOR[props.layer]);
 
+/** 2026-10-04 新增：header 口径标签文案（与柱状图开关共用 DELIVERY_BASIS_LABEL）。 */
+const basisLabel = computed(() => DELIVERY_BASIS_LABEL[props.basis]);
+
+/** 2026-10-04 新增：取当前口径对应的交期字段值。
+ *  倒计列有三处消费（class / 倒计文案 / 日期回显），散在模板里各写一次三元容易
+ *  漏改一处导致「class 用计划交期、文案用系统交期」，故收成一个函数。
+ *  入参是**两个字段值**而不是整行：el-table 列的 scoped slot 交给模板的 row 类型是
+ *  el-table 的 DefaultRow（Record<PropertyKey, any>，不含具体字段），把整行传进收
+ *  PartListItem 的函数在模板侧就得逐处 `as PartListItem` 强转，噪音大且掩盖了
+ *  「这个函数到底读哪几个字段」这条信息。传字段值则零强转，函数签名本身也把依赖
+ *  的字段钉死了。
+ *  system_delivery_date 可空，返回 null 时下游 deliveryDate 工具函数按空值处理
+ *  （无倒计文案、日期列留空）。 */
+function rowDeliveryDate(
+  plannedDate: string | null,
+  systemDate: string | null,
+): string | null {
+  return props.basis === 'system' ? systemDate : plannedDate;
+}
+
 /** 2026-09-30 新增：params getter —— 仅 drawer 打开时返回非 null 让闸门打开；
- *  关闭（modelValue=false）时返回 null 停 fetch，与 enabled 闸门语义对齐。 */
+ *  关闭（modelValue=false）时返回 null 停 fetch，与 enabled 闸门语义对齐。
+ *  2026-10-04：透传 basis，让下钻的日期窗口与柱状图当前口径一致。 */
 const params = computed(() => {
   if (!props.modelValue) return null;
   if (props.statuses.length === 0) return null;
-  return { date: props.date, statuses: [...props.statuses] as OrderStatus[] };
+  return {
+    date: props.date,
+    statuses: [...props.statuses] as OrderStatus[],
+    basis: props.basis,
+  };
 });
 
 const { data: rows, isPending, error } = useDashboardUpcomingList(() => toValue(params));
@@ -196,10 +239,11 @@ function onRowClick(row: PartListItem): void {
   emit('rowClick', row);
 }
 
-/** 2026-09-30 新增：客户路径展示 —— l1_customer_name + customer_name（如有）。 */
-function customerPath(item: PartListItem): string {
-  const l1 = item.l1_customer_name ?? '';
-  const cur = item.customer_name ?? '';
+/** 2026-09-30 新增：客户路径展示 —— l1_customer_name + customer_name（如有）。
+ *  同 rowDeliveryDate：收字段值而非整行，模板侧免掉 `as PartListItem` 强转。 */
+function customerPath(l1Name: string | null, customerName: string | null): string {
+  const l1 = l1Name ?? '';
+  const cur = customerName ?? '';
   if (l1 && cur && l1 !== cur) return `${l1} / ${cur}`;
   return cur || l1;
 }
