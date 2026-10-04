@@ -10,22 +10,31 @@
   3. 扫码枪输入 serial_no；前端校验必须等于选中零件.serial_no；不等则拒绝
   4. 通过则弹「数量」对话框；确认后调 POST /prod/batches/{batch_id}/pick-up
 
-  2026-10-03 迁 v2 批次锚定端点（pickUpPart 由 v1 遗留的 /parts/pick-up 迁入 prod 域）：
-  - 批次 id 走**路径参数**，body 只剩 `{ version, worker_id, shelf_id, quantity?, note? }`：
-    `version` 取列表项 `batch_version`（t_part_batch.version，OCC 锚）、
-    `worker_id` 是工人雪花 ID（**不是** badge_code）、`quantity` **必须发字符串**
-    （后端只解 JSON string，发 number 直接 422）。
-  - 数量对话框不再是死 UI：v2 端点支持部分领取，缺省 quantity 才 = 整批。
-  - 本页依赖的两处后端能力均已合入 backend `master`（2026-10-03：部分领取 +
-    拆批、`pickable-by-work-type` 返 `batch_id` / `batch_version`），即流程可跑通。
-  - 列表行缺 batch_id / batch_version 时走显式报错（`PICK_UP_NO_BATCH_HINT`），
-    **不静默用 part_id 顶替**（那会打成后端「批次不存在」，掩盖真实原因）。
-    ⚠️ 这条守卫是**防线**而非常态：正常路径上 `GET /parts/pickable-by-work-type` 恒返
-    这两个字段（后端对 part 级行一律不填，只对这个「行单位就是批次」的端点填），所以
-    弹这条提示基本等于「后端没给锚点」，值得当异常上报。
-  - 本页 PICK_UP 不直接调 worker-scan（该端点服务 RETURNED / INSPECTED 事件），
-    仍走 pickUpPart 这条手动领取路径。
+   2026-10-03 迁 v2 批次锚定端点（pickUpPart 由 v1 遗留的 /parts/pick-up 迁入 prod 域）：
+   - 批次 id 走**路径参数**，body 只剩 `{ version, worker_id, quantity?, note? }`：
+     `version` 取列表项 `batch_version`（t_part_batch.version，OCC 锚）、
+     `worker_id` 是工人雪花 ID（**不是** badge_code）、`quantity` **必须发字符串**
+     （后端只解 JSON string，发 number 直接 422）。
+   - 数量对话框不再是死 UI：v2 端点支持部分领取，缺省 quantity 才 = 整批。
+   - 本页依赖的两处后端能力均已合入 backend `master`（2026-10-03：部分领取 +
+     拆批、`pickable-by-work-type` 返 `batch_id` / `batch_version`），即流程可跑通。
+   - 列表行缺 batch_id / batch_version 时走显式报错（`PICK_UP_NO_BATCH_HINT`），
+     **不静默用 part_id 顶替**（那会打成后端「批次不存在」，掩盖真实原因）。
+     ⚠️ 这条守卫是**防线**而非常态：正常路径上 `GET /parts/pickable-by-work-type` 恒返
+     这两个字段（后端对 part 级行一律不填，只对这个「行单位就是批次」的端点填），所以
+     弹这条提示基本等于「后端没给锚点」，值得当异常上报。
+   - 本页 PICK_UP 不直接调 worker-scan（该端点服务 RETURNED / INSPECTED 事件），
+     仍走 pickUpPart 这条手动领取路径。
+
+   2026-10-04 解绑作业架：后端把 pick-up 的 `shelf_id` 改成可选（缺省不做任何校验），
+   该值本就既不落库也不参与任何 WHERE ⇒ 本页不再发它，也不再读 `useScanShelfStore`。
+   这解掉了「账号绑 ≥ 2 个架 ⇒ 作业架判不出 ⇒ 守卫 100% 拦死、取件一次都提交不出去」
+   的死结：取件对账号绑了几个架不再有任何要求。送检（/scan/inspect）的 `shelf_id` 是
+   真事实（落库 + scope 校验），仍走作业架 + 选架 UI。
+   - ⚠️ **部署顺序**：后端改成可选的那一支必须先上线；旧后端 + 不发 `shelf_id` = 裸
+     HTTP 422（axum Json extractor 拒，不是项目统一信封）。
 -->
+
 
 <template>
   <div class="scan-pick">
@@ -142,15 +151,12 @@
                   class="urgent-pulse"
                   >加急</el-tag
                 >
-                <!-- 2026-10-04：后端这两个 service 把 planned_delivery_date 写死
-                     '1970-01-01'（占位），已在 scanPartRowSchema 的 transform 里
-                     归一成 null；两个日期都为 null 时整个 chip 不渲染（否则会留下
-                     一个只含日历图标的空壳）。 -->
-                <DeliveryDateChip
-                  v-if="p.planned_delivery_date || p.system_delivery_date"
-                  :planned-delivery-date="p.planned_delivery_date"
-                  :system-delivery-date="p.system_delivery_date"
-                />
+                <!-- 2026-10-04：chip 只显示系统交期，无值显示 '-'（恒渲染，不加 v-if）。
+                     计划交期只作排序键、不上屏。⚠️ 后端在这两个端点上把
+                     planned_delivery_date 写死 '1970-01-01'、system_delivery_date 恒 null
+                     （已在 scanPartRowSchema 的 transform 里归一成 null）⇒ 后端补真实投影
+                     之前，全仓卡片这一位都会是 '-'，是发布顺序问题、不是渲染缺陷。 -->
+                <DeliveryDateChip :system-delivery-date="p.system_delivery_date" />
               </div>
 
               <!-- 2) 名称 -->
@@ -268,11 +274,6 @@ import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useScanShelfStore } from '@/stores/scanShelf';
-import {
-  resolveWorkingShelfId,
-  workingShelfProblem,
-} from '@/views/scan/composables/resolveWorkingShelf';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
 import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
@@ -289,13 +290,9 @@ const router = useRouter();
 const { worker, requireWorker, reset: resetScanSession } = useScanSession();
 const { onScan } = useBarcodeScanner();
 const { emitHeldChanged } = useScanBus();
-// 2026-07-13：跨架列表展示用 listPartsByWorkTypeAllShelves（后端按 user.shelf_ids 收口）；
-// shelf_id 提交取「当前作业架」，来自 useScanShelfStore：单架 = 唯一架 id；多架 =
-// sessionStorage 里上次会话落盘、且仍在本次候选集内的那个架（典型成因是账号原本单架、
-// 后来管理员加了第二架）—— 沿用来的架系统判不出对错，提交前会提示一句
-// 「沿用上次会话的 {code}」（workingShelfNotice）；wildcard / 多架无可用架 → 无作业架，
-// 见 resolveWorkingShelfId。
-const scanShelf = useScanShelfStore();
+// 2026-10-04：跨架列表展示用 listPartsByWorkTypeAllShelves（后端按 user.shelf_ids 收口）。
+// 取件提交不再需要任何货架字段（pick-up 的 shelf_id 已改为可选，见文件头），本页因此不
+// 依赖 useScanShelfStore —— 账号绑几个架都提交得出去。
 
 const parts = ref<ScanPartRowSchema[]>([]);
 // 后端信封里的总条数（可能大于已加载的 parts.length —— 见 refresh 里的 limit 说明）
@@ -341,20 +338,9 @@ function isHeic(t: string): boolean {
 
 onBeforeMount(async () => {
   if (!requireWorker(router)) return;
-  // 2026-10-04：先确保候选架已加载，再在提交时读作业架。
-  // 候选集由 useScanShelfStore（Pinia 单例）跨路由存活；store 内部按账号 + 绑定集幂等，
-  // 直接进本页（深链 / 刷新）时这一句才真的去拉货架。
-  // ⚠️ 读 `selectedShelfId` 必须在这句 await **之后** —— 深链 / 刷新直进本页时 store 尚无
-  // 候选集，未加载时 `selectedShelfId` 恒为 null，守卫会把它误报成「账号没绑货架」。
-  // 两件事并发：货架请求挂掉时（api timeout 30s）零件列表不必陪着一起等。
-  // 安全依据：作业架只在**用户交互之后**被读（applyScanSelection / onQtyConfirm），
-  // 那两个处理器都在本 await 完成之后才可能被触发；模板不读任何货架值。
-  await Promise.all([scanShelf.initShelves(), refresh()]);
-  // 2026-10-04 提前提示：作业架不可用时本页一次都提交不出去（每条提交路径都要过
-  // resolveWorkingShelfId），不必等工人走完「选件 → 扫码」才被拦。用 warning 而非
-  // error：这里只是告知，不阻断本页的浏览与预览。
-  const shelfProblem = workingShelfProblem();
-  if (shelfProblem) ElMessage.warning(`${shelfProblem}；本页的取件操作暂不可用`);
+  // 2026-10-04：取件页已不依赖任何货架状态（pick-up 的 shelf_id 可选，见文件头），
+  // 进页只加载零件列表。
+  await refresh();
 });
 
 async function refresh(): Promise<void> {
@@ -477,19 +463,13 @@ async function scrollCardIntoView(batchKey: string): Promise<void> {
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-/** PICK tail：选中 + 滚动 + 校验 shelf_id + 开数量弹窗 */
+/** PICK tail：选中 + 滚动 + 开数量弹窗 */
 async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
   selectedPart.value = p;
   selectedQty.value = p.quantity;
   const key = String(p.batch_id || p.id);
   await scrollCardIntoView(key);
   if (!worker.value) return;
-  // 2026-09-16 PR-2：part 级 current_holder_id 随 t_part 瘦身下线，shelf_id 统一
-  // 取「当前作业架」（判定见文件头 scanShelf 处的说明）。拿不到（如 wildcard 账号）
-  // 就报错提示，**不发**空 shelf_id（后端必填 i64，省略会被 axum
-  // `Json` extractor 拒成裸 HTTP 422、不是项目统一信封）。
-  const useShelfId = resolveWorkingShelfId();
-  if (!useShelfId) return;
   showQtyDialog.value = true;
 }
 
@@ -540,9 +520,6 @@ async function onQtyConfirm(qty: number): Promise<void> {
   showQtyDialog.value = false;
   if (!selectedPart.value || !worker.value) return;
   const code = selectedPart.value.serial_no || selectedPart.value.drawing_no || '';
-  // 2026-09-16 PR-2：同 applyScanSelection，shelf_id 只取当前作业架。
-  const useShelfId = resolveWorkingShelfId();
-  if (!useShelfId) return;
   // 2026-10-03 迁 v2 批次锚定：batch_id 升为路径参数、version 为 OCC 锚，两者都取自
   // 列表项（后端 2026-10-03 起在 pickable-by-work-type 补上）。缺任一即契约/数据缺口，
   // **不用 part_id 顶替**（顶替会打成后端「批次不存在」，把真因盖掉）。
@@ -560,7 +537,6 @@ async function onQtyConfirm(qty: number): Promise<void> {
       version: batchVersion,
       // 工人雪花 ID 字符串（后端按 worker 记录归属，不认 badge_code）。
       worker_id: String(worker.value.id),
-      shelf_id: useShelfId,
       // 部分领取；必须发字符串（后端 deserialize_i64_opt 只解 JSON string）。
       quantity: String(qty),
     });
