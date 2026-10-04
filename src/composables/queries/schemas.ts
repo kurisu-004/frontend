@@ -1939,8 +1939,9 @@ export const scanPartRowSchema = z.object({
    * 2026-10-04：同上，`planned_delivery_date` 恒为占位符 `1970-01-01`。归一成
    * `null` 的直接收益：报工台三页的 `DeliveryDateChip` 不再显示
    * 「01/01 · 已逾期 2 万多天」的红色错值（`formatDeliveryDate` / `deliveryUrgencyClass`
-   * 拿到 null 后返空串 / 空 class），三页模板的 chip 外层再各自按「两个日期都为 null」
-   * 加 `v-if`，空 chip 外壳也不渲染。
+   * 拿到 null 后返空串 / 空 class）。2026-10-04 起 chip 在三页**恒渲染**、无值时日期位
+   * 显示 `-`，空外壳这件事由组件自己保证，不再由调用方加 `v-if`（见
+   * `views/scan/components/DeliveryDateChip.vue`）。
    */
   planned_delivery_date: z
     .string()

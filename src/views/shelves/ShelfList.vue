@@ -84,7 +84,7 @@
           ><el-input v-model="shelfForm.name" placeholder="如 生产区-A1 货架"
         /></el-form-item>
         <el-form-item label="区域" prop="zone">
-          <el-select v-model="shelfForm.zone" style="width: 100%">
+          <el-select v-model="shelfForm.zone" style="width: 100%" @change="onZoneChange">
             <el-option label="生产区" value="PRODUCTION" /><el-option
               label="品检区"
               value="INSPECTION"
@@ -104,7 +104,14 @@
           />
           <span class="field-hint">用于共享 HMI 卡片网格 picker 的物理顺序；0=未设置</span>
         </el-form-item>
-        <el-form-item label="工序">
+        <!--
+          2026-10-04 后端收紧 `POST /api/v2/prod/shelf-processes/{id}`：`items` 非空时会对
+          非 PRODUCTION 区的货架返 20104（`items: []` 的清空路径已豁免）。读侧早就按
+          `zone='PRODUCTION'` 口径取候选（10 处 `useShelfProcessFilter`），写侧这里对齐 ——
+          品检架不该在这里配工序，界面上就不给入口。
+          zone 的判据是 `effectiveZone` 而不是 `shelfForm.zone`，见该 computed 的注释。
+        -->
+        <el-form-item v-if="effectiveZone === 'PRODUCTION'" label="工序">
           <el-select
             v-model="selectedProcessIds"
             multiple
@@ -139,7 +146,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, h } from 'vue';
+import { computed, ref, reactive, onMounted, h } from 'vue';
 import { ElMessage, ElTag, ElForm, type FormInstance } from 'element-plus';
 // 2026-10-02 review 第 1 轮 M-3：useQueryClient 只为保存成功后失效共享映射缓存
 // （见 saveShelf 里的 invalidateShelfProcessMappingsQuery 调用点注释）。
@@ -259,6 +266,45 @@ const shelfRules = {
   zone: [{ required: true, message: '必选' }],
 };
 
+/**
+ * 映射编辑区（工序多选）与提交清空逻辑的 zone 判据。
+ *
+ * 2026-10-04：后端把 `POST /prod/shelf-processes/{id}` 收紧成「`items` 非空时，非
+ * PRODUCTION 区的货架返 20104」（`items: []` 清空路径豁免）。前端这里必须跟着收，否则
+ * 品检架的新增 / 编辑都收 20104 —— 而 `saveShelf` 里 `updateShelf` / `createShelf` 都**先于**
+ * 这一步执行，于是变成**半截保存**：字段改了、映射没改，界面还弹「已保存」。
+ *
+ * 为什么编辑态不能用 `shelfForm.zone`：
+ *   - `updateShelf` 的 payload 只有 `{name, location, display_order}`，**不含 zone** ⇒
+ *     编辑态在表单里改「区域」对 DB 完全无效；
+ *   - 区域下拉在编辑态**没有** `:disabled`（只有「代码」输入框有）⇒ 用户改得动。
+ * 两个方向都会错：品检架被切到 PRODUCTION ⇒ 用表单值判会说「可以写」⇒ 调接口 ⇒ 后端读 DB
+ * 仍是 INSPECTION ⇒ 20104（又半截保存）；生产架被切成品检 ⇒ 判说说「跳过」⇒ 静默留下陈旧
+ * 映射，界面零提示。
+ *
+ * 所以编辑态一律以 `editingShelf.zone`（= `GET /shelves` 返回的 DB 值，表格行不过滤 zone）
+ * 为准。它只被 `editShelf`（赋表格行）与 `resetForm`（置 null）写，任何表单交互都不写它。
+ * 新增态 `editingShelf` 为 null，`shelfForm.zone` 正是随 `createShelf` 写进 DB 的值，
+ * 不可能分叉。
+ */
+const effectiveZone = computed(() => editingShelf.value?.zone ?? shelfForm.zone);
+
+/**
+ * 用户真的改了「区域」时清掉已选工序。
+ *
+ * 2026-10-04：切到非生产区后工序多选会被 `v-if` 隐藏，但 `v-model` 绑的
+ * `selectedProcessIds` 里**残留值仍在**，「隐藏多选」不等于「清空选择」—— 残留会被
+ * `saveShelf` 原样提交。必须同步清。
+ *
+ * 用 `@change` 而不是 `watch(() => effectiveZone.value)`：`editShelf` 会异步
+ * `getShelfProcesses` 填充 `selectedProcessIds`，而 `effectiveZone` 在 `editingShelf` 被赋值
+ * 那一刻就变了 ⇒ watch 会与打开弹窗时的填充流程竞态（可能把刚填进去的映射清掉）。
+ * `@change` 只在用户实际改 zone 时触发，不与填充流程相撞。
+ */
+function onZoneChange(): void {
+  selectedProcessIds.value = [];
+}
+
 async function fetchData() {
   loading.value = true;
   try {
@@ -349,7 +395,18 @@ async function saveShelf() {
     // payload 构造收口到 api/shelves::toShelfProcessesPayload（sort_order = 数组
     // 下标，沿 v1「提交顺序即 sort_order」语义），并由 src/api/shelfProcesses.spec.ts
     // 逐字钉死形态，避免调用方再编出 v1 形态。
-    await setShelfProcesses(shelfId, toShelfProcessesPayload(selectedProcessIds.value));
+    //
+    // 2026-10-04：非 PRODUCTION 区提交 `{items: []}`（= 显式清空），**不是跳过这一次
+    // 调用**。两条理由：
+    //   - 跳过 ⇒ 品检架上原有的陈旧映射留在库里，界面零提示（静默不一致）；
+    //   - 跳过 ⇒ **新增路径会留下孤儿货架**：货架已由上面的 `createShelf` 落库，映射一步
+    //     却没写，用户以为配好了；再点保存会带同一个 `code` 重新 createShelf，撞部分唯一
+    //     `uk_t_shelf_code`（`WHERE deleted_at IS NULL`）⇒ 20502 DUPLICATE_CODE 彻底卡死，
+    //     而编辑弹窗里没有停用入口（停用按钮在表格行、且 `v-if="row.is_active"`）。
+    // `{items: []}` 则清空动作真的发生，且后端对 `items` 为空已豁免、不报 20104。
+    const processIdsToSave =
+      effectiveZone.value === 'PRODUCTION' ? selectedProcessIds.value : [];
+    await setShelfProcesses(shelfId, toShelfProcessesPayload(processIdsToSave));
     // 2026-10-02 review 第 1 轮 M-3：保存成功后失效共享映射缓存。本数据的写点全仓
     // 只有这一个、读点有 10 处（useShelfProcessFilter），不适用 CLAUDE.md「跨页面写
     // 操作不做穷举失效」策略（那条针对写点散落多域、补齐等于穷举的情形），补失效

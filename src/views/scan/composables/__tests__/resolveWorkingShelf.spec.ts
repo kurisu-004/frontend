@@ -2,12 +2,12 @@
 //
 // 2026-10-04 新增：resolveWorkingShelfId 的守卫判定与文案。
 //
-// 为什么值得单测：它是取件 / 送检两页**唯一**的「不发请求」出口，后果分别是
-// 「worker-scan 省略 shelf_id → 422」与「填品检架 → 20501」，都是工人看不懂的
+// 为什么值得单测：它是送检页（/scan/inspect）**唯一**的「不发请求」出口，后果是
+// 「worker-scan 省略 shelf_id → 裸 422」与「填品检架 → 20501」，都是工人看不懂的
 // 烂错误。守卫一旦放行了不该放行的组合，这两个故障就回来了。
 //
-// 本文件是**共用**守卫的单测：取件（/scan/pick）与送检（/scan/inspect）import 的都是
-// 这个 composable（仓内没有两页各自的页面级 spec），故这里的每条用例对两页同时生效。
+// 2026-10-04 收窄到只服务送检：取件页已解绑（后端把 pick-up 的 shelf_id 改成可选、
+// 缺省不做任何校验），那里不再有任何货架守卫，本文件不再替它背书。
 //
 // ElMessage 按仓内既有做法桩成 no-op（node/happy-dom 下真实 ElMessage 走
 // normalizeAppendTo 会污染输出，见 CLAUDE.md 的 ElMessage 错误桥接条目）。
@@ -29,11 +29,7 @@ vi.mock('@/api/shelves', () => ({
 
 import { listShelves } from '@/api/shelves';
 import { useScanShelfStore } from '@/stores/scanShelf';
-import {
-  resolveWorkingShelfId,
-  workingShelfNotice,
-  workingShelfProblem,
-} from '../resolveWorkingShelf';
+import { resolveWorkingShelfId, workingShelfProblem } from '../resolveWorkingShelf';
 
 import type { CurrentUser } from '@/types/user';
 import type { Shelf } from '@/types/shelf';
@@ -106,7 +102,10 @@ describe('resolveWorkingShelfId', () => {
     );
   });
 
-  it('G3：多架未选 → 返回 null 并指向「指定唯一作业货架」（不是「去选一下」）', async () => {
+  // 2026-10-04 语义反转：多架账号的出路从「找管理员收窄绑定」改成了「工人自己在
+  // /scan/action 顶部的「当前作业货架」区选一次」。文案必须指向那个入口 —— 指错了工人
+  // 会去找管理员做一件管理员根本不用做的事。
+  it('G3：多架未选 → 返回 null，文案指向「操作选择」页的选架入口', async () => {
     bootstrap(makeUser(['8800000000001', '8800000000002']));
     mockShelves([
       { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
@@ -116,11 +115,31 @@ describe('resolveWorkingShelfId', () => {
 
     expect(resolveWorkingShelfId()).toBeNull();
     expect(ElMessage.error).toHaveBeenCalledWith(
-      '本账号绑定了多个货架，无法确定当前作业货架，请联系管理员为本账号指定唯一作业货架',
+      '本账号绑定了多个货架，请先在「操作选择」页选择当前作业货架',
     );
   });
 
-  it('G4：选中的架在品检区 → 返回 null，且文案不叫工人「改选」（页面上没有选架入口）', async () => {
+  // 守住「文案指向的入口真的存在且能解除这个状态」：worker 照 G3 的文案退回操作选择页
+  // 选一个架，同一份候选集下守卫就必须放行了。少这条，G3 的文案与
+  // ScanActionPicker 的选架 UI 可能各说各话而无人发现。
+  it('G3b：按 G3 文案选完架（selectShelf）后守卫放行，不再弹 error', async () => {
+    bootstrap(makeUser(['8800000000001', '8800000000002']));
+    mockShelves([
+      { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
+      { id: '8800000000002', code: 'SH-P02', zone: 'PRODUCTION' },
+    ]);
+    const scanShelf = useScanShelfStore();
+    await scanShelf.initShelves();
+    expect(resolveWorkingShelfId()).toBeNull();
+    vi.mocked(ElMessage.error).mockClear();
+
+    expect(scanShelf.selectShelf('8800000000002')).toBe(true);
+
+    expect(resolveWorkingShelfId()).toBe('8800000000002');
+    expect(ElMessage.error).not.toHaveBeenCalled();
+  });
+
+  it('G4：选中的架在品检区 → 返回 null，文案说清「候选里没有生产架、只能找管理员」', async () => {
     bootstrap(makeUser(['8800000000002']));
     mockShelves([{ id: '8800000000002', code: 'SH-I02', zone: 'INSPECTION' }]);
     const scanShelf = useScanShelfStore();
@@ -151,6 +170,8 @@ describe('resolveWorkingShelfId', () => {
     expect(workingShelfProblem()).toBe(
       '当前账号未绑定作业货架，请联系管理员在「账号管理」为本账号绑定生产货架',
     );
+    // 这条是**行为锁**：`workingShelfProblem` 的约定就是只读不弹（调用方自选级别与时机），
+    // /scan/action 顶部的横条正是靠这一点复用它而不必自己吞提示。
     expect(ElMessage.error).not.toHaveBeenCalled();
     expect(ElMessage.warning).not.toHaveBeenCalled();
   });
@@ -167,7 +188,10 @@ describe('resolveWorkingShelfId', () => {
     );
   });
 
-  it('G8：多架沿用上次会话的架 → 照常放行，但 warning 告知沿用来源', async () => {
+  // 2026-10-04：多架沿用 sessionStorage 里上次选定的架 → 照常放行。选架入口已经存在，
+  // 沿用不再需要「不该拦但该让工人知道」那条 warning：那条提示的存在理由是「拦了就是
+  // 死路」，现在工人自己就能换，重复提示只会变成噪音（守卫因此不再有任何 warning 分支）。
+  it('G8：多架沿用上次会话选定的架 → 照常放行，且不弹任何提示', async () => {
     bootstrap(makeUser(['8800000000001', '8800000000002']));
     mockShelves([
       { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
@@ -176,67 +200,22 @@ describe('resolveWorkingShelfId', () => {
     sessionStorage.setItem('active_shelf_selection:u1', '8800000000002');
     await useScanShelfStore().initShelves();
 
-    // 不拦：页面上没有选架入口，拦了就是死路
     expect(resolveWorkingShelfId()).toBe('8800000000002');
     expect(ElMessage.error).not.toHaveBeenCalled();
-    expect(ElMessage.warning).toHaveBeenCalledWith(
-      '当前作业货架沿用上次会话的 SH-P02，如需更换请联系管理员',
-    );
-    expect(workingShelfNotice()).toBe('当前作业货架沿用上次会话的 SH-P02，如需更换请联系管理员');
-  });
-
-  it('G9：单架自动选不提示「沿用上次会话」（否则每次提交都是噪音）', async () => {
-    bootstrap(makeUser(['8800000000001']));
-    mockShelves([{ id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' }]);
-    await useScanShelfStore().initShelves();
-
-    expect(resolveWorkingShelfId()).toBe('8800000000001');
-    expect(ElMessage.warning).not.toHaveBeenCalled();
-    expect(workingShelfNotice()).toBeNull();
-  });
-
-  it('G10：有阻断问题时不再叠「沿用」提示（一次只说一句）', async () => {
-    bootstrap(makeUser(['8800000000001', '8800000000002']));
-    mockShelves([
-      { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
-      { id: '8800000000002', code: 'SH-I02', zone: 'INSPECTION' },
-    ]);
-    sessionStorage.setItem('active_shelf_selection:u1', '8800000000002');
-    await useScanShelfStore().initShelves();
-
-    expect(resolveWorkingShelfId()).toBeNull();
-    expect(workingShelfNotice()).toBeNull();
-    expect(ElMessage.error).toHaveBeenCalledWith(
-      '本账号当前绑定的货架在品检区，缺少生产区作业货架，请联系管理员为本账号绑定生产货架',
-    );
+    // ⚠️ 哨兵，不是行为锁（2026-10-04 review 第 1 轮标注）：`workingShelfNotice` 已删，
+    // 守卫**当前没有任何 warning 分支**，所以这条恒真、当前不携带信息。留着的唯一作用是
+    // 「别把噪音加回来」—— 将来谁在守卫里塞一条 warning（尤其是带去重的状态位），
+    // 这里会响。真正的行为锁是上面那两行：放行 + 不弹 error。
     expect(ElMessage.warning).not.toHaveBeenCalled();
   });
 
-  it('G11：沿用提示同一份候选集内只弹一次（一次提交流程要过两遍守卫）', async () => {
-    bootstrap(makeUser(['8800000000001', '8800000000002']));
-    mockShelves([
-      { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' },
-      { id: '8800000000002', code: 'SH-P02', zone: 'PRODUCTION' },
-    ]);
-    sessionStorage.setItem('active_shelf_selection:u1', '8800000000002');
-    await useScanShelfStore().initShelves();
-
-    // 取件页「扫码选中」+「提交确认」、送检页「扫码选中」+「提交」各过一次守卫 ⇒
-    // 不去重就是同一次操作弹两条一模一样的 warning
-    expect(resolveWorkingShelfId()).toBe('8800000000002');
-    expect(resolveWorkingShelfId()).toBe('8800000000002');
-    expect(ElMessage.warning).toHaveBeenCalledTimes(1);
-    // warning 去重不该影响放行：两次都拿到 id
-    expect(ElMessage.error).not.toHaveBeenCalled();
-  });
-
-  it('G12：阻断问题的 error 每次都弹（与 warning 去重策略不同）', async () => {
+  it('G12：阻断问题的 error 每次都弹（「这次提交被拦」是逐次事实）', async () => {
     bootstrap(makeUser([]));
     await useScanShelfStore().initShelves();
 
     expect(resolveWorkingShelfId()).toBeNull();
     expect(resolveWorkingShelfId()).toBeNull();
-    // 「这次提交被拦」是逐次事实，压掉第二条工人会以为第二次成了
+    // 压掉第二条工人会以为第二次成了
     expect(ElMessage.error).toHaveBeenCalledTimes(2);
   });
 });

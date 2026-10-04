@@ -135,14 +135,12 @@
                   class="urgent-pulse"
                   >加急</el-tag
                 >
-                <!-- 2026-10-04：planned_delivery_date 的后端占位符 '1970-01-01'
-                     已在 scanPartRowSchema 归一成 null；两个日期都为 null 时整个
-                     chip 不渲染（否则只剩一个日历图标的空壳）。 -->
-                <DeliveryDateChip
-                  v-if="p.planned_delivery_date || p.system_delivery_date"
-                  :planned-delivery-date="p.planned_delivery_date"
-                  :system-delivery-date="p.system_delivery_date"
-                />
+                <!-- 2026-10-04：chip 只显示系统交期，无值显示 '-'（恒渲染，不加 v-if）。
+                     计划交期只作排序键、不上屏。⚠️ 后端给 by-worker 的
+                     system_delivery_date 恒 null（占位值 '1970-01-01' 已在
+                     scanPartRowSchema 归一成 null）⇒ 后端补真实投影之前，本页这一位
+                     全是 '-'，是发布顺序问题、不是渲染缺陷。 -->
+                <DeliveryDateChip :system-delivery-date="p.system_delivery_date" />
               </div>
 
               <!-- 2) 名称 -->
@@ -357,6 +355,8 @@ onBeforeMount(async () => {
   // 2026-10-04 提前提示：作业架不可用时本页**一次都提交不出去**（每条提交路径都要过
   // resolveWorkingShelfId），不必等工人走完「选件 → 扫码 → 选品检架」才被拦。
   // 用 warning 而非 error：这里只是告知，不阻断本页的浏览与预览。
+  // 多架未选那条文案的出路在 `/scan/action` 顶部的「当前作业货架」区（选架入口在那儿，
+  // 本页没有）—— 工人退回操作选择页选一次即可，本页的深链兜底守卫只在刷新直入时触发。
   const problem = workingShelfProblem();
   if (problem) ElMessage.warning(`${problem}；本页的送检操作暂不可用`);
 });

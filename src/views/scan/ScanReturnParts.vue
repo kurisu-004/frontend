@@ -146,14 +146,12 @@
                   class="urgent-pulse"
                   >加急</el-tag
                 >
-                <!-- 2026-10-04：planned_delivery_date 的后端占位符 '1970-01-01'
-                     已在 scanPartRowSchema 归一成 null；两个日期都为 null 时整个
-                     chip 不渲染（否则只剩一个日历图标的空壳）。 -->
-                <DeliveryDateChip
-                  v-if="p.planned_delivery_date || p.system_delivery_date"
-                  :planned-delivery-date="p.planned_delivery_date"
-                  :system-delivery-date="p.system_delivery_date"
-                />
+                <!-- 2026-10-04：chip 只显示系统交期，无值显示 '-'（恒渲染，不加 v-if）。
+                     计划交期只作排序键、不上屏。⚠️ 后端给 by-worker 的
+                     system_delivery_date 恒 null（占位值 '1970-01-01' 已在
+                     scanPartRowSchema 归一成 null）⇒ 后端补真实投影之前，本页这一位
+                     全是 '-'，是发布顺序问题、不是渲染缺陷。 -->
+                <DeliveryDateChip :system-delivery-date="p.system_delivery_date" />
               </div>
 
               <!-- 2) 名称 -->

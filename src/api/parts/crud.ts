@@ -271,14 +271,17 @@ export interface PartUpdatePayload {
 
 /** 2026-10-03 迁 prod 域：领取入参对齐后端 v2 `PickUpRequest`。与 v1 的
  *  `{ serial_no, shelf_id, badge_code, batch_id?, quantity? }` 不再同构 ——
- *  v1 是「扫序列号 + 工牌」，v2 是「按批次 + OCC + 工人」。 */
+ *  v1 是「扫序列号 + 工牌」，v2 是「按批次 + OCC + 工人」。
+ *
+ *  2026-10-04 去掉 `shelf_id`：后端把它从必填 `i64` 改成 `Option<i64>`，**缺省即不做
+ *  任何校验**。该字段在 pick-up 里本来就只是「存在 + active + zone=PRODUCTION」的一
+ *  道冗余断言 —— 既不落库、也不参与任何 WHERE，删掉它对端点行为没有影响，而取件页因此
+ *  不再需要「当前作业架」，多架账号（`user.shelf_ids` ≥ 2）也能提交。 */
 export interface PartPickUpPayload {
   /** 必填；t_part_batch.version（OCC），从列表项的 batch_version 取 */
   version: number;
   /** 必填；雪花 ID 字符串；不是工牌码 */
   worker_id: string;
-  /** 必填；雪花 ID 字符串 */
-  shelf_id: string;
   /** 2026-10-03 部分领取：缺省 = 整批。**必须发字符串**（后端 deserialize_i64_opt 只吃 JSON string，发 number 会 422） */
   quantity?: string | null;
   note?: string | null;
@@ -513,10 +516,12 @@ export async function releaseFromProgramming(
  *  - `quantity` **必须发 JSON 字符串**（后端 `deserialize_i64_opt` 的实现是先
  *    `Option::<String>::deserialize` 再 `parse::<i64>()`，发 number 会被 axum `Json`
  *    extractor 拒成 422）；缺省 / null = 整批，小于总量时后端自动拆批。
+ *  - 不发 `shelf_id`（2026-10-04：后端改成 `Option<i64>`，缺省不做任何校验；该值在
+ *    pick-up 里既不落库也不参与 WHERE，见 `PartPickUpPayload` 的说明）。
  *  响应仍是 part 级 `R<PartOut>`，调用方按整批刷新列表即可。
  *
- *  当前**无跨仓部署顺序依赖**（2026-10-03 核）：调用方可以无条件发 `quantity`、
- *  也可以直接读列表项的 `batch_id` / `batch_version` —— 后端这两处能力均已具备。 */
+ *  **有跨仓部署顺序依赖**（2026-10-04）：后端把 `shelf_id` 改成可选的那一支必须先上线，
+ *  前端这个改动才能独立验证；反之旧后端 + 不发 `shelf_id` 会得到裸 HTTP 422。 */
 export async function pickUpPart(batchId: string, payload: PartPickUpPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/pick-up`,

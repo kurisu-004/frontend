@@ -345,18 +345,26 @@ describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () =
   //   - `quantity` 必须发 JSON **字符串**（后端 deserialize_i64_opt 先解 String 再 parse
   //     i64，发 number 直接 422）；
   //   - `version` 必须是普通 number（i32，无自定义 deserializer）。
+  // 2026-10-04：`shelf_id` 不再进 body（后端改成 `Option<i64>`，缺省不做任何校验；
+  // 键集断言同步收紧 —— 少一个键是契约，多一个键会被后端静默忽略而前端以为自己有货架
+  // 语义，取件页因此彻底不依赖作业架）。
   it('R4b：pickUpPart 打 /prod/batches/{batch_id}/pick-up，body 与 PickUpRequest 同构', async () => {
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
     await pickUpPart(BATCH, {
       version: 7,
       worker_id: '190000000000001',
-      shelf_id: '190000000000002',
       quantity: '4',
     });
     const [path, body] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
     expect(path).toBe(`/prod/batches/${BATCH}/pick-up`);
-    expect(Object.keys(body).sort()).toEqual(['quantity', 'shelf_id', 'version', 'worker_id']);
+    // ⚠️ 这条 `toEqual` 钉的是**本用例自己构造的 payload**（上面那 3 个键），不是真实调用点
+    // 的 body —— `pickUpPart` 是 `api.post(url, payload)` 原样透传、不重组，所以键集等于
+    // 调用点传了什么。调用点（`views/scan/ScanPickParts.vue` 的 `onQtyConfirm`）传
+    // `{ version, worker_id, quantity }`、不传 `note`，两者一致这件事由
+    // `api/parts/crud.ts` 的 `PartPickUpPayload` 类型 + 那个调用点保证，不在本用例的
+    // 守门范围内。真正独立有效的是下面那几条 `not.toHaveProperty`。
+    expect(Object.keys(body).sort()).toEqual(['quantity', 'version', 'worker_id']);
     expect(typeof body.version).toBe('number');
     expect(body.version).toBe(7);
     // 字符串形态钉死（v1 的 number 形态就是 422 的根因）。
@@ -364,6 +372,8 @@ describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () =
     expect(body.quantity).toBe('4');
     // batch_id 是路径参数，不再进 body。
     expect(body).not.toHaveProperty('batch_id');
+    // shelf_id 已从 v2 契约里退成可选且前端不再发（见上方注释）。
+    expect(body).not.toHaveProperty('shelf_id');
     // v1 的两个字段随端点下线一并消失（worker_id ≠ badge_code，serial_no 不用了）。
     expect(body).not.toHaveProperty('badge_code');
     expect(body).not.toHaveProperty('serial_no');

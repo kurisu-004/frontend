@@ -3,10 +3,14 @@
 
   报工台（PICK / RETURN / INSPECT）工件卡片右上角的交期 chip。
   把 ScanPickParts / ScanReturnParts / ScanInspectParts 三页重复的 span 模板与样式集中。
-  「系统交期」优先级：若 system_delivery_date 已设置，显示它 + 加一个「系统交期」小标签；
-  否则 fallback 到 planned_delivery_date（保持原行为）。
--->
 
+  2026-10-04：**只显示系统交期**（`system_delivery_date`），无值时日期位渲染 `-`
+  （对齐 `formatDashboardDeliveryDate` 的空值口径）。计划交期（`planned_delivery_date`）
+  退化为**纯排序键** —— `useScanPartsSort` 仍用它给「无系统交期」的那一组排序，不再
+  上屏：工人对着两个日期分不清哪个是硬期限，混着显示只会催错件。
+  无值时 `daysText` / 紧迫样式 / 「系统交期」小标签全部不渲染，只留一个 `-`，不制造
+  「这里应该有值」的错觉。
+-->
 <template>
   <span :class="['delivery-date', urgencyClass]">
     <el-icon><Calendar /></el-icon>
@@ -28,15 +32,13 @@ import {
 } from '@/utils/deliveryDate';
 
 const props = defineProps<{
-  plannedDeliveryDate: string | null;
   systemDeliveryDate: string | null;
 }>();
 
-const effectiveDate = computed(() => props.systemDeliveryDate ?? props.plannedDeliveryDate);
 const hasSystem = computed(() => props.systemDeliveryDate != null);
-const formattedDate = computed(() => formatDeliveryDate(effectiveDate.value));
-const daysText = computed(() => deliveryDaysLeftText(effectiveDate.value));
-const urgencyClass = computed(() => deliveryUrgencyClass(effectiveDate.value));
+const formattedDate = computed(() => formatDeliveryDate(props.systemDeliveryDate) || '-');
+const daysText = computed(() => deliveryDaysLeftText(props.systemDeliveryDate));
+const urgencyClass = computed(() => deliveryUrgencyClass(props.systemDeliveryDate));
 </script>
 
 <style scoped>

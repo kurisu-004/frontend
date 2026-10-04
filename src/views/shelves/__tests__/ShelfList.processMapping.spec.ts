@@ -189,6 +189,10 @@ const globalConfig = {
     'el-select': {
       name: 'ElSelect',
       props: ['modelValue', 'multiple'],
+      // 2026-10-04：ShelfList 的「区域」下拉挂了 `@change="onZoneChange"`（切区清空已选
+      // 工序）。emits 里补 change，用例才能从 DOM 侧触发它（下面找「区域」那个 form-item
+      // 里的 ElSelect 发 $emit），而不是直接调内部函数。
+      emits: ['change', 'update:modelValue'],
       template: '<div class="mock-select"><slot /></div>',
     },
     'el-option': {
@@ -214,6 +218,11 @@ interface ShelfListVm {
   editingShelf: Shelf | null;
   selectedProcessIds: string[];
   processLoadFailed: boolean;
+  /** 2026-10-04：映射区 / 提交清空的 zone 判据。 */
+  effectiveZone: string;
+  /** 2026-10-04：区域下拉的 @change 处理器（用例从 DOM 侧触发，这里只为类型完整）。 */
+  onZoneChange: () => void;
+  shelfForm: { code: string; name: string; zone: string; location: string; display_order: number };
 }
 
 const SHELF: Shelf = {
@@ -472,5 +481,209 @@ describe('2026-10-02 review I-1：映射加载失败后保存不得清空整组�
     // 全仓只有 setShelfProcesses 这一个、读点有 10 处，补失效成本近乎零：把「改完映射
     // 重开对话框才可见」升级成「下一次读即见」。键值钉死，防止将来有人改成裸数组。
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['shelf-process-mappings'] });
+  });
+});
+
+// ============================================================================
+// 2026-10-04：后端收紧 `POST /prod/shelf-processes/{id}` —— `items` 非空时会对非
+// PRODUCTION 区的货架返 20104（`items: []` 的清空路径已豁免）。ShelfList 是该端点的
+// 唯一写点，不补就是半截保存（updateShelf / createShelf 都先于它执行 ⇒ 字段改了、
+// 映射没改，界面还弹「已保存」）。
+//
+// 三条配套各自的回归锁：
+//   ① 隐藏：`effectiveZone !== 'PRODUCTION'` 时不渲染「工序」表单项；
+//   ② 提交：两条路径统一提交 `{items: []}`，**不是跳过 setShelfProcesses 调用**
+//      （跳过 ⇒ 品检架上原有陈旧映射静默留着；新增路径还会留下孤儿货架，再点保存撞
+//      `uk_t_shelf_code` 报 20502，而编辑弹窗里没有停用入口）；
+//   ③ 清空：用户改 zone 时同步清空 `selectedProcessIds`（「隐藏多选」≠「清空选择」，
+//      残留值会被原样提交）。
+// 判据那一半（编辑态必须用 `editingShelf.zone` 而非 `shelfForm.zone`，因为
+// `updateShelf` 的 payload 不含 zone、且区域下拉在编辑态没 :disabled）见 Z3/Z4。
+// ============================================================================
+
+/** 品检架行（zone 走 `GET /shelves` 的 DB 值，表格行不过滤 zone ⇒ 品检架也在表里）。 */
+const INSPECTION_SHELF: Shelf = { ...SHELF, id: '8800000000002', code: 'SH-I01', zone: 'INSPECTION' };
+
+/**
+ * 打开「新增货架」弹窗（`showCreate = true`）。
+ *
+ * 必须显式开：`el-dialog` 桩是 `v-if="modelValue"` ⇒ 弹窗没开时整个表单都不渲染，
+ * `formLabels` 恒为空、`shelfFormRef` 为 null（`saveShelf` 第一步
+ * `shelfFormRef.value?.validate()` 会短路成 `undefined` 再取 `.catch` 而抛）。
+ * 现有 P 系列用例走 `vm.editShelf(s)`，那条路径自己会 `showCreate = true`；新增路径
+ * 没有入口函数，只能这样开。
+ */
+async function openCreateDialog(wrapper: Awaited<ReturnType<typeof mountShelfList>>) {
+  (wrapper.vm as unknown as ShelfListVm).showCreate = true;
+  await flushPromises();
+}
+
+/** 表单里所有 `el-form-item` 的 label（工序表单项在/不在，一眼可见）。 */
+function formLabels(wrapper: Awaited<ReturnType<typeof mountShelfList>>): string[] {
+  return wrapper.findAll('.mock-label').map((n) => n.text());
+}
+
+/** 找到 label 含「区域」那个表单项里的 el-select（不靠下标，模板顺序变了也不会错位）。 */
+function zoneSelect(wrapper: Awaited<ReturnType<typeof mountShelfList>>) {
+  const item = wrapper.findAll('.mock-form-item').find((n) => n.text().includes('区域'));
+  expect(item, '模板里找不到「区域」表单项').toBeTruthy();
+  return item!.findComponent({ name: 'ElSelect' });
+}
+
+describe('2026-10-04：非生产区不写工序映射（20104 守卫配套，ShelfList）', () => {
+  it('Z1：品检架编辑 → 不渲染「工序」表单项，保存提交 {items: []}', async () => {
+    getShelfProcessesMock.mockResolvedValue({ items: [] });
+    const wrapper = await mountShelfList();
+    const vm = wrapper.vm as unknown as ShelfListVm;
+
+    await vm.editShelf(INSPECTION_SHELF);
+    await flushPromises();
+
+    // 判据：编辑态取 DB 里的 zone
+    expect(vm.effectiveZone).toBe('INSPECTION');
+    // ① 隐藏：不给品检架配工序的入口
+    expect(formLabels(wrapper)).not.toContain('工序');
+    expect(formLabels(wrapper)).toContain('区域');
+
+    // ② 提交：仍要发这一次请求（清空），且 items 为空
+    await vm.saveShelf();
+    await flushPromises();
+
+    expect(updateShelfMock).toHaveBeenCalledTimes(1);
+    expect(setShelfProcessesMock).toHaveBeenCalledTimes(1);
+    expect(setShelfProcessesMock).toHaveBeenCalledWith('8800000000002', { items: [] });
+  });
+
+  it('Z2：新增一个品检架 → createShelf 落库后仍发 {items: []}（⛔ 不得跳过这一次调用）', async () => {
+    const wrapper = await mountShelfList();
+    const vm = wrapper.vm as unknown as ShelfListVm;
+    await openCreateDialog(wrapper);
+
+    // 新增态：直接改表单（新增路径不走 editShelf，editingShelf 保持 null）
+    vm.shelfForm.code = 'SH-I99';
+    vm.shelfForm.name = '新���检架';
+    vm.shelfForm.zone = 'INSPECTION';
+    // 直接改表单不会自动等一拍；`effectiveZone` 是惰性 computed、读它即时生效，但断言
+    // **DOM** 必须等重渲染（真实界面里这一步是 el-select 的 v-model 自己触发的）。
+    await nextTick();
+    expect(vm.effectiveZone).toBe('INSPECTION');
+    // 用户在切区前选过工序（残留不该被提交）
+    vm.selectedProcessIds = ['190000000000001'];
+    expect(formLabels(wrapper)).not.toContain('工序');
+
+    await vm.saveShelf();
+    await flushPromises();
+
+    // 关键：**调了** setShelfProcesses，且清空。跳过它 ⇒ 货架已落库（孤儿）却一个映射
+    // 都没写，用户以为配好了；再点保存会带同一个 code 重新 createShelf ⇒ 20502 卡死。
+    expect(createShelfMock).toHaveBeenCalledTimes(1);
+    expect(createShelfMock.mock.calls[0]![0]).toMatchObject({ zone: 'INSPECTION' });
+    expect(setShelfProcessesMock).toHaveBeenCalledTimes(1);
+    expect(setShelfProcessesMock).toHaveBeenCalledWith('NEW1', { items: [] });
+  });
+
+  it('Z3：生产架编辑时把表单区域改成品检 → 判据仍按 DB 的 PRODUCTION，映射照原样提交', async () => {
+    getShelfProcessesMock.mockResolvedValue(EXISTING);
+    const wrapper = await mountShelfList();
+    const vm = wrapper.vm as unknown as ShelfListVm;
+
+    await vm.editShelf(SHELF);
+    await flushPromises();
+    expect(vm.effectiveZone).toBe('PRODUCTION');
+
+    // 用户在表单里把区域改成品检（区域下拉在编辑态没有 :disabled，改得动）
+    vm.shelfForm.zone = 'INSPECTION';
+
+    // 判据必须是 editingShelf.zone：updateShelf 的 payload 不含 zone ⇒ 表单里这个值
+    // 对 DB 完全无效，用它判会与后端守卫读到不同的 zone 而误判。
+    expect(vm.effectiveZone).toBe('PRODUCTION');
+    // 工序表单项仍渲染（DB 还是生产区）
+    expect(formLabels(wrapper)).toContain('工序');
+
+    await vm.saveShelf();
+    await flushPromises();
+
+    expect(updateShelfMock.mock.calls[0]![1]).not.toHaveProperty('zone');
+    expect(setShelfProcessesMock).toHaveBeenCalledWith('8800000000001', {
+      items: [
+        { process_id: '190000000000001', sort_order: 0 },
+        { process_id: '190000000000002', sort_order: 1 },
+      ],
+    });
+  });
+
+  it('Z4：品检架编辑时把表单区域改成生产 → 判据仍按 DB 的 INSPECTION，提交 {items: []}', async () => {
+    getShelfProcessesMock.mockResolvedValue({ items: [] });
+    const wrapper = await mountShelfList();
+    const vm = wrapper.vm as unknown as ShelfListVm;
+
+    await vm.editShelf(INSPECTION_SHELF);
+    await flushPromises();
+    vm.shelfForm.zone = 'PRODUCTION';
+
+    // 反方向同样要按 DB 判：若用表单值，这里会说「可以写」⇒ 调接口 ⇒ 后端读 DB 仍是
+    // INSPECTION ⇒ 20104 ⇒ 半截保存。
+    expect(vm.effectiveZone).toBe('INSPECTION');
+    expect(formLabels(wrapper)).not.toContain('工序');
+
+    await vm.saveShelf();
+    await flushPromises();
+
+    expect(setShelfProcessesMock).toHaveBeenCalledWith('8800000000002', { items: [] });
+  });
+
+  // ③ 清空：「隐藏多选」不等于「清空选择」。用户先选工序、再把区域切成品检，多选虽被隐藏，
+  // model 里的残留仍在，saveShelf 照发 ⇒ 后端 20104。
+  it('Z5：改区域时 @change 清空已选工序（残留不会被提交）', async () => {
+    const wrapper = await mountShelfList();
+    const vm = wrapper.vm as unknown as ShelfListVm;
+    await openCreateDialog(wrapper);
+
+    // 新增态默认 zone=PRODUCTION ⇒ 工序表单项在
+    expect(vm.effectiveZone).toBe('PRODUCTION');
+    expect(formLabels(wrapper)).toContain('工序');
+    vm.selectedProcessIds = ['190000000000001', '190000000000002'];
+
+    // 用户改「区域」：从 DOM 侧发事件，与真实点击同一条路径。**两个都要发** ——
+    // 真实 Element Plus 的 el-select 在选中后会先发 `update:modelValue`（v-model 据此
+    // 写 shelfForm.zone）再发 `change`（触发 onZoneChange 清空工序）。只发 `change`
+    // 的话 zone 根本没变，等于在测另一个场景。
+    const zs = zoneSelect(wrapper);
+    zs.vm.$emit('update:modelValue', 'INSPECTION');
+    zs.vm.$emit('change', 'INSPECTION');
+    await flushPromises();
+    expect(vm.shelfForm.zone).toBe('INSPECTION');
+
+    expect(vm.selectedProcessIds).toEqual([]);
+    expect(formLabels(wrapper)).not.toContain('工序');
+
+    // 双保险：即便 model 里又冒出了残留值，提交那一层也必须发 {items: []}
+    vm.selectedProcessIds = ['190000000000001'];
+    await vm.saveShelf();
+    await flushPromises();
+    expect(setShelfProcessesMock).toHaveBeenCalledWith('NEW1', { items: [] });
+  });
+
+  // 用 @change 而不是 watch 的理由：editShelf 异步 getShelfProcesses 填充
+  // selectedProcessIds，而 effectiveZone 在 editingShelf 被赋值那一刻就变了 ⇒ watch 会与
+  // 打开弹窗的填充流程竞态，把刚填进去的映射清掉。
+  it('Z6：打开品检架的编辑弹窗不会清掉刚加载好的映射（@change 不与加载流程竞态）', async () => {
+    getShelfProcessesMock.mockImplementation(async () => ({
+      ...EXISTING,
+      // 借返回体把 zone 换成品检，模拟「品检架上确实有历史映射」
+      items: EXISTING.items,
+    }));
+    const wrapper = await mountShelfList();
+    const vm = wrapper.vm as unknown as ShelfListVm;
+
+    await vm.editShelf({ ...INSPECTION_SHELF });
+    await flushPromises();
+
+    // 加载填进去了（尽管 effectiveZone 是 INSPECTION、且工序表单项已隐藏）
+    expect(vm.selectedProcessIds).toEqual(['190000000000001', '190000000000002']);
+    // 且保存时被清空（不是静默留着）
+    await vm.saveShelf();
+    await flushPromises();
+    expect(setShelfProcessesMock).toHaveBeenCalledWith('8800000000002', { items: [] });
   });
 });
