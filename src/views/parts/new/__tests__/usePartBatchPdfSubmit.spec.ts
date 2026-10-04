@@ -23,6 +23,9 @@ const mocks = vi.hoisted(() => ({
   uploadPartDrawing: vi.fn(),
   uploadPart3DModel: vi.fn(),
   alert: vi.fn(),
+  success: vi.fn(),
+  warning: vi.fn(),
+  error: vi.fn(),
   saverFlush: vi.fn(),
   draftLoad: vi.fn(() => null),
   /** draft.saver.schedule 收到的 payload 队列（末条即最新快照）。 */
@@ -53,7 +56,12 @@ vi.mock('vue-router', () => ({
   useRoute: () => ({ path: '/parts/new', query: {} }),
 }));
 vi.mock('element-plus', () => ({
-  ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() },
+  ElMessage: {
+    error: mocks.error,
+    success: mocks.success,
+    warning: mocks.warning,
+    info: vi.fn(),
+  },
   ElMessageBox: { confirm: vi.fn(), alert: mocks.alert },
 }));
 
@@ -115,6 +123,9 @@ beforeEach(() => {
   mocks.uploadPartDrawing.mockReset();
   mocks.uploadPart3DModel.mockReset();
   mocks.alert.mockReset();
+  mocks.success.mockReset();
+  mocks.warning.mockReset();
+  mocks.error.mockReset();
   mocks.routerPush.mockReset();
   mocks.draftLoad.mockReturnValue(null);
   mocks.scheduled.length = 0;
@@ -558,6 +569,41 @@ describe('建单之后的异常', () => {
     expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(1);
     w.unmount();
   });
+
+  it('建单结果解析到一半抛错（已有 part 落库）：绝不退成 idle 让用户重来', async () => {
+    // 「creating 阶段 catch ⇒ 一定一个工单都没建出来」是能被证伪的：created 里混进
+    // 一个畸形元素时，forEach 会在已经把前几个 part 写进 createdPartIds 之后抛错。
+    // 此时退成 idle = 主按钮重新可点 = 已落库的工单被建第二遍。
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件1.pdf'), up(2, 'A-2_件2.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value.forEach((r) => (r.customer_id = 'c-root'));
+    const malformed = {
+      created: [{ id: 'p0', sourceIndex: 0 }, null],
+      failed: [],
+      groupErrors: [],
+    };
+    mocks.batchCreateParts.mockResolvedValue(malformed);
+
+    await api.onSubmit();
+
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    // 已落库 ⇒ 停在 done，工单事实如实转达；不回 idle
+    expect(api.commitStage.value).toBe('done');
+    expect(api.submitLabel.value).toBe('重试上传（1 项）');
+    expect(api.submitLabel.value).not.toContain('提交创建');
+    expect(mocks.alert).toHaveBeenCalledTimes(1);
+    expect(mocks.alert.mock.calls[0]![1]).toBe('提交中断');
+    expect(mocks.alert.mock.calls[0]![0] as string).toContain('工单已创建 1 条零件');
+
+    // 再点主按钮进不去建单路径：不重复建单
+    await api.onSubmit();
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    w.unmount();
+  });
 });
 
 describe('建单「部分行成立」', () => {
@@ -803,6 +849,115 @@ describe('并发闸门与「已存在」归一', () => {
 
     expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(1);
     expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    w.unmount();
+  });
+});
+
+/**
+ * 2026-10-04：提交 / 补传在途时表格被改写。
+ *
+ * `resetCommitState` 会把 `commitStage` 打回 idle，而 `commitStage` 是「第二次建单」唯一
+ * 的连点闸门；在途时打掉它，先行的 `onSubmit` 跑完仍会照常收口（成功提示 + 清空 + 跳页），
+ * 而 `createdPartIds` 已被清空 ⇒ 用户刚建好的行被静默清掉、还收到一条「成功创建 0 条零件」。
+ *
+ * 两道防线分别锁住：
+ *  - `rebuildFromUploads` 的提交在途闸门（第一道，拦住整表换新）；
+ *  - `summarizeUploads` 的行集合世代校验（第二道，拦住任何绕过闸门改写行集合的入口）。
+ */
+describe('提交在途时改写行集合', () => {
+  /** 建单成功 + 上传在途（未 resolve）→ 返回「放行全部上传」+ 本次 submit 的 promise。 */
+  async function startSubmitInFlight(api: UsePartBatchPdfReturn): Promise<{
+    release: () => void;
+    done: Promise<void>;
+  }> {
+    const releases: Array<() => void> = [];
+    mocks.uploadPartDrawing.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [
+        { id: 'p0', sourceIndex: 0 },
+        { id: 'p1', sourceIndex: 1 },
+      ],
+      failed: [],
+      groupErrors: [],
+    });
+    const done = api.onSubmit();
+    await flushPromises();
+    expect(api.pdfSubmitting.value).toBe(true);
+    expect(releases).toHaveLength(2);
+    return { release: () => releases.forEach((r) => r()), done };
+  }
+
+  it('上传在途时「重新解析」被拦下：行原样保留，不出现假收口', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件1.pdf'), up(2, 'A-2_件2.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value.forEach((r) => (r.customer_id = 'c-root'));
+    const uids = api.standaloneParts.value.map((r) => r.uid);
+    const { release, done } = await startSubmitInFlight(api);
+    mocks.success.mockClear();
+
+    // 用户在上传途中点「重新解析」
+    await api.rebuildFromUploads();
+
+    // 第一道防线：解析被拒，表格原样
+    expect(mocks.warning).toHaveBeenCalled();
+    expect(api.standaloneParts.value.map((r) => r.uid)).toEqual(uids);
+    expect(api.pdfBuildingTree.value).toBe(false);
+    // 闸门没被 resetCommitState 打掉：阶段仍在 uploading
+    expect(api.commitStage.value).toBe('uploading');
+    expect(api.canSubmit.value).toBe(false);
+
+    release();
+    await done;
+    await flushPromises();
+
+    // 正常收口（表格没被换过）：成功提示 + 跳页，且成功数不是 0
+    expect(mocks.alert).not.toHaveBeenCalled();
+    const okText = mocks.success.mock.calls.map((c) => c[0] as string).join('|');
+    expect(okText).toContain('成功创建 2 条零件');
+    expect(okText).not.toContain('成功创建 0 条');
+    expect(mocks.routerPush).toHaveBeenCalledWith('/parts?status=PENDING');
+    expect(api.standaloneParts.value).toHaveLength(0);
+    w.unmount();
+  });
+
+  it('在途时行集合被旁路改写（新增一行）：收口拒绝对不上的表格，不清空不跳页', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件1.pdf'), up(2, 'A-2_件2.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value.forEach((r) => (r.customer_id = 'c-root'));
+    const { release, done } = await startSubmitInFlight(api);
+    mocks.success.mockClear();
+
+    // 模拟一个不经过第一道闸门的行集合改写（删除行 / 将来新增的入口）——直接往表里
+    // 塞一行新行。世代号必须 +1，第二道防线才认得出来。
+    api.standaloneParts.value.push({ ...api.standaloneParts.value[0]!, uid: 'bypassed-row' });
+
+    release();
+    await done;
+    await flushPromises();
+
+    // 绝不静默收口：没有「成功创建」假提示、不跳页、用户新加的行还在
+    expect(mocks.success).not.toHaveBeenCalled();
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(api.standaloneParts.value.map((r) => r.uid)).toContain('bypassed-row');
+    // 如实说清出路：工单已落库，去零件列表核对
+    expect(mocks.alert).toHaveBeenCalledTimes(1);
+    expect(mocks.alert.mock.calls[0]![1]).toBe('提交结果请到零件列表核对');
+    expect(mocks.alert.mock.calls[0]![0] as string).toContain('工单已经创建');
+    // 工单确实建出去了，绝不能退成 idle 让用户重来一遍
+    expect(api.commitStage.value).toBe('done');
     w.unmount();
   });
 });

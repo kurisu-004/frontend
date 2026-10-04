@@ -125,7 +125,7 @@
     <div class="pdf-actions">
       <el-button
         type="primary"
-        :disabled="pdfFiles.length === 0 || pdfBuildingTree"
+        :disabled="pdfFiles.length === 0 || pdfBuildingTree || pdfSubmitting"
         @click="rebuildFromUploads"
       >
         <el-icon><magic-stick /></el-icon>

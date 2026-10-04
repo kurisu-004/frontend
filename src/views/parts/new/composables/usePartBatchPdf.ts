@@ -11,10 +11,12 @@
 // idle 也不会重复建单。`POST /parts/batch` 无幂等键，任何「同一批行发第二次」都是
 // 真建出第二份工单。
 //
-// 已知取舍：跨刷新的重复建单**未**防住。`File` 不跨刷新存活、刷新后必须重新选文件
-// 再提交，而重新解析出来的行 uid 每次都是新的（`makeUid` 走 crypto.randomUUID），
-// 任何 uid → partId 映射都对不上新行，所以草稿里不落任何 partId 映射。要根治得让
-// 行 uid 可复现（解析结果按文件名+页码派生），属独立设计变更。
+// 已知取舍（2026-10-04）：本 Tab 的草稿是**只写**的 —— `draft.load()` 只在 saver 里用来
+// 读回旧 payload 以保住 Tab 1 的 `manual_tab` 段，没有任何把 `pdf_tab.rows` 灌回
+// `standaloneParts` / `assemblies` 的路径。所以刷新后表格是空的、行全部丢失，重新提交
+// 必须重新选文件再解析。会**重复建单**的实际触发点是「重新解析」：它把全部行重新列出来
+// （含上一次已经建出工单的那些），再点提交就会建第二遍，而 `POST /parts/batch` 无幂等键。
+// 要根治得让行 uid 可复现（解析结果按文件名+页码派生），属独立设计变更。
 
 import {
   computed,
@@ -509,6 +511,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       ElMessage.warning('请选择一级客户');
       return;
     }
+    // 提交 / 补传在途时重新解析 = 整表换新（行 uid 全换 + resetCommitState 清空
+    // createdPartIds），先行的 onSubmit 跑完还会照常收口 ⇒ 静默清空刚解析出的行、
+    // 跳页、再弹「成功创建 0 条零件」。两道防线里这是第一道。
+    if (guardRowMutation()) return;
     pdfBuildingTree.value = true;
     try {
       // 解析 Excel（可选）。2026-10-03：结果写进 composable 级 excelByDrawingNo，
@@ -977,6 +983,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
   /** 合并选中页 → 一个独立零件（同一 PDF）。 */
   async function mergeSelectedAsPart(): Promise<void> {
+    if (guardRowMutation()) return;
     const byPdf = selectedByPdf();
     if (byPdf.size === 0) {
       ElMessage.warning('请先勾选页');
@@ -1030,6 +1037,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
   /** 合并选中页 → 一个装配件（同一 PDF，至少 2 页）。 */
   async function mergeSelectedAsAssembly(): Promise<void> {
+    if (guardRowMutation()) return;
     const byPdf = selectedByPdf();
     if (byPdf.size === 0) {
       ElMessage.warning('请先勾选页');
@@ -1241,6 +1249,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
 
   async function confirmManualPart(): Promise<void> {
+    if (guardRowMutation()) return;
     if (!manualPartFormValid.value) return;
     const f = manualPartForm.file!;
     const pdfUid = `manual-${makeUid()}`;
@@ -1309,6 +1318,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
 
   async function confirmManualAssembly(): Promise<void> {
+    if (guardRowMutation()) return;
     if (!manualAsmFormValid.value) return;
     const f = manualAsmForm.file!;
     const totalPages = await countPdfPages(f);
@@ -1547,9 +1557,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
   /** 提交流程阶段机。转移：
    *  - idle → creating → uploading → done
-   *  - creating 失败 → 回 idle：`batchCreateParts` 逐 customer 分组提交且**逐组捕获**，
-   *    抛错组记进 `groupErrors`、成功组照常进 `created`，所以走到外层 catch 只剩
-   *    「一个 part 都没建出来」这一种情况（此时重来安全）
+   *  - creating 失败 → 回 idle。前提是 `createdPartIds` 为空（一个 part 都没建出来，
+   *    本地表格原样保留，重来不会碰到已落库的工单）。`createdPartIds` 非空说明已经
+   *    有 part 建出来了，此时回 idle 会诱导重复建单，必须走下面的部分成功分支。
    *  - 建单「部分行成立」→ 同样回 idle，但前提是**建成的行已被移出本地表格**（见
    *    dropCreatedRows），下一次提交只会发出剩下的失败行
    *  - uploading 阶段失败 → 转 done 走失败清单（工单已落库，回 idle 会让用户再点
@@ -1606,6 +1616,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 2026-10-04：重新解析出一批全新行时清掉上一批的提交状态（行 uid 全部换新，
    * `createdPartIds` / job / 失败清单都再也对不上表里任何一行）。
    * 阶段回 idle：这是新的一批内容，可以正常提交。
+   *
+   * 调用方必须先过 `guardRowMutation`：这一句会把 `commitStage` 打回 idle，而
+   * `commitStage` 是「第二次建单」唯一的连点闸门 —— 提交在途时打掉它，主按钮的
+   * `disabled` 就成了唯一防线。
    */
   function resetCommitState(): void {
     commitStage.value = 'idle';
@@ -1619,6 +1633,48 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     runningJobIds.clear();
     Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
     Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
+  }
+
+  /**
+   * 2026-10-04：行集合世代号，**只在行的增删换时 +1**（新 uid 进表 / 行被移除 / 整表
+   * 被替换）；行内字段编辑不动它，所以用户改个数量不会误触发。
+   *
+   * `flush: 'sync'` 让它在改动发生的那一刻同步递增，于是「谁改的行集合」这件事
+   * 不必逐个入口打点 —— 重新解析 / 手动新增 / 合并 / 拆分 / 删除，以及将来新增的入口，
+   * 全部被这一个收口覆盖。`rowEpoch` 的唯一消费方是 `summarizeUploads` 的世代校验。
+   */
+  const rowEpoch = ref(0);
+  watch(
+    () =>
+      `${standaloneParts.value.map((r) => r.uid).join('|')}#${assemblies.value
+        .map((a) => a.uid)
+        .join('|')}`,
+    () => {
+      rowEpoch.value += 1;
+    },
+    { flush: 'sync' },
+  );
+
+  /**
+   * 本次提交 / 补传开始时的世代号快照。收口时与 `rowEpoch` 比对：不等说明用户在这期间
+   * 换过行集合，本次收口的计数、清场、跳页已经对不上当前表格。
+   */
+  let submitRowEpoch = 0;
+
+  /**
+   * 2026-10-04：**所有会往表里加行 / 换掉整表的入口**共用的提交在途闸门。
+   *
+   * 提交在途时建出来的新行没有 partId、也不会被本次 job 覆盖，成功收口会把它跟
+   * 已建出的行一起清掉。返回 true = 已拦下，调用方必须立即 return。
+   *
+   * 这道闸门是第一道防线；第二道是 `rowEpoch`（即便有入口绕过这里，收口也会拒绝对不上
+   * 的表格动手）。纯删除行（拆分 / 删除 / 移除源文件）**不**走这道闸门：它不产生新
+   * 内容，删掉的行对应的工单也已落库，世代校验会如实提示「结果无法与当前表格对应」。
+   */
+  function guardRowMutation(): boolean {
+    if (!pdfSubmitting.value) return false;
+    ElMessage.warning('正在提交 / 上传图纸中，请等本轮结束再改表格');
+    return true;
   }
 
   /** cell key → 对应的响应式 cell（PDF / 3D 分表存）。 */
@@ -1687,6 +1743,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /**
    * 汇总上传结果：无失败 → 提示 + 清空跳页；有失败 → 弹清单 + 保留现场供重试。
    *
+   * **前提**：行集合自 `submitRowEpoch` 快照以来没被改过（见开头的世代校验）。收口的
+   * 计数 / 清场 / 跳页全部以「当前表格 == 建单时那张表」为前提，不成立就只能如实告知。
+   *
    * 计数口径统一为 **job**（一个 part × 一份原件 = 一项），与下面清单的行一一对应：
    * 一份 PDF 被装配件 master + N 子件共享时是 N+1 项，标题若按「文件数」算就会
    * 出现「1 个文件失败」底下列两行零件号的矛盾。涉及的零件数 / 文件数作为补充
@@ -1698,6 +1757,20 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * `failedJobs` 再弹清单。`uploadJobs` 为空但工单已建（job 构造抛错）同样不算成功。
    */
   function summarizeUploads(): void {
+    // 2026-10-04 世代校验，必须**先于**任何收口动作。行集合在提交期间被换过（重新解析
+    // 会把 `createdPartIds` 一并清空、行 uid 全部换新）时，下面的计数 / 清场 / 跳页
+    // 都对不上当前表格：走成功收口会把用户刚建好的行静默清掉、跳到零件列表、再弹一条
+    // 「成功创建 0 条零件」的假提示，而工单其实已经落库了。
+    if (rowEpoch.value !== submitRowEpoch) {
+      const lost = failedJobs.size > 0 ? `其中 ${failedJobs.size} 项文件未上传成功。\n` : '';
+      ElMessageBox.alert(
+        `工单已经创建，但提交期间本地表格被改过，本次结果已无法与当前表格对应。\n` +
+          `${lost}\n已创建的工单请到零件列表查看，图纸可在零件详情页补传。`,
+        '提交结果请到零件列表核对',
+        { type: 'warning' },
+      );
+      return;
+    }
     const unfinished = uploadJobs.value.filter((j) => jobStates.get(j.id) !== 'done');
     for (const job of unfinished) {
       if (!failedJobs.has(job.id)) {
@@ -1731,8 +1804,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     ElMessage.success(
       `成功创建 ${createdPartIds.size} 条零件（${standaloneCount} 独立 + ${assemblyMasters} 装配件顶层 + ${childCount} 子件）`,
     );
-    // 2026-10-04：草稿在这里才清 —— 还有上传失败就必须留着（行数据是用户重选的
-    // 依据，File 本身不跨刷新存活）。
+    // 2026-10-04：草稿在这里才清 —— 还有上传失败就必须留着（工单已落库，图样要靠本页
+    // 的 job 现场补传）。注意草稿对 Tab 2 是**只写**的（`pdf_tab` 段没有回读路径，
+    // 刷新后表格本来就是空的），清掉它不代表行可恢复。
     draft.saver.cancel();
     draft.clear();
     allPdfs.value = [];
@@ -1982,6 +2056,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       ElMessage.warning('该文件没有待重试的记录，请重新提交');
       return;
     }
+    submitRowEpoch = rowEpoch.value;
     pdfSubmitting.value = true;
     try {
       await runUploadJobs(jobs);
@@ -2197,6 +2272,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     const { items, rowUids } = buildCommitItems();
     itemRowUids.value = rowUids;
 
+    submitRowEpoch = rowEpoch.value;
     pdfSubmitting.value = true;
     commitStage.value = 'creating';
     try {
@@ -2259,10 +2335,21 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         commitStage.value = 'done';
         summarizeUploads();
       } else if (commitStage.value === 'creating') {
-        // 走到这里说明 batchCreateParts 整体抛了：它内部按 customer 分组逐组捕获，
-        // 单组失败只进 groupErrors，所以 created 必为空，一个工单都没建出来，
-        // 回 idle 重来安全。
-        commitStage.value = 'idle';
+        // creating 阶段的兜底。走到这里的**前提**是 `createdPartIds` 为空：建单结果
+        // 一拿到就已写进 createdPartIds（见上方 forEach），非空说明已有 part 落库。
+        // 非空时**绝不能**回 idle —— 主按钮会重新可点，用户再按一次就是已建出的那批
+        // 工单建第二遍（`POST /parts/batch` 无幂等键）；改走 done 态补传语义，工单
+        // 已落库的事实如实转达。
+        if (createdPartIds.size > 0) {
+          commitStage.value = 'done';
+          ElMessageBox.alert(
+            `工单已创建 ${createdPartIds.size} 条零件，但提交过程中出错：\n${msg}\n\n请点「重试上传」在本页补传（不会重复建单）；若一直失败，可到零件详情页补传。`,
+            '提交中断',
+            { type: 'error' },
+          );
+        } else {
+          commitStage.value = 'idle';
+        }
       }
       ElMessage.error(msg);
     } finally {
@@ -2301,6 +2388,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       ElMessage.warning('当前没有可重试的上传');
       return;
     }
+    submitRowEpoch = rowEpoch.value;
     pdfSubmitting.value = true;
     try {
       if (failed.length > 0) {

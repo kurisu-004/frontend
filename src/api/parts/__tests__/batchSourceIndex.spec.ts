@@ -7,7 +7,7 @@
 // 本 spec 锁的关键点：**同一 customer_id 可以出现在数组的多个不连续区段**
 //（Tab 2 每行各选分厂时是常态，A / B / C / A 会分成 2 组）。反推全局下标时不能靠
 // 「前几组长度的累加」，必须原样带着分组时记下的下标。
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock('@/api/http', () => ({
@@ -19,6 +19,10 @@ vi.mock('@/composables/queries/schemas', () => ({
 }));
 
 import { batchCreateParts } from '../batch';
+
+beforeEach(() => {
+  mocks.post.mockReset();
+});
 
 describe('batchCreateParts sourceIndex', () => {
   it('跨 customer 分组 + 组内失败不占位', async () => {
@@ -159,5 +163,86 @@ describe('batchCreateParts sourceIndex', () => {
       { customer_id: 'A', startIndex: 0, endIndex: 0, message: '网络中断' },
       { customer_id: 'B', startIndex: 1, endIndex: 1, message: '网络中断' },
     ]);
+  });
+});
+
+/**
+ * 2026-10-04：响应后处理（`failed` / `created` 解读）也必须在该组的 try 里。
+ *
+ * 请求已经 commit 之后才抛错 ⇒ 这一组的成败**已经无法确定**，且前面几组建出的 part
+ * 必须原样交给 caller。若让这类抛错整体 reject，caller 只能退到「回 idle 让用户重来」，
+ * 把上一组已建出的工单建第二遍。
+ */
+describe('batchCreateParts 畸形响应', () => {
+  const twoGroups = () => [
+    {
+      customer_id: 'A',
+      name: 'n0',
+      drawing_no: 'd0',
+      request_date: '2026-01-01',
+      planned_delivery_date: '2026-01-01',
+    },
+    {
+      customer_id: 'B',
+      name: 'n1',
+      drawing_no: 'd1',
+      request_date: '2026-01-01',
+      planned_delivery_date: '2026-01-01',
+    },
+  ];
+
+  it('缺 failed 字段：整组记未知，前面已建的组不丢，也不 reject', async () => {
+    mocks.post
+      .mockResolvedValueOnce({ data: { created: [{ id: 'a0' }], failed: [] } })
+      .mockResolvedValueOnce({ data: { created: [{ id: 'b1' }] } }); // 没有 failed
+
+    const res = await batchCreateParts(twoGroups());
+
+    expect(res.created.map((c) => [c.id, c.sourceIndex])).toEqual([['a0', 0]]);
+    expect(res.failed).toEqual([]);
+    expect(res.groupErrors).toEqual([
+      { customer_id: 'B', startIndex: 1, endIndex: 1, message: '响应缺少 failed 数组' },
+    ]);
+  });
+
+  it('created 不是数组：整组记未知，前面已建的组不丢，也不 reject', async () => {
+    mocks.post
+      .mockResolvedValueOnce({ data: { created: [{ id: 'a0' }], failed: [] } })
+      .mockResolvedValueOnce({ data: { created: null, failed: [] } });
+
+    const res = await batchCreateParts(twoGroups());
+
+    expect(res.created.map((c) => [c.id, c.sourceIndex])).toEqual([['a0', 0]]);
+    expect(res.groupErrors).toEqual([
+      { customer_id: 'B', startIndex: 1, endIndex: 1, message: '响应缺少 created 数组' },
+    ]);
+  });
+
+  it('响应体是字符串（网关返 200 + HTML）：整组记未知，不 reject', async () => {
+    mocks.post.mockResolvedValue({ data: '<html>502</html>' });
+
+    const res = await batchCreateParts(twoGroups());
+
+    expect(res.created).toEqual([]);
+    expect(res.groupErrors).toEqual([
+      { customer_id: 'A', startIndex: 0, endIndex: 0, message: '响应不是对象（可能被网关拦截）' },
+      { customer_id: 'B', startIndex: 1, endIndex: 1, message: '响应不是对象（可能被网关拦截）' },
+    ]);
+  });
+
+  it('failed 里的 item_index 不合法：整组记未知（不把 part 绑到错误的行上）', async () => {
+    mocks.post.mockResolvedValueOnce({
+      data: { created: [{ id: 'a0' }], failed: [{ item_index: 'x', message: '坏数据' }] },
+    });
+
+    const res = await batchCreateParts(twoGroups());
+
+    expect(res.created).toEqual([]);
+    expect(res.groupErrors?.[0]).toEqual({
+      customer_id: 'A',
+      startIndex: 0,
+      endIndex: 0,
+      message: '响应 failed 缺少合法的 item_index',
+    });
   });
 });

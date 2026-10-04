@@ -39,8 +39,10 @@ export interface PartBatchResult {
   /** 后端 commit 后自清理的 tmp 对象 key 列表，前端忽略。 */
   cleanup_tmp_keys?: string[];
   /**
-   * 2026-10-04 新增：按 customer 分组逐组提交时，**整组请求抛错**（网络 / 5xx）的记录。
-   * 组内没有任何一行的成败信息（`failed` 是 200 响应里的逐行明细），只能给下标区间。
+   * 2026-10-04 新增：按 customer 分组逐组提交时，**该组成败无法确定**的记录。
+   * 两种来源：整组请求抛错（网络 / 5xx），或响应能拿到但 `created` / `failed` 缺字段、
+   * 形状不对而无法解读。组内没有任何一行的成败信息（`failed` 是 200 响应里的逐行
+   * 明细），只能给下标区间。
    */
   groupErrors?: PartBatchGroupError[];
 }
@@ -143,10 +145,11 @@ export interface PartBatchCreatePayload extends PartCreatePayload {
  *
  * 2026-10-04：**逐组捕获、聚合返回**。每组是一次独立的 `POST /parts/batch`，组与组之间
  * 没有事务包裹 —— 第 1 组 commit 之后第 2 组 502，整体 reject 会让 caller 完全看不到
- * 第 1 组已经建出的 part，再发一次就是重复建单。改成逐组 try/catch、成功的组照常进
- * `created`、抛错的组进 `groupErrors`，caller 拿得到「哪些行已经建出来了」。
- * 取舍：抛错组的成败仍然未知（响应丢失时后端可能已 commit），本函数无法判定，
- * 只能把下标区间如实交给 caller。
+ * 第 1 组已经建出的 part，再发一次就是重复建单。改成整组（请求 + 响应解读）一起
+ * try/catch：能解读的组照常进 `created` / `failed`，解读不了的组进 `groupErrors`，
+ * caller 拿得到「哪些行已经建出来了」。本函数**不整体 reject**。
+ * 取舍：进 `groupErrors` 的组成败仍然未知（响应丢失 / 形状不对时后端可能已 commit），
+ * 本函数无法判定，只能把下标区间如实交给 caller。
  */
 export async function batchCreateParts(items: PartBatchCreatePayload[]): Promise<PartBatchResult> {
   if (items.length === 0) {
@@ -173,46 +176,84 @@ export async function batchCreateParts(items: PartBatchCreatePayload[]): Promise
       customer_id: customerId,
       items: groupItems.map((g) => toPartBatchCreateItem(g.item)),
     };
-    let resp: { data: PartBatchCreateOutFE };
+    const groupRange = {
+      customer_id: customerId,
+      startIndex: groupItems[0]!.sourceIndex,
+      endIndex: groupItems[groupItems.length - 1]!.sourceIndex,
+    };
     try {
-      resp = await api.post<PartBatchCreateOutFE>('/parts/batch', body);
+      const resp = await api.post<PartBatchCreateOutFE>('/parts/batch', body);
+      // 响应后处理与请求同处一个 try：请求已经 commit，**任何**后续步骤抛错都不能
+      // 让本函数整体 reject —— 前面几组已建出的 part 会整包丢失，caller 只能退到
+      // 「回 idle 让用户重来」，那就把已建出的工单建了第二遍。所以这里只往局部变量
+      // 里算，算全了才并入累加器，抛错时该组一条都不进（它的成败按未知上报）。
+      const data = assertBatchCreateOut(resp.data);
+      const createdInGroup = readCreatedInGroup(data, groupItems);
+      const failedInGroup = readFailedInGroup(data, groupItems);
+      created.push(...createdInGroup);
+      failed.push(...failedInGroup);
+      if (resp.data.cleanup_tmp_keys) {
+        cleanupTmpKeys.push(...resp.data.cleanup_tmp_keys);
+      }
     } catch (e) {
-      // 这一组一条成败信息都拿不到，只记下标区间 + 原因，交给 caller 如实转达。
-      groupErrors.push({
-        customer_id: customerId,
-        startIndex: groupItems[0]!.sourceIndex,
-        endIndex: groupItems[groupItems.length - 1]!.sourceIndex,
-        message: (e as Error).message ?? '请求失败',
-      });
-      continue;
-    }
-    // 后端 created[i] 恒等于组内第 i 个**成功**的 item（按 items 顺序 push、失败项不
-    // 占位）⇒ 沿组内 items 顺序走一个游标，跳过 failed[].item_index 命中的项，
-    // 落到的那个位置就是该 part 的源下标。
-    const failedInGroup = new Set(resp.data.failed.map((f) => f.item_index));
-    let groupCursor = 0;
-    // 后端 created: Vec<PartDetailOut>（结构兼容 PartItem，断言转换）
-    created.push(
-      ...resp.data.created.map((raw) => {
-        while (failedInGroup.has(groupCursor)) groupCursor += 1;
-        const sourceIndex = groupItems[groupCursor]?.sourceIndex ?? groupCursor;
-        groupCursor += 1;
-        return { ...(raw as PartItem), sourceIndex };
-      }),
-    );
-    // 后端 failed[i].item_index 是组内下标，换算回请求 items 的全局下标便于 caller
-    // 显示「第 X 行」
-    failed.push(
-      ...resp.data.failed.map((f) => ({
-        index: groupItems[f.item_index]?.sourceIndex ?? f.item_index,
-        message: f.message,
-      })),
-    );
-    if (resp.data.cleanup_tmp_keys) {
-      cleanupTmpKeys.push(...resp.data.cleanup_tmp_keys);
+      // 这一组一条成败信息都拿不到（请求抛错，或响应缺 created / failed 无法解读），
+      // 只记下标区间 + 原因，交给 caller 如实转达「成功与否未知」。
+      groupErrors.push({ ...groupRange, message: (e as Error).message ?? '请求失败' });
     }
   }
   return { created, failed, cleanup_tmp_keys: cleanupTmpKeys, groupErrors };
+}
+
+/** 断言响应的 `created` / `failed` 都是数组，否则抛给调用方的 try 记成整组未知。 */
+function assertBatchCreateOut(data: PartBatchCreateOutFE | undefined | null): PartBatchCreateOutFE {
+  if (!data || typeof data !== 'object') {
+    throw new Error('响应不是对象（可能被网关拦截）');
+  }
+  if (!Array.isArray(data.created)) throw new Error('响应缺少 created 数组');
+  if (!Array.isArray(data.failed)) throw new Error('响应缺少 failed 数组');
+  return data;
+}
+
+/**
+ * 响应 `created` → 全局 `sourceIndex`。
+ *
+ * 后端 created[i] 恒等于组内第 i 个**成功**的 item（按 items 顺序 push、失败项不占位）
+ * ⇒ 沿组内 items 顺序走一个游标，跳过 failed[].item_index 命中的项，落到的那个位置
+ * 就是该 part 的源下标。
+ */
+function readCreatedInGroup(
+  data: PartBatchCreateOutFE,
+  groupItems: Array<{ item: PartBatchCreatePayload; sourceIndex: number }>,
+): CreatedPartItem[] {
+  const failedInGroup = new Set(data.failed.map((f) => f?.item_index));
+  let groupCursor = 0;
+  return data.created.map((raw) => {
+    while (failedInGroup.has(groupCursor)) groupCursor += 1;
+    const sourceIndex = groupItems[groupCursor]?.sourceIndex ?? groupCursor;
+    groupCursor += 1;
+    return { ...(raw as PartItem), sourceIndex };
+  });
+}
+
+/**
+ * 响应 `failed` → 请求 items 的全局下标（便于 caller 显示「第 X 行」）。
+ *
+ * `item_index` 不是有限数时按「解读不了」抛错（整组记未知），不用 0 / NaN 硬凑 ——
+ * 凑出来的 sourceIndex 会把 part 绑到错误的本地行上。
+ */
+function readFailedInGroup(
+  data: PartBatchCreateOutFE,
+  groupItems: Array<{ item: PartBatchCreatePayload; sourceIndex: number }>,
+): PartBatchFailure[] {
+  return data.failed.map((f) => {
+    if (typeof f?.item_index !== 'number' || !Number.isFinite(f.item_index)) {
+      throw new Error('响应 failed 缺少合法的 item_index');
+    }
+    return {
+      index: groupItems[f.item_index]?.sourceIndex ?? f.item_index,
+      message: f.message,
+    };
+  });
 }
 
 function toPartBatchCreateItem(it: PartBatchCreatePayload): PartBatchCreateItemFE {

@@ -151,11 +151,15 @@ export interface SerializedColumnLayout {
 
 /** PDF Tab 完整快照。
  *
- * 2026-10-04：草稿只承载**行数据**（可序列化的部分），不承载任何 partId 映射。
- * 已知的取舍：上传失败后刷新页面，`File` 不跨刷新存活、用户必须重新选文件再提交，
- * 而重新解析出的行 uid 每次都是新生成的（`makeUid` 走 `crypto.randomUUID`），
- * 所以任何「行 → 已建 partId」的映射都对不上新行，刷新后再次提交必然重建工单
- * （`POST /parts/batch` 无幂等键）。要根治得让行 uid 可复现，属独立设计变更。
+ *  2026-10-04：对 Tab 2 是**只写**的 —— PDF Tab 只往这里写，没有任何把 `pdf_tab.rows` /
+ *  `pdf_tab.assemblies` 灌回表格的路径（`mergeDraftWithSession` 由 Tab 1 消费）。保留
+ *  这个段只是因为两个 Tab 的 saver 共用同一个 localStorage key，PDF Tab 必须读回旧
+ *  payload 才能只覆盖自己那段、不把 Tab 1 的 `manual_tab` 冲掉。
+ *
+ *  由此刷新后表格是空的、行全部丢失，重新提交必须重新选文件再解析。会**重复建单**的
+ *  实际触发点是「重新解析」—— 它把全部行重新列出来（含上一次已经建出工单的那些），
+ *  再点提交就会建第二遍（`POST /parts/batch` 无幂等键）。刷新本身不重复：刷新后表是空的。
+ *  要根治得让行 uid 可复现，属独立设计变更。
  */
 export interface SerializedPdfTab {
   customerL1Id: string | null;
