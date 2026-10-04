@@ -119,6 +119,7 @@
       v-model="showShelfDialog"
       :options="scanShelf.options"
       :current-shelf-id="scanShelf.selectedShelfId"
+      :empty-text="emptyShelfText ?? undefined"
       @confirm="onWorkingShelfConfirm"
       @cancel="onWorkingShelfCancel"
     />
@@ -162,13 +163,21 @@ const showInspect = computed<boolean>(() => boundZones.value.has('INSPECTION'));
 const hasAnyAction = computed<boolean>(
   () => showPickUp.value || showReturn.value || showInspect.value,
 );
-/** 三个按钮全隐藏时的原因说明。零按钮 + 零文案会让工人以为页面坏了：候选为空（wildcard）
- *  与「候选有但 zone 一个都认不出来」（含 store 兜底填 UNKNOWN 的情形）都走这里。 */
+/**
+ * 三个按钮全隐藏时的原因说明。零按钮 + 零文案会让工人以为页面坏了。
+ *
+ * 2026-10-04 review 第 2 轮：候选非空但 zone 一个都认不出来这一支改成返回 `null` ——
+ * 那句文案与顶部横条摆的 `shelfProblem` 说的是同一件事（横条：「无法识别当前货架所属区域，
+ * 不能作为作业货架…」），两处同时渲染就是同一屏两条近义长句。横条已经说了，这里不再重复。
+ * 顺带覆盖掉「后端将来返一个本仓还不认识的新 zone」这一支：横条同样会兜住。
+ *
+ * wildcard（候选为空）那一支保持原样：那时横条整条不渲染（`showWorkingShelfBar` 要求
+ * `options.length > 0`），这句话没有别处可去，删了就是一屏零字。
+ */
 const noActionReason = computed<string | null>(() => {
   if (shelfLoading.value || hasAnyAction.value) return null;
-  return scanShelf.options.length === 0
-    ? '本账号未绑定货架，请联系管理员在「账号管理」为本账号绑定货架'
-    : '本账号绑定的货架所属区域无法识别，请联系管理员核对本账号的货架绑定';
+  if (scanShelf.options.length > 0) return null;
+  return '本账号未绑定货架，请联系管理员在「账号管理」为本账号绑定货架';
 });
 
 // ===== 当前作业货架（只服务送检）=====
@@ -217,6 +226,24 @@ const workingShelfText = computed<string>(() => {
   return scanShelf.options.length >= 2 ? `当前：${label}` : `自动：${label}`;
 });
 
+/**
+ * 弹窗空态文案（null = 弹窗里有东西可列，文案用不上）。
+ *
+ * 2026-10-04 review 第 2 轮新增。判据是「候选里一个生产架都没有」这件事本身，**不是**
+ * `shelfProblem()` —— 后者回答的是「为什么当前作业架不可提交」，空态要回答的是「为什么这里
+ * 列不出一张货架卡」。两者在「绑了 ≥ 2 个架、但一个都不是生产区」时会分叉：那时守卫说的是
+ * 「本账号绑定了多个货架，请先在「操作选择」页选择当前作业货架」，可工人此刻**正站在
+ * 「操作选择」页**、弹窗里一张卡都没有 —— 让他去「选择货架」是循环指引，而选择根本解决不了
+ * （没有生产架可选）。所以这里自己判、并且不替 zone 猜成因，只如实说「没有生产架 + 找谁」。
+ *
+ * 具体成因（都在品检区 / 所属区域暂未识别）由**背后的横条**给出：那里摆的是
+ * `shelfProblem`，逐条区分「在品检区」与「无法识别所属区域」。两处各说一件事、互不矛盾。
+ */
+const emptyShelfText = computed<string | null>(() => {
+  if (scanShelf.options.some((o) => o.zone === 'PRODUCTION')) return null;
+  return '本账号绑定的货架里没有生产区作业货架（可能都在品检区，或所属区域暂未识别），请联系管理员核对本账号的货架绑定';
+});
+
 function openShelfSelector(): void {
   showShelfDialog.value = true;
 }
@@ -237,6 +264,15 @@ function onWorkingShelfConfirm(shelfId: string): void {
     return;
   }
   // 选架是「进送检」的入口：确认选了架就把这次跳转补上，工人不必再点一次送检按钮。
+  //
+  // ⚠️ 2026-10-04 review 第 2 轮登记：这里（以及上面失败/cancel 两条路径）都**刻意不调**
+  // `setAction('INSPECT')`，与 `selectAction` 里 INSPECT 的常规路径不同。当前零功能后果 ——
+  // `useScanSession` 的 `action` ref 唯一消费方是 `requireWorkerAndAction`，而它连同
+  // `actionToSlug` / `slugToAction` **全仓零调用点**，`/scan/inspect` 自己只要求
+  // `requireWorker`（见该页 onBeforeMount）。但这是个 latent trap：将来谁把
+  // `requireWorkerAndAction` 接进 `/scan/inspect`，本路径就会因 `action` 为 null 被弹回
+  // `/scan/action`，与「点送检 → 弹窗 → confirm → push」形成来回弹。接的时候记得在本行
+  // 补上 `setAction('INSPECT')`。
   if (pendingInspect) {
     pendingInspect = false;
     void router.push('/scan/inspect');
@@ -358,6 +394,10 @@ function rescanBadge(): void {
 .working-shelf {
   display: flex;
   align-items: center;
+  // 2026-10-04 review 第 2 轮：警示态摆的是守卫原话（最长一条 41 字），加上标签、图标、
+  // 按钮约需 920px。`.content` 上限 1100px，1024px 屏放得下，**800px 屏放不下** —— 单行
+  // flex 会把「选择货架」按钮挤出/裁掉，而那正是这类状态下唯一的出路。允许换行兜底。
+  flex-wrap: wrap;
   gap: 10px;
   margin: 0 0 24px;
   padding: 12px 18px;
@@ -379,6 +419,9 @@ function rescanBadge(): void {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-weight: 700;
   color: #303133;
+  // flex 子项默认 `min-width: auto`，长文本会把同行的按钮顶出去 ⇒ 必须显式给 0，
+  // 否则上一条的 `flex-wrap` 在「标签 + 长文本 + 按钮」这一组合里也救不回来。
+  min-width: 0;
 }
 
 .action-grid {

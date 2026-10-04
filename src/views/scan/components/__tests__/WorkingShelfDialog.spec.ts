@@ -38,10 +38,15 @@ function opt(id: string, code: string, zone: string): ShelfOption {
 
 function render(
   options: ShelfOption[],
-  extra: { modelValue?: boolean; currentShelfId?: string | null } = {},
+  extra: { modelValue?: boolean; currentShelfId?: string | null; emptyText?: string } = {},
 ) {
   return mount(WorkingShelfDialog, {
-    props: { modelValue: extra.modelValue ?? true, options, currentShelfId: extra.currentShelfId },
+    props: {
+      modelValue: extra.modelValue ?? true,
+      options,
+      currentShelfId: extra.currentShelfId,
+      emptyText: extra.emptyText,
+    },
     global: { stubs },
   });
 }
@@ -63,17 +68,58 @@ describe('WorkingShelfDialog', () => {
     expect(w.text()).not.toContain('SH-I02');
   });
 
-  it('候选全在品检区 → 空态文案指向「联系管理员绑定生产货架」，不给确认按钮', async () => {
+  // 2026-10-04 review 第 2 轮：空态文案改由**调用方**传（`emptyText`）。组件判不出成因
+  // （至少两个：都在品检区 / 所属区域暂未识别 = 调用方 store 兜底填的 UNKNOWN），猜错就会
+  // 与背后的横条摆出互相矛盾的成因。下面两条分别锁「传了就用传的」与「不传才用兜底」。
+  it('候选全在品检区 → 空态：不给确认按钮、也不 emit confirm', async () => {
     const w = render([opt('2', 'SH-I02', 'INSPECTION')]);
 
     expect(w.find('.empty-state').exists()).toBe(true);
-    expect(w.text()).toContain(
-      '本账号当前绑定的货架在品检区，缺少生产区作业货架，请联系管理员为本账号绑定生产货架',
-    );
     expect(w.findAll('.hmi-card')).toHaveLength(0);
     // 空态下点「完成」不该 emit confirm（没得可确认）
     await w.findAll('button').find((b) => b.text().includes('完成'))!.trigger('click');
     expect(w.emitted('confirm')).toBeUndefined();
+  });
+
+  it('emptyText 传了就原样渲染，且不与兜底文案混着出现', () => {
+    const w = render([opt('2', 'SH-I02', 'INSPECTION')], {
+      emptyText: '本账号绑定的货架里没有生产区作业货架（可能都在品检区，或所属区域暂未识别）……',
+    });
+
+    expect(w.find('.empty-text').text()).toBe(
+      '本账号绑定的货架里没有生产区作业货架（可能都在品检区，或所属区域暂未识别）……',
+    );
+    // 兜底那句不该同时出现（否则又是一屏两条近义文案）
+    expect(w.text()).not.toContain('缺少生产区作业货架');
+  });
+
+  it('未传 emptyText → 用组件内兜底（全品检这一支的既有文案）', () => {
+    const w = render([opt('2', 'SH-I02', 'INSPECTION')]);
+
+    expect(w.find('.empty-text').text()).toBe(
+      '本账号当前绑定的货架在品检区，缺少生产区作业货架，请联系管理员为本账号绑定生产货架',
+    );
+  });
+
+  // 组件侧只认「有没有生产架可列」，成因归调用方：UNKNOWN 区（store 兜底形态）同样落空态，
+  // 此时渲染哪句完全由 emptyText 决定 —— 组件不猜。
+  it('候选全是 UNKNOWN 区（store 兜底形态）→ 也落空态，文案同样由 emptyText 决定', () => {
+    const w = render([opt('1', 'shelf#1', 'UNKNOWN')], {
+      emptyText: '本账号绑定的货架里没有生产区作业货架（可能都在品检区，或所属区域暂未识别）……',
+    });
+
+    expect(w.find('.empty-state').exists()).toBe(true);
+    expect(w.find('.empty-text').text()).toContain('或所属区域暂未识别');
+  });
+
+  // 兜底文案必须真的只覆盖「全品检」：zone 全未知时原样念出来是错的（见上方用例）。
+  it('兜底文案那句在 zone 全 UNKNOWN 时不再被当成权威（未传 emptyText 的已知取舍）', () => {
+    const w = render([opt('1', 'shelf#1', 'UNKNOWN')]);
+
+    expect(w.find('.empty-state').exists()).toBe(true);
+    // 兜底仍然是兜底：会显示，但调用方（唯一消费方）一定会传 emptyText，此处只是把
+    // 「未传 ⇒ 显示兜底」这一行为钉住，不对兜底本身的文案正确性做跨 zone 断言。
+    expect(w.find('.empty-text').text()).toContain('请联系管理员');
   });
 
   it('单选：点第二张卡换选中，确认只 emit 后点的那一个', async () => {

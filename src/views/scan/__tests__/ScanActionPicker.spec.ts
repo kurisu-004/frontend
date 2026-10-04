@@ -58,13 +58,14 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: h.push, replace: h.repl
 vi.mock('@/views/scan/components/WorkingShelfDialog.vue', () => ({
   default: {
     name: 'WorkingShelfDialogStub',
-    props: ['modelValue', 'options', 'currentShelfId'],
+    props: ['modelValue', 'options', 'currentShelfId', 'emptyText'],
     setup() {
       return { confirmId: () => h.dialogConfirmId };
     },
     template: `
       <div class="stub-dialog" :class="{ 'is-open': modelValue }">
         <span class="stub-current">{{ currentShelfId ?? '' }}</span>
+        <span class="stub-empty">{{ emptyText ?? '' }}</span>
         <button class="stub-confirm" @click="$emit('confirm', confirmId())">confirm</button>
         <button class="stub-cancel" @click="$emit('cancel')">cancel</button>
       </div>
@@ -369,6 +370,52 @@ describe('ScanActionPicker：选架接线 + 送检前置', () => {
     await clickAction(w, '放 回');
     expect(h.push).toHaveBeenCalledWith('/scan/return');
     expect(w.find('.stub-dialog').classes()).not.toContain('is-open');
+  });
+
+  // ── 2026-10-04 review 第 2 轮：空态文案由调用方给 + noActionReason 降噪 ────────
+
+  // 守卫的 `shelfProblem` 回答的是「为什么当前作业架不可提交」，空态要回答的是「为什么这里
+  // 列不出卡」。绑 ≥ 2 个非生产架时两者会分叉：守卫说「请先在「操作选择」页选择当前作业
+  // 货架」，而工人此刻就站在那一页、弹窗里一张卡都没有 —— 那是循环指引，且选择解决不了。
+  it('B5：绑 ≥2 个非生产架 → 空态文案不说「请去选择货架」（不制造循环指引）', async () => {
+    mockShelves([SHELF_I1, { id: '8800000000004', code: 'SH-I02', zone: 'INSPECTION' }]);
+    const w = await mountPicker(makeUser('u1', ['8800000000003', '8800000000004']));
+
+    expect(useScanShelfStore().selectedShelfId).toBeNull();
+    expect(useScanShelfStore().showShelfSelector).toBe(true);
+    await clickAction(w, '送 检');
+    expect(w.find('.stub-dialog').classes()).toContain('is-open');
+
+    const empty = w.find('.stub-empty').text();
+    expect(empty).toContain('没有生产区作业货架');
+    expect(empty).not.toContain('请先在「操作选择」页选择');
+    expect(empty).not.toContain('在品检区，缺少');
+  });
+
+  it('B6：候选里有生产架 → 不传空态文案（弹窗有卡可列，文案用不上）', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_I1.id]));
+
+    expect(w.find('.stub-empty').text()).toBe('');
+  });
+
+  // 降噪：候选非空但 zone 一个都认不出来（listShelves 失败 ⇒ store 兜底填 UNKNOWN）时，
+  // noActionReason 不再与横条重复同一段话。wildcard 那支必须保持原样（横条不渲染）。
+  it('E1：zone 全 UNKNOWN → 横条自解释，noActionReason 不再重复（降噪）', async () => {
+    vi.mocked(h.listShelves).mockRejectedValue(new Error('boom'));
+    const w = await mountPicker(makeUser('u1', [SHELF_P1.id]));
+
+    // 横条说了「无法识别」
+    expect(w.find('.working-shelf').classes()).toContain('is-warn');
+    expect(w.find('.working-shelf-value').text()).toBe(
+      '无法识别当前货架所属区域，不能作为作业货架，请联系管理员核对本账号的货架绑定',
+    );
+    // 三个动作按钮全隐藏（没有可认出的 zone），但**不再**额外渲染一段近义文案。
+    // 两条候选文案都断言「不在」：只钉住降噪前那一句的话，把降噪改成返回**另一句**错文案
+    // （例如误落到 wildcard 那一支）会漏过。
+    expect(actionButtons(w)).toHaveLength(0);
+    expect(w.text()).not.toContain('本账号绑定的货架所属区域无法识别');
+    expect(w.text()).not.toContain('本账号未绑定货架');
   });
 
   it('D2：候选为空（wildcard）→ 不渲染横条，走既有 noActionReason 文案', async () => {

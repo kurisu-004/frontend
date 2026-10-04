@@ -21,6 +21,7 @@
     modelValue: boolean              // 弹窗可见
     options: ShelfOption[]          // 候选（内部只留 PRODUCTION 区）
     currentShelfId?: string | null  // 调用方当前已生效的作业架；打开时预选它（见 preselectedOnOpen）
+    emptyText?: string               // 无可选生产架时的说明；不传则用下面的兜底文案
   emits:
     update:modelValue(v: boolean)
     confirm(shelfId: string)        // 确认选中（写 store 由调用方做）
@@ -37,9 +38,7 @@
   >
     <div v-if="productionOptions.length === 0" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><Box /></el-icon>
-      <p class="empty-text">
-        本账号当前绑定的货架在品检区，缺少生产区作业货架，请联系管理员为本账号绑定生产货架
-      </p>
+      <p class="empty-text">{{ emptyText ?? DEFAULT_EMPTY_TEXT }}</p>
     </div>
     <div v-else class="card-grid">
       <HmiPickerCard
@@ -86,6 +85,20 @@ const props = defineProps<{
    * 品检架）—— 那不是能选的那一张，不预选。
    */
   currentShelfId?: string | null;
+  /**
+   * 2026-10-04 review 第 2 轮新增：无可选生产架时的说明文案，**由调用方给**。
+   *
+   * 为什么不留在组件里猜：`productionOptions` 为空有**两个**成因 —— 全绑品检架（全绑
+   * 品检区），以及全绑「区域未知」架（`listShelves` 失败时 `useScanShelfStore` 兜底填
+   * UNKNOWN，见该 store 的 initShelves 兜底分支）。这两种成因要说的是不同的话，而调用方
+   * 手里正好有判别所需的 `workingShelfProblem()`（它逐条区分了「在品检区」与「无法识别
+   * 所属区域」）—— 组件自己只能看到 zone 字符串，猜错就会在同一屏上给出与横条矛盾的
+   * 成因。沿本仓「差异在调用侧消化」的取向，文案随数据一起传进来。
+   *
+   * 不传时用下面的 `DEFAULT_EMPTY_TEXT` 兜底（= 全品检这一支的既有文案，保留是为了
+   * 单测与将来第二个消费方不必先关心这件事）。
+   */
+  emptyText?: string;
 }>();
 
 const emit = defineEmits<{
@@ -93,6 +106,17 @@ const emit = defineEmits<{
   confirm: [shelfId: string];
   cancel: [];
 }>();
+
+/**
+ * `emptyText` 未传时的兜底文案。
+ *
+ * 2026-10-04 review 第 2 轮：这是**兜底**，不是权威 —— 组件自己判不出「无可选生产架」的成因
+ * （至少两个：都在品检区 / 所属区域暂未识别，即调用方 store 兜底填的 UNKNOWN），所以真相由
+ * 调用方的 `emptyText` 带来。这句兜底只覆盖「都在品检区」这一支，保留是为了让本组件的
+ * 单测、以及将来第二个消费方不必先关心这件事。
+ */
+const DEFAULT_EMPTY_TEXT =
+  '本账号当前绑定的货架在品检区，缺少生产区作业货架，请联系管理员为本账号绑定生产货架';
 
 const selectedId = ref<string | null>(null);
 
