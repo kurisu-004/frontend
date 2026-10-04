@@ -17,16 +17,21 @@
   2026-10-04：**作业货架（只有送检要用）的选定入口在本页**。取件的 pick-up 已解绑
   （后端把 `shelf_id` 改成可选、缺省不做任何校验），放回的 `shelf_id` 来自放回链自己
   的货架 picker —— 两者都不经过 `useScanShelfStore`。
-  - 顶部「当前作业货架」区三种形态：单架 → 「自动：{code}」不可换；多架未选 → 警示态
-    +「选择货架」；多架已选 → 「当前：{code}」+「更换」。三态都常驻，工人随时能看清
-    自己此刻报给系统的是哪个架。
-  - 点「送检」时若 `showShelfSelector` 为真，**先开 `WorkingShelfDialog`** 让工人选，
-    confirm 之后才 `router.push('/scan/inspect')`；cancel 则中止、留在本页。刻意不用
-    按钮 disabled 代替 —— HMI 上置灰既让工人困惑、又没有任何出路提示。
+  - 顶部「当前作业货架」区**按「作业架能不能提交」渲染**，判据复用送检页的
+    `workingShelfProblem()`（与页内两处守卫同源）—— 不可提交时转警示态并把原因原话
+    摆出来；可提交且只有一个候选显示「自动：{code}」，多个候选显示「当前：{code}」。
+  - 警示态不只对应「多架未选」：**选中的是品检架**、**zone 未解析**两种同样落进来。
+    只判「多架未选」会让「只绑了品检架」的账号显示「自动：SH-I02」—— 一个 worker-scan
+    必然 20501 打回的架号，工人据此点进送检页才发现一次都提交不出去，而那一屏没有出路。
+  - 只要**有候选**就给「选择货架 / 更换」按钮，不按架数：品检账号点开就能看到
+    `WorkingShelfDialog` 的空态说明（指向「联系管理员绑定生产货架」），比一条没有按钮
+    的警示横条更像出路。候选为空时整条横条不渲染（走 `noActionReason`）。
+  - 点「送检」时若作业架不可提交，**先开 `WorkingShelfDialog`** 让工人选，confirm 之后
+    才 `router.push('/scan/inspect')`；cancel 则中止、留在本页。刻意不用按钮 disabled 代替
+    —— HMI 上置灰既让工人困惑、又没有任何出路提示。
   - ⚠️ 送检页的 `ShelfPickerDialog` 给的是**目标品检架**（worker-scan 的
     `target_inspection_shelf_id`），与本页这个「作业架」不是同一个东西，别混。
-  - 候选为空（wildcard）时不额外渲染：走既有 `noActionReason` 分支。zone 一个都认不
-    出来时三个按钮全隐藏（zone 未解析，见 store 的 initShelves 兜底）。
+  - zone 一个都认不出来时三个按钮全隐藏（zone 未解析，见 store 的 initShelves 兜底）。
 -->
 
 <template>
@@ -50,7 +55,7 @@
     </div>
 
     <div class="content">
-      <!-- 当前作业货架（只服务送检）：常驻显示当前值，多架未选时是警示态 + 选架入口 -->
+      <!-- 当前作业货架（只服务送检）：常驻显示当前值；作业架不可提交时转警示态 + 选架入口 -->
       <div v-if="showWorkingShelfBar" :class="['working-shelf', { 'is-warn': needShelf }]">
         <el-icon :size="22"><Location /></el-icon>
         <span class="working-shelf-label">当前作业货架</span>
@@ -113,6 +118,7 @@
     <WorkingShelfDialog
       v-model="showShelfDialog"
       :options="scanShelf.options"
+      :current-shelf-id="scanShelf.selectedShelfId"
       @confirm="onWorkingShelfConfirm"
       @cancel="onWorkingShelfCancel"
     />
@@ -126,6 +132,7 @@ import { ElMessage } from 'element-plus';
 import { Avatar, Back, Box, Check, Location, Refresh } from '@element-plus/icons-vue';
 import { ACTION_LABEL, useScanSession, type WorkAction } from '@/composables/useScanSession';
 import { useScanShelfStore } from '@/stores/scanShelf';
+import { workingShelfProblem } from '@/views/scan/composables/resolveWorkingShelf';
 import WorkingShelfDialog from '@/views/scan/components/WorkingShelfDialog.vue';
 
 const router = useRouter();
@@ -170,20 +177,44 @@ const noActionReason = computed<string | null>(() => {
 const workingShelfCode = computed<string | null>(
   () => scanShelf.options.find((o) => o.id === scanShelf.selectedShelfId)?.code ?? null,
 );
-/** 多架且未选 = 需要工人去选一个（store 侧唯一表达该状态的判定）。 */
-const needShelf = computed<boolean>(() => scanShelf.showShelfSelector);
-/** 单架是唯一确定的选择，没有「换一个」这回事，不给按钮。 */
-const canChangeShelf = computed<boolean>(() => scanShelf.options.length >= 2);
+/**
+ * 作业架当前不可提交的原因（null = 可提交）。直接复用送检页的守卫判定，本页与它同源
+ * 才不会出现「横条说自动认定了一个架、送检页却 100% 拦死」这种各说各话。
+ *
+ * 2026-10-04 review 第 1 轮：原先这里判的是 store 的 `showShelfSelector`（= 多架且未选），
+ * 于是「只绑了品检架」的账号（单架 ⇒ 自动选中 ⇒ 该判据为 false）落进正常态，横条显示
+ * 「自动：SH-I02」—— 一个 worker-scan 必然 20501 打回的架号，看上去像是系统认定的。
+ * 工人据此点进送检页后才被页内两处守卫拦死，而那一屏没有任何出路。改判「作业架不可用」
+ * 之后，「多架未选 / 选中品检架 / zone 未解析」三种走同一条警示路径。
+ *
+ * `workingShelfProblem` 只读不弹提示（见 resolveWorkingShelf.ts 的约定），且本 computed 只在
+ * 模板渲染时求值 —— 那时 `shelfLoading` 已转 false、`initShelves()` 已 await 完，读得到候选集。
+ */
+const shelfProblem = computed<string | null>(() => workingShelfProblem());
+/** 作业架不可提交 ⇒ 横条转警示态，送检也先拦一道弹窗。 */
+const needShelf = computed<boolean>(() => shelfProblem.value !== null);
+/**
+ * 选架入口的显隐：**只看有没有候选**，不按架数。品检账号只有品检架时同样要给出按钮 ——
+ * 点开看到 `WorkingShelfDialog` 的空态说明（指向「联系管理员绑定生产货架」），比一条
+ * 没有按钮的警示横条更像出路。候选为空时整条横条都不渲染（走 noActionReason），按钮
+ * 也就无从出现。
+ */
+const canChangeShelf = computed<boolean>(() => scanShelf.options.length > 0);
 /** 候选为空时不额外渲染：那条路走 noActionReason 文案就够了，两处都渲染是重复噪音。 */
 const showWorkingShelfBar = computed<boolean>(
   () => !shelfLoading.value && scanShelf.options.length > 0,
 );
-/** 单架 = 自动选出来的，不写「当前」而写「自动」：让工人知道这一栏他没得挑。多架未选
- *  直说「未选择」—— 少一个架号，工人就不知道系统此刻拿不到作业架（也就是送检发不出去）。 */
+/**
+ * 作业架这一位怎么说话。
+ * - 不可提交：把 `shelfProblem` 原话摆出来（多架未选 / 在品检区 / 区域未知），让工人在**点
+ *   按钮之前**就知道送检发不出、以及为什么 —— 不必等进了送检页吃 error 才知道。
+ * - 可提交且只有一个候选：「自动：{code}」，让工人知道这一栏他没得挑。
+ * - 可提交且有多个候选：「当前：{code}」，并给「更换」。
+ */
 const workingShelfText = computed<string>(() => {
-  if (needShelf.value) return '未选择';
+  if (shelfProblem.value) return shelfProblem.value;
   const label = workingShelfCode.value ?? scanShelf.selectedShelfId ?? '—';
-  return canChangeShelf.value ? `当前：${label}` : `自动：${label}`;
+  return scanShelf.options.length >= 2 ? `当前：${label}` : `自动：${label}`;
 });
 
 function openShelfSelector(): void {
@@ -191,7 +222,10 @@ function openShelfSelector(): void {
 }
 
 /** 「点送检 → 需要先选架」的中转标记：选完架由 onWorkingShelfConfirm 补上跳转。
- *  非响应式：它只在一次点击到弹窗回执之间有意义，不进模板。 */
+ *  非响应式：它只在一次点击到弹窗回执之间有意义，不进模板。
+ *  2026-10-04 review 第 1 轮：**每条离开 pendingInspect 的路径都必须复位**（确认成功 /
+ *  确认失败 / 取消）。漏掉失败那条的话，一次越界确认留下的 true 会让工人下一次点
+ *  「更换」货架、随手 confirm 时被**意外带进送检页**。 */
 let pendingInspect = false;
 
 function onWorkingShelfConfirm(shelfId: string): void {
@@ -199,6 +233,7 @@ function onWorkingShelfConfirm(shelfId: string): void {
   // selectShelf 越界返回 false 且不写：与候选集不符的 id 进来时保留原状，不静默写坏值。
   if (!scanShelf.selectShelf(shelfId)) {
     ElMessage.error('该货架不在本账号的可用货架内，请重新选择');
+    pendingInspect = false;
     return;
   }
   // 选架是「进送检」的入口：确认选了架就把这次跳转补上，工人不必再点一次送检按钮。

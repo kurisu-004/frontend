@@ -20,6 +20,7 @@
   props:
     modelValue: boolean              // 弹窗可见
     options: ShelfOption[]          // 候选（内部只留 PRODUCTION 区）
+    currentShelfId?: string | null  // 调用方当前已生效的作业架；打开时预选它（见 preselectedOnOpen）
   emits:
     update:modelValue(v: boolean)
     confirm(shelfId: string)        // 确认选中（写 store 由调用方做）
@@ -77,6 +78,14 @@ const props = defineProps<{
   modelValue: boolean;
   /** 候选（本账号绑定的全部架，含品检架）。组件内部只留 PRODUCTION 区。 */
   options: ShelfOption[];
+  /**
+   * 2026-10-04 review 第 1 轮新增：调用方当前**已生效**的作业架。横条上写着
+   * 「当前：SH-P01」+「更换」，弹窗打开后那张卡却不是选中态，等于要工人把自己刚选过的
+   * 架再指一次。传进来即可预选。判据走 `productionOptions`（而不是 `options`）：store 里
+   * 的值已过 `id ∈ options` 校验，但还可能是品检架（单架品检账号 / sessionStorage 恢复出
+   * 品检架）—— 那不是能选的那一张，不预选。
+   */
+  currentShelfId?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -99,13 +108,29 @@ function zoneLabel(zone: string): string {
   return '区域未知';
 }
 
-// 每次打开都重置选中：上一次的选择可能已被解绑（候选集随之变化），沿用它等于替工人
-// 做了一个决定。不预选「第一个」—— 多架账号里没有哪个是天然正确的默认项。
+/** 打开时该预选哪一张：调用方已生效的那张（须在本弹窗的可选集内），否则不预选。 */
+function preselectedOnOpen(): string | null {
+  const id = props.currentShelfId;
+  if (!id) return null;
+  return productionOptions.value.some((o) => o.id === id) ? id : null;
+}
+
+/**
+ * 每次打开都重算预选，而不是沿用弹窗上一轮的临时选择。
+ *
+ * 2026-10-04 review 第 1 轮：原先这里无脑置 null，理由是「上一次的选择可能已被解绑」——
+ * 但那是**弹窗自己上一轮**的临时选择，而 `currentShelfId` 是 store 里已过 `id ∈ options`
+ * 校验的生效值。两者性质不同，后者值得预选（不预选只是让工人多点一次，前者会让人以为
+ * 系统没记住）。仍不预选「第一个」—— 多架账号里没有哪个是天然正确的默认项。
+ */
 watch(
   () => props.modelValue,
   (v) => {
-    if (v) selectedId.value = null;
+    if (v) selectedId.value = preselectedOnOpen();
   },
+  // immediate：弹窗也可能一挂载就是打开态（调用方先置 true 再渲染），那种情况下
+  // 不会先经历一次 false，watch 也就不会触发 ⇒ 首帧就漏了预选。
+  { immediate: true },
 );
 
 function onSelect(shelfId: string): void {
@@ -149,7 +174,7 @@ function onCancel(): void {
   }
 }
 .confirm-btn {
-  min-width: 180px;
+  min-width: 200px;
   font-size: 16px;
   font-weight: 600;
 }

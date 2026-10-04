@@ -170,6 +170,8 @@ describe('resolveWorkingShelfId', () => {
     expect(workingShelfProblem()).toBe(
       '当前账号未绑定作业货架，请联系管理员在「账号管理」为本账号绑定生产货架',
     );
+    // 这条是**行为锁**：`workingShelfProblem` 的约定就是只读不弹（调用方自选级别与时机），
+    // /scan/action 顶部的横条正是靠这一点复用它而不必自己吞提示。
     expect(ElMessage.error).not.toHaveBeenCalled();
     expect(ElMessage.warning).not.toHaveBeenCalled();
   });
@@ -200,6 +202,10 @@ describe('resolveWorkingShelfId', () => {
 
     expect(resolveWorkingShelfId()).toBe('8800000000002');
     expect(ElMessage.error).not.toHaveBeenCalled();
+    // ⚠️ 哨兵，不是行为锁（2026-10-04 review 第 1 轮标注）：`workingShelfNotice` 已删，
+    // 守卫**当前没有任何 warning 分支**，所以这条恒真、当前不携带信息。留着的唯一作用是
+    // 「别把噪音加回来」—— 将来谁在守卫里塞一条 warning（尤其是带去重的状态位），
+    // 这里会响。真正的行为锁是上面那两行：放行 + 不弹 error。
     expect(ElMessage.warning).not.toHaveBeenCalled();
   });
 

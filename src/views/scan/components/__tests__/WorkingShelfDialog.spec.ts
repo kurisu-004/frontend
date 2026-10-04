@@ -36,9 +36,12 @@ function opt(id: string, code: string, zone: string): ShelfOption {
   return { id, code, zone };
 }
 
-function render(options: ShelfOption[], modelValue = true) {
+function render(
+  options: ShelfOption[],
+  extra: { modelValue?: boolean; currentShelfId?: string | null } = {},
+) {
   return mount(WorkingShelfDialog, {
-    props: { modelValue, options },
+    props: { modelValue: extra.modelValue ?? true, options, currentShelfId: extra.currentShelfId },
     global: { stubs },
   });
 }
@@ -76,7 +79,7 @@ describe('WorkingShelfDialog', () => {
   it('单选：点第二张卡换选中，确认只 emit 后点的那一个', async () => {
     const w = render([opt('1', 'SH-P01', 'PRODUCTION'), opt('2', 'SH-P02', 'PRODUCTION')]);
 
-    // 打开时不预选任何一张：多架账号里没有天然正确的默认项
+    // 调用方没传 currentShelfId（未选状态）⇒ 不预选任何一张：多架账号里没有天然正确的默认项
     expect(w.findAll('.hmi-card.is-selected')).toHaveLength(0);
 
     await w.findAll('.hmi-card')[1]!.trigger('click');
@@ -103,7 +106,7 @@ describe('WorkingShelfDialog', () => {
 
   // 重新打开时清掉上一次的选中：候选可能已经变了（管理员解绑 / 换绑定），
   // 沿用旧选中等于替工人做了一个他没做的决定。
-  it('关闭后重开：清掉上一次的选中', async () => {
+  it('关闭后重开：清掉上一次的选中（没有生效架可预选时）', async () => {
     const w = render([opt('1', 'SH-P01', 'PRODUCTION'), opt('2', 'SH-P02', 'PRODUCTION')]);
     await w.findAll('.hmi-card')[1]!.trigger('click');
     expect(w.findAll('.hmi-card.is-selected')).toHaveLength(1);
@@ -112,5 +115,61 @@ describe('WorkingShelfDialog', () => {
     await w.setProps({ modelValue: true });
 
     expect(w.findAll('.hmi-card.is-selected')).toHaveLength(0);
+  });
+
+  // 2026-10-04 review 第 1 轮：预选调用方**已生效**的架。横条写着「当前：SH-P01」+
+  // 「更换」，弹窗打开后那张卡却不是选中态，等于让工人把自己刚选过的架再指一次。
+  it('传了 currentShelfId：打开即预选那一张（不要求工人重指）', async () => {
+    const w = render([opt('1', 'SH-P01', 'PRODUCTION'), opt('2', 'SH-P02', 'PRODUCTION')], {
+      currentShelfId: '2',
+    });
+
+    const cards = w.findAll('.hmi-card');
+    expect(cards[0]!.classes()).not.toContain('is-selected');
+    expect(cards[1]!.classes()).toContain('is-selected');
+
+    // 不点任何卡直接「完成」⇒ emit 的就是预选值
+    await w.findAll('button').find((b) => b.text().includes('完成'))!.trigger('click');
+    expect(w.emitted('confirm')).toEqual([['2']]);
+  });
+
+  it('currentShelfId 指向品检架 / 越界 id / 未传 → 都不预选（预选只认可选集里的生产架）', async () => {
+    const options = [opt('1', 'SH-P01', 'PRODUCTION'), opt('2', 'SH-I02', 'INSPECTION')];
+    /** 「完成」按钮是否可点：预选错架时它会被悄悄放开，工人就能确认一个看不见的品检架。 */
+    const confirmDisabled = (w: ReturnType<typeof render>): unknown => {
+      const btn = w.findAll('button').find((b) => b.text().includes('完成'));
+      return btn!.attributes('disabled');
+    };
+
+    // 品检架：单架品检账号的生效值。品检架不在可选集里，预选它等于默认了一个必然 20501
+    // 的架 —— 而且它不在卡片网格里，「完成」会被悄悄放开，工人确认的是一张看不见的卡。
+    const inZone = render(options, { currentShelfId: '2' });
+    expect(inZone.findAll('.hmi-card.is-selected')).toHaveLength(0);
+    expect(confirmDisabled(inZone)).toBeDefined();
+
+    // 越界（已解绑 / listShelves 没返到）
+    const stale = render(options, { currentShelfId: '999' });
+    expect(stale.findAll('.hmi-card.is-selected')).toHaveLength(0);
+    expect(confirmDisabled(stale)).toBeDefined();
+
+    // 没传
+    const none = render(options, { currentShelfId: null });
+    expect(none.findAll('.hmi-card.is-selected')).toHaveLength(0);
+    expect(confirmDisabled(none)).toBeDefined();
+  });
+
+  it('关闭后重开：预选跟着 currentShelfId 重算，不沿用上一轮的临时选中', async () => {
+    const w = render([opt('1', 'SH-P01', 'PRODUCTION'), opt('2', 'SH-P02', 'PRODUCTION')], {
+      currentShelfId: '1',
+    });
+    await w.findAll('.hmi-card')[1]!.trigger('click');
+    expect(w.findAll('.hmi-card')[1]!.classes()).toContain('is-selected');
+
+    await w.setProps({ modelValue: false });
+    // 生效架在关闭期间变了（工人用别的入口改过 / store 重算过）
+    await w.setProps({ modelValue: true, currentShelfId: '2' });
+
+    expect(w.findAll('.hmi-card')[1]!.classes()).toContain('is-selected');
+    expect(w.findAll('.hmi-card')[0]!.classes()).not.toContain('is-selected');
   });
 });

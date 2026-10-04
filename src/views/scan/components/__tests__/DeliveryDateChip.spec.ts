@@ -14,10 +14,15 @@
 // `deliveryDaysLeftText` 都以系统交期为唯一输入），一并钉住，避免两个函数某天只改一个。
 //
 // ⚠️ `deliveryDate.ts` 内部把 `systemDeliveryDate` 归一成**日期串**再用 `new Date()`
-// 解析，日期串按 UTC 零点解读，而「今天」是本地零点 ⇒ 东八区下天数会多算一天。本文件
-// 用 `isoForDiffDays(n)` 反推出「在该口径下正好差 n 天」的日期串，于是「2 天后到期」这类
-// 断言在任意时区都成立（红的不会只是机器时区）。日期**格式**（MM/DD 与否）用形状断言
-// 而不是写死日历日，同理。
+// 解析，日期串按 UTC 零点解读，而「今天」是本地零点 ⇒ 东八区下天数会多算一天（该缺陷
+// 的权威登记在 `src/utils/deliveryDate.ts` 文件头）。本文件用 `isoForDiffDays(n)` 反推出
+// 「在该口径下正好差 n 天」的日期串，于是「2 天后到期」这类断言在任意时区都成立（红的
+// 不会只是机器时区）。日期**格式**（MM/DD 与否）用形状断言而不是写死日历日，同理。
+//
+// 职责边界（2026-10-04 review 第 1 轮）：本文件只管**组件渲染契约**（渲染不渲染、渲什么
+// 形状、挂不挂 class），**不管天数算得对不对**。天数与紧迫样式的绝对值、以及那个时区
+// 缺陷的 TZ 两档对照，锁在 `src/utils/__tests__/deliveryDate.spec.ts` —— 那边修好之后
+// 会红，这边不会，两边都不该越界。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
