@@ -5,7 +5,7 @@
 
   Props:
     - cell: UploadStatusCell | undefined
-      - undefined：未启动上传（提交前或本行无文件）
+      - undefined：本次提交不涉及该文件（或还没开始上传）
       - { status, progress, error }：上传运行时状态
     - label: 标签（'PDF' / '3D' / '主图' 等），用于 row 内区分
 
@@ -13,22 +13,18 @@
     - retry：点击「重试」按钮触发（仅 cell.status === 'error' 时显示）
 
   状态映射：
-    - 'hashing' / 'uploading'：el-progress + 百分比文字
+    - 'uploading'：el-progress + 百分比文字（multipart 无进度回调，progress 固定 0）
     - 'done'：✓ 绿色文字「上传完成」
     - 'error'：红色文字 + 「重试」按钮
-    - 'pending'：灰色「待上传」（提交流程启动但该 item 还没跑）
+    - 'pending'：灰色「待上传」（已排队、还没跑到该文件）
 -->
 
 <template>
   <div v-if="cell" class="upload-status-cell">
     <span class="upload-status-label">{{ label }}</span>
-    <template v-if="cell.status === 'hashing'">
+    <template v-if="cell.status === 'uploading'">
       <el-progress :percentage="cell.progress" :stroke-width="6" :show-text="false" />
-      <span class="upload-status-text">hash 中…</span>
-    </template>
-    <template v-else-if="cell.status === 'uploading'">
-      <el-progress :percentage="cell.progress" :stroke-width="6" :show-text="false" />
-      <span class="upload-status-text">上传中 {{ cell.progress }}%</span>
+      <span class="upload-status-text">上传中</span>
     </template>
     <template v-else-if="cell.status === 'done'">
       <el-icon class="upload-status-icon-done"><check /></el-icon>
@@ -41,7 +37,7 @@
       <el-button link type="primary" size="small" @click="$emit('retry')">重试</el-button>
     </template>
     <template v-else>
-      <!-- 'pending'：进度还没初始化（cell 存在但 status=pending）-->
+      <!-- 'pending'：已排队但还没跑到该文件 -->
       <span class="upload-status-text">待上传</span>
     </template>
   </div>
@@ -53,7 +49,7 @@ import { Check } from '@element-plus/icons-vue';
 
 /** 与 usePartBatchPdf.UploadStatusCell 同形；这里重写一份以避免 cross-folder import。 */
 export interface UploadStatusCell {
-  status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
+  status: 'pending' | 'uploading' | 'done' | 'error';
   progress: number;
   error?: string;
 }

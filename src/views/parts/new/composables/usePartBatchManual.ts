@@ -946,7 +946,6 @@ export function usePartBatchManual(opts: UsePartBatchManualOptions): UsePartBatc
             rows: [],
             assemblies: [],
             selectedPages: [],
-            file_links: [],
           },
           manual_tab: serializeManualTab(),
         };

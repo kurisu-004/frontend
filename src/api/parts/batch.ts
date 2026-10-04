@@ -23,10 +23,20 @@ export interface PartBatchFailure {
   message: string;
 }
 
+/**
+ * 2026-10-04 新增：`batchCreateParts` 成功创建的 part。
+ *
+ * `sourceIndex` 是**本次请求 `items` 数组的全局下标**（跨 customer 分组累计，
+ * 与 `PartBatchFailure.index` 同一坐标系）。后端 `created` 按 items 顺序 push、
+ * 失败项不占位，所以这个下标是「建出来的 part ↔ caller 的哪一行」的唯一可靠锚 ——
+ * 不带它的话，调用方无法把 part 和本地行对应起来，也就无法做后置补传。
+ */
+export type CreatedPartItem = PartItem & { sourceIndex: number };
+
 export interface PartBatchResult {
-  created: PartItem[];
+  created: CreatedPartItem[];
   failed: PartBatchFailure[];
-  /** 后端 commit 后自清理的 tmp 对象 key 列表，前端忽略（M3 范围）。 */
+  /** 后端 commit 后自清理的 tmp 对象 key 列表，前端忽略。 */
   cleanup_tmp_keys?: string[];
 }
 
@@ -101,21 +111,18 @@ export interface PartBatchCreatePayload extends PartCreatePayload {
 }
 
 /**
- * 批量新建零件（JSON）。
+ * 批量新建零件（JSON）。`POST /parts/batch` 只发 JSON items，**不带文件** ——
+ * 图纸 / 3D 走建单之后的 `POST /parts/{id}/upload-drawing` / `upload-3d-model`
+ * 后置补传（见 `./file.ts`）；本函数的 `created[].sourceIndex` 就是 caller 把
+ * 「建出来的 part」对回「本地哪一行」的锚。
  *
- * 2026-09-16 修复：原实现以 multipart/form-data 调 `/parts/batch`，但 v2
- * rust 后端（`backend-rust/src/modules/part/handler.rs::batch_create_parts`）
- * 只接受 application/json → 415 Unsupported Media Type。后端 multipart
- * 路由是 `/parts/batch-with-pdfs`（语义不同：单 PDF 多页拆装配件），
- * 不适用于「录入」批量新建"每条 entry 可带 1 张图"场景。
+ * 2026-10-04：item 侧的 `drawing_file` / `model3d_file`（FileBinding）在本仓已无
+ * 生产者 —— 走的是后置上传，不再需要把 COS tmp 绑在建单请求里。字段与类型保留，
+ * 供后端契约对齐时参考。
  *
- * 当前改造：
- * - 只发 JSON items，**不上传图纸**（图纸后续走「前端上传」重构）。
- * - 提交前由 caller `usePartBatchManual` 完成申请人 dedupe（同 L1 root
- *   下同名命中 applicantSearch 缓存 → 复用 id），避免重复 POST 触发 409。
- * - 2026-09-16 M3：item 可选携带 `drawing_file` / `model3d_file`（已直传
- *   COS 完成的绑定），后端在事务内 head + copy tmp → 正式 CAS key + 插
- *   `t_part_file(READY)`。
+ * 后端 multipart 端点 `POST /parts/batch-with-pdfs` 的语义是「单 PDF 多页 → 拆成装配件」，
+ * 入参里没有 `items` 数组，服务端自己造一个 `装配件-{今天}` 并按 PDF 页数拆子件，
+ * **不能**用来承载 Tab 2 的逐行录入。
  *
  * 后端契约（`PartBatchCreateRequest { customer_id, items }`）要求 top-level
  * `customer_id`、item 不带 `customer_id`；本函数按 customer_id 分组提交，
@@ -125,39 +132,52 @@ export async function batchCreateParts(items: PartBatchCreatePayload[]): Promise
   if (items.length === 0) {
     return { created: [], failed: [], cleanup_tmp_keys: [] };
   }
-  // 按 customer_id 分组，每组单独提交一次。
-  const groups = new Map<string, PartBatchCreatePayload[]>();
-  for (const it of items) {
-    const list = groups.get(it.customer_id);
+  // 按 customer_id 分组，每组单独提交一次。**连同请求 items 的全局下标一起存**：
+  // 同一个 customer_id 可以出现在数组的多个不连续区段（Tab 2 每行各选分厂时是常态），
+  // 所以不能用「前几组长度的累加」反推全局下标，只能原样带着。
+  const groups = new Map<string, Array<{ item: PartBatchCreatePayload; sourceIndex: number }>>();
+  items.forEach((item, sourceIndex) => {
+    const list = groups.get(item.customer_id);
     if (list) {
-      list.push(it);
+      list.push({ item, sourceIndex });
     } else {
-      groups.set(it.customer_id, [it]);
+      groups.set(item.customer_id, [{ item, sourceIndex }]);
     }
-  }
-  const created: PartItem[] = [];
+  });
+  const created: CreatedPartItem[] = [];
   const failed: PartBatchFailure[] = [];
   const cleanupTmpKeys: string[] = [];
-  let globalOffset = 0;
   for (const [customerId, groupItems] of groups) {
     const body: PartBatchCreateRequestFE = {
       customer_id: customerId,
-      items: groupItems.map(toPartBatchCreateItem),
+      items: groupItems.map((g) => toPartBatchCreateItem(g.item)),
     };
     const resp = await api.post<PartBatchCreateOutFE>('/parts/batch', body);
+    // 后端 created[i] 恒等于组内第 i 个**成功**的 item（按 items 顺序 push、失败项不
+    // 占位）⇒ 沿组内 items 顺序走一个游标，跳过 failed[].item_index 命中的项，
+    // 落到的那个位置就是该 part 的源下标。
+    const failedInGroup = new Set(resp.data.failed.map((f) => f.item_index));
+    let groupCursor = 0;
     // 后端 created: Vec<PartDetailOut>（结构兼容 PartItem，断言转换）
-    created.push(...(resp.data.created as PartItem[]));
-    // 后端 failed[i].item_index 是组内下标，换算回全局下标便于 caller 显示「第 X 行」
+    created.push(
+      ...resp.data.created.map((raw) => {
+        while (failedInGroup.has(groupCursor)) groupCursor += 1;
+        const sourceIndex = groupItems[groupCursor]?.sourceIndex ?? groupCursor;
+        groupCursor += 1;
+        return { ...(raw as PartItem), sourceIndex };
+      }),
+    );
+    // 后端 failed[i].item_index 是组内下标，换算回请求 items 的全局下标便于 caller
+    // 显示「第 X 行」
     failed.push(
       ...resp.data.failed.map((f) => ({
-        index: globalOffset + f.item_index,
+        index: groupItems[f.item_index]?.sourceIndex ?? f.item_index,
         message: f.message,
       })),
     );
     if (resp.data.cleanup_tmp_keys) {
       cleanupTmpKeys.push(...resp.data.cleanup_tmp_keys);
     }
-    globalOffset += groupItems.length;
   }
   return { created, failed, cleanup_tmp_keys: cleanupTmpKeys };
 }
@@ -180,17 +200,9 @@ function toPartBatchCreateItem(it: PartBatchCreatePayload): PartBatchCreateItemF
   };
 }
 
-// ===== 2026-07-21：批量树形创建（PDF 批量上传）— 2026-09-25 删除 =====
-//
-// 原 batchCreatePartsWithPdfs 函数（@deprecated 状态）与配套类型
-// PartBatchTreeItemFE / PartBatchTreeAssemblyFE / PartBatchTreePartResultFE /
-// PartBatchTreeAssemblyResultFE / PartBatchTreeResultFE 一并删除。Tab 2「PDF 批量上传」
-// 已迁移到 batchCreateParts JSON 路径（场景 A 直传 COS）+ useCosUpload 链路，
-// 全仓零调用方。如未来重新启用，按下方归档注释里的入参 / 返回结构复原。
-//   入参：{ items: PartBatchTreeItemFE[], assemblies: PartBatchTreeAssemblyFE[],
-//          files: PartBatchFilePayload[], threeDModels?: PartBatchFilePayload[] }
-//   端点：POST /parts/batch-with-pdfs（multipart, field=data JSON + files + three_d_models）
-//   返回：PartBatchTreeResultFE { standalone_parts, assemblies, failed }
+// 2026-09-25：`batchCreatePartsWithPdfs`（PDF 批量树形创建）整段删除。该端点
+// `POST /parts/batch-with-pdfs` 的语义是「单 PDF 多页 → 拆装配件」，入参没有
+// `items` 数组、无法承载逐行录入；Tab 2 走 `POST /parts/batch` + 后置上传。
 
 // ============================================================
 // 批次（2026-07-29 批次化）

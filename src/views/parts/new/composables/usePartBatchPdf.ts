@@ -1,17 +1,10 @@
 // Tab 2「PDF 批量上传」composable。
 //
-// 2026-08-25 拆分：原 PartBatchNew.vue 第 1605-2857 行的「PDF 上传 + 拆页 + 合并 + 提交」
-// 整段抽到本文件 + PartBatchPdfTab.vue。
-//
-// 2026-09-18 接入 backend-rust `/api/v2/upload-sessions/*` 共享 STS session pool：
-// - onStartUpload 不再每文件并发调 `grantStsTmpKey`，改为单次 `session.allocate(N)`
-//   拿整批 tmp_key；session 凭证过期由 `useUploadSession` 定时器自动续期。
-// - useCosUpload 的 `refetchIntents` 回调改为 `session.renew()` + 从最新 session
-//   字段重建 UploadIntentsOut。
-// - onCommit 成功后调 `session.consumeFiles(submittedClientRefs)` 通知后端延长
-//   tmp 对象保留窗口（便于后端事务内 head + copy）。
-// - mount 时 `useUploadSession.init('parts_new')` + 配合 `usePartsNewDraft` 恢复
-//   session.files 中 status='done' 的条目到 rows 的「已上传」区。
+// 2026-10-04 单按钮 + 后端上传：提交入口收敛成一个 `onSubmit`，内部三段
+// `idle → creating（POST /parts/batch 建工单）→ uploading（逐个 part 后置补传图纸 /
+// 3D）→ done`。上传失败语义是「工单已建 + 失败行清单可重试」——工单落库不可回滚，
+// 所以 `createdPartIds`（本地 rowUid → partId）跨 done 保留，是「重试只重传文件、
+// 绝不重复建 part」的唯一保证。
 
 import {
   computed,
@@ -24,36 +17,14 @@ import {
   type ComputedRef,
   type Ref,
 } from 'vue';
-import type { UseCosUploadReturn } from '@/composables/useCosUpload';
-import { useCosUpload } from '@/composables/useCosUpload';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
-import type { CosUploadItem } from '@/composables/useCosUpload';
-import { batchCreateParts, type PartBatchCreatePayload } from '@/api/parts';
-import { grantStsTmpKeyFiles } from '@/api/files/sts';
-import { parseFileExt } from '@/utils/fileExt';
-// 2026-09-28 删 useUploadSession：mergeDraftWithSession 不再被本文件消费（仅在
-// 已被删除的 onMounted 块中调用）；usePartsNewDraft 仍被 draft composable 调用，
-// 其它类型（Serialized*Row / MergeResult）仍由 serialize* 函数消费。
-import {
-  usePartsNewDraft,
-  type MergeResult,
-  type SerializedAssemblyChildRow,
-  type SerializedAssemblyRow,
-  type SerializedPdfTab,
-  type SerializedStandalonePartRow,
-} from '@/views/parts/new/composables/usePartsNewDraft';
-import { stsCredentialsToCosCredentials } from '@/views/parts/new/composables/_grantMappers';
-import { PartFileKindToStsPurpose } from '@/types/sts';
+import { batchCreateParts, uploadPart3DModel, uploadPartDrawing } from '@/api/parts';
+import type { CreatedPartItem, PartBatchCreatePayload } from '@/api/parts';
+import { usePartsNewDraft, type SerializedAssemblyChildRow, type SerializedAssemblyRow, type SerializedPdfTab, type SerializedStandalonePartRow } from '@/views/parts/new/composables/usePartsNewDraft';
 import type { Customer } from '@/api/customer';
-import type {
-  FileBinding,
-  PartFileKind,
-  UploadIntentsOut,
-  UploadIntentItemOut,
-} from '@/types/part_file';
-import { computeSha256 } from '@/utils/fileHash';
+import type { PartFileKind } from '@/types/part_file';
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser';
 import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
 import { parseDrawingFilename } from '@/utils/drawingFilename';
@@ -221,11 +192,14 @@ export interface PdfPreviewState {
 /**
  * 2026-09-21 显式返回类型需要：模块级 export UploadStatusCell 接口，
  * UsePartBatchPdfReturn 在文件较前位置引用它。
+ *
+ * 2026-10-04 收窄：删掉 `'hashing'`（后置上传链路不本地算摘要，multipart 也没有
+ * 进度回调 ⇒ 状态机只剩 pending / uploading / done / error）。
  */
 export interface UploadStatusCell {
-  /** 当前阶段：hashing / uploading / done / error / pending。 */
-  status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
-  /** 0-100。hashing 与 uploading 阶段都走该字段。 */
+  /** 当前阶段：pending（已排队未跑）/ uploading / done / error。 */
+  status: 'pending' | 'uploading' | 'done' | 'error';
+  /** 0-100；multipart 无进度回调，上传中固定 0、完成时 100（不伪造百分比）。 */
   progress: number;
   /** 错误信息（status='error' 时）。 */
   error?: string;
@@ -297,38 +271,20 @@ export interface UsePartBatchPdfReturn {
   onAsmPlannedChange: (asmRow: AssemblyRow, v: string) => void;
   onSourceSelectionChange: (rows: SourceTreeRow[]) => void;
   previewSourceRow: (row: SourceTreeRow) => void;
-  hydrateRestoredCount: ComputedRef<number>;
-  // 2026-09-21 fix：原 unknown[] 与 PartBatchNew.vue v-bind propType `{client_ref, kind,
-  // original_filename, file_size, uploaded_at}[]` 不兼容；收紧到 SessionFile[]（后端
-  // /upload-sessions 单端点唯一结构，hydrate 输出与 UI 期望一致）。
-  //
-  // 2026-09-28 删 useUploadSession + @/types/upload_session：内联一个最小结构
-  // 性类型，对齐 usePartsNewDraft.DraftSessionFile（松散：所有字段 optional，
-  // 仅 hydrate 输出端实际有值）。子任务 #5 重写 grantStsTmpKeyFiles 路径后
-  // 无需回归此签名。
-  orphanFileRefs: ComputedRef<
-    Array<{
-      client_ref: string;
-      status?: string;
-      kind?: string;
-      tmp_key?: string;
-      file_size?: number;
-      original_filename?: string;
-      uploaded_at?: string | null;
-    }>
-  >;
   pdfUploadCells: Record<string, UploadStatusCell>;
   threeDUploadCells: Record<string, UploadStatusCell>;
   hasUploadErrors: ComputedRef<boolean>;
   getRowPdfCell: (row: { pdfSourceUid: string }) => UploadStatusCell | undefined;
   getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCell | undefined;
-  uploadStage: Ref<'idle' | 'uploading' | 'uploaded' | 'committed'>;
-  canStartUpload: ComputedRef<boolean>;
-  canSubmitCreate: ComputedRef<boolean>;
-  retryUploadByRow: (rowUid: string, slot: 'pdf' | '3d', threeDIndex?: number) => Promise<void>;
-  onStartUpload: () => Promise<void>;
-  // 2026-09-21 fix：PartBatchNew.vue 在 v-bind 时传了 onCommit，但 T-B8 显式返回类型化时漏声明。
-  onCommit: () => Promise<void>;
+  /** 2026-10-04：单按钮提交流程的阶段机，替代原 uploadStage 两段式。 */
+  commitStage: Ref<'idle' | 'creating' | 'uploading' | 'done'>;
+  canSubmit: ComputedRef<boolean>;
+  /** 2026-10-04：按钮文案（提交 / 重试 / 进行中三态都由这里驱动）。 */
+  submitLabel: ComputedRef<string>;
+  /** 行内单文件重试：按 cell key 反查 job 重跑（不重复建 part）。 */
+  retryUploadByCell: (jobKey: string) => Promise<void>;
+  onSubmit: () => Promise<void>;
+  retryFailedUploads: () => Promise<void>;
   manualPartDialogVisible: Ref<boolean>;
   manualPartForm: { drawing_no: string; name: string; file: File | null };
   manualPartFileList: ComputedRef<UploadFile[]>;
@@ -1385,27 +1341,23 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
 
   // ============================================================
-  // 2026-09-16 T3.4：COS 直传 + JSON batchCreate 链路
+  // 2026-10-04：建工单（POST /parts/batch）+ 逐 part 后置上传
   // ============================================================
 
-  /** 反查用：client_ref → status cell（map 而非 reactive 数组，配合 watch deep）。 */ const pdfUploadCells =
-    reactive<Record<string, UploadStatusCell>>({});
+  /** 反查用：jobKey（`pdf:${srcUid}` / `3d:${fileUid}`）→ status cell。 */
+  const pdfUploadCells = reactive<Record<string, UploadStatusCell>>({});
   const threeDUploadCells = reactive<Record<string, UploadStatusCell>>({});
 
   /**
-   * 任意 Blob → File。PdfSource.raw 在合成路径（pdf-lib save()）下是 Blob 而非 File，
-   * computeSha256 / cos-js-sdk-v5 都接受 File 或 Blob，但 hash-wasm.createSHA256
-   * 默认按 File.slice 分块，两者等价。这里统一包成 File 以简化下游类型。
+   * 任意 Blob → File。PdfSource.raw 在合成路径（pdf-lib save()）下是 Blob 而非 File。
+   * 这里统一包成 File 以简化下游类型。
    */
   function ensureFile(blob: Blob, filename: string): File {
     if (blob instanceof File) return blob;
     return new File([blob], filename, { type: blob.type || 'application/octet-stream' });
   }
 
-  /**
-   * 受控并发跑 async 函数（与 useCosUpload.ts::runWithConcurrency 同语义；本文件
-   * 的 hash 阶段独立一份以避免暴露 useCosUpload 内部 API）。
-   */
+  /** 受控并发跑 async 函数；单个 item 抛错不影响其它 item（异常在各 fn 内自兜）。 */
   async function runWithConcurrency<T>(
     items: T[],
     limit: number,
@@ -1447,9 +1399,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
   /**
    * 文件上传条目（统一容器）。
-   * - key：UI 反查用（`pdf:${srcUid}` / `3d:${fileUid}`）。
-   * - rowRefs：哪些 row 引用了该文件（同一 PDF 被多个 row 共享时会有 N 个 ref）。
-   * - sha / clientRef / tmpKey：hash + createUploadIntents + 上传完成后回填。
+   * - key：UI cell / 后置上传 job 的键（`pdf:${srcUid}` / `3d:${fileUid}`）。
+   * - rowRefs：哪些 row 引用了该文件（同一 PDF 被装配件主子件共享时会有 N 个 ref）。
+   *   后置上传按「part × ref」展开 job：同一份原件被 N 个 part 引用就上传 N 次。
    */
   interface FileUploadEntry {
     key: string;
@@ -1458,12 +1410,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     file: File;
     size: number;
     contentType: string;
-    sha?: string;
-    clientRef?: string;
-    tmpKey?: string;
     rowRefs: RowRef[];
   }
-  /** row 反向引用：哪个 row 用了哪个文件（用于回填 FileBinding）。 */
+  /** row 反向引用：哪个 row 用了哪个文件（决定该 part 要传哪些原件）。 */
   type RowRef =
     | { rowKind: 'standalone'; rowUid: string }
     | { rowKind: 'asmMaster'; rowUid: string }
@@ -1492,7 +1441,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         file: ensureFile(src.raw, src.filename),
         size: src.raw.size,
         contentType: src.raw.type || 'application/pdf',
-        rowRefs: [{ rowKind: 'standalone', rowUid: r.uid }],
+        rowRefs: [],
       })).rowRefs.push({ rowKind: 'standalone', rowUid: r.uid });
     }
     // 2) PDF：装配件顶层（master）
@@ -1515,16 +1464,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       }
     }
     // 3) 3D 模型：被 row 引用的（three_d_index 指向的文件）
-    const referencedThreeD = new Set<number>();
-    for (const r of standaloneParts.value) {
-      if (r.three_d_index !== null) referencedThreeD.add(r.three_d_index);
-    }
-    for (const a of assemblies.value) {
-      for (const c of a.children) {
-        if (c.three_d_index !== null) referencedThreeD.add(c.three_d_index);
-      }
-    }
-    referencedThreeD.forEach((idx) => {
+    const attachThreeD = (ref: RowRef, idx: number): void => {
       const f = threeDModelFiles.value[idx];
       const raw = f?.raw as File | undefined;
       if (!f || !raw) return;
@@ -1537,147 +1477,163 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         size: raw.size,
         contentType: raw.type || 'application/octet-stream',
         rowRefs: [],
-      }));
-    });
+      })).rowRefs.push(ref);
+    };
+    for (const r of standaloneParts.value) {
+      if (r.three_d_index !== null) attachThreeD({ rowKind: 'standalone', rowUid: r.uid }, r.three_d_index);
+    }
+    for (const a of assemblies.value) {
+      for (const c of a.children) {
+        if (c.three_d_index !== null) {
+          attachThreeD({ rowKind: 'asmChild', rowUid: c.uid, asmUid: a.uid }, c.three_d_index);
+        }
+      }
+    }
     return Array.from(map.values());
   }
 
-  /** 从已上传的 entry 构建 FileBinding（提交时挂到 row 的 drawing_file/model3d_file）。 */
-  function buildBindingFromEntry(entry: FileUploadEntry): FileBinding | undefined {
-    if (!entry.tmpKey || !entry.sha) return undefined;
-    return {
-      tmp_key: entry.tmpKey,
-      content_sha256: entry.sha,
-      original_filename: entry.filename,
-      file_size: String(entry.size),
-      content_type: entry.contentType,
-    };
+  // ============================================================
+  // 2026-10-04：建工单（POST /parts/batch）+ 逐 part 后置上传
+  // ============================================================
+
+  /**
+   * 2026-10-04 定：后端 `upload_part_file` 把整份 multipart 读进内存（`&[u8]`）再转存
+   * 对象存储，6 是内存安全上限（6 × 30MB ≈ 180MB 峰值）。并发数不按文件数放大。
+   */
+  const PART_UPLOAD_CONCURRENCY = 6;
+
+  /** 一次后置上传作业 = 一个 part × 一份原件。 */
+  interface UploadJob {
+    /** = entry.key（`pdf:<uid>` / `3d:<uid>`），同时是 UI cell 的键。 */
+    jobKey: string;
+    /** 雪花 ID 字符串（后端 JSON 里是 string，URL 拼接前统一 String()）。 */
+    partId: string;
+    kind: PartFileKind;
+    entry: FileUploadEntry;
   }
 
-  /** 给 row 反查它对应的 PDF entry（用于把 FileBinding 写回）。 */
-  function findPdfEntryForRow(rowUid: string): FileUploadEntry | undefined {
-    for (const e of lastUploadEntries) {
-      if (e.kind !== 'DRAWING') continue;
-      if (e.rowRefs.some((r) => r.rowUid === rowUid)) return e;
+  /** 本次提交的 `items[i]` 对应的本地行 uid（与 `created[].sourceIndex` 同坐标系）。 */
+  const itemRowUids = ref<string[]>([]);
+
+  /** 提交流程阶段机。转移：
+   *  - idle → creating → uploading → done
+   *  - creating/uploading 任一步失败 → 回 idle（未建单时可安全重来）
+   *  - done（无失败）→ 清空重来；done（有失败）→ 只走 retryFailedUploads，不再建单 */
+  const commitStage = ref<'idle' | 'creating' | 'uploading' | 'done'>('idle');
+
+  /**
+   * 本地 rowUid → 已建出的 partId。**跨 done 保留**（重试路径绝不清空）：工单已落库
+   * 不可回滚，这是「重试只重传文件、绝不重复建 part」的唯一保证。
+   */
+  const createdPartIds = new Map<string, string>();
+
+  /** 本次提交的全部上传作业。`retryFailedUploads` / 行内重试都从它派生，不重跑建单。 */
+  let uploadJobs: UploadJob[] = [];
+
+  /** 失败 job 清单（行号 + 错误），汇总时弹给用户看。 */
+  function failedJobLines(): string[] {
+    const out: string[] = [];
+    for (const job of uploadJobs) {
+      const cell =
+        job.kind === 'DRAWING' ? pdfUploadCells[job.jobKey] : threeDUploadCells[job.jobKey];
+      if (cell?.status !== 'error') continue;
+      out.push(`第 ${job.partId} 号零件 · ${job.entry.filename}：${cell.error ?? '上传失败'}`);
     }
-    return undefined;
-  }
-  /** 给 row 反查它对应的 3D entry。 */
-  function findThreeDEntryForRow(rowUid: string, threeDIndex: number): FileUploadEntry | undefined {
-    const f = threeDModelFiles.value[threeDIndex];
-    if (!f) return undefined;
-    const key = `3d:${f.uid}`;
-    return lastUploadEntries.find((e) => e.key === key);
+    return out;
   }
 
-  // 2026-09-28 删 useUploadSession：writeRowFileLink 仅由原 allocate 块内的
-  // cosItemsRef watch 调用（已 stub），下游无其它调用点。子任务 #5 重写
-  // grantStsTmpKeyFiles 路径后，新 watcher（监听 cosItemsRef）会重新引入等效的
-  // row.fileLink 写入函数。
+  /** 汇总上传结果：无失败 → 提示 + 清空跳页；有失败 → 弹清单 + 保留现场供重试。 */
+  function summarizeUploads(): void {
+    const failedCount =
+      Object.values(pdfUploadCells).filter((c) => c.status === 'error').length +
+      Object.values(threeDUploadCells).filter((c) => c.status === 'error').length;
+    if (failedCount > 0) {
+      const lines = failedJobLines();
+      const sample = lines.slice(0, 5).join('\n');
+      const more = lines.length > 5 ? `\n…还有 ${lines.length - 5} 个文件失败` : '';
+      ElMessageBox.alert(
+        `工单已创建，但 ${failedCount} 个文件上传失败：\n${sample}${more}\n\n可在本页重试上传（不会重复建单）。`,
+        '文件上传失败',
+        { type: 'warning' },
+      );
+      return;
+    }
+    const standaloneCount = standaloneParts.value.length;
+    const assemblyMasters = assemblies.value.length;
+    const childCount = assemblies.value.reduce((s, a) => s + a.children.length, 0);
+    ElMessage.success(
+      `成功创建 ${createdPartIds.size} 条零件（${standaloneCount} 独立 + ${assemblyMasters} 装配件顶层 + ${childCount} 子件）`,
+    );
+    // 2026-10-04：草稿在这里才清 —— 只要还有上传失败就必须留着（created_part_ids
+    // 是刷新后不重复建单的唯一依据）。
+    draft.saver.cancel();
+    draft.clear();
+    allPdfs.value = [];
+    standaloneParts.value = [];
+    assemblies.value = [];
+    selectedPages.value = new Set();
+    pdfFiles.value = [];
+    excelFiles.value = [];
+    // 2026-10-03：Excel 文件已清空 → 解析结果同步作废（下一批是新数据）。
+    excelByDrawingNo.value = null;
+    threeDModelFiles.value = [];
+    Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
+    Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
+    uploadJobs = [];
+    createdPartIds.clear();
+    successNextTab.value = 'manual';
+    router.push('/parts?status=PENDING');
+  }
 
-  /** 本次提交对应的上传条目集合（仅 onSubmitPdfTree 期间有效，buildBinding 时用）。 */
-  let lastUploadEntries: FileUploadEntry[] = [];
+  /** 跑一批 job（受控并发）。每个 job 独立成败，失败写进 cell.error 不抛出。 */
+  async function runUploadJobs(jobs: UploadJob[]): Promise<void> {
+    await runWithConcurrency(jobs, PART_UPLOAD_CONCURRENCY, async (job) => {
+      const cell =
+        job.kind === 'DRAWING' ? pdfUploadCells[job.jobKey] : threeDUploadCells[job.jobKey];
+      if (cell) {
+        cell.status = 'uploading';
+        cell.progress = 0;
+      }
+      try {
+        const partId = String(job.partId);
+        if (job.kind === 'DRAWING') await uploadPartDrawing(partId, job.entry.file);
+        else await uploadPart3DModel(partId, job.entry.file);
+        if (cell) {
+          cell.status = 'done';
+          cell.progress = 100;
+        }
+      } catch (e) {
+        if (cell) {
+          cell.status = 'error';
+          cell.error = (e as Error).message ?? '上传失败';
+        }
+      }
+    });
+  }
 
-  // ============================================================
-  // 2026-09-28 删 useUploadSession 模块级 Map 单例池：详见 plan §3.1。
-  // ============================================================
-  //
-  // 原块（2026-09-18 接入）：与 Manual Tab 共享 `parts_new` scope session；
-  // mount 时 mergeDraftWithSession 把 session.files 中 status='done' 的条目
-  // hydrate 到 rows.fileLink；commit / discard 时清空。
-  //
-  // 本次删除：useUploadSession.ts + @/types/upload_session 已整文件下线。
-  // draft 仍持有（持久化 staged / rows），但 hydrate 路径无数据来源。本任务保留
-  // hydrateResult / hydrateRestoredCount / orphanFileRefs 三件 API 暴露（给 UI
-  // 顶部 el-alert 与孤儿文件面板），值恒为「未恢复」/0/[]，由子任务 #5 重写
-  // 实现 grantStsTmpKeyFiles 后重新挂上 session 来源。
-  //
-  // 同步下线 onMounted 中的 await session.init('parts_new') 预申请逻辑；
-  // syncCellsFromSession 函数随之删除（仅由 onMounted 调用）。
   const draft = usePartsNewDraft();
 
-  // ============================================================
-  // 2026-09-18 hydrate：mount 时从 draft + session.files 恢复 rows / fileLink
-  // ============================================================
-  //
-  // hydrate 是 PDF Tab 恢复功能的入口（A1/A2 关键路径）：
-  // 1) session.init → session.files 拿到后端实际状态；
-  // 2) draft.load() → 拿到上次 mount 时写入 localStorage 的 rows / file_links；
-  // 3) mergeDraftWithSession(draft, session) → 按 client_ref 合并 →
-  //    - pdfRows / pdfAssemblies 的 drawing / threeD 状态 = 'done' | 'need_reselect'
-  //    - orphanFileRefs（session.files 中存在但 snapshot 未引用的 client_ref）
-  //
-  // hydrate 写到本地 state 的部分：
-  // - standaloneParts / assemblies → 还原字段（含 fileLink 写入触发 A3 UI 渲染）；
-  // - orphanFileRefs → 暴露给 UI 渲染「孤儿文件待认领」面板；
-  // - hydrateRestoredCount → 暴露给 UI 渲染顶部「已恢复 N 条已上传图纸」总览。
-  //
-  // 流程不变量：
-  // - restore 失败（draft=null / version 不匹配 / user_id 不匹配）→ restored=false，
-  //   不动 rows（保持空），orphanFileRefs = session.files（用户能看到的全部 session 文件）；
-  // - restore 成功但 rows 中所有 file 状态都是 need_reselect → restored=true，
-  //   hydrateRestoredCount = 0（用户看到「已恢复 0 条已上传图纸」+ 需重传的 row tag）。
-  const hydrateResult = ref<MergeResult | null>(null);
-  const hydrateRestoredCount = computed<number>(() => {
-    const r = hydrateResult.value;
-    if (!r) return 0;
-    let count = 0;
-    for (const row of r.pdfRows) {
-      if (row.drawing === 'done') count += 1;
-      if (row.threeD === 'done') count += 1;
-    }
-    for (const asm of r.pdfAssemblies) {
-      // asm.children[0] = master，其余是 child
-      if (asm.children[0]?.drawing === 'done') count += 1;
-      for (let i = 1; i < asm.children.length; i += 1) {
-        const c = asm.children[i];
-        if (!c) continue;
-        if (c.drawing === 'done') count += 1;
-        if (c.threeD === 'done') count += 1;
-      }
-    }
-    return count;
-  });
-  const orphanFileRefs = computed(() => hydrateResult.value?.orphanFileRefs ?? []);
-
-  // 2026-09-28 删除 onMounted 中的 init session + syncCellsFromSession + mergeDraftWithSession
-  // 预申请逻辑。session 来源下线后 hydrate 路径无数据来源，hydrateResult / orphanFileRefs
-  // 保持 null / []；由子任务 #5 重写 grantStsTmpKeyFiles 路径后重新挂上。
-  //
-  // 原 onMounted 块：
-  //   try {
-  //     await session.init('parts_new');
-  //     const loaded = draft.load();
-  //     const merged = mergeDraftWithSession(loaded, session.session.value);
-  //     hydrateResult.value = merged;
-  //     applyHydrate(merged);
-  //     syncCellsFromSession();
-  //   } catch (e) { console.warn(...); }
-
-  // 2026-09-28 删除 applyHydrate / deserializeStandaloneRow / deserializeAssemblyRow /
-  // deserializeAssemblyChildRow / buildFileLinkFromSnapshot / syncCellsFromSession /
-  // fileKeyFromSessionFile 整段：
-  // - applyHydrate 仅由原 onMounted 调用，session 下线后无入口；
-  // - 三个 deserialize* 反序列化函数内部依赖 buildFileLinkFromSnapshot 拿 session.files
-  //   中的 tmp_key / uploaded_at；session 不复存在 → 整链下线；
-  // - buildFileLinkFromSnapshot 同样依赖 session.files.value；
-  // - syncCellsFromSession + fileKeyFromSessionFile 仅被 onMounted 调用作 cell 兜底。
-  //
-  // 子任务 #5 用 grantStsTmpKeyFiles 重写 caller 后，hydrate 路径可能改回「先调
-  // grantStsTmpKeyFiles 拿 STS → 用 STS 直传 → commit 时 confirm」流；届时如需
-  // 恢复 upload-session 形式的文件状态缓存，新 session composable 重新落到本仓
-  // composables/（按 2026-09-27 归档判别 + 依赖深度）。当前 stub：不持有 session，
-  // rows / fileLink 由 commit 时 buildBindingFromEntry 单点从「最后一次 buildFileLinkFromSnapshot
-  // 调用」产物（即 onStartUpload 内 cosItemsRef）反查。
+  /**
+   * 2026-10-04：把上次提交已建出的 partId 从草稿读回来。
+   *
+   * 只在「上次提交停在失败态」时有值；本页不会自动续传（`File` 不跨刷新存活），
+   * 但**必须**留着：否则用户刷新后按重试会重走 `POST /parts/batch`，同一批工单
+   * 会被再建一遍。rowUid 由 makeUid / pageUid 生成、不会与新解析的行撞号，所以即便
+   * 行数据本身是陈旧的，映射指向的 part 也确实是那次提交建出来的。
+   */
+  function restoreCreatedPartIds(): void {
+    const saved = draft.load()?.pdf_tab.created_part_ids;
+    if (!saved) return;
+    for (const [rowUid, partId] of Object.entries(saved)) createdPartIds.set(rowUid, partId);
+  }
+  restoreCreatedPartIds();
 
   // ============================================================
-  // 2026-09-18 draft 持久化：监听 rows / assemblies 变更 → debounce 500ms 写 localStorage
+  // draft 持久化：监听 rows / assemblies 变更 → debounce 500ms 写 localStorage
   // ============================================================
   //
-  // 写时机：
-  // - rows / assemblies 任意字段变化 → schedule saver（debounce 500ms 合并）；
-  // - onStartUpload 启动前（mount 时基线快照 + 每次「开始上传」前）→ saver.flush()；
-  // - onCommit 成功后 → clearDraft + 清 sessions（保留 session 单例由 caller 决定）。
+  // 写时机：rows / assemblies 任意字段变化 → schedule saver（debounce 500ms 合并）；
+  // 建单前 → saver.flush()（把当前现场固化进 localStorage）；全部上传成功 → clearDraft。
   //
   // 2026-09-18 B1 修复：cross-tab clobber。原来 PDF Tab saver 写整个 payload 时
   // 把 manual_tab 覆盖为 `{ staged: [] }`（PDF Tab 不写 manual 段），Manual Tab
@@ -1687,7 +1643,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   // debounce 窗口内合并，开销可接受）。
   if (draft.userId) {
     watch(
-      () => [pdfForm.customerL1Id, pdfForm.requestDate, JSON.stringify(serializePdfTab())] as const,
+      () => [
+        pdfForm.customerL1Id,
+        pdfForm.requestDate,
+        commitStage.value,
+        JSON.stringify(serializePdfTab()),
+      ] as const,
       () => {
         const prev = draft.load();
         const basePayload = {
@@ -1713,7 +1674,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       rows: standaloneParts.value.map(serializeStandalonePartRow),
       assemblies: assemblies.value.map(serializeAssemblyRow),
       selectedPages: Array.from(selectedPages.value),
-      file_links: serializeFileLinks(),
+      // 2026-10-04：只在已经建过单（commitStage 非 idle）时落盘，idle 态不写空壳。
+      ...(commitStage.value !== 'idle' && createdPartIds.size > 0
+        ? { created_part_ids: Object.fromEntries(createdPartIds) }
+        : {}),
     };
   }
 
@@ -1793,129 +1757,46 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     };
   }
 
-  /**
-   * 收集所有 row.fileLink → file_links 数组。
-   * bound_row_ids 用 row uid 数组（一个 file 可能被多个 row 引用：装配主子件）。
-   */
-  function serializeFileLinks(): SerializedPdfTab['file_links'] {
-    const links: SerializedPdfTab['file_links'] = [];
-    const seen = new Map<
-      string,
-      { kind: 'drawing' | '3d_model'; sha256: string; rowIds: Set<string> }
-    >();
-    const addLink = (
-      clientRef: string | undefined,
-      sha: string | undefined,
-      rowUid: string,
-      kind: 'drawing' | '3d_model',
-    ): void => {
-      if (!clientRef || !sha) return;
-      const cur = seen.get(clientRef);
-      if (cur) {
-        cur.rowIds.add(rowUid);
-        return;
-      }
-      seen.set(clientRef, { kind, sha256: sha, rowIds: new Set([rowUid]) });
-    };
-    standaloneParts.value.forEach((r) => {
-      addLink(r.fileLink?.client_ref, r.fileLink?.sha256, r.uid, 'drawing');
-    });
-    assemblies.value.forEach((a) => {
-      addLink(a.fileLink?.client_ref, a.fileLink?.sha256, a.uid, 'drawing');
-      a.children.forEach((c) => {
-        addLink(c.fileLink?.client_ref, c.fileLink?.sha256, c.uid, 'drawing');
-      });
-    });
-    seen.forEach((v, k) => {
-      links.push({
-        client_ref: k,
-        sha256: v.sha256,
-        bound_row_ids: Array.from(v.rowIds),
-        kind: v.kind,
-      });
-    });
-    return links;
-  }
-
-  // ============================================================
-  // 2026-09-16 M3-B 复审兜底：cosUpload 提升到 composable 顶层
-  // ============================================================
-  //
-  // 旧实现的 cosUpload / cosItemsRef 是在 onSubmitPdfTree 内 `let` 声明的局部变量，
-  // retryUploadByRow 拿不到 → 实际是空操作 stub（仅弹「请重新提交」提示）。
-  // 复审要求：cosUpload 提到顶层 Ref<UseCosUploadReturn | null>，让 row 内「重试」
-  // 按钮能直接调 retryItem()，不必再走「重提交 → 重新走整条七步流程」。
-  //
-  // 提交拆两步：
-  // - 「开始上传」：hash + createUploadIntents + useCosUpload.startUpload()，uploadStage='uploaded'
-  // - 「提交创建」：仅 batchCreateParts + 清空，uploadStage='committed'
-  // 「重试」按钮（行内）调 cosUpload.value?.retryItem(clientRef)，全程在 uploaded 阶段可达。
-  //
-  // null = 本次会话还没点过「开始上传」；上传 / 提交各自结束后清回 null（与 cell 一起重置）。
-  // cosItemsRef 是顶层 Ref<CosUploadItem[]>，useCosUpload 在闭包里持有它，
-  // retryItem 时能读到同一对象（mutable status / progress / etag 都是原地写）。
-  // 「未开始上传」状态下用空数组占位（避免 useCosUpload 内部 items.value[i] 炸 RangeError）。
-  const cosUpload = shallowRef<UseCosUploadReturn | null>(null);
-  const cosItemsRef = ref<CosUploadItem[]>([]);
-
-  /** 上传阶段机。状态机转换：
-   *  - idle → uploading → uploaded → committed
-   *  - uploaded → uploading（用户点行内「重试」，单文件重跑）
-   *  - committed → idle（提交完成、清空，下次重新解析后可再提交） */
-  const uploadStage = ref<'idle' | 'uploading' | 'uploaded' | 'committed'>('idle');
-
-  /** 计算属性：是否可以点「开始上传」（PDF/3D 文件都至少有一份处于 pending/error）。 */
-  const canStartUpload = computed<boolean>(
-    () =>
-      (standaloneParts.value.length > 0 || assemblies.value.length > 0) &&
-      uploadStage.value === 'idle',
-  );
-
-  /** 计算属性：是否可以点「提交创建」（所有 cell.status === 'done'）。 */
-  const canSubmitCreate = computed<boolean>(() => {
-    if (uploadStage.value !== 'uploaded') return false;
-    const pdfKeys = Object.keys(pdfUploadCells);
-    const tKeys = Object.keys(threeDUploadCells);
-    if (pdfKeys.length === 0 && tKeys.length === 0) return true; // 无文件 = 视为就绪
-    return (
-      pdfKeys.every((k) => pdfUploadCells[k]?.status === 'done') &&
-      tKeys.every((k) => threeDUploadCells[k]?.status === 'done')
-    );
+  /** 是否可以点主按钮：idle 态有内容可提交，或 done 态还有失败文件待重试。 */
+  const canSubmit = computed<boolean>(() => {
+    if (commitStage.value === 'done') return hasUploadErrors.value;
+    if (commitStage.value !== 'idle') return false;
+    return standaloneParts.value.length > 0 || assemblies.value.length > 0;
   });
 
-  /** UI 调用：单项重试。映射 rowUid → 找到对应 entry 的 clientRef 触发 retryItem。
-   *
-   * 2026-09-16 M3-B 复审修复：cosUpload 提升到 composable 顶层后，retryItem
-   * 全程可触达（不再依赖 caller 注入）；单元接收 (rowUid, slot, threeDIndex?) 即可。
-   * 行内「重试」按钮在「开始上传」之后、commit 之前任意时刻可点。
-   */
-  async function retryUploadByRow(
-    rowUid: string,
-    slot: 'pdf' | '3d',
-    threeDIndex?: number,
-  ): Promise<void> {
-    const upload = cosUpload.value;
-    if (!upload) {
-      ElMessage.warning('请先点「开始上传」再使用行内「重试」');
+  /** 失败文件数（按钮文案用）。 */
+  const failedFileCount = computed<number>(
+    () =>
+      Object.values(pdfUploadCells).filter((c) => c.status === 'error').length +
+      Object.values(threeDUploadCells).filter((c) => c.status === 'error').length,
+  );
+
+  /** 主按钮文案（提交 / 进行中 / 重试三态）。 */
+  const submitLabel = computed<string>(() => {
+    if (commitStage.value === 'creating') return '正在创建工单…';
+    if (commitStage.value === 'uploading') return '正在上传图纸…';
+    if (commitStage.value === 'done' && hasUploadErrors.value) {
+      return `重试上传（${failedFileCount.value} 个文件）`;
+    }
+    const partCount =
+      standaloneParts.value.length +
+      assemblies.value.length +
+      totalAssemblyChildren.value;
+    return `提交创建（${partCount} 个零件）`;
+  });
+
+  /** UI 调用：行内单文件重试。`jobKey` 直接取该 cell 自身的 key。 */
+  async function retryUploadByCell(jobKey: string): Promise<void> {
+    const jobs = uploadJobs.filter((j) => j.jobKey === jobKey);
+    if (jobs.length === 0) {
+      ElMessage.warning('该文件没有待重试的记录，请重新提交');
       return;
     }
-    let entry: FileUploadEntry | undefined;
-    if (slot === 'pdf') {
-      entry = findPdfEntryForRow(rowUid);
-    } else {
-      entry = threeDIndex !== undefined ? findThreeDEntryForRow(rowUid, threeDIndex) : undefined;
-    }
-    if (!entry?.clientRef) {
-      ElMessage.warning('找不到对应上传条目，请重新点「开始上传」');
-      return;
-    }
-    // 标记 uploading 阶段让 UI 知道「正在重试」（但保持 uploaded 阶段，commit 仍可走）
-    uploadStage.value = 'uploading';
+    pdfSubmitting.value = true;
     try {
-      await upload.retryItem(entry.clientRef);
+      await runUploadJobs(jobs);
     } finally {
-      // 重试完成：恢复 uploaded 阶段；如仍有 error 项，canSubmitCreate 会保持 false
-      uploadStage.value = 'uploaded';
+      pdfSubmitting.value = false;
     }
   }
 
@@ -1940,320 +1821,122 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     return true;
   }
 
-  /** 点击「开始上传」按钮（2026-09-16 M3-B 复审拆第一步）。
+  /** 本地行 → `POST /parts/batch` 的 item（不含文件：文件走后置上传）。
    *
-   * 七步流程中的步骤 1-5：
-   * 1) 收集待上传文件（PDF + 3D），按 (kind, srcUid/fileUid) 去重；保留 rowRefs
-   *    反查哪些 row 需要这个 FileBinding
-   * 2) 受控并发 3 hash → UI cell.status='hashing' → 完成后 'pending'
-   * 3) 调 createUploadIntents (owner_part_id 缺省 = 场景 A)；按 idx 把
-   *    client_ref / tmp_key 回填到 entries
-   * 4) 构造 CosUploadItem[] + useCosUpload，**提升到顶层 ref**（cosUpload.value），
-   *    让 row 内「重试」按钮能直接调 retryItem(client_ref)
-   * 5) startUpload() 完成后 uploadStage='uploaded'；如任何 cell.status !== 'done'
-   *    保留在 'uploading' 阶段让行内 retry 按钮可达（不再强制 alert 阻断）
+   * 展平顺序固定，且**必须**与 `res.created[].sourceIndex` 的坐标系一致：
+   * 独立零件 → 装配件顶层（master）→ 装配件子件。
+   * 装配件主子件各建一个独立 part（`POST /parts/batch` 无 assembly 概念），
+   * 子件继承顶层的申请人 / 分厂。
    */
-  async function onStartUpload(): Promise<void> {
+  function buildCommitItems(): { items: PartBatchCreatePayload[]; rowUids: string[] } {
+    const items: PartBatchCreatePayload[] = [];
+    const rowUids: string[] = [];
+    for (const r of standaloneParts.value) {
+      rowUids.push(r.uid);
+      items.push({
+        name: r.name || r.drawing_no,
+        drawing_no: r.drawing_no,
+        applicant_name: r.applicant_name,
+        applicant_id: null,
+        quantity: r.quantity,
+        request_date: r.request_date,
+        planned_delivery_date: r.planned_delivery_date || r.request_date,
+        is_urgent: r.is_urgent,
+        order_no: r.order_no,
+        system_delivery_date: r.system_delivery_date,
+        note: r.note,
+        customer_id: r.customer_id,
+      });
+    }
+    for (const a of assemblies.value) {
+      // 顶层 master part（也是独立 part，不创建 assembly 父节点）
+      rowUids.push(a.uid);
+      items.push({
+        name: a.name || a.drawing_no || `装配件-${a.uid}`,
+        drawing_no: a.drawing_no || '',
+        applicant_name: a.applicant_name,
+        applicant_id: null,
+        quantity: a.quantity,
+        request_date: a.request_date,
+        planned_delivery_date: a.planned_delivery_date || a.request_date,
+        is_urgent: a.is_urgent,
+        order_no: a.order_no,
+        system_delivery_date: a.system_delivery_date,
+        note: a.note,
+        customer_id: a.customer_id,
+      });
+      // 子件：每个子件一个 part（共享顶层 PDF）
+      for (const c of a.children) {
+        rowUids.push(c.uid);
+        items.push({
+          name: c.name || `子件${c.page_index + 1}`,
+          drawing_no: c.drawing_no,
+          applicant_name: a.applicant_name, // 继承顶层
+          applicant_id: null,
+          quantity: c.quantity,
+          request_date: c.request_date,
+          planned_delivery_date: c.planned_delivery_date || c.request_date,
+          is_urgent: c.is_urgent,
+          order_no: c.order_no,
+          system_delivery_date: c.system_delivery_date,
+          note: c.note,
+          customer_id: a.customer_id, // 分厂继承顶层
+        });
+      }
+    }
+    return { items, rowUids };
+  }
+
+  /** 本次提交要上传的 part + 文件的对应关系（`POST /parts/batch` 返回后调用一次）。 */
+  function buildUploadJobs(parts: CreatedPartItem[]): UploadJob[] {
+    const entries = collectFilesToUpload();
+    const byRow = new Map<string, FileUploadEntry[]>();
+    for (const e of entries) {
+      for (const ref of e.rowRefs) {
+        const list = byRow.get(ref.rowUid) ?? [];
+        list.push(e);
+        byRow.set(ref.rowUid, list);
+      }
+    }
+    const jobs: UploadJob[] = [];
+    for (const part of parts) {
+      // 用 sourceIndex 反查源行，不靠数组下标 —— 它才是「建出来的 part ↔ 本地哪一行」
+      // 的权威锚。
+      const rowUid = itemRowUids.value[part.sourceIndex];
+      if (!rowUid) continue;
+      for (const entry of byRow.get(rowUid) ?? []) {
+        jobs.push({ jobKey: entry.key, partId: String(part.id), kind: entry.kind, entry });
+      }
+    }
+    // 同一份 PDF 被装配件 master + N 个子件共享时，这里会产出 N+1 个 job（每个 part
+    // 各上传一次）。这是本次改造的已知代价：请求数比「建单时各带一份绑定」高，
+    // 但换来的是建单与文件上传彻底解耦（上传失败不再需要回滚工单）。
+    return jobs;
+  }
+
+  /** 主按钮：创建工单 + 逐 part 后置上传图纸 / 3D（单入口，2026-10-04）。 */
+  async function onSubmit(): Promise<void> {
+    if (commitStage.value !== 'idle') {
+      ElMessage.warning(commitStage.value === 'done' ? '工单已创建，请使用「重试上传」' : '正在提交中');
+      return;
+    }
     if (standaloneParts.value.length === 0 && assemblies.value.length === 0) {
       ElMessage.warning('请先解析上传');
       return;
     }
     if (!validateL2Customers()) return;
-    if (uploadStage.value !== 'idle') {
-      ElMessage.warning('已上传或已提交；如需重传请重新解析');
-      return;
-    }
 
-    // 2026-09-18：上传前 flush draft 快照（把当前解析结果固化进 localStorage，
-    // 万一上传中途页面刷新，用户重进仍能从 draft + session.files 恢复）
+    // 建单前固化快照：万一上传途中刷新，draft 里的 created_part_ids 能让重试不再建单
     draft.saver.flush();
 
-    pdfSubmitting.value = true;
-    uploadStage.value = 'uploading';
-    try {
-      // 清空旧的 cell（重新解析拆分后可能引用变了）
-      Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
-      Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
-
-      // 步骤 1：收集文件
-      const entries = collectFilesToUpload();
-      lastUploadEntries = entries;
-
-      // 步骤 2：受控并发 3 hash
-      if (entries.length > 0) {
-        entries.forEach((e) => {
-          const cell: UploadStatusCell = { status: 'hashing', progress: 0 };
-          if (e.kind === 'DRAWING') pdfUploadCells[e.key] = cell;
-          else threeDUploadCells[e.key] = cell;
-        });
-        await runWithConcurrency(entries, 3, async (entry) => {
-          const sha = await computeSha256(entry.file);
-          entry.sha = sha;
-          const cell =
-            entry.kind === 'DRAWING' ? pdfUploadCells[entry.key] : threeDUploadCells[entry.key];
-          if (cell) {
-            cell.status = 'pending';
-            cell.progress = 0;
-          }
-        });
-      }
-      // 步骤 2 末尾断言 + 类型收尾（review B.1）：所有 entry 必含 sha，
-      // 类型从 FileUploadEntry[] 收尾为 Required<FileUploadEntry>[]，
-      // 下游 grant / refetch 不再需要 `e.sha!` 非空断言。
-      if (!entries.every((e): e is Required<FileUploadEntry> => !!e.sha)) {
-        throw new Error('所有 entry 在步骤 2 后必须都有 sha');
-      }
-
-      // 步骤 3 + 4 + 5：grantStsTmpKeyFiles 单批签名 + useCosUpload 直传
-      // （2026-09-28 子任务 #5：替换原 backend-rust upload-session 共享 STS）
-      //
-      // 流程：
-      // 1) 收集 entries → grantStsTmpKeyFiles({scope, files: [...]}]) 单 HTTP +
-      //    单签名批；返回 items[i].tmp_key 与 files[i] 一一对应（下标对齐）；
-      // 2) 给每个 entry 分配 clientRef + tmpKey（caller 侧持有，便于 retryItem
-      //    按 clientRef 反查；useCosUpload.applyFreshIntents 也按 clientRef
-      //    索引命中，所以 refetchIntents 必须复用同一 clientRef）；
-      // 3) 构造 CosUploadItem[] 喂给 useCosUpload；startUpload() 走 cos-js-sdk-v5
-      //    直传 COS tmp 区。
-      //
-      // 与 usePartBatchManual.requestDrawingUpload 的差异：
-      // - 本函数要把 entry.kind 映射成 purpose（drawing / 3d_model）；
-      // - 本函数走 useCosUpload（part-file 专用，UploadIntentsOut 形态）而非
-      //   useCosUploader（CosUploadGrant 形态）。两者都接受 grantStsTmpKeyFiles
-      //   的响应，只需构造时按 schema 字段挑选。
-      if (entries.length > 0) {
-        // 3.1 准备 clientRef + grantStsTmpKeyFiles 入参
-        entries.forEach((e) => {
-          e.clientRef = crypto.randomUUID();
-        });
-        // 2026-09-29：rust schema 收紧 content_sha256 为 required 64 hex + 新增
-        // ext 必填；本调用点已在上方步骤 2 算好 entry.sha，再按文件名解析 ext 后
-        // 一起喂 grantStsTmpKeyFiles（hash-wasm 流式 8MB 分块，已防 OOM）。
-        // 步骤 2 末尾断言已收尾 entries 类型为 Required<FileUploadEntry>[]，
-        // entry.sha 在下游是 string（非 string | undefined）。
-        const grants = await grantStsTmpKeyFiles({
-          scope: 'parts_new',
-          files: entries.map((e) => ({
-            purpose: PartFileKindToStsPurpose[e.kind] ?? 'tmp',
-            // 文件名在 entry.file.name 上（ensureFile() 包 File 后保留原 name）
-            filename: e.file.name,
-            content_type: e.contentType,
-            // 必传完整 64 hex SHA-256（步骤 2 已算好）
-            content_sha256: e.sha,
-            // 必传 ext：utils/fileExt.parseFileExt（小写字母数字 1-7 字符）
-            ext: parseFileExt(e.file.name),
-          })),
-        });
-        if (grants.items.length !== entries.length) {
-          throw new Error(
-            `grantStsTmpKeyFiles 返回项数（${grants.items.length}）≠ entries 长度（${entries.length}）`,
-          );
-        }
-        // 3.2 把响应回填到 entries[i].tmpKey + 准备 UploadIntentItemOut
-        // （python 端 batch 按 scope 共享同一 STS 凭证，head 取 items[0] 的
-        //  credentials / bucket / region / upload_prefix）
-        const head = grants.items[0]!;
-        const intentsItems: UploadIntentItemOut[] = entries.map((e, idx) => {
-          const sts = grants.items[idx]!;
-          e.tmpKey = sts.tmp_key;
-          return {
-            client_ref: e.clientRef!,
-            tmp_key: sts.tmp_key,
-            // 2026-09-28：python STS 端口无 dedup 语义；固定 false，composable
-            // 永远走直传路径（与原 backend-rust dedup_hit=false 分支同形）。
-            dedup_hit: false,
-          };
-        });
-        const uploadIntents: UploadIntentsOut = {
-          credentials: stsCredentialsToCosCredentials(head),
-          bucket: head.bucket,
-          region: head.region,
-          // upload_prefix 来自 python 端 STS policy resource 限定前缀（展示用；
-          // 上传时 tmp_key 已自含前缀）。fallback 到 head.upload_prefix 直传。
-          tmp_prefix: head.upload_prefix,
-          items: intentsItems,
-        };
-
-        // 3.3 构造 CosUploadItem[] + useCosUpload 单批上传
-        // 这里使用 reqComputeSha256=false 因为 entries[i].sha 已在步骤 2 算好，
-        // 避免 useCosUpload 内部 computeSha256 重复一遍（节省 ~30MB PDF 的 hash
-        // 时间）。
-        cosItemsRef.value = entries.map((e, idx) => {
-          const item = intentsItems[idx]!;
-          return {
-            client_ref: item.client_ref,
-            file: e.file,
-            tmp_key: item.tmp_key,
-            bucket: uploadIntents.bucket,
-            region: uploadIntents.region,
-            tmp_prefix: uploadIntents.tmp_prefix,
-            credentials: uploadIntents.credentials,
-            status: 'pending' as const,
-            progress: 0,
-          };
-        });
-
-        /**
-         * 凭证过期或重签时再调一次 grantStsTmpKeyFiles；client_ref 复用，确保
-         * useCosUpload.applyFreshIntents 按 Map 命中同一 item。tmp_key 由
-         * python 端按 (purpose, filename, content_sha256) 派生，重签漂移时
-         * useCosUpload.applyFreshIntents 内部会强制 reset pending 走重传。
-         */
-        const fetchIntents = async (): Promise<UploadIntentsOut> => {
-          // 2026-09-29：refetch 同样必传完整 64 hex SHA-256 + ext。
-          // 复用步骤 2 已算好的 entry.sha + parseFileExt（hash 已确定性，无需重算）。
-          // entries 类型已在步骤 2 末尾收尾为 Required<FileUploadEntry>[]，
-          // 此处 e.sha 是 string，无需非空断言。
-          const fresh = await grantStsTmpKeyFiles({
-            scope: 'parts_new',
-            files: entries.map((e) => ({
-              purpose: PartFileKindToStsPurpose[e.kind] ?? 'tmp',
-              filename: e.file.name,
-              content_type: e.contentType,
-              content_sha256: e.sha,
-              ext: parseFileExt(e.file.name),
-            })),
-          });
-          const freshHead = fresh.items[0]!;
-          // 同一序号的 client_ref 复用；让 useCosUpload 按 client_ref 索引命中
-          const freshItems: UploadIntentItemOut[] = fresh.items.map((sts, idx) => ({
-            client_ref: entries[idx]!.clientRef!,
-            tmp_key: sts.tmp_key,
-            dedup_hit: false,
-          }));
-          return {
-            credentials: stsCredentialsToCosCredentials(freshHead),
-            bucket: freshHead.bucket,
-            region: freshHead.region,
-            tmp_prefix: freshHead.upload_prefix,
-            items: freshItems,
-          };
-        };
-
-        const upload = useCosUpload({
-          items: cosItemsRef,
-          refetchIntents: fetchIntents,
-          concurrency: 3,
-        });
-        cosUpload.value = upload;
-        await upload.startUpload();
-      }
-
-      // 阶段切到 uploaded；失败项由行内 retry 兜底，不阻断 stage
-      uploadStage.value = 'uploaded';
-
-      const failedCount =
-        Object.values(pdfUploadCells).filter((c) => c.status === 'error').length +
-        Object.values(threeDUploadCells).filter((c) => c.status === 'error').length;
-      if (failedCount === 0) {
-        ElMessage.success('所有文件已上传完成，请确认后提交创建');
-      } else {
-        ElMessage.warning(`${failedCount} 个文件上传失败，请点行内「重试」`);
-      }
-    } catch (e) {
-      // 上传阶段异常 → 回滚到 idle 允许重试
-      uploadStage.value = 'idle';
-      ElMessage.error((e as Error).message ?? '上传失败');
-    } finally {
-      pdfSubmitting.value = false;
-    }
-  }
-
-  /** 点击「提交创建」按钮（2026-09-16 M3-B 复审拆第二步）。
-   *
-   * 步骤 6+7：仅 batchCreateParts + 清空，不再触发上传。前提：uploadStage='uploaded'
-   * 且所有 cell.status === 'done'（UI 通过 disabled 阻止；这里再校验一次）。
-   */
-  async function onCommit(): Promise<void> {
-    if (uploadStage.value !== 'uploaded') {
-      ElMessage.warning('请先点「开始上传」');
-      return;
-    }
-    if (!canSubmitCreate.value) {
-      ElMessage.warning('仍有文件上传失败，请先点行内「重试」');
-      return;
-    }
-    if (!validateL2Customers()) return;
+    const { items, rowUids } = buildCommitItems();
+    itemRowUids.value = rowUids;
 
     pdfSubmitting.value = true;
+    commitStage.value = 'creating';
     try {
-      // 步骤 6：构造 PartBatchCreatePayload[]
-      // - 装配主子件统一展平为独立 part（M3 v2 端点无 assembly_uid 支持）；
-      //   子件图号 / 名称沿用原 drawing_no / name；quantity / 分厂 / 申请人继承自顶层。
-      // - drawing_file：从 PDF entry 派生；model3d_file：从 3D entry 派生。
-      const items: PartBatchCreatePayload[] = [];
-      for (const r of standaloneParts.value) {
-        const pdfEntry = findPdfEntryForRow(r.uid);
-        const threeDEntry =
-          r.three_d_index !== null ? findThreeDEntryForRow(r.uid, r.three_d_index) : undefined;
-        const drawingFile = pdfEntry ? buildBindingFromEntry(pdfEntry) : undefined;
-        const model3dFile = threeDEntry ? buildBindingFromEntry(threeDEntry) : undefined;
-        items.push({
-          name: r.name || r.drawing_no,
-          drawing_no: r.drawing_no,
-          applicant_name: r.applicant_name,
-          applicant_id: null, // M3 v2 JSON 端点无 applicant_id 字段
-          quantity: r.quantity,
-          request_date: r.request_date,
-          planned_delivery_date: r.planned_delivery_date || r.request_date,
-          is_urgent: r.is_urgent,
-          order_no: r.order_no,
-          system_delivery_date: r.system_delivery_date,
-          note: r.note,
-          customer_id: r.customer_id,
-          drawing_file: drawingFile,
-          model3d_file: model3dFile,
-        });
-      }
-      for (const a of assemblies.value) {
-        // 顶层 master part（也是独立 part，不创建 assembly 父节点）
-        const masterPdfEntry = findPdfEntryForRow(a.uid);
-        items.push({
-          name: a.name || a.drawing_no || `装配件-${a.uid}`,
-          drawing_no: a.drawing_no || '',
-          applicant_name: a.applicant_name,
-          applicant_id: null,
-          quantity: a.quantity,
-          request_date: a.request_date,
-          planned_delivery_date: a.planned_delivery_date || a.request_date,
-          is_urgent: a.is_urgent,
-          order_no: a.order_no,
-          system_delivery_date: a.system_delivery_date,
-          note: a.note,
-          customer_id: a.customer_id,
-          drawing_file: masterPdfEntry ? buildBindingFromEntry(masterPdfEntry) : undefined,
-          // master 顶层不强挂 3D（按 row.three_d_index 约定，3D 挂到具体子件）
-          model3d_file: undefined,
-        });
-        // 子件：每个子件一个 part（共享顶层 PDF）
-        for (const c of a.children) {
-          const childPdfEntry = findPdfEntryForRow(c.uid);
-          const threeDEntry =
-            c.three_d_index !== null ? findThreeDEntryForRow(c.uid, c.three_d_index) : undefined;
-          items.push({
-            name: c.name || `子件${c.page_index + 1}`,
-            drawing_no: c.drawing_no,
-            applicant_name: a.applicant_name, // 继承顶层
-            applicant_id: null,
-            quantity: c.quantity,
-            request_date: c.request_date,
-            planned_delivery_date: c.planned_delivery_date || c.request_date,
-            is_urgent: c.is_urgent,
-            order_no: c.order_no,
-            system_delivery_date: c.system_delivery_date,
-            note: c.note,
-            customer_id: a.customer_id, // 分厂继承顶层
-            drawing_file: childPdfEntry ? buildBindingFromEntry(childPdfEntry) : undefined,
-            model3d_file: threeDEntry ? buildBindingFromEntry(threeDEntry) : undefined,
-          });
-        }
-      }
-
-      // 步骤 7：JSON batchCreate（v2 后端按 customer_id 自动分组；无需前端分组）
-      // 注：applicant dedupe 在 PDF Tab 不需要 —— JSON 端点不接受 applicant_id，
-      // applicant_name 走字符串直存（同名校验在 createApplicant 单点路径上，本路径
-      // 不触发）。同名重复只会让 t_part.applicant_name 出现重复字符串，不影响
-      // applicant 表去重。详见 T3.4 调研报告 §7。
+      // applicant dedupe 在本 Tab 不需要：JSON 端点不接受 applicant_id，
+      // applicant_name 走字符串直存，同名只会在 t_part.applicant_name 出现重复字符串。
       const res = await batchCreateParts(items);
       if (res.failed.length > 0) {
         const sample = res.failed
@@ -2266,67 +1949,73 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
           '部分行未通过',
           { type: 'warning' },
         );
+        // 一个文件都没上传，阶段回 idle 让用户改完再提交
+        commitStage.value = 'idle';
         return;
       }
 
-      // 2026-09-18 接入 upload_session：通知后端「本批 tmp 文件已被消费」。
-      // consume 仅延长 tmp 保留窗口（便于 batch_create_parts 事务内 head + copy
-      // tmp → 正式 CAS key 完成）；tmp 物理删除由 batch_create_parts 端点 spawn
-      // delete 兜底（详见 backend-rust `src/handlers/parts/batch.rs`），前端不感知。
-      // submittedClientRefs 来自 lastUploadEntries（本次提交真实上传的文件），
-      // 不包含 row.fileLink 引用但本批未上传的复用项（那些已经在之前的提交里
-      // consume 过或由 markComplete 触发过 commit，无需再 notify）。
-      //
-      // 2026-09-28 删 useUploadSession：session.consumeFiles 不复存在。
-      // 子任务 #5 重写 grantStsTmpKeyFiles 路径后，commit 后端 batch_create_parts
-      // 走「先 copy tmp → 正式 CAS key → spawn delete tmp」流水（详见 plan §2.1），
-      // 头部 commit 完成即自动清理，无需前端额外 consumeFiles 通知。当前 stub：保留
-      // submittedClientRefs 收集 + skip 整个 await，便于子任务 #5 决定是否复用本变量。
-      void lastUploadEntries.map((e) => e.clientRef).filter((r): r is string => !!r);
+      // 记下「建出来的 part ↔ 本地哪一行」，这是后置上传的锚
+      createdPartIds.clear();
+      res.created.forEach((c) => {
+        const rowUid = itemRowUids.value[c.sourceIndex];
+        if (rowUid) createdPartIds.set(rowUid, String(c.id));
+      });
 
-      const standaloneCount = standaloneParts.value.length;
-      const assemblyMasters = assemblies.value.length;
-      const childCount = assemblies.value.reduce((s, a) => s + a.children.length, 0);
-      ElMessage.success(
-        `成功创建 ${res.created.length} 条零件（${standaloneCount} 独立 + ${assemblyMasters} 装配件顶层 + ${childCount} 子件）`,
-      );
-      // 2026-09-18：提交成功后清空 draft（保留 session 单例，下一批次继续复用）
-      draft.saver.cancel();
-      draft.clear();
-      // 清空 + 跳回
-      allPdfs.value = [];
-      standaloneParts.value = [];
-      assemblies.value = [];
-      selectedPages.value.clear();
-      pdfFiles.value = [];
-      excelFiles.value = [];
-      // 2026-10-03：Excel 文件已清空 → 解析结果同步作废（下一批是新数据）。
-      excelByDrawingNo.value = null;
-      threeDModelFiles.value = [];
+      commitStage.value = 'uploading';
+      uploadJobs = buildUploadJobs(res.created);
+      // cell 状态是「按文件」而非「按 job」的：同一份 PDF 被 N 个 part 共享时所有 job
+      // 共用一个 cell，全部成功才置 done（任一失败即 error，重试会把它们一起重跑）。
       Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
       Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
-      lastUploadEntries = [];
-      // 释放上传引用，避免下次会话持到 stale items（cosUpload.value = null 让 retryUploadByRow 兜底）
-      cosUpload.value = null;
-      cosItemsRef.value = [];
-      uploadStage.value = 'committed';
-      // 重置回 idle 供下次「开始上传」使用
-      uploadStage.value = 'idle';
-      successNextTab.value = 'manual';
-      router.push('/parts?status=PENDING');
+      const seen = new Set<string>();
+      for (const job of uploadJobs) {
+        if (seen.has(job.jobKey)) continue;
+        seen.add(job.jobKey);
+        const cell: UploadStatusCell = { status: 'pending', progress: 0 };
+        if (job.kind === 'DRAWING') pdfUploadCells[job.jobKey] = cell;
+        else threeDUploadCells[job.jobKey] = cell;
+      }
+      await runUploadJobs(uploadJobs);
+
+      commitStage.value = 'done';
+      summarizeUploads();
     } catch (e) {
+      // 阶段未过 uploading ⇒ 工单还没建（或建单请求整体失败），回 idle 可安全重来
+      if (commitStage.value !== 'done') commitStage.value = 'idle';
       ElMessage.error((e as Error).message ?? '提交失败');
     } finally {
       pdfSubmitting.value = false;
     }
   }
 
+  /** 重试全部失败文件（**不重复建工单**）。前置：done 态且仍有失败。 */
+  async function retryFailedUploads(): Promise<void> {
+    if (commitStage.value !== 'done' || !hasUploadErrors.value) {
+      ElMessage.warning('当前没有可重试的上传');
+      return;
+    }
+    const failed = uploadJobs.filter((j) => {
+      const cell =
+        j.kind === 'DRAWING' ? pdfUploadCells[j.jobKey] : threeDUploadCells[j.jobKey];
+      return cell?.status === 'error';
+    });
+    if (failed.length === 0) {
+      ElMessage.warning('当前没有可重试的上传');
+      return;
+    }
+    pdfSubmitting.value = true;
+    try {
+      await runUploadJobs(failed);
+    } finally {
+      pdfSubmitting.value = false;
+    }
+    summarizeUploads();
+  }
+
   // 2026-08-27：vue-draggable-plus 的 useDraggable composable 在 unmount 时
   // 自动 destroy，无需手动调用。
-  //
-  // 2026-09-18：unmount 时刷新 draft 快照 + 撤销 pending saver（避免 debounce
-  // 在组件已销毁后写入 stale state）。session 不在 unmount 销毁 —— 两 Tab
-  // 共享同一单例，Manual Tab 仍在活跃时 session 续期定时器必须存活。
+  // unmount 时刷新 draft 快照 + 撤销 pending saver（避免 debounce 在组件已销毁后
+  // 写入 stale state）。
   onBeforeUnmount(() => {
     closePdfPreview();
     draft.saver.flush();
@@ -2408,26 +2097,19 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     onManualAsmFileRemove,
     confirmManualAssembly,
     closeManualAsmDialog,
-    // submit
-    // 2026-09-16 M3-B 复审：原 onSubmitPdfTree 拆成「先上传 → 后提交」两步。
-    // onStartUpload：hash + createUploadIntents + useCosUpload + startUpload
-    // onCommit：仅 batchCreateParts + 清空 + 跳页
-    onStartUpload,
-    onCommit,
-    // 2026-09-16 T3.4：上传状态（UI 进度 / 重试用）
+    // submit：2026-10-04 单入口（建工单 + 逐 part 后置上传）
+    onSubmit,
+    retryFailedUploads,
+    // 上传状态（行内进度 / 行内单文件重试 / 全局汇总）
     pdfUploadCells,
     threeDUploadCells,
     getRowPdfCell,
     getRowThreeDCell,
     hasUploadErrors,
-    // 2026-09-16 M3-B 复审：阶段机 + 按钮 disabled 判定
-    uploadStage,
-    canStartUpload,
-    canSubmitCreate,
-    retryUploadByRow,
-    // 2026-09-18 A3：hydrate 结果给 UI 渲染顶部「已恢复 N 条」el-alert +
-    // 孤儿文件待认领面板（合并由 usePartsNewDraft.mergeDraftWithSession 完成）
-    hydrateRestoredCount,
-    orphanFileRefs,
+    // 阶段机 + 主按钮文案
+    commitStage,
+    canSubmit,
+    submitLabel,
+    retryUploadByCell,
   };
 }

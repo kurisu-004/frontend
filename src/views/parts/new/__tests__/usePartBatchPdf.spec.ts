@@ -55,9 +55,14 @@ vi.mock('pdf-lib', () => ({
   },
 }));
 
-vi.mock('@/api/parts', () => ({ batchCreateParts: vi.fn() }));
-vi.mock('@/api/files/sts', () => ({ grantStsTmpKeyFiles: vi.fn() }));
-vi.mock('@/composables/useCosUpload', () => ({ useCosUpload: vi.fn() }));
+// 2026-10-04：Tab 2 改成「建工单 + 逐 part 后置上传」，composable 从 @/api/parts
+// 导入 batchCreateParts / uploadPartDrawing / uploadPart3DModel 三个导出 —— mock 必须
+// 覆盖全部被 import 的导出，否则模块解析失败。
+vi.mock('@/api/parts', () => ({
+  batchCreateParts: vi.fn(),
+  uploadPartDrawing: vi.fn(),
+  uploadPart3DModel: vi.fn(),
+}));
 
 vi.mock('@/views/parts/new/composables/usePartsNewDraft', () => ({
   usePartsNewDraft: () => ({

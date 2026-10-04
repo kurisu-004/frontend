@@ -139,48 +139,63 @@ export async function fetchPartFileContent(fileId: string): Promise<Blob> {
 }
 
 // ============================================================
-// 2026-09-25 迁移：原误放在 assembly.ts 的零件文件上传函数迁回 parts/file.ts。
+// 零件文件 multipart 上传（图纸 / 3D 模型）
 // ============================================================
 //
-// 历史背景：2026-09-16 M3 重构时 multipart 直传路径被 COS 直传 + JSON 链路取代，
-// 后端 `/parts/{id}/drawings` / `/3d-models` / `/cad-files` 端点已删除（v2 不再
-// 支持 multipart upload）。原函数在 assembly.ts 标注 @deprecated 但保留 export。
-// 2026-09-25 清理：把 export 从 assembly.ts 迁移到本文件（更符合子域归属），
-// 调用端继续可用，但实际调用会抛 404 Not Found。详情页补传请改用
-// `usePartFileUpload({ ownerPartId, kind: 'DRAWING' })`（场景 B）。
+// 2026-10-04：图纸 / 3D 的后置上传端点是 `POST /parts/{id}/upload-drawing` 与
+// `POST /parts/{id}/upload-3d-model`（与详情页的 `usePartFileUpload` 是两条不同链路：
+// 后者带 `owner_part_id` + kind 落 part-file 表，作用于任意所有者；本文件这两个是
+// 「part 建好之后，把这批录入用的原件补传上去」的批量录入路径）。
+//
+// 端点契约对 multipart body 有**严格**约束（违反即 40001）：
+// 1. 只接受**一个**名为 `file` 的字段。多 append 一个字段、缺字段、或换个字段名都不行；
+// 2. `content_type` 必须落在扩展名白名单里（见下方两个归一函数）。后端按「扩展名 →
+//    允许的 content_type」比对，不按浏览器嗅探结果放行。
+//
+// 因此 `content_type` **不能**直接用 `file.type`：.step / .stp / .igs 在多数浏览器上
+// 是空串或 `application/octet-stream` 之外的怪值（部分环境给 .igs 报 text/plain），
+// 直传会被后端 policy 挡回 40001。归一逻辑见 PDF_CONTENT_TYPE / THREE_D_CONTENT_TYPE。
+
+/** 图纸 / PDF 的 content_type：后端对 `.pdf` 只接受这一种。 */
+const PDF_CONTENT_TYPE = 'application/pdf';
+/** 3D 模型的 content_type：后端对全部 3D 扩展名统一接受这一种二进制流。 */
+const THREE_D_CONTENT_TYPE = 'application/octet-stream';
 
 /**
- * 上传零件图纸。2026-07-14 起 DRAWING 同时接受 PDF + 8 种图片格式
- * （PNG/JPG/JPEG/GIF/BMP/TIF/TIFF/WEBP/HEIC），后端 /drawings 端点统一处理。
- * 图片与 PDF 同槽（单文件覆盖语义）。
+ * 上传零件图纸（`POST /api/v2/parts/{part_id}/upload-drawing`）。
  *
- * @deprecated 2026-09-16 M3 重构：multipart 直传路径已被 COS 直传 + JSON 链路取代，
- * 后端 `/parts/{id}/drawings` 端点已删除（v2 不再支持 multipart upload）。
- * 详情页补传请改用 `usePartFileUpload({ ownerPartId, kind: 'DRAWING' })`（场景 B）。
- * 保留 export 仅作 import 兼容；调用会抛 404 Not Found。
- *
- * 2026-09-25 迁移：从 `api/assembly.ts` 迁回 `api/parts/file.ts`（更符合子域归属）。
+ * multipart body **只** append 一个 `file` 字段；`content_type` 一律写
+ * `application/pdf`（后端按扩展名白名单比对，不接受浏览器嗅探值）。
+ * 单文件 ≤ 300MB；服务端把整份 multipart 读进内存后再转存对象存储 ⇒ 调用侧自己
+ * 控并发（见 `usePartBatchPdf` 的 `PART_UPLOAD_CONCURRENCY`）。
  */
 export async function uploadPartDrawing(partId: string, file: File): Promise<PartFileItem> {
   const form = new FormData();
-  form.append('file', file);
-  const resp = await api.post<PartFileItem>(`/parts/${partId}/drawings`, form);
+  const payload = new File([file], file.name, { type: PDF_CONTENT_TYPE });
+  form.append('file', payload);
+  const resp = await api.post<PartFileItem>(
+    `/parts/${encodeURIComponent(partId)}/upload-drawing`,
+    form,
+  );
   return resp.data;
 }
 
 /**
- * 上传零件 3D 模型（STEP / STP / IGES / IGS / STL / OBJ / 3MF）。
+ * 上传零件 3D 模型（`POST /api/v2/parts/{part_id}/upload-3d-model`）。
  *
- * @deprecated 2026-09-16 M3 重构：multipart 直传路径已被 COS 直传 + JSON 链路取代，
- * 后端 `/parts/{id}/3d-models` 端点已删除。详情页补传请改用
- * `usePartFileUpload({ ownerPartId, kind: '3D_MODEL' })`（场景 B）。
- *
- * 2026-09-25 迁移：从 `api/assembly.ts` 迁回 `api/parts/file.ts`。
+ * 支持 STEP / STP / IGES / IGS / STL / OBJ / 3MF。multipart body **只** append 一个
+ * `file` 字段；`content_type` 一律写 `application/octet-stream`（后端对全部 3D
+ * 扩展名接受这一种，浏览器给的 `File.type` 多为空串或怪值，不能直接用）。
+ * 单文件 ≤ 300MB；服务端把整份 multipart 读进内存后再转存对象存储。
  */
 export async function uploadPart3DModel(partId: string, file: File): Promise<PartFileItem> {
   const form = new FormData();
-  form.append('file', file);
-  const resp = await api.post<PartFileItem>(`/parts/${partId}/3d-models`, form);
+  const payload = new File([file], file.name, { type: THREE_D_CONTENT_TYPE });
+  form.append('file', payload);
+  const resp = await api.post<PartFileItem>(
+    `/parts/${encodeURIComponent(partId)}/upload-3d-model`,
+    form,
+  );
   return resp.data;
 }
 

@@ -16,6 +16,9 @@
   本组件改为本地 reactive 副本 + watch 同步 + emit('update:pdf-form' / 'update:manual-part-form' /
   'update:manual-asm-form')；父组件 v-bind 摊开后再单独监听 emit 把值合并回
   usePartBatchPdf 持有的 form。
+
+  2026-10-04：底部两个提交按钮（开始上传 / 提交创建）合并为一个。行内「上传」列保留，
+  其 cell 状态由 composable 在建单成功后的后置上传阶段写入。
 -->
 
 <template>
@@ -25,26 +28,6 @@
     拆为候选页：勾选页可「合并为零件」或「合并为装配件」； 单页 PDF 直接进入独立零件表。可手动新增 /
     删除条目。
   </p>
-
-  <!-- 2026-09-18 A3：mount 时 hydrate 完成后顶部 el-alert 总览「已恢复 N 条已上传图纸」。
-       hydrateRestoredCount>0 → success；=0 → info（无恢复但路由存在）；负向（need_reselect）
-       → warning 副文。 -->
-  <el-alert
-    v-if="hydrateRestoredCount > 0"
-    :title="`已恢复 ${hydrateRestoredCount} 条已上传图纸`"
-    type="success"
-    :closable="false"
-    show-icon
-    class="hydrate-summary"
-  />
-  <el-alert
-    v-else-if="orphanFileRefs.length > 0"
-    :title="`发现 ${orphanFileRefs.length} 个孤儿文件未引用`"
-    type="info"
-    :closable="false"
-    show-icon
-    class="hydrate-summary"
-  />
 
   <el-card shadow="never" class="pdf-form-card">
     <el-form :model="localPdfForm" inline>
@@ -155,35 +138,6 @@
   </el-card>
 
   <!-- ① 源文件区 -->
-  <!-- 2026-09-18 A3：孤儿文件待认领面板。orphanFileRefs 是 session.files 中
-       存在但不在 snapshot file_links 引用集合的条目（典型场景：用户上次上传了
-       文件但刷新页面时 draft 因 user_id / version 不匹配被丢弃，session.files
-       仍残留）。让用户能看到这些文件 → 可作为重新选图 / 删 session 的入口。 -->
-  <el-alert
-    v-if="orphanFileRefs.length > 0"
-    type="warning"
-    :closable="false"
-    show-icon
-    class="orphan-alert"
-  >
-    <template #title>
-      <span>孤儿文件待认领（{{ orphanFileRefs.length }} 个）</span>
-    </template>
-    <ul class="orphan-list">
-      <li v-for="f in orphanFileRefs" :key="f.client_ref">
-        <code>{{ f.original_filename }}</code>
-        <span class="orphan-meta"
-          >（{{ f.kind ?? 'unknown' }} · {{ ((f.file_size ?? 0) / 1024).toFixed(1) }} KB · uploaded
-          {{ f.uploaded_at ?? 'unknown' }}）</span
-        >
-      </li>
-    </ul>
-    <p class="orphan-hint">
-      这些文件存在于 upload session 但未关联到任何行 —— 可忽略（最终会随 session discard 回收），
-      或在本 Tab 重新解析文件时手动认领。
-    </p>
-  </el-alert>
-
   <el-card v-if="allPdfs.length > 0" shadow="never" class="pdf-source-card">
     <div class="source-header">
       <span class="title">源文件区</span>
@@ -337,13 +291,13 @@
               <UploadStatusCellView
                 :cell="getRowPdfCell(row as StandalonePartRow)"
                 label="PDF"
-                @retry="onRetryStandalonePdf(row as StandalonePartRow)"
+                @retry="onRetryRowPdf(row as StandalonePartRow)"
               />
               <UploadStatusCellView
                 v-if="(row as StandalonePartRow).three_d_index !== null"
                 :cell="getRowThreeDCell(row as StandalonePartRow)"
                 label="3D"
-                @retry="onRetryStandaloneThreeD(row as StandalonePartRow)"
+                @retry="onRetryRowThreeD(row as StandalonePartRow)"
               />
             </div>
           </template>
@@ -510,13 +464,13 @@
                     <UploadStatusCellView
                       :cell="getRowPdfCell(c as AssemblyChildRow)"
                       label="PDF"
-                      @retry="onRetryAssemblyChildPdf(c as AssemblyChildRow)"
+                      @retry="onRetryRowPdf(c as AssemblyChildRow)"
                     />
                     <UploadStatusCellView
                       v-if="(c as AssemblyChildRow).three_d_index !== null"
                       :cell="getRowThreeDCell(c as AssemblyChildRow)"
                       label="3D"
-                      @retry="onRetryAssemblyChildThreeD(c as AssemblyChildRow)"
+                      @retry="onRetryRowThreeD(c as AssemblyChildRow)"
                     />
                   </div>
                 </template>
@@ -552,7 +506,7 @@
             <UploadStatusCellView
               :cell="getRowPdfCell(row as AssemblyRow)"
               label="主图"
-              @retry="onRetryAssemblyMasterPdf(row as AssemblyRow)"
+              @retry="onRetryRowPdf(row as AssemblyRow)"
             />
           </template>
         </el-table-column>
@@ -568,35 +522,19 @@
   </div>
 
   <!-- 提交按钮：放在装配件表下方（form-card 顶部仅保留解析拆分）。
-       2026-09-16 M3-B 复审：拆「先上传 → 后提交」两步，按钮 disabled 走阶段机。 -->
+       2026-10-04：单入口 —— 一次点击完成「建工单 + 逐 part 后置上传图纸/3D」；
+       上传失败时工单已建，按钮转「重试上传（N 个文件）」，绝不重复建单。 -->
   <div v-if="allPdfs.length > 0" class="pdf-footer-actions">
     <el-button
       type="primary"
       size="large"
-      :disabled="!canStartUpload || pdfSubmitting"
-      :loading="pdfSubmitting && uploadStage === 'uploading'"
-      @click="onStartUpload"
+      :disabled="!canSubmit || pdfSubmitting"
+      :loading="pdfSubmitting"
+      @click="commitStage === 'done' ? retryFailedUploads() : onSubmit()"
     >
       <el-icon><upload-filled /></el-icon>
-      <span
-        >开始上传（{{ standaloneParts.length }} 个零件 + {{ assemblies.length }} 个装配件）</span
-      >
+      <span>{{ submitLabel }}</span>
     </el-button>
-    <el-button
-      type="success"
-      size="large"
-      :disabled="!canSubmitCreate || pdfSubmitting"
-      :loading="pdfSubmitting && uploadStage === 'committed'"
-      @click="onCommit"
-    >
-      <el-icon><check /></el-icon>
-      <span>提交创建</span>
-    </el-button>
-    <!-- 2026-09-16 M3-B 复审：删掉误导的「有文件上传失败」统一提示；改成阶段化文案
-         （按钮 disabled 状态已经反映，行内 cell 也有各自的红字）。 -->
-    <span v-if="uploadStage === 'uploaded' && hasUploadErrors" class="upload-error-hint"
-      >仍有文件上传失败，请点行内「重试」</span
-    >
   </div>
 
   <!-- PDF 文件名点击触发的全屏预览（Tab 2）。blob URL 生命周期见
@@ -732,15 +670,7 @@ import 'element-plus/es/components/date-picker/style/css';
 import 'element-plus/es/components/input-number/style/css';
 import 'element-plus/es/components/switch/style/css';
 import 'element-plus/es/components/link/style/css';
-import {
-  Document,
-  MagicStick,
-  Plus,
-  Rank,
-  UploadFilled,
-  Files,
-  Check,
-} from '@element-plus/icons-vue';
+import { Document, MagicStick, Plus, Rank, UploadFilled, Files } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
 import {
   resolveDraggable,
@@ -768,7 +698,7 @@ import type {
 // state 在同一文件管理（更内聚）。
 /** 与 UploadStatusCellView.vue::UploadStatusCell 同形，跨文件复用。 */
 interface UploadStatusCellViewCell {
-  status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error';
+  status: 'pending' | 'uploading' | 'done' | 'error';
   progress: number;
   error?: string;
 }
@@ -837,34 +767,18 @@ const props = defineProps<{
   // 2026-09-16 M3-B 复审：原 onSubmitPdfTree 拆为「开始上传」+「提交创建」两步。
   // onStartUpload / onCommit 见下方。
   closePdfPreview: () => void;
-  // 2026-09-16 T3.4：上传状态（cell + 反查函数 + 全局汇总）
+  // 上传状态（cell + 反查函数 + 全局汇总）
   pdfUploadCells: Record<string, UploadStatusCellViewCell>;
   threeDUploadCells: Record<string, UploadStatusCellViewCell>;
   getRowPdfCell: (row: { pdfSourceUid: string }) => UploadStatusCellViewCell | undefined;
   getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCellViewCell | undefined;
-  hasUploadErrors: boolean;
-  retryUploadByRow: (rowUid: string, slot: 'pdf' | '3d', threeDIndex?: number) => Promise<void>;
-  // 2026-09-16 M3-B 复审：拆「先上传 → 后提交」两步
-  onStartUpload: () => Promise<void>;
-  onCommit: () => Promise<void>;
-  uploadStage: 'idle' | 'uploading' | 'uploaded' | 'committed';
-  canStartUpload: boolean;
-  canSubmitCreate: boolean;
-  // 2026-09-18 A3：hydrate 结果（顶部 el-alert + 孤儿文件面板）
-  //
-  // 2026-09-28 删 useUploadSession：orphanFileRefs 类型从 SessionFile[] 收到 DraftSessionFile[]
-  // （usePartsNewDraft.ts 内联松散结构类型）。本组件只读 client_ref / original_filename
-  // 等基础字段，optional 字段在 UI 端走 `?? ''` 兜底。子任务 #5 重写后无需回归。
-  hydrateRestoredCount: number;
-  orphanFileRefs: {
-    client_ref: string;
-    status?: string;
-    kind?: string;
-    tmp_key?: string;
-    file_size?: number;
-    original_filename?: string;
-    uploaded_at?: string | null;
-  }[];
+  // 2026-10-04：单入口提交流程（建工单 + 逐 part 后置上传）
+  commitStage: 'idle' | 'creating' | 'uploading' | 'done';
+  canSubmit: boolean;
+  submitLabel: string;
+  onSubmit: () => Promise<void>;
+  retryFailedUploads: () => Promise<void>;
+  retryUploadByCell: (jobKey: string) => Promise<void>;
 }>();
 
 // PR-2 2026-09-13：父级三个 form 都是 reactive；vue/no-mutating-props 禁止
@@ -947,24 +861,18 @@ function bindAssembliesTableRef(el: unknown): void {
   pdfRefs.assembliesTableRef.value = asElTableInstance(el);
 }
 
-// ============ 2026-09-16 T3.4：上传重试 handler ============
-// 2026-09-16 M3-B 复审修复：cosUpload 提到 usePartBatchPdf composable 顶层 Ref 后，
-// retryUploadByRow 不再是 stub —— 行内「重试」按钮可直接调 useCosUpload.retryItem()，
-// 不必再走「重新提交」整条流程。onRetry* 五处 handler 仅做 rowUid 解析转发。
-function onRetryStandalonePdf(row: StandalonePartRow): void {
-  void props.retryUploadByRow(row.uid, 'pdf');
+// ============ 行内上传重试（按 cell key 定位 job）============
+// cell 状态是「按文件」的，`getRowPdfCell` / `getRowThreeDCell` 用的 key 正是
+// `UploadJob.jobKey` ⇒ 行内「重试」只需把该 cell 自身的 key 交给 composable，
+// 由它筛出这个文件涉及的全部 job 重跑（不会重复建工单）。
+function onRetryRowPdf(row: { pdfSourceUid: string }): void {
+  void props.retryUploadByCell(`pdf:${row.pdfSourceUid}`);
 }
-function onRetryStandaloneThreeD(row: StandalonePartRow): void {
-  void props.retryUploadByRow(row.uid, '3d', row.three_d_index ?? undefined);
-}
-function onRetryAssemblyMasterPdf(row: AssemblyRow): void {
-  void props.retryUploadByRow(row.uid, 'pdf');
-}
-function onRetryAssemblyChildPdf(c: AssemblyChildRow): void {
-  void props.retryUploadByRow(c.uid, 'pdf');
-}
-function onRetryAssemblyChildThreeD(c: AssemblyChildRow): void {
-  void props.retryUploadByRow(c.uid, '3d', c.three_d_index ?? undefined);
+function onRetryRowThreeD(row: { pdfSourceUid: string; three_d_index: number | null }): void {
+  if (row.three_d_index === null) return;
+  const f = props.threeDModelFiles[row.three_d_index];
+  if (!f) return;
+  void props.retryUploadByCell(`3d:${String(f.uid)}`);
 }
 
 // ============ 2026-09-18 A3：row.fileLink 状态 tag（cellRender helper）============
@@ -1551,11 +1459,6 @@ onMounted(() => {
   gap: 12px;
 }
 
-.upload-error-hint {
-  color: var(--el-color-danger);
-  font-size: 13px;
-}
-
 .upload-cell {
   display: flex;
   flex-direction: column;
@@ -1570,29 +1473,7 @@ onMounted(() => {
   font-size: 16px;
 }
 
-/* 2026-09-18 A3：hydrate 顶部总览 alert 与孤儿文件面板 */
-.hydrate-summary {
-  margin: 0 0 12px;
-}
-.orphan-alert {
-  margin: 0 0 12px;
-}
-.orphan-list {
-  margin: 6px 0;
-  padding-left: 20px;
-  font-size: 13px;
-}
-.orphan-meta {
-  color: var(--text-secondary);
-  margin-left: 6px;
-}
-.orphan-hint {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-/* 2026-09-18 A3：图纸列的 link + tag 两行布局 */
+/* 图纸列的 link + tag 两行布局 */
 .drawing-cell {
   display: flex;
   flex-direction: column;

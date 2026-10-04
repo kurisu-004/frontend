@@ -35,9 +35,6 @@ import { useAuthStore } from '@/stores/auth';
 // tmp_key / file_size / original_filename / uploaded_at / files）。UI 消费端下游
 // orphanFileRefs 也已在本仓库收口到 `Array<{ client_ref; kind; original_filename; file_size;
 // uploaded_at; tmp_key }>`（详见 usePartBatchPdf.ts 接口签名注释）。
-//
-// 子任务 #5 重写 grantStsTmpKeyFiles 路径后，可能引入新的 upload_session 域或基于
-// 单文件 grantStsTmpKey 的本地缓存；届时本结构类型需重新评估字段。
 
 // ============================================================
 // 序列化类型（与后端契约对齐：version=1 即可）
@@ -160,14 +157,18 @@ export interface SerializedPdfTab {
   rows: SerializedStandalonePartRow[];
   assemblies: SerializedAssemblyRow[];
   selectedPages: string[];
-  /** 文件上传关联（drawing + 3D → rows / child）。 */
-  file_links: Array<{
-    client_ref: string;
-    sha256: string;
-    /** 该 file 关联到哪些 row uid（standalone / asmMaster / asmChild）。 */
-    bound_row_ids: string[];
-    kind: 'drawing' | '3d_model';
-  }>;
+  /**
+   * 2026-10-04 新增：rowUid → partId 映射（`POST /parts/batch` 建出来的 part）。
+   *
+   * 存在的唯一理由：**工单已落库、不可回滚**。Tab 2 的上传失败语义是「工单已建 +
+   * 失败行清单可重试」；用户此时刷新页面，`File` 对象不跨刷新存活、必然要重新选
+   * 文件。没有这份映射，重试就只能重走 `POST /parts/batch`，把同一批工单**再建一遍**。
+   *
+   * 2026-10-04 同时删除 `file_links`（client_ref / sha256 / bound_row_ids）：它是
+   * upload session 直传链路的文件绑定索引，本仓已无任何生产者，保留只会让人误以为
+   * 能从快照恢复文件。
+   */
+  created_part_ids?: Record<string, string>;
   column_layout?: SerializedColumnLayout;
 }
 
@@ -249,10 +250,7 @@ export interface MergeResult {
   restored: boolean;
 }
 
-/**
- * 2026-09-28：upload_session.ts 下线后内联松散结构类型，仅保留 merge 函数读到的字段。
- * 子任务 #5 重写 grantStsTmpKeyFiles 路径后视新缓存形态再决定是否收紧。
- */
+/** merge 链路读到的松散结构类型（仅保留 merge 函数实际读取的字段）。 */
 export interface DraftSessionFile {
   client_ref: string;
   kind?: string;
@@ -263,10 +261,7 @@ export interface DraftSessionFile {
   uploaded_at?: string | null;
 }
 
-/**
- * 2026-09-28：mergeDraftWithSession 入参的 session / UploadSession 松散形态。
- * 仅取 files 字段；其它字段（credentials / bucket / etc.）merge 函数不读。
- */
+/** `mergeDraftWithSession` 入参的 session 松散形态：仅取 files 字段。 */
 export interface DraftUploadSession {
   files?: DraftSessionFile[];
 }
@@ -334,9 +329,9 @@ export function mergeDraftWithSession(
     drawing: classifyFile(s.drawingClientRef),
   }));
 
-  // orphan：session.files 存在但不在 snapshot.file_links 引用集合里
+  // orphan：session.files 存在但不在 snapshot 引用集合里（引用来源 = 各行自身的
+  // client_ref 字段；pdf_tab 侧不再有独立的 file_links 索引段）
   const referencedRefs = new Set<string>();
-  draft.pdf_tab.file_links.forEach((l) => referencedRefs.add(l.client_ref));
   draft.pdf_tab.rows.forEach((r) => {
     if (r.drawing_client_ref) referencedRefs.add(r.drawing_client_ref);
     if (r.three_d_client_ref) referencedRefs.add(r.three_d_client_ref);

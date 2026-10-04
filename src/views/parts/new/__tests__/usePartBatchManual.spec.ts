@@ -181,6 +181,9 @@ const harnessMount = () =>
 
 const okPartItem: PartBatchResult['created'][number] = {
   id: 'p1',
+  // 2026-10-04：batchCreateParts 的 created 元素新增 sourceIndex（请求 items 的全局
+  // 下标）。Tab 1 不消费它，但类型上必填，fixture 需补。
+  sourceIndex: 0,
   version: 0,
   serial_no: 'P00001',
   name: 'x',

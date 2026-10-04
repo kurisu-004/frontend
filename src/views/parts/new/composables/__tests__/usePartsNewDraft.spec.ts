@@ -6,7 +6,7 @@
 // - loadDraft：版本不匹配 → null；user_id 不匹配 → null；解析失败 → null
 // - saveDraft / clearDraft：localStorage 写入 / 删除
 // - mergeDraftWithSession：合并逻辑（命中 done → done / 缺 / 状态非 done → need_reselect）
-// - orphan：session.files 存在但不在 snapshot file_links 引用集合
+// - orphan：session.files 存在但不在 snapshot 各行引用的集合
 // - debounce saver：多次 schedule 调用合并为一次写入
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,7 +26,6 @@ function makeDraft(overrides?: Partial<PartsNewDraftPayload>): PartsNewDraftPayl
       rows: [],
       assemblies: [],
       selectedPages: [],
-      file_links: [],
     },
     manual_tab: { staged: [] },
     ...overrides,
@@ -183,8 +182,7 @@ describe('mergeDraftWithSession', () => {
         ],
         assemblies: [],
         selectedPages: [],
-        file_links: [],
-      },
+        },
     });
     const out = mergeDraftWithSession(draft, null);
     expect(out.restored).toBe(true);
@@ -225,8 +223,7 @@ describe('mergeDraftWithSession', () => {
         ],
         assemblies: [],
         selectedPages: [],
-        file_links: [],
-      },
+        },
     });
     const session = {
       session_id: 'sess-1',
@@ -295,8 +292,7 @@ describe('mergeDraftWithSession', () => {
         ],
         assemblies: [],
         selectedPages: [],
-        file_links: [],
-      },
+        },
     });
     const session = {
       session_id: 'sess-1',
@@ -434,8 +430,7 @@ describe('mergeDraftWithSession', () => {
           },
         ],
         selectedPages: [],
-        file_links: [],
-      },
+        },
     });
     const session = {
       session_id: 'sess-1',
