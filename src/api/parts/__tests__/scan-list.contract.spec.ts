@@ -277,8 +277,8 @@ const heldRowFixture = {
 // W 组补的就是这一维：下面两个对象转录自 `GET /parts/pickable-by-work-type/208472998548602880`
 // 与 `GET /parts/by-worker/208473192891678720` 的响应体（dev 库，2026-10-04 采集）。
 //
-// ⚠️ **每个样本里哪部分是实测、哪部分是按后端契约手写，必须说清**（否则这个「唯一真值
-// 维度」的守卫会自我否定 —— 拿手写的值当实测证据，下一个读代码的人会以为它验过）：
+//   ⚠️ **每个样本里哪部分是实测、哪部分是按后端契约手写，必须说清**（否则这个「唯一真值
+//     维度」的守卫会自我否定 —— 拿手写的值当实测证据，下一个读代码的人会以为它验过）：
 //   · **实测转录**：基础字段 30 余个（雪花 id 形态 / Decimal 字符串 / 两个日期占位符 /
 //     取件行的批次锚点 / `process_chain_id` 等），采集方式是 e2e seed 一个 MANAGER 账号
 //     → `POST /iam/login` 取 token → 带 `Authorization: Bearer` 打两个 GET
@@ -286,6 +286,11 @@ const heldRowFixture = {
 //   · **按契约手写**（2026-10-04 与前端并行推进的后端改动当时尚未上线，无法实测）：
 //     工序链派生四件套（两个样本都有）与放回行的批次锚点。手写依据是后端 VO 的填充
 //     口径，**后端上线后必须重新采集这两个样本替换**。
+//   · `name`：两个样本里的图号值（与 `drawing_no` 相同）是**实测**的 —— 后端当时把
+//     图号当工单名下发。2026-10-04 起后端给这两个端点补 part 侧 4 列真实投影
+//     （`name` / `is_urgent` / `system_delivery_date` / `planned_delivery_date`），
+//     届时 `name` 会变成真实工单名 ⇒ **下面两个样本的 `name` 是按新契约手写的**，
+//     重采时要把这一项换回实测值（替换前请确认新响应里 `name !== drawing_no`）。
 //   · `process_chain_id`：两个样本里的 null 是采集时的实际值；放回端点此后会改为投影
 //     `t_part.process_chain_id`（链四件套正是沿它派生），届时该值可能非 null。字段声明是
 //     nullable，两种取值都过守门，故不必为此重采 —— 但重采时别把这个 null 当成「后端
@@ -299,7 +304,9 @@ const heldRowFixture = {
 const wirePickRow = {
   id: '226157188085710848',
   serial_no: 'F2256',
-  name: 'E42BD20009014101',
+  // 2026-10-04：原样本这里填的是图号（与 drawing_no 相同），那是后端把图号当工单名下发的
+  // 实测值。补真实投影后 `name` 才是工单名，按新契约手写成可辨识的名字。
+  name: '齿轮轴',
   drawing_no: 'E42BD20009014101',
   applicant_name: '',
   quantity: 2,
@@ -342,7 +349,8 @@ const wirePickRow = {
 const wireHeldRow = {
   id: '228801248768294912',
   serial_no: 'F2475',
-  name: 'E42703FZJ294500',
+  // 2026-10-04：同 wirePickRow —— 原样本是图号，补真实投影后按工单名手写
+  name: '连接法兰',
   drawing_no: 'E42703FZJ294500',
   applicant_name: '',
   quantity: 2,
@@ -594,6 +602,13 @@ describe('W 组：wire 样本过守门（实测转录部分 + 按契约手写的
   // 两个 transform 的实测值：真实响应里两个日期**恒为占位符字符串 '1970-01-01'**
   // （不是 null、不是缺键）—— 归一后必须变 null，否则 DeliveryDateChip 会显示
   // 「01/01 · 已逾期 2 万多天」。反之字段本身仍必填（键恒在，值为字符串）。
+  //
+  // ⚠️ 2026-10-04 部署顺序约束：本断言锁的是**后端补真实投影之前**的 wire 形态。后端给
+  // `pickable-by-work-type` / `by-worker` 补上 part 侧 `system_delivery_date` /
+  // `planned_delivery_date` 的真投影之后，这两个样本上的 `'1970-01-01'` 会变成真实日期，
+  // 归一结果就不再是 null ⇒ **届时本条要改成「真实日期原样透传」，并把两个 wire 样本整体
+  // 重采**。在那之前它必须保持现状：后端投影没上之前 wire 上确实是占位值，chip 恒渲染
+  // 「-」是这个前提的必然结果（发布顺序问题，不是渲染缺陷）。
   it('W2：真实样本的两个日期是占位符字符串，归一后为 null', () => {
     expect(wirePickRow.request_date).toBe('1970-01-01');
     expect(wirePickRow.planned_delivery_date).toBe('1970-01-01');
@@ -675,6 +690,59 @@ describe('W 组：wire 样本过守门（实测转录部分 + 按契约手写的
     expect(held.chain_next_process_id).toBe('0');
     expect(held.chain_next_process_name).toBeNull();
     expect(held.chain_current_process_name).toBe('CUT-01 下料');
+  });
+
+  // 2026-10-04 新增：后端补 part 侧真实投影之后，报工台三页真正会遇到的行形态 —— 加急件、
+  // 有系统交期、两个日期都缺。此前样本里 `is_urgent` 恒 false、`system_delivery_date` 恒
+  // null、两个日期恒占位符，**这三种形态一条都没有被验过**：schema 若把
+  // `system_delivery_date` 声明成必填、或把 `is_urgent` 声明成 string，W1~W6 全绿而线上
+  // 报工台三页全崩（chip 不渲染、加急行不激活、排序静默退化）。
+  it('W7：补真实投影后的三种行形态过守门（加急 / 有系统交期 / 两个日期都缺）', () => {
+    const urgentWithSys = scanPartRowSchema.parse({
+      ...wirePickRow,
+      name: '急件齿轮轴',
+      is_urgent: true,
+      system_delivery_date: '2026-12-31',
+      planned_delivery_date: '2026-11-15',
+    });
+    // 加急 + 系统交期：chip 会显示 12/31，「加急」tag 与 .part-row.is-urgent 整行红底同时生效
+    expect(urgentWithSys.is_urgent).toBe(true);
+    expect(urgentWithSys.system_delivery_date).toBe('2026-12-31');
+    // 真实计划交期不得被占位符归一误伤（它只归一 1970-01-01）
+    expect(urgentWithSys.planned_delivery_date).toBe('2026-11-15');
+    // 名字是真实工单名而非图号（chip 上方的工单名行直接渲染它）
+    expect(urgentWithSys.name).toBe('急件齿轮轴');
+    expect(urgentWithSys.name).not.toBe(urgentWithSys.drawing_no);
+
+    // 无系统交期但有计划交期：chip 显示 '-'，计划交期只作排序键
+    const plannedOnly = scanPartRowSchema.parse({
+      ...wireHeldRow,
+      system_delivery_date: null,
+      planned_delivery_date: '2026-10-20',
+    });
+    expect(plannedOnly.system_delivery_date).toBeNull();
+    expect(plannedOnly.planned_delivery_date).toBe('2026-10-20');
+
+    // 两个日期都缺：仍必须 parse 通过（不是抛错、不是被 strip 掉键）
+    const noDates = scanPartRowSchema.parse({
+      ...wireHeldRow,
+      system_delivery_date: null,
+      planned_delivery_date: null,
+      request_date: null,
+      is_urgent: false,
+    });
+    expect(noDates.system_delivery_date).toBeNull();
+    expect(noDates.planned_delivery_date).toBeNull();
+    expect(noDates.request_date).toBeNull();
+    expect(noDates.is_urgent).toBe(false);
+    // 键集不变：归一只改值不改键（strip 会把键悄悄吃掉）
+    expect(Object.keys(noDates).sort()).toEqual(Object.keys(wireHeldRow).sort());
+
+    // 反向锁：把这三个字段的类型改坏必须被拒（证明上面三条不是恒真断言）
+    expect(() => scanPartRowSchema.parse({ ...wirePickRow, is_urgent: 'true' })).toThrow(ZodError);
+    expect(() => scanPartRowSchema.parse({ ...wireHeldRow, system_delivery_date: 20261231 })).toThrow(
+      ZodError,
+    );
   });
 });
 
