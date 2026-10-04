@@ -82,30 +82,6 @@ export interface PdfSource {
   originPdfUid?: string;
 }
 
-/**
- * row → upload session file 缝合标记（2026-09-18 接入 upload_session 时新增）。
- *
- * 当 row.fileLink 非空时：
- * - client_ref：upload session 中分配的 client_ref（refetch / markComplete /
- *   removeFiles / consumeFiles 都用这个 key）；
- * - sha256：图纸 SHA-256 hex（与后端 SessionFile.content_sha256 对齐，便于
- *   后端 commit 时按 (sha) 验真）；
- * - tmp_key：COS tmp 区 key（提交时挂到 part_batch payload 的 drawing_file）。
- *
- * UI 层根据 fileLink 是否存在决定渲染「已上传」态还是「需选择文件」态。
- */
-export interface FileLink {
-  client_ref: string;
-  sha256: string;
-  tmp_key: string;
-  /** 文件大小（bytes），用于 row.fileSize 显示；session.files 中也有但不强依赖 */
-  file_size?: number;
-  /** 原始文件名（仅展示）；session.files.original_filename 同源 */
-  original_filename?: string;
-  /** 绑定时间（ISO8601）；session.files.uploaded_at 同源，UI 展示用 */
-  uploaded_at?: string | null;
-}
-
 /** 独立零件表的一行。 */
 export interface StandalonePartRow {
   uid: string;
@@ -131,21 +107,6 @@ export interface StandalonePartRow {
   total_price: number | null;
   /** PR-H 2026-07-28：3D 模型数组下标；null = 不挂 */
   three_d_index: number | null;
-  /**
-   * 2026-09-18 接入 upload_session：当 row 由 session.files 中 status=done 的
-   * 条目恢复而来时设置，UI 据此展示「已上传」badge + 跳过文件选择器。
-   * 普通新解析行不设置（保持 null）。
-   */
-  fileLink?: FileLink | null;
-  /**
-   * 2026-09-18 A3：hydrate 时 snapshot 原 drawing_client_ref 的"曾上传过"标记。
-   * 区分两种 null fileLink：
-   * - fileLink=null + fileLinkNeedReselect=true → 之前传过但 session 失效，需重传；
-   * - fileLink=null + fileLinkNeedReselect=false → 从未上传，保持普通态。
-   * 仅 deserialize 时根据 snapshot.drawing_client_ref + drawing 状态写入，
-   * 用户编辑 / 新增行不会自动设置（默认 undefined，UI 当 false 处理）。
-   */
-  fileLinkNeedReselect?: boolean;
 }
 
 /** 装配件子件。分厂 / 申请人由顶层 AssemblyRow 指定，提交时复制到每条 item。 */
@@ -168,10 +129,6 @@ export interface AssemblyChildRow {
   total_price: number | null;
   /** PR-H 2026-07-28：3D 模型数组下标；null = 不挂 */
   three_d_index: number | null;
-  /** 2026-09-18 接入 upload_session：见 StandalonePartRow.fileLink 注释 */
-  fileLink?: FileLink | null;
-  /** 2026-09-18 A3：见 StandalonePartRow.fileLinkNeedReselect 注释 */
-  fileLinkNeedReselect?: boolean;
 }
 
 /** 装配件顶层行。 */
@@ -193,10 +150,6 @@ export interface AssemblyRow {
   /** 装配体套数（默认 1）。2026-08-04 新增：用于背面页 Q: 打印 */
   quantity: number;
   children: AssemblyChildRow[];
-  /** 2026-09-18 接入 upload_session：顶层 master 也可能来自 session.files；见上 */
-  fileLink?: FileLink | null;
-  /** 2026-09-18 A3：见 StandalonePartRow.fileLinkNeedReselect 注释 */
-  fileLinkNeedReselect?: boolean;
 }
 
 /** 弹窗内显示的 blob URL + 标题 + 起始页。blob URL 由 pdfFiles[i].raw →
@@ -1945,9 +1898,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       unit_price: r.unit_price,
       total_price: r.total_price,
       three_d_index: r.three_d_index,
-      ...(r.fileLink
-        ? { drawing_client_ref: r.fileLink.client_ref, drawing_sha256: r.fileLink.sha256 }
-        : {}),
     };
   }
 
@@ -1969,9 +1919,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       is_urgent: a.is_urgent,
       masterPageIndex: a.masterPageIndex,
       quantity: a.quantity,
-      ...(a.fileLink
-        ? { drawing_client_ref: a.fileLink.client_ref, drawing_sha256: a.fileLink.sha256 }
-        : {}),
       children: a.children.map(serializeAssemblyChildRow),
     };
   }
@@ -1993,9 +1940,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       unit_price: c.unit_price,
       total_price: c.total_price,
       three_d_index: c.three_d_index,
-      ...(c.fileLink
-        ? { drawing_client_ref: c.fileLink.client_ref, drawing_sha256: c.fileLink.sha256 }
-        : {}),
     };
   }
 

@@ -420,17 +420,6 @@
                   <el-tag v-if="c.three_d_index !== null" type="success" size="small">3D ✓</el-tag>
                 </template>
               </el-table-column>
-              <!-- 2026-09-18 A3：子件 fileLink 状态 tag（与独立零件 / 装配件顶层同语义） -->
-              <el-table-column label="图纸上传" min-width="100" align="center">
-                <template #default="{ row: c }">
-                  <template v-if="(c as AssemblyChildRow).fileLink?.client_ref">
-                    <el-tag type="success" size="small">已上传</el-tag>
-                  </template>
-                  <template v-else-if="(c as AssemblyChildRow).fileLinkNeedReselect">
-                    <el-tag type="warning" size="small">需重传</el-tag>
-                  </template>
-                </template>
-              </el-table-column>
               <el-table-column label="计划交期" min-width="150" align="center">
                 <template #default="{ row: c }">
                   <el-date-picker
@@ -690,7 +679,6 @@ import UploadStatusCellView from '@/components/UploadStatusCellView.vue';
 import type {
   AssemblyChildRow,
   AssemblyRow,
-  FileLink,
   PdfPreviewState,
   SourceTreeRow,
   StandalonePartRow,
@@ -880,29 +868,6 @@ function onRetryRowThreeD(row: { pdfSourceUid: string; three_d_index: number | n
   void props.retryUploadByCell(`3d:${String(f.uid)}`);
 }
 
-// ============ 2026-09-18 A3：row.fileLink 状态 tag（cellRender helper）============
-//
-// 三种渲染分支：
-// - fileLink?.client_ref 非空 → 已上传（绿 type=success）；
-// - fileLink=null + fileLinkNeedReselect=true → 需重传（黄 type=warning，
-//   之前 snapshot 有 drawing_client_ref 但 session 没命中，session 失效或已被消费）；
-// - fileLink=null + fileLinkNeedReselect=false → 未上传（不渲染 tag）。
-//
-// 返回 NOTHING（空 span）让 h('div', {}, [...]) 渲染出 0 子节点空 div 视觉对齐。
-const NOTHING = h('span', null);
-function renderFileLinkTag(
-  fileLink: FileLink | null | undefined,
-  needReselect: boolean | undefined,
-): typeof NOTHING {
-  if (fileLink?.client_ref) {
-    return h(ElTag, { type: 'success', size: 'small' }, () => '已上传');
-  }
-  if (needReselect) {
-    return h(ElTag, { type: 'warning', size: 'small' }, () => '需重传');
-  }
-  return NOTHING;
-}
-
 // ============ 2026-08-27 T23：列顺序拖动 + 可见性（3 个 el-table）============
 // 与 composable 持有的 row-drag（tbody Sortable）独立 —— 列拖挂表头 <tr>（列换序；
 // 绑 thead 会变成拖整行，2026-08-27 修正）。
@@ -1004,8 +969,6 @@ const columnDefs_standalone: ColumnDef[] = [
           },
           () => props.pdfSourceLabel(r.pdfSourceUid),
         ),
-        // 2026-09-18 A3：row.fileLink 状态 tag（见 renderFileLinkTag 注释）
-        renderFileLinkTag(r.fileLink, r.fileLinkNeedReselect),
       ]);
     },
   },
@@ -1263,8 +1226,6 @@ const columnDefs_assembly: ColumnDef[] = [
           },
           () => props.pdfSourceLabel(r.pdfSourceUid),
         ),
-        // 2026-09-18 A3：见 standalone 注释
-        renderFileLinkTag(r.fileLink, r.fileLinkNeedReselect),
       ]);
     },
   },

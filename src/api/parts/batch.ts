@@ -66,14 +66,15 @@ export interface PartBatchFilePayload {
 
 /** `POST /parts/batch` 单 item 入参（FE 视图）。
  *
- *  与 rust 后端 `PartBatchCreateItem`（`backend-rust/src/modules/part/dto_crud.rs:47`）
- *  对齐：后端契约要求 top-level `customer_id`，item 不带；FE 多带几个可选字段
- *  （`applicant_id` / `unit_price`）后端 serde 默认忽略，不影响解析。
+ *  与 rust 后端 `PartBatchCreateItem`（`backend-rust/src/modules/part/dto_crud.rs`
+ *  的 batch create 段）对齐：后端契约要求 top-level `customer_id`，item 不带；FE
+ *  多带几个可选字段（`applicant_id` / `unit_price`）后端 serde 默认忽略，不影响解析。
  *  2026-09-16 PR-2：`actual_delivery_date` 随 t_part 瘦身从出入参一并移除。
  *
- *  2026-09-16 M3：新增可选 `drawing_file` / `model3d_file`（FileBinding）——
- *  前端直传 COS 后用这两个字段把 tmp_key + sha 绑定到新 part。至少 status=done
- *  才允许提交（M3-C 强制）；上传失败 → 表单提交按钮 disabled。 */
+ *  `drawing_file` / `model3d_file` 是后端契约字段：填了就由后端在建单事务内
+ *  head + copy tmp → 正式 CAS key（入参形状见 `types/part_file.ts` 的 `FileBinding`）；
+ *  不填则这一步跳过，文件改在建单之后由
+ *  `POST /parts/{id}/upload-drawing` / `upload-3d-model` 补传。 */
 interface PartBatchCreateItemFE {
   name: string;
   drawing_no: string;
@@ -86,9 +87,9 @@ interface PartBatchCreateItemFE {
   system_delivery_date?: string | null;
   note?: string | null;
   applicant_id?: string | null;
-  /** 2026-09-16 M3：可选图纸文件绑定（DRAWING kind）。 */
+  /** 可选图纸文件绑定（DRAWING kind）。后端在建单事务内 head + copy tmp → 正式 CAS key。 */
   drawing_file?: FileBinding;
-  /** 2026-09-16 M3：可选 3D 模型绑定（3D_MODEL kind）。 */
+  /** 可选 3D 模型绑定（3D_MODEL kind），语义同上。 */
   model3d_file?: FileBinding;
 }
 
@@ -115,11 +116,11 @@ interface PartBatchCreateOutFE {
 
 /** `POST /parts/batch` 单 item 入参（含可选文件绑定）。
  *
- * 2026-09-16 M3 新增：扩展 `PartCreatePayload` 携带文件绑定。新建工单时若已
- *  直传 COS 成功（status=done），把 `binding` 字段传给本函数即可组装进 batch
- *  item 的 `drawing_file` / `model3d_file`。 */
+ *  `drawing_file` / `model3d_file` 是后端契约字段：填了就由后端在建单事务内
+ *  head + copy tmp → 正式 CAS key；不填则建单不挂文件，文件走建单后的
+ *  `POST /parts/{id}/upload-drawing` / `upload-3d-model` 补传。 */
 export interface PartBatchCreatePayload extends PartCreatePayload {
-  /** 选填：图纸文件绑定（已直传 COS 完成后传入）。 */
+  /** 选填：图纸文件绑定。 */
   drawing_file?: FileBinding;
   /** 选填：3D 模型文件绑定。 */
   model3d_file?: FileBinding;
@@ -131,9 +132,11 @@ export interface PartBatchCreatePayload extends PartCreatePayload {
  * 后置补传（见 `./file.ts`）；本函数的 `created[].sourceIndex` 就是 caller 把
  * 「建出来的 part」对回「本地哪一行」的锚。
  *
- * 2026-10-04：item 侧的 `drawing_file` / `model3d_file`（FileBinding）在本仓已无
- * 生产者 —— 走的是后置上传，不需要把 COS tmp 绑在建单请求里。字段与类型保留，
- * 供后端契约对齐时参考。
+ * 2026-10-04：item 侧两个文件绑定字段的当前分工 —— `drawing_file` 只有 Tab 1
+ * 「手工录入」在填（该 Tab 走 `useCosUploader` 前端直传 COS，建单时把 tmp_key +
+ * sha 一并绑进来）；Tab 2「PDF 批量上传」是建单后逐 part 后置上传，建单请求里
+ * 不带这两个字段。`model3d_file` 目前全仓没有填它的调用点。两者的差别只在文件
+ * 到达建单请求之前还是之后，字段本身是后端契约字段，保留。
  *
  * 后端 multipart 端点 `POST /parts/batch-with-pdfs` 的语义是「单 PDF 多页 → 拆成装配件」，
  * 入参里没有 `items` 数组，服务端自己造一个 `装配件-{今天}` 并按 PDF 页数拆子件，
