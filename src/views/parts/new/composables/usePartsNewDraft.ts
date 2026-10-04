@@ -30,11 +30,10 @@
 
 import { useAuthStore } from '@/stores/auth';
 
-// 2026-09-28 删 useUploadSession + @/types/upload_session：原 SessionFile / UploadSession
-// 类型改为内联松散结构类型，仅保留 merge 函数读到的字段（client_ref / status / kind /
-// tmp_key / file_size / original_filename / uploaded_at / files）。UI 消费端下游
-// orphanFileRefs 也已在本仓库收口到 `Array<{ client_ref; kind; original_filename; file_size;
-// uploaded_at; tmp_key }>`（详见 usePartBatchPdf.ts 接口签名注释）。
+// upload session 链路已删除：原 SessionFile / UploadSession 类型改为内联松散结构
+// 类型 DraftSessionFile，仅保留 merge 函数读到的字段（client_ref / status / kind /
+// tmp_key / file_size / original_filename / uploaded_at / files）。UI 消费端
+// MergeResult.orphanFileRefs 直接用 DraftSessionFile[]。
 
 // ============================================================
 // 序列化类型（与后端契约对齐：version=1 即可）
@@ -150,25 +149,20 @@ export interface SerializedColumnLayout {
   widths?: Record<string, number>;
 }
 
-/** PDF Tab 完整快照。 */
+/** PDF Tab 完整快照。
+ *
+ * 2026-10-04：草稿只承载**行数据**（可序列化的部分），不承载任何 partId 映射。
+ * 已知的取舍：上传失败后刷新页面，`File` 不跨刷新存活、用户必须重新选文件再提交，
+ * 而重新解析出的行 uid 每次都是新生成的（`makeUid` 走 `crypto.randomUUID`），
+ * 所以任何「行 → 已建 partId」的映射都对不上新行，刷新后再次提交必然重建工单
+ * （`POST /parts/batch` 无幂等键）。要根治得让行 uid 可复现，属独立设计变更。
+ */
 export interface SerializedPdfTab {
   customerL1Id: string | null;
   requestDate: string;
   rows: SerializedStandalonePartRow[];
   assemblies: SerializedAssemblyRow[];
   selectedPages: string[];
-  /**
-   * 2026-10-04 新增：rowUid → partId 映射（`POST /parts/batch` 建出来的 part）。
-   *
-   * 存在的唯一理由：**工单已落库、不可回滚**。Tab 2 的上传失败语义是「工单已建 +
-   * 失败行清单可重试」；用户此时刷新页面，`File` 对象不跨刷新存活、必然要重新选
-   * 文件。没有这份映射，重试就只能重走 `POST /parts/batch`，把同一批工单**再建一遍**。
-   *
-   * 2026-10-04 同时删除 `file_links`（client_ref / sha256 / bound_row_ids）：它是
-   * upload session 直传链路的文件绑定索引，本仓已无任何生产者，保留只会让人误以为
-   * 能从快照恢复文件。
-   */
-  created_part_ids?: Record<string, string>;
   column_layout?: SerializedColumnLayout;
 }
 

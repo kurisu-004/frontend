@@ -2,9 +2,14 @@
 //
 // 2026-10-04 单按钮 + 后端上传：提交入口收敛成一个 `onSubmit`，内部三段
 // `idle → creating（POST /parts/batch 建工单）→ uploading（逐个 part 后置补传图纸 /
-// 3D）→ done`。上传失败语义是「工单已建 + 失败行清单可重试」——工单落库不可回滚，
-// 所以 `createdPartIds`（本地 rowUid → partId）跨 done 保留，是「重试只重传文件、
-// 绝不重复建 part」的唯一保证。
+// 3D）→ done`。上传失败语义是「工单已建 + 失败清单可重试」——工单落库不可回滚，
+// 所以 `commitStage` 一旦越过 creating 就绝不回 idle（回 idle 会让用户再点一次
+// 主按钮，把同一批工单建第二遍），重试一律只补传文件。
+//
+// 已知取舍：跨刷新的重复建单**未**防住。`File` 不跨刷新存活、刷新后必须重新选文件
+// 再提交，而重新解析出来的行 uid 每次都是新的（`makeUid` 走 crypto.randomUUID），
+// 任何 uid → partId 映射都对不上新行，所以草稿里不落任何 partId 映射。要根治得让
+// 行 uid 可复现（解析结果按文件名+页码派生），属独立设计变更。
 
 import {
   computed,
@@ -22,7 +27,13 @@ import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { batchCreateParts, uploadPart3DModel, uploadPartDrawing } from '@/api/parts';
 import type { CreatedPartItem, PartBatchCreatePayload } from '@/api/parts';
-import { usePartsNewDraft, type SerializedAssemblyChildRow, type SerializedAssemblyRow, type SerializedPdfTab, type SerializedStandalonePartRow } from '@/views/parts/new/composables/usePartsNewDraft';
+import {
+  usePartsNewDraft,
+  type SerializedAssemblyChildRow,
+  type SerializedAssemblyRow,
+  type SerializedPdfTab,
+  type SerializedStandalonePartRow,
+} from '@/views/parts/new/composables/usePartsNewDraft';
 import type { Customer } from '@/api/customer';
 import type { PartFileKind } from '@/types/part_file';
 import { parseBidExcel, type BidRow, type ParseResult } from '@/utils/bidExcelParser';
@@ -273,7 +284,6 @@ export interface UsePartBatchPdfReturn {
   previewSourceRow: (row: SourceTreeRow) => void;
   pdfUploadCells: Record<string, UploadStatusCell>;
   threeDUploadCells: Record<string, UploadStatusCell>;
-  hasUploadErrors: ComputedRef<boolean>;
   getRowPdfCell: (row: { pdfSourceUid: string }) => UploadStatusCell | undefined;
   getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCell | undefined;
   /** 2026-10-04：单按钮提交流程的阶段机，替代原 uploadStage 两段式。 */
@@ -281,7 +291,7 @@ export interface UsePartBatchPdfReturn {
   canSubmit: ComputedRef<boolean>;
   /** 2026-10-04：按钮文案（提交 / 重试 / 进行中三态都由这里驱动）。 */
   submitLabel: ComputedRef<string>;
-  /** 行内单文件重试：按 cell key 反查 job 重跑（不重复建 part）。 */
+  /** 行内单文件重试：按 cell key 取其下仍失败的 job 重跑（不重复建 part）。 */
   retryUploadByCell: (jobKey: string) => Promise<void>;
   onSubmit: () => Promise<void>;
   retryFailedUploads: () => Promise<void>;
@@ -1389,14 +1399,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     return threeDUploadCells[`3d:${f.uid}`];
   }
 
-  /** 当前是否有任何文件上传失败（用于提交按钮 disabled）。 */
-  const hasUploadErrors = computed<boolean>(() => {
-    return (
-      Object.values(pdfUploadCells).some((c) => c.status === 'error') ||
-      Object.values(threeDUploadCells).some((c) => c.status === 'error')
-    );
-  });
-
   /**
    * 文件上传条目（统一容器）。
    * - key：UI cell / 后置上传 job 的键（`pdf:${srcUid}` / `3d:${fileUid}`）。
@@ -1480,7 +1482,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       })).rowRefs.push(ref);
     };
     for (const r of standaloneParts.value) {
-      if (r.three_d_index !== null) attachThreeD({ rowKind: 'standalone', rowUid: r.uid }, r.three_d_index);
+      if (r.three_d_index !== null)
+        attachThreeD({ rowKind: 'standalone', rowUid: r.uid }, r.three_d_index);
     }
     for (const a of assemblies.value) {
       for (const c of a.children) {
@@ -1497,62 +1500,151 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   // ============================================================
 
   /**
-   * 2026-10-04 定：后端 `upload_part_file` 把整份 multipart 读进内存（`&[u8]`）再转存
-   * 对象存储，6 是内存安全上限（6 × 30MB ≈ 180MB 峰值）。并发数不按文件数放大。
+   * 2026-10-04 定：并发上限。瓶颈在后端内存 —— `upload_part_file` 把整份 multipart
+   * 读进内存（`&[u8]`）再转存对象存储，单文件上限 300MB（`cos.max_file_size`），
+   * 所以 6 是「几路并发不至于把后端内存打爆」的保守值，不是吞吐最优值。
+   * 不取更小的 3：文件字节现在全过后端，限制在服务端一侧（对象存储直传链路才是
+   * 浏览器侧受限），按浏览器侧的余量取值对后端没有意义。
    */
   const PART_UPLOAD_CONCURRENCY = 6;
 
   /** 一次后置上传作业 = 一个 part × 一份原件。 */
   interface UploadJob {
+    /**
+     * job 的稳定身份 = `${jobKey}:${partId}`（jobKey 已含 `pdf:` / `3d:` 前缀，故
+     * 天然区分 kind）。job 状态、失败清单、重试集合全按它寻址 —— 粒度必须是 job
+     * 而不是 cell：一份 PDF 被装配件 master + N 个子件共享时会展开成 N+1 个 job，
+     * 只失败其中一个时按 cell 重试会把已成功的也重跑一遍，而后端
+     * `uk_t_part_file_single(part_id, kind)` 会对二次上传报 21108「相同文件已存在」。
+     */
+    id: string;
     /** = entry.key（`pdf:<uid>` / `3d:<uid>`），同时是 UI cell 的键。 */
     jobKey: string;
-    /** 雪花 ID 字符串（后端 JSON 里是 string，URL 拼接前统一 String()）。 */
+    /** 雪花 ID 字符串（后端 JSON 里是 string）。 */
     partId: string;
     kind: PartFileKind;
     entry: FileUploadEntry;
   }
+
+  /** job 运行时状态。`error` 的错误文案存在 failedJobs 里，不在状态里。 */
+  type UploadJobState = 'pending' | 'uploading' | 'done' | 'error';
 
   /** 本次提交的 `items[i]` 对应的本地行 uid（与 `created[].sourceIndex` 同坐标系）。 */
   const itemRowUids = ref<string[]>([]);
 
   /** 提交流程阶段机。转移：
    *  - idle → creating → uploading → done
-   *  - creating/uploading 任一步失败 → 回 idle（未建单时可安全重来）
-   *  - done（无失败）→ 清空重来；done（有失败）→ 只走 retryFailedUploads，不再建单 */
+   *  - creating 失败 → 回 idle（后端没有留下工单，可安全重来）
+   *  - uploading 阶段失败 → 转 done 走失败清单（工单已落库，回 idle 会让用户再点
+   *    一次主按钮、把同一批工单建第二遍）
+   *  - done（无失败）→ 清空跳页；done（有失败）→ 只走重试上传，不再建单 */
   const commitStage = ref<'idle' | 'creating' | 'uploading' | 'done'>('idle');
 
   /**
    * 本地 rowUid → 已建出的 partId。**跨 done 保留**（重试路径绝不清空）：工单已落库
-   * 不可回滚，这是「重试只重传文件、绝不重复建 part」的唯一保证。
+   * 不可回滚，这是同一次页面停留内「重试只重传文件、绝不重复建 part」的唯一保证。
+   * 跨刷新的取舍见文件头注释。
    */
   const createdPartIds = new Map<string, string>();
 
-  /** 本次提交的全部上传作业。`retryFailedUploads` / 行内重试都从它派生，不重跑建单。 */
+  /** 本次提交的全部上传作业。重试从中挑失败子集，不重跑建单。 */
   let uploadJobs: UploadJob[] = [];
+  /** jobKey → 该 cell 名下的全部 job（cell 状态按它聚合推导）。 */
+  let jobsByCellKey = new Map<string, UploadJob[]>();
+  /** jobId → 状态。 */
+  const jobStates = new Map<string, UploadJobState>();
+  /**
+   * 失败 job：jobId → { job, error }。失败清单与重试集合的唯一来源。
+   * reactive（Vue 的集合代理）⇒ 按 job 粒度的计数可以直接进 computed。
+   */
+  const failedJobs = reactive(new Map<string, { job: UploadJob; error: string }>());
 
-  /** 失败 job 清单（行号 + 错误），汇总时弹给用户看。 */
-  function failedJobLines(): string[] {
-    const out: string[] = [];
-    for (const job of uploadJobs) {
-      const cell =
-        job.kind === 'DRAWING' ? pdfUploadCells[job.jobKey] : threeDUploadCells[job.jobKey];
-      if (cell?.status !== 'error') continue;
-      out.push(`第 ${job.partId} 号零件 · ${job.entry.filename}：${cell.error ?? '上传失败'}`);
-    }
-    return out;
+  /** 当前是否有任何 job 上传失败（主按钮 disabled + 重试分支的判据）。 */
+  const hasUploadErrors = computed<boolean>(() => failedJobs.size > 0);
+
+  /** 失败 job 数（按钮文案用，口径与失败清单的行一一对应）。 */
+  const failedJobCount = computed<number>(() => failedJobs.size);
+
+  /** cell key → 对应的响应式 cell（PDF / 3D 分表存）。 */
+  function cellOf(jobKey: string, kind: PartFileKind): UploadStatusCell | undefined {
+    return kind === 'DRAWING' ? pdfUploadCells[jobKey] : threeDUploadCells[jobKey];
   }
 
-  /** 汇总上传结果：无失败 → 提示 + 清空跳页；有失败 → 弹清单 + 保留现场供重试。 */
+  /**
+   * 由 jobStates / failedJobs 重新推导每个 cell 的状态，**不就地覆盖**。
+   *
+   * 同一份文件可能被 N+1 个 job 共用一个 cell：任一 job 失败即 error（该文件确实
+   * 没传全），但重试时只重跑失败的那个 job，成功过的不会再动。error 文案取第一个
+   * 失败 job 的错误（同一份文件、同一批请求，错误基本一致）。
+   */
+  function syncCells(): void {
+    for (const [jobKey, jobs] of jobsByCellKey) {
+      const cell = cellOf(jobKey, jobs[0]!.kind);
+      if (!cell) continue;
+      const firstFailed = jobs.find((j) => failedJobs.has(j.id));
+      if (firstFailed) {
+        cell.status = 'error';
+        cell.progress = 0;
+        cell.error = failedJobs.get(firstFailed.id)!.error;
+        continue;
+      }
+      delete cell.error;
+      if (jobs.every((j) => jobStates.get(j.id) === 'done')) {
+        cell.status = 'done';
+        cell.progress = 100;
+      } else if (jobs.some((j) => jobStates.get(j.id) === 'uploading')) {
+        cell.status = 'uploading';
+        cell.progress = 0;
+      } else {
+        cell.status = 'pending';
+        cell.progress = 0;
+      }
+    }
+  }
+
+  /** 登记一次提交的全部 job（并按 jobKey 建 cell）。重试不重跑这里。 */
+  function registerUploadJobs(jobs: UploadJob[]): void {
+    uploadJobs = jobs;
+    jobsByCellKey = new Map();
+    jobStates.clear();
+    failedJobs.clear();
+    Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
+    Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
+    for (const job of jobs) {
+      const list = jobsByCellKey.get(job.jobKey) ?? [];
+      list.push(job);
+      jobsByCellKey.set(job.jobKey, list);
+      jobStates.set(job.id, 'pending');
+      const bucket = job.kind === 'DRAWING' ? pdfUploadCells : threeDUploadCells;
+      if (!bucket[job.jobKey]) bucket[job.jobKey] = { status: 'pending', progress: 0 };
+    }
+    syncCells();
+  }
+
+  /** 失败 job 清单（每行 = 一个 part × 一份原件），汇总时弹给用户看。 */
+  function failedJobLines(): string[] {
+    return Array.from(failedJobs.values()).map(
+      (f) => `第 ${f.job.partId} 号零件 · ${f.job.entry.filename}：${f.error}`,
+    );
+  }
+
+  /**
+   * 汇总上传结果：无失败 → 提示 + 清空跳页；有失败 → 弹清单 + 保留现场供重试。
+   *
+   * 计数口径统一为 **job**（一个 part × 一份原件 = 一项），与下面清单的行一一对应：
+   * 一份 PDF 被装配件 master + N 子件共享时是 N+1 项，标题若按「文件数」算就会
+   * 出现「1 个文件失败」底下列两行零件号的矛盾。涉及的零件数 / 文件数作为补充
+   * 信息一并给出。
+   */
   function summarizeUploads(): void {
-    const failedCount =
-      Object.values(pdfUploadCells).filter((c) => c.status === 'error').length +
-      Object.values(threeDUploadCells).filter((c) => c.status === 'error').length;
-    if (failedCount > 0) {
+    if (failedJobs.size > 0) {
       const lines = failedJobLines();
+      const partCount = new Set(Array.from(failedJobs.values(), (f) => f.job.partId)).size;
+      const fileCount = new Set(Array.from(failedJobs.values(), (f) => f.job.jobKey)).size;
       const sample = lines.slice(0, 5).join('\n');
-      const more = lines.length > 5 ? `\n…还有 ${lines.length - 5} 个文件失败` : '';
+      const more = lines.length > 5 ? `\n…还有 ${lines.length - 5} 项失败` : '';
       ElMessageBox.alert(
-        `工单已创建，但 ${failedCount} 个文件上传失败：\n${sample}${more}\n\n可在本页重试上传（不会重复建单）。`,
+        `工单已创建，但 ${failedJobs.size} 项上传失败（涉及 ${partCount} 个零件 / ${fileCount} 个文件）：\n${sample}${more}\n\n可在本页重试上传（不会重复建单）。`,
         '文件上传失败',
         { type: 'warning' },
       );
@@ -1564,8 +1656,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     ElMessage.success(
       `成功创建 ${createdPartIds.size} 条零件（${standaloneCount} 独立 + ${assemblyMasters} 装配件顶层 + ${childCount} 子件）`,
     );
-    // 2026-10-04：草稿在这里才清 —— 只要还有上传失败就必须留着（created_part_ids
-    // 是刷新后不重复建单的唯一依据）。
+    // 2026-10-04：草稿在这里才清 —— 还有上传失败就必须留着（行数据是用户重选的
+    // 依据，File 本身不跨刷新存活）。
     draft.saver.cancel();
     draft.clear();
     allPdfs.value = [];
@@ -1580,53 +1672,36 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
     Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
     uploadJobs = [];
+    jobsByCellKey = new Map();
+    jobStates.clear();
+    failedJobs.clear();
     createdPartIds.clear();
     successNextTab.value = 'manual';
     router.push('/parts?status=PENDING');
   }
 
-  /** 跑一批 job（受控并发）。每个 job 独立成败，失败写进 cell.error 不抛出。 */
+  /**
+   * 跑一批 job（受控并发）。成败记在 job 上（jobStates / failedJobs）再由 syncCells
+   * 推导 cell 状态；单个 job 抛错只记失败、不影响其它 job，也不外抛。
+   */
   async function runUploadJobs(jobs: UploadJob[]): Promise<void> {
     await runWithConcurrency(jobs, PART_UPLOAD_CONCURRENCY, async (job) => {
-      const cell =
-        job.kind === 'DRAWING' ? pdfUploadCells[job.jobKey] : threeDUploadCells[job.jobKey];
-      if (cell) {
-        cell.status = 'uploading';
-        cell.progress = 0;
-      }
+      jobStates.set(job.id, 'uploading');
+      syncCells();
       try {
-        const partId = String(job.partId);
-        if (job.kind === 'DRAWING') await uploadPartDrawing(partId, job.entry.file);
-        else await uploadPart3DModel(partId, job.entry.file);
-        if (cell) {
-          cell.status = 'done';
-          cell.progress = 100;
-        }
+        if (job.kind === 'DRAWING') await uploadPartDrawing(job.partId, job.entry.file);
+        else await uploadPart3DModel(job.partId, job.entry.file);
+        jobStates.set(job.id, 'done');
+        failedJobs.delete(job.id);
       } catch (e) {
-        if (cell) {
-          cell.status = 'error';
-          cell.error = (e as Error).message ?? '上传失败';
-        }
+        jobStates.set(job.id, 'error');
+        failedJobs.set(job.id, { job, error: (e as Error).message ?? '上传失败' });
       }
+      syncCells();
     });
   }
 
   const draft = usePartsNewDraft();
-
-  /**
-   * 2026-10-04：把上次提交已建出的 partId 从草稿读回来。
-   *
-   * 只在「上次提交停在失败态」时有值；本页不会自动续传（`File` 不跨刷新存活），
-   * 但**必须**留着：否则用户刷新后按重试会重走 `POST /parts/batch`，同一批工单
-   * 会被再建一遍。rowUid 由 makeUid / pageUid 生成、不会与新解析的行撞号，所以即便
-   * 行数据本身是陈旧的，映射指向的 part 也确实是那次提交建出来的。
-   */
-  function restoreCreatedPartIds(): void {
-    const saved = draft.load()?.pdf_tab.created_part_ids;
-    if (!saved) return;
-    for (const [rowUid, partId] of Object.entries(saved)) createdPartIds.set(rowUid, partId);
-  }
-  restoreCreatedPartIds();
 
   // ============================================================
   // draft 持久化：监听 rows / assemblies 变更 → debounce 500ms 写 localStorage
@@ -1643,12 +1718,13 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   // debounce 窗口内合并，开销可接受）。
   if (draft.userId) {
     watch(
-      () => [
-        pdfForm.customerL1Id,
-        pdfForm.requestDate,
-        commitStage.value,
-        JSON.stringify(serializePdfTab()),
-      ] as const,
+      () =>
+        [
+          pdfForm.customerL1Id,
+          pdfForm.requestDate,
+          commitStage.value,
+          JSON.stringify(serializePdfTab()),
+        ] as const,
       () => {
         const prev = draft.load();
         const basePayload = {
@@ -1674,10 +1750,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       rows: standaloneParts.value.map(serializeStandalonePartRow),
       assemblies: assemblies.value.map(serializeAssemblyRow),
       selectedPages: Array.from(selectedPages.value),
-      // 2026-10-04：只在已经建过单（commitStage 非 idle）时落盘，idle 态不写空壳。
-      ...(commitStage.value !== 'idle' && createdPartIds.size > 0
-        ? { created_part_ids: Object.fromEntries(createdPartIds) }
-        : {}),
     };
   }
 
@@ -1757,37 +1829,33 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     };
   }
 
-  /** 是否可以点主按钮：idle 态有内容可提交，或 done 态还有失败文件待重试。 */
+  /** 是否可以点主按钮：idle 态有内容可提交，或 done 态还有失败上传待重试。 */
   const canSubmit = computed<boolean>(() => {
     if (commitStage.value === 'done') return hasUploadErrors.value;
     if (commitStage.value !== 'idle') return false;
     return standaloneParts.value.length > 0 || assemblies.value.length > 0;
   });
 
-  /** 失败文件数（按钮文案用）。 */
-  const failedFileCount = computed<number>(
-    () =>
-      Object.values(pdfUploadCells).filter((c) => c.status === 'error').length +
-      Object.values(threeDUploadCells).filter((c) => c.status === 'error').length,
-  );
-
   /** 主按钮文案（提交 / 进行中 / 重试三态）。 */
   const submitLabel = computed<string>(() => {
     if (commitStage.value === 'creating') return '正在创建工单…';
     if (commitStage.value === 'uploading') return '正在上传图纸…';
     if (commitStage.value === 'done' && hasUploadErrors.value) {
-      return `重试上传（${failedFileCount.value} 个文件）`;
+      return `重试上传（${failedJobCount.value} 项）`;
     }
     const partCount =
-      standaloneParts.value.length +
-      assemblies.value.length +
-      totalAssemblyChildren.value;
+      standaloneParts.value.length + assemblies.value.length + totalAssemblyChildren.value;
     return `提交创建（${partCount} 个零件）`;
   });
 
-  /** UI 调用：行内单文件重试。`jobKey` 直接取该 cell 自身的 key。 */
+  /**
+   * UI 调用：行内单文件重试。`jobKey` 取该 cell 自身的 key，**只重跑该 key 下仍在
+   * 失败的 job**（同一份文件被多个 part 共享时，已成功的那些不会重传）。
+   * 收尾与 retryFailedUploads 对称：跑完必须 summarizeUploads —— 否则最后一个错误
+   * 修好后页面停在「无失败但按钮禁用」的态，既不提示也不跳页。
+   */
   async function retryUploadByCell(jobKey: string): Promise<void> {
-    const jobs = uploadJobs.filter((j) => j.jobKey === jobKey);
+    const jobs = uploadJobs.filter((j) => j.jobKey === jobKey && failedJobs.has(j.id));
     if (jobs.length === 0) {
       ElMessage.warning('该文件没有待重试的记录，请重新提交');
       return;
@@ -1798,6 +1866,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     } finally {
       pdfSubmitting.value = false;
     }
+    summarizeUploads();
   }
 
   /** 前端兜底：所有 row 的 customer_id 必须有 L2 客户（后端强校验 L2-leaf）。
@@ -1904,8 +1973,15 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       // 的权威锚。
       const rowUid = itemRowUids.value[part.sourceIndex];
       if (!rowUid) continue;
+      const partId = String(part.id);
       for (const entry of byRow.get(rowUid) ?? []) {
-        jobs.push({ jobKey: entry.key, partId: String(part.id), kind: entry.kind, entry });
+        jobs.push({
+          id: `${entry.key}:${partId}`,
+          jobKey: entry.key,
+          partId,
+          kind: entry.kind,
+          entry,
+        });
       }
     }
     // 同一份 PDF 被装配件 master + N 个子件共享时，这里会产出 N+1 个 job（每个 part
@@ -1917,7 +1993,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /** 主按钮：创建工单 + 逐 part 后置上传图纸 / 3D（单入口，2026-10-04）。 */
   async function onSubmit(): Promise<void> {
     if (commitStage.value !== 'idle') {
-      ElMessage.warning(commitStage.value === 'done' ? '工单已创建，请使用「重试上传」' : '正在提交中');
+      ElMessage.warning(
+        commitStage.value === 'done' ? '工单已创建，请使用「重试上传」' : '正在提交中',
+      );
       return;
     }
     if (standaloneParts.value.length === 0 && assemblies.value.length === 0) {
@@ -1926,7 +2004,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
     if (!validateL2Customers()) return;
 
-    // 建单前固化快照：万一上传途中刷新，draft 里的 created_part_ids 能让重试不再建单
+    // 建单前固化快照：上传途中刷新 / 切走时，行数据（含用户已填的分厂、交期）还在
     draft.saver.flush();
 
     const { items, rowUids } = buildCommitItems();
@@ -1962,43 +2040,50 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       });
 
       commitStage.value = 'uploading';
-      uploadJobs = buildUploadJobs(res.created);
-      // cell 状态是「按文件」而非「按 job」的：同一份 PDF 被 N 个 part 共享时所有 job
-      // 共用一个 cell，全部成功才置 done（任一失败即 error，重试会把它们一起重跑）。
-      Object.keys(pdfUploadCells).forEach((k) => delete pdfUploadCells[k]);
-      Object.keys(threeDUploadCells).forEach((k) => delete threeDUploadCells[k]);
-      const seen = new Set<string>();
-      for (const job of uploadJobs) {
-        if (seen.has(job.jobKey)) continue;
-        seen.add(job.jobKey);
-        const cell: UploadStatusCell = { status: 'pending', progress: 0 };
-        if (job.kind === 'DRAWING') pdfUploadCells[job.jobKey] = cell;
-        else threeDUploadCells[job.jobKey] = cell;
+      let jobs: UploadJob[];
+      try {
+        jobs = buildUploadJobs(res.created);
+      } catch (e) {
+        // 工单已落库，但一条上传都还没发出去（job 登记前就抛了）⇒ 封住「再提交一次
+        // 就多建一批工单」的口子：转 done（canSubmit 转 false），并如实说明当前状态。
+        commitStage.value = 'done';
+        ElMessageBox.alert(
+          `工单已创建 ${createdPartIds.size} 条零件，但文件未能开始上传：\n${(e as Error).message ?? '上传失败'}\n\n本批次不会再次建单；图纸请到零件详情页补传。`,
+          '文件上传未开始',
+          { type: 'error' },
+        );
+        return;
       }
-      await runUploadJobs(uploadJobs);
+      registerUploadJobs(jobs);
+      await runUploadJobs(jobs);
 
       commitStage.value = 'done';
       summarizeUploads();
     } catch (e) {
-      // 阶段未过 uploading ⇒ 工单还没建（或建单请求整体失败），回 idle 可安全重来
-      if (commitStage.value !== 'done') commitStage.value = 'idle';
-      ElMessage.error((e as Error).message ?? '提交失败');
+      const msg = (e as Error).message ?? '提交失败';
+      if (commitStage.value === 'uploading') {
+        // 工单已建、补传阶段整体抛错：转 done 走失败清单 / 重试语义（已登记的 job
+        // 各自成败照实汇总）。绝不能回 idle —— 那会让主按钮重新可点，用户再按一次
+        // 就是同一批工单建第二遍。
+        commitStage.value = 'done';
+        summarizeUploads();
+      } else if (commitStage.value === 'creating') {
+        // 建单请求整体失败（网络 / 5xx）：后端没有留下工单，回 idle 可安全重来
+        commitStage.value = 'idle';
+      }
+      ElMessage.error(msg);
     } finally {
       pdfSubmitting.value = false;
     }
   }
 
-  /** 重试全部失败文件（**不重复建工单**）。前置：done 态且仍有失败。 */
+  /** 重试全部失败上传（**不重复建工单**）。前置：done 态且仍有失败 job。 */
   async function retryFailedUploads(): Promise<void> {
     if (commitStage.value !== 'done' || !hasUploadErrors.value) {
       ElMessage.warning('当前没有可重试的上传');
       return;
     }
-    const failed = uploadJobs.filter((j) => {
-      const cell =
-        j.kind === 'DRAWING' ? pdfUploadCells[j.jobKey] : threeDUploadCells[j.jobKey];
-      return cell?.status === 'error';
-    });
+    const failed = uploadJobs.filter((j) => failedJobs.has(j.id));
     if (failed.length === 0) {
       ElMessage.warning('当前没有可重试的上传');
       return;
@@ -2105,7 +2190,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     threeDUploadCells,
     getRowPdfCell,
     getRowThreeDCell,
-    hasUploadErrors,
     // 阶段机 + 主按钮文案
     commitStage,
     canSubmit,
