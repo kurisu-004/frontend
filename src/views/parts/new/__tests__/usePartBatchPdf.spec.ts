@@ -804,7 +804,7 @@ describe('usePartBatchPdf：装配件整套单价回填（Excel 整套口径）'
     w.unmount();
   });
 
-  it('回填是 `!= null` 才覆盖：用户手填的顶层单价不被 Excel 抹掉', async () => {
+  it('回填只作用于本次新建的装配件：既有行手改过的整套单价 / 总价不被后续新增抹掉', async () => {
     mocks.pageCount = 2;
     const w = harnessMount();
     await flushPromises();

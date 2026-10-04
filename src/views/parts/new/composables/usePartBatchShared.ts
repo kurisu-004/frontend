@@ -84,6 +84,12 @@ export function parsePageUid(key: string): { pdfUid: string; pageIndex: number }
  *
  * `null` / `undefined` / `NaN` → `undefined`：调用方据此**不发该键**，后端落默认 0。
  * 不能折成 `'0'` —— 那会把「用户没填价」和「用户明确填了 0 元」混成同一个语义。
+ *
+ * 已知舍入边界：`toFixed(2)` 走 IEEE 754 的 double，半值在两个量级上舍向相反
+ * （`(1.005).toFixed(2) === '1.00'` 而 `(0.005).toFixed(2) === '0.01'`）。UI 录入路径
+ * 上 `ElInputNumber` 的 `precision: 2` 先舍一遍，所以只影响 Excel 回填这类未经
+ * `ElInputNumber` 的值，误差 ≤ 0.01 元，可接受。`(-0).toFixed(2)` 是 `'0.00'`，不产
+ * 出 `-0.00`。
  */
 export function toMoneyString(n: number | null | undefined): string | undefined {
   if (n == null || !Number.isFinite(n)) return undefined;

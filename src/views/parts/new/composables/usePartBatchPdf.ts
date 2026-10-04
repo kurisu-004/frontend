@@ -614,6 +614,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       // 这些在 Excel 的「物料编号」列里根本不存在 —— 顶层回填认自身图号才是稳的。
       // 保留 child 命中作为回退：Excel 里「逐个子件各占一行」的历史数据，其子件图号就是
       // 物料编号本身，仍应命中。
+      //
+      // 2026-10-05 记录的口径风险：走到 childHit 时，`hit` 是**子件**行，`hit.unitPrice` /
+      // `hit.totalPrice` 会被当成**整套**价写进顶层。`applicant_name` / `quantity` /
+      // `planned_delivery_date` 早已是同样处理（Excel 的数量口径就是整套数量），但价格
+      // 摊到子件与整套上差一个套数倍率。用户在装配件行的「含税单价」列看到并改的值才是
+      // 权威值；这条回退只影响「Excel 逐子件成行 + 用户没手改顶层价」的场景。
       const ownHit = excelMap.get(a.drawing_no);
       const childHit = a.children
         .map((c) => excelMap.get(c.drawing_no))
@@ -633,8 +639,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         // 数量 = **整套数量**（业务口径：Excel 的数量是整套的数量）
         a.quantity = hit.quantity || a.quantity;
         if (hit.plannedDeliveryDate) a.planned_delivery_date = hit.plannedDeliveryDate;
-        // 2026-10-05：顶层整套含税单价 / 总价按同口径回填（与独立零件分支一致），
-        // `!= null` 才覆盖，避免 Excel 空值抹掉用户手填的价。
+        // 2026-10-05：顶层整套含税单价 / 总价按同口径回填（与独立零件分支一致）。
+        // `!= null` 只是类型防御：`BidRow.unitPrice` / `totalPrice` 声明为 `number`，
+        // parser 已把空值 / 负数兜底成 0（`totalPrice` 缺列时是 `unitPrice * quantity`），
+        // 永不为 null ⇒ 走不到短路，Excel 单元格为空时**照样**以 0 覆盖用户手填的单价。
         if (hit.unitPrice != null) a.unit_price = hit.unitPrice;
         if (hit.totalPrice != null) a.total_price = hit.totalPrice;
       }

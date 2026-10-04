@@ -67,7 +67,7 @@ describe('batchCreateParts：item 载荷形状', () => {
     expect('total_price' in wire.items[0]!).toBe(false);
   });
 
-  it('total_price 显式 null 时透传 null（交给后端按 unit_price × quantity 兜底算）', async () => {
+  it('total_price 显式 null 时原样透传 null（后端落 0，不做兜底计算）', async () => {
     await batchCreateParts([baseItem({ unit_price: '12.50', total_price: null })]);
 
     const body = mocks.post.mock.calls[0]![1] as { items: Record<string, unknown>[] };

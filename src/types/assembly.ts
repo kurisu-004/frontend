@@ -129,9 +129,15 @@ export interface AssemblyChildPayload {
   name: string;
   quantity?: number;
   applicant_name?: string | null;
-  /** 2026-10-05 新增：子件含税单价（2 位小数字符串）。后端 `Decimal` 只认字符串。 */
+  /** 子件含税单价（2 位小数字符串）。后端是 rust `rust_decimal` + `serde-with-str`，
+   *  **只认 JSON 字符串**，发 number 会被拒或丢精度。
+   *
+   *  2026-10-05：**截至本提交后端还没收这一项** —— `AssemblyChildRequest` 只有
+   *  `name / drawing_no / planned_delivery_date / quantity`，serde 无
+   *  `deny_unknown_fields` ⇒ 现在多发会被**静默忽略**，`t_assembly_child` 的价格列
+   *  仍由后端 insert 写死 0。字段先备好，等后端给装配件子件补齐价格入参后才真正生效。 */
   unit_price?: string;
-  /** 2026-10-05 新增：子件含税总价；null = 让后端按 unit_price × quantity 兜底算。 */
+  /** 子件含税总价（2 位小数字符串）。字符串约束与生效状态同 `unit_price`。 */
   total_price?: string | null;
 }
 
@@ -157,7 +163,8 @@ export interface AssemblyCreatePayload {
   // 2026-10-05：单价 / 总价由 number 改 string —— 后端是 rust `rust_decimal::Decimal`
   // + `serde-with-str`，**只认字符串**，发 JSON number 会被拒或丢精度。
   unit_price?: string;
-  /** 不传时由 service 按 unit_price * quantity 计算 */
+  /** 缺省 / null = 落 0：service 是 `req.total_price.or(Some(Decimal::ZERO))` 纯透传，
+   *  **不**按 `unit_price × quantity` 重算 ⇒ 总额要前端算好一并发，只发单价会落 0。 */
   total_price?: string | null;
   order_no?: string | null;
   system_delivery_date?: string | null;

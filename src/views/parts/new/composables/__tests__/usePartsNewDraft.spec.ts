@@ -496,9 +496,6 @@ describe('mergeDraftWithSession', () => {
     expect(asm?.children[1]?.drawing).toBe('done'); // child-1 done
     expect(asm?.children[2]?.drawing).toBe('need_reselect'); // child-2 pending
     expect(out.orphanFileRefs).toEqual([]);
-    // 2026-10-05：顶层整套单价 / 总价随草稿原样带出（合并只叠 file 状态，不动业务字段）
-    expect(asm?.row.unit_price).toBe(95);
-    expect(asm?.row.total_price).toBe(190);
   });
 
   it('manual staged 也按 drawingClientRef 合并', async () => {

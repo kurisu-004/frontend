@@ -108,9 +108,12 @@ export interface SerializedAssemblyRow {
   is_urgent: boolean;
   masterPageIndex: number | null;
   quantity: number;
-  /** 2026-10-05 新增：整套含税单价 / 总价（顶层持有，子件各有各的价）。 */
-  unit_price: number | null;
-  total_price: number | null;
+  /** 2026-10-05 新增：整套含税单价 / 总价（顶层持有，子件各有各的价）。
+   *
+   *  只写不读：与整个 `pdf_tab` 一样没有 hydrate 路径（见 `SerializedPdfTab`），所以本轮
+   *  只保证「写出去」—— 落进草稿的金额是完整的，读回还原顺延到 Tab 2 补 hydrate 时。 */
+  unit_price?: number | null;
+  total_price?: number | null;
   drawing_client_ref?: string;
   drawing_sha256?: string;
   children: SerializedAssemblyChildRow[];
@@ -163,6 +166,10 @@ export interface SerializedColumnLayout {
  *  实际触发点是「重新解析」—— 它把全部行重新列出来（含上一次已经建出工单的那些），
  *  再点提交就会建第二遍（`POST /parts/batch` 无幂等键）。刷新本身不重复：刷新后表是空的。
  *  要根治得让行 uid 可复现，属独立设计变更。
+ *
+ *  2026-10-05：Tab 2 新增的 `assemblies[].unit_price` / `total_price` 也在这条「只写」
+ *  的链上 —— 写侧（序列化 → localStorage）已通，读侧（草稿 → 表格）不存在，故**读方向
+ *  顺延**到 Tab 2 补 hydrate 时。本轮不要把这两个字段的「能存」当成「能还原」。
  */
 export interface SerializedPdfTab {
   customerL1Id: string | null;
