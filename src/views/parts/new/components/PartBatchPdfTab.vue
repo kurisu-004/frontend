@@ -733,6 +733,8 @@ const props = defineProps<{
   onThreeDModelRemove: (file: UploadFile) => void;
   rebuildFromUploads: () => Promise<void>;
   onUnitPriceChange: (row: StandalonePartRow, v: number | undefined) => void;
+  /** 2026-10-05 新增：装配件顶层整套含税单价（联动 total_price = 单价 × 套数）。 */
+  onAsmUnitPriceChange: (row: AssemblyRow, v: number | undefined) => void;
   onChildUnitPriceChange: (c: AssemblyChildRow, v: number | undefined) => void;
   onL2Change: (row: { customer_id: string; customer_name?: string }, v: string) => void;
   onAsmPlannedChange: (asmRow: AssemblyRow, v: string) => void;
@@ -1372,6 +1374,53 @@ const columnDefs_assembly: ColumnDef[] = [
         type: 'textarea',
         rows: 1,
         placeholder: '选填',
+      });
+    },
+  },
+  {
+    key: 'unit_price',
+    label: '含税单价',
+    prop: 'unit_price',
+    minWidth: 120,
+    align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as AssemblyRow;
+      return h(ElInputNumber, {
+        modelValue: r.unit_price,
+        'onUpdate:modelValue': (v: number | undefined) => {
+          r.unit_price = v ?? null;
+        },
+        min: 0,
+        precision: 2,
+        step: 1,
+        size: 'small',
+        controlsPosition: 'right',
+        placeholder: '可填',
+        style: 'width: 110px',
+        onChange: (v: number | undefined) => props.onAsmUnitPriceChange(r, v),
+      });
+    },
+  },
+  {
+    key: 'total_price',
+    label: '含税价格',
+    prop: 'total_price',
+    minWidth: 120,
+    align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as AssemblyRow;
+      return h(ElInputNumber, {
+        modelValue: r.total_price,
+        'onUpdate:modelValue': (v: number | undefined) => {
+          r.total_price = v ?? null;
+        },
+        min: 0,
+        precision: 2,
+        step: 1,
+        size: 'small',
+        controlsPosition: 'right',
+        placeholder: '可填',
+        style: 'width: 110px',
       });
     },
   },

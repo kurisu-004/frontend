@@ -108,6 +108,9 @@ export interface SerializedAssemblyRow {
   is_urgent: boolean;
   masterPageIndex: number | null;
   quantity: number;
+  /** 2026-10-05 新增：整套含税单价 / 总价（顶层持有，子件各有各的价）。 */
+  unit_price: number | null;
+  total_price: number | null;
   drawing_client_ref?: string;
   drawing_sha256?: string;
   children: SerializedAssemblyChildRow[];

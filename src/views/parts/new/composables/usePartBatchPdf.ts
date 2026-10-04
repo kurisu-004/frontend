@@ -48,7 +48,14 @@ import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
 import { parseDrawingFilename } from '@/utils/drawingFilename';
 import { findElTableTbody } from '@/utils/elTable';
 import { countPdfPages } from '@/utils/pdfjs';
-import { makeUid, pageUid, parsePageUid, stripExt, todayIso } from './usePartBatchShared';
+import {
+  makeUid,
+  pageUid,
+  parsePageUid,
+  stripExt,
+  toMoneyString,
+  todayIso,
+} from './usePartBatchShared';
 
 interface PdfFormState {
   /** 一级客户 id（Tab 2 必选；决定 serial_prefix 来源 + 二级客户候选范围）。 */
@@ -149,6 +156,10 @@ export interface AssemblyRow {
   masterPageIndex: number | null;
   /** 装配体套数（默认 1）。2026-08-04 新增：用于背面页 Q: 打印 */
   quantity: number;
+  /** 2026-10-05 新增：整套含税单价。业务口径 = **整套**的单件价，不是各子件单价之和。 */
+  unit_price: number | null;
+  /** 2026-10-05 新增：整套含税总价；随 `unit_price` 联动（单价 × 套数）。 */
+  total_price: number | null;
   children: AssemblyChildRow[];
 }
 
@@ -236,6 +247,8 @@ export interface UsePartBatchPdfReturn {
   previewStandalonePart: (row: StandalonePartRow) => void;
   previewPdfSourceByUid: (uid: string) => void;
   onUnitPriceChange: (row: StandalonePartRow, v: number | undefined) => void;
+  /** 2026-10-05 新增：装配件顶层整套含税单价（联动 total_price = 单价 × 套数）。 */
+  onAsmUnitPriceChange: (row: AssemblyRow, v: number | undefined) => void;
   onChildUnitPriceChange: (c: AssemblyChildRow, v: number | undefined) => void;
   onL2Change: (row: { customer_id: string; customer_name?: string }, v: string) => void;
   onAsmPlannedChange: (asmRow: AssemblyRow, v: string) => void;
@@ -620,18 +633,21 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         // 数量 = **整套数量**（业务口径：Excel 的数量是整套的数量）
         a.quantity = hit.quantity || a.quantity;
         if (hit.plannedDeliveryDate) a.planned_delivery_date = hit.plannedDeliveryDate;
+        // 2026-10-05：顶层整套含税单价 / 总价按同口径回填（与独立零件分支一致），
+        // `!= null` 才覆盖，避免 Excel 空值抹掉用户手填的价。
+        if (hit.unitPrice != null) a.unit_price = hit.unitPrice;
+        if (hit.totalPrice != null) a.total_price = hit.totalPrice;
       }
-      // 2026-10-03 子件口径（业务口径：分厂 / 申请人 / 计划交期是整套共享的，
-      // 子件数量需手填、子件不需要单价）：
+      // 2026-10-05 子件口径（业务口径：分厂 / 申请人 / 计划交期 / 单价是整套共享的，
+      // 子件数量与单价需手填）：
       //   - 计划交期：顶层填完后同步给全部子件，保证「整套一个交期」。交期既可能来自
       //     Excel，也可能来自用户在顶层手改（`onAsmPlannedChange`），两种来源都会同步
       //     下来；子件单独改过的交期会被顶层值覆盖，与该 handler 的简单覆盖语义一致。
       //   - quantity 保持 makeAssemblyChild 的默认值 1；
-      //   - unit_price / total_price 保持默认 null。
-      // 单价留空不是漏填，而是整套含税单价在本仓无处落库：`AssemblyRow` 没有
-      // unit_price / total_price 字段，后端 `POST /parts/batch` 的 item DTO 也不收
-      // （`PartBatchCreateItemFE` 无这两项）⇒ 装配件整套的单价提交时必然丢弃。子件
-      // 虽然有这两个字段（`AssemblyChildRow`）和表格里的手填列，提交时同样被丢弃。
+      //   - unit_price / total_price 保持 null 待手填。**子件单价不从 Excel 回填**：
+      //     Excel 的含税单价是**整套**口径（同一行同时给出了整套数量和整套总价），
+      //     摊到每个子件上会让 N 个子件把整套价重复计价 N 倍。要给子件单独定价就得
+      //     人工按子件拆，用户在子件行的「含税单价」列自己填。
       if (a.planned_delivery_date) {
         for (const c of a.children) c.planned_delivery_date = a.planned_delivery_date;
       }
@@ -649,21 +665,35 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     return match?.id ?? null;
   }
 
-  /** PR-H 2026-07-28：含税单价改动 → 自动联动 total_price（仅在用户未手动锁定时）；
-   *  保留 Excel 回填值优先 —— 若 total_price 已被 Excel 写入过且与自动算的不一致，
-   *  仍按 Excel 的值，不强制覆盖（用户可手动改回）。 */
-  function onUnitPriceChange(row: StandalonePartRow, v: number | undefined): void {
+  /**
+   * 单价改动 → 自动联动总价（PR-H 2026-07-28 起三类行共用）。
+   *
+   * 三类行（独立零件 / 装配件顶层 / 装配件子件）的联动公式完全一样：
+   * `total_price = unit_price × quantity`。对装配件顶层，`quantity` 是**套数**
+   * （`AssemblyRow.quantity`），所以算出来的是整套总价，与 Excel 的整套口径一致。
+   *
+   * 用户手改过总价后本函数会把它覆盖掉 —— 表格里总价列可编辑，用户想保自己的值
+   * 就以那次手改为准再点一次单价。数量为 0 或单价为空时**不动**总价（避免清空
+   * 单价顺手把已有总价也抹成 0）。
+   */
+  function linkTotalPrice(
+    row: { quantity: number; unit_price: number | null; total_price: number | null },
+    v: number | undefined,
+  ): void {
     row.unit_price = v ?? null;
-    // 仅当用户没明确设置过 total_price 时自动算
     if (row.quantity > 0 && row.unit_price != null) {
       row.total_price = row.unit_price * row.quantity;
     }
   }
+
+  function onUnitPriceChange(row: StandalonePartRow, v: number | undefined): void {
+    linkTotalPrice(row, v);
+  }
+  function onAsmUnitPriceChange(a: AssemblyRow, v: number | undefined): void {
+    linkTotalPrice(a, v);
+  }
   function onChildUnitPriceChange(c: AssemblyChildRow, v: number | undefined): void {
-    c.unit_price = v ?? null;
-    if (c.quantity > 0 && c.unit_price != null) {
-      c.total_price = c.unit_price * c.quantity;
-    }
+    linkTotalPrice(c, v);
   }
 
   /** PR-H 2026-07-28：3D 模型支持扩展名（与后端 _file_kind_policy.THREE_D_MODEL 对齐）。 */
@@ -780,6 +810,37 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       unit_price: null,
       total_price: null,
       three_d_index: null,
+    };
+  }
+
+  /** 装配件顶层默认填充（2026-10-05 新增：与两个建行入口共用，避免字段漏填）。
+   *  分厂 / 申请人 / 单价 / 总价初始全空，由 `applyExcelToAll` 回填或用户手填。 */
+  function makeAssemblyRow(opts: {
+    pdfSourceUid: string;
+    drawing_no: string;
+    name: string;
+    masterPageIndex: number | null;
+    children: AssemblyChildRow[];
+  }): AssemblyRow {
+    return {
+      uid: `asm-${makeUid()}`,
+      pdfSourceUid: opts.pdfSourceUid,
+      drawing_no: opts.drawing_no,
+      name: opts.name,
+      applicant_name: '',
+      customer_id: '',
+      customer_name: '',
+      request_date: pdfForm.requestDate,
+      planned_delivery_date: '',
+      system_delivery_date: null,
+      order_no: null,
+      note: null,
+      is_urgent: false,
+      masterPageIndex: opts.masterPageIndex,
+      quantity: 1,
+      unit_price: null,
+      total_price: null,
+      children: opts.children,
     };
   }
 
@@ -1008,7 +1069,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     const src = allPdfs.value.find((s) => s.uid === pdfUid);
     if (!src) return;
     const parsed = parseDrawingFilename(src.filename);
-    const asmUid = `asm-${makeUid()}`;
     const children: AssemblyChildRow[] = pageIndices.map((pi) => {
       const drawingNo = parsed.drawingNo
         ? pi === 0
@@ -1027,24 +1087,13 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         name: name,
       });
     });
-    const created: AssemblyRow = {
-      uid: asmUid,
+    const created = makeAssemblyRow({
       pdfSourceUid: pdfUid,
       drawing_no: parsed.drawingNo || '',
       name: parsed.partName || '',
-      applicant_name: '',
-      customer_id: '',
-      customer_name: '',
-      request_date: pdfForm.requestDate,
-      planned_delivery_date: '',
-      system_delivery_date: null,
-      order_no: null,
-      note: null,
-      is_urgent: false,
       masterPageIndex: null,
-      quantity: 1,
       children,
-    };
+    });
     assemblies.value.push(created);
     clearSelection();
     // 2026-10-03：只回填本次新建的这一个装配件（含其子件交期同步），不动其它装配件。
@@ -1283,7 +1332,6 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       totalPages,
       synthesized: false,
     });
-    const asmUid = `asm-${makeUid()}`;
     const children: AssemblyChildRow[] = [];
     for (let p = 0; p < totalPages; p++) {
       children.push(
@@ -1301,24 +1349,13 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         }),
       );
     }
-    const created: AssemblyRow = {
-      uid: asmUid,
+    const created = makeAssemblyRow({
       pdfSourceUid: pdfUid,
       drawing_no: manualAsmForm.drawing_no.trim(),
       name: manualAsmForm.name.trim(),
-      applicant_name: '',
-      customer_id: '',
-      customer_name: '',
-      request_date: pdfForm.requestDate,
-      planned_delivery_date: '',
-      system_delivery_date: null,
-      order_no: null,
-      note: null,
-      is_urgent: false,
       masterPageIndex: totalPages > 1 ? 0 : null,
-      quantity: 1,
       children,
-    };
+    });
     assemblies.value.push(created);
     manualAsmDialogVisible.value = false;
     // 2026-10-03：只回填本次新建的这一个装配件（含其子件交期同步），不动其它装配件。
@@ -1919,6 +1956,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       is_urgent: a.is_urgent,
       masterPageIndex: a.masterPageIndex,
       quantity: a.quantity,
+      unit_price: a.unit_price,
+      total_price: a.total_price,
       children: a.children.map(serializeAssemblyChildRow),
     };
   }
@@ -2037,7 +2076,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 独立零件 → 装配件顶层（master）→ 装配件子件。
    * 装配件主子件各建一个独立 part（`POST /parts/batch` 无 assembly 概念），
    * 子件继承顶层的申请人 / 分厂。
-   */
+   *
+   * 2026-10-05：三类行的 `unit_price` / `total_price` 都经 `toMoneyString` 带上
+   * （2 位小数字符串，缺价时为 undefined → 键不生效，后端落 0）。 */
   function buildCommitItems(): { items: PartBatchCreatePayload[]; rowUids: string[] } {
     const items: PartBatchCreatePayload[] = [];
     const rowUids: string[] = [];
@@ -2056,6 +2097,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         system_delivery_date: r.system_delivery_date,
         note: r.note,
         customer_id: r.customer_id,
+        // 2026-10-05：含税单价 / 总价随建单一起发（此前三层同时丢弃，表格里填的价
+        // 永远落不了库）。`toMoneyString` 保证 2 位小数标度，缺价时给 undefined
+        // 而不是 null / '0' —— 让「没填价」与「填了 0 元」在请求体里可区分。
+        unit_price: toMoneyString(r.unit_price),
+        total_price: toMoneyString(r.total_price),
       });
     }
     for (const a of assemblies.value) {
@@ -2076,6 +2122,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
           system_delivery_date: a.system_delivery_date,
           note: a.note,
           customer_id: a.customer_id,
+          unit_price: toMoneyString(a.unit_price),
+          total_price: toMoneyString(a.total_price),
         });
       }
       // 子件：每个子件一个 part（共享顶层 PDF）
@@ -2094,6 +2142,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
           system_delivery_date: c.system_delivery_date,
           note: c.note,
           customer_id: a.customer_id, // 分厂继承顶层
+          // 子件单价不从 Excel 继承（Excel 是整套口径，摊到 N 个子件会重复计价 N 倍），
+          // 只有用户在子件行手填过才会发出去。
+          unit_price: toMoneyString(c.unit_price),
+          total_price: toMoneyString(c.total_price),
         });
       }
     }
@@ -2423,6 +2475,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     // parse
     rebuildFromUploads,
     onUnitPriceChange,
+    onAsmUnitPriceChange,
     onChildUnitPriceChange,
     onL2Change,
     onAsmPlannedChange,

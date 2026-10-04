@@ -961,3 +961,178 @@ describe('提交在途时改写行集合', () => {
     w.unmount();
   });
 });
+
+// 2026-10-05 新增：含税单价 / 总价随建单一起发（缺陷：表格里填的价三层同时被丢）。
+//
+// 关键约束（锁死，别在后续重构里放松）：
+//   - 后端是 rust `rust_decimal` + `serde-with-str`，**只认字符串**、标度固定 2 位；
+//   - 表格里的总价是裸浮点乘（0.1 * 3 === 0.30000000000000004），必须过 `toMoneyString`；
+//   - 缺价是 `undefined`（键整个不上线），不是 `null` 也不是 `'0'`。
+describe('建单载荷：含税单价 / 总价', () => {
+  /** 提交并返回实际发给 batchCreateParts 的 item 数组。 */
+  async function submitAndCapture(
+    api: UsePartBatchPdfReturn,
+    createdCount: number,
+  ): Promise<Array<Record<string, unknown>>> {
+    mocks.batchCreateParts.mockResolvedValue({
+      created: Array.from({ length: createdCount }, (_, i) => ({
+        id: `p${i}`,
+        sourceIndex: i,
+      })),
+      failed: [],
+    });
+    await api.onSubmit();
+    await flushPromises();
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    return mocks.batchCreateParts.mock.calls[0]![0] as Array<Record<string, unknown>>;
+  }
+
+  it('独立零件：unit_price / total_price 落成 2 位小数字符串', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件.pdf'), up(2, 'A-2_件.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value.forEach((r) => (r.customer_id = 'c-root'));
+    const [r0, r1] = api.standaloneParts.value;
+    // 整数单价：必须补零到 2 位
+    r0!.unit_price = 95;
+    r0!.total_price = 190;
+    // 浮点尾数：0.1 * 3 = 0.30000000000000004
+    r1!.unit_price = 0.1;
+    r1!.quantity = 3;
+    r1!.total_price = 0.1 * 3;
+
+    const items = await submitAndCapture(api, 2);
+
+    expect(items[0]!.unit_price).toBe('95.00');
+    expect(items[0]!.total_price).toBe('190.00');
+    expect(items[1]!.unit_price).toBe('0.10');
+    expect(items[1]!.total_price).toBe('0.30');
+    w.unmount();
+  });
+
+  it("缺价：unit_price / total_price 是 undefined（不是 null、不是 '0'）", async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value[0]!.customer_id = 'c-root';
+    expect(api.standaloneParts.value[0]!.unit_price).toBeNull();
+
+    const items = await submitAndCapture(api, 1);
+
+    expect(items[0]!.unit_price).toBeUndefined();
+    expect(items[0]!.total_price).toBeUndefined();
+    expect(items[0]!.unit_price).not.toBeNull();
+    expect(items[0]!.unit_price).not.toBe('0');
+    // JSON.stringify 之后这两个键整个消失（后端看不到、走默认 0）
+    const wire = JSON.parse(JSON.stringify({ items })) as {
+      items: Array<Record<string, unknown>>;
+    };
+    expect('unit_price' in wire.items[0]!).toBe(false);
+    expect('total_price' in wire.items[0]!).toBe(false);
+    w.unmount();
+  });
+
+  it('装配件：顶层整套价与子件各自的价分开发，不互相污染', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    const asm = await mountAssembly(api);
+    // 顶层手填整套价（Excel 口径：整套）
+    asm.unit_price = 130;
+    asm.total_price = 260;
+    // 子件各自手填（Excel 不回填，见 applyExcelToAll）
+    asm.children[0]!.unit_price = 7.5;
+    asm.children[0]!.total_price = 7.5;
+    asm.children[1]!.unit_price = null;
+    asm.children[1]!.total_price = null;
+
+    // master + 2 子件 = 3 个 item（顺序：顶层 → 子件）
+    const items = await submitAndCapture(api, 3);
+
+    expect(items).toHaveLength(3);
+    expect(items[0]!.drawing_no).toBe(asm.drawing_no);
+    expect(items[0]!.unit_price).toBe('130.00');
+    expect(items[0]!.total_price).toBe('260.00');
+    expect(items[1]!.unit_price).toBe('7.50');
+    expect(items[1]!.total_price).toBe('7.50');
+    // 没填价的子件：键不上线，绝不折成 '0'
+    expect(items[2]!.unit_price).toBeUndefined();
+    expect(items[2]!.total_price).toBeUndefined();
+    w.unmount();
+  });
+
+  it('单价联动总价：独立零件 total = unit × quantity；清空单价不动总价', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件.pdf')];
+    await api.rebuildFromUploads();
+    const row = api.standaloneParts.value[0];
+    if (!row) throw new Error('未生成独立零件行');
+
+    row.quantity = 4;
+    api.onUnitPriceChange(row, 12.5);
+    expect(row.unit_price).toBe(12.5);
+    expect(row.total_price).toBe(50);
+
+    // 清空单价（undefined）只清单价，不动已有总价
+    api.onUnitPriceChange(row, undefined);
+    expect(row.unit_price).toBeNull();
+    expect(row.total_price).toBe(50);
+    w.unmount();
+  });
+
+  it('单价联动总价：装配件顶层用**套数**、子件用子件数量', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    const asm = await mountAssembly(api);
+    const [child0] = asm.children;
+
+    // 顶层：quantity 是套数
+    asm.quantity = 3;
+    api.onAsmUnitPriceChange(asm, 0.1);
+    expect(asm.unit_price).toBe(0.1);
+    expect(asm.total_price).toBe(0.1 * 3);
+
+    // 子件：quantity 是子件数量
+    child0!.quantity = 6;
+    api.onChildUnitPriceChange(child0!, 2);
+    expect(child0!.unit_price).toBe(2);
+    expect(child0!.total_price).toBe(12);
+
+    // 清空单价（undefined）只清单价，不动已有总价
+    api.onChildUnitPriceChange(child0!, undefined);
+    expect(child0!.unit_price).toBeNull();
+    expect(child0!.total_price).toBe(12);
+    w.unmount();
+  });
+
+  it('草稿快照带出装配件顶层单价 / 总价（刷新后可还原的手填值）', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    const asm = await mountAssembly(api);
+    asm.unit_price = 88.5;
+    asm.total_price = 177;
+    await flushPromises();
+
+    const last = mocks.scheduled.at(-1);
+    const pdfTab = last?.pdf_tab as {
+      assemblies: Array<{ unit_price: number | null; total_price: number | null }>;
+    };
+    expect(pdfTab.assemblies[0]!.unit_price).toBe(88.5);
+    expect(pdfTab.assemblies[0]!.total_price).toBe(177);
+    w.unmount();
+  });
+});

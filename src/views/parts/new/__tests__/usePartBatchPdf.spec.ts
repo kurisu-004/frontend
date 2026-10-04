@@ -2,9 +2,10 @@
 // 模式参考同目录 usePartBatchManual.spec.ts：harness 组件 + 模块 mock。
 //
 // 本 spec 锁的是「Excel 数据回填」这条链路的业务口径（缺陷 B）：
-//   - 装配件顶层按**装配件自身图号**命中 Excel → 分厂 / 申请人 / 整套数量 / 计划交期；
-//   - 子件**只**共享计划交期，数量保持 1、单价 / 总价保持 null（业务口径：Excel 里的
-//     数量和单价是整套的；子件数量手填、子件不需要单价）；
+//   - 装配件顶层按**装配件自身图号**命中 Excel → 分厂 / 申请人 / 整套数量 / 计划交期 /
+//     整套单价 / 整套总价；
+//   - 子件**只**共享计划交期，数量保持 1、单价 / 总价保持 null 供手填（业务口径：Excel
+//     里的数量和单价是**整套**的，摊到 N 个子件上会把整套价重复计价 N 倍）；
 //   - 独立零件（单页 PDF）维持原状：数量 / 单价 / 总价 / 交期 / 分厂 / 申请人全回填；
 //   - Excel 解析结果活过 rebuildFromUploads（合并不再是无源之水）；
 //   - splitStandalonePart 把多页拆回子页时**不**回填，且之后再建行也不会被回填
@@ -750,6 +751,111 @@ describe('usePartBatchPdf：跨集合作用域（建行不得污染另一张表�
       expect(c.planned_delivery_date).toBe(fresh.planned_delivery_date);
       expect(c.quantity).toBe(1);
       expect(c.unit_price).toBeNull();
+    }
+
+    w.unmount();
+  });
+});
+
+// 2026-10-05 新增：装配件顶层的含税单价 / 总价回填口径。
+//
+// 背景：Excel 的「含税单价 / 含税价格」是**整套**口径（同一行里数量也是整套的）。
+// 装配件顶层持有整套价 ⇒ 按 `hit.unitPrice` / `hit.totalPrice` 回填；子件**不**回填 ——
+// 摊到 N 个子件上会让整套价被重复计价 N 倍，只能人工在子件行手填。
+describe('usePartBatchPdf：装配件整套单价回填（Excel 整套口径）', () => {
+  it('顶层按 hit.unitPrice / hit.totalPrice 回填整套价', async () => {
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: ASM_PDF, withExcel: true });
+    selectPages(api, 'pdf-1001', 2);
+    await api.mergeSelectedAsAssembly();
+
+    const asm = api.assemblies.value[0];
+    if (!asm) throw new Error('未生成装配件');
+    expect(asm.unit_price).toBe(EXCEL_ROW_ASM.unitPrice);
+    expect(asm.total_price).toBe(EXCEL_ROW_ASM.totalPrice);
+
+    w.unmount();
+  });
+
+  it('子件不被回填（整套价摊到 N 个子件会重复计价 N 倍）', async () => {
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: ASM_PDF, withExcel: true });
+    selectPages(api, 'pdf-1001', 2);
+    await api.mergeSelectedAsAssembly();
+
+    const asm = api.assemblies.value[0];
+    if (!asm) throw new Error('未生成装配件');
+    expect(asm.children).toHaveLength(2);
+    for (const c of asm.children) {
+      // 顶层确实拿到了整套价（证明不是 Excel 没命中）
+      expect(asm.unit_price).toBe(EXCEL_ROW_ASM.unitPrice);
+      expect(c.unit_price).toBeNull();
+      expect(c.total_price).toBeNull();
+    }
+
+    w.unmount();
+  });
+
+  it('回填是 `!= null` 才覆盖：用户手填的顶层单价不被 Excel 抹掉', async () => {
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setupMany(api, { pdfNames: [ASM_PDF, PART_PDF], withExcel: true });
+    selectPages(api, 'pdf-1001', 2);
+    await api.mergeSelectedAsAssembly();
+    const edited = api.assemblies.value[0];
+    if (!edited) throw new Error('未生成装配件');
+    expect(edited.unit_price).toBe(EXCEL_ROW_ASM.unitPrice);
+    edited.unit_price = 999;
+    edited.total_price = 999 * 99;
+
+    // 再建一个装配件（手动新增 1 页 PDF 的入口）：只作用于新行，既有行的手改值不动
+    await api.addManualAssembly();
+    api.manualAsmForm.drawing_no = EXCEL_ROW_ASM.drawingNo;
+    api.manualAsmForm.name = '扁条收框档条';
+    api.manualAsmForm.file = pdfFile('manual-asm.pdf');
+    await api.confirmManualAssembly();
+
+    expect(edited.unit_price).toBe(999);
+    expect(edited.total_price).toBe(999 * 99);
+    const fresh = api.assemblies.value[1];
+    if (!fresh) throw new Error('未生成第二个装配件');
+    expect(fresh.unit_price).toBe(EXCEL_ROW_ASM.unitPrice);
+    expect(fresh.total_price).toBe(EXCEL_ROW_ASM.totalPrice);
+
+    w.unmount();
+  });
+
+  it('confirmManualAssembly：手动新增的装配件同样回填整套价', async () => {
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: ASM_PDF, withExcel: true });
+    expect(api.assemblies.value).toHaveLength(0);
+    api.manualAsmForm.drawing_no = EXCEL_ROW_ASM.drawingNo;
+    api.manualAsmForm.name = '扁条收框档条';
+    api.manualAsmForm.file = pdfFile('manual-asm.pdf');
+    await api.confirmManualAssembly();
+
+    const asm = api.assemblies.value[0];
+    if (!asm) throw new Error('未生成手动装配件');
+    expect(asm.unit_price).toBe(EXCEL_ROW_ASM.unitPrice);
+    expect(asm.total_price).toBe(EXCEL_ROW_ASM.totalPrice);
+    for (const c of asm.children) {
+      expect(c.unit_price).toBeNull();
+      expect(c.total_price).toBeNull();
     }
 
     w.unmount();

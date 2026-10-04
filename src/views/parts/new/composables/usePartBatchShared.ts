@@ -69,3 +69,23 @@ export function parsePageUid(key: string): { pdfUid: string; pageIndex: number }
   const last = key.lastIndexOf(':');
   return { pdfUid: key.slice(0, last), pageIndex: Number(key.slice(last + 1)) };
 }
+
+/**
+ * 含税单价 / 总价 → 后端 `Decimal` 契约字符串（固定 2 位小数）。
+ *
+ * 2026-10-05 新增：建单入参的 `unit_price` / `total_price` 是 rust `rust_decimal`
+ * + `serde-with-str`，**只认字符串**，且列精度是 `NUMERIC(12,2)` / `NUMERIC(14,2)`。
+ *
+ * 为什么必须 `toFixed(2)` 而不是 `String(n)`：表格里的总价是裸浮点乘算出来的
+ * （`unit_price * quantity`），`0.1 * 3` 在 IEEE 754 下是 `0.30000000000000004`。
+ * `String()` 会把它原样发出去，后端 `Decimal` 如实解析成 13 位小数，超出 2 位标度
+ * 的入参要么被拒、要么落库出一堆无意义尾数。`toFixed(2)` 同时解决「浮点尾数」和
+ * 「不足 2 位补零」两件事，输出恒为 `d+` 或 `-d+.dd`。
+ *
+ * `null` / `undefined` / `NaN` → `undefined`：调用方据此**不发该键**，后端落默认 0。
+ * 不能折成 `'0'` —— 那会把「用户没填价」和「用户明确填了 0 元」混成同一个语义。
+ */
+export function toMoneyString(n: number | null | undefined): string | undefined {
+  if (n == null || !Number.isFinite(n)) return undefined;
+  return n.toFixed(2);
+}

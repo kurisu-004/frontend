@@ -68,8 +68,13 @@ export interface PartBatchFilePayload {
  *
  *  与 rust 后端 `PartBatchCreateItem`（`backend-rust/src/modules/part/dto_crud.rs`
  *  的 batch create 段）对齐：后端契约要求 top-level `customer_id`，item 不带；FE
- *  多带几个可选字段（`applicant_id` / `unit_price`）后端 serde 默认忽略，不影响解析。
+ *  多带的 `applicant_id` 后端 serde 默认忽略，不影响解析。
  *  2026-09-16 PR-2：`actual_delivery_date` 随 t_part 瘦身从出入参一并移除。
+ *
+ *  2026-10-05：`unit_price` / `total_price` 后端**真的收**（此前是 FE 白名单漏转发，
+ *  表格里填的含税单价在提交时被静默丢弃）。后端侧是 rust `rust_decimal` +
+ *  `serde-with-str`，**只认字符串**，且标度固定 2 位（`NUMERIC(12,2)` / `NUMERIC(14,2)`）
+ *  ⇒ 这里声明成 string，别用 number（浮点尾数会被 Decimal 如实解析成 13 位小数）。
  *
  *  `drawing_file` / `model3d_file` 是后端契约字段：填了就由后端在建单事务内
  *  head + copy tmp → 正式 CAS key（入参形状见 `types/part_file.ts` 的 `FileBinding`）；
@@ -87,6 +92,10 @@ interface PartBatchCreateItemFE {
   system_delivery_date?: string | null;
   note?: string | null;
   applicant_id?: string | null;
+  /** 含税单价（2 位小数字符串）。undefined = 不发该键，后端落 0。 */
+  unit_price?: string;
+  /** 含税总价（2 位小数字符串）。null = 显式发 null，让后端按 unit_price × quantity 兜底算。 */
+  total_price?: string | null;
   /** 可选图纸文件绑定（DRAWING kind）。后端在建单事务内 head + copy tmp → 正式 CAS key。 */
   drawing_file?: FileBinding;
   /** 可选 3D 模型绑定（3D_MODEL kind），语义同上。 */
@@ -272,6 +281,8 @@ function toPartBatchCreateItem(it: PartBatchCreatePayload): PartBatchCreateItemF
     system_delivery_date: it.system_delivery_date,
     note: it.note,
     applicant_id: it.applicant_id,
+    unit_price: it.unit_price,
+    total_price: it.total_price,
     drawing_file: it.drawing_file,
     model3d_file: it.model3d_file,
   };
