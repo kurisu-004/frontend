@@ -15,8 +15,9 @@
       snapshot 请求（useDashboardSnapshot 的 queryKey 含 basis ⇒ 切口径即换键
       自动 refetch）、下钻抽屉（`:basis`）。柱状图与「今日到期 / 两周到期」KPI 都
       从同一份 upcomingBuckets 派生，KPI 无需任何改动即自动跟随。切口径时 snapshot
-      用 keepPreviousData 顶着上一份数据（大屏不闪空），把 query 的 isFetching 经
-      `:loading` 下发给柱状图出「切换中」提示层，避免旧数静默停在新口径开关下。
+      用 keepPreviousData 顶着上一份数据（大屏不闪空），把 query 的 isPlaceholderData
+      经 `:stale` 下发给柱状图出「数字还不是当前口径」提示层，避免旧数静默停在新口径
+      开关下。
     - useDashboardSnapshot(() => deliveryBasis.value) → snapshot.upcoming_delivery
       （14 天分桶，随口径变化）+ in_process + on_inspection_shelves（在制 / 在检 KPI
       派生来源）
@@ -54,7 +55,7 @@
         <UpcomingDeliveryChart
           :buckets="upcomingBuckets"
           :basis="deliveryBasis"
-          :loading="snapshotFetching"
+          :stale="snapshotStale"
           height="100%"
           @update:basis="deliveryBasis = $event"
           @bar-layer-click="onBarLayerClick"
@@ -145,7 +146,10 @@ const canOpenPartDetail = computed(
 const deliveryBasis = ref<DeliveryBasis>('planned');
 
 // ============ 数据 ============
-const { data: snapshot, isFetching: snapshotFetching } = useDashboardSnapshot(
+// snapshotStale = 该 query 的 isPlaceholderData，即「换键占位中，图上数字还是上一口径」。
+// 不用 isFetching：同键后台 refetch（WS 事件驱动的周期性刷新）也会让它为 true，
+// 而那时图上数字是当前且正确的，不该提示。
+const { data: snapshot, isPlaceholderData: snapshotStale } = useDashboardSnapshot(
   () => deliveryBasis.value,
 );
 const { items: urgentItems } = useDashboardUrgentList();

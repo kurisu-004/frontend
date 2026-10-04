@@ -14,25 +14,29 @@
     上下文），不新增头部行、不改左栏 flex 布局；
   - 组件**不持口径状态**：props.basis 进、emit('update:basis') 出，唯一状态源是父组件
     DashboardView（与抽屉的 update:modelValue 同风格，不用 defineModel）；
-  - 开关旁挂一句随口径变化的提示，用 el-tooltip 承载（trigger="hover focus" +
+  - 开关旁挂一句随口径变化的提示，用 el-tooltip 承载（trigger 含 hover + focus +
     触发元素 tabindex=0，键盘也能读到；aria-label 挂在无 role 的 span 上会被多数
     屏幕阅读器忽略，title 则只对鼠标悬停生效）：system_delivery_date 可空，后端对
     NULL 做范围比较恒 false ⇒ 未填系统交期的工单在系统口径下整件不计入；
-    planned_delivery_date 是 NOT NULL 列，计划口径无此缺失。两口径的桶总数恒为
-    N（缺失日期补 0），差异只体现在 count / by_status，且合计**无可比大小关系**
-    （同一工单的两列可能落在窗口内外不同侧）。不说清楚用户会把差异误读成数据丢失。
+    planned_delivery_date 是 NOT NULL 列，计划口径无此缺失。两种口径的统计结果不可
+    互相替代，各桶件数随口径变化，而两口径合计**无可比大小关系**（同一工单的两列可能
+    落在窗口内外不同侧）。不说清楚用户会把差异误读成数据丢失。
   - 宽度预算：3 个图例项 ≈230px + 开关 ≈165px ≈ 395px。最窄双栏视口 1101px
-    （单列断点 1100px 再宽 1px）下左栏可用宽 =（1101 − 165 侧栏 − 32 .el-main
+    （单列断点 1100px 再宽 1px）下左栏可用宽 =（1101 − 165 侧栏 − 16 .el-main
     padding − 32 .dashboard padding − 16 grid gap）按 3fr/5fr 分 ≈514px，
-    .chart-wrap 扣掉自身 8px×2 padding 与 1px×2 边框后 ≈495px。395 < 495 ⇒ 不撞；
-    ≤1100px 走单列布局，图表区更宽。图例因此钉 left: 0（不居中），给右侧留出开关。
+    .chart-wrap 扣掉自身 8px×2 padding ≈498px（用的是 box-shadow，没有 border）。
+    395 < 498 ⇒ 不撞，余量 ~100px；≤1100px 走单列布局，图表区更宽。图例因此钉
+    left: 0（不居中），给右侧留出开关。
 
-  数据切换提示（2026-10-04 新增）：props.loading = 父组件 snapshot query 的
-  isFetching。useDashboardSnapshot 配了 placeholderData: keepPreviousData，换口径
-  期间图上仍是上一份快照的数字，若不给提示就成了「开关已切到系统、数字还是计划的」。
-  实现是一层绝对定位的半透明覆盖层（纯 DOM，不进 ECharts option）⇒ 与
-  updateOptions.notMerge 的整份替换互不干扰；z-index 压在口径开关之下，开关始终
-  可点、可继续切口径。
+  口径占位提示（2026-10-04 新增）：props.stale = 父组件 snapshot query 的
+  isPlaceholderData，即「换了键、新键还没数据、正拿上一份占位」，此刻图上的数字属于
+  **上一个口径**。不给提示就成了「开关已切到系统、数字还是计划的」。实现是一层绝对
+  定位的半透明覆盖层（纯 DOM，不进 ECharts option）⇒ 与 updateOptions.notMerge 的
+  整份替换互不干扰；z-index 压在口径开关之下，开关始终可点、可继续切口径。
+  prop 名用 stale 而不是「加载中」类的名字：这一层要表达的是「数字不是当前口径的」，
+  不是「正在取数」。同 queryKey 的后台 refetch（WS 事件驱动的周期性刷新）会让
+  isFetching 为 true，而那时图上数字是当前且正确的，拿它当信号就会让这层在用户什么都
+  没干时反复播报「口径切换中」。
 
   视觉 / 实现规则（改动本图时必须守住的不变量）：
   - 颜色走 EP 预设 hex（success #67c23a / warning #e6a23c / danger #f56c6c），
@@ -79,9 +83,9 @@
         <span class="basis-hint" tabindex="0" :aria-label="basisHint">ⓘ</span>
       </el-tooltip>
     </div>
-    <!-- 换口径期间盖一层半透明提示：keepPreviousData 让图上数字还是上一份快照，
-         没有这层就成了「开关已切、数字没切」。pointer-events: none 不吃点击。 -->
-    <div v-if="loading" class="chart-pending" role="status">
+    <!-- 口径占位期间盖一层半透明提示：keepPreviousData 让图上数字还是上一口径的，
+         没有这层就成了「开关已切、数字没切」。不吃点击（见样式里的 pointer-events）。 -->
+    <div v-if="stale" class="chart-pending" role="status">
       <span class="chart-pending-text">口径切换中…</span>
     </div>
   </div>
@@ -144,9 +148,10 @@ const props = withDefaults(
     /** 2026-10-04 新增：交期统计口径（唯一状态源在父组件，本组件只读 + emit）。
      *  必填不兜默认值：默认值会掩盖父组件漏传 wiring，柱状图就会静默按计划交期画。 */
     basis: DeliveryBasis;
-    /** 2026-10-04 新增：父组件 snapshot query 的 isFetching —— 换口径期间图上仍是
-     *  上一份快照的数字，需要出一层「切换中」提示。必填同上，不兜默认值。 */
-    loading: boolean;
+    /** 2026-10-04 新增：图上数字是否还是**上一个口径**的（父组件传该 query 的
+     *  isPlaceholderData，即换键占位中）。为 true 时盖一层「口径切换中」提示。
+     *  必填同上，不兜默认值 —— 默认 false 会让「正在占位」这个状态静默消失。 */
+    stale: boolean;
     height?: string;
   }>(),
   { height: '320px' },
@@ -370,10 +375,10 @@ function onChartClick(p: ECElementEvent): void {
 /** 2026-10-04 新增：口径开关提示文案，随当前口径变化。
  *  关键差异只有系统口径有：system_delivery_date 可空，后端对 NULL 做范围比较恒
  *  false ⇒ 未填系统交期的工单在系统口径下**整件不计入**；planned_delivery_date 是
- *  NOT NULL 列，计划口径没有这个缺失。两口径用的**是同一个日期窗口**，只是打在
- *  不同列上，所以合计无可比大小关系（同一工单的计划交期落在窗口外、系统交期落在
- *  窗口内是常态）——文案里不能说「会少于」。不讲清楚，用户会把「件数变了」读成数据
- *  丢失。 */
+ *  NOT NULL 列，计划口径没有这个缺失。两口径用的**是同一个日期窗口**、只是打在不同
+ *  列上，所以合计之间没有大小关系（同一工单的计划交期落在窗口外、系统交期落在窗口
+ *  内是常态）——文案只陈述差异来源，不对两个合计做方向性断言。不讲清楚，用户会把
+ *  「件数变了」读成数据丢失。 */
 const basisHint = computed(() =>
   props.basis === 'system'
     ? '系统交期口径：未填写系统交期的工单整件不计入，合计与计划交期口径不同'
@@ -429,8 +434,9 @@ function onBasisChange(v: string | number | boolean | undefined): void {
   }
 }
 .chart-pending {
-  // 换口径期间的「数字还没跟上开关」提示层。纯 DOM 覆盖，不进 ECharts option ⇒
-  // 与 updateOptions.notMerge 的整份替换互不影响，也不会触发多余的 setOption。
+  // 口径占位期间的「图上数字还不是当前口径」提示层。纯 DOM 覆盖，不进 ECharts
+  // option ⇒ 与 updateOptions.notMerge 的整份替换互不影响，也不会触发多余的
+  // setOption；绝对定位脱离文档流，不改变 .chart-wrap 尺寸 ⇒ 不触发 autoresize。
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -438,7 +444,8 @@ function onBasisChange(v: string | number | boolean | undefined): void {
   align-items: center;
   justify-content: center;
   background: rgba(255, 255, 255, 0.6);
-  // 不吃鼠标事件：切换期间仍可继续点开关 / 点柱子。
+  // 不吃鼠标事件：占位期间仍可继续点开关 / 点柱子。这一条没有自动化断言兜底
+  // （happy-dom 无布局引擎，算不出 pointer-events），属只能靠代码评审守住的不变量。
   pointer-events: none;
 }
 .chart-pending-text {

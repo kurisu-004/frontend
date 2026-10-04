@@ -22,8 +22,10 @@
 //   - U9：切 basis 触发自动 refetch，且请求带上新 basis；
 //   - U10：WS 事件失效的是**前缀**（qk.dashboardSnapshotPrefix）—— 切到 system 后
 //     派事件，planned 那条缓存也被标脏（用户切回去时不能吃到旧数）；
-//   - U11：切口径的请求在途期间 data 沿用上一份快照 + isFetching=true（大屏不闪空，
-//     同时给调用方出「数字还是旧的」提示的信号）。
+//   - U11：切口径的请求在途期间 data 沿用上一份快照 + isFetching/isPlaceholderData
+//     均为 true（大屏不闪空，同时给调用方出「数字还是旧的」提示的信号）；
+//   - U12：同键后台 refetch（WS 事件驱动）isFetching=true 但 isPlaceholderData=false
+//     —— 提示层的信号只能取后者，否则大屏会在无人操作时反复播报假状态。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope, nextTick, ref } from 'vue';
@@ -401,15 +403,55 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     // 今日/两周到期归零，连与口径无关的在制/在检 KPI 也一起归零，整块大屏闪空。
     expect(q!.data.value).toBeDefined();
     expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
-    // 数字暂时还是旧口径的 —— 调用方据此出「切换中」提示（DashboardView 把它接到
-    // UpcomingDeliveryChart 的 :loading，图上盖一层 .chart-pending）。
+    // 数字暂时还是旧口径的 —— 调用方据此出提示（DashboardView 把这个信号接到
+    // UpcomingDeliveryChart 的 :stale，图上盖一层 .chart-pending）。
     expect(q!.isFetching.value).toBe(true);
+    expect(q!.isPlaceholderData.value).toBe(true);
 
     releaseSystem({ ...makeBaseSnapshot(), ts: '2026-10-04T10:00:00+08:00' });
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(q!.isFetching.value).toBe(false);
+    expect(q!.isPlaceholderData.value).toBe(false);
     expect(q!.data.value?.ts).toBe('2026-10-04T10:00:00+08:00');
+    scope.stop();
+  });
+
+  it('U12：同键后台 refetch（WS 事件）isFetching=true 但 isPlaceholderData=false', async () => {
+    vi.useFakeTimers();
+    const basis = ref<DeliveryBasis>('planned');
+    const scope = effectScope();
+    let q: ReturnType<typeof useDashboardSnapshot> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useDashboardSnapshot(basis));
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
+    expect(q!.isPlaceholderData.value).toBe(false);
+
+    // 挂起一次响应，模拟慢的后台 refetch。
+    let release: (v: unknown) => void = () => {};
+    fetchSnapshotMock.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+
+    // 派一个真实 WS 事件 → useDashboardInvalidation 500ms debounce → invalidate →
+    // **同一个 queryKey** 的后台 refetch。图上数字此刻是当前且正确的（仍是 planned），
+    // 不该被提示层说成「口径切换中」。
+    lastEventHandler!({ type: 'event', event_type: 'PART_TO_SHIP', data: {}, ts: 'x' });
+    await vi.advanceTimersByTimeAsync(500);
+
+    // 鉴别点：isFetching 已经是 true（正是把它当提示信号会踩的坑），但
+    // isPlaceholderData 保持 false ⇒ 提示层不出现，用户什么都没切也不会看到假状态。
+    expect(q!.isFetching.value).toBe(true);
+    expect(q!.isPlaceholderData.value).toBe(false);
+    expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
+
+    release({ ...makeBaseSnapshot(), ts: '2026-09-28T10:00:00+08:00' });
+    await vi.advanceTimersByTimeAsync(30);
+
+    expect(q!.isFetching.value).toBe(false);
+    expect(q!.isPlaceholderData.value).toBe(false);
     scope.stop();
   });
 });

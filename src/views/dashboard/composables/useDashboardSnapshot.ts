@@ -39,8 +39,15 @@
 //     全从这一个 ref 出 ⇒ 一次口径切换会让**整块大屏**闪空，包括与口径毫无关系的
 //     在制 / 在检面板。沿用仓内既成做法（usePartsListQuery / useInspectionListStore /
 //     usePendingProgrammingStore 同款），换键期间沿用上一份快照，图形不闪。
-//     代价是新口径数据到达前图上仍是旧口径的数字，故调用方必须配合 query.isFetching
-//     出一层「数据切换中」的提示，不能让旧数静默停留在新口径开关下。
+//     代价是新口径数据到达前图上仍是旧口径的数字，故调用方必须配合
+//     query.isPlaceholderData 出一层「数字不是当前口径的」提示，不能让旧数静默停留在
+//     新口径开关下。
+//     必须是 isPlaceholderData 而**不是 isFetching**：后者是「正在取数」，任何同键后台
+//     refetch（含 AFFECTS_DASHBOARD 事件在 busy 车间 500ms debounce 后的高频刷新）都
+//     会让它为 true，而那种情况下图上数字是当前且正确的，提示层会播报一个假状态。
+//     isPlaceholderData 只在「换了键、新键还没有数据、正用上一份占位」时为 true
+//     （query-core 的判定条件是 placeholderData !== undefined && data === undefined &&
+//     status === 'pending'），与这层要表达的状态一一对应。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
 import { keepPreviousData, useQuery } from '@tanstack/vue-query';

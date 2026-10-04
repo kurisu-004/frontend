@@ -24,7 +24,7 @@
 //
 // 2026-10-04 追加「交期统计口径」覆盖（B1~B6）：切换控件渲染 / basis prop 驱动选中态
 // （受控）/ 切换 emit update:basis / 口径提示文案随 basis 变（el-tooltip 承载 + 键盘
-// 可达 + 无方向性断言）/ legend 钉 left: 0 / loading 提示层随 isFetching 显隐。
+// 可达 + 无方向性断言）/ legend 钉 left: 0 / 口径占位提示层随 stale 显隐。
 // 口径开关用 EP_STUBS 局部 stub（沿用本文件 v-chart 策略，不 mock element-plus 模块）：
 // 口径不参与渲染，断言集中在 props/emits 与提示文案上。
 
@@ -151,7 +151,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -197,7 +197,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -219,7 +219,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       makeBucket({ date: todayIso(), count: 5, by_status: { PENDING: 5 } }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -245,7 +245,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
   it('C4：未知 seriesName → 不 emit（防御性）', async () => {
     const buckets: UpcomingDeliveryEntryData[] = [makeBucket({ date: '2026-10-01', count: 1 })];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -261,7 +261,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
 
   it('C5：vue-echarts initOptions={renderer:"canvas"} + theme="v5"', async () => {
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets: [makeBucket()], basis: 'planned' as const, loading: false, height: '320px' },
+      props: { buckets: [makeBucket()], basis: 'planned' as const, stale: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -288,7 +288,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -311,7 +311,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -336,7 +336,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
+      props: { buckets, basis: 'planned' as const, stale: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -359,7 +359,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       makeBucket({ date: todayIso(), count: 4, by_status: { PENDING: 4 } }),
     ];
     return mount(UpcomingDeliveryChart, {
-      props: { buckets, basis, loading: false, height: '320px' },
+      props: { buckets, basis, stale: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
   }
@@ -454,22 +454,23 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
     wrapper.unmount();
   });
 
-  it('B6：loading 切换提示层 —— loading=true 盖「口径切换中」，false 不渲染', async () => {
+  it('B6：口径占位提示层 —— stale=true 盖「口径切换中」，false 不渲染', async () => {
     const wrapper = mountChart('planned');
     await nextTick();
-    // 静态数据下不传 loading → 提示层不出现（图上数字与开关一致，无需提示）。
+    // 数据已就绪（图上数字与开关一致）→ 提示层不出现。
     expect(wrapper.find('.chart-pending').exists()).toBe(false);
 
-    // 父组件切口径后 snapshot 处于 keepPreviousData 换键期：图上还是上一份快照的
-    // 数字，必须有一层提示挡住「开关已切、数字没切」的误读。
-    await wrapper.setProps({ loading: true });
+    // 父组件切口径后 snapshot 处于 keepPreviousData 换键期（isPlaceholderData=true）：
+    // 图上还是上一口径的数字，必须有一层提示挡住「开关已切、数字没切」的误读。
+    await wrapper.setProps({ stale: true });
     const pending = wrapper.find('.chart-pending');
     expect(pending.exists()).toBe(true);
     expect(pending.text()).toBe('口径切换中…');
-    // 提示层不吃点击：切换期间开关与柱子仍可交互。
+    // role="status" 是给读屏用户的（提示文本变化时朗读）；「不吃点击」是 CSS
+    // pointer-events，happy-dom 无布局引擎算不出，这条只能靠代码评审守住。
     expect(pending.attributes('role')).toBe('status');
 
-    await wrapper.setProps({ loading: false });
+    await wrapper.setProps({ stale: false });
     expect(wrapper.find('.chart-pending').exists()).toBe(false);
 
     wrapper.unmount();
