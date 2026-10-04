@@ -1439,7 +1439,7 @@ onMounted(() => {
   font-size: 16px;
 }
 
-/* 图纸列的 link + tag 两行布局 */
+/* 图纸列：文件名链接 */
 .drawing-cell {
   display: flex;
   flex-direction: column;
