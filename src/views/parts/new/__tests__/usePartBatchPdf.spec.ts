@@ -43,6 +43,52 @@ vi.mock('@/utils/pdfjs', () => ({
   countPdfPages: async () => mocks.pageCount,
 }));
 
+// 2026-10-05：历史价确认单解析结果**追加一条合成的「逐子件成行」形态**。
+//
+// 真实 fixture 的 5 行物料编号都与表格里「装配件自身图号」同形（合并成装配件时
+// children[0].drawing_no 就等于顶层图号），所以「顶层图号查不到、只有子件图号查得到」
+// 这条分支用原 fixture 造不出来。这里补一行图号 `E42GUN0001-01`（顶层 `E42GUN0001`
+// 故意不在表里）来模拟该历史形态；计划交期硬编码为 TODAY+14（2026-10-17），因为
+// mock 工厂在模块初始化期执行，读不到文件后文的 TODAY 常量。
+//
+// 用 `vi.hoisted` 承载这个常量：`vi.mock` 会被提升到 import 之前，普通模块级 const
+// 此刻还在 TDZ 里。
+const CHILD_ONLY = vi.hoisted(() => ({ drawingNo: 'E42GUN0001-01' }));
+
+vi.mock('@/utils/historicalPriceExcelParser', async (importOriginal) => {
+  const actual = await importOriginal<typeof HistPriceNS>();
+  return {
+    ...actual,
+    parseHistoricalPriceExcel: (workbook: XLSX.WorkBook, today: string) => {
+      const parsed = actual.parseHistoricalPriceExcel(workbook, today);
+      return {
+        ...parsed,
+        rows: [
+          ...parsed.rows,
+          {
+            rowNumber: 99,
+            applicantName: '谢岩国',
+            drawingNo: CHILD_ONLY.drawingNo,
+            partName: '胶枪内胆',
+            quantity: 9,
+            unitPrice: 999,
+            totalPrice: 999,
+            isUrgent: false,
+            deliveryDays: 14,
+            plannedDeliveryDate: '2026-10-17',
+            deptCode: 'F06',
+            deptName: '六厂',
+            designDrawingLabel: null,
+            processTypeLabel: null,
+            remarkText: null,
+            warnings: [],
+          },
+        ],
+      };
+    },
+  };
+});
+
 // pdf-lib 只被 mergePages（部分页合并成独立零件）用到；用最小假实现代替，
 // 免去在单测里造真实 PDF 字节。
 vi.mock('pdf-lib', () => ({
@@ -88,12 +134,15 @@ vi.mock('element-plus', () => ({
 
 // 静态导入（必须在 vi.mock 之后）
 import { usePartBatchPdf } from '../composables/usePartBatchPdf';
-import type { UsePartBatchPdfReturn } from '../composables/usePartBatchPdf';
+import type { AssemblyRow, UsePartBatchPdfReturn } from '../composables/usePartBatchPdf';
 import type { Customer } from '@/api/customer';
 import type { UploadFile } from 'element-plus';
 // 类型命名空间导入（编译期擦除，放在 vi.mock 之后不影响 hoist），
 // 供上面 importOriginal<typeof …> 泛型用 —— eslint 禁内联 `typeof import('…')` 写法。
 import type * as PartBatchSharedNS from '../composables/usePartBatchShared';
+import type * as HistPriceNS from '@/utils/historicalPriceExcelParser';
+// 历史价确认单解析器的工作簿类型（XLSX.WorkBook）。type-only 导入 xlsx 不进 bundle。
+import type * as XLSX from 'xlsx';
 
 // ============ fixtures ============
 
@@ -857,6 +906,98 @@ describe('usePartBatchPdf：装配件整套单价回填（Excel 整套口径）'
       expect(c.unit_price).toBeNull();
       expect(c.total_price).toBeNull();
     }
+
+    w.unmount();
+  });
+});
+
+// 2026-10-05 口径定案：装配件**整套价只从顶层自身图号（ownHit）那一行回填**。
+//
+// 背景：Excel 的「物料编号」列在「逐个子件各占一行」的历史形态下装的是**子件**图号，
+// 那一行的价格是**子件价**。写进顶层会与整套价差一个套数倍率，错的数字比空值更危险
+// ⇒ ownHit 缺失而只命中 childHit 时，顶层价格保持 null 等用户手填。
+// 分厂 / 申请人 / 数量 / 计划交期的 `ownHit ?? childHit` 回退**保持现状**（那几列在两种
+// 形态下都是整套口径）。
+describe('usePartBatchPdf：装配件整套价的回填口径（只认顶层图号）', () => {
+  /** 建一个「顶层图号不在 Excel、子件图号在 Excel」的手动装配件，返回顶层行。 */
+  async function childHitOnlyAssembly(api: UsePartBatchPdfReturn): Promise<AssemblyRow> {
+    mocks.pageCount = 2;
+    await setup(api, { pdfName: PART_PDF, withExcel: true });
+    await api.addManualAssembly();
+    // 顶层图号 E42GUN0001 故意不在 Excel；2 页 ⇒ 子件图号是 E42GUN0001-01 / -02
+    api.manualAsmForm.drawing_no = 'E42GUN0001';
+    api.manualAsmForm.name = '胶枪内胆总装';
+    api.manualAsmForm.file = pdfFile('manual-asm.pdf');
+    await api.confirmManualAssembly();
+    const asm = api.assemblies.value[0];
+    if (!asm) throw new Error('未生成装配件');
+    expect(asm.children.map((c) => c.drawing_no)).toEqual(['E42GUN0001-01', 'E42GUN0001-02']);
+    return asm;
+  }
+
+  it('只命中子件行（childHit）时：顶层整套价**不**回填，保持 null 等手填', async () => {
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+    const asm = await childHitOnlyAssembly(api);
+
+    // childHit 确实命中了（分厂 / 申请人 / 数量 / 交期都回填了 ⇒ 证明不是 Excel 没命中）
+    expect(asm.customer_id).toBe('c-liuchang');
+    expect(asm.applicant_name).toBe('谢岩国');
+    expect(asm.quantity).toBe(9);
+    expect(asm.planned_delivery_date).toBe('2026-10-17');
+    // 但那一行是**子件**行（单价 999 / 总价 999），拿它当整套价会与整套口径差一个套数倍率
+    expect(asm.unit_price).toBeNull();
+    expect(asm.total_price).toBeNull();
+    // 子件本来就不回填价（Excel 是整套口径），口径一致
+    for (const c of asm.children) {
+      expect(c.unit_price).toBeNull();
+      expect(c.total_price).toBeNull();
+    }
+
+    w.unmount();
+  });
+
+  it('只命中子件行时：用户手填的顶层整套价不被后续新增装配件抹掉', async () => {
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+    const edited = await childHitOnlyAssembly(api);
+    edited.unit_price = 130;
+    edited.total_price = 260;
+
+    // 再手动新增一个同样「只命中子件」的装配件
+    await api.addManualAssembly();
+    api.manualAsmForm.drawing_no = 'E42GUN0001';
+    api.manualAsmForm.name = '胶枪内胆总装2';
+    api.manualAsmForm.file = pdfFile('manual-asm2.pdf');
+    await api.confirmManualAssembly();
+
+    // 新行仍然不回填（口径一致），既有行的手改值原样
+    const fresh = api.assemblies.value[1];
+    if (!fresh) throw new Error('未生成第二个装配件');
+    expect(fresh.unit_price).toBeNull();
+    expect(fresh.total_price).toBeNull();
+    expect(edited.unit_price).toBe(130);
+    expect(edited.total_price).toBe(260);
+
+    w.unmount();
+  });
+
+  it('顶层自身图号命中（ownHit）时：整套价照常回填（口径不误伤正常形态）', async () => {
+    mocks.pageCount = 2;
+    const w = harnessMount();
+    await flushPromises();
+    const api = need();
+
+    await setup(api, { pdfName: ASM_PDF, withExcel: true });
+    selectPages(api, 'pdf-1001', 2);
+    await api.mergeSelectedAsAssembly();
+
+    const asm = api.assemblies.value[0];
+    if (!asm) throw new Error('未生成装配件');
+    expect(asm.unit_price).toBe(EXCEL_ROW_ASM.unitPrice);
+    expect(asm.total_price).toBe(EXCEL_ROW_ASM.totalPrice);
 
     w.unmount();
   });

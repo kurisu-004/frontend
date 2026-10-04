@@ -1,21 +1,26 @@
 // Tab 2「PDF 批量上传」composable。
 //
 // 2026-10-04 单按钮 + 后端上传：提交入口收敛成一个 `onSubmit`，内部三段
-// `idle → creating（POST /parts/batch 建工单）→ uploading（逐个 part 后置补传图纸 /
-// 3D）→ done`。上传失败语义是「工单已建 + 失败清单可重试」——工单落库不可回滚，
+// `idle → creating → uploading → done`。上传失败语义是「工单已建 + 失败清单可重试」——工单落库不可回滚，
 // 所以 `commitStage` 一旦越过 creating 就绝不回 idle（回 idle 会让用户再点一次
 // 主按钮，把同一批工单建第二遍），重试一律只补传文件。
 //
+// 2026-10-05：creating 阶段**分两路**。独立零件行走 `POST /parts/batch`（一次请求，
+// 端点内无 assembly 概念）；装配件行走树形端点 `POST /api/v2/assemblies`（逐组一次请求，
+// 一次建出 `t_assembly` 顶层 + 全部 `t_part` 子件）。此前把装配件主子件展平成 N+1 个
+// 独立 part 发 `POST /parts/batch`，结果 `t_assembly` 一行不涨、子件的 `assembly_id`
+// 全 NULL —— 表格上叫「装配件」的东西在服务端根本不是装配件。
+//
 // 建单只有「部分行成立」时是例外：建出来的行会立刻从本地表格移除（它们已经是真实
 // 工单，留着只会诱导重复提交），剩下的失败行才留在表里等下一次提交 ⇒ 阶段此时回
-// idle 也不会重复建单。`POST /parts/batch` 无幂等键，任何「同一批行发第二次」都是
-// 真建出第二份工单。
+// idle 也不会重复建单。`POST /parts/batch` 与 `POST /assemblies` 都无幂等键，任何
+// 「同一批行发第二次」都是真建出第二份工单。
 //
 // 已知取舍（2026-10-04）：本 Tab 的草稿是**只写**的 —— `draft.load()` 只在 saver 里用来
 // 读回旧 payload 以保住 Tab 1 的 `manual_tab` 段，没有任何把 `pdf_tab.rows` 灌回
 // `standaloneParts` / `assemblies` 的路径。所以刷新后表格是空的、行全部丢失，重新提交
 // 必须重新选文件再解析。会**重复建单**的实际触发点是「重新解析」：它把全部行重新列出来
-// （含上一次已经建出工单的那些），再点提交就会建第二遍，而 `POST /parts/batch` 无幂等键。
+// （含上一次已经建出工单的那些），再点提交就会建第二遍。
 // 要根治得让行 uid 可复现（解析结果按文件名+页码派生），属独立设计变更。
 
 import {
@@ -34,6 +39,8 @@ import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { batchCreateParts, uploadPart3DModel, uploadPartDrawing } from '@/api/parts';
 import type { PartBatchCreatePayload, PartBatchResult } from '@/api/parts';
+import { createAssembly, uploadAssemblyPdf } from '@/api/assembly';
+import type { AssemblyCreatePayload } from '@/types/assembly';
 import {
   usePartsNewDraft,
   type SerializedAssemblyChildRow,
@@ -478,7 +485,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       return;
     }
     // 提交 / 补传在途时重新解析 = 整表换新（行 uid 全换 + resetCommitState 清空
-    // createdPartIds），先行的 onSubmit 跑完还会照常收口 ⇒ 静默清空刚解析出的行、
+    // createdTargets），先行的 onSubmit 跑完还会照常收口 ⇒ 静默清空刚解析出的行、
     // 跳页、再弹「成功创建 0 条零件」。两道防线里这是第一道。
     if (guardRowMutation()) return;
     pdfBuildingTree.value = true;
@@ -532,7 +539,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       standaloneParts.value = rows;
       assemblies.value = [];
       selectedPages.value = new Set();
-      // 行 uid 全部换新 ⇒ 上一批的提交状态（partId 映射 / job / 失败清单 / 阶段机）
+      // 行 uid 全部换新 ⇒ 上一批的提交状态（工单 id 映射 / job / 失败清单 / 阶段机）
       // 再也对不上表里任何一行，留着只会让主按钮显示点不动的「重试上传」。
       // 上一批已建出的工单在服务端，本页无从补传（跨刷新取舍见文件头注释）。
       resetCommitState();
@@ -608,18 +615,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       }
     }
     for (const a of asms) {
-      // 2026-10-03：顶层命中源改为**装配件自身图号** `a.drawing_no`。子件图号是前端按
+      // 2026-10-03：顶层命中源为**装配件自身图号** `a.drawing_no`。子件图号是前端按
       // 「首页原图号 / 原图号-02」合成的（见 mergeSelectedAsAssembly /
       // confirmManualAssembly），其中只有第 1 页那个恰好等于装配件自身图号，`-02 / -03`
       // 这些在 Excel 的「物料编号」列里根本不存在 —— 顶层回填认自身图号才是稳的。
       // 保留 child 命中作为回退：Excel 里「逐个子件各占一行」的历史数据，其子件图号就是
       // 物料编号本身，仍应命中。
-      //
-      // 2026-10-05 记录的口径风险：走到 childHit 时，`hit` 是**子件**行，`hit.unitPrice` /
-      // `hit.totalPrice` 会被当成**整套**价写进顶层。`applicant_name` / `quantity` /
-      // `planned_delivery_date` 早已是同样处理（Excel 的数量口径就是整套数量），但价格
-      // 摊到子件与整套上差一个套数倍率。用户在装配件行的「含税单价」列看到并改的值才是
-      // 权威值；这条回退只影响「Excel 逐子件成行 + 用户没手改顶层价」的场景。
       const ownHit = excelMap.get(a.drawing_no);
       const childHit = a.children
         .map((c) => excelMap.get(c.drawing_no))
@@ -639,12 +640,19 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         // 数量 = **整套数量**（业务口径：Excel 的数量是整套的数量）
         a.quantity = hit.quantity || a.quantity;
         if (hit.plannedDeliveryDate) a.planned_delivery_date = hit.plannedDeliveryDate;
-        // 2026-10-05：顶层整套含税单价 / 总价按同口径回填（与独立零件分支一致）。
+      }
+      // 2026-10-05 口径定案：**整套价只从 `ownHit`（装配件自身图号那一行）回填**。
+      // `ownHit` 缺失而只命中 `childHit` 时不回填，保持 null 等用户手填 ——
+      // Excel 的「物料编号」列在逐子件成行的形态下是**子件**图号，它的价格是子件价；
+      // 写进顶层会与整套价差一个套数倍率，错的数字比空值更危险。
+      // （分厂 / 申请人 / 数量 / 交期的 `ownHit ?? childHit` 回退保持现状：Excel 那几列在
+      // 两种形态下都是整套口径，摊不摊得开都不影响语义。）
+      if (ownHit) {
         // `!= null` 只是类型防御：`BidRow.unitPrice` / `totalPrice` 声明为 `number`，
         // parser 已把空值 / 负数兜底成 0（`totalPrice` 缺列时是 `unitPrice * quantity`），
         // 永不为 null ⇒ 走不到短路，Excel 单元格为空时**照样**以 0 覆盖用户手填的单价。
-        if (hit.unitPrice != null) a.unit_price = hit.unitPrice;
-        if (hit.totalPrice != null) a.total_price = hit.totalPrice;
+        if (ownHit.unitPrice != null) a.unit_price = ownHit.unitPrice;
+        if (ownHit.totalPrice != null) a.total_price = ownHit.totalPrice;
       }
       // 2026-10-05 子件口径（业务口径：分厂 / 申请人 / 计划交期 / 单价是整套共享的，
       // 子件数量与单价需手填）：
@@ -1424,7 +1432,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 文件上传条目（统一容器）。
    * - key：UI cell / 后置上传 job 的键（`pdf:${srcUid}` / `3d:${fileUid}`）。
    * - rowRefs：哪些 row 引用了该文件（同一 PDF 被装配件主子件共享时会有 N 个 ref）。
-   *   后置上传按「part × ref」展开 job：同一份原件被 N 个 part 引用就上传 N 次。
+   *   后置上传按「目标实体 × ref」展开 job：同一份原件被 N 个实体引用就上传 N 次，
+   *   **落在哪个端点由 ref 的 rowKind 决定**（见 `buildUploadJobs`）：装配件顶层走
+   *   `POST /assemblies/{id}/files`，其余（独立零件 / 装配件子件）走 parts 的上传端点。
    */
   interface FileUploadEntry {
     key: string;
@@ -1529,20 +1539,45 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    */
   const PART_UPLOAD_CONCURRENCY = 6;
 
-  /** 一次后置上传作业 = 一个 part × 一份原件。 */
+  /**
+   * 2026-10-05 定：装配件建单的并发上限（`POST /assemblies`，每组一次请求）。
+   *
+   * 不沿用 `PART_UPLOAD_CONCURRENCY`（6）：那个值的瓶颈是**字节流**（整份 multipart 进
+   * 后端内存），装配件建单一个请求只发几 KB JSON，字节维度根本不是约束。装配件建单的
+   * 真实约束在服务端写事务：每组要派 1 个装配件流水号（`t_serial_counter` 上一次 UPSERT）
+   * + 1 条 `t_assembly` + N 条 `t_part` INSERT，组数一多请求就在同一张计数表上排队。
+   *
+   * 取 3 而不是串行：一次批量导入的装配件组数是个位数（合并多页 PDF 才能凑出一组），
+   * 串行会把每组的往返时间线性叠加；3 路足够把等待摊薄，又把同一 L1 客户计数表上的
+   * 并发写压到很低。也不取更高：组数本就少，再高只增加计数表争用，收益为零。
+   */
+  const ASSEMBLY_CREATE_CONCURRENCY = 3;
+
+  /**
+   * 后置上传的**目标实体**。2026-10-05 起上传端点按目标分流：装配件顶层（`t_assembly` 行）
+   * 的总装图走 `POST /assemblies/{id}/files`；独立零件与装配件子件（都是 `t_part` 行）走
+   * `POST /parts/{id}/upload-drawing` / `upload-3d-model`。
+   */
+  type UploadTarget = 'part' | 'assembly';
+
+  /** 一次后置上传作业 = 一个目标实体 × 一份原件。 */
   interface UploadJob {
     /**
-     * job 的稳定身份 = `${jobKey}:${partId}`（jobKey 已含 `pdf:` / `3d:` 前缀，故
-     * 天然区分 kind）。job 状态、失败清单、重试集合全按它寻址 —— 粒度必须是 job
-     * 而不是 cell：一份 PDF 被装配件 master + N 个子件共享时会展开成 N+1 个 job，
+     * job 的稳定身份 = `${jobKey}:${target}:${ownerId}`（jobKey 已含 `pdf:` / `3d:` 前缀，
+     * 故天然区分 kind；再带 target 是因为 t_part.id 与 t_assembly.id 是两套雪花，job id
+     * 必须全局唯一）。job 状态、失败清单、重试集合全按它寻址 —— 粒度必须是 job
+     * 而不是 cell：一份 PDF 被装配件顶层 + N 个子件共享时会展开成 N+1 个 job，
      * 只失败其中一个时按 cell 重试会把已成功的也重跑一遍，而后端
-     * `uk_t_part_file_single(part_id, kind)` 会对二次上传报 21108「相同文件已存在」。
+     * `uk_t_part_file_owner_kind_sha` 会对同一 owner + kind 的二次上传报 21108
+     * 「相同文件已存在」。
      */
     id: string;
     /** = entry.key（`pdf:<uid>` / `3d:<uid>`），同时是 UI cell 的键。 */
     jobKey: string;
-    /** 雪花 ID 字符串（后端 JSON 里是 string）。 */
-    partId: string;
+    /** 目标端点。 */
+    target: UploadTarget;
+    /** 目标实体的雪花 ID 字符串（后端 JSON 里是 string）：part.id 或 assembly.id。 */
+    ownerId: string;
     kind: PartFileKind;
     entry: FileUploadEntry;
   }
@@ -1550,14 +1585,18 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /** job 运行时状态。`error` 的错误文案存在 failedJobs 里，不在状态里。 */
   type UploadJobState = 'pending' | 'uploading' | 'done' | 'error';
 
-  /** 本次提交的 `items[i]` 对应的本地行 uid（与 `created[].sourceIndex` 同坐标系）。 */
+  /**
+   * 本次提交 `buildCommitItems()` 的 `items[i]` 对应的本地行 uid（**只覆盖独立零件**，
+   * 与 `res.created[].sourceIndex` 同坐标系）。装配件不走这条坐标：它的 id 来自
+   * `createAssembly` 响应，建单成功时直接按 rowUid 记进 `createdTargets`。
+   */
   const itemRowUids = ref<string[]>([]);
 
   /** 提交流程阶段机。转移：
    *  - idle → creating → uploading → done
-   *  - creating 失败 → 回 idle。前提是 `createdPartIds` 为空（一个 part 都没建出来，
-   *    本地表格原样保留，重来不会碰到已落库的工单）。`createdPartIds` 非空说明已经
-   *    有 part 建出来了，此时回 idle 会诱导重复建单，必须走下面的部分成功分支。
+   *  - creating 失败 → 回 idle。前提是 `createdTargets` 为空（一行都没建出来，
+   *    本地表格原样保留，重来不会碰到已落库的工单）。`createdTargets` 非空说明已经
+   *    有行建出来了，此时回 idle 会诱导重复建单，必须走下面的部分成功分支。
    *  - 建单「部分行成立」→ 同样回 idle，但前提是**建成的行已被移出本地表格**（见
    *    dropCreatedRows），下一次提交只会发出剩下的失败行
    *  - uploading 阶段失败 → 转 done 走失败清单（工单已落库，回 idle 会让用户再点
@@ -1567,23 +1606,41 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   const commitStage = ref<'idle' | 'creating' | 'uploading' | 'done'>('idle');
 
   /**
-   * 本地 rowUid → 已建出的 partId。**跨 done 保留**（重试路径绝不清空）：工单已落库
-   * 不可回滚，这是同一次页面停留内「重试只重传文件、绝不重复建 part」的唯一保证。
+   * 一行已建出的工单 = 目标实体（`t_part` 行 / `t_assembly` 行）+ 它的雪花 ID。
+   *
+   * 2026-10-05：`t_part` 与 `t_assembly` 两张表的 id 都在同一张 map 里，所以必须带
+   * `target` 区分 —— 只存一个裸 id 的话，后置上传分不清该打 `/parts/{id}/upload-drawing`
+   * 还是 `/assemblies/{id}/files`。
+   */
+  interface CreatedTarget {
+    target: UploadTarget;
+    /** 目标实体的雪花 ID 字符串。 */
+    id: string;
+  }
+
+  /**
+   * 本地 rowUid → 已建出的目标实体。**跨 done 保留**（重试路径绝不清空）：工单已落库
+   * 不可回滚，这是同一次页面停留内「重试只重传文件、绝不重复建单」的唯一保证。
    * 跨刷新的取舍见文件头注释。
+   *
+   * 装配件是**整组记账**：一次 `POST /assemblies` 建出顶层 + 全部子件，三条记录同进同出。
+   * 组内若出现「顶层建出但子件数对不上」这种响应异常，整组都不记账（见
+   * `createAssemblyGroups`），保证 map 里的每条记录都对应服务端真实存在的一行。
    *
    * reactive（Vue 的集合代理）⇒ `size` 可以直接进 computed 判「工单已建但 job 未登记」。
    */
-  const createdPartIds = reactive(new Map<string, string>());
+  const createdTargets = reactive(new Map<string, CreatedTarget>());
 
-  /**
-   * 2026-10-04：建单「部分行成立」时装配顶层（master）已经建出的那些行。
-   *
-   * 装配件顶层在 UI 上是一行、提交时却与子件各自成为独立 item：顶层建出而某个子件
-   * 被拒时，这一行不能整行删掉（被拒子件得留着重发），也不能整行重发（顶层会再建成
-   * 一份）。所以顶层建出的事实单独记在这里，`buildCommitItems` 据此跳过它。
-   * 生命周期跟着行 uid：行被删 / 全成功清场 / 重新解析出新的 uid 后自然失效。
-   */
-  const createdAssemblyMasters = reactive(new Set<string>());
+  /** 已建出实体按表计数（提示文案 / 主按钮文案用；装配件子件计入 `parts`）。 */
+  const createdCounts = computed<{ parts: number; assemblies: number; total: number }>(() => {
+    let parts = 0;
+    let assemblies = 0;
+    for (const v of createdTargets.values()) {
+      if (v.target === 'assembly') assemblies += 1;
+      else parts += 1;
+    }
+    return { parts, assemblies, total: parts + assemblies };
+  });
 
   /** 本次提交的全部上传作业（shallowRef：整体替换，不深代理 File）。 */
 
@@ -1612,7 +1669,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
   /**
    * 2026-10-04：重新解析出一批全新行时清掉上一批的提交状态（行 uid 全部换新，
-   * `createdPartIds` / job / 失败清单都再也对不上表里任何一行）。
+   * `createdTargets` / job / 失败清单都再也对不上表里任何一行）。
    * 阶段回 idle：这是新的一批内容，可以正常提交。
    *
    * 调用方必须先过 `guardRowMutation`：这一句会把 `commitStage` 打回 idle，而
@@ -1621,8 +1678,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    */
   function resetCommitState(): void {
     commitStage.value = 'idle';
-    createdPartIds.clear();
-    createdAssemblyMasters.clear();
+    createdTargets.clear();
     itemRowUids.value = [];
     uploadJobs.value = [];
     jobsByCellKey = new Map();
@@ -1662,7 +1718,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /**
    * 2026-10-04：**所有会往表里加行 / 换掉整表的入口**共用的提交在途闸门。
    *
-   * 提交在途时建出来的新行没有 partId、也不会被本次 job 覆盖，成功收口会把它跟
+   * 提交在途时建出来的新行没有工单 id、也不会被本次 job 覆盖，成功收口会把它跟
    * 已建出的行一起清掉。返回 true = 已拦下，调用方必须立即 return。
    *
    * 这道闸门是第一道防线；第二道是 `rowEpoch`（即便有入口绕过这里，收口也会拒绝对不上
@@ -1731,10 +1787,19 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     syncCells();
   }
 
-  /** 失败 job 清单（每行 = 一个 part × 一份原件），汇总时弹给用户看。 */
+  /**
+   * 失败 job 的目标实体标签（失败清单 / 汇总标题用）。
+   * 装配件子件与独立零件都是 `t_part` 行，标「第 X 号零件」；装配件顶层是 `t_assembly`
+   * 行，标「装配件 X」—— 两者的 id 是两套雪花，混标会让用户拿着装配件 id 去零件列表里找。
+   */
+  function jobOwnerLabel(job: UploadJob): string {
+    return job.target === 'assembly' ? `装配件 ${job.ownerId}` : `第 ${job.ownerId} 号零件`;
+  }
+
+  /** 失败 job 清单（每行 = 一个目标实体 × 一份原件），汇总时弹给用户看。 */
   function failedJobLines(): string[] {
     return Array.from(failedJobs.values()).map(
-      (f) => `第 ${f.job.partId} 号零件 · ${f.job.entry.filename}：${f.error}`,
+      (f) => `${jobOwnerLabel(f.job)} · ${f.job.entry.filename}：${f.error}`,
     );
   }
 
@@ -1744,9 +1809,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * **前提**：行集合自 `submitRowEpoch` 快照以来没被改过（见开头的世代校验）。收口的
    * 计数 / 清场 / 跳页全部以「当前表格 == 建单时那张表」为前提，不成立就只能如实告知。
    *
-   * 计数口径统一为 **job**（一个 part × 一份原件 = 一项），与下面清单的行一一对应：
-   * 一份 PDF 被装配件 master + N 子件共享时是 N+1 项，标题若按「文件数」算就会
-   * 出现「1 个文件失败」底下列两行零件号的矛盾。涉及的零件数 / 文件数作为补充
+   * 计数口径统一为 **job**（一个目标实体 × 一份原件 = 一项），与下面清单的行一一对应：
+   * 一份 PDF 被装配件顶层 + N 子件共享时是 N+1 项，标题若按「文件数」算就会
+   * 出现「1 个文件失败」底下列两行实体号的矛盾。涉及的目标实体数 / 文件数作为补充
    * 信息一并给出。
    *
    * 成功判据是「**全部已登记 job 都判成功**」，不是「failedJobs 为空」：登记 / 调度
@@ -1756,15 +1821,15 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    */
   function summarizeUploads(): void {
     // 2026-10-04 世代校验，必须**先于**任何收口动作。行集合在提交期间被换过（重新解析
-    // 会把 `createdPartIds` 一并清空、行 uid 全部换新）时，下面的计数 / 清场 / 跳页
+    // 会把 `createdTargets` 一并清空、行 uid 全部换新）时，下面的计数 / 清场 / 跳页
     // 都对不上当前表格：走成功收口会把用户刚建好的行静默清掉、跳到零件列表、再弹一条
     // 「成功创建 0 条零件」的假提示，而工单其实已经落库了。
     if (rowEpoch.value !== submitRowEpoch) {
       const lost = failedJobs.size > 0 ? `其中 ${failedJobs.size} 项文件未上传成功。\n` : '';
       ElMessageBox.alert(
         `工单已经创建，但提交期间本地表格被改过，本次结果已无法与当前表格对应。\n` +
-          `${lost}\n已创建的工单请到零件列表查看，图纸可在零件详情页补传。`,
-        '提交结果请到零件列表核对',
+          `${lost}\n已创建的工单请到零件列表 / 装配件列表查看，图纸可在详情页补传。`,
+        '提交结果请到列表核对',
         { type: 'warning' },
       );
       return;
@@ -1775,9 +1840,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         failedJobs.set(job.id, { job, error: '未完成（上传过程被中断）' });
       }
     }
-    if (uploadJobs.value.length === 0 && createdPartIds.size > 0) {
+    if (uploadJobs.value.length === 0 && createdTargets.size > 0) {
       ElMessageBox.alert(
-        `工单已创建 ${createdPartIds.size} 条零件，但文件一个都没上传（上传任务没能登记）。\n\n可在本页点「重试上传」补传（不会重复建单）。`,
+        `工单已创建 ${createdCountText()}，但文件一个都没上传（上传任务没能登记）。\n\n可在本页点「重试上传」补传（不会重复建单）。`,
         '文件上传未开始',
         { type: 'error' },
       );
@@ -1785,23 +1850,26 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
     if (failedJobs.size > 0) {
       const lines = failedJobLines();
-      const partCount = new Set(Array.from(failedJobs.values(), (f) => f.job.partId)).size;
+      const ownerCount = new Set(Array.from(failedJobs.values(), (f) => f.job.ownerId)).size;
       const fileCount = new Set(Array.from(failedJobs.values(), (f) => f.job.jobKey)).size;
       const sample = lines.slice(0, 5).join('\n');
       const more = lines.length > 5 ? `\n…还有 ${lines.length - 5} 项失败` : '';
       ElMessageBox.alert(
-        `工单已创建，但 ${failedJobs.size} 项上传失败（涉及 ${partCount} 个零件 / ${fileCount} 个文件）：\n${sample}${more}\n\n可在本页重试上传（不会重复建单）。`,
+        `工单已创建，但 ${failedJobs.size} 项上传失败（涉及 ${ownerCount} 个工单 / ${fileCount} 个文件）：\n${sample}${more}\n\n可在本页重试上传（不会重复建单）。`,
         '文件上传失败',
         { type: 'warning' },
       );
       return;
     }
-    const standaloneCount = standaloneParts.value.length;
-    const assemblyMasters = assemblies.value.length;
-    const childCount = assemblies.value.reduce((s, a) => s + a.children.length, 0);
-    ElMessage.success(
-      `成功创建 ${createdPartIds.size} 条零件（${standaloneCount} 独立 + ${assemblyMasters} 装配件顶层 + ${childCount} 子件）`,
-    );
+    // 2026-10-05：装配件子件挂上 assembly_id 后**不会**出现在零件一览（列表的 part 段是
+    // `WHERE assembly_id IS NULL`），只有装配件父行进列表 ⇒ 成功提示里必须说清子件去哪看。
+    const c = createdCounts.value;
+    const childCount = totalAssemblyChildren.value;
+    const segs: string[] = [];
+    if (c.parts > 0) segs.push(`${c.parts} 条零件`);
+    if (c.assemblies > 0) segs.push(`${c.assemblies} 个装配件（含 ${childCount} 个子件）`);
+    const hint = c.assemblies > 0 ? '\n子件不在零件一览里，请到装配件详情页查看。' : '';
+    ElMessage.success(`成功创建 ${segs.join(' + ') || '0 条'}${hint}`);
     // 2026-10-04：草稿在这里才清 —— 还有上传失败就必须留着（工单已落库，图样要靠本页
     // 的 job 现场补传）。注意草稿对 Tab 2 是**只写**的（`pdf_tab` 段没有回读路径，
     // 刷新后表格本来就是空的），清掉它不代表行可恢复。
@@ -1823,8 +1891,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     jobStates.clear();
     failedJobs.clear();
     runningJobIds.clear();
-    createdPartIds.clear();
-    createdAssemblyMasters.clear();
+    createdTargets.clear();
     itemRowUids.value = [];
     successNextTab.value = 'manual';
     router.push('/parts?status=PENDING');
@@ -1834,13 +1901,19 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 跑一批 job（受控并发）。成败记在 job 上（jobStates / failedJobs）再由 syncCells
    * 推导 cell 状态；单个 job 抛错只记失败、不影响其它 job，也不外抛。
    *
+   * 端点按 `job.target` 分流（2026-10-05）：装配件顶层的总装图打
+   * `POST /assemblies/{id}/files`（field=`file`，只收 PDF，存成 kind=ASSEMBLY_MASTER）；
+   * 独立零件 / 装配件子件（都是 `t_part` 行）打 `/parts/{id}/upload-drawing` /
+   * `upload-3d-model`。
+   *
    * 已在途的 job 直接跳过（`runningJobIds`）：同一次上传请求重复发出去既浪费带宽，
    * 又会撞后端唯一索引。
    *
-   * 命中 `isPartFileDuplicateError`（后端说这个 part 的这个 kind 已有文件）按**成功**
+   * 命中 `isPartFileDuplicateError`（后端说这个 owner 的这个 kind 已有文件）按**成功**
    * 收：该 kind 下已有文件就说明那份文件已经在服务端，此刻把它记成失败会让每次重试
    * 都稳定再拿一次同一个码，UI 永远停在假错误里（成因是上一次上传「已落库但响应
-   * 丢失」）。
+   * 丢失」）。装配件总装图与零件图纸同落 `t_part_file`（`owner_kind` 不同、kind 都是各自
+   * 那一个），所以复用同一个 21108 归一。
    */
   async function runUploadJobs(jobs: UploadJob[]): Promise<void> {
     const runnable = jobs.filter((j) => !runningJobIds.has(j.id));
@@ -1850,8 +1923,13 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       jobStates.set(job.id, 'uploading');
       syncCells();
       try {
-        if (job.kind === 'DRAWING') await uploadPartDrawing(job.partId, job.entry.file);
-        else await uploadPart3DModel(job.partId, job.entry.file);
+        if (job.target === 'assembly') {
+          await uploadAssemblyPdf(job.ownerId, job.entry.file);
+        } else if (job.kind === 'DRAWING') {
+          await uploadPartDrawing(job.ownerId, job.entry.file);
+        } else {
+          await uploadPart3DModel(job.ownerId, job.entry.file);
+        }
         jobStates.set(job.id, 'done');
         failedJobs.delete(job.id);
       } catch (e) {
@@ -1995,11 +2073,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    *
    * 这时 `failedJobs` 是空的，只按「有失败 job」判可点会让主按钮显示「提交创建（N 个
    * 零件）」却永久 disabled —— UI 在邀请一个点不动的动作，而用户看到自己填好的行唯一
-   * 合理的动作就是再点一次，那会把工单再建一遍。出路是现成的：`createdPartIds` 与
+   * 合理的动作就是再点一次，那会把工单再建一遍。出路是现成的：`createdTargets` 与
    * `itemRowUids` 还在手上，现场重建 job 列表即可（不碰建单）。
    */
   const needsUploadRebuild = computed<boolean>(
-    () => createdPartIds.size > 0 && uploadJobs.value.length === 0,
+    () => createdTargets.size > 0 && uploadJobs.value.length === 0,
   );
 
   /** 是否可以点主按钮：idle 态有内容可提交；done 态还有失败 job 或待重建的 job 列表。 */
@@ -2019,7 +2097,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     if (commitStage.value === 'creating') return '正在创建工单…';
     if (commitStage.value === 'uploading') return '正在上传图纸…';
     if (commitStage.value === 'done') {
-      const n = hasUploadErrors.value ? failedJobCount.value : createdPartIds.size;
+      const n = hasUploadErrors.value ? failedJobCount.value : createdCounts.value.total;
       if (n > 0) return `重试上传（${n} 项）`;
     }
     const partCount =
@@ -2078,15 +2156,15 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     return true;
   }
 
-  /** 本地行 → `POST /parts/batch` 的 item（不含文件：文件走后置上传）。
+  /** 独立零件行 → `POST /parts/batch` 的 item（不含文件：文件走后置上传）。
    *
-   * 展平顺序固定，且**必须**与 `res.created[].sourceIndex` 的坐标系一致：
-   * 独立零件 → 装配件顶层（master）→ 装配件子件。
-   * 装配件主子件各建一个独立 part（`POST /parts/batch` 无 assembly 概念），
-   * 子件继承顶层的申请人 / 分厂。
+   * 2026-10-05：**只含独立零件**。装配件不再展平成 N+1 个独立 part —— `POST /parts/batch`
+   * 端点内没有 assembly 概念，展平的结果是 `t_assembly` 一行不涨、子件的 `assembly_id`
+   * 全 NULL。装配件改走树形端点 `POST /api/v2/assemblies`（见 `buildAssemblyPayload`）。
    *
-   * 2026-10-05：三类行的 `unit_price` / `total_price` 都经 `toMoneyString` 带上
-   * （2 位小数字符串，缺价时为 undefined → 键不生效，后端落 0）。 */
+   * 顺序必须与 `res.created[].sourceIndex` 的坐标系一致（`rowUids[i]` ↔ `items[i]`）。
+   * 金额经 `toMoneyString` 带上（2 位小数字符串，缺价时为 undefined → 键不生效，
+   * 后端落 0），与独立零件 / 装配件 / 子件三层保持同一口径。 */
   function buildCommitItems(): { items: PartBatchCreatePayload[]; rowUids: string[] } {
     const items: PartBatchCreatePayload[] = [];
     const rowUids: string[] = [];
@@ -2112,66 +2190,150 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         total_price: toMoneyString(r.total_price),
       });
     }
-    for (const a of assemblies.value) {
-      // 顶层 master part（也是独立 part，不创建 assembly 父节点）。部分成功收口后
-      // 顶层已建出（createdAssemblyMasters），再发一次就是重复建单。
-      if (!createdAssemblyMasters.has(a.uid)) {
-        rowUids.push(a.uid);
-        items.push({
-          name: a.name || a.drawing_no || `装配件-${a.uid}`,
-          drawing_no: a.drawing_no || '',
-          applicant_name: a.applicant_name,
-          applicant_id: null,
-          quantity: a.quantity,
-          request_date: a.request_date,
-          planned_delivery_date: a.planned_delivery_date || a.request_date,
-          is_urgent: a.is_urgent,
-          order_no: a.order_no,
-          system_delivery_date: a.system_delivery_date,
-          note: a.note,
-          customer_id: a.customer_id,
-          unit_price: toMoneyString(a.unit_price),
-          total_price: toMoneyString(a.total_price),
-        });
-      }
-      // 子件：每个子件一个 part（共享顶层 PDF）
-      for (const c of a.children) {
-        rowUids.push(c.uid);
-        items.push({
-          name: c.name || `子件${c.page_index + 1}`,
-          drawing_no: c.drawing_no,
-          applicant_name: a.applicant_name, // 继承顶层
-          applicant_id: null,
-          quantity: c.quantity,
-          request_date: c.request_date,
-          planned_delivery_date: c.planned_delivery_date || c.request_date,
-          is_urgent: c.is_urgent,
-          order_no: c.order_no,
-          system_delivery_date: c.system_delivery_date,
-          note: c.note,
-          customer_id: a.customer_id, // 分厂继承顶层
-          // 子件单价不从 Excel 继承（Excel 是整套口径，摊到 N 个子件会重复计价 N 倍），
-          // 只有用户在子件行手填过才会发出去。
-          unit_price: toMoneyString(c.unit_price),
-          total_price: toMoneyString(c.total_price),
-        });
-      }
-    }
     return { items, rowUids };
   }
 
   /**
-   * 建单结果里 `buildUploadJobs` 真正用到的部分：partId + 它对应的请求 items 下标。
-   * 收窄成这个形状是为了让「job 登记失败后用 createdPartIds 现场重建」不必伪造整个
-   * `PartItem`（重建路径拿不到后端吐回的那些字段，而这里一个都不读）。
+   * 装配件行 → `POST /api/v2/assemblies` 的 `data` JSON（**不传 PDF**）。
+   *
+   * 一次请求建出 `t_assembly` 顶层 + 全部 `t_part` 子件（子件的 `assembly_id` 指向顶层）。
+   * 后端该端点现在**无条件**派序列号、**无条件**建子件（2026-10-05 放开），所以不传
+   * PDF 也能建出完整的装配件；总装图走 `POST /assemblies/{id}/files` 单独上传
+   * （那个端点才真入库，存 kind=ASSEMBLY_MASTER）。
+   *
+   * 金额一律过 `toMoneyString`：`unit_price` / `total_price` 是 rust `rust_decimal` +
+   * `serde-with-str`，只认 JSON 字符串。
    */
-  interface CreatedPartRef {
-    id: string | number;
-    sourceIndex: number;
+  function buildAssemblyPayload(a: AssemblyRow): AssemblyCreatePayload {
+    return {
+      name: a.name || a.drawing_no || `装配件-${a.uid}`,
+      drawing_no: a.drawing_no,
+      // 必须是 L2 叶子，后端强校验（20302）；空值由 validateL2Customers 挡在前头。
+      customer_id: a.customer_id,
+      applicant_name: a.applicant_name,
+      request_date: a.request_date,
+      planned_delivery_date: a.planned_delivery_date || a.request_date,
+      is_urgent: a.is_urgent,
+      /** 顶层是**套数**。 */
+      quantity: a.quantity,
+      unit_price: toMoneyString(a.unit_price),
+      total_price: toMoneyString(a.total_price),
+      order_no: a.order_no,
+      system_delivery_date: a.system_delivery_date,
+      note: a.note,
+      children: a.children.map((c, i) => ({
+        name: c.name || `子件${i + 1}`,
+        drawing_no: c.drawing_no,
+        quantity: c.quantity,
+        planned_delivery_date: c.planned_delivery_date || c.request_date,
+        // 子件单价不从 Excel 继承（Excel 是整套口径，摊到 N 个子件会重复计价 N 倍），
+        // 只有用户在子件行手填过才会发出去。
+        unit_price: toMoneyString(c.unit_price),
+        total_price: toMoneyString(c.total_price),
+      })),
+    };
   }
 
-  /** 本次提交要上传的 part + 文件的对应关系（`POST /parts/batch` 返回后调用一次）。 */
-  function buildUploadJobs(parts: CreatedPartRef[]): UploadJob[] {
+  /** 一次装配件建单的结果分三类，逐组独立记账（互不影响）。 */
+  interface AssemblyGroupFailure {
+    /** 该组的本地行 uid（`AssemblyRow.uid`）。 */
+    rowUid: string;
+    /** 展示用标签：`图号 xxx` 或 `装配件-uid`。 */
+    label: string;
+    error: string;
+    /**
+     * `rejected` = 后端明确拒了（业务错误码），该组一定没建出；
+     * `unknown` = 拿不到定论（网络 / 5xx，或响应形状对不上），后端可能已落库。
+     */
+    outcome: 'rejected' | 'unknown';
+  }
+
+  /**
+   * 后端业务错误码是 5 位（`1xxxx`–`4xxxx`）；`api/http.ts` 在拿不到 `{code,message,data}`
+   * 信封时用 HTTP 状态码（网络错误是 0）兜底 ⇒ `code >= 10000` 才代表后端明确拒了。
+   */
+  function isDefinitiveApiRejection(e: unknown): boolean {
+    const code = (e as { code?: unknown } | null)?.code;
+    return typeof code === 'number' && code >= 10000;
+  }
+
+  /**
+   * 逐个装配件发 `POST /api/v2/assemblies`（受控并发 `ASSEMBLY_CREATE_CONCURRENCY`），
+   * **逐组 try/catch、不整体 reject**，并把建出的实体写进 `createdTargets`。
+   *
+   * 心智模型与 `batchCreateParts` 一致：该端点无幂等键，一个组装配件 400（比如 20308
+   * L1 客户没有 `serial_prefix`）绝不能让其它已建好的组在 UI 上消失。
+   *
+   * **记账的不变量**：`createdTargets` 里的每条记录都对应服务端真实存在的一行。
+   * 顶层建出但 `created_children` 数量与请求不符时整组**不记账**（按 `unknown` 上报）——
+   * 宁可让这一组留在表里、如实告诉用户「请先到装配件列表核对」，也不能在「顶层已建 /
+   * 子件没建全」的状态下让用户重提（顶层会再建成第二份装配件）。
+   */
+  async function createAssemblyGroups(rows: AssemblyRow[]): Promise<AssemblyGroupFailure[]> {
+    const failures: AssemblyGroupFailure[] = [];
+    if (rows.length === 0) return failures;
+    await runWithConcurrency(rows, ASSEMBLY_CREATE_CONCURRENCY, async (a) => {
+      const label = a.drawing_no || a.name || `装配件-${a.uid}`;
+      try {
+        const res = await createAssembly(buildAssemblyPayload(a));
+        const children = res?.created_children;
+        if (!res?.assembly?.id || !Array.isArray(children)) {
+          throw new Error('响应缺少 assembly / created_children（可能被网关拦截）');
+        }
+        if (children.length !== a.children.length) {
+          throw new Error(
+            `子件数量与请求不一致（请求 ${a.children.length} 个，响应 ${children.length} 个）`,
+          );
+        }
+        // 顶层 + 子件同进同出（一次请求一个事务）
+        createdTargets.set(a.uid, { target: 'assembly', id: String(res.assembly.id) });
+        children.forEach((child, i) => {
+          const row = a.children[i];
+          // 后端按入参顺序建子件，序列号 `{asm_serial}-{i:02d}`（1-based）
+          if (row && child?.id)
+            createdTargets.set(row.uid, { target: 'part', id: String(child.id) });
+        });
+      } catch (e) {
+        failures.push({
+          rowUid: a.uid,
+          label,
+          error: (e as Error).message ?? '创建失败',
+          // 只有带 5 位业务码的 ApiError 才是「后端明确拒了」；本文件自造的响应形状错误
+          // 与网络错误都没有 code，一律按「可能已落库」的 unknown 上报。
+          outcome: isDefinitiveApiRejection(e) ? 'rejected' : 'unknown',
+        });
+      }
+    });
+    // 失败清单按表格顺序展示（并发下完成顺序不定）
+    const order = new Map(rows.map((a, i) => [a.uid, i]));
+    failures.sort((x, y) => (order.get(x.rowUid) ?? 0) - (order.get(y.rowUid) ?? 0));
+    return failures;
+  }
+
+  /**
+   * `buildUploadJobs` 真正用到的部分：目标实体 + 它的本地行 uid。
+   * 收窄成这个形状是为了让「job 登记失败后用 `createdTargets` 现场重建」不必伪造
+   * 后端返回的整个 item（重建路径拿不到那些字段，而这里一个都不读）。
+   */
+  interface CreatedTargetRef {
+    target: UploadTarget;
+    /** 目标实体 id（part.id 或 assembly.id）。 */
+    id: string;
+    /**
+     * 本地行 uid。**直查，不走 `itemRowUids[sourceIndex]`**：装配件子件的 id 来自
+     * `createAssembly` 的响应，本来就没有 `sourceIndex` 坐标。
+     */
+    rowUid: string;
+  }
+
+  /**
+   * 本次提交要上传的「目标实体 × 原件」对应关系（建单成功后调用一次）。
+   *
+   * 端点分流在**行**这一级，不在 entry 这一级：同一份 PDF 会同时被装配件顶层与 N 个子件
+   * 引用（共享一个 UI cell），但顶层要打 `/assemblies/{id}/files`、子件要打
+   * `/parts/{id}/upload-drawing`。
+   */
+  function buildUploadJobs(refs: CreatedTargetRef[]): UploadJob[] {
     const entries = collectFilesToUpload();
     const byRow = new Map<string, FileUploadEntry[]>();
     for (const e of entries) {
@@ -2182,81 +2344,138 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       }
     }
     const jobs: UploadJob[] = [];
-    for (const part of parts) {
-      // 用 sourceIndex 反查源行，不靠数组下标 —— 它才是「建出来的 part ↔ 本地哪一行」
-      // 的权威锚。
-      const rowUid = itemRowUids.value[part.sourceIndex];
-      if (!rowUid) continue;
-      const partId = String(part.id);
-      for (const entry of byRow.get(rowUid) ?? []) {
+    for (const ref of refs) {
+      for (const entry of byRow.get(ref.rowUid) ?? []) {
+        // 总装图只存 PDF（`/assemblies/{id}/files` 只收 PDF）。顶层本来就不挂 3D
+        // （`collectFilesToUpload` 只给 asmChild / standalone 挂），这一句是防线：万一
+        // 将来给顶层挂了 3D，绝不能把 3D 文件发到只收 PDF 的端点上去。
+        if (ref.target === 'assembly' && entry.kind !== 'DRAWING') continue;
         jobs.push({
-          id: `${entry.key}:${partId}`,
+          id: `${entry.key}:${ref.target}:${ref.id}`,
           jobKey: entry.key,
-          partId,
+          target: ref.target,
+          ownerId: ref.id,
           kind: entry.kind,
           entry,
         });
       }
     }
-    // 同一份 PDF 被装配件 master + N 个子件共享时，这里会产出 N+1 个 job（每个 part
-    // 各上传一次）。这是本次改造的已知代价：请求数比「建单时各带一份绑定」高，
-    // 但换来的是建单与文件上传彻底解耦（上传失败不再需要回滚工单）。
+    // 同一份 PDF 被装配件顶层 + N 个子件共享时，这里会产出 N+1 个 job（每个实体各上传
+    // 一次）。这是建单与文件上传彻底解耦的已知代价：请求数比「建单时各带一份绑定」高，
+    // 但上传失败不再需要回滚工单。
     return jobs;
   }
 
   /**
-   * 把 `createdPartIds` 里的那些行从本地表格移走。
+   * 把 `createdTargets` 里的那些行从本地表格移走。
    *
-   * 这些行对应的 part 已经是服务端里的真实工单了，留在表内只会诱导「再点一次提交」
-   * ⇒ 重复建单。`itemRowUids` 保持原样（补传 job 仍要靠它把 partId 对回 PDF）。
+   * 这些行对应的工单已经是服务端里的真实记录了，留在表内只会诱导「再点一次提交」
+   * ⇒ 重复建单。`itemRowUids` 保持原样（补传 job 仍要靠它把 id 对回 PDF）。
    *
-   * 装配件按 part 粒度摘：子件各自是独立 part，摘掉建出的那些；顶层只在**连子件一起
-   * 全部建出**时才整行删除 —— 只要还有子件没建出就得把这一行留着（被拒子件的数据在
-   * 这里），而顶层本身记进 `createdAssemblyMasters`，下一次提交只发剩下的子件。
+   * 独立零件按行摘。装配件按**组**摘：一次 `POST /assemblies` 建出顶层 + 全部子件，
+   * 记账也是整组记的（`createAssemblyGroups` 保证 map 里每条记录都真实存在），所以
+   * 顶层建出即整行完成、整行摘掉；没记账的组（明确被拒 / 成败未知）整行留在表里。
    * `allPdfs` 里的原件一律留着（源文件区仍可预览，也不参与提交）。
    */
   function dropCreatedRows(): void {
-    standaloneParts.value = standaloneParts.value.filter((r) => !createdPartIds.has(r.uid));
-    const kept: AssemblyRow[] = [];
-    for (const a of assemblies.value) {
-      const masterCreated = createdPartIds.has(a.uid);
-      if (masterCreated) createdAssemblyMasters.add(a.uid);
-      a.children = a.children.filter((c) => !createdPartIds.has(c.uid));
-      if (masterCreated && a.children.length === 0) continue;
-      kept.push(a);
+    standaloneParts.value = standaloneParts.value.filter(
+      (r) => createdTargets.get(r.uid)?.target !== 'part',
+    );
+    assemblies.value = assemblies.value.filter(
+      (a) => createdTargets.get(a.uid)?.target !== 'assembly',
+    );
+  }
+
+  /** 已建出实体的一句话计数（「N 条零件 + M 个装配件」，无则给 0 条）。 */
+  function createdCountText(): string {
+    const c = createdCounts.value;
+    const segs: string[] = [];
+    if (c.parts > 0) segs.push(`${c.parts} 条零件`);
+    if (c.assemblies > 0) segs.push(`${c.assemblies} 个装配件`);
+    return segs.join(' + ') || '0 条';
+  }
+
+  /**
+   * 建单「有行没建出来」的清单文案。四个来源各自成段：
+   * 独立零件逐行被拒 / 独立零件整组请求失败（成败未知）/ 装配件组被拒 / 装配件组成败未知。
+   */
+  function buildCreateFailureText(
+    res: PartBatchResult | null,
+    asmFailures: AssemblyGroupFailure[],
+  ): string {
+    const parts: string[] = [];
+    if (res) {
+      const sample = res.failed
+        .slice(0, 5)
+        .map((f) => `第 ${f.index + 1} 行：${f.message}`)
+        .join('\n');
+      const more = res.failed.length > 5 ? `\n…还有 ${res.failed.length - 5} 行被拒绝` : '';
+      if (res.failed.length > 0)
+        parts.push(`${res.failed.length} 行被服务端拒绝：\n${sample}${more}`);
+      const groupLines = (res.groupErrors ?? []).map(
+        (g) => `第 ${g.startIndex + 1}-${g.endIndex + 1} 行（分厂 ${g.customer_id}）：${g.message}`,
+      );
+      if (groupLines.length > 0) {
+        parts.push(
+          `${groupLines.length} 个分厂组请求失败，成功与否未知（响应丢失时后端可能已落库）：\n${groupLines
+            .slice(0, 3)
+            .join('\n')}`,
+        );
+      }
     }
-    assemblies.value = kept;
-  }
-
-  /** 建单「有行没建出来」的清单文案（服务端逐行拒绝 + 整组请求失败两段）。 */
-  function buildCreateRejectionText(res: PartBatchResult, createdCount: number): string {
-    const groupErrors = res.groupErrors ?? [];
-    const sample = res.failed
-      .slice(0, 5)
-      .map((f) => `第 ${f.index + 1} 行：${f.message}`)
-      .join('\n');
-    const more = res.failed.length > 5 ? `\n…还有 ${res.failed.length - 5} 行被拒绝` : '';
-    const groupLines = groupErrors.map(
-      (g) => `第 ${g.startIndex + 1}-${g.endIndex + 1} 行（分厂 ${g.customer_id}）：${g.message}`,
-    );
-    const groupNote = groupLines.length
-      ? `\n\n另有 ${groupLines.length} 个分厂组请求失败，成功与否未知（响应丢失时后端可能已落库）：\n${groupLines
-          .slice(0, 3)
-          .join('\n')}\n重新提交这些行前建议先到零件列表核对。`
-      : '';
-    if (createdCount === 0)
-      return `服务端拒绝了 ${res.failed.length} 行：\n${sample}${more}${groupNote}`;
-    const rejected = res.failed.length
-      ? `${res.failed.length} 行被服务端拒绝：\n${sample}${more}`
-      : '';
+    const rejected = asmFailures.filter((f) => f.outcome === 'rejected');
+    const unknown = asmFailures.filter((f) => f.outcome === 'unknown');
+    if (rejected.length > 0) {
+      parts.push(
+        `${rejected.length} 个装配件服务端拒绝：\n${rejected
+          .slice(0, 5)
+          .map((f) => `装配件 ${f.label}：${f.error}`)
+          .join('\n')}`,
+      );
+    }
+    if (unknown.length > 0) {
+      parts.push(
+        `${unknown.length} 个装配件成功与否未知（网络失败 / 响应形状异常时后端可能已落库）：\n${unknown
+          .slice(0, 5)
+          .map((f) => `装配件 ${f.label}：${f.error}`)
+          .join('\n')}`,
+      );
+    }
+    if (parts.length === 0) return '没有任何一行建出。';
+    const c = createdCounts.value;
+    const head = c.total > 0 ? `已创建 ${createdCountText()}；` : '';
+    const hint = c.assemblies > 0 ? '\n装配件子件不在零件一览里，请到装配件详情页查看。' : '';
     return (
-      `已创建 ${createdCount} 条工单；${rejected || '其余行未建出。'}\n` +
-      `已创建的工单尚未上传图纸，可在零件详情页补传。\n建成的行已从表格移除，` +
-      `直接重新提交只会发出剩下的行。${groupNote}`
+      `${head}${parts.join('\n\n')}\n` +
+      `已创建的工单尚未上传图纸，可在详情页补传。\n建成的行已从表格移除，` +
+      `直接重新提交只会发出剩下的行。` +
+      // 成败未知的组重提就是第二份工单，必须先说清核对义务
+      (parts.some((p) => p.includes('成功与否未知'))
+        ? '\n重新提交前请先到零件 / 装配件列表核对，避免重复建单。'
+        : '') +
+      hint
     );
   }
 
-  /** 主按钮：创建工单 + 逐 part 后置上传图纸 / 3D（单入口，2026-10-04）。 */
+  /**
+   * 主按钮：创建工单 + 逐实体后置上传图纸 / 3D（单入口，2026-10-04）。
+   *
+   * creating 阶段分两路（2026-10-05）：
+   *  1. 独立零件行 → `batchCreateParts`（一次请求，`batchCreateParts` 内部按分厂分组、
+   *     逐组 try/catch 聚合，从不整体 reject）；
+   *  2. 装配件行 → `createAssemblyGroups`（逐组一次 `POST /assemblies`，受控并发，
+   *     逐组 try/catch）。
+   *
+   * **先独立零件后装配件**：装配件那路自己吞掉所有错误，零件这路抛错只可能来自
+   * `batchCreateParts` 自身（它不整体 reject）⇒ 万一抛错时装配件还没建，回 idle 让用户
+   * 重来不会碰到已落库的工单；反过来（先装配件）就会落进「已建出但一条上传都没发」的
+   * done 态分支。
+   *
+   * 两路的失败**合并**成一次 `ElMessageBox.alert` 汇总：任一路有行没建出就整轮不上传
+   * （与既有口径一致：已建出的行移出表格、剩下的留在表里等下一次提交，图纸可到详情页
+   * 补传）。装配件子件挂上 `assembly_id` 后不进入零件一览，只有装配件父行进列表 ⇒
+   * 成功提示与失败提示都会告诉用户「子件在装配件详情页看」。
+   */
   async function onSubmit(): Promise<void> {
     if (commitStage.value !== 'idle') {
       ElMessage.warning(
@@ -2275,6 +2494,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
     const { items, rowUids } = buildCommitItems();
     itemRowUids.value = rowUids;
+    createdTargets.clear();
 
     submitRowEpoch = rowEpoch.value;
     pdfSubmitting.value = true;
@@ -2282,28 +2502,35 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     try {
       // applicant dedupe 在本 Tab 不需要：JSON 端点不接受 applicant_id，
       // applicant_name 走字符串直存，同名只会在 t_part.applicant_name 出现重复字符串。
-      const res = await batchCreateParts(items);
+      // 没有独立零件行时压根不调（整批都是装配件）：`POST /parts/batch` 与装配件无关，
+      // 调一个空数组虽然也会早返回，但「装配件不经过批量端点」这件事值得在代码里直白。
+      const res: PartBatchResult =
+        items.length > 0
+          ? await batchCreateParts(items)
+          : { created: [], failed: [], groupErrors: [] };
 
       // 记下「建出来的 part ↔ 本地哪一行」，这是后置上传的锚
-      createdPartIds.clear();
       res.created.forEach((c) => {
         const rowUid = itemRowUids.value[c.sourceIndex];
-        if (rowUid) createdPartIds.set(rowUid, String(c.id));
+        if (rowUid) createdTargets.set(rowUid, { target: 'part', id: String(c.id) });
       });
 
-      if (res.failed.length > 0 || (res.groupErrors?.length ?? 0) > 0) {
-        if (createdPartIds.size === 0) {
-          // 一个 part 都没建出来 ⇒ 本地表格原样保留，回 idle 让用户改完再提交。
-          ElMessageBox.alert(buildCreateRejectionText(res, 0), '部分行未通过', { type: 'warning' });
+      // 装配件：整组一次请求（顶层 + 全部子件），逐组失败不影响其它组
+      const asmFailures = await createAssemblyGroups(assemblies.value);
+
+      const partFailed = res.failed.length > 0 || (res.groupErrors?.length ?? 0) > 0;
+      if (partFailed || asmFailures.length > 0) {
+        const text = buildCreateFailureText(partFailed ? res : null, asmFailures);
+        if (createdTargets.size === 0) {
+          // 一行都没建出来 ⇒ 本地表格原样保留，回 idle 让用户改完再提交。
+          ElMessageBox.alert(text, '部分行未通过', { type: 'warning' });
           commitStage.value = 'idle';
           return;
         }
         // 部分成功：建成的行移出表格（它们已经是真实工单），剩下的失败行留在表里。
         // 此时回 idle 是安全的 —— 下一次提交只会发出剩下的行，不可能重复建已建成的行。
         dropCreatedRows();
-        ElMessageBox.alert(buildCreateRejectionText(res, createdPartIds.size), '部分行未通过', {
-          type: 'warning',
-        });
+        ElMessageBox.alert(text, '部分行未通过', { type: 'warning' });
         commitStage.value = 'idle';
         return;
       }
@@ -2311,15 +2538,15 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       commitStage.value = 'uploading';
       let jobs: UploadJob[];
       try {
-        jobs = buildUploadJobs(res.created);
+        jobs = buildUploadJobs(rebuildCreatedTargets());
       } catch (e) {
         // 工单已落库，但一条上传都还没发出去（job 登记前就抛了）⇒ 封住「再提交一次
         // 就多建一批工单」的口子：转 done（canSubmit 只剩「重建 job 补传」这一条出路），
-        // 并保留 createdPartIds / itemRowUids —— 用户点「重试上传」时靠它们现场重建
+        // 并保留 createdTargets / itemRowUids —— 用户点「重试上传」时靠它们现场重建
         // job 列表，仍然不建单。
         commitStage.value = 'done';
         ElMessageBox.alert(
-          `工单已创建 ${createdPartIds.size} 条零件，但文件未能开始上传：\n${(e as Error).message ?? '上传失败'}\n\n请点「重试上传」在本页补传（不会重复建单）；若一直失败，可到零件详情页补传。`,
+          `工单已创建 ${createdCountText()}，但文件未能开始上传：\n${(e as Error).message ?? '上传失败'}\n\n请点「重试上传」在本页补传（不会重复建单）；若一直失败，可到详情页补传。`,
           '文件上传未开始',
           { type: 'error' },
         );
@@ -2339,15 +2566,15 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         commitStage.value = 'done';
         summarizeUploads();
       } else if (commitStage.value === 'creating') {
-        // creating 阶段的兜底。走到这里的**前提**是 `createdPartIds` 为空：建单结果
-        // 一拿到就已写进 createdPartIds（见上方 forEach），非空说明已有 part 落库。
-        // 非空时**绝不能**回 idle —— 主按钮会重新可点，用户再按一次就是已建出的那批
-        // 工单建第二遍（`POST /parts/batch` 无幂等键）；改走 done 态补传语义，工单
-        // 已落库的事实如实转达。
-        if (createdPartIds.size > 0) {
+        // creating 阶段的兜底。走到这里的**前提**是 `createdTargets` 为空：建单结果
+        // 一拿到就已写进 createdTargets（见上方 forEach / createAssemblyGroups），
+        // 非空说明已有工单落库。非空时**绝不能**回 idle —— 主按钮会重新可点，用户再按
+        // 一次就是已建出的那批工单建第二遍（两个建单端点都无幂等键）；改走 done 态补传
+        // 语义，工单已落库的事实如实转达。
+        if (createdTargets.size > 0) {
           commitStage.value = 'done';
           ElMessageBox.alert(
-            `工单已创建 ${createdPartIds.size} 条零件，但提交过程中出错：\n${msg}\n\n请点「重试上传」在本页补传（不会重复建单）；若一直失败，可到零件详情页补传。`,
+            `工单已创建 ${createdCountText()}，但提交过程中出错：\n${msg}\n\n请点「重试上传」在本页补传（不会重复建单）；若一直失败，可到详情页补传。`,
             '提交中断',
             { type: 'error' },
           );
@@ -2362,24 +2589,23 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
 
   /**
-   * 由 `createdPartIds` + `itemRowUids` 现场还原「partId ↔ 请求 items 下标」。
+   * 由 `createdTargets` 现场还原「目标实体 ↔ 本地行」。
    *
-   * `buildUploadJobs` 抛错时 job 列表没登记上，但它的两个入参还在手上，所以重建
-   * 不需要重新建单、也不需要后端再返回一次 `created`。
+   * `buildUploadJobs` 抛错时 job 列表没登记上，但记账还在，所以重建不需要重新建单、
+   * 也不需要后端再返回一次 `created`。
    */
-  function rebuildCreatedPartRefs(): CreatedPartRef[] {
-    const refs: CreatedPartRef[] = [];
-    itemRowUids.value.forEach((rowUid, sourceIndex) => {
-      const partId = createdPartIds.get(rowUid);
-      if (partId) refs.push({ id: partId, sourceIndex });
-    });
-    return refs;
+  function rebuildCreatedTargets(): CreatedTargetRef[] {
+    return Array.from(createdTargets.entries()).map(([rowUid, v]) => ({
+      rowUid,
+      target: v.target,
+      id: v.id,
+    }));
   }
 
   /**
    * 重试上传（**不重复建工单**）。done 态的两种出路：
    *  - 有失败 job → 只重跑 `failedJobs` 里的那些；
-   *  - job 列表压根没登记上 → 用 `createdPartIds` + `itemRowUids` 现场重建再全跑。
+   *  - job 列表压根没登记上 → 用 `createdTargets` 现场重建再全跑。
    */
   async function retryFailedUploads(): Promise<void> {
     if (commitStage.value !== 'done' || pdfSubmitting.value) {
@@ -2400,10 +2626,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       } else {
         let jobs: UploadJob[];
         try {
-          jobs = buildUploadJobs(rebuildCreatedPartRefs());
+          jobs = buildUploadJobs(rebuildCreatedTargets());
         } catch (e) {
           ElMessageBox.alert(
-            `补传仍未能开始：\n${(e as Error).message ?? '上传失败'}\n\n工单已创建，可到零件详情页补传。`,
+            `补传仍未能开始：\n${(e as Error).message ?? '上传失败'}\n\n工单已创建，可到零件 / 装配件详情页补传。`,
             '文件上传未开始',
             { type: 'error' },
           );
@@ -2413,7 +2639,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
           // 建单时还在的文件此刻已经不在了（行被删 / 重新解析过）⇒ 再点也补不上，
           // 如实说清出路，不要让用户反复点一个不可能成功的动作。
           ElMessageBox.alert(
-            `工单已创建 ${createdPartIds.size} 条，但本页已找不到对应的文件（行数据被清空或重新解析过）。\n\n图纸请到零件详情页补传。`,
+            `工单已创建 ${createdCountText()}，但本页已找不到对应的文件（行数据被清空或重新解析过）。\n\n图纸请到零件 / 装配件详情页补传。`,
             '文件上传未开始',
             { type: 'error' },
           );
