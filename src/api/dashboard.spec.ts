@@ -347,15 +347,14 @@ describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2
 
     const result = await api.fetchDashboardSnapshot();
 
-    // 2026-10-04：端点新增可选查询参数（upcomingDays / basis），不传参时 params 为
-    // 空对象（cleanParams 剔掉 undefined）⇒ 请求串与加参数前逐字一致。
+    // 2026-10-04：端点新增可选查询参数 basis，不传参时 params 为空对象
+    // （cleanParams 剔掉 undefined）⇒ 请求串与加参数前逐字一致。
     expect(httpGetMock).toHaveBeenCalledWith('/dashboard/snapshot', { params: {} });
     expect(result).toEqual(sample);
   });
 
-  // 2026-10-04 新增：交期统计口径进查询串（planned / system），upcomingDays 前端
-  // 不传（缺省由后端决定 14 天）⇒ 不应出现在请求串里。
-  it('fetchDashboardSnapshot：basis 进查询串，未传的 upcomingDays 被剔掉', async () => {
+  // 2026-10-04 新增：交期统计口径进查询串（planned / system），未传 basis 时被剔掉。
+  it('fetchDashboardSnapshot：basis 进查询串，未传的 basis 被剔掉', async () => {
     const api = await loadDashboardApi();
     const sample = {
       on_production_shelves: [],
@@ -371,10 +370,8 @@ describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2
       params: { basis: 'system' },
     });
 
-    await api.fetchDashboardSnapshot({ basis: 'planned', upcomingDays: 7 });
-    expect(httpGetMock).toHaveBeenLastCalledWith('/dashboard/snapshot', {
-      params: { basis: 'planned', upcomingDays: 7 },
-    });
+    await api.fetchDashboardSnapshot({ basis: undefined });
+    expect(httpGetMock).toHaveBeenLastCalledWith('/dashboard/snapshot', { params: {} });
   });
 });
 

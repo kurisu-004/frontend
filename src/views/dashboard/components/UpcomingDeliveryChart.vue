@@ -14,12 +14,25 @@
     上下文），不新增头部行、不改左栏 flex 布局；
   - 组件**不持口径状态**：props.basis 进、emit('update:basis') 出，唯一状态源是父组件
     DashboardView（与抽屉的 update:modelValue 同风格，不用 defineModel）；
-  - 开关旁挂一句随口径变化的提示：system_delivery_date 可空，后端对 NULL 做范围比较
-    恒 false ⇒ 未填系统交期的工单在系统口径下整件不计入，系统口径合计必然 ≤ 计划口径。
-    不说清楚用户会把差异误读成数据丢失。
-  - 宽度预算：3 个图例项 ≈230px + 开关 ≈130px；左栏在 ≥1100px 视口下 ≥600px，
-    两者不撞（≤1100px 走单列布局，图表区更宽）。图例因此钉 left: 0（不居中），
-    给右侧留出开关的位置。
+  - 开关旁挂一句随口径变化的提示，用 el-tooltip 承载（trigger="hover focus" +
+    触发元素 tabindex=0，键盘也能读到；aria-label 挂在无 role 的 span 上会被多数
+    屏幕阅读器忽略，title 则只对鼠标悬停生效）：system_delivery_date 可空，后端对
+    NULL 做范围比较恒 false ⇒ 未填系统交期的工单在系统口径下整件不计入；
+    planned_delivery_date 是 NOT NULL 列，计划口径无此缺失。两口径的桶总数恒为
+    N（缺失日期补 0），差异只体现在 count / by_status，且合计**无可比大小关系**
+    （同一工单的两列可能落在窗口内外不同侧）。不说清楚用户会把差异误读成数据丢失。
+  - 宽度预算：3 个图例项 ≈230px + 开关 ≈165px ≈ 395px。最窄双栏视口 1101px
+    （单列断点 1100px 再宽 1px）下左栏可用宽 =（1101 − 165 侧栏 − 32 .el-main
+    padding − 32 .dashboard padding − 16 grid gap）按 3fr/5fr 分 ≈514px，
+    .chart-wrap 扣掉自身 8px×2 padding 与 1px×2 边框后 ≈495px。395 < 495 ⇒ 不撞；
+    ≤1100px 走单列布局，图表区更宽。图例因此钉 left: 0（不居中），给右侧留出开关。
+
+  数据切换提示（2026-10-04 新增）：props.loading = 父组件 snapshot query 的
+  isFetching。useDashboardSnapshot 配了 placeholderData: keepPreviousData，换口径
+  期间图上仍是上一份快照的数字，若不给提示就成了「开关已切到系统、数字还是计划的」。
+  实现是一层绝对定位的半透明覆盖层（纯 DOM，不进 ECharts option）⇒ 与
+  updateOptions.notMerge 的整份替换互不干扰；z-index 压在口径开关之下，开关始终
+  可点、可继续切口径。
 
   视觉 / 实现规则（改动本图时必须守住的不变量）：
   - 颜色走 EP 预设 hex（success #67c23a / warning #e6a23c / danger #f56c6c），
@@ -62,7 +75,14 @@
         <el-radio-button value="planned">计划交期</el-radio-button>
         <el-radio-button value="system">系统交期</el-radio-button>
       </el-radio-group>
-      <span class="basis-hint" :title="basisHint" :aria-label="basisHint">ⓘ</span>
+      <el-tooltip :content="basisHint" placement="bottom" :trigger="['hover', 'focus']">
+        <span class="basis-hint" tabindex="0" :aria-label="basisHint">ⓘ</span>
+      </el-tooltip>
+    </div>
+    <!-- 换口径期间盖一层半透明提示：keepPreviousData 让图上数字还是上一份快照，
+         没有这层就成了「开关已切、数字没切」。pointer-events: none 不吃点击。 -->
+    <div v-if="loading" class="chart-pending" role="status">
+      <span class="chart-pending-text">口径切换中…</span>
     </div>
   </div>
 </template>
@@ -124,6 +144,9 @@ const props = withDefaults(
     /** 2026-10-04 新增：交期统计口径（唯一状态源在父组件，本组件只读 + emit）。
      *  必填不兜默认值：默认值会掩盖父组件漏传 wiring，柱状图就会静默按计划交期画。 */
     basis: DeliveryBasis;
+    /** 2026-10-04 新增：父组件 snapshot query 的 isFetching —— 换口径期间图上仍是
+     *  上一份快照的数字，需要出一层「切换中」提示。必填同上，不兜默认值。 */
+    loading: boolean;
     height?: string;
   }>(),
   { height: '320px' },
@@ -263,7 +286,8 @@ const chartOption = computed<EChartsCoreOption>(() => {
       data: LAYERS.map((l) => l.label),
       top: 0,
       // 2026-10-04：钉 left: 0（不居中）。3 个图例项 ≈230px 从左侧起排，右上角
-      // 留给口径开关浮层（≈130px）；左栏在 ≥1100px 视口下 ≥600px，两者不会撞。
+      // 留给口径开关浮层（≈165px）；最窄双栏视口 1101px 下 .chart-wrap 内层 ≈495px，
+      // 两者合计 ≈395px 不撞（预算推导见文件头注释）。
       left: 0,
       textStyle: { fontSize: 12, color: '#606266' },
       itemWidth: 12,
@@ -344,13 +368,16 @@ function onChartClick(p: ECElementEvent): void {
 }
 
 /** 2026-10-04 新增：口径开关提示文案，随当前口径变化。
- *  关键信息只有系统口径有：system_delivery_date 可空，后端对 NULL 做范围比较恒
- *  false ⇒ 未填系统交期的工单在系统口径下**整件不计入**，所以系统口径的合计必然
- *  ≤ 计划口径。不讲清楚，用户会把「少了件数」读成数据丢失。 */
+ *  关键差异只有系统口径有：system_delivery_date 可空，后端对 NULL 做范围比较恒
+ *  false ⇒ 未填系统交期的工单在系统口径下**整件不计入**；planned_delivery_date 是
+ *  NOT NULL 列，计划口径没有这个缺失。两口径用的**是同一个日期窗口**，只是打在
+ *  不同列上，所以合计无可比大小关系（同一工单的计划交期落在窗口外、系统交期落在
+ *  窗口内是常态）——文案里不能说「会少于」。不讲清楚，用户会把「件数变了」读成数据
+ *  丢失。 */
 const basisHint = computed(() =>
   props.basis === 'system'
-    ? '系统交期口径：未填写系统交期的工单不计入，合计会少于计划交期'
-    : '计划交期口径：全部未交期工单都计入',
+    ? '系统交期口径：未填写系统交期的工单整件不计入，合计与计划交期口径不同'
+    : '计划交期口径：按计划交期分桶，工单全部计入',
 );
 
 /** 2026-10-04 新增：el-radio-group change → emit('update:basis')。
@@ -379,10 +406,12 @@ function onBasisChange(v: string | number | boolean | undefined): void {
 .basis-toggle {
   // 右上角浮层：不占布局空间（不挤压 canvas 高度 / 不改左栏 flex）。
   // 高度 ≈24px（small radio-group），落在 grid.top=36 之上，不遮绘图区。
+  // z-index 高于 .chart-pending：换口径期间那层提示要盖住图表，但不能把开关
+  // 一起盖灰 —— 开关得保持可点，用户才能继续来回切。
   position: absolute;
   top: 4px;
   right: 8px;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -392,5 +421,28 @@ function onBasisChange(v: string | number | boolean | undefined): void {
   font-size: 13px;
   line-height: 1;
   color: #909399;
+  // 键盘可达：el-tooltip 的 trigger 含 focus，元素本身必须可聚焦才能收到 focus 事件。
+  &:focus-visible {
+    outline: 2px solid var(--el-color-primary);
+    outline-offset: 2px;
+    border-radius: 50%;
+  }
+}
+.chart-pending {
+  // 换口径期间的「数字还没跟上开关」提示层。纯 DOM 覆盖，不进 ECharts option ⇒
+  // 与 updateOptions.notMerge 的整份替换互不影响，也不会触发多余的 setOption。
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.6);
+  // 不吃鼠标事件：切换期间仍可继续点开关 / 点柱子。
+  pointer-events: none;
+}
+.chart-pending-text {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

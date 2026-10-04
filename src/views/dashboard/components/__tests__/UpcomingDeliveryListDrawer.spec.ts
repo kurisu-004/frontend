@@ -13,17 +13,17 @@
 //   - U7：el-table 行点击 → emit('rowClick', part)（Phase 5 新增行点击事件防回归）
 //
 // 2026-10-04 追加「交期统计口径」覆盖（U8~U10）：倒计列取当前口径对应的交期字段 /
-// system 口径下系统交期为空则倒计列留空 / header 口径标签随 basis 变化。
-// 倒计列的断言依赖文件头那套行感知 el-table stub 把 **:data 的真实行**喂进列的
-// scoped slot；日期取 2099 年的远期值：deliveryDaysLeftText 对 >3 天的远期返回空串，
-// 倒计时稳定回落到 MM/DD，断言不随「测试运行当天」漂移。
+// system 口径下系统交期为空则倒计列留空 / header 口径标签随 basis 变化。日期取
+// 2099 年的远期值：deliveryDaysLeftText 对 >3 天的远期返回空串，倒计时稳定回落到
+// MM/DD，断言不随「测试运行当天」漂移。
 //
 // 2026-10-04 纯测试基建修复（零生产代码改动）：原 ElTable stub 只按 :data 数行、
 // 根本不渲染默认 slot，等于整张表一个单元格都不渲染 —— 任何列级断言在这样一张空表上
 // 都无从谈起。修法照抄真实 Element Plus 的做法：stub 的 ElTable 按 :data 渲染
 // .mock-row，行内 provide 出当前行（MockTableRow），列 stub inject 后按该行喂自己的
 // scoped slot ⇒ 模板里的 `const { row } = undefined` 不再抛错，且列断言真的绑定到
-// :data 的行上（:data 为空时列内容一个都不渲染，可作反向断言）。
+// :data 的行上（:data 为空时列内容一个都不渲染，U4 有对应的反向断言）。
+
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
@@ -399,12 +399,14 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     const plannedWrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
     await nextTick();
+    expect(plannedWrapper.findAll('.cell-due')).toHaveLength(1);
     expect(plannedWrapper.find('.cell-due').text()).toBe('12/31');
     plannedWrapper.unmount();
 
     const systemWrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts({ basis: 'system' }));
     await new Promise((resolve) => setTimeout(resolve, 80));
     await nextTick();
+    expect(systemWrapper.findAll('.cell-due')).toHaveLength(1);
     expect(systemWrapper.find('.cell-due').text()).toBe('11/30');
     systemWrapper.unmount();
   });

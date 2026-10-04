@@ -446,12 +446,9 @@ export function reconnectDashboard(): void {
 // ============================================================
 
 /** 2026-10-04 新增：GET /dashboard/snapshot 的可选查询参数。
- *  全部 optional —— 缺省调用（不传参）与后端契约对齐：upcomingDays 缺省 14 天、
- *  basis 缺省 planned（计划交期），前端当前不传 upcomingDays，让窗口长度继续由
- *  后端缺省值决定。 */
+ *  全部 optional —— 缺省调用（不传参）与后端契约对齐：basis 缺省 planned（计划交期）。
+ *  窗口长度（未来 14 天）不开放给前端，继续由后端缺省值决定。 */
 export interface FetchDashboardSnapshotParams {
-  /** 未来天数窗口（后端缺省 14）。前端不传，保留字段只为与后端契约对齐。 */
-  upcomingDays?: number;
   /** 交期统计口径：planned（计划交期）/ system（系统交期）。 */
   basis?: DeliveryBasis;
 }
@@ -459,8 +456,8 @@ export interface FetchDashboardSnapshotParams {
 /** GET /api/v2/dashboard/snapshot —— 拉一次大屏全量快照。
  *  返回值已由 http.ts 响应拦截器解封（response.data = payload.data），
  *  即 api.get 返回的 resp.data 已经是 DashboardSnapshotData，不再是 R<T> 信封。
- *  2026-10-04：接受可选查询参数（upcomingDays / basis）；两个字段都 optional，
- *  cleanParams 会把 undefined 剔掉 ⇒ 不传参时请求串与加参数前逐字一致。 */
+ *  2026-10-04：接受可选查询参数 basis；该字段 optional，cleanParams 会把 undefined
+ *  剔掉 ⇒ 不传参时请求串与加参数前逐字一致。 */
 export async function fetchDashboardSnapshot(
   params: FetchDashboardSnapshotParams = {},
 ): Promise<DashboardSnapshotData> {

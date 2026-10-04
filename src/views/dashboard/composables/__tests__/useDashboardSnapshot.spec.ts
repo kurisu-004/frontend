@@ -21,10 +21,12 @@
 //     'snapshot', basis]；
 //   - U9：切 basis 触发自动 refetch，且请求带上新 basis；
 //   - U10：WS 事件失效的是**前缀**（qk.dashboardSnapshotPrefix）—— 切到 system 后
-//     派事件，planned 那条缓存也被标脏（用户切回去时不能吃到旧数）。
+//     派事件，planned 那条缓存也被标脏（用户切回去时不能吃到旧数）；
+//   - U11：切口径的请求在途期间 data 沿用上一份快照 + isFetching=true（大屏不闪空，
+//     同时给调用方出「数字还是旧的」提示的信号）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp, effectScope, ref } from 'vue';
+import { createApp, effectScope, nextTick, ref } from 'vue';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 vi.mock('element-plus', () => ({
@@ -367,6 +369,47 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate（2026-09-
     expect(planned?.state.isInvalidated).toBe(true);
     // 当前口径那条被立即重取
     expect(fetchSnapshotMock).toHaveBeenCalledWith({ basis: 'system' });
+    scope.stop();
+  });
+
+  // ==========================================================================
+  // 2026-10-04：切口径期间保持上一份快照（大屏不闪空）
+  // ==========================================================================
+
+  it('U11：切 basis 的请求在途期间 data 仍是上一份快照，且 isFetching=true', async () => {
+    const basis = ref<DeliveryBasis>('planned');
+    const scope = effectScope();
+    let q: ReturnType<typeof useDashboardSnapshot> | undefined;
+    scope.run(() => {
+      q = testApp.runWithContext(() => useDashboardSnapshot(basis));
+    });
+    await q!.refetch();
+    expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
+    expect(q!.isFetching.value).toBe(false);
+
+    // 让新口径的请求挂在未决状态上（模拟慢响应）。
+    let releaseSystem: (v: unknown) => void = () => {};
+    fetchSnapshotMock.mockImplementationOnce(
+      () => new Promise((resolve) => { releaseSystem = resolve; }),
+    );
+
+    basis.value = 'system';
+    await nextTick();
+
+    // 关键：DashboardView 的 7 个派生量（全从这一个 ref 出）都依赖 data 非空。
+    // 不配 keepPreviousData 的话此刻 data 会是 undefined —— 柱状图 14 根柱清零、
+    // 今日/两周到期归零，连与口径无关的在制/在检 KPI 也一起归零，整块大屏闪空。
+    expect(q!.data.value).toBeDefined();
+    expect(q!.data.value?.ts).toBe('2026-09-28T10:00:00+08:00');
+    // 数字暂时还是旧口径的 —— 调用方据此出「切换中」提示（DashboardView 把它接到
+    // UpcomingDeliveryChart 的 :loading，图上盖一层 .chart-pending）。
+    expect(q!.isFetching.value).toBe(true);
+
+    releaseSystem({ ...makeBaseSnapshot(), ts: '2026-10-04T10:00:00+08:00' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(q!.isFetching.value).toBe(false);
+    expect(q!.data.value?.ts).toBe('2026-10-04T10:00:00+08:00');
     scope.stop();
   });
 });

@@ -102,9 +102,12 @@ export type ConnectionStatus = 'connecting' | 'open' | 'closed';
 // 的职责是对响应做 Zod 守门 + 派生响应类型，把请求参数塞进去会让「守卫响应」与
 // 「描述请求」两件事混在一个文件里。
 //
-// **两种口径的件数必然不等**：system_delivery_date 可空，后端对 NULL 做范围比较恒为
-// false ⇒ 未填系统交期的工单在系统口径下整件不计入，系统口径合计 ≤ 计划口径。
-// 图卡上的口径开关旁挂了提示，避免用户把差异误读成数据丢失。
+// 两种口径的**分桶结果必然不同**：system_delivery_date 可空，后端对 NULL 做范围比较
+// 恒为 false ⇒ 该列为 NULL 的工单在系统口径下整件不计入；planned_delivery_date 是
+// NOT NULL 列，计划口径无此缺失。两口径用的是**同一个日期窗口**、只是打在不同的列上，
+// 桶总数恒为 N（缺失日期补 0），差异只体现在 count / by_status；合计**无可比大小
+// 关系**（同一工单的两列可能分别落在窗口内外）。图卡上的口径开关旁挂了提示，避免用户
+// 把差异误读成数据丢失。
 export type DeliveryBasis = 'planned' | 'system';
 
 /** 口径 → 中文名（图卡开关 / 抽屉 header 共用同一份文案）。 */

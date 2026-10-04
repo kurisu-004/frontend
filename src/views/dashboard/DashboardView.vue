@@ -14,7 +14,9 @@
       唯一口径源，一处下发三处消费 —— 柱状图开关（`:basis` / `@update:basis`）、
       snapshot 请求（useDashboardSnapshot 的 queryKey 含 basis ⇒ 切口径即换键
       自动 refetch）、下钻抽屉（`:basis`）。柱状图与「今日到期 / 两周到期」KPI 都
-      从同一份 upcomingBuckets 派生，KPI 无需任何改动即自动跟随。
+      从同一份 upcomingBuckets 派生，KPI 无需任何改动即自动跟随。切口径时 snapshot
+      用 keepPreviousData 顶着上一份数据（大屏不闪空），把 query 的 isFetching 经
+      `:loading` 下发给柱状图出「切换中」提示层，避免旧数静默停在新口径开关下。
     - useDashboardSnapshot(() => deliveryBasis.value) → snapshot.upcoming_delivery
       （14 天分桶，随口径变化）+ in_process + on_inspection_shelves（在制 / 在检 KPI
       派生来源）
@@ -52,6 +54,7 @@
         <UpcomingDeliveryChart
           :buckets="upcomingBuckets"
           :basis="deliveryBasis"
+          :loading="snapshotFetching"
           height="100%"
           @update:basis="deliveryBasis = $event"
           @bar-layer-click="onBarLayerClick"
@@ -106,7 +109,7 @@
 //   - SHELF_ACCOUNT：isShelfAccount = true → canOpenPartDetail = false → chips 不可点。
 //   - MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER：canOpenPartDetail = true。
 
-import { computed, ref, toValue } from 'vue';
+import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { usePermissions } from '@/composables/usePermissions';
 import type { OrderStatus, PartListItem } from '@/types/parts';
@@ -142,7 +145,9 @@ const canOpenPartDetail = computed(
 const deliveryBasis = ref<DeliveryBasis>('planned');
 
 // ============ 数据 ============
-const { data: snapshot } = useDashboardSnapshot(() => toValue(deliveryBasis));
+const { data: snapshot, isFetching: snapshotFetching } = useDashboardSnapshot(
+  () => deliveryBasis.value,
+);
 const { items: urgentItems } = useDashboardUrgentList();
 const { overdueCount } = useDashboardOverdue(isManager);
 

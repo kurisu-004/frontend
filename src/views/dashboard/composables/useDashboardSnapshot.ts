@@ -33,9 +33,17 @@
 //     CLAUDE.md 认证一节「跨账号缓存隔离只靠 auth 的 queryClient.clear() 兜底」
 //     这条安全约束的一部分，改成有限值会掩盖该约束的前提。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
+//   - 2026-10-04：placeholderData: keepPreviousData —— 切交期统计口径换的是 queryKey，
+//     不设 placeholderData 的话新键在响应到达前 data 为 undefined。而 DashboardView 的
+//     7 个派生量（分桶柱状图 / 今日到期 / 两周到期 / 在制 / 在检 KPI / 实时态 items）
+//     全从这一个 ref 出 ⇒ 一次口径切换会让**整块大屏**闪空，包括与口径毫无关系的
+//     在制 / 在检面板。沿用仓内既成做法（usePartsListQuery / useInspectionListStore /
+//     usePendingProgrammingStore 同款），换键期间沿用上一份快照，图形不闪。
+//     代价是新口径数据到达前图上仍是旧口径的数字，故调用方必须配合 query.isFetching
+//     出一层「数据切换中」的提示，不能让旧数静默停留在新口径开关下。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
-import { useQuery } from '@tanstack/vue-query';
+import { keepPreviousData, useQuery } from '@tanstack/vue-query';
 import { ElMessage } from 'element-plus';
 import { fetchDashboardSnapshot } from '@/api/dashboard';
 import { qk } from '@/composables/queries/keys';
@@ -58,6 +66,7 @@ export function useDashboardSnapshot(basis: MaybeRefOrGetter<DeliveryBasis>) {
       dashboardSnapshotSchema.parse(await fetchDashboardSnapshot({ basis: queryKey.value[2] })),
     staleTime: 30_000,
     gcTime: Number.POSITIVE_INFINITY,
+    placeholderData: keepPreviousData,
   });
 
   // 错误桥接：useQuery 的 error 不在 setup 抛错。

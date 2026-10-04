@@ -22,8 +22,9 @@
 //   click 驱动走 `wrapper.findComponent({ name: 'VChart' }).vm.$emit('click', payload)`，
 //   与真 vue-echarts 行为对齐（vue-echarts 内部 chart.on('click', ...) → emit('click', ECElementEvent)）。
 //
-// 2026-10-04 追加「交期统计口径」覆盖（B1~B5）：切换控件渲染 / basis prop 驱动选中态
-// （受控）/ 切换 emit update:basis / 口径提示文案随 basis 变 / legend 钉 left: 0。
+// 2026-10-04 追加「交期统计口径」覆盖（B1~B6）：切换控件渲染 / basis prop 驱动选中态
+// （受控）/ 切换 emit update:basis / 口径提示文案随 basis 变（el-tooltip 承载 + 键盘
+// 可达 + 无方向性断言）/ legend 钉 left: 0 / loading 提示层随 isFetching 显隐。
 // 口径开关用 EP_STUBS 局部 stub（沿用本文件 v-chart 策略，不 mock element-plus 模块）：
 // 口径不参与渲染，断言集中在 props/emits 与提示文案上。
 
@@ -79,6 +80,13 @@ const EP_STUBS = {
     name: 'ElRadioButton',
     props: ['value', 'label', 'disabled'],
     template: '<label class="mock-radio-button"><slot /></label>',
+  },
+  // 2026-10-04：口径提示改用 el-tooltip 承载（原 span + title 只有鼠标可达）。
+  // stub 只当 content prop 的载体，模板直接渲染 slot，不模拟浮层。
+  'el-tooltip': {
+    name: 'ElTooltip',
+    props: ['content', 'placement', 'trigger'],
+    template: '<span class="mock-tooltip"><slot /></span>',
   },
 };
 
@@ -143,7 +151,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, height: '320px' },
+      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -189,7 +197,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, height: '320px' },
+      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -211,7 +219,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       makeBucket({ date: todayIso(), count: 5, by_status: { PENDING: 5 } }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, height: '320px' },
+      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -237,7 +245,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
   it('C4：未知 seriesName → 不 emit（防御性）', async () => {
     const buckets: UpcomingDeliveryEntryData[] = [makeBucket({ date: '2026-10-01', count: 1 })];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, height: '320px' },
+      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -253,7 +261,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
 
   it('C5：vue-echarts initOptions={renderer:"canvas"} + theme="v5"', async () => {
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets: [makeBucket()], basis: 'planned' as const, height: '320px' },
+      props: { buckets: [makeBucket()], basis: 'planned' as const, loading: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -280,7 +288,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, height: '320px' },
+      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -303,7 +311,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, height: '320px' },
+      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -328,7 +336,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       }),
     ];
     const wrapper = mount(UpcomingDeliveryChart, {
-      props: { buckets, basis: 'planned' as const, height: '320px' },
+      props: { buckets, basis: 'planned' as const, loading: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
 
@@ -351,7 +359,7 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
       makeBucket({ date: todayIso(), count: 4, by_status: { PENDING: 4 } }),
     ];
     return mount(UpcomingDeliveryChart, {
-      props: { buckets, basis, height: '320px' },
+      props: { buckets, basis, loading: false, height: '320px' },
       global: { stubs: { 'v-chart': VChartStub, ...EP_STUBS } },
     });
   }
@@ -407,17 +415,27 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
     wrapper.unmount();
   });
 
-  it('B4：口径提示文案随 basis 变化（系统口径点明「未填系统交期不计入」）', async () => {
+  it('B4：口径提示文案随 basis 变化（el-tooltip 承载，且不含「合计更少」方向性断言）', async () => {
     const wrapper = mountChart('planned');
     await nextTick();
-    const hint = wrapper.find('.basis-hint');
-    expect(hint.exists()).toBe(true);
-    expect(hint.attributes('title')).toBe('计划交期口径：全部未交期工单都计入');
+
+    const tooltip = () => wrapper.findComponent({ name: 'ElTooltip' });
+    const hint = () => wrapper.find('.basis-hint');
+    expect(hint().exists()).toBe(true);
+    // 键盘可达：触发元素必须可聚焦，且 tooltip trigger 含 focus（EP 默认只 hover）。
+    expect(hint().attributes('tabindex')).toBe('0');
+    expect(tooltip().props('trigger')).toEqual(['hover', 'focus']);
+    // 读屏用户直接读 aria-label，无需等浮层。
+    expect(hint().attributes('aria-label')).toBe('计划交期口径：按计划交期分桶，工单全部计入');
+    expect(tooltip().props('content')).toBe('计划交期口径：按计划交期分桶，工单全部计入');
 
     await wrapper.setProps({ basis: 'system' });
-    expect(hint.attributes('title')).toBe(
-      '系统交期口径：未填写系统交期的工单不计入，合计会少于计划交期',
-    );
+    const systemHint = '系统交期口径：未填写系统交期的工单整件不计入，合计与计划交期口径不同';
+    expect(tooltip().props('content')).toBe(systemHint);
+    expect(hint().attributes('aria-label')).toBe(systemHint);
+    // 两个口径用的是同一个日期窗口、只是打在不同列上，合计无可比大小关系，
+    // 文案里不得出现「少于 / 小于 / ≤」这类可被反例击穿的方向性断言。
+    expect(systemHint).not.toMatch(/少于|小于|≤|不超过/);
 
     wrapper.unmount();
   });
@@ -432,6 +450,27 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配（2026-09-30 重写�
     };
     expect(option.legend.left).toBe(0);
     expect(option.legend.top).toBe(0);
+
+    wrapper.unmount();
+  });
+
+  it('B6：loading 切换提示层 —— loading=true 盖「口径切换中」，false 不渲染', async () => {
+    const wrapper = mountChart('planned');
+    await nextTick();
+    // 静态数据下不传 loading → 提示层不出现（图上数字与开关一致，无需提示）。
+    expect(wrapper.find('.chart-pending').exists()).toBe(false);
+
+    // 父组件切口径后 snapshot 处于 keepPreviousData 换键期：图上还是上一份快照的
+    // 数字，必须有一层提示挡住「开关已切、数字没切」的误读。
+    await wrapper.setProps({ loading: true });
+    const pending = wrapper.find('.chart-pending');
+    expect(pending.exists()).toBe(true);
+    expect(pending.text()).toBe('口径切换中…');
+    // 提示层不吃点击：切换期间开关与柱子仍可交互。
+    expect(pending.attributes('role')).toBe('status');
+
+    await wrapper.setProps({ loading: false });
+    expect(wrapper.find('.chart-pending').exists()).toBe(false);
 
     wrapper.unmount();
   });

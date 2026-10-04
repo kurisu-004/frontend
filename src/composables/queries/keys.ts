@@ -84,11 +84,13 @@ export const qk = {
    *  'PLANNED_DELIVERY_DATE'；system 发 system_delivery_date_from/to + sort_by
    *  'SYSTEM_DELIVERY_DATE'，两组参数互斥、绝不同时发）。口径进了键，切口径即换键
    *  自动 refetch，抽屉不会拿计划交期的工单冒充系统交期的下钻结果。
-   *  失效走字面量前缀 ['dashboard','upcoming-list']（见 useDashboardUpcomingList 注释）。 */
+   *  失效走前缀（见 useDashboardUpcomingList 注释）—— 该处现用字面量前缀，是本仓
+   *  既有写法，新增前缀键时不要照抄，优先在本文件补 <域>Prefix 键。 */
   dashboardUpcomingList: (params: { date: string; statuses: string[]; basis: DeliveryBasis }) =>
     ['dashboard', 'upcoming-list', params] as const,
   /** 2026-09-28 新增：dashboard 域前缀 —— WS 事件触发 invalidate 用；
-   *  包含 dashboardSnapshot / dashboardUrgentList / dashboardOverdue 三个 query，
+   *  2026-10-04 更新覆盖范围：包含两种口径的 dashboardSnapshot、
+   *  dashboardUrgentList、dashboardOverdue、dashboardUpcomingList 四类 query，
    *  invalidateQueries({ queryKey: qk.dashboardPrefix }) 一键全失效。 */
   dashboardPrefix: ['dashboard'] as const,
   /** 2026-09-29 新增：零件 owner 维度文件列表共享 query 键。
