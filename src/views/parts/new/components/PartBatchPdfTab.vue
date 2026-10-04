@@ -17,8 +17,9 @@
   'update:manual-asm-form')；父组件 v-bind 摊开后再单独监听 emit 把值合并回
   usePartBatchPdf 持有的 form。
 
-  2026-10-04：底部两个提交按钮（开始上传 / 提交创建）合并为一个。行内「上传」列保留，
-  其 cell 状态由 composable 在建单成功后的后置上传阶段写入。
+  2026-10-04：底部提交按钮只有一个（建工单 + 逐 part 后置上传一次完成）。行内「上传」列
+  保留，cell 状态由 composable 在建单成功后的后置上传阶段写入；补传在途时行内「重试」
+  置灰（由 cellRetryDisabled 驱动）。
 -->
 
 <template>
@@ -291,12 +292,14 @@
               <UploadStatusCellView
                 :cell="getRowPdfCell(row as StandalonePartRow)"
                 label="PDF"
+                :retry-disabled="cellRetryDisabled"
                 @retry="onRetryRowPdf(row as StandalonePartRow)"
               />
               <UploadStatusCellView
                 v-if="(row as StandalonePartRow).three_d_index !== null"
                 :cell="getRowThreeDCell(row as StandalonePartRow)"
                 label="3D"
+                :retry-disabled="cellRetryDisabled"
                 @retry="onRetryRowThreeD(row as StandalonePartRow)"
               />
             </div>
@@ -464,12 +467,14 @@
                     <UploadStatusCellView
                       :cell="getRowPdfCell(c as AssemblyChildRow)"
                       label="PDF"
+                      :retry-disabled="cellRetryDisabled"
                       @retry="onRetryRowPdf(c as AssemblyChildRow)"
                     />
                     <UploadStatusCellView
                       v-if="(c as AssemblyChildRow).three_d_index !== null"
                       :cell="getRowThreeDCell(c as AssemblyChildRow)"
                       label="3D"
+                      :retry-disabled="cellRetryDisabled"
                       @retry="onRetryRowThreeD(c as AssemblyChildRow)"
                     />
                   </div>
@@ -506,6 +511,7 @@
             <UploadStatusCellView
               :cell="getRowPdfCell(row as AssemblyRow)"
               label="主图"
+              :retry-disabled="cellRetryDisabled"
               @retry="onRetryRowPdf(row as AssemblyRow)"
             />
           </template>
@@ -764,8 +770,6 @@ const props = defineProps<{
   onManualAsmFileRemove: () => void;
   confirmManualAssembly: () => Promise<void>;
   closeManualAsmDialog: () => void;
-  // 2026-09-16 M3-B 复审：原 onSubmitPdfTree 拆为「开始上传」+「提交创建」两步。
-  // onStartUpload / onCommit 见下方。
   closePdfPreview: () => void;
   // 上传状态（cell + 反查函数 + 全局汇总）
   pdfUploadCells: Record<string, UploadStatusCellViewCell>;
@@ -776,6 +780,7 @@ const props = defineProps<{
   commitStage: 'idle' | 'creating' | 'uploading' | 'done';
   canSubmit: boolean;
   submitLabel: string;
+  cellRetryDisabled: boolean;
   onSubmit: () => Promise<void>;
   retryFailedUploads: () => Promise<void>;
   retryUploadByCell: (jobKey: string) => Promise<void>;

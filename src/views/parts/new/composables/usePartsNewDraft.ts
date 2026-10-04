@@ -30,10 +30,10 @@
 
 import { useAuthStore } from '@/stores/auth';
 
-// upload session 链路已删除：原 SessionFile / UploadSession 类型改为内联松散结构
-// 类型 DraftSessionFile，仅保留 merge 函数读到的字段（client_ref / status / kind /
-// tmp_key / file_size / original_filename / uploaded_at / files）。UI 消费端
-// MergeResult.orphanFileRefs 直接用 DraftSessionFile[]。
+// 草稿里的文件条目是内联的松散结构 DraftSessionFile，只保留 merge 函数读到的字段
+// （client_ref / status / kind / tmp_key / file_size / original_filename /
+// uploaded_at / files）。UI 消费端 MergeResult.orphanFileRefs 直接用
+// DraftSessionFile[]。
 
 // ============================================================
 // 序列化类型（与后端契约对齐：version=1 即可）
@@ -323,8 +323,8 @@ export function mergeDraftWithSession(
     drawing: classifyFile(s.drawingClientRef),
   }));
 
-  // orphan：session.files 存在但不在 snapshot 引用集合里（引用来源 = 各行自身的
-  // client_ref 字段；pdf_tab 侧不再有独立的 file_links 索引段）
+  // orphan：files 存在但不在 snapshot 引用集合里；引用来源就是各行自身的
+  // client_ref 字段（pdf_tab 与 manual_tab 都从行上取，没有独立的索引段）
   const referencedRefs = new Set<string>();
   draft.pdf_tab.rows.forEach((r) => {
     if (r.drawing_client_ref) referencedRefs.add(r.drawing_client_ref);

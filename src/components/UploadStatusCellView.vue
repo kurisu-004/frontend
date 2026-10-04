@@ -8,12 +8,14 @@
       - undefined：本次提交不涉及该文件（或还没开始上传）
       - { status, progress, error }：上传运行时状态
     - label: 标签（'PDF' / '3D' / '主图' 等），用于 row 内区分
+    - retryDisabled：「重试」按钮置灰（补传在途时由 caller 驱动；同一个 part + kind
+      重复上传会撞后端唯一索引 21108，所以并发重试必须挡住）
 
   Emits:
     - retry：点击「重试」按钮触发（仅 cell.status === 'error' 时显示）
 
   状态映射：
-    - 'uploading'：el-progress + 百分比文字（multipart 无进度回调，progress 固定 0）
+    - 'uploading'：空进度条（multipart 无进度回调，progress 恒 0）+ 文字「上传中」
     - 'done'：✓ 绿色文字「上传完成」
     - 'error'：红色文字 + 「重试」按钮
     - 'pending'：灰色「待上传」（已排队、还没跑到该文件）
@@ -34,7 +36,9 @@
       <span class="upload-status-text upload-status-text-error" :title="cell.error">
         {{ cell.error || '上传失败' }}
       </span>
-      <el-button link type="primary" size="small" @click="$emit('retry')">重试</el-button>
+      <el-button link type="primary" size="small" :disabled="retryDisabled" @click="$emit('retry')"
+        >重试</el-button
+      >
     </template>
     <template v-else>
       <!-- 'pending'：已排队但还没跑到该文件 -->
@@ -57,9 +61,11 @@ export interface UploadStatusCell {
 interface Props {
   cell: UploadStatusCell | undefined;
   label: string;
+  /** 「重试」按钮置灰。默认 false（无并发约束的调用方）。 */
+  retryDisabled?: boolean;
 }
 
-defineProps<Props>();
+withDefaults(defineProps<Props>(), { retryDisabled: false });
 
 defineEmits<{
   retry: [];

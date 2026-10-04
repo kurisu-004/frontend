@@ -4,11 +4,13 @@
 //   - 一次点击 = 建工单（POST /parts/batch）+ 逐 part 补传图纸 / 3D；
 //   - item 不带 drawing_file / model3d_file（文件走后置上传）；
 //   - 服务端拒行 → 回 idle，**一个文件都不上传**；
+//   - 建单「部分行成立」→ 建成的行移出本地表格，再提交只发剩下的失败行；
 //   - 上传失败 → done 态 + 保留现场 + 弹失败清单，重试**只重传不重复建单**；
 //   - 同一份 PDF 被装配件 master + N 子件共享 → N+1 次上传（每 part 各一次）；
 //   - 重试按 **job**（part × 文件）粒度：共享 PDF 部分失败时只补传失败的那一个，
 //     已成功的绝不重传（重传会撞后端 uk_t_part_file_single 报 21108）；
-//   - 建单之后任何抛错都不许把阶段退回 idle（否则再点一次 = 同一批工单建第二遍）。
+//   - 建单之后任何抛错都不许把阶段退回 idle（否则再点一次 = 同一批工单建第二遍）；
+//   - job 列表没登记上时主按钮必须仍是可点的「重试上传」，出路是现场重建 job。
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref } from 'vue';
@@ -96,6 +98,12 @@ function up(uid: number, name: string): UploadFile {
     raw: new File([new Uint8Array([1, 2, 3])], name),
   } as unknown as UploadFile;
 }
+
+/** 造一个后端业务错误（ApiError 形状：message + code），用于「错误码」路径。 */
+function apiError(code: number, message: string): Error {
+  return Object.assign(new Error(message), { name: 'ApiError', code });
+}
+
 function need(): UsePartBatchPdfReturn {
   if (!captured) throw new Error('no');
   return captured;
@@ -107,6 +115,7 @@ beforeEach(() => {
   mocks.uploadPartDrawing.mockReset();
   mocks.uploadPart3DModel.mockReset();
   mocks.alert.mockReset();
+  mocks.routerPush.mockReset();
   mocks.draftLoad.mockReturnValue(null);
   mocks.scheduled.length = 0;
 });
@@ -402,7 +411,7 @@ describe('上传重试（job 粒度）', () => {
 });
 
 describe('建单之后的异常', () => {
-  it('job 登记前抛错：不回 idle、不重复建单', async () => {
+  it('job 登记前抛错：主按钮仍是可点的「重试上传」，点它现场重建 job（不重复建单）', async () => {
     const w = mount(Harness);
     await flushPromises();
     const api = need();
@@ -413,6 +422,7 @@ describe('建单之后的异常', () => {
     mocks.batchCreateParts.mockResolvedValue({
       created: [{ id: '9001', sourceIndex: 0 }],
       failed: [],
+      groupErrors: [],
     });
     // 建单已成功，但读 File 时炸了（Blob 属性访问抛错）⇒ buildUploadJobs 抛出
     const emptyBlob: Blob = new Blob();
@@ -428,14 +438,97 @@ describe('建单之后的异常', () => {
 
     expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
     expect(mocks.uploadPartDrawing).not.toHaveBeenCalled();
-    // 阶段停在 done：主按钮禁用，再点也进不去建单路径
+    // 阶段停在 done；主按钮**不许**退化成永久 disabled 的「提交创建」——
+    // 用户看到自己填好的行唯一合理的动作就是再点一次，那会把工单再建一遍。
     expect(api.commitStage.value).toBe('done');
-    expect(api.canSubmit.value).toBe(false);
+    expect(api.canSubmit.value).toBe(true);
+    expect(api.submitLabel.value).toBe('重试上传（1 项）');
+    expect(api.submitLabel.value).not.toContain('提交创建');
     expect(mocks.alert).toHaveBeenCalledTimes(1);
     expect(mocks.alert.mock.calls[0]![1]).toBe('文件上传未开始');
 
+    // 直接再调 onSubmit（用户点主按钮）也进不去建单路径
     await api.onSubmit();
     expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+
+    // File 恢复后点「重试上传」：用 createdPartIds + itemRowUids 现场重建 job 再补传
+    api.allPdfs.value = [src];
+    mocks.uploadPartDrawing.mockResolvedValue({});
+    await api.retryFailedUploads();
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(1);
+    expect(mocks.uploadPartDrawing.mock.calls[0]![0]).toBe('9001');
+    expect(mocks.routerPush).toHaveBeenCalledWith('/parts?status=PENDING');
+    w.unmount();
+  });
+
+  it('job 登记前抛错后重试仍抛错：如实告知，不静默成功也不重建工单', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value[0]!.customer_id = 'c-root';
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: '9001', sourceIndex: 0 }],
+      failed: [],
+      groupErrors: [],
+    });
+    const broken: Blob = new Proxy(new Blob(), {
+      get() {
+        throw new Error('文件对象已失效');
+      },
+    });
+    api.allPdfs.value = [{ ...api.allPdfs.value[0]!, raw: broken }];
+
+    await api.onSubmit();
+    mocks.alert.mockClear();
+    await api.retryFailedUploads();
+
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    expect(mocks.uploadPartDrawing).not.toHaveBeenCalled();
+    expect(mocks.alert).toHaveBeenCalledTimes(1);
+    expect(mocks.alert.mock.calls[0]![1]).toBe('文件上传未开始');
+    // 出路仍然在：主按钮可点、仍是「重试上传」
+    expect(api.canSubmit.value).toBe(true);
+    expect(api.submitLabel.value).toBe('重试上传（1 项）');
+    w.unmount();
+  });
+
+  it('重试时文件已不在（行被删）→ 如实说清出路，不静默成功也不无限可重试', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件.pdf')];
+    await api.rebuildFromUploads();
+    const row = api.standaloneParts.value[0]!;
+    row.customer_id = 'c-root';
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: '9001', sourceIndex: 0 }],
+      failed: [],
+      groupErrors: [],
+    });
+    const broken: Blob = new Proxy(new Blob(), {
+      get() {
+        throw new Error('文件对象已失效');
+      },
+    });
+    api.allPdfs.value = [{ ...api.allPdfs.value[0]!, raw: broken }];
+    await api.onSubmit();
+
+    // 行被删掉 ⇒ 重建 job 时找不到任何 part × 文件的组合
+    api.removeStandalonePart(row.uid);
+    mocks.alert.mockClear();
+    await api.retryFailedUploads();
+
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    expect(mocks.uploadPartDrawing).not.toHaveBeenCalled();
+    expect(mocks.alert).toHaveBeenCalledTimes(1);
+    expect(mocks.alert.mock.calls[0]![0] as string).toContain('找不到对应的文件');
+    // 没有「成功创建」的假提示，也没有跳转
+    expect(mocks.routerPush).not.toHaveBeenCalled();
     w.unmount();
   });
 
@@ -457,11 +550,259 @@ describe('建单之后的异常', () => {
     mocks.batchCreateParts.mockResolvedValue({
       created: [{ id: '9001', sourceIndex: 0 }],
       failed: [],
+      groupErrors: [],
     });
     mocks.uploadPartDrawing.mockResolvedValue({});
     await api.onSubmit();
     expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
     expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(1);
+    w.unmount();
+  });
+});
+
+describe('建单「部分行成立」', () => {
+  it('建成的行移出表格：再提交只发失败行，绝不重建已建成的 part', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件1.pdf'), up(2, 'A-2_件2.pdf'), up(3, 'A-3_件3.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value.forEach((r) => (r.customer_id = 'c-root'));
+    const rejected = api.standaloneParts.value[1]!;
+    mocks.uploadPartDrawing.mockResolvedValue({});
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [
+        { id: 'p1', sourceIndex: 0 },
+        { id: 'p3', sourceIndex: 2 },
+      ],
+      failed: [{ index: 1, message: '图号已存在' }],
+      groupErrors: [],
+    });
+
+    await api.onSubmit();
+
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    // 建成的 p1 / p3 已从本地表格移除，只剩被拒的那行
+    expect(api.standaloneParts.value).toHaveLength(1);
+    expect(api.standaloneParts.value[0]!.uid).toBe(rejected.uid);
+    // 如实告知「已创建 M 条工单」
+    const text = mocks.alert.mock.calls[0]![0] as string;
+    expect(text).toContain('已创建 2 条工单');
+    expect(text).toContain('图号已存在');
+    // 阶段回 idle 是安全的：剩下的行重发不可能碰到 p1 / p3
+    expect(api.commitStage.value).toBe('idle');
+    expect(api.canSubmit.value).toBe(true);
+    expect(api.submitLabel.value).toContain('1 个零件');
+    expect(mocks.uploadPartDrawing).not.toHaveBeenCalled();
+
+    // 再点提交：只有失败行被发出去
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: 'p2', sourceIndex: 0 }],
+      failed: [],
+      groupErrors: [],
+    });
+    await api.onSubmit();
+
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(2);
+    const second = mocks.batchCreateParts.mock.calls[1]![0] as Array<{ drawing_no: string }>;
+    expect(second).toHaveLength(1);
+    expect(second[0]!.drawing_no).toBe(rejected.drawing_no);
+    // p1 / p3 没有被重建
+    expect(mocks.uploadPartDrawing.mock.calls.map((c) => c[0])).toEqual(['p2']);
+    w.unmount();
+  });
+
+  it('装配件：顶层 + 一个子件建出、另一个子件被拒 → 只发剩下那个子件', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    const asm = await mountAssembly(api);
+    const rejected = asm.children[0]!;
+    mocks.uploadPartDrawing.mockResolvedValue({});
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [
+        { id: 'M1', sourceIndex: 0 },
+        { id: 'C2', sourceIndex: 2 },
+      ],
+      failed: [{ index: 1, message: '子件被拒' }],
+      groupErrors: [],
+    });
+
+    await api.onSubmit();
+
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    // 行留着（被拒子件的数据在这里），建出的子件已摘走
+    expect(api.assemblies.value).toHaveLength(1);
+    expect(api.assemblies.value[0]!.uid).toBe(asm.uid);
+    expect(api.assemblies.value[0]!.children.map((c) => c.uid)).toEqual([rejected.uid]);
+    expect(api.commitStage.value).toBe('idle');
+
+    // 第二次只发被拒的那个子件：顶层 M1 已建出，重发就是重复建单
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: 'C1', sourceIndex: 0 }],
+      failed: [],
+      groupErrors: [],
+    });
+    await api.onSubmit();
+    const second = mocks.batchCreateParts.mock.calls[1]![0] as Array<{ drawing_no: string }>;
+    expect(second).toHaveLength(1);
+    expect(second[0]!.drawing_no).toBe(rejected.drawing_no);
+    expect(mocks.uploadPartDrawing.mock.calls.map((c) => c[0])).toEqual(['C1']);
+    w.unmount();
+  });
+
+  it('整组请求失败（多分厂）：已建行移出表格，未知成败的组原样留下并被如实告知', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件1.pdf'), up(2, 'A-2_件2.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value[0]!.customer_id = 'c-a';
+    api.standaloneParts.value[1]!.customer_id = 'c-b';
+    mocks.uploadPartDrawing.mockResolvedValue({});
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: 'A1', sourceIndex: 0 }],
+      failed: [],
+      groupErrors: [{ startIndex: 1, endIndex: 1, customer_id: 'c-b', message: '网关 502' }],
+    });
+
+    await api.onSubmit();
+
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    expect(api.standaloneParts.value).toHaveLength(1);
+    expect(api.standaloneParts.value[0]!.customer_id).toBe('c-b');
+    const text = mocks.alert.mock.calls[0]![0] as string;
+    expect(text).toContain('已创建 1 条工单');
+    // 该组成败未知，必须说清楚，不能让用户以为「一定没建」
+    expect(text).toContain('成功与否未知');
+    expect(api.commitStage.value).toBe('idle');
+
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: 'B1', sourceIndex: 0 }],
+      failed: [],
+      groupErrors: [],
+    });
+    await api.onSubmit();
+    const second = mocks.batchCreateParts.mock.calls[1]![0] as Array<{ customer_id: string }>;
+    expect(second).toHaveLength(1);
+    expect(second[0]!.customer_id).toBe('c-b');
+    w.unmount();
+  });
+});
+
+describe('并发闸门与「已存在」归一', () => {
+  it('提交按钮连点两次只建一次单', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件1.pdf'), up(2, 'A-2_件2.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value.forEach((r) => (r.customer_id = 'c-root'));
+    let release: () => void = () => undefined;
+    mocks.batchCreateParts.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              created: [
+                { id: 'p0', sourceIndex: 0 },
+                { id: 'p1', sourceIndex: 1 },
+              ],
+              failed: [],
+              groupErrors: [],
+            });
+        }),
+    );
+    mocks.uploadPartDrawing.mockResolvedValue({});
+
+    const first = api.onSubmit();
+    const second = api.onSubmit();
+    release();
+    await Promise.all([first, second]);
+
+    // POST /parts/batch 无幂等键，连点必须只发一次
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    expect(mocks.uploadPartDrawing.mock.calls.map((c) => c[0]).sort()).toEqual(['p0', 'p1']);
+    w.unmount();
+  });
+
+  it('上传响应丢失 → 重试拿到 21108「相同文件已存在」按成功收口', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件.pdf')];
+    await api.rebuildFromUploads();
+    const row = api.standaloneParts.value[0]!;
+    row.customer_id = 'c-root';
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: '9001', sourceIndex: 0 }],
+      failed: [],
+      groupErrors: [],
+    });
+    // 首轮：后端已写完 t_part_file，响应被掐掉
+    mocks.uploadPartDrawing.mockRejectedValueOnce(new Error('请求超时'));
+
+    await api.onSubmit();
+    expect(api.getRowPdfCell(row)?.status).toBe('error');
+    expect(api.submitLabel.value).toBe('重试上传（1 项）');
+    expect(mocks.alert.mock.calls[0]![0] as string).toContain('第 9001 号零件');
+
+    // 重试：撞 uk_t_part_file_single（(part_id, kind) 已有文件）
+    mocks.alert.mockClear();
+    mocks.uploadPartDrawing.mockRejectedValue(apiError(21108, '相同文件已存在'));
+    await api.retryFailedUploads();
+
+    expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(2);
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
+    // 21108 归一为「已存在」：不进失败清单、不显示错误、页面正常收口
+    expect(mocks.alert).not.toHaveBeenCalled();
+    expect(Object.keys(api.pdfUploadCells)).toHaveLength(0);
+    expect(api.commitStage.value).toBe('done');
+    expect(mocks.routerPush).toHaveBeenCalledWith('/parts?status=PENDING');
+    w.unmount();
+  });
+
+  it('行内重试连点两次只发一次请求', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_件.pdf')];
+    await api.rebuildFromUploads();
+    const row = api.standaloneParts.value[0]!;
+    row.customer_id = 'c-root';
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: '9001', sourceIndex: 0 }],
+      failed: [],
+      groupErrors: [],
+    });
+    mocks.uploadPartDrawing.mockRejectedValue(new Error('boom'));
+    await api.onSubmit();
+    expect(api.getRowPdfCell(row)?.status).toBe('error');
+
+    // 空闲态允许重试；补传在途时必须置灰（同一 part + kind 重发会撞唯一索引）
+    expect(api.cellRetryDisabled.value).toBe(false);
+    mocks.uploadPartDrawing.mockReset();
+    let release: () => void = () => undefined;
+    mocks.uploadPartDrawing.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => resolve();
+        }),
+    );
+    const first = api.retryUploadByCell(`pdf:${row.pdfSourceUid}`);
+    const second = api.retryUploadByCell(`pdf:${row.pdfSourceUid}`);
+    expect(api.cellRetryDisabled.value).toBe(true);
+    release();
+    await Promise.all([first, second]);
+
+    expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(1);
+    expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
     w.unmount();
   });
 });

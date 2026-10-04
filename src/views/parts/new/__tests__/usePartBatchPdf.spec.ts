@@ -55,8 +55,8 @@ vi.mock('pdf-lib', () => ({
   },
 }));
 
-// 2026-10-04：Tab 2 改成「建工单 + 逐 part 后置上传」，composable 从 @/api/parts
-// 导入 batchCreateParts / uploadPartDrawing / uploadPart3DModel 三个导出 —— mock 必须
+// Tab 2 走「建工单 + 逐 part 后置上传」，composable 从 @/api/parts 导入
+// batchCreateParts / uploadPartDrawing / uploadPart3DModel 三个导出 —— mock 必须
 // 覆盖全部被 import 的导出，否则模块解析失败。
 vi.mock('@/api/parts', () => ({
   batchCreateParts: vi.fn(),
@@ -532,7 +532,7 @@ describe('usePartBatchPdf：Excel 回填（业务口径：整套 vs 子件）', 
   });
 });
 
-// ============ 跨集合作用域回归（2026-10-03 review 第 3 轮）============
+// ============ 跨集合作用域回归（2026-10-03）============
 //
 // 上面的两条「手改值不被撤销」只覆盖**同集合**（改零件 + 建零件 / 改装配件 + 建装配件），
 // 跨集合（改零件 + 建装配件 / 改装配件 + 建零件）零覆盖 —— 于是 `applyExcelToAll` 里

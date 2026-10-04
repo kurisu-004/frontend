@@ -38,6 +38,19 @@ export interface PartBatchResult {
   failed: PartBatchFailure[];
   /** 后端 commit 后自清理的 tmp 对象 key 列表，前端忽略。 */
   cleanup_tmp_keys?: string[];
+  /**
+   * 2026-10-04 新增：按 customer 分组逐组提交时，**整组请求抛错**（网络 / 5xx）的记录。
+   * 组内没有任何一行的成败信息（`failed` 是 200 响应里的逐行明细），只能给下标区间。
+   */
+  groupErrors?: PartBatchGroupError[];
+}
+
+export interface PartBatchGroupError {
+  /** 该组覆盖的请求 items 全局下标区间（闭区间）。 */
+  startIndex: number;
+  endIndex: number;
+  customer_id: string;
+  message: string;
 }
 
 export interface PartBatchFilePayload {
@@ -117,7 +130,7 @@ export interface PartBatchCreatePayload extends PartCreatePayload {
  * 「建出来的 part」对回「本地哪一行」的锚。
  *
  * 2026-10-04：item 侧的 `drawing_file` / `model3d_file`（FileBinding）在本仓已无
- * 生产者 —— 走的是后置上传，不再需要把 COS tmp 绑在建单请求里。字段与类型保留，
+ * 生产者 —— 走的是后置上传，不需要把 COS tmp 绑在建单请求里。字段与类型保留，
  * 供后端契约对齐时参考。
  *
  * 后端 multipart 端点 `POST /parts/batch-with-pdfs` 的语义是「单 PDF 多页 → 拆成装配件」，
@@ -127,10 +140,17 @@ export interface PartBatchCreatePayload extends PartCreatePayload {
  * 后端契约（`PartBatchCreateRequest { customer_id, items }`）要求 top-level
  * `customer_id`、item 不带 `customer_id`；本函数按 customer_id 分组提交，
  * 每组共享 top-level customer_id，避免跨客户混合导致的语义错误。
+ *
+ * 2026-10-04：**逐组捕获、聚合返回**。每组是一次独立的 `POST /parts/batch`，组与组之间
+ * 没有事务包裹 —— 第 1 组 commit 之后第 2 组 502，整体 reject 会让 caller 完全看不到
+ * 第 1 组已经建出的 part，再发一次就是重复建单。改成逐组 try/catch、成功的组照常进
+ * `created`、抛错的组进 `groupErrors`，caller 拿得到「哪些行已经建出来了」。
+ * 取舍：抛错组的成败仍然未知（响应丢失时后端可能已 commit），本函数无法判定，
+ * 只能把下标区间如实交给 caller。
  */
 export async function batchCreateParts(items: PartBatchCreatePayload[]): Promise<PartBatchResult> {
   if (items.length === 0) {
-    return { created: [], failed: [], cleanup_tmp_keys: [] };
+    return { created: [], failed: [], cleanup_tmp_keys: [], groupErrors: [] };
   }
   // 按 customer_id 分组，每组单独提交一次。**连同请求 items 的全局下标一起存**：
   // 同一个 customer_id 可以出现在数组的多个不连续区段（Tab 2 每行各选分厂时是常态），
@@ -146,13 +166,26 @@ export async function batchCreateParts(items: PartBatchCreatePayload[]): Promise
   });
   const created: CreatedPartItem[] = [];
   const failed: PartBatchFailure[] = [];
+  const groupErrors: PartBatchGroupError[] = [];
   const cleanupTmpKeys: string[] = [];
   for (const [customerId, groupItems] of groups) {
     const body: PartBatchCreateRequestFE = {
       customer_id: customerId,
       items: groupItems.map((g) => toPartBatchCreateItem(g.item)),
     };
-    const resp = await api.post<PartBatchCreateOutFE>('/parts/batch', body);
+    let resp: { data: PartBatchCreateOutFE };
+    try {
+      resp = await api.post<PartBatchCreateOutFE>('/parts/batch', body);
+    } catch (e) {
+      // 这一组一条成败信息都拿不到，只记下标区间 + 原因，交给 caller 如实转达。
+      groupErrors.push({
+        customer_id: customerId,
+        startIndex: groupItems[0]!.sourceIndex,
+        endIndex: groupItems[groupItems.length - 1]!.sourceIndex,
+        message: (e as Error).message ?? '请求失败',
+      });
+      continue;
+    }
     // 后端 created[i] 恒等于组内第 i 个**成功**的 item（按 items 顺序 push、失败项不
     // 占位）⇒ 沿组内 items 顺序走一个游标，跳过 failed[].item_index 命中的项，
     // 落到的那个位置就是该 part 的源下标。
@@ -179,7 +212,7 @@ export async function batchCreateParts(items: PartBatchCreatePayload[]): Promise
       cleanupTmpKeys.push(...resp.data.cleanup_tmp_keys);
     }
   }
-  return { created, failed, cleanup_tmp_keys: cleanupTmpKeys };
+  return { created, failed, cleanup_tmp_keys: cleanupTmpKeys, groupErrors };
 }
 
 function toPartBatchCreateItem(it: PartBatchCreatePayload): PartBatchCreateItemFE {
@@ -200,9 +233,9 @@ function toPartBatchCreateItem(it: PartBatchCreatePayload): PartBatchCreateItemF
   };
 }
 
-// 2026-09-25：`batchCreatePartsWithPdfs`（PDF 批量树形创建）整段删除。该端点
-// `POST /parts/batch-with-pdfs` 的语义是「单 PDF 多页 → 拆装配件」，入参没有
-// `items` 数组、无法承载逐行录入；Tab 2 走 `POST /parts/batch` + 后置上传。
+// `POST /parts/batch-with-pdfs` 是「单 PDF 多页 → 拆装配件」的树形创建端点：入参没有
+// `items` 数组、服务端自己造一个 `装配件-{今天}` 并按页数拆子件，承载不了 Tab 2 的
+// 逐行录入。逐行建单一律走上面的 `batchCreateParts` + 后置上传。
 
 // ============================================================
 // 批次（2026-07-29 批次化）
@@ -280,10 +313,10 @@ export async function cancelPartBatch(
   version: number,
   reason?: string | null,
 ): Promise<PartBatch[]> {
-  const resp = await api.post<PartBatch[]>(
-    `/prod/batches/${encodeURIComponent(batchId)}/cancel`,
-    { version, reason },
-  );
+  const resp = await api.post<PartBatch[]>(`/prod/batches/${encodeURIComponent(batchId)}/cancel`, {
+    version,
+    reason,
+  });
   return resp.data;
 }
 

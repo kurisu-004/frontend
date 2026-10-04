@@ -20,6 +20,29 @@
 export type PartFileKind =
   'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D';
 
+/**
+ * 2026-10-04：后端 `BIZ_PART_FILE_DUPLICATE` —— 同一 `(part_id, kind)` 已有未删除文件。
+ *
+ * 唯一索引 `uk_t_part_file_single ON (part_id, kind) WHERE deleted_at IS NULL`，与文件
+ * 内容无关：只要那个 part 的那个 kind 已经有文件，二次上传必撞此码。
+ *
+ * multipart 上传最常见的失败形态是「后端已写完 `t_part_file`、响应在回程被掐掉」
+ * （超时 / 连接重置）。此时文件其实好好在服务端，前端却记成了失败；再重试一次只会
+ * 稳定地拿到这个码，于是 UI 永远停在假错误里。⇒ 命中此码按**已存在**处理，不记失败。
+ */
+export const PART_FILE_DUPLICATE_CODES = [21108] as const;
+
+/** 触发「文件已存在、按成功处理」的 ApiError.code 取值类型。 */
+export type PartFileDuplicateCode = (typeof PART_FILE_DUPLICATE_CODES)[number];
+
+/** 判断一个后端错误是否命中 `PART_FILE_DUPLICATE_CODES`（读 `ApiError.code`）。 */
+export function isPartFileDuplicateError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  return (
+    typeof code === 'number' && (PART_FILE_DUPLICATE_CODES as readonly number[]).includes(code)
+  );
+}
+
 /** 统一文件项（对齐 v2 backend-rust PartFileOut） */
 export interface PartFileItem {
   id: string;

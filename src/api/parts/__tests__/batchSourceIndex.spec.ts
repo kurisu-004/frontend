@@ -1,6 +1,6 @@
 // 2026-10-04 新增：`batchCreateParts` 的 `created[].sourceIndex` 契约。
 //
-// Tab 2 改成「建工单 + 逐 part 后置上传」后，caller 必须能把建出来的 part 对回本地
+// Tab 2 走「建工单 + 逐 part 后置上传」，caller 必须能把建出来的 part 对回本地
 // 哪一行，sourceIndex 是唯一锚。后端 `created` 按 items 顺序 push、失败项不占位，
 // 所以它等于「沿组内 items 顺序、跳过 failed[].item_index 命中的项后落到的位置」。
 //
@@ -86,5 +86,78 @@ describe('batchCreateParts sourceIndex', () => {
       ['b5', 5],
     ]);
     expect(res.failed).toEqual([{ index: 1, message: 'bad' }]);
+  });
+
+  it('整组请求失败：聚合成 groupErrors，不整体 reject（前面成功的组已 commit）', async () => {
+    // 组 A commit 成功，组 B 抛 502。整体 reject 会让 caller 看不到 A 已建出的 part，
+    // 再发一次就是重复建单。
+    mocks.post
+      .mockResolvedValueOnce({ data: { created: [{ id: 'a0' }, { id: 'a1' }], failed: [] } })
+      .mockRejectedValueOnce(new Error('网关 502'));
+
+    const res = await batchCreateParts([
+      {
+        customer_id: 'A',
+        name: 'n0',
+        drawing_no: 'd0',
+        request_date: '2026-01-01',
+        planned_delivery_date: '2026-01-01',
+      },
+      {
+        customer_id: 'A',
+        name: 'n1',
+        drawing_no: 'd1',
+        request_date: '2026-01-01',
+        planned_delivery_date: '2026-01-01',
+      },
+      {
+        customer_id: 'B',
+        name: 'n2',
+        drawing_no: 'd2',
+        request_date: '2026-01-01',
+        planned_delivery_date: '2026-01-01',
+      },
+      {
+        customer_id: 'B',
+        name: 'n3',
+        drawing_no: 'd3',
+        request_date: '2026-01-01',
+        planned_delivery_date: '2026-01-01',
+      },
+    ]);
+
+    expect(res.created.map((c) => [c.id, c.sourceIndex])).toEqual([
+      ['a0', 0],
+      ['a1', 1],
+    ]);
+    expect(res.failed).toEqual([]);
+    expect(res.groupErrors).toEqual([
+      { customer_id: 'B', startIndex: 2, endIndex: 3, message: '网关 502' },
+    ]);
+  });
+
+  it('全部组都失败：不 reject，created 为空、groupErrors 覆盖全部下标', async () => {
+    mocks.post.mockRejectedValue(new Error('网络中断'));
+    const res = await batchCreateParts([
+      {
+        customer_id: 'A',
+        name: 'n0',
+        drawing_no: 'd0',
+        request_date: '2026-01-01',
+        planned_delivery_date: '2026-01-01',
+      },
+      {
+        customer_id: 'B',
+        name: 'n1',
+        drawing_no: 'd1',
+        request_date: '2026-01-01',
+        planned_delivery_date: '2026-01-01',
+      },
+    ]);
+    expect(res.created).toEqual([]);
+    expect(res.groupErrors).toEqual([
+      { customer_id: 'A', startIndex: 0, endIndex: 0, message: '网络中断' },
+      { customer_id: 'B', startIndex: 1, endIndex: 1, message: '网络中断' },
+    ]);
   });
 });
