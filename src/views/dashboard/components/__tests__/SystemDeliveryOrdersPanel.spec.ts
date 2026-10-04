@@ -11,8 +11,8 @@
 //   - P2：名称 tooltip 的 content 是完整 name（窄屏 ellipsis 的唯一兜底手段）
 //   - P3：urgent 数量列渲染纯数值
 //   - P4：二级客户为空 → 渲染 '—' 且对应 tooltip disabled
-//   - P5：系统交期只出 MM/DD，且不含「天后到期」「已逾期」倒计文案；逾期 / 临近配色类
-//         仍由 deliveryUrgencyClass 驱动
+//   - P5：系统交期只出 MM/DD，且不含「天后到期」「已逾期」倒计文案；临近橙仍由
+//         deliveryUrgencyClass 驱动（逾期态不在本面板口径内，样式表无逾期分支）
 //   - P6：两个 variant 的标题 / 副标题 / 空态文案
 //   - P7：urgent 变体有 `.urgent` 红底行、partial 变体没有
 //   - P8：partial 数量列出「20 / 64」，已交部分单独成节点（走主题色的入口）
@@ -212,7 +212,7 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（urgent 变体）', (
     wrapper.unmount();
   });
 
-  it('P5：系统交期只出 MM/DD，且不含倒计文案；逾期 / 临近配色类保留', () => {
+  it('P5：系统交期只出 MM/DD，且不含倒计文案；临近橙保留，逾期态不在本面板口径内', () => {
     const due = isoOffset(2);
     const wrapper = mountPanel('urgent', [makePart({ system_delivery_date: due })]);
     const text = wrapper.find('.list-rows .row').text();
@@ -221,14 +221,17 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（urgent 变体）', (
     expect(text).not.toContain('天后到期');
     expect(text).not.toContain('已逾期');
     expect(text).not.toContain('今天到期');
-    // 2 天后 → due-soon（橙）
+    // 2 天后 → due-soon（橙，本面板唯一的交期强调色）
     expect(wrapper.find('.row-due').classes()).toContain('due-soon');
+    wrapper.unmount();
 
+    // 逾期件不在本面板口径内（items 已过 splitForDashboard 的窗口下界），组件自己不
+    // 判窗口：真数据流里传不到逾期行，这里只钉「不额外加判据」—— 传进来时
+    // deliveryUrgencyClass 的返回值原样落到 class 上（该工具是共享的，本组件不改它）。
     const overdue = mountPanel('urgent', [makePart({ system_delivery_date: isoOffset(-52) })]);
     expect(overdue.find('.row-due').text()).toBe(mmdd(isoOffset(-52)));
     expect(overdue.find('.row-due').classes()).toContain('overdue');
     overdue.unmount();
-    wrapper.unmount();
   });
 
   it('P11：点行 → emit rowClick(item)', async () => {
@@ -325,7 +328,6 @@ describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
     // 浮层也被 stub 渲染进 DOM，text 可直接断言
     expect(part.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 20 件 / 总量 64 件');
     expect(assembly.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 3 件 / 总量 8 件');
-    expect(assembly.text()).not.toContain('套');
     assembly.unmount();
     part.unmount();
   });

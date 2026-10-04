@@ -293,7 +293,9 @@ describe('useDashboardUrgentList — items 派生', () => {
 
     const today = isoOffset(0);
     // 键形态 = ['dashboard','urgent-list', today]
-    const cached = testQueryClient.getQueryCache().find({ queryKey: qk.dashboardUrgentList(today) });
+    const cached = testQueryClient
+      .getQueryCache()
+      .find({ queryKey: qk.dashboardUrgentList(today) });
     expect(cached).toBeTruthy();
     expect(cached?.queryKey).toEqual(['dashboard', 'urgent-list', today]);
     // 前缀键与工厂键同根：WS 事件按前缀能一把命中（跨零点前后的两条都命中）

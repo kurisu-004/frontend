@@ -59,11 +59,16 @@ export function deliveryWindowCutoffIso(): string {
 }
 
 /** 工单是否落在交期窗口内：system_delivery_date 为 null 剔除，
- *  早于下界（逾期）或晚于上界（窗口外）剔除。 */
+ *  早于下界（逾期）或晚于上界（窗口外）剔除。窗口两端现取现用（单条判断用）。 */
 export function inDeliveryWindow(item: PartListItem): boolean {
   const date = item.system_delivery_date;
   if (!date) return false;
-  return date >= deliveryWindowStartIso() && date <= deliveryWindowCutoffIso();
+  return inWindowBetween(date, deliveryWindowStartIso(), deliveryWindowCutoffIso());
+}
+
+/** 窗口内判断的纯比较段：两端由调用方给，跨整批只算一次窗口。 */
+function inWindowBetween(date: string, startIso: string, cutoffIso: string): boolean {
+  return date >= startIso && date <= cutoffIso;
 }
 
 /** 是否「已经交过」：已送数量 > 0。字段缺失（后端未上线该列）时按未交过处理。 */
@@ -90,12 +95,21 @@ export interface SplitResult {
  *   - 「有交过」= `delivered_quantity > 0`，这类进 partial；其余（0 / 字段缺失）留 urgent。
  *     ⇒ `delivered_quantity` 缺失时 urgent 桶与不做分桶完全一致。
  *   - 后端已按 system_delivery_date ASC 排好，前端只 filter + slice，**不重排**。
+ *   - 窗口两端在整批上只取一次（2026-10-05）：逐条调 inDeliveryWindow 会让每行都重算
+ *     两个 ISO（cutoff 还内部再推一次 today），100 行 ≈ 400 次 Date 运算，且跨零点时
+ *     前后行可能取到不同的「今天」。inDeliveryWindow 仍是导出的单条入口（语义同源，
+ *     只是每次现取窗口）。
  */
 export function splitForDashboard(
   items: PartListItem[],
   { urgentLimit, partialLimit }: SplitOptions,
 ): SplitResult {
-  const inWindow = items.filter(inDeliveryWindow);
+  const startIso = deliveryWindowStartIso();
+  const cutoffIso = deliveryWindowEndIso(startIso);
+  const inWindow = items.filter((it) => {
+    const date = it.system_delivery_date;
+    return !!date && inWindowBetween(date, startIso, cutoffIso);
+  });
   return {
     urgent: inWindow.filter((it) => !hasDeliveredQuantity(it)).slice(0, urgentLimit),
     partial: inWindow.filter(hasDeliveredQuantity).slice(0, partialLimit),

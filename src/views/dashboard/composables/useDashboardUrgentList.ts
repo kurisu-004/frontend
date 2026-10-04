@@ -36,8 +36,8 @@
 //     HTTP 流量带动 http.ts 的 token 主动刷新，详见 useDashboardSnapshot.ts 同位置
 //     长注释。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
-//   - 返回 { items, fetchList }：items = 窗口内全量件，让 caller 走
-//     splitForDashboard 自行分桶 + slice。
+//   - 返回 { items, fetchList }：items = 窗口内至多 100 件（服务端 limit 截断），让
+//     caller 走 splitForDashboard 自行分桶 + slice。
 
 import { computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -45,10 +45,7 @@ import { useQuery } from '@tanstack/vue-query';
 import { listUnionItems, type UnionListParams } from '@/api/com/unionList';
 import { partListResultSchema, type UnionListResultSchema } from '@/composables/queries/schemas';
 import { qk } from '@/composables/queries/keys';
-import {
-  deliveryWindowEndIso,
-  deliveryWindowStartIso,
-} from '@/utils/systemDeliveryOrders';
+import { deliveryWindowEndIso, deliveryWindowStartIso } from '@/utils/systemDeliveryOrders';
 import type { PartListItem } from '@/types/parts';
 import { useDashboardInvalidation } from './useDashboardInvalidation';
 
@@ -107,7 +104,8 @@ export function useDashboardUrgentList() {
     gcTime: Number.POSITIVE_INFINITY,
   });
 
-  // 派生：items = 全量 100 件数组，消费方（DashboardView）走 splitForDashboard 分桶。
+  // 派生：items = 服务端按 [today, today+6] 窗口过滤后、limit 截断到至多 100 件的数组，
+  // 消费方（DashboardView）走 splitForDashboard 分桶。
   // partSchema 的 z.infer 与 PartListItem 已直接对齐，无需强转。
   const items = computed<PartListItem[]>(() => query.data.value?.items ?? []);
 

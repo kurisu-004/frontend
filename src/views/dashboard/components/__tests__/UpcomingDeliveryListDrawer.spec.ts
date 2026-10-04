@@ -20,6 +20,9 @@
 // 2026-10-05 追加「头部件数不谎报」覆盖（U11 / U12）：件数取服务端 total，被
 // 服务端 limit 截断（total > 取回条数）时追加「仅显示前 N 条」提示，未截断时
 // 不渲染任何提示。
+// 2026-10-05 追加 U13：换键（切 basis / 切日期 / 切层）后新键尚无数据、isPending 为
+// true 时，头部**不渲染件数** —— 此时渲染「共 0 件」会被读成一个权威计数（该 query 无
+// placeholderData，pending 期 query.data 恒 undefined）。
 //
 // 2026-10-04 纯测试基建修复（零生产代码改动）：原 ElTable stub 只按 :data 数行、
 // 根本不渲染默认 slot，等于整张表一个单元格都不渲染 —— 任何列级断言在这样一张空表上
@@ -27,7 +30,6 @@
 // .mock-row，行内 provide 出当前行（MockTableRow），列 stub inject 后按该行喂自己的
 // scoped slot ⇒ 模板里的 `const { row } = undefined` 不再抛错，且列断言真的绑定到
 // :data 的行上（:data 为空时列内容一个都不渲染，U4 有对应的反向断言）。
-
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
@@ -495,6 +497,22 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
 
     expect(wrapper.find('.header-total').text()).toBe('共 2 件');
     expect(wrapper.find('.header-truncated').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('U13：换键 pending 期头部不渲染件数（不把「共 0 件」当权威计数抛出去）', async () => {
+    // 挂起一个永不 settle 的请求 ⇒ query.data 恒 undefined、isPending 恒 true
+    // （该 query 无 placeholderData）。此时 total 派生为 0，渲染出来会被读成
+    // 「服务端确认 0 件」，而真相是「还没拿到数据」。
+    listUnionItemsMock.mockReturnValue(new Promise(() => {}));
+
+    const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
+    await nextTick();
+
+    expect(wrapper.find('.header-total').exists()).toBe(false);
+    // pending 期也没有截断提示可判（0 > 0 不成立），两侧都不出现
+    expect(wrapper.find('.header-truncated').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('共 0 件');
     wrapper.unmount();
   });
 });

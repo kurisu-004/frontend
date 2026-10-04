@@ -14,12 +14,14 @@
 // 行源口径（2026-10-05）：row_type='PART_FLAT' —— t_part 全表行，**含装配件的子零件、
 // 不含装配件父行**，行单位恒为「件」。与柱状图 `upcoming_delivery[].count` 的
 // `COUNT(*) FROM t_part`（`t_assembly` 全模块零引用）同源 ⇒ 点某根柱后抽屉列出的
-// 条数与柱高口径一致：一个装配件（4 个子零件）+ 5 个独立零件，柱高 9，抽屉 9 行
-// （装配件那 4 个子零件各占一行，不显示装配件父行、不加树形、不加装配件标识）。
+// 条数与柱高口径一致：一个装配件（4 个子零件）+ 5 个独立零件，柱高 9，三层抽屉
+// 逐层打开的行数之和 = 9（装配件那 4 个子零件各占一行，抽屉里**不**出现装配件父行、
+// 不加树形、不加装配件标识）。一次只开一层，故单层抽屉看到的是该层自己的行数。
 //
-// 条数与展示条数是两个值：端点 limit 被后端 clamp(1, 200)，所以抽屉最多拿回 200 行
-// 而 total 可能是更大的数。**头部件数渲染 total**（`total` 派生见下），被截断时由
-// 组件追加「仅显示前 N 条」提示 —— 用 rows.length 当件数会在 200 行为上限时谎报。
+// 条数与展示条数是两个值：请求的 limit 与端点允许的页长上限一致（200），所以最多拿回
+// 200 行而 total 可能是更大的数。**头部件数渲染 total**（`total` 派生见下），被截断时
+// 由组件追加「仅显示前 N 条」提示 —— 用 rows.length 当件数会在触顶时谎报。截断提示由
+// `total > rows.length` 推导，不依赖 200 这个常数，后端放开上限时不会误报。
 //
 // 设计要点（与 useDashboardUrgentList 同形）：
 //   - reactive params 模式：queryKey = computed(() => qk.xxx(toValue(params)))，
@@ -118,7 +120,7 @@ export function useDashboardUpcomingList(
           statuses: p.statuses,
           ...windowParams,
           sort_dir: 'ASC',
-          limit: 500,
+          limit: 200,
           offset: 0,
         }),
       );

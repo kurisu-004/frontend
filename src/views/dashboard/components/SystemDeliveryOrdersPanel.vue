@@ -12,7 +12,10 @@
 
   行内 6 列 —— 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期：
     - 名称与二级客户两列窄屏下 ellipsis 截断，tooltip 常显兜底（不做溢出检测：
-      行高会随内容抖动）。系统交期只出日期，逾期红 / 临近橙仍由 deliveryUrgencyClass 驱动。
+      行高会随内容抖动）。系统交期只出日期；临近橙由 deliveryUrgencyClass 驱动。
+      逾期红在本面板恒不出现 —— items 已过窗口下界（每一行 system_delivery_date >=
+      today），而 deliveryUrgencyClass 只在 diff < 0 时才给 'overdue'，故样式表里
+      没有逾期分支。
     - 数量列：urgent 出纯总量；partial 出「已交 / 总量」，已交部分走主题色，
       并包 el-tooltip 显式标注单位与含义（恒「件」）。
       partial 的两个数字不做静默截断 —— 轨宽按 4 位 ×2 留足，溢出会带省略号可见。
@@ -293,10 +296,9 @@ function deliveredTooltip(item: PartListItem): string {
 .row-due {
   color: var(--text-secondary);
   text-align: right;
-  &.overdue {
-    color: var(--el-color-danger);
-    font-weight: 600;
-  }
+  // 2026-10-05：无逾期分支。入参 items 已过交期窗口下界（system_delivery_date >=
+  // today），deliveryUrgencyClass 在本面板恒不返 'overdue'，写一条永不命中的规则
+  // 只会让后来人以为逾期有配色。逾期件由 KPI「逾期未交」tile 承担。
   &.due-soon {
     color: var(--el-color-warning);
     font-weight: 600;

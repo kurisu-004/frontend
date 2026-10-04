@@ -114,7 +114,7 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
   });
 
   it('L1：queryKey 形态 = ["dashboard","upcoming-list",{date,statuses,basis}]', async () => {
-    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
 
     const params = ref<{
       date: string;
@@ -214,7 +214,7 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
         },
       ],
       total: 1,
-      limit: 500,
+      limit: 200,
       offset: 0,
     });
 
@@ -239,8 +239,8 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     scope.stop();
   });
 
-  it('L5：planned 口径入参 = row_type=PART_FLAT / sort_by=PLANNED_DELIVERY_DATE / limit=500', async () => {
-    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+  it('L5：planned 口径入参 = row_type=PART_FLAT / sort_by=PLANNED_DELIVERY_DATE / limit=200', async () => {
+    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
 
     const params = ref<{
       date: string;
@@ -264,7 +264,7 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     expect(args['row_type']).toBe('PART_FLAT');
     expect(args['sort_by']).toBe('PLANNED_DELIVERY_DATE');
     expect(args['sort_dir']).toBe('ASC');
-    expect(args['limit']).toBe(500);
+    expect(args['limit']).toBe(200);
     expect(args['offset']).toBe(0);
     expect(args['planned_delivery_date_from']).toBe('2026-10-03');
     expect(args['planned_delivery_date_to']).toBe('2026-10-03');
@@ -279,7 +279,7 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     listUnionItemsMock.mockResolvedValue({
       items: [makeBasePart({ id: '180000000000099' })],
       total: 1,
-      limit: 500,
+      limit: 200,
       offset: 0,
     });
 
@@ -307,7 +307,7 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
   // ==========================================================================
 
   it('L7：system 口径发 system 窗口 + sort_by=SYSTEM_DELIVERY_DATE，且不夹带 planned 参数', async () => {
-    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
 
     const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>({
       date: '2026-10-05',
@@ -334,13 +334,13 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     // 两口径共用的字段不变（row_type 恒 PART_FLAT：行源 = t_part 全表行）
     expect(args['row_type']).toBe('PART_FLAT');
     expect(args['sort_dir']).toBe('ASC');
-    expect(args['limit']).toBe(500);
+    expect(args['limit']).toBe(200);
     expect(args['offset']).toBe(0);
     scope.stop();
   });
 
   it('L8：切 basis → 换键自动 refetch，且两次请求的口径参数各归各位', async () => {
-    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
 
     const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>({
       date: '2026-10-01',
@@ -391,16 +391,16 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
   // ==========================================================================
 
   it('L9：暴露 total —— 服务端匹配总数与取回条数解耦（9 件只回 2 条时 total 为 9）', async () => {
-    // 端点 limit 被后端 clamp(1, 200)，rows.length 恒 ≤ 200；头部件数必须按
+    // 请求 limit 与端点页长上限一致（200），rows.length 恒 ≤ 200；头部件数必须按
     // 服务端 total 渲染，否则条数触顶时谎报件数。
     listUnionItemsMock.mockResolvedValue({
       items: [makeBasePart({ id: '180000000000001' }), makeBasePart({ id: '180000000000002' })],
       total: 9,
-      limit: 500,
+      limit: 200,
       offset: 0,
     });
 
-    const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>({
+    const params = ref<{ date: string; statuses: 'PENDING'[]; basis: DeliveryBasis } | null>({
       date: '2026-10-01',
       statuses: ['PENDING'],
       basis: 'planned',
@@ -420,7 +420,7 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
   });
 
   it('L10：请求未落数据前 total 派生为 0（不返 undefined，抽屉头不显示 NaN）', async () => {
-    const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>(null);
+    const params = ref<{ date: string; statuses: 'PENDING'[]; basis: DeliveryBasis } | null>(null);
 
     const scope = effectScope();
     let q: ReturnType<typeof useDashboardUpcomingList> | undefined;

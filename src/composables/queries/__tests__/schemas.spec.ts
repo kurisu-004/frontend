@@ -39,8 +39,9 @@
 //     来自 `#[serde(flatten)]` quirk），不抛错。
 //   - S15c（partSchema 系列）：has_cnc_program = false 也能 parse。
 //   - S15d~S15f（2026-10-05 新增，partSchema 系列）：assembly_id 接受 null（独立
-//     零件行）/ 父装配件 id 字符串（装配件子件行）/ 缺键（GET /parts 家族不填该列）——
-//     该键 wire 上恒在，漏声明会被 zod strip 静默丢弃。
+//     零件行）/ 父装配件 id 字符串（装配件子件行）/ 缺键也 parse 得过（GET /parts 家族
+//     不填该列 ⇒ 该键 optional 而非必填）—— 该键在 union-list 的 wire 上恒在，
+//     漏声明会被 zod strip 静默丢弃。
 //   - S16：assemblyDetailFlatSchema 缺 children → 抛 ZodError（M-1 同形态
 //     regression guard：缺必填字段静默 strip = 校验形同虚设）。
 //   - S17：assemblyDetailFlatSchema 多出 `assembly` 嵌套键 → 抛 ZodError。
@@ -617,13 +618,14 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(parsed.assembly_id).toBe('190000000000001');
     });
 
-    it('S15f：缺 assembly_id 也合法（复用同一 VO 的 GET /parts 家族不填该列）', () => {
-      const { assembly_id: _, ...rest } = makeBasePart() as Record<string, unknown> & {
-        assembly_id?: string;
-      };
-      void _;
-      const parsed = partSchema.parse(rest);
-      expect(parsed.assembly_id).toBeUndefined();
+    it('S15f：输入缺 assembly_id 时仍 parse 成功（该键是 optional 而非必填）', () => {
+      // 复用同一 VO 的 GET /parts 家族不填该列，声明成必填会让那一族接口在前端
+      // parse 阶段全炸。故本条只钉「缺键不抛」。这里**不**写
+      // expect(parsed.assembly_id).toBeUndefined() —— 键未声明时 zod strip 同样给出
+      // undefined，两种实现都会过，是伪守卫。「键确实被声明」由 S15d / S15e 负责
+      // （给了值就原样往返，未声明会被 strip 丢成 undefined，那两条会红）。
+      expect(makeBasePart()).not.toHaveProperty('assembly_id');
+      expect(() => partSchema.parse(makeBasePart())).not.toThrow();
     });
   });
 
