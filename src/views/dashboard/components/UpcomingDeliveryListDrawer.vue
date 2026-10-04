@@ -6,13 +6,21 @@
     - date: 'YYYY-MM-DD'
     - layer: 'top' | 'middle' | 'bottom'
     - statuses: OrderStatus[]
+    - basis: 'planned' | 'system'（2026-10-04 新增，交期统计口径）
     - @update:modelValue: 双向同步
   渲染：el-table stripe；列 = # / 流水(serial_no) / 图号(drawing_no) / 名称 /
   客户(l1_customer_name + customer_name 拼接) / 状态 ElTag / 倒计
-  (planned_delivery_date，出逾期/临近配色)；loading / error / empty 三态。
+  （按 basis 取 planned_delivery_date 或 system_delivery_date，出逾期/临近配色）；
+  loading / error / empty 三态。
   闸门：父组件 DashboardView `v-if="selectedLayer"` 保证 drawer 首次点击前不挂载，
   useDashboardUpcomingList 的 enabled 闸门天然生效；drawer 自身
   `v-if="statuses.length === 0"` 是 props 异常兜底。
+
+  口径（2026-10-04 新增）：抽屉是柱状图的下钻，日期窗口与倒计列都必须跟柱状图当前
+  口径一致，否则会出现「点的是系统交期的柱、列里却显示计划交期倒计」的自相矛盾。
+  - 组件不持口径状态：props.basis 进，透传给 useDashboardUpcomingList；
+  - header 挂一枚口径小标签，让抽屉自解释当前口径；
+  - 倒计列读 rowDeliveryDate(row) 统一取字段，模板里不写三元。
 
   抽屉形态：direction 'btt'（bottom-to-top）+ :size 60% —— 从屏幕底部弹出、水平
   宽度撑满、最大高度 60%，与 dashboard 双栏布局配合（点柱状图看到的是「目标日期的
@@ -50,6 +58,8 @@
           >
             {{ LAYER_LABEL[layer] }}
           </el-tag>
+          <!-- 2026-10-04：口径小标签，让抽屉自解释当前统计口径（跟柱状图开关同步） -->
+          <el-tag size="small" effect="plain" type="info">{{ basisLabel }}</el-tag>
           <span class="header-total">共 {{ rows.length }} 件</span>
         </div>
       </div>
@@ -96,10 +106,12 @@
           </el-table-column>
           <el-table-column label="倒计" width="84" align="right">
             <template #default="{ row }">
-              <span :class="['cell-due', deliveryUrgencyClass(row.planned_delivery_date)]">
+              <span
+                :class="['cell-due', deliveryUrgencyClass(rowDeliveryDate(row as PartListItem))]"
+              >
                 {{
-                  deliveryDaysLeftText(row.planned_delivery_date) ||
-                    formatDeliveryDate(row.planned_delivery_date)
+                  deliveryDaysLeftText(rowDeliveryDate(row as PartListItem)) ||
+                  formatDeliveryDate(rowDeliveryDate(row as PartListItem))
                 }}
               </span>
             </template>
@@ -120,14 +132,14 @@
 //
 // 数据流：
 //   1. props.modelValue=true 时 useDashboardUpcomingList 的 enabled 闸门打开
-//      （params getter 返回 { date, statuses } 非 null）；
-//   2. params 变化（切层 / 切日期）→ queryKey 变化 → 自动 refetch；
+//      （params getter 返回 { date, statuses, basis } 非 null）；
+//   2. params 变化（切层 / 切日期 / 切口径）→ queryKey 变化 → 自动 refetch；
 //   3. rows = query.data.items（500 件上限防御性兜底；实际单日 × 8 状态远小于此）。
 //
 // 视觉：
-//   - 顶部 header：单行放 日期 + 层标题(el-tag 用项目主色背景) + 共 N 件
+//   - 顶部 header：单行放 日期 + 层标题(el-tag 用项目主色背景) + 口径标签 + 共 N 件
 //   - 列表：el-table stripe；列 = # / 流水 / 图号 / 名称 / 客户(一二级拼接) / 状态 ElTag /
-//     倒计（planned_delivery_date 的倒计文案，逾期/临近配色）
+//     倒计（**当前口径**交期字段的倒计文案，逾期/临近配色）
 //   - loading / error / empty 三态
 //   - v-if="statuses.length === 0" 兜底：父组件 onBarLayerClick 写入后 statuses
 //     一定有元素；此处防御 props 异常时给空状态提示。
@@ -146,12 +158,15 @@ import {
   type OrderStatus,
   type PartListItem,
 } from '@/types/parts';
+import { DELIVERY_BASIS_LABEL, type DeliveryBasis } from '@/types/dashboard';
 
 const props = defineProps<{
   modelValue: boolean;
   date: string;
   layer: 'top' | 'middle' | 'bottom';
   statuses: readonly OrderStatus[];
+  /** 2026-10-04 新增：交期统计口径（必填，唯一状态源在父组件 DashboardView）。 */
+  basis: DeliveryBasis;
 }>();
 
 const emit = defineEmits<{
@@ -179,12 +194,29 @@ const LAYER_COLOR: Record<'top' | 'middle' | 'bottom', string> = {
 
 const layerColor = computed(() => LAYER_COLOR[props.layer]);
 
+/** 2026-10-04 新增：header 口径标签文案（与柱状图开关共用 DELIVERY_BASIS_LABEL）。 */
+const basisLabel = computed(() => DELIVERY_BASIS_LABEL[props.basis]);
+
+/** 2026-10-04 新增：取当前口径对应的交期字段。
+ *  倒计列有三处消费（class / 倒计文案 / 日期回显），散在模板里各写一次三元容易
+ *  漏改一处导致「class 用计划交期、文案用系统交期」，故收成一个函数。
+ *  system_delivery_date 可空，返回 null 时下游 deliveryDate 工具函数按空值处理
+ *  （无倒计文案、日期列留空）。 */
+function rowDeliveryDate(row: PartListItem): string | null {
+  return props.basis === 'system' ? row.system_delivery_date : row.planned_delivery_date;
+}
+
 /** 2026-09-30 新增：params getter —— 仅 drawer 打开时返回非 null 让闸门打开；
- *  关闭（modelValue=false）时返回 null 停 fetch，与 enabled 闸门语义对齐。 */
+ *  关闭（modelValue=false）时返回 null 停 fetch，与 enabled 闸门语义对齐。
+ *  2026-10-04：透传 basis，让下钻的日期窗口与柱状图当前口径一致。 */
 const params = computed(() => {
   if (!props.modelValue) return null;
   if (props.statuses.length === 0) return null;
-  return { date: props.date, statuses: [...props.statuses] as OrderStatus[] };
+  return {
+    date: props.date,
+    statuses: [...props.statuses] as OrderStatus[],
+    basis: props.basis,
+  };
 });
 
 const { data: rows, isPending, error } = useDashboardUpcomingList(() => toValue(params));

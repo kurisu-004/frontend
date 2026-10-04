@@ -4,11 +4,14 @@
 // Zod parse 守门回归保护（与 plan §2.7 对齐）。
 //
 // 覆盖：
-//   - L1：queryKey 形态 — 含 ['dashboard','upcoming-list', { date, statuses }] 三层
+//   - L1：queryKey 形态 — 含 ['dashboard','upcoming-list', { date, statuses, basis }] 三层
 //   - L2：params=null 时 enabled=false，listUnionItems 不被调
 //   - L3：params.statuses 空数组时 enabled=false（防御性）
 //   - L4：成功路径走 partListResultSchema.parse(...) 守门
 //   - L5：listUnionItems 入参硬编码 row_type='PART' / sort_by / sort_dir / limit / offset
+//   （2026-10-04 新增）L7：system 口径发 system_delivery_date_from/to +
+//     sort_by='SYSTEM_DELIVERY_DATE'，且 planned 那组参数**根本不在请求里**；
+//     L8：切 basis 换键自动 refetch
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope, ref } from 'vue';
@@ -59,6 +62,7 @@ vi.mock('@/api/dashboard', () => ({
 
 import { useDashboardUpcomingList } from '../useDashboardUpcomingList';
 import { qk } from '@/composables/queries/keys';
+import type { DeliveryBasis } from '@/types/dashboard';
 
 function makeBasePart(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -107,12 +111,17 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     vi.useRealTimers();
   });
 
-  it('L1：queryKey 形态 = ["dashboard","upcoming-list",{date,statuses}]', async () => {
+  it('L1：queryKey 形态 = ["dashboard","upcoming-list",{date,statuses,basis}]', async () => {
     listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
 
-    const params = ref<{ date: string; statuses: ('PENDING' | 'PROGRAMMING')[] } | null>({
+    const params = ref<{
+      date: string;
+      statuses: ('PENDING' | 'PROGRAMMING')[];
+      basis: DeliveryBasis;
+    } | null>({
       date: '2026-10-01',
       statuses: ['PENDING', 'PROGRAMMING'],
+      basis: 'planned',
     });
 
     const scope = effectScope();
@@ -124,20 +133,28 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
 
     // 直接通过 QueryClient cache 拉真实 queryKey 断言形态（不用 onDashboardEventMock
     // .toHaveBeenCalled 这种「WS 订阅挂上」的名实不符断言）
-    const expectedKey = qk.dashboardUpcomingList({ date: '2026-10-01', statuses: ['PENDING', 'PROGRAMMING'] });
+    const expectedKey = qk.dashboardUpcomingList({
+      date: '2026-10-01',
+      statuses: ['PENDING', 'PROGRAMMING'],
+      basis: 'planned',
+    });
     const cached = testQueryClient.getQueryCache().find({ queryKey: expectedKey });
     expect(cached).toBeTruthy();
     expect(cached?.queryKey).toEqual(expectedKey);
-    // queryKey 必须严格三层：['dashboard', 'upcoming-list', { date, statuses }]
+    // queryKey 必须严格三层：['dashboard', 'upcoming-list', { date, statuses, basis }]
     expect(cached?.queryKey).toHaveLength(3);
     expect(cached?.queryKey[0]).toBe('dashboard');
     expect(cached?.queryKey[1]).toBe('upcoming-list');
-    expect(cached?.queryKey[2]).toEqual({ date: '2026-10-01', statuses: ['PENDING', 'PROGRAMMING'] });
+    expect(cached?.queryKey[2]).toEqual({
+      date: '2026-10-01',
+      statuses: ['PENDING', 'PROGRAMMING'],
+      basis: 'planned',
+    });
     scope.stop();
   });
 
   it('L2：params=null 时 enabled=false → listUnionItems 不被调', async () => {
-    const params = ref<{ date: string; statuses: ('PENDING')[] } | null>(null);
+    const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>(null);
 
     const scope = effectScope();
     scope.run(() => {
@@ -151,9 +168,10 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
   });
 
   it('L3：params.statuses.length === 0 时 enabled=false → listUnionItems 不被调', async () => {
-    const params = ref<{ date: string; statuses: never[] } | null>({
+    const params = ref<{ date: string; statuses: never[]; basis: DeliveryBasis } | null>({
       date: '2026-10-01',
       statuses: [],
+      basis: 'planned',
     });
 
     const scope = effectScope();
@@ -198,9 +216,10 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
       offset: 0,
     });
 
-    const params = ref<{ date: string; statuses: ('PENDING')[] } | null>({
+    const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>({
       date: '2026-10-01',
       statuses: ['PENDING'],
+      basis: 'planned',
     });
 
     const scope = effectScope();
@@ -218,12 +237,17 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     scope.stop();
   });
 
-  it('L5：listUnionItems 入参 = row_type=PART / sort_by=PLANNED_DELIVERY_DATE / limit=500', async () => {
+  it('L5：planned 口径入参 = row_type=PART / sort_by=PLANNED_DELIVERY_DATE / limit=500', async () => {
     listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
 
-    const params = ref<{ date: string; statuses: ('INSPECTION' | 'READY_TO_SHIP')[] } | null>({
+    const params = ref<{
+      date: string;
+      statuses: ('INSPECTION' | 'READY_TO_SHIP')[];
+      basis: DeliveryBasis;
+    } | null>({
       date: '2026-10-03',
       statuses: ['INSPECTION', 'READY_TO_SHIP'],
+      basis: 'planned',
     });
 
     const scope = effectScope();
@@ -242,6 +266,9 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
     expect(args['offset']).toBe(0);
     expect(args['planned_delivery_date_from']).toBe('2026-10-03');
     expect(args['planned_delivery_date_to']).toBe('2026-10-03');
+    // planned 口径不得夹带 system 窗口参数（两组同时发会被后端 AND 成交集）
+    expect(args).not.toHaveProperty('system_delivery_date_from');
+    expect(args).not.toHaveProperty('system_delivery_date_to');
     expect((args['statuses'] as string[]).sort()).toEqual(['INSPECTION', 'READY_TO_SHIP'].sort());
     scope.stop();
   });
@@ -254,9 +281,10 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
       offset: 0,
     });
 
-    const params = ref<{ date: string; statuses: ('PENDING')[] } | null>({
+    const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>({
       date: '2026-10-01',
       statuses: ['PENDING'],
+      basis: 'planned',
     });
 
     const scope = effectScope();
@@ -269,6 +297,90 @@ describe('useDashboardUpcomingList — reactive params + enabled 闸门（2026-0
 
     expect(q!.data.value).toHaveLength(1);
     expect(q!.data.value[0]?.id).toBe('180000000000099');
+    scope.stop();
+  });
+
+  // ==========================================================================
+  // 2026-10-04：交期统计口径（planned / system）下钻
+  // ==========================================================================
+
+  it('L7：system 口径发 system 窗口 + sort_by=SYSTEM_DELIVERY_DATE，且不夹带 planned 参数', async () => {
+    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+
+    const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>({
+      date: '2026-10-05',
+      statuses: ['PENDING'],
+      basis: 'system',
+    });
+
+    const scope = effectScope();
+    scope.run(() => {
+      testApp.runWithContext(() => useDashboardUpcomingList(() => params.value));
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(listUnionItemsMock).toHaveBeenCalled();
+    const args = listUnionItemsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(args['system_delivery_date_from']).toBe('2026-10-05');
+    expect(args['system_delivery_date_to']).toBe('2026-10-05');
+    expect(args['sort_by']).toBe('SYSTEM_DELIVERY_DATE');
+    // 关键断言：两组窗口参数互斥。若两组同时发，后端按 AND 取交集 → 抽屉恒空，
+    // 而且这个 bug 表现为「点得到柱但列不出工单」，排查成本很高。
+    expect(args).not.toHaveProperty('planned_delivery_date_from');
+    expect(args).not.toHaveProperty('planned_delivery_date_to');
+    // 两口径共用的字段不变
+    expect(args['row_type']).toBe('PART');
+    expect(args['sort_dir']).toBe('ASC');
+    expect(args['limit']).toBe(500);
+    expect(args['offset']).toBe(0);
+    scope.stop();
+  });
+
+  it('L8：切 basis → 换键自动 refetch，且两次请求的口径参数各归各位', async () => {
+    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+
+    const params = ref<{ date: string; statuses: ('PENDING')[]; basis: DeliveryBasis } | null>({
+      date: '2026-10-01',
+      statuses: ['PENDING'],
+      basis: 'planned',
+    });
+
+    const scope = effectScope();
+    scope.run(() => {
+      testApp.runWithContext(() => useDashboardUpcomingList(() => params.value));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(listUnionItemsMock).toHaveBeenCalledTimes(1);
+
+    params.value = { ...params.value!, basis: 'system' };
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(listUnionItemsMock).toHaveBeenCalledTimes(2);
+    const first = listUnionItemsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    const second = listUnionItemsMock.mock.calls[1]?.[0] as Record<string, unknown>;
+    expect(first['sort_by']).toBe('PLANNED_DELIVERY_DATE');
+    expect(second['sort_by']).toBe('SYSTEM_DELIVERY_DATE');
+    // 两条 cache identity 都在（键含 basis）
+    const cache = testQueryClient.getQueryCache();
+    expect(
+      cache.find({
+        queryKey: qk.dashboardUpcomingList({
+          date: '2026-10-01',
+          statuses: ['PENDING'],
+          basis: 'planned',
+        }),
+      }),
+    ).toBeTruthy();
+    expect(
+      cache.find({
+        queryKey: qk.dashboardUpcomingList({
+          date: '2026-10-01',
+          statuses: ['PENDING'],
+          basis: 'system',
+        }),
+      }),
+    ).toBeTruthy();
     scope.stop();
   });
 });

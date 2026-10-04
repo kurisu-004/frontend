@@ -27,6 +27,7 @@ import type { ListShelvesParams } from '@/api/shelves';
 // 处，沿 ListShelvesParams / ListPendingBatchesParams 的既有做法），本文件只引用。
 import type { WorkTypeListParams } from '@/api/workType';
 import type { ProcessCategory } from '@/types/process';
+import type { DeliveryBasis } from '@/types/dashboard';
 import type { UnionListParams } from '@/api/com/unionList';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
@@ -57,10 +58,16 @@ export const qk = {
    *  listParts 参数形态都会命中）。与 customersPrefix / processesPrefix 同形。 */
   partsPrefix: ['parts'] as const,
   /** 2026-09-28 新增：dashboard 域大屏快照键（HTTP 全量首取 + WS 事件 invalidate）。
-   *  与 customersList / processesList 等 list 形态不同 —— dashboard snapshot 是
-   *  全量单条（无 params），HTTP 端点 GET /api/v2/dashboard/snapshot 一次取回
-   *  完整 DashboardSnapshotVO。 */
-  dashboardSnapshot: ['dashboard', 'snapshot'] as const,
+   *  2026-10-04 改为**工厂**：键含交期统计口径 basis 维度（planned / system），两种
+   *  口径的 upcoming_delivery 分桶口径不同、不能共用同一份 cache identity，切口径
+   *  即换键，TanStack Query 自动为新键发一次请求（不依赖任何显式 refetch）。
+   *  失效走 qk.dashboardSnapshotPrefix（见下），不用本键。 */
+  dashboardSnapshot: (basis: DeliveryBasis) => ['dashboard', 'snapshot', basis] as const,
+  /** 2026-10-04 新增：dashboard snapshot 域前缀 —— 专供 WS 事件失效用。
+   *  键已含 basis 维度，WS 事件到达时该口径**以及另一口径**的缓存都应被失效（业务
+   *  写入会同时改变两种口径的统计结果，用户切回去时不能吃到旧数）⇒ 用前缀一把
+   *  partial match 同时命中 planned / system 两条，而不是只失效当前口径那一条。 */
+  dashboardSnapshotPrefix: ['dashboard', 'snapshot'] as const,
   /** dashboard「交期工单」queryKey。
    *  listUnionItems 拉 100 件按 system_delivery_date ASC 的非终态件，客户端再按
    *  system_delivery_date <= today+6 过滤并分 urgent / partial 两桶（各取 top 30）。
@@ -72,10 +79,13 @@ export const qk = {
    *  启用（enabled: isManager 闸门），非 Manager 不发请求。 */
   dashboardOverdue: ['dashboard', 'overdue'] as const,
   /** dashboard「交期分桶柱状图按层点击抽屉」queryKey。
-   *  listUnionItems({ row_type: 'PART', statuses, planned_delivery_date_from =
-   *  to = date, sort_by: 'PLANNED_DELIVERY_DATE', sort_dir: 'ASC', limit: 500,
-   *  offset: 0 }) 拉该日 × 该层状态的所有工单。 */
-  dashboardUpcomingList: (params: { date: string; statuses: string[] }) =>
+   *  2026-10-04：params 加交期统计口径 basis —— 下钻的日期窗口与排序必须跟柱状图
+   *  当前口径一致（planned 发 planned_delivery_date_from/to + sort_by
+   *  'PLANNED_DELIVERY_DATE'；system 发 system_delivery_date_from/to + sort_by
+   *  'SYSTEM_DELIVERY_DATE'，两组参数互斥、绝不同时发）。口径进了键，切口径即换键
+   *  自动 refetch，抽屉不会拿计划交期的工单冒充系统交期的下钻结果。
+   *  失效走字面量前缀 ['dashboard','upcoming-list']（见 useDashboardUpcomingList 注释）。 */
+  dashboardUpcomingList: (params: { date: string; statuses: string[]; basis: DeliveryBasis }) =>
     ['dashboard', 'upcoming-list', params] as const,
   /** 2026-09-28 新增：dashboard 域前缀 —— WS 事件触发 invalidate 用；
    *  包含 dashboardSnapshot / dashboardUrgentList / dashboardOverdue 三个 query，

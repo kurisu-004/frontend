@@ -12,6 +12,12 @@
 //   - U6：el-drawer direction=btt + size=60%（Phase 5 改 btt 防回归）
 //   - U7：el-table 行点击 → emit('rowClick', part)（Phase 5 新增行点击事件防回归）
 //
+// 2026-10-04 追加「交期统计口径」覆盖（U8~U10）：倒计列取当前口径对应的交期字段 /
+// system 口径下系统交期为空则倒计列留空 / header 口径标签随 basis 变化。
+// 倒计列的断言依赖文件头那套行感知 el-table stub 把 **:data 的真实行**喂进列的
+// scoped slot；日期取 2099 年的远期值：deliveryDaysLeftText 对 >3 天的远期返回空串，
+// 倒计时稳定回落到 MM/DD，断言不随「测试运行当天」漂移。
+//
 // 2026-10-04 纯测试基建修复（零生产代码改动）：原 ElTable stub 只按 :data 数行、
 // 根本不渲染默认 slot，等于整张表一个单元格都不渲染 —— 任何列级断言在这样一张空表上
 // 都无从谈起。修法照抄真实 Element Plus 的做法：stub 的 ElTable 按 :data 渲染
@@ -24,6 +30,7 @@ import { mount } from '@vue/test-utils';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { h, inject, nextTick, provide, toRef, type Ref, type VNode } from 'vue';
 import type { OrderStatus } from '@/types/parts';
+import type { DeliveryBasis } from '@/types/dashboard';
 
 /** 行上下文的 provide key（与真实 el-table 的 table store 同一层语义）。 */
 const ROW_KEY = Symbol('mock-el-table-row');
@@ -181,6 +188,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
       date: string;
       layer: 'top' | 'middle' | 'bottom';
       statuses: readonly OrderStatus[];
+      basis: DeliveryBasis;
     }> = {},
   ) {
     const statuses: readonly OrderStatus[] = ['PENDING', 'PROGRAMMING'];
@@ -190,6 +198,8 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
         date: '2026-10-01',
         layer: 'top' as const,
         statuses,
+        // 口径必填 prop，缺省 planned（与视图缺省口径一致）
+        basis: 'planned' as DeliveryBasis,
         ...overrides,
       },
       global: {
@@ -367,5 +377,77 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     expect(events?.[0]?.[0]).toMatchObject({ id: '180000000000001' });
 
     wrapper.unmount();
+  });
+
+  // ==========================================================================
+  // 交期统计口径（planned / system）—— 倒计列与 header 自解释
+  // ==========================================================================
+
+  /** 远期日期（>3 天）⇒ deliveryDaysLeftText 返回空串、倒计时稳定回落到 MM/DD，
+   *  断言不随「测试运行当天」漂移。两个日期刻意拉开，一眼能看出取的是哪个字段。 */
+  const FAR_PLANNED = '2099-12-31';
+  const FAR_SYSTEM = '2099-11-30';
+
+  it('U8：倒计列按 basis 取字段（planned 取计划交期 / system 取系统交期）', async () => {
+    listUnionItemsMock.mockResolvedValue({
+      items: [makePart({ planned_delivery_date: FAR_PLANNED, system_delivery_date: FAR_SYSTEM })],
+      total: 1,
+      limit: 500,
+      offset: 0,
+    });
+
+    const plannedWrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+    expect(plannedWrapper.find('.cell-due').text()).toBe('12/31');
+    plannedWrapper.unmount();
+
+    const systemWrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts({ basis: 'system' }));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+    expect(systemWrapper.find('.cell-due').text()).toBe('11/30');
+    systemWrapper.unmount();
+  });
+
+  it('U9：system 口径下系统交期为空 → 倒计列留空、不挂逾期样式', async () => {
+    listUnionItemsMock.mockResolvedValue({
+      items: [makePart({ planned_delivery_date: FAR_PLANNED, system_delivery_date: null })],
+      total: 1,
+      limit: 500,
+      offset: 0,
+    });
+
+    const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts({ basis: 'system' }));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+
+    // 未填系统交期的工单本来就不会出现在系统口径的抽屉里；这里钉的是「万一出现
+    // （后端某天放宽了 NULL 处理）也不会显示成逾期 2099 年的计划交期倒计时」。
+    const due = wrapper.find('.cell-due');
+    expect(due.text()).toBe('');
+    expect(due.classes()).not.toContain('overdue');
+    expect(due.classes()).not.toContain('due-soon');
+    wrapper.unmount();
+  });
+
+  it('U10：header 口径标签随 basis 变化（抽屉自解释当前口径）', async () => {
+    listUnionItemsMock.mockResolvedValue({
+      items: [makePart()],
+      total: 1,
+      limit: 500,
+      offset: 0,
+    });
+
+    const plannedWrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+    expect(plannedWrapper.text()).toContain('计划交期');
+    plannedWrapper.unmount();
+
+    const systemWrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts({ basis: 'system' }));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await nextTick();
+    expect(systemWrapper.text()).toContain('系统交期');
+    systemWrapper.unmount();
   });
 });

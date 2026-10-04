@@ -5,22 +5,38 @@
   barLayerClick 给父组件打开抽屉。
 
   数据来源：snapshot.upcoming_delivery: {date, count, by_status}[]（by_status
-  必填对象，OrderStatus → 件数）。
+  必填对象，OrderStatus → 件数）。分桶落在哪个日期列上由**交期统计口径**决定
+  （props.basis：planned = planned_delivery_date 计划交期 / system =
+  system_delivery_date 系统交期），后端按 basis 换 SQL 日期列，wire 形态不变。
 
-  视觉 / 实现规则：
+  口径开关（2026-10-04 新增）：
+  - 位置：图卡内**右上角绝对定位浮层**（.chart-wrap 拿 position: relative 做定位
+    上下文），不新增头部行、不改左栏 flex 布局；
+  - 组件**不持口径状态**：props.basis 进、emit('update:basis') 出，唯一状态源是父组件
+    DashboardView（与抽屉的 update:modelValue 同风格，不用 defineModel）；
+  - 开关旁挂一句随口径变化的提示：system_delivery_date 可空，后端对 NULL 做范围比较
+    恒 false ⇒ 未填系统交期的工单在系统口径下整件不计入，系统口径合计必然 ≤ 计划口径。
+    不说清楚用户会把差异误读成数据丢失。
+  - 宽度预算：3 个图例项 ≈230px + 开关 ≈130px；左栏在 ≥1100px 视口下 ≥600px，
+    两者不撞（≤1100px 走单列布局，图表区更宽）。图例因此钉 left: 0（不居中），
+    给右侧留出开关的位置。
+
+  视觉 / 实现规则（改动本图时必须守住的不变量）：
   - 颜色走 EP 预设 hex（success #67c23a / warning #e6a23c / danger #f56c6c），
     与 UpcomingDeliveryListDrawer 的 LAYER_COLOR 一致，形成「柱色 ↔ 抽屉层标签」
     闭环。**必须用 hex 而非 var(--el-color-*)** —— ECharts Canvas renderer 解析
     CSS var() 不可靠，会出现「系列不渲染」或「取色失败」静默 fail。
-  - 横向堆叠 + series barMaxWidth: 18（14 天视觉不拥挤）；barGap / barCategoryGap
-    留默认（堆叠条本身已紧密）；不设 itemStyle.borderRadius（横向堆叠圆角意义不大）。
-  - LAYERS 顺序 [bottom, middle, top] —— 视觉从下到上按「完成度递增」（已送货 →
-    待品检待送货 → 品检前），配 yAxis.inverse=true 让 today 在顶。
-  - 走 vue-echarts 8.3 的全局 <v-chart>（theme v5 + renderer canvas + autoresize），
-    不自管 echarts.init / ResizeObserver / dispose。
+  - LAYERS 顺序 [bottom, middle, top] 必须与 series 渲染顺序、legend.data 顺序
+    逐字一致，否则 ECharts 打印「xxx series not exists」；LAYERS 顺序同时是视觉
+    「完成度递增」（已送货 → 待品检待送货 → 品检前），配 yAxis.inverse=true 让
+    today 在顶。
+  - series.name（中文 label）与 legend.data 字符串相等，但 barLayerClick emit 出
+    的是英文 layer.key。
+  - tooltip formatter 拼 innerHTML，**只允许拼模块常量 + 后端 ISO 日期 + 数字**，
+    禁插用户输入。
+  - 走 vue-echarts 8.3 的全局 <v-chart>（theme v5 + renderer canvas + autoresize +
+    updateOptions.notMerge），不自管 echarts.init / ResizeObserver / dispose。
   - series 加 emphasis.focus='series'，hover 时本层高亮、其余弱化。
-  - click 通过 @click emit 透传（payload 形态与 chart.on('click', ...) 一致 ——
-    seriesName / dataIndex / value 等字段由 ECElementEvent 提供）。
 -->
 <template>
   <div class="chart-wrap">
@@ -34,6 +50,20 @@
       autoresize
       @click="onChartClick"
     />
+    <!-- 口径开关浮层：受控用法（:model-value 进、@change 出），选中态由父组件
+         持有。el-radio-button 用 value 属性（EP ≥2.6）而非已废弃的 label 当值。 -->
+    <div class="basis-toggle">
+      <el-radio-group
+        :model-value="basis"
+        size="small"
+        aria-label="交期统计口径"
+        @change="onBasisChange"
+      >
+        <el-radio-button value="planned">计划交期</el-radio-button>
+        <el-radio-button value="system">系统交期</el-radio-button>
+      </el-radio-group>
+      <span class="basis-hint" :title="basisHint" :aria-label="basisHint">ⓘ</span>
+    </div>
   </div>
 </template>
 
@@ -55,6 +85,10 @@
 //   - click @click payload 类型 ECElementEvent，seriesName 即 series.name（中文 label），
 //     dataIndex 即 yAxis category 索引；反查 LAYERS.find(l => l.label === seriesName)
 //     得到 layer，emit 时仍用 layer.key（英文 ID）以保父组件契约不变。
+//   - 2026-10-04：交期统计口径 props.basis 是**只读入参** + emit('update:basis') 出参
+//     （受控组件，状态源在 DashboardView）。柱状图不因口径改任何渲染逻辑 —— buckets
+//     由父组件按当前口径的 snapshot 派生，组件只负责画；口径真正要驱动的是后端请求
+//     （useDashboardSnapshot 的 queryKey 含 basis）与下钻（抽屉按 basis 发日期窗口）。
 //   - vue-echarts autoresize prop 自管 ResizeObserver，无需手写 observe / disconnect。
 //   - 主题锁 v5。
 
@@ -63,6 +97,7 @@ import type { ECElementEvent } from 'echarts/core';
 import type { EChartsCoreOption } from 'echarts/core';
 import type { UpcomingDeliveryEntryData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
 import type { OrderStatus } from '@/types/parts';
+import type { DeliveryBasis } from '@/types/dashboard';
 
 /** 3 层状态分组。
  *  - 顶层（top）4 状态：PENDING / PROGRAMMING / IN_PROCESS / OUTSOURCE（品检前）
@@ -86,6 +121,9 @@ interface UpcomingLayer {
 const props = withDefaults(
   defineProps<{
     buckets: UpcomingDeliveryEntryData[];
+    /** 2026-10-04 新增：交期统计口径（唯一状态源在父组件，本组件只读 + emit）。
+     *  必填不兜默认值：默认值会掩盖父组件漏传 wiring，柱状图就会静默按计划交期画。 */
+    basis: DeliveryBasis;
     height?: string;
   }>(),
   { height: '320px' },
@@ -97,6 +135,8 @@ const emit = defineEmits<{
     layer: UpcomingLayer['key'];
     statuses: readonly OrderStatus[];
   }];
+  /** 2026-10-04 新增：口径切换上抛（父组件改 basis → snapshot 换键 refetch）。 */
+  'update:basis': [value: DeliveryBasis];
 }>();
 
 /** 3 层状态分组实例（必须在 defineProps/defineEmits 之后，沿 vue/define-macros-order
@@ -222,6 +262,9 @@ const chartOption = computed<EChartsCoreOption>(() => {
     legend: {
       data: LAYERS.map((l) => l.label),
       top: 0,
+      // 2026-10-04：钉 left: 0（不居中）。3 个图例项 ≈230px 从左侧起排，右上角
+      // 留给口径开关浮层（≈130px）；左栏在 ≥1100px 视口下 ≥600px，两者不会撞。
+      left: 0,
       textStyle: { fontSize: 12, color: '#606266' },
       itemWidth: 12,
       itemHeight: 12,
@@ -299,10 +342,29 @@ function onChartClick(p: ECElementEvent): void {
     statuses: layer.statuses,
   });
 }
+
+/** 2026-10-04 新增：口径开关提示文案，随当前口径变化。
+ *  关键信息只有系统口径有：system_delivery_date 可空，后端对 NULL 做范围比较恒
+ *  false ⇒ 未填系统交期的工单在系统口径下**整件不计入**，所以系统口径的合计必然
+ *  ≤ 计划口径。不讲清楚，用户会把「少了件数」读成数据丢失。 */
+const basisHint = computed(() =>
+  props.basis === 'system'
+    ? '系统交期口径：未填写系统交期的工单不计入，合计会少于计划交期'
+    : '计划交期口径：全部未交期工单都计入',
+);
+
+/** 2026-10-04 新增：el-radio-group change → emit('update:basis')。
+ *  受控用法（本组件不持状态），并把 EP 的 string|number|boolean 收敛回两个合法
+ *  口径值，不做 `as DeliveryBasis` 强转。 */
+function onBasisChange(v: string | number | boolean | undefined): void {
+  emit('update:basis', v === 'system' ? 'system' : 'planned');
+}
 </script>
 
 <style lang="scss" scoped>
 .chart-wrap {
+  // 2026-10-04：口径开关浮层的定位上下文（浮层绝对定位于本盒右上角）。
+  position: relative;
   width: 100%;
   min-width: 0;
   background: #fff;
@@ -313,5 +375,22 @@ function onChartClick(p: ECElementEvent): void {
 .chart {
   width: 100%;
   min-width: 0;
+}
+.basis-toggle {
+  // 右上角浮层：不占布局空间（不挤压 canvas 高度 / 不改左栏 flex）。
+  // 高度 ≈24px（small radio-group），落在 grid.top=36 之上，不遮绘图区。
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.basis-hint {
+  cursor: help;
+  font-size: 13px;
+  line-height: 1;
+  color: #909399;
 }
 </style>

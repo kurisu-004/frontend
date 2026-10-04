@@ -10,12 +10,18 @@
     - 视口 ≤1100px 折叠成单列
 
   数据流：
-    - useDashboardSnapshot() → snapshot.upcoming_delivery（14 天分桶）+ in_process +
-      on_inspection_shelves（在制 / 在检 KPI 派生来源）
+    - **交期统计口径**（2026-10-04 新增）：`deliveryBasis` ref（缺省 planned）是全页
+      唯一口径源，一处下发三处消费 —— 柱状图开关（`:basis` / `@update:basis`）、
+      snapshot 请求（useDashboardSnapshot 的 queryKey 含 basis ⇒ 切口径即换键
+      自动 refetch）、下钻抽屉（`:basis`）。柱状图与「今日到期 / 两周到期」KPI 都
+      从同一份 upcomingBuckets 派生，KPI 无需任何改动即自动跟随。
+    - useDashboardSnapshot(() => deliveryBasis.value) → snapshot.upcoming_delivery
+      （14 天分桶，随口径变化）+ in_process + on_inspection_shelves（在制 / 在检 KPI
+      派生来源）
     - useDashboardUrgentList() → items（listUnionItems 拉 100 件非终态件，按
       system_delivery_date ASC）；右栏两块面板**共用这一份 items**，由
       splitForDashboard（src/utils/systemDeliveryOrders.ts）按 7 天窗口 + 「有无已交
-      批次」分桶，零新增请求。
+      批次」分桶，零新增请求。右栏恒为系统交期语义，不跟随交期口径开关。
     - useDashboardOverdue(isManager) → overdueCount（Manager-only，闸门按角色）
     - 行点击 → selectedPart + previewOpen 走 PartPreviewDialog（统一入口）
 
@@ -45,7 +51,9 @@
         />
         <UpcomingDeliveryChart
           :buckets="upcomingBuckets"
+          :basis="deliveryBasis"
           height="100%"
+          @update:basis="deliveryBasis = $event"
           @bar-layer-click="onBarLayerClick"
         />
         <!-- 工厂实时态 -->
@@ -81,6 +89,7 @@
       :date="selectedLayer.date"
       :layer="selectedLayer.layer"
       :statuses="selectedLayer.statuses"
+      :basis="selectedLayer.basis"
       @row-click="onUpcomingRowClick"
     />
   </div>
@@ -97,10 +106,11 @@
 //   - SHELF_ACCOUNT：isShelfAccount = true → canOpenPartDetail = false → chips 不可点。
 //   - MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER：canOpenPartDetail = true。
 
-import { computed, ref } from 'vue';
+import { computed, ref, toValue } from 'vue';
 import { useRouter } from 'vue-router';
 import { usePermissions } from '@/composables/usePermissions';
 import type { OrderStatus, PartListItem } from '@/types/parts';
+import type { DeliveryBasis } from '@/types/dashboard';
 import { useDashboardSnapshot } from '@/views/dashboard/composables/useDashboardSnapshot';
 import { useDashboardUrgentList } from '@/views/dashboard/composables/useDashboardUrgentList';
 import { useDashboardOverdue } from '@/views/dashboard/composables/useDashboardOverdue';
@@ -120,8 +130,19 @@ const canOpenPartDetail = computed(
   () => isManager.value || isClerk.value || isInspector.value || isCncProgrammer.value,
 );
 
+// ============ 交期统计口径 ============
+// 2026-10-04 新增：全页唯一口径源。planned（计划交期）是缺省口径（= 加本功能前的
+// 行为），不做 localStorage 持久化 —— 每次进页面回落 planned，避免上次口径成为
+// 隐性默认、用户对着与预期不符的数字做判断。
+// 切口径只改这一个 ref，三处消费自动跟随：
+//   - useDashboardSnapshot 的 queryKey（含 basis）→ 换键自动 refetch 新口径数据；
+//   - UpcomingDeliveryChart 开关的选中态（受控 :basis）；
+//   - selectedLayer.basis → 抽屉下钻的日期窗口与倒计列。
+// KPI（今日到期 / 两周到期）从 upcomingBuckets 派生，buckets 本身随口径变，故无需改动。
+const deliveryBasis = ref<DeliveryBasis>('planned');
+
 // ============ 数据 ============
-const { data: snapshot } = useDashboardSnapshot();
+const { data: snapshot } = useDashboardSnapshot(() => toValue(deliveryBasis));
 const { items: urgentItems } = useDashboardUrgentList();
 const { overdueCount } = useDashboardOverdue(isManager);
 
@@ -182,13 +203,17 @@ function goPartDetail(partId: string): void {
 }
 
 // ============ 交期柱状图按层点击 ============
-// selectedLayer 持有 { date, layer, statuses } 三元组，v-if="selectedLayer" 保证
+// selectedLayer 持有 { date, layer, statuses, basis } 四元组，v-if="selectedLayer" 保证
 // drawer 在首次点击前不挂载（useDashboardUpcomingList 的 enabled 闸门天然生效）。
+// basis 随点击时的口径**快照**进 selectedLayer：抽屉打开后用户再切图上的开关，
+// 已打开的抽屉不会被就地改口径（那会让「点的是 A 柱、列表变成 B 口径」在半途发生）；
+// 下次点柱才带新口径。
 const upcomingDrawerOpen = ref(false);
 const selectedLayer = ref<{
   date: string;
   layer: 'top' | 'middle' | 'bottom';
   statuses: readonly OrderStatus[];
+  basis: DeliveryBasis;
 } | null>(null);
 
 function onBarLayerClick(payload: {
@@ -200,6 +225,7 @@ function onBarLayerClick(payload: {
     date: payload.date,
     layer: payload.layer,
     statuses: payload.statuses,
+    basis: deliveryBasis.value,
   };
   upcomingDrawerOpen.value = true;
 }
