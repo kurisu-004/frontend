@@ -6,6 +6,20 @@
  * 排好），本模块负责在客户端按 7 天窗口（today → today+6）过滤并按「有无已交批次」
  * 分成两桶。
  *
+ * **窗口两端**（2026-10-05 补下界）：与 `useDashboardUrgentList` 下发给服务端的
+ * `system_delivery_date_from/_to` 是**同一个窗口**（下界 = 今天，上界 = 今天+6）。
+ * 服务端先过滤，客户端再过一遍不是为了改口径，而是把服务端分页/裁剪之外的边界
+ * （例如后端某天放宽了日期条件）在面板侧钉死；两端定义同源于本模块，调用方
+ * （useDashboardUrgentList）直接取 `deliveryWindowStartIso` / `deliveryWindowEndIso`
+ * 拼请求参数，不允许任何一处自己再写一份「today+6」。
+ *
+ * **窗口起点由调用方传入**（2026-10-05）：`splitForDashboard` 不自己取「今天」，第三个
+ * 参 `startIso` 就是该 query 下发给服务端的同一个下界（`useDashboardUrgentList` 在 setup
+ * 里捕获一次，同时喂给 queryKey 与本函数）。两端因此锁死在同一瞬间，不会出现「服务端
+ * 窗口是 [D, D+6]、客户端按 [D+1, D+7] 过滤」的一天空档（丢掉的是「昨天」那一天，与
+ * 「面板不含逾期」的目标重合，故这类漂移是静默的）。本模块自行现取 today 只能保证
+ * 单次调用内部自洽，跨两端的同刻一致性保证不了。
+ *
  * **「有已交批次就移出紧急列表」这条规则只允许存在这一个模块里** —— 两个面板都必须
  * 调 `splitForDashboard`，不允许任何一侧自己再判一次 `delivered_quantity`，否则两侧
  * 口径漂移（一边剔一边不剔）无法在单测里发现。
@@ -18,21 +32,54 @@ import type { PartListItem } from '@/types/parts';
 /** 交期窗口天数：today → today+6（含端点，即 7 天）。 */
 export const DELIVERY_WINDOW_DAYS = 7;
 
-/** today+(DELIVERY_WINDOW_DAYS-1) 的本地 ISO（'YYYY-MM-DD'），作为过滤上限。 */
-export function deliveryWindowCutoffIso(): string {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + DELIVERY_WINDOW_DAYS - 1);
+/** Date → 本地 ISO（'YYYY-MM-DD'）。 */
+function toLocalIso(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** 工单是否落在交期窗口内：system_delivery_date 为 null 剔除，晚于上限剔除。 */
+/** 'YYYY-MM-DD' 加减 n 天（按本地时区，跨月/跨年/夏令时都由 Date 归一）。 */
+function addDaysIso(iso: string, days: number): string {
+  const [y, m, d] = iso.split('-').map((n) => Number(n));
+  const dt = new Date(y!, m! - 1, d!);
+  dt.setDate(dt.getDate() + days);
+  return toLocalIso(dt);
+}
+
+/** 窗口下界 = 本地今天的 ISO（'YYYY-MM-DD'），作为过滤下限与服务端 from 参数。 */
+export function deliveryWindowStartIso(): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return toLocalIso(d);
+}
+
+/** 给定窗口下界求上界：start + (DELIVERY_WINDOW_DAYS-1) 天。服务端 to 参数用。 */
+export function deliveryWindowEndIso(startIso: string): string {
+  return addDaysIso(startIso, DELIVERY_WINDOW_DAYS - 1);
+}
+
+/** 窗口上界 = today+(DELIVERY_WINDOW_DAYS-1) 的本地 ISO（'YYYY-MM-DD'），作为过滤上限。 */
+export function deliveryWindowCutoffIso(): string {
+  return deliveryWindowEndIso(deliveryWindowStartIso());
+}
+
+/** 工单是否落在交期窗口内：system_delivery_date 为 null 剔除，
+ *  早于下界（逾期）或晚于上界（窗口外）剔除。
+ *
+ *  **窗口两端现取现用**（2026-10-05）：生产路径不经过本函数 —— 两块面板统一走
+ *  `splitForDashboard`（窗口两端由调用方一并给，保证与服务端请求同刻）。本函数保留
+ *  导出只为让 spec 能直接断言「单条判定」的边界语义，改动它不影响生产行为。 */
 export function inDeliveryWindow(item: PartListItem): boolean {
-  if (!item.system_delivery_date) return false;
-  return item.system_delivery_date <= deliveryWindowCutoffIso();
+  const date = item.system_delivery_date;
+  if (!date) return false;
+  return inWindowBetween(date, deliveryWindowStartIso(), deliveryWindowCutoffIso());
+}
+
+/** 窗口内判断的纯比较段：两端由调用方给，跨整批只算一次窗口。 */
+function inWindowBetween(date: string, startIso: string, cutoffIso: string): boolean {
+  return date >= startIso && date <= cutoffIso;
 }
 
 /** 是否「已经交过」：已送数量 > 0。字段缺失（后端未上线该列）时按未交过处理。 */
@@ -59,12 +106,21 @@ export interface SplitResult {
  *   - 「有交过」= `delivered_quantity > 0`，这类进 partial；其余（0 / 字段缺失）留 urgent。
  *     ⇒ `delivered_quantity` 缺失时 urgent 桶与不做分桶完全一致。
  *   - 后端已按 system_delivery_date ASC 排好，前端只 filter + slice，**不重排**。
+ *   - 窗口两端（2026-10-05）：下界由调用方作为**必填第三参** `startIso` 传入（与该 query
+ *     下发给服务端的 from 同值），上界由本函数派生 —— 整批只算一次窗口，逐条调
+ *     inDeliveryWindow 会让每行都重算两个 ISO（cutoff 还内部再推一次 today），100 行
+ *     ≈ 400 次 Date 运算。传入而非现取，是为了让客户端窗口与服务端窗口锁同一瞬间。
  */
 export function splitForDashboard(
   items: PartListItem[],
   { urgentLimit, partialLimit }: SplitOptions,
+  startIso: string,
 ): SplitResult {
-  const inWindow = items.filter(inDeliveryWindow);
+  const cutoffIso = deliveryWindowEndIso(startIso);
+  const inWindow = items.filter((it) => {
+    const date = it.system_delivery_date;
+    return !!date && inWindowBetween(date, startIso, cutoffIso);
+  });
   return {
     urgent: inWindow.filter((it) => !hasDeliveredQuantity(it)).slice(0, urgentLimit),
     partial: inWindow.filter(hasDeliveredQuantity).slice(0, partialLimit),

@@ -229,6 +229,10 @@ export interface PartListItem {
   has_children?: boolean;
   /** 2026-07-30：子件数量（仅装配件行） */
   child_count?: number | null;
+  /** 2026-10-05 新增：所属装配件 id（雪花 ID 字符串）；独立零件行为 null。
+   *  `GET /com/union-list` 的 PART / PART_FLAT 段恒返该键，t_part 行的值 = 父装
+   *  配件 id；复用同一 VO 的 `GET /parts` 家族不填 ⇒ 必须 optional + 可空。 */
+  assembly_id?: string | null;
   /** 2026-07-30：创建时间（装配件行带出） */
   created_at?: string | null;
 }

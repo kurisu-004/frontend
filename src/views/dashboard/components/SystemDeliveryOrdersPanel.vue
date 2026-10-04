@@ -7,11 +7,17 @@
   两个 variant 的入参 items 都是 useDashboardUrgentList.items 的同一份（零新增请求），
   但**已经过窗口过滤 + 分桶**（`splitForDashboard`），本组件只负责渲染，不再判口径。
 
+  行源（2026-10-05）：t_part 全表行，含装配件的子零件、不含装配件父行，行单位恒「件」
+  （与 snapshot 柱状图 `upcoming_delivery[].count` 的 `COUNT(*) FROM t_part` 同口径）。
+
   行内 6 列 —— 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期：
     - 名称与二级客户两列窄屏下 ellipsis 截断，tooltip 常显兜底（不做溢出检测：
-      行高会随内容抖动）。系统交期只出日期，逾期红 / 临近橙仍由 deliveryUrgencyClass 驱动。
+      行高会随内容抖动）。系统交期只出日期；临近橙由 deliveryUrgencyClass 驱动。
+      逾期红在本面板恒不出现 —— items 已过窗口下界（每一行 system_delivery_date >=
+      today），而 deliveryUrgencyClass 只在 diff < 0 时才给 'overdue'，故样式表里
+      没有逾期分支。
     - 数量列：urgent 出纯总量；partial 出「已交 / 总量」，已交部分走主题色，
-      并包 el-tooltip 显式标注单位与含义（装配件行「套」、零件行「件」）。
+      并包 el-tooltip 显式标注单位与含义（恒「件」）。
       partial 的两个数字不做静默截断 —— 轨宽按 4 位 ×2 留足，溢出会带省略号可见。
 
   布局：行宽分三档，用容器查询而非视口媒体查询（见 .list-rows 的 container-type）。
@@ -124,10 +130,10 @@ const emptyText = computed(() =>
 );
 
 /** partial 数量列的 tooltip：显式标注单位与含义。
- *  装配件行的数量单位是「套」、零件行是「件」，两者不可混用同单位文案。 */
+ *  行源恒为 t_part（row_type=PART_FLAT：含装配件子件、不含装配件父行），故单位恒「件」，
+ *  不存在「装配件行按套计」的分支。 */
 function deliveredTooltip(item: PartListItem): string {
-  const unit = item.row_type === 'ASSEMBLY' ? '套' : '件';
-  return `已送 ${item.delivered_quantity ?? 0} ${unit} / 总量 ${item.quantity} ${unit}`;
+  return `已送 ${item.delivered_quantity ?? 0} 件 / 总量 ${item.quantity} 件`;
 }
 </script>
 
@@ -290,10 +296,9 @@ function deliveredTooltip(item: PartListItem): string {
 .row-due {
   color: var(--text-secondary);
   text-align: right;
-  &.overdue {
-    color: var(--el-color-danger);
-    font-weight: 600;
-  }
+  // 2026-10-05：无逾期分支。入参 items 已过交期窗口下界（system_delivery_date >=
+  // today），deliveryUrgencyClass 在本面板恒不返 'overdue'，写一条永不命中的规则
+  // 只会让后来人以为逾期有配色。逾期件由 KPI「逾期未交」tile 承担。
   &.due-soon {
     color: var(--el-color-warning);
     font-weight: 600;

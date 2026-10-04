@@ -68,12 +68,25 @@ export const qk = {
    *  写入会同时改变两种口径的统计结果，用户切回去时不能吃到旧数）⇒ 用前缀一把
    *  partial match 同时命中 planned / system 两条，而不是只失效当前口径那一条。 */
   dashboardSnapshotPrefix: ['dashboard', 'snapshot'] as const,
-  /** dashboard「交期工单」queryKey。
-   *  listUnionItems 拉 100 件按 system_delivery_date ASC 的非终态件，客户端再按
-   *  system_delivery_date <= today+6 过滤并分 urgent / partial 两桶（各取 top 30）。
-   *  命中 useDashboardInvalidation 同套 AFFECTS_DASHBOARD 事件集后自动 invalidate
-   *  重取。 */
-  dashboardUrgentList: ['dashboard', 'urgent-list'] as const,
+  /** dashboard「交期工单」queryKey（2026-10-05 改为工厂：键含窗口下界 today）。
+   *  listUnionItems 拉 100 件 row_type=PART_FLAT（行源 = t_part 全表行，含装配件
+   *  子件、不含装配件父行，与 snapshot 的 upcoming_delivery[].count 同口径）、
+   *  system_delivery_date ∈ [today, today+6] 的非终态件，客户端在
+   *  src/utils/systemDeliveryOrders.ts 里按同一窗口再过一遍并分 urgent / partial 两桶。
+   *  命中 useDashboardInvalidation 同套 AFFECTS_DASHBOARD 事件集后自动 invalidate 重取。
+   *
+   *  **today 必须进键**：本 query 的 gcTime 是 POSITIVE_INFINITY（dashboard 域例外，
+   *  靠 WS 事件失效），若 today 不进键，跨零点后新窗口的请求会命中「昨天的窗口」
+   *  缓存并常驻（全局 refetchOnWindowFocus: false，无焦点重取可救）。
+   *  2026-10-05：键里的 date 由 useDashboardUrgentList 在 setup 里捕获一次（同值同时
+   *  喂给 splitForDashboard 作客户端窗口下界）⇒ 重新挂载后一定是新窗口的键，但常驻
+   *  页面跨零点后不会自动换窗（无定时 tick 驱动重算）。
+   *  失效走 dashboardUrgentListPrefix（见下），不用本键。 */
+  dashboardUrgentList: (date: string) => ['dashboard', 'urgent-list', date] as const,
+  /** 2026-10-05 新增：urgent-list 域前缀 —— 专供 WS 事件失效用。键已含 today 维度，
+   *  事件到达时昨天窗口那条缓存同样过期（业务写入会改变窗口内的件集合），用前缀一把
+   *  partial match 命中全部日期形态，而不是只失效当前 today 那一条。 */
+  dashboardUrgentListPrefix: ['dashboard', 'urgent-list'] as const,
   /** 2026-09-29 新增：dashboard「逾期未交 KPI」queryKey。
    *  fetchOverview 拉当天日期范围内的 overdue_undelivered_count，仅 Manager 角色
    *  启用（enabled: isManager 闸门），非 Manager 不发请求。 */

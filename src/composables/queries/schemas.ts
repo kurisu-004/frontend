@@ -268,6 +268,15 @@ export const partSchema = z.object({
   batch_quantity: z.number().nullable().optional(),
   // 2026-09-28 修复：兼容不返 row_type 的端点（后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts 始终返 'PART' | 'ASSEMBLY'；但工艺制定等旧端点仍可能缺该字段）。2026-10-01 备注：唯一曾缺该字段的 pending-programming 端点已下线（「待编程一览」数据源迁到 prod 域 GET /prod/programming/pending，其出参走独立的 pendingProgrammingItemSchema，不复用 partSchema），本 default 保留兼容其余历史端点。
   row_type: z.enum(['PART', 'ASSEMBLY']).default('PART'),
+  // 2026-10-05 新增：所属装配件 id（雪花 ID 字符串）。`GET /com/union-list` 的
+  // PART / PART_FLAT 段恒返该键：t_part 行的值 = 父装配件 id，独立零件行为 null
+  // （后端 VO 无 skip_serializing_if，键在、值为 null，不是 undefined）。与 batch_id
+  // 同理**必须显式声明** —— zod 默认 strip 会静默丢弃它，让后续消费者（装配件子件
+  // 归组等）以为「所有行都没有父装配件」。声明成 nullable + optional：复用同一 VO
+  // 的其余端点（GET /parts 家族）不填该列。**当前 dashboard 无读点**（行源已切
+  // PART_FLAT，抽屉与交期面板均按纯 t_part 行展示，不加装配件标识列/树形/标签），
+  // 声明只为不让后续消费者踩 strip 坑。
+  assembly_id: z.string().nullable().optional(),
   has_children: z.boolean().optional(),
   child_count: z.number().nullable().optional(),
   created_at: z.string().nullable().optional(),

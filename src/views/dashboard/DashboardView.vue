@@ -21,9 +21,10 @@
     - useDashboardSnapshot(() => deliveryBasis.value) → snapshot.upcoming_delivery
       （14 天分桶，随口径变化）+ in_process + on_inspection_shelves（在制 / 在检 KPI
       派生来源）
-    - useDashboardUrgentList() → items（listUnionItems 拉 100 件非终态件，按
-      system_delivery_date ASC）；右栏两块面板**共用这一份 items**，由
-      splitForDashboard（src/utils/systemDeliveryOrders.ts）按 7 天窗口 + 「有无已交
+    - useDashboardUrgentList() → items（listUnionItems 拉 row_type=PART_FLAT 的
+      非终态件，按 system_delivery_date ASC；服务端已按 [今天, 今天+6] 的 7 天窗口
+      过滤，并截断到至多 100 件）；右栏两块面板**共用这一份 items**，再由
+      splitForDashboard（src/utils/systemDeliveryOrders.ts）按同一窗口 + 「有无已交
       批次」分桶，零新增请求。右栏恒为系统交期语义，不跟随交期口径开关。
     - useDashboardOverdue(isManager) → overdueCount（Manager-only，闸门按角色）
     - 行点击 → selectedPart + previewOpen 走 PartPreviewDialog（统一入口）
@@ -152,7 +153,7 @@ const deliveryBasis = ref<DeliveryBasis>('planned');
 const { data: snapshot, isPlaceholderData: snapshotStale } = useDashboardSnapshot(
   () => deliveryBasis.value,
 );
-const { items: urgentItems } = useDashboardUrgentList();
+const { items: urgentItems, windowStartIso } = useDashboardUrgentList();
 const { overdueCount } = useDashboardOverdue(isManager);
 
 // upcoming_delivery 数组（来自 snapshot，可能为空数组）
@@ -163,8 +164,9 @@ const inProcessItems = computed(() => snapshot.value?.in_process ?? []);
 
 // 右栏两块面板的分桶结果。共用同一份 items，只 filter + slice，零新增请求；
 // 交付动作发 PART_DELIVERED（已在本域 AFFECTS_DASHBOARD 事件集内）→ 自动失效重取。
+// windowStartIso 原样透传 ⇒ 客户端窗口与服务端请求窗口锁同一瞬间，不会差一天。
 const deliveryBuckets = computed(() =>
-  splitForDashboard(urgentItems.value, { urgentLimit: 30, partialLimit: 30 }),
+  splitForDashboard(urgentItems.value, { urgentLimit: 30, partialLimit: 30 }, windowStartIso),
 );
 
 // ============ KPI 派生 ============
