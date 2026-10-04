@@ -11,13 +11,72 @@
 // 2026-09-30（Phase 7）追加：vue-echarts 8.3 适配后回归保护：
 //   - U6：el-drawer direction=btt + size=60%（Phase 5 改 btt 防回归）
 //   - U7：el-table 行点击 → emit('rowClick', part)（Phase 5 新增行点击事件防回归）
+//
+// 2026-10-04 纯测试基建修复（零生产代码改动）：原 ElTable stub 只按 :data 数行、
+// 根本不渲染默认 slot，等于整张表一个单元格都不渲染 —— 任何列级断言在这样一张空表上
+// 都无从谈起。修法照抄真实 Element Plus 的做法：stub 的 ElTable 按 :data 渲染
+// .mock-row，行内 provide 出当前行（MockTableRow），列 stub inject 后按该行喂自己的
+// scoped slot ⇒ 模板里的 `const { row } = undefined` 不再抛错，且列断言真的绑定到
+// :data 的行上（:data 为空时列内容一个都不渲染，可作反向断言）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
-import { nextTick } from 'vue';
+import { h, inject, nextTick, provide, toRef, type Ref, type VNode } from 'vue';
 import type { OrderStatus } from '@/types/parts';
 
+/** 行上下文的 provide key（与真实 el-table 的 table store 同一层语义）。 */
+const ROW_KEY = Symbol('mock-el-table-row');
+
+interface MockRow {
+  id: string;
+  [k: string]: unknown;
+}
+interface Slots {
+  default?: (props?: Record<string, unknown>) => VNode[] | undefined;
+}
+
+/** 单行的上下文壳：provide 出当前行，内部照常渲染 el-table 的默认 slot。 */
+const MockTableRow = {
+  name: 'MockTableRow',
+  props: ['row'],
+  setup(props: { row: MockRow }, ctx: { slots: Slots }) {
+    provide(ROW_KEY, toRef(props, 'row'));
+    return () => ctx.slots['default']?.() ?? [];
+  },
+};
+
+/** 行感知版 el-table：按 :data 渲染 .mock-row，每行内重新求值默认 slot（= 各列）。 */
+const ElTableStub = {
+  name: 'ElTable',
+  props: ['data', 'stripe', 'emptyText'],
+  emits: ['row-click', 'selection-change'],
+  setup(props: { data?: MockRow[] }, ctx: { slots: Slots }) {
+    return () =>
+      h('div', { class: 'mock-table' }, (props.data ?? []).map((r) =>
+        h('div', { class: 'mock-row', key: r.id }, [
+          String(r.id),
+          h(MockTableRow, { row: r }, { default: () => ctx.slots['default']?.() ?? [] }),
+        ]),
+      ));
+  },
+};
+
+/** 行感知版 el-table-column：inject 出 MockTableRow 提供的当前行喂 scoped slot。 */
+const ElTableColumnStub = {
+  name: 'ElTableColumn',
+  props: ['prop', 'label', 'width', 'minWidth', 'align', 'type'],
+  setup(_props: Record<string, unknown>, ctx: { slots: Slots }) {
+    const row = inject<Ref<MockRow | undefined> | undefined>(ROW_KEY, undefined);
+    return () => h('div', { class: 'mock-column' }, ctx.slots['default']?.({ row: row?.value }));
+  },
+};
+
+// vi.mock('element-plus') 的 factory 被提升到文件顶部、且在静态 import 的 SFC 之前
+// 求值 ⇒ factory 内不能引用本文件的顶层 const（TDZ），也拿不到 MockTableRow。故
+// factory 里的 ElTable / ElTableColumn 只是**空形状占位**（本组件模板不 import
+// element-plus，模板里的 <el-table> / <el-table-column> 一律由 makeMountOpts 的
+// global.components 解析），真正生效的行感知形状见上面那份。
 vi.mock('element-plus', () => ({
   ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() },
   ElDrawer: {
@@ -31,19 +90,8 @@ vi.mock('element-plus', () => ({
     props: ['text', 'size'],
     template: '<button class="mock-button" @click="$emit(\'click\')"><slot /></button>',
   },
-  // ElTable stub：对 data 做 v-for，row 计数即可（用于断言）。
-  ElTable: {
-    props: ['data', 'stripe', 'emptyText'],
-    template:
-      '<div class="mock-table"><div v-for="r in (data || [])" :key="r.id" class="mock-row">{{ r.id }}</div></div>',
-  },
-  // 关键：el-table-column scoped slot (`<template #default="{ row }">`) 在 stub 里
-  // 必须 `<slot :row="{}" />` —— 否则 SFC 编译的 `renderSlot($slots, 'default', {})`
-  // 不会传 row 上下文，模板里的 `const { row } = undefined` 直接抛错。
-  ElTableColumn: {
-    props: ['prop', 'label', 'width', 'minWidth', 'align', 'type'],
-    template: '<div class="mock-column"><slot :row="{}" /></div>',
-  },
+  ElTable: {},
+  ElTableColumn: {},
   ElIcon: { template: '<i><slot /></i>' },
   ElTooltip: { template: '<span><slot /></span>' },
 }));
@@ -176,18 +224,8 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
             emits: ['click'],
             template: '<button class="mock-button" @click="$emit(\'click\')"><slot /></button>',
           },
-          'el-table': {
-            name: 'ElTable',
-            props: ['data', 'stripe', 'emptyText'],
-            emits: ['row-click', 'selection-change'],
-            template:
-              '<div class="mock-table"><div v-for="r in (data || [])" :key="r.id" class="mock-row">{{ r.id }}</div></div>',
-          },
-          'el-table-column': {
-            name: 'ElTableColumn',
-            props: ['prop', 'label', 'width', 'minWidth', 'align', 'type'],
-            template: '<div class="mock-column"><slot :row="{}" /></div>',
-          },
+          'el-table': ElTableStub,
+          'el-table-column': ElTableColumnStub,
           'el-icon': { name: 'ElIcon', template: '<i><slot /></i>' },
           'el-tooltip': {
             name: 'ElTooltip',
@@ -264,6 +302,9 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     expect(wrapper.findAll('.mock-row')).toHaveLength(0);
     // total = 0
     expect(wrapper.text()).toContain('共 0 件');
+    // 反向断言：:data 为空时列模板一个都不渲染。若列 stub 喂的是与 :data 无关的假行，
+    // 这条会挂 —— 说明列级断言真的绑在 :data 的行上，而不是绑在桩产物上。
+    expect(wrapper.find('.cell-due').exists()).toBe(false);
     wrapper.unmount();
   });
 
