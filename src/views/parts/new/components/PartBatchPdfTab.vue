@@ -389,6 +389,7 @@
                   <el-input-number
                     v-model="c.unit_price"
                     :min="0"
+                    :max="MONEY_MAX"
                     :precision="2"
                     :step="1"
                     size="small"
@@ -406,6 +407,7 @@
                   <el-input-number
                     v-model="c.total_price"
                     :min="0"
+                    :max="MONEY_MAX"
                     :precision="2"
                     :step="1"
                     size="small"

@@ -92,10 +92,10 @@ interface PartBatchCreateItemFE {
   system_delivery_date?: string | null;
   note?: string | null;
   applicant_id?: string | null;
-  /** 含税单价（2 位小数字符串）。缺省 = 不发该键，后端 SQL `COALESCE($, 0)` 落 0。 */
+  /** 含税单价（2 位小数字符串）。缺省 = 不发该键，后端 SQL 侧 `COALESCE(…, 0::numeric)` 落 0。 */
   unit_price?: string;
   /** 含税总价（2 位小数字符串）。缺省 / null 一律落 0：后端 service 纯透传
-   *  （`total_price: item.total_price`）、SQL 是 `COALESCE($16, 0::numeric)`，
+   *  （`total_price: item.total_price`）、SQL 侧 `COALESCE(…, 0::numeric)`，
    *  **不**按 `unit_price × quantity` 重算 ⇒ 总额必须前端算好一并发，只发单价会落 0。 */
   total_price?: string | null;
   /** 可选图纸文件绑定（DRAWING kind）。后端在建单事务内 head + copy tmp → 正式 CAS key。 */

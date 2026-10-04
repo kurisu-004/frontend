@@ -134,8 +134,9 @@ export interface AssemblyChildPayload {
    *
    *  2026-10-05：**截至本提交后端还没收这一项** —— `AssemblyChildRequest` 只有
    *  `name / drawing_no / planned_delivery_date / quantity`，serde 无
-   *  `deny_unknown_fields` ⇒ 现在多发会被**静默忽略**，`t_assembly_child` 的价格列
-   *  仍由后端 insert 写死 0。字段先备好，等后端给装配件子件补齐价格入参后才真正生效。 */
+   *  `deny_unknown_fields` ⇒ 现在多发会被**静默忽略**。子件是 `t_part` 行（`assembly_id`
+   *  指向父装配件），价格列在 `t_part` 上，insert 时传 `None` 由 SQL `COALESCE` 落 0。
+   *  字段先备好，等后端给装配件子件补齐价格入参后才真正生效。 */
   unit_price?: string;
   /** 子件含税总价（2 位小数字符串）。字符串约束与生效状态同 `unit_price`。 */
   total_price?: string | null;
