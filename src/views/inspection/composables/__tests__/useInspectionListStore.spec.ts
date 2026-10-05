@@ -18,7 +18,8 @@
 //     normalizeAppendTo 会撞 `document is not defined`）；列定义用的 ElButton /
 //     ElInput / ElDatePicker / ElTreeSelect 在本 spec 里**不被调用**（只读 columnDefs
 //     的元数据），但 import 本身要能解析，故一并给最简桩。
-//   - `vi.mock('@/api/parts')`：主查询 + 3 个写端点。
+//   - `vi.mock('@/api/parts')`：主查询 + 3 个写端点（to-ship / to-process / to-inspection）。
+//   - `vi.mock('@/api/inspection')`：扫码树端点（本域新模块，2026-10-05）。
 //   - `vi.mock('@/api/customer')` / `@/api/shelves` / `@/api/process`：共享基础数据层
 //     （useCustomerTree → useCustomersQuery、useProductionShelvesQuery、useProcessesQuery）
 //     在 store setup 里就会 fetch，不桩会走真实 axios 触发未处理 rejection。
@@ -52,15 +53,19 @@ vi.mock('@/components/ColumnFilterPopover.vue', () => ({
 const listInspectionBatchesMock = vi.fn();
 const toShipMock = vi.fn();
 const toProcessMock = vi.fn();
-const scanInspectMock = vi.fn();
-const getPartBySerialMock = vi.fn();
+const toInspectionMock = vi.fn();
+const scanInspectionMock = vi.fn();
 
 vi.mock('@/api/parts', () => ({
   listInspectionBatches: (...args: unknown[]) => listInspectionBatchesMock(...args),
   toShip: (...args: unknown[]) => toShipMock(...args),
   toProcess: (...args: unknown[]) => toProcessMock(...args),
-  scanInspect: (...args: unknown[]) => scanInspectMock(...args),
-  getPartBySerial: (...args: unknown[]) => getPartBySerialMock(...args),
+  toInspection: (...args: unknown[]) => toInspectionMock(...args),
+}));
+
+// 扫码树端点独立在 `@/api/inspection`（本域新模块），桩同款。
+vi.mock('@/api/inspection', () => ({
+  scanInspection: (...args: unknown[]) => scanInspectionMock(...args),
 }));
 
 // ---------------------------------------------------------------- 共享基础数据层桩
@@ -566,10 +571,10 @@ describe('useInspectionListStore', () => {
     expect(listInspectionBatchesMock).toHaveBeenCalled();
   });
 
-  it('指定工序 / 扫码快捷品检 mutation 的 payload 逐字对齐后端字段名', async () => {
+  it('指定工序 / 送检 mutation 的 payload 逐字对齐后端字段名', async () => {
     const store = useInspectionListStore();
     toProcessMock.mockResolvedValue({ part: {}, new_batch_id: null });
-    scanInspectMock.mockResolvedValue({});
+    toInspectionMock.mockResolvedValue({ part: {}, new_batch_id: null });
 
     await store.mutations.toProcessMutation.mutateAsync({
       batchId: 'B1',
@@ -581,6 +586,8 @@ describe('useInspectionListStore', () => {
       label: 'SN-A',
       processCode: 'CUT',
       shelfCode: 'SH-A',
+      processName: '切割',
+      shelfName: '生产架 A',
     });
     expect(toProcessMock).toHaveBeenCalledWith('B1', {
       shelf_id: 'S1',
@@ -590,53 +597,343 @@ describe('useInspectionListStore', () => {
       quantity: 2,
     });
 
-    await store.mutations.scanInspectMutation.mutateAsync({
+    await store.mutations.toInspectionMutation.mutateAsync({
       batchId: 'B1',
       targetInspectionShelfId: 'IS1',
-      pass: true,
       version: 7,
-      shelfId: null,
-      nextProcessId: null,
-      note: null,
-      quantity: null,
+      quantity: 2,
       label: 'SN-A',
+      targetShelfName: '品检架 1',
     });
-    expect(scanInspectMock).toHaveBeenCalledWith('B1', {
+    expect(toInspectionMock).toHaveBeenCalledWith('B1', {
       target_inspection_shelf_id: 'IS1',
-      pass: true,
       version: 7,
-      shelf_id: undefined,
-      next_process_id: undefined,
-      note: null,
-      quantity: null,
+      quantity: 2,
     });
   });
 
-  it('扫码快捷品检遇到 40901 同样走 warning + 重拉（与 toShip / toProcess 同款）', async () => {
+  it('送检遇到 40901 走 warning + 重拉（与 toShip / toProcess 同款）', async () => {
     const { ElMessage } = await import('element-plus');
     const store = useInspectionListStore();
     listInspectionBatchesMock.mockClear();
-    scanInspectMock.mockRejectedValue(Object.assign(new Error('版本冲突'), { code: 40901 }));
+    toInspectionMock.mockRejectedValue(Object.assign(new Error('版本冲突'), { code: 40901 }));
 
     await expect(
-      store.mutations.scanInspectMutation.mutateAsync({
+      store.mutations.toInspectionMutation.mutateAsync({
         batchId: 'B1',
         targetInspectionShelfId: 'IS1',
-        pass: true,
         version: 7,
-        shelfId: null,
-        nextProcessId: null,
-        note: null,
         quantity: null,
         label: 'SN-A',
+        targetShelfName: '品检架 1',
       }),
     ).rejects.toThrow('版本冲突');
 
-    // 40901 的文案必须比通用「快捷品检失败：版本冲突」有指导性，且重拉列表。
+    // 40901 的文案必须比通用「送检失败：版本冲突」有指导性，且重拉列表。
     expect(ElMessage.warning).toHaveBeenCalledWith('该批次已被他人修改，请刷新后重试');
     expect(ElMessage.error).not.toHaveBeenCalled();
     await tick();
     expect(listInspectionBatchesMock).toHaveBeenCalled();
+  });
+
+  // ============ 扫码树 ============
+  it('扫码 mutation：把返回的树写进 scanTree，clearScanTree 清空', async () => {
+    const store = useInspectionListStore();
+    const TREE = {
+      hit_kind: 'PART',
+      scanned_serial_no: 'F1006-01',
+      assembly: null,
+      children: [],
+    };
+    scanInspectionMock.mockResolvedValue(TREE);
+
+    expect(store.mutations.scanTree).toBeNull();
+    await store.mutations.scanMutation.mutateAsync('F1006-01');
+
+    expect(scanInspectionMock).toHaveBeenCalledWith('F1006-01');
+    expect(store.mutations.scanTree).toEqual(TREE);
+
+    store.mutations.clearScanTree();
+    expect(store.mutations.scanTree).toBeNull();
+  });
+
+  // ============ 扫码树：写后本地回写（2026-10-05）============
+  /** 一棵单零件单批次的树：批次 status=INSPECTION、version=7、数量 10、在品检架上。 */
+  function treeWithOneBatch() {
+    return {
+      hit_kind: 'PART' as const,
+      scanned_serial_no: 'F1006-01',
+      assembly: null,
+      children: [
+        {
+          id: 'P1',
+          serial_no: 'F1006-01',
+          name: '子件 01',
+          drawing_no: 'DWG-01',
+          status: 'INSPECTION',
+          quantity: 10,
+          is_urgent: false,
+          system_delivery_date: null,
+          customer_name: '二级客户',
+          version: 3,
+          children: [
+            {
+              id: 'B1',
+              batch_no: 1,
+              quantity: 10,
+              status: 'INSPECTION',
+              version: 7,
+              is_repairing: false,
+              location: 'INSPECTION_SHELF',
+              current_holder_display: '品检架 1',
+              process_name: null,
+              is_scanned: true,
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('品检通过成功：树里该批次 status / version 就地更新（操作列按钮矩阵随之变）', async () => {
+    const store = useInspectionListStore();
+    store.mutations.scanTree = treeWithOneBatch();
+    toShipMock.mockResolvedValue({
+      part: { status: 'READY_TO_SHIP', version: 4 },
+      new_batch_id: null,
+    });
+
+    await store.mutations.toShipMutation.mutateAsync({
+      batchId: 'B1',
+      version: 7,
+      quantity: null,
+      label: 'F1006-01',
+    });
+
+    const part = store.mutations.scanTree?.children[0];
+    const batch = part?.children[0];
+    // 批次：status 翻目标态、version +1（后端 status_gate 恒 version = version + 1）；
+    // part：直接采用响应里的 part 投影（rollup 后的权威值）。
+    expect(batch?.status).toBe('READY_TO_SHIP');
+    expect(batch?.version).toBe(8);
+    // 品检通过不动 location / holder / 工序（后端该分支只翻 status）。
+    expect(batch?.location).toBe('INSPECTION_SHELF');
+    expect(batch?.current_holder_display).toBe('品检架 1');
+    expect(batch?.process_name).toBeNull();
+    expect(part?.status).toBe('READY_TO_SHIP');
+    expect(part?.version).toBe(4);
+    // 整批操作不重拉扫码树（无新批次要补）。
+    expect(scanInspectionMock).not.toHaveBeenCalled();
+  });
+
+  it('送检成功：location / holder 落品检架、工序清空；指定工序成功：落生产架 + 下一道工序', async () => {
+    const store = useInspectionListStore();
+    store.mutations.scanTree = treeWithOneBatch();
+    toInspectionMock.mockResolvedValue({
+      part: { status: 'INSPECTION', version: 4 },
+      new_batch_id: null,
+    });
+
+    await store.mutations.toInspectionMutation.mutateAsync({
+      batchId: 'B1',
+      targetInspectionShelfId: 'IS1',
+      version: 7,
+      quantity: null,
+      label: 'F1006-01',
+      targetShelfName: '品检架 2',
+    });
+    let batch = store.mutations.scanTree?.children[0]?.children[0];
+    expect(batch?.status).toBe('INSPECTION');
+    expect(batch?.version).toBe(8);
+    expect(batch?.location).toBe('INSPECTION_SHELF');
+    expect(batch?.current_holder_display).toBe('品检架 2');
+
+    store.mutations.scanTree = treeWithOneBatch();
+    toProcessMock.mockResolvedValue({
+      part: { status: 'IN_PROCESS', version: 4 },
+      new_batch_id: null,
+    });
+    await store.mutations.toProcessMutation.mutateAsync({
+      batchId: 'B1',
+      shelfId: 'S1',
+      nextProcessId: 'P1',
+      version: 7,
+      note: null,
+      quantity: null,
+      label: 'F1006-01',
+      processCode: 'CUT',
+      shelfCode: 'SH-A',
+      processName: '切割',
+      shelfName: '生产架 A',
+    });
+    batch = store.mutations.scanTree?.children[0]?.children[0];
+    expect(batch?.status).toBe('IN_PROCESS');
+    expect(batch?.location).toBe('PRODUCTION_SHELF');
+    expect(batch?.current_holder_display).toBe('生产架 A');
+    expect(batch?.process_name).toBe('切割');
+  });
+
+  it('部分流转（拆批）：remainder 数量减 / version +1 / 状态留源态，并重拉扫码树补新批次行', async () => {
+    const store = useInspectionListStore();
+    store.mutations.scanTree = treeWithOneBatch();
+    // 响应的 new_batch_id = remainder id（就是本次传入的 B1）；被流转那部分落在一个
+    // 响应完全不提 id 的新批次上 ⇒ 本地补不出那一行，只能重拉。
+    toShipMock.mockResolvedValue({
+      part: { status: 'INSPECTION', version: 4 },
+      new_batch_id: 'B1',
+    });
+    // 重拉回来的树：remainder 变 6 件留在品检 + 后端新造的那一行（id 全新）。
+    const RESYNCED = treeWithOneBatch();
+    RESYNCED.children[0]!.children[0]!.quantity = 6;
+    RESYNCED.children[0]!.children[0]!.version = 8;
+    RESYNCED.children[0]!.children.push({
+      ...RESYNCED.children[0]!.children[0]!,
+      id: 'B2',
+      batch_no: 2,
+      quantity: 4,
+      status: 'READY_TO_SHIP',
+      version: 1,
+    });
+    scanInspectionMock.mockResolvedValue(RESYNCED);
+
+    await store.mutations.toShipMutation.mutateAsync({
+      batchId: 'B1',
+      version: 7,
+      quantity: 4,
+      label: 'F1006-01',
+    });
+
+    // 重拉后树里两行都在：remainder（6 件、留在品检）+ 被流转的新批次（4 件、已过）。
+    const children = store.mutations.scanTree?.children[0]?.children ?? [];
+    expect(children.map((b) => [b.id, b.quantity, b.status, b.version])).toEqual([
+      ['B1', 6, 'INSPECTION', 8],
+      ['B2', 4, 'READY_TO_SHIP', 1],
+    ]);
+    // 重拉用的是当前树回显的条码（trim 后的原始扫码串）。
+    expect(scanInspectionMock).toHaveBeenCalledWith('F1006-01');
+  });
+
+  it('部分流转的本地回写：remainder 数量减 / version +1 / 状态留源态（重拉失败也不丢）', async () => {
+    const store = useInspectionListStore();
+    store.mutations.scanTree = treeWithOneBatch();
+    toShipMock.mockResolvedValue({
+      part: { status: 'INSPECTION', version: 4 },
+      new_batch_id: 'B1',
+    });
+    // 重拉失败：已回写的树要留着（失败提示由 scanMutation.onError 弹）。
+    scanInspectionMock.mockRejectedValue(new Error('后端 500'));
+
+    await store.mutations.toShipMutation.mutateAsync({
+      batchId: 'B1',
+      version: 7,
+      quantity: 4,
+      label: 'F1006-01',
+    });
+
+    const batch = store.mutations.scanTree?.children[0]?.children[0];
+    expect(batch?.quantity).toBe(6);
+    expect(batch?.version).toBe(8);
+    expect(batch?.status).toBe('INSPECTION');
+    expect(scanInspectionMock).toHaveBeenCalledWith('F1006-01');
+  });
+
+  it('没有扫码树时（列表页流转）本地回写是空操作，不触发重拉', async () => {
+    const store = useInspectionListStore();
+    expect(store.mutations.scanTree).toBeNull();
+    toShipMock.mockResolvedValue({
+      part: { status: 'READY_TO_SHIP', version: 4 },
+      new_batch_id: null,
+    });
+
+    await store.mutations.toShipMutation.mutateAsync({
+      batchId: 'B1',
+      version: 7,
+      quantity: null,
+      label: 'SN-A',
+    });
+
+    expect(store.mutations.scanTree).toBeNull();
+    expect(scanInspectionMock).not.toHaveBeenCalled();
+  });
+
+  it('父装配件被级联翻状态（synced_assembly_id 非 null）时重拉扫码树', async () => {
+    const store = useInspectionListStore();
+    store.mutations.scanTree = treeWithOneBatch();
+    toInspectionMock.mockResolvedValue({
+      part: { status: 'INSPECTION', version: 4 },
+      new_batch_id: null,
+      // 非 null = 本次流转把父装配件的派生状态也翻了。
+      synced_assembly_id: '190000000000900',
+    });
+    scanInspectionMock.mockResolvedValue(treeWithOneBatch());
+
+    await store.mutations.toInspectionMutation.mutateAsync({
+      batchId: 'B1',
+      targetInspectionShelfId: 'IS1',
+      version: 7,
+      quantity: null,
+      label: 'F1006-01',
+      targetShelfName: '品检架 2',
+    });
+
+    // 装配件根行的状态不在本地回写范围内（回写只覆盖零件 / 批次两层）⇒ 只能重拉。
+    expect(scanInspectionMock).toHaveBeenCalledWith('F1006-01');
+  });
+
+  it('40901 且扫码树开着：重拉扫码树（否则树上仍是旧 version，再点必然再次 40901）', async () => {
+    const { ElMessage } = await import('element-plus');
+    const store = useInspectionListStore();
+    store.mutations.scanTree = treeWithOneBatch();
+    toShipMock.mockRejectedValue(Object.assign(new Error('版本冲突'), { code: 40901 }));
+    // 别人已经把这一批流转过了：树上该行的 version / 状态都要跟着变。
+    const RESYNCED = treeWithOneBatch();
+    RESYNCED.children[0]!.children[0]!.version = 8;
+    RESYNCED.children[0]!.children[0]!.status = 'READY_TO_SHIP';
+    scanInspectionMock.mockResolvedValue(RESYNCED);
+    listInspectionBatchesMock.mockClear();
+
+    await expect(
+      store.mutations.toShipMutation.mutateAsync({
+        batchId: 'B1',
+        version: 7,
+        quantity: null,
+        label: 'F1006-01',
+      }),
+    ).rejects.toThrow('版本冲突');
+
+    // 树弹窗是 fullscreen、没有「刷新」入口，且开着时扫码会被守卫丢弃 ⇒ 只刷列表
+    // 的话用户再点一次还是用旧 version，确定性再次 40901。
+    expect(scanInspectionMock).toHaveBeenCalledWith('F1006-01');
+    const batch = store.mutations.scanTree?.children[0]?.children[0];
+    expect(batch?.version).toBe(8);
+    expect(batch?.status).toBe('READY_TO_SHIP');
+    expect(ElMessage.warning).toHaveBeenCalledWith('该批次已被他人修改，扫码树已刷新，请重新操作');
+    expect(ElMessage.error).not.toHaveBeenCalled();
+    await tick();
+    expect(listInspectionBatchesMock).toHaveBeenCalled();
+  });
+
+  it('扫码查不到（20101）走 warning + 带出条码，不弹通用 error', async () => {
+    const { ElMessage } = await import('element-plus');
+    const store = useInspectionListStore();
+    scanInspectionMock.mockRejectedValue(Object.assign(new Error('零件不存在'), { code: 20101 }));
+
+    await expect(store.mutations.scanMutation.mutateAsync('F9999')).rejects.toThrow('零件不存在');
+
+    // 序列号取自 onError 的第二参（variables），不是闭包 —— 并发扫码下闭包会张冠李戴。
+    expect(ElMessage.warning).toHaveBeenCalledWith('未找到条码 F9999 对应的零件或装配件');
+    expect(ElMessage.error).not.toHaveBeenCalled();
+    // 查不到时不得留下半截树。
+    expect(store.mutations.scanTree).toBeNull();
+  });
+
+  it('扫码遇到非 20101 的错误走 ElMessage.error', async () => {
+    const { ElMessage } = await import('element-plus');
+    const store = useInspectionListStore();
+    scanInspectionMock.mockRejectedValue(new Error('后端 500'));
+
+    await expect(store.mutations.scanMutation.mutateAsync('F1006')).rejects.toThrow('后端 500');
+    expect(ElMessage.error).toHaveBeenCalledWith('扫码查询失败：后端 500');
   });
 
   // ============ 不变量 #2：$dispose 重建 ============

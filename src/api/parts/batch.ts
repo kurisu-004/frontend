@@ -530,7 +530,8 @@ export interface BatchToInspectionItem {
   batch_id: string;
   /** 必填；2026-08-29：t_part_batch.version。 */
   version: number;
-  /** 可选；部分数量。缺省 = 批次全量；小于批次量时后端会拆分 remainder。 */
+  /** 可选；部分数量。缺省 = 批次全量；小于批次量时后端拆批（源批次原地减量、留在源状态，
+   *  被流转的那部分另立一个数量 = 操作量的新批次，语义见下方 new_batch_id）。 */
   quantity?: number | null;
 }
 
@@ -558,11 +559,12 @@ export interface BatchToInspectionOutFE {
    *  只能靠「位置 + 用 failed[].batch_id 扣除失败项」，不能指望 submitted[].batch_id。 */
   submitted: Array<{
     part: PartItem;
-    /** 拆批语义（见 inspection.md「自动拆批」）：
-     *  - 整批操作（quantity 缺省 / == batch.quantity）→ `null`，未拆批；
-     *  - 部分操作（quantity < batch.quantity）→ 拆出的 **remainder 批次 id**
-     *    （原批次量减少后留在源状态，待后续操作），**不等于**入参 batch_id。
-     *  前端拿到非 null 应刷新批次列表（会多出一行 quantity = 原量 - 操作量 的批次）。 */
+    /** 拆批语义（后端 `_split_for_partial_op`）：
+     *  - 整批操作（quantity 缺省 / >= 批次量）→ `null`，未拆批；
+     *  - 部分操作（quantity < 批次量）→ `Some(remainder_id)`，而 remainder **就是入参
+     *    batch_id 本身**：源批次原地减量、状态留在源状态、id 不变；被流转的那 quantity 件
+     *    另立一个**新批次**（数量 = 操作量、状态翻到目标态），其 id 全程不返回。
+     *  前端拿到非 null 应刷新批次列表（会多出一行**数量 = 操作量**的新批次）。 */
     new_batch_id: string | null;
   }>;
   failed: BatchToInspectionFailureFE[];
@@ -600,10 +602,9 @@ export interface BatchToShipOutFE {
    *  与请求 items 同序、**不含 batch_id**、失败项不占位。 */
   submitted: Array<{
     part: PartItem;
-    /** 拆批语义（见 inspection.md「自动拆批」）：
-     *  - 整批操作（quantity 缺省 / == batch.quantity）→ `null`，未拆批；
-     *  - 部分操作（quantity < batch.quantity）→ 拆出的 **remainder 批次 id**，
-     *    **不等于**入参 batch_id。前端拿到非 null 应刷新批次列表。 */
+    /** 拆批语义与 `BatchToInspectionOutFE.submitted[].new_batch_id` 逐条一致
+     *  （源批次原地减量、remainder 就是入参 batch_id、另立一个数量 = 操作量且 id
+     *  不返回的新批次）。 */
     new_batch_id: string | null;
   }>;
   failed: BatchToShipFailureFE[];

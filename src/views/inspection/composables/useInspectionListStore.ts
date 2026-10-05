@@ -6,7 +6,7 @@
 //
 // 迁移动机（两条独立理由，缺一条都不该做这次改造）：
 //   1. 数据新鲜度：`ListShell` 的分页 / 勾选 / 排序是**本地**状态机（每次翻页重发
-//      请求、无缓存、无失效点），品检流转（品检通过 / 指定工序 / 扫码快捷品检）后只能
+//      请求、无缓存、无失效点），品检流转（品检通过 / 指定工序 / 送检）后只能
 //      靠各处的 `fetchList()` 手动重拉，漏一处就展示过期队列。
 //   2. 筛选范式统一：待品检页要把图号 / 名称 / 序列号 / 日期筛选搬进表头（照零件一览），
 //      而 `ListShell` 的 filter 插槽与列定义（`ColumnDef.headerRender`）不在同一层，
@@ -29,12 +29,13 @@ import { ElMessage } from 'element-plus';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import {
   listInspectionBatches,
-  scanInspect,
+  toInspection,
   toProcess,
   toShip,
   type InspectionQueueItem,
   type ListInspectionQueueParams,
 } from '@/api/parts';
+import { scanInspection, type ScanTreeOut } from '@/api/inspection';
 import { qk } from '@/composables/queries/keys';
 import {
   inspectionQueueListResultSchema,
@@ -72,7 +73,8 @@ export interface ToShipVars {
 }
 
 /** 2026-10-03：指定工序（`POST /prod/batches/{batch_id}/to-process`）的 mutation 入参。
- *  `processCode` / `shelfCode` 同样只进提示文案（它们由视图从 options 里查出来）。 */
+ *  `processCode` / `shelfCode` 同样只进提示文案（它们由视图从 options 里查出来）；
+ *  `processName` / `shelfName` 只进扫码树写后本地回写（「工序」「当前位置」两列）。 */
 export interface ToProcessVars {
   batchId: string;
   shelfId: string;
@@ -83,19 +85,39 @@ export interface ToProcessVars {
   label: string;
   processCode: string;
   shelfCode: string;
+  processName: string;
+  shelfName: string;
 }
 
-/** 2026-10-03：扫码快捷品检（`POST /prod/batches/{batch_id}/scan-inspect`）的入参。 */
-export interface ScanInspectVars {
+/** 2026-10-05：送检（`POST /prod/batches/{batch_id}/to-inspection`）的 mutation 入参。
+ *  `targetInspectionShelfId` 是目标品检架；`label` 只进成功提示，
+ *  `targetShelfName` 只用于扫码树写后本地回写的「当前位置」列。 */
+export interface ToInspectionVars {
   batchId: string;
   targetInspectionShelfId: string;
-  pass: boolean;
   version: number;
-  shelfId: string | null;
-  nextProcessId: string | null;
-  note: string | null;
   quantity: number | null;
   label: string;
+  targetShelfName: string;
+}
+
+/** 流转后要写进扫码树批次节点的目标列。`undefined` = 保持原值（后端该列本就未变），
+ *  `null` = 清空（后端出池清了 `current_process_id` / holder 这类列）。 */
+interface ScanTreeBatchTarget {
+  status: string;
+  location?: string | null;
+  holderDisplay?: string | null;
+  processName?: string | null;
+}
+
+/** 三个写端点的响应里与本地回写有关的三段。`part` 是操作后 part 的最新投影，
+ *  `new_batch_id` 非 null = 走了部分流转的拆批分支，
+ *  `synced_assembly_id` 非 null = 父装配件的状态被同事务内的 rollup 翻了。 */
+interface ScanTreeWriteResult {
+  part?: { status?: string; version?: number } | null;
+  new_batch_id?: string | null;
+  /** 父装配件 id（雪花字符串）；非 null = 本次流转连带翻了它的派生状态。 */
+  synced_assembly_id?: string | null;
 }
 
 export const useInspectionListStore = defineStore('inspection-list', () => {
@@ -304,15 +326,22 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     mutationKey: ['inspection', 'to-ship'],
     mutationFn: ({ batchId, version, quantity }: ToShipVars) =>
       toShip(batchId, { version, quantity }),
-    onSuccess: async (_data, vars) => {
+    onSuccess: async (data, vars) => {
       await invalidateInspectionQuery();
+      // 品检通过只翻 status（后端该分支不动 location / holder / 工序列）⇒ 目标列全留空
+      // 表示「保持原值」。
+      const applied = applyScanTreeTransition(
+        vars.batchId,
+        { status: 'READY_TO_SHIP' },
+        data,
+        vars.quantity,
+      );
+      if (scanTreeNeedsResync(data, applied)) await resyncScanTree();
       ElMessage.success(`零件 ${vars.label} 品检通过${vars.quantity ? ` × ${vars.quantity}` : ''}`);
     },
     onError: async (e: Error & { code?: number }) => {
-      // 40901：批次已被他人改动（OCC version 不匹配）→ 提示 + 重拉，让用户看到最新数量。
       if (e?.code === 40901) {
-        ElMessage.warning('该批次已被他人修改，请刷新后重试');
-        await fetchList();
+        await onOccConflict();
         return;
       }
       ElMessage.error(`品检通过失败：${e?.message ?? '未知错误'}`);
@@ -329,59 +358,100 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
         note,
         quantity,
       }),
-    onSuccess: async (_data, vars) => {
+    onSuccess: async (data, vars) => {
       await invalidateInspectionQuery();
+      // 指定工序 = 打回生产：location 落目标生产架、holder 换成该架、工序换成下一道。
+      const applied = applyScanTreeTransition(
+        vars.batchId,
+        {
+          status: 'IN_PROCESS',
+          location: 'PRODUCTION_SHELF',
+          holderDisplay: vars.shelfName,
+          processName: vars.processName,
+        },
+        data,
+        vars.quantity,
+      );
+      if (scanTreeNeedsResync(data, applied)) await resyncScanTree();
       ElMessage.success(
         `零件 ${vars.label} 已指定下一道工序 ${vars.processCode}，放到生产货架 ${vars.shelfCode}`,
       );
     },
     onError: async (e: Error & { code?: number }) => {
       if (e?.code === 40901) {
-        ElMessage.warning('该批次已被他人修改，请刷新后重试');
-        await fetchList();
+        await onOccConflict();
         return;
       }
       ElMessage.error(`指定工序失败：${e?.message ?? '未知错误'}`);
     },
   });
 
-  const scanInspectMutation = useMutation({
-    mutationKey: ['inspection', 'scan-inspect'],
-    mutationFn: ({
-      batchId,
-      targetInspectionShelfId,
-      pass,
-      version,
-      shelfId,
-      nextProcessId,
-      note,
-      quantity,
-    }: ScanInspectVars) =>
-      scanInspect(batchId, {
+  const toInspectionMutation = useMutation({
+    mutationKey: ['inspection', 'to-inspection'],
+    mutationFn: ({ batchId, targetInspectionShelfId, version, quantity }: ToInspectionVars) =>
+      toInspection(batchId, {
         target_inspection_shelf_id: targetInspectionShelfId,
-        pass,
         version,
-        shelf_id: shelfId ?? undefined,
-        next_process_id: nextProcessId ?? undefined,
-        note,
         quantity,
       }),
-    onSuccess: async (_data, vars) => {
+    onSuccess: async (data, vars) => {
       await invalidateInspectionQuery();
-      ElMessage.success(
-        vars.pass ? `零件 ${vars.label} 快捷品检通过` : `零件 ${vars.label} 已快捷打回`,
+      // 送检 = 出池：location 落目标品检架、holder 换成该架、工序列被后端清空。
+      const applied = applyScanTreeTransition(
+        vars.batchId,
+        {
+          status: 'INSPECTION',
+          location: 'INSPECTION_SHELF',
+          holderDisplay: vars.targetShelfName,
+          processName: null,
+        },
+        data,
+        vars.quantity,
       );
+      if (scanTreeNeedsResync(data, applied)) await resyncScanTree();
+      ElMessage.success(`零件 ${vars.label} 已送检${vars.quantity ? ` × ${vars.quantity}` : ''}`);
     },
     onError: async (e: Error & { code?: number }) => {
-      // 40901：批次已被他人改动（OCC version 不匹配）—— 与 toShip / toProcess 同款分支。
-      // 扫码快捷品检尤其需要它：版本锚错（见 InspectionPending.vue 里 PartItem.version
-      // 的说明）时后端必回 40901，走通用分支只会显示无指导性的「快捷品检失败：批次已被他人修改」。
       if (e?.code === 40901) {
-        ElMessage.warning('该批次已被他人修改，请刷新后重试');
-        await fetchList();
+        await onOccConflict();
         return;
       }
-      ElMessage.error(`快捷品检失败：${e?.message ?? '未知错误'}`);
+      ElMessage.error(`送检失败：${e?.message ?? '未知错误'}`);
+    },
+  });
+
+  // ============ 扫码树（2026-10-05）============
+  /** 扫码命中的树快照，供 `ScanTreeDialog` 渲染。null = 本次会话还没扫过码。
+   *  弹窗关闭时由视图调 `clearScanTree()` 清掉：不清的话下次开弹窗会先闪出上一次的
+   *  树（mutation 在飞、data 还没回来），用户会以为扫的是上一次那个条码。 */
+  const scanTree = ref<ScanTreeOut | null>(null);
+
+  function clearScanTree(): void {
+    scanTree.value = null;
+  }
+
+  /** 扫码取树（`GET /prod/inspection/scan/{serial_no}`）。
+   *  用 useMutation 而非 useQuery：扫码是用户触发的单次拉取，重扫同一条码必须重取
+   *  （树里的批次可能已被别人流转），缓存留着反而会给出过期状态。
+   *  `mutationKey` 写字面量（全仓写 mutation 一律如此，无一处从 `qk` 工厂取）：工厂项
+   *  服务的是 queryKey 的缓存身份，扫码树不进任何 query 缓存，登记进去只会留下一个
+   *  零消费者的死键。 */
+  const scanMutation = useMutation({
+    mutationKey: ['inspection', 'scan'],
+    mutationFn: (serialNo: string) => scanInspection(serialNo),
+    onSuccess: (data) => {
+      scanTree.value = data;
+    },
+    // 序列号走 onError 的第二参（variables），不闭包捕获 —— 闭包里的「当前条码」在
+    // 并发扫码（快速连扫）时可能是另一个条码的，提示会张冠李戴。
+    onError: (e: Error & { code?: number }, serialNo: string) => {
+      // 20101 = 零件 / 装配件不存在（后端查不到与空白序列号都走这一支，走 HTTP 404 +
+      // 业务码信封）。这类不是「系统故障」，用 warning 而不是 error。
+      if (e?.code === 20101) {
+        ElMessage.warning(`未找到条码 ${serialNo} 对应的零件或装配件`);
+        return;
+      }
+      ElMessage.error(`扫码查询失败：${e?.message ?? '未知错误'}`);
     },
   });
 
@@ -389,8 +459,94 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     passingBatchId,
     toShipMutation,
     toProcessMutation,
-    scanInspectMutation,
+    toInspectionMutation,
+    scanMutation,
+    scanTree,
+    clearScanTree,
   };
+
+  // ============ 扫码树：写后本地回写（2026-10-05）============
+  // 三个写 mutation 的 onSuccess 只失效列表前缀（键前缀 `inspection`），而扫码树是
+  // 普通 ref、不在 query 缓存里 ⇒ 同一个弹窗内会一直停在流转前的状态：操作列的按钮
+  // 矩阵不跟着变，用户再点一次必然 40901。这里按后端「一次流转 = 批次 version +1」的
+  // 语义就地改树；部分流转（拆批）本地补不出被流转的那一行，交 resyncScanTree 重拉。
+
+  /** 把一次流转的结果写进当前扫码树。返回 true = 调用方需要 `resyncScanTree()` 重拉。
+   *
+   *  拆批分支（响应 `new_batch_id` 非 null）是本地补不出来的一档：被流转的那部分落在一个
+   *  **新批次**上（后端新造的 id 全程不返回，响应的 `new_batch_id` 反而是留在源状态的
+   *  remainder —— 也就是本次传入的 batchId，源批次原地减量、id 不变）。故本地只回写
+   *  remainder 自身（数量减、version +1，状态留在源状态），新批次行交重拉补。
+   *
+   *  part 节点的 status / version 直接采用响应里的 part 投影（后端 rollup 后的权威值，
+   *  本地重算 min-progress 只会猜错）。 */
+  function applyScanTreeTransition(
+    batchId: string,
+    target: ScanTreeBatchTarget,
+    result: ScanTreeWriteResult,
+    opQuantity: number | null,
+  ): boolean {
+    const tree = scanTree.value;
+    if (!tree) return false;
+    const partNode = tree.children.find((p) => p.children.some((b) => b.id === batchId));
+    const node = partNode?.children.find((b) => b.id === batchId);
+    if (partNode && result.part?.status) {
+      partNode.status = result.part.status;
+      if (typeof result.part.version === 'number') partNode.version = result.part.version;
+    }
+    if (!node) return false;
+    if (result.new_batch_id) {
+      node.quantity = Math.max(0, node.quantity - (opQuantity ?? 0));
+      node.version += 1;
+      return true;
+    }
+    node.status = target.status;
+    node.version += 1;
+    if (target.location !== undefined) node.location = target.location;
+    if (target.holderDisplay !== undefined) node.current_holder_display = target.holderDisplay;
+    if (target.processName !== undefined) node.process_name = target.processName;
+    return false;
+  }
+
+  /** 这次写完之后扫码树要不要重拉。两档本地补不出来：
+   *  1. 拆批 —— 新批次行（含新 id）只能从后端拿；
+   *  2. 父装配件被级联翻了状态（`synced_assembly_id` 非 null）—— 回写只覆盖树里的
+   *     零件 / 批次两层，装配件根行的状态列不在其中，不重拉就会一直显示流转前的旧值。 */
+  function scanTreeNeedsResync(result: ScanTreeWriteResult, splitHandled: boolean): boolean {
+    return splitHandled || Boolean(result.synced_assembly_id);
+  }
+
+  /** 按当前树的条码重拉一次（拆批后补新批次行 / 装配件级联改状态 / 树与后端已经对不齐
+   *  时的兜底）。失败不抛：扫码端点的错误提示由 `scanMutation.onError` 弹，这里保持
+   *  已回写的树不丢。 */
+  async function resyncScanTree(): Promise<void> {
+    const serialNo = scanTree.value?.scanned_serial_no;
+    if (!serialNo) return;
+    try {
+      await scanMutation.mutateAsync(serialNo);
+    } catch {
+      // 已在 onError 提示过；这里吞掉不让写 mutation 的 onSuccess 变成失败。
+    }
+  }
+
+  /** 40901（`t_part_batch.version` 不匹配 = 批次在扫码之后被别人流转过）的统一处理，
+   *  三个写端点共用。
+   *
+   *  树上有人操作时**必须同时重拉扫码树**：树弹窗是 fullscreen、没有「刷新」按钮，
+   *  而且开着时扫码会被守卫丢弃 —— 只刷列表的话树上那行还是旧 version，用户再点一次
+   *  必然再次 40901（提示里说「请刷新后重试」，界面上却没有可刷新的入口）。
+   *  列表页直接操作（没有树）时照旧只刷列表，那条路径上有工具栏的「刷新」按钮。
+   *
+   *  无递归：这里只经 `scanMutation` 一条路走（成功写 scanTree / 失败弹提示），
+   *  不回调三个写 mutation 的 onSuccess ⇒ 与 applyScanTreeTransition 无环。 */
+  async function onOccConflict(): Promise<void> {
+    const treeOpen = scanTree.value !== null;
+    ElMessage.warning(
+      treeOpen ? '该批次已被他人修改，扫码树已刷新，请重新操作' : '该批次已被他人修改，请刷新后重试',
+    );
+    if (treeOpen) await resyncScanTree();
+    await fetchList();
+  }
 
   // ============ 切片：options（弹窗下拉的候选数据）============
   // 2026-10-03：替代旧版视图里的 3 处裸调（listShelves ×2 + listProcesses）——

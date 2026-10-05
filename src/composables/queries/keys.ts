@@ -252,9 +252,9 @@ export const qk = {
   //       - scan 域工人放回 `workerScan` event_type=RETURNED
   //         （ScanReturnParts）—— service 同事务跑 WorkerPool refill，
   //         放回即从池里抢批，counts / by-process / state 三域同时变；
-  //       - inspection 域 `scanInspect`（`useInspectionListStore` 的
-  //         `scanInspectMutation`）—— 品检流转，IN_PROCESS+PRODUCTION_SHELF
-  //         起点同样会离开候选池；
+  //       - inspection 域的品检流转（`useInspectionListStore` 的 `toInspectionMutation`
+  //         / `toShipMutation` / `toProcessMutation`）—— 送检把 IN_PROCESS+PRODUCTION_SHELF
+  //         的批次迁到 INSPECTION+INSPECTION_SHELF，即把批次移出候选池；
   //       - outsource 域收发（useOutsourceSendableList / usePartDetail 的
   //         receiveFromOutsource / useOutsourceReceivingList）—— send 移出候选池、
   //         receive 移入候选池；**仍未挂 worker-pool 三域失效**（既存缺口）。
@@ -312,7 +312,7 @@ export const qk = {
    *  params 变化才能拿到不同 cache identity（与 partsList / programmingList 同形）。 */
   inspectionQueueList: (params: ListInspectionQueueParams) =>
     ['inspection', 'queue', params] as const,
-  /** inspection 域前缀 —— 品检流转（scan-inspect / to-process / to-ship）完成后
+  /** inspection 域前缀 —— 品检流转（to-inspection / to-process / to-ship）完成后
    *  调 `qc.invalidateQueries({ queryKey: qk.inspectionPrefix })` 失效本域；
    *  未来若本域新增其它 list 键，一并被前缀覆盖。 */
   inspectionPrefix: ['inspection'] as const,

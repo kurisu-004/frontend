@@ -663,6 +663,11 @@ export interface ScanInspectPayload {
   quantity?: number | null;
 }
 
+/** ⚠️ 2026-10-05 起本封装在生产侧**零调用方**：待品检页的「快捷品检」已改成
+ *  `GET /prod/inspection/scan/{serial_no}` 取树 + `to-inspection`（送检）/
+ *  `to-ship`（品检通过）/ `to-process`（指定工序）三个显式端点，快捷品检那套
+ *  pass/pass=false 分流不再有调用点。后端 `scan-inspect` 端点仍在，签名照上注释
+ *  保留待用，不要当死代码删。 */
 export async function scanInspect(batchId: string, payload: ScanInspectPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/scan-inspect`,
@@ -701,6 +706,9 @@ export async function receiveFromOutsourceToInspection(
 
 /** 单件送检（多状态 → INSPECTION）。后端 `ToInspectionRequest`：
  *  `target_inspection_shelf_id` / `version` 必填，`quantity` / `note` 选填。
+ *  响应里的 `new_batch_id` 是拆批信号，语义与 toShip 完全一致（拆批时源批次原地减量、
+ *  留下的 remainder 就是入参 batchId，被流转的那部分落在一个 id 不返回的新批次上，
+ *  详见上方 `ToShipPayload` 的拆批说明）。
  *  ⚠️ 与上面的 `receiveFromOutsourceToInspection`（外协回收直送品检）不是同一端点。 */
 export interface ToInspectionPayload {
   /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
@@ -724,8 +732,16 @@ export async function toInspection(
 
 /** 品检通过（INSPECTION → READY_TO_SHIP，可选自动拆批）。
  *  后端 `ToShipRequest`：`version` 必填（OCC 锚 t_part_batch），
- *  `quantity` / `note` 选填。`new_batch_id` 非 null = 部分数量触发拆批，
- *  值是 remainder 批次 id（≠ 入参 batchId），调用方应据此刷新批次列表。 */
+ *  `quantity` / `note` 选填。
+ *
+ *  `new_batch_id` 的拆批语义（后端 `_split_for_partial_op`，本文件三个写端点一致）：
+ *  - 整批操作（`quantity` 缺省或 >= 批次量）→ `null`，未拆批；
+ *  - 部分操作（`quantity` < 批次量）→ `Some(remainder_id)`，而 **remainder 就是本次
+ *    入参的 batchId 本身**：源批次原地减量（数量 -quantity、状态留在源状态、id 不变），
+ *    被流转的那 quantity 件另立一个**新批次**（数量 = 操作量、状态翻到目标态），
+ *    新批次的 id 全程不返回。
+ *  调用方据此刷新批次列表：会多出一行**数量 = 操作量**的新批次。
+ */
 export interface ToShipPayload {
   /** 必填；t_part_batch.version。 */
   version: number;

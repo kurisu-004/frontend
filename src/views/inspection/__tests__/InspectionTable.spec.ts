@@ -57,8 +57,7 @@ vi.mock('@/api/parts', () => ({
   listInspectionBatches: (...args: unknown[]) => listInspectionBatchesMock(...args),
   toShip: vi.fn(),
   toProcess: vi.fn(),
-  scanInspect: vi.fn(),
-  getPartBySerial: vi.fn(),
+  toInspection: vi.fn(),
 }));
 
 // 共享基础数据层（useCustomerTree / useProductionShelvesQuery / useProcessesQuery）
