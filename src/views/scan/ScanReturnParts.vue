@@ -233,6 +233,15 @@
       @cancel="onCancelSelect"
     />
 
+    <!-- 自动补料告知：worker-scan 同事务 refill 抢到批次时弹窗（数量 / 系统交期见卡内）；
+         补料弹窗打开时它兼作本次放回的成功提示（lead-text），故此处不另发 ElMessage.success -->
+    <RefillTakenDialog
+      v-if="showRefillTaken"
+      v-model="showRefillTaken"
+      :items="refillTaken"
+      :lead-text="refillLead"
+    />
+
     <!-- 图纸 / 图片 全屏预览 -->
     <el-dialog
       v-model="showPreview"
@@ -313,6 +322,7 @@ import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
 import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
+import { refillTakenOf } from '@/views/scan/composables/refillTaken';
 import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
@@ -324,6 +334,8 @@ import ProcessPickerDialog from '@/views/scan/components/ProcessPickerDialog.vue
 import ReturnConfirmDialog from '@/views/scan/components/ReturnConfirmDialog.vue';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
+import RefillTakenDialog from '@/views/scan/components/RefillTakenDialog.vue';
+import type { TakenItemDto } from '@/api/workerPool.contract';
 import type { Process } from '@/types/process';
 import type { ShelfForReturn } from '@/types/shelf';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
@@ -382,6 +394,12 @@ const selectedNextProcessName = ref<string>('');
 const showShelfPicker = ref(false);
 const showQtyDialog = ref(false);
 const pendingShelfId = ref<string>('');
+
+// --- 自动补料告知（worker-scan 同事务 refill；抢到批次才弹窗） ---
+const showRefillTaken = ref(false);
+const refillTaken = ref<TakenItemDto[]>([]);
+/** 扫码动作自身的成功文案（补料弹窗打开时它取代 ElMessage.success，见组件注释） */
+const refillLead = ref('');
 
 // --- 2026-10-04 工序链已知分支：下一工序 + 推荐货架都已派生，只差一次确认 ---
 // chainShelfId 存的是「还没提交」的推荐架：与 pendingShelfId 分开是因为后者一写就代表
@@ -505,7 +523,8 @@ async function onScanToSelect(rawCode: string): Promise<void> {
     showChainConfirm.value ||
     showShelfPicker.value ||
     showQtyDialog.value ||
-    showBatchPicker.value
+    showBatchPicker.value ||
+    showRefillTaken.value
   )
     return;
   const matches = findAllByCode(parts.value, code);
@@ -809,7 +828,7 @@ async function submitReturn(): Promise<void> {
   const nextProcessName = selectedNextProcessName.value ?? '';
   submitting.value = true;
   try {
-    await workerScan({
+    const res = await workerScan({
       serial_no: serialNo,
       badge_code: worker.value.badge_code ?? '',
       event_type: 'RETURNED',
@@ -817,8 +836,19 @@ async function submitReturn(): Promise<void> {
       next_process_id: nextProcessId,
       batch_id: batchId,
     });
-    ElMessage.success(`已放回：${serialNo} → ${nextProcessName}`);
     cancelSelect();
+    // 2026-10-05：worker-scan 同事务 refill 抢到批次时弹窗告知（空数组 = 池空 / 已持满，
+    // 不弹）。放在 refresh() 之前：弹窗不依赖列表刷新的往返，工人立刻看到补了什么料。
+    // 成功文案并进弹窗（lead-text），不另发 ElMessage.success —— 后开的 dialog 遮罩会盖住
+    // 先发的 toast。
+    const taken = refillTakenOf(res);
+    if (taken.length) {
+      refillTaken.value = taken;
+      refillLead.value = `已放回：${serialNo} → ${nextProcessName}`;
+      showRefillTaken.value = true;
+    } else {
+      ElMessage.success(`已放回：${serialNo} → ${nextProcessName}`);
+    }
     await refresh();
     emitHeldChanged();
   } catch (e) {

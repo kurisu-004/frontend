@@ -29,6 +29,7 @@ import type {
   SortDir,
 } from '@/types/parts';
 import type { RepairBatchListResult } from './batch';
+import type { WorkerRefillResultDto } from '@/api/workerPool.contract';
 
 export interface PartItem {
   id: string;
@@ -595,15 +596,17 @@ export interface WorkerScanOut {
     worker_id: string;
     part_id: string;
     batch_id: string;
+    /** 实际取值是 WS 广播名（`WORKER_SCAN_RETURNED` / `WORKER_SCAN_INSPECTED`），
+     *  不是入参那两个 `RETURNED` / `INSPECTED` —— 前端当前不消费，宽松标注。 */
     event_type: string;
     /** 父装配件 id（仅当 INSPECTED 分支触发父 status 变更时 Some） */
     synced_assembly_id: string | null;
   };
-  /** 同事务 WorkerPoolService::refill 结果（前端按需消费） */
-  refill: {
-    pool_count_by_process: { process_id: string; pool_count: number }[];
-    held_batches: unknown[];
-  };
+  /** 同事务 WorkerPoolService::refill 结果。与 `POST /prod/pool/refill` 的出参
+   *  **同一个** rust `RefillResult`（`worker_pool/model.rs`），故直接复用
+   *  `WorkerRefillResultDto`，不另立一份会漂移的本地结构：
+   *  `taken[]` 是本次自动给该工人抢到的批次（扫检 / 放回后报工台据此弹窗提示）。 */
+  refill: WorkerRefillResultDto;
 }
 
 export async function workerScan(payload: WorkerScanPayload): Promise<WorkerScanOut> {

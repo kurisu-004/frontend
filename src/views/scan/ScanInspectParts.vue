@@ -169,6 +169,15 @@
       @pick="onBatchPicked"
     />
 
+    <!-- 自动补料告知：worker-scan 同事务 refill 抢到批次时弹窗（数量 / 系统交期见卡内）；
+         补料弹窗打开时它兼作本次送检的成功提示（lead-text），故此处不另发 ElMessage.success -->
+    <RefillTakenDialog
+      v-if="showRefillTaken"
+      v-model="showRefillTaken"
+      :items="refillTaken"
+      :lead-text="refillLead"
+    />
+
     <!-- 品检货架选择（送检只需选架，不需下一道工序） -->
     <ShelfPickerDialog
       v-if="showShelfPicker"
@@ -277,6 +286,7 @@ import {
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
 import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
+import { refillTakenOf } from '@/views/scan/composables/refillTaken';
 import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
@@ -285,6 +295,8 @@ import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import ShelfPickerDialog from '@/views/scan/components/ShelfPickerDialog.vue';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
+import RefillTakenDialog from '@/views/scan/components/RefillTakenDialog.vue';
+import type { TakenItemDto } from '@/api/workerPool.contract';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 
 const router = useRouter();
@@ -337,6 +349,12 @@ function isHeic(t: string): boolean {
 const showShelfPicker = ref(false);
 const showQtyDialog = ref(false);
 const pendingShelfId = ref<string>('');
+
+// --- 自动补料告知（worker-scan 同事务 refill；抢到批次才弹窗） ---
+const showRefillTaken = ref(false);
+const refillTaken = ref<TakenItemDto[]>([]);
+/** 扫码动作自身的成功文案（补料弹窗打开时它取代 ElMessage.success，见组件注释） */
+const refillLead = ref('');
 
 // --- 多批次扫码命中弹窗 ---
 const showBatchPicker = ref(false);
@@ -391,7 +409,13 @@ async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
 async function onScanToSelect(rawCode: string): Promise<void> {
   const code = rawCode.trim();
   if (!code) return;
-  if (submitting.value || showShelfPicker.value || showQtyDialog.value || showBatchPicker.value)
+  if (
+    submitting.value ||
+    showShelfPicker.value ||
+    showQtyDialog.value ||
+    showBatchPicker.value ||
+    showRefillTaken.value
+  )
     return;
   const matches = findAllByCode(parts.value, code);
   if (matches.length === 1) {
@@ -556,7 +580,7 @@ async function submitInspect(): Promise<void> {
   if (!workingShelfId) return;
   submitting.value = true;
   try {
-    await workerScan({
+    const res = await workerScan({
       serial_no: selectedPart.value.serial_no ?? '',
       badge_code: worker.value.badge_code ?? '',
       event_type: 'INSPECTED',
@@ -564,8 +588,19 @@ async function submitInspect(): Promise<void> {
       target_inspection_shelf_id: pendingShelfId.value,
       batch_id: selectedPart.value.batch_id ?? null,
     });
-    ElMessage.success(`已送检：${selectedPart.value.serial_no}`);
+    // 成功文案在 await 后立即取值（见 cancelSelect 会把 selectedPart 清空）
+    const serialNo = selectedPart.value.serial_no;
     cancelSelect();
+    // 2026-10-05：worker-scan 同事务 refill 抢到批次时弹窗告知（空数组 = 池空 / 已持满，
+    // 不弹）。放在 refresh() 之前：弹窗不依赖列表刷新的往返，工人立刻看到补了什么料。
+    const taken = refillTakenOf(res);
+    if (taken.length) {
+      refillTaken.value = taken;
+      refillLead.value = `已送检：${serialNo}`;
+      showRefillTaken.value = true;
+    } else {
+      ElMessage.success(`已送检：${serialNo}`);
+    }
     await refresh();
     emitHeldChanged();
   } catch (e) {
