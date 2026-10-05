@@ -220,10 +220,7 @@ function scanTreeDialog(wrapper: Awaited<ReturnType<typeof mountPage>>['wrapper'
 }
 
 /** 按 title 找壳里那 3 个 el-dialog 桩之一（品检通过 / 指定工序）。 */
-function dialogByTitle(
-  wrapper: Awaited<ReturnType<typeof mountPage>>['wrapper'],
-  title: string,
-) {
+function dialogByTitle(wrapper: Awaited<ReturnType<typeof mountPage>>['wrapper'], title: string) {
   return wrapper
     .findAllComponents({ name: 'ElDialog' })
     .find((d) => d.props('title')?.startsWith(title));
@@ -268,9 +265,7 @@ describe('InspectionPending · 扫码流程', () => {
 
   it('失败收窗：扫码端点 reject 后弹窗回 false（不留空弹窗），提示由 store 弹', async () => {
     const { ElMessage } = await import('element-plus');
-    scanInspectionMock.mockRejectedValue(
-      Object.assign(new Error('零件不存在'), { code: 20101 }),
-    );
+    scanInspectionMock.mockRejectedValue(Object.assign(new Error('零件不存在'), { code: 20101 }));
     const { wrapper, store } = await mountPage();
 
     await scan('F1009');
@@ -313,6 +308,45 @@ describe('InspectionPending · 扫码流程', () => {
     expect(dialogByTitle(wrapper, '指定工序')?.props('modelValue')).toBe(true);
     await scan('F1006-04');
     expect(scanInspectionMock).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  // 2026-10-06 回归：数量弹窗「显示在下面点不动」。
+  //
+  // 成因不是 z-index 数值大小，而是 **stacking context 的归属**：
+  // ScanTreeDialog 带 `append-to-body`，teleport 到 body 下；本页的「品检通过」/
+  // 「指定工序」两个弹窗原本留在原位，于是落在 `layouts/MainLayout.vue:275` 的
+  // `.main-content { position: relative; z-index: 1 }` 建立的 **stacking context**
+  // 内部 —— 它们的 z-index 被该上下文封顶，与 ScanTreeDialog 的 z-index 不在同一个
+  // 排序体系里。而 ScanTreeDialog 是 body 下的后继兄弟，在**根** stacking context
+  // 里参与绘制，于是「后打开的弹窗反被先打开的压住」。
+  //
+  // 修法：两个弹窗也 `append-to-body`（同 `views/delivery/components/
+  // BatchInspectionConfirmDialog.vue` 的嵌套弹窗范式），回到同一层后由 EP 的
+  // popup manager 按打开顺序递增 z-index，后开的自然在上。
+  //
+  // 断言方式：DialogStub **故意不声明** `appendToBody`，未声明的属性会 fall through
+  // 成桩根元素的原生 attribute —— 于是「有没有 append-to-body」在测试里可直接观测。
+  it('品检通过 / 指定工序弹窗都 append-to-body（否则被 append-to-body 的扫码树弹窗压住）', async () => {
+    scanInspectionMock.mockResolvedValue(TREE);
+    const { wrapper } = await mountPage();
+    await scan('F1006-01');
+    const batch = TREE.children[0]?.children[0];
+    expect(batch).toBeDefined();
+
+    for (const title of ['品检通过', '指定工序']) {
+      const dlg = dialogByTitle(wrapper, title);
+      expect(dlg, `找不到「${title}」弹窗`).toBeDefined();
+      expect(
+        dlg!.attributes('append-to-body'),
+        `「${title}」弹窗缺 append-to-body，会被扫码树弹窗压住点不动`,
+      ).toBeDefined();
+    }
+
+    // 顺带确认从树上点按钮能真的把对应弹窗打开（守卫用例已覆盖，这里只验联动）
+    scanTreeDialog(wrapper).vm.$emit('pass', batch);
+    await flushPromises();
+    expect(dialogByTitle(wrapper, '品检通过')?.props('modelValue')).toBe(true);
     wrapper.unmount();
   });
 

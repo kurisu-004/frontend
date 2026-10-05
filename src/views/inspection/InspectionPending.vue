@@ -52,13 +52,21 @@
       />
     </div>
 
-    <!-- 品检通过对话框（带数量；部分通过时后端先拆批再过） -->
+    <!-- 品检通过对话框（带数量；部分通过时后端先拆批再过）
+         2026-10-06 补 `append-to-body`：本弹窗由 ScanTreeDialog 的「品检通过」按钮
+         打开，而 ScanTreeDialog 已 `append-to-body`（teleport 到 body）。本弹窗若留在
+         原位就落在 `layouts/MainLayout.vue:275` 的 `.main-content { position: relative;
+         z-index: 1 }` 那个 **stacking context** 里 —— 它的 z-index 被该上下文封顶，
+         而 ScanTreeDialog 作为 body 下的后继兄弟在**根** stacking context 里参与排序，
+         于是「后开的弹窗反而被先开的压住」，数量弹窗点不动。
+         同 `views/delivery/components/BatchInspectionConfirmDialog.vue` 的嵌套弹窗范式。 -->
     <el-dialog
       v-model="passDialogVisible"
       title="品检通过"
       :width="passDlg.width"
       :top="passDlg.top"
       :close-on-click-modal="false"
+      append-to-body
       @closed="onPassDialogClosed"
     >
       <div v-if="passTarget" class="fail-summary">
@@ -99,13 +107,16 @@
       </template>
     </el-dialog>
 
-    <!-- 指定工序对话框：先选下一道工序，再选目标生产货架（按 shelf↔process 映射过滤） -->
+    <!-- 指定工序对话框：先选下一道工序，再选目标生产货架（按 shelf↔process 映射过滤）
+         2026-10-06 补 `append-to-body`，理由同上方「品检通过」弹窗的注释
+         （由 ScanTreeDialog 打开，且须压过它）。 -->
     <el-dialog
       v-model="failDialogVisible"
       title="指定工序 — 选择下一道工序 + 目标生产货架"
       :width="failDlg.width"
       :top="failDlg.top"
       :close-on-click-modal="false"
+      append-to-body
       @closed="onFailDialogClosed"
     >
       <div v-if="failTarget" class="fail-summary">
