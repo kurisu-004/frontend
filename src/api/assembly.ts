@@ -4,6 +4,7 @@
 
 import { api, cleanParams } from '@/api/http';
 import {
+  assemblyCreateResultSchema,
   assemblyDetailFlatSchema,
   assemblyFileRefSchemaArray,
   assemblyOutSchema,
@@ -228,14 +229,24 @@ export async function getAssemblyForPart(partId: string): Promise<AssemblyDetail
   return parseAssemblyDetail(resp.data);
 }
 
+/**
+ * 建装配件（树形端点，`POST /api/v2/assemblies`）：一次请求建出 `t_assembly` 顶层 +
+ * 全部 `t_part` 子件（子件的 `assembly_id` 指向顶层）。
+ *
+ * 2026-10-05：响应走 `assemblyCreateResultSchema.parse` 守门（此前只做类型断言）。
+ * 消费方（`usePartBatchPdf` 的建单记账）把 `created_children[i]` 按下标对回本地子件行，
+ * 响应形状不对时若无守门，会在**零报错**的情况下把子件图纸挂到错误的行上。
+ *
+ * 不传文件字段：总装图走 `POST /assemblies/{id}/files`（`uploadAssemblyPdf`）单独上传。
+ * 2026-10-05 起该端点无条件派装配件序列号、无条件建子件，不传 PDF 也能建出完整装配件。
+ */
 export async function createAssembly(
   payload: AssemblyCreatePayload,
 ): Promise<AssemblyCreateResult> {
   const form = new FormData();
   form.append('data', JSON.stringify(payload));
-  // 不传 file：创建空装配体；详情页再上传 PDF / 添加子件
-  const resp = await api.post<AssemblyCreateResult>('/assemblies', form);
-  return resp.data;
+  const resp = await api.post<unknown>('/assemblies', form);
+  return assemblyCreateResultSchema.parse(resp.data);
 }
 
 /** 一次性创建：上传总装 PDF + 子件一并生成。
@@ -244,7 +255,10 @@ export async function createAssembly(
  *  的 multipart 解析只认 `files`；传 `file` **不报错**，文件被静默丢弃（建出一个没有
  *  总装图的装配件），所以这个字段名必须与后端一致。
  *
- *  当前全仓零调用点（装配件建单链路尚未接入 Tab 2），改动零风险。
+ *  2026-10-05：**本函数零调用点** —— 零件批量建单走 `createAssembly`（不传 PDF）+
+ *  `uploadAssemblyPdf` 补总装图这条两段式。保留它是因为它是「建单时一并带总装图」的
+ *  现成封装，将来若要走那条路，字段名与「`files` 只处理首份做页数校验」的行为差异
+ *  必须先对齐。
  */
 export async function createAssemblyWithFile(
   payload: AssemblyCreatePayload,
@@ -253,18 +267,21 @@ export async function createAssemblyWithFile(
   const form = new FormData();
   form.append('data', JSON.stringify(payload));
   form.append('files', pdfFile);
-  const resp = await api.post<AssemblyCreateResult>('/assemblies', form);
-  return resp.data;
+  const resp = await api.post<unknown>('/assemblies', form);
+  return assemblyCreateResultSchema.parse(resp.data);
 }
 
-/** 详情页上传总装 PDF：拆页 → 自动创建子件。
- *  2026-09-25 修正：v2 后端把 upload-pdf 合并到 `/files` 端点（multipart, field=file），
- *  不再走 `/upload-pdf`。
- *  2026-09-29 review 第 1 轮 C2 修复：后端实际响应是 `R<Vec<AssemblyFileRef>>`
- *  （handler.rs:244-302），不是 `R<AssemblyDetail>`。旧实现走 parseAssemblyDetail
- *  把数组塞进 z.object → ZodError，上传功能全废。新实现返 AssemblyFileRef[]，
- *  call 方（useAssemblyDetail.uploadPdfFn）调 fetchData() 重拉详情用，
- *  files 列表是中间信号。 */
+/** 装配件总装图上传（`POST /assemblies/{id}/files`，multipart field=`file`，只收 PDF）。
+ *
+ * 2026-10-05 订正：端点是**纯文件入库** —— COS PUT + `INSERT t_part_file`
+ * （`owner_kind='ASSEMBLY'`、`kind='ASSEMBLY_MASTER'`），**不拆页、不建子件**。
+ * 装配件的子件由 `POST /assemblies` 建单时按 `children` 入参一并建出。
+ *
+ * 2026-09-25 修正：v2 后端把 upload-pdf 合并到 `/files` 端点，不再走 `/upload-pdf`。
+ * 2026-09-29 review 第 1 轮 C2 修复：后端实际响应是 `R<Vec<AssemblyFileRef>>`，
+ * 不是 `R<AssemblyDetail>`。旧实现走 parseAssemblyDetail 把数组塞进 z.object → ZodError，
+ * 上传功能全废。新实现返 AssemblyFileRef[]，call 方（useAssemblyDetail.uploadPdfFn）
+ * 调 fetchData() 重拉详情用，files 列表是中间信号。 */
 export async function uploadAssemblyPdf(id: string, file: File): Promise<AssemblyFileRefSchema[]> {
   const form = new FormData();
   form.append('file', file);

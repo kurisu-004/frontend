@@ -1568,8 +1568,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
      * 必须全局唯一）。job 状态、失败清单、重试集合全按它寻址 —— 粒度必须是 job
      * 而不是 cell：一份 PDF 被装配件顶层 + N 个子件共享时会展开成 N+1 个 job，
      * 只失败其中一个时按 cell 重试会把已成功的也重跑一遍，而后端
-     * `uk_t_part_file_owner_kind_sha` 会对同一 owner + kind 的二次上传报 21108
-     * 「相同文件已存在」。
+     * `uk_t_part_file_single (part_id, kind)`（覆盖 DRAWING / 3D_MODEL /
+     * ASSEMBLY_MASTER / CAD_2D）会对二次上传报 21108「相同文件已存在」。装配件文件的
+     * `t_part_file.part_id` 存的就是 assembly.id，所以装配件顶层同样受这条约束。
      */
     id: string;
     /** = entry.key（`pdf:<uid>` / `3d:<uid>`），同时是 UI cell 的键。 */
@@ -1863,11 +1864,19 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
     // 2026-10-05：装配件子件挂上 assembly_id 后**不会**出现在零件一览（列表的 part 段是
     // `WHERE assembly_id IS NULL`），只有装配件父行进列表 ⇒ 成功提示里必须说清子件去哪看。
+    // 装配件子件本身就是 t_part 行、已经含在 `parts` 里，所以显式点明其中几条是子件，
+    // 免得读成「零件和子件是两批」。
     const c = createdCounts.value;
-    const childCount = totalAssemblyChildren.value;
+    const childCount = createdChildCount();
     const segs: string[] = [];
-    if (c.parts > 0) segs.push(`${c.parts} 条零件`);
-    if (c.assemblies > 0) segs.push(`${c.assemblies} 个装配件（含 ${childCount} 个子件）`);
+    if (c.parts > 0) {
+      segs.push(
+        c.assemblies > 0
+          ? `${c.parts} 条零件（其中 ${childCount} 个为装配件子件）`
+          : `${c.parts} 条零件`,
+      );
+    }
+    if (c.assemblies > 0) segs.push(`${c.assemblies} 个装配件`);
     const hint = c.assemblies > 0 ? '\n子件不在零件一览里，请到装配件详情页查看。' : '';
     ElMessage.success(`成功创建 ${segs.join(' + ') || '0 条'}${hint}`);
     // 2026-10-04：草稿在这里才清 —— 还有上传失败就必须留着（工单已落库，图样要靠本页
@@ -2234,7 +2243,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     };
   }
 
-  /** 一次装配件建单的结果分三类，逐组独立记账（互不影响）。 */
+  /** 一次装配件建单的结果分两类，逐组独立记账（互不影响）。 */
   interface AssemblyGroupFailure {
     /** 该组的本地行 uid（`AssemblyRow.uid`）。 */
     rowUid: string;
@@ -2242,15 +2251,18 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     label: string;
     error: string;
     /**
-     * `rejected` = 后端明确拒了（业务错误码），该组一定没建出；
-     * `unknown` = 拿不到定论（网络 / 5xx，或响应形状对不上），后端可能已落库。
+     * `rejected` = 后端处理过并回滚了（带 5 位业务码），该组一定没建出，重提安全；
+     * `unknown` = 拿不到定论（网络 / 5xx 页面，或响应与请求对不上），后端可能已落库。
      */
     outcome: 'rejected' | 'unknown';
   }
 
   /**
-   * 后端业务错误码是 5 位（`1xxxx`–`4xxxx`）；`api/http.ts` 在拿不到 `{code,message,data}`
-   * 信封时用 HTTP 状态码（网络错误是 0）兜底 ⇒ `code >= 10000` 才代表后端明确拒了。
+   * 后端业务错误码是 5 位（`1xxxx`–`5xxxx`）；`api/http.ts` 在拿不到 `{code,message,data}`
+   * 信封时用 HTTP 状态码（网络错误是 0）兜底 ⇒ `code >= 10000` 才代表「后端处理过这次
+   * 请求」。事务内的 DB / 内部错误（50001 / 50000）同样是 5 位、同样已回滚 ⇒ 归
+   * `rejected`（该组一定没建出，重提安全）；它们不是「客户数据不合法」意义上的拒绝，
+   * 但对「会不会重复建单」这个问题答案一样。
    */
   function isDefinitiveApiRejection(e: unknown): boolean {
     const code = (e as { code?: unknown } | null)?.code;
@@ -2262,12 +2274,15 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * **逐组 try/catch、不整体 reject**，并把建出的实体写进 `createdTargets`。
    *
    * 心智模型与 `batchCreateParts` 一致：该端点无幂等键，一个组装配件 400（比如 20308
-   * L1 客户没有 `serial_prefix`）绝不能让其它已建好的组在 UI 上消失。
+   *  L1 客户没有 `serial_prefix`）绝不能让其它已建好的组在 UI 上消失。
    *
-   * **记账的不变量**：`createdTargets` 里的每条记录都对应服务端真实存在的一行。
-   * 顶层建出但 `created_children` 数量与请求不符时整组**不记账**（按 `unknown` 上报）——
-   * 宁可让这一组留在表里、如实告诉用户「请先到装配件列表核对」，也不能在「顶层已建 /
-   * 子件没建全」的状态下让用户重提（顶层会再建成第二份装配件）。
+   * **记账的不变量（双向）**：
+   *  1. 记了账的必真实存在（`createdTargets` 里每条都对应服务端的一行）；
+   *  2. 建出来的必都记上账（否则那行的图纸永不上传，且本页再也够不着它 —— 行会被
+   *     `dropCreatedRows` 整行摘掉）。
+   * ⇒ 响应只要对不上请求（子件数不一致 / 某个子件缺 id / 子件顺序错位），**整组不记账**，
+   *  落进 `unknown` 分支：行留在表里、如实告诉用户「先到装配件列表核对」。宁可让用户
+   * 多核对一次，也不能出现「顶层已建、子件没建全/挂错行」的状态。
    */
   async function createAssemblyGroups(rows: AssemblyRow[]): Promise<AssemblyGroupFailure[]> {
     const failures: AssemblyGroupFailure[] = [];
@@ -2285,13 +2300,25 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
             `子件数量与请求不一致（请求 ${a.children.length} 个，响应 ${children.length} 个）`,
           );
         }
+        // 2026-10-05：`created_children[i]` 要按下标对回本地子件行（后端按入参顺序建子件，
+        // 序列号 `{asm_serial}-{i:02d}` 1-based）。**同长度但错序是静默数据损坏**：子件 A
+        // 的图纸会挂到子件 B 上（part id 只是 id，后端不校验）⇒ 不报错、不进失败清单、
+        // 最后弹「成功」。所以用后端回显的 drawing_no 逐个对账，不符即整组不记账。
+        // 只容忍 null / 空白差异（空图号在库里是 NULL、回显也就 null），真实值不一致一律
+        // 当错序处理。
+        children.forEach((child, i) => {
+          if (!child?.id) throw new Error(`响应第 ${i + 1} 个子件缺 id`);
+          if ((child.drawing_no ?? '').trim() !== a.children[i]!.drawing_no.trim()) {
+            throw new Error(
+              `子件顺序与请求不一致（请求第 ${i + 1} 个是 ${a.children[i]!.drawing_no || '（空图号）'}，` +
+                `响应是 ${child.drawing_no || '（空图号）'}）`,
+            );
+          }
+        });
         // 顶层 + 子件同进同出（一次请求一个事务）
         createdTargets.set(a.uid, { target: 'assembly', id: String(res.assembly.id) });
         children.forEach((child, i) => {
-          const row = a.children[i];
-          // 后端按入参顺序建子件，序列号 `{asm_serial}-{i:02d}`（1-based）
-          if (row && child?.id)
-            createdTargets.set(row.uid, { target: 'part', id: String(child.id) });
+          createdTargets.set(a.children[i]!.uid, { target: 'part', id: String(child!.id) });
         });
       } catch (e) {
         failures.push({
@@ -2396,6 +2423,22 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
 
   /**
+   * 已记账的装配件子件数。子件是 `t_part` 行、已经含在 `createdCounts().parts` 里，
+   * 这里单独数出来只为文案说清「零件那 N 条里有几条是子件」。
+   * 从 `createdTargets` 数而不是 `totalAssemblyChildren`（那是表内行数，与「建出了几个」
+   * 不是一回事），保证文案里的两个数字永远自洽。
+   */
+  function createdChildCount(): number {
+    let n = 0;
+    for (const a of assemblies.value) {
+      for (const c of a.children) {
+        if (createdTargets.get(c.uid)?.target === 'part') n += 1;
+      }
+    }
+    return n;
+  }
+
+  /**
    * 建单「有行没建出来」的清单文案。四个来源各自成段：
    * 独立零件逐行被拒 / 独立零件整组请求失败（成败未知）/ 装配件组被拒 / 装配件组成败未知。
    */
@@ -2445,11 +2488,14 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     const c = createdCounts.value;
     const head = c.total > 0 ? `已创建 ${createdCountText()}；` : '';
     const hint = c.assemblies > 0 ? '\n装配件子件不在零件一览里，请到装配件详情页查看。' : '';
+    // 「先核对再重提」这句是**承重**的，不是客套：`t_assembly.drawing_no` 与
+    // `t_part.drawing_no` 都没有唯一索引（只有 serial_no 唯一）⇒ 重提一个已建出的组会
+    // **完全静默**地建出第二份，没有任何 DB 报错能兜住。前端对 `unknown` 组拿不到定论，
+    // 那句提示就是用户唯一的防重复建单防线。
     return (
       `${head}${parts.join('\n\n')}\n` +
       `已创建的工单尚未上传图纸，可在详情页补传。\n建成的行已从表格移除，` +
       `直接重新提交只会发出剩下的行。` +
-      // 成败未知的组重提就是第二份工单，必须先说清核对义务
       (parts.some((p) => p.includes('成功与否未知'))
         ? '\n重新提交前请先到零件 / 装配件列表核对，避免重复建单。'
         : '') +
@@ -2494,6 +2540,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
     const { items, rowUids } = buildCommitItems();
     itemRowUids.value = rowUids;
+    // 2026-10-05：记账只覆盖**本轮**。上一轮「部分失败」时建成的行已被 dropCreatedRows
+    // 移出表格，但它们在 map 里的记录还在；不清的话本轮成功提示会把上一批一并数进去
+    // （文案形如「成功创建 7 条零件 + 2 个装配件」，而本轮只建了 3 条）—— 在一个专门防
+    // 重复建单的流程里给出自相矛盾的计数。
+    // 清在这里而不是 `resetCommitState`：重试上传（done 态）**绝不能**碰它，否则已落库
+    // 工单的 id 就丢了，job 现场重建与「重试只重传不重建」两个不变量同时失效。
     createdTargets.clear();
 
     submitRowEpoch = rowEpoch.value;

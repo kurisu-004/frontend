@@ -129,6 +129,12 @@ export interface AssemblyChildPayload {
   name: string;
   quantity?: number;
   applicant_name?: string | null;
+  /** YYYY-MM-DD。子件入参优先；**缺省继承父装配件**的 `planned_delivery_date`。
+   *  2026-10-05 补声明：本仓的建单映射（`usePartBatchPdf` 的 `buildAssemblyPayload`）真的
+   *  在发这一项。此前类型里缺它，而 `.map()` 的返回值会丢掉对象字面量的 freshness、
+   *  TS 的多余属性检查根本不触发 ⇒ `typecheck` 全绿却对 wire 撒谎；将来把这段映射
+   *  收进任何带类型的 helper，子件交期就会被静默丢掉（悄悄退回继承父件）。 */
+  planned_delivery_date?: string;
   /** 子件含税单价（2 位小数字符串）。后端 `AssemblyChildRequest` 已收这一项，类型是 rust
    *  `rust_decimal` + `serde-with-str` ⇒ **只认 JSON 字符串**，发 number 会被拒或丢精度。
    *  子件是 `t_part` 行（`assembly_id` 指向父装配件），价格列在 `t_part` 上。 */

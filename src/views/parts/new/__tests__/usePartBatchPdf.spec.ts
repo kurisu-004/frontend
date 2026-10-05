@@ -48,12 +48,14 @@ vi.mock('@/utils/pdfjs', () => ({
 // 真实 fixture 的 5 行物料编号都与表格里「装配件自身图号」同形（合并成装配件时
 // children[0].drawing_no 就等于顶层图号），所以「顶层图号查不到、只有子件图号查得到」
 // 这条分支用原 fixture 造不出来。这里补一行图号 `E42GUN0001-01`（顶层 `E42GUN0001`
-// 故意不在表里）来模拟该历史形态；计划交期硬编码为 TODAY+14（2026-10-17），因为
-// mock 工厂在模块初始化期执行，读不到文件后文的 TODAY 常量。
+// 故意不在表里）来模拟该历史形态。
 //
-// 用 `vi.hoisted` 承载这个常量：`vi.mock` 会被提升到 import 之前，普通模块级 const
-// 此刻还在 TDZ 里。
-const CHILD_ONLY = vi.hoisted(() => ({ drawingNo: 'E42GUN0001-01' }));
+// 计划交期由工厂收到的 `today` 参数推算（today + 14 天），**不硬编码日期**：mock 工厂
+// 在模块初始化期执行，读不到文件后文的 TODAY 常量，硬编码会让 TODAY 一改、这批用例就
+// 以完全误导的方式挂掉（真实 fixture 行的交期跟着 TODAY 走，合成行不跟，两边对不上）。
+//
+// 图号走 `vi.hoisted`：`vi.mock` 会被提升到 import 之前，普通模块级 const 此刻还在 TDZ 里。
+const CHILD_ONLY = vi.hoisted(() => ({ drawingNo: 'E42GUN0001-01', deliveryDays: 14 }));
 
 vi.mock('@/utils/historicalPriceExcelParser', async (importOriginal) => {
   const actual = await importOriginal<typeof HistPriceNS>();
@@ -61,6 +63,8 @@ vi.mock('@/utils/historicalPriceExcelParser', async (importOriginal) => {
     ...actual,
     parseHistoricalPriceExcel: (workbook: XLSX.WorkBook, today: string) => {
       const parsed = actual.parseHistoricalPriceExcel(workbook, today);
+      const d = new Date(`${today}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + CHILD_ONLY.deliveryDays);
       return {
         ...parsed,
         rows: [
@@ -74,8 +78,8 @@ vi.mock('@/utils/historicalPriceExcelParser', async (importOriginal) => {
             unitPrice: 999,
             totalPrice: 999,
             isUrgent: false,
-            deliveryDays: 14,
-            plannedDeliveryDate: '2026-10-17',
+            deliveryDays: CHILD_ONLY.deliveryDays,
+            plannedDeliveryDate: d.toISOString().slice(0, 10),
             deptCode: 'F06',
             deptName: '六厂',
             designDrawingLabel: null,
@@ -945,7 +949,8 @@ describe('usePartBatchPdf：装配件整套价的回填口径（只认顶层图�
     expect(asm.customer_id).toBe('c-liuchang');
     expect(asm.applicant_name).toBe('谢岩国');
     expect(asm.quantity).toBe(9);
-    expect(asm.planned_delivery_date).toBe('2026-10-17');
+    // 交期由 mock 工厂按 today + deliveryDays 推出（见该文件顶部的 CHILD_ONLY）
+    expect(asm.planned_delivery_date).toBe(plusDays(TODAY, CHILD_ONLY.deliveryDays));
     // 但那一行是**子件**行（单价 999 / 总价 999），拿它当整套价会与整套口径差一个套数倍率
     expect(asm.unit_price).toBeNull();
     expect(asm.total_price).toBeNull();

@@ -131,25 +131,36 @@ function networkError(message: string): Error {
   return Object.assign(new Error(message), { name: 'ApiError', code: 0 });
 }
 
-/** `POST /assemblies` 201 响应里实现真正读的字段：`assembly.id` + `created_children[].id`。 */
+/** `POST /assemblies` 201 响应里实现真正读的字段：`assembly.id` + `created_children[]`。 */
 interface FakeAssemblyResult {
-  assembly: { id: string };
-  created_children: Array<{ id: string; serial_no: string }>;
+  assembly: { id: string; drawing_no: string };
+  created_children: Array<{ id: string; serial_no: string; drawing_no: string }>;
 }
 
 /**
- * 按子件数造一个合法的建装配件响应。`tag` 让每次调用的 id 唯一（顶层 `A<tag>`、
- * 子件 `A<tag>-01/-02`），这样「哪一次请求建的」在断言里一目了然。
+ * 造一个合法的建装配件响应：`tag` 让每次调用的 id 唯一（顶层 `A<tag>`、子件
+ * `A<tag>-01/-02`），`children` 给子件回显的图号（**必须与请求一致**，实现按下标把
+ * `created_children[i]` 对回本地子件行，不一致会被判成错序而整组不记账）。
  */
-function okAssembly(tag: string, childCount: number): FakeAssemblyResult {
+function okAssembly(
+  tag: string,
+  children: Array<string | { drawing_no: string }>,
+): FakeAssemblyResult {
+  const nos = children.map((c) => (typeof c === 'string' ? c : c.drawing_no));
   return {
-    assembly: { id: `A${tag}` },
-    created_children: Array.from({ length: childCount }, (_, i) => ({
+    assembly: { id: `A${tag}`, drawing_no: '' },
+    created_children: nos.map((drawingNo, i) => ({
       id: `A${tag}-${String(i + 1).padStart(2, '0')}`,
       // 后端子件序列号格式 `{asm_serial}-{i:02d}`（1-based）
       serial_no: `A${tag}-${String(i + 1).padStart(2, '0')}`,
+      drawing_no: drawingNo,
     })),
   };
+}
+
+/** 一个装配件行对应的子件图号（喂给 `okAssembly`，保证回显与请求一致）。 */
+function childNos(asm: AssemblyRow): string[] {
+  return asm.children.map((c) => c.drawing_no);
 }
 
 function need(): UsePartBatchPdfReturn {
@@ -317,7 +328,7 @@ describe('onSubmit', () => {
     api.threeDModelFiles.value = [up(9, 'ASM-1_总装.step')];
     asm.children[0]!.three_d_index = 0;
 
-    mocks.createAssembly.mockResolvedValue(okAssembly('1', 2));
+    mocks.createAssembly.mockResolvedValue(okAssembly('1', childNos(asm)));
     mocks.uploadAssemblyPdf.mockResolvedValue([]);
     mocks.uploadPartDrawing.mockResolvedValue({});
     mocks.uploadPart3DModel.mockResolvedValue({});
@@ -344,10 +355,12 @@ describe('onSubmit', () => {
     expect(mocks.uploadPart3DModel.mock.calls[0]![1].name).toBe('ASM-1_总装.step');
     expect(mocks.alert).not.toHaveBeenCalled();
     expect(api.commitStage.value).toBe('done');
-    // 2026-10-05：子件挂上 assembly_id 后不进入零件一览 ⇒ 成功提示必须说清去哪看
+    // 2026-10-05：子件挂上 assembly_id 后不进入零件一览 ⇒ 成功提示必须说清去哪看，
+    // 且「零件 N 条」与「子件 Z 个」是**同一批**（子件本身就是 t_part 行）
     const okText = mocks.success.mock.calls.map((c) => c[0] as string).join('|');
-    expect(okText).toContain('1 个装配件（含 2 个子件）');
+    expect(okText).toContain('2 条零件（其中 2 个为装配件子件） + 1 个装配件');
     expect(okText).toContain('装配件详情页');
+    expect(okText).not.toContain('1 个装配件（含');
     expect(mocks.routerPush).toHaveBeenCalledWith('/parts?status=PENDING');
     w.unmount();
   });
@@ -397,7 +410,7 @@ describe('上传重试（job 粒度）', () => {
     const api = need();
     const asm = await mountAssembly(api);
     expect(asm.children).toHaveLength(2);
-    mocks.createAssembly.mockResolvedValue(okAssembly('1', 2));
+    mocks.createAssembly.mockResolvedValue(okAssembly('1', childNos(asm)));
     // 首轮：两个子件图纸成功，装配件总装图网络失败
     mocks.uploadPartDrawing.mockResolvedValue({});
     mocks.uploadAssemblyPdf.mockRejectedValueOnce(new Error('网络中断'));
@@ -440,8 +453,8 @@ describe('上传重试（job 粒度）', () => {
     const w = mount(Harness);
     await flushPromises();
     const api = need();
-    await mountAssembly(api);
-    mocks.createAssembly.mockResolvedValue(okAssembly('1', 2));
+    const asm = await mountAssembly(api);
+    mocks.createAssembly.mockResolvedValue(okAssembly('1', childNos(asm)));
     mocks.uploadPartDrawing.mockResolvedValue({});
     mocks.uploadAssemblyPdf.mockRejectedValue(new Error('网络中断'));
     await api.onSubmit();
@@ -506,7 +519,7 @@ describe('建单之后的异常', () => {
     await api.onSubmit();
     expect(mocks.batchCreateParts).toHaveBeenCalledTimes(1);
 
-    // File 恢复后点「重试上传」：用 createdPartIds + itemRowUids 现场重建 job 再补传
+    // File 恢复后点「重试上传」：用 createdTargets 现场重建 job 再补传（不碰建单）
     api.allPdfs.value = [src];
     mocks.uploadPartDrawing.mockResolvedValue({});
     await api.retryFailedUploads();
@@ -616,7 +629,7 @@ describe('建单之后的异常', () => {
 
   it('建单结果解析到一半抛错（已有 part 落库）：绝不退成 idle 让用户重来', async () => {
     // 「creating 阶段 catch ⇒ 一定一个工单都没建出来」是能被证伪的：created 里混进
-    // 一个畸形元素时，forEach 会在已经把前几个 part 写进 createdPartIds 之后抛错。
+    // 一个畸形元素时，forEach 会在已经把前几个 part 写进 createdTargets 之后抛错。
     // 此时退成 idle = 主按钮重新可点 = 已落库的工单被建第二遍。
     const w = mount(Harness);
     await flushPromises();
@@ -728,7 +741,7 @@ describe('建单「部分行成立」', () => {
 
     // 第 1 组成功、第 2 组被后端明确拒（20308：L1 客户没有 serial_prefix）
     mocks.createAssembly
-      .mockResolvedValueOnce(okAssembly('1', 2))
+      .mockResolvedValueOnce(okAssembly('1', childNos(ok1!)))
       .mockRejectedValueOnce(apiError(20308, '一级客户未配置流水号前缀'));
     mocks.uploadAssemblyPdf.mockResolvedValue([]);
     mocks.uploadPartDrawing.mockResolvedValue({});
@@ -754,7 +767,7 @@ describe('建单「部分行成立」', () => {
     expect(api.canSubmit.value).toBe(true);
 
     // 第二次提交：只发剩下那组，已成功的那组 createAssembly 不会被再调一次
-    mocks.createAssembly.mockResolvedValue(okAssembly('3', 2));
+    mocks.createAssembly.mockResolvedValue(okAssembly('3', childNos(bad!)));
     await api.onSubmit();
     expect(mocks.createAssembly).toHaveBeenCalledTimes(3);
     const third = mocks.createAssembly.mock.calls[2]![0] as { drawing_no: string };
@@ -787,9 +800,9 @@ describe('建单「部分行成立」', () => {
     const w = mount(Harness);
     await flushPromises();
     const api = need();
-    await mountAssembly(api);
+    const asm = await mountAssembly(api);
     // 后端只回了 1 个子件（契约要求 2 个）⇒ 这一组的建成事实无法解读
-    mocks.createAssembly.mockResolvedValue(okAssembly('1', 1));
+    mocks.createAssembly.mockResolvedValue(okAssembly('1', childNos(asm).slice(0, 1)));
 
     await api.onSubmit();
 
@@ -800,6 +813,87 @@ describe('建单「部分行成立」', () => {
     // 一条上传都不该发（没有可用的 id）
     expect(mocks.uploadAssemblyPdf).not.toHaveBeenCalled();
     expect(mocks.uploadPartDrawing).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it('装配件：响应的子件顺序与请求不一致 ⇒ 整组不记账（否则子件 A 的图纸会挂到子件 B 上）', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    const asm = await mountAssembly(api);
+    const nos = childNos(asm);
+    expect(nos).toHaveLength(2);
+    expect(nos[0]).not.toBe(nos[1]);
+    // 长度对得上、只有顺序反了：后端把两个子件建出来了，但返回顺序与请求相反
+    mocks.createAssembly.mockResolvedValue(okAssembly('1', [...nos].reverse()));
+
+    await api.onSubmit();
+
+    // 记账必须为空：行留在表里、阶段回 idle（绝不能变成「重试上传」，那会让人以为工单已建）
+    expect(api.assemblies.value).toHaveLength(1);
+    expect(api.commitStage.value).toBe('idle');
+    const text = mocks.alert.mock.calls[0]![0] as string;
+    expect(text).toContain('子件顺序与请求不一致');
+    // 错序 = 后端很可能已落库（顶层 + 两个子件都建了）⇒ 必须按 unknown 提示先核对
+    expect(text).toContain('成功与否未知');
+    expect(text).toContain('先到零件 / 装配件列表核对');
+    // 一条上传都不该发：错序的 id 对应不上任何一行
+    expect(mocks.uploadAssemblyPdf).not.toHaveBeenCalled();
+    expect(mocks.uploadPartDrawing).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it('部分失败后再提交：成功提示只数**本轮**建出的（上一批的记账不许混进来）', async () => {
+    // 2026-10-05 回归锁：`onSubmit` 开头的 createdTargets.clear() 曾是零覆盖。
+    // 不清的话本轮成功提示会把上一轮「部分失败」时建出的那一批一并数进去，在一个专门
+    // 防重复建单的流程里给出自相矛盾的计数（形如「成功创建 3 条零件 + 1 个装配件」，
+    // 而本轮只建了 2 个子件 + 1 个装配件）。
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    // 1 个独立零件 + 1 个装配件（2 子件）
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'A-1_独立件.pdf')];
+    await api.rebuildFromUploads();
+    api.standaloneParts.value[0]!.customer_id = 'c-root';
+    await api.addManualAssembly();
+    api.manualAsmForm.drawing_no = 'E42-ASM-009';
+    api.manualAsmForm.name = '胶枪内胆总装';
+    api.manualAsmForm.file = new File([new Uint8Array([1])], 'manual-asm.pdf');
+    await api.confirmManualAssembly();
+    const asm = api.assemblies.value[0]!;
+    asm.customer_id = 'c-root';
+    expect(asm.children).toHaveLength(1);
+
+    // 第一轮：独立零件建成，装配件被明确拒
+    mocks.batchCreateParts.mockResolvedValue({
+      created: [{ id: 'P-1', sourceIndex: 0 }],
+      failed: [],
+      groupErrors: [],
+    });
+    mocks.createAssembly.mockRejectedValueOnce(apiError(20308, '一级客户未配置流水号前缀'));
+    await api.onSubmit();
+    // 独立零件行已建出 ⇒ 被移出表格；装配件行留在表里
+    expect(api.standaloneParts.value).toHaveLength(0);
+    expect(api.assemblies.value).toHaveLength(1);
+    expect(api.commitStage.value).toBe('idle');
+    expect(mocks.alert.mock.calls[0]![0] as string).toContain('已创建 1 条零件');
+
+    // 第二轮：只剩装配件这一行
+    mocks.createAssembly.mockResolvedValue(okAssembly('9', childNos(asm)));
+    mocks.uploadAssemblyPdf.mockResolvedValue([]);
+    mocks.uploadPartDrawing.mockResolvedValue({});
+    mocks.success.mockClear();
+    await api.onSubmit();
+    await flushPromises();
+
+    // 计数只含本轮：1 个子件（是 t_part 行）+ 1 个装配件。上一轮那条独立零件（P-1）
+    // 的记账若没被清掉，这里会变成「2 条零件（其中 1 个为装配件子件）」。
+    const okText = mocks.success.mock.calls.map((c) => c[0] as string).join('|');
+    expect(okText).toBe(
+      '成功创建 1 条零件（其中 1 个为装配件子件） + 1 个装配件\n子件不在零件一览里，请到装配件详情页查看。',
+    );
+    expect(okText).not.toContain('2 条零件');
     w.unmount();
   });
 
@@ -962,7 +1056,7 @@ describe('并发闸门与「已存在」归一', () => {
  *
  * `resetCommitState` 会把 `commitStage` 打回 idle，而 `commitStage` 是「第二次建单」唯一
  * 的连点闸门；在途时打掉它，先行的 `onSubmit` 跑完仍会照常收口（成功提示 + 清空 + 跳页），
- * 而 `createdPartIds` 已被清空 ⇒ 用户刚建好的行被静默清掉、还收到一条「成功创建 0 条零件」。
+ * 而 `createdTargets` 已被清空 ⇒ 用户刚建好的行被静默清掉、还收到一条「成功创建 0 条零件」。
  *
  * 两道防线分别锁住：
  *  - `rebuildFromUploads` 的提交在途闸门（第一道，拦住整表换新）；
@@ -1156,7 +1250,7 @@ describe('建单载荷：含税单价 / 总价', () => {
     asm.children[1]!.unit_price = null;
     asm.children[1]!.total_price = null;
 
-    mocks.createAssembly.mockResolvedValue(okAssembly('1', 2));
+    mocks.createAssembly.mockResolvedValue(okAssembly('1', childNos(asm)));
     mocks.uploadAssemblyPdf.mockResolvedValue([]);
     mocks.uploadPartDrawing.mockResolvedValue({});
     await api.onSubmit();
@@ -1286,7 +1380,7 @@ describe('建装配件：payload 形状', () => {
     c1!.unit_price = null;
     c1!.total_price = null;
 
-    mocks.createAssembly.mockResolvedValue(okAssembly('1', 2));
+    mocks.createAssembly.mockResolvedValue(okAssembly('1', childNos(asm)));
     mocks.uploadAssemblyPdf.mockResolvedValue([]);
     mocks.uploadPartDrawing.mockResolvedValue({});
     await api.onSubmit();
@@ -1353,7 +1447,7 @@ describe('建装配件：payload 形状', () => {
       failed: [],
       groupErrors: [],
     });
-    mocks.createAssembly.mockResolvedValue(okAssembly('2', 1));
+    mocks.createAssembly.mockResolvedValue(okAssembly('2', childNos(asm)));
     mocks.uploadAssemblyPdf.mockResolvedValue([]);
     mocks.uploadPartDrawing.mockResolvedValue({});
     await api.onSubmit();
