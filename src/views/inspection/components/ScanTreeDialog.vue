@@ -31,8 +31,10 @@
   <el-dialog
     :model-value="modelValue"
     title="扫码结果 — 装配件 / 子零件 / 批次"
-    fullscreen
+    :width="dlg.width"
+    :top="dlg.top"
     :close-on-click-modal="false"
+    append-to-body
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
     @closed="onClosed"
   >
@@ -53,7 +55,7 @@
       :tree-props="{ children: 'children' }"
       :row-class-name="rowClassName"
       default-expand-all
-      height="calc(100vh - 220px)"
+      max-height="52vh"
       stripe
       border
       size="small"
@@ -188,6 +190,7 @@ import { computed, reactive, ref } from 'vue';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE, type OrderStatus } from '@/types/parts';
 import type { ScanBatchOut, ScanPartOut, ScanTreeOut } from '@/api/inspection';
 import type { Shelf } from '@/types/shelf';
+import { useDialogSize } from '@/composables/useDialogSize';
 import { useInspectionListStore } from '../composables/useInspectionListStore';
 
 const props = defineProps<{
@@ -209,6 +212,15 @@ const emit = defineEmits<{
 }>();
 
 const store = useInspectionListStore();
+
+// 2026-10-06：弹窗从 fullscreen 改为定宽（用户要求「不要全屏显示」）。
+// 宽度取 1200px：表格 10 列的 min-width 合计约 1370px（序列号 130 / 图号 130 /
+// 名称 150 / 数量 80 / 状态 100 / 当前位置 130 / 工序 120 / 系统交期 110 /
+// 客户 120 / 操作 300），定宽下不足部分由 el-table 自身的横向滚动承接 ——
+// 序列号列 fixed="left"、操作列 fixed="right"，横向滚动时两端始终可见。
+// 表格高度同步从 `height="calc(100vh - 220px)"`（fullscreen 专属）改为
+// `max-height="52vh"`：行数少时弹窗按内容收缩，不再留大片空白。
+const dlg = useDialogSize({ desktopWidth: 1200 });
 
 // ============ 树 → 表格行 ============
 // 三层的字段集不一样（零件没有 location / 工序，批次没有系统交期 / 图号），统一摊成

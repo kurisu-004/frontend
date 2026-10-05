@@ -251,6 +251,10 @@ const MockElTable = defineComponent({
     rowKey: { type: Function, default: null },
     rowClassName: { type: Function, default: null },
     treeProps: { type: Object, default: null },
+    // 2026-10-06：弹窗改定宽后表格高度由 `height="calc(100vh - 220px)"`
+    // 换成 `max-height="52vh"`，此处补上声明以便断言（未声明会落进 attrs，
+    // `props('maxHeight')` 取不到）。
+    maxHeight: { type: String, default: undefined },
   },
   setup(props, { slots }) {
     const render = (rows: StubRow[], depth: number): VNodeChild[] =>
@@ -288,7 +292,11 @@ const MockElTableColumn = defineComponent({
 
 const MockElDialog = defineComponent({
   name: 'ElDialog',
-  props: ['modelValue', 'title', 'fullscreen', 'closeOnClickModal'],
+  // 只声明与用例交互的 props。`width` / `top` / `fullscreen` **故意不声明** ——
+  // 未声明的属性会 fall through 成根元素上的原生 attribute，于是
+  // 「弹窗是否 fullscreen / 宽度多少」在测试里可直接断言
+  // （`dialog.attributes('fullscreen')` 有值 = 退回了全屏，见「弹窗非全屏」用例）。
+  props: ['modelValue', 'title', 'closeOnClickModal'],
   emits: ['update:modelValue', 'closed'],
   setup(props, { slots }) {
     return () =>
@@ -462,6 +470,24 @@ describe('ScanTreeDialog', () => {
     const { wrapper } = await mountDialog(TREE_ASSEMBLY);
     const table = wrapper.findComponent({ name: 'ElTable' });
     expect(table.props('treeProps')).toEqual({ children: 'children' });
+    wrapper.unmount();
+  });
+
+  // 2026-10-06：用户要求「扫码后弹出的批次列表不要全屏显示」。定宽后 10 列
+  // （min-width 合计约 1370px）放不下，横向滚动由 el-table 自身承接 ——
+  // 序列号列 fixed="left"、操作列 fixed="right"，滚动时两端始终可见。
+  it('弹窗非全屏：带定宽 width，且不带 fullscreen 属性', async () => {
+    const { wrapper } = await mountDialog(TREE_ASSEMBLY);
+    const dlg = wrapper.find('.mock-dialog');
+    expect(dlg.exists()).toBe(true);
+    // MockElDialog 故意不声明 width / fullscreen，未声明的属性会 fall through
+    // 成根元素 attribute —— 所以「没有 fullscreen」在这里是可直接观测的。
+    expect(dlg.attributes('fullscreen')).toBeUndefined();
+    expect(dlg.attributes('width')).toBe('1200');
+    // 表格高度用 max-height（行数少时按内容收缩），不再是 fullscreen 专属的
+    // height="calc(100vh - 220px)"。
+    const table = wrapper.findComponent({ name: 'ElTable' });
+    expect(table.props('maxHeight')).toBe('52vh');
     wrapper.unmount();
   });
 
