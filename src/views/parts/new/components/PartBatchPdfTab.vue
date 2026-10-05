@@ -484,13 +484,19 @@
                   />
                 </template>
               </el-table-column>
-              <!-- 2026-10-05：子件上传状态（各自那一页的单页切片 + 各自 3D）。 -->
+              <!-- 2026-10-05：子件上传状态（各自那一页的单页切片 + 各自 3D）。
+                   被指定为总装图的那一页不建出子件，它的状态格取的是同一个切片的
+                   `asmMaster` entry（这一页确实作为总装图传了）⇒ 标签改成「总装图」，
+                   免得在子件表里读成「该页作为子件传了」。状态与重试入口照旧：
+                   顶层行本来就渲染同一个 cell（见总装图那列），两处指向同一份状态。 -->
               <el-table-column label="上传" min-width="140" align="center">
                 <template #default="{ row: c }">
                   <div class="upload-cell">
                     <UploadStatusCellView
                       :cell="getRowPdfCell(c as AssemblyChildRow)"
-                      label="PDF"
+                      :label="
+                        c.page_index === (row as AssemblyRow).masterPageIndex ? '总装图' : 'PDF'
+                      "
                       :retry-disabled="cellRetryDisabled"
                       @retry="onRetryRowPdf(c as AssemblyChildRow)"
                     />

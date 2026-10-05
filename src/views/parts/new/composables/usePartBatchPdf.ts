@@ -1080,12 +1080,26 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    *
    * 2026-10-05：pdf-lib 对加密 PDF 抛 `EncryptedPDFError`、对 xref 异常的 PDF 抛
    * `ParseError`（pdfjs 能正常读，源文件区已经能看到页），所以「能预览」不代表
-   * 「能切页」。两个建行入口的按钮是裸 `@click`（Vue 不接 handler 返回的 promise），
+   * 「能切页」。三个建行入口的按钮都是裸 `@click`（Vue 不接 handler 返回的 promise），
    * 不兜住就是 unhandled rejection：不建行、不提示、用户只看到按钮按了没反应。
    */
   function sliceFailedMessage(src: PdfSource, e: unknown): string {
-    const why = e instanceof Error && e.message ? e.message : '未知原因';
-    return `切页失败：无法从「${src.filename}」切出单页 PDF（${why}）`;
+    return `切页失败：无法从「${src.filename}」切出单页 PDF（${errorReason(e)}）`;
+  }
+
+  /**
+   * 读不出页数时的提示。与 `sliceFailedMessage` **刻意分开**：这是另一个失败面 ——
+   * 手动新增的这份 PDF 从没进过 `rebuildFromUploads`（那里 pdfjs 读不动会整批中断并
+   * 弹「解析失败」），所以走到这里还读不出页数只可能是这份文件本身 pdfjs 就打不开。
+   * 混进「切页失败」会让用户以为坏的是切页那一步，换份文件重试也还是这句。
+   */
+  function pageCountFailedMessage(src: PdfSource, e: unknown): string {
+    return `无法读取「${src.filename}」的页数，子件数量无法确定（${errorReason(e)}）`;
+  }
+
+  /** 异常 → 提示里的一句话原因（两个失败文案共用同一口径）。 */
+  function errorReason(e: unknown): string {
+    return e instanceof Error && e.message ? e.message : '未知原因';
   }
 
   /** 切页在途标记。模块内局部量，不进对外返回面（模板拿不到、也就无从 `:loading`）。 */
@@ -1120,6 +1134,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /** 合并选中页 → 一个独立零件（同一 PDF）。 */
   async function mergeSelectedAsPart(): Promise<void> {
     if (guardRowMutation()) return;
+    if (rejectIfSlicing()) return;
     const byPdf = selectedByPdf();
     if (byPdf.size === 0) {
       ElMessage.warning('请先勾选页');
@@ -1143,7 +1158,20 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       });
     } else {
       // 部分页 → pdf-lib 合成
-      const merged = await mergePages(src.raw, pageIndices);
+      // 2026-10-05：与「合并为装配件」/「手动新增装配件」同一口径 —— 按钮是裸 `@click`，
+      // pdf-lib 抛错时原本是 unhandled rejection（不建行、不提示、按钮看着像坏了）。
+      // 回滚集合天然为空：合成产物是 `mergePages` 成功之后才 push 进 allPdfs 的，
+      // 抛错时一个条目都没登记，没有半成品要摘。
+      pageSlicing = true;
+      let merged: Blob;
+      try {
+        merged = await mergePages(src.raw, pageIndices);
+      } catch (e) {
+        ElMessage.error(sliceFailedMessage(src, e));
+        return;
+      } finally {
+        pageSlicing = false;
+      }
       const newUid = `syn-${makeUid()}`;
       allPdfs.value.push({
         uid: newUid,
@@ -1524,28 +1552,41 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     if (rejectIfSlicing()) return;
     if (!manualAsmFormValid.value) return;
     const f = manualAsmForm.file!;
-    const totalPages = await countPdfPages(f);
     const pdfUid = `manual-asm-${makeUid()}`;
     const manualSource: PdfSource = {
       uid: pdfUid,
       raw: f,
       filename: f.name,
-      totalPages,
+      // 下面读出页数后就地补上；先给 0 是为了让失败提示能用上这个 source（带文件名）
+      totalPages: 0,
       synthesized: false,
     };
     // 2026-10-05：与「合并为装配件」同一口径 —— 每个子件只持自己那一页的单页切片。
     // 原始 PDF 也进 allPdfs，一起纳入回滚：切页失败时行没建出来，留着它会让用户重试时
     // 多出一份重复的源文件（源文件区是按 `!synthesized` 展示的，删得掉但看不见因果）。
+    //
+    // 重入闸门必须占在**任何 await 之前**：`countPdfPages` 是这里最慢的一步（pdfjs 要解析
+    // 整份文件），占晚了对话框「添加」按钮在解析期间就变成可连点 ⇒ 建出两行重复装配件
+    // （`POST /assemblies` 无幂等键）。`countPdfPages` 也因此必须落在 try 里：flag 已置位
+    // 而 await 在 try 外的话，它一抛错 `pageSlicing` 就永远停在 true，本入口被焊死。
     const slices: PdfSource[] = [];
+    // 失败发生在哪一步：`pages` = 连页数都读不出来（另一个失败面，见 `pageCountFailedMessage`）。
+    let phase: 'pages' | 'slice' = 'pages';
     pageSlicing = true;
+    let totalPages = 0;
     try {
+      totalPages = await countPdfPages(f);
+      manualSource.totalPages = totalPages;
+      phase = 'slice';
       allPdfs.value.push(manualSource);
       const srcDoc = await loadPdfDoc(f);
       for (let p = 0; p < totalPages; p++)
         slices.push(await pushPageSlice(manualSource, srcDoc, p));
     } catch (e) {
       rollbackPushedSources([manualSource.uid, ...slices.map((s) => s.uid)]);
-      ElMessage.error(sliceFailedMessage(manualSource, e));
+      ElMessage.error(
+        phase === 'pages' ? pageCountFailedMessage(manualSource, e) : sliceFailedMessage(manualSource, e),
+      );
       return;
     } finally {
       pageSlicing = false;
@@ -1726,9 +1767,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       if (r.three_d_index !== null)
         attachThreeD({ rowKind: 'standalone', rowUid: r.uid }, r.three_d_index);
     }
-    // 装配件子件走 effectiveChildren：被指定为总装图的那一页不建出子件，它的 3D 也就
-    // 永不上传 —— 仍遍历全量 children 会挂出一个没有 job、也不占状态格的死 entry
-    //（`buildUploadJobs` 只对 `createdTargets` 里的 rowUid 建 job）。
+    // 装配件子件走 effectiveChildren，与建单口径（buildAssemblyPayload）对齐：被指定为
+    // 总装图的那一页不建出子件，遍历它只会挂出一个没有 job 的 entry。
+    // 2026-10-05：这一处**对外不可观测** —— 不建 job 就不进 jobsByCellKey，syncCells 也不
+    // 会凭空造 cell，composable 的返回面上看不出差别。保留这个写法是为了不给「一个
+    // PdfSource 同时挂 asmChild + asmMaster 两种 ref」留下悬空引用；配套用例锁的是
+    // 用户可见的那条不变式：被排除那一行不占 3D 状态格。
     for (const a of assemblies.value) {
       for (const c of effectiveChildren(a)) {
         if (c.three_d_index !== null) {

@@ -42,11 +42,25 @@ const mocks = vi.hoisted(() => ({
   copyPages: vi.fn(),
   /** > 0 时：第 N 次 copyPages（1-based）抛错，模拟加密 / xref 异常导致的切页中途失败。 */
   failOnCopyPagesCall: 0,
+  /** true 时：`PDFDocument.load` 抛错，模拟 pdf-lib 读不动（加密 / xref 异常）的那份文件。 */
+  failOnLoad: false,
+  /** true 时：`countPdfPages` 抛错，模拟 pdfjs 都读不出页数（与切页失败是两个失败面）。 */
+  pageCountThrows: false,
+  /** 非 null 时：`countPdfPages` 先 await 这个 promise，用于把「解析在途」那段挂起来。 */
+  pageCountGate: null as Promise<void> | null,
   /** draft.saver.schedule 收到的 payload 队列（末条即最新快照）。 */
   scheduled: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock('@/utils/pdfjs', () => ({ countPdfPages: async () => mocks.pageCount }));
+// 2026-10-05：`countPdfPages` 是「手动新增装配件」里最慢的一步，也是重入闸门必须占在
+// 它之前的原因。挂起（gate）/ 抛错（throws）两个开关都在这里，不塞进用例里各自 stub。
+vi.mock('@/utils/pdfjs', () => ({
+  countPdfPages: async () => {
+    if (mocks.pageCountGate) await mocks.pageCountGate;
+    if (mocks.pageCountThrows) throw new Error('Invalid PDF structure');
+    return mocks.pageCount;
+  },
+}));
 vi.mock('@/api/parts', () => ({
   batchCreateParts: mocks.batchCreateParts,
   uploadPartDrawing: mocks.uploadPartDrawing,
@@ -104,7 +118,15 @@ vi.mock('pdf-lib', () => {
     },
     save: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46, ...added]),
   });
-  return { PDFDocument: { load: async () => doc(), create: async () => doc() } };
+  return {
+    PDFDocument: {
+      load: async () => {
+        if (mocks.failOnLoad) throw new Error('Input buffer contains an encrypted PDF');
+        return doc();
+      },
+      create: async () => doc(),
+    },
+  };
 });
 vi.mock('element-plus', () => ({
   ElMessage: {
@@ -226,6 +248,9 @@ beforeEach(() => {
   // 而「造页 + 把 addPage 记进字节」正是它要证明的东西。
   mocks.copyPages.mockClear();
   mocks.failOnCopyPagesCall = 0;
+  mocks.failOnLoad = false;
+  mocks.pageCountThrows = false;
+  mocks.pageCountGate = null;
   mocks.scheduled.length = 0;
 });
 
@@ -1705,7 +1730,10 @@ describe('装配件逐页分发', () => {
     await flushPromises();
     const api = need();
     const asm = await mountAssembly(api);
-    // 3D 是建行时按图号挂到子件上的，发生在用户指定总装图之前 ⇒ 两页都挂着 3D
+    // 3D 索引在这里是手搓的：真实流程里**合并出来的装配件子件拿不到 3D** ——
+    // `linkThreeDModelsToRows` 全仓只有一个调用点（`rebuildFromUploads` 内），执行前
+    // `assemblies.value` 已清空，而 `onThreeDModelChange` 只追加文件、不重新挂载。
+    // 本用例只锁「指定总装图后被排除的那一行不产生 3D job、不占 3D 状态格」这条不变式。
     api.threeDModelFiles.value = [up(9, 'ASM-1_总装.step'), up(10, 'ASM-1-总装-02.step')];
     asm.children[0]!.three_d_index = 0;
     asm.children[1]!.three_d_index = 1;
@@ -1810,6 +1838,179 @@ describe('装配件逐页分发', () => {
     expect(mocks.copyPages).toHaveBeenCalledTimes(2);
     expect(mocks.warning.mock.calls.map((c) => c[0]).join('|')).toContain('正在切页');
     // 第二次点击被闸门挡在切页之前 ⇒ 不该冒出任何切页失败提示
+    expect(mocks.error).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  // 2026-10-05：下面这组锁「三个切页入口同一套兜底」。`load` 抛错是 pdf-lib 读不动的
+  // 那一类（加密 / xref 异常），它发生在**任何切片登记之前**，比中途失败的用例更靠前。
+  it('pdf-lib 读不动：合并为零件（部分页）弹出带文件名的错误、不建行', async () => {
+    mocks.pageCount = 3;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'P-7_加密.pdf')];
+    await api.rebuildFromUploads();
+    api.selectedPages.value = new Set(['pdf-1:0', 'pdf-1:1']);
+    mocks.failOnLoad = true;
+
+    await api.mergeSelectedAsPart();
+
+    expect(api.standaloneParts.value).toHaveLength(0);
+    const errText = mocks.error.mock.calls.map((c) => c[0] as string).join('|');
+    expect(errText).toContain('P-7_加密.pdf');
+    // 失败时一个条目都没登记，不留悬空切片
+    expect(api.allPdfs.value.filter((s) => s.synthesized)).toHaveLength(0);
+    w.unmount();
+  });
+
+  it('pdf-lib 读不动：合并为装配件弹出带文件名的错误、不建行', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'ASM-7_加密.pdf')];
+    await api.rebuildFromUploads();
+    api.selectedPages.value = new Set(['pdf-1:0', 'pdf-1:1']);
+    mocks.failOnLoad = true;
+
+    await api.mergeSelectedAsAssembly();
+
+    expect(api.assemblies.value).toHaveLength(0);
+    const errText = mocks.error.mock.calls.map((c) => c[0] as string).join('|');
+    expect(errText).toContain('ASM-7_加密.pdf');
+    // load 在 push 原始源之前就抛了 ⇒ allPdfs 只剩重建时那一份
+    expect(api.allPdfs.value.filter((s) => s.synthesized)).toHaveLength(0);
+    expect(api.allPdfs.value).toHaveLength(1);
+    w.unmount();
+  });
+
+  it('pdf-lib 读不动：手动新增装配件弹出带文件名的错误、不建行、原始 PDF 回滚', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    await api.addManualAssembly();
+    api.manualAsmForm.drawing_no = 'E42-ASM-007';
+    api.manualAsmForm.file = new File([new Uint8Array([1])], 'manual-7_加密.pdf');
+    mocks.failOnLoad = true;
+
+    await api.confirmManualAssembly();
+
+    expect(api.assemblies.value).toHaveLength(0);
+    const errText = mocks.error.mock.calls.map((c) => c[0] as string).join('|');
+    expect(errText).toContain('manual-7_加密.pdf');
+    // 那份原始 PDF 已进 allPdfs，失败后必须摘掉（否则用户重试会多出一份重复源文件）
+    expect(api.allPdfs.value).toHaveLength(0);
+    w.unmount();
+  });
+
+  it('合并为零件切页在途连点：只建出一行（重入闸门同样覆盖这个入口）', async () => {
+    mocks.pageCount = 3;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'P-2_总装.pdf')];
+    await api.rebuildFromUploads();
+    api.selectedPages.value = new Set(['pdf-1:0', 'pdf-1:1']);
+
+    await Promise.all([api.mergeSelectedAsPart(), api.mergeSelectedAsPart()]);
+
+    expect(api.standaloneParts.value).toHaveLength(1);
+    expect(mocks.warning.mock.calls.map((c) => c[0]).join('|')).toContain('正在切页');
+    expect(mocks.error).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it('合并为零件的全部页分支：不占重入闸门（无合成，后续合并为装配件照常）', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    api.pdfFiles.value = [up(1, 'P-3_单页.pdf')];
+    await api.rebuildFromUploads();
+
+    // 全部页 ⇒ 直接复用原 PDF，根本不调 pdf-lib
+    api.selectedPages.value = new Set(['pdf-1:0', 'pdf-1:1']);
+    await api.mergeSelectedAsPart();
+    expect(mocks.copyPages).not.toHaveBeenCalled();
+    expect(api.standaloneParts.value).toHaveLength(1);
+    // 没有合成条目，行直接指向原始 PDF
+    expect(api.standaloneParts.value[0]!.pdfSourceUid).toBe('pdf-1');
+    expect(api.allPdfs.value.filter((s) => s.synthesized)).toHaveLength(0);
+
+    // 闸门没被占死：紧接着合并为装配件（这步要切页）不会被「正在切页」挡掉
+    mocks.warning.mockClear();
+    api.selectedPages.value = new Set(['pdf-1:0', 'pdf-1:1']);
+    await api.mergeSelectedAsAssembly();
+    expect(api.assemblies.value).toHaveLength(1);
+    expect(mocks.warning.mock.calls.map((c) => c[0]).join('|')).not.toContain('正在切页');
+    w.unmount();
+  });
+
+  it('手动新增装配件读不出页数：文案与切页失败区分开、不建行、闸门已复位', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    await api.addManualAssembly();
+    api.manualAsmForm.drawing_no = 'E42-ASM-008';
+    api.manualAsmForm.file = new File([new Uint8Array([1])], 'manual-8_坏页数.pdf');
+    mocks.pageCountThrows = true;
+
+    await api.confirmManualAssembly();
+
+    expect(api.assemblies.value).toHaveLength(0);
+    const errText = mocks.error.mock.calls.map((c) => c[0] as string).join('|');
+    expect(errText).toContain('manual-8_坏页数.pdf');
+    // 两个失败面要说不同的话：读页数失败不许说成切页失败
+    expect(errText).toContain('页数');
+    expect(errText).not.toContain('切页失败');
+    expect(api.allPdfs.value).toHaveLength(0);
+
+    // 闸门已复位（finally 覆盖到 countPdfPages）：换一份正常文件仍能新增
+    mocks.error.mockClear();
+    mocks.warning.mockClear();
+    mocks.pageCountThrows = false;
+    await api.addManualAssembly();
+    api.manualAsmForm.drawing_no = 'E42-ASM-009';
+    api.manualAsmForm.file = new File([new Uint8Array([1])], 'manual-9_正常.pdf');
+    await api.confirmManualAssembly();
+
+    expect(api.assemblies.value).toHaveLength(1);
+    expect(mocks.warning.mock.calls.map((c) => c[0]).join('|')).not.toContain('正在切页');
+    expect(mocks.error).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it('手动新增装配件在读页数期间连点：只建出一行（闸门占在 countPdfPages 之前）', async () => {
+    mocks.pageCount = 2;
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    api.pdfForm.customerL1Id = 'c-root';
+    await api.addManualAssembly();
+    api.manualAsmForm.drawing_no = 'E42-ASM-010';
+    api.manualAsmForm.file = new File([new Uint8Array([1])], 'manual-10_总装.pdf');
+    // 把「读页数」这一步挂起，模拟大 PDF 的 pdfjs 解析耗时
+    let release: () => void = () => undefined;
+    mocks.pageCountGate = new Promise<void>((r) => (release = r));
+
+    const p1 = api.confirmManualAssembly();
+    const p2 = api.confirmManualAssembly();
+    release();
+    await Promise.all([p1, p2]);
+
+    expect(api.assemblies.value).toHaveLength(1);
+    // 只切了一轮（2 页 = 2 次 copyPages），第二次点击没进切页
+    expect(mocks.copyPages).toHaveBeenCalledTimes(2);
+    expect(mocks.warning.mock.calls.map((c) => c[0]).join('|')).toContain('正在切页');
     expect(mocks.error).not.toHaveBeenCalled();
     w.unmount();
   });
