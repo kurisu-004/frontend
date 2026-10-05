@@ -73,7 +73,8 @@ export interface ToShipVars {
 }
 
 /** 2026-10-03：指定工序（`POST /prod/batches/{batch_id}/to-process`）的 mutation 入参。
- *  `processCode` / `shelfCode` 同样只进提示文案（它们由视图从 options 里查出来）。 */
+ *  `processCode` / `shelfCode` 同样只进提示文案（它们由视图从 options 里查出来）；
+ *  `processName` / `shelfName` 只进扫码树写后本地回写（「工序」「当前位置」两列）。 */
 export interface ToProcessVars {
   batchId: string;
   shelfId: string;
@@ -84,16 +85,36 @@ export interface ToProcessVars {
   label: string;
   processCode: string;
   shelfCode: string;
+  processName: string;
+  shelfName: string;
 }
 
 /** 2026-10-05：送检（`POST /prod/batches/{batch_id}/to-inspection`）的 mutation 入参。
- *  `targetInspectionShelfId` 是目标品检架；`label` 只进成功提示。 */
+ *  `targetInspectionShelfId` 是目标品检架；`label` 只进成功提示，
+ *  `targetShelfName` 只用于扫码树写后本地回写的「当前位置」列。 */
 export interface ToInspectionVars {
   batchId: string;
   targetInspectionShelfId: string;
   version: number;
   quantity: number | null;
   label: string;
+  targetShelfName: string;
+}
+
+/** 流转后要写进扫码树批次节点的目标列。`undefined` = 保持原值（后端该列本就未变），
+ *  `null` = 清空（后端出池清了 `current_process_id` / holder 这类列）。 */
+interface ScanTreeBatchTarget {
+  status: string;
+  location?: string | null;
+  holderDisplay?: string | null;
+  processName?: string | null;
+}
+
+/** 三个写端点的响应里与本地回写有关的两段。`part` 是操作后 part 的最新投影，
+ *  `new_batch_id` 非 null = 走了部分流转的拆批分支。 */
+interface ScanTreeWriteResult {
+  part?: { status?: string; version?: number } | null;
+  new_batch_id?: string | null;
 }
 
 export const useInspectionListStore = defineStore('inspection-list', () => {
@@ -302,8 +323,13 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     mutationKey: ['inspection', 'to-ship'],
     mutationFn: ({ batchId, version, quantity }: ToShipVars) =>
       toShip(batchId, { version, quantity }),
-    onSuccess: async (_data, vars) => {
+    onSuccess: async (data, vars) => {
       await invalidateInspectionQuery();
+      // 品检通过只翻 status（后端该分支不动 location / holder / 工序列）⇒ 目标列全留空
+      // 表示「保持原值」。
+      if (applyScanTreeTransition(vars.batchId, { status: 'READY_TO_SHIP' }, data, vars.quantity)) {
+        await resyncScanTree();
+      }
       ElMessage.success(`零件 ${vars.label} 品检通过${vars.quantity ? ` × ${vars.quantity}` : ''}`);
     },
     onError: async (e: Error & { code?: number }) => {
@@ -327,8 +353,24 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
         note,
         quantity,
       }),
-    onSuccess: async (_data, vars) => {
+    onSuccess: async (data, vars) => {
       await invalidateInspectionQuery();
+      // 指定工序 = 打回生产：location 落目标生产架、holder 换成该架、工序换成下一道。
+      if (
+        applyScanTreeTransition(
+          vars.batchId,
+          {
+            status: 'IN_PROCESS',
+            location: 'PRODUCTION_SHELF',
+            holderDisplay: vars.shelfName,
+            processName: vars.processName,
+          },
+          data,
+          vars.quantity,
+        )
+      ) {
+        await resyncScanTree();
+      }
       ElMessage.success(
         `零件 ${vars.label} 已指定下一道工序 ${vars.processCode}，放到生产货架 ${vars.shelfCode}`,
       );
@@ -351,8 +393,24 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
         version,
         quantity,
       }),
-    onSuccess: async (_data, vars) => {
+    onSuccess: async (data, vars) => {
       await invalidateInspectionQuery();
+      // 送检 = 出池：location 落目标品检架、holder 换成该架、工序列被后端清空。
+      if (
+        applyScanTreeTransition(
+          vars.batchId,
+          {
+            status: 'INSPECTION',
+            location: 'INSPECTION_SHELF',
+            holderDisplay: vars.targetShelfName,
+            processName: null,
+          },
+          data,
+          vars.quantity,
+        )
+      ) {
+        await resyncScanTree();
+      }
       ElMessage.success(`零件 ${vars.label} 已送检${vars.quantity ? ` × ${vars.quantity}` : ''}`);
     },
     onError: async (e: Error & { code?: number }) => {
@@ -409,6 +467,61 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     scanTree,
     clearScanTree,
   };
+
+  // ============ 扫码树：写后本地回写（2026-10-05）============
+  // 三个写 mutation 的 onSuccess 只失效列表前缀（键前缀 `inspection`），而扫码树是
+  // 普通 ref、不在 query 缓存里 ⇒ 同一个弹窗内会一直停在流转前的状态：操作列的按钮
+  // 矩阵不跟着变，用户再点一次必然 40901。这里按后端「一次流转 = 批次 version +1」的
+  // 语义就地改树；部分流转（拆批）本地补不出被流转的那一行，交 resyncScanTree 重拉。
+
+  /** 把一次流转的结果写进当前扫码树。返回 true = 调用方需要 `resyncScanTree()` 重拉。
+   *
+   *  拆批分支（响应 `new_batch_id` 非 null）是本地补不出来的一档：后端把被流转的那部分
+   *  拆成**新批次**并翻它的状态，而响应里的 `new_batch_id` 是留下的 remainder（就是本次
+   *  传入的那个 batchId），新批次的 id 全程不返回 ⇒ 本地构造不出那一行。故本地只回写
+   *  remainder 自身（数量减、version +1，状态留在源状态），新批次行交重拉补。
+   *
+   *  part 节点的 status / version 直接采用响应里的 part 投影（后端 rollup 后的权威值，
+   *  本地重算 min-progress 只会猜错）。 */
+  function applyScanTreeTransition(
+    batchId: string,
+    target: ScanTreeBatchTarget,
+    result: ScanTreeWriteResult,
+    opQuantity: number | null,
+  ): boolean {
+    const tree = scanTree.value;
+    if (!tree) return false;
+    const partNode = tree.children.find((p) => p.children.some((b) => b.id === batchId));
+    const node = partNode?.children.find((b) => b.id === batchId);
+    if (partNode && result.part?.status) {
+      partNode.status = result.part.status;
+      if (typeof result.part.version === 'number') partNode.version = result.part.version;
+    }
+    if (!node) return false;
+    if (result.new_batch_id) {
+      node.quantity = Math.max(0, node.quantity - (opQuantity ?? 0));
+      node.version += 1;
+      return true;
+    }
+    node.status = target.status;
+    node.version += 1;
+    if (target.location !== undefined) node.location = target.location;
+    if (target.holderDisplay !== undefined) node.current_holder_display = target.holderDisplay;
+    if (target.processName !== undefined) node.process_name = target.processName;
+    return false;
+  }
+
+  /** 按当前树的条码重拉一次（拆批后补新批次行 / 树与后端已经对不齐时的兜底）。
+   *  失败不抛：扫码端点的错误提示由 `scanMutation.onError` 弹，这里保持已回写的树不丢。 */
+  async function resyncScanTree(): Promise<void> {
+    const serialNo = scanTree.value?.scanned_serial_no;
+    if (!serialNo) return;
+    try {
+      await scanMutation.mutateAsync(serialNo);
+    } catch {
+      // 已在 onError 提示过；这里吞掉不让写 mutation 的 onSuccess 变成失败。
+    }
+  }
 
   // ============ 切片：options（弹窗下拉的候选数据）============
   // 2026-10-03：替代旧版视图里的 3 处裸调（listShelves ×2 + listProcesses）——

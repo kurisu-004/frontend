@@ -663,6 +663,11 @@ export interface ScanInspectPayload {
   quantity?: number | null;
 }
 
+/** ⚠️ 2026-10-05 起本封装在生产侧**零调用方**：待品检页的「快捷品检」已改成
+ *  `GET /prod/inspection/scan/{serial_no}` 取树 + `to-inspection`（送检）/
+ *  `to-ship`（品检通过）/ `to-process`（指定工序）三个显式端点，快捷品检那套
+ *  pass/pass=false 分流不再有调用点。后端 `scan-inspect` 端点仍在，签名照上注释
+ *  保留待用，不要当死代码删。 */
 export async function scanInspect(batchId: string, payload: ScanInspectPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/scan-inspect`,

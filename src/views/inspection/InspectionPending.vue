@@ -247,6 +247,7 @@
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { useConfirm } from '@/composables/useConfirm';
 import { useDialogSize } from '@/composables/useDialogSize';
@@ -425,10 +426,14 @@ function onFailDialogClosed(): void {
 async function onFailConfirm(): Promise<void> {
   if (!failTarget.value || !failProcessId.value || !failShelfId.value) return;
   const row = failTarget.value;
-  const shelfCode =
-    store.options.productionShelves.find((s) => String(s.id) === failShelfId.value)?.code ?? '';
-  const processCode =
-    store.options.processes.find((p) => String(p.id) === failProcessId.value)?.code ?? '';
+  // code 进提示文案、name 进扫码树写后本地回写（「当前位置」「工序」两列）—— 写端点
+  // 的响应只回 part 投影，批次行的展示字段前端自己最清楚。
+  const targetShelf = store.options.productionShelves.find(
+    (s) => String(s.id) === failShelfId.value,
+  );
+  const targetProcess = store.options.processes.find((p) => String(p.id) === failProcessId.value);
+  const shelfCode = targetShelf?.code ?? '';
+  const processCode = targetProcess?.code ?? '';
   if (
     !(await confirmDangerous(
       '指定工序',
@@ -452,6 +457,8 @@ async function onFailConfirm(): Promise<void> {
       label: row.serial_no || row.drawing_no,
       processCode,
       shelfCode,
+      processName: targetProcess?.name ?? '',
+      shelfName: targetShelf?.name ?? '',
     });
     failDialogVisible.value = false;
   } finally {
@@ -486,27 +493,40 @@ function toBatchRow(batch: ScanBatchOut): InspectionBatchRow | null {
 
 function onScanTreePass(batch: ScanBatchOut): void {
   const row = toBatchRow(batch);
-  if (row) openPassDialog(row);
+  // 正常路径不可达（批次行就是从当前树上来的），但真发生（树被并发扫码换掉）时用户
+  // 点按钮毫无反馈最让人困惑，补一句提示。
+  if (!row) {
+    ElMessage.warning('该批次已不在当前扫码树里，请关闭弹窗后重新扫码');
+    return;
+  }
+  openPassDialog(row);
 }
 
 function onScanTreeAssignProcess(batch: ScanBatchOut): void {
   const row = toBatchRow(batch);
-  if (row) openFailDialog(row);
+  if (!row) {
+    ElMessage.warning('该批次已不在当前扫码树里，请关闭弹窗后重新扫码');
+    return;
+  }
+  openFailDialog(row);
 }
 
 async function onInspectionScan(rawCode: string): Promise<void> {
   const code = rawCode.trim();
   if (!code) return;
   // 已有 dialog 在显示时不抢流程（品检通过 / 指定工序 / 树形弹窗三者任一开着都跳过）——
-  // 否则会在用户正填数量的半路上换掉整棵树的上下文。
+  // 否则会在用户正填数量的半路上换掉整棵树的上下文。守卫必须在 await 之前判。
   if (passDialogVisible.value || failDialogVisible.value || scanTreeOpen.value) {
     return;
   }
+  // 乐观开窗：先开窗再发请求，弹窗内的 v-loading 才是活的（等请求回来才开窗的话，
+  // 渲染时请求早已 settle，loading 永远是死绑定，请求期间零反馈）。失败关窗。
+  scanTreeOpen.value = true;
   try {
     await store.mutations.scanMutation.mutateAsync(code);
-    scanTreeOpen.value = true;
   } catch {
-    // 查不到 / 其它错误的提示已在 store 的 scanMutation.onError 弹过，这里不重复。
+    // 查不到 / 其它错误的提示已在 store 的 scanMutation.onError 弹过，这里只收窗。
+    scanTreeOpen.value = false;
   }
 }
 

@@ -1,20 +1,27 @@
 // @vitest-environment happy-dom
 // src/views/inspection/__tests__/ScanTreeDialog.spec.ts
 //
-// 2026-10-05 新增：扫码树弹窗的**渲染 / 交互契约**回归守卫。覆盖 7 组用例：
+// 2026-10-05 新增：扫码树弹窗的**渲染 / 交互契约**回归守卫。覆盖 9 组用例：
 //
 //  1. 树形结构：装配件树 = 1 个装配件行 + N 个零件行 + 每个零件下 M 个批次行；
 //     独立件树没有装配件行。`row-key` 是函数且**按层加前缀**（三层 id 都来自雪花流，
 //     跨层撞车会让 el-table 的展开态串行）。
 //  2. `tree-props.children` 声明了子节点键（缺了就是平铺、树形失效）。
 //  3. 按钮矩阵：INSPECTION → 品检通过 + 指定工序；PENDING / PROGRAMMING / IN_PROCESS
-//     → 送检；READY_TO_SHIP 等其它状态无按钮；装配件 / 零件行不渲染操作按钮。
+//     → 送检（IN_PROCESS 还要过 location 闸门）；READY_TO_SHIP 等其它状态无按钮；
+//     装配件 / 零件行不渲染操作按钮。
 //  4. 返修守卫：`is_repairing` 的批次行「指定工序」禁用。
-//  5. 高亮：`is_scanned` 的行带 row-scanned 类（扫装配件时全部不亮）。
-//  6. emit 载荷：「品检通过」「指定工序」抛的是**批次**行，且 `version` 是
+//  5. 高亮**三档**（照抄后端 `is_scanned`，不在前端按 hit_kind 反推）：独立件 /
+//     装配件**子件**（hit_kind 仍 PART + assembly 非空，只有被扫中那个子件亮）/
+//     装配件条码（全不亮）；另断加急行加 `row-urgent`。
+//  6. 展示列：当前位置优先 holder 名，无 holder 退到 location 的中文兜底，
+//     都没有给 `—`（不吐枚举原文）。
+//  7. emit 载荷：「品检通过」「指定工序」抛的是**批次**行，且 `version` 是
 //     `t_part_batch.version`（不是零件节点的 version —— 两个计数器混用必 409）。
-//  7. 送检：行内面板选品检架（候选来自 props）+ 数量 → 调 `toInspection`（批次 id +
-//     批次 version）；未选品检架时「确认送检」禁用、不发请求。
+//  8. 送检：行内面板选品检架（候选来自 props）+ 数量 → 调 `toInspection`（批次 id +
+//     批次 version + 目标架名）；未选品检架时「确认送检」禁用、不发请求；成功后树就地
+//     更新（状态 / 当前位置 / 按钮矩阵一起变）。
+//  9. 关闭弹窗清树 + 清行内面板态；`v-loading` 绑扫码请求的在飞态。
 //
 // 为什么用 EP 模板桩而不是真 el-table：el-table ↔ el-table-column 的插槽作用域协议
 // （列的 `{row}` 由 EP 从 table 上下文注入）与三层展开都不该由本用例复刻 ——
@@ -37,7 +44,7 @@ import {
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
-import type { ScanTreeOut } from '@/api/inspection';
+import type { ScanPartOut, ScanTreeOut } from '@/api/inspection';
 import type { Shelf } from '@/types/shelf';
 
 vi.mock('element-plus', () => ({
@@ -153,12 +160,18 @@ const PART_B = {
   ],
 };
 
-/** 扫到装配件条码：顶层带 assembly，各行 is_scanned 全 false。 */
+/** 把某个零件节点下所有批次的 is_scanned 抹成 false（扫装配件条码那一档的 wire 形态）。 */
+function withNoScan(part: ScanPartOut): ScanPartOut {
+  return { ...part, children: part.children.map((b) => ({ ...b, is_scanned: false })) };
+}
+
+/** 扫到装配件条码：顶层带 assembly，各行 is_scanned 全 false（命中的是装配件本身，
+ *  它自己没有批次 ⇒ 后端无批次可标）。 */
 const TREE_ASSEMBLY: ScanTreeOut = {
   hit_kind: 'ASSEMBLY',
   scanned_serial_no: 'F1006',
   assembly: ASSEMBLY,
-  children: [PART_A, PART_B],
+  children: [withNoScan(PART_A), withNoScan(PART_B)],
 };
 
 /** 扫到子件条码：没有 assembly，顶层就是零件数组。 */
@@ -167,6 +180,15 @@ const TREE_PART: ScanTreeOut = {
   scanned_serial_no: 'F1006-01',
   assembly: null,
   children: [PART_A],
+};
+
+/** 扫到**装配件的子件**条码（产线最常见的一档）：hit_kind 仍是 'PART'，但 assembly
+ *  非空 ⇒ 树里带装配件根行 + 全部兄弟子件，只有被扫中那个子件的批次 is_scanned=true。 */
+const TREE_ASSEMBLY_CHILD: ScanTreeOut = {
+  hit_kind: 'PART',
+  scanned_serial_no: 'F1006-01',
+  assembly: ASSEMBLY,
+  children: [PART_A, PART_B],
 };
 
 const SHELVES = [
@@ -397,7 +419,9 @@ async function mountDialog(tree: ScanTreeOut) {
     },
   });
   const store = useInspectionListStore();
-  store.mutations.scanTree = tree;
+  // 深拷贝后再进 store：写后本地回写会就地改树（改的就是 store 里那个对象），
+  // 共享同一份 module 级常量会让用例之间互相污染。
+  store.mutations.scanTree = structuredClone(tree) as ScanTreeOut;
   await flushPromises();
   return { wrapper, store };
 }
@@ -490,17 +514,130 @@ describe('ScanTreeDialog', () => {
     wrapper.unmount();
   });
 
-  it('is_scanned 的行高亮（扫装配件时全部不亮）', async () => {
+  it('is_scanned 高亮三档：独立件 / 装配件子件 / 装配件条码，全部照抄后端 flag', async () => {
+    // 档 1：扫独立件 —— 树里只有它，被扫中的零件行 + 它的 is_scanned 批次行亮。
     const { wrapper } = await mountDialog(TREE_PART);
     const classes = wrapper.findAll('.mock-row').map((r) => r.classes().join(' '));
     expect(classes[0]).toContain('row-scanned'); // 被扫中的零件
     expect(classes[1]).toContain('row-scanned'); // 它的 is_scanned 批次
-    expect(classes[2]).not.toContain('row-scanned');
+    expect(classes[2]).not.toContain('row-scanned'); // 同件的 is_scanned=false 批次
     wrapper.unmount();
 
-    const { wrapper: w2 } = await mountDialog(TREE_ASSEMBLY);
-    expect(w2.findAll('.mock-row').every((r) => !r.classes().includes('row-scanned'))).toBe(true);
+    // 档 2：扫**装配件的子件**（hit_kind 仍 PART、assembly 非空）—— 装配件根行与
+    // 兄弟子件全不亮，只有被扫中那个子件的行亮。产线最常见的一档。
+    const { wrapper: w2 } = await mountDialog(TREE_ASSEMBLY_CHILD);
+    const byKey = (key: string) =>
+      w2
+        .findAll('.mock-row')
+        .find((r) => r.attributes('data-key') === key)
+        ?.classes() ?? [];
+    expect(byKey('ASSEMBLY_9000000000001')).not.toContain('row-scanned');
+    expect(byKey('PART_9000000000011')).toContain('row-scanned'); // 被扫中的子件
+    expect(byKey('BATCH_9000000000101')).toContain('row-scanned'); // 它的 is_scanned 批次
+    expect(byKey('BATCH_9000000000102')).not.toContain('row-scanned');
+    // 兄弟子件整棵（零件行 + 它的批次）都不亮。
+    expect(byKey('PART_9000000000012')).not.toContain('row-scanned');
+    expect(byKey('BATCH_9000000000103')).not.toContain('row-scanned');
     w2.unmount();
+
+    // 档 3：扫装配件条码 —— 后端全给 false，树上没有任何一行亮。
+    const { wrapper: w3 } = await mountDialog(TREE_ASSEMBLY);
+    expect(w3.findAll('.mock-row').every((r) => !r.classes().includes('row-scanned'))).toBe(true);
+    w3.unmount();
+  });
+
+  it('加急行加 row-urgent（照同页 InspectionTable 的红底信号），与扫码高亮可并存', async () => {
+    const tree: ScanTreeOut = {
+      ...TREE_PART,
+      children: [
+        {
+          ...PART_A,
+          is_urgent: true, // 装配件已加急，零件节点是权威来源
+          children: [PART_A.children[0], PART_A.children[1]],
+        },
+      ],
+    };
+    const { wrapper } = await mountDialog(tree);
+    // 加急从零件节点摊到它的每一行批次（批次表本身没有该列）。
+    const scanned = rowBy(wrapper, 'BATCH_9000000000101');
+    expect(scanned?.classes()).toContain('row-urgent');
+    // 被扫中 + 加急时两个类都在（底色优先级由样式书写顺序定：扫码高亮写在前者之后）。
+    expect(scanned?.classes()).toContain('row-scanned');
+    const notScanned = rowBy(wrapper, 'BATCH_9000000000102');
+    expect(notScanned?.classes()).toContain('row-urgent');
+    expect(notScanned?.classes()).not.toContain('row-scanned');
+    // 零件行自己也是加急。
+    expect(rowBy(wrapper, 'PART_9000000000011')?.classes()).toContain('row-urgent');
+    wrapper.unmount();
+  });
+
+  it('当前位置：holder 名优先，无 holder 退到 location 中文，都没有给 —', async () => {
+    const tree: ScanTreeOut = {
+      ...TREE_PART,
+      children: [
+        {
+          ...PART_A,
+          children: [
+            PART_A.children[0], // 有 holder → holder 名直出
+            { ...PART_A.children[1], location: 'PRODUCTION_SHELF' }, // 无 holder → 中文兜底
+            { ...PART_A.children[1], id: '9000000000104', location: 'OUTSOURCE_COMPANY' },
+            { ...PART_A.children[1], id: '9000000000105', location: null },
+          ],
+        },
+      ],
+    };
+    const { wrapper } = await mountDialog(tree);
+    const cell = (key: string) =>
+      rowBy(wrapper, key)
+        ?.findAll('.mock-column')
+        .find((c) => c.attributes('data-label') === '当前位置')
+        ?.text();
+    expect(cell('BATCH_9000000000101')).toBe('SH-I01');
+    expect(cell('BATCH_9000000000102')).toBe('生产架');
+    expect(cell('BATCH_9000000000104')).toBe('外协');
+    // location 与 holder 都没有才给占位符，不吐枚举原文。
+    expect(cell('BATCH_9000000000105')).toBe('—');
+    expect(cell('PART_9000000000011')).toBe('—');
+    wrapper.unmount();
+  });
+
+  it('IN_PROCESS 批次的送检按钮受 location 闸门约束（工人手上的不给）', async () => {
+    const tree: ScanTreeOut = {
+      ...TREE_PART,
+      children: [
+        {
+          ...PART_A,
+          children: [
+            { ...PART_A.children[1], status: 'IN_PROCESS', location: 'PRODUCTION_SHELF' },
+            {
+              ...PART_A.children[1],
+              id: '9000000000104',
+              status: 'IN_PROCESS',
+              location: 'WORKER',
+            },
+            { ...PART_A.children[1], id: '9000000000105', status: 'PENDING', location: 'WORKER' },
+          ],
+        },
+      ],
+    };
+    const { wrapper } = await mountDialog(tree);
+    // IN_PROCESS + PRODUCTION_SHELF → 给送检。
+    expect(
+      rowBy(wrapper, 'BATCH_9000000000102')
+        ?.findAll('button')
+        .map((b) => b.text()),
+    ).toEqual(['送检']);
+    // IN_PROCESS + WORKER → 后端必拒 20103，不给按钮。
+    const workerRow = rowBy(wrapper, 'BATCH_9000000000104');
+    expect(workerRow?.findAll('button')).toHaveLength(0);
+    expect(workerRow?.text()).toContain('—');
+    // 非 IN_PROCESS 状态不受 location 闸门约束。
+    expect(
+      rowBy(wrapper, 'BATCH_9000000000105')
+        ?.findAll('button')
+        .map((b) => b.text()),
+    ).toEqual(['送检']);
+    wrapper.unmount();
   });
 
   it('「品检通过」「指定工序」emit 的是批次行，且 version 是 t_part_batch.version', async () => {
@@ -539,6 +676,7 @@ describe('ScanTreeDialog', () => {
     expect(toInspectionMock).not.toHaveBeenCalled();
 
     // 选品检架 2 → 可提交；payload 用批次 id + 批次 version（零件的 version 是 3）。
+    // 目标品检架名一并带进 vars（写成功后 store 要用它回写「当前位置」列）。
     await pendingRow?.findAll('.mock-option')[1]?.trigger('click');
     await flushPromises();
     expect(confirmBtn()?.attributes('disabled')).toBeUndefined();
@@ -551,6 +689,62 @@ describe('ScanTreeDialog', () => {
     });
     // 提交成功后面板收起。
     expect(pendingRow?.find('.mock-select').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('送检成功后树就地更新：状态 / 当前位置变，操作列按钮随之换成品检侧动作', async () => {
+    toInspectionMock.mockResolvedValue({
+      part: { status: 'INSPECTION', version: 9 },
+      new_batch_id: null,
+    });
+    const { wrapper, store } = await mountDialog(TREE_ASSEMBLY);
+    const pendingRow = rowBy(wrapper, 'BATCH_9000000000103');
+    await pendingRow?.find('button').trigger('click');
+    await pendingRow?.findAll('.mock-option')[1]?.trigger('click');
+    await pendingRow
+      ?.findAll('button')
+      .find((b) => b.text() === '确认送检')
+      ?.trigger('click');
+    await flushPromises();
+
+    // store 里的树被本地回写：批次 status / version / location / holder 都跟上后端。
+    const batch = store.mutations.scanTree?.children[1]?.children[0];
+    expect(batch?.status).toBe('INSPECTION');
+    expect(batch?.version).toBe(2);
+    expect(batch?.location).toBe('INSPECTION_SHELF');
+    expect(batch?.current_holder_display).toBe('品检架 2');
+    expect(batch?.process_name).toBeNull();
+
+    // 表格随之重渲染：状态标签 + 当前位置 + 操作列按钮（不再是可以再点一次的「送检」）。
+    const row = rowBy(wrapper, 'BATCH_9000000000103');
+    expect(row?.attributes('data-status')).toBe('INSPECTION');
+    expect(
+      row
+        ?.findAll('.mock-column')
+        .find((c) => c.attributes('data-label') === '当前位置')
+        ?.text(),
+    ).toBe('品检架 2');
+    expect(row?.findAll('button').map((b) => b.text())).toEqual(['品检通过', '指定工序']);
+    wrapper.unmount();
+  });
+
+  it('关闭弹窗清掉树与行内送检面板的选择（下一次扫码不继承上一次的展开态）', async () => {
+    const { wrapper, store } = await mountDialog(TREE_ASSEMBLY);
+    const pendingRow = rowBy(wrapper, 'BATCH_9000000000103');
+    await pendingRow?.find('button').trigger('click');
+    await pendingRow?.findAll('.mock-option')[0]?.trigger('click');
+    await flushPromises();
+    expect(pendingRow?.find('.mock-select').exists()).toBe(true);
+
+    // el-dialog 的 closed 事件：清树 + 清面板态。
+    wrapper.findComponent({ name: 'ElDialog' }).vm.$emit('closed');
+    await flushPromises();
+    expect(store.mutations.scanTree).toBeNull();
+
+    // 同一个组件实例上模拟下一次扫码的结果：面板不该被上一次的展开态顶出来。
+    store.mutations.scanTree = structuredClone(TREE_ASSEMBLY) as ScanTreeOut;
+    await flushPromises();
+    expect(rowBy(wrapper, 'BATCH_9000000000103')?.find('.mock-select').exists()).toBe(false);
     wrapper.unmount();
   });
 

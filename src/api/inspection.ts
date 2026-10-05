@@ -7,7 +7,10 @@
 //
 // 两条后端行为是本文件契约的一部分（已实测）：
 //   - 扫装配件条码与扫其子件条码返回**同一棵树**，差别只在 `hit_kind` 与各批次的
-//     `is_scanned`（扫装配件时全部 false）；
+//     `is_scanned`，三档分别是：扫独立件 = 该件全部批次 true；扫**装配件子件**
+//     （hit_kind 'PART' + assembly 非空）= 只有被扫中那个子件的批次 true、兄弟子件
+//     全 false；扫装配件条码（hit_kind 'ASSEMBLY'）= 全部 false。渲染层的高亮一律
+//     照抄这个 flag，不要在前端按 hit_kind 反推；
 //   - 序列号会先 `trim`，空白串 / 查不到一律 HTTP 404（业务码 20101）—— 与其它
 //     端点一样由 `envelopeResponseInterceptor` 抛 `ApiError`，本文件不吞，提示由调用方
 //     的 `onError` 给。
@@ -75,12 +78,15 @@ export interface ScanBatchOut {
 
 /** 扫码响应（`ScanTreeOut`）。 */
 export interface ScanTreeOut {
-  /** `"ASSEMBLY"` = 扫到装配件条码；`"PART"` = 扫到子件 / 独立件条码。 */
-  hit_kind: string;
+  /** `"ASSEMBLY"` = 扫到装配件条码；`"PART"` = 扫到子件 / 独立件条码。
+   *  后端只有这两个字面量，`schemas.ts` 侧按 `z.enum` 守门，这里同步收窄。 */
+  hit_kind: 'ASSEMBLY' | 'PART';
   scanned_serial_no: string;
-  /** 仅 `hit_kind === 'ASSEMBLY'` 时有值；装配件节点本身没有批次。 */
+  /** 装配件节点；**扫装配件条码、或扫中的零件是某个装配件的子件时**都有值
+   *  （后端只保证 hit_kind='ASSEMBLY' ⇔ 非空，反过来不成立），独立件 / 父装配件已软删
+   *  时为 null。装配件节点本身没有批次。 */
   assembly: ScanAssemblyOut | null;
-  /** 顶层子节点：装配件树 = 全部子件；独立件树 = `[被扫中的那个 part]`。 */
+  /** 顶层子节点：装配件树（含「扫子件」那一档）= 全部子件；独立件树 = `[被扫中的那个 part]`。 */
   children: ScanPartOut[];
 }
 

@@ -2177,8 +2177,10 @@ export type ProcessDesignPartListResultSchema = z.infer<typeof processDesignPart
 // 2026-10-05 新增：品检扫码树（`GET /api/v2/prod/inspection/scan/{serial_no}`）的 Zod
 // 守门 schema。契约见 backend-rust `docs/api/production/inspection.md`。
 //
-// 响应是**一层套一层**的树：顶层 `hit_kind` 判条码是装配件还是子件；`assembly` 在
-// `hit_kind='ASSEMBLY'` 时带出装配件节点（它**没有批次**，批次挂在零件节点下）；
+// 响应是**一层套一层**的树：顶层 `hit_kind` 判条码是装配件还是零件；`assembly` 在
+// 扫到装配件条码**或**扫中的零件是某个装配件的子件时带出装配件节点（它**没有批次**，
+// 批次挂在零件节点下）—— 即「assembly 非空」不等价于「hit_kind='ASSEMBLY'」，前端
+// 分形态时两个信息都要看；
 // `children` 恒是零件数组（装配件树 = 全部子件；独立件树 = `[被扫中的那个 part]`），
 // 每个零件的 `children` 是它的**全部**批次（含终态批次 —— 终态行要在表上显示为
 // 不可操作，而不是从树上消失，否则用户会以为批次不存在）。
@@ -2255,10 +2257,12 @@ export type InspectionScanAssemblySchema = z.infer<typeof inspectionScanAssembly
 
 /** 扫码树顶层（`ScanTreeOut`）。 */
 export const inspectionScanTreeSchema = z.object({
-  /** `"ASSEMBLY"` = 扫到装配件条码；`"PART"` = 扫到子件 / 独立件条码。 */
-  hit_kind: z.string(),
+  /** `"ASSEMBLY"` = 扫到装配件条码；`"PART"` = 扫到子件 / 独立件条码。
+   *  用 enum 守门（后端只有这两个字面量）：写成 z.string() 会让「后端改了命中口径」
+   *  这类契约漂移一路溜到渲染层，靠人工看标签文案才发现。 */
+  hit_kind: z.enum(['ASSEMBLY', 'PART']),
   scanned_serial_no: z.string(),
-  /** 仅 `hit_kind === 'ASSEMBLY'` 时有值。 */
+  /** 扫装配件条码、或扫中的是某个装配件的子件时有值；独立件 / 父装配件已软删时为 null。 */
   assembly: inspectionScanAssemblySchema.nullable(),
   children: z.array(inspectionScanPartSchema),
 });
