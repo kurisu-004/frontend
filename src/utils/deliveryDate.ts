@@ -23,11 +23,11 @@
  *     `daysText` / `overdue` / `due-soon` 首次在报工台 HMI 上真正生效（此前
  *     `system_delivery_date` 恒 null，这段是死路径）；后端补上真实投影的同一次发布
  *     就会把它暴露给工人。
- *   - `views/dashboard/components/UpcomingDeliveryListDrawer.vue` / `UrgentOrderDrawer.vue`
+ *   - `views/dashboard/components/UpcomingDeliveryListDrawer.vue`
  *     / `SystemDeliveryOrdersPanel.vue` —— 早已在生产上带着这个偏差跑。
  *
  * 取舍（2026-10-04）：报工台这批改动**不顺手修**。修它要改日期串的解析口径（按本地
- * 零点构造 Date），会同时改动上面 3 个 dashboard 组件的渲染值（逾期红线的位置、倒计时
+ * 零点构造 Date），会同时改动上面 2 个 dashboard 组件的渲染值（逾期红线的位置、倒计时
  * 文案），属于另一个评审面；混进本批会让这次改动的爆炸半径失控。
  */
 export const DELIVERY_DATE_BUFFER_DAYS = 0;
