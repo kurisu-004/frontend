@@ -2,10 +2,7 @@
 //
 // 2026-10-05 新增：「制定工序」页 store（Pinia setup store）单测。
 //
-// 覆盖（14 例，与任务书 A8 清单逐条对齐；断言多从已删除的
-// usePartProcessDesign.spec.ts 平移，**驱动方式全变**：
-// `loadParts()` → `store.query.restoreState()` + `store.query.fetchList()`，
-// `q.parts.value` → `store.query.parts`）：
+// 覆盖（20 例）：
 //   T1  列表加载 + process_chain_id / assembly_id 透传
 //   T2  子件可见（assembly_id 非空的行不被过滤掉）
 //   T3  enabled 闸门：store 构造后不发请求，restoreState 后才发
@@ -15,12 +12,24 @@
 //   T7  选中无链零件不发请求，直接判空链
 //   T8  链 20701（BIZ_PROCESS_CHAIN_NOT_FOUND）视为空链
 //   T9  本地编辑立刻生效（sort_order 拍平为 0,1,…；不自动 POST）
-//   T10 连续两次 addStep() 后 save() 发的是拍平后的 [0,1]（旧回归用例，必须保留）
+//   T10 连续两次 addStep() 后 save() 发的是拍平后的 [0,1]（后端 20104 回归守卫）
 //   T11 save 成功后 process_chain_id 回写 → 分组迁移到「已制定」（setQueryData 零闪烁）
 //   T12 save 失败：ElMessage.error 被调 + 保留本地 steps 不回滚
 //   T13 $dispose 后重建 store，状态归零（Pinia hydrate 泄漏 guard）
 //   T14 el-table rowKey 与 current-row-key 的匹配契约 ——
 //       ⚠️ 放在 PartPickerList.spec.ts（happy-dom 真挂 el-table），本文件 node 环境不碰 DOM。
+//   T15 选中「已制定」零件：链**在途**时读值不播种（steps 空 / dirty=false），
+//       到达后对齐服务端 3 步（工序下拉的 code/name/category 冗余也补齐）
+//   T16 数据丢失守卫：有链零件直接 save() 发的必须是那 3 步，**不是** `{"steps": []}`
+//       （后端整组替换语义下空数组 = 清空所有步骤）
+//   T17 切到无链零件再切回 → steps 仍是 3 步、dirty=false（空草稿没被钉死）
+//   T18 resetSteps：回到服务端 steps、dirty=false、不发 POST
+//   T19 removeStep 按 uid 删一道 → 草稿与 payload 同步少一条且 sort_order 拍平
+//   T20 链加载失败 → canReset=false 且 resetSteps() 不清空草稿
+//   T21 零闪烁回写用 save() 那一刻的 params 快照（保存期间切排序不丢回写）
+//
+// ⚠️ T15~T21 必须选 **process_chain_id 非空** 的零件：只选无链零件的用例盖不到
+// 「服务端已有链」这条路径（工序加载不出来的回归就藏在那里）。
 //
 // mock 策略（照 usePendingProgrammingStore.spec.ts 骨架，理由同样成立）：
 //   - vi.mock('@/api/http')：**只**替换 `api.get` / `api.post`（importOriginal 保留
@@ -46,7 +55,11 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 // 供 vi.mock 的 importOriginal 泛型使用（@typescript-eslint/consistent-type-imports
 // 禁止内联 `typeof import('...')` 写法；沿 usePendingProgrammingStore.spec.ts 同款）
 import type * as HttpModule from '@/api/http';
-import type { ProcessDesignPartSchema } from '@/composables/queries/schemas';
+import { qk } from '@/composables/queries/keys';
+import type {
+  ProcessDesignPartListResultSchema,
+  ProcessDesignPartSchema,
+} from '@/composables/queries/schemas';
 import type { ProcessChainByPartDto, UpsertProcessChainRequest } from '@/api/processChain.contract';
 
 vi.mock('element-plus', () => ({
@@ -119,6 +132,10 @@ let partsState: ProcessDesignPartSchema[];
 let chainState: Record<string, UpsertProcessChainRequest['steps']>;
 /** T11 用：非 null 时下一次列表请求挂起，模拟 refetch 网络延迟。 */
 let listGate: Deferred<{ data: unknown }> | null;
+/** T15 用：非 null 时链请求挂起，制造「有链但在途」窗口（守卫必须能挡住播种）。 */
+let chainGate: Deferred<{ data: unknown }> | null;
+/** T20 用：非 null 时链请求抛该错（模拟 5xx），验证 resetSteps 不清空草稿。 */
+let chainError: ApiError | null;
 /** T4 用：非 null 时列表响应改用它（喂非法 payload）。 */
 let partsOverride: unknown | null;
 
@@ -168,6 +185,8 @@ async function respondGet(url: string): Promise<{ data: unknown }> {
     };
   }
   const chainId = decodeURIComponent(url.slice(CHAIN_BY_ID_PREFIX.length));
+  if (chainGate) return chainGate.promise;
+  if (chainError) throw chainError;
   const steps = chainState[chainId];
   if (!steps) {
     // 链已删 / 脏数据：后端回 20701 BIZ_PROCESS_CHAIN_NOT_FOUND（store 按空链归一）
@@ -203,11 +222,14 @@ describe('useProcessDesignStore', () => {
     // 它的调用记录 ⇒ 每例显式 clear，避免上一例的弹错串到下一例的断言。
     vi.mocked(ElMessage.error).mockClear();
     vi.mocked(ElMessage.success).mockClear();
+    vi.mocked(ElMessage.warning).mockClear();
     partsState = STUB_PARTS.map((p) => ({ ...p }));
     chainState = Object.fromEntries(
       Object.entries(STUB_CHAINS).map(([id, c]) => [id, c.steps.map((s) => ({ ...s }))]),
     );
     listGate = null;
+    chainGate = null;
+    chainError = null;
     partsOverride = null;
 
     testQueryClient = new QueryClient({
@@ -498,5 +520,185 @@ describe('useProcessDesignStore', () => {
     expect(store2.editor.steps).toHaveLength(0);
     expect(store2.editor.dirty).toBe(false);
     expect(store2.query.sortDir).toBe('ASC');
+  });
+
+  // ==================================================================
+  // 「已制定」零件的加载 / 编辑闭环（下面 7 例的共同前提：必须选一个
+  // process_chain_id **非空**的零件 —— 前面 T1~T13 全部选的是无链零件或没选，
+  // 盖不到「服务端已有链」这条路径）。
+  // ==================================================================
+
+  // ============ T15：加载已有链（在途不播种 + 到达后对齐）============
+  it('T15：选中「已制定」零件 —— 链在途时读值不播种（steps 仍空、dirty=false），到达后是服务端那 3 步', async () => {
+    const store = await bootedStore();
+    // 挂起链请求，构造「有链但在途」窗口
+    chainGate = deferred<{ data: unknown }>();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => chainCalls() === 1);
+
+    // 在途态：读 steps / totalMinutes 都不得凭空造草稿（空草稿一旦钉死，工序永远加载不出来）
+    expect(store.query.chainPending).toBe(true);
+    expect(store.editor.steps).toHaveLength(0);
+    expect(store.editor.totalMinutes).toBe(0);
+    expect(store.editor.dirty).toBe(false);
+
+    chainGate.resolve({ data: chainEnvelope('7000000000001', chainState['7000000000001'] ?? []) });
+    await waitUntil(() => store.query.chainPending === false);
+
+    expect(store.editor.steps).toHaveLength(3);
+    expect(store.editor.steps.map((s) => s.process_id)).toEqual([
+      '2000000000001',
+      '2000000000004',
+      '2000000000003',
+    ]);
+    expect(store.editor.steps.map((s) => s.sort_order)).toEqual([0, 1, 2]);
+    // 冗余字段按 process_id 二次查工序下拉补齐（服务端响应不冗余 code/name）
+    expect(store.editor.steps[0]?.process_code).toBe('CNC-01');
+    expect(store.editor.steps[0]?.process_name).toBe('粗加工');
+    expect(store.editor.steps[1]?.category).toBe('OUTSOURCE');
+    expect(store.editor.steps[0]?.note).toBe('注意装夹方向');
+    expect(store.editor.totalMinutes).toBe(45 + 90 + 15);
+    // 播种时同步落定基线 ⇒ 与服务端一致，不是 dirty
+    expect(store.editor.dirty).toBe(false);
+  });
+
+  // ============ T16：数据丢失守卫（有链零件绝不能 POST 空 steps）============
+  it('T16：选中「已制定」零件后直接 save() → POST 的是服务端那 3 步，绝不是 {"steps": []}', async () => {
+    // ⚠️ 后端 POST by-part 是整组替换：空数组 = 「保留 header 但清空所有步骤」。
+    // 旧实现有个「链在途就播种空草稿 + 读值播种」的口子，点一次保存即抹掉整条链。
+    const store = await bootedStore();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.chainPending === false);
+    expect(store.editor.dirty).toBe(false);
+
+    await store.editor.save();
+
+    expect(apiPostMock).toHaveBeenCalledTimes(1);
+    const [url, body] = apiPostMock.mock.calls[0] as [string, UpsertProcessChainRequest];
+    expect(url).toBe(`${CHAIN_BY_PART_PREFIX}${FLANGE}`);
+    expect(body.steps).toHaveLength(3);
+    expect(body.steps.map((s) => s.process_id)).toEqual([
+      '2000000000001',
+      '2000000000004',
+      '2000000000003',
+    ]);
+    expect(body.steps.map((s) => s.sort_order)).toEqual([0, 1, 2]);
+    expect(body.steps.map((s) => s.estimated_minutes)).toEqual([45, 90, 15]);
+  });
+
+  // ============ T17：切走再切回 ============
+  it('T17：切到无链零件再切回「已制定」零件 → steps 仍是 3 步、dirty=false', async () => {
+    const store = await bootedStore();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.chainPending === false);
+    expect(store.editor.steps).toHaveLength(3);
+
+    store.query.selectPart(SHELL);
+    await settle();
+    expect(store.query.chainPending).toBe(false); // 无链零件不发请求
+    expect(store.editor.steps).toHaveLength(0);
+    expect(store.editor.dirty).toBe(false);
+
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.chainPending === false);
+
+    expect(store.editor.steps).toHaveLength(3);
+    expect(store.editor.steps.map((s) => s.estimated_minutes)).toEqual([45, 90, 15]);
+    expect(store.editor.dirty).toBe(false);
+  });
+
+  // ============ T18：resetSteps ============
+  it('T18：改过草稿后 resetSteps() → 回到服务端 steps、dirty=false、不发 POST', async () => {
+    const store = await bootedStore();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.chainPending === false);
+    const serverSide = store.editor.steps.map((s) => s.process_id);
+
+    store.editor.removeStep(store.editor.steps[1]?.uid ?? '');
+    store.editor.patchStep(store.editor.steps[0]?.uid ?? '', { estimated_minutes: 999 });
+    expect(store.editor.steps).toHaveLength(2);
+    expect(store.editor.dirty).toBe(true);
+
+    store.editor.resetSteps();
+
+    expect(store.editor.steps).toHaveLength(3);
+    expect(store.editor.steps.map((s) => s.process_id)).toEqual(serverSide);
+    expect(store.editor.steps[0]?.estimated_minutes).toBe(45);
+    expect(store.editor.dirty).toBe(false);
+    expect(apiPostMock).not.toHaveBeenCalled();
+  });
+
+  // ============ T19：removeStep 按 uid ============
+  it('T19：removeStep 按 uid 删一道工序 → 草稿与 save() 的 payload 同步少一条且 sort_order 拍平', async () => {
+    const store = await bootedStore();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.chainPending === false);
+    const victim = store.editor.steps[1];
+    expect(victim?.process_id).toBe('2000000000004'); // 外协热处理
+
+    store.editor.removeStep(victim?.uid ?? '');
+
+    expect(store.editor.steps).toHaveLength(2);
+    expect(store.editor.steps.map((s) => s.process_id)).toEqual(['2000000000001', '2000000000003']);
+    expect(store.editor.steps.map((s) => s.sort_order)).toEqual([0, 1]);
+    expect(store.editor.dirty).toBe(true);
+
+    await store.editor.save();
+
+    const body = apiPostMock.mock.calls[0]?.[1] as UpsertProcessChainRequest;
+    expect(body.steps.map((s) => s.process_id)).toEqual(['2000000000001', '2000000000003']);
+    expect(body.steps.map((s) => s.sort_order)).toEqual([0, 1]);
+  });
+
+  // ============ T20：链加载失败时不得重置（否则无声丢编辑）============
+  it('T20：链加载失败 → canReset=false 且 resetSteps() 不清空草稿', async () => {
+    const store = await bootedStore();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.chainPending === false);
+    store.editor.addStep();
+    expect(store.editor.steps).toHaveLength(4);
+    expect(store.editor.dirty).toBe(true);
+
+    // 切走再切回，让链 query 重新发请求并失败（5xx ≠ 20701，不会被归一成空链）
+    store.query.selectPart(SHELL);
+    await settle();
+    chainError = new ApiError(500, 'chain boom');
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.errorMsg !== null);
+
+    expect(store.query.chainPending).toBe(false);
+    expect(store.editor.canReset).toBe(false);
+    const kept = store.editor.steps.map((s) => s.estimated_minutes);
+
+    store.editor.resetSteps();
+
+    // 草稿原样保留（serverSteps 在错误态不是权威值），并弹提示而不是静默清空
+    expect(store.editor.steps.map((s) => s.estimated_minutes)).toEqual(kept);
+    expect(store.editor.dirty).toBe(true);
+    expect(ElMessage.warning).toHaveBeenCalledWith('工艺链尚未加载完成，暂不能重置');
+  });
+
+  // ============ T21：零闪烁回写用 save() 时刻的 params 快照 ============
+  it('T21：保存期间切排序方向 → 零闪烁回写仍落在发起保存那一刻的 params 键上', async () => {
+    const store = await bootedStore(); // sort_dir = ASC
+    store.query.selectPart(SHELL);
+    await settle();
+    store.editor.addStep();
+
+    // 挂住失效 refetch，好观察 setQueryData 的效果
+    listGate = deferred<{ data: unknown }>();
+    const saved = store.editor.save();
+    // 保存请求在途时用户切了排序方向（实时 sortDir 与保存发起时已经不是同一个）
+    store.query.onSortChange('descending');
+    await settle();
+
+    const ascRows =
+      testQueryClient.getQueryData<ProcessDesignPartListResultSchema>(
+        qk.processDesignParts({ sort_dir: 'ASC', limit: PROCESS_DESIGN_LIMIT, offset: 0 }),
+      )?.items ?? [];
+    expect(ascRows.find((p) => p.id === SHELL)?.process_chain_id).toBe('7000000000005');
+
+    listGate.resolve({ data: listEnvelope() });
+    await saved;
   });
 });

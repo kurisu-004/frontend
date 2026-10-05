@@ -1,8 +1,7 @@
 // process_chain 域前端 API（v2，baseURL /api/v2，2026-09-15 Phase 5 业务全切 v2）。
 //
 // 端点（与 backend-rust/src/modules/process_chain/handler.rs 对齐）：
-//   GET  /api/v2/prod/process-chains/by-part/{part_id}  ← getProcessChainByPart（保留可用）
-//   GET  /api/v2/prod/process-chains/{chain_id}         ← getProcessChainById（2026-09-16 新增）
+//   GET  /api/v2/prod/process-chains/{chain_id}         ← getProcessChainById
 //   POST /api/v2/prod/process-chains/by-part/{part_id}  ← upsertProcessChainByPart（2026-09-29 由 PUT 改 POST）
 //   GET  /api/v2/prod/process-design/parts              ← listProcessDesignParts（2026-10-05 新增）
 //
@@ -14,7 +13,8 @@
 // 2026-09-29 变更：upsertProcessChainByPart 由 PUT 改 POST（统一惯例，整组
 // upsert 不是幂等覆盖而是 create-or-replace 语义，更贴 POST）。
 //
-// 2026-10-05 变更：删除本文件内的 listParts / listProcesses 两个转引函数。
+// 2026-10-05 变更：删除本文件内的 listParts / listProcesses / getProcessChainByPart
+//   三个转引函数。
 //   - listParts（part 域 `GET /api/v2/parts`）：「制定工序」页此前是它唯一的调用方，
 //     本页数据源已切到 `GET /prod/process-design/parts`（见 listProcessDesignParts），
 //     删后全仓零调用方。src/api/parts/crud.ts 的同名函数是另一份（零件一览 / 报工台
@@ -23,6 +23,9 @@
 //     基础数据层 `useProcessesQuery`（src/composables/queries/useProcessesQuery.ts），
 //     它自带 Zod 守门 + 30s staleTime 跨页去重，删后全仓零调用方。其它页调的是
 //     `src/api/process.ts` 的同名函数（各自的真实数据源），不受影响。
+//   - getProcessChainByPart（`GET /prod/process-chains/by-part/{part_id}`）：本域前端
+//     读链一律走 `getProcessChainById`（按 part.process_chain_id 驱动，见
+//     useProcessDesignStore），该函数删后全仓零调用方。后端端点本身保留可用。
 
 import { api, cleanParams } from '@/api/http';
 import {
@@ -31,22 +34,7 @@ import {
 } from '@/composables/queries/schemas';
 import type { ProcessChainByPartDto, UpsertProcessChainRequest } from './processChain.contract';
 
-/** GET /api/v2/prod/process-chains/by-part/{part_id}
- *  无链 → 后端 20701 BIZ_PROCESS_CHAIN_NOT_FOUND（HTTP 404）；前端用 try/catch 兜底。
- *  partId 接受 string|number：雪花 ID 字符串是前端约定（CLAUDE.md #3），
- *  但部分调用方可能传 number（兼容），最终拼接时 toString() 统一。
- *  2026-09-16：工序制定页 loadFlow 已改走 getProcessChainById（part.process_chain_id
- *  驱动），本端点后端保留可用，前端暂无消费方，保留备查。 */
-export async function getProcessChainByPart(
-  partId: string | number,
-): Promise<ProcessChainByPartDto> {
-  const resp = await api.get<ProcessChainByPartDto>(
-    `/prod/process-chains/by-part/${encodeURIComponent(String(partId))}`,
-  );
-  return resp.data;
-}
-
-/** GET /api/v2/prod/process-chains/{chain_id}（2026-09-16 新增）
+/** GET /api/v2/prod/process-chains/{chain_id}
  *  按链 id 加载工艺链；响应 shape 与 by-part 一致（ProcessChainOut，已无 part_id）。
  *  无链 / 链已删 → 后端 20701 BIZ_PROCESS_CHAIN_NOT_FOUND（HTTP 404），前端按空链兜底。 */
 export async function getProcessChainById(chainId: string): Promise<ProcessChainByPartDto> {

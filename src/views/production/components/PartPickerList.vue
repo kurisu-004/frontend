@@ -153,9 +153,9 @@ const searchKeyword = ref('');
  *  2026-09-12 新增：原 3 列表格（图号 / 名称 / 状态）改为双表分组展示；
  *  状态信息已通过「待制定 / 已制定」section 标题表达。
  *  2026-09-16 改造：分组依据从「本地懒加载缓存的 step_count > 0」改为
- *  part.process_chain_id（后端 /parts 出参新增字段；null → 待制定 / 非 null → 已制定）。
- *  2026-09-29 简化：删除「装配件不参与分组」分支（PartPickerList 已移除独立 section），
- *  所有行（纯 t_part）按 process_chain_id 直入待制定/已制定。
+ *  part.process_chain_id（null → 待制定 / 非 null → 已制定）。
+ *  2026-10-05：所有行（含装配件子件 —— 新端点刻意不加 `AND assembly_id IS NULL`）
+ *  按 process_chain_id 直入待制定 / 已制定；子件靠序列号列的「子」角标区分。
  *  拆分逻辑抽在 utils/partDesignGrouping.ts（纯函数，便于 node 环境 vitest 直测）。 */
 const pendingParts = computed<ProcessDesignPartSchema[]>(
   () => splitPartsByProcessDesign(parts.value).pending,

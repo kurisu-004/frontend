@@ -393,7 +393,4 @@ export const qk = {
    *  后端无链 / 链已删 → 20701 BIZ_PROCESS_CHAIN_NOT_FOUND，store 的 queryFn 按空链
    *  归一（不当错误态），故本页不需要第二条失效路径。 */
   processDesignChain: (chainId: string) => ['process-design', 'chain', chainId] as const,
-  /** process-design 链域前缀 —— 供将来按 part 维度的批量失效留位（当前写点已由
-   *  上面的 partsPrefix 覆盖，`['process-design','chain']` 是它的子前缀） */
-  processDesignChainPrefix: ['process-design', 'chain'] as const,
 } as const;

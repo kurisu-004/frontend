@@ -27,6 +27,9 @@
       就地改那个对象会在链 query 重算时静默丢失（草稿必须经 store 播种出来）。
     - 拖拽仍绑三参形态的 useLazyDraggable（列表内重排场景，见 useLazyDraggable 注释）：
       steps 是可写 computed，Sortable 的内建 splice 落到 store 草稿上。
+    - 「重置」按钮在链在途 / 链加载失败时置灰（store.editor.canReset，见 store 的
+      resetSteps 守卫注释）：重置的内容源是服务端 steps，那两种状态下它不是权威值，
+      点下去等于无声丢掉用户的在途编辑。
 
   CLAUDE.md 合规：
   - #10：容器 ref 位于 v-else（空态 vs 列表切换），初始 mount 时为 null → 用 useLazyDraggable。
@@ -58,8 +61,12 @@
         >
           保存
         </el-button>
-        <el-tooltip content="重置" placement="top" :disabled="!dirty">
-          <el-button :disabled="!dirty" size="small" @click="store.editor.resetSteps()">
+        <el-tooltip content="重置" placement="top" :disabled="!dirty || !canReset">
+          <el-button
+            :disabled="!dirty || !canReset"
+            size="small"
+            @click="store.editor.resetSteps()"
+          >
             <el-icon><RefreshLeft /></el-icon>
           </el-button>
         </el-tooltip>
@@ -173,6 +180,9 @@ const totalMinutes = computed<number>(() => store.editor.totalMinutes);
 const dirty = computed<boolean>(() => store.editor.dirty);
 const saving = computed<boolean>(() => store.editor.saving);
 const chainPending = computed<boolean>(() => store.query.chainPending);
+// 2026-10-05：重置的内容源是服务端 steps，链在途 / 加载失败时它不是权威值 —— 按钮置灰，
+// 否则用户点一下就无声丢掉在途编辑（store 的 resetSteps 侧也有同一道守卫）。
+const canReset = computed<boolean>(() => store.editor.canReset);
 
 function onAdd(): void {
   if (!props.partId) {

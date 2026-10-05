@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
 // src/views/production/components/__tests__/PartPickerList.spec.ts
 //
-// 2026-10-05 新增：左栏零件选择器组件单测（仓内第二例组件单测，先例 LoginCard.spec.ts）。
+// 2026-10-05 新增：左栏零件选择器组件单测（happy-dom + @vue/test-utils，真挂
+// Element Plus + mock 掉数据层，与仓内其它组件单测同形态，先例
+// views/inspection/__tests__/InspectionTable.spec.ts —— 同样是 el-table + 页面级 store）。
 //
 // 覆盖：
 //   C1（rowKey 回归守卫，B bugfix）：`:current-row-key` 传裸 id 时，待制定 / 已制定
@@ -11,11 +13,13 @@
 //        同一份断言对带前缀的旧写法必须为 false（把被修掉的 bug 钉在测试里）。
 //   C3：截断提示（total 是全量口径，> 已取行数时明示「仅显示前 N / 共 M」）。
 //   C4：装配件子件角标（assembly_id 非空 → 序列号列前置「子」标记）。
+//   C5：两张表**各自**的 `@sort-change` 都接到了 store（漏掉任一张肉眼难辨 ——
+//        两段模板几乎逐字相同，只能靠「点两个表头各断言一次」守住）。
 //
 // 为什么能挂真组件：数据层整块 mock 掉 `useProcessDesignStore`（只给 query 侧的
 // 读接口），组件其余部分（el-card / el-input / el-tag / el-table / el-table-column /
-// el-tooltip / v-loading）走 **真 Element Plus**。rowKey 是不是裸 id 只有真表格
-// 才能证伪 —— 桩掉 el-table 就等于把待测契约一起桩掉。
+// el-tooltip / v-loading）走 **真 Element Plus**。rowKey 是不是裸 id、排序事件有没有
+// 真的接到 store，只有真表格才能证伪 —— 桩掉 el-table 就等于把待测契约一起桩掉。
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick } from 'vue';
@@ -105,7 +109,8 @@ describe('PartPickerList', () => {
     const w = mountPicker(PENDING_ROW.id);
     await flush();
     const rows = rowsOf(w);
-    // 渲染顺序：待制定 3 行（齿轮 / 轴承座 / 装配件子件同表）… 实际按 process_chain_id 分组
+    // 渲染顺序：先「待制定」2 行（齿轮 + 轴承座，后者是装配件子件），再「已制定」1 行
+    // （法兰盘）—— 分组依据是 process_chain_id（见 splitPartsByProcessDesign）。
     expect(rows.length).toBe(3);
     const highlighted = rows.filter((tr) => tr.classes().includes('current-row'));
     expect(highlighted).toHaveLength(1);
@@ -219,5 +224,29 @@ describe('PartPickerList', () => {
     expect(childRow?.find('.child-flag').exists()).toBe(true);
     const plainRow = rowsOf(w).find((tr) => tr.text().includes('齿轮'));
     expect(plainRow?.find('.child-flag').exists()).toBe(false);
+  });
+
+  // ============ C5：两张表各自的 @sort-change 接线 ============
+  it('C5：两张表的序列号表头点下去都写进 store（漏接任一张肉眼难辨）', async () => {
+    const w = mountPicker(null);
+    await flush();
+    // sortable="custom" 的序列号列 ⇒ 每张 el-table 各一个 th.is-sortable
+    const headers = w.findAll('th.is-sortable');
+    expect(headers).toHaveLength(2);
+
+    // 「待制定」那张表点一下：EP 三态循环的第一态是 ascending
+    await headers[0]?.trigger('click');
+    await flush();
+    expect(storeMock.query.onSortChange).toHaveBeenCalledTimes(1);
+    expect(storeMock.query.onSortChange).toHaveBeenCalledWith('ascending');
+
+    // 「已制定」那张表点两下：ascending → descending（两张表的排序状态互不影响）
+    await headers[1]?.trigger('click');
+    await flush();
+    expect(storeMock.query.onSortChange).toHaveBeenLastCalledWith('ascending');
+    await headers[1]?.trigger('click');
+    await flush();
+    expect(storeMock.query.onSortChange).toHaveBeenLastCalledWith('descending');
+    expect(storeMock.query.onSortChange).toHaveBeenCalledTimes(3);
   });
 });

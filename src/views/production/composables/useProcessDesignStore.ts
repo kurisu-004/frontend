@@ -32,13 +32,24 @@
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0 / mutations.retry: 0；
 //   - 缓存时长：本页是页面级列表，走 main.ts 全局默认（不在共享层有限缓存约束范围内）。
 //
-// ⚠️ 服务端态与未保存草稿**分家**（本次重构的核心）：旧实现的 `flows` map 把两者混在
-// 一个字典里 —— 「服务端链」与「本地 dirty 编辑」共用一份 PartProcessFlow。现在：
+// ⚠️ 服务端态与未保存草稿**分家**（本页数据层的核心设计）：
 //   - 服务端链 → store 内第 2 个 useQuery（qk.processDesignChain）**读**，
 //     query 缓存只装已持久化的东西；
 //   - 未保存的工序草稿 → 私有 `draftSteps: Record<string, ProcessStep[]>`，**绝不**
 //     进 query 缓存（否则「刷新页面 = 恢复未保存编辑」这种反直觉行为会出现，且脏数据
-//     会被失效 / 重取悄悄覆盖）。
+//     会被失效 / 重取悄悄覆盖）；
+//   - dirty 的基线 → 私有 `savedSignatures: Record<string, string>`，只在「服务端数据
+//     对齐草稿」与「保存成功」两个时点落定快照（不是拿实时 serverSteps 比），详见
+//     isDirty 的注释。
+//
+// 两条读路径纪律（互相独立，踩中任一条都会让「已制定」零件的工序永远加载不出来）：
+//   1. `steps` 的 getter **纯读**，不播种草稿 —— 读值发生在每一次渲染里
+//      （toolbar 的 `{{ totalMinutes }}` 无条件渲染），在这里播种会凭空造出草稿；
+//   2. 服务端数据对齐草稿的 watch 只在「当前链的数据已到位」时播种，「有链但在途」
+//      直接 return（此时 serverSteps 还是空数组，播种等于把空草稿钉死）。
+// 两者叠加的后果是同一条：空草稿一旦落盘，工序列表永远是空的，而 dirty 却为 true
+// ⇒ 用户点一次「保存」就把该零件的工艺链清空（POST 空 steps = 整组替换语义下的
+// 「清空所有步骤」）。回归守卫见 __tests__/useProcessDesignStore.spec.ts 的 T15~T17。
 
 import { computed, ref, watch } from 'vue';
 import { defineStore } from 'pinia';
@@ -120,8 +131,14 @@ export const useProcessDesignStore = defineStore('process-design', () => {
   /** 当前选中的零件（null = 未选）。驱动选中零件工艺链的懒加载。 */
   const selectedPartId = ref<string | null>(null);
   /** partId → 未保存的工序草稿。**只装 dirty 编辑**，query 缓存不碰它。
-   *  语义与旧 `flows[partId].steps` 一致（按零件存盘，来回切零件不丢编辑）。 */
+   *  语义是「按零件存盘」：来回切零件不丢编辑。 */
   const draftSteps = ref<Record<string, ProcessStep[]>>({});
+  /** partId → 播种 / 保存那一刻的 `stepsSignature` 快照，即 dirty 的**基线**。
+   *  2026-10-05 新增：dirty 不再拿**实时** `serverSteps` 当基线（那样任何 refetch /
+   *  invalidate 改变服务端 steps 都会翻转 dirty，dirty 就不再是「用户有没有改过」的
+   *  意图信号；后端对响应做归一化时还会让「保存」按钮卡在可点态）。快照只在两个
+   *  时点落定：服务端数据对齐草稿时（seedDraft）、保存成功时（markSaved）。 */
+  const savedSignatures = ref<Record<string, string>>({});
   // 2026-10-05：enabled 闸门。store 实例化时 useQuery 不发请求，restoreState() 末尾
   // 置 true 才开闸（避免「默认参数首屏 + 恢复参数再屏」双 fetch）。
   const restored = ref(false);
@@ -267,7 +284,7 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     if (!pid) return [];
     const existing = draftSteps.value[pid];
     if (existing) return existing;
-    return writeDraft(
+    return seedDraft(
       pid,
       serverSteps.value.map((s) => ({ ...s })),
     );
@@ -282,27 +299,58 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     return flattened;
   }
 
-  /** 当前零件草稿与服务端链是否已分家（dirty）。 */
+  /** 用服务端 steps 播种草稿，**同时**把签名快照记成 dirty 基线
+   *  （「此刻的草稿 = 已持久化的内容」⇒ dirty 应为 false）。 */
+  function seedDraft(partId: string, steps: ProcessStep[]): ProcessStep[] {
+    const flattened = writeDraft(partId, steps);
+    savedSignatures.value = {
+      ...savedSignatures.value,
+      [partId]: stepsSignature(flattened),
+    };
+    return flattened;
+  }
+
+  /** 保存成功后把基线推到「刚发出去的那份草稿」上 ⇒ dirty 归零。
+   *  基线取**请求 payload** 而不是响应 steps：后端若对响应做归一化（耗时 clamp 之类），
+   *  拿响应当基线会让「保存」按钮刚变灰又变可点。随后那次失效 refetch 带归一化后的
+   *  steps 回来时，下面的 watch 会把草稿对齐过去（此时 dirty 已是 false，允许覆盖）。 */
+  function markSaved(partId: string): void {
+    savedSignatures.value = {
+      ...savedSignatures.value,
+      [partId]: stepsSignature(draftSteps.value[partId] ?? []),
+    };
+  }
+
+  /** 当前零件草稿与「播种 / 上次保存那一刻的快照」是否已分家（dirty）。 */
   function isDirty(partId: string): boolean {
     const draft = draftSteps.value[partId];
     if (!draft) return false;
-    return stepsSignature(draft) !== stepsSignature(serverSteps.value);
+    const baseline = savedSignatures.value[partId];
+    // 有草稿却没有基线 = 未走过播种 / 保存路径（正常路径下不可能，见 seedDraft 注释）。
+    // 保守判 dirty：宁可让用户多点一次保存，也不让「有编辑但保存按钮灰着」。
+    if (baseline === undefined) return true;
+    return stepsSignature(draft) !== baseline;
   }
 
   const dirty = computed<boolean>(() =>
     selectedPartId.value ? isDirty(selectedPartId.value) : false,
   );
 
-  /** 当前零件的工序步骤（可写）：get 返回草稿，set 写回草稿。
+  /** 当前零件的工序步骤（可写）：get 纯读草稿，set 写回草稿。
    *  可写是 Sortable 的硬要求 —— 工序卡拖拽排序走 vue-draggable-plus 三参形态
    *  （useLazyDraggable 的 list 形参），库内建 handler 会 `list.value.splice(...)`；
    *  绑只读 computed 的话，排序改的是临时数组、DOM 顺序与数据当场脱钩。
-   *  草稿不存在时 get 走播种分支，保证返回的**是**草稿数组本身（可被 splice）。 */
+   *  ⚠️ getter **纯读、不播种**（2026-10-05 修）：读值发生在任何渲染里（toolbar 的
+   *  `{{ totalMinutes }}` 无条件渲染），一旦在这里调播种就会凭空造出一份草稿 ——
+   *  链还没回来时播种的是**空数组**，真数据到达后被 isDirty 挡在门外，steps 永远空。
+   *  写侧不受影响：addStep / removeStep / patchStep / selectProcess / resetSteps
+   *  自己都先调 `currentDraft()`（那里才播种），Sortable 也只在列表非空（= 草稿已存在）
+   *  时才拿到可写数组。 */
   const steps = computed<ProcessStep[]>({
     get: () => {
       const pid = selectedPartId.value;
       if (!pid) return [];
-      return draftSteps.value[pid] ?? currentDraft();
+      return draftSteps.value[pid] ?? [];
     },
     set: (val: ProcessStep[]) => {
       const pid = selectedPartId.value;
@@ -311,16 +359,32 @@ export const useProcessDesignStore = defineStore('process-design', () => {
   });
 
   /** 服务端数据到达 / 切换零件时，把草稿对齐到服务端 steps ——
-   *  ⚠️ **仅在未 dirty 时**：用户在途编辑不能被异步返回的数据覆盖（沿用旧实现的语义）。
-   *  race 守卫：`chain.id !== selectedChainId` 说明这是上一个零件的响应（切件途中），
-   *  丢弃。 */
-  watch([chainQuery.data, selectedPartId], () => {
+   *  ⚠️ **仅在未 dirty 时**：用户在途编辑不能被异步返回的数据覆盖。
+   *
+   *  2026-10-05 修：「有链但在途」必须直接 return。切零件时 watch 源（含
+   *  `selectedPartId`）立刻触发，此刻链 query 的键刚换、`data` 还是 undefined ⇒
+   *  `serverSteps` 是空数组，此时播种等于把一份**空草稿**钉死在该 partId 上；真数据
+   *  到达后的第二次触发又因 isDirty（空草稿 vs 真 steps）被挡回去，工序永远加载不出来，
+   *  且 dirty 卡在 true ⇒ 用户一点「保存」就把该零件的工艺链清空（POST 空 steps =
+   *  「保留 header 但清空所有步骤」）。
+   *
+   *  ⚠️ 判据不能用 `isPending` 单判：`enabled=false` 的 query（零件压根没有链）isPending
+   *  **恒为 true**，而「无链」分支恰恰必须放行（服务端就是空链，播种空数组是对的）。
+   *  故先按「有没有链 id」分流：有链 ⇒ 要求 `data` 已到位且 id 对得上（键刚换、
+   *  isPending 还没翻转的那一瞬也拦得住，不依赖 vue-query 内部 watcher 的时序）；
+   *  无链 ⇒ 直接按空链播种。 */
+  watch([chainQuery.data, selectedPartId, selectedChainId], () => {
     const pid = selectedPartId.value;
     if (!pid) return;
-    const chain = chainQuery.data.value;
-    if (chain && chain.id !== selectedChainId.value) return; // 陈旧响应
+    const chainId = selectedChainId.value;
+    if (chainId) {
+      if (chainQuery.isPending.value) return;
+      const chain = chainQuery.data.value;
+      // data 未到位（键刚换）或 id 对不上（上一个零件的响应）都算陈旧，丢弃
+      if (!chain || chain.id !== chainId) return;
+    }
     if (isDirty(pid)) return;
-    writeDraft(
+    seedDraft(
       pid,
       serverSteps.value.map((s) => ({ ...s })),
     );
@@ -397,11 +461,23 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     );
   }
 
-  /** 「重置」：丢弃草稿，回到服务端链的 steps。 */
+  /** 「重置」是否可点：重置的**内容源**是 serverSteps，链在途 / 链加载失败时它不是
+   *  权威值（空数组或上一份缓存），此时点重置等于无声丢弃用户的编辑。 */
+  const canReset = computed<boolean>(() => {
+    if (!selectedChainId.value) return true;
+    return !chainQuery.isPending.value && !chainQuery.isError.value;
+  });
+
+  /** 「重置」：丢弃草稿，回到服务端链的 steps。
+   *  守卫见 `canReset`：链没就绪时宁可拒绝（弹提示）也不清空用户的编辑。 */
   function resetSteps(): void {
     const pid = selectedPartId.value;
     if (!pid) return;
-    writeDraft(
+    if (!canReset.value) {
+      ElMessage.warning('工艺链尚未加载完成，暂不能重置');
+      return;
+    }
+    seedDraft(
       pid,
       serverSteps.value.map((s) => ({ ...s })),
     );
@@ -413,11 +489,16 @@ export const useProcessDesignStore = defineStore('process-design', () => {
   );
 
   // ============ 保存整组 mutation（POST by-part）============
-  const saveMutation = useMutation<
-    ProcessChainByPartDto,
-    Error,
-    { partId: string; steps: ProcessStep[] }
-  >({
+  /** mutation 变量：`params` 是**发起保存那一刻**的列表 params 快照（2026-10-05 新增）。
+   *  零闪烁回写要按当时生效的 sort_dir 组 queryKey，用响应时刻的实时 sortDir 组会打到
+   *  一份没人用的缓存上（用户在请求发出与 resolve 之间切了排序），回写静默失效。 */
+  interface SaveChainVars {
+    partId: string;
+    steps: ProcessStep[];
+    params: ListProcessDesignPartsParams;
+  }
+
+  const saveMutation = useMutation<ProcessChainByPartDto, Error, SaveChainVars>({
     mutationKey: ['process-design', 'upsert-chain'],
     // 不写 retry：信任 main.ts 全局 mutations.retry: 0。
     mutationFn: ({ partId, steps: payload }) =>
@@ -426,13 +507,13 @@ export const useProcessDesignStore = defineStore('process-design', () => {
       // 零闪烁回写：无链零件首次保存时后端建链，响应的 `id` 即新链 id（既有链保存时
       // id 不变，赋值幂等）。先 setQueryData 把该行就地改成「已制定」——不等一个往返，
       // 左栏分组立刻迁移；再失效整域拿权威值。
-      // ⚠️ 用 mutation 变量里的 partId，不用 selectedPartId：保存期间用户可能已经切到
-      // 别的零件，按当前选中去 patch 会改错行。
-      const params = buildParams();
+      // ⚠️ 用 mutation 变量里的 partId / params，不用当前的 selectedPartId / sortDir：
+      // 保存期间用户可能已经切到别的零件或切了排序，按当前值去 patch 会改错行 / 改错缓存。
       // 显式标注 prev 类型：queryKey 末段是普通对象（非 tagged key），TS 无法从键反推
       // TQueryFnData，不标注会被退化成 `{}`。
+      markSaved(vars.partId);
       qc.setQueryData(
-        qk.processDesignParts(params),
+        qk.processDesignParts(vars.params),
         (prev: ProcessDesignPartListResultSchema | undefined) => {
           if (!prev) return prev;
           return {
@@ -449,7 +530,8 @@ export const useProcessDesignStore = defineStore('process-design', () => {
       // 先闪一帧旧 steps。
       qc.setQueryData(qk.processDesignChain(dto.id), dto);
       // ⚠️ 草稿**不清**：它就是刚保存成功的那份，留在草稿里可避免链 query 重取到达前
-      // 右栏闪空态（切走零件再回来时与服务端一致，dirty 自动为 false）。
+      // 右栏闪空态（dirty 由 markSaved 归零，随后失效 refetch 到达时 watch 允许把
+      // 草稿对齐到服务端权威 steps）。
       await invalidateProcessDesignQuery(qc);
       ElMessage.success('已保存');
     },
@@ -468,7 +550,7 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     const pid = selectedPartId.value;
     if (!pid) return;
     const flattened = writeDraft(pid, currentDraft());
-    await saveMutation.mutateAsync({ partId: pid, steps: flattened });
+    await saveMutation.mutateAsync({ partId: pid, steps: flattened, params: buildParams() });
   }
 
   /** 恢复页面状态 + 开闸。本页**无持久化状态**（零件列表每次进页都重拉），故本方法
@@ -495,7 +577,6 @@ export const useProcessDesignStore = defineStore('process-design', () => {
       parts,
       /** 全量行数（后端 COUNT，与 limit/offset 无关）—— 用于「仅显示前 N / 共 M」提示 */
       total,
-      limit: PROCESS_DESIGN_LIMIT,
       loading,
       errorMsg,
       sortDir,
@@ -513,11 +594,13 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     editor: {
       /** 当前零件的工序步骤（可写，Sortable 拖拽排序直接绑它） */
       steps,
-      /** 是否已修改（与服务端链的业务签名比对） */
+      /** 是否已修改（与播种 / 上次保存那一刻的签名快照比对） */
       dirty,
       saving,
       /** 当前零件工序总耗时（分钟） */
       totalMinutes,
+      /** 「重置」是否可点（链在途 / 链加载失败时为 false） */
+      canReset,
       addStep,
       removeStep,
       patchStep,

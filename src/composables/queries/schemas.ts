@@ -107,7 +107,7 @@ export const customerListResultSchema = z.object({
 export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
 
 /** 2026-09-26 新增：工序实体。字段对齐 backend-rust `ProcessOut`
- * （`backend-rust/docs/api/production/processes.md:159-173`）：id / code / name /
+ * （契约见 `backend-rust/docs/api/production/processes.md`）：id / code / name /
  * category / sort_order / description / requires_approval / color / is_cnc /
  * version / created_at / updated_at（**12 字段**）。category 用 z.enum 锁死 INHOUSE /
  * OUTSOURCE；color 与 description nullable；时间戳保持 string（与 API 字符串格式
@@ -124,24 +124,16 @@ export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
  * 必填 boolean 显式声明 —— 后端漏返 Zod parse 抛错守门。
  *
  * 2026-09-30 修复：description / color 加 `.optional()` 兼容后端 skip_serializing_if。
- * 后端 `ProcessOut` (backend-rust src/modules/prod/process/vo/process.rs:15-20) 对
- * description (line 15) 与 color (line 19) 两个 `Option<String>` 字段加了
- * `#[serde(skip_serializing_if = "Option::is_none")]` —— `None` 时整个字段从
- * JSON 响应中省略（不是序列化为 `null`）。原 schema 只用 `.nullable()` 不放宽
- * required，字段缺失时 Zod 抛 `Required` error → queryFn parse 失败 →
- * data === undefined → 整张 process 列表消费侧退化：ProcessTab.vue 表格空、
- * WorkerQueueBoard.vue 没有 INHOUSE 工序 tab、usePartDispatch 工序下拉空。
- * `.nullable()` 与 `.optional()` 是正交维度（前者放宽类型、后者放宽 required），
- * 必须并存才能同时接受 null 与字段缺失两种形态。3 处共用 cache 的 view caller
- * （数据层 1 处 parse 点 useProcessesQuery.ts:39 + 3 处 view caller：
- * ProcessTab.vue:255 + WorkerQueueBoard.vue:153 + usePartDispatch.ts:104 共用同一份 cache）
- * 因此受影响；另有 8 处 caller
- * （PendingProgrammingList.vue:413 / ShelfList.vue:324 /
- * ProcessPickerDialog.vue:180 / InspectionPending.vue:865 /
- * OutsourceQuoteList.vue:79 / OutsourceSendReceive.vue:75 /
- * OutsourceList.vue:341 / PartDetail.vue:579 /
- * ProcessWorkTypeMappingTab.vue:108 / RepairStartDialog.vue:87 等）走
- * `resp.items` 直接消费、不经 Zod，不受本回归影响。 */
+ * 后端 `ProcessOut` 对 description 与 color 两个 `Option<String>` 字段加了
+ * `#[serde(skip_serializing_if = "Option::is_none")]` —— `None` 时整个字段从 JSON 响应中
+ * 省略（不是序列化为 `null`）。只写 `.nullable()` 不放宽 required 时，字段缺失会让 Zod 抛
+ * `Required` error → queryFn parse 失败 → data === undefined ⇒ 整份工序列表在**所有共用
+ * `useProcessesQuery` 缓存**的消费侧一起退化（表格空 / 工序 tab 消失 / 工序下拉空）。
+ * `.nullable()` 与 `.optional()` 是正交维度（前者放宽类型、后者放宽 required），必须并存
+ * 才能同时接受 null 与字段缺失两种形态。
+ * 仍走 `listProcesses` 裸调、**不**经 Zod 的视图（RepairStartDialog / ShelfList /
+ * OutsourceSendReceive / OutsourceQuoteList / OutsourceList / ProcessPickerDialog）
+ * 不受本 schema 变更影响。 */
 export const processSchema = z.object({
   id: z.string(),
   version: z.number(),

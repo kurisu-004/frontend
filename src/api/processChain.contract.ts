@@ -5,8 +5,7 @@
 //   - ProcessChainOut 删除 part_id 字段（链与 part 的归属关系改由 part.process_chain_id 表达）
 //
 // 端点（与 backend-rust/src/modules/process_chain/handler.rs 对齐）：
-//   GET  /api/v2/process-chains/by-part/{part_id}  ← getProcessChainByPart（保留可用）
-//   GET  /api/v2/process-chains/{chain_id}         ← getProcessChainById（2026-09-16 新增）
+//   GET  /api/v2/process-chains/{chain_id}         ← getProcessChainById（本域读链唯一入口）
 //   POST /api/v2/process-chains/by-part/{part_id}  ← upsertProcessChainByPart（2026-09-29 由 PUT 改 POST）
 //
 // 2026-09-29 变更：upsertProcessChainByPart 由 PUT 改 POST（统一惯例）
