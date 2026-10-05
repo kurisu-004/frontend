@@ -189,12 +189,24 @@ function onSortChange({ order }: { order: 'ascending' | 'descending' | null }): 
   store.query.onSortChange(order);
 }
 
-/** 2026-07-30：树表 row-key（避免顶层与子件 id 冲突）。
- *  复用 PartsTable.vue:291-295 模式。
- *  2026-09-29 简化：删除装配件懒加载后无需前缀化（无 id 冲突）。 */
+/** el-table 行 key：**必须是裸 `row.id`，不能加任何前缀**（2026-10-05 修：高亮失效）。
+ *
+ * ⚠️ 这是 element-plus 的不对称契约，不是风格问题：函数型 rowKey 走 `getRowIdentity`
+ * 的 `isFunction` 分支，**原样返回**调用结果；而 `:current-row-key` 那个 prop 在
+ * `style-helper.mjs` 里**总是被字符串化**（`setCurrentRowKey(`${key}`)`），匹配时又用
+ * `===` 严格相等（`store/current.mjs`）。加了前缀的话 rowKey 侧是 `PART_5000…`、
+ * prop 侧是 `5000…`，恒不相等 ⇒ `currentRow` 恒 null ⇒ 选中行永不高亮。裸 id 两侧
+ * 是同一个字符串，匹配成立。
+ *
+ * 本表不需要前缀命名空间：所有行都是纯 `t_part` 行（雪花 id 全局唯一），
+ * 「待制定 / 已制定」两张表又是同一数组切出的互斥两份 ⇒ 同表内不可能有 id 冲突。
+ * （`views/parts/list` 的 PartsTable 仍混装装配件父行与子件行，那里**必须**保留
+ * `ASM_` 前缀，两处不要互相照抄。）
+ *
+ * 回归守卫：components/__tests__/PartPickerList.spec.ts 的 C1 / C2 两组用例
+ * （真挂 el-table 断言行拿到 `current-row` 类，并复现带前缀写法不高亮）。 */
 function rowKey(row: ProcessDesignPartSchema): string {
-  if (!row) return '';
-  return `PART_${row.id}`;
+  return row.id;
 }
 </script>
 
