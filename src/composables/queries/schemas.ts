@@ -574,6 +574,26 @@ export type AssemblyDetailFlatSchema = z.infer<typeof assemblyDetailFlatSchema>;
  * 让 mapper（api/assembly.ts::uploadAssemblyPdf）在 api 边界守门。 */
 export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);
 
+/** 装配件创建响应（`POST /api/v2/assemblies` 的 201 body）：顶层实体 + 刚建出的子件。
+ *
+ * 2026-10-05 补：此前 `createAssembly` 只做类型断言、无守门，而建单结果直接决定
+ * 「哪些本地行算已建出」（`usePartBatchPdf` 的 createdTargets 记账）⇒ 响应形状不对时
+ * 会在**没有任何报错**的情况下把子件挂错行 / 记不上账。守门与 `uploadAssemblyPdf` /
+ * `getAssembly` 同款（api 边界 parse）。
+ *
+ * 外层 `.strict()`：本域已经吃过一次键名回归的亏（`AssemblyCreateResult` 的子件键是
+ * `created_children`，而 `AssemblyDetail` 那边叫 `children`）。两个键名同时存在或被
+ * 改名时，parse 立刻抛错，而不是让 `.map(c => c.id)` 静默跑出空数组。
+ * 内层沿用 `assemblyOutSchema` / `assemblyChildOutSchema`（非 strict，额外字段 strip）。 */
+export const assemblyCreateResultSchema = z
+  .object({
+    assembly: assemblyOutSchema,
+    created_children: z.array(assemblyChildOutSchema),
+  })
+  .strict();
+
+export type AssemblyCreateResultSchema = z.infer<typeof assemblyCreateResultSchema>;
+
 // ============================================================
 // 2026-09-29 新增：待下发批次 schema（生产队列「待下发」Tab 共享基础数据层）。
 //
