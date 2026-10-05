@@ -2172,3 +2172,95 @@ export const processDesignPartListResultSchema = z.object({
 });
 
 export type ProcessDesignPartListResultSchema = z.infer<typeof processDesignPartListResultSchema>;
+
+// ============================================================
+// 2026-10-05 新增：品检扫码树（`GET /api/v2/prod/inspection/scan/{serial_no}`）的 Zod
+// 守门 schema。契约见 backend-rust `docs/api/production/inspection.md`。
+//
+// 响应是**一层套一层**的树：顶层 `hit_kind` 判条码是装配件还是子件；`assembly` 在
+// `hit_kind='ASSEMBLY'` 时带出装配件节点（它**没有批次**，批次挂在零件节点下）；
+// `children` 恒是零件数组（装配件树 = 全部子件；独立件树 = `[被扫中的那个 part]`），
+// 每个零件的 `children` 是它的**全部**批次（含终态批次 —— 终态行要在表上显示为
+// 不可操作，而不是从树上消失，否则用户会以为批次不存在）。
+//
+// 必填字段**逐个显式声明**（Zod strip 陷阱，见 CLAUDE.md「TanStack Query」条目）：
+//   - 雪花 ID（`assembly.id` / 各 part / batch 的 `id`）是 `serialize_i64` ⇒ JSON
+//     **string**，声明 `z.string()`（禁 `z.number()`，19 位 ID 在 JS Number 下丢精度）；
+//   - 后端这些 VO 字段都没挂 `skip_serializing_if` ⇒ 键恒在，可空的一律
+//     `.nullable()` 而非 `.optional()`（写成 `.optional()` 会让「后端漏发某个键」静默
+//     通过，UI 的那一列整列失效）；
+//   - `system_delivery_date` 是 `YYYY-MM-DD` 字符串，DB NULL → JSON null，不锁字面量。
+//
+// ⚠️ 两处版本号是**互不相关的两个计数器**，混用必 409：
+//   - `ScanPartOut.version` = `t_part.version`，本页只作展示；
+//   - `ScanBatchOut.version` = `t_part_batch.version`，三个写端点（to-inspection /
+//     to-ship / to-process）的 OCC 锚，取错就是「版本冲突」的用户可见症状。
+// ============================================================
+
+/** 批次节点（`ScanBatchOut`）—— 三个写端点的锚都在这一层。 */
+export const inspectionScanBatchSchema = z.object({
+  id: z.string(),
+  batch_no: z.number(),
+  quantity: z.number(),
+  /** 批次 `status` 原文（8 态枚举字符串），前端按它决定操作列的按钮矩阵。 */
+  status: z.string(),
+  /** `t_part_batch.version`（OCC 锚）。**不是** `t_part.version`。 */
+  version: z.number(),
+  /** 返修标记（后端不再产生 REPAIRING 状态，返修语义由该布尔列承载）。 */
+  is_repairing: z.boolean(),
+  /** `t_part_batch.location` 枚举原文。 */
+  location: z.string().nullable(),
+  /** 派生持有人名（货架编码 / 工人姓名）。 */
+  current_holder_display: z.string().nullable(),
+  /** 当前工序名；INSPECTION 批次恒 null（出池时后端清 `current_process_id`）。 */
+  process_name: z.string().nullable(),
+  /** 该批次所属零件就是被扫中的那个 → 前端高亮用。 */
+  is_scanned: z.boolean(),
+});
+
+export type InspectionScanBatchSchema = z.infer<typeof inspectionScanBatchSchema>;
+
+/** 零件节点（`ScanPartOut`）—— 装配件的子件，或独立件本身。 */
+export const inspectionScanPartSchema = z.object({
+  id: z.string(),
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string(),
+  status: z.string(),
+  quantity: z.number(),
+  is_urgent: z.boolean(),
+  system_delivery_date: z.string().nullable(),
+  customer_name: z.string().nullable(),
+  /** `t_part.version`（仅展示；写端点的 OCC 锚是 `children[].version`）。 */
+  version: z.number(),
+  children: z.array(inspectionScanBatchSchema),
+});
+
+export type InspectionScanPartSchema = z.infer<typeof inspectionScanPartSchema>;
+
+/** 装配件节点（`ScanAssemblyOut`）—— 本身没有批次。 */
+export const inspectionScanAssemblySchema = z.object({
+  id: z.string(),
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string(),
+  status: z.string(),
+  quantity: z.number(),
+  is_urgent: z.boolean(),
+  system_delivery_date: z.string().nullable(),
+  customer_name: z.string().nullable(),
+});
+
+export type InspectionScanAssemblySchema = z.infer<typeof inspectionScanAssemblySchema>;
+
+/** 扫码树顶层（`ScanTreeOut`）。 */
+export const inspectionScanTreeSchema = z.object({
+  /** `"ASSEMBLY"` = 扫到装配件条码；`"PART"` = 扫到子件 / 独立件条码。 */
+  hit_kind: z.string(),
+  scanned_serial_no: z.string(),
+  /** 仅 `hit_kind === 'ASSEMBLY'` 时有值。 */
+  assembly: inspectionScanAssemblySchema.nullable(),
+  children: z.array(inspectionScanPartSchema),
+});
+
+export type InspectionScanTreeSchema = z.infer<typeof inspectionScanTreeSchema>;

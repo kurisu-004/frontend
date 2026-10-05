@@ -18,7 +18,8 @@
 //     normalizeAppendTo 会撞 `document is not defined`）；列定义用的 ElButton /
 //     ElInput / ElDatePicker / ElTreeSelect 在本 spec 里**不被调用**（只读 columnDefs
 //     的元数据），但 import 本身要能解析，故一并给最简桩。
-//   - `vi.mock('@/api/parts')`：主查询 + 3 个写端点。
+//   - `vi.mock('@/api/parts')`：主查询 + 3 个写端点（to-ship / to-process / to-inspection）。
+//   - `vi.mock('@/api/inspection')`：扫码树端点（本域新模块，2026-10-05）。
 //   - `vi.mock('@/api/customer')` / `@/api/shelves` / `@/api/process`：共享基础数据层
 //     （useCustomerTree → useCustomersQuery、useProductionShelvesQuery、useProcessesQuery）
 //     在 store setup 里就会 fetch，不桩会走真实 axios 触发未处理 rejection。
@@ -52,15 +53,19 @@ vi.mock('@/components/ColumnFilterPopover.vue', () => ({
 const listInspectionBatchesMock = vi.fn();
 const toShipMock = vi.fn();
 const toProcessMock = vi.fn();
-const scanInspectMock = vi.fn();
-const getPartBySerialMock = vi.fn();
+const toInspectionMock = vi.fn();
+const scanInspectionMock = vi.fn();
 
 vi.mock('@/api/parts', () => ({
   listInspectionBatches: (...args: unknown[]) => listInspectionBatchesMock(...args),
   toShip: (...args: unknown[]) => toShipMock(...args),
   toProcess: (...args: unknown[]) => toProcessMock(...args),
-  scanInspect: (...args: unknown[]) => scanInspectMock(...args),
-  getPartBySerial: (...args: unknown[]) => getPartBySerialMock(...args),
+  toInspection: (...args: unknown[]) => toInspectionMock(...args),
+}));
+
+// 扫码树端点独立在 `@/api/inspection`（本域新模块），桩同款。
+vi.mock('@/api/inspection', () => ({
+  scanInspection: (...args: unknown[]) => scanInspectionMock(...args),
 }));
 
 // ---------------------------------------------------------------- 共享基础数据层桩
@@ -566,10 +571,10 @@ describe('useInspectionListStore', () => {
     expect(listInspectionBatchesMock).toHaveBeenCalled();
   });
 
-  it('指定工序 / 扫码快捷品检 mutation 的 payload 逐字对齐后端字段名', async () => {
+  it('指定工序 / 送检 mutation 的 payload 逐字对齐后端字段名', async () => {
     const store = useInspectionListStore();
     toProcessMock.mockResolvedValue({ part: {}, new_batch_id: null });
-    scanInspectMock.mockResolvedValue({});
+    toInspectionMock.mockResolvedValue({ part: {}, new_batch_id: null });
 
     await store.mutations.toProcessMutation.mutateAsync({
       batchId: 'B1',
@@ -590,53 +595,85 @@ describe('useInspectionListStore', () => {
       quantity: 2,
     });
 
-    await store.mutations.scanInspectMutation.mutateAsync({
+    await store.mutations.toInspectionMutation.mutateAsync({
       batchId: 'B1',
       targetInspectionShelfId: 'IS1',
-      pass: true,
       version: 7,
-      shelfId: null,
-      nextProcessId: null,
-      note: null,
-      quantity: null,
+      quantity: 2,
       label: 'SN-A',
     });
-    expect(scanInspectMock).toHaveBeenCalledWith('B1', {
+    expect(toInspectionMock).toHaveBeenCalledWith('B1', {
       target_inspection_shelf_id: 'IS1',
-      pass: true,
       version: 7,
-      shelf_id: undefined,
-      next_process_id: undefined,
-      note: null,
-      quantity: null,
+      quantity: 2,
     });
   });
 
-  it('扫码快捷品检遇到 40901 同样走 warning + 重拉（与 toShip / toProcess 同款）', async () => {
+  it('送检遇到 40901 走 warning + 重拉（与 toShip / toProcess 同款）', async () => {
     const { ElMessage } = await import('element-plus');
     const store = useInspectionListStore();
     listInspectionBatchesMock.mockClear();
-    scanInspectMock.mockRejectedValue(Object.assign(new Error('版本冲突'), { code: 40901 }));
+    toInspectionMock.mockRejectedValue(Object.assign(new Error('版本冲突'), { code: 40901 }));
 
     await expect(
-      store.mutations.scanInspectMutation.mutateAsync({
+      store.mutations.toInspectionMutation.mutateAsync({
         batchId: 'B1',
         targetInspectionShelfId: 'IS1',
-        pass: true,
         version: 7,
-        shelfId: null,
-        nextProcessId: null,
-        note: null,
         quantity: null,
         label: 'SN-A',
       }),
     ).rejects.toThrow('版本冲突');
 
-    // 40901 的文案必须比通用「快捷品检失败：版本冲突」有指导性，且重拉列表。
+    // 40901 的文案必须比通用「送检失败：版本冲突」有指导性，且重拉列表。
     expect(ElMessage.warning).toHaveBeenCalledWith('该批次已被他人修改，请刷新后重试');
     expect(ElMessage.error).not.toHaveBeenCalled();
     await tick();
     expect(listInspectionBatchesMock).toHaveBeenCalled();
+  });
+
+  // ============ 扫码树 ============
+  it('扫码 mutation：把返回的树写进 scanTree，clearScanTree 清空', async () => {
+    const store = useInspectionListStore();
+    const TREE = {
+      hit_kind: 'PART',
+      scanned_serial_no: 'F1006-01',
+      assembly: null,
+      children: [],
+    };
+    scanInspectionMock.mockResolvedValue(TREE);
+
+    expect(store.mutations.scanTree).toBeNull();
+    await store.mutations.scanMutation.mutateAsync('F1006-01');
+
+    expect(scanInspectionMock).toHaveBeenCalledWith('F1006-01');
+    expect(store.mutations.scanTree).toEqual(TREE);
+
+    store.mutations.clearScanTree();
+    expect(store.mutations.scanTree).toBeNull();
+  });
+
+  it('扫码查不到（20101）走 warning + 带出条码，不弹通用 error', async () => {
+    const { ElMessage } = await import('element-plus');
+    const store = useInspectionListStore();
+    scanInspectionMock.mockRejectedValue(Object.assign(new Error('零件不存在'), { code: 20101 }));
+
+    await expect(store.mutations.scanMutation.mutateAsync('F9999')).rejects.toThrow('零件不存在');
+
+    // 序列号取自 onError 的第二参（variables），不是闭包 —— 并发扫码下闭包会张冠李戴。
+    expect(ElMessage.warning).toHaveBeenCalledWith('未找到条码 F9999 对应的零件或装配件');
+    expect(ElMessage.error).not.toHaveBeenCalled();
+    // 查不到时不得留下半截树。
+    expect(store.mutations.scanTree).toBeNull();
+  });
+
+  it('扫码遇到非 20101 的错误走 ElMessage.error', async () => {
+    const { ElMessage } = await import('element-plus');
+    const store = useInspectionListStore();
+    scanInspectionMock.mockRejectedValue(new Error('后端 500'));
+
+    await expect(store.mutations.scanMutation.mutateAsync('F1006')).rejects.toThrow('后端 500');
+    expect(ElMessage.error).toHaveBeenCalledWith('扫码查询失败：后端 500');
   });
 
   // ============ 不变量 #2：$dispose 重建 ============

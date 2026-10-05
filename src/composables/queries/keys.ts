@@ -252,9 +252,9 @@ export const qk = {
   //       - scan 域工人放回 `workerScan` event_type=RETURNED
   //         （ScanReturnParts）—— service 同事务跑 WorkerPool refill，
   //         放回即从池里抢批，counts / by-process / state 三域同时变；
-  //       - inspection 域 `scanInspect`（`useInspectionListStore` 的
-  //         `scanInspectMutation`）—— 品检流转，IN_PROCESS+PRODUCTION_SHELF
-  //         起点同样会离开候选池；
+  //       - inspection 域的品检流转（`useInspectionListStore` 的 `toInspectionMutation`
+  //         / `toShipMutation` / `toProcessMutation`）—— 送检把 IN_PROCESS+PRODUCTION_SHELF
+  //         的批次迁到 INSPECTION+INSPECTION_SHELF，即把批次移出候选池；
   //       - outsource 域收发（useOutsourceSendableList / usePartDetail 的
   //         receiveFromOutsource / useOutsourceReceivingList）—— send 移出候选池、
   //         receive 移入候选池；**仍未挂 worker-pool 三域失效**（既存缺口）。
@@ -312,10 +312,19 @@ export const qk = {
    *  params 变化才能拿到不同 cache identity（与 partsList / programmingList 同形）。 */
   inspectionQueueList: (params: ListInspectionQueueParams) =>
     ['inspection', 'queue', params] as const,
-  /** inspection 域前缀 —— 品检流转（scan-inspect / to-process / to-ship）完成后
+  /** inspection 域前缀 —— 品检流转（to-inspection / to-process / to-ship）完成后
    *  调 `qc.invalidateQueries({ queryKey: qk.inspectionPrefix })` 失效本域；
    *  未来若本域新增其它 list 键，一并被前缀覆盖。 */
   inspectionPrefix: ['inspection'] as const,
+  /** 2026-10-05 新增：品检扫码树键（`GET /api/v2/prod/inspection/scan/{serial_no}`）。
+   *  键含序列号维度 —— 不同条码的树**互不相同**（扫装配件与扫其子件虽返回同一棵树，
+   *  但 `hit_kind` / `is_scanned` 有别），共键即串树。
+   *
+   *  ⚠️ 当前消费方是 `useInspectionListStore` 的 `scanMutation`（**useMutation**）：
+   *  扫码是用户触发的单次拉取，缓存无价值（用户重扫同一条码时应当重取——树里的批次
+   *  可能已被别人流转），TanStack 在这里只是去重层。键仍登记在此，将来若改成
+   *  `useQuery`（例如支持「扫码后离开页面再回来仍看得到」）可直接复用，不必新造字面量。 */
+  scanInspection: (serialNo: string) => ['inspection', 'scan', serialNo] as const,
   // ============================================================
   // 2026-10-03 新增：outsource-pool 域（「外协发送/接收」看板）queryKey 工厂。
   //

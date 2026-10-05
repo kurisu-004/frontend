@@ -6,7 +6,7 @@
 //
 // 迁移动机（两条独立理由，缺一条都不该做这次改造）：
 //   1. 数据新鲜度：`ListShell` 的分页 / 勾选 / 排序是**本地**状态机（每次翻页重发
-//      请求、无缓存、无失效点），品检流转（品检通过 / 指定工序 / 扫码快捷品检）后只能
+//      请求、无缓存、无失效点），品检流转（品检通过 / 指定工序 / 送检）后只能
 //      靠各处的 `fetchList()` 手动重拉，漏一处就展示过期队列。
 //   2. 筛选范式统一：待品检页要把图号 / 名称 / 序列号 / 日期筛选搬进表头（照零件一览），
 //      而 `ListShell` 的 filter 插槽与列定义（`ColumnDef.headerRender`）不在同一层，
@@ -29,12 +29,13 @@ import { ElMessage } from 'element-plus';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import {
   listInspectionBatches,
-  scanInspect,
+  toInspection,
   toProcess,
   toShip,
   type InspectionQueueItem,
   type ListInspectionQueueParams,
 } from '@/api/parts';
+import { scanInspection, type ScanTreeOut } from '@/api/inspection';
 import { qk } from '@/composables/queries/keys';
 import {
   inspectionQueueListResultSchema,
@@ -85,15 +86,12 @@ export interface ToProcessVars {
   shelfCode: string;
 }
 
-/** 2026-10-03：扫码快捷品检（`POST /prod/batches/{batch_id}/scan-inspect`）的入参。 */
-export interface ScanInspectVars {
+/** 2026-10-05：送检（`POST /prod/batches/{batch_id}/to-inspection`）的 mutation 入参。
+ *  `targetInspectionShelfId` 是目标品检架；`label` 只进成功提示。 */
+export interface ToInspectionVars {
   batchId: string;
   targetInspectionShelfId: string;
-  pass: boolean;
   version: number;
-  shelfId: string | null;
-  nextProcessId: string | null;
-  note: string | null;
   quantity: number | null;
   label: string;
 }
@@ -345,43 +343,60 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     },
   });
 
-  const scanInspectMutation = useMutation({
-    mutationKey: ['inspection', 'scan-inspect'],
-    mutationFn: ({
-      batchId,
-      targetInspectionShelfId,
-      pass,
-      version,
-      shelfId,
-      nextProcessId,
-      note,
-      quantity,
-    }: ScanInspectVars) =>
-      scanInspect(batchId, {
+  const toInspectionMutation = useMutation({
+    mutationKey: ['inspection', 'to-inspection'],
+    mutationFn: ({ batchId, targetInspectionShelfId, version, quantity }: ToInspectionVars) =>
+      toInspection(batchId, {
         target_inspection_shelf_id: targetInspectionShelfId,
-        pass,
         version,
-        shelf_id: shelfId ?? undefined,
-        next_process_id: nextProcessId ?? undefined,
-        note,
         quantity,
       }),
     onSuccess: async (_data, vars) => {
       await invalidateInspectionQuery();
-      ElMessage.success(
-        vars.pass ? `零件 ${vars.label} 快捷品检通过` : `零件 ${vars.label} 已快捷打回`,
-      );
+      ElMessage.success(`零件 ${vars.label} 已送检${vars.quantity ? ` × ${vars.quantity}` : ''}`);
     },
     onError: async (e: Error & { code?: number }) => {
-      // 40901：批次已被他人改动（OCC version 不匹配）—— 与 toShip / toProcess 同款分支。
-      // 扫码快捷品检尤其需要它：版本锚错（见 InspectionPending.vue 里 PartItem.version
-      // 的说明）时后端必回 40901，走通用分支只会显示无指导性的「快捷品检失败：批次已被他人修改」。
+      // 40901 与 toShip / toProcess 同款：OCC 锚（t_part_batch.version）不匹配，
+      // 说明批次在扫码之后被别人改过，重拉让用户看到最新状态再重试。
       if (e?.code === 40901) {
         ElMessage.warning('该批次已被他人修改，请刷新后重试');
         await fetchList();
         return;
       }
-      ElMessage.error(`快捷品检失败：${e?.message ?? '未知错误'}`);
+      ElMessage.error(`送检失败：${e?.message ?? '未知错误'}`);
+    },
+  });
+
+  // ============ 扫码树（2026-10-05）============
+  /** 扫码命中的树快照，供 `ScanTreeDialog` 渲染。null = 本次会话还没扫过码。
+   *  弹窗关闭时由视图调 `clearScanTree()` 清掉：不清的话下次开弹窗会先闪出上一次的
+   *  树（mutation 在飞、data 还没回来），用户会以为扫的是上一次那个条码。 */
+  const scanTree = ref<ScanTreeOut | null>(null);
+
+  function clearScanTree(): void {
+    scanTree.value = null;
+  }
+
+  /** 扫码取树（`GET /prod/inspection/scan/{serial_no}`）。
+   *  用 useMutation 而非 useQuery：扫码是用户触发的单次拉取，重扫同一条码必须重取
+   *  （树里的批次可能已被别人流转），缓存留着反而会给出过期状态。
+   *  键已登记在 `qk.scanInspection`，将来若改 useQuery 可直接复用。 */
+  const scanMutation = useMutation({
+    mutationKey: ['inspection', 'scan'],
+    mutationFn: (serialNo: string) => scanInspection(serialNo),
+    onSuccess: (data) => {
+      scanTree.value = data;
+    },
+    // 序列号走 onError 的第二参（variables），不闭包捕获 —— 闭包里的「当前条码」在
+    // 并发扫码（快速连扫）时可能是另一个条码的，提示会张冠李戴。
+    onError: (e: Error & { code?: number }, serialNo: string) => {
+      // 20101 = 零件 / 装配件不存在（后端查不到与空白序列号都走这一支，走 HTTP 404 +
+      // 业务码信封）。这类不是「系统故障」，用 warning 而不是 error。
+      if (e?.code === 20101) {
+        ElMessage.warning(`未找到条码 ${serialNo} 对应的零件或装配件`);
+        return;
+      }
+      ElMessage.error(`扫码查询失败：${e?.message ?? '未知错误'}`);
     },
   });
 
@@ -389,7 +404,10 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     passingBatchId,
     toShipMutation,
     toProcessMutation,
-    scanInspectMutation,
+    toInspectionMutation,
+    scanMutation,
+    scanTree,
+    clearScanTree,
   };
 
   // ============ 切片：options（弹窗下拉的候选数据）============
