@@ -1497,12 +1497,16 @@ const columnDefs_assembly: ColumnDef[] = [
   },
   {
     key: 'children_length',
+    // 2026-10-05：按 effectiveChildren 计数（与工具栏表头 totalAssemblyChildren、建单口径
+    // 同一口径）。指定了总装图的那一页从子件里排除，这一列若还报 `children.length`，用户
+    // 拿它跟表头「共 N 子件」核对会凭空多出一条。表头文案「子件数」无需改：总装图本来
+    // 就不是子件，显示「不把它算进来的子件数」正是这个文案的字面含义。
     label: '子件数',
     minWidth: 70,
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as AssemblyRow;
-      return h('span', null, r.children.length);
+      return h('span', null, props.effectiveChildren(r).length);
     },
   },
 ];

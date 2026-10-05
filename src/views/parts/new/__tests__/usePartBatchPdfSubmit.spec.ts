@@ -19,6 +19,16 @@
 //     已成功的绝不重传（重传会撞后端 uk_t_part_file_owner_kind_sha 报 21108）；
 //   - 建单之后任何抛错都不许把阶段退回 idle（否则再点一次 = 同一批工单建第二遍）；
 //   - job 列表没登记上时主按钮必须仍是可点的「重试上传」，出路是现场重建 job。
+//
+// 2026-10-05 边界（读用例前先看，别把结论外推得比证据宽）：
+//   本 spec 与 usePartBatchPdf.spec.ts 都用**假 pdf-lib**（见下方 mock）。它证明的是
+//   **分发口径**：「切页入参 pageIndex 是第 k 页」+「每个子件上传的是各自那一份 Blob」。
+//   假实现的 `save()` 把页下标编码进字节，所以「各子件字节不同」是可断言的，但那是
+//   假字节的差异，**不证明**真 pdf-lib 切出来的单页 PDF 在浏览器 / 后端能正确渲染、
+//   也不证明字节级保真（字体资源、旋转、注释、页面框等 copyPages 复刻得到）。
+//   人工验证方式（未自动化，做过即视为该边界已验）：用一份真多页 PDF 走「合并为装配件」
+//   → 提交，在零件详情 / 装配件详情里逐个打开子件图纸，确认每份只有 1 页、页面内容是
+//   原 PDF 的对应那一页、方向与缩放正常。
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref } from 'vue';
@@ -1697,6 +1707,35 @@ describe('装配件逐页分发', () => {
     const before = api.allPdfs.value.length;
     api.removeAssembly(asm.uid);
     expect(api.allPdfs.value.length).toBe(before - 2);
+    w.unmount();
+  });
+
+  // 2026-10-05：删原始 PDF 的级联正确性由上面两条约定**共同**成立 ——
+  //   ① 顶层 `pdfSourceUid` 指原始 PDF（removePdf 按它摘整行）；
+  //   ② 子件切片的 `originPdfUid` 指原始 PDF（removePdf 按它把切片一并摘掉）。
+  // 任一条写反的后果不同：② 反了 ⇒ 切片成孤儿留在 allPdfs；① 反了 ⇒ 装配件行不被摘，
+  // 它的子件仍指向已被删掉的切片。两条都没用例锁过，这里补。
+  it('删掉原始 PDF：装配件整行与它持有的单页切片一并消失（不留孤儿切片）', async () => {
+    const w = mount(Harness);
+    await flushPromises();
+    const api = need();
+    const asm = await mountAssembly(api);
+
+    // 前置：2 个子件切片 + 1 份原始 PDF
+    expect(api.allPdfs.value).toHaveLength(3);
+    expect(api.allPdfs.value.filter((s) => s.uid.startsWith('syn-'))).toHaveLength(2);
+    expect(asm.pdfSourceUid).toBe('pdf-1');
+
+    api.removePdf('pdf-1');
+
+    // 整行摘掉（靠顶层 pdfSourceUid 指原始 PDF）
+    expect(api.assemblies.value).toHaveLength(0);
+    // 切片一并摘掉（靠切片的 originPdfUid 指原始 PDF），不留指向已删原件的 syn- 条目
+    expect(api.allPdfs.value.filter((s) => s.uid.startsWith('syn-'))).toHaveLength(0);
+    expect(api.allPdfs.value).toHaveLength(0);
+    // 勾选与上传文件也一并清掉（级联的其余两面）
+    expect(api.selectedPages.value.size).toBe(0);
+    expect(api.pdfFiles.value).toHaveLength(0);
     w.unmount();
   });
 

@@ -1686,8 +1686,18 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    *
    * 2026-10-05：装配件侧每个子件、每个总装图都是各自独立的**单页切片**（uid 唯一），
    * 装配件顶层在「无总装图」时**不产生 entry** ⇒ 装配件的一份 entry 只对应一个目标
-   * 实体。同一 entry 挂多个 ref 只剩「多行共享同一份原件」的情形（合成的多页独立零件、
-   * 原始 PDF 直接当独立零件行、多个装配件各切自同一 PDF —— 那种切片各建各的，不共享）。
+   * 实体。同一份 PDF 挂多个 ref 只可能来自「多行共享同一份原件」，而「合成多页独立
+   * 零件」「多个装配件各切自同一 PDF」这两类**不产生多 ref** —— 前者一个合成产物只挂
+   * 一行，后者每个子件各建各的切片（uid 互不相同）。
+   *
+   * 2026-10-05 补：PDF 侧真正稳定产出「一个 cell 多个 job」的活口是 `splitStandalonePart`
+   * —— 它把合成行拆回 N 行，每行的 `pdfSourceUid` 都指回**原始** PDF 的 uid（不是被
+   * 删掉的那个 `syn-` 切片），于是 `pdf:<原 uid>` 这一份 entry 挂 N 个 standalone ref；
+   * 次要的一条是对同一份原始 PDF 再次「全部页合并为独立零件」（那条分支直接复用原
+   * uid、不建切片），重复做就会得到多行共享同一 uid。
+   * （3D 侧本来就常见多 ref：同一个模型文件被多行选中。）改 `syncCells` /
+   * `buildUploadJobs` 的多 ref 逻辑时按上面这些设防，不要假设「一份 entry 只有一个
+   * ref」而把循环简化掉。
    */
   interface FileUploadEntry {
     key: string;
