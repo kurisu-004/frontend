@@ -96,13 +96,19 @@ vi.mock('@/utils/historicalPriceExcelParser', async (importOriginal) => {
 // pdf-lib 只在**切页**时被用到（部分页合并成独立零件 / 装配件逐页切单页切片），
 // 用最小假实现代替，免去在单测里造真实 PDF 字节。
 // 2026-10-05：装配件建行是「load 一次、逐页 copyPages」，所以 `load` 返回的 src 文档
-// 必须能被反复 `copyPages`；`copyPages` 按传入的 pageIndices 造出对应页数的拷贝。
+// 必须能被反复 `copyPages`；`copyPages` 按传入的 pageIndices 造出对应页数的拷贝，
+// `addPage` 记下本轮装进的是源文档第几页，`save()` 把它编码进字节（切错页能测出来）。
 vi.mock('pdf-lib', () => {
-  const doc = () => ({
+  interface FakePage {
+    pageIndex: number;
+  }
+  const doc = (added: number[] = []) => ({
     copyPages: async (_src: unknown, indices: number[]) =>
       indices.map((pageIndex) => ({ pageIndex })),
-    addPage: () => undefined,
-    save: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+    addPage: (p: FakePage) => {
+      added.push(p.pageIndex);
+    },
+    save: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46, ...added]),
   });
   return { PDFDocument: { load: async () => doc(), create: async () => doc() } };
 });

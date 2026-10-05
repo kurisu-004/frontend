@@ -22,13 +22,11 @@
   emit('update:form')；父级 @update:form 合并即可。
 
   2026-10-05：上传总装 PDF 的文案改为如实描述 —— 后端 `POST /assemblies/{id}/files`
-  只入库总装图文件（SHA-256 CAS + COS PUT + INSERT t_part_file），不拆页、不建子件。
+  只入库总装图文件（SHA-256 CAS + COS PUT + INSERT t_part_file(kind='ASSEMBLY_MASTER')），
+  **不拆页、不建子件**，所以卡片文案如实写「上传不会按页拆分」，子件在下方单独添加。
 -->
 <template>
-  <!-- 上传总装 PDF：仅当装配体当前没有 master + 没有子件时才可上传。
-       2026-10-05 核实：`POST /assemblies/{id}/files` 只做 SHA-256 CAS + COS PUT +
-       INSERT `t_part_file(kind='ASSEMBLY_MASTER')`，**不建任何子件**，所以这里不再宣称
-       「自动按页拆分」。子件在下方单独添加。 -->
+  <!-- 仅当装配体当前没有 master + 没有子件时才可上传（后端行为见文件头）。 -->
   <el-card v-if="canUploadTotalPdf" shadow="never" class="upload-pdf-card">
     <div class="upload-pdf-row">
       <div class="upload-pdf-hint">

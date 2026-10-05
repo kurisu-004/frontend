@@ -107,6 +107,10 @@ export interface SerializedAssemblyRow {
   note: string | null;
   is_urgent: boolean;
   masterPageIndex: number | null;
+  // 2026-10-05：总装图（单页切片）的 `masterPdfSourceUid` **不进草稿**。切片本体是内存
+  // Blob，刷新即失效，而 `pdf_tab` 整段只写、无 hydrate 路径（见 `SerializedPdfTab`），
+  // 存一个刷新后必然对不上的 uid 只是误导。与本文件 `unit_price` / `total_price` 同款取舍：
+  // 等 Tab 2 补 hydrate 时连同切片一起还原。
   quantity: number;
   /** 2026-10-05 新增：整套含税单价 / 总价（顶层持有，子件各有各的价）。
    *

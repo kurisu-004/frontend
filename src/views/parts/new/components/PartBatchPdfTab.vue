@@ -437,7 +437,22 @@
               </el-table-column>
               <el-table-column label="3D" min-width="55" align="center">
                 <template #default="{ row: c }">
-                  <el-tag v-if="c.three_d_index !== null" type="success" size="small">3D ✓</el-tag>
+                  <!-- 2026-10-05：这一列表达「3D 文件已挂到本行」。被指定为总装图的那一页
+                       不作为子件建出、它的 3D 也不会上传 ⇒ 该行改用中性 tag，别再用绿勾
+                       暗示会上传。 -->
+                  <el-tag
+                    v-if="c.three_d_index !== null"
+                    :type="
+                      c.page_index === (row as AssemblyRow).masterPageIndex ? 'info' : 'success'
+                    "
+                    :effect="
+                      c.page_index === (row as AssemblyRow).masterPageIndex ? 'plain' : 'light'
+                    "
+                    size="small"
+                    >{{
+                      c.page_index === (row as AssemblyRow).masterPageIndex ? '3D 不上传' : '3D ✓'
+                    }}</el-tag
+                  >
                 </template>
               </el-table-column>
               <el-table-column label="计划交期" min-width="150" align="center">
@@ -1410,9 +1425,8 @@ const columnDefs_assembly: ColumnDef[] = [
         ElSelect,
         {
           modelValue: r.masterPageIndex,
-          // 2026-10-05：走 composable 的 handler —— 它同时把 masterPdfSourceUid 指向
-          // 那个子件的切片（提交 / 上传 / 状态格都按它寻址）。直接写 masterPageIndex
-          // 会让两层字段对不上（切片 uid 永远是 null ⇒ 顶层永远不传总装图）。
+          // 2026-10-05：走 composable 的 handler —— masterPageIndex 与 masterPdfSourceUid
+          // 成对维护（提交 / 上传 / 状态格都按后者寻址）。
           'onUpdate:modelValue': (v: number | null | undefined) => {
             props.onAsmMasterPageChange(r, v);
           },
