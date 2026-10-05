@@ -55,6 +55,9 @@ import { parseHistoricalPriceExcel } from '@/utils/historicalPriceExcelParser';
 import { parseDrawingFilename } from '@/utils/drawingFilename';
 import { findElTableTbody } from '@/utils/elTable';
 import { countPdfPages } from '@/utils/pdfjs';
+// type-only：只为 `loadPdfDoc` / `copyPagesFrom` 的返回类型标注。pdf-lib 的**值**必须
+// 保持动态 import（切页只在建行时发生，不该进首屏 bundle）。
+import type { PDFDocument as PdfLibDocument } from 'pdf-lib';
 import {
   makeUid,
   pageUid,
@@ -161,6 +164,15 @@ export interface AssemblyRow {
   note: string | null;
   is_urgent: boolean;
   masterPageIndex: number | null;
+  /**
+   * 2026-10-05 新增：总装图（单页切片）的 PdfSource uid；null = 本装配件**无总装图**。
+   * 无总装图时不产生 `ASSEMBLY_MASTER` 上传 job ⇒ 库里没有 ASSEMBLY_MASTER 行 ⇒
+   * 打印时既不出总装图也不出该装配件的序列号背面（后端 `printing.py` 的既有守卫）。
+   *
+   * 与 `pdfSourceUid`（**原始** PDF，供源文件区预览 / 移除时级联清理用）是两回事：
+   * 顶层图号 / 子件页的打印都只认这份单页切片。
+   */
+  masterPdfSourceUid: string | null;
   /** 装配体套数（默认 1）。2026-08-04 新增：用于背面页 Q: 打印 */
   quantity: number;
   /** 2026-10-05 新增：整套含税单价。业务口径 = **整套**的单件价，不是各子件单价之和。 */
@@ -246,6 +258,13 @@ export interface UsePartBatchPdfReturn {
   clearSelection: (table?: { clearSelection: () => void } | null) => void;
   mergeSelectedAsPart: () => Promise<void>;
   mergeSelectedAsAssembly: () => Promise<void>;
+  /**
+   * 2026-10-05 新增：实际建出的子件（被指定为总装图的那一页被排除）。建单 / 上传 /
+   * 计数一律走它，表格仍渲染完整 `a.children`。
+   */
+  effectiveChildren: (a: AssemblyRow) => AssemblyChildRow[];
+  /** 2026-10-05 新增：总装图下拉改值（同时维护 masterPageIndex 与 masterPdfSourceUid）。 */
+  onAsmMasterPageChange: (a: AssemblyRow, v: number | null | undefined) => void;
   splitStandalonePart: (row: StandalonePartRow) => void;
   removePdf: (pdfUid: string) => void;
   removeStandalonePart: (uid: string) => void;
@@ -263,7 +282,7 @@ export interface UsePartBatchPdfReturn {
   previewSourceRow: (row: SourceTreeRow) => void;
   pdfUploadCells: Record<string, UploadStatusCell>;
   threeDUploadCells: Record<string, UploadStatusCell>;
-  getRowPdfCell: (row: { pdfSourceUid: string }) => UploadStatusCell | undefined;
+  getRowPdfCell: (row: { pdfSourceUid: string | null }) => UploadStatusCell | undefined;
   getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCell | undefined;
   /** 2026-10-04：单按钮提交流程的阶段机。 */
   commitStage: Ref<'idle' | 'creating' | 'uploading' | 'done'>;
@@ -369,8 +388,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
   /** 只用于源文件区表格展示的原始（未合成）PDF。 */
   const originalPdfs = computed(() => allPdfs.value.filter((s) => !s.synthesized));
+  // 2026-10-05：按 effectiveChildren 计数 —— 指定为总装图的那一页从子件里排除，
+  // 表头计数必须与真正建出的子件数一致，否则用户按计数核对会多出一条。
   const totalAssemblyChildren = computed(() =>
-    assemblies.value.reduce((sum, a) => sum + a.children.length, 0),
+    assemblies.value.reduce((sum, a) => sum + effectiveChildren(a).length, 0),
   );
 
   /** 源文件区树状数据：仅显示多页 PDF（单页 PDF 已直接进独立零件表）。
@@ -830,12 +851,14 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   }
 
   /** 装配件顶层默认填充（2026-10-05 新增：与两个建行入口共用，避免字段漏填）。
-   *  分厂 / 申请人 / 单价 / 总价初始全空，由 `applyExcelToAll` 回填或用户手填。 */
+   *  分厂 / 申请人 / 单价 / 总价初始全空，由 `applyExcelToAll` 回填或用户手填。
+   *  `masterPdfSourceUid` 与 `masterPageIndex` 成对：默认两者皆 null = 无总装图。 */
   function makeAssemblyRow(opts: {
     pdfSourceUid: string;
     drawing_no: string;
     name: string;
     masterPageIndex: number | null;
+    masterPdfSourceUid: string | null;
     children: AssemblyChildRow[];
   }): AssemblyRow {
     return {
@@ -853,6 +876,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       note: null,
       is_urgent: false,
       masterPageIndex: opts.masterPageIndex,
+      masterPdfSourceUid: opts.masterPdfSourceUid,
       quantity: 1,
       unit_price: null,
       total_price: null,
@@ -985,17 +1009,113 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     selectedPages.value = new Set();
   }
 
-  /** 用 pdf-lib 合并 PDF 的指定页（0-based pageIndices）→ 新 PDF Blob。 */
-  async function mergePages(raw: Blob, pageIndices: number[]): Promise<Blob> {
+  /**
+   * 加载源 PDF 文档。一次建行里的多次切页共用它，避免 N 页就 load N 次（load 要重解
+   * 整份 xref，代价随页数线性涨）。
+   */
+  async function loadPdfDoc(raw: Blob): Promise<PdfLibDocument> {
     const { PDFDocument } = await import('pdf-lib');
-    const src = await PDFDocument.load(await raw.arrayBuffer());
+    return PDFDocument.load(await raw.arrayBuffer());
+  }
+
+  /** 从已加载的 srcDoc 切出 pageIndices（0-based）指定的页 → 新 PDF Blob。 */
+  async function copyPagesFrom(srcDoc: PdfLibDocument, pageIndices: number[]): Promise<Blob> {
+    const { PDFDocument } = await import('pdf-lib');
     const out = await PDFDocument.create();
-    const copied = await out.copyPages(src, pageIndices);
+    const copied = await out.copyPages(srcDoc, pageIndices);
     copied.forEach((p) => out.addPage(p));
     const bytes = await out.save();
     // pdf-lib save() 返回 Uint8Array<ArrayBufferLike>，TS 5+ 要求 BlobPart 严格是
     // ArrayBuffer 类型；slice() 拷贝出独立 ArrayBuffer，避开 SharedArrayBuffer 误判。
     return new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'application/pdf' });
+  }
+
+  /** 用 pdf-lib 合并 PDF 的指定页（0-based pageIndices）→ 新 PDF Blob。 */
+  async function mergePages(raw: Blob, pageIndices: number[]): Promise<Blob> {
+    return copyPagesFrom(await loadPdfDoc(raw), pageIndices);
+  }
+
+  /**
+   * 切出 1 页并登记成 PdfSource（`syn-` 约定），返回新 source。
+   *
+   * 2026-10-05：装配件的每个子件 / 总装图各自持有一份**单页切片**，`uid` 天然唯一 ⇒
+   * 上传时一个 entry 对应一个目标实体（顶层与 N 个子件共享整份多页 PDF 会让打印把每一页
+   * 在每个子件上重复输出）。`originPdfUid` 指向原始 PDF，`removePdf` 靠它级联清理这些切片。
+   */
+  async function pushPageSlice(
+    src: PdfSource,
+    srcDoc: PdfLibDocument,
+    pageIndex: number,
+  ): Promise<PdfSource> {
+    const slice: PdfSource = {
+      uid: `syn-${makeUid()}`,
+      raw: await copyPagesFrom(srcDoc, [pageIndex]),
+      filename: `${stripExt(src.filename)}_p${pageIndex + 1}.pdf`,
+      totalPages: 1,
+      synthesized: true,
+      synthesizedFrom: [{ pdfUid: src.uid, pageIndices: [pageIndex] }],
+      originPdfUid: src.uid,
+    };
+    allPdfs.value.push(slice);
+    return slice;
+  }
+
+  /**
+   * 把本轮已登记的 PdfSource 按 uid 从 `allPdfs` 摘掉（切页中途失败时的回滚）。
+   *
+   * 2026-10-05：切片是循环里逐个 push 进去的，失败时装配件行还没建出来 ⇒ 这批切片没有
+   * 任何行引用，也不在源文件区显示（`originalPdfs` 只留 `!synthesized`），用户既看不到
+   * 也删不掉，纯占内存（切到第 40 页失败 = 前 39 份单页 Blob 悬空）。失败即整批摘掉，
+   * 保持「一次建行要么全成、要么什么都不留」。
+   */
+  function rollbackPushedSources(uid: string[]): void {
+    if (uid.length === 0) return;
+    const owned = new Set(uid);
+    allPdfs.value = allPdfs.value.filter((s) => !owned.has(s.uid));
+  }
+
+  /**
+   * 切页失败的提示文案。**必须带出是哪个文件**：源文件区有多份 PDF 时，只说「解析失败」
+   * 用户无从判断是哪一份出了问题。
+   *
+   * 2026-10-05：pdf-lib 对加密 PDF 抛 `EncryptedPDFError`、对 xref 异常的 PDF 抛
+   * `ParseError`（pdfjs 能正常读，源文件区已经能看到页），所以「能预览」不代表
+   * 「能切页」。三个建行入口的按钮都是裸 `@click`（Vue 不接 handler 返回的 promise），
+   * 不兜住就是 unhandled rejection：不建行、不提示、用户只看到按钮按了没反应。
+   */
+  function sliceFailedMessage(src: PdfSource, e: unknown): string {
+    return `切页失败：无法从「${src.filename}」切出单页 PDF（${errorReason(e)}）`;
+  }
+
+  /**
+   * 读不出页数时的提示。与 `sliceFailedMessage` **刻意分开**：这是另一个失败面 ——
+   * 手动新增的这份 PDF 从没进过 `rebuildFromUploads`（那里 pdfjs 读不动会整批中断并
+   * 弹「解析失败」），所以走到这里还读不出页数只可能是这份文件本身 pdfjs 就打不开。
+   * 混进「切页失败」会让用户以为坏的是切页那一步，换份文件重试也还是这句。
+   */
+  function pageCountFailedMessage(src: PdfSource, e: unknown): string {
+    return `无法读取「${src.filename}」的页数，子件数量无法确定（${errorReason(e)}）`;
+  }
+
+  /** 异常 → 提示里的一句话原因（两个失败文案共用同一口径）。 */
+  function errorReason(e: unknown): string {
+    return e instanceof Error && e.message ? e.message : '未知原因';
+  }
+
+  /** 切页在途标记。模块内局部量，不进对外返回面（模板拿不到、也就无从 `:loading`）。 */
+  let pageSlicing = false;
+
+  /**
+   * 切页前的重入闸门：已在切页就拒掉本次点击（返回 true = 调用方应直接 return）。
+   *
+   * 2026-10-05：切页是主线程同步计算（load 要重解整份 xref，再逐页 create/copyPages/
+   * save），几百页会假死数秒；期间按钮既无 loading 也未禁用，可连点 ⇒ 建出两行重复装配件
+   *（`POST /assemblies` 无幂等键）。这里只做函数级拦截。
+   */
+  function rejectIfSlicing(): boolean {
+    if (!pageSlicing) return false;
+    ElMessage.warning('正在切页，请稍候');
+    return true;
   }
 
   /** 把选中页按 pdfUid 分组。 */
@@ -1014,6 +1134,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /** 合并选中页 → 一个独立零件（同一 PDF）。 */
   async function mergeSelectedAsPart(): Promise<void> {
     if (guardRowMutation()) return;
+    if (rejectIfSlicing()) return;
     const byPdf = selectedByPdf();
     if (byPdf.size === 0) {
       ElMessage.warning('请先勾选页');
@@ -1037,7 +1158,20 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       });
     } else {
       // 部分页 → pdf-lib 合成
-      const merged = await mergePages(src.raw, pageIndices);
+      // 2026-10-05：与「合并为装配件」/「手动新增装配件」同一口径 —— 按钮是裸 `@click`，
+      // pdf-lib 抛错时原本是 unhandled rejection（不建行、不提示、按钮看着像坏了）。
+      // 回滚集合天然为空：合成产物是 `mergePages` 成功之后才 push 进 allPdfs 的，
+      // 抛错时一个条目都没登记，没有半成品要摘。
+      pageSlicing = true;
+      let merged: Blob;
+      try {
+        merged = await mergePages(src.raw, pageIndices);
+      } catch (e) {
+        ElMessage.error(sliceFailedMessage(src, e));
+        return;
+      } finally {
+        pageSlicing = false;
+      }
       const newUid = `syn-${makeUid()}`;
       allPdfs.value.push({
         uid: newUid,
@@ -1068,6 +1202,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /** 合并选中页 → 一个装配件（同一 PDF，至少 2 页）。 */
   async function mergeSelectedAsAssembly(): Promise<void> {
     if (guardRowMutation()) return;
+    if (rejectIfSlicing()) return;
     const byPdf = selectedByPdf();
     if (byPdf.size === 0) {
       ElMessage.warning('请先勾选页');
@@ -1085,7 +1220,21 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     const src = allPdfs.value.find((s) => s.uid === pdfUid);
     if (!src) return;
     const parsed = parseDrawingFilename(src.filename);
-    const children: AssemblyChildRow[] = pageIndices.map((pi) => {
+    // 2026-10-05：每个子件切出**自己那一页**的单页 PDF（load 一次，逐页切）。校验全过
+    // 才占重入闸门，所以上面那些 early return 不必各自释放。
+    pageSlicing = true;
+    const slices: PdfSource[] = [];
+    try {
+      const srcDoc = await loadPdfDoc(src.raw);
+      for (const pi of pageIndices) slices.push(await pushPageSlice(src, srcDoc, pi));
+    } catch (e) {
+      rollbackPushedSources(slices.map((s) => s.uid));
+      ElMessage.error(sliceFailedMessage(src, e));
+      return;
+    } finally {
+      pageSlicing = false;
+    }
+    const children: AssemblyChildRow[] = pageIndices.map((pi, i) => {
       const drawingNo = parsed.drawingNo
         ? pi === 0
           ? parsed.drawingNo
@@ -1097,17 +1246,21 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
           : `${parsed.partName}-${pi + 1}`
         : '';
       return makeAssemblyChild({
-        pdfSourceUid: pdfUid,
+        pdfSourceUid: slices[i]!.uid,
         pageIndex: pi,
         drawing_no: drawingNo,
         name: name,
       });
     });
     const created = makeAssemblyRow({
+      // 顶层 pdfSourceUid 仍是**原始** PDF：源文件区预览 / removePdf 级联清理依赖它
       pdfSourceUid: pdfUid,
       drawing_no: parsed.drawingNo || '',
       name: parsed.partName || '',
+      // 默认「无总装图」：不产生 ASSEMBLY_MASTER 文件，打印既不出总装图也不出
+      // 该装配件的序列号背面。要指定某页作总装图由用户在下拉里选。
       masterPageIndex: null,
+      masterPdfSourceUid: null,
       children,
     });
     assemblies.value.push(created);
@@ -1193,8 +1346,29 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     standaloneParts.value = standaloneParts.value.filter((r) => r.uid !== uid);
   }
 
+  /**
+   * 删除一个装配件行，并把它持有的单页切片（`syn-` 开头）从 `allPdfs` 里摘掉 ——
+   * 切片只在建这一行时产生、行删了就没有引用，留在 allPdfs 里只是堆无人使用的 Blob。
+   * 仍被其它行引用的切片不动（`Set` 去重：总装图切片与对应子件的切片是同一个 uid）。
+   */
   function removeAssembly(uid: string): void {
+    const row = assemblies.value.find((a) => a.uid === uid);
+    if (!row) return;
     assemblies.value = assemblies.value.filter((a) => a.uid !== uid);
+    const owned = new Set<string>();
+    if (row.masterPdfSourceUid) owned.add(row.masterPdfSourceUid);
+    for (const c of row.children) owned.add(c.pdfSourceUid);
+    if (owned.size === 0) return;
+    const stillUsed = new Set<string>();
+    for (const r of standaloneParts.value) stillUsed.add(r.pdfSourceUid);
+    for (const a of assemblies.value) {
+      stillUsed.add(a.pdfSourceUid);
+      if (a.masterPdfSourceUid) stillUsed.add(a.masterPdfSourceUid);
+      for (const c of a.children) stillUsed.add(c.pdfSourceUid);
+    }
+    allPdfs.value = allPdfs.value.filter(
+      (s) => !(s.uid.startsWith('syn-') && owned.has(s.uid) && !stillUsed.has(s.uid)),
+    );
   }
 
   /** 展示用：把 PdfSource uid 翻译成可读文件名 + 页数。 */
@@ -1226,6 +1400,44 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   function onAsmPlannedChange(asmRow: AssemblyRow, v: string): void {
     asmRow.planned_delivery_date = v;
     for (const c of asmRow.children) c.planned_delivery_date = v;
+  }
+
+  /**
+   * 实际建出的子件：被指定为总装图的那一页从子件里排除。
+   * 表格里仍然渲染完整 `a.children`（下拉选项来自它、用户填的图号 / 交期不能丢），
+   * 但建单 / 上传 / 计数一律走本函数。
+   *
+   * 排除是为了「页不重不漏」：总装图单独走 `kind=ASSEMBLY_MASTER`，若同一页又作为子件
+   * 存在，打印会在总装图页之外再输出一次该页。
+   */
+  function effectiveChildren(a: AssemblyRow): AssemblyChildRow[] {
+    if (a.masterPageIndex === null) return a.children;
+    return a.children.filter((c) => c.page_index !== a.masterPageIndex);
+  }
+
+  /**
+   * 总装图下拉改值：同时维护 `masterPageIndex` 与 `masterPdfSourceUid`（后者是那个
+   * 子件的切片，提交 / 上传 / 状态格都按它寻址）。
+   *
+   * 判空用 `typeof v !== 'number'`：el-select 清空 emit 的是 `undefined`
+   * （应用层配了 `value-on-clear` 时可能是 `''`），都按「无总装图」处理。
+   */
+  function onAsmMasterPageChange(a: AssemblyRow, v: number | null | undefined): void {
+    if (typeof v !== 'number') {
+      a.masterPageIndex = null;
+      a.masterPdfSourceUid = null;
+      return;
+    }
+    a.masterPageIndex = v;
+    const child = a.children.find((c) => c.page_index === v);
+    if (!child) {
+      // 下拉选项就是从 children 生成的，理论上到不了这里。真到了说明 children 被
+      // 换过（草稿恢复 / 将来新增的入口），宁可提示也不要静默按「无」提交。
+      a.masterPdfSourceUid = null;
+      ElMessage.warning('总装图选中的页在子件表里找不到，已按「无总装图」处理');
+      return;
+    }
+    a.masterPdfSourceUid = child.pdfSourceUid;
   }
 
   // ============ 手动新增零件 / 装配件 ============
@@ -1337,22 +1549,53 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
   async function confirmManualAssembly(): Promise<void> {
     if (guardRowMutation()) return;
+    if (rejectIfSlicing()) return;
     if (!manualAsmFormValid.value) return;
     const f = manualAsmForm.file!;
-    const totalPages = await countPdfPages(f);
     const pdfUid = `manual-asm-${makeUid()}`;
-    allPdfs.value.push({
+    const manualSource: PdfSource = {
       uid: pdfUid,
       raw: f,
       filename: f.name,
-      totalPages,
+      // 下面读出页数后就地补上；先给 0 是为了让失败提示能用上这个 source（带文件名）
+      totalPages: 0,
       synthesized: false,
-    });
+    };
+    // 2026-10-05：与「合并为装配件」同一口径 —— 每个子件只持自己那一页的单页切片。
+    // 原始 PDF 也进 allPdfs，一起纳入回滚：切页失败时行没建出来，留着它会让用户重试时
+    // 多出一份重复的源文件（源文件区是按 `!synthesized` 展示的，删得掉但看不见因果）。
+    //
+    // 重入闸门必须占在**任何 await 之前**：`countPdfPages` 是这里最慢的一步（pdfjs 要解析
+    // 整份文件），占晚了对话框「添加」按钮在解析期间就变成可连点 ⇒ 建出两行重复装配件
+    // （`POST /assemblies` 无幂等键）。`countPdfPages` 也因此必须落在 try 里：flag 已置位
+    // 而 await 在 try 外的话，它一抛错 `pageSlicing` 就永远停在 true，本入口被焊死。
+    const slices: PdfSource[] = [];
+    // 失败发生在哪一步：`pages` = 连页数都读不出来（另一个失败面，见 `pageCountFailedMessage`）。
+    let phase: 'pages' | 'slice' = 'pages';
+    pageSlicing = true;
+    let totalPages = 0;
+    try {
+      totalPages = await countPdfPages(f);
+      manualSource.totalPages = totalPages;
+      phase = 'slice';
+      allPdfs.value.push(manualSource);
+      const srcDoc = await loadPdfDoc(f);
+      for (let p = 0; p < totalPages; p++)
+        slices.push(await pushPageSlice(manualSource, srcDoc, p));
+    } catch (e) {
+      rollbackPushedSources([manualSource.uid, ...slices.map((s) => s.uid)]);
+      ElMessage.error(
+        phase === 'pages' ? pageCountFailedMessage(manualSource, e) : sliceFailedMessage(manualSource, e),
+      );
+      return;
+    } finally {
+      pageSlicing = false;
+    }
     const children: AssemblyChildRow[] = [];
     for (let p = 0; p < totalPages; p++) {
       children.push(
         makeAssemblyChild({
-          pdfSourceUid: pdfUid,
+          pdfSourceUid: slices[p]!.uid,
           pageIndex: p,
           drawing_no:
             totalPages === 1
@@ -1369,7 +1612,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       pdfSourceUid: pdfUid,
       drawing_no: manualAsmForm.drawing_no.trim(),
       name: manualAsmForm.name.trim(),
-      masterPageIndex: totalPages > 1 ? 0 : null,
+      // 2026-10-05：默认「无总装图」，与「合并为装配件」一致。默认把第 1 页当总装图会
+      // 让「有总装图 ⇒ 打印额外出总装图页 + 序列号背面」这条后端守卫在用户没要求时也被
+      // 触发。要总装图由用户在下拉里显式指定。
+      masterPageIndex: null,
+      masterPdfSourceUid: null,
       children,
     });
     assemblies.value.push(created);
@@ -1415,9 +1662,11 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
 
   /**
    * 决定某个 row 的 PDF 单元（用于 UI 显示上传状态）。
-   * 同一 PDF 源被多个 row 共享时（assembly 子件继承顶层 PDF），所有 row 显示同一状态。
+   * `pdfSourceUid` 允许为 null = 该实体没有要传的 PDF（装配件无总装图时顶层就是这种
+   * 情况），此时不占状态格。
    */
-  function getRowPdfCell(row: { pdfSourceUid: string }): UploadStatusCell | undefined {
+  function getRowPdfCell(row: { pdfSourceUid: string | null }): UploadStatusCell | undefined {
+    if (!row.pdfSourceUid) return undefined;
     return pdfUploadCells[`pdf:${row.pdfSourceUid}`];
   }
   /** 决定某个 row 的 3D 单元。 */
@@ -1431,10 +1680,24 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /**
    * 文件上传条目（统一容器）。
    * - key：UI cell / 后置上传 job 的键（`pdf:${srcUid}` / `3d:${fileUid}`）。
-   * - rowRefs：哪些 row 引用了该文件（同一 PDF 被装配件主子件共享时会有 N 个 ref）。
-   *   后置上传按「目标实体 × ref」展开 job：同一份原件被 N 个实体引用就上传 N 次，
-   *   **落在哪个端点由 ref 的 rowKind 决定**（见 `buildUploadJobs`）：装配件顶层走
-   *   `POST /assemblies/{id}/files`，其余（独立零件 / 装配件子件）走 parts 的上传端点。
+   * - rowRefs：哪些 row 引用了该文件。**落在哪个端点由 ref 的 rowKind 决定**（见
+   *   `buildUploadJobs`）：装配件顶层走 `POST /assemblies/{id}/files`，其余（独立零件 /
+   *   装配件子件）走 parts 的上传端点。
+   *
+   * 2026-10-05：装配件侧每个子件、每个总装图都是各自独立的**单页切片**（uid 唯一），
+   * 装配件顶层在「无总装图」时**不产生 entry** ⇒ 装配件的一份 entry 只对应一个目标
+   * 实体。同一份 PDF 挂多个 ref 只可能来自「多行共享同一份原件」，而「合成多页独立
+   * 零件」「多个装配件各切自同一 PDF」这两类**不产生多 ref** —— 前者一个合成产物只挂
+   * 一行，后者每个子件各建各的切片（uid 互不相同）。
+   *
+   * 2026-10-05 补：PDF 侧真正稳定产出「一个 cell 多个 job」的活口是 `splitStandalonePart`
+   * —— 它把合成行拆回 N 行，每行的 `pdfSourceUid` 都指回**原始** PDF 的 uid（不是被
+   * 删掉的那个 `syn-` 切片），于是 `pdf:<原 uid>` 这一份 entry 挂 N 个 standalone ref；
+   * 次要的一条是对同一份原始 PDF 再次「全部页合并为独立零件」（那条分支直接复用原
+   * uid、不建切片），重复做就会得到多行共享同一 uid。
+   * （3D 侧本来就常见多 ref：同一个模型文件被多行选中。）改 `syncCells` /
+   * `buildUploadJobs` 的多 ref 逻辑时按上面这些设防，不要假设「一份 entry 只有一个
+   * ref」而把循环简化掉。
    */
   interface FileUploadEntry {
     key: string;
@@ -1461,40 +1724,38 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       map.set(key, created);
       return created;
     };
+    /** 装一个 PDF 条目并把 row 挂上去（每个实体一个独立切片 ⇒ key 天然唯一）。 */
+    const attachPdf = (src: PdfSource, ref: RowRef): void => {
+      const key = `pdf:${src.uid}`;
+      ensure(key, () => ({
+        key,
+        kind: 'DRAWING',
+        filename: src.filename,
+        file: ensureFile(src.raw, src.filename),
+        size: src.raw.size,
+        contentType: src.raw.type || 'application/pdf',
+        rowRefs: [],
+      })).rowRefs.push(ref);
+    };
 
     // 1) PDF：独立零件行
     for (const r of standaloneParts.value) {
       const src = allPdfs.value.find((s) => s.uid === r.pdfSourceUid);
       if (!src) continue;
-      const key = `pdf:${src.uid}`;
-      ensure(key, () => ({
-        key,
-        kind: 'DRAWING',
-        filename: src.filename,
-        file: ensureFile(src.raw, src.filename),
-        size: src.raw.size,
-        contentType: src.raw.type || 'application/pdf',
-        rowRefs: [],
-      })).rowRefs.push({ rowKind: 'standalone', rowUid: r.uid });
+      attachPdf(src, { rowKind: 'standalone', rowUid: r.uid });
     }
-    // 2) PDF：装配件顶层（master）
+    // 2) PDF：装配件 —— 每个子件一份单页切片；总装图可选（也是独立的那一页的切片）
     for (const a of assemblies.value) {
-      const src = allPdfs.value.find((s) => s.uid === a.pdfSourceUid);
-      if (!src) continue;
-      const key = `pdf:${src.uid}`;
-      ensure(key, () => ({
-        key,
-        kind: 'DRAWING',
-        filename: src.filename,
-        file: ensureFile(src.raw, src.filename),
-        size: src.raw.size,
-        contentType: src.raw.type || 'application/pdf',
-        rowRefs: [],
-      })).rowRefs.push({ rowKind: 'asmMaster', rowUid: a.uid });
-      // 子件共享同 PDF
-      for (const c of a.children) {
-        map.get(key)!.rowRefs.push({ rowKind: 'asmChild', rowUid: c.uid, asmUid: a.uid });
+      for (const c of effectiveChildren(a)) {
+        const src = allPdfs.value.find((s) => s.uid === c.pdfSourceUid);
+        if (!src) continue;
+        attachPdf(src, { rowKind: 'asmChild', rowUid: c.uid, asmUid: a.uid });
       }
+      // 「无总装图」⇒ 顶层一个 job 都不产生（库里就不会有 ASSEMBLY_MASTER 行）
+      if (!a.masterPdfSourceUid) continue;
+      const master = allPdfs.value.find((s) => s.uid === a.masterPdfSourceUid);
+      if (!master) continue;
+      attachPdf(master, { rowKind: 'asmMaster', rowUid: a.uid });
     }
     // 3) 3D 模型：被 row 引用的（three_d_index 指向的文件）
     const attachThreeD = (ref: RowRef, idx: number): void => {
@@ -1516,8 +1777,14 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       if (r.three_d_index !== null)
         attachThreeD({ rowKind: 'standalone', rowUid: r.uid }, r.three_d_index);
     }
+    // 装配件子件走 effectiveChildren，与建单口径（buildAssemblyPayload）对齐：被指定为
+    // 总装图的那一页不建出子件，遍历它只会挂出一个没有 job 的 entry。
+    // 2026-10-05：这一处**对外不可观测** —— 不建 job 就不进 jobsByCellKey，syncCells 也不
+    // 会凭空造 cell，composable 的返回面上看不出差别。保留这个写法是为了不给「一个
+    // PdfSource 同时挂 asmChild + asmMaster 两种 ref」留下悬空引用；配套用例锁的是
+    // 用户可见的那条不变式：被排除那一行不占 3D 状态格。
     for (const a of assemblies.value) {
-      for (const c of a.children) {
+      for (const c of effectiveChildren(a)) {
         if (c.three_d_index !== null) {
           attachThreeD({ rowKind: 'asmChild', rowUid: c.uid, asmUid: a.uid }, c.three_d_index);
         }
@@ -1566,7 +1833,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
      * job 的稳定身份 = `${jobKey}:${target}:${ownerId}`（jobKey 已含 `pdf:` / `3d:` 前缀，
      * 故天然区分 kind；再带 target 是因为 t_part.id 与 t_assembly.id 是两套雪花，job id
      * 必须全局唯一）。job 状态、失败清单、重试集合全按它寻址 —— 粒度必须是 job
-     * 而不是 cell：一份 PDF 被装配件顶层 + N 个子件共享时会展开成 N+1 个 job，
+     * 而不是 cell：一份原件被多个 row 共享时（合成的多页独立零件等）会展开成多个 job，
      * 只失败其中一个时按 cell 重试会把已成功的也重跑一遍，而后端
      * `uk_t_part_file_single (part_id, kind)`（覆盖 DRAWING / 3D_MODEL /
      * ASSEMBLY_MASTER / CAD_2D）会对二次上传报 21108「相同文件已存在」。装配件文件的
@@ -1740,9 +2007,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /**
    * 由 jobStates / failedJobs 重新推导每个 cell 的状态，**不就地覆盖**。
    *
-   * 同一份文件可能被 N+1 个 job 共用一个 cell：任一 job 失败即 error（该文件确实
-   * 没传全），但重试时只重跑失败的那个 job，成功过的不会再动。error 文案取第一个
-   * 失败 job 的错误（同一份文件、同一批请求，错误基本一致）。
+   * 同一份文件可能被多个 job 共用一个 cell（多行共享原件时）：任一 job 失败即 error
+   * （该文件确实没传全），但重试时只重跑失败的那个 job，成功过的不会再动。error 文案
+   * 取第一个失败 job 的错误（同一份文件、同一批请求，错误基本一致）。
    */
   function syncCells(): void {
     for (const [jobKey, jobs] of jobsByCellKey) {
@@ -1811,9 +2078,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 计数 / 清场 / 跳页全部以「当前表格 == 建单时那张表」为前提，不成立就只能如实告知。
    *
    * 计数口径统一为 **job**（一个目标实体 × 一份原件 = 一项），与下面清单的行一一对应：
-   * 一份 PDF 被装配件顶层 + N 子件共享时是 N+1 项，标题若按「文件数」算就会
-   * 出现「1 个文件失败」底下列两行实体号的矛盾。涉及的目标实体数 / 文件数作为补充
-   * 信息一并给出。
+   * 同一份文件被多个实体引用时是多项，标题若按「文件数」算就会出现「1 个文件失败」
+   * 底下列两行实体号的矛盾。涉及的目标实体数 / 文件数作为补充信息一并给出。
    *
    * 成功判据是「**全部已登记 job 都判成功**」，不是「failedJobs 为空」：登记 / 调度
    * 被打断时，未被调度的 job 停在 `pending` 且不在 `failedJobs` 里，只看 failedJobs 会
@@ -2230,7 +2496,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       order_no: a.order_no,
       system_delivery_date: a.system_delivery_date,
       note: a.note,
-      children: a.children.map((c, i) => ({
+      children: effectiveChildren(a).map((c, i) => ({
         name: c.name || `子件${i + 1}`,
         drawing_no: c.drawing_no,
         quantity: c.quantity,
@@ -2289,15 +2555,18 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     if (rows.length === 0) return failures;
     await runWithConcurrency(rows, ASSEMBLY_CREATE_CONCURRENCY, async (a) => {
       const label = a.drawing_no || a.name || `装配件-${a.uid}`;
+      // 2026-10-05：请求里的子件 = effectiveChildren（被指定为总装图的那一页不算子件）。
+      // 算一次存局部变量：下面的长度校验与按下标逐个对账必须用**同一份**数组。
+      const effChildren = effectiveChildren(a);
       try {
         const res = await createAssembly(buildAssemblyPayload(a));
         const children = res?.created_children;
         if (!res?.assembly?.id || !Array.isArray(children)) {
           throw new Error('响应缺少 assembly / created_children（可能被网关拦截）');
         }
-        if (children.length !== a.children.length) {
+        if (children.length !== effChildren.length) {
           throw new Error(
-            `子件数量与请求不一致（请求 ${a.children.length} 个，响应 ${children.length} 个）`,
+            `子件数量与请求不一致（请求 ${effChildren.length} 个，响应 ${children.length} 个）`,
           );
         }
         // 2026-10-05：`created_children[i]` 要按下标对回本地子件行（后端按入参顺序建子件，
@@ -2308,9 +2577,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         // 当错序处理。
         children.forEach((child, i) => {
           if (!child?.id) throw new Error(`响应第 ${i + 1} 个子件缺 id`);
-          if ((child.drawing_no ?? '').trim() !== a.children[i]!.drawing_no.trim()) {
+          if ((child.drawing_no ?? '').trim() !== effChildren[i]!.drawing_no.trim()) {
             throw new Error(
-              `子件顺序与请求不一致（请求第 ${i + 1} 个是 ${a.children[i]!.drawing_no || '（空图号）'}，` +
+              `子件顺序与请求不一致（请求第 ${i + 1} 个是 ${effChildren[i]!.drawing_no || '（空图号）'}，` +
                 `响应是 ${child.drawing_no || '（空图号）'}）`,
             );
           }
@@ -2318,7 +2587,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         // 顶层 + 子件同进同出（一次请求一个事务）
         createdTargets.set(a.uid, { target: 'assembly', id: String(res.assembly.id) });
         children.forEach((child, i) => {
-          createdTargets.set(a.children[i]!.uid, { target: 'part', id: String(child!.id) });
+          createdTargets.set(effChildren[i]!.uid, { target: 'part', id: String(child!.id) });
         });
       } catch (e) {
         failures.push({
@@ -2356,9 +2625,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /**
    * 本次提交要上传的「目标实体 × 原件」对应关系（建单成功后调用一次）。
    *
-   * 端点分流在**行**这一级，不在 entry 这一级：同一份 PDF 会同时被装配件顶层与 N 个子件
-   * 引用（共享一个 UI cell），但顶层要打 `/assemblies/{id}/files`、子件要打
-   * `/parts/{id}/upload-drawing`。
+   * 端点分流在**行**这一级，不在 entry 这一级：同一份原件被多个 row 引用时（共享一个
+   * UI cell），顶层要打 `/assemblies/{id}/files`、子件要打 `/parts/{id}/upload-drawing`。
    */
   function buildUploadJobs(refs: CreatedTargetRef[]): UploadJob[] {
     const entries = collectFilesToUpload();
@@ -2387,8 +2655,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         });
       }
     }
-    // 同一份 PDF 被装配件顶层 + N 个子件共享时，这里会产出 N+1 个 job（每个实体各上传
-    // 一次）。这是建单与文件上传彻底解耦的已知代价：请求数比「建单时各带一份绑定」高，
+    // 同一份原件被多个 row 共享时（合成的多页独立零件等），这里会为每个实体各产出
+    // 一个 job。这是建单与文件上传彻底解耦的已知代价：请求数比「建单时各带一份绑定」高，
     // 但上传失败不再需要回滚工单。
     return jobs;
   }
@@ -2431,7 +2699,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   function createdChildCount(): number {
     let n = 0;
     for (const a of assemblies.value) {
-      for (const c of a.children) {
+      for (const c of effectiveChildren(a)) {
         if (createdTargets.get(c.uid)?.target === 'part') n += 1;
       }
     }
@@ -2777,6 +3045,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     // merge / split
     mergeSelectedAsPart,
     mergeSelectedAsAssembly,
+    effectiveChildren,
+    onAsmMasterPageChange,
     splitStandalonePart,
     removePdf,
     removeStandalonePart,

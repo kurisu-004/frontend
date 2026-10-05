@@ -428,8 +428,11 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
 
   /** 2026-09-29 review 第 1 轮 C2 修复：后端 uploadAssemblyPdf 响应是
    *  `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。响应只携带
-   *  新建的 AssemblyFileRef 列表，detail / children 走 fetchData() 重拉；
-   *  ElMessage 用返回的 files.length 报「自动创建 N 个子件」。 */
+   *  新建的 AssemblyFileRef 列表，detail / children 走 fetchData() 重拉。
+   *
+   *  2026-10-05：`created.length` 是**上传成功的总装 PDF 份数**（该端点只做 SHA-256
+   *  CAS + COS PUT + INSERT `t_part_file(kind='ASSEMBLY_MASTER')`，核实过它不建任何
+   *  子件），所以文案不能说成「自动创建 N 个子件」。 */
   async function uploadPdfFn(file: UploadFile): Promise<boolean> {
     if (!file.raw) return false;
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -440,7 +443,7 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     try {
       const created = await uploadAssemblyPdf(assemblyId.value, file.raw);
       await fetchData();
-      ElMessage.success(`上传成功：自动创建 ${created.length} 个子件`);
+      ElMessage.success(`上传成功：已上传 ${created.length} 份总装 PDF（子件请单独添加）`);
       return true;
     } catch (e) {
       ElMessage.error((e as Error).message ?? '上传总装 PDF 失败');

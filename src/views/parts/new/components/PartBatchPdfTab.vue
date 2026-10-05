@@ -358,9 +358,27 @@
         <!-- expand 列不进 defs（EP type='expand' 不可拖；子件表固定结构） -->
         <el-table-column type="expand">
           <template #default="{ row }">
-            <el-table :data="row.children" size="small" :show-header="true" class="child-table">
-              <el-table-column label="页" min-width="60" align="center">
-                <template #default="{ row: c }">P{{ c.page_index + 1 }}</template>
+            <!-- 2026-10-05：被指定为总装图的那一页整行置灰 + 打「总装图」标签 ——
+                 它不再作为子件建出（页不能既当总装图又当子件），但行内容不删不改，
+                 切回「无」时用户填的图号 / 交期仍在。 -->
+            <el-table
+              :data="(row as AssemblyRow).children"
+              size="small"
+              :show-header="true"
+              :row-class-name="childRowClass(row as AssemblyRow)"
+              class="child-table"
+            >
+              <el-table-column label="页" min-width="110" align="center">
+                <template #default="{ row: c }">
+                  <span>P{{ c.page_index + 1 }}</span>
+                  <el-tag
+                    v-if="c.page_index === (row as AssemblyRow).masterPageIndex"
+                    type="info"
+                    size="small"
+                    effect="plain"
+                    >总装图</el-tag
+                  >
+                </template>
               </el-table-column>
               <el-table-column label="图号" min-width="140" align="center">
                 <template #default="{ row: c }">
@@ -419,7 +437,22 @@
               </el-table-column>
               <el-table-column label="3D" min-width="55" align="center">
                 <template #default="{ row: c }">
-                  <el-tag v-if="c.three_d_index !== null" type="success" size="small">3D ✓</el-tag>
+                  <!-- 2026-10-05：这一列表达「3D 文件已挂到本行」。被指定为总装图的那一页
+                       不作为子件建出、它的 3D 也不会上传 ⇒ 该行改用中性 tag，别再用绿勾
+                       暗示会上传。 -->
+                  <el-tag
+                    v-if="c.three_d_index !== null"
+                    :type="
+                      c.page_index === (row as AssemblyRow).masterPageIndex ? 'info' : 'success'
+                    "
+                    :effect="
+                      c.page_index === (row as AssemblyRow).masterPageIndex ? 'plain' : 'light'
+                    "
+                    size="small"
+                    >{{
+                      c.page_index === (row as AssemblyRow).masterPageIndex ? '3D 不上传' : '3D ✓'
+                    }}</el-tag
+                  >
                 </template>
               </el-table-column>
               <el-table-column label="计划交期" min-width="150" align="center">
@@ -451,13 +484,19 @@
                   />
                 </template>
               </el-table-column>
-              <!-- 2026-09-16 T3.4：子件上传状态（共享顶层 PDF + 各自 3D）。 -->
+              <!-- 2026-10-05：子件上传状态（各自那一页的单页切片 + 各自 3D）。
+                   被指定为总装图的那一页不建出子件，它的状态格取的是同一个切片的
+                   `asmMaster` entry（这一页确实作为总装图传了）⇒ 标签改成「总装图」，
+                   免得在子件表里读成「该页作为子件传了」。状态与重试入口照旧：
+                   顶层行本来就渲染同一个 cell（见总装图那列），两处指向同一份状态。 -->
               <el-table-column label="上传" min-width="140" align="center">
                 <template #default="{ row: c }">
                   <div class="upload-cell">
                     <UploadStatusCellView
                       :cell="getRowPdfCell(c as AssemblyChildRow)"
-                      label="PDF"
+                      :label="
+                        c.page_index === (row as AssemblyRow).masterPageIndex ? '总装图' : 'PDF'
+                      "
                       :retry-disabled="cellRetryDisabled"
                       @retry="onRetryRowPdf(c as AssemblyChildRow)"
                     />
@@ -496,15 +535,18 @@
             </template>
           </el-table-column>
         </template>
-        <!-- 2026-09-16 T3.4：装配件顶层 PDF 上传状态列；子件上传状态在下方子表里。 -->
+        <!-- 2026-10-05：顶层「主图」只挂被指定为总装图的那一页的切片；没有总装图时
+             不产生 ASSEMBLY_MASTER 上传 job（库里也没那行），如实说明打印侧的后果。 -->
         <el-table-column label="上传" min-width="140" align="center">
           <template #default="{ row }">
             <UploadStatusCellView
-              :cell="getRowPdfCell(row as AssemblyRow)"
+              v-if="(row as AssemblyRow).masterPdfSourceUid"
+              :cell="getRowPdfCell({ pdfSourceUid: (row as AssemblyRow).masterPdfSourceUid })"
               label="主图"
               :retry-disabled="cellRetryDisabled"
-              @retry="onRetryRowPdf(row as AssemblyRow)"
+              @retry="onRetryRowPdf({ pdfSourceUid: (row as AssemblyRow).masterPdfSourceUid })"
             />
+            <span v-else class="no-master-hint">无总装图（打印时不出总装图与序列号背面）</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" min-width="80" align="center" fixed="right">
@@ -748,6 +790,10 @@ const props = defineProps<{
   clearSelection: (table: { clearSelection: () => void } | null | undefined) => void;
   mergeSelectedAsPart: () => Promise<void>;
   mergeSelectedAsAssembly: () => Promise<void>;
+  /** 2026-10-05 新增：实际建出的子件（被指定为总装图的那一页被排除）。 */
+  effectiveChildren: (a: AssemblyRow) => AssemblyChildRow[];
+  /** 2026-10-05 新增：总装图下拉改值（同时维护 masterPageIndex 与 masterPdfSourceUid）。 */
+  onAsmMasterPageChange: (a: AssemblyRow, v: number | null | undefined) => void;
   splitStandalonePart: (row: StandalonePartRow) => void;
   removePdf: (pdfUid: string) => void;
   removeStandalonePart: (uid: string) => void;
@@ -766,7 +812,7 @@ const props = defineProps<{
   // 上传状态（cell + 反查函数 + 全局汇总）
   pdfUploadCells: Record<string, UploadStatusCellViewCell>;
   threeDUploadCells: Record<string, UploadStatusCellViewCell>;
-  getRowPdfCell: (row: { pdfSourceUid: string }) => UploadStatusCellViewCell | undefined;
+  getRowPdfCell: (row: { pdfSourceUid: string | null }) => UploadStatusCellViewCell | undefined;
   getRowThreeDCell: (row: { three_d_index: number | null }) => UploadStatusCellViewCell | undefined;
   // 2026-10-04：单入口提交流程（建工单 + 逐 part 后置上传）
   commitStage: 'idle' | 'creating' | 'uploading' | 'done';
@@ -862,7 +908,11 @@ function bindAssembliesTableRef(el: unknown): void {
 // cell 状态是「按文件」的，`getRowPdfCell` / `getRowThreeDCell` 用的 key 正是
 // `UploadJob.jobKey` ⇒ 行内「重试」只需把该 cell 自身的 key 交给 composable，
 // 由它筛出这个文件涉及的全部 job 重跑（不会重复建工单）。
-function onRetryRowPdf(row: { pdfSourceUid: string }): void {
+//
+// 2026-10-05：PDF 一侧的入参放宽到 `string | null` —— 装配件顶层在「无总装图」时
+// 传 null（没有可重试的文件），此时不发请求。
+function onRetryRowPdf(row: { pdfSourceUid: string | null }): void {
+  if (!row.pdfSourceUid) return;
   void props.retryUploadByCell(`pdf:${row.pdfSourceUid}`);
 }
 function onRetryRowThreeD(row: { pdfSourceUid: string; three_d_index: number | null }): void {
@@ -870,6 +920,14 @@ function onRetryRowThreeD(row: { pdfSourceUid: string; three_d_index: number | n
   const f = props.threeDModelFiles[row.three_d_index];
   if (!f) return;
   void props.retryUploadByCell(`3d:${String(f.uid)}`);
+}
+
+/**
+ * 子件表行 class：被父行指定为总装图的那一页置灰。
+ * 闭包捕获父行 —— el-table 的 `row-class-name` 只给子行，拿不到父行。
+ */
+function childRowClass(parent: AssemblyRow): (data: { row: AssemblyChildRow }) => string {
+  return ({ row }) => (row.page_index === parent.masterPageIndex ? 'is-master-page' : '');
 }
 
 // ============ 2026-08-27 T23：列顺序拖动 + 可见性（3 个 el-table）============
@@ -1365,7 +1423,7 @@ const columnDefs_assembly: ColumnDef[] = [
   {
     key: 'masterPageIndex',
     label: '装配图（总装图）',
-    minWidth: 180,
+    minWidth: 220,
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as AssemblyRow;
@@ -1373,20 +1431,21 @@ const columnDefs_assembly: ColumnDef[] = [
         ElSelect,
         {
           modelValue: r.masterPageIndex,
-          // masterPageIndex 类型为 number | null；clearable 正常落 null。
+          // 2026-10-05：走 composable 的 handler —— masterPageIndex 与 masterPdfSourceUid
+          // 成对维护（提交 / 上传 / 状态格都按后者寻址）。
           'onUpdate:modelValue': (v: number | null | undefined) => {
-            r.masterPageIndex = v ?? null;
+            props.onAsmMasterPageChange(r, v);
           },
-          placeholder: '无（清空即不指定）',
+          placeholder: '无总装图',
           clearable: true,
           size: 'small',
-          style: 'width: 170px',
+          style: 'width: 210px',
         },
         () =>
           r.children.map((c) =>
             h(ElOption, {
               key: c.page_index,
-              label: `P${c.page_index + 1}（${c.drawing_no || '子件'}）`,
+              label: `P${c.page_index + 1}（${c.drawing_no || '子件'} · 总装图，该页不再作为子件）`,
               value: c.page_index,
             }),
           ),
@@ -1438,12 +1497,16 @@ const columnDefs_assembly: ColumnDef[] = [
   },
   {
     key: 'children_length',
+    // 2026-10-05：按 effectiveChildren 计数（与工具栏表头 totalAssemblyChildren、建单口径
+    // 同一口径）。指定了总装图的那一页从子件里排除，这一列若还报 `children.length`，用户
+    // 拿它跟表头「共 N 子件」核对会凭空多出一条。表头文案「子件数」无需改：总装图本来
+    // 就不是子件，显示「不把它算进来的子件数」正是这个文案的字面含义。
     label: '子件数',
     minWidth: 70,
     align: 'center',
     cellRender: ({ row }) => {
       const r = row as AssemblyRow;
-      return h('span', null, r.children.length);
+      return h('span', null, props.effectiveChildren(r).length);
     },
   },
 ];
@@ -1491,6 +1554,22 @@ onMounted(() => {
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
+}
+
+/* 2026-10-05：装配件无总装图时顶层「主图」列的说明。灰色小字（居中由列的 align 提供），
+   与本文件其它灰色提示（.hint / .hint-inline）同一套 var(--text-secondary)。 */
+.no-master-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* 子件表里被指定为总装图的那一行（不作为子件建出）。用 EP 自带的
+   --el-fill-color-light 灰底，不新造 token；!important 是为了压过 EP 表格
+   自身的行 / 单元格背景。 */
+:deep(.is-master-page),
+:deep(.is-master-page .el-table__cell) {
+  background-color: var(--el-fill-color-light) !important;
 }
 
 /* PR-H 2026-07-28：sortable.js 拖拽视觉 */
