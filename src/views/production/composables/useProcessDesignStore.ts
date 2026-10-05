@@ -1,0 +1,539 @@
+// src/views/production/composables/useProcessDesignStore.ts
+//
+// 2026-10-05 新增：「制定工序」页 Pinia setup store —— 替代
+// usePartProcessDesign.ts（模块级 `ref` 单例 + 4 处裸 async API 调用，
+// 无 queryKey / 无 Zod 守门 / 无 enabled 闸门，2026-10-05 删除）。
+//
+// 数据源迁移：本页 2026-10-05 起读 prod 域 `GET /api/v2/prod/process-design/parts`
+// （旧 part 域 `GET /api/v2/parts?status=PENDING` 的 repo SQL 硬置
+// `AND assembly_id IS NULL`，把**装配件的子零件全排除**了，而子件同样需要定工序）。
+// 行类型从 `PartListItem`（20 余字段）换成 `ProcessDesignPartSchema`（7 字段，本页
+// 实际只读 id / process_chain_id / name / serial_no / drawing_no 五个 + assembly_id 标注）。
+//
+// 范本：src/views/cnc/composables/usePendingProgrammingStore.ts。
+//
+// 不变量（改动前必读）：
+//   1. 必须在组件 setup 内首次调用 useProcessDesignStore()；
+//   2. 视图 onBeforeUnmount 必须 store.$dispose()（Pinia 单例，泄漏选中零件 /
+//      未保存草稿到下次进入 —— 注意 $dispose 只 reset 本 store 自建的 ref，
+//      故对外状态必须走 query / editor 两个 plain object slice，见 return 处的说明）；
+//   3. 消费侧禁止解构 store —— 一律 store.query.xxx / store.editor.xxx
+//      （深代理自动解包嵌套 ref）；
+//   4. 不 import vue-router：本页暂无跳转需求（确有需要时按
+//      usePendingProgrammingStore::registerRouter 的注入范式加）。
+//
+// 沿 CLAUDE.md 硬约束：
+//   - 两层数据获取架构：本文件是**页面级 store**（私有状态 + 内部 useQuery +
+//     useMutation + 失效），工序下拉走**共享基础数据层** useProcessesQuery；
+//   - queryKey 全走 qk.xxx，queryFn 从 queryKey 读最新 params（不闭包捕获 stale）；
+//   - Zod 守门在 **api 层**（listProcessDesignParts 内部 parse），queryFn 不重复
+//     parse（parse 返回深拷贝，重复 parse = 每屏数据被校验 + 克隆两遍）；
+//   - enabled 闸门（restored）避免「默认参数首屏 + 持久化参数再屏」双 fetch；
+//   - 不写 retry：信任 main.ts 全局 queries.retry: 0 / mutations.retry: 0；
+//   - 缓存时长：本页是页面级列表，走 main.ts 全局默认（不在共享层有限缓存约束范围内）。
+//
+// ⚠️ 服务端态与未保存草稿**分家**（本次重构的核心）：旧实现的 `flows` map 把两者混在
+// 一个字典里 —— 「服务端链」与「本地 dirty 编辑」共用一份 PartProcessFlow。现在：
+//   - 服务端链 → store 内第 2 个 useQuery（qk.processDesignChain）**读**，
+//     query 缓存只装已持久化的东西；
+//   - 未保存的工序草稿 → 私有 `draftSteps: Record<string, ProcessStep[]>`，**绝不**
+//     进 query 缓存（否则「刷新页面 = 恢复未保存编辑」这种反直觉行为会出现，且脏数据
+//     会被失效 / 重取悄悄覆盖）。
+
+import { computed, ref, watch } from 'vue';
+import { defineStore } from 'pinia';
+import { ElMessage } from 'element-plus';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
+import type { QueryClient } from '@tanstack/vue-query';
+
+import { ApiError } from '@/api/http';
+import {
+  getProcessChainById,
+  listProcessDesignParts,
+  upsertProcessChainByPart,
+  type ListProcessDesignPartsParams,
+} from '@/api/processChain';
+import type { ProcessChainByPartDto, ProcessChainStepDto } from '@/api/processChain.contract';
+import { qk } from '@/composables/queries/keys';
+import type {
+  ProcessDesignPartListResultSchema,
+  ProcessDesignPartSchema,
+} from '@/composables/queries/schemas';
+import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
+import type { Process } from '@/types/process';
+import type { ProcessStep } from '@/types/partProcess';
+
+/** 2026-10-05：单页拉取上限。后端 limit 缺省 200 / clamp(1, 500)；本页不分页，
+ *  取 200 与后端缺省一致。左栏据此提示「仅显示前 N / 共 M」（后端 total 是全量口径，
+ *  与 limit/offset 无关）。 */
+export const PROCESS_DESIGN_LIMIT = 200;
+
+/** 链不存在 / 已删的后端错误码（BIZ_PROCESS_CHAIN_NOT_FOUND，HTTP 404）。
+ *  命中即按**空链**归一，不当错误态：链软删后 part 上仍挂着 process_chain_id 是
+ *  合法中间态，此时零件就是「没有工序」，不该弹错、不该阻塞编辑。 */
+const CHAIN_NOT_FOUND = 20701;
+
+/** 把 service 侧 ProcessChainStepDto 转成 UI 用的 ProcessStep（注入 uid / color 等冗余）。
+ *  ProcessStep.uid 仅作 UI v-for key，不参与后端。
+ *
+ *  ⚠️ 每次调用都生成**新的随机 uid** ⇒ 不能拿整对象 JSON 比较来判断「草稿与服务端是否
+ *  一致」（见下方 stepsSignature：只比对业务字段）。 */
+function dtoToStep(dto: ProcessChainStepDto): ProcessStep {
+  return {
+    uid: `step-${dto.id ?? Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    process_id: dto.process_id,
+    process_code: '', // 后端响应不冗余 code/name — 由调用方按 process_id 二次查
+    process_name: '',
+    category: 'INHOUSE', // 默认值；查不到工序时保持（后端不填）
+    estimated_minutes: dto.estimated_minutes,
+    note: dto.note ?? null,
+    sort_order: dto.sort_order,
+    color: null,
+  };
+}
+
+/** 把 UI 用的 ProcessStep 转成 service UpsertProcessChainRequest 用的 step（去掉 uid）。 */
+function stepToUpsert(step: ProcessStep): ProcessChainStepDto {
+  return {
+    sort_order: step.sort_order,
+    process_id: step.process_id,
+    estimated_minutes: step.estimated_minutes,
+    note: step.note ?? null,
+  };
+}
+
+/** 工序步骤的「业务签名」—— 只取参与后端语义的四个字段。
+ *  刻意**排除 uid**：服务端每次映射都会生成新随机 uid（见 dtoToStep），带 uid 比较
+ *  会让「草稿 = 服务端」永远不成立（dirty 恒 true）。 */
+function stepsSignature(steps: ProcessStep[]): string {
+  return JSON.stringify(
+    steps.map((s) => [s.process_id, s.estimated_minutes, s.note ?? null, s.sort_order]),
+  );
+}
+
+export const useProcessDesignStore = defineStore('process-design', () => {
+  const qc = useQueryClient();
+
+  // ============ 私有状态 ============
+  /** 序列号排序方向（进 queryKey ⇒ 进请求）。后端排序键固定 serial_no，无 sort_by。 */
+  const sortDir = ref<'ASC' | 'DESC'>('ASC');
+  /** 当前选中的零件（null = 未选）。驱动选中零件工艺链的懒加载。 */
+  const selectedPartId = ref<string | null>(null);
+  /** partId → 未保存的工序草稿。**只装 dirty 编辑**，query 缓存不碰它。
+   *  语义与旧 `flows[partId].steps` 一致（按零件存盘，来回切零件不丢编辑）。 */
+  const draftSteps = ref<Record<string, ProcessStep[]>>({});
+  // 2026-10-05：enabled 闸门。store 实例化时 useQuery 不发请求，restoreState() 末尾
+  // 置 true 才开闸（避免「默认参数首屏 + 恢复参数再屏」双 fetch）。
+  const restored = ref(false);
+
+  // ============ buildParams ============
+  function buildParams(): ListProcessDesignPartsParams {
+    return {
+      sort_dir: sortDir.value,
+      limit: PROCESS_DESIGN_LIMIT,
+      offset: 0,
+    };
+  }
+
+  // ============ 主查询 useQuery（零件列表）============
+  const listQuery = useQuery<
+    ProcessDesignPartListResultSchema,
+    Error,
+    ProcessDesignPartListResultSchema,
+    ReturnType<typeof qk.processDesignParts>
+  >({
+    queryKey: computed(() => qk.processDesignParts(buildParams())),
+    // params 从 queryKey[2] 读（不闭包捕获 buildParams 的 snapshot）。
+    // 守门**收敛在 api 层**（listProcessDesignParts 内部 parse，形态同
+    // api/programming.ts::fetchPendingProgramming ⇒ 任何调用方都受 Zod 守门），
+    // 此处不重复 parse。
+    queryFn: async ({ queryKey }) =>
+      listProcessDesignParts(queryKey[2] as ListProcessDesignPartsParams),
+    enabled: restored,
+    placeholderData: keepPreviousData,
+  });
+
+  // ============ 派生 ============
+  const parts = computed<ProcessDesignPartSchema[]>(() => listQuery.data.value?.items ?? []);
+  const total = computed<number>(() => listQuery.data.value?.total ?? 0);
+  const loading = listQuery.isFetching;
+
+  // ============ 工序下拉（共享基础数据层）============
+  // 旧实现是 store 内裸调 listProcesses({}) + 模块级 ref（每次进页都重拉、跨页零去重）。
+  // 2026-10-05 改走共享层：自带 Zod 守门 + 30s staleTime + 跨页去重。
+  // limit 500 拉全量（工序下拉要全量，后端 processes 端点 limit clamp 500）。
+  const processesQuery = useProcessesQuery({ limit: 500 });
+  // processSchema 派生的 description / color 是 optional（对齐后端 skip_serializing_if），
+  // 而 Process 业务类型是 required ⇒ 结构不匹配，走 `as Process[]` 桥接（沿
+  // usePendingProgrammingStore::processes 同款）。本页只读 id / code / name /
+  // category / color / requires_approval，对 optional 字段无依赖。
+  const processes = computed<Process[]>(
+    () => (processesQuery.data.value?.items ?? []) as Process[],
+  );
+
+  // ============ 选中零件的工艺链（第 2 个 useQuery）============
+  /** 选中零件的链 id：零件行上 process_chain_id 为 null ⇒ null（未制定工序）。
+   *  这也是「该零件有没有链」的唯一判据 —— 零件不在列表里（异常路径）同样落 null。 */
+  const selectedChainId = computed<string | null>(() => {
+    const pid = selectedPartId.value;
+    if (!pid) return null;
+    return parts.value.find((p) => p.id === pid)?.process_chain_id ?? null;
+  });
+
+  const chainQuery = useQuery<
+    ProcessChainByPartDto,
+    Error,
+    ProcessChainByPartDto,
+    ReturnType<typeof qk.processDesignChain>
+  >({
+    queryKey: computed(() => qk.processDesignChain(selectedChainId.value ?? '')),
+    queryFn: async ({ queryKey }) => {
+      const chainId = queryKey[2] as string;
+      try {
+        return await getProcessChainById(chainId);
+      } catch (e) {
+        // 20701（链已删 / 脏数据）按空链归一：query 缓存里存一条空链，UI 走「暂无工序」
+        // 空态而不是错误态。其它错误照抛（错误由下方 watch 桥接 ElMessage）。
+        if (e instanceof ApiError && e.code === CHAIN_NOT_FOUND) {
+          return {
+            id: chainId,
+            name: '',
+            note: null,
+            version: 0,
+            created_at: '',
+            updated_at: '',
+            steps: [],
+          } satisfies ProcessChainByPartDto;
+        }
+        throw e;
+      }
+    },
+    // 闸门挂在**链 id** 上而不是 selectedPartId：process_chain_id 为空的零件
+    // （绝大多数「待制定」行）压根不需要发请求，直接判空链 —— 省一次必 404 的往返。
+    enabled: computed(() => restored.value && !!selectedChainId.value),
+  });
+
+  /** 服务端链 → UI 步骤（冗余字段按 process_id 二次查工序下拉补齐）。 */
+  const serverSteps = computed<ProcessStep[]>(() =>
+    (chainQuery.data.value?.steps ?? []).map((dto) => {
+      const step = dtoToStep(dto);
+      const p = processes.value.find((pp) => pp.id === step.process_id);
+      if (p) {
+        step.process_code = p.code;
+        step.process_name = p.name;
+        step.category = p.category;
+        step.color = p.color ?? null;
+      }
+      return step;
+    }),
+  );
+
+  // ElMessage 错误桥接（useQuery 的 error 不在 setup 抛错）
+  const errorMsg = computed<string | null>(() => {
+    const e = listQuery.error.value ?? chainQuery.error.value;
+    return e ? e.message : null;
+  });
+  watch(errorMsg, (msg) => {
+    if (msg) ElMessage.error(msg);
+  });
+
+  /** fetchList 别名 = useQuery.refetch 的 async 包装（保留该名字：视图的「刷新」入口
+   *  与测试都通过它驱动，保持当前 sort_dir refetch）。 */
+  async function fetchList(): Promise<void> {
+    await listQuery.refetch();
+  }
+
+  // ============ 选中零件 ============
+  /** 选中零件（由左栏行点击驱动）。零件未在列表里（异常路径）时也允许选中，
+   *  此时 selectedChainId 落 null ⇒ 不发请求、steps 为空。 */
+  function selectPart(partId: string): void {
+    if (selectedPartId.value === partId) return;
+    selectedPartId.value = partId;
+  }
+
+  /** 序列号排序方向切换（由 el-table 的 @sort-change 驱动）。
+   *  EP 的 order 三态：'ascending' / 'descending' / null（取消排序）⇒ null 落回 ASC
+   *  （后端只认 DESC / 非 DESC 两态）。 */
+  function onSortChange(order: 'ascending' | 'descending' | null): void {
+    sortDir.value = order === 'descending' ? 'DESC' : 'ASC';
+  }
+
+  // ============ 草稿（未持久化的编辑）============
+  /** 读当前零件草稿；缺省时用服务端 steps 播种一份。
+   *  `currentDraft()` 必须在**所有**编辑入口前调用：草稿不存在时 in-place 改动
+   *  serverSteps 派生出来的对象，改动会在下次 chainQuery 重算时静默丢失。 */
+  function currentDraft(): ProcessStep[] {
+    const pid = selectedPartId.value;
+    if (!pid) return [];
+    const existing = draftSteps.value[pid];
+    if (existing) return existing;
+    return writeDraft(
+      pid,
+      serverSteps.value.map((s) => ({ ...s })),
+    );
+  }
+
+  /** 写草稿并**按数组下标拍平 sort_order**（返回拍平后的数组）。
+   *  拍平是硬要求：后端 20104 校验 sort_order 重复，而 `addStep()` 恒给 sort_order=0
+   *  （用户连点两次「添加工序」就是 [0, 0]）⇒ 保存前必须重写成 0,1,2…。 */
+  function writeDraft(partId: string, steps: ProcessStep[]): ProcessStep[] {
+    const flattened = steps.map((s, i) => ({ ...s, sort_order: i }));
+    draftSteps.value = { ...draftSteps.value, [partId]: flattened };
+    return flattened;
+  }
+
+  /** 当前零件草稿与服务端链是否已分家（dirty）。 */
+  function isDirty(partId: string): boolean {
+    const draft = draftSteps.value[partId];
+    if (!draft) return false;
+    return stepsSignature(draft) !== stepsSignature(serverSteps.value);
+  }
+
+  const dirty = computed<boolean>(() =>
+    selectedPartId.value ? isDirty(selectedPartId.value) : false,
+  );
+
+  /** 当前零件的工序步骤（可写）：get 返回草稿，set 写回草稿。
+   *  可写是 Sortable 的硬要求 —— 工序卡拖拽排序走 vue-draggable-plus 三参形态
+   *  （useLazyDraggable 的 list 形参），库内建 handler 会 `list.value.splice(...)`；
+   *  绑只读 computed 的话，排序改的是临时数组、DOM 顺序与数据当场脱钩。
+   *  草稿不存在时 get 走播种分支，保证返回的**是**草稿数组本身（可被 splice）。 */
+  const steps = computed<ProcessStep[]>({
+    get: () => {
+      const pid = selectedPartId.value;
+      if (!pid) return [];
+      return draftSteps.value[pid] ?? currentDraft();
+    },
+    set: (val: ProcessStep[]) => {
+      const pid = selectedPartId.value;
+      if (pid) writeDraft(pid, val);
+    },
+  });
+
+  /** 服务端数据到达 / 切换零件时，把草稿对齐到服务端 steps ——
+   *  ⚠️ **仅在未 dirty 时**：用户在途编辑不能被异步返回的数据覆盖（沿用旧实现的语义）。
+   *  race 守卫：`chain.id !== selectedChainId` 说明这是上一个零件的响应（切件途中），
+   *  丢弃。 */
+  watch([chainQuery.data, selectedPartId], () => {
+    const pid = selectedPartId.value;
+    if (!pid) return;
+    const chain = chainQuery.data.value;
+    if (chain && chain.id !== selectedChainId.value) return; // 陈旧响应
+    if (isDirty(pid)) return;
+    writeDraft(
+      pid,
+      serverSteps.value.map((s) => ({ ...s })),
+    );
+  });
+
+  /** 追加一道空白工序（末尾）。默认带第一道工序的 code / name / category / color，
+   *  estimated_minutes=30 —— 与旧实现同默认。 */
+  function addStep(): void {
+    const pid = selectedPartId.value;
+    if (!pid) return;
+    const first = processes.value[0];
+    const step: ProcessStep = {
+      uid: `step-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      process_id: first?.id ?? '',
+      process_code: first?.code ?? '',
+      process_name: first?.name ?? '',
+      category: first?.category ?? 'INHOUSE',
+      estimated_minutes: 30,
+      note: null,
+      sort_order: 0,
+      color: first?.color ?? null,
+    };
+    writeDraft(pid, [...currentDraft(), step]);
+  }
+
+  /** 按 uid 删除一道工序。 */
+  function removeStep(uid: string): void {
+    const pid = selectedPartId.value;
+    if (!pid) return;
+    writeDraft(
+      pid,
+      currentDraft().filter((s) => s.uid !== uid),
+    );
+  }
+
+  /** 行内改单字段（耗时 / 备注）。走 store 而不是就地改对象，保证任何编辑路径都会
+   *  先经 currentDraft() 播种出草稿（否则改的是 serverSteps 的临时对象，会丢）。 */
+  function patchStep(
+    uid: string,
+    patch: Partial<Pick<ProcessStep, 'estimated_minutes' | 'note'>>,
+  ): void {
+    const pid = selectedPartId.value;
+    if (!pid) return;
+    writeDraft(
+      pid,
+      currentDraft().map((s) => (s.uid === uid ? { ...s, ...patch } : s)),
+    );
+  }
+
+  /** 换工序：同步透传 code / name / category / color（UI 卡片左侧色条 + 标签用）。
+   *  选不到（清空 / 脏 id）时回落成空工序字段，不报错。 */
+  function selectProcess(uid: string, processId: string): void {
+    const pid = selectedPartId.value;
+    if (!pid) return;
+    const p = processes.value.find((pp) => pp.id === processId);
+    const next = p
+      ? {
+          process_id: p.id,
+          process_code: p.code,
+          process_name: p.name,
+          category: p.category,
+          color: p.color ?? null,
+        }
+      : {
+          process_id: '',
+          process_code: '',
+          process_name: '',
+          category: 'INHOUSE' as const,
+          color: null,
+        };
+    writeDraft(
+      pid,
+      currentDraft().map((s) => (s.uid === uid ? { ...s, ...next } : s)),
+    );
+  }
+
+  /** 「重置」：丢弃草稿，回到服务端链的 steps。 */
+  function resetSteps(): void {
+    const pid = selectedPartId.value;
+    if (!pid) return;
+    writeDraft(
+      pid,
+      serverSteps.value.map((s) => ({ ...s })),
+    );
+  }
+
+  /** 摘要：当前零件的工序总耗时（右栏 toolbar 展示）。 */
+  const totalMinutes = computed<number>(() =>
+    steps.value.reduce((acc, s) => acc + (s.estimated_minutes || 0), 0),
+  );
+
+  // ============ 保存整组 mutation（POST by-part）============
+  const saveMutation = useMutation<
+    ProcessChainByPartDto,
+    Error,
+    { partId: string; steps: ProcessStep[] }
+  >({
+    mutationKey: ['process-design', 'upsert-chain'],
+    // 不写 retry：信任 main.ts 全局 mutations.retry: 0。
+    mutationFn: ({ partId, steps: payload }) =>
+      upsertProcessChainByPart(partId, { steps: payload.map(stepToUpsert) }),
+    onSuccess: async (dto, vars) => {
+      // 零闪烁回写：无链零件首次保存时后端建链，响应的 `id` 即新链 id（既有链保存时
+      // id 不变，赋值幂等）。先 setQueryData 把该行就地改成「已制定」——不等一个往返，
+      // 左栏分组立刻迁移；再失效整域拿权威值。
+      // ⚠️ 用 mutation 变量里的 partId，不用 selectedPartId：保存期间用户可能已经切到
+      // 别的零件，按当前选中去 patch 会改错行。
+      const params = buildParams();
+      // 显式标注 prev 类型：queryKey 末段是普通对象（非 tagged key），TS 无法从键反推
+      // TQueryFnData，不标注会被退化成 `{}`。
+      qc.setQueryData(
+        qk.processDesignParts(params),
+        (prev: ProcessDesignPartListResultSchema | undefined) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            items: prev.items.map((p) =>
+              p.id === vars.partId && p.process_chain_id !== dto.id
+                ? { ...p, process_chain_id: dto.id }
+                : p,
+            ),
+          };
+        },
+      );
+      // 链缓存直接落服务端响应（整组 upsert 后的权威 steps / version），避免切件回来
+      // 先闪一帧旧 steps。
+      qc.setQueryData(qk.processDesignChain(dto.id), dto);
+      // ⚠️ 草稿**不清**：它就是刚保存成功的那份，留在草稿里可避免链 query 重取到达前
+      // 右栏闪空态（切走零件再回来时与服务端一致，dirty 自动为 false）。
+      await invalidateProcessDesignQuery(qc);
+      ElMessage.success('已保存');
+    },
+    onError: (e: Error) => {
+      // 失败：保留草稿与 dirty（不回滚），让用户编辑不丢、可点保存重试。
+      ElMessage.error(`保存工艺链失败：${e.message ?? '未知错误'}`);
+    },
+  });
+
+  const saving = saveMutation.isPending;
+
+  /** 显式持久化入口：先本地拍平（writeDraft 内部）再 POST 整组。
+   *  失败时 mutateAsync reject —— 草稿与 dirty 保持不变，调用方（UI）只需 catch
+   *  吞掉（错误提示已在 onError 弹过）。 */
+  async function save(): Promise<void> {
+    const pid = selectedPartId.value;
+    if (!pid) return;
+    const flattened = writeDraft(pid, currentDraft());
+    await saveMutation.mutateAsync({ partId: pid, steps: flattened });
+  }
+
+  /** 恢复页面状态 + 开闸。本页**无持久化状态**（零件列表每次进页都重拉），故本方法
+   *  目前只做开闸；保留这个入口是为了与「视图 onMounted 统一调 restoreState()」的
+   *  页面级 store 范式对齐 —— 将来加持久化只需在这里恢复，开闸位置不用动。 */
+  function restoreState(): void {
+    restored.value = true;
+  }
+
+  // ============ 对外切片 ============
+  // ⚠️ 为什么切 query / editor 两个 slice，而不是把 10 个 ref 平铺在 store 顶层：
+  // Pinia setup store 的 `$dispose()` 只做 `scope.stop()` + 清订阅 + 从 `pinia._s`
+  // 摘除，**不删** `pinia.state.value[$id]`；下次 `useStore()` 时 Pinia 会把
+  // 上次残留的 state **hydrate 回新建的 ref**（pinia.mjs createSetupStore 的
+  // `if (initialState && shouldHydrate(prop)) prop.value = initialState[key]`）。
+  //   - 平铺的顶层 ref（如 selectedPartId / draftSteps）会被序列化进 state ⇒
+  //     $dispose 后「上次编辑到一半的工序」泄漏到下次进入，直接违反不变量 #2；
+  //   - 切成 plain object slice 后，slice 既不是 ref 也不是 reactive，Pinia
+  //     不会把它写进 state ⇒ $dispose 后真 fresh。
+  // 回归守卫见 __tests__/useProcessDesignStore.spec.ts 的「$dispose 后重建」用例。
+  return {
+    query: {
+      /** 零件行（后端 7 字段 VO 的 z.infer；本页只读其中 6 个） */
+      parts,
+      /** 全量行数（后端 COUNT，与 limit/offset 无关）—— 用于「仅显示前 N / 共 M」提示 */
+      total,
+      limit: PROCESS_DESIGN_LIMIT,
+      loading,
+      errorMsg,
+      sortDir,
+      selectedPartId,
+      selectPart,
+      onSortChange,
+      restoreState,
+      /** fetchList 别名（视图「刷新」入口 / 测试驱动） */
+      fetchList,
+      /** 选中零件的链是否在途（右栏空态区分「加载中」与「真的没工序」） */
+      chainPending: computed<boolean>(() => !!selectedChainId.value && chainQuery.isPending.value),
+      /** 工序下拉（共享基础数据层 query 的只读投影） */
+      processes,
+    },
+    editor: {
+      /** 当前零件的工序步骤（可写，Sortable 拖拽排序直接绑它） */
+      steps,
+      /** 是否已修改（与服务端链的业务签名比对） */
+      dirty,
+      saving,
+      /** 当前零件工序总耗时（分钟） */
+      totalMinutes,
+      addStep,
+      removeStep,
+      patchStep,
+      selectProcess,
+      resetSteps,
+      save,
+    },
+  };
+});
+
+/** 失效整个 process-design 域（保存工艺链成功后调）。
+ *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。
+ *  `processDesignPartsPrefix` = `['process-design']`，同时命中零件列表与选中零件的链。 */
+export function invalidateProcessDesignQuery(qc: QueryClient): Promise<void> {
+  return qc.invalidateQueries({ queryKey: qk.processDesignPartsPrefix }).then(() => undefined);
+}
+
+/** 行类型再导出（组件 cellRender / 测试用；与 schemas 的 z.infer 同源）。 */
+export type { ProcessDesignPartSchema, ProcessDesignPartListResultSchema };

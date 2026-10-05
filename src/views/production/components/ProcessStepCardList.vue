@@ -4,7 +4,7 @@
   2026-09-11 新增。
   2026-09-16 改造：删除「dirty=true → 800ms 自动保存」防抖链路，改为显式保存按钮触发。
   原 watch(steps) 内的 setTimeout(doAutoSave) 让保存按钮永远 disabled（dirty 在 POST 成功后
-  立刻被清零）；现在 watch 只同步 dirty，持久化入口唯一化为 onSave → saveFlow(partId, steps)。
+  立刻被清零）；现在持久化入口唯一化为 onSave → store.editor.save()。
   2026-09-12 改造（第三轮 UI 精修）：
     - 删除 header 中的「外协警示」<el-alert>（S3）
     - 删除 header 中的「+ 添加工序」按钮（S3）；改在卡片列表末尾放虚线方框占位（点击 → onAdd）
@@ -16,8 +16,17 @@
     - 「重置」按钮去掉文字，改为 RefreshLeft 图标 + el-tooltip（T1）
     - 改回 default button（非 text button，disabled 时更可见）
     - toolbar 单行：总耗时 tag + spacer + 保存 + 重置 icon（T1，20% 右栏 ≈256px 内能放下）
-  2026-09-29 改造：删除「装配件选中提示」分支（isAssembly hint + assembly-hint CSS）；
-    后端 GET /parts 已切到只查 t_part，UI 不可能再选中装配件。
+
+  2026-10-05 改造（数据层切 useProcessDesignStore）：
+    - 步骤数组、dirty、saving、总耗时、增删改 / 保存 / 重置**全部由 store.editor 持有**
+      （服务端链在 store 的 query 里，未保存草稿在 store 私有 draftSteps）；
+      本组件退化为纯展示 + 事件接线，删掉三个 watch（partId 同步 / flows 同步 / dirty 同步）
+      与本地 savedSnapshot。
+    - 行内编辑从 v-model 改成 `:model-value` + `@update:model-value` → store.editor.patchStep /
+      selectProcess。**不能继续用 v-model 直改对象**：没有草稿时 steps 派生自服务端链，
+      就地改那个对象会在链 query 重算时静默丢失（草稿必须经 store 播种出来）。
+    - 拖拽仍绑三参形态的 useLazyDraggable（列表内重排场景，见 useLazyDraggable 注释）：
+      steps 是可写 computed，Sortable 的内建 splice 落到 store 草稿上。
 
   CLAUDE.md 合规：
   - #10：容器 ref 位于 v-else（空态 vs 列表切换），初始 mount 时为 null → 用 useLazyDraggable。
@@ -50,7 +59,7 @@
           保存
         </el-button>
         <el-tooltip content="重置" placement="top" :disabled="!dirty">
-          <el-button :disabled="!dirty" size="small" @click="onReset">
+          <el-button :disabled="!dirty" size="small" @click="store.editor.resetSteps()">
             <el-icon><RefreshLeft /></el-icon>
           </el-button>
         </el-tooltip>
@@ -58,7 +67,12 @@
     </template>
 
     <div v-if="steps.length === 0" class="empty-state">
-      <el-empty description="该零件暂无工序，点击下方方框添加第一道工序" :image-size="80" />
+      <!-- 2026-10-05：选中零件的工艺链在途时别先闪「暂无工序」—— steps 是草稿派生，
+           链 query 到达前它必然是空数组（chainPending 区分「在加载」与「真的没工序」）。 -->
+      <el-empty
+        :description="chainPending ? '正在加载工序…' : '该零件暂无工序，点击下方方框添加第一道工序'"
+        :image-size="80"
+      />
       <!-- 2026-09-12 第三轮：空态也展示占位方框（与有步骤时保持一致入口） -->
       <div class="step-add-placeholder step-add-placeholder--solo" @click="onAdd">
         <el-icon :size="20"><Plus /></el-icon>
@@ -83,19 +97,19 @@
               size="small"
               class="step-delete"
               :title="'删除工序 ' + (idx + 1)"
-              @click="onDelete(step)"
+              @click="store.editor.removeStep(step.uid)"
             >
               <el-icon><Delete /></el-icon>
             </el-button>
             <span class="step-index">工序 {{ idx + 1 }}</span>
             <el-select
-              v-model="step.process_id"
+              :model-value="step.process_id"
               filterable
               clearable
               size="small"
               placeholder="选择工序"
               class="step-select"
-              @change="(id: string) => onProcessChange(step, id)"
+              @update:model-value="(id: string) => store.editor.selectProcess(step.uid, id)"
             >
               <el-option
                 v-for="p in processes"
@@ -106,23 +120,25 @@
             </el-select>
             <span class="step-minutes-label">预计</span>
             <el-input-number
-              v-model="step.estimated_minutes"
+              :model-value="step.estimated_minutes"
               :min="0"
               :step="1"
               :precision="0"
               size="small"
               :controls="false"
               class="step-minutes"
+              @update:model-value="(v: number | undefined) => patchMinutes(step.uid, v)"
             />
             <span class="step-minutes-unit">分钟</span>
           </div>
           <el-input
-            v-model="step.note!"
+            :model-value="step.note ?? ''"
             placeholder="备注（选填，最多 100 字）"
             size="small"
             maxlength="100"
             show-word-limit
             class="step-note"
+            @update:model-value="(v: string) => patchNote(step.uid, v)"
           />
         </div>
       </el-card>
@@ -137,155 +153,54 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { Delete, Plus, RefreshLeft } from '@element-plus/icons-vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import { ElMessage } from 'element-plus';
 import type { ProcessStep } from '@/types/partProcess';
-import { usePartProcessDesign } from '../composables/usePartProcessDesign';
+import { useProcessDesignStore } from '../composables/useProcessDesignStore';
 
 const props = defineProps<{
   partId: string | null;
 }>();
 
-const { processes, flows, getFlowByPartId, loadFlowForPart, save, newStep, summaries } =
-  usePartProcessDesign();
+// 不变量 #3：消费侧禁止解构 store，一律 store.query.xxx / store.editor.xxx。
+const store = useProcessDesignStore();
 
-const steps = ref<ProcessStep[]>([]);
-const savedSnapshot = ref<string>(''); // JSON.stringify 当前已保存的 steps
-const dirty = ref(false);
-const saving = ref(false);
-
-// 当前 partId 对应零件的派生
-const totalMinutes = computed(() => (props.partId ? summaries(props.partId).total_minutes : 0));
-// 2026-09-12 第三轮：删除 hasOutsource 派生（不再展示外协警示）。
-// 保留 summaries 调用以确保派生触发；如不再需要可后续清理。
-
-/** 当 partId 变化或外部流程变更：载入当前流程到本地 steps，更新 dirty。
- *  2026-09-14 切真接口后：先 getFlowByPartId 拿本地缓存，若未加载则触发
- *  loadFlowForPart 异步拉取；拉到后再同步本地 steps（异步部分用 watch 二次触发）。
- *
- *  2026-09-14 follow-up：加 partId race 守卫。场景：用户选 A → 等待 A 懒加载 →
- *  切到 B → B 走 cache 立即同步 → A 加载完成回填时陈旧闭包会用 A.steps 覆盖 B.steps。
- *  守卫点：await loadFlowForPart 后再次校验 newId === props.partId（不再一致就放弃写入）。 */
-watch(
-  () => props.partId,
-  async (newId) => {
-    if (!newId) {
-      steps.value = [];
-      savedSnapshot.value = '';
-      dirty.value = false;
-      return;
-    }
-    let f = getFlowByPartId(newId);
-    if (!f) {
-      // 2026-09-14：触发懒加载；loadFlowForPart 完成后 flows 单例更新会触发下方 watch
-      await loadFlowForPart(newId);
-      // 2026-09-14 follow-up：race 守卫 — 等待期间用户可能已切到别的 part；
-      // 此时 props.partId !== newId，写入会用陈旧闭包覆盖新 part 的 steps。
-      if (newId !== props.partId) return;
-      f = getFlowByPartId(newId);
-    }
-    steps.value = f ? f.steps.map((s) => ({ ...s })) : [];
-    savedSnapshot.value = JSON.stringify(steps.value);
-    dirty.value = false;
-  },
-  { immediate: true },
-);
-
-/** 监听本地 flows 单例更新（懒加载完成后），重新同步 steps。
- *  2026-09-14 新增：composable 切换到真接口后，loadFlowForPart 是 async，
- *  上方 watch 的 await 之后 f 仍可能为 null（load 失败），需要二次 watch 兜底。
- *
- *  2026-09-14 follow-up：加 partId race 守卫 — flows 单例按 partId 存盘，
- *  异步 GET 完成时回调 f.part_id 必须 === 当前 props.partId，否则是别的 part 的
- *  loadFlow 完成回调，丢弃即可。 */
-watch(
-  () => (props.partId ? flows.value[props.partId] : null),
-  (f) => {
-    if (!f || !props.partId) return;
-    // 2026-09-14 follow-up：race 守卫 — 异步 load 完成时 f.part_id 必须等于当前 props.partId
-    if (f.part_id !== props.partId) return;
-    // 仅在本地未 dirty 时刷新（避免保存中误覆盖用户编辑）
-    if (dirty.value) return;
-    steps.value = f.steps.map((s) => ({ ...s }));
-    savedSnapshot.value = JSON.stringify(steps.value);
-  },
-);
-
-/** 步骤本地修改：仅标 dirty（不同步触发 POST）。2026-09-16 改造：
- *  删掉原先的「dirty=true → 800ms 后自动 doAutoSave」防抖链路。
- *  持久化入口唯一化为 onSave 按钮（→ saveFlow），避免保存按钮形同虚设。 */
-watch(
-  steps,
-  () => {
-    if (!props.partId) return;
-    dirty.value = JSON.stringify(steps.value) !== savedSnapshot.value;
-  },
-  { deep: true },
-);
+const steps = computed<ProcessStep[]>(() => store.editor.steps);
+const processes = computed(() => store.query.processes);
+const totalMinutes = computed<number>(() => store.editor.totalMinutes);
+const dirty = computed<boolean>(() => store.editor.dirty);
+const saving = computed<boolean>(() => store.editor.saving);
+const chainPending = computed<boolean>(() => store.query.chainPending);
 
 function onAdd(): void {
   if (!props.partId) {
     ElMessage.warning('请先选择零件');
     return;
   }
-  steps.value = [...steps.value, newStep()];
+  store.editor.addStep();
 }
 
-function onDelete(step: ProcessStep): void {
-  steps.value = steps.value.filter((s) => s.uid !== step.uid);
+/** 预计耗时：el-input-number 清空时给 undefined，归一成 0（后端 CHECK 约束 ≥ 0）。 */
+function patchMinutes(uid: string, value: number | undefined): void {
+  store.editor.patchStep(uid, { estimated_minutes: value ?? 0 });
 }
 
-function onProcessChange(step: ProcessStep, id: string): void {
-  const p = processes.value.find((pp) => pp.id === id);
-  if (!p) {
-    step.process_id = '';
-    step.process_code = '';
-    step.process_name = '';
-    step.category = 'INHOUSE';
-    step.color = null;
-    return;
-  }
-  step.process_id = p.id;
-  step.process_code = p.code;
-  step.process_name = p.name;
-  step.category = p.category;
-  // 2026-09-12 第三轮：选中工序时同步透传 color
-  step.color = p.color ?? null;
+/** 备注：空串归一成 null（后端「空串 / null 视作 None」）。 */
+function patchNote(uid: string, value: string): void {
+  store.editor.patchStep(uid, { note: value || null });
 }
 
+/** 显式持久化。失败时 store 的 onError 已弹错，这里 catch 住即可：草稿与 dirty
+ *  都保持不变（用户编辑不丢，可再点保存重试）。 */
 async function onSave(): Promise<void> {
   if (!props.partId) return;
-  saving.value = true;
   try {
-    // 2026-09-16 改造：直接走公开 save(partId, steps)（替代原 doAutoSave → upsertSteps →
-    // 防抖 scheduleSave → 800ms 后 POST 的隐式链路，以及第 1 轮 review 前的
-    // upsertSteps + saveFlow 两步拆分）。save 内部已串行做：① 本地 upsertSteps
-    // mutate → ② POST 整组 → ③ 成功由本函数清 dirty / 失败保留 dirty。
-    await save(props.partId, steps.value);
-    // 成功：刷新 savedSnapshot 并清 dirty（save 内部已做 mutate + POST，
-    // 这里只负责同步本地 dirty 标志位）。
-    savedSnapshot.value = JSON.stringify(steps.value);
-    dirty.value = false;
-    ElMessage.success('已保存');
-  } catch (e) {
-    // 2026-09-16 第 1 轮 review 修复：失败时**保留** steps 与 dirty=true，
-    // 让用户编辑不丢、可点保存按钮重试。ElMessage.error 在 composable saveFlow
-    // 内部已弹过，这里不再重复弹错；只在 dirty 已通过其他途径被清掉的极端
-    // 路径下做兜底提示。
-    void e;
-  } finally {
-    saving.value = false;
+    await store.editor.save();
+  } catch {
+    // 已提示，不重复弹
   }
-}
-
-function onReset(): void {
-  if (!props.partId) return;
-  const f = getFlowByPartId(props.partId);
-  steps.value = f ? f.steps.map((s) => ({ ...s })) : [];
-  savedSnapshot.value = JSON.stringify(steps.value);
-  dirty.value = false;
 }
 
 /** 2026-09-12 第三轮：卡片左侧 4px 竖条颜色。优先 step.color，无则回退 category 默认色。 */
@@ -298,6 +213,9 @@ function cardColor(step: ProcessStep): string {
 // 容器 ref 位于 v-else 块（空态/列表切换），mount 时可能为 null → useLazyDraggable
 // 强制 immediate: false + watch elRef 转非 null 时 start(el)，符合 CLAUDE.md #10。
 // 2026-09-12 第三轮：filter: '.step-add-placeholder' 显式排除占位方框，避免 Sortable 误选。
+// ⚠️ 这里必须传 list（列表内重排语义，见 useLazyDraggable 头注）：steps 是 store 草稿的
+// 可写 computed，Sortable 的内建 splice 落到草稿上；不传 list 则拖拽只剩 DOM 变化、
+// 数据不动。
 const containerRef = ref<HTMLElement | null>(null);
 useLazyDraggable(containerRef, steps, {
   animation: 200,

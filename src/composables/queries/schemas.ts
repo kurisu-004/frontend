@@ -139,7 +139,7 @@ export type CustomerListResultSchema = z.infer<typeof customerListResultSchema>;
  * （PendingProgrammingList.vue:413 / ShelfList.vue:324 /
  * ProcessPickerDialog.vue:180 / InspectionPending.vue:865 /
  * OutsourceQuoteList.vue:79 / OutsourceSendReceive.vue:75 /
- * OutsourceList.vue:341 / PartDetail.vue:579 / usePartProcessDesign.ts:220 /
+ * OutsourceList.vue:341 / PartDetail.vue:579 /
  * ProcessWorkTypeMappingTab.vue:108 / RepairStartDialog.vue:87 等）走
  * `resp.items` 直接消费、不经 Zod，不受本回归影响。 */
 export const processSchema = z.object({
@@ -2114,3 +2114,69 @@ export const scanPartListResultSchema = z.object({
 });
 
 export type ScanPartListResultSchema = z.infer<typeof scanPartListResultSchema>;
+
+// ============================================================
+// 2026-10-05 新增：「制定工序」页零件列表（`GET /api/v2/prod/process-design/parts`）的
+// Zod 守门 schema。契约见 backend-rust `docs/api/production/process-design.md`。
+//
+// 为什么是独立端点 / 独立 VO：此前本页读 part 域 `GET /api/v2/parts?status=PENDING`，
+// 而该端点在 repo SQL 里硬置 `AND assembly_id IS NULL`（part 域口径是「装配件子件
+// 由 service 内存合并、不独立成行」），把**装配件的子零件全部排除** —— 而子件同样
+// 需要定工序。本页只做「选零件 → 定工序」，展示信息够用即可，故端点把字段集收窄到
+// 7 个（part 域 PartListOut 有 20 余个：客户 / 交期 / 数量 / 价格 / 状态 …）。
+//
+// 两条序列化约定（与本文件既有行 VO 逐字一致，方向**相反**别看错）：
+//   - 雪花 ID（`id` / `process_chain_id` / `assembly_id`）是 `serialize_i64` /
+//     `serialize_i64_opt` ⇒ JSON **string**，声明 `z.string()`（禁 `z.number()`，
+//     19 位 ID 在 JS Number 下会丢精度）；
+//   - 分页计数（`total` / `limit` / `offset`）是**裸 i64** ⇒ JSON **number**
+//     （与 inspection 域的 string 计数方向相反）。
+//
+// 必填字段**逐个显式声明**（Zod strip 陷阱，见 CLAUDE.md「TanStack Query」条目）：
+// 7 个行字段 + 3 个计数字段全部显式写出；后端 VO 的这 7 列都没有挂
+// `skip_serializing_if` ⇒ 键恒在（可空的一律 `.nullable()` 而非 `.optional()`，
+// 写成 `.optional()` 会让「后端漏发 assembly_id」静默通过，UI 的子件标记就整列失效）。
+// ============================================================
+
+/** 2026-10-05：「制定工序」页零件行（后端 `ProcessDesignPartItemOut`）—— 7 字段。 */
+export const processDesignPartSchema = z.object({
+  /** `t_part.id`（`serialize_i64` → JSON string）。全链路按 string 用，禁止 `Number()` */
+  id: z.string(),
+  /**
+   * ⚠️ **`t_part.version`**，与 `t_part_process_chain.version`（工艺链自己的乐观锁）
+   * 是**两个独立计数器**，互不相干。
+   *
+   * 本页保存工艺链走 `POST /prod/process-chains/by-part/{part_id}`，其请求体里的
+   * OCC 锚是 `ProcessChainOut.version`（**链自己的**版本号，由 upsert 响应带回），
+   * **绝不是**本字段。**严禁**把 `part.version` 塞进那个请求体 —— 两者取值互不相关，
+   * 混用会打出莫名其妙的 409 冲突。
+   *
+   * 本字段**当前无消费方**：本页不在列表上改零件。保留它是因为它是 `t_part` 的
+   * 一列（非领域概念），后端 VO 明确带上，预留给将来「在本页改零件」时做 OCC 回传；
+   * 显式声明同时能守住「后端哪天不投影这一列」的契约漂移。
+   */
+  version: z.number(),
+  /** `varchar(15)` 可空：手工工单没序列号 ⇒ JSON `null`（**不是空串**）。排序键 */
+  serial_no: z.string().nullable(),
+  name: z.string(),
+  drawing_no: z.string(),
+  /** `serialize_i64_opt`：`null` = 未制定工序（本页「待制定 / 已制定」分组依据） */
+  process_chain_id: z.string().nullable(),
+  /** `serialize_i64_opt`：`null` = 独立零件；非 `null` = 装配件的子零件。
+   *  ⚠️ 该字段**不是**过滤条件（后端刻意不加 `AND assembly_id IS NULL`），
+   *  只供前端标注归属。 */
+  assembly_id: z.string().nullable(),
+});
+
+export type ProcessDesignPartSchema = z.infer<typeof processDesignPartSchema>;
+
+/** 2026-10-05：`GET /prod/process-design/parts` 顶层（后端 `ProcessDesignPartListOut`）——
+ *  分页信封 `{ items, total, limit, offset }`。三个计数是裸 i64 ⇒ `z.number()`。 */
+export const processDesignPartListResultSchema = z.object({
+  items: z.array(processDesignPartSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export type ProcessDesignPartListResultSchema = z.infer<typeof processDesignPartListResultSchema>;

@@ -4,26 +4,31 @@
 //   GET  /api/v2/prod/process-chains/by-part/{part_id}  ← getProcessChainByPart（保留可用）
 //   GET  /api/v2/prod/process-chains/{chain_id}         ← getProcessChainById（2026-09-16 新增）
 //   POST /api/v2/prod/process-chains/by-part/{part_id}  ← upsertProcessChainByPart（2026-09-29 由 PUT 改 POST）
-//   GET  /api/v2/prod/processes                         ← listProcesses (转引)
-//   GET  /api/v2/parts                                 ← listParts (转引；2026-09-29 修正：
-//                                                       原误路由 /prod/parts，后端无该端点 → 404；
-//                                                       parts 始终在 part 域，与 /prod/* 无关)
+//   GET  /api/v2/prod/process-design/parts              ← listProcessDesignParts（2026-10-05 新增）
 //
 // 业务端点统一走 `api`（baseURL `/api/v2`，2026-09-15 Phase 5 起）。
 // 整组 upsert 约束：rust POST /prod/process-chains/by-part/{part_id} 是整组替换语义——
 // 前端必须发完整 steps 数组（包括 service-side 已有的 step），否则会被覆盖。
-// 详见 usePartProcessDesign.ts 的 GET-merge-POST 模式。
 //
-// 2026-09-25 修正：补齐 /prod/ 前缀；listProcesses / listParts 用
-// ProcessListResult / PartListResult 类型替代裸 unknown[]。
-// 2026-09-29 修正：listParts 由 /prod/parts 改为 /parts（详见上方注释）。
-// 2026-09-29 修正：upsertProcessChainByPart 由 PUT 改 POST（统一惯例，整组
-// upsert 不是幂等覆盖而是 create-or-replace 语义，更贴 POST；后端契约对齐中，
-// 由 backend-rust implementor 在另一个 worktree 同步落地）。
+// 2026-09-25 修正：补齐 /prod/ 前缀；出参类型由裸 unknown[] 换成形化类型。
+// 2026-09-29 变更：upsertProcessChainByPart 由 PUT 改 POST（统一惯例，整组
+// upsert 不是幂等覆盖而是 create-or-replace 语义，更贴 POST）。
+//
+// 2026-10-05 变更：删除本文件内的 listParts / listProcesses 两个转引函数。
+//   - listParts（part 域 `GET /api/v2/parts`）：「制定工序」页此前是它唯一的调用方，
+//     本页数据源已切到 `GET /prod/process-design/parts`（见 listProcessDesignParts），
+//     删后全仓零调用方。src/api/parts/crud.ts 的同名函数是另一份（零件一览 / 报工台
+//     等页的历史调用链），不受影响。
+//   - listProcesses（转引 `GET /api/v2/prod/processes`）：本页的工序下拉已改走共享
+//     基础数据层 `useProcessesQuery`（src/composables/queries/useProcessesQuery.ts），
+//     它自带 Zod 守门 + 30s staleTime 跨页去重，删后全仓零调用方。其它页调的是
+//     `src/api/process.ts` 的同名函数（各自的真实数据源），不受影响。
 
 import { api, cleanParams } from '@/api/http';
-import type { OrderStatus, PartListItem } from '@/types/parts';
-import type { Process } from '@/types/process';
+import {
+  processDesignPartListResultSchema,
+  type ProcessDesignPartListResultSchema,
+} from '@/composables/queries/schemas';
 import type { ProcessChainByPartDto, UpsertProcessChainRequest } from './processChain.contract';
 
 /** GET /api/v2/prod/process-chains/by-part/{part_id}
@@ -69,46 +74,38 @@ export async function upsertProcessChainByPart(
   return resp.data;
 }
 
-/** GET /api/v2/prod/processes
- *  走 api（baseURL `/api/v2`）：rust 端 processes 域只在 v2 实现（migration 018），
- *  v1 Python 端无对应。
- *  limit=500 拉全量（默认 50 太少）。
- *  2026-09-25 修正：返回类型由 unknown[] 改为 Process[]（依赖 @/types/process 的
- *  ProcessListResult 派生），调用方不再需要就地强转。 */
-export async function listProcesses(
-  params: { is_active?: boolean } = {},
-): Promise<Process[]> {
-  void params; // is_active 在当前 v2 schema 不支持；保留入参兼容未来扩展
-  const resp = await api.get<{ items: Process[]; total: number; limit: number; offset: number }>(
-    '/prod/processes',
-    { params: { limit: 500 } },
-  );
-  return resp.data.items;
+/** `GET /api/v2/prod/process-design/parts` 入参形态（rust `ListProcessDesignPartsQuery`）。
+ *  2026-10-05 新增。**三字段全部可选、无一必填**，后端逐字段 `Option<...>` 接收。
+ *   - `sort_dir`：`'DESC'` 生效、其余值（含缺省 / 任意字面量）一律按 `'ASC'` 处理
+ *     （大小写不敏感）。排序键**固定** `serial_no`（`varchar(15)` ⇒ 字典序，不是
+ *     数值序：`F1001-10` 排在 `F1001-2` 前面），端点**不提供** `sort_by`。
+ *   - `limit`：缺省 200，service 层 `clamp(1, 500)`。
+ *   - `offset`：缺省 0，service 层 `max(0)`。
+ *  刻意**不提供** `status` / `keyword` / `row_type` / `include_assemblies`：
+ *   - `status`：`PENDING` 是本页的业务闸门（只有未开工的零件才需要定工序），
+ *     写死在后端 SQL 常量里，不开放成旋钮；
+ *   - `keyword`：前端本地过滤，后端不接收；
+ *   - `row_type` / `include_assemblies`：本端点存在的意义就是**没有**那道
+ *     `AND assembly_id IS NULL` 守卫（part 域 `GET /parts` 有，故把装配件子件全排除），
+ *     把「要不要子件」做成开关等于把守卫换个地方藏。 */
+export interface ListProcessDesignPartsParams {
+  sort_dir?: 'ASC' | 'DESC';
+  limit?: number;
+  offset?: number;
 }
 
-/** GET /api/v2/parts
- *  走 api（baseURL `/api/v2`）。
- *  keyword 模糊过滤图号/名称（PartListQuery.keyword，rust 端 2026-08 已支持）。
- *  status 单值过滤（PartListQuery.status）：rust 端 2026-08 已支持；
- *  工序制定页固定传 `PENDING` —— 已经下发编程/车间的工件不应在此页展示
- *  （v2 PartStatus 枚举与 OrderStatus 一致：PENDING / PROGRAMMING / IN_PROCESS / ...）。
- *  limit=200：v2 不支持 include_assemblies（已删除该参数）；工序制定只需零件本体。
- *  2026-09-25 修正：返回类型由 unknown[] 改为 PartListItem[]（来自 @/types/parts）。
- *  2026-09-29 修正：URL 由 `/prod/parts` 改为 `/parts` —— 后端 `/api/v2/prod/*`
- *  只承载生产管理支撑域（workers/process-chains/worker-pool 等），不含 parts；
- *  parts 始终在 part 域 `/api/v2/parts`（与业务流无关）。原 URL 必 404。
- *  2026-09-16 修复：新增 status 入参（与 src/api/parts/crud.ts:statuses 不复用，
- *  那个是 OrderStatus[] 重复 key，给其它列表页用；这里走单值 status，与后端 PartListQuery.status 对齐）。 */
-export async function listParts(
-  params: { keyword?: string; status?: OrderStatus } = {},
-): Promise<PartListItem[]> {
-  const resp = await api.get<{
-    items: PartListItem[];
-    total: number;
-    limit: number;
-    offset: number;
-  }>('/parts', {
-    params: cleanParams({ keyword: params.keyword, status: params.status, limit: 200 }),
+/** `GET /api/v2/prod/process-design/parts` —— 「制定工序」页零件列表。
+ *  响应 `{ items, total, limit, offset }` 经 `processDesignPartListResultSchema.parse`
+ *  守门（7 个行字段 + 3 个计数字段全部显式声明，见 schemas.ts 的说明）。
+ *
+ *  Zod 守门**刻意收敛在 api 层**（沿 api/programming.ts::fetchPendingProgramming）：
+ *  任何调用方都自动受守门，不必各自记得 parse；调用方（store 的 queryFn）**不要**再
+ *  parse 一遍 —— Zod 的 parse 返回**深拷贝**，重复 parse 等于每屏数据被校验 + 克隆两遍。 */
+export async function listProcessDesignParts(
+  params: ListProcessDesignPartsParams = {},
+): Promise<ProcessDesignPartListResultSchema> {
+  const resp = await api.get<unknown>('/prod/process-design/parts', {
+    params: cleanParams(params),
   });
-  return resp.data.items;
+  return processDesignPartListResultSchema.parse(resp.data);
 }
