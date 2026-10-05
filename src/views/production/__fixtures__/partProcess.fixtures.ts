@@ -5,88 +5,175 @@
 // 2026-09-14 usePartProcessDesign 切到 @/api/processChain 后，零件 / 工序 / 流程
 // 三组 fixture 不再被 composable 引用。
 //
-// 2026-09-16 新增：STUB_PARTS / STUB_PROCESSES / STUB_CHAINS —— usePartProcessDesign
-// 单测 stub 数据（从 spec 迁入本文件统一管理），对齐后端 2026-09-16 契约：
-// part 出参带 process_chain_id（null = 未制定工序）；工艺链改按 chain_id 索引
+// 2026-09-16 新增：STUB_PARTS / STUB_PROCESSES / STUB_CHAINS —— 工序制定页单测 stub 数据
+// （从 spec 迁入本文件统一管理），对齐后端 2026-09-16 契约：part 出参带
+// process_chain_id（null = 未制定工序）；工艺链改按 chain_id 索引
 // （GET /process-chains/{chain_id}），链出参不再含 part_id。
 //
 // 2026-09-29 删除：FIXTURE_FILES / MockPartFile / sample-drawing.pdf 引用。
 // DrawingPreviewPane.vue 已切 usePartFilesListQuery 单调用接真实后端，
 // fixture mock 不再被任何代码引用。
+//
+// 2026-10-05：STUB_PARTS 换成本页新端点 `GET /prod/process-design/parts` 的
+// ProcessDesignPartItemOut（**7 字段**：id / version / serial_no / name / drawing_no /
+// process_chain_id / assembly_id），并新增一行**装配件子件**（assembly_id 非空）——
+// 新端点刻意不加 `AND assembly_id IS NULL`，子件是本页的正常成员，必须有稳定 stub 守住
+// 「子件可见」这条回归。消费方：composables/__tests__/useProcessDesignStore.spec.ts。
 
-/** 单测 stub 零件（2026-09-16 新增）：字段对齐 v2 PartListItem 子集 +
- *  后端新增的 process_chain_id（null = 未制定工序 →「待制定」分组）。
+/** 单测 stub 零件（7 字段，对齐后端 ProcessDesignPartItemOut）：
  *  - 0001 法兰盘 / 0003 阀体：已制定（process_chain_id 指向 STUB_CHAINS 对应链）
- *  - 0002 齿轮 / 0005 外壳：未制定（null）
+ *  - 0002 齿轮 / 0005 外壳：未制定（process_chain_id = null）
  *  - 0004 连接轴：process_chain_id 非空但链在 STUB_CHAINS 不存在（脏数据/链已删），
- *    用于覆盖「by-id 拉取 20701 → 视为空链」分支 */
+ *    用于覆盖「by-id 拉取 20701 → 视为空链」分支
+ *  - 0006 轴承座：**装配件子件**（assembly_id 非空）且未制定工序 ——
+ *    覆盖「子件与独立零件同表出现」的回归（part 域旧端点看不到它） */
 export const STUB_PARTS = [
   {
     id: '5000000000001',
+    version: 3,
+    serial_no: 'F1001-01',
     name: '法兰盘',
     drawing_no: 'DWG-A-001',
     process_chain_id: '7000000000001',
+    assembly_id: null,
   },
-  { id: '5000000000002', name: '齿轮', drawing_no: 'DWG-A-002', process_chain_id: null },
-  { id: '5000000000003', name: '阀体', drawing_no: 'DWG-B-001', process_chain_id: '7000000000003' },
+  {
+    id: '5000000000002',
+    version: 0,
+    serial_no: 'F1001-02',
+    name: '齿轮',
+    drawing_no: 'DWG-A-002',
+    process_chain_id: null,
+    assembly_id: null,
+  },
+  {
+    id: '5000000000003',
+    version: 1,
+    serial_no: 'F1002-01',
+    name: '阀体',
+    drawing_no: 'DWG-B-001',
+    process_chain_id: '7000000000003',
+    assembly_id: null,
+  },
   {
     id: '5000000000004',
+    version: 0,
+    serial_no: null,
     name: '连接轴',
     drawing_no: 'DWG-C-001',
     process_chain_id: '7000000000099',
+    assembly_id: null,
   },
-  { id: '5000000000005', name: '外壳', drawing_no: 'DWG-D-001', process_chain_id: null },
+  {
+    id: '5000000000005',
+    version: 0,
+    serial_no: 'F1003-02',
+    name: '外壳',
+    drawing_no: 'DWG-D-001',
+    process_chain_id: null,
+    assembly_id: null,
+  },
+  {
+    id: '5000000000006',
+    version: 0,
+    serial_no: 'F1003-01',
+    name: '轴承座',
+    drawing_no: 'DWG-D-002',
+    process_chain_id: null,
+    // 装配件子件：父装配件 8000000000001
+    assembly_id: '8000000000001',
+  },
 ];
 
-/** 单测 stub 工序（2026-09-16 新增，自 spec 迁入）：3 自产 + 3 外协（均需审批）。 */
+/** 单测 stub 工序（自 spec 迁入）：3 自产 + 3 外协（均需审批）。
+ *  2026-10-05：补齐 `processSchema` 的其余必填字段（version / sort_order /
+ *  description / is_cnc / created_at / updated_at）—— store 的工序下拉改走共享层
+ *  useProcessesQuery，响应会经 `processListResultSchema.parse` 守门，缺字段会被整条
+ *  query 判错（description / color 是 optional，其余必填）。 */
 export const STUB_PROCESSES = [
   {
     id: '2000000000001',
+    version: 0,
     code: 'CNC-01',
     name: '粗加工',
     category: 'INHOUSE',
+    sort_order: 0,
+    description: null,
     requires_approval: false,
     color: '#409EFF',
+    is_cnc: true,
+    created_at: '2026-09-10T08:00:00Z',
+    updated_at: '2026-09-10T08:00:00Z',
   },
   {
     id: '2000000000002',
+    version: 0,
     code: 'CNC-02',
     name: '精加工',
     category: 'INHOUSE',
+    sort_order: 1,
+    description: null,
     requires_approval: false,
     color: '#67C23A',
+    is_cnc: false,
+    created_at: '2026-09-10T08:00:00Z',
+    updated_at: '2026-09-10T08:00:00Z',
   },
   {
     id: '2000000000003',
+    version: 0,
     code: 'QC-01',
     name: '质检',
     category: 'INHOUSE',
+    sort_order: 2,
+    description: null,
     requires_approval: false,
     color: '#9B59B6',
+    is_cnc: false,
+    created_at: '2026-09-10T08:00:00Z',
+    updated_at: '2026-09-10T08:00:00Z',
   },
   {
     id: '2000000000004',
+    version: 0,
     code: 'OUT-01',
     name: '热处理',
     category: 'OUTSOURCE',
+    sort_order: 3,
+    description: null,
     requires_approval: true,
     color: '#E6A23C',
+    is_cnc: false,
+    created_at: '2026-09-10T08:00:00Z',
+    updated_at: '2026-09-10T08:00:00Z',
   },
   {
     id: '2000000000005',
+    version: 0,
     code: 'OUT-02',
     name: '表面喷涂',
     category: 'OUTSOURCE',
+    sort_order: 4,
+    description: null,
     requires_approval: true,
     color: '#F56C6C',
+    is_cnc: false,
+    created_at: '2026-09-10T08:00:00Z',
+    updated_at: '2026-09-10T08:00:00Z',
   },
   {
     id: '2000000000006',
+    version: 0,
     code: 'OUT-03',
     name: '电镀',
     category: 'OUTSOURCE',
+    sort_order: 5,
+    description: null,
     requires_approval: true,
     color: '#1ABC9C',
+    is_cnc: false,
+    created_at: '2026-09-10T08:00:00Z',
+    updated_at: '2026-09-10T08:00:00Z',
   },
 ];
 

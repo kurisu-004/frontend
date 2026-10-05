@@ -110,7 +110,7 @@ import { ElMessage } from 'element-plus';
 import { Loading, Tools } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
 import StepViewer from '@/components/cad-viewer/StepViewer.vue';
-import type { PartListItem } from '@/types/parts';
+import type { ProcessDesignPartSchema } from '@/composables/queries/schemas';
 import type { PartFileItem } from '@/types/part_file';
 // 2026-09-29 单调用：usePartFilesListQuery 替代 usePartFiles 三并发
 // （fetchDrawings + fetch3DModels + fetchCadFiles）。reactive params 自动驱动
@@ -120,7 +120,10 @@ import { fetchPartFileContent } from '@/api/parts/file';
 import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
 
 const props = defineProps<{
-  part: PartListItem | null;
+  // 2026-10-05：随「制定工序」页数据源切到 prod 域 /prod/process-design/parts，
+  // prop 类型由 PartListItem（20 余字段）换成本页窄行类型（7 字段）。
+  // 本组件只读 id / drawing_no / name 三个字段。
+  part: ProcessDesignPartSchema | null;
 }>();
 
 const activeTab = ref<'drawings' | 'models3d' | 'cad'>('drawings');

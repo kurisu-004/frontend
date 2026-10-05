@@ -9,9 +9,22 @@
     - 子件 row 点击 → emit('select') → 父组件切换 selectedPartId（CLAUDE.md #11 row 空值守卫）
   2026-09-16：「待制定 / 已制定」分组改为 part.process_chain_id 驱动
   （null → 待制定 / 非 null → 已制定），替代原 step_count 懒加载派生。
-  2026-09-29 改造：删除顶部「装配件」section 与装配件 lazy 展开（loadChildren）。后端 GET /parts
-  已切到只查 t_part 表，入参不再含 row_type='ASSEMBLY'。所有行按 process_chain_id 进入待制定/已制定分组。
-  2026-09-29 简化：序列号列改 width="80"（最长 F1234-99 ≈75px），名称列 min-width="140" 收紧；列间空白收敛更紧凑。
+  2026-09-29 改造：删除顶部「装配件」section 与装配件 lazy 展开（loadChildren）。
+  所有行按 process_chain_id 进入待制定/已制定分组。
+  2026-09-29 简化：序列号列改 width="80"（最长 F1234-99 ≈75px），名称列 min-width="140" 收紧。
+
+  2026-10-05 改造：
+    - 数据源切 useProcessDesignStore（store.query.parts / loading / total / sortDir），
+      搜索仍是**本地过滤**（新端点不接收 keyword，见 api/processChain.ts 的入参注释）；
+    - 序列号列加 sortable="custom" + @sort-change：排序是**服务端**行为（后端排序键
+      固定 serial_no，无 sort_by），故不发 localSort，方向写进 store 的 sortDir 触发
+      refetch；两张表各带一个表头箭头，点哪张表哪张显示方向（EP 的 default-sort 只在
+      初始化时读一次，不做两表箭头同步）；
+    - 用 assembly_id 标出装配件子件（序列号列前置「子」角标 + 名称列缩进）—— 新端点
+      刻意不加 `AND assembly_id IS NULL`，子件与独立零件同表混排，不标的话用户分不清
+      哪些件属于某个装配件；
+    - 截断提示：后端一次只返 limit 条（total 是全量口径），超限时左栏明示
+      「仅显示前 N / 共 M」，避免用户以为列表是全的。
 -->
 <template>
   <el-card shadow="never" class="picker-card">
@@ -24,7 +37,10 @@
       :prefix-icon="Search"
     />
 
-    <!-- 2026-09-29 删除：「装配件」section 与黄色 tag；后端 GET /parts 已不再返装配件 -->
+    <!-- 2026-10-05：后端 total 是全量口径、本页一次只取 limit 条，超限时明示截断 -->
+    <div v-if="truncated" class="picker-truncated">
+      仅显示前 {{ parts.length }} / 共 {{ total }} 条，请用上方搜索缩小范围
+    </div>
 
     <div class="picker-section">
       <div class="section-title">
@@ -41,8 +57,15 @@
         stripe
         class="picker-table"
         @row-click="onSelect"
+        @sort-change="onSortChange"
       >
-        <el-table-column prop="serial_no" label="序列号" width="80" show-overflow-tooltip />
+        <el-table-column prop="serial_no" label="序列号" width="92" sortable="custom">
+          <template #default="{ row }">
+            <!-- assembly_id 非空 = 装配件的子件（与独立零件同表混排） -->
+            <span v-if="row?.assembly_id" class="child-flag" title="装配件子件">子</span>
+            <span :class="{ 'is-child': row?.assembly_id }">{{ row?.serial_no ?? '—' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="名称" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tooltip
@@ -50,7 +73,7 @@
               placement="top"
               :disabled="!row?.drawing_no"
             >
-              <span class="picker-name">
+              <span :class="['picker-name', { 'is-child': row?.assembly_id }]">
                 {{ row?.name ?? '—' }}
               </span>
             </el-tooltip>
@@ -74,8 +97,14 @@
         stripe
         class="picker-table"
         @row-click="onSelect"
+        @sort-change="onSortChange"
       >
-        <el-table-column prop="serial_no" label="序列号" width="80" show-overflow-tooltip />
+        <el-table-column prop="serial_no" label="序列号" width="92" sortable="custom">
+          <template #default="{ row }">
+            <span v-if="row?.assembly_id" class="child-flag" title="装配件子件">子</span>
+            <span :class="{ 'is-child': row?.assembly_id }">{{ row?.serial_no ?? '—' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="名称" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tooltip
@@ -83,7 +112,7 @@
               placement="top"
               :disabled="!row?.drawing_no"
             >
-              <span class="picker-name">
+              <span :class="['picker-name', { 'is-child': row?.assembly_id }]">
                 {{ row?.name ?? '—' }}
               </span>
             </el-tooltip>
@@ -97,8 +126,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { Search } from '@element-plus/icons-vue';
-import type { PartListItem } from '@/types/parts';
-import { usePartProcessDesign } from '../composables/usePartProcessDesign';
+import type { ProcessDesignPartSchema } from '@/composables/queries/schemas';
+import { useProcessDesignStore } from '../composables/useProcessDesignStore';
 import { splitPartsByProcessDesign } from '../utils/partDesignGrouping';
 
 defineProps<{
@@ -107,8 +136,16 @@ defineProps<{
 
 const emit = defineEmits<(e: 'select', partId: string) => void>();
 
-const { parts, loadingParts } = usePartProcessDesign();
-const loading = loadingParts;
+// 不变量 #3：消费侧禁止解构 store，一律 store.query.xxx / store.editor.xxx。
+const store = useProcessDesignStore();
+
+const parts = computed<ProcessDesignPartSchema[]>(() => store.query.parts);
+const loading = computed<boolean>(() => store.query.loading);
+const total = computed<number>(() => store.query.total);
+
+/** 后端 total 是全量口径（COUNT 与 limit/offset 无关），本页一次只取 limit 条。
+ *  total > 已取行数即发生静默截断，必须让用户看见。 */
+const truncated = computed<boolean>(() => total.value > parts.value.length);
 
 const searchKeyword = ref('');
 
@@ -116,18 +153,19 @@ const searchKeyword = ref('');
  *  2026-09-12 新增：原 3 列表格（图号 / 名称 / 状态）改为双表分组展示；
  *  状态信息已通过「待制定 / 已制定」section 标题表达。
  *  2026-09-16 改造：分组依据从「本地懒加载缓存的 step_count > 0」改为
- *  part.process_chain_id（后端 /parts 出参新增字段；null → 待制定 / 非 null → 已制定）。
- *  旧逻辑的限制随之消除：未点击过的零件不会再被误判为「待制定」——
- *  是否制定过工序现在由后端链外键直接表达，与本地懒加载状态无关。
- *  2026-09-29 简化：删除「装配件不参与分组」分支（PartPickerList 已移除独立 section），
- *  所有行（纯 t_part）按 process_chain_id 直入待制定/已制定。
+ *  part.process_chain_id（null → 待制定 / 非 null → 已制定）。
+ *  2026-10-05：所有行（含装配件子件 —— 新端点刻意不加 `AND assembly_id IS NULL`）
+ *  按 process_chain_id 直入待制定 / 已制定；子件靠序列号列的「子」角标区分。
  *  拆分逻辑抽在 utils/partDesignGrouping.ts（纯函数，便于 node 环境 vitest 直测）。 */
-const pendingParts = computed<PartListItem[]>(() => splitPartsByProcessDesign(parts.value).pending);
-const designedParts = computed<PartListItem[]>(
+const pendingParts = computed<ProcessDesignPartSchema[]>(
+  () => splitPartsByProcessDesign(parts.value).pending,
+);
+const designedParts = computed<ProcessDesignPartSchema[]>(
   () => splitPartsByProcessDesign(parts.value).designed,
 );
 
-function filterByKw(arr: PartListItem[]): PartListItem[] {
+/** 本地过滤（端点不接收 keyword，见 api/processChain.ts::ListProcessDesignPartsParams）。 */
+function filterByKw(arr: ProcessDesignPartSchema[]): ProcessDesignPartSchema[] {
   const kw = searchKeyword.value.trim().toLowerCase();
   if (!kw) return arr;
   return arr.filter((p) => {
@@ -141,16 +179,34 @@ function filterByKw(arr: PartListItem[]): PartListItem[] {
 const filteredPending = computed(() => filterByKw(pendingParts.value));
 const filteredDesigned = computed(() => filterByKw(designedParts.value));
 
-function onSelect(row: PartListItem): void {
+function onSelect(row: ProcessDesignPartSchema): void {
   if (row && row.id) emit('select', row.id);
 }
 
-/** 2026-07-30：树表 row-key（避免顶层与子件 id 冲突）。
- *  复用 PartsTable.vue:291-295 模式。
- *  2026-09-29 简化：删除装配件懒加载后无需前缀化（无 id 冲突）。 */
-function rowKey(row: PartListItem): string {
-  if (!row) return '';
-  return `PART_${row.id}`;
+/** 序列号列排序：**服务端**排序（sortable="custom" ⇒ 不做 localSort），
+ *  方向写进 store 的 sortDir → queryKey 变化 → useQuery 自动 refetch。 */
+function onSortChange({ order }: { order: 'ascending' | 'descending' | null }): void {
+  store.query.onSortChange(order);
+}
+
+/** el-table 行 key：**必须是裸 `row.id`，不能加任何前缀**（2026-10-05 修：高亮失效）。
+ *
+ * ⚠️ 这是 element-plus 的不对称契约，不是风格问题：函数型 rowKey 走 `getRowIdentity`
+ * 的 `isFunction` 分支，**原样返回**调用结果；而 `:current-row-key` 那个 prop 在
+ * `style-helper.mjs` 里**总是被字符串化**（`setCurrentRowKey(`${key}`)`），匹配时又用
+ * `===` 严格相等（`store/current.mjs`）。加了前缀的话 rowKey 侧是 `PART_5000…`、
+ * prop 侧是 `5000…`，恒不相等 ⇒ `currentRow` 恒 null ⇒ 选中行永不高亮。裸 id 两侧
+ * 是同一个字符串，匹配成立。
+ *
+ * 本表不需要前缀命名空间：所有行都是纯 `t_part` 行（雪花 id 全局唯一），
+ * 「待制定 / 已制定」两张表又是同一数组切出的互斥两份 ⇒ 同表内不可能有 id 冲突。
+ * （`views/parts/list` 的 PartsTable 仍混装装配件父行与子件行，那里**必须**保留
+ * `ASM_` 前缀，两处不要互相照抄。）
+ *
+ * 回归守卫：components/__tests__/PartPickerList.spec.ts 的 C1 / C2 两组用例
+ * （真挂 el-table 断言行拿到 `current-row` 类，并复现带前缀写法不高亮）。 */
+function rowKey(row: ProcessDesignPartSchema): string {
+  return row.id;
 }
 </script>
 
@@ -171,6 +227,13 @@ function rowKey(row: PartListItem): string {
 }
 .picker-search {
   flex-shrink: 0;
+}
+// 2026-10-05：截断提示（一行小字）
+.picker-truncated {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--el-color-warning);
+  line-height: 1.4;
 }
 .picker-section {
   display: flex;
@@ -195,5 +258,21 @@ function rowKey(row: PartListItem): string {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+// 2026-10-05：装配件子件标记 —— 序列号列前置「子」角标，名称列同步缩进
+.child-flag {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 3px;
+  border: 1px solid var(--el-color-info);
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--el-color-info);
+  vertical-align: 1px;
+}
+.is-child {
+  padding-left: 8px;
+  border-left: 2px solid var(--el-color-info-light-5);
 }
 </style>

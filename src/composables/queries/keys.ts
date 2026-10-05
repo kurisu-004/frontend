@@ -22,6 +22,9 @@ import type { ListInspectionQueueParams } from '@/api/parts/batch';
 import type { ListPartsParams } from '@/api/parts';
 import type { ListPendingBatchesParams } from '@/api/pendingBatches';
 import type { ListPendingProgrammingParams } from '@/api/programming';
+// 2026-10-05：入参形态在 api/processChain.ts 定义（api 层是 wire 契约的唯一定义处，
+// 沿上面几个 List*Params 的既有做法），本文件只引用。
+import type { ListProcessDesignPartsParams } from '@/api/processChain';
 import type { ListShelvesParams } from '@/api/shelves';
 // 2026-10-02：工种列表入参形态在 api/workType.ts 定义（api 层是 wire 契约的唯一定义
 // 处，沿 ListShelvesParams / ListPendingBatchesParams 的既有做法），本文件只引用。
@@ -356,4 +359,38 @@ export const qk = {
   /** outsource-pool state 域前缀 —— 一次发送/接收会同时改多个公司列（接收写入侧的
    *  目标公司、发送释放源公司的持有数），故按前缀全刷而非按 (公司, 工序) 精刷。 */
   outsourcePoolStatePrefix: ['outsource-pool', 'state'] as const,
+  // ============================================================
+  // 2026-10-05 新增：process-design 域（「制定工序」页）queryKey 工厂。
+  //
+  // 根命名空间取 `process-design`（与页面路由 / 后端 URL 段 `/prod/process-design/*`
+  // 逐字对齐，便于按 URL 反查键），**不**挂到 `parts` 前缀下 —— 理由沿本文件
+  // `inspection` / `outsource-pool` 两段的取舍：键的根只要求「同根前缀匹配」才有意义。
+  // 本页与零件一览 / 批次列表**没有共享写点**：本页唯一的写操作是保存工艺链
+  // （`POST /prod/process-chains/by-part/{part_id}`，写 `t_part_process_chain` /
+  // `t_part_process`，**不改** `t_part` 的 status / 货架归属 / 批次成员资格），
+  //   而零件一览 / 生产队列的写点（下发 / 送检 / 收发）改的是那些字段。
+  // 反过来若挂到 `parts` 下，任何一次「零件域一把全刷」（`qk.partsPrefix` 是全仓最热
+  // 的失效键）都会连带把本页列表 + 选中零件的工艺链全部重拉，纯粹浪费往返。
+  //
+  // 失效编排点：`useProcessDesignStore` 的 upsert-chain mutation（保存工艺链）成功后
+  // 调 `invalidateProcessDesignQuery(qc)` —— 同时失效零件列表（该零件要从「待制定」
+  // 迁到「已制定」）与选中零件的工艺链（整组 upsert 后 steps / version 全变）。
+  // ⚠️ 编排点 ≠ 全部写点：与 CLAUDE.md「跨页面写操作不做穷举失效」一致，本域的
+  // 新鲜度由有限 staleTime + 本页自身的显式 refetch 兜底。
+  // ============================================================
+  /** 零件列表键（页面级 store `useProcessDesignStore` 的主查询，数据源
+   *  `GET /api/v2/prod/process-design/parts`）。带 params 是因为端点接
+   *  `sort_dir` / `limit` / `offset`，键必须随 params 变化才能拿到不同 cache identity
+   *  （与 partsList / programmingList / inspectionQueueList 同形）。 */
+  processDesignParts: (params: ListProcessDesignPartsParams) =>
+    ['process-design', 'parts', params] as const,
+  /** process-design 域前缀 —— 保存工艺链成功后一把全失效（列表 + 选中零件的链） */
+  processDesignPartsPrefix: ['process-design'] as const,
+  /** 选中零件的工艺链键（`GET /api/v2/prod/process-chains/{chain_id}`）。
+   *  **参数键**：该端点按链 id 分片返回，切零件时必须换一份 cache identity，否则会拿
+   *  上一个零件的 steps 冒充当前零件的。chainId 空串 → 占位键
+   *  （`enabled=false` 闸门拦掉，见 store 的 selectedChainId 派生）。
+   *  后端无链 / 链已删 → 20701 BIZ_PROCESS_CHAIN_NOT_FOUND，store 的 queryFn 按空链
+   *  归一（不当错误态），故本页不需要第二条失效路径。 */
+  processDesignChain: (chainId: string) => ['process-design', 'chain', chainId] as const,
 } as const;
