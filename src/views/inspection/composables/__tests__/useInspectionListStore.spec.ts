@@ -856,6 +856,63 @@ describe('useInspectionListStore', () => {
     expect(scanInspectionMock).not.toHaveBeenCalled();
   });
 
+  it('父装配件被级联翻状态（synced_assembly_id 非 null）时重拉扫码树', async () => {
+    const store = useInspectionListStore();
+    store.mutations.scanTree = treeWithOneBatch();
+    toInspectionMock.mockResolvedValue({
+      part: { status: 'INSPECTION', version: 4 },
+      new_batch_id: null,
+      // 非 null = 本次流转把父装配件的派生状态也翻了。
+      synced_assembly_id: '190000000000900',
+    });
+    scanInspectionMock.mockResolvedValue(treeWithOneBatch());
+
+    await store.mutations.toInspectionMutation.mutateAsync({
+      batchId: 'B1',
+      targetInspectionShelfId: 'IS1',
+      version: 7,
+      quantity: null,
+      label: 'F1006-01',
+      targetShelfName: '品检架 2',
+    });
+
+    // 装配件根行的状态不在本地回写范围内（回写只覆盖零件 / 批次两层）⇒ 只能重拉。
+    expect(scanInspectionMock).toHaveBeenCalledWith('F1006-01');
+  });
+
+  it('40901 且扫码树开着：重拉扫码树（否则树上仍是旧 version，再点必然再次 40901）', async () => {
+    const { ElMessage } = await import('element-plus');
+    const store = useInspectionListStore();
+    store.mutations.scanTree = treeWithOneBatch();
+    toShipMock.mockRejectedValue(Object.assign(new Error('版本冲突'), { code: 40901 }));
+    // 别人已经把这一批流转过了：树上该行的 version / 状态都要跟着变。
+    const RESYNCED = treeWithOneBatch();
+    RESYNCED.children[0]!.children[0]!.version = 8;
+    RESYNCED.children[0]!.children[0]!.status = 'READY_TO_SHIP';
+    scanInspectionMock.mockResolvedValue(RESYNCED);
+    listInspectionBatchesMock.mockClear();
+
+    await expect(
+      store.mutations.toShipMutation.mutateAsync({
+        batchId: 'B1',
+        version: 7,
+        quantity: null,
+        label: 'F1006-01',
+      }),
+    ).rejects.toThrow('版本冲突');
+
+    // 树弹窗是 fullscreen、没有「刷新」入口，且开着时扫码会被守卫丢弃 ⇒ 只刷列表
+    // 的话用户再点一次还是用旧 version，确定性再次 40901。
+    expect(scanInspectionMock).toHaveBeenCalledWith('F1006-01');
+    const batch = store.mutations.scanTree?.children[0]?.children[0];
+    expect(batch?.version).toBe(8);
+    expect(batch?.status).toBe('READY_TO_SHIP');
+    expect(ElMessage.warning).toHaveBeenCalledWith('该批次已被他人修改，扫码树已刷新，请重新操作');
+    expect(ElMessage.error).not.toHaveBeenCalled();
+    await tick();
+    expect(listInspectionBatchesMock).toHaveBeenCalled();
+  });
+
   it('扫码查不到（20101）走 warning + 带出条码，不弹通用 error', async () => {
     const { ElMessage } = await import('element-plus');
     const store = useInspectionListStore();

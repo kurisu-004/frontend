@@ -316,15 +316,6 @@ export const qk = {
    *  调 `qc.invalidateQueries({ queryKey: qk.inspectionPrefix })` 失效本域；
    *  未来若本域新增其它 list 键，一并被前缀覆盖。 */
   inspectionPrefix: ['inspection'] as const,
-  /** 2026-10-05 新增：品检扫码树键（`GET /api/v2/prod/inspection/scan/{serial_no}`）。
-   *  键含序列号维度 —— 不同条码的树**互不相同**（扫装配件与扫其子件虽返回同一棵树，
-   *  但 `hit_kind` / `is_scanned` 有别），共键即串树。
-   *
-   *  ⚠️ 当前消费方是 `useInspectionListStore` 的 `scanMutation`（**useMutation**）：
-   *  扫码是用户触发的单次拉取，缓存无价值（用户重扫同一条码时应当重取——树里的批次
-   *  可能已被别人流转），TanStack 在这里只是去重层。键仍登记在此，将来若改成
-   *  `useQuery`（例如支持「扫码后离开页面再回来仍看得到」）可直接复用，不必新造字面量。 */
-  scanInspection: (serialNo: string) => ['inspection', 'scan', serialNo] as const,
   // ============================================================
   // 2026-10-03 新增：outsource-pool 域（「外协发送/接收」看板）queryKey 工厂。
   //

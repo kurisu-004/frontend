@@ -514,11 +514,16 @@ function onScanTreeAssignProcess(batch: ScanBatchOut): void {
 async function onInspectionScan(rawCode: string): Promise<void> {
   const code = rawCode.trim();
   if (!code) return;
-  // 已有 dialog 在显示时不抢流程（品检通过 / 指定工序 / 树形弹窗三者任一开着都跳过）——
-  // 否则会在用户正填数量的半路上换掉整棵树的上下文。守卫必须在 await 之前判。
+  // 已有 dialog 在显示时不抢流程（品检通过 / 指定工序 / 树形弹窗三者任一开着都跳过；
+  // 行内送检面板在树弹窗内，跟着树弹窗一起被这条守卫挡住）—— 否则会在用户正填数量的
+  // 半路上换掉整棵树的上下文。守卫必须在 await 之前判。
   if (passDialogVisible.value || failDialogVisible.value || scanTreeOpen.value) {
     return;
   }
+  // 清上一棵树与乐观开窗放在同一段同步代码里：请求在飞时用户按 ESC 关窗的话，closed 先
+  // 触发（那时树上还是上一次的内容，清了个寂寞），响应随后把新树写进去而弹窗是关的 ⇒
+  // 下次扫码开窗先闪出上一次的树（正是 clearScanTree 注释里说要避免的现象）。
+  store.mutations.clearScanTree();
   // 乐观开窗：先开窗再发请求，弹窗内的 v-loading 才是活的（等请求回来才开窗的话，
   // 渲染时请求早已 settle，loading 永远是死绑定，请求期间零反馈）。失败关窗。
   scanTreeOpen.value = true;

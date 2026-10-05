@@ -6,16 +6,18 @@
   `row-key` 按层加前缀（`ASSEMBLY_` / `PART_` / `BATCH_`）后，一张表就能承载这三层。
 
   操作列只对**批次行**渲染（装配件 / 零件行没有可写的对象），按钮矩阵由批次 `status`
-  单点决定：
+    单点决定：
     - INSPECTION → 品检通过（to-ship）/ 指定工序（to-process）
-    - PENDING / PROGRAMMING / IN_PROCESS → 送检（to-inspection，行内选品检架）
+    - PENDING / PROGRAMMING → 送检（to-inspection，行内选品检架）
+    - IN_PROCESS → 送检，但还要过 location 闸门（必须在生产架上，见 canSendToInspection）
     - 其余（READY_TO_SHIP / DELIVERED / COMPLETED / CANCELLED / OUTSOURCE …）→ 不给按钮
   「品检通过」「指定工序」只 emit，由壳（InspectionPending.vue）复用它已有的两个对话框 ——
   品检器在这里选数量、选工序 + 货架，没有理由重造一遍。
 
-  高亮一律以**后端**的 `is_scanned` 为准：独立件树 = 该件全部批次亮；扫装配件子件 =
-  只有被扫中那个子件的批次亮（兄弟子件不亮）；扫装配件条码 = 全部不亮。零件层没有
-  独立 flag，由「任一批次被扫中」反推。
+  高亮以**后端**的 `is_scanned` 为准：独立件树 = 该件全部批次亮；扫装配件子件 =
+  只有被扫中那个子件的批次亮（兄弟子件不亮）；扫装配件条码 = 全部不亮。零件层后端
+  没有独立 flag，按「这个零件就是被扫中的那个」点亮（批次一个都没有的件也要亮，否则
+  扫了码却零视觉反馈）。
 
   ⚠️ 规模上限：扫码端点**无分页、不过滤状态**（含终态批次），这里 `default-expand-all`
   全展开且没有虚拟滚动。装配件 N 子件 × M 批次到上千行会卡；后端一旦在该端点加分页，
@@ -244,7 +246,7 @@ type ActionRow = Pick<ScanTreeRow, 'id' | 'quantity' | 'batch'>;
 /** 送检按钮的显隐还要读 status / location，凑成这一个窄结构。 */
 type SendGateRow = ActionRow & Pick<ScanTreeRow, 'status' | 'location'>;
 
-/** 可送检的批次状态。IN_PROCESS 还带一道 location 闸门，见 canSendToInspection。 */
+/** 可送检的批次状态。IN_PROCESS 还带一道 location 白名单闸门，见 canSendToInspection。 */
 const SEND_TO_INSPECTION_STATUSES: readonly string[] = ['PENDING', 'PROGRAMMING', 'IN_PROCESS'];
 
 /** 返修批次的「指定工序」为什么不给：后端对返修中批次返 20118 守卫，而本仓的返修出口
@@ -262,7 +264,9 @@ const LOCATION_LABEL: Record<string, string> = {
   OUTSOURCE_COMPANY: '外协',
 };
 
-function partRow(part: ScanPartOut): ScanTreeRow {
+/** 零件节点 → 表格行。`tree` 只用来判「这个零件是不是被扫中的那个」（零件层高亮，
+ *  批次层一律照抄后端 flag）。 */
+function partRow(part: ScanPartOut, tree: ScanTreeOut): ScanTreeRow {
   return {
     node_kind: 'PART',
     id: part.id,
@@ -279,8 +283,10 @@ function partRow(part: ScanPartOut): ScanTreeRow {
     location: null,
     current_holder_display: null,
     process_name: null,
-    // 零件层后端没有独立 flag：任一批次被扫中即视为「这条子件就是刚扫的那个」。
-    is_scanned: part.children.some((b) => b.is_scanned),
+    // 零件层按「被扫中的就是它」点亮，不看批次：被扫中的子件若一个批次都没有
+    // （还没下发），按批次反推的结果是整行不亮 —— 扫了码却零视觉反馈。
+    // 扫装配件条码（hit_kind='ASSEMBLY'）时没有零件被扫中，全树不亮。
+    is_scanned: tree.hit_kind === 'PART' && part.serial_no === tree.scanned_serial_no,
     batch: null,
     children: part.children.map((b) => batchRow(b, part)),
   };
@@ -296,9 +302,9 @@ function batchRow(batch: ScanBatchOut, parent: ScanPartOut): ScanTreeRow {
     name: '',
     quantity: batch.quantity,
     status: batch.status,
-    system_delivery_date: null,
-    // 客户与加急同样只在零件节点上，批次行从父零件继承（装配件跨子件时树的每一行
-    // 都要能看出客户，否则扫装配件时无从判断这批活是哪家的）。
+    // 系统交期 / 客户 / 加急都只在零件节点上，批次行从父零件继承：装配件跨子件时
+    // 树的每一行都要能看出交期与客户，否则扫装配件时无从判断这批活是哪家的、赶不赶得上。
+    system_delivery_date: parent.system_delivery_date,
     customer_name: parent.customer_name,
     is_urgent: parent.is_urgent,
     batch_no: batch.batch_no,
@@ -341,11 +347,11 @@ const rows = computed<ScanTreeRow[]>(() => {
         process_name: null,
         is_scanned: false,
         batch: null,
-        children: t.children.map((p) => partRow(p)),
+        children: t.children.map((p) => partRow(p, t)),
       },
     ];
   }
-  return t.children.map((p) => partRow(p));
+  return t.children.map((p) => partRow(p, t));
 });
 
 const scannedSerialNo = computed<string>(() => tree.value?.scanned_serial_no ?? '');
@@ -399,14 +405,15 @@ function locationDisplay(row: ScanTreeRow): string {
   return LOCATION_LABEL[row.location] ?? '—';
 }
 
-/** 送检按钮的显隐。IN_PROCESS 多一道 location 闸门：后端要求源批次
- *  `location='PRODUCTION_SHELF'` 且持有人是货架，工人手上的 IN_PROCESS 批次
- *  （location='WORKER'）必被 20103 拒 —— 那种行不给按钮。location 为空的老数据照给，
- *  真被拒时由 mutation 的 onError 把后端原文弹出来。 */
+/** 送检按钮的显隐。IN_PROCESS 多一道 location 闸门，且是**白名单**而不是「非
+ *  PRODUCTION_SHELF 就拒」：后端对该端点的 IN_PROCESS 源批次要求
+ *  `location='PRODUCTION_SHELF'`，`location` 为空的老数据同样硬拒 20103
+ *  （那一列在服务层被定性为数据完整性违规）。工人手上的（`location='WORKER'`）也拒。
+ *  三种都给按钮的话它们就是「点了必然失败」的死按钮。 */
 function canSendToInspection(row: SendGateRow): boolean {
   if (!SEND_TO_INSPECTION_STATUSES.includes(row.status)) return false;
   if (row.status !== 'IN_PROCESS') return true;
-  return !row.location || row.location === 'PRODUCTION_SHELF';
+  return row.location === 'PRODUCTION_SHELF';
 }
 
 // ============ 行内送检面板 ============
