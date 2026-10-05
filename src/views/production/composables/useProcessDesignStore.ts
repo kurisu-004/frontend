@@ -49,7 +49,16 @@
 //      直接 return（此时 serverSteps 还是空数组，播种等于把空草稿钉死）。
 // 两者叠加的后果是同一条：空草稿一旦落盘，工序列表永远是空的，而 dirty 却为 true
 // ⇒ 用户点一次「保存」就把该零件的工艺链清空（POST 空 steps = 整组替换语义下的
-// 「清空所有步骤」）。回归守卫见 __tests__/useProcessDesignStore.spec.ts 的 T15~T17。
+// 「清空所有步骤」）。
+//
+// 三条同族守卫生住「草稿与基线在异步往返期间不被错配」这条不变量（后端 POST 是整组
+// 替换，错配一次就是数据丢失，故都收在 store 而不是 UI）：
+//   3. `addStep` 在链在途时拒绝（`chainPending`）—— 那窗口里 `currentDraft()` 播的是
+//      空草稿，硬接一道工序会挡住真数据到达后的播种，保存时把服务端整条链截成 1 条；
+//   4. `resetSteps` 在链在途 / 加载失败时拒绝（`canReset`）—— 重置的内容源不是权威值；
+//   5. `markSaved` 的基线取**请求 payload 快照**而非实时草稿 —— 保存往返期间的新编辑
+//      不在 payload 里，保存完成后 dirty 仍为 true，不会被随后的失效 refetch 覆盖。
+// 回归守卫见 __tests__/useProcessDesignStore.spec.ts 的 T15~T24。
 
 import { computed, ref, watch } from 'vue';
 import { defineStore } from 'pinia';
@@ -310,14 +319,25 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     return flattened;
   }
 
-  /** 保存成功后把基线推到「刚发出去的那份草稿」上 ⇒ dirty 归零。
-   *  基线取**请求 payload** 而不是响应 steps：后端若对响应做归一化（耗时 clamp 之类），
-   *  拿响应当基线会让「保存」按钮刚变灰又变可点。随后那次失效 refetch 带归一化后的
-   *  steps 回来时，下面的 watch 会把草稿对齐过去（此时 dirty 已是 false，允许覆盖）。 */
-  function markSaved(partId: string): void {
+  /** 保存成功后把基线推到「刚发出去的那份 payload」上 ⇒ dirty 归零。
+   *  基线取**请求 payload**（`saved` 形参，由 `save()` 拍的草稿快照）而不是当前草稿：
+   *  后端若对响应做归一化（耗时 clamp 之类），拿响应当基线会让「保存」按钮刚变灰又变可点。
+   *  `saved` 是发起保存那一刻 `writeDraft` 产出的独立数组，此后所有编辑
+   *  （addStep / removeStep / patchStep / selectProcess / Sortable）都整体替换草稿、
+   *  不会改到它 ⇒ 它是**稳定快照**。
+   *
+   *  ⚠️ 2026-10-05 修：取 payload 而非实时草稿，还顺带收掉「POST 在途期间的并发编辑被
+   *  静默丢弃」——保存往返期间用户新增的那道工序不在 `saved` 里，于是保存完成后
+   *  草稿签名 ≠ 基线签名 ⇒ dirty 仍为 true，下方播种 watch 因 isDirty 挡在门外，
+   *  草稿原样保留、用户能再点一次保存。拿实时草稿当基线则会把这道未保存的工序
+   *  一起当成「已保存」，随后失效 refetch 回来时播种覆盖掉它（编辑凭空消失 +
+   *  按钮变灰），用户毫不知情。
+   *  随后那次失效 refetch 带归一化后的 steps 回来时，若期间无新编辑（isDirty 为
+   *  false）则允许把草稿对齐到服务端权威 steps。 */
+  function markSaved(partId: string, saved: ProcessStep[]): void {
     savedSignatures.value = {
       ...savedSignatures.value,
-      [partId]: stepsSignature(draftSteps.value[partId] ?? []),
+      [partId]: stepsSignature(saved),
     };
   }
 
@@ -390,11 +410,32 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     );
   });
 
+  /** 选中零件的链是否在途（右栏空态区分「在加载」与「真的没工序」，也是编辑侧的
+   *  准入闸门）。口径与 `canReset` 同源：`enabled=false` 的 query（零件压根没有链）
+   *  isPending 恒为 true，所以必须先按「有没有链 id」分流。 */
+  const chainPending = computed<boolean>(
+    () => !!selectedChainId.value && chainQuery.isPending.value,
+  );
+
   /** 追加一道空白工序（末尾）。默认带第一道工序的 code / name / category / color，
-   *  estimated_minutes=30 —— 与旧实现同默认。 */
+   *  estimated_minutes=30 —— 与旧实现同默认。
+   *
+   *  ⚠️ 2026-10-05 修：链在途时**拒绝**并提示，不让它建草稿。守卫放在 store 而不是
+   *  组件，是为了任何入口（占位方框、快捷键、将来的批量导入）都绕不过去。
+   *  原因是 `currentDraft()` 在草稿缺失时会用 `serverSteps` 播种，而链在途时
+   *  `serverSteps` 是空数组：此刻 addStep 会把「空草稿 + 1 道新工序」连同空基线一起
+   *  写进 draftSteps，随后真数据到达时播种 watch 被 isDirty 挡在门外 ⇒ 服务端那 3 步
+   *  永远进不来，用户再点一次保存就是拿 1 条去整组替换 3 条（步骤被静默截断）。
+   *  removeStep / patchStep / selectProcess 在同一窗口里是无害的：它们对空草稿做完
+   *  过滤 / 改字段后仍是空数组，签名与基线一致 ⇒ dirty 为 false，数据到达时正常
+   *  播种覆盖；唯一会把草稿改成「非空且与基线不一致」的入口就是 addStep。 */
   function addStep(): void {
     const pid = selectedPartId.value;
     if (!pid) return;
+    if (chainPending.value) {
+      ElMessage.warning('工艺链尚未加载完成，暂不能添加工序');
+      return;
+    }
     const first = processes.value[0];
     const step: ProcessStep = {
       uid: `step-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -511,7 +552,7 @@ export const useProcessDesignStore = defineStore('process-design', () => {
       // 保存期间用户可能已经切到别的零件或切了排序，按当前值去 patch 会改错行 / 改错缓存。
       // 显式标注 prev 类型：queryKey 末段是普通对象（非 tagged key），TS 无法从键反推
       // TQueryFnData，不标注会被退化成 `{}`。
-      markSaved(vars.partId);
+      markSaved(vars.partId, vars.steps);
       qc.setQueryData(
         qk.processDesignParts(vars.params),
         (prev: ProcessDesignPartListResultSchema | undefined) => {
@@ -586,8 +627,9 @@ export const useProcessDesignStore = defineStore('process-design', () => {
       restoreState,
       /** fetchList 别名（视图「刷新」入口 / 测试驱动） */
       fetchList,
-      /** 选中零件的链是否在途（右栏空态区分「加载中」与「真的没工序」） */
-      chainPending: computed<boolean>(() => !!selectedChainId.value && chainQuery.isPending.value),
+      /** 选中零件的链是否在途（右栏空态区分「加载中」与「真的没工序」；
+       *  同时是编辑侧的准入闸门，见 addStep 守卫） */
+      chainPending,
       /** 工序下拉（共享基础数据层 query 的只读投影） */
       processes,
     },

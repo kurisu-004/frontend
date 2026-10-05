@@ -30,6 +30,9 @@
     - 「重置」按钮在链在途 / 链加载失败时置灰（store.editor.canReset，见 store 的
       resetSteps 守卫注释）：重置的内容源是服务端 steps，那两种状态下它不是权威值，
       点下去等于无声丢掉用户的在途编辑。
+    - 链在途时两个「添加工序」占位方框同步置灰。准入判定与拒绝在 store 的 addStep
+      里（那里才有 serverSteps 的权威性视角），本组件只做视觉提示：置灰后点击仍会
+      走到 store，由它弹「工艺链尚未加载完成」解释原因，不做静默吞点击。
 
   CLAUDE.md 合规：
   - #10：容器 ref 位于 v-else（空态 vs 列表切换），初始 mount 时为 null → 用 useLazyDraggable。
@@ -81,7 +84,15 @@
         :image-size="80"
       />
       <!-- 2026-09-12 第三轮：空态也展示占位方框（与有步骤时保持一致入口） -->
-      <div class="step-add-placeholder step-add-placeholder--solo" @click="onAdd">
+      <div
+        :class="[
+          'step-add-placeholder',
+          'step-add-placeholder--solo',
+          { 'step-add-placeholder--disabled': chainPending },
+        ]"
+        :data-draggable="false"
+        @click="onAdd"
+      >
         <el-icon :size="20"><Plus /></el-icon>
         <span>添加工序</span>
       </div>
@@ -151,7 +162,11 @@
       </el-card>
 
       <!-- 2026-09-12 第三轮：列表末尾虚线占位方框（点击 → onAdd） -->
-      <div class="step-add-placeholder" :data-draggable="false" @click="onAdd">
+      <div
+        :class="['step-add-placeholder', { 'step-add-placeholder--disabled': chainPending }]"
+        :data-draggable="false"
+        @click="onAdd"
+      >
         <el-icon :size="20"><Plus /></el-icon>
         <span>添加工序</span>
       </div>
@@ -184,6 +199,8 @@ const chainPending = computed<boolean>(() => store.query.chainPending);
 // 否则用户点一下就无声丢掉在途编辑（store 的 resetSteps 侧也有同一道守卫）。
 const canReset = computed<boolean>(() => store.editor.canReset);
 
+// 只挡「没选零件」这一种；链在途由 store 的 addStep 守卫拒绝（不变量放在 store，
+// 换入口也不会漏）。这里让点击照常走到 store，好拿到那句解释原因的提示。
 function onAdd(): void {
   if (!props.partId) {
     ElMessage.warning('请先选择零件');
@@ -386,6 +403,18 @@ useLazyDraggable(containerRef, steps, {
     // 空态时的占位方框（单独显示在 .empty-state 内）
     width: 80%;
     max-width: 320px;
+  }
+  // 2026-10-05：链在途时置灰（添加工序此刻会被 store 的 addStep 守卫拒绝，见该函数注释
+  // —— 在途时播种的是空草稿，硬接这道工序会让服务端已有的步骤再也进不来）。仍保留点击，
+  // 点了由 store 弹「工艺链尚未加载完成」解释原因，而不是让方框看着可点却毫无反应。
+  &--disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    &:hover {
+      border-color: var(--border-color);
+      color: var(--text-secondary);
+      background: transparent;
+    }
   }
 }
 </style>

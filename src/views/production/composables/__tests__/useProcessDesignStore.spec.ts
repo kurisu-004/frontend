@@ -2,7 +2,7 @@
 //
 // 2026-10-05 新增：「制定工序」页 store（Pinia setup store）单测。
 //
-// 覆盖（20 例）：
+// 覆盖（23 例）：
 //   T1  列表加载 + process_chain_id / assembly_id 透传
 //   T2  子件可见（assembly_id 非空的行不被过滤掉）
 //   T3  enabled 闸门：store 构造后不发请求，restoreState 后才发
@@ -27,8 +27,13 @@
 //   T19 removeStep 按 uid 删一道 → 草稿与 payload 同步少一条且 sort_order 拍平
 //   T20 链加载失败 → canReset=false 且 resetSteps() 不清空草稿
 //   T21 零闪烁回写用 save() 那一刻的 params 快照（保存期间切排序不丢回写）
+//   T22 保存往返在途期间新增的工序不被静默吞掉：基线取请求 payload 快照 ⇒
+//       草稿留 4 道、dirty 仍 true、可再点一次保存
+//   T23 链在途时 addStep() 被 store 拒绝 ⇒ 服务端 3 步正常进来、保存发 3 条
+//       （不设守卫时会被截成 1 条）
+//   T24 链就绪后 addStep() 不被守卫误伤
 //
-// ⚠️ T15~T21 必须选 **process_chain_id 非空** 的零件：只选无链零件的用例盖不到
+// ⚠️ T15~T24 必须选 **process_chain_id 非空** 的零件：只选无链零件的用例盖不到
 // 「服务端已有链」这条路径（工序加载不出来的回归就藏在那里）。
 //
 // mock 策略（照 usePendingProgrammingStore.spec.ts 骨架，理由同样成立）：
@@ -136,6 +141,8 @@ let listGate: Deferred<{ data: unknown }> | null;
 let chainGate: Deferred<{ data: unknown }> | null;
 /** T20 用：非 null 时链请求抛该错（模拟 5xx），验证 resetSteps 不清空草稿。 */
 let chainError: ApiError | null;
+/** T22 用：非 null 时 POST 挂起，构造「保存往返在途」窗口。 */
+let postGate: Deferred<{ data: unknown }> | null;
 /** T4 用：非 null 时列表响应改用它（喂非法 payload）。 */
 let partsOverride: unknown | null;
 
@@ -204,6 +211,8 @@ async function respondPost(url: string, body?: unknown): Promise<{ data: unknown
   partsState = partsState.map((p) =>
     p.id === partId && p.process_chain_id !== chainId ? { ...p, process_chain_id: chainId } : p,
   );
+  // 2026-10-05：挂起响应（服务端态已按整组替换语义落地），用来构造「保存往返在途」窗口
+  if (postGate) return postGate.promise;
   return {
     data: chainEnvelope(chainId, steps),
   };
@@ -230,6 +239,7 @@ describe('useProcessDesignStore', () => {
     listGate = null;
     chainGate = null;
     chainError = null;
+    postGate = null;
     partsOverride = null;
 
     testQueryClient = new QueryClient({
@@ -700,5 +710,97 @@ describe('useProcessDesignStore', () => {
 
     listGate.resolve({ data: listEnvelope() });
     await saved;
+  });
+
+  // ============ T22：保存往返在途的并发编辑不被静默吞掉 ============
+  it('T22：POST 在途期间新增的工序留在草稿里、dirty 仍为 true（不靠实时草稿当基线）', async () => {
+    const store = await bootedStore();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.chainPending === false);
+    expect(store.editor.steps).toHaveLength(3);
+
+    // 挂住 POST 响应，构造「保存往返在途」窗口
+    postGate = deferred<{ data: unknown }>();
+    const saving = store.editor.save();
+    await waitUntil(() => store.editor.saving === true);
+    // 发出去的 payload 是发起保存那一刻的快照（3 步）
+    const posted = apiPostMock.mock.calls[0]?.[1] as UpsertProcessChainRequest;
+    expect(posted.steps).toHaveLength(3);
+
+    // 在途期间用户又点了一次「添加工序」
+    store.editor.addStep();
+    expect(store.editor.steps).toHaveLength(4);
+    expect(store.editor.dirty).toBe(true);
+
+    postGate.resolve({
+      data: chainEnvelope('7000000000001', chainState['7000000000001'] ?? []),
+    });
+    await saving;
+
+    // ⚠️ 基线若取实时草稿：保存期间新增的这道会被当成「已保存」→ dirty 归零 →
+    // 随后的失效 refetch 触发播种 watch（isDirty 为 false 放行）把它覆盖掉，
+    // 结果是编辑凭空消失 + 保存按钮变灰，用户毫不知情。
+    expect(store.editor.steps).toHaveLength(4);
+    expect(store.editor.dirty).toBe(true);
+    expect(store.editor.saving).toBe(false);
+
+    // 用户能再点一次保存，这次发的是 4 条（第 4 道没丢）
+    postGate = null;
+    await store.editor.save();
+    const second = apiPostMock.mock.calls[1]?.[1] as UpsertProcessChainRequest;
+    expect(second.steps).toHaveLength(4);
+    expect(second.steps.map((s) => s.sort_order)).toEqual([0, 1, 2, 3]);
+    expect(second.steps[3]?.estimated_minutes).toBe(30);
+    await waitUntil(() => store.editor.dirty === false);
+  });
+
+  // ============ T23：链在途时 addStep 必须被拒（否则服务端整条链被截断）============
+  it('T23：有链零件在链在途时 addStep() 被 store 拒绝 → 数据到达后是服务端 3 步，保存发 3 条', async () => {
+    // 失败形状：链在途时 currentDraft() 用空 serverSteps 播种 → addStep 写进「1 道工序 +
+    // 空基线」⇒ 真数据到达时被 isDirty 挡在门外 ⇒ 随后的 save() 拿 1 条去整组替换 3 条，
+    // 服务端已有步骤被静默截断。守卫必须在 store 侧（换入口也得挡住）。
+    const store = await bootedStore();
+    chainGate = deferred<{ data: unknown }>();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => chainCalls() === 1);
+    expect(store.query.chainPending).toBe(true);
+
+    store.editor.addStep();
+
+    // 被拒 + 弹提示：草稿一个字节都没写（steps 仍 0、dirty 仍 false）
+    expect(ElMessage.warning).toHaveBeenCalledWith('工艺链尚未加载完成，暂不能添加工序');
+    expect(store.editor.steps).toHaveLength(0);
+    expect(store.editor.dirty).toBe(false);
+    expect(apiPostMock).not.toHaveBeenCalled();
+
+    chainGate.resolve({
+      data: chainEnvelope('7000000000001', chainState['7000000000001'] ?? []),
+    });
+    await waitUntil(() => store.query.chainPending === false);
+
+    // 服务端那 3 步一条不少地进来
+    expect(store.editor.steps).toHaveLength(3);
+    expect(store.editor.steps.map((s) => s.estimated_minutes)).toEqual([45, 90, 15]);
+    expect(store.editor.dirty).toBe(false);
+
+    // 截断形状的反向断言：保存发的是 3 条（若守卫失效这里会是 1 条）
+    await store.editor.save();
+    const body = apiPostMock.mock.calls[0]?.[1] as UpsertProcessChainRequest;
+    expect(body.steps).toHaveLength(3);
+  });
+
+  // ============ T24：链就绪后 addStep 恢复正常（守卫不许误伤）============
+  it('T24：链加载完成后 addStep() 正常追加（守卫只挡在途窗口）', async () => {
+    const store = await bootedStore();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.chainPending === false);
+    vi.mocked(ElMessage.warning).mockClear();
+
+    store.editor.addStep();
+
+    expect(ElMessage.warning).not.toHaveBeenCalled();
+    expect(store.editor.steps).toHaveLength(4);
+    expect(store.editor.steps[3]?.estimated_minutes).toBe(30);
+    expect(store.editor.dirty).toBe(true);
   });
 });
