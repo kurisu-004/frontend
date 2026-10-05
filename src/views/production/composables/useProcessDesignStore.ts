@@ -56,9 +56,10 @@
 //   3. `addStep` 在链在途时拒绝（`chainPending`）—— 那窗口里 `currentDraft()` 播的是
 //      空草稿，硬接一道工序会挡住真数据到达后的播种，保存时把服务端整条链截成 1 条；
 //   4. `resetSteps` 在链在途 / 加载失败时拒绝（`canReset`）—— 重置的内容源不是权威值；
-//   5. `markSaved` 的基线取**请求 payload 快照**而非实时草稿 —— 保存往返期间的新编辑
-//      不在 payload 里，保存完成后 dirty 仍为 true，不会被随后的失效 refetch 覆盖。
-// 回归守卫见 __tests__/useProcessDesignStore.spec.ts 的 T15~T24。
+//   5. `markSaved` 的基线取**发起保存那一刻同步算出的签名字符串**（随 mutation 变量
+//      传下去）而非实时草稿 —— 保存往返期间的任何新编辑都改不了这串基线，保存完成后
+//      dirty 仍为 true，不会被随后的失效 refetch 覆盖。
+// 回归守卫见 __tests__/useProcessDesignStore.spec.ts 的 T15~T25。
 
 import { computed, ref, watch } from 'vue';
 import { defineStore } from 'pinia';
@@ -320,24 +321,28 @@ export const useProcessDesignStore = defineStore('process-design', () => {
   }
 
   /** 保存成功后把基线推到「刚发出去的那份 payload」上 ⇒ dirty 归零。
-   *  基线取**请求 payload**（`saved` 形参，由 `save()` 拍的草稿快照）而不是当前草稿：
-   *  后端若对响应做归一化（耗时 clamp 之类），拿响应当基线会让「保存」按钮刚变灰又变可点。
-   *  `saved` 是发起保存那一刻 `writeDraft` 产出的独立数组，此后所有编辑
-   *  （addStep / removeStep / patchStep / selectProcess / Sortable）都整体替换草稿、
-   *  不会改到它 ⇒ 它是**稳定快照**。
+   *  `signature` 是发起保存那一刻**同步**算出的业务签名字符串（`save()` 随 mutation 变量
+   *  一起传下来），不是 resolve 时刻重算的：后端若对响应做归一化（耗时 clamp 之类），
+   *  拿响应当基线会让「保存」按钮刚变灰又变可点。
    *
-   *  ⚠️ 2026-10-05 修：取 payload 而非实时草稿，还顺带收掉「POST 在途期间的并发编辑被
-   *  静默丢弃」——保存往返期间用户新增的那道工序不在 `saved` 里，于是保存完成后
-   *  草稿签名 ≠ 基线签名 ⇒ dirty 仍为 true，下方播种 watch 因 isDirty 挡在门外，
-   *  草稿原样保留、用户能再点一次保存。拿实时草稿当基线则会把这道未保存的工序
-   *  一起当成「已保存」，随后失效 refetch 回来时播种覆盖掉它（编辑凭空消失 +
-   *  按钮变灰），用户毫不知情。
+   *  ⚠️ 2026-10-05 修：基线必须是**字符串**而不是数组快照。数组快照对「原地改动」不免疫
+   *  —— Sortable 的内建 handler 是 `list.value.splice(...)`（见 useLazyDraggable 头注），
+   *  它改的正是 `writeDraft` 产出的那份数组（`draftSteps` 是 ref，取值是包着同一份 raw
+   *  的 reactive 代理，代理上的 splice 直达底层）：保存往返期间一次拖拽就能把「快照」
+   *  改成重排后的顺序，基线与草稿同进同出、dirty 静默保持 false，而服务端还是旧顺序 ⇒
+   *  UI 显示幻影顺序 + 保存按钮灰着。签名字符串在那一刻已成定局，对任何后续原地改动免疫。
+   *
+   *  基线取 payload 而非实时草稿，同时收掉「POST 在途期间的并发编辑被静默丢弃」——
+   *  保存往返期间用户新增 / 重排的工序都不在基线里，于是保存完成后草稿签名 ≠ 基线签名
+   *  ⇒ dirty 仍为 true，下方播种 watch 因 isDirty 挡在门外，草稿原样保留、用户能再点
+   *  一次保存。拿实时草稿当基线则会把这批未保存的编辑一起当成「已保存」，随后失效
+   *  refetch 回来时播种覆盖掉它们（编辑凭空消失 + 按钮变灰），用户毫不知情。
    *  随后那次失效 refetch 带归一化后的 steps 回来时，若期间无新编辑（isDirty 为
    *  false）则允许把草稿对齐到服务端权威 steps。 */
-  function markSaved(partId: string, saved: ProcessStep[]): void {
+  function markSaved(partId: string, signature: string): void {
     savedSignatures.value = {
       ...savedSignatures.value,
-      [partId]: stepsSignature(saved),
+      [partId]: signature,
     };
   }
 
@@ -428,7 +433,11 @@ export const useProcessDesignStore = defineStore('process-design', () => {
    *  永远进不来，用户再点一次保存就是拿 1 条去整组替换 3 条（步骤被静默截断）。
    *  removeStep / patchStep / selectProcess 在同一窗口里是无害的：它们对空草稿做完
    *  过滤 / 改字段后仍是空数组，签名与基线一致 ⇒ dirty 为 false，数据到达时正常
-   *  播种覆盖；唯一会把草稿改成「非空且与基线不一致」的入口就是 addStep。 */
+   *  播种覆盖；唯一会把草稿改成「非空且与基线不一致」的入口就是 addStep。
+   *  Sortable 在这窗口同样够不着：卡片列表（连同它的容器 ref）在 ProcessStepCardList 的
+   *  `v-else` 分支里，而 chainPending 期间该零件不可能有非空草稿（唯一的建草稿入口
+   *  currentDraft() 播的是空 serverSteps）⇒ steps 必为空、走 `v-if` 空态分支 ⇒
+   *  Sortable 没启动，没有任何可拖的卡片。哪天让空态也渲染列表分支，这条就失效了。 */
   function addStep(): void {
     const pid = selectedPartId.value;
     if (!pid) return;
@@ -536,6 +545,10 @@ export const useProcessDesignStore = defineStore('process-design', () => {
   interface SaveChainVars {
     partId: string;
     steps: ProcessStep[];
+    /** 2026-10-05 新增：`steps` 那一刻的业务签名，作为保存后 dirty 的基线。
+     *  **必须随变量传下去**，不能在 resolve 时重算 —— 那时草稿可能已被 Sortable 就地
+     *  重排或新增过，重算出来的基线等于「连没保存的编辑一起认了」。 */
+    signature: string;
     params: ListProcessDesignPartsParams;
   }
 
@@ -552,7 +565,7 @@ export const useProcessDesignStore = defineStore('process-design', () => {
       // 保存期间用户可能已经切到别的零件或切了排序，按当前值去 patch 会改错行 / 改错缓存。
       // 显式标注 prev 类型：queryKey 末段是普通对象（非 tagged key），TS 无法从键反推
       // TQueryFnData，不标注会被退化成 `{}`。
-      markSaved(vars.partId, vars.steps);
+      markSaved(vars.partId, vars.signature);
       qc.setQueryData(
         qk.processDesignParts(vars.params),
         (prev: ProcessDesignPartListResultSchema | undefined) => {
@@ -591,7 +604,12 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     const pid = selectedPartId.value;
     if (!pid) return;
     const flattened = writeDraft(pid, currentDraft());
-    await saveMutation.mutateAsync({ partId: pid, steps: flattened, params: buildParams() });
+    await saveMutation.mutateAsync({
+      partId: pid,
+      steps: flattened,
+      signature: stepsSignature(flattened),
+      params: buildParams(),
+    });
   }
 
   /** 恢复页面状态 + 开闸。本页**无持久化状态**（零件列表每次进页都重拉），故本方法

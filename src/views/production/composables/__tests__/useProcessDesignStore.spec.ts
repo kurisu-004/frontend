@@ -2,7 +2,7 @@
 //
 // 2026-10-05 新增：「制定工序」页 store（Pinia setup store）单测。
 //
-// 覆盖（23 例）：
+// 覆盖（24 例）：
 //   T1  列表加载 + process_chain_id / assembly_id 透传
 //   T2  子件可见（assembly_id 非空的行不被过滤掉）
 //   T3  enabled 闸门：store 构造后不发请求，restoreState 后才发
@@ -27,13 +27,15 @@
 //   T19 removeStep 按 uid 删一道 → 草稿与 payload 同步少一条且 sort_order 拍平
 //   T20 链加载失败 → canReset=false 且 resetSteps() 不清空草稿
 //   T21 零闪烁回写用 save() 那一刻的 params 快照（保存期间切排序不丢回写）
-//   T22 保存往返在途期间新增的工序不被静默吞掉：基线取请求 payload 快照 ⇒
+//   T22 保存往返在途期间新增的工序不被静默吞掉：基线取发起保存那一刻的签名字符串 ⇒
 //       草稿留 4 道、dirty 仍 true、可再点一次保存
 //   T23 链在途时 addStep() 被 store 拒绝 ⇒ 服务端 3 步正常进来、保存发 3 条
 //       （不设守卫时会被截成 1 条）
 //   T24 链就绪后 addStep() 不被守卫误伤
+//   T25 保存往返在途期间的 **Sortable 式原地重排** 不被静默吞掉（同 T22 的原理，
+//       但走的是库内建 handler 那条 `list.value.splice(...)` 原地改动路径）
 //
-// ⚠️ T15~T24 必须选 **process_chain_id 非空** 的零件：只选无链零件的用例盖不到
+// ⚠️ T15~T25 必须选 **process_chain_id 非空** 的零件：只选无链零件的用例盖不到
 // 「服务端已有链」这条路径（工序加载不出来的回归就藏在那里）。
 //
 // mock 策略（照 usePendingProgrammingStore.spec.ts 骨架，理由同样成立）：
@@ -802,5 +804,59 @@ describe('useProcessDesignStore', () => {
     expect(store.editor.steps).toHaveLength(4);
     expect(store.editor.steps[3]?.estimated_minutes).toBe(30);
     expect(store.editor.dirty).toBe(true);
+  });
+
+  // ============ T25：保存往返在途的 Sortable 原地重排不被静默吞掉 ============
+  it('T25：POST 在途期间 Sortable 式 splice 重排草稿 → resolve 后仍是重排后的顺序、dirty 仍为 true', async () => {
+    // 与 T22 同源的不变量，但走的是 Sortable 那条**原地**改动路径：vue-draggable-plus
+    // 三参形态的内建 onUpdate / onRemove 是 `list.value.splice(...)`（见 useLazyDraggable
+    // 头注），改的是 store 草稿数组本体，而草稿是 `ref` ⇒ 拿到的是包着同一份 raw 的
+    // reactive 代理，代理上的 splice 直达底层。⇒ 基线若是「数组快照」，一次拖拽就把它
+    // 改成重排后的顺序，dirty 静默归零 + 保存按钮变灰，UI 却显示与服务端不一致的顺序。
+    const store = await bootedStore();
+    store.query.selectPart(FLANGE);
+    await waitUntil(() => store.query.chainPending === false);
+    const serverOrder = store.editor.steps.map((s) => s.process_id);
+    expect(serverOrder).toEqual(['2000000000001', '2000000000004', '2000000000003']);
+
+    // 挂住 POST 响应，构造「保存往返在途」窗口
+    postGate = deferred<{ data: unknown }>();
+    const saving = store.editor.save();
+    await waitUntil(() => store.editor.saving === true);
+    // 请求体是发起保存那一刻拍的（服务端存的是原顺序）
+    const posted = apiPostMock.mock.calls[0]?.[1] as UpsertProcessChainRequest;
+    expect(posted.steps.map((s) => s.process_id)).toEqual(serverOrder);
+
+    // 在途期间用户拖了一下卡片：把最后一道拖到最前（Sortable 内建换位等价物）
+    const draft = store.editor.steps;
+    const [tail] = draft.splice(2, 1);
+    draft.splice(0, 0, tail as (typeof draft)[number]);
+    const reordered = ['2000000000003', '2000000000001', '2000000000004'];
+    expect(store.editor.steps.map((s) => s.process_id)).toEqual(reordered);
+    expect(store.editor.dirty).toBe(true);
+
+    postGate.resolve({
+      data: chainEnvelope('7000000000001', chainState['7000000000001'] ?? []),
+    });
+    await saving;
+
+    // ⚠️ 基线若取「实时草稿数组」或「数组快照」：此刻基线已被这次 splice 污染 ⇒
+    // dirty 归零 ⇒ 随后的失效 refetch 触发播种 watch（isDirty 为 false 放行）把草稿
+    // 覆盖回服务端原顺序，用户的拖拽凭空消失 + 保存按钮变灰。
+    expect(store.editor.dirty).toBe(true);
+    expect(store.editor.saving).toBe(false);
+
+    // 失效 refetch 回来（带服务端原顺序）也不得覆盖草稿
+    await settle();
+    expect(store.editor.steps.map((s) => s.process_id)).toEqual(reordered);
+
+    // 用户能再点一次保存：这次发的是重排后的 3 条，且 sort_order 被重新拍平
+    // （Sortable 只 splice 不改 sort_order，落盘前必须靠 writeDraft 拍平，否则撞 20104）
+    postGate = null;
+    await store.editor.save();
+    const second = apiPostMock.mock.calls[1]?.[1] as UpsertProcessChainRequest;
+    expect(second.steps.map((s) => s.process_id)).toEqual(reordered);
+    expect(second.steps.map((s) => s.sort_order)).toEqual([0, 1, 2]);
+    await waitUntil(() => store.editor.dirty === false);
   });
 });
