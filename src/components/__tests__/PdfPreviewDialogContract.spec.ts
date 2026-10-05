@@ -26,9 +26,8 @@
 // 范围说明（有意只锁这 7 处，不做全仓扫描）：
 //   - 非 fullscreen 弹窗不走这条规则。OutsourceQuotePdfPreview.vue 是 900px 宽的
 //     非全屏预览，它在自己的 scoped 样式里给 .drawing-frame-wrap 定了确定高度。
-//   - 宿主自带确定高度、无需该 class 的 3 处（不改、也不在本守卫内）：
-//     DrawingPreviewPane（.file-preview flex 链）、PartPreviewDialog（aspect-ratio 定宽定高）、
-//     UrgentOrderDrawer（.el-drawer__body 自带 flex:1）。
+//   - 宿主自带确定高度、无需该 class 的 2 处（不改、也不在本守卫内）：
+//     DrawingPreviewPane（.file-preview flex 链）、PartPreviewDialog（aspect-ratio 定宽定高）。
 //   上述「例外集合」是人工判定，再加一条全仓扫描只会把维护者绑在人工白名单上；
 //  本守卫的价值是锁死这 7 个已知调用点，新增 fullscreen 预览弹窗请一并加进下面的表。
 

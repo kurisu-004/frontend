@@ -1,7 +1,7 @@
 <!--
   PartPreviewDialog.vue
-  2026-09-30 新增：dashboard 通用图纸预览对话框，替代 UrgentOrderDrawer 作为
-  行点击统一入口（A4 横向预览 + 该工单所有批次 + 持有者）。
+  2026-09-30 新增：dashboard 通用图纸预览对话框，行点击统一入口
+  （A4 横向预览 + 该工单所有批次 + 持有者）。
 
   形态：
     - el-dialog 居中 modal（useDialogSize desktopWidth: 960），append-to-body 脱离
@@ -17,7 +17,7 @@
     - part：PartListItem | null（父组件传入选中行；null = 未选）；
     - @update:modelValue：双向同步。
 
-  数据流（沿 UrgentOrderDrawer 范式 + 新批次流）：
+  数据流：
     - 文件：usePartFilesListQuery(() => part?.id ?? null) → 过滤 kind='DRAWING' &&
       (isPdf/isImage) → selectedFile 取首张 → watch(loadPreviewUrl) 拉
       fetchPartFileContent(id) + URL.createObjectURL → 喂 <PdfViewer> / <el-image>；
@@ -113,8 +113,8 @@
 </template>
 
 <script setup lang="ts">
-// 2026-09-30 新增：dashboard 通用图纸预览对话框 —— 替代 UrgentOrderDrawer
-// 作为行点击统一入口（A4 横向预览 + 该工单所有批次 + 持有者）。
+// 2026-09-30 新增：dashboard 通用图纸预览对话框，行点击统一入口
+// （A4 横向预览 + 该工单所有批次 + 持有者）。
 //
 // 设计要点：
 //   - 数据流：
@@ -158,7 +158,7 @@ const emit = defineEmits<(e: 'update:modelValue', v: boolean) => void>();
 
 const dlg = useDialogSize({ desktopWidth: 960 });
 
-// ============ 文件查询（lazy fetch 闸门，沿 UrgentOrderDrawer 范式） ============
+// ============ 文件查询（lazy fetch 闸门） ============
 const filesQuery = usePartFilesListQuery(() => props.part?.id ?? null);
 const files = computed<PartFileSchema[]>(() => filesQuery.data.value?.items ?? []);
 const filesLoading = computed(() => filesQuery.isFetching.value);
@@ -175,7 +175,7 @@ const selectedFile = computed<PartFileSchema | null>(() => {
   return drawings[0] ?? null;
 });
 
-// ============ PDF / 图片 blob URL（沿 UrgentOrderDrawer.vue 范式） ============
+// ============ PDF / 图片 blob URL ============
 const previewBlob = ref<string | null>(null);
 const previewLoading = ref(false);
 const currentPreviewFileId = ref<string | null>(null);
