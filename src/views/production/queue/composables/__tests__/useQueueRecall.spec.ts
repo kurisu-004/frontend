@@ -1,29 +1,34 @@
-// src/views/production/composables/__tests__/useBatchRecall.spec.ts
+// src/views/production/queue/composables/__tests__/useQueueRecall.spec.ts
 //
-// 2026-10-06 新增：useBatchRecall 的行为 spec（生产队列「已下发批次右键召回」）。
+// 「已下发批次召回为待下发」的写操作 composable 行为 spec（生产队列右键召回通路）。
 //
-// 后端契约：`POST /api/v2/prod/batches/{batch_id}/recall-to-pending`，入参
-// `{ version, note? }`，**version 必填**（后端 RecallToPendingRequest.version 是 i32
-// 且无 `#[serde(default)]`，缺省 40001）。RBAC：MANAGER 或 CLERK。
+// 后端契约：`POST /api/v2/prod/queue/recall`，入参 `{ batch_id, version, note? }`，
+// 其中 **`batch_id` 是 body 字段且必须发 JSON 字符串**（后端 `deserialize_i64` 只接受
+// 字符串，发数字返 40001 —— 这是 2026-10-08 契约变更里最容易踩的一处）；
+// `version` 必填（无 `#[serde(default)]`，缺省 40001）。RBAC：MANAGER 或 CLERK。
 //
 // 覆盖：
-//   - R1：recallBatch 以 `{ version }` 调 recallToPending（batch_id 作路径参数）；
+//   - R1：recallBatch 以**单参数对象** `{ batch_id, version }` 调 recallToPending；
+//   - R1b：canRecall 与后端 MANAGER/CLERK 对齐；
+//   - R1c：出参缺字段 → mutationFn 的 Zod 守门抛错（契约漂移不会静默通过）；
 //   - R2：用户取消确认弹窗 → 不发请求；
+//   - R2b：确认弹窗文案（标题 / 正文 / 按钮）；
 //   - R3：卡片缺 version → 早退 + warning，不发请求（后端必填，发了必然 40001）；
 //   - R4：角色既非 MANAGER 也非 CLERK → 早退不发请求（后端返 40300）；
-//   - R5：onSuccess 触发五域失效（含 qk.partsPrefix）+ 成功 toast；
-//   - R6：onError 也跑同一串失效 + 错误 toast（409 OCC 必须与服务器对账）。
+//   - R5：onSuccess 触发四域失效（pending / board / snapshot + qk.partsPrefix）+ 成功 toast；
+//   - R6：onError 也跑同一串失效 + 错误 toast（409 OCC 必须与服务器对账）；
+//   - R6b：mutation 不重试（信任 main.ts 全局 mutations.retry: 0）。
 //
 // 测试策略：
-//   - vi.mock('@/api/parts/crud') 桩掉 recallToPending —— 只关心入参形态与调用次数，
-//     出参 PartItem 本次零消费（取舍见该 composable 文件头）。
+//   - vi.mock('@/api/productionQueue') 桩掉 recallToPending —— 只关心入参形态与调用
+//     次数（出参 RecallOut 经 schema 守门后零消费，取舍见该 composable 文件头）；
 //   - vi.mock('element-plus')：ElMessage 桩成 no-op（node env 下真实 ElMessage 会因
 //     `document is not defined` 污染输出），ElMessageBox.confirm 桩成可控 resolve /
-//     reject（reject = 用户点「取消」）。
-//   - vi.mock('@/stores/auth')：只桩 useBatchRecall 消费的那一面（hasRole），避免把
-//     整个 auth store（含 useQueryClient 依赖）拉进本 spec。
-//   - app.use(VueQueryPlugin) + 传 QueryClient（CLAUDE.md：useQueryClient() 在惰性取
-//     时会抛），并 vi.spyOn(qc, 'invalidateQueries') 验证失效链的 queryKey 序列。
+//     reject（reject = 用户点「取消」）；
+//   - vi.mock('@/stores/auth')：只桩 useQueueRecall 消费的那一面（hasRole），避免把
+//     整个 auth store 拉进本 spec；
+//   - app.use(VueQueryPlugin) + 传 QueryClient，并 vi.spyOn(qc, 'invalidateQueries')
+//     验证失效链的 queryKey 序列。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from 'vue';
@@ -34,12 +39,23 @@ vi.mock('element-plus', () => ({
   ElMessageBox: { confirm: vi.fn(async () => undefined) },
 }));
 
-const realRecallToPending = vi.fn<(batchId: string, payload?: unknown) => Promise<unknown>>(
-  async () => ({ id: '4000000000001' }),
-);
-vi.mock('@/api/parts/crud', () => ({
+/** 出参对齐 queue 域 RecallOut（version = batch.version + 1）。 */
+const realRecallToPending = vi.fn<
+  (req: { batch_id: string; version: number; note?: string }) => Promise<unknown>
+>(async () => ({ batch_id: '3000000000001', part_id: '4000000000001', version: 8 }));
+
+vi.mock('@/api/productionQueue', () => ({
   recallToPending: (...args: unknown[]) =>
     realRecallToPending(...(args as Parameters<typeof realRecallToPending>)),
+  // 本 spec 只消费 recallToPending；列出 stub 防止 partial mock 副作用
+  fetchQueueSnapshot: vi.fn(),
+  fetchQueueBoard: vi.fn(),
+  fetchPendingBatches: vi.fn(),
+  dispatchBatches: vi.fn(),
+  previewAutoDispatch: vi.fn(),
+  moveBatch: vi.fn(),
+  autoAllocate: vi.fn(),
+  refillQueue: vi.fn(),
 }));
 
 /** 角色桩：默认 MANAGER + CLERK 都有权；用例内可改。 */
@@ -50,7 +66,7 @@ vi.mock('@/stores/auth', () => ({
   }),
 }));
 
-import { useBatchRecall } from '../useBatchRecall';
+import { useQueueRecall } from '../useQueueRecall';
 import { qk } from '@/composables/queries/keys';
 import type { BatchCardModel } from '@/types/batchCard';
 
@@ -81,21 +97,22 @@ function makeCard(overrides: Partial<BatchCardModel> = {}): BatchCardModel {
   };
 }
 
-/** onSuccess / onError 应触发的五域失效序列（键一律来自 qk 工厂）。 */
-function expectFiveDomainsInvalidated(): void {
+/** onSuccess / onError 应触发的四域失效序列（键一律来自 qk 工厂）。
+ *  全部前缀失效：批次可能来自任意工序的候选池或任意工人的手里，菜单只带卡片 model，
+ *  拿不到「它原本在哪个 processId / workerId」。 */
+function expectFourDomainsInvalidated(): void {
   const keys = vi
     .mocked(testQueryClient.invalidateQueries)
     .mock.calls.map((c) => (c[0] as { queryKey: readonly unknown[] }).queryKey);
   expect(keys).toEqual([
-    ['pending-batches'],
+    ['production-queue', 'pending'],
+    ['production-queue', 'board'],
+    ['production-queue', 'snapshot'],
     qk.partsPrefix,
-    ['worker-pool', 'by-process'],
-    ['worker-pool', 'counts'],
-    ['worker-pool', 'state'],
   ]);
 }
 
-describe('useBatchRecall（2026-10-06 已下发批次召回）', () => {
+describe('useQueueRecall（已下发批次召回）', () => {
   beforeEach(async () => {
     const { ElMessage, ElMessageBox } = await import('element-plus');
     realRecallToPending.mockClear();
@@ -122,33 +139,45 @@ describe('useBatchRecall（2026-10-06 已下发批次召回）', () => {
     vi.restoreAllMocks();
   });
 
-  it('R1：recallBatch 以 { version } 调 recallToPending（version 必填）', async () => {
-    const r = testApp.runWithContext(() => useBatchRecall());
+  it('R1：recallBatch 以单参数对象 { batch_id, version } 调 recallToPending', async () => {
+    const r = testApp.runWithContext(() => useQueueRecall());
     await r.recallBatch(makeCard({ batch_id: '3000000000009', version: 12 }));
 
     expect(realRecallToPending).toHaveBeenCalledTimes(1);
-    // batch_id 作路径参数，payload 必须带 version（缺省后端 40001）
-    expect(realRecallToPending).toHaveBeenCalledWith('3000000000009', { version: 12 });
+    // batch_id 是 body 字段且必须是**字符串**（后端 deserialize_i64 只收字符串）；
+    // version 必填（缺省后端 40001）。
+    expect(realRecallToPending).toHaveBeenCalledWith({
+      batch_id: '3000000000009',
+      version: 12,
+    });
+  });
+
+  it('R1c：出参缺字段 → Zod 守门抛错（契约漂移不静默通过）', async () => {
+    realRecallToPending.mockResolvedValueOnce({ batch_id: '3000000000001' });
+    const r = testApp.runWithContext(() => useQueueRecall());
+    await expect(
+      r.recallMutation.mutateAsync({ batchId: '3000000000001', version: 7 }),
+    ).rejects.toThrow();
   });
 
   it('R1b：canRecall 与后端 MANAGER/CLERK 对齐', () => {
-    const r = testApp.runWithContext(() => useBatchRecall());
+    const r = testApp.runWithContext(() => useQueueRecall());
     expect(r.canRecall.value).toBe(true);
 
     roles.list = ['CLERK'];
-    expect(testApp.runWithContext(() => useBatchRecall()).canRecall.value).toBe(true);
+    expect(testApp.runWithContext(() => useQueueRecall()).canRecall.value).toBe(true);
 
     roles.list = ['MANAGER'];
-    expect(testApp.runWithContext(() => useBatchRecall()).canRecall.value).toBe(true);
+    expect(testApp.runWithContext(() => useQueueRecall()).canRecall.value).toBe(true);
 
     roles.list = ['INSPECTOR'];
-    expect(testApp.runWithContext(() => useBatchRecall()).canRecall.value).toBe(false);
+    expect(testApp.runWithContext(() => useQueueRecall()).canRecall.value).toBe(false);
   });
 
   it('R2：用户取消确认弹窗 → 不发请求', async () => {
     const { ElMessageBox } = await import('element-plus');
     vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel' as never);
-    const r = testApp.runWithContext(() => useBatchRecall());
+    const r = testApp.runWithContext(() => useQueueRecall());
 
     await r.recallBatch(makeCard());
 
@@ -158,7 +187,7 @@ describe('useBatchRecall（2026-10-06 已下发批次召回）', () => {
 
   it('R2b：确认弹窗文案（标题 / 正文 / 按钮）', async () => {
     const { ElMessageBox } = await import('element-plus');
-    const r = testApp.runWithContext(() => useBatchRecall());
+    const r = testApp.runWithContext(() => useQueueRecall());
     await r.recallBatch(makeCard({ batch_no: 'B2048' }));
 
     const [message, title, options] = vi.mocked(ElMessageBox.confirm).mock.calls[0]!;
@@ -175,7 +204,7 @@ describe('useBatchRecall（2026-10-06 已下发批次召回）', () => {
 
   it('R3：卡片缺 version → 早退 + warning，不发请求', async () => {
     const { ElMessage, ElMessageBox } = await import('element-plus');
-    const r = testApp.runWithContext(() => useBatchRecall());
+    const r = testApp.runWithContext(() => useQueueRecall());
 
     await r.recallBatch(makeCard({ version: undefined }));
 
@@ -188,7 +217,7 @@ describe('useBatchRecall（2026-10-06 已下发批次召回）', () => {
   it('R4：既非 MANAGER 也非 CLERK → 早退不发请求', async () => {
     const { ElMessage, ElMessageBox } = await import('element-plus');
     roles.list = ['INSPECTOR'];
-    const r = testApp.runWithContext(() => useBatchRecall());
+    const r = testApp.runWithContext(() => useQueueRecall());
 
     await r.recallBatch(makeCard());
 
@@ -198,35 +227,38 @@ describe('useBatchRecall（2026-10-06 已下发批次召回）', () => {
     expect(realRecallToPending).not.toHaveBeenCalled();
   });
 
-  it('R5：onSuccess 触发五域失效（含 qk.partsPrefix）+ 成功 toast', async () => {
+  it('R5：onSuccess 触发四域失效（含 qk.partsPrefix）+ 成功 toast', async () => {
     const { ElMessage } = await import('element-plus');
-    const r = testApp.runWithContext(() => useBatchRecall());
+    const r = testApp.runWithContext(() => useQueueRecall());
 
     await r.recallMutation.mutateAsync({ batchId: '3000000000001', version: 7 });
 
-    expect(realRecallToPending).toHaveBeenCalledWith('3000000000001', { version: 7 });
-    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(5);
-    expectFiveDomainsInvalidated();
+    expect(realRecallToPending).toHaveBeenCalledWith({
+      batch_id: '3000000000001',
+      version: 7,
+    });
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(4);
+    expectFourDomainsInvalidated();
     expect(ElMessage.success).toHaveBeenCalledWith('已召回到待下发');
   });
 
   it('R6：onError 报错 toast + 同一串失效（409 OCC 必须与服务器对账）', async () => {
     const { ElMessage } = await import('element-plus');
     realRecallToPending.mockRejectedValueOnce(new Error('批次已被他人修改'));
-    const r = testApp.runWithContext(() => useBatchRecall());
+    const r = testApp.runWithContext(() => useQueueRecall());
 
     await expect(
       r.recallMutation.mutateAsync({ batchId: '3000000000001', version: 7 }),
     ).rejects.toThrow('批次已被他人修改');
 
     expect(ElMessage.error).toHaveBeenCalledWith('批次已被他人修改');
-    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(5);
-    expectFiveDomainsInvalidated();
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(4);
+    expectFourDomainsInvalidated();
   });
 
   it('R6b：mutation 不重试（信任 main.ts 全局 mutations.retry: 0）', async () => {
     realRecallToPending.mockRejectedValue(new Error('boom'));
-    const r = testApp.runWithContext(() => useBatchRecall());
+    const r = testApp.runWithContext(() => useQueueRecall());
     // 客户端 QueryClient 显式配了 retry:0；这里断言的是「请求只打一次」这一可观测行为，
     // 组件内没有自己的 retry 覆盖（配 retry 时首打也会被延后，行为等价但次数断言不直观）
     await expect(

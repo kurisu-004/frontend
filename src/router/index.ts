@@ -247,7 +247,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'production/worker-queue',
         name: 'WorkerQueueBoard',
-        component: () => import('@/views/production/WorkerQueueBoard.vue'),
+        component: () => import('@/views/production/queue/QueueBoard.vue'),
         meta: {
           title: '生产队列',
           icon: 'Operation',

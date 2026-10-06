@@ -1,54 +1,49 @@
-// src/views/production/composables/__tests__/usePendingDispatch.spec.ts
+// src/views/production/queue/composables/__tests__/useQueueDispatch.spec.ts
 //
-// 2026-09-29 新增；2026-09-30 重写（后端 batch 域重构对齐）。
+// 「待下发」Tab 的视图层 composable：待下发列表（读）+ 下发 / 自动下发（写）。
 //
-// 2026-09-30 后端契约漂移（backend-rust/src/modules/prod/batch/{mod.rs,dto.rs,vo.rs}）：
-//   1. **dispatch 统一 bulk-only** —— `POST /batches/dispatch` 请求体改
-//      `{targets: [...], note?}`；`POST /batches/bulk-dispatch` 端点**已删除**
-//      （router 层不再挂载 ⇒ 404）。故 `dispatchMutation` + `bulkDispatchMutation`
-//      合并为**单个** `dispatchMutation`，入参 `{batchIds, targetProcessId}`
-//      （单条即 `batchIds.length === 1`）。
-//   2. **dispatch 出参改列表形态** —— `DispatchResult {succeeded[], failed[]}`。
-//   3. **auto-dispatch 改为只读 preview** —— 出参 `{items: [AutoDispatchItem]}`
-//      （含 `first_process_id` / `first_shelf_id` / `skip_reason`），不再写库。
-//      前端改成**两步**：① 调 preview；② ElMessageBox 展示明细，用户确认后用
-//      `first_process_id` 构造 targets 链式调 dispatchMutation 真正下发。
-//   4. `usePendingDispatch()` 不再接受 deps —— `refreshBoard` 随
-//      useWorkerQueue.loadBoard + 模块级 workerHeld 一并删除。
+// 2026-10-08 改名与域收敛：composable 从「pending_dispatch」改名 queue_dispatch，
+// 落到 `views/production/queue/composables/`；api 函数从已删除的 pending-batches 模块迁到
+// `@/api/productionQueue`（端点 `/prod/batches/{pending,dispatch,auto-dispatch}` →
+// `/prod/queue/{pending,dispatch,auto-dispatch}`）；queryKey 从 `pending-batches` 域改成
+// `production-queue/pending`；失效链从「pending-batches + parts + pool 三域」改成
+// 「pending + board + snapshot + parts」。
+//
+// 两个 mutation 的语义逐字不变：dispatch 是 bulk-only（单条即 targets.length === 1），
+// auto-dispatch 是**只读预览 + 确认后链式下发**两步。
 //
 // 覆盖：
-//   - T1：dispatchMutation 成功 → 请求体 targets 形态 + 4 域 invalidate（无 refreshBoard）。
+//   - T1：dispatchMutation 成功 → 请求体 targets 形态 + 失效四域（无 refreshBoard）。
 //   - T2：dispatchMutation 成功 → 清空 selectedIds + 成功 toast。
 //   - T3：autoDispatch preview 全部可下发 → 弹确认框 → 确认后调 dispatchBatches
 //     （用 first_process_id 作 target_process_id）。
 //   - T4：autoDispatch preview 含 skip 件 → 确认框文案含跳过原因 + 确认后只下发可下发项。
 //   - T5：autoDispatch preview 全部不可下发 → **不弹确认框** + ElMessage.warning。
-//   - T6：autoDispatch preview 多件 NO_PROCESS_CHAIN → **只弹一次** handleProcessChainRequired
+//   - T6：preview 多件 NO_PROCESS_CHAIN → **只弹一次** handleProcessChainRequired
 //     引导框（合成 ApiError(20706) → ElMessageBox.confirm），文案带件数、深链只带
 //     第一件的 part_id、零下发请求。
 //   - T6b：引导框被用户取消 → 仍只弹一次、不跳页、不发下发请求。
 //   - T7：用户取消确认框 → 不发 dispatch 请求（preview 是只读的，无需回滚）。
 //   - T8：preview 多首道工序 → 按 first_process_id 拆成多次 dispatch。
 //   - T9：setSelectedIds / clearSelection 行为正确（基础状态守卫）。
-//   - T10：不再接受 deps（旧 refreshBoard 注入链已删）。
-//   - T11：dispatchMutation 失败 → 报错 toast + 只失效 pending-batches 域
-//     （「失败即与服务器对账」的重拉路径，多选保持不动）。
+//   - T10：不再导出 bulkDispatchMutation（批量端点已下线）。
+//   - T11：dispatchMutation 失败 → 报错 toast + 只失效待下发列表域（多选保持不动）。
 //
 // 测试策略：
-//   - vi.mock('@/api/pendingBatches')：dispatchBatches / previewAutoDispatch /
+//   - vi.mock('@/api/productionQueue')：dispatchBatches / previewAutoDispatch /
 //     fetchPendingBatches 替换为 vi.fn()。
 //   - vi.mock('element-plus', ...) 防 vitest node env ElMessage 污染输出；ElMessageBox
 //     桩成 vi.fn()（自动下发确认框 + handleProcessChainRequired 都会调）。
 //   - vi.mock('vue-router')：useRouter() 注入 fakeRouter 闭包。
-//   - 2026-10-04 新增：T6 / T6b 用 qc.setQueryData 预置待下发列表（引导框 part_id
-//     深链的唯一数据源是批次列表的 batch_id → part_id 反查表），使深链可断言。
+//   - T6 / T6b 用 qc.setQueryData 预置待下发列表（引导框 part_id 深链的唯一数据源是
+//     批次列表的 batch_id → part_id 反查表），使深链可断言。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from 'vue';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 // 供 vi.mock 的 importOriginal 泛型使用（@typescript-eslint/consistent-type-imports
 // 禁止 `import()` 形式类型注解）
-import type * as PendingBatchesModule from '@/api/pendingBatches';
+import type * as ProductionQueueModule from '@/api/productionQueue';
 
 vi.mock('element-plus', () => ({
   ElMessage: {
@@ -95,7 +90,7 @@ interface AutoDispatchPreviewItem {
   skip_reason: string | null;
 }
 
-/** 2026-09-30：dispatch 出参对齐 backend-rust DispatchResult（bulk-only 列表形态）。 */
+/** dispatch 出参对齐 queue 域 DispatchResult（bulk-only 列表形态）。 */
 const realDispatchBatches = vi.fn<
   (req: {
     targets: Array<{ batch_id: string; target_process_id: string }>;
@@ -112,7 +107,7 @@ const realDispatchBatches = vi.fn<
   failed: [],
 }));
 
-/** 2026-09-30：auto-dispatch 出参对齐 backend-rust AutoDispatchResult（只读 preview）。 */
+/** auto-dispatch 出参对齐 queue 域 AutoDispatchResult（只读 preview）。 */
 const realPreviewAutoDispatch = vi.fn<
   (req: { batch_ids: string[] }) => Promise<AutoDispatchPreview>
 >(async () => ({
@@ -134,11 +129,9 @@ const realFetchPendingBatches = vi.fn<
   () => Promise<{ items: unknown[]; total: number; limit: number; offset: number }>
 >(async () => ({ items: [], total: 0, limit: 200, offset: 0 }));
 
-vi.mock('@/api/pendingBatches', async (importOriginal) => ({
-  // 2026-09-30：dispatchBatch / bulkDispatchBatches / autoDispatchBatches 三个旧函数
-  // 全部下线，替换为 dispatchBatches（bulk-only）+ previewAutoDispatch（只读）。
+vi.mock('@/api/productionQueue', async (importOriginal) => ({
   // importOriginal 保留 AUTO_DISPATCH_SKIP_REASON_LABELS（纯常量文案表，不该被 mock）。
-  ...(await importOriginal<typeof PendingBatchesModule>()),
+  ...(await importOriginal<typeof ProductionQueueModule>()),
   dispatchBatches: (...args: unknown[]) =>
     realDispatchBatches(...(args as Parameters<typeof realDispatchBatches>)),
   previewAutoDispatch: (...args: unknown[]) =>
@@ -147,24 +140,24 @@ vi.mock('@/api/pendingBatches', async (importOriginal) => ({
     realFetchPendingBatches(...(args as [])),
 }));
 
-import { usePendingDispatch } from '../usePendingDispatch';
+import { useQueueDispatch } from '../useQueueDispatch';
 import { qk } from '@/composables/queries/keys';
 
 let testApp: ReturnType<typeof createApp>;
 let testQueryClient: QueryClient;
 
-/** 2026-09-30：invalidateAll() 失效域的 queryKey 序列断言。
- *  2026-09-30 修复：去掉 ['processes']（下发不改变工序列表）+ 改名四域。 */
+/** invalidateAll() 失效域的 queryKey 序列断言（**顺序敏感**：先刷待下发列表，再刷
+ *  工序看板 + 队列快照，最后跨域刷 parts；parts 放最后是因为它最热、一次失效会连带
+ *  零件一览与批次列表的多个 query）。 */
 function expectFourDomainsInvalidated(): void {
   const keys = vi
     .mocked(testQueryClient.invalidateQueries)
     .mock.calls.map((c) => (c[0] as { queryKey: readonly unknown[] }).queryKey);
   expect(keys).toEqual([
-    ['pending-batches'],
+    ['production-queue', 'pending'],
+    ['production-queue', 'board'],
+    ['production-queue', 'snapshot'],
     ['parts'],
-    ['worker-pool', 'by-process'],
-    ['worker-pool', 'counts'],
-    ['worker-pool', 'state'],
   ]);
 }
 
@@ -196,7 +189,7 @@ function makePendingBatchItem(batchId: string, partId: string) {
     serial_no: 'SN-1',
     name: '零件',
     drawing_no: 'D-1',
-    planned_delivery_date: null,
+    planned_delivery_date: '2026-11-01',
     system_delivery_date: null,
     customer_name: null,
     parent_customer_name: null,
@@ -204,12 +197,10 @@ function makePendingBatchItem(batchId: string, partId: string) {
     is_urgent: false,
     note: null,
     version: 1,
-    current_process_step_id: '0',
-    process_chain_id: '0',
   };
 }
 
-describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026-09-30 契约对齐）', () => {
+describe('useQueueDispatch — bulk-only dispatch + auto preview 两步', () => {
   beforeEach(async () => {
     const { ElMessageBox } = await import('element-plus');
     realDispatchBatches.mockClear();
@@ -250,7 +241,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
   });
 
   it('T1：dispatchMutation 成功 → 请求体 targets 形态 + 4 域 invalidate', async () => {
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
     await d.dispatchMutation.mutateAsync({
       batchIds: ['3000000000001', '3000000000002'],
       targetProcessId: '2000000000001',
@@ -265,13 +256,13 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     });
     // preview 端点不被「显式下发」路径触碰
     expect(realPreviewAutoDispatch).not.toHaveBeenCalled();
-    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(5);
+    expect(testQueryClient.invalidateQueries).toHaveBeenCalledTimes(4);
     expectFourDomainsInvalidated();
   });
 
   it('T2：dispatchMutation 成功 → 清空 selectedIds + 成功 toast', async () => {
     const { ElMessage } = await import('element-plus');
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
     d.setSelectedIds(['3000000000001', '3000000000002']);
     expect(d.selectedIds.value.size).toBe(2);
 
@@ -285,7 +276,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
   });
 
   it('T2b：单件下发（batchIds.length === 1）→ targets 长度 1', async () => {
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
     await d.dispatchMutation.mutateAsync({
       batchIds: ['3000000000001'],
       targetProcessId: '2000000000001',
@@ -296,7 +287,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
 
   it('T3：autoDispatch preview 全部可下发 → 弹确认框 → 确认后调 dispatchBatches（用 first_process_id）', async () => {
     const { ElMessageBox } = await import('element-plus');
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
 
     await d.autoDispatchMutation.mutateAsync({ batchIds: ['3000000000001'] });
 
@@ -318,7 +309,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
         makeOkPreviewItem('3000000000002', null, 'NO_SHELF'),
       ],
     });
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
 
     await d.autoDispatchMutation.mutateAsync({
       batchIds: ['3000000000001', '3000000000002'],
@@ -342,7 +333,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
         makeOkPreviewItem('3000000000002', null, 'NOT_FOUND'),
       ],
     });
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
 
     await d.autoDispatchMutation.mutateAsync({
       batchIds: ['3000000000001', '3000000000002'],
@@ -359,7 +350,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
   });
 
   it('T6：preview 多件 NO_PROCESS_CHAIN → 只弹一次引导框，文案带件数、深链只带第一件 part_id', async () => {
-    // 后端 batch 域不再抛 20706（错误码表已无此项），改以 skip_reason soft-skip
+    // 后端不再抛 20706（错误码表已无此项），改以 skip_reason soft-skip
     // 呈现；前端合成 ApiError(20706) 复用既有 handleProcessChainRequired 兜底，
     // 保持「引导去工艺制定页」的 UX 不退化。一次操作只弹一次 —— 多选 N 件未制定
     // 工序链的工单不该弹 N 个一模一样的弹窗。
@@ -371,7 +362,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     ];
     realPreviewAutoDispatch.mockResolvedValueOnce({ items: noChain });
     // 预置待下发列表：引导框的 part_id 深链来自批次列表的 batch_id → part_id 反查表
-    testQueryClient.setQueryData(qk.pendingBatchesList({ limit: 200 }), {
+    testQueryClient.setQueryData(qk.productionQueuePending({ limit: 200 }), {
       items: [
         makePendingBatchItem('3000000000001', '4000000000001'),
         makePendingBatchItem('3000000000002', '4000000000002'),
@@ -381,7 +372,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
       limit: 200,
       offset: 0,
     });
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
 
     await d.autoDispatchMutation.mutateAsync({
       batchIds: ['3000000000001', '3000000000002', '3000000000003'],
@@ -406,7 +397,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
         makeOkPreviewItem('3000000000003', null, 'NO_PROCESS_CHAIN'),
       ],
     });
-    testQueryClient.setQueryData(qk.pendingBatchesList({ limit: 200 }), {
+    testQueryClient.setQueryData(qk.productionQueuePending({ limit: 200 }), {
       items: [
         makePendingBatchItem('3000000000001', '4000000000001'),
         makePendingBatchItem('3000000000002', '4000000000002'),
@@ -417,7 +408,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
       offset: 0,
     });
     vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel' as never);
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
 
     await d.autoDispatchMutation.mutateAsync({
       batchIds: ['3000000000001', '3000000000002', '3000000000003'],
@@ -432,7 +423,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
   it('T7：用户取消确认框 → 不发 dispatch 请求（preview 只读，无需回滚）', async () => {
     const { ElMessageBox } = await import('element-plus');
     vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel' as never);
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
 
     await d.autoDispatchMutation.mutateAsync({ batchIds: ['3000000000001'] });
 
@@ -448,7 +439,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
         makeOkPreviewItem('3000000000002', '2000000000002', null),
       ],
     });
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
 
     await d.autoDispatchMutation.mutateAsync({
       batchIds: ['3000000000001', '3000000000002'],
@@ -465,17 +456,17 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
   });
 
   it('T9：setSelectedIds / clearSelection 行为正确', () => {
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
     d.setSelectedIds(['3000000000001', '3000000000002', '3000000000003']);
     expect(d.selectedIds.value.size).toBe(3);
     d.clearSelection();
     expect(d.selectedIds.value.size).toBe(0);
   });
 
-  it('T10：不再接受 deps 参数（旧 refreshBoard 注入链已删）', () => {
-    // 回归 guard：deps.refreshBoard 是随 loadBoard 一起删掉的「非 TanStack 数据源」
-    // 兜底。若未来有人再加回来，本用例会失败。
-    const d = testApp.runWithContext(() => usePendingDispatch());
+  it('T10：不再导出 bulkDispatchMutation（批量下发端点已下线）', () => {
+    // 回归 guard：bulkDispatchMutation 对应的后端端点已下线；若未来有人再加回来，
+    // 本用例会失败。
+    const d = testApp.runWithContext(() => useQueueDispatch());
     expect(d).not.toHaveProperty('bulkDispatchMutation');
   });
 
@@ -487,18 +478,18 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     const { ElMessage } = await import('element-plus');
     realDispatchBatches.mockRejectedValueOnce(new Error('BIZ_BATCH_ALREADY_DISPATCHED'));
 
-    const d = testApp.runWithContext(() => usePendingDispatch());
+    const d = testApp.runWithContext(() => useQueueDispatch());
     d.setSelectedIds(['3000000000001']);
     await d.dispatchMutation
       .mutateAsync({ batchIds: ['3000000000001'], targetProcessId: '2000000000001' })
       .catch(() => undefined);
 
     expect(ElMessage.error).toHaveBeenCalledWith('BIZ_BATCH_ALREADY_DISPATCHED');
-    // 只失效 pending-batches 域，不碰其余四域（失败的写只波及待下发列表）
+    // 只失效待下发列表域，不碰其余三域（失败的写只波及待下发列表）
     const keys = vi
       .mocked(testQueryClient.invalidateQueries)
       .mock.calls.map((c) => (c[0] as { queryKey: readonly unknown[] }).queryKey);
-    expect(keys).toEqual([['pending-batches']]);
+    expect(keys).toEqual([['production-queue', 'pending']]);
     // 失败不动多选：用户的选择不该被一次失败清空
     expect(d.selectedIds.value.size).toBe(1);
   });

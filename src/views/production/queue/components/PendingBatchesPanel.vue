@@ -1,13 +1,12 @@
-<!-- 2026-09-29 卡片化：从 el-table 改为 flex-wrap 卡片网格（与其他 Tab 一致）；
-     保留多选 + 拖拽 + 自动下发。字段补全：serial_no / L1客户 / note。
-     2026-10-02：卡片渲染收敛到 BatchCard.vue（全看板唯一批次卡片），DTO 适配走
-     poolItemToCard.pendingBatchToCard；拖拽从 HTML5 native drag 切到
-     vue-draggable-plus，与工序池 / 工人列统一为同一套 Sortable 链路。本文件只持有
-     工具条 / footer / 拖拽源配置。
-     2026-10-02：源容器顺带承担「拖入高亮」的事件源 —— Sortable 的 _onMove 只从被
-     拖起的容器（源）取 options.onMove，投放目标（工序卡）侧永不触发，故由本容器读
-     evt.related.dataset.processId 上报，父级 WorkerQueueBoard 转成 PendingPoolsPanel
-     的 hoveredProcessId。 -->
+<!-- 「待下发」Tab 左栏：批次卡片网格（全选 + 拖拽 + 自动下发）。
+     卡片渲染收敛到 BatchCard.vue（全站唯一批次卡片），DTO 适配走
+     `utils/queueItemToCard.ts` 的 pendingBatchToCard；本文件只持工具条 / footer /
+     拖拽源配置。
+
+     本容器同时是「拖入高亮」的事件源 —— Sortable 的 _onMove 只从被拖起的容器（源）
+     取 options.onMove，投放目标（工序卡）侧永不触发，故由本容器读
+     evt.related.dataset.processId 上报，父级 QueueBoard 转成 PendingPoolsPanel 的
+     hoveredProcessId。 -->
 <template>
   <div class="pending-batches-panel">
     <div class="toolbar">
@@ -65,25 +64,25 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
-import type { PendingBatchItemDto } from '@/api/workerPool.contract';
+import type { QueuePendingBatchDto } from '@/api/productionQueue.contract';
 import type { BatchCardModel } from '@/types/batchCard';
-import { pendingBatchToCard } from '@/views/production/composables/poolItemToCard';
-import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
+import { pendingBatchToCard } from '../utils/queueItemToCard';
+import type { UseQueueDispatchReturn } from '@/views/production/queue/composables/useQueueDispatch';
 import BatchCard from '@/components/BatchCard.vue';
 
 interface Props {
-  batches: PendingBatchItemDto[];
+  batches: QueuePendingBatchDto[];
   total: number;
   isLoading: boolean;
   /** Ref<Set<string>> —— 多选已选集合（响应式，父级 composable 持有）。 */
-  selectedIds: UsePendingDispatchReturn['selectedIds'];
+  selectedIds: UseQueueDispatchReturn['selectedIds'];
   setSelectedIds: (ids: string[]) => void;
-  autoDispatchMutation: UsePendingDispatchReturn['autoDispatchMutation'];
+  autoDispatchMutation: UseQueueDispatchReturn['autoDispatchMutation'];
 }
 
 const props = defineProps<Props>();
 
-/** 2026-10-02：拖拽悬停的工序 id（null = 未悬停在任何工序卡上）。
+/** 拖拽悬停的工序 id（null = 未悬停在任何工序卡上）。
  *  payload 契约：Sortable 的 MoveEvent.related = 悬停到的**目标容器元素本身**
  *  （工序卡内 `draggable: '.never'` 匹配不到任何子元素 ⇒ Sortable 找不到落点元素，
  *  related 退化为容器本身），其 dataset.processId 即工序 id。
@@ -94,7 +93,7 @@ const emit = defineEmits<(e: 'hoverProcess', processId: string | null) => void>(
 // 解构 props.selectedIds 时 .value 拿响应式 Set（与父级 composable.selectedIds 同源）
 const selectedIdsValue = computed<Set<string>>(() => props.selectedIds.value);
 
-/** 2026-10-02：待下发 DTO → 卡片 model（统一适配层，组件零 DTO 依赖）。 */
+/** 待下发 DTO → 卡片 model（统一适配层，组件零 DTO 依赖）。 */
 const cards = computed<BatchCardModel[]>(() => props.batches.map(pendingBatchToCard));
 
 const cardsRef = ref<HTMLElement | null>(null);

@@ -36,7 +36,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, ref, toRaw, type ComputedRef } from 'vue';
 import { mount } from '@vue/test-utils';
 import type { BatchCardModel } from '@/types/batchCard';
-import type { ProcessPoolView } from '@/types/workerPool';
+import type { ProcessPoolView } from '@/types/productionQueue';
 
 const captured = vi.hoisted(() => ({
   calls: [] as { list: unknown; options: Record<string, unknown> }[],

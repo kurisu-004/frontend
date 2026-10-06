@@ -1,7 +1,7 @@
-<!-- src/views/production/components/BatchContextMenu.vue
-     2026-10-06 新增：生产队列「已下发批次右键召回」的操作菜单。挂在 WorkerQueueBoard
-     顶层，整页单例；卡片侧只挂一个 `@contextmenu.prevent` 并经 provide/inject 把
-     (事件, 卡片) 交给板级 opener。
+<!-- src/views/production/queue/components/BatchContextMenu.vue
+     生产队列「已下发批次右键召回」的操作菜单。挂在 QueueBoard 顶层，整页单例；
+     卡片侧只挂一个 `@contextmenu.prevent` 并经 provide/inject 把 (事件, 卡片) 交给
+     板级 opener。
 
      ⚠️ 为什么**绝对不能**用任何组件去「包裹」BatchCard：
        BatchCard 是 Sortable 的可拖项，硬不变式是「可拖元素 == vnode 的 DOM footprint」

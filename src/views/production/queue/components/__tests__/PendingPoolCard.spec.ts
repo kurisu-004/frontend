@@ -9,7 +9,7 @@
 //     `POST /batches/bulk-dispatch` 端点删除，两 mutation 合并为一个）。
 //
 // 覆盖：
-//   - P1：**零网络请求** —— mount 不调 getWorkerPoolByProcess（懒加载核心 guard：
+//   - P1：**零网络请求** —— mount 不调 fetchQueueBoard（懒加载核心 guard：
 //     本卡在默认首屏 tab 内 v-for 全部工序，改前是 N+1 请求源头）；
 //   - P2：标题 + badge 渲染（process.code + process.name + count prop）；
 //   - P3：selectedIds 空 → 单击触发 ElMessage.warning，不调 dispatchMutation；
@@ -44,7 +44,7 @@
 //
 // 测试策略（沿 LoginView.spec.ts 范本）：
 //   - vue-test-utils mount + globalConfig.plugins: [[VueQueryPlugin, { queryClient }]]；
-//   - vi.mock('@/api/workerPool') + vi.mock('element-plus') + vi.mock('vue-draggable-plus')。
+//   - vi.mock('@/api/productionQueue') + vi.mock('element-plus') + vi.mock('vue-draggable-plus')。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref, type Ref } from 'vue';
@@ -88,29 +88,29 @@ vi.mock('vue-draggable-plus', () => ({
   },
 }));
 
-const realGetWorkerPoolByProcess = vi.fn<(processId: string) => Promise<unknown>>(
-  async (processId: string) => ({
-    process_id: processId,
-    process_code: 'CNC-01',
-    process_name: '粗加工',
-    workers: [],
-    work_types: [],
-    total: 0,
-    items: [],
-  }),
-);
+/** 工序看板请求的调用计数（零请求 guard 用）：本卡片不得自管它。 */
+const realFetchQueueBoard = vi.fn<(processId: string) => Promise<unknown>>(async (processId) => ({
+  process: { process_id: processId, process_code: 'CNC-01', process_name: '粗加工', color: null },
+  workers: [],
+  items: [],
+  total: 0,
+  ts: '2026-10-08T09:12:33+08:00',
+}));
 
-vi.mock('@/api/workerPool', () => ({
-  getWorkerPoolByProcess: (processId: string) => realGetWorkerPoolByProcess(processId),
-  getWorkerPoolCounts: vi.fn(),
-  getWorkerState: vi.fn(),
-  refillWorkerPool: vi.fn(),
+vi.mock('@/api/productionQueue', () => ({
+  fetchQueueBoard: (processId: string) => realFetchQueueBoard(processId),
+  fetchQueueSnapshot: vi.fn(),
+  fetchPendingBatches: vi.fn(),
+  dispatchBatches: vi.fn(),
+  previewAutoDispatch: vi.fn(),
+  recallToPending: vi.fn(),
   moveBatch: vi.fn(),
   autoAllocate: vi.fn(),
+  refillQueue: vi.fn(),
 }));
 
 import PendingPoolCard from '../PendingPoolCard.vue';
-import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
+import type { UseQueueDispatchReturn } from '../../composables/useQueueDispatch';
 
 // Element Plus 子组件 stub。
 const ElTagStub = defineComponent({
@@ -143,11 +143,11 @@ process.on('unhandledRejection', () => undefined);
  *  差异由 cast 吸收（与仓库既有 spec 范本一致）。 */
 function makeMutationStub(
   mutate: ReturnType<typeof vi.fn>,
-): UsePendingDispatchReturn['dispatchMutation'] {
+): UseQueueDispatchReturn['dispatchMutation'] {
   return {
     mutate,
     mutateAsync: vi.fn(async () => undefined),
-  } as unknown as UsePendingDispatchReturn['dispatchMutation'];
+  } as unknown as UseQueueDispatchReturn['dispatchMutation'];
 }
 
 function mountCard(
@@ -208,7 +208,7 @@ function foreignSource(): HTMLElement {
 
 describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
   beforeEach(async () => {
-    realGetWorkerPoolByProcess.mockClear();
+    realFetchQueueBoard.mockClear();
     captured.calls.length = 0;
     const { ElMessageBox } = await import('element-plus');
     vi.mocked(ElMessageBox.confirm).mockClear();
@@ -223,7 +223,7 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
     // 意图完全相反。徽标现已改走 useWorkerPoolCountsQuery（聚合计数，单请求）。
     const wrapper = mountCard(ref(new Set<string>()));
     await flushPromises();
-    expect(realGetWorkerPoolByProcess).not.toHaveBeenCalled();
+    expect(realFetchQueueBoard).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -245,7 +245,7 @@ describe('PendingPoolCard（2026-09-30 懒加载 + bulk-only 收敛）', () => {
     wrapper.unmount();
   });
 
-  it("P2c：count = '…'（父级 counts 加载中占位）原样透传", async () => {
+  it("P2c：count = '…'（父级队列快照加载中占位）原样透传", async () => {
     const wrapper = mountCard(ref<Set<string>>(new Set<string>()), '…');
     await flushPromises();
     expect(wrapper.html()).toContain('…');

@@ -3,7 +3,7 @@
 //
 // 2026-10-02 新增：PendingPoolsPanel.vue 组件 spec —— 工序投放卡列。组件本身无逻辑，
 // 只有一条值得守的映射：**hoveredProcessId → 逐张 PendingPoolCard 的 dropping**。
-// 它是「拖到工序卡上高亮」跨组件链路的中间一环（源面板 emit → WorkerQueueBoard ref
+// 它是「拖到工序卡上高亮」跨组件链路的中间一环（源面板 emit → QueueBoard ref
 // → 本面板 prop → PendingPoolCard 的 .is-dropping），任一环断掉都表现为「拖入时工序
 // 卡不亮」且无任何报错。
 //
@@ -27,7 +27,7 @@ import { defineComponent, h, ref, type Ref } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import PendingPoolsPanel from '../PendingPoolsPanel.vue';
 import type { ProcessCategory } from '@/types/process';
-import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
+import type { UseQueueDispatchReturn } from '../../composables/useQueueDispatch';
 
 vi.mock('vue-draggable-plus', () => ({
   useDraggable: () => ({
@@ -109,7 +109,7 @@ function mountPanel(
       dispatchMutation: {
         mutate,
         mutateAsync: vi.fn(async () => undefined),
-      } as unknown as UsePendingDispatchReturn['dispatchMutation'],
+      } as unknown as UseQueueDispatchReturn['dispatchMutation'],
       hoveredProcessId,
     },
     global: globalConfig,

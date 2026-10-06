@@ -4,7 +4,7 @@
 // 2026-10-02 新增：PendingBatchesPanel.vue 组件 spec —— 待下发批次列（Sortable
 // 拖拽**源**）。聚焦新增的「拖入工序卡高亮」事件源：Sortable 的 _onMove 只从被拖起
 // 的容器（源）取 options.onMove，投放目标（工序卡）侧挂了在真机上永不触发 ⇒ 高亮态
-// 必须由本容器上报 process.id，父级 WorkerQueueBoard 落到 PendingPoolCard 的
+// 必须由本容器上报 process.id，父级 QueueBoard 落到 PendingPoolCard 的
 // dropping prop。本 spec 就是这条跨组件链路的回归 guard。
 //
 // 覆盖：
@@ -29,8 +29,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref, type PropType } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import PendingBatchesPanel from '../PendingBatchesPanel.vue';
-import type { PendingBatchItemDto } from '@/api/workerPool.contract';
-import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
+import type { QueuePendingBatchDto } from '@/api/productionQueue.contract';
+import type { UseQueueDispatchReturn } from '../../composables/useQueueDispatch';
 
 const captured = vi.hoisted(() => ({
   calls: [] as { list: unknown; options: Record<string, unknown> }[],
@@ -133,7 +133,7 @@ const globalConfig = {
   },
 };
 
-function makeDto(overrides: Partial<PendingBatchItemDto> = {}): PendingBatchItemDto {
+function makeDto(overrides: Partial<QueuePendingBatchDto> = {}): QueuePendingBatchDto {
   return {
     batch_id: '3000000000009',
     part_id: '4000000000001',
@@ -142,7 +142,9 @@ function makeDto(overrides: Partial<PendingBatchItemDto> = {}): PendingBatchItem
     serial_no: 'SN-0001',
     name: '连杆',
     drawing_no: 'DRW-1',
-    planned_delivery_date: null,
+    // queue 域的待下发行：planned_delivery_date 是**非 null** 字符串（后端对 DB NULL
+    // 兜底 `1970-01-01`），system_delivery_date 才 nullable。
+    planned_delivery_date: '2026-10-25',
     system_delivery_date: '2026-10-20',
     customer_name: '某某零件厂',
     parent_customer_name: '某某集团',
@@ -150,8 +152,6 @@ function makeDto(overrides: Partial<PendingBatchItemDto> = {}): PendingBatchItem
     is_urgent: false,
     note: null,
     version: 1,
-    current_process_step_id: '0',
-    process_chain_id: '6000000000001',
     ...overrides,
   };
 }
@@ -166,7 +166,7 @@ function fakeProcessCardEl(processId?: string): HTMLElement {
 }
 
 function mountPanel(
-  batches: PendingBatchItemDto[] = [makeDto()],
+  batches: QueuePendingBatchDto[] = [makeDto()],
   extra: {
     selected?: string[];
     setSelectedIds?: (ids: string[]) => void;
@@ -183,7 +183,7 @@ function mountPanel(
       autoDispatchMutation: {
         mutate: extra.autoDispatchMutate ?? vi.fn(),
         isPending: ref(false),
-      } as unknown as UsePendingDispatchReturn['autoDispatchMutation'],
+      } as unknown as UseQueueDispatchReturn['autoDispatchMutation'],
     },
     global: globalConfig,
   });

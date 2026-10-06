@@ -1,15 +1,21 @@
 // @vitest-environment happy-dom
-// src/views/production/components/__tests__/WorkerColumn.spec.ts
+// src/views/production/queue/components/__tests__/WorkerColumn.spec.ts
 //
-// 2026-10-03 新增：WorkerColumn.vue 的拖拽落点分发 + Sortable 接线回归 guard。
-// 本 spec 守的是用户报的那个 bug（批次移到工人手中后该工人卡片显示不正确）的整条
-// 前端链路：Sortable onStart 记源 → onAdd 分发 → 注入的 move 包装被调。
+// 工人列的拖拽落点分发 + Sortable 接线回归 guard。守的是「批次移到工人手中后该工人
+// 卡片显示不正确」这条用户报过的 bug 的整条前端链路：Sortable onStart 记源 → onAdd
+// 分发 → 注入的 move 包装被调。
+//
+// 2026-10-08：组件不再自管 query（后端把持有批次与容量三字段内联进工序看板的
+// `workers[]`），props 收敛成单个 `worker: QueueWorkerSchema`。旧用例里「桩 query
+// 观察调用点只传 workerId 一维」的 W8 随之删除 —— 数据不再经过 query 调用点，那条
+// 防线已由 queueWorkerSchema（`held_batches` 与容量三字段全部必填，见
+// productionQueueSchema.spec.ts 的 Q-B2 / Q-B3）接住。
 //
 // 覆盖：
 //   - W1：Sortable 用**二参重载**（不传 list）—— 库的内建 onAdd/onRemove 假定「传进来
-//     的 list 就是渲染源」，而本组件的渲染源是 query 派生出的 heldBatches，传镜像数组
+//     的 list 就是渲染源」，而本组件的渲染源是 props 派生的 heldBatches，传镜像数组
 //     只会往一个没人看的数组里 splice。
-//   - W2：候选池源 → moveBatchToWorker(batchId, 本列 worker, 卡片自带的真实货架)。
+//   - W2：候选池源 → moveBatchToWorker(batchId, 本列工人, 卡片自带的真实货架)。
 //   - W3：工人源（**另一名**工人）→ moveBatchBetweenWorkers(batchId, 源工人, 本列工人)，
 //     且不发 POOL→WORKER。此即「主症状」的修复点：此前只有 W2 一条路径。
 //   - W4：拖回自己那一列 → 两个包装都不调（不构成一次移动）。
@@ -17,9 +23,6 @@
 //   - W6：空态 el-empty 是 .col-body 的**兄弟覆盖层**：容器仍在（非空/空态都要存在，
 //     空列是 POOL→WORKER 的主落点），且容器内没有任何非可拖子元素。
 //   - W7：卡片渲染在 .col-body 容器内，容器带 data-worker-id（拖拽源的识别锚点）。
-//   - W8：state query 的调用点**只传 workerId 一个实参**（2026-10-04 新增）—— 桩不受
-//     真实签名约束，接线层没有类型锚，必须在实参元组上断言，否则 shelfId 这类
-//     第二维度被悄悄加回时无一条用例会红。
 //   - W9：空列也把 Sortable 绑到了 .col-body 上（start(el) 收到的就是该容器节点）——
 //     容器不渲染 ⇒ watch 走 destroy 分支 ⇒ 空列没有任何 Sortable 实例，拖不进去。
 //   - W10：options 带 sort: false 且**不带** onMove（容器内重排由 Sortable 的 sort
@@ -27,31 +30,31 @@
 //   - W11：options 带 onRemove，且把被拖节点放回 `from.children[oldIndex]`（DOM 下标）。
 //     二参形态下库不挂内建 onRemove，缺了它投放失败时幻影节点留在落点列、invalidate
 //     清不掉。断言必须落在「放回原下标位置」而不仅是「函数存在」。
-//   - W12（2026-10-06）：卡片上派发 contextmenu → 注入的 openBatchContextMenu 被调一次，
-//     参数是**被右键那张卡**的 BatchCardModel（含 recall 必需的 version）；用例渲染两张
-//     卡并右键第二张，否则「那张卡」与「唯一那张卡」不可区分。W12b：未提供 opener 时
-//     右键不抛错（inject 缺省 noop 兜底）。
-//   - W13 / W13b（2026-10-06）：Sortable 容器 .col-body 内的节点构成 —— 只有卡片根元素
-//     与 v-for 的 2 个空文本锚点，**没有注释节点**（dev 构建保留模板注释，注释同样是
-//     容器直接子节点）；空列时零元素子节点、容器仍是合法投放目标。
+//   - W12：卡片上派发 contextmenu → 注入的 openBatchContextMenu 被调一次，参数是**被
+//     右键那张卡**的 BatchCardModel（含 recall 必需的 version）；用例渲染两张卡并右键
+//     第二张，否则「那张卡」与「唯一那张卡」不可区分。W12b：未提供 opener 时右键不抛错
+//     （inject 缺省 noop 兜底）。
+//   - W13 / W13b：Sortable 容器 .col-body 内的节点构成 —— 只有卡片根元素与 v-for 的
+//     2 个空文本锚点，**没有注释节点**（dev 构建保留注释，注释同样是容器直接子节点）；
+//     空列时零元素子节点、容器仍是合法投放目标。
+//   - W14（2026-10-08 新增）：容量三字段直接渲染 props —— 「加载中占位 …」分支已
+//     消失（数据一次请求到齐，列内不存在中间态）。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
 //     无头环境无法模拟 Sortable 的 _onDragOver，options 回调就是组件与库之间唯一的
 //     契约面）；
-//   - vi.mock('@/composables/queries/useWorkerStateByWorkerQuery') 桩掉数据源
-//     （held_batches / max_held / current_held 全在本 spec 自造），并记录实参元组
-//     供 W8 断言调用点只传 workerId（工厂不受真实签名约束，桩必须自带这个锚）；
+//   - 工人数据经 **props** 注入（不再桩 query）—— 每个用例造自己的 QueueWorkerSchema；
 //   - dndSourceTracker 用**真实实现**：onStart 记、onAdd 取的读写配对本身就是被测行为
 //     的一半，桩掉它等于把要守的东西一起桩掉；
-//   - EP 组件 stub（el-card / el-avatar / el-tag / el-progress / el-skeleton /
-//     el-empty / el-tooltip）+ vi.mock('element-plus') 把 ElMessage 桩成 no-op。
+//   - EP 组件 stub（el-card / el-avatar / el-tag / el-progress / el-empty /
+//     el-tooltip）+ vi.mock('element-plus') 把 ElMessage 桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, ref, type PropType } from 'vue';
+import { defineComponent, h, nextTick, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
-import type { HeldBatchItemDto } from '@/api/workerPool.contract';
-import type { Worker } from '@/types/workerPool';
+import type { QueueHeldBatchDto } from '@/api/productionQueue.contract';
+import type { QueueWorkerSchema } from '../../composables/productionQueueSchema';
 
 const captured = vi.hoisted(() => ({
   calls: [] as { list: unknown; options: Record<string, unknown> }[],
@@ -80,38 +83,6 @@ vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 
-/** held_batches 数据源（由各用例自造）。`data` 在 mountColumn 里赋值 —— vi.hoisted
- *  工厂早于模块顶部的 `import { ref }` 求值，不能在里面调 ref()。 */
-interface FakeWorkerState {
-  worker_id: string;
-  worker_name: string;
-  work_type_code: string;
-  max_held: number;
-  current_held: number;
-  capacity_remaining: number;
-  pool_count_by_process: unknown[];
-  held_batches: unknown[];
-}
-
-const stateRef = vi.hoisted(() => ({
-  data: null as { value: FakeWorkerState | undefined } | null,
-  /** 2026-10-04：桩记录的入参元组。vi.mock 工厂不受真实签名约束，组件若把 shelfId
-   *  之类的第二维度加回来（或改回 inject）不会有任何类型报错，只有这里的实参个数
-   *  断言能让它变红。 */
-  args: [] as unknown[][],
-}));
-
-vi.mock('@/composables/queries/useWorkerStateByWorkerQuery', () => ({
-  useWorkerStateByWorkerQuery: (...args: unknown[]) => {
-    stateRef.args.push(args);
-    return {
-      data: stateRef.data,
-      isLoading: ref(false),
-      error: ref<Error | null>(null),
-    };
-  },
-}));
-
 import WorkerColumn from '../WorkerColumn.vue';
 // 工人源不在本 spec 里手工 record：它必须经组件自己的 onStart 写入，W3/W4 守的正是
 // 「onStart 记的源能被 onAdd 取到并按 from ≠ to 分流」这条链路。
@@ -137,10 +108,18 @@ const ElTagStub = defineComponent({
     () =>
       h('span', { class: 'el-tag-stub' }, slots.default?.()),
 });
+// 进度条桩把 format 的返回值渲染出来 —— W14 要断言的正是「当前/上限」那段文案
+// （el-progress 的 format 回调），只渲染一个空 div 的话占位分支（'…'）与真实数字
+// 在断言里无法区分。
 const ElProgressStub = defineComponent({
   name: 'ElProgressStub',
   props: { percentage: Number, format: Function, status: String },
-  setup: () => () => h('div', { class: 'el-progress-stub' }),
+  setup(props) {
+    return () =>
+      h('div', { class: 'el-progress-stub' }, [
+        props.format ? String(props.format(props.percentage ?? 0)) : '',
+      ]);
+  },
 });
 const ElSkeletonStub = defineComponent({
   name: 'ElSkeletonStub',
@@ -193,19 +172,10 @@ const globalConfig = {
   },
 };
 
-const SELF_WORKER: Worker = {
-  id: '1900000000002',
-  name: '李四',
-  badge_code: 'G002',
-  work_type_code: 'CNC',
-  max_held: 3,
-  current_held: 1,
-  capacity_remaining: 2,
-  is_online: true,
-  process_ids: ['2000000000001'],
-};
+/** 本列工人 id（后端 QueueWorker 原样透传，无中间 view-model 改写）。 */
+const SELF_WORKER_ID = '1900000000002';
 
-function makeHeld(overrides: Partial<HeldBatchItemDto> = {}): HeldBatchItemDto {
+function makeHeld(overrides: Partial<QueueHeldBatchDto> = {}): QueueHeldBatchDto {
   return {
     batch_id: '3000000000001',
     part_id: '4000000000001',
@@ -221,7 +191,6 @@ function makeHeld(overrides: Partial<HeldBatchItemDto> = {}): HeldBatchItemDto {
     parent_customer_name: '某某集团',
     applicant_name: '张三',
     location: 'WORKER',
-    shelf_code: null,
     note: null,
     has_cnc_program: false,
     version: 3,
@@ -229,26 +198,31 @@ function makeHeld(overrides: Partial<HeldBatchItemDto> = {}): HeldBatchItemDto {
   };
 }
 
-function mountColumn(
-  held: HeldBatchItemDto[] = [makeHeld()],
-  provided: Record<string, unknown> = {},
-) {
-  stateRef.data = ref<FakeWorkerState | undefined>({
-    worker_id: SELF_WORKER.id,
-    worker_name: SELF_WORKER.name,
-    work_type_code: SELF_WORKER.work_type_code,
+/** 造本列工人 props（容量三字段随持有数派生，与后端口径一致：
+ *  current_held = 持有批次数，capacity_remaining = max_held - current_held）。 */
+function makeWorker(held: QueueHeldBatchDto[] = [makeHeld()]): QueueWorkerSchema {
+  return {
+    worker_id: SELF_WORKER_ID,
+    name: '李四',
+    work_type_code: 'CNC',
+    badge_code: 'G002',
     max_held: 3,
     current_held: held.length,
     capacity_remaining: 3 - held.length,
-    pool_count_by_process: [],
     held_batches: held,
-  });
+  };
+}
+
+function mountColumn(
+  held: QueueHeldBatchDto[] = [makeHeld()],
+  provided: Record<string, unknown> = {},
+) {
   return mount(WorkerColumn, {
-    props: { worker: SELF_WORKER },
+    props: { worker: makeWorker(held) },
     global: {
       components: globalConfig.components,
-      // 2026-10-04：不再 provide shelfId —— 组件已删掉 inject('shelfId')，
-      // state query 只按 workerId 取数（桩 query，见上方 vi.mock）。
+      // 不 provide shelfId —— 组件已删掉 inject('shelfId')（队列数据全部由后端按批次
+      // 真实位置返回，前端不拼货架）。
       provide: {
         moveBatchToWorker: vi.fn(async () => true),
         moveBatchBetweenWorkers: vi.fn(async () => true),
@@ -273,11 +247,10 @@ function dragEvent(dataset: { batchId: string }, fromDataset: Record<string, str
   return { item, from };
 }
 
-describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
+describe('WorkerColumn（拖拽落点分发）', () => {
   beforeEach(() => {
     captured.calls.length = 0;
     captured.starts.length = 0;
-    stateRef.args.length = 0;
   });
 
   it('W1：Sortable 用二参重载，不传 list（渲染源与 list 不同源）', () => {
@@ -307,7 +280,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     expect(moveBatchToWorker).toHaveBeenCalledTimes(1);
     expect(moveBatchToWorker).toHaveBeenCalledWith(
       '3000000000009',
-      SELF_WORKER.id,
+      SELF_WORKER_ID,
       '5000000000009',
     );
     expect(moveBatchBetweenWorkers).not.toHaveBeenCalled();
@@ -329,7 +302,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     expect(moveBatchBetweenWorkers).toHaveBeenCalledWith(
       '3000000000009',
       '1900000000001',
-      SELF_WORKER.id,
+      SELF_WORKER_ID,
     );
     expect(moveBatchToWorker).not.toHaveBeenCalled();
     wrapper.unmount();
@@ -341,7 +314,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     const wrapper = mountColumn([makeHeld()], { moveBatchToWorker, moveBatchBetweenWorkers });
     const options = capturedOptions();
 
-    const evt = dragEvent({ batchId: '3000000000009' }, { workerId: SELF_WORKER.id });
+    const evt = dragEvent({ batchId: '3000000000009' }, { workerId: SELF_WORKER_ID });
     (options.onStart as (e: unknown) => void)(evt);
     await (options.onAdd as (e: unknown) => Promise<void>)(evt);
 
@@ -369,7 +342,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     // Sortable 实例，「给空闲工人派活」根本放不进去（卡片弹回源容器）。
     const col = wrapper.find('.col-body');
     expect(col.exists()).toBe(true);
-    expect((col.element as HTMLElement).dataset.workerId).toBe(SELF_WORKER.id);
+    expect((col.element as HTMLElement).dataset.workerId).toBe(SELF_WORKER_ID);
     // 容器内不得混入任何非可拖子元素（空态 ⇒ 零子元素）
     expect(col.element.children).toHaveLength(0);
     // 空态插画仍渲染，且必须是容器的兄弟节点而非后代
@@ -388,7 +361,7 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     const wrapper = mountColumn([makeHeld(), makeHeld({ batch_id: '3000000000002', batch_no: 2 })]);
     const col = wrapper.find('.col-body');
     expect(col.exists()).toBe(true);
-    expect((col.element as HTMLElement).dataset.workerId).toBe(SELF_WORKER.id);
+    expect((col.element as HTMLElement).dataset.workerId).toBe(SELF_WORKER_ID);
     expect(col.findAll('.batch-card')).toHaveLength(2);
     // 容器直接子元素全是批次卡（真 el-tooltip 不产生包裹元素，测试里的 stub 多包了
     // 一层 .el-tooltip-stub），没有空态 / skeleton 这类非可拖项混入
@@ -400,18 +373,14 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W8：state query 只接 workerId 一个维度（无 shelfId 第二参）', () => {
-    // 2026-10-04 接线 guard：本组件的 query 调用点与 composable 签名之间没有任何
-    // 类型锚（桩是零参的），历史上 shelfId 就是在这里悄悄加回去的 —— 而
-    // auth.activeShelfId 对 MANAGER / CLERK / INSPECTOR 恒空 ⇒ enabled 恒 false
-    // ⇒ 持有列表静默显示「暂无持有工单」+ 0/0。断言落在**实参元组**上。
-    const wrapper = mountColumn();
-    expect(stateRef.args).toHaveLength(1);
-    expect(stateRef.args[0]).toHaveLength(1);
-    // 唯一实参是返回 worker.id 的 getter，调用它应拿到本列 worker 的 id
-    const only = stateRef.args[0][0];
-    expect(typeof only).toBe('function');
-    expect((only as () => string)()).toBe(SELF_WORKER.id);
+  it('W14：容量三字段直接渲染 props（无「加载中」中间态与占位分支）', () => {
+    // 2026-10-08：数据由父级 tab 一次请求到齐，列内不再有 loading / error 两级互斥
+    // 分支，也就没有「max_held / current_held 暂显 …」的占位。断言落在进度条的
+    // format 输出上（`current_held/max_held`）—— 若有人把占位分支加回来，这里会看到
+    // 「…/…」而不是真实数字。
+    const wrapper = mountColumn([makeHeld(), makeHeld({ batch_id: '3000000000002' })]);
+    // 两张卡 ⇒ current_held=2 / max_held=3
+    expect(wrapper.find('.el-progress-stub').text()).toBe('2/3');
     wrapper.unmount();
   });
 
@@ -556,20 +525,11 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W12b（2026-10-06）：未 provide opener 时右键不抛错（inject 缺省 noop）', async () => {
-    stateRef.data = ref<FakeWorkerState | undefined>({
-      worker_id: SELF_WORKER.id,
-      worker_name: SELF_WORKER.name,
-      work_type_code: SELF_WORKER.work_type_code,
-      max_held: 3,
-      current_held: 1,
-      capacity_remaining: 2,
-      pool_count_by_process: [],
-      held_batches: [makeHeld()],
-    });
-    // 完全不 provide（板级 opener 缺失的极端形态）⇒ 右键退化为无反应，不炸回调
+  it('W12b：未 provide opener 时右键不抛错（inject 缺省 noop）', async () => {
+    // 完全不 provide move 包装与 opener（板级契约缺失的极端形态）⇒ 右键退化为无反应、
+    // 拖拽落点退化为 noop，都不炸回调。
     const wrapper = mount(WorkerColumn, {
-      props: { worker: SELF_WORKER },
+      props: { worker: makeWorker([makeHeld()]) },
       global: { components: globalConfig.components },
     });
     const card = wrapper.find('.col-body').find('.batch-card');

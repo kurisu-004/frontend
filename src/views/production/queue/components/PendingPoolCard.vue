@@ -1,41 +1,35 @@
-<!-- 2026-09-30：自产工序 pool 卡（PendingPoolsPanel 的 v-for 项）——「待下发」Tab
-     右栏的**下发目标**卡片（单击下发 / 拖放批次到此工序）。
-     渲染：标题 (code + name + badge 候选 batch 数) + 交互区。
+<!-- 工序投放卡（PendingPoolsPanel 的 v-for 项）——「待下发」Tab 右栏的**下发目标**
+     卡片（单击下发 / 拖放批次到此工序）。
+     渲染：标题 (code + name + 候选批次徽标) + 交互区。
 
-     2026-09-30 懒加载关键改动：**本卡片不再自管 useWorkerPoolByProcessQuery**。
-     改前：卡片为了渲染右上角 badge（`items.length`）而发 `GET /prod/pool/{pid}`，
-     而本卡片位于**默认首屏激活的「待下发」tab**内、且 `v-for` 全部 INHOUSE 工序
-     ⇒ 进页面即打出 N 个 per-process 详情请求（N+1），与「切到 tab 才懒加载」的
-     设计意图完全相反。
-     改后：badge 直接取 `useWorkerPoolCountsQuery` 的聚合计数（单请求，本页已 eager
-     拉取用于 tab 标题徽标），本组件**零网络请求**。per-process 详情只有
-     `WorkerPoolTab`（el-tab-pane `:lazy="true"`）会拉。
-     ⇒ 进入页面的请求数恒为 3：`GET /prod/processes` + `GET /prod/pool/counts` +
-     `GET /prod/batches/pending`。
+     **零网络请求**：本卡片是默认首屏 tab 内 `v-for` 全部工序的列表项，一旦自管
+     per-process 详情就是进页面即打 N 个请求的 N+1。徽标与工序色都由父级 QueueBoard
+     从队列快照（`GET /prod/queue/snapshot`，单请求跨所有货架聚合）透传。
+     ⇒ 进入页面的请求数恒为 3：`GET /prod/processes` + `GET /prod/queue/snapshot` +
+     `GET /prod/queue/pending`；per-process 详情只有切到某个工序 tab
+     （el-tab-pane `:lazy="true"`）时才拉。
 
-     2026-10-02 三项变更：
-       1. **盒模型对齐 BatchCard**（固定 200×96 + 4px 左边框 + 8px 圆角），与左侧
-          批次卡同款网格节奏；
-       2. **左边框取工序色**（process.color，未设置时回落主色）—— 工序卡是下发的
-          视觉归属标识，与左侧批次卡的「加急橙」左边框占同一视觉位；
-     3. **拖拽改 vue-draggable-plus**：本卡片根 div 即 Sortable 投放目标容器，
-        用**二参重载**（不传 list）—— 传了 list 会带上一整套内置 handler，反过来
-        污染目标状态；且内置 onAdd 会把拖入的 DOM 节点塞进本容器却不受 Vue 管理。
-        成功态反馈只能挂目标的 onAdd（跨容器 drop 时目标的 onEnd 永不触发）；
-     4. **拖入高亮（.is-dropping）由父级驱动**：Sortable 的 _onMove 只从**被拖起的
-        那个容器**（源，即待下发批次列表）的 options.onMove 取回调，投放目标的 onMove
-        一次都不触发 ⇒ 高亮态由源面板 onMove 上报 process.id、经 WorkerQueueBoard 落到
-        本组件的 `dropping` prop。根 div 的 data-process-id 就是这条链路的识别标记。
+     盒模型对齐 BatchCard（固定 200×96 + 4px 左边框 + 8px 圆角），左边框取工序色 ——
+     工序卡是下发的视觉归属标识，与左侧批次卡的「加急橙」左边框占同一视觉位。
 
-     2026-10-04 拖入下发加二次确认：手动把批次拖到工序卡是「不可逆写操作 + 手滑高发」
-     （指针划过即亮、稍一松手即下发），故 mutate 之前弹一次确认框。弹窗**只报工序名**：
-     被拖卡片的 DOM 上只有 data-batch-id，零件名 / 批次号在另一面板的 batches 里，
-     为此把批次详情接进投放卡并不划算。确认框**只挂在拖拽路径**上，单击工序卡的既有
-     下发语义（多选集合 + 空选兜底）完全不动。弹窗的异步性不影响节点归位：拖拽源
-     PendingBatchesPanel 走的是 vue-draggable-plus **三参重载**（传了 list），库内建
-     onRemove 的第一句 `from.insertBefore(item, from.children[oldIndex])` 在同一个
-     _onDrop 里、目标 onAdd 返回后**同步**把被拖节点放回源容器 ⇒ 本组件不必自备
-     onRemove 回滚。 -->
+     拖拽（vue-draggable-plus）：本卡片根 div 即 Sortable 投放目标容器，用**二参
+     重载**（不传 list）—— 传了 list 会带上一整套内置 handler 反过来污染目标状态，
+     且内置 onAdd 会把拖入的 DOM 节点塞进本容器却不受 Vue 管理。成功态反馈只能挂
+     目标的 onAdd（跨容器 drop 时目标的 onEnd 永不触发）。
+
+     拖入高亮（.is-dropping）由父级驱动：Sortable 的 _onMove 只从**被拖起的那个
+     容器**（源，即待下发批次列表）的 options.onMove 取回调，投放目标的 onMove 一次都
+     不触发 ⇒ 高亮态由源面板 onMove 上报 process.id、经 QueueBoard 落到本组件的
+     `dropping` prop。根 div 的 data-process-id 就是这条链路的识别标记。
+
+     拖入下发有二次确认：手动把批次拖到工序卡是「不可逆写操作 + 手滑高发」（指针划过
+     即亮、稍一松手即下发），故 mutate 之前弹一次确认框。弹窗**只报工序名**：被拖卡片
+     的 DOM 上只有 data-batch-id，零件名 / 批次号在另一面板的 batches 里，为此把批次
+     详情接进投放卡并不划算。确认框**只挂在拖拽路径**上，单击工序卡的下发语义（多选
+     集合 + 空选兜底）完全不动。弹窗的异步性不影响节点归位：拖拽源 PendingBatchesPanel
+     走的是 vue-draggable-plus **三参重载**（传了 list），库内建 onRemove 的第一句
+     `from.insertBefore(item, from.children[oldIndex])` 在同一个 _onDrop 里、目标 onAdd
+     返回后**同步**把被拖节点放回源容器 ⇒ 本组件不必自备 onRemove 回滚。 -->
 <template>
   <div
     ref="dropRef"
@@ -62,19 +56,20 @@ import { computed, ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useDraggable, type DraggableEvent } from 'vue-draggable-plus';
 import { useConfirm } from '@/composables/useConfirm';
-import type { UsePendingDispatchReturn } from '@/views/production/composables/usePendingDispatch';
+import type { UseQueueDispatchReturn } from '@/views/production/queue/composables/useQueueDispatch';
 
 interface Props {
-  /** 单工序的轻量元数据（来自 useProcessesQuery.items.filter(INHOUSE)）。 */
+  /** 单工序的轻量元数据（来自 useProcessesQuery.items，含自产与外协）。 */
   process: { id: string; code: string; name: string; color?: string | null | undefined };
-  /** 该工序候选批次徽标 —— 由父级 WorkerQueueBoard 从 useWorkerPoolCountsQuery 的
-   *  `counts[].count` 透传（`number` 或加载中占位 `'…'`）。本卡片不自行请求。 */
+  /** 该工序候选批次徽标 —— 由父级 QueueBoard 从队列快照的
+   *  `processes[].pool_count` 透传（`number`）。零候选的工序不在快照里，父级填 0。
+   *  本卡片不自行请求。 */
   count: number | string;
   /** 多选已选集合（响应式 Ref，父级 composable 持有）。 */
   selectedIds: Ref<Set<string>>;
-  /** 下发 mutation（来自 usePendingDispatch.dispatchMutation）。 */
-  dispatchMutation: UsePendingDispatchReturn['dispatchMutation'];
-  /** 2026-10-02：拖拽悬停高亮态，由父级（PendingPoolsPanel ← WorkerQueueBoard）
+  /** 下发 mutation（来自 useQueueDispatch.dispatchMutation）。 */
+  dispatchMutation: UseQueueDispatchReturn['dispatchMutation'];
+  /** 拖拽悬停高亮态，由父级（PendingPoolsPanel ← QueueBoard）
    *  透传。Sortable 只从源的 options.onMove 派发，投放目标自身收不到 onMove ⇒
    *  本组件不持有该状态，只按 prop 渲染 .is-dropping。 */
   dropping?: boolean;
@@ -82,17 +77,17 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), { dropping: false });
 
-/** 2026-10-02：左侧 4px 竖条色 = 工序色。工序色是 el-color-picker color-format="hex8"
+/** 左侧 4px 竖条色 = 工序色。工序色是 el-color-picker color-format="hex8"
  *  产出的 `#RRGGBBAA`（9 字符），CSS border-left-color 直接吃，不做任何字符串加工；
  *  后端 color 为 NULL（未设置）时回落主色。 */
 const accent = computed<string>(() => props.process.color ?? 'var(--el-color-primary)');
 
 const dropRef = ref<HTMLElement | null>(null);
 
-/** 2026-10-04：拖入下发的二次确认。按钮文案与 usePendingDispatch 的自动下发确认框
+/** 拖入下发的二次确认。按钮文案与 useQueueDispatch 的自动下发确认框
  *  统一（「下发 / 取消」），两处下发入口在用户心智里是同一个动作。 */
 const { dangerous: confirmDangerous } = useConfirm();
-/** 2026-10-02：Sortable 投放目标（二参重载，不传 list）。本卡片根 div 无条件渲染，
+/** Sortable 投放目标（二参重载，不传 list）。本卡片根 div 无条件渲染，
  *  mount 即非 null，直接用 useDraggable（不需要 useLazyDraggable 的延后绑定）。
  *  - `draggable: '.never'`：容器内没有任何匹配 `.never` 的子元素 ⇒ 卡片自身不可从
  *    本容器拖出，但外部投放仍可被 Sortable 的 _onDragOver 接受；
@@ -167,7 +162,7 @@ type AddEvent = DraggableEvent & { originalEvent?: Event };
  *  高亮的清理由源侧 onEnd 负责（end 只派发给源，跨容器 drop 时本目标的 onEnd 永不
  *  触发，故此处不能也不该复位 dropping）。
  *
- *  2026-10-04 二次确认：三道守卫与 item / batchId 提取全部**同步**跑在第一个 await
+ *  三道守卫与 item / batchId 提取全部**同步**跑在第一个 await
  *  之前 —— 它们是「这次根本不算投放」的静默短路，不该被一个弹窗拦在中间（用户按了 Esc
  *  却还要再点一次「取消」才能消掉弹窗）。守卫全过才弹确认框，取消即不发请求。
  *
@@ -209,7 +204,7 @@ async function onDrop(evt: DraggableEvent) {
   });
 }
 
-/** 2026-10-02：守卫生效时的 dev-only 诊断。三道守卫全是**静默 return**，而
+/** 守卫生效时的 dev-only 诊断。三道守卫全是**静默 return**，而
  *  vue-draggable-plus 一旦升级就可能换掉 `originalEvent` 字段或事件名，届时所有拖拽
  *  下发会无声失效、控制台一片干净 ⇒ 这里在 dev 把命中的守卫与 `orig.type` 打出来，
  *  日后一眼定位。生产不打：守卫生效是正常路径，量级随拖拽次数。 */
