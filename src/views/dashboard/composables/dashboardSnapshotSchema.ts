@@ -20,6 +20,7 @@
 
 import { z } from 'zod';
 import { ORDER_STATUSES } from '@/types/parts';
+import { DELIVERY_BASES } from '@/types/dashboard';
 
 /** 2026-10-07：工人在手加工批次（WorkerHeldBatch VO，7 字段）。
  *  `snapshot.in_process[]` 的行类型。语义由后端 SQL 硬约束钉死：
@@ -92,12 +93,21 @@ export type UpcomingDeliveryEntryData = z.infer<typeof upcomingDeliveryBucketSch
 /** 2026-10-07：交期分桶响应（UpcomingDeliveryBuckets VO，3 顶层字段）。
  *  today 是**后端**判定的今天（口径 Asia/Shanghai），与 buckets[0].date 是同一个值；
  *  前端一律用它做「今天」的锚点，不再 new Date()（浏览器时区与服务端不同步会让整块
- *  柱状图错位）。buckets 恒为请求的 days 条、缺失日期已在服务端零填充。 */
-export const upcomingBucketsSchema = z.object({
-  today: z.string(),
-  buckets: z.array(upcomingDeliveryBucketSchema),
-  ts: z.string(),
-});
+ *  柱状图错位）。buckets 恒为请求的 days 条、缺失日期已在服务端零填充。
+ *
+ *  末位 refine 把「today 与 buckets[0].date 同值」这条契约钉成**机器校验**：它是
+ *  DashboardView 里「今日到期」KPI 唯一的数据来源（取首桶 count）。后端一旦漂了
+ *  零填充起点，KPI 会静默显示错日的数字；refine 让它在 queryFn 守门处抛错，走既有的
+ *  ElMessage 错误桥接暴露成显式故障。 */
+export const upcomingBucketsSchema = z
+  .object({
+    today: z.string(),
+    buckets: z.array(upcomingDeliveryBucketSchema),
+    ts: z.string(),
+  })
+  .refine((v) => v.buckets[0]?.date === v.today, {
+    message: 'buckets[0].date 必须等于 today（后端自 today 起零填充，「今日到期」KPI 取首桶）',
+  });
 
 export type UpcomingBucketsData = z.infer<typeof upcomingBucketsSchema>;
 
@@ -124,7 +134,9 @@ export type DeliveryOrderDetailData = z.infer<typeof deliveryOrderDetailSchema>;
  *  据此渲染「共 N 件」，用 items.length 会在触顶时谎报）。items 最多 200 行。 */
 export const deliveryOrderDetailOutSchema = z.object({
   date: z.string(),
-  basis: z.string(),
+  // 后端把请求参数原样回显，合法值与 DELIVERY_BASES 同源（收成 enum 后，非法口径
+  // 不可能通过守门 —— 它只会在请求构造阶段就出错）。
+  basis: z.enum(DELIVERY_BASES),
   total: z.number(),
   items: z.array(deliveryOrderDetailSchema),
   ts: z.string(),

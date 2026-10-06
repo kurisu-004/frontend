@@ -236,7 +236,7 @@ const params = computed(() => {
   if (props.statuses.length === 0) return null;
   return {
     date: props.date,
-    statuses: [...props.statuses] as OrderStatus[],
+    statuses: [...props.statuses],
     basis: props.basis,
   };
 });

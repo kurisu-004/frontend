@@ -1,7 +1,6 @@
 // src/api/dashboard.spec.ts
 //
-// 2026-09-28 重构：原订阅 / 取消订阅控制帧测试全部删除（subscribe/unsubscribe
-// 帧随控制帧发送逻辑一起删除）。覆盖：
+// 覆盖：
 //   - URL 拼接（带 token）
 //   - fetchDashboardSnapshot / fetchUpcomingDelivery / fetchDeliveryOrders 三个
 //     HTTP 端点（mock api.get）

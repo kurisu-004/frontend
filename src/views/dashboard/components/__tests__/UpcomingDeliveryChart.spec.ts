@@ -19,6 +19,9 @@
 //   - D4：后端少返一天时按 props.days 补 0 桶（防御性对齐）；
 //   - D5：天数选择器渲染 3 档 + emit update:days（非法值收敛忽略）；
 //   - D6：stale=true 时 onChartClick 不 emit（换键占位期间不许拿旧日期 + 新口径去查）；
+//   - D7 / D8：today 为空串（首帧 upcoming 未落地）→ 空坐标轴、不造假柱，点柱不 emit
+//     出 date: ''（后端拿到空日期会走 validation 40001）；
+//   - D9：三层 statuses 都在后端 statuses 限长闸门内（≤16 元素 / ≤256 字节）；
 //   - 口径开关用例（B 系列）保留，受控 props / emit / 提示文案 / 占位提示层。
 // 口径与天数选择器用 EP_STUBS 局部 stub（沿用本文件 v-chart 策略，不 mock
 // element-plus 模块）：两者不参与 ECharts 渲染，断言集中在 props/emits 与提示文案上。
@@ -511,6 +514,83 @@ describe('UpcomingDeliveryChart — vue-echarts 8.3 适配', () => {
     vchart.vm.$emit('click', { seriesName: '待品检/待送货', dataIndex: 0 });
     await nextTick();
     expect(wrapper.emitted('barLayerClick')).toBeTruthy();
+
+    wrapper.unmount();
+  });
+
+  it('D7：today 为空串（首帧 upcoming 未落地）→ 空坐标轴，不造假柱', async () => {
+    // 证伪力：改前 nextNDays 退化返回 [today]，yAxis.data 会是 [''] —— 一根空标签柱，
+    // 且 14 根柱塌成 1 根。这里断言的是「一根都不造」。
+    const wrapper = mountChart([makeBucket({ count: 9, by_status: { PENDING: 9 } })], {
+      days: 14,
+      today: '',
+    });
+    await nextTick();
+    await flushPromises();
+
+    const option = readOption(wrapper);
+    expect(option.yAxis.data).toEqual([]);
+    for (const s of option.series) {
+      expect(s.data).toEqual([]);
+    }
+
+    wrapper.unmount();
+  });
+
+  it('D8：today 为空串时点柱子不 emit（不产出 date: "" 的下钻）', async () => {
+    // 后端拿到 date= 会走 validation 40001。stale 闸门挡不住这一帧 —— 首帧没有前值、
+    // isPlaceholderData 为 false，所以必须在坐标轴侧就不产出可点的柱。
+    const wrapper = mountChart([makeBucket({ count: 9, by_status: { PENDING: 9 } })], {
+      days: 14,
+      today: '',
+      stale: false,
+    });
+    await nextTick();
+    await flushPromises();
+
+    const vchart = wrapper.findComponent({ name: 'VChart' });
+    // dataIndex 0 已越界（aligned 为空），组件必须自己挡住而不是 emit 空日期。
+    vchart.vm.$emit('click', { seriesName: '品检前', dataIndex: 0 });
+    await nextTick();
+    expect(wrapper.emitted('barLayerClick')).toBeFalsy();
+
+    // today 补上后同一个 click 恢复正常 emit —— 证明上一条不是被 stub 吞掉。
+    await wrapper.setProps({ today: TODAY });
+    await nextTick();
+    vchart.vm.$emit('click', { seriesName: '品检前', dataIndex: 0 });
+    await nextTick();
+    expect(wrapper.emitted('barLayerClick')?.[0]?.[0]).toEqual({
+      date: TODAY,
+      layer: 'top',
+      statuses: ['PENDING', 'PROGRAMMING', 'IN_PROCESS', 'OUTSOURCE'],
+    });
+
+    wrapper.unmount();
+  });
+
+  it('D9：三层 statuses 都在后端 statuses 限长闸门内（≤16 元素 / ≤256 字节）', async () => {
+    // 后端对超限的 statuses 直接走 validation 40001。statuses 拼自 LAYERS 常量、长度在
+    // 编译期就定死 ⇒ 运行时加闸门是不可达的死代码，这里改成静态断言：将来往某层塞状态
+    // 一旦越过后端闸门，本用例先红。
+    const wrapper = mountChart([makeBucket({ count: 5, by_status: { PENDING: 5 } })]);
+    await nextTick();
+    await flushPromises();
+
+    const vchart = wrapper.findComponent({ name: 'VChart' });
+    for (const seriesName of ['已送货', '待品检/待送货', '品检前']) {
+      vchart.vm.$emit('click', { seriesName, dataIndex: 0 });
+      await nextTick();
+    }
+    const emitted = (wrapper.emitted('barLayerClick') ?? []).map(
+      (e) => e[0] as { layer: string; statuses: string[] },
+    );
+    expect(emitted).toHaveLength(3);
+    for (const payload of emitted) {
+      expect(payload.statuses.length).toBeLessThanOrEqual(16);
+      expect(new TextEncoder().encode(payload.statuses.join(',')).byteLength).toBeLessThanOrEqual(
+        256,
+      );
+    }
 
     wrapper.unmount();
   });

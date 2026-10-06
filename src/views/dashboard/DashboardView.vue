@@ -154,7 +154,9 @@ const { data: upcoming, isPlaceholderData: upcomingStale } = useDashboardUpcomin
   () => deliveryDays.value,
 );
 
-/** 后端判定的「今天」（'YYYY-MM-DD'）。前端一律用它，不再 new Date()。 */
+/** 后端判定的「今天」（'YYYY-MM-DD'）。前端一律用它，不再 new Date()。
+ *  首帧 `upcoming` 尚未落地时为空串：柱状图据此渲染空坐标轴（不造假柱），
+ *  「今日到期」取不到桶即 0。 */
 const upcomingToday = computed<string>(() => upcoming.value?.today ?? '');
 
 /** 交期分桶（来自端点 2，可能为空数组）。 */
@@ -171,7 +173,9 @@ const deliveryBuckets = computed(() => snapshot.value?.system_delivery_orders ??
 // ============ KPI 派生 ============
 const overdueCount = computed<number>(() => snapshot.value?.overdue_count ?? 0);
 
-/** 今日到期：端点 2 的分桶恒从 today 起按序生成，首桶即今天。 */
+/** 今日到期 = 首桶 count。「首桶即今天」不是口头约定：
+ *  `upcomingBucketsSchema` 的末位 refine 在 queryFn 守门处强制 today === buckets[0].date，
+ *  后端漂了会抛错而不是让这个 KPI 静默显示错日的数字。 */
 const todayCount = computed<number>(() => upcomingBuckets.value[0]?.count ?? 0);
 
 /** 窗口内到期：全 N 天桶 count 之和（非按某个自然周切）。 */

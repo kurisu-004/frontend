@@ -8,8 +8,9 @@
 //   - W2：params=null 时 enabled=false，请求不发；
 //   - W3：params.statuses 为空数组时 enabled=false（防御性：后端对空白 statuses
 //     走 validation 40001，前端不发比发必失败的请求更省）；
-//   - W4：queryFn 从 queryKey 读 params 下发请求（statuses 逗号拼接在 api 层做，
-//     这里断言传给 api 的是数组形态）；
+//   - W4：换 params 后不调 fetchList，自动 refetch 直接带新 params（请求参数 ≡ 当前
+//     缓存键，queryFn 不捕获 setup 期的旧值）；
+//   - W4b：响应只落在与请求同源的缓存键下（键与请求参数不得各说各话）；
 //   - W5：切日期 / 切层 / 切口径各换键并自动 refetch；
 //   - W6：WS 事件触发 invalidate —— 走前缀键（精确键只会失效当前那一条）；
 //   - W7：total 不受 items 截断影响（抽屉头部「共 N 件」的来源）。
@@ -169,22 +170,61 @@ describe('useDashboardDeliveryOrders — 下钻明细 query（2026-10-07）', ()
     scope.stop();
   });
 
-  it('W4：queryFn 从 queryKey 读 params 下发请求（不闭包捕获 stale 值）', async () => {
+  it('W4：换 params 后不调 fetchList，自动 refetch 直接带新 params（不闭包捕获 stale）', async () => {
     const params = ref<Params | null>({
       date: '2026-10-01',
       statuses: ['PENDING', 'PROGRAMMING'],
       basis: 'planned',
     });
     const { scope, comp } = mountOrders(params);
-    await comp.fetchList();
-
+    // 只靠挂载时的自动取数，不调 fetchList —— fetchList 会强制 refetch，把
+    // 「queryFn 读到的是不是新值」这件事整个盖掉。
+    await new Promise((resolve) => setTimeout(resolve, 30));
     expect(fetchDeliveryOrdersMock).toHaveBeenCalledWith({
       date: '2026-10-01',
       statuses: ['PENDING', 'PROGRAMMING'],
       basis: 'planned',
     });
+
+    // 证伪力：若 queryFn 在 setup 期就把 params 求值捕获下来（闭包 stale 实现），
+    // 这次换键触发的请求仍会带 10-01，断言即失败。
+    fetchDeliveryOrdersMock.mockClear();
+    params.value = { date: '2026-10-09', statuses: ['DELIVERED'], basis: 'system' };
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(fetchDeliveryOrdersMock).toHaveBeenCalledTimes(1);
+    expect(fetchDeliveryOrdersMock).toHaveBeenCalledWith({
+      date: '2026-10-09',
+      statuses: ['DELIVERED'],
+      basis: 'system',
+    });
     expect(comp.data.value).toHaveLength(1);
-    expect(comp.data.value[0]?.drawing_no).toBe('DWG-001');
+    scope.stop();
+  });
+
+  it('W4b：响应只落在与请求同源的缓存键下（键与请求参数不得各说各话）', async () => {
+    // 键与请求参数同源是这个 composable 的核心不变量：一旦某天改成「键算一份、
+    // 请求参数从别处再取一份」，响应就会被写进错误的键，前端随后从该键读出别的日期的
+    // 数据且毫无报错。这里让 mock 按收到的 date 回带标记数据，再逐键对账。
+    fetchDeliveryOrdersMock.mockImplementation((p: Params) =>
+      Promise.resolve(makeOut({ date: p.date, total: Number(p.date.slice(8)) })),
+    );
+    const params = ref<Params | null>({
+      date: '2026-10-01',
+      statuses: ['PENDING'],
+      basis: 'planned',
+    });
+    const { scope } = mountOrders(params);
+
+    for (const day of ['2026-10-01', '2026-10-02', '2026-10-03']) {
+      params.value = { date: day, statuses: ['PENDING'], basis: 'planned' };
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const entry = testQueryClient
+        .getQueryCache()
+        .find({ queryKey: qk.dashboardDeliveryOrders(params.value) });
+      // 该键下缓存的必须是「按这一天请求回来的」那份 total（= 日期的日号）。
+      expect(entry?.state.data).toMatchObject({ date: day, total: Number(day.slice(8)) });
+    }
     scope.stop();
   });
 

@@ -19,6 +19,9 @@
 import { api, cleanParams, normalizeListResult } from '@/api/http';
 import type { ListPartsParams, PartListResult } from '@/api/parts';
 
+/** 后端 com/union_list 支持的四态行类型。
+ *  `PART_FLAT` 目前**没有调用方** —— 它是后端已上线、类型层先备着的合法值，用到它时
+ *  直接传即可，不必再改这个 union。 */
 export type UnionListRowType = 'ALL' | 'PART' | 'PART_FLAT' | 'ASSEMBLY';
 
 /** ListPartsParams 含 row_type 与 include_assemblies 字段，union-list 端点：

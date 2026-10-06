@@ -17,10 +17,26 @@
 //   - U7：scope 停止后 onDashboardEvent handler 从 Set 清零（不累加订阅）；
 //   - U8：queryKey 是**无维度常量键** —— 快照不再承载口径，交期分桶在独立 query；
 //   - U9：WS 事件失效走**前缀键**（qk.dashboardSnapshotPrefix）。
+//   - U10：不得配 placeholderData（keepPreviousData 职责归柱状图那个 query）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope } from 'vue';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
+import type * as VueQuery from '@tanstack/vue-query';
+
+// 透传真实实现的同时记录 useQuery 收到的 options —— U10 要断言「没有配
+// placeholderData」，而那是 options 上的一个键，行为侧（数据 / 失效）看不出来。
+const capturedQueryOptions: Record<string, unknown>[] = [];
+vi.mock('@tanstack/vue-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof VueQuery>();
+  return {
+    ...actual,
+    useQuery: (options: Record<string, unknown>) => {
+      capturedQueryOptions.push(options);
+      return (actual.useQuery as (o: unknown) => unknown)(options);
+    },
+  };
+});
 
 vi.mock('element-plus', () => ({
   ElMessage: {
@@ -299,6 +315,18 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate', () => {
     // 给快照再加维度时不至于静默漏失效。
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardSnapshotPrefix });
     expect(fetchSnapshotMock).toHaveBeenCalledTimes(1);
+    scope.stop();
+  });
+
+  it('U10：不得配 placeholderData（keepPreviousData 是柱状图自己的事）', () => {
+    // 快照是常量键、无口径维度，加 keepPreviousData 不会改善切参体验；但它会让
+    // 「逾期 / 在加工 / 在检 / 右栏两块面板」四个与口径无关的 KPI 在同键后台 refetch
+    // 期间跟着闪占位。职责归 useDashboardUpcoming（唯一有可变参数的 query）。
+    capturedQueryOptions.length = 0;
+    const { scope } = mountSnapshot();
+
+    expect(capturedQueryOptions).toHaveLength(1);
+    expect(capturedQueryOptions[0]?.placeholderData).toBeUndefined();
     scope.stop();
   });
 });

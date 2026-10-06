@@ -109,7 +109,9 @@ export type ConnectionStatus = 'connecting' | 'open' | 'closed';
 // 上，桶的**个数**恒为请求的 days（服务端零填充），各桶件数随口径变化，合计**无可比
 // 大小关系**（同一工单的两列可能分别落在窗口内外）。图卡上的口径开关旁挂了提示，避免
 // 用户把差异误读成数据丢失。
-export type DeliveryBasis = 'planned' | 'system';
+export const DELIVERY_BASES = ['planned', 'system'] as const;
+
+export type DeliveryBasis = (typeof DELIVERY_BASES)[number];
 
 /** 口径 → 中文名（图卡开关 / 抽屉 header 共用同一份文案）。 */
 export const DELIVERY_BASIS_LABEL: Record<DeliveryBasis, string> = {
@@ -124,9 +126,6 @@ export const DELIVERY_BASIS_LABEL: Record<DeliveryBasis, string> = {
 // SystemDeliveryOrderData / DeliveryOrderDetailData），但通用预览弹窗只读 4 个字段
 // （序列号 / 名称 / 状态 + 按 id 拉图纸与批次两个独立请求）。收成这个最小结构而不是
 // 让弹窗去认某个具体 VO：弹窗的契约就摆在这里，加字段时必须同步评估它的渲染面。
-//
-// 2026-10-07 起原先的 `PartListItem` 入参被这个结构取代 —— 大屏三条路径不再传
-// PartListItem。PartListItem 本身在零件一览页仍是权威类型，与本结构无耦合。
 export interface PartPreviewTarget {
   id: string;
   serial_no: string | null;

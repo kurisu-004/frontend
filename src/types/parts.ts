@@ -23,8 +23,7 @@ export type WarehouseStatus = '未入库' | '部分入库' | '已入库';
  *  删掉成员会让类型层与 Zod 枚举一起收窄、老环境直接解析失败。
  *
  *  2026-10-07：提到这里成为单一来源，`OrderStatus` 由它派生，dashboard 域 VO 的
- *  status 字段（Zod `z.enum`）也直接引用 —— 状态字面量此前在 partSchema 的
- *  `z.enum([...])` 与本文件的 union 里各写一份，dashboard 新增 VO 时容易只加一处。 */
+ *  status 字段（Zod `z.enum`）也直接引用 —— 新增 VO 时不会漏加一处。 */
 export const ORDER_STATUSES = [
   'PENDING',
   'PROGRAMMING',

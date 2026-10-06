@@ -25,6 +25,7 @@ import {
   upcomingDeliveryBucketSchema,
   workerHeldBatchSchema,
 } from '../dashboardSnapshotSchema';
+import { DELIVERY_BASES } from '@/types/dashboard';
 
 function makeBaseWorkerHeldBatch(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -320,6 +321,32 @@ describe('upcomingBucketsSchema（分桶响应 3 顶层字段）', () => {
       expect(() => upcomingBucketsSchema.parse(omit(makeBaseBuckets(), key))).toThrow();
     }
   });
+
+  // 「今日到期」KPI 完全建立在「首桶即今天」上。这条不变式由 refine 在 queryFn 守门处
+  // 机器校验 —— 后端漂了零填充起点，KPI 会静默显示错日的数字。
+  it('refine 正例：buckets[0].date === today（多桶也只看首桶）→ 通过', () => {
+    const parsed = upcomingBucketsSchema.parse({
+      today: '2026-10-07',
+      buckets: [
+        makeBaseBucket({ count: 5 }),
+        makeBaseBucket({ date: '2026-10-08', count: 2, by_status: { DELIVERED: 2 } }),
+      ],
+      ts: '2026-10-07T14:30:00.123+08:00',
+    });
+    expect(parsed.buckets[0]?.date).toBe('2026-10-07');
+  });
+
+  it('refine 反例：today 与 buckets[0].date 不一致 → 抛 ZodError', () => {
+    // 后端零填充起点前移一天（today 判成 10-06、分桶从 10-07 起）。
+    const drifted = {
+      ...makeBaseBuckets(),
+      buckets: [makeBaseBucket({ date: '2026-10-06', count: 5 })],
+    };
+    expect(() => upcomingBucketsSchema.parse(drifted)).toThrow();
+
+    // buckets 为空同样违约（后端恒返 days 条，days 经 clamp 后 ≥1）。
+    expect(() => upcomingBucketsSchema.parse({ ...makeBaseBuckets(), buckets: [] })).toThrow();
+  });
 });
 
 describe('deliveryOrderDetailSchema（下钻行 9 字段）', () => {
@@ -386,5 +413,20 @@ describe('deliveryOrderDetailOutSchema（下钻响应 5 顶层字段）', () => 
     for (const key of ['total', 'date', 'basis', 'items', 'ts']) {
       expect(() => deliveryOrderDetailOutSchema.parse(omit(makeBaseDetailOut(), key))).toThrow();
     }
+  });
+
+  it('basis 锁 DELIVERY_BASES 两个口径（非法值 → 抛 ZodError）', () => {
+    // basis 是请求参数回显：它只能等于前端发出的那个口径，后端不可能回出第三个值。
+    for (const basis of DELIVERY_BASES) {
+      expect(deliveryOrderDetailOutSchema.parse({ ...makeBaseDetailOut(), basis }).basis).toBe(
+        basis,
+      );
+    }
+    expect(() =>
+      deliveryOrderDetailOutSchema.parse({ ...makeBaseDetailOut(), basis: 'PLANNED' }),
+    ).toThrow();
+    expect(() =>
+      deliveryOrderDetailOutSchema.parse({ ...makeBaseDetailOut(), basis: '' }),
+    ).toThrow();
   });
 });

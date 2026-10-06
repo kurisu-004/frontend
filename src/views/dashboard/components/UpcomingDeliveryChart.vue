@@ -153,6 +153,8 @@ import type { DeliveryBasis } from '@/types/dashboard';
  *  REPAIRING 后端 2026-10-01 起不再产生，也不进 LAYERS —— 保留它不会降级也不会 400
  *  （statuses 在后端零校验 + `= ANY` 文本比较），但会恒匹配 0 行，即点了顶层柱看到
  *  空抽屉。
+ *  每层 statuses 会逗号拼进下钻请求，后端限长 ≤16 元素 / ≤256 字节（超限 40001）；
+ *  当前最宽的顶层 4 个状态、拼串 40 字节，离闸门很远，加状态前先看一眼这条。
  *  颜色走 EP 预设 hex（success green #67c23a / warning orange #e6a23c /
  *  danger red #f56c6c），对齐项目其它 danger/warning/success 标签。
  *  **必须用 hex 而非 var()** —— ECharts Canvas renderer 解析 var() 不可靠。 */
@@ -236,10 +238,14 @@ function formatLabel(iso: string): string {
  *
  *  按**本地零点**构造 Date：`new Date('YYYY-MM-DD')` 这种 date-only 形式按 UTC 零点
  *  解读，在东八区会把起点的日历日往前挪一天，整条坐标轴错位（与 utils/deliveryDate
- *  修掉的同一类缺陷）。解析失败（非法 today）退化为单桶，保证不抛错。 */
+ *  修掉的同一类缺陷）。
+ *
+ *  today 非法时（首帧 `upcoming` 尚未落地，父组件传的是空串）返回**空序列**：
+ *  空数据配空坐标轴，比造一根 `date: ''` 的假柱诚实 —— 那根假柱会把 14 根柱塌成
+ *  1 根空标签柱，被点到时还会 emit `date: ''`，让抽屉发一个空日期出去。 */
 function nextNDays(days: number, today: string): string[] {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(today);
-  if (!m) return [today];
+  if (!m) return [];
   const cursor = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   const out: string[] = [];
   for (let i = 0; i < days; i++) {

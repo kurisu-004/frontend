@@ -250,9 +250,7 @@ export const partSchema = z.object({
   // （后端 VO 无 skip_serializing_if，键在、值为 null，不是 undefined）。与 batch_id
   // 同理**必须显式声明** —— zod 默认 strip 会静默丢弃它，让后续消费者（装配件子件
   // 归组等）以为「所有行都没有父装配件」。声明成 nullable + optional：复用同一 VO
-  // 的其余端点（GET /parts 家族）不填该列。**当前 dashboard 无读点**（行源已切
-  // PART_FLAT，抽屉与交期面板均按纯 t_part 行展示，不加装配件标识列/树形/标签），
-  // 声明只为不让后续消费者踩 strip 坑。
+  // 的其余端点（GET /parts 家族）不填该列。声明只为不让后续消费者踩 strip 坑。
   assembly_id: z.string().nullable().optional(),
   has_children: z.boolean().optional(),
   child_count: z.number().nullable().optional(),
