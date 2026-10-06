@@ -10,7 +10,9 @@
 //   - V4：换键占位（keepPreviousData）—— data 沿用上一份 + isPlaceholderData=true，
 //     同键后台 refetch 时 isPlaceholderData=false（提示层的信号只能取后者）；
 //   - V5：WS 事件触发 invalidate（走前缀键，一次命中全部 basis × days 组合）；
-//   - V6：Zod parse 失败 → query.error 非空。
+//   - V6：Zod parse 失败（缺 today 必填字段）→ query.error 非空；
+//   - V7：Zod refine 失配（today 与 buckets[0].date 漂移）→ query.error 非空 +
+//     错误经 ElMessage 桥接暴露成显式故障。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, effectScope, nextTick, ref } from 'vue';
@@ -58,6 +60,7 @@ vi.mock('@/api/dashboard', () => ({
 }));
 
 import { useDashboardUpcoming } from '../useDashboardUpcoming';
+import { ElMessage } from 'element-plus';
 import { qk } from '@/composables/queries/keys';
 import type { DeliveryBasis } from '@/types/dashboard';
 import type { MaybeRefOrGetter } from 'vue';
@@ -235,6 +238,31 @@ describe('useDashboardUpcoming — 交期分桶 query（2026-10-07）', () => {
       // 期望抛错
     }
     expect(comp.query.error.value).not.toBeNull();
+    scope.stop();
+  });
+
+  it('V7：refine 失配（today 与 buckets[0].date 漂移）→ query.error 非空 + ElMessage 桥接', async () => {
+    // 三个顶层字段全部齐全，只有 refine 能抓住这条：服务端若从别的日期起零填充，
+    // 「今日到期」KPI（取首桶 count）就会静默显示错日的数字，必须在守门处炸掉。
+    fetchUpcomingMock.mockResolvedValue(
+      makeBuckets({
+        buckets: [{ date: '2026-10-06', count: 8, by_status: { IN_PROCESS: 3, DELIVERED: 5 } }],
+      }),
+    );
+
+    const basis = ref<DeliveryBasis>('system');
+    const days = ref(14);
+    const { scope, comp } = mountUpcoming(basis, days);
+    try {
+      await comp.fetchList();
+    } catch {
+      // 期望抛错
+    }
+    expect(comp.query.error.value).not.toBeNull();
+    // 漂移数据不得落到 data 上（否则柱状图与 KPI 会画出错的今天）。
+    expect(comp.data.value).toBeUndefined();
+    await nextTick();
+    expect(ElMessage.error).toHaveBeenCalled();
     scope.stop();
   });
 });

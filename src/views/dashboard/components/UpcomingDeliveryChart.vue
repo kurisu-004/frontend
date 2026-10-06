@@ -201,7 +201,6 @@ const emit = defineEmits<{
 /** 窗口天数选择器的固定档位（值域受后端 clamp 1..60 约束）。 */
 const DAY_OPTIONS = [7, 14, 30] as const;
 
-
 /** 3 层状态分组实例（必须在 defineProps/defineEmits 之后，沿 vue/define-macros-order
  *  ESLint 约定）。
  * 顺序 [bottom, middle, top] —— ECharts 横向堆叠时，series 数组中后入的 series 会

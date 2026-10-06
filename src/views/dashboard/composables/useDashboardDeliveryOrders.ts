@@ -59,7 +59,7 @@ export function useDashboardDeliveryOrders(
   // 让键保持稳定（enabled 闸门已保证不会真的发请求）。
   const keyParams = computed<DeliveryOrdersParams>(() => {
     const p = toValue(params);
-    return p ?? { date: '', statuses: [] as OrderStatus[], basis: 'system' };
+    return p ?? { date: '', statuses: [], basis: 'system' };
   });
 
   const queryKey = computed(() => qk.dashboardDeliveryOrders(keyParams.value));
@@ -68,6 +68,14 @@ export function useDashboardDeliveryOrders(
     queryKey,
     queryFn: async () => {
       // 从 queryKey 读最新 params（reactive params 范式），避免闭包捕获 stale。
+      //
+      // 2026-10-07 登记测试盲区：「从 queryKey 读」与「从 params 读」在当前键工厂的
+      // 恒等映射下运行期等价，没有任何断言能区分两者。被断言真正守住的是两点 ——
+      // (a) 不捕获 setup 期旧值（W4/W5）；(b) 请求参数与缓存键同源（W4b）。
+      // 若将来键工厂引入归一化（排序 statuses / trim date —— TanStack hashKey 对数组
+      // 顺序敏感），queryKey.value[2] 送的是归一化后的值、toValue(params) 送的是调用
+      // 方原序的值，请求与缓存键就会分家，而上述用例全都不会红；届时需补一条能区分
+      // 两个数据源的用例。
       return deliveryOrderDetailOutSchema.parse(await fetchDeliveryOrders(queryKey.value[2]));
     },
     enabled: computed(() => {
