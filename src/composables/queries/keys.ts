@@ -30,6 +30,7 @@ import type { ListShelvesParams } from '@/api/shelves';
 // 处，沿 ListShelvesParams / ListPendingBatchesParams 的既有做法），本文件只引用。
 import type { WorkTypeListParams } from '@/api/workType';
 import type { ProcessCategory } from '@/types/process';
+import type { OrderStatus } from '@/types/parts';
 import type { DeliveryBasis } from '@/types/dashboard';
 import type { UnionListParams } from '@/api/com/unionList';
 
@@ -60,53 +61,43 @@ export const qk = {
    *  qc.invalidateQueries({ queryKey: qk.partsPrefix }) 失效整个 parts 域（任意
    *  listParts 参数形态都会命中）。与 customersPrefix / processesPrefix 同形。 */
   partsPrefix: ['parts'] as const,
-  /** 2026-09-28 新增：dashboard 域大屏快照键（HTTP 全量首取 + WS 事件 invalidate）。
-   *  2026-10-04 改为**工厂**：键含交期统计口径 basis 维度（planned / system），两种
-   *  口径的 upcoming_delivery 分桶口径不同、不能共用同一份 cache identity，切口径
-   *  即换键，TanStack Query 自动为新键发一次请求（不依赖任何显式 refetch）。
+  /** 2026-10-07：dashboard 域大屏快照键（HTTP 全量首取 + WS 事件 invalidate）。
+   *  **无维度键**：快照本身没有口径概念（交期分桶已拆到独立的 dashboardUpcoming 端点），
+   *  后端也不接受任何 query 参数 ⇒ 键里没有任何可变量。切口径 / 切天数都不会换键，
+   *  刷新只发生在 WS 事件 invalidate 与 staleTime 到期两条路径上。
    *  失效走 qk.dashboardSnapshotPrefix（见下），不用本键。 */
-  dashboardSnapshot: (basis: DeliveryBasis) => ['dashboard', 'snapshot', basis] as const,
-  /** 2026-10-04 新增：dashboard snapshot 域前缀 —— 专供 WS 事件失效用。
-   *  键已含 basis 维度，WS 事件到达时该口径**以及另一口径**的缓存都应被失效（业务
-   *  写入会同时改变两种口径的统计结果，用户切回去时不能吃到旧数）⇒ 用前缀一把
-   *  partial match 同时命中 planned / system 两条，而不是只失效当前口径那一条。 */
+  dashboardSnapshot: () => ['dashboard', 'snapshot'] as const,
+  /** dashboard snapshot 域前缀 —— 专供 WS 事件失效用。 */
   dashboardSnapshotPrefix: ['dashboard', 'snapshot'] as const,
-  /** dashboard「交期工单」queryKey（2026-10-05 改为工厂：键含窗口下界 today）。
-   *  listUnionItems 拉 100 件 row_type=PART_FLAT（行源 = t_part 全表行，含装配件
-   *  子件、不含装配件父行，与 snapshot 的 upcoming_delivery[].count 同口径）、
-   *  system_delivery_date ∈ [today, today+6] 的非终态件，客户端在
-   *  src/utils/systemDeliveryOrders.ts 里按同一窗口再过一遍并分 urgent / partial 两桶。
-   *  命中 useDashboardInvalidation 同套 AFFECTS_DASHBOARD 事件集后自动 invalidate 重取。
+  /** 2026-10-07：dashboard「交期分桶」queryKey（柱状图数据源 + 今日 / 窗口 KPI 派生）。
+   *  listUpcomingDelivery 取服务端零填充好的 days 条分桶，并回一个后端判定的 `today`
+   *  作「今天」锚点（前端不再 new Date()）。
    *
-   *  **today 必须进键**：本 query 的 gcTime 是 POSITIVE_INFINITY（dashboard 域例外，
-   *  靠 WS 事件失效），若 today 不进键，跨零点后新窗口的请求会命中「昨天的窗口」
-   *  缓存并常驻（全局 refetchOnWindowFocus: false，无焦点重取可救）。
-   *  2026-10-05：键里的 date 由 useDashboardUrgentList 在 setup 里捕获一次（同值同时
-   *  喂给 splitForDashboard 作客户端窗口下界）⇒ 重新挂载后一定是新窗口的键，但常驻
-   *  页面跨零点后不会自动换窗（无定时 tick 驱动重算）。
-   *  失效走 dashboardUrgentListPrefix（见下），不用本键。 */
-  dashboardUrgentList: (date: string) => ['dashboard', 'urgent-list', date] as const,
-  /** 2026-10-05 新增：urgent-list 域前缀 —— 专供 WS 事件失效用。键已含 today 维度，
-   *  事件到达时昨天窗口那条缓存同样过期（业务写入会改变窗口内的件集合），用前缀一把
-   *  partial match 命中全部日期形态，而不是只失效当前 today 那一条。 */
-  dashboardUrgentListPrefix: ['dashboard', 'urgent-list'] as const,
-  /** 2026-09-29 新增：dashboard「逾期未交 KPI」queryKey。
-   *  fetchOverview 拉当天日期范围内的 overdue_undelivered_count，仅 Manager 角色
-   *  启用（enabled: isManager 闸门），非 Manager 不发请求。 */
-  dashboardOverdue: ['dashboard', 'overdue'] as const,
-  /** dashboard「交期分桶柱状图按层点击抽屉」queryKey。
-   *  2026-10-04：params 加交期统计口径 basis —— 下钻的日期窗口与排序必须跟柱状图
-   *  当前口径一致（planned 发 planned_delivery_date_from/to + sort_by
-   *  'PLANNED_DELIVERY_DATE'；system 发 system_delivery_date_from/to + sort_by
-   *  'SYSTEM_DELIVERY_DATE'，两组参数互斥、绝不同时发）。口径进了键，切口径即换键
-   *  自动 refetch，抽屉不会拿计划交期的工单冒充系统交期的下钻结果。
-   *  失效走前缀（见 useDashboardUpcomingList 注释）—— 该处现用字面量前缀，是本仓
-   *  既有写法，新增前缀键时不要照抄，优先在本文件补 <域>Prefix 键。 */
-  dashboardUpcomingList: (params: { date: string; statuses: string[]; basis: DeliveryBasis }) =>
-    ['dashboard', 'upcoming-list', params] as const,
-  /** 2026-09-28 新增：dashboard 域前缀 —— WS 事件触发 invalidate 用；
-   *  2026-10-04 更新覆盖范围：包含两种口径的 dashboardSnapshot、
-   *  dashboardUrgentList、dashboardOverdue、dashboardUpcomingList 四类 query，
+   *  **basis 与 days 都必须进键**：两者任意变化都换缓存身份，切口径 / 切天数即自动
+   *  refetch。本 query 的 gcTime 是 POSITIVE_INFINITY（dashboard 域例外，靠 WS 事件
+   *  失效），不把可变入参进键会让「上一次的口径 / 天数」缓存被下一次请求直接命中。
+   *  失效走 dashboardUpcomingPrefix（见下），不用本键。 */
+  dashboardUpcoming: (basis: DeliveryBasis, days: number) =>
+    ['dashboard', 'upcoming', basis, days] as const,
+  /** dashboard「交期分桶」域前缀 —— 专供 WS 事件失效用。键含 basis + days 两个维度，
+   *  事件到达时所有组合（任意口径 × 任意天数）都过期，用前缀一把 partial match 命中，
+   *  而不是只失效当前那一条。 */
+  dashboardUpcomingPrefix: ['dashboard', 'upcoming'] as const,
+  /** 2026-10-07：dashboard「柱状图按层下钻明细」queryKey。
+   *  listDeliveryOrders 按 date + statuses + basis 查工单明细；statuses 序列化成数组进键，
+   *  保证换层 / 换日期 / 换口径都换缓存身份。失效走 dashboardDeliveryOrdersPrefix。 */
+  dashboardDeliveryOrders: (params: {
+    date: string;
+    statuses: readonly OrderStatus[];
+    basis: DeliveryBasis;
+  }) => ['dashboard', 'delivery-orders', params] as const,
+  /** dashboard「柱状图按层下钻明细」域前缀 —— 专供 WS 事件失效用。params 随用户切层 /
+   *  切日期 / 切口径不断变化，事件到达时要失效的是整个维度（此前挂载过、现已切走的那些
+   *  查询同样过期），故用前缀而非精确键。 */
+  dashboardDeliveryOrdersPrefix: ['dashboard', 'delivery-orders'] as const,
+  /** dashboard 域前缀 —— WS 事件触发 invalidate 用；
+   *  覆盖范围：dashboardSnapshot（无维度）、dashboardUpcoming（basis × days）、
+   *  dashboardDeliveryOrders（date × statuses × basis）三类 query，
    *  invalidateQueries({ queryKey: qk.dashboardPrefix }) 一键全失效。 */
   dashboardPrefix: ['dashboard'] as const,
   /** 2026-09-29 新增：零件 owner 维度文件列表共享 query 键。

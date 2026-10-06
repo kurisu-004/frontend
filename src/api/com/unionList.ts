@@ -9,15 +9,6 @@
 // 老 /api/v2/parts 回退到 PART-only；listParts（@/api/parts）仍存在（processChain.ts 在用），
 // 这里仅迁移零件一览页（src/views/parts/list/）到 com 域新端点。
 //
-// **PART_FLAT 的后端依赖（2026-10-05）**：该行类型尚未合入后端主线 —— 后端
-// `RowType::parse` 的白名单只有 PART / ASSEMBLY / ALL（None/空串归 ALL），下发本值会
-// 命中 `Err(AppError::validation)` ⇒ `40001 VALIDATION_ERROR`。**发布顺序必须后端先**：
-// 后端 feat/dashboard-part-flat-count 合入并上线后本值才可用；在此之前任何下发
-// PART_FLAT 的调用方（dashboard 交期分桶柱状图的按层下钻抽屉、最紧急工单面板）
-// 会整条请求 400、面板与抽屉恒空并各弹一条 ElMessage.error。
-// 本端**故意不加运行时兜底**（不回落 ALL / 不静默吞错误）：那会把「发布顺序错」这个
-// 配置问题伪装成一次成功的空结果，故障现场更难定位。
-//
 // 四态合并 + 分页修复的设计动机（详见 plan: com-get-part-union-all-t-assembly-t-par-graceful-mitten）：
 //   - 域边界回归：part 域不再查 t_assembly；跨表合并下沉到 com 域；
 //   - 分页 bug 修复：原 ALL 分支用 segment_limit = (limit+offset).clamp(1,200) 把每段
@@ -28,6 +19,9 @@
 import { api, cleanParams, normalizeListResult } from '@/api/http';
 import type { ListPartsParams, PartListResult } from '@/api/parts';
 
+/** 后端 com/union_list 支持的四态行类型。
+ *  `PART_FLAT` 目前**没有调用方** —— 它是后端已上线、类型层先备着的合法值，用到它时
+ *  直接传即可，不必再改这个 union。 */
 export type UnionListRowType = 'ALL' | 'PART' | 'PART_FLAT' | 'ASSEMBLY';
 
 /** ListPartsParams 含 row_type 与 include_assemblies 字段，union-list 端点：

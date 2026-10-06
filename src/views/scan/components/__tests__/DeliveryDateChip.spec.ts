@@ -13,21 +13,14 @@
 // 紧迫样式与剩余天数文案是同一个日期的两副面孔（`deliveryUrgencyClass` /
 // `deliveryDaysLeftText` 都以系统交期为唯一输入），一并钉住，避免两个函数某天只改一个。
 //
-// ⚠️ `deliveryDate.ts` 内部把 `systemDeliveryDate` 归一成**日期串**再用 `new Date()`
-// 解析，日期串按 UTC 零点解读，而「今天」是本地零点 ⇒ 东八区下天数会多算一天（该缺陷
-// 的权威登记在 `src/utils/deliveryDate.ts` 文件头）。本文件用 `isoForDiffDays(n)` 反推出
-// 「在该口径下正好差 n 天」的日期串，于是「2 天后到期」这类断言在任意时区都成立（红的
-// 不会只是机器时区）。日期**格式**（MM/DD 与否）用形状断言而不是写死日历日，同理。
+// `deliveryDate.ts` 把 `systemDeliveryDate` 归一成日期串后按**本地零点**构造 Date，与
+// 「今天」的本地零点同基准。本文件用 `isoForDiffDays(n)` 反推出「正好差 n 天」的日期串
+// （取本地日历分量，不是 UTC 分量），于是「2 天后到期」这类断言在任意时区都成立
+// （红的不会只是机器时区）。日期**格式**（MM/DD 与否）用形状断言而不是写死日历日，同理。
 //
-// 职责边界（2026-10-04 review 第 1 轮，review 第 2 轮修正）：本文件只管**组件渲染契约**
-// （渲染不渲染、渲什么形状、挂不挂 class），**不越界去管天数的绝对值**。
-//
-// 缺陷的 TZ 两档对照锁在 `src/utils/__tests__/deliveryDate.spec.ts`；那边是权威。
-// ⚠️ 修 `deliveryDate.ts` 那个时区缺陷时**两个文件都会红**，必须一起改：上面那个
-// `isoForDiffDays` 是按**当前（带缺陷的）口径**反推日期串的，缺陷一修，它产出的串会比
-// 正确值少一天，「2天后到期」就变成了「1天后到期」。本文件的职责只是「不去重复断言
-// 天数」，**不是**「修 bug 时不受影响」——2026-10-04 实测：按最小修法改
-// `deliveryDate.ts` 后，两个 spec 共 3 条变红（那边 1 条 + 这边 2 条）。
+// 职责边界：本文件只管**组件渲染契约**（渲染不渲染、渲什么形状、挂不挂 class），
+// **不越界去管天数的绝对值**。天数的 TZ 两档对照锁在
+// `src/utils/__tests__/deliveryDate.spec.ts`；那边是权威。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
@@ -44,17 +37,17 @@ const stubs = {
 };
 
 /**
- * 造一个「`deliveryDate.ts` 口径下正好差 n 天」的系统交期值（本地正午时间戳）。
- * 见文件头：直接用「今天 + n 天」拼串会在 UTC+8 下少一天。
+ * 造一个「正好差 n 天」的系统交期值（本地正午时间戳）。
+ * 取**本地日历分量**拼串：与 deliveryDate 的本地零点口径同基准，故任意时区下
+ * 产出的串与「今天」都正好差 n 个日历日。
  */
 function isoForDiffDays(n: number): string {
   const todayMidnight = new Date();
   todayMidnight.setHours(0, 0, 0, 0);
   const target = new Date(todayMidnight.getTime() + n * 86400000);
-  // 取 UTC 日历分量拼成本地正午：解析结果落在同一个民用日，且 UTC 零点口径下正好差 n 天
-  const mm = String(target.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(target.getUTCDate()).padStart(2, '0');
-  return `${target.getUTCFullYear()}-${mm}-${dd}T12:00:00`;
+  const mm = String(target.getMonth() + 1).padStart(2, '0');
+  const dd = String(target.getDate()).padStart(2, '0');
+  return `${target.getFullYear()}-${mm}-${dd}T12:00:00`;
 }
 
 function render(systemDeliveryDate: string | null) {

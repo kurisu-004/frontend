@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 // src/views/dashboard/components/__tests__/UpcomingDeliveryListDrawer.spec.ts
 //
-// 2026-09-30 新增：UpcomingDeliveryListDrawer 三态渲染回归保护。
+// UpcomingDeliveryListDrawer 三态渲染回归保护。
 // 覆盖：
 //   - U1：modelValue=true + statuses.length > 0 → 抽屉渲染 + 表头展示
-//   - U2：modelValue=false → useDashboardUpcomingList enabled=false，listUnionItems 不被调
+//   - U2：modelValue=false → useDashboardDeliveryOrders enabled=false，请求不被发
 //   - U3：rows 非空 → el-table 显示 N 行
 //   - U4：rows 为空 + pending=false → 「该日该层无工单」empty text
 //   - U5：v-model 双向同步 —— update:modelValue 事件正确发出
@@ -12,29 +12,20 @@
 //   - U6：el-drawer direction=btt + size=60%（Phase 5 改 btt 防回归）
 //   - U7：el-table 行点击 → emit('rowClick', part)（Phase 5 新增行点击事件防回归）
 //
-// 2026-10-04 追加「交期统计口径」覆盖（U8~U10）：倒计列取当前口径对应的交期字段 /
-// system 口径下系统交期为空则倒计列留空 / header 口径标签随 basis 变化。日期取
-// 2099 年的远期值：deliveryDaysLeftText 对 >3 天的远期返回空串，倒计时稳定回落到
-// MM/DD，断言不随「测试运行当天」漂移。
+// 「交期统计口径」覆盖（U8~U10）：倒计列取当前口径对应的交期字段 / system 口径下
+// 系统交期为空则倒计列留空 / header 口径标签随 basis 变化。日期取 2099 年的远期值：
+// deliveryDaysLeftText 对 >3 天的远期返回空串，倒计时稳定回落到 MM/DD，断言不随
+// 「测试运行当天」漂移。
 //
-// 2026-10-05 追加「头部件数不谎报」覆盖（U11 / U12）：件数取服务端 total，被
-// 服务端 limit 截断（total > 取回条数）时追加「仅显示前 N 条」提示，未截断时
-// 不渲染任何提示。
-// 2026-10-05 追加 U13：首次加载（query.data 未落地、isPending 为 true）时，头部**不
-// 渲染件数** —— 此时渲染「共 0 件」会被读成一个权威计数（该 query 无 placeholderData）。
-// 换键（切 basis / 切日期 / 切层）走同一分支、同样 isPending，不必单列用例。
-// 2026-10-05 追加 U14 / U15：
-//   - U14：请求失败后 isPending 归 false、total 回落 0，头部同样不得渲染「共 0 件」；
-//   - U15：后台 refetch 期（isPending=false、isFetching=true、data 仍在）头部**照常**
-//     渲染件数 —— 该开关盯的是 isPending，不是 isFetching，否则 30s stale 后的后台重取
-//     会让头部计数整段闪烁。
+// 「头部件数不谎报」覆盖（U11~U15）：件数取服务端 total（不受 items 截断影响），
+// 被截断时追加「仅显示前 N 条」；首次加载（isPending）与请求失败（error）期都不渲染
+// 「共 0 件」；后台 refetch 期（isPending=false、isFetching=true、data 仍在）头部照常
+// 渲染 —— 开关盯的是 isPending，不是 isFetching。
 //
-// 2026-10-04 纯测试基建修复（零生产代码改动）：原 ElTable stub 只按 :data 数行、
-// 根本不渲染默认 slot，等于整张表一个单元格都不渲染 —— 任何列级断言在这样一张空表上
-// 都无从谈起。修法照抄真实 Element Plus 的做法：stub 的 ElTable 按 :data 渲染
-// .mock-row，行内 provide 出当前行（MockTableRow），列 stub inject 后按该行喂自己的
-// scoped slot ⇒ 模板里的 `const { row } = undefined` 不再抛错，且列断言真的绑定到
-// :data 的行上（:data 为空时列内容一个都不渲染，U4 有对应的反向断言）。
+// ElTable stub 照抄真实 Element Plus 的做法：按 :data 渲染 .mock-row，行内 provide
+// 出当前行（MockTableRow），列 stub inject 后按该行喂自己的 scoped slot ⇒ 模板里的
+// `const { row } = undefined` 不再抛错，且列断言真的绑定到 :data 的行上（:data 为空时
+// 列内容一个都不渲染，U4 有对应的反向断言）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
@@ -114,7 +105,7 @@ vi.mock('element-plus', () => ({
   ElTooltip: { template: '<span><slot /></span>' },
 }));
 
-const listUnionItemsMock = vi.fn();
+const fetchDeliveryOrdersMock = vi.fn();
 let lastEventHandler:
   | ((ev: { type: 'event'; event_type: string; data: Record<string, unknown>; ts: string }) => void)
   | null = null;
@@ -134,10 +125,8 @@ const onDashboardEventMock = vi.fn(
   },
 );
 
-vi.mock('@/api/com/unionList', () => ({
-  listUnionItems: (params: Record<string, unknown>) => listUnionItemsMock(params),
-}));
 vi.mock('@/api/dashboard', () => ({
+  fetchDeliveryOrders: (params: Record<string, unknown>) => fetchDeliveryOrdersMock(params),
   onDashboardEvent: (
     h: (ev: {
       type: 'event';
@@ -151,30 +140,32 @@ vi.mock('@/api/dashboard', () => ({
 import UpcomingDeliveryListDrawer from '../UpcomingDeliveryListDrawer.vue';
 import { qk } from '@/composables/queries/keys';
 
-function makePart(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+/** 下钻明细行（DeliveryOrderDetail VO，9 字段）。两列交期恒同时返回，倒计列由组件
+ *  按当前口径自己选列。 */
+function makeDetail(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: '180000000000001',
-    version: 1,
     serial_no: 'SN-001',
-    name: '零件甲',
     drawing_no: 'DWG-001',
-    applicant_name: null,
-    quantity: 10,
-    unit_price: '0',
-    total_price: '0',
-    request_date: '2026-09-29',
-    planned_delivery_date: '2026-10-01',
-    is_urgent: false,
-    status: 'PENDING',
-    order_no: null,
-    system_delivery_date: null,
-    note: null,
-    customer_name: '客户甲',
+    name: '零件甲',
     l1_customer_name: 'L1 客户',
-    location: null,
-    has_cnc_program: false,
-    row_type: 'PART',
+    customer_name: '客户甲',
+    status: 'PENDING',
+    planned_delivery_date: '2026-10-01',
+    system_delivery_date: null,
     ...overrides,
+  };
+}
+
+/** 下钻响应（DeliveryOrderDetailOut VO）。date / basis 是请求参数回显，total 不受
+ *  items 截断影响（服务端最多返 200 行）。 */
+function makeOut(items: unknown[], total: number): Record<string, unknown> {
+  return {
+    date: '2026-10-01',
+    basis: 'planned',
+    total,
+    items,
+    ts: '2026-10-07T14:30:00.123+08:00',
   };
 }
 
@@ -182,12 +173,12 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   let testQueryClient: QueryClient;
 
   beforeEach(() => {
-    listUnionItemsMock.mockReset();
+    fetchDeliveryOrdersMock.mockReset();
     onDashboardEventMock.mockClear();
     lastEventHandler = null;
-    // 2026-10-05：queries.retry: 0 与生产 main.ts 的全局默认对齐。插件自建 client 时
-    // 用的是库默认（queries.retry: 3 + 指数退避），错误态用例会等 1s+2s+4s 才落 error
-    // 态，既慢又不确定；显式关掉后错误态一次请求即定型。
+    // queries.retry: 0 与生产 main.ts 的全局默认对齐。插件自建 client 时用的是库默认
+    // （queries.retry: 3 + 指数退避），错误态用例会等 1s+2s+4s 才落 error 态，既慢又
+    // 不确定；显式关掉后错误态一次请求即定型。
     testQueryClient = new QueryClient({
       defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
     });
@@ -215,23 +206,19 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
         date: '2026-10-01',
         layer: 'top' as const,
         statuses,
-        // 口径必填 prop，缺省 planned（与视图缺省口径一致）
+        // 口径必填 prop，用例统一从 planned 起步
         basis: 'planned' as DeliveryBasis,
         ...overrides,
       },
       global: {
-        // 2026-10-05：client 随插件一起传。原先写 `plugins: [VueQueryPlugin]` +
-        // `provide: { VUE_QUERY_CLIENT }`，后者对本插件无效（vue-query 读的是 provide
-        // 之前就建好的插件私有 client），于是 testQueryClient 的缓存 / defaultOptions
-        // 全是空壳，组件实际跑在另一个 client 上。现形态下 testQueryClient.getQueryCache()
-        // 能看到组件建的 query，spec 也才能驱动 invalidate（U14 依赖这点）。
+        // client 随插件一起传，testQueryClient.getQueryCache() 才能看到组件建的
+        // query、defaultOptions 才真的生效（U14 依赖前者）。
         plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]],
         // 注册全局 stub：vi.mock('element-plus') 替换的 module export 不能被
         // Vue 自动注册到组件表里；这里手动用 kebab-case 注册保证 SFC 模板里
-        // 的 <el-tag> / <el-table> 等可以解析。
-        // 2026-09-30（Phase 7）调整：el-drawer / el-table 加 name + props/emits，
-        // 让 wrapper.findComponent({ name: 'ElDrawer' / 'ElTable' }) 能命中
-        // （U6 / U7 依赖此能力）。
+        // 的 <el-tag> / <el-table> 等可以解析。el-drawer / el-table 带 name +
+        // props/emits，wrapper.findComponent({ name: 'ElDrawer' / 'ElTable' })
+        // 才能命中（U6 / U7 依赖此能力）。
         components: {
           'el-drawer': {
             name: 'ElDrawer',
@@ -269,12 +256,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   }
 
   it('U1：modelValue=true + statuses.length>0 → 抽屉渲染 + 表头展示日期与层标签', async () => {
-    listUnionItemsMock.mockResolvedValue({
-      items: [makePart()],
-      total: 1,
-      limit: 500,
-      offset: 0,
-    });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail()], 1));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
 
@@ -292,25 +274,20 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     wrapper.unmount();
   });
 
-  it('U2：modelValue=false → useDashboardUpcomingList enabled=false，listUnionItems 不被调', async () => {
-    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+  it('U2：modelValue=false → useDashboardDeliveryOrders enabled=false，请求不发', async () => {
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([], 0));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts({ modelValue: false }));
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     await nextTick();
 
-    expect(listUnionItemsMock).not.toHaveBeenCalled();
+    expect(fetchDeliveryOrdersMock).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
   it('U3：rows 非空 → el-table 显示 N 行', async () => {
-    listUnionItemsMock.mockResolvedValue({
-      items: [makePart({ id: '180000000000001' }), makePart({ id: '180000000000002' })],
-      total: 2,
-      limit: 500,
-      offset: 0,
-    });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 2));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
 
@@ -323,7 +300,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   });
 
   it('U4：rows 为空 + pending=false → emptyText 生效', async () => {
-    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([], 0));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
 
@@ -340,7 +317,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   });
 
   it('U5：v-model 双向同步 —— update:modelValue 事件正确发出', async () => {
-    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([], 0));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await nextTick();
@@ -355,9 +332,9 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     wrapper.unmount();
   });
 
-  // 2026-09-30（Phase 7）新增：Phase 5 把 el-drawer 方向从 rtl 改为 btt + size 480→60%。
+  // el-drawer 方向 btt + size 60%（防回归）。
   it('U6：el-drawer direction=btt + size=60%（Phase 5 改动防回归）', async () => {
-    listUnionItemsMock.mockResolvedValue({ items: [], total: 0, limit: 500, offset: 0 });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([], 0));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
 
@@ -371,17 +348,11 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     wrapper.unmount();
   });
 
-  // 2026-09-30（Phase 7）新增：Phase 5 新增行点击 → emit('rowClick', part)。
-  // 通过 stub ElTable 的 vm.$emit('row-click', part) 直接驱动（沿 vue-echarts 8.3 适配思路：
-  // happy-dom 下 .el-table__row click 事件冒泡链路脆弱，直接 emit 最稳）。
+  // 行点击 → emit('rowClick', part)。通过 stub ElTable 的 vm.$emit('row-click', part)
+  // 直接驱动（happy-dom 下 .el-table__row click 事件冒泡链路脆弱，直接 emit 最稳）。
   it('U7：el-table 行点击 → emit rowClick(part)', async () => {
-    const part = makePart({ id: '180000000000001' });
-    listUnionItemsMock.mockResolvedValue({
-      items: [part],
-      total: 1,
-      limit: 500,
-      offset: 0,
-    });
+    const row = makeDetail({ id: '180000000000001' });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([row], 1));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -390,7 +361,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     const elTable = wrapper.findComponent({ name: 'ElTable' });
     expect(elTable.exists()).toBe(true);
     // el-table @row-click emit 名 = 'row-click'（kebab-case，vue 事件命名约定）
-    elTable.vm.$emit('row-click', part);
+    elTable.vm.$emit('row-click', row);
     await nextTick();
 
     const events = wrapper.emitted('rowClick');
@@ -410,12 +381,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   const FAR_SYSTEM = '2099-11-30';
 
   it('U8：倒计列按 basis 取字段（planned 取计划交期 / system 取系统交期）', async () => {
-    listUnionItemsMock.mockResolvedValue({
-      items: [makePart({ planned_delivery_date: FAR_PLANNED, system_delivery_date: FAR_SYSTEM })],
-      total: 1,
-      limit: 500,
-      offset: 0,
-    });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ planned_delivery_date: FAR_PLANNED, system_delivery_date: FAR_SYSTEM })], 1));
 
     const plannedWrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -433,12 +399,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   });
 
   it('U9：system 口径下系统交期为空 → 倒计列留空、不挂逾期样式', async () => {
-    listUnionItemsMock.mockResolvedValue({
-      items: [makePart({ planned_delivery_date: FAR_PLANNED, system_delivery_date: null })],
-      total: 1,
-      limit: 500,
-      offset: 0,
-    });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ planned_delivery_date: FAR_PLANNED, system_delivery_date: null })], 1));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts({ basis: 'system' }));
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -454,12 +415,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   });
 
   it('U10：header 口径标签随 basis 变化（抽屉自解释当前口径）', async () => {
-    listUnionItemsMock.mockResolvedValue({
-      items: [makePart()],
-      total: 1,
-      limit: 500,
-      offset: 0,
-    });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail()], 1));
 
     const plannedWrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -475,17 +431,12 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   });
 
   // ==========================================================================
-  // 2026-10-05：头部件数按 total 渲染 + 被 limit 截断时出提示
+  // 头部件数按 total 渲染 + 被服务端截断时出提示
   // ==========================================================================
 
   it('U11：total(9) > 取回条数(2) → 头部件数是 9 且追加「仅显示前 2 条」', async () => {
-    // 端点 limit 被后端 clamp(1, 200)，rows.length 只是本页拿回来的条数。
-    listUnionItemsMock.mockResolvedValue({
-      items: [makePart({ id: '180000000000001' }), makePart({ id: '180000000000002' })],
-      total: 9,
-      limit: 200,
-      offset: 0,
-    });
+    // items 被服务端截断到 200 行，rows.length 只是本页拿回来的条数。
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 9));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -499,12 +450,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   });
 
   it('U12：total === rows.length → 只出「共 N 件」，不渲染截断提示', async () => {
-    listUnionItemsMock.mockResolvedValue({
-      items: [makePart({ id: '180000000000001' }), makePart({ id: '180000000000002' })],
-      total: 2,
-      limit: 200,
-      offset: 0,
-    });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 2));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -520,8 +466,8 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     // （该 query 无 placeholderData）。此时 total 派生为 0，渲染出来会被读成
     // 「服务端确认 0 件」，而真相是「还没拿到数据」。
     // 用例名只钉「首次加载」这一种形态：换键（切 basis / 切日期 / 切层）走的是同一个
-    // 分支且同样 isPending（该 query 无 placeholderData ⇒ 新键无 data），不必单列。
-    listUnionItemsMock.mockReturnValue(new Promise(() => {}));
+    // 分支且同样 isPending（新键无 data），不必单列。
+    fetchDeliveryOrdersMock.mockReturnValue(new Promise(() => {}));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await nextTick();
@@ -536,7 +482,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
   it('U14：请求失败 → 不渲染「共 0 件」，只出错误块（0 件 ≠ 没拿到数据）', async () => {
     // 失败后 isPending 归 false、total 回落 0。若头部只盯 isPending，会渲染出
     // 「共 0 件」与下方红色错误块并存，自相矛盾且会被读成服务端确认了 0 件。
-    listUnionItemsMock.mockRejectedValue(new Error('boom'));
+    fetchDeliveryOrdersMock.mockRejectedValue(new Error('boom'));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -555,12 +501,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     // 已有数据 + 同键 invalidate 触发的后台 refetch：此时 query 已有 data、status 不是
     // pending，只有 fetchStatus 是 fetching。头部件数必须留着 —— 数字是当前且正确的，
     // 整段闪烁反而是大屏噪音。若把 composable 的 isPending 误接成 isFetching，本条红。
-    listUnionItemsMock.mockResolvedValue({
-      items: [makePart({ id: '180000000000001' }), makePart({ id: '180000000000002' })],
-      total: 2,
-      limit: 200,
-      offset: 0,
-    });
+    fetchDeliveryOrdersMock.mockResolvedValue(makeOut([makeDetail({ id: '180000000000001' }), makeDetail({ id: '180000000000002' })], 2));
 
     const wrapper = mount(UpcomingDeliveryListDrawer, makeMountOpts());
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -568,7 +509,7 @@ describe('UpcomingDeliveryListDrawer — 三态渲染（2026-09-30）', () => {
     expect(wrapper.find('.header-total').text()).toBe('共 2 件');
 
     // 换成永不 settle 的实现 + 失效该 query ⇒ 进入「有旧数据、正在后台重取」的状态
-    listUnionItemsMock.mockReturnValue(new Promise(() => {}));
+    fetchDeliveryOrdersMock.mockReturnValue(new Promise(() => {}));
     void testQueryClient.invalidateQueries({ queryKey: qk.dashboardPrefix });
     await new Promise((resolve) => setTimeout(resolve, 50));
     await nextTick();

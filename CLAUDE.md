@@ -53,7 +53,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 **缓存定位**：TanStack Query 在本仓只是**短时请求去重层，不承担数据新鲜度保证**。跨页面写操作（送检 / worker-scan / scan-inspect / outsource 等改候选池成员资格的流转）**不做精确失效补齐**（穷举写点不可持续）；数据新鲜度靠 WS 事件或显式 refetch。现有 `invalidateQueries` 调用点是「写完立即看到自己那笔」的优化，全部保留。
 
-**唯一例外**：`views/dashboard/composables/` 下 4 个 query（snapshot / urgentList / overdue / upcomingList）用 `gcTime: POSITIVE_INFINITY`（靠 WS 事件失效，不靠 GC），因此**跨账号泄漏窗口无限大**，只靠 auth 会话终止时的 `queryClient.clear()` 兜底。改它们的 gcTime 前先看 auth 一节。
+**唯一例外**：`views/dashboard/composables/` 下 3 个 query（`useDashboardSnapshot` / `useDashboardUpcoming` / `useDashboardDeliveryOrders`）用 `gcTime: POSITIVE_INFINITY`（靠 WS 事件失效，不靠 GC），因此**跨账号泄漏窗口无限大**，只靠 auth 会话终止时的 `queryClient.clear()` 兜底。改它们的 gcTime 前先看 auth 一节。
 
 ### Zod schema-first
 

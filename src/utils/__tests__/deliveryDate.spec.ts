@@ -1,22 +1,21 @@
 // src/utils/__tests__/deliveryDate.spec.ts
 //
-// 交期天数/紧迫样式的**绝对输出**回归锁（2026-10-04 新增，review 第 1 轮）。
+// 交期天数/紧迫样式的**绝对输出**回归锁。
 //
 // 为什么值得单独立一个文件：报工台 HMI 上「昨天到期的件不显红」这类问题没有报错、不会
 // 有人发现，而仓内原有的交期断言全部走「形状」口径（有没有 `.days-left`、有没有
 // `overdue` class），对天数**算得对不对**零覆盖。本文件是全仓唯一按 TZ 两档锁定
 // 「今天到期 / 已逾期 N 天 / N 天后到期」**具体字符串**的地方。
 //
-// ⚠️ 本文件刻意锁的是**当前带缺陷的输出**。`deliveryDate.ts` 有一个已登记的时区缺陷
-// （见该文件文件头）：日期串按 UTC 零点解析、「今天」按本地零点，东八区恒多算一天。
-// 修好之后下面两条断言会同时变红 —— 那正是提醒「该把这里改成正确值、并同步三个
-// dashboard 组件的期望」的红灯，不是误报。
+// 两档 TZ 锁同一个算法是刻意的：日期串按**本地零点**构造（`new Date('YYYY-MM-DD')`
+// 按 UTC 零点解读会让东八区恒多算一天），故算法与时区无关 —— 下面两档给出**逐字相同**
+// 的期望值。任一档变红都意味着「本地零点口径」被破坏，而不是「时区差异」。
 //
 // 固定 TZ 的方式（本仓 vitest.config.ts 没有全局 `test.env` 段，见下）：在 `withTz` 里
 // 直接赋值 `process.env.TZ`，**且必须早于 `vi.useFakeTimers()`** —— 假 Date 装好后
 // 换 TZ 不再生效（sinon 的 fake Date 会把时区偏移固定在安装那一刻）。所以「设 TZ → 装
 // 假表 → 跑断言」三步必须包在同一个 helper 里，每个用例重装一次。
-// 不写进 vitest.config.ts 的 `test.env`：那会一次性改掉全仓 125 个 spec 的时区基线，
+// 不写进 vitest.config.ts 的 `test.env`：那会一次性改掉全仓所有 spec 的时区基线，
 // 超出本文件职责。「今天」用 `vi.setSystemTime` 钉到固定日历日，避免跨日那一刻集体变红。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,8 +30,8 @@ let originalTz: string | undefined;
 /**
  * 在指定时区下跑一段断言。顺序不可调换：设 TZ 必须在装假表之前。
  * 「今天」在假表下恒为 FIXED_TODAY，日期串则用**本地日历分量**从 FIXED_TODAY 推出来 ——
- * 两种时区下推出来的都是同一个真实日历日（这是本文件要的：只让时区影响 `deliveryDate`
- * 自己的算术，不让日期串本身随时区漂移）。
+ * 两种时区下推出来的都是同一个真实日历日（这是本文件要的：只让时区影响
+ * `deliveryDate` 自己的算术，不让日期串本身随时区漂移）。
  */
 function withTz(tz: string, run: (isoDaysFromToday: (n: number) => string) => void): void {
   process.env.TZ = tz;
@@ -51,7 +50,29 @@ function withTz(tz: string, run: (isoDaysFromToday: (n: number) => string) => vo
   }
 }
 
-describe('deliveryDate 天数口径（已知时区缺陷的绝对输出锁）', () => {
+/** 同一批真实日历日在两种时区下的期望输出（本地零点口径 ⇒ 与时区无关）。 */
+function assertCalendarDaySemantics(iso: (n: number) => string): void {
+  // 今天到期
+  expect(deliveryDaysLeftText(iso(0))).toBe('今天到期');
+  expect(deliveryUrgencyClass(iso(0))).toBe('due-soon');
+  // 今天+2
+  expect(deliveryDaysLeftText(iso(2))).toBe('2天后到期');
+  expect(deliveryUrgencyClass(iso(2))).toBe('due-soon');
+  // 昨天到期：必须是「已逾期1天」+ overdue（红）。这条是本文件的核心回归 ——
+  // 按 UTC 零点解读时它会退化成「今天到期」+ due-soon，产线屏上过期件不显红。
+  expect(deliveryDaysLeftText(iso(-1))).toBe('已逾期1天');
+  expect(deliveryUrgencyClass(iso(-1))).toBe('overdue');
+  // 5 天前逾期
+  expect(deliveryDaysLeftText(iso(-5))).toBe('已逾期5天');
+  expect(deliveryUrgencyClass(iso(-5))).toBe('overdue');
+  // due-soon 的实际覆盖窗口（真实日历日）：今天 ~ 今天+3；今天+4 起无紧迫样式
+  expect(deliveryUrgencyClass(iso(3))).toBe('due-soon');
+  expect(deliveryUrgencyClass(iso(4))).toBe('');
+  // >3 天不倒计时（只回落到 MM/DD 展示）
+  expect(deliveryDaysLeftText(iso(9))).toBe('');
+}
+
+describe('deliveryDate 天数口径（本地零点，两档 TZ 期望逐字相同）', () => {
   beforeEach(() => {
     originalTz = process.env.TZ;
   });
@@ -61,46 +82,36 @@ describe('deliveryDate 天数口径（已知时区缺陷的绝对输出锁）', 
     else process.env.TZ = originalTz;
   });
 
-  // 缺陷本体：同一批真实日历日，UTC 下算得对，东八区整体 +1 天。
-  it('TZ=Asia/Shanghai（生产时区）：今天算「1天后到期」、昨天算「今天到期」且不判逾期', () => {
+  it('TZ=Asia/Shanghai（生产时区）：今天=今天到期、昨天=已逾期1天 + overdue', () => {
+    withTz('Asia/Shanghai', assertCalendarDaySemantics);
+  });
+
+  it('TZ=UTC：同一天同一批日历日全部算对（对照档，两档输出必须一致）', () => {
+    withTz('UTC', assertCalendarDaySemantics);
+  });
+
+  // 跨月 / 跨年边界：本地零点构造 Date 后 setDate 由 Date 归一，不该有月末跳日。
+  it('跨月 / 跨年：日历日差正确', () => {
     withTz('Asia/Shanghai', (iso) => {
-      // 今天到期：口径差一天 ⇒ 说成还剩 1 天
-      expect(deliveryDaysLeftText(iso(0))).toBe('1天后到期');
-      // 今天+2：说成还剩 3 天
-      expect(deliveryDaysLeftText(iso(2))).toBe('3天后到期');
-      // 昨天到期：说成「今天到期」，样式是 `due-soon`（橙）而**不是 `overdue`**（红）——
-      // 也就是昨天已经过期的件在产线屏上不显红。
-      expect(deliveryDaysLeftText(iso(-1))).toBe('今天到期');
-      expect(deliveryUrgencyClass(iso(-1))).toBe('due-soon');
-      // 5 天前逾期：少报 1 天
-      expect(deliveryDaysLeftText(iso(-5))).toBe('已逾期4天');
-      expect(deliveryUrgencyClass(iso(-5))).toBe('overdue');
-      // due-soon 的实际覆盖窗口（真实日历日）：昨天 ~ 今天+2；今天+3 起无紧迫样式
-      expect(deliveryUrgencyClass(iso(2))).toBe('due-soon');
-      expect(deliveryUrgencyClass(iso(3))).toBe('');
+      expect(deliveryDaysLeftText(iso(1))).toBe('1天后到期');
+      expect(deliveryDaysLeftText(iso(3))).toBe('3天后到期');
+      expect(deliveryUrgencyClass(iso(3))).toBe('due-soon');
+      expect(deliveryDaysLeftText(iso(-30))).toBe('已逾期30天');
     });
   });
 
-  // 对照档：证明上面那组不是「算法本来就该这样」，而是时区产物。修好之后本档不会变。
-  it('TZ=UTC：同一天同一批日历日全部算对（对照档，说明偏差来源是时区不是算法）', () => {
-    withTz('UTC', (iso) => {
-      expect(deliveryDaysLeftText(iso(0))).toBe('今天到期');
-      expect(deliveryDaysLeftText(iso(2))).toBe('2天后到期');
-      expect(deliveryDaysLeftText(iso(-1))).toBe('已逾期1天');
-      expect(deliveryUrgencyClass(iso(-1))).toBe('overdue');
-      expect(deliveryDaysLeftText(iso(-5))).toBe('已逾期5天');
-    });
-  });
-
-  // 空值口径与时区无关，两档都该成立（chip 恒渲染后这条直接决定屏幕上显示什么）。
-  it('空值：两档时区下都返空串 / 无紧迫 class（chip 据此显示「-」且不挂样式）', () => {
-    withTz('Asia/Shanghai', () => {
-      expect(deliveryDaysLeftText(null)).toBe('');
-      expect(deliveryUrgencyClass(null)).toBe('');
-    });
-    withTz('UTC', () => {
-      expect(deliveryDaysLeftText(null)).toBe('');
-      expect(deliveryUrgencyClass(null)).toBe('');
-    });
+  // 空值 / 非法串口径与时区无关：chip 据此显示「-」且不挂样式。
+  it('空值与非法串：两档时区下都返空串 / 无紧迫 class', () => {
+    for (const tz of ['Asia/Shanghai', 'UTC']) {
+      withTz(tz, () => {
+        expect(deliveryDaysLeftText(null)).toBe('');
+        expect(deliveryDaysLeftText(undefined)).toBe('');
+        expect(deliveryDaysLeftText('')).toBe('');
+        expect(deliveryUrgencyClass(null)).toBe('');
+        // 非法日期串：解析失败按「无值」处理，不抛错也不返回 NaN 参与比较
+        expect(deliveryDaysLeftText('not-a-date')).toBe('');
+        expect(deliveryUrgencyClass('not-a-date')).toBe('');
+      });
+    }
   });
 });

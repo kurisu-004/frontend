@@ -1,18 +1,25 @@
 <!--
   FactoryRealtimeStrip.vue
-  2026-09-29 新增：dashboard 底部「工厂实时态」chip strip。
-  2026-09-30 Phase 2 followup #2：worker groups 按 PAGE_SIZE=4 一组切片成 pages，
-  groups.length > 4 时套 <el-carousel>（8s 翻页 + hover 暂停 + 箭头手动切页）；
-  groups.length ≤ 4 时退化为 flex-wrap 排（占满 20% 高度，无需轮播）。
-  el-carousel CSS 由 main.ts 手动 import theme-chalk（unplugin resolver 只扫
-  <template>，carousel-item CSS 由 carousel.css 携带）。
+  dashboard 底部「工厂实时态」chip strip。
+  worker groups 按 PAGE_SIZE=4 一组切片成 pages，groups.length > 4 时套
+  <el-carousel>（8s 翻页 + hover 暂停 + 箭头手动切页）；groups.length ≤ 4 时退化为
+  flex-wrap 排（占满 20% 高度，无需轮播）。el-carousel CSS 由 main.ts 手动 import
+  theme-chalk（unplugin resolver 只扫 <template>，carousel-item CSS 由 carousel.css
+  携带）。
 
-  数据来源：snapshot.in_process（dashboard 快照的 in_process 切片），按
+  数据来源：snapshot.in_process（工人在手加工批次行，7 字段），按
   current_holder_id / worker_name 分组的 workerGroups computed 收在本组件内部。
+
+  chip 文本 = `序列号(批次量)`：只显示序列号时，同一工单被拆成多个批次后屏幕上是几个
+  长得一样的 chip，看不出手上到底压了几件。件数用弱一档的 .worker-qty 小字，颜色随
+  chip 状态（普通 / urgent）走，序列号仍是视觉主体。
+
+  chip 的 :key 用 `batch_id ?? id`：t_part 无唯一约束，同一工单的多个 IN_PROCESS 批次
+  会产生多行，只用 part_id 会让 Vue 拿到重复 key（patch 错行 / 复用错 chip）。
 
   视觉：
     - 按 current_holder_id / worker_name 分组
-    - 每组「工人姓名 + 该工人持有的流水号 chips」
+    - 每组「工人姓名 + 该工人持有的 chip」
     - 紧急 chip 底色 #fde2e2 + 红字（沿旧 .worker-chip.urgent 约定）
     - 非 SHELF_ACCOUNT 账号可点 chip 跳详情；emit item-click(partId)
 -->
@@ -44,12 +51,13 @@
               <div class="worker-chips">
                 <span
                   v-for="it in g.items"
-                  :key="it.id"
+                  :key="it.batch_id ?? it.id"
                   :class="['worker-chip', { urgent: it.is_urgent, clickable: canOpenDetail }]"
-                  :title="canOpenDetail ? '查看详情' : ''"
+                  :title="chipTitle(it)"
                   @click="canOpenDetail && emit('itemClick', it.id)"
                 >
-                  {{ it.serial_no ?? '—' }}
+                  <span class="worker-serial">{{ it.serial_no ?? '—' }}</span>
+                  <span class="worker-qty">({{ it.quantity }})</span>
                 </span>
               </div>
             </div>
@@ -63,12 +71,13 @@
           <div class="worker-chips">
             <span
               v-for="it in g.items"
-              :key="it.id"
+              :key="it.batch_id ?? it.id"
               :class="['worker-chip', { urgent: it.is_urgent, clickable: canOpenDetail }]"
-              :title="canOpenDetail ? '查看详情' : ''"
+              :title="chipTitle(it)"
               @click="canOpenDetail && emit('itemClick', it.id)"
             >
-              {{ it.serial_no ?? '—' }}
+              <span class="worker-serial">{{ it.serial_no ?? '—' }}</span>
+              <span class="worker-qty">({{ it.quantity }})</span>
             </span>
           </div>
         </div>
@@ -82,29 +91,37 @@
 // 切片成 pages，>4 套 <el-carousel>，≤4 退化为 flex-wrap。分组派生（按
 // current_holder_id / worker_name）在组件内部 computed。
 //
-// emit item-click(partId) 给父组件跳详情；权限守门（canOpenDetail）由父组件
-// 计算并通过 props 传入；本组件自身不 import usePermissions（沿 §composition
-// 边界 —— 权限判断走 usePermissions 已集中暴露 computed 模式）。
+// emit item-click(partId) 给父组件跳详情（partId = t_part.id，详情路由按工单 id）；
+// 权限守门（canOpenDetail）由父组件计算并通过 props 传入；本组件自身不 import
+// usePermissions（沿 §composition 边界 —— 权限判断走 usePermissions 已集中暴露
+// computed 模式）。
 
 import { computed } from 'vue';
 import { Tools } from '@element-plus/icons-vue';
-import type { DashboardItemData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
+import type { WorkerHeldBatchData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
 
 interface WorkerGroup {
   key: string;
   worker_name: string | null;
-  items: DashboardItemData[];
+  items: WorkerHeldBatchData[];
 }
 
 const props = defineProps<{
-  items: DashboardItemData[];
+  items: WorkerHeldBatchData[];
   /** 是否允许点 chip 跳详情（SHELF_ACCOUNT 默认 false） */
   canOpenDetail: boolean;
 }>();
 
 const emit = defineEmits<(e: 'itemClick', partId: string) => void>();
 
-/** 2026-09-29 新增：按 current_holder_id / worker_name 分组。 */
+/** chip 的 title：显式带上件数（悬停时不必靠括号里的弱色小字去数）。
+ *  无序列号时给「未编号」而不是留空 —— 空 title 的元素在浏览器里连 hover 光标都
+ *  不给，用户看不出这里可以点。 */
+function chipTitle(item: WorkerHeldBatchData): string {
+  return `${item.serial_no ?? '未编号'} · ${item.quantity} 件`;
+}
+
+/** 按 current_holder_id / worker_name 分组。 */
 const groups = computed<WorkerGroup[]>(() => {
   const map = new Map<string, WorkerGroup>();
   for (const p of props.items) {
@@ -119,8 +136,8 @@ const groups = computed<WorkerGroup[]>(() => {
   return Array.from(map.values());
 });
 
-/** 2026-09-30 Phase 2 followup #2：worker groups 按 PAGE_SIZE=4 一组切片成 pages；
- *  groups.length ≤ 4 时退化为直接 flex-wrap 排，不进 carousel。 */
+/** worker groups 按 PAGE_SIZE=4 一组切片成 pages；
+ * groups.length ≤ 4 时退化为直接 flex-wrap 排，不进 carousel。 */
 const PAGE_SIZE = 4;
 const pagedGroups = computed<WorkerGroup[][]>(() => {
   const out: WorkerGroup[][] = [];
@@ -223,7 +240,8 @@ const pagedGroups = computed<WorkerGroup[][]>(() => {
 }
 .worker-chip {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
+  gap: 3px;
   padding: 2px 8px;
   background: #fff;
   border-radius: 4px;
@@ -231,6 +249,12 @@ const pagedGroups = computed<WorkerGroup[][]>(() => {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
+  // 序列号是视觉主体，件数只做补白；两者同色不同权重。
+  .worker-qty {
+    font-size: 11px;
+    font-weight: 400;
+    opacity: 0.75;
+  }
   &.urgent {
     background: #fde2e2;
     color: #f56c6c;

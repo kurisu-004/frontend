@@ -1,15 +1,16 @@
-// dashboard 域 WebSocket 层（2026-09-28 重写）。
+// dashboard 域 WebSocket 层（2026-09-28 重写；2026-10-07 随 VO 重构同步 HTTP 面）。
 //
 // 数据流（与 frontend/CLAUDE.md 2026-09-28 新增的「dashboard 域 HTTP 全量 +
 // WS 事件 invalidate」架构对齐）：
-//   1. 消费者通过 useDashboardSnapshot()（views/dashboard/composables/）订阅大屏快照。
-//      该 composable 内部用 TanStack Query 拉一次 GET /api/v2/dashboard/snapshot
-//      取全量（fetchDashboardSnapshot），之后不依赖本模块推送 snapshot。
+//   1. 消费者通过 views/dashboard/composables/ 下的三个 composable 订阅大屏数据：
+//      useDashboardSnapshot（快照）/ useDashboardUpcoming（交期分桶）/
+//      useDashboardDeliveryOrders（柱状图下钻）。三者都走 HTTP 首取 + WS 事件
+//      invalidate 重取，不依赖本模块推送的业务数据。
 //   2. 本模块仍是 WebSocket 单例层：持有唯一长连接 + 按频道分发事件给订阅者。
 //      WS 首帧 snapshot 仍会到达（后端行为不变），但前端消费方已切到 HTTP 全量，
 //      故首帧 snapshot 仅作「连接就绪信号」（通过 onConnected 标记 isReady）。
 //   3. 业务事件（PICKED_UP / RELEASED / PART_TO_SHIP 等）继续通过 onDashboardEvent
-//      派发给 NotificationBanner.vue / useDashboardSnapshot.invalidate 等消费者。
+//      派发给 NotificationBanner.vue / useDashboardInvalidation 等消费者。
 //
 // 实现要点：
 //   - 用 VueUse useWebSocket + createGlobalState 包单例（替代原 258 行手写 socket 管理）；
@@ -33,12 +34,14 @@
 //     「服务端 30s 推 {type:'heartbeat'} text 帧」无关，收到也只在 onMessage
 //     分发层丢包。
 //
-// 子任务锚点：本次改造后 dashboard 域 snapshot 数据流是 HTTP 全量首取 + WS 事件
-// invalidate 重取，WS 层不复用 server-pushed snapshot 的业务数据。
+// 子任务锚点：dashboard 域的数据流是 HTTP 全量首取 + WS 事件 invalidate 重取，
+// WS 层不复用 server-pushed snapshot 的业务数据。HTTP 面共 3 个只读端点
+// （snapshot / upcoming-delivery / delivery-orders），见文件末尾「HTTP 端点」段。
 
 import { createGlobalState, useWebSocket } from '@vueuse/core';
 import { shallowRef, watch, type ShallowRef } from 'vue';
 import { api, cleanParams } from '@/api/http';
+import type { OrderStatus } from '@/types/parts';
 import type {
   ConnectionStatus,
   DashboardEvent,
@@ -46,7 +49,11 @@ import type {
   DashboardServerMessage,
   DeliveryBasis,
 } from '@/types/dashboard';
-import type { DashboardSnapshotData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
+import type {
+  DashboardSnapshotData,
+  DeliveryOrderDetailOutData,
+  UpcomingBucketsData,
+} from '@/views/dashboard/composables/dashboardSnapshotSchema';
 import { decodeJwt } from '@/utils/jwt';
 
 type EventHandler = (ev: DashboardEvent) => void;
@@ -442,27 +449,69 @@ export function reconnectDashboard(): void {
 }
 
 // ============================================================
-// HTTP 全量首取（2026-09-28 新增，与 WS snapshot 帧并行；WS 首帧不再消费）
+// HTTP 端点（2026-10-07 收敛为 3 个，与 WS snapshot 帧并行；WS 首帧不再消费）
+//
+// 契约来源：backend-rust docs/api/dashboard.md
+//   1. GET /dashboard/snapshot          —— 无 query 参数
+//   2. GET /dashboard/upcoming-delivery —— basis? / days?
+//   3. GET /dashboard/delivery-orders   —— date / statuses 必填，basis?
+// 三个端点都是只读聚合，返回值已由 http.ts 响应拦截器解封（response.data = payload.data），
+// 即 api.get 返回的 resp.data 已经是内层 VO，不再是 R<T> 信封。
+//
+// 快照与分桶拆成两个端点的理由：分桶的 days / basis 是**可变**入参，与快照主体的
+// 刷新节奏、缓存身份都不同 —— 放一起会导致切口径 / 切天数时整个快照换键重取。
 // ============================================================
 
-/** 2026-10-04 新增：GET /dashboard/snapshot 的可选查询参数。
- *  全部 optional —— 缺省调用（不传参）与后端契约对齐：basis 缺省 planned（计划交期）。
- *  窗口长度（未来 14 天）不开放给前端，继续由后端缺省值决定。 */
-export interface FetchDashboardSnapshotParams {
+/** GET /api/v2/dashboard/snapshot —— 拉一次大屏全量快照（无 query 参数）。
+ *  后端不接受任何 query（交期分桶已拆到 /dashboard/upcoming-delivery），多传会被忽略
+ *  但语义上已无意义，故本函数不暴露 params。 */
+export async function fetchDashboardSnapshot(): Promise<DashboardSnapshotData> {
+  const resp = await api.get<DashboardSnapshotData>('/dashboard/snapshot');
+  return resp.data;
+}
+
+/** 2026-10-07：GET /dashboard/upcoming-delivery 的可选查询参数。
+ *  全部 optional，缺省由后端决定（basis 缺省 system、days 缺省 14 并 clamp 到 1..60）。
+ *  前端调用点一律显式传全两个（口径 / 天数是页面级可见状态，走 cleanParams 后
+ *  undefined 才不会被发出去）。 */
+export interface FetchUpcomingDeliveryParams {
+  /** 交期统计口径：planned（计划交期）/ system（系统交期）。 */
+  basis?: DeliveryBasis;
+  /** 窗口天数（未来 N 天）；后端 clamp 1..60。 */
+  days?: number;
+}
+
+/** GET /api/v2/dashboard/upcoming-delivery —— 交期分桶（柱状图数据源 + 今日/窗口 KPI）。
+ *  响应含后端判定的 today，前端一律用它做「今天」锚点，不再 new Date()。 */
+export async function fetchUpcomingDelivery(
+  params: FetchUpcomingDeliveryParams,
+): Promise<UpcomingBucketsData> {
+  const resp = await api.get<UpcomingBucketsData>('/dashboard/upcoming-delivery', {
+    params: cleanParams(params),
+  });
+  return resp.data;
+}
+
+/** 2026-10-07：GET /dashboard/delivery-orders 的查询参数。
+ *  date / statuses 必填（缺失或非法走 AppError::validation / 40001），basis 缺省 system。
+ *  statuses 在 wire 上是逗号分隔单值（后端 axum Query 反序列化为逗号分隔），故本函数
+ *  内部把数组 join(',')，调用方只给数组。 */
+export interface FetchDeliveryOrdersParams {
+  /** 命中的交期日期（'YYYY-MM-DD'），必填。 */
+  date: string;
+  /** 该柱层覆盖的 OrderStatus 集合，必填（不能为空数组）。 */
+  statuses: readonly OrderStatus[];
   /** 交期统计口径：planned（计划交期）/ system（系统交期）。 */
   basis?: DeliveryBasis;
 }
 
-/** GET /api/v2/dashboard/snapshot —— 拉一次大屏全量快照。
- *  返回值已由 http.ts 响应拦截器解封（response.data = payload.data），
- *  即 api.get 返回的 resp.data 已经是 DashboardSnapshotData，不再是 R<T> 信封。
- *  2026-10-04：接受可选查询参数 basis；该字段 optional，cleanParams 会把 undefined
- *  剔掉 ⇒ 不传参时请求串与加参数前逐字一致。 */
-export async function fetchDashboardSnapshot(
-  params: FetchDashboardSnapshotParams = {},
-): Promise<DashboardSnapshotData> {
-  const resp = await api.get<DashboardSnapshotData>('/dashboard/snapshot', {
-    params: cleanParams(params),
+/** GET /api/v2/dashboard/delivery-orders —— 柱状图按层下钻的工单明细。
+ *  total 是匹配总数、不受 items 截断（200 行）影响。 */
+export async function fetchDeliveryOrders(
+  params: FetchDeliveryOrdersParams,
+): Promise<DeliveryOrderDetailOutData> {
+  const resp = await api.get<DeliveryOrderDetailOutData>('/dashboard/delivery-orders', {
+    params: cleanParams({ ...params, statuses: params.statuses.join(',') }),
   });
   return resp.data;
 }

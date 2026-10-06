@@ -186,7 +186,7 @@ export const useAuthStore = defineStore('auth', () => {
     // `remove()` → 同包 query.js:129-132 `destroy()` → `this.cancel({ silent: true })`），
     // **禁止**再叠 cancelQueries()：默认非 silent 会触发仓内 query 的
     // `watch(error, …ElMessage.error)` 桥接，登出瞬间刷一屏假错误。
-    // dashboard 系 4 个 query 用 gcTime: POSITIVE_INFINITY（永不被 GC），
+    // dashboard 系 3 个 query 用 gcTime: POSITIVE_INFINITY（永不被 GC），
     // 靠这一步兜底。
     queryClient.clear();
   }
