@@ -5,41 +5,46 @@
 // `utils/bidExcelParser.ts`，不归本文件（前端 utils 域，非 API）。
 
 import { api } from '@/api/http';
-import type { PartItem } from './crud';
 
-/** 采购订单 Excel 中解析出的有效明细行。 */
-export interface PurchaseOrderExcelItem {
-  rowNo: number;
-  lineNo: string;
-  deleted: boolean;
-  drawingNo: string;
-  name: string;
-  deliveryDate: string | null;
-  unitPrice: number | null;
-  shippableQty: number | null;
-}
+// 2026-10-06 删：这里的 PurchaseOrderExcelItem。
+// 它是解析器域类型被放进了 API 层，与本文件头「解析逻辑在 utils/，不归本文件」的
+// 分层约定直接冲突；又与 utils/purchaseOrderExcelParser.ts 的同名接口同构却零
+// 引用，还经 index.ts 的 `export *` 暴露在 `@/api/parts` 桶上 —— 未来有人从 API
+// 层 import 会拿到一个与 parser 解耦的副本，drift 完全不可见。解析结果一律从
+// `@/utils/purchaseOrderExcelParser` 取类型。
 
+/**
+ * match-by-excel-items 的单行入参。
+ * 2026-10-06 删：delivery_date / unit_price / quantity 三个键后端不声明。
+ * 交货日期无法识别的文本会被解析器原样透传，后端若声明日期字段会被任意文本打挂
+ * 整个请求；后端也确实用不到这三个值（系统交期由前端本地预填进 date-picker）。
+ */
 export interface PartBatchOrderInfoMatchItem {
+  /** 与响应里的 row_no 一一对应，前端按它把候选挂回 Excel 行。 */
   row_no: number;
   line_no?: string | null;
   drawing_no?: string | null;
   name?: string | null;
-  delivery_date?: string | null;
-  unit_price?: number | null;
-  quantity?: number | null;
 }
 
+/** 后端按图号 / 名称在零件表与装配件表里查出的候选零件。 */
 export interface PartMatchInfo {
+  /** 雪花 ID，全链路 string，禁止 Number() 转换（会丢精度）。 */
   part_id: string;
+  /** OCC 版本号，前端回填时原样传回。 */
   version: number;
-  drawing_no: string | null;
+  /** 非空：t_part.drawing_no 是 NOT NULL 列。 */
+  drawing_no: string;
   name: string;
-  unit_price: number | null;
-  quantity: number | null;
   order_no: string | null;
   system_delivery_date: string | null;
+  /** 所属装配件的雪花 ID，同样按 string 传输。 */
   assembly_id: string | null;
   assembly_name: string | null;
+  // 2026-10-06 删：unit_price / quantity。
+  // unit_price 此前声明为 number 本身就是类型谎言：后端 TPart.unit_price 是
+  // Decimal，按 rust_decimal::serde::str 序列化成 string。两个字段 UI 都不读，
+  // 留着只会诱导调用方按 number 去用实际拿到的是 string 的值。
 }
 
 export interface PartBatchOrderInfoMatchResult {
@@ -50,7 +55,7 @@ export interface PartBatchOrderInfoMatchResult {
 }
 
 export interface PartBatchOrderInfoMatchRequest {
-  doc_no: string;
+  // 2026-10-06 删：doc_no。匹配只按行内图号 / 名称做，后端不需要单据号。
   items: PartBatchOrderInfoMatchItem[];
 }
 
@@ -58,6 +63,16 @@ export interface PartBatchOrderInfoUpdateItem {
   part_id: string;
   version: number;
   order_no?: string | null;
+  /**
+   * 三态日期：字符串 = 写入该日期，null = 清空成 NULL，undefined = 不动这一列。
+   * 2026-10-06：主链路上非法文本的**唯一**来源是 Excel 解析器透传（已在预填处
+   * 过滤：utils 的 resolveExcelDeliveryDate —— 交货日期不可识别时退回零件现有值，
+   * 不发原文也不发 null）。el-date-picker 侧不构成来源：element-plus 2.14.6 的
+   * handleChange 只在 parseUserInputToDayjs 返回有效值时才 emitInput，非法输入只
+   * debugWarn，不会写进 model。但过滤只覆盖这一条路径 —— 其它调用方、或将来改成
+   * raw:true / 换解析层，仍可能送进非法文本，所以后端逐行校验要留：不可解析的行
+   * 按 failed 返回，而不是让整批反序列化失败。
+   */
   system_delivery_date?: string | null;
   skip?: boolean;
 }
@@ -69,7 +84,10 @@ export interface PartBatchOrderInfoUpdateFailure {
 }
 
 export interface PartBatchOrderInfoUpdateResult {
-  updated: PartItem[];
+  // 2026-10-06 由 PartItem[] 改为数量：UI 只读这一个数字，
+  // 返回完整零件实体还得让后端补 customer_name / location / holder_name 等
+  // UI 从不读的字段。
+  updated_count: number;
   failed: PartBatchOrderInfoUpdateFailure[];
   skipped_count: number;
 }

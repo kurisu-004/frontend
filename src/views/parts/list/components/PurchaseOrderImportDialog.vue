@@ -275,6 +275,7 @@ import {
 } from '@/api/parts';
 import {
   parsePurchaseOrderExcel,
+  resolveExcelDeliveryDate,
   type PurchaseOrderExcelItem,
 } from '@/utils/purchaseOrderExcelParser';
 import {
@@ -324,7 +325,11 @@ interface CandidateRow {
   selected: boolean;
   /** 默认 = 当前 docNo */
   orderNo: string;
-  /** 默认 = Excel 行的 deliveryDate */
+  /**
+   * 要写入的新系统交期。默认 = Excel 行的 deliveryDate；Excel 交货日期不可识别
+   * 或缺失时默认 = part.system_delivery_date（不动这一列，见 buildPreviewGroups）。
+   * null 是用户主动清空 —— 后端三态里 null = 清空成 NULL，语义要区别对待。
+   */
   systemDeliveryDate: string | null;
 }
 
@@ -586,15 +591,9 @@ async function onFileChange(uploadFile: UploadFile): Promise<void> {
       line_no: it.lineNo,
       drawing_no: it.drawingNo || null,
       name: it.name || null,
-      delivery_date: it.deliveryDate,
-      unit_price: it.unitPrice,
-      quantity: it.shippableQty,
     }));
 
-    const results = await matchPartsByExcelItems({
-      doc_no: parsed.docNo,
-      items: matchItems,
-    });
+    const results = await matchPartsByExcelItems({ items: matchItems });
     previewGroups.value = buildPreviewGroups(parsed.items, results);
   } catch (e) {
     parseErrors.value = [(e as Error).message ?? 'Excel 解析或匹配失败'];
@@ -612,6 +611,10 @@ function onExceed(_files: File[]): void {
 /**
  * 把 Excel 行 + 后端 match 结果合并成嵌套展开行的 PreviewGroup。
  * 每个 part → 一个 CandidateRow；默认 selected = isEmptyTarget(part)。
+ *
+ * 2026-10-06（MAJOR-1）：系统交期的预填值改由 resolveExcelDeliveryDate 决定 ——
+ * Excel 交货日期可识别才预填它，不可识别/缺失则预填零件现有值（不动这一列，
+ * 不能映射成 null：null 在后端三态里是清空），并给该行追加一条 warnings 说明。
  */
 function buildPreviewGroups(
   items: PurchaseOrderExcelItem[],
@@ -623,18 +626,26 @@ function buildPreviewGroups(
   return items.map((it) => {
     const r = resultByRow.get(it.rowNo);
     const parts = r?.parts ?? [];
+    const matchWarnings = r?.warnings ?? [];
+    const delivery = resolveExcelDeliveryDate(it.rowNo, it.deliveryDate);
     return {
       rowNo: it.rowNo,
       lineNo: it.lineNo,
       excelDrawingNo: it.drawingNo,
       excelName: it.name,
       matchType: r?.match_type ?? 'NONE',
-      warnings: r?.warnings ?? [],
+      // 无条件展开：即使不追加本地说明也不把后端返回的数组实例交给 PreviewGroup，
+      // 否则将来谁 push / sort 一下就会污染响应对象。
+      // 无候选时日期压根用不上，提示是纯噪音，不追加（2026-10-06）。
+      warnings: [
+        ...matchWarnings,
+        ...(delivery.warning && parts.length > 0 ? [delivery.warning] : []),
+      ],
       candidates: parts.map((part) => ({
         part,
         selected: isEmptyTarget(part),
         orderNo: docNo.value,
-        systemDeliveryDate: it.deliveryDate,
+        systemDeliveryDate: delivery.prefill(part.system_delivery_date),
       })),
     };
   });
@@ -674,13 +685,13 @@ async function onConfirm(): Promise<void> {
     failedRows.value = new Map(result.failed.map((f) => [f.part_id, `${f.code}: ${f.message}`]));
 
     if (result.failed.length === 0) {
-      ElMessage.success(`已更新 ${result.updated.length} 个零件`);
+      ElMessage.success(`已更新 ${result.updated_count} 个零件`);
       emit('success');
       emit('update:modelValue', false);
       return;
     }
 
-    const updated = result.updated.length;
+    const updated = result.updated_count;
     const failed = result.failed.length;
     if (updated === 0) {
       ElMessage.error(`全部 ${failed} 条更新失败，请检查失败行`);
