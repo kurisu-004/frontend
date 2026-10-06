@@ -159,7 +159,7 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
       drawing_no: search.drawingNo.trim() || undefined,
       name: search.name.trim() || undefined,
       serial_no: search.serialNo.trim() || undefined,
-      // 雪花 ID 字符串直传，禁止 Number()（CLAUDE.md §3：19 位 ID 丢精度）。
+      // 雪花 ID 字符串直传，禁止 Number()（19 位雪花 ID 会丢精度）。
       customer_id: search.customerId || undefined,
       system_delivery_date_from: search.systemDeliveryDateFrom || undefined,
       system_delivery_date_to: search.systemDeliveryDateTo || undefined,
