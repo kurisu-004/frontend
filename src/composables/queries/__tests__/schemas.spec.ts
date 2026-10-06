@@ -59,7 +59,8 @@
 //     backend-rust `InspectionBatchListItemOut` 完整 28 字段结构（批次 9 + holder 4 +
 //     delivery_note 2 + 工单 10 + 客户 3，含 l1_customer_name 与 holder_name），
 //     不抛错。**服务对象已收窄为仅** `GET /prod/batches/repair` / `/repairing`
-//     两条返修端点（待品检端点 2026-10-03 换成 13 字段精简 VO，见 S-IQ1 系列）。
+//     两条返修端点（待品检端点换成 13 字段精简 VO，其守门用例在
+//     `views/inspection/composables/__tests__/inspectionSchema.spec.ts` 的 I 系列）。
 //   - S21：repairBatchListResultSchema 接受分页结构（items / total / limit /
 //     offset）。
 //   - S22：repairBatchListItemSchema 多出 `id` 字段 → 抛 ZodError（`.strict()`
@@ -70,19 +71,6 @@
 //   - S23b（2026-10-02 新增 regression guard）：is_repairing = true 也能 parse
 //     （不得被人「先写 z.literal(false) 消警告」把真实返修数据挡掉），且缺
 //     is_repairing 必抛错（后端恒输出该键）。
-//     编号说明：本用例原编 S24，与下面「2026-10-01 新增：programming / shelves」
-//     describe 块里既有的 S24（pendingProgrammingItemSchema 13 字段）撞号，
-//     2026-10-02 review 第 1 轮改为 S23b（沿本文件 S11b / S12b / S19b 等后缀惯例）。
-//   - S-IQ1（2026-10-03 新增）：inspectionQueueListItemSchema 接受待品检端点
-//     精简 VO 的完整 13 字段，且 `.strict()` 下多一个键（如返修 VO 独有的 status /
-//     holder_name）立刻抛错 —— 这是「两个 VO 已分家」的核心 guard：一旦有人图省事
-//     把 28 字段 VO 的键拷回来，这条会红。
-//   - S-IQ2：system_delivery_date = null 也能 parse（DB NULL ⇒ JSON null，列表页
-//     渲染 '—'；不能因为「多数行有值」就锁成非空）。
-//   - S-IQ3：inspectionQueueListResultSchema 的 total / limit / offset 是 JSON
-//     **string**（serialize_i64），用 number 会被拒。
-//   - S-IQ4：缺 batch_id / part_id / version 抛错（M-1 guard：三者是写端点路径参数
-//     与 OCC 锚，缺任一个都意味着前端拼不出请求）。
 //   - S-SP1（2026-10-04 新增，报工台）：scanPartRowSchema 接受后端 `PartListItem`
 //     完整 34 字段（含 `location` / `holder_name` 等恒 null 的派生键与
 //     `batch_id` / `batch_version` 批次锚点），不抛错。
@@ -130,10 +118,6 @@ import {
   autoDispatchResultSchema,
   repairBatchListItemSchema,
   repairBatchListResultSchema,
-  inspectionQueueListItemSchema,
-  inspectionQueueListResultSchema,
-  pendingProgrammingItemSchema,
-  pendingProgrammingListResultSchema,
   shelfSchema,
   shelfListResultSchema,
   scanPartRowSchema,
@@ -1513,154 +1497,25 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
       expect(() => repairBatchListItemSchema.parse(rest)).toThrow();
     });
   });
-
-  // 2026-10-03 新增：待品检队列（`GET /api/v2/prod/batches/inspection`）13 字段
-  // 精简 VO 守门。它与上面的返修 VO **不是同一个后端 VO** —— 本组用例的核心职责是
-  // 钉死「两个 VO 已分家」：多一个返修 VO 独有的键就必须抛错（防有人图省事把 28 字段
-  // 的键拷回精简 VO，让「后端 VO 收口」这件事静默失效）。
-  describe('inspectionQueueListItemSchema（2026-10-03 新增）', () => {
-    const validItem = {
-      batch_id: '3000000000001',
-      batch_no: 1,
-      quantity: 5,
-      version: 2,
-      part_id: '4000000000001',
-      serial_no: 'SN-2026-001',
-      drawing_no: 'DWG-A001',
-      name: '零件A',
-      system_delivery_date: '2026-10-08',
-      is_urgent: false,
-      customer_id: '9000000000001',
-      customer_name: '客户A-子',
-      l1_customer_name: '客户A',
-    };
-
-    it('S-IQ1：解析完整 13 字段不抛错，且解析结果键集合恰为 13 个', () => {
-      // 键集合断言是本组用例的核心：不写死「恰 13 个」，后端哪天把 status 之类加回
-      // 精简 VO，本用例不会红。
-      expect(Object.keys(validItem)).toHaveLength(13);
-      const parsed = inspectionQueueListItemSchema.parse(validItem);
-      expect(parsed.batch_id).toBe('3000000000001');
-      expect(parsed.part_id).toBe('4000000000001');
-      expect(parsed.version).toBe(2);
-      expect(parsed.system_delivery_date).toBe('2026-10-08');
-      expect(parsed.customer_name).toBe('客户A-子');
-      expect(parsed.l1_customer_name).toBe('客户A');
-      expect(Object.keys(parsed).sort()).toEqual(Object.keys(validItem).sort());
-    });
-
-    it('S-IQ1b：system_delivery_date = null 也能 parse（DB NULL ⇒ JSON null）', () => {
-      // 列表页对 null 渲染 '—'。若被人「看到多数行有值」锁成 z.string()，未设系统
-      // 交期的批次会让整页 parse 失败（zod 把数组内所有失败项汇成单个 ZodError）。
-      const parsed = inspectionQueueListItemSchema.parse({
-        ...validItem,
-        system_delivery_date: null,
-      });
-      expect(parsed.system_delivery_date).toBeNull();
-    });
-
-    it('S-IQ1c：多一个键（返修 VO 独有的 status / holder_name）立刻抛错（.strict() 守门）', () => {
-      expect(() =>
-        inspectionQueueListItemSchema.parse({ ...validItem, status: 'INSPECTION' }),
-      ).toThrow();
-      expect(() =>
-        inspectionQueueListItemSchema.parse({ ...validItem, holder_name: '品检A-01' }),
-      ).toThrow();
-      // id 同样是历史误用键（旧实现把行当 PartItem，详情跳转拼出 /parts/undefined）
-      expect(() => inspectionQueueListItemSchema.parse({ ...validItem, id: '1' })).toThrow();
-    });
-
-    it('S-IQ3：inspectionQueueListResultSchema 的 total / limit / offset 是 string', () => {
-      // 后端用 serialize_i64 序列化为 JSON string；写成 z.number() 会让真实响应
-      // 100% 抛错。方向与 pendingProgrammingListResultSchema（裸 i64 ⇒ number）相反。
-      const parsed = inspectionQueueListResultSchema.parse({
-        items: [validItem],
-        total: '1',
-        limit: '200',
-        offset: '0',
-      });
-      expect(parsed.items).toHaveLength(1);
-      expect(parsed.total).toBe('1');
-      expect(parsed.limit).toBe('200');
-      expect(parsed.offset).toBe('0');
-    });
-
-    it('S-IQ3b：total 传 number → 抛错（防 schema 退化成 z.number()）', () => {
-      expect(() =>
-        inspectionQueueListResultSchema.parse({
-          items: [validItem],
-          total: 1,
-          limit: 200,
-          offset: 0,
-        }),
-      ).toThrow();
-    });
-
-    it('S-IQ4：缺 batch_id / part_id / version 任一个都抛错（M-1 guard）', () => {
-      // 三者是写端点路径参数 / 详情跳转锚 / OCC 锚，缺任一个前端都拼不出正确请求。
-      for (const key of ['batch_id', 'part_id', 'version'] as const) {
-        const { [key]: _omit, ...rest } = validItem;
-        void _omit;
-        expect(() => inspectionQueueListItemSchema.parse(rest)).toThrow();
-      }
-    });
-  });
 });
 
 // ============================================================
-// 2026-10-01 新增：待编程一览（prod 域 programming）+ 货架（shelves）schema 断言。
+// 货架（shelves）schema 契约断言。
 //
 // 数据来源：
-//   - backend-rust `src/modules/prod/programming/mod.rs` 的
-//     `GET /api/v2/prod/programming/pending`（ProgrammingItem 13 字段 +
-//     ProgrammingListOut 4 字段；「待编程一览」页数据源，替代恒返空的
-//     part 域 /parts/pending-programming）。
 //   - @/types/shelf.ts::Shelf 10 字段（货架列表 GET /api/v2/shelves，
 //     共享基础数据层 useProductionShelvesQuery 守门；2026-10-02 起
 //     account_count 随「用户决定货架列表页不再展示账号数」一并摘除，
 //     后端 ShelfOut 在同 PR 也已删该字段，属另一次独立决策）。
 //
 // 覆盖：
-//   - S24：pendingProgrammingItemSchema 接受完整 15 字段不抛错（13 基础 + 2026-10-03
-//     后端补的批次锚点 batch_id / batch_version，fixture 显式给 null）；客户字段是
-//     parent_customer_name(L1) / customer_name(L2)，与 part 域 l1_customer_name
-//     不同名（本用例把 parent_customer_name 写满并断言读出，防回归成 l1_*）。
-//   - S25：pendingProgrammingItemSchema 缺 has_cnc_program → 抛 ZodError
-//     （M-1 strip regression guard —— 该字段是本页 Tab 化的唯一依据，
-//     静默 strip 会让「已编程 / 未编程」列恒显示错值且不报错）。
-//   - S26：pendingProgrammingItemSchema 缺 version → 抛 ZodError（同源 guard）。
-//   - S27：pendingProgrammingItemSchema 的 id 传 number → 抛 ZodError
-//     （雪花 ID 一律 string，JS Number 会丢精度 —— CLAUDE.md §3）。
-//   - S28：pendingProgrammingListResultSchema 接受分页 4 字段；缺 items → 抛错。
 //   - S29：shelfSchema 接受完整 10 字段（zone=PRODUCTION / location=null）。
 //   - S30：shelfSchema 缺 zone → 抛 ZodError（M-1 同形态 guard；2026-10-02 起
 //     guard 字段从 account_count 换成 zone —— 前者随「用户决定不再展示账号数」
 //     摘除，但「必填字段缺失必须报错」这个设计意图不变，不能跟着删用例）；
 //     shelfListResultSchema 缺 items → 抛 ZodError。
 // ============================================================
-describe('2026-10-01 新增：programming / shelves schema 契约断言', () => {
-  const validProgrammingItem = {
-    id: '190000000000099',
-    version: 3,
-    serial_no: 'SN-001',
-    name: '法兰盘',
-    drawing_no: 'DWG-A001',
-    quantity: 5,
-    status: 'PROGRAMMING',
-    is_urgent: true,
-    planned_delivery_date: '2026-10-10',
-    system_delivery_date: null,
-    customer_name: '客户A-子',
-    parent_customer_name: '客户A',
-    has_cnc_program: false,
-    // 2026-10-03 m1：后端 ProgrammingItemOut 的批次锚点两字段**无**
-    // `skip_serializing_if` ⇒ 恒返（无 PROGRAMMING 批次时为 null），schema 因此声明成
-    // 「必填 + 可空」。fixture 必须显式给 null，否则 parse 直接抛
-    // invalid_type（这正是 m1 想要的守门强度）。
-    batch_id: null,
-    batch_version: null,
-  };
-
+describe('货架（shelves）schema 契约断言', () => {
   const validShelf = {
     id: '8800000000001',
     version: 2,
@@ -1674,69 +1529,6 @@ describe('2026-10-01 新增：programming / shelves schema 契约断言', () => 
     created_at: '2026-09-01 10:00:00',
     updated_at: '2026-09-30 11:00:00',
   };
-
-  it('S24：pendingProgrammingItemSchema 接受完整 15 字段（客户字段是 parent_customer_name）', () => {
-    const parsed = pendingProgrammingItemSchema.parse(validProgrammingItem);
-    expect(parsed.id).toBe('190000000000099');
-    expect(parsed.version).toBe(3);
-    expect(parsed.has_cnc_program).toBe(false);
-    // 客户：L1 = parent_customer_name / L2 = customer_name（不是 l1_customer_name）
-    expect(parsed.parent_customer_name).toBe('客户A');
-    expect(parsed.customer_name).toBe('客户A-子');
-    expect((parsed as Record<string, unknown>).l1_customer_name).toBeUndefined();
-  });
-
-  // 2026-10-03 m1 regression guard：批次锚点两字段是「必填 + 可空」，不是
-  // `.optional()`。后端无 `skip_serializing_if` ⇒ 恒返（无批次时为 null）；一旦
-  // 有人为省事退回 `.optional()`，下面两条会红 ——
-  //   ① 有值时必须解析出来（不因 strip 丢字段）；
-  //   ② **缺键时必须抛错**（静默通过会让全表下发按钮恒 disabled 且无任何报错）。
-  it('S24b：批次锚点有值时解析出来；缺键时抛 ZodError（防退回 .optional()）', () => {
-    const withAnchor = pendingProgrammingItemSchema.parse({
-      ...validProgrammingItem,
-      batch_id: '190000000000123',
-      batch_version: 7,
-    });
-    expect(withAnchor.batch_id).toBe('190000000000123');
-    expect(withAnchor.batch_version).toBe(7);
-
-    const { batch_id: _omitId, batch_version: _omitVer, ...noAnchor } = validProgrammingItem;
-    void _omitId;
-    void _omitVer;
-    expect(() => pendingProgrammingItemSchema.parse(noAnchor)).toThrow();
-  });
-
-  it('S25：pendingProgrammingItemSchema 缺 has_cnc_program → 抛 ZodError（M-1 guard）', () => {
-    const { has_cnc_program: _omit, ...rest } = validProgrammingItem;
-    void _omit;
-    expect(() => pendingProgrammingItemSchema.parse(rest)).toThrow();
-  });
-
-  it('S26：pendingProgrammingItemSchema 缺 version → 抛 ZodError（M-1 guard）', () => {
-    const { version: _omit, ...rest } = validProgrammingItem;
-    void _omit;
-    expect(() => pendingProgrammingItemSchema.parse(rest)).toThrow();
-  });
-
-  it('S27：pendingProgrammingItemSchema 的 id 传 number → 抛 ZodError（雪花 ID 必须 string）', () => {
-    expect(() =>
-      pendingProgrammingItemSchema.parse({ ...validProgrammingItem, id: 190000000000099 }),
-    ).toThrow();
-  });
-
-  it('S28：pendingProgrammingListResultSchema 接受分页 4 字段；缺 items → 抛 ZodError', () => {
-    const parsed = pendingProgrammingListResultSchema.parse({
-      items: [validProgrammingItem],
-      total: 1,
-      limit: 20,
-      offset: 0,
-    });
-    expect(parsed.items).toHaveLength(1);
-    expect(parsed.total).toBe(1);
-    expect(() =>
-      pendingProgrammingListResultSchema.parse({ total: 1, limit: 20, offset: 0 }),
-    ).toThrow();
-  });
 
   it('S29：shelfSchema 接受完整 10 字段（zone=PRODUCTION / location=null）', () => {
     const parsed = shelfSchema.parse(validShelf);

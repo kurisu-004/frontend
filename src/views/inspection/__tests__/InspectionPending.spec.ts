@@ -61,7 +61,7 @@ vi.mock('element-plus', () => ({
   ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() },
   // useConfirm 的二次确认（指定工序的确认框），本 spec 不点它，给个恒 false 的壳。
   ElMessageBox: { confirm: vi.fn(async () => Promise.reject(new Error('未确认'))) },
-  // 列定义（src/utils/inspectionColumnDefs.ts）在 store setup 期就 h() 这几个组件，
+  // 列定义（src/views/inspection/inspectionColumnDefs.ts）在 store setup 期就 h() 这几个组件，
   // import 期要能解析（被测的是壳，表格本身已桩掉）。
   ElButton: { name: 'ElButtonStub', template: '<button><slot /></button>' },
   ElInput: { name: 'ElInputStub', template: '<input />' },

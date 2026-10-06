@@ -24,19 +24,18 @@
 // mock 策略：
 //   - vi.mock('@/api/http')：只替换其中的 `api.get`（用 importOriginal 保留 cleanParams
 //     / normalizeListResult / ApiError 等真实导出）。**不** mock 掉 '@/api/programming'
-//     整个模块 —— 理由见下方 M-2 注：守门（pendingProgrammingListResultSchema.parse）
-//     已收敛进 api 层，mock 整个 api 模块会把守门链短路，T5 变成在测 mock 自己。
+//     整个模块 —— 守门在 usePendingProgrammingQuery 的 queryFn，mock 掉整个 api 模块
+//     会把 queryFn 的 parse 一起短路，T5 变成在测 mock 自己。
 //   - vi.mock('@/api/parts')：releaseFromProgramming（@/api/parts 聚合导出，mock
 //     工厂只需给出用到的成员）；
 //   - vi.mock('@/api/process') / vi.mock('@/api/shelves')：store 内
 //     useProcessesQuery / useProductionShelvesQuery + useShelfProcessFilter 会拉
 //     基础数据，桩掉避免真实 axios；
-//   - vi.mock('element-plus', () => ({ ElMessage: {...} }))：store 内
-//     watch(errorMsg) → ElMessage.error 在 vitest node env 会因 ElMessage 内部
-//     normalizeAppendTo 触发 ReferenceError: document is not defined（CLAUDE.md
-//     TanStack Query 架构条目 #9），必须桩成 no-op。
+//   - vi.mock('element-plus', () => ({ ElMessage: {...} }))：query hook 内
+//     watch(error) → ElMessage.error 在 vitest node env 会因 ElMessage 内部
+//     normalizeAppendTo 触发 ReferenceError: document is not defined，必须桩成 no-op。
 //     ElButton / ElTag / ElTooltip 也要列出来 —— store 经
-//     ../pendingProgrammingColumnDefs 把这两个组件拉进了模块图（renderActions /
+//     ../pendingProgrammingColumnDefs 把这三个组件拉进了模块图（renderActions /
 //     renderCncProgram 在 cellRender 里用），本文件 mock 掉 element-plus 后它们
 //     会是 undefined。今天不炸只因没有用例调 cellRender；将来加一个「渲染行」的
 //     用例会撞 undefined 组件报错，故显式占位（空对象即可，本文件只断言 store
@@ -64,9 +63,11 @@ vi.mock('element-plus', () => ({
     info: vi.fn(),
   },
   ElMessageBox: { confirm: vi.fn() },
-  // 见文件头 M-7 注：store 模块图经 pendingProgrammingColumnDefs 引入了这两个组件
+  // store 模块图经 pendingProgrammingColumnDefs 引入了这三个组件（ElTooltip 用在
+  // 「无批次锚点」按钮的 h(ElTooltip, …) 提示上）
   ElButton: {},
   ElTag: {},
+  ElTooltip: {},
 }));
 
 // vitest node 环境没有 localStorage（useListFilterPersist / useColumnVisibility
@@ -105,12 +106,12 @@ const { apiGetMock } = vi.hoisted(() => ({
 }));
 
 // **mock 边界下移到 axios 层**。
-// Zod 守门（pendingProgrammingListResultSchema.parse）已收敛进 api 层
-// （fetchPendingProgramming 内部，形态同 api/pendingBatches.ts::dispatchBatches），
-// 若还 mock 掉 '@/api/programming' 整个模块，守门链被短路 —— T5（响应缺字段 →
-// query 进 error 态）就变成在测 mock 自己，而不是测产品代码。
+// Zod 守门（pendingProgrammingListResultSchema.parse）在 queryFn
+// （usePendingProgrammingQuery 内），若还 mock 掉 '@/api/programming' 整个模块，
+// 守门链被短路 —— T5（响应缺字段 → query 进 error 态）就变成在测 mock 自己，
+// 而不是测产品代码。
 // 改 mock '@/api/http' 的 api.get 后：
-//   · fetchPendingProgramming 真跑（真 cleanParams + 真 pendingProgrammingListResultSchema.parse）；
+//   · fetchPendingProgramming 真跑（真 cleanParams），queryFn 的 parse 也真跑；
 //   · api.get 桩成可控 payload，发出的入参从 config.params 断言（已经过 cleanParams）；
 //   · http.ts 其余导出（cleanParams / normalizeListResult / ApiError …）保持真实。
 vi.mock('@/api/http', async (importOriginal) => {

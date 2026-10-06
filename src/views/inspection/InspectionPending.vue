@@ -20,7 +20,8 @@
   新树一次给全，操作列按批次状态直接给出可执行动作。
 
   保留能力（与 2026-10-03 版一致）：品检通过 / 指定工序两个弹窗 + 扫码订阅 +
-  5min 自动刷新 timer + 加急红底 + 部分通过拆批提示 + 40901 冲突提示。
+  5min 自动刷新（query hook 的 refetchInterval）+ 加急红底 + 部分通过拆批提示 +
+  40901 冲突提示。
 -->
 <template>
   <div class="inspection-pending">
@@ -30,9 +31,7 @@
           <el-icon><Refresh /></el-icon>
           <span>刷新</span>
         </el-button>
-        <el-checkbox v-model="store.ui.autoRefresh" @change="onAutoRefreshToggle">
-          自动刷新（5min）
-        </el-checkbox>
+        <el-checkbox v-model="store.ui.autoRefresh">自动刷新（5min）</el-checkbox>
         <span v-if="store.query.total > 0" class="total-hint">共 {{ store.query.total }} 条</span>
       </div>
     </el-card>
@@ -251,8 +250,8 @@
 //   - InspectionTable（承载全部表格 DOM 逻辑）；
 //   - 分页（page / pageSize 在 store，切页改 queryKey 自动 refetch）；
 //   - 品检通过 / 指定工序两个弹窗 + 扫码树弹窗；
-//   - 生命周期编排：restoreState（开 enabled 闸门）、排序箭头恢复、扫码订阅、timer、
-//     store.$dispose()。
+//   - 生命周期编排：restoreState（开 enabled 闸门）、排序箭头恢复、扫码订阅、
+//     store.$dispose()（轮询定时器由 query hook 的 refetchInterval 自管，本壳无 timer）。
 //
 // 导航（详情 / 零件链接）留在壳内 —— store 不 import vue-router（不变量 #4）。
 
@@ -306,21 +305,11 @@ function onDetail(row: InspectionQueueItem): void {
 store.registerActions({ onPass, onOpenFail, onDetail });
 
 // ============ 手动刷新 / 自动刷新 ============
+// 自动刷新勾选直接 v-model 到 store.ui.autoRefresh，轮询由 store 的 query hook
+// （useInspectionQueueQuery 的 refetchInterval，5min）承担 —— 本壳不再持有 timer，
+// 也不需要 onMounted 起停 / onBeforeUnmount 清理。
 async function onRefresh(): Promise<void> {
   await store.query.fetchList();
-}
-
-let autoRefreshTimer: number | null = null;
-function onAutoRefreshToggle(val: string | number | boolean): void {
-  if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer);
-    autoRefreshTimer = null;
-  }
-  if (val) {
-    autoRefreshTimer = window.setInterval(() => {
-      void store.query.fetchList();
-    }, 300_000);
-  }
 }
 
 // pageSize 变化时 page 复位（照 PartsList.vue 语义，避免停在一个已不存在的页）。
@@ -561,16 +550,10 @@ onMounted(async () => {
   const sortProp = INSPECTION_SORT_KEY_TO_PROP[store.query.sortBy] ?? 'system_delivery_date';
   const sortOrder = store.query.sortDir === 'ASC' ? 'ascending' : 'descending';
   tableRef.value?.tableRef?.sort(sortProp, sortOrder);
-  // 3) 自动刷新开关（布尔在 store，timer 实例在本壳）。
-  if (store.ui.autoRefresh) onAutoRefreshToggle(true);
 });
 
 onBeforeUnmount(() => {
   unsubInspectionScan();
-  if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer);
-    autoRefreshTimer = null;
-  }
   // 不变量 #2：Pinia 单例，离开页面销毁，下次进入重建 fresh 状态。
   store.$dispose();
 });

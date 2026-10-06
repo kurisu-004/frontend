@@ -24,7 +24,7 @@ import type { Directive, VNodeChild } from 'vue';
 
 vi.mock('element-plus', () => ({
   ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() },
-  // 列定义（src/utils/inspectionColumnDefs.ts）用 h() 直接 import 这几个 EP 组件，
+  // 列定义（src/views/inspection/inspectionColumnDefs.ts）用 h() 直接 import 这几个 EP 组件，
   // 桩成最简可点 / 可渲染形态即可（用例 4 要点「品检通过」按钮）。
   ElButton: {
     name: 'ElButtonStub',

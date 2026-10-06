@@ -1,8 +1,9 @@
-// 原 views/parts/list/composables/partsListColumnDefs.ts，2026-09-21 迁至 src/utils/
+// src/views/parts/list/partsListColumnDefs.ts
 //
-// 2026-09-15 从 PartsList.vue 抽出：18 列 ColumnDef 工厂（base 9 + price 2 仅 canEdit +
-// tail 7）。cellRender / headerRender 闭包持 raw composable 切片（ref 照写 .value），
-// 与消费侧 store.切片.字段 的解包访问落同一批 ref，无双写分裂。
+// 零件一览 18 列 ColumnDef 工厂（base 9 + price 2 仅 canEdit + tail 7）。单域专用文件，
+// 与页面主组件（PartsList.vue）同层放域根 —— `src/utils/` 只放跨域通用工具。
+// cellRender / headerRender 闭包持 raw composable 切片（ref 照写 .value），与消费侧
+// store.切片.字段 的解包访问落同一批 ref，无双写分裂。
 
 import { h } from 'vue';
 import {
@@ -22,8 +23,8 @@ import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
 import type { PartListItem } from '@/types/parts';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
-import type { usePartsColumnFilters } from '@/views/parts/list/composables/usePartsColumnFilters';
-import type { usePartInlineEdit } from '@/views/parts/list/composables/usePartInlineEdit';
+import type { usePartsColumnFilters } from './composables/usePartsColumnFilters';
+import type { usePartInlineEdit } from './composables/usePartInlineEdit';
 
 export function buildPartsListColumnDefs(deps: {
   filters: ReturnType<typeof usePartsColumnFilters>;

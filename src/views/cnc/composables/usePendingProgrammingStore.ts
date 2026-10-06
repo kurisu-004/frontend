@@ -23,12 +23,14 @@
 //    无 router 实例化。
 //
 // 沿 CLAUDE.md 硬约束：
-//   - 两层数据获取架构：本文件是**页面级 store**（私有状态 + 内部 useQuery +
-//     useMutation + 失效），货架 / 工序下拉走**共享基础数据层**
-//     （useProductionShelvesQuery / useProcessesQuery）；
-//   - queryKey 全走 qk.xxx，queryFn 从 queryKey 读最新 params（不闭包捕获 stale）；
-//   - Zod 守门在 **api 层**（fetchPendingProgramming 内部 parse，所有调用方都受守门），
-//     queryFn 不重复 parse（见主查询处 M-2 注）；错误经 watch(errorMsg) 桥接 ElMessage；
+//   - 两层数据获取架构：本文件是**页面级 store**（私有状态 + 失效 + 列定义 + 下发
+//     对话框），主查询的 useQuery 段外提成同域 hook（usePendingProgrammingQuery），
+//     货架 / 工序下拉走**共享基础数据层**（useProductionShelvesQuery /
+//     useProcessesQuery）；
+//   - 本文件**不含 queryKey / queryFn**：queryKey 走 qk.xxx 工厂、queryFn 从
+//     queryKey 读最新 params（不闭包捕获 stale）、Zod 守门 parse、error → ElMessage
+//     桥接，四件事都在 usePendingProgrammingQuery 内；本文件用到 qk 的场合只有
+//     写后失效的前缀；
 //   - enabled 闸门（restored）避免「默认参数首屏 + 持久化参数再屏」双 fetch；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0 / mutations.retry: 0；
 //   - 缓存时长：本页是页面级列表，走 main.ts 全局默认（不在共享层有限缓存
@@ -37,16 +39,12 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { defineStore } from 'pinia';
 import { ElMessage } from 'element-plus';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
+import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import type { QueryClient } from '@tanstack/vue-query';
 
-import { fetchPendingProgramming, type ListPendingProgrammingParams } from '@/api/programming';
+import type { ListPendingProgrammingParams } from '@/api/programming';
 import { releaseFromProgramming } from '@/api/parts';
 import { qk } from '@/composables/queries/keys';
-import type {
-  PendingProgrammingItemSchema,
-  PendingProgrammingListResultSchema,
-} from '@/composables/queries/schemas';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
@@ -59,6 +57,8 @@ import {
   RELEASE_MISSING_BATCH_ANCHOR_HINT,
   type PendingProgrammingRow,
 } from '../pendingProgrammingColumnDefs';
+import { usePendingProgrammingQuery } from './usePendingProgrammingQuery';
+import type { PendingProgrammingItemData } from './pendingProgrammingSchema';
 import type { Process } from '@/types/process';
 import type { Shelf } from '@/types/shelf';
 
@@ -127,42 +127,16 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     };
   }
 
-  // ============ 主查询 useQuery ============
-  const listQuery = useQuery<
-    PendingProgrammingListResultSchema,
-    Error,
-    PendingProgrammingListResultSchema,
-    ReturnType<typeof qk.programmingList>
-  >({
-    queryKey: computed(() => qk.programmingList(buildParams())),
-    // queryFn 从 queryKey[2] 读最新 params（不闭包捕获 buildParams 的 snapshot）
-    // 守门**收敛在 api 层**（api/programming.ts::fetchPendingProgramming 内部 parse，
-    // 形态同 api/pendingBatches.ts::dispatchBatches ⇒ 任何调用方都受 Zod 守门）。
-    // 此处不再重复 parse —— Zod 的 parse 返回**深拷贝**，重复 parse 等于每屏数据
-    // 被校验 + 克隆两遍（50 行 × 13 字段），纯浪费。
-    queryFn: async ({ queryKey }) =>
-      fetchPendingProgramming(queryKey[2] as ListPendingProgrammingParams),
+  // ============ 主查询 ============
+  // useQuery 段外提成同域 hook（usePendingProgrammingQuery）：私有状态留在这里，
+  // queryKey / queryFn / Zod 守门 / 轮询 / 错误桥接归 hook。本 store 只把 restored 与
+  // autoRefresh 两个开关递给它。
+  const listQuery = usePendingProgrammingQuery({
+    params: computed(() => buildParams()),
     enabled: restored,
-    placeholderData: keepPreviousData,
-    // 自动刷新：原视图的 window.setInterval(5min) 迁移到 refetchInterval。
-    // ⚠️ refetchIntervalInBackground 必须显式 true —— TanStack Query 默认 false，
-    // 窗口失焦时暂停轮询，与原手写 setInterval（后台照跑）行为不一致。
-    // ⚠️ refetchInterval 用 **computed** 而非裸函数 `() => autoRefresh ? 300_000 : false`
-    //   （勿改回函数形态）：vue-query 的 defaultedOptions 是对 options 的 computed，
-    //   经 `cloneDeepUnref` 逐层 unref —— 只在 queryKey 那一层会把 function 求值
-    //   （`unrefGetters` 仅 queryKey 为 true），其余层 function 原样保留。
-    //   裸函数体内的 `autoRefresh.value` 因此**不进入** defaultedOptions 的依赖收集，
-    //   勾选「自动刷新」不触发 `watch(defaultedOptions) → observer.setOptions(...)`
-    //   ⇒ query-core 的 `#updateRefetchInterval` 不会被重新求值（setOptions 里只有
-    //   `nextRefetchInterval !== #currentRefetchInterval` 时才重建定时器）⇒ 轮询永远
-    //   不启动，必须再改一次筛选 / 手动刷新才「歪打正着」。computed 让 autoRefresh
-    //   进入依赖，勾选与取消勾选都会重建定时器。
-    //   注：轮询本身无法在 vitest node 环境断言 —— query-core 的
-    //   `#shouldScheduleTimer` 有 `!isServer()` 闸门（node 下 window 未定义 ⇒
-    //   永不排定时器），单测只覆盖到「开关状态 + 参数」层。
-    refetchInterval: computed(() => (autoRefresh.value ? 300_000 : false)),
-    refetchIntervalInBackground: true,
+    autoRefresh,
   });
+  const { fetchList } = listQuery;
 
   // ============ 派生 ============
   const items = computed<PendingProgrammingRow[]>(() => listQuery.data.value?.items ?? []);
@@ -173,17 +147,6 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     return e ? e.message : null;
   });
   const emptyText = computed<string>(() => errorMsg.value ?? '当前无待编程零件');
-
-  // ElMessage 错误桥接（useQuery 的 error 不在 setup 抛错）
-  watch(errorMsg, (msg) => {
-    if (msg) ElMessage.error(msg);
-  });
-
-  /** fetchList 别名 = useQuery.refetch 的 async 包装（保留该名字：视图「刷新」按钮
-   *  与测试都通过它驱动，保持当前页码 refetch）。 */
-  async function fetchList(): Promise<void> {
-    await listQuery.refetch();
-  }
 
   // ============ 事件处理 ============
   // ⚠️ 只做 page=1；queryKey 变化自动 refetch。**不要**再加 watch(activeTab) ——
@@ -464,6 +427,9 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   //     不变量 #2；
   //   - 切成 plain object slice 后，slice 既不是 ref 也不是 reactive，Pinia
   //     不会把它写进 state ⇒ $dispose 后真 fresh。
+  //     ⚠️ 前提是 slice 确实是 **plain object**：写成 reactive() 会通过 Pinia 的 state
+  //     登记闸门（isRef || isReactive）进 state，重建时由 mergeReactiveObjects 递归
+  //     回填、内层 ref 一样复活 ⇒ 本护栏失效。
   // 这也是 usePartsListStore 切成 query / filters / batch / dispatch 切片的
   // 同源原因（那里靠 batchMode 泄漏的回归用例守住）。
   return {
@@ -528,5 +494,5 @@ export function invalidateProgrammingQuery(qc: QueryClient): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.programmingPrefix }).then(() => undefined);
 }
 
-/** 行类型再导出（视图 cellRender / 测试用；与 api/programming 的 z.infer 同源）。 */
-export type { PendingProgrammingItemSchema, PendingProgrammingRow };
+/** 行类型再导出（视图 cellRender / 测试用；与 domain schema 的 z.infer 同源）。 */
+export type { PendingProgrammingItemData, PendingProgrammingRow };

@@ -20,8 +20,9 @@
 // 表，EP 升级改了闭包本守卫会跟着变。
 //
 // 覆盖面盲区（已知、本轮不扩范围）：本守卫只扫 `src/**/*.vue`。`.ts` 文件里为 `h()`
-// 渲染函数手动 import EP 组件是同一类问题（`src/utils/inspectionColumnDefs.ts` /
-// `src/utils/partsListColumnDefs.ts` / `src/views/cnc/pendingProgrammingColumnDefs.ts`
+// 渲染函数手动 import EP 组件是同一类问题（`src/views/inspection/inspectionColumnDefs.ts` /
+// `src/views/parts/list/partsListColumnDefs.ts` /
+// `src/views/cnc/pendingProgrammingColumnDefs.ts`
 // 都是），今天靠消费它们的 `.vue` 顺带注入样式、视觉正常，故未纳入扫描。
 
 import { describe, it, expect } from 'vitest';

@@ -172,7 +172,7 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     queryKey: computed(() => qk.processDesignParts(buildParams())),
     // params 从 queryKey[2] 读（不闭包捕获 buildParams 的 snapshot）。
     // 守门**收敛在 api 层**（listProcessDesignParts 内部 parse，形态同
-    // api/programming.ts::fetchPendingProgramming ⇒ 任何调用方都受 Zod 守门），
+    // api/pendingBatches.ts::dispatchBatches ⇒ 任何调用方都受 Zod 守门），
     // 此处不重复 parse。
     queryFn: async ({ queryKey }) =>
       listProcessDesignParts(queryKey[2] as ListProcessDesignPartsParams),
@@ -629,6 +629,9 @@ export const useProcessDesignStore = defineStore('process-design', () => {
   //     $dispose 后「上次编辑到一半的工序」泄漏到下次进入，直接违反不变量 #2；
   //   - 切成 plain object slice 后，slice 既不是 ref 也不是 reactive，Pinia
   //     不会把它写进 state ⇒ $dispose 后真 fresh。
+  //     ⚠️ 前提是 slice 确实是 **plain object**：写成 reactive() 会通过 Pinia 的 state
+  //     登记闸门（isRef || isReactive）进 state，重建时由 mergeReactiveObjects 递归
+  //     回填、内层 ref 一样复活 ⇒ 本护栏失效。
   // 回归守卫见 __tests__/useProcessDesignStore.spec.ts 的「$dispose 后重建」用例。
   return {
     query: {

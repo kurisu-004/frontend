@@ -1,24 +1,24 @@
-// src/utils/inspectionColumnDefs.ts
+// src/views/inspection/inspectionColumnDefs.ts
 //
-// 2026-10-03 新增：待品检一览页的 8 列 ColumnDef 工厂（7 数据列 + 1 操作列）。
-// 形态照 `src/utils/partsListColumnDefs.ts`（零件一览 18 列那份）：cellRender /
-// headerRender 闭包持 raw composable 切片（ref 照写 .value），与消费侧
+// 待品检一览页的 8 列 ColumnDef 工厂（7 数据列 + 1 操作列）。单域专用文件，与页面主
+// 组件（InspectionPending.vue）同层放域根 —— `src/utils/` 只放跨域通用工具。
+// 形态照 `src/views/parts/list/partsListColumnDefs.ts`（零件一览 18 列那份）：
+// cellRender / headerRender 闭包持 raw composable 切片（ref 照写 .value），与消费侧
 // `store.切片.字段` 的解包访问落同一批 ref，无双写分裂。
 //
-// 列集与后端 VO 的关系（2026-10-03 VO 收口）：
+// 列集与后端 VO 的关系：
 //   待品检端点 `GET /prod/batches/inspection` 换成了**恰 13 字段**的精简 VO
 //   （`InspectionQueueItem`），本工厂只消费覆盖这 7 个数据列 + 写端点锚点的字段。
-//   旧版的「计划交期」「品检货架」两列随之删除（前者 VO 已无 `planned_delivery_date`，
-//   后者 VO 已无 `holder_name`）—— 用户需求明确只要 7 列。
+//   VO 里没有 `planned_delivery_date` 与 `holder_name` 两个键，故「计划交期」
+//   「品检货架」两列不存在 —— 用户需求明确只要 7 列。
 //
-// ⚠️ 第 4 列的 key 由 `batch_label` 改为 `batch_no`（旧版是「key 与数据字段脱节」的
-// 历史遗留：列 key 叫 batch_label，渲染的却是 `batch_no` 字段）。改成 batch_no 之后，
+// ⚠️ 第 4 列的 key 与数据字段同名（`batch_no`），别再改成「key 与字段脱节」的命名：
 //   - `inspection_pending_columns` / `inspection_pending_columnOrder` 两个 localStorage
-//     旧快照里存的是 `batch_label` 这个 key；
+//     快照可能存着更早的 `batch_label` 这个 key；
 //   - `useColumnVisibility` / `useColumnDrag` 两侧都是 lenient 策略：未知 key 视为可见、
-//     恢复时只覆盖 defs 里存在的 key ⇒ 旧快照失配的后果仅限「批次列回到默认可见 +
+//     恢复时只覆盖 defs 里存在的 key ⇒ 快照失配的后果仅限「批次列回到默认可见 +
 //     排到其余列之后」，不会白屏、不会误隐藏别的列。故两个 composable 侧不需改动。
-//   - 另：排序白名单键是 `BATCH_NO`（`INSPECTION_SORT_PROP_MAP`），列 prop 必须
+//   - 排序白名单键是 `BATCH_NO`（`INSPECTION_SORT_PROP_MAP`），列 prop 必须
 //     对上 `batch_no` 才能让表头点击排序落到正确的后端 sort_by。
 
 import { h } from 'vue';
@@ -27,7 +27,7 @@ import { RouterLink } from 'vue-router';
 import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { InspectionQueueItem } from '@/api/parts';
-import type { useInspectionColumnFilters } from '@/views/inspection/composables/useInspectionColumnFilters';
+import type { useInspectionColumnFilters } from './composables/useInspectionColumnFilters';
 
 export interface InspectionColumnActions {
   /** 品检通过（弹「品检通过」对话框，带数量）。 */
@@ -178,14 +178,14 @@ export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): 
           },
         ),
       // ⚠️ 跳 `/parts/{part_id}`：待品检 VO **没有 `id`**（那是 t_part.id 的另一个名字），
-      // 锚点是 part_id。旧版误拼 `/parts/undefined` 的根因就在这里。
+      // 锚点是 part_id。
       cellRender: ({ row }) => {
         const r = row as InspectionQueueItem;
         return h(RouterLink, { to: `/parts/${r.part_id}`, class: 'name-link' }, () => r.name);
       },
     },
 
-    // 4. 批次（等宽 chip；key 见文件头「batch_label → batch_no」注）
+    // 4. 批次（等宽 chip；key 见文件头「列 key 须与数据字段同名」注）
     {
       key: 'batch_no',
       label: '批次',
@@ -201,7 +201,7 @@ export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): 
       },
     },
 
-    // 5. 数量（label 由旧版「批次量」改为「数量」，与用户需求原文一致）
+    // 5. 数量（label 为「数量」，与用户需求原文一致）
     {
       key: 'quantity',
       label: '数量',
@@ -257,8 +257,7 @@ export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): 
               }),
           },
         ),
-      // 2026-10-03：旧 VO 没有 system_delivery_date，这列恒显 '—'；新 VO 带该键
-      // （DB NULL → JSON null），空值同样渲染灰 '—'。
+      // DB NULL → JSON null，空值同样渲染灰 '—'。
       cellRender: ({ row }) => {
         const r = row as InspectionQueueItem;
         return h(
@@ -344,8 +343,8 @@ export function buildInspectionColumnDefs(deps: BuildInspectionColumnDefsDeps): 
       cellRender: ({ row }) => {
         const r = row as InspectionQueueItem;
         // 行内 loading 判据是「正在提交的 batch_id === 本行 batch_id」：只让被提交的那
-        // 一行转圈，其余行照常可点（旧版往 row 对象上挂 `_passing`，Pinia 响应式下
-        // 往 data 行挂字段会让整表重渲染，改为 ref 判据更干净）。
+        // 一行转圈，其余行照常可点。判据取自 store 的 ref 而非往 data 行上挂字段 ——
+        // Pinia 响应式下给 data 行加字段会让整表重渲染。
         const isPassing = passingBatchId() === r.batch_id;
         return h('div', { class: 'row-actions' }, [
           h(

@@ -14,9 +14,6 @@ vi.mock('@/api/http', () => ({
   api: { post: mocks.post, get: vi.fn() },
   cleanParams: (p: unknown) => p,
 }));
-vi.mock('@/composables/queries/schemas', () => ({
-  inspectionQueueListResultSchema: { parse: (v: unknown) => v },
-}));
 
 import { batchCreateParts } from '../batch';
 
