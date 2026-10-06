@@ -20,7 +20,8 @@
 //
 // 判定逻辑（避免「文件里出现过这个字符串就算过」的高误判）：
 //   先剥注释（注释里出现的 deliveryDate / prefill 字面量不算结构），再断言候选
-//   赋值的**表达式原文**。
+//   赋值与 warnings 表达式的**原文**；warnings 是跨行数组字面量，断言前先做
+//   空白归一。
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -30,13 +31,28 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('../../../../../../', import.meta.url));
 const DIALOG = 'src/views/parts/list/components/PurchaseOrderImportDialog.vue';
 
-/** 把注释逐字符替换成空格（换行保留）—— 位置全不变，只在真实代码上判定。 */
+/**
+ * 把注释逐字符替换成空格（换行保留）—— 位置全不变，只在真实代码上判定。
+ *
+ * 2026-10-06 补剥独占整行的 `//`（做法与
+ * src/views/parts/new/__tests__/PartBatchPdfTabChildCountContract.spec.ts 一致）：
+ * 对话框 <script setup> 里 39 处注释全是独占整行，不剥的话一句
+ * `// systemDeliveryDate: it.deliveryDate` 就能让负向断言假失败、一句
+ * `// systemDeliveryDate: delivery.prefill(...)` 就能让正向断言假通过。
+ * 不做「遇到 // 就截断」那种粗暴处理（会误伤 URL 里的 //）；本文件唯一的行尾
+ * 注释是 onConfirm 里的 `return; // 用户取消`，已核过它不含任何被守卫的字面量。
+ */
 function stripComments(src: string): string {
   const blank = (m: string): string => m.replace(/[^\n]/g, ' ');
-  return src.replace(/<!--[\s\S]*?-->/g, blank).replace(/\/\*[\s\S]*?\*\//g, blank);
+  return src
+    .replace(/<!--[\s\S]*?-->/g, blank)
+    .replace(/\/\*[\s\S]*?\*\//g, blank)
+    .replace(/^[ \t]*\/\/[^\n]*$/gm, blank);
 }
 
 const src = stripComments(readFileSync(join(ROOT, DIALOG), 'utf8'));
+/** 空白归一，让跨行的对象字面量能被单条断言覆盖。 */
+const flat = src.replace(/\s+/g, ' ');
 
 describe('采购订单导入的系统交期预填契约', () => {
   it('候选默认值走 resolveExcelDeliveryDate 的 prefill', () => {
@@ -63,11 +79,23 @@ describe('采购订单导入的系统交期预填契约', () => {
     ).not.toMatch(/deliveryDate\s*\?\?\s*null/);
   });
 
-  it('该行的 warnings 追加本地说明，且不改后端返回的数组本身', () => {
+  it('warnings 无条件展开，不与后端返回的数组共享引用', () => {
     expect(
-      src,
-      `${DIALOG} 的 buildPreviewGroups 没把「保持现有交期」的说明追加进该行 warnings，` +
-        '用户只能在候选行里看到日期没变，不知道 Excel 那列写了什么',
-    ).toContain('delivery.warning ? [...matchWarnings, delivery.warning] : matchWarnings');
+      flat,
+      `${DIALOG} 的 warnings 没有把 ...matchWarnings 摊进新数组：` +
+        'PreviewGroup 会直接持有后端响应的数组实例，将来谁 push / sort 就污染响应对象',
+    ).toMatch(/warnings:\s*\[\s*\.\.\.matchWarnings\s*,/);
+    expect(
+      flat,
+      `${DIALOG} 里仍有把 matchWarnings 实例直接交给 PreviewGroup 的分支（如 : matchWarnings）`,
+    ).not.toMatch(/:\s*matchWarnings\s*[,\}]/);
+  });
+
+  it('本地说明只在有候选时追加（未匹配行的提示是纯噪音）', () => {
+    expect(
+      flat,
+      `${DIALOG} 没给本地说明加 parts.length > 0 的门槛：` +
+        '无候选的行压根用不上日期，却会被挂上说明、抬高警告计数',
+    ).toMatch(/delivery\.warning && parts\.length > 0 \? \[delivery\.warning\] : \[\]/);
   });
 });

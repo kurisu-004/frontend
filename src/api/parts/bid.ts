@@ -65,10 +65,13 @@ export interface PartBatchOrderInfoUpdateItem {
   order_no?: string | null;
   /**
    * 三态日期：字符串 = 写入该日期，null = 清空成 NULL，undefined = 不动这一列。
-   * 2026-10-06：前端已在预填处过滤（utils 的 resolveExcelDeliveryDate —— Excel
-   * 交货日期不可识别 / 缺失时退回零件现有值，不发 null 也不发原文），但过滤只覆盖
-   * 预填路径，用户手输的非法值仍会带着走，所以后端逐行校验，不可解析的行按
-   * failed 返回而不是让整批反序列化失败。
+   * 2026-10-06：主链路上非法文本的**唯一**来源是 Excel 解析器透传（已在预填处
+   * 过滤：utils 的 resolveExcelDeliveryDate —— 交货日期不可识别时退回零件现有值，
+   * 不发原文也不发 null）。el-date-picker 侧不构成来源：element-plus 2.14.6 的
+   * handleChange 只在 parseUserInputToDayjs 返回有效值时才 emitInput，非法输入只
+   * debugWarn，不会写进 model。但过滤只覆盖这一条路径 —— 其它调用方、或将来改成
+   * raw:true / 换解析层，仍可能送进非法文本，所以后端逐行校验要留：不可解析的行
+   * 按 failed 返回，而不是让整批反序列化失败。
    */
   system_delivery_date?: string | null;
   skip?: boolean;

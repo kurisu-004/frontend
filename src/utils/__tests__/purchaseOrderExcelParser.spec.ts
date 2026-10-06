@@ -280,10 +280,11 @@ describe('parseDateOrNull', () => {
 });
 
 describe('resolveExcelDeliveryDate', () => {
+  // 2026-10-06：不暴露 usable 布尔，判定结果直接从 warning（是否要提示）与
+  // prefill（最终写什么）两个出口验 —— 生产代码也只用这两个。
   it('Excel 交货日期可识别时预填该值且不产生说明', () => {
     const decision = resolveExcelDeliveryDate(5, '2026-08-01');
 
-    expect(decision.usable).toBe(true);
     expect(decision.warning).toBeNull();
     expect(decision.prefill('2026-07-01')).toBe('2026-08-01'); // 零件现有值被 Excel 值覆盖
     expect(decision.prefill(null)).toBe('2026-08-01');
@@ -294,19 +295,38 @@ describe('resolveExcelDeliveryDate', () => {
     // 会静默抹掉零件上已有的交期，所以这里必须退回现有值。
     const decision = resolveExcelDeliveryDate(5, '待定');
 
-    expect(decision.usable).toBe(false);
     expect(decision.warning).toBe('第 5 行交货日期「待定」无法识别，已保持零件现有系统交期不变');
     expect(decision.prefill('2026-07-01')).toBe('2026-07-01');
     // 零件本来就没有交期时保持 null（与「清空」不可区分，但语义上是同一个空值）
     expect(decision.prefill(null)).toBeNull();
   });
 
-  it('缺失时给出「未填写」说明并同样退回零件现有值', () => {
-    const decision = resolveExcelDeliveryDate(9, null);
+  it('缺失时退回零件现有值，但不追加说明（没填是常态，不是数据异常）', () => {
+    for (const missing of [null, ''] as (string | null)[]) {
+      const decision = resolveExcelDeliveryDate(9, missing);
 
-    expect(decision.usable).toBe(false);
-    expect(decision.warning).toBe('第 9 行未填写交货日期，已保持零件现有系统交期不变');
-    expect(decision.prefill('2026-07-01')).toBe('2026-07-01');
+      expect(decision.warning).toBeNull();
+      expect(decision.prefill('2026-07-01')).toBe('2026-07-01');
+    }
+  });
+
+  it('形态不合格一律按不可识别处理', () => {
+    for (const bad of ['待定', '2026年8月1日', '8/1/26', '2026-1-1']) {
+      const decision = resolveExcelDeliveryDate(5, bad);
+
+      expect(decision.warning).toContain('无法识别');
+      expect(decision.prefill('2026-07-01')).toBe('2026-07-01');
+    }
+  });
+
+  it('形态合格但语义不可能的日期不在这里拦（交给后端逐行校验）', () => {
+    // 正则只管形态：dayjs 对 2026-13-45 判 valid（滚成 2027-02-14），原先叠的
+    // isValid() 是恒真的死条件已删。主链路上这种值也到不了这里 —— parseDateOrNull
+    // 会先把它归一成 2027-02-14；真发出去时由后端逐行校验挡。
+    const decision = resolveExcelDeliveryDate(5, '2026-13-45');
+
+    expect(decision.warning).toBeNull();
+    expect(decision.prefill('2026-07-01')).toBe('2026-13-45');
   });
 
   it('端到端：待定行的候选默认值 = 零件现有交期，且 group 追加了说明', () => {

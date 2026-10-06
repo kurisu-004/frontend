@@ -634,8 +634,13 @@ function buildPreviewGroups(
       excelDrawingNo: it.drawingNo,
       excelName: it.name,
       matchType: r?.match_type ?? 'NONE',
-      // 不可用时只追加、不改后端返回的数组本身
-      warnings: delivery.warning ? [...matchWarnings, delivery.warning] : matchWarnings,
+      // 无条件展开：即使不追加本地说明也不把后端返回的数组实例交给 PreviewGroup，
+      // 否则将来谁 push / sort 一下就会污染响应对象。
+      // 无候选时日期压根用不上，提示是纯噪音，不追加（2026-10-06）。
+      warnings: [
+        ...matchWarnings,
+        ...(delivery.warning && parts.length > 0 ? [delivery.warning] : []),
+      ],
       candidates: parts.map((part) => ({
         part,
         selected: isEmptyTarget(part),

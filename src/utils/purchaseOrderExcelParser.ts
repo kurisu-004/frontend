@@ -108,6 +108,15 @@ function parseNumberOrNull(value: unknown): number | null {
  * 格式化成文本再进来（xlsx 在 read 时就会给日期单元格补 `w`），所以下面的
  * `instanceof Date` 分支在 parsePurchaseOrderExcel 里目前不可达；保留它是为了
  * 调用方哪天切 `raw: true` 时不会静默错判，导出则让单测能直接覆盖该分支。
+ *
+ * 已知缺口（2026-10-06 登记，本轮不修，只留痕）：日期规范化是**宽松**的，
+ * 两种输入会被静默归一成另一个日期，用户和界面都看不出来 ——
+ *   1. 溢出日期：`2026-02-31` → `2026-03-03`；
+ *   2. 美式歧义：raw:false 拿到的是 Excel 数字格式文本，dayjs 走 new Date() 的
+ *      美式解析，单元格若是 d/m/yy（`3/5/26` 表示 3 May）会被读成 5 March。
+ * 修它要改解析策略（严格模式 / 形态白名单），与 resolveExcelDeliveryDate 的预填
+ * 守卫不是同一层，不在守卫里兜 —— 守卫只管「这个值能不能直接用」，管不了
+ * 「这个值被归一成了什么」。
  */
 export function parseDateOrNull(value: unknown): string | null {
   if (value instanceof Date) {
@@ -129,12 +138,14 @@ const USABLE_DELIVERY_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** resolveExcelDeliveryDate 的判定结果。 */
 export interface ExcelDeliveryDatePrefill {
-  /** Excel 值能否直接用作系统交期。false 时必须退回零件现有值。 */
-  usable: boolean;
-  /** usable=false 时给预览行的中文说明（供 warnings 列 tooltip 汇总）；usable=true 时为 null。 */
+  /**
+   * 给该行追加的中文说明（供 warnings 列 tooltip 汇总），null = 不追加。
+   * 注意只有「无法识别」会追加；「没填」不追加 —— 没填是采购订单常态，
+   * 塞进与后端异常同构的 warnings 通道会稀释真正要看的异常。
+   */
   warning: string | null;
   /**
-   * 候选行的系统交期默认值。usable 时用 Excel 值，否则用 partDeliveryDate
+   * 候选行的系统交期默认值：Excel 值可用时用它，否则用传入的 partDeliveryDate
    * （零件当前已有值，即「不动这一列」）。
    */
   prefill: (partDeliveryDate: string | null) => string | null;
@@ -144,10 +155,10 @@ export interface ExcelDeliveryDatePrefill {
  * 判定 Excel 交货日期能不能直接当作系统交期预填。
  *
  * 2026-10-06 新增（MAJOR-1）：parseDateOrNull 对「待定」「2026年8月1日」这类
- * 无法识别的文本是原样透传的，而 el-date-picker 不会顺手洗掉绑定的 model 值
- * （它解析失败只把展示用的 parsedValue 置空），于是原文会一路流进
- * batch-update 的 system_delivery_date —— 后端该字段是三态 NaiveDate，反序列化
- * 阶段就 400，body 还是纯文本而不是 R 信封，用户已勾选的整批回填全部作废。
+ * 无法识别的文本是原样透传的，原文会一路流进 batch-update 的 system_delivery_date
+ * —— 后端该字段是三态 NaiveDate，反序列化阶段就 400，body 还是纯文本而不是 R
+ * 信封，用户已勾选的整批回填全部作废。（el-date-picker 侧不构成来源：2.14.6 的
+ * handleChange 只在解析成功时才 emitInput，非法输入只 debugWarn。）
  *
  * 取舍：不可解析时**不能**映射成 null。CandidateRow.systemDeliveryDate 的语义是
  * 「要写入的新值」，而 null 在后端三态里等于**清空成 NULL**；把识别不了的
@@ -155,24 +166,28 @@ export interface ExcelDeliveryDatePrefill {
  * 所以这里退回零件现有的 system_delivery_date（该行这一列不动），并给该行追加
  * 一条中文 warning，用户在预览表的「警告」列能看见。
  *
- * 注：dayjs 对 2026-02-31 这类溢出日期判 valid（会滚成 03-03），所以真正卡住
- * 不可用值的是前面的正则 —— dayjs 判定只是纵深防御（dayjs 库换了实现时会兜住）。
- * 溢出日期也走不到这里：parseDateOrNull 见到它就已经格式化成 03-03 了。
+ * 可用性只看形态（正则）：2026-10-06 曾在这里叠一道 `dayjs(excelValue).isValid()`，
+ * 实测是恒真的死条件 —— 2024–2027 全月全日 1848 组 + 边界年份/月份/日期抽样共
+ * 2000 余组里「正则放行而 dayjs 判 invalid」的值一个都没有（dayjs 对 2026-02-31、
+ * 2026-13-45、0000-00-00 全判 valid，滚成 03-03 / 2027-02-14 / 1899-11-30），
+ * 所以已删。
  */
 export function resolveExcelDeliveryDate(
   rowNo: number,
   excelValue: string | null,
 ): ExcelDeliveryDatePrefill {
-  const usable =
-    excelValue != null && USABLE_DELIVERY_DATE.test(excelValue) && dayjs(excelValue).isValid();
-  if (usable) {
-    return { usable: true, warning: null, prefill: () => excelValue };
+  if (excelValue != null && USABLE_DELIVERY_DATE.test(excelValue)) {
+    return { warning: null, prefill: () => excelValue };
   }
-  const warning =
-    excelValue == null || excelValue === ''
-      ? `第 ${rowNo} 行未填写交货日期，已保持零件现有系统交期不变`
-      : `第 ${rowNo} 行交货日期「${excelValue}」无法识别，已保持零件现有系统交期不变`;
-  return { usable: false, warning, prefill: (partDeliveryDate) => partDeliveryDate };
+  // 没填不是数据异常（2026-10-06）：采购订单模板里交货日期本就可空，
+  // 照常退回零件现有值，但不往 warnings 里塞一条「未填写」去稀释真异常。
+  if (excelValue == null || excelValue === '') {
+    return { warning: null, prefill: (partDeliveryDate) => partDeliveryDate };
+  }
+  return {
+    warning: `第 ${rowNo} 行交货日期「${excelValue}」无法识别，已保持零件现有系统交期不变`,
+    prefill: (partDeliveryDate) => partDeliveryDate,
+  };
 }
 
 function emptyResult(errors: string[] = []): ParsedPurchaseOrder {
