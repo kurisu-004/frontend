@@ -7,8 +7,6 @@
 // 批量品检通过，整体从 part 域迁入 prod 域（`/prod/batches/*`）—— 它们的操作对象是
 // 批次（t_part_batch），不是 part。批次集合读 `GET /parts/{part_id}/batches` 留在
 // part 域（操作对象是「某个 part 的批次集合」）。
-// 2026-10-07：待品检队列读的封装与类型不在本文件（域 = prod::inspection，见
-// `api/inspection.ts`）。
 //
 // 跨子域类型引用：PartItem / PartCreatePayload 定义在 ./crud；本文件所有批量响应
 // （DTO / 失败明细）都涉及单件 DTO 与单件创建 payload，因此仅 type-only 导入，

@@ -26,9 +26,8 @@
 //   在后端仓 `src/` 与 `tests/` 全仓 grep 过 `change-status`，零路由注册、零测试引用，
 //   前端侧亦零调用方，故无反断言需求。
 //
-// 2026-10-07：待品检队列读（`GET /prod/inspection/queue`）不在本文件守 —— 它属于
-//   prod::inspection 域（`src/api/inspection.ts`），URL 与 Query 参数断言见
-//   `src/api/__tests__/inspection.contract.spec.ts`。
+// 待品检队列读（`GET /prod/inspection/queue`）属 prod::inspection 域，其 URL 与
+//   Query 参数断言见 `src/api/__tests__/inspection.contract.spec.ts`。
 //
 // mock 手法沿 src/api/shelfProcesses.spec.ts 同款：整模块桩掉 `@/api/http`
 // （不 importOriginal），只留可断言的 api.get / api.post 入口。

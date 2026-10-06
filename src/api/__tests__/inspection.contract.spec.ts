@@ -25,8 +25,9 @@
 // （不 importOriginal），只留可断言的 api.get / api.post 入口。`cleanParams` 的桩**照抄**
 // 真实现的剥离语义（undefined / null / 空串 / 空数组一律不上 wire），否则 Q3 会退化成
 // 空断言（identity 桩 + `toEqual` 会因 `toEqual` 忽略 undefined 属性而恒真）。
-// 要断的是 `listInspectionBatches` 有没有把 `cleanParams(params)` 交给 axios，
-// 而非 cleanParams 自身的实现 —— 后者由真实现的单测负责。
+// 要断的是 `listInspectionBatches` 有没有把 `cleanParams(params)` 交给 axios；
+// `cleanParams` 自身语义在 `src/api/http.ts`，**当前无单测** —— 改它的过滤规则时
+// 上方复刻桩须同步，否则 Q3 会跟着假绿。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 

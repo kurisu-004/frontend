@@ -266,12 +266,12 @@ describe('useInspectionListStore', () => {
     await tick();
     listInspectionBatchesMock.mockClear();
 
-    // 默认态：只发排序 + 分页，不带 5 个筛选键。
+    // 默认态：只发排序 + 分页，不带 6 个筛选键。
     // ⚠️ 本用例只断到 **buildParams 层**：本 spec `vi.mock('@/api/inspection')`，
     // `listInspectionBatches` 是被 mock 掉的，`cleanParams` 那层「undefined 键不上
     // wire」根本不会执行 —— `params.xxx === undefined` ≠ 「axios 没发这个键」。
-    // 真 wire 形态（键集合逐个比对 axios 收到的 params）在
-    // `src/api/__tests__/inspection.contract.spec.ts` 的 Q2 / Q3 用例里验。
+    // 真 wire 形态在 `src/api/__tests__/inspection.contract.spec.ts`：Q2 逐值比
+    // params，Q3 断键集合。
     store.query.search.drawingNo = '   ';
     store.query.pageSize = 20;
     await store.query.fetchList();

@@ -2,10 +2,6 @@
 //   1. 待品检队列列表（`GET /prod/inspection/queue`，判据 `status='INSPECTION'`）；
 //   2. 扫码查「装配件 → 子零件 → 批次」树（`GET /prod/inspection/scan/{serial_no}`）。
 //
-// 2026-10-07：队列读的封装与行类型住本文件 —— `/prod/inspection/queue` 是
-// prod::inspection 域的读端点（不打 `/prod/batches/*`），队列行也是品检域专属 VO，
-// 不属零件域。
-//
 // 路径**相对**（`api` 实例的 baseURL 是 `/api/v2`），禁写绝对 URL：dev 走 vite proxy、
 // 生产走 nginx 同源反代，写死 host 会让两个环境各连各的。
 
@@ -54,7 +50,7 @@ export interface InspectionQueueItem {
 // 的返回类型标注）。
 // ⚠️ 单点只覆盖**信封**：**行**类型 `InspectionQueueItem`（上方手写声明）与
 // `inspectionQueueListItemSchema` 仍是双声明 —— 行被列定义 / 表格 / 扫码选行共用，
-// 手写形态是这份模块图零运行时依赖的前提。改行字段须同批改两处。
+// 改行字段须同批改两处。
 
 /** `GET /prod/inspection/queue` 的 Query 入参。
  *
@@ -68,7 +64,7 @@ export interface ListInspectionQueueParams {
   name?: string;
   /** ILIKE `%kw%` 匹配 `t_part.serial_no`。 */
   serial_no?: string;
-  /** 雪花 ID 字符串，禁止 Number()（CLAUDE.md §3）。后端展开为 L1+L2 ids。 */
+  /** 雪花 ID 字符串，禁止 Number()（19 位雪花 ID 会丢精度）。后端展开为 L1+L2 ids。 */
   customer_id?: string;
   /** 系统交期区间（含端点；任一端点为空表示半开）。 */
   system_delivery_date_from?: string;
