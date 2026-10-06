@@ -1,21 +1,21 @@
 <!--
   SystemDeliveryOrdersPanel.vue
   dashboard 右栏两块交期面板的共用展示壳（variant 二选一）：
-    - variant="urgent"   「最紧急工单（Top N）」：7 天窗口内**还没交过**的工单
-    - variant="partial"  「部分已交（Top N）」：7 天窗口内**已交过一部分**的工单
+    - variant="urgent"   「最紧急工单」：服务端 7 天窗口内**还没交过**的工单
+    - variant="partial"  「部分已交」：服务端 7 天窗口内**已交过一部分**的工单
 
-  两个 variant 的入参 items 都是 useDashboardUrgentList.items 的同一份（零新增请求），
-  但**已经过窗口过滤 + 分桶**（`splitForDashboard`），本组件只负责渲染，不再判口径。
+  数据源是 GET /dashboard/snapshot 的 `system_delivery_orders.{urgent,partial}`：
+  窗口过滤、按「有无已交」分桶、每桶截断**全部在服务端**，本组件只负责渲染、不再
+  判口径、不再 slice。服务端每桶上限 30 条，与面板高度匹配（超出部分由面板滚动）。
 
-  行源（2026-10-05）：t_part 全表行，含装配件的子零件、不含装配件父行，行单位恒「件」
-  （与 snapshot 柱状图 `upcoming_delivery[].count` 的 `COUNT(*) FROM t_part` 同口径）。
+  行源（2026-10-07）：t_part 全表行，含装配件的子零件、不含装配件父行，行单位恒「件」。
 
   行内 6 列 —— 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期：
     - 名称与二级客户两列窄屏下 ellipsis 截断，tooltip 常显兜底（不做溢出检测：
       行高会随内容抖动）。系统交期只出日期；临近橙由 deliveryUrgencyClass 驱动。
-      逾期红在本面板恒不出现 —— items 已过窗口下界（每一行 system_delivery_date >=
-      today），而 deliveryUrgencyClass 只在 diff < 0 时才给 'overdue'，故样式表里
-      没有逾期分支。
+      逾期红在本面板恒不出现 —— 入参已过服务端窗口下界（每一行
+      system_delivery_date >= today），而 deliveryUrgencyClass 只在 diff < 0 时才给
+      'overdue'，故样式表里没有逾期分支。
     - 数量列：urgent 出纯总量；partial 出「已交 / 总量」，已交部分走主题色，
       并包 el-tooltip 显式标注单位与含义（恒「件」）。
       partial 的两个数字不做静默截断 —— 轨宽按 4 位 ×2 留足，溢出会带省略号可见。
@@ -35,13 +35,13 @@
       </div>
     </template>
 
-    <div v-if="displayItems.length === 0" class="list-empty">
+    <div v-if="items.length === 0" class="list-empty">
       <el-empty :image-size="60" :description="emptyText" />
     </div>
 
     <div v-else class="list-rows">
       <div
-        v-for="item in displayItems"
+        v-for="item in items"
         :key="item.id"
         :class="['row', { urgent: isUrgentVariant && item.is_urgent }]"
         @click="emit('rowClick', item)"
@@ -58,7 +58,7 @@
           :show-after="200"
         >
           <span class="row-qty row-qty--partial">
-            <span class="row-qty-done">{{ item.delivered_quantity ?? 0 }}</span>
+            <span class="row-qty-done">{{ item.delivered_quantity }}</span>
             <span class="row-qty-sep">/</span>
             <span>{{ item.quantity }}</span>
           </span>
@@ -90,37 +90,27 @@
 import { computed } from 'vue';
 import { Bell, GoodsFilled } from '@element-plus/icons-vue';
 import { deliveryUrgencyClass, formatDeliveryDate } from '@/utils/deliveryDate';
-import {
-  ORDER_STATUS_LABEL,
-  ORDER_STATUS_TAG_TYPE,
-  type PartListItem,
-} from '@/types/parts';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
+import type { SystemDeliveryOrderData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
 
-const props = withDefaults(
-  defineProps<{
-    /** 变体：urgent = 最紧急（未交过）；partial = 部分已交。 */
-    variant: 'urgent' | 'partial';
-    /** 已过窗口过滤 + 分桶的条目（`splitForDashboard` 的某一桶）。 */
-    items: PartListItem[];
-    limit?: number;
-  }>(),
-  { limit: 30 },
-);
+const props = defineProps<{
+  /** 变体：urgent = 最紧急（未交过）；partial = 部分已交。 */
+  variant: 'urgent' | 'partial';
+  /** 服务端已分桶并截断的条目（`snapshot.system_delivery_orders` 的某一桶）。
+   *  **组件不再 slice**：上限由服务端定，重复截断只会让标题的 Top N 与实际行数
+   *  在服务端放宽上限时对不上。 */
+  items: SystemDeliveryOrderData[];
+}>();
 
-const emit = defineEmits<(e: 'rowClick', part: PartListItem) => void>();
+const emit = defineEmits<(e: 'rowClick', part: SystemDeliveryOrderData) => void>();
 
 const isPartialVariant = computed(() => props.variant === 'partial');
 const isUrgentVariant = computed(() => props.variant === 'urgent');
 
 const titleIcon = computed(() => (isPartialVariant.value ? GoodsFilled : Bell));
 
-/** 展示条数：入参已分桶，这里只做上限截断。 */
-const displayItems = computed<PartListItem[]>(() => props.items.slice(0, props.limit));
-
 const titleText = computed(() =>
-  isPartialVariant.value
-    ? `部分已交（Top ${displayItems.value.length}）`
-    : `最紧急工单（Top ${displayItems.value.length}）`,
+  isPartialVariant.value ? '部分已交工单' : '最紧急工单',
 );
 const subtitleText = computed(() =>
   isPartialVariant.value ? '存在已交批次 · 7 天内' : '按系统交期升序 · 7 天内',
@@ -130,10 +120,10 @@ const emptyText = computed(() =>
 );
 
 /** partial 数量列的 tooltip：显式标注单位与含义。
- *  行源恒为 t_part（row_type=PART_FLAT：含装配件子件、不含装配件父行），故单位恒「件」，
+ *  行源恒为 t_part（含装配件子件、不含装配件父行），故单位恒「件」，
  *  不存在「装配件行按套计」的分支。 */
-function deliveredTooltip(item: PartListItem): string {
-  return `已送 ${item.delivered_quantity ?? 0} 件 / 总量 ${item.quantity} 件`;
+function deliveredTooltip(item: SystemDeliveryOrderData): string {
+  return `已送 ${item.delivered_quantity} 件 / 总量 ${item.quantity} 件`;
 }
 </script>
 

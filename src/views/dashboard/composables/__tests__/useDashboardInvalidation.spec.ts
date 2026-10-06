@@ -20,8 +20,9 @@
 // 没在看的那个口径，切回去时吃到旧数。断言语义不变（仍是「WS 事件 → invalidate
 // 该前缀」）。
 //
-// 2026-10-05：urgentList 键改为含 today 的工厂后同理改用
-// qk.dashboardUrgentListPrefix —— 事件到达时昨天窗口那条缓存同样该失效。
+// 2026-10-07：dashboard 域只余 3 个 query（snapshot / upcoming / deliveryOrders），
+// 本文件用 qk.dashboardUpcomingPrefix 作「第二个 key」样本 —— 交期分桶键含
+// basis × days 两个维度，事件到达时任意口径 / 任意天数的缓存同样该失效。
 //
 // 2026-10-02 取舍：用例内显式 `scope.stop()` 只是正常路径的清理；真正的
 // 安全网是文件级 `makeScope()` 记账 + afterEach 统一 stop —— 断言中途失败时用例末尾的
@@ -186,7 +187,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
     const scope = makeScope();
     scope.run(() => {
-      testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardUrgentListPrefix));
+      testApp.runWithContext(() => useDashboardInvalidation(qk.dashboardUpcomingPrefix));
     });
     invalidateSpy.mockClear();
 
@@ -257,7 +258,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() =>
-        useDashboardInvalidation([qk.dashboardSnapshotPrefix, qk.dashboardUrgentListPrefix]),
+        useDashboardInvalidation([qk.dashboardSnapshotPrefix, qk.dashboardUpcomingPrefix]),
       );
     });
     invalidateSpy.mockClear();
@@ -269,10 +270,10 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
       ts: 'x',
     });
     await vi.advanceTimersByTimeAsync(500);
-    // 两次 invalidate（dashboardSnapshotPrefix + dashboardUrgentListPrefix）
+    // 两次 invalidate（dashboardSnapshotPrefix + dashboardUpcomingPrefix）
     expect(invalidateSpy).toHaveBeenCalledTimes(2);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardSnapshotPrefix });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardUrgentListPrefix });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardUpcomingPrefix });
     scope.stop();
   });
 
@@ -346,7 +347,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     const scope = makeScope();
     scope.run(() => {
       testApp.runWithContext(() =>
-        useDashboardInvalidation([qk.dashboardSnapshotPrefix, qk.dashboardUrgentListPrefix]),
+        useDashboardInvalidation([qk.dashboardSnapshotPrefix, qk.dashboardUpcomingPrefix]),
       );
     });
     invalidateSpy.mockClear();
@@ -354,7 +355,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     window.dispatchEvent(new CustomEvent('dashboard:full-refetch', { detail: { code: 4003 } }));
     expect(invalidateSpy).toHaveBeenCalledTimes(2);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardSnapshotPrefix });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardUrgentListPrefix });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.dashboardUpcomingPrefix });
     scope.stop();
   });
 

@@ -14,8 +14,13 @@
 
   Props / Events：
     - modelValue：boolean（v-model 双向绑定）；
-    - part：PartListItem | null（父组件传入选中行；null = 未选）；
+    - part：PartPreviewTarget | null（父组件传入选中行；null = 未选）；
     - @update:modelValue：双向同步。
+
+  入参类型用 `PartPreviewTarget`（types/dashboard.ts）而不是某个具体 VO：dashboard 上
+  三条行点击路径的行类型各不相同（工人在手加工批次 / 交期面板行 / 下钻明细行），
+  而本弹窗只读 4 个字段（序列号 / 名称 / 状态 + 按 id 拉图纸与批次两个独立请求）。
+  收成最小公共结构，弹窗的契约就摆在这里。
 
   数据流：
     - 文件：usePartFilesListQuery(() => part?.id ?? null) → 过滤 kind='DRAWING' &&
@@ -145,13 +150,13 @@ import {
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TAG_TYPE,
   type OrderStatus,
-  type PartListItem,
 } from '@/types/parts';
+import type { PartPreviewTarget } from '@/types/dashboard';
 import type { PartBatchSchema, PartFileSchema } from '@/composables/queries/schemas';
 
 const props = defineProps<{
   modelValue: boolean;
-  part: PartListItem | null;
+  part: PartPreviewTarget | null;
 }>();
 
 const emit = defineEmits<(e: 'update:modelValue', v: boolean) => void>();

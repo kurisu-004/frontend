@@ -6,29 +6,27 @@
     - date: 'YYYY-MM-DD'
     - layer: 'top' | 'middle' | 'bottom'
     - statuses: OrderStatus[]
-    - basis: 'planned' | 'system'（2026-10-04 新增，交期统计口径）
+    - basis: 'planned' | 'system'（交期统计口径）
     - @update:modelValue: 双向同步
   渲染：el-table stripe；列 = # / 流水(serial_no) / 图号(drawing_no) / 名称 /
   客户(l1_customer_name + customer_name 拼接) / 状态 ElTag / 倒计
   （按 basis 取 planned_delivery_date 或 system_delivery_date，出逾期/临近配色）；
   loading / error / empty 三态。
   闸门：父组件 DashboardView `v-if="selectedLayer"` 保证 drawer 首次点击前不挂载，
-  useDashboardUpcomingList 的 enabled 闸门天然生效；drawer 自身
+  useDashboardDeliveryOrders 的 enabled 闸门天然生效；drawer 自身
   `v-if="statuses.length === 0"` 是 props 异常兜底。
 
-  口径（2026-10-04 新增）：抽屉是柱状图的下钻，日期窗口与倒计列都必须跟柱状图当前
-  口径一致，否则会出现「点的是系统交期的柱、列里却显示计划交期倒计」的自相矛盾。
-  - 组件不持口径状态：props.basis 进，透传给 useDashboardUpcomingList；
+  口径：抽屉是柱状图的下钻，明细的交期口径必须跟柱状图当前口径一致，否则会出现
+  「点的是系统交期的柱、列里却显示计划交期倒计」的自相矛盾。
+  - 组件不持口径状态：props.basis 进，透传给 useDashboardDeliveryOrders；
   - header 挂一枚口径小标签，让抽屉自解释当前口径；
   - 倒计列读 rowDeliveryDate(计划交期, 系统交期) 统一取字段，模板里不写三元；
-  - 客户列 / 倒计列的取字段 helper 一律收「字段值」而不是整行，模板侧不留
-    `as PartListItem` 强转（el-table 列 slot 的 row 是 DefaultRow，见函数注释）。
+  - 客户列 / 倒计列的取字段 helper 一律收「字段值」而不是整行，模板侧不留强转
+    （el-table 列 slot 的 row 是 DefaultRow，见函数注释）。
 
-  统计口径与条目（2026-10-05）：抽屉是柱状图的下钻，行源与柱高同源 ——
-  t_part 全表行，含装配件的子零件、不含装配件父行，行单位恒「件」。故一个装配件
-  （4 个子零件）+ 5 个独立零件 = 柱高 9 = 三层抽屉逐层打开的行数之和（一次只开一层）；
-  子零件各占一行，抽屉里**不**出现装配件父行，也无装配件标识列 / 树形 / 标签。
-  头部件数取服务端 total，被 limit 截断时追加「仅显示前 N 条」。
+  条数：头部件数取服务端 total（匹配总数，不受 items 截断影响），被截断时追加
+  「仅显示前 N 条」。行源与柱高同源 —— t_part 全表行，含装配件的子零件、不含装配件
+  父行，行单位恒「件」。
 
   抽屉形态：direction 'btt'（bottom-to-top）+ :size 60% —— 从屏幕底部弹出、水平
   宽度撑满、最大高度 60%，与 dashboard 双栏布局配合（点柱状图看到的是「目标日期的
@@ -39,7 +37,7 @@
 
   emit('rowClick', part)：行点击 → 父组件打开 PartPreviewDialog 预览该工单。抽屉
   **不自行关闭**（dialog append-to-body 覆盖在抽屉之上，关掉 dialog 后抽屉仍可见，
-  方便连续预览）。本组件不感知 PartPreviewDialog 存在，emit 只传 part payload。
+  方便连续预览）。本组件不感知 PartPreviewDialog 存在，emit 只传行 payload。
 -->
 <template>
   <el-drawer
@@ -66,12 +64,12 @@
           >
             {{ LAYER_LABEL[layer] }}
           </el-tag>
-          <!-- 2026-10-04：口径小标签，让抽屉自解释当前统计口径（跟柱状图开关同步） -->
+          <!-- 口径小标签，让抽屉自解释当前统计口径（跟柱状图开关同步） -->
           <el-tag size="small" effect="plain" type="info">{{ basisLabel }}</el-tag>
           <!--
-            2026-10-05：件数渲染 total（服务端匹配总数）而非 rows.length —— limit 与
-            端点页长上限一致，rows.length 只是「本页拿回来的条数」，拿它当件数会在
-            条数触顶时谎报。被截断时追加提示，否则用户以为抽屉里的就是全部。
+            件数渲染 total（服务端匹配总数）而非 rows.length —— items 被服务端截断到
+            200 行，rows.length 只是「本页拿回来的条数」，拿它当件数会在条数触顶时谎报。
+            被截断时追加提示，否则用户以为抽屉里的就是全部。
             两个开关必须同时盯着：
             - isPending：换键期间（切 basis / 切日期 / 切层）query.data 尚未落地，
               此时不渲染件数 —— pending 期渲染「共 0 件」会被读成一个权威计数；
@@ -151,18 +149,18 @@
 // dashboard「交期分桶柱状图按层点击抽屉」展示壳。
 //
 // 数据流：
-//   1. props.modelValue=true 时 useDashboardUpcomingList 的 enabled 闸门打开
+//   1. props.modelValue=true 时 useDashboardDeliveryOrders 的 enabled 闸门打开
 //      （params getter 返回 { date, statuses, basis } 非 null）；
 //   2. params 变化（切层 / 切日期 / 切口径）→ queryKey 变化 → 自动 refetch；
-//   3. rows = query.data.items（请求 limit 与端点页长上限一致 ⇒ 最多 200 行；
-//      单日 × 8 状态实际远小于此）；total = 服务端匹配总数，header 件数按它渲染。
+//   3. rows = query.data.items（服务端最多 200 行；单日 × 单层实际远小于此）；
+//      total = 服务端匹配总数，header 件数按它渲染。
 //
 // 视觉：
 //   - 顶部 header：单行放 日期 + 层标题(el-tag 用项目主色背景) + 口径标签 + 共 N 件
 //     （N = total；首次加载 pending 期与请求失败期整块不渲染，避免「共 0 件」被读成
 //      权威计数；后台 refetch 期（isPending=false、isFetching=true）**照常渲染**，
 //      因为此刻数字是当前且正确的，整段闪烁反而是大屏噪音；
-//      被服务端 limit 截断时追加「仅显示前 N 条」）
+//      被服务端截断时追加「仅显示前 N 条」）
 //   - 列表：el-table stripe；列 = # / 流水 / 图号 / 名称 / 客户(一二级拼接) / 状态 ElTag /
 //     倒计（**当前口径**交期字段的倒计文案，逾期/临近配色）
 //   - loading / error / empty 三态
@@ -171,18 +169,14 @@
 
 import { computed, toValue } from 'vue';
 import { WarningFilled } from '@element-plus/icons-vue';
-import { useDashboardUpcomingList } from '@/views/dashboard/composables/useDashboardUpcomingList';
+import { useDashboardDeliveryOrders } from '@/views/dashboard/composables/useDashboardDeliveryOrders';
+import type { DeliveryOrderDetailData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
 import {
   deliveryDaysLeftText,
   deliveryUrgencyClass,
   formatDeliveryDate,
 } from '@/utils/deliveryDate';
-import {
-  ORDER_STATUS_LABEL,
-  ORDER_STATUS_TAG_TYPE,
-  type OrderStatus,
-  type PartListItem,
-} from '@/types/parts';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE, type OrderStatus } from '@/types/parts';
 import { DELIVERY_BASIS_LABEL, type DeliveryBasis } from '@/types/dashboard';
 
 const props = defineProps<{
@@ -190,25 +184,24 @@ const props = defineProps<{
   date: string;
   layer: 'top' | 'middle' | 'bottom';
   statuses: readonly OrderStatus[];
-  /** 2026-10-04 新增：交期统计口径（必填，唯一状态源在父组件 DashboardView）。 */
+  /** 交期统计口径（必填，唯一状态源在父组件 DashboardView）。 */
   basis: DeliveryBasis;
 }>();
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void;
   /** 行点击 → 父组件 DashboardView 打开 PartPreviewDialog 预览该工单。 */
-  (e: 'rowClick', part: PartListItem): void;
+  (e: 'rowClick', part: DeliveryOrderDetailData): void;
 }>();
 
-/** 2026-09-30 新增：层标签映射（与 UpcomingDeliveryChart.LAYERS.label 对齐）。 */
+/** 层标签映射（与 UpcomingDeliveryChart.LAYERS.label 对齐）。 */
 const LAYER_LABEL: Record<'top' | 'middle' | 'bottom', string> = {
   top: '品检前',
   middle: '待品检/待送货',
   bottom: '已送货',
 };
 
-/** 2026-09-30 新增 + Phase 5 同步 EP 预设 hex（与 UpcomingDeliveryChart.LAYERS.color 对齐，
- *  顶部 header 标签背景色取此）。
+/** 层色映射（与 UpcomingDeliveryChart.LAYERS.color 对齐，顶部 header 标签背景色取此）。
  *  用 hex 而非 var() —— el-tag :style 直接吃 hex 字符串，与 chart 内 layer.color
  *  形态对齐；dashboard 三层视觉闭环 = chart 柱体 + drawer header tag 同色。 */
 const LAYER_COLOR: Record<'top' | 'middle' | 'bottom', string> = {
@@ -219,29 +212,25 @@ const LAYER_COLOR: Record<'top' | 'middle' | 'bottom', string> = {
 
 const layerColor = computed(() => LAYER_COLOR[props.layer]);
 
-/** 2026-10-04 新增：header 口径标签文案（与柱状图开关共用 DELIVERY_BASIS_LABEL）。 */
+/** header 口径标签文案（与柱状图开关共用 DELIVERY_BASIS_LABEL）。 */
 const basisLabel = computed(() => DELIVERY_BASIS_LABEL[props.basis]);
 
-/** 2026-10-04 新增：取当前口径对应的交期字段值。
+/** 取当前口径对应的交期字段值。
  *  倒计列有三处消费（class / 倒计文案 / 日期回显），散在模板里各写一次三元容易
  *  漏改一处导致「class 用计划交期、文案用系统交期」，故收成一个函数。
  *  入参是**两个字段值**而不是整行：el-table 列的 scoped slot 交给模板的 row 类型是
  *  el-table 的 DefaultRow（Record<PropertyKey, any>，不含具体字段），把整行传进收
- *  PartListItem 的函数在模板侧就得逐处 `as PartListItem` 强转，噪音大且掩盖了
+ *  DeliveryOrderDetailData 的函数在模板侧就得逐处强转，噪音大且掩盖了
  *  「这个函数到底读哪几个字段」这条信息。传字段值则零强转，函数签名本身也把依赖
  *  的字段钉死了。
  *  system_delivery_date 可空，返回 null 时下游 deliveryDate 工具函数按空值处理
  *  （无倒计文案、日期列留空）。 */
-function rowDeliveryDate(
-  plannedDate: string | null,
-  systemDate: string | null,
-): string | null {
+function rowDeliveryDate(plannedDate: string | null, systemDate: string | null): string | null {
   return props.basis === 'system' ? systemDate : plannedDate;
 }
 
-/** 2026-09-30 新增：params getter —— 仅 drawer 打开时返回非 null 让闸门打开；
- *  关闭（modelValue=false）时返回 null 停 fetch，与 enabled 闸门语义对齐。
- *  2026-10-04：透传 basis，让下钻的日期窗口与柱状图当前口径一致。 */
+/** params getter —— 仅 drawer 打开时返回非 null 让闸门打开；
+ *  关闭（modelValue=false）时返回 null 停 fetch，与 enabled 闸门语义对齐。 */
 const params = computed(() => {
   if (!props.modelValue) return null;
   if (props.statuses.length === 0) return null;
@@ -252,21 +241,23 @@ const params = computed(() => {
   };
 });
 
-const { data: rows, total, isPending, error } = useDashboardUpcomingList(() => toValue(params));
+const { data: rows, total, isPending, error } = useDashboardDeliveryOrders(
+  () => toValue(params),
+);
 
-/** total 超过实际取回条数 = 服务端截断（limit 与端点页长上限一致），
+/** total 超过实际取回条数 = 服务端截断（items 上限 200 行），
  *  头部件数与提示条的开关。total <= rows.length 时不渲染任何额外提示。 */
 const isTruncated = computed(() => total.value > rows.value.length);
 
 /** 行点击 → emit rowClick(part) 给父组件 DashboardView（父组件负责打开
  *  PartPreviewDialog）。本组件不感知该 dialog 存在 —— 关注点分离，emit 只传
  *  part payload。 */
-function onRowClick(row: PartListItem): void {
+function onRowClick(row: DeliveryOrderDetailData): void {
   emit('rowClick', row);
 }
 
-/** 2026-09-30 新增：客户路径展示 —— l1_customer_name + customer_name（如有）。
- *  同 rowDeliveryDate：收字段值而非整行，模板侧免掉 `as PartListItem` 强转。 */
+/** 客户路径展示 —— l1_customer_name + customer_name（如有）。
+ *  同 rowDeliveryDate：收字段值而非整行，模板侧免掉整行强转。 */
 function customerPath(l1Name: string | null, customerName: string | null): string {
   const l1 = l1Name ?? '';
   const cur = customerName ?? '';

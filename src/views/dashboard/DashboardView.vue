@@ -4,29 +4,23 @@
   组件自身不持数据，全部由 composables 提供。
 
   布局：
-    - KPI 横排（DashboardKpiTiles，5 tile：逾期未交 / 今日到期 / 两周到期 / 在制 / 在检）
+    - KPI 横排（DashboardKpiTiles，5 tile：逾期未交 / 今日到期 / N 天到期 / 在加工 / 在检）
     - 双栏：左 UpcomingDeliveryChart + FactoryRealtimeStrip，右 SystemDeliveryOrdersPanel ×2
       （variant=urgent 最紧急工单 / variant=partial 部分已交）
     - 视口 ≤1100px 折叠成单列
 
-  数据流：
-    - **交期统计口径**（2026-10-04 新增）：`deliveryBasis` ref（缺省 planned）是全页
-      唯一口径源，一处下发三处消费 —— 柱状图开关（`:basis` / `@update:basis`）、
-      snapshot 请求（useDashboardSnapshot 的 queryKey 含 basis ⇒ 切口径即换键
-      自动 refetch）、下钻抽屉（`:basis`）。柱状图与「今日到期 / 两周到期」KPI 都
-      从同一份 upcomingBuckets 派生，KPI 无需任何改动即自动跟随。切口径时 snapshot
-      用 keepPreviousData 顶着上一份数据（大屏不闪空），把 query 的 isPlaceholderData
-      经 `:stale` 下发给柱状图出「数字还不是当前口径」提示层，避免旧数静默停在新口径
-      开关下。
-    - useDashboardSnapshot(() => deliveryBasis.value) → snapshot.upcoming_delivery
-      （14 天分桶，随口径变化）+ in_process + on_inspection_shelves（在制 / 在检 KPI
-      派生来源）
-    - useDashboardUrgentList() → items（listUnionItems 拉 row_type=PART_FLAT 的
-      非终态件，按 system_delivery_date ASC；服务端已按 [今天, 今天+6] 的 7 天窗口
-      过滤，并截断到至多 100 件）；右栏两块面板**共用这一份 items**，再由
-      splitForDashboard（src/utils/systemDeliveryOrders.ts）按同一窗口 + 「有无已交
-      批次」分桶，零新增请求。右栏恒为系统交期语义，不跟随交期口径开关。
-    - useDashboardOverdue(isManager) → overdueCount（Manager-only，闸门按角色）
+  数据流（两个 HTTP 请求 + 一个共享 WS 事件订阅）：
+    - useDashboardSnapshot() → snapshot：逾期未交 KPI / 在加工 KPI / 在检 KPI /
+      工厂实时态 chips / 右栏两块交期面板。**无口径概念** —— 分桶已拆到独立端点，
+      故切口径 / 切天数不会换它的键，与口径无关的四个 KPI 也不会跟着闪空。
+    - useDashboardUpcoming(deliveryBasis, deliveryDays) → 分桶 + 后端判定的 today：
+      柱状图数据源，也是「今日到期 / N 天到期」两个 KPI 的派生来源（柱状图与 KPI
+      读同一份 buckets，口径天然一致，不存在两个数互相矛盾）。
+    - 交期统计口径（deliveryBasis，缺省 system）与窗口天数（deliveryDays，缺省 14）
+      是全页唯二的可变入参，一处改动、三处消费：柱状图分桶请求、柱状图开关 / 天数
+      选择器、下钻抽屉的 basis 快照。切口径 / 切天数时 useDashboardUpcoming 换键占位
+      （keepPreviousData），isPlaceholderData 经 `:stale` 下发给柱状图出「数字还不是
+      当前口径」提示层，同时挡住柱子点击（拿旧日期 + 新口径去查会数据错位）。
     - 行点击 → selectedPart + previewOpen 走 PartPreviewDialog（统一入口）
 
   2026-10-03 新增右栏第二块面板「部分已交」：.main-right 两卡均分高度
@@ -46,19 +40,22 @@
       <div class="main-left">
         <!-- KPI 横排（5 tile） -->
         <DashboardKpiTiles
-          :manager="isManager"
           :overdue-count="overdueCount"
           :today-count="todayCount"
-          :week-count="weekCount"
+          :window-count="windowCount"
+          :days="deliveryDays"
           :in-process-count="inProcessCount"
           :in-inspection-count="inInspectionCount"
         />
         <UpcomingDeliveryChart
           :buckets="upcomingBuckets"
           :basis="deliveryBasis"
-          :stale="snapshotStale"
+          :days="deliveryDays"
+          :today="upcomingToday"
+          :stale="upcomingStale"
           height="100%"
           @update:basis="deliveryBasis = $event"
+          @update:days="deliveryDays = $event"
           @bar-layer-click="onBarLayerClick"
         />
         <!-- 工厂实时态 -->
@@ -101,7 +98,7 @@
 </template>
 
 <script setup lang="ts">
-// dashboard 顶层视图的编排：三个独立 useQuery + 一个共享 WS 事件订阅，通过
+// dashboard 顶层视图的编排：两个独立 useQuery + 一个共享 WS 事件订阅，通过
 // useDashboardInvalidation 复用 AFFECTS_DASHBOARD 事件集 + 500ms / 1500ms debounce，
 // 避免重复订阅 handler。
 //
@@ -114,12 +111,10 @@
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { usePermissions } from '@/composables/usePermissions';
-import type { OrderStatus, PartListItem } from '@/types/parts';
-import type { DeliveryBasis } from '@/types/dashboard';
+import type { OrderStatus } from '@/types/parts';
+import type { DeliveryBasis, PartPreviewTarget } from '@/types/dashboard';
 import { useDashboardSnapshot } from '@/views/dashboard/composables/useDashboardSnapshot';
-import { useDashboardUrgentList } from '@/views/dashboard/composables/useDashboardUrgentList';
-import { useDashboardOverdue } from '@/views/dashboard/composables/useDashboardOverdue';
-import { splitForDashboard } from '@/utils/systemDeliveryOrders';
+import { useDashboardUpcoming } from '@/views/dashboard/composables/useDashboardUpcoming';
 import DashboardKpiTiles from './components/DashboardKpiTiles.vue';
 import UpcomingDeliveryChart from './components/UpcomingDeliveryChart.vue';
 import UpcomingDeliveryListDrawer from './components/UpcomingDeliveryListDrawer.vue';
@@ -135,75 +130,72 @@ const canOpenPartDetail = computed(
   () => isManager.value || isClerk.value || isInspector.value || isCncProgrammer.value,
 );
 
-// ============ 交期统计口径 ============
-// 2026-10-04 新增：全页唯一口径源。planned（计划交期）是缺省口径（= 加本功能前的
-// 行为），不做 localStorage 持久化 —— 每次进页面回落 planned，避免上次口径成为
-// 隐性默认、用户对着与预期不符的数字做判断。
-// 切口径只改这一个 ref，三处消费自动跟随：
-//   - useDashboardSnapshot 的 queryKey（含 basis）→ 换键自动 refetch 新口径数据；
-//   - UpcomingDeliveryChart 开关的选中态（受控 :basis）；
-//   - selectedLayer.basis → 抽屉下钻的日期窗口与倒计列。
-// KPI（今日到期 / 两周到期）从 upcomingBuckets 派生，buckets 本身随口径变，故无需改动。
-const deliveryBasis = ref<DeliveryBasis>('planned');
+// ============ 交期统计口径 + 窗口天数 ============
+// 全页唯二的可变入参。不做 localStorage 持久化 —— 每次进页面回落缺省值，避免上次口径
+// 成为隐性默认、用户对着与预期不符的数字做判断。切任一个都只改这一个 ref：
+//   - useDashboardUpcoming 的 queryKey（含 basis + days）→ 换键自动 refetch 新数据；
+//   - UpcomingDeliveryChart 的开关 / 天数选择器选中态（受控 props）；
+//   - selectedLayer.basis → 抽屉下钻的统计口径。
+// KPI（今日到期 / N 天到期）从同一份 buckets 派生，故无需改动即自动跟随口径。
+//
+// 口径缺省 system（系统交期）：右栏两块交期面板恒为系统交期语义，缺省口径若选
+// planned 会让 KPI 与同页右栏在首次进入时说两个口径的数字。
+const deliveryBasis = ref<DeliveryBasis>('system');
+/** 柱状图窗口天数（后端 clamp 1..60）。列进 KPI 标签（`N 天到期`）与柱状图分桶。 */
+const deliveryDays = ref(14);
 
 // ============ 数据 ============
-// snapshotStale = 该 query 的 isPlaceholderData，即「换键占位中，图上数字还是上一口径」。
-// 不用 isFetching：同键后台 refetch（WS 事件驱动的周期性刷新）也会让它为 true，
-// 而那时图上数字是当前且正确的，不该提示。
-const { data: snapshot, isPlaceholderData: snapshotStale } = useDashboardSnapshot(
+// upcomingStale = useDashboardUpcoming 的 isPlaceholderData，即「换键占位中，图上数字
+// 还是上一份（口径 / 天数）」。不用 isFetching：同键后台 refetch（WS 事件驱动的周期性
+// 刷新）也会让它为 true，而那时图上数字是当前且正确的，不该提示。
+const { data: snapshot } = useDashboardSnapshot();
+const { data: upcoming, isPlaceholderData: upcomingStale } = useDashboardUpcoming(
   () => deliveryBasis.value,
+  () => deliveryDays.value,
 );
-const { items: urgentItems, windowStartIso } = useDashboardUrgentList();
-const { overdueCount } = useDashboardOverdue(isManager);
 
-// upcoming_delivery 数组（来自 snapshot，可能为空数组）
-const upcomingBuckets = computed(() => snapshot.value?.upcoming_delivery ?? []);
+/** 后端判定的「今天」（'YYYY-MM-DD'）。前端一律用它，不再 new Date()。 */
+const upcomingToday = computed<string>(() => upcoming.value?.today ?? '');
 
-// in_process 数组（来自 snapshot，按工人分组 chips 用）
+/** 交期分桶（来自端点 2，可能为空数组）。 */
+const upcomingBuckets = computed(() => upcoming.value?.buckets ?? []);
+
+/** 工人在手加工批次（来自 snapshot.in_process，chips 用）。 */
 const inProcessItems = computed(() => snapshot.value?.in_process ?? []);
 
-// 右栏两块面板的分桶结果。共用同一份 items，只 filter + slice，零新增请求；
-// 交付动作发 PART_DELIVERED（已在本域 AFFECTS_DASHBOARD 事件集内）→ 自动失效重取。
-// windowStartIso 原样透传 ⇒ 客户端窗口与服务端请求窗口锁同一瞬间，不会差一天。
-const deliveryBuckets = computed(() =>
-  splitForDashboard(urgentItems.value, { urgentLimit: 30, partialLimit: 30 }, windowStartIso),
-);
+/** 右栏两块面板的分桶（服务端已按窗口 + 「有无已交」分好并各截断 30 行，零新增请求、
+ *  零前端过滤）。交付动作发 PART_DELIVERED（已在本域 AFFECTS_DASHBOARD 事件集内）
+ *  → 自动失效重取。 */
+const deliveryBuckets = computed(() => snapshot.value?.system_delivery_orders ?? { urgent: [], partial: [] });
 
 // ============ KPI 派生 ============
-const todayCount = computed<number>(() => {
-  const today = todayIso();
-  return upcomingBuckets.value
-    .filter((b) => b.date === today)
-    .reduce((sum, b) => sum + (Number(b.count) || 0), 0);
-});
+const overdueCount = computed<number>(() => snapshot.value?.overdue_count ?? 0);
 
-const weekCount = computed<number>(() =>
-  upcomingBuckets.value.reduce((sum, b) => sum + (Number(b.count) || 0), 0),
+/** 今日到期：端点 2 的分桶恒从 today 起按序生成，首桶即今天。 */
+const todayCount = computed<number>(() => upcomingBuckets.value[0]?.count ?? 0);
+
+/** 窗口内到期：全 N 天桶 count 之和（非按某个自然周切）。 */
+const windowCount = computed<number>(() =>
+  upcomingBuckets.value.reduce((sum, b) => sum + (b.count || 0), 0),
 );
 
-/** 在制件数 = snapshot.in_process.length（在制 KPI tile 数据源） */
+/** 在加工件数 = 工人在手加工批次数（snapshot.in_process.length）。 */
 const inProcessCount = computed<number>(() => snapshot.value?.in_process.length ?? 0);
 
-/** 在检件数 = snapshot.on_inspection_shelves.length（在检 KPI tile 数据源） */
-const inInspectionCount = computed<number>(
-  () => snapshot.value?.on_inspection_shelves.length ?? 0,
-);
-
-function todayIso(): string {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
+/** 在检件数 = 品检区待品检批次数（服务端 COUNT，snapshot.in_inspection_count）。 */
+const inInspectionCount = computed<number>(() => snapshot.value?.in_inspection_count ?? 0);
 
 // ============ 预览对话框 ============
 // 两条路径（右栏两面板行点击 + UpcomingDeliveryListDrawer 行点击）都进
 // PartPreviewDialog，行为统一：selectedPart.value = part; previewOpen.value = true。
+// PartPreviewDialog 只读 4 个字段（id / serial_no / name / status），故 selectedPart
+// 用 PartPreviewTarget 这个最小结构 —— 三条路径的行类型各不相同
+// （WorkerHeldBatchData / SystemDeliveryOrderData / DeliveryOrderDetailData），
+// 收成最小公共结构比让弹窗去认某个具体 VO 更稳。
 const previewOpen = ref(false);
-const selectedPart = ref<PartListItem | null>(null);
+const selectedPart = ref<PartPreviewTarget | null>(null);
 
-function onRowClick(part: PartListItem): void {
+function onRowClick(part: PartPreviewTarget): void {
   selectedPart.value = part;
   previewOpen.value = true;
 }
@@ -215,7 +207,7 @@ function goPartDetail(partId: string): void {
 
 // ============ 交期柱状图按层点击 ============
 // selectedLayer 持有 { date, layer, statuses, basis } 四元组，v-if="selectedLayer" 保证
-// drawer 在首次点击前不挂载（useDashboardUpcomingList 的 enabled 闸门天然生效）。
+// drawer 在首次点击前不挂载（useDashboardDeliveryOrders 的 enabled 闸门天然生效）。
 // basis 随点击时的口径**快照**进 selectedLayer：抽屉打开后用户再切图上的开关，
 // 已打开的抽屉不会被就地改口径（那会让「点的是 A 柱、列表变成 B 口径」在半途发生）；
 // 下次点柱才带新口径。
@@ -245,7 +237,7 @@ function onBarLayerClick(payload: {
 // rowClick(part)，不感知 PartPreviewDialog 存在。drawer 不关闭 —— dialog
 // （append-to-body）覆盖在 drawer 之上，关掉 dialog 后 drawer 仍可见，方便连续预览。
 // 不重置 selectedLayer：下次用户再点柱状图时 upcomingDrawerOpen 按需重新打开。
-function onUpcomingRowClick(part: PartListItem): void {
+function onUpcomingRowClick(part: PartPreviewTarget): void {
   selectedPart.value = part;
   previewOpen.value = true;
 }
