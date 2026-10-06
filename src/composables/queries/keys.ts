@@ -18,7 +18,7 @@
 // 锁字面量类型：所有键数组用 as const，调用方拿到的类型是 readonly tuple，
 // 与 TanStack Query 的 QueryKey = readonly unknown[] 契约对齐。
 
-import type { ListInspectionQueueParams } from '@/api/parts/batch';
+import type { ListInspectionQueueParams } from '@/api/inspection';
 import type { ListPartsParams } from '@/api/parts';
 import type { ListPendingBatchesParams } from '@/api/pendingBatches';
 import type { ListPendingProgrammingParams } from '@/api/programming';
@@ -291,14 +291,13 @@ export const qk = {
   // ============================================================
   // 2026-10-03 新增：inspection 域（「待品检」页）queryKey 工厂。
   //
-  // 根命名空间取 `inspection`（与页面路由 / 菜单域一致，也是 api 层
-  // `listInspectionBatches` 名字里的那个词），**不**沿用 `parts` 或 `part-batch`：
+  // 根命名空间取 `inspection`（与页面路由 / 菜单域、后端 prod::inspection 域一致）：
   // 键的根只要求「同域前缀匹配」，而本页与零件一览 / 批次列表没有共享写点
   // （本页的写操作只有品检流转，它改的是批次状态，不会改零件一览的行集），
   // 挂在 parts 域下反而会让 qk.partsPrefix 的一把全刷捎带上本页缓存。
   // ============================================================
   /** 待品检队列列表键（页面级 store `useInspectionListStore` 的主查询，
-   *  数据源 `GET /api/v2/prod/batches/inspection`）。带 params 是因为后端 list 端点
+   *  数据源 `GET /api/v2/prod/inspection/queue`）。带 params 是因为后端 list 端点
    *  接 3 个 ILIKE 子串 + 客户 + 系统交期区间 + 排序 + limit / offset，键必须随
    *  params 变化才能拿到不同 cache identity（与 partsList / programmingList 同形）。 */
   inspectionQueueList: (params: ListInspectionQueueParams) =>

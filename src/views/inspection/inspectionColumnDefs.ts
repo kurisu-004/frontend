@@ -7,7 +7,7 @@
 // `store.切片.字段` 的解包访问落同一批 ref，无双写分裂。
 //
 // 列集与后端 VO 的关系：
-//   待品检端点 `GET /prod/batches/inspection` 换成了**恰 13 字段**的精简 VO
+//   待品检端点 `GET /prod/inspection/queue` 用的是**恰 13 字段**的精简 VO
 //   （`InspectionQueueItem`），本工厂只消费覆盖这 7 个数据列 + 写端点锚点的字段。
 //   VO 里没有 `planned_delivery_date` 与 `holder_name` 两个键，故「计划交期」
 //   「品检货架」两列不存在 —— 用户需求明确只要 7 列。
@@ -26,7 +26,7 @@ import { ElButton, ElDatePicker, ElInput, ElTreeSelect } from 'element-plus';
 import { RouterLink } from 'vue-router';
 import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
-import type { InspectionQueueItem } from '@/api/parts';
+import type { InspectionQueueItem } from '@/api/inspection';
 import type { useInspectionColumnFilters } from './composables/useInspectionColumnFilters';
 
 export interface InspectionColumnActions {

@@ -27,14 +27,13 @@ import { computed, reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { ElMessage } from 'element-plus';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
+import { toInspection, toProcess, toShip } from '@/api/parts';
 import {
-  toInspection,
-  toProcess,
-  toShip,
+  scanInspection,
   type InspectionQueueItem,
   type ListInspectionQueueParams,
-} from '@/api/parts';
-import { scanInspection, type ScanTreeOut } from '@/api/inspection';
+  type ScanTreeOut,
+} from '@/api/inspection';
 import { qk } from '@/composables/queries/keys';
 import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
@@ -160,7 +159,7 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
       drawing_no: search.drawingNo.trim() || undefined,
       name: search.name.trim() || undefined,
       serial_no: search.serialNo.trim() || undefined,
-      // 雪花 ID 字符串直传，禁止 Number()（CLAUDE.md §3：19 位 ID 丢精度）。
+      // 雪花 ID 字符串直传，禁止 Number()（19 位雪花 ID 会丢精度）。
       customer_id: search.customerId || undefined,
       system_delivery_date_from: search.systemDeliveryDateFrom || undefined,
       system_delivery_date_to: search.systemDeliveryDateTo || undefined,

@@ -18,8 +18,8 @@
 //     normalizeAppendTo 会撞 `document is not defined`）；列定义用的 ElButton /
 //     ElInput / ElDatePicker / ElTreeSelect 在本 spec 里**不被调用**（只读 columnDefs
 //     的元数据），但 import 本身要能解析，故一并给最简桩。
-//   - `vi.mock('@/api/parts')`：主查询 + 3 个写端点（to-ship / to-process / to-inspection）。
-//   - `vi.mock('@/api/inspection')`：扫码树端点（本域新模块，2026-10-05）。
+//   - `vi.mock('@/api/parts')`：3 个写端点（to-ship / to-process / to-inspection）。
+//   - `vi.mock('@/api/inspection')`：队列读（主查询数据源）+ 扫码树端点。
 //   - `vi.mock('@/api/customer')` / `@/api/shelves` / `@/api/process`：共享基础数据层
 //     （useCustomerTree → useCustomersQuery、useProductionShelvesQuery、useProcessesQuery）
 //     在 store setup 里就会 fetch，不桩会走真实 axios 触发未处理 rejection。
@@ -56,15 +56,16 @@ const toProcessMock = vi.fn();
 const toInspectionMock = vi.fn();
 const scanInspectionMock = vi.fn();
 
+// 队列读端点（`listInspectionBatches`）与扫码树端点（`scanInspection`）同在
+// `@/api/inspection`；3 个写端点仍从 `@/api/parts` 聚合导出。
 vi.mock('@/api/parts', () => ({
-  listInspectionBatches: (...args: unknown[]) => listInspectionBatchesMock(...args),
   toShip: (...args: unknown[]) => toShipMock(...args),
   toProcess: (...args: unknown[]) => toProcessMock(...args),
   toInspection: (...args: unknown[]) => toInspectionMock(...args),
 }));
 
-// 扫码树端点独立在 `@/api/inspection`（本域新模块），桩同款。
 vi.mock('@/api/inspection', () => ({
+  listInspectionBatches: (...args: unknown[]) => listInspectionBatchesMock(...args),
   scanInspection: (...args: unknown[]) => scanInspectionMock(...args),
 }));
 
@@ -100,7 +101,7 @@ vi.mock('@/api/process', () => ({
 import { useInspectionListStore } from '../useInspectionListStore';
 import { qk } from '@/composables/queries/keys';
 import { INSPECTION_SORT_KEY_TO_PROP } from '@/types/inspection';
-import type { InspectionQueueItem } from '@/api/parts';
+import type { InspectionQueueItem } from '@/api/inspection';
 
 /** 后端真实 wire 形态：total / limit / offset 是 serialize_i64 的 JSON **string**，
  *  item 恰 13 字段（inspectionQueueListItemSchema 是 .strict()，多一个键就抛）。 */
@@ -265,12 +266,12 @@ describe('useInspectionListStore', () => {
     await tick();
     listInspectionBatchesMock.mockClear();
 
-    // 默认态：只发排序 + 分页，不带 5 个筛选键。
-    // ⚠️ 本用例只断到 **buildParams 层**：本 spec `vi.mock('@/api/parts')`，
+    // 默认态：只发排序 + 分页，不带 6 个筛选键。
+    // ⚠️ 本用例只断到 **buildParams 层**：本 spec `vi.mock('@/api/inspection')`，
     // `listInspectionBatches` 是被 mock 掉的，`cleanParams` 那层「undefined 键不上
     // wire」根本不会执行 —— `params.xxx === undefined` ≠ 「axios 没发这个键」。
-    // 真 wire 形态（`toEqual` 逐键比对 axios 收到的 params）在
-    // `src/api/parts/__tests__/routes.spec.ts` 的 R7 用例里验。
+    // 真 wire 形态在 `src/api/__tests__/inspection.contract.spec.ts`：Q2 逐值比
+    // params，Q3 断键集合。
     store.query.search.drawingNo = '   ';
     store.query.pageSize = 20;
     await store.query.fetchList();

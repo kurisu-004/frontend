@@ -33,8 +33,8 @@ export interface InspectionSearchState {
   drawingNo: string;
   /** 名称 ILIKE 子串（后端 `name`）。 */
   name: string;
-  /** 客户雪花 ID 字符串（后端 `customer_id`）。**禁止 Number()**（CLAUDE.md §3：
-   *  19 位 ID 在 JS Number 丢精度）。空串 = 不筛。 */
+  /** 客户雪花 ID 字符串（后端 `customer_id`），禁止 Number()（19 位雪花 ID 会丢精度）。
+   *  空串 = 不筛。 */
   customerId: string;
   /** 系统交期区间起点（含端点）；空串 = 不限。 */
   systemDeliveryDateFrom: string;

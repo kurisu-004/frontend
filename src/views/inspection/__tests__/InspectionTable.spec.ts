@@ -54,10 +54,15 @@ vi.mock('@/components/ColumnVisibilityPopover.vue', () => ({
 
 const listInspectionBatchesMock = vi.fn();
 vi.mock('@/api/parts', () => ({
-  listInspectionBatches: (...args: unknown[]) => listInspectionBatchesMock(...args),
   toShip: vi.fn(),
   toProcess: vi.fn(),
   toInspection: vi.fn(),
+}));
+
+// 队列读端点（列表主查询的数据源）来自 `@/api/inspection`。
+vi.mock('@/api/inspection', () => ({
+  listInspectionBatches: (...args: unknown[]) => listInspectionBatchesMock(...args),
+  scanInspection: vi.fn(),
 }));
 
 // 共享基础数据层（useCustomerTree / useProductionShelvesQuery / useProcessesQuery）
@@ -78,7 +83,7 @@ vi.mock('@/api/process', () => ({
 
 import InspectionTable from '../components/InspectionTable.vue';
 import { useInspectionListStore } from '../composables/useInspectionListStore';
-import type { InspectionQueueItem } from '@/api/parts';
+import type { InspectionQueueItem } from '@/api/inspection';
 
 // 后端 wire 形态：total / limit / offset 是 JSON string；item 恰 13 字段。
 const ROW: InspectionQueueItem = {

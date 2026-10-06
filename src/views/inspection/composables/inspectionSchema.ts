@@ -2,7 +2,7 @@
 //
 // 2026-10-07 新增：品检域的 Zod 守门 schema 搬进域内，与 query hook 同居。
 // 「待品检一览」域的 Zod 守门 schema，两组：
-//   1. 待品检队列（守门 `GET /api/v2/prod/batches/inspection` 的**精简 13 字段
+//   1. 待品检队列（守门 `GET /api/v2/prod/inspection/queue` 的**精简 13 字段
 //      VO**）—— 守门点是列表 query 的 queryFn（useInspectionQueueQuery）；
 //   2. 品检扫码树（守门 `GET /api/v2/prod/inspection/scan/{serial_no}`）。
 //
@@ -12,7 +12,7 @@
 import { z } from 'zod';
 
 // ============================================================
-// 待品检队列行 + 列表（`GET /api/v2/prod/batches/inspection` 的精简 13 字段 VO）。
+// 待品检队列行 + 列表（`GET /api/v2/prod/inspection/queue` 的精简 13 字段 VO）。
 //
 // 为什么与返修 VO（composables/queries/schemas.ts::repairBatchListItemSchema，
 // 28 字段）分家：待品检页最终只显示 7 个数据列（序列号 / 图号 / 名称 / 批次 / 数量 /

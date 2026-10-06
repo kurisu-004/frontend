@@ -26,6 +26,9 @@
 //   在后端仓 `src/` 与 `tests/` 全仓 grep 过 `change-status`，零路由注册、零测试引用，
 //   前端侧亦零调用方，故无反断言需求。
 //
+// 待品检队列读（`GET /prod/inspection/queue`）属 prod::inspection 域，其 URL 与
+//   Query 参数断言见 `src/api/__tests__/inspection.contract.spec.ts`。
+//
 // mock 手法沿 src/api/shelfProcesses.spec.ts 同款：整模块桩掉 `@/api/http`
 // （不 importOriginal），只留可断言的 api.get / api.post 入口。
 
@@ -52,8 +55,6 @@ vi.mock('@/composables/queries/schemas', () => ({
   //   - scanPartListResultSchema 服务报工台两个列表端点（pickable-by-work-type /
   //     by-worker），出参是分页信封而非裸数组，crud.ts 在模块顶层 import 它，
   //     mock 缺一个整份 spec 直接挂。
-  // 待品检端点的守门 schema 归位到域内 views/inspection/composables，api 侧只剩
-  // type-only 引入（编译期擦除），故本模块图里不需要它的桩。
   repairBatchListResultSchema: { parse: (v: unknown) => v },
   scanPartListResultSchema: { parse: (v: unknown) => v },
 }));
@@ -62,7 +63,6 @@ import {
   batchToInspection,
   batchToShip,
   cancelPartBatch,
-  listInspectionBatches,
   listPartBatches,
   splitPartBatch,
 } from '../batch';
@@ -379,9 +379,8 @@ describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () =
   });
 });
 
-describe('2026-10-02：集合读迁入 prod 域（3 条）', () => {
-  it('R5：品检 / 返修 / 返修中', async () => {
-    expect(await fetchedPath(() => listInspectionBatches())).toBe('/prod/batches/inspection');
+describe('2026-10-02：集合读迁入 prod 域（2 条）', () => {
+  it('R5：返修 / 返修中', async () => {
     expect(await fetchedPath(() => listRepairBatches())).toBe('/prod/batches/repair');
     expect(await fetchedPath(() => listRepairingBatches())).toBe('/prod/batches/repairing');
   });
@@ -391,78 +390,4 @@ describe('2026-10-02：留在 part 域的路径一个都不许动', () => {
   it('R6：批次集合读仍按 part 锚定（操作对象是「某 part 的批次集合」）', async () => {
     expect(await fetchedPath(() => listPartBatches('42'))).toBe('/parts/42/batches');
   });
-});
-
-describe('2026-10-03：待品检端点的 Query 参数集（VO 收口的另一半）', () => {
-  /** 发一次 listInspectionBatches 并取回实际打到 axios 的 params。 */
-  async function inspectionQueryParams(
-    run: () => Promise<unknown>,
-  ): Promise<Record<string, unknown>> {
-    httpGetMock.mockReset();
-    httpGetMock.mockResolvedValue({ data: { items: [], total: '0', limit: '200', offset: '0' } });
-    await run();
-    const config = httpGetMock.mock.calls[0]![1] as { params: Record<string, unknown> };
-    return config.params;
-  }
-
-  it('R7：新参数集（三个 ILIKE + 客户 + 系统交期 + 排序 + 分页）逐个落到 axios params', async () => {
-    const params = await inspectionQueryParams(() =>
-      listInspectionBatches({
-        drawing_no: 'A',
-        name: 'B',
-        serial_no: 'C',
-        customer_id: '9000000000001',
-        system_delivery_date_from: '2026-10-01',
-        system_delivery_date_to: '2026-10-31',
-        sort_by: 'NAME',
-        sort_dir: 'ASC',
-        limit: 20,
-        offset: 40,
-      }),
-    );
-    expect(params).toEqual({
-      drawing_no: 'A',
-      name: 'B',
-      serial_no: 'C',
-      customer_id: '9000000000001',
-      system_delivery_date_from: '2026-10-01',
-      system_delivery_date_to: '2026-10-31',
-      sort_by: 'NAME',
-      sort_dir: 'ASC',
-      limit: 20,
-      offset: 40,
-    });
-  });
-
-  // 「空筛选 → undefined → 不上 wire」这一层的真 wire 形态守卫：store spec 里
-  // buildParams 那半（params.xxx === undefined）因 @/api/parts 被 mock 掉而验不到 wire。
-  // 入参刻意把 6 个筛选键显式写成 undefined —— 那正是 buildParams 空筛选下的产出，
-  // 走的是 cleanParams 真正要 strip 的那条路径（不写这几个键则该层根本没被触发）。
-  it('R7b：筛选键为 undefined 时不出现在 axios params 上', async () => {
-    const params = await inspectionQueryParams(() =>
-      listInspectionBatches({
-        drawing_no: undefined,
-        name: undefined,
-        serial_no: undefined,
-        customer_id: undefined,
-        system_delivery_date_from: undefined,
-        system_delivery_date_to: undefined,
-        sort_by: 'SYSTEM_DELIVERY_DATE',
-        sort_dir: 'ASC',
-        limit: 20,
-        offset: 0,
-      }),
-    );
-    expect(params).toEqual({
-      sort_by: 'SYSTEM_DELIVERY_DATE',
-      sort_dir: 'ASC',
-      limit: 20,
-      offset: 0,
-    });
-  });
-
-  // 2026-10-03：原 R8「废弃的 keyword / planned_delivery_date_* 绝不出现在 axios
-  // params 上」随 api 层的过渡剥离逻辑（DEPRECATED_INSPECTION_QUERY_KEYS）一起删除 ——
-  // 三个键已从 ListInspectionQueueParams 类型上消失，待品检页也已改传新参数集，
-  // api 层不再需要「拦住页面层误传」这层防御。
 });

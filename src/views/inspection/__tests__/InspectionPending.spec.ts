@@ -72,15 +72,15 @@ vi.mock('element-plus', () => ({
 const scanInspectionMock = vi.fn();
 vi.mock('@/api/inspection', () => ({
   scanInspection: (...args: unknown[]) => scanInspectionMock(...args),
-}));
-
-vi.mock('@/api/parts', () => ({
   listInspectionBatches: vi.fn(async () => ({
     items: [],
     total: '0',
     limit: '20',
     offset: '0',
   })),
+}));
+
+vi.mock('@/api/parts', () => ({
   toShip: vi.fn(),
   toProcess: vi.fn(),
   toInspection: vi.fn(),

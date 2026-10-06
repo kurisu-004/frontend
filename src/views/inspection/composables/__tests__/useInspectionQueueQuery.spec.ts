@@ -26,13 +26,13 @@ vi.mock('element-plus', () => ({
 
 const fetchMock = vi.fn();
 
-vi.mock('@/api/parts', () => ({
+vi.mock('@/api/inspection', () => ({
   listInspectionBatches: (params: unknown) => fetchMock(params),
 }));
 
 import { ElMessage } from 'element-plus';
 import { qk } from '@/composables/queries/keys';
-import type { ListInspectionQueueParams } from '@/api/parts';
+import type { ListInspectionQueueParams } from '@/api/inspection';
 import { useInspectionQueueQuery } from '../useInspectionQueueQuery';
 
 function makeRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
