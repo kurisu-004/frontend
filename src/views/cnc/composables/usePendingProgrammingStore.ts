@@ -363,9 +363,10 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
       // union-list 与 GET /parts 复用同一根命名空间，qk.partsPrefix 一次覆盖）。
       // ⚠️ 释放后批次落入 IN_PROCESS + PRODUCTION_SHELF，即**进入工人候选池**
       // （后端候选池口径 status='IN_PROCESS' AND location='PRODUCTION_SHELF'），
-      // pool 域（workerPoolCounts / workerPoolByProcess）也因此变陈旧。此处**不**
-      // 补挂 pool 失效：按 CLAUDE.md「跨页面写操作不做穷举失效，30s 有限 staleTime
-      // + 显式刷新兜新鲜度」的既定策略，生产队列页本就不靠本 mutation 的失效。
+      // production-queue 域（qk.productionQueueSnapshotPrefix /
+      // productionQueueBoardPrefix）也因此变陈旧。此处**不**补挂该域失效：按
+      // CLAUDE.md「跨页面写操作不做穷举失效，30s 有限 staleTime + 显式刷新兜
+      // 新鲜度」的既定策略，生产队列页本就不靠本 mutation 的失效。
       await invalidateProgrammingQuery(qc);
       await qc.invalidateQueries({ queryKey: qk.partsPrefix });
       ElMessage.success(releasedMessage());

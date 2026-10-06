@@ -1,17 +1,17 @@
 // src/types/batchCard.ts
 //
 // 2026-10-03 新增：`BatchCard.vue`（现 `src/components/BatchCard.vue`，全仓共享组件）
-// 的 props 类型，及其领域扩展槽 `BatchCardExtra`。原先随 workerPool 域类型同文件
+// 的 props 类型，及其领域扩展槽 `BatchCardExtra`。原先随生产队列域类型同文件
 // 声明，卡片升级为共享组件后独立成文件：卡片现在被生产队列（工序池 / 工人列 /
-// 待下发池）与外协看板两套域消费，view-model 不应挂在 workerPool 这个域的名字下。
+// 待下发池）与外协看板两套域消费，view-model 不应挂在某个业务域的名字下。
 //
-// 拆分理由（与 `src/types/workerPool.ts` 的分工）：
-//   - `workerPool.ts` 留 `Worker` / `ProcessPoolView` —— 生产队列域自有的看板结构；
+// 拆分理由（与 `src/types/productionQueue.ts` 的分工）：
+//   - `productionQueue.ts` 留 `ProcessPoolView` —— 生产队列域自有的抽屉结构；
 //   - 本文件只描述「一张批次卡片长什么样」，与看板、工人、货架都无关。
 //
-// 字段来源：三个 wire DTO（`PoolBatchItemDto` / `HeldBatchItemDto` /
-// `PendingBatchItemDto`）字段集各不相同，统一经各域自持的适配层
-// （`views/production/composables/poolItemToCard.ts`）转换成本类型，组件零 DTO 依赖。
+// 字段来源：三个 wire DTO（`QueuePoolItemDto` / `QueueHeldBatchDto` /
+// `QueuePendingBatchDto`）字段集各不相同，统一经各域自持的适配层
+// （`views/production/queue/utils/queueItemToCard.ts`）转换成本类型，组件零 DTO 依赖。
 
 /** 2026-10-03 新增：批次卡片的**领域扩展槽**，只进 tooltip，不占 body 的 4 行预算。
  *
@@ -72,12 +72,12 @@ export interface BatchCardModel {
   /**
    * 该 batch **当前所在货架 ID**（t_part_batch.current_holder_id）。
    *
-   * 仅工序池侧（`poolItemToCard` 从 `PoolBatchItemDto.shelf_id`）填充；工人持有侧
+   * 仅工序池侧（`poolItemToCard` 从 `QueuePoolItemDto.shelf_id`）填充；工人持有侧
    * 与待下发侧恒为 null —— batch 在 worker 手里、或尚未下发，没有"货架位置"。
    *
-   * 用途：`POST /api/v2/prod/pool/move` 的 `from: {kind:'POOL', shelf_id}` 必须等于
+   * 用途：`POST /api/v2/prod/queue/move` 的 `from: {kind:'POOL', shelf_id}` 必须等于
    * batch 真实所在货架，否则后端返 20122 BIZ_BATCH_LOCATION_MISMATCH（HTTP 409）。
-   * 候选池是**跨所有货架**返回的（`list_candidates_by_process_all_shelves`），batch
+   * 候选池是**跨所有货架**返回的（后端 `prod::queue::board` 的工序板聚合 SQL），batch
    * 所在货架未必等于用户当前激活货架（`auth.activeShelfId`），所以必须在拖拽开始时
    * 从卡片 DOM dataset 读出真实值（见 utils/dndSourceTracker.ts::recordPoolSource）。
    */

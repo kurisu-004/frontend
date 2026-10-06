@@ -10,7 +10,7 @@
 //     桩不带返回体），把「响应可能整个不存在」这一层收在这里，两页只判 `length`，
 //     不用各自写一遍可选链。
 
-import type { TakenItemDto } from '@/api/workerPool.contract';
+import type { TakenItemDto } from '@/api/productionQueue.contract';
 import type { WorkerScanOut } from '@/api/parts';
 
 /** 取 refill 抢到的批次；响应缺 `refill` / `taken` 一律归一成空数组。 */

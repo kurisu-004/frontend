@@ -152,14 +152,6 @@
               @click="store.dispatch.onDispatch(row as PartListItem)"
               >下发</el-button
             >
-            <el-button
-              v-if="store.dispatch.canRecallToPending(row as PartListItem)"
-              link
-              type="danger"
-              size="small"
-              @click="store.dispatch.onRecallToPending(row as PartListItem)"
-              >召回(待生产)</el-button
-            >
             <!--
               2026-09-30 新增：MANAGER 专属「完成」按钮 —— 强推工单+所有非取消批次为 COMPLETED。
               守卫 canForceComplete 收口：isManager && 非 ASSEMBLY && 非 COMPLETED && 非 CANCELLED。

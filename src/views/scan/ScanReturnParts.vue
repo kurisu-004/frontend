@@ -335,7 +335,7 @@ import ReturnConfirmDialog from '@/views/scan/components/ReturnConfirmDialog.vue
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/scan/components/RefillTakenDialog.vue';
-import type { TakenItemDto } from '@/api/workerPool.contract';
+import type { TakenItemDto } from '@/api/productionQueue.contract';
 import type { Process } from '@/types/process';
 import type { ShelfForReturn } from '@/types/shelf';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
