@@ -26,13 +26,17 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 两层数据获取：
 
 - **共享基础数据层** `src/composables/queries/`：`staleTime: 30_000` / `gcTime: 5 * 60 * 1000`（有限值，禁 `POSITIVE_INFINITY`）。
-- **页面级 store** `src/views/<域>/<页>/composables/useXxxStore.ts`：沿用 4 不变量（首调 / `onBeforeUnmount` `$dispose` / 禁解构 / 不 import vue-router），内部持有分页筛选勾选 + useQuery + useMutation。
+- **页面级 store** `src/views/<域>/<页>/composables/useXxxStore.ts`：沿用 4 不变量（首调 / `onBeforeUnmount` `$dispose` / 禁解构 / 不 import vue-router），内部持有分页筛选勾选 + useQuery + useMutation。**useQuery 段可外提成同域独立 query hook**（见下）。
+
+**主查询外提成域内 query hook**：页面级 store 的 `useQuery` 段常被外提成 `src/views/<域>/<页>/composables/useXxxQuery.ts`（如 `usePendingProgrammingQuery` / `useInspectionQueueQuery`，形态范本 `useDashboardUpcoming`）：hook **无自有状态**，入参 `MaybeRefOrGetter`（params + `enabled` 闸门 + `autoRefresh` 等开关），返回 `{ query, data, isFetching, error, fetchList }` + 内部 Zod 守门 + `watch(error) → ElMessage` 桥接。外提后 store 仍保留全部页面态职责：私有状态（分页 / 筛选输入态-生效态拆分 / Tab / 对话框态）、`$dispose` 契约与**切片形态**（对外状态走 plain object slice，禁止平铺 ref 到 store 顶层）、`restoreState()` 末尾开 enabled 闸门、mutation 与失效、列定义与列可见性。query hook 与它守的 schema 同居域内（见「Zod schema-first」）。
+
+`refetchInterval`（自动刷新）一律写 `computed(() => (autoRefresh ? 300_000 : false))` **而非裸函数**，并显式 `refetchIntervalInBackground: true`（TanStack Query 默认 false，窗口失焦会暂停轮询）。裸函数形态踩过的坑：vue-query 的 `defaultedOptions` 只在 `queryKey` 那一层对 function 求值（`unrefGetters` 仅 queryKey 为 true），裸函数体内的 `autoRefresh` 不进依赖收集 ⇒ 勾选开关不触发 `observer.setOptions` ⇒ `#updateRefetchInterval` 不重新求值 ⇒ 轮询永远不启动。
 
 模式：
 
 - **queryKey 工厂** `src/composables/queries/keys.ts` 是全仓唯一来源（`qk.customersList` / `qk.processesList(params)` / `<域>Prefix` …）。**禁止在调用点拼字面量数组**。`<域>Prefix` 用于前缀失效。
 - **reactive params**：入参 `MaybeRefOrGetter<T>`，`queryKey: computed(() => qk.xxx(toValue(params)))`，`queryFn` 从 `queryKey` 读 params（不闭包捕获 stale）。
-- **queryFn Zod 守门**：`xxxListResultSchema.parse(await xxxAPI())`。Zod 默认 strip 会静默丢缺字段，**必填字段必须显式声明**。
+- **queryFn Zod 守门**：`xxxListResultSchema.parse(await xxxAPI())`。Zod 默认 strip 会静默丢缺字段，**必填字段必须显式声明**。主查询的守门点在 queryFn，**api 层函数只发请求 + 用 schema 的 `z.infer` 标注返回类型，不 parse**（parse 返回深拷贝，多一层等于每屏数据被校验并克隆两遍）；守门留在 api 层的是那些**没有 queryFn 承载**的调用（如扫码取树走 useMutation、批量写端点）。
 - **enabled 闸门**：页面 store 内 useQuery 默认 `enabled=false`，`restoreState()` 末尾开闸，避免双 fetch。
 - **fetchList 别名**：主查询暴露 `fetchList(): Promise<void>` = `refetch` 的 async 包装，供外部调用方与测试零改动驱动。
 - **mutation 范本**：`mutationKey: ['<域>', '<action>']`；`onSuccess` 失效对应域 + ElMessage.success，`onError` 走 ElMessage.error。
@@ -58,6 +62,13 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 ### Zod schema-first
 
 表单类 schema 写在 `src/views/<域>/<表单>Schema.ts`，导出 schema + `z.infer` 类型；链式顺序 trim 在前；错误聚合用同文件内的 `toFieldErrors`。
+
+**域 schema 与 query hook 同居**：主查询的守门 schema 放域内 query hook 旁边（`src/views/<域>/<页>/composables/<xxx>Schema.ts`，如 `pendingProgrammingSchema.ts` / `inspectionSchema.ts`），导出 `xxxSchema` + `z.infer` 派生类型（`*Data` 后缀，api 层用它标注返回类型）。`src/composables/queries/schemas.ts` 只留**跨域共用**的基础数据层 schema。
+
+### 目录归位
+
+- **域内列定义**放 `src/views/<域>/<name>ColumnDefs.ts`（域根，与页面主组件同级），**不放 `src/utils/`** —— 单域专用文件不是通用工具：它 import 域内 composable 类型会让 `utils/` 反向依赖 `views/`（层次倒挂）。
+- **`src/utils/` 只放跨域通用工具**：`fileExt` / `date` / `jwt` / `download` / `pdfjs` / `elTable` / `dndSourceTracker` / 各 `ExcelParser` / `permissions`。判据是「零个域内依赖」+「多域复用」，不是「看起来像工具」。
 
 ### auth / 会话
 
