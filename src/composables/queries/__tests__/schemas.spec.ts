@@ -59,7 +59,8 @@
 //     backend-rust `InspectionBatchListItemOut` 完整 28 字段结构（批次 9 + holder 4 +
 //     delivery_note 2 + 工单 10 + 客户 3，含 l1_customer_name 与 holder_name），
 //     不抛错。**服务对象已收窄为仅** `GET /prod/batches/repair` / `/repairing`
-//     两条返修端点（待品检端点 2026-10-03 换成 13 字段精简 VO，见 S-IQ1 系列）。
+//     两条返修端点（待品检端点换成 13 字段精简 VO，其守门用例在
+//     `views/inspection/composables/__tests__/inspectionSchema.spec.ts` 的 I 系列）。
 //   - S21：repairBatchListResultSchema 接受分页结构（items / total / limit /
 //     offset）。
 //   - S22：repairBatchListItemSchema 多出 `id` 字段 → 抛 ZodError（`.strict()`
@@ -70,8 +71,6 @@
 //   - S23b（2026-10-02 新增 regression guard）：is_repairing = true 也能 parse
 //     （不得被人「先写 z.literal(false) 消警告」把真实返修数据挡掉），且缺
 //     is_repairing 必抛错（后端恒输出该键）。
-//     编号说明：本用例原编 S24，与 programming 域（待编程）schema 的 S24 撞号，
-//     2026-10-02 review 第 1 轮改为 S23b（沿本文件 S11b / S12b / S19b 等后缀惯例）。
 //   - S-SP1（2026-10-04 新增，报工台）：scanPartRowSchema 接受后端 `PartListItem`
 //     完整 34 字段（含 `location` / `holder_name` 等恒 null 的派生键与
 //     `batch_id` / `batch_version` 批次锚点），不抛错。

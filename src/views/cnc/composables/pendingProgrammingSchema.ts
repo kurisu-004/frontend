@@ -1,5 +1,6 @@
 // src/views/cnc/composables/pendingProgrammingSchema.ts
 //
+// 2026-10-07 新增：「待编程一览」页主查询的 Zod 守门 schema，搬进域内与 query hook 同居。
 // 「待编程一览」页主查询的 Zod 守门 schema。数据源是 prod 域
 // `GET /api/v2/prod/programming/pending`，出参对齐后端 `ProgrammingItemOut`（行）/
 // `ProgrammingListOut`（分页信封 `{ items, total, limit, offset }`）。

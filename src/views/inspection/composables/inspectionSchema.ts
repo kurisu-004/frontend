@@ -1,5 +1,6 @@
 // src/views/inspection/composables/inspectionSchema.ts
 //
+// 2026-10-07 新增：品检域的 Zod 守门 schema 搬进域内，与 query hook 同居。
 // 「待品检一览」域的 Zod 守门 schema，两组：
 //   1. 待品检队列（守门 `GET /api/v2/prod/batches/inspection` 的**精简 13 字段
 //      VO**）—— 守门点是列表 query 的 queryFn（useInspectionQueueQuery）；

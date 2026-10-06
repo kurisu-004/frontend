@@ -20,7 +20,8 @@
   新树一次给全，操作列按批次状态直接给出可执行动作。
 
   保留能力（与 2026-10-03 版一致）：品检通过 / 指定工序两个弹窗 + 扫码订阅 +
-  5min 自动刷新 timer + 加急红底 + 部分通过拆批提示 + 40901 冲突提示。
+  5min 自动刷新（query hook 的 refetchInterval）+ 加急红底 + 部分通过拆批提示 +
+  40901 冲突提示。
 -->
 <template>
   <div class="inspection-pending">
@@ -249,8 +250,8 @@
 //   - InspectionTable（承载全部表格 DOM 逻辑）；
 //   - 分页（page / pageSize 在 store，切页改 queryKey 自动 refetch）；
 //   - 品检通过 / 指定工序两个弹窗 + 扫码树弹窗；
-//   - 生命周期编排：restoreState（开 enabled 闸门）、排序箭头恢复、扫码订阅、timer、
-//     store.$dispose()。
+//   - 生命周期编排：restoreState（开 enabled 闸门）、排序箭头恢复、扫码订阅、
+//     store.$dispose()（轮询定时器由 query hook 的 refetchInterval 自管，本壳无 timer）。
 //
 // 导航（详情 / 零件链接）留在壳内 —— store 不 import vue-router（不变量 #4）。
 

@@ -468,9 +468,11 @@ export interface InspectionQueueItem {
 }
 
 // 分页信封不另起一份手写声明：形状 = `InspectionQueueItem[]` + 三个 JSON string 计数，
-// 与域内 schema 的 z.infer（`InspectionQueueListResultData`）逐字段等价 —— 两份声明
-// 等价时只会有「改了其中一份」的漂移风险，故单点由 schema 派生（见
+// 直接取域内 schema 的 z.infer（`InspectionQueueListResultData`，见
 // listInspectionBatches 的返回类型标注）。
+// ⚠️ 单点只覆盖**信封**：**行**类型 `InspectionQueueItem`（上方手写声明）与
+// `inspectionQueueListItemSchema` 仍是双声明 —— 行被列定义 / 表格 / 扫码选行共用，
+// 手写形态是这份模块图零运行时依赖的前提。改行字段须同批改两处。
 
 /** `GET /prod/batches/inspection` 的 Query 入参。
  *

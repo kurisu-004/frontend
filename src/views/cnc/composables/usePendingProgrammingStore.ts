@@ -27,9 +27,10 @@
 //     对话框），主查询的 useQuery 段外提成同域 hook（usePendingProgrammingQuery），
 //     货架 / 工序下拉走**共享基础数据层**（useProductionShelvesQuery /
 //     useProcessesQuery）；
-//   - queryKey 全走 qk.xxx，queryFn 从 queryKey 读最新 params（不闭包捕获 stale）；
-//   - Zod 守门在 **queryFn**（usePendingProgrammingQuery 内 parse），错误经
-//     hook 内的 watch(error) 桥接 ElMessage；
+//   - 本文件**不含 queryKey / queryFn**：queryKey 走 qk.xxx 工厂、queryFn 从
+//     queryKey 读最新 params（不闭包捕获 stale）、Zod 守门 parse、error → ElMessage
+//     桥接，四件事都在 usePendingProgrammingQuery 内；本文件用到 qk 的场合只有
+//     写后失效的前缀；
 //   - enabled 闸门（restored）避免「默认参数首屏 + 持久化参数再屏」双 fetch；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0 / mutations.retry: 0；
 //   - 缓存时长：本页是页面级列表，走 main.ts 全局默认（不在共享层有限缓存

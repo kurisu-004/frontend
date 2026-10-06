@@ -49,10 +49,7 @@ import {
 import type { SortDir } from '@/types/parts';
 import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
-import {
-  buildInspectionColumnDefs,
-  type InspectionColumnActions,
-} from '../inspectionColumnDefs';
+import { buildInspectionColumnDefs, type InspectionColumnActions } from '../inspectionColumnDefs';
 import {
   useInspectionColumnFilters,
   type InspectionSearchState,
@@ -147,11 +144,11 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   // { search, autoRefresh }，与新的 { search, sortBy, sortDir, pageSize } 快照 shape
   // 不兼容，恢复会整份被丢弃。
   //
-  // ⚠️ 为什么塞进 ui 切片而不是摆在 store 根上：Pinia 的 setup store 在**同一 pinia 内
-  //   `$dispose()` 后重建**时，会把残留的 `pinia.state.value[storeId]` 当 initialState
-  //   回填进新的 ref（state hydration）。根级 ref 会被上一个页面实例的值「复活」，
-  //   而嵌套在普通对象里的 ref 不会（整个对象被新实例替换）。放切片里 ⇒ $dispose 后
-  //   一定是 false，行为可预期。
+  // ⚠️ 为什么放在 `ui` 切片里返回（而不是作为 store 顶层返回）：Pinia 的 setup store
+  //   在**同一 pinia 内 `$dispose()` 后重建**时，会把残留的 `pinia.state.value[storeId]`
+  //   当 initialState 回填进**顶层**返回的 ref（state hydration）；嵌套在普通对象里的
+  //   ref 不会被回填（整个对象被新实例替换）。放切片里 ⇒ $dispose 后一定是 false，
+  //   行为可预期。
   const uiAutoRefresh = ref(false);
 
   /** search + 分页 + 排序 → queryKey params 的**唯一**转换点。 */

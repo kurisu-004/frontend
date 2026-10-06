@@ -1,5 +1,7 @@
 // src/views/cnc/composables/usePendingProgrammingQuery.ts
 //
+// 2026-10-07 新增：「待编程一览」页主查询的 useQuery 段从页面级 store 外提成同域独立
+// hook（无自有状态），守门 schema 与它同居域内。
 // 「待编程一览」页主查询的 useQuery composable（无自有状态，入参全 reactive）。
 // 数据源：`GET /api/v2/prod/programming/pending`（api/programming.ts）。
 //

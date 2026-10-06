@@ -68,7 +68,8 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 ### 目录归位
 
 - **域内列定义**放 `src/views/<域>/<name>ColumnDefs.ts`（域根，与页面主组件同级），**不放 `src/utils/`** —— 单域专用文件不是通用工具：它 import 域内 composable 类型会让 `utils/` 反向依赖 `views/`（层次倒挂）。
-- **`src/utils/` 只放跨域通用工具**：`fileExt` / `date` / `jwt` / `download` / `pdfjs` / `elTable` / `dndSourceTracker` / 各 `ExcelParser` / `permissions`。判据是「零个域内依赖」+「多域复用」，不是「看起来像工具」。
+- **`src/utils/` 只放跨域通用工具**（举例，非全量清单：`fileExt` / `date` / `jwt` / `download` / `pdfjs` / `elTable` / `dndSourceTracker` / 各 `ExcelParser` / `permissions`）。判据是「零个域内依赖」+「多域复用」，不是「看起来像工具」。
+- **api 层引域内 schema 的口径**：默认用 `import type`（编译期擦除，照 `api/dashboard.ts` / `api/programming.ts` / `api/parts/batch.ts`）；运行时值引入只允许出现在**没有 queryFn 承载**的守门点 —— 典型是走 useMutation 的单次拉取（`api/inspection.ts` 的扫码树 `inspectionScanTreeSchema.parse`）。这与上面「`utils/` 不得反向依赖 `views/`」是两条不同的禁令：后者禁的是**通用工具**引**单域实现**；api 层引自己域的 schema（含守门 schema 归位后的唯一运行时边 `api → views/inspection`）是允许形态。
 
 ### auth / 会话
 
