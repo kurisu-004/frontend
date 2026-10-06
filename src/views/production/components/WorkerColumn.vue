@@ -12,6 +12,16 @@
      refetchType:'active' 遇 disabled query 也不补刷。后端 `GET /prod/pool/state` 已把
      shelf_id 降为可选，且它唯一影响的 pool_count_by_process 前端零消费。
 
+     2026-10-06 新增：卡片右键召回（批次在工人持有中同样可召回）。`@contextmenu.prevent`
+     挂在 BatchCard 上 —— 它是 inheritAttrs:false + v-bind="$attrs"，该监听原样落到卡片
+     根 div，**零新增 DOM 节点**。
+     ⚠️ 本列的 .col-body 是 Sortable 落点，卡片的「可拖元素 == vnode 的 DOM footprint」
+     是硬不变式（守卫 src/components/__tests__/BatchCardDndFootprint.spec.ts）：**不要**
+     用 el-dropdown / el-tooltip / el-popover 之类去包 BatchCard 给右键菜单用（包裹即
+     多根 vnode，锚点残留 + evt.item 指向包裹层 ⇒ POOL↔WORKER 拖拽断链）。菜单本体是
+     板级单例 BatchContextMenu，teleport 到 body。事件走 inject（WorkerColumn 与菜单
+     之间隔着 WorkerPoolTab / Board 两层），键名 openBatchContextMenu。
+
      2026-09-30：拖拽链路对接后端 `POST /prod/pool/move`（取代 assign/remove 两端点）。
      - onStart 记 worker 源（落点的 @add 消费）；onAdd 记/取候选池源时改为读
        `consumePoolSource` 返回的 { processId, shelfId }，其中 **shelfId 必须是
@@ -71,7 +81,16 @@
            代价控制：loading / error 仍走 v-if / v-else-if 两级互斥分支（不进容器），
            空态由下面的兄弟覆盖层承担（pointer-events:none，不吃落点判定）。 -->
       <div ref="containerRef" class="col-body" :data-worker-id="worker.id">
-        <BatchCard v-for="batch in heldBatches" :key="batch.batch_id" :batch="batch" />
+        <!-- 2026-10-06：右键召回 —— @contextmenu.prevent 走 BatchCard 的 fallthrough
+             attrs 落在卡片根 div，未引入任何包裹层（包裹即破坏 Sortable footprint，见文件
+             头注释）。第二参传 v-for 变量 batch 本身（heldBatches 已是
+             BatchCardModel[]，heldToCard 已填 version —— 召回的 OCC 锚）。 -->
+        <BatchCard
+          v-for="batch in heldBatches"
+          :key="batch.batch_id"
+          :batch="batch"
+          @contextmenu.prevent="onCardContextMenu($event, batch)"
+        />
       </div>
       <div v-if="showEmpty" class="col-empty">
         <el-empty description="暂无持有工单" :image-size="60" />
@@ -205,6 +224,21 @@ const moveBatchToWorker = inject<
 const moveBatchBetweenWorkers = inject<
   (batch_id: string, from_worker_id: string, to_worker_id: string) => Promise<boolean>
 >('moveBatchBetweenWorkers', async () => false);
+
+/** 2026-10-06：卡片右键 → 板级单例菜单（BatchContextMenu.teleport 在 body 上，
+ *  与本 Sortable 容器零 DOM 关系）。opener 由 WorkerQueueBoard provide；本组件与菜单
+ *  之间隔着 WorkerPoolTab 一层，走 inject 而非 prop 穿透。
+ *  inject 缺省 noop 兜底（Board 未提供时右键无反应，不炸掉事件回调）。 */
+const openBatchContextMenu = inject<(evt: MouseEvent, batch: Card) => void>(
+  'openBatchContextMenu',
+  () => {},
+);
+
+/** 2026-10-06：卡片根部的右键落点。只做「把 (事件, 卡片) 转交 opener」这一件事，
+ *  权限闸在 Board 的 provide 里（canRecall），本组件不重复判。 */
+function onCardContextMenu(evt: MouseEvent, batch: Card): void {
+  openBatchContextMenu(evt, batch);
+}
 
 /** 2026-08-26：记录源 worker ID（拖出本工人列的 worker.id），供落点的
  *  @add 构造 `from: {kind:'WORKER', worker_id}`。落点可能是工序池（撤回批次）也

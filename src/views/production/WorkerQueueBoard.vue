@@ -7,6 +7,18 @@
          全部带 :lazy="true" ⇒ 切到该 tab 才 mount 才发 `GET /prod/pool/{pid}`
      tab 标题 `(N)` 徽标数据源 = useWorkerPoolCountsQuery（单请求跨货架聚合）。
 
+     2026-10-06 新增「已下发批次右键召回」通路（详见文末变更记录）：
+       - 批次无论在工序候选池（货架上）还是在工人列（工人持有中），右键卡片都能
+         「召回到待下发」；写操作、权限闸、二次确认、失效编排集中在
+         composables/useBatchRecall.ts；
+       - 菜单组件 components/BatchContextMenu.vue 挂在本组件顶层（<template v-else>
+         之外 ⇒ loading 态下也已挂载），teleport 到 body；
+       - 新增 provide 键 `openBatchContextMenu`：(evt: MouseEvent, batch: BatchCardModel)
+         → void，消费方 PoolDrawer / WorkerColumn 用 inject 接（缺省 noop 兜底）；
+       - 卡片侧**不包任何组件**：@contextmenu.prevent 经 BatchCard 的 fallthrough
+         attrs 落在卡片根 div 上（包裹即破坏 Sortable 的「可拖元素 == vnode 的 DOM
+         footprint」不变式，见文末变更记录与 BatchCardDndFootprint.spec.ts）。
+
      2026-10-04 「待下发」右栏纳入外协工序（详见文末变更记录）：
        - 右栏工序卡数据源由「只含 INHOUSE」放宽到「全部工序」，并在 props 上透传
          category，由 PendingPoolsPanel 客户端分两组渲染、中间一条分割线；
@@ -31,6 +43,14 @@
           同时删 activeProcessId provide（随 move 端点改造后无消费者）。
 
      2026-09-30 变更记录（自上而下按时间倒序）：
+       - 2026-10-06：新增「已下发批次右键召回」通路。菜单组件 BatchContextMenu 是
+         板级单例、teleport 到 body、挂在 <template v-else> 之外（loading 态下已挂载）；
+         卡片侧只经 fallthrough attrs 挂 @contextmenu.prevent，**不加包裹层** ——
+         BatchCard 是 Sortable 可拖项，「可拖元素 == vnode 的 DOM footprint」是硬不变式，
+         el-dropdown（根是硬包裹 div，会让 evt.item.dataset.batchId 恒 undefined、
+         直接断掉 POOL↔WORKER 拖拽）与 el-tooltip / el-popover（Fragment 锚点 + teleport
+         占位注释留在 Sortable 容器内）都不合格。新增 provide 键 openBatchContextMenu，
+         权限闸在 opener 内（canRecall）。
        - 2026-09-30：counts query 去 shelf_id params 维度（后端 counts 端点无
          shelf 维度）⇒ shelfId 不再必须在 useWorkerPoolCountsQuery 之前声明，
          2026-09-30 hotfix 第 1 轮加的 TDZ 防护随之退休；
@@ -110,6 +130,14 @@
         <el-button :loading="loading" @click="onRefresh">刷新</el-button>
       </div>
     </template>
+
+    <!-- 2026-10-06：已下发批次右键召回的操作菜单（板级单例）。
+         放在 <template v-else>（el-tabs）**之外**、根 div 的直接子级位置 ⇒ loading
+         骨架态下菜单组件也已挂载，不必等数据到位。菜单本体 teleport 到 body，与本页
+         所有 Sortable 容器（PoolDrawer / WorkerColumn）零 DOM 关系。
+         卡片侧不包任何组件：@contextmenu.prevent 经 BatchCard 的 fallthrough attrs 落在
+         卡片根 div 上（包裹即破坏 Sortable 的「可拖元素 == vnode footprint」不变式）。 -->
+    <BatchContextMenu ref="batchCtxMenu" @recall="onRecall" />
   </div>
 </template>
 
@@ -127,9 +155,12 @@ import { useWorkerPoolCountsQuery } from '@/composables/queries/useWorkerPoolCou
 import { invalidateWorkerPoolByProcessAll } from '@/composables/queries/useWorkerPoolByProcessQuery';
 import { invalidateWorkerPoolCountsQuery } from '@/composables/queries/useWorkerPoolCountsQuery';
 import { invalidateWorkerStateByWorkerAll } from '@/composables/queries/useWorkerStateByWorkerQuery';
+import type { BatchCardModel } from '@/types/batchCard';
+import { useBatchRecall } from '@/views/production/composables/useBatchRecall';
 import WorkerPoolTab from './components/WorkerPoolTab.vue';
 import PendingBatchesPanel from './components/PendingBatchesPanel.vue';
 import PendingPoolsPanel from './components/PendingPoolsPanel.vue';
+import BatchContextMenu from './components/BatchContextMenu.vue';
 
 const auth = useAuthStore();
 // 2026-10-04：shelfId 现在**只服务 PoolDrawer 的 WORKER→POOL 撤回目标货架**；
@@ -189,7 +220,19 @@ const panelProcesses = computed(() =>
 );
 
 const pendingDispatch = usePendingDispatch();
+const recall = useBatchRecall();
 const { error, moveBatchToWorker, moveBatchToPool, moveBatchBetweenWorkers } = queue;
+
+/** 2026-10-06：右键菜单组件的模板 ref —— 卡片侧只经 inject 拿 opener，opener 需要
+ *  拿到菜单实例的 open()，故本组件是唯一持有该 ref 的地方。
+ *  类型走 InstanceType<typeof 局部 import 的组件>，菜单 open 的入参类型即由此贯通。 */
+const batchCtxMenu = ref<InstanceType<typeof BatchContextMenu> | null>(null);
+
+/** 2026-10-06：菜单项派发 → 召回。菜单本身是 dumb 的（只派发卡片），权限校验 /
+ *  二次确认 / 写请求全在 useBatchRecall 内，故这里只有一行转交。 */
+function onRecall(batch: BatchCardModel): void {
+  void recall.recallBatch(batch);
+}
 
 /** 2026-10-02：拖拽悬停的工序 id（null = 未悬停在任何工序卡上）—— 工序卡
  *  `.is-dropping` 高亮的唯一状态源。
@@ -225,6 +268,18 @@ provide<typeof moveBatchToPool>('moveBatchToPool', moveBatchToPool);
 // 2026-10-03 新增：WorkerColumn 落点消费（把 A 手中的批次拖到 B 手中 = WORKER→WORKER）。
 provide<typeof moveBatchBetweenWorkers>('moveBatchBetweenWorkers', moveBatchBetweenWorkers);
 provide<ComputedRef<string>>('shelfId', shelfId);
+// 2026-10-06 新增：卡片右键 → 板级单例菜单的 opener。消费方是 PoolDrawer（批次在货架上）
+// 与 WorkerColumn（批次在工人持有中），两者与菜单之间隔着 WorkerPoolTab 一层，故走
+// provide/inject 而非 prop 穿透；inject 侧缺省 noop 兜底。
+// 权限闸在本函数里（canRecall，与后端 MANAGER/CLERK 对齐）：无权角色连菜单都打不开，
+// useBatchRecall.recallBatch 内还有第二道，菜单打开与最终提交两处都不漏。
+provide<(evt: MouseEvent, batch: BatchCardModel) => void>(
+  'openBatchContextMenu',
+  (evt, batch) => {
+    if (!recall.canRecall.value) return;
+    batchCtxMenu.value?.open(evt, batch);
+  },
+);
 
 // 2026-09-30：workerHeld 的唯一消费者 WorkerColumn 已自管
 // useWorkerStateByWorkerQuery，onMounted(loadBoard) 与 refreshBoard 注入一并删除。

@@ -19,6 +19,11 @@
 //   - T4：拖入高亮的跨面板接线（源面板 emit → 板级 ref → 工序池面板 prop）。
 //   - T5：provide 三个 move 包装（含 2026-10-03 新增的 WORKER→WORKER 包装）——
 //     WorkerColumn 落点全靠 inject 拿包装，漏 provide 就退化为「不发请求」。
+//   - T6（2026-10-06）：provide openBatchContextMenu + 权限闸（canRecall 为假时菜单
+//     打不开）+ 菜单 open 收到 (evt, batch)。
+//   - T7（2026-10-06）：菜单 emit('recall') → useBatchRecall.recallBatch 拿到那张卡。
+//   ⚠️ 请求数断言（T2 / T2b / T3）**不因本次新增而放宽**：useBatchRecall 只建 mutation、
+//   不建 query，BatchContextMenu 是纯渲染组件，两条都不产生首屏请求。
 //
 // 测试策略：
 //   - vue-test-utils mount + globalConfig.plugins: [[VueQueryPlugin, { queryClient }]]；
@@ -241,6 +246,44 @@ vi.mock('../components/WorkerPoolTab.vue', () => ({
   }),
 }));
 
+// 2026-10-06：右键召回菜单（板级单例）与召回 composable 的接线 guard。
+// 两个都桩掉的理由：
+//   - 菜单：本 spec 的 element-plus 是整体 mock，真实 el-menu / el-menu-item 在这里
+//     解析不出来（模板组件解析走全局注册，不走模块 import），真实组件会打一串
+//     "Failed to resolve component" 噪声。桩只保留两条接线面 —— expose 的 open 与
+//     recall emit，组件自身行为由 BatchContextMenu.spec.ts 覆盖。
+//   - useBatchRecall：只需观察 recallBatch 是否被转交、canRecall 是否被读，
+//     写请求 / 确认弹窗 / 失效链由 useBatchRecall.spec.ts 覆盖。
+// 走 vi.hoisted：工厂被提升到模块顶部求值，裸引用模块级 const 会命中 TDZ。
+const { menuOpenCalls, recallBatchMock, recallable } = vi.hoisted(() => ({
+  menuOpenCalls: [] as unknown[][],
+  recallBatchMock: vi.fn(async () => undefined),
+  /** 权限闸的开关：默认 false ⇒ opener 直接早退（与本 spec 的 auth mock 一致） */
+  recallable: { ok: false },
+}));
+vi.mock('../components/BatchContextMenu.vue', () => ({
+  default: defineComponent({
+    name: 'BatchContextMenuStub',
+    emits: ['recall'],
+    setup(_, { expose }) {
+      expose({ open: (...args: unknown[]) => menuOpenCalls.push(args) });
+      return () => h('div', { class: 'batch-context-menu-stub' });
+    },
+  }),
+}));
+vi.mock('@/views/production/composables/useBatchRecall', () => ({
+  useBatchRecall: () => ({
+    // getter 而非 ref 快照：用例可随时改 recallable.ok，改完立即生效
+    canRecall: {
+      get value(): boolean {
+        return recallable.ok;
+      },
+    },
+    recallMutation: { mutate: vi.fn(), isPending: ref(false) },
+    recallBatch: recallBatchMock,
+  }),
+}));
+
 // vue-router stub —— 提供 query / replace 方法。
 const routeQuery: Ref<Record<string, unknown>> = ref({});
 vi.mock('vue-router', () => ({
@@ -264,6 +307,9 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     realFetchPendingBatches.mockClear();
     realFetchPendingBatches.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
     activeShelfIdRef.value = undefined;
+    recallable.ok = false;
+    menuOpenCalls.length = 0;
+    recallBatchMock.mockClear();
     testQueryClient = new QueryClient({
       defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
     });
@@ -389,6 +435,75 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     // 源面板上报某个工序 id → 板级状态透传到工序池面板
     await wrapper.find('.pending-batches-stub').trigger('click');
     expect(pools()).toBe('mock-hover:2000000000001');
+    wrapper.unmount();
+  });
+
+  it('T6（2026-10-06）：provide openBatchContextMenu + 权限闸 + open 入参', async () => {
+    // 回归 guard：卡片侧只 inject 这个 opener，漏 provide 就退化为「右键没反应」且
+    // 无任何报错（inject 缺省 noop）。权限闸在 opener 内 —— 无权角色连菜单都打不开。
+    activeShelfIdRef.value = '5000000000001';
+    const wrapper = mount(WorkerQueueBoard, {
+      global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+    });
+    await flushPromises();
+    const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown) => void;
+    expect(typeof open).toBe('function');
+
+    const evt = new MouseEvent('contextmenu');
+    const card = { batch_id: '3000000000001', version: 7 };
+
+    // 无权：opener 直接早退，菜单不被调 open
+    recallable.ok = false;
+    open(evt, card);
+    expect(menuOpenCalls).toHaveLength(0);
+
+    // 有权：转发给菜单，坐标与卡片原样送达
+    recallable.ok = true;
+    open(evt, card);
+    expect(menuOpenCalls).toHaveLength(1);
+    expect(menuOpenCalls[0]![0]).toBe(evt);
+    expect(menuOpenCalls[0]![1]).toBe(card);
+    wrapper.unmount();
+  });
+
+  it('T7（2026-10-06）：菜单 recall 事件 → recallBatch 拿到那张卡', async () => {
+    // 回归 guard：菜单 → 板级 onRecall → useBatchRecall.recallBatch 是一条 emit 链，
+    // 任一环断掉都表现为「菜单能打开、点召回毫无反应」。
+    activeShelfIdRef.value = '5000000000001';
+    recallable.ok = true;
+    const wrapper = mount(WorkerQueueBoard, {
+      global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+    });
+    await flushPromises();
+
+    const card = { batch_id: '3000000000002', version: 3 };
+    wrapper.findComponent({ name: 'BatchContextMenuStub' }).vm.$emit('recall', card);
+    await flushPromises();
+
+    expect(recallBatchMock).toHaveBeenCalledTimes(1);
+    expect(recallBatchMock).toHaveBeenCalledWith(card);
+    wrapper.unmount();
+  });
+
+  it('T7b（2026-10-06）：召回通路不新增任何首屏请求', async () => {
+    // 守住「进页面请求数恒为 3」这条不变式不被写操作 composable 与菜单组件破掉：
+    // useBatchRecall 只建 mutation（不建 query），BatchContextMenu 零请求。
+    activeShelfIdRef.value = '5000000000001';
+    const wrapper = mount(WorkerQueueBoard, {
+      global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+    });
+    await flushPromises();
+    await testQueryClient.refetchQueries();
+    await flushPromises();
+
+    // 断言口径与 T2b 一致（不锁 counts 的绝对次数）：上面对 refetchQueries() 的显式
+    // 补刷本身就是第 2 次 counts 请求，能守的是「端点集合没变、per-process / state /
+    // pending 依旧零请求」。
+    expect(realGetWorkerPoolCounts).toHaveBeenCalled();
+    expect(realGetWorkerPoolByProcess).not.toHaveBeenCalled();
+    expect(realGetWorkerState).not.toHaveBeenCalled();
+    expect(realFetchPendingBatches).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 });

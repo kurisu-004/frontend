@@ -16,6 +16,9 @@
 //   - D4：撤回投放（onStart 记工人源 → onAdd 消费）调 moveBatchToPool，
 //     to.shelf_id 取当前激活货架；无工人源时不发请求。
 //   - D5：目标货架为空 → ElMessage.warning 且不发请求。
+//   - D9（2026-10-06）：卡片上派发 contextmenu → 注入的 openBatchContextMenu 被调一次，
+//     参数是那张卡的 BatchCardModel（含 recall 必需的 version）。D9b：未提供 opener 时
+//     右键不抛错（inject 缺省 noop 兜底）。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -26,7 +29,7 @@
 //     桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, ref, type ComputedRef } from 'vue';
+import { defineComponent, h, nextTick, ref, toRaw, type ComputedRef } from 'vue';
 import { mount } from '@vue/test-utils';
 import type { BatchCardModel } from '@/types/batchCard';
 import type { ProcessPoolView } from '@/types/workerPool';
@@ -336,6 +339,39 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     // 本抽屉不消费池源，但记录必须落库：消费方是 WorkerColumn 的 onAdd（POOL→WORKER）
     const { consumePoolSource } = await import('@/utils/dndSourceTracker');
     expect(consumePoolSource(batchId)).toEqual({ processId: PROCESS_ID, shelfId: '5000000000007' });
+    wrapper.unmount();
+  });
+
+  it('D9（2026-10-06）：卡片右键 → 注入的 opener 被调一次，参数是那张卡的 model', async () => {
+    const openBatchContextMenu = vi.fn();
+    const batch = makeCard({ batch_id: '3000000000005', version: 9 });
+    const wrapper = mountDrawer(makePool([batch]), { openBatchContextMenu });
+
+    const card = wrapper.find('.pool-cards').find('.batch-card');
+    expect(card.exists()).toBe(true);
+    await card.trigger('contextmenu', { clientX: 240, clientY: 180 });
+
+    expect(openBatchContextMenu).toHaveBeenCalledTimes(1);
+    const [evt, passed] = openBatchContextMenu.mock.calls[0]!;
+    // 第一参是原始 MouseEvent（含坐标，菜单靠它定位）
+    expect(evt).toBeInstanceOf(Event);
+    expect((evt as MouseEvent).clientX).toBe(240);
+    // 第二参就是那张卡的 BatchCardModel（v-for 变量本身）：召回链路要读它的
+    // batch_id + version。props 经 Vue 响应式代理过，故比对底层目标对象。
+    expect(toRaw(passed)).toBe(batch);
+    expect(passed).toMatchObject({ batch_id: '3000000000005', version: 9 });
+    wrapper.unmount();
+  });
+
+  it('D9b（2026-10-06）：未 provide opener 时右键不抛错（inject 缺省 noop）', async () => {
+    const batch = makeCard();
+    // 完全不 provide（Board 未挂 opener 的极端形态）⇒ 右键退化为无反应，不炸回调
+    const wrapper = mount(PoolDrawer, {
+      props: { pool: makePool([batch]) },
+      global: { components: globalConfig.components },
+    });
+    const card = wrapper.find('.pool-cards').find('.batch-card');
+    await expect(card.trigger('contextmenu')).resolves.not.toThrow();
     wrapper.unmount();
   });
 });

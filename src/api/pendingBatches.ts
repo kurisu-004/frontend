@@ -108,10 +108,12 @@ export type AutoDispatchPreviewItem = AutoDispatchResultSchema['items'][number];
 
 /** `skip_reason` 字符串 → 中文文案（前端 UI 展示用，后端只给 ASCII 枚举）。
  *  2026-09-30：后端 auto-dispatch 改为只读 preview 后，「无工序链」不再走
- *  20706 业务错，而是以 `skip_reason` 形式出现在 items 里
- *  （batches.md §AutoDispatchResult / batch/service.rs:273-292）。 */
+ *  20706 业务错，而是以 `skip_reason` 形式出现在 items 里。
+ *  2026-10-06：`NOT_FOUND` 的文案去掉「非 PENDING」的表述 —— 后端把历史
+ *  `PROGRAMMING` 批次也纳入可下发白名单，该原因真正的语义是「批次不存在，或
+ *  当前状态不可下发」，按状态枚举直接命名会随白名单变动而失准。 */
 export const AUTO_DISPATCH_SKIP_REASON_LABELS: Record<string, string> = {
-  NOT_FOUND: '批次不存在或已非 PENDING',
+  NOT_FOUND: '批次不存在或状态不可下发',
   NO_PROCESS_CHAIN: '工单未制定工序链',
   NO_PROCESS_STEP: '工序链无可用步骤',
   NO_SHELF: '首道工序未配置货架',

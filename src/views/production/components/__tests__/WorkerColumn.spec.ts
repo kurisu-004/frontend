@@ -27,6 +27,9 @@
 //   - W11：options 带 onRemove，且把被拖节点放回 `from.children[oldIndex]`（DOM 下标）。
 //     二参形态下库不挂内建 onRemove，缺了它投放失败时幻影节点留在落点列、invalidate
 //     清不掉。断言必须落在「放回原下标位置」而不仅是「函数存在」。
+//   - W12（2026-10-06）：卡片上派发 contextmenu → 注入的 openBatchContextMenu 被调一次，
+//     参数是那张卡的 BatchCardModel（含 recall 必需的 version）。W12b：未提供 opener 时
+//     右键不抛错（inject 缺省 noop 兜底）。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -41,7 +44,7 @@
 //     el-empty / el-tooltip）+ vi.mock('element-plus') 把 ElMessage 桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, ref, type PropType } from 'vue';
+import { defineComponent, h, nextTick, ref, toRaw, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
 import type { HeldBatchItemDto } from '@/api/workerPool.contract';
 import type { Worker } from '@/types/workerPool';
@@ -462,6 +465,48 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     expect(Array.from(source.children).map((el) => el.id)).toEqual(['a', 'card', 'c']);
     // 落点列已被清空，不留幻影节点
     expect(target.children).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('W12（2026-10-06）：卡片右键 → 注入的 opener 被调一次，参数是那张卡的 model', async () => {
+    const openBatchContextMenu = vi.fn();
+    const wrapper = mountColumn([makeHeld()], { openBatchContextMenu });
+
+    const card = wrapper.find('.col-body').find('.batch-card');
+    expect(card.exists()).toBe(true);
+    await card.trigger('contextmenu', { clientX: 320, clientY: 240 });
+
+    expect(openBatchContextMenu).toHaveBeenCalledTimes(1);
+    const [evt, passed] = openBatchContextMenu.mock.calls[0]!;
+    // 第一参是原始 MouseEvent（含坐标，菜单靠它定位）
+    expect(evt).toBeInstanceOf(Event);
+    expect((evt as MouseEvent).clientX).toBe(320);
+    // 第二参就是那张卡的 BatchCardModel（heldToCard 产出的 v-for 变量本身）：
+    // 批次在工人持有中同样可召回，OCC 锚 version 由适配层填好
+    expect(toRaw(passed)).toMatchObject({ batch_id: '3000000000001', version: 3 });
+    // 拖拽链路不受影响：右键监听是挂在卡片根 div 上的 fallthrough attr，没引入包裹层
+    expect((card.element as HTMLElement).matches('.batch-card')).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('W12b（2026-10-06）：未 provide opener 时右键不抛错（inject 缺省 noop）', async () => {
+    stateRef.data = ref<FakeWorkerState | undefined>({
+      worker_id: SELF_WORKER.id,
+      worker_name: SELF_WORKER.name,
+      work_type_code: SELF_WORKER.work_type_code,
+      max_held: 3,
+      current_held: 1,
+      capacity_remaining: 2,
+      pool_count_by_process: [],
+      held_batches: [makeHeld()],
+    });
+    // 完全不 provide（板级 opener 缺失的极端形态）⇒ 右键退化为无反应，不炸回调
+    const wrapper = mount(WorkerColumn, {
+      props: { worker: SELF_WORKER },
+      global: { components: globalConfig.components },
+    });
+    const card = wrapper.find('.col-body').find('.batch-card');
+    await expect(card.trigger('contextmenu')).resolves.not.toThrow();
     wrapper.unmount();
   });
 });
