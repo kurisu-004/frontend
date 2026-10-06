@@ -102,7 +102,7 @@ export const qk = {
    *  dashboardDeliveryOrders（date × statuses × basis）三类 query，
    *  invalidateQueries({ queryKey: qk.dashboardPrefix }) 一键全失效。 */
   dashboardPrefix: ['dashboard'] as const,
-/** 2026-09-29 新增：零件 owner 维度文件列表共享 query 键。
+  /** 2026-09-29 新增：零件 owner 维度文件列表共享 query 键。
    * 单请求 owner 全量，computed 内按 kind 桶。失效粒度 = owner 维度。 */
   partFilesList: (ownerId: string) => ['part-files', 'list', ownerId] as const,
   /** 2026-09-29 新增：part-files 域前缀 —— 上传 / 删除完成后调用方通过

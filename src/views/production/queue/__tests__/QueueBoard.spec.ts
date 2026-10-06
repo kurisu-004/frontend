@@ -37,6 +37,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref, type Ref } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
+// 下面 vi.mock('element-plus') 里定义的 EP stub：QueueBoard 的模板不 import 组件，
+// 解析不到模块导出就会退化成同名原生标签（<el-tab-pane> 原样输出、label 槽不渲染）。
+// 要断言渲染结果就得把 stub 显式注册进 global.components —— T8 依赖这一点。
+import { ElSplitter, ElSplitterPanel, ElTabPane, ElTabs } from 'element-plus';
 
 vi.mock('element-plus', () => ({
   ElMessage: {
@@ -69,8 +73,14 @@ vi.mock('element-plus', () => ({
   ElTabPane: defineComponent({
     name: 'ElTabPaneStub',
     props: { name: String, lazy: Boolean },
+    // label 槽一并渲染：T8 要断言「待下发」tab 标题徽标读的是快照的 pending_count，
+    // 断言落在真实渲染出来的标签文本上（而不是去摸组件内部的 computed）。
     setup(_, { slots }) {
-      return () => h('div', { class: 'el-tab-pane-stub' }, slots.default?.());
+      return () =>
+        h('div', { class: 'el-tab-pane-stub' }, [
+          h('div', { class: 'el-tab-pane-stub__label' }, slots.label?.()),
+          slots.default?.(),
+        ]);
     },
   }),
   ElButton: defineComponent({
@@ -387,6 +397,39 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     expect(realFetchQueueSnapshot).toHaveBeenCalled();
     // 一个参数都不能有
     expect(realFetchQueueSnapshot.mock.calls[0]).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('T8：「待下发」tab 标题徽标读快照 pending_count，不是列表 batches.length', async () => {
+    // 回归 guard：徽标一度读 `pendingDispatch.batches.length` —— 那是**分页后的页
+    // 长度**（limit=200），超过一页就低报。本用例把两个数设成互不相同的值：
+    //   快照 pending_count = 42（本 spec mock 的 useQueueDispatch 给 batches = []）
+    //   batches.length     = 0
+    // 断言落在真实渲染出的标签文本上（el-tab-pane stub 渲染 label 槽）。
+    realFetchQueueSnapshot.mockResolvedValue({
+      processes: [],
+      pending_count: 42,
+      ts: '2026-10-08T09:12:33+08:00',
+    });
+    activeShelfIdRef.value = '5000000000001';
+    const wrapper = mount(QueueBoard, {
+      global: {
+        components: { ElTabs, ElTabPane, ElSplitter, ElSplitterPanel },
+        plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]],
+      },
+    });
+    await flushPromises();
+    await testQueryClient.refetchQueries();
+    await flushPromises();
+
+    const label = wrapper
+      .findAll('.el-tab-pane-stub__label')
+      .map((w) => w.text())
+      .find((t) => t.includes('待下发'));
+    expect(label).toBeDefined();
+    expect(label).toContain('(42)');
+    // 若退回 batches.length（= 0）这里会是 (0)
+    expect(label).not.toContain('(0)');
     wrapper.unmount();
   });
 

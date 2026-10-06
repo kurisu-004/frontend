@@ -8,15 +8,16 @@
 // `{process_id, process_code, process_name, workers[brief], work_types[], items[]}`
 // 换成 `{process{...}, workers[含 held_batches + 容量三字段], items[], total, ts}`。
 // **请求数**也从「1 + N」（1 个工序详情 + N 个单工人 state）降为恒 1 ——
-// 本 spec 的 P5 正是这条不变式的回归 guard。
+// 本 spec 的 P5 守「本组件只发一次」，工人列零请求那条不变式由
+// WorkerColumn.spec.ts 的 W15 守（见 P5 用例内的口径说明）。
 //
 // 覆盖：
 //   - P1：传入 processId → 内部 fetchQueueBoard 收到该 processId。
 //   - P2：resolved 后渲染 el-splitter + PoolDrawer + WorkerColumn（mock 化）。
 //   - P3：query 抛错 → 渲染 el-empty description="加载失败"。
 //   - P4：workers 数组为空 → 渲染「该工序暂无可用工人」占位。
-//   - P5（2026-10-08 新增）：打开一个工序 tab **只发 1 个**请求 —— 工人列不再自管
-//     单工人 state 请求（N+1 收口）。
+//   - P5（2026-10-08 新增）：打开一个工序 tab，**ProcessBoardTab 自己**只发 1 个
+//     请求（工人列被 stub 掉，故 N+1 那条不变式不在本用例的覆盖面内）。
 //   - P6（2026-10-08 新增）：workers[] 的容量三字段与 held_batches 原样透传给
 //     WorkerColumn（不再有 `max_held: 0 / is_online: true` 这类占位值）。
 //
@@ -250,10 +251,11 @@ describe('ProcessBoardTab（单工序看板 tab body）', () => {
     wrapper.unmount();
   });
 
-  it('P5：打开一个工序 tab 只发 1 个请求（工人列零请求，N+1 收口）', async () => {
-    // 回归 guard：改前 WorkerColumn 自管「单工人 state」请求，打开一个工序 tab 会打出
-    // 1 + N 个请求（N = 该工序可执行工人数）。后端把容量与持有批次内联进 workers[] 之后
-    // 请求数必须恒为 1 —— 有人给工人列加回自管 query 时本用例会红。
+  it('P5：打开一个工序 tab 只发 1 个请求', async () => {
+    // 守的是「**本组件**只发一次工序板请求」，不是整个 tab 恒 1 个请求：WorkerColumn
+    // 在本 spec 里被 mock 成 stub，stub 不发请求，所以「工人列自管 query 复发」这种
+    // N+1 回归本用例照样绿。那条不变式的守门点是 WorkerColumn.spec.ts 的 W15
+    // （真挂载 + api 层 tripwire）。
     realFetchQueueBoard.mockImplementation(async (pid: string) => ({
       process: { process_id: pid, process_code: 'CNC-01', process_name: '粗加工', color: null },
       workers: [makeWorker('1900000000001'), makeWorker('1900000000002')],

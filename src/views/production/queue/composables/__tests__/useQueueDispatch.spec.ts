@@ -27,7 +27,9 @@
 //   - T8：preview 多首道工序 → 按 first_process_id 拆成多次 dispatch。
 //   - T9：setSelectedIds / clearSelection 行为正确（基础状态守卫）。
 //   - T10：不再导出 bulkDispatchMutation（批量端点已下线）。
-//   - T11：dispatchMutation 失败 → 报错 toast + 只失效待下发列表域（多选保持不动）。
+//   - T11：dispatchMutation 失败 → 报错 toast + 与成功同款的**四域**失效链（多选保持
+//     不动）。失败不等于「什么都没发生」：40901 / 20120 意味着别人已经把这批下发了。
+//   - T11b：auto-dispatch 预览失败 → 只报错 toast、零失效（只读预览不写库）。
 //
 // 测试策略：
 //   - vi.mock('@/api/productionQueue')：dispatchBatches / previewAutoDispatch /
@@ -68,6 +70,7 @@ interface DispatchResult {
   succeeded: Array<{
     batch_id: string;
     current_process_step_id: string | null;
+    current_process_id: string | null;
     target_process_id: string;
     shelf_id: string;
     version: number;
@@ -100,6 +103,7 @@ const realDispatchBatches = vi.fn<
   succeeded: req.targets.map((t, i) => ({
     batch_id: t.batch_id,
     current_process_step_id: null,
+    current_process_id: t.target_process_id,
     target_process_id: t.target_process_id,
     shelf_id: '5000000000001',
     version: i + 2,
@@ -215,6 +219,7 @@ describe('useQueueDispatch — bulk-only dispatch + auto preview 两步', () => 
       succeeded: req.targets.map((t, i) => ({
         batch_id: t.batch_id,
         current_process_step_id: null,
+        current_process_id: t.target_process_id,
         target_process_id: t.target_process_id,
         shelf_id: '5000000000001',
         version: i + 2,
@@ -470,11 +475,12 @@ describe('useQueueDispatch — bulk-only dispatch + auto preview 两步', () => 
     expect(d).not.toHaveProperty('bulkDispatchMutation');
   });
 
-  it('T11：dispatch 失败 → 报错 toast + 与服务器对账重拉待下发列表', async () => {
-    // 2026-10-02 回归 guard：失败时卡片本来就不会从待下发池消失（面板渲染的是
-    // props.batches 派生的 cards，Sortable 改的是不参与渲染的本地副本
-    // sortableCards + DOM，被拖节点由库放回源容器），onError 里的重拉是「失败即对账」
-    // 的兜底。若哪天有人删掉它，本用例的失效域断言会失败。
+it('T11：dispatch 失败 → 报错 toast + 走全套四域失效链（多选保持不动）', async () => {
+    // 回归 guard（2026-10-02）：失败时卡片本来就不会从待下发池消失，onError 里的重拉
+    // 是「失败即对账」的兜底。2026-10-08 修正覆盖面：原先 onError 只失效待下发列表域，
+    // 但 dispatch 最常见的失败恰是 40901 OCC / 20120 状态不允许 —— 那意味着**别人已经
+    // 把这批下发出去**（批次真的离开待下发池、进了目标工序候选池），只刷 pending 会让
+    // 目标工序列凭空少卡、tab 徽标过期。故 onError 与 onSuccess 同款走四域。
     const { ElMessage } = await import('element-plus');
     realDispatchBatches.mockRejectedValueOnce(new Error('BIZ_BATCH_ALREADY_DISPATCHED'));
 
@@ -485,12 +491,22 @@ describe('useQueueDispatch — bulk-only dispatch + auto preview 两步', () => 
       .catch(() => undefined);
 
     expect(ElMessage.error).toHaveBeenCalledWith('BIZ_BATCH_ALREADY_DISPATCHED');
-    // 只失效待下发列表域，不碰其余三域（失败的写只波及待下发列表）
-    const keys = vi
-      .mocked(testQueryClient.invalidateQueries)
-      .mock.calls.map((c) => (c[0] as { queryKey: readonly unknown[] }).queryKey);
-    expect(keys).toEqual([['production-queue', 'pending']]);
+    // 与 onSuccess 同一条失效链、同一顺序
+    expectFourDomainsInvalidated();
     // 失败不动多选：用户的选择不该被一次失败清空
     expect(d.selectedIds.value.size).toBe(1);
+  });
+
+  it('T11b：auto-dispatch 预览失败 → 只报错 toast，零失效（预览不写库）', async () => {
+    // 对照 T11：auto-dispatch 是**只读预览**（后端不写库、不发 WS），失败不可能让
+    // 任何域的数据变旧 ⇒ 不该失效任何 query。多失效只会白拉一遍。
+    const { ElMessage } = await import('element-plus');
+    realPreviewAutoDispatch.mockRejectedValueOnce(new Error('preview failed'));
+
+    const d = testApp.runWithContext(() => useQueueDispatch());
+    await d.autoDispatchMutation.mutateAsync({ batchIds: ['3000000000001'] }).catch(() => undefined);
+
+    expect(ElMessage.error).toHaveBeenCalledWith('preview failed');
+    expect(testQueryClient.invalidateQueries).not.toHaveBeenCalled();
   });
 });

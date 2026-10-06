@@ -8,8 +8,9 @@
 // 2026-10-08：组件不再自管 query（后端把持有批次与容量三字段内联进工序看板的
 // `workers[]`），props 收敛成单个 `worker: QueueWorkerSchema`。旧用例里「桩 query
 // 观察调用点只传 workerId 一维」的 W8 随之删除 —— 数据不再经过 query 调用点，那条
-// 防线已由 queueWorkerSchema（`held_batches` 与容量三字段全部必填，见
-// productionQueueSchema.spec.ts 的 Q-B2 / Q-B3）接住。
+// 防线改由 W15 接住（api 模块 tripwire + 零调用断言）。
+// ⚠️ schema 侧只守「字段齐不齐」（productionQueueSchema.spec.ts 的 Q-B2 / Q-B3），
+// 挡不住有人把自管 query 加回本组件 —— 字段再齐，多发的那次请求照样发生。
 //
 // 覆盖：
 //   - W1：Sortable 用**二参重载**（不传 list）—— 库的内建 onAdd/onRemove 假定「传进来
@@ -39,6 +40,8 @@
 //     空列时零元素子节点、容器仍是合法投放目标。
 //   - W14（2026-10-08 新增）：容量三字段直接渲染 props —— 「加载中占位 …」分支已
 //     消失（数据一次请求到齐，列内不存在中间态）。
+//   - W15（2026-10-08 新增）：挂载 + 完整交互窗口内对 `@/api/productionQueue`
+//     **零请求** —— N+1 收口这条不变式的真守卫。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -81,6 +84,53 @@ vi.mock('vue-draggable-plus', () => ({
 
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
+}));
+
+// 2026-10-08：api 模块整体桩成「一被调用就记账」的 tripwire（W15 守它）。
+// 组件树当前对 `@/api/productionQueue` 只有 type import（type 会被编译期抹掉），
+// 所以这个 mock 的 factory 在 W1~W14 里**根本不会执行** —— 它只在有人把自管 query
+// 加回工人列时才被解析到。列名的枚举在本 spec 里是刻意的冗余：新增端点时补一行，
+// 补漏的后果是新端点不在断言面里（漏报，不会假绿在「误以为守住了」上）。
+const apiCalls = vi.hoisted(() => [] as string[]);
+
+vi.mock('@/api/productionQueue', () => ({
+  fetchQueueSnapshot: vi.fn(() => {
+    apiCalls.push('fetchQueueSnapshot');
+    return Promise.reject(new Error('api tripwire: fetchQueueSnapshot'));
+  }),
+  fetchQueueBoard: vi.fn(() => {
+    apiCalls.push('fetchQueueBoard');
+    return Promise.reject(new Error('api tripwire: fetchQueueBoard'));
+  }),
+  fetchPendingBatches: vi.fn(() => {
+    apiCalls.push('fetchPendingBatches');
+    return Promise.reject(new Error('api tripwire: fetchPendingBatches'));
+  }),
+  dispatchBatches: vi.fn(() => {
+    apiCalls.push('dispatchBatches');
+    return Promise.reject(new Error('api tripwire: dispatchBatches'));
+  }),
+  previewAutoDispatch: vi.fn(() => {
+    apiCalls.push('previewAutoDispatch');
+    return Promise.reject(new Error('api tripwire: previewAutoDispatch'));
+  }),
+  recallToPending: vi.fn(() => {
+    apiCalls.push('recallToPending');
+    return Promise.reject(new Error('api tripwire: recallToPending'));
+  }),
+  moveBatch: vi.fn(() => {
+    apiCalls.push('moveBatch');
+    return Promise.reject(new Error('api tripwire: moveBatch'));
+  }),
+  autoAllocate: vi.fn(() => {
+    apiCalls.push('autoAllocate');
+    return Promise.reject(new Error('api tripwire: autoAllocate'));
+  }),
+  refillQueue: vi.fn(() => {
+    apiCalls.push('refillQueue');
+    return Promise.reject(new Error('api tripwire: refillQueue'));
+  }),
+  AUTO_DISPATCH_SKIP_REASON_LABELS: {},
 }));
 
 import WorkerColumn from '../WorkerColumn.vue';
@@ -251,6 +301,7 @@ describe('WorkerColumn（拖拽落点分发）', () => {
   beforeEach(() => {
     captured.calls.length = 0;
     captured.starts.length = 0;
+    apiCalls.length = 0;
   });
 
   it('W1：Sortable 用二参重载，不传 list（渲染源与 list 不同源）', () => {
@@ -535,5 +586,40 @@ describe('WorkerColumn（拖拽落点分发）', () => {
     const card = wrapper.find('.col-body').find('.batch-card');
     await expect(card.trigger('contextmenu')).resolves.not.toThrow();
     wrapper.unmount();
+  });
+
+  it('W15：挂载 + 跑完整交互期间对 api 层零请求（N+1 收口的真守卫）', async () => {
+    // 这条不变式的守门点在这里，不在 ProcessBoardTab.spec.ts 的 P5。
+    //
+    // 为什么 P5 顶不住：P5 把 WorkerColumn 整个 vi.mock 成 stub，stub 组件不发请求，
+    // 于是「工人列自己多发一次单工人 state 请求」这种 N+1 复发**照样绿** —— P5 只能
+    // 挡住「ProcessBoardTab 自己重复请求同一端点」。本用例真挂载 WorkerColumn 及其
+    // 子树（BatchCard），并把 `@/api/productionQueue` 整体桩成记账 tripwire：有人把
+    // `useWorkerStateByWorkerQuery` 之类自管 query 加回组件，模块在运行期被解析到桩、
+    // 立刻记账 ⇒ 本用例红。
+    //
+    // 断言落在「整个交互窗口内零调用」而不是「mount 当下零调用」：query 常在
+    // onMounted / watch(post) 之后才首次触发，只查 mount 当下会漏。
+    const wrapper = mountColumn([makeHeld(), makeHeld({ batch_id: '3000000000002' })]);
+
+    // 非空列：跑一次完整拖拽落点（W2 路径）+ 右键（W12 路径）
+    const options = capturedOptions();
+    recordPoolSource('3000000000009', {
+      processId: '2000000000001',
+      shelfId: '5000000000009',
+    });
+    (options.onStart as (e: unknown) => void)(dragEvent({ batchId: '3000000000009' }));
+    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009' }));
+    await wrapper.findAll('.batch-card')[1]!.trigger('contextmenu', { clientX: 10, clientY: 20 });
+
+    // 空列再挂一次：空列是 POOL→WORKER 的主落点，复发多半落在空列分支上
+    const emptyWrapper = mountColumn([]);
+    await nextTick();
+    expect(emptyWrapper.find('.col-body').exists()).toBe(true);
+
+    await nextTick();
+    expect(apiCalls).toEqual([]);
+    wrapper.unmount();
+    emptyWrapper.unmount();
   });
 });

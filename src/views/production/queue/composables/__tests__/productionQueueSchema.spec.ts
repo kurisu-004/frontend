@@ -26,12 +26,15 @@
 //           （后端对 NULL 兜底 `1970-01-01`）；给 null 必须抛错，否则前端会把
 //           「无计划交期」与兜底值混为一谈。
 //   - Q-PB2：列表信封 items / total / limit / offset。
+//   - Q-PB3：待下发行缺 process_chain_id → 抛错（「是否已挂工艺链」要靠它）。
+//   - Q-PB4：待下发行缺 current_process_step_id → 抛错；「未设 step」是 "0" 非 null。
 //   - Q-M1：moveRequestSchema 解析 POOL→WORKER 与 WORKER→WORKER 两个方向。
 //   - Q-M2：moveResultSchema 接受 `skip_serializing_if` 四字段**整体省略**的
 //           WORKER→WORKER 响应（用 `.nullish()` 而非 `.nullable()` 的理由）。
 //   - Q-R1：refillResultSchema + takenItemSchema；taken 缺 has_cnc_program → 抛错。
 //   - Q-D1：dispatchRequestSchema 空 targets → 抛错（后端 40001 同形态）。
 //   - Q-D2：dispatchResultSchema 接受 `failed` 被整体省略（`.default([])`）。
+//   - Q-D3：succeeded[] 缺 current_process_id → 抛错；Option 字段的 null 也收。
 //   - Q-AD1：autoDispatchRequestSchema 空 batch_ids → 抛错。
 //   - Q-AD2：autoDispatchResultSchema 缺 items → 抛错。
 //   - Q-RC1：recallRequestSchema 的 batch_id 必须是字符串（后端 deserialize_i64
@@ -138,6 +141,9 @@ function makePendingBatch(): Record<string, unknown> {
     is_urgent: false,
     note: null,
     version: 0,
+    // 后端非 Option i64 + unwrap_or(0) ⇒ 「未挂」是字符串 "0"，不是 null / 缺省
+    current_process_step_id: '0',
+    process_chain_id: '0',
   };
 }
 
@@ -270,6 +276,26 @@ describe('productionQueueSchema — 待下发（GET /queue/pending）', () => {
     expect(parsed.total).toBe(1);
     expect(() => queuePendingBatchListSchema.parse({ items: [], total: 1 })).toThrow();
   });
+
+  it('Q-PB3：缺 process_chain_id → 抛错（漏声明会被 strip 静默丢掉，值恒 undefined）', () => {
+    // 漏声明这条键，parse 照样成功而值被 zod strip 掉 ⇒ 将来做「未制定工序链」提示时
+    // 读到的永远是 undefined，且没有任何报错可查。断言落在「缺键必须抛」。
+    const { process_chain_id: _dropped, ...rest } = makePendingBatch();
+    void _dropped;
+    expect(() => queuePendingBatchSchema.parse(rest)).toThrow();
+    expect(queuePendingBatchSchema.parse(makePendingBatch()).process_chain_id).toBe('0');
+  });
+
+  it('Q-PB4：current_process_step_id 同样必声明，且「未设 step」是 "0" 而非 null', () => {
+    const { current_process_step_id: _dropped, ...rest } = makePendingBatch();
+    void _dropped;
+    expect(() => queuePendingBatchSchema.parse(rest)).toThrow();
+    // 后端是 i64 + unwrap_or(0)，DB NULL 投影成 "0"；收 null 会让真响应 parse 失败。
+    expect(queuePendingBatchSchema.parse(makePendingBatch()).current_process_step_id).toBe('0');
+    expect(() =>
+      queuePendingBatchSchema.parse({ ...makePendingBatch(), current_process_step_id: null }),
+    ).toThrow();
+  });
 });
 
 describe('productionQueueSchema — move / refill', () => {
@@ -350,6 +376,7 @@ describe('productionQueueSchema — dispatch / auto-dispatch', () => {
         {
           batch_id: '3000000000001',
           current_process_step_id: null,
+          current_process_id: '2000000000001',
           target_process_id: '2000000000001',
           shelf_id: '5000000000001',
           version: 1,
@@ -358,6 +385,28 @@ describe('productionQueueSchema — dispatch / auto-dispatch', () => {
     });
     expect(parsed.failed).toEqual([]);
     expect(parsed.succeeded[0]?.current_process_step_id).toBeNull();
+  });
+
+  it('Q-D3：succeeded[] 的 current_process_id 必须声明（后端 Option，null 合法）', () => {
+    // 后端 DispatchSuccessItem 第 3 个字段。漏声明时值被 strip 掉，而 succeeded 是
+    // 「下发成功」的回报，消费方读它却拿到 undefined 且无报错。
+    const base = {
+      batch_id: '3000000000001',
+      current_process_step_id: null,
+      target_process_id: '2000000000001',
+      shelf_id: '5000000000001',
+      version: 1,
+    };
+    expect(() => dispatchResultSchema.parse({ succeeded: [base] })).toThrow();
+    const ok = dispatchResultSchema.parse({
+      succeeded: [{ ...base, current_process_id: '2000000000001' }],
+    });
+    expect(ok.succeeded[0]?.current_process_id).toBe('2000000000001');
+    // Option 字段，None → JSON null 也要能收
+    expect(
+      dispatchResultSchema.parse({ succeeded: [{ ...base, current_process_id: null }] })
+        .succeeded[0]?.current_process_id,
+    ).toBeNull();
   });
 
   it('Q-AD1：autoDispatchRequestSchema 空 batch_ids → 抛 ZodError', () => {

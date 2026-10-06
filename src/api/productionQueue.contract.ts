@@ -206,11 +206,15 @@ export interface QueuePendingBatchListDto {
   offset: number;
 }
 
-/** `QueuePendingBatchListDto.items[]` 元素（rust QueuePendingBatch）。15 字段。
+/** `QueuePendingBatchListDto.items[]` 元素（rust PendingBatchItem）。17 字段。
  *
  *  `planned_delivery_date` 是**非 null** 字符串：待下发批次必然已制定计划交期，
  *  后端对 NULL 兜底为 `1970-01-01`（不要拿它做「无交期」判据）；
- *  `system_delivery_date` 才是 nullable。 */
+ *  `system_delivery_date` 才是 nullable。
+ *
+ *  ⚠️ 末两项在后端是**非 Option 的 i64**（`unwrap_or(0)`），故声明为非 null string：
+ *  DB 列为 NULL 时后端投影成 `"0"`，前端按 `=== '0'` 判「未挂」。判据不要写成
+ *  「缺失 / null」—— 那两种形态在这条契约上不存在。 */
 export interface QueuePendingBatchDto {
   batch_id: string;
   part_id: string;
@@ -229,6 +233,11 @@ export interface QueuePendingBatchDto {
   is_urgent: boolean;
   note: string | null;
   version: number;
+  /** `t_part_batch.current_process_step_id`；`"0"` = DB 列为 NULL = 未挂 step。
+   *  待下发批次按定义尚未挂 step，值恒 `"0"`。 */
+  current_process_step_id: string;
+  /** `t_part.process_chain_id`；`"0"` = 工单未制定工序链。 */
+  process_chain_id: string;
 }
 
 /** `POST /api/v2/prod/queue/recall` 请求（rust RecallRequest）。
@@ -409,11 +418,14 @@ export interface DispatchResultDto {
   failed?: DispatchFailureItemDto[];
 }
 
-/** `DispatchResultDto.succeeded[]` 元素（rust DispatchSuccessItem）。 */
+/** `DispatchResultDto.succeeded[]` 元素（rust DispatchSuccessItem）。6 字段。 */
 export interface DispatchSuccessItemDto {
   batch_id: string;
   /** dispatch 路径不解析工序链步骤 ⇒ Option 为 None ⇒ 后端返 null。 */
   current_process_step_id: string | null;
+  /** 下发后写入 `t_part_batch.current_process_id` 的值，恒等于本次
+   *  `target_process_id`。后端保留 Option 形态（None → JSON `null`）。 */
+  current_process_id: string | null;
   target_process_id: string;
   /** service 按 `target_process_id` 在 `t_shelf_process` 解析出的货架。 */
   shelf_id: string;

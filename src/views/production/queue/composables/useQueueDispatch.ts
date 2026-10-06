@@ -181,11 +181,12 @@ export function useQueueDispatch(): UseQueueDispatchReturn {
       // 后端 dispatch 端点不再抛「工序链缺失」业务错（统一走 auto-dispatch preview
       // 的 skip_reason = NO_PROCESS_CHAIN 引导路径），故此处只报原始错误消息。
       ElMessage.error(e.message ?? '下发失败');
-      // 失败即与服务器对账一次：下发失败时卡片本来不会从待下发池消失（面板渲染的是
-      // props.batches 派生的 cards，Sortable 改的是不参与渲染的本地副本
-      // sortableCards + DOM）。若列表已与服务器漂移（并发下发 / 状态被别处改过），
-      // 不该留到下一次自然刷新才发现。
-      await invalidateQueuePendingAll(qc);
+      // 失败也要走**全套**失效链（与 onSuccess 同款），不是只刷待下发列表：dispatch
+      // 最常见的失败恰恰是 40901 OCC 与 20120 状态不允许 —— 那意味着**别人已经把这批
+      // 下发出去了**（批次真的离开待下发池、真的进了目标工序候选池）。只失效 pending
+      // 会让目标工序列凭空少卡、tab 徽标过期，只能等 30s staleTime 到期自愈。
+      // 失败信息不可能预知是哪一类，所以统一按「本端副本已过期」处理。
+      await invalidateAll();
     },
   });
 

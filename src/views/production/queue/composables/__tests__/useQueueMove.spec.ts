@@ -19,7 +19,7 @@
 //   - T4：moveBatchToPool 成功 → moveBatch 收到 WORKER→POOL 形态（to.shelf_id = 目标货架）。
 //   - T5：moveBatchToPool toShelfId 为空 → 早退返回 false + warning，不发请求。
 //   - T6：runAutoAllocate 成功 → autoAllocate 被调 + queue 两域前缀失效。
-//   - T7：runAutoAllocate 失败 → onError 路径 error.value 写入。
+//   - T7：runAutoAllocate 失败 → onError 写入 error.value **且失效 queue 两域**。
 //   - T8：请求体**不含** process_id / next_process_id（目标工序由后端自推）。
 //   - T9：不再导出 `workers`（恒空数组的占位 view-model）/ loadBoard / workerHeld。
 //   - T10：moveBatchBetweenWorkers 成功 → moveBatch 收到 WORKER→WORKER 形态
@@ -241,7 +241,7 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     expectQueueDomainInvalidated();
   });
 
-  it('T7：runAutoAllocate 失败 → onError 路径 error.value 写入', async () => {
+  it('T7：runAutoAllocate 失败 → onError 写入 error.value **且失效 queue 两域**', async () => {
     const { useQueueMove } = await import('../useQueueMove');
     realAutoAllocate.mockRejectedValueOnce(new ApiError(20704, 'BIZ_AUTO_ALLOCATE_INVALID_RATIO'));
     const q = testApp.runWithContext(() => useQueueMove());
@@ -254,6 +254,10 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
       }),
     ).rejects.toThrow();
     expect(q.error.value).toContain('BIZ_AUTO_ALLOCATE_INVALID_RATIO');
+    // 失败也要对账：auto-allocate 一次会动多名工人，任一名中途遇 OCC 就整体中断，
+    // 此时前面几名工人的持有数已经落库、本地看板却停在中断前 —— 与真值分叉。
+    // 与 moveMutation.onError 同款理由（对 T3 / T11 / T12 守的是「失败也失效」）。
+    expectQueueDomainInvalidated();
   });
 
   it('T8：move 请求体不含 process_id / next_process_id（后端已无此入参）', async () => {

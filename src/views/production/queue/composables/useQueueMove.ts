@@ -117,6 +117,15 @@ export function useQueueMove(): UseQueueMoveReturn {
     },
   });
 
+  /** `POST /queue/auto-allocate`：出参 `AutoAllocateResult`（`{process_id, shelf_id,
+   *  mode, fill_ratio, filled[], pool_empty}`）**没有对应 schema，mutationFn 也没有
+   *  Zod parse** —— 与上面 moveMutation 的 `moveResultSchema.parse()` 不同款。后端改
+   *  这个 VO 的字段名不会被运行时或测试抓到。声明见 productionQueueSchema.ts 文件头
+   *  的覆盖登记；补 schema 时注意别复用 `refillResultSchema`（字段集不同）。
+   *
+   *  onError 也要失效本域（与 moveMutation 同款理由）：auto-allocate 一次会动多名
+   *  工人，任一名中途遇 OCC 就整体中断，此时部分工人的持有数已经落库、本地看板却停在
+   *  中断前 —— 与真值分叉。 */
   const autoAllocateMutation = useMutation<AutoAllocateResultDto, Error, AutoAllocateRequest>({
     mutationKey: ['production-queue', 'auto-allocate'],
     mutationFn: async (req) => autoAllocate(req),
@@ -124,9 +133,10 @@ export function useQueueMove(): UseQueueMoveReturn {
       await invalidateQueueDomains();
       error.value = null;
     },
-    onError: (e: Error) => {
+    onError: async (e: Error) => {
       error.value = e.message ?? '自动分配失败';
       ElMessage.error(e.message ?? '自动分配失败');
+      await invalidateQueueDomains();
     },
   });
 

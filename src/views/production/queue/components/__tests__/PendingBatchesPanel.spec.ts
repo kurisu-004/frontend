@@ -152,6 +152,9 @@ function makeDto(overrides: Partial<QueuePendingBatchDto> = {}): QueuePendingBat
     is_urgent: false,
     note: null,
     version: 1,
+    // 后端非 Option i64 + unwrap_or(0) ⇒「未挂」是字符串 "0"，不是 null / 缺省
+    current_process_step_id: '0',
+    process_chain_id: '0',
     ...overrides,
   };
 }

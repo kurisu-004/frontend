@@ -7,17 +7,30 @@
 //     `useQueueSnapshot` / `useQueueBoard` / `useQueueMove` / `useQueueDispatch`
 //     在 queryFn / mutationFn 里 `xxxSchema.parse(await fetchXxx())` 完成。
 //
-// 契约来源：backend-rust `docs/api/production/queue.md`（唯一权威来源，勿翻后端源码
-// 反推）。九个端点各一组 schema：
+// 契约来源：backend-rust 分支 `feat/queue-domain` 的 `src/modules/prod/queue/`
+// （`docs/api/production/queue.md` 与 `vo/queue.rs` 两处**口径一致**，但该分支尚未
+// 合入 master，别在 master 上找不到就以为契约不存在）。九个端点的 schema 覆盖情况：
 //   - GET  /queue/snapshot                  → queueSnapshotSchema
 //   - GET  /queue/processes/{process_id}    → queueBoardSchema（及其嵌套 4 组）
 //   - GET  /queue/pending                   → queuePendingBatchListSchema
 //   - POST /queue/move                      → moveRequestSchema / moveResultSchema
-//   - POST /queue/auto-allocate             → refillResultSchema / takenItemSchema
-//   - POST /queue/refill                    → refillResultSchema
 //   - POST /queue/dispatch                  → dispatchRequestSchema / dispatchResultSchema
 //   - POST /queue/auto-dispatch             → autoDispatchRequestSchema / autoDispatchResultSchema
 //   - POST /queue/recall                    → recallRequestSchema / recallOutSchema
+//   - POST /queue/refill                    → refillResultSchema
+//   - POST /queue/auto-allocate             → **无**（出参未声明，见下）
+//
+// ⚠️ 两处如实登记，不要按「九个端点各有守门」去推断覆盖面：
+//   - `auto-allocate` 出参（`{process_id, shelf_id, mode, fill_ratio, filled[],
+//     pool_empty}`）**未声明 schema**，`useQueueMove.runAutoAllocate` 的 mutationFn
+//     也**没有** Zod parse（与 move 的 `moveResultSchema.parse` 不同款）。后果：
+//     后端改 AutoAllocateResult 的字段名不会被任何测试或运行时抓到。补 schema 时
+//     注意别复用 `refillResultSchema` —— 两者字段集完全不同（refill 是
+//     `{worker_id, shelf_id, taken[], pool_empty}`，auto-allocate 是
+//     `{process_id, shelf_id, mode, fill_ratio, filled[], pool_empty}`）。
+//   - `refillResultSchema` 与它守的 `refillQueue()` 目前**零生产消费方**
+//     （仓内只有自动分配走这条链路，没有「手动抢批」入口）。声明保留是为了改
+//     auto-allocate 出参时有个同族参照，**它不是任何在跑的守门点**。
 //
 // 关键约束（沿仓内 queryFn Zod 守门 + Zod schema-first 两条约定）：
 //   - 所有字段**显式声明**。Zod 默认 strip 会静默丢弃未声明字段，漏一个字段声明
@@ -165,11 +178,16 @@ export const queueBoardSchema = z.object({
 
 export type QueueBoardSchema = z.infer<typeof queueBoardSchema>;
 
-/** `QueuePendingBatch` 元素（rust QueuePendingBatch）。15 字段全声明。
+/** `QueuePendingBatch` 元素（rust PendingBatchItem）。17 字段全声明。
  *
  *  `planned_delivery_date` 是**非 null** 字符串：待下发批次必然已制定计划交期，
  *  后端对 DB NULL 兜底为 `1970-01-01`。故前端**不能**拿它判「无交期」（会把兜底值
- *  显示成 1970 年），也没有哨兵值需要解释。 */
+ *  显示成 1970 年），也没有哨兵值需要解释。
+ *
+ *  ⚠️ 末两项（`current_process_step_id` / `process_chain_id`）在后端是**非 Option
+ *  的 `i64`**（`unwrap_or(0)` 兜底），故 Zod 侧按 `z.string()` 收、不给 nullable：
+ *  DB 列为 NULL 时后端投影成 `"0"`，前端按 `=== '0'` 判「未挂」。判据**不能**改成
+ *  「字段缺失或 null」—— 那两种形态在这条契约上不存在，认它们等于把真值当缺失。 */
 export const queuePendingBatchSchema = z.object({
   batch_id: z.string(),
   part_id: z.string(),
@@ -186,6 +204,12 @@ export const queuePendingBatchSchema = z.object({
   is_urgent: z.boolean(),
   note: z.string().nullable(),
   version: z.number(),
+  /** `t_part_batch.current_process_step_id`；DB 为 NULL 时后端返 `"0"` = 未挂 step。
+   *  待下发批次按定义还没挂 step，值恒 `"0"`；保留它是为了让「已挂 / 未挂」在列表
+   *  上可见（后续做「未挂 step 不可下发」之类的提示时不必再动契约）。 */
+  current_process_step_id: z.string(),
+  /** `t_part.process_chain_id`；未制定工序链时后端返 `"0"`。 */
+  process_chain_id: z.string(),
 });
 
 export type QueuePendingBatchSchema = z.infer<typeof queuePendingBatchSchema>;
@@ -295,11 +319,15 @@ export const dispatchRequestSchema = z.object({
 
 export type DispatchRequestSchema = z.infer<typeof dispatchRequestSchema>;
 
-/** `DispatchResult.succeeded[]` 单条（rust DispatchSuccessItem）。 */
+/** `DispatchResult.succeeded[]` 单条（rust DispatchSuccessItem）。6 字段。
+ *  `current_process_id` 是下发后写入 `t_part_batch.current_process_id` 的值，
+ *  恒等于本次 `target_process_id`；后端留 Option 形态，故用 `.nullable()`。 */
 export const dispatchSuccessItemSchema = z.object({
   batch_id: z.string(),
   /** Option<i64>：dispatch 路径不解析工序链步骤 → None → JSON null。 */
   current_process_step_id: z.string().nullable(),
+  /** 下发后 batch 当前工序；当前恒等于 `target_process_id`。 */
+  current_process_id: z.string().nullable(),
   target_process_id: z.string(),
   /** service 按 target_process_id 在 t_shelf_process 解析出的货架
    *  （sort_order ASC, id ASC LIMIT 1）。 */

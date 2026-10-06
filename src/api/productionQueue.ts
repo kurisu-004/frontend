@@ -40,39 +40,14 @@ import type {
   RecallRequest,
 } from './productionQueue.contract';
 
-// 契约类型的再导出：视图层 composable 从本模块（api 层唯一入口）取类型，不必记住
-// contract 文件名。与 ./crud 等既有做法一致（类型经 api 入口透出，不让 views 直接
-// 摸 contract 文件）。
-export type {
-  AutoAllocateMode,
-  AutoDispatchItemDto,
-  AutoDispatchPreviewDto,
-  AutoDispatchPreviewRequest,
-  DispatchFailureItemDto,
-  DispatchRequest,
-  DispatchResultDto,
-  DispatchSuccessItemDto,
-  DispatchTarget,
-  ListQueuePendingParams,
-  MoveLocationDto,
-  MoveRequest,
-  MoveResultDto,
-  QueueBoardDto,
-  QueueBoardProcessDto,
-  QueueHeldBatchDto,
-  QueuePendingBatchDto,
-  QueuePendingBatchListDto,
-  QueuePoolItemDto,
-  QueueProcessDto,
-  QueueRefillRequest,
-  QueueRefillResultDto,
-  QueueSnapshotDto,
-  QueueWorkerDto,
-  RecallOutDto,
-  RecallRequest,
-  TakenItemDto,
-  WorkerFillItemDto,
-} from './productionQueue.contract';
+// 只再导出 `ListQueuePendingParams`：它被共享文件 `composables/queries/keys.ts` 以
+// `@/api/productionQueue` 为路径 import（query 键工厂的入参类型不该让 keys.ts 知道
+// contract 文件名）。**其余契约类型一律从 `@/api/productionQueue.contract` 直接取**
+// —— 视图层 / composable / scan 域共 14 个文件都是这么写的，本仓 `.contract` 文件
+// （`processChain.contract.ts`）也是同一形态：contract 本身就是「给人直接 import 的
+// 契约文件」，api 入口只透传 runtime 函数。曾经这里再导出全部 25 个类型、并注释
+// 「视图层从 api 层入口取类型」，实际零消费方遵守，等于凭空多一层可绕过的入口。
+export type { ListQueuePendingParams } from './productionQueue.contract';
 
 /** GET /api/v2/prod/queue/snapshot —— 队列页两个徽标的唯一数据源
  *  （工序 tab 标题 `(N)`、「待下发」tab 标题 `(N)`），外加右栏工序卡的候选数与

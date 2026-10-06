@@ -357,7 +357,7 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
 
   // 2026-10-08：召回入口从本文件移除。召回端点由后端收进生产队列域
   // （`POST /prod/queue/recall`），入口统一收敛到生产队列页的批次右键菜单
-  // （components/queue/useQueueRecall.ts）。零件一览页原有入口一并下线：本页的
+  // （`views/production/queue/composables/useQueueRecall.ts`）。零件一览页原有入口一并下线：本页的
   // 行模型不返回批次锚点（旧路径发出去的请求必然缺 batch_id），且同一批次的召回
   // 需要 version 做 OCC，列表行给不出两者。留在这里只会是「点了必失败」的死按钮。
 
