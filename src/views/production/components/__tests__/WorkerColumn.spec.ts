@@ -501,18 +501,30 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     expect(passed).not.toMatchObject({ batch_id: '3000000000001' });
     expect(passed).not.toMatchObject({ version: 3 });
     // 右键监听落在卡片根 div 上、且没有为它加包裹层：卡片的父节点就是 Sortable 容器
-    // （BatchCard 的 tooltip 在根**内部**，不是包根；容器侧口径由 W13 守）
+    // （BatchCard 的 tooltip 在根**内部**、不包根，所以这里不存在中间层）；容器侧的
+    // 节点构成由 W13 守
     const cardEl = cards[1]!.element as HTMLElement;
     expect(cardEl.parentElement?.classList.contains('col-body')).toBe(true);
-    expect(cardEl.matches('.batch-card')).toBe(true);
     wrapper.unmount();
   });
 
   it('W13（2026-10-06）：Sortable 容器 .col-body 内只有卡片（无注释节点、无包裹层）', () => {
     // 「Sortable 容器的直接子元素必须全是可拖项」。dev 构建保留模板注释，注释节点同样
     // 是容器的直接子节点 —— 有人在容器 div 内留注释就红；为右键菜单加一层包裹
-    // 也会让元素子节点数超过卡片数。口径按 DOM 实测定：模板里的 keyed v-for 额外留下
-    // 2 个空文本锚点（Vue 的 fragment 锚），除此之外只允许卡片根元素。
+    // 也会让元素子节点数超过卡片数。
+    //
+    // 2026-10-06 口径说明（两条不变式各守一层，别把两者的断言写法互抄）：
+    //   - BatchCardDndFootprint.spec.ts 的 D2 守**第一层**：卡片组件根必须是单元素
+    //     （可拖元素 == vnode 的 DOM footprint）。它的宿主用 h() 渲染，children 是
+    //     vnode 数组、不经过 Fragment vnode ⇒ 没有锚点 ⇒ 那里 `childNodes` 与
+    //     `children` 相等是对的。**本用例的容器是模板编译产物，照搬那个写法必错。**
+    //   - 本用例守**第二层**：Sortable 容器的直接子节点只能是卡片。模板里的 keyed
+    //     v-for 会编译成 Fragment ⇒ 必然额外留下 2 个空文本锚点（Vue 的 fragment 锚），
+    //     实测 2 卡时 children=2 / childNodes=4。
+    //
+    // 承重的是前两条（元素数 == 卡片数、注释数 == 0）：两者都不依赖上面那个常数，
+    // 往容器里塞元素或注释都会红。第三条总数断言只是冗余网 —— 万一将来 Vue 改了
+    // fragment 锚点行为，只有它需要跟着更新，且失效方向是假红、不会假绿。
     const wrapper = mountColumn([
       makeHeld({ batch_id: '3000000000001' }),
       makeHeld({ batch_id: '3000000000002', batch_no: 2 }),
@@ -522,11 +534,12 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
 
     expect(nodes.filter((n) => n.nodeType === Node.ELEMENT_NODE)).toHaveLength(2);
     expect(nodes.filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(0);
-    // 剩下的只能是那两个 fragment 空文本锚点；多出来的任何节点（注释 / 文本 / 包裹层）
-    // 都会让这个总数对不上
+    // 冗余网（见上方口径说明）：剩下只能是那两个 fragment 空文本锚点
     expect(nodes).toHaveLength(4);
     for (const child of Array.from(col.children)) {
-      expect(child.matches('.batch-card, .el-tooltip-stub')).toBe(true);
+      // 只认卡片根 div：BatchCard 的 tooltip 在根**内部**（.el-tooltip-stub 包的是
+      // 卡片内部的触发区），所以容器的直接子元素里不会出现它 —— 不给这个位置留口子
+      expect(child.matches('.batch-card')).toBe(true);
     }
     wrapper.unmount();
   });
