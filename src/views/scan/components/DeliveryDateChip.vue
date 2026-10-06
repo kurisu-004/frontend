@@ -5,7 +5,7 @@
   把 ScanPickParts / ScanReturnParts / ScanInspectParts 三页重复的 span 模板与样式集中。
 
   2026-10-04：**只显示系统交期**（`system_delivery_date`），无值时日期位渲染 `-`
-  （对齐 `formatDashboardDeliveryDate` 的空值口径）。计划交期（`planned_delivery_date`）
+  （与 utils/deliveryDate 的空值口径一致）。计划交期（`planned_delivery_date`）
   退化为**纯排序键** —— `useScanPartsSort` 仍用它给「无系统交期」的那一组排序，不再
   上屏：工人对着两个日期分不清哪个是硬期限，混着显示只会催错件。
   无值时 `daysText` / 紧迫样式 / 「系统交期」小标签全部不渲染，只留一个 `-`，不制造

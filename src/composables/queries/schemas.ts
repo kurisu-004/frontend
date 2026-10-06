@@ -10,9 +10,8 @@
  *   - 4 个图表：daily_created / daily_completed / delivery_performance /
  *     status_distribution 数组。
  *
- * dashboard 域只消费 overdue_undelivered_count 字段（2026-09-29 重做后
- * DashboardKpiTiles「逾期未交」tile），但 schema 仍对齐全 VO 字段集：基础数据
- * schema 与后端契约对齐，缺字段静默 strip = 校验形同虚设。
+ * 生产消费方：**仅生产统计页**（views/statistics/OverviewTab.vue）。dashboard 域
+ * 已在 2026-10-07 改读 `GET /dashboard/snapshot` 的 `overdue_count`，不再消费本 schema。
  *
  * 所有非 Option 字段必填显式声明（见 CLAUDE.md「TanStack Query」的 Zod 守门条目；
  * `__tests__/schemas.spec.ts` 的 S4 系列用例是这条的回归保护），调用方通过
@@ -72,6 +71,7 @@ export type OverviewOutSchema = z.infer<typeof overviewOutSchema>;
 // partEntrySchema 的职责，查询返回值的契约是「能解析就够了」）。
 
 import { z } from 'zod';
+import { ORDER_STATUSES } from '@/types/parts';
 
 /** 2026-09-26 新增：客户实体。字段对齐 backend-rust `CustomerOut`
  * （`backend-rust/docs/api/customers.md:142-153`，8 字段）：雪花 id / name /
@@ -194,22 +194,9 @@ export const partSchema = z.object({
   request_date: z.string(),
   planned_delivery_date: z.string(),
   is_urgent: z.boolean(),
-  // 2026-10-03 取舍登记：REPAIRING 作为**枚举成员**保留，尽管后端 2026-10-01 起不再
-  // 产生该状态（返修改用 t_part_batch.is_repairing 布尔列）。未 apply 存量洗数据
-  // migration 的环境仍可能返出 REPAIRING 行，删掉成员会让 partSchema.parse 抛错
-  // ⇒ 整页白屏。「能否作为筛选参数下发」由 PARTS_STATUS_FILTER_WHITELIST 单独管。
-  status: z.enum([
-    'PENDING',
-    'PROGRAMMING',
-    'IN_PROCESS',
-    'INSPECTION',
-    'READY_TO_SHIP',
-    'DELIVERED',
-    'REPAIRING',
-    'OUTSOURCE',
-    'COMPLETED',
-    'CANCELLED',
-  ]),
+  // 2026-10-07：状态字面量改为引用 types/parts.ts 的 ORDER_STATUSES（单一来源），
+  // 取舍登记见该常量注释。
+  status: z.enum(ORDER_STATUSES),
   order_no: z.string().nullable(),
   system_delivery_date: z.string().nullable(),
   // 2026-10-03：已送数量。复用同一 VO 的 7 个端点里只有 com/union-list 与
@@ -227,19 +214,17 @@ export const partSchema = z.object({
   /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与上面的 batch_id 同源。
    *
    *  **本 schema 不服务扫码台。** 它的生产消费方是 `partListResultSchema`（下方）→
-   *  `usePartsListQuery`（零件一览，`GET /com/union-list`）与 dashboard 的
-   *  `useDashboardUrgentList` / `useDashboardUpcomingList`（同端点）。这些行的单位是
+   *  `usePartsListQuery`（零件一览，`GET /com/union-list`）。这些行的单位是
    *  part、后端**刻意不填**批次锚点（一个 part 的活跃批次可能不止一个，填任一都是
    *  错锚点）⇒ batch_id / batch_version 在本 schema 上**恒为 null**（后端 VO 无
    *  `skip_serializing_if`，键在、值为 null，不是 undefined）。保留声明只为类型与
    *  后端 VO 对齐，不承担任何扫码台职责。
    *
-   *  ⚠️ 2026-10-03 已知不对称：本 VO 同样恒返两键（`PartListItem` 的两个字段也都
-   *  没有 `skip_serializing_if`），按 `pendingProgrammingItemSchema` 的同款理由本该
-   *  也声明成必填 + 可空。**本轮未改**：实测改必填会让 16 个用例 / 5 个 spec 的
-   *  fixture 变红（schemas / usePartsListStore / useDashboardUrgentList /
-   *  useDashboardUpcomingList / UpcomingDeliveryListDrawer），且这几个 spec 的
-   *  fixture 是共享对象，改动面超出「注释订正」的合理半径。补齐留待单独一轮。
+   *  ⚠️ 已知不对称：本 VO 同样恒返两键（`PartListItem` 的两个字段也都没有
+   *  `skip_serializing_if`），按 `pendingProgrammingItemSchema` 的同款理由本该
+   *  也声明成必填 + 可空。**当前未改**：改必填会让 `schemas.spec.ts` /
+   *  `usePartsListStore.spec.ts` 等共用 fixture 的用例变红，fixture 是跨 spec 共享
+   *  对象，改动面超出注释订正的合理半径。补齐留待单独一轮。
    *
    *  这个失守的**症状边界要说清**（别误读成「无读点」）：`batch_id` 在本 schema 上
    *  **有**前端读点 —— `usePartDispatch.ts:353`（批量下发的 targets）与 `:421`

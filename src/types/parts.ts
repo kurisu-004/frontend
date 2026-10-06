@@ -15,23 +15,30 @@ export type PartCategory = '紧固件' | '轴承' | '传动件' | '电气件' | 
 export type PartStatus = '启用' | '停用';
 export type WarehouseStatus = '未入库' | '部分入库' | '已入库';
 
-/** 后端订单状态枚举（数据大屏用）。
+/** 后端订单状态枚举（数据大屏用）的**唯一字面量清单**。
  *
  *  2026-10-03 取舍登记：`REPAIRING` 成员保留，尽管后端 2026-10-01 起不再产生该状态
  *  （返修语义由 `t_part_batch.is_repairing` 布尔列承载，返修批次的 status 恒为
  *  IN_PROCESS）。未 apply 存量洗数据 migration 的环境仍可能返出 REPAIRING 行，
- *  删掉成员会让类型层与 Zod 枚举一起收窄、老环境直接解析失败。 */
-export type OrderStatus =
-  | 'PENDING'
-  | 'PROGRAMMING'
-  | 'IN_PROCESS'
-  | 'INSPECTION'
-  | 'READY_TO_SHIP'
-  | 'DELIVERED'
-  | 'REPAIRING'
-  | 'OUTSOURCE'
-  | 'COMPLETED'
-  | 'CANCELLED';
+ *  删掉成员会让类型层与 Zod 枚举一起收窄、老环境直接解析失败。
+ *
+ *  2026-10-07：提到这里成为单一来源，`OrderStatus` 由它派生，dashboard 域 VO 的
+ *  status 字段（Zod `z.enum`）也直接引用 —— 状态字面量此前在 partSchema 的
+ *  `z.enum([...])` 与本文件的 union 里各写一份，dashboard 新增 VO 时容易只加一处。 */
+export const ORDER_STATUSES = [
+  'PENDING',
+  'PROGRAMMING',
+  'IN_PROCESS',
+  'INSPECTION',
+  'READY_TO_SHIP',
+  'DELIVERED',
+  'REPAIRING',
+  'OUTSOURCE',
+  'COMPLETED',
+  'CANCELLED',
+] as const;
+
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   PENDING: '待生产',
