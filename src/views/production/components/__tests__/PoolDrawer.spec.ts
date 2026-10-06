@@ -17,8 +17,12 @@
 //     to.shelf_id 取当前激活货架；无工人源时不发请求。
 //   - D5：目标货架为空 → ElMessage.warning 且不发请求。
 //   - D9（2026-10-06）：卡片上派发 contextmenu → 注入的 openBatchContextMenu 被调一次，
-//     参数是那张卡的 BatchCardModel（含 recall 必需的 version）。D9b：未提供 opener 时
+//     参数是**被右键那张卡**的 BatchCardModel（含 recall 必需的 version）；用例渲染两张
+//     卡并右键第二张，否则「那张卡」与「唯一那张卡」不可区分。D9b：未提供 opener 时
 //     右键不抛错（inject 缺省 noop 兜底）。
+//   - D7b / D7c（2026-10-06）：Sortable 容器 .pool-cards 内的节点构成 —— 只有卡片根元素
+//     与 v-for 的 2 个空文本锚点，**没有注释节点**（dev 构建保留模板注释，注释同样是
+//     容器直接子节点）；空池时零元素子节点、容器仍是合法投放目标。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -323,6 +327,40 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     wrapper.unmount();
   });
 
+  it('D7b（2026-10-06）：Sortable 容器内只有卡片根元素（无注释节点、无包裹层）', () => {
+    // 容器是 Sortable 的源与落点，「直接子元素必须全是可拖项」。dev 构建保留模板注释，
+    // 注释节点同样是容器的直接子节点 —— 一旦有人在容器 div 内留注释、或为某个特性
+    // 加一层包裹，这条断言就红。口径按 DOM 实测定：模板里的 keyed v-for 会额外留下
+    // 2 个空文本锚点（Vue 的 fragment 锚），除此之外只允许卡片根元素。
+    const wrapper = mountDrawer(
+      makePool([makeCard({ batch_id: '3000000000001' }), makeCard({ batch_id: '3000000000002' })]),
+    );
+    const body = wrapper.find('.pool-cards').element as HTMLElement;
+    const nodes = Array.from(body.childNodes);
+
+    expect(nodes.filter((n) => n.nodeType === Node.ELEMENT_NODE)).toHaveLength(2);
+    expect(nodes.filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(0);
+    // 剩下的只能是那两个 fragment 空文本锚点；多出来的任何节点（注释 / 文本 / 包裹层）
+    // 都会让这个总数对不上
+    expect(nodes).toHaveLength(4);
+    for (const child of Array.from(body.children)) {
+      expect(child.matches('.batch-card')).toBe(true);
+    }
+    wrapper.unmount();
+  });
+
+  it('D7c：空池的容器内零节点（空容器仍须是合法投放目标）', () => {
+    const wrapper = mountDrawer(makePool([]));
+    const body = wrapper.find('.pool-cards').element as HTMLElement;
+    // 空 v-for 只剩 2 个 fragment 空文本锚点：一个元素子节点都没有，也**没有**注释
+    expect(body.children).toHaveLength(0);
+    expect(body.childNodes).toHaveLength(2);
+    expect(Array.from(body.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(
+      0,
+    );
+    wrapper.unmount();
+  });
+
   it('D8：onStart 记的是**池**源 { processId, shelfId }（供工人列的 onAdd 消费）', async () => {
     const wrapper = mountDrawer();
     const options = capturedOptions();
@@ -342,24 +380,34 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     wrapper.unmount();
   });
 
-  it('D9（2026-10-06）：卡片右键 → 注入的 opener 被调一次，参数是那张卡的 model', async () => {
+  it('D9（2026-10-06）：卡片右键 → 注入的 opener 被调一次，参数是**第二张**卡的 model', async () => {
     const openBatchContextMenu = vi.fn();
-    const batch = makeCard({ batch_id: '3000000000005', version: 9 });
-    const wrapper = mountDrawer(makePool([batch]), { openBatchContextMenu });
+    // 两张卡（batch_id / version 都不同）且右键**第二张**：单卡场景下「拿到那张卡」
+    // 与「拿到唯一那张卡」无法区分，实现误传 batches[0] 也会照样通过
+    const first = makeCard({ batch_id: '3000000000004', version: 3, batch_no: 'B-A' });
+    const second = makeCard({ batch_id: '3000000000005', version: 9, batch_no: 'B-B' });
+    const wrapper = mountDrawer(makePool([first, second]), { openBatchContextMenu });
 
-    const card = wrapper.find('.pool-cards').find('.batch-card');
-    expect(card.exists()).toBe(true);
-    await card.trigger('contextmenu', { clientX: 240, clientY: 180 });
+    const cards = wrapper.find('.pool-cards').findAll('.batch-card');
+    expect(cards).toHaveLength(2);
+    await cards[1]!.trigger('contextmenu', { clientX: 240, clientY: 180 });
 
     expect(openBatchContextMenu).toHaveBeenCalledTimes(1);
     const [evt, passed] = openBatchContextMenu.mock.calls[0]!;
     // 第一参是原始 MouseEvent（含坐标，菜单靠它定位）
     expect(evt).toBeInstanceOf(Event);
     expect((evt as MouseEvent).clientX).toBe(240);
-    // 第二参就是那张卡的 BatchCardModel（v-for 变量本身）：召回链路要读它的
-    // batch_id + version。props 经 Vue 响应式代理过，故比对底层目标对象。
-    expect(toRaw(passed)).toBe(batch);
-    expect(passed).toMatchObject({ batch_id: '3000000000005', version: 9 });
+    // 第二参就是被右键那张卡的 BatchCardModel（v-for 变量本身）：召回链路要读它的
+    // batch_id + version。身份断言用 toRaw 穿透可能的响应式代理，比对底层目标对象 ——
+    // 必须是 second，拿到 first 就说明事件载荷取错了卡片。
+    expect(toRaw(passed)).toBe(second);
+    expect(toRaw(passed)).not.toBe(first);
+    expect(passed).toMatchObject({ batch_id: '3000000000005', version: 9, batch_no: 'B-B' });
+    // 右键监听落在卡片根 div 上、且没有为它加包裹层：卡片的父节点就是 Sortable 容器
+    // （BatchCard 的 tooltip 在根**内部**，不是包根；容器侧口径由 D7b 守）
+    const cardEl = cards[1]!.element as HTMLElement;
+    expect(cardEl.parentElement?.classList.contains('pool-cards')).toBe(true);
+    expect(cardEl.matches('.batch-card')).toBe(true);
     wrapper.unmount();
   });
 

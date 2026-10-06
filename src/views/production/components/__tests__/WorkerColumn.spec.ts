@@ -28,8 +28,12 @@
 //     二参形态下库不挂内建 onRemove，缺了它投放失败时幻影节点留在落点列、invalidate
 //     清不掉。断言必须落在「放回原下标位置」而不仅是「函数存在」。
 //   - W12（2026-10-06）：卡片上派发 contextmenu → 注入的 openBatchContextMenu 被调一次，
-//     参数是那张卡的 BatchCardModel（含 recall 必需的 version）。W12b：未提供 opener 时
+//     参数是**被右键那张卡**的 BatchCardModel（含 recall 必需的 version）；用例渲染两张
+//     卡并右键第二张，否则「那张卡」与「唯一那张卡」不可区分。W12b：未提供 opener 时
 //     右键不抛错（inject 缺省 noop 兜底）。
+//   - W13 / W13b（2026-10-06）：Sortable 容器 .col-body 内的节点构成 —— 只有卡片根元素
+//     与 v-for 的 2 个空文本锚点，**没有注释节点**（dev 构建保留模板注释，注释同样是
+//     容器直接子节点）；空列时零元素子节点、容器仍是合法投放目标。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -44,7 +48,7 @@
 //     el-empty / el-tooltip）+ vi.mock('element-plus') 把 ElMessage 桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, ref, toRaw, type PropType } from 'vue';
+import { defineComponent, h, nextTick, ref, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
 import type { HeldBatchItemDto } from '@/api/workerPool.contract';
 import type { Worker } from '@/types/workerPool';
@@ -468,24 +472,74 @@ describe('WorkerColumn（2026-10-03 拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W12（2026-10-06）：卡片右键 → 注入的 opener 被调一次，参数是那张卡的 model', async () => {
+  it('W12（2026-10-06）：卡片右键 → 注入的 opener 被调一次，参数是**第二张**卡的 model', async () => {
     const openBatchContextMenu = vi.fn();
-    const wrapper = mountColumn([makeHeld()], { openBatchContextMenu });
+    // 两张卡（batch_id / version 都不同）且右键**第二张**：单卡场景下「拿到那张卡」
+    // 与「拿到唯一那张卡」无法区分，实现误传 heldBatches[0] 也会照样通过
+    const first = makeHeld({ batch_id: '3000000000001', batch_no: 1024, version: 3 });
+    const second = makeHeld({ batch_id: '3000000000002', batch_no: 2048, version: 8 });
+    const wrapper = mountColumn([first, second], { openBatchContextMenu });
 
-    const card = wrapper.find('.col-body').find('.batch-card');
-    expect(card.exists()).toBe(true);
-    await card.trigger('contextmenu', { clientX: 320, clientY: 240 });
+    const cards = wrapper.find('.col-body').findAll('.batch-card');
+    expect(cards).toHaveLength(2);
+    await cards[1]!.trigger('contextmenu', { clientX: 320, clientY: 240 });
 
     expect(openBatchContextMenu).toHaveBeenCalledTimes(1);
     const [evt, passed] = openBatchContextMenu.mock.calls[0]!;
     // 第一参是原始 MouseEvent（含坐标，菜单靠它定位）
     expect(evt).toBeInstanceOf(Event);
     expect((evt as MouseEvent).clientX).toBe(320);
-    // 第二参就是那张卡的 BatchCardModel（heldToCard 产出的 v-for 变量本身）：
-    // 批次在工人持有中同样可召回，OCC 锚 version 由适配层填好
-    expect(toRaw(passed)).toMatchObject({ batch_id: '3000000000001', version: 3 });
-    // 拖拽链路不受影响：右键监听是挂在卡片根 div 上的 fallthrough attr，没引入包裹层
-    expect((card.element as HTMLElement).matches('.batch-card')).toBe(true);
+    // 第二参就是被右键那张卡的 BatchCardModel —— 注意这里**不能**与 held DTO 做身份
+    // 比对：卡片是 heldToCard 适配层现产出的新对象，heldBatches 里的原始 DTO 不是它。
+    // 鉴别口径落在两张卡各自不同的字段上（batch_id / version / batch_no）：实现若误传
+    // heldBatches[0]，这三个字段会全部对不上。
+    expect(passed).toMatchObject({
+      batch_id: '3000000000002',
+      version: 8,
+      batch_no: 'B2048',
+    });
+    expect(passed).not.toMatchObject({ batch_id: '3000000000001' });
+    expect(passed).not.toMatchObject({ version: 3 });
+    // 右键监听落在卡片根 div 上、且没有为它加包裹层：卡片的父节点就是 Sortable 容器
+    // （BatchCard 的 tooltip 在根**内部**，不是包根；容器侧口径由 W13 守）
+    const cardEl = cards[1]!.element as HTMLElement;
+    expect(cardEl.parentElement?.classList.contains('col-body')).toBe(true);
+    expect(cardEl.matches('.batch-card')).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('W13（2026-10-06）：Sortable 容器 .col-body 内只有卡片（无注释节点、无包裹层）', () => {
+    // 「Sortable 容器的直接子元素必须全是可拖项」。dev 构建保留模板注释，注释节点同样
+    // 是容器的直接子节点 —— 有人在容器 div 内留注释就红；为右键菜单加一层包裹
+    // 也会让元素子节点数超过卡片数。口径按 DOM 实测定：模板里的 keyed v-for 额外留下
+    // 2 个空文本锚点（Vue 的 fragment 锚），除此之外只允许卡片根元素。
+    const wrapper = mountColumn([
+      makeHeld({ batch_id: '3000000000001' }),
+      makeHeld({ batch_id: '3000000000002', batch_no: 2 }),
+    ]);
+    const col = wrapper.find('.col-body').element as HTMLElement;
+    const nodes = Array.from(col.childNodes);
+
+    expect(nodes.filter((n) => n.nodeType === Node.ELEMENT_NODE)).toHaveLength(2);
+    expect(nodes.filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(0);
+    // 剩下的只能是那两个 fragment 空文本锚点；多出来的任何节点（注释 / 文本 / 包裹层）
+    // 都会让这个总数对不上
+    expect(nodes).toHaveLength(4);
+    for (const child of Array.from(col.children)) {
+      expect(child.matches('.batch-card, .el-tooltip-stub')).toBe(true);
+    }
+    wrapper.unmount();
+  });
+
+  it('W13b：空列的容器内零节点（空容器仍须是合法投放目标）', () => {
+    const wrapper = mountColumn([]);
+    const col = wrapper.find('.col-body').element as HTMLElement;
+    // 空 v-for 只剩 2 个 fragment 空文本锚点：一个元素子节点都没有，也**没有**注释
+    expect(col.children).toHaveLength(0);
+    expect(col.childNodes).toHaveLength(2);
+    expect(Array.from(col.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(
+      0,
+    );
     wrapper.unmount();
   });
 

@@ -18,9 +18,11 @@
      ⚠️ 本列的 .col-body 是 Sortable 落点，卡片的「可拖元素 == vnode 的 DOM footprint」
      是硬不变式（守卫 src/components/__tests__/BatchCardDndFootprint.spec.ts）：**不要**
      用 el-dropdown / el-tooltip / el-popover 之类去包 BatchCard 给右键菜单用（包裹即
-     多根 vnode，锚点残留 + evt.item 指向包裹层 ⇒ POOL↔WORKER 拖拽断链）。菜单本体是
-     板级单例 BatchContextMenu，teleport 到 body。事件走 inject（WorkerColumn 与菜单
-     之间隔着 WorkerPoolTab / Board 两层），键名 openBatchContextMenu。
+     多根 vnode，锚点残留 + evt.item 指向包裹层 ⇒ POOL↔WORKER 拖拽断链）。同理**不要**
+     在容器内留模板注释 —— dev 构建保留注释，注释节点也是容器的直接子节点；容器内的说明
+     一律写在容器 div 之外（守卫见本组件 spec 的 W13：容器内不许有 comment 节点）。菜单本体是板级单例
+     BatchContextMenu，teleport 到 body。事件走 inject（WorkerColumn 与菜单之间隔着
+     WorkerPoolTab / Board 两层），键名 openBatchContextMenu。
 
      2026-09-30：拖拽链路对接后端 `POST /prod/pool/move`（取代 assign/remove 两端点）。
      - onStart 记 worker 源（落点的 @add 消费）；onAdd 记/取候选池源时改为读
@@ -80,11 +82,13 @@
            源容器），而这正是 POOL→WORKER 的主场景、也是 WORKER→WORKER 的常见落点。
            代价控制：loading / error 仍走 v-if / v-else-if 两级互斥分支（不进容器），
            空态由下面的兄弟覆盖层承担（pointer-events:none，不吃落点判定）。 -->
+      <!-- 2026-10-06：右键召回 —— @contextmenu.prevent 走 BatchCard 的 fallthrough
+           attrs 落在卡片根 div，未引入任何包裹层（包裹即破坏 Sortable footprint，见文件
+           头注释）。第二参传 v-for 变量 batch 本身（heldBatches 已是
+           BatchCardModel[]，heldToCard 已填 version —— 召回的 OCC 锚）。
+           这段说明**刻意留在容器之外**：dev 构建保留模板注释，注释节点同样算 Sortable
+           容器的直接子节点（守卫见本 spec 的 W13：容器内不许有 comment 节点）。 -->
       <div ref="containerRef" class="col-body" :data-worker-id="worker.id">
-        <!-- 2026-10-06：右键召回 —— @contextmenu.prevent 走 BatchCard 的 fallthrough
-             attrs 落在卡片根 div，未引入任何包裹层（包裹即破坏 Sortable footprint，见文件
-             头注释）。第二参传 v-for 变量 batch 本身（heldBatches 已是
-             BatchCardModel[]，heldToCard 已填 version —— 召回的 OCC 锚）。 -->
         <BatchCard
           v-for="batch in heldBatches"
           :key="batch.batch_id"

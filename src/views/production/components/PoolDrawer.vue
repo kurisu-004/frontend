@@ -17,9 +17,11 @@
      是硬不变式（守卫 src/components/__tests__/BatchCardDndFootprint.spec.ts）：**不要**
      用 el-dropdown / el-tooltip / el-popover 之类去包 BatchCard 给右键菜单用
      （el-dropdown 的根是硬包裹 div，会让 evt.item.dataset.batchId 恒 undefined，
-     直接断掉整条拖拽链路）。菜单本体是板级单例 BatchContextMenu，teleport 到 body。
-     事件走 inject（PoolDrawer 与 BatchContextMenu 之间隔着 WorkerPoolTab / Board 两
-     层，prop 穿透不划算），键名 openBatchContextMenu。
+     直接断掉整条拖拽链路）；同理**不要**在容器内留模板注释 —— dev 构建保留注释，
+     注释节点也是 Sortable 容器的直接子节点，容器内的说明一律写在容器 div 之外。
+     菜单本体是板级单例 BatchContextMenu，teleport 到 body。事件走 inject
+     （PoolDrawer 与 BatchContextMenu 之间隔着 WorkerPoolTab / Board 两层，prop 穿透
+     不划算），键名 openBatchContextMenu。
 
      2026-09-30：
      - moveBatchToPool 签名去掉 next_process_id（后端 `POST /prod/pool/move` 的
@@ -39,15 +41,17 @@
         <span class="process-name">{{ pool.process_name }}</span>
         <el-tag size="small" type="info">{{ pool.batches.length }}</el-tag>
       </div>
+      <!-- 2026-10-02：卡片渲染收敛到 BatchCard.vue，包装层删除。Sortable 容器的
+           直接子元素必须**全是可拖项**（空态 div 是本容器的兄弟节点，不在其中）。
+           data-shelf-id 经 BatchCard 的 fallthrough attrs 落到卡片根 div
+           （BatchCard 是 inheritAttrs: false + v-bind="$attrs"）。
+           2026-10-06：@contextmenu.prevent 同样走 fallthrough attrs 落在同一张卡片
+           根 div 上 —— 右键能力没有引入任何包裹层（包裹即破坏 Sortable 拖拽，见文件
+           头注释）。事件的第二参传 v-for 变量 batch 本身（pool.batches 已是
+           BatchCardModel[]），消费方要的就是它的 batch_id 与 version。
+           这段说明**刻意留在容器之外**：dev 构建保留模板注释，注释节点同样算 Sortable
+           容器的直接子节点（守卫见本组件 spec 的 D7b：容器内不许有 comment 节点）。 -->
       <div ref="containerRef" class="section-body pool-cards" :data-process-id="pool.process_id">
-        <!-- 2026-10-02：卡片渲染收敛到 BatchCard.vue，包装层删除。Sortable 容器的
-             直接子元素必须**全是可拖项**（空态 div 是本容器的兄弟节点，不在其中）。
-             data-shelf-id 经 BatchCard 的 fallthrough attrs 落到卡片根 div
-             （BatchCard 是 inheritAttrs: false + v-bind="$attrs"）。
-             2026-10-06：@contextmenu.prevent 同样走 fallthrough attrs 落在同一张卡片
-             根 div 上 —— 右键能力没有引入任何包裹层（包裹即破坏 Sortable 拖拽，见文件
-             头注释）。事件的第二参传 v-for 变量 batch 本身（pool.batches 已是
-             BatchCardModel[]），消费方要的就是它的 batch_id 与 version。 -->
         <BatchCard
           v-for="batch in pool.batches"
           :key="batch.batch_id"

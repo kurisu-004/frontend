@@ -66,9 +66,12 @@ const MENU_ESTIMATE_H = 120;
 const visible = ref(false);
 const x = ref(0);
 const y = ref(0);
-/** 目标批次：**shallow**Ref —— 卡片 model 只被原样转交（emit 出去交给召回链路读
- *  batch_id / version），不需要深层响应式；用 ref 反而会把卡片包成 reactive 代理，
- *  交出去的就不再是渲染源里那一张卡本身。 */
+/** 目标批次：**shallow**Ref。卡片 model 只被原样转交（emit 出去交给召回链路读
+ *  batch_id / version），既不需要深层响应式追踪，也不想让存下来的对象与调用方传入的
+ *  那个产生身份差异：卡片若是**裸对象**，`ref()` 会把它包成 reactive 代理，之后
+ *  emit 出去的就是代理、不是渲染源里那一张卡本身（`PoolDrawer` 路径的卡片已经是响应式
+ *  代理，`ref(代理)` 原样返回同一代理，那条路径上身份不变 —— 换 shallowRef 是为了把
+ *  「不追踪内部字段」和「身份不变」两件事都钉死，而不是只对某一条路径成立）。 */
 const target = shallowRef<BatchCardModel | null>(null);
 const menuEl = ref<HTMLElement | null>(null);
 

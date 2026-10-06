@@ -20,8 +20,10 @@
 //   - T5：provide 三个 move 包装（含 2026-10-03 新增的 WORKER→WORKER 包装）——
 //     WorkerColumn 落点全靠 inject 拿包装，漏 provide 就退化为「不发请求」。
 //   - T6（2026-10-06）：provide openBatchContextMenu + 权限闸（canRecall 为假时菜单
-//     打不开）+ 菜单 open 收到 (evt, batch)。
+//     打不开、且给出 warning 而非静默）+ 菜单 open 收到 (evt, batch)。
 //   - T7（2026-10-06）：菜单 emit('recall') → useBatchRecall.recallBatch 拿到那张卡。
+//   - T7b（2026-10-06）：召回通路不新增首屏请求 —— 四个端点的调用次数快照
+//     （T2b 只锁集合不锁次数，本用例补上次数这一维）。
 //   ⚠️ 请求数断言（T2 / T2b / T3）**不因本次新增而放宽**：useBatchRecall 只建 mutation、
 //   不建 query，BatchContextMenu 是纯渲染组件，两条都不产生首屏请求。
 //
@@ -440,7 +442,9 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
 
   it('T6（2026-10-06）：provide openBatchContextMenu + 权限闸 + open 入参', async () => {
     // 回归 guard：卡片侧只 inject 这个 opener，漏 provide 就退化为「右键没反应」且
-    // 无任何报错（inject 缺省 noop）。权限闸在 opener 内 —— 无权角色连菜单都打不开。
+    // 无任何报错（inject 缺省 noop）。权限闸在 opener 内 —— 无权角色连菜单都打不开，
+    // 但必须给一句 warning（卡片侧已 prevent 掉系统右键菜单，静默早退等于无反馈）。
+    const { ElMessage } = await import('element-plus');
     activeShelfIdRef.value = '5000000000001';
     const wrapper = mount(WorkerQueueBoard, {
       global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
@@ -453,17 +457,21 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     const evt = new MouseEvent('contextmenu');
     const card = { batch_id: '3000000000001', version: 7 };
 
-    // 无权：opener 直接早退，菜单不被调 open
+    // 无权：菜单不被调 open，且给出可读提示
     recallable.ok = false;
+    vi.mocked(ElMessage.warning).mockClear();
     open(evt, card);
     expect(menuOpenCalls).toHaveLength(0);
+    expect(ElMessage.warning).toHaveBeenCalledWith('没有召回已下发批次的权限');
 
-    // 有权：转发给菜单，坐标与卡片原样送达
+    // 有权：转发给菜单，坐标与卡片原样送达（不再弹提示）
     recallable.ok = true;
+    vi.mocked(ElMessage.warning).mockClear();
     open(evt, card);
     expect(menuOpenCalls).toHaveLength(1);
     expect(menuOpenCalls[0]![0]).toBe(evt);
     expect(menuOpenCalls[0]![1]).toBe(card);
+    expect(ElMessage.warning).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -486,9 +494,12 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     wrapper.unmount();
   });
 
-  it('T7b（2026-10-06）：召回通路不新增任何首屏请求', async () => {
+  it('T7b（2026-10-06）：召回通路不新增任何首屏请求（锁请求面**与次数**）', async () => {
     // 守住「进页面请求数恒为 3」这条不变式不被写操作 composable 与菜单组件破掉：
     // useBatchRecall 只建 mutation（不建 query），BatchContextMenu 零请求。
+    // 与 T2b 的分工：T2b 只断言「哪些端点被调过」（集合，toHaveBeenCalled 无次数），
+    // 本用例把四个端点的调用次数一起锁成一张快照 —— 多打一遍 counts（双 fetch /
+    // 重复挂载）或新增一条走这四个端点的首屏查询，都会红。
     activeShelfIdRef.value = '5000000000001';
     const wrapper = mount(WorkerQueueBoard, {
       global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
@@ -497,13 +508,14 @@ describe('WorkerQueueBoard（2026-09-30 契约对齐 + 懒加载 N+1 修复）',
     await testQueryClient.refetchQueries();
     await flushPromises();
 
-    // 断言口径与 T2b 一致（不锁 counts 的绝对次数）：上面对 refetchQueries() 的显式
-    // 补刷本身就是第 2 次 counts 请求，能守的是「端点集合没变、per-process / state /
-    // pending 依旧零请求」。
-    expect(realGetWorkerPoolCounts).toHaveBeenCalled();
-    expect(realGetWorkerPoolByProcess).not.toHaveBeenCalled();
-    expect(realGetWorkerState).not.toHaveBeenCalled();
-    expect(realFetchPendingBatches).not.toHaveBeenCalled();
+    expect({
+      // 唯一该发的那条：首屏 1 次 + 上面对 refetchQueries() 的显式补刷 1 次
+      counts: realGetWorkerPoolCounts.mock.calls.length,
+      // 以下三个端点进页面时必须是 0 次（tab :lazy / 子组件桩掉 / pending 被 mock 掉）
+      byProcess: realGetWorkerPoolByProcess.mock.calls.length,
+      workerState: realGetWorkerState.mock.calls.length,
+      pendingBatches: realFetchPendingBatches.mock.calls.length,
+    }).toEqual({ counts: 2, byProcess: 0, workerState: 0, pendingBatches: 0 });
     wrapper.unmount();
   });
 });

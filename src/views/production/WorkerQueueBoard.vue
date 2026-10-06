@@ -42,7 +42,7 @@
        3. 删 useWorkerQueue.loadBoard + 模块级 workerHeld（唯一非 TanStack 数据源），
           同时删 activeProcessId provide（随 move 端点改造后无消费者）。
 
-     2026-09-30 变更记录（自上而下按时间倒序）：
+     变更记录（自上而下按时间倒序）：
        - 2026-10-06：新增「已下发批次右键召回」通路。菜单组件 BatchContextMenu 是
          板级单例、teleport 到 body、挂在 <template v-else> 之外（loading 态下已挂载）；
          卡片侧只经 fallthrough attrs 挂 @contextmenu.prevent，**不加包裹层** ——
@@ -50,7 +50,8 @@
          el-dropdown（根是硬包裹 div，会让 evt.item.dataset.batchId 恒 undefined、
          直接断掉 POOL↔WORKER 拖拽）与 el-tooltip / el-popover（Fragment 锚点 + teleport
          占位注释留在 Sortable 容器内）都不合格。新增 provide 键 openBatchContextMenu，
-         权限闸在 opener 内（canRecall）。
+         权限闸在 opener 内（canRecall），无权时给 warning 而不是静默早退
+         （卡片侧已 prevent 掉系统菜单，静默等于无反馈）。
        - 2026-09-30：counts query 去 shelf_id params 维度（后端 counts 端点无
          shelf 维度）⇒ shelfId 不再必须在 useWorkerPoolCountsQuery 之前声明，
          2026-09-30 hotfix 第 1 轮加的 TDZ 防护随之退休；
@@ -271,12 +272,17 @@ provide<ComputedRef<string>>('shelfId', shelfId);
 // 2026-10-06 新增：卡片右键 → 板级单例菜单的 opener。消费方是 PoolDrawer（批次在货架上）
 // 与 WorkerColumn（批次在工人持有中），两者与菜单之间隔着 WorkerPoolTab 一层，故走
 // provide/inject 而非 prop 穿透；inject 侧缺省 noop 兜底。
-// 权限闸在本函数里（canRecall，与后端 MANAGER/CLERK 对齐）：无权角色连菜单都打不开，
-// useBatchRecall.recallBatch 内还有第二道，菜单打开与最终提交两处都不漏。
+// 权限闸在本函数里（canRecall，与后端 MANAGER/CLERK 对齐）：无权角色连菜单都打不开。
+// 无权时**必须给一句提示**而不是静默 return —— 卡片侧的 `@contextmenu.prevent` 已经把
+// 系统右键菜单吞掉了，静默早退等于让无权角色右键卡片彻底无反馈。useBatchRecall.recallBatch
+// 内还有第二道闸，菜单打开与最终提交两处都不漏。
 provide<(evt: MouseEvent, batch: BatchCardModel) => void>(
   'openBatchContextMenu',
   (evt, batch) => {
-    if (!recall.canRecall.value) return;
+    if (!recall.canRecall.value) {
+      ElMessage.warning('没有召回已下发批次的权限');
+      return;
+    }
     batchCtxMenu.value?.open(evt, batch);
   },
 );
