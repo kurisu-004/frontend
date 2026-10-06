@@ -16,6 +16,13 @@
 //   - D4：撤回投放（onStart 记工人源 → onAdd 消费）调 moveBatchToPool，
 //     to.shelf_id 取当前激活货架；无工人源时不发请求。
 //   - D5：目标货架为空 → ElMessage.warning 且不发请求。
+//   - D9（2026-10-06）：卡片上派发 contextmenu → 注入的 openBatchContextMenu 被调一次，
+//     参数是**被右键那张卡**的 BatchCardModel（含 recall 必需的 version）；用例渲染两张
+//     卡并右键第二张，否则「那张卡」与「唯一那张卡」不可区分。D9b：未提供 opener 时
+//     右键不抛错（inject 缺省 noop 兜底）。
+//   - D7b / D7c（2026-10-06）：Sortable 容器 .pool-cards 内的节点构成 —— 只有卡片根元素
+//     与 v-for 的 2 个空文本锚点，**没有注释节点**（dev 构建保留模板注释，注释同样是
+//     容器直接子节点）；空池时零元素子节点、容器仍是合法投放目标。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的入参与 options（happy-dom
@@ -26,7 +33,7 @@
 //     桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, ref, type ComputedRef } from 'vue';
+import { defineComponent, h, nextTick, ref, toRaw, type ComputedRef } from 'vue';
 import { mount } from '@vue/test-utils';
 import type { BatchCardModel } from '@/types/batchCard';
 import type { ProcessPoolView } from '@/types/workerPool';
@@ -320,6 +327,51 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     wrapper.unmount();
   });
 
+  it('D7b（2026-10-06）：Sortable 容器内只有卡片根元素（无注释节点、无包裹层）', () => {
+    // 容器是 Sortable 的源与落点，「直接子元素必须全是可拖项」。dev 构建保留模板注释，
+    // 注释节点同样是容器的直接子节点 —— 一旦有人在容器 div 内留注释、或为某个特性
+    // 加一层包裹，这条断言就红。
+    //
+    // 2026-10-06 口径说明（两条不变式各守一层，别把两者的断言写法互抄）：
+    //   - BatchCardDndFootprint.spec.ts 的 D2 守**第一层**：卡片组件根必须是单元素
+    //     （可拖元素 == vnode 的 DOM footprint）。它的宿主用 h() 渲染，children 是
+    //     vnode 数组、不经过 Fragment vnode ⇒ 没有锚点 ⇒ 那里 `childNodes` 与
+    //     `children` 相等是对的。**本用例的容器是模板编译产物，照搬那个写法必错。**
+    //   - 本用例守**第二层**：Sortable 容器的直接子节点只能是卡片。模板里的 keyed
+    //     v-for 会编译成 Fragment ⇒ 必然额外留下 2 个空文本锚点（Vue 的 fragment 锚），
+    //     实测 2 卡时 children=2 / childNodes=4。
+    //
+    // 承重的是前两条（元素数 == 卡片数、注释数 == 0）：两者都不依赖上面那个常数，
+    // 往容器里塞元素或注释都会红。第三条总数断言只是冗余网 —— 万一将来 Vue 改了
+    // fragment 锚点行为，只有它需要跟着更新，且失效方向是假红、不会假绿。
+    const wrapper = mountDrawer(
+      makePool([makeCard({ batch_id: '3000000000001' }), makeCard({ batch_id: '3000000000002' })]),
+    );
+    const body = wrapper.find('.pool-cards').element as HTMLElement;
+    const nodes = Array.from(body.childNodes);
+
+    expect(nodes.filter((n) => n.nodeType === Node.ELEMENT_NODE)).toHaveLength(2);
+    expect(nodes.filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(0);
+    // 冗余网（见上方口径说明）：剩下只能是那两个 fragment 空文本锚点
+    expect(nodes).toHaveLength(4);
+    for (const child of Array.from(body.children)) {
+      expect(child.matches('.batch-card')).toBe(true);
+    }
+    wrapper.unmount();
+  });
+
+  it('D7c：空池的容器内零节点（空容器仍须是合法投放目标）', () => {
+    const wrapper = mountDrawer(makePool([]));
+    const body = wrapper.find('.pool-cards').element as HTMLElement;
+    // 空 v-for 只剩 2 个 fragment 空文本锚点：一个元素子节点都没有，也**没有**注释
+    expect(body.children).toHaveLength(0);
+    expect(body.childNodes).toHaveLength(2);
+    expect(Array.from(body.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(
+      0,
+    );
+    wrapper.unmount();
+  });
+
   it('D8：onStart 记的是**池**源 { processId, shelfId }（供工人列的 onAdd 消费）', async () => {
     const wrapper = mountDrawer();
     const options = capturedOptions();
@@ -336,6 +388,49 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     // 本抽屉不消费池源，但记录必须落库：消费方是 WorkerColumn 的 onAdd（POOL→WORKER）
     const { consumePoolSource } = await import('@/utils/dndSourceTracker');
     expect(consumePoolSource(batchId)).toEqual({ processId: PROCESS_ID, shelfId: '5000000000007' });
+    wrapper.unmount();
+  });
+
+  it('D9（2026-10-06）：卡片右键 → 注入的 opener 被调一次，参数是**第二张**卡的 model', async () => {
+    const openBatchContextMenu = vi.fn();
+    // 两张卡（batch_id / version 都不同）且右键**第二张**：单卡场景下「拿到那张卡」
+    // 与「拿到唯一那张卡」无法区分，实现误传 batches[0] 也会照样通过
+    const first = makeCard({ batch_id: '3000000000004', version: 3, batch_no: 'B-A' });
+    const second = makeCard({ batch_id: '3000000000005', version: 9, batch_no: 'B-B' });
+    const wrapper = mountDrawer(makePool([first, second]), { openBatchContextMenu });
+
+    const cards = wrapper.find('.pool-cards').findAll('.batch-card');
+    expect(cards).toHaveLength(2);
+    await cards[1]!.trigger('contextmenu', { clientX: 240, clientY: 180 });
+
+    expect(openBatchContextMenu).toHaveBeenCalledTimes(1);
+    const [evt, passed] = openBatchContextMenu.mock.calls[0]!;
+    // 第一参是原始 MouseEvent（含坐标，菜单靠它定位）
+    expect(evt).toBeInstanceOf(Event);
+    expect((evt as MouseEvent).clientX).toBe(240);
+    // 第二参就是被右键那张卡的 BatchCardModel（v-for 变量本身）：召回链路要读它的
+    // batch_id + version。身份断言用 toRaw 穿透可能的响应式代理，比对底层目标对象 ——
+    // 必须是 second，拿到 first 就说明事件载荷取错了卡片。
+    expect(toRaw(passed)).toBe(second);
+    expect(toRaw(passed)).not.toBe(first);
+    expect(passed).toMatchObject({ batch_id: '3000000000005', version: 9, batch_no: 'B-B' });
+    // 右键监听落在卡片根 div 上、且没有为它加包裹层：卡片的父节点就是 Sortable 容器
+    // （BatchCard 的 tooltip 在根**内部**、不包根，所以这里不存在中间层）；容器侧的
+    // 节点构成由 D7b 守
+    const cardEl = cards[1]!.element as HTMLElement;
+    expect(cardEl.parentElement?.classList.contains('pool-cards')).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('D9b（2026-10-06）：未 provide opener 时右键不抛错（inject 缺省 noop）', async () => {
+    const batch = makeCard();
+    // 完全不 provide（Board 未挂 opener 的极端形态）⇒ 右键退化为无反应，不炸回调
+    const wrapper = mount(PoolDrawer, {
+      props: { pool: makePool([batch]) },
+      global: { components: globalConfig.components },
+    });
+    const card = wrapper.find('.pool-cards').find('.batch-card');
+    await expect(card.trigger('contextmenu')).resolves.not.toThrow();
     wrapper.unmount();
   });
 });

@@ -10,6 +10,19 @@
      options.onRemove（restoreNodeToSource）补回。完整推导见 useLazyDraggable 的
      文件头注释。
 
+     2026-10-06 新增：卡片右键召回。`@contextmenu.prevent` 挂在 BatchCard 上 —— 它是
+     inheritAttrs:false + v-bind="$attrs"，该监听原样落到卡片根 div，**零新增 DOM
+     节点**。
+     ⚠️ 本容器是 Sortable 的源与落点，卡片的「可拖元素 == vnode 的 DOM footprint」
+     是硬不变式（守卫 src/components/__tests__/BatchCardDndFootprint.spec.ts）：**不要**
+     用 el-dropdown / el-tooltip / el-popover 之类去包 BatchCard 给右键菜单用
+     （el-dropdown 的根是硬包裹 div，会让 evt.item.dataset.batchId 恒 undefined，
+     直接断掉整条拖拽链路）；同理**不要**在容器内留模板注释 —— dev 构建保留注释，
+     注释节点也是 Sortable 容器的直接子节点，容器内的说明一律写在容器 div 之外。
+     菜单本体是板级单例 BatchContextMenu，teleport 到 body。事件走 inject
+     （PoolDrawer 与 BatchContextMenu 之间隔着 WorkerPoolTab / Board 两层，prop 穿透
+     不划算），键名 openBatchContextMenu。
+
      2026-09-30：
      - moveBatchToPool 签名去掉 next_process_id（后端 `POST /prod/pool/move` 的
        `to` 是 MoveLocation tagged enum，POOL 分支只认 shelf_id；目标工序由 service
@@ -28,16 +41,23 @@
         <span class="process-name">{{ pool.process_name }}</span>
         <el-tag size="small" type="info">{{ pool.batches.length }}</el-tag>
       </div>
+      <!-- 2026-10-02：卡片渲染收敛到 BatchCard.vue，包装层删除。Sortable 容器的
+           直接子元素必须**全是可拖项**（空态 div 是本容器的兄弟节点，不在其中）。
+           data-shelf-id 经 BatchCard 的 fallthrough attrs 落到卡片根 div
+           （BatchCard 是 inheritAttrs: false + v-bind="$attrs"）。
+           2026-10-06：@contextmenu.prevent 同样走 fallthrough attrs 落在同一张卡片
+           根 div 上 —— 右键能力没有引入任何包裹层（包裹即破坏 Sortable 拖拽，见文件
+           头注释）。事件的第二参传 v-for 变量 batch 本身（pool.batches 已是
+           BatchCardModel[]），消费方要的就是它的 batch_id 与 version。
+           这段说明**刻意留在容器之外**：dev 构建保留模板注释，注释节点同样算 Sortable
+           容器的直接子节点（守卫见本组件 spec 的 D7b：容器内不许有 comment 节点）。 -->
       <div ref="containerRef" class="section-body pool-cards" :data-process-id="pool.process_id">
-        <!-- 2026-10-02：卡片渲染收敛到 BatchCard.vue，包装层删除。Sortable 容器的
-             直接子元素必须**全是可拖项**（空态 div 是本容器的兄弟节点，不在其中）。
-             data-shelf-id 经 BatchCard 的 fallthrough attrs 落到卡片根 div
-             （BatchCard 是 inheritAttrs: false + v-bind="$attrs"）。 -->
         <BatchCard
           v-for="batch in pool.batches"
           :key="batch.batch_id"
           :batch="batch"
           :data-shelf-id="batch.shelf_id ?? ''"
+          @contextmenu.prevent="onCardContextMenu($event, batch)"
         />
       </div>
     </div>
@@ -51,6 +71,7 @@ import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { ProcessPoolView } from '@/types/workerPool';
+import type { BatchCardModel } from '@/types/batchCard';
 import {
   consumeWorkerSource,
   recordPoolSource,
@@ -110,6 +131,21 @@ const shelfId = inject<ComputedRef<string>>(
   'shelfId',
   computed(() => ''),
 );
+
+/** 2026-10-06：卡片右键 → 板级单例菜单（BatchContextMenu.teleport 在 body 上，
+ *  与本 Sortable 容器零 DOM 关系）。opener 由 WorkerQueueBoard provide，
+ *  本组件与菜单之间隔着 WorkerPoolTab 一层，走 inject 而非 prop 穿透。
+ *  inject 缺省 noop 兜底（Board 未提供时右键无反应，不炸掉事件回调）。 */
+const openBatchContextMenu = inject<(evt: MouseEvent, batch: BatchCardModel) => void>(
+  'openBatchContextMenu',
+  () => {},
+);
+
+/** 2026-10-06：卡片根部的右键落点。只做「把 (事件, 卡片) 转交 opener」这一件事，
+ *  不在本组件判权限 —— 权限闸在 Board 的 provide 里（canRecall），单点收口。 */
+function onCardContextMenu(evt: MouseEvent, batch: BatchCardModel): void {
+  openBatchContextMenu(evt, batch);
+}
 
 /** 2026-09-30：记录「候选池 → 工人」拖拽源。**必须带 batch 的真实 shelf_id**：
  *  `POST /prod/pool/move` 的 `from: {kind:'POOL', shelf_id}` 需与

@@ -352,7 +352,7 @@ describe('usePendingDispatch — bulk-only dispatch + auto preview 两步（2026
     expect(ElMessageBox.confirm).not.toHaveBeenCalled();
     expect(realDispatchBatches).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith(
-      '无可下发批次：工序链无可用步骤 1、批次不存在或已非 PENDING 1',
+      '无可下发批次：工序链无可用步骤 1、批次不存在或状态不可下发 1',
     );
     // 多选被清空（本次无任何下发发生）
     expect(d.selectedIds.value.size).toBe(0);
