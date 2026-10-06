@@ -144,11 +144,13 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   // { search, autoRefresh }，与新的 { search, sortBy, sortDir, pageSize } 快照 shape
   // 不兼容，恢复会整份被丢弃。
   //
-  // ⚠️ 为什么放在 `ui` 切片里返回（而不是作为 store 顶层返回）：Pinia 的 setup store
-  //   在**同一 pinia 内 `$dispose()` 后重建**时，会把残留的 `pinia.state.value[storeId]`
-  //   当 initialState 回填进**顶层**返回的 ref（state hydration）；嵌套在普通对象里的
-  //   ref 不会被回填（整个对象被新实例替换）。放切片里 ⇒ $dispose 后一定是 false，
-  //   行为可预期。
+  // ⚠️ 为什么放在 `ui` 切片里返回（而不是作为 store 顶层返回）：Pinia setup store
+  //   登记 state 的闸门是 `(isRef(prop) && !isComputed(prop)) || isReactive(prop)`
+  //   （pinia.mjs createSetupStore）。`ui` 是**普通对象**（不是 `reactive()`），既不是
+  //   ref 也不是 reactive ⇒ 压根不进 `pinia.state.value[storeId]`，没有 state 可回填 ⇒
+  //   同一 pinia 内 `$dispose()` 后重建拿到的是全新实例，`ui.autoRefresh` 归 false。
+  //   ⚠️ 这条护栏**只对普通对象成立**：写成 `reactive()` 就会通过闸门被登记进 state，
+  //   重建时走 `mergeReactiveObjects` 递归回填，内层 ref 一样会被复活。
   const uiAutoRefresh = ref(false);
 
   /** search + 分页 + 排序 → queryKey params 的**唯一**转换点。 */

@@ -97,7 +97,7 @@ describe('inspectionQueueListItemSchema — 待品检行（13 字段 .strict()�
     expect(() =>
       inspectionQueueListItemSchema.parse(makeQueueRow({ holder_name: '品检A-01' })),
     ).toThrow();
-    // id 是历史误用键（旧实现把行当 PartItem，详情跳转拼出 /parts/undefined）
+    // id 不是本 VO 的键（行标识是 batch_id / part_id），多出来即抛
     expect(() => inspectionQueueListItemSchema.parse(makeQueueRow({ id: '1' }))).toThrow();
   });
 

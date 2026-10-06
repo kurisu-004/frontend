@@ -427,6 +427,9 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   //     不变量 #2；
   //   - 切成 plain object slice 后，slice 既不是 ref 也不是 reactive，Pinia
   //     不会把它写进 state ⇒ $dispose 后真 fresh。
+  //     ⚠️ 前提是 slice 确实是 **plain object**：写成 reactive() 会通过 Pinia 的 state
+  //     登记闸门（isRef || isReactive）进 state，重建时由 mergeReactiveObjects 递归
+  //     回填、内层 ref 一样复活 ⇒ 本护栏失效。
   // 这也是 usePartsListStore 切成 query / filters / batch / dispatch 切片的
   // 同源原因（那里靠 batchMode 泄漏的回归用例守住）。
   return {

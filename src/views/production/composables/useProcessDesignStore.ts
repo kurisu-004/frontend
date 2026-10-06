@@ -629,6 +629,9 @@ export const useProcessDesignStore = defineStore('process-design', () => {
   //     $dispose 后「上次编辑到一半的工序」泄漏到下次进入，直接违反不变量 #2；
   //   - 切成 plain object slice 后，slice 既不是 ref 也不是 reactive，Pinia
   //     不会把它写进 state ⇒ $dispose 后真 fresh。
+  //     ⚠️ 前提是 slice 确实是 **plain object**：写成 reactive() 会通过 Pinia 的 state
+  //     登记闸门（isRef || isReactive）进 state，重建时由 mergeReactiveObjects 递归
+  //     回填、内层 ref 一样复活 ⇒ 本护栏失效。
   // 回归守卫见 __tests__/useProcessDesignStore.spec.ts 的「$dispose 后重建」用例。
   return {
     query: {

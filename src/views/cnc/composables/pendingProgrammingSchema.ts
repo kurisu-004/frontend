@@ -1,9 +1,9 @@
 // src/views/cnc/composables/pendingProgrammingSchema.ts
 //
 // 2026-10-07 新增：「待编程一览」页主查询的 Zod 守门 schema，搬进域内与 query hook 同居。
-// 「待编程一览」页主查询的 Zod 守门 schema。数据源是 prod 域
-// `GET /api/v2/prod/programming/pending`，出参对齐后端 `ProgrammingItemOut`（行）/
-// `ProgrammingListOut`（分页信封 `{ items, total, limit, offset }`）。
+// 数据源是 prod 域 `GET /api/v2/prod/programming/pending`，出参对齐后端
+// `ProgrammingItemOut`（行）/ `ProgrammingListOut`（分页信封 `{ items, total, limit,
+// offset }`）。
 //
 // 为什么住域内而不是全局 schema 文件：守门点在 queryFn
 // （usePendingProgrammingQuery），schema 跟 query hook 同居域内，守卫关系就近可读。
@@ -20,8 +20,8 @@
 //
 // ⚠️ 客户字段名与 part 域**不同名**：本 schema 是 parent_customer_name(L1) /
 // customer_name(L2)，而 PartListItem 是 l1_customer_name / customer_name。
-// 两个端点的 rows 不能互相 cast（列渲染已按本 schema 读 parent_customer_name，
-// 拿 PartListItem 的 cast 复用旧代码会渲染出「—」）。
+// 两个端点的 rows 不能互相 cast（列渲染读的是 parent_customer_name，cast 过来
+// 命不中 ⇒ 渲染出「—」）。
 //
 // ⚠️ 本 schema 是 strip 模式的 `z.object`（非 `.strict()`），所以**后端改字段名
 // 不会被 Zod 报错**、只会被静默丢弃。批次锚点两个字段的改名义务双向登记在

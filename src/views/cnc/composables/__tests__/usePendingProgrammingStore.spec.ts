@@ -35,7 +35,7 @@
 //     watch(error) → ElMessage.error 在 vitest node env 会因 ElMessage 内部
 //     normalizeAppendTo 触发 ReferenceError: document is not defined，必须桩成 no-op。
 //     ElButton / ElTag / ElTooltip 也要列出来 —— store 经
-//     ../pendingProgrammingColumnDefs 把这两个组件拉进了模块图（renderActions /
+//     ../pendingProgrammingColumnDefs 把这三个组件拉进了模块图（renderActions /
 //     renderCncProgram 在 cellRender 里用），本文件 mock 掉 element-plus 后它们
 //     会是 undefined。今天不炸只因没有用例调 cellRender；将来加一个「渲染行」的
 //     用例会撞 undefined 组件报错，故显式占位（空对象即可，本文件只断言 store
@@ -63,9 +63,11 @@ vi.mock('element-plus', () => ({
     info: vi.fn(),
   },
   ElMessageBox: { confirm: vi.fn() },
-  // 见文件头 M-7 注：store 模块图经 pendingProgrammingColumnDefs 引入了这两个组件
+  // store 模块图经 pendingProgrammingColumnDefs 引入了这三个组件（ElTooltip 用在
+  // 「无批次锚点」按钮的 h(ElTooltip, …) 提示上）
   ElButton: {},
   ElTag: {},
+  ElTooltip: {},
 }));
 
 // vitest node 环境没有 localStorage（useListFilterPersist / useColumnVisibility

@@ -29,9 +29,8 @@ import { z } from 'zod';
 //      （加急红底）。
 //
 // 契约要点：
-//   - `system_delivery_date` 是本 VO 的**净增字段**（旧待品检 VO 不含它，
-//     前端只能恒显 '—'）；wire 上是 `YYYY-MM-DD` 字符串，DB NULL → JSON null，故
-//     `z.string().nullable()`，不锁字面量。
+//   - `system_delivery_date` 是本 VO 列表页用到的交付日期列，wire 上是 `YYYY-MM-DD`
+//     字符串，DB NULL → JSON null，故 `z.string().nullable()`，不锁字面量。
 //   - batch_id / part_id / customer_id 是**雪花 ID 字符串**（`serialize_i64`，禁止
 //     Number() —— 会丢精度）；batch_no / quantity / version 是 i32 → `z.number()`。
 //   - `total` / `limit` / `offset` 同样是 `serialize_i64` ⇒ JSON **string**，与
