@@ -27,14 +27,13 @@ import { computed, reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { ElMessage } from 'element-plus';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
+import { toInspection, toProcess, toShip } from '@/api/parts';
 import {
-  toInspection,
-  toProcess,
-  toShip,
+  scanInspection,
   type InspectionQueueItem,
   type ListInspectionQueueParams,
-} from '@/api/parts';
-import { scanInspection, type ScanTreeOut } from '@/api/inspection';
+  type ScanTreeOut,
+} from '@/api/inspection';
 import { qk } from '@/composables/queries/keys';
 import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';

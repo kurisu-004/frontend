@@ -1130,12 +1130,11 @@ export type WorkerStateSchema = z.infer<typeof workerStateSchema>;
 // 2026-09-30 新增：返修集合读行 + 列表 schema（守门 backend-rust
 // `InspectionBatchListItemOut` / `InspectionBatchListOut`）。
 //
-// 2026-10-03 改名：本 schema 组的消费者已从「品检 / 返修 / 返修中 3 个共用端点」
-// 收窄为**仅** `GET /prod/batches/repair` 与 `GET /prod/batches/repairing` 两条返修
-// 端点（待品检端点 `GET /prod/batches/inspection` 同期换成 13 字段的精简 VO，见
-// src/views/inspection/composables/inspectionSchema.ts::inspectionQueueListItemSchema）。
-// 名字里的 "inspection" 此刻已经
-// 指向错误的端点，故连同 `InspectionBatchListItemSchema` /
+// 2026-10-03 改名：本 schema 组的消费者是**仅** `GET /prod/batches/repair` 与
+// `GET /prod/batches/repairing` 两条返修端点 —— 待品检队列（`GET /prod/inspection/queue`）
+// 用 13 字段的精简 VO，schema 在域内
+// src/views/inspection/composables/inspectionSchema.ts::inspectionQueueListItemSchema。
+// 名字里的 "inspection" 指向错误的端点，故连同 `InspectionBatchListItemSchema` /
 // `InspectionBatchListResultSchema` 导出类型一起改名；**字段一个都没动** —— 两条
 // 返修端点的 VO 后端原样未变。
 //

@@ -887,15 +887,14 @@ export async function completePartRepair(
 
 /** 返修接收 Tab·已送货（DELIVERED 批次；PR-M 2026-08-04）。
  *
- * 2026-08-25 注：返回类型 RepairBatchListResult 定义在 ./batch（listRepairBatches
- * 是单件 lifecycle 端点，但与 listRepairingBatches 共用同一个后端 VO
+ * 返回类型 RepairBatchListResult 定义在 ./batch（两条返修端点共用同一个后端 VO
  * `InspectionBatchListItemOut`）；用 type-only 跨子域引用。
  *
- * 2026-10-02 补 Zod 守门：此前是 `return resp.data` 零校验。两条返修端点共用
- * `repairBatchListResultSchema`（./batch 的 listInspectionBatches 同期换成 13 字段
- * 精简 VO 后，品检 / 返修不再是同一个 VO，也不再是同一个 schema —— 行对象不可互相
- * cast）。零守门的代价是踩过的坑：`is_repairing`（后端恒输出）没被 schema 声明时，
- * 本函数会**静默**把多出来的键丢掉，页面照常渲染、只是列全空。
+ * Zod 守门：两条返修端点共用 `repairBatchListResultSchema`。品检队列读（`api/inspection.ts`
+ * 的 listInspectionBatches）另有自己的 13 字段精简 VO 与 schema，与返修 VO 行对象
+ * **不可互相 cast**（少了 status / location / holder_name 等键）。零守门的代价是踩过
+ * 的坑：`is_repairing`（后端恒输出）没被 schema 声明时，本函数会**静默**把多出来的
+ * 键丢掉，页面照常渲染、只是列全空。
  * 守门只在这一处（不在 useXxxQuery 里再 parse —— Zod parse 是深拷贝，两处都做
  * 等于白拷一次）。 */
 export async function listRepairBatches(

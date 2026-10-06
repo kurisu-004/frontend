@@ -1,4 +1,4 @@
-// 2026-10-03 新增：待品检队列（`GET /api/v2/prod/batches/inspection`）的排序枚举
+// 2026-10-03 新增：待品检队列（`GET /api/v2/prod/inspection/queue`）的排序枚举
 // 与列 prop 双向映射。形态对齐 parts 域的 `PartSortKey` / `PART_SORT_PROP_MAP`
 // （同在 `@/types/parts`），使「待品检一览」页能与「零件一览」页共用同一套
 // 表头点击 → 排序的服务端排序接法。

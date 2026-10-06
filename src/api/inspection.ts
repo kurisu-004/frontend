@@ -1,11 +1,115 @@
-// 品检域 API —— 扫码查「装配件 → 子零件 → 批次」树（`GET /prod/inspection/scan/{serial_no}`）。
+// 品检域 API —— 两条只读端点，都落在 prod::inspection 域下：
+//   1. 待品检队列列表（`GET /prod/inspection/queue`，判据 `status='INSPECTION'`）；
+//   2. 扫码查「装配件 → 子零件 → 批次」树（`GET /prod/inspection/scan/{serial_no}`）。
 //
-// 2026-10-05 新增：待品检页的扫码入口。此前本页扫到序列号后走的是 part 域
-// `GET /parts/by-serial/{serial_no}`（单件 VO，无批次），要在前端再靠当前页列表命中 /
-// BatchPickerDialog / 状态分流拼出「该扫哪一批」；本端点把「扫到的件 → 它的全部批次」
-// 一次返回，前端只负责展示与按批次发写端点。
+// 2026-10-07：队列读的封装与行类型住本文件 —— `/prod/inspection/queue` 是
+// prod::inspection 域的读端点（不打 `/prod/batches/*`），队列行也是品检域专属 VO，
+// 不属零件域。
 //
-// 两条后端行为是本文件契约的一部分（已实测）：
+// 路径**相对**（`api` 实例的 baseURL 是 `/api/v2`），禁写绝对 URL：dev 走 vite proxy、
+// 生产走 nginx 同源反代，写死 host 会让两个环境各连各的。
+
+import { api, cleanParams } from '@/api/http';
+import type { InspectionSortKey } from '@/types/inspection';
+import type { SortDir } from '@/types/parts';
+import {
+  inspectionScanTreeSchema,
+  type InspectionQueueListResultData,
+} from '@/views/inspection/composables/inspectionSchema';
+
+/** 待品检队列行（批次级；行 = 批次）—— 服务 `GET /api/v2/prod/inspection/queue`。
+ *
+ *  **恰 13 个键**，字段严格对齐后端本端点专属 VO：
+ *   - 7 个数据列：serial_no / drawing_no / name / batch_no / quantity /
+ *     system_delivery_date /（customer_name + l1_customer_name 供客户列派生「父 / 子」）；
+ *   - 3 个写端点 / 跳转锚：batch_id（`POST /prod/batches/{batch_id}/…` 路径参数 +
+ *     扫码选行标识）、part_id（`/parts/{part_id}`）、version（OCC 锚 t_part_batch）；
+ *   - 筛选 / 展示辅助：customer_id（客户表头筛选）、is_urgent（加急红底）。
+ *
+ *  与返修两条端点的行类型 `RepairBatchListItem`（`@/api/parts`，28 字段）**不可互相
+ *  cast**：本 VO 不含 status / location / holder_name / next_process_* / is_repairing /
+ *  order_no / planned_delivery_date / delivery_note_* / parent_batch_id /
+ *  current_process_step_id / part_version / created_at / updated_at。 */
+export interface InspectionQueueItem {
+  batch_id: string;
+  batch_no: number;
+  quantity: number;
+  /** OCC 锚 `t_part_batch.version`（**不是** `t_part.version`）。 */
+  version: number;
+  part_id: string;
+  serial_no: string | null;
+  drawing_no: string;
+  name: string;
+  /** 系统交期；DB NULL → null（列表页渲染 '—'）。 */
+  system_delivery_date: string | null;
+  is_urgent: boolean;
+  customer_id: string;
+  customer_name: string | null;
+  /** L1（一级客户）名；客户列渲染「L1 / L2」两段文本。 */
+  l1_customer_name: string | null;
+}
+
+// 分页信封不另起一份手写声明：形状 = `InspectionQueueItem[]` + 三个 JSON string 计数，
+// 直接取域内 schema 的 z.infer（`InspectionQueueListResultData`，见 listInspectionBatches
+// 的返回类型标注）。
+// ⚠️ 单点只覆盖**信封**：**行**类型 `InspectionQueueItem`（上方手写声明）与
+// `inspectionQueueListItemSchema` 仍是双声明 —— 行被列定义 / 表格 / 扫码选行共用，
+// 手写形态是这份模块图零运行时依赖的前提。改行字段须同批改两处。
+
+/** `GET /prod/inspection/queue` 的 Query 入参。
+ *
+ *  契约：三个 ILIKE 子串参数各自独立（`drawing_no` / `name` / `serial_no`，同时传
+ *  ⇒ AND 联合），日期筛**系统交期**，服务端排序白名单见 `InspectionSortKey`
+ *  （非法值后端退化为 SYSTEM_DELIVERY_DATE / ASC）。 */
+export interface ListInspectionQueueParams {
+  /** ILIKE `%kw%` 匹配 `t_part.drawing_no`；含 `%` `_` `\` → 40001。 */
+  drawing_no?: string;
+  /** ILIKE `%kw%` 匹配 `t_part.name`。 */
+  name?: string;
+  /** ILIKE `%kw%` 匹配 `t_part.serial_no`。 */
+  serial_no?: string;
+  /** 雪花 ID 字符串，禁止 Number()（CLAUDE.md §3）。后端展开为 L1+L2 ids。 */
+  customer_id?: string;
+  /** 系统交期区间（含端点；任一端点为空表示半开）。 */
+  system_delivery_date_from?: string;
+  system_delivery_date_to?: string;
+  sort_by?: InspectionSortKey;
+  sort_dir?: SortDir;
+  limit?: number;
+  offset?: number;
+}
+
+/** 待品检队列（`GET /api/v2/prod/inspection/queue`）。
+ *
+ *  Zod 守门在 **queryFn**（`views/inspection/composables/useInspectionQueueQuery`，
+ *  schema 同居域内 `views/inspection/composables/inspectionSchema.ts`）：本层只发请求
+ *  + 标注返回类型，不 parse（parse 返回深拷贝，多一层等于每屏数据被校验并克隆两遍）。
+ *  item schema 用 `.strict()`，后端若误把 `id` 字段加进响应（regression）或漏 part_id
+ *  等核心字段，queryFn 的 parse 立刻抛错而非默认 strip 静默丢。
+ *
+ *  出参是 13 字段精简 VO（`InspectionQueueItem`），入参是 `ListInspectionQueueParams`
+ *  （三个 ILIKE 子串 + 系统交期区间 + 服务端排序）。分页信封的 total / limit / offset
+ *  是 JSON **string**（后端 serialize_i64），调用方在边界 Number() 转 number 才能塞进
+ *  分页组件。
+ *
+ *  返回类型标注取域内 schema 的 z.infer，与 `InspectionQueueItem`（本文件保留的手写
+ *  行类型，被列定义 / 表格 / 扫码选行共用）结构一致，故不需要桥接 cast。 */
+export async function listInspectionBatches(
+  params: ListInspectionQueueParams = {},
+): Promise<InspectionQueueListResultData> {
+  const resp = await api.get<InspectionQueueListResultData>('/prod/inspection/queue', {
+    params: cleanParams(params),
+  });
+  return resp.data;
+}
+
+// ============================================================
+// 扫码查树（`GET /prod/inspection/scan/{serial_no}`）。
+//
+// 2026-10-05 新增：待品检页的扫码入口 —— 把「扫到的件 → 它的全部批次」一次返回，
+// 前端只负责展示与按批次发写端点。
+//
+// 两条后端行为是本端点契约的一部分（已实测）：
 //   - 扫装配件条码与扫其子件条码返回**同一棵树**，差别只在 `hit_kind` 与各批次的
 //     `is_scanned`，三档分别是：扫独立件 = 该件全部批次 true；扫**装配件子件**
 //     （hit_kind 'PART' + assembly 非空）= 只有被扫中那个子件的批次 true、兄弟子件
@@ -14,12 +118,7 @@
 //   - 序列号会先 `trim`，空白串 / 查不到一律 HTTP 404（业务码 20101）—— 与其它
 //     端点一样由 `envelopeResponseInterceptor` 抛 `ApiError`，本文件不吞，提示由调用方
 //     的 `onError` 给。
-//
-// 路径**相对**（`api` 实例的 baseURL 是 `/api/v2`），禁写绝对 URL：dev 走 vite proxy、
-// 生产走 nginx 同源反代，写死 host 会让两个环境各连各的。
-
-import { api } from '@/api/http';
-import { inspectionScanTreeSchema } from '@/views/inspection/composables/inspectionSchema';
+// ============================================================
 
 /** 树里的装配件节点（`ScanAssemblyOut`）。装配件本身**没有批次**，只有子零件有。 */
 export interface ScanAssemblyOut {

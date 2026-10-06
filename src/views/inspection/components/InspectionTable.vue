@@ -109,7 +109,7 @@ import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import { resolveDraggable } from '@/composables/useColumnVisibility';
-import type { InspectionQueueItem } from '@/api/parts';
+import type { InspectionQueueItem } from '@/api/inspection';
 import { useInspectionListStore } from '../composables/useInspectionListStore';
 
 const store = useInspectionListStore();

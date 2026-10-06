@@ -1,21 +1,21 @@
-// 后端零件 API 封装 —— 批量 / 批次化端点（批量新建、批次拆分/取消、品检待办、批量品检通过）。
+// 后端零件 API 封装 —— 批量 / 批次化端点（批量新建、批次拆分/取消、返修集合读、
+// 批量送检 / 批量品检通过）。
 // 2026-09-15 Phase 5：业务全切 v2，统一走 `api`（baseURL `/api/v2`）。
 // 2026-08-25：从原 1165 行 api/parts.ts 拆分到 ./ 子文件；本文件是 ./batch 子域。
 //
-// 2026-10-02：批次的**写**端点（split / cancel）与品检 / 返修集合读、批量送检 /
+// 2026-10-02：批次的**写**端点（split / cancel）与返修集合读、批量送检 /
 // 批量品检通过，整体从 part 域迁入 prod 域（`/prod/batches/*`）—— 它们的操作对象是
 // 批次（t_part_batch），不是 part。批次集合读 `GET /parts/{part_id}/batches` 留在
 // part 域（操作对象是「某个 part 的批次集合」）。
+// 2026-10-07：待品检队列读的封装与类型不在本文件（域 = prod::inspection，见
+// `api/inspection.ts`）。
 //
 // 跨子域类型引用：PartItem / PartCreatePayload 定义在 ./crud；本文件所有批量响应
 // （DTO / 失败明细）都涉及单件 DTO 与单件创建 payload，因此仅 type-only 导入，
 // 运行时不会产生 ESM 循环。
 
-import { api, cleanParams } from '@/api/http';
-import type { InspectionQueueListResultData } from '@/views/inspection/composables/inspectionSchema';
-import type { InspectionSortKey } from '@/types/inspection';
+import { api } from '@/api/http';
 import type { FileBinding } from '@/types/part_file';
-import type { SortDir } from '@/types/parts';
 import type { PartCreatePayload, PartItem } from './crud';
 
 export interface PartBatchFailure {
@@ -380,10 +380,8 @@ export async function cancelPartBatch(
 /** 返修集合读行（批次级；行 = 批次）—— 服务 `GET /api/v2/prod/batches/repair`（已送货）
  *  与 `GET /api/v2/prod/batches/repairing`（返修中）两条端点。
  *
- *  2026-10-03 改名：原名里带 "Inspection" 是在「品检 / 返修 / 返修中 3 个
- *  端点共用同一个 Rust VO」时期起的名。待品检端点同期换成 13 字段精简 VO（见下方
- *  `InspectionQueueItem`）后，名字里的 "Inspection" 指向错误的端点，故改名。**字段
- *  一个都没动**，两条返修端点的 VO 后端原样未变。
+ *  名字**不含** "Inspection"：本 VO 与待品检队列行（13 字段精简 VO，见
+ *  `api/inspection.ts::InspectionQueueItem`）是两个独立 VO，品检端点不归它。
  *
  *  行内无 `id` 字段：详情跳转锚是 `part_id`（`/parts/{part_id}`）。 */
 export interface RepairBatchListItem {
@@ -433,92 +431,6 @@ export interface RepairBatchListResult {
   total: string;
   limit: string;
   offset: string;
-}
-
-/** 待品检队列行（批次级；行 = 批次）—— 服务 `GET /api/v2/prod/batches/inspection`。
- *
- *  2026-10-03 新建精简 VO，**恰 13 个键**，字段严格对齐后端本端点专属 VO：
- *   - 7 个数据列：serial_no / drawing_no / name / batch_no / quantity /
- *     system_delivery_date /（customer_name + l1_customer_name 供客户列派生「父 / 子」）；
- *   - 3 个写端点 / 跳转锚：batch_id（`POST /prod/batches/{batch_id}/…` 路径参数 +
- *     扫码选行标识）、part_id（`/parts/{part_id}`）、version（OCC 锚 t_part_batch）；
- *   - 筛选 / 展示辅助：customer_id（客户表头筛选）、is_urgent（加急红底）。
- *
- *  与 `RepairBatchListItem` **不可互相 cast**：本 VO 不含 status / location /
- *  holder_name / next_process_* / is_repairing / order_no / planned_delivery_date /
- *  delivery_note_* / parent_batch_id / current_process_step_id / part_version /
- *  created_at / updated_at。 */
-export interface InspectionQueueItem {
-  batch_id: string;
-  batch_no: number;
-  quantity: number;
-  /** OCC 锚 `t_part_batch.version`（**不是** `t_part.version`）。 */
-  version: number;
-  part_id: string;
-  serial_no: string | null;
-  drawing_no: string;
-  name: string;
-  /** 系统交期；DB NULL → null（列表页渲染 '—'）。旧 VO 不含本字段，前端曾恒显 '—'。 */
-  system_delivery_date: string | null;
-  is_urgent: boolean;
-  customer_id: string;
-  customer_name: string | null;
-  /** L1（一级客户）名；客户列渲染「L1 / L2」两段文本。 */
-  l1_customer_name: string | null;
-}
-
-// 分页信封不另起一份手写声明：形状 = `InspectionQueueItem[]` + 三个 JSON string 计数，
-// 直接取域内 schema 的 z.infer（`InspectionQueueListResultData`，见
-// listInspectionBatches 的返回类型标注）。
-// ⚠️ 单点只覆盖**信封**：**行**类型 `InspectionQueueItem`（上方手写声明）与
-// `inspectionQueueListItemSchema` 仍是双声明 —— 行被列定义 / 表格 / 扫码选行共用，
-// 手写形态是这份模块图零运行时依赖的前提。改行字段须同批改两处。
-
-/** `GET /prod/batches/inspection` 的 Query 入参。
- *
- *  2026-10-03 契约收口：三个 ILIKE 子串参数各自独立（`drawing_no` / `name` /
- *  `serial_no`，同时传 ⇒ AND 联合），日期筛选改筛**系统交期**（旧契约筛的是计划交期，
- *  而计划交期列随 VO 精简一并删除）、服务端排序白名单见 `InspectionSortKey`
- *  （非法值后端退化为 SYSTEM_DELIVERY_DATE / ASC）。 */
-export interface ListInspectionQueueParams {
-  /** ILIKE `%kw%` 匹配 `t_part.drawing_no`；含 `%` `_` `\` → 40001。 */
-  drawing_no?: string;
-  /** ILIKE `%kw%` 匹配 `t_part.name`。 */
-  name?: string;
-  /** ILIKE `%kw%` 匹配 `t_part.serial_no`。 */
-  serial_no?: string;
-  /** 雪花 ID 字符串，禁止 Number()（CLAUDE.md §3）。后端展开为 L1+L2 ids。 */
-  customer_id?: string;
-  /** 系统交期区间（含端点；任一端点为空表示半开）。 */
-  system_delivery_date_from?: string;
-  system_delivery_date_to?: string;
-  sort_by?: InspectionSortKey;
-  sort_dir?: SortDir;
-  limit?: number;
-  offset?: number;
-}
-
-/** 待品检队列（`GET /api/v2/prod/batches/inspection`，判据 `status='INSPECTION'`）。
- *
- *  Zod 守门在 **queryFn**（`views/inspection/composables/useInspectionQueueQuery`，
- *  schema 同居域内 `views/inspection/composables/inspectionSchema.ts`）：本层只发请求
- *  + 标注返回类型，不 parse（parse 返回深拷贝，多一层等于每屏数据被校验并克隆两遍）。
- *  item schema 用 `.strict()`，后端若误把 `id` 字段加进响应（regression）或漏 part_id
- *  等核心字段，queryFn 的 parse 立刻抛错而非默认 strip 静默丢。
- *
- *  出参是 13 字段精简 VO（`InspectionQueueItem`），入参是 `ListInspectionQueueParams`
- *  （三个 ILIKE 子串 + 系统交期区间 + 服务端排序）。路径不变（`/prod/batches/inspection`，
- *  2026-10-02 由 `/parts/inspection-batches` 迁入 prod 域）。
- *
- *  返回类型标注取域内 schema 的 z.infer，与 `InspectionQueueItem`（本文件保留的手写
- *  行类型，被列定义 / 表格 / 扫码选行共用）结构一致，故不需要桥接 cast。 */
-export async function listInspectionBatches(
-  params: ListInspectionQueueParams = {},
-): Promise<InspectionQueueListResultData> {
-  const resp = await api.get<InspectionQueueListResultData>('/prod/batches/inspection', {
-    params: cleanParams(params),
-  });
-  return resp.data;
 }
 
 // ============ inspection to-XXX 体系批量（2026-08-28 后端路线 B 重构）==============

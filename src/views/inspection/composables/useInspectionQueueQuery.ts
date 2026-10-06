@@ -3,7 +3,7 @@
 // 2026-10-07 新增：「待品检一览」页主查询的 useQuery 段从页面级 store 外提成同域独立
 // hook（无自有状态），守门 schema 与它同居域内。
 // 「待品检一览」页主查询的 useQuery composable（无自有状态，入参全 reactive）。
-// 数据源：`GET /api/v2/prod/batches/inspection`（api/parts/batch.ts::listInspectionBatches）。
+// 数据源：`GET /api/v2/prod/inspection/queue`（api/inspection.ts::listInspectionBatches）。
 //
 // 数据流：
 //   1. 调用方（页面级 store useInspectionListStore）持有私有状态：表头筛选 / 排序 /
@@ -39,7 +39,7 @@
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
 import { keepPreviousData, useQuery } from '@tanstack/vue-query';
 import { ElMessage } from 'element-plus';
-import { listInspectionBatches, type ListInspectionQueueParams } from '@/api/parts';
+import { listInspectionBatches, type ListInspectionQueueParams } from '@/api/inspection';
 import { qk } from '@/composables/queries/keys';
 import { inspectionQueueListResultSchema } from './inspectionSchema';
 
