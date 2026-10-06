@@ -586,15 +586,9 @@ async function onFileChange(uploadFile: UploadFile): Promise<void> {
       line_no: it.lineNo,
       drawing_no: it.drawingNo || null,
       name: it.name || null,
-      delivery_date: it.deliveryDate,
-      unit_price: it.unitPrice,
-      quantity: it.shippableQty,
     }));
 
-    const results = await matchPartsByExcelItems({
-      doc_no: parsed.docNo,
-      items: matchItems,
-    });
+    const results = await matchPartsByExcelItems({ items: matchItems });
     previewGroups.value = buildPreviewGroups(parsed.items, results);
   } catch (e) {
     parseErrors.value = [(e as Error).message ?? 'Excel 解析或匹配失败'];
@@ -674,13 +668,13 @@ async function onConfirm(): Promise<void> {
     failedRows.value = new Map(result.failed.map((f) => [f.part_id, `${f.code}: ${f.message}`]));
 
     if (result.failed.length === 0) {
-      ElMessage.success(`已更新 ${result.updated.length} 个零件`);
+      ElMessage.success(`已更新 ${result.updated_count} 个零件`);
       emit('success');
       emit('update:modelValue', false);
       return;
     }
 
-    const updated = result.updated.length;
+    const updated = result.updated_count;
     const failed = result.failed.length;
     if (updated === 0) {
       ElMessage.error(`全部 ${failed} 条更新失败，请检查失败行`);
