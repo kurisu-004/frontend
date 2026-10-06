@@ -1,9 +1,10 @@
 // src/api/dashboard.spec.ts
 //
 // 2026-09-28 重构：原订阅 / 取消订阅控制帧测试全部删除（subscribe/unsubscribe
-// 帧随控制帧发送逻辑一起删除，2026-09-28 决策）。新增覆盖：
+// 帧随控制帧发送逻辑一起删除）。覆盖：
 //   - URL 拼接（带 token）
-//   - fetchDashboardSnapshot HTTP + Zod parse 集成（mock api.get）
+//   - fetchDashboardSnapshot / fetchUpcomingDelivery / fetchDeliveryOrders 三个
+//     HTTP 端点（mock api.get）
 //   - reconnectDashboard() 公开 API
 // FakeWebSocket 桩保留（VueUse 内部仍是 new WebSocket(url)，实例计数可用）。
 //
@@ -320,10 +321,10 @@ describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2
       data: JSON.stringify({
         type: 'snapshot',
         data: {
-          on_production_shelves: [],
-          on_inspection_shelves: [],
+          overdue_count: 0,
+          in_inspection_count: 0,
           in_process: [],
-          upcoming_delivery: [],
+          system_delivery_orders: { urgent: [], partial: [] },
           ts: 'x',
         },
         ts: 'x',
@@ -337,41 +338,71 @@ describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2
   it('fetchDashboardSnapshot：HTTP GET /api/v2/dashboard/snapshot，返回解封后 data', async () => {
     const api = await loadDashboardApi();
     const sample = {
-      on_production_shelves: [],
-      on_inspection_shelves: [],
+      overdue_count: 12,
+      in_inspection_count: 4,
       in_process: [],
-      upcoming_delivery: [],
-      ts: '2026-09-28T10:00:00+08:00',
+      system_delivery_orders: { urgent: [], partial: [] },
+      ts: '2026-10-07T14:30:00.123+08:00',
     };
     httpGetMock.mockResolvedValue({ data: sample });
 
     const result = await api.fetchDashboardSnapshot();
 
-    // 2026-10-04：端点新增可选查询参数 basis，不传参时 params 为空对象
-    // （cleanParams 剔掉 undefined）⇒ 请求串与加参数前逐字一致。
-    expect(httpGetMock).toHaveBeenCalledWith('/dashboard/snapshot', { params: {} });
+    // 端点不接受任何 query 参数（交期分桶已拆到 /dashboard/upcoming-delivery），
+    // 故不传 config —— 少一个 params 段，axum 的 Query 提取器拿到空 map。
+    expect(httpGetMock).toHaveBeenCalledWith('/dashboard/snapshot');
     expect(result).toEqual(sample);
   });
 
-  // 2026-10-04 新增：交期统计口径进查询串（planned / system），未传 basis 时被剔掉。
-  it('fetchDashboardSnapshot：basis 进查询串，未传的 basis 被剔掉', async () => {
+  it('fetchUpcomingDelivery：basis + days 进查询串，GET /dashboard/upcoming-delivery', async () => {
     const api = await loadDashboardApi();
     const sample = {
-      on_production_shelves: [],
-      on_inspection_shelves: [],
-      in_process: [],
-      upcoming_delivery: [],
-      ts: '2026-09-28T10:00:00+08:00',
+      today: '2026-10-07',
+      buckets: [{ date: '2026-10-07', count: 8, by_status: { IN_PROCESS: 3 } }],
+      ts: '2026-10-07T14:30:00.123+08:00',
     };
     httpGetMock.mockResolvedValue({ data: sample });
 
-    await api.fetchDashboardSnapshot({ basis: 'system' });
-    expect(httpGetMock).toHaveBeenCalledWith('/dashboard/snapshot', {
-      params: { basis: 'system' },
+    const result = await api.fetchUpcomingDelivery({ basis: 'system', days: 14 });
+    expect(httpGetMock).toHaveBeenCalledWith('/dashboard/upcoming-delivery', {
+      params: { basis: 'system', days: 14 },
+    });
+    expect(result).toEqual(sample);
+
+    // cleanParams 剔 undefined：不传的字段根本不出现在请求对象里
+    await api.fetchUpcomingDelivery({});
+    expect(httpGetMock).toHaveBeenLastCalledWith('/dashboard/upcoming-delivery', { params: {} });
+  });
+
+  it('fetchDeliveryOrders：statuses 数组拼成逗号分隔单值，GET /dashboard/delivery-orders', async () => {
+    const api = await loadDashboardApi();
+    const sample = {
+      date: '2026-10-07',
+      basis: 'system',
+      total: 17,
+      items: [],
+      ts: '2026-10-07T14:30:00.123+08:00',
+    };
+    httpGetMock.mockResolvedValue({ data: sample });
+
+    const result = await api.fetchDeliveryOrders({
+      date: '2026-10-07',
+      statuses: ['PENDING', 'IN_PROCESS', 'OUTSOURCE'],
+      basis: 'system',
     });
 
-    await api.fetchDashboardSnapshot({ basis: undefined });
-    expect(httpGetMock).toHaveBeenLastCalledWith('/dashboard/snapshot', { params: {} });
+    // 后端 axum Query 把 statuses 反序列化成逗号分隔的单值；发重复 key 取不到期望形态
+    // 直接 400，故这里必须 join(',') 而不是把数组原样发出去。
+    expect(httpGetMock).toHaveBeenCalledWith('/dashboard/delivery-orders', {
+      params: { date: '2026-10-07', statuses: 'PENDING,IN_PROCESS,OUTSOURCE', basis: 'system' },
+    });
+    expect(result).toEqual(sample);
+
+    // basis 不传时被 cleanParams 剔掉（后端缺省 system）
+    await api.fetchDeliveryOrders({ date: '2026-10-07', statuses: ['DELIVERED'] });
+    expect(httpGetMock).toHaveBeenLastCalledWith('/dashboard/delivery-orders', {
+      params: { date: '2026-10-07', statuses: 'DELIVERED' },
+    });
   });
 });
 
