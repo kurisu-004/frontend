@@ -20,14 +20,16 @@
 
 import type { ListInspectionQueueParams } from '@/api/inspection';
 import type { ListPartsParams } from '@/api/parts';
-import type { ListPendingBatchesParams } from '@/api/pendingBatches';
+// 2026-10-08：入参形态在 api/productionQueue.ts 定义（api 层是 wire 契约的唯一定义
+// 处，沿上面几个 List*Params 的既有做法），本文件只引用。
+import type { ListQueuePendingParams } from '@/api/productionQueue';
 import type { ListPendingProgrammingParams } from '@/api/programming';
 // 2026-10-05：入参形态在 api/processChain.ts 定义（api 层是 wire 契约的唯一定义处，
 // 沿上面几个 List*Params 的既有做法），本文件只引用。
 import type { ListProcessDesignPartsParams } from '@/api/processChain';
 import type { ListShelvesParams } from '@/api/shelves';
 // 2026-10-02：工种列表入参形态在 api/workType.ts 定义（api 层是 wire 契约的唯一定义
-// 处，沿 ListShelvesParams / ListPendingBatchesParams 的既有做法），本文件只引用。
+// 处，沿 ListShelvesParams 等既有做法），本文件只引用。
 import type { WorkTypeListParams } from '@/api/workType';
 import type { ProcessCategory } from '@/types/process';
 import type { OrderStatus } from '@/types/parts';
@@ -100,8 +102,8 @@ export const qk = {
    *  dashboardDeliveryOrders（date × statuses × basis）三类 query，
    *  invalidateQueries({ queryKey: qk.dashboardPrefix }) 一键全失效。 */
   dashboardPrefix: ['dashboard'] as const,
-  /** 2026-09-29 新增：零件 owner 维度文件列表共享 query 键。
-   *  单请求 owner 全量，computed 内按 kind 桶。失效粒度 = owner 维度。 */
+/** 2026-09-29 新增：零件 owner 维度文件列表共享 query 键。
+   * 单请求 owner 全量，computed 内按 kind 桶。失效粒度 = owner 维度。 */
   partFilesList: (ownerId: string) => ['part-files', 'list', ownerId] as const,
   /** 2026-09-29 新增：part-files 域前缀 —— 上传 / 删除完成后调用方通过
    *  qc.invalidateQueries({ queryKey: qk.partFilesPrefix }) 失效整个 part-files
@@ -115,30 +117,17 @@ export const qk = {
    *  qc.invalidateQueries({ queryKey: qk.partBatchesPrefix }) 失效整个 part-batches
    *  域（任意 partId 形态都会命中）。 */
   partBatchesPrefix: ['part-batches'] as const,
-  /** 2026-09-29 新增：待下发批次列表键工厂 —— list / 单参数形态（沿 processesList 同形）。
-   *  Consumer：usePendingBatchesQuery（在 src/composables/queries/usePendingBatchesQuery.ts）。 */
-  pendingBatchesList: (params: ListPendingBatchesParams) =>
-    ['pending-batches', 'list', params] as const,
   /** 2026-09-29 新增：com 域 union-list 列表键 —— 零件一览页主查询
    *  （src/views/parts/list/composables/usePartsListQuery.ts）切换到
    *  GET /api/v2/com/union-list 后消费此键。params 内 row_type 必填。
-   *  2026-09-29 修订：根命名空间沿用 'parts' 而非 'com'——union-list 端点虽在
-   *  com 域路由下，但 TanStack Query 的 partialMatchKey 仅在同根命名空间内
-   *  前缀匹配；原 ['com', 'union-list', params] 无法被 ['parts'] 前缀命中，
-   *  导致 7 个 part 域 mutation（usePartDispatch / usePendingDispatch /
-   *  usePartInlineEdit 40901 路径）失效后 union-list 缓存持续 stale。
-   *  改用 ['parts', 'union-list', params] 后 qk.partsPrefix 仍是单一失效源。 */
+   *  根命名空间取 'parts' 而非 'com'：TanStack Query 的 partialMatchKey 只在同根
+   *  命名空间内前缀匹配，挂 'com' 下会让 qk.partsPrefix 的一把全刷捎带不上本查询
+   *  ⇒ part 域 7 个 mutation 失效后 union-list 缓存持续 stale。 */
   unionList: (params: UnionListParams) => ['parts', 'union-list', params] as const,
   /** 2026-09-29 修订：union-list 缓存身份已与 parts 域合并，unionPrefix 与
    *  partsPrefix 等价；保留命名仅为未来 com 域自有写操作（如非 part 维度
    *  union 写入）做扩展位 —— 实际失效调用方继续走 qk.partsPrefix。 */
   unionPrefix: ['parts', 'union-list'] as const,
-  /** 2026-09-29 新增：pending-batches 域前缀 —— dispatch 完成后调
-   *  qc.invalidateQueries({ queryKey: qk.pendingBatchesPrefix }) 失效整个域
-   *  （任意 params 形态的 list 都会命中）。同时触发 partsPrefix 跨域失效
-   *  （usePendingDispatch.ts 集中编排）。2026-09-30 修复：去掉 processesPrefix ——
-   *  下发批次不改变工序列表，失效它只会多打一次 processes 请求。 */
-  pendingBatchesPrefix: ['pending-batches'] as const,
   // ============================================================
   // 2026-10-01 新增：programming 域（「待编程一览」页）+ shelves 域（生产货架下拉）
   // queryKey 工厂。
@@ -171,13 +160,13 @@ export const qk = {
   shelvesList: (params: ListShelvesParams) => ['shelves', 'list', params] as const,
   /** 2026-10-02 新增：货架↔工序映射全集键（GET /prod/shelf-processes，单条无 params）。
    *  后端 handler 不接 Query extractor，一次返全部 active 映射的**扁平行**（一行一个
-   *  (货架, 工序) 对），故键退化为常量键（与 workerPoolCounts 同形），不随任何
+   *  (货架, 工序) 对），故键退化为常量键（与 productionQueueSnapshot 同形），不随任何
    *  候选源变化。10 处 useShelfProcessFilter 实例共用本键 ⇒ 30s 窗口内只发一次请求
    *  （该窗口有 Q6「卸载 → 立即重挂仍不重发」的用例实证；Q5 证的只是同 tick 并发
    *  挂载的在飞请求合并）。 */
   shelfProcessMappings: ['shelf-process-mappings'] as const,
   /** 2026-10-02 新增：货架↔工序映射域前缀 —— 与 shelfProcessMappings 同值（键已是
-   *  常量，前缀即自身，沿 workerPoolCountsPrefix 同形）。唯一写点
+   *  常量，前缀即自身，沿 productionQueueSnapshotPrefix 同形）。唯一写点
    *  setShelfProcesses（ShelfList.vue）成功后调 invalidateShelfProcessMappingsQuery(qc)
    *  —— 本域**不是**「跨页面写操作无法穷举」那种情形：全仓写点只有这一个，10 个读点
    *  全是 useShelfProcessFilter，补失效的成本近乎零。 */
@@ -210,84 +199,75 @@ export const qk = {
   workTypeProcesses: (workTypeId: string) => ['work-types', 'processes', workTypeId] as const,
   workTypeProcessesPrefix: ['work-types', 'processes'] as const,
   // ============================================================
-  // 2026-09-30 新增：pool 域 queryKey 工厂（后端 worker-pool → pool 路径收敛后
-  // 前端同步改名）—— 生产队列 Tab 懒加载 + 数据层 TanStack Query 化
-  // （CLAUDE.md 2026-09-30 硬约束）的共享基础数据层。
+  // 2026-10-08 新增：production-queue 域（「生产队列」页）queryKey 工厂。
   //
-  // 三个 list / state query + 对应 prefix：
-  //   - workerPoolCounts：全工序 batch 计数（eager，30s staleTime 去重缓存），
-  //     tab 标题 (N) 徽标 + 「待下发」Tab 工序卡 badge 数据源，跨 tab 共享；
-  //   - workerPoolByProcess：单工序候选池详情（lazy，仅 tab 首次激活时拉），
-  //     与 WorkerPoolTab 共享 cache identity；
-  //   - workerPoolStateByWorker：单 worker state（held_batches + max_held），
-  //     WorkerColumn 自管 query 拉取 + 跨 tab 共享。
+  // 根命名空间取 `production-queue`，与后端 URL 段 `/prod/queue/*` 与视图目录
+  // `views/production/queue/` 对齐，便于按 URL 反查键。**不**挂到 `parts` 前缀下
+  // —— 理由沿本文件 inspection / outsource-pool 两段的取舍：本域的三个读端点与
+  // 零件一览、批次列表**没有共享写点**（本域写操作改的是批次位置 / 状态归属，
+  // 那两个页面消费的是工单级派生视图），挂 parts 下反而会让最热的
+  // `qk.partsPrefix` 一把全刷把队列页的看板缓存全部连带重拉。
   //
-  // 失效规则（2026-09-30 策略变更后已改写，pool 域不再声称「失效即可保证一致性」）：
-  //   - 已显式挂 pool 失效的写点（**不是**全部写点）：
-  //     - moveBatch / autoAllocate 完成后调 invalidateWorkerPoolByProcessAll(qc) +
-  //       invalidateWorkerPoolCountsQuery(qc) + invalidateWorkerStateByWorkerAll(qc)
-  //       （useWorkerQueue.ts 集中编排）；
-  //     - dispatch（含 preview 确认后的真正下发）完成后 usePendingDispatch 集中
-  //       失效四域（pendingBatchesPrefix + partsPrefix + workerPoolByProcessPrefix +
-  //       workerPoolCountsPrefix）+ pool state（workerPoolStatePrefix）。2026-09-30
-  //       修复：原先含 processesPrefix，下发不改变工序列表故移除。
-  //   - 上述两条失效链只覆盖 useWorkerQueue（move / autoAllocate）与
-  //     usePendingDispatch（dispatch）**这两条路径**，prefix 一把全刷也只覆盖它们。
-  //     后端候选池定义 = `status='IN_PROCESS' AND location='PRODUCTION_SHELF'`
-  //     （worker_pool/repo/sql.rs），而其它域的流转端点同样会改这两个
-  //     字段、却**未挂 pool 失效**：
-  //       - delivery 域送检 `batchToInspection`（POST /prod/batches/to-inspection，
-  //         useBulkScanInspect）—— to_inspection_core 接受
-  //         IN_PROCESS+PRODUCTION_SHELF 为合法起点并迁到 INSPECTION+INSPECTION_SHELF，
-  //         即把批次移出候选池；
-  //       - scan 域工人放回 `workerScan` event_type=RETURNED
-  //         （ScanReturnParts）—— service 同事务跑 WorkerPool refill，
-  //         放回即从池里抢批，counts / by-process / state 三域同时变；
-  //       - inspection 域的品检流转（`useInspectionListStore` 的 `toInspectionMutation`
-  //         / `toShipMutation` / `toProcessMutation`）—— 送检把 IN_PROCESS+PRODUCTION_SHELF
-  //         的批次迁到 INSPECTION+INSPECTION_SHELF，即把批次移出候选池；
-  //       - outsource 域收发（useOutsourceSendableList / usePartDetail 的
-  //         receiveFromOutsource / useOutsourceReceivingList）—— send 移出候选池、
-  //         receive 移入候选池；**仍未挂 worker-pool 三域失效**（既存缺口）。
-  //         2026-10-03 起该页改看板（UI 属并行任务，看板侧消费 outsource-pool
-  //         三键）、数据源换成 outsource-pool 三域；看板侧收发
-  //         mutation（useOutsourceBoardMove，并行任务待落地）挂 outsource-pool
-  //         三键 + qk.partsPrefix 失效。
-  //   - 2026-09-30 决策：**不再逐个给这些写点补失效**（要求穷举全仓写点，不可持续）。
-  //     改为把 pool 三域的 staleTime / gcTime 收紧到有限值（30s / 5min）——
-  //     工人送检后切回队列页（操作间隔通常 > 1min）自动 refetch，实时性由有限
-  //     staleTime + WS 事件 / 显式 refetch（WorkerQueueBoard.onRefresh）保证。
-  //     上面的失效调用点是「写完立即看到自己那笔」的优化，不是新鲜度保证。
+  // 三条读键：
+  //   - productionQueueSnapshot：全工序候选数 + 待下发总数（**常量键**，eager），
+  //     工序 tab 标题 (N) / 「待下发」tab 标题 (N) / 右栏工序卡徽标的唯一数据源；
+  //   - productionQueueBoard(processId)：单工序看板（工序元数据 + 工人列
+  //     **内联持有批次与容量** + 候选池），**参数键**（端点按工序分片返回，
+  //     不带 id 会拿上一个工序的缓存冒充当前工序）⇒ 消掉了「每列一个工人 state
+  //     请求」的 N+1，打开一个工序 tab 恒为 1 个请求；
+  //   - productionQueuePending(params)：待下发列表（**参数键**，端点接 limit /
+  //     offset），消费方 useQueueDispatch（「待下发」tab 的左侧列表 + 多选源）。
+  //
+  // 失效规则（本域**不再声称「失效即可保证一致性」**）：
+  //   - 已显式挂失效的写点（**不是**全部写点）：
+  //     - move / auto-allocate 完成后 `useQueueMove` 失效 snapshot + board 前缀
+  //       （前缀全失效：目标工序由后端从批次当前 step 自推，前端拿不到受影响
+  //       processId；一次 auto-allocate 还能同时动多个工人）；
+  //     - dispatch（含 preview 确认后的真正下发）完成后 `useQueueDispatch` 失效
+  //       pending 前缀 + board 前缀 + snapshot 前缀，外加跨域 `qk.partsPrefix`
+  //       （下发把工单迁到 IN_PROCESS + 生产货架，零件一览的派生状态跟着变）；
+  //     - recall 完成后 `useQueueRecall` 失效同一组前缀（同 dispatch 的理由：
+  //       批次可能从任意工序的候选池或任意工人的手里被召回，菜单只带卡片 model）。
+  //   - 上述编排点只覆盖 queue 域自身的写路径。后端候选池 = `IN_PROCESS` +
+  //     `PRODUCTION_SHELF`，而其它域的流转端点同样会改这两个字段却不挂本前缀
+  //     失效：delivery 域送检（`POST /prod/batches/to-inspection`）、scan 域
+  //     工人放回（`workerScan` 同事务跑 refill，放回即从池里抢批）、inspection 域
+  //     品检流转（送检 / 转生产 / 发货）、outsource 域收发。
+  //   - 决策：**不再逐个给这些写点补失效**（要求穷举全仓写点，不可持续）。新鲜度
+  //     由有限 staleTime（30s）+ 本页自身的显式刷新按钮 + 写后失效兜底。
+  //     上面的编排点是「写完立即看到自己那笔」的优化，**不是**新鲜度保证。
   // ============================================================
 
-  /** 全工序 batch 计数（eager 拉取，tab 标题徽标 + 待下发工序卡 badge 数据源）。
-   *  2026-09-30：去 params 维度 —— 后端 `GET /prod/pool/counts` 的 handler
-   *  （worker_pool/handler.rs）只有 `State` + `CurrentUser`，**不接 Query
-   *  extractor**；按 process_id GROUP BY 跨所有货架聚合，没有 shelf 维度。
-   *  故本 queryKey 退化为常量键（与 prefix 同形），不再随 activeShelfId 变化而
-   *  refetch —— 也顺带消除了 WorkerQueueBoard 里 shelfId 的 TDZ 隐患。 */
-  workerPoolCounts: ['worker-pool', 'counts'] as const,
-  /** worker-pool counts 域前缀 —— 写 mutation 完成后
-   *  qc.invalidateQueries({ queryKey: qk.workerPoolCountsPrefix }) 一键全失效。
-   *  2026-09-30：与 `workerPoolCounts` 同值（键已是常量，前缀即自身）。 */
-  workerPoolCountsPrefix: ['worker-pool', 'counts'] as const,
-  /** 单工序候选池详情（lazy，仅 WorkerPoolTab 首次激活时拉）。
-   *  processId 空字符串 → 占位 key（enabled=false 拦挡，queryFn 二次守卫）。 */
-  workerPoolByProcess: (processId: string) => ['worker-pool', 'by-process', processId] as const,
-  /** worker-pool by-process 域前缀 —— 写 mutation 完成后
-   *  qc.invalidateQueries({ queryKey: qk.workerPoolByProcessPrefix }) 一键全失效
-   *  （任意 processId 形态都会命中）。 */
-  workerPoolByProcessPrefix: ['worker-pool', 'by-process'] as const,
-  /** 单 worker state（held_batches + max_held + current_held）。
-   *  2026-10-04：**单键**（workerId 唯一维度）—— WorkerColumn 自管 query 拉取，
-   *  同一 worker 在不同 tab / 不同货架视图下共享同一 cache identity。
-   *  后端 `GET /prod/pool/state` 的出参（held_batches / max_held / current_held /
-   *  capacity_remaining）本就不含货架维度，shelf_id 唯一影响的 pool_count_by_process
-   *  前端零消费，故不进键。 */
-  workerPoolStateByWorker: (workerId: string) => ['worker-pool', 'state', workerId] as const,
-  /** worker-pool state 域前缀 —— `POST /prod/pool/move` 完成后调（POOL↔WORKER
-   *  双向移动都会改变 worker 的 held_batches，故按前缀全刷而非按 worker 精刷）。 */
-  workerPoolStatePrefix: ['worker-pool', 'state'] as const,
+  /** 队列快照（全工序候选数 + 待下发总数，eager 拉取）。
+   *  **常量键**：后端 `GET /prod/queue/snapshot` 不接 Query extractor（无分页、无
+   *  筛选、无 shelf 维度），故键不随任何 tab / 选中态 / 激活货架变化。
+   *  ⚠️ `processes[]` 只含候选数 > 0 的工序 —— 它是**徽标数据源**、不是工序全集；
+   *  右栏「待下发」工序卡仍要与 `useProcessesQuery` 的工序列表 join 才能拿到
+   *  只在列表上出现的 `category` 等字段。 */
+  productionQueueSnapshot: () => ['production-queue', 'snapshot'] as const,
+  /** production-queue snapshot 域前缀 —— 写 mutation 完成后
+   *  qc.invalidateQueries({ queryKey: qk.productionQueueSnapshotPrefix }) 一键全失效。
+   *  与 productionQueueSnapshot 同值（键已是常量，前缀即自身）。 */
+  productionQueueSnapshotPrefix: ['production-queue', 'snapshot'] as const,
+  /** 单工序看板（工序元数据 + 工人列内联持有批次与容量 + 该工序候选池）。
+   *  **参数键**：端点按 process_id 分片返回，不带 id 切 tab 时会命中上一个工序的缓存。
+   *  processId 空字符串 → 占位键（`enabled=false` 闸门 + queryFn 内二次守卫拦掉）。
+   *  消费方 ProcessBoardTab（el-tab-pane `:lazy="true"` ⇒ 首次激活才 mount 才发）。 */
+  productionQueueBoard: (processId: string) =>
+    ['production-queue', 'board', processId] as const,
+  /** production-queue board 域前缀 —— 写 mutation 完成后一把全失效（任意 processId
+   *  形态都命中）。**前缀而非精确键**是唯一正确策略：move 的目标工序由后端从批次
+   *  当前 step 推导、一次 auto-allocate 跨全部工人、一次 dispatch 可能同时改多个
+   *  工序池，调用 onSuccess 时都拿不到「受影响的 processId」。 */
+  productionQueueBoardPrefix: ['production-queue', 'board'] as const,
+  /** 待下发批次列表（`GET /prod/queue/pending`）。**参数键**：端点接 limit / offset，
+   *  键必须随 params 变化才能拿到不同 cache identity（与 partsList / programmingList
+   *  / inspectionQueueList 同形）。 */
+  productionQueuePending: (params: ListQueuePendingParams) =>
+    ['production-queue', 'pending', params] as const,
+  /** production-queue pending 域前缀 —— dispatch / recall 完成后一把全失效
+   *  （任意 params 形态都命中）。 */
+  productionQueuePendingPrefix: ['production-queue', 'pending'] as const,
   // ============================================================
   // 2026-10-03 新增：inspection 域（「待品检」页）queryKey 工厂。
   //
@@ -333,7 +313,7 @@ export const qk = {
    *  无筛选），故键不随任何 tab / 选中态变化。 */
   outsourcePoolCounts: ['outsource-pool', 'counts'] as const,
   /** outsource-pool counts 域前缀 —— 与 `outsourcePoolCounts` 同值（键已是常量，
-   *  前缀即自身，沿 workerPoolCountsPrefix 同形）。 */
+   *  前缀即自身，沿 productionQueueSnapshotPrefix 同形）。 */
   outsourcePoolCountsPrefix: ['outsource-pool', 'counts'] as const,
   /** 单工序看板详情（左「可发送候选批次」+ 右「外协公司列」）。
    *  processId 空串 → 占位键（enabled=false 闸门 + queryFn 二次守卫拦掉）。 */

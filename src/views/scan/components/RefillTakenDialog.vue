@@ -77,7 +77,7 @@
 <script setup lang="ts">
 import { CircleCheckFilled } from '@element-plus/icons-vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
-import type { TakenItemDto } from '@/api/workerPool.contract';
+import type { TakenItemDto } from '@/api/productionQueue.contract';
 
 defineProps<{
   modelValue: boolean;

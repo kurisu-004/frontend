@@ -29,7 +29,7 @@ import type {
   SortDir,
 } from '@/types/parts';
 import type { RepairBatchListResult } from './batch';
-import type { WorkerRefillResultDto } from '@/api/workerPool.contract';
+import type { QueueRefillResultDto } from '@/api/productionQueue.contract';
 
 export interface PartItem {
   id: string;
@@ -410,34 +410,10 @@ export async function placeOnShelf(
 // 历史沿革：原 sendToProgramming / recallToProgramming 在 2026-07-17 PR-F 引入，
 // 2026-08-05 召回工作增加 recallToProgramming；2026-09-29 业务迁移「待编程 Tab 化」后下线。
 
-/** 2026-08-05 召回：ON_SHELF 或 PROGRAMMING → PENDING（Manager；PROGRAMMING 为
- *  历史数据消化场景）。2026-09-29 业务迁移后 PROGRAMMING 状态自该日起被标记为
- *  废弃（无新进入路径），但本端点保留供历史 PROGRAMMING 批次召回。
- *
- *  2026-10-02 迁 prod 域：召回是批次级动作（ON_SHELF/PROGRAMMING 都是批次状态），
- *  路径锚点改为 `{batch_id}`，故 `batch_id` 是路径参数、不再是可选项
- *  ——「缺省按 expect 唯一批次解析」的旧语义已随端点下线。 */
-export interface PartRecallPayload {
-  /** 批次 OCC：t_part_batch.version，取列表项的 `batch_version`；后端必填，缺失 422。
-   *  已知缺口（2026-10-03 登记，未修）同 `PlaceOnShelfPayload.version`：后端
-   *  `RecallToPendingRequest { version, note? }` 的 `version` 无 `#[serde(default)]`，
-   *  而调用方 `usePartDispatch`（召回 mutation）属本轮范围外的 `views/parts/list/**`。
-   *  解阻塞同样**需要后端**先为 `GET /parts` 提供 `batch_id` + `batch_version`
-   *  （两者必须同时补，只补 batch_id 仍 422）；在此之前保持可选。 */
-  version?: number;
-  note?: string | null;
-}
-
-export async function recallToPending(
-  batchId: string,
-  payload?: PartRecallPayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(
-    `/prod/batches/${encodeURIComponent(batchId)}/recall-to-pending`,
-    payload ?? {},
-  );
-  return resp.data;
-}
+// 2026-10-08：召回（`ON_SHELF` / `PROGRAMMING` → `PENDING`）的 api 封装迁到
+// `@/api/productionQueue`（`recallToPending` + `POST /prod/queue/recall`）—— 后端把
+// 召回端点收进 queue 域并把 `batch_id` 从路径参数改成 body 字段，零件域不再是它的
+// 归属地。本文件随之删除 `PartRecallPayload` 与 `recallToPending`。
 
 // 2026-09-30 新增：系统管理员专属「强制完成」—— 绕过状态机将该工单及所有非取消
 // 批次置为 COMPLETED（与正常 `completePart` DELIVERED → COMPLETED 不同）。仅 MANAGER
@@ -602,11 +578,11 @@ export interface WorkerScanOut {
     /** 父装配件 id（仅当 INSPECTED 分支触发父 status 变更时 Some） */
     synced_assembly_id: string | null;
   };
-  /** 同事务 WorkerPoolService::refill 结果。与 `POST /prod/pool/refill` 的出参
-   *  **同一个** rust `RefillResult`（`worker_pool/model.rs`），故直接复用
-   *  `WorkerRefillResultDto`，不另立一份会漂移的本地结构：
+  /** 同事务 queue 域 refill 结果。与 `POST /prod/queue/refill` 的出参
+   *  **同一个** rust `RefillResult`，故直接复用 `QueueRefillResultDto`，
+   *  不另立一份会漂移的本地结构：
    *  `taken[]` 是本次自动给该工人抢到的批次（扫检 / 放回后报工台据此弹窗提示）。 */
-  refill: WorkerRefillResultDto;
+  refill: QueueRefillResultDto;
 }
 
 export async function workerScan(payload: WorkerScanPayload): Promise<WorkerScanOut> {

@@ -14,13 +14,12 @@
 //   这 3 个函数（`getAllShelfProcessMappings` / `getShelfProcesses` /
 //   `setShelfProcesses`）**刻意留在本文件**、不新建 `api/prod/` 子目录：本仓
 //   `src/api/` 的组织约定是**按前端实体扁平放置**，不按后端模块分层。反证有两组：
-//   ① `/prod` 命名空间已被**7 个扁平文件**瓜分（`process.ts` / `worker.ts` /
-//      `workType.ts` / `workerPool.ts` / `pendingBatches.ts` / `processChain.ts` /
-//      `programming.ts`）。其中 `programming.ts` → `/prod/programming/pending` 与
-//      本次的 `/prod/shelf-processes` **完全同构**（文件名 ≠ URL 段）；而
-//      `workerPool.ts` → `/prod/pool/*` 连 URL 段都和文件名不是一个词 —— 可见
+//   ① `/prod` 命名空间已被**6 个扁平文件**瓜分（`process.ts` / `worker.ts` /
+//      `workType.ts` / `productionQueue.ts` / `processChain.ts` / `programming.ts`）。
+//      其中 `programming.ts` → `/prod/programming/pending` 与本文件的
+//      `/prod/shelf-processes` **完全同构**（文件名 ≠ URL 段）—— 可见
 //      「文件名 = URL 段」在本仓**从来不是**规则。建 `api/prod/` 只会把 1 个资源
-//      塞进第 8 处，或引发搬这 7 个文件的巨量 diff。
+//      塞进第 7 处，或引发搬这 6 个文件的巨量 diff。
 //   ② 现有 3 个子目录 `com/` / `files/` / `parts/` 则**全部镜像独占 URL 命名
 //      空间**（`com/unionList.ts` → `/com/union-list`、`files/sts.ts` →
 //      `/files/sts-tmp-keys`、`parts/*` → `/parts/*`）。注意 `files/` 只有 1 个文件、

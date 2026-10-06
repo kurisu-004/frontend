@@ -86,7 +86,8 @@ export interface ListProcessDesignPartsParams {
  *  响应 `{ items, total, limit, offset }` 经 `processDesignPartListResultSchema.parse`
  *  守门（7 个行字段 + 3 个计数字段全部显式声明，见 schemas.ts 的说明）。
  *
- *  Zod 守门**刻意收敛在 api 层**（形态同 api/pendingBatches.ts::dispatchBatches）：
+ *  Zod 守门**刻意收敛在 api 层**（读端点都在 api 层守门；queue 域的读端点守门在
+ *  视图侧 composable，因其 schema 随视图目录走）：
  *  任何调用方都自动受守门，不必各自记得 parse；调用方（store 的 queryFn）**不要**再
  *  parse 一遍 —— Zod 的 parse 返回**深拷贝**，重复 parse 等于每屏数据被校验 + 克隆两遍。 */
 export async function listProcessDesignParts(

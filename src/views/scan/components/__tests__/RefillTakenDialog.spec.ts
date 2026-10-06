@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
 import RefillTakenDialog from '../RefillTakenDialog.vue';
-import type { TakenItemDto } from '@/api/workerPool.contract';
+import type { TakenItemDto } from '@/api/productionQueue.contract';
 
 /** el-dialog 壳 + footer slot、el-button 保留原生 click 透传，与同目录
  *  ReturnConfirmDialog.spec.ts / BatchPickerDialog.spec.ts 的桩手法一致。
@@ -36,7 +36,7 @@ const stubs = {
   'el-icon': { name: 'ElIconStub', template: '<i class="mock-icon"><slot /></i>' },
 };
 
-/** 与后端 `TakenItemDto`（workerPool/model.rs TakenItem）同形。 */
+/** 与后端 `TakenItemDto`（queue 域 model 的 TakenItem）同形。 */
 function taken(over: Partial<TakenItemDto> = {}): TakenItemDto {
   return {
     batch_id: '223628232644100096',

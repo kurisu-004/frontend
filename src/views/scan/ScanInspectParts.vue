@@ -296,7 +296,7 @@ import ShelfPickerDialog from '@/views/scan/components/ShelfPickerDialog.vue';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/scan/components/RefillTakenDialog.vue';
-import type { TakenItemDto } from '@/api/workerPool.contract';
+import type { TakenItemDto } from '@/api/productionQueue.contract';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 
 const router = useRouter();
