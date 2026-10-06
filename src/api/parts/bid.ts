@@ -6,17 +6,12 @@
 
 import { api } from '@/api/http';
 
-/** 采购订单 Excel 中解析出的有效明细行。 */
-export interface PurchaseOrderExcelItem {
-  rowNo: number;
-  lineNo: string;
-  deleted: boolean;
-  drawingNo: string;
-  name: string;
-  deliveryDate: string | null;
-  unitPrice: number | null;
-  shippableQty: number | null;
-}
+// 2026-10-06 删：这里的 PurchaseOrderExcelItem。
+// 它是解析器域类型被放进了 API 层，与本文件头「解析逻辑在 utils/，不归本文件」的
+// 分层约定直接冲突；又与 utils/purchaseOrderExcelParser.ts 的同名接口同构却零
+// 引用，还经 index.ts 的 `export *` 暴露在 `@/api/parts` 桶上 —— 未来有人从 API
+// 层 import 会拿到一个与 parser 解耦的副本，drift 完全不可见。解析结果一律从
+// `@/utils/purchaseOrderExcelParser` 取类型。
 
 /**
  * match-by-excel-items 的单行入参。
@@ -68,6 +63,13 @@ export interface PartBatchOrderInfoUpdateItem {
   part_id: string;
   version: number;
   order_no?: string | null;
+  /**
+   * 三态日期：字符串 = 写入该日期，null = 清空成 NULL，undefined = 不动这一列。
+   * 2026-10-06：前端已在预填处过滤（utils 的 resolveExcelDeliveryDate —— Excel
+   * 交货日期不可识别 / 缺失时退回零件现有值，不发 null 也不发原文），但过滤只覆盖
+   * 预填路径，用户手输的非法值仍会带着走，所以后端逐行校验，不可解析的行按
+   * failed 返回而不是让整批反序列化失败。
+   */
   system_delivery_date?: string | null;
   skip?: boolean;
 }

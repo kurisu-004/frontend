@@ -101,7 +101,15 @@ function parseNumberOrNull(value: unknown): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-function parseDateOrNull(value: unknown): string | null {
+/**
+ * 把单元格值解析成 YYYY-MM-DD；无法识别时**原样透传**，让预览阶段能展示源数据。
+ *
+ * 2026-10-06 导出：解析主链路用 `sheet_to_json({ raw: false })`，Date 单元格会被
+ * 格式化成文本再进来（xlsx 在 read 时就会给日期单元格补 `w`），所以下面的
+ * `instanceof Date` 分支在 parsePurchaseOrderExcel 里目前不可达；保留它是为了
+ * 调用方哪天切 `raw: true` 时不会静默错判，导出则让单测能直接覆盖该分支。
+ */
+export function parseDateOrNull(value: unknown): string | null {
   if (value instanceof Date) {
     const parsed = dayjs(value);
     return parsed.isValid() ? parsed.format('YYYY-MM-DD') : null;
@@ -114,6 +122,57 @@ function parseDateOrNull(value: unknown): string | null {
   // 无法识别时保留原值，让后续预览/匹配阶段能够展示源数据。
   const parsed = dayjs(text);
   return parsed.isValid() ? parsed.format('YYYY-MM-DD') : text;
+}
+
+/** 解析结果里能直接当系统交期用的日期形态：parseDateOrNull 的合格输出。 */
+const USABLE_DELIVERY_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** resolveExcelDeliveryDate 的判定结果。 */
+export interface ExcelDeliveryDatePrefill {
+  /** Excel 值能否直接用作系统交期。false 时必须退回零件现有值。 */
+  usable: boolean;
+  /** usable=false 时给预览行的中文说明（供 warnings 列 tooltip 汇总）；usable=true 时为 null。 */
+  warning: string | null;
+  /**
+   * 候选行的系统交期默认值。usable 时用 Excel 值，否则用 partDeliveryDate
+   * （零件当前已有值，即「不动这一列」）。
+   */
+  prefill: (partDeliveryDate: string | null) => string | null;
+}
+
+/**
+ * 判定 Excel 交货日期能不能直接当作系统交期预填。
+ *
+ * 2026-10-06 新增（MAJOR-1）：parseDateOrNull 对「待定」「2026年8月1日」这类
+ * 无法识别的文本是原样透传的，而 el-date-picker 不会顺手洗掉绑定的 model 值
+ * （它解析失败只把展示用的 parsedValue 置空），于是原文会一路流进
+ * batch-update 的 system_delivery_date —— 后端该字段是三态 NaiveDate，反序列化
+ * 阶段就 400，body 还是纯文本而不是 R 信封，用户已勾选的整批回填全部作废。
+ *
+ * 取舍：不可解析时**不能**映射成 null。CandidateRow.systemDeliveryDate 的语义是
+ * 「要写入的新值」，而 null 在后端三态里等于**清空成 NULL**；把识别不了的
+ * Excel 日期写成 null 会静默抹掉零件上已有的系统交期，比整批 400 更危险。
+ * 所以这里退回零件现有的 system_delivery_date（该行这一列不动），并给该行追加
+ * 一条中文 warning，用户在预览表的「警告」列能看见。
+ *
+ * 注：dayjs 对 2026-02-31 这类溢出日期判 valid（会滚成 03-03），所以真正卡住
+ * 不可用值的是前面的正则 —— dayjs 判定只是纵深防御（dayjs 库换了实现时会兜住）。
+ * 溢出日期也走不到这里：parseDateOrNull 见到它就已经格式化成 03-03 了。
+ */
+export function resolveExcelDeliveryDate(
+  rowNo: number,
+  excelValue: string | null,
+): ExcelDeliveryDatePrefill {
+  const usable =
+    excelValue != null && USABLE_DELIVERY_DATE.test(excelValue) && dayjs(excelValue).isValid();
+  if (usable) {
+    return { usable: true, warning: null, prefill: () => excelValue };
+  }
+  const warning =
+    excelValue == null || excelValue === ''
+      ? `第 ${rowNo} 行未填写交货日期，已保持零件现有系统交期不变`
+      : `第 ${rowNo} 行交货日期「${excelValue}」无法识别，已保持零件现有系统交期不变`;
+  return { usable: false, warning, prefill: (partDeliveryDate) => partDeliveryDate };
 }
 
 function emptyResult(errors: string[] = []): ParsedPurchaseOrder {
