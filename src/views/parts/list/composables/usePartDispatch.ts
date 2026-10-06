@@ -26,8 +26,7 @@
 // 批量编程 action（batchDispatchAction='programming'）一并移除，批量 action 仅
 // 保留 'shelf'。CNC 编程主入口迁到「待编程一览」Tab 页。
 //
-// 2026-10-02 已知缺口（**2026-10-03 订正，仍未修**）：place-on-shelf /
-// recall-to-pending 迁 prod 域后以**批次**为锚，而本页拿不到批次锚点：
+// 已知缺口（place-on-shelf 迁 prod 域后以**批次**为锚，而本页拿不到批次锚点）：
 //   - 数据源：零件一览页自 2026-09-29 起读 `GET /api/v2/com/union-list`
 //     （`usePartsListQuery` 内的 `listUnionItems`，queryKey `qk.unionList`），
 //     出参复用 part 域 `PartListItem`（union-list 与 `GET /parts` 是同一个 VO）。
@@ -43,10 +42,10 @@
 // *_NO_BATCH_HINT 显式报错，让用户知道是数据缺口而不是随机失败。
 
 import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import { useQueryClient, useMutation } from '@tanstack/vue-query';
 import { useRouter } from 'vue-router';
-import { placeOnShelf, recallToPending, forceCompletePart } from '@/api/parts';
+import { placeOnShelf, forceCompletePart } from '@/api/parts';
 import { listShelves } from '@/api/shelves';
 import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
@@ -56,13 +55,10 @@ import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { qk } from '@/composables/queries/keys';
 import { useConfirm } from '@/composables/useConfirm';
 import { usePermissions } from '@/composables/usePermissions';
-// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
-import { useAuthStore } from '@/stores/auth';
 import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
 
-/** 2026-10-02：列表行缺活跃批次 id 时的统一提示（见文件头「已知缺口」）。 */
+/** 列表行缺活跃批次 id 时的统一提示（见文件头「已知缺口」）。 */
 const PLACE_ON_SHELF_NO_BATCH_HINT = '该零件的批次信息缺失，无法下发（列表接口未返回批次）';
-const RECALL_NO_BATCH_HINT = '该零件的批次信息缺失，无法召回（列表接口未返回批次）';
 import type { SelectedRowType } from './usePartBatchSelection';
 
 interface TableRef {
@@ -76,10 +72,7 @@ export interface UsePartDispatchDeps {
   getTable: () => TableRef | null | undefined;
 }
 
-/** 2026-09-21 显式返回类型。
- *  2026-09-29：移除 dispatchMode 编程分支（'cnc' 不再使用，固定 'direct'）；移除
- *  batchDispatchAction 编程分支（'programming' 不再使用，固定 'shelf'）；移除
- *  canRecallToProgramming / onRecallToProgramming（CNC 编程入口已迁出零件一览）。 */
+/** 2026-09-21 显式返回类型。 */
 export interface UsePartDispatchReturn {
   shelves: Ref<Shelf[]>;
   processes: ComputedRef<Process[]>;
@@ -107,8 +100,6 @@ export interface UsePartDispatchReturn {
   batchFilteredProcesses: ComputedRef<readonly Process[]>;
   onOpenBatchDispatch: () => Promise<void>;
   onBatchDispatchConfirm: () => Promise<void>;
-  canRecallToPending: (row: PartListItem) => boolean;
-  onRecallToPending: (row: PartListItem) => Promise<void>;
   /** 2026-09-30 新增：MANAGER 专属「完成」按钮（强制完成工单+所有非取消批次为 COMPLETED）。 */
   forceCompletingMap: Record<string, boolean>;
   canForceComplete: (row: PartListItem) => boolean;
@@ -364,62 +355,11 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     });
   }
 
-  // ============ 召回（2026-08-05）============
-  // 2026-09-26：消费侧禁止解构 store（沿 usePartsListStore 不变量 #3），统一 auth.xxx。
-  // 2026-09-29：删除 canRecallToProgramming / onRecallToProgramming（CNC 编程入口
-  // 已迁出零件一览，recallToProgramming 后端端点 404 下线）。仅保留
-  // canRecallToPending / onRecallToPending。
-  const auth = useAuthStore();
-  // 2026-08-05 召回权限：与后端 POST /parts/{id}/recall-* 一致
-  const canRecallToPendingAuth = auth.hasRole('MANAGER') || auth.hasRole('CLERK');
-
-  /** 召回按钮可见性：与后端 `_resolve_target_batch` expect 保持一致。
-   *  不显式判定 status=='PROGRAMMING'：PROGRAMMING 是 PROGRAMMING DB status；
-   *  行 location 在该态下为 'OFFICE'，自然被排除。 */
-  function canRecallToPending(row: PartListItem): boolean {
-    if (!canRecallToPendingAuth) return false;
-    if (row.row_type === 'ASSEMBLY') return false;
-    // 2026-09-29：history PROGRAMMING 状态零件仍可走「召回(待生产)」路径，与原行为兼容。
-    if (row.status === 'PROGRAMMING') return true;
-    return row.status === 'IN_PROCESS' && row.location === 'PRODUCTION_SHELF';
-  }
-
-  // 2026-09-26（B 任务）：recallToPending mutation —— onSuccess 提示 + invalidate。
-  const recallToPendingMutation = useMutation<
-    unknown,
-    Error,
-    { rowId: string; batchId: string | null }
-  >({
-    mutationKey: ['parts', 'dispatch', 'recall-to-pending'],
-    // 2026-10-02：recall-to-pending 迁 prod 域并以批次为锚（batch_id 是路径参数，
-    // 缺省按活跃批次猜唯一者的旧语义已下线）。
-    mutationFn: ({ batchId }) => {
-      if (!batchId) throw new Error(RECALL_NO_BATCH_HINT);
-      return recallToPending(batchId);
-    },
-    onSuccess: () => {
-      ElMessage.success('已召回为待生产');
-      qc.invalidateQueries({ queryKey: qk.partsPrefix });
-    },
-    onError: (e) => {
-      ElMessage.error(e.message ?? '召回失败');
-    },
-  });
-
-  async function onRecallToPending(row: PartListItem): Promise<void> {
-    const label = row.serial_no || row.drawing_no || row.id;
-    try {
-      await ElMessageBox.confirm(`确认召回「${label}」为待生产？`, '召回确认', {
-        type: 'warning',
-        confirmButtonText: '确认召回',
-        cancelButtonText: '取消',
-      });
-    } catch {
-      // 用户取消
-      return;
-    }
-    recallToPendingMutation.mutate({ rowId: row.id, batchId: row.batch_id ?? null });
-  }
+  // 2026-10-08：召回入口从本文件移除。召回端点由后端收进生产队列域
+  // （`POST /prod/queue/recall`），入口统一收敛到生产队列页的批次右键菜单
+  // （components/queue/useQueueRecall.ts）。零件一览页原有入口一并下线：本页的
+  // 行模型不返回批次锚点（旧路径发出去的请求必然缺 batch_id），且同一批次的召回
+  // 需要 version 做 OCC，列表行给不出两者。留在这里只会是「点了必失败」的死按钮。
 
   // ============ 强制完成（2026-09-30）============
   // 系统管理员专属：绕过状态机把工单+所有非取消批次置为 COMPLETED。
@@ -439,9 +379,9 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     return true;
   }
 
-  // 2026-09-30 新增：per-row loading map（参考 DeliveryNoteList.deliveringMap
-  // 同款 reactive<Record<string, boolean>> 模式；本件 usePartDispatch 内部首次引入
-  // 该模式——之前 placeOnShelf / recallToPending 仅用 dispatchSubmitting /
+  // per-row loading map（沿 DeliveryNoteList.deliveringMap 同款
+  // reactive<Record<string, boolean>> 模式）：下发 / 放上架只有 dispatchSubmitting
+  // 单 bool，强制完成需要按行挂 spinner，故需要 per-row map。
   // batchDispatchSubmitting 单 bool，不存在同款 map。命名 forceCompletingMap
   // 与按钮文案「完成」对齐）。
   const forceCompletingMap = reactive<Record<string, boolean>>({});
@@ -469,9 +409,8 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
   });
 
   async function onForceComplete(row: PartListItem): Promise<void> {
-    // 2026-09-30 修复：label fallback 与 onRecallToPending 保持一致
-    // （serial_no || drawing_no || row.id），不引入 order_no —— order_no 是
-    // PR-F 2026-07-17 命名的「送货单号」，非工单号，不应出现在工单级确认文案里。
+    // label fallback 用 serial_no || drawing_no || row.id，不引入 order_no ——
+    // order_no 是「送货单号」，非工单号，不应出现在工单级确认文案里。
     const label = row.serial_no || row.drawing_no || row.id;
     // 2026-09-30 修复：移除 batchCount —— batch_no 是 per-part 递增的批次序号
     // （types/parts.ts:191），不是批次数。弹窗文案不再含具体批次数，仅承诺
@@ -513,9 +452,6 @@ export function usePartDispatch(deps: UsePartDispatchDeps): UsePartDispatchRetur
     batchFilteredProcesses,
     onOpenBatchDispatch,
     onBatchDispatchConfirm,
-    // 召回（2026-09-29：仅保留 recall-to-pending）
-    canRecallToPending,
-    onRecallToPending,
     // 强制完成（2026-09-30：MANAGER 专属）
     forceCompletingMap,
     canForceComplete,

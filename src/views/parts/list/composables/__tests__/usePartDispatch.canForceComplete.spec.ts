@@ -43,7 +43,6 @@ vi.mock('element-plus', () => ({
 
 vi.mock('@/api/parts', () => ({
   placeOnShelf: vi.fn(),
-  recallToPending: vi.fn(),
   forceCompletePart: vi.fn(),
 }));
 
