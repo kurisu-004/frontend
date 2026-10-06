@@ -17,7 +17,7 @@
 //     Manager（部分操作放开 Clerk，见各函数注释）；
 //   - recall：Manager 或 Clerk。
 //
-// 错误码（跨域共用的 2xxxx / 4xxxx 段，完整表见后端 `docs/api/production/queue.md`）：
+// 错误码（跨域共用的 2xxxx / 4xxxx 段，完整表见后端 `docs/api/queue.md`）：
 //   20120 BIZ_BATCH_INVALID_STATUS   批次状态不允许该操作
 //   20121 BIZ_BATCH_NOT_FOUND        批次不存在
 //   20122 BIZ_BATCH_LOCATION_MISMATCH move 的 from 与批次实际位置不符

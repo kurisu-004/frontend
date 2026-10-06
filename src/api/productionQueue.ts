@@ -43,10 +43,10 @@ import type {
 // 只再导出 `ListQueuePendingParams`：它被共享文件 `composables/queries/keys.ts` 以
 // `@/api/productionQueue` 为路径 import（query 键工厂的入参类型不该让 keys.ts 知道
 // contract 文件名）。**其余契约类型一律从 `@/api/productionQueue.contract` 直接取**
-// —— 视图层 / composable / scan 域共 14 个文件都是这么写的，本仓 `.contract` 文件
-// （`processChain.contract.ts`）也是同一形态：contract 本身就是「给人直接 import 的
-// 契约文件」，api 入口只透传 runtime 函数。曾经这里再导出全部 25 个类型、并注释
-// 「视图层从 api 层入口取类型」，实际零消费方遵守，等于凭空多一层可绕过的入口。
+// —— 仓内 14 个消费文件都是这么写的，本仓 `.contract` 文件（`processChain.contract.ts`）
+// 也是同一形态：contract 本身就是「给人直接 import 的契约文件」，api 入口只透传
+// runtime 函数。再导一层没有消费方，却让读代码的人多一个「该 import api 还是
+// contract」的判断，故不保留。
 export type { ListQueuePendingParams } from './productionQueue.contract';
 
 /** GET /api/v2/prod/queue/snapshot —— 队列页两个徽标的唯一数据源

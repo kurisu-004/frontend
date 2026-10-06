@@ -308,8 +308,9 @@ function useQueuePendingQuery(
 }
 
 /** 失效整个待下发列表域（写操作完成后调；返回 Promise<void> 让调用方可 await）。
- *  调用点：useQueueDispatch.invalidateAll / dispatchMutation.onError、
- *  useQueueRecall（召回把批次送回本列表）、QueueBoard.onRefresh（手动刷新）。 */
+ *  调用点：useQueueDispatch.invalidateAll（dispatchMutation 的 onSuccess 与 onError
+ *  都经它，失败也走全套失效链）、useQueueRecall（召回把批次送回本列表）、
+ *  QueueBoard.onRefresh（手动刷新）。 */
 export function invalidateQueuePendingAll(qc: QueryClient): Promise<void> {
   return qc
     .invalidateQueries({ queryKey: qk.productionQueuePendingPrefix })

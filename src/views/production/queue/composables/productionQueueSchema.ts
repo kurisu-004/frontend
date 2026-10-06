@@ -8,7 +8,7 @@
 //     在 queryFn / mutationFn 里 `xxxSchema.parse(await fetchXxx())` 完成。
 //
 // 契约来源：backend-rust 分支 `feat/queue-domain` 的 `src/modules/prod/queue/`
-// （`docs/api/production/queue.md` 与 `vo/queue.rs` 两处**口径一致**，但该分支尚未
+// （`docs/api/queue.md` 与 `vo/queue.rs` 两处**口径一致**，但该分支尚未
 // 合入 master，别在 master 上找不到就以为契约不存在）。九个端点的 schema 覆盖情况：
 //   - GET  /queue/snapshot                  → queueSnapshotSchema
 //   - GET  /queue/processes/{process_id}    → queueBoardSchema（及其嵌套 4 组）
