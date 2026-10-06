@@ -30,9 +30,7 @@
           <el-icon><Refresh /></el-icon>
           <span>刷新</span>
         </el-button>
-        <el-checkbox v-model="store.ui.autoRefresh" @change="onAutoRefreshToggle">
-          自动刷新（5min）
-        </el-checkbox>
+        <el-checkbox v-model="store.ui.autoRefresh">自动刷新（5min）</el-checkbox>
         <span v-if="store.query.total > 0" class="total-hint">共 {{ store.query.total }} 条</span>
       </div>
     </el-card>
@@ -306,21 +304,11 @@ function onDetail(row: InspectionQueueItem): void {
 store.registerActions({ onPass, onOpenFail, onDetail });
 
 // ============ 手动刷新 / 自动刷新 ============
+// 自动刷新勾选直接 v-model 到 store.ui.autoRefresh，轮询由 store 的 query hook
+// （useInspectionQueueQuery 的 refetchInterval，5min）承担 —— 本壳不再持有 timer，
+// 也不需要 onMounted 起停 / onBeforeUnmount 清理。
 async function onRefresh(): Promise<void> {
   await store.query.fetchList();
-}
-
-let autoRefreshTimer: number | null = null;
-function onAutoRefreshToggle(val: string | number | boolean): void {
-  if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer);
-    autoRefreshTimer = null;
-  }
-  if (val) {
-    autoRefreshTimer = window.setInterval(() => {
-      void store.query.fetchList();
-    }, 300_000);
-  }
 }
 
 // pageSize 变化时 page 复位（照 PartsList.vue 语义，避免停在一个已不存在的页）。
@@ -561,16 +549,10 @@ onMounted(async () => {
   const sortProp = INSPECTION_SORT_KEY_TO_PROP[store.query.sortBy] ?? 'system_delivery_date';
   const sortOrder = store.query.sortDir === 'ASC' ? 'ascending' : 'descending';
   tableRef.value?.tableRef?.sort(sortProp, sortOrder);
-  // 3) 自动刷新开关（布尔在 store，timer 实例在本壳）。
-  if (store.ui.autoRefresh) onAutoRefreshToggle(true);
 });
 
 onBeforeUnmount(() => {
   unsubInspectionScan();
-  if (autoRefreshTimer !== null) {
-    window.clearInterval(autoRefreshTimer);
-    autoRefreshTimer = null;
-  }
   // 不变量 #2：Pinia 单例，离开页面销毁，下次进入重建 fresh 状态。
   store.$dispose();
 });

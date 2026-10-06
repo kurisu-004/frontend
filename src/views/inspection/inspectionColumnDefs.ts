@@ -1,8 +1,9 @@
-// src/utils/inspectionColumnDefs.ts
+// src/views/inspection/inspectionColumnDefs.ts
 //
-// 2026-10-03 新增：待品检一览页的 8 列 ColumnDef 工厂（7 数据列 + 1 操作列）。
-// 形态照 `src/utils/partsListColumnDefs.ts`（零件一览 18 列那份）：cellRender /
-// headerRender 闭包持 raw composable 切片（ref 照写 .value），与消费侧
+// 待品检一览页的 8 列 ColumnDef 工厂（7 数据列 + 1 操作列）。单域专用文件，与页面主
+// 组件（InspectionPending.vue）同层放域根 —— `src/utils/` 只放跨域通用工具。
+// 形态照 `src/views/parts/list/partsListColumnDefs.ts`（零件一览 18 列那份）：
+// cellRender / headerRender 闭包持 raw composable 切片（ref 照写 .value），与消费侧
 // `store.切片.字段` 的解包访问落同一批 ref，无双写分裂。
 //
 // 列集与后端 VO 的关系（2026-10-03 VO 收口）：
@@ -27,7 +28,7 @@ import { RouterLink } from 'vue-router';
 import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { InspectionQueueItem } from '@/api/parts';
-import type { useInspectionColumnFilters } from '@/views/inspection/composables/useInspectionColumnFilters';
+import type { useInspectionColumnFilters } from './composables/useInspectionColumnFilters';
 
 export interface InspectionColumnActions {
   /** 品检通过（弹「品检通过」对话框，带数量）。 */

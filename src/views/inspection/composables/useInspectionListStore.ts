@@ -23,12 +23,11 @@
 //    不写 .value（深代理自动解包）。store 内部闭包持 raw 切片，照写 .value。
 // 4. 不 import vue-router：导航（详情跳 `/parts/{part_id}`）由视图侧持有 router。
 
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { ElMessage } from 'element-plus';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
+import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import {
-  listInspectionBatches,
   toInspection,
   toProcess,
   toShip,
@@ -37,10 +36,6 @@ import {
 } from '@/api/parts';
 import { scanInspection, type ScanTreeOut } from '@/api/inspection';
 import { qk } from '@/composables/queries/keys';
-import {
-  inspectionQueueListResultSchema,
-  type InspectionQueueListResultSchema,
-} from '@/composables/queries/schemas';
 import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { useListFilterPersist } from '@/composables/useListFilterPersist';
@@ -57,11 +52,12 @@ import type { Process } from '@/types/process';
 import {
   buildInspectionColumnDefs,
   type InspectionColumnActions,
-} from '@/utils/inspectionColumnDefs';
+} from '../inspectionColumnDefs';
 import {
   useInspectionColumnFilters,
   type InspectionSearchState,
 } from './useInspectionColumnFilters';
+import { useInspectionQueueQuery } from './useInspectionQueueQuery';
 
 /** 2026-10-03：品检通过（`POST /prod/batches/{batch_id}/to-ship`）的 mutation 入参。
  *  `label` 只用于拼成功提示（serial_no || drawing_no），不参与请求。 */
@@ -146,6 +142,17 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   // 「store 实例化即用默认 search 自动 fetch + restoreState 后用持久化 search 再 fetch」
   // 的双 fetch（与 usePartsListQuery 同一设计点）。
   const restored = ref(false);
+  // 自动刷新布尔（5min 轮询，由 useInspectionQueueQuery 的 refetchInterval 承担定时器；
+  // 视图不自建 window 定时器）。2026-10-03 起不再持久化：旧版的持久化 deps 形如
+  // { search, autoRefresh }，与新的 { search, sortBy, sortDir, pageSize } 快照 shape
+  // 不兼容，恢复会整份被丢弃。
+  //
+  // ⚠️ 为什么塞进 ui 切片而不是摆在 store 根上：Pinia 的 setup store 在**同一 pinia 内
+  //   `$dispose()` 后重建**时，会把残留的 `pinia.state.value[storeId]` 当 initialState
+  //   回填进新的 ref（state hydration）。根级 ref 会被上一个页面实例的值「复活」，
+  //   而嵌套在普通对象里的 ref 不会（整个对象被新实例替换）。放切片里 ⇒ $dispose 后
+  //   一定是 false，行为可预期。
+  const uiAutoRefresh = ref(false);
 
   /** search + 分页 + 排序 → queryKey params 的**唯一**转换点。 */
   function buildParams(): ListInspectionQueueParams {
@@ -165,27 +172,16 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     };
   }
 
-  const listQuery = useQuery<
-    InspectionQueueListResultSchema,
-    Error,
-    InspectionQueueListResultSchema,
-    ReturnType<typeof qk.inspectionQueueList>
-  >({
-    queryKey: computed(() => qk.inspectionQueueList(buildParams())),
-    // params 从 queryKey 读，不闭包捕获 buildParams() 的 snapshot（否则 search /
-    // 排序变化后 queryFn 仍发旧参数）。
-    queryFn: async ({ queryKey }) => {
-      const params = queryKey[2] as ListInspectionQueueParams;
-      return inspectionQueueListResultSchema.parse(await listInspectionBatches(params));
-    },
+  // ============ 主查询 ============
+  // useQuery 段外提成同域 hook（useInspectionQueueQuery）：queryKey / queryFn / Zod 守门
+  // （`inspectionQueueListResultSchema.parse`）/ 轮询 / 错误桥接都在 hook 内，本 store
+  // 只递 params 与两个开关（enabled 闸门 + 自动刷新）。
+  const listQuery = useInspectionQueueQuery({
+    params: computed(() => buildParams()),
     enabled: restored,
-    placeholderData: keepPreviousData,
+    autoRefresh: uiAutoRefresh,
   });
-
-  /** 2026-10-03：refetch 别名（写操作后 / 手动刷新 / 测试驱动都走它，不重写 queryKey）。 */
-  async function fetchList(): Promise<void> {
-    await listQuery.refetch();
-  }
+  const { fetchList } = listQuery;
 
   const items = computed<InspectionQueueItem[]>(() => listQuery.data.value?.items ?? []);
   // 后端 total 是 serialize_i64 的 JSON string ⇒ 边界 Number()（分页组件要 number）。
@@ -285,10 +281,8 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
     restored.value = true;
   }
 
-  // useQuery 的错误不在 setup 抛错，走 watch 桥接弹 ElMessage。
-  watch(errorMsg, (msg) => {
-    if (msg) ElMessage.error(msg);
-  });
+  // useQuery 的错误不在 setup 抛错，由 useInspectionQueueQuery 内的 watch 桥接弹
+  // ElMessage（守门点与错误桥接同在 query hook，本 store 不重复弹）。
 
   const query = {
     search,
@@ -608,17 +602,10 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   }
 
   // ============ 切片：ui（视图级开关）============
-  // 自动刷新布尔放这里，timer 实例由视图持有（与旧版一致：store 不知道定时器）。
-  // 2026-10-03 不再持久化：旧版的持久化 deps 形如 { search, autoRefresh }，与新的
-  // { search, sortBy, sortDir, pageSize } 快照 shape 不兼容，恢复会整份被丢弃。
-  //
-  // ⚠️ 为什么塞进切片而不是摆在 store 根上：Pinia 的 setup store 在**同一 pinia 内
-  //   `$dispose()` 后重建**时，会把残留的 `pinia.state.value[storeId]` 当 initialState
-  //   回填进新的 ref（state hydration）。根级 ref 会被上一个页面实例的值「复活」，
-  //   而嵌套在普通对象里的 ref 不会（整个对象被新实例替换）。放切片里 ⇒ $dispose 后
-  //   一定是 false，行为可预期。
+  // 自动刷新开关（布尔；轮询定时器归 useInspectionQueueQuery 的 refetchInterval，
+  // 视图不再持有 timer，也不需要 onMounted/onBeforeUnmount 配对清理）。
   const ui = {
-    autoRefresh: ref(false),
+    autoRefresh: uiAutoRefresh,
   };
 
   return {

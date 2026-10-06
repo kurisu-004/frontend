@@ -165,7 +165,7 @@ onMounted(() => {
   gap: 4px;
 }
 
-// 列定义在 src/utils/inspectionColumnDefs.ts 里用 h() 造的单元格节点（空值占位 /
+// 列定义在 src/views/inspection/inspectionColumnDefs.ts 里用 h() 造的单元格节点（空值占位 /
 // 名称链接 / 批次等宽 chip）。它们不在本组件模板的渲染输出里 ⇒ scoped 选择器带不上
 // scopeId，必须用 :deep() 才能命中（scoped 写法会静默失效）。
 :deep(.muted) {

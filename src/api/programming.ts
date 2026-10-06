@@ -17,18 +17,20 @@
 //   `deserialize_i64_opt` 解析，数字或字符串都收，但空串会触发 400
 //   VALIDATION_ERROR ⇒ 前端一律经 `cleanParams` 剥掉空串 / undefined。
 //
-// Zod 守门理由：响应经 `pendingProgrammingListResultSchema.parse` 校验 ——
-// 沿 CLAUDE.md §M-4（Zod 默认 strip 模式缺字段静默丢弃 = 校验形同虚设），
-//   ProgrammingItem 的 13 个字段在 schema 内全部显式声明，后端漏返 / 漂移立即抛
-//   ZodError，而不是让表格静默少列显示。
+// Zod 守门位置：**queryFn**（`usePendingProgrammingQuery`，CLAUDE.md
+// 「TanStack Query → queryFn Zod 守门」）。本层只负责发请求 + 给返回值标类型，
+// 不做 parse：
+//   - 守门点跟着 query hook 走，schema 已随它归位到域内
+//     （views/cnc/composables/pendingProgrammingSchema.ts），不再从 api 层
+//     反向引用一个全局 schema 文件；
+//   - parse 返回**深拷贝**，api 层 parse 一次 + queryFn 再 parse 一次等于每屏数据
+//     被校验并克隆两遍。
+// 标注用的类型同样来自域内 schema 的 z.infer（`PendingProgrammingListResultData`）。
 //
 // 业务端点统一走 `api`（baseURL `/api/v2`）。
 
 import { api, cleanParams } from '@/api/http';
-import {
-  pendingProgrammingListResultSchema,
-  type PendingProgrammingListResultData,
-} from '@/views/cnc/composables/pendingProgrammingSchema';
+import type { PendingProgrammingListResultData } from '@/views/cnc/composables/pendingProgrammingSchema';
 
 /** `GET /api/v2/prod/programming/pending` 入参形态（rust ListPendingQuery）。
  *
@@ -68,17 +70,12 @@ export interface ListPendingProgrammingParams {
  *  「同一个出参两种叫法」让后来者猜该用哪个。 */
 
 /** GET /api/v2/prod/programming/pending —— 拉取待编程（/ 已编程）零件列表。
- *  响应经 Zod parse 守门（见文件头「Zod 守门理由」）。
- *
- *  2026-10-01 review 第 1 轮 M-2：守门**刻意收敛在本层**（形态同
- *  api/pendingBatches.ts::dispatchBatches）—— 任何调用方都自动受守门，不必各自
- *  记得 parse；调用方（如 usePendingProgrammingStore 的 queryFn）**不要**再 parse
- *  一遍，Zod 的 parse 返回深拷贝，重复 parse 等于每屏数据被克隆两遍。 */
+ *  响应**不在本层 parse**：守门在 queryFn（见文件头「Zod 守门位置」）。 */
 export async function fetchPendingProgramming(
   params: ListPendingProgrammingParams = {},
 ): Promise<PendingProgrammingListResultData> {
-  const resp = await api.get<unknown>('/prod/programming/pending', {
+  const resp = await api.get<PendingProgrammingListResultData>('/prod/programming/pending', {
     params: cleanParams(params),
   });
-  return pendingProgrammingListResultSchema.parse(resp.data);
+  return resp.data;
 }

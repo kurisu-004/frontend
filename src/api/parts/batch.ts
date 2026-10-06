@@ -12,7 +12,7 @@
 // 运行时不会产生 ESM 循环。
 
 import { api, cleanParams } from '@/api/http';
-import { inspectionQueueListResultSchema } from '@/views/inspection/composables/inspectionSchema';
+import type { InspectionQueueListResultData } from '@/views/inspection/composables/inspectionSchema';
 import type { InspectionSortKey } from '@/types/inspection';
 import type { FileBinding } from '@/types/part_file';
 import type { SortDir } from '@/types/parts';
@@ -467,14 +467,10 @@ export interface InspectionQueueItem {
   l1_customer_name: string | null;
 }
 
-export interface InspectionQueueListResult {
-  items: InspectionQueueItem[];
-  // total / limit / offset 与 batch_id / part_id / customer_id 一样是
-  // `serialize_i64` 的 JSON string 形态（雪花 ID 防 JS 精度截断）。
-  total: string;
-  limit: string;
-  offset: string;
-}
+// 分页信封不另起一份手写声明：形状 = `InspectionQueueItem[]` + 三个 JSON string 计数，
+// 与域内 schema 的 z.infer（`InspectionQueueListResultData`）逐字段等价 —— 两份声明
+// 等价时只会有「改了其中一份」的漂移风险，故单点由 schema 派生（见
+// listInspectionBatches 的返回类型标注）。
 
 /** `GET /prod/batches/inspection` 的 Query 入参。
  *
@@ -502,20 +498,25 @@ export interface ListInspectionQueueParams {
 
 /** 待品检队列（`GET /api/v2/prod/batches/inspection`，判据 `status='INSPECTION'`）。
  *
- *  2026-09-30：Zod 守门（M-1 同形态）。item schema 用 `.strict()`，后端若误把 `id`
- *  字段加进响应（regression）或漏 part_id 等核心字段，立刻抛错而非默认 strip 静默
- *  丢；与 schemas.spec.ts 的 guard 配套。
- *  2026-10-03：出参换成 13 字段精简 VO（`InspectionQueueItem`），入参换成
- *  `ListInspectionQueueParams`（三个 ILIKE 子串 + 系统交期区间 + 服务端排序）。
- *  路径不变（`/prod/batches/inspection`，2026-10-02 由 `/parts/inspection-batches`
- *  迁入 prod 域）。 */
+ *  Zod 守门在 **queryFn**（`views/inspection/composables/useInspectionQueueQuery`，
+ *  schema 同居域内 `views/inspection/composables/inspectionSchema.ts`）：本层只发请求
+ *  + 标注返回类型，不 parse（parse 返回深拷贝，多一层等于每屏数据被校验并克隆两遍）。
+ *  item schema 用 `.strict()`，后端若误把 `id` 字段加进响应（regression）或漏 part_id
+ *  等核心字段，queryFn 的 parse 立刻抛错而非默认 strip 静默丢。
+ *
+ *  出参是 13 字段精简 VO（`InspectionQueueItem`），入参是 `ListInspectionQueueParams`
+ *  （三个 ILIKE 子串 + 系统交期区间 + 服务端排序）。路径不变（`/prod/batches/inspection`，
+ *  2026-10-02 由 `/parts/inspection-batches` 迁入 prod 域）。
+ *
+ *  返回类型标注取域内 schema 的 z.infer，与 `InspectionQueueItem`（本文件保留的手写
+ *  行类型，被列定义 / 表格 / 扫码选行共用）结构一致，故不需要桥接 cast。 */
 export async function listInspectionBatches(
   params: ListInspectionQueueParams = {},
-): Promise<InspectionQueueListResult> {
-  const resp = await api.get<unknown>('/prod/batches/inspection', {
+): Promise<InspectionQueueListResultData> {
+  const resp = await api.get<InspectionQueueListResultData>('/prod/batches/inspection', {
     params: cleanParams(params),
   });
-  return inspectionQueueListResultSchema.parse(resp.data) as InspectionQueueListResult;
+  return resp.data;
 }
 
 // ============ inspection to-XXX 体系批量（2026-08-28 后端路线 B 重构）==============

@@ -1,7 +1,7 @@
 // src/views/cnc/pendingProgrammingColumnDefs.ts
 //
 // 2026-10-01 新增：从 PendingProgrammingList.vue 抽出「待编程一览」8 列 ColumnDef
-// 工厂（照 src/utils/partsListColumnDefs.ts 的 factory 形态：deps 注入、返回
+// 工厂（照 src/views/parts/list/partsListColumnDefs.ts 的 factory 形态：deps 注入、返回
 // ColumnDef[]），避免页面 store 文件膨胀。
 //
 // 为什么单独成文件：列定义含 5 个 cellRender 闭包（序列号 / 名称 / CNC 程序 /
