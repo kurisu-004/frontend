@@ -4,7 +4,21 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 ## API 文档路径
 
-后端主仓在 `~/Code/hsh-erp/backend-rust`（Rust + axum + sqlx）。所有后端契约维护在 `~/Code/hsh-erp/backend-rust/docs/api/`（按域切分：`auth.md` / `users.md` / `delivery-notes.md` / `delivery-groups.md` / `websocket.md` / `index.md` 通用约定）。需要查后端接口时直接 `Read` 对应文件，不要翻后端源码反推。
+后端主仓在 `~/Code/hsh-erp/backend-rust`（Rust + axum + sqlx）。后端契约的载体是**代码注释**，`docs/api/` 只对少数几个域做了整域契约文档（2026-10-07 盘点，`ls backend-rust/docs/api/` 复核）：
+
+| 文档 | 覆盖域 |
+|---|---|
+| `docs/api/dashboard.md` | `dashboard` 大屏聚合（3 个只读 HTTP 端点 + `/ws/dashboard` 的 WS 首帧与增量） |
+| `docs/api/programming.md` | `prod::programming` 待编程一览 |
+| `docs/api/inspection.md` | `prod::inspection` 待品检（队列列表 + 扫码三层树） |
+
+**其余域没有 `docs/api/` 文档**（`part` / `prod::batch` / `iam` / `shelf` / `outsource` / `delivery_note` / `assembly` / `wx` / `statistics` / `files` / `cnc_program` …），契约载体是代码注释。查接口按这条路径走：
+
+1. **先查 `docs/api/` 清单**（`ls backend-rust/docs/api/`）有没有该域的文档 —— 有就直接 `Read`，它是整域契约（端点表 / 逐字段 / 口径表 / 错误码 / 前端配套清单）。
+2. **没有就去该域的 `mod.rs` 模块 doc**（`src/modules/<域>/mod.rs` 顶部的 `//!` 注释块）：域范围、端点分组、路由硬切与关键取舍都写在这里。`prod` 是容器域，子域要看 `src/modules/prod/<子模块>/mod.rs`（如 `prod/batch`、`prod/inspection`）。个别域的模块 doc 很薄（`iam` 只有一行），那就下钻该域的 `handler` / `service`。
+3. **字段级细节看 `vo` 与 `repo` 的文件头**：`vo`（出参，`Serialize` 侧）与 `repo`（SQL 真源 + 胖 trait）的模块 doc 按端点语义分组列了字段与口径，再细看逐字段 / 逐函数的 doc 注释。
+
+⚠️ **引用路径前先确认目标存在** —— 不要凭印象 `Read` 一个 `docs/api/` 下的文件，那条路径下的文档只有上表这 3 份。
 
 ## 主题色
 
@@ -117,7 +131,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - **URL 用模块级 `shallowRef<string | undefined>` + 显式 `syncWsUrl()`，不用 `computed`**（computed 会缓存住旧 token，logout→重登后仍握吊销 token → `40105` 死循环）。
 - **`undefined` 是「无 token 不要连」的哨兵**。禁止无 token 时拿裸 URL 握手（后端必回 `40100`，是无意义重试刷屏的来源）。
 - **重试不封顶**（`retries: -1`，退避 1s→10s 封顶），失败日志前 3 次完整诊断、之后每 30 次一行。WS 是 dashboard 唯一更新通道，封顶重试会让页面静默停更。诊断输出：脱敏 URL（`token=***`）/ closeCode + reason / hadErrorEvent / tokenExpired。
-- **关闭码分流**（语义表权威来源是后端 `docs/api/websocket.md`）：`1000` / `1001` / `1006` / `1011` / `1012` → 继续无限重试；`4001`（会话在连接期间失效）→ **停重连 + 清 session + 走登出**；`4003`（慢消费方丢了 n 条事件）→ 继续重试 **+ 派发 `dashboard:full-refetch` 立即全量 invalidate**（该事件由 `views/dashboard/composables/useDashboardInvalidation.ts` 接收；必须走立即路径而非 500ms 防抖，且重连首帧 snapshot 在 `dispatch()` 里被 no-op 丢弃、Query 无轮询，丢的事件没有补偿通道）。
+- **关闭码分流**（语义载体是后端代码注释，`docs/api/` 下没有关闭码语义表 —— `4001` 的判定收在 `src/modules/dashboard/handler.rs` 的纯函数 `reauth_close_code`（鉴权类错误码 → `4001 auth expired`，其余一律 `1011`），`1011` / `1012` / `4003` 见该文件内各 `close_with(&mut sender, <code>, …)` 发出点旁的注释；`docs/api/dashboard.md` 只覆盖 `4003 lagged` 一条，不是语义表）：`1000` / `1001` / `1006` / `1011` / `1012` → 继续无限重试；`4001`（会话在连接期间失效）→ **停重连 + 清 session + 走登出**；`4003`（慢消费方丢了 n 条事件）→ 继续重试 **+ 派发 `dashboard:full-refetch` 立即全量 invalidate**（该事件由 `views/dashboard/composables/useDashboardInvalidation.ts` 接收；必须走立即路径而非 500ms 防抖，且重连首帧 snapshot 在 `dispatch()` 里被 no-op 丢弃、Query 无轮询，丢的事件没有补偿通道）。
 - **分层禁令**：WS 层**禁止** import `stores/auth`、`vue-router`、`@tanstack/vue-query`，全部走 CustomEvent 解耦。
 - **`4001` 只在已建立的连接上有效**，握手阶段的鉴权失败只会表现为 `1006`（后端 upgrade 前直接回 HTTP `401`，浏览器 WS API 不暴露握手期 status）。所以会话真死的最终兜底是 HTTP 侧 `40105 → auth:logout`，不是 WS 侧的 `4001`；也**不要**加「握手失败几次就登出」的启发式，那会把代理 / 后端故障误判成会话失效。
 - **dev 环境必须有 `/ws` 反代**（`vite.config.ts` `server.proxy`）。Vite 8 的 dev upgrade 监听器只对匹配到的 proxy context 转发，缺了表现为「页面数据正常但控制台一直刷 WS 报错」。生产 / 预发由 nginx 的 `location ^~ /ws/` 负责。
@@ -146,4 +160,4 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 ## 已知风险
 
-- 依赖 `xlsx@0.18.5` 有原型污染 + ReDoS 高危漏洞（npm 官方无修复版本）。仅用于内部只读 Excel 解析（parser / 视图已统一收口，不执行公式宏），攻击面可控，后续迁 SheetJS CDN 版或 exceljs。详见 [`docs/08-known-risks/dependency-risks.md`](./docs/08-known-risks/dependency-risks.md)。
+- 依赖 `xlsx@0.18.5` 有原型污染 + ReDoS 高危漏洞（npm 官方无修复版本）。仅用于内部只读 Excel 解析（parser / 视图已统一收口，不执行公式宏），攻击面可控，后续迁 SheetJS CDN 版或 exceljs。
