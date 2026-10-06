@@ -221,7 +221,9 @@ export const partSchema = z.object({
    *  后端 VO 对齐，不承担任何扫码台职责。
    *
    *  ⚠️ 已知不对称：本 VO 同样恒返两键（`PartListItem` 的两个字段也都没有
-   *  `skip_serializing_if`），按 `pendingProgrammingItemSchema` 的同款理由本该
+   *  `skip_serializing_if`），按
+   *  `src/views/cnc/composables/pendingProgrammingSchema.ts::pendingProgrammingItemSchema`
+   *  的同款理由本该
    *  也声明成必填 + 可空。**当前未改**：改必填会让 `schemas.spec.ts` /
    *  `usePartsListStore.spec.ts` 等共用 fixture 的用例变红，fixture 是跨 spec 共享
    *  对象，改动面超出注释订正的合理半径。补齐留待单独一轮。
@@ -232,8 +234,9 @@ export const partSchema = z.object({
    *  null** ⇒ 这两处恒走 `PLACE_ON_SHELF_NO_BATCH_HINT` / `RECALL_NO_BATCH_HINT`
    *  显式报错分支（2026-10-02 登记的已知缺口，见 usePartDispatch 文件头）。所以
    *  缺键与否**不改变运行时行为**，`.optional()` 真正丢掉的是「后端删键时报错」
-   *  这一层契约守门（区别于 pendingProgrammingItemSchema：那边的读点是**按钮可用性
-   *  判据**，缺键会静默让全表下发按钮恒 disabled，是真症状）。
+   *  这一层契约守门（区别于
+   *  src/views/cnc/composables/pendingProgrammingSchema.ts::pendingProgrammingItemSchema：
+   *  那边的读点是**按钮可用性判据**，缺键会静默让全表下发按钮恒 disabled，是真症状）。
    *
    *  扫码台 PICK_UP 的数据源 `listPartsByWorkTypeAllShelves` **不过本 schema**：它的行
    *  由后端填了批次锚点，走本文件末尾的 `scanPartRowSchema`（那边 `batch_id` /
@@ -243,7 +246,7 @@ export const partSchema = z.object({
   batch_version: z.number().nullable().optional(),
   batch_no: z.number().nullable().optional(),
   batch_quantity: z.number().nullable().optional(),
-  // 2026-09-28 修复：兼容不返 row_type 的端点（后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts 始终返 'PART' | 'ASSEMBLY'；但工艺制定等旧端点仍可能缺该字段）。2026-10-01 备注：唯一曾缺该字段的 pending-programming 端点已下线（「待编程一览」数据源迁到 prod 域 GET /prod/programming/pending，其出参走独立的 pendingProgrammingItemSchema，不复用 partSchema），本 default 保留兼容其余历史端点。
+  // 2026-09-28 修复：兼容不返 row_type 的端点（后端 modules/part/service/crud.rs::list_parts 真正合并后，GET /parts 始终返 'PART' | 'ASSEMBLY'；但工艺制定等旧端点仍可能缺该字段）。2026-10-01 备注：唯一曾缺该字段的 pending-programming 端点已下线（「待编程一览」数据源迁到 prod 域 GET /prod/programming/pending，其出参走 src/views/cnc/composables/pendingProgrammingSchema.ts 的独立 schema，不复用 partSchema），本 default 保留兼容其余历史端点。
   row_type: z.enum(['PART', 'ASSEMBLY']).default('PART'),
   // 2026-10-05 新增：所属装配件 id（雪花 ID 字符串）。`GET /com/union-list` 的
   // PART / PART_FLAT 段恒返该键：t_part 行的值 = 父装配件 id，独立零件行为 null
@@ -626,92 +629,6 @@ export const pendingBatchListResultSchema = z.object({
 });
 
 export type PendingBatchListResultSchema = z.infer<typeof pendingBatchListResultSchema>;
-
-// ============================================================
-// 2026-10-01 新增：待编程一览（prod 域 programming）schema —— 守门
-// `GET /api/v2/prod/programming/pending`。
-//
-// 端点迁移背景：「待编程一览」页数据源从 part 域
-// `GET /parts/pending-programming`（恒返空，2026-10-01 已删前端 wrapper）切到 prod 域
-// `GET /prod/programming/pending`（后端同期新增，backend-rust
-// src/modules/prod/programming/mod.rs）。出参从 PartListItem 换成 ProgrammingItem。
-//
-// ProgrammingItem 15 字段全声明（沿 CLAUDE.md §M-4 strip 陷阱 —— Zod 默认 strip
-// 模式会让缺字段静默丢弃，必填字段漏声明 = 整份校验形同虚设）：
-//   id (雪花 ID string) / version (part 级乐观锁 i32) / serial_no (nullable) /
-//   name / drawing_no / quantity (i32) / status (String，语义同 OrderStatus 但
-//   不锁字面量，与 partBatchSchema.status 同约定) / is_urgent /
-//   planned_delivery_date (string) / system_delivery_date (nullable) /
-//   customer_name (nullable，L2) / parent_customer_name (nullable，L1) /
-//   has_cnc_program (bool 必填 —— 本页 Tab 化关键字段) /
-//   batch_id (nullable) / batch_version (nullable) —— 2026-10-03 后端补齐的批次锚点。
-// ⚠️ 后端这两个 key **恒返**（`Option` 走 `serialize_i64_opt` → null，无
-// `skip_serializing_if`），即契约上它们是「必填 + 可空」；前端仍声明成
-// `nullable().optional()`，是为了让不携带批次锚点的手工构造行（单测 fixture 等）
-// 仍能通过类型检查。**读取侧一律按「可能缺失」处理**（`Boolean(row.batch_id)` /
-// `row.batch_version ?? null`），不因 optional 就假设一定有值。
-// ⚠️ 本 schema 仍保持 strip 模式的 `z.object`（非 `.strict()`），所以**后端改字段名
-// 不会被 Zod 报错**、只会被静默丢弃。批次锚点这两个字段的改名义务双向登记在
-// `src/views/cnc/pendingProgrammingColumnDefs.ts` 的 RELEASE_* 常量注释上，后端换名时
-// 两处必须同批改。
-//
-// ⚠️ 客户字段名与 part 域**不同名**：这里是 parent_customer_name(L1) /
-// customer_name(L2)，而 PartListItem 是 l1_customer_name / customer_name。
-// 两个端点的 rows 不能互相 cast（列渲染已按本页 schema 读 parent_customer_name）。
-// ============================================================
-
-export const pendingProgrammingItemSchema = z.object({
-  id: z.string(),
-  version: z.number(),
-  serial_no: z.string().nullable(),
-  name: z.string(),
-  drawing_no: z.string(),
-  quantity: z.number(),
-  status: z.string(),
-  is_urgent: z.boolean(),
-  planned_delivery_date: z.string(),
-  system_delivery_date: z.string().nullable(),
-  /** L2 客户名（可空） */
-  customer_name: z.string().nullable(),
-  /** L1 客户名（可空） */
-  parent_customer_name: z.string().nullable(),
-  /** 是否已上传 G_CODE（后端 t_part_file EXISTS 派生）—— 必填 boolean，守门到位 */
-  has_cnc_program: z.boolean(),
-  /** 批次 id（雪花 ID 字符串，nullable）。**2026-10-03 后端已返**：取该 part 的
-   *  `status='PROGRAMMING' AND deleted_at IS NULL` 批次中 `id` 最大者（后端
-   *  ProgrammingItemOut::batch_id），无 PROGRAMMING 批次时为 null ⇒ 该行不可下发。
-   *  只认 PROGRAMMING 是因为本行唯一写出口 release-from-programming 硬要求源状态
-   *  是 PROGRAMMING，给别的状态等于给前端一个必然 20103 的锚点。
-   *  ⚠️ 改名义务：本字段与下面 batch_version 一起被
-   *  `src/views/cnc/pendingProgrammingColumnDefs.ts` 双向登记（strip 模式下后端换名
-   *  只会静默丢字段、不会报错，换名时那侧的用户可见文案会同时失真）。
-   *  ⚠️ 声明成**必填 + 可空**（不是 `.optional()`）：后端 `ProgrammingItemOut`
-   *  的两字段都无 `skip_serializing_if`（`batch_id` 走 `serialize_i64_opt`、
-   *  `batch_version` 只有 `#[serde(default)]`，后者只影响反序列化）⇒ 两 key 恒返。
-   *  写成 `.optional()` 会让「后端哪天删掉这两个键」**静默通过**（Zod 不报错）⇒
-   *  全表按钮恒 disabled，正是本字段要守门的症状。 */
-  batch_id: z.string().nullable(),
-  /** 批次乐观锁版本号（`t_part_batch.version`，nullable）。2026-10-03 与 batch_id
-   *  同批下发、**同生共死**（batch_id 为 null 时后端也必为 null），作
-   *  release-from-programming 的 OCC 版本回传 —— 后端 `PlaceOnShelfRequest.version`
-   *  是**必填** i32（无 `#[serde(default)]`，缺字段 422），拿 part 级 version 顶替
-   *  会打成版本冲突。同 batch_id：必填理由与改名义务同批。 */
-  batch_version: z.number().nullable(),
-});
-
-export type PendingProgrammingItemSchema = z.infer<typeof pendingProgrammingItemSchema>;
-
-/** 2026-10-01 新增：待编程列表分页结果（结构对齐 backend-rust ProgrammingListOut：
- *  items / total / limit / offset 四字段，后端用 JSON number 返回计数
- *  ——与 repairBatchListResultSchema 的「string 计数」形态不同，本页按 number 声明）。 */
-export const pendingProgrammingListResultSchema = z.object({
-  items: z.array(pendingProgrammingItemSchema),
-  total: z.number(),
-  limit: z.number(),
-  offset: z.number(),
-});
-
-export type PendingProgrammingListResultSchema = z.infer<typeof pendingProgrammingListResultSchema>;
 
 // ============================================================
 // 2026-10-01 新增：货架实体 + 货架列表分页结果 schema（共享基础数据层
@@ -1216,7 +1133,8 @@ export type WorkerStateSchema = z.infer<typeof workerStateSchema>;
 // 2026-10-03 改名：本 schema 组的消费者已从「品检 / 返修 / 返修中 3 个共用端点」
 // 收窄为**仅** `GET /prod/batches/repair` 与 `GET /prod/batches/repairing` 两条返修
 // 端点（待品检端点 `GET /prod/batches/inspection` 同期换成 13 字段的精简 VO，见
-// 本节末尾的 `inspectionQueueListItemSchema`）。名字里的 "inspection" 此刻已经
+// src/views/inspection/composables/inspectionSchema.ts::inspectionQueueListItemSchema）。
+// 名字里的 "inspection" 此刻已经
 // 指向错误的端点，故连同 `InspectionBatchListItemSchema` /
 // `InspectionBatchListResultSchema` 导出类型一起改名；**字段一个都没动** —— 两条
 // 返修端点的 VO 后端原样未变。
@@ -1312,65 +1230,6 @@ export const repairBatchListResultSchema = z.object({
 });
 
 export type RepairBatchListResultSchema = z.infer<typeof repairBatchListResultSchema>;
-
-// ============================================================
-// 2026-10-03 新增：待品检队列行 + 列表 schema（守门
-// `GET /api/v2/prod/batches/inspection` 的**精简 13 字段 VO**）。
-//
-// 为什么与上面的返修 VO 分家：待品检页最终只显示 7 个数据列（序列号 / 图号 / 名称 /
-// 批次 / 数量 / 系统交期 / 客户），后端同期为本端点新建了只覆盖这些列 + 3 个写端点
-// 锚字段的精简 VO。`GET /prod/batches/repair` 与 `GET /prod/batches/repairing` 继续
-// 用原 28 字段 VO（上面那套 `repairBatchListItemSchema`），两端点的行对象**不可互相
-// cast** —— 少了 status / location / holder_name 等键。
-//
-// key 集合**恰为 13 个**，且用 `.strict()`：多一个键即抛 `unrecognized_keys`。
-//   1. 列表页的 7 个数据列：batch_no / serial_no / drawing_no / name / quantity /
-//      system_delivery_date / customer_name（+ l1_customer_name 供客户列派生「父 / 子」）；
-//   2. 写端点与跳转锚：batch_id（`POST /prod/batches/{batch_id}/…` 路径参数 +
-//      扫码选行标识）、part_id（`/parts/{part_id}` 详情跳转）、version
-//      （`t_part_batch.version`，OCC 锚）、customer_id（客户表头筛选）、is_urgent
-//      （加急红底）。
-//
-// 2026-10-03 契约要点：
-//   - `system_delivery_date` 是本 VO 相对旧 VO 的**净增字段**（旧待品检 VO 不含它，
-//     前端只能恒显 '—'）；wire 上是 `YYYY-MM-DD` 字符串，DB NULL → JSON null，故
-//     `z.string().nullable()`，不锁字面量。
-//   - batch_id / part_id / customer_id 是**雪花 ID 字符串**（`serialize_i64`，禁止
-//     Number() —— 会丢精度）；batch_no / quantity / version 是 i32 → `z.number()`。
-//   - `total` / `limit` / `offset` 同样是 `serialize_i64` ⇒ JSON **string**，与
-//     `pendingProgrammingListResultSchema`（裸 i64 ⇒ number）方向相反，别照抄。
-//     消费方在边界 `Number(resp.total)` 转 number 才能塞进分页组件的 total。
-// ============================================================
-
-export const inspectionQueueListItemSchema = z
-  .object({
-    batch_id: z.string(),
-    batch_no: z.number(),
-    quantity: z.number(),
-    version: z.number(),
-    part_id: z.string(),
-    serial_no: z.string().nullable(),
-    drawing_no: z.string(),
-    name: z.string(),
-    system_delivery_date: z.string().nullable(),
-    is_urgent: z.boolean(),
-    customer_id: z.string(),
-    customer_name: z.string().nullable(),
-    l1_customer_name: z.string().nullable(),
-  })
-  .strict();
-
-export type InspectionQueueListItemSchema = z.infer<typeof inspectionQueueListItemSchema>;
-
-/** 待品检队列分页结果（items / total / limit / offset 四字段，计数为 JSON string）。 */
-export const inspectionQueueListResultSchema = z.object({
-  items: z.array(inspectionQueueListItemSchema),
-  total: z.string(),
-  limit: z.string(),
-  offset: z.string(),
-});
-
-export type InspectionQueueListResultSchema = z.infer<typeof inspectionQueueListResultSchema>;
 
 // ============================================================
 // 2026-10-02 新增：工种 + 工种↔工序映射 schema（守门 backend-rust
@@ -2155,99 +2014,3 @@ export const processDesignPartListResultSchema = z.object({
 });
 
 export type ProcessDesignPartListResultSchema = z.infer<typeof processDesignPartListResultSchema>;
-
-// ============================================================
-// 2026-10-05 新增：品检扫码树（`GET /api/v2/prod/inspection/scan/{serial_no}`）的 Zod
-// 守门 schema。契约见 backend-rust `docs/api/production/inspection.md`。
-//
-// 响应是**一层套一层**的树：顶层 `hit_kind` 判条码是装配件还是零件；`assembly` 在
-// 扫到装配件条码**或**扫中的零件是某个装配件的子件时带出装配件节点（它**没有批次**，
-// 批次挂在零件节点下）—— 即「assembly 非空」不等价于「hit_kind='ASSEMBLY'」，前端
-// 分形态时两个信息都要看；
-// `children` 恒是零件数组（装配件树 = 全部子件；独立件树 = `[被扫中的那个 part]`），
-// 每个零件的 `children` 是它的**全部**批次（含终态批次 —— 终态行要在表上显示为
-// 不可操作，而不是从树上消失，否则用户会以为批次不存在）。
-//
-// 必填字段**逐个显式声明**（Zod strip 陷阱，见 CLAUDE.md「TanStack Query」条目）：
-//   - 雪花 ID（`assembly.id` / 各 part / batch 的 `id`）是 `serialize_i64` ⇒ JSON
-//     **string**，声明 `z.string()`（禁 `z.number()`，19 位 ID 在 JS Number 下丢精度）；
-//   - 后端这些 VO 字段都没挂 `skip_serializing_if` ⇒ 键恒在，可空的一律
-//     `.nullable()` 而非 `.optional()`（写成 `.optional()` 会让「后端漏发某个键」静默
-//     通过，UI 的那一列整列失效）；
-//   - `system_delivery_date` 是 `YYYY-MM-DD` 字符串，DB NULL → JSON null，不锁字面量。
-//
-// ⚠️ 两处版本号是**互不相关的两个计数器**，混用必 409：
-//   - `ScanPartOut.version` = `t_part.version`，本页只作展示；
-//   - `ScanBatchOut.version` = `t_part_batch.version`，三个写端点（to-inspection /
-//     to-ship / to-process）的 OCC 锚，取错就是「版本冲突」的用户可见症状。
-// ============================================================
-
-/** 批次节点（`ScanBatchOut`）—— 三个写端点的锚都在这一层。 */
-export const inspectionScanBatchSchema = z.object({
-  id: z.string(),
-  batch_no: z.number(),
-  quantity: z.number(),
-  /** 批次 `status` 原文（8 态枚举字符串），前端按它决定操作列的按钮矩阵。 */
-  status: z.string(),
-  /** `t_part_batch.version`（OCC 锚）。**不是** `t_part.version`。 */
-  version: z.number(),
-  /** 返修标记（后端不再产生 REPAIRING 状态，返修语义由该布尔列承载）。 */
-  is_repairing: z.boolean(),
-  /** `t_part_batch.location` 枚举原文。 */
-  location: z.string().nullable(),
-  /** 派生持有人名（货架编码 / 工人姓名）。 */
-  current_holder_display: z.string().nullable(),
-  /** 当前工序名；INSPECTION 批次恒 null（出池时后端清 `current_process_id`）。 */
-  process_name: z.string().nullable(),
-  /** 该批次所属零件就是被扫中的那个 → 前端高亮用。 */
-  is_scanned: z.boolean(),
-});
-
-export type InspectionScanBatchSchema = z.infer<typeof inspectionScanBatchSchema>;
-
-/** 零件节点（`ScanPartOut`）—— 装配件的子件，或独立件本身。 */
-export const inspectionScanPartSchema = z.object({
-  id: z.string(),
-  serial_no: z.string().nullable(),
-  name: z.string(),
-  drawing_no: z.string(),
-  status: z.string(),
-  quantity: z.number(),
-  is_urgent: z.boolean(),
-  system_delivery_date: z.string().nullable(),
-  customer_name: z.string().nullable(),
-  /** `t_part.version`（仅展示；写端点的 OCC 锚是 `children[].version`）。 */
-  version: z.number(),
-  children: z.array(inspectionScanBatchSchema),
-});
-
-export type InspectionScanPartSchema = z.infer<typeof inspectionScanPartSchema>;
-
-/** 装配件节点（`ScanAssemblyOut`）—— 本身没有批次。 */
-export const inspectionScanAssemblySchema = z.object({
-  id: z.string(),
-  serial_no: z.string().nullable(),
-  name: z.string(),
-  drawing_no: z.string(),
-  status: z.string(),
-  quantity: z.number(),
-  is_urgent: z.boolean(),
-  system_delivery_date: z.string().nullable(),
-  customer_name: z.string().nullable(),
-});
-
-export type InspectionScanAssemblySchema = z.infer<typeof inspectionScanAssemblySchema>;
-
-/** 扫码树顶层（`ScanTreeOut`）。 */
-export const inspectionScanTreeSchema = z.object({
-  /** `"ASSEMBLY"` = 扫到装配件条码；`"PART"` = 扫到子件 / 独立件条码。
-   *  用 enum 守门（后端只有这两个字面量）：写成 z.string() 会让「后端改了命中口径」
-   *  这类契约漂移一路溜到渲染层，靠人工看标签文案才发现。 */
-  hit_kind: z.enum(['ASSEMBLY', 'PART']),
-  scanned_serial_no: z.string(),
-  /** 扫装配件条码、或扫中的是某个装配件的子件时有值；独立件 / 父装配件已软删时为 null。 */
-  assembly: inspectionScanAssemblySchema.nullable(),
-  children: z.array(inspectionScanPartSchema),
-});
-
-export type InspectionScanTreeSchema = z.infer<typeof inspectionScanTreeSchema>;

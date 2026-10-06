@@ -12,7 +12,7 @@
 // 运行时不会产生 ESM 循环。
 
 import { api, cleanParams } from '@/api/http';
-import { inspectionQueueListResultSchema } from '@/composables/queries/schemas';
+import { inspectionQueueListResultSchema } from '@/views/inspection/composables/inspectionSchema';
 import type { InspectionSortKey } from '@/types/inspection';
 import type { FileBinding } from '@/types/part_file';
 import type { SortDir } from '@/types/parts';

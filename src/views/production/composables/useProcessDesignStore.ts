@@ -172,7 +172,7 @@ export const useProcessDesignStore = defineStore('process-design', () => {
     queryKey: computed(() => qk.processDesignParts(buildParams())),
     // params 从 queryKey[2] 读（不闭包捕获 buildParams 的 snapshot）。
     // 守门**收敛在 api 层**（listProcessDesignParts 内部 parse，形态同
-    // api/programming.ts::fetchPendingProgramming ⇒ 任何调用方都受 Zod 守门），
+    // api/pendingBatches.ts::dispatchBatches ⇒ 任何调用方都受 Zod 守门），
     // 此处不重复 parse。
     queryFn: async ({ queryKey }) =>
       listProcessDesignParts(queryKey[2] as ListProcessDesignPartsParams),

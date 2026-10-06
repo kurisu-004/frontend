@@ -18,10 +18,10 @@ import { h, type VNode } from 'vue';
 import { ElButton, ElTag, ElTooltip } from 'element-plus';
 import { RouterLink } from 'vue-router';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
-import type { PendingProgrammingItemSchema } from '@/composables/queries/schemas';
+import type { PendingProgrammingItemData } from './composables/pendingProgrammingSchema';
 
 /** 行类型 = 待编程列表项（prod 域 ProgrammingItem）。 */
-export type PendingProgrammingRow = PendingProgrammingItemSchema;
+export type PendingProgrammingRow = PendingProgrammingItemData;
 
 // ============================================================================
 // 批次锚点的**改名义务**登记（2026-10-03 改写：此前登记的是「后端还没定字段名」，
@@ -35,7 +35,7 @@ export type PendingProgrammingRow = PendingProgrammingItemSchema;
 // （下面两个常量）会**同时失真**，而 Zod strip 模式不会报错、只会静默丢字段 ⇒
 // 症状是「按钮恒 disabled 且 tooltip 说『没有编程中的批次』」。必须同批改三处：
 //   1. 本文件的 `canReleaseRow` + 两个文案常量；
-//   2. `src/composables/queries/schemas.ts::pendingProgrammingItemSchema`
+//   2. `src/views/cnc/composables/pendingProgrammingSchema.ts::pendingProgrammingItemSchema`
 //      的 `batch_id` / `batch_version` 声明（该侧也登记了本文件，双向登记）；
 //   3. 扫码台 PICK_UP 领取的同名锚点（`ScanPickParts` →
 //      `POST /prod/batches/{batch_id}/pick-up`，`version` 取 `batch_version`）——

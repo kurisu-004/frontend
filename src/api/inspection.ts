@@ -19,7 +19,7 @@
 // 生产走 nginx 同源反代，写死 host 会让两个环境各连各的。
 
 import { api } from '@/api/http';
-import { inspectionScanTreeSchema } from '@/composables/queries/schemas';
+import { inspectionScanTreeSchema } from '@/views/inspection/composables/inspectionSchema';
 
 /** 树里的装配件节点（`ScanAssemblyOut`）。装配件本身**没有批次**，只有子零件有。 */
 export interface ScanAssemblyOut {
@@ -79,7 +79,7 @@ export interface ScanBatchOut {
 /** 扫码响应（`ScanTreeOut`）。 */
 export interface ScanTreeOut {
   /** `"ASSEMBLY"` = 扫到装配件条码；`"PART"` = 扫到子件 / 独立件条码。
-   *  后端只有这两个字面量，`schemas.ts` 侧按 `z.enum` 守门，这里同步收窄。 */
+   *  后端只有这两个字面量，`views/inspection/composables/inspectionSchema.ts` 侧按 `z.enum` 守门，这里同步收窄。 */
   hit_kind: 'ASSEMBLY' | 'PART';
   scanned_serial_no: string;
   /** 装配件节点；**扫装配件条码、或扫中的零件是某个装配件的子件时**都有值
@@ -91,9 +91,9 @@ export interface ScanTreeOut {
 }
 
 /** 扫码查树。`serialNo` 走 `encodeURIComponent`（条码里可能带 `/` 与空格）。
- *  Zod 守门在 api 边界做（与 `listInspectionBatches` 同款），schema 在
- *  `composables/queries/schemas.ts`；两条声明（手写 interface / z.infer）等价，
- *  跨边界时用 `as` 桥接。 */
+ *  Zod 守门在 api 边界做（schema 在域内 `views/inspection/composables/inspectionSchema.ts`，
+ *  与手写 `ScanTreeOut` 等价，跨边界用 `as` 桥接）。守门留在本层而不是 queryFn：
+ * 扫码是用户触发的单次拉取（store 内走 useMutation，没有承载它的 queryFn）。 */
 export async function scanInspection(serialNo: string): Promise<ScanTreeOut> {
   const resp = await api.get<unknown>(`/prod/inspection/scan/${encodeURIComponent(serialNo)}`);
   return inspectionScanTreeSchema.parse(resp.data) as ScanTreeOut;

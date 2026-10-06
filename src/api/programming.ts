@@ -27,8 +27,8 @@
 import { api, cleanParams } from '@/api/http';
 import {
   pendingProgrammingListResultSchema,
-  type PendingProgrammingListResultSchema,
-} from '@/composables/queries/schemas';
+  type PendingProgrammingListResultData,
+} from '@/views/cnc/composables/pendingProgrammingSchema';
 
 /** `GET /api/v2/prod/programming/pending` 入参形态（rust ListPendingQuery）。
  *
@@ -76,7 +76,7 @@ export interface ListPendingProgrammingParams {
  *  一遍，Zod 的 parse 返回深拷贝，重复 parse 等于每屏数据被克隆两遍。 */
 export async function fetchPendingProgramming(
   params: ListPendingProgrammingParams = {},
-): Promise<PendingProgrammingListResultSchema> {
+): Promise<PendingProgrammingListResultData> {
   const resp = await api.get<unknown>('/prod/programming/pending', {
     params: cleanParams(params),
   });

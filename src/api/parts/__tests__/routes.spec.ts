@@ -48,15 +48,18 @@ vi.mock('@/api/http', () => ({
 vi.mock('@/composables/queries/schemas', () => ({
   // 集合读端点本函数内会 Zod parse；URL 守卫不需要真实 schema，原样回传给调用方即可。
   // 2026-10-03：待品检端点换 13 字段精简 VO 后，两个 VO 的守门 schema 也分家了
-  // （repairBatchListResultSchema 服务返修两条端点，inspectionQueueListResultSchema
-  // 服务待品检端点），mock 必须同时给出两者，缺一个 vitest 就会报
-  // 「No xxx export is defined on the mock」。
+  // （repairBatchListResultSchema 服务返修两条端点，待品检端点的守门 schema 已随
+  // query hook 归位到域内 views/inspection/composables/inspectionSchema.ts，
+  // 单独桩在下面那个 vi.mock 里）—— 两个 VO 的键集合不同，桩混用会让真 schema 拒收。
   // 2026-10-04：报工台两个列表端点（pickable-by-work-type / by-worker）出参改走
   // scanPartListResultSchema（它们返分页信封，不再是裸数组），crud.ts 在模块顶层
-  // import 它 ⇒ mock 同样必须给出，缺一个整份 spec 直接挂（与上面两条同款理由）。
+  // import 它 ⇒ mock 同样必须给出，缺一个整份 spec 直接挂。
   repairBatchListResultSchema: { parse: (v: unknown) => v },
-  inspectionQueueListResultSchema: { parse: (v: unknown) => v },
   scanPartListResultSchema: { parse: (v: unknown) => v },
+}));
+
+vi.mock('@/views/inspection/composables/inspectionSchema', () => ({
+  inspectionQueueListResultSchema: { parse: (v: unknown) => v },
 }));
 
 import {

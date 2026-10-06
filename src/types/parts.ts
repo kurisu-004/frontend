@@ -195,7 +195,8 @@ export interface PartListItem {
    *  `t_part_cnc_program` 表 EXISTS 判定派生）。
    *  2026-10-01 备注：「待编程一览」页（cnc/PendingProgrammingList）已改读 prod 域
    *  `GET /api/v2/prod/programming/pending`（恒返空的老端点已弃用），其出参是
-   *  ProgrammingItem（见 composables/queries/schemas.ts::pendingProgrammingItemSchema），
+   *  ProgrammingItem（见
+   *  views/cnc/composables/pendingProgrammingSchema.ts::pendingProgrammingItemSchema），
    *  字段同名 has_cnc_program 但**客户字段名不同**（parent_customer_name vs
    *  l1_customer_name），两者不可互相 cast。 */
   has_cnc_program: boolean;

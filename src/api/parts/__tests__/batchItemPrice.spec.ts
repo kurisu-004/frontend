@@ -14,7 +14,7 @@ vi.mock('@/api/http', () => ({
   api: { post: mocks.post, get: vi.fn() },
   cleanParams: (p: unknown) => p,
 }));
-vi.mock('@/composables/queries/schemas', () => ({
+vi.mock('@/views/inspection/composables/inspectionSchema', () => ({
   inspectionQueueListResultSchema: { parse: (v: unknown) => v },
 }));
 
