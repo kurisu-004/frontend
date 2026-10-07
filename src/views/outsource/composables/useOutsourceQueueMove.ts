@@ -18,9 +18,14 @@
 // processId，精确失效必然漏刷。
 //
 // 拖拽投放与本文件的三条硬约定（不要改，继承生产队列的踩坑结论）：
-//   1. Sortable 容器一律二参重载（不传 list）⇒ 视图侧必须自己补
-//      `onRemove: restoreNodeToSource` 做 DOM 回滚，否则投放失败时幻影卡片留在落点列、
-//      失效也清不掉；
+//   1. 两侧容器的 Sortable 形态**不同**，各自的原因不能互相套用：
+//      - **投放落点**（公司列 `CompanyColumn.vue`）走**二参**（不传 list）：它的渲染源是
+//        props 派生的数组，传 list 会让库挂上内建 `onRemove`（内建 handler 假定 list 就是
+//        渲染源）⇒ DOM 放回随之消失，必须自己补 `onRemove: restoreNodeToSource`，否则
+//        投放失败时幻影卡片留在落点列、失效也清不掉；
+//      - **拖拽源**（候选池 `CandidatePool.vue`）走**三参 + 本地副本 list**：把一个不是渲染源
+//        的副本 list 传给库，换回内建 `onRemove` 的 `from.insertBefore(...)`（无论成败先把
+//        被拖节点放回源列）。
 //   2. 空态用兄弟覆盖层（pointer-events: none），别把投放容器 v-if 摘掉 —— **空公司列
 //      必须仍是合法投放目标**（后端 `companies[]` 特意返 `held_count = 0` 的空列）；
 //   3. 卡片组件根必须是单元素（BatchCard 已满足），且容器内不许留模板注释（dev 构建

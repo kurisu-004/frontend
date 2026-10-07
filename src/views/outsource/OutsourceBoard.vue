@@ -8,7 +8,9 @@
        的工序，它只是**徽标数据源**。直接拿它当 tab 列表的话，「某工序收发清零」的瞬间
        该 tab 会凭空消失，操作到一半页面结构跳走。故行全集来自共享工序列表
        （`useProcessesQuery({ category: 'OUTSOURCE', limit: 200 })`），快照只补
-       `sendable_count` / `in_flight_count` / `color` 三个字段。
+       `sendable_count` / `in_flight_count` / `color` 三个字段；快照里
+       **`category` 非 OUTSOURCE** 的工序（批次在外协公司、`current_process_id` 指向
+       INHOUSE 工序）另行补行，否则这批在途批次在看板上彻底不可见。
 
      深链 `?tab=<process_id>`：`router.replace` 写入（不污染 history），工序列表解析后
      校正非法值（深链到已删除的工序 / 自产工序时不会停在一个空 tab 上）。
@@ -119,10 +121,21 @@ const { error: moveError, canMove, sendToCompany, receiveToProduction, receiveTo
 
 const loading = computed(() => procsQuery.isLoading.value || snapshotQuery.isLoading.value);
 
-/** tab 行全集 = 全部 OUTSOURCE 工序；快照只补徽标两数与工序色。 */
+/** tab 行全集 = 全部 OUTSOURCE 工序 ∪ 快照里 `category` 非 OUTSOURCE 的那些工序。
+ *
+ *  第二个来源不是冗余：批次停在外协公司、`current_process_id` 却指向 INHOUSE 工序时
+ *  （工序被改类别后的历史数据），后端在途计数按 DB 真值把它下发成
+ *  `category = 'INHOUSE'` 的一行，而它不在 OUTSOURCE 工序列表里 ⇒ 只走列表会把这批
+ *  在途批次整个漏掉，操作员既看不到也无从收货。
+ *
+ *  闸门用 `s.category !== 'OUTSOURCE'` 而不是「不在列表里就补」：快照里绝大多数行都是
+ *  OUTSOURCE 工序（它们只因「零收发」才没出现在列表侧的情况不存在 —— 快照只收录
+ *  `sendable + in_flight > 0` 的行），不按 category 闸会把「工序列表加载中/为空」
+ *  这一瞬的快照整批补成 tab。 */
 const tabProcesses = computed(() => {
-  const byId = new Map((snapshotQuery.data.value?.processes ?? []).map((p) => [p.process_id, p]));
-  return (procsQuery.data.value?.items ?? []).map((p) => {
+  const snapshots = snapshotQuery.data.value?.processes ?? [];
+  const byId = new Map(snapshots.map((p) => [p.process_id, p]));
+  const rows = (procsQuery.data.value?.items ?? []).map((p) => {
     const s = byId.get(p.id);
     return {
       id: p.id,
@@ -135,6 +148,20 @@ const tabProcesses = computed(() => {
       inFlight: s?.in_flight_count ?? 0,
     };
   });
+  const known = new Set(rows.map((r) => r.id));
+  for (const s of snapshots) {
+    if (s.category === 'OUTSOURCE' || known.has(s.process_id)) continue;
+    known.add(s.process_id);
+    rows.push({
+      id: s.process_id,
+      code: s.process_code,
+      name: s.process_name,
+      color: s.color,
+      sendable: s.sendable_count,
+      inFlight: s.in_flight_count,
+    });
+  }
+  return rows;
 });
 
 /** tab 标题的「可发 N / 在途 M」双徽标。快照加载中显「…」，与真实的 0 区分开

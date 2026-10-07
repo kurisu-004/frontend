@@ -149,7 +149,9 @@ const emit = defineEmits<{
   action: [payload: { type: 'submit' | 'approve' | 'reject' | 'delete'; row: OutsourceQuoteSchema }];
 }>();
 
-// store 必须在本组件 setup 内首调（不变量 #1）。
+// store 由父壳 `OutsourceQuoteList.vue` 首调（不变量 #1；`$dispose` 也在父壳）——
+// 本组件只消费不实例化：Pinia 是单例，两处 setup 都调无害，但首调者决定
+// `onBeforeUnmount` 绑在谁身上，规矩写在父壳才不歧义。
 const store = useOutsourceQuoteListStore();
 
 const drag = useColumnDrag(store.columnDefs, { listKey: 'outsource_quote_table' });

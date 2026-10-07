@@ -24,6 +24,7 @@ vi.mock('element-plus', () => ({
 }));
 
 const listCompaniesByProcessMock = vi.fn();
+const listOutsourceQuotesMock = vi.fn();
 const createMock = vi.fn();
 const submitMock = vi.fn();
 const softDeleteMock = vi.fn();
@@ -35,6 +36,7 @@ vi.mock('@/api/outsource', () => ({
   softDeleteOutsourceQuote: (...args: unknown[]) => softDeleteMock(...args),
   submitOutsourceQuote: (...args: unknown[]) => submitMock(...args),
   listCompaniesByProcess: (...args: unknown[]) => listCompaniesByProcessMock(...args),
+  listOutsourceQuotes: (...args: unknown[]) => listOutsourceQuotesMock(...args),
 }));
 
 vi.mock('@/composables/useConfirm', () => ({
@@ -54,7 +56,7 @@ function makeForm(): ReturnType<typeof useOutsourceQuoteForm> {
   const scope = effectScope();
   let form!: ReturnType<typeof useOutsourceQuoteForm>;
   scope.run(() => {
-    form = testApp.runWithContext(() => useOutsourceQuoteForm({ refresh: vi.fn() }));
+    form = testApp.runWithContext(() => useOutsourceQuoteForm());
   });
   return form;
 }
@@ -96,6 +98,8 @@ beforeEach(() => {
   submitMock.mockResolvedValue(makeQuote({ status: 'SUBMITTED' }));
   softDeleteMock.mockReset();
   softDeleteMock.mockResolvedValue(undefined);
+  listOutsourceQuotesMock.mockReset();
+  listOutsourceQuotesMock.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
   vi.mocked(ElMessage.info).mockClear();
   testQueryClient = new QueryClient({
     defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
@@ -170,6 +174,70 @@ describe('六条写路径的 payload 与失效', () => {
     const form = makeForm();
     await form.onSubmit(makeQuote());
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['outsource', 'quotes'] });
+  });
+});
+
+// 写路径的错误处理：`mutateAsync` 失败时 reject，错误文案由 mutation 的 onError 弹。
+// 调用侧（OutsourceQuoteList 的 `@confirm` / `void form.onSubmit`）是裸接，包装层不兜
+// 就是每次写失败多一条 unhandledrejection。
+describe('写失败：包装吞掉 rejection（onError 已提示）', () => {
+  it('Q7a：submit 失败 → 包装 resolve、ElMessage.error 一次、不产生未捕获 rejection', async () => {
+    submitMock.mockRejectedValueOnce(new Error('40901 乐观锁冲突'));
+    const form = makeForm();
+
+    await expect(form.onSubmit(makeQuote())).resolves.toBeUndefined();
+    expect(ElMessage.error).toHaveBeenCalledWith('40901 乐观锁冲突');
+  });
+
+  it('Q7b：soft-delete 失败 → 包装 resolve、ElMessage.error 一次', async () => {
+    softDeleteMock.mockRejectedValueOnce(new Error('删除失败'));
+    const form = makeForm();
+
+    await expect(form.onDelete(makeQuote())).resolves.toBeUndefined();
+    expect(ElMessage.error).toHaveBeenCalledWith('删除失败');
+  });
+
+  it('Q7c：create 失败 → 包装 resolve、弹窗保持打开（用户改完可重试）', async () => {
+    createMock.mockRejectedValueOnce(new Error('创建失败'));
+    const form = makeForm();
+    form.openCreate();
+    Object.assign(form.createForm, {
+      part_id: 'P1',
+      outsource_company_id: 'CO1',
+      process_id: 'PR-OUT-1',
+      price: '12.50',
+    });
+
+    await expect(form.onCreate()).resolves.toBeUndefined();
+    expect(form.showCreate.value).toBe(true);
+    expect(ElMessage.error).toHaveBeenCalledWith('创建失败');
+  });
+});
+
+// 失效链的唯一性：写成功后的刷新只走 invalidateOutsourceQuotesAll（内部已 refetch 活跃
+// query）。以前还叠一条 caller 的 refresh 回调（= 再次 refetch）⇒ 每次写成功打两次列表
+// 请求。这条用「活跃 query 的请求计数」钉死。
+describe('写成功后的刷新次数', () => {
+  it('Q7d：一次写成功只重拉一次列表（失效已含 refetch，不再叠 refresh 回调）', async () => {
+    const { useOutsourceQuotesQuery } = await import('../useOutsourceQuotesQuery');
+    const scope = effectScope();
+    scope.run(() => {
+      testApp.runWithContext(() => useOutsourceQuoteForm());
+      testApp.runWithContext(() =>
+        useOutsourceQuotesQuery({ params: { limit: 20, offset: 0 }, enabled: true }),
+      );
+    });
+    await vi.waitFor(() => expect(listOutsourceQuotesMock).toHaveBeenCalledTimes(1));
+
+    const scope2 = effectScope();
+    const form = scope2.run(() => testApp.runWithContext(() => useOutsourceQuoteForm()))!;
+    listOutsourceQuotesMock.mockClear();
+    await form.onSubmit(makeQuote());
+
+    // 先等第一次落地，再留一段静默窗口让第二次 refetch 有机会发生，最后数总量。
+    await vi.waitFor(() => expect(listOutsourceQuotesMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(listOutsourceQuotesMock).toHaveBeenCalledTimes(1);
   });
 });
 

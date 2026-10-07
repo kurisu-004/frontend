@@ -103,7 +103,10 @@ const processId = ref<string>('');
 
 // 基础数据走共享 query（30s staleTime 全域去重），组件自身不直接调 listShelves /
 // listProcesses。货架一次拉全量（不分 zone），按 mode 在 computed 里分区取用。
-const shelvesQuery = useProductionShelvesQuery({ limit: 200 });
+// limit 取后端 clamp 上限 500：`useShelfProcessFilter` 的双向收窄要拿全量货架算
+// 映射，取小了会先截断再算 —— 货架列表按 display_order 排序、不按 zone 分组，
+// 总数一超 limit，被截掉的品检架会让「回收到品检」的目标货架下拉直接空掉。
+const shelvesQuery = useProductionShelvesQuery({ limit: 500 });
 const procsQuery = useProcessesQuery({ limit: 200 });
 const allShelves = computed(() => shelvesQuery.data.value?.items ?? []);
 const allProcesses = computed(() => procsQuery.data.value?.items ?? []);

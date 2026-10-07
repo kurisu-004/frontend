@@ -146,13 +146,24 @@ describe('outsourceQueueSchema —— 外协看板候选行', () => {
       quote_id: null,
       price: null,
       company_options: [{ id: '9000000000002', name: '外协厂乙' }],
-      shelf_id: null,
+      // 未上架批次是空串（不是 null）：后端 `shelf_id` 是非可空 String
+      shelf_id: '',
       shelf_code: null,
     };
     const parsed = outsourceQueueCandidateSchema.parse(direct);
     expect(parsed.send_mode).toBe('DIRECT');
     expect(parsed.price).toBeNull();
+    expect(parsed.shelf_id).toBe('');
     expect(parsed.company_options).toHaveLength(1);
+  });
+
+  // ⚠️ 守门方向守卫：shelf_id 是非可空 String，后端只会给空串不会给 null。
+  // 声明成 .nullable() 的后果不是「多接受一种合法值」，而是后端真返 null 时 Zod 放行 ⇒
+  // 卡片不置灰 ⇒ 操作员要拖到公司列才被「尚未上架」拦下，UI 守门形同虚设。
+  it('OQ-C2b：shelf_id 为 null（PENDING 未上架）→ 抛 ZodError，不被守门放行', () => {
+    expect(() =>
+      outsourceQueueCandidateSchema.parse({ ...candidateFixture, shelf_id: null }),
+    ).toThrow();
   });
 
   // 漏声明类：逐个必填字段抽掉都必须抛错（漏声明 ⇒ strip ⇒ parse 照过 ⇒ 守门失效）

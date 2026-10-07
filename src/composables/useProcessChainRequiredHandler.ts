@@ -1,7 +1,6 @@
 // 2026-09-16 PR-3 新增：后端 20706 BIZ_PROCESS_CHAIN_REQUIRED 错误兜底。
 //
-// 触发场景（后端 service `place_on_shelf` / `release_from_programming` /
-// `send_to_outsource` 共三条路径）：
+// 触发场景（后端 service `place_on_shelf` / `release_from_programming` 共两条路径）：
 //   - part.process_chain_id IS NULL（即该零件尚未制定工艺链）
 //   - 业务要求「下发前必须先制定工序链」，否则返 20706 (HTTP 409) + msg "请先制定工序链"
 //
@@ -15,7 +14,6 @@
 //     两条 placeOnShelf 调用都 wrap
 //   - usePartCncGroups.ts：onReleaseToShelf（releaseFromProgramming）
 //   - PendingProgrammingList.vue：onReleaseConfirm（releaseFromProgramming）
-//   - useOutsourceSendableList.ts：onConfirmSend + onConfirmBatchSend（sendToOutsource）
 //
 // 注意：part_id 由 caller 显式传入（不依赖 ApiError.payload 反查），避免
 // 后端响应结构改动把这条 UI 流误伤。

@@ -44,11 +44,6 @@ import { invalidateOutsourceQuotesAll } from './useOutsourceQuotesQuery';
 /** 新建报价表单（reactive；形状与 `OutsourceQuoteFormInput` 一致）。 */
 export type CreateQuoteForm = OutsourceQuoteFormInput;
 
-export interface UseOutsourceQuoteFormOptions {
-  /** 创建 / 审批 / 删除成功后由 caller 触发表格刷新（store 的 fetchList）。 */
-  refresh: () => Promise<void> | void;
-}
-
 /** 2026-09-21 显式返回类型。 */
 export interface UseOutsourceQuoteFormReturn {
   showCreate: Ref<boolean>;
@@ -73,9 +68,12 @@ export interface UseOutsourceQuoteFormReturn {
   onDelete: (q: OutsourceQuote) => Promise<void>;
 }
 
-export function useOutsourceQuoteForm(
-  opts: UseOutsourceQuoteFormOptions,
-): UseOutsourceQuoteFormReturn {
+/** 报价表单 + 六条写路径的 mutation。
+ *
+ *  **无入参**：写成功后的刷新只走 `invalidateOutsourceQuotesAll`（前缀失效，内部已经
+ *  refetch 了活跃 query），不再挂 caller 的 `refresh` 回调 —— 两者串起来会让每次写成功
+ *  打两次列表请求。 */
+export function useOutsourceQuoteForm(): UseOutsourceQuoteFormReturn {
   const { dangerous: confirmDangerous } = useConfirm();
   // 必须在组件 setup 内调用本 composable（useQueryClient 依赖注入上下文）。
   const qc = useQueryClient();
@@ -166,7 +164,6 @@ export function useOutsourceQuoteForm(
       await invalidateOutsourceQuotesAll(qc);
       ElMessage.success('已创建 DRAFT 报价');
       showCreate.value = false;
-      await opts.refresh();
     },
     onError: (e: Error) => ElMessage.error(e.message ?? '创建失败'),
   });
@@ -180,7 +177,6 @@ export function useOutsourceQuoteForm(
     onSuccess: async () => {
       await invalidateOutsourceQuotesAll(qc);
       ElMessage.success('已提交审核');
-      await opts.refresh();
     },
     onError: (e: Error) => ElMessage.error(e.message ?? '提交失败'),
   });
@@ -193,7 +189,6 @@ export function useOutsourceQuoteForm(
       await invalidateOutsourceQuotesAll(qc);
       ElMessage.success('已通过');
       showApprove.value = false;
-      await opts.refresh();
     },
     onError: (e: Error) => ElMessage.error(e.message ?? '审批失败'),
   });
@@ -206,7 +201,6 @@ export function useOutsourceQuoteForm(
       await invalidateOutsourceQuotesAll(qc);
       ElMessage.success('已拒绝');
       showReject.value = false;
-      await opts.refresh();
     },
     onError: (e: Error) => ElMessage.error(e.message ?? '拒绝失败'),
   });
@@ -218,11 +212,13 @@ export function useOutsourceQuoteForm(
     onSuccess: async () => {
       await invalidateOutsourceQuotesAll(qc);
       ElMessage.success('已软删');
-      await opts.refresh();
     },
     onError: (e: Error) => ElMessage.error(e.message ?? '删除失败'),
   });
 
+  /** 六个包装统一 try/catch：`mutateAsync` 在失败时 reject，错误文案由各 mutation 的
+   *  `onError` 弹；调用侧（`OutsourceQuoteList.vue` 的 `@confirm` / `void form.onSubmit`）
+   *  是裸接，不兜就是每次写失败多一条 unhandledrejection。 */
   async function onCreate(): Promise<void> {
     const parsed = outsourceQuoteFormSchema.safeParse(createForm);
     if (!parsed.success) {
@@ -231,27 +227,39 @@ export function useOutsourceQuoteForm(
     }
     createFieldErrors.value = {};
     const v = parsed.data;
-    await createMutation.mutateAsync({
-      part_id: v.part_id,
-      outsource_company_id: v.outsource_company_id,
-      process_id: v.process_id,
-      // 单价原样传字符串：后端入参是 Decimal 串，前端不做 number 转换（会丢末位精度）。
-      price: v.price,
-      note: v.note || null,
-    });
+    try {
+      await createMutation.mutateAsync({
+        part_id: v.part_id,
+        outsource_company_id: v.outsource_company_id,
+        process_id: v.process_id,
+        // 单价原样传字符串：后端入参是 Decimal 串，前端不做 number 转换（会丢末位精度）。
+        price: v.price,
+        note: v.note || null,
+      });
+    } catch {
+      // mutation onError 已 ElMessage 提示
+    }
   }
 
   async function onSubmit(q: OutsourceQuote): Promise<void> {
-    await submitMutation.mutateAsync({ id: q.id, version: q.version });
+    try {
+      await submitMutation.mutateAsync({ id: q.id, version: q.version });
+    } catch {
+      // mutation onError 已 ElMessage 提示
+    }
   }
 
   async function onApprove(): Promise<void> {
     if (!activeQuote.value) return;
-    await approveMutation.mutateAsync({
-      id: activeQuote.value.id,
-      version: activeQuote.value.version,
-      review_note: reviewNote.value || null,
-    });
+    try {
+      await approveMutation.mutateAsync({
+        id: activeQuote.value.id,
+        version: activeQuote.value.version,
+        review_note: reviewNote.value || null,
+      });
+    } catch {
+      // mutation onError 已 ElMessage 提示
+    }
   }
 
   async function onReject(): Promise<void> {
@@ -259,11 +267,15 @@ export function useOutsourceQuoteForm(
       ElMessage.warning('请填写拒绝原因');
       return;
     }
-    await rejectMutation.mutateAsync({
-      id: activeQuote.value.id,
-      version: activeQuote.value.version,
-      review_note: reviewNote.value.trim(),
-    });
+    try {
+      await rejectMutation.mutateAsync({
+        id: activeQuote.value.id,
+        version: activeQuote.value.version,
+        review_note: reviewNote.value.trim(),
+      });
+    } catch {
+      // mutation onError 已 ElMessage 提示
+    }
   }
 
   async function onDelete(q: OutsourceQuote): Promise<void> {
@@ -274,7 +286,11 @@ export function useOutsourceQuoteForm(
       ))
     )
       return;
-    await softDeleteMutation.mutateAsync({ id: q.id, version: q.version });
+    try {
+      await softDeleteMutation.mutateAsync({ id: q.id, version: q.version });
+    } catch {
+      // mutation onError 已 ElMessage 提示
+    }
   }
 
   return {

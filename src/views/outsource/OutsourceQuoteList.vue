@@ -34,13 +34,13 @@ import OutsourceQuoteCreateDialog from './components/OutsourceQuoteCreateDialog.
 import OutsourceQuoteReviewDialog from './components/OutsourceQuoteReviewDialog.vue';
 import OutsourceQuotePdfPreview from './components/OutsourceQuotePdfPreview.vue';
 import type { Process } from '@/types/process';
-import type { QuotablePart } from '@/types/outsource';
+import type { OutsourceQuote, QuotablePart } from '@/types/outsource';
 import type { PartFileItem } from '@/types/part_file';
 
 const route = useRoute();
 // store 必须在壳 setup 内首调（不变量 #1：切片链路上的 onBeforeUnmount 会绑到本组件）。
 const store = useOutsourceQuoteListStore();
-const form = useOutsourceQuoteForm({ refresh: store.query.fetchList });
+const form = useOutsourceQuoteForm();
 
 // ============================================================
 // 页级 lookup：OUTSOURCE 工序列表 + 可报价零件 picker
@@ -125,11 +125,19 @@ function closeDrawingPreview(): void {
 // ============================================================
 // 操作列路由：OutsourceQuoteTable emit('action') → form composable
 // ============================================================
-function onTableAction(payload: { type: 'submit' | 'approve' | 'reject' | 'delete'; row: any }): void {
-  if (payload.type === 'submit') void form.onSubmit(payload.row);
-  else if (payload.type === 'approve') form.openApprove(payload.row);
-  else if (payload.type === 'reject') form.openReject(payload.row);
-  else void form.onDelete(payload.row);
+// 行类型走 `OutsourceQuoteSchema`（表格 `emit('action')` 的 row 就是它）。表单包装收的是
+// `OutsourceQuote`（`@/types/outsource`），两者字段同构、只差 `status` 的宽度：schema 按
+// `z.string()` 收（DB 里存着 legacy 值，见 outsourceListSchema.ts），类型是活跃值 + legacy
+// 的联合。这一处显式 cast，不把 payload 标成 `any`。
+function onTableAction(payload: {
+  type: 'submit' | 'approve' | 'reject' | 'delete';
+  row: OutsourceQuoteSchema;
+}): void {
+  const row = payload.row as OutsourceQuote;
+  if (payload.type === 'submit') void form.onSubmit(row);
+  else if (payload.type === 'approve') form.openApprove(row);
+  else if (payload.type === 'reject') form.openReject(row);
+  else void form.onDelete(row);
 }
 
 onMounted(async () => {

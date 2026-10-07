@@ -609,6 +609,36 @@ describe('OutsourceBoard（外协看板壳）', () => {
     expect(tabLabels(wrapper).map((t) => t.code)).toEqual(['IP10', 'OP10']);
     wrapper.unmount();
   });
+
+  // 快照的 `category` 是 DB 真值：批次停在外协公司、`current_process_id` 却指向 INHOUSE
+  // 工序时（工序改过类别）后端照样下发这一行。它不在 OUTSOURCE 工序列表里 ⇒ 不补行的话
+  // 这批在途批次在看板彻底不可见，操作员既看不到也无从收货。
+  it('B10c：快照里 category=INHOUSE 且不在 OUTSOURCE 列表的工序 → 补成 tab（带在途徽标）', () => {
+    procsMock.items = [{ id: PROC_A, code: 'OP10', name: '外协粗车', color: null }];
+    snapshotMock.processes = [
+      {
+        process_id: PROC_INHOUSE,
+        process_code: 'IP10',
+        process_name: '自产车削',
+        color: null,
+        category: 'INHOUSE',
+        sendable_count: 0,
+        in_flight_count: 3,
+      },
+    ];
+
+    const wrapper = mountBoard();
+
+    expect(tabLabels(wrapper)).toEqual([
+      { code: 'OP10', badge: '(0 / 0)' },
+      { code: 'IP10', badge: '(0 / 3)' },
+    ]);
+    expect(wrapper.findAll('.process-board-tab-stub').map((b) => b.attributes('data-pid'))).toEqual([
+      PROC_A,
+      PROC_INHOUSE,
+    ]);
+    wrapper.unmount();
+  });
 });
 
 /** 从组件实例的 provides 里取值（provide/inject 的唯一可测缝）。 */

@@ -3,8 +3,9 @@
 // 不再寄居全局 `composables/queries/schemas.ts`：
 //   - 本域 schema 只被本域的 query hook / 视图消费，全局 schemas.ts 是「跨域共享基础
 //     数据」的 schema 集；
-//   - `company_options` 的公司下拉项 schema 除外 —— 它同时服务 `GET /outsource-sendable`
-//     （全局 schemas.ts 里的共享基础数据层），故留在那里由本文件 import。
+//   - `company_options` 的公司下拉项 schema 是例外但**不出域**：它复用同域
+//     `outsourceListSchema.outsourceCompanyOptionSchema`（同一个 VO —— 后端
+//     `vo/sendable.rs::OutsourceCompanyOption`），故由本文件 import 域内文件。
 //
 // 契约来源：后端 outsource 域「看板三件套」（`/outsource-queue/*`）。**已删除的字段不要
 // 在这里声明**：新契约删掉的 `status_label` / `source_status` / `batch_quantity` /
@@ -57,8 +58,9 @@ import { outsourceCompanyOptionSchema } from './outsourceListSchema';
  *
  *  几处容易误判的字段：
  *  - `quantity` 是**可发送数量**（行 = 批次时恒等于批次量）；
- *  - `shelf_id` 是批次真实所在货架（发送时给「撤回 / 对账」用），`shelf_code` 是它的
- *    展示形态；`PENDING` 且未上架的批次没有 holder，两个字段都为 null；
+ *  - `shelf_id` 是批次真实所在货架（发送 `from.shelf_id` 用），**非 nullable** ——
+ *    `PENDING` 且未上架的批次没有 holder（`current_holder_id` 为 NULL），后端把它序列化成
+ *    **空串**而不是 `null`；`shelf_code` 才是 nullable（它没有空串兜底，未上架为 null）；
  *  - `can_send` 是**后端派生**的可发送判据（APPROVAL，或 DIRECT 且 company_options
  *    非空），前端口径统一读它，不自己再算一遍；
  *  - `has_cnc_program` 与卡片 body 的「已编程」tag 同源。 */
@@ -80,7 +82,10 @@ export const outsourceQueueCandidateSchema = z.object({
   customer_name: z.string().nullable(),
   parent_customer_name: z.string().nullable(),
   shelf_code: z.string().nullable(),
-  shelf_id: z.string().nullable(),
+  /** `t_part_batch.current_holder_id`，**非 nullable**：`PENDING` 未上架批次是**空串**
+   *  （不是 null）—— 声明成 `.nullable()` 会让「后端返 null」这类漂移静默通过守门，UI
+   *  少置灰一行、直到拖到落点才弹「尚未上架」。 */
+  shelf_id: z.string(),
   /** APPROVAL 单值；DIRECT 为 null（用 company_options）。 */
   outsource_company_id: z.string().nullable(),
   outsource_company_name: z.string().nullable(),
@@ -175,6 +180,9 @@ export const outsourceQueueProcessSchema = z.object({
   /** `t_process.color`（9 字符 `#RRGGBBAA` 含 alpha），未设置时 null；前端直接喂 CSS
    * `border-left-color`，不做字符串加工。 */
   color: z.string().nullable(),
+  /** `t_process.category`（**DB 真值**）。批次停在外协公司、`current_process_id` 指向
+   *  INHOUSE 工序时快照照样下发这种行 —— 板级 `tabProcesses` 靠它把不在 OUTSOURCE
+   *  工序列表里的那些工序补成 tab。 */
   category: z.enum(['INHOUSE', 'OUTSOURCE']),
   sendable_count: z.number(),
   in_flight_count: z.number(),

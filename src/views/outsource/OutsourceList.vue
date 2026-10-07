@@ -148,6 +148,9 @@
         <el-form-item label="启用">
           <el-switch v-model="store.dialogs.form.is_active" />
         </el-form-item>
+        <!-- 勾选项取「共享 OUTSOURCE 工序列表 ∪ GET /{id} 回包的已映射工序」并集
+             （store.options.processOptions）：已映射但不在 OUTSOURCE 列表里的工序
+             必须仍可见可取消，否则保存时它被静默删掉。 -->
         <!-- el-checkbox-group 根元素非 labelable ⇒ 显式 for="" + aria-label（a11y） -->
         <el-form-item label="工序能力" for="">
           <el-checkbox-group
@@ -155,10 +158,10 @@
             class="process-check-group"
             aria-label="工序能力"
           >
-            <el-checkbox v-for="p in store.options.outsourceProcesses" :key="p.id" :value="p.id">
-              {{ p.code }} — {{ p.name }}
+            <el-checkbox v-for="p in store.options.processOptions" :key="p.id" :value="p.id">
+              {{ p.label }}
             </el-checkbox>
-            <span v-if="store.options.outsourceProcesses.length === 0" class="muted">
+            <span v-if="store.options.processOptions.length === 0" class="muted">
               没有 OUTSOURCE 工序，请先在「设置 → 工序管理」中新增
             </span>
           </el-checkbox-group>

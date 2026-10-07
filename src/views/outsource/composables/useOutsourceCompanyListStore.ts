@@ -184,17 +184,36 @@ export const useOutsourceCompanyListStore = defineStore('outsource-company-list'
   };
 
   // ============ 切片：options（工序勾选候选）============
-  // 勾选候选全集来自共享工序列表（`category='OUTSOURCE'`）—— 已映射工序的 code / name
-  // 由 `GET /{id}` 的 `processes[]` 提供，**两条来源取并集**：
-  //   - 只有共享列表能给出「还没映射过这道工序」的可选项（公司要能新增能力）；
-  //   - 只有回包能保证「后端已映射但不在当前 OUTSOURCE 列表里」（如工序被改成 INHOUSE）
-  //     的那一项不会在勾选框里凭空消失、导致保存时被静默清掉。
+  /** 已映射工序的 code / name（`GET /{id}` 回包提供，勾选项 label 与展示一致）。 */
+  const mappedProcesses = ref<Array<{ process_id: string; process_code: string; process_name: string }>>(
+    [],
+  );
+
+  // 勾选候选全集 = 共享 OUTSOURCE 工序列表 ∪ 回包里的已映射工序，**两条来源取并集**：
+  //   - 共享列表（`useProcessesQuery({category:'OUTSOURCE'})`）给「还没映射过这道工序」的
+  //     可选项（公司要能新增能力）；
+  //   - 回包给「后端已映射但不在当前 OUTSOURCE 列表里」（工序被改成 INHOUSE 的历史映射）
+  //     的那一项 —— 只走共享列表会让它在勾选框里凭空消失，用户看不见也取消不掉，
+  //     保存时那一项就被静默删掉。
   const processesQuery = useProcessesQuery({ category: 'OUTSOURCE', limit: 200 });
   const outsourceProcesses = computed<Process[]>(
     () => (processesQuery.data.value?.items ?? []) as Process[],
   );
 
-  const options = { outsourceProcesses };
+  /** 对话框「工序能力」勾选项 = 并集后的 `{id, label}` 列表（`outsourceProcesses` 在前，
+   *  回包补出来的追加在后，后者带「非外协工序」标注让操作员看得出异常来源）。 */
+  const processOptions = computed<{ id: string; label: string }[]>(() => {
+    const opts = outsourceProcesses.value.map((p) => ({ id: p.id, label: `${p.code} — ${p.name}` }));
+    const known = new Set(opts.map((o) => o.id));
+    for (const m of mappedProcesses.value) {
+      if (known.has(m.process_id)) continue;
+      known.add(m.process_id);
+      opts.push({ id: m.process_id, label: `${m.process_code} — ${m.process_name}（非外协工序）` });
+    }
+    return opts;
+  });
+
+  const options = { outsourceProcesses, processOptions };
 
   // ============ 切片：dialogs（新建 / 编辑合并为一个对话框）============
   const visible = ref(false);
@@ -204,11 +223,6 @@ export const useOutsourceCompanyListStore = defineStore('outsource-company-list'
   const editingVersion = ref<number | null>(null);
   const saving = ref(false);
   const form = reactive<CompanyFormState>(initialForm());
-
-  /** 已映射工序的 code / name（回包提供，勾选项 label 与展示一致）。 */
-  const mappedProcesses = ref<Array<{ process_id: string; process_code: string; process_name: string }>>(
-    [],
-  );
 
   function resetForm(): void {
     Object.assign(form, initialForm());
@@ -252,7 +266,12 @@ export const useOutsourceCompanyListStore = defineStore('outsource-company-list'
       ))
     )
       return;
-    await softDeleteMutation.mutateAsync({ id: row.id, version: row.version });
+    try {
+      await softDeleteMutation.mutateAsync({ id: row.id, version: row.version });
+    } catch {
+      // mutation onError 已 ElMessage 提示（OutsourceList 的按钮是裸接，不兜会多一条
+      // unhandledrejection）
+    }
   }
 
   // ============ 切片：mutations（三条写路径）============
