@@ -6,6 +6,11 @@
 // （`views/outsource/composables/outsourceQueueSchema.ts`），api 层 import 它就是
 // api → views 的反向依赖；守门由消费方 composable 在 queryFn / mutationFn 里
 // `xxxSchema.parse(await fetchXxx())` 完成。
+//
+// 2026-10-09：删掉 `listOutsourceSendable`（`GET /outsource-sendable`）与
+// `listOutsourceInFlight`（`GET /outsource-shipments/in-flight`）—— 外协看板
+// （`/outsource-queue/*` 三件套）取代了原「可发送 / 待接收」双表格页，这两个端点只服务
+// 那两个表格页，后端已硬切删除。前端也不留声明：留着的 helper 会让后来人以为还能调。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
 import type {
@@ -15,9 +20,7 @@ import type {
   OutsourceQueueSnapshotDto,
 } from './outsource.contract';
 import {
-  outsourceInFlightListResultSchema,
   outsourceQuotablePartListResultSchema,
-  outsourceSendableListResultSchema,
   outsourceSentPartListResultSchema,
 } from '@/composables/queries/schemas';
 import type {
@@ -26,7 +29,6 @@ import type {
   OutsourceCompanyListResult,
   OutsourceCompanyUpdatePayload,
   OutsourceCompanyWithProcesses,
-  OutsourceInFlightListResult,
   OutsourceQuote,
   OutsourceQuoteApprovePayload,
   OutsourceQuoteCreatePayload,
@@ -35,7 +37,6 @@ import type {
   OutsourceQuoteStatus,
   OutsourceQuoteUpdatePayload,
   OutsourceReconciliationUpdatePayload,
-  OutsourceSendableListResult,
   OutsourceSentPartListResult,
   OutsourceSentPartSortKey,
   QuotablePartListResult,
@@ -251,60 +252,6 @@ export async function reconcileUpdateShipment(
     `/outsource-shipments/${encodeURIComponent(shipmentId)}/reconcile-update`,
     payload,
   );
-}
-
-/**
- * 外协中批次列表（「待接收」tab 数据源）。
- * GET /outsource-shipments/in-flight
- *
- * 2026-10-03 契约对齐：URL 从 `/parts/outsource-in-flight` 迁到 outsource 域
- * （旧路径返的是通用零件列表 `PartListItem`，与本 VO 不同构）；出参从裸数组改为
- * 分页信封 `OutsourceInFlightListOut`。
- */
-export async function listOutsourceInFlight(
-  params: {
-    keyword?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
-): Promise<OutsourceInFlightListResult> {
-  const resp = await api.get<unknown>('/outsource-shipments/in-flight', {
-    params: cleanParams(params),
-  });
-  // 2026-10-03 修正：Zod 守门 + 形态对齐（此前按数组消费信封 ⇒ items.length
-  // undefined ⇒ 「待接收」tab 表格空白且分页失效）。
-  return outsourceInFlightListResultSchema.parse(
-    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
-  ) as OutsourceInFlightListResult;
-}
-
-/**
- * 统一外协可发送一览（「可发送」tab 数据源）：合并 APPROVAL（工序需审批 + 已有
- * 已审批报价）与 DIRECT（工序免审批）两类候选，每行带 send_mode + source_status。
- * GET /outsource-sendable
- *
- * 2026-10-03：URL 是 outsource 域顶层的 `/outsource-sendable`，函数落在本文件
- * （该列表与批次 lifecycle 写端点不同域：读侧是外协域，写的 `send-to-outsource`
- * 才是 prod/batches 域）。出参是分页信封。
- * 工序归属字段是 `current_process_id` / `current_process_name`，判据取
- * `t_part_batch.current_process_id`（兼容没制定过工序链的旧零件）。
- */
-export async function listOutsourceSendable(
-  params: {
-    keyword?: string;
-    customer_id?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
-): Promise<OutsourceSendableListResult> {
-  const resp = await api.get<unknown>('/outsource-sendable', {
-    params: cleanParams(params),
-  });
-  // 2026-10-03 修正：Zod 守门（此前无守门 ⇒ 旧 URL 返的通用零件列表被直接喂给
-  // 「可发送」表格，列全空且不报错）。
-  return outsourceSendableListResultSchema.parse(
-    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
-  ) as OutsourceSendableListResult;
 }
 
 // ============================================================

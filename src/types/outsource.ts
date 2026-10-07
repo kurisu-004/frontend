@@ -155,75 +155,13 @@ export interface OutsourceQuoteRejectPayload {
   review_note: string;
 }
 
-// ============================================================
-// 统一外协可发送一览（2026-07-28 新增）
-// ============================================================
-
-/** 发送模式：APPROVAL 需审批，DIRECT 无需审批可直发 */
-export type OutsourceSendMode = 'APPROVAL' | 'DIRECT';
-
-/** 来源状态：PENDING 起始外协（OFFICE），IN_PROCESS 中间外协（在生产架） */
-export type OutsourceSourceStatus = 'PENDING' | 'IN_PROCESS';
-
-/** 可发送候选公司选项（DIRECT 时由 UI 选择） */
+/** 外协候选行的公司下拉项（DIRECT 路径由用户在拖拽落点上选的那家公司）。
+ *  2026-10-09：`/outsource-sendable` 的列表类型随外协看板取代双表格页删除后，本条是
+ *  外协域**唯一**还在消费的公司选项类型 —— `api/outsource.contract.ts` 的候选 DTO
+ *  `company_options` 用它（与 Zod 侧的 `outsourceCompanyOptionSchema` 一一对应）。 */
 export interface OutsourceCompanyOption {
   id: string;
   name: string;
-}
-
-/** 外协可发送一览的统一返回项。
- *  2026-10-03：行粒度是「一个批次一行」，工序归属取 `t_part_batch.current_process_id`。 */
-export interface OutsourceSendableItem {
-  /** 乐观锁版本号（OCC；前端发送时回传）。
-   *  2026-07-29 PR-fix-0.2.0：批次化后改为 TPartBatch.version（批次级 OCC） */
-  version: number;
-  /** 2026-10-03 语义：由外协工序的 `requires_approval` 决定（false → DIRECT，
-   *  true → APPROVAL），不再看「有没有已审批报价」；`requires_approval = true` 但
-   *  无已审批报价的行后端**不返回**，故本列表行数会随报价齐备度变化。 */
-  send_mode: OutsourceSendMode;
-  source_status: OutsourceSourceStatus;
-  part_id: string;
-  part_serial_no: string | null;
-  part_drawing_no: string | null;
-  part_name: string | null;
-  /** 可发送数量（行=批次：等于 batch_quantity） */
-  quantity: number | null;
-  /** 2026-07-29 PR-fix-0.2.0 批次化字段：可发送批次 id */
-  batch_id: string;
-  /** 2026-07-29 PR-fix-0.2.0 批次化字段：批次号（per-part 递增） */
-  batch_no: number;
-  /** 2026-07-29 PR-fix-0.2.0 批次化字段：批次数量 */
-  batch_quantity: number;
-  planned_delivery_date: string | null;
-  is_urgent: boolean;
-  customer_path: string | null;
-  /** 批次**当前所属**的外协工序（不是「下一道工序」），权威依据是
-   *  `t_part_batch.current_process_id`（工序候选池的归属判据）。发往该工序的
-   *  body 键名另叫 `process_id`（后端 `SendToOutsourceRequest` 不叫这个）。 */
-  current_process_id: string;
-  /** 同 `current_process_id` 的展示名 */
-  current_process_name: string | null;
-  /** PR-H 2026-07-28：源货架 code（如 C2） */
-  shelf_code: string | null;
-  /** APPROVAL 单值；DIRECT 为 null（用 company_options） */
-  outsource_company_id: string | null;
-  outsource_company_name: string | null;
-  /** DIRECT 时为该 part 可用的全部公司；APPROVAL 时为空数组（用单值字段） */
-  company_options: OutsourceCompanyOption[];
-  /** APPROVAL 时为该报价的 Decimal 字符串；DIRECT 为 null（直发无报价） */
-  price: string | null;
-  /** 2026-10-03 新增：APPROVAL 模式回指的报价 id（雪花 ID 字符串）；DIRECT 为 null。
-   *  发送端点要求 `quote_id` 与 `direct` 必传其一，两者都不传返 400 —— 前端由本字段
-   *  判定模式并组装 payload，字段缺失会把每一行都打回 400。 */
-  quote_id: string | null;
-  status_label: 'sendable';
-}
-
-export interface OutsourceSendableListResult {
-  items: OutsourceSendableItem[];
-  total: number;
-  limit: number;
-  offset: number;
 }
 
 // ============================================================
@@ -279,40 +217,6 @@ export interface OutsourceReconciliationUpdatePayload {
   quantity?: number | null;
   /** 对账标记；null = 不更新 */
   is_billed?: boolean | null;
-}
-
-// ============================================================
-// 外协中批次列表（2026-07-30 新增）
-// ============================================================
-
-export interface OutsourceInFlightItem {
-  part_id: string;
-  batch_id: string;
-  batch_no: number;
-  /** 当前批次**剩余待收量**（部分接收后源批次留余量，本值随之变小），
-   *  不是 shipment 的发出量。 */
-  quantity: number;
-  serial_no: string | null;
-  drawing_no: string | null;
-  name: string | null;
-  is_urgent: boolean;
-  customer_path: string | null;
-  next_process_id: string | null;
-  next_process_name: string | null;
-  outsource_company_id: string;
-  outsource_company_name: string | null;
-  /** 开口 shipment 的发出时间（ISO datetime） */
-  sent_at: string;
-  /** t_part_batch.version —— `receive-from-outsource` 的 OCC 锚（**不是** shipment 的
-   *  version；部分接收拆批后源批次 version 会自增，列表每次重取都要带最新值）。 */
-  version: number;
-}
-
-export interface OutsourceInFlightListResult {
-  items: OutsourceInFlightItem[];
-  total: number;
-  limit: number;
-  offset: number;
 }
 
 // ============================================================

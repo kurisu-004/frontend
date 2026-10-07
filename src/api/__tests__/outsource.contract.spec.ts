@@ -11,6 +11,8 @@
 //        `/{id}`（`Path<i64>`）吞成 400 ⇒ 报价页每次进都报错 + picker 恒空；
 //     ③ `GET /parts/outsource-in-flight` / `/parts/outsource-sendable` 后端存在但返的是
 //        通用零件列表 `PartListItem` ⇒ 收发两 tab 全空白。
+//   2026-10-09：③ 的两个端点随外协看板取代那对表格页而删除，本文件守的 list 端点从
+//   4 个减为 2 个（对账 / 可报价零件）；A3 留了一条存在性反断言钉住「不得复活」。
 //   契约必须在前端侧被逐字钉死，不能靠「后端自测 + 类型系统」兜底。
 //
 // 本文件负责「路径与形态」，守门有效性（漏声明字段会被 strip）由 §E 组用例保证。
@@ -26,9 +28,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  outsourceInFlightListResultSchema,
   outsourceQuotablePartListResultSchema,
-  outsourceSendableListResultSchema,
   outsourceSentPartListResultSchema,
 } from '@/composables/queries/schemas';
 
@@ -44,12 +44,7 @@ vi.mock('@/api/http', () => ({
   normalizeListResult: (v: unknown) => v,
 }));
 
-import {
-  listCompanySentParts,
-  listOutsourceInFlight,
-  listOutsourceSendable,
-  listQuotableParts,
-} from '../outsource';
+import { listCompanySentParts, listQuotableParts } from '../outsource';
 import { receiveFromOutsource, sendToOutsource } from '@/api/parts';
 
 const COMPANY = '190000000000900';
@@ -80,7 +75,7 @@ beforeEach(() => {
   httpPostMock.mockReset();
 });
 
-describe('A 组：4 个 list 端点 URL 逐字钉死', () => {
+describe('A 组：2 个 list 端点 URL 逐字钉死', () => {
   it('A1：对账列表 = /outsource-companies/{id}/sent-parts（companyId 走 encodeURIComponent）', async () => {
     expect(await fetchedPath(() => listCompanySentParts(COMPANY))).toBe(
       `/outsource-companies/${COMPANY}/sent-parts`,
@@ -91,31 +86,22 @@ describe('A 组：4 个 list 端点 URL 逐字钉死', () => {
     expect(await fetchedPath(() => listQuotableParts())).toBe('/outsource-quotes/quotable-parts');
   });
 
-  // ⚠️ 故障 ③ 的直接修复点：URL 已从 part 域迁到 outsource 域。
-  // 旧路径 `/parts/outsource-in-flight` 的 handler 返的是通用零件列表 PartListItem，
-  // 与前端要的外协专用 VO 完全不同构 —— 写回去就等于把「两 tab 全空白」请回来。
-  it('A3：待接收 = /outsource-shipments/in-flight', async () => {
-    expect(await fetchedPath(() => listOutsourceInFlight())).toBe('/outsource-shipments/in-flight');
+  // 2026-10-09：`/outsource-shipments/in-flight` 与 `/outsource-sendable` 两个 helper
+  // 随外协看板（`/outsource-queue/*` 三件套）取代「可发送 / 待接收」双表格页一并删除
+  // （后端已硬切）。这里留一条**存在性反断言**：模块上不得再有这两个导出 —— 留着会让
+  // 后来人以为还能调，而它们的出参 VO（`OutsourceInFlightItem` /
+  // `OutsourceSendableItem`）与看板的 `OutsourceQueueHeldBatch` /
+  // `OutsourceQueueCandidate` 完全不同构。
+  it('A3：已下线的两个 list helper 不再是本模块的导出（外协看板取代双表格页）', async () => {
+    const mod = (await import('../outsource')) as Record<string, unknown>;
+    expect(mod.listOutsourceInFlight).toBeUndefined();
+    expect(mod.listOutsourceSendable).toBeUndefined();
   });
 
-  it('A4：可发送 = /outsource-sendable（且已从 @/api/parts 迁到 @/api/outsource）', async () => {
-    expect(await fetchedPath(() => listOutsourceSendable())).toBe('/outsource-sendable');
-  });
-
-  // ⚠️ 这 4 条在逻辑上**被 A3 / A4 蕴含**（那两条已把 URL 逐字钉死），不可能独立失败 ——
-  // 记在这里只是把「旧路径不得复活」写成可读的意图，不作独立守卫计功。
-  it('A5：反断言 —— 已下线的两条旧 URL 不得复活（被 A3 / A4 蕴含）', async () => {
-    expect(await fetchedPath(() => listOutsourceInFlight())).not.toContain('/parts/');
-    expect(await fetchedPath(() => listOutsourceSendable())).not.toContain('/parts/');
-    // 引号级别的硬钉：谁把字面量改回去，这里直接红。
-    expect(await fetchedPath(() => listOutsourceInFlight())).not.toBe('/parts/outsource-in-flight');
-    expect(await fetchedPath(() => listOutsourceSendable())).not.toBe('/parts/outsource-sendable');
-  });
-
-  it('A6：分页参数照传（limit / offset 进 query）', async () => {
+  it('A4：分页参数照传（limit / offset 进 query）', async () => {
     httpGetMock.mockReset();
     httpGetMock.mockResolvedValue({ data: { items: [], total: 0, limit: 20, offset: 40 } });
-    await listOutsourceInFlight({ keyword: 'k', limit: 20, offset: 40 });
+    await listCompanySentParts(COMPANY, { keyword: 'k', limit: 20, offset: 40 });
     const [, cfg] = httpGetMock.mock.calls[0] as [string, { params: Record<string, unknown> }];
     expect(cfg.params).toEqual({ keyword: 'k', limit: 20, offset: 40 });
   });
@@ -269,50 +255,6 @@ const quotablePartFixture = {
   customer_path: '一级客户/二级客户',
 };
 
-const inFlightFixture = {
-  part_id: 'P1',
-  batch_id: 'BA1',
-  batch_no: 1,
-  quantity: 8,
-  serial_no: 'SN-1',
-  drawing_no: 'DWG-1',
-  name: '零件甲',
-  is_urgent: true,
-  customer_path: '一级客户/二级客户',
-  next_process_id: 'PR1',
-  next_process_name: '外协工序',
-  outsource_company_id: 'C1',
-  outsource_company_name: '外协厂',
-  sent_at: '2026-10-01T08:00:00',
-  version: 4,
-};
-
-const sendableFixture = {
-  version: 2,
-  send_mode: 'APPROVAL',
-  source_status: 'IN_PROCESS',
-  part_id: 'P1',
-  part_serial_no: 'SN-1',
-  part_drawing_no: 'DWG-1',
-  part_name: '零件甲',
-  quantity: 10,
-  batch_id: 'BA1',
-  batch_no: 1,
-  batch_quantity: 10,
-  planned_delivery_date: '2026-10-20',
-  is_urgent: false,
-  customer_path: '一级客户/二级客户',
-  current_process_id: 'PR1',
-  current_process_name: '外协工序',
-  shelf_code: 'C2',
-  outsource_company_id: 'C1',
-  outsource_company_name: '外协厂',
-  company_options: [],
-  price: '30.00',
-  quote_id: 'Q1',
-  status_label: 'sendable',
-};
-
 /** 从 fixture 浅拷并删掉一个键。 */
 function omit<T extends object>(obj: T, key: keyof T): Omit<T, keyof T> {
   const { [key]: _dropped, ...rest } = obj;
@@ -320,7 +262,7 @@ function omit<T extends object>(obj: T, key: keyof T): Omit<T, keyof T> {
   return rest as Omit<T, keyof T>;
 }
 
-describe('E 组：4 个 item schema 的守门有效性', () => {
+describe('E 组：2 个 item schema 的守门有效性', () => {
   it('E1：合法 fixture 全部 parse 通过（items/total/limit/offset 信封）', () => {
     expect(
       outsourceSentPartListResultSchema.parse({
@@ -338,22 +280,6 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
         offset: 0,
       }).items[0]!.customer_path,
     ).toBe('一级客户/二级客户');
-    expect(
-      outsourceInFlightListResultSchema.parse({
-        items: [inFlightFixture],
-        total: 1,
-        limit: 20,
-        offset: 0,
-      }).items[0]!.version,
-    ).toBe(4);
-    expect(
-      outsourceSendableListResultSchema.parse({
-        items: [sendableFixture],
-        total: 1,
-        limit: 20,
-        offset: 0,
-      }).items[0]!.quote_id,
-    ).toBe('Q1');
   });
 
   // 逐条锁「漏声明 ⇒ 静默 strip」这个坑：每个 schema 抽 2 个代表性必填字段
@@ -383,34 +309,9 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
         offset: 0,
       }),
     ).toThrow();
-    expect(() =>
-      outsourceInFlightListResultSchema.parse({
-        items: [omit(inFlightFixture, 'sent_at')],
-        total: 1,
-        limit: 50,
-        offset: 0,
-      }),
-    ).toThrow();
-    expect(() =>
-      outsourceSendableListResultSchema.parse({
-        items: [omit(sendableFixture, 'quote_id')],
-        total: 1,
-        limit: 50,
-        offset: 0,
-      }),
-    ).toThrow();
   });
 
   it('E3：字段类型错 → parse 抛错（雪花 id 必须是 string，Decimal 必须是 string）', () => {
-    // 雪花 id 退化成 number（后端某天漏了 serialize_i64）必须被抓出来，不能 coerce 掩盖。
-    expect(() =>
-      outsourceInFlightListResultSchema.parse({
-        items: [{ ...inFlightFixture, batch_id: 123 }],
-        total: 1,
-        limit: 50,
-        offset: 0,
-      }),
-    ).toThrow();
     // Decimal 退化成 number
     expect(() =>
       outsourceSentPartListResultSchema.parse({
@@ -420,44 +321,9 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
         offset: 0,
       }),
     ).toThrow();
-    // is_urgent 退化成字符串
-    expect(() =>
-      outsourceSendableListResultSchema.parse({
-        items: [{ ...sendableFixture, is_urgent: 'true' }],
-        total: 1,
-        limit: 50,
-        offset: 0,
-      }),
-    ).toThrow();
   });
 
-  it('E4：枚举字段锁死（send_mode / source_status / status_label / shipment status）', () => {
-    expect(() =>
-      outsourceSendableListResultSchema.parse({
-        items: [{ ...sendableFixture, send_mode: 'AUTO' }],
-        total: 1,
-        limit: 50,
-        offset: 0,
-      }),
-    ).toThrow();
-    // source_status 的两个合法值（PENDING / IN_PROCESS）由 E1 与 E5 覆盖正向，
-    // 这里补非法值 —— 只测 send_mode 的话，source_status 退化成 z.string() 不会被发现。
-    expect(() =>
-      outsourceSendableListResultSchema.parse({
-        items: [{ ...sendableFixture, source_status: 'FINISHED' }],
-        total: 1,
-        limit: 50,
-        offset: 0,
-      }),
-    ).toThrow();
-    expect(() =>
-      outsourceSendableListResultSchema.parse({
-        items: [{ ...sendableFixture, status_label: 'pending' }],
-        total: 1,
-        limit: 50,
-        offset: 0,
-      }),
-    ).toThrow();
+  it('E4：枚举字段锁死（shipment status）', () => {
     expect(() =>
       outsourceSentPartListResultSchema.parse({
         items: [{ ...sentPartFixture, status: 'SHIPPED' }],
@@ -485,32 +351,8 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
     }
   });
 
-  // DIRECT 行：company_options 有值、quote_id 为 null、price 为 null。
-  // 这条锁的是「DIRECT 模式真的能 parse」—— 旧 VO 没有 quote_id，DIRECT 行的
-  // 三个 null 字段组合是最容易在 schema 里写歪的地方。
-  it('E5：DIRECT 行 fixture parse 通过（company_options 有值、quote_id / price 为 null）', () => {
-    const direct = {
-      ...sendableFixture,
-      send_mode: 'DIRECT',
-      source_status: 'PENDING',
-      outsource_company_id: null,
-      company_options: [{ id: 'C1', name: '外协厂' }],
-      price: null,
-      quote_id: null,
-    };
-    const parsed = outsourceSendableListResultSchema.parse({
-      items: [direct],
-      total: 1,
-      limit: 50,
-      offset: 0,
-    });
-    expect(parsed.items[0]!.company_options).toEqual([{ id: 'C1', name: '外协厂' }]);
-    expect(parsed.items[0]!.quote_id).toBeNull();
-  });
-
   it('E6：top-level 裸数组 → parse 抛错（防「信封退化成数组」的历史形态复发）', () => {
     // 这正是故障 ③ 的形态：把分页信封当数组用。守门必须在 API 边界就拒绝。
-    expect(() => outsourceInFlightListResultSchema.parse([inFlightFixture])).toThrow();
     expect(() => outsourceQuotablePartListResultSchema.parse([quotablePartFixture])).toThrow();
   });
 
@@ -522,7 +364,7 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
   //   · schema 多声明一个 **optional** 字段 → 键集断言**看不见**（Zod 对输入中缺省的
   //     optional 键不写入输出，parse 结果与 fixture 键集仍相等）。该失败模式本身无害
   //     —— 多一个 optional 声明不会误拒任何响应，也不会有字段被静默吞掉。
-  // 66 个字段（18 + 10 + 15 + 23）一次性锁住。
+  // 28 个字段（18 + 10）一次性锁住。
   it('E7：parse 后的行键集与后端 VO 字段集逐字段相等（少声明 / 多声明必填字段都红）', () => {
     const cases = [
       {
@@ -536,18 +378,6 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
         schema: outsourceQuotablePartListResultSchema,
         fixture: quotablePartFixture,
         vo: 10,
-      },
-      {
-        name: 'in-flight（15 字段）',
-        schema: outsourceInFlightListResultSchema,
-        fixture: inFlightFixture,
-        vo: 15,
-      },
-      {
-        name: 'sendable（23 字段）',
-        schema: outsourceSendableListResultSchema,
-        fixture: sendableFixture,
-        vo: 23,
       },
     ];
     for (const { name, schema, fixture, vo } of cases) {
@@ -564,7 +394,7 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
 //
 // 为什么必须走 helper 而不是直接测 schema：E 组全是在隔离环境里 import 真 schema
 // 直接 parse，锁的是「schema 自身行为」；它证明不了 `.parse()` 真的接在
-// `listOutsourceInFlight` 的返回路径上。把 helper 里的 `.parse()` 整段删掉
+// `listCompanySentParts` 的返回路径上。把 helper 里的 `.parse()` 整段删掉
 // （只留 `normalizeListResult(...)`）时 E 组仍全绿 —— 守门被拆掉而测试无感。
 // F 组每条都从 helper 进、期待 rejected promise，把「守门在 API 边界」钉成可执行断言。
 //
@@ -574,7 +404,7 @@ describe('E 组：4 个 item schema 的守门有效性', () => {
 //
 // ⚠️ 覆盖边界：F 组锁的是「schema 挂上了没」。`normalizeListResult` 的 i64 → number
 // 强转**在覆盖范围外** —— 它在本文件被 `@/api/http` 的整模块 mock 桩成恒等函数，
-// 把 4 个 helper 里的 `normalizeListResult(...)` 包装整个删掉，F 组仍全绿。该 helper
+// 把 2 个 helper 里的 `normalizeListResult(...)` 包装整个删掉，F 组仍全绿。该 helper
 // 是全仓共享的、有独立的测试缺口；且删掉后是「响亮失败」（schema 的 `total: z.number()`
 // 会拒收字符串 total 抛 ZodError），不会退化成静默空白，故不纳入本组。
 // ============================================================
@@ -585,32 +415,22 @@ function respondWith(data: unknown): void {
   httpGetMock.mockResolvedValue({ data });
 }
 
-describe('F 组：4 个 list helper 真的在 API 边界 reject 坏响应', () => {
-  it('F1：裸数组响应 → 4 个 helper 全部 reject（不把数组当信封吐出去）', async () => {
-    respondWith([inFlightFixture]);
-    await expect(listOutsourceInFlight()).rejects.toThrow();
-    respondWith([sendableFixture]);
-    await expect(listOutsourceSendable()).rejects.toThrow();
+describe('F 组：2 个 list helper 真的在 API 边界 reject 坏响应', () => {
+  it('F1：裸数组响应 → 2 个 helper 全部 reject（不把数组当信封吐出去）', async () => {
     respondWith([quotablePartFixture]);
     await expect(listQuotableParts()).rejects.toThrow();
     respondWith([sentPartFixture]);
     await expect(listCompanySentParts(COMPANY)).rejects.toThrow();
   });
 
-  it('F2：信封在但行是空对象 → 4 个 helper 全部 reject（漏声明字段不会被静默放过）', async () => {
+  it('F2：信封在但行是空对象 → 2 个 helper 全部 reject（漏声明字段不会被静默放过）', async () => {
     respondWith({ items: [{}], total: 1, limit: 50, offset: 0 });
-    await expect(listOutsourceInFlight()).rejects.toThrow();
-    await expect(listOutsourceSendable()).rejects.toThrow();
     await expect(listQuotableParts()).rejects.toThrow();
     await expect(listCompanySentParts(COMPANY)).rejects.toThrow();
   });
 
   // 正向对照：合法信封必须**放行**。没有这条，F 组可能整体因为桩坏掉而恒绿。
-  it('F3：合法分页信封 → 4 个 helper 全部 resolve 且透传 items/total', async () => {
-    respondWith({ items: [inFlightFixture], total: 1, limit: 20, offset: 0 });
-    await expect(listOutsourceInFlight()).resolves.toMatchObject({ total: 1 });
-    respondWith({ items: [sendableFixture], total: 1, limit: 20, offset: 0 });
-    await expect(listOutsourceSendable()).resolves.toMatchObject({ total: 1 });
+  it('F3：合法分页信封 → 2 个 helper 全部 resolve 且透传 items/total', async () => {
     respondWith({ items: [quotablePartFixture], total: 1, limit: 500, offset: 0 });
     await expect(listQuotableParts()).resolves.toMatchObject({ total: 1 });
     respondWith({ items: [sentPartFixture], total: 1, limit: 50, offset: 0 });

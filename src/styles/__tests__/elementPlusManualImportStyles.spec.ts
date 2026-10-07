@@ -49,7 +49,7 @@ interface Violation {
   missing: string[];
 }
 
-// 存量豁免表（2026-10-03）：这 27 个文件同样手动 import 了 EP 组件，但当前样式由**同路由
+// 存量豁免表（2026-10-03）：这些文件同样手动 import 了 EP 组件，但当前样式由**同路由
 // 其它文件**经 resolver 顺带注入，视觉正常；逐一补 style import 属预防性改动，本轮不做
 // （用户明确决定）。**补齐后请从表里删掉对应行**，否则豁免会长期掩盖后续新引入的同类漏洞。
 //
@@ -68,8 +68,6 @@ const EXEMPT: Record<string, string[]> = {
   'views/delivery/components/PrintPreviewDialog.vue': ['el-tag', 'el-table'],
   'views/outsource/OutsourceCompanySentParts.vue': ['el-input-number', 'el-switch', 'el-tag'],
   'views/outsource/OutsourceList.vue': ['el-tag', 'el-table'],
-  'views/outsource/OutsourceReceivingTab.vue': ['el-tag'],
-  'views/outsource/OutsourceSendableTab.vue': ['el-tag'],
   'views/outsource/components/OutsourceQuoteTable.vue': ['el-link'],
   'views/parts/detail/components/PartBatchMonitorCard.vue': ['el-tag'],
   'views/parts/list/components/PurchaseOrderImportDialog.vue': ['el-tag', 'el-tooltip'],
