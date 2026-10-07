@@ -11,7 +11,9 @@
 // 覆盖：防抖 / inflight 守卫 / 扫码取树成功与错误分流 / 入单提交 / 草稿提交。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { nextTick } from 'vue';
+import { createApp, nextTick } from 'vue';
+import { createPinia, setActivePinia } from 'pinia';
+import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 
 vi.mock('@/api/com/deliveryNote', () => ({
   getDeliveryScanTree: vi.fn(),
@@ -33,12 +35,22 @@ vi.mock('element-plus', () => ({
   },
 }));
 
-import {
+// composable 内部已经用上 useMutation（扫码取树 / 入单提交），需要 vue-query 的注入上下文。
+const app = createApp({ render: () => null });
+app.use(createPinia());
+app.use(VueQueryPlugin, { queryClient: new QueryClient() });
+setActivePinia(app.config.globalProperties.$pinia);
+/** 在 app 注入上下文里跑一段 setup 体（vue-query hook 的硬要求）。 */
+function inSetup<T>(fn: () => T): T {
+  return app.runWithContext(fn);
+}
+
+const {
   getDeliveryScanTree,
   submitDeliveryEntries,
   getNote,
   submitNote,
-} from '@/api/com/deliveryNote';
+} = await import('@/api/com/deliveryNote');
 import { useDeliveryScanSubmission } from '../composables/useDeliveryScanSubmission';
 import { ApiError } from '@/api/http';
 import type { DeliveryScanTreeData } from '../composables/deliveryScanTreeSchema';
@@ -108,7 +120,7 @@ describe('useDeliveryScanSubmission 扫码取树（纯读，不建单）', () =>
   it('命中 → 打开三层树对话框，且不写草稿（建单要等用户确认数量）', async () => {
     vi.mocked(getDeliveryScanTree).mockResolvedValue(mkTree());
     const opts = baseOpts();
-    const sub = useDeliveryScanSubmission(opts);
+    const sub = inSetup(() => useDeliveryScanSubmission(opts));
     await sub.handleScan('A001');
     await nextTick();
     expect(sub.scanTreeDialogVisible.value).toBe(true);
@@ -118,7 +130,7 @@ describe('useDeliveryScanSubmission 扫码取树（纯读，不建单）', () =>
   });
 
   it('空条码 / 超长条码 → 直接 warning，不发请求', async () => {
-    const sub = useDeliveryScanSubmission(baseOpts());
+    const sub = inSetup(() => useDeliveryScanSubmission(baseOpts()));
     await sub.handleScan('   ');
     expect(getDeliveryScanTree).not.toHaveBeenCalled();
     expect(sub.scanTreeDialogVisible.value).toBe(false);
@@ -126,7 +138,7 @@ describe('useDeliveryScanSubmission 扫码取树（纯读，不建单）', () =>
 
   it('1.5s 内同码重复扫码 → 吞掉（扫码枪连扫容错）', async () => {
     vi.mocked(getDeliveryScanTree).mockResolvedValue(mkTree());
-    const sub = useDeliveryScanSubmission(baseOpts());
+    const sub = inSetup(() => useDeliveryScanSubmission(baseOpts()));
     await sub.handleScan('A001');
     await sub.handleScan('A001');
     expect(getDeliveryScanTree).toHaveBeenCalledTimes(1);
@@ -135,7 +147,7 @@ describe('useDeliveryScanSubmission 扫码取树（纯读，不建单）', () =>
   it('21421（C 组状态不允许）→ toast，不弹对话框', async () => {
     vi.mocked(getDeliveryScanTree).mockRejectedValue(new ApiError(21421, '批次状态不允许'));
     const { ElMessage } = await import('element-plus');
-    const sub = useDeliveryScanSubmission(baseOpts());
+    const sub = inSetup(() => useDeliveryScanSubmission(baseOpts()));
     await sub.handleScan('X');
     await nextTick();
     expect(sub.scanTreeDialogVisible.value).toBe(false);
@@ -145,7 +157,7 @@ describe('useDeliveryScanSubmission 扫码取树（纯读，不建单）', () =>
   it('21417（条码未命中）→ toast「无法识别扫码」', async () => {
     vi.mocked(getDeliveryScanTree).mockRejectedValue(new ApiError(21417, 'not found'));
     const { ElMessage } = await import('element-plus');
-    const sub = useDeliveryScanSubmission(baseOpts());
+    const sub = inSetup(() => useDeliveryScanSubmission(baseOpts()));
     await sub.handleScan('X');
     await nextTick();
     expect(sub.scanTreeDialogVisible.value).toBe(false);
@@ -160,10 +172,11 @@ describe('useDeliveryScanSubmission 入单提交（POST /scan）', () => {
     vi.mocked(getDeliveryScanTree).mockResolvedValue(mkTree());
     vi.mocked(submitDeliveryEntries).mockResolvedValue(mkDetail('N1', 6));
     const opts = baseOpts();
-    const sub = useDeliveryScanSubmission(opts);
+    const sub = inSetup(() => useDeliveryScanSubmission(opts));
     await sub.handleScan('A001');
     await sub.onSubmitEntries([{ node_kind: 'PART', node_id: 'P1', quantity: 3 }]);
-    expect(submitDeliveryEntries).toHaveBeenCalledWith({
+    // mutationFn 会被 vue-query 追加第 2 个参数（mutation context），所以只断言第 1 个
+    expect(vi.mocked(submitDeliveryEntries).mock.calls[0]![0]).toEqual({
       serial_no: 'A001',
       note_version: 5,
       entries: [{ node_kind: 'PART', node_id: 'P1', quantity: 3 }],
@@ -176,17 +189,18 @@ describe('useDeliveryScanSubmission 入单提交（POST /scan）', () => {
   it('无既有草稿（draft=null）→ note_version 传 null，由服务端建单', async () => {
     vi.mocked(getDeliveryScanTree).mockResolvedValue(mkTree({ draft: null }));
     vi.mocked(submitDeliveryEntries).mockResolvedValue(mkDetail('NEW', 1));
-    const sub = useDeliveryScanSubmission(baseOpts());
+    const sub = inSetup(() => useDeliveryScanSubmission(baseOpts()));
     await sub.loadScanTree('A001');
     await sub.onSubmitEntries([{ node_kind: 'PART', node_id: 'P1', quantity: 1 }]);
     expect(vi.mocked(submitDeliveryEntries).mock.calls[0]![0].note_version).toBeNull();
   });
 
   it('40901（撞并发扫码）→ warning 且保留树对话框让用户重扫', async () => {
+    // onSubmitEntries 把错误吞掉（onError 已 toast），不让它变成未处理的 rejection
     vi.mocked(getDeliveryScanTree).mockResolvedValue(mkTree());
     vi.mocked(submitDeliveryEntries).mockRejectedValue(new ApiError(40901, 'version 冲突'));
     const { ElMessage } = await import('element-plus');
-    const sub = useDeliveryScanSubmission(baseOpts());
+    const sub = inSetup(() => useDeliveryScanSubmission(baseOpts()));
     await sub.handleScan('A001');
     await sub.onSubmitEntries([{ node_kind: 'PART', node_id: 'P1', quantity: 1 }]);
     expect(ElMessage.warning).toHaveBeenCalled();
@@ -201,7 +215,7 @@ describe('useDeliveryScanSubmission 草稿提交', () => {
     vi.mocked(getNote).mockResolvedValue(mkDetail('N1', 5));
     vi.mocked(submitNote).mockResolvedValue('N1');
     const opts = baseOpts();
-    const sub = useDeliveryScanSubmission(opts);
+    const sub = inSetup(() => useDeliveryScanSubmission(opts));
     await sub.onSubmitDraft(mkDraft('N1', 4));
     await nextTick();
     // 详情是 version 的更新源：listNotes 给的 4 会被刷成 5
@@ -215,7 +229,7 @@ describe('useDeliveryScanSubmission 草稿提交', () => {
     vi.mocked(submitNote).mockRejectedValue(new ApiError(21403, '版本已过期'));
     const { ElMessage } = await import('element-plus');
     const opts = baseOpts();
-    const sub = useDeliveryScanSubmission(opts);
+    const sub = inSetup(() => useDeliveryScanSubmission(opts));
     await sub.onSubmitDraft(mkDraft('N1', 5));
     await nextTick();
     expect(opts.onDraftRemoved).not.toHaveBeenCalled();

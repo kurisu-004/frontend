@@ -38,7 +38,7 @@ import {
   invalidateDeliveryGroupsQuery,
   useDeliveryGroupsQuery,
 } from './composables/useDeliveryGroupsQuery';
-import type { DeliveryNoteItemData } from './composables/deliveryNoteSchema';
+import type { DeliveryNoteItemData, DeliveryScanEntry } from './composables/deliveryNoteSchema';
 import {
   useDeliveryDraftBoard,
   type DraftTableInstance,
@@ -48,6 +48,7 @@ import { useDeliveryScanSubmission } from './composables/useDeliveryScanSubmissi
 import DeliveryScanBar from './components/DeliveryScanBar.vue';
 import DeliveryGroupPanel from './components/DeliveryGroupPanel.vue';
 import DeliveryDraftCard from './components/DeliveryDraftCard.vue';
+import DeliveryScanTreeDialog from './components/DeliveryScanTreeDialog.vue';
 import PrintPreviewDialog from './components/PrintPreviewDialog.vue';
 
 const router = useRouter();
@@ -102,6 +103,13 @@ async function reloadGroups(): Promise<void> {
 
 // ============ 草稿卡片业务（board）============
 const board = useDeliveryDraftBoard();
+
+/** 扫码台顶部的「当前草稿」锚点：同 L1 同时只允许一张 DRAFT（后端有部分唯一索引兜底），
+ *  所以这里直接取看板里的第一张。扫码入单成功后就地替换，无需重扫。 */
+const currentDraft = computed<DeliveryNoteItemData | null>(() => {
+  const first = board.drafts.value[Object.keys(board.drafts.value)[0] ?? ''];
+  return first ?? null;
+});
 
 // ============ 扫码 + 入单 + 提交 + 预览（submission）============
 const submission = useDeliveryScanSubmission({
@@ -262,6 +270,14 @@ onBeforeUnmount(() => {
       @update:l1-id="(v: string) => scanState.setL1CustomerId(v)"
     />
 
+    <!-- 当前 L1 下的草稿单号 / 状态（扫码台顶部的单据锚点；入单就落在这里） -->
+    <div v-if="currentDraft" class="draft-banner">
+      <span class="draft-banner__label">当前草稿</span>
+      <strong class="draft-banner__no">{{ currentDraft.delivery_note_no }}</strong>
+      <el-tag size="small" type="info" effect="plain">{{ currentDraft.status }}</el-tag>
+      <span class="muted">{{ currentDraft.part_count }} 条 · v{{ currentDraft.version }}</span>
+    </div>
+
     <!-- 分组规则面板 -->
     <DeliveryGroupPanel
       :groups="groups"
@@ -314,6 +330,16 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- ========== 扫码入单三层树（page-level，shell 渲染） ==========
+      v-if 保持：tree=null 时（取树在途 / 失败）不渲染，避免闪一张空表。 -->
+    <DeliveryScanTreeDialog
+      v-if="submission.scanTree.value"
+      v-model="submission.scanTreeDialogVisible.value"
+      :tree="submission.scanTree.value"
+      :submitting="submission.scanSubmitting.value"
+      @submit="(entries: DeliveryScanEntry[]) => submission.onSubmitEntries(entries)"
+    />
+
     <!-- ========== 打印送货单预览（page-level，shell 渲染） ==========
       v-if 保持：note=null 时（getNote 加载中）不渲染 dialog。openPrintNote
       等 detail 拉回后再开 dialog，避免 PrintPreviewDialog 在 note=null 时
@@ -337,6 +363,25 @@ onBeforeUnmount(() => {
 .dn-scan-card-title {
   font-weight: 600;
   color: var(--text-primary, #303133);
+}
+
+/* ============ 当前草稿横幅（扫码台顶部的单据锚点） ============ */
+.draft-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--primary-bg, #eaf2fb);
+  border: 1px solid #d9ecff;
+  border-radius: 4px;
+}
+.draft-banner__label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.draft-banner__no {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 15px;
 }
 
 /* ============ 草稿卡片列表 ============ */

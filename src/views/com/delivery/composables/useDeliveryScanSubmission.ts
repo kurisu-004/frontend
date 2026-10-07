@@ -26,19 +26,18 @@
 //   闸门收敛在服务端。
 // - 手搓的 useDeliveryNoteDetailCache：并发去重改由 useQuery 承担，本文件直接调 getNote。
 
-import { nextTick, reactive, ref, type Ref } from 'vue';
+import { computed, nextTick, reactive, ref, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import {
-  getNote,
-  getDeliveryScanTree,
-  submitDeliveryEntries,
-  submitNote,
-} from '@/api/com/deliveryNote';
+import { useMutation } from '@tanstack/vue-query';
+import { getNote, submitDeliveryEntries, submitNote } from '@/api/com/deliveryNote';
 import { ApiError } from '@/api/http';
 import { BLOCK_SCAN_CODES } from '@/types/deliveryNote';
 import type { DeliveryScanEntry } from './deliveryNoteSchema';
 import type { DeliveryScanTreeData } from './deliveryScanTreeSchema';
 import type { DeliveryNoteDetailData, DeliveryNoteItemData } from './deliveryNoteSchema';
+import { useDeliveryScanTreeMutation } from './useDeliveryScanTreeQuery';
+import { invalidateDeliveryNotesQuery } from './useDeliveryNoteListStore';
+import { useQueryClient } from '@tanstack/vue-query';
 
 export interface UseDeliveryScanSubmissionOptions {
   /** 入单成功后写入 drafts Map 的回调（由 useDeliveryDraftBoard 注入）。 */
@@ -62,6 +61,8 @@ export interface UseDeliveryScanSubmissionReturn {
   scanTreeDialogVisible: Ref<boolean>;
   /** 当前三层树数据（对话框的数据源）。 */
   scanTree: Ref<DeliveryScanTreeData | null>;
+  /** 取树请求在途（对话框的 loading）。 */
+  scanTreeLoading: Ref<boolean>;
   printNotePreviewVisible: Ref<boolean>;
   printNoteTarget: Ref<DeliveryNoteDetailData | null>;
   printNoteLoading: Ref<boolean>;
@@ -89,8 +90,11 @@ export function useDeliveryScanSubmission(
 
   // ============ 三层树对话框 ============
   const scanTreeDialogVisible = ref(false);
-  const scanTree = ref<DeliveryScanTreeData | null>(null);
-  const scanSubmitting = ref(false);
+  // 树数据由 useMutation 承载（扫码是用户触发的单次拉取，不是页面持有的读数据；
+  // 理由见 useDeliveryScanTreeQuery 文件头）。对外仍以 Ref 暴露，方便模板直接读。
+  const treeState = useDeliveryScanTreeMutation();
+  const scanTree = computed(() => treeState.tree.value);
+  const scanTreeLoading = treeState.scanTreeMutation.isPending;
 
   // ============ 打印送货单预览 ============
   /** preview 弹窗显隐 + 当前打开的 note（getNote 拉回）。 */
@@ -100,6 +104,29 @@ export function useDeliveryScanSubmission(
 
   /** 每张草稿卡片各自的提交中 loading 态。 */
   const submittingByNote = reactive<Record<string, boolean>>({});
+
+  // ============ 入单 mutation（POST /scan）============
+  const qc = useQueryClient();
+  const submitEntriesMutation = useMutation({
+    mutationKey: ['delivery', 'scan-entries'],
+    mutationFn: submitDeliveryEntries,
+    onSuccess: async (detail) => {
+      // 响应含拆批后的完整详情 ⇒ 就地替换草稿看板那张卡 + 失效本域（列表 / 详情缓存）。
+      opts.writeDraftFromScan(detail);
+      await opts.refreshDraftDetail(detail.id);
+      await invalidateDeliveryNotesQuery(qc);
+      closeScanTree();
+      ElMessage.success(`已加入 ${detail.delivery_note_no}`);
+    },
+    onError: (e: ApiError) => {
+      if (e?.code === 40901) {
+        ElMessage.warning('该送货单已被他人修改，请重新扫码');
+      } else {
+        ElMessage.error(e?.message ?? '入单失败');
+      }
+    },
+  });
+  const scanSubmitting = submitEntriesMutation.isPending;
 
   // ============ 扫码主流程 ============
 
@@ -133,8 +160,7 @@ export function useDeliveryScanSubmission(
 
     scanning.value = true;
     try {
-      const tree = await getDeliveryScanTree(code);
-      scanTree.value = tree;
+      await treeState.scanTreeMutation.mutateAsync(code);
       scanTreeDialogVisible.value = true;
     } catch (e) {
       applyError(e);
@@ -148,7 +174,7 @@ export function useDeliveryScanSubmission(
   async function loadScanTree(serialNo: string): Promise<void> {
     scanning.value = true;
     try {
-      scanTree.value = await getDeliveryScanTree(serialNo.trim());
+      await treeState.scanTreeMutation.mutateAsync(serialNo.trim());
     } catch (e) {
       applyError(e);
     } finally {
@@ -158,7 +184,7 @@ export function useDeliveryScanSubmission(
 
   function closeScanTree(): void {
     scanTreeDialogVisible.value = false;
-    scanTree.value = null;
+    treeState.clearScanTree();
   }
 
   /**
@@ -191,32 +217,21 @@ export function useDeliveryScanSubmission(
    * 入单提交：把三层树对话框里选好的条目一次性发给
    * `POST /com/delivery/note/scan`（服务端 find-or-create 该 L1 的唯一 DRAFT）。
    *
-   * 响应含拆批后的完整详情 ⇒ 就地替换草稿看板那张卡（无需重扫）。
    * `note_version` 取扫码时读到的 draft.version 做 OCC，撞并发扫码返 40901。
+   * 成功 / 失败处理都在 submitEntriesMutation 的 onSuccess / onError 里。
    */
   async function onSubmitEntries(entries: DeliveryScanEntry[]): Promise<void> {
     const tree = scanTree.value;
     if (!tree || entries.length === 0) return;
-    scanSubmitting.value = true;
     try {
-      const detail = await submitDeliveryEntries({
+      await submitEntriesMutation.mutateAsync({
         serial_no: tree.scanned_serial_no,
         note_version: tree.draft?.version ?? null,
         entries,
       });
-      opts.writeDraftFromScan(detail);
-      await opts.refreshDraftDetail(detail.id);
-      closeScanTree();
-      ElMessage.success(`已加入 ${detail.delivery_note_no}`);
-    } catch (e) {
-      const err = e as ApiError;
-      if (err?.code === 40901) {
-        ElMessage.warning('该送货单已被他人修改，请重新扫码');
-      } else {
-        ElMessage.error(err?.message ?? '入单失败');
-      }
-    } finally {
-      scanSubmitting.value = false;
+    } catch {
+      // onError 已提示（40901 走 warning / 其它走 error），这里只吞掉 rejection：
+      // 对话框保留在页面上让用户改数量或重扫，不该冒一个未处理的 promise rejection。
     }
   }
 
@@ -300,6 +315,7 @@ export function useDeliveryScanSubmission(
     lastScanAt,
     scanTreeDialogVisible,
     scanTree,
+    scanTreeLoading,
     scanSubmitting,
     printNotePreviewVisible,
     printNoteTarget,
