@@ -308,18 +308,23 @@ export const qk = {
   //   - snapshot     → 各工序可发送 / 在途计数（tab 标题徽标的唯一数据源，eager 拉取）
   //   - processes/{id} → 单工序看板（左列候选批次 + 右列公司列），tab body 懒加载
   //
-  // 失效编排点（待落地）：看板侧收发 mutation `useOutsourceBoardMove`（并行任务，本仓
-  // 尚无调用方）落地后由其 onSuccess 集中失效本域两键 + `qk.partsPrefix` ——
-  // 发送/接收改的是 t_part 的派生 status，零件一览 / 批次列表要跟着变。
+  // 写端点 `POST /outsource-queue/move`（发送 / 回收生产 / 回收品检）**没有自己的
+  // queryKey** —— 它是 mutation，由 `useOutsourceQueueMove` 的 onSuccess / onError
+  // 串行失效下面两个前缀。一次移动会同时改左列候选池与右列在途集合（两个 tab body 是
+  // 两条独立 query），漏刷任何一个都会看到「徽标更新了、卡片没动」；而受影响的
+  // processId 前端拿不到（可能跨 tab），故一律前缀全失效。
   // ⚠️ 编排点 ≠ 全部写点：与 CLAUDE.md「跨页面写操作不做穷举失效」一致，本域的
   // 新鲜度由 30s 有限 staleTime + 看板自身的显式 refetch 兜底。
   // ============================================================
   /** 各外协工序的可发送 / 在途计数（eager 拉取，看板 tab 标题徽标的唯一数据源）。
    *  **常量键**：后端 `GET /outsource-queue/snapshot` 不接 Query extractor（无分页、
-   *  无筛选），故键不随任何 tab / 选中态变化。 */
-  outsourceQueueSnapshot: ['outsource-queue', 'snapshot'] as const,
-  /** outsource-queue snapshot 域前缀 —— 与 `outsourceQueueSnapshot` 同值（键已是
-   *  常量，前缀即自身，沿 productionQueueSnapshotPrefix 同形）。 */
+   *  无筛选），故键里没有任何可变量。函数形态与 `productionQueueSnapshot` 对齐 ——
+   *  `queryKey: computed(() => qk.outsourceQueueSnapshot())`。 */
+  outsourceQueueSnapshot: () => ['outsource-queue', 'snapshot'] as const,
+  /** outsource-queue snapshot 域前缀 —— 写端点 `POST /outsource-queue/move` 完成后
+   *  qc.invalidateQueries({ queryKey: qk.outsourceQueueSnapshotPrefix }) 一键全失效。
+   *  与 outsourceQueueSnapshot 同值（键已是常量，前缀即自身，沿
+   *  productionQueueSnapshotPrefix 同形）。 */
   outsourceQueueSnapshotPrefix: ['outsource-queue', 'snapshot'] as const,
   /** 单工序看板详情（左「可发送候选批次」+ 右「外协公司列」，在途批次内联在
    *  公司列上）。processId 空串 → 占位键（enabled=false 闸门 + queryFn 二次守卫拦掉）。 */

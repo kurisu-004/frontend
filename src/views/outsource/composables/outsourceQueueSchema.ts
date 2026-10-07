@@ -12,12 +12,17 @@
 // 「前端漏声明」，两边的漂移方向刚好相反，排查时要来回猜。
 //
 // 端点（baseURL `/api/v2`，前缀 `/outsource-queue/*`，**无 alias**）与本文件的覆盖：
-//   GET /outsource-queue/snapshot           → outsourceQueueSnapshotSchema
-//                                               （+ 嵌套 outsourceQueueProcessSchema）
-//   GET /outsource-queue/processes/{id}     → outsourceQueueProcessDetailSchema
-//                                               （+ 嵌套 outsourceQueueCompanySchema
-//                                                 / outsourceQueueCandidateSchema
-//                                                 / outsourceQueueHeldBatchSchema）
+//   GET  /outsource-queue/snapshot          → outsourceQueueSnapshotSchema
+//                                                （+ 嵌套 outsourceQueueProcessSchema）
+//   GET  /outsource-queue/processes/{id}    → outsourceQueueProcessDetailSchema
+//                                                （+ 嵌套 outsourceQueueCompanySchema
+//                                                  / outsourceQueueCandidateSchema
+//                                                  / outsourceQueueHeldBatchSchema）
+//   POST /outsource-queue/move              → outsourceMoveResultSchema（写端点出参；
+//                                                入参形状见 api/outsource.contract.ts
+//                                                的 OutsourceMoveRequestDto —— 请求体
+//                                                不守门，它由三个包装函数的入参守卫
+//                                                按方向组装）
 //
 // 三条序列化约定（与本域其它 schema 逐字一致）：
 //   - 雪花 i64 **全字段 `z.string()`**：后端 `#[serde(serialize_with =
@@ -219,3 +224,34 @@ export const outsourceQueueProcessDetailSchema = z.object({
 });
 
 export type OutsourceQueueProcessDetailData = z.infer<typeof outsourceQueueProcessDetailSchema>;
+
+/** `POST /outsource-queue/move` 出参（后端 `OutsourceMoveResult`）—— 9 字段。
+ *
+ *  ⚠️ `shipment_id` / `new_process_id` 用 **`.nullish()`** 而非 `.nullable()`：后端两字段
+ *  带 `#[serde(skip_serializing_if = "Option::is_none")]`，方向不满足时**整个键从 JSON
+ *  消失**（不是 `null`）。写成 `.nullable()` 会在真实响应上抛错。
+ *
+ *  `from_kind` / `to_kind` 锁成三个 `t_part_batch.location` 枚举字面量；`new_location`
+ *  则声明成 `z.string()` —— 它是 location 枚举的**完整值域**（比这三个移动 kind 宽，
+ *  还含 PENDING / WORKER 等），收窄成同款联合会让后端返任何非移动态时整条 move 炸在
+ *  守门上（而这恰恰是「移动前」合法存在的状态）。 */
+export const outsourceMoveResultSchema = z.object({
+  batch_id: z.string(),
+  part_id: z.string(),
+  /** 入参 `from.kind` 的字面回显。 */
+  from_kind: z.enum(['PRODUCTION_SHELF', 'OUTSOURCE_COMPANY', 'INSPECTION_SHELF']),
+  /** 入参 `to.kind` 的字面回显。 */
+  to_kind: z.enum(['PRODUCTION_SHELF', 'OUTSOURCE_COMPANY', 'INSPECTION_SHELF']),
+  /** 移动后 `batch.current_holder_id`（货架 id / 外协公司 id）。 */
+  new_holder_id: z.string(),
+  /** 移动后 `batch.location`（值域比上面两个 kind 宽，故不收窄）。 */
+  new_location: z.string(),
+  /** `batch.version + 1`。 */
+  version: z.number(),
+  /** 仅发送方向填；回收方向**整个键缺失**。 */
+  shipment_id: z.string().nullish(),
+  /** 回收生产时后端实际推进到的工序 id；发送 / 回收品检方向**整个键缺失**。 */
+  new_process_id: z.string().nullish(),
+});
+
+export type OutsourceMoveResultData = z.infer<typeof outsourceMoveResultSchema>;

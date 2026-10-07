@@ -1,6 +1,19 @@
 // 外协公司 (OutsourceCompany) API 封装。
+//
+// 2026-10-08 新增：外协**看板**三件套的读 / 写端点（前缀 `/outsource-queue/*`），
+// 契约类型在 `./outsource.contract.ts`（types only）。分层取舍与
+// `productionQueue.ts` 逐字一致：api 层**不做 Zod 守门** —— 守门 schema 随视图目录走
+// （`views/outsource/composables/outsourceQueueSchema.ts`），api 层 import 它就是
+// api → views 的反向依赖；守门由消费方 composable 在 queryFn / mutationFn 里
+// `xxxSchema.parse(await fetchXxx())` 完成。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
+import type {
+  OutsourceMoveRequestDto,
+  OutsourceMoveResultDto,
+  OutsourceQueueProcessDetailDto,
+  OutsourceQueueSnapshotDto,
+} from './outsource.contract';
 import {
   outsourceInFlightListResultSchema,
   outsourceQuotablePartListResultSchema,
@@ -292,4 +305,50 @@ export async function listOutsourceSendable(
   return outsourceSendableListResultSchema.parse(
     normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
   ) as OutsourceSendableListResult;
+}
+
+// ============================================================
+// 外协看板 (OutsourceQueue) — 2026-10-08 新增
+// 端点前缀 `/outsource-queue/*`（**无 alias**），读写合一的三件套。
+// 角色：读 Manager + Clerk + Inspector；move `require_any_role([Manager, Clerk,
+// Inspector])`（前端闸门见 views/outsource/composables/useOutsourceQueueMove.ts）。
+// ============================================================
+
+/** GET /api/v2/outsource-queue/snapshot —— 外协看板 tab 标题双徽标（可发 / 在途）的
+ *  唯一数据源。裸对象（**无分页信封、无 `total` 字段**）。
+ *  `processes[]` 只含 `sendable_count + in_flight_count > 0` 的工序 ⇒ tab 集合必须与
+ *  全量 OUTSOURCE 工序列表 join，否则某工序收发清零时该 tab 会凭空消失。
+ *  业务错：40300（角色无权，HTTP 403）。 */
+export async function fetchOutsourceQueueSnapshot(): Promise<OutsourceQueueSnapshotDto> {
+  const resp = await api.get<OutsourceQueueSnapshotDto>('/outsource-queue/snapshot');
+  return resp.data;
+}
+
+/** GET /api/v2/outsource-queue/processes/{process_id} —— 单工序看板的全部内容。
+ *  左列候选卡 `items[]` + 右列公司 `companies[]`（`companies[].held_batches` 已内联，
+ *  **零 N+1**）。**不分页，一次全量**；`companies[]` 含 `held_count === 0` 的空公司
+ *  （合法拖拽落点，不能被前端过滤掉）。
+ *  业务错：20801（工序不存在）。 */
+export async function fetchOutsourceQueueProcess(
+  processId: string,
+): Promise<OutsourceQueueProcessDetailDto> {
+  const resp = await api.get<OutsourceQueueProcessDetailDto>(
+    `/outsource-queue/processes/${encodeURIComponent(processId)}`,
+  );
+  return resp.data;
+}
+
+/** POST /api/v2/outsource-queue/move —— 外协收发合一移动（发送 / 回收生产 / 回收品检）。
+ *  收发合一的理由：`t_part_batch` 的 `location` / `current_holder_id` / `version` 三列
+ *  在三个方向上是同一组列，拆成三个端点只会让同一份事务边界写三遍。
+ *  ❌ 缺 `version` 时后端返 HTTP 422 **纯文本**（serde 无 `#[serde(default)]`），不是
+ *  业务信封 —— 调用方必须自己保证 version 非空。
+ *  业务错：20104（报价路径 `quote_id` / `direct` 都不传或同时传）/ 20121（批次不存在）/
+ *  20706（工序链推不出下一道工序且未指定）/ 40901（OCC 冲突，HTTP 409）/
+ *  40300（角色无权，HTTP 403）。 */
+export async function moveOutsourceBatch(
+  payload: OutsourceMoveRequestDto,
+): Promise<OutsourceMoveResultDto> {
+  const resp = await api.post<OutsourceMoveResultDto>('/outsource-queue/move', payload);
+  return resp.data;
 }
