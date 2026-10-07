@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // src/views/com/delivery/components/__tests__/PrintPreviewDialog.spec.ts
 //
-// 2026-10-08 新增：打印送货单对话框的守卫（替代随打印链路下线而删除的
+// 2026-10-08 新增：打印对话框的守卫（替代随打印链路下线而删除的
 // PrintPreviewDialog.customOrder.spec.ts —— 后者守的是已不存在的 printNote payload 契约）。
 //
 // 覆盖：
@@ -10,15 +10,22 @@
 //   - 模板校验通过 → 「导出」可点（哪怕还没选司机 —— 单据上已有司机名即可）；
 //   - 未指定司机 → 「导出」disabled（页脚「送货人」与 pickup 都要它）；
 //   - el-tabs 按 L2 客户分组，label 带 (N)；
-//   - 行拆分（守恒不通过则「确定」disabled）。
+//   - 行拆分（守恒不通过则「确定」disabled）；
+//   - `mode='label'` 标签模式：无模板区 / 无司机下拉 / 逐行勾选 / 导出单 sheet /
+//     勾选为空时 disabled + tooltip。
+//
+// ⚠️ 两条「导出」闸门用例守的是**对话框内**的闸门，与入口可见性无关：详情页 / 草稿卡
+// 的按钮一律可见（canPrint 只看角色 + 行项数），司机由对话框自己兜。这是 2026-10-08
+// 死锁修复后必须仍然成立的不变量。
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
-import { defineComponent, type PropType } from 'vue';
+import { defineComponent, h, type PropType } from 'vue';
 import { createApp, nextTick } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { readFileSync } from 'node:fs';
+import { readXlsx } from 'hucre';
 import type * as HttpModule from '@/api/http';
 
 const { apiGetMock, apiPostMock } = vi.hoisted(() => ({
@@ -40,10 +47,25 @@ vi.mock('element-plus', () => ({
   ElMessageBox: { confirm: vi.fn() },
 }));
 
+/** 下载桩：happy-dom 没有真实下载，标签 / 送货单的导出产物靠它断言文件名与字节。
+ *  blob 一并留下，标签那条用 readXlsx 读回验「7 列单 sheet」。 */
+const downloads: { filename: string; blob: Blob }[] = [];
+vi.mock('@/utils/download', () => ({
+  triggerBrowserDownload: (blob: Blob, filename: string) => {
+    downloads.push({ filename, blob });
+  },
+}));
+
 const app = createApp({ render: () => null });
 app.use(createPinia());
 app.use(VueQueryPlugin, { queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }) });
 setActivePinia(app.config.globalProperties.$pinia);
+
+// 「已打印标签」是模块级单例（跨用例累积），每个用例前清空 —— localStorage.clear() 只清盘，
+// 清不掉内存里的 `_store`。
+const { ElMessage } = await import('element-plus');
+const { usePrintedLabels } = await import('../../composables/usePrintedLabels');
+const printedLabels = usePrintedLabels();
 
 const BUILTIN = readFileSync('templates/delivery_note_fala.xlsx');
 
@@ -106,6 +128,19 @@ const ElUploadStub = defineComponent({
   template: '<div class="mock-el-upload"><slot /></div>',
 });
 
+/**
+ * 桩 el-table / 桩 el-table-column 之间的数据通道：列桩要按 data 逐行展开「勾选」这类行内
+ * 受控列的默认插槽，否则勾选框在桩 DOM 里根本不存在，「默认全选 / 勾掉全部」只能空跑。
+ *
+ * ⚠️ 用模块级 holder 而**不是**组件链上的 provide/inject：本用例靠
+ * `app.runWithContext` 挂载（vue-query 的 `useQueryClient` 需要注入上下文），而 Vue 的
+ * `inject` 在 `currentApp` 存在时直接读 `app._context.provides`、**跳过整条父链**，
+ * provide 到桩 el-table 上的值根本到不了列桩。
+ * 桩 el-table 在渲染子节点前写入 holder，列桩在同一次同步 patch 内读到；各分组表之间不
+ * 存在嵌套，没有竞态。
+ */
+const MOCK_TABLE_ROWS: { current: readonly Record<string, unknown>[] } = { current: [] };
+
 const stubs = {
   'el-dialog': {
     name: 'ElDialogStub',
@@ -126,7 +161,15 @@ const stubs = {
     template: '<span class="mock-el-tooltip" :title="content"><slot /></span>',
   },
   'el-upload': ElUploadStub,
-  'el-select': { name: 'ElSelectStub', props: ['modelValue'], template: '<div><slot /></div>' },
+  'el-select': {
+    name: 'ElSelectStub',
+    props: ['modelValue', 'loading', 'disabled'],
+    // v-model 编译成 modelValue + onUpdate:modelValue 两个 prop；桩 emit 前者即可驱动下拉。
+    // change 也要能 emit：真实 el-select 在更新 modelValue 之后还会发 change，
+    // 「切换下拉不 POST」这条不变量必须连 change 路径一起钉住。
+    emits: ['update:modelValue', 'change'],
+    template: '<div class="mock-el-select"><slot /></div>',
+  },
   'el-option': { name: 'ElOptionStub', template: '<div><slot /></div>' },
   'el-radio-group': { name: 'ElRadioGroupStub', props: ['modelValue'], template: '<div><slot /></div>' },
   'el-radio-button': { name: 'ElRadioButtonStub', props: ['value'], template: '<span><slot /></span>' },
@@ -140,21 +183,67 @@ const stubs = {
     props: ['name'],
     template: '<div class="mock-el-tab-pane" :data-name="name"><slot name="label" /><slot /></div>',
   },
-  'el-table': {
+  'el-table': defineComponent({
     name: 'ElTableStub',
-    props: ['data'],
-    template: '<div class="mock-el-table" :data-rows="(data || []).length"><slot /></div>',
-  },
-  'el-table-column': { name: 'ElTableColumnStub', props: ['label'], template: '<div />' },
+    props: { data: { type: Array as PropType<unknown[]>, default: () => [] } },
+    setup(props, { slots }) {
+      return () => {
+        MOCK_TABLE_ROWS.current = (props.data ?? []) as Record<string, unknown>[];
+        return h(
+          'div',
+          { class: 'mock-el-table', 'data-rows': (props.data || []).length },
+          slots.default?.(),
+        );
+      };
+    },
+  }),
+  // 标签模式的勾选列是**行内受控渲染**（不进 defs），桩里按 data 逐行展开它的默认插槽
+  'el-table-column': defineComponent({
+    name: 'ElTableColumnStub',
+    props: ['label', 'columnKey'],
+    setup(p, { slots }) {
+      const perRow = p.columnKey === 'label_select';
+      return () =>
+        h(
+          'div',
+          {
+            class: 'mock-el-table-column',
+            'data-label': p.label,
+            'data-column-key': p.columnKey ?? '',
+          },
+          perRow ? MOCK_TABLE_ROWS.current.map((row) => slots.default?.({ row })) : undefined,
+        );
+    },
+  }),
+  'el-checkbox': defineComponent({
+    name: 'ElCheckboxStub',
+    props: ['modelValue'],
+    emits: ['change'],
+    setup: (p, { emit }) => () =>
+      h('input', {
+        class: 'mock-el-checkbox',
+        type: 'checkbox',
+        checked: p.modelValue === true,
+        onChange: () => emit('change', p.modelValue !== true),
+      }),
+  }),
   'el-input-number': { name: 'ElInputNumberStub', template: '<input class="mock-el-input-number" />' },
+  // 列可见性 popover 内部按列渲染 8 颗 el-checkbox，会和标签模式的勾选框混淆计数，整体桩掉。
+  ColumnVisibilityPopover: true,
   ElIcon: true,
   ElTable: true,
 };
 
-async function mountDialog(over: Record<string, unknown> = {}): Promise<VueWrapper> {
+async function mountDialog(
+  over: Record<string, unknown> = {},
+  opts: { mode?: 'note' | 'label' } = {},
+): Promise<VueWrapper> {
   const { default: Dialog } = await import('../PrintPreviewDialog.vue');
   const w = app.runWithContext(() =>
-    mount(Dialog, { props: { modelValue: true, note: note(over) }, global: { stubs } }),
+    mount(Dialog, {
+      props: { modelValue: true, mode: opts.mode ?? 'note', note: note(over) },
+      global: { stubs },
+    }),
   );
   await flush();
   return w;
@@ -211,6 +300,10 @@ beforeEach(() => {
   apiGetMock.mockResolvedValue({ data: { items: [] } });
   apiPostMock.mockReset();
   apiPostMock.mockResolvedValue({ data: null });
+  downloads.length = 0;
+  localStorage.clear();
+  printedLabels.store.value = {};
+  (ElMessage.error as unknown as { mock: { calls: unknown[] } }).mock.calls.length = 0;
 });
 
 describe('PrintPreviewDialog 导出闸门', () => {
@@ -358,5 +451,341 @@ describe('PrintSplitEditor 数量守恒', () => {
 describe('模板契约常量', () => {
   it('内置模板存在（对话框的「上传」默认值参考它）', () => {
     expect(BUILTIN.byteLength).toBeGreaterThan(0);
+  });
+});
+
+// ============================================================
+// 司机绑定时机（2026-10-08 死锁修复的核心验收点）
+// ============================================================
+
+/** 让 GET /com/delivery/drivers 返回两名候选（否则下拉选中项查不到名字）。 */
+function withDriverOptions(): void {
+  apiGetMock.mockImplementation(async (url: string) => {
+    if (url.includes('/drivers')) {
+      return {
+        data: {
+          items: [
+            { id: 'W1', name: '李四', badge_code: 'S001' },
+            { id: 'W2', name: '王五', badge_code: 'S002' },
+          ],
+        },
+      };
+    }
+    return { data: { items: [] } };
+  });
+}
+
+/** 等某个条件成立。桩 GET 与 hucre 渲染都是异步链，机器忙时固定轮次的 `flush` 不够
+ *  （整套 spec 与其它文件并行跑时尤其明显）—— 断言前先轮询到终态，别赌 sleep 够长。 */
+async function waitUntil(ok: () => boolean, label: string): Promise<void> {
+  for (let i = 0; i < 400; i += 1) {
+    if (ok()) return;
+    await nextTick();
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error(`等待超时：${label}`);
+}
+
+/** 错误 toast 次数（对话框里所有失败路径都先 ElMessage.error 再 return）。 */
+function errorToastCount(): number {
+  return (ElMessage.error as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+}
+
+/** 在司机下拉里选中 id（走 v-model，与用户点选同一条路径）。 */
+async function selectDriver(w: VueWrapper, id: string): Promise<void> {
+  // 等司机候选回流：选中项要能在候选列表里查到名字，否则落库闸门不会触发。
+  await waitUntil(() => w.findAllComponents({ name: 'ElOptionStub' }).length === 2, '司机候选回流');
+  const sel = w.findComponent({ name: 'ElSelectStub' });
+  sel.vm.$emit('update:modelValue', id);
+  sel.vm.$emit('change', id); // 真实 el-select 的事件序列：先更值，再发 change
+  await flush();
+}
+
+/** 点「导出」并等导出流程落定：`expectFile` = 等产物落地，否则等错误 toast（= 中止）。 */
+async function clickExport(w: VueWrapper, expectFile: boolean): Promise<void> {
+  const before = errorToastCount();
+  await w.find('button[data-role="export"]').trigger('click');
+  if (expectFile) {
+    await waitUntil(() => downloads.length === 1, '导出产物落地');
+  } else {
+    await waitUntil(() => errorToastCount() > before, '导出中止（错误 toast）');
+  }
+  await flush();
+}
+
+/** 打过 `/{id}/driver` 的 POST 调用。 */
+function driverPosts(): unknown[][] {
+  return apiPostMock.mock.calls.filter((c) => String(c[0]).includes('/driver'));
+}
+
+describe('PrintPreviewDialog 司机绑定时机', () => {
+  it('打开对话框（还没选司机）→ 零 POST', async () => {
+    withDriverOptions();
+    await mountDialog({ driver_worker_name: null });
+    expect(driverPosts()).toHaveLength(0);
+  });
+
+  it('在下拉里选司机 → 仍零 POST（切换只写本地态）', async () => {
+    withDriverOptions();
+    const w = await mountDialog({ driver_worker_name: null });
+    await uploadFile(w, builtinFile());
+    await selectDriver(w, 'W2');
+    expect(driverPosts()).toHaveLength(0);
+    // 选完之后「导出」可点（司机闸门在对话框内被满足）
+    expect(exportDisabled(w)).toBe(false);
+  });
+
+  it('点「导出」→ 先 POST /{id}/driver 成功，再下载 xlsx', async () => {
+    withDriverOptions();
+    const w = await mountDialog({ driver_worker_name: null });
+    await uploadFile(w, builtinFile());
+    await selectDriver(w, 'W2');
+    await clickExport(w, true);
+    expect(driverPosts()).toHaveLength(1);
+    expect(driverPosts()[0]![0]).toBe('/com/delivery/note/N1/driver');
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0]!.filename).toBe('DN-001.xlsx');
+  });
+
+  it('选了与单据上同名的司机 → 不发 POST（后端仍会推进 version，白写一次还会让手上 version 过期）', async () => {
+    withDriverOptions();
+    const w = await mountDialog({ driver_worker_name: '李四' });
+    await uploadFile(w, builtinFile());
+    await selectDriver(w, 'W1');
+    await clickExport(w, true);
+    expect(driverPosts()).toHaveLength(0);
+    expect(downloads).toHaveLength(1);
+  });
+
+  it('司机落库失败 → 中止导出、不产出文件', async () => {
+    withDriverOptions();
+    // 按 URL 条件拒绝（而不是 mockRejectedValueOnce）：对话框里 POST 的先后顺序不保证，
+    // 一旦有别的 POST 抢先消费掉 once，失败路径就测不到了。
+    apiPostMock.mockImplementation(async (url: string) => {
+      if (String(url).includes('/driver')) throw new Error('版本已过期，请刷新');
+      return { data: null };
+    });
+    const w = await mountDialog({ driver_worker_name: null });
+    await uploadFile(w, builtinFile());
+    await selectDriver(w, 'W2');
+    await clickExport(w, false);
+    expect(driverPosts()).toHaveLength(1);
+    expect(downloads).toHaveLength(0);
+    // 按钮回到可点（用户改了条件还能重试），对话框仍开着
+    expect(w.find('button[data-role="export"]').attributes('disabled')).toBeUndefined();
+    expect(w.emitted('update:modelValue')).toBeUndefined();
+  });
+
+  it('关对话框（取消）→ 零 POST：司机改动留在本地，服务端没有副作用', async () => {
+    withDriverOptions();
+    const w = await mountDialog({ driver_worker_name: null });
+    await uploadFile(w, builtinFile());
+    await selectDriver(w, 'W2');
+    await w.findAll('button.mock-el-button').find((b) => b.text().includes('取消'))!.trigger('click');
+    await flush();
+    expect(driverPosts()).toHaveLength(0);
+    expect(downloads).toHaveLength(0);
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false]);
+  });
+});
+
+// ============================================================
+// 标签模式（2026-10-08 恢复「打印标签」时新增）
+// ============================================================
+
+/** 勾选框（按出现顺序；跨 tab 的顺序 = 第一个 tab 的行序，然后第二个 tab…）。 */
+function checkboxes(w: VueWrapper) {
+  return w.findAll<HTMLInputElement>('input.mock-el-checkbox');
+}
+
+function isChecked(box: { element: HTMLInputElement }): boolean {
+  return box.element.checked;
+}
+
+/** 勾掉第 n 个勾选框。 */
+async function uncheck(w: VueWrapper, n: number): Promise<void> {
+  await checkboxes(w)[n]!.setValue(false);
+  await flush();
+}
+
+/** localStorage 里 N1 单被登记为「已打印标签」的批次 id（升序）。 */
+function markedBatchIds(): string[] {
+  const raw = localStorage.getItem('delivery_scan_printed_labels_v1');
+  expect(raw).toBeTruthy();
+  const store = JSON.parse(raw!) as Record<string, Record<string, true>>;
+  return Object.keys(store['N1'] ?? {}).sort();
+}
+
+describe('PrintPreviewDialog 标签模式 —— 形态', () => {
+  it('标题是「打印标签」', async () => {
+    const w = await mountDialog({}, { mode: 'label' });
+    expect(w.findComponent({ name: 'ElDialogStub' }).props('title')).toBe('打印标签');
+    const note = await mountDialog();
+    expect(note.findComponent({ name: 'ElDialogStub' }).props('title')).toBe('打印送货单');
+  });
+
+  it('无模板上传区（标签不需要模板）', async () => {
+    const w = await mountDialog({}, { mode: 'label' });
+    expect(w.findComponent(ElUploadStub).exists()).toBe(false);
+    expect(w.text()).not.toContain('选择模板');
+  });
+
+  it('无司机下拉（标签页脚没有「送货人」）', async () => {
+    const w = await mountDialog({}, { mode: 'label' });
+    expect(w.text()).not.toContain('司机');
+    expect(w.findComponent({ name: 'ElSelectStub' }).exists()).toBe(false);
+    // 对照：送货单模式有
+    const note = await mountDialog();
+    expect(note.findComponent({ name: 'ElSelectStub' }).exists()).toBe(true);
+  });
+
+  it('标签模式不拉司机候选（白跑一次往返没有收益）', async () => {
+    await mountDialog({}, { mode: 'label' });
+    const call = apiGetMock.mock.calls.find((c) => String(c[0]).includes('/drivers'));
+    expect(call).toBeUndefined();
+  });
+
+  it('每张分组表都有一列勾选，且打开时默认全选', async () => {
+
+    const w = await mountDialog(
+      {
+        line_items: [
+          li({ id: '1', part_id: 'P1', customer_name: '二五六厂' }),
+          li({ id: '2', part_id: 'P2', customer_name: '陆达电子' }),
+        ],
+      },
+      { mode: 'label' },
+    );
+    expect(w.findAll('.mock-el-table-column[data-column-key="label_select"]')).toHaveLength(2);
+    expect(checkboxes(w)).toHaveLength(2);
+    expect(checkboxes(w).every(isChecked)).toBe(true);
+    expect(w.text()).toContain('已勾选 2 条');
+  });
+});
+
+describe('PrintPreviewDialog 标签模式 —— 勾选', () => {
+  async function twoTabs(): Promise<VueWrapper> {
+    return mountDialog(
+      {
+        line_items: [
+          li({ id: '1', part_id: 'P1', customer_name: '二五六厂' }),
+          li({ id: '2', part_id: 'P2', customer_name: '陆达电子' }),
+        ],
+      },
+      { mode: 'label' },
+    );
+  }
+
+  it('勾掉一个 → 汇总数减一，另一个 tab 的勾选不受影响（跨 tab 累积在一份集合里）', async () => {
+    const w = await twoTabs();
+    await uncheck(w, 0);
+    expect(w.text()).toContain('已勾选 1 条');
+    expect(isChecked(checkboxes(w)[1]!)).toBe(true);
+  });
+
+  it('勾掉全部 → 「导出」disabled + tooltip 说明原因', async () => {
+    const w = await twoTabs();
+    await uncheck(w, 0);
+    await uncheck(w, 1); // 第二个 tab 的唯一一行
+    expect(w.text()).toContain('已勾选 0 条');
+    expect(exportDisabled(w)).toBe(true);
+    expect(w.find('.mock-el-tooltip').attributes('title')).toBe('请先勾选要打印的标签行');
+  });
+
+  it('数量未知的行即使勾上也会在提示里说出会被跳过（导出仍可点）', async () => {
+    const w = await mountDialog(
+      {
+        line_items: [
+          li({ id: '1', part_id: 'P1', serial_no: 'S-1' }),
+          li({
+            id: '2',
+            part_id: 'P2',
+            serial_no: 'S-2',
+            assembly_id: 'A1',
+            assembly_name: '总装',
+            shippable_sets: null,
+          }),
+        ],
+      },
+      { mode: 'label' },
+    );
+    expect(exportDisabled(w)).toBe(false);
+    expect(w.find('.mock-el-tooltip').attributes('title')).toBe('标签数量为空的行已跳过 1 条');
+  });
+});
+
+describe('PrintPreviewDialog 标签模式 —— 导出', () => {
+  it('导出单 sheet、7 列、文件名 `<单号>-标签.xlsx`，且零 POST（无司机要落库）', async () => {
+    const w = await mountDialog(
+      {
+        line_items: [
+          li({ id: '1', part_id: 'P1', customer_name: '法拉', order_no: 'SO-1' }),
+          li({ id: '2', part_id: 'P2', customer_name: '陆达电子', order_no: 'SO-2' }),
+        ],
+      },
+      { mode: 'label' },
+    );
+    await uncheck(w, 0);
+    await w.find('button[data-role="export"]').trigger('click');
+    await waitUntil(() => downloads.length === 1, '标签产物落地');
+    await flush();
+
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0]!.filename).toBe('DN-001-标签.xlsx');
+    const wb = await readXlsx(new Uint8Array(await downloads[0]!.blob.arrayBuffer()));
+    expect(wb.sheets).toHaveLength(1);
+    expect(wb.sheets[0]!.rows[0]).toEqual([
+      '客户',
+      '订单号',
+      '申请人',
+      '名称',
+      '图号',
+      '数量',
+      '单位',
+    ]);
+    // 只剩被勾上的那一行
+    expect(wb.sheets[0]!.rows).toHaveLength(2);
+    expect(wb.sheets[0]!.rows[1]![1]).toBe('SO-2');
+    // 标签模式不碰司机落库 ⇒ 一次 POST 都不该发
+    expect(apiPostMock).not.toHaveBeenCalled();
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false]);
+  });
+
+  it('导出成功后写「已打印标签」标记，且用的是 member_ids（批次 id）而不是 PrintRow.id', async () => {
+    // 两个子件同属一个装配件 ⇒ merge 模式折成 1 行，PrintRow.id = 'ASM_A1'（不是批次 id），
+    // member_ids = 组内两个批次 id。草稿看板的绿底按批次 id 查，写错就永远不亮。
+    const w = await mountDialog(
+      {
+        line_items: [
+          li({ id: '11', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装', shippable_sets: 3 }),
+          li({ id: '12', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装', shippable_sets: 3 }),
+        ],
+      },
+      { mode: 'label' },
+    );
+    expect(checkboxes(w)).toHaveLength(1);
+    await w.find('button[data-role="export"]').trigger('click');
+    await waitUntil(() => Boolean(localStorage.getItem('delivery_scan_printed_labels_v1')), '标记写盘');
+    await flush();
+
+    expect(markedBatchIds()).toEqual(['11', '12']);
+  });
+
+  it('同 part 折叠行只标记代表批次（既有限度：foldSamePart 只保留最小 batch id）', async () => {
+    const w = await mountDialog(
+      {
+        line_items: [
+          li({ id: '20', part_id: 'P1', serial_no: 'S-9' }),
+          li({ id: '10', part_id: 'P1', serial_no: 'S-9' }),
+        ],
+      },
+      { mode: 'label' },
+    );
+    expect(checkboxes(w)).toHaveLength(1);
+    await w.find('button[data-role="export"]').trigger('click');
+    await waitUntil(() => Boolean(localStorage.getItem('delivery_scan_printed_labels_v1')), '标记写盘');
+    await flush();
+
+    expect(markedBatchIds()).toEqual(['10']);
   });
 });

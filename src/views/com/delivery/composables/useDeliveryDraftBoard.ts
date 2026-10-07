@@ -241,13 +241,11 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
   function foldedRows(noteId: string): MergedDraftRow[] {
     let c = foldedComputeds.get(noteId);
     if (!c) {
-      c = computed(() => {
-        // 显式读 store：`isPrintedBatch` 内部遍历的是 `_store.value`，但闭包里
-        // 读 ref 不会被 computed 收集成依赖（函数调用不是属性访问）⇒ 不显式读一下，
-        // markPrinted / unmark 之后绿底不会重算。
-        void printedLabelStore.store.value;
-        return foldBySerial(draftDetails[noteId] ?? [], isPrintedBatch);
-      });
+      // 绿底会随标记重算：`isPrintedBatch` 在本 computed 求值**期间**同步读
+      // `usePrintedLabels` 的 `_store`，Vue 按「求值期间发生的 ref 读」收集依赖 ——
+      // 不需要在这里显式再读一次 store。（行项目录为空时不会调 isPrinted，那种情况下
+      // 结果本就是空数组，重算与否无差别。）
+      c = computed(() => foldBySerial(draftDetails[noteId] ?? [], isPrintedBatch));
       foldedComputeds.set(noteId, c);
     }
     return ((): MergedDraftRow[] => c!.value)();
