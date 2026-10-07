@@ -1,31 +1,35 @@
 /** 外协公司 (OutsourceCompany) — 工序能力清单 / CRUD */
 
-import type { ProcessCategory } from './process';
-
-/** 单条外协公司（无映射） */
+/** 单条外协公司（无映射）—— 后端 `OutsourceCompanyOut`，**7 字段**。
+ *
+ *  2026-10-09 契约对齐删 `created_at` / `updated_at`：公司一览是外协看板 / 报价 /
+ *  对账三处的公司下拉数据源，页面只渲染「名称 + 联系人 + 启停用」，两列时间戳零消费方，
+ *  而每次写端点都会让它们变化 ⇒ 纯粹的缓存抖动。 */
 export interface OutsourceCompany {
   id: string;
-  /** 乐观锁版本号；每次 UPDATE 自增 */
+  /** 乐观锁版本号；`POST /{id}/update` 与 `POST /{id}/soft-delete` **必传**。
+   *  每次 UPDATE / SOFT-DELETE 自增。 */
   version: number;
   name: string;
   contact_name: string | null;
   contact_phone: string | null;
   address: string | null;
   is_active: boolean;
-  created_at: string;
-  updated_at: string;
 }
 
-/** 单条映射条目 */
+/** 单条映射条目 —— 后端 `OutsourceCompanyProcessLinkOut`，**3 字段**。
+ *
+ *  2026-10-09 契约对齐删 `category` / `sort_order`：
+ *  - `category` 与勾选框候选集（`GET /proc/processes?category=OUTSOURCE`）恒等，冗余；
+ *  - `sort_order` 从不由 VO 消费（只被写侧赋值、被看板 SQL 的 ORDER BY 读）。 */
 export interface OutsourceCompanyProcessLink {
   process_id: string;
   process_code: string;
   process_name: string;
-  category: ProcessCategory;
-  sort_order: number;
 }
 
-/** 公司 + 映射的全部工序 */
+/** 公司 + 映射的全部工序 —— 后端 `OutsourceCompanyWithProcessesOut`，**8 字段**
+ *  （`OutsourceCompany` 七项 + `processes[]`）。 */
 export interface OutsourceCompanyWithProcesses extends OutsourceCompany {
   processes: OutsourceCompanyProcessLink[];
 }
@@ -43,21 +47,33 @@ export interface OutsourceCompanyCreatePayload {
   contact_phone?: string | null;
   address?: string | null;
   is_active?: boolean;
-  /** 创建时可一并提交 OUTSOURCE 工序 id 列表（雪花 ID 字符串，提交顺序即 sort_order） */
+  /** 创建时可一并提交 OUTSOURCE 工序 id 列表（雪花 ID 字符串，提交顺序即映射展示顺序） */
   process_ids?: string[];
 }
 
+/** `POST /outsource-companies/{id}/update` 入参。
+ *
+ *  2026-10-09 契约对齐：新增**必填** `version`（OCC 锚）与 `process_ids`（三态：
+ *  `undefined`/缺省 = 不动工序映射、`[]` = 清空、`[a,b]` = 整体替换）。`process_ids`
+ *  吸收了同轮硬切删除的 `POST /{id}/processes` 端点。 */
 export interface OutsourceCompanyUpdatePayload {
+  version: number;
   name?: string;
   contact_name?: string | null;
   contact_phone?: string | null;
   address?: string | null;
   is_active?: boolean;
+  /** 缺省 / `undefined` = 不动；`[]` = 清空；非空 = 整体替换。 */
+  process_ids?: string[];
 }
 
-export interface SetOutsourceCompanyProcessesPayload {
-  /** 雪花 ID 字符串（前端 Number() 会丢精度，必须 str） */
-  process_ids: string[];
+/** `POST /outsource-companies/{id}/soft-delete` 入参。
+ *
+ *  2026-10-09 契约对齐：新增**必填** `version`。此前该端点无 body，service 内部自读
+ *  version 守乐观锁，等于用自己读到的值守自己的锁、`UPDATE … WHERE version = <刚读的>`
+ *  恒成立。缺 version 是 axum 的 HTTP 422 **纯文本**响应，不是业务信封。 */
+export interface OutsourceCompanySoftDeletePayload {
+  version: number;
 }
 
 // ============================================================
@@ -139,12 +155,6 @@ export interface OutsourceQuoteCreatePayload {
   note?: string | null;
 }
 
-export interface OutsourceQuoteUpdatePayload {
-  version: number;
-  price?: string;
-  note?: string | null;
-}
-
 export interface OutsourceQuoteApprovePayload {
   version: number;
   review_note?: string | null;
@@ -153,6 +163,19 @@ export interface OutsourceQuoteApprovePayload {
 export interface OutsourceQuoteRejectPayload {
   version: number;
   review_note: string;
+}
+
+/** `POST /outsource-quotes/{id}/submit` 入参 —— 2026-10-09 新增**必填** `version`。
+ *  此前该端点无 body（service 自读 version 守乐观锁，形同虚设）；缺 version 是
+ *  axum 的 HTTP 422 纯文本响应，不是业务信封。 */
+export interface OutsourceQuoteSubmitPayload {
+  version: number;
+}
+
+/** `POST /outsource-quotes/{id}/soft-delete` 入参 —— 2026-10-09 新增**必填**
+ *  `version`（理由同 submit）。 */
+export interface OutsourceQuoteSoftDeletePayload {
+  version: number;
 }
 
 /** 外协候选行的公司下拉项（DIRECT 路径由用户在拖拽落点上选的那家公司）。
@@ -171,13 +194,17 @@ export interface OutsourceCompanyOption {
 /** PR-H 2026-07-29：对账页排序字段（对应 GET /outsource-companies/{id}/sent-parts?sort_by=...） */
 export type OutsourceSentPartSortKey = 'PRICE' | 'SENT_AT' | 'RECEIVED_AT';
 
+/** `GET /outsource-companies/{id}/sent-parts` 单行 —— 后端 `OutsourceSentPartOut`，
+ *  **16 字段**。
+ *
+ *  2026-10-09 契约对齐删 `quote_id` / `part_id`：行编辑端点按 `shipment_id` 取锚，
+ *  页面列展示的是 `part_drawing_no` / `part_name` 两个可读字段，留着等于把同一份
+ *  零件标识序列化两次且分叉。 */
 export interface OutsourceSentPartItem {
   /** t_outsource_shipment.id（行编辑端点入参） */
   shipment_id: string;
   /** OCC 乐观锁（shipment.version） */
   version: number;
-  quote_id: string;
-  part_id: string;
   part_drawing_no: string | null;
   part_name: string | null;
   customer_path: string | null;
@@ -194,14 +221,24 @@ export interface OutsourceSentPartItem {
   total_price: string;
   sent_at: string;
   received_at: string | null;
-  /** OUTSOURCING / RECEIVED */
-  status: string;
+  /** 后端 SQL 硬编码只返 `OUTSOURCING` / `RECEIVED` 两值（DB CHECK 里的 `CANCELLED`
+   *  无任何代码路径写入），故收成两值枚举 —— 第三个枚举值是死代码。 */
+  status: OutsourceSentPartStatus;
   is_billed: boolean;
   /** 2026-08-04 新增：所属零件加急标记（前端加急红底用） */
   is_urgent: boolean;
 }
 
+/** 对账行的状态枚举（后端 SQL 硬编码两值，契约收口）。 */
+export type OutsourceSentPartStatus = 'OUTSOURCING' | 'RECEIVED';
+
+/** `GET /outsource-companies/{id}/sent-parts` 分页信封 —— 2026-10-09 加两个公司字段。
+ *
+ *  `outsource_company_id` 是请求 id 的回显；`outsource_company_name` **公司不存在 /
+ *  已软删时为 `null`**（端点本身不因公司缺失而 404，页头要能显示「未知公司」）。 */
 export interface OutsourceSentPartListResult {
+  outsource_company_id: string;
+  outsource_company_name: string | null;
   items: OutsourceSentPartItem[];
   total: number;
   limit: number;

@@ -854,71 +854,26 @@ export const workTypeProcessesResultSchema = z.object({
 export type WorkTypeProcessesResultSchema = z.infer<typeof workTypeProcessesResultSchema>;
 
 // ============================================================
-// 2026-10-03 新增：外协域 4 个 list 端点的 Zod 守门 schema。
+// 2026-10-03 新增：外协域的 Zod 守门 schema。
 //
-// 为什么补这一段：外协域此前是全仓少数**没有** Zod 守门的模块 —— api helper 把
-// `api.get` 的结果原样喂给 `el-table` / PagedTable，形状不符时收不到数组就**静默空白**
-// 而不是报错。3 个线上故障都是这么悄悄上线的（对账页 404、quotable-parts 400、
-// 收发两 tab 全空白）。本段把守门补到 API 边界（`src/api/outsource.ts` 里 `.parse()`），
-// 形状漂移立即抛 ZodError。
+// 为什么最初补这一段：外协域此前是全仓少数**没有** Zod 守门的模块 —— api helper 把
+// `api.get` 的结果原样喂给 `el-table`，形状不符时收不到数组就**静默空白**而不是报错。
+// 3 个线上故障都是这么悄悄上线的（对账页 404、quotable-parts 400、收发两 tab 全空白）。
 //
 // 共同的 strip 陷阱约定（沿 CLAUDE.md §M-4）：每个 item schema **逐字段显式声明**，
 // 一条不漏。Zod 默认 `z.object()` 是 strip 模式，漏声明的字段会被静默丢弃、parse
 // 不报错 —— 守门形同虚设。雪花 id 一律 `z.string()`（后端 `serialize_i64`），
 // 不用 `z.coerce.string()` / `z.number()` 掩盖类型漂移；Decimal 一律 `z.string()`；
 // datetime 一律 `z.string()`。
+//
+// 2026-10-09 归位：对账列表（`sent-parts`）与公司选项两个 schema 迁到域内
+// `views/outsource/composables/outsourceListSchema.ts`（与三个 query hook 同居）。
+// 理由：它们只被本域自己的 query hook 消费，守门点也在 queryFn，本文件是
+// 「跨域共享基础数据」的 schema 集，留着会让同一条契约出现两个真相源。
+// 本段**只剩** `quotable-parts` 一个端点 —— 它是外协域唯一守门留在 api 层的读端点：
+// 由报价一览 shell 的 `loadLookups()` 裸调，没有 queryFn 承载（CLAUDE.md：
+// 守门留在 api 层的只允许「没有 queryFn 承载」的调用）。
 // ============================================================
-
-/** `GET /api/v2/outsource-companies/{company_id}/sent-parts` 单行
- *  （后端 `OutsourceSentPartItem`）—— 18 字段。
- *
- *  ⚠️ 主键是 `shipment_id`（不是 `id`）：行编辑端点
- *  `POST /outsource-shipments/{shipment_id}/reconcile-update` 以它为锚。
- *  ⚠️ `total_price` / `is_urgent` 由后端直出（2026-10-03 契约对齐），
- *  声明为必填 —— 漏声明会让对账页「总价」列恒空、加急红底恒不生效。 */
-export const outsourceSentPartItemSchema = z.object({
-  shipment_id: z.string(),
-  /** shipment.version（对账行编辑的 OCC 锚，与 in-flight 的批次 version 不是一回事） */
-  version: z.number(),
-  quote_id: z.string(),
-  part_id: z.string(),
-  part_drawing_no: z.string().nullable(),
-  part_name: z.string().nullable(),
-  customer_path: z.string().nullable(),
-  /** 历史 shipment 可能无批次（后端 left join 落空） */
-  batch_no: z.number().nullable(),
-  process_id: z.string(),
-  process_name: z.string().nullable(),
-  quantity: z.number(),
-  /** Decimal 字符串；DIRECT 直发自动建的占位报价为 "0" */
-  unit_price: z.string(),
-  /** Decimal 字符串；总价列的单一真源（后端算好，不在前端二次推导） */
-  total_price: z.string(),
-  sent_at: z.string(),
-  received_at: z.string().nullable(),
-  /**
-   * 三个字面量穷举自 `t_outsource_shipment.status` 的 DB CHECK 约束
-   * （`ck_t_outsource_shipment_status`）：OUTSOURCING（在外协厂）/ RECEIVED（已回收）
-   * / CANCELLED（已取消）。后端 VO 声明成 `String`，故枚举值以约束为准而非 VO 类型 ——
-   * 只写前两个会让已取消的 shipment 在对账页整页 parse 失败。
-   */
-  status: z.enum(['OUTSOURCING', 'RECEIVED', 'CANCELLED']),
-  is_billed: z.boolean(),
-  is_urgent: z.boolean(),
-});
-
-export type OutsourceSentPartItemSchema = z.infer<typeof outsourceSentPartItemSchema>;
-
-/** `GET /api/v2/outsource-companies/{company_id}/sent-parts` 顶层
- *  （后端 `OutsourceSentPartListOut`）：items / total / limit / offset 四字段。 */
-export const outsourceSentPartListResultSchema = z.object({
-  items: z.array(outsourceSentPartItemSchema),
-  total: z.number(),
-  limit: z.number(),
-  offset: z.number(),
-});
-
-export type OutsourceSentPartListResultSchema = z.infer<typeof outsourceSentPartListResultSchema>;
 
 /** `GET /api/v2/outsource-quotes/quotable-parts` 单行（后端 `QuotablePart`）—— 10 字段。
  *
@@ -956,19 +911,6 @@ export const outsourceQuotablePartListResultSchema = z.object({
 export type OutsourceQuotablePartListResultSchema = z.infer<
   typeof outsourceQuotablePartListResultSchema
 >;
-
-/** 外协候选行的公司下拉项（DIRECT 路径的选择源）。
- *
- *  2026-10-08 导出：外协看板的域 schema（`views/outsource/composables/
- *  outsourceQueueSchema.ts` 的候选行 `company_options`）也用它 —— views → composables
- *  是正常方向，而把同一条公司下拉项 schema 在两个文件里各写一份只会让「外协公司选项
- *  的键集」出现两个真相源。
- *  2026-10-09：`/outsource-sendable` 与 `/outsource-shipments/in-flight` 两个列表
- *  schema 随外协看板取代双表格页一并删除，本条是它们与看板之间唯一仍被消费的公共件。 */
-export const outsourceCompanyOptionSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-});
 
 // ============================================================
 // 2026-10-04 新增：报工台三页（取件 / 放回 / 送检）列表行的 Zod 守门 schema。
