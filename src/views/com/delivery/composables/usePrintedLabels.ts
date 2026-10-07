@@ -1,4 +1,4 @@
-// views/delivery/composables/usePrintedLabels.ts
+// views/com/delivery/composables/usePrintedLabels.ts
 //
 // 草稿卡片「打印标签」状态记录（2026-08-23 新增）。
 //

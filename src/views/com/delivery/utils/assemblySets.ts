@@ -1,4 +1,4 @@
-// src/views/delivery/utils/assemblySets.ts
+// src/views/com/delivery/utils/assemblySets.ts
 //
 // 装配件套数字段的读取口径。详情页 tree 父行（useDeliveryNoteDetail）与打印对话框的
 // 「合并一套」父行（deliveryNotePrintRows）共用这一份实现：同一张装配件在两处显示的套数

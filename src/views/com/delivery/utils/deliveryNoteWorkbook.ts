@@ -73,6 +73,10 @@ export type { Workbook as HucreWorkbook } from 'hucre/xlsx';
  * 没有（子路径只导出 read/write + roundtrip + 一批 cell 工具）。因此这里必须 import
  * 根入口 —— hucre 标了 `"sideEffects": false` 且 index.mjs 只是 re-export，
  * rolldown 仍会按用到哪些符号做 tree-shake，不会把整个引擎拉进来。
+ *
+ * ⚠️ **代价（有意接受）**：根入口切出的 chunk 实测 484 kB raw / **142 kB gzip**，
+ * 接近规格体积预算（68 kB）的两倍。**不要**改成一部分符号走 `hucre/xlsx` 子入口 ——
+ * 两个入口混用会把两个 chunk 都拉进来，比只走根入口更大。
  */
 async function loadHucre(): Promise<typeof HUCRE_MODULE> {
   // ⚠️ specifier 必须是**字面量**：写成变量 / 加 `/* @vite-ignore */` 都会让打包器

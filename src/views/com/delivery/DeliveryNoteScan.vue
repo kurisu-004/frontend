@@ -164,6 +164,14 @@ function gotoDetail(draft: DeliveryNoteItemData): void {
   void router.push(`/delivery-notes/${draft.id}`);
 }
 
+/**
+ * 「查看全部 →」跳送货单一览。
+ *
+ * ⚠️ **只带 `statuses=DRAFT`**：`customer_id` 这条 query 一览页**不读**（store 只解析
+ * `statuses`，见 setRouteStatuses / parseUrlStatuses）⇒ 跳转过去不会带上客户过滤。
+ * 这是重构前就有的行为（老视图同样只读 `statuses`），本轮**刻意不改** ——
+ * 要「点了就按当前 L1 过滤」得给 store 加 URL 侧的客户筛选，属于另一次改动。
+ */
 function gotoAllDrafts(): void {
   if (!scanState.l1CustomerId.value) return;
   void router.push({

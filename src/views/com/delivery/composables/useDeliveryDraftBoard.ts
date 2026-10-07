@@ -190,7 +190,7 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     for (const k of Object.keys(selectedByNote)) {
       if (!(k in next)) delete selectedByNote[k];
     }
-      for (const k of Object.keys(deletingByNote)) {
+    for (const k of Object.keys(deletingByNote)) {
       if (!(k in next)) delete deletingByNote[k];
     }
     for (const k of Array.from(foldedComputeds.keys())) {

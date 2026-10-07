@@ -3,7 +3,8 @@
 // 2026-10-08：随视图目录搬进 `views/com/delivery/` 一并搬到 `api/com/`，URL 硬切到
 // `/api/v2/com/delivery/*`（**无 alias**，旧路径 404）。
 //
-// 端点清单（全部走 `api`，baseURL `/api/v2`）：
+// 端点清单（全部走 `api`，baseURL `/api/v2`；**note 前缀共 12 个端点**，与后端
+// `modules/com/delivery_note/handler/mod.rs::router()` 逐条对应）：
 //   /com/delivery/note   —— 送货单
 //     GET    /                       - listNotes
 //     GET    /{id}                   - getNote
@@ -28,6 +29,10 @@
 // `GET /candidate-parts`、加件 `POST /{id}/add-parts`、attach `POST /{id}/attach-batches`、
 // 事件流 `GET /{id}/events`、待领 `GET /pickup-pending`、司机累扫 `POST /{id}/pickup-scan`、
 // 打印 `POST /{id}/print` 与 `POST /{id}/print-labels`（打印改为前端 hucre 本地生成）。
+//
+// 字段级备注：`DeliveryNoteOut.created_at` 后端**保留**（列表 / 详情都要显示创建时间），
+// 本仓零读 ⇒ 守门 schema 不声明它，被 Zod strip 掉无害；**不要**为了「与 VO 对齐」
+// 给 schema 加这个字段（没有展示位，加了就得连带一条展示口径）。
 //
 // 权限一律 Mgr+Clerk+Inspector；错误码按 `ApiError.code` 分流（见各函数注释）。
 // 全部雪花 ID 入参为 string（CLAUDE.md 硬约束：JS Number 丢精度）。

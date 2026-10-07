@@ -7,6 +7,8 @@
 // 的运行时边口径）。
 //
 // ⚠️ 所有字段显式声明；雪花 id 一律 `z.string()`（文件头口径同 deliveryNoteSchema）。
+// 字段名 / 可空性与后端 `modules/com/delivery_note/vo/scan_tree.rs` 逐字对齐 ——
+// 「多声明一个后端不发 / 不为空的字段」= 扫码弹窗当场 parse 抛（同 B1 那类故障）。
 
 import { z } from 'zod';
 
@@ -30,7 +32,7 @@ export const deliveryScanPerSetPartSchema = z.object({
 
 export type DeliveryScanPerSetPartData = z.infer<typeof deliveryScanPerSetPartSchema>;
 
-/** 装配件节点（13 字段）。 */
+/** 装配件节点（12 字段，无批次层）。 */
 export const deliveryScanAssemblySchema = z.object({
   id: z.string(),
   serial_no: z.string().nullable(),

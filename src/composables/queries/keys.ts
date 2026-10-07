@@ -375,11 +375,17 @@ export const qk = {
   // 送货单的写点会改批次与零件的 DELIVERED 状态；挂 parts 下会让全仓最热的
   // `qk.partsPrefix` 一把全刷把整个送货单域连带重拉（列表 + 详情 + 草稿看板三处）。
   //
-  // 失效编排点（本域写操作完成后由对应 mutation 的 onSuccess 调）：
-  //   - `POST /{id}/update`（改送货日期 / 备注）、`/{id}/driver`（指定司机）、
-  //     `/{id}/remove-batches`、`/{id}/submit`、`/{id}/recall`、`/{id}/pickup`、
-  //     `/{id}/soft-delete`、`POST /scan`（扫码入单）：全部经
-  //     `invalidateDeliveryNotesQuery(qc)` 一把失效本域的列表 / 详情 / 批量详情键；
+  // 失效编排点（本域写操作完成后由对应 mutation 的 onSuccess / 写后回调调，
+  // 逐条对应关系见下，改端点时照这张表核对「有没有接上失效」）：
+  //   - `POST /{id}/update` / `/{id}/submit` / `/{id}/recall` / `/{id}/soft-delete` /
+  //     `/{id}/remove-batches` —— useDeliveryNoteActions.ts（详情页 5 个写端点，
+  //     每个都在 fetchDetail 之外**额外**刷本域前缀）；
+  //   - `POST /{id}/pickup`（一键送货）—— useDeliveryNoteListStore 的 deliverMutation；
+  //   - `POST /{id}/driver`（指定司机）—— PrintPreviewDialog 的 onDriverChange；
+  //   - `POST /scan`（扫码入单）—— useDeliveryScanSubmission；
+  //   - 草稿看板的移除 / 提交 —— useDeliveryDraftBoard；
+  //   - 以上都经 `invalidateDeliveryNotesQuery(qc)` 一把失效本域的列表 / 详情 /
+  //     批量详情键；
   //   - 分组 create / update / soft-delete → `invalidateDeliveryGroupsQuery(qc)`。
   //
   // ⚠️ 编排点 ≠ 全部写点：其它域的写端点同样会改本域关心的字段 ——
@@ -413,7 +419,8 @@ export const qk = {
   deliveryGroupsPrefix: ['delivery-groups'] as const,
   /** 送货司机候选键（打印对话框的司机下拉，数据源 `GET /com/delivery/drivers`）。
    *  **常量键**：端点不接 Query extractor（无分页、无筛选），一条 JOIN 返全部在职
-   *  送货司机 ⇒ 键不随任何筛选 / tab 变化。 */
+   *  送货司机 ⇒ 键不随任何筛选 / tab 变化。本仓本域 query 都不设 staleTime（走全局
+   *  默认 0），常量的意义是「同一次挂载内不重复往返」，不是「30s 内不发请求」。 */
   deliveryDrivers: () => ['delivery-drivers'] as const,
   /** 送货司机域前缀 —— 与 deliveryDrivers 同值（键已是常量，前缀即自身）。 */
   deliveryDriversPrefix: ['delivery-drivers'] as const,
