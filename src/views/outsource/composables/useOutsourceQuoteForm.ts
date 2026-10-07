@@ -1,24 +1,24 @@
-// composables/useOutsourceQuoteForm.ts
+// src/views/outsource/composables/useOutsourceQuoteForm.ts
 //
-// 2026-08-25 T13：从 OutsourceQuoteList.vue 抽出：新建 + 审批 + 删除 业务状态 + 业务函数。
+// 2026-10-09：新建 + 审批 + 删除 六条写路径全部改 `useMutation` + 失效（替掉裸
+// `await api()` + `opts.refresh()` 的手工链路）。同时把新建表单的校验从 el-form 的
+// `FormRules` / `validate()` 换成 Zod（`views/outsource/OutsourceQuoteFormSchema.ts`）。
 //
-// 职责：
-// - 新建报价 dialog state：showCreate / createForm / createRules / createFormRef +
-//   companies / companiesLoading / onCreatePartChange（换零件时清空工序与公司） +
-//   watch process_id 级联 + onCreate（创建草稿）
-// - 审批 dialog state：showApprove / showReject / reviewNote / activeQuote +
-//   openApprove / openReject / onApprove / onReject
-// - 删除（带 confirmDangerous 二次确认）：onDelete
-// - 提交审核（无 dialog）：onSubmit
+// 保留的原有行为（不要在改造中丢掉）：
+//   - 工序 → 外协公司级联（`watch(createForm.process_id)` + `listCompaniesByProcess`），
+//     以及 `onCreatePartChange` 的两步清空（`process_id` + `outsource_company_id`）——
+//     watch 只在值**变化**时跑回调，换零件时 `process_id` 往往已经是 `''`，`'' → ''`
+//     不构成变化 ⇒ 没有这一步上一条报价选过的公司会跨零件残留；
+//   - 新建报价的零件候选源是「有活跃 PENDING 批次的在制件」，VO 不带工序 ⇒ 工序一律手选。
 //
-// 不持有：
-// - 表格列表状态（由 useOutsourceQuoteTable 持有）
-// - 页级 lookup（processes / parts）：2026-10-03 起本 composable 不再需要它们
-//   （工序改为操作员在 dialog 里手选，见 onCreatePartChange），二者由 shell 直供
-//   OutsourceQuoteCreateDialog。
+// 契约对齐（2026-10-09，两处**必填 version**）：
+//   `POST /{id}/submit` 与 `POST /{id}/soft-delete` 的入参新增必填 `version`（此前
+//   无 body，service 自读 version 守乐观锁、形同虚设）。`POST /{id}/update` 与
+//   `GET /{id}` 已随本轮硬切从后端删除，本文件对它们的调用一并删除（前端零消费）。
 
 import { reactive, ref, watch, type Ref } from 'vue';
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import {
   approveOutsourceQuote,
   createOutsourceQuote,
@@ -28,28 +28,33 @@ import {
   submitOutsourceQuote,
 } from '@/api/outsource';
 import { useConfirm } from '@/composables/useConfirm';
-import { OUTSOURCE_QUOTE_STATUS_LABEL, type OutsourceQuote } from '@/types/outsource';
+import {
+  OUTSOURCE_QUOTE_STATUS_LABEL,
+  type OutsourceQuote,
+  type OutsourceQuoteStatus,
+} from '@/types/outsource';
+import {
+  outsourceQuoteFormSchema,
+  toFieldErrors,
+  type OutsourceQuoteFieldErrors,
+  type OutsourceQuoteFormInput,
+} from '../OutsourceQuoteFormSchema';
+import { invalidateOutsourceQuotesAll } from './useOutsourceQuotesQuery';
 
-/** 新建报价表单（reactive） */
-export interface CreateQuoteForm {
-  part_id: string;
-  outsource_company_id: string;
-  process_id: string;
-  price: string;
-  note: string;
-}
+/** 新建报价表单（reactive；形状与 `OutsourceQuoteFormInput` 一致）。 */
+export type CreateQuoteForm = OutsourceQuoteFormInput;
 
 export interface UseOutsourceQuoteFormOptions {
-  /** 创建 / 审批 / 删除 成功后由 caller 触发表格刷新 */
+  /** 创建 / 审批 / 删除成功后由 caller 触发表格刷新（store 的 fetchList）。 */
   refresh: () => Promise<void> | void;
 }
 
 /** 2026-09-21 显式返回类型。 */
 export interface UseOutsourceQuoteFormReturn {
   showCreate: Ref<boolean>;
-  createFormRef: Ref<FormInstance | undefined>;
   createForm: CreateQuoteForm;
-  createRules: FormRules;
+  /** Zod 聚合出的字段错误（`Record<字段, 提示>`）；空对象 = 无错误。 */
+  createFieldErrors: Ref<OutsourceQuoteFieldErrors>;
   openCreate: () => void;
   onCreate: () => Promise<void>;
   onCreatePartChange: (partId: string) => void;
@@ -72,10 +77,11 @@ export function useOutsourceQuoteForm(
   opts: UseOutsourceQuoteFormOptions,
 ): UseOutsourceQuoteFormReturn {
   const { dangerous: confirmDangerous } = useConfirm();
+  // 必须在组件 setup 内调用本 composable（useQueryClient 依赖注入上下文）。
+  const qc = useQueryClient();
 
   // ============ 新建报价 dialog ============
   const showCreate = ref(false);
-  const createFormRef = ref<FormInstance>();
   const createForm = reactive<CreateQuoteForm>({
     part_id: '',
     outsource_company_id: '',
@@ -83,35 +89,11 @@ export function useOutsourceQuoteForm(
     price: '',
     note: '',
   });
-
-  // 前端必填校验：4 个核心字段都必填，price 还需 > 0（镜像 schema/outsource_quote.py
-  // `OutsourceQuoteCreateRequest` 的 `gt=0`）。
-  const createRules: FormRules = {
-    part_id: [{ required: true, message: '请选择零件', trigger: 'change' }],
-    outsource_company_id: [{ required: true, message: '请选择外协公司', trigger: 'change' }],
-    process_id: [{ required: true, message: '请选择工序', trigger: 'change' }],
-    price: [
-      { required: true, message: '请填写单价', trigger: 'blur' },
-      {
-        validator: (_rule, value: string, cb) => {
-          const n = Number(value);
-          if (value === '' || value == null || Number.isNaN(n) || n <= 0) {
-            cb(new Error('单价必须大于 0'));
-          } else {
-            cb();
-          }
-        },
-        trigger: 'blur',
-      },
-    ],
-  };
+  const createFieldErrors = ref<OutsourceQuoteFieldErrors>({});
 
   function openCreate(): void {
-    createForm.part_id = '';
-    createForm.outsource_company_id = '';
-    createForm.process_id = '';
-    createForm.price = '';
-    createForm.note = '';
+    Object.assign(createForm, { part_id: '', outsource_company_id: '', process_id: '', price: '', note: '' });
+    createFieldErrors.value = {};
     showCreate.value = true;
   }
 
@@ -126,8 +108,9 @@ export function useOutsourceQuoteForm(
     }
     companiesLoading.value = true;
     try {
-      const cs = await listCompaniesByProcess(processId);
-      companies.value = cs.map((c) => ({ id: c.id, name: c.name }));
+      // 2026-10-09：端点出参收成窄 VO `{id, name}[]`（裸数组），不再有 is_active ——
+      // service 层已滤掉停用公司，能出现在这里的恒为启用。
+      companies.value = await listCompaniesByProcess(processId);
     } catch (e) {
       companies.value = [];
       ElMessage.error((e as Error).message ?? '外协公司加载失败');
@@ -136,9 +119,8 @@ export function useOutsourceQuoteForm(
     }
   }
 
-  // 工序变化：级联刷新公司列表，并清掉之前已选的公司，避免脏数据
-  // 注意：此处 watch 必须在 createForm (reactive) 声明之后注册，
-  //       否则 watch() 同步调用 source getter 会撞到 const TDZ 抛 ReferenceError。
+  // 工序变化：级联刷新公司列表，并清掉之前已选的公司，避免脏数据。
+  // watch 必须在 createForm 声明之后注册，否则 watch() 同步求值 source 会撞 TDZ。
   watch(
     () => createForm.process_id,
     (newPid) => {
@@ -149,58 +131,13 @@ export function useOutsourceQuoteForm(
 
   /** 选择零件后重置工序与公司，让操作员在独立的工序下拉里重新选。
    *
-   *  2026-10-03 契约对齐：`GET /outsource-quotes/quotable-parts` 的行粒度是
-   *  「一个零件一行」，VO 不带工序 / 货架字段 ⇒ **没有任何数据通路**能推断出该
-   *  零件该报哪道工序，工序一律手选。
-   *
-   *  清空两步是必须的：`process_id` 不清会沿用上一零件的工序（`el-select` 的
-   *  `:value` 只按 part_id 匹配，改零件不会自动清它），`outsource_company_id` 不清
-   *  则会残留一个与新工序无隶属关系的公司。
-   *
    *  入参保留是为对齐 dialog 的 `partChange` 事件载荷（当前无需读取）。 */
   function onCreatePartChange(_partId: string): void {
     createForm.process_id = '';
     // 2026-10-03 登记：与 `createForm.process_id` 的 watch 看似重复，**不可删** ——
-    // watch 只在值**发生变化**时才跑回调，而换零件时 `process_id` 往往已经是 `''`
-    // （或本次赋的仍是 `''`），`'' → ''` 不构成变化 ⇒ watch 不触发；没有这一行，
-    // 上一条报价选过的公司会跨零件残留。`useOutsourceQuoteForm.spec.ts` 的 Q2 正是
-    // 靠它才绿。
+    // watch 只在值**发生变化**时才跑回调，换零件时 `process_id` 往往已经是 `''`，
+    // `'' → ''` 不构成变化 ⇒ watch 不触发；没有这一行，上一条报价选过的公司会跨零件残留。
     createForm.outsource_company_id = '';
-  }
-
-  async function onCreate(): Promise<void> {
-    if (!createFormRef.value) return;
-    // el-form 校验：4 个必填字段 + price > 0；校验失败时 validate() reject，直接短路（红字提示）
-    try {
-      await createFormRef.value.validate();
-    } catch {
-      return;
-    }
-    try {
-      await createOutsourceQuote({
-        part_id: createForm.part_id,
-        outsource_company_id: createForm.outsource_company_id,
-        process_id: createForm.process_id,
-        price: createForm.price || '0',
-        note: createForm.note || null,
-      });
-      ElMessage.success('已创建 DRAFT 报价');
-      showCreate.value = false;
-      await opts.refresh();
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '创建失败');
-    }
-  }
-
-  // ============ 提交审核（无 dialog，直接发请求）============
-  async function onSubmit(q: OutsourceQuote): Promise<void> {
-    try {
-      await submitOutsourceQuote(q.id);
-      ElMessage.success('已提交审核');
-      await opts.refresh();
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '提交失败');
-    }
   }
 
   // ============ 审批 dialog（通过 + 拒绝）============
@@ -220,19 +157,101 @@ export function useOutsourceQuoteForm(
     showReject.value = true;
   }
 
-  async function onApprove(): Promise<void> {
-    if (!activeQuote.value) return;
-    try {
-      await approveOutsourceQuote(activeQuote.value.id, {
-        version: activeQuote.value.version,
-        review_note: reviewNote.value || null,
-      });
+  // ============ 六条写路径的 useMutation ============
+  const createMutation = useMutation({
+    mutationKey: ['outsource', 'quotes', 'create'],
+    mutationFn: (payload: Parameters<typeof createOutsourceQuote>[0]) =>
+      createOutsourceQuote(payload),
+    onSuccess: async () => {
+      await invalidateOutsourceQuotesAll(qc);
+      ElMessage.success('已创建 DRAFT 报价');
+      showCreate.value = false;
+      await opts.refresh();
+    },
+    onError: (e: Error) => ElMessage.error(e.message ?? '创建失败'),
+  });
+
+  // ⚠️ `version` 是硬约束：`OutsourceQuoteSubmitRequest.version` 无
+  // `#[serde(default)]` ⇒ 缺传是 axum 的 HTTP 422 纯文本（不是业务信封）。
+  const submitMutation = useMutation({
+    mutationKey: ['outsource', 'quotes', 'submit'],
+    mutationFn: (vars: { id: string; version: number }) =>
+      submitOutsourceQuote(vars.id, { version: vars.version }),
+    onSuccess: async () => {
+      await invalidateOutsourceQuotesAll(qc);
+      ElMessage.success('已提交审核');
+      await opts.refresh();
+    },
+    onError: (e: Error) => ElMessage.error(e.message ?? '提交失败'),
+  });
+
+  const approveMutation = useMutation({
+    mutationKey: ['outsource', 'quotes', 'approve'],
+    mutationFn: (vars: { id: string; version: number; review_note: string | null }) =>
+      approveOutsourceQuote(vars.id, { version: vars.version, review_note: vars.review_note }),
+    onSuccess: async () => {
+      await invalidateOutsourceQuotesAll(qc);
       ElMessage.success('已通过');
       showApprove.value = false;
       await opts.refresh();
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '审批失败');
+    },
+    onError: (e: Error) => ElMessage.error(e.message ?? '审批失败'),
+  });
+
+  const rejectMutation = useMutation({
+    mutationKey: ['outsource', 'quotes', 'reject'],
+    mutationFn: (vars: { id: string; version: number; review_note: string }) =>
+      rejectOutsourceQuote(vars.id, { version: vars.version, review_note: vars.review_note }),
+    onSuccess: async () => {
+      await invalidateOutsourceQuotesAll(qc);
+      ElMessage.success('已拒绝');
+      showReject.value = false;
+      await opts.refresh();
+    },
+    onError: (e: Error) => ElMessage.error(e.message ?? '拒绝失败'),
+  });
+
+  const softDeleteMutation = useMutation({
+    mutationKey: ['outsource', 'quotes', 'soft-delete'],
+    mutationFn: (vars: { id: string; version: number }) =>
+      softDeleteOutsourceQuote(vars.id, { version: vars.version }),
+    onSuccess: async () => {
+      await invalidateOutsourceQuotesAll(qc);
+      ElMessage.success('已软删');
+      await opts.refresh();
+    },
+    onError: (e: Error) => ElMessage.error(e.message ?? '删除失败'),
+  });
+
+  async function onCreate(): Promise<void> {
+    const parsed = outsourceQuoteFormSchema.safeParse(createForm);
+    if (!parsed.success) {
+      createFieldErrors.value = toFieldErrors(parsed.error.issues);
+      return;
     }
+    createFieldErrors.value = {};
+    const v = parsed.data;
+    await createMutation.mutateAsync({
+      part_id: v.part_id,
+      outsource_company_id: v.outsource_company_id,
+      process_id: v.process_id,
+      // 单价原样传字符串：后端入参是 Decimal 串，前端不做 number 转换（会丢末位精度）。
+      price: v.price,
+      note: v.note || null,
+    });
+  }
+
+  async function onSubmit(q: OutsourceQuote): Promise<void> {
+    await submitMutation.mutateAsync({ id: q.id, version: q.version });
+  }
+
+  async function onApprove(): Promise<void> {
+    if (!activeQuote.value) return;
+    await approveMutation.mutateAsync({
+      id: activeQuote.value.id,
+      version: activeQuote.value.version,
+      review_note: reviewNote.value || null,
+    });
   }
 
   async function onReject(): Promise<void> {
@@ -240,20 +259,13 @@ export function useOutsourceQuoteForm(
       ElMessage.warning('请填写拒绝原因');
       return;
     }
-    try {
-      await rejectOutsourceQuote(activeQuote.value.id, {
-        version: activeQuote.value.version,
-        review_note: reviewNote.value.trim(),
-      });
-      ElMessage.success('已拒绝');
-      showReject.value = false;
-      await opts.refresh();
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '拒绝失败');
-    }
+    await rejectMutation.mutateAsync({
+      id: activeQuote.value.id,
+      version: activeQuote.value.version,
+      review_note: reviewNote.value.trim(),
+    });
   }
 
-  // ============ 软删（二次确认）============
   async function onDelete(q: OutsourceQuote): Promise<void> {
     if (
       !(await confirmDangerous(
@@ -262,31 +274,20 @@ export function useOutsourceQuoteForm(
       ))
     )
       return;
-    try {
-      await softDeleteOutsourceQuote(q.id);
-      ElMessage.success('已软删');
-      await opts.refresh();
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '删除失败');
-    }
+    await softDeleteMutation.mutateAsync({ id: q.id, version: q.version });
   }
 
   return {
-    // 新建
     showCreate,
-    createFormRef,
     createForm,
-    createRules,
+    createFieldErrors,
     openCreate,
     onCreate,
     onCreatePartChange,
-    // 工序 → 公司级联
     companies,
     companiesLoading,
     loadCompaniesByProcess,
-    // 提交
     onSubmit,
-    // 审批
     showApprove,
     showReject,
     reviewNote,
@@ -295,7 +296,18 @@ export function useOutsourceQuoteForm(
     openReject,
     onApprove,
     onReject,
-    // 删除
     onDelete,
   };
+}
+
+/** 报价状态筛选的候选（原生 `:filters` 列的 options）。
+ *
+ *  候选源是 `ACTIVE_QUOTE_STATUSES`（草稿 / 待审核 / 已批准 / 已拒绝四个活跃值）而不是
+ *  `OUTSOURCE_QUOTE_STATUS_LABEL` 的全部键 —— 后者含四个 legacy 值
+ *  （`OUTSOURCING` / `RECEIVED` / `BILLED` / `USED`），它们没有操作按钮、选中也拿不到
+ *  行，让用户能选到「查不出任何行」的状态是纯误导。 */
+export function quoteStatusFilterOptions(
+  activeStatuses: readonly OutsourceQuoteStatus[],
+): { text: string; value: string }[] {
+  return activeStatuses.map((v) => ({ text: OUTSOURCE_QUOTE_STATUS_LABEL[v], value: v }));
 }

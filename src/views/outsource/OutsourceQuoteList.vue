@@ -1,61 +1,57 @@
 <!-- 报价一览页 — 外协报价 CRUD + MANAGER 审批
-     2026-07-16 重排：列头 popover 筛选 + 列头排序 + 分页 sizes
-     2026-08-25 T13：拆为装配壳 + OutsourceQuoteTable + 3 个 dialog + 2 个 composables。
-     本文件只保留：
-       - 顶部 filter-card（keyword + 重置 + 共 N 条 + 新建按钮）
-       - OutsourceQuoteTable（表格组件）
-       - 3 个 dialog（create / approve+reject / drawing preview）
-       - 图纸预览业务（ensureDrawing + previewDrawing + 缓存）
-       - 页级 lookup 装载（processes / parts；companies-by-process 由 form composable 内调）
-       - shell onMounted 编排（loadLookups → restore → refresh）
+
+     2026-10-09 重构（列表交互 + 迁 TanStack Query + 表头筛选）：
+     - 列表状态从 `useOutsourceQuoteTable()` composable + `OutsourceQuoteTable` 的
+       `:ctx` prop 模式改为 Pinia store `useOutsourceQuoteListStore`（与外协公司一览 /
+       外协对账页统一）；子组件直接消费 store。
+     - 主查询改走域内 query hook `useOutsourceQuotesQuery`，page / pageSize / 筛选 /
+       排序全部进 queryKey。
+     - 表头筛选补齐：图号（`drawing_no`）、名称（`name`）、外协公司（等值下拉）、
+       状态（EP 原生 `:filters` → `statuses[]`）；客户沿用原有 popover 形态但换成共享
+       `ColumnFilterPopover` 外壳。顶部 filter 卡收缩为「新建 + 重置筛选 + 共 N 条」。
+     - 六条写路径（create / submit / approve / reject / soft-delete）全部走 useMutation
+       + 失效；`submit` 与 `soft-delete` **必传 `version`**（后端本轮设为必填）。
+     - 新建表单校验从 el-form `FormRules` 换成 Zod（`OutsourceQuoteFormSchema.ts`）。
+
+     仍留在本页壳里的：页级 lookup（OUTSOURCE 工序列表 / 可报价零件 picker）、图纸预览
+     业务（ensureDrawing + previewDrawing + blob 缓存）、3 个 dialog 的挂载。
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { RefreshLeft, Search } from '@element-plus/icons-vue';
-// 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
-// store proxy 自动解包嵌套 ref —— auth.user 直接是 CurrentUser | null，无需 .value。
-import { useAuthStore } from '@/stores/auth';
-import { useCustomerTree } from '@/composables/useCustomerTree';
+import { RefreshLeft } from '@element-plus/icons-vue';
 import { listProcesses } from '@/api/process';
-import type { Process } from '@/types/process';
-import type { OutsourceQuote, QuotablePart } from '@/types/outsource';
-import { listPartFilesByOwner } from '@/api/assembly';
 import { listQuotableParts } from '@/api/outsource';
+import { listPartFilesByOwner } from '@/api/assembly';
 import { api } from '@/api/http';
-import type { PartFileItem } from '@/types/part_file';
-import { canCreate, rolesArrayToMap } from '@/utils/outsourceQuotePermissions';
-import { useOutsourceQuoteTable } from './composables/useOutsourceQuoteTable';
+import { canCreate } from '@/utils/outsourceQuotePermissions';
+import { useOutsourceQuoteListStore } from './composables/useOutsourceQuoteListStore';
 import { useOutsourceQuoteForm } from './composables/useOutsourceQuoteForm';
+import type { OutsourceQuoteSchema } from './composables/outsourceListSchema';
 import OutsourceQuoteTableComponent from './components/OutsourceQuoteTable.vue';
 import OutsourceQuoteCreateDialog from './components/OutsourceQuoteCreateDialog.vue';
 import OutsourceQuoteReviewDialog from './components/OutsourceQuoteReviewDialog.vue';
 import OutsourceQuotePdfPreview from './components/OutsourceQuotePdfPreview.vue';
+import type { Process } from '@/types/process';
+import type { QuotablePart } from '@/types/outsource';
+import type { PartFileItem } from '@/types/part_file';
 
-const auth = useAuthStore();
-const roleMap = computed(() => rolesArrayToMap(auth.user?.roles ?? []));
 const route = useRoute();
-const { tree: customerTree } = useCustomerTree();
+// store 必须在壳 setup 内首调（不变量 #1：切片链路上的 onBeforeUnmount 会绑到本组件）。
+const store = useOutsourceQuoteListStore();
+const form = useOutsourceQuoteForm({ refresh: store.query.fetchList });
 
 // ============================================================
-// 列表 composable（search / sort / popover / 列可见性 / 行类名）
-// ============================================================
-const table = useOutsourceQuoteTable({ roleMap });
-
-// ============================================================
-// 表单 composable（create / approve / reject / delete / submit）
-// 2026-10-03：form composable 不再吃页级 lookup（parts / processes）—— 报价工序
-// 改由操作员在 dialog 的工序下拉里手选，无需从零件反推。表格刷新由 form composable
-// 内部需要时调（创建 / 审批成功）。
+// 页级 lookup：OUTSOURCE 工序列表 + 可报价零件 picker
 // ============================================================
 const processes = ref<Process[]>([]);
-// 2026-10-03：picker 候选源 —— 「有活跃 PENDING 批次的零件」，一零件一行。
+// picker 候选源 —— 「有活跃 PENDING 批次的零件」，一零件一行。
 const parts = ref<QuotablePart[]>([]);
 
 async function loadLookups(): Promise<void> {
-  // 2026-10-03：拆成两段独立 try —— 此前一个 try 包两个 await，quotable-parts 失败
-  // 会把已成功的 processes 结果一起废掉（且报错文案笼统，操作员分不清是哪个下拉空了）。
+  // 拆成两段独立 try —— 一个 try 包两个 await 时 quotable-parts 失败会把已成功的
+  // processes 结果一起废掉（且报错文案笼统，操作员分不清是哪个下拉空了）。
   try {
     const ps = await listProcesses({ limit: 200 });
     processes.value = ps.items.filter((p) => p.category === 'OUTSOURCE');
@@ -63,7 +59,6 @@ async function loadLookups(): Promise<void> {
     ElMessage.error((e as Error).message ?? '工序数据加载失败');
   }
   try {
-    // picker 候选源：有活跃 PENDING 批次的在制件（一零件一行），出参是分页信封。
     const r = await listQuotableParts({ limit: 500 });
     parts.value = r.items;
   } catch (e) {
@@ -71,13 +66,8 @@ async function loadLookups(): Promise<void> {
   }
 }
 
-const form = useOutsourceQuoteForm({
-  refresh: table.refresh,
-});
-
 // ============================================================
-// 图纸行内预览（2026-07-16）：行点击 / 图号链接 → 拉取该零件的 DRAWING
-// → blob URL → 全屏 PDF / 图片预览
+// 图纸行内预览：行点击 / 图号链接 → 该零件的 DRAWING → blob URL → 全屏预览
 // ============================================================
 const drawingPreviewVisible = ref(false);
 const drawingPreviewUrl = ref<string | null>(null);
@@ -93,19 +83,14 @@ function isPdfType(t: string): boolean {
 
 async function ensureDrawing(partId: string): Promise<PartFileItem | null> {
   if (drawingCache.has(partId)) return drawingCache.get(partId) ?? null;
-  // 2026-09-16 T3.5：列表端点切到 v2 /part-files?owner_id=...&kind=...（owner 多态）
+  // v2 /part-files?owner_id=…&kind=…（owner 多态）
   const files = (await listPartFilesByOwner(partId, 'DRAWING')).items;
   const f = files[0] ?? null;
   drawingCache.set(partId, f);
   return f;
 }
 
-async function previewDrawing(row: {
-  part_id?: string;
-  part_drawing_no?: string | null;
-  part_name?: string | null;
-}): Promise<void> {
-  if (!row.part_id) return;
+async function previewDrawing(row: OutsourceQuoteSchema): Promise<void> {
   drawingPreviewLoading.value = true;
   try {
     const f = await ensureDrawing(row.part_id);
@@ -113,7 +98,7 @@ async function previewDrawing(row: {
       ElMessage.warning('该零件暂无图纸');
       return;
     }
-    // 2026-09-16：v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
+    // v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
     const resp = await api.get<Blob>(`/part-files/${encodeURIComponent(f.id)}/content`, {
       responseType: 'blob',
     });
@@ -137,88 +122,54 @@ function closeDrawingPreview(): void {
   }
 }
 
-onBeforeUnmount(() => {
-  if (drawingPreviewUrl.value) URL.revokeObjectURL(drawingPreviewUrl.value);
-});
-
 // ============================================================
 // 操作列路由：OutsourceQuoteTable emit('action') → form composable
 // ============================================================
-function onTableAction(payload: {
-  type: 'submit' | 'approve' | 'reject' | 'delete';
-  row: OutsourceQuote;
-}): void {
+function onTableAction(payload: { type: 'submit' | 'approve' | 'reject' | 'delete'; row: any }): void {
   if (payload.type === 'submit') void form.onSubmit(payload.row);
   else if (payload.type === 'approve') form.openApprove(payload.row);
   else if (payload.type === 'reject') form.openReject(payload.row);
-  else if (payload.type === 'delete') void form.onDelete(payload.row);
+  else void form.onDelete(payload.row);
 }
 
-// ============================================================
-// 初始化：lookup → restore → refresh
-// ============================================================
 onMounted(async () => {
-  await loadLookups();
-  table.restore(route.query.statuses);
-  await table.refresh();
+  // 图号点击 → 预览图纸的回调注入 store（弹窗与 blob 逻辑留在壳，store 不碰 DOM）。
+  store.registerPreviewDrawing((row) => void previewDrawing(row));
+  // restoreState 末尾开 enabled 闸（首屏只发一次请求）。
+  store.query.restoreState(route.query.statuses);
+  await Promise.all([loadLookups(), store.options.loadCompanyOptions()]);
 });
 
-// 模板里需要的别名（columnVisibility 已下沉到 OutsourceQuoteTable）
-const search = table.search;
-const pagedRef = table.pagedRef;
+onBeforeUnmount(() => {
+  if (drawingPreviewUrl.value) URL.revokeObjectURL(drawingPreviewUrl.value);
+  store.$dispose();
+});
 </script>
 
 <template>
   <div class="page">
-    <!-- 顶部 filter-card：仅保留 keyword + 重置 + 共 N 条 + 新建 -->
+    <!-- 顶部 filter 卡：筛选全部搬进表头，这里只留「新建报价 + 重置筛选 + 共 N 条」 -->
     <el-card shadow="never" class="filter-card">
       <div class="filter-row">
-        <el-input
-          v-model="search.keyword"
-          placeholder="序列号 / 图号 / 名称（前缀搜索）"
-          clearable
-          style="width: 280px"
-          @keyup.enter="table.onSearch"
-          @clear="table.onSearch"
-        >
-          <template #prefix>
-            <el-icon><Search /></el-icon>
-          </template>
-        </el-input>
-
-        <el-button @click="table.onReset">
-          <el-icon><RefreshLeft /></el-icon>
-          <span>重置</span>
-        </el-button>
-
-        <el-button v-if="canCreate(roleMap)" type="success" @click="form.openCreate">
+        <el-button v-if="canCreate(store.roleMap)" type="success" @click="form.openCreate">
           新建报价
         </el-button>
-
-        <span v-if="pagedRef?.total && pagedRef.total > 0" class="total-hint"
-          >共 {{ pagedRef.total }} 条</span
-        >
+        <el-button @click="store.query.resetAllFilters">
+          <el-icon><RefreshLeft /></el-icon><span>重置筛选</span>
+        </el-button>
+        <span v-if="store.query.total > 0" class="total-hint">共 {{ store.query.total }} 条</span>
       </div>
     </el-card>
 
     <el-card shadow="never">
-      <OutsourceQuoteTableComponent
-        :ctx="{
-          table,
-          roleMap,
-          customerTree,
-        }"
-        @row-click="previewDrawing"
-        @previewDrawing="previewDrawing"
-        @action="onTableAction"
-      />
+      <OutsourceQuoteTableComponent @row-click="previewDrawing" @action="onTableAction" />
     </el-card>
 
     <!-- 新建 DRAFT 报价 -->
     <OutsourceQuoteCreateDialog
       :model-value="form.showCreate.value"
       :form="form.createForm"
-      :rules="form.createRules"
+      :field-errors="form.createFieldErrors.value"
       :parts="parts"
       :processes="processes"
       :companies="form.companies.value"
@@ -229,11 +180,6 @@ const pagedRef = table.pagedRef;
       @update:company-id="(v: string) => (form.createForm.outsource_company_id = v)"
       @update:price="(v: string) => (form.createForm.price = v)"
       @update:note="(v: string) => (form.createForm.note = v)"
-      @formRef="
-        (el) => {
-          form.createFormRef.value = el ?? undefined;
-        }
-      "
       @partChange="form.onCreatePartChange"
       @confirm="form.onCreate"
     />
@@ -258,7 +204,7 @@ const pagedRef = table.pagedRef;
       @confirm="form.onReject"
     />
 
-    <!-- 图纸行内预览（2026-07-16） -->
+    <!-- 图纸行内预览 -->
     <OutsourceQuotePdfPreview
       :model-value="drawingPreviewVisible"
       :url="drawingPreviewUrl"
@@ -277,20 +223,15 @@ const pagedRef = table.pagedRef;
   flex-direction: column;
   gap: 12px;
 }
-
-.filter-card {
-  :deep(.el-card__body) {
-    padding: 12px 16px;
-  }
+.filter-card :deep(.el-card__body) {
+  padding: 12px 16px;
 }
-
 .filter-row {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
-
 .total-hint {
   font-size: 13px;
   color: var(--text-secondary);
