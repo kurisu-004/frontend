@@ -20,7 +20,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { deliveryDaysLeftText, deliveryUrgencyClass } from '../deliveryDate';
+import {
+  deliveryDaysLeftText,
+  deliveryUrgencyClass,
+  formatDeliveryMonthDay,
+} from '../deliveryDate';
 
 /** 固定「今天」= 2026-10-04（本地零点）。`new Date(2026, 9, 4)` 按本地时区构造。 */
 const FIXED_TODAY = new Date(2026, 9, 4, 0, 0, 0);
@@ -111,6 +115,41 @@ describe('deliveryDate 天数口径（本地零点，两档 TZ 期望逐字相�
         // 非法日期串：解析失败按「无值」处理，不抛错也不返回 NaN 参与比较
         expect(deliveryDaysLeftText('not-a-date')).toBe('');
         expect(deliveryUrgencyClass('not-a-date')).toBe('');
+      });
+    }
+  });
+});
+
+// 打印「预估交期」列的展示格式（2026-10-08 新增）。只取日历分量、不做日期算术，
+// 两档 TZ 的期望必须逐字相同 —— 与上面那组同规格。
+describe('formatDeliveryMonthDay（M月D日，两档 TZ 期望逐字相同）', () => {
+  it('月 / 日不补零、不带年份', () => {
+    for (const tz of ['Asia/Shanghai', 'UTC']) {
+      withTz(tz, () => {
+        expect(formatDeliveryMonthDay('2026-09-29')).toBe('9月29日');
+        expect(formatDeliveryMonthDay('2026-01-05')).toBe('1月5日');
+        expect(formatDeliveryMonthDay('2026-12-01')).toBe('12月1日');
+        expect(formatDeliveryMonthDay('2026-10-10')).toBe('10月10日');
+      });
+    }
+  });
+
+  it('带时间后缀 / 跨年都只取日历分量', () => {
+    for (const tz of ['Asia/Shanghai', 'UTC']) {
+      withTz(tz, () => {
+        expect(formatDeliveryMonthDay('2026-09-29T00:00:00')).toBe('9月29日');
+        expect(formatDeliveryMonthDay('2027-03-31')).toBe('3月31日');
+      });
+    }
+  });
+
+  it('空值与非法串返空串（调用方按「无值」写空格，不写破折号占位）', () => {
+    for (const tz of ['Asia/Shanghai', 'UTC']) {
+      withTz(tz, () => {
+        expect(formatDeliveryMonthDay(null)).toBe('');
+        expect(formatDeliveryMonthDay(undefined)).toBe('');
+        expect(formatDeliveryMonthDay('')).toBe('');
+        expect(formatDeliveryMonthDay('not-a-date')).toBe('');
       });
     }
   });

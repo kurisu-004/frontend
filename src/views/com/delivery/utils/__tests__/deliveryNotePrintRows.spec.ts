@@ -311,6 +311,7 @@ describe('单位（后端 line item 无 unit 字段，前端按行性质推导�
     );
     expect(specs[0]!.rows.map((r) => r.unit)).toEqual(['件', '套']);
   });
+
 });
 
 describe('sortPrintRows', () => {
@@ -366,6 +367,72 @@ describe('splitRow', () => {
   it('备注每行独立、默认空（继承会让同一句话重复 N 遍）', () => {
     const out = splitRow(row, [2, 3]);
     expect(Array.isArray(out) && out.every((r) => r.note === '')).toBe(true);
+  });
+});
+
+// 「预估交期」列的展示格式：`M月D日`（月日不补零、不带年份）。转换只发生在 pack 出口
+// （`PrintSheetRow.etd` 是展示就绪的值）；`PrintRow.system_delivery_date` 必须留 ISO 原值
+// —— 它是打印预览里该列的排序 `prop`，按 `M月D日` 的字典序排会跨月倒挂
+// （`12月1日` 排在 `2月1日` 前）。
+describe('预估交期列格式（M月D日）', () => {
+  // 预估交期列的格式转换点就在 pack 这一步（PrintSheetRow.etd 是「展示就绪」的值）。
+  it('pack 成 sheet 时预估交期转成 `M月D日`；无值仍是 null（不写破折号占位）', () => {
+    const map = buildL2GroupMap({
+      groups: [],
+      ungrouped_customers: [{ id: '1', name: '二五六厂' }],
+    });
+    const specs = groupIntoSheets(
+      groupRows(
+        [
+          li({ id: '1', part_id: 'P1', customer_id: '1', customer_name: '二五六厂' }),
+          li({
+            id: '2',
+            part_id: 'P2',
+            customer_id: '1',
+            customer_name: '二五六厂',
+            system_delivery_date: '2026-11-01',
+          }),
+          li({ id: '3', part_id: 'P3', customer_id: '1', customer_name: '二五六厂' }),
+        ],
+        map,
+        'merge',
+      ),
+    );
+    expect(specs[0]!.rows.map((r) => r.etd)).toEqual([null, '11月1日', null]);
+  });
+
+  // 排序用的是 PrintRow.system_delivery_date（ISO 原值），不能被这里改掉的格式污染 ——
+  // `12月1日` 按字典序会排在 `2月1日` 前面。
+  it('转换只发生在 pack 出口：sortPrintRows 仍按 ISO 排（跨月不倒挂）', () => {
+    const map = buildL2GroupMap({
+      groups: [],
+      ungrouped_customers: [{ id: '1', name: '二五六厂' }],
+    });
+    const packed = groupRows(
+      [
+        li({
+          id: '1',
+          part_id: 'D',
+          customer_id: '1',
+          customer_name: '二五六厂',
+          system_delivery_date: '2026-12-01',
+        }),
+        li({
+          id: '2',
+          part_id: 'F',
+          customer_id: '1',
+          customer_name: '二五六厂',
+          system_delivery_date: '2026-02-01',
+        }),
+      ],
+      map,
+      'merge',
+    );
+    const flat = [...packed.values()].flatMap((g) => g.rows);
+    const sorted = sortPrintRows(flat, 'system_delivery_date', 'asc');
+    expect(sorted.map((r) => r.id)).toEqual(['2', '1']);
+    // 且确认 pack 出口确实转过（否则上面那条断言是假的）
+    expect(groupIntoSheets(packed)[0]!.rows.map((r) => r.etd)).toEqual(['12月1日', '2月1日']);
   });
 });
 

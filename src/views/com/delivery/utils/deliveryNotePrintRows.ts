@@ -16,6 +16,7 @@ import type { DeliveryGroupListResultData } from '../composables/deliveryGroupSc
 import { DELIVERY_NOTE_TEMPLATE_CONTRACT } from './deliveryNoteTemplateContract';
 import { shippableSetsOfGroup } from './assemblySets';
 import type { PrintSheetSpec } from './deliveryNoteWorkbook';
+import { formatDeliveryMonthDay } from '@/utils/deliveryDate';
 
 /** 打印表的一行（与模板 10 列一一对应）。 */
 export interface PrintRow {
@@ -384,7 +385,12 @@ export function groupIntoSheets(
 /** PrintRow → 模板行（去打印侧不用的字段）。
  *
  * ⚠️ `quantity: null`（装配件「后端没给可出货套数」）在模板里写**空**而不是 0 ——
- * 0 会被读成「这套打不了」。 */
+ * 0 会被读成「这套打不了」。
+ *
+ * ⚠️ `etd` 在**这里**才转成 `M月D日`，不在 `toPrintRow`：`PrintRow.system_delivery_date`
+ * 是打印预览里「预估交期」列的排序 `prop`，改成 `M月D日` 后按字典序排会跨月错序
+ * （`12月1日` 排在 `2月1日` 前面）。预览表格用 `cellRender` 单独格式化展示，
+ * 排序仍走 ISO 原值。 */
 function toSheetRows(rows: readonly PrintRow[]): PrintSheetSpec['rows'] {
   return rows.map((r) => ({
     orderNo: r.order_no,
@@ -394,7 +400,7 @@ function toSheetRows(rows: readonly PrintRow[]): PrintSheetSpec['rows'] {
     name: r.name,
     quantity: r.quantity,
     unit: r.unit,
-    etd: r.system_delivery_date,
+    etd: formatDeliveryMonthDay(r.system_delivery_date) || null,
     note: r.note,
   }));
 }

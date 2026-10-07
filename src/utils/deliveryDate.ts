@@ -64,6 +64,20 @@ export function formatDeliveryDate(s: DeliveryDate): string {
   return buffered.slice(5).replace(/-/g, '/');
 }
 
+/**
+ * 送货单打印「预估交期」列的展示格式：`YYYY-MM-DD` → `M月D日`（月、日不补零，不带年份）。
+ *
+ * 走 `parseLocalIso` 而不是裸正则切片，是为了让非法串与本文件其余入口同口径返空串。
+ * 只做取字段、不做日期算术 ⇒ 不存在 UTC / 本地零点的漂移问题（见文件头那条约束的成因）。
+ * 空值 / 非法串 → 空串，由调用方按「无值」处理。
+ */
+export function formatDeliveryMonthDay(s: DeliveryDate): string {
+  if (!s) return '';
+  const d = parseLocalIso(s);
+  if (!d) return '';
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
 /** 本地零点「今天」+ 目标日与它的日历日差（两端同基准，见 parseLocalIso）。 */
 function calendarDaysLeftOf(buffered: string): number | null {
   const target = parseLocalIso(buffered);

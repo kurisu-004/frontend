@@ -22,6 +22,7 @@ import { ElTag } from 'element-plus';
 import { Rank } from '@element-plus/icons-vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { PrintRow } from './utils/deliveryNotePrintRows';
+import { formatDeliveryMonthDay } from '@/utils/deliveryDate';
 
 export type PrintPreviewRow = PrintRow;
 
@@ -115,7 +116,9 @@ export function buildDeliveryNotePrintColumnDefs(): ColumnDef[] {
       minWidth: 110,
       sortable: true,
       align: 'center',
-      cellRender: ({ row: r }) => h('span', null, row(r).system_delivery_date || '—'),
+      // 展示走 `M月D日`（与导出的送货单一致），排序仍读 `prop` 的 ISO 原值 ——
+      // 排序若也按格式化后的串走会跨月错序（`12月1日` 排在 `2月1日` 前）。
+      cellRender: ({ row: r }) => h('span', null, formatDeliveryMonthDay(row(r).system_delivery_date) || '—'),
     },
     {
       key: 'note',

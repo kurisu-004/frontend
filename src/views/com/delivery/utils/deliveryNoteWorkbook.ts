@@ -44,7 +44,8 @@ export interface PrintSheetRow {
   quantity: number | null;
   /** 单位由打印行整形时按行性质定死（散件「件」/ 装配件「套」），渲染层原样写。 */
   unit: string;
-  /** 系统交期；无值写 null（模板该格留空，不写字符串 '—'）。 */
+  /** 系统交期，**已格式化成 `M月D日`**（见 toSheetRows 的口径说明）；无值写 null
+   *  （模板该格留空，不写字符串 '—'）。 */
   etd: string | null;
   note: string;
 }

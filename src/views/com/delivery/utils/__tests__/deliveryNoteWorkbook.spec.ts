@@ -112,7 +112,7 @@ function row(i: number) {
     name: '铝电解电容',
     quantity: i + 1,
     unit: '件',
-    etd: '2026-11-01',
+    etd: '11月1日',
     note: '',
   };
 }
@@ -145,6 +145,10 @@ describe('renderDeliveryNoteWorkbook', () => {
     expect(s.rows[2]![1]).toBe('SO-0');
     expect(s.rows[2]![4]).toBe('C-1000');
     expect(s.rows[2]![6]).toBe(1);
+    // I 列「预估交期」：`PrintSheetRow.etd` 由 toSheetRows 预格式化（口径见那边），
+    // 渲染层原样落格 —— 这里只锁「原样写、不二次加工」。
+    expect(s.rows[2]![8]).toBe('11月1日');
+    expect(s.rows[2]![7]).toBe('件');
     expect(s.rows[4]![1]).toBe('SO-2');
     // 第 4..12 数据行必须整行清空（否则会漏出 {{order_no}} 字面量）
     expect(s.rows[5]!.every((v) => String(v ?? '') === '')).toBe(true);
