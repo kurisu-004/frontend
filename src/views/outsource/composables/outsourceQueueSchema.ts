@@ -47,7 +47,7 @@
 // `__tests__/outsourceQueueSchema.spec.ts` 的「parse 后键集 == fixture 键集」断言钉死。
 
 import { z } from 'zod';
-import { outsourceCompanyOptionSchema } from '@/composables/queries/schemas';
+import { outsourceCompanyOptionSchema } from './outsourceListSchema';
 
 /** 看板左列的一个候选批次卡片（后端 `OutsourceQueueCandidate`）—— 25 字段。
  *
