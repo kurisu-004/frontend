@@ -74,11 +74,12 @@ export type { Workbook as HucreWorkbook } from 'hucre/xlsx';
  * 根入口 —— hucre 标了 `"sideEffects": false` 且 index.mjs 只是 re-export，
  * rolldown 仍会按用到哪些符号做 tree-shake，不会把整个引擎拉进来。
  */
-const HUCRE_ENTRY = 'hucre';
-
 async function loadHucre(): Promise<typeof HUCRE_MODULE> {
-  const mod = (await import(/* @vite-ignore */ HUCRE_ENTRY)) as typeof HUCRE_MODULE;
-  return mod;
+  // ⚠️ specifier 必须是**字面量**：写成变量 / 加 `/* @vite-ignore */` 都会让打包器
+  // 无法静态分析，产物里留下一句运行时 `import('hucre')` —— node 单测能跑（node 会
+  // 原生解析 bare specifier），**浏览器里必 404**，而 dist 里也不会出现 hucre chunk
+  // （体积假装省掉了，其实是根本没打进去）。字面量才能切出独立 chunk。
+  return import('hucre');
 }
 
 /** 打印产物的 MIME（Blob / download 用，从契约文件再导出一次省得调用方多 import）。 */

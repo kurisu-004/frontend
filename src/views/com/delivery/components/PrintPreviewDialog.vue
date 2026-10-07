@@ -94,7 +94,7 @@ async function onFileChange(file: { raw?: File; name?: string }): Promise<void> 
   try {
     const bytes = new Uint8Array(await file.raw.arrayBuffer());
     const src: TemplateSource = { kind: 'local', bytes, filename: file.name ?? 'template.xlsx' };
-    const { openXlsx } = await import(/* @vite-ignore */ 'hucre');
+    const { openXlsx } = await import('hucre');
     templateDiffs.value = await assertTemplateMatches(await openXlsx(bytes));
     templateName.value = src.filename;
     // 校验不过就不留字节：导出按钮已经 disabled，留着只会让人以为「换模板」这一步过了。
@@ -262,7 +262,7 @@ async function onExport(): Promise<void> {
   exporting.value = true;
   try {
     const bytes = await fetchTemplateBytes(src);
-    const { openXlsx } = await import(/* @vite-ignore */ 'hucre');
+    const { openXlsx } = await import('hucre');
     // 导出前再校验一次：用户在「上传 → 导出」之间可能又传了别的模板，或文件被外部覆盖。
     const diffs = await assertTemplateMatches(await openXlsx(bytes));
     if (diffs.length > 0) {
@@ -276,7 +276,10 @@ async function onExport(): Promise<void> {
       ...todayParts(),
     });
     triggerBrowserDownload(
-      new Blob([out as BlobPart], { type: XLSX_MIME }),
+      // `out` 是 hucre 的 Uint8Array（TS 5.7+ 泛型到 ArrayBufferLike，而
+      // BlobPart 要 ArrayBuffer 变体）—— 复制进一个新的 ArrayBuffer 再包，零拷贝
+      // 假设都不成立但体积只有几十 KB，且比 `as BlobPart` 强转诚实。
+      new Blob([out.slice().buffer as ArrayBuffer], { type: XLSX_MIME }),
       `${props.note.delivery_note_no}.xlsx`,
     );
     ElMessage.success(`已导出 ${sheets.value.length} 个 sheet`);

@@ -46,7 +46,9 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { PrintRow } from '../utils/deliveryNotePrintRows';
+// 静态 import：deliveryNotePrintRows 已被同域多个组件静态引入（对话框 + 分组表），
+// 这里再动态 import 只会得到 vite 的 INEFFECTIVE_DYNAMIC_IMPORT 告警，切不出 chunk。
+import { splitRow, type PrintRow } from '../utils/deliveryNotePrintRows';
 
 const props = defineProps<{
   /** 被拆分的原行。 */
@@ -100,12 +102,9 @@ function addCell(): void {
 /** 确认：把数量数组交给纯函数 splitRow（守恒错误文案也出自它），成功后 emit。 */
 function confirm(): void {
   if (!valid.value) return;
-  // 局部 import 纯函数（懒加载省首屏体积；这条路径只在用户点「拆分」时才走到）。
-  void import('../utils/deliveryNotePrintRows').then(({ splitRow }) => {
-    const out = splitRow(props.row, quantities.value);
-    if (typeof out === 'string') return;
-    emit('done', out);
-  });
+  const out = splitRow(props.row, quantities.value);
+  if (typeof out === 'string') return;
+  emit('done', out);
 }
 </script>
 

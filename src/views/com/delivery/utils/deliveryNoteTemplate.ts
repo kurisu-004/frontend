@@ -30,11 +30,19 @@ export async function fetchTemplateBytes(src: TemplateSource): Promise<Uint8Arra
   return new Uint8Array(await resp.arrayBuffer());
 }
 
-/** 列字母 → 0-based 列下标（'A' → 0，'J' → 9）。不认 >26 列，模板契约用不到。 */
+/** 列字母 → 0-based 列下标（'A' → 0，'J' → 9）。
+ *  ⚠️ 只认**单字母**列：模板契约的 10 个数据列全在 A..J 内，多字母（'AA'）被静默
+ *  当成 'A' 会把值写错列且不发任何错 —— 故显式拒绝。 */
 export function colIndexOf(letter: string): number {
-  const n = letter.charCodeAt(0) - 65;
-  if (n < 0 || n > 25) throw new Error(`模板契约的列字母越界：${letter}`);
-  return n;
+  if (!/^[A-Z]$/.test(letter)) throw new Error(`模板契约的列字母必须是单个 A-Z：${letter}`);
+  return letter.charCodeAt(0) - 65;
+}
+
+/** A1 记法 → 0-based 行列（'F15' → { row: 14, col: 5 }）。页脚锚点用的是整格引用。 */
+export function parseRef(ref: string): { row: number; col: number } {
+  const m = /^([A-Z])(\d+)$/.exec(ref);
+  if (!m) throw new Error(`模板契约的单元格引用格式不对：${ref}`);
+  return { row: Number(m[2]) - 1, col: colIndexOf(m[1]!) };
 }
 
 /** 读一格的文本（null / undefined / 非字符串都归一成串，便于比对与报错）。 */
@@ -108,19 +116,17 @@ export async function assertTemplateMatches(wb: Workbook): Promise<string[]> {
     }
   }
 
-  // 页脚：占位符嵌在整串文案里，只查「包含」。
+  // 页脚：占位符嵌在整串文案里，只查「包含」。锚点用整格引用（A1 记法）。
   const driverRef = c.footer.driver_name;
-  const driverRow = 14; // F15
-  const driverCol = colIndexOf(driverRef);
-  if (!cellText(wb, driverRow, driverCol).includes('{{driver_name}}')) {
+  const driverAt = parseRef(driverRef);
+  if (!cellText(wb, driverAt.row, driverAt.col).includes('{{driver_name}}')) {
     diffs.push(
       `${driverRef} 应包含 {{driver_name}}（锚文案「${FOOTER_DRIVER_NAME_ANCHOR}」）`,
     );
   }
   const dateRef = c.footer.year;
-  const dateRow = 16; // A17
-  const dateCol = colIndexOf(dateRef);
-  const dateCell = cellText(wb, dateRow, dateCol);
+  const dateAt = parseRef(dateRef);
+  const dateCell = cellText(wb, dateAt.row, dateAt.col);
   for (const ph of ['{{year}}', '{{month}}', '{{date}}']) {
     if (!dateCell.includes(ph)) {
       diffs.push(`${dateRef} 应包含 ${ph}（锚文案「${FOOTER_DATE_ANCHOR}」）`);
