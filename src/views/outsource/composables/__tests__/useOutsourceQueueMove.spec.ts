@@ -33,6 +33,18 @@
 //     （schema 必须 .nullish()，用 .nullable() 会在真实响应上抛错）。
 //   - M17：早退路径裸 await 失效，invalidateQueries 抛错被吞、不冒未捕获 rejection。
 //   - M18：成功 toast 文案按 to_kind 三向分。
+//   - M19（2026-10-09 契约抢救）：旧表格页 `useOutsourceSendableList.buildSendPayload`
+//     的三条硬要求随该文件一起删除后，逐条迁到本 spec 钉在新契约上。形态都变了，但
+//     「踩中就整页 400/422」的性质没变，故必须留下可执行断言而不是靠记忆：
+//       ① 工序键：新端点**根本没有**工序键（发送的 `from` 只有货架，目标工序由后端
+//          从批次当前 step 自推）。断言落点是「请求体里不存在任何 process 键」——
+//          照旧字段名（`current_process_id` / `process_id`）拼进 body 会被后端 serde
+//          当未知字段或错类型拒（HTTP 422 纯文本，错误文案对用户毫无意义）。
+//       ② `quote_id` 与 `direct` 必传其一：两者都传或都不传 → 20104。M1/M2 已覆盖正
+//          向两路（APPROVAL 传 quote_id+direct=null、DIRECT 传 direct=true+
+//          quote_id=null），M19 补「回收方向两者必须都是 null」这一路。
+//       ③ 旧端点的 `quantity: null` = 整批；新端点**删掉了 quantity 字段**（整批语义
+//          内建），部分收发要先拆批。断言落点是「请求体里不存在 quantity 键」。
 //
 // 测试策略：
 //   - vi.mock('@/api/outsource') 桩掉 moveOutsourceBatch —— 只关心入参形态与调用次数；
@@ -493,5 +505,44 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
       toShelfId: '6000000000001',
     });
     expect(ElMessage.success).toHaveBeenLastCalledWith('已从外协公司回收至品检');
+  });
+
+  // 2026-10-09 契约抢救组：旧表格页 buildSendPayload 的三条硬要求迁到新契约上的可执行
+  // 断言（见文件头的 M19 说明）。
+  it('M19a：发送请求体里没有任何工序键（目标外协工序由后端自推，不是前端传的）', async () => {
+    const q = testApp.runWithContext(() => useOutsourceQueueMove());
+    await q.sendToCompany({ candidate: approvalCandidate, companyId: '9000000000001' });
+    const sent = realMoveOutsourceBatch.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    expect(Object.keys(sent)).not.toContain('process_id');
+    expect(Object.keys(sent)).not.toContain('current_process_id');
+    expect(Object.keys(sent)).not.toContain('outsource_process_id');
+    // `from` 只带批次真实所在货架，没有别的
+    expect(sent.from).toEqual({ kind: 'PRODUCTION_SHELF', shelf_id: '5000000000001' });
+  });
+
+  it('M19b：回收方向 quote_id 与 direct 都是 null（两者都不传 / 同时传 → 20104）', async () => {
+    const q = testApp.runWithContext(() => useOutsourceQueueMove());
+    await q.receiveToProduction({
+      companyId: '9000000000001',
+      batch: heldBatch,
+      toShelfId: '5000000000002',
+    });
+    const sent = realMoveOutsourceBatch.mock.calls[0]?.[0] as OutsourceMoveRequestDto;
+    expect(sent.quote_id).toBeNull();
+    expect(sent.direct).toBeNull();
+  });
+
+  it('M19c：请求体里不存在 quantity 键（move 是整批语义，部分收发先拆批）', async () => {
+    const q = testApp.runWithContext(() => useOutsourceQueueMove());
+    await q.sendToCompany({ candidate: approvalCandidate, companyId: '9000000000001' });
+    const sent = realMoveOutsourceBatch.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    expect(Object.keys(sent)).not.toContain('quantity');
+    await q.receiveToInspection({
+      companyId: '9000000000001',
+      batch: heldBatch,
+      toShelfId: '6000000000001',
+    });
+    const recv = realMoveOutsourceBatch.mock.calls[1]?.[0] as unknown as Record<string, unknown>;
+    expect(Object.keys(recv)).not.toContain('quantity');
   });
 });

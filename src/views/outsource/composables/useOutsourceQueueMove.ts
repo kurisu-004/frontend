@@ -26,6 +26,18 @@
 //   3. 卡片组件根必须是单元素（BatchCard 已满足），且容器内不许留模板注释（dev 构建
 //      保留注释，注释节点也算容器的直接子节点）。
 //   守卫：src/components/__tests__/BatchCardDndFootprint.spec.ts。
+//
+// 2026-10-09 三条发送契约的形态（与旧端点 `POST /batches/{id}/send-to-outsource` 的
+// 逐字对照，守卫在 __tests__/useOutsourceQueueMove.spec.ts 的 M19 组）：
+//   ① **请求体里没有任何工序键**。旧端点的 body 键叫 `process_id`（而行字段叫
+//     `current_process_id`，沿行字段名必然 422）；新端点干脆不传工序 —— 批次当前所属的
+//     外协工序由后端按 `t_part_batch` 真实位置自推。照旧字段名拼进 body 会被 serde 当
+//     未知字段 / 错类型拒（HTTP 422 纯文本，错误文案对用户毫无意义）。
+//   ② `quote_id` 与 `direct` **必传其一**（都不传或同时传 → 20104）。恒满足
+//     「APPROVAL 传 quote_id + direct=null / DIRECT 传 direct=true + quote_id=null」；
+//     回收方向两者都必须是 null。
+//   ③ **没有 `quantity` 字段**（旧端点的 `quantity: null` 表示整批）。move 是整批语义，
+//     部分收发要先拆批（`POST /batches/split`）。
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
