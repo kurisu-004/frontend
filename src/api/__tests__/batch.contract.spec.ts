@@ -12,7 +12,8 @@
 //   - S1：URL 逐字钉死为 `/batches/split`（**不是** `/prod/batches/{id}/split`，也不是
 //     旧 v1 形态 `/parts/{id}/batches/split`）。
 //   - S2：body 原样透传、`batch_id` 在 body 里（不是路径参数）；雪花 ID 是字符串。
-//   - S2b：`quantity` 打在 body 里必须是字符串（后端 `deserialize_i64`，发 number → 422）。
+//   - S2b：`quantity` 打在 body 里必须是**裸数字**（后端 `pub quantity: i32` 不挂
+//     `deserialize_i64`，发字符串 → 422）；与 `batch_id` 的字符串档方向相反。
 //   - S3：出参原样返回（不做加工、不 parse）—— api 层不承担守门职责。
 //   - S4：反断言 —— URL 不得含 `/parts/` 或 `/prod/batches/`（把新端点又挂回旧域的
 //     典型回归）。
@@ -55,13 +56,13 @@ beforeEach(() => {
 
 describe('batch api（批次拆分共用端点）', () => {
   it('S1：URL 逐字钉死为 /batches/split（baseURL 之外的路径部分）', async () => {
-    await splitBatch({ batch_id: BATCH, version: 3, quantity: '4' });
+    await splitBatch({ batch_id: BATCH, version: 3, quantity: 4 });
     expect(httpPostMock).toHaveBeenCalledTimes(1);
     expect(httpPostMock.mock.calls[0]![0]).toBe('/batches/split');
   });
 
   it('S2：body 原样透传，batch_id 在 body 里且是雪花 ID 字符串', async () => {
-    const payload = { batch_id: BATCH, version: 3, quantity: '4', note: '先拆一半' };
+    const payload = { batch_id: BATCH, version: 3, quantity: 4, note: '先拆一半' };
     await splitBatch(payload);
     const [path, body] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
     expect(path).toBe('/batches/split');
@@ -70,27 +71,30 @@ describe('batch api（批次拆分共用端点）', () => {
     expect(typeof body.batch_id).toBe('string');
   });
 
-  it('S2b：`quantity` 打在 body 里必须是**字符串**（后端 deserialize_i64 只吃 str）', async () => {
-    // 后端 SplitBatchByBodyRequest.quantity 与 batch_id 同样挂 deserialize_i64，发
-    // JSON number 会被 serde 拒在反序列化阶段：HTTP 422 **纯文本**、响应里没有 code
-    // 字段。类型声明（`SplitBatchByBodyRequest.quantity: string`）是编译期闸，这条是
-    // 运行期闸 —— 断言真正 post 出去的 body，避免有人为了「让它好过」把类型改回 number。
-    await splitBatch({ batch_id: BATCH, version: 3, quantity: '4' });
+  it('S2b：`quantity` 打在 body 里必须是**裸数字**（与 `batch_id` 的字符串档相反）', async () => {
+    // 后端 `SplitBatchByBodyRequest.quantity` 是裸 `i32`、**不挂** `deserialize_i64`
+    // （`batch_id` 才挂），所以 wire 上必须是 JSON number：发字符串会被 serde 拒在反
+    // 序列化阶段 ⇒ HTTP 422 **纯文本**、响应里没有 code 字段。类型声明
+    // （`SplitBatchByBodyRequest.quantity: number`）是编译期闸，这条是运行期闸 ——
+    // 断言真正 post 出去的 body，避免有人按 `batch_id` 的口径把它一并字符串化。
+    await splitBatch({ batch_id: BATCH, version: 3, quantity: 4 });
     const [, body] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(typeof body.quantity).toBe('string');
-    expect(body.quantity).toBe('4');
-    // version 是裸 i32（无该反序列化器）⇒ 保持 JSON integer，别被一并字符串化
+    expect(typeof body.quantity).toBe('number');
+    expect(body.quantity).toBe(4);
+    // 同一请求体里 batch_id 仍是字符串档（雪花 ID）⇒ 混用是刻意的，别顺手一起改
+    expect(typeof body.batch_id).toBe('string');
+    // version 同样是裸 i32 ⇒ 保持 JSON integer
     expect(typeof body.version).toBe('number');
   });
 
   it('S3：出参原样返回（api 层不 parse、不加工）', async () => {
-    await expect(splitBatch({ batch_id: BATCH, version: 3, quantity: '4' })).resolves.toEqual(
+    await expect(splitBatch({ batch_id: BATCH, version: 3, quantity: 4 })).resolves.toEqual(
       SPLIT_OUT,
     );
   });
 
   it('S4：反断言 —— URL 不得含 /parts/ 或 /prod/batches/', async () => {
-    await splitBatch({ batch_id: BATCH, version: 3, quantity: '4' });
+    await splitBatch({ batch_id: BATCH, version: 3, quantity: 4 });
     const url = httpPostMock.mock.calls[0]![0] as string;
     expect(url).not.toContain('/parts/');
     expect(url).not.toContain('/prod/batches/');

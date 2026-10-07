@@ -9,11 +9,12 @@
 //
 // wire 层形态约定：
 //   - 后端标了 `#[serde(deserialize_with = "deserialize_i64")]` 的字段 → JSON **字符串**。
-//     雪花 ID 走这一档（防 JS 精度截断），本端点的 `quantity` 也走同一档（后端按 i64
-//     统一反序列化，不因为它是计数就放行 number）。⚠️ 发数字 → **HTTP 422 纯文本**，
-//     响应里**没有 `code` 字段**，调用方不要按业务错误码分支解析；
-//   - 没标该反序列化器的字段（如 `version` / `note`）走 JSON integer 与字符串，前端照常
-//     用 number / string；
+//     本端点只有 `batch_id` 走这一档（雪花 ID，防 JS 精度截断）。⚠️ 发数字 → **HTTP 422
+//     纯文本**，响应里**没有 `code` 字段**，调用方不要按业务错误码分支解析；
+//   - 没标该反序列化器的计数 / OCC 字段（`version` / `quantity`）走**裸 JSON 数字**，
+//     前端照常用 number。⚠️ 反过来发字符串同样吃 422 纯文本；
+//   - 同一份请求体里 `batch_id` 发字符串、`version` / `quantity` 发数字，**混用是刻意的**
+//     —— 后端逐字段挂了各自的反序列化器。不要把一档的口径套到另一档；
 //   - 2026-10-08：`batch_id` 是 **body 字段**而非路径参数（split 与 cancel 同形，
 //     都是「以批次为锚」的写端点，前端不拼路径）。
 
@@ -29,10 +30,10 @@ export interface SplitBatchByBodyRequest {
   version: number;
   /** 拆出数量，∈ [1, 源批次 quantity - 1]（后端按此新建子批次，源批次原地减量）。
    *
-   *  声明成 **string** 是后端 wire 真形，不是笔误：它与 `batch_id` 同样挂着
-   *  `deserialize_i64`，发 JSON number 会被 serde 拒在反序列化阶段（HTTP 422 纯文本）。
-   *  调用方手里是 number，用 `String(n)` 转一道即可。 */
-  quantity: string;
+   *  **裸 JSON 数字**（后端 `pub quantity: i32`，不挂 `deserialize_i64`）：发字符串会被
+   *  serde 拒在反序列化阶段 ⇒ **HTTP 422 纯文本**。与同一结构里 `batch_id` 必须发字符串
+   *  **正好相反** —— 两个字段各自挂了不同的反序列化器，不要互相套用口径。 */
+  quantity: number;
   /** 可选，写入事件 `note`。 */
   note?: string | null;
 }

@@ -98,9 +98,9 @@ function resolve(ok: boolean): void {
   emit('update:modelValue', false);
 }
 
-/** `POST /batches/split`。⚠️ 入参 / 出参都有**不是业务信封**的失败面：缺 version、
- *  或 `batch_id` / `quantity` 发成 JSON number（后端 `deserialize_i64`）都返 HTTP 422
- *  纯文本，错误文案因此走 `(e as Error).message ?? …` 的双兜底。
+/** `POST /batches/split`。⚠️ 入参侧有**不是业务信封**的失败面：缺 version，或
+ *  `batch_id` / `quantity` 的 wire 形态发反（前者必须字符串、后者必须裸数字，方向相反）
+ *  ，都返 HTTP 422 纯文本，错误文案因此走 `(e as Error).message ?? …` 的双兜底。
  *
  *  这里**没有**失效链：见文件头「组件保持 dumb」，成功后派 `done` 由板级编排。 */
 const splitMutation = useMutation({
@@ -125,8 +125,7 @@ async function onConfirm(): Promise<void> {
     const res = await splitMutation.mutateAsync({
       batch_id: src.batch_id,
       version: src.version,
-      // wire 上必须是十进制字符串（后端 `deserialize_i64`，见 batch.contract.ts）
-      quantity: String(quantity.value),
+      quantity: quantity.value,
     });
     // 2026-10-09：`res.quantity` 是**实际拆走量**（= 新批次数量），不是源批次余量 ——
     // 源批次余量不在出参里，用请求锚的源数量减出来。余量取服务端确认的拆走量回算，

@@ -502,8 +502,7 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
       // fetchBatches 重拉。
       const result = await splitBatch({
         batch_id: batch.id,
-        // wire 上必须是十进制字符串（后端 `deserialize_i64`，见 batch.contract.ts）
-        quantity: String(quantity),
+        quantity,
         version: batch.version,
       });
       ElMessage.success('拆分成功');
