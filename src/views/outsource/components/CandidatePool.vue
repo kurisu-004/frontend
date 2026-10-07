@@ -154,11 +154,14 @@ function onDragStart(evt: DraggableStartEvent): void {
   });
 }
 
-/** 板级右键 opener（菜单一律挂在 el-tabs 之外，teleport 到 body）。inject 缺省 noop
- *  兜底：板级契约缺失时右键无反应，不炸事件回调。 */
+/** 板级右键 opener（菜单本体由板级调 `showBatchContextMenu`，挂在 body 上，与本
+ * Sortable 容器零 DOM 关系）。inject 缺省 noop 兜底：板级契约缺失时右键无反应，不炸
+ * 事件回调。 */
 const openOutsourceBatchMenu = inject<OpenOutsourceBatchMenu>(OPEN_OUTSOURCE_BATCH_MENU, () => {});
 
-/** 卡片根部的右键落点。只转交 (事件, 卡片, 候选行上下文)，动作与权限都在板级。 */
+/** 卡片根部的右键落点。只转交 (事件, 卡片, 区域, 候选行上下文)，动作与权限都在板级。
+ * 区域标签 `'outsource-candidate'` 是本容器恒定的 —— 与 ctx.kind 表达的是同一件事，
+ * 前者是「板级派菜单矩阵用哪个区域」，后者是「这行的 DTO 属于哪一侧」，两者恒一致。 */
 function onCardContextMenu(evt: MouseEvent, card: PoolCard): void {
   const candidate = props.items.find((it) => it.batch_id === card.batch_id);
   if (!candidate) return;
@@ -167,7 +170,7 @@ function onCardContextMenu(evt: MouseEvent, card: PoolCard): void {
     candidate,
     processName: props.processName,
   };
-  openOutsourceBatchMenu(evt, card, ctx);
+  openOutsourceBatchMenu(evt, card, 'outsource-candidate', ctx);
 }
 
 /** 勾选框翻转（BatchCard 的 toggleSelect 不带 payload，batch_id 由模板闭包绑进来）。

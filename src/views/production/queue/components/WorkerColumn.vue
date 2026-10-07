@@ -8,17 +8,19 @@
      不再有 loading / error 两级互斥分支：数据由父级 tab 一次性到齐，列内不需要
      骨架。骨架 / 空态仍由 ProcessBoardTab 承担（粒度更粗但请求数是 1）。
 
-     2026-10-06：卡片右键召回（批次在工人持有中同样可召回）。`@contextmenu.prevent`
-     挂在 BatchCard 上 —— 它是 inheritAttrs:false + v-bind="$attrs"，该监听原样落到
-     卡片根 div，**零新增 DOM 节点**。
+     2026-10-06：卡片右键菜单（批次在工人持有中同样可召回 / 转交 / 拆批）。
+     `@contextmenu.prevent` 挂在 BatchCard 上 —— 它是 inheritAttrs:false +
+     v-bind="$attrs"，该监听原样落到卡片根 div，**零新增 DOM 节点**。
      ⚠️ 本列的 .col-body 是 Sortable 落点，卡片的「可拖元素 == vnode 的 DOM footprint」
      是硬不变式（守卫 src/components/__tests__/BatchCardDndFootprint.spec.ts）：**不要**
      用 el-dropdown / el-tooltip / el-popover 之类去包 BatchCard 给右键菜单用（包裹即
      多根 vnode，锚点残留 + evt.item 指向包裹层 ⇒ POOL↔WORKER 拖拽断链）。同理**不要**
      在容器内留模板注释 —— dev 构建保留注释，注释节点也是容器的直接子节点；容器内的说明
      一律写在容器 div 之外（守卫见本组件 spec 的 W13：容器内不许有 comment 节点）。菜单
-     本体是板级单例 BatchContextMenu，teleport 到 body。事件走 inject（WorkerColumn 与
-     菜单之间隔着 ProcessBoardTab / QueueBoard 两层），键名 openBatchContextMenu。
+     本体是 `@/composables/useBatchContextMenu.ts` 的 `showBatchContextMenu()`（库函数
+     模式，菜单挂在 body 级单例容器上）。事件走 inject（本组件与板级之间隔着
+     ProcessBoardTab / QueueBoard 两层），键名 openBatchContextMenu，第三参是本列恒定
+     的区域标签 `'worker'`。
 
      2026-09-30：拖拽链路对接后端通用移动端点 `POST /prod/queue/move`。
      - onStart 记 worker 源（落点的 @add 消费）；onAdd 记/取候选池源时改为读
@@ -99,6 +101,7 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
+import type { BatchMenuOpener } from '@/composables/useBatchContextMenu';
 import type { QueueWorkerSchema } from '../composables/productionQueueSchema';
 import type { BatchCardModel as Card } from '@/types/batchCard';
 import { heldToCard } from '../utils/queueItemToCard';
@@ -190,19 +193,16 @@ const moveBatchBetweenWorkers = inject<
   ) => Promise<boolean>
 >('moveBatchBetweenWorkers', async () => false);
 
-/** 卡片右键 → 板级单例菜单（BatchContextMenu.teleport 在 body 上，与本 Sortable
- *  容器零 DOM 关系）。opener 由 QueueBoard provide；本组件与菜单之间隔着
- *  ProcessBoardTab 一层，走 inject 而非 prop 穿透。inject 缺省 noop 兜底
- *  （QueueBoard 未提供时右键无反应，不炸掉事件回调）。 */
-const openBatchContextMenu = inject<(evt: MouseEvent, batch: Card) => void>(
-  'openBatchContextMenu',
-  () => {},
-);
+/** 卡片右键 → 板级 opener（菜单本体由板级调 `showBatchContextMenu` 挂在 body 上，与本
+ *  Sortable 容器零 DOM 关系）。opener 由 QueueBoard provide；本组件与板级之间隔着
+ * ProcessBoardTab 一层，走 inject 而非 prop 穿透。inject 缺省 noop 兜底
+ * （QueueBoard 未提供时右键无反应，不炸掉事件回调）。 */
+const openBatchContextMenu = inject<BatchMenuOpener>('openBatchContextMenu', () => {});
 
-/** 卡片根部的右键落点。只做「把 (事件, 卡片) 转交 opener」这一件事，权限闸在
- *  QueueBoard 的 provide 里（canRecall），本组件不重复判。 */
+/** 卡片根部的右键落点。只做「把 (事件, 卡片, 区域) 转交 opener」这一件事，权限闸在
+ * 板级的派生函数里，本组件不重复判。第三参 `'worker'` 是本列恒定的区域标签。 */
 function onCardContextMenu(evt: MouseEvent, batch: Card): void {
-  openBatchContextMenu(evt, batch);
+  openBatchContextMenu(evt, batch, 'worker');
 }
 
 /** 记录源 worker ID（拖出本工人列的 `worker.worker_id`），供落点的 @add 构造

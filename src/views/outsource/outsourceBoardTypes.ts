@@ -1,27 +1,29 @@
 // 2026-10-09 新建：外协看板（板级壳与两个投放容器之间）的 provide/inject 契约类型。
 //
-// 为什么单独一个 types 文件：`BatchContextMenu` 的 `select` 事件只派发
-// `(key, batch)` —— 卡片自带的 batch_id / version 两个字段。而外协看板的右键动作
-// **需要更多上下文**：
+// 为什么单独一个 types 文件：右键菜单改为**函数模式**（菜单本体在
+// `@/composables/useBatchContextMenu.ts`，无组件实例、无 select 事件），板级只在
+// 右键那一刻经 opener 派生菜单项并直接开菜单。外协看板的右键动作**需要卡片之外的
+// 上下文**：
 //   - 「回收生产 / 回收品检」要 `companies[]` 那一列的 company_id（在途卡 DTO 上
 //     **没有**公司字段，只挂在列上），缺它组不出 `from.company_id`；
-//   - 白名单守卫要候选行的 `send_mode` / `company_options` / `can_send`，它们只在
+//   - 发送白名单守卫要候选行的 `send_mode` / `company_options` / `can_send`，它们只在
 //     左列候选 DTO 上；
 //   - 拆批要批次的 `quantity`（卡片 model 上有）与 OCC `version`。
-// 故右键落点经 inject 把「这张卡来自哪个容器 + 那侧的行对象」一并发给板级 opener，
-// 板级按容器渲染不同的菜单项并分发到不同动作。
+// 故右键落点经 inject 把「这张卡来自哪个区域 + 那侧的行对象」一并发给板级 opener，
+// 板级按区域派生菜单项（`buildOutsourceBatchMenuItems`）并分发到不同动作。
+//
+// `area` 是**容器**给的常量区域标签（`OutsourceBatchArea`），不是从数据反推的：同一张
+// 候选卡在两个容器里字段集一模一样，数据侧无从分辨，而两个区域的动作集合不同。
 //
 // provide 键用字面量字符串（与生产队列域 QueueBoard 的 provide 键同款）：它们不是
 // 跨模块的公共契约，两侧都在本目录内。
 
 import type { BatchCardModel } from '@/types/batchCard';
+import type { OutsourceBatchArea } from './composables/outsourceBatchMenuItems';
 import type {
   OutsourceQueueCandidateData,
   OutsourceQueueHeldBatchData,
 } from './composables/outsourceQueueSchema';
-
-/** 右键菜单项 key。与后端动作名对齐便于对账，分发方是板级的 `onCtxMenuSelect`。 */
-export type OutsourceBatchMenuKey = 'receive-production' | 'receive-inspection' | 'split';
 
 /** 左列「可发送候选池」卡片的上下文。 */
 export interface OutsourceCandidateCardContext {
@@ -44,10 +46,11 @@ export interface OutsourceHeldCardContext {
 
 export type OutsourceBatchCardContext = OutsourceCandidateCardContext | OutsourceHeldCardContext;
 
-/** 板级右键 opener 签名。消费方两个投放容器各调一次（第二参 / 第三参不同）。 */
+/** 板级右键 opener 签名。消费方两个投放容器各调一次（第三 / 四参按区域不同）。 */
 export type OpenOutsourceBatchMenu = (
   evt: MouseEvent,
   batch: BatchCardModel,
+  area: OutsourceBatchArea,
   ctx: OutsourceBatchCardContext,
 ) => void;
 
@@ -84,16 +87,4 @@ export interface OutsourceReceiveSubmit {
   toShelfId: string;
   /** 回收生产的下一道工序（`to.next_process_id`）；品检模式恒 null。 */
   nextProcessId?: string | null;
-}
-
-/** 拆分对话框的被拆目标（由右键卡片带进来的最小信息）。 */
-export interface OutsourceSplitTarget {
-  batch_id: string;
-  /** `t_part_batch.version` —— `POST /batches/split` 必填的 OCC 锚（缺它返 422 纯文本）。 */
-  version: number;
-  /** 当前余量，决定拆出数量的 `:max = quantity - 1`。 */
-  quantity: number;
-  /** 展示用（卡片 model 已带 'B' 前缀）。 */
-  batch_no: string;
-  part_name: string;
 }

@@ -532,7 +532,7 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('D13：卡片右键 → opener 带 held + companyId/companyName 被调一次', async () => {
+  it('D13：卡片右键 → opener 带区域 + held + companyId/companyName 被调一次', async () => {
     const openOutsourceBatchMenu = vi.fn();
     const held = makeHeld();
     const wrapper = mountColumn(
@@ -544,13 +544,17 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
     await cards[1]!.trigger('contextmenu', { clientX: 320, clientY: 240 });
 
     expect(openOutsourceBatchMenu).toHaveBeenCalledTimes(1);
-    const [evt, batch, ctx] = openOutsourceBatchMenu.mock.calls[0]! as [
+    const [evt, batch, area, ctx] = openOutsourceBatchMenu.mock.calls[0]! as [
       MouseEvent,
       { batch_id: string; version?: number },
+      string,
       { kind: string; held: { batch_id: string }; companyId: string; companyName: string },
     ];
     expect((evt as MouseEvent).clientX).toBe(320);
-    // 第三参带在途 DTO 与所在公司（公司字段只在列上，卡片上取不到）
+    // 第三参是容器恒定的区域标签 —— 板级靠它派菜单矩阵（公司列与候选池的动作集合不同，
+    // 而两处卡片字段集一样，只能由容器给）
+    expect(area).toBe('outsource-company');
+    // 第四参带在途 DTO 与所在公司（公司字段只在列上，卡片上取不到）
     expect(ctx.kind).toBe('held');
     expect(ctx.held.batch_id).toBe('3000000000002');
     expect(ctx.companyId).toBe(COMPANY_ID);

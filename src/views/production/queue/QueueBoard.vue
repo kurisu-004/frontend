@@ -7,16 +7,23 @@
          全部带 :lazy="true" ⇒ 切到该 tab 才 mount 才发 `GET /prod/queue/processes/{pid}`
      tab 标题 `(N)` 徽标数据源 = useQueueSnapshot（单请求跨货架聚合）。
 
-     2026-10-08 「已下发批次右键召回」通路的宿主：
-       - 批次无论在工序候选池（货架上）还是在工人列（工人持有中），右键卡片都能
-         「召回到待下发」；写操作、权限闸、二次确认、失效编排集中在
-         composables/useQueueRecall.ts；
-       - 菜单组件 `@/components/BatchContextMenu.vue`（2026-10-08 从本目录升为共享
-         组件：菜单项由 `ctxMenuItems` 配置、动作由 `select` 事件按 key 分发）挂在本
-         组件顶层（<template v-else> 之外 ⇒ loading 态下也已挂载），teleport 到 body；
-       - provide 键 `openBatchContextMenu`：(evt: MouseEvent, batch: BatchCardModel)
-         → void，消费方 PoolDrawer / WorkerColumn 用 inject 接（缺省 noop 兜底）；
-       - 卡片侧**不包任何组件**：@contextmenu.prevent 经 BatchCard 的 fallthrough
+     2026-10-09「批次右键菜单」通路的宿主（菜单换库 + 扩到三区）：
+       - 菜单本体是 `@/composables/useBatchContextMenu.ts` 的 `showBatchContextMenu()`
+         （`@imengyu/vue3-context-menu` **函数模式**，零组件实例、菜单挂 body 级单例
+         容器）。本组件模板里**不再有任何菜单组件 / 模板 ref**；
+       - provide 键 `openBatchContextMenu`：`(evt, batch, area) => void`，三个容器
+         （待下发池 / 工序池 / 工人列）各自 inject 并把自己的**区域常量**传上来
+         （消费侧一律带 noop 缺省）；
+       - 菜单项由本组件按 **区域 × 角色 × 批次状态 × 目标集** 派生（纯函数
+         `buildQueueBatchMenuItems`，见 composables/queueBatchMenuItems.ts 的矩阵表）：
+         待下发池 = 拆批 + 发到工序；工序池 = 召回 + 拆批 + 派给工人；工人列 = 召回 +
+         转交给工人；
+       - 四条写路径全部复用现成 composable（`useQueueRecall` / 拆批对话框 /
+         `useQueueDispatch.dispatchMutation` / `useQueueMove` 三个 move 包装），板级
+         **不新增任何 mutation**，也就不新增失效编排；
+       - 拆批成功后由本组件编排 production-queue 三域失效（对话框只发 `done`，见
+         `onSplitDone`）；
+       - 卡片侧**不包任何组件**：`@contextmenu.prevent` 经 BatchCard 的 fallthrough
          attrs 落在卡片根 div 上（包裹即破坏 Sortable 的「可拖元素 == vnode 的 DOM
          footprint」不变式，见文末与 BatchCardDndFootprint.spec.ts）。
 
@@ -113,15 +120,11 @@
       </div>
     </template>
 
-    <!-- 已下发批次右键召回的操作菜单（板级单例）。放在 <template v-else>（el-tabs）
-         **之外**、根 div 的直接子级位置 ⇒ loading 骨架态下菜单组件也已挂载，不必等
-         数据到位。菜单本体 teleport 到 body，与本页所有 Sortable 容器
-         （PoolDrawer / WorkerColumn）零 DOM 关系。
-         菜单项由本组件给（ctxMenuItems）：组件本身是 dumb 的，权限闸在板级 ——
-         无权角色拿到空数组，菜单一个项都不渲染。
-         卡片侧不包任何组件：@contextmenu.prevent 经 BatchCard 的 fallthrough attrs 落在
-         卡片根 div 上（包裹即破坏 Sortable 的「可拖元素 == vnode footprint」不变式）。 -->
-    <BatchContextMenu ref="batchCtxMenu" :items="ctxMenuItems" @select="onCtxMenuSelect" />
+    <!-- 拆批对话框（共享组件，局部 import）。放在 <template v-else> 之外、根 div 的直接
+         子级位置 ⇒ loading 骨架态下也已挂载。**失效编排在本组件**：对话框只发 `done`，
+         由 onSplitDone 失效 production-queue 三域（外协看板那边要失效的是另外两个域，
+         对话框 import 任一方的失效函数都会锁死单域消费方）。 -->
+    <BatchSplitDialog v-model="splitVisible" :source="splitTarget" @done="onSplitDone" />
   </div>
 </template>
 
@@ -135,15 +138,23 @@ import { useAuthStore } from '@/stores/auth';
 import { useQueueMove } from './composables/useQueueMove';
 import { useQueueDispatch, invalidateQueuePendingAll } from './composables/useQueueDispatch';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
+import { qk } from '@/composables/queries/keys';
 import { useQueueSnapshot, invalidateQueueSnapshot } from './composables/useQueueSnapshot';
 import { invalidateQueueBoardAll } from './composables/useQueueBoard';
+import type { QueueWorkerSchema } from './composables/productionQueueSchema';
 import type { BatchCardModel } from '@/types/batchCard';
+import type { BatchSplitSource } from '@/types/batchSplit';
+import { showBatchContextMenu, type BatchMenuOpener } from '@/composables/useBatchContextMenu';
 import { useQueueRecall } from './composables/useQueueRecall';
+import {
+  buildQueueBatchMenuItems,
+  type QueueMenuProcess,
+  type QueueMenuWorker,
+} from './composables/queueBatchMenuItems';
 import ProcessBoardTab from './components/ProcessBoardTab.vue';
 import PendingBatchesPanel from './components/PendingBatchesPanel.vue';
 import PendingPoolsPanel from './components/PendingPoolsPanel.vue';
-import BatchContextMenu from '@/components/BatchContextMenu.vue';
-import type { BatchContextMenuItem } from '@/components/BatchContextMenu.vue';
+import BatchSplitDialog from '@/components/BatchSplitDialog.vue';
 
 const auth = useAuthStore();
 // shelfId **只服务** PoolDrawer 的 WORKER→POOL 撤回目标货架（工人列与工序池都不再
@@ -219,36 +230,17 @@ const queueDispatch = useQueueDispatch();
 const recall = useQueueRecall();
 const { error, moveBatchToWorker, moveBatchToPool, moveBatchBetweenWorkers } = queueMove;
 
-/** 右键菜单组件的模板 ref —— 卡片侧只经 inject 拿 opener，opener 需要拿到菜单实例
- *  的 open()，故本组件是唯一持有该 ref 的地方。
- *  类型走 InstanceType<typeof 局部 import 的组件>，菜单 open 的入参类型即由此贯通。 */
-const batchCtxMenu = ref<InstanceType<typeof BatchContextMenu> | null>(null);
-
-/** 菜单项 —— **由本组件按权限派生**（共享菜单组件本身不认识任何动作）：
- *  有召回权限给一项，无权给空数组（组件拿到空数组就不渲染任何菜单）。
- *  key 与后端动作名同名，便于对账；分发方是下面的 onCtxMenuSelect。 */
-const ctxMenuItems = computed<BatchContextMenuItem[]>(() =>
-  recall.canRecall.value ? [{ key: 'recall', label: '召回到待下发' }] : [],
-);
-
-/** 菜单项派发 → 按 key 分发到对应动作。当前只有召回一项；将来加项时在这里加分支。
- * 权限校验 / 二次确认 / 写请求全在 useQueueRecall 内，故本函数只有一行转交。 */
-function onCtxMenuSelect(key: string, batch: BatchCardModel): void {
-  if (key === 'recall') void recall.recallBatch(batch);
-}
-
-/** 拖拽悬停的工序 id（null = 未悬停在任何工序卡上）—— 工序卡 `.is-dropping` 高亮的
- *  唯一状态源。Sortable 的 onMove 只派发给**源**（待下发批次列表），投放目标侧收不到
- *  ⇒ 状态落在两个面板的共同父级，由源面板 emit 上报、逐级透传到 PendingPoolCard 的
- *  dropping prop。放在本组件而不是 useQueueDispatch：它是纯视觉反馈，不属于「下发」域。 */
-const hoveredProcessId = ref<string | null>(null);
-
-// loading 由 procsQuery.isLoading || queueSnapshot.isLoading 控制初始 skeleton，
-// 不阻塞 tab 切换。
-const loading = computed(() => procsQuery.isLoading.value || queueSnapshot.isLoading.value);
+/** 拆批权限闸 —— 与后端 `POST /batches/split` 的 `require_any_role([Manager, Clerk])`
+ *  逐字对齐（Inspector 能收发但**不能**拆批）。
+ *
+ *  当前与 `recall.canRecall` 恰好是同一组角色，但它们是**两个端点各自独立的 RBAC 声明**
+ *  （`POST /prod/queue/recall` 与 `POST /batches/split`），将来任一端点放宽都会只动一处，
+ *  故不复用同一个布尔。 */
+const canSplit = computed<boolean>(() => auth.hasRole('MANAGER') || auth.hasRole('CLERK'));
 
 // activeTab 默认 = __pending__（首屏即待下发 tab，符合任务规约「待下发 Tab 在最前」）；
-// URL ?tab=XXX 可覆盖（深链到具体工序），覆盖优先级 > 默认。
+// URL ?tab=XXX 可覆盖（深链到具体工序），覆盖优先级 > 默认。放在右键菜单那一段之前：
+// 「派给工人 / 转交给工人」的目标集要按当前 tab 去 board 缓存里取。
 const TAB_QUERY_KEY = 'tab';
 const PENDING_TAB = '__pending__';
 function readInitialTab(): string {
@@ -262,28 +254,158 @@ watch(activeTab, (next) => {
   void router.replace({ query: { ...route.query, [TAB_QUERY_KEY]: next } });
 });
 
+// ============================================================
+// 右键菜单（区域 × 角色 × 批次状态 × 目标集 的派生在纯函数里，见 queueBatchMenuItems.ts）
+// ============================================================
+
+/** 「发送到工序」的目标集 —— 共享 `useProcessesQuery` 的**全量**工序（INHOUSE +
+ *  OUTSOURCE 都要）。与右栏「待下发」工序卡共用同一个 observer：同一个
+ *  queryKey ⇒ 零新增请求，「进页面请求数恒为 3」的不变式不变。 */
+function dispatchTargets(): QueueMenuProcess[] {
+  return (procsQuery.data.value?.items ?? []).map((p) => ({
+    id: p.id,
+    code: p.code,
+    name: p.name,
+  }));
+}
+
+/** 当前 tab 的工人列原始数据（右键那一刻现读，理由同 currentWorkers）。
+ *
+ *  `getQueryData` 不是响应式的，所以**不能**包 computed；它在右键回调里被调，每次都是
+ *  最新值 —— 而卡片能被右键就意味着该 tab 的看板早已解析完。 */
+function currentBoardWorkers(): QueueWorkerSchema[] {
+  const pid = activeTab.value;
+  if (pid === PENDING_TAB) return [];
+  return qc.getQueryData<{ workers: QueueWorkerSchema[] }>(qk.productionQueueBoard(pid))?.workers ?? [];
+}
+
+/** 「派给工人 / 转交给工人」的目标集 —— 当前 tab 的工人列。
+ *
+ *  数据源是 ProcessBoardTab 里那条 `useQueueBoard` 的**同一个 queryKey**
+ *  （`qk.productionQueueBoard(processId)`）：切到某个工序 tab 时该 tab body 自己发请求
+ *  并填充缓存，板级只是 `getQueryData` 读同一份缓存 ⇒ **零新增请求、零状态副本**。
+ *  不另开一条 query，也不用「provide 一个可写 ref 让各 tab 往里写」——后者要处理
+ *  「多个 tab 同时活着、谁最后写、卸载要不要清」的问题，而这里读的是同一个缓存键。 */
+function currentWorkers(): QueueMenuWorker[] {
+  return currentBoardWorkers().map((w) => ({ worker_id: w.worker_id, name: w.name }));
+}
+
+/** 卡片所在列的 worker id —— 与目标集**同一个数据源**：持有该批次的那一列就是
+ *  「自己」。在途卡片在一张看板里只出现在一列，按 batch_id 反查即可。
+ *
+ *  不从 DOM dataset 读（WorkerColumn 模板里那张 `data-worker-id` 是给拖拽 `onDragStart`
+ *  用的）：右键回调拿不到 `evt.item`，而 board 缓存里已经有全部信息，多一条 DOM 查询
+ *  通道只是多一条能取错值的路。取不到时返回 null，交给 moveBatchBetweenWorkers 的守卫
+ *  提示，而不是发一个注定失败的 move。 */
+function selfWorkerIdOf(batch: BatchCardModel): string | null {
+  return (
+    currentBoardWorkers().find((w) => w.held_batches.some((b) => b.batch_id === batch.batch_id))
+      ?.worker_id ?? null
+  );
+}
+
+const splitVisible = ref(false);
+const splitTarget = ref<BatchSplitSource | null>(null);
+
+/** 打开拆批对话框。
+ *
+ *  version 是后端必填的 OCC 锚（缺它返 HTTP 422 纯文本），卡片 model 上它是**可选**
+ *  字段，故守卫用 `typeof + isFinite` 两条而不是只看 isFinite（`undefined` 同样过不了
+ *  isFinite，但显式 typeof 让类型收窄与运行时判据对齐）。 */
+function openSplitDialog(batch: BatchCardModel): void {
+  if (typeof batch.version !== 'number' || !Number.isFinite(batch.version)) {
+    ElMessage.warning('批次版本信息缺失，无法拆分');
+    return;
+  }
+  splitTarget.value = {
+    batch_id: batch.batch_id,
+    version: batch.version,
+    quantity: batch.quantity,
+    batch_no: batch.batch_no,
+    part_name: batch.part_name,
+  };
+  splitVisible.value = true;
+}
+
+/** 卡片右键 → 板级 opener（消费方三个容器：待下发池 / 工序池 / 工人列）。容器与板级之间
+ *  隔着 ProcessBoardTab 一层，故走 provide/inject 而非 prop 穿透；inject 侧一律带 noop
+ *  缺省。
+ *
+ *  菜单项派生出来是**空数组**（当前角色对这张卡一个动作都没有）时不弹菜单、改为一句
+ *  warning：卡片侧的 `@contextmenu.prevent` 已经把系统右键菜单吞掉了，静默早退等于
+ *  「右键卡片彻底没反应」，而弹一个空白菜单框同样没法解释。各写操作内部另有第二道闸
+ *  （`useQueueRecall.recallBatch` / move 包装的守卫），菜单打开与最终提交两处都不漏。 */
+provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
+  // 共享 `BatchArea` 是五个区域的并集，本页只有三个（消费方就是这三个容器）。不可达
+  // 分支早退而不是硬 cast —— cast 会把「传错区域」变成静默派出一份对不上的菜单矩阵。
+  if (area !== 'pending' && area !== 'pool' && area !== 'worker') return;
+  const items = buildQueueBatchMenuItems({
+    area,
+    batch,
+    canRecall: recall.canRecall.value,
+    canSplit: canSplit.value,
+    processes: dispatchTargets(),
+    workers: currentWorkers(),
+    selfWorkerId: area === 'worker' ? (selfWorkerIdOf(batch) ?? undefined) : undefined,
+    onRecall: () => void recall.recallBatch(batch),
+    onSplit: () => openSplitDialog(batch),
+    onDispatch: (targetProcessId) => {
+      queueDispatch.dispatchMutation.mutate({ batchIds: [batch.batch_id], targetProcessId });
+    },
+    onMoveToWorker: (workerId) => {
+      // version 守卫在 moveBatchToWorker 内（缺 version / 货架必被后端拒，两条早退都带
+      // 提示）；shelf_id 取**卡片自带的真实货架** —— 候选池跨所有货架，与当前激活货架
+      // 可能不一致，填错后端返 20122。
+      void moveBatchToWorker(
+        batch.batch_id,
+        batch.version ?? Number.NaN,
+        workerId,
+        batch.shelf_id ?? '',
+      );
+    },
+    onTransfer: (workerId) => {
+      // 转交的 from 工人 id 从当前 tab 的 board 缓存反查（见 selfWorkerIdOf）—— 卡片
+      // model 上没有「自己属于哪一列」这个概念。
+      void moveBatchBetweenWorkers(
+        batch.batch_id,
+        batch.version ?? Number.NaN,
+        selfWorkerIdOf(batch) ?? '',
+        workerId,
+      );
+    },
+  });
+  if (items.length === 0) {
+    ElMessage.warning('当前角色对该批次没有可执行的操作');
+    return;
+  }
+  void showBatchContextMenu(evt, items);
+});
+
+/** 拆批成功后的失效编排 —— **本组件持有**（对话框只发 `done`，见 BatchSplitDialog 文件头）。
+ *  拆批后源批次留在原处（量变小）+ 新批次继承状态 / 位置 ⇒ 本域三域都要刷：
+ *  待下发列表（新批多一件、源批件数变）、工序看板（若拆的是池 / 工人列里的批次）、
+ *  快照（tab 徽标 + 右栏工序卡徽标）。 */
+async function onSplitDone(): Promise<void> {
+  await invalidateQueuePendingAll(qc);
+  await invalidateQueueBoardAll(qc);
+  await invalidateQueueSnapshot(qc);
+}
+
+/** 拖拽悬停的工序 id（null = 未悬停在任何工序卡上）—— 工序卡 `.is-dropping` 高亮的
+ *  唯一状态源。Sortable 的 onMove 只派发给**源**（待下发批次列表），投放目标侧收不到
+ *  ⇒ 状态落在两个面板的共同父级，由源面板 emit 上报、逐级透传到 PendingPoolCard 的
+ *  dropping prop。放在本组件而不是 useQueueDispatch：它是纯视觉反馈，不属于「下发」域。 */
+const hoveredProcessId = ref<string | null>(null);
+
+// loading 由 procsQuery.isLoading || queueSnapshot.isLoading 控制初始 skeleton，
+// 不阻塞 tab 切换。
+const loading = computed(() => procsQuery.isLoading.value || queueSnapshot.isLoading.value);
+
 provide<typeof moveBatchToWorker>('moveBatchToWorker', moveBatchToWorker);
 provide<typeof moveBatchToPool>('moveBatchToPool', moveBatchToPool);
 // WorkerColumn 落点消费（把 A 手中的批次拖到 B 手中 = WORKER→WORKER）。
 provide<typeof moveBatchBetweenWorkers>('moveBatchBetweenWorkers', moveBatchBetweenWorkers);
 provide<ComputedRef<string>>('shelfId', shelfId);
-// 卡片右键 → 板级单例菜单的 opener。消费方是 PoolDrawer（批次在货架上）与 WorkerColumn
-// （批次在工人持有中），两者与菜单之间隔着 ProcessBoardTab 一层，故走 provide/inject
-// 而非 prop 穿透；inject 侧缺省 noop 兜底。
-// 权限闸在本函数里（canRecall，与后端 MANAGER/CLERK 对齐）：无权角色连菜单都打不开。
-// 无权时**必须给一句提示**而不是静默 return —— 卡片侧的 `@contextmenu.prevent` 已经把
-// 系统右键菜单吞掉了，静默早退等于让无权角色右键卡片彻底无反馈。useQueueRecall.recallBatch
-// 内还有第二道闸，菜单打开与最终提交两处都不漏。
-provide<(evt: MouseEvent, batch: BatchCardModel) => void>(
-  'openBatchContextMenu',
-  (evt, batch) => {
-    if (!recall.canRecall.value) {
-      ElMessage.warning('没有召回已下发批次的权限');
-      return;
-    }
-    batchCtxMenu.value?.open(evt, batch);
-  },
-);
 
 // 深链 ?tab=<某工序> 时 inhouseProcs 尚未从 procsQuery 解析完、无法校验 tab 合法性 ——
 // 解析后校正到第一个 INHOUSE 工序。
