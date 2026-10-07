@@ -13,7 +13,7 @@
  *
  * 2026-10-03：本对话框只做**整批**返修下发。后端 `RepairDispatchRequest` 无
  * quantity 字段（serde 未开 deny_unknown_fields，多带数量会被静默忽略）⇒ 操作员
- * 填「3/10」也会整批 10 件下发。返修部分数量须先 `splitPartBatch` 拆出子批次、
+ * 填「3/10」也会整批 10 件下发。返修部分数量须先 `splitBatch`（`@/api/batch`）拆出子批次、
  * 再对子批次下发，故此处不提供数量控件。
  */
 import { computed, ref, watch } from 'vue';

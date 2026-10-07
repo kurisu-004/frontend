@@ -13,7 +13,7 @@
 //     onMove 只从**源**实例读取，挂在落点侧覆盖不了「工人列拖进池时的池内重排」）。
 //   - D3：onRemove 把被拖节点放回 `from.children[oldIndex]`（DOM 下标）—— 与
 //     WorkerColumn 侧 W10 对称，两处缺一不可。
-//   - D4：撤回投放（onStart 记工人源 → onAdd 消费）调 moveBatchToPool，
+//   - D4：撤回投放（onStart 记工人源 → onAdd 消费）调 moveBatchToPool（含 version）。
 //     to.shelf_id 取当前激活货架；无工人源时不发请求。
 //   - D5：目标货架为空 → ElMessage.warning 且不发请求。
 //   - D9（2026-10-06）：卡片上派发 contextmenu → 注入的 openBatchContextMenu 被调一次，
@@ -154,17 +154,25 @@ function capturedOptions(): Record<string, unknown> {
   return captured.calls[0].options;
 }
 
+/** 全部撤回用例的卡片 version（真形态是整数 OCC 锚）。 */
+const CARD_VERSION = 11;
+
 /** 造一个 Sortable 原生事件的最小载荷：item 是工人列里的卡片，from 是那个工人列。
  *  源侧的 recordWorkerSource 由 WorkerColumn 负责，本抽屉的 onStart 记的是**池**源，
- *  与撤回路径无关，故这里不驱动本组件的 onStart。 */
+ *  与撤回路径无关，故这里不驱动本组件的 onStart。
+ *  `version` 走卡片的 `data-batch-version` dataset（2026-10-08 起撤回 move 必传 OCC 锚）：
+ *  落点只拿得到 evt.item，读不到渲染源里的 batch 对象 ⇒ version 必须随 DOM 一起搬过来。
+ *  传 null 时**不写该 dataset**，复现「卡片没填 version」。 */
 function workerDragEvent(
   batchId: string,
   shelfId = '',
   workerId = '1900000000001',
+  version: number | null = CARD_VERSION,
 ): { item: HTMLElement; from: HTMLElement } {
   const item = document.createElement('div');
   item.dataset.batchId = batchId;
   item.dataset.shelfId = shelfId;
+  if (version !== null) item.dataset.batchVersion = String(version);
   const from = document.createElement('div');
   from.dataset.workerId = workerId;
   // 源侧 WorkerColumn.onDragStart 的真实效果
@@ -256,7 +264,7 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     wrapper.unmount();
   });
 
-  it('D4：撤回投放（工人源）→ moveBatchToPool(batchId, 源工人, 当前激活货架)', async () => {
+  it('D4：撤回投放（工人源）→ moveBatchToPool(batchId, version, 源工人, 当前激活货架)', async () => {
     const moveBatchToPool = vi.fn(async () => true);
     const wrapper = mountDrawer(makePool(), { moveBatchToPool });
     const options = capturedOptions();
@@ -266,7 +274,30 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     await (options.onAdd as (e: unknown) => Promise<void>)(evt);
 
     expect(moveBatchToPool).toHaveBeenCalledTimes(1);
-    expect(moveBatchToPool).toHaveBeenCalledWith('3000000000009', '1900000000001', '5000000000009');
+    expect(moveBatchToPool).toHaveBeenCalledWith(
+      '3000000000009',
+      CARD_VERSION,
+      '1900000000001',
+      '5000000000009',
+    );
+    wrapper.unmount();
+  });
+
+  it('D4c（2026-10-08）：卡片没带 data-batch-version → version 实参是 NaN（守卫在 useQueueMove）', async () => {
+    // 回归 guard：撤回 move 的 version 是后端必填的 OCC 锚，只能从 DOM 读。缺 dataset
+    // 时不能退化成 0（形态合法的假 version ⇒ 后端按 OCC 冲突 40901 拒一次用户没做错的
+    // 投放），正确形态是 NaN，由 useQueueMove 的 version 守卫拦下（守卫本身由
+    // useQueueMove.spec.ts 守）。
+    // 形参显式声明（含 version）：断言要读 calls[0][1]
+    const moveBatchToPool = vi.fn(async (_batchId: string, _version: number) => true);
+    const wrapper = mountDrawer(makePool(), { moveBatchToPool });
+    const options = capturedOptions();
+
+    const evt = workerDragEvent('3000000000009', '', '1900000000001', null);
+    await (options.onAdd as (e: unknown) => Promise<void>)(evt);
+
+    expect(moveBatchToPool).toHaveBeenCalledTimes(1);
+    expect(moveBatchToPool.mock.calls[0]![1]).toBeNaN();
     wrapper.unmount();
   });
 

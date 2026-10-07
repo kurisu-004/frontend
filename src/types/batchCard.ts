@@ -86,10 +86,16 @@ export interface BatchCardModel {
    * t_part_batch.version —— OCC 乐观锁锚，**不是任何领域的概念**，故作为顶层字段
    * （对比下方 `extra` 是单域扩展槽）。
    *
-   * 用途：外协看板的「送到外协 / 从外协收回」两个写端点都**必传** version
-   * （缺失或过期 → 40901 BIZ_VERSION_CONFLICT）。卡片是这两个操作拿 version 的载体，
-   * 适配层从 DTO 直填（三个源 DTO 均已带该字段）。生产队列域当前不消费它，
-   * 故为可选。
+   * 用途：任何改批次的写端点都**必传** version（缺失或过期 → 40901
+   * BIZ_VERSION_CONFLICT）：外协看板的「送到外协 / 从外协收回」、生产队列的
+   * 「召回到待下发」与三个方向的 move（`POST /prod/queue/move`）。卡片是这些操作拿
+   * version 的载体，适配层从 DTO 直填（各域源 DTO 均已带该字段）。
+   *
+   * 拖拽场景（move）另有一条传输通道：落点的 Sortable `onDragAdd` 只拿得到
+   * `evt.item`（DOM），拿不到渲染源里的 batch 对象 ⇒ 卡片把 version 以
+   * `:data-batch-version` 经 fallthrough attrs 落在根 div 上，由落点从 dataset 读
+   * （与 `shelf_id` 的 `data-shelf-id` 同款）。字段本身仍为可选：任一适配层没填时
+   * dataset 缺失，读出来是 NaN，由 useQueueMove 的守卫拦下（不发注定被拒的请求）。
    */
   version?: number;
   /** 领域扩展槽（外协看板在用）—— 只进 tooltip，见 `BatchCardExtra`。 */

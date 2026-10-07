@@ -5,9 +5,11 @@
 // 折中：@start 时（DOM dataset 还完整）把源信息写到模块级 Map；@add 时读 + delete。
 //
 // 模块级单例：WorkerColumn 与 PoolDrawer 共用同一份 Map。
-// 用前缀隔离两类条目（同 batchId 不会冲突）：
+// 用前缀隔离三类条目（同 batchId 不会冲突）：
 //   - 裸 batchId     → 候选池源（recordPoolSource / consumePoolSource）
 //   - 'w:' + batchId → 工人持有源（recordWorkerSource / consumeWorkerSource）
+//   - 'o:' + batchId → 外协看板候选池源（recordOutsourceSource /
+//                      consumeOutsourceSource）
 //
 // 2026-08-27：把 vue-draggable-plus Sortable.js 原生事件子集（onStart/onAdd 共有：
 // item + from）抽成本接口，WorkerColumn / PoolDrawer 共用，避免重复声明。
@@ -107,5 +109,47 @@ export function recordWorkerSource(batchId: string, fromWorkerId: string): void 
 export function consumeWorkerSource(batchId: string): string | undefined {
   const v = sources.get(`w:${batchId}`);
   sources.delete(`w:${batchId}`);
+  return v;
+}
+
+/** 2026-10-09 新增：外协看板候选池拖拽源信息（recordOutsourceSource /
+ *  consumeOutsourceSource 的载荷）。
+ *
+ *  为什么 `o:` 前缀而不是复用裸 batchId 槽位：生产队列的候选池源只存
+ *  `{processId, shelfId}`，而外协的源条目要带上报价锁定的公司与批次 OCC 版本。共用一个
+ *  槽位会让两套页面的落点回调互相「捡到」对方的源条目（同一个批次同时出现在两域是
+ *  常态），前缀隔离把这类互抢挡在 Map 层。
+ *
+ *  ⚠️ **只有 `companyId` 被落点消费**（APPROVAL 报价锁定公司的白名单判定）：发送请求
+ *  的 `from.shelf_id` / `version` 取自**候选 DTO 本身**（CompanyColumn 把 candidate
+ *  一起交给 `sendToCompany`），不读本条目。其余三个字段是来源识别与排障留痕。 */
+export interface OutsourceDragSource {
+  /** 源外协工序 id（= 候选池容器的 `data-process-id`）。发送请求不带它（后端按批次
+   *  真实位置自推外协工序），这里只用于来源识别与日志定位。 */
+  processId: string;
+  /** 批次**真实所在货架**（卡片 `data-shelf-id`），与候选 DTO 上的 `shelf_id` 同源；
+   *  `PENDING` 且未上架的行是**空串**（这类行前端已置灰，不该拖出来）。 */
+  shelfId: string;
+  /** `t_part_batch.version`（OCC 锚），与候选 DTO 上的 `version` 同源。 */
+  version: number;
+  /** APPROVAL 行 = 报价锁定的外协公司 id（`outsource_company_id`）；DIRECT 行为空串
+   *  （目标公司在拖拽落点上才定，落点侧按 `company_options` 判白名单）。 */
+  companyId: string;
+}
+
+/** 外协看板候选池源条目单独一张 Map（键带 `o:` 前缀，见上方隔离理由）。 */
+const outsourceSources = new Map<string, OutsourceDragSource>();
+
+/** 记录卡片从外协看板候选池拖出（公司列落点消费）。 */
+export function recordOutsourceSource(batchId: string, source: OutsourceDragSource): void {
+  outsourceSources.set(`o:${batchId}`, source);
+}
+
+/** 读 + 删：卡片从外协看板候选池拖出。返回 undefined 表示不是本看板的候选池来源
+ *  （调用方应直接 return，不发 move 请求）。 */
+export function consumeOutsourceSource(batchId: string): OutsourceDragSource | undefined {
+  const key = `o:${batchId}`;
+  const v = outsourceSources.get(key);
+  outsourceSources.delete(key);
   return v;
 }

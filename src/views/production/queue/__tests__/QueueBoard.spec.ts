@@ -18,7 +18,9 @@
 //     抽屉的 @add 全靠 inject 拿包装，漏 provide 就退化为「不发请求」。
 //   - T6：provide openBatchContextMenu + 权限闸（canRecall 为假时菜单打不开、且给出
 //     warning 而非静默）+ 菜单 open 收到 (evt, batch)。
-//   - T7：菜单 emit('recall') → useQueueRecall.recallBatch 拿到那张卡。
+//   - T7：菜单 emit('select', 'recall', batch) → useQueueRecall.recallBatch 拿到那张卡；
+//     另锁一条「菜单项由 canRecall 派生」—— 无权时 items 为空数组（组件据此不渲染
+//     任何菜单项）。
 //   - T7b：召回通路不新增首屏请求 —— 四个端点的调用次数快照（T2b 只锁集合不锁次数，
 //     本用例补上次数这一维）。
 //
@@ -34,7 +36,7 @@
 //   - vi.mock('vue-router') 让 useRoute / useRouter 不报 undefined error。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, ref, type Ref } from 'vue';
+import { computed, defineComponent, h, nextTick, ref, type Ref } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 // 下面 vi.mock('element-plus') 里定义的 EP stub：QueueBoard 的模板不 import 组件，
@@ -250,21 +252,21 @@ vi.mock('../components/ProcessBoardTab.vue', () => ({
 // 两个都桩掉的理由：
 //   - 菜单：本 spec 的 element-plus 是整体 mock，真实 el-menu / el-menu-item 在这里
 //     解析不出来（模板组件解析走全局注册，不走模块 import），真实组件会打一串
-//     "Failed to resolve component" 噪声。桩只保留两条接线面 —— expose 的 open 与
-//     recall emit，组件自身行为由 BatchContextMenu.spec.ts 覆盖。
+//     "Failed to resolve component" 噪声。桩只保留三条接线面 —— items prop、expose 的
+//     open 与 select emit，组件自身行为由 src/components/__tests__/BatchContextMenu.spec.ts
+//     覆盖。
 //   - useQueueRecall：只需观察 recallBatch 是否被转交、canRecall 是否被读，
 //     写请求 / 确认弹窗 / 失效链由 useQueueRecall.spec.ts 覆盖。
 // 走 vi.hoisted：工厂被提升到模块顶部求值，裸引用模块级 const 会命中 TDZ。
-const { menuOpenCalls, recallBatchMock, recallable } = vi.hoisted(() => ({
+const { menuOpenCalls, recallBatchMock } = vi.hoisted(() => ({
   menuOpenCalls: [] as unknown[][],
   recallBatchMock: vi.fn(async () => undefined),
-  /** 权限闸的开关：默认 false ⇒ opener 直接早退（与本 spec 的 auth mock 一致） */
-  recallable: { ok: false },
 }));
-vi.mock('../components/BatchContextMenu.vue', () => ({
+vi.mock('@/components/BatchContextMenu.vue', () => ({
   default: defineComponent({
     name: 'BatchContextMenuStub',
-    emits: ['recall'],
+    props: { items: { type: Array, default: () => [] } },
+    emits: ['select'],
     setup(_, { expose }) {
       expose({ open: (...args: unknown[]) => menuOpenCalls.push(args) });
       return () => h('div', { class: 'batch-context-menu-stub' });
@@ -272,13 +274,10 @@ vi.mock('../components/BatchContextMenu.vue', () => ({
   }),
 }));
 vi.mock('@/views/production/queue/composables/useQueueRecall', () => ({
+  // 工厂里不碰 vue 的 ref（它被提升到 import 之前会命中 TDZ），canRecall 在**调用**
+  // useQueueRecall 时才读下面的模块级 `recallable` —— 那时模块已初始化完。
   useQueueRecall: () => ({
-    // getter 而非 ref 快照：用例可随时改 recallable.ok，改完立即生效
-    canRecall: {
-      get value(): boolean {
-        return recallable.ok;
-      },
-    },
+    canRecall: computed(() => recallable.current.value),
     recallMutation: { mutate: vi.fn(), isPending: ref(false) },
     recallBatch: recallBatchMock,
   }),
@@ -292,6 +291,11 @@ vi.mock('vue-router', () => ({
 }));
 
 import QueueBoard from '../QueueBoard.vue';
+
+/** 召回权限开关（默认 false ⇒ opener 直接早退，与本 spec 的 auth mock 一致）。
+ *  真 ref 而不是裸布尔：看板把权限派生进菜单 items 的 computed，裸布尔在 computed 眼里
+ *  没有任何依赖 —— 只算一次就锁死快照，「用例改了开关就该立刻反映到 items」恒假。 */
+const recallable: { current: Ref<boolean> } = { current: ref(false) };
 
 // 公共环境未处理 rejection（vue-query 异步 + 子组件 mount）。
 process.on('unhandledRejection', () => undefined);
@@ -310,7 +314,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     realFetchPendingBatches.mockClear();
     realFetchPendingBatches.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
     activeShelfIdRef.value = undefined;
-    recallable.ok = false;
+    recallable.current.value = false;
     menuOpenCalls.length = 0;
     recallBatchMock.mockClear();
     testQueryClient = new QueryClient({
@@ -488,14 +492,14 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     const card = { batch_id: '3000000000001', version: 7 };
 
     // 无权：菜单不被调 open，且给出可读提示
-    recallable.ok = false;
+    recallable.current.value = false;
     vi.mocked(ElMessage.warning).mockClear();
     open(evt, card);
     expect(menuOpenCalls).toHaveLength(0);
     expect(ElMessage.warning).toHaveBeenCalledWith('没有召回已下发批次的权限');
 
     // 有权：转发给菜单，坐标与卡片原样送达（不再弹提示）
-    recallable.ok = true;
+    recallable.current.value = true;
     vi.mocked(ElMessage.warning).mockClear();
     open(evt, card);
     expect(menuOpenCalls).toHaveLength(1);
@@ -505,22 +509,42 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     wrapper.unmount();
   });
 
-  it('T7（2026-10-06）：菜单 recall 事件 → recallBatch 拿到那张卡', async () => {
-    // 回归 guard：菜单 → 板级 onRecall → useQueueRecall.recallBatch 是一条 emit 链，
-    // 任一环断掉都表现为「菜单能打开、点召回毫无反应」。
+  it('T7（2026-10-06 / 2026-10-08 改为 select 事件）：菜单 select → recallBatch 拿到那张卡', async () => {
+    // 回归 guard：菜单 → 板级 onCtxMenuSelect（按 key 分发）→ useQueueRecall.recallBatch
+    // 是一条 emit 链，任一环断掉都表现为「菜单能打开、点召回毫无反应」。
     activeShelfIdRef.value = '5000000000001';
-    recallable.ok = true;
+    recallable.current.value = true;
     const wrapper = mount(QueueBoard, {
       global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
     });
     await flushPromises();
 
     const card = { batch_id: '3000000000002', version: 3 };
-    wrapper.findComponent({ name: 'BatchContextMenuStub' }).vm.$emit('recall', card);
+    wrapper.findComponent({ name: 'BatchContextMenuStub' }).vm.$emit('select', 'recall', card);
     await flushPromises();
 
     expect(recallBatchMock).toHaveBeenCalledTimes(1);
     expect(recallBatchMock).toHaveBeenCalledWith(card);
+    wrapper.unmount();
+  });
+
+  it('T7a（2026-10-08）：菜单项由 canRecall 派生（无权时 items 为空数组）', async () => {
+    // 回归 guard：共享菜单组件是 dumb 的 —— 它不知道任何动作、也不知道权限。本页把权限
+    // 闸落在 items 上：有权给一项、无权给空数组（组件拿到空数组就不渲染菜单）。漏派生
+    // ⇒ 无权角色右键看到的是**能点的菜单**，点下去才吃后端 40300。
+    activeShelfIdRef.value = '5000000000001';
+    recallable.current.value = true;
+    const wrapper = mount(QueueBoard, {
+      global: { plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+    });
+    await flushPromises();
+
+    const menu = () => wrapper.findComponent({ name: 'BatchContextMenuStub' });
+    expect(menu().props('items')).toEqual([{ key: 'recall', label: '召回到待下发' }]);
+
+    recallable.current.value = false;
+    await nextTick();
+    expect(menu().props('items')).toEqual([]);
     wrapper.unmount();
   });
 

@@ -1,494 +1,242 @@
 <template>
   <div class="outsource-list">
+    <!--
+      2026-10-09：顶部 filter 卡收缩 —— 公司名 / 状态两个筛选项搬进表头
+      （照零件一览 / 待品检的范式），顶部只留「新增」+「重置筛选」。
+    -->
     <el-card shadow="never" class="filter-card">
-      <el-form inline>
-        <el-form-item label="公司名">
-          <el-input v-model="search.name_like" clearable style="width: 200px" />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="search.is_active" clearable style="width: 120px">
-            <el-option label="启用" :value="true" />
-            <el-option label="停用" :value="false" />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="fetchList">
-            <el-icon><Search /></el-icon><span>查询</span>
-          </el-button>
-          <el-button @click="onReset">
-            <el-icon><RefreshLeft /></el-icon><span>重置</span>
-          </el-button>
-          <el-button type="success" @click="onNew">
-            <el-icon><Plus /></el-icon><span>新增外协公司</span>
-          </el-button>
-        </el-form-item>
-      </el-form>
+      <div class="filter-row">
+        <el-button type="success" @click="onNew">
+          <el-icon><Plus /></el-icon><span>新增外协公司</span>
+        </el-button>
+        <el-button @click="onResetFilters">
+          <el-icon><RefreshLeft /></el-icon><span>重置筛选</span>
+        </el-button>
+        <span v-if="store.query.total > 0" class="total-hint">共 {{ store.query.total }} 家</span>
+      </div>
     </el-card>
 
     <el-card shadow="never">
-      <!-- 2026-08-25：删除 ResponsiveList 包装（手机卡片视图随 T1 撤掉），改用纯 el-table。
-           ColumnVisibilityPopover 按 T2 模板提到 .table-toolbar 顶层 div。
-           2026-08-25 (T7)：el-pagination 收口到 <PagedTable>；原 `search.offset/limit` 已迁出 search，PagedTable 内部管 -->
       <div class="table-toolbar">
+        <el-button size="small" @click="onResetFilters">重置筛选</el-button>
         <ColumnVisibilityPopover
-          :defs="columnDefs"
-          :model-value="columnVisibility.currentMap"
-          @update:model-value="columnVisibility.update"
-          @reset="columnVisibility.showAll"
+          :defs="store.columnDefs"
+          :model-value="store.columnVisibility.currentMap"
+          @update:model-value="store.columnVisibility.update"
+          @reset="store.columnVisibility.showAll"
           @resetOrder="drag.reset"
         />
       </div>
-      <PagedTable
-        ref="pagedRef"
-        :fetcher="fetcher"
-        :default-page-size="100"
-        pagination-layout="total, sizes, prev, pager, next, jumper"
+      <el-table
+        ref="tableRef"
+        v-loading="store.query.loading"
+        :data="store.query.items"
+        row-key="id"
+        stripe
+        border
+        size="small"
+        :empty-text="store.query.emptyText"
+        @filter-change="store.query.onNativeFilterChange"
       >
-        <template #default="{ items, loading }">
-          <el-table
-            ref="tableRef"
-            v-loading="loading"
-            :data="items"
-            row-key="id"
-            stripe
-            border
-            size="small"
-          >
-            <template #empty>
-              <el-empty description="暂无外协公司" />
-            </template>
-            <el-table-column type="index" label="#" width="50" />
-            <!--
-              2026-08-27 T16：列顺序拖动接入。drag.orderedDefs 提供持久化顺序；
-              用 <template v-for> 包裹以兼容 Vue 3 同元素 v-for + v-if 优先级问题。
-              type=index / fixed="right" 操作列保留为字面量 <el-table-column>。
-            -->
-            <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
-              <el-table-column
-                v-if="columnVisibility.isVisible(d.key)"
-                :prop="d.prop ?? d.key"
-                :label="d.label"
-                :width="d.width"
-                :min-width="d.minWidth"
-                :sortable="d.sortable"
-                :align="d.align"
-                :show-overflow-tooltip="d.showOverflowTooltip"
-                :column-key="d.columnKey ?? d.key"
-                :label-class-name="drag.dragLabelClass(d)"
-              >
-                <template v-if="d.cellRender" #default="scope">
-                  <component :is="d.cellRender(scope)" />
-                </template>
-                <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
-                  <span>{{ d.label }}</span>
-                  <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
-                </template>
-              </el-table-column>
-            </template>
-            <el-table-column label="操作" min-width="280" fixed="right" align="center">
-              <template #default="{ row }">
-                <el-button link type="primary" size="small" @click="onEdit(row as OutsourceCompany)"
-                  >编辑</el-button
-                >
-                <el-button
-                  link
-                  type="warning"
-                  size="small"
-                  @click="onManageProcesses(row as OutsourceCompany)"
-                  >维护工序</el-button
-                >
-                <el-button
-                  link
-                  type="success"
-                  size="small"
-                  @click="onBilling(row as OutsourceCompany)"
-                  >对账</el-button
-                >
-                <el-button
-                  link
-                  type="danger"
-                  size="small"
-                  @click="onDelete(row as OutsourceCompany)"
-                  >删除</el-button
-                >
-              </template>
-            </el-table-column>
-          </el-table>
+        <template #empty>
+          <el-empty :description="store.query.emptyText" />
         </template>
-      </PagedTable>
+        <el-table-column type="index" label="#" width="50" />
+        <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
+          <el-table-column
+            v-if="store.columnVisibility.isVisible(d.key)"
+            :prop="d.prop ?? d.key"
+            :label="d.label"
+            :width="d.width"
+            :min-width="d.minWidth"
+            :sortable="d.sortable"
+            :align="d.align"
+            :filters="d.filters"
+            :filter-multiple="d.filterMultiple"
+            :filtered-value="d.filteredValue"
+            :show-overflow-tooltip="d.showOverflowTooltip"
+            :column-key="d.columnKey ?? d.key"
+            :label-class-name="drag.dragLabelClass(d)"
+          >
+            <template
+              v-if="d.headerRender || (resolveDraggable(d) && !d.type && !d.fixed)"
+              #header="scope"
+            >
+              <component :is="d.headerRender(scope)" v-if="d.headerRender" />
+              <span v-else>{{ d.label }}</span>
+              <ColumnDragHandle
+                v-if="resolveDraggable(d) && !d.type && !d.fixed"
+                :title="`拖动 ${d.label} 列`"
+              />
+            </template>
+            <template v-if="d.cellRender" #default="scope">
+              <component :is="d.cellRender(scope)" />
+            </template>
+          </el-table-column>
+        </template>
+        <el-table-column label="操作" min-width="220" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="primary"
+              size="small"
+              @click="store.dialogs.openEdit(row as OutsourceCompanySchema)"
+              >编辑</el-button
+            >
+            <el-button
+              link
+              type="success"
+              size="small"
+              @click="onBilling(row as OutsourceCompanySchema)"
+              >对账</el-button
+            >
+            <el-button
+              link
+              type="danger"
+              size="small"
+              @click="store.dialogs.onDelete(row as OutsourceCompanySchema)"
+              >删除</el-button
+            >
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="pagination">
+        <el-pagination
+          v-model:current-page="store.query.page"
+          v-model:page-size="store.query.pageSize"
+          :page-sizes="[20, 50, 100, 200]"
+          :total="store.query.total"
+          layout="total, sizes, prev, pager, next, jumper"
+          :pager-count="7"
+          background
+          size="small"
+        />
+      </div>
     </el-card>
 
-    <!-- CRUD 对话框 -->
+    <!--
+      2026-10-09：编辑 / 新建两个对话框**合并为一个** —— 原先「编辑外协公司」与
+      「维护工序」是两次保存（两个 POST），后端本轮已把工序能力的整体替换吸收进
+      `POST /{id}/update` 的 `process_ids`（三态可分），拆开两个弹窗反而会让「勾了工序
+      却忘了点维护工序那侧的保存」这类半截操作存在。操作列的「维护工序」按钮随之删除。
+    -->
     <el-dialog
-      v-model="dialogVisible"
-      :title="editing ? '编辑外协公司' : '新增外协公司'"
+      v-model="store.dialogs.visible"
+      :title="store.dialogs.editingId ? '编辑外协公司' : '新增外协公司'"
       :width="companyDlg.width"
       :top="companyDlg.top"
       :close-on-click-modal="false"
-      @closed="onDialogClosed"
     >
-      <el-form :model="form" label-width="100px">
+      <el-form :model="store.dialogs.form" label-width="100px">
         <el-form-item label="公司名" required>
-          <el-input v-model="form.name" :disabled="!!editing" placeholder="如 福州精工外协" />
+          <el-input
+            v-model="store.dialogs.form.name"
+            :disabled="!!store.dialogs.editingId"
+            placeholder="如 福州精工外协"
+          />
         </el-form-item>
         <el-form-item label="联系人">
-          <el-input v-model="form.contact_name" />
+          <el-input v-model="store.dialogs.form.contact_name" />
         </el-form-item>
         <el-form-item label="联系电话">
-          <el-input v-model="form.contact_phone" />
+          <el-input v-model="store.dialogs.form.contact_phone" />
         </el-form-item>
         <el-form-item label="地址">
-          <el-input v-model="form.address" />
+          <el-input v-model="store.dialogs.form.address" />
         </el-form-item>
         <el-form-item label="启用">
-          <el-switch v-model="form.is_active" />
+          <el-switch v-model="store.dialogs.form.is_active" />
         </el-form-item>
-        <!-- 2026-08-22 a11y：el-checkbox-group 根元素非 labelable -->
-        <el-form-item v-if="!editing" label="工序能力（创建时）" for="">
+        <!-- 勾选项取「共享 OUTSOURCE 工序列表 ∪ GET /{id} 回包的已映射工序」并集
+             （store.options.processOptions）：已映射但不在 OUTSOURCE 列表里的工序
+             必须仍可见可取消，否则保存时它被静默删掉。 -->
+        <!-- el-checkbox-group 根元素非 labelable ⇒ 显式 for="" + aria-label（a11y） -->
+        <el-form-item label="工序能力" for="">
           <el-checkbox-group
-            v-model="form.process_ids"
+            v-model="store.dialogs.form.process_ids"
             class="process-check-group"
             aria-label="工序能力"
           >
-            <el-checkbox v-for="p in outsourceProcesses" :key="p.id" :value="p.id">
-              {{ p.code }} — {{ p.name }}
+            <el-checkbox v-for="p in store.options.processOptions" :key="p.id" :value="p.id">
+              {{ p.label }}
             </el-checkbox>
-            <span v-if="outsourceProcesses.length === 0" class="muted">
+            <span v-if="store.options.processOptions.length === 0" class="muted">
               没有 OUTSOURCE 工序，请先在「设置 → 工序管理」中新增
             </span>
           </el-checkbox-group>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="onSave">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 维护工序能力对话框 -->
-    <el-dialog
-      v-model="manageDialogVisible"
-      :title="managing ? `维护「${managing.name}」的工序能力` : ''"
-      :width="companyDlg.width"
-      :top="companyDlg.top"
-      :close-on-click-modal="false"
-      @closed="onManageDialogClosed"
-    >
-      <el-form label-width="80px">
-        <!-- 2026-08-22 a11y：el-checkbox-group 根元素非 labelable -->
-        <el-form-item label="可执行外协工序" for="">
-          <el-checkbox-group
-            v-model="manageForm.process_ids"
-            class="process-check-group"
-            aria-label="可执行外协工序"
-          >
-            <el-checkbox v-for="p in outsourceProcesses" :key="p.id" :value="p.id">
-              {{ p.code }} — {{ p.name }}
-            </el-checkbox>
-            <span v-if="outsourceProcesses.length === 0" class="muted">
-              没有 OUTSOURCE 工序，请先在「设置 → 工序管理」中新增
-            </span>
-          </el-checkbox-group>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="manageDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="onSaveProcesses">保存</el-button>
+        <el-button @click="store.dialogs.visible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="store.dialogs.saving"
+          @click="store.dialogs.onSave"
+          >保存</el-button
+        >
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { h, onMounted, reactive, ref } from 'vue';
+// views/outsource/OutsourceList.vue — 外协厂一览
+//
+// 2026-10-09 三项变更：
+//   1. 主查询改走域内 query hook `useOutsourceCompaniesQuery`（替掉手工 `PagedTable`
+//      fetcher + `limit/offset` 手工换算），分页改为 `el-pagination` + store 私有页码；
+//   2. 表头筛选：公司名（popover 文本）+ 状态（EP 原生 `:filters`），顶部 filter 卡收缩；
+//   3. 编辑 / 新建合并为一个对话框，保存走 `POST /{id}/update`（**必传 `version`** 与
+//      `process_ids` 三态）—— 此前 onSave 漏传 version，后端本轮已把它设为必填，漏传
+//      恒 422，等于编辑功能 100% 失败（本次修掉的线上缺陷）。
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage, ElTag, ElTable, type TableInstance } from 'element-plus';
-import { Search, RefreshLeft, Plus } from '@element-plus/icons-vue';
+import type { TableInstance } from 'element-plus';
+import { Plus, RefreshLeft } from '@element-plus/icons-vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
-import PagedTable from '@/components/PagedTable.vue';
-import {
-  useColumnVisibility,
-  resolveDraggable,
-  type ColumnDef,
-} from '@/composables/useColumnVisibility';
-import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
-import { useConfirm } from '@/composables/useConfirm';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
+import { resolveDraggable } from '@/composables/useColumnVisibility';
 import { useDialogSize } from '@/composables/useDialogSize';
-import { useListStatePersist } from '@/composables/useListFilterPersist';
-import {
-  createOutsourceCompany,
-  getOutsourceCompany,
-  listOutsourceCompanies,
-  setOutsourceCompanyProcesses,
-  softDeleteOutsourceCompany,
-  updateOutsourceCompany,
-} from '@/api/outsource';
-import type { OutsourceCompany } from '@/types/outsource';
-import { listProcesses } from '@/api/process';
-import type { Process } from '@/types/process';
+import { useOutsourceCompanyListStore } from './composables/useOutsourceCompanyListStore';
+import type { OutsourceCompanySchema } from './composables/outsourceListSchema';
+// 2026-10-09：`outsourceCompanyColumnDefs.ts` 用 h() 直挂 ElTag 渲染「状态」列，而
+// unplugin-vue-components 只处理**模板**里用到的标签，.ts 文件里的值 import 拿不到样式
+// 注入（`src/styles/__tests__/elementPlusManualImportStyles.spec.ts` 登记的已知盲区）。
+// 这里显式补副作用 import，免得本路由下 tag 样式靠别处顺带注入。
+import 'element-plus/es/components/tag/style/css';
 
 const router = useRouter();
 const companyDlg = useDialogSize({ desktopWidth: 520 });
 
-const { dangerous: confirmDangerous } = useConfirm();
+// store 必须在本组件 setup 内首调（不变量 #1：切片链路上的 onMounted / onBeforeUnmount
+// 会绑到首个创建 store 的组件 = 本组件）。
+const store = useOutsourceCompanyListStore();
 
-const saving = ref(false);
-// 2026-08-25 T7：page/pageSize/total/loading/items 已迁到 <PagedTable> 内部；view 不再持有
-const pagedRef = ref();
-// search 只保留过滤项（不含分页）
-const search = reactive<{ name_like: string; is_active: boolean | undefined }>({
-  name_like: '',
-  is_active: undefined,
-});
-
-// ============ 筛选状态持久化（2026-07-30 commit 4B；2026-08-25 T7：search 只含过滤项）============
-const { restore: restoreOutsourceCompanyFilter } = useListStatePersist('outsource_company_list', {
-  search,
-});
-
-// ============ 列可见性 + 列顺序拖动 ============
-// 「#」和「操作」列不放进 defs → 始终可见。
-// 2026-08-27 T16：补 prop / minWidth / align + 文本列走 cellRender(ListShell 同款)。
-// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
-const columnDefs: ColumnDef[] = [
-  { key: 'name', label: '公司名', prop: 'name', minWidth: 160, align: 'center' },
-  {
-    key: 'contact_name',
-    label: '联系人',
-    minWidth: 100,
-    align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as OutsourceCompany).contact_name || '—'),
-  },
-  {
-    key: 'contact_phone',
-    label: '联系电话',
-    minWidth: 120,
-    align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as OutsourceCompany).contact_phone || '—'),
-  },
-  {
-    key: 'address',
-    label: '地址',
-    prop: 'address',
-    minWidth: 200,
-    showOverflowTooltip: true,
-    align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as OutsourceCompany).address || '—'),
-  },
-  {
-    key: 'is_active',
-    label: '状态',
-    minWidth: 80,
-    align: 'center',
-    cellRender: ({ row }) =>
-      h(
-        ElTag,
-        { type: (row as OutsourceCompany).is_active ? 'success' : 'info', size: 'small' },
-        () => ((row as OutsourceCompany).is_active ? '启用' : '停用'),
-      ),
-  },
-];
-const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'outsource_company_list' });
+const columnDefs = store.columnDefs;
 const drag = useColumnDrag(columnDefs, { listKey: 'outsource_company_list' });
-// 2026-08-28 改造：applyDrag 接受 el-table 实例 ref，内部归一化根 + MutationObserver 自愈
-// 2026-09-21 对齐 TS 严格：模板 ref 收紧为 EP TableInstance；null 初值
 const tableRef = ref<TableInstance | null>(null);
 
-const outsourceProcesses = ref<Process[]>([]);
-
-// CRUD dialog state
-const dialogVisible = ref(false);
-const editing = ref<OutsourceCompany | null>(null);
-const form = reactive<{
-  name: string;
-  contact_name: string;
-  contact_phone: string;
-  address: string;
-  is_active: boolean;
-  process_ids: string[];
-}>({
-  name: '',
-  contact_name: '',
-  contact_phone: '',
-  address: '',
-  is_active: true,
-  process_ids: [],
-});
-
-// 维护工序 dialog state
-const manageDialogVisible = ref(false);
-const managing = ref<OutsourceCompany | null>(null);
-const manageForm = reactive<{ process_ids: string[] }>({ process_ids: [] });
-
-// PagedTable fetcher：分页参数从 params 读；过滤项从 view 本地 search 闭包读
-async function fetcher(params: { page: number; pageSize: number }) {
-  return await listOutsourceCompanies({
-    name_like: search.name_like || undefined,
-    is_active: search.is_active,
-    limit: params.pageSize,
-    offset: (params.page - 1) * params.pageSize,
-  });
-}
-
-// view 其它地方触发刷新的薄包装（保持调用方不变）
-async function fetchList(): Promise<void> {
-  await pagedRef.value?.fetch();
-}
-
-async function fetchOutsourceProcesses(): Promise<void> {
-  try {
-    const res = await listProcesses({ category: 'OUTSOURCE', limit: 200 });
-    outsourceProcesses.value = res.items;
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载外协工序失败');
-  }
-}
-
-function onReset(): void {
-  search.name_like = '';
-  search.is_active = undefined;
-  // 2026-08-25 T7：重置同时调 reset 把页码拨回 1
-  void pagedRef.value?.reset();
-}
-
 function onNew(): void {
-  editing.value = null;
-  form.name = '';
-  form.contact_name = '';
-  form.contact_phone = '';
-  form.address = '';
-  form.is_active = true;
-  form.process_ids = [];
-  dialogVisible.value = true;
+  store.dialogs.openCreate();
 }
 
-function onEdit(row: OutsourceCompany): void {
-  editing.value = row;
-  form.name = row.name;
-  form.contact_name = row.contact_name ?? '';
-  form.contact_phone = row.contact_phone ?? '';
-  form.address = row.address ?? '';
-  form.is_active = row.is_active;
-  form.process_ids = [];
-  dialogVisible.value = true;
+function onResetFilters(): void {
+  store.query.resetAllFilters();
 }
 
-async function onSave(): Promise<void> {
-  if (!form.name.trim()) {
-    ElMessage.warning('公司名不能为空');
-    return;
-  }
-  saving.value = true;
-  try {
-    if (editing.value) {
-      await updateOutsourceCompany(editing.value.id, {
-        name: form.name.trim(),
-        contact_name: form.contact_name.trim() || null,
-        contact_phone: form.contact_phone.trim() || null,
-        address: form.address.trim() || null,
-        is_active: form.is_active,
-      });
-      ElMessage.success('已保存');
-    } else {
-      await createOutsourceCompany({
-        name: form.name.trim(),
-        contact_name: form.contact_name.trim() || null,
-        contact_phone: form.contact_phone.trim() || null,
-        address: form.address.trim() || null,
-        is_active: form.is_active,
-        process_ids: form.process_ids,
-      });
-      ElMessage.success('已新增');
-    }
-    dialogVisible.value = false;
-    fetchList();
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '保存失败');
-  } finally {
-    saving.value = false;
-  }
-}
-
-function onDialogClosed(): void {
-  editing.value = null;
-  form.name = '';
-  form.contact_name = '';
-  form.contact_phone = '';
-  form.address = '';
-  form.is_active = true;
-  form.process_ids = [];
-}
-
-async function onManageProcesses(row: OutsourceCompany): Promise<void> {
-  managing.value = row;
-  manageForm.process_ids = [];
-  manageDialogVisible.value = true;
-  try {
-    const detail = await getOutsourceCompany(row.id);
-    manageForm.process_ids = detail.processes.map((p) => p.process_id);
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载公司详情失败');
-  }
-}
-
-async function onSaveProcesses(): Promise<void> {
-  if (!managing.value) return;
-  saving.value = true;
-  try {
-    await setOutsourceCompanyProcesses(managing.value.id, {
-      process_ids: manageForm.process_ids,
-    });
-    ElMessage.success('工序能力已更新');
-    manageDialogVisible.value = false;
-    fetchList();
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '保存失败');
-  } finally {
-    saving.value = false;
-  }
-}
-
-function onManageDialogClosed(): void {
-  managing.value = null;
-  manageForm.process_ids = [];
-}
-
-function onBilling(row: OutsourceCompany): void {
-  // 跳到外协对账页（2026-07-28 新增）
+function onBilling(row: OutsourceCompanySchema): void {
   void router.push(`/outsource/companies/${row.id}/sent-parts`);
 }
 
-async function onDelete(row: OutsourceCompany): Promise<void> {
-  if (
-    !(await confirmDangerous('提示', `确认删除外协公司「${row.name}」？若有工序映射会拒绝。`, {
-      type: 'warning',
-      confirmText: '删除',
-      cancelText: '取消',
-    }))
-  )
-    return;
-  try {
-    await softDeleteOutsourceCompany(row.id);
-    ElMessage.success('已删除');
-    fetchList();
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '删除失败');
-  }
-}
-
 onMounted(() => {
-  // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
   drag.applyDrag(tableRef);
+  store.query.restoreState();
+});
 
-  void fetchOutsourceProcesses();
-  // 从 localStorage 恢复搜索；强制将当前页重置到第 1 页（避免恢复到无数据页）
-  const persisted = restoreOutsourceCompanyFilter() as
-    { search?: Partial<typeof search> } | null | undefined;
-  if (persisted) {
-    if (persisted.search) Object.assign(search, persisted.search);
-  }
-  void fetchList();
+onBeforeUnmount(() => {
+  store.$dispose();
 });
 </script>
 
@@ -498,10 +246,25 @@ onMounted(() => {
   flex-direction: column;
   gap: 12px;
 }
-// 2026-08-25：ColumnVisibilityPopover 收纳位（ResponsiveList 拆掉后从子组件抽出提到顶层）
+.filter-card :deep(.el-card__body) {
+  padding: 12px 16px;
+}
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.total-hint {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
 .table-toolbar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 8px;
 }
 .pagination {
@@ -519,5 +282,14 @@ onMounted(() => {
 .muted {
   color: #909399;
   font-size: 12px;
+}
+// 原生 :filters 列的激活态视觉（蓝字加粗 + 计数），与零件一览同款。
+.status-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.status-count {
+  font-weight: 600;
 }
 </style>

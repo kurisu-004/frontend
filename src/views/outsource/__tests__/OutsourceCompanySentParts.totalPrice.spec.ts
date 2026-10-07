@@ -1,48 +1,34 @@
 // @vitest-environment happy-dom
 // src/views/outsource/__tests__/OutsourceCompanySentParts.totalPrice.spec.ts
 //
-// 2026-10-03 新增：外协对账页「总价」链路的三个纯函数守卫 ——
-// `displayTotalPrice`（列显示源）/ `totalPriceSummary`（合计行求和口径）/
-// `saveEdit`（保存后就地回填）。
+// 外协对账页「总价」链路的三个纯逻辑守卫 —— `displayTotalPrice`（列显示源）/
+// `summaryMethod`（合计行求和口径）/ `saveEdit`（行内保存的 payload 与 OCC 锚）。
 //
-// 为什么锁这三处：本轮把 `total_price` 的真源从「前端 q × p」改成「后端直出」
-// （`OutsourceSentPartItem.total_price`）。这个改动的核心承诺是**全链路只认后端值**，
-// 列 / 合计行 / 保存回填三处必须口径一致 —— 任一处偷偷退回前端二次推导，对账单上的
-// 数字就会和后端算的不一致，且是纯展示层的静默偏差（不报错、不空表格）。
+// 为什么锁这三处：`total_price` 的真源是**后端直出**（`OutsourceSentPartItemSchema.
+// total_price`）。这个承诺的核心是「全链路只认后端值」——列 / 合计行 / 保存三处必须
+// 口径一致：任一处偷偷退回前端二次推导，对账单上的数字就会和后端算的不一致，且是纯
+// 展示层的静默偏差（不报错、不空表格）。
 //
-// 三条各自的失败形态：
-//   · displayTotalPrice 退回无条件 q × p ⇒ Decimal 末位与后端对不上（编辑态尤其明显）
-//   · totalPriceSummary 改回 q × p 求和 ⇒ 合计行与「总价」列对不上
-//   · saveEdit 漏回填 total_price ⇒ 刚保存完的那一行仍显示旧总价，直到下次 refetch
+// 2026-10-09：被测对象从 `<script setup>` 顶层绑定改为 composable
+// `useOutsourceSentPartsPage`（页面状态整体搬进 composable 后组件顶层不再暴露这三个
+// 函数）。保存后的「就地回填」也一并删除 —— 行内保存改为失效
+// `invalidateOutsourceSentPartsAll` 拿后端权威值，前端不再自己算一遍总价冒充真相
+// （自算的浮点末位与后端 Decimal 串对不上时，对账单上的数字会与库存系统不一致）。
 //
-// 依赖处理沿 ShelfList.processMapping.spec.ts：列可见性（依赖 pinia）与列拖动
-// （依赖 vue-draggable-plus）与被测逻辑无关，整体桩掉；el-table 走轻量 stub，
-// 直接调 `<script setup>` 暴露的函数（同款理由：被测的是这三个函数本身，不是点击链路）。
-// ElMessage 桩成 no-op（node/happy-dom 下真实 EP 会碰 document 与内部 normalizeAppendTo）。
+// 依赖处理沿本仓其它 spec 同款：列可见性（依赖 pinia）与列拖动（依赖 vue-draggable-plus）
+// 与被测逻辑无关，整体桩掉；ElMessage 桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushPromises, mount } from '@vue/test-utils';
-import { reactive, ref } from 'vue';
-
-import type { OutsourceSentPartItem } from '@/types/outsource';
+import { createApp, effectScope, ref } from 'vue';
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 vi.mock('element-plus', () => ({
   ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() },
-  // ElInputNumber / ElSwitch / ElTag 是 columnDefs 的 cellRender 里 h() 直挂的真组件，
-  // 换成同名空壳即可（stub 转发的 props 不会被 cellRender 读）。
-  ElInputNumber: { name: 'ElInputNumber', template: '<i class="mock-num" />' },
-  ElSwitch: { name: 'ElSwitch', template: '<i class="mock-switch" />' },
-  ElTag: { name: 'ElTag', template: '<span class="mock-tag"><slot /></span>' },
-}));
-
-vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { id: 'C1' } }),
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
 vi.mock('@/composables/useColumnVisibility', () => ({
   useColumnVisibility: () => ({
-    currentMap: reactive<Record<string, boolean>>({}),
+    currentMap: {},
     isVisible: () => true,
     toggle: vi.fn(),
     update: vi.fn(),
@@ -53,53 +39,37 @@ vi.mock('@/composables/useColumnVisibility', () => ({
   resolveDraggable: () => true,
 }));
 
-vi.mock('@/composables/useColumnDrag', () => ({
-  useColumnDrag: () => ({
-    orderedKeys: ref<string[]>([]),
-    orderedDefs: ref<unknown[]>([]),
-    applyDrag: vi.fn(),
-    dragLabelClass: () => '',
-    reset: vi.fn(),
-    clear: vi.fn(),
-    isBound: () => false,
-  }),
-  columnIdentifier: (def: { key: string }) => def.key,
+vi.mock('@/composables/useCustomerTree', () => ({
+  useCustomerTree: () => ({ tree: ref([]) }),
 }));
 
-vi.mock('@/composables/useListFilterPersist', () => ({
-  useListStatePersist: () => ({ restore: () => null, snapshot: vi.fn(), clear: vi.fn() }),
+vi.mock('@/composables/queries/useProcessesQuery', () => ({
+  useProcessesQuery: () => ({ data: ref({ items: [] }) }),
 }));
 
 const reconcileUpdateShipmentMock = vi.fn();
-const listCompanySentPartsMock = vi.fn();
+const invalidateSpy = vi.fn(() => Promise.resolve());
 
 vi.mock('@/api/outsource', () => ({
-  getOutsourceCompany: vi.fn(async () => ({ id: 'C1', name: '外协厂' })),
-  listCompanySentParts: (...args: unknown[]) => listCompanySentPartsMock(...args),
   reconcileUpdateShipment: (...args: unknown[]) => reconcileUpdateShipmentMock(...args),
+  listCompanySentParts: vi.fn(async () => ({
+    outsource_company_id: 'C1',
+    outsource_company_name: '外协厂',
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  })),
 }));
 
-import OutsourceCompanySentParts from '../OutsourceCompanySentParts.vue';
+import { useOutsourceSentPartsPage } from '../composables/useOutsourceSentPartsPage';
+import type { OutsourceSentPartItemSchema } from '../composables/outsourceListSchema';
 
-/** `<script setup>` 的顶层绑定经 VTU proxy 解包后可直接当普通值访问。 */
-interface SentPartsVm {
-  editingId: string | null;
-  editBuffer: { unit_price: number | null; quantity: number | null; is_billed: boolean };
-  displayTotalPrice: (row: OutsourceSentPartItem) => string;
-  totalPriceSummary: (args: {
-    columns: { label: string }[];
-    data: OutsourceSentPartItem[];
-  }) => string[];
-  saveEdit: (row: OutsourceSentPartItem) => Promise<void>;
-}
-
-/** 一行合法对账记录（只填三个被测函数关心的字段）。 */
-function row(overrides: Partial<OutsourceSentPartItem> = {}): OutsourceSentPartItem {
+/** 一行合法对账记录（16 字段全填，照后端 `OutsourceSentPartOut`）。 */
+function row(overrides: Partial<OutsourceSentPartItemSchema> = {}): OutsourceSentPartItemSchema {
   return {
     shipment_id: 'S1',
     version: 3,
-    quote_id: 'Q1',
-    part_id: 'P1',
     part_drawing_no: 'DWG-1',
     part_name: '零件甲',
     customer_path: '一级/二级',
@@ -118,128 +88,115 @@ function row(overrides: Partial<OutsourceSentPartItem> = {}): OutsourceSentPartI
   };
 }
 
-/** 挂载组件并返回 vm（等首屏取数落定）。 */
-async function setup(): Promise<{ vm: SentPartsVm }> {
-  const wrapper = mount(OutsourceCompanySentParts, {
-    global: {
-      stubs: { ColumnVisibilityPopover: true, ColumnDragHandle: true },
-      directives: { loading: {} },
-      components: {
-        'el-card': { template: '<div><slot /></div>' },
-        'el-button': { template: '<button><slot /></button>' },
-        'el-form': { template: '<form><slot /></form>' },
-        'el-form-item': { template: '<div><slot /></div>' },
-        'el-input': { template: '<input />' },
-        'el-date-picker': { template: '<i />' },
-        'el-empty': { template: '<i />' },
-        'el-table': { template: '<div><slot /></div>' },
-        'el-table-column': { template: '<div><slot :row="{}" /></div>' },
-      },
-    },
+let testApp: ReturnType<typeof createApp>;
+let testQueryClient: QueryClient;
+
+/** 在 effectScope 里跑一遍 composable（拿到真实 useQuery / useMutation 生命周期）。 */
+function setup(): ReturnType<typeof useOutsourceSentPartsPage> {
+  const scope = effectScope();
+  let page!: ReturnType<typeof useOutsourceSentPartsPage>;
+  scope.run(() => {
+    page = testApp.runWithContext(() => useOutsourceSentPartsPage('C1'));
   });
-  await flushPromises();
-  return { vm: wrapper.vm as unknown as SentPartsVm };
+  return page;
 }
 
 beforeEach(() => {
   reconcileUpdateShipmentMock.mockReset();
   reconcileUpdateShipmentMock.mockResolvedValue(undefined);
-  listCompanySentPartsMock.mockReset();
-  listCompanySentPartsMock.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  invalidateSpy.mockClear();
+  testQueryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
+  });
+  testQueryClient.invalidateQueries = invalidateSpy as never;
+  testApp = createApp({});
+  testApp.use(VueQueryPlugin, { queryClient: testQueryClient });
 });
 
 describe('displayTotalPrice：总价列的显示源', () => {
   // 真源承诺：非编辑态**原样**展示后端值，绝不用 q × p 覆盖。
-  it('P1：非编辑态 → 原样返回后端 total_price（不做前端二次推导）', async () => {
-    const { vm } = await setup();
-    // 故意让 q × p 与后端值不同：qty=3、price=10 → q*p=30.00 与 total_price 一致，
-    // 换成 total_price='30.50' 才能证明读的是后端值。
-    vm.editingId = null;
-    expect(vm.displayTotalPrice(row({ total_price: '30.50' }))).toBe('30.50');
+  it('P1：非编辑态 → 原样返回后端 total_price（不做前端二次推导）', () => {
+    const page = setup();
+    // fixture 的 total_price 故意 ≠ q × p（3 × 10 = 30.00，这里给 30.50），
+    // 否则「读后端值」与「前端重算碰巧相等」不可区分。
+    expect(page.edit.displayTotalPrice(row({ total_price: '30.50' }))).toBe('30.50');
   });
 
-  it('P2：非编辑态下改数量也不影响显示（编辑缓冲不串到别的行）', async () => {
-    const { vm } = await setup();
-    vm.editingId = null;
+  it('P2：非编辑态下改数量也不影响显示（编辑缓冲不串到别的行）', () => {
+    const page = setup();
     // 缓冲里留着脏值：非编辑行不得被它带偏。
-    vm.editBuffer.quantity = 999;
-    vm.editBuffer.unit_price = 999;
-    expect(vm.displayTotalPrice(row({ total_price: '30.50' }))).toBe('30.50');
+    page.edit.editBuffer.quantity = 999;
+    page.edit.editBuffer.unit_price = 999;
+    expect(page.edit.displayTotalPrice(row({ total_price: '30.50' }))).toBe('30.50');
   });
 
-  // fixture 的 total_price 必须**故意不等于** q × p（10.00 × 3 = 30.00，这里给 30.50）。
-  // 否则本条恒真：自洽的 fixture 下「读后端值」与「前端重算碰巧相等」不可区分，
-  // 而后者正是这里要防的浮点末位漂移。
-  it('P3：编辑态 + 缓冲与原值一致 → 仍走后端值（避免浮点误差与 Decimal 末位对不上）', async () => {
-    const { vm } = await setup();
+  it('P3：编辑态 + 缓冲与原值一致 → 仍走后端值（避免浮点误差与 Decimal 末位对不上）', () => {
+    const page = setup();
     const r = row({ total_price: '30.50' });
-    vm.editingId = r.shipment_id;
-    vm.editBuffer.unit_price = Number(r.unit_price);
-    vm.editBuffer.quantity = r.quantity;
-    expect(vm.displayTotalPrice(r)).toBe('30.50');
+    page.edit.editingId.value = r.shipment_id;
+    page.edit.editBuffer.unit_price = Number(r.unit_price);
+    page.edit.editBuffer.quantity = r.quantity;
+    expect(page.edit.displayTotalPrice(r)).toBe('30.50');
   });
 
-  it('P4：编辑态 + 改了数量 → 用缓冲实时重算（操作员敲数字时能看到总价变化）', async () => {
-    const { vm } = await setup();
+  it('P4：编辑态 + 改了数量 → 用缓冲实时重算（操作员敲数字时能看到总价变化）', () => {
+    const page = setup();
     const r = row();
-    vm.editingId = r.shipment_id;
-    vm.editBuffer.unit_price = Number(r.unit_price);
-    vm.editBuffer.quantity = 5;
-    expect(vm.displayTotalPrice(r)).toBe('50.00');
+    page.edit.editingId.value = r.shipment_id;
+    page.edit.editBuffer.unit_price = Number(r.unit_price);
+    page.edit.editBuffer.quantity = 5;
+    expect(page.edit.displayTotalPrice(r)).toBe('50.00');
   });
 
-  it('P5：编辑态 + 改了单价 → 用缓冲实时重算', async () => {
-    const { vm } = await setup();
+  it('P5：编辑态 + 改了单价 → 用缓冲实时重算', () => {
+    const page = setup();
     const r = row();
-    vm.editingId = r.shipment_id;
-    vm.editBuffer.unit_price = 12.5;
-    vm.editBuffer.quantity = r.quantity;
-    expect(vm.displayTotalPrice(r)).toBe('37.50');
+    page.edit.editingId.value = r.shipment_id;
+    page.edit.editBuffer.unit_price = 12.5;
+    page.edit.editBuffer.quantity = r.quantity;
+    expect(page.edit.displayTotalPrice(r)).toBe('37.50');
   });
 
   // 只重算「本行」：编辑 A 行时 B 行的总价不能被 A 的缓冲带偏。
-  it('P6：编辑态只影响本行（另一行仍走自己的后端值）', async () => {
-    const { vm } = await setup();
+  it('P6：编辑态只影响本行（另一行仍走自己的后端值）', () => {
+    const page = setup();
     const editing = row();
     const other = row({ shipment_id: 'S2', total_price: '99.00' });
-    vm.editingId = editing.shipment_id;
-    vm.editBuffer.unit_price = 1;
-    vm.editBuffer.quantity = 1;
-    expect(vm.displayTotalPrice(other)).toBe('99.00');
+    page.edit.editingId.value = editing.shipment_id;
+    page.edit.editBuffer.unit_price = 1;
+    page.edit.editBuffer.quantity = 1;
+    expect(page.edit.displayTotalPrice(other)).toBe('99.00');
   });
 
   // 缓冲被改成非正数时不能算出「-30.00」或除零噪声，直接给占位符。
-  // 恢复合法值后回到后端值 —— 同样是 total_price ≠ q × p 的 fixture（30.50 vs 30.00），
-  // 否则后半段与「读后端值」不可区分。
-  it('P7：编辑态缓冲非法（非正数量 / 非有限值）→ 显示占位符而不是算出的垃圾数', async () => {
-    const { vm } = await setup();
+  it('P7：编辑态缓冲非法（非正数量）→ 显示占位符而不是算出的垃圾数', () => {
+    const page = setup();
     const r = row({ total_price: '30.50' });
-    vm.editingId = r.shipment_id;
-    vm.editBuffer.unit_price = Number(r.unit_price);
-    vm.editBuffer.quantity = 0;
-    expect(vm.displayTotalPrice(r)).toBe('—');
-    vm.editBuffer.unit_price = Number(r.unit_price);
-    vm.editBuffer.quantity = r.quantity;
-    expect(vm.displayTotalPrice(r)).toBe('30.50');
+    page.edit.editingId.value = r.shipment_id;
+    page.edit.editBuffer.unit_price = Number(r.unit_price);
+    page.edit.editBuffer.quantity = 0;
+    expect(page.edit.displayTotalPrice(r)).toBe('—');
+    page.edit.editBuffer.quantity = r.quantity;
+    expect(page.edit.displayTotalPrice(r)).toBe('30.50');
   });
 });
 
-describe('totalPriceSummary：合计行求和口径', () => {
+describe('summaryMethod：合计行求和口径', () => {
   const COLUMNS = [{ label: '图号' }, { label: '数量' }, { label: '总价' }];
 
-  it('P8：逐行累加后端 total_price（不重算 q × p）', async () => {
-    const { vm } = await setup();
-    const out = vm.totalPriceSummary({
+  it('P8：逐行累加后端 total_price（不重算 q × p）', () => {
+    const page = setup();
+    // 两行的 q × p 分别是 30.00 / 12.00（合计 42.00），后端值合计是 42.50。
+    const out = page.summaryMethod({
       columns: COLUMNS,
-      // 两行的 q × p 分别是 30.00 / 12.00（合计 42.00），后端值合计是 42.50。
       data: [row({ total_price: '30.50' }), row({ shipment_id: 'S2', total_price: '12.00' })],
     });
     expect(out[2]).toBe('42.50');
   });
 
-  it('P9：首列显示本页条数，总价列给求和，其余列空串（列序由 label 定位）', async () => {
-    const { vm } = await setup();
-    const out = vm.totalPriceSummary({
+  it('P9：首列显示本页条数，总价列给求和，其余列空串（列序由 label 定位）', () => {
+    const page = setup();
+    const out = page.summaryMethod({
       // 总价列不在 index 2 —— 证明是按 label 定位而不是按下标硬取。
       columns: [{ label: '图号' }, { label: '单价' }, { label: '数量' }, { label: '总价' }],
       data: [row()],
@@ -247,25 +204,25 @@ describe('totalPriceSummary：合计行求和口径', () => {
     expect(out).toEqual(['合计（本页 1 条）', '', '', '30.00']);
   });
 
-  it('P10：空数据 → 合计行不抛（求和初值 0，格式化成 "0.00"）', async () => {
-    const { vm } = await setup();
-    const out = vm.totalPriceSummary({ columns: COLUMNS, data: [] });
+  it('P10：空数据 → 合计行不抛（求和初值 0，格式化成 "0.00"）', () => {
+    const page = setup();
+    const out = page.summaryMethod({ columns: COLUMNS, data: [] });
     expect(out[2]).toBe('0.00');
     expect(out[0]).toBe('合计（本页 0 条）');
   });
 });
 
-describe('saveEdit：保存后就地回填', () => {
-  // 核心守卫：total_price 必须**一起**回填。不回填的话，displayTotalPrice 在
-  // 非编辑态只读 row.total_price ⇒ 刚保存完的这一行显示旧总价，直到下次 refetch。
-  it('P11：改数量后保存 → 行内 unit_price / quantity / total_price 一起回填', async () => {
-    const { vm } = await setup();
+describe('saveEdit：行内保存的 payload 与 OCC 锚', () => {
+  // ⚠️ version 是硬约束：`POST /outsource-shipments/{id}/reconcile-update` 的
+  // `version` 无 `#[serde(default)]` ⇒ 漏传是后端 HTTP 422 纯文本。
+  it('P11：改数量后保存 → payload 带 version（shipment 的 OCC 锚）+ 三个可编辑字段', async () => {
+    const page = setup();
     const r = row();
-    vm.editBuffer.unit_price = null;
-    vm.editBuffer.quantity = 5;
-    vm.editBuffer.is_billed = true;
+    page.edit.editBuffer.unit_price = null;
+    page.edit.editBuffer.quantity = 5;
+    page.edit.editBuffer.is_billed = true;
 
-    await vm.saveEdit(r);
+    await page.edit.saveEdit(r);
 
     expect(reconcileUpdateShipmentMock).toHaveBeenCalledWith('S1', {
       version: 3,
@@ -273,94 +230,72 @@ describe('saveEdit：保存后就地回填', () => {
       quantity: 5,
       is_billed: true,
     });
-    expect(r.quantity).toBe(5);
-    expect(r.unit_price).toBe('10.00');
-    // 3 → 5，总价必须跟着变成 50.00（而不是停在旧的 30.00）
-    expect(r.total_price).toBe('50.00');
-    expect(r.is_billed).toBe(true);
-    // 版本乐观锁同步 +1，否则下次编辑同一行必撞 40901
-    expect(r.version).toBe(4);
   });
 
-  it('P12：改单价后保存 → total_price 用新单价重算', async () => {
-    const { vm } = await setup();
+  it('P12：保存成功后失效对账域（拿后端权威值，前端不自己算总价冒充真相）', async () => {
+    const page = setup();
     const r = row();
-    vm.editBuffer.unit_price = 12.5;
-    vm.editBuffer.quantity = null;
+    page.edit.editBuffer.quantity = 5;
 
-    await vm.saveEdit(r);
+    await page.edit.saveEdit(r);
 
-    expect(r.unit_price).toBe('12.5');
-    expect(r.quantity).toBe(3);
-    expect(r.total_price).toBe('37.50');
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['outsource', 'sent-parts'] });
   });
 
-  // 只改对账标记时，total_price 必须按原值重算而不是被 null 打成 0.00。
-  it('P13：只改对账标记 → total_price 保持原值（不被 null 打成 0.00）', async () => {
-    const { vm } = await setup();
+  it('P13：保存成功后退出编辑态（否则行会卡在输入框里）', async () => {
+    const page = setup();
     const r = row();
-    vm.editBuffer.unit_price = null;
-    vm.editBuffer.quantity = null;
-    vm.editBuffer.is_billed = true;
+    page.edit.editingId.value = r.shipment_id;
 
-    await vm.saveEdit(r);
+    await page.edit.saveEdit(r);
 
-    expect(r.total_price).toBe('30.00');
-    expect(r.quantity).toBe(3);
+    expect(page.edit.editingId.value).toBeNull();
   });
 
-  it('P14：非法数量（< 1）→ 不发请求、不动行（前端先拦）', async () => {
-    const { vm } = await setup();
+  it('P14：非法数量（< 1）→ 不发请求（前端先拦）', async () => {
+    const page = setup();
     const r = row();
-    vm.editBuffer.quantity = 0;
-    vm.editBuffer.unit_price = null;
-    vm.editBuffer.is_billed = false;
+    page.edit.editBuffer.quantity = 0;
 
-    await vm.saveEdit(r);
+    await page.edit.saveEdit(r);
 
     expect(reconcileUpdateShipmentMock).not.toHaveBeenCalled();
-    expect(r.quantity).toBe(3);
-    expect(r.total_price).toBe('30.00');
   });
 
-  it('P15：非法单价（< 0）→ 不发请求、不动行', async () => {
-    const { vm } = await setup();
+  it('P15：非法单价（< 0）→ 不发请求', async () => {
+    const page = setup();
     const r = row();
-    vm.editBuffer.unit_price = -1;
-    vm.editBuffer.quantity = null;
-    vm.editBuffer.is_billed = false;
+    page.edit.editBuffer.unit_price = -1;
 
-    await vm.saveEdit(r);
+    await page.edit.saveEdit(r);
 
     expect(reconcileUpdateShipmentMock).not.toHaveBeenCalled();
-    expect(r.unit_price).toBe('10.00');
   });
 
-  it('P16：保存成功后退出编辑态（否则行会卡在输入框里）', async () => {
-    const { vm } = await setup();
-    const r = row();
-    vm.editingId = r.shipment_id;
-    vm.editBuffer.quantity = 3;
-    vm.editBuffer.unit_price = Number(r.unit_price);
-    vm.editBuffer.is_billed = false;
-
-    await vm.saveEdit(r);
-
-    expect(vm.editingId).toBeNull();
-  });
-
-  it('P17：保存失败 → 不回填、不退出版本（后端没改，前端也不许假装改了）', async () => {
-    const { vm } = await setup();
+  // 保存失败：弹窗不关、编辑态保留（用户改完能直接重试），且不发失效（没有可刷新的东西）。
+  it('P16：保存失败 → 留在编辑态、不失效对账域', async () => {
+    const page = setup();
     const r = row();
     reconcileUpdateShipmentMock.mockRejectedValueOnce(new Error('40901 版本冲突'));
-    vm.editBuffer.quantity = 5;
-    vm.editBuffer.unit_price = null;
-    vm.editBuffer.is_billed = false;
+    page.edit.editingId.value = r.shipment_id;
+    page.edit.editBuffer.quantity = 5;
 
-    await vm.saveEdit(r);
+    await page.edit.saveEdit(r);
 
-    expect(r.quantity).toBe(3);
-    expect(r.total_price).toBe('30.00');
-    expect(r.version).toBe(3);
+    expect(page.edit.editingId.value).toBe(r.shipment_id);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  // 同一时刻只允许一行处于编辑态：跨行双击必须先解决当前行，否则缓冲会被后一行覆盖、
+  // 用户以为改的是 A 行。
+  it('P17：另一行已在编辑态时双击本行 → 拒绝进入编辑（缓冲不被覆盖）', () => {
+    const page = setup();
+    page.edit.editingId.value = 'S-OTHER';
+    page.edit.editBuffer.quantity = 7;
+
+    page.edit.startEdit(row({ shipment_id: 'S1', quantity: 3 }));
+
+    expect(page.edit.editingId.value).toBe('S-OTHER');
+    expect(page.edit.editBuffer.quantity).toBe(7);
   });
 });

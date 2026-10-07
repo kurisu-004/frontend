@@ -11,8 +11,9 @@
        - 批次无论在工序候选池（货架上）还是在工人列（工人持有中），右键卡片都能
          「召回到待下发」；写操作、权限闸、二次确认、失效编排集中在
          composables/useQueueRecall.ts；
-       - 菜单组件 components/BatchContextMenu.vue 挂在本组件顶层（<template v-else>
-         之外 ⇒ loading 态下也已挂载），teleport 到 body；
+       - 菜单组件 `@/components/BatchContextMenu.vue`（2026-10-08 从本目录升为共享
+         组件：菜单项由 `ctxMenuItems` 配置、动作由 `select` 事件按 key 分发）挂在本
+         组件顶层（<template v-else> 之外 ⇒ loading 态下也已挂载），teleport 到 body；
        - provide 键 `openBatchContextMenu`：(evt: MouseEvent, batch: BatchCardModel)
          → void，消费方 PoolDrawer / WorkerColumn 用 inject 接（缺省 noop 兜底）；
        - 卡片侧**不包任何组件**：@contextmenu.prevent 经 BatchCard 的 fallthrough
@@ -116,9 +117,11 @@
          **之外**、根 div 的直接子级位置 ⇒ loading 骨架态下菜单组件也已挂载，不必等
          数据到位。菜单本体 teleport 到 body，与本页所有 Sortable 容器
          （PoolDrawer / WorkerColumn）零 DOM 关系。
+         菜单项由本组件给（ctxMenuItems）：组件本身是 dumb 的，权限闸在板级 ——
+         无权角色拿到空数组，菜单一个项都不渲染。
          卡片侧不包任何组件：@contextmenu.prevent 经 BatchCard 的 fallthrough attrs 落在
          卡片根 div 上（包裹即破坏 Sortable 的「可拖元素 == vnode footprint」不变式）。 -->
-    <BatchContextMenu ref="batchCtxMenu" @recall="onRecall" />
+    <BatchContextMenu ref="batchCtxMenu" :items="ctxMenuItems" @select="onCtxMenuSelect" />
   </div>
 </template>
 
@@ -139,7 +142,8 @@ import { useQueueRecall } from './composables/useQueueRecall';
 import ProcessBoardTab from './components/ProcessBoardTab.vue';
 import PendingBatchesPanel from './components/PendingBatchesPanel.vue';
 import PendingPoolsPanel from './components/PendingPoolsPanel.vue';
-import BatchContextMenu from './components/BatchContextMenu.vue';
+import BatchContextMenu from '@/components/BatchContextMenu.vue';
+import type { BatchContextMenuItem } from '@/components/BatchContextMenu.vue';
 
 const auth = useAuthStore();
 // shelfId **只服务** PoolDrawer 的 WORKER→POOL 撤回目标货架（工人列与工序池都不再
@@ -220,10 +224,17 @@ const { error, moveBatchToWorker, moveBatchToPool, moveBatchBetweenWorkers } = q
  *  类型走 InstanceType<typeof 局部 import 的组件>，菜单 open 的入参类型即由此贯通。 */
 const batchCtxMenu = ref<InstanceType<typeof BatchContextMenu> | null>(null);
 
-/** 菜单项派发 → 召回。菜单本身是 dumb 的（只派发卡片），权限校验 / 二次确认 /
- *  写请求全在 useQueueRecall 内，故这里只有一行转交。 */
-function onRecall(batch: BatchCardModel): void {
-  void recall.recallBatch(batch);
+/** 菜单项 —— **由本组件按权限派生**（共享菜单组件本身不认识任何动作）：
+ *  有召回权限给一项，无权给空数组（组件拿到空数组就不渲染任何菜单）。
+ *  key 与后端动作名同名，便于对账；分发方是下面的 onCtxMenuSelect。 */
+const ctxMenuItems = computed<BatchContextMenuItem[]>(() =>
+  recall.canRecall.value ? [{ key: 'recall', label: '召回到待下发' }] : [],
+);
+
+/** 菜单项派发 → 按 key 分发到对应动作。当前只有召回一项；将来加项时在这里加分支。
+ * 权限校验 / 二次确认 / 写请求全在 useQueueRecall 内，故本函数只有一行转交。 */
+function onCtxMenuSelect(key: string, batch: BatchCardModel): void {
+  if (key === 'recall') void recall.recallBatch(batch);
 }
 
 /** 拖拽悬停的工序 id（null = 未悬停在任何工序卡上）—— 工序卡 `.is-dropping` 高亮的

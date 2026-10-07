@@ -1,48 +1,72 @@
 // 外协公司 (OutsourceCompany) API 封装。
+//
+// 2026-10-08 新增：外协**看板**三件套的读 / 写端点（前缀 `/outsource-queue/*`），
+// 契约类型在 `./outsource.contract.ts`（types only）。分层取舍与
+// `productionQueue.ts` 逐字一致：api 层**不做 Zod 守门** —— 守门 schema 随视图目录走
+// （`views/outsource/composables/outsourceQueueSchema.ts`），api 层 import 它就是
+// api → views 的反向依赖；守门由消费方 composable 在 queryFn / mutationFn 里
+// `xxxSchema.parse(await fetchXxx())` 完成。
+//
+// 2026-10-09：删掉 `listOutsourceSendable`（`GET /outsource-sendable`）与
+// `listOutsourceInFlight`（`GET /outsource-shipments/in-flight`）—— 外协看板
+// （`/outsource-queue/*` 三件套）取代了原「可发送 / 待接收」双表格页，这两个端点只服务
+// 那两个表格页，后端已硬切删除。前端也不留声明：留着的 helper 会让后来人以为还能调。
+//
+// 2026-10-09（第二轮契约收敛，18 端点）：
+//   - 删 `setOutsourceCompanyProcesses`（`POST /{id}/processes`）—— 工序能力清单的整体
+//     替换已吸收进 `POST /{id}/update` 的 `process_ids`（三态可分）；
+//   - 删 `getOutsourceQuote`（`GET /outsource-quotes/{id}`）与 `updateOutsourceQuote`
+//     （`POST /{id}/update`）—— 后端硬切，前端零消费；
+//   - 三条写端点补**必填 body `version`**（公司 `soft-delete`、报价 `submit` 与
+//     `soft-delete`），出参类型 / 入参形状按 VO + DTO 逐字对齐。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
-import {
-  outsourceInFlightListResultSchema,
-  outsourcePoolByProcessResultSchema,
-  outsourcePoolCountsResultSchema,
-  outsourcePoolStateResultSchema,
-  outsourceQuotablePartListResultSchema,
-  outsourceSendableListResultSchema,
-  outsourceSentPartListResultSchema,
-} from '@/composables/queries/schemas';
 import type {
-  OutsourceCompany,
+  OutsourceMoveRequestDto,
+  OutsourceMoveResultDto,
+  OutsourceQueueProcessDetailDto,
+  OutsourceQueueSnapshotDto,
+} from './outsource.contract';
+import { outsourceQuotablePartListResultSchema } from '@/composables/queries/schemas';
+import type {
   OutsourceCompanyCreatePayload,
   OutsourceCompanyListResult,
+  OutsourceCompanyOption,
+  OutsourceCompanySoftDeletePayload,
   OutsourceCompanyUpdatePayload,
   OutsourceCompanyWithProcesses,
-  OutsourceInFlightListResult,
-  OutsourcePoolCountsResult,
-  OutsourcePoolDetailResult,
-  OutsourcePoolStateResult,
   OutsourceQuote,
   OutsourceQuoteApprovePayload,
   OutsourceQuoteCreatePayload,
   OutsourceQuoteListResult,
   OutsourceQuoteRejectPayload,
+  OutsourceQuoteSoftDeletePayload,
   OutsourceQuoteStatus,
-  OutsourceQuoteUpdatePayload,
+  OutsourceQuoteSubmitPayload,
   OutsourceReconciliationUpdatePayload,
-  OutsourceSendableListResult,
   OutsourceSentPartListResult,
   OutsourceSentPartSortKey,
   QuotablePartListResult,
-  SetOutsourceCompanyProcessesPayload,
 } from '@/types/outsource';
 import type { SortDir } from '@/types/parts';
 
+/** GET /api/v2/outsource-companies —— 外协公司一览（分页信封）。
+ *
+ *  出参是 `OutsourceCompanyListOut`：**7 字段**的公司行（无 `created_at` / `updated_at`，
+ *  2026-10-09 删 —— 两列零消费方却是纯粹的缓存抖动）+ 分页信封四字段。
+ *  业务错：40001（入参形状）/ 40103（未登录）/ 40300（角色无权，HTTP 403）。 */
+/** `GET /outsource-companies` 的入参形态（后端 `OutsourceCompanyListQuery`，4 字段）。
+ *  导出供 `composables/queries/keys.ts` 的键工厂与 query hook 复用（api 层是 wire
+ *  契约的唯一定义处，沿 `ListShelvesParams` 等既有做法）。 */
+export interface ListOutsourceCompaniesParams {
+  name_like?: string;
+  is_active?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
 export async function listOutsourceCompanies(
-  params: {
-    name_like?: string;
-    is_active?: boolean;
-    limit?: number;
-    offset?: number;
-  } = {},
+  params: ListOutsourceCompaniesParams = {},
 ): Promise<OutsourceCompanyListResult> {
   const resp = await api.get<OutsourceCompanyListResult>('/outsource-companies', {
     params: cleanParams(params),
@@ -53,6 +77,13 @@ export async function listOutsourceCompanies(
   return normalizeListResult(resp.data);
 }
 
+/** GET /api/v2/outsource-companies/{id} —— 公司详情 + 工序能力清单（编辑对话框用）。
+ *
+ *  出参 `OutsourceCompanyWithProcessesOut`：**8 字段**（公司 7 项 + `processes[]`）。
+ *  `processes[]` 每项 **3 字段**（`process_id` / `process_code` / `process_name`）——
+ *  `category` / `sort_order` 已于 2026-10-09 删（前者与勾选框候选集恒等；后者只被
+ *  写侧赋值与看板 SQL 的 ORDER BY 读，从不经本 VO）。
+ *  业务错：21201（公司不存在或已软删）。 */
 export async function getOutsourceCompany(id: string): Promise<OutsourceCompanyWithProcesses> {
   const resp = await api.get<OutsourceCompanyWithProcesses>(
     `/outsource-companies/${encodeURIComponent(id)}`,
@@ -60,21 +91,39 @@ export async function getOutsourceCompany(id: string): Promise<OutsourceCompanyW
   return resp.data;
 }
 
-/** 按工序反查能做此 OUTSOURCE 工序的活跃公司（发送外协对话框用） */
-export async function listCompaniesByProcess(processId: string): Promise<OutsourceCompany[]> {
-  const resp = await api.get<OutsourceCompany[]>(
+/** GET /api/v2/outsource-companies/by-process/{process_id} —— 按工序反查能做此
+ *  OUTSOURCE 工序的活跃公司（新建报价对话框的公司下拉）。
+ *
+ *  2026-10-09 契约对齐：出参从 `OutsourceCompanyOut[]` 收成窄 VO
+ *  `OutsourceCompanyOptionOut { id, name }[]`（**裸数组，非分页信封**）—— service 层已在
+ *  Rust 里滤掉停用公司，能出现在本列表里的行恒为启用，再返 `is_active` 等于把「已被后端
+ *  消掉的事实」重新交给前端判断。
+ *  业务错：40001（`process_id` 非整数）/ 40103（未登录）。 */
+export async function listCompaniesByProcess(processId: string): Promise<OutsourceCompanyOption[]> {
+  const resp = await api.get<OutsourceCompanyOption[]>(
     `/outsource-companies/by-process/${encodeURIComponent(processId)}`,
   );
   return resp.data;
 }
 
-export async function createOutsourceCompany(
-  payload: OutsourceCompanyCreatePayload,
-): Promise<OutsourceCompanyWithProcesses> {
-  const resp = await api.post<OutsourceCompanyWithProcesses>('/outsource-companies', payload);
-  return resp.data;
+/** POST /api/v2/outsource-companies → 201 —— 新建外协公司（可一并写工序能力清单）。
+ *
+ *  2026-10-09 契约对齐：出参改 `R<()>`（`data: null`），前端建完一律重拉列表 ——
+ *  返整份详情（含工序映射 + 工序元数据）多一次往返，而消费方一个字段都不用。
+ *  业务错：40001（`name` 空白）/ 21202 或 21214（公司名重名）/ 21203（`process_ids` 里的
+ *  工序不存在或不是 OUTSOURCE / INHOUSE 类别）/ 40300（角色无权）。 */
+export async function createOutsourceCompany(payload: OutsourceCompanyCreatePayload): Promise<void> {
+  await api.post('/outsource-companies', payload);
 }
 
+/** POST /api/v2/outsource-companies/{id}/update —— 改基础字段 + 整体替换工序能力清单。
+ *
+ *  ⚠️ **`version` 必填**（OCC 锚）：缺省是 axum 的 HTTP 422 **纯文本**
+ *  （serde 无 `#[serde(default)]`），不是业务信封 —— 漏传会让编辑功能 100% 失败。
+ *  `process_ids` 三态：缺省 / `null` = 不动、`[]` = 清空、`[a,b]` = 整体替换
+ *  （同轮硬切删除的 `POST /{id}/processes` 已吸收进本端点）。
+ *  业务错：21201（公司不存在）/ 40901（OCC 冲突，HTTP 409）/ 40001（`name` 空白）/
+ *  21202 或 21214（重名）/ 21203（`process_ids` 含非法工序）。 */
 export async function updateOutsourceCompany(
   id: string,
   payload: OutsourceCompanyUpdatePayload,
@@ -86,37 +135,56 @@ export async function updateOutsourceCompany(
   return resp.data;
 }
 
-export async function softDeleteOutsourceCompany(id: string): Promise<void> {
-  await api.post(`/outsource-companies/${encodeURIComponent(id)}/soft-delete`);
-}
-
-export async function setOutsourceCompanyProcesses(
+/** POST /api/v2/outsource-companies/{id}/soft-delete —— 软删公司。
+ *
+ *  2026-10-09 契约对齐：入参**新增必填** `{ version }`（此前无 body，service 自读
+ *  version 守乐观锁形同虚设）。守卫顺序为**先 OCC（40901）后工序映射（21205）**。
+ *  业务错：21201（公司不存在）/ 40901（OCC 冲突，HTTP 409）/ 21205（仍映射 N 项工序）。 */
+export async function softDeleteOutsourceCompany(
   id: string,
-  payload: SetOutsourceCompanyProcessesPayload,
-): Promise<OutsourceCompanyWithProcesses> {
-  const resp = await api.post<OutsourceCompanyWithProcesses>(
-    `/outsource-companies/${encodeURIComponent(id)}/processes`,
-    payload,
-  );
-  return resp.data;
+  payload: OutsourceCompanySoftDeletePayload,
+): Promise<void> {
+  await api.post(`/outsource-companies/${encodeURIComponent(id)}/soft-delete`, payload);
 }
 // ============================================================
 // 外协报价 (OutsourceQuote) API — 2026-07-16 新增
 // ============================================================
 
+/** GET /api/v2/outsource-quotes —— 报价一览（分页信封）。
+ *
+ *  2026-10-09 契约对齐：
+ *  - **删** `keyword`（改 `drawing_no` / `name` 两个直连 ILIKE 字段）：旧 `keyword`
+ *    走预搜索再用 `part_id = ANY($N)` 回筛，预搜索带 `LIMIT 10000` 且无 `ORDER BY`
+ *    ⇒ 触顶时静默返回非确定性子集、`total` 偏小；
+ *  - **加** `statuses`（**逗号分隔单值**，axum 的 `Query` 走 `serde_urlencoded`，其 `Part`
+ *    反序列化器不支持序列，`Vec<String>` 字段只能收 CSV 形态。`src/api/http.ts` 的
+ *    `ARRAY_AS_CSV_KEYS` 已含 `'statuses'`，调用点直接传数组即可）。⚠️ 2026-10-09 起后端
+ *    才真正接上这条筛选（此前 DTO 少字段 + service 恒传 `&[]`，前端发的 `statuses[]` 被
+ *    serde 静默忽略 ⇒ 状态筛选恒不生效，连角色默认筛选也没生效）；
+ *  - **加** `drawing_no` / `name` / `is_urgent`。
+ *
+ *  业务错：40001（`sort_by` / `sort_dir` 非法时回落默认值，不报错）/ 40103（未登录）。 */
+/** `GET /outsource-quotes` 的入参形态（后端 `OutsourceQuoteListQuery`）。
+ *  导出供键工厂与 query hook 复用。 */
+export interface ListOutsourceQuotesParams {
+  status?: OutsourceQuoteStatus;
+  statuses?: OutsourceQuoteStatus[];
+  part_id?: string;
+  outsource_company_id?: string;
+  customer_id?: string;
+  /** `t_part.drawing_no` ILIKE 子串。 */
+  drawing_no?: string;
+  /** `t_part.name` ILIKE 子串。 */
+  name?: string;
+  is_urgent?: boolean;
+  sort_by?: 'CREATED_AT' | 'PRICE' | 'REVIEWED_AT';
+  sort_dir?: 'ASC' | 'DESC';
+  limit?: number;
+  offset?: number;
+}
+
 export async function listOutsourceQuotes(
-  params: {
-    status?: OutsourceQuoteStatus;
-    statuses?: OutsourceQuoteStatus[];
-    part_id?: string;
-    outsource_company_id?: string;
-    customer_id?: string;
-    keyword?: string;
-    sort_by?: 'CREATED_AT' | 'PRICE' | 'REVIEWED_AT';
-    sort_dir?: 'ASC' | 'DESC';
-    limit?: number;
-    offset?: number;
-  } = {},
+  params: ListOutsourceQuotesParams = {},
 ): Promise<OutsourceQuoteListResult> {
   const resp = await api.get<OutsourceQuoteListResult>('/outsource-quotes', {
     params: cleanParams(params),
@@ -127,11 +195,6 @@ export async function listOutsourceQuotes(
   return normalizeListResult(resp.data);
 }
 
-export async function getOutsourceQuote(id: string): Promise<OutsourceQuote> {
-  const resp = await api.get<OutsourceQuote>(`/outsource-quotes/${encodeURIComponent(id)}`);
-  return resp.data;
-}
-
 export async function createOutsourceQuote(
   payload: OutsourceQuoteCreatePayload,
 ): Promise<OutsourceQuote> {
@@ -139,22 +202,24 @@ export async function createOutsourceQuote(
   return resp.data;
 }
 
-export async function updateOutsourceQuote(
+/** POST /api/v2/outsource-quotes/{id}/submit —— DRAFT → SUBMITTED。
+ *
+ *  2026-10-09 契约对齐：入参**新增必填** `{ version }`（此前无 body，service 自读 version
+ *  守乐观锁，形同虚设）；缺 version 是 axum 的 HTTP 422 **纯文本**，不是业务信封。
+ *  业务错：21301（报价不存在）/ 21302（当前状态不允许提交）/ 40901（OCC 冲突，HTTP 409）。 */
+export async function submitOutsourceQuote(
   id: string,
-  payload: OutsourceQuoteUpdatePayload,
+  payload: OutsourceQuoteSubmitPayload,
 ): Promise<OutsourceQuote> {
   const resp = await api.post<OutsourceQuote>(
-    `/outsource-quotes/${encodeURIComponent(id)}/update`,
+    `/outsource-quotes/${encodeURIComponent(id)}/submit`,
     payload,
   );
   return resp.data;
 }
 
-export async function submitOutsourceQuote(id: string): Promise<OutsourceQuote> {
-  const resp = await api.post<OutsourceQuote>(`/outsource-quotes/${encodeURIComponent(id)}/submit`);
-  return resp.data;
-}
-
+/** POST /api/v2/outsource-quotes/{id}/approve —— SUBMITTED → APPROVED（MANAGER-only）。
+ *  业务错：21301 / 21302（状态不允许）/ 40901（OCC 冲突）/ 40300（非 MANAGER）。 */
 export async function approveOutsourceQuote(
   id: string,
   payload: OutsourceQuoteApprovePayload,
@@ -166,6 +231,8 @@ export async function approveOutsourceQuote(
   return resp.data;
 }
 
+/** POST /api/v2/outsource-quotes/{id}/reject —— SUBMITTED → REJECTED（MANAGER-only，
+ *  `review_note` 必填）。业务错：21301 / 21302 / 40901 / 40001（`review_note` 空白）/ 40300。 */
 export async function rejectOutsourceQuote(
   id: string,
   payload: OutsourceQuoteRejectPayload,
@@ -177,8 +244,15 @@ export async function rejectOutsourceQuote(
   return resp.data;
 }
 
-export async function softDeleteOutsourceQuote(id: string): Promise<void> {
-  await api.post(`/outsource-quotes/${encodeURIComponent(id)}/soft-delete`);
+/** POST /api/v2/outsource-quotes/{id}/soft-delete —— 软删报价。
+ *
+ *  2026-10-09 契约对齐：入参**新增必填** `{ version }`（理由同 submit）。
+ *  业务错：21301（报价不存在）/ 21302（非 DRAFT 不可删）/ 40901（OCC 冲突）。 */
+export async function softDeleteOutsourceQuote(
+  id: string,
+  payload: OutsourceQuoteSoftDeletePayload,
+): Promise<void> {
+  await api.post(`/outsource-quotes/${encodeURIComponent(id)}/soft-delete`, payload);
 }
 
 /**
@@ -207,28 +281,54 @@ export async function listQuotableParts(
 /**
  * 外协对账一览：列出发送给某外协公司的所有零件 + 当前状态。
  * 用于与外协公司发来的对账单核对。
+ *
+ * GET /api/v2/outsource-companies/{id}/sent-parts。**2026-10-09 契约对齐**：
+ *   - 信封**加** `outsource_company_id` / `outsource_company_name`：页头公司名改读这里，
+ *     不必再单独发一次 `GET /outsource-companies/{id}`；
+ *   - 行 18 → **16 字段**（删 `quote_id` / `part_id`）；
+ *   - 入参**删** `keyword`、**加** `drawing_no` / `name` / `customer_id` / `process_id` /
+ *     `is_billed`。⚠️ `customer_id` 语义与报价一览的**不同**：本端点只判零件直属
+ *     `t_part.customer_id` 等值（筛「这家外协厂供过哪个客户的货」），报价端点在 service
+ *     层展开成「自身 ∪ 直接子客户」的客户子树。
+ *
+ * 业务错：40001（入参形状）/ 40103（未登录）。⚠️ **端点不因公司缺失而 404** —— 公司不存在 /
+ * 软删时返回 `outsource_company_name: null` + 空行集（口径对齐 prod::queue 的
+ * `held_count` 容错风格），页头要能显示「未知公司」。
  */
+/** `GET /outsource-companies/{id}/sent-parts` 的筛选入参形态（后端
+ *  `OutsourceSentPartListQuery`）。公司 id 走路径参数、不在此对象里。
+ *  导出供键工厂与 query hook 复用。 */
+export interface ListOutsourceSentPartsParams {
+  /** `t_part.drawing_no` ILIKE 子串。 */
+  drawing_no?: string;
+  /** `t_part.name` ILIKE 子串。 */
+  name?: string;
+  /** 零件**直属**客户雪花 ID 字符串（等值，不是客户子树）。 */
+  customer_id?: string;
+  /** `t_outsource_shipment.process_id` 等值。 */
+  process_id?: string;
+  /** 已开票 / 未开票分账用。 */
+  is_billed?: boolean;
+  sent_from?: string; // ISO datetime，闭区间下界（含）
+  sent_to?: string; // ISO datetime，闭区间上界（含）
+  received_from?: string; // ISO datetime，闭区间下界（含）
+  received_to?: string; // ISO datetime，闭区间上界（含）
+  sort_by?: OutsourceSentPartSortKey;
+  sort_dir?: SortDir;
+  limit?: number;
+  offset?: number;
+}
+
 export async function listCompanySentParts(
   companyId: string,
-  params: {
-    keyword?: string;
-    sent_from?: string; // ISO datetime
-    sent_to?: string; // ISO datetime
-    received_from?: string; // ISO datetime
-    received_to?: string; // ISO datetime
-    sort_by?: OutsourceSentPartSortKey;
-    sort_dir?: SortDir;
-    limit?: number;
-    offset?: number;
-  } = {},
+  params: ListOutsourceSentPartsParams = {},
 ): Promise<OutsourceSentPartListResult> {
   const resp = await api.get<unknown>(
     `/outsource-companies/${encodeURIComponent(companyId)}/sent-parts`,
     { params: cleanParams(params) },
   );
-  // 2026-10-03 修正：Zod 守门（此前无守门 ⇒ 路由漏注册返 404 时列表静默空白）。
-  return outsourceSentPartListResultSchema.parse(
-    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
+  return normalizeListResult(
+    resp.data as Parameters<typeof normalizeListResult>[0],
   ) as OutsourceSentPartListResult;
 }
 
@@ -246,120 +346,48 @@ export async function reconcileUpdateShipment(
   );
 }
 
-/**
- * 外协中批次列表（「待接收」tab 数据源）。
- * GET /outsource-shipments/in-flight
- *
- * 2026-10-03 契约对齐：URL 从 `/parts/outsource-in-flight` 迁到 outsource 域
- * （旧路径返的是通用零件列表 `PartListItem`，与本 VO 不同构）；出参从裸数组改为
- * 分页信封 `OutsourceInFlightListOut`。
- */
-export async function listOutsourceInFlight(
-  params: {
-    keyword?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
-): Promise<OutsourceInFlightListResult> {
-  const resp = await api.get<unknown>('/outsource-shipments/in-flight', {
-    params: cleanParams(params),
-  });
-  // 2026-10-03 修正：Zod 守门 + 形态对齐（此前按数组消费信封 ⇒ items.length
-  // undefined ⇒ 「待接收」tab 表格空白且分页失效）。
-  return outsourceInFlightListResultSchema.parse(
-    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
-  ) as OutsourceInFlightListResult;
-}
-
-/**
- * 统一外协可发送一览（「可发送」tab 数据源）：合并 APPROVAL（工序需审批 + 已有
- * 已审批报价）与 DIRECT（工序免审批）两类候选，每行带 send_mode + source_status。
- * GET /outsource-sendable
- *
- * 2026-10-03：URL 是 outsource 域顶层的 `/outsource-sendable`，函数落在本文件
- * （该列表与批次 lifecycle 写端点不同域：读侧是外协域，写的 `send-to-outsource`
- * 才是 prod/batches 域）。出参是分页信封。
- * 工序归属字段是 `current_process_id` / `current_process_name`，判据取
- * `t_part_batch.current_process_id`（兼容没制定过工序链的旧零件）。
- */
-export async function listOutsourceSendable(
-  params: {
-    keyword?: string;
-    customer_id?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
-): Promise<OutsourceSendableListResult> {
-  const resp = await api.get<unknown>('/outsource-sendable', {
-    params: cleanParams(params),
-  });
-  // 2026-10-03 修正：Zod 守门（此前无守门 ⇒ 旧 URL 返的通用零件列表被直接喂给
-  // 「可发送」表格，列全空且不报错）。
-  return outsourceSendableListResultSchema.parse(
-    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
-  ) as OutsourceSendableListResult;
-}
-
 // ============================================================
-// 外协看板 pool 域（2026-10-03 新增）
-//
-// 3 个只读端点，供「外协发送/接收」看板按「工序 tab × 左侧可发送候选批次 × 右侧
-// 外协公司列」消费。与上面 4 个 list helper 的两点差异：
-//   1. 响应是**裸对象**（无分页信封、无 limit/offset）⇒ 不走 `normalizeListResult`
-//      （它只重整 items/total/limit/offset 四键，对裸对象无意义）；count 字段本就是
-//      裸 i64 数字，与雪花 ID 的字符串方向相反。
-//   2. 守门在 API 边界做**第一层**，调用方的 queryFn 还会再 parse 一次（第二层）。
-//      本层是沿本文件另外 4 个 list helper 的既有做法在边界挡一次漂移（那 4 个的
-//      消费方是页面级 composable、queryFn 里不再 parse）；queryFn 那次是 CLAUDE.md §4
-//      对共享 useQuery 的硬要求（worker-pool 三个 query 同款）。本域 3 个 helper 目前
-//      **只被 `useOutsourcePool*Query` 消费**，故两层在运行路径上实际重叠。
-//
-// ⚠️ 本段 3 个 helper 的 `schema.parse(...) as XxxResult` 里的 `as` 是**已知不提供
-// schema↔类型一致性保证**的（`as` 允许向更宽方向断言：TS 接口若比 schema 更宽松、
-// 如某字段被写成 `| null`，编译器不会报错）。行 schema 与顶层 result schema 两侧的键集
-// 一致性都由 `src/composables/queries/__tests__/schemas.spec.ts` 的 outsource-pool 段
-// 「parse 后键集 == fixture 键集」断言兜住（4 个行 schema + 3 个顶层 result schema 各
-// 一组）—— 漏声明 / 多声明带默认值都会让那组用例会红。
+// 外协看板 (OutsourceQueue) — 2026-10-08 新增
+// 端点前缀 `/outsource-queue/*`（**无 alias**），读写合一的三件套。
+// 角色：读 Manager + Clerk + Inspector；move `require_any_role([Manager, Clerk,
+// Inspector])`（前端闸门见 views/outsource/composables/useOutsourceQueueMove.ts）。
 // ============================================================
 
-/**
- * 各外协工序的「可发送 / 在途」计数（看板 tab 标题徽标的唯一数据源）。
- * GET /outsource-pool/counts
- *
- * 响应裸对象：counts[]（只含 sendable_count + in_flight_count > 0 的工序，按
- * process_id 升序）+ sendable_total + in_flight_total + total。
- */
-export async function listOutsourcePoolCounts(): Promise<OutsourcePoolCountsResult> {
-  const resp = await api.get<unknown>('/outsource-pool/counts');
-  return outsourcePoolCountsResultSchema.parse(resp.data) as OutsourcePoolCountsResult;
+/** GET /api/v2/outsource-queue/snapshot —— 外协看板 tab 标题双徽标（可发 / 在途）的
+ *  唯一数据源。裸对象（**无分页信封、无 `total` 字段**）。
+ *  `processes[]` 只含 `sendable_count + in_flight_count > 0` 的工序 ⇒ tab 集合必须与
+ *  全量 OUTSOURCE 工序列表 join，否则某工序收发清零时该 tab 会凭空消失。
+ *  业务错：40300（角色无权，HTTP 403）。 */
+export async function fetchOutsourceQueueSnapshot(): Promise<OutsourceQueueSnapshotDto> {
+  const resp = await api.get<OutsourceQueueSnapshotDto>('/outsource-queue/snapshot');
+  return resp.data;
 }
 
-/**
- * 单工序的完整看板数据：可发送候选批次 × 该工序，外加该工序映射的**全部活跃**
- * 外协公司（含在途为 0 的）。
- * GET /outsource-pool/{process_id}
- */
-export async function listOutsourcePoolByProcess(
+/** GET /api/v2/outsource-queue/processes/{process_id} —— 单工序看板的全部内容。
+ *  左列候选卡 `items[]` + 右列公司 `companies[]`（`companies[].held_batches` 已内联，
+ *  **零 N+1**）。**不分页，一次全量**；`companies[]` 含 `held_count === 0` 的空公司
+ *  （合法拖拽落点，不能被前端过滤掉）。
+ *  业务错：20801（工序不存在）。 */
+export async function fetchOutsourceQueueProcess(
   processId: string,
-): Promise<OutsourcePoolDetailResult> {
-  const resp = await api.get<unknown>(`/outsource-pool/${encodeURIComponent(processId)}`);
-  return outsourcePoolByProcessResultSchema.parse(resp.data) as OutsourcePoolDetailResult;
+): Promise<OutsourceQueueProcessDetailDto> {
+  const resp = await api.get<OutsourceQueueProcessDetailDto>(
+    `/outsource-queue/processes/${encodeURIComponent(processId)}`,
+  );
+  return resp.data;
 }
 
-/**
- * 单公司 × 单工序的在途批次（看板右侧公司列的展开内容）。
- * GET /outsource-pool/state?outsource_company_id=&process_id=
- *
- * 两个 query 参数**都必填** —— 缺任一个后端即拒。守门侧由
- * `useOutsourcePoolStateQuery` 的 enabled 闸门挡（不满足时零网络请求），本 helper
- * 仍是纯透传、不兜默认值。
- */
-export async function listOutsourcePoolState(params: {
-  outsource_company_id: string;
-  process_id: string;
-}): Promise<OutsourcePoolStateResult> {
-  const resp = await api.get<unknown>('/outsource-pool/state', {
-    params: cleanParams(params),
-  });
-  return outsourcePoolStateResultSchema.parse(resp.data) as OutsourcePoolStateResult;
+/** POST /api/v2/outsource-queue/move —— 外协收发合一移动（发送 / 回收生产 / 回收品检）。
+ *  收发合一的理由：`t_part_batch` 的 `location` / `current_holder_id` / `version` 三列
+ *  在三个方向上是同一组列，拆成三个端点只会让同一份事务边界写三遍。
+ *  ❌ 缺 `version` 时后端返 HTTP 422 **纯文本**（serde 无 `#[serde(default)]`），不是
+ *  业务信封 —— 调用方必须自己保证 version 非空。
+ *  业务错：20104（报价路径 `quote_id` / `direct` 都不传或同时传）/ 20121（批次不存在）/
+ *  20706（工序链推不出下一道工序且未指定）/ 40901（OCC 冲突，HTTP 409）/
+ *  40300（角色无权，HTTP 403）。 */
+export async function moveOutsourceBatch(
+  payload: OutsourceMoveRequestDto,
+): Promise<OutsourceMoveResultDto> {
+  const resp = await api.post<OutsourceMoveResultDto>('/outsource-queue/move', payload);
+  return resp.data;
 }

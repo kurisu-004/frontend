@@ -5,6 +5,9 @@
 //   - 提供 3 个 move 包装（POOL→WORKER / WORKER→POOL / WORKER→WORKER），全部
 //     收口同一个 `moveMutation`，视图层（PoolDrawer / WorkerColumn）只 inject 这三个
 //     函数、不直接 import 本文件；
+//   - 三个包装的入参都带 `version`（源批次 `t_part_batch.version`，取自卡片 model，
+//     经卡片 `:data-batch-version` → DOM dataset 传递）：move 改的是 current_holder_id
+//     / location 属并发敏感写，后端必填 OCC 锚，缺失时返 HTTP 422 纯文本；
 //   - mutationFn 走 `moveResultSchema.parse()` 守门；
 //   - 写后集中失效「工序看板前缀 + 快照前缀」两个域。
 //
@@ -42,18 +45,32 @@ export interface UseQueueMoveReturn {
   error: Ref<string | null>;
   /** POOL → WORKER：把候选池批次分配给工人。
    *  @param batchId      待移动批次
+   *  @param version      OCC 锚（`t_part_batch.version`，取自卡片 model）。后端必填，
+   *                     缺失 / 非有限数一律早退（见包装内的守卫）
    *  @param toWorkerId   目标工人
    *  @param fromShelfId  **批次真实所在货架**（不是当前激活货架 —— 候选池跨所有
    *                     货架，填错后端返 20122 BIZ_BATCH_LOCATION_MISMATCH）*/
-  moveBatchToWorker: (batchId: string, toWorkerId: string, fromShelfId: string) => Promise<boolean>;
+  moveBatchToWorker: (
+    batchId: string,
+    version: number,
+    toWorkerId: string,
+    fromShelfId: string,
+  ) => Promise<boolean>;
   /** WORKER → POOL：把工人持有的批次撤回候选池货架。
+   *  @param version    OCC 锚（同上，后端必填）
    *  @param toShelfId 目标货架（须映射到批次当前工序，否则 20507 / HTTP 422） */
-  moveBatchToPool: (batchId: string, fromWorkerId: string, toShelfId: string) => Promise<boolean>;
+  moveBatchToPool: (
+    batchId: string,
+    version: number,
+    fromWorkerId: string,
+    toShelfId: string,
+  ) => Promise<boolean>;
   /** WORKER → WORKER：把一名工人手中的批次转交给另一名。落点列的 onDragAdd 在
    *  「拿不到候选池源」时走这条路径（从自己那一列拖回自己不构成移动，由调用方早退，
    *  故本函数不校验 from ≠ to）。 */
   moveBatchBetweenWorkers: (
     batchId: string,
+    version: number,
     fromWorkerId: string,
     toWorkerId: string,
   ) => Promise<boolean>;
@@ -150,14 +167,34 @@ export function useQueueMove(): UseQueueMoveReturn {
       : '已撤回批次至候选池';
   }
 
+  /** version 守卫（三个 move 包装共用）。
+   *
+   *  `POST /queue/move` 的 `version` 是必填的 OCC 锚（后端 serde 无
+   *  `#[serde(default)]` ⇒ 缺字段返 HTTP 422 **纯文本**，不是业务信封，错误文案对用户
+   *  毫无意义），所以宁可不发请求也不能发一个注定被拒的 move。
+   *
+   *  判据是 `typeof !== 'number' || !Number.isFinite(...)` 两条而不是只看 typeof：
+   *  调用侧从卡片 dataset 读 version（`Number.parseInt(dataset.x ?? '', 10)`），
+   *  dataset 缺失时得到的是 **NaN** —— 它 `typeof` 是 `number`，只查 typeof 会让它
+   *  穿过守卫，发出去的 `version: null` 又变回同一个 422。 */
+  async function guardVersion(version: number): Promise<boolean> {
+    if (typeof version === 'number' && Number.isFinite(version)) return true;
+    ElMessage.warning('批次版本信息缺失，无法移动');
+    await reconcileAfterEarlyReturn();
+    return false;
+  }
+
   /** POOL → WORKER 包装 —— 保留 Promise<boolean> 签名以兼容 WorkerColumn.onDragAdd
-   *  调用点。`from.shelf_id` 必填（空串直接早退，避免发出必被后端 20122 拒的请求）。
-   *  早退也走一次失效对账，且包 try/catch 防止未捕获 rejection。 */
+   *  调用点。`from.shelf_id` 必填（空串直接早退，避免发出必被后端 20122 拒的请求），
+   * `version` 同样必填（见 guardVersion）。两条早退都走一次失效对账，且包 try/catch
+   * 防止未捕获 rejection。 */
   async function moveBatchToWorker(
     batchId: string,
+    version: number,
     toWorkerId: string,
     fromShelfId: string,
   ): Promise<boolean> {
+    if (!(await guardVersion(version))) return false;
     if (!fromShelfId) {
       ElMessage.warning('批次货架信息缺失，无法分配');
       await reconcileAfterEarlyReturn();
@@ -166,6 +203,7 @@ export function useQueueMove(): UseQueueMoveReturn {
     try {
       await moveMutation.mutateAsync({
         batch_id: batchId,
+        version,
         from: { kind: 'POOL', shelf_id: fromShelfId },
         to: { kind: 'WORKER', worker_id: toWorkerId },
       });
@@ -188,9 +226,11 @@ export function useQueueMove(): UseQueueMoveReturn {
    *  或 `/shelves/for-return?next_process_id=` picker。 */
   async function moveBatchToPool(
     batchId: string,
+    version: number,
     fromWorkerId: string,
     toShelfId: string,
   ): Promise<boolean> {
+    if (!(await guardVersion(version))) return false;
     if (!toShelfId) {
       ElMessage.warning('请先选择目标货架');
       await reconcileAfterEarlyReturn();
@@ -199,6 +239,7 @@ export function useQueueMove(): UseQueueMoveReturn {
     try {
       await moveMutation.mutateAsync({
         batch_id: batchId,
+        version,
         from: { kind: 'WORKER', worker_id: fromWorkerId },
         to: { kind: 'POOL', shelf_id: toShelfId },
       });
@@ -215,12 +256,15 @@ export function useQueueMove(): UseQueueMoveReturn {
    *  不校验 from ≠ to —— 拖回自己那一列不构成一次移动，由调用方早退。 */
   async function moveBatchBetweenWorkers(
     batchId: string,
+    version: number,
     fromWorkerId: string,
     toWorkerId: string,
   ): Promise<boolean> {
+    if (!(await guardVersion(version))) return false;
     try {
       await moveMutation.mutateAsync({
         batch_id: batchId,
+        version,
         from: { kind: 'WORKER', worker_id: fromWorkerId },
         to: { kind: 'WORKER', worker_id: toWorkerId },
       });

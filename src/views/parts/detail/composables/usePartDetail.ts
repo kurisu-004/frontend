@@ -31,7 +31,6 @@ import {
   listPartBatches,
   listPartEvents,
   softDeletePart,
-  splitPartBatch,
   toProcess,
   toShip,
   updatePart,
@@ -41,6 +40,8 @@ import {
   type PartUpdatePayload,
 } from '@/api/parts';
 import { enrichAssemblyItem, getAssemblyForPart } from '@/api/assembly';
+import { splitBatch } from '@/api/batch';
+import type { BatchSplitDto } from '@/api/batch.contract';
 import type { AssemblyDetail } from '@/types/assembly';
 import { receiveFromOutsource } from '@/api/parts';
 import { usePermissions } from '@/composables/usePermissions';
@@ -130,7 +131,10 @@ export interface UsePartDetailReturn {
     shelfId: string;
     processId: string;
   }) => Promise<boolean>;
-  onSplitBatch: (batch: PartBatch, quantity: number) => Promise<PartBatch[] | null>;
+  /** 拆批。返回拆分结果（源批次余量 + 新批次 id）供调用方判成败；行数据靠调用方随后的
+   *  `fetchBatches` 重拉，不在这里回显。 */
+  onSplitBatch: (batch: PartBatch, quantity: number) => Promise<BatchSplitDto | null>;
+
   onCancelBatch: (batch: PartBatch) => Promise<PartBatch[] | null>;
   statusLabel: (s: OrderStatus) => string;
   statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
@@ -489,18 +493,21 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     }
   }
 
-  async function onSplitBatch(batch: PartBatch, quantity: number): Promise<PartBatch[] | null> {
+  async function onSplitBatch(batch: PartBatch, quantity: number): Promise<BatchSplitDto | null> {
     try {
-      // 2026-10-02：批次锚定 `POST /prod/batches/{batch_id}/split`；
-      // version 取被拆批次的 t_part_batch.version（OCC 必填）。
-      const newBatches = await splitPartBatch(batch.id, {
+      // 2026-10-08：拆批搬到共用层 `POST /api/v2/batches/split`（`batch_id` 走 body，
+      // 不是路径参数）；version 取被拆批次的 t_part_batch.version（OCC 必填，缺了后端
+      // 返 HTTP 422 纯文本而非业务信封）。出参是拆分结果对象（源批次余量 + 新批次 id），
+      // 不是批次数组 —— 调用方只判成败，行数据由随后的 fetchBatches 重拉。
+      const result = await splitBatch({
+        batch_id: batch.id,
         quantity,
         version: batch.version,
       });
       ElMessage.success('拆分成功');
       await fetchPart();
       void fetchEvents();
-      return newBatches;
+      return result;
     } catch (e) {
       ElMessage.error(`拆分失败：${(e as Error).message}`);
       return null;

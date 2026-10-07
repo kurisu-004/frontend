@@ -31,6 +31,13 @@ import type { ListShelvesParams } from '@/api/shelves';
 // 2026-10-02：工种列表入参形态在 api/workType.ts 定义（api 层是 wire 契约的唯一定义
 // 处，沿 ListShelvesParams 等既有做法），本文件只引用。
 import type { WorkTypeListParams } from '@/api/workType';
+// 2026-10-09：外协三页的列表入参形态同样在 api/outsource.ts 定义（api 层是 wire 契约的
+// 唯一定义处），本文件只引用类型。
+import type {
+  ListOutsourceCompaniesParams,
+  ListOutsourceQuotesParams,
+  ListOutsourceSentPartsParams,
+} from '@/api/outsource';
 import type { ProcessCategory } from '@/types/process';
 import type { OrderStatus } from '@/types/parts';
 import type { DeliveryBasis } from '@/types/dashboard';
@@ -49,6 +56,15 @@ export interface ProcessListParams {
  *  保留独立命名以对齐 ListPartsParams 风格，方便未来分叉为「全量列表 vs 下拉选项」
  *  两套入参（例如管理页加 sort_by / 筛选条件，下拉保持 limit:200 简单契约）。 */
 export type ListProcessesParams = ProcessListParams;
+
+/** 2026-10-09：`qk.outsourceSentParts` 的入参 —— companyId 与 filters 分开，
+ *  因为 companyId 是**端点的路径分段**（端点按公司分片返回），必须单独占一个键位，
+ *  不能混在会被 hash 的 params 对象里（否则切公司时对比不出「换了公司」，只能靠整个
+ *  params 对象不相等来判断，而 params 里其它字段恰好相同时会误命中旧公司的缓存）。 */
+export interface ListOutsourceSentPartsKeyParams {
+  companyId: string;
+  filters: ListOutsourceSentPartsParams;
+}
 
 export const qk = {
   customersList: ['customers', 'list'] as const,
@@ -203,7 +219,7 @@ export const qk = {
   //
   // 根命名空间取 `production-queue`，与后端 URL 段 `/prod/queue/*` 与视图目录
   // `views/production/queue/` 对齐，便于按 URL 反查键。**不**挂到 `parts` 前缀下
-  // —— 理由沿本文件 inspection / outsource-pool 两段的取舍：本域的三个读端点与
+  // —— 理由沿本文件 inspection / outsource-queue 两段的取舍：本域的三个读端点与
   // 零件一览、批次列表**没有共享写点**（本域写操作改的是批次位置 / 状态归属，
   // 那两个页面消费的是工单级派生视图），挂 parts 下反而会让最热的
   // `qk.partsPrefix` 一把全刷把队列页的看板缓存全部连带重拉。
@@ -287,54 +303,107 @@ export const qk = {
    *  未来若本域新增其它 list 键，一并被前缀覆盖。 */
   inspectionPrefix: ['inspection'] as const,
   // ============================================================
-  // 2026-10-03 新增：outsource-pool 域（「外协发送/接收」看板）queryKey 工厂。
+  // 2026-10-08：外协看板 queue 域（「外协发送/接收」看板）queryKey 工厂。
   //
-  // 根命名空间取 `outsource-pool`（**不**挂到既有 `outsource` 前缀下），理由沿本
-  // 文件 `inspection` 域段的「根命名空间」取舍：
+  // 根命名空间取 `outsource-queue`（**不**挂到既有 `outsource` 前缀下），理由沿本
+  // 文件 `inspection` / `process-design` 两段的「根命名空间」取舍：
   //   - 键的根只要求「同根前缀匹配」才有意义。本域与既有 `outsource` 域的读端点
   //     （`/outsource-sendable` / `/outsource-shipments/in-flight` /
   //     `/outsource-companies/*`）**没有共享写点**：那 4 个 list 端点所在的收发页面
-  //     2026-10-03 起改看板（UI 属并行任务，看板侧消费本域三键）、数据源换成本域；
-  //     而看板自己的写操作只有外协发送 / 接收，两者都是
-  //     `POST /prod/batches/{batch_id}/send-to-outsource` /
-  //     `receive-from-outsource`（prod/batches 域），不写 outsource 域的表。
+  //     2026-10-03 起改看板（UI 属并行任务，看板侧消费本域两键）、数据源换成本域；
+  //     而看板自己的写操作只有外协发送 / 接收，两者都是 prod/batches 域的
+  //     `POST /batches/{batch_id}/send-to-outsource` / `receive-from-outsource`，
+  //     不写 outsource 域的表。
   //   - 反过来，挂到 `outsource` 前缀下会让将来任何一次「outsource 域一把全刷」把
-  //     看板三个 tab 的数据全部连带重拉（`in_flight_count` 随收发变动，量级不小）。
-  //   - 命名空间与后端 URL 段逐字对齐（`/outsource-pool/*`），便于按 URL 反查键。
+  //     看板两个 tab 的数据全部连带重拉（`in_flight_count` 随收发变动，量级不小）。
+  //   - 命名空间与后端 URL 段逐字对齐（`/outsource-queue/*`），便于按 URL 反查键。
   //
-  // 失效编排点（待落地）：看板侧收发 mutation `useOutsourceBoardMove`（并行任务，本仓
-  // 尚无调用方）落地后由其 onSuccess 集中失效本域三键 + `qk.partsPrefix` ——
-  // 发送/接收改的是 t_part 的派生 status，零件一览 / 批次列表要跟着变。
+  // 两个键对应两个只读端点（2026-10-08 的契约重排：原 `/outsource-pool/state` 端点
+  // 删除 —— 在途批次改为随工序详情内联在 `companies[].held_batches`，公司列不再单独
+  // 发请求，N+1 从结构上消失）：
+  //   - snapshot     → 各工序可发送 / 在途计数（tab 标题徽标的唯一数据源，eager 拉取）
+  //   - processes/{id} → 单工序看板（左列候选批次 + 右列公司列），tab body 懒加载
+  //
+  // 写端点 `POST /outsource-queue/move`（发送 / 回收生产 / 回收品检）**没有自己的
+  // queryKey** —— 它是 mutation，由 `useOutsourceQueueMove` 的 onSuccess / onError
+  // 串行失效下面两个前缀。一次移动会同时改左列候选池与右列在途集合（两个 tab body 是
+  // 两条独立 query），漏刷任何一个都会看到「徽标更新了、卡片没动」；而受影响的
+  // processId 前端拿不到（可能跨 tab），故一律前缀全失效。
   // ⚠️ 编排点 ≠ 全部写点：与 CLAUDE.md「跨页面写操作不做穷举失效」一致，本域的
   // 新鲜度由 30s 有限 staleTime + 看板自身的显式 refetch 兜底。
   // ============================================================
   /** 各外协工序的可发送 / 在途计数（eager 拉取，看板 tab 标题徽标的唯一数据源）。
-   *  **常量键**：后端 `GET /outsource-pool/counts` 不接 Query extractor（无分页、
-   *  无筛选），故键不随任何 tab / 选中态变化。 */
-  outsourcePoolCounts: ['outsource-pool', 'counts'] as const,
-  /** outsource-pool counts 域前缀 —— 与 `outsourcePoolCounts` 同值（键已是常量，
-   *  前缀即自身，沿 productionQueueSnapshotPrefix 同形）。 */
-  outsourcePoolCountsPrefix: ['outsource-pool', 'counts'] as const,
-  /** 单工序看板详情（左「可发送候选批次」+ 右「外协公司列」）。
-   *  processId 空串 → 占位键（enabled=false 闸门 + queryFn 二次守卫拦掉）。 */
-  outsourcePoolByProcess: (processId: string) =>
-    ['outsource-pool', 'by-process', processId] as const,
-  /** outsource-pool by-process 域前缀 —— 任意 processId 形态一把全失效（发送的目标
+   *  **常量键**：后端 `GET /outsource-queue/snapshot` 不接 Query extractor（无分页、
+   *  无筛选），故键里没有任何可变量。函数形态与 `productionQueueSnapshot` 对齐 ——
+   *  `queryKey: computed(() => qk.outsourceQueueSnapshot())`。 */
+  outsourceQueueSnapshot: () => ['outsource-queue', 'snapshot'] as const,
+  /** outsource-queue snapshot 域前缀 —— 写端点 `POST /outsource-queue/move` 完成后
+   *  qc.invalidateQueries({ queryKey: qk.outsourceQueueSnapshotPrefix }) 一键全失效。
+   *  与 outsourceQueueSnapshot 同值（键已是常量，前缀即自身，沿
+   *  productionQueueSnapshotPrefix 同形）。 */
+  outsourceQueueSnapshotPrefix: ['outsource-queue', 'snapshot'] as const,
+  /** 单工序看板详情（左「可发送候选批次」+ 右「外协公司列」，在途批次内联在
+   *  公司列上）。processId 空串 → 占位键（enabled=false 闸门 + queryFn 二次守卫拦掉）。 */
+  outsourceQueueProcess: (processId: string) =>
+    ['outsource-queue', 'process', processId] as const,
+  /** outsource-queue process 域前缀 —— 任意 processId 形态一把全失效（发送的目标
    *  工序由 tab 决定、后端不自推，mutation 回调里可能拿不到 processId）。 */
-  outsourcePoolByProcessPrefix: ['outsource-pool', 'by-process'] as const,
-  /** 单公司 × 单工序的在途批次（看板右侧公司列）。
-   *  **双键**：公司列是 (公司 × 工序) 的笛卡尔格，任一维度变化都换一份 cache identity。 */
-  outsourcePoolState: (outsourceCompanyId: string, processId: string) =>
-    ['outsource-pool', 'state', outsourceCompanyId, processId] as const,
-  /** outsource-pool state 域前缀 —— 一次发送/接收会同时改多个公司列（接收写入侧的
-   *  目标公司、发送释放源公司的持有数），故按前缀全刷而非按 (公司, 工序) 精刷。 */
-  outsourcePoolStatePrefix: ['outsource-pool', 'state'] as const,
+  outsourceQueueProcessPrefix: ['outsource-queue', 'process'] as const,
+  // ============================================================
+  // 2026-10-09 新增：outsource 域（外协公司一览 / 外协对账 / 报价一览）queryKey 工厂。
+  //
+  // 根命名空间取 `outsource`（与页面路由段 / 菜单域、后端 `/outsource-companies/*` 与
+  // `/outsource-quotes/*` 两组 URL 对齐，便于按 URL 反查键），**不**挂到
+  // `outsource-queue` 前缀下 —— 理由沿本文件 `inspection` / `process-design` 两段的
+  // 「根命名空间」取舍，且这两域的读写前缀确实不同：
+  //   - 本域写点（公司 create / update / soft-delete、报价 submit / approve / reject /
+  //     soft-delete、行内 reconcile-update）改的是 `t_outsource_company` /
+  //     `t_outsource_company_process` / `t_outsource_quote` / `t_outsource_shipment`，
+  //     **一个字都不写 `t_part_batch`** ⇒ 看板（候选池 / 在途集合）完全不受影响；
+  //   - 看板写点 `POST /outsource-queue/move` 改的是批次 `location` / `current_holder_id`
+  //     / `version`，也不碰本域四张表 ⇒ 本域三个列表页不必跟着重拉。
+  // 所以两边的失效前缀各自独立：公司的工序映射变了（`process_ids` 整体替换）只影响
+  // 公司一览与报价的公司下拉，不影响看板的 `held_batches`。
+  //
+  // 三条读键（都是**参数键**：三个 list 端点都接 limit / offset 与各自的筛选维度，
+  // 键必须随 params 变化才能拿到不同 cache identity）：
+  //   - outsourceCompanies(params)   —— GET /outsource-companies
+  //   - outsourceSentParts({companyId, ...}) —— GET /outsource-companies/{id}/sent-parts
+  //     （companyId 走**独立键位**而非塞进 params 对象：端点按公司分片返回，不带 id 切
+  //      公司时会命中上一个公司的缓存）；
+  //   - outsourceQuotes(params)       —— GET /outsource-quotes
+  //
+  // 失效编排点（各页 store / composable 的 mutation 回调）：
+  //   - 公司 create / update / soft-delete → invalidateOutsourceCompaniesAll
+  //     （`process_ids` 替换会改公司工序清单，报价一览的「外协公司」筛选列名要跟着变）；
+  //   - 报价 create / submit / approve / reject / soft-delete → invalidateOutsourceQuotesAll；
+  //   - 行内 reconcile-update（改单价 / 数量 / 对账标记）→ invalidateOutsourceSentPartsAll。
+  // ⚠️ 编排点 ≠ 全部写点：与 CLAUDE.md「跨页面写操作不做穷举失效」一致，本域的新鲜度
+  // 由有限 staleTime（30s）+ 各页自身的显式刷新兜底。
+  // ============================================================
+  /** 外协公司一览列表键。params = `name_like` / `is_active` / `limit` / `offset`。 */
+  outsourceCompanies: (params: ListOutsourceCompaniesParams) =>
+    ['outsource', 'companies', params] as const,
+  /** outsource companies 域前缀 —— 公司写端点成功后一把全失效（任意 params 形态都命中）。 */
+  outsourceCompaniesPrefix: ['outsource', 'companies'] as const,
+  /** 外协对账（某公司已发出的零件）列表键。companyId 走独立键位。 */
+  outsourceSentParts: (params: ListOutsourceSentPartsKeyParams) =>
+    ['outsource', 'sent-parts', params.companyId, params.filters] as const,
+  /** outsource sent-parts 域前缀 —— 行内 reconcile-update 成功后一把全失效。 */
+  outsourceSentPartsPrefix: ['outsource', 'sent-parts'] as const,
+  /** 外协报价一览列表键。params = `statuses` / `drawing_no` / `name` /
+   *  `outsource_company_id` / `customer_id` / `is_urgent` / `sort_by` / `sort_dir` /
+   *  `limit` / `offset`。 */
+  outsourceQuotes: (params: ListOutsourceQuotesParams) =>
+    ['outsource', 'quotes', params] as const,
+  /** outsource quotes 域前缀 —— 报价写端点成功后一把全失效。 */
+  outsourceQuotesPrefix: ['outsource', 'quotes'] as const,
   // ============================================================
   // 2026-10-05 新增：process-design 域（「制定工序」页）queryKey 工厂。
   //
   // 根命名空间取 `process-design`（与页面路由 / 后端 URL 段 `/prod/process-design/*`
   // 逐字对齐，便于按 URL 反查键），**不**挂到 `parts` 前缀下 —— 理由沿本文件
-  // `inspection` / `outsource-pool` 两段的取舍：键的根只要求「同根前缀匹配」才有意义。
+  // `inspection` / `outsource-queue` 两段的取舍：键的根只要求「同根前缀匹配」才有意义。
   // 本页与零件一览 / 批次列表**没有共享写点**：本页唯一的写操作是保存工艺链
   // （`POST /prod/process-chains/by-part/{part_id}`，写 `t_part_process_chain` /
   // `t_part_process`，**不改** `t_part` 的 status / 货架归属 / 批次成员资格），

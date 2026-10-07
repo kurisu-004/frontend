@@ -147,24 +147,18 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        // 2026-07-16：外协发送/接收（MANAGER + CLERK；合并原 send + receive）
+        // 外协发送/接收看板（MANAGER + CLERK + INSPECTOR）。2026-10-09 组件硬切：
+        // 原「可发送 / 待接收」双表格 tab 换成按外协工序分的看板（OutsourceBoard.vue），
+        // **路径不变**，只有组件换了。`?tab=` 的语义随之从 sendable/receiving 变成
+        // 外协工序 id（见 OutsourceBoard.vue 的深链校正）。
         path: 'outsource/send-receive',
         name: 'OutsourceSendReceive',
-        component: () => import('@/views/outsource/OutsourceSendReceive.vue'),
+        component: () => import('@/views/outsource/OutsourceBoard.vue'),
         meta: {
           title: '外协发送/接收',
           icon: 'Promotion',
           menuCode: 'outsource_send_receive_list',
         },
-      },
-      {
-        // 2026-07-16 兼容：旧路径 → 重定向到新页面，URL ?tab= 同步
-        path: 'outsource/send',
-        redirect: { path: '/outsource/send-receive', query: { tab: 'sendable' } },
-      },
-      {
-        path: 'outsource/receive',
-        redirect: { path: '/outsource/send-receive', query: { tab: 'receiving' } },
       },
       {
         // 2026-07-28：外协对账一览（按公司聚合 SENT_TO_OUTSOURCE 事件）

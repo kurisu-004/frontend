@@ -114,8 +114,9 @@ export async function recallToPending(req: RecallRequest): Promise<RecallOutDto>
 }
 
 /** POST /api/v2/prod/queue/move —— 通用移动端点（POOL ↔ WORKER + WORKER → WORKER）。
- *  关键不变量见 contract 的 MoveRequest 注释（`from` 必须等于批次真实位置，
- *  否则 20122）。target process 由后端自推，前端不传。
+ *  关键不变量见 contract 的 MoveRequest 注释（`from` 必须等于批次真实位置，否则
+ *  20122；`version` 是必填的 OCC 锚，缺了返 HTTP 422 纯文本）。target process 由后端
+ *  自推，前端不传。
  *  业务错：20121 / 20120 / 20122（from 不符）/ 20202 / 20204 / 20104 / 20507 /
  *  40901 / 40300 / 40001。 */
 export async function moveBatch(req: MoveRequest): Promise<MoveResultDto> {

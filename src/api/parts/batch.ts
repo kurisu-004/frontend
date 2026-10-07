@@ -340,25 +340,15 @@ export interface PartBatch {
 }
 
 /** 2026-10-02：批次**写**端点整体迁 prod 域并锚定批次 ——
- *  `POST /parts/{part_id}/batches/split` → `POST /prod/batches/{batch_id}/split`、
- *  `POST /parts/{part_id}/batches/{batch_id}/cancel` → `POST /prod/batches/{batch_id}/cancel`。
+ *  `POST /parts/{part_id}/batches/cancel` → `POST /prod/batches/{batch_id}/cancel`。
  *  `batch_id` 从 body 删除（已是路径参数），`version` 必填（OCC 锚 t_part_batch）。
  *  批次**读**（`GET /parts/{part_id}/batches`）留在 part 域不动 —— 它的操作对象是
- *  「某个 part 的批次集合」而不是单个批次，判据同 `POST /parts/{id}/cancel`。 */
+ *  「某个 part 的批次集合」而不是单个批次，判据同 `POST /parts/{id}/cancel`。
+ *  2026-10-08：批次**拆分**也搬走了 —— `POST /prod/batches/{batch_id}/split` 硬切下线，
+ *  新入口是共用层 `POST /api/v2/batches/split`（`@/api/batch` 的 `splitBatch`，
+ *  `batch_id` 走 body）。本文件因此不再有拆批。 */
 export async function listPartBatches(partId: string): Promise<PartBatch[]> {
   const resp = await api.get<PartBatch[]>(`/parts/${partId}/batches`);
-  return resp.data;
-}
-
-/** 拆批：后端 `SplitBatchRequest { version, quantity, note? }`（batch_id 已是路径）。 */
-export async function splitPartBatch(
-  batchId: string,
-  payload: { quantity: number; version: number; note?: string | null },
-): Promise<PartBatch[]> {
-  const resp = await api.post<PartBatch[]>(
-    `/prod/batches/${encodeURIComponent(batchId)}/split`,
-    payload,
-  );
   return resp.data;
 }
 

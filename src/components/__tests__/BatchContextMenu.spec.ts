@@ -1,25 +1,34 @@
 // @vitest-environment happy-dom
-// src/views/production/components/__tests__/BatchContextMenu.spec.ts
+// src/components/__tests__/BatchContextMenu.spec.ts
 //
-// 2026-10-06 新增：BatchContextMenu 的行为 spec。菜单是「已下发批次右键召回」的唯一
-// UI 入口，它的两条硬需求分别由本 spec 与 PoolDrawer/WorkerColumn 的 spec 守住：
-//   - 本 spec：菜单本身（定位 / 视口钳制 / 派发 / 三种关闭 / 监听清理）；
+// 2026-10-06 新增：BatchContextMenu 的行为 spec。菜单是批次卡片右键操作的唯一 UI 入口，
+// 它的两条硬需求分别由本 spec 与消费方 spec 守住：
+//   - 本 spec：菜单本身（定位 / 视口钳制 / 派发 / 三种关闭 / 监听清理 / 菜单项由 props
+//     驱动）；
 //   - 消费方 spec：`@contextmenu.prevent` 真的落到了 BatchCard 根 div 上、且没有引入
 //     包裹层（BatchCardDndFootprint.spec.ts 守不变式）。
 //
+// 2026-10-08 升为共享组件（从 views/production/queue/components 搬来）：菜单项由调用方
+// 经 `items` 配置、动作由 `select(key, batch)` 分发，本 spec 的用例相应从「硬编码一条
+// 召回项」改成按传入 items 断言。⚠️ 用例结构整体保留（原样搬，不重写）：定位 / 钳制 /
+// 三种关闭 / 监听清理这些行为与菜单项数无关，改写等于丢掉原有的回归网。
+//
 // 覆盖：
-//   - C1：open(evt, batch) → 菜单渲染出来，left/top 等于传入坐标；
+//   - C1：open(evt, batch) → 菜单渲染出来，left/top 等于传入坐标，文案 = 传入的 items；
 //   - C2：贴右下角的坐标被钳制回视口内（不出屏）；
-//   - C3：点菜单项 → emit('recall', **同一个 batch 实例**) 且菜单先关闭；
+//   - C3：点菜单项 → emit('select', **该项的 key**, **同一个 batch 实例**) 且菜单先关闭；
 //   - C4：Escape 关闭；C5：点菜单外部关闭；点菜单内部不关；
 //   - C6：unmount 后 document 上的监听已移除（removeEventListener 断言）；
-//   - C7：dumb 契约 —— 组件不认识 api / store（零 props、零权限判断）。
+//   - C7：dumb 契约 —— 组件不认识 api / store，**唯一 prop 是 items**（目标批次只走
+//     expose 的 open 入参，没有 batch / target 之类的 prop）；
+//   - C8：多菜单项 → 每项都渲染，且点第 N 项 emit 第 N 项的 key（分发键不错位）；
+//   - C9：items 为空数组 → 不渲染菜单（调用方用它表达「本角色无可执行动作」）。
 //
 // 测试策略：
 //   - 挂**真** el-menu / el-menu-item：菜单项的点击 → `select` 派发链是 EP 内部实现
 //     （menu-item → inject menu → rootMenu.handleClick），换成 stub 用例就恒绿、
 //     什么也守不住；happy-dom 下不涉及浮层，不需要 teleport 之外的任何 mock。
-//   - 组件用 expose 出来的 open() 驱动（与线上一致：Board 的 opener 调它），不构造
+//   - 组件用 expose 出来的 open() 驱动（与线上一致：板级 opener 调它），不构造
 //     MouseEvent 之外的任何耦合。
 //   - 不用 vi.mock('element-plus')：本组件只用 el-menu / el-menu-item 两个渲染组件，
 //     不碰 ElMessage / ElMessageBox，真实组件在 happy-dom 下可正常挂载。
@@ -28,7 +37,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import { ElMenu, ElMenuItem } from 'element-plus';
-import BatchContextMenu from '../BatchContextMenu.vue';
+import BatchContextMenu, { type BatchContextMenuItem } from '../BatchContextMenu.vue';
 import type { BatchCardModel } from '@/types/batchCard';
 
 function makeCard(overrides: Partial<BatchCardModel> = {}): BatchCardModel {
@@ -55,13 +64,17 @@ function makeCard(overrides: Partial<BatchCardModel> = {}): BatchCardModel {
   };
 }
 
+/** 默认菜单项：单条召回项（与生产队列板级给的那一项同形）。 */
+const RECALL_ITEMS: BatchContextMenuItem[] = [{ key: 'recall', label: '召回到待下发' }];
+
 interface MenuExpose {
   open: (evt: MouseEvent, batch: BatchCardModel) => void;
 }
 
 /** 挂菜单组件（挂在 document 上，teleport 的目标就是 body）。 */
-function mountMenu(): VueWrapper {
+function mountMenu(items: BatchContextMenuItem[] = RECALL_ITEMS): VueWrapper {
   return mount(BatchContextMenu, {
+    props: { items },
     global: { components: { ElMenu, ElMenuItem } },
     attachTo: document.body,
   }) as VueWrapper;
@@ -89,7 +102,7 @@ afterEach(() => {
   document.querySelectorAll('.batch-context-menu').forEach((el) => el.remove());
 });
 
-describe('BatchContextMenu（2026-10-06 右键召回菜单）', () => {
+describe('BatchContextMenu（批次卡片右键菜单）', () => {
   it('C1：open 后菜单渲染出来，left/top 等于传入坐标', async () => {
     wrapper = mountMenu();
     (wrapper.vm as unknown as MenuExpose).open(contextEvent(240, 180), makeCard());
@@ -98,6 +111,7 @@ describe('BatchContextMenu（2026-10-06 右键召回菜单）', () => {
     const box = menuBox(wrapper);
     expect(box.style.left).toBe('240px');
     expect(box.style.top).toBe('180px');
+    // 文案来自 props.items，不是组件里的硬编码
     expect(box.querySelector('.el-menu-item')?.textContent?.trim()).toBe('召回到待下发');
   });
 
@@ -120,7 +134,7 @@ describe('BatchContextMenu（2026-10-06 右键召回菜单）', () => {
     const box = menuBox(wrapper);
     const left = Number.parseInt(box.style.left, 10);
     const top = Number.parseInt(box.style.top, 10);
-    // 钳制量是估算值（160×120），只断言「不越界且为正」
+    // 钳制量是估算值（宽 160、高按条目数算），只断言「不越界且为正」
     expect(left).toBeGreaterThanOrEqual(0);
     expect(top).toBeGreaterThanOrEqual(0);
     expect(left).toBeLessThanOrEqual(window.innerWidth);
@@ -129,7 +143,7 @@ describe('BatchContextMenu（2026-10-06 右键召回菜单）', () => {
     expect(box.style.top).not.toBe('10000px');
   });
 
-  it('C3：点菜单项 → emit(recall, 同一个 batch 实例)，且菜单先关闭', async () => {
+  it('C3：点菜单项 → emit(select, 该项 key, 同一个 batch 实例)，且菜单先关闭', async () => {
     wrapper = mountMenu();
     const batch = makeCard();
     (wrapper.vm as unknown as MenuExpose).open(contextEvent(100, 100), batch);
@@ -140,10 +154,11 @@ describe('BatchContextMenu（2026-10-06 右键召回菜单）', () => {
     item!.click();
     await nextTick();
 
-    const emitted = wrapper.emitted('recall');
+    const emitted = wrapper.emitted('select');
     expect(emitted).toHaveLength(1);
-    // 同一实例：消费方（useBatchRecall）要的是卡片自带的 batch_id / version
-    expect(emitted![0]![0]).toBe(batch);
+    // 同一实例：消费方（useBatchRecall / 外协收发链路）要的是卡片自带的 batch_id / version
+    expect(emitted![0]![0]).toBe('recall');
+    expect(emitted![0]![1]).toBe(batch);
     expect(document.querySelector('.batch-context-menu')).toBeNull();
   });
 
@@ -201,10 +216,43 @@ describe('BatchContextMenu（2026-10-06 右键召回菜单）', () => {
     removeSpy.mockRestore();
   });
 
-  it('C7：dumb 契约 —— 零 props（目标批次只走 expose 的 open 入参）', () => {
+  it('C7：dumb 契约 —— 只收 items 一个 prop（目标批次只走 expose 的 open 入参）', () => {
     wrapper = mountMenu();
-    const def = (wrapper.vm.$options as unknown as { props?: unknown }).props ?? {};
-    // script setup 未声明任何 props ⇒ 组件 options 上没有 props 定义
-    expect(def).toEqual({});
+    const def = (wrapper.vm.$options as unknown as { props?: Record<string, unknown> }).props ?? {};
+    // 组件不许有 batch / target 之类的 prop：目标批次是「光标在哪」的瞬时状态，
+    // 只经 open(evt, batch) 传入，多声明一个 prop 就多一条能让调用方存错对象的路。
+    expect(Object.keys(def)).toEqual(['items']);
+  });
+
+  it('C8：多菜单项逐项渲染，且点第 N 项 emit 第 N 项的 key（分发键不错位）', async () => {
+    wrapper = mountMenu([
+      { key: 'recall', label: '召回到待下发' },
+      { key: 'split', label: '拆分批次' },
+      { key: 'cancel', label: '取消批次', danger: true },
+    ]);
+    const batch = makeCard();
+    (wrapper.vm as unknown as MenuExpose).open(contextEvent(100, 100), batch);
+    await nextTick();
+
+    const rendered = [...document.querySelectorAll('.el-menu-item')].map((el) => el.textContent?.trim());
+    expect(rendered).toEqual(['召回到待下发', '拆分批次', '取消批次']);
+    // danger 项带标记 class（EP 的 el-menu-item 没有 danger prop，颜色由本组件样式给）
+    const third = document.querySelectorAll('.el-menu-item')[2]!;
+    expect(third.classList.contains('is-danger')).toBe(true);
+
+    // 点中间那条 ⇒ key 与 batch 都要对
+    document.querySelectorAll<HTMLElement>('.el-menu-item')[1]!.click();
+    await nextTick();
+    const emitted = wrapper.emitted('select');
+    expect(emitted).toHaveLength(1);
+    expect(emitted![0]![0]).toBe('split');
+    expect(emitted![0]![1]).toBe(batch);
+  });
+
+  it('C9：items 为空数组 → 不渲染菜单（调用方用它表达本角色无可执行动作）', async () => {
+    wrapper = mountMenu([]);
+    (wrapper.vm as unknown as MenuExpose).open(contextEvent(100, 100), makeCard());
+    await nextTick();
+    expect(document.querySelector('.batch-context-menu')).toBeNull();
   });
 });
