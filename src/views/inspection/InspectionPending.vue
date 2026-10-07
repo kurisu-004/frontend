@@ -58,7 +58,7 @@
          z-index: 1 }` 那个 **stacking context** 里 —— 它的 z-index 被该上下文封顶，
          而 ScanTreeDialog 作为 body 下的后继兄弟在**根** stacking context 里参与排序，
          于是「后开的弹窗反而被先开的压住」，数量弹窗点不动。
-         同 `views/delivery/components/BatchInspectionConfirmDialog.vue` 的嵌套弹窗范式。 -->
+         同 `views/com/delivery/components/BatchInspectionConfirmDialog.vue` 的嵌套弹窗范式。 -->
     <el-dialog
       v-model="passDialogVisible"
       title="品检通过"

@@ -18,7 +18,10 @@ describe('ADMIN_MENUS', () => {
   // code 总数 27 → 30 → 33。
   // 2026-09-24：template_management + print_templates_designer 随 x-data-spreadsheet 弃用而下线（用户决策
   // 不再做模板编辑器，路由 /print-templates 与 view PrintTemplateDesigner 一并删除）。code 总数 33 → 31。
-  it('covers all 31 menuCodes', () => {
+  // 2026-10-08：delivery_dispatch（送货司机扫码台 /delivery-dispatch）随送货单域重构下线 ——
+  // 送货入口收进送货单列表页的「送货」按钮（见 views/com/delivery/DeliveryNoteList.vue），
+  // 路由与 fixture 节点同步删除。code 总数 31 → 30。
+  it('covers all 30 menuCodes', () => {
     const all = flatten(ADMIN_MENUS);
     const codes = all.map((n) => n.code);
     expect(codes).toContain('home');
@@ -42,7 +45,6 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('work_types_list');
     expect(codes).toContain('processes_list');
     expect(codes).toContain('work_type_processes_list');
-    expect(codes).toContain('delivery_dispatch');
     expect(codes).toContain('production_stats');
     // 2026-08-26 新增：6 个分组 code 断言（生产 DB 暴露给 MANAGER 的分组节点）
     expect(codes).toContain('customer_management');

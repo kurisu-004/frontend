@@ -2,13 +2,18 @@
 // src/views/scan/components/__tests__/BatchPickerDialog.spec.ts
 //
 // 2026-10-03 新增：holder 文本与 meta 行的渲染契约守卫。本组件是**跨域共享组件**
-// （views/scan/ 三页 + views/delivery/PartPickerDialog + views/inspection/InspectionPending），
+// （views/scan/ 三页 + views/inspection/InspectionPending），
 // 2026-10-03 给它加了「3 个判据键一个都不在的窄 VO ⇒ holderText 返空 ⇒ meta 行整行隐藏」
 // 这条分支。两头都要钉住：
 //   - views/scan/ 三页（`PartListItem` 形态）行为**一字未变**，否则报工台卡片静默少一行信息；
-//   - views/delivery/（`DeliveryNoteCandidatePart` 形态）**确实变了**：meta 行整行不再渲染。
-//     它消掉的是恒显的「未知位置」无信息量文案，属本次一并接受的观感变化，用例把它钉死，
+//   - 窄 VO（3 个 holder 判据键一个都不在）**确实变了**：meta 行整行不再渲染。
+//     它消掉的是恒显的「未知位置」无信息量文案，属一并接受的观感变化，用例把它钉死，
 //     免得后来人误判成回归又改回去。
+//
+// 2026-10-08：原先窄 VO fixture 用的是 `@/types/deliveryNote` 的 `DeliveryNoteCandidatePart`
+// （送货单候选入单，随 `GET /candidate-parts` 端点下线而删除）。窄 VO 形态本身仍可能出现在
+//  别的域，故 fixture 改为本文件内联的 `NarrowDeliveryRow`（显式类型标注依旧保留：
+//  一旦有人给它加上 holder 判据键，`tsc` 会因多余属性报错，逼着改用例而不是静默继续通过）。
 //
 // 判据是「键在不在」而不是「值是否 null」，理由与脆弱点见 BatchPickerDialog.holderText 注释。
 
@@ -16,7 +21,6 @@ import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
 import BatchPickerDialog from '../BatchPickerDialog.vue';
 import type { PartItem } from '@/api/parts';
-import type { DeliveryNoteCandidatePart } from '@/types/deliveryNote';
 
 /** 前端 `PartItem` 宽形态（判据键显式全带上）的最小子集。
  *
@@ -71,12 +75,30 @@ const NARROW_ROW = {
   l1_customer_name: '一级客户',
 };
 
-/** 15 字段窄 VO（送货单候选入单 DeliveryNoteCandidatePart，cast 进 props）。
+/** 窄 VO：3 个 holder 判据键一个都不在（cast 进 props）。
  *
  *  显式标上类型是有意的：这条用例的全部价值就是「证明 3 个判据键一个都不在」，
  *  一旦后端给该 VO 加了 `location` / `current_holder_*` 字段，`tsc` 就会因缺字段报错，
  *  逼着改用例而不是让它静默继续通过。 */
-const DELIVERY_ROW: DeliveryNoteCandidatePart = {
+interface NarrowDeliveryRow {
+  id: string;
+  batch_id: string;
+  batch_no: number | null;
+  batch_label: string | null;
+  serial_no: string;
+  drawing_no: string;
+  name: string;
+  quantity: number;
+  applicant_name: string | null;
+  status: string;
+  planned_delivery_date: string | null;
+  order_no: string | null;
+  customer_name: string | null;
+  parent_customer_name: string | null;
+  customer_path: string | null;
+}
+
+const DELIVERY_ROW: NarrowDeliveryRow = {
   id: '190000000000201',
   batch_id: '190000000000301',
   batch_no: 2,
@@ -170,7 +192,7 @@ describe('BatchPickerDialog / holder 文本与 meta 行', () => {
     expect(w.text()).not.toContain('未知位置');
   });
 
-  it('送货单候选 VO（DeliveryNoteCandidatePart，15 字段无 holder 键）：meta 行不渲染', () => {
+  it('窄 VO（15 字段无 holder 键）：meta 行不渲染', () => {
     // 2026-10-03：这条路径在空串分支落地时**行为变了**（原本恒显「未知位置」），
     // 消掉的是无信息量文案，属一并接受的观感变化。钉在这里是为了让后来人知道这是有意为之，
     // 不是回归 —— 真要恢复那行的话，改本用例而不是改 holderText。

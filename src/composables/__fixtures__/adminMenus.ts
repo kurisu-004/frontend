@@ -181,17 +181,6 @@ export const ADMIN_MENUS: MenuNode[] = [
         children: [],
       },
       {
-        id: id(45),
-        version: 0,
-        parent_id: id(4),
-        code: 'delivery_dispatch',
-        title: '送货',
-        path: '/delivery-dispatch',
-        icon: 'Van',
-        sort_order: 60,
-        children: [],
-      },
-      {
         id: id(46),
         version: 0,
         parent_id: id(4),

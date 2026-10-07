@@ -49,23 +49,23 @@ interface Violation {
   missing: string[];
 }
 
-// 存量豁免表（2026-10-03）：这 27 个文件同样手动 import 了 EP 组件，但当前样式由**同路由
+// 存量豁免表（2026-10-03 建立）：这些文件同样手动 import 了 EP 组件，但当前样式由**同路由
 // 其它文件**经 resolver 顺带注入，视觉正常；逐一补 style import 属预防性改动，本轮不做
 // （用户明确决定）。**补齐后请从表里删掉对应行**，否则豁免会长期掩盖后续新引入的同类漏洞。
 //
 // 键 = 相对 src/ 的路径，值 = 该文件尚未覆盖样式的 kebab 组件名。
+// ⚠️ 2026-10-08 送货单域重构删掉了 BatchInspectionConfirmDialog / PartPickerDialog，
+//    对应两条登记随之删除（文件没了登记即陈旧，spec 的「豁免表无陈旧登记」用例会红）。
 const EXEMPT: Record<string, string[]> = {
   'components/FileListCard.vue': ['el-upload'],
   'components/UploadStatusCellView.vue': ['el-button', 'el-progress'],
   'views/assemblies/components/AssemblyChildrenTable.vue': ['el-link', 'el-tag'],
-  'views/delivery/DeliveryNoteList.vue': ['el-tag'],
-  'views/delivery/DeliveryNoteScan.vue': ['el-table'],
-  'views/delivery/components/BatchInspectionConfirmDialog.vue': ['el-tag', 'el-table'],
-  'views/delivery/components/DeliveryDraftCard.vue': ['el-table'],
-  'views/delivery/components/DeliveryGroupEditor.vue': ['el-form'],
-  'views/delivery/components/DeliveryNoteLineItemsTable.vue': ['el-tag'],
-  'views/delivery/components/PartPickerDialog.vue': ['el-tag'],
-  'views/delivery/components/PrintPreviewDialog.vue': ['el-tag', 'el-table'],
+  'views/com/delivery/DeliveryNoteList.vue': ['el-tag'],
+  'views/com/delivery/DeliveryNoteScan.vue': ['el-table'],
+  'views/com/delivery/components/DeliveryDraftCard.vue': ['el-table'],
+  'views/com/delivery/components/DeliveryGroupEditor.vue': ['el-form'],
+  'views/com/delivery/components/DeliveryNoteLineItemsTable.vue': ['el-tag'],
+  'views/com/delivery/components/PrintPreviewDialog.vue': ['el-tag', 'el-table'],
   'views/outsource/OutsourceCompanySentParts.vue': ['el-input-number', 'el-switch', 'el-tag'],
   'views/outsource/OutsourceList.vue': ['el-tag', 'el-table'],
   'views/outsource/OutsourceReceivingTab.vue': ['el-tag'],
