@@ -31,6 +31,26 @@
       :default-sort="{ prop: 'order_no', order: 'ascending' }"
       @sort-change="onSortChange"
     >
+      <!-- 勾选列（仅标签模式）：**受控 el-checkbox，不进 defs**。
+           - 不进 defs ⇒ 列可见性 / 列顺序拖动都不知道它存在，它天然固定在最左、不可换位；
+           - 不用 EP `type="selection"`：勾选集合在父组件、跨 N 张表共享一份，而 EP 的
+             selection 状态是 per-table 的，`reserve-selection` 跨表不可靠。
+           形态与既有的「数量 / 操作」两列同款（受控渲染 + row-key 行身份）。 -->
+      <el-table-column
+        v-if="selectable"
+        label="勾选"
+        width="48"
+        align="center"
+        fixed="left"
+        column-key="label_select"
+      >
+        <template #default="{ row }">
+          <el-checkbox
+            :model-value="selectedIds.has((row as PrintRow).id)"
+            @change="(v: unknown) => toggleSelected((row as PrintRow).id, v)"
+          />
+        </template>
+      </el-table-column>
       <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
         <el-table-column
           v-if="columnVisibility.isVisible(d.key)"
@@ -47,7 +67,7 @@
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />
           </template>
-          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+          <template v-if="resolveDraggable(d) && !d.fixed" #header>
             <span>{{ d.label }}</span>
             <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
           </template>
@@ -72,14 +92,17 @@
       </el-table-column>
     </el-table>
 
-    <!-- 拆分编辑器挂在表格下方（跨列的整行控件，el-table 没有对应插槽） -->
-    <PrintSplitEditor
-      v-for="r in rows.filter((x) => x.id === splitRowId)"
-      :key="r.id"
-      :row="r"
-      @done="(parts) => onSplitDone(r.id, parts)"
-      @cancel="splitRowId = null"
-    />
+    <!-- 拆分编辑器挂在表格下方（跨列的整行控件，el-table 没有对应插槽）。
+         标签模式无「客户要求拆多条」这层 ⇒ 不渲染（标签行不参与拆分）。 -->
+    <template v-if="!selectable">
+      <PrintSplitEditor
+        v-for="r in rows.filter((x) => x.id === splitRowId)"
+        :key="r.id"
+        :row="r"
+        @done="(parts) => onSplitDone(r.id, parts)"
+        @cancel="splitRowId = null"
+      />
+    </template>
   </div>
 </template>
 
@@ -95,33 +118,50 @@ import { printColumnOrderListKey } from '../deliveryNotePrintColumnDefs';
 import { sortPrintRows, type PrintRow } from '../utils/deliveryNotePrintRows';
 import PrintSplitEditor from './PrintSplitEditor.vue';
 
-const props = defineProps<{
-  /** 本 tab 的行（父组件持有；拖拽 / 排序只改这里的引用，父组件的 map 被整体替换）。 */
-  rows: PrintRow[];
-  /** 排序态：'column' = 表头排序，'custom' = 用户拖过（自定义顺序优先）。 */
-  sortMode: 'column' | 'custom';
-  /** 列定义与列可见性由**父组件**持有（N 张表共用一份可见性快照）。 */
-  columnDefs: ColumnDef[];
-  columnVisibility: {
-    isVisible: (key: string) => boolean;
-    update: (next: Record<string, boolean>) => void;
-    showAll: () => void;
-    currentMap: Record<string, boolean>;
-  };
-  /**
-   * 列顺序快照的分组后缀（= 本 tab 的 groupKey）：每张表一条独立序列，
-   * 快照 key 由 `printColumnOrderListKey(groupKey)` 拼出（见父组件）。
-   */
-  groupKey: string;
-  /** 「重置列顺序」的信号量（父组件点 popover 的「重置列顺序」时自增）。 */
-  resetOrderToken: number;
-}>();
+const props = withDefaults(
+  defineProps<{
+    /** 本 tab 的行（父组件持有；拖拽 / 排序只改这里的引用，父组件的 map 被整体替换）。 */
+    rows: PrintRow[];
+    /** 排序态：'column' = 表头排序，'custom' = 用户拖过（自定义顺序优先）。 */
+    sortMode: 'column' | 'custom';
+    /** 列定义与列可见性由**父组件**持有（N 张表共用一份可见性快照）。 */
+    columnDefs: ColumnDef[];
+    columnVisibility: {
+      isVisible: (key: string) => boolean;
+      update: (next: Record<string, boolean>) => void;
+      showAll: () => void;
+      currentMap: Record<string, boolean>;
+    };
+    /**
+     * 列顺序快照的分组后缀（= 本 tab 的 groupKey）：每张表一条独立序列，
+     * 快照 key 由 `printColumnOrderListKey(groupKey)` 拼出（见父组件）。
+     */
+    groupKey: string;
+    /** 「重置列顺序」的信号量（父组件点 popover 的「重置列顺序」时自增）。 */
+    resetOrderToken: number;
+    /** 标签模式：每张表多一列受控勾选（勾选集合本身由父组件持有，见 selectedIds）。 */
+    selectable?: boolean;
+    /** 勾选集合（父组件持有，跨 N 张表共享一份 —— 行 id 全局唯一）。 */
+    selectedIds?: ReadonlySet<string>;
+  }>(),
+  { selectable: false, selectedIds: () => new Set<string>() },
+);
 
 const emit = defineEmits<{
   /** 行数组被改动（拖拽 / 拆分）后交给父组件写回 map。 */
   'update:rows': [rows: PrintRow[]];
   'update:sortMode': [mode: 'column' | 'custom'];
+  /** 勾选集合变化（整体替换，父组件写回 selectedIds ref）。 */
+  'update:selectedIds': [ids: ReadonlySet<string>];
 }>();
+
+/** 标签模式下勾选一行的勾选框（emit 新集合，集合本体归父组件）。 */
+function toggleSelected(rowId: string, checked: unknown): void {
+  const next = new Set(props.selectedIds);
+  if (checked === true) next.add(rowId);
+  else next.delete(rowId);
+  emit('update:selectedIds', next);
+}
 
 const tableEl = ref<TableInstance | null>(null);
 const tbodyRef = ref<HTMLElement | null>(null);
@@ -203,7 +243,10 @@ function onSortChange({ prop, order }: { prop: string | null; order: string | nu
 }
 
 function onSplitDone(rowId: string, parts: PrintRow[]): void {
-  emit('update:rows', props.rows.flatMap((r) => (r.id === rowId ? parts : [r])));
+  emit(
+    'update:rows',
+    props.rows.flatMap((r) => (r.id === rowId ? parts : [r])),
+  );
   splitRowId.value = null;
 }
 

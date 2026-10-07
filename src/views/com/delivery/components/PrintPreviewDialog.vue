@@ -1,12 +1,13 @@
 <!--
-  打印送货单对话框（2026-10-08 重写）。
+  打印对话框（2026-10-08 重写）：`mode` 决定导出产物形态，两条链路都在**前端本地生成**。
+  1. `'note'` 送货单：模板由用户上传，逐格校验后才允许导出；`openXlsx/saveXlsx`
+     round-trip 保留未建模的样式（合并 / 边框 / 列宽 / 打印区域）。
+  2. `'label'` 打印标签：**无模板、单 sheet**，7 列逐行写（`deliveryNoteLabelWorkbook`）。
 
-  相对 2026-08 的旧版（调后端 /print 转发 python）三处根本变化：
-  1. **xlsx 由前端本地生成**（hucre，动态 import）：模板由用户上传，逐格校验后
-     才允许导出；后端两条打印端点已下线。
-  2. **按分厂分组（el-tabs）**：一张送货单一个收货单位，按送货分组规则（或未分组 L2）
-     分组，每组一个 tab / 一个 sheet，每 sheet 最多 10 条。
-  3. **表头排序 + 行拖拽 + 行拆分 + 列拖拽**共存，行拖拽会清掉排序标记（自定义顺序优先）。
+  送货单按分厂分组（el-tabs）：一张送货单一个收货单位，按送货分组规则（或未分组 L2）
+  分组，每组一个 tab / 一个 sheet，每 sheet 最多 10 条。
+
+  表头排序 + 行拖拽 + 行拆分 + 列拖拽共存，行拖拽会清掉排序标记（自定义顺序优先）。
 
   交互契约：
   · 每个 tab 一张独立 el-table（子组件 `PrintGroupTable`）—— Sortable 绑的是 EP 内部
@@ -14,8 +15,9 @@
   · tab 顺序 = 分组键在 `line_items` 中**首次出现**的顺序；
   · tab name = groupKey（`g_<gid>` / `c_<l2id>` 语义字符串，非索引）；
   · 表头排序走 EP 内置比较 + 客户端 `sortPrintRows`，`prop` 是 snake_case 字段名本身；
-  · 数量列**只读**，要改必须走行尾「拆分」（守恒校验在 PrintSplitEditor 里）；
-  · 司机变更立即落库（`POST /com/delivery/note/{id}/driver`）。
+  · 数量列**只读**，要改必须走行尾「拆分」（守恒校验在 PrintSplitEditor 里，标签模式无此层）；
+  · 司机变更**在导出确认时随本次导出一并落库**（下拉切换是纯本地态）；
+  · 标签模式的勾选集合放本组件（跨 N 张表共享一份），每张表渲染一列受控 el-checkbox。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
@@ -29,6 +31,7 @@ import { setNoteDriver } from '@/api/com/deliveryNote';
 import { useDeliveryDriversQuery } from '../composables/useDeliveryDriversQuery';
 import { useDeliveryGroupsQuery } from '../composables/useDeliveryGroupsQuery';
 import { invalidateDeliveryNotesQuery } from '../composables/useDeliveryNoteListStore';
+import { usePrintedLabels } from '../composables/usePrintedLabels';
 import {
   buildDeliveryNotePrintColumnDefs,
   PRINT_PREVIEW_LIST_KEY,
@@ -49,26 +52,42 @@ import {
   type PrintRow,
 } from '../utils/deliveryNotePrintRows';
 import { renderDeliveryNoteWorkbook, XLSX_MIME } from '../utils/deliveryNoteWorkbook';
+import {
+  DELIVERY_NOTE_LABEL_XLSX_MIME,
+  renderDeliveryNoteLabelWorkbook,
+} from '../utils/deliveryNoteLabelWorkbook';
 import { DELIVERY_NOTE_TEMPLATE_CONTRACT } from '../utils/deliveryNoteTemplateContract';
 
-const props = defineProps<{
-  modelValue: boolean;
-  note: {
-    id: string;
-    version: number;
-    delivery_note_no: string;
-    part_count: number;
-    /** 单据归属的 L1 客户 id —— 送货分组查询的入参（打印时才知道有没有分组规则）。 */
-    customer_id: string;
-    driver_worker_name: string | null;
-    line_items: readonly DeliveryNoteLineItemData[];
-  };
-}>();
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean;
+    /**
+     * 导出模式：`'note'` = 送货单（模板 round-trip，多 sheet，页脚要送货人）；
+     * `'label'` = 打印标签（单 sheet、无模板、逐行勾选，前端本地生成）。
+     */
+    mode?: 'note' | 'label';
+    note: {
+      id: string;
+      version: number;
+      delivery_note_no: string;
+      part_count: number;
+      /** 单据归属的 L1 客户 id —— 送货分组查询的入参（打印时才知道有没有分组规则）。 */
+      customer_id: string;
+      driver_worker_name: string | null;
+      line_items: readonly DeliveryNoteLineItemData[];
+    };
+  }>(),
+  { mode: 'note' },
+);
 
 const emit = defineEmits<{ 'update:modelValue': [v: boolean] }>();
 
+const isLabelMode = computed(() => props.mode === 'label');
+
 const dlg = useDialogSize({ desktopWidth: 1200 });
 const qc = useQueryClient();
+/** 「已打印标签」记录（localStorage；草稿看板的绿底消费者）。标签导出成功后写入。 */
+const printedLabelStore = usePrintedLabels();
 
 // ============================================================
 // 模板（用户上传 + 逐格校验）
@@ -112,7 +131,10 @@ async function onFileChange(file: { raw?: File; name?: string }): Promise<void> 
 // ============================================================
 // 司机
 // ============================================================
-const driverQuery = useDeliveryDriversQuery(computed(() => props.modelValue));
+// 标签模式不拉司机：那里没有下拉（页脚没有「送货人」），白拉一次是纯浪费往返。
+const driverQuery = useDeliveryDriversQuery(
+  computed(() => props.modelValue && !isLabelMode.value),
+);
 /** 仅本地选中态。切换下拉**不发请求**（2026-10-08：改动随「导出」确认一并落库，见
  *  persistDriverIfChanged）—— 关对话框即放弃，与「改完就生效」的直觉相反是刻意的：
  * 打印对话框是一次性动作，点「取消」不该在服务端留下一条 version 变更。 */
@@ -178,6 +200,15 @@ const activeTab = ref<string>('');
 const rowsByKey = ref<Record<string, PrintRow[]>>({});
 const sortModeByKey = ref<Record<string, 'column' | 'custom'>>({});
 
+/**
+ * 标签模式的勾选集合（**放父组件**：N 张表共享一份，行 id 全局唯一 —— 散件行是代表批次
+ * id，装配件父行是 `ASM_<assembly_id>`，拆分行是 `<id>#<n>`）。
+ *
+ * 用整体替换（不是 add/delete 就地改）以便 Vue 侦测到引用变化；Set 本身是可变对象，
+ * 就地改会让模板拿到同一引用而不重渲染。
+ */
+const selectedIds = ref<ReadonlySet<string>>(new Set<string>());
+
 // 打开 / mergeMode / 分组数据变化 → 重建各 tab 的行（拷贝，拖拽与排序只动副本）。
 watch(
   () => [props.modelValue, mergeMode.value, groupsQuery.data.value] as const,
@@ -191,6 +222,9 @@ watch(
     }
     rowsByKey.value = rows;
     sortModeByKey.value = sorts;
+    // 行集合整体换新（重开 / 换合并模式 / 分组规则回流）⇒ 勾选同步重置成「全选」。
+    // 只在这一处重置：勾选本身由用户逐个点，不该被别处的 reactive 变化偷偷清掉。
+    selectedIds.value = new Set(Object.values(rows).flat().map((r) => r.id));
     if (!rowsByKey.value[activeTab.value]) activeTab.value = tabs.value[0]?.groupKey ?? '';
   },
   { immediate: true },
@@ -214,6 +248,22 @@ function tabNameOf(groupKey: string): string {
 
 const totalRows = computed(() =>
   Object.values(rowsByKey.value).reduce((sum, rows) => sum + rows.length, 0),
+);
+
+/**
+ * 标签模式要导出的行：**tab 顺序 → 组内当前行序（拖拽 / 表头排序后的结果）**，再按
+ * `selectedIds` 过滤。行序即勾选顺序，「先拖好再勾」是这条链路的自然用法。
+ */
+const selectedRows = computed<PrintRow[]>(() => {
+  const out: PrintRow[] = [];
+  for (const t of tabs.value) {
+    for (const r of rowsOf(t.groupKey)) if (selectedIds.value.has(r.id)) out.push(r);
+  }
+  return out;
+});
+/** 勾选行里数量未知的条数（渲染时整行跳过，提示里如实说出来）。 */
+const selectedRowsWithoutQty = computed(
+  () => selectedRows.value.filter((r) => r.quantity === null).length,
 );
 
 /** sheet 分配（容量 / 跨组不混 / sheet 名清洗都在纯函数里，这里只做组装）。 */
@@ -246,16 +296,27 @@ const resetOrderToken = ref(0);
 // 导出
 // ============================================================
 const exporting = ref(false);
-const exportDisabled = computed(
-  () => !templateOk.value || exporting.value || totalRows.value === 0 || !driverNameOfExport.value,
-);
 
 const driverNameOfExport = computed(
   () => selectedDriverName.value ?? props.note.driver_worker_name ?? '',
 );
 
+const exportDisabled = computed(() => {
+  if (exporting.value) return true;
+  // 标签：无模板、无司机页脚，唯一的前置条件是「至少勾了一行」。
+  if (isLabelMode.value) return selectedRows.value.length === 0;
+  return !templateOk.value || totalRows.value === 0 || !driverNameOfExport.value;
+});
+
 /** 「导出」disabled 的原因（tooltip 显示；空串 = 可导出）。 */
 const exportHint = computed(() => {
+  if (isLabelMode.value) {
+    if (selectedRows.value.length === 0) return '请先勾选要打印的标签行';
+    if (selectedRowsWithoutQty.value > 0) {
+      return `标签数量为空的行已跳过 ${selectedRowsWithoutQty.value} 条`;
+    }
+    return '';
+  }
   if (!templateOk.value) {
     return templateDiffs.value.length > 0
       ? `模板校验未通过：${templateDiffs.value.join('；')}`
@@ -276,10 +337,15 @@ function todayParts(): { year: string; month: string; date: string } {
 }
 
 async function onExport(): Promise<void> {
-  const src = templateSource.value;
-  if (!src || exportDisabled.value) return;
+  if (exportDisabled.value) return;
   exporting.value = true;
   try {
+    if (isLabelMode.value) {
+      await exportLabelWorkbook();
+      return;
+    }
+    const src = templateSource.value;
+    if (!src) return;
     // 司机先落库：打印即「这次确认了送货人」。落库失败（409 / 21409 / 网络）时中止，
     // 不产出文件 —— 否则会下载出一张页脚写着 A 司机、单据上却是 B 司机的送货单。
     if (!(await persistDriverIfChanged())) return;
@@ -312,12 +378,39 @@ async function onExport(): Promise<void> {
     exporting.value = false;
   }
 }
+
+/**
+ * 标签导出：单 sheet、无模板、无司机。导出成功后写「已打印标签」标记
+ * （localStorage，草稿看板的绿底靠它；详情页与看板共用同一条记录）。
+ *
+ * ⚠️ **必须用 `member_ids ?? [id]` 而不是 `id`**：`PrintRow.id` 在装配件父行是
+ * `ASM_<assembly_id>`、在拆分行是 `<id>#<n>`，都不是批次 id；`member_ids` 才是「该行
+ * 代表的批次 id 集合」，而草稿看板的绿底正是按批次 id 查的（`foldBySerial`）。
+ *
+ * ⚠️ **既有限度（忠实保留）**：同 part 折叠行（`foldSamePart`）只保留同 part 的**最小**
+ * batch id 作代表，于是 `markPrinted` 只会标记那个代表批次 ⇒ 草稿看板里同序列号的其它
+ * 批次不会变绿。要消掉它得改折叠口径（`member_ids` 是装配件折叠与拆分的依据），不在本次范围。
+ */
+async function exportLabelWorkbook(): Promise<void> {
+  const rows = selectedRows.value;
+  const { bytes, skipped } = await renderDeliveryNoteLabelWorkbook(rows);
+  triggerBrowserDownload(
+    new Blob([bytes.slice().buffer as ArrayBuffer], { type: DELIVERY_NOTE_LABEL_XLSX_MIME }),
+    `${props.note.delivery_note_no}-标签.xlsx`,
+  );
+  printedLabelStore.markPrinted(
+    props.note.id,
+    rows.flatMap((r) => r.member_ids ?? [r.id]),
+  );
+  ElMessage.success(skipped > 0 ? `已导出标签（跳过 ${skipped} 条数量为空的行）` : '已导出标签');
+  emit('update:modelValue', false);
+}
 </script>
 
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="打印送货单"
+    :title="isLabelMode ? '打印标签' : '打印送货单'"
     :width="dlg.width"
     :top="dlg.top"
     :close-on-click-modal="false"
@@ -325,7 +418,7 @@ async function onExport(): Promise<void> {
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
     <div class="print-toolbar">
-      <span class="toolbar-item">
+<span v-if="!isLabelMode" class="toolbar-item">
         模板
         <el-upload
           ref="uploadRef"
@@ -343,6 +436,11 @@ async function onExport(): Promise<void> {
         <el-tag v-else-if="templateDiffs.length" type="danger" size="small" effect="plain">
           校验未通过（{{ templateDiffs.length }}）
         </el-tag>
+      </span>
+
+      <!-- 列可见性是**对话框级**偏好（与 mode 无关：标签与送货单共用一份
+           print_preview_dialog 快照，见下方列可见性段注释）。 -->
+      <span class="toolbar-item">
         <ColumnVisibilityPopover
           :defs="columnDefs"
           :model-value="columnVisibility.currentMap"
@@ -352,7 +450,9 @@ async function onExport(): Promise<void> {
         />
       </span>
 
-      <span class="toolbar-item">
+      <!-- 司机下拉只服务送货单：标签页脚没有「送货人」，`{{driver_name}}` 是送货单
+           模板的页脚字段。 -->
+      <span v-if="!isLabelMode" class="toolbar-item">
         司机
         <el-select
           v-model="driverId"
@@ -381,7 +481,7 @@ async function onExport(): Promise<void> {
       </el-radio-group>
     </div>
 
-    <div v-if="templateDiffs.length" class="template-diffs">
+    <div v-if="!isLabelMode && templateDiffs.length" class="template-diffs">
       <div v-for="(d, i) in templateDiffs" :key="i" class="template-diff">{{ d }}</div>
     </div>
 
@@ -400,19 +500,31 @@ async function onExport(): Promise<void> {
           :column-visibility="columnVisibility"
           :group-key="t.groupKey"
           :reset-order-token="resetOrderToken"
+          :selectable="isLabelMode"
+          :selected-ids="selectedIds"
           @update:rows="(next: PrintRow[]) => setRows(t.groupKey, next)"
           @update:sort-mode="(m: 'column' | 'custom') => setSortMode(t.groupKey, m)"
+          @update:selected-ids="(ids: ReadonlySet<string>) => (selectedIds = ids)"
         />
         <div class="group-hint">
-          本组 {{ rowsOf(t.groupKey).length }} 条 → Sheet「{{ safeSheetName(tabNameOf(t.groupKey)) }}」（容量
-          {{ DELIVERY_NOTE_TEMPLATE_CONTRACT.dataRowCount }}/张）
-          <span v-if="sortModeByKey[t.groupKey] === 'custom'" class="muted">（已手动调序）</span>
+          <template v-if="isLabelMode">
+            本组 {{ rowsOf(t.groupKey).length }} 条 · 已勾选
+            {{ rowsOf(t.groupKey).filter((r) => selectedIds.has(r.id)).length }} 条
+          </template>
+          <template v-else>
+            本组 {{ rowsOf(t.groupKey).length }} 条 → Sheet「{{ safeSheetName(tabNameOf(t.groupKey)) }}」（容量
+            {{ DELIVERY_NOTE_TEMPLATE_CONTRACT.dataRowCount }}/张）
+            <span v-if="sortModeByKey[t.groupKey] === 'custom'" class="muted">（已手动调序）</span>
+          </template>
         </div>
       </el-tab-pane>
     </el-tabs>
 
     <template #footer>
-      <span class="footer-hint">共 {{ totalRows }} 条 · {{ sheets.length }} 个 sheet</span>
+      <span v-if="isLabelMode" class="footer-hint">
+        共 {{ totalRows }} 条 · 已勾选 {{ selectedRows.length }} 条
+      </span>
+      <span v-else class="footer-hint">共 {{ totalRows }} 条 · {{ sheets.length }} 个 sheet</span>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
       <!-- data-role 供组件级用例定位「导出」按钮（按钮数随分组数变化，按位置取是脆的） -->
       <el-tooltip :disabled="!exportHint" :content="exportHint" placement="top">

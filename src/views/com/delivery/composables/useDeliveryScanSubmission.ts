@@ -1,11 +1,11 @@
 // composables/useDeliveryScanSubmission.ts
 //
-// 扫码主流程 + 提交草稿 + 打印送货单预览的业务状态 + 函数。
+// 扫码主流程 + 提交草稿 + 打印预览（送货单 / 打印标签）的业务状态 + 函数。
 //
 // 持有：
 //   - 扫码防抖态（lastScanCode / lastScanAt / scanning）
 //   - 三层树对话框态（scanTreeDialogVisible / scannedSerialNo）
-//   - 打印送货单预览（PrintPreviewDialog）状态
+//   - 打印预览（PrintPreviewDialog）状态与导出形态（printNoteMode）
 //   - submittingByNote —— 每张草稿卡片提交中 loading
 //
 // 不持有：
@@ -65,6 +65,8 @@ export interface UseDeliveryScanSubmissionReturn {
   scanTreeLoading: Ref<boolean>;
   printNotePreviewVisible: Ref<boolean>;
   printNoteTarget: Ref<DeliveryNoteDetailData | null>;
+  /** 打印对话框的导出形态（'note' = 送货单 / 'label' = 打印标签）。 */
+  printNoteMode: Ref<'note' | 'label'>;
   printNoteLoading: Ref<boolean>;
   submittingByNote: Record<string, boolean>;
   handleScan: (rawCode: string) => Promise<void>;
@@ -74,7 +76,7 @@ export interface UseDeliveryScanSubmissionReturn {
   /** 入单提交（三层树对话框里选好数量后调）。 */
   onSubmitEntries: (entries: DeliveryScanEntry[]) => Promise<void>;
   scanSubmitting: Ref<boolean>;
-  openPrintNote: (d: DeliveryNoteItemData) => Promise<void>;
+  openPrintNote: (d: DeliveryNoteItemData, mode?: 'note' | 'label') => Promise<void>;
   onSubmitDraft: (d: DeliveryNoteItemData) => Promise<void>;
 }
 
@@ -96,10 +98,12 @@ export function useDeliveryScanSubmission(
   const scanTree = computed(() => treeState.tree.value);
   const scanTreeLoading = treeState.scanTreeMutation.isPending;
 
-  // ============ 打印送货单预览 ============
-  /** preview 弹窗显隐 + 当前打开的 note（getNote 拉回）。 */
+  // ============ 打印送货单 + 提交草稿 ============
+  /** preview 弹窗显隐 + 当前打开的 note（getNote 拉回）+ 导出形态。 */
   const printNotePreviewVisible = ref(false);
   const printNoteTarget = ref<DeliveryNoteDetailData | null>(null);
+  /** 由 openPrintNote 每次调用显式重置（对话框关闭后不复用上一次的形态）。 */
+  const printNoteMode = ref<'note' | 'label'>('note');
   const printNoteLoading = ref(false);
 
   /** 每张草稿卡片各自的提交中 loading 态。 */
@@ -238,14 +242,15 @@ export function useDeliveryScanSubmission(
   // ============ 打印送货单 + 提交草稿 ============
 
   /**
-   * 打开打印送货单预览：
+   * 打开打印预览（`mode` 决定是送货单还是打印标签）：
    *   - 先 getNote 拉 detail（full line_items），期间 printNoteTarget=null
    *     且弹窗保持关闭（v-if 控制）
    *   - 拿到 detail 后才打开弹窗；失败 toast 并保持关闭
    */
-  async function openPrintNote(d: DeliveryNoteItemData): Promise<void> {
+  async function openPrintNote(d: DeliveryNoteItemData, mode: 'note' | 'label' = 'note'): Promise<void> {
     printNoteTarget.value = null;
     printNotePreviewVisible.value = false;
+    printNoteMode.value = mode;
     printNoteLoading.value = true;
     try {
       const detail = await getNote(d.id);
@@ -319,6 +324,7 @@ export function useDeliveryScanSubmission(
     scanSubmitting,
     printNotePreviewVisible,
     printNoteTarget,
+    printNoteMode,
     printNoteLoading,
     submittingByNote,
 

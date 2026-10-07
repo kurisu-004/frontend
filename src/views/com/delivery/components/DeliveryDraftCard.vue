@@ -15,15 +15,15 @@
     rows              — foldBySerial 后的行（el-table 数据源）
     deleting          — 删除草稿 loading 态
     submitting        — 提交草稿 loading 态
-    canPrint          — 「打印送货单」按钮可用（角色 + DRAFT + ≥1 行项 + 已指定司机）
+    canPrint          — 「打印送货单」/「打印标签」两按钮可用（角色 + ≥1 行项）
     canSubmit         — 「提交草稿」按钮可用（status === 'DRAFT'）
     rowClassName      — 行 className 函数（绿底渲染已打印行）
 
   emits:
     goto-detail         — 点 header 跳转详情
-    selection-change    — el-table 勾选变化
     remove              — 移除某行
     print-note          — 打开打印送货单预览
+    print-labels        — 打开打印标签预览
     delete-draft        — 删除草稿
     submit-draft        — 提交草稿
     set-table-ref       — el-table 实例注册 / 反注册
@@ -31,7 +31,7 @@
 <script setup lang="ts">
 import { h, ref } from 'vue';
 import type { ComponentInstance } from 'vue';
-import { Delete, Printer } from '@element-plus/icons-vue';
+import { Delete, Printer, Tickets } from '@element-plus/icons-vue';
 import { ElTable } from 'element-plus'; // 2026-09-21 T-B4：收紧 emits / ref / 函数参 any → ComponentInstance<typeof ElTable> | null
 import type { MergedDraftRow } from '../composables/useDeliveryDraftBoard';
 import type { DeliveryNoteItemData } from '../composables/deliveryNoteSchema';
@@ -58,6 +58,7 @@ const emit = defineEmits<{
   gotoDetail: [];
   remove: [row: MergedDraftRow];
   printNote: [];
+  printLabels: [];
   deleteDraft: [];
   submitDraft: [];
   setTableRef: [el: ComponentInstance<typeof ElTable> | null];
@@ -175,7 +176,7 @@ drag.applyDrag(tableEl);
       </el-table>
     </div>
     <template #footer>
-      <!-- 3 按钮等宽：删除草稿 / 打印送货单 / 提交草稿（标签导出随打印端点下线） -->
+      <!-- 4 按钮等宽：删除草稿 / 打印送货单 / 打印标签 / 提交草稿 -->
       <div class="draft-card-footer">
         <el-button
           type="danger"
@@ -196,6 +197,16 @@ drag.applyDrag(tableEl);
         >
           <el-icon><Printer /></el-icon>
           打印送货单
+        </el-button>
+        <el-button
+          type="success"
+          plain
+          class="footer-btn"
+          :disabled="!canPrint"
+          @click="emit('printLabels')"
+        >
+          <el-icon><Tickets /></el-icon>
+          打印标签
         </el-button>
         <el-button
           type="primary"

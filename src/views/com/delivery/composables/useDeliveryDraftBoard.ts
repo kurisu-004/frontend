@@ -23,9 +23,9 @@
 //   - 提交 / 打印预览相关弹窗状态
 //
 // 子组件约定：
-//   - DeliveryDraftCard 通过 props 读 drafts / rows / selectedRows / 各 loading 标志，
-//     通过 emits 把 user action（goto-detail / selection-change / remove / print-labels /
-//     print-note / delete-draft / submit-draft / set-table-ref）回给 shell。
+//   - DeliveryDraftCard 通过 props 读 drafts / rows / 各 loading 标志，
+//     通过 emits 把 user action（goto-detail / remove / print-note / print-labels /
+//     delete-draft / submit-draft / set-table-ref）回给 shell。
 //
 // 2026-10-08 的连带变更：
 // - `scope` / `scope_label` / `recent_items` 三字段消失（后端不发、前端原来还在编
@@ -39,6 +39,7 @@ import { getNote, removeBatches, softDeleteNote } from '@/api/com/deliveryNote';
 import { useQueryClient } from '@tanstack/vue-query';
 import { invalidateDeliveryNotesQuery } from './useDeliveryNoteListStore';
 import { useDeliveryDraftsDetailQuery, useDeliveryDraftsQuery } from './useDeliveryDraftsQuery';
+import { usePrintedLabels } from './usePrintedLabels';
 import type {
   DeliveryNoteDetailData,
   DeliveryNoteItemData,
@@ -48,9 +49,8 @@ import type {
 /**
  * el-table 一行 = 同 serial_no 折叠后的若干 batch；serial 为 null 时按 id 各占一行。
  *
- * ⚠️ `label_printed` 字段随「打印标签」端点下线而恒 false（它读的是
- * `usePrintedLabels` 的 localStorage 记录）。字段先留着：它是 el-table selection
- * 之外的第二套行态，将来重新引入标签打印时不用重建折叠逻辑。
+ * `label_printed` 读 `usePrintedLabels` 的 localStorage 记录：打印对话框里
+ * `mode='label'` 导出成功后写入（走 `member_ids`，即该行代表的批次 id 集合）。
  */
 export interface MergedDraftRow {
   /** 同 serial_no 折叠后的代表 serial；为 null 时按各自一行（key = `__null_<id>`）。 */
@@ -226,10 +226,10 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
    */
   const foldedComputeds = new Map<string, ComputedRef<MergedDraftRow[]>>();
 
-  /** 2026-10-08：「打印标签」端点下线后，已打印标签的绿底不再有数据源（它的记录在
-   *  `usePrintedLabels` 的 localStorage 里，本模块已无写入方）。折叠行恒不带绿底，
-   *  字段 `label_printed` 保留（见 MergedDraftRow 注释）。 */
-  const isPrintedBatch = (): boolean => false;
+  /** 「已打印标签」的 localStorage 记录（模块级单例，见 usePrintedLabels）。 */
+  const printedLabelStore = usePrintedLabels();
+  /** 跨 note 查某个 batch 是否打过标签（foldBySerial 的 isPrinted 回调）。 */
+  const isPrintedBatch = printedLabelStore.isPrintedBatch;
 
   /** 子组件用：注册 / 反注册 el-table 实例；给 onPrintLabels 的 clearSelection 用。 */
   function setTableRef(noteId: string, el: DraftTableInstance | null): void {
@@ -241,9 +241,13 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
   function foldedRows(noteId: string): MergedDraftRow[] {
     let c = foldedComputeds.get(noteId);
     if (!c) {
-      c = computed(() =>
-        foldBySerial(draftDetails[noteId] ?? [], isPrintedBatch),
-      );
+      c = computed(() => {
+        // 显式读 store：`isPrintedBatch` 内部遍历的是 `_store.value`，但闭包里
+        // 读 ref 不会被 computed 收集成依赖（函数调用不是属性访问）⇒ 不显式读一下，
+        // markPrinted / unmark 之后绿底不会重算。
+        void printedLabelStore.store.value;
+        return foldBySerial(draftDetails[noteId] ?? [], isPrintedBatch);
+      });
       foldedComputeds.set(noteId, c);
     }
     return ((): MergedDraftRow[] => c!.value)();
@@ -318,6 +322,8 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
       draftDetails[noteId] = updated.line_items;
       drafts.value[noteId] = { ...drafts.value[noteId], version: updated.version };
       await invalidateDeliveryNotesQuery(qc);
+      // 批次已从单据上摘掉 → 清掉「已打印标签」记录，否则行再被加回来时会带着脏绿底。
+      printedLabelStore.unmark(noteId, row.batch_ids);
       // 该表可能折叠行被剔除 → 清掉选中
       if (selectedByNote[noteId]) {
         selectedByNote[noteId] = selectedByNote[noteId].filter(
