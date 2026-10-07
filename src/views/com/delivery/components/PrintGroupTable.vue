@@ -83,7 +83,9 @@
           <span v-else>{{ row.quantity }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="90" fixed="right" align="center">
+      <!-- 操作列（拆分）只服务送货单：标签模式下 PrintSplitEditor 被下面的 v-if 藏掉，
+           留着列就是一个点了没反应的死按钮，还会把 splitRowId 留成脏值。 -->
+      <el-table-column v-if="!selectable" label="操作" width="90" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link size="small" :disabled="row.is_asm_row" @click="splitRowId = row.id">
             拆分

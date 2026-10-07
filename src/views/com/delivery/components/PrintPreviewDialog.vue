@@ -460,7 +460,7 @@ async function exportLabelWorkbook(): Promise<void> {
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
     <div class="print-toolbar">
-<span v-if="!isLabelMode" class="toolbar-item">
+      <span v-if="!isLabelMode" class="toolbar-item">
         模板
         <el-upload
           ref="uploadRef"

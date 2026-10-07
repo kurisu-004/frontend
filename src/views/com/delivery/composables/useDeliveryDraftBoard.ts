@@ -201,9 +201,9 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
   }
 
   // ============ 每张草稿卡片各自的运行时状态 ============
-  /** 每张草稿卡片各自的勾选行（表格 selection；打印端点下线后无消费者，
-   *  保留是因为 el-table 的 selection 态与它是一对，删掉会让「勾了但看不出」的语义
-   *  在将来重新引入打印时更难接回来）。 */
+  /** 每张草稿卡片各自的勾选行（el-table 的 selection 态；行被折叠过，所以 EP 选中的是
+   *  `MergedDraftRow` 而不是 line_item）。保留是因为「勾了哪些行」是这张卡与用户之间的
+   *  一份约定：提交前的复核、打印前的挑选都从它读起，删掉会让勾选变成纯装饰。 */
   const selectedByNote = reactive<Record<string, MergedDraftRow[]>>({});
   /** 每张草稿卡片各自的删除中 loading 态。 */
   const deletingByNote = reactive<Record<string, boolean>>({});
@@ -351,6 +351,9 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     try {
       await softDeleteNote(noteId, { version: d.version });
       clearNoteLocalState(noteId);
+      // 整张草稿已删 ⇒ localStorage 里它那个「已打印标签」bucket 永远不会再被读到，
+      // 不清就是无界增长（onRemove 只清被移除的那几个批次 id）。
+      printedLabelStore.unmark(noteId, Object.keys(printedLabelStore.store.value[noteId] ?? {}));
       await invalidateDeliveryNotesQuery(qc);
       ElMessage.success('草稿已删除');
     } catch (e) {

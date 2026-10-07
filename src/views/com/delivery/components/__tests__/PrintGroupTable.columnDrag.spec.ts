@@ -195,13 +195,14 @@ describe('PrintGroupTable 标签模式勾选列', () => {
   it('勾选列固定在最左（在 drag.orderedDefs 循环之前渲染）', async () => {
     dragApi.orderedDefs.value = [DEFS[2]!, DEFS[0]!, DEFS[1]!];
     const w = await mountTable({ selectable: true });
+    // 标签模式末尾只有「数量」一列：「操作（拆分）」被 v-if 藏掉（编辑器也没渲染，
+    // 留着就是点了没反应的死按钮，见下一条用例）。
     expect(w.findAll('.mock-col').map((e) => e.attributes('data-label'))).toEqual([
       '勾选',
       '分厂',
       '序号',
       '订单号',
       '数量',
-      '操作',
     ]);
   });
 
@@ -231,10 +232,11 @@ describe('PrintGroupTable 标签模式勾选列', () => {
     expect(byKey('order_no').attributes('data-label-class')).toContain('col-draggable');
   });
 
-  it('标签模式不渲染拆分编辑器（标签没有「客户要求拆多条」这层）', async () => {
+  it('标签模式不渲染拆分编辑器，也没有「操作」列（标签没有「客户要求拆多条」这层）', async () => {
     dragApi.orderedDefs.value = [DEFS[0]!];
     const on = await mountTable({ selectable: true });
     expect(on.findComponent({ name: 'PrintSplitEditorStub' }).exists()).toBe(false);
+    expect(on.findAll('.mock-col').map((e) => e.attributes('data-label'))).not.toContain('操作');
     // 对照：送货单模式点「拆分」会拉起编辑器（证明上一条不是因为按钮没渲染才空过）
     const off = await mountTable();
     await off.findAll('.mock-col button').at(-1)!.trigger('click');

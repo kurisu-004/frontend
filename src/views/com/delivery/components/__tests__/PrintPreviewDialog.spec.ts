@@ -678,6 +678,14 @@ describe('PrintPreviewDialog 标签模式 —— 形态', () => {
     expect(checkboxes(w).every(isChecked)).toBe(true);
     expect(w.text()).toContain('已勾选 2 条');
   });
+
+  it('标签模式没有「操作（拆分）」列 —— 它下面藏了编辑器，留着就是死按钮', async () => {
+    const w = await mountDialog({}, { mode: 'label' });
+    expect(w.findAll('.mock-el-table-column[data-label="操作"]')).toHaveLength(0);
+    // 对照：送货单模式有
+    const note = await mountDialog();
+    expect(note.findAll('.mock-el-table-column[data-label="操作"]')).toHaveLength(1);
+  });
 });
 
 describe('PrintPreviewDialog 标签模式 —— 勾选', () => {
