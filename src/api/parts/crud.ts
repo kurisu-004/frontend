@@ -919,7 +919,7 @@ export async function listRepairingBatches(
  *  ⚠️ 该 DTO **无 quantity**（后端 `RepairDispatchRequest` 只有 batch_id / version /
  *  shelf_id / next_process_id / reason / note 六个字段，且 serde 未开
  *  `deny_unknown_fields` ⇒ 多带的键被**静默忽略**）：本端点是**整批返修**，
- *  传任何数量都不会生效。返修部分数量只能先 `splitPartBatch` 拆出子批次、
+ *  传任何数量都不会生效。返修部分数量只能先 `splitBatch`（`@/api/batch`）拆出子批次、
  *  再对子批次调本端点。 */
 export interface RepairDispatchPayload {
   shelf_id: string;

@@ -74,7 +74,10 @@
       <!-- 2026-10-06：右键召回 —— @contextmenu.prevent 走 BatchCard 的 fallthrough
            attrs 落在卡片根 div，未引入任何包裹层（包裹即破坏 Sortable footprint，见文件
            头注释）。第二参传 v-for 变量 batch 本身（heldBatches 已是
-           BatchCardModel[]，heldToCard 已填 version —— 召回的 OCC 锚）。
+           BatchCardModel[]，heldToCard 已填 version —— 召回与 move 的 OCC 锚）。
+           data-batch-version 同理：move 的 version 必填，而落点的 onDragAdd 只拿得到
+           DOM（evt.item），拿不到渲染源里的 batch 对象 ⇒ version 经 fallthrough attrs
+           落在同一张卡片根 div 上，与 batch-id 走同一条 dataset 通道。
            这段说明**刻意留在容器之外**：dev 构建保留模板注释，注释节点同样算 Sortable
            容器的直接子节点（守卫见本 spec 的 W13：容器内不许有 comment 节点）。 -->
       <div ref="containerRef" class="col-body" :data-worker-id="worker.worker_id">
@@ -82,6 +85,7 @@
           v-for="batch in heldBatches"
           :key="batch.batch_id"
           :batch="batch"
+          :data-batch-version="batch.version"
           @contextmenu.prevent="onCardContextMenu($event, batch)"
         />
       </div>
@@ -160,18 +164,30 @@ useLazyDraggable(containerRef, {
   onRemove: restoreNodeToSource,
 });
 
-/** moveBatchToWorker 签名 (batch_id, to_worker_id, from_shelf_id)，由 QueueBoard
- *  provide、useQueueMove 实现。inject 缺省用 noop 兜底（provider 缺失时不炸）。
- *  目标工序由后端自推，故没有 process_id 形参。 */
+/** moveBatchToWorker 签名 (batch_id, version, to_worker_id, from_shelf_id)，由
+ *  QueueBoard provide、useQueueMove 实现。inject 缺省用 noop 兜底（provider 缺失时
+ *  不炸）。目标工序由后端自推，故没有 process_id 形参。
+ *  `version` 排在第二参：它是**每个方向都要带**的 OCC 锚（源批次 t_part_batch.version），
+ *  排在这里三个包装的形参顺序就完全一致（batch_id, version, …），调用侧不会漏。 */
 const moveBatchToWorker = inject<
-  (batch_id: string, to_worker_id: string, from_shelf_id: string) => Promise<boolean>
+  (
+    batch_id: string,
+    version: number,
+    to_worker_id: string,
+    from_shelf_id: string,
+  ) => Promise<boolean>
 >('moveBatchToWorker', async () => false);
 
 /** WORKER→WORKER 包装（把别的工人列里的批次拖到本列 = 转交）。inject 缺省 noop
  *  兜底：拿不到包装时 onDragAdd 的工人源分支退化为不发请求，而不是抛错炸掉整个
  *  drop 回调。 */
 const moveBatchBetweenWorkers = inject<
-  (batch_id: string, from_worker_id: string, to_worker_id: string) => Promise<boolean>
+  (
+    batch_id: string,
+    version: number,
+    from_worker_id: string,
+    to_worker_id: string,
+  ) => Promise<boolean>
 >('moveBatchBetweenWorkers', async () => false);
 
 /** 卡片右键 → 板级单例菜单（BatchContextMenu.teleport 在 body 上，与本 Sortable
@@ -199,7 +215,8 @@ function onDragStart(evt: DraggableStartEvent) {
 }
 
 /** Sortable @add 的 payload 是原生事件本体，item 为被拖入的 HTMLElement；通过
- *  BatchCard 上的 :data-batch-id 反查 batch_id。
+ *  BatchCard 上的 :data-batch-id 反查 batch_id、:data-batch-version 反查 OCC 锚
+ *  version（落点拿不到渲染源里的 batch 对象 —— 卡片可能已随 key 变化卸载）。
  *
  *  两段来源：候选池源（POOL→WORKER）与工人源（WORKER→WORKER）。此前只认候选池源、
  *  拿不到就早退 ⇒ 把 A 手中的卡片拖到 B 手中时前端既不发请求也不失效。
@@ -207,13 +224,17 @@ function onDragStart(evt: DraggableStartEvent) {
 async function onDragAdd(evt: DraggableStartEvent) {
   const batchId = evt.item.dataset.batchId;
   if (!batchId) return;
+  // dataset 缺失时 parseInt('') ⇒ NaN，被 useQueueMove 的 version 守卫拦下（warning +
+  // 早退）。⚠️ 不能写 `|| 0`：0 是合法形态的假 version，会让后端按 OCC 冲突（40901）
+  // 拒一次用户没做错的投放。
+  const version = Number.parseInt(evt.item.dataset.batchVersion ?? '', 10);
 
   // ① POOL → WORKER：候选池卡片拖进本列。`from.shelf_id` 取卡片自带的**真实货架**
   // （src.shelfId，来自 PoolDrawer 渲染的 :data-shelf-id），不是当前激活货架 ——
   // 候选池跨所有货架，两者可能不一致；填错后端返 20122 BIZ_BATCH_LOCATION_MISMATCH。
   const poolSrc = consumePoolSource(batchId);
   if (poolSrc) {
-    await moveBatchToWorker(batchId, props.worker.worker_id, poolSrc.shelfId);
+    await moveBatchToWorker(batchId, version, props.worker.worker_id, poolSrc.shelfId);
     return;
   }
 
@@ -222,7 +243,7 @@ async function onDragAdd(evt: DraggableStartEvent) {
   const fromWorkerId = consumeWorkerSource(batchId);
   if (!fromWorkerId) return;
   if (fromWorkerId === props.worker.worker_id) return;
-  await moveBatchBetweenWorkers(batchId, fromWorkerId, props.worker.worker_id);
+  await moveBatchBetweenWorkers(batchId, version, fromWorkerId, props.worker.worker_id);
 }
 </script>
 

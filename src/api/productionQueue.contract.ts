@@ -39,6 +39,9 @@
 // wire 层形态约定：
 //   - i64 主键 → JSON **字符串**（雪花 ID 防 JS 精度截断）。⚠️ 请求体里的雪花 ID
 //     同样必须发字符串 —— 后端 `deserialize_i64` 只接受字符串，发数字返 40001。
+//   - `version` 是 OCC 乐观锁锚，**写端点必填**（recall / move / split …）：后端
+//     serde 无 `#[serde(default)]` ⇒ 缺字段直接反序列化失败、返 HTTP 422 纯文本
+//     （不是业务信封，别指望从错误响应里解析 code）。
 //   - `Option<T>` 字段在 rust 侧未加 `skip_serializing_if` 时序列化为 `null`；
 //     加了则**整个字段从 JSON 省略** ⇒ 契约按「可能缺省」标注（`?:` / `| undefined`）。
 //   - 计数（`pool_count` / `total` / `capacity_remaining` / `max_held` 等）是
@@ -285,6 +288,9 @@ export type MoveLocationDto =
  *  不变量（前端必须遵守，否则 409 / 422）：
  *  - `from` 必与批次当前 `(location, current_holder_id)` 严格一致，否则 **20122**
  *    （HTTP 409）；
+ *  - `version` 必填（OCC 乐观锁，缺省 40001）—— 取卡片 model 的
+ *    `t_part_batch.version`。⚠️ 后端 serde 无 `#[serde(default)]` ⇒ 缺字段返 HTTP 422
+ *    **纯文本**，不是业务信封；
  *  - `to.kind = 'POOL'`：目标货架必须映射到批次当前工序，否则 **20507**（HTTP 422）；
  *  - `to.kind = 'WORKER'`：工人须在岗、工种含批次当前工序、持有数 < max_held，
  *    否则 20202 / 20104 / 20204。
@@ -292,6 +298,9 @@ export type MoveLocationDto =
  *  step 自推 ⇒ 前端不需要也不该传 process_id。 */
 export interface MoveRequest {
   batch_id: string;
+  /** OCC 锚：源批次 `t_part_batch.version`。移动会改 `current_holder_id` /
+   *  `location`，属并发敏感写 ⇒ 与召回（RecallRequest）同款必填。 */
+  version: number;
   from: MoveLocationDto;
   to: MoveLocationDto;
   note?: string;

@@ -47,9 +47,6 @@ vi.mock('@/api/http', () => ({
 import {
   listCompanySentParts,
   listOutsourceInFlight,
-  listOutsourcePoolByProcess,
-  listOutsourcePoolCounts,
-  listOutsourcePoolState,
   listOutsourceSendable,
   listQuotableParts,
 } from '../outsource';
@@ -618,115 +615,5 @@ describe('F 组：4 个 list helper 真的在 API 边界 reject 坏响应', () =
     await expect(listQuotableParts()).resolves.toMatchObject({ total: 1 });
     respondWith({ items: [sentPartFixture], total: 1, limit: 50, offset: 0 });
     await expect(listCompanySentParts(COMPANY)).resolves.toMatchObject({ total: 1 });
-  });
-});
-
-// ============================================================
-// A2 组 / F2 组：2026-10-03 新增 —— 外协看板 pool 域 3 个只读端点。
-//
-// 与上面 A / F 组同款守卫（URL 逐字钉死 + 坏响应必 reject），覆盖的是「外协发送/
-// 接收」页重构成看板后的新数据源。3 个端点与上面 4 个 list 端点不同构：响应是
-// **裸对象**（无分页信封），所以 URL 组用合法的**空裸对象**当响应体，坏响应组用
-// 「裸数组」与「空对象」两种形态。
-// ============================================================
-
-/** 让下一次读请求返回指定响应体（与 F 组的 respondWith 同款，语义不冲突）。 */
-function respondWithPool(data: unknown): void {
-  httpGetMock.mockReset();
-  httpGetMock.mockResolvedValue({ data });
-}
-
-const POOL_COUNTS_EMPTY = { counts: [], sendable_total: 0, in_flight_total: 0, total: 0 };
-const POOL_PROCESS_EMPTY = {
-  process_id: 'PR1',
-  process_code: 'OUT-01',
-  process_name: '外协粗加工',
-  companies: [],
-  total: 0,
-  items: [],
-};
-const POOL_STATE_EMPTY = {
-  outsource_company_id: 'C1',
-  outsource_company_name: '外协厂甲',
-  process_id: 'PR1',
-  current_held: 0,
-  items: [],
-};
-
-describe('A2 组：pool 域 3 个端点 URL 逐字钉死（2026-10-03 新增）', () => {
-  it('A2-1：counts = /outsource-pool/counts（无 query 参数）', async () => {
-    respondWithPool(POOL_COUNTS_EMPTY);
-    await listOutsourcePoolCounts();
-    expect(httpGetMock).toHaveBeenCalledTimes(1);
-    // 后端端点不接 Query extractor：连 config 都不能传
-    expect(httpGetMock.mock.calls[0]).toEqual(['/outsource-pool/counts']);
-  });
-
-  it('A2-2：单工序详情 = /outsource-pool/{process_id}（走 encodeURIComponent）', async () => {
-    respondWithPool(POOL_PROCESS_EMPTY);
-    await listOutsourcePoolByProcess(COMPANY);
-    expect(httpGetMock.mock.calls[0]![0]).toBe(`/outsource-pool/${COMPANY}`);
-  });
-
-  it('A2-3：state = /outsource-pool/state 且两个 query 参数都必传', async () => {
-    respondWithPool(POOL_STATE_EMPTY);
-    await listOutsourcePoolState({ outsource_company_id: 'C1', process_id: 'PR1' });
-    const [path, cfg] = httpGetMock.mock.calls[0] as [string, { params: Record<string, unknown> }];
-    // state 端点必须排在 /{process_id} 之前被后端匹配；前端 URL 写死独立段。
-    expect(path).toBe('/outsource-pool/state');
-    expect(cfg.params).toEqual({ outsource_company_id: 'C1', process_id: 'PR1' });
-  });
-
-  // 反断言：不得把这 3 个端点挂到 parts 域或 outsource 域顶层（与 2026-10-03 那次
-  // /parts/outsource-sendable → /outsource-sendable 的迁移同款风险）。
-  it('A2-4：反断言 —— 3 个 URL 都不得含 /parts/', async () => {
-    respondWithPool(POOL_COUNTS_EMPTY);
-    await listOutsourcePoolCounts();
-    expect(httpGetMock.mock.calls[0]![0]).not.toContain('/parts/');
-    respondWithPool(POOL_PROCESS_EMPTY);
-    await listOutsourcePoolByProcess('PR1');
-    expect(httpGetMock.mock.calls[0]![0]).not.toContain('/parts/');
-    respondWithPool(POOL_STATE_EMPTY);
-    await listOutsourcePoolState({ outsource_company_id: 'C1', process_id: 'PR1' });
-    expect(httpGetMock.mock.calls[0]![0]).not.toContain('/parts/');
-  });
-});
-
-describe('F2 组：pool 域 3 个 helper 真的在 API 边界 reject 坏响应（2026-10-03 新增）', () => {
-  it('F2-1：裸数组响应 → 3 个 helper 全部 reject（不把数组当裸对象吐出去）', async () => {
-    respondWithPool([{ process_id: 'PR1' }]);
-    await expect(listOutsourcePoolCounts()).rejects.toThrow();
-    await expect(listOutsourcePoolByProcess('PR1')).rejects.toThrow();
-    await expect(
-      listOutsourcePoolState({ outsource_company_id: 'C1', process_id: 'PR1' }),
-    ).rejects.toThrow();
-  });
-
-  it('F2-2：空对象响应 → 3 个 helper 全部 reject（漏声明字段不会被静默放过）', async () => {
-    respondWithPool({});
-    await expect(listOutsourcePoolCounts()).rejects.toThrow();
-    await expect(listOutsourcePoolByProcess('PR1')).rejects.toThrow();
-    await expect(
-      listOutsourcePoolState({ outsource_company_id: 'C1', process_id: 'PR1' }),
-    ).rejects.toThrow();
-  });
-
-  // counts 端点少返一个分项总数必须被拒：漏声明 sendable_total 时前端会拿
-  // undefined 做加法，页头汇总恒 NaN 且无任何报错。
-  it('F2-3：counts 缺任一分项 total → reject', async () => {
-    respondWithPool({ counts: [], in_flight_total: 0, total: 0 });
-    await expect(listOutsourcePoolCounts()).rejects.toThrow();
-  });
-
-  // 正向对照：合法裸对象必须放行。没有这条，F2 组可能整体因桩坏掉而恒绿。
-  it('F2-4：合法裸对象 → 3 个 helper 全部 resolve 且透传顶层字段', async () => {
-    respondWithPool(POOL_COUNTS_EMPTY);
-    await expect(listOutsourcePoolCounts()).resolves.toMatchObject({ total: 0 });
-    respondWithPool(POOL_PROCESS_EMPTY);
-    await expect(listOutsourcePoolByProcess('PR1')).resolves.toMatchObject({ total: 0 });
-    respondWithPool(POOL_STATE_EMPTY);
-    await expect(
-      listOutsourcePoolState({ outsource_company_id: 'C1', process_id: 'PR1' }),
-    ).resolves.toMatchObject({ current_held: 0 });
   });
 });

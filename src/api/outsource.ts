@@ -3,9 +3,6 @@
 import { api, cleanParams, normalizeListResult } from '@/api/http';
 import {
   outsourceInFlightListResultSchema,
-  outsourcePoolByProcessResultSchema,
-  outsourcePoolCountsResultSchema,
-  outsourcePoolStateResultSchema,
   outsourceQuotablePartListResultSchema,
   outsourceSendableListResultSchema,
   outsourceSentPartListResultSchema,
@@ -17,9 +14,6 @@ import type {
   OutsourceCompanyUpdatePayload,
   OutsourceCompanyWithProcesses,
   OutsourceInFlightListResult,
-  OutsourcePoolCountsResult,
-  OutsourcePoolDetailResult,
-  OutsourcePoolStateResult,
   OutsourceQuote,
   OutsourceQuoteApprovePayload,
   OutsourceQuoteCreatePayload,
@@ -298,68 +292,4 @@ export async function listOutsourceSendable(
   return outsourceSendableListResultSchema.parse(
     normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
   ) as OutsourceSendableListResult;
-}
-
-// ============================================================
-// 外协看板 pool 域（2026-10-03 新增）
-//
-// 3 个只读端点，供「外协发送/接收」看板按「工序 tab × 左侧可发送候选批次 × 右侧
-// 外协公司列」消费。与上面 4 个 list helper 的两点差异：
-//   1. 响应是**裸对象**（无分页信封、无 limit/offset）⇒ 不走 `normalizeListResult`
-//      （它只重整 items/total/limit/offset 四键，对裸对象无意义）；count 字段本就是
-//      裸 i64 数字，与雪花 ID 的字符串方向相反。
-//   2. 守门在 API 边界做**第一层**，调用方的 queryFn 还会再 parse 一次（第二层）。
-//      本层是沿本文件另外 4 个 list helper 的既有做法在边界挡一次漂移（那 4 个的
-//      消费方是页面级 composable、queryFn 里不再 parse）；queryFn 那次是 CLAUDE.md §4
-//      对共享 useQuery 的硬要求（worker-pool 三个 query 同款）。本域 3 个 helper 目前
-//      **只被 `useOutsourcePool*Query` 消费**，故两层在运行路径上实际重叠。
-//
-// ⚠️ 本段 3 个 helper 的 `schema.parse(...) as XxxResult` 里的 `as` 是**已知不提供
-// schema↔类型一致性保证**的（`as` 允许向更宽方向断言：TS 接口若比 schema 更宽松、
-// 如某字段被写成 `| null`，编译器不会报错）。行 schema 与顶层 result schema 两侧的键集
-// 一致性都由 `src/composables/queries/__tests__/schemas.spec.ts` 的 outsource-pool 段
-// 「parse 后键集 == fixture 键集」断言兜住（4 个行 schema + 3 个顶层 result schema 各
-// 一组）—— 漏声明 / 多声明带默认值都会让那组用例会红。
-// ============================================================
-
-/**
- * 各外协工序的「可发送 / 在途」计数（看板 tab 标题徽标的唯一数据源）。
- * GET /outsource-pool/counts
- *
- * 响应裸对象：counts[]（只含 sendable_count + in_flight_count > 0 的工序，按
- * process_id 升序）+ sendable_total + in_flight_total + total。
- */
-export async function listOutsourcePoolCounts(): Promise<OutsourcePoolCountsResult> {
-  const resp = await api.get<unknown>('/outsource-pool/counts');
-  return outsourcePoolCountsResultSchema.parse(resp.data) as OutsourcePoolCountsResult;
-}
-
-/**
- * 单工序的完整看板数据：可发送候选批次 × 该工序，外加该工序映射的**全部活跃**
- * 外协公司（含在途为 0 的）。
- * GET /outsource-pool/{process_id}
- */
-export async function listOutsourcePoolByProcess(
-  processId: string,
-): Promise<OutsourcePoolDetailResult> {
-  const resp = await api.get<unknown>(`/outsource-pool/${encodeURIComponent(processId)}`);
-  return outsourcePoolByProcessResultSchema.parse(resp.data) as OutsourcePoolDetailResult;
-}
-
-/**
- * 单公司 × 单工序的在途批次（看板右侧公司列的展开内容）。
- * GET /outsource-pool/state?outsource_company_id=&process_id=
- *
- * 两个 query 参数**都必填** —— 缺任一个后端即拒。守门侧由
- * `useOutsourcePoolStateQuery` 的 enabled 闸门挡（不满足时零网络请求），本 helper
- * 仍是纯透传、不兜默认值。
- */
-export async function listOutsourcePoolState(params: {
-  outsource_company_id: string;
-  process_id: string;
-}): Promise<OutsourcePoolStateResult> {
-  const resp = await api.get<unknown>('/outsource-pool/state', {
-    params: cleanParams(params),
-  });
-  return outsourcePoolStateResultSchema.parse(resp.data) as OutsourcePoolStateResult;
 }

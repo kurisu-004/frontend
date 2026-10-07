@@ -29,6 +29,11 @@
 // 待品检队列读（`GET /prod/inspection/queue`）属 prod::inspection 域，其 URL 与
 //   Query 参数断言见 `src/api/__tests__/inspection.contract.spec.ts`。
 //
+// 2026-10-08：批次拆分（`POST /prod/batches/{batch_id}/split`）硬切下线，改为共用层
+//   `POST /api/v2/batches/split`（`batch_id` 走 body 不走路径），封装在 `@/api/batch`
+//   的 `splitBatch` 里 —— 那条 URL / body 的守卫随之搬到
+//   `src/api/__tests__/batch.contract.spec.ts`，本文件不再覆盖它。
+//
 // mock 手法沿 src/api/shelfProcesses.spec.ts 同款：整模块桩掉 `@/api/http`
 // （不 importOriginal），只留可断言的 api.get / api.post 入口。
 
@@ -59,13 +64,7 @@ vi.mock('@/composables/queries/schemas', () => ({
   scanPartListResultSchema: { parse: (v: unknown) => v },
 }));
 
-import {
-  batchToInspection,
-  batchToShip,
-  cancelPartBatch,
-  listPartBatches,
-  splitPartBatch,
-} from '../batch';
+import { batchToInspection, batchToShip, cancelPartBatch, listPartBatches } from '../batch';
 import {
   completePart,
   completePartRepair,
@@ -163,9 +162,6 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
         scanInspect(BATCH, { target_inspection_shelf_id: 's', pass: true, version: 1 }),
       ),
     ).toBe(`/prod/batches/${BATCH}/scan-inspect`);
-    expect(await postedPath(() => splitPartBatch(BATCH, { quantity: 1, version: 1 }))).toBe(
-      `/prod/batches/${BATCH}/split`,
-    );
     expect(await postedPath(() => cancelPartBatch(BATCH, 1))).toBe(`/prod/batches/${BATCH}/cancel`);
     // 单件送检（本次新建的 URL）。别与 receiveFromOutsourceToInspection 混：
     // 那个是 /receive-from-outsource-to-inspection，外协回收直送品检。

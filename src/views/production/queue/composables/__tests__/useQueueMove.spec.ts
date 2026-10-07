@@ -20,7 +20,12 @@
 //   - T5：moveBatchToPool toShelfId 为空 → 早退返回 false + warning，不发请求。
 //   - T6：runAutoAllocate 成功 → autoAllocate 被调 + queue 两域前缀失效。
 //   - T7：runAutoAllocate 失败 → onError 写入 error.value **且失效 queue 两域**。
-//   - T8：请求体**不含** process_id / next_process_id（目标工序由后端自推）。
+//   - T8：请求体**不含** process_id / next_process_id（目标工序由后端自推），且键集合
+//     恰为 batch_id / version / from / to。
+//   - T14（2026-10-08）：三个包装的 version 实参原样进请求体（OCC 锚）；
+//     version 缺失 / 非有限数（NaN）→ 早退 false + warning「批次版本信息缺失，无法移动」
+//     且**零请求**（后端 serde 无 default，缺 version 返 HTTP 422 纯文本，发过去只会
+//     得到一条对用户无意义的报错）。
 //   - T9：不再导出 `workers`（恒空数组的占位 view-model）/ loadBoard / workerHeld。
 //   - T10：moveBatchBetweenWorkers 成功 → moveBatch 收到 WORKER→WORKER 形态
 //     （from/to 都是 worker_id）+ queue 两域前缀失效。
@@ -74,11 +79,15 @@ function makeMoveResult(from: 'POOL' | 'WORKER', to: 'POOL' | 'WORKER'): MoveRes
 const realMoveBatch = vi.fn<
   (req: {
     batch_id: string;
+    version: number;
     from: { kind: 'POOL'; shelf_id: string } | { kind: 'WORKER'; worker_id: string };
     to: { kind: 'POOL'; shelf_id: string } | { kind: 'WORKER'; worker_id: string };
     note?: string;
   }) => Promise<MoveResultDto>
 >(async (req) => makeMoveResult(req.from.kind, req.to.kind));
+
+/** 卡片 version（真形态是整数 OCC 锚）；各用例的 payload 断言都拿它比对。 */
+const CARD_VERSION = 11;
 
 const realAutoAllocate = vi.fn<() => Promise<AutoAllocateResultDto>>(async () => ({
   process_id: '2000000000001',
@@ -147,11 +156,17 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     const { useQueueMove } = await import('../useQueueMove');
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchToWorker('3000000000001', '1900000000002', '5000000000001');
+    const ok = await q.moveBatchToWorker(
+      '3000000000001',
+      CARD_VERSION,
+      '1900000000002',
+      '5000000000001',
+    );
     expect(ok).toBe(true);
     expect(realMoveBatch).toHaveBeenCalledTimes(1);
     expect(realMoveBatch).toHaveBeenCalledWith({
       batch_id: '3000000000001',
+      version: CARD_VERSION,
       from: { kind: 'POOL', shelf_id: '5000000000001' },
       to: { kind: 'WORKER', worker_id: '1900000000002' },
     });
@@ -166,7 +181,7 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     const { useQueueMove } = await import('../useQueueMove');
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchToWorker('3000000000001', '1900000000002', '');
+    const ok = await q.moveBatchToWorker('3000000000001', CARD_VERSION, '1900000000002', '');
     expect(ok).toBe(false);
     expect(realMoveBatch).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('批次货架信息缺失，无法分配');
@@ -186,7 +201,7 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
       new Error('invalidate boom'),
     );
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchToWorker('3000000000001', '1900000000002', '');
+    const ok = await q.moveBatchToWorker('3000000000001', CARD_VERSION, '1900000000002', '');
     expect(ok).toBe(false);
     expect(ElMessage.warning).toHaveBeenCalledWith('批次货架信息缺失，无法分配');
   });
@@ -196,7 +211,12 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     const { ElMessage } = await import('element-plus');
     realMoveBatch.mockRejectedValueOnce(new ApiError(20204, 'WORKER_CAPACITY_EXCEEDED'));
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchToWorker('3000000000001', '1900000000002', '5000000000001');
+    const ok = await q.moveBatchToWorker(
+      '3000000000001',
+      CARD_VERSION,
+      '1900000000002',
+      '5000000000001',
+    );
     expect(ok).toBe(false);
     expect(q.error.value).toContain('WORKER_CAPACITY_EXCEEDED');
     expect(ElMessage.error).toHaveBeenCalledWith('WORKER_CAPACITY_EXCEEDED');
@@ -205,10 +225,16 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
   it('T4：moveBatchToPool 成功 → moveBatch 收到 WORKER→POOL 形态', async () => {
     const { useQueueMove } = await import('../useQueueMove');
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchToPool('3000000000001', '1900000000002', '5000000000001');
+    const ok = await q.moveBatchToPool(
+      '3000000000001',
+      CARD_VERSION,
+      '1900000000002',
+      '5000000000001',
+    );
     expect(ok).toBe(true);
     expect(realMoveBatch).toHaveBeenCalledWith({
       batch_id: '3000000000001',
+      version: CARD_VERSION,
       from: { kind: 'WORKER', worker_id: '1900000000002' },
       to: { kind: 'POOL', shelf_id: '5000000000001' },
     });
@@ -221,7 +247,7 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     const { useQueueMove } = await import('../useQueueMove');
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchToPool('3000000000001', '1900000000002', '');
+    const ok = await q.moveBatchToPool('3000000000001', CARD_VERSION, '1900000000002', '');
     expect(ok).toBe(false);
     expect(realMoveBatch).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('请先选择目标货架');
@@ -266,11 +292,11 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     // `batch.current_process_step.process_id` 自推（worker-pool.md:146-147）。
     const { useQueueMove } = await import('../useQueueMove');
     const q = testApp.runWithContext(() => useQueueMove());
-    await q.moveBatchToWorker('3000000000001', '1900000000002', '5000000000001');
+    await q.moveBatchToWorker('3000000000001', CARD_VERSION, '1900000000002', '5000000000001');
     const sent = realMoveBatch.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(sent).not.toHaveProperty('process_id');
     expect(sent).not.toHaveProperty('next_process_id');
-    expect(Object.keys(sent).sort()).toEqual(['batch_id', 'from', 'to']);
+    expect(Object.keys(sent).sort()).toEqual(['batch_id', 'from', 'to', 'version']);
   });
 
   it('T9：不再导出 `workers` / loadBoard / workerHeld（无消费方的占位数据源）', async () => {
@@ -289,12 +315,18 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
   it('T10：moveBatchBetweenWorkers 成功 → moveBatch 收到 WORKER→WORKER 形态 + 两域失效', async () => {
     const { useQueueMove } = await import('../useQueueMove');
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchBetweenWorkers('3000000000001', '1900000000001', '1900000000002');
+    const ok = await q.moveBatchBetweenWorkers(
+      '3000000000001',
+      CARD_VERSION,
+      '1900000000001',
+      '1900000000002',
+    );
     expect(ok).toBe(true);
     expect(realMoveBatch).toHaveBeenCalledTimes(1);
     // from / to 两侧都是 WORKER 形态（tagged enum 的 worker_id 分支）
     expect(realMoveBatch).toHaveBeenCalledWith({
       batch_id: '3000000000001',
+      version: CARD_VERSION,
       from: { kind: 'WORKER', worker_id: '1900000000001' },
       to: { kind: 'WORKER', worker_id: '1900000000002' },
     });
@@ -310,7 +342,12 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     const { useQueueMove } = await import('../useQueueMove');
     realMoveBatch.mockRejectedValueOnce(new ApiError(20204, 'WORKER_CAPACITY_EXCEEDED'));
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchBetweenWorkers('3000000000001', '1900000000001', '1900000000002');
+    const ok = await q.moveBatchBetweenWorkers(
+      '3000000000001',
+      CARD_VERSION,
+      '1900000000001',
+      '1900000000002',
+    );
     expect(ok).toBe(false);
     expect(q.error.value).toContain('WORKER_CAPACITY_EXCEEDED');
     expectQueueDomainInvalidated();
@@ -320,7 +357,12 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     const { useQueueMove } = await import('../useQueueMove');
     realMoveBatch.mockRejectedValueOnce(new ApiError(20507, 'BIZ_SHELF_PROCESS_NOT_MAPPED'));
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchToWorker('3000000000001', '1900000000002', '5000000000001');
+    const ok = await q.moveBatchToWorker(
+      '3000000000001',
+      CARD_VERSION,
+      '1900000000002',
+      '5000000000001',
+    );
     expect(ok).toBe(false);
     expectQueueDomainInvalidated();
   });
@@ -329,5 +371,54 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     const { useQueueMove } = await import('../useQueueMove');
     const q = testApp.runWithContext(() => useQueueMove());
     expect(typeof q.moveBatchBetweenWorkers).toBe('function');
+  });
+
+  // ===== 2026-10-08：move 补 OCC 锚 version =====
+
+  it('T14：三个包装都把 version 原样带进请求体（OCC 锚）', async () => {
+    const { useQueueMove } = await import('../useQueueMove');
+    const q = testApp.runWithContext(() => useQueueMove());
+    await q.moveBatchToWorker('3000000000001', CARD_VERSION, '1900000000002', '5000000000001');
+    await q.moveBatchToPool('3000000000001', CARD_VERSION, '1900000000002', '5000000000001');
+    await q.moveBatchBetweenWorkers(
+      '3000000000001',
+      CARD_VERSION,
+      '1900000000001',
+      '1900000000002',
+    );
+    expect(realMoveBatch).toHaveBeenCalledTimes(3);
+    for (const call of realMoveBatch.mock.calls) {
+      expect(call[0].version).toBe(CARD_VERSION);
+    }
+  });
+
+  it('T15：version 为 NaN（卡片没填）→ 三个包装都早退 + warning，零请求', async () => {
+    // 回归 guard：卡片没填 version 时，落点从 dataset 读到的是 NaN（不是 undefined / 0）。
+    // 后端 serde 无 #[serde(default)] ⇒ 缺 version 返 HTTP 422 **纯文本**而非业务信封，
+    // 发过去用户只看到一句语法错误。所以守卫必须同时挡住 NaN：`typeof NaN === 'number'`，
+    // 只查 typeof 会让它穿过去。
+    const { useQueueMove } = await import('../useQueueMove');
+    const { ElMessage } = await import('element-plus');
+    const q = testApp.runWithContext(() => useQueueMove());
+
+    expect(await q.moveBatchToWorker('3', Number.NaN, 'w2', 's1')).toBe(false);
+    expect(await q.moveBatchToPool('3', Number.NaN, 'w1', 's1')).toBe(false);
+    expect(await q.moveBatchBetweenWorkers('3', Number.NaN, 'w1', 'w2')).toBe(false);
+
+    expect(realMoveBatch).not.toHaveBeenCalled();
+    expect(ElMessage.warning).toHaveBeenCalledWith('批次版本信息缺失，无法移动');
+    // 早退同样要失效对账（卡片已被 Sortable 搬到落点列，服务器侧没有任何变化）
+    expectQueueDomainInvalidated();
+  });
+
+  it('T16：version 守卫先于货架守卫（两个都缺时提示 version，不发请求）', async () => {
+    const { useQueueMove } = await import('../useQueueMove');
+    const { ElMessage } = await import('element-plus');
+    const q = testApp.runWithContext(() => useQueueMove());
+    const ok = await q.moveBatchToWorker('3', Number.NaN, 'w2', '');
+    expect(ok).toBe(false);
+    expect(realMoveBatch).not.toHaveBeenCalled();
+    expect(ElMessage.warning).toHaveBeenCalledWith('批次版本信息缺失，无法移动');
+    expect(ElMessage.warning).not.toHaveBeenCalledWith('批次货架信息缺失，无法分配');
   });
 });

@@ -16,9 +16,12 @@
 //   - W1：Sortable 用**二参重载**（不传 list）—— 库的内建 onAdd/onRemove 假定「传进来
 //     的 list 就是渲染源」，而本组件的渲染源是 props 派生的 heldBatches，传镜像数组
 //     只会往一个没人看的数组里 splice。
-//   - W2：候选池源 → moveBatchToWorker(batchId, 本列工人, 卡片自带的真实货架)。
-//   - W3：工人源（**另一名**工人）→ moveBatchBetweenWorkers(batchId, 源工人, 本列工人)，
-//     且不发 POOL→WORKER。此即「主症状」的修复点：此前只有 W2 一条路径。
+//   - W2：候选池源 → moveBatchToWorker(batchId, version, 本列工人, 卡片自带的真实货架)。
+//   - W2b（2026-10-08）：卡片没带 data-batch-version → version 实参是 NaN 而不是 0
+//     （守卫在 useQueueMove：0 是形态合法的假 version，会让后端按 OCC 冲突拒一次
+//     用户没做错的投放）。
+//   - W3：工人源（**另一名**工人）→ moveBatchBetweenWorkers(batchId, version, 源工人,
+//     本列工人)，且不发 POOL→WORKER。此即「主症状」的修复点：此前只有 W2 一条路径。
 //   - W4：拖回自己那一列 → 两个包装都不调（不构成一次移动）。
 //   - W5：既无候选池源也无工人源 → 两个包装都不调。
 //   - W6：空态 el-empty 是 .col-body 的**兄弟覆盖层**：容器仍在（非空/空态都要存在，
@@ -288,14 +291,27 @@ function capturedOptions(): Record<string, unknown> {
   return captured.calls[0].options;
 }
 
-/** 造一个形状与 Sortable 原生事件一致的最小载荷。 */
-function dragEvent(dataset: { batchId: string }, fromDataset: Record<string, string> = {}) {
+/**
+ * 造一个形状与 Sortable 原生事件一致的最小载荷。
+ *
+ * `version` 走卡片的 `data-batch-version` dataset（2026-10-08 起 move 必传 OCC 锚）：
+ * 落点只拿得到 evt.item，读不到渲染源里的 batch 对象 ⇒ version 必须随 DOM 一起搬过来。
+ * 传 `version: undefined` 时**不写该 dataset**，用来复现「卡片没填 version」的形态。
+ */
+function dragEvent(
+  dataset: { batchId: string; version?: number },
+  fromDataset: Record<string, string> = {},
+) {
   const item = document.createElement('div');
   item.dataset.batchId = dataset.batchId;
+  if (dataset.version !== undefined) item.dataset.batchVersion = String(dataset.version);
   const from = document.createElement('div');
   for (const [k, v] of Object.entries(fromDataset)) from.dataset[k] = v;
   return { item, from };
 }
+
+/** 全部 move 用例的卡片 version（真形态是整数 OCC 锚）。 */
+const CARD_VERSION = 11;
 
 describe('WorkerColumn（拖拽落点分发）', () => {
   beforeEach(() => {
@@ -314,7 +330,7 @@ describe('WorkerColumn（拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W2：候选池源 → moveBatchToWorker(batchId, 本列工人, 卡片真实货架)', async () => {
+  it('W2：候选池源 → moveBatchToWorker(batchId, version, 本列工人, 卡片真实货架)', async () => {
     const moveBatchToWorker = vi.fn(async () => true);
     const moveBatchBetweenWorkers = vi.fn(async () => true);
     const wrapper = mountColumn([makeHeld()], { moveBatchToWorker, moveBatchBetweenWorkers });
@@ -325,12 +341,13 @@ describe('WorkerColumn（拖拽落点分发）', () => {
       processId: '2000000000001',
       shelfId: '5000000000009',
     });
-    (options.onStart as (e: unknown) => void)(dragEvent({ batchId: '3000000000009' }));
-    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009' }));
+    (options.onStart as (e: unknown) => void)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
+    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
 
     expect(moveBatchToWorker).toHaveBeenCalledTimes(1);
     expect(moveBatchToWorker).toHaveBeenCalledWith(
       '3000000000009',
+      CARD_VERSION,
       SELF_WORKER_ID,
       '5000000000009',
     );
@@ -338,20 +355,45 @@ describe('WorkerColumn（拖拽落点分发）', () => {
     wrapper.unmount();
   });
 
-  it('W3：工人源（另一名工人）→ moveBatchBetweenWorkers，且不发 POOL→WORKER', async () => {
+  it('W2b（2026-10-08）：卡片没带 data-batch-version → 实参是 NaN（守卫在 useQueueMove）', async () => {
+    // 回归 guard：move 的 version 是后端必填的 OCC 锚，而落点只能从 DOM 读。卡片缺该
+    // dataset（某个适配层忘了填 version）时**不能退化成 0** —— 0 是形态合法的假 version，
+    // 会让后端按 OCC 冲突（40901）拒一次用户没做错的投放。正确形态是 NaN，由
+    // useQueueMove 的 version 守卫拦下（warning + 早退，零请求；守卫本身由
+    // useQueueMove.spec.ts 守）。
+    // 形参显式声明（含 version）：断言要读 calls[0][1]
+    const moveBatchToWorker = vi.fn(async (_batchId: string, _version: number) => true);
+    const wrapper = mountColumn([makeHeld()], { moveBatchToWorker });
+    const options = capturedOptions();
+
+    recordPoolSource('3000000000009', {
+      processId: '2000000000001',
+      shelfId: '5000000000009',
+    });
+    await (options.onAdd as (e: unknown) => Promise<void>)(
+      dragEvent({ batchId: '3000000000009' }),
+    );
+
+    expect(moveBatchToWorker).toHaveBeenCalledTimes(1);
+    expect(moveBatchToWorker.mock.calls[0]![1]).toBeNaN();
+    wrapper.unmount();
+  });
+
+  it('W3：工人源（另一名工人）→ moveBatchBetweenWorkers(batchId, version, 源工人, 本列工人)，且不发 POOL→WORKER', async () => {
     const moveBatchToWorker = vi.fn(async () => true);
     const moveBatchBetweenWorkers = vi.fn(async () => true);
     const wrapper = mountColumn([makeHeld()], { moveBatchToWorker, moveBatchBetweenWorkers });
     const options = capturedOptions();
 
     // 源容器 = 另一个工人列（data-worker-id = 源工人）
-    const evt = dragEvent({ batchId: '3000000000009' }, { workerId: '1900000000001' });
+    const evt = dragEvent({ batchId: '3000000000009', version: CARD_VERSION }, { workerId: '1900000000001' });
     (options.onStart as (e: unknown) => void)(evt);
     await (options.onAdd as (e: unknown) => Promise<void>)(evt);
 
     expect(moveBatchBetweenWorkers).toHaveBeenCalledTimes(1);
     expect(moveBatchBetweenWorkers).toHaveBeenCalledWith(
       '3000000000009',
+      CARD_VERSION,
       '1900000000001',
       SELF_WORKER_ID,
     );
@@ -365,7 +407,7 @@ describe('WorkerColumn（拖拽落点分发）', () => {
     const wrapper = mountColumn([makeHeld()], { moveBatchToWorker, moveBatchBetweenWorkers });
     const options = capturedOptions();
 
-    const evt = dragEvent({ batchId: '3000000000009' }, { workerId: SELF_WORKER_ID });
+    const evt = dragEvent({ batchId: '3000000000009', version: CARD_VERSION }, { workerId: SELF_WORKER_ID });
     (options.onStart as (e: unknown) => void)(evt);
     await (options.onAdd as (e: unknown) => Promise<void>)(evt);
 
@@ -380,7 +422,7 @@ describe('WorkerColumn（拖拽落点分发）', () => {
     const wrapper = mountColumn([makeHeld()], { moveBatchToWorker, moveBatchBetweenWorkers });
     const options = capturedOptions();
 
-    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009' }));
+    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
 
     expect(moveBatchBetweenWorkers).not.toHaveBeenCalled();
     expect(moveBatchToWorker).not.toHaveBeenCalled();
@@ -608,8 +650,8 @@ describe('WorkerColumn（拖拽落点分发）', () => {
       processId: '2000000000001',
       shelfId: '5000000000009',
     });
-    (options.onStart as (e: unknown) => void)(dragEvent({ batchId: '3000000000009' }));
-    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009' }));
+    (options.onStart as (e: unknown) => void)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
+    await (options.onAdd as (e: unknown) => Promise<void>)(dragEvent({ batchId: '3000000000009', version: CARD_VERSION }));
     await wrapper.findAll('.batch-card')[1]!.trigger('contextmenu', { clientX: 10, clientY: 20 });
 
     // 空列再挂一次：空列是 POOL→WORKER 的主落点，复发多半落在空列分支上

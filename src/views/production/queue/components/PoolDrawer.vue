@@ -40,7 +40,11 @@
       <!-- 卡片渲染收敛到 BatchCard.vue，无包装层。Sortable 容器的
            直接子元素必须**全是可拖项**（空态 div 是本容器的兄弟节点，不在其中）。
            data-shelf-id 经 BatchCard 的 fallthrough attrs 落到卡片根 div
-           （BatchCard 是 inheritAttrs: false + v-bind="$attrs"）。
+           （BatchCard 是 inheritAttrs: false + v-bind="$attrs"）—— 它是撤回 move 的
+           `from.shelf_id` 唯一正确来源。
+           data-batch-version 同一条通道：撤回 move 的 `version`（OCC 锚，后端必填）
+           也是从卡片 dataset 读的 —— 落点的 onDragAdd 只拿得到 evt.item，拿不到渲染源
+           里的 batch 对象。
            @contextmenu.prevent 同样走 fallthrough attrs 落在同一张卡片
            根 div 上 —— 右键能力没有引入任何包裹层（包裹即破坏 Sortable 拖拽，见文件
            头注释）。事件的第二参传 v-for 变量 batch 本身（pool.batches 已是
@@ -53,6 +57,7 @@
           :key="batch.batch_id"
           :batch="batch"
           :data-shelf-id="batch.shelf_id ?? ''"
+          :data-batch-version="batch.version"
           @contextmenu.prevent="onCardContextMenu($event, batch)"
         />
       </div>
@@ -109,11 +114,18 @@ useLazyDraggable(containerRef, {
   onRemove: restoreNodeToSource,
 });
 
-// page provide 必注入；moveBatchToPool 签名是 (batch_id, from_worker_id, to_shelf_id)。
+// page provide 必注入；moveBatchToPool 签名是
+// (batch_id, version, from_worker_id, to_shelf_id) —— version 是 OCC 锚（源批次
+// t_part_batch.version），撤回 move 必填。
 const moveBatchToPool =
-  inject<(batch_id: string, from_worker_id: string, to_shelf_id: string) => Promise<boolean>>(
-    'moveBatchToPool',
-  )!;
+  inject<
+    (
+      batch_id: string,
+      version: number,
+      from_worker_id: string,
+      to_shelf_id: string,
+    ) => Promise<boolean>
+  >('moveBatchToPool')!;
 // shelfId 是 WORKER→POOL 的 `to.shelf_id`（撤回目标货架）。
 // 后端校验该货架必须映射到 batch 当前工序，否则 20507 BIZ_SHELF_PROCESS_NOT_MAPPED
 // （HTTP 422）—— 用当前激活货架是唯一合理默认（用户视角「放回我正在看的货架」）。
@@ -165,7 +177,10 @@ async function onDragAdd(evt: DraggableStartEvent) {
     ElMessage.warning('请先选择目标货架');
     return;
   }
-  await moveBatchToPool(batchId, fromWorkerId, toShelfId);
+  // OCC 锚同 WorkerColumn：走卡片的 data-batch-version dataset（本抽屉不传事件第二参
+  // 给 useQueueMove 之前先自查，守卫在包装里）。缺失时 NaN，由 useQueueMove 拦下。
+  const version = Number.parseInt(evt.item.dataset.batchVersion ?? '', 10);
+  await moveBatchToPool(batchId, version, fromWorkerId, toShelfId);
 }
 </script>
 

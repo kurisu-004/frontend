@@ -245,8 +245,9 @@ export function useOutsourceSendableList(
    *     都是对的，所以置灰文案不能写「状态不满足」——那会把排查方向从
    *     `t_outsource_company_process` 映射表引向状态机。
    *
-   *  将来判据整体挪到后端时改读 `OutsourcePoolItem.can_send`（后端已派生该字段，
-   *  见 `src/types/outsource.ts` 的 `OutsourcePoolItem`），届时删掉上面两档推导。 */
+   *  将来判据整体挪到后端时改读外协看板候选行的 `can_send`（后端已派生该字段，见
+   *  `views/outsource/composables/outsourceQueueSchema.ts` 的
+   *  `outsourceQueueCandidateSchema.can_send`），届时删掉上面两档推导。 */
   function canSend(item: SendableItem): boolean {
     if (item.status_label !== 'sendable') return false;
     if (item.send_mode === 'DIRECT') {
