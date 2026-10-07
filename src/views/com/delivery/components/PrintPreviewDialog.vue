@@ -174,6 +174,9 @@ async function persistSelectedDriver(): Promise<boolean> {
     ElMessage.error((e as Error).message ?? '指定司机失败，已取消导出');
     // 落库失败最常见的是 409（手上 version 已被别人推进）。失效本域，下一轮 refetch
     // 就能拿到新 version，对话框里直接重试即成 —— 否则用户只能关页面重新进来。
+    // ⚠️ 对话框内没有 `delivery-notes/*` 的活跃 observer（草稿看板那条链在本页另有
+    // 实例），这一处失效是为**页面上下文**兜底：万一将来在本页再挂一个同 key 的
+    // observer，它能立刻拿到新 version，不必等 staleTime 到期。
     await invalidateDeliveryNotesQuery(qc);
     return false;
   } finally {
@@ -217,10 +220,11 @@ const sortModeByKey = ref<Record<string, 'column' | 'custom'>>({});
  */
 const selectedIds = ref<ReadonlySet<string>>(new Set<string>());
 
-/** 上一次的打开态 / 合并模式 / 行 id 集合（判「行是否真的换了」的基准）。
- *  注意基准是**行 id 集合**而不是当前勾选 —— 勾选是它的子集，拿勾选当基准会把
- *  「用户点掉几行」误判成「行变了」。`lastMergeMode` 的初值 null = 还没开过（首开
- *  本来就要 force，不依赖它）。 */
+/** 上一次的打开态 / 合并模式 / 行 id 序列（判「行是否真的换了」的基准）。
+ *  注意基准是**行 id 序列**而不是当前勾选 —— 勾选是它的子集，拿勾选当基准会把
+ *  「用户点掉几行」误判成「行变了」。比较是**顺序敏感**的逐位对照（重排也算变），
+ *  这符合直觉：用户重拖了行序就应当重新确认一遍勾选。`lastMergeMode` 的初值 null =
+ *  还没开过（首开本来就要 force，不依赖它）。 */
 let lastOpen = false;
 let lastMergeMode: 'merge' | 'separate' | null = null;
 let lastRowIds: string[] = [];
@@ -228,8 +232,8 @@ let lastRowIds: string[] = [];
 /** 重建各 tab 的行（拷贝，拖拽与排序只动副本）。
  *
  *  勾选只在两种场合重置成全选（`force`）：首开 / 重开（打开态 false→true）、换合并模式
- *  —— 这两处行 id 集合必变。分组规则是弹窗打开后才 enable 的、会晚回流一次，若那时也
- *  重置，用户在等待期间点掉的行会被无声还原；所以这里按「行 id 集合是否真的变了」判。 */
+ *  —— 这两处行 id 序列必变。分组规则是弹窗打开后才 enable 的、会晚回流一次，若那时也
+ *  重置，用户在等待期间点掉的行会被无声还原；所以这里按「行 id 序列是否真的变了」判。 */
 function rebuildRows(force: boolean): void {
   const rows: Record<string, PrintRow[]> = {};
   const sorts: Record<string, 'column' | 'custom'> = {};

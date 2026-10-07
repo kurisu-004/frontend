@@ -11,6 +11,9 @@
 //
 // 另外第一条用例钉住**批量详情的数据源形状**：`batchGetNotes` 在 api 层已解信封，
 // 桩必须返回**数组**（信封形状的桩会让守门抛，把整块看板罩成绿的）。
+//
+// 最后一组钉「删除草稿 ⇒ 清该 note 的已打印标签记录」：漏了就是 localStorage 里一个
+// 永不被读的 bucket（无界增长），且没有任何报错。
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
@@ -213,3 +216,40 @@ describe('useDeliveryDraftBoard 已打印标签绿底', () => {
     expect(board.rowClassName({ row: board.foldedRows(NOTE_ID)[0]! })).toBe('row-printed');
   });
 });
+
+describe('useDeliveryDraftBoard 删除草稿 ⇒ 清该 note 的「已打印标签」记录', () => {
+  it('onDeleteDraft 清空本 note 的 bucket，其它 note 的标记不受影响', async () => {
+    batchGetNotesMock.mockResolvedValue([
+      {
+        ...DRAFT_HEAD,
+        part_count: 2,
+        line_items: [
+          lineItem({ id: '911000000000000001' }),
+          lineItem({ id: '911000000000000002', serial_no: 'S-2' }),
+        ],
+      },
+    ]);
+    const board = await bootBoard();
+    const printed = usePrintedLabels();
+    printed.markPrinted(NOTE_ID, ['911000000000000001', '911000000000000002']);
+    printed.markPrinted('OTHER_NOTE', ['911000000000000009']);
+
+    await board.onDeleteDraft(board.drafts.value[NOTE_ID]);
+
+    // 整单删掉 ⇒ 它的 bucket 永不再被读到，unmark 走「全部批次 id」这条路径并连桶一起摘掉
+    expect(printed.store.value[NOTE_ID]).toBeUndefined();
+    // unmark 的是本 note 的键，不许顺手清掉别人的
+    expect(printed.store.value['OTHER_NOTE']).toEqual({ '911000000000000009': true });
+    // 本地看板状态同批清掉
+    expect(board.drafts.value[NOTE_ID]).toBeUndefined();
+    expect(board.draftDetails[NOTE_ID]).toBeUndefined();
+    expect(printedLabelsPersistedIds()).toEqual(['OTHER_NOTE']);
+  });
+});
+
+/** 落盘后 localStorage 里仍登记着标记的 note id（升序）。 */
+function printedLabelsPersistedIds(): string[] {
+  const raw = localStorage.getItem('delivery_scan_printed_labels_v1');
+  expect(raw).toBeTruthy();
+  return Object.keys(JSON.parse(raw!) as Record<string, unknown>).sort();
+}

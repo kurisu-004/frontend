@@ -12,7 +12,9 @@
 //   - el-tabs 按 L2 客户分组，label 带 (N)；
 //   - 行拆分（守恒不通过则「确定」disabled）；
 //   - `mode='label'` 标签模式：无模板区 / 无司机下拉 / 逐行勾选 / 导出单 sheet /
-//     勾选为空时 disabled + tooltip。
+//     勾选为空时 disabled + tooltip；
+//   - 司机落库时机：没碰下拉直接导出 ⇒ 零 driver POST（打开时的零 POST 另有用例）；
+//   - 重建各 tab 的行后勾选恢复全选（关→重开 / 切合并模式）。
 //
 // ⚠️ 两条「导出」闸门用例守的是**对话框内**的闸门，与入口可见性无关：详情页 / 草稿卡
 // 的按钮一律可见（canPrint 只看角色 + 行项数），司机由对话框自己兜。这是 2026-10-08
@@ -547,6 +549,19 @@ describe('PrintPreviewDialog 司机绑定时机', () => {
     expect(downloads[0]!.filename).toBe('DN-001.xlsx');
   });
 
+  it('单据上已有司机名 + 不碰下拉 → 导出时零 driver POST，xlsx 照常下载', async () => {
+    // 裁决 J 落库判据（`driverId` 非空才 POST）的端到端一侧：没碰下拉 ⇒ 零 POST。
+    // 打开时的零 POST 由上面那条守着，这条守的是**导出那一刻**。
+    withDriverOptions();
+    const w = await mountDialog(); // note() 默认 driver_worker_name = '李四'
+    await uploadFile(w, builtinFile());
+    await clickExport(w, true);
+    expect(driverPosts()).toHaveLength(0);
+    expect(apiPostMock).not.toHaveBeenCalled();
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0]!.filename).toBe('DN-001.xlsx');
+  });
+
   it('选了与单据上**同名但不同 id** 的司机 → 也要 POST（司机名允许重名，按名短路会让单据仍绑旧 id）', async () => {
     withDriverOptions();
     const w = await mountDialog({ driver_worker_name: '李四' });
@@ -618,6 +633,12 @@ function checkboxes(w: VueWrapper) {
 
 function isChecked(box: { element: HTMLInputElement }): boolean {
   return box.element.checked;
+}
+
+/** 勾选框的**受控态**（按出现顺序），即 Vue 传给桩 el-checkbox 的 modelValue。
+ *  与 `isChecked`（读 DOM `checked`）的区别见「重建后的勾选重置」那组的说明。 */
+function checkedStates(w: VueWrapper): unknown[] {
+  return w.findAllComponents({ name: 'ElCheckboxStub' }).map((c) => c.props('modelValue'));
 }
 
 /** 勾掉第 n 个勾选框。 */
@@ -760,6 +781,73 @@ describe('PrintPreviewDialog 标签模式 —— 勾选不被晚回流抹掉', (
 
     expect(w.text()).toContain('已勾选 0 条');
     expect(exportDisabled(w)).toBe(true);
+  });
+});
+
+describe('PrintPreviewDialog 标签模式 —— 重建后的勾选重置', () => {
+  // 钉的是「重建各 tab 的行之后，勾选恢复全选」这两个用户可见时刻：关掉重开、换合并模式。
+  //
+  // ⚠️ 两者只有第一个是 force 独占的：换合并模式时装配件行 id 从 `ASM_<id>` 变回批次 id，
+  // 行 id 序列真的变了 ⇒ 即便 force 不为 true，idsChanged 也会重置（把 force 整段摘掉，
+  // 本组第二条仍绿）。仓内不存在「切了模式但行 id 序列不变」的可达场景 —— 没装配件时
+  // 合并 radio 根本不渲染，rows 也没得变。所以这里守的是**行为**（切模式后不保留上一次
+  // 的勾选），不是 `lastMergeMode` 那一项判据。
+  //
+  // 断言看**受控的 modelValue** 而不是 input 的 DOM `checked`：桩 el-checkbox 的 checked
+  // 是渲染时的快照，而 `setValue` 之后 Vue 只有在 vnode prop 变化时才会回写它。跨
+  // 「关→重开」这种整表重建时 DOM 上可能留着上一次的值（modelValue 已是 true），
+  // 那是桩的同步缺口，不是产品行为。各组「已勾选 N 条」与页脚汇总都从真实数据算，
+  // 两条一起钉住更稳。
+
+  it('关掉再打开 → force 重置成全选（打开态 false→true 那一支）', async () => {
+    const w = await mountDialog(
+      {
+        line_items: [
+          li({ id: '1', part_id: 'P1', customer_name: '二五六厂' }),
+          li({ id: '2', part_id: 'P2', customer_name: '陆达电子' }),
+        ],
+      },
+      { mode: 'label' },
+    );
+    await uncheck(w, 0);
+    expect(w.text()).toContain('已勾选 1 条');
+
+    await w.setProps({ modelValue: false });
+    await flush();
+    await w.setProps({ modelValue: true });
+    await flush();
+
+    expect(checkedStates(w)).toEqual([true, true]);
+    // 两组各自 1 条都勾上 + 页脚汇总 2 条
+    expect(w.text()).toContain('本组 1 条 · 已勾选 1 条');
+    expect(w.text()).toContain('共 2 条 · 已勾选 2 条');
+  });
+
+  it('切合并模式 → force 重置成全选（换合并模式那一支）', async () => {
+    // 两个子件同属 A1：merge 折成 1 行（ASM_A1），separate 拆回 2 行。
+    const w = await mountDialog(
+      {
+        line_items: [
+          li({ id: '11', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装', shippable_sets: 3 }),
+          li({ id: '12', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装', shippable_sets: 3 }),
+        ],
+      },
+      { mode: 'label' },
+    );
+    expect(checkboxes(w)).toHaveLength(1);
+    await uncheck(w, 0);
+    expect(w.text()).toContain('已勾选 0 条');
+    expect(exportDisabled(w)).toBe(true);
+
+    // el-radio-group 的桩没声明 emits，但 v-model 的 onUpdate:modelValue 落在 vnode props 上，
+    // $emit 照样能驱动（同一路径与 el-select 桩一致）。
+    w.findComponent({ name: 'ElRadioGroupStub' }).vm.$emit('update:modelValue', 'separate');
+    await flush();
+
+    // 行数从 1 变 2（装配件拆开），force 把勾选重置成全选
+    expect(checkboxes(w)).toHaveLength(2);
+    expect(checkedStates(w)).toEqual([true, true]);
+    expect(w.text()).toContain('共 2 条 · 已勾选 2 条');
   });
 });
 

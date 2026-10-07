@@ -9,7 +9,7 @@
 //   - submittingByNote —— 每张草稿卡片提交中 loading
 //
 // 不持有：
-//   - drafts / draftDetails / selectedByNote / printingByNote / deletingByNote
+//   - drafts / draftDetails / deletingByNote / tableRefs / foldedComputeds
 //     —— useDeliveryDraftBoard 持有；本 composable 通过 options 注入回调访问
 //
 // 与 useDeliveryDraftBoard 的协调：
@@ -47,7 +47,7 @@ export interface UseDeliveryScanSubmissionOptions {
   refreshDraftDetail: (noteId: string) => Promise<DeliveryNoteDetailData | null>;
   /**
    * 提交成功后清掉 note 全部本地 ref（由 useDeliveryDraftBoard 注入）；
-   * useDeliveryScanSubmission 不直接知道 draftDetails / selectedByNote / tableRefs 的存在。
+   * useDeliveryScanSubmission 不直接知道 draftDetails / deletingByNote / tableRefs 的存在。
    */
   onDraftRemoved: (noteId: string) => void;
 }
@@ -294,8 +294,9 @@ export function useDeliveryScanSubmission(
     submittingByNote[noteId] = true;
     try {
       await submitNote(noteId, { version: d.version });
-      // 本地清掉全部 ref（drafts / draftDetails / selectedByNote / printingByNote /
-      // deletingByNote / tableRefs / foldedComputeds / localStorage 标记）。
+      // 本地清掉全部 ref（drafts / draftDetails / deletingByNote / foldedComputeds /
+      // tableRefs）。localStorage 的「已打印标签」记录不在此清 —— 它归 onRemove /
+      // onDeleteDraft 管。
       opts.onDraftRemoved(noteId);
       ElMessage.success('已提交');
     } catch (e) {

@@ -8,7 +8,8 @@
   - el-table 实例 ref 在本组件内部声明（避免 T9 教训「template ref on readonly prop 静默失败」）。
     通过 emit('set-table-ref', el) 把实例回传给 shell → useDeliveryDraftBoard.setTableRef。
   - props.rows 是 shell 调 board.foldedRows(noteId) 拿到的 MergedDraftRow[] 引用；
-    board 内部按 noteId 缓存 computed，确保引用稳定（避免 EP 自动 clearSelection 误清勾选）。
+    board 内部按 noteId 缓存 computed，确保同一份数据的引用稳定（el-table 的 :data
+    换引用会整表重算）。
 
   props:
     draft             — 当前草稿 header（列表行 DeliveryNoteItemData）
