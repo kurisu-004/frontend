@@ -11,8 +11,8 @@
 
   2026-09-15 Phase 5：RETURN / INSPECT 后端走 worker-scan（`POST /parts/worker-scan`，
   event_type=RETURNED / INSPECTED）二合一；PICK_UP 仍走 `POST /parts/pick-up`
-  （B 方案手动 pick-up 兜底）。送货入口已移到 MANAGER/INSPECTOR 的「送货」菜单
-  （/delivery-dispatch），扫码台不再有 DELIVER 操作。
+  （B 方案手动 pick-up 兜底）。送货入口在送货单列表页的「送货」按钮，扫码台不再有
+  DELIVER 操作（`useScanSession` 的 DELIVER 枚举成员已于 2026-10-08 随之删除）。
 
   2026-10-04：**作业货架（只有送检要用）的选定入口在本页**。取件的 pick-up 已解绑
   （后端把 `shelf_id` 改成可选、缺省不做任何校验），放回的 `shelf_id` 来自放回链自己
@@ -306,7 +306,7 @@ function selectAction(a: WorkAction): void {
   // PICK_UP 走「按工种选件」新流程 → /scan/pick（不依赖作业架）
   // RETURN 走「按工人列持有件 → 选件 → 选工序 → 选架」新流程 → /scan/return
   // INSPECT 走「按工人列持有件 → 选件 → 扫码确认 → 选品检架」新流程 → /scan/inspect
-  // 送货入口已移到 MANAGER/INSPECTOR 的「送货」菜单（/delivery-dispatch）。
+  // 送货入口在送货单列表页的「送货」按钮（扫码台无 DELIVER 分支）。
   if (a === 'PICK_UP') {
     void router.push('/scan/pick');
   } else if (a === 'RETURN') {

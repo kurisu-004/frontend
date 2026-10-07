@@ -362,7 +362,7 @@ describe('useAuthStore', () => {
         JSON.stringify({ token: 'old', refresh_token: 'r', user: makeUser() }),
       );
       // 2026-10-02 review Nit 5：顺带锁定 tagsView 清理。refreshOrLogout 的失败分支
-      // 委托给 forceLogout，守卫 / ScanBadgeGate / DispatchBadgeGate 的失败路径因此
+      // 委托给 forceLogout，守卫 / ScanBadgeGate 的失败路径因此
       // 也会清 tag 条（第一轮 Minor 2 的顺带效果）。若将来有人把 reset() 挪出
       // forceLogout，只有 forceLogout 的直测会红、守卫路径会静默退化 → 这里补断言。
       useTagsViewStore().addView({

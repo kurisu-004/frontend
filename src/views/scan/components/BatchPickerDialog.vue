@@ -11,7 +11,7 @@
 
   单行点选即关弹窗（不可改）。卡片按批次号升序展示；显示 batch_no / 数量 /
   当前 holder 文本 / 下一工序。点击 emit('pick')，调用方按业务需要驱动后续动作。
-  ⚠️ 「按批次号升序 / 显示 batch_no」**只对 `views/delivery` 与 `views/inspection`
+  ⚠️ 「按批次号升序 / 显示 batch_no」**只对 `views/com/delivery` 与 `views/inspection`
   两域成立**：它们的行 VO 带 `batch_no`。`views/scan/` 三域的行是后端 `PartListItem`
   （无 `batch_no` 键，且经 `scanPartRowSchema` 后该键被 strip）⇒ 这三域的卡片恒显
   「批次 1」、排序恒为恒等操作。要让报工台也显示批次号，须后端给 `PartListItem`
@@ -77,7 +77,7 @@ import type { PartItem } from '@/api/parts';
 
 /**
  * 2026-10-04：本组件被 3 个域复用，各域行的 VO 结构完全不同 —— 报工台三页是后端
- * `PartListItem`（走 `scanPartRowSchema` 守门），`views/delivery` 是 15 字段的
+ * `PartListItem`（走 `scanPartRowSchema` 守门），`views/com/delivery` 是 15 字段的
  * `DeliveryNoteCandidatePart`，`views/inspection` 是 13 字段的 `InspectionQueueItem`。
  * props 写死任一域的 VO 都会让另外两域在调用点被迫 `as unknown as`。
  *
@@ -132,7 +132,7 @@ const sortedRows = computed(() =>
  *    `PartListItem`，行经 `scanPartRowSchema` 守门（该 schema 显式声明了 `location`
  *    ⇒ **键恒在**，只是值恒为 null：这两个 service 不做 batch enrichment，VO 的
  *    `holder_name` / `location` 恒 null）；
- *  - `views/delivery/PartPickerDialog` 传 15 字段的 `DeliveryNoteCandidatePart`，
+ *  - `views/com/delivery/PartPickerDialog` 传 15 字段的 `DeliveryNoteCandidatePart`，
  *    3 个判据键**一个都没有**；
  *  - `views/inspection/InspectionPending` 传 13 字段的 `InspectionQueueItem`，同样一个都没有。
  *

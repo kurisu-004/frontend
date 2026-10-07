@@ -32,6 +32,8 @@
 // - onBeforeUnmount 强制同步写一次（防页面关闭 timer 没触发）。
 // - localStorage key 含 user.id 后缀，避免共享浏览器账号污染。
 // - 不持久化 `page`（当前页码）—— 避免恢复时拉到不存在数据的页。
+// - restore() 默认**严格**校验「每个 dep key 都在快照里」；消费方能逐字段容错时可传
+//   `requireAllDeps: false`，让「新增 dep 键」不再作废老快照（见 options 注释）。
 // - 用 vue 的 `isRef` 判断，绝不 duck-type `.value !== undefined`（reactive 对象
 //   可能有 value 键，会误判）。
 
@@ -75,9 +77,22 @@ type Dep = Ref<unknown> | Record<string, unknown>;
 export function useListStatePersist<T extends Record<string, Dep>>(
   key: string,
   deps: T,
-  options: { exclude?: Set<string>; throttleMs?: number } = {},
+  options: {
+    exclude?: Set<string>;
+    throttleMs?: number;
+    /**
+     * restore() 是否要求快照**包含每个 dep key**（默认 true）。
+     *
+     * 严格校验是防「deps 改名 / 增删导致读出半截快照」的手段，但代价是**任何一次
+     * deps 形状变化都会让老用户的快照整体作废**。当消费方能自己逐字段容错（缺字段就
+     * 用默认值）时传 false，让老快照里的键还能被读到 —— 典型场景是本轮给 deps **新增**
+     * 一个键（老快照里没有它）：严格模式下整份返回 null，老用户的状态 / 筛选 / 单号
+     * 记忆一次性全丢，而实际只有新增的那个字段没默认值而已。
+     */
+    requireAllDeps?: boolean;
+  } = {},
 ) {
-  const { exclude = new Set(), throttleMs = 300 } = options;
+  const { exclude = new Set(), throttleMs = 300, requireAllDeps = true } = options;
   const KEY = storageKey(key);
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -108,9 +123,11 @@ export function useListStatePersist<T extends Record<string, Dep>>(
       const parsed = JSON.parse(raw) as Record<string, unknown> | null;
       if (!parsed || typeof parsed !== 'object') return null;
       // 校验：每个 dep 的 key（排除 exclude 后）都必须存在于快照里
-      for (const k of Object.keys(deps)) {
-        if (exclude.has(k)) continue;
-        if (!(k in parsed)) return null;
+      if (requireAllDeps) {
+        for (const k of Object.keys(deps)) {
+          if (exclude.has(k)) continue;
+          if (!(k in parsed)) return null;
+        }
       }
       return parsed;
     } catch {

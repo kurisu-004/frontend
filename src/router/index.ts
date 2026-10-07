@@ -179,7 +179,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'delivery-notes',
         name: 'DeliveryNoteList',
-        component: () => import('@/views/delivery/DeliveryNoteList.vue'),
+        component: () => import('@/views/com/delivery/DeliveryNoteList.vue'),
         meta: {
           title: '送货单',
           icon: 'Document',
@@ -189,7 +189,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'delivery-notes/:id(\\d+)',
         name: 'DeliveryNoteDetail',
-        component: () => import('@/views/delivery/DeliveryNoteDetail.vue'),
+        component: () => import('@/views/com/delivery/DeliveryNoteDetail.vue'),
         meta: {
           title: '送货单详情',
           menuCode: 'delivery_notes_manage',
@@ -201,7 +201,7 @@ const routes: RouteRecordRaw[] = [
         // 复用 delivery_notes_manage menuCode，与 list / detail 同一权限面。
         path: 'delivery-notes/scan',
         name: 'DeliveryNoteScan',
-        component: () => import('@/views/delivery/DeliveryNoteScan.vue'),
+        component: () => import('@/views/com/delivery/DeliveryNoteScan.vue'),
         meta: {
           title: '扫码建单',
           menuCode: 'delivery_notes_manage',
@@ -354,32 +354,6 @@ const routes: RouteRecordRaw[] = [
       },
     ],
   },
-  // 司机送货扫码台（2026-07-23）：MANAGER/INSPECTOR 的「送货」菜单入口，全屏、
-  // MainLayout 之外。工牌识别 → 只有「送货司机」工种可通过 → 待送货单选择 →
-  // 逐件扫描 → 确认送货（复用后端 pickup-scan / pickup）。
-  {
-    path: '/delivery-dispatch',
-    meta: {
-      requireAuth: true,
-      // 2026-09-28 新增：司机送货扫码台全屏、MainLayout 之外，不进 tagsView
-      noTagsView: true,
-    },
-    children: [
-      { path: '', redirect: '/delivery-dispatch/badge' },
-      {
-        path: 'badge',
-        name: 'DispatchBadge',
-        component: () => import('@/views/delivery-dispatch/DispatchBadgeGate.vue'),
-        meta: { title: '送货 · 工牌识别', menuCode: 'delivery_dispatch' },
-      },
-      {
-        path: 'notes',
-        name: 'DispatchNotes',
-        component: () => import('@/views/delivery-dispatch/DispatchNoteList.vue'),
-        meta: { title: '送货 · 待送货单', menuCode: 'delivery_dispatch' },
-      },
-    ],
-  },
 ];
 
 const router = createRouter({ history: createWebHistory(), routes });
@@ -391,7 +365,7 @@ const router = createRouter({ history: createWebHistory(), routes });
 //
 // 为什么接收方选 router 模块而不是 MainLayout.vue：
 //   ① 全局一次性注册。MainLayout 是组件（且挂在 requireAuth 子树下），
-//      /scan/* /delivery-dispatch/* 这些 MainLayout 之外的全屏路由收不到；
+//      /scan/* 这些 MainLayout 之外的全屏路由收不到；
 //   ② router 模块已持有 router 实例 + 已 import useAuthStore，本处零新增依赖；
 //   ③ store 仍不 import vue-router —— forceLogout(router) 按参数注入（不变式）。
 //

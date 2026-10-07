@@ -22,8 +22,10 @@
 // 覆盖面盲区（已知、本轮不扩范围）：本守卫只扫 `src/**/*.vue`。`.ts` 文件里为 `h()`
 // 渲染函数手动 import EP 组件是同一类问题（`src/views/inspection/inspectionColumnDefs.ts` /
 // `src/views/parts/list/partsListColumnDefs.ts` /
-// `src/views/cnc/pendingProgrammingColumnDefs.ts`
-// 都是），今天靠消费它们的 `.vue` 顺带注入样式、视觉正常，故未纳入扫描。
+// `src/views/cnc/pendingProgrammingColumnDefs.ts` /
+// `src/views/com/delivery/deliveryNoteColumnDefs.ts`（及其 lineItems / print 两个
+// deliveryNote*ColumnDefs.ts）都是），今天靠消费它们的 `.vue` 顺带注入样式、视觉正常，
+// 故未纳入扫描 —— `.ts` 里的裸 `from 'element-plus'` **不在本守卫口径内**。
 
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -49,23 +51,31 @@ interface Violation {
   missing: string[];
 }
 
-// 存量豁免表（2026-10-03）：这些文件同样手动 import 了 EP 组件，但当前样式由**同路由
+// 存量豁免表（2026-10-03 建立）：这些文件同样手动 import 了 EP 组件，但当前样式由**同路由
 // 其它文件**经 resolver 顺带注入，视觉正常；逐一补 style import 属预防性改动，本轮不做
 // （用户明确决定）。**补齐后请从表里删掉对应行**，否则豁免会长期掩盖后续新引入的同类漏洞。
 //
 // 键 = 相对 src/ 的路径，值 = 该文件尚未覆盖样式的 kebab 组件名。
+// ⚠️ 2026-10-08 送货单域重构删掉了 BatchInspectionConfirmDialog / PartPickerDialog，
+//    对应两条登记随之删除（文件没了登记即陈旧，spec 的「豁免表无陈旧登记」用例会红）；
+//    DeliveryNoteList.vue 的 el-tag 登记同时失效 —— 状态列的 ElTag 搬去了
+//    deliveryNoteColumnDefs.ts 并在那里 value-import；那条**不需要**在本表登记，
+//    因为本守卫的扫描范围只有 `src/**/*.vue`，`.ts` 文件不在口径内（见文件头的盲区段）；
+//    PrintPreviewDialog.vue 的 el-tag / el-table 登记随之失效 —— 组件重写后它不再
+//    value-import 这两个组件（ElTag 落在 deliveryNotePrintColumnDefs.ts，
+//    el-table 用的是全局注册的模板标签，不进模块图）。
 const EXEMPT: Record<string, string[]> = {
+// ⚠️ 2026-10-09 合并 main（外协域重构）时一并裁掉 5 条 outsource 陈旧登记：
+//    OutsourceList / OutsourceReceivingTab / OutsourceSendableTab 等文件已被外协域
+//    重构改造或移除，对应样式已覆盖（或文件已不存在），登记留着会被「豁免表无陈旧
+//    登记」用例判红。与送货单域那几条是同一类问题。
   'components/FileListCard.vue': ['el-upload'],
   'components/UploadStatusCellView.vue': ['el-button', 'el-progress'],
   'views/assemblies/components/AssemblyChildrenTable.vue': ['el-link', 'el-tag'],
-  'views/delivery/DeliveryNoteList.vue': ['el-tag'],
-  'views/delivery/DeliveryNoteScan.vue': ['el-table'],
-  'views/delivery/components/BatchInspectionConfirmDialog.vue': ['el-tag', 'el-table'],
-  'views/delivery/components/DeliveryDraftCard.vue': ['el-table'],
-  'views/delivery/components/DeliveryGroupEditor.vue': ['el-form'],
-  'views/delivery/components/DeliveryNoteLineItemsTable.vue': ['el-tag'],
-  'views/delivery/components/PartPickerDialog.vue': ['el-tag'],
-  'views/delivery/components/PrintPreviewDialog.vue': ['el-tag', 'el-table'],
+  'views/com/delivery/DeliveryNoteScan.vue': ['el-table'],
+  'views/com/delivery/components/DeliveryDraftCard.vue': ['el-table'],
+  'views/com/delivery/components/DeliveryGroupEditor.vue': ['el-form'],
+  'views/com/delivery/components/DeliveryNoteLineItemsTable.vue': ['el-tag'],
   'views/parts/detail/components/PartBatchMonitorCard.vue': ['el-tag'],
   'views/parts/list/components/PurchaseOrderImportDialog.vue': ['el-tag', 'el-tooltip'],
   'views/parts/new/components/PartBatchManualTab.vue': ['el-button', 'el-tag'],

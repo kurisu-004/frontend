@@ -23,15 +23,15 @@
 //    导航，stores/auth.ts 清会话状态 + queryClient.clear()。本文件是**派发方**，
 //    详见 CLAUDE.md「`auth:logout` 是订阅点不是派发点」条目。
 //
-// 4) 打印端点（4 个，2026-10-03 起由 rust 鉴权后转发 python，前端路径与调用签名不变）：
-//    - POST /delivery-notes/{id}/print           ← printNote
-//    - POST /delivery-notes/{id}/print-labels    ← printNoteLabels
+// 4) 打印端点（2 个，2026-10-03 起由 rust 鉴权后转发 python，前端路径与调用签名不变）：
 //    - GET  /parts/{id}/print-drawing            ← printPartDrawing
 //    - POST /parts/print-drawing-batch           ← printPartDrawingBatch
-//    响应都是文件 blob（不是信封）。送货单那 2 个额外从 `Content-Disposition` 取下载
-//    文件名（api/deliveryNote.ts 的 parseFilename）；零件图纸那 2 个不读文件名——单件
-//    走 iframe 内联渲染、批量直接进打印对话框，都不落盘。
-//    这 4 条路径在 rust 侧放宽了读超时（打印档 660s，批量拼接 PDF 耗时可达分钟级），
+//    响应是文件 blob（不是信封），且**不读 `Content-Disposition`**：单件走 iframe 内联
+//    渲染、批量直接进打印对话框，都不落盘。
+//    送货单那 2 条打印端点（`/delivery-notes/{id}/print` / `/print-labels`）已随
+//    2026-10-08 的送货单域重构整体下线：打印改由前端本地渲染（见
+//    views/com/delivery/utils/deliveryNoteWorkbook.ts），后端不再经手。
+//    这 2 条路径在 rust 侧放宽了读超时（打印档 660s，批量拼接 PDF 耗时可达分钟级），
 //    前端批量端点的 axios timeout 必须严格大于它，理由见 api/parts/file.ts。
 
 import type { AxiosError } from 'axios';
