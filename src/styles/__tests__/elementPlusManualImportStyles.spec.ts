@@ -58,7 +58,10 @@ interface Violation {
 //    对应两条登记随之删除（文件没了登记即陈旧，spec 的「豁免表无陈旧登记」用例会红）；
 //    DeliveryNoteList.vue 的 el-tag 登记同时失效 —— 状态列的 ElTag 搬去了
 //    deliveryNoteColumnDefs.ts 并在那里 value-import（那才是需要豁免的文件，
-//    它没有裸 `from 'element-plus'`，见同 spec 的主用例）。
+//    它没有裸 `from 'element-plus'`，见同 spec 的主用例）；
+//    PrintPreviewDialog.vue 的 el-tag / el-table 登记随之失效 —— 组件重写后它不再
+//    value-import 这两个组件（ElTag 落在 deliveryNotePrintColumnDefs.ts，
+//    el-table 用的是全局注册的模板标签，不进模块图）。
 const EXEMPT: Record<string, string[]> = {
   'components/FileListCard.vue': ['el-upload'],
   'components/UploadStatusCellView.vue': ['el-button', 'el-progress'],
@@ -67,7 +70,6 @@ const EXEMPT: Record<string, string[]> = {
   'views/com/delivery/components/DeliveryDraftCard.vue': ['el-table'],
   'views/com/delivery/components/DeliveryGroupEditor.vue': ['el-form'],
   'views/com/delivery/components/DeliveryNoteLineItemsTable.vue': ['el-tag'],
-  'views/com/delivery/components/PrintPreviewDialog.vue': ['el-tag', 'el-table'],
   'views/outsource/OutsourceCompanySentParts.vue': ['el-input-number', 'el-switch', 'el-tag'],
   'views/outsource/OutsourceList.vue': ['el-tag', 'el-table'],
   'views/outsource/OutsourceReceivingTab.vue': ['el-tag'],

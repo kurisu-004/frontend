@@ -13,12 +13,9 @@
   props:
     draft             — 当前草稿 header（列表行 DeliveryNoteItemData）
     rows              — foldBySerial 后的行（el-table 数据源）
-    selectedRows      — 当前勾选行（由 board.selectedByNote[noteId] 透传）
-    selectionCount    — 当前勾选行数（用于打印标签按钮文案 "(n)"）
-    printing          — 打印标签 loading 态
     deleting          — 删除草稿 loading 态
     submitting        — 提交草稿 loading 态
-    canPrint          — 「打印送货单」按钮可用（角色 + ≥1 零件）
+    canPrint          — 「打印送货单」按钮可用（角色 + DRAFT + ≥1 行项 + 已指定司机）
     canSubmit         — 「提交草稿」按钮可用（status === 'DRAFT'）
     rowClassName      — 行 className 函数（绿底渲染已打印行）
 
@@ -26,7 +23,6 @@
     goto-detail         — 点 header 跳转详情
     selection-change    — el-table 勾选变化
     remove              — 移除某行
-    print-labels        — 打印标签
     print-note          — 打开打印送货单预览
     delete-draft        — 删除草稿
     submit-draft        — 提交草稿
@@ -51,9 +47,6 @@ import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 defineProps<{
   draft: DeliveryNoteItemData;
   rows: MergedDraftRow[];
-  selectedRows: MergedDraftRow[];
-  selectionCount: number;
-  printing: boolean;
   deleting: boolean;
   submitting: boolean;
   canPrint: boolean;
@@ -63,9 +56,7 @@ defineProps<{
 
 const emit = defineEmits<{
   gotoDetail: [];
-  selectionChange: [rows: MergedDraftRow[]];
   remove: [row: MergedDraftRow];
-  printLabels: [];
   printNote: [];
   deleteDraft: [];
   submitDraft: [];
@@ -146,10 +137,7 @@ drag.applyDrag(tableEl);
         height="240"
         size="small"
         empty-text="暂无加入批次 — 扫码加入"
-        @selection-change="(rs: MergedDraftRow[]) => emit('selectionChange', rs)"
       >
-        <!-- selection 勾选列不进 defs（fixed 列不可拖） -->
-        <el-table-column type="selection" width="44" fixed />
         <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
           <el-table-column
             v-if="columnVisibility.isVisible(d.key)"
@@ -187,7 +175,7 @@ drag.applyDrag(tableEl);
       </el-table>
     </div>
     <template #footer>
-      <!-- 4 按钮等宽：删除草稿 / 打印送货单 / 打印标签 / 提交草稿 -->
+      <!-- 3 按钮等宽：删除草稿 / 打印送货单 / 提交草稿（标签导出随打印端点下线） -->
       <div class="draft-card-footer">
         <el-button
           type="danger"
@@ -208,17 +196,6 @@ drag.applyDrag(tableEl);
         >
           <el-icon><Printer /></el-icon>
           打印送货单
-        </el-button>
-        <el-button
-          type="success"
-          plain
-          class="footer-btn"
-          :disabled="selectionCount === 0"
-          :loading="printing"
-          @click="emit('printLabels')"
-        >
-          <el-icon><Printer /></el-icon>
-          打印标签{{ selectionCount > 0 ? `（${selectionCount}）` : '' }}
         </el-button>
         <el-button
           type="primary"

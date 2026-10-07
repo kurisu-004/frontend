@@ -140,14 +140,8 @@ function canSubmitDraft(d: DeliveryNoteItemData): boolean {
 function onCardGotoDetail(d: DeliveryNoteItemData): void {
   gotoDetail(d);
 }
-function onCardSelectionChange(d: DeliveryNoteItemData, rows: MergedDraftRow[]): void {
-  board.onSelectionChange(d.id, rows);
-}
 function onCardRemove(d: DeliveryNoteItemData, row: MergedDraftRow): void {
   void board.onRemove(d, row);
-}
-function onCardPrintLabels(d: DeliveryNoteItemData): void {
-  void board.onPrintLabels(d);
 }
 function onCardDeleteDraft(d: DeliveryNoteItemData): void {
   void board.onDeleteDraft(d);
@@ -310,18 +304,13 @@ onBeforeUnmount(() => {
           :key="d.id"
           :draft="d"
           :rows="board.foldedRows(d.id)"
-          :selected-rows="board.selectedByNote[d.id] ?? []"
-          :selection-count="board.getSelectionSize(d.id)"
-          :printing="board.printingByNote[d.id] ?? false"
           :deleting="board.deletingByNote[d.id] ?? false"
           :submitting="submission.submittingByNote[d.id] ?? false"
           :can-print="canPrintNote(d)"
           :can-submit="canSubmitDraft(d)"
           :row-class-name="board.rowClassName"
           @gotoDetail="onCardGotoDetail(d)"
-          @selection-change="(rs: MergedDraftRow[]) => onCardSelectionChange(d, rs)"
           @remove="(r: MergedDraftRow) => onCardRemove(d, r)"
-          @printLabels="onCardPrintLabels(d)"
           @deleteDraft="onCardDeleteDraft(d)"
           @printNote="onCardPrintNote(d)"
           @submitDraft="onCardSubmitDraft(d)"
@@ -348,7 +337,6 @@ onBeforeUnmount(() => {
       v-if="submission.printNotePreviewVisible.value && submission.printNoteTarget.value"
       v-model="submission.printNotePreviewVisible.value"
       :note="submission.printNoteTarget.value"
-      mode="note"
     />
   </div>
 </template>

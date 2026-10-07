@@ -35,12 +35,10 @@
 
 import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { getNote, printNoteLabels, removeBatches, softDeleteNote } from '@/api/com/deliveryNote';
+import { getNote, removeBatches, softDeleteNote } from '@/api/com/deliveryNote';
 import { useQueryClient } from '@tanstack/vue-query';
 import { invalidateDeliveryNotesQuery } from './useDeliveryNoteListStore';
 import { useDeliveryDraftsDetailQuery, useDeliveryDraftsQuery } from './useDeliveryDraftsQuery';
-import { usePrintedLabels } from './usePrintedLabels';
-import { triggerBrowserDownload } from '@/utils/download';
 import type {
   DeliveryNoteDetailData,
   DeliveryNoteItemData,
@@ -49,6 +47,10 @@ import type {
 
 /**
  * el-table 一行 = 同 serial_no 折叠后的若干 batch；serial 为 null 时按 id 各占一行。
+ *
+ * ⚠️ `label_printed` 字段随「打印标签」端点下线而恒 false（它读的是
+ * `usePrintedLabels` 的 localStorage 记录）。字段先留着：它是 el-table selection
+ * 之外的第二套行态，将来重新引入标签打印时不用重建折叠逻辑。
  */
 export interface MergedDraftRow {
   /** 同 serial_no 折叠后的代表 serial；为 null 时按各自一行（key = `__null_<id>`）。 */
@@ -113,7 +115,6 @@ export interface UseDeliveryDraftBoardReturn {
   draftsLoading: Ref<boolean>;
   draftsCount: ComputedRef<number>;
   selectedByNote: Record<string, MergedDraftRow[]>;
-  printingByNote: Record<string, boolean>;
   deletingByNote: Record<string, boolean>;
   setTableRef: (noteId: string, el: DraftTableInstance | null) => void;
   foldedRows: (noteId: string) => MergedDraftRow[];
@@ -125,14 +126,12 @@ export interface UseDeliveryDraftBoardReturn {
   refreshDraftDetail: (noteId: string) => Promise<DeliveryNoteDetailData | null>;
   writeDraftFromScan: (note: DeliveryNoteItemData) => void;
   onRemove: (d: DeliveryNoteItemData, row: MergedDraftRow) => Promise<void>;
-  onPrintLabels: (d: DeliveryNoteItemData) => Promise<void>;
   onDeleteDraft: (d: DeliveryNoteItemData) => Promise<void>;
   clearNoteLocalState: (noteId: string) => void;
   clearAll: () => void;
 }
 
 export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
-  const printedLabelStore = usePrintedLabels();
   const qc = useQueryClient();
 
   // ============ 数据源（query）============
@@ -191,10 +190,7 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     for (const k of Object.keys(selectedByNote)) {
       if (!(k in next)) delete selectedByNote[k];
     }
-    for (const k of Object.keys(printingByNote)) {
-      if (!(k in next)) delete printingByNote[k];
-    }
-    for (const k of Object.keys(deletingByNote)) {
+      for (const k of Object.keys(deletingByNote)) {
       if (!(k in next)) delete deletingByNote[k];
     }
     for (const k of Array.from(foldedComputeds.keys())) {
@@ -204,10 +200,10 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
   }
 
   // ============ 每张草稿卡片各自的运行时状态 ============
-  /** 每张草稿卡片各自的勾选行（「打印标签」按钮的成员来源）。 */
+  /** 每张草稿卡片各自的勾选行（表格 selection；打印端点下线后无消费者，
+   *  保留是因为 el-table 的 selection 态与它是一对，删掉会让「勾了但看不出」的语义
+   *  在将来重新引入打印时更难接回来）。 */
   const selectedByNote = reactive<Record<string, MergedDraftRow[]>>({});
-  /** 每张草稿卡片各自的打印中 loading 态。 */
-  const printingByNote = reactive<Record<string, boolean>>({});
   /** 每张草稿卡片各自的删除中 loading 态。 */
   const deletingByNote = reactive<Record<string, boolean>>({});
 
@@ -230,6 +226,11 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
    */
   const foldedComputeds = new Map<string, ComputedRef<MergedDraftRow[]>>();
 
+  /** 2026-10-08：「打印标签」端点下线后，已打印标签的绿底不再有数据源（它的记录在
+   *  `usePrintedLabels` 的 localStorage 里，本模块已无写入方）。折叠行恒不带绿底，
+   *  字段 `label_printed` 保留（见 MergedDraftRow 注释）。 */
+  const isPrintedBatch = (): boolean => false;
+
   /** 子组件用：注册 / 反注册 el-table 实例；给 onPrintLabels 的 clearSelection 用。 */
   function setTableRef(noteId: string, el: DraftTableInstance | null): void {
     if (el) tableRefs.set(noteId, el);
@@ -241,7 +242,7 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     let c = foldedComputeds.get(noteId);
     if (!c) {
       c = computed(() =>
-        foldBySerial(draftDetails[noteId] ?? [], printedLabelStore.isPrintedBatch),
+        foldBySerial(draftDetails[noteId] ?? [], isPrintedBatch),
       );
       foldedComputeds.set(noteId, c);
     }
@@ -275,7 +276,6 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     drafts.value = {};
     for (const k of Object.keys(draftDetails)) delete draftDetails[k];
     for (const k of Object.keys(selectedByNote)) delete selectedByNote[k];
-    for (const k of Object.keys(printingByNote)) delete printingByNote[k];
     for (const k of Object.keys(deletingByNote)) delete deletingByNote[k];
     foldedComputeds.clear();
     tableRefs.clear();
@@ -318,7 +318,6 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
       draftDetails[noteId] = updated.line_items;
       drafts.value[noteId] = { ...drafts.value[noteId], version: updated.version };
       await invalidateDeliveryNotesQuery(qc);
-      printedLabelStore.unmark(noteId, row.batch_ids);
       // 该表可能折叠行被剔除 → 清掉选中
       if (selectedByNote[noteId]) {
         selectedByNote[noteId] = selectedByNote[noteId].filter(
@@ -328,35 +327,6 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
       ElMessage.success('已移除');
     } catch (e) {
       ElMessage.error((e as Error).message ?? '移除失败');
-    }
-  }
-
-  /** 打印标签：把 selectedByNote 展平为 line_item_ids → 下载 → 写 localStorage → 清空选中。
-   *
-   * ⚠️ **过渡态**：后端 `/print-labels` 端点已随送货单域重构下线，本函数连同
-   * `usePrintedLabels` 的绿底标记在打印对话框改本地渲染时一并删除。 */
-  async function onPrintLabels(d: DeliveryNoteItemData): Promise<void> {
-    const noteId = d.id;
-    const rows = selectedByNote[noteId] ?? [];
-    if (rows.length === 0) return;
-    const lineItemIds: string[] = [];
-    for (const r of rows) lineItemIds.push(...r.batch_ids);
-    if (lineItemIds.length === 0) return;
-
-    printingByNote[noteId] = true;
-    try {
-      const { blob, filename } = await printNoteLabels(noteId, {
-        line_item_ids: lineItemIds,
-      });
-      triggerBrowserDownload(blob, filename);
-      printedLabelStore.markPrinted(noteId, lineItemIds);
-      tableRefs.get(noteId)?.clearSelection();
-      selectedByNote[noteId] = [];
-      ElMessage.success('已导出标签');
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '打印标签失败');
-    } finally {
-      printingByNote[noteId] = false;
     }
   }
 
@@ -377,7 +347,6 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
       await softDeleteNote(noteId, { version: d.version });
       clearNoteLocalState(noteId);
       await invalidateDeliveryNotesQuery(qc);
-      printedLabelStore.unmark(noteId, Object.keys(printedLabelStore.store.value[noteId] ?? {}));
       ElMessage.success('草稿已删除');
     } catch (e) {
       ElMessage.error((e as Error).message ?? '删除草稿失败');
@@ -391,7 +360,6 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     delete drafts.value[noteId];
     delete draftDetails[noteId];
     delete selectedByNote[noteId];
-    delete printingByNote[noteId];
     delete deletingByNote[noteId];
     foldedComputeds.delete(noteId);
     tableRefs.delete(noteId);
@@ -403,7 +371,6 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     draftsLoading,
     draftsCount,
     selectedByNote,
-    printingByNote,
     deletingByNote,
 
     setTableRef,
@@ -415,7 +382,6 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     refreshDraftDetail,
     writeDraftFromScan,
     onRemove,
-    onPrintLabels,
     onDeleteDraft,
     clearNoteLocalState,
     clearAll,

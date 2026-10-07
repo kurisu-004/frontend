@@ -22,18 +22,21 @@
 
 import type { DeliveryNoteLineItemData } from '../composables/deliveryNoteSchema';
 
+/** 两个读取函数只需要行项上的**一个字段**，形参收这个最小结构（结构化子类型）——
+ * 打印侧的折叠已经把行压成 PrintRow（没有 part_id / status 等 20 个字段），收整个
+ * 行项类型会让它被迫去造假字段。 */
+type AssemblySetsCarrier = Pick<DeliveryNoteLineItemData, 'assembly_quantity' | 'shippable_sets'>;
+
 /** 装配件工单总套数：取组内首个有值的子件行（组内等值，缺失则 null）。
  *  2026-10-04 新增：详情页装配件父行与打印预览「合并一套」父行共用。 */
-export function assemblyTotalSetsOfGroup(
-  siblings: readonly DeliveryNoteLineItemData[],
-): number | null {
+export function assemblyTotalSetsOfGroup(siblings: readonly AssemblySetsCarrier[]): number | null {
   return siblings.find((s) => s.assembly_quantity != null)?.assembly_quantity ?? null;
 }
 
 /** 装配件在本单可出货的套数：只对有值的子件取 min，组内全缺（后端未给数）则 null。
  *  取 min 是不依赖后端把整组填满的保守口径 —— 真给满了组内等值，min 是 no-op。
  *  2026-10-04 新增：详情页装配件父行与打印预览「合并一套」父行共用。 */
-export function shippableSetsOfGroup(siblings: readonly DeliveryNoteLineItemData[]): number | null {
+export function shippableSetsOfGroup(siblings: readonly AssemblySetsCarrier[]): number | null {
   const present = siblings.map((s) => s.shippable_sets).filter((v): v is number => v != null);
   return present.length === 0 ? null : Math.min(...present);
 }

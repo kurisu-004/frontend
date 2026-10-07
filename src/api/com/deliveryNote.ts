@@ -21,10 +21,8 @@
 //   /com/delivery/drivers —— 送货司机候选
 //     GET    /                       - listDeliveryDrivers
 //
-// ⚠️ **过渡态**：后端两条打印端点（`/com/delivery/note/{id}/print` 与 `/print-labels`）
-//   已在本次重构中下线（打印改为前端本地渲染），但前端的 PrintPreviewDialog 要到
-//   打印对话框重写那一版才切走 ⇒ 这两个函数与它们的调用暂时原样保留（路径已硬切到
-//   `/com/delivery/note/*`）。**打印对话框改本地渲染时必须同批删除本节**。
+// 打印链路整体不在本文件：送货单 / 标签 xlsx 由**前端本地渲染**
+// （views/com/delivery/utils/deliveryNoteWorkbook.ts，hucre 动态 import），后端不再经手。
 //
 // 已下线（2026-10-08，本次一并删除前端调用与类型）：手动建单 `POST /`、候选零件
 // `GET /candidate-parts`、加件 `POST /{id}/add-parts`、attach `POST /{id}/attach-batches`、
@@ -219,81 +217,6 @@ export async function submitDeliveryEntries(
 export async function listDeliveryDrivers(): Promise<DeliveryDriverListResultData> {
   const resp = await api.get<DeliveryDriverListResultData>('/com/delivery/drivers');
   return resp.data;
-}
-
-// ============================================================
-// 打印（**过渡态**，见文件头：打印对话框改本地渲染时整节删除）
-// ============================================================
-
-export interface PrintNoteProgress {
-  loaded: number;
-  total: number;
-}
-
-export interface PrintNoteResult {
-  blob: Blob;
-  filename: string;
-}
-
-export interface PrintNotePayload {
-  /** 批次 id 顺序（与预览组件产出对齐；空 = 走默认 DB 顺序）。 */
-  custom_order?: string[];
-  /** 装配件子件合并为一行（单位套）；false = 散件逐行（默认）。 */
-  merge_assemblies?: boolean;
-}
-
-export interface PrintLabelsPayload extends PrintNotePayload {
-  /** 只打这些批次行；省略 = 全部。 */
-  line_item_ids?: string[];
-}
-
-export async function printNote(
-  noteId: string,
-  payload: PrintNotePayload = {},
-  onProgress?: (p: PrintNoteProgress) => void,
-): Promise<PrintNoteResult> {
-  const resp = await api.post<Blob>(
-    `/com/delivery/note/${encodeURIComponent(noteId)}/print`,
-    payload,
-    {
-      responseType: 'blob',
-      onDownloadProgress: (event) => {
-        onProgress?.({ loaded: event.loaded, total: event.total ?? 0 });
-      },
-    },
-  );
-  return {
-    blob: resp.data,
-    filename: parseFilename(resp.headers['content-disposition']) ?? `note-${noteId}.xlsx`,
-  };
-}
-
-export async function printNoteLabels(
-  noteId: string,
-  payload: PrintLabelsPayload = {},
-  onProgress?: (p: PrintNoteProgress) => void,
-): Promise<PrintNoteResult> {
-  const resp = await api.post<Blob>(
-    `/com/delivery/note/${encodeURIComponent(noteId)}/print-labels`,
-    payload,
-    {
-      responseType: 'blob',
-      onDownloadProgress: (event) => {
-        onProgress?.({ loaded: event.loaded, total: event.total ?? 0 });
-      },
-    },
-  );
-  return {
-    blob: resp.data,
-    filename: parseFilename(resp.headers['content-disposition']) ?? `label-${noteId}.xlsx`,
-  };
-}
-
-/** 解析 `attachment; filename="delivery_note_F_123.xlsx"`。 */
-function parseFilename(header: string | undefined): string | null {
-  if (!header) return null;
-  const m = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(header);
-  return m ? decodeURIComponent(m[1].trim()) : null;
 }
 
 // ============ wire 契约类型再导出 ============

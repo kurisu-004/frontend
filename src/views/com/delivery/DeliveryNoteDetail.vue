@@ -52,9 +52,6 @@ const actions = useDeliveryNoteActions({
 
 // ============ UI state（dialog 可见性由 shell 持有）============
 const previewVisible = ref(false);
-/** 2026-10-08 过渡态：打印对话框切本地渲染（送货单 XLSX）后，「标签」模式一并下线，
- *  本 ref 与 onPrintLabels 一起删。后端的 `/print-labels` 端点已下线。 */
-const previewMode = ref<'note' | 'label'>('note');
 
 // ============ 事件处理 ============
 function onBack(): void {
@@ -62,12 +59,6 @@ function onBack(): void {
 }
 
 function onPrint(): void {
-  previewMode.value = 'note';
-  previewVisible.value = true;
-}
-
-function onPrintLabels(): void {
-  previewMode.value = 'label';
   previewVisible.value = true;
 }
 
@@ -111,7 +102,6 @@ onBeforeUnmount(() => {
         @submit="actions.onSubmit"
         @recall="() => actions.onRecall()"
         @print="onPrint"
-        @printLabels="onPrintLabels"
         @softDelete="() => actions.onSoftDelete()"
       />
     </template>
@@ -121,7 +111,6 @@ onBeforeUnmount(() => {
       v-if="detail.note.value"
       v-model="previewVisible"
       :note="detail.note.value"
-      :mode="previewMode"
     />
   </div>
 </template>

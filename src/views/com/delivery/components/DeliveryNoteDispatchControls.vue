@@ -2,7 +2,7 @@
   DeliveryNoteDispatchControls.vue
 
   送货单详情「状态操作」卡（DeliveryNoteDetail 第 3 张卡）：
-  - 左侧：状态机操作（提交 / 撤回 / 打印送货单 / 打印标签）
+  - 左侧：状态机操作（提交 / 撤回 / 打印送货单）
   - 右侧：删除草稿（仅 DRAFT）
 
   权限判定由父组件通过 props 传入；按钮 click 只 emit。
@@ -27,15 +27,6 @@
         <el-button v-if="canPrint(note, role)" type="success" @click="emit('print')">
           打印送货单
         </el-button>
-        <!-- 「打印标签」不经过送货单模板、不含司机页脚，故不挂 canPrint 的司机条件。 -->
-        <el-button
-          v-if="hasManageNoteRole(role) && note.part_count > 0"
-          type="success"
-          plain
-          @click="emit('printLabels')"
-        >
-          打印标签
-        </el-button>
       </el-space>
       <el-button
         v-if="canSoftDelete(note.status, role)"
@@ -51,13 +42,7 @@
 
 <script setup lang="ts">
 import type { DeliveryNoteRoleMap } from '../composables/useDeliveryNoteDetail';
-import {
-  canPrint,
-  canRecall,
-  canSoftDelete,
-  canSubmit,
-  hasManageNoteRole,
-} from '@/utils/deliveryNotePermissions';
+import { canPrint, canRecall, canSoftDelete, canSubmit } from '@/utils/deliveryNotePermissions';
 
 interface Props {
   note: {
@@ -75,7 +60,6 @@ const emit = defineEmits<{
   submit: [];
   recall: [];
   print: [];
-  printLabels: [];
   softDelete: [];
 }>();
 </script>
