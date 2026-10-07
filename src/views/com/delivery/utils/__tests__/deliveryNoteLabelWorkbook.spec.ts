@@ -7,7 +7,7 @@
 // 零件上的实物，列序错一位、unit 丢成空串都是现场事故，单测必须在**字节层面**兜住。
 //
 // 覆盖：7 列表头与列序 / 单 sheet / autoWidth 生效 / quantity=null 整行跳过 + skipped 计数 +
-// written 只含写出去的行 / unit 透传（散件空串 + 装配件「套」）/ 装配件行只出 1 行 /
+// written 只含写出去的行 / unit 透传（散件「件」+ 装配件「套」）/ 装配件行只出 1 行 /
 // 行序按传入顺序。
 
 import { describe, expect, it } from 'vitest';
@@ -29,7 +29,9 @@ function row(over: Partial<PrintRow> = {}): PrintRow {
     drawing_no: 'D-1',
     name: '铝电解电容',
     quantity: 5,
-    unit: '',
+    // 散件行在真实链路上就是「件」（单位在 deliveryNotePrintRows 整形时定死），
+    // fixture 照实写，别让「空串」再混进断言里当契约。
+    unit: '件',
     system_delivery_date: '2026-11-01',
     note: '',
     member_ids: ['1'],
@@ -81,7 +83,7 @@ describe('renderDeliveryNoteLabelWorkbook', () => {
       '数量',
       '单位',
     ]);
-    expect(wb.sheets[0]!.rows[1]).toEqual(['法拉', 'SO-1', '张三', '铝电解电容', 'D-1', 5, '']);
+    expect(wb.sheets[0]!.rows[1]).toEqual(['法拉', 'SO-1', '张三', '铝电解电容', 'D-1', 5, '件']);
   });
 
   it('autoWidth 生效（读回的 columns 带算出来的列宽，没有它就没有 widths）', async () => {
@@ -142,12 +144,12 @@ describe('renderDeliveryNoteLabelWorkbook', () => {
     expect(sheet.rows).toHaveLength(1);
   });
 
-  it('unit 透传：散件行空串、装配件行「套」', async () => {
+  it('unit 透传：散件行「件」、装配件行「套」（后端无 unit 字段，整形时就定死）', async () => {
     const { sheet } = await render([
-      row({ id: 'a', unit: '' }),
+      row({ id: 'a', unit: '件' }),
       row({ id: 'b', is_asm_row: true, unit: '套', quantity: 3 }),
     ]);
-    expect(sheet.rows[1]![6]).toBe('');
+    expect(sheet.rows[1]![6]).toBe('件');
     expect(sheet.rows[2]![6]).toBe('套');
   });
 
