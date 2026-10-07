@@ -59,6 +59,12 @@ import 'element-plus/theme-chalk/el-timeline.css';
 import 'element-plus/theme-chalk/el-carousel.css';
 import 'element-plus/theme-chalk/el-carousel-item.css';
 
+// 2026-10-09 新增：批次卡片右键菜单换用 `@imengyu/vue3-context-menu`（看板五区共用）。
+// 该库的样式**必须**单独 import —— 它是预编译 CSS、不走 unplugin-vue-components 的按需
+// 注入链，漏掉这行的症状是「菜单渲染出来了但完全没有样式」（无边框 / 无背景 / 全透明）。
+// 外观全走库原生主题（`theme: 'default'`），本仓不覆写它的任何 CSS 变量。
+import '@imengyu/vue3-context-menu/lib/vue3-context-menu.css';
+
 // 2026-08-21：Element Plus 全量注册（app.use + 全局图标循环）已移除，改为
 // unplugin-auto-import / unplugin-vue-components 按需自动解析（见 vite.config.ts），
 // index chunk 从 1.1MB 降到 500kB 以下。中文 locale 下沉到 App.vue 根级
