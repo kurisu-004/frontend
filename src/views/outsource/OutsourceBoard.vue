@@ -1,7 +1,7 @@
 <!-- 2026-10-09 新建：外协「发送 / 接收」看板（路由 /outsource/send-receive，路径不变、
      组件硬切）。取代原「可发送 / 待接收」双表格 tab：现在是**每个外协工序一个 tab**，
-     tab body = el-splitter 30/70（左可发送候选池 / 右外协公司列），发件走拖拽、回收走
-     卡片右键。
+     tab body = el-splitter 30/70（左可发送候选池 / 右外协公司列），发件走拖拽、回收与
+     收发 / 拆分走卡片右键。
 
      ⚠️ **tab 集合必须与工序列表 join**（`tabProcesses`）：
        `useOutsourceQueueSnapshotQuery` 的 `processes[]` 只含 `sendable + in_flight > 0`
@@ -18,13 +18,15 @@
      「刷新」= 失效快照 + 单工序看板**两个前缀**：手动刷新的语义是「我把当前屏幕当成
      不可信」，不该只刷一半。
 
-     板级持有三个跨容器的东西（provide + inject，见 outsourceBoardTypes.ts）：
-       - `sendToCompany`：`useOutsourceQueueMove` 的**唯一**实例。公司列的拖拽落点与
-         回收对话框都经它发请求 —— 同一个 useMutation 挂两个 observer 会弹两份成功 toast。
-       - `openOutsourceBatchMenu`：右键菜单 opener（菜单本体是本组件的
-         `<BatchContextMenu>`，teleport 到 body）。
-       - `activeOutsourceProcessId`：扫码选中的作用域闸门（切过的 tab 都还挂着，多个
-         候选池实例会同时收到条码事件）。 -->
+板级持有三个跨容器的东西（provide + inject，见 outsourceBoardTypes.ts）：
+         - `sendToCompany`：`useOutsourceQueueMove` 的**唯一**实例。公司列的拖拽落点与
+           候选池右键菜单的「发送到外协公司」都经它发请求 —— 同一个 useMutation 挂两个
+           observer 会弹两份成功 toast。
+         - `openOutsourceBatchMenu`：右键 opener（菜单本体是
+           `@/composables/useBatchContextMenu.ts` 的 `showBatchContextMenu()`，挂在 body 级
+           单例容器上）。
+         - `activeOutsourceProcessId`：扫码选中的作用域闸门（切过的 tab 都还挂着，多个
+           候选池实例会同时收到条码事件）。 -->
 <template>
   <div class="outsource-board">
     <el-alert
@@ -55,14 +57,6 @@
       </div>
     </div>
 
-    <!-- 批次右键操作菜单（板级单例）。放在 el-tabs **之外**、根 div 的直接子级位置 ⇒
-         骨架态下菜单组件也已挂载，不必等数据到位。菜单本体 teleport 到 body，与本页
-         所有 Sortable 容器零 DOM 关系。
-         卡片侧不包任何组件：@contextmenu.prevent 经 BatchCard 的 fallthrough attrs
-         落在卡片根 div 上（包裹即破坏 Sortable 的「可拖元素 == vnode 的 DOM
-         footprint」不变式，见 CLAUDE.md「拖拽投放（Sortable）」）。 -->
-    <BatchContextMenu ref="batchCtxMenu" :items="ctxMenuItems" @select="onCtxMenuSelect" />
-
     <OutsourceReceiveDialog
       v-model="receiveVisible"
       :mode="receiveMode"
@@ -72,7 +66,11 @@
       @confirm="onReceiveConfirm"
     />
 
-    <BatchSplitDialog v-model="splitVisible" :source="splitTarget" />
+    <!-- 拆批对话框（共享组件，局部 import，与 BatchCard 同款）。放在 el-tabs **之外**、
+         根 div 的直接子级位置 ⇒ 骨架态下也已挂载。**失效编排在板级**：对话框只发
+         `done`，由 onSplitDone 失效外协看板两域（生产队列那边要失效的是另外三个域，
+         对话框 import 任一方的失效函数都会锁死单域消费方）。 -->
+    <BatchSplitDialog v-model="splitVisible" :source="splitTarget" @done="onSplitDone" />
   </div>
 </template>
 
@@ -83,26 +81,33 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useQueryClient } from '@tanstack/vue-query';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
+import { qk } from '@/composables/queries/keys';
 import { useAuthStore } from '@/stores/auth';
-import BatchContextMenu from '@/components/BatchContextMenu.vue';
-import type { BatchContextMenuItem } from '@/components/BatchContextMenu.vue';
+import { showBatchContextMenu } from '@/composables/useBatchContextMenu';
 import type { BatchCardModel } from '@/types/batchCard';
+import type { BatchSplitSource } from '@/types/batchSplit';
 import ProcessBoardTab from './components/ProcessBoardTab.vue';
 import OutsourceReceiveDialog from './components/OutsourceReceiveDialog.vue';
-import BatchSplitDialog from './components/BatchSplitDialog.vue';
+import BatchSplitDialog from '@/components/BatchSplitDialog.vue';
+import { useQueueRecall } from '@/views/production/queue/composables/useQueueRecall';
 import { useOutsourceQueueSnapshotQuery } from './composables/useOutsourceQueueSnapshotQuery';
 import { invalidateOutsourceQueueProcessAll } from './composables/useOutsourceQueueProcessQuery';
 import { invalidateOutsourceQueueSnapshotAll } from './composables/useOutsourceQueueSnapshotQuery';
 import { useOutsourceQueueMove } from './composables/useOutsourceQueueMove';
 import {
+  buildOutsourceBatchMenuItems,
+  type OutsourceMenuCompany,
+} from './composables/outsourceBatchMenuItems';
+import type { OutsourceQueueCompanyData } from './composables/outsourceQueueSchema';
+import {
   ACTIVE_OUTSOURCE_PROCESS_ID,
   OPEN_OUTSOURCE_BATCH_MENU,
   SEND_TO_COMPANY,
-  type OutsourceBatchCardContext,
+  isCandidateDraggable,
+  type OpenOutsourceBatchMenu,
   type OutsourceHeldCardContext,
   type OutsourceReceiveMode,
   type OutsourceReceiveSubmit,
-  type OutsourceSplitTarget,
 } from './outsourceBoardTypes';
 
 const auth = useAuthStore();
@@ -118,6 +123,8 @@ const snapshotQuery = useOutsourceQueueSnapshotQuery();
 // 写操作 composable 在板级实例化一次（见文件头「板级持有三个跨容器的东西」）。
 const { error: moveError, canMove, sendToCompany, receiveToProduction, receiveToInspection } =
   useOutsourceQueueMove();
+// 候选池右键「召回到待下发」复用生产队列域的召回 composable（跨域端点，本页不另写一份）。
+const recall = useQueueRecall();
 
 const loading = computed(() => procsQuery.isLoading.value || snapshotQuery.isLoading.value);
 
@@ -218,37 +225,116 @@ provide(SEND_TO_COMPANY, sendToCompany);
 // 板级的 ref 形态，且类型与 inject 侧的 ComputedRef<string> 对齐。
 provide<ComputedRef<string>>(ACTIVE_OUTSOURCE_PROCESS_ID, computed(() => activeTab.value));
 
-const batchCtxMenu = ref<InstanceType<typeof BatchContextMenu> | null>(null);
-/** 菜单打开时那张卡的上下文（`BatchContextMenu` 的 select 只给 (key, batch)，
- *  容器信息必须由 opener 侧记住）。 */
-const menuCtx = ref<OutsourceBatchCardContext | null>(null);
+// ============================================================
+// 右键菜单（区域 × 角色 × 批次状态 × 报价路径 的派生在纯函数里，见 outsourceBatchMenuItems.ts）
+// ============================================================
 
-/** 菜单项按**容器 + 角色**逐项过滤，不是「一次性闸」：
- *   - 回收生产 / 回收品检：后端 move 的 `require_any_role([Manager, Clerk, Inspector])`
- *     —— 三类角色都能收发，缺一个用户点了吃 40300；
- *   - 拆分批次：角色 MANAGER + CLERK（Inspector 能收发但**不能拆批**），多放一个角色
- *     会让用户点了才知道没权限。
- *  key 与后端动作名对齐，便于对账；分发方是下面的 onCtxMenuSelect。 */
-const ctxMenuItems = computed<BatchContextMenuItem[]>(() => {
-  if (menuCtx.value === null) return [];
-  const canSplit = auth.hasRole('MANAGER') || auth.hasRole('CLERK');
-  if (menuCtx.value.kind === 'candidate') {
-    return canSplit ? [{ key: 'split', label: '拆分批次' }] : [];
+/** 拆批权限闸 —— 与后端 `POST /batches/split` 的 `require_any_role([Manager, Clerk])`
+ *  逐字对齐（Inspector 能收发但**不能**拆批）。与 `recall.canRecall` 当前同组角色，但
+ *  那是两个端点各自独立的 RBAC 声明，不复用同一个布尔。 */
+const canSplit = computed<boolean>(() => auth.hasRole('MANAGER') || auth.hasRole('CLERK'));
+
+/** 「发送到外协公司」的目标集上游 —— 当前 tab 的公司列。
+ *
+ *  读的是 ProcessBoardTab 里那条 `useOutsourceQueueProcessQuery` 的**同一个 queryKey**
+ *  （`qk.outsourceQueueProcess(processId)`）：tab body 自己发请求并填充缓存，板级只是
+ *  `getQueryData` 读同一份缓存 ⇒ 零新增请求、零状态副本（公司列表随 tab 变，板级不另
+ *  开 query 也不用可写 ref 让各 tab 往里写 —— 后者要处理「多 tab 同时活着、谁最后写、
+ *  卸载要不要清」）。
+ *
+ *  读取发生在右键那一刻而非 computed：卡片能被右键就意味着该 tab 的详情早已解析完。 */
+function currentTabCompanies(): OutsourceMenuCompany[] {
+  const pid = activeTab.value;
+  if (!pid) return [];
+  const cached = qc.getQueryData<{ companies: OutsourceQueueCompanyData[] }>(
+    qk.outsourceQueueProcess(pid),
+  );
+  return (cached?.companies ?? []).map((c) => ({ company_id: c.company_id, name: c.name }));
+}
+
+/** 打开拆批对话框。
+ *
+ *  version 是后端必填的 OCC 锚（缺它返 HTTP 422 纯文本），卡片 model 上它是**可选**
+ *  字段，故守卫用 `typeof + isFinite` 两条而不是只看 isFinite（`undefined` 同样过不了
+ *  isFinite，但显式 typeof 让类型收窄与运行时判据对齐）。 */
+function openSplitDialog(batch: BatchCardModel): void {
+  if (typeof batch.version !== 'number' || !Number.isFinite(batch.version)) {
+    ElMessage.warning('批次版本信息缺失，无法拆分');
+    return;
   }
-  const items: BatchContextMenuItem[] = [];
-  if (canMove.value) {
-    items.push({ key: 'receive-production', label: '回收生产' });
-    items.push({ key: 'receive-inspection', label: '回收品检' });
+  splitTarget.value = {
+    batch_id: batch.batch_id,
+    version: batch.version,
+    quantity: batch.quantity,
+    batch_no: batch.batch_no,
+    part_name: batch.part_name,
+  };
+  splitVisible.value = true;
+}
+
+const splitVisible = ref(false);
+const splitTarget = ref<BatchSplitSource | null>(null);
+
+/** 卡片右键 → 派生菜单项 → 开菜单。消费方两个投放容器（候选池 / 公司列）inject 这一个
+ *  opener，第三参给出区域、第四参给出那一侧的行 DTO。
+ *
+ *  菜单项派生出来是**空数组**时不弹菜单、改为一句 warning：卡片侧的 `@contextmenu.prevent`
+ *  已经把系统右键菜单吞掉了，静默早退等于「右键卡片彻底没反应」，弹一个空白菜单框同样
+ *  没法解释。文案按「空的原因」分级，见下面的 `byPermission`。
+ *
+ *  「召回到待下发」复用生产队列域的 `useQueueRecall`（`POST /prod/queue/recall` 是跨域
+ *  端点、批次回到 `PENDING` 后生产队列的待下发列表确实要变），其失效链按**前缀**全刷，
+ *  在本页同样成立。不为外协看板另写一份 recall composable。 */
+provide<OpenOutsourceBatchMenu>(OPEN_OUTSOURCE_BATCH_MENU, (evt, batch, area, ctx) => {
+  const held = ctx.kind === 'held' ? ctx : null;
+  const items = buildOutsourceBatchMenuItems({
+    area,
+    batch,
+    canMove: canMove.value,
+    canSplit: canSplit.value,
+    canRecall: recall.canRecall.value,
+    candidate: ctx.kind === 'candidate' ? ctx.candidate : undefined,
+    companies: currentTabCompanies(),
+    // 「已经是 PENDING 未上架」的行本来就在待下发区，召回自己没有意义。
+    candidateIsPending: ctx.kind === 'candidate' && !isCandidateDraggable(ctx.candidate),
+    onSend: (companyId) => {
+      if (ctx.kind !== 'candidate') return;
+      void sendToCompany({ candidate: ctx.candidate, companyId });
+    },
+    onRecall: () => void recall.recallBatch(batch),
+    onSplit: () => openSplitDialog(batch),
+    onReceiveProduction: () => {
+      receiveCtx.value = held;
+      receiveMode.value = 'production';
+      receiveVisible.value = true;
+    },
+    onReceiveInspection: () => {
+      receiveCtx.value = held;
+      receiveMode.value = 'inspection';
+      receiveVisible.value = true;
+    },
+  });
+  if (items.length === 0) {
+    // 文案按**空的原因**分级：三个权限闸全 false 才能断定「空」是权限造成的。全权
+    // 角色同样会遇到「有权但这一行没得可做」—— 未上架（shelf_id 为空串）且不可召回、
+    // 余量 ≤ 1 不可拆、DIRECT 但 company_options 为空、当前 tab 没画出可投的公司列。
+    // 对他说「当前角色没有可执行的操作」是把批次 / 报价状态误报成权限问题。
+    const byPermission = !canMove.value && !canSplit.value && !recall.canRecall.value;
+    ElMessage.warning(
+      byPermission ? '当前角色对该批次没有可执行的操作' : '该批次当前没有可执行的操作',
+    );
+    return;
   }
-  if (canSplit) items.push({ key: 'split', label: '拆分批次' });
-  return items;
+  void showBatchContextMenu(evt, items);
 });
 
-function onCardContextMenu(evt: MouseEvent, batch: BatchCardModel, ctx: OutsourceBatchCardContext) {
-  menuCtx.value = ctx;
-  batchCtxMenu.value?.open(evt, batch);
+/** 拆批成功后的失效编排 —— **本组件持有**（对话框只发 `done`，见 BatchSplitDialog 文件头）。
+ *  拆批后源批次留在原处（量变小）+ 新批次继承状态 / 位置 ⇒ 外协看板两域都要刷：
+ *  单工序看板（左列候选 / 右列在途都可能变）与快照（tab 徽标）。 */
+async function onSplitDone(): Promise<void> {
+  await invalidateOutsourceQueueProcessAll(qc);
+  await invalidateOutsourceQueueSnapshotAll(qc);
 }
-provide(OPEN_OUTSOURCE_BATCH_MENU, onCardContextMenu);
 
 // ============================================================
 // 回收对话框（右键触发，非拖拽）
@@ -257,37 +343,6 @@ const receiveVisible = ref(false);
 const receiveMode = ref<OutsourceReceiveMode>('production');
 const receiveCtx = ref<OutsourceHeldCardContext | null>(null);
 const receiving = ref(false);
-
-const splitVisible = ref(false);
-const splitTarget = ref<OutsourceSplitTarget | null>(null);
-
-function onCtxMenuSelect(key: string, batch: BatchCardModel): void {
-  const ctx = menuCtx.value;
-  menuCtx.value = null;
-  if (!ctx) return;
-  if (key === 'split') {
-    // 拆批的 version 是后端必填的 OCC 锚（缺它返 HTTP 422 纯文本）。卡片 model 上它是
-    // 可选字段，守卫用 typeof + isFinite 两条而不是只看 isFinite（`undefined` 同样
-    // 过不了 isFinite，但显式 typeof 让类型收窄与运行时判据对齐）。
-    if (typeof batch.version !== 'number' || !Number.isFinite(batch.version)) {
-      ElMessage.warning('批次版本信息缺失，无法拆分');
-      return;
-    }
-    splitTarget.value = {
-      batch_id: batch.batch_id,
-      version: batch.version,
-      quantity: batch.quantity,
-      batch_no: batch.batch_no,
-      part_name: batch.part_name,
-    };
-    splitVisible.value = true;
-    return;
-  }
-  if (ctx.kind !== 'held') return;
-  receiveCtx.value = ctx;
-  receiveMode.value = key === 'receive-production' ? 'production' : 'inspection';
-  receiveVisible.value = true;
-}
 
 async function onReceiveConfirm(payload: OutsourceReceiveSubmit): Promise<void> {
   const ctx = receiveCtx.value;

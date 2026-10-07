@@ -110,8 +110,9 @@ const sendToCompany = inject<(input: SendToCompanyInput) => Promise<boolean>>(
 const openOutsourceBatchMenu = inject<OpenOutsourceBatchMenu>(OPEN_OUTSOURCE_BATCH_MENU, () => {});
 
 /** 卡片根部的右键落点。只转交上下文（在途 DTO + 所在公司 id/name），动作在板级。
- *  company_id 必须在这一步带上：在途卡 DTO 上**没有**公司字段，公司只挂在列上，
- *  而回收请求的 `from.company_id` 正是它。 */
+ * company_id 必须在这一步带上：在途卡 DTO 上**没有**公司字段，公司只挂在列上，
+ * 而回收请求的 `from.company_id` 正是它。区域标签 `'outsource-company'` 是本列恒定的
+ * —— 与 ctx.kind 表达的是同一件事，前者给板级派菜单矩阵、后者给板级取 DTO。 */
 function onCardContextMenu(evt: MouseEvent, batch: BatchCardModel): void {
   const held = props.company.held_batches.find((b) => b.batch_id === batch.batch_id);
   if (!held) return;
@@ -121,7 +122,7 @@ function onCardContextMenu(evt: MouseEvent, batch: BatchCardModel): void {
     companyId: props.company.company_id,
     companyName: props.company.name,
   };
-  openOutsourceBatchMenu(evt, batch, ctx);
+  openOutsourceBatchMenu(evt, batch, 'outsource-company', ctx);
 }
 
 /** 落点校验结果：一个候选行 + 一句给用户的拒绝理由。 */

@@ -13,9 +13,11 @@
 //   - B4：深链 `?tab=<process_id>` 生效；非法值（已删除 / 自产工序）在工序列表解析后校正到
 //     第一个 OUTSOURCE 工序。
 //   - B5：手动刷新失效**两个前缀**（快照 + 单工序看板），语义是「我把当前屏幕当成不可信」。
-//   - B6：右键菜单项按**容器 + 角色**逐项过滤：候选池卡只给「拆分批次」（M/C）；公司列卡
-//     给「回收生产 / 回收品检」（M/C/I）+「拆分批次」（M/C）。Inspector 拿不到拆批。
-//   - B7：菜单本体挂在 el-tabs **之外**（骨架态下已挂载）。
+//   - B6：右键菜单项按**区域 × 角色 × 批次状态 × 报价路径**逐格派生：候选池卡 = 召回 +
+//     拆分批次 + 发送到外协公司二级菜单；公司列卡 = 回收生产 / 回收品检 + 拆分批次。
+//     Inspector 拿不到拆批；`can_send=false` 的候选行拿不到「发送到」。
+//   - B7：拆批对话框挂在 el-tabs **之外**（骨架态下已挂载），且 `done` → 板级失效外协
+//     两域（失效编排在板级，不在共享对话框内）。
 //   - B8：provide 三件套（sendToCompany / openOutsourceBatchMenu / activeOutsourceProcessId）
 //     真的提供了，且 sendToCompany 是写操作 composable 的那一个实例。
 //   - B9：回收对话框 submit 后走 receiveToProduction / receiveToInspection，成功才关。
@@ -25,10 +27,15 @@
 // 测试策略：
 //   - EP 组件桩：`el-tabs` / `el-tab-pane` 各渲染其 label slot + default slot（不实现
 //     :lazy，子组件桩统一渲染），`el-skeleton` / `el-alert` / `el-button` 走最小桩；
+//   - 菜单本体（`@imengyu/vue3-context-menu` 函数模式）整体 mock：板级在右键回调里派生
+//     items 并调 `showBatchContextMenu(evt, items)`，本 spec 断言递进去的 **items**（菜单
+//     本体的固定传参与打开串行化由 src/composables/__tests__/useBatchContextMenu.spec.ts
+//     守）；菜单项的派生矩阵本身由 composables/__tests__/outsourceBatchMenuItems.spec.ts
+//     逐格覆盖，本 spec 只守接线；
 //   - 子组件带接缝桩（ProcessBoardTab / OutsourceReceiveDialog / BatchSplitDialog）渲染出
 //     自己的 props 与可触发的 emit，让本用例能断言「板级把什么接给了谁」；
-//   - 数据层桩：useProcessesQuery / 两个 query hook / useOutsourceQueueMove 全部
-//     vi.mock 成可控桩（测的是壳的接线与派生，不重复测数据层）。
+//   - 数据层桩：useProcessesQuery / 两个 query hook / useOutsourceQueueMove / 生产队列域的
+//     useQueueRecall 全部 vi.mock 成可控桩（测的是壳的接线与派生，不重复测数据层）。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { computed, defineComponent, h, ref } from 'vue';
@@ -93,8 +100,9 @@ vi.mock('@/views/outsource/composables/useOutsourceQueueProcessQuery', () => ({
 vi.mock('@/views/outsource/composables/useOutsourceQueueMove', () => ({
   useOutsourceQueueMove: () => ({
     error: ref(null),
-    // canMove 恒真：角色差异由 authMock 走 ctxMenuItems 那一侧的 hasRole 断言覆盖
-    canMove: computed(() => true),
+    // canMove 跟着 authMock 的角色走：后端 move 端点是
+    // require_any_role([Manager, Clerk, Inspector])，少放一个角色用户点了才吃 40300
+    canMove: computed(() => authMock.roles.length > 0),
     sendToCompany: moveMock.send,
     receiveToProduction: moveMock.receiveToProduction,
     receiveToInspection: moveMock.receiveToInspection,
@@ -103,12 +111,48 @@ vi.mock('@/views/outsource/composables/useOutsourceQueueMove', () => ({
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({ hasRole: (r: string) => authMock.roles.includes(r) }),
 }));
+/** QueryClient 的最小替身：`invalidateQueries` 记失效调用（串行化调用点），
+ *  `setQueryData` / `getQueryData` 让用例能预置并读到「tab body 已经填好的缓存」（板级
+ *  读「发送到」目标集用的就是同一份缓存 ⇒ 零新增请求，用例也无需真挂 ProcessBoardTab）。 */
+const qcStub = vi.hoisted(() => {
+  const cache = new Map<string, unknown>();
+  const key = (k: unknown) => JSON.stringify(k);
+  return {
+    cache,
+    invalidateQueries: vi.fn(async () => undefined),
+    setQueryData: vi.fn((k: unknown, v: unknown) => cache.set(key(k), v)),
+    getQueryData: (k: unknown) => cache.get(key(k)),
+  };
+});
 vi.mock('@tanstack/vue-query', async (importOriginal) => {
   const actual = await importOriginal<typeof VueQuery>();
-  return { ...actual, useQueryClient: () => ({ invalidateQueries: invalidateSpy }) };
+  return { ...actual, useQueryClient: () => qcStub };
 });
+const warningMock = vi.hoisted(() => vi.fn());
 vi.mock('element-plus', () => ({
-  ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
+  ElMessage: { success: vi.fn(), error: vi.fn(), warning: warningMock, info: vi.fn() },
+}));
+
+/** 右键菜单本体的记账替身：记录板级递进去的 (事件, items)。
+ *  `showBatchContextMenu` 真实实现是**异步**的（内部 close → nextTick → show），板级对它
+ *  fire-and-forget，本 spec 因此给一个同步替身 —— items 可同步断言。 */
+const menuOpenCalls = vi.hoisted(() => [] as { evt: unknown; items: unknown }[]);
+vi.mock('@/composables/useBatchContextMenu', () => ({
+  showBatchContextMenu: (evt: MouseEvent, items: unknown) => {
+    menuOpenCalls.push({ evt, items });
+    return Promise.resolve();
+  },
+}));
+
+/** 生产队列域的召回 composable 桩（外协候选池右键「召回到待下发」复用它）。 */
+const recallBatchMock = vi.hoisted(() => vi.fn(async () => undefined));
+const recallableMock = vi.hoisted(() => ({ current: true }));
+vi.mock('@/views/production/queue/composables/useQueueRecall', () => ({
+  useQueueRecall: () => ({
+    canRecall: computed(() => recallableMock.current),
+    recallMutation: { mutate: vi.fn(), isPending: ref(false) },
+    recallBatch: recallBatchMock,
+  }),
 }));
 
 // 路由桩：记录 replace 调用（深链写回）
@@ -121,6 +165,7 @@ const routeMock = vi.hoisted(() => {
 });
 
 import OutsourceBoard from '../OutsourceBoard.vue';
+import { qk } from '@/composables/queries/keys';
 import {
   ACTIVE_OUTSOURCE_PROCESS_ID,
   OPEN_OUTSOURCE_BATCH_MENU,
@@ -229,49 +274,12 @@ const SplitDialogStub = defineComponent({
       h('span', { class: 'split-dialog-stub__src' }, props.source?.batch_id ?? ''),
     ]),
 });
-/**
- * BatchContextMenu 桩：**只在被 open() 调过之后才渲染菜单项**。
- *
- * 这样「板级确实持有菜单实例并调了 open()」就落进断言面 —— 只按 `items` 渲染的桩会让
- * 「模板上漏了 ref、菜单永远打不开」这类缺陷照样绿（items 有值但没人调 open）。
- */
-const menuStubRef = vi.hoisted(() => ({ open: vi.fn() }));
-interface MenuItemStub {
-  key: string;
-  label?: string;
-}
+const PROC_A = '2000000000001';
+const PROC_B = '2000000000002';
+const PROC_INHOUSE = '2000000000003';
+const COMPANY_ID = '9000000000001';
 
-const BatchContextMenuStub = defineComponent({
-  name: 'BatchContextMenuStub',
-  props: { items: { type: Array as () => MenuItemStub[], default: () => [] } },
-  emits: ['select'],
-  setup(props, { emit, expose }) {
-    menuStubRef.open.mockClear();
-    const opened = ref(false);
-    expose({
-      open: (evt: MouseEvent, batch: BatchCardModel) => {
-        opened.value = true;
-        menuStubRef.open(evt, batch);
-      },
-    });
-    return () =>
-      h(
-        'div',
-        { class: 'ctx-menu-stub', 'data-opened': String(opened.value), 'data-count': props.items.length },
-        opened.value
-          ? props.items.map((it) =>
-              h('button', {
-                class: 'ctx-menu-stub__item',
-                'data-key': it.key,
-                onClick: () => emit('select', it.key, MENU_TARGET_BATCH),
-              }),
-            )
-          : [],
-      );
-  },
-});
-
-/** 被右键的那张卡（板级 select 回调的第二参）。 */
+/** 被右键的那张卡（板级 opener 的第二参）。 */
 const MENU_TARGET_BATCH: BatchCardModel = {
   batch_id: '3000000000002',
   part_id: '4000000000002',
@@ -294,6 +302,41 @@ const MENU_TARGET_BATCH: BatchCardModel = {
   extra: { outsource_company_name: '外协厂甲', can_auto_receive: true },
 };
 
+interface MenuItemStub {
+  label?: string;
+  onClick?: () => void;
+  children?: MenuItemStub[];
+}
+
+/** 一条完整的候选行（发送白名单的五条锚都在它上面）：APPROVAL 报价锁定「外协厂甲」。 */
+const CANDIDATE_STUB = {
+  version: 5,
+  send_mode: 'APPROVAL' as const,
+  part_id: '4000000000002',
+  part_serial_no: 'SN-2',
+  part_drawing_no: 'DRW-2',
+  part_name: '齿轮',
+  quantity: 8,
+  batch_id: MENU_TARGET_BATCH.batch_id,
+  batch_no: 1025,
+  planned_delivery_date: null,
+  is_urgent: false,
+  customer_name: null,
+  parent_customer_name: null,
+  shelf_code: 'SH-A01',
+  shelf_id: '5000000000002',
+  outsource_company_id: COMPANY_ID,
+  outsource_company_name: '外协厂甲',
+  quote_id: '7000000000001',
+  company_options: [],
+  price: '12.50',
+  has_cnc_program: false,
+  applicant_name: null,
+  note: null,
+  system_delivery_date: null,
+  can_send: true,
+};
+
 const globalConfig = {
   components: {
     ElTabs: ElTabsStub,
@@ -306,13 +349,9 @@ const globalConfig = {
     ProcessBoardTab: ProcessBoardTabStub,
     OutsourceReceiveDialog: ReceiveDialogStub,
     BatchSplitDialog: SplitDialogStub,
-    BatchContextMenu: BatchContextMenuStub,
   },
 };
 
-const PROC_A = '2000000000001';
-const PROC_B = '2000000000002';
-const PROC_INHOUSE = '2000000000003';
 
 function mountBoard(query: Record<string, unknown> = {}) {
   routeMock.query = query;
@@ -349,6 +388,9 @@ beforeEach(() => {
     },
   ];
   authMock.roles = ['MANAGER', 'CLERK', 'INSPECTOR'];
+  recallableMock.current = true;
+  menuOpenCalls.length = 0;
+  qcStub.cache.clear();
 });
 
 describe('OutsourceBoard（外协看板壳）', () => {
@@ -432,69 +474,115 @@ describe('OutsourceBoard（外协看板壳）', () => {
     wrapper.unmount();
   });
 
-  it('B6a：公司列卡的菜单 = 回收生产 + 回收品检 + 拆分批次（三角色都有权）', async () => {
+  it('B6a：公司列卡的菜单 = 回收生产 + 回收品检 + 拆分批次（三角色都有权）', () => {
     const wrapper = mountBoard();
-    // 模拟公司列卡右键：注入的 opener 由 ProcessBoardTab 消费，这里直接通过 provide
-    // 的键拿到板级 opener 并驱动（等价于 CompanyColumn 触发 contextmenu）。
-    const opener = provideOf(wrapper, OPEN_OUTSOURCE_BATCH_MENU) as (
-      e: MouseEvent,
-      b: BatchCardModel,
-      c: unknown,
-    ) => void;
-    opener(new MouseEvent('contextmenu'), MENU_TARGET_BATCH, {
-      kind: 'held',
-      held: { batch_id: MENU_TARGET_BATCH.batch_id },
-      companyId: '9000000000001',
-      companyName: '外协厂甲',
-    });
-    await wrapper.vm.$nextTick();
-    // open() 真的被调到了菜单实例上（否则模板上漏 ref 的缺陷照样绿）
-    expect(menuStubRef.open).toHaveBeenCalledTimes(1);
-    expect(menuKeys(wrapper)).toEqual(['receive-production', 'receive-inspection', 'split']);
+    openHeld(wrapper);
+    expect(menuLabels()).toEqual(['回收生产', '回收品检', '拆分批次']);
     wrapper.unmount();
   });
 
-  it('B6b：Inspector 拿得到回收两项、拿不到拆批（逐项过滤，不是「一次性闸」）', async () => {
+  it('B6b：Inspector 拿得到回收两项、拿不到拆批（逐项过滤，不是「一次性闸」）', () => {
     authMock.roles = ['INSPECTOR'];
     const wrapper = mountBoard();
-    const opener = provideOf(wrapper, OPEN_OUTSOURCE_BATCH_MENU) as (
-      e: MouseEvent,
-      b: BatchCardModel,
-      c: unknown,
-    ) => void;
-    opener(new MouseEvent('contextmenu'), MENU_TARGET_BATCH, {
-      kind: 'held',
-      held: { batch_id: MENU_TARGET_BATCH.batch_id },
-      companyId: '9000000000001',
-      companyName: '外协厂甲',
-    });
-    await wrapper.vm.$nextTick();
-    expect(menuKeys(wrapper)).toEqual(['receive-production', 'receive-inspection']);
+    openHeld(wrapper);
+    expect(menuLabels()).toEqual(['回收生产', '回收品检']);
     wrapper.unmount();
   });
 
-  it('B6c：候选池卡的菜单只有「拆分批次」（回收动作对公司列卡才有意义）', async () => {
+  it('B6c：公司列卡**不给**召回与「发送到」（在途批次的出路是回收，不是召回/改投）', () => {
     const wrapper = mountBoard();
-    const opener = provideOf(wrapper, OPEN_OUTSOURCE_BATCH_MENU) as (
-      e: MouseEvent,
-      b: BatchCardModel,
-      c: unknown,
-    ) => void;
-    opener(new MouseEvent('contextmenu'), MENU_TARGET_BATCH, {
-      kind: 'candidate',
-      candidate: { batch_id: MENU_TARGET_BATCH.batch_id },
-      processName: '外协热处理',
-    });
-    await wrapper.vm.$nextTick();
-    expect(menuKeys(wrapper)).toEqual(['split']);
+    openHeld(wrapper);
+    const labels = menuLabels();
+    expect(labels).not.toContain('召回到待下发');
+    expect(labels).not.toContain('发送到外协公司');
     wrapper.unmount();
   });
 
-  it('B7：菜单本体挂在 el-tabs 之外（骨架态下已挂载）', () => {
+  it('B6d：候选池卡 = 召回 + 拆分批次 + 发送到外协公司（二级菜单按报价白名单收窄）', () => {
     const wrapper = mountBoard();
-    // 骨架态（procsQuery 加载中）下 tabs 不渲染，但菜单必须已挂载
+    openCandidate(wrapper, CANDIDATE_STUB);
+    // tab body 的公司列缓存（板级从同一 queryKey 读，零新增请求）
+    seedCompanies();
+    openCandidate(wrapper, CANDIDATE_STUB);
+    expect(menuLabels()).toEqual(['召回到待下发', '拆分批次', '发送到外协公司']);
+    // APPROVAL 行：目标是报价锁定的那一家，白名单外的公司一律不进二级菜单
+    expect(menuChildren('发送到外协公司')).toEqual(['外协厂甲']);
+    wrapper.unmount();
+  });
+
+  it('B6e：候选池「召回到待下发」→ 复用生产队列域的 useQueueRecall（板级不新增 mutation）', () => {
+    const wrapper = mountBoard();
+    openCandidate(wrapper, CANDIDATE_STUB);
+    clickItem('召回到待下发');
+    expect(recallBatchMock).toHaveBeenCalledWith(MENU_TARGET_BATCH);
+    wrapper.unmount();
+  });
+
+  it('B6f：候选池「发送到外协公司」二级菜单 → sendToCompany 带候选行 + 目标公司', () => {
+    const wrapper = mountBoard();
+    seedCompanies();
+    openCandidate(wrapper, CANDIDATE_STUB);
+    clickChild('发送到外协公司', '外协厂甲');
+    expect(moveMock.send).toHaveBeenCalledWith({
+      candidate: CANDIDATE_STUB,
+      companyId: COMPANY_ID,
+    });
+    wrapper.unmount();
+  });
+
+  it('B6g：尚未上架（PENDING）的候选行不给召回 —— 它本来就在待下发区', () => {
+    const wrapper = mountBoard();
+    openCandidate(wrapper, { ...CANDIDATE_STUB, shelf_id: '' });
+    expect(menuLabels()).not.toContain('召回到待下发');
+    wrapper.unmount();
+  });
+
+  it('B6h：can_send=false 的候选行整个不给「发送到」（后端派生的可发送判据，前端不重算）', () => {
+    const wrapper = mountBoard();
+    seedCompanies();
+    openCandidate(wrapper, { ...CANDIDATE_STUB, can_send: false });
+    expect(menuLabels()).not.toContain('发送到外协公司');
+    wrapper.unmount();
+  });
+
+  it('B6i：余量 ≤ 1 的卡不给「拆分批次」（后端要求拆出数量 ∈ [1, n-1]）', () => {
+    const wrapper = mountBoard();
+    openHeld(
+      wrapper,
+      { batch_id: MENU_TARGET_BATCH.batch_id, version: 5, quantity: 1 },
+      { ...MENU_TARGET_BATCH, quantity: 1 },
+    );
+    expect(menuLabels()).not.toContain('拆分批次');
+    wrapper.unmount();
+  });
+
+  it('B6j：一个动作都没有时不弹菜单，改为一句 warning（右键已被 prevent 掉系统菜单）', () => {
+    // 一个角色都不给：既不能收发（canMove 假）、也不能拆批、也不能召回
+    authMock.roles = [];
+    recallableMock.current = false;
+    const wrapper = mountBoard();
+    openHeld(wrapper);
+    expect(menuOpenCalls).toHaveLength(0);
+    expect(warningMock).toHaveBeenCalledWith('当前角色对该批次没有可执行的操作');
+    wrapper.unmount();
+  });
+
+  it('B7：拆批对话框挂在 el-tabs 之外（骨架态下已挂载）', () => {
+    const wrapper = mountBoard();
+    // 骨架态（procsQuery 加载中）下 tabs 不渲染，但对话框必须已挂载
     expect(wrapper.find('.el-tabs-stub').exists()).toBe(true);
-    expect(wrapper.find('.ctx-menu-stub').exists()).toBe(true);
+    expect(wrapper.find('.split-dialog-stub').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('B7b：拆批 `done` → 板级失效外协两域（失效编排在板级，不在共享对话框里）', async () => {
+    // 回归 guard：对话框是**共享组件**（生产队列看板也用它）。失效编排一旦留在对话框里
+    // 就会锁死单域消费方（它 import 了某一方的前缀失效函数）。守法：对话框只发 `done`。
+    const wrapper = mountBoard();
+    invalidateSpy.mockClear();
+    wrapper.findComponent({ name: 'BatchSplitDialogStub' }).vm.$emit('done');
+    await wrapper.vm.$nextTick();
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
     wrapper.unmount();
   });
 
@@ -511,26 +599,15 @@ describe('OutsourceBoard（外协看板壳）', () => {
 
   it('B9a：回收生产 → receiveToProduction 被调，批次的 companyId 来自所在列', async () => {
     const wrapper = mountBoard();
-    const opener = provideOf(wrapper, OPEN_OUTSOURCE_BATCH_MENU) as (
-      e: MouseEvent,
-      b: BatchCardModel,
-      c: unknown,
-    ) => void;
     const held = { batch_id: '3000000000002', version: 5, quantity: 8 };
-    opener(new MouseEvent('contextmenu'), MENU_TARGET_BATCH, {
-      kind: 'held',
-      held,
-      companyId: '9000000000001',
-      companyName: '外协厂甲',
-    });
-    await wrapper.vm.$nextTick();
-    await wrapper.find('.ctx-menu-stub__item').trigger('click');
+    openHeld(wrapper, held);
+    clickItem('回收生产');
     await wrapper.vm.$nextTick();
     expect(wrapper.find('.receive-dialog-stub').attributes('data-mode')).toBe('production');
 
     await wrapper.find('.receive-dialog-stub__confirm').trigger('click');
     expect(moveMock.receiveToProduction).toHaveBeenCalledWith({
-      companyId: '9000000000001',
+      companyId: COMPANY_ID,
       batch: held,
       toShelfId: '5000000000002',
       nextProcessId: '2000000000002',
@@ -541,27 +618,16 @@ describe('OutsourceBoard（外协看板壳）', () => {
 
   it('B9b：回收品检 → receiveToInspection 被调（不带工序）', async () => {
     const wrapper = mountBoard();
-    const opener = provideOf(wrapper, OPEN_OUTSOURCE_BATCH_MENU) as (
-      e: MouseEvent,
-      b: BatchCardModel,
-      c: unknown,
-    ) => void;
-    opener(new MouseEvent('contextmenu'), MENU_TARGET_BATCH, {
-      kind: 'held',
-      held: { batch_id: '3000000000002', version: 5 },
-      companyId: '9000000000001',
-      companyName: '外协厂甲',
-    });
-    await wrapper.vm.$nextTick();
-    const items = wrapper.findAll('.ctx-menu-stub__item');
-    await items[1]!.trigger('click');
+    const held = { batch_id: '3000000000002', version: 5 };
+    openHeld(wrapper, held);
+    clickItem('回收品检');
     await wrapper.vm.$nextTick();
     expect(wrapper.find('.receive-dialog-stub').attributes('data-mode')).toBe('inspection');
 
     await wrapper.find('.receive-dialog-stub__confirm').trigger('click');
     expect(moveMock.receiveToInspection).toHaveBeenCalledWith({
-      companyId: '9000000000001',
-      batch: { batch_id: '3000000000002', version: 5 },
+      companyId: COMPANY_ID,
+      batch: held,
       toShelfId: '5000000000002',
     });
     expect(moveMock.receiveToProduction).not.toHaveBeenCalled();
@@ -571,19 +637,8 @@ describe('OutsourceBoard（外协看板壳）', () => {
   it('B9c：回收失败 → 对话框保持打开（用户改一下货架即可重试）', async () => {
     moveMock.receiveToProduction.mockResolvedValueOnce(false);
     const wrapper = mountBoard();
-    const opener = provideOf(wrapper, OPEN_OUTSOURCE_BATCH_MENU) as (
-      e: MouseEvent,
-      b: BatchCardModel,
-      c: unknown,
-    ) => void;
-    opener(new MouseEvent('contextmenu'), MENU_TARGET_BATCH, {
-      kind: 'held',
-      held: { batch_id: '3000000000002', version: 5 },
-      companyId: '9000000000001',
-      companyName: '外协厂甲',
-    });
-    await wrapper.vm.$nextTick();
-    await wrapper.find('.ctx-menu-stub__item').trigger('click');
+    openHeld(wrapper);
+    clickItem('回收生产');
     await wrapper.vm.$nextTick();
     await wrapper.find('.receive-dialog-stub__confirm').trigger('click');
     await wrapper.vm.$nextTick();
@@ -646,6 +701,79 @@ function provideOf(wrapper: ReturnType<typeof mountBoard>, key: string): unknown
   return (wrapper.vm as unknown as { $: { provides: Record<string, unknown> } }).$.provides[key];
 }
 
-function menuKeys(wrapper: ReturnType<typeof mountBoard>): string[] {
-  return wrapper.findAll('.ctx-menu-stub__item').map((b) => b.attributes('data-key')!);
+/** 驱动板级右键 opener（等价于 CompanyColumn / CandidatePool 触发 contextmenu）。
+ *  第三参是**区域标签**（容器恒定给），第四参是该侧的行 DTO。 */
+function openMenu(
+  wrapper: ReturnType<typeof mountBoard>,
+  area: 'outsource-company' | 'outsource-candidate',
+  ctx: unknown,
+  batch: BatchCardModel = MENU_TARGET_BATCH,
+): void {
+  const opener = provideOf(wrapper, OPEN_OUTSOURCE_BATCH_MENU) as (
+    e: MouseEvent,
+    b: BatchCardModel,
+    a: string,
+    c: unknown,
+  ) => void;
+  opener(new MouseEvent('contextmenu'), batch, area, ctx);
+}
+
+function openHeld(
+  wrapper: ReturnType<typeof mountBoard>,
+  held: unknown = { batch_id: MENU_TARGET_BATCH.batch_id, version: 5, quantity: 8 },
+  batch: BatchCardModel = MENU_TARGET_BATCH,
+): void {
+  openMenu(
+    wrapper,
+    'outsource-company',
+    { kind: 'held', held, companyId: COMPANY_ID, companyName: '外协厂甲' },
+    batch,
+  );
+}
+
+function openCandidate(
+  wrapper: ReturnType<typeof mountBoard>,
+  candidate: unknown,
+  batch: BatchCardModel = MENU_TARGET_BATCH,
+): void {
+  openMenu(
+    wrapper,
+    'outsource-candidate',
+    { kind: 'candidate', candidate, processName: '外协热处理' },
+    batch,
+  );
+}
+
+/** 往 query 缓存里塞当前 tab 的公司列（板级从同一个 queryKey 读，零新增请求）。
+ *  「开到哪一列」与 tab 一致：默认首个 tab = PROC_A。 */
+function seedCompanies(): void {
+  qcStub.setQueryData(qk.outsourceQueueProcess(PROC_A), {
+    companies: [{ company_id: COMPANY_ID, name: '外协厂甲', held_count: 0, held_batches: [] }],
+  });
+}
+
+/** 最近一次传给菜单本体的菜单项。 */
+function lastItems(): MenuItemStub[] {
+  return menuOpenCalls[menuOpenCalls.length - 1]!.items as MenuItemStub[];
+}
+
+function menuLabels(): (string | undefined)[] {
+  return lastItems().map((i) => i.label);
+}
+
+function menuChildren(label: string): (string | undefined)[] {
+  return (lastItems().find((i) => i.label === label)?.children ?? []).map((c) => c.label);
+}
+
+/** 触发某一项的 onClick（模拟用户在菜单上点它）。 */
+function clickItem(label: string): void {
+  lastItems().find((i) => i.label === label)!.onClick!();
+}
+
+/** 触发某项二级菜单里某一项的 onClick。 */
+function clickChild(label: string, child: string): void {
+  lastItems()
+    .find((i) => i.label === label)!
+    .children!.find((c) => c.label === child)!
+    .onClick!();
 }

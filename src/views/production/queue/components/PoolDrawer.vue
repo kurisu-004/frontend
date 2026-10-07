@@ -6,12 +6,12 @@
      onSuccess、失败走 onError、目标货架缺失的早退走包装内的显式失效，三条路都会失效
      queue 域）。
 
-     Sortable 走二参重载（不传 list），本容器退化为「纯投放目标」—— 二参形态下内建
+     Sortable 走二参重载（不传 list），本容器退化为「纯投放信号源」—— 二参形态下内建
      onRemove 的 DOM 放回也随之消失（卡片节点归位靠它、不靠失效），由
      options.onRemove（restoreNodeToSource）补回。完整推导见 useLazyDraggable 的文件头
      注释。
 
-     卡片右键召回：`@contextmenu.prevent` 挂在 BatchCard 上 —— 它是 inheritAttrs:false
+     卡片右键菜单：`@contextmenu.prevent` 挂在 BatchCard 上 —— 它是 inheritAttrs:false
      + v-bind="$attrs"，该监听原样落到卡片根 div，**零新增 DOM 节点**。
      ⚠️ 本容器是 Sortable 的源与落点，卡片的「可拖元素 == vnode 的 DOM footprint」
      是硬不变式（守卫 src/components/__tests__/BatchCardDndFootprint.spec.ts）：**不要**
@@ -19,9 +19,11 @@
      （el-dropdown 的根是硬包裹 div，会让 evt.item.dataset.batchId 恒 undefined，直接
      断掉整条拖拽链路）；同理**不要**在容器内留模板注释 —— dev 构建保留注释，注释节点
      也是 Sortable 容器的直接子节点，容器内的说明一律写在容器 div 之外。
-     菜单本体是板级单例 BatchContextMenu，teleport 到 body。事件走 inject（PoolDrawer
-     与菜单之间隔着 ProcessBoardTab / QueueBoard 两层，prop 穿透不划算），键名
-     openBatchContextMenu。
+     菜单本体是 `@/composables/useBatchContextMenu.ts` 的 `showBatchContextMenu()`
+     （`@imengyu/vue3-context-menu` 函数模式，菜单挂在 body 级单例容器上，与本
+     Sortable 容器零 DOM 关系）。事件走 inject（PoolDrawer 与板级之间隔着
+     ProcessBoardTab / QueueBoard 两层，prop 穿透不划算），键名 openBatchContextMenu，
+     第三参是本容器自己的**区域常量** `'pool'`。
 
      moveBatchToPool 签名没有 next_process_id（`to` 是 MoveLocation tagged enum，POOL
      分支只认 shelf_id；目标工序由后端从批次当前 step 自推）。
@@ -71,6 +73,7 @@ import { computed, inject, ref } from 'vue';
 import type { ComputedRef } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
+import type { BatchMenuOpener } from '@/composables/useBatchContextMenu';
 import type { ProcessPoolView } from '@/types/productionQueue';
 import type { BatchCardModel } from '@/types/batchCard';
 import {
@@ -134,19 +137,18 @@ const shelfId = inject<ComputedRef<string>>(
   computed(() => ''),
 );
 
-/** 卡片右键 → 板级单例菜单（BatchContextMenu.teleport 在 body 上，与本 Sortable
- *  容器零 DOM 关系）。opener 由 QueueBoard provide，本组件与菜单之间隔着
+/** 卡片右键 → 板级 opener（`showBatchContextMenu` 在板级调，菜单挂在 body 上，与本
+ *  Sortable 容器零 DOM 关系）。opener 由 QueueBoard provide，本组件与板级之间隔着
  *  ProcessBoardTab 一层，走 inject 而非 prop 穿透。inject 缺省 noop 兜底
  *  （QueueBoard 未提供时右键无反应，不炸掉事件回调）。 */
-const openBatchContextMenu = inject<(evt: MouseEvent, batch: BatchCardModel) => void>(
-  'openBatchContextMenu',
-  () => {},
-);
+const openBatchContextMenu = inject<BatchMenuOpener>('openBatchContextMenu', () => {});
 
-/** 卡片根部的右键落点。只做「把 (事件, 卡片) 转交 opener」这一件事，
- *  不在本组件判权限 —— 权限闸在 QueueBoard 的 provide 里（canRecall），单点收口。 */
+/** 卡片根部的右键落点。只做「把 (事件, 卡片, 区域) 转交 opener」这一件事，
+ *  不在本组件判权限 —— 权限闸在板级的派生函数里，单点收口。第三参 `'pool'` 是本容器
+ *  恒定的区域标签（同一张卡在工序池与工人列上的动作集合不同，而两处的卡片字段集
+ *  完全一样 —— 只能由容器给）。 */
 function onCardContextMenu(evt: MouseEvent, batch: BatchCardModel): void {
-  openBatchContextMenu(evt, batch);
+  openBatchContextMenu(evt, batch, 'pool');
 }
 
 /** 记录「候选池 → 工人」拖拽源。**必须带 batch 的真实 shelf_id**：

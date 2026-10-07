@@ -28,6 +28,9 @@
 //     仍在（零元素子节点）且空态是兄弟覆盖层。
 //   - C12：容器上不包任何组件（BatchCard 根就是 vnode 的 DOM footprint）—— 判据是卡
 //     片根 div 的父节点就是 .pool-cards。
+//   - C14：卡片右键 → 板级 opener 带**区域标签** `'outsource-candidate'` 与候选行上下文
+//     （发送白名单的五条锚只在候选 DTO 上，卡片 model 里没有）；C14b：未 provide opener
+//     时右键不抛错（inject 缺省 noop）。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 复刻重载判别（照 WorkerColumn.spec.ts 同款），捕获
@@ -71,6 +74,7 @@ import { consumeOutsourceSource, recordOutsourceSource } from '@/utils/dndSource
 import {
   ACTIVE_OUTSOURCE_PROCESS_ID,
   NOT_SHELVED_HINT,
+  OPEN_OUTSOURCE_BATCH_MENU,
   SCAN_MISS_HINT,
 } from '../../outsourceBoardTypes';
 // 扫码枪用**真实实现**（模块级单例）：onScan 订阅 / 卸载退订这条链本身就是被测行为，
@@ -188,6 +192,7 @@ function mountPool(
   items: OutsourceQueueCandidateData[],
   selectedIds: Set<string> = new Set(),
   activeProcessId: string = PROCESS_ID,
+  extraProvide: Record<string, unknown> = {},
 ) {
   return mount(CandidatePool, {
     props: {
@@ -201,6 +206,7 @@ function mountPool(
       components: globalConfig.components,
       provide: {
         [ACTIVE_OUTSOURCE_PROCESS_ID]: computed(() => activeProcessId),
+        ...extraProvide,
       },
     },
   });
@@ -471,6 +477,43 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
       companyId: '',
     });
     expect(consumeOutsourceSource('sentinel')).toBeDefined();
+  });
+
+  it('C14：卡片右键 → opener 带区域标签 + 候选行上下文被调一次', async () => {
+    const openOutsourceBatchMenu = vi.fn();
+    // 两张卡（batch_id 不同）且右键**第二张**：单卡场景下「拿到那张行」与「拿到唯一那张行」
+    // 无法区分，实现误传 items[0] 也会照样通过。
+    const first = makeCandidate({ batch_id: '3000000000001' });
+    const second = makeCandidate({ batch_id: '3000000000002' });
+    const wrapper = mountPool([first, second], new Set(), PROCESS_ID, {
+      [OPEN_OUTSOURCE_BATCH_MENU]: openOutsourceBatchMenu,
+    });
+    const cards = wrapper.findAll('.pool-cards .batch-card');
+    expect(cards).toHaveLength(2);
+    await cards[1]!.trigger('contextmenu', { clientX: 240, clientY: 180 });
+
+    expect(openOutsourceBatchMenu).toHaveBeenCalledTimes(1);
+    const call = openOutsourceBatchMenu.mock.calls[0]! as [
+      MouseEvent,
+      { batch_id: string },
+      string,
+      { kind: string; candidate: { batch_id: string }; processName: string },
+    ];
+    expect(call[0].clientX).toBe(240);
+    // 第三参是容器恒定的区域标签（板级靠它派菜单矩阵；两处卡片字段集一样，只能由容器给）
+    expect(call[2]).toBe('outsource-candidate');
+    // 第四参带候选行 DTO —— 发送白名单的五条锚都在它上面，卡片 model 上没有
+    expect(call[3].kind).toBe('candidate');
+    expect(call[3].candidate.batch_id).toBe('3000000000002');
+    expect(call[3].processName).toBe('外协热处理');
+    expect(call[1].batch_id).toBe('3000000000002');
+    wrapper.unmount();
+  });
+
+  it('C14b：未 provide opener 时右键不抛错（inject 缺省 noop）', async () => {
+    const wrapper = mountPool([makeCandidate()]);
+    await expect(wrapper.find('.pool-cards .batch-card').trigger('contextmenu')).resolves.not.toThrow();
+    wrapper.unmount();
   });
 });
 

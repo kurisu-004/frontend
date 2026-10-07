@@ -43,7 +43,9 @@
          工具条 / footer 是本容器的兄弟节点，天然不在拖拽列表内。
          data-pending-pool 是「本容器 = 待下发池」的契约标记：投放目标侧
          （PendingPoolCard.onDrop）据此做来源白名单，因为 Sortable 的 put: true
-         布尔形态不做 group 名比对、任何 Sortable 来源都会被 onAdd 接受。 -->
+         布尔形态不做 group 名比对、任何 Sortable 来源都会被 onAdd 接受。
+         @contextmenu.prevent 经 BatchCard 的 fallthrough attrs 落在卡片根 div（零新增
+         DOM 节点，见 useBatchContextMenu.ts 文件头的 footprint 不变式）。 -->
     <div v-else ref="cardsRef" class="pending-cards" data-pending-pool="1">
       <BatchCard
         v-for="card in cards"
@@ -52,6 +54,7 @@
         :selectable="true"
         :selected="selectedIdsValue.has(card.batch_id)"
         @toggle-select="onCardToggleSelect(card.batch_id)"
+        @contextmenu.prevent="onCardContextMenu($event, card)"
       />
     </div>
 
@@ -62,8 +65,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, inject, ref, watch } from 'vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
+import type { BatchMenuOpener } from '@/composables/useBatchContextMenu';
 import type { QueuePendingBatchDto } from '@/api/productionQueue.contract';
 import type { BatchCardModel } from '@/types/batchCard';
 import { pendingBatchToCard } from '../utils/queueItemToCard';
@@ -171,6 +175,16 @@ const onCardToggleSelect = (batchId: string) => {
   else next.add(batchId);
   props.setSelectedIds(Array.from(next));
 };
+
+/** 卡片右键 → 板级 opener（`showBatchContextMenu` 在板级调，菜单挂在 body 上，与本
+ *  Sortable 容器零 DOM 关系）。opener 由 QueueBoard provide，缺省 noop 兜底（板级契约
+ *  缺失时右键无反应，不炸掉事件回调）。第三参 `'pending'` 是本容器恒定的区域标签 ——
+ *  待下发区的动作集合与已下发区不同（不发「召回」，那等于召回自己）。 */
+const openBatchContextMenu = inject<BatchMenuOpener>('openBatchContextMenu', () => {});
+
+function onCardContextMenu(evt: MouseEvent, card: BatchCardModel): void {
+  openBatchContextMenu(evt, card, 'pending');
+}
 
 function onAutoDispatch() {
   const ids = Array.from(selectedIdsValue.value);
