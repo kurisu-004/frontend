@@ -34,11 +34,14 @@ const TEMPLATE_STYLED_CELLS = 172;
 // 最小 zip 读取器（仅本文件用；纯内存，不落临时文件）
 // ============================================================
 //
-// ⚠️ **不 import fflate**：它只是 hucre 的**传递**依赖，不在 package.json 的
-// dependencies 里，而且它的 package.json `exports` 没写 `types` 条件 —— 本仓
-// `moduleResolution: "Bundler"` 下 `import { unzipSync } from 'fflate'` 直接
-// TS7016（实测），深路径 `fflate/lib/node.cjs` 也没被 exports 放行。所以这里用
-// `node:zlib` 手写最小读取：EOCD → 中央目录 → 本地头算数据偏移 → inflateRawSync。
+// ⚠️ **不 import fflate**：hucre 是 **zero-dependency**（它 package.json 里没有
+// dependencies），`fflate@0.6.11` 是本仓 devDependencies 中 `@types/three@^0.160.0`
+// 的 **dev-only** 传递依赖（`package-lock.json` 里带 `"dev": true`）—— dev-only ⇒
+// 生产安装根本没有它，也没有理由把它提为运行时依赖。另外 fflate 的 package.json
+// `exports` 没写 `types` 条件 —— 本仓 `moduleResolution: "Bundler"` 下
+// `import { unzipSync } from 'fflate'` 直接 TS7016（实测），深路径
+// `fflate/lib/node.cjs` 也没被 exports 放行。所以这里用 `node:zlib` 手写最小读取：
+// EOCD → 中央目录 → 本地头算数据偏移 → inflateRawSync。
 //
 // 适用前提（xlsx 都是小文件，不触发）：无 zip64（条目数 < 65535、单条目 < 4 GB）、
 // 不用压缩方法 8 以外的加密条目。
