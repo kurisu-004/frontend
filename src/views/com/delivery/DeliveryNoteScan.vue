@@ -4,7 +4,7 @@
 // 结构：
 //   - 业务状态 / 函数全部下移到 composables：
 //       useDeliveryDraftBoard     — 草稿卡片列表 + 移除 / 打印标签 / 删除草稿
-//       useDeliveryScanSubmission — 扫码取树 + 三层树入单 + 提交草稿 + 打印送货单预览
+//       useDeliveryScanSubmission — 扫码取树 + 三层树入单 + 提交草稿 + 打印预览
 //   - 视图层切为 3 个子组件：
 //       DeliveryScanBar              — 顶部 L1 客户选择条
 //       DeliveryGroupPanel           — 分组规则面板（含编辑器 dialog）
@@ -126,7 +126,7 @@ const { onScan } = useBarcodeScanner();
 let unsubScan: (() => void) | null = null;
 
 // ============ 草稿卡片：行为函数（透传 board / submission 业务）============
-/** 草稿卡片 row 是否允许打印（canPrint：管理角色 + DRAFT + 行项 > 0 + 已指定司机）。 */
+/** 草稿卡片两个打印按钮的可用性（canPrint：管理角色 + 至少 1 个行项）。 */
 function canPrintNote(d: DeliveryNoteItemData): boolean {
   return canPrint(d, roleMap.value);
 }
@@ -147,7 +147,10 @@ function onCardDeleteDraft(d: DeliveryNoteItemData): void {
   void board.onDeleteDraft(d);
 }
 function onCardPrintNote(d: DeliveryNoteItemData): void {
-  void submission.openPrintNote(d);
+  void submission.openPrintNote(d, 'note');
+}
+function onCardPrintLabels(d: DeliveryNoteItemData): void {
+  void submission.openPrintNote(d, 'label');
 }
 function onCardSubmitDraft(d: DeliveryNoteItemData): void {
   void submission.onSubmitDraft(d);
@@ -321,6 +324,7 @@ onBeforeUnmount(() => {
           @remove="(r: MergedDraftRow) => onCardRemove(d, r)"
           @deleteDraft="onCardDeleteDraft(d)"
           @printNote="onCardPrintNote(d)"
+          @printLabels="onCardPrintLabels(d)"
           @submitDraft="onCardSubmitDraft(d)"
           @setTableRef="(el: ComponentInstance<typeof ElTable> | null) => onCardTableRef(d, el)"
         />
@@ -337,13 +341,14 @@ onBeforeUnmount(() => {
       @submit="(entries: DeliveryScanEntry[]) => submission.onSubmitEntries(entries)"
     />
 
-    <!-- ========== 打印送货单预览（page-level，shell 渲染） ==========
+    <!-- ========== 打印预览（page-level，shell 渲染） ==========
       v-if 保持：note=null 时（getNote 加载中）不渲染 dialog。openPrintNote
       等 detail 拉回后再开 dialog，避免 PrintPreviewDialog 在 note=null 时
-      初始化空表格。 -->
+      初始化空表格。mode 由 openPrintNote 的第二个实参决定（送货单 / 打印标签）。 -->
     <PrintPreviewDialog
       v-if="submission.printNotePreviewVisible.value && submission.printNoteTarget.value"
       v-model="submission.printNotePreviewVisible.value"
+      :mode="submission.printNoteMode.value"
       :note="submission.printNoteTarget.value"
     />
   </div>

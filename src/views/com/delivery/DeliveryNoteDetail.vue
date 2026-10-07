@@ -10,7 +10,7 @@
 
   Shell 责任：
   - route id 监听 + 首屏拉取
-  - 打印对话框可见性 + 目标 note
+  - 打印对话框可见性 + 目标 note + 导出形态（送货单 / 打印标签）
   - 把 actions composable 与 detail composable 桥接（bindings）
 -->
 <script setup lang="ts">
@@ -50,8 +50,10 @@ const actions = useDeliveryNoteActions({
   setSelectedItemIds: detail.setSelectedItemIds,
 });
 
-// ============ UI state（dialog 可见性由 shell 持有）============
+// ============ UI state（dialog 可见性与导出形态由 shell 持有）============
 const previewVisible = ref(false);
+/** 打印对话框的导出形态：'note' = 送货单（模板 round-trip）/ 'label' = 打印标签。 */
+const previewMode = ref<'note' | 'label'>('note');
 
 // ============ 事件处理 ============
 function onBack(): void {
@@ -59,6 +61,12 @@ function onBack(): void {
 }
 
 function onPrint(): void {
+  previewMode.value = 'note';
+  previewVisible.value = true;
+}
+
+function onPrintLabels(): void {
+  previewMode.value = 'label';
   previewVisible.value = true;
 }
 
@@ -102,14 +110,17 @@ onBeforeUnmount(() => {
         @submit="actions.onSubmit"
         @recall="() => actions.onRecall()"
         @print="onPrint"
+        @printLabels="onPrintLabels"
         @softDelete="() => actions.onSoftDelete()"
       />
     </template>
 
-    <!-- 打印送货单对话框（模板上传 + 分厂分组 + 拖拽 + hucre 本地渲染） -->
+    <!-- 打印预览对话框（送货单：模板上传 + 分厂分组 + 拖拽；打印标签：逐行勾选；
+         两者都由 hucre 在前端本地渲染） -->
     <PrintPreviewDialog
       v-if="detail.note.value"
       v-model="previewVisible"
+      :mode="previewMode"
       :note="detail.note.value"
     />
   </div>
