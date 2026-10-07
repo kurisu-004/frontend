@@ -3,7 +3,9 @@
 
   送货单详情「零件列表」卡（DeliveryNoteDetail 第 2 张卡）：
   - 顶部 actions：列显隐 popover + 移除选中（加件入口随 `POST /{id}/add-parts` 下线）
-  - 主区域：el-table（tree-props + selection + sort-change + 加急红底）
+  - 主区域：el-table（tree-props + selection + sort-change + 列顺序拖动）
+    ⚠️ 行高亮已随行项 `is_urgent` 下线而清空（后端 VO 删了该字段，投影恒 false）——
+    `row-class-name` 现在恒为空串，样式表里也没有对应的 `.row-urgent` 规则了。
 
   业务状态（note / treeLineItems / columnVisibility / selectedItemIds）由父组件通过 prop 注入。
   本组件只负责 UI 编排 + 选择事件转发。
@@ -345,12 +347,5 @@ function onSortChange(sort: {
 }
 .muted {
   color: var(--text-secondary);
-}
-
-:deep(.el-table__row.row-urgent) > td.el-table__cell {
-  background-color: #fde2e2 !important;
-}
-:deep(.el-table__row.row-urgent:hover > td.el-table__cell) {
-  background-color: #fbcaca !important;
 }
 </style>

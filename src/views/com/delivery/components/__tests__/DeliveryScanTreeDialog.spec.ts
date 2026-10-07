@@ -40,7 +40,6 @@ const ElTableStub = defineComponent({
   name: 'ElTableStub',
   props: {
     data: { type: Array as PropType<Record<string, unknown>[]>, default: () => [] },
-    selectable: { type: Function as PropType<(row: unknown) => boolean>, default: undefined },
   },
   setup(props, { slots }) {
     return () => {
@@ -214,14 +213,10 @@ describe('DeliveryScanTreeDialog 三层树', () => {
     expect(wrapper.find('[data-col="占用"] [data-row-id="A1"]').text()).toBe('—');
   });
 
-  it('已被占用的批次行不可选（el-table selectable 闸门）', async () => {
+  it('批次行永远没有入单按钮（占用与否都一样，入单单位是零件 / 装配件）', async () => {
     const wrapper = await mountDialog(tree());
-    const selectables = wrapper
-      .findComponent(ElTableStub)
-      .props('selectable') as (row: Record<string, unknown>) => boolean;
-    expect(selectables({ node_kind: 'BATCH', occupied_by_note_no: 'DN-1' })).toBe(false);
-    expect(selectables({ node_kind: 'BATCH', occupied_by_note_no: null })).toBe(true);
-    expect(selectables({ node_kind: 'PART', occupied_by_note_no: null })).toBe(true);
+    expect(actionsOf(wrapper, 'B1')).toEqual([]); // occupied_by_note_no = DN-20260101-0002
+    expect(actionsOf(wrapper, 'B2')).toEqual([]); // 未占用
   });
 
   it('draft 存在 → 横幅显示加入哪张草稿；draft 为 null → 明说会新建', async () => {

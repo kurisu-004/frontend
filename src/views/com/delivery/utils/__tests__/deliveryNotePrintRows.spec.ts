@@ -3,7 +3,9 @@
 // 2026-10-08 新增：打印行整形的纯函数守卫（不挂载组件；node 环境即可跑）。
 //
 // 覆盖（对齐任务书 §7 清单）：
-//   - buildL2GroupMap：分组成员 / 未分组 L2 各自一组的两种映射；
+//   - buildL2GroupMap：分组成员 / 未分组 L2 各自一组的两种映射 + 重名告警；
+//   - groupRefOf：**按 L2 客户 id 分组**（name 仅兜底；同名不同 id 不合并 / 带 id 查不到
+//     也不退回按名 / 过渡期无 id 时按名兜底）；
 //   - foldSamePart：同 part 折叠 + 代表批次按 **BigInt** 取 min（19 位雪花 id，
 //     转 Number 比较会判相等 → 静默选错批次，这是本文件最重要的那条）；
 //   - collapseAssemblies：merge / separate 两态 + shippable_sets 全 null 时返 null
@@ -13,7 +15,7 @@
 //   - groupIntoSheets：每组独立 pack、跨组不混、capacity 边界、空组出空表；
 //   - safeSheetName：31 字符上限 / 非法字符 / 重名去重。
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildL2GroupMap,
   collapseAssemblies,
@@ -29,7 +31,6 @@ import type { DeliveryNoteLineItemData } from '../../composables/deliveryNoteSch
 
 function li(p: Partial<DeliveryNoteLineItemData> & { id: string; part_id: string }) {
   const row: DeliveryNoteLineItemData = {
-    version: 1,
     batch_no: null,
     batch_label: null,
     serial_no: `S-${p.id}`,
@@ -80,17 +81,100 @@ describe('buildL2GroupMap', () => {
     expect(map.get('13')?.groupName).toBe('法拉');
   });
 
-  it('每个成员写 id 与 name 两条键（行项 VO 只有 customer_name，没有 customer_id）', () => {
+  it('除 id 键外还写 name 键（行项没有 customer_id 时的兜底查表）', () => {
     const map = buildL2GroupMap(groupRes);
     expect(map.get('陆达')?.groupKey).toBe('g_7');
     expect(map.get('法拉')?.groupKey).toBe('c_13');
   });
 
-  it('groupRefOf：查不到时兜底成「自身一个组」（不丢客户）', () => {
-    const map = buildL2GroupMap(groupRes);
+  it('同名不同 id → console.warn（不静默合并）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    buildL2GroupMap({
+      groups: [{ id: '7', name: '厂', version: 1, members: [{ customer_id: '11', customer_name: '陆达' }] }],
+      ungrouped_customers: [{ id: '12', name: '陆达' }],
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toContain('陆达');
+    warn.mockRestore();
+  });
+});
+
+describe('groupRefOf（分组键 = L2 客户 id，name 仅兜底）', () => {
+  const map = buildL2GroupMap({
+    groups: [
+      {
+        id: '7',
+        name: '二五六厂',
+        version: 1,
+        members: [
+          { customer_id: '11', customer_name: '陆达' },
+          { customer_id: '12', customer_name: '富士' },
+        ],
+      },
+    ],
+    ungrouped_customers: [{ id: '13', name: '法拉' }],
+  });
+
+  it('带 customer_id → 按 id 命中分组', () => {
+    expect(groupRefOf(li({ id: '1', part_id: 'P', customer_id: '11' }), map)).toEqual({
+      groupKey: 'g_7',
+      groupName: '二五六厂',
+    });
+  });
+
+  it('同名不同 id：按 id 各归各组（不按名合并成一张 sheet）', () => {
+    const sameName = buildL2GroupMap({
+      groups: [],
+      ungrouped_customers: [
+        { id: '21', name: '陆达' },
+        { id: '22', name: '陆达' },
+      ],
+    });
+    const a = groupRefOf(li({ id: '1', part_id: 'P', customer_id: '21', customer_name: '陆达' }), sameName);
+    const b = groupRefOf(li({ id: '2', part_id: 'P', customer_id: '22', customer_name: '陆达' }), sameName);
+    expect(a.groupKey).toBe('c_21');
+    expect(b.groupKey).toBe('c_22');
+    // sheet 名同名时由 uniqueSheetName 加序号区分，不合并。
+    const specs = groupIntoSheets(
+      groupRows(
+        [
+          li({ id: '1', part_id: 'P1', customer_id: '21', customer_name: '陆达' }),
+          li({ id: '2', part_id: 'P2', customer_id: '22', customer_name: '陆达' }),
+        ],
+        sameName,
+        'merge',
+      ),
+    );
+    expect(specs.map((s) => s.sheetName)).toEqual(['陆达', '陆达-2']);
+  });
+
+  it('带 id 但分组结果里查不到 → 单独成组（**不**退回按名查，否则并错人）', () => {
+    const ref = groupRefOf(
+      li({ id: '1', part_id: 'P', customer_id: '99', customer_name: '富士' }),
+      map,
+    );
+    expect(ref).toEqual({ groupKey: 'c_cid_99', groupName: '富士' });
+  });
+
+  it('过渡期：没有 customer_id → 按名兜底（行为与后端未补字段时一致）', () => {
+    expect(groupRefOf(li({ id: '1', part_id: 'P', customer_name: '陆达' }), map)).toEqual({
+      groupKey: 'g_7',
+      groupName: '二五六厂',
+    });
+  });
+
+  it('id 与 name 都查不到 → 兜底成「自身一个组」（不丢客户）', () => {
     expect(groupRefOf(li({ id: '1', part_id: 'P', customer_name: '未知厂' }), map)).toEqual({
       groupKey: 'c_named_未知厂',
       groupName: '未知厂',
+    });
+  });
+
+  it('改名后 id 不变 → 仍归原组（分组查询与行项两次请求不再分裂）', () => {
+    // 行项里的名字是改过之后的（分组结果里的旧名查不到），但 id 一致。
+    expect(groupRefOf(li({ id: '1', part_id: 'P', customer_id: '11', customer_name: '陆达新' }), map)).toEqual({
+      groupKey: 'g_7',
+      groupName: '二五六厂',
     });
   });
 });

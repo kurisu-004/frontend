@@ -58,52 +58,91 @@ export interface PrintGroupRef {
 }
 
 /**
- * 分组查询结果 → `customer_id → 分组引用` 映射。
+ * 分组查询结果 → `客户 → 分组引用` 映射（**主键 = L2 客户 id**，name 键只作兜底）。
  *
  *   · `groups[].members[].customer_id` → `{ groupKey: 'g_<gid>', groupName: 组名 }`
  *   · `ungrouped_customers[].id`      → `{ groupKey: 'c_<l2id>', groupName: L2 客户名 }`
  *     （**每个未分组 L2 各自一 sheet** —— 按 L2 拆单是收货习惯，合成一张会让收货人
  *     找不到自己那批）
  *
- * ⚠️ **每个成员写两条键**（`customer_id` 与 `customer_name` 各一条，指向同一个 ref）。
- * 起因：`DeliveryNoteLineItem` **没有 `customer_id`**（后端 VO 的 26 个字段里只有
- * `customer_name` / `parent_customer_name` / `customer_path` 三个客户相关字段）⇒
- * 打印分组时手里只有 L2 **客户名**。id 键保留是为了将来某处拿到 id 时不必改本函数。
+ * **为什么按 id 而不是按客户名**：`t_customer.name` 只有**非唯一** btree 索引（允许重名）
+ * ⇒ 两个不同收货单位同名时，按名分组会把它们并进同一张 sheet，且 sheet 名取后写的那个。
+ * 打印产物是客户签字的收货凭证，收货单位归属错了是业务事故，不是显示瑕疵。
+ *
+ * 每个成员额外写一条 **name 键**（指向同一个 ref），它只有一个用途：行项上**没有 id 时**
+ * 的兜底查表（`groupRefOf`）。写 name 键时检测重名并 `console.warn` —— 重名时后写的覆盖
+ * 先写的，**不静默**：那条 name 键只服务「无 id 行项」，带 id 的行永远走 id 键。
  *
  * ⚠️ 后端的 `ungrouped_customers` 是差集（理论上与 groups[].members 不重叠）；真重叠
- * 时后写的未分组覆盖分组，语义是「保守不丢客户」。
+ * 时未分组覆盖分组，语义是「保守不丢客户」。
  */
 export function buildL2GroupMap(
   groupRes: DeliveryGroupListResultData,
 ): Map<string, PrintGroupRef> {
   const map = new Map<string, PrintGroupRef>();
+  /** name → ref：只用来识别「同一个客户名被两个不同 id 抢到」。 */
+  const nameOwner = new Map<string, PrintGroupRef>();
+  /** 写 name 键；指向与既有不同的 ref 时告警（静默覆盖 = 把两家并成一家）。 */
+  function setNameKey(name: string, ref: PrintGroupRef): void {
+    if (!name) return;
+    const prev = nameOwner.get(name);
+    if (prev && prev.groupKey !== ref.groupKey) {
+      console.warn(
+        `[buildL2GroupMap] 客户名「${name}」同时命中 ${prev.groupKey} 与 ${ref.groupKey}：` +
+          '按名分组的兜底键会让这两家共用一个 sheet（行项带 customer_id 时不受影响）。',
+      );
+    }
+    nameOwner.set(name, ref);
+    map.set(name, ref);
+  }
+
   for (const g of groupRes.groups) {
     const ref: PrintGroupRef = { groupKey: `g_${g.id}`, groupName: g.name };
     for (const m of g.members) {
       map.set(String(m.customer_id), ref);
-      if (m.customer_name) map.set(m.customer_name, ref);
+      setNameKey(m.customer_name, ref);
     }
   }
   for (const u of groupRes.ungrouped_customers) {
     const ref: PrintGroupRef = { groupKey: `c_${u.id}`, groupName: u.name };
     map.set(String(u.id), ref);
-    if (u.name) map.set(u.name, ref);
+    setNameKey(u.name, ref);
   }
   return map;
 }
 
-/** 行项所属的分组引用：先按 L2 客户名查（行项 VO 只有名字），再兜底成「自身一个组」。 */
+/** 行项的 L2 客户名兜底：`customer_name` 空时取 `customer_path` 的最后一段。 */
+function fallbackCustomerName(li: DeliveryNoteLineItemData): string {
+  return li.customer_name ?? li.customer_path?.split(' / ').pop() ?? '';
+}
+
+/**
+ * 行项所属的分组引用：**先按 L2 客户 id 查**（`customer_id`，打印分组的权威键），
+ * 再按客户名兜底（行项没有 id 时），最后兜底成「自身一个组」。
+ *
+ * ⚠️ 有 id 但查不到时**不再退回按名查**：查不到说明这个 L2 不在分组结果里（分组查询与
+ * 行项是两次请求，改名 / 建组都可能造成这种不一致），此时按名查可能命中**另一个同名
+ * 客户**的组 —— 那才是把货并错人，宁可单独成组（`c_cid_<id>`）。
+ *
+ * 合成组的 key 同样优先带 id：同名不同 id 的两个 L2 各出一张 sheet，sheet 名撞了由
+ * `uniqueSheetName` 加序号后缀区分。
+ *
+ * 过渡期（后端尚未在 `DeliveryNoteLineItem` 上发 `customer_id`）：`li.customer_id`
+ * 为 undefined ⇒ 自动走 name 兜底，行为与「一直只有名字」时完全一致。
+ */
 export function groupRefOf(
   li: DeliveryNoteLineItemData,
   map: Map<string, PrintGroupRef>,
 ): PrintGroupRef {
-  const name = li.customer_name ?? li.customer_path?.split(' / ').pop() ?? '';
-  return (
-    map.get(name) ?? {
-      groupKey: `c_named_${name || 'unknown'}`,
-      groupName: name || '未分组',
-    }
-  );
+  const id = li.customer_id ? String(li.customer_id) : '';
+  if (id) {
+    const hit = map.get(id);
+    if (hit) return hit;
+    const name = fallbackCustomerName(li);
+    return { groupKey: `c_cid_${id}`, groupName: name || '未分组' };
+  }
+  const name = fallbackCustomerName(li);
+  return map.get(name) ?? { groupKey: `c_named_${name || 'unknown'}`, groupName: name || '未分组' };
 }
 
 // ============================================================
@@ -205,7 +244,7 @@ export function collapseAssemblies(
       name: r.assembly_name ?? '',
       quantity: shippableSetsOfGroup(
         // shippableSetsOfGroup 只读 shippable_sets 一个字段，给它最小窄结构即可
-        // （不必造整行 DeliveryNoteLineItemData —— 那 26 个字段这里一个都用不到）。
+        // （不必造整行 DeliveryNoteLineItemData —— 它几十个字段这里一个都用不到）。
         siblings.map((s) => ({ shippable_sets: s.shippable_sets })),
       ),
       unit: '套',

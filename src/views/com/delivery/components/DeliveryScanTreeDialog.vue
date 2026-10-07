@@ -16,8 +16,10 @@
   `POST /com/delivery/note/scan`（同一个 serial 下可能有多个节点入单）。
 
   批次层的 `occupied_by_note_no` 非空 = 已被某张送货单占用（后端
-  `LEFT JOIN t_delivery_note … dn.deleted_at IS NULL`）⇒ 标「已被 DN-xxx 占用」，
-  且该行**不可选**（el-table 的 `selectable` 闸门）。
+  `LEFT JOIN t_delivery_note … dn.deleted_at IS NULL`）⇒ 标「已被 DN-xxx 占用」。
+  ⚠️ 这只是**提示**：本表没有 `type="selection"` 列，占用不影响任何前端闸门 ——
+  入单单位是「零件 / 装配件」，批次由服务端 DP 分配，真撞上已占用的批次时后端返
+  21406 `BIZ_DELIVERY_NOTE_PART_ALREADY_ASSIGNED`。
 
   ⚠️ 规模上限：扫码端点**无分页、不过滤状态**（含终态批次），这里 `default-expand-all`
   全展开且没有虚拟滚动。装配件 N 子件 × M 批次到上千行会卡；后端一旦在该端点加分页，
@@ -53,7 +55,6 @@
       :data="rows"
       :row-key="rowKey"
       :tree-props="{ children: 'children' }"
-      :selectable="isRowSelectable"
       default-expand-all
       max-height="52vh"
       stripe
@@ -328,11 +329,6 @@ const batchCount = computed<number>(
 /** row-key 按层加前缀（见文件头）。 */
 function rowKey(row: ScanTreeRow): string {
   return `${row.node_kind}_${row.id}`;
-}
-
-/** 已被别的送货单占用的批次行不可选。 */
-function isRowSelectable(row: ScanTreeRow): boolean {
-  return row.node_kind !== 'BATCH' || !row.occupied_by_note_no;
 }
 
 function statusLabel(status: string): string {

@@ -51,7 +51,6 @@ function li(p: Record<string, unknown> = {}) {
   return {
     id: '1',
     part_id: 'P1',
-    version: 1,
     batch_no: 1,
     batch_label: 'L1',
     serial_no: 'S-1',

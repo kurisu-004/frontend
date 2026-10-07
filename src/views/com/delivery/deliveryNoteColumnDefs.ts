@@ -28,6 +28,16 @@ export type DeliveryNoteRow = DeliveryNoteItemData;
 // 改 key 会让老用户已配好的列可见性 / 列顺序整体失效（新增列无害，删列 / 改 key 有害）。
 // 因此这三个文件的**列 key 与列顺序一行不许改**；真要改必须同批写 localStorage key
 // 迁移（读旧 key → 按新 key 数组过滤 → 写新 key）。
+//
+// ⚠️ **两条例外（2026-10-08 review 第 1 轮登记，别当成漏登记）**：
+//   1. `print_preview_dialog` 的列**可见性**快照沿用原 key，但**列顺序**快照改成按分组
+//      分片（`print_preview_dialog__<groupKey>`，每张分组表一条序列；见
+//      deliveryNotePrintColumnDefs::printColumnOrderListKey）。老版本那条单序列
+//      `print_preview_dialog_columnOrder` 就此作废、**不可迁移** —— 一个序列表达不了
+//      N 张表的列顺序。
+//   2. 「分厂」列的 key 是老快照里的 `customer_name`（行数据字段叫 `l2_customer`，
+//      渲染 / prop 取后者）。曾一度改成 `l2_customer`，等于让所有老用户这列的显隐设置
+//      作废，已回滚；key ≠ prop 是这里的刻意形态。
 // （2026-10-08：用 `//` 块而非 JSDoc —— 这段登记是模块级约定，不宿主于任何单个导出物；
 //  写成 `/** */` 会在 IDE 里成为悬空的孤立注释。）
 // ============================================================================

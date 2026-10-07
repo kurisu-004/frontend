@@ -180,9 +180,8 @@ export function useDeliveryNoteDetail(
       const children = asmGroups.get(li.assembly_id) ?? [];
       result.push({
         id: `ASM_${li.assembly_id}`,
-        // 装配件父行的 version 是「任一子件版本占位」：父行不参与任何写端点调用，
-        // 随子件一起刷新。
-        version: li.version,
+        // 父行是**纯展示行**：它不携带任何 OCC 锚（写端点的 version 一律取自 note 本身
+        // 或真实行项的 id 列表），后端也没有「装配件」这种行项 ⇒ 不再有 version 字段可抄。
         is_asm_row: true,
         has_children: true,
         assembly_id: li.assembly_id,
@@ -267,6 +266,9 @@ export function useDeliveryNoteDetail(
       )[s] ?? 'info'
     );
   }
+  /** 行高亮类名。恒返回空串：行项 `is_urgent` 已随后端 VO 字段裁剪下线（投影恒 false），
+   *  对应的 `.row-urgent` 样式规则也已删除。保留这个返回位是因为它是表格组件
+   *  `:row-class-name` 的绑定点（表格组件的 props 契约里有它），不是死代码分支。 */
   function deliveryLineRowClassName({ row }: { row: AssemblyTreeRow }): string {
     void row;
     return '';

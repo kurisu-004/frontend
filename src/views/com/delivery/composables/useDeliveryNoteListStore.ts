@@ -169,14 +169,24 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
 
   // ============ 持久化 ============
   // ⚠️ key 沿用既有值 `delivery_note_list`（与列可见性 / 列顺序快照共用同一个 key
-  // 前缀约定，**不许改**：改了老用户的筛选记忆全丢）。deps 只放**生效态** search，
-  // **不放** searchInput：① restore() 严格校验「每个 dep key 都必须存在于快照里」，
-  // 多一个键会让旧快照整体失效；② 语义上也只该存生效态（存草稿会让下次进页面时
-  // 输入框显示一个从未生效过的条件）。page 排除（避免恢复到不存在的页）。
+  // 前缀约定，**不许改**：改了老用户的筛选记忆全丢）。
+  //
+  // ⚠️ **dep 键名 `keyword` 是既有快照里的名字，不许改成 `search`**：快照结构是
+  // `{ statuses, customerId, keyword }`（老视图写的），键名一改，
+  // restore() 的「每个 dep key 都必须在快照里」校验就让**整份**快照返回 null ——
+  // 所有老用户的状态 / 客户 / 单号筛选记忆一次性全丢。dep 的值直接绑生效态 `search`
+  // 这个 ref（键名与被绑的 ref 名可以不同），读取时 `s.keyword` 回填 `search`。
+  //
+  // `autoRefresh` 是本轮新增的 dep，老快照里没有它 ⇒ `requireAllDeps: false`（否则老
+  // 快照又是一次性作废）+ 读取时 `?? false` 兜底。
+  //
+  // deps 只放**生效态** search，**不放** searchInput：① 存草稿会让下次进页面时输入框
+  // 显示一个从未生效过的条件（且与列表内容不一致）；② 多一个键会让旧快照整体失效。
+  // page 排除（避免恢复到不存在的页）。
   const { restore: restorePersisted } = useListStatePersist(
     DELIVERY_NOTE_LIST_KEY,
-    { statuses, customerId, search, autoRefresh },
-    { exclude: new Set(['page']) },
+    { statuses, customerId, keyword: search, autoRefresh },
+    { exclude: new Set(['page']), requireAllDeps: false },
   );
 
   function restoreState(): void {
@@ -189,15 +199,16 @@ export const useDeliveryNoteListStore = defineStore('delivery-note-list', () => 
         | {
             statuses?: DeliveryNoteStatus[];
             customerId?: string;
-            search?: string;
+            /** 快照键名（见上方注释），值写进生效态 `search`。 */
+            keyword?: string;
             autoRefresh?: boolean;
           }
         | null;
       if (s) {
         if (Array.isArray(s.statuses)) statuses.value = s.statuses;
         if (typeof s.customerId === 'string') customerId.value = s.customerId;
-        if (typeof s.search === 'string') search.value = s.search;
-        if (typeof s.autoRefresh === 'boolean') autoRefresh.value = s.autoRefresh;
+        if (typeof s.keyword === 'string') search.value = s.keyword;
+        autoRefresh.value = s.autoRefresh === true;
       }
     }
     // 把生效态同步回输入态，否则输入框空白而列表已按恢复出的条件过滤 ——

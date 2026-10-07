@@ -11,6 +11,9 @@
 // - composable 只持有「业务函数」；不持有 UI 状态（dialog 可见性由 shell 自管）。
 // - 所有破坏性操作走 confirmDangerous（T8 模式）。
 // - fetchDetail 由 detail composable 传入，操作完成后调一次 refresh。
+// - **写成功后除了 refetch 详情键，还 `invalidateDeliveryNotesQuery(qc)` 刷本域键**：
+//   详情页的 5 个写端点全都改单据状态 / 行项集合 / 日期 / 司机，而一览、草稿看板、
+//   打印对话框读的正是同一批键（不刷的话，用户提交完回到列表仍看到旧的 DRAFT）。
 // - 错误处理：40403 / 21403 / 40901 → ElMessage.warning 并 fetchDetail 同步本地；
 //   其它 → ElMessage.error(e.message)（让 fetch 自然抛、不在 composable 内吞）。
 // - 返回值 Promise<boolean> 由 shell 决定后续（是否关对话框 / 跳转）。
@@ -26,6 +29,7 @@
 import { ElMessage } from 'element-plus';
 import { ref, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { useQueryClient } from '@tanstack/vue-query';
 import {
   recallNote,
   removeBatches,
@@ -35,6 +39,7 @@ import {
 } from '@/api/com/deliveryNote';
 import type { ApiError } from '@/api/http';
 import { useConfirm } from '@/composables/useConfirm';
+import { invalidateDeliveryNotesQuery } from './useDeliveryNoteListStore';
 
 /**
  * 详情 composable 暴露给 actions 的最小接口（避免 actions 依赖整个 detail composable）。
@@ -70,8 +75,18 @@ export function useDeliveryNoteActions(
   bindings: DeliveryNoteDetailBindings,
 ): UseDeliveryNoteActionsReturn {
   const router = useRouter();
+  const qc = useQueryClient();
   const { dangerous: confirmDangerous } = useConfirm();
   const pendingNoteId = ref<string | null>(null);
+
+  /** 写成功后刷本域键（列表 / 详情 / 批量详情）。失效失败不该把成功操作报成失败。 */
+  async function invalidateNotes(): Promise<void> {
+    try {
+      await invalidateDeliveryNotesQuery(qc);
+    } catch {
+      /* 失效只是「让别的视图尽快看到」，失败不阻塞当前流程 */
+    }
+  }
 
   // ============ 辅助 ============
   /** submitNote 统一错误处理：识别 21403 note 版本冲突 / 40901 批次 version 不匹配
@@ -109,6 +124,7 @@ export function useDeliveryNoteActions(
         delivery_date: normalized,
       });
       ElMessage.success('已更新送货日期');
+      await invalidateNotes();
       await bindings.fetchDetail();
       return true;
     } catch (e: unknown) {
@@ -144,6 +160,7 @@ export function useDeliveryNoteActions(
     try {
       await submitNote(n.id, { version: n.version });
       ElMessage.success('已提交');
+      await invalidateNotes();
       await bindings.fetchDetail();
       return true;
     } catch (e) {
@@ -167,6 +184,7 @@ export function useDeliveryNoteActions(
     try {
       await recallNote(n.id, { version: n.version });
       ElMessage.success('已撤回');
+      await invalidateNotes();
       await bindings.fetchDetail();
       return true;
     } catch (e) {
@@ -189,6 +207,8 @@ export function useDeliveryNoteActions(
     try {
       await softDeleteNote(n.id, { version: n.version });
       ElMessage.success('已删除');
+      // 先刷键再跳转：列表页挂载时的首屏请求不该拿到已删单。
+      await invalidateNotes();
       await router.push('/delivery-notes');
       return true;
     } catch (e) {
@@ -221,6 +241,7 @@ export function useDeliveryNoteActions(
       });
       ElMessage.success('已移除');
       bindings.setSelectedItemIds([]);
+      await invalidateNotes();
       await bindings.fetchDetail();
       return true;
     } catch (e) {

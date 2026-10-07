@@ -2,12 +2,17 @@
   PrintGroupTable.vue — 打印预览的**单个分组表**（2026-10-08 新增）。
 
   el-tabs 的每个 tab 一张独立 el-table；本组件是那张表的 owner，因此
-  `tbodyRef` / `useLazyDraggable` 实例 / 拆分态 / EP 表头 ref 都是**每 tab 一份**
-  —— Sortable 绑的是 EP 内部渲染出的 `<tbody>`，多 tab 复用同一个实例会把 A 表的
-  拖拽事件算到 B 表的下标上。
+  `tbodyRef` / `useLazyDraggable` 实例 / `useColumnDrag` / 拆分态 / EP 表头 ref 都是
+  **每 tab 一份** —— Sortable 绑的是 EP 内部渲染出的 DOM，多 tab 复用同一个实例会把
+  A 表的拖拽算到 B 表的下标上。
 
   为什么不在父组件里统一处理：tab 是 `v-for` 出来的，模板里没法按 tab 调 composable，
   只能每个 tab 一个子组件。
+
+  两类拖动并存，互不干扰：
+  - **行拖动**（重排行序）：Sortable 绑 `<tbody>`，handle 是行内 `.drag-handle`；
+  - **列拖动**（重排列序）：`useColumnDrag` 绑表头 `<tr>`，handle 是 `.col-drag-handle`，
+    快照 key 带 groupKey 后缀（每张表一条独立序列）。
 
   ⚠️ CLAUDE.md 的「可拖元素 == vnode 的 DOM footprint ⇒ 根必须是单元素」约束**不适用
   于表格行**：Sortable 的 `draggable: 'tr'` 直接抓 EP 内部渲染的 `<tr>`，`<tbody>` 的子
@@ -26,7 +31,7 @@
       :default-sort="{ prop: 'order_no', order: 'ascending' }"
       @sort-change="onSortChange"
     >
-      <template v-for="d in columnDefs" :key="d.key">
+      <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
         <el-table-column
           v-if="columnVisibility.isVisible(d.key)"
           :prop="d.prop ?? d.key"
@@ -37,9 +42,14 @@
           :align="d.align"
           :show-overflow-tooltip="d.showOverflowTooltip"
           :column-key="d.columnKey ?? d.key"
+          :label-class-name="drag.dragLabelClass(d)"
         >
           <template v-if="d.cellRender" #default="scope">
             <component :is="d.cellRender(scope)" />
+          </template>
+          <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+            <span>{{ d.label }}</span>
+            <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
           </template>
         </el-table-column>
       </template>
@@ -76,9 +86,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import type { TableInstance } from 'element-plus';
+import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
-import type { ColumnDef } from '@/composables/useColumnVisibility';
+import { resolveDraggable, type ColumnDef } from '@/composables/useColumnVisibility';
+import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import { findElTableTbody } from '@/utils/elTable';
+import { printColumnOrderListKey } from '../deliveryNotePrintColumnDefs';
 import { sortPrintRows, type PrintRow } from '../utils/deliveryNotePrintRows';
 import PrintSplitEditor from './PrintSplitEditor.vue';
 
@@ -87,7 +100,7 @@ const props = defineProps<{
   rows: PrintRow[];
   /** 排序态：'column' = 表头排序，'custom' = 用户拖过（自定义顺序优先）。 */
   sortMode: 'column' | 'custom';
-  /** 列定义与列可见性由**父组件**持有（N 张表共用一份 localStorage 快照）。 */
+  /** 列定义与列可见性由**父组件**持有（N 张表共用一份可见性快照）。 */
   columnDefs: ColumnDef[];
   columnVisibility: {
     isVisible: (key: string) => boolean;
@@ -95,6 +108,13 @@ const props = defineProps<{
     showAll: () => void;
     currentMap: Record<string, boolean>;
   };
+  /**
+   * 列顺序快照的分组后缀（= 本 tab 的 groupKey）：每张表一条独立序列，
+   * 快照 key 由 `printColumnOrderListKey(groupKey)` 拼出（见父组件）。
+   */
+  groupKey: string;
+  /** 「重置列顺序」的信号量（父组件点 popover 的「重置列顺序」时自增）。 */
+  resetOrderToken: number;
 }>();
 
 const emit = defineEmits<{
@@ -106,6 +126,25 @@ const emit = defineEmits<{
 const tableEl = ref<TableInstance | null>(null);
 const tbodyRef = ref<HTMLElement | null>(null);
 const splitRowId = ref<string | null>(null);
+
+// 列顺序拖动：每张分组表一份 useColumnDrag（快照 key 带 groupKey 后缀 ⇒ N 张表互不覆盖）。
+// 绑定目标是本表自己的 el-table 实例 ref。
+// ⚠️ `columnDefs` / `groupKey` 在本组件生命周期内**不变**（父组件的 tab pane 以
+// `groupKey` 为 :key，groupKey 变即整表重挂载），而 useColumnDrag 的 defs 与 listKey
+// 都只在 setup 时读一次 —— 所以用 IIFE 读 props（沿 OutsourceQuoteTable 的写法，绕开
+// vue/no-setup-props-destructure 的「顶层直读 props 会丢响应性」）。
+const drag = (() => {
+  const { columnDefs, groupKey } = props;
+  return useColumnDrag(columnDefs, { listKey: printColumnOrderListKey(groupKey) });
+})();
+drag.applyDrag(tableEl);
+
+// 「重置列顺序」是 popover 上的单个按钮，作用于全部 N 张表 ⇒ 父组件自增信号量，
+// 各表 watch 到变化就 reset 自己那条序列（reset 会写盘）。
+watch(
+  () => props.resetOrderToken,
+  () => drag.reset(),
+);
 
 // 拖拽：useLazyDraggable 三参形态（传 listRef）—— 真正的场景是「同容器内重排」，
 // list 就是渲染源，内建 onUpdate 的 splice 与我们的 rows 一致，故不自己补 onRemove。

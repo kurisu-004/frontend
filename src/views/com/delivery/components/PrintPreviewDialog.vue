@@ -6,7 +6,7 @@
      才允许导出；后端两条打印端点已下线。
   2. **按分厂分组（el-tabs）**：一张送货单一个收货单位，按送货分组规则（或未分组 L2）
      分组，每组一个 tab / 一个 sheet，每 sheet 最多 10 条。
-  3. **表头排序 + 行拖拽 + 行拆分**三者共存，拖拽会清掉排序标记（自定义顺序优先）。
+  3. **表头排序 + 行拖拽 + 行拆分 + 列拖拽**共存，行拖拽会清掉排序标记（自定义顺序优先）。
 
   交互契约：
   · 每个 tab 一张独立 el-table（子组件 `PrintGroupTable`）—— Sortable 绑的是 EP 内部
@@ -217,11 +217,15 @@ const sheets = computed(() =>
 // ============================================================
 // 列可见性（快照 key = print_preview_dialog，既有值不许改）
 // ============================================================
-// ⚠️ **列顺序拖动在本对话框下线**：旧版只有一张表，列顺序快照是单一序列；新版是
-// 「每个分组一张表」，一个序列要同时表达 N 张表的列顺序没有意义（用户拖 A 表的列，
-// B 表跟着变或不变都说不通）。列可见性快照保留（`print_preview_dialog` 沿用原 key）。
+// 列可见性是**对话框级**偏好（N 张表共用一份快照，key 沿用既有 `print_preview_dialog`）；
+// 列**顺序**是**每张表**一份（快照 key = `print_preview_dialog__<groupKey>`，见
+// deliveryNotePrintColumnDefs::printColumnOrderListKey）—— 一个序列表达不了 N 张表的
+// 列顺序，用户拖 A 表的列不该牵动 B 表。老版本那条单序列
+// `print_preview_dialog_columnOrder` 随之作废，不可迁移。
 const columnDefs = buildDeliveryNotePrintColumnDefs();
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: PRINT_PREVIEW_LIST_KEY });
+/** 「重置列顺序」信号量：popover 只有一颗按钮，作用在全部 N 张表上。 */
+const resetOrderToken = ref(0);
 
 // ============================================================
 // 导出
@@ -326,6 +330,7 @@ async function onExport(): Promise<void> {
           :model-value="columnVisibility.currentMap"
           @update:model-value="columnVisibility.update"
           @reset="columnVisibility.showAll"
+          @resetOrder="resetOrderToken += 1"
         />
       </span>
 
@@ -375,6 +380,8 @@ async function onExport(): Promise<void> {
           :sort-mode="sortModeByKey[t.groupKey] ?? 'column'"
           :column-defs="columnDefs"
           :column-visibility="columnVisibility"
+          :group-key="t.groupKey"
+          :reset-order-token="resetOrderToken"
           @update:rows="(next: PrintRow[]) => setRows(t.groupKey, next)"
           @update:sort-mode="(m: 'column' | 'custom') => setSortMode(t.groupKey, m)"
         />

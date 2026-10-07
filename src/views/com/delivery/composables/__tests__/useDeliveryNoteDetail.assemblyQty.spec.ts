@@ -71,7 +71,6 @@ beforeEach(() => {
 
 function mkItem(p: Partial<DeliveryNoteLineItemData> & { id: string; part_id: string }) {
   return {
-    version: 1,
     batch_no: null,
     batch_label: null,
     serial_no: `S-${p.id}`,

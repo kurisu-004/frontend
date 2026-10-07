@@ -8,7 +8,8 @@
 // 列 key 与顺序在本文件里钉死：
 //   · delivery_note_list           —— 一览 8 列（deliveryNoteColumnDefs）
 //   · delivery_note_detail_line_items —— 详情 13 列（deliveryNoteLineItemsColumnDefs）
-//   · print_preview_dialog         —— 打印 6 列（deliveryNotePrintColumnDefs）
+//   · print_preview_dialog         —— 打印 8 列（deliveryNotePrintColumnDefs）；列**顺序**
+//     另按分组分片存 `print_preview_dialog__<groupKey>`（每张分组表一条序列）
 //
 // 另钉：行类型与 schema 的 z.infer 同源（`export type XxxRow = XxxItemData`）——
 // 改 schema 时忘了同步列渲染，TS 会在这里报错。
@@ -21,6 +22,7 @@ import {
 } from '../deliveryNoteLineItemsColumnDefs';
 import {
   buildDeliveryNotePrintColumnDefs,
+  printColumnOrderListKey,
   PRINT_PREVIEW_LIST_KEY,
 } from '../deliveryNotePrintColumnDefs';
 import type { DeliveryNoteItemData } from '../composables/deliveryNoteSchema';
@@ -58,12 +60,13 @@ describe('列 key 与顺序（改了就让老用户列设置失效）', () => {
     ]);
   });
 
-  it('打印对话框 6 列（数量 / 操作列不进 defs）', () => {
+  it('打印对话框 8 列，key 与 2026-10-08 之前完全一致（数量 / 操作列不进 defs）', () => {
     const keys = buildDeliveryNotePrintColumnDefs().map((d) => d.key);
     expect(keys).toEqual([
       'index',
       'order_no',
-      'l2_customer',
+      // 「分厂」列的 key 是老快照里的 customer_name（行数据字段叫 l2_customer，渲染取它）
+      'customer_name',
       'applicant_name',
       'drawing_no',
       'name',
@@ -79,6 +82,11 @@ describe('列 key 与顺序（改了就让老用户列设置失效）', () => {
     expect(DELIVERY_NOTE_LIST_KEY).toBe('delivery_note_list');
     expect(DELIVERY_NOTE_LINE_ITEMS_LIST_KEY).toBe('delivery_note_detail_line_items');
     expect(PRINT_PREVIEW_LIST_KEY).toBe('print_preview_dialog');
+  });
+
+  it('打印对话框的列顺序快照按分组后缀分片（每张分组表一条序列）', () => {
+    expect(printColumnOrderListKey('g_7')).toBe('print_preview_dialog__g_7');
+    expect(printColumnOrderListKey('c_13')).toBe('print_preview_dialog__c_13');
   });
 });
 

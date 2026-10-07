@@ -136,6 +136,45 @@ describe('useDeliveryNoteListStore', () => {
     await settle();
   });
 
+  it('老快照（{statuses, customerId, keyword}，没有 autoRefresh）照样恢复（M2 回归）', () => {
+    // 老视图写进 localStorage 的就是这三个键；本轮把「生效态 ref」改名成 search 之后，
+    // 若把持久化 dep 键也改名，restore() 的严格校验会让**整份**快照返回 null ⇒
+    // 所有老用户的状态 / 客户 / 单号筛选记忆一次性全丢。
+    memoryStorage.set(
+      'myerp.list.anon.delivery_note_list',
+      JSON.stringify({
+        statuses: ['SUBMITTED'],
+        customerId: 'C-7',
+        keyword: 'DN-2026',
+      }),
+    );
+    const store = boot();
+    store.query.restoreState();
+    expect(store.query.statuses).toEqual(['SUBMITTED']);
+    expect(store.query.customerId).toBe('C-7');
+    expect(store.query.search).toBe('DN-2026');
+    expect(store.query.searchInput).toBe('DN-2026');
+    // 老快照里没有 autoRefresh ⇒ 兜底 false（而不是让整份快照作废）
+    expect(store.query.autoRefresh).toBe(false);
+  });
+
+  it('写回的快照用 keyword 键（键名不许漂）', async () => {
+    const store = boot();
+    store.query.restoreState();
+    store.query.search = 'DN-2026';
+    // useListStatePersist 的 watch 是 300ms 节流 ⇒ 等过节流窗口再读盘。
+    await new Promise((r) => setTimeout(r, 400));
+    await settle();
+    const raw = memoryStorage.get('myerp.list.anon.delivery_note_list');
+    expect(raw).toBeTruthy();
+    expect(Object.keys(JSON.parse(raw!)).sort()).toEqual([
+      'autoRefresh',
+      'customerId',
+      'keyword',
+      'statuses',
+    ]);
+  });
+
   it('写后走前缀失效（一把刷掉本域全部键，而不是只刷当前 list）', async () => {
     const store = boot();
     store.query.restoreState();

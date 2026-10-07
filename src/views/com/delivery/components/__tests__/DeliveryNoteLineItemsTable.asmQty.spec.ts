@@ -81,7 +81,6 @@ const stubs = {
 
 function mkRow(p: Partial<AssemblyTreeRow> & { id: string }): AssemblyTreeRow {
   return {
-    version: 1,
     part_id: '',
     batch_no: null,
     batch_label: null,
