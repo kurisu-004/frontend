@@ -2,10 +2,11 @@
 // 走 `@imengyu/vue3-context-menu` 的**函数模式**（`ContextMenu.showContextMenu`）。
 //
 // 为什么是「一个函数 + 板级 provide」而不是板级挂一个菜单组件：
-//   - 库在函数模式下把菜单挂到 body 上一个**模块级单例容器**（`mx-menu-ghost-host`），
-//     每次 show 都往里 render 一棵新 vnode。不存在「板级模板里挂一个组件实例、卡片侧
-//     拿 ref 调 open()」这条路径，也不需要维护「当前被右键的是哪张卡」的组件内状态 ——
-//     菜单项由板级在**右键那一刻**派生，闭包里直接带着那张卡的全部锚。
+//   - 库在函数模式下把菜单挂到 body 上一个**模块级单例容器**（id
+//     `mx-menu-default-container`、class `mx-menu-ghost-host`），每次 show 都往里 render
+//     一棵新 vnode。不存在「板级模板里挂一个组件实例、卡片侧拿 ref 调 open()」这条路径，
+//     也不需要维护「当前被右键的是哪张卡」的组件内状态 —— 菜单项由板级在**右键那一刻**
+//     派生，闭包里直接带着那张卡的全部锚。
 //   - 派生函数（`buildQueueBatchMenuItems` / `buildOutsourceBatchMenuItems`）是纯函数，
 //     与权限、目标集、批次状态解耦，可直接单测派生矩阵。
 //
@@ -69,13 +70,19 @@ export type BatchMenuOpener = (evt: MouseEvent, batch: BatchCardModel, area: Bat
  * 调用方无需 await（本仓两个板级都当 fire-and-forget 用），但签名保留 Promise 以便
  * 未来在开菜单前后挂动作、以及测试里 `await` 它断言时序。 */
 export async function showBatchContextMenu(evt: MouseEvent, items: MenuItem[]): Promise<void> {
-  // ★ 必须先关：库复用同一个 body 级容器（`mx-menu-ghost-host`），上一个菜单的
-  //   after-leave 回调会 `render(null, container)` 把**紧接着打开的新菜单一起抹掉**
-  //   （库 issue #123 未修）。看板是逐卡右键的高频场景，不串行化就会稳定复现
-  //   「右键 A 再右键 B，第二次菜单根本不出现」。
+  // ★ 必须先关：库复用同一个 body 级容器（id `mx-menu-default-container`、class
+  //   `mx-menu-ghost-host`），上一个菜单的收尾会 `render(null, container)` 把**紧接着
+  //   打开的新菜单一起抹掉**（库 issue #123 未修）。看板是逐卡右键的高频场景，不串行化
+  //   就会稳定复现「右键 A 再右键 B，第二次菜单根本不出现」。
+  //
+  //   2026-10-09 校准机制（此前那段注释把因果写反了，勿照它去「加固」）：`closeContextMenu()`
+  //   里的 `closeAnimFinished` 在**未设 `menuTransitionProps`** 时**同步** emit，处理函数就是
+  //   `render(null, container)` ⇒ 这行返回时容器已被同步清空、旧子树已 unmount，那条
+  //   `Transition onAfterLeave` 根本不会跑到。所以 `closeContextMenu()` **本身就是**修复，
+  //   下面那个 `nextTick()` 只是无害双保险 —— 不要拿 `setTimeout` 之类去「等更久」，那是在
+  //   修一个不存在的竞态。残余竞态不存在：微任务窗口内两次右键无法交错。
   ContextMenu.closeContextMenu();
-  // 等上一个菜单的关闭过渡走完（离场动画 + after-leave）再挂新菜单。少这一拍的话新菜单
-  // 会被旧菜单的收尾 unmount 掉 —— 这正是上面那条注释描述的现象。
+  // 无害双保险：与上面的同步清空重叠，不引入额外时序假设。
   await nextTick();
   ContextMenu.showContextMenu({
     x: evt.clientX,
@@ -89,11 +96,15 @@ export async function showBatchContextMenu(evt: MouseEvent, items: MenuItem[]): 
     minWidth: 180,
     maxHeight: 420,
     // 默认 false ⇒ 滚轮滚的是底下的看板（连带触发菜单关闭）而不是二级菜单。
-    mouseScroll: true,
+    // ⚠️ 不要开 `mouseScroll`：它只在 `ContextMenuDefine.d.ts` 里有声明，两个产物
+    //   （lib/vue3-context-menu.es.js / .umd.js）里都搜不到实现，传了是幽灵参数。
+    //   二级菜单靠上面那个 maxHeight 滚动。
     // 默认 true ⇒ 任何滚动都关菜单；看板上 Sortable 拖到边缘会自动滚动，会误关菜单。
     closeWhenScroll: false,
     // 默认 true ⇒ 库在 document 上 capture 方向键 / Home / End / Enter 并 preventDefault，
-    // 会吃掉看板自己的快捷键。
+    // 会吃掉看板自己的快捷键。⚠️ 代价：库的 **Escape 处理整体挂在那个 keydown 监听里**，
+    // 关掉它就没有任何 Escape 关闭路径了 —— 关闭只剩「点菜单项」与「点菜单外部」两条。
+    // 取舍：看板的键盘操作比 Escape 关闭更重要（右键是偶发动作、方向键是日常），故保留关。
     keyboardControl: false,
     // 默认 200ms（仅「切换到另一个已开二级」时才等，首个二级其实瞬开）。看板的操作员
     // 是「扫一眼 → 选目标 → 提交」，二级菜单的等待只会被读成卡顿。

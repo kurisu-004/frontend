@@ -295,8 +295,13 @@ function currentWorkers(): QueueMenuWorker[] {
  *
  *  不从 DOM dataset 读（WorkerColumn 模板里那张 `data-worker-id` 是给拖拽 `onDragStart`
  *  用的）：右键回调拿不到 `evt.item`，而 board 缓存里已经有全部信息，多一条 DOM 查询
- *  通道只是多一条能取错值的路。取不到时返回 null，交给 moveBatchBetweenWorkers 的守卫
- *  提示，而不是发一个注定失败的 move。 */
+ *  通道只是多一条能取错值的路。
+ *
+ *  ⚠️ 常态下返回 null 意味着「这张卡不在当前 tab 的任何一列里」，只在**切 tab 的过渡
+ *  窗口**可达：el-tab-pane 用 `v-show` 常驻（不销毁旧 pane），旧 pane 的卡仍可右键，
+ *  而 `activeTab` 已指向新 tab、其看板缓存里还没有这张卡。此时 `moveBatchBetweenWorkers`
+ *  收不到可用的 `from`（它只守 `version`、对 `fromWorkerId` 零校验），所以菜单派生层
+ *  据此**不给**「转交给工人」这一项（见 queueBatchMenuItems 的 `selfWorkerId`）。 */
 function selfWorkerIdOf(batch: BatchCardModel): string | null {
   return (
     currentBoardWorkers().find((w) => w.held_batches.some((b) => b.batch_id === batch.batch_id))
@@ -331,14 +336,20 @@ function openSplitDialog(batch: BatchCardModel): void {
  *  隔着 ProcessBoardTab 一层，故走 provide/inject 而非 prop 穿透；inject 侧一律带 noop
  *  缺省。
  *
- *  菜单项派生出来是**空数组**（当前角色对这张卡一个动作都没有）时不弹菜单、改为一句
- *  warning：卡片侧的 `@contextmenu.prevent` 已经把系统右键菜单吞掉了，静默早退等于
- *  「右键卡片彻底没反应」，而弹一个空白菜单框同样没法解释。各写操作内部另有第二道闸
- *  （`useQueueRecall.recallBatch` / move 包装的守卫），菜单打开与最终提交两处都不漏。 */
+ *  菜单项派生出来是**空数组**时不弹菜单、改为一句 warning：卡片侧的
+ *  `@contextmenu.prevent` 已经把系统右键菜单吞掉了，静默早退等于「右键卡片彻底没反应」，
+ *  而弹一个空白菜单框同样没法解释。文案按**空的原因**分级 —— 全权角色也会遇到「有权但
+ *  这一格批次没得可做」（余量 ≤ 1 不可拆、目标集为空、切 tab 窗口反查不到自己所在列），
+ *  对他说「当前角色没有可执行的操作」是把批次状态问题误报成权限问题。各写操作内部另有
+ *  第二道闸（`useQueueRecall.recallBatch` / move 包装的守卫），菜单打开与最终提交两处都
+ *  不漏。 */
 provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
   // 共享 `BatchArea` 是五个区域的并集，本页只有三个（消费方就是这三个容器）。不可达
   // 分支早退而不是硬 cast —— cast 会把「传错区域」变成静默派出一份对不上的菜单矩阵。
   if (area !== 'pending' && area !== 'pool' && area !== 'worker') return;
+  // 求值**一次**存进闭包：菜单项是此刻派生的，但点击发生在之后。若在 onTransfer 里
+  // 再反查一次，跨越的 tab 切换会让「派生时的自己」与「点击时的自己」不一致。
+  const selfWorkerId = selfWorkerIdOf(batch);
   const items = buildQueueBatchMenuItems({
     area,
     batch,
@@ -346,7 +357,7 @@ provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
     canSplit: canSplit.value,
     processes: dispatchTargets(),
     workers: currentWorkers(),
-    selfWorkerId: area === 'worker' ? (selfWorkerIdOf(batch) ?? undefined) : undefined,
+    selfWorkerId: area === 'worker' ? (selfWorkerId ?? undefined) : undefined,
     onRecall: () => void recall.recallBatch(batch),
     onSplit: () => openSplitDialog(batch),
     onDispatch: (targetProcessId) => {
@@ -364,18 +375,24 @@ provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
       );
     },
     onTransfer: (workerId) => {
-      // 转交的 from 工人 id 从当前 tab 的 board 缓存反查（见 selfWorkerIdOf）—— 卡片
-      // model 上没有「自己属于哪一列」这个概念。
+      // `from` 用闭包里那次求值的结果（见上面「求值一次」）。派生层已保证
+      // area='worker' 时 selfWorkerId 非空 —— 取不到就不给这一项，所以这里的 `?? ''`
+      // 是不可达兜底，不是正常路径。
       void moveBatchBetweenWorkers(
         batch.batch_id,
         batch.version ?? Number.NaN,
-        selfWorkerIdOf(batch) ?? '',
+        selfWorkerId ?? '',
         workerId,
       );
     },
   });
   if (items.length === 0) {
-    ElMessage.warning('当前角色对该批次没有可执行的操作');
+    // 本页的两个权限闸就是 canRecall / canSplit（派活 / 转交 / 下发不另设角色闸），
+    // 两个都 false 才能断定「空」是权限造成的。
+    const byPermission = !recall.canRecall.value && !canSplit.value;
+    ElMessage.warning(
+      byPermission ? '当前角色对该批次没有可执行的操作' : '该批次当前没有可执行的操作',
+    );
     return;
   }
   void showBatchContextMenu(evt, items);
@@ -384,11 +401,14 @@ provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
 /** 拆批成功后的失效编排 —— **本组件持有**（对话框只发 `done`，见 BatchSplitDialog 文件头）。
  *  拆批后源批次留在原处（量变小）+ 新批次继承状态 / 位置 ⇒ 本域三域都要刷：
  *  待下发列表（新批多一件、源批件数变）、工序看板（若拆的是池 / 工人列里的批次）、
- *  快照（tab 徽标 + 右栏工序卡徽标）。 */
+ *  快照（tab 徽标 + 右栏工序卡徽标）。另加 parts（`qk.partsPrefix`）：拆批**新增**了
+ *  批次成员关系，常驻的零件列表 / 详情页会显示过期成员 —— 与 useQueueDispatch /
+ *  useQueueRecall 同域两条兄弟写路径同款理由（外协侧不刷是与本域一致的）。 */
 async function onSplitDone(): Promise<void> {
   await invalidateQueuePendingAll(qc);
   await invalidateQueueBoardAll(qc);
   await invalidateQueueSnapshot(qc);
+  await qc.invalidateQueries({ queryKey: qk.partsPrefix }).then(() => undefined);
 }
 
 /** 拖拽悬停的工序 id（null = 未悬停在任何工序卡上）—— 工序卡 `.is-dropping` 高亮的

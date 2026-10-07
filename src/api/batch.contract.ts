@@ -7,10 +7,13 @@
 // 零 runtime 依赖；请求发送在 `./batch.ts`，且**不做 Zod 守门**（守门点在有 queryFn /
 // mutationFn 承载的调用方，见 CLAUDE.md「api 层引域内 schema 的口径」）。
 //
-// wire 层形态约定（与 `productionQueue.contract.ts` 逐字一致）：
-//   - i64 主键 → JSON **字符串**（雪花 ID 防 JS 精度截断）。⚠️ **请求体**里的雪花 ID
-//     同样必须发字符串 —— 后端 `deserialize_i64` 只接受字符串，发数字返 40001；
-//   - 计数 / version 是 JSON integer，前端 number；
+// wire 层形态约定：
+//   - 后端标了 `#[serde(deserialize_with = "deserialize_i64")]` 的字段 → JSON **字符串**。
+//     雪花 ID 走这一档（防 JS 精度截断），本端点的 `quantity` 也走同一档（后端按 i64
+//     统一反序列化，不因为它是计数就放行 number）。⚠️ 发数字 → **HTTP 422 纯文本**，
+//     响应里**没有 `code` 字段**，调用方不要按业务错误码分支解析；
+//   - 没标该反序列化器的字段（如 `version` / `note`）走 JSON integer 与字符串，前端照常
+//     用 number / string；
 //   - 2026-10-08：`batch_id` 是 **body 字段**而非路径参数（split 与 cancel 同形，
 //     都是「以批次为锚」的写端点，前端不拼路径）。
 
@@ -20,12 +23,16 @@
  *  直接反序列化失败），不是业务信封 —— 调用方必须自己保证 version 非空，不要指望
  *  从错误信封里解析 code。 */
 export interface SplitBatchByBodyRequest {
-  /** 雪花 ID 字符串（JS Number 会丢精度，发数字后端返 40001）。 */
+  /** 雪花 ID 字符串（JS Number 会丢精度；且后端 `deserialize_i64` 只吃字符串，发数字 → 422）。 */
   batch_id: string;
-  /** OCC 锚：源批次 `t_part_batch.version`。 */
+  /** OCC 锚：源批次 `t_part_batch.version`。裸 i32 → JSON integer。 */
   version: number;
-  /** 拆出数量，∈ [1, 源批次 quantity - 1]（后端按此新建子批次，源批次原地减量）。 */
-  quantity: number;
+  /** 拆出数量，∈ [1, 源批次 quantity - 1]（后端按此新建子批次，源批次原地减量）。
+   *
+   *  声明成 **string** 是后端 wire 真形，不是笔误：它与 `batch_id` 同样挂着
+   *  `deserialize_i64`，发 JSON number 会被 serde 拒在反序列化阶段（HTTP 422 纯文本）。
+   *  调用方手里是 number，用 `String(n)` 转一道即可。 */
+  quantity: string;
   /** 可选，写入事件 `note`。 */
   note?: string | null;
 }
@@ -41,7 +48,11 @@ export interface BatchSplitDto {
   /** 新立出来的子批次 id（雪花 ID 字符串）。 */
   new_batch_id: string;
   part_id: string;
-  /** 源批次拆后余量（源批次原地减量、id 不变）。 */
+  /** **实际拆走量**（= 新批次数量），不是源批次余量。
+   *
+   *  ⚠️ 源批次余量**不在出参里** —— 源批次原地减量、id 不变，但它的新数量要自行用
+   *  `源批次.quantity - 本字段` 算。把本字段当余量读会让「拆 4 / 剩 10」显示成
+   *  「拆 4 / 剩 4」。 */
   quantity: number;
   /** 源批次 version（拆批后 = 原 version + 1）。 */
   source_version: number;

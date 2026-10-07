@@ -38,8 +38,9 @@ export interface OutsourceBatchMenuInput {
    *  公司显示名的来源（`company_options` 里的 name 是下拉快照，可能与列名不同步）。 */
   companies?: OutsourceMenuCompany[];
   /** area='outsource-candidate'：该行是否「`PENDING` 未上架」—— 判据就是候选行的
-   *  `shelf_id` 为**空串**（见 outsourceBoardTypes.isCandidateDraggable）。这种行本来
-   *  就在待下发区，给召回是召回自己。 */
+   *  `shelf_id` 为**空串**（见 outsourceBoardTypes.isCandidateDraggable，与拖拽落点的
+   *  置灰判据同源）。这种行本来就在待下发区，给召回是召回自己；且没有 holder，
+   *  发送请求的 `from.shelf_id` 必被后端 `from` 守卫拒收，所以「发送到」整块不给。 */
   candidateIsPending?: boolean;
   /** 发送到指定外协公司（`sendToCompany`，自带报价路径 / 未上架 / 白名单三道早退）。 */
   onSend: (companyId: string) => void;
@@ -91,7 +92,10 @@ export function sendableCompanyIds(candidate: OutsourceQueueCandidateData): stri
  *  推进工序 —— 公司列给的是回收两项 + 拆批。
  *
  *  「拆分批次」的批次闸是 `quantity > 1`：后端要求拆出数量 ∈ [1, quantity - 1]，
- *  余量 ≤ 1 时给选项就是给一个必然失败的入口。 */
+ *  余量 ≤ 1 时给选项就是给一个必然失败的入口。
+ *
+ *  另有一条与区域无关的抑制：未上架的候选行**不给**「发送到」（判据见
+ *  `candidateIsPending`）—— 与拖拽落点的置灰同源，两条路径必须一起改。 */
 export function buildOutsourceBatchMenuItems(input: OutsourceBatchMenuInput): MenuItem[] {
   const { area, batch } = input;
   const items: MenuItem[] = [];
@@ -116,7 +120,11 @@ export function buildOutsourceBatchMenuItems(input: OutsourceBatchMenuInput): Me
   }
 
   const candidate = input.candidate;
-  if (candidate) {
+  // 未上架的行**整块不给**（含「发送到」）：`candidateIsPending` 与拖拽路径的置灰判据
+  // 同源（`outsourceBoardTypes.isCandidateDraggable`，即 `shelf_id` 为空串）。这种行
+  // 没有 holder，发送请求的 `from.shelf_id` 必被后端 `from` 守卫拒收 —— 拖拽路径正是
+  // 据此置灰 + 给 NOT_SHELVED_HINT，菜单路径必须一起收窄，否则给一个点下去必失败的入口。
+  if (candidate && !input.candidateIsPending) {
     // 与当前 tab 的公司列求交：白名单里的公司若没被映射进本工序，看板上根本没有那一列，
     // 给一个点下去发不出请求的目标。
     const allowed = new Set(sendableCompanyIds(candidate));

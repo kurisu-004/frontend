@@ -9,7 +9,8 @@
 //   - O1：公司列 = 回收生产 + 回收品检 + 拆分批次；**不给**召回与「发送到」；
 //   - O2：候选池 = 召回 + 拆分批次 + 发送到外协公司（二级菜单）；
 //   - O3：角色闸逐项生效（Inspector 拿得到回收两项、拿不到拆批 / 召回）；
-//   - O4：批次闸 —— 余量 ≤ 1 不给拆批；PENDING 未上架的行不给召回；
+//   - O4：批次闸 —— 余量 ≤ 1 不给拆批；PENDING 未上架的行既不给召回、也不给「发送到」
+//     （后者的 from.shelf_id 守卫与拖拽置灰同源）；
 //   - O5：发送白名单 —— APPROVAL 只给报价锁定的一家；DIRECT 给 company_options 里的；
 //     白名单与当前 tab 的公司列求交（没被映射成列的公司不进列表）；
 //   - O6：`can_send=false`（后端派生的可发送判据）整个不给「发送到」；
@@ -183,9 +184,7 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
       '回收品检',
     ]);
     expect(
-      labels(
-        buildOutsourceBatchMenuItems(input({ area: 'outsource-candidate', batch: card })),
-      ),
+      labels(buildOutsourceBatchMenuItems(input({ area: 'outsource-candidate', batch: card }))),
     ).toEqual(['召回到待下发', '发送到外协公司']);
   });
 
@@ -194,6 +193,18 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
       input({ area: 'outsource-candidate', candidateIsPending: true }),
     );
     expect(labels(items)).not.toContain('召回到待下发');
+  });
+
+  it('O4c：PENDING 未上架（candidateIsPending）的候选行也不给「发送到」—— from.shelf_id 必被拒', () => {
+    // 未上架的行没有 holder，发送请求的 `from.shelf_id` 必被后端 `from` 守卫拒收。
+    // 拖拽路径正是据此把该行置灰 + 给 NOT_SHELVED_HINT（判据同源：isCandidateDraggable
+    // 看的就是 `shelf_id` 为空串），菜单路径必须一起收窄，否则给一个点下去必失败的入口。
+    // 注意这条与 `can_send` 无关：can_send=true 的未上架行走的是 company_options 白名单，
+    // 白名单本身不含 shelf_id 这条闸。
+    const items = buildOutsourceBatchMenuItems(
+      input({ area: 'outsource-candidate', candidateIsPending: true }),
+    );
+    expect(labels(items)).not.toContain('发送到外协公司');
   });
 
   it('O5a：APPROVAL 行的二级菜单只含报价锁定的那一家', () => {
@@ -213,7 +224,10 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
 
   it('O5c：白名单里的公司没被映射进本工序（看板上没有那一列）→ 不进二级菜单', () => {
     const items = buildOutsourceBatchMenuItems(
-      input({ area: 'outsource-candidate', companies: [{ company_id: COMPANY_B, name: '外协厂乙' }] }),
+      input({
+        area: 'outsource-candidate',
+        companies: [{ company_id: COMPANY_B, name: '外协厂乙' }],
+      }),
     );
     // APPROVAL 锁定的是甲，而本工序只映射了乙 ⇒ 交集为空 ⇒ 整项不给
     expect(labels(items)).not.toContain('发送到外协公司');

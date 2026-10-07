@@ -43,7 +43,13 @@ export interface QueueBatchMenuInput {
   /** area='pool'（派活）/ 'worker'（转交）的目标工人（当前 tab 的工人列）。 */
   workers?: QueueMenuWorker[];
   /** area='worker' 时**容器自己**的 worker id —— 自己这一列不进「转交给工人」列表
-   *  （转交给自己不构成一次移动，与拖拽路径的早退判据一致）。 */
+   *  （转交给自己不构成一次移动，与拖拽路径的早退判据一致）。
+   *
+   *  ⚠️ 它同时是「这条转交能不能成立」的**唯一锚**：`moveBatchBetweenWorkers` 的
+   *  `from` 就是它，而那个包装只守 `version`、**对 `fromWorkerId` 零校验**，空串会
+   *  原样发出去由后端拒。所以这里取不到（非空串）时**整项不给**，而不是给一个点下去
+   *  必然失败的入口。取不到只发生在「切 tab 的过渡窗口」：el-tab-pane 用 `v-show`
+   *  常驻，旧 pane 的卡仍可右键，而 `activeTab` 已指向新 tab、其看板缓存里没有这张卡。 */
   selfWorkerId?: string;
   /** 召回到待下发（内含二次确认 + 失效链，见 useQueueRecall.recallBatch）。 */
   onRecall: () => void;
@@ -75,6 +81,8 @@ function processLabel(p: QueueMenuProcess): string {
  *  「工人列不给拆批」：拆批的用途是「一部分走这条路、一部分走那条路」（部分下发 / 部分
  *  外协），而工人持有的批次只有「整体转交给别人」与「整体召回到待下发」两条出路 ——
  *  拆出来的子批次同样在这名工人手上、同样得立刻转交，拆批在这里没有可执行的下一步。
+ *  ⚠️ 这是**产品侧取舍**，不是对齐后端：`split_batch` 端点没有「按批次状态」的闸，
+ *  MANAGER 拿一个在工人手上的批次去拆后端也照办。
  *
  *  「拆分批次」的批次闸是 `quantity > 1`：后端要求拆出数量 ∈ [1, quantity - 1]，
  *  余量 ≤ 1 时给选项就是给一个必然失败的入口。 */
@@ -106,12 +114,18 @@ export function buildQueueBatchMenuItems(input: QueueBatchMenuInput): MenuItem[]
     return items;
   }
 
+  // 工人列：转交需要一个非空的 `from`（自己所在列），取不到就整项不给 —— 见
+  // `selfWorkerId` 的注释。与拖拽路径的差别：拖拽是从 evt.item 的 dataset 反查 worker
+  // 属性的，拿不到时 `onAdd` 不落库；这里是从板级看板缓存反查，判据同源。
+  if (area === 'worker' && !input.selfWorkerId) return items;
+
   const targets = (input.workers ?? []).filter(
     (w) => area === 'pool' || w.worker_id !== input.selfWorkerId,
   );
   const children = targets.map((w) => ({
     label: w.name,
-    onClick: () => (area === 'pool' ? input.onMoveToWorker(w.worker_id) : input.onTransfer(w.worker_id)),
+    onClick: () =>
+      area === 'pool' ? input.onMoveToWorker(w.worker_id) : input.onTransfer(w.worker_id),
   }));
   if (children.length > 0) {
     items.push({

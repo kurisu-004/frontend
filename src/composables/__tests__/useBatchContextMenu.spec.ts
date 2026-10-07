@@ -67,12 +67,12 @@ describe('showBatchContextMenu（批次右键菜单本体）', () => {
       minWidth: 180,
       // 长二级菜单（工序 / 工人 / 外协公司都可能几十项）的滚动上限
       maxHeight: 420,
-      // 默认 false ⇒ 滚轮滚的是看板（连带触发菜单关闭）而不是二级菜单
-      mouseScroll: true,
       // 默认 true ⇒ Sortable 拖到边缘自动滚动会误关菜单
       closeWhenScroll: false,
       // 默认 true ⇒ 库全局 capture 方向键 / Home / End / Enter 并 preventDefault，
-      // 吃掉看板自己的快捷键
+      // 吃掉看板自己的快捷键。代价（已接受）：库唯一的 Escape 处理也在那个 keydown
+      // 监听里，关掉它就没有 Escape 关闭路径，关闭只剩点菜单项 / 点菜单外部。
+      // 本 spec **不**断言 Escape 行为 —— 它不由本组件负责。
       keyboardControl: false,
       // 默认 200ms（切换已开二级时的等待）⇒ 0 = 全瞬开
       subMenuOpenDelay: 0,
@@ -81,9 +81,11 @@ describe('showBatchContextMenu（批次右键菜单本体）', () => {
   });
 
   it('★ E1：先 closeContextMenu → 隔一个 nextTick → 再 showContextMenu（打开串行化）', async () => {
-    // 回归守卫（库 issue #123 未修）：库复用同一个 body 级容器，上一个菜单的 after-leave
-    // 会 `render(null, container)` 把紧接着挂上去的新菜单一起抹掉。表现是「右键 A 再
+    // 回归守卫（库 issue #123 未修）：库复用同一个 body 级容器，上一个菜单的收尾会
+    // `render(null, container)` 把紧接着挂上去的新菜单一起抹掉。表现是「右键 A 再
     // 右键 B，第二次菜单根本不出现」—— 逐卡右键的高频场景下这等于菜单不可用。
+    // 真正兜住这件事的是 `closeContextMenu()` 本身（同步清空容器）；实现里紧跟的那
+    // 个 `nextTick()` 是无害双保险，本例只守「close 必排在 show 之前」这个可观测序。
     const pending = showBatchContextMenu(EVT, ITEMS);
 
     // ① 调用当拍：close 已调，show 还没调（说明中间确实隔了一个 tick）

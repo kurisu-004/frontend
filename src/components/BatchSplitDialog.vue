@@ -31,8 +31,7 @@
         <!-- batch_no 直接取卡片 model 的值 —— 它已经带 'B' 前缀（各域适配层
              poolItemToCard / heldBatchToCard / pendingBatchToCard 统一加的），
              这里不要再拼一个 B。 -->
-        源批次 <b>{{ source.batch_no }}</b> {{ source.part_name }}（当前
-        {{ source.quantity }} 件）
+        源批次 <b>{{ source.batch_no }}</b> {{ source.part_name }}（当前 {{ source.quantity }} 件）
       </p>
       <el-form label-width="90px">
         <el-form-item label="拆出数量" required>
@@ -65,6 +64,7 @@ import { ElMessage } from 'element-plus';
 import { useMutation } from '@tanstack/vue-query';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { splitBatch } from '@/api/batch';
+import type { SplitBatchByBodyRequest } from '@/api/batch.contract';
 import type { BatchSplitSource } from '@/types/batchSplit';
 
 const props = defineProps<{
@@ -98,15 +98,15 @@ function resolve(ok: boolean): void {
   emit('update:modelValue', false);
 }
 
-/** `POST /batches/split`。⚠️ 缺 version 时后端返 HTTP 422 纯文本（不是业务信封），
- *  错误文案因此走 `(e as Error).message ?? …` 的双兜底。
+/** `POST /batches/split`。⚠️ 入参 / 出参都有**不是业务信封**的失败面：缺 version、
+ *  或 `batch_id` / `quantity` 发成 JSON number（后端 `deserialize_i64`）都返 HTTP 422
+ *  纯文本，错误文案因此走 `(e as Error).message ?? …` 的双兜底。
  *
  *  这里**没有**失效链：见文件头「组件保持 dumb」，成功后派 `done` 由板级编排。 */
 const splitMutation = useMutation({
   mutationKey: ['batches', 'split'],
   // 不写 retry（信任 main.ts 全局 mutations.retry: 0）。
-  mutationFn: (payload: { batch_id: string; version: number; quantity: number }) =>
-    splitBatch(payload),
+  mutationFn: (payload: SplitBatchByBodyRequest) => splitBatch(payload),
 });
 
 /** 每次打开复位（不继承上一次的拆出数量）。 */
@@ -125,10 +125,14 @@ async function onConfirm(): Promise<void> {
     const res = await splitMutation.mutateAsync({
       batch_id: src.batch_id,
       version: src.version,
-      quantity: quantity.value,
+      // wire 上必须是十进制字符串（后端 `deserialize_i64`，见 batch.contract.ts）
+      quantity: String(quantity.value),
     });
+    // 2026-10-09：`res.quantity` 是**实际拆走量**（= 新批次数量），不是源批次余量 ——
+    // 源批次余量不在出参里，用请求锚的源数量减出来。余量取服务端确认的拆走量回算，
+    // 而不是复读输入框，避免提示里的两个数与库里对不上。
     ElMessage.success(
-      `拆分成功：源批次剩 ${res.quantity} 件，新批次 ${quantity.value} 件（继承当前状态/位置）`,
+      `拆分成功：新批次 ${res.quantity} 件，源批次剩 ${src.quantity - res.quantity} 件（继承当前状态/位置）`,
     );
     resolve(true);
   } catch (e) {

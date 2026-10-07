@@ -11,6 +11,7 @@
 //     （目标集 = 全量工序，INHOUSE + OUTSOURCE 都要）；
 //   - Q2：工序候选池 —— 召回 + 拆批 + 「派给工人」二级菜单；
 //   - Q3：工人列 —— 召回 + **不给拆批** + 「转交给工人」二级菜单**排除自己所在列**；
+//   - Q3b：工人列反查不到自己所在列时**整项不给**「转交给工人」（from 为空必被后端拒）；
 //   - Q4：角色闸 —— 无召回权 / 无拆批权逐项消失（不是「一次性闸」）；
 //   - Q5：批次闸 —— `quantity <= 1` 时三个区都不给拆批（后端要求拆出数量 ∈ [1, n-1]，
 //     给选项就是给一个必然失败的入口）；
@@ -23,10 +24,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { MenuItem } from '@imengyu/vue3-context-menu';
-import {
-  buildQueueBatchMenuItems,
-  type QueueBatchMenuInput,
-} from '../queueBatchMenuItems';
+import { buildQueueBatchMenuItems, type QueueBatchMenuInput } from '../queueBatchMenuItems';
 import type { BatchCardModel } from '@/types/batchCard';
 
 function makeCard(overrides: Partial<BatchCardModel> = {}): BatchCardModel {
@@ -63,7 +61,10 @@ const WORKERS = [
   { worker_id: 'W-2', name: '李四' },
 ];
 
-/** 默认入参（全权、余量足够、目标集齐全），各用例只改自己关心的那一维。 */
+/** 默认入参（全权、余量足够、目标集齐全），各用例只改自己关心的那一维。
+ *
+ *  `selfWorkerId` 默认给 W-1 —— 工人列上真正常驻的卡总能反查到自己所在列（见
+ *  Q3b：反查不到时那一项整个消失，那是唯一的例外）。 */
 function input(overrides: Partial<QueueBatchMenuInput> = {}): QueueBatchMenuInput {
   return {
     area: 'pool',
@@ -72,6 +73,7 @@ function input(overrides: Partial<QueueBatchMenuInput> = {}): QueueBatchMenuInpu
     canSplit: true,
     processes: PROCESSES,
     workers: WORKERS,
+    selfWorkerId: 'W-1',
     onRecall: vi.fn(),
     onSplit: vi.fn(),
     onDispatch: vi.fn(),
@@ -97,12 +99,21 @@ describe('buildQueueBatchMenuItems（生产队列三区的菜单项派生）', (
   });
 
   it('Q3：工人列 = 召回 + 转交给工人（不给拆批；二级菜单排除自己所在列）', () => {
-    const items = buildQueueBatchMenuItems(
-      input({ area: 'worker', selfWorkerId: 'W-1' }),
-    );
+    const items = buildQueueBatchMenuItems(input({ area: 'worker', selfWorkerId: 'W-1' }));
     expect(labels(items)).toEqual(['召回到待下发', '转交给工人']);
     // 自己那一列不进「转交给工人」—— 转交给自己不构成一次移动
     expect(childrenOf(items, '转交给工人').map((c) => c.label)).toEqual(['李四']);
+  });
+
+  it('Q3b：工人列反查不到自己所在列 → **整项不给**「转交给工人」（不给必失败的入口）', () => {
+    // `moveBatchBetweenWorkers` 的 from 就是 selfWorkerId，而那个包装只守 version、
+    // 对 fromWorkerId 零校验：空串会原样发出去由后端拒。若这里放行，菜单会把**所有**
+    // 工人（含真正持有该批次的那位，因为过滤器此时无差别）列成目标，点了必失败。
+    // 可达路径只有切 tab 的过渡窗口（el-tab-pane 用 v-show 常驻，旧 pane 的卡仍可
+    // 右键，而 activeTab 已指向新 tab、其看板缓存里没有这张卡）。
+    const items = buildQueueBatchMenuItems(input({ area: 'worker', selfWorkerId: undefined }));
+    expect(labels(items)).toEqual(['召回到待下发']);
+    expect(childrenOf(items, '转交给工人')).toEqual([]);
   });
 
   it('Q4a：无召回权 → 三个区都少「召回到待下发」', () => {
@@ -116,9 +127,9 @@ describe('buildQueueBatchMenuItems（生产队列三区的菜单项派生）', (
   });
 
   it('Q4b：无拆批权 → 三个区都少「拆分批次」（逐项闸，不是「一次性闸」）', () => {
-    expect(
-      labels(buildQueueBatchMenuItems(input({ area: 'pending', canSplit: false }))),
-    ).toEqual(['发送到工序']);
+    expect(labels(buildQueueBatchMenuItems(input({ area: 'pending', canSplit: false })))).toEqual([
+      '发送到工序',
+    ]);
     expect(labels(buildQueueBatchMenuItems(input({ area: 'pool', canSplit: false })))).toEqual([
       '召回到待下发',
       '派给工人',

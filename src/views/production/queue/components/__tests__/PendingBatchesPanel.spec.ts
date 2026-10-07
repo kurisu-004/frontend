@@ -16,6 +16,7 @@
 //   - H4b：onStart → emit hover-process(null)（防御性复位：拖拽开始即清零，覆盖 onEnd
 //     尚未触发的窗口；不是某条具体残留场景的回归守卫）。
 //   - H5：渲染 batch 列表（BatchCard）+ 全选 / 自动下发工具条基本接线。
+//   - H6：卡片右键 → 注入的 opener 被调一次，第三参区域标签为 'pending'。
 //
 // 测试策略：
 //   - vi.mock('vue-draggable-plus') 捕获 useDraggable 的 options，再手动驱动回调
@@ -174,6 +175,8 @@ function mountPanel(
     selected?: string[];
     setSelectedIds?: (ids: string[]) => void;
     autoDispatchMutate?: ReturnType<typeof vi.fn>;
+    /** 覆盖 provide（本容器只消费 `openBatchContextMenu`，缺省 noop 是板级契约的兜底）。 */
+    provided?: Record<string, unknown>;
   } = {},
 ) {
   return mount(PendingBatchesPanel, {
@@ -188,7 +191,7 @@ function mountPanel(
         isPending: ref(false),
       } as unknown as UseQueueDispatchReturn['autoDispatchMutation'],
     },
-    global: globalConfig,
+    global: { ...globalConfig, provide: extra.provided ?? {} },
   });
 }
 
@@ -295,6 +298,27 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
     expect(wrapper.text()).toContain('已选 0 件');
     await wrapper.find('.el-checkbox-stub__input').trigger('change');
     expect(setSelectedIds).toHaveBeenCalledWith(['3000000000009', '3000000000010']);
+    wrapper.unmount();
+  });
+
+  it("H6：卡片右键 → 注入的 opener 被调一次，第三参区域标签是 **'pending'**", async () => {
+    // 五个区域（pending / pool / worker / outsource-candidate / outsource-company）
+    // 各自的菜单矩阵不同，区域标签由**容器**硬编码 —— 所以「标签传对」本身就是契约：
+    // 写错成 'pool' 会让待下发区的卡拿到工序池那一格菜单矩阵（含不该有的「召回到待下发」）。
+    // 其余四区的同款断言在 PoolDrawer（D13）/ WorkerColumn / CandidatePool / CompanyColumn。
+    const openBatchContextMenu = vi.fn();
+    const wrapper = mountPanel([makeDto({ batch_id: '3000000000009' })], {
+      provided: { openBatchContextMenu },
+    });
+    await flushPromises();
+    await wrapper.find('.batch-card').trigger('contextmenu', { clientX: 120, clientY: 90 });
+
+    expect(openBatchContextMenu).toHaveBeenCalledTimes(1);
+    const [evt, passed, area] = openBatchContextMenu.mock.calls[0]!;
+    expect(evt).toBeInstanceOf(Event);
+    expect((evt as MouseEvent).clientX).toBe(120);
+    expect(passed).toMatchObject({ batch_id: '3000000000009' });
+    expect(area).toBe('pending');
     wrapper.unmount();
   });
 

@@ -497,11 +497,13 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     try {
       // 2026-10-08：拆批搬到共用层 `POST /api/v2/batches/split`（`batch_id` 走 body，
       // 不是路径参数）；version 取被拆批次的 t_part_batch.version（OCC 必填，缺了后端
-      // 返 HTTP 422 纯文本而非业务信封）。出参是拆分结果对象（源批次余量 + 新批次 id），
-      // 不是批次数组 —— 调用方只判成败，行数据由随后的 fetchBatches 重拉。
+      // 返 HTTP 422 纯文本而非业务信封）。出参是拆分结果对象（**实际拆走量** + 新批次
+      // id + 源批次新 version），不是批次数组 —— 调用方只判成败，行数据由随后的
+      // fetchBatches 重拉。
       const result = await splitBatch({
         batch_id: batch.id,
-        quantity,
+        // wire 上必须是十进制字符串（后端 `deserialize_i64`，见 batch.contract.ts）
+        quantity: String(quantity),
         version: batch.version,
       });
       ElMessage.success('拆分成功');

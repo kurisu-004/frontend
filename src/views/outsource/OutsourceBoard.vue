@@ -19,14 +19,14 @@
      不可信」，不该只刷一半。
 
 板级持有三个跨容器的东西（provide + inject，见 outsourceBoardTypes.ts）：
-        - `sendToCompany`：`useOutsourceQueueMove` 的**唯一**实例。公司列的拖拽落点与
-          候选池右键菜单的「发送到外协公司」都经它发请求 —— 同一个 useMutation 挂两个
-          observer 会弹两份成功 toast。
-        - `openOutsourceBatchMenu`：右键 opener（菜单本体是
-          `@/composables/useBatchContextMenu.ts` 的 `showBatchContextMenu()`，挂在 body 级
-          单例容器上）。
-        - `activeOutsourceProcessId`：扫码选中的作用域闸门（切过的 tab 都还挂着，多个
-          候选池实例会同时收到条码事件）。 -->
+         - `sendToCompany`：`useOutsourceQueueMove` 的**唯一**实例。公司列的拖拽落点与
+           候选池右键菜单的「发送到外协公司」都经它发请求 —— 同一个 useMutation 挂两个
+           observer 会弹两份成功 toast。
+         - `openOutsourceBatchMenu`：右键 opener（菜单本体是
+           `@/composables/useBatchContextMenu.ts` 的 `showBatchContextMenu()`，挂在 body 级
+           单例容器上）。
+         - `activeOutsourceProcessId`：扫码选中的作用域闸门（切过的 tab 都还挂着，多个
+           候选池实例会同时收到条码事件）。 -->
 <template>
   <div class="outsource-board">
     <el-alert
@@ -278,9 +278,9 @@ const splitTarget = ref<BatchSplitSource | null>(null);
 /** 卡片右键 → 派生菜单项 → 开菜单。消费方两个投放容器（候选池 / 公司列）inject 这一个
  *  opener，第三参给出区域、第四参给出那一侧的行 DTO。
  *
- *  派生结果是**空数组**（当前角色对这张卡一个动作都没有）时不弹菜单、改为一句 warning：
- *  卡片侧的 `@contextmenu.prevent` 已经把系统右键菜单吞掉了，静默早退等于「右键卡片彻底
- *  没反应」，弹一个空白菜单框同样没法解释。
+ *  菜单项派生出来是**空数组**时不弹菜单、改为一句 warning：卡片侧的 `@contextmenu.prevent`
+ *  已经把系统右键菜单吞掉了，静默早退等于「右键卡片彻底没反应」，弹一个空白菜单框同样
+ *  没法解释。文案按「空的原因」分级，见下面的 `byPermission`。
  *
  *  「召回到待下发」复用生产队列域的 `useQueueRecall`（`POST /prod/queue/recall` 是跨域
  *  端点、批次回到 `PENDING` 后生产队列的待下发列表确实要变），其失效链按**前缀**全刷，
@@ -315,7 +315,14 @@ provide<OpenOutsourceBatchMenu>(OPEN_OUTSOURCE_BATCH_MENU, (evt, batch, area, ct
     },
   });
   if (items.length === 0) {
-    ElMessage.warning('当前角色对该批次没有可执行的操作');
+    // 文案按**空的原因**分级：三个权限闸全 false 才能断定「空」是权限造成的。全权
+    // 角色同样会遇到「有权但这一行没得可做」—— 未上架（shelf_id 为空串）且不可召回、
+    // 余量 ≤ 1 不可拆、DIRECT 但 company_options 为空、当前 tab 没画出可投的公司列。
+    // 对他说「当前角色没有可执行的操作」是把批次 / 报价状态误报成权限问题。
+    const byPermission = !canMove.value && !canSplit.value && !recall.canRecall.value;
+    ElMessage.warning(
+      byPermission ? '当前角色对该批次没有可执行的操作' : '该批次当前没有可执行的操作',
+    );
     return;
   }
   void showBatchContextMenu(evt, items);
