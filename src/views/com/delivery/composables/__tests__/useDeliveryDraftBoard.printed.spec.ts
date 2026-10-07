@@ -5,9 +5,12 @@
 //
 // 守的是三件事，任一断掉绿底就永远不亮，且**没有任何报错**（纯 localStorage + 纯函数）：
 //   1. `foldedRows` 的折叠回调读的是 `usePrintedLabels` 的记录（接回数据源）；
-//   2. 折叠 computed **显式依赖** store —— `isPrintedBatch` 内部读 ref 不构成依赖，
-//      不显式读一下 store 的话 `markPrinted` 之后不会重算；
+//   2. 折叠 computed 会随 store 重算 —— `isPrintedBatch` 在求值**期间**同步读 `_store`，
+//      Vue 按「求值期间发生的 ref 读」收集依赖，因此不需要再显式读一次 store；
 //   3. `rowClassName` 把 `label_printed` 映射成 el-table 的行 class。
+//
+// 另外第一条用例钉住**批量详情的数据源形状**：`batchGetNotes` 在 api 层已解信封，
+// 桩必须返回**数组**（信封形状的桩会让守门抛，把整块看板罩成绿的）。
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
@@ -35,10 +38,13 @@ vi.mock('element-plus', () => ({
 
 const app = createApp({ render: () => null });
 app.use(createPinia());
-app.use(VueQueryPlugin, {
-  queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }),
-});
+/** 每个用例前 clear：同名 queryKey 的缓存跨用例残留会让「本次拿到的到底是哪次请求」
+ *  变得不可判（下面那条反向对照用例就靠「空缓存起步」才有意义）。 */
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+app.use(VueQueryPlugin, { queryClient });
 setActivePinia(app.config.globalProperties.$pinia);
+
+const { ElMessage } = await import('element-plus');
 
 const { useDeliveryDraftBoard } = await import('../useDeliveryDraftBoard');
 const { usePrintedLabels } = await import('../usePrintedLabels');
@@ -101,14 +107,17 @@ async function flush(): Promise<void> {
 }
 
 beforeEach(() => {
+  queryClient.clear();
   localStorage.clear();
   usePrintedLabels().store.value = {};
   listNotesMock.mockReset();
   batchGetNotesMock.mockReset();
+  (ElMessage.error as unknown as { mock: { calls: unknown[] } }).mock.calls.length = 0;
   listNotesMock.mockResolvedValue({ items: [DRAFT_HEAD], total: 1, limit: 200, offset: 0 });
-  batchGetNotesMock.mockResolvedValue({
-    items: [{ ...DRAFT_HEAD, line_items: [lineItem()] }],
-  });
+  // ⚠️ 必须返回**数组**：`batchGetNotes` 在 api 层末尾 `return resp.data.items`，
+  // queryFn 拿到的是数组。返回信封的桩是**与真实契约相反的假契约** —— 它能让
+  // 「queryFn 直接 parse 返回值」的写法也变绿，从而把整块看板罩成绿的（2026-10-08 修）。
+  batchGetNotesMock.mockResolvedValue([{ ...DRAFT_HEAD, line_items: [lineItem()] }]);
 });
 
 /** 起一个看板实例并等两条 query 回流。 */
@@ -119,6 +128,31 @@ async function bootBoard() {
   expect(board.drafts.value[NOTE_ID]).toBeTruthy();
   return board;
 }
+
+describe('草稿看板批量详情的数据源形状（B1 回归锁）', () => {
+  it('api 层已解信封 → queryFn 拿到的是数组：行项表出行，且零 error toast', async () => {
+    const board = await bootBoard();
+
+    // 桩给的确实是数组（真实 api 的返回形状），不是 `{ items }`。
+    const raw = await batchGetNotesMock.mock.results[0]!.value;
+    expect(Array.isArray(raw)).toBe(true);
+
+    expect(board.draftDetails[NOTE_ID]).toHaveLength(1);
+    expect(board.foldedRows(NOTE_ID).map((r) => r.name)).toEqual(['铝电解电容']);
+    // 守门抛过一次就是这条：query 恒 error ⇒ detail watch 走兜底把行项写成 []，
+    // 同时每次查询弹一条「加载草稿详情失败」。
+    expect(ElMessage.error).not.toHaveBeenCalled();
+  });
+
+  it('批量详情返回信封（api 层忘了解信封）→ 守门抛 ⇒ 行项表空（这是**不该**发生的形状）', async () => {
+    // 反向对照：把桩改回信封，守门必须抛、看板必须空。
+    // 说明本文件第一组用例靠的是「数组形状」而不是任何巧合。
+    batchGetNotesMock.mockResolvedValue({ items: [{ ...DRAFT_HEAD, line_items: [lineItem()] }] });
+    const board = await bootBoard();
+    expect(board.foldedRows(NOTE_ID)).toEqual([]);
+    expect(ElMessage.error).toHaveBeenCalled();
+  });
+});
 
 describe('useDeliveryDraftBoard 已打印标签绿底', () => {
   it('没有打印记录 → 行不带绿底', async () => {
@@ -152,18 +186,16 @@ describe('useDeliveryDraftBoard 已打印标签绿底', () => {
   });
 
   it('同 serial_no 的多个批次折叠成一行：任一批次打过标签即整行绿', async () => {
-    batchGetNotesMock.mockResolvedValue({
-      items: [
-        {
-          ...DRAFT_HEAD,
-          part_count: 2,
-          line_items: [
-            lineItem({ id: '911000000000000002', serial_no: 'S-9' }),
-            lineItem({ id: '911000000000000001', serial_no: 'S-9' }),
-          ],
-        },
-      ],
-    });
+    batchGetNotesMock.mockResolvedValue([
+      {
+        ...DRAFT_HEAD,
+        part_count: 2,
+        line_items: [
+          lineItem({ id: '911000000000000002', serial_no: 'S-9' }),
+          lineItem({ id: '911000000000000001', serial_no: 'S-9' }),
+        ],
+      },
+    ]);
     const board = await bootBoard();
     expect(board.foldedRows(NOTE_ID)).toHaveLength(1);
 

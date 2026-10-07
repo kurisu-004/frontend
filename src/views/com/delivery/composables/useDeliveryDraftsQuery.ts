@@ -49,7 +49,10 @@ export function useDeliveryDraftsQuery(l1Id: MaybeRefOrGetter<string | null | un
   return { query, data: query.data, isFetching: query.isFetching, error: query.error };
 }
 
-/** 草稿的批量详情（ids 由列表头派生）。ids 为空数组时闸门关掉。 */
+/** 草稿的批量详情（ids 由列表头派生）。ids 为空数组时闸门关掉。
+ *
+ *  ⚠️ data 是**数组**（`DeliveryNoteDetailData[]`），不是 `{ items }` 信封 ——
+ *  api 层 `batchGetNotes` 已解信封，见 queryFn 内的注释（2026-10-08 修）。 */
 export function useDeliveryDraftsDetailQuery(
   ids: MaybeRefOrGetter<readonly string[]>,
 ) {
@@ -61,8 +64,13 @@ export function useDeliveryDraftsDetailQuery(
     queryFn: async ({ queryKey }) => {
       const list = queryKey[2] as string[];
       // batchGetNotes([]) 短路返回 []，但仍走一次网络没有意义 —— 闸门外二次守卫。
-      if (list.length === 0) return { items: [] };
-      return deliveryNoteBatchDetailResultSchema.parse(await batchGetNotes(list));
+      if (list.length === 0) return [];
+      // ⚠️ `batchGetNotes` 在 api 层**已经解了信封**（`return resp.data.items`）⇒ 它给
+      // 的是数组；`deliveryNoteBatchDetailResultSchema` 是 `{ items: [...] }` 形状。
+      // 直接 `parse(数组)` 会抛 `expected object, received array` ⇒ query 恒 error
+      // ⇒ 草稿看板的行项表恒空 + 每次查询一条 ElMessage.error（2026-10-08 修）。
+      const items = await batchGetNotes(list);
+      return deliveryNoteBatchDetailResultSchema.parse({ items }).items;
     },
     enabled: computed(() => key.value.length > 0),
   });

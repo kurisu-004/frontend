@@ -66,12 +66,15 @@ function toLabelRecord(r: PrintRow): LabelRecord {
  * - 装配件父行不用额外处理：`quantity` 是可出货套数、`unit` 是「套」，与散件行走同一
  *   套 `PrintRow`。
  *
- * 返回 `skipped` 是为了让调用方在 toast 里如实说出跳过了几条，而不是静悄悄少打几张。
+ * 返回 `skipped` 是为了让调用方在 toast 里如实说出跳过了几条，而不是静悄悄少打几张；
+ * 返回 `written`（**实际写进 xlsx 的那些行**，按写入顺序）是给「已打印标签」标记用的 ——
+ * 跳过的行根本没出纸，标成已打印就是绿底骗人（2026-10-08 修）。
  */
 export async function renderDeliveryNoteLabelWorkbook(
   rows: readonly PrintRow[],
-): Promise<{ bytes: Uint8Array; skipped: number }> {
+): Promise<{ bytes: Uint8Array; skipped: number; written: PrintRow[] }> {
   const data: LabelRecord[] = [];
+  const written: PrintRow[] = [];
   let skipped = 0;
   for (const r of rows) {
     if (r.quantity === null) {
@@ -79,6 +82,7 @@ export async function renderDeliveryNoteLabelWorkbook(
       continue;
     }
     data.push(toLabelRecord(r));
+    written.push(r);
   }
 
   const { writeXlsx } = await import('hucre');
@@ -95,5 +99,5 @@ export async function renderDeliveryNoteLabelWorkbook(
       },
     ],
   });
-  return { bytes, skipped };
+  return { bytes, skipped, written };
 }

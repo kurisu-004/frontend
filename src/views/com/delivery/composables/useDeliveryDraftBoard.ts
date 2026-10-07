@@ -168,10 +168,11 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
   );
 
   // 批量详情回流 → draftDetails（详情是 version 的更新源）。
+  // ⚠️ data 是数组（api 层已解信封），不是 `{ items }`。
   watch(
     () => detailQuery.data.value,
     (data) => {
-      for (const det of data?.items ?? []) {
+      for (const det of data ?? []) {
         const id = String(det.id);
         draftDetails[id] = det.line_items;
         if (drafts.value[id]) drafts.value[id] = { ...drafts.value[id], version: det.version };

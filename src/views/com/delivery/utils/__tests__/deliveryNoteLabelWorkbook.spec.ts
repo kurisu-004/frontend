@@ -6,8 +6,9 @@
 // 用 readXlsx 把产物读回来验，而不是只断言「writeXlsx 没抛」—— 标签是拿去打印、贴到
 // 零件上的实物，列序错一位、unit 丢成空串都是现场事故，单测必须在**字节层面**兜住。
 //
-// 覆盖：7 列表头与列序 / 单 sheet / autoWidth 生效 / quantity=null 整行跳过 + skipped 计数 /
-// unit 透传（散件空串 + 装配件「套」）/ 装配件行只出 1 行 / 行序按传入顺序。
+// 覆盖：7 列表头与列序 / 单 sheet / autoWidth 生效 / quantity=null 整行跳过 + skipped 计数 +
+// written 只含写出去的行 / unit 透传（散件空串 + 装配件「套」）/ 装配件行只出 1 行 /
+// 行序按传入顺序。
 
 import { describe, expect, it } from 'vitest';
 import { readXlsx } from 'hucre';
@@ -36,11 +37,13 @@ function row(over: Partial<PrintRow> = {}): PrintRow {
   };
 }
 
-/** 渲染并读回唯一那个 sheet。 */
-async function render(rows: readonly PrintRow[]): Promise<{ sheet: Sheet; skipped: number }> {
-  const { bytes, skipped } = await renderDeliveryNoteLabelWorkbook(rows);
+/** 渲染并读回唯一那个 sheet，同时带回 skipped / written（调用方据此写「已打印」标记）。 */
+async function render(
+  rows: readonly PrintRow[],
+): Promise<{ sheet: Sheet; skipped: number; written: PrintRow[] }> {
+  const { bytes, skipped, written } = await renderDeliveryNoteLabelWorkbook(rows);
   const wb = await readXlsx(bytes);
-  return { sheet: wb.sheets[0]!, skipped };
+  return { sheet: wb.sheets[0]!, skipped, written };
 }
 
 describe('标签列定义', () => {
@@ -111,13 +114,26 @@ describe('renderDeliveryNoteLabelWorkbook', () => {
     expect(sheet.rows.slice(1).map((r) => r[1])).toEqual(['SO-A', 'SO-C']);
   });
 
-  it('全部行数量未知 → 只剩表头，skipped 等于行数', async () => {
-    const { sheet, skipped } = await render([
+  it('written 只含真正写出去的行（跳过的不在其中：标记「已打印」靠它，没出纸就不算打印）', async () => {
+    const { sheet, skipped, written } = await render([
+      row({ id: 'a', order_no: 'SO-A' }),
+      row({ id: 'b', order_no: 'SO-B', quantity: null }),
+      row({ id: 'c', order_no: 'SO-C' }),
+    ]);
+    expect(written.map((r) => r.id)).toEqual(['a', 'c']);
+    // written 与 xlsx 里的数据行一一对应（防「改了 skip 判据忘了同步 written」的半修）
+    expect(written).toHaveLength(sheet.rows.length - 1);
+    expect(skipped).toBe(1);
+  });
+
+  it('全部行数量未知 → 只剩表头，skipped 等于行数，written 为空', async () => {
+    const { sheet, skipped, written } = await render([
       row({ id: 'a', quantity: null }),
       row({ id: 'b', quantity: null }),
     ]);
     expect(skipped).toBe(2);
     expect(sheet.rows).toHaveLength(1);
+    expect(written).toEqual([]);
   });
 
   it('空行数组 → 只有表头（导出按钮的 disabled 由调用方守，这里不抛）', async () => {

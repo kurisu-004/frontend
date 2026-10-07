@@ -136,10 +136,10 @@ const driverQuery = useDeliveryDriversQuery(
   computed(() => props.modelValue && !isLabelMode.value),
 );
 /** 仅本地选中态。切换下拉**不发请求**（2026-10-08：改动随「导出」确认一并落库，见
- *  persistDriverIfChanged）—— 关对话框即放弃，与「改完就生效」的直觉相反是刻意的：
+ *  persistSelectedDriver）—— 关对话框即放弃，与「改完就生效」的直觉相反是刻意的：
  * 打印对话框是一次性动作，点「取消」不该在服务端留下一条 version 变更。 */
 const driverId = ref<string>('');
-/** 司机落库中（只在 persistDriverIfChanged 的 await 期间为 true）。 */
+/** 司机落库中（只在 persistSelectedDriver 的 await 期间为 true）。 */
 const driverSaving = ref(false);
 
 const hasDriver = computed(() => Boolean(props.note.driver_worker_name));
@@ -150,16 +150,21 @@ const selectedDriverName = computed(
 /**
  * 导出前把所选司机落库；成功返回 true。
  *
- * 落库条件：**有选中项** 且 **与单据上的司机名不一致**（没选 → 用单据上已有的；
- * 选了同名 → 后端仍会推进 version，白跑一次写且让手上的 version 过期）。
+ * 落库判据只有一条：**用户在下拉里选过**（`driverId` 非空）。没碰过下拉 ⇒ 用单据上已有的
+ * 司机名导出，`driverId` 保持 `''` ⇒ 不 POST。
+ *
+ * ⚠️ **不能拿司机名当判据**：司机名允许重名（后端列表同名时按 id 定序 ⇒ 同名是预期数据现状）。
+ * 按名短路会让「选了同名不同 id 的司机」静默跳过落库 ⇒ 单据仍绑着旧 id，`POST /{id}/pickup`
+ * 会用错人，用户的显式选择也进不了审计。省一次写不值得换一个语义洞。
+ * 副作用：每次导出只要选了司机就 POST 一次（幂等、推进 version）—— 用户「明确选了司机」
+ * 本身就值得留一条审计记录。
  *
  * `POST /com/delivery/note/{id}/driver` 会推进 version ⇒ 成功后失效本域，
  * 让详情 / 草稿看板看到新 version 与新司机名。
  */
-async function persistDriverIfChanged(): Promise<boolean> {
+async function persistSelectedDriver(): Promise<boolean> {
   const id = driverId.value;
-  const name = selectedDriverName.value;
-  if (!id || !name || name === props.note.driver_worker_name) return true;
+  if (!id) return true;
   driverSaving.value = true;
   try {
     await setNoteDriver(props.note.id, { version: props.note.version, driver_worker_id: id });
@@ -167,6 +172,9 @@ async function persistDriverIfChanged(): Promise<boolean> {
     return true;
   } catch (e) {
     ElMessage.error((e as Error).message ?? '指定司机失败，已取消导出');
+    // 落库失败最常见的是 409（手上 version 已被别人推进）。失效本域，下一轮 refetch
+    // 就能拿到新 version，对话框里直接重试即成 —— 否则用户只能关页面重新进来。
+    await invalidateDeliveryNotesQuery(qc);
     return false;
   } finally {
     driverSaving.value = false;
@@ -209,23 +217,55 @@ const sortModeByKey = ref<Record<string, 'column' | 'custom'>>({});
  */
 const selectedIds = ref<ReadonlySet<string>>(new Set<string>());
 
-// 打开 / mergeMode / 分组数据变化 → 重建各 tab 的行（拷贝，拖拽与排序只动副本）。
+/** 上一次的打开态 / 合并模式 / 行 id 集合（判「行是否真的换了」的基准）。
+ *  注意基准是**行 id 集合**而不是当前勾选 —— 勾选是它的子集，拿勾选当基准会把
+ *  「用户点掉几行」误判成「行变了」。`lastMergeMode` 的初值 null = 还没开过（首开
+ *  本来就要 force，不依赖它）。 */
+let lastOpen = false;
+let lastMergeMode: 'merge' | 'separate' | null = null;
+let lastRowIds: string[] = [];
+
+/** 重建各 tab 的行（拷贝，拖拽与排序只动副本）。
+ *
+ *  勾选只在两种场合重置成全选（`force`）：首开 / 重开（打开态 false→true）、换合并模式
+ *  —— 这两处行 id 集合必变。分组规则是弹窗打开后才 enable 的、会晚回流一次，若那时也
+ *  重置，用户在等待期间点掉的行会被无声还原；所以这里按「行 id 集合是否真的变了」判。 */
+function rebuildRows(force: boolean): void {
+  const rows: Record<string, PrintRow[]> = {};
+  const sorts: Record<string, 'column' | 'custom'> = {};
+  for (const [key, { rows: r }] of groupsByKey.value) {
+    rows[key] = r.map((x) => ({ ...x }));
+    sorts[key] = 'column';
+  }
+  rowsByKey.value = rows;
+  sortModeByKey.value = sorts;
+  const nextIds = Object.values(rows)
+    .flat()
+    .map((r) => r.id);
+  const idsChanged =
+    nextIds.length !== lastRowIds.length || nextIds.some((id, i) => id !== lastRowIds[i]);
+  lastRowIds = nextIds;
+  if (force || idsChanged) selectedIds.value = new Set(nextIds);
+  if (!rowsByKey.value[activeTab.value]) activeTab.value = tabs.value[0]?.groupKey ?? '';
+}
+
+// 打开 / mergeMode / 分组数据变化 → 重建各 tab 的行。
 watch(
   () => [props.modelValue, mergeMode.value, groupsQuery.data.value] as const,
-  ([open]) => {
-    if (!open) return;
-    const rows: Record<string, PrintRow[]> = {};
-    const sorts: Record<string, 'column' | 'custom'> = {};
-    for (const [key, { rows: r }] of groupsByKey.value) {
-      rows[key] = r.map((x) => ({ ...x }));
-      sorts[key] = 'column';
+  ([open, merge]) => {
+    if (!open) {
+      // 关对话框即放弃本地态：详情页的 v-if 只判 detail.note，组件不卸载
+      // （destroy-on-close 只销毁插槽）⇒ 不复位的话「选司机 → 取消 → 重开」下拉还显示
+      // 那个**从未落库**的司机。「本单已指定：X」提示继续承担回显职责（VO 只有名字，
+      // 无法预选下拉项）。
+      driverId.value = '';
+      lastOpen = false;
+      return;
     }
-    rowsByKey.value = rows;
-    sortModeByKey.value = sorts;
-    // 行集合整体换新（重开 / 换合并模式 / 分组规则回流）⇒ 勾选同步重置成「全选」。
-    // 只在这一处重置：勾选本身由用户逐个点，不该被别处的 reactive 变化偷偷清掉。
-    selectedIds.value = new Set(Object.values(rows).flat().map((r) => r.id));
-    if (!rowsByKey.value[activeTab.value]) activeTab.value = tabs.value[0]?.groupKey ?? '';
+    const force = open !== lastOpen || (lastMergeMode !== null && merge !== lastMergeMode);
+    lastOpen = true;
+    lastMergeMode = merge;
+    rebuildRows(force);
   },
   { immediate: true },
 );
@@ -348,7 +388,7 @@ async function onExport(): Promise<void> {
     if (!src) return;
     // 司机先落库：打印即「这次确认了送货人」。落库失败（409 / 21409 / 网络）时中止，
     // 不产出文件 —— 否则会下载出一张页脚写着 A 司机、单据上却是 B 司机的送货单。
-    if (!(await persistDriverIfChanged())) return;
+    if (!(await persistSelectedDriver())) return;
     const bytes = await fetchTemplateBytes(src);
     const { openXlsx } = await import('hucre');
     // 导出前再校验一次：用户在「上传 → 导出」之间可能又传了别的模板，或文件被外部覆盖。
@@ -387,20 +427,22 @@ async function onExport(): Promise<void> {
  * `ASM_<assembly_id>`、在拆分行是 `<id>#<n>`，都不是批次 id；`member_ids` 才是「该行
  * 代表的批次 id 集合」，而草稿看板的绿底正是按批次 id 查的（`foldBySerial`）。
  *
+ * ⚠️ **只用 `written` 标记，不用全部勾选行**：`quantity === null` 的行根本没写进 xlsx
+ * （没出纸），把它记成「已打印」就是草稿看板绿底骗人（2026-10-08 修）。
+ *
  * ⚠️ **既有限度（忠实保留）**：同 part 折叠行（`foldSamePart`）只保留同 part 的**最小**
  * batch id 作代表，于是 `markPrinted` 只会标记那个代表批次 ⇒ 草稿看板里同序列号的其它
  * 批次不会变绿。要消掉它得改折叠口径（`member_ids` 是装配件折叠与拆分的依据），不在本次范围。
  */
 async function exportLabelWorkbook(): Promise<void> {
-  const rows = selectedRows.value;
-  const { bytes, skipped } = await renderDeliveryNoteLabelWorkbook(rows);
+  const { bytes, skipped, written } = await renderDeliveryNoteLabelWorkbook(selectedRows.value);
   triggerBrowserDownload(
     new Blob([bytes.slice().buffer as ArrayBuffer], { type: DELIVERY_NOTE_LABEL_XLSX_MIME }),
     `${props.note.delivery_note_no}-标签.xlsx`,
   );
   printedLabelStore.markPrinted(
     props.note.id,
-    rows.flatMap((r) => r.member_ids ?? [r.id]),
+    written.flatMap((r) => r.member_ids ?? [r.id]),
   );
   ElMessage.success(skipped > 0 ? `已导出标签（跳过 ${skipped} 条数量为空的行）` : '已导出标签');
   emit('update:modelValue', false);

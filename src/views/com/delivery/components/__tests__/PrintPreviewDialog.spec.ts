@@ -547,14 +547,32 @@ describe('PrintPreviewDialog 司机绑定时机', () => {
     expect(downloads[0]!.filename).toBe('DN-001.xlsx');
   });
 
-  it('选了与单据上同名的司机 → 不发 POST（后端仍会推进 version，白写一次还会让手上 version 过期）', async () => {
+  it('选了与单据上**同名但不同 id** 的司机 → 也要 POST（司机名允许重名，按名短路会让单据仍绑旧 id）', async () => {
     withDriverOptions();
     const w = await mountDialog({ driver_worker_name: '李四' });
     await uploadFile(w, builtinFile());
-    await selectDriver(w, 'W1');
+    await selectDriver(w, 'W1'); // W1 才是「李四」，单据上那个同名司机是别人
     await clickExport(w, true);
-    expect(driverPosts()).toHaveLength(0);
+    expect(driverPosts()).toHaveLength(1);
+    expect(driverPosts()[0]![1]).toEqual({ version: 3, driver_worker_id: 'W1' });
     expect(downloads).toHaveLength(1);
+  });
+
+  it('关对话框再打开 → 下拉复位（没落库的司机不该被「本单已指定」之外的幽灵选中项顶住）', async () => {
+    withDriverOptions();
+    const w = await mountDialog({ driver_worker_name: null });
+    await uploadFile(w, builtinFile());
+    await selectDriver(w, 'W2');
+    expect(w.findComponent({ name: 'ElSelectStub' }).props('modelValue')).toBe('W2');
+
+    await w.setProps({ modelValue: false });
+    await flush();
+    await w.setProps({ modelValue: true });
+    await flush();
+
+    // 详情页的 v-if 只判 detail.note，组件不卸载 ⇒ 复位只能靠打开沿的 watch
+    expect(w.findComponent({ name: 'ElSelectStub' }).props('modelValue')).toBe('');
+    expect(driverPosts()).toHaveLength(0);
   });
 
   it('司机落库失败 → 中止导出、不产出文件', async () => {
@@ -646,7 +664,6 @@ describe('PrintPreviewDialog 标签模式 —— 形态', () => {
   });
 
   it('每张分组表都有一列勾选，且打开时默认全选', async () => {
-
     const w = await mountDialog(
       {
         line_items: [
@@ -711,6 +728,30 @@ describe('PrintPreviewDialog 标签模式 —— 勾选', () => {
     );
     expect(exportDisabled(w)).toBe(false);
     expect(w.find('.mock-el-tooltip').attributes('title')).toBe('标签数量为空的行已跳过 1 条');
+  });
+});
+
+describe('PrintPreviewDialog 标签模式 —— 勾选不被晚回流抹掉', () => {
+  it('分组规则晚回流 → 行重建但勾选保留（用户等待期间点掉的行不会被无声还原）', async () => {
+    // 分组查询是弹窗打开后才 enable 的，晚回流会走同一个「重建行」的 watch。
+    let releaseGroups!: (v: { data: unknown }) => void;
+    const groupsPending = new Promise<{ data: unknown }>((resolve) => {
+      releaseGroups = resolve;
+    });
+    apiGetMock.mockImplementation(async (url: string) => {
+      if (url.includes('/delivery/group')) return groupsPending;
+      return { data: { items: [] } };
+    });
+
+    const w = await mountDialog({}, { mode: 'label' });
+    await uncheck(w, 0);
+    expect(w.text()).toContain('已勾选 0 条');
+
+    releaseGroups({ data: { groups: [], ungrouped_customers: [] } });
+    await flush();
+
+    expect(w.text()).toContain('已勾选 0 条');
+    expect(exportDisabled(w)).toBe(true);
   });
 });
 
@@ -787,5 +828,33 @@ describe('PrintPreviewDialog 标签模式 —— 导出', () => {
     await flush();
 
     expect(markedBatchIds()).toEqual(['10']);
+  });
+
+  it('数量未知的行（没写进 xlsx）不进「已打印标签」标记 —— 没出纸就不算打印过', async () => {
+    const w = await mountDialog(
+      {
+        line_items: [
+          li({ id: '31', part_id: 'P1', customer_name: '法拉' }),
+          li({
+            id: '32',
+            part_id: 'P2',
+            customer_name: '陆达电子',
+            assembly_id: 'A1',
+            assembly_name: '总装',
+            shippable_sets: null,
+          }),
+        ],
+      },
+      { mode: 'label' },
+    );
+    expect(checkboxes(w)).toHaveLength(2);
+    await w.find('button[data-role="export"]').trigger('click');
+    await waitUntil(() => downloads.length === 1, '标签产物落地');
+    await flush();
+
+    // 产物里只有那 1 行；标记里也只有它 —— 装配件父行被跳过了
+    const wb = await readXlsx(new Uint8Array(await downloads[0]!.blob.arrayBuffer()));
+    expect(wb.sheets[0]!.rows).toHaveLength(2);
+    expect(markedBatchIds()).toEqual(['31']);
   });
 });
