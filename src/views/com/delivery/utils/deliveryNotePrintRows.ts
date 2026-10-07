@@ -70,8 +70,9 @@ export interface PrintGroupRef {
  * 打印产物是客户签字的收货凭证，收货单位归属错了是业务事故，不是显示瑕疵。
  *
  * 每个成员额外写一条 **name 键**（指向同一个 ref），它只有一个用途：行项上**没有 id 时**
- * 的兜底查表（`groupRefOf`）。写 name 键时检测重名并 `console.warn` —— 重名时后写的覆盖
- * 先写的，**不静默**：那条 name 键只服务「无 id 行项」，带 id 的行永远走 id 键。
+ *  的兜底查表（`groupRefOf`）。写 name 键时检测重名并 `console.warn`（dev-only，见
+ *  `setNameKey`）—— 重名时后写的覆盖先写的，**不静默**：那条 name 键只服务「无 id 行项」，
+ *  带 id 的行永远走 id 键。
  *
  * ⚠️ 后端的 `ungrouped_customers` 是差集（理论上与 groups[].members 不重叠）；真重叠
  * 时未分组覆盖分组，语义是「保守不丢客户」。
@@ -82,11 +83,14 @@ export function buildL2GroupMap(
   const map = new Map<string, PrintGroupRef>();
   /** name → ref：只用来识别「同一个客户名被两个不同 id 抢到」。 */
   const nameOwner = new Map<string, PrintGroupRef>();
-  /** 写 name 键；指向与既有不同的 ref 时告警（静默覆盖 = 把两家并成一家）。 */
+  /** 写 name 键；指向与既有不同的 ref 时告警（静默覆盖 = 把两家并成一家）。
+   *  ⚠️ dev-only：`buildL2GroupMap` 在**每次打开打印对话框**时都会跑一遍，而重名是数据
+   *  现状（`t_customer.name` 非唯一）⇒ 生产环境每次开对话框都刷一行同样的 warn。告警的
+   *  价值只在开发期定位（与 `PendingPoolCard` 的 `warnDropped` 同一取舍）。 */
   function setNameKey(name: string, ref: PrintGroupRef): void {
     if (!name) return;
     const prev = nameOwner.get(name);
-    if (prev && prev.groupKey !== ref.groupKey) {
+    if (import.meta.env.DEV && prev && prev.groupKey !== ref.groupKey) {
       console.warn(
         `[buildL2GroupMap] 客户名「${name}」同时命中 ${prev.groupKey} 与 ${ref.groupKey}：` +
           '按名分组的兜底键会让这两家共用一个 sheet（行项带 customer_id 时不受影响）。',

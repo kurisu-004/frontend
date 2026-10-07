@@ -78,7 +78,8 @@ const props = defineProps<{
   maxQuantity: number;
   /** 仅 ASSEMBLY 有值：每套用量。 */
   perSetParts?: DeliveryScanPerSetPartData[];
-  /** 仅 PART 有值：子件序列号表（把 per_set_parts 的 part_id 翻成人看的序列号）。 */
+  /** 仅 PART 有值：子件可读名表（把 per_set_parts 的 part_id 翻成人看的东西，
+   *  取值是序列号或零件名，由壳决定 —— 无序列号的子件给的是零件名）。 */
   partSerials?: Record<string, string>;
 }>();
 
@@ -109,7 +110,7 @@ const valid = computed(
 
 const perSetParts = computed<DeliveryScanPerSetPartData[]>(() => props.perSetParts ?? []);
 
-/** part_id → 序列号；查不到就退到 part_id 本身（至少可定位，不显示空白）。 */
+/** part_id → 子件可读名（壳给的表）；查不到就退到 part_id 本身（至少可定位）。 */
 function partSerialOf(partId: string): string {
   return props.partSerials?.[partId] ?? partId;
 }

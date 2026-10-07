@@ -235,4 +235,19 @@ describe('DeliveryScanTreeDialog 三层树', () => {
     await mountDialog(null);
     expect(scopeRows).toEqual([]);
   });
+
+  it('无序列号子件：「每套需」tooltip 退到零件名，不吐裸雪花 id', async () => {
+    // `t_part.serial_no` 可空（migration 007 释放过终态工单的序列号），退到 `?? partId`
+    // 会渲染成「每套需 P1 3 件」—— 用户对着实物无法对应。
+    const t = tree();
+    const child = t.children[0]!;
+    child.serial_no = null;
+    child.name = '铝电解电容';
+    const wrapper = await mountDialog(t);
+    const content = String(
+      wrapper.findAllComponents({ name: 'ElTooltipStub' })[0]!.props('content'),
+    );
+    expect(content).toBe('每套需 铝电解电容 3 件');
+    expect(content).not.toContain('P1');
+  });
 });

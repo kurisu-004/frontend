@@ -339,7 +339,7 @@ function statusTagType(status: string): 'info' | 'warning' | 'success' | 'danger
   return ORDER_STATUS_TAG_TYPE[status as OrderStatus] ?? 'info';
 }
 
-/** 「每套需 F1001-01 3 件 / F1001-02 2 件」——part_id 翻成子件序列号。 */
+/** 「每套需 F1001-01 3 件 / 铝电解电容 2 件」——part_id 翻成子件可读名（序列号优先）。 */
 function perSetText(row: ScanTreeRow): string {
   if (row.per_set_parts.length === 0) return '该装配件没有子件用量信息';
   return `每套需 ${row.per_set_parts
@@ -347,13 +347,21 @@ function perSetText(row: ScanTreeRow): string {
     .join(' / ')}`;
 }
 
-/** part_id → 子件序列号（把 per_set_parts 的雪花 id 翻成人看的序列号）。 */
+/**
+ * part_id → 子件的可读名（把 per_set_parts 的雪花 id 翻成人看的东西）。
+ *
+ * 无序列号（`serial_no: null`：手工子件 / migration 007 释放过序列号的终态工单）退到
+ * `name` —— **不退到 part_id**：那是裸雪花 id（「每套需 225132995307110400 3 件」）
+ * 用户完全无法对应实物。查表本身仍由 `partSerialOf` 兜底 part_id（per_set_parts 引用了
+ * 不在 children 里的子件时才会走到那条路，后端两处同源，正常不会）。
+ */
 const partSerialMap = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {};
-  for (const p of props.tree?.children ?? []) map[p.id] = p.serial_no;
+  for (const p of props.tree?.children ?? []) map[p.id] = p.serial_no ?? p.name;
   return map;
 });
 
+/** 展示名兜底：查不到 id 就退到 id 本身（至少可定位，不显示空白）。 */
 function partSerialOf(partId: string): string {
   return partSerialMap.value[partId] ?? partId;
 }
