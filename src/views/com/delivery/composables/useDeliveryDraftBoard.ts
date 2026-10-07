@@ -2,6 +2,13 @@
 //
 // 扫码建单页「草稿卡片列表」的业务状态 + 业务函数。
 //
+// 数据来源是同域 query hook（`useDeliveryDraftsQuery` = DRAFT 列表头 +
+// `useDeliveryDraftsDetailQuery` = 批量详情），本 composable 负责把 query 结果
+// **写穿**进本地 Map，并叠加卡片级状态（每张卡的勾选 / loading / el-table 实例 /
+// 折叠缓存 / localStorage 已打印标签记录）。写穿而不是纯派生，是因为卡片有大量
+// 本地增量更新（入单后就地替换、移除批次后就地覆盖、提交 / 删除后清 key），
+// 这些更新要走 mutation + 失效，让 query 自己回流。
+//
 // 持有：
 //   - drafts / draftDetails / draftsLoading / draftsCount
 //     —— 草稿 header + line_items + 加载态 + 计数
@@ -23,19 +30,15 @@
 // 2026-10-08 的连带变更：
 // - `scope` / `scope_label` / `recent_items` 三字段消失（后端不发、前端原来还在编
 //   `'L1_WIDE'` / `'按一级客户'`）；同 L1 同时只允许一张 DRAFT，scope 概念整体下线。
-// - 详情缓存由 `useQuery` 天然去重承担，原手搓的 `useDeliveryNoteDetailCache`
-//   （TTL Map + in-flight Map）随该文件一起删除，这里直接调 getNote。
+// - 详情缓存由 query 承担；原手搓的 `useDeliveryNoteDetailCache`（TTL Map +
+//   in-flight Map）随该文件一起删除。
 
-import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
+import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import {
-  batchGetNotes,
-  getNote,
-  listNotes,
-  printNoteLabels,
-  removeBatches,
-  softDeleteNote,
-} from '@/api/com/deliveryNote';
+import { getNote, printNoteLabels, removeBatches, softDeleteNote } from '@/api/com/deliveryNote';
+import { useQueryClient } from '@tanstack/vue-query';
+import { invalidateDeliveryNotesQuery } from './useDeliveryNoteListStore';
+import { useDeliveryDraftsDetailQuery, useDeliveryDraftsQuery } from './useDeliveryDraftsQuery';
 import { usePrintedLabels } from './usePrintedLabels';
 import { triggerBrowserDownload } from '@/utils/download';
 import type {
@@ -104,7 +107,6 @@ function foldBySerial(
   return order.map((k) => groups.get(k)!);
 }
 
-/** 2026-09-21 显式返回类型。 */
 export interface UseDeliveryDraftBoardReturn {
   drafts: Ref<Record<string, DeliveryNoteItemData>>;
   draftDetails: Record<string, DeliveryNoteLineItemData[]>;
@@ -118,25 +120,88 @@ export interface UseDeliveryDraftBoardReturn {
   rowClassName: (ctx: { row: MergedDraftRow }) => string;
   onSelectionChange: (noteId: string, rows: MergedDraftRow[]) => void;
   getSelectionSize: (noteId: string) => number;
-  reloadDrafts: (l1Id: string) => Promise<void>;
+  /** 切 L1（写穿到两个 query 的闸门）。空串 = 清空看板。 */
+  setL1Id: (l1Id: string) => void;
   refreshDraftDetail: (noteId: string) => Promise<DeliveryNoteDetailData | null>;
   writeDraftFromScan: (note: DeliveryNoteItemData) => void;
   onRemove: (d: DeliveryNoteItemData, row: MergedDraftRow) => Promise<void>;
   onPrintLabels: (d: DeliveryNoteItemData) => Promise<void>;
   onDeleteDraft: (d: DeliveryNoteItemData) => Promise<void>;
   clearNoteLocalState: (noteId: string) => void;
+  clearAll: () => void;
 }
 
 export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
   const printedLabelStore = usePrintedLabels();
+  const qc = useQueryClient();
 
-  // ============ 草稿 header + 详情行 ============
+  // ============ 数据源（query）============
+  const l1Id = ref<string>('');
+  const draftsQuery = useDeliveryDraftsQuery(l1Id);
+  /** 批量详情的入参 = 列表头里的 DRAFT 单 id（后端按 ids 顺序装配）。 */
+  const draftIds = computed<string[]>(() =>
+    (draftsQuery.data.value?.items ?? [])
+      .filter((n) => n.status === 'DRAFT')
+      .map((n) => String(n.id)),
+  );
+  const detailQuery = useDeliveryDraftsDetailQuery(draftIds);
+
+  // ============ 写穿层 ============
   /** 当前 L1 下所有 DRAFT 草稿（key = note_id）—— header 摘要。 */
   const drafts = ref<Record<string, DeliveryNoteItemData>>({});
   /** 每个草稿的完整 line_items（按 note_id 存），el-table 数据源。 */
   const draftDetails = reactive<Record<string, DeliveryNoteLineItemData[]>>({});
-  const draftsLoading = ref(false);
+  const draftsLoading = computed<boolean>(() => draftsQuery.isFetching.value || detailQuery.isFetching.value);
   const draftsCount: ComputedRef<number> = computed(() => Object.keys(drafts.value).length);
+
+  // 列表头回流 → drafts Map（含「后端未严格按 status 过滤」的防御性本地过滤）。
+  watch(
+    () => draftsQuery.data.value,
+    (data) => {
+      const next: Record<string, DeliveryNoteItemData> = {};
+      for (const n of data?.items ?? []) {
+        if (n.status !== 'DRAFT') continue;
+        next[String(n.id)] = n;
+      }
+      drafts.value = next;
+      pruneStaleKeys(next);
+    },
+  );
+
+  // 批量详情回流 → draftDetails（详情是 version 的更新源）。
+  watch(
+    () => detailQuery.data.value,
+    (data) => {
+      for (const det of data?.items ?? []) {
+        const id = String(det.id);
+        draftDetails[id] = det.line_items;
+        if (drafts.value[id]) drafts.value[id] = { ...drafts.value[id], version: det.version };
+      }
+      for (const id of draftIds.value) {
+        if (!(id in draftDetails)) draftDetails[id] = [];
+      }
+    },
+  );
+
+  /** 清掉「不再出现在当前结果集里」的 note 的全部本地 key。 */
+  function pruneStaleKeys(next: Record<string, DeliveryNoteItemData>): void {
+    for (const k of Object.keys(draftDetails)) {
+      if (!(k in next)) delete draftDetails[k];
+    }
+    for (const k of Object.keys(selectedByNote)) {
+      if (!(k in next)) delete selectedByNote[k];
+    }
+    for (const k of Object.keys(printingByNote)) {
+      if (!(k in next)) delete printingByNote[k];
+    }
+    for (const k of Object.keys(deletingByNote)) {
+      if (!(k in next)) delete deletingByNote[k];
+    }
+    for (const k of Array.from(foldedComputeds.keys())) {
+      if (!(k in next)) foldedComputeds.delete(k);
+    }
+    tableRefs.clear();
+  }
 
   // ============ 每张草稿卡片各自的运行时状态 ============
   /** 每张草稿卡片各自的勾选行（「打印标签」按钮的成员来源）。 */
@@ -196,76 +261,24 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     return selectedByNote[noteId]?.length ?? 0;
   }
 
-  // ============ 数据加载 ============
+  // ============ L1 闸门 ============
 
-  /**
-   * 拉当前 L1 下所有 DRAFT 草稿 + 各草稿的完整 line_items。
-   *
-   * 两步：
-   *   1) listNotes 拿 header（statuses=DRAFT, customer_id=l1, limit=200）；
-   *   2) 一次 batchGetNotes 拿全部详情（1 次往返，不是 N 次 getNote）。
-   *
-   * 任一失败 → 兜底空数组（不阻断其他草稿卡片渲染）。
-   */
-  async function reloadDrafts(l1Id: string): Promise<void> {
-    if (!l1Id) {
-      drafts.value = {};
-      // 清空 draftDetails / selectedByNote / printingByNote / deletingByNote 残留 key。
-      for (const k of Object.keys(draftDetails)) delete draftDetails[k];
-      for (const k of Object.keys(selectedByNote)) delete selectedByNote[k];
-      for (const k of Object.keys(printingByNote)) delete printingByNote[k];
-      for (const k of Object.keys(deletingByNote)) delete deletingByNote[k];
-      foldedComputeds.clear();
-      return;
-    }
-    draftsLoading.value = true;
-    try {
-      const resp = await listNotes({ statuses: ['DRAFT'], customer_id: l1Id, limit: 200 });
-      const next: Record<string, DeliveryNoteItemData> = {};
-      for (const n of resp.items) {
-        // 防御性前端过滤：listNotes 已带 statuses=['DRAFT'] 查询参数，但若后端未
-        // 严格按 status 过滤，已提交件会跟着回来。本地再筛一次确保 UI 只显示草稿。
-        if (n.status !== 'DRAFT') continue;
-        next[n.id] = n;
-      }
-      drafts.value = next;
+  /** 切 L1：两个 query 的闸门都由 l1Id 驱动，写不写只决定何时开始拉。
+   *  L1 未选（空串）时两个 query 的 enabled 都是 false，且看板被清空。 */
+  function setL1Id(next: string): void {
+    l1Id.value = next;
+    if (!next) clearAll();
+  }
 
-      // 清掉旧 key（残留可能因 listNotes 限 200 不再返回）
-      for (const k of Object.keys(draftDetails)) {
-        if (!(k in next)) delete draftDetails[k];
-      }
-      for (const k of Object.keys(selectedByNote)) {
-        if (!(k in next)) delete selectedByNote[k];
-      }
-      for (const k of Object.keys(printingByNote)) {
-        if (!(k in next)) delete printingByNote[k];
-      }
-      for (const k of Object.keys(deletingByNote)) {
-        if (!(k in next)) delete deletingByNote[k];
-      }
-      for (const k of Array.from(foldedComputeds.keys())) {
-        if (!(k in next)) foldedComputeds.delete(k);
-      }
-
-      const items = resp.items.filter((n) => n.status === 'DRAFT');
-      const fetched = items.length > 0 ? await batchGetNotes(items.map((d) => d.id)) : [];
-      // 后端按 ids 入参顺序装配；用 id 自索引对齐，不靠下标猜。
-      const byId = new Map(fetched.map((d) => [String(d.id), d]));
-      for (const header of items) {
-        const detail = byId.get(String(header.id));
-        if (detail) {
-          draftDetails[header.id] = detail.line_items;
-          // 详情是 version 的更新源（列表行的 version 可能落后一拍）
-          drafts.value[header.id] = { ...drafts.value[header.id], version: detail.version };
-        } else if (!(header.id in draftDetails)) {
-          draftDetails[header.id] = []; // 失败兜底：空数组，el-table 渲染空态
-        }
-      }
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '加载草稿列表失败');
-    } finally {
-      draftsLoading.value = false;
-    }
+  function clearAll(): void {
+    l1Id.value = '';
+    drafts.value = {};
+    for (const k of Object.keys(draftDetails)) delete draftDetails[k];
+    for (const k of Object.keys(selectedByNote)) delete selectedByNote[k];
+    for (const k of Object.keys(printingByNote)) delete printingByNote[k];
+    for (const k of Object.keys(deletingByNote)) delete deletingByNote[k];
+    foldedComputeds.clear();
+    tableRefs.clear();
   }
 
   /**
@@ -276,7 +289,6 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     try {
       const detail = await getNote(noteId);
       draftDetails[noteId] = detail.line_items;
-      // 同步乐观锁 version 到 drafts
       if (drafts.value[noteId]) {
         drafts.value[noteId] = { ...drafts.value[noteId], version: detail.version };
       }
@@ -305,6 +317,7 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
       });
       draftDetails[noteId] = updated.line_items;
       drafts.value[noteId] = { ...drafts.value[noteId], version: updated.version };
+      await invalidateDeliveryNotesQuery(qc);
       printedLabelStore.unmark(noteId, row.batch_ids);
       // 该表可能折叠行被剔除 → 清掉选中
       if (selectedByNote[noteId]) {
@@ -363,6 +376,7 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     try {
       await softDeleteNote(noteId, { version: d.version });
       clearNoteLocalState(noteId);
+      await invalidateDeliveryNotesQuery(qc);
       printedLabelStore.unmark(noteId, Object.keys(printedLabelStore.store.value[noteId] ?? {}));
       ElMessage.success('草稿已删除');
     } catch (e) {
@@ -397,12 +411,13 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     rowClassName,
     onSelectionChange,
     getSelectionSize,
-    reloadDrafts,
+    setL1Id,
     refreshDraftDetail,
     writeDraftFromScan,
     onRemove,
     onPrintLabels,
     onDeleteDraft,
     clearNoteLocalState,
+    clearAll,
   };
 }

@@ -1,33 +1,41 @@
 // views/com/delivery/composables/useDeliveryNoteDetail.ts
 //
-// /delivery-notes/:id 详情页的所有 page-level 数据状态 + 派生：
-// - 主数据 note（`GET /com/delivery/note/{id}`）
-// - 角色矩阵 role（MANAGER / CLERK / INSPECTOR）
-// - 业务派生：canEdit / treeLineItems / existingBatchIds
+// /delivery-notes/:id 详情页的派生层 + UI 状态。主数据来自同域 query hook
+// `useDeliveryNoteDetailQuery`（useQuery + Zod 守门），本 composable 只做：
+// - 角色矩阵 role（MANAGER / CLERK / INSPECTOR）与权限派生 canEdit / canView
+// - 装配件父行 + 子件行的 tree 结构（treeLineItems，含客户端排序）
 // - 列显隐 columnDefs + columnVisibility
 // - 状态 / 标签 helpers（partStatusLabel / partStatusTagType / deliveryLineRowClassName）
-// - 客户端排序 onLineItemSort（详情一次性返回全量 line_items；null 兜底末尾）
-// - UI state：editDeliveryDate（日期 picker v-model）/ selectedItemIds（表格选中）
+// - UI state：editDeliveryDate（日期 picker v-model）/ selectedItemIds（表格选中）/
+//   客户端排序态（sortBy / sortDir）
+//
+// ⚠️ **排序不改缓存**：详情一次返回全量 line_items，客户端排序在派生层做
+// （`sortedLineItems` 派生副本），不 sort query data 本身 —— 那是 TanStack Query
+// 缓存里的对象，原地改会让「别的消费者读到排过序的数组」且绕过失效。
 //
 // 设计要点：
-// - composable 只持有「数据 + 派生 + UI 状态变量」；dialog 可见性等临时 UI 状态由 shell 持有；
-// - fetcher 让 fetch 自然抛出 → 顶层 shell 捕获提示（与 ListShell 同款模式）。
-//   详情页有「加载失败占位」的明确语义，所以失败时 note 置 null。
+// - composable 只持有「派生 + UI 状态变量」；dialog 可见性等临时 UI 状态由 shell 持有；
 // - 事件流时间线与「添加零件」入口已随端点下线消失（`GET /{id}/events` 与
 //   `POST /{id}/add-parts` 端点删除，入单只有扫码一条路）。
 
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
-import { getNote } from '@/api/com/deliveryNote';
-import type {
-  DeliveryNoteDetailData,
-  DeliveryNoteLineItemData,
-} from './deliveryNoteSchema';
+import type { MaybeRefOrGetter } from 'vue';
+import { toValue } from 'vue';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE, type OrderStatus } from '@/types/parts';
 import { canAddRemoveParts, canView } from '@/utils/deliveryNotePermissions';
 // 读 auth 只走 Pinia store（useAuthStore），不解构（见 CLAUDE.md §auth）。
 import { useAuthStore } from '@/stores/auth';
-import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility';
+import { useColumnVisibility } from '@/composables/useColumnVisibility';
 import { shippableSetsOfGroup } from '../utils/assemblySets';
+import {
+  buildDeliveryNoteLineItemsColumnDefs,
+  DELIVERY_NOTE_LINE_ITEMS_LIST_KEY,
+} from '../deliveryNoteLineItemsColumnDefs';
+import { useDeliveryNoteDetailQuery } from './useDeliveryNoteDetailQuery';
+import type {
+  DeliveryNoteDetailData,
+  DeliveryNoteLineItemData,
+} from './deliveryNoteSchema';
 
 export interface DeliveryNoteRoleMap {
   MANAGER: boolean;
@@ -50,7 +58,7 @@ export interface AssemblyTreeRow extends Omit<DeliveryNoteLineItemData, 'quantit
 }
 
 export interface UseDeliveryNoteDetailReturn {
-  // data
+  // data（query 的投影）
   note: Ref<DeliveryNoteDetailData | null>;
   loading: Ref<boolean>;
   // role / permissions
@@ -61,7 +69,7 @@ export interface UseDeliveryNoteDetailReturn {
   existingBatchIds: ComputedRef<string[]>;
   treeLineItems: ComputedRef<AssemblyTreeRow[]>;
   // column visibility
-  columnDefs: readonly ColumnDef[];
+  columnDefs: ReturnType<typeof buildDeliveryNoteLineItemsColumnDefs>;
   columnVisibility: ReturnType<typeof useColumnVisibility>;
   // UI state
   editDeliveryDate: Ref<string>;
@@ -78,12 +86,13 @@ export interface UseDeliveryNoteDetailReturn {
   onLineItemSort: (sort: { prop: string | null; order: 'ascending' | 'descending' | null }) => void;
   /** 把外部选中写入 selectedItemIds */
   setSelectedItemIds: (ids: string[]) => void;
-  /** 页面级 store 的 $dispose 契约占位（详情页是壳直调 composable，无 Pinia 单例，
-   *  切路由即销毁；这里保留同名方法让 shell 的 onBeforeUnmount 语义可对照）。 */
+  /** 卸载时清本 composable 自建的 UI 状态（query 缓存由 queryClient 统一管）。 */
   $dispose: () => void;
 }
 
-export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetailReturn {
+export function useDeliveryNoteDetail(
+  noteId: MaybeRefOrGetter<string>,
+): UseDeliveryNoteDetailReturn {
   // 2026-09-26：消费侧禁止解构 store（沿 usePartsListStore 不变量 #3），统一 auth.xxx。
   const auth = useAuthStore();
 
@@ -94,27 +103,11 @@ export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetai
     INSPECTOR: auth.hasRole('INSPECTOR'),
   }));
 
-  // ============ 主数据 ============
-  const note = ref<DeliveryNoteDetailData | null>(null);
-  const loading = ref(false);
-
-  async function fetchDetail(): Promise<void> {
-    const id = noteId.value;
-    if (!id) return;
-    loading.value = true;
-    try {
-      const d = await getNote(id);
-      note.value = d;
-      // 进入页面时同步本地 editDeliveryDate 到当前 delivery_date；
-      // 用户改了日期后这个 ref 也保持本地未保存状态。
-      editDeliveryDate.value = d.delivery_date ?? '';
-    } catch (e) {
-      note.value = null;
-      throw e; // 让 shell 捕获并 ElMessage.error
-    } finally {
-      loading.value = false;
-    }
-  }
+  // ============ 主数据（useQuery + Zod 守门）============
+  const detailQuery = useDeliveryNoteDetailQuery(noteId);
+  const note = computed<DeliveryNoteDetailData | null>(() => detailQuery.data.value ?? null);
+  const loading = detailQuery.isFetching;
+  const fetchDetail = detailQuery.fetchDetail;
 
   // ============ 权限派生 ============
   const canView_ = computed(() => note.value != null && canView(note.value.status));
@@ -128,10 +121,46 @@ export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetai
     note.value == null ? [] : note.value.line_items.map((it) => String(it.id)),
   );
 
+  // ============ 客户端排序（派生副本，不动缓存）============
+  const sortBy = ref<string | null>(null);
+  const sortDir = ref<1 | -1>(1);
+
+  const sortedLineItems = computed<DeliveryNoteLineItemData[]>(() => {
+    const items = note.value?.line_items ?? [];
+    if (!sortBy.value) return items;
+    const prop = sortBy.value;
+    const dir = sortDir.value;
+    return [...items].sort((a, b) => {
+      const av = a[prop as keyof DeliveryNoteLineItemData] as unknown;
+      const bv = b[prop as keyof DeliveryNoteLineItemData] as unknown;
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1; // null 强制末尾
+      if (bv == null) return -1;
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+  });
+
+  function onLineItemSort({
+    prop,
+    order,
+  }: {
+    prop: string | null;
+    order: 'ascending' | 'descending' | null;
+  }): void {
+    // 三态点击（order=null = 清排序）回到「后端返回顺序」。
+    if (!prop || !order) {
+      sortBy.value = null;
+      return;
+    }
+    sortBy.value = prop;
+    sortDir.value = order === 'ascending' ? 1 : -1;
+  }
+
   // ============ 装配件父行 + 子件行 tree 结构 ============
   const treeLineItems = computed<AssemblyTreeRow[]>(() => {
-    if (!note.value) return [];
-    const flat = note.value.line_items;
+    const flat = sortedLineItems.value;
     const asmGroups = new Map<string, DeliveryNoteLineItemData[]>();
     const insertedAsm = new Set<string>();
     flat.forEach((li) => {
@@ -190,23 +219,9 @@ export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetai
   });
 
   // ============ 列显隐（line items 表）============
-  const columnDefs: readonly ColumnDef[] = [
-    { key: 'batch_label', label: '批次' },
-    { key: 'serial_no', label: '序列号' },
-    { key: 'drawing_no', label: '图号' },
-    { key: 'order_no', label: '订单号' },
-    { key: 'name', label: '名称' },
-    { key: 'customer', label: '客户（二级）' },
-    { key: 'applicant_name', label: '申请人' },
-    { key: 'quantity', label: '数量' },
-    { key: 'request_date', label: '请购日期' },
-    { key: 'planned_delivery_date', label: '计划交期' },
-    { key: 'system_delivery_date', label: '系统交期' },
-    { key: 'note', label: '备注' },
-    { key: 'status', label: '状态' },
-  ];
+  const columnDefs = buildDeliveryNoteLineItemsColumnDefs();
   const columnVisibility = useColumnVisibility(columnDefs, {
-    listKey: 'delivery_note_detail_line_items',
+    listKey: DELIVERY_NOTE_LINE_ITEMS_LIST_KEY,
   });
 
   // ============ UI state ============
@@ -217,10 +232,24 @@ export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetai
     selectedItemIds.value = ids;
   }
 
-  // 切 noteId 时清空选中
-  watch(noteId, () => {
-    selectedItemIds.value = [];
-  });
+  // note 变化时把本地 editDeliveryDate 同步到当前 delivery_date；用户改了日期后这个
+  // ref 保持本地未保存状态（直到下次 note 变化）。
+  watch(
+    () => note.value?.delivery_date ?? '',
+    (v) => {
+      editDeliveryDate.value = v;
+    },
+    { immediate: true },
+  );
+
+  // 切 noteId 时清空选中与排序态
+  watch(
+    () => toValue(noteId),
+    () => {
+      selectedItemIds.value = [];
+      sortBy.value = null;
+    },
+  );
 
   // ============ 标签 / 行样式 helpers ============
   function partStatusLabel(s: OrderStatus | string): string {
@@ -243,56 +272,27 @@ export function useDeliveryNoteDetail(noteId: Ref<string>): UseDeliveryNoteDetai
     return '';
   }
 
-  // ============ 客户端排序 ============
-  function onLineItemSort({
-    prop,
-    order,
-  }: {
-    prop: string | null;
-    order: 'ascending' | 'descending' | null;
-  }): void {
-    if (!note.value || !prop || !order) return;
-    const dir = order === 'ascending' ? 1 : -1;
-    note.value.line_items.sort((a: DeliveryNoteLineItemData, b: DeliveryNoteLineItemData) => {
-      const av = a[prop as keyof DeliveryNoteLineItemData] as unknown;
-      const bv = b[prop as keyof DeliveryNoteLineItemData] as unknown;
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      if (av < bv) return -1 * dir;
-      if (av > bv) return 1 * dir;
-      return 0;
-    });
-  }
-
   return {
-    // data
     note,
     loading,
-    // role / permissions
     role,
     canEdit,
     canView: canView_,
-    // derived
     existingBatchIds,
     treeLineItems,
-    // column visibility
     columnDefs,
     columnVisibility,
-    // UI state
     editDeliveryDate,
     selectedItemIds,
-    // fetchers
     fetchDetail,
-    // helpers
     partStatusLabel,
     partStatusTagType,
     deliveryLineRowClassName,
     onLineItemSort,
     setSelectedItemIds,
     $dispose: () => {
-      note.value = null;
       selectedItemIds.value = [];
+      sortBy.value = null;
     },
   };
 }

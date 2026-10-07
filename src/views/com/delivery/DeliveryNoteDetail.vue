@@ -14,9 +14,8 @@
   - 把 actions composable 与 detail composable 桥接（bindings）
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
 
 import PrintPreviewDialog from './components/PrintPreviewDialog.vue';
 import DeliveryNoteHeaderCard from './components/DeliveryNoteHeaderCard.vue';
@@ -73,12 +72,8 @@ function onPrintLabels(): void {
 }
 
 // ============ 生命周期 ============
-// 首屏 + 切路由 id 都触发 refetch（queryKey 带 noteId，切 id 自动换缓存身份）。
-watch(noteId, () => {
-  void detail.fetchDetail().catch((e: Error) => {
-    ElMessage.error(e.message ?? '加载失败');
-  });
-});
+// 首屏与切路由 id 都由 query 自动覆盖（queryKey 带 noteId，切 id 即换缓存身份），
+// 视图不再显式调 fetchDetail；错误由 query hook 的 watch → ElMessage 桥接。
 onBeforeUnmount(() => {
   detail.$dispose();
 });

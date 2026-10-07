@@ -55,12 +55,14 @@ interface Violation {
 //
 // 键 = 相对 src/ 的路径，值 = 该文件尚未覆盖样式的 kebab 组件名。
 // ⚠️ 2026-10-08 送货单域重构删掉了 BatchInspectionConfirmDialog / PartPickerDialog，
-//    对应两条登记随之删除（文件没了登记即陈旧，spec 的「豁免表无陈旧登记」用例会红）。
+//    对应两条登记随之删除（文件没了登记即陈旧，spec 的「豁免表无陈旧登记」用例会红）；
+//    DeliveryNoteList.vue 的 el-tag 登记同时失效 —— 状态列的 ElTag 搬去了
+//    deliveryNoteColumnDefs.ts 并在那里 value-import（那才是需要豁免的文件，
+//    它没有裸 `from 'element-plus'`，见同 spec 的主用例）。
 const EXEMPT: Record<string, string[]> = {
   'components/FileListCard.vue': ['el-upload'],
   'components/UploadStatusCellView.vue': ['el-button', 'el-progress'],
   'views/assemblies/components/AssemblyChildrenTable.vue': ['el-link', 'el-tag'],
-  'views/com/delivery/DeliveryNoteList.vue': ['el-tag'],
   'views/com/delivery/DeliveryNoteScan.vue': ['el-table'],
   'views/com/delivery/components/DeliveryDraftCard.vue': ['el-table'],
   'views/com/delivery/components/DeliveryGroupEditor.vue': ['el-form'],

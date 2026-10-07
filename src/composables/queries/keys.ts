@@ -35,6 +35,9 @@ import type { ProcessCategory } from '@/types/process';
 import type { OrderStatus } from '@/types/parts';
 import type { DeliveryBasis } from '@/types/dashboard';
 import type { UnionListParams } from '@/api/com/unionList';
+// 2026-10-08：送货单域入参形态在 api/com/deliveryNote.ts 定义（沿上面几个 List*Params
+// 的既有做法），本文件只引用。
+import type { ListNotesParams } from '@/api/com/deliveryNote';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
  *  含 code_like / category / limit / offset 四字段；与 ListProcessesParams 同形，预留扩展分叉。 */
@@ -363,4 +366,55 @@ export const qk = {
    *  后端无链 / 链已删 → 20701 BIZ_PROCESS_CHAIN_NOT_FOUND，store 的 queryFn 按空链
    *  归一（不当错误态），故本页不需要第二条失效路径。 */
   processDesignChain: (chainId: string) => ['process-design', 'chain', chainId] as const,
+  // ============================================================
+  // 2026-10-08 新增：送货单域（`/api/v2/com/delivery/*`）queryKey 工厂。
+  //
+  // 根命名空间取 `delivery-notes` / `delivery-groups` / `delivery-drivers`，与后端 URL
+  // 前缀逐段对齐，便于按 URL 反查键。**不**挂 `partsPrefix` 下 —— 理由沿本文件
+  // `inspection` / `process-design` 两段的取舍：键的根只要求「同根前缀匹配」才有意义。
+  // 送货单的写点会改批次与零件的 DELIVERED 状态；挂 parts 下会让全仓最热的
+  // `qk.partsPrefix` 一把全刷把整个送货单域连带重拉（列表 + 详情 + 草稿看板三处）。
+  //
+  // 失效编排点（本域写操作完成后由对应 mutation 的 onSuccess 调）：
+  //   - `POST /{id}/update`（改送货日期 / 备注）、`/{id}/driver`（指定司机）、
+  //     `/{id}/remove-batches`、`/{id}/submit`、`/{id}/recall`、`/{id}/pickup`、
+  //     `/{id}/soft-delete`、`POST /scan`（扫码入单）：全部经
+  //     `invalidateDeliveryNotesQuery(qc)` 一把失效本域的列表 / 详情 / 批量详情键；
+  //   - 分组 create / update / soft-delete → `invalidateDeliveryGroupsQuery(qc)`。
+  //
+  // ⚠️ 编排点 ≠ 全部写点：其它域的写端点同样会改本域关心的字段 ——
+  //   `POST /prod/batches/to-ship`（品检流转把批次转成 READY_TO_SHIP，直接决定它能不能
+  //   扫码入单）、`POST /parts/worker-scan`（工人放回，批次位置变）、
+  //   `/prod/inspection/*` 品检流转、outsource 外协收发。按 CLAUDE.md
+  //   「跨页面写操作不做穷举失效，30s 有限 staleTime + 显式刷新兜新鲜度」的既定策略，
+  //   这些写点**不逐个补失效**（要求穷举全仓写点，不可持续）。
+  // ============================================================
+  /** 送货单一览键（页面级 store `useDeliveryNoteListStore` 的主查询，
+   *  数据源 `GET /api/v2/com/delivery/note`）。**参数键**：端点接 statuses 多值 +
+   *  customer_id + keyword ILIKE + limit / offset，键必须随 params 变化才能拿到不同
+   *  cache identity（与 partsList / programmingList / inspectionQueueList 同形）。 */
+  deliveryNotesList: (params: ListNotesParams) => ['delivery-notes', 'list', params] as const,
+  /** 送货单详情键（`GET /com/delivery/note/{id}`）。**参数键**：端点按单据 id 分片
+   *  返回，不带 id 切详情页时会命中上一张单的缓存。id 为空串 → 占位键
+   *  （`enabled=false` 闸门 + queryFn 内二次守卫拦掉）。 */
+  deliveryNoteDetail: (id: string) => ['delivery-notes', 'detail', id] as const,
+  /** 批量详情键（`GET /com/delivery/note/batch-detail?ids=`）。**参数键**：
+   *  ids 数组进键（后端按入参顺序装配 items），草稿看板拉 N 张详情只发一次往返。 */
+  deliveryNotesBatchDetail: (ids: string[]) => ['delivery-notes', 'batch-detail', ids] as const,
+  /** 送货单域前缀 —— 域内任一写操作完成后
+   *  `qc.invalidateQueries({ queryKey: qk.deliveryNotesPrefix })` 一把全失效
+   *  （任意 params 形态 / 任意 note id 都命中）。 */
+  deliveryNotesPrefix: ['delivery-notes'] as const,
+  /** 送货分组列表键（扫码建单页的分组面板，数据源
+   *  `GET /com/delivery/group?customer_id=`）。**参数键**：端点按 L1 分片返回，
+   *  切 L1 时必须换一份 cache identity。 */
+  deliveryGroupsList: (l1Id: string) => ['delivery-groups', 'list', l1Id] as const,
+  /** 送货分组域前缀 —— 分组 create / update / soft-delete 完成后一把全失效。 */
+  deliveryGroupsPrefix: ['delivery-groups'] as const,
+  /** 送货司机候选键（打印对话框的司机下拉，数据源 `GET /com/delivery/drivers`）。
+   *  **常量键**：端点不接 Query extractor（无分页、无筛选），一条 JOIN 返全部在职
+   *  送货司机 ⇒ 键不随任何筛选 / tab 变化。 */
+  deliveryDrivers: () => ['delivery-drivers'] as const,
+  /** 送货司机域前缀 —— 与 deliveryDrivers 同值（键已是常量，前缀即自身）。 */
+  deliveryDriversPrefix: ['delivery-drivers'] as const,
 } as const;

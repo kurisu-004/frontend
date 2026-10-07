@@ -16,9 +16,10 @@
 //   - useBarcodeScanner 扫码枪订阅 → handleScan → 拉三层树并弹树对话框；
 //     **建单发生在用户在树对话框里确认数量时**，扫码本身是纯读。
 
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import type { ComponentInstance } from 'vue';
 import { useRouter } from 'vue-router';
+import { useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElTable } from 'element-plus';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useDeliveryScanState } from './composables/useDeliveryScanState';
@@ -27,16 +28,16 @@ import type { Customer } from '@/api/customer';
 import { useCustomersQuery } from '@/composables/queries/useCustomersQuery';
 import {
   createDeliveryGroup,
-  listDeliveryGroups,
   softDeleteDeliveryGroup,
   updateDeliveryGroup,
 } from '@/api/com/deliveryGroup';
 import { useAuthStore } from '@/stores/auth';
 import { canPrint } from '@/utils/deliveryNotePermissions';
-import type {
-  DeliveryGroupData,
-  DeliveryGroupListResultData,
-} from './composables/deliveryGroupSchema';
+import type { DeliveryGroupData } from './composables/deliveryGroupSchema';
+import {
+  invalidateDeliveryGroupsQuery,
+  useDeliveryGroupsQuery,
+} from './composables/useDeliveryGroupsQuery';
 import type { DeliveryNoteItemData } from './composables/deliveryNoteSchema';
 import {
   useDeliveryDraftBoard,
@@ -50,6 +51,9 @@ import DeliveryDraftCard from './components/DeliveryDraftCard.vue';
 import PrintPreviewDialog from './components/PrintPreviewDialog.vue';
 
 const router = useRouter();
+// 分组写后失效要用 queryClient；页面级 store 不变量 #4 那条（store 不 import
+// vue-router）不适用于本页 —— 本页不是 store，直接用 useQueryClient 即可。
+const qc = useQueryClient();
 
 // ============ L1 / 客户全集 ============
 const scanState = useDeliveryScanState();
@@ -86,24 +90,14 @@ const roleMap = computed<{ MANAGER?: boolean; CLERK?: boolean; INSPECTOR?: boole
   };
 });
 
-// ============ 分组态 ============
-const groups = ref<DeliveryGroupListResultData>({ groups: [], ungrouped_customers: [] });
-const groupsLoading = ref(false);
+// ============ 分组态（useQuery；切 L1 自动换缓存身份）============
+const groupsQuery = useDeliveryGroupsQuery(scanState.l1CustomerId);
+const groups = groupsQuery.data;
+const groupsLoading = groupsQuery.isFetching;
 
-/** 拉当前 L1 下的分组 + 未分组 L2。 */
-async function reloadGroups(l1Id: string): Promise<void> {
-  if (!l1Id) {
-    groups.value = { groups: [], ungrouped_customers: [] };
-    return;
-  }
-  groupsLoading.value = true;
-  try {
-    groups.value = await listDeliveryGroups(l1Id);
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载分组规则失败');
-  } finally {
-    groupsLoading.value = false;
-  }
+/** 分组写操作成功后失效本域（create / update / soft-delete 三处共用）。 */
+async function reloadGroups(): Promise<void> {
+  await invalidateDeliveryGroupsQuery(qc);
 }
 
 // ============ 草稿卡片业务（board）============
@@ -189,7 +183,7 @@ async function onGroupCreate(payload: {
       member_customer_ids: payload.member_customer_ids,
     });
     ElMessage.success('分组已创建');
-    await reloadGroups(scanState.l1CustomerId.value);
+    await reloadGroups();
   } catch (e) {
     ElMessage.error((e as Error).message ?? '保存分组失败');
   }
@@ -207,9 +201,7 @@ async function onGroupUpdate(payload: {
       member_customer_ids: payload.member_customer_ids,
     });
     ElMessage.success('分组已更新');
-    if (scanState.l1CustomerId.value) {
-      await reloadGroups(scanState.l1CustomerId.value);
-    }
+    await reloadGroups();
   } catch (e) {
     ElMessage.error((e as Error).message ?? '保存分组失败');
   }
@@ -219,9 +211,7 @@ async function onGroupDelete(g: DeliveryGroupData): Promise<void> {
   try {
     await softDeleteDeliveryGroup(g.id, { version: g.version });
     ElMessage.success('分组已删除');
-    if (scanState.l1CustomerId.value) {
-      await reloadGroups(scanState.l1CustomerId.value);
-    }
+    await reloadGroups();
   } catch (e) {
     ElMessage.error((e as Error).message ?? '保存分组失败');
   }
@@ -246,11 +236,13 @@ onMounted(async () => {
 watch(
   scanState.l1CustomerId,
   async (id) => {
+    // 分组面板由 useDeliveryGroupsQuery 自己随 l1Id 换键重取，本 watch 只驱动草稿看板
+    // （board 持有卡片级状态：勾选 / loading / table 实例，不是纯读数据）。
     if (!id) {
-      groups.value = { groups: [], ungrouped_customers: [] };
+      board.clearAll();
       return;
     }
-    await Promise.all([reloadGroups(id), board.reloadDrafts(id)]);
+    board.setL1Id(id);
   },
   { immediate: true },
 );
