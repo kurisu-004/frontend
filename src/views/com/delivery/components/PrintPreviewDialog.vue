@@ -113,7 +113,11 @@ async function onFileChange(file: { raw?: File; name?: string }): Promise<void> 
 // 司机
 // ============================================================
 const driverQuery = useDeliveryDriversQuery(computed(() => props.modelValue));
+/** 仅本地选中态。切换下拉**不发请求**（2026-10-08：改动随「导出」确认一并落库，见
+ *  persistDriverIfChanged）—— 关对话框即放弃，与「改完就生效」的直觉相反是刻意的：
+ * 打印对话框是一次性动作，点「取消」不该在服务端留下一条 version 变更。 */
 const driverId = ref<string>('');
+/** 司机落库中（只在 persistDriverIfChanged 的 await 期间为 true）。 */
 const driverSaving = ref(false);
 
 const hasDriver = computed(() => Boolean(props.note.driver_worker_name));
@@ -121,16 +125,27 @@ const selectedDriverName = computed(
   () => driverQuery.drivers.value.find((d) => d.id === driverId.value)?.name ?? null,
 );
 
-async function onDriverChange(): Promise<void> {
+/**
+ * 导出前把所选司机落库；成功返回 true。
+ *
+ * 落库条件：**有选中项** 且 **与单据上的司机名不一致**（没选 → 用单据上已有的；
+ * 选了同名 → 后端仍会推进 version，白跑一次写且让手上的 version 过期）。
+ *
+ * `POST /com/delivery/note/{id}/driver` 会推进 version ⇒ 成功后失效本域，
+ * 让详情 / 草稿看板看到新 version 与新司机名。
+ */
+async function persistDriverIfChanged(): Promise<boolean> {
   const id = driverId.value;
-  if (!id) return;
+  const name = selectedDriverName.value;
+  if (!id || !name || name === props.note.driver_worker_name) return true;
   driverSaving.value = true;
   try {
     await setNoteDriver(props.note.id, { version: props.note.version, driver_worker_id: id });
     await invalidateDeliveryNotesQuery(qc);
-    ElMessage.success('已指定司机');
+    return true;
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '指定司机失败');
+    ElMessage.error((e as Error).message ?? '指定司机失败，已取消导出');
+    return false;
   } finally {
     driverSaving.value = false;
   }
@@ -265,6 +280,9 @@ async function onExport(): Promise<void> {
   if (!src || exportDisabled.value) return;
   exporting.value = true;
   try {
+    // 司机先落库：打印即「这次确认了送货人」。落库失败（409 / 21409 / 网络）时中止，
+    // 不产出文件 —— 否则会下载出一张页脚写着 A 司机、单据上却是 B 司机的送货单。
+    if (!(await persistDriverIfChanged())) return;
     const bytes = await fetchTemplateBytes(src);
     const { openXlsx } = await import('hucre');
     // 导出前再校验一次：用户在「上传 → 导出」之间可能又传了别的模板，或文件被外部覆盖。
@@ -342,7 +360,7 @@ async function onExport(): Promise<void> {
           filterable
           style="width: 180px"
           :loading="driverSaving"
-          @change="onDriverChange"
+          :disabled="exporting || driverSaving"
         >
           <el-option
             v-for="d in driverQuery.drivers.value"

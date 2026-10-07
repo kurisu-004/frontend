@@ -19,7 +19,11 @@ export interface PrintableNoteLike {
   status: string;
   /** 行项条数；0 = 空单，打不出东西。 */
   part_count: number;
-  /** 司机名；null / 空串 = 还没指定司机。 */
+  /**
+   * 司机名；null / 空串 = 还没指定司机。
+   *
+   * ⚠️ **只**用于打印对话框内「导出」按钮的闸门，不参与入口可见性判据（见 `canPrint`）。
+   */
   driver_worker_name: string | null;
 }
 
@@ -49,16 +53,19 @@ export function canSoftDelete(status: string, role: RoleMapLike): boolean {
   return hasManageNoteRole(role) && status === 'DRAFT';
 }
 
-/** 打印送货单：管理角色 + `DRAFT` / `SUBMITTED` + 至少 1 个行项 + **已指定司机**。
+/** 打印送货单：管理角色 + 至少 1 个行项。
  *
- * 司机这条是硬闸门而不只是 UX：页脚「送货人：{{driver_name}}」必须有值，且
- * `POST /{id}/pickup` 要从单据上读 `driver_worker_id`（没指定直接 21409）⇒ 不指定司机
- * 打出来的单子没法闭环。后端不再发 `driver_worker_id`，用 `driver_worker_name` 判空即可。 */
+ *  **status 不设闸门**：已送货（PICKED_UP / ARCHIVED）的单允许补打 —— 收货方丢了这张单子
+ *  时补打是真实场景，把它挡在门外没有收益。
+ *
+ *  ⚠️ **司机不是入口判据**（2026-10-08 修死锁）：唯一能指定司机的地方是打印对话框内的
+ *  下拉，而进那个对话框的唯一入口就是被 `canPrint` 挡住的按钮 ⇒ 把「已指定司机」写进
+ *  本函数等于让按钮与下拉互相等待，谁也进不去。司机闸门只保留在**对话框内部**的
+ *  「导出」按钮上（送货单页脚「送货人：{{driver_name}}」必须有值，`POST /{id}/pickup`
+ * 也要从单据上读 `driver_worker_id`），那里能看到用户在选什么。 */
 export function canPrint(note: PrintableNoteLike, role: RoleMapLike): boolean {
   if (!hasManageNoteRole(role)) return false;
-  if (note.status !== 'DRAFT' && note.status !== 'SUBMITTED') return false;
-  if (note.part_count <= 0) return false;
-  return Boolean(note.driver_worker_name);
+  return note.part_count > 0;
 }
 
 /** 一键送货：`SUBMITTED` + 至少 1 个行项 + 管理角色。
