@@ -8,6 +8,8 @@
 //     也不退回按名 / 过渡期无 id 时按名兜底）；
 //   - foldSamePart：同 part 折叠 + 代表批次按 **BigInt** 取 min（19 位雪花 id，
 //     转 Number 比较会判相等 → 静默选错批次，这是本文件最重要的那条）；
+//   - 单位：后端 line item 无 unit 字段，两个出口分别定死 —— 散件「件」（toPrintRow，
+//     separate 模式的装配件子件行也走它）/ 装配件合并行「套」（collapseAssemblies）；
 //   - collapseAssemblies：merge / separate 两态 + shippable_sets 全 null 时返 null
 //     不兜 0 + 真 0 套照实透传；
 //   - sortPrintRows：null 末尾 + 数值 / 字符串两路；
@@ -252,6 +254,62 @@ describe('collapseAssemblies', () => {
       'merge',
     );
     expect(rows[0]!.quantity).toBe(0);
+  });
+});
+
+describe('单位（后端 line item 无 unit 字段，前端按行性质推导：散件「件」装配件「套」）', () => {
+  it('foldSamePart 出口的散件行 = 「件」', () => {
+    const rows = foldSamePart([li({ id: '1', part_id: 'P1', quantity: 2 })]);
+    expect(rows[0]!.unit).toBe('件');
+  });
+
+  it('merge 出口的装配件行 = 「套」', () => {
+    const rows = collapseAssemblies(
+      foldSamePart([
+        li({ id: '1', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装', shippable_sets: 7 }),
+      ]),
+      'merge',
+    );
+    expect(rows[0]!.unit).toBe('套');
+  });
+
+  it('separate 出口没有装配件行，子件行仍是「件」', () => {
+    const rows = collapseAssemblies(
+      foldSamePart([
+        li({ id: '1', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
+        li({ id: '2', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装' }),
+      ]),
+      'separate',
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.unit === '件')).toBe(true);
+    expect(rows.some((r) => r.is_asm_row)).toBe(false);
+  });
+
+  it('pack 成 sheet 时单位原样带过去（送货单 H 列 / 标签单位列读的就是它）', () => {
+    const map = buildL2GroupMap({
+      groups: [],
+      ungrouped_customers: [{ id: '1', name: '二五六厂' }],
+    });
+    const specs = groupIntoSheets(
+      groupRows(
+        [
+          li({ id: '1', part_id: 'P1', customer_id: '1', customer_name: '二五六厂' }),
+          li({
+            id: '2',
+            part_id: 'PA',
+            customer_id: '1',
+            customer_name: '二五六厂',
+            assembly_id: 'A1',
+            assembly_name: '总装',
+            shippable_sets: 3,
+          }),
+        ],
+        map,
+        'merge',
+      ),
+    );
+    expect(specs[0]!.rows.map((r) => r.unit)).toEqual(['件', '套']);
   });
 });
 

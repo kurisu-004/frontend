@@ -5,10 +5,10 @@
 // 打印链路本次整体从后端搬回前端：后端两条打印端点（`/{id}/print` 与
 // `/print-labels`）随送货单域重构下线，xlsx 由本文件生成。
 //
-// **为什么用 openXlsx/saveXlsx 而不是 writeXlsx**：round-trip 路径保留未建模的 part
-// byte-for-byte —— 模板的合并单元格 / 边框 / 列宽 / 打印区域 / 字体 hucre 都没建模，
-// 用 writeXlsx 重建会把这些全丢掉（打印出来是一张没有框线、没有合并的裸表）。
-// 我们的写入只碰「值」，样式一律沿用模板。
+// **为什么用 openXlsx/saveXlsx 而不是 writeXlsx**：round-trip 路径把模板里 hucre **已建模**
+// 的部分（合并单元格 / 列宽 / 行高 / 打印设置 / 视图）连同没建模的 part 一起带过去；
+// writeXlsx 从零建表会把 merges 和列宽一起丢掉 —— 那正是模板渲染的硬需求。
+// 我们的写入只碰「值」，样式一律沿用模板（样式要开 `readStyles` 才进模型，见下）。
 //
 // **数据行不走 fillTemplate**：fillTemplate 只吃 flat 的标量 record（hucre README 唯一
 // 示例就是 `{company, date, total}`），没有数组 / 循环 / 多 sheet 概念。每行 10 列 ×
@@ -25,6 +25,7 @@
 //   ⇒ 走 fillTemplate，**不**退化成整串写入。
 
 import type * as HUCRE_MODULE from 'hucre';
+import type { CellValue, Sheet } from 'hucre';
 import {
   DELIVERY_NOTE_TEMPLATE_CONTRACT,
   XLSX_MIME,
@@ -41,6 +42,7 @@ export interface PrintSheetRow {
   /** 装配件「后端没给可出货套数」时是 null，模板里写**空**而不是 0 —— 0 会被读成
    *  「这套打不了」（口径见 utils/assemblySets）。 */
   quantity: number | null;
+  /** 单位由打印行整形时按行性质定死（散件「件」/ 装配件「套」），渲染层原样写。 */
   unit: string;
   /** 系统交期；无值写 null（模板该格留空，不写字符串 '—'）。 */
   etd: string | null;
@@ -90,14 +92,49 @@ async function loadHucre(): Promise<typeof HUCRE_MODULE> {
 export { XLSX_MIME };
 
 /**
+ * 写一个单元格的值（数据行逐格写、清空未填满的行都走它）。
+ *
+ * ⚠️ **必须同时写 `rows` 与 `sheet.cells` 两个位置**（2026-10-08）：开了 `readStyles` 之后
+ * hucre 把每个格的样式读进 `sheet.cells` 侧表（key 是 `"行,列"`，行列入 0-based），而
+ * `saveXlsx` 的落盘顺序是「先按 `rows` 建网格、再用 `cells` 逐格覆盖」（hucre 文档原话：
+ * "Where both describe a position, `cells` wins"）。只写 `rows` 的话，模板里那条陈旧的
+ * `{{order_no}}` 会从侧表把新值原样盖回去 —— 实测整块数据区会输出成一堆占位符。
+ * `fillTemplate` 也是同样的双写（见 hucre/dist/template.mjs）。
+ *
+ * 侧表是**原地改 value**、其余字段（尤其 `style`）保持模板原样，所以样式一点不丢；
+ * `type` 跟着值改（与 fillTemplate 同口径，写出侧实际只看 `value`）。
+ * 侧表里没有这个坐标（该格既无值也无样式）时不新建：`rows` 那一路已经覆盖得到。
+ */
+function setCell(sheet: Sheet, y: number, x: number, value: CellValue): void {
+  const row = sheet.rows[y];
+  if (row) row[x] = value;
+  const cell = sheet.cells?.get(`${y},${x}`);
+  if (!cell) return;
+  cell.value = value;
+  cell.type =
+    typeof value === 'number'
+      ? 'number'
+      : typeof value === 'boolean'
+        ? 'boolean'
+        : value instanceof Date
+          ? 'date'
+          : 'string';
+}
+
+/**
  * 在模板字节上渲染打印内容，返回新的 xlsx 字节。
  *
  * - 第一个 sheet 用模板本体并改名成第 1 组的 sheet 名；
  * - 后续每组 `cloneSheet(base, name)` 克隆一份（深拷贝 rows / cells / columns /
  *   rowDefs / merges / dataValidations，见 hucre 的 sheet-ops::cloneSheet）；
- * - 数据行按契约列下标逐格写；**未填满的行整行清空**（模板第 3 行有 9 个 placeholder，
- *   不清的话没数据的行会漏出 `{{order_no}}` 字面量）；
+ * - 数据行按契约列下标逐格写（走 `setCell`：rows 与 cells 侧表两处都写）；**未填满的行
+ *   整行清空**（模板第 3 行有 9 个 placeholder，不清的话没数据的行会漏出 `{{order_no}}`
+ *   字面量）；
  * - 页脚 4 个占位符交给 fillTemplate（嵌在整串文案里，正是它的目标场景）。
+ *
+ * ⚠️ `xl/styles.xml` 由 `saveXlsx` **重建**，只输出**被单元格引用到**的格式（实测
+ * 27 cellXfs / 10 fonts / 10 borders）；模板里没人引用的冗余 `numFmt` / `tableStyles`
+ * 记录不再输出（33332 B → 约 6.7 KB）。**对打印无影响**，有意接受。
  */
 export async function renderDeliveryNoteWorkbook(
   templateBytes: Uint8Array,
@@ -107,7 +144,20 @@ export async function renderDeliveryNoteWorkbook(
   const { openXlsx, saveXlsx, cloneSheet, fillTemplate } = await loadHucre();
   const c = DELIVERY_NOTE_TEMPLATE_CONTRACT;
 
-  const wb = await openXlsx(templateBytes);
+  // ⚠️ `readStyles: true` **必开，不要「优化」掉**（2026-10-08）：hucre 的
+  // `ReadOptions.readStyles` 默认 `false`（`hucre/dist/_types.d.mts`），不开时 sheet 模型里
+  // 根本没有样式这一层（只有 name / rows / columns / merges / view / pageSetup / rowDefs
+  // 等），`saveXlsx` 于是重建一份 829 B 的空壳 styles.xml —— 1 个宋体 12pt、0 边框，
+  // 打印出来就是一张没有框线、没有字体的裸表。模板的 172 个 cell 全部带 `s=`，
+  // 开之后渲染产物仍是 172 个。
+  //
+  // 开了之后样式挂在 `sheet.cells` 侧表上（不挂在 `rows[y][x]` 的值上）⇒ 数据行一律
+  // 走 `setCell` 双写（见它的注释），清空未填满的行也不会踩掉边框。
+  //
+  // ⚠️ `PrintPreviewDialog.vue` 里的两处 `openXlsx`（上传时 / 导出前）**故意不开**
+  // readStyles：那里只做「读值做模板契约校验」、不产出文件，省掉一次全量样式解析。
+  // 不要为了「统一」把三处一起改。
+  const wb = await openXlsx(templateBytes, { readStyles: true });
   const base = wb.sheets[c.sheetIndex];
   if (!base) throw new Error('模板缺少数据工作表');
 
@@ -142,24 +192,20 @@ export async function renderDeliveryNoteWorkbook(
     // 整块数据区先清空（模板首行数据带 placeholder，其余行是空但有样式的格子）
     for (let k = 0; k < c.dataRowCount; k += 1) {
       const y = c.dataStartRow + k;
-      const row = sheet.rows[y];
-      if (!row) continue;
-      for (let j = 0; j < width; j += 1) row[col.no + j] = '';
+      for (let j = 0; j < width; j += 1) setCell(sheet, y, col.no + j, '');
     }
     spec.rows.slice(0, c.dataRowCount).forEach((r, k) => {
       const y = c.dataStartRow + k;
-      const row = sheet.rows[y];
-      if (!row) return;
-      row[col.no] = k + 1;
-      row[col.order_no] = r.orderNo;
-      row[col.l2_customer] = r.l2Customer;
-      row[col.applicant] = r.applicant;
-      row[col.drawing_no] = r.drawingNo;
-      row[col.name] = r.name;
-      row[col.quantity] = r.quantity ?? '';
-      row[col.unit] = r.unit;
-      row[col.system_delivery_date] = r.etd ?? '';
-      row[col.note] = r.note;
+      setCell(sheet, y, col.no, k + 1);
+      setCell(sheet, y, col.order_no, r.orderNo);
+      setCell(sheet, y, col.l2_customer, r.l2Customer);
+      setCell(sheet, y, col.applicant, r.applicant);
+      setCell(sheet, y, col.drawing_no, r.drawingNo);
+      setCell(sheet, y, col.name, r.name);
+      setCell(sheet, y, col.quantity, r.quantity ?? '');
+      setCell(sheet, y, col.unit, r.unit);
+      setCell(sheet, y, col.system_delivery_date, r.etd ?? '');
+      setCell(sheet, y, col.note, r.note);
     });
   }
 

@@ -64,7 +64,8 @@ function toLabelRecord(r: PrintRow): LabelRecord {
  * - **`quantity === null` 的行整行跳过**并计入 `skipped`：装配件父行的数量是「后端没给
  *   可出货套数」，打出来是一张数量空的标签，贴到零件上只会让人以为这批没货；
  * - 装配件父行不用额外处理：`quantity` 是可出货套数、`unit` 是「套」，与散件行走同一
- *   套 `PrintRow`。
+ *   套 `PrintRow`（单位在打印行整形时就按行性质定死：散件「件」/ 装配件「套」，见
+ *   `deliveryNotePrintRows` 的 toPrintRow 与 collapseAssemblies —— 标签列原样透传）。
  *
  * 返回 `skipped` 是为了让调用方在 toast 里如实说出跳过了几条，而不是静悄悄少打几张；
  * 返回 `written`（**实际写进 xlsx 的那些行**，按写入顺序）是给「已打印标签」标记用的 ——

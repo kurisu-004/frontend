@@ -1,7 +1,8 @@
 <!--
   打印对话框（2026-10-08 重写）：`mode` 决定导出产物形态，两条链路都在**前端本地生成**。
   1. `'note'` 送货单：模板由用户上传，逐格校验后才允许导出；`openXlsx/saveXlsx`
-     round-trip 保留未建模的样式（合并 / 边框 / 列宽 / 打印区域）。
+     round-trip 保住 merges / 列宽 / 打印设置，**单元格样式要另开 `readStyles` 才进
+     模型**（见 utils/deliveryNoteWorkbook.ts 文件头）。
   2. `'label'` 打印标签：**无模板、单 sheet**，7 列逐行写（`deliveryNoteLabelWorkbook`）。
 
   送货单按分厂分组（el-tabs）：一张送货单一个收货单位，按送货分组规则（或未分组 L2）

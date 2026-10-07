@@ -29,6 +29,8 @@ export interface PrintRow {
   /** 散件行 = 折叠后的件数；装配件父行 = 可出货套数，**全为 null 时是 null 不兜 0**
    *  （「后端没给数」与「凑不齐整套」业务含义相反，兜 0 会让用户以为这单打不了）。 */
   quantity: number | null;
+  /** 单位（2026-10-08 补）：后端 line item **没有单位字段**，只能由前端按行性质推导 ——
+   *  散件行 = 「件」，装配件合并行 = 「套」（两个出口分别在 toPrintRow / collapseAssemblies）。 */
   unit: string;
   system_delivery_date: string | null;
   note: string;
@@ -185,7 +187,14 @@ export function foldSamePart(lineItems: readonly DeliveryNoteLineItemData[]): Pr
   return order.map((pid) => toPrintRow(rep.get(pid)!, qty.get(pid)!));
 }
 
-/** 行项 → 打印行（保留折叠所需的装配件字段）。 */
+/**
+ * 行项 → 打印行（保留折叠所需的装配件字段）。
+ *
+ * ⚠️ `unit: '件'` 是**本文件唯一的单位出口之一**（2026-10-08）：后端 line item 没有单位
+ * 字段，单位只能前端按行性质推导。走到这里的都是**散件行**——包括装配件在 `separate`
+ * 模式下的子件行（它们同样是逐个 part 的散件），所以一律「件」。装配件合并行的「套」
+ * 在 collapseAssemblies 里写。
+ */
 function toPrintRow(li: DeliveryNoteLineItemData, quantity: number): PrintRow {
   return {
     id: String(li.id),
@@ -195,7 +204,7 @@ function toPrintRow(li: DeliveryNoteLineItemData, quantity: number): PrintRow {
     drawing_no: li.drawing_no,
     name: li.name,
     quantity,
-    unit: '',
+    unit: '件',
     system_delivery_date: li.system_delivery_date,
     note: '',
     member_ids: [String(li.id)],
@@ -251,6 +260,8 @@ export function collapseAssemblies(
         // （不必造整行 DeliveryNoteLineItemData —— 它几十个字段这里一个都用不到）。
         siblings.map((s) => ({ shippable_sets: s.shippable_sets })),
       ),
+      // 装配件合并行的单位 = 「套」（与 toPrintRow 的散件「件」互为两个出口）。
+      // `separate` 模式直接原样返回、走不到这里 ⇒ 那一态只有子件行、单位恒为「件」。
       unit: '套',
       system_delivery_date: first.system_delivery_date,
       note: '',
