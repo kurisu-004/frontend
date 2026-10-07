@@ -343,8 +343,13 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     }
   }
 
-  /** 清掉某 note 的全部本地 ref / table ref / foldedComputed（不动 localStorage 标记，
-   *  那由 onRemove / onDeleteDraft 各自按批次 / 整单清）。 */
+  /** 清掉某 note 的全部本地 ref / table ref / foldedComputed（不动 localStorage 标记）。
+   *
+   *  ⚠️ 2026-10-08 补：本函数有两个调用方，只有 `onDeleteDraft` 会顺手 `unmark` 整个
+   *  bucket（整单没了，那个 bucket 才真的永不被读、不清就是无界增长）。提交成功经
+   *  `onDraftRemoved` 走这里时标记留着是对的 —— **recall 会把 status 退回 `DRAFT`
+   *  （`line_items` 原样不动）**，撤回后同一批批次要继续显示绿底；标签已经出纸，
+   *  这里清掉就是诱导重复打印。 */
   function clearNoteLocalState(noteId: string): void {
     delete drafts.value[noteId];
     delete draftDetails[noteId];

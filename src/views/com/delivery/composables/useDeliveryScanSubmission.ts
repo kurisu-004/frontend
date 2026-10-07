@@ -10,7 +10,8 @@
 //
 // 不持有：
 //   - drafts / draftDetails / deletingByNote / tableRefs / foldedComputeds
-//     —— useDeliveryDraftBoard 持有；本 composable 通过 options 注入回调访问
+//     —— useDeliveryDraftBoard 持有；本 composable 只经 onDraftRemoved 让它清 ref，
+//     不直接读其中任何一项
 //
 // 与 useDeliveryDraftBoard 的协调：
 //   - writeDraftFromScan(note) → board 写入 drafts Map
@@ -295,8 +296,11 @@ export function useDeliveryScanSubmission(
     try {
       await submitNote(noteId, { version: d.version });
       // 本地清掉全部 ref（drafts / draftDetails / deletingByNote / foldedComputeds /
-      // tableRefs）。localStorage 的「已打印标签」记录不在此清 —— 它归 onRemove /
-      // onDeleteDraft 管。
+      // tableRefs）。localStorage 的「已打印标签」记录不在此清 —— 它只在批次被摘下
+      // （onRemove）/ 整单被删（onDeleteDraft）时清。
+      // ⚠️ 2026-10-08 补：**提交路径也不清**。recall 会把单子退回 DRAFT（status 回写
+      // DRAFT、line_items 原样不动），撤回后同一批批次要继续显示绿底；标签已经出纸，
+      // 这时忘记标记会诱导重复打印。
       opts.onDraftRemoved(noteId);
       ElMessage.success('已提交');
     } catch (e) {

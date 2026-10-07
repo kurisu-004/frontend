@@ -174,9 +174,13 @@ async function persistSelectedDriver(): Promise<boolean> {
     ElMessage.error((e as Error).message ?? '指定司机失败，已取消导出');
     // 落库失败最常见的是 409（手上 version 已被别人推进）。失效本域，下一轮 refetch
     // 就能拿到新 version，对话框里直接重试即成 —— 否则用户只能关页面重新进来。
-    // ⚠️ 对话框内没有 `delivery-notes/*` 的活跃 observer（草稿看板那条链在本页另有
-    // 实例），这一处失效是为**页面上下文**兜底：万一将来在本页再挂一个同 key 的
-    // observer，它能立刻拿到新 version，不必等 staleTime 到期。
+    //
+    // 2026-10-08 修正措辞：这一处失效的作用对象是**对话框所在的页面**，且扫码页上它
+    // 真的会命中活跃 observer —— 第一宿主页 `DeliveryNoteScan.vue` 无条件实例化
+    // `useDeliveryDraftBoard()`，其 `['delivery-notes','list',params]` observer 在选中
+    // L1 时就是活的（要看到草稿卡、进而点开本对话框，L1 必然已选），而
+    // `invalidateDeliveryNotesQuery` 失效的是整个 `['delivery-notes']` 前缀
+    // ⇒ 草稿看板会回流。对话框自身不持有 `delivery-notes/*` 的 query。
     await invalidateDeliveryNotesQuery(qc);
     return false;
   } finally {
@@ -222,9 +226,12 @@ const selectedIds = ref<ReadonlySet<string>>(new Set<string>());
 
 /** 上一次的打开态 / 合并模式 / 行 id 序列（判「行是否真的换了」的基准）。
  *  注意基准是**行 id 序列**而不是当前勾选 —— 勾选是它的子集，拿勾选当基准会把
- *  「用户点掉几行」误判成「行变了」。比较是**顺序敏感**的逐位对照（重排也算变），
- *  这符合直觉：用户重拖了行序就应当重新确认一遍勾选。`lastMergeMode` 的初值 null =
- *  还没开过（首开本来就要 force，不依赖它）。 */
+ *  「用户点掉几行」误判成「行变了」。比较是**顺序敏感**的逐位对照，目的是把**晚回流
+ *  分组导致的重排**也判成「行变了」：原本各自成 sheet 的 L2 被并进命名组后行序会挪动，
+ *  这种重排下让用户逐行复核一遍勾选是合理的。与「分组晚回流 ⇒ 勾选保留」不冲突 ——
+ *  `groupRows` 按 `line_items` 里的**首次出现序**建组，晚回流只改组归属、不改组内行序。
+ *  （拖拽 / 表头排序写的是 `rowsByKey`，不回流本基准：用户手动调序不该触发重选。）
+ *  `lastMergeMode` 的初值 null = 还没开过（首开本来就要 force，不依赖它）。 */
 let lastOpen = false;
 let lastMergeMode: 'merge' | 'separate' | null = null;
 let lastRowIds: string[] = [];
@@ -232,8 +239,10 @@ let lastRowIds: string[] = [];
 /** 重建各 tab 的行（拷贝，拖拽与排序只动副本）。
  *
  *  勾选只在两种场合重置成全选（`force`）：首开 / 重开（打开态 false→true）、换合并模式
- *  —— 这两处行 id 序列必变。分组规则是弹窗打开后才 enable 的、会晚回流一次，若那时也
- *  重置，用户在等待期间点掉的行会被无声还原；所以这里按「行 id 序列是否真的变了」判。 */
+ *  —— 首开时序列 `[] → N` 必变，但**重开时只要 `line_items` 没变，序列与上次完全相同**
+ *  （`lastRowIds` 跨关闭保留）⇒ 这两处只能靠 `force` 兜底，光靠序列比对救不了重开。
+ *  分组规则是弹窗打开后才 enable 的、会晚回流一次，若那时也重置，用户在等待期间点掉的
+ *  行会被无声还原；所以其余场合按「行 id 序列是否真的变了」判。 */
 function rebuildRows(force: boolean): void {
   const rows: Record<string, PrintRow[]> = {};
   const sorts: Record<string, 'column' | 'custom'> = {};
