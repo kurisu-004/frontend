@@ -35,6 +35,7 @@ import { ElMessage } from 'element-plus';
 import { listUsers, type ListUsersParams } from '@/api/iam';
 import { qk } from '@/composables/queries/keys';
 import { userListResultSchema } from '../usersSchema';
+import { usersErrorText } from '../usersErrorText';
 
 /** 入参：全部 reactive（Ref / ComputedRef / getter 都可）。 */
 export interface UsersQueryOptions {
@@ -69,7 +70,9 @@ export function useUsersQuery(options: UsersQueryOptions) {
 
   // 错误桥接：useQuery 的 error 不在 setup 抛错（CLAUDE.md 硬约束）。
   watch(query.error, (e) => {
-    if (e) ElMessage.error(e.message ?? '账号列表加载失败');
+    // 走本域文案收口：Zod 守门失败（契约漂移）时 `e.message` 是 issues 的 JSON 数组，
+    // 弹给管理员只是一坨噪音；人话给用户、细节进 console（见 `../usersErrorText`）。
+    if (e) ElMessage.error(usersErrorText(e, '账号列表加载失败'));
   });
 
   return {

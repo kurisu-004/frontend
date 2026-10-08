@@ -15,6 +15,8 @@
   ⚠️ `getWxIdentity` 未绑定时返回 **`null`**（不是 `[]`）：下面的分支显式区分
   「加载中 / 加载失败 / 已绑 / 未绑」四态，不直接对返回值 `.map` / `.length`。
   「加载失败」必须与「未绑」分开渲染 —— 见模板里 `v-else-if` 的注释。
+  失败态的文案经 `errorText`（`computed`）走 `../usersErrorText` 收口，不直接渲染
+  `error.message`：Zod 守门失败时它是 issues 的 JSON 数组。
 -->
 <template>
   <el-dialog
@@ -49,10 +51,14 @@
 
     <!-- 加载失败：与「未绑定」必须分开渲染。两者在 data 上都是「没有对象」，共用一个分支
          会让 20601 / 40101 / 网络抖动静默变成一个可提交的绑定输入框（用户填完提交才被后端
-         拒，且看不出真实原因）。这里给一个显式错误态 + 重试；重试走 store 的 reload。 -->
+         拒，且看不出真实原因）。这里给一个显式错误态 + 重试；重试走 store 的 reload。
+         文案经 `errorText` 收口：Zod 守门失败（契约漂移）时原样渲染 `error.message`
+         等于把 issues 的 JSON 数组甩给管理员（人话给用户、细节进 console）。 -->
     <div v-else-if="store.wxIdentity.error" class="wx-error-state">
-      <span>绑定状态加载失败：{{ store.wxIdentity.error.message }}</span>
-      <el-button :loading="store.wxIdentity.loading" @click="onRetry">重试</el-button>
+      <span>绑定状态加载失败：{{ errorText }}</span>
+      <!-- 无 `:loading`：本分支在「加载中」分支之后，只有非加载态才可见，绑上去恒 false。
+           重试期间该块整体被「加载中」分支顶掉，视觉反馈已经由上面那行文字承担。 -->
+      <el-button @click="onRetry">重试</el-button>
     </div>
 
     <!-- 未绑态：一个输入框 + 「绑定」按钮 -->
@@ -96,6 +102,7 @@ import {
   type WxBindFormFieldErrors,
   type WxBindFormInput,
 } from '../usersSchema';
+import { usersErrorText } from '../usersErrorText';
 import { useUsersListStore } from '../composables/useUsersListStore';
 
 const store = useUsersListStore();
@@ -103,6 +110,14 @@ const dlg = useDialogSize({ desktopWidth: 480 });
 
 /** 已绑定的绑定行；`undefined` = 还在加载，`null` = 后端确认未绑定。 */
 const identity = computed(() => store.wxIdentity.data ?? null);
+
+/**
+ * 失败态要显示的文案（`computed` 而非模板里直接调函数：漂移分支每求值一次就
+ * `console.error` 一次，模板求值是逐次渲染触发）。
+ */
+const errorText = computed(() =>
+  store.wxIdentity.error ? usersErrorText(store.wxIdentity.error, '未知原因') : '',
+);
 
 /** 加载失败后的重试（store 侧已把 error 桥接成 ElMessage，这里只补一个显式入口）。 */
 function onRetry(): void {

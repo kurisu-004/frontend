@@ -10,12 +10,14 @@
 // 这个不变量横跨两个文件（store 传全量 defs ↔ UserTable 过滤），任一侧漏改就**静默失效**
 // （操作列整列消失，用户无法自救），今天也没有仓内先例可抄，所以补一条守卫把两侧钉在一起。
 //
-// 三条断言：
+// 四条断言：
 //   1. 前提：`buildUsersColumnDefs` 的输出里确实存在恒可见列（否则守卫无的放矢，且日后
 //      有人删掉 `fixed: 'right'` 会被这条抓住）；
 //   2. 纯函数层：按 `isAlwaysVisibleColumn` 过滤后，候选里不再有任何恒可见列；
 //   3. 接线层：扫 `UserTable.vue` 源码，断言 `visibilityDefs` 走的是 `isAlwaysVisibleColumn`
-//      而不是硬编码列 key 名单（名单会随新增吸附列静默漏项）。
+//      而不是硬编码列 key 名单（名单会随新增吸附列静默漏项）；
+//   4. 守卫自身：扫描到的源码非空且含 `visibilityDefs` —— 断言 3 是 `not.toMatch`，
+//      扫描源一旦变空串它会恒绿，守卫就空转了（比正则不严谨更糟）。
 //
 // ⚠️ 断言 3 是**源码扫描**（fs 口径），与 `styles/__tests__/elementPlusManualImportStyles.spec.ts`
 // 同款做法。若将来 UserTable.vue 重构到把过滤逻辑挪进别的模块，请同步改本守卫的扫描目标。
@@ -92,7 +94,27 @@ describe('恒可见列守卫（操作列恒可见）', () => {
   it('接线层：UserTable.vue 的候选过滤走 isAlwaysVisibleColumn，不硬编码列 key 名单', () => {
     const src = readFileSync(USER_TABLE_VUE, 'utf8');
     expect(src).toMatch(/isAlwaysVisibleColumn/);
-    // 硬编码 key 名单的两种典型写法：`.key !== 'actions'` / `.key === 'actions'`。
-    expect(src).not.toMatch(/\.key\s*[!=]==?\s*'[^']+'/);
+    // 禁止范围 = **恒可见列的 key 与字面量比较**：`.key !== 'actions'` / `.key === "actions"`
+    // （单双引号都认，prettier 不强制引号风格，只认单引号会漏网）。
+    //   - 名单从 `DEFS` 现算而不是写死 'actions'：日后新增第二个吸附 / 不可拖列时守卫自动
+    //     跟着覆盖（写死名单会随新增静默漏项，正是这条断言要防的反模式）；
+    //   - 只比 `.key`，不拦 `d.prop === '…'` 等与可见性无关的比较：整段一刀切会在日后
+    //     为别的用途写一句合法的 key 比较时误报，误报久了就会被人加白名单绕开守卫。
+    const alwaysVisibleKeys = DEFS.filter(isAlwaysVisibleColumn).map((d) =>
+      d.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    );
+    expect(alwaysVisibleKeys.length).toBeGreaterThan(0);
+    const hardcodedAlwaysVisibleCompare = new RegExp(
+      `\\.key\\s*[!=]==?\\s*['"](?:${alwaysVisibleKeys.join('|')})['"]`,
+    );
+    expect(src).not.toMatch(hardcodedAlwaysVisibleCompare);
+  });
+
+  // 断言 3 的探测范围本身就是不变量：扫描源一旦换文件 / 变成空串，正则匹配会恒不命中 ⇒
+  // `not.toMatch` 永远绿、守卫空转。这里把「非空 + 真的含 `isAlwaysVisibleColumn`」钉住。
+  it('守卫自身：扫描到的 UserTable.vue 源码非空且含过滤判据（防 not.toMatch 恒绿空转）', () => {
+    const src = readFileSync(USER_TABLE_VUE, 'utf8');
+    expect(src.length).toBeGreaterThan(0);
+    expect(src).toContain('visibilityDefs');
   });
 });

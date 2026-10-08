@@ -47,6 +47,7 @@ import {
   type UsersTextFilter,
 } from '../usersColumnDefs';
 import { wxIdentityOrNullSchema, type UserOutData, type UserRoleOutData } from '../usersSchema';
+import { usersErrorText } from '../usersErrorText';
 import { DEFAULT_PASSWORD, SHELF_SCOPED_ROLE } from '../usersConstants';
 import { useUsersQuery } from './useUsersQuery';
 
@@ -424,7 +425,9 @@ export const useUsersListStore = defineStore('users-list', () => {
   // （CLAUDE.md 硬约束）。少了这条，`getWxIdentity` 真失败（20601 / 40101 / 网络）时弹窗会
   // 静默渲染成「未绑态」输入框，用户无从分辨。
   watch(wxIdentityQuery.error, (e) => {
-    if (e) ElMessage.error(e.message ?? '企业微信绑定状态加载失败');
+    // 走本域文案收口（`../usersErrorText`）：Zod 守门失败时 `e.message` 是 issues 的
+    // JSON 数组，弹窗与 toast 都不该甩给管理员看。
+    if (e) ElMessage.error(usersErrorText(e, '企业微信绑定状态加载失败'));
   });
 
   // ============ 切片：mutations（8 条写路径）============
