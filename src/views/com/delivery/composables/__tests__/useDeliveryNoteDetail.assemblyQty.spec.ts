@@ -11,6 +11,10 @@
 // 本用例按 vue-query 的注入要求补 pinia + VueQueryPlugin 上下文；api 层 mock 下移到
 // axios 层（`@/api/http` 的 `api.get`），**不**整个 mock 掉 `@/api/com/deliveryNote`
 // —— 守门 parse 在 queryFn 里，整个 mock 掉等于把守门一起短路。
+//
+// 2026-10-09：树行由「装配件父行 + 批次叶子行」改为「装配件父行 + 零件叶子行（折叠多批次）」，
+// 折叠实现搬进 `utils/deliveryNotePartRows`；本用例顺带钉住绿底（`row-printed`）的两条
+// 规则：零件行按 `label_printed`、装配件父行恒不绿。
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createApp, ref } from 'vue';
@@ -48,6 +52,7 @@ vi.mock('@/stores/auth', () => ({
 }));
 
 const { useDeliveryNoteDetail } = await import('../useDeliveryNoteDetail');
+const { usePrintedLabels } = await import('../usePrintedLabels');
 
 // vue-query hook 需要注入上下文（node 单测无组件）：造一个 app 装 pinia + 插件。
 // 本用例实例化的是**普通 composable**（不是 Pinia store），所以必须用
@@ -67,6 +72,8 @@ function inSetup<T>(fn: () => T): T {
 beforeEach(() => {
   queryClient.clear();
   apiGetMock.mockReset();
+  localStorage.clear();
+  usePrintedLabels().store.value = {};
 });
 
 function mkItem(p: Partial<DeliveryNoteLineItemData> & { id: string; part_id: string }) {
@@ -115,12 +122,17 @@ function mkNote(lineItems: DeliveryNoteLineItemData[]): DeliveryNoteDetailData {
   } satisfies DeliveryNoteDetailData;
 }
 
-/** 拉一次详情并返回 treeLineItems。 */
-async function treeOf(lineItems: DeliveryNoteLineItemData[]) {
+/** 拉一次详情并返回该 detail 实例（用例要读的不止 treeLineItems）。 */
+async function detailOf(lineItems: DeliveryNoteLineItemData[]) {
   apiGetMock.mockResolvedValue({ data: mkNote(lineItems) });
   const detail = inSetup(() => useDeliveryNoteDetail(ref('NOTE-1')));
   await detail.fetchDetail();
-  return detail.treeLineItems.value;
+  return detail;
+}
+
+/** 拉一次详情并返回 treeLineItems。 */
+async function treeOf(lineItems: DeliveryNoteLineItemData[]) {
+  return (await detailOf(lineItems)).treeLineItems.value;
 }
 
 const ASM = 'ASM-1';
@@ -156,5 +168,59 @@ describe('详情页装配件父行数量 = 本单可出货套数', () => {
     const rows = await treeOf([mkItem({ id: '999', part_id: 'PLOOSE', quantity: 6 })]);
     expect(rows[0]!.is_asm_row).toBeUndefined();
     expect(rows[0]!.quantity).toBe(6);
+  });
+});
+describe('详情页零件列表绿底（已打印标签）', () => {
+  it('零件行：批次登记为已打印即 row-printed，unmark 后回普通行', async () => {
+    const detail = await detailOf([mkItem({ id: '400', part_id: 'PA' })]);
+    const row = () => detail.treeLineItems.value[0]!;
+    expect(detail.deliveryLineRowClassName({ row: row() })).toBe('');
+
+    usePrintedLabels().markPrinted('NOTE-1', ['400']);
+    expect(detail.deliveryLineRowClassName({ row: row() })).toBe('row-printed');
+
+    usePrintedLabels().unmark('NOTE-1', ['400']);
+    expect(detail.deliveryLineRowClassName({ row: row() })).toBe('');
+  });
+
+  it('同零件多批次折叠成一行：任一批次打过即整行绿', async () => {
+    const detail = await detailOf([
+      mkItem({ id: '400', part_id: 'PA', quantity: 2 }),
+      mkItem({ id: '401', part_id: 'PA', quantity: 3 }),
+    ]);
+    expect(detail.treeLineItems.value).toHaveLength(1);
+    usePrintedLabels().markPrinted('NOTE-1', ['401']);
+    expect(detail.deliveryLineRowClassName({ row: detail.treeLineItems.value[0]! })).toBe(
+      'row-printed',
+    );
+  });
+
+  it('装配件父行恒不绿（它是聚合展示行，绿底由子件行体现）', async () => {
+    const detail = await detailOf([
+      mkItem({ id: '400', part_id: 'PA', assembly_id: ASM, shippable_sets: 2 }),
+      mkItem({ id: '300', part_id: 'PB', assembly_id: ASM, shippable_sets: 2 }),
+    ]);
+    usePrintedLabels().markPrinted('NOTE-1', ['400', '300']);
+    const parent = detail.treeLineItems.value.find((r) => r.is_asm_row)!;
+    expect(detail.deliveryLineRowClassName({ row: parent })).toBe('');
+    // 子件行照常绿
+    expect(
+      detail.deliveryLineRowClassName({ row: detail.treeLineItems.value[0]!.children![0]! }),
+    ).toBe('row-printed');
+  });
+});
+
+describe('勾选行 → 批次 id 展开（移除用）', () => {
+  it('rowIdToBatchIds 覆盖父行与全部子件行，装配件父行给的是子件批次并集', async () => {
+    const detail = await detailOf([
+      mkItem({ id: '400', part_id: 'PA', assembly_id: ASM }),
+      mkItem({ id: '300', part_id: 'PB', assembly_id: ASM }),
+      mkItem({ id: '999', part_id: 'PLOOSE' }),
+    ]);
+    const map = detail.rowIdToBatchIds.value;
+    expect(map.get('ASM_' + ASM)).toEqual(['400', '300']);
+    expect(map.get('P:' + ASM + ':PA')).toEqual(['400']);
+    expect(map.get('P:-:PLOOSE')).toEqual(['999']);
+    expect(map.size).toBe(4);
   });
 });

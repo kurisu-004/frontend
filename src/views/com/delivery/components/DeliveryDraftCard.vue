@@ -6,14 +6,17 @@
   设计要点：
   - 纯受控展示：所有数据 / loading 态由 props 传入；所有 user action 通过 emit 回给 shell。
   - el-table 实例 ref 在本组件内部声明（避免 T9 教训「template ref on readonly prop 静默失败」）。
-    通过 emit('set-table-ref', el) 把实例回传给 shell → useDeliveryDraftBoard.setTableRef。
-  - props.rows 是 shell 调 board.foldedRows(noteId) 拿到的 MergedDraftRow[] 引用；
+    通过 emit('setTableRef', el) 把实例回传给 shell → useDeliveryDraftBoard.setTableRef。
+  - props.rows 是 shell 调 board.foldedRows(noteId) 拿到的 PartTreeRow[] 引用；
     board 内部按 noteId 缓存 computed，确保同一份数据的引用稳定（el-table 的 :data
     换引用会整表重算）。
 
+  2026-10-09：行形态改为零件 / 装配件树（序列号 / 图号 / 名称 / 数量 / 系统交期 + 勾选列），
+  「打印标签」直接导出勾选行，不再打开预览对话框。
+
   props:
     draft             — 当前草稿 header（列表行 DeliveryNoteItemData）
-    rows              — foldBySerial 后的行（el-table 数据源）
+    rows              — buildPartTreeRows 后的零件 / 装配件行（el-table 数据源）
     deleting          — 删除草稿 loading 态
     submitting        — 提交草稿 loading 态
     canPrint          — 「打印送货单」/「打印标签」两按钮可用（角色 + ≥1 行项）
@@ -22,19 +25,21 @@
 
   emits:
     goto-detail         — 点 header 跳转详情
-    remove              — 移除某行
+    remove              — 移除某行（按行展开成批次 id）
     print-note          — 打开打印送货单预览
-    print-labels        — 打开打印标签预览
+    print-labels        — 导出当前勾选行的标签
     delete-draft        — 删除草稿
     submit-draft        — 提交草稿
+    update:selectedRows — 勾选变化（勾选集合归 shell，各卡互不干扰）
     set-table-ref       — el-table 实例注册 / 反注册
 -->
 <script setup lang="ts">
 import { h, ref } from 'vue';
 import type { ComponentInstance } from 'vue';
+import { RouterLink } from 'vue-router';
 import { Delete, Printer, Tickets } from '@element-plus/icons-vue';
-import { ElTable } from 'element-plus'; // 2026-09-21 T-B4：收紧 emits / ref / 函数参 any → ComponentInstance<typeof ElTable> | null
-import type { MergedDraftRow } from '../composables/useDeliveryDraftBoard';
+import { ElTable, ElTag } from 'element-plus'; // 2026-09-21 T-B4：收紧 emits / ref / 函数参 any → ComponentInstance<typeof ElTable> | null
+import type { PartTreeRow } from '../utils/deliveryNotePartRows';
 import type { DeliveryNoteItemData } from '../composables/deliveryNoteSchema';
 import {
   resolveDraggable,
@@ -47,21 +52,23 @@ import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 
 defineProps<{
   draft: DeliveryNoteItemData;
-  rows: MergedDraftRow[];
+  rows: PartTreeRow[];
   deleting: boolean;
   submitting: boolean;
   canPrint: boolean;
   canSubmit: boolean;
-  rowClassName: (info: { row: MergedDraftRow }) => string;
+  rowClassName: (info: { row: PartTreeRow }) => string;
 }>();
 
 const emit = defineEmits<{
   gotoDetail: [];
-  remove: [row: MergedDraftRow];
+  remove: [row: PartTreeRow];
   printNote: [];
   printLabels: [];
   deleteDraft: [];
   submitDraft: [];
+  /** 勾选变化：整份上抛（保留在 shell 的 selectedRowsByNote 里）。 */
+  'update:selectedRows': [rows: PartTreeRow[]];
   setTableRef: [el: ComponentInstance<typeof ElTable> | null];
 }>();
 
@@ -76,30 +83,76 @@ function handleTableRef(el: ComponentInstance<typeof ElTable> | null): void {
   emit('setTableRef', el);
 }
 
+/** 勾选变化 → 上抛给 shell（EP 的 selection 是组件内部状态，不试图反向单控）。 */
+function handleSelectionChange(rows: PartTreeRow[]): void {
+  emit('update:selectedRows', rows);
+}
+
 // 2026-08-27 Task 8：列顺序拖动 + 可见性。
 // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
+/** cellRender 的 row 形参是 unknown（ColumnDef 契约如此），按行类型取回。 */
+function asPartRow(raw: unknown): PartTreeRow {
+  return raw as PartTreeRow;
+}
+
 const columnDefs: ColumnDef[] = [
   {
     key: 'serial_no',
     label: '序列号',
     prop: 'serial_no',
     minWidth: 100,
-    // 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
-    cellRender: ({ row }) =>
-      h(
-        'span',
-        { class: { muted: !(row as MergedDraftRow).serial_no } },
-        (row as MergedDraftRow).serial_no || '—',
-      ),
+    cellRender: ({ row }) => {
+      const r = asPartRow(row);
+      return h('span', { class: { muted: !r.serial_no } }, r.serial_no || '—');
+    },
   },
-  { key: 'name', label: '名称', prop: 'name', minWidth: 110, showOverflowTooltip: true },
-  { key: 'quantity', label: '数量', prop: 'quantity', width: 60, align: 'right' },
+  {
+    key: 'drawing_no',
+    label: '图号',
+    prop: 'drawing_no',
+    minWidth: 140,
+    showOverflowTooltip: true,
+  },
+  {
+    key: 'name',
+    label: '名称',
+    prop: 'name',
+    minWidth: 110,
+    showOverflowTooltip: true,
+    // 装配件父行渲染「装配件」标签 + 跳装配件详情；零件行是纯文本。
+    // h() 传字符串 type 不做组件解析（会渲染成字面 <router-link> 自定义元素、
+    // 函数 children 被当 slots 丢掉 → 空白），必须传导入的 RouterLink 组件。
+    cellRender: ({ row }) => {
+      const r = asPartRow(row);
+      if (!r.is_asm_row) return h('span', null, r.name);
+      return h('div', null, [
+        h(ElTag, { type: 'warning', size: 'small', class: 'asm-tag' }, () => '装配件'),
+        h(RouterLink, { to: `/assemblies/${r.assembly_id}`, class: 'assembly-link' }, () => r.name),
+      ]);
+    },
+  },
+  {
+    key: 'quantity',
+    label: '数量',
+    prop: 'quantity',
+    width: 90,
+    align: 'right',
+    // 单位随数走：装配件「套」（null 时没有单位，否则渲染成「— 套」，会被读成
+    // 「凑不齐整套、打不了」）；零件「件」（件数必填，没有缺失态）。
+    cellRender: ({ row }) => {
+      const r = asPartRow(row);
+      return h('div', { class: 'qty' }, [
+        h('span', null, r.quantity ?? '—'),
+        r.quantity !== null ? h('span', { class: 'muted' }, r.unit) : null,
+      ]);
+    },
+  },
   {
     key: 'system_delivery_date',
     label: '系统交期',
-    width: 90,
+    width: 110,
     align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as MergedDraftRow).system_delivery_date || '—'),
+    cellRender: ({ row }) => h('span', null, asPartRow(row).system_delivery_date || '—'),
   },
 ];
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'delivery_draft_card' });
@@ -134,12 +187,17 @@ drag.applyDrag(tableEl);
       <el-table
         :ref="(el) => handleTableRef(el as ComponentInstance<typeof ElTable> | null)"
         :data="rows"
-        :row-key="(row: MergedDraftRow) => row.batch_ids[0]"
+        :row-key="(row: PartTreeRow) => row.id"
         :row-class-name="rowClassName"
+        :tree-props="{ children: 'children' }"
+        default-expand-all
         height="240"
         size="small"
-        empty-text="暂无加入批次 — 扫码加入"
+        empty-text="暂无加入零件 — 扫码加入"
+        @selection-change="handleSelectionChange"
       >
+        <!-- 勾选列不进 defs：列顺序拖动会把列拖到别处，勾选列必须恒在序列号之前。 -->
+        <el-table-column type="selection" width="42" reserve-selection />
         <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
           <el-table-column
             v-if="columnVisibility.isVisible(d.key)"
@@ -168,7 +226,7 @@ drag.applyDrag(tableEl);
               link
               size="small"
               type="danger"
-              @click="emit('remove', row as MergedDraftRow)"
+              @click="emit('remove', row as PartTreeRow)"
             >
               移除
             </el-button>
@@ -283,5 +341,21 @@ drag.applyDrag(tableEl);
 
 .muted {
   color: var(--el-text-color-secondary);
+}
+.qty {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.asm-tag {
+  margin-right: 6px;
+}
+.assembly-link {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+.assembly-link:hover {
+  text-decoration: underline;
 }
 </style>

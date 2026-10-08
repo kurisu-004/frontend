@@ -1,15 +1,17 @@
 // @vitest-environment happy-dom
 // src/views/com/delivery/components/__tests__/DeliveryNoteLineItemsTable.asmQty.spec.ts
 //
-// 2026-10-04 新增：详情页「零件列表」数量列的装配件父行渲染契约（打印预览侧已有
-// 同款守卫，详见 PrintPreviewDialog.customOrder.spec.ts）。
+// 详情页「零件列表」数量列的渲染契约（打印预览侧已有同款守卫，详见
+// PrintPreviewDialog.spec.ts）。2026-10-09 起列定义只有域根一份（组件内那份副本已删），
+// 本用例通过传真实的 `buildDeliveryNoteLineItemsColumnDefs()` 驱动渲染 —— 顺带守住
+// 「组件真的吃父注入的 defs，没有另建副本」。
 //
 // 断的是「单位随数走」这条口径：后端没给 shippable_sets 时输出「—」而**不是**
 // 「— 套」。后端没给数 = 这张单照常能打（照常打整套），带上单位会被读成「凑不齐
 // 一套、打不了」；反过来 0 套是真凑不齐，必须照实显示「0 套」，不能因为 falsy
 // 一起把单位吞掉。两种态相反 ⇒ 用例各钉一条。
 //
-// 为什么用 EP 模板桩而不是真 el-table：被测的是本组件自己的 cellRender 逻辑，
+// 为什么用 EP 模板桩而不是真 el-table：被测的是列定义里的 cellRender 逻辑，
 // el-table ↔ el-table-column 的插槽作用域协议不该由本用例复刻（理由同
 // src/views/inspection/__tests__/InspectionTable.spec.ts）。桩 el-table 把**真实**
 // 的 :data（treeLineItems）逐行喂给列桩，断言按 [data-col="数量"][data-row-id]
@@ -20,7 +22,8 @@ import { mount, type VueWrapper } from '@vue/test-utils';
 import { defineComponent, h, type PropType } from 'vue';
 import { createRouter, createMemoryHistory } from 'vue-router';
 import type { DeliveryNoteDetailData } from '../../composables/deliveryNoteSchema';
-import type { AssemblyTreeRow } from '../../composables/useDeliveryNoteDetail';
+import type { PartTreeRow } from '../../utils/deliveryNotePartRows';
+import { buildDeliveryNoteLineItemsColumnDefs } from '../../deliveryNoteLineItemsColumnDefs';
 import DeliveryNoteLineItemsTable from '../DeliveryNoteLineItemsTable.vue';
 
 vi.mock('@/components/ColumnDragHandle.vue', () => ({
@@ -79,38 +82,42 @@ const stubs = {
   }),
 };
 
-function mkRow(p: Partial<AssemblyTreeRow> & { id: string }): AssemblyTreeRow {
+function mkRow(p: Partial<PartTreeRow> & { id: string }): PartTreeRow {
   return {
-    part_id: '',
-    batch_no: null,
-    batch_label: null,
+    is_part_row: true,
     serial_no: '',
     drawing_no: '',
     name: '',
+    order_no: '',
+    applicant_name: '',
+    customer_name: '',
+    customer_path: '',
+    note: '',
     quantity: 1,
-    status: 'READY_TO_SHIP',
-    applicant_name: null,
+    unit: '件',
+    batch_ids: ['1'],
+    label_printed: false,
     request_date: null,
     planned_delivery_date: null,
     system_delivery_date: null,
-    order_no: null,
-    note: null,
-    customer_name: null,
-    parent_customer_name: null,
-    customer_path: null,
+    status: 'READY_TO_SHIP',
+    part_id: '',
     assembly_id: null,
     assembly_serial_no: null,
     assembly_drawing_no: null,
     assembly_name: null,
     assembly_order_no: null,
+    assembly_quantity: null,
+    shippable_sets: null,
     ...p,
   };
 }
 
-/** 装配件父行（与 useDeliveryNoteDetail 构造的一致）：数量 = 本单可出货套数，缺失时 null。 */
-function asmRow(quantity: number | null): AssemblyTreeRow {
+/** 装配件父行（与 buildPartTreeRows 构造的一致）：数量 = 本单可出货套数，缺失时 null。 */
+function asmRow(quantity: number | null): PartTreeRow {
   return mkRow({
     id: 'ASM_ASM-1',
+    is_part_row: undefined,
     is_asm_row: true,
     has_children: true,
     assembly_id: 'ASM-1',
@@ -118,6 +125,7 @@ function asmRow(quantity: number | null): AssemblyTreeRow {
     name: '总装',
     quantity,
     unit: '套',
+    batch_ids: ['1', '2'],
   });
 }
 
@@ -140,23 +148,24 @@ function mkNote(): DeliveryNoteDetailData {
   };
 }
 
-function mountTable(rows: AssemblyTreeRow[]): VueWrapper {
+function mountTable(rows: PartTreeRow[]): VueWrapper {
   scopeRows = [];
+  const defs = buildDeliveryNoteLineItemsColumnDefs();
   return mount(DeliveryNoteLineItemsTable, {
     props: {
       note: mkNote(),
       canEdit: true,
+      role: { MANAGER: true, CLERK: false, INSPECTOR: false },
       treeLineItems: rows,
-      columnDefs: [],
+      // 传真实的列定义（域根那份）——组件内不再有副本
+      columnDefs: defs,
       columnVisibility: {
         isVisible: () => true,
         update: () => {},
         showAll: () => {},
         currentMap: {},
       },
-      selectedItemIds: [],
-      partStatusLabel: (s: string) => s,
-      partStatusTagType: () => 'info' as const,
+      selectedRows: [],
       deliveryLineRowClassName: () => '',
     },
     global: {
@@ -171,6 +180,30 @@ function mountTable(rows: AssemblyTreeRow[]): VueWrapper {
 function qtyCell(wrapper: VueWrapper, rowId: string) {
   return wrapper.find(`[data-col="数量"] [data-row-id="${rowId}"]`);
 }
+
+describe('详情页列定义只有一份（组件吃父注入的 defs）', () => {
+  it('列集合 = 域根那份 12 列，且不含批次列', () => {
+    const w = mountTable([]);
+    const labels = w.findAll('.mock-el-table-column').map((e) => e.attributes('data-col'));
+    // 组件内固定列：selection + index（不进 defs）
+    expect(labels.slice(0, 2)).toEqual(['', '#']);
+    expect(labels.slice(2)).toEqual([
+      '序列号',
+      '图号',
+      '订单号',
+      '名称',
+      '客户（二级）',
+      '申请人',
+      '数量',
+      '请购日期',
+      '计划交期',
+      '系统交期',
+      '备注',
+      '状态',
+    ]);
+    expect(labels).not.toContain('批次');
+  });
+});
 
 describe('详情页装配件父行数量列', () => {
   it('后端没给 shippable_sets → 「—」且不带单位（不是「— 套」）', () => {
@@ -195,10 +228,10 @@ describe('详情页装配件父行数量列', () => {
     expect(cell.find('.muted').text()).toBe('套');
   });
 
-  it('散件行渲染批次数量（无单位，不受装配件口径影响）', () => {
-    const wrapper = mountTable([mkRow({ id: '999', part_id: 'PLOOSE', quantity: 5 })]);
+  it('零件行渲染「N 件」（折叠后的件数，与标签导出的单位一致）', () => {
+    const wrapper = mountTable([mkRow({ id: '999', quantity: 5 })]);
     const cell = qtyCell(wrapper, '999');
-    expect(cell.text()).toBe('5');
-    expect(cell.find('.muted').exists()).toBe(false);
+    expect(cell.text()).toBe('5件');
+    expect(cell.find('.muted').text()).toBe('件');
   });
 });

@@ -1,14 +1,25 @@
 // src/views/com/delivery/deliveryNoteLineItemsColumnDefs.ts
 //
-// 详情页「零件列表」的 13 列 ColumnDef 工厂（deps 注入形态，同
+// 详情页「零件列表」的 12 列 ColumnDef 工厂（deps 注入形态，同
 // src/views/com/delivery/deliveryNoteColumnDefs.ts）。
 //
 // 列可见性 / 列顺序快照 key = `delivery_note_detail_line_items`（既有值，**不许改** ——
 // 改名义务登记见 deliveryNoteColumnDefs.ts 顶部的 `//` 块）。
 //
-// 行的形态是 `AssemblyTreeRow`（装配件父行 + 散件行摊平成一行一形态），由
-// `useDeliveryNoteDetail.treeLineItems` 派生。父行的 `is_asm_row` 标记让「批次 /
-// 名称 / 数量 / 状态」四列走两套渲染。
+// 行的形态是 `PartTreeRow`（装配件父行 + 零件行摊平成一行一形态），由
+// `useDeliveryNoteDetail.treeLineItems` 派生。父行的 `is_asm_row` 标记让「名称 / 数量 /
+// 状态」三列走两套渲染。
+//
+// 2026-10-09 列集合变化：
+// - 删 `batch_label`（批次号不再单列）：行是零件级折叠，一行可能代表同零件的多个批次，
+//   单列批次号对不上「这一行的量」，展示成 N 个批次号反而误导。
+// - 图号 / 名称补 `showOverflowTooltip`（长图号按 `overflow-wrap: break-word` 折行，
+//   排版被拉成两段）；EP 只在该列开了 `show-overflow-tooltip` 时才给 `.cell` 加
+//   `el-tooltip` 类，那个类才是 `white-space: nowrap` + ellipsis。
+// - 申请人 / 数量 / 计划交期 / 系统交期四列加宽：表头「列名 + 列拖动手柄(18px) +
+//   排序箭头(24px) + .cell 左右 padding(24px)」在原宽度下超过可用宽度，而 EP 的 `.cell`
+//   是 `white-space: normal` ⇒ 排序箭头折行。`src/styles/index.scss` 另有 `nowrap` 兜底，
+//   两处一起改：加宽让文案不挤，nowrap 兜住更窄的窗口。
 
 import { h, type VNode } from 'vue';
 import { ElTag } from 'element-plus';
@@ -16,23 +27,17 @@ import { RouterLink } from 'vue-router';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { OrderStatus } from '@/types/parts';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
-import type { DeliveryNoteLineItemData } from './composables/deliveryNoteSchema';
-import type { AssemblyTreeRow } from './composables/useDeliveryNoteDetail';
+import type { PartTreeRow } from './utils/deliveryNotePartRows';
 
-/** 行类型 = 详情页树形行（装配件父行 + 行项）。 */
-export type DeliveryNoteLineItemRow = AssemblyTreeRow;
+/** 行类型 = 详情页树形行（装配件父行 + 零件行）。 */
+export type DeliveryNoteLineItemRow = PartTreeRow;
 
 /** 列可见性 / 列顺序的 localStorage key（既有值，**不许改**）。 */
 export const DELIVERY_NOTE_LINE_ITEMS_LIST_KEY = 'delivery_note_detail_line_items';
 
 export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
-  function row(ctx: { row: unknown }): AssemblyTreeRow {
-    return ctx.row as AssemblyTreeRow;
-  }
-
-  function renderBatchLabel(ctx: { row: unknown }): VNode {
-    const r = row(ctx);
-    return h('span', null, r.is_asm_row ? '—' : (r.batch_label ?? '—'));
+  function row(ctx: { row: unknown }): PartTreeRow {
+    return ctx.row as PartTreeRow;
   }
 
   function renderName(ctx: { row: unknown }): VNode {
@@ -50,17 +55,12 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
 
   function renderQuantity(ctx: { row: unknown }): VNode {
     const r = row(ctx);
-    if (r.is_asm_row) {
-      // 父行数量 = 本单可出货套数（后端算，与打印对话框同源同值）；后端没给数时
-      // null → 渲染「—」。**不可兜成 0**（「没给数」与「凑不齐整套」业务含义相反）。
-      // 单位随数走：没数就没有单位，否则渲染成「— 套」。
-      return h('div', null, [
-        h('strong', null, r.quantity ?? '—'),
-        r.quantity !== null ? h('span', { class: 'muted' }, '套') : null,
-      ]);
-    }
-    // 散件行的 quantity 必填 number，没有缺失态，所以不写 `?? '—'`。
-    return h('span', null, (ctx.row as DeliveryNoteLineItemData).quantity);
+    // 单位随数走：没数就没有单位（渲染成「— 套」会被读成「凑不齐整套、打不了」）。
+    // 装配件「套」/ 零件「件」，两个出口都与标签导出的单位一致。
+    return h('div', null, [
+      h('strong', null, r.quantity ?? '—'),
+      r.quantity !== null ? h('span', { class: 'muted' }, r.unit) : null,
+    ]);
   }
 
   function renderStatus(ctx: { row: unknown }): VNode {
@@ -72,9 +72,8 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
     );
   }
 
-  // 字段顺序 = 初始渲染顺序，**顺序与 key 一行未改**（见改名义务登记）。
+  // 字段顺序 = 初始渲染顺序（顺序快照的变更登记见 deliveryNoteColumnDefs.ts 顶部）。
   return [
-    { key: 'batch_label', label: '批次', minWidth: 100, sortable: true, align: 'center', cellRender: renderBatchLabel },
     {
       key: 'serial_no',
       label: '序列号',
@@ -85,7 +84,15 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
       cellRender: (ctx) =>
         h('span', { class: { muted: !row(ctx).serial_no } }, row(ctx).serial_no || '—'),
     },
-    { key: 'drawing_no', label: '图号', prop: 'drawing_no', minWidth: 140, sortable: true, align: 'center' },
+    {
+      key: 'drawing_no',
+      label: '图号',
+      prop: 'drawing_no',
+      minWidth: 160,
+      showOverflowTooltip: true,
+      sortable: true,
+      align: 'center',
+    },
     {
       key: 'order_no',
       label: '订单号',
@@ -96,7 +103,7 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
       align: 'center',
       cellRender: (ctx) => h('span', null, row(ctx).order_no || '—'),
     },
-    { key: 'name', label: '名称', minWidth: 200, sortable: true, align: 'center', cellRender: renderName },
+    { key: 'name', label: '名称', minWidth: 200, showOverflowTooltip: true, sortable: true, align: 'center', cellRender: renderName },
     {
       key: 'customer',
       label: '客户（二级）',
@@ -114,12 +121,12 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
       key: 'applicant_name',
       label: '申请人',
       prop: 'applicant_name',
-      minWidth: 100,
+      minWidth: 140,
       sortable: true,
       align: 'center',
       cellRender: (ctx) => h('span', null, row(ctx).applicant_name || '—'),
     },
-    { key: 'quantity', label: '数量', minWidth: 80, sortable: true, align: 'center', cellRender: renderQuantity },
+    { key: 'quantity', label: '数量', minWidth: 110, sortable: true, align: 'center', cellRender: renderQuantity },
     {
       key: 'request_date',
       label: '请购日期',
@@ -131,7 +138,7 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
       key: 'planned_delivery_date',
       label: '计划交期',
       prop: 'planned_delivery_date',
-      minWidth: 120,
+      minWidth: 140,
       sortable: true,
       align: 'center',
       cellRender: (ctx) => h('span', null, row(ctx).planned_delivery_date || '—'),
@@ -140,7 +147,7 @@ export function buildDeliveryNoteLineItemsColumnDefs(): ColumnDef[] {
       key: 'system_delivery_date',
       label: '系统交期',
       prop: 'system_delivery_date',
-      minWidth: 120,
+      minWidth: 140,
       sortable: true,
       align: 'center',
       cellRender: (ctx) => h('span', null, row(ctx).system_delivery_date || '—'),

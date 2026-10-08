@@ -5,33 +5,40 @@
 // 数据来源是同域 query hook（`useDeliveryDraftsQuery` = DRAFT 列表头 +
 // `useDeliveryDraftsDetailQuery` = 批量详情），本 composable 负责把 query 结果
 // **写穿**进本地 Map，并叠加卡片级状态（每张卡的 loading / el-table 实例 /
-// 折叠缓存 / localStorage 已打印标签记录）。写穿而不是纯派生，是因为卡片有大量
-// 本地增量更新（入单后就地替换、移除批次后就地覆盖、提交 / 删除后清 key），
+// 行形缓存 / 每张卡的勾选 / localStorage 已打印标签记录）。写穿而不是纯派生，是因为
+// 卡片有大量本地增量更新（入单后就地替换、移除批次后就地覆盖、提交 / 删除后清 key），
 // 这些更新要走 mutation + 失效，让 query 自己回流。
 //
 // 持有：
 //   - drafts / draftDetails / draftsLoading / draftsCount
 //     —— 草稿 header + line_items + 加载态 + 计数
 //   - deletingByNote —— 每张草稿卡片各自的删除中 loading
-//   - foldedComputeds —— per-note 的 foldBySerial 缓存（保 el-table 的 :data 引用稳定）
-//   - tableRefs —— 每张卡片的 el-table 实例（子组件注册 / 反注册；当前只注册不读取，
+//   - foldedComputeds —— per-note 的 buildPartTreeRows 缓存（保 el-table 的 :data 引用稳定）
+//   - selectedRowsByNote —— 每张卡片勾选的零件 / 装配件行（「打印标签」的入参）
+//   - tableRefs —— 每张卡片的 el-table 实例（子组件注册 / 反注册；移除行后清勾选用，
 //     见 setTableRef 处注释）
 //
 // 不持有：
 //   - submittingByNote（属于 useDeliveryScanSubmission，与 doSubmit 配对）
 //   - 扫码相关状态（lastScanCode / scanning 等）
-//   - 提交 / 打印预览相关弹窗状态
+//   - 提交 / 打印送货单预览相关弹窗状态
 //
 // 子组件约定：
 //   - DeliveryDraftCard 通过 props 读 drafts / rows / 各 loading 标志，
 //     通过 emits 把 user action（goto-detail / remove / print-note / print-labels /
-//     delete-draft / submit-draft / set-table-ref）回给 shell。
+//     delete-draft / submit-draft / selection-change / set-table-ref）回给 shell。
 //
 // 2026-10-08 的连带变更：
 // - `scope` / `scope_label` / `recent_items` 三字段消失（后端不发、前端原来还在编
 //   `'L1_WIDE'` / `'按一级客户'`）；同 L1 同时只允许一张 DRAFT，scope 概念整体下线。
 // - 详情缓存由 query 承担；原手搓的 `useDeliveryNoteDetailCache`（TTL Map +
 //   in-flight Map）随该文件一起删除。
+//
+// 2026-10-09 的连带变更：
+// - 卡片行形态由「同 serial_no 折叠的批次行」改为**零件 / 装配件树行**，折叠实现搬进
+//   `utils/deliveryNotePartRows`（与详情页共用）；本文件的 `MergedDraftRow` /
+//   `foldBySerial` 随之删除。
+// - 新增 `selectedRowsByNote`：卡片加了勾选列，「打印标签」直接导出勾选行，不再经对话框。
 
 import { computed, reactive, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -40,6 +47,7 @@ import { useQueryClient } from '@tanstack/vue-query';
 import { invalidateDeliveryNotesQuery } from './useDeliveryNoteListStore';
 import { useDeliveryDraftsDetailQuery, useDeliveryDraftsQuery } from './useDeliveryDraftsQuery';
 import { usePrintedLabels } from './usePrintedLabels';
+import { buildPartTreeRows, type PartTreeRow } from '../utils/deliveryNotePartRows';
 import type {
   DeliveryNoteDetailData,
   DeliveryNoteItemData,
@@ -47,69 +55,14 @@ import type {
 } from './deliveryNoteSchema';
 
 /**
- * el-table 一行 = 同 serial_no 折叠后的若干 batch；serial 为 null 时按 id 各占一行。
- *
- * `label_printed` 读 `usePrintedLabels` 的 localStorage 记录：打印对话框里
- * `mode='label'` 导出成功后写入（走 `member_ids`，即该行代表的批次 id 集合）。
- */
-export interface MergedDraftRow {
-  /** 同 serial_no 折叠后的代表 serial；为 null 时按各自一行（key = `__null_<id>`）。 */
-  serial_no: string | null;
-  drawing_no: string;
-  name: string;
-  /** 折叠各 batch 之和。 */
-  quantity: number;
-  /** 系统交期；同 serial 多 batch 取首个非空。 */
-  system_delivery_date: string | null;
-  /** 折叠行背后的所有 batch id（移除用）。 */
-  batch_ids: string[];
-  /** 任一 batch 在 localStorage 里登记为已打印标签 = true；用于绿底渲染。 */
-  label_printed: boolean;
-}
-
-/**
  * el-table 实例 ref（不绑 FormInstance 等更复杂类型）。
  *
- * ⚠️ 只作**窄接口的形状锚点**：全仓没有任何读取方（见 `tableRefs` 的注释），
- * 之所以还留一个方法签名，是空接口过不了 lint。
+ * 卡片表格开了 `reserve-selection`，EP 的保留集按 row-key 记；移除一行后不清保留集，
+ * 该零件被重新扫码入单时会带着上一次没出纸的勾选态回来，所以 onRemove 要拿实例调
+ * `clearSelection()`。
  */
 export interface DraftTableInstance {
   clearSelection: () => void;
-}
-
-/** 同 serial_no 的多 batch 折叠为一行（分组 key = serial_no）。 */
-function foldBySerial(
-  items: readonly DeliveryNoteLineItemData[],
-  isPrinted: (batchId: string) => boolean,
-): MergedDraftRow[] {
-  const groups = new Map<string, MergedDraftRow>();
-  const order: string[] = [];
-  for (const li of items) {
-    const key = li.serial_no ?? `__null_${li.id}`;
-    const existing = groups.get(key);
-    const printed = isPrinted(String(li.id));
-    if (existing) {
-      existing.quantity += li.quantity;
-      existing.batch_ids.push(String(li.id));
-      if (!existing.label_printed && printed) existing.label_printed = true;
-      if (!existing.system_delivery_date && li.system_delivery_date) {
-        existing.system_delivery_date = li.system_delivery_date;
-      }
-    } else {
-      const row: MergedDraftRow = {
-        serial_no: li.serial_no,
-        drawing_no: li.drawing_no,
-        name: li.name,
-        quantity: li.quantity,
-        system_delivery_date: li.system_delivery_date,
-        batch_ids: [String(li.id)],
-        label_printed: printed,
-      };
-      groups.set(key, row);
-      order.push(key);
-    }
-  }
-  return order.map((k) => groups.get(k)!);
 }
 
 export interface UseDeliveryDraftBoardReturn {
@@ -119,13 +72,16 @@ export interface UseDeliveryDraftBoardReturn {
   draftsCount: ComputedRef<number>;
   deletingByNote: Record<string, boolean>;
   setTableRef: (noteId: string, el: DraftTableInstance | null) => void;
-  foldedRows: (noteId: string) => MergedDraftRow[];
-  rowClassName: (ctx: { row: MergedDraftRow }) => string;
+  foldedRows: (noteId: string) => PartTreeRow[];
+  /** 每张卡片勾选的零件 / 装配件行（打印标签的入参）。 */
+  selectedRowsByNote: Record<string, PartTreeRow[]>;
+  setSelectedRows: (noteId: string, rows: PartTreeRow[]) => void;
+  rowClassName: (ctx: { row: PartTreeRow }) => string;
   /** 切 L1（写穿到两个 query 的闸门）。空串 = 清空看板。 */
   setL1Id: (l1Id: string) => void;
   refreshDraftDetail: (noteId: string) => Promise<DeliveryNoteDetailData | null>;
   writeDraftFromScan: (note: DeliveryNoteItemData) => void;
-  onRemove: (d: DeliveryNoteItemData, row: MergedDraftRow) => Promise<void>;
+  onRemove: (d: DeliveryNoteItemData, row: PartTreeRow) => Promise<void>;
   onDeleteDraft: (d: DeliveryNoteItemData) => Promise<void>;
   clearNoteLocalState: (noteId: string) => void;
   clearAll: () => void;
@@ -191,6 +147,9 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     for (const k of Object.keys(deletingByNote)) {
       if (!(k in next)) delete deletingByNote[k];
     }
+    for (const k of Object.keys(selectedRowsByNote)) {
+      if (!(k in next)) delete selectedRowsByNote[k];
+    }
     for (const k of Array.from(foldedComputeds.keys())) {
       if (!(k in next)) foldedComputeds.delete(k);
     }
@@ -204,51 +163,60 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
   /**
    * 每张草稿卡片各自的 el-table 实例 ref，由子组件通过 setTableRef 注册。
    *
-   * ⚠️ **只写不读**：卡片表格没有 selection 列，全仓没有任何读取方。详情页那张带
-   * selection 的零件列表表（DeliveryNoteLineItemsTable）自己管自己的勾选态，不经这条
-   * 注册链。注册链本身留着（DeliveryDraftCard → shell 的接线真实存在），但别在注释里
-   * 给它编消费者。
+   * 唯一读取方是 `onRemove`：卡片表格开了 `reserve-selection`，EP 的保留集按 row-key 记，
+   * 移除一行后不清掉保留集，同一零件被重新扫码入单时会带着上一次没出纸的勾选态回来
+   * ⇒ 移除成功后必须调实例的 `clearSelection()`。详情页那张表不经过这条注册链
+   * （它自己 expose clearSelection，由 shell 接到行内 composable 的移除回调上）。
    */
   const tableRefs = new Map<string, DraftTableInstance>();
 
-  // ============ 折叠数据缓存（per-note computed；保 data 引用稳定）============
+  /** 每张卡片勾选的零件 / 装配件行（「打印标签」的入参；由卡片 selection-change 写入）。 */
+  const selectedRowsByNote = reactive<Record<string, PartTreeRow[]>>({});
+
+  // ============ 行形数据缓存（per-note computed；保 data 引用稳定）============
   /**
-   * `foldedRows` 在模板里被调用，裸调 `foldBySerial(...)` 每次重渲染都产生新数组
-   * ⇒ el-table 的 `:data` 每次都换引用，EP 当成数据源变了、整表重算。
+   * `foldedRows` 在模板里被调用，裸调 `buildPartTreeRows(...)` 每次重渲染都产生新数组
+   * ⇒ el-table 的 `:data` 每次都换引用，EP 当成数据源变了、整表重算（勾选态也会被
+   * 无谓地重算一遍）。
    *
    * 按 note_id 缓存 computed：`draftDetails[noteId]` 与 printedLabelStore 均未变时复用
    * 同一引用，视图重渲染不再换 `:data`；数据真正变化（扫码刷新 / markPrinted / 移除）
    * 时正常重算。
    */
-  const foldedComputeds = new Map<string, ComputedRef<MergedDraftRow[]>>();
+  const foldedComputeds = new Map<string, ComputedRef<PartTreeRow[]>>();
 
   /** 「已打印标签」的 localStorage 记录（模块级单例，见 usePrintedLabels）。 */
   const printedLabelStore = usePrintedLabels();
-  /** 跨 note 查某个 batch 是否打过标签（foldBySerial 的 isPrinted 回调）。 */
+  /** 跨 note 查某个 batch 是否打过标签（buildPartTreeRows 的 isPrinted 回调）。 */
   const isPrintedBatch = printedLabelStore.isPrintedBatch;
 
-  /** 子组件用：注册 / 反注册 el-table 实例。当前只注册，无读取方（见 tableRefs 注释）。 */
+  /** 子组件用：注册 / 反注册 el-table 实例（移除行后由 onRemove 反注册前清勾选）。 */
   function setTableRef(noteId: string, el: DraftTableInstance | null): void {
     if (el) tableRefs.set(noteId, el);
     else tableRefs.delete(noteId);
   }
 
-  /** 按 note_id 取 foldBySerial 结果（命中 cache 时复用同一 ref）。 */
-  function foldedRows(noteId: string): MergedDraftRow[] {
+  /** 按 note_id 取行形结果（命中 cache 时复用同一 ref）。 */
+  function foldedRows(noteId: string): PartTreeRow[] {
     let c = foldedComputeds.get(noteId);
     if (!c) {
       // 绿底会随标记重算：`isPrintedBatch` 在本 computed 求值**期间**同步读
       // `usePrintedLabels` 的 `_store`，Vue 按「求值期间发生的 ref 读」收集依赖 ——
       // 不需要在这里显式再读一次 store。（行项目录为空时不会调 isPrinted，那种情况下
       // 结果本就是空数组，重算与否无差别。）
-      c = computed(() => foldBySerial(draftDetails[noteId] ?? [], isPrintedBatch));
+      c = computed(() => buildPartTreeRows(draftDetails[noteId] ?? [], isPrintedBatch));
       foldedComputeds.set(noteId, c);
     }
-    return ((): MergedDraftRow[] => c!.value)();
+    return ((): PartTreeRow[] => c!.value)();
+  }
+
+  /** 卡片勾选变化：整份替换（reactive 记录要换引用才会重渲 shell）。 */
+  function setSelectedRows(noteId: string, rows: PartTreeRow[]): void {
+    selectedRowsByNote[noteId] = rows;
   }
 
   /** el-table 行已打印标签绿底。 */
-  function rowClassName({ row }: { row: MergedDraftRow }): string {
+  function rowClassName({ row }: { row: PartTreeRow }): string {
     return row.label_printed ? 'row-printed' : '';
   }
 
@@ -266,6 +234,7 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     drafts.value = {};
     for (const k of Object.keys(draftDetails)) delete draftDetails[k];
     for (const k of Object.keys(deletingByNote)) delete deletingByNote[k];
+    for (const k of Object.keys(selectedRowsByNote)) delete selectedRowsByNote[k];
     foldedComputeds.clear();
     tableRefs.clear();
   }
@@ -296,8 +265,8 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     };
   }
 
-  /** 移除某折叠行对应的全部批次；成功后本地剔除并 unmark localStorage 记录。 */
-  async function onRemove(d: DeliveryNoteItemData, row: MergedDraftRow): Promise<void> {
+  /** 移除某行对应的全部批次；成功后本地剔除、清掉该行的勾选，并 unmark localStorage 记录。 */
+  async function onRemove(d: DeliveryNoteItemData, row: PartTreeRow): Promise<void> {
     const noteId = d.id;
     try {
       const updated = await removeBatches(noteId, {
@@ -309,6 +278,11 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
       await invalidateDeliveryNotesQuery(qc);
       // 批次已从单据上摘掉 → 清掉「已打印标签」记录，否则行再被加回来时会带着脏绿底。
       printedLabelStore.unmark(noteId, row.batch_ids);
+      // `reserve-selection` 的保留集按 row-key 记，不显式清的话同一零件重新扫码入单会
+      // 带着没出纸的勾选态回来；同时把 shell 侧那份勾选行替换成「只剩未被移除的行」。
+      const keep = (selectedRowsByNote[noteId] ?? []).filter((r) => r.id !== row.id);
+      setSelectedRows(noteId, keep);
+      tableRefs.get(noteId)?.clearSelection();
       ElMessage.success('已移除');
     } catch (e) {
       ElMessage.error((e as Error).message ?? '移除失败');
@@ -354,6 +328,7 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     delete drafts.value[noteId];
     delete draftDetails[noteId];
     delete deletingByNote[noteId];
+    delete selectedRowsByNote[noteId];
     foldedComputeds.delete(noteId);
     tableRefs.delete(noteId);
   }
@@ -364,9 +339,11 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
     draftsLoading,
     draftsCount,
     deletingByNote,
+    selectedRowsByNote,
 
     setTableRef,
     foldedRows,
+    setSelectedRows,
     rowClassName,
     setL1Id,
     refreshDraftDetail,

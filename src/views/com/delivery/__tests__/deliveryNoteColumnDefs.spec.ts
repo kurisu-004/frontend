@@ -7,9 +7,15 @@
 // ColumnVisibilityPopover 的人只会觉得「我的列设置怎么没了」）。所以这三个文件的
 // 列 key 与顺序在本文件里钉死：
 //   · delivery_note_list           —— 一览 8 列（deliveryNoteColumnDefs）
-//   · delivery_note_detail_line_items —— 详情 13 列（deliveryNoteLineItemsColumnDefs）
+//   · delivery_note_detail_line_items —— 详情 12 列（deliveryNoteLineItemsColumnDefs）
 //   · print_preview_dialog         —— 打印 8 列（deliveryNotePrintColumnDefs）；列**顺序**
 //     另按分组分片存 `print_preview_dialog__<groupKey>`（每张分组表一条序列）
+//
+// 2026-10-09：详情表行由批次行改为零件 / 装配件行 ⇒ 删 `batch_label`（批次号不再单列，
+// 一行代表同零件的多个批次），13 列变 12 列。**删列是安全的**：`useColumnVisibility` 的
+// 恢复是 lenient 的（只取 defs 里存在的 key，缺失 key 按新增列追加到末尾），老快照里的
+// `batch_label` 会被直接剔除、不报错。反过来「改 key 名」才是会让快照静默失效的动作，
+// 那才必须连本文件一起改。
 //
 // 另钉：行类型与 schema 的 z.infer 同源（`export type XxxRow = XxxItemData`）——
 // 改 schema 时忘了同步列渲染，TS 会在这里报错。
@@ -42,9 +48,8 @@ describe('列 key 与顺序（改了就让老用户列设置失效）', () => {
     ]);
   });
 
-  it('详情页 13 列，顺序与 2026-10-08 之前完全一致', () => {
+  it('详情页 12 列（批次列已删），其余 key 与顺序未变', () => {
     expect(buildDeliveryNoteLineItemsColumnDefs().map((d) => d.key)).toEqual([
-      'batch_label',
       'serial_no',
       'drawing_no',
       'order_no',
@@ -58,6 +63,8 @@ describe('列 key 与顺序（改了就让老用户列设置失效）', () => {
       'note',
       'status',
     ]);
+    // 批次列已下线：行是零件级折叠，一行可能代表同零件的多个批次
+    expect(buildDeliveryNoteLineItemsColumnDefs().map((d) => d.key)).not.toContain('batch_label');
   });
 
   it('打印对话框 8 列，key 与 2026-10-08 之前完全一致（数量 / 操作列不进 defs）', () => {

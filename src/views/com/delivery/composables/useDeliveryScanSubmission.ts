@@ -1,15 +1,15 @@
 // composables/useDeliveryScanSubmission.ts
 //
-// 扫码主流程 + 提交草稿 + 打印预览（送货单 / 打印标签）的业务状态 + 函数。
+// 扫码主流程 + 提交草稿 + 打印（送货单预览 / 打印标签）的业务状态 + 函数。
 //
 // 持有：
 //   - 扫码防抖态（lastScanCode / lastScanAt / scanning）
 //   - 三层树对话框态（scanTreeDialogVisible / scannedSerialNo）
-//   - 打印预览（PrintPreviewDialog）状态与导出形态（printNoteMode）
+//   - 打印送货单预览（PrintPreviewDialog）状态
 //   - submittingByNote —— 每张草稿卡片提交中 loading
 //
 // 不持有：
-//   - drafts / draftDetails / deletingByNote / tableRefs / foldedComputeds
+//   - drafts / draftDetails / deletingByNote / tableRefs / foldedComputeds / 卡片勾选
 //     —— useDeliveryDraftBoard 持有；本 composable 只经 onDraftRemoved 让它清 ref，
 //     不直接读其中任何一项
 //
@@ -26,6 +26,10 @@
 // - submit 的 CANDIDATES_AVAILABLE 候选分流：`POST /{id}/submit` 改回只回单据 id，
 //   闸门收敛在服务端。
 // - 手搓的 useDeliveryNoteDetailCache：并发去重改由 useQuery 承担，本文件直接调 getNote。
+//
+// 2026-10-09 的连带变更：
+// - 「打印标签」不再经打印对话框（`printNoteMode` / `mode='label'` 分支整体下线），
+//   改为 `printLabelsOfRows(d, rows)` 直接导出调用方勾选的零件 / 装配件行。
 
 import { computed, nextTick, reactive, ref, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -38,6 +42,8 @@ import type { DeliveryScanTreeData } from './deliveryScanTreeSchema';
 import type { DeliveryNoteDetailData, DeliveryNoteItemData } from './deliveryNoteSchema';
 import { useDeliveryScanTreeMutation } from './useDeliveryScanTreeQuery';
 import { invalidateDeliveryNotesQuery } from './useDeliveryNoteListStore';
+import { exportPartRowsLabels } from '../utils/deliveryNoteLabelExport';
+import type { PartTreeRow } from '../utils/deliveryNotePartRows';
 import { useQueryClient } from '@tanstack/vue-query';
 
 export interface UseDeliveryScanSubmissionOptions {
@@ -66,8 +72,6 @@ export interface UseDeliveryScanSubmissionReturn {
   scanTreeLoading: Ref<boolean>;
   printNotePreviewVisible: Ref<boolean>;
   printNoteTarget: Ref<DeliveryNoteDetailData | null>;
-  /** 打印对话框的导出形态（'note' = 送货单 / 'label' = 打印标签）。 */
-  printNoteMode: Ref<'note' | 'label'>;
   printNoteLoading: Ref<boolean>;
   submittingByNote: Record<string, boolean>;
   handleScan: (rawCode: string) => Promise<void>;
@@ -77,7 +81,13 @@ export interface UseDeliveryScanSubmissionReturn {
   /** 入单提交（三层树对话框里选好数量后调）。 */
   onSubmitEntries: (entries: DeliveryScanEntry[]) => Promise<void>;
   scanSubmitting: Ref<boolean>;
-  openPrintNote: (d: DeliveryNoteItemData, mode?: 'note' | 'label') => Promise<void>;
+  /** 打开打印送货单预览（先拉详情再开对话框）。 */
+  openPrintNote: (d: DeliveryNoteItemData) => Promise<void>;
+  /**
+   * 打印标签：直接导出勾选的零件 / 装配件行（2026-10-09 起不经打印对话框）。
+   * 实现与详情页共用 `utils/deliveryNoteLabelExport`，两处行为必须一致。
+   */
+  printLabelsOfRows: (d: DeliveryNoteItemData, rows: readonly PartTreeRow[]) => Promise<void>;
   onSubmitDraft: (d: DeliveryNoteItemData) => Promise<void>;
 }
 
@@ -100,11 +110,9 @@ export function useDeliveryScanSubmission(
   const scanTreeLoading = treeState.scanTreeMutation.isPending;
 
   // ============ 打印送货单 + 提交草稿 ============
-  /** preview 弹窗显隐 + 当前打开的 note（getNote 拉回）+ 导出形态。 */
+  /** preview 弹窗显隐 + 当前打开的 note（getNote 拉回）。 */
   const printNotePreviewVisible = ref(false);
   const printNoteTarget = ref<DeliveryNoteDetailData | null>(null);
-  /** 由 openPrintNote 每次调用显式重置（对话框关闭后不复用上一次的形态）。 */
-  const printNoteMode = ref<'note' | 'label'>('note');
   const printNoteLoading = ref(false);
 
   /** 每张草稿卡片各自的提交中 loading 态。 */
@@ -243,15 +251,14 @@ export function useDeliveryScanSubmission(
   // ============ 打印送货单 + 提交草稿 ============
 
   /**
-   * 打开打印预览（`mode` 决定是送货单还是打印标签）：
+   * 打开打印送货单预览：
    *   - 先 getNote 拉 detail（full line_items），期间 printNoteTarget=null
    *     且弹窗保持关闭（v-if 控制）
    *   - 拿到 detail 后才打开弹窗；失败 toast 并保持关闭
    */
-  async function openPrintNote(d: DeliveryNoteItemData, mode: 'note' | 'label' = 'note'): Promise<void> {
+  async function openPrintNote(d: DeliveryNoteItemData): Promise<void> {
     printNoteTarget.value = null;
     printNotePreviewVisible.value = false;
-    printNoteMode.value = mode;
     printNoteLoading.value = true;
     try {
       const detail = await getNote(d.id);
@@ -262,6 +269,14 @@ export function useDeliveryScanSubmission(
     } finally {
       printNoteLoading.value = false;
     }
+  }
+
+  /** 打印标签：导出该卡勾选的零件 / 装配件行（空选由 exportPartRowsLabels 给出 warning）。 */
+  async function printLabelsOfRows(
+    d: DeliveryNoteItemData,
+    rows: readonly PartTreeRow[],
+  ): Promise<void> {
+    await exportPartRowsLabels(d, rows);
   }
 
   /**
@@ -329,7 +344,6 @@ export function useDeliveryScanSubmission(
     scanSubmitting,
     printNotePreviewVisible,
     printNoteTarget,
-    printNoteMode,
     printNoteLoading,
     submittingByNote,
 
@@ -339,6 +353,7 @@ export function useDeliveryScanSubmission(
     closeScanTree,
     onSubmitEntries,
     openPrintNote,
+    printLabelsOfRows,
     onSubmitDraft,
   };
 }

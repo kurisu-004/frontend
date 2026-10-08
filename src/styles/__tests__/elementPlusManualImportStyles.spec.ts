@@ -64,6 +64,10 @@ interface Violation {
 //    PrintPreviewDialog.vue 的 el-tag / el-table 登记随之失效 —— 组件重写后它不再
 //    value-import 这两个组件（ElTag 落在 deliveryNotePrintColumnDefs.ts，
 //    el-table 用的是全局注册的模板标签，不进模块图）。
+// 2026-10-09 送货单行形态改零件 / 装配件树：DeliveryNoteLineItemsTable.vue 的 el-tag
+//    登记随之失效 —— 它删掉了组件内的列定义副本（渲染逻辑搬去域根那份
+//    deliveryNoteLineItemsColumnDefs.ts），那四个本地 render 函数连同它们 import 的
+//    ElTag / RouterLink 一起从本文件消失。
 const EXEMPT: Record<string, string[]> = {
 // ⚠️ 2026-10-09 合并 main（外协域重构）时一并裁掉 5 条 outsource 陈旧登记：
 //    OutsourceList / OutsourceReceivingTab / OutsourceSendableTab 等文件已被外协域
@@ -73,9 +77,12 @@ const EXEMPT: Record<string, string[]> = {
   'components/UploadStatusCellView.vue': ['el-button', 'el-progress'],
   'views/assemblies/components/AssemblyChildrenTable.vue': ['el-link', 'el-tag'],
   'views/com/delivery/DeliveryNoteScan.vue': ['el-table'],
-  'views/com/delivery/components/DeliveryDraftCard.vue': ['el-table'],
+  // ⚠️ 2026-10-09 送货单行形态改为零件 / 装配件树：DeliveryDraftCard 的名称列 cellRender
+  //    要给装配件父行渲染 ElTag，于是它也成了「脚本里 value-import EP 组件」的文件。
+  //    样式由宿主页 DeliveryNoteScan.vue 模板里的 `<el-tag>` 经 resolver 顺带注入
+  //    （卡片只在扫码建单页里渲染），与 DeliveryNoteLineItemsTable.vue 的 el-tag 同款理由。
+  'views/com/delivery/components/DeliveryDraftCard.vue': ['el-table', 'el-tag'],
   'views/com/delivery/components/DeliveryGroupEditor.vue': ['el-form'],
-  'views/com/delivery/components/DeliveryNoteLineItemsTable.vue': ['el-tag'],
   'views/parts/detail/components/PartBatchMonitorCard.vue': ['el-tag'],
   'views/parts/list/components/PurchaseOrderImportDialog.vue': ['el-tag', 'el-tooltip'],
   'views/parts/new/components/PartBatchManualTab.vue': ['el-button', 'el-tag'],
