@@ -222,7 +222,15 @@ interface ShelfListVm {
   effectiveZone: string;
   /** 2026-10-04：区域下拉的 @change 处理器（用例从 DOM 侧触发，这里只为类型完整）。 */
   onZoneChange: () => void;
-  shelfForm: { code: string; name: string; zone: string; location: string; display_order: number };
+  shelfForm: {
+    code: string;
+    name: string;
+    zone: string;
+    location: string;
+    display_order: number;
+    /** 2026-10-10：负载上限（件数）。undefined = 留空 = 不限。 */
+    capacity: number | undefined;
+  };
 }
 
 const SHELF: Shelf = {
@@ -233,6 +241,10 @@ const SHELF: Shelf = {
   zone: 'PRODUCTION',
   location: null,
   is_active: true,
+  // 2026-10-10：选架口径的两个字段（分子 / 分母）。本文件另有专门的容量用例组
+  // （见文件末尾），这里的值取「80/100 = 80%」，不影响任何既有断言。
+  capacity: 100,
+  current_load: 80,
   display_order: 1,
   created_at: '2026-09-01 10:00:00',
   updated_at: '2026-09-30 11:00:00',
@@ -502,7 +514,12 @@ describe('2026-10-02 review I-1：映射加载失败后保存不得清空整组�
 // ============================================================================
 
 /** 品检架行（zone 走 `GET /shelves` 的 DB 值，表格行不过滤 zone ⇒ 品检架也在表里）。 */
-const INSPECTION_SHELF: Shelf = { ...SHELF, id: '8800000000002', code: 'SH-I01', zone: 'INSPECTION' };
+const INSPECTION_SHELF: Shelf = {
+  ...SHELF,
+  id: '8800000000002',
+  code: 'SH-I01',
+  zone: 'INSPECTION',
+};
 
 /**
  * 打开「新增货架」弹窗（`showCreate = true`）。

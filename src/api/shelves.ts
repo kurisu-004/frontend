@@ -66,6 +66,8 @@ export interface CreateShelfPayload {
   zone: string;
   location?: string;
   display_order?: number;
+  /** 2026-10-10：负载上限（件数）。`null` / 省略 = 不限。 */
+  capacity?: number | null;
 }
 
 export async function createShelf(payload: CreateShelfPayload): Promise<Shelf> {
@@ -78,6 +80,9 @@ export interface UpdateShelfPayload {
   location?: string;
   is_active?: boolean;
   display_order?: number;
+  /** 2026-10-10：负载上限（件数）。**三态**：字段不传 = 不改、传 `null` = 清空
+   *  （回到不限）。别用「传 undefined」表达清空 —— 那与「不传」在 JSON 序列化后不可分。 */
+  capacity?: number | null;
 }
 
 export async function updateShelf(id: string, payload: UpdateShelfPayload): Promise<Shelf> {

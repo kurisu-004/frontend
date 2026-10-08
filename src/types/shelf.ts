@@ -7,6 +7,19 @@ export interface Shelf {
   zone: string; // PRODUCTION | INSPECTION
   location: string | null;
   is_active: boolean;
+  /**
+   * 2026-10-10 新增：负载上限（**件数**，不是批次数）。
+   * `null` 或 `<= 0` = **不限**（后端选架时该架不参与百分比比较）。
+   * 负载上限只影响**选架**时的排序，不构成拒绝：允许超载（> 100%）继续投放。
+   * 百分比由前端自己算 `current_load / capacity` —— 后端不返 `load_ratio`，
+   * 避免同一个派生量在前端 / 后端各算一遍而两边口径漂移。
+   */
+  capacity: number | null;
+  /**
+   * 2026-10-10 新增：在架**件数**（`SUM(t_part_batch.quantity)`，件数不是批次数）。
+   * 恒为 number（空架 = 0），后端必返。
+   */
+  current_load: number;
   // 2026-10-02 摘除 account_count：**用户决定货架列表页不再展示账号数**，前端
   // 类型 / 表格列 / shelfSchema 三处同步摘除（漏改任一处，Zod 守门会对真实响应
   // 抛 ZodError）。

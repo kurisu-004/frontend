@@ -576,10 +576,11 @@ export type AssemblyCreateResultSchema = z.infer<typeof assemblyCreateResultSche
 // 2026-10-01 新增：货架实体 + 货架列表分页结果 schema（共享基础数据层
 // useProductionShelvesQuery 守门）。
 //
-// 字段对齐 @/types/shelf.ts::Shelf 的 10 字段：id / version / code / name / zone
+// 字段对齐 @/types/shelf.ts::Shelf 的 12 字段：id / version / code / name / zone
 // （PRODUCTION | INSPECTION，string 不锁 enum）/ location (nullable) / is_active /
-// display_order / created_at / updated_at。10 字段全声明
-// （沿 §M-4 strip 陷阱 guard）。入参形态见 @/api/shelves::ListShelvesParams。
+// capacity (nullable) / current_load / display_order / created_at / updated_at。
+// 12 字段全声明（沿 §M-4 strip 陷阱 guard）。入参形态见
+// @/api/shelves::ListShelvesParams。
 //
 // 2026-10-02 摘除 account_count：**用户决定货架列表页不再展示账号数**（决策理由
 // 与 @/types/shelf::Shelf 处的说明一致）。此前它是被显式声明的必填字段，后端一删
@@ -587,6 +588,12 @@ export type AssemblyCreateResultSchema = z.infer<typeof assemblyCreateResultSche
 // 「修一个崩一片」。
 // 注意因果方向：后端 ShelfOut 在同 PR 已删该字段，但那是另一次独立决策，不是
 // 「后端删了所以前端跟着删」；写成后者会让下一个读者误以为前端摘字段是被动响应。
+//
+// 2026-10-10 加 capacity / current_load：目标货架改由后端按负载自动选择，这两项是
+// 选架口径的输入，也是货架管理页展示负载的来源。**键恒在、值可空** ⇒ 两个都声明成
+// 必填键（`capacity` 用 `z.number().nullable()`，`current_load` 用 `z.number()`）：
+// 后端恒发这两个键，漏声明会被 strip 静默丢掉、把负载列渲染成「不限 / —」。
+// ⚠️ 不声明 `load_ratio`：百分比由前端 `current_load / capacity` 算，不让后端再派生一份。
 // ============================================================
 
 export const shelfSchema = z.object({
@@ -597,6 +604,10 @@ export const shelfSchema = z.object({
   zone: z.string(),
   location: z.string().nullable(),
   is_active: z.boolean(),
+  /** 负载上限（件数）。`null` 或 `<= 0` = 不限。 */
+  capacity: z.number().nullable(),
+  /** 在架件数（恒为 number，空架 = 0）。 */
+  current_load: z.number(),
   display_order: z.number(),
   created_at: z.string(),
   updated_at: z.string(),
