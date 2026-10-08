@@ -3,15 +3,16 @@
 
   拆分后结构：
   - <DeliveryNoteHeaderCard>     — page-header + info card + 送货日期 picker
-  - <DeliveryNoteLineItemsTable> — 列显隐 + 树形 line items 表
+  - <DeliveryNoteLineItemsTable> — 列显隐 + 树形零件列表表（零件 / 装配件行）
   - <DeliveryNoteDispatchControls>— 状态机操作按钮
   - composable useDeliveryNoteDetail — 数据 + 派生 + 列显隐
   - composable useDeliveryNoteActions — 业务操作（confirmDangerous + 业务 API）
 
   Shell 责任：
   - route id 监听 + 首屏拉取
-  - 打印对话框可见性 + 目标 note + 导出形态（送货单 / 打印标签）
-  - 把 actions composable 与 detail composable 桥接（bindings）
+  - 打印送货单的对话框可见性 + 目标 note（打印标签不走对话框）
+  - 把 actions composable 与 detail composable 桥接（bindings），并把表格实例的
+    clearSelection 转给 actions（移除勾选行后清 EP 的保留集）
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
@@ -23,6 +24,8 @@ import DeliveryNoteLineItemsTable from './components/DeliveryNoteLineItemsTable.
 import DeliveryNoteDispatchControls from './components/DeliveryNoteDispatchControls.vue';
 import { useDeliveryNoteDetail } from './composables/useDeliveryNoteDetail';
 import { useDeliveryNoteActions } from './composables/useDeliveryNoteActions';
+import { exportPartRowsLabels } from './utils/deliveryNoteLabelExport';
+import type { PartTreeRow } from './utils/deliveryNotePartRows';
 
 const route = useRoute();
 const router = useRouter();
@@ -30,6 +33,9 @@ const router = useRouter();
 const noteId = computed<string>(() => String(route.params.id ?? ''));
 
 const detail = useDeliveryNoteDetail(noteId);
+
+/** 零件列表表的实例（移除勾选行后要调它的 clearSelection）。 */
+const lineItemsTableRef = ref<InstanceType<typeof DeliveryNoteLineItemsTable> | null>(null);
 
 // ============ 业务操作（绑到 detail 的 state）============
 const actions = useDeliveryNoteActions({
@@ -44,16 +50,16 @@ const actions = useDeliveryNoteActions({
           delivery_date: detail.note.value.delivery_date,
         },
   ),
-  selectedItemIds: detail.selectedItemIds,
+  selectedRows: detail.selectedRows,
+  rowIdToBatchIds: detail.rowIdToBatchIds,
   editDeliveryDate: detail.editDeliveryDate,
   fetchDetail: detail.fetchDetail,
-  setSelectedItemIds: detail.setSelectedItemIds,
+  setSelectedRows: detail.setSelectedRows,
+  clearSelection: () => lineItemsTableRef.value?.clearSelection(),
 });
 
-// ============ UI state（dialog 可见性与导出形态由 shell 持有）============
+// ============ UI state（打印送货单对话框可见性由 shell 持有）============
 const previewVisible = ref(false);
-/** 打印对话框的导出形态：'note' = 送货单（模板 round-trip）/ 'label' = 打印标签。 */
-const previewMode = ref<'note' | 'label'>('note');
 
 // ============ 事件处理 ============
 function onBack(): void {
@@ -61,13 +67,21 @@ function onBack(): void {
 }
 
 function onPrint(): void {
-  previewMode.value = 'note';
   previewVisible.value = true;
 }
 
+/** 打印标签：直接导出表格里勾选的零件 / 装配件行（空选由导出实现给 warning）。
+ *  与扫码建单页的卡片「打印标签」是同一份实现（域内 utils/deliveryNoteLabelExport），
+ *  文件名 / toast / 绿底标记三处行为必须一致。 */
 function onPrintLabels(): void {
-  previewMode.value = 'label';
-  previewVisible.value = true;
+  const n = detail.note.value;
+  if (!n) return;
+  void exportPartRowsLabels(n, detail.selectedRows.value);
+}
+
+/** 表格勾选变化 → 回写 detail（勾选集合由 composable 持有，行 = 零件 / 装配件）。 */
+function onSelectionChange(rows: PartTreeRow[]): void {
+  detail.setSelectedRows(rows);
 }
 
 // ============ 生命周期 ============
@@ -90,17 +104,17 @@ onBeforeUnmount(() => {
       />
 
       <DeliveryNoteLineItemsTable
+        ref="lineItemsTableRef"
         :note="detail.note.value"
         :can-edit="detail.canEdit.value"
+        :role="detail.role.value"
         :tree-line-items="detail.treeLineItems.value"
         :column-defs="detail.columnDefs"
         :column-visibility="detail.columnVisibility"
-        :selected-item-ids="detail.selectedItemIds.value"
-        :part-status-label="detail.partStatusLabel"
-        :part-status-tag-type="detail.partStatusTagType"
+        :selected-rows="detail.selectedRows.value"
         :delivery-line-row-class-name="detail.deliveryLineRowClassName"
         @removeSelected="() => actions.onRemoveSelected()"
-        @update:selected-item-ids="(ids: string[]) => detail.setSelectedItemIds(ids)"
+        @selectionChange="onSelectionChange"
         @sort-change="detail.onLineItemSort"
       />
 
@@ -115,12 +129,10 @@ onBeforeUnmount(() => {
       />
     </template>
 
-    <!-- 打印预览对话框（送货单：模板上传 + 分厂分组 + 拖拽；打印标签：逐行勾选；
-         两者都由 hucre 在前端本地渲染） -->
+    <!-- 打印送货单预览（模板上传 + 分厂分组 + 拖拽；打印标签不经过它） -->
     <PrintPreviewDialog
       v-if="detail.note.value"
       v-model="previewVisible"
-      :mode="previewMode"
       :note="detail.note.value"
     />
   </div>

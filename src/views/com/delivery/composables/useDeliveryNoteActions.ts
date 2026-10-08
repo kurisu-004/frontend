@@ -1,11 +1,11 @@
 // views/com/delivery/composables/useDeliveryNoteActions.ts
 //
-// 详情页的所有 page-level 业务操作（状态机 transition / 移除批次）：
+// 详情页的所有 page-level 业务操作（状态机 transition / 移除勾选行）：
 // - onDeliveryDateChange：改送货日期（含 21403 BIZ_VERSION_CONFLICT 识别）
 // - onSubmit：confirmDangerous + submitNote（带 version 冲突兜底）
 // - onRecall：撤回
 // - onSoftDelete：软删并跳列表
-// - onRemoveSelected：移除选中批次
+// - onRemoveSelected：把勾选的零件 / 装配件行展开成批次 id 逐批移除
 //
 // 设计要点：
 // - composable 只持有「业务函数」；不持有 UI 状态（dialog 可见性由 shell 自管）。
@@ -25,9 +25,14 @@
 // - `submitCandidate*` / `onSubmitCandidate*`：submit 的 CANDIDATES_AVAILABLE 候选分流
 //   随 `POST /{id}/submit` 改回「只回单据 id」而下线（闸门收敛在服务端）。
 // - `onAddParts`：手动加件入口下线（`POST /{id}/add-parts` 删除）。
+//
+// 2026-10-09 的连带变更：
+// - 表格行由「批次行」改为「零件 / 装配件行」，移除接口仍收 batch_ids ⇒ 选中态改为
+//   传整行 + 行 id → 批次 id 展开表；移除成功后除了清选中态还要 `clearSelection()`
+//   （勾选列开了 `reserve-selection`，不清就会留下已删行的残影）。
 
 import { ElMessage } from 'element-plus';
-import { ref, type Ref } from 'vue';
+import { ref, type ComputedRef, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useQueryClient } from '@tanstack/vue-query';
 import {
@@ -40,6 +45,7 @@ import {
 import type { ApiError } from '@/api/http';
 import { useConfirm } from '@/composables/useConfirm';
 import { invalidateDeliveryNotesQuery } from './useDeliveryNoteListStore';
+import type { PartTreeRow } from '../utils/deliveryNotePartRows';
 
 /**
  * 详情 composable 暴露给 actions 的最小接口（避免 actions 依赖整个 detail composable）。
@@ -52,10 +58,15 @@ export interface DeliveryNoteDetailBindings {
     delivery_note_no: string;
     delivery_date: string | null;
   } | null>;
-  selectedItemIds: Ref<string[]>;
+  /** 表格勾选的零件 / 装配件行（一行可能代表多个批次）。 */
+  selectedRows: Ref<PartTreeRow[]>;
+  /** 行 id → 批次 id 集合（移除时展开成接口要的 batch_ids）。 */
+  rowIdToBatchIds: ComputedRef<Map<string, string[]>>;
   editDeliveryDate: Ref<string>;
   fetchDetail: () => Promise<void>;
-  setSelectedItemIds: (ids: string[]) => void;
+  setSelectedRows: (rows: PartTreeRow[]) => void;
+  /** 清掉表格内部（EP）的勾选态；表格开了 `reserve-selection`，移除后必须显式清。 */
+  clearSelection: () => void;
 }
 
 export interface UseDeliveryNoteActionsReturn {
@@ -218,29 +229,46 @@ export function useDeliveryNoteActions(
     }
   }
 
-  // ============ 移除选中批次 ============
+  // ============ 移除勾选的零件 / 装配件行 ============
+  /**
+   * 勾选的是**行**（一个零件 / 一个装配件），移除接口收的是批次 id ⇒ 逐行展开成
+   * `rowIdToBatchIds`。确认文案把两个口径都说出来：用户按行勾，接口按批次删，
+   * 只说「N 个」会让用户以为删掉的就是那 N 行。
+   *
+   * ⚠️ **批次 id 必须去重**：「装配件父行 + 它的某个子件行」同时勾上是允许的（父子不
+   * 联动，见 `DeliveryNoteLineItemsTable` 的 `treeProps.checkStrictly`），而父行的
+   * `batch_ids` 就是子件批次的并集 ⇒ 不去重会把同一批批次发两次，「含 M 个批次」的
+   * 确认文案也会虚高。
+   */
   async function onRemoveSelected(): Promise<boolean> {
     const n = bindings.note.value;
     if (!n) return false;
-    if (bindings.selectedItemIds.value.length === 0) {
-      ElMessage.warning('请勾选要移除的批次');
+    const rows = bindings.selectedRows.value;
+    if (rows.length === 0) {
+      ElMessage.warning('请勾选要移除的零件/装配件');
       return false;
     }
+    const batchIds = [
+      ...new Set(rows.flatMap((r) => bindings.rowIdToBatchIds.value.get(r.id) ?? r.batch_ids)),
+    ];
     if (
       !(await confirmDangerous(
-        '移除批次',
-        `确认移除选中的 ${bindings.selectedItemIds.value.length} 个批次？`,
+        '移除零件/装配件',
+        `确认移除选中的 ${rows.length} 个零件/装配件（含 ${batchIds.length} 个批次）？`,
         { type: 'warning' },
       ))
     )
       return false;
     try {
       await removeBatches(n.id, {
-        batch_ids: bindings.selectedItemIds.value,
+        batch_ids: batchIds,
         version: n.version,
       });
       ElMessage.success('已移除');
-      bindings.setSelectedItemIds([]);
+      bindings.setSelectedRows([]);
+      // 表格的勾选列开了 `reserve-selection`：不清 EP 的保留集，已删的行会留在保留集里
+      // （同一零件被重新扫码入单时会带着没删掉的勾选态回来）。
+      bindings.clearSelection();
       await invalidateNotes();
       await bindings.fetchDetail();
       return true;

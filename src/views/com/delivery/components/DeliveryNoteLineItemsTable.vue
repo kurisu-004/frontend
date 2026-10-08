@@ -4,20 +4,29 @@
   送货单详情「零件列表」卡（DeliveryNoteDetail 第 2 张卡）：
   - 顶部 actions：列显隐 popover + 移除选中（加件入口随 `POST /{id}/add-parts` 下线）
   - 主区域：el-table（tree-props + selection + sort-change + 列顺序拖动）
-    ⚠️ 行高亮已随行项 `is_urgent` 下线而清空（后端 VO 删了该字段，投影恒 false）——
-    `row-class-name` 现在恒为空串，样式表里也没有对应的 `.row-urgent` 规则了。
+     行高亮 = 「已打印标签」绿底，口径与扫码建单页的草稿卡片同款：**零件行取任一批次
+     已打印（any），装配件父行取全部批次已打印（all）**。
 
-  业务状态（note / treeLineItems / columnVisibility / selectedItemIds）由父组件通过 prop 注入。
-  本组件只负责 UI 编排 + 选择事件转发。
+  行形态是 `PartTreeRow`（装配件父行 + 零件行），由父 composable 派生后注入；
+  本组件只负责 UI 编排 + 选择事件转发。列定义**只有一份**（域根
+  `deliveryNoteLineItemsColumnDefs.ts`，含 cellRender / 宽度 / 排序等元数据），
+  可见性与列顺序都直接吃它 —— 不在组件内另建副本。
+
+  业务状态（note / treeLineItems / columnVisibility / selectedRows / role）由父组件通过
+  prop 注入；状态标签的文案映射由列定义自己读 `@/types/parts`（域根那份列定义是唯一
+  一份渲染逻辑，不再经 prop 注入两个等价 helper）。
 
   2026-08-25 frontend-overall-refactor：从 DeliveryNoteDetail.vue 抽出。
   2026-08-27 T17：接入列顺序拖动（HTMLElement 路径 — el-card v-if="note" 始终为 truthy 后 el-table 一直在 DOM）。
+  2026-10-09：删掉组件内的列定义副本（本文件曾有第二份，与域根那份重复且已漂移）；
+    勾选列对装配件父行也放开（INSPECTOR 能打印但不能改单，原来「装配件父行不可勾」会把
+    它们挡在打印之外）；勾选列开 `reserve-selection`，打印后绿底重算不丢勾选。
 -->
 <template>
   <el-card v-if="note" shadow="never" class="line-items-card">
     <template #header>
       <div class="card-header">
-        <span>零件列表 ({{ note.line_items.length }})</span>
+        <span>零件列表 ({{ displayRowCount }})</span>
         <div class="actions">
           <!-- 2026-08-02：列显隐控制；2026-08-27 T17 增 @resetOrder -->
           <ColumnVisibilityPopover
@@ -28,24 +37,38 @@
             @resetOrder="drag.reset"
           />
           <el-button
-            v-if="canEdit && selectedItemIds.length"
+            v-if="canEdit && selectedRows.length"
             type="danger"
             size="small"
             @click="emit('removeSelected')"
           >
-            移除选中 ({{ selectedItemIds.length }})
+            移除选中 ({{ selectedRows.length }})
           </el-button>
         </div>
       </div>
     </template>
     <!-- 2026-08-22 a11y：selection 列所在 table 加 aria-label -->
+    <!--
+      2026-10-09：`checkStrictly: true` 是硬要求，不能删。
+      EP 的 `treeProps.checkStrictly` 默认 false ⇒ 勾选在父子间级联：勾「装配件父行」
+      （用户想出 1 张「N 套」标签）会把全部子件行一起勾上，同一批货出两轮标签；反向
+      勾满全部子件也会把父行勾上。「一行 = 一张标签」只有不联动才成立。
+
+      2026-10-09：**表头全选框不受 `checkStrictly` 约束**，是刻意接受的口径、不改行为。
+      EP `store/watcher._toggleAllSelection` 另建了一份 treeProps 并把 `checkStrictly`
+      **写死为 false**，不看本表传的值 ⇒ 点表头全选时装配件父行 + 全部子件行会一起进
+      selection（即「打印全部行」，与改造前打印对话框 label 模式下列出父行与零件子件一致）。
+      本字段只约束**逐行点击**。
+    -->
     <el-table
       ref="tableRef"
+      class="line-items-table"
       :data="treeLineItems"
       row-key="id"
       aria-label="送货单明细列表"
       :row-class-name="deliveryLineRowClassName"
-      :tree-props="{ children: 'children', hasChildren: 'has_children' }"
+      :tree-props="{ children: 'children', hasChildren: 'has_children', checkStrictly: true }"
+      default-expand-all
       stripe
       border
       height="500"
@@ -53,21 +76,13 @@
       @selection-change="onSelectionChange"
       @sort-change="onSortChange"
     >
-      <!-- selection / index 始终可见，不放 defs -->
-      <el-table-column
-        v-if="canEdit"
-        type="selection"
-        width="50"
-        :selectable="(row: AssemblyTreeRow) => !row.is_asm_row"
-      />
+      <!-- selection / index 始终可见，不放 defs。
+           可见条件 = 可改单 **或** 可打印：INSPECTOR 能打印但不能改单，把勾选列只挂在
+           canEdit 下会让他们看不到「打印标签」要用的勾选入口。装配件父行同样可勾 ——
+           它代表整套货，标签就是按套出的。`reserve-selection` 让打印后绿底触发的行重算
+           不丢勾选（连续打多批时体验）。 -->
+      <el-table-column v-if="showSelection" type="selection" width="50" reserve-selection />
       <el-table-column type="index" label="#" width="50" />
-      <!--
-        2026-08-27 T17：列顺序拖动接入。父 useDeliveryNoteDetail 注入的 columnDefs 仅含
-        key + label（无 prop / minWidth 等元数据），本组件本地构建一份 draggableColumnDefs
-        补齐 prop / minWidth / sortable / showOverflowTooltip / align 给 <el-table-column>
-        渲染；visibility 与 drag 共用 listKey `delivery_note_detail_line_items`。
-        装配件/零件两套渲染靠 cellRender + is_asm_row 分支。
-      -->
       <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
         <el-table-column
           v-if="columnVisibility.isVisible(d.key)"
@@ -95,26 +110,26 @@
 </template>
 
 <script setup lang="ts">
-import { h, ref } from 'vue';
-import { RouterLink } from 'vue-router';
-import { ElTag } from 'element-plus';
+import { computed, ref } from 'vue';
+import type { TableInstance } from 'element-plus';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import { resolveDraggable, type ColumnDef } from '@/composables/useColumnVisibility';
 import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
-import type {
-  DeliveryNoteDetailData,
-  DeliveryNoteLineItemData,
-} from '../composables/deliveryNoteSchema';
-import type { AssemblyTreeRow } from '../composables/useDeliveryNoteDetail';
+import { canPrint } from '@/utils/deliveryNotePermissions';
+import type { DeliveryNoteDetailData } from '../composables/deliveryNoteSchema';
+import type { DeliveryNoteRoleMap } from '../composables/useDeliveryNoteDetail';
+import type { PartTreeRow } from '../utils/deliveryNotePartRows';
 
 interface Props {
   note: DeliveryNoteDetailData | null;
-  /** 权限 flag（可编辑 = 可勾选 / 移除） */
+  /** 权限 flag（可勾选移除 / 改单） */
   canEdit: boolean;
+  /** 角色矩阵（打印判据 canPrint(note, role) 需要它） */
+  role: DeliveryNoteRoleMap;
   /** 树形化后的行（composable 提供） */
-  treeLineItems: AssemblyTreeRow[];
-  /** 列显隐状态（composable 提供） */
+  treeLineItems: PartTreeRow[];
+  /** 列定义（域根唯一一份，含 cellRender / 宽度 / 排序元数据） */
   columnDefs: readonly ColumnDef[];
   columnVisibility: {
     isVisible: (key: string) => boolean;
@@ -122,12 +137,10 @@ interface Props {
     showAll: () => void;
     currentMap: Record<string, boolean>;
   };
-  /** 选中行（受控） */
-  selectedItemIds: string[];
-  /** 标签 / 行样式 helpers（composable 提供） */
-  partStatusLabel: (s: string) => string;
-  partStatusTagType: (s: string) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
-  deliveryLineRowClassName: (ctx: { row: AssemblyTreeRow }) => string;
+  /** 勾选中的零件 / 装配件行（行本身可能代表多个批次） */
+  selectedRows: PartTreeRow[];
+  /** 行样式 helper（composable 提供；绿底判据在那侧） */
+  deliveryLineRowClassName: (ctx: { row: PartTreeRow }) => string;
 }
 
 const props = defineProps<Props>();
@@ -135,8 +148,8 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   /** 点「移除选中」 */
   removeSelected: [];
-  /** 选中行变化（受控） */
-  'update:selectedItemIds': [ids: string[]];
+  /** 勾选变化（一行 = 零件 / 装配件，不是批次 id） */
+  selectionChange: [rows: PartTreeRow[]];
   /** 排序变化 */
   sortChange: [
     sort: {
@@ -146,175 +159,46 @@ const emit = defineEmits<{
   ];
 }>();
 
+/** 勾选列可见：能改单（移除）或能打印（打标签）任一即可。 */
+const showSelection = computed(
+  () => props.canEdit || (props.note != null && canPrint(props.note, props.role)),
+);
+
+/**
+ * 卡片头计数 = **表格实际展示的行数**（递归摊平树形行，装配件子件行计入）。
+ *
+ * 2026-10-09 改口径：原先取 `note.line_items.length`，那是**批次条数**，而表体已经按
+ * 零件折叠 + 装配件父行摊平 —— 12 个批次常常只有 4 行，头部却写「零件列表 (12)」，
+ * 与表里对不上。表格常驻 `default-expand-all`，所以子件行恒可见，直接递归求和即可。
+ */
+const displayRowCount = computed(() => {
+  const walk = (rows: readonly PartTreeRow[]): number =>
+    rows.reduce((acc, r) => acc + 1 + walk(r.children ?? []), 0);
+  return walk(props.treeLineItems);
+});
+
 // 2026-08-27 T17：列顺序拖动接入。
-// 本地构建 draggableColumnDefs 给 v-for 模板用：补齐 prop / minWidth / sortable /
-// showOverflowTooltip / align。key 集合与父 useDeliveryNoteDetail 注入的 columnDefs 一致，
-// 所以 visibility popover 与 drag 顺序存储互不打架。
-// 装配件行（is_asm_row=true）与零件行（false）渲染分支用 cellRender 处理。
-// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
-function renderBatchLabel({ row }: { row: unknown }): ReturnType<typeof h> {
-  const r = row as AssemblyTreeRow;
-  return r.is_asm_row ? h('span', null, '—') : h('span', null, r.batch_label || '—');
-}
-function renderName({ row }: { row: unknown }): ReturnType<typeof h> {
-  const r = row as AssemblyTreeRow;
-  if (r.is_asm_row) {
-    return h('div', null, [
-      h(ElTag, { type: 'warning', size: 'small', class: 'asm-tag' }, () => '装配件'),
-      // 2026-08-27 修正：原为 h('router-link', ...)。h() 传字符串 type 不做组件解析，
-      // 会渲染成字面 <router-link> 自定义元素——既不导航，函数 children 也被当 slots 丢掉 → 空白。
-      // 必须传导入的 RouterLink 组件；组件的函数 children 才是合法 default slot。
-      h(RouterLink, { to: `/assemblies/${r.assembly_id}`, class: 'assembly-link' }, () => r.name),
-    ]);
-  }
-  return h('span', null, r.name);
-}
-function renderQuantity({ row }: { row: unknown }): ReturnType<typeof h> {
-  const r = row as AssemblyTreeRow;
-  if (r.is_asm_row) {
-    // 2026-10-04：装配件父行数量 = 后端算出的本单可出货套数（与打印预览同源同值），
-    // 后端没给数时显示「—」；不可兜成 0（「没给数」≠「凑不齐整套」）。
-    // 单位随数走：没数就没有单位，否则渲染成「— 套」（口径同打印预览的数量列）。
-    return h('div', null, [
-      h('strong', null, r.quantity ?? '—'),
-      r.quantity !== null ? h('span', { class: 'muted' }, '套') : null,
-    ]);
-  }
-  // 散件行是真正的行项（quantity 必填 number，没有缺失态），所以不写 `?? '—'`：
-  // 那个分支不可达，留着只会把将来的类型错误悄悄吞掉。
-  return h('span', null, (row as DeliveryNoteLineItemData).quantity);
-}
-function renderStatus({ row }: { row: unknown }): ReturnType<typeof h> {
-  const r = row as AssemblyTreeRow;
-  if (r.is_asm_row) return h('span', null, '—');
-  return h(ElTag, { type: props.partStatusTagType(r.status), effect: 'plain', size: 'small' }, () =>
-    props.partStatusLabel(r.status),
-  );
-}
+// ⚠️ IIFE 读 props：`columnDefs` 在本组件生命周期内不变（父 composable 只建一次），
+// 而 useColumnDrag 的 defs / listKey 都只在 setup 时读一次（沿 PrintGroupTable 写法，
+// 绕开 vue/no-setup-props-destructure 的「顶层直读 props 会丢响应性」）。
+const drag = (() => {
+  const { columnDefs } = props;
+  return useColumnDrag(columnDefs, { listKey: 'delivery_note_detail_line_items' });
+})();
 
-const draggableColumnDefs: ColumnDef[] = [
-  {
-    key: 'batch_label',
-    label: '批次',
-    minWidth: 100,
-    sortable: true,
-    align: 'center',
-    cellRender: renderBatchLabel,
-  },
-  {
-    key: 'serial_no',
-    label: '序列号',
-    prop: 'serial_no',
-    minWidth: 120,
-    sortable: true,
-    align: 'center',
-    cellRender: ({ row }) => {
-      const r = row as AssemblyTreeRow;
-      return h('span', { class: { muted: !r.serial_no } }, r.serial_no || '—');
-    },
-  },
-  {
-    key: 'drawing_no',
-    label: '图号',
-    prop: 'drawing_no',
-    minWidth: 140,
-    sortable: true,
-    align: 'center',
-  },
-  {
-    key: 'order_no',
-    label: '订单号',
-    prop: 'order_no',
-    minWidth: 120,
-    showOverflowTooltip: true,
-    sortable: true,
-    align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as AssemblyTreeRow).order_no || '—'),
-  },
-  {
-    key: 'name',
-    label: '名称',
-    minWidth: 200,
-    sortable: true,
-    align: 'center',
-    cellRender: renderName,
-  },
-  {
-    key: 'customer',
-    label: '客户（二级）',
-    prop: 'customer_name',
-    minWidth: 160,
-    showOverflowTooltip: true,
-    sortable: true,
-    align: 'center',
-    cellRender: ({ row }) => {
-      const r = row as AssemblyTreeRow;
-      return h('span', null, r.customer_path ?? r.customer_name ?? '—');
-    },
-  },
-  {
-    key: 'applicant_name',
-    label: '申请人',
-    prop: 'applicant_name',
-    minWidth: 100,
-    sortable: true,
-    align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as AssemblyTreeRow).applicant_name || '—'),
-  },
-  {
-    key: 'quantity',
-    label: '数量',
-    minWidth: 80,
-    sortable: true,
-    align: 'center',
-    cellRender: renderQuantity,
-  },
-  {
-    key: 'request_date',
-    label: '请购日期',
-    minWidth: 120,
-    align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as AssemblyTreeRow).request_date || '—'),
-  },
-  {
-    key: 'planned_delivery_date',
-    label: '计划交期',
-    prop: 'planned_delivery_date',
-    minWidth: 120,
-    sortable: true,
-    align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as AssemblyTreeRow).planned_delivery_date || '—'),
-  },
-  {
-    key: 'system_delivery_date',
-    label: '系统交期',
-    prop: 'system_delivery_date',
-    minWidth: 120,
-    sortable: true,
-    align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as AssemblyTreeRow).system_delivery_date || '—'),
-  },
-  {
-    key: 'note',
-    label: '备注',
-    minWidth: 120,
-    showOverflowTooltip: true,
-    align: 'center',
-    cellRender: ({ row }) => h('span', null, (row as AssemblyTreeRow).note || '—'),
-  },
-  { key: 'status', label: '状态', minWidth: 120, align: 'center', cellRender: renderStatus },
-];
-const drag = useColumnDrag(draggableColumnDefs, { listKey: 'delivery_note_detail_line_items' });
-
-const tableRef = ref();
+const tableRef = ref<TableInstance | null>(null);
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部解析表头 + MutationObserver 自愈
 drag.applyDrag(tableRef);
 
-function onSelectionChange(rows: AssemblyTreeRow[]): void {
-  emit(
-    'update:selectedItemIds',
-    rows.map((r) => r.id),
-  );
+/** 移除勾选行后清 EP 的勾选：开了 `reserve-selection` 就不主动清的话，保留集里还留着
+ *  已删行的 row-key，同一零件被重新扫码入单会带着没出纸的勾选态回来。 */
+function clearSelection(): void {
+  tableRef.value?.clearSelection();
+}
+defineExpose({ clearSelection });
+
+function onSelectionChange(rows: PartTreeRow[]): void {
+  emit('selectionChange', rows);
 }
 
 function onSortChange(sort: {
@@ -347,5 +231,27 @@ function onSortChange(sort: {
 }
 .muted {
   color: var(--text-secondary);
+}
+
+/* ============ 表头 nowrap ============ */
+/* 2026-10-09：本表表头统一不折行。
+   表头内容 = 列名 + 列拖动手柄(18px) + 排序箭头(24px) + .cell 左右 padding(24px)，
+   min-width 不足时 EP 的 `.cell`（`white-space: normal` + `overflow-wrap: break-word`）
+   会把排序箭头折成第二段。
+   这条规则**刻意只作用于本表**（专属 class + scoped）：写在全局 `src/styles/index.scss`
+   会命中全仓每一张接了列拖动的表，而那些表的 `.cell` 是 `overflow: hidden`，效果是
+   把「折行」换成「裁切」—— 比折行更糟（表头文案直接看不全）。
+   代价：本表在极窄窗口下宁可裁切也不折行。 */
+.line-items-table :deep(th.col-draggable > .cell) {
+  white-space: nowrap;
+}
+
+/* ============ 已打印标签行绿底 ============ */
+/* 与扫码建单页的草稿卡片同款判据（同一份 usePrintedLabels 记录 + all/any 口径）。 */
+:deep(.el-table__row.row-printed) > td.el-table__cell {
+  background-color: #e6f7e6 !important;
+}
+:deep(.el-table__row.row-printed:hover) > td.el-table__cell {
+  background-color: #d6efd6 !important;
 }
 </style>

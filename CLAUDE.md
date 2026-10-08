@@ -4,21 +4,25 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 ## API 文档路径
 
-后端主仓在 `~/Code/hsh-erp/backend-rust`（Rust + axum + sqlx）。后端契约的载体是**代码注释**，`docs/api/` 只对少数几个域做了整域契约文档（2026-10-07 盘点，`ls backend-rust/docs/api/` 复核）：
+后端主仓在 `~/Code/hsh-erp/backend-rust`（Rust + axum + sqlx）。后端契约的载体是**代码注释**，`docs/api/` 只对少数几个域做了整域契约文档（2026-10-09 盘点，`ls backend-rust/docs/api/` 复核）：
 
 | 文档 | 覆盖域 |
 |---|---|
+| `docs/api/batch.md` | `part` 批次域 |
 | `docs/api/dashboard.md` | `dashboard` 大屏聚合（3 个只读 HTTP 端点 + `/ws/dashboard` 的 WS 首帧与增量） |
-| `docs/api/programming.md` | `prod::programming` 待编程一览 |
+| `docs/api/delivery_note.md` | `delivery_note` 送货单（列表 / 详情 / 扫码入单 / 移除批次 / 打印） |
 | `docs/api/inspection.md` | `prod::inspection` 待品检（队列列表 + 扫码三层树） |
+| `docs/api/outsource.md` | 外协（报价 / 订单 / 收发货流转） |
+| `docs/api/programming.md` | `prod::programming` 待编程一览 |
+| `docs/api/queue.md` | `prod` 生产看板队列域 |
 
-**其余域没有 `docs/api/` 文档**（`part` / `prod::batch` / `iam` / `shelf` / `outsource` / `delivery_note` / `assembly` / `wx` / `statistics` / `files` / `cnc_program` …），契约载体是代码注释。查接口按这条路径走：
+**其余域没有 `docs/api/` 文档**（`iam` / `shelf` / `assembly` / `wx` / `statistics` / `files` / `cnc_program` …），契约载体是代码注释。查接口按这条路径走：
 
 1. **先查 `docs/api/` 清单**（`ls backend-rust/docs/api/`）有没有该域的文档 —— 有就直接 `Read`，它是整域契约（端点表 / 逐字段 / 口径表 / 错误码 / 前端配套清单）。
 2. **没有就去该域的 `mod.rs` 模块 doc**（`src/modules/<域>/mod.rs` 顶部的 `//!` 注释块）：域范围、端点分组、路由硬切与关键取舍都写在这里。`prod` 是容器域，子域要看 `src/modules/prod/<子模块>/mod.rs`（如 `prod/batch`、`prod/inspection`）。个别域的模块 doc 很薄（`iam` 只有一行），那就下钻该域的 `handler` / `service`。
 3. **字段级细节看 `vo` 与 `repo` 的文件头**：`vo`（出参，`Serialize` 侧）与 `repo`（SQL 真源 + 胖 trait）的模块 doc 按端点语义分组列了字段与口径，再细看逐字段 / 逐函数的 doc 注释。
 
-⚠️ **引用路径前先确认目标存在** —— 不要凭印象 `Read` 一个 `docs/api/` 下的文件，那条路径下的文档只有上表这 3 份。
+⚠️ **引用路径前先确认目标存在** —— 不要凭印象 `Read` 一个 `docs/api/` 下的文件，那条路径下的文档随域逐个上线，上表会继续变。
 
 ## 主题色
 

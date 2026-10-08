@@ -1,8 +1,8 @@
 // src/views/com/delivery/utils/deliveryNoteLabelWorkbook.ts
 //
 // 「打印标签」的工作簿渲染（2026-10-08 新增）：**单 sheet、无模板**，7 列一行一标签，
-// 前端用 hucre 本地生成。行序 = 对话框里的勾选顺序（tabs 顺序 → 组内当前行序），
-// 调用方决定传什么顺序进来，这里不做任何重排。
+// 前端用 hucre 本地生成。行序 = 调用方传进来的行序（草稿卡片 / 详情页都是「表格里勾选的
+// 行」经 `partRowsToLabelRows` 映射的结果，也就是用户看到的表内行序），本函数不做任何重排。
 //
 // **为什么不用模板 round-trip（openXlsx/saveXlsx）**：标签不是合同，是一张张贴在零件上
 // 的小纸条 —— 用户要的是「7 列、按需打印」，不是「一张带合并单元格的表」。走
@@ -63,9 +63,9 @@ function toLabelRecord(r: PrintRow): LabelRecord {
  *   客户名 / 名称长度差异大，写死宽度必然有一头截断）；
  * - **`quantity === null` 的行整行跳过**并计入 `skipped`：装配件父行的数量是「后端没给
  *   可出货套数」，打出来是一张数量空的标签，贴到零件上只会让人以为这批没货；
- * - 装配件父行不用额外处理：`quantity` 是可出货套数、`unit` 是「套」，与散件行走同一
- *   套 `PrintRow`（单位在打印行整形时就按行性质定死：散件「件」/ 装配件「套」，见
- *   `deliveryNotePrintRows` 的 toPrintRow 与 collapseAssemblies —— 标签列原样透传）。
+ * - 装配件父行不用额外处理：`quantity` 是可出货套数、`unit` 是「套」，与散件行走同一套
+ *   `PrintRow`（单位在 `partRowsToLabelRows` 映射时就按行性质定死：散件「件」/ 装配件
+ *   「套」，来自 `PartTreeRow.unit` —— 标签列原样透传）。
  *
  * 返回 `skipped` 是为了让调用方在 toast 里如实说出跳过了几条，而不是静悄悄少打几张；
  * 返回 `written`（**实际写进 xlsx 的那些行**，按写入顺序）是给「已打印标签」标记用的 ——

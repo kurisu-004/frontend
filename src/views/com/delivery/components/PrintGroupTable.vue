@@ -17,6 +17,9 @@
   ⚠️ CLAUDE.md 的「可拖元素 == vnode 的 DOM footprint ⇒ 根必须是单元素」约束**不适用
   于表格行**：Sortable 的 `draggable: 'tr'` 直接抓 EP 内部渲染的 `<tr>`，`<tbody>` 的子
   节点恒等于行集合。
+
+  2026-10-09：「打印标签」不经本对话框（原 `selectable` / `selectedIds` 受控勾选列
+  与随之隐藏的「操作」列门控随之删除，表格恒是「各列 + 数量 + 拆分」形态）。
 -->
 <template>
   <div class="print-group-table">
@@ -31,26 +34,6 @@
       :default-sort="{ prop: 'order_no', order: 'ascending' }"
       @sort-change="onSortChange"
     >
-      <!-- 勾选列（仅标签模式）：**受控 el-checkbox，不进 defs**。
-           - 不进 defs ⇒ 列可见性 / 列顺序拖动都不知道它存在，它天然固定在最左、不可换位；
-           - 不用 EP `type="selection"`：勾选集合在父组件、跨 N 张表共享一份，而 EP 的
-             selection 状态是 per-table 的，`reserve-selection` 跨表不可靠。
-           形态与既有的「数量 / 操作」两列同款（受控渲染 + row-key 行身份）。 -->
-      <el-table-column
-        v-if="selectable"
-        label="勾选"
-        width="48"
-        align="center"
-        fixed="left"
-        column-key="label_select"
-      >
-        <template #default="{ row }">
-          <el-checkbox
-            :model-value="selectedIds.has((row as PrintRow).id)"
-            @change="(v: unknown) => toggleSelected((row as PrintRow).id, v)"
-          />
-        </template>
-      </el-table-column>
       <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
         <el-table-column
           v-if="columnVisibility.isVisible(d.key)"
@@ -83,9 +66,7 @@
           <span v-else>{{ row.quantity }}</span>
         </template>
       </el-table-column>
-      <!-- 操作列（拆分）只服务送货单：标签模式下 PrintSplitEditor 被下面的 v-if 藏掉，
-           留着列就是一个点了没反应的死按钮，还会把 splitRowId 留成脏值。 -->
-      <el-table-column v-if="!selectable" label="操作" width="90" fixed="right" align="center">
+      <el-table-column label="操作" width="90" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link size="small" :disabled="row.is_asm_row" @click="splitRowId = row.id">
             拆分
@@ -94,17 +75,14 @@
       </el-table-column>
     </el-table>
 
-    <!-- 拆分编辑器挂在表格下方（跨列的整行控件，el-table 没有对应插槽）。
-         标签模式无「客户要求拆多条」这层 ⇒ 不渲染（标签行不参与拆分）。 -->
-    <template v-if="!selectable">
-      <PrintSplitEditor
-        v-for="r in rows.filter((x) => x.id === splitRowId)"
-        :key="r.id"
-        :row="r"
-        @done="(parts) => onSplitDone(r.id, parts)"
-        @cancel="splitRowId = null"
-      />
-    </template>
+    <!-- 拆分编辑器挂在表格下方（跨列的整行控件，el-table 没有对应插槽）。 -->
+    <PrintSplitEditor
+      v-for="r in rows.filter((x) => x.id === splitRowId)"
+      :key="r.id"
+      :row="r"
+      @done="(parts) => onSplitDone(r.id, parts)"
+      @cancel="splitRowId = null"
+    />
   </div>
 </template>
 
@@ -120,50 +98,33 @@ import { printColumnOrderListKey } from '../deliveryNotePrintColumnDefs';
 import { sortPrintRows, type PrintRow } from '../utils/deliveryNotePrintRows';
 import PrintSplitEditor from './PrintSplitEditor.vue';
 
-const props = withDefaults(
-  defineProps<{
-    /** 本 tab 的行（父组件持有；拖拽 / 排序只改这里的引用，父组件的 map 被整体替换）。 */
-    rows: PrintRow[];
-    /** 排序态：'column' = 表头排序，'custom' = 用户拖过（自定义顺序优先）。 */
-    sortMode: 'column' | 'custom';
-    /** 列定义与列可见性由**父组件**持有（N 张表共用一份可见性快照）。 */
-    columnDefs: ColumnDef[];
-    columnVisibility: {
-      isVisible: (key: string) => boolean;
-      update: (next: Record<string, boolean>) => void;
-      showAll: () => void;
-      currentMap: Record<string, boolean>;
-    };
-    /**
-     * 列顺序快照的分组后缀（= 本 tab 的 groupKey）：每张表一条独立序列，
-     * 快照 key 由 `printColumnOrderListKey(groupKey)` 拼出（见父组件）。
-     */
-    groupKey: string;
-    /** 「重置列顺序」的信号量（父组件点 popover 的「重置列顺序」时自增）。 */
-    resetOrderToken: number;
-    /** 标签模式：每张表多一列受控勾选（勾选集合本身由父组件持有，见 selectedIds）。 */
-    selectable?: boolean;
-    /** 勾选集合（父组件持有，跨 N 张表共享一份 —— 行 id 全局唯一）。 */
-    selectedIds?: ReadonlySet<string>;
-  }>(),
-  { selectable: false, selectedIds: () => new Set<string>() },
-);
+const props = defineProps<{
+  /** 本 tab 的行（父组件持有；拖拽 / 排序只改这里的引用，父组件的 map 被整体替换）。 */
+  rows: PrintRow[];
+  /** 排序态：'column' = 表头排序，'custom' = 用户拖过（自定义顺序优先）。 */
+  sortMode: 'column' | 'custom';
+  /** 列定义与列可见性由**父组件**持有（N 张表共用一份可见性快照）。 */
+  columnDefs: ColumnDef[];
+  columnVisibility: {
+    isVisible: (key: string) => boolean;
+    update: (next: Record<string, boolean>) => void;
+    showAll: () => void;
+    currentMap: Record<string, boolean>;
+  };
+  /**
+   * 列顺序快照的分组后缀（= 本 tab 的 groupKey）：每张表一条独立序列，
+   * 快照 key 由 `printColumnOrderListKey(groupKey)` 拼出（见父组件）。
+   */
+  groupKey: string;
+  /** 「重置列顺序」的信号量（父组件点 popover 的「重置列顺序」时自增）。 */
+  resetOrderToken: number;
+}>();
 
 const emit = defineEmits<{
   /** 行数组被改动（拖拽 / 拆分）后交给父组件写回 map。 */
   'update:rows': [rows: PrintRow[]];
   'update:sortMode': [mode: 'column' | 'custom'];
-  /** 勾选集合变化（整体替换，父组件写回 selectedIds ref）。 */
-  'update:selectedIds': [ids: ReadonlySet<string>];
 }>();
-
-/** 标签模式下勾选一行的勾选框（emit 新集合，集合本体归父组件）。 */
-function toggleSelected(rowId: string, checked: unknown): void {
-  const next = new Set(props.selectedIds);
-  if (checked === true) next.add(rowId);
-  else next.delete(rowId);
-  emit('update:selectedIds', next);
-}
 
 const tableEl = ref<TableInstance | null>(null);
 const tbodyRef = ref<HTMLElement | null>(null);

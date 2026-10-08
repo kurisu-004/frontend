@@ -19,8 +19,8 @@
 // 容错：
 //   - localStorage 读 / 写失败（quota exceeded、隐私模式 disabled、JSON 损坏）
 //     全部静默吞掉。打印流不能因持久化失败而中断——下一轮写入会自然覆盖。
-//   - store 跨组件 / 跨路由共享：同一 ref 实例 → 模板自动响应（foldBySerial
-//     里 isPrintedBatch 也会自动反映最新状态）。
+//   - store 跨组件 / 跨路由共享：同一 ref 实例 → 模板自动响应（`buildPartTreeRows` 的
+//     `isPrintedBatch` 回调在行形 computed 求值期间同步读它，打完标签绿底立刻重算）。
 
 import { ref, type Ref } from 'vue';
 
@@ -57,25 +57,22 @@ function persist(): void {
 /** 2026-09-21 显式返回类型。 */
 export interface UsePrintedLabelsReturn {
   isPrintedBatch: (batchId: string) => boolean;
-  isPrintedForNote: (noteId: string, batchId: string) => boolean;
   markPrinted: (noteId: string, batchIds: string[]) => void;
   unmark: (noteId: string, batchIds: string[]) => void;
   store: Ref<Store>;
 }
 
 export function usePrintedLabels(): UsePrintedLabelsReturn {
-  /** 跨 note 查单个 batch 是否已打印（O(n) where n = 草稿数；草稿量 < 200 可接受）。 */
+  /** 跨 note 查单个 batch 是否已打印（O(n) where n = 草稿数；草稿量 < 200 可接受）。
+   *
+   *  刻意**不**收 noteId：批次被扫码入单 / 被移走时 note 归属会变，而「这个批次打过标签」
+   *  是批次自身的事实，按 note 分桶只是 localStorage 的落盘形状。 */
   function isPrintedBatch(batchId: string): boolean {
     const map = _store.value;
     for (const noteId of Object.keys(map)) {
       if (map[noteId]?.[batchId]) return true;
     }
     return false;
-  }
-
-  /** 单 note 内精确查：foldBySerial 用此避免遍历其他 note。 */
-  function isPrintedForNote(noteId: string, batchId: string): boolean {
-    return !!_store.value[noteId]?.[batchId];
   }
 
   /** 标记若干 batch 为已打印（下载成功后调用）。空数组 no-op。 */
@@ -106,7 +103,6 @@ export function usePrintedLabels(): UsePrintedLabelsReturn {
 
   return {
     isPrintedBatch,
-    isPrintedForNote,
     markPrinted,
     unmark,
     store: _store,

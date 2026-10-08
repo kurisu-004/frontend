@@ -15,6 +15,9 @@
 // 设计要点：
 //   - useBarcodeScanner 扫码枪订阅 → handleScan → 拉三层树并弹树对话框；
 //     **建单发生在用户在树对话框里确认数量时**，扫码本身是纯读。
+//
+// 2026-10-09：卡片行形态改为零件 / 装配件树 + 勾选列；「打印标签」直接导出该卡勾选行
+// （PrintPreviewDialog 只服务「打印送货单」，不再有 mode 参数）。
 
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import type { ComponentInstance } from 'vue';
@@ -42,8 +45,8 @@ import type { DeliveryNoteItemData, DeliveryScanEntry } from './composables/deli
 import {
   useDeliveryDraftBoard,
   type DraftTableInstance,
-  type MergedDraftRow,
 } from './composables/useDeliveryDraftBoard';
+import type { PartTreeRow } from './utils/deliveryNotePartRows';
 import { useDeliveryScanSubmission } from './composables/useDeliveryScanSubmission';
 import DeliveryScanBar from './components/DeliveryScanBar.vue';
 import DeliveryGroupPanel from './components/DeliveryGroupPanel.vue';
@@ -140,17 +143,22 @@ function canSubmitDraft(d: DeliveryNoteItemData): boolean {
 function onCardGotoDetail(d: DeliveryNoteItemData): void {
   gotoDetail(d);
 }
-function onCardRemove(d: DeliveryNoteItemData, row: MergedDraftRow): void {
+function onCardRemove(d: DeliveryNoteItemData, row: PartTreeRow): void {
   void board.onRemove(d, row);
 }
 function onCardDeleteDraft(d: DeliveryNoteItemData): void {
   void board.onDeleteDraft(d);
 }
 function onCardPrintNote(d: DeliveryNoteItemData): void {
-  void submission.openPrintNote(d, 'note');
+  void submission.openPrintNote(d);
 }
+/** 打印标签：直接导出该卡当前勾选的零件 / 装配件行（空选由导出实现给 warning）。 */
 function onCardPrintLabels(d: DeliveryNoteItemData): void {
-  void submission.openPrintNote(d, 'label');
+  void submission.printLabelsOfRows(d, board.selectedRowsByNote[d.id] ?? []);
+}
+/** 卡片勾选变化：整份写回 board（各卡勾选互不干扰，打印时才按 note 取）。 */
+function onCardSelectionChange(d: DeliveryNoteItemData, rows: PartTreeRow[]): void {
+  board.setSelectedRows(d.id, rows);
 }
 function onCardSubmitDraft(d: DeliveryNoteItemData): void {
   void submission.onSubmitDraft(d);
@@ -321,11 +329,12 @@ onBeforeUnmount(() => {
           :can-submit="canSubmitDraft(d)"
           :row-class-name="board.rowClassName"
           @gotoDetail="onCardGotoDetail(d)"
-          @remove="(r: MergedDraftRow) => onCardRemove(d, r)"
+          @remove="(r: PartTreeRow) => onCardRemove(d, r)"
           @deleteDraft="onCardDeleteDraft(d)"
           @printNote="onCardPrintNote(d)"
           @printLabels="onCardPrintLabels(d)"
           @submitDraft="onCardSubmitDraft(d)"
+          @update:selectedRows="(rows: PartTreeRow[]) => onCardSelectionChange(d, rows)"
           @setTableRef="(el: ComponentInstance<typeof ElTable> | null) => onCardTableRef(d, el)"
         />
       </div>
@@ -341,14 +350,13 @@ onBeforeUnmount(() => {
       @submit="(entries: DeliveryScanEntry[]) => submission.onSubmitEntries(entries)"
     />
 
-    <!-- ========== 打印预览（page-level，shell 渲染） ==========
+    <!-- ========== 打印送货单预览（page-level，shell 渲染） ==========
       v-if 保持：note=null 时（getNote 加载中）不渲染 dialog。openPrintNote
       等 detail 拉回后再开 dialog，避免 PrintPreviewDialog 在 note=null 时
-      初始化空表格。mode 由 openPrintNote 的第二个实参决定（送货单 / 打印标签）。 -->
+      初始化空表格。「打印标签」不经本对话框：直接导出勾选行（见 printLabelsOfRows）。 -->
     <PrintPreviewDialog
       v-if="submission.printNotePreviewVisible.value && submission.printNoteTarget.value"
       v-model="submission.printNotePreviewVisible.value"
-      :mode="submission.printNoteMode.value"
       :note="submission.printNoteTarget.value"
     />
   </div>
