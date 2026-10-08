@@ -45,6 +45,9 @@ import type { UnionListParams } from '@/api/com/unionList';
 // 2026-10-08：送货单域入参形态在 api/com/deliveryNote.ts 定义（沿上面几个 List*Params
 // 的既有做法），本文件只引用。
 import type { ListNotesParams } from '@/api/com/deliveryNote';
+// 2026-10-10：账号列表入参形态在 api/iam.ts 定义（沿 ListShelvesParams 等既有做法），
+// 本文件只引用。
+import type { ListUsersParams } from '@/api/iam';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
  *  含 code_like / category / limit / offset 四字段；与 ListProcessesParams 同形，预留扩展分叉。 */
@@ -493,4 +496,34 @@ export const qk = {
   deliveryDrivers: () => ['delivery-drivers'] as const,
   /** 送货司机域前缀 —— 与 deliveryDrivers 同值（键已是常量，前缀即自身）。 */
   deliveryDriversPrefix: ['delivery-drivers'] as const,
+  // ============================================================
+  // 2026-10-10 新增：iam 域（「账号管理」页）queryKey 工厂。
+  //
+  // 根命名空间取 `users`（与页面路由段 / 菜单域、后端 `/iam/users/*` 两组 URL 对齐），
+  // **不**挂 `iamPrefix` 下的其它名字：本域只有账号管理这一个页面族，且它的读端点与
+  // `auth` 域的登录 / 会话链路**没有共享写点**（改密码 / 改角色不影响 `me` 的返回，
+  // 后者的货架范围要等 token 刷新才变，见 RoleDialog 的提示）。
+  //
+  // 三条键：
+  //   - usersList(params)   —— 账号分页列表（**参数键**：端点接 username_like / is_active
+  //     / limit / offset，键必须随 params 变化才能拿到不同 cache identity，与
+  //     partsList / programmingList / inspectionQueueList 同形）。
+  //   - userWxIdentity(id)  —— 单账号的企业微信绑定（**参数键**：端点按账号 id 分片返回，
+  //     不带 id 切账号时会命中上一个账号的绑定缓存）。⚠️ 该端点未绑定时返回 `null`，
+  //     消费侧必须能处理 null（不要 `.map` / `.length`）。
+  //   - usersPrefix         —— 域前缀失效：本域 8 个写端点（建号 / 编辑 / 停用 / 重置密码 /
+  //     加角色 / 移角色 / 绑企微 / 解企微）成功后一律失效它，一把覆盖上面两条读键。
+  // ============================================================
+  /** 账号分页列表键（页面级 store `useUsersListStore` 的主查询，数据源
+   *  `GET /api/v2/iam/users`）。params = `username_like` / `is_active` / `limit` / `offset`。 */
+  usersList: (params: ListUsersParams) => ['users', 'list', params] as const,
+  /** iam 账号域前缀 —— 域内任一写端点成功后
+   *  `qc.invalidateQueries({ queryKey: qk.usersPrefix })` 一把全失效
+   *  （任意 params 形态 / 任意账号 id 都命中），单个账号的企微绑定由
+   *  `qk.userWxIdentity(userId)` 精确失效（同在 users 前缀下，前缀一把也覆盖得到）。 */
+  usersPrefix: ['users'] as const,
+  /** 单账号的企业微信绑定键（`GET /api/v2/iam/users/{id}/wx-bind`）。**参数键**：端点按
+   *  账号分片返回，不带 id 切账号时会拿上一个账号的绑定冒充当前账号的。
+   *  id 空串 → 占位键（`enabled=false` 闸门 + queryFn 内二次守卫拦掉）。 */
+  userWxIdentity: (userId: string) => ['users', 'wx-identity', userId] as const,
 } as const;
