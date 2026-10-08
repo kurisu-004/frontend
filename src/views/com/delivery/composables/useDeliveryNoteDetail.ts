@@ -200,13 +200,14 @@ export function useDeliveryNoteDetail(
   );
 
   // ============ 行样式 helper ============
-  /** 行高亮类名（绿底 = 该行已打过标签）。
+  /**
+   * 行高亮类名（绿底 = 该行已打过标签）。
    *
-   *  装配件父行恒不绿：它是聚合展示行，本身不代表一次出纸，绿底由子件行体现（父行与
-   *  子行的批次集合高度重叠，两行都绿会读成「打了两遍」）。
+   * 判据只有 `row.label_printed` 一条，**不对装配件父行开特例**：绿底口径在
+   * `utils/deliveryNotePartRows` 里定死为「零件行 any / 装配件父行 all」，本函数与扫码建单页
+   * 草稿卡片的 `rowClassName` 同款 —— 同一行形态（装配件父行 + 子件行）在两张表上是同一套语义。
    */
   function deliveryLineRowClassName({ row }: { row: PartTreeRow }): string {
-    if (row.is_asm_row) return '';
     return row.label_printed ? 'row-printed' : '';
   }
 

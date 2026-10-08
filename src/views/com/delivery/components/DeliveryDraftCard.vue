@@ -184,12 +184,18 @@ drag.applyDrag(tableEl);
           @resetOrder="drag.reset"
         />
       </div>
+      <!--
+        2026-10-09：`treeProps.checkStrictly: true` 是硬要求，不能删。
+        EP 的该选项默认 false ⇒ 勾选在父子间级联：勾「装配件父行」（想出 1 张「N 套」
+        标签）会把全部子件行一起勾上，同一批货出两轮标签；反向勾满全部子件也会把父行勾上。
+        「一行 = 一张标签」只有不联动才成立。
+      -->
       <el-table
         :ref="(el) => handleTableRef(el as ComponentInstance<typeof ElTable> | null)"
         :data="rows"
         :row-key="(row: PartTreeRow) => row.id"
         :row-class-name="rowClassName"
-        :tree-props="{ children: 'children' }"
+        :tree-props="{ children: 'children', checkStrictly: true }"
         default-expand-all
         height="240"
         size="small"

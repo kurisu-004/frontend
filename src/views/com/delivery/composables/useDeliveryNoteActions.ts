@@ -234,6 +234,11 @@ export function useDeliveryNoteActions(
    * 勾选的是**行**（一个零件 / 一个装配件），移除接口收的是批次 id ⇒ 逐行展开成
    * `rowIdToBatchIds`。确认文案把两个口径都说出来：用户按行勾，接口按批次删，
    * 只说「N 个」会让用户以为删掉的就是那 N 行。
+   *
+   * ⚠️ **批次 id 必须去重**：「装配件父行 + 它的某个子件行」同时勾上是允许的（父子不
+   * 联动，见 `DeliveryNoteLineItemsTable` 的 `treeProps.checkStrictly`），而父行的
+   * `batch_ids` 就是子件批次的并集 ⇒ 不去重会把同一批批次发两次，「含 M 个批次」的
+   * 确认文案也会虚高。
    */
   async function onRemoveSelected(): Promise<boolean> {
     const n = bindings.note.value;
@@ -243,7 +248,9 @@ export function useDeliveryNoteActions(
       ElMessage.warning('请勾选要移除的零件/装配件');
       return false;
     }
-    const batchIds = rows.flatMap((r) => bindings.rowIdToBatchIds.value.get(r.id) ?? r.batch_ids);
+    const batchIds = [
+      ...new Set(rows.flatMap((r) => bindings.rowIdToBatchIds.value.get(r.id) ?? r.batch_ids)),
+    ];
     if (
       !(await confirmDangerous(
         '移除零件/装配件',

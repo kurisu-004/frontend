@@ -18,8 +18,8 @@
 //   `el-tooltip` 类，那个类才是 `white-space: nowrap` + ellipsis。
 // - 申请人 / 数量 / 计划交期 / 系统交期四列加宽：表头「列名 + 列拖动手柄(18px) +
 //   排序箭头(24px) + .cell 左右 padding(24px)」在原宽度下超过可用宽度，而 EP 的 `.cell`
-//   是 `white-space: normal` ⇒ 排序箭头折行。`src/styles/index.scss` 另有 `nowrap` 兜底，
-//   两处一起改：加宽让文案不挤，nowrap 兜住更窄的窗口。
+//   是 `white-space: normal` ⇒ 排序箭头折行。加宽让文案不挤；`nowrap` 兜底是
+//   `DeliveryNoteLineItemsTable` 自己 scoped 样式里的一条（只作用于本表，见该文件注释）。
 
 import { h, type VNode } from 'vue';
 import { ElTag } from 'element-plus';

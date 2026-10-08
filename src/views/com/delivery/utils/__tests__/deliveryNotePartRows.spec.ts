@@ -9,9 +9,10 @@
 //   - 装配件父子结构：父行插在首个子件位置、套数 = 组内 min shippable_sets、全 null 时
 //     null 不兜 0（真 0 套照实透传）；
 //   - row-key 全表唯一，且零件行 key 不与批次 id 相撞（reserve-selection 的前提）；
-//   - `label_printed` 的 any 口径（任一批次打过即整行绿）；
+//   - `label_printed` 的**零件行 any / 装配件父行 all** 口径（两张表共用同一判据）；
 //   - `partRowsToLabelRows`：单位（件 / 套）、数量口径、`member_ids` 是**整行** batch_ids
-//     （只登记代表批次会让该行其余批次永远不绿）。
+//     （只登记代表批次会让该行其余批次永远不绿）、不写 `PrintRow.is_asm_row`（标签渲染层
+//     7 列全程不读它）。
 
 import { describe, expect, it } from 'vitest';
 import { buildPartTreeRows, partRowsToLabelRows } from '../deliveryNotePartRows';
@@ -205,7 +206,7 @@ describe('buildPartTreeRows：装配件父子结构', () => {
     expect(parent.unit).toBe('套');
   });
 
-  it('父行展示值取 assembly_*（不回落子件），批次 id 与绿底由子件汇总', () => {
+  it('父行展示值取 assembly_*（不回落子件），批次 id 由子件汇总', () => {
     const rows = buildPartTreeRows(asmItems, () => true);
     const parent = rows[0]!;
     expect(parent.name).toBe('总装');
@@ -284,8 +285,8 @@ describe('buildPartTreeRows：装配件父子结构', () => {
   });
 });
 
-describe('buildPartTreeRows：绿底口径', () => {
-  it('任一批次打过标签即整行绿（any，不是 all）', () => {
+describe('buildPartTreeRows：绿底口径（零件行 any / 装配件父行 all）', () => {
+  it('零件行：任一批次打过标签即整行绿（any，不是 all）', () => {
     const rows = buildPartTreeRows(
       [
         li({ id: '10', part_id: 'P1' }),
@@ -299,6 +300,55 @@ describe('buildPartTreeRows：绿底口径', () => {
   it('都没打过 → false', () => {
     const rows = buildPartTreeRows([li({ id: '10', part_id: 'P1' })], never);
     expect(rows[0]!.label_printed).toBe(false);
+  });
+
+  it('装配件父行：只打过一个子件时不绿（否则读成「整套都出过纸」）', () => {
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '13', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
+        li({ id: '14', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装' }),
+      ],
+      (id) => id === '13',
+    );
+    const parent = rows[0]!;
+    expect(parent.is_asm_row).toBe(true);
+    expect(parent.label_printed).toBe(false);
+    // 打过那个子件行照常绿
+    expect(parent.children!.map((c) => c.label_printed)).toEqual([true, false]);
+  });
+
+  it('装配件父行：全部子件批次都打过才绿（打印父行会把整套标记上）', () => {
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '13', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
+        li({ id: '14', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装' }),
+      ],
+      (id) => id === '13' || id === '14',
+    );
+    expect(rows[0]!.label_printed).toBe(true);
+  });
+
+  it('子件行折叠多批次时，父行取的是「每个子件行」的 all（不是逐批次展开的 all）', () => {
+    // PA 折成一行、含两个批次，其中只有一个打过 ⇒ PA 行绿；PB 一个批次也绿 ⇒ 父行绿
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '10', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
+        li({ id: '11', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
+        li({ id: '12', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装' }),
+      ],
+      (id) => id === '11' || id === '12',
+    );
+    expect(rows[0]!.label_printed).toBe(true);
+    // 全部三个批次都绿
+    const all = buildPartTreeRows(
+      [
+        li({ id: '10', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
+        li({ id: '11', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
+        li({ id: '12', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装' }),
+      ],
+      () => true,
+    );
+    expect(all[0]!.label_printed).toBe(true);
   });
 
   it('空数组 → 空结果（看板未加载时不该造出空父行）', () => {
@@ -328,13 +378,14 @@ describe('partRowsToLabelRows', () => {
       name: '铝电解电容',
       note: '',
     });
-    // 零件行不带装配件标记（下游按这个标记选渲染分支）
+    // 标签行不带装配件标记：标签工作簿是 7 列，渲染层全程不读 `is_asm_row`
+    // （那个字段只服务「打印送货单」的预览表，由 deliveryNotePrintRows 自己写）
     expect(label[0]!.is_asm_row).toBeUndefined();
     // 全量批次 id：只登记代表批次会让同零件的其余批次永远不绿
     expect(label[0]!.member_ids).toEqual(['10', '11']);
   });
 
-  it('装配件父行：单位「套」、数量 = 可出货套数、is_asm_row 置位', () => {
+  it('装配件父行：单位「套」、数量 = 可出货套数、同样不带 is_asm_row', () => {
     const rows = buildPartTreeRows(
       [
         li({
@@ -368,9 +419,9 @@ describe('partRowsToLabelRows', () => {
       order_no: 'ASM-SO',
       drawing_no: 'ASM-D',
       name: '总装',
-      is_asm_row: true,
       assembly_quantity: 10,
     });
+    expect(label[0]!.is_asm_row).toBeUndefined();
     expect(label[0]!.member_ids).toEqual(['13', '14']);
   });
 

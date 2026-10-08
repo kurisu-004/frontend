@@ -14,7 +14,8 @@
 //
 // 2026-10-09：树行由「装配件父行 + 批次叶子行」改为「装配件父行 + 零件叶子行（折叠多批次）」，
 // 折叠实现搬进 `utils/deliveryNotePartRows`；本用例顺带钉住绿底（`row-printed`）的两条
-// 规则：零件行按 `label_printed`、装配件父行恒不绿。
+// 规则：零件行按 `label_printed` 的 any 口径、装配件父行按 all 口径，两张表（详情页 /
+// 草稿卡片）共用同一判据，`deliveryLineRowClassName` 不再对父行开特例。
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createApp, ref } from 'vue';
@@ -195,18 +196,23 @@ describe('详情页零件列表绿底（已打印标签）', () => {
     );
   });
 
-  it('装配件父行恒不绿（它是聚合展示行，绿底由子件行体现）', async () => {
+  it('装配件父行取 all：只打印了部分子件时不绿，全部打完才绿', async () => {
     const detail = await detailOf([
       mkItem({ id: '400', part_id: 'PA', assembly_id: ASM, shippable_sets: 2 }),
       mkItem({ id: '300', part_id: 'PB', assembly_id: ASM, shippable_sets: 2 }),
     ]);
-    usePrintedLabels().markPrinted('NOTE-1', ['400', '300']);
-    const parent = detail.treeLineItems.value.find((r) => r.is_asm_row)!;
-    expect(detail.deliveryLineRowClassName({ row: parent })).toBe('');
-    // 子件行照常绿
-    expect(
-      detail.deliveryLineRowClassName({ row: detail.treeLineItems.value[0]!.children![0]! }),
-    ).toBe('row-printed');
+    const parent = () => detail.treeLineItems.value.find((r) => r.is_asm_row)!;
+
+    // 只打了一个子件：那个子件行绿，父行不绿
+    usePrintedLabels().markPrinted('NOTE-1', ['400']);
+    expect(detail.deliveryLineRowClassName({ row: parent() })).toBe('');
+    expect(detail.deliveryLineRowClassName({ row: detail.treeLineItems.value[0]!.children![0]! })).toBe(
+      'row-printed',
+    );
+
+    // 整套打完（打印父行会把全部子件批次一起标记上）⇒ 父行也绿
+    usePrintedLabels().markPrinted('NOTE-1', ['300']);
+    expect(detail.deliveryLineRowClassName({ row: parent() })).toBe('row-printed');
   });
 });
 

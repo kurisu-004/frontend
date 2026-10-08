@@ -16,6 +16,12 @@
 //   做），折叠不得自行重排，否则表头排序会被静默还原。
 // - **代表批次取首个**：展示字段（序列号 / 名称 / 图号 / 订单号 / 申请人 / 客户 / 日期 /
 //   状态）沿用草稿卡片折叠的既有口径取首个批次，只有系统交期取首个非空。
+//
+// ⚠️ 折叠带来的两个展示副作用（2026-10-09 明确记录，勿当 bug 修）：
+// - **客户端排序会改变同一折叠行的展示值**。折叠代表批次取**首个**，所以按状态 / 计划交期
+//   / 申请人排序会重排批次序列，进而改掉折叠行上显示的那个值；只有「数量」是例外（见下）。
+// - **按数量排序比较的是批次值，展示的是求和值**。折叠行的数量 = 同零件各批次数量之和，
+//   而排序走的是单批次数量 ⇒ 排出来的名次与列上显示的数字不完全对应。
 
 import { shippableSetsOfGroup } from './assemblySets';
 import type { DeliveryNoteLineItemData } from '../composables/deliveryNoteSchema';
@@ -50,7 +56,12 @@ export interface PartTreeRow {
   unit: string;
   /** 该行代表的全部批次 id（移除 / 已打印标签标记 / 标签行成员都用它）。 */
   batch_ids: string[];
-  /** 任一批次已在 usePrintedLabels 登记为已打印（绿底判据）。 */
+  /**
+   * 绿底判据，**零件行取 any / 装配件父行取 all**（2026-10-09 统一，全仓两张表共用）：
+   * - 零件行 = `batch_ids` 里**任一**批次已在 usePrintedLabels 登记为已打印；
+   * - 装配件父行 = `batch_ids` **全部**批次都已打印。打印父行会把全部子件批次一起标记上，
+   *   所以整套打完父行就该绿；只打了某一个子件时父行不该绿（子件行绿就够了）。
+   */
   label_printed: boolean;
   // —— 代表批次（装配件父行取 assembly_*，缺失时回落首个子件）的展示字段 ——
   serial_no: string;
@@ -146,7 +157,10 @@ function foldPartRows(
 
 /**
  * 装配件父行：展示值取 `assembly_*`（缺失时回落首个子件），数量取本单可出货套数
- * （`shippableSetsOfGroup`），批次 / 绿底由子件行汇总。
+ * （`shippableSetsOfGroup`），批次由子件行汇总、绿底取 **all**（见 `PartTreeRow`）。
+ *
+ * `children` 恒非空：父行只由 `buildPartTreeRows` 从已折叠的零件行归组建出来，一个都没有
+ * 就不会产生父行 ⇒ `[].every(...) === true` 的空数组语义不会在这里被误当成「已打印」。
  *
  * `request_date` 恒 null：父行是聚合展示，没有「这张单什么时候请购」这一个事实
  * （子件各自有各自的请购日期）。
@@ -161,7 +175,7 @@ function buildAsmParentRow(assemblyId: string, children: PartTreeRow[]): PartTre
     quantity: shippableSetsOfGroup(children),
     unit: '套',
     batch_ids: children.flatMap((c) => c.batch_ids),
-    label_printed: children.some((c) => c.label_printed),
+    label_printed: children.every((c) => c.label_printed),
     serial_no: first.assembly_serial_no ?? '',
     drawing_no: first.assembly_drawing_no ?? first.drawing_no,
     name: first.assembly_name ?? first.name,
@@ -233,6 +247,11 @@ export function buildPartTreeRows(
  * `member_ids` 给的是**整行 batch_ids**：折叠行代表同零件的多个批次，只登记代表批次
  * 会让该行其余批次永远不绿。`quantity === null` 的行**不在这里过滤** ——
  * `renderDeliveryNoteLabelWorkbook` 会整行跳过并回 `skipped` 计数，toast 据实说明跳过条数。
+ *
+ * 不带 `PrintRow.is_asm_row`：标签工作簿是 7 列（客户 / 订单号 / 申请人 / 名称 / 图号 /
+ * 数量 / 单位），渲染层全程不读这个标记，两种行走的完全是同一套渲染路径。那个字段只服务
+ * 「打印送货单」的预览表（`deliveryNotePrintColumnDefs` / `PrintGroupTable`），由
+ * `deliveryNotePrintRows` 自己写。
  */
 export function partRowsToLabelRows(rows: readonly PartTreeRow[]): PrintRow[] {
   return rows.map((r) => ({
@@ -249,7 +268,5 @@ export function partRowsToLabelRows(rows: readonly PartTreeRow[]): PrintRow[] {
     note: '',
     member_ids: [...r.batch_ids],
     assembly_quantity: r.assembly_quantity,
-    // 装配件父行才带这个标记（零件行不设，避免被下游按「是装配件」分支处理）。
-    ...(r.is_asm_row ? { is_asm_row: true } : {}),
   }));
 }

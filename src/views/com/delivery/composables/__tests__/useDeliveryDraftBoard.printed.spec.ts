@@ -9,6 +9,9 @@
 //      Vue 按「求值期间发生的 ref 读」收集依赖，因此不需要再显式读一次 store；
 //   3. `rowClassName` 把 `label_printed` 映射成 el-table 的行 class。
 //
+// 绿底口径是**零件行 any / 装配件父行 all**（2026-10-09 统一，两张表共用同一个判据，
+// 定义处见 `utils/deliveryNotePartRows` 的 `PartTreeRow.label_printed`）。
+//
 // 另外第一条用例钉住**批量详情的数据源形状**：`batchGetNotes` 在 api 层已解信封，
 // 桩必须返回**数组**（信封形状的桩会让守门抛，把整块看板罩成绿的）。
 //
@@ -188,7 +191,7 @@ describe('useDeliveryDraftBoard 已打印标签绿底', () => {
     expect(board.rowClassName({ row: board.foldedRows(NOTE_ID)[0]! })).toBe('');
   });
 
-  it('同 serial_no 的多个批次折叠成一行：任一批次打过标签即整行绿', async () => {
+  it('同 (assembly_id, part_id) 的多个批次折叠成一行：任一批次打过标签即整行绿', async () => {
     batchGetNotesMock.mockResolvedValue([
       {
         ...DRAFT_HEAD,
@@ -214,6 +217,32 @@ describe('useDeliveryDraftBoard 已打印标签绿底', () => {
     const board = await bootBoard();
     usePrintedLabels().markPrinted('OTHER_NOTE', ['911000000000000001']);
     expect(board.rowClassName({ row: board.foldedRows(NOTE_ID)[0]! })).toBe('row-printed');
+  });
+
+  it('装配件父行取 all：只打印了部分子件时父行不绿，全部打完才绿', async () => {
+    batchGetNotesMock.mockResolvedValue([
+      {
+        ...DRAFT_HEAD,
+        part_count: 2,
+        line_items: [
+          lineItem({ id: '911000000000000001', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
+          lineItem({ id: '911000000000000002', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装' }),
+        ],
+      },
+    ]);
+    const board = await bootBoard();
+    const parent = () => board.foldedRows(NOTE_ID).find((r) => r.is_asm_row)!;
+    expect(board.rowClassName({ row: parent() })).toBe('');
+
+    // 只打了一个子件：子件行绿，父行不绿
+    usePrintedLabels().markPrinted(NOTE_ID, ['911000000000000001']);
+    expect(board.rowClassName({ row: parent() })).toBe('');
+    const children = board.foldedRows(NOTE_ID).find((r) => r.is_asm_row)!.children!;
+    expect(children.map((c) => board.rowClassName({ row: c }))).toEqual(['row-printed', '']);
+
+    // 整套打完：父行也绿
+    usePrintedLabels().markPrinted(NOTE_ID, ['911000000000000002']);
+    expect(board.rowClassName({ row: parent() })).toBe('row-printed');
   });
 });
 

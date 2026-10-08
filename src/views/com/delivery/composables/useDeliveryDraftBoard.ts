@@ -279,9 +279,10 @@ export function useDeliveryDraftBoard(): UseDeliveryDraftBoardReturn {
       // 批次已从单据上摘掉 → 清掉「已打印标签」记录，否则行再被加回来时会带着脏绿底。
       printedLabelStore.unmark(noteId, row.batch_ids);
       // `reserve-selection` 的保留集按 row-key 记，不显式清的话同一零件重新扫码入单会
-      // 带着没出纸的勾选态回来；同时把 shell 侧那份勾选行替换成「只剩未被移除的行」。
-      const keep = (selectedRowsByNote[noteId] ?? []).filter((r) => r.id !== row.id);
-      setSelectedRows(noteId, keep);
+      // 带着没出纸的勾选态回来。`clearSelection()` 会**同步** emit 一次
+      // `selection-change: []`（EP 的 `clearSelection` 在旧选中集非空时立刻 emit），
+      // shell 那份 `update:selectedRows` 随即被覆盖成空 —— 也就是**清空该卡的全部勾选**，
+      // 不只是刚移除的那一行。
       tableRefs.get(noteId)?.clearSelection();
       ElMessage.success('已移除');
     } catch (e) {
