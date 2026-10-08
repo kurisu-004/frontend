@@ -104,6 +104,11 @@ function makeRefreshedPair(remainingSec: number): { token: string; refresh_token
  * 队列尾部挂的是 `run.catch(() => undefined)` 而不是 `run` 本身：前一个临界区抛错时，
  * 队尾必须仍然是 fulfilled 的，否则一次失败会把后面所有等待者一起卡死（真实 Web Locks
  * 不会这样 —— 锁的释放与回调的成败无关）。
+ *
+ * 回调的 lock 实参恒为 `null`（真实 Web Locks 传的是 Lock 对象）：生产代码
+ * `withRefreshLock` 传的是零参箭头 `() => fn()`、从不读它，所以桩这样够用；但将来若在
+ * 回调里写 `({ name }) => …` 这类解构，桩下会抛 TypeError 而真实宿主不会 —— 要读实参的
+ * 用例请改用宿主实现（jsdom + 真实 `navigator.locks`），别把桩当真。
  */
 function stubWebLocks(): void {
   const tails = new Map<string, Promise<unknown>>();
