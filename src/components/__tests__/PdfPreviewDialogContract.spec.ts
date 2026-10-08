@@ -42,9 +42,9 @@ const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const FULLSCREEN_PDF_DIALOGS: { file: string; where: string }[] = [
   { file: 'src/components/FileListCard.vue', where: 'previewVisible 预览弹窗' },
   { file: 'src/views/assemblies/components/AssemblyChildrenTable.vue', where: '子件图纸预览' },
-  { file: 'src/views/scan/ScanPickParts.vue', where: '图纸预览' },
-  { file: 'src/views/scan/ScanInspectParts.vue', where: '图纸预览' },
-  { file: 'src/views/scan/ScanReturnParts.vue', where: '图纸预览' },
+  { file: 'src/views/production/scan/ScanPickParts.vue', where: '图纸预览' },
+  { file: 'src/views/production/scan/ScanInspectParts.vue', where: '图纸预览' },
+  { file: 'src/views/production/scan/ScanReturnParts.vue', where: '图纸预览' },
   { file: 'src/views/parts/new/components/PartBatchPdfTab.vue', where: 'PDF 文件名预览' },
   { file: 'src/views/parts/new/components/PartBatchManualTab.vue', where: '图纸预览' },
 ];

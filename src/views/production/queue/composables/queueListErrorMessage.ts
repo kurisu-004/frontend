@@ -1,7 +1,7 @@
 // views/production/queue/composables/queueListErrorMessage.ts
 //
 // 生产队列列表加载失败时的**文案收口**，与报工台的
-// `views/scan/composables/scanListErrorMessage.ts` 同形：各域自持一份（域内不出域，
+// `views/production/scan/composables/scanListErrorMessage.ts` 同形：各域自持一份（域内不出域，
 // 也避免一个「给 4 个域共用」的小工具把三个域的文案差异藏进参数表）。
 //
 // 为什么需要收口：队列看板的出参走 `queueBoardSchema` / `queueSnapshotSchema` 契约守门

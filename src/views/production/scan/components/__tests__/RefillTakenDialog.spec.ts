@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/scan/components/__tests__/RefillTakenDialog.spec.ts
+// src/views/production/scan/components/__tests__/RefillTakenDialog.spec.ts
 //
 // 2026-10-05 新增：worker-scan 同事务 refill 抢到批次时给工人看的告知弹窗。
 //

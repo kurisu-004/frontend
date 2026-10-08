@@ -48,7 +48,7 @@ export type DeliveryNoteRow = DeliveryNoteItemData;
 //     `src/views/inspection/InspectionPending.vue` —— 引用
 //     `views/delivery/components/BatchInspectionConfirmDialog.vue`（旧目录 + 已删）
 //     的「嵌套弹窗 append-to-body 范式」；
-//   · `src/views/scan/components/BatchPickerDialog.vue` —— 引用
+//   · `src/components/BatchPickerDialog.vue` —— 引用
 //     `views/com/delivery/PartPickerDialog`（目录对、文件已删）作为「另一种行 DTO 形态」。
 // 三处都不影响行为（纯注释），而它们分属 **inspection / scan 两个域**（本域不越界改别人
 // 域的注释）⇒ **随那两个域各自的下次改动一并清理**，届时改引用或删掉整句。

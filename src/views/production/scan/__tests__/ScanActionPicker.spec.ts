@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/scan/__tests__/ScanActionPicker.spec.ts
+// src/views/production/scan/__tests__/ScanActionPicker.spec.ts
 //
 // /scan/action 的回归守卫：**按钮显隐按「账号绑定货架的 zone 并集」决定**，以及点了之后
 // 跳哪一页。
@@ -47,8 +47,8 @@ vi.mock('element-plus', () => ({ ElMessage: h.ElMessage }));
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: h.push, replace: h.replace }) }));
 
-import ScanActionPicker from '@/views/scan/ScanActionPicker.vue';
-import { useScanSession } from '@/views/scan/composables/useScanSession';
+import ScanActionPicker from '@/views/production/scan/ScanActionPicker.vue';
+import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import type { CurrentUser } from '@/types/user';
 import type { Shelf, ShelfListResult } from '@/types/shelf';
 import type { Worker } from '@/types/worker';

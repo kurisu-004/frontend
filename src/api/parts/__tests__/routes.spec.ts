@@ -280,7 +280,7 @@ describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () =
     expect(path).toBe(`/prod/batches/${BATCH}/pick-up`);
     // ⚠️ 这条 `toEqual` 钉的是**本用例自己构造的 payload**（上面那 3 个键），不是真实调用点
     // 的 body —— `pickUpPart` 是 `api.post(url, payload)` 原样透传、不重组，所以键集等于
-    // 调用点传了什么。调用点（`views/scan/ScanPickParts.vue` 的 `onQtyConfirm`）传
+    // 调用点传了什么。调用点（`views/production/scan/ScanPickParts.vue` 的 `onQtyConfirm`）传
     // `{ version, worker_id, quantity }`、不传 `note`，两者一致这件事由
     // `api/parts/crud.ts` 的 `PartPickUpPayload` 类型 + 那个调用点保证，不在本用例的
     // 守门范围内。真正独立有效的是下面那几条 `not.toHaveProperty`。

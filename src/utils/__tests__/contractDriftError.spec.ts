@@ -3,7 +3,7 @@
 // 2026-10-10 新增：跨域文案收口 `contractDriftErrorText` 的行为锁定。
 //
 // 锁的是三条真值表：**ZodError ⇒ 固定人话 + console.error（细节）**、普通 Error ⇒ message
-// 逐字透传、无 message ⇒ 回落 fallback。这条收口替两个域挡着（`views/scan` 报工台列表、
+// 逐字透传、无 message ⇒ 回落 fallback。这条收口替两个域挡着（`views/production/scan` 报工台列表、
 // `views/users` 账号列表 / 企微绑定），一旦行为漂移，两边都是把 issues 的 JSON 甩给用户。
 
 import { afterEach, describe, expect, it, vi } from 'vitest';

@@ -1,4 +1,4 @@
-// src/views/scan/composables/__tests__/useScanPartsSort.spec.ts
+// src/views/production/scan/composables/__tests__/useScanPartsSort.spec.ts
 //
 // 2026-10-04 新增：报工台客户端排序的四条产品规则的回归锁。
 //

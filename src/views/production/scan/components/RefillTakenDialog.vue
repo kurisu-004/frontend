@@ -75,7 +75,7 @@
 
 <script setup lang="ts">
 import { CircleCheckFilled } from '@element-plus/icons-vue';
-import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
+import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
 import type { TakenItemDto } from '@/api/productionQueue.contract';
 
 defineProps<{

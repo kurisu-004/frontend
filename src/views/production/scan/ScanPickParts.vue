@@ -35,7 +35,7 @@
      HTTP 422（axum Json extractor 拒，不是项目统一信封）。
 
    2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
-   （有链 = 绿，规则见 `@/views/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
+   （有链 = 绿，规则见 `@/views/production/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
    加急由红底 + 「加急」tag 承担，两者都不进边框。
 -->
 
@@ -276,20 +276,20 @@ import { api } from '@/api/http';
 import PdfViewer from '@/components/PdfViewer.vue';
 import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
-import { useScanSession } from '@/views/scan/composables/useScanSession';
+import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useScanBus } from '@/views/scan/composables/useScanBus';
-import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
-import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
-import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
-import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
-import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
+import { useScanBus } from '@/views/production/scan/composables/useScanBus';
+import { useScanPartsSort } from '@/views/production/scan/composables/useScanPartsSort';
+import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
+import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vue';
+import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
+import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
 import { listPartsByWorkTypeAllShelves, pickUpPart, type PartItem } from '@/api/parts';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
-import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
-import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
-import { chainRowClass } from '@/views/scan/chainAccent';
+import BatchPickerDialog from '@/components/BatchPickerDialog.vue';
+import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
+import { chainRowClass } from '@/views/production/scan/chainAccent';
 
 const router = useRouter();
 const { worker, requireWorker, reset: resetScanSession } = useScanSession();

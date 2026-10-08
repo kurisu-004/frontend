@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/scan/components/__tests__/DeliveryDateChip.spec.ts
+// src/views/production/scan/components/__tests__/DeliveryDateChip.spec.ts
 //
 // 2026-10-04 新增：交期 chip「只显示系统交期、无值显示 '-'」的渲染契约。
 //

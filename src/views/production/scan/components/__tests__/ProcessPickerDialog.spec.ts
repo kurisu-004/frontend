@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/scan/components/__tests__/ProcessPickerDialog.spec.ts
+// src/views/production/scan/components/__tests__/ProcessPickerDialog.spec.ts
 //
 // 2026-10-04 新增：工序选择弹窗的常驻横幅 `hint` prop 契约。
 //

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/scan/__tests__/ScanReturnChainFlow.spec.ts
+// src/views/production/scan/__tests__/ScanReturnChainFlow.spec.ts
 //
 // 放回流程「按 chain_state 分流」三条分支的回归守卫。
 //
@@ -78,8 +78,8 @@ vi.mock('@/components/PdfViewer.vue', () => ({
 }));
 
 import ScanReturnParts from '../ScanReturnParts.vue';
-import { CHAIN_ROW_CLASS } from '@/views/scan/chainAccent';
-import { useScanSession } from '@/views/scan/composables/useScanSession';
+import { CHAIN_ROW_CLASS } from '@/views/production/scan/chainAccent';
+import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 
 const WORKER = {

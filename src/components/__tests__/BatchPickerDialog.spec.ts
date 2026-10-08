@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
-// src/views/scan/components/__tests__/BatchPickerDialog.spec.ts
+// src/components/__tests__/BatchPickerDialog.spec.ts
 //
 // 2026-10-03 新增：holder 文本与 meta 行的渲染契约守卫。本组件是**跨域共享组件**
-// （views/scan/ 三页 + views/inspection/InspectionPending），
+// （views/production/scan/ 三页 + views/inspection/InspectionPending），
 // 2026-10-03 给它加了「3 个判据键一个都不在的窄 VO ⇒ holderText 返空 ⇒ meta 行整行隐藏」
 // 这条分支。两头都要钉住：
-//   - views/scan/ 三页（`PartListItem` 形态）行为**一字未变**，否则报工台卡片静默少一行信息；
+//   - views/production/scan/ 三页（`PartListItem` 形态）行为**一字未变**，否则报工台卡片静默少一行信息；
 //   - 窄 VO（3 个 holder 判据键一个都不在）**确实变了**：meta 行整行不再渲染。
 //     它消掉的是恒显的「未知位置」无信息量文案，属一并接受的观感变化，用例把它钉死，
 //     免得后来人误判成回归又改回去。
@@ -18,14 +18,14 @@
 // 判据是「键在不在」而不是「值是否 null」，理由与脆弱点见 BatchPickerDialog.holderText 注释。
 //
 // 2026-10-09：批次行左边框改为按 `has_process_chain` 着色（原先硬编码蓝），走类绑定
-// `.has-chain`（规则见 `@/views/scan/chainAccent`）。只有报工台三域的行带这个键 ⇒
+// `.has-chain`（规则见 `@/views/production/scan/chainAccent`）。只有报工台三域的行带这个键 ⇒
 // 另外两域不挂类落中性色（用窄 VO fixture 守这条）。
 
 import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
 import BatchPickerDialog from '../BatchPickerDialog.vue';
 import type { PartItem } from '@/api/parts';
-import { CHAIN_ROW_CLASS } from '@/views/scan/chainAccent';
+import { CHAIN_ROW_CLASS } from '@/views/production/scan/chainAccent';
 
 /** 前端 `PartItem` 宽形态（判据键显式全带上）的最小子集。
  *
@@ -174,7 +174,7 @@ describe('BatchPickerDialog / holder 文本与 meta 行', () => {
     // ⚠️ 本用例的断言对象是**运行时数据**，而 fixture 自己显式带上了 3 个键 ⇒ 它证明不了
     // 「键真的在」。那条不变量完全依赖后端 `PartListItem.location` 不加
     // `skip_serializing_if`：后端一旦加上，`'location' in p` 转 false、holderText 返空、
-    // 报工台卡片静默少掉这一行，而本用例仍绿。views/scan/ 三页零 spec，这个盲区是既存的。
+    // 报工台卡片静默少掉这一行，而本用例仍绿。views/production/scan/ 三页零 spec，这个盲区是既存的。
     const w = render([
       wideRow({ current_holder_display: null, location: null, current_holder_kind: null }),
     ]);

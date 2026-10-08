@@ -97,7 +97,7 @@ import {
   ACTION_LABEL,
   useScanSession,
   type WorkAction,
-} from '@/views/scan/composables/useScanSession';
+} from '@/views/production/scan/composables/useScanSession';
 import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
 import { useAuthStore } from '@/stores/auth';
 

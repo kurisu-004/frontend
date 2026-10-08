@@ -1,4 +1,4 @@
-// views/scan/composables/useScanPartsSort.ts
+// views/production/scan/composables/useScanPartsSort.ts
 //
 // 报工台三页（ScanPickParts / ScanReturnParts / ScanInspectParts）共用客户端排序。
 // 引入「系统交期」硬优先级：含 system_delivery_date 的工件整体提到无

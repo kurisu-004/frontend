@@ -1,4 +1,4 @@
-// views/scan/composables/scanListErrorMessage.ts
+// views/production/scan/composables/scanListErrorMessage.ts
 //
 // 报工台列表加载失败时的**文案收口**，供 4 个调用点共用：取件 / 放回 / 送检三页的
 // `refresh()` 与 `HeldPartsBadge` 的 `fetchHeld()`。三页走 `ElMessage.error`，

@@ -113,8 +113,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Box, Loading, Refresh, User, WarningFilled } from '@element-plus/icons-vue';
 import { listPartsHeldByWorker } from '@/api/parts';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
-import { useScanBus } from '@/views/scan/composables/useScanBus';
-import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
+import { useScanBus } from '@/views/production/scan/composables/useScanBus';
+import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
 
 const props = withDefaults(
   defineProps<{

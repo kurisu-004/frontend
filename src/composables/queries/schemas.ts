@@ -931,7 +931,7 @@ export type OutsourceQuotablePartListResultSchema = z.infer<
 // `PartListOut` 定义在 backend-rust `src/modules/part/vo/part.rs`。
 // 把信封当数组消费（`parts.value = await listX()` 然后 `parts.length`）会连锁炸三处：
 //   1. `parts.value` 变成对象，`{{ parts.length }}` 渲染成 undefined（计数恒空）；
-//   2. `src/views/scan/composables/useScanPartsSort.ts` 里的 `[...list].sort()` 抛
+//   2. `src/views/production/scan/composables/useScanPartsSort.ts` 里的 `[...list].sort()` 抛
 //      `TypeError: list is not iterable` —— 抛点在 computed 内，模板
 //      `v-for="p in sortedParts"` 随之渲染失败，**取件 / 放回 / 送检三页同时白屏**；
 //   3. `HeldPartsBadge.vue` 的 `v-for="p in parts"` 迭代对象值，同样坏。
@@ -1007,7 +1007,7 @@ export const scanPartRowSchema = z.object({
    * 「01/01 · 已逾期 2 万多天」的红色错值（`formatDeliveryDate` / `deliveryUrgencyClass`
    * 拿到 null 后返空串 / 空 class）。2026-10-04 起 chip 在三页**恒渲染**、无值时日期位
    * 显示 `-`，空外壳这件事由组件自己保证，不再由调用方加 `v-if`（见
-   * `views/scan/components/DeliveryDateChip.vue`）。
+   * `views/production/scan/components/DeliveryDateChip.vue`）。
    */
   planned_delivery_date: z
     .string()
@@ -1031,7 +1031,7 @@ export const scanPartRowSchema = z.object({
    * 不可区分，不如在 API 边界炸出来。
    * ⚠️ **部署顺序：后端必须先上线**。旧后端（漏发该键）+ 新前端 ⇒ 这一个键就足以让
    * 报工台三页列表 + `HeldPartsBadge` 四个面全空（ZodError ⇒ 整份信封 parse 失败）。
-   * 契约漂移的文案由 `views/scan/composables/scanListErrorMessage.ts` 收口成一句人话，
+   * 契约漂移的文案由 `views/production/scan/composables/scanListErrorMessage.ts` 收口成一句人话，
    * 细节只进 console。
    * ⚠️ 存量数据里 `by-worker`（放回 / 送检）的指针常常是 NULL ⇒ 短期内部分卡片灰边框
    * 属于预期，不是渲染缺陷。

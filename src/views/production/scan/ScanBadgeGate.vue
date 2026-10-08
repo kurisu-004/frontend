@@ -34,7 +34,7 @@ import { findWorkerByBadge } from '@/api/worker';
 // 标量 getter 去掉括号：isAuthenticated() → isAuthenticated；user 自动解包为对象。
 import { useAuthStore } from '@/stores/auth';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useScanSession } from '@/views/scan/composables/useScanSession';
+import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 
 const router = useRouter();
 const { onScan } = useBarcodeScanner();

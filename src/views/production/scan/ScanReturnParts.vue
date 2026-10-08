@@ -1,30 +1,41 @@
 <!--
-  ScanInspectParts.vue
+  ScanReturnParts.vue
 
-  /scan/inspect —— 扫码台 INSPECT 流程（2026-07-19，2026-09-15 Phase 5 切 v2）
+  /scan/return —— 扫码台 RETURN 流程（2026-07-10 PR-E，2026-09-15 Phase 5 切 v2）
   1. onBeforeMount 调 GET /parts/by-worker/{worker_id} 列出当前 worker 持有件
-  2. 工人点选一件 → 进入「待扫码确认」状态（confirm-bar 提示扫该件条码）
-  3. 扫码枪扫到与选中件 serial_no 匹配的条码 → 直接提交送检
-     （与 ScanPickParts.vue 的「选中后扫码确认」同款防误触模式；不匹配 → ElMessage.error）
-  4. 送检不需要下一道工序（后端 INSPECTED 忽略 next_process_id）
-  5. 提交走 POST /prod/batches/worker-scan（event_type=INSPECTED），service
-     ::mark_inspected → 写事件 + 同事务 WorkerPool refill。
-  6. 成功后自动 refresh（该件从列表消失）
+  2. 工人点选一件 → 按行 VO 的 `chain_state` 分流（2026-10-04，工序链适配）：
+       - NEXT（链内有下一道）→ 下一道工序由链直接给出，弹单确认框三选一：
+         「按链放回」/「换一道工序」（落回手选）/「取消」
+       - TAIL（当前是链内最后一道）→ 工序选择弹窗内常驻提示「加工完成后请送检」，
+         工人手选工序（提示不判死下一步的选择权）
+       - NONE（无链 / 链已软删 / 指针漂移）→ 手选「下一道工序」picker
+  3. 2026-09-15 Phase 5：提交走 POST /prod/batches/worker-scan（event_type=RETURNED），
+     service 层 mark_returned + 同事务 WorkerPool refill。
+  4. 成功后自动 refresh（该件从列表消失）
 
-  2026-10-10：**「作业货架」整条下线**。`shelf_id`（工人所在的补料生产架）与
-  `target_inspection_shelf_id`（送检目标品检架）两个字段后端一并删除 —— 目标架改由
-  后端按负载自动选择，`WorkingShelfDialog` / `useScanShelfStore` /
-  `resolveWorkingShelf` 随之删除。扫码确认后直接提交，不再有任何货架闸门。
+  2026-10-10：**货架不再由工人指定** —— 目标货架改由后端按负载自动选择（按
+  `current_load / capacity` 升序，capacity 为 null = 不限，超载不拒）。本页因此
+  删掉货架选择弹窗与「拉候选货架取推荐架」旁路。
 
-  旧「扫一批条码」流程（ScanPartsWork.vue ?action=inspect）已随本页上线替换不保留。
+  ⚠️ **单确认弹窗的主文案随之下半句**：原来要先拿到候选架才能说「放到哪个架」，
+  现在前端没有货架信息可展示，只讲下一道工序。选中态里也只保留工序段 —— 写一个
+  后端不保证等于用户所想的架号，比不写更糟（超载被允许时后端完全可能选另一个架）。
+  但「换一道工序」这个出口必须留着：确认框是 NEXT 分支唯一能到达 ProcessPickerDialog
+  的路，少了它工人一旦不同意管理员配的链就被困死（详见 showChainConfirm 处注释）。
+
+  与 ScanPickParts.vue 范式对齐：
+  - 选件 → （必要时选工序）→ 提交
+  - 不需要扫码确认（点选即确认；旧流程「扫一批条码」已替换不保留）
 
   2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
-  （有链 = 绿，规则见 `@/views/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
+  （有链 = 绿，规则见 `@/views/production/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
   加急由红底 + 「加急」tag 承担，两者都不进边框。
+  ⚠️ 本页是放回流程，`by-worker` 存量数据里链指针常常是 NULL ⇒ 短期内部分卡片灰边框
+  属于预期，与下面 `chain_state` 分流是同一根因（指针未维护），不是渲染缺陷。
 -->
 
 <template>
-  <div class="scan-inspect">
+  <div class="scan-return">
     <!-- 顶栏 -->
     <div class="topbar">
       <div class="topbar-left">
@@ -36,7 +47,7 @@
           {{ worker?.badge_code ?? '' }}
         </el-tag>
         <el-divider direction="vertical" class="divider" />
-        <el-tag type="success" effect="dark">送 检</el-tag>
+        <el-tag type="warning" effect="dark">放 回</el-tag>
       </div>
       <div class="topbar-right">
         <HeldPartsBadge
@@ -74,7 +85,7 @@
       <div v-else-if="parts.length === 0" class="empty-block">
         <el-icon :size="60" color="#c0c4cc"><Box /></el-icon>
         <h3>您当前没有持有零件</h3>
-        <p>请先到「取件」领取零件后再来送检。</p>
+        <p>请先到「取件」领取零件后再来放回。</p>
         <el-button type="primary" @click="refresh">刷新</el-button>
         <el-button @click="backToAction">返回</el-button>
       </div>
@@ -92,15 +103,20 @@
           <el-button :icon="Refresh" circle size="small" @click="refresh" />
         </div>
 
-        <!-- 待扫码确认栏 -->
-        <div v-if="selectedPart && awaitingScan" class="confirm-bar pending-scan">
-          <el-icon :size="20" color="#e6a23c"><Aim /></el-icon>
+        <!-- 已选确认栏 -->
+        <div v-if="selectedPart" class="confirm-bar">
+          <el-icon :size="20" color="#67c23a"><CircleCheckFilled /></el-icon>
           <span class="confirm-text">
             已选 <strong>{{ selectedPart.serial_no || selectedPart.drawing_no }}</strong> ·
-            {{ selectedPart.name }} · 送检数量 {{ selectedPart.quantity }}
-            · 请<strong>扫描该零件条码</strong>确认送检
+            {{ selectedPart.name }} · 归还数量 {{ selectedPart.quantity }} · 下一工序：{{
+              selectedNextProcessName || '未选'
+            }}
           </span>
-          <el-button size="small" @click="cancelSelect">取消选择</el-button>
+          <!-- 2026-10-04：提交在途时置灰，不是不置灰也点不动（onCancelSelect 的守卫照旧
+               拦着，只是把「按了没反应」变成「按不了」，HMI 上工人不会以为按钮坏了）。 -->
+          <el-button size="small" :disabled="submitting" @click="onCancelSelect"
+            >取消选择</el-button
+          >
         </div>
 
         <div class="parts-list">
@@ -178,14 +194,61 @@
       @pick="onBatchPicked"
     />
 
-    <!-- 自动补料告知：worker-scan 同事务 refill 抢到批次时弹窗（数量 / 系统交期见卡内）；
-         补料弹窗打开时它兼作本次送检的成功提示（lead-text），故此处不另发 ElMessage.success -->
-    <RefillTakenDialog
-      v-if="showRefillTaken"
-      v-model="showRefillTaken"
-      :items="refillTaken"
-      :lead-text="refillLead"
+    <!-- 下一道工序选择对话框（2026-07-17 升级为大卡 + INHOUSE/OUTSOURCE tabs）。
+         2026-10-04：仍不传 current-process-id / exclude-process-ids —— 行 VO 的
+         `chain_next_process_id` 是**下一道**的 id，填进「当前工序」槽位会让 dialog
+         把下一道预填成选中项，工人直接点「下一步」就等于没得选；这两个绑定
+         保持组件默认值（null / []）= 不预填、全部可选。
+         链已知分支（chain_state=NEXT）下本 dialog 由「换一道工序」那个出口打开；
+         「按链放回」与「取消」两条出口不经它。
+         `hint` 是链尾（TAIL）时段的常驻送检提醒 —— 做成弹窗内的横幅而不是 toast，
+         因为后开的 el-dialog 遮罩必然盖住先发的 ElMessage。 -->
+    <ProcessPickerDialog
+      v-if="showProcessDialog"
+      v-model="showProcessDialog"
+      kind="return"
+      :hint="processHint"
+      @confirm="onProcessPicked"
+      @cancel="onProcessCancel"
     />
+
+    <!-- 链已知（chain_state=NEXT）单确认弹窗：下一道工序由链给出，工人三选一 ——
+         「按链放回」/「换一道工序」/「取消」。
+         自绘 el-dialog 而不是 ElMessageBox：后者只有确认/取消两个键，而「换一道工序」
+         是工人不同意管理员配的链时唯一的出路（工序链是配置、临时插单会改道）；HMI
+         触屏上三个并排大按钮也远好过塞在 message 正文里的小链接。
+         ⚠️ **`:show-close="false"` 不是可选的洁癖**：右上角 × 只 emit
+         `update:modelValue(false)`，不发任何业务事件，而本框是 NEXT 分支**唯一**的提交
+         入口（`submitReturn` 的另外两个调用点分别要先进工序选择框、另一个是调试入口）。
+         × 一关就留下「卡片已选中 + 工序已填 + 无处可提交」的死角，工人只能按
+         「取消选择」再重选一遍。同页另外三个弹窗关掉不致命（确认栏的「取消选择」就能
+         恢复），只有本框必须把关闭权收在 footer 三键上。 -->
+    <el-dialog
+      v-model="showChainConfirm"
+      title="确认放回"
+      width="min(95vw, 640px)"
+      :align-center="true"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="`「${selectedNextProcessName}」是这道工序的下一道。`"
+      />
+      <p class="chain-confirm-hint">
+        确认后工件自动按负载放到合适的货架。若这道工序不对，用「换一道工序」自己选。
+      </p>
+      <template #footer>
+        <el-button @click="onChainCancel">取消</el-button>
+        <el-button type="warning" @click="onChainManual">换一道工序</el-button>
+        <el-button type="primary" :loading="submitting" @click="onChainConfirm">
+          按链放回
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- 数量选择弹窗 -->
     <QuantityDialog
@@ -194,9 +257,18 @@
       :max="selectedPart?.quantity ?? 1"
       :serial-no="selectedPart?.serial_no || selectedPart?.drawing_no || null"
       :part-name="selectedPart?.name || null"
-      action-label="送检"
+      action-label="放回"
       @confirm="onQtyConfirm"
-      @cancel="cancelSelect"
+      @cancel="onCancelSelect"
+    />
+
+    <!-- 自动补料告知：worker-scan 同事务 refill 抢到批次时弹窗（数量 / 系统交期见卡内）；
+         补料弹窗打开时它兼作本次放回的成功提示（lead-text），故此处不另发 ElMessage.success -->
+    <RefillTakenDialog
+      v-if="showRefillTaken"
+      v-model="showRefillTaken"
+      :items="refillTaken"
+      :lead-text="refillLead"
     />
 
     <!-- 图纸 / 图片 全屏预览 -->
@@ -258,10 +330,10 @@ import { computed, nextTick, onBeforeMount, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
-  Aim,
   Avatar,
   Back,
   Box,
+  CircleCheckFilled,
   Download,
   Files,
   Loading,
@@ -274,22 +346,24 @@ import { api } from '@/api/http';
 import PdfViewer from '@/components/PdfViewer.vue';
 import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
-import { useScanSession } from '@/views/scan/composables/useScanSession';
+import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useScanBus } from '@/views/scan/composables/useScanBus';
-import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
-import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
-import { refillTakenOf } from '@/views/scan/composables/refillTaken';
-import HeldPartsBadge from '@/views/scan/components/HeldPartsBadge.vue';
-import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
-import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
+import { useScanBus } from '@/views/production/scan/composables/useScanBus';
+import { useScanPartsSort } from '@/views/production/scan/composables/useScanPartsSort';
+import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
+import { refillTakenOf } from '@/views/production/scan/composables/refillTaken';
+import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vue';
+import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
+import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
 import { listPartsHeldByWorker, workerScan, type PartItem } from '@/api/parts';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
-import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
-import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
-import RefillTakenDialog from '@/views/scan/components/RefillTakenDialog.vue';
-import { chainRowClass } from '@/views/scan/chainAccent';
+import ProcessPickerDialog from '@/views/production/scan/components/ProcessPickerDialog.vue';
+import BatchPickerDialog from '@/components/BatchPickerDialog.vue';
+import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
+import RefillTakenDialog from '@/views/production/scan/components/RefillTakenDialog.vue';
+import { chainRowClass } from '@/views/production/scan/chainAccent';
 import type { TakenItemDto } from '@/api/productionQueue.contract';
+import type { Process } from '@/types/process';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 
 const router = useRouter();
@@ -304,10 +378,6 @@ const total = ref(0);
 const sortedParts = useScanPartsSort(parts);
 const loadingList = ref(false);
 const selectedPart = ref<ScanPartRowSchema | null>(null);
-// 点选卡片后进入「待扫码确认」状态；扫到匹配条码才提交送检
-const awaitingScan = ref(false);
-
-const contentRef = ref<HTMLElement | null>(null);
 const submitting = ref(false);
 
 // --- 预览状态 ---
@@ -335,6 +405,17 @@ function isHeic(t: string): boolean {
   return t.toUpperCase() === 'HEIC';
 }
 
+// 工序选择（2026-07-17：ProcessPickerDialog 自管加载与展示，这里只保留 select 后的状态）
+const showProcessDialog = ref(false);
+// 2026-10-04：工序选择弹窗内的**常驻**横幅（见模板注释）。只服务链尾（TAIL）分支的
+// 送检提醒；其余分支为空串 ⇒ ProcessPickerDialog 不渲染横幅。
+const processHint = ref('');
+const selectedNextProcessId = ref<string>('');
+
+const contentRef = ref<HTMLElement | null>(null);
+const selectedNextProcessCode = ref<string>('');
+const selectedNextProcessName = ref<string>('');
+
 // 2026-10-10：货架选择整块下线（目标架由后端按负载自动选）。showQtyDialog 保留：
 // 正常路径已不走它，但它是 worker-scan 整批语义的旧调试入口。
 const showQtyDialog = ref(false);
@@ -345,17 +426,22 @@ const refillTaken = ref<TakenItemDto[]>([]);
 /** 扫码动作自身的成功文案（补料弹窗打开时它取代 ElMessage.success，见组件注释） */
 const refillLead = ref('');
 
+// --- 工序链已知分支（chain_state=NEXT）：下一工序已由链派生，只差一次确认 ---
+//
+// 目标货架不由前端决定（后端按负载自选），所以这个弹窗只有「下一道工序」一句话要摆。
+// 但它**必须有三个出口**：确认框打开时页面上没有任何别的路能进 `ProcessPickerDialog`，
+// 只给「按链放回 / 取消」的话，工人一旦不同意管理员配的链（临时插单、改道）就被困死
+// —— 取消只是清选中态，再点卡片还是同一个弹窗。
+// 故自绘 el-dialog 而不用 ElMessageBox：后者只有确认/取消两键，且塞在 message 正文里
+// 的小链接在 HMI 触屏上是个难点目标。
+const showChainConfirm = ref(false);
+
 // --- 多批次扫码命中弹窗 ---
 const showBatchPicker = ref(false);
 const batchPickerCode = ref('');
 const batchPickerRows = ref<ScanPartRowSchema[]>([]);
 
-onBeforeMount(async () => {
-  if (!requireWorker(router)) return;
-  await refresh();
-});
-
-// --- 扫码：扫描直接选中 + 滚动居中 + 直接提交送检；不在列表则提示当前位置 ---
+// --- 扫码：扫描直接选中 + 滚动居中 + 触发 per-page tail；不在列表则提示当前位置 ---
 
 /** 选中后等一拍再滚动；元素不在容器内则静默返回 */
 async function scrollCardIntoView(batchKey: string): Promise<void> {
@@ -367,25 +453,87 @@ async function scrollCardIntoView(batchKey: string): Promise<void> {
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-/**
- * INSPECT tail：选中 + 清 awaitingScan + 滚动 + 直接提交送检。
- *
- * 2026-10-10：原先这里开品检架 picker（选完架才提交），现改为**扫码确认即提交** ——
- * 目标架由后端按负载自动选，工人不再指定。
- */
+/** 扫码命中：选中 + 滚动居中，再按 chain_state 分流放回流程 */
 async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
+  // 换件前先收掉上一件的确认框，理由见 closeChainConfirm 的注释。
+  closeChainConfirm();
   selectedPart.value = p;
   selectedQty.value = p.quantity;
-  awaitingScan.value = false;
+  selectedNextProcessId.value = '';
+  selectedNextProcessCode.value = '';
+  selectedNextProcessName.value = '';
   const key = String(p.batch_id || p.id);
   await scrollCardIntoView(key);
-  await submitInspect();
+  enterReturnFlow(p);
+}
+
+/**
+ * 2026-10-04：按 chain_state 分流放回流程（点选与扫码两个入口共用这一个）。
+ *
+ * - `TAIL`：当前工序是链内最后一道 → 工序选择弹窗内**常驻**提示「加工完成后请送检」
+ *   （不是 toast，见 `processHint`）。不把「下一道 = 送检」判死：链是管理员配的，
+ *   工人对「这一步是不是真的走完」有最终发言权（临时插单 / 改道），提示 + 手选并存。
+ * - `NEXT`：链内且有下一道 → 下一道工序已由链给出，弹一次确认框，工人不选工序、
+ *   更不选货架（见 openChainConfirm）。
+ * - 其它（含无链 / 链已软删 / 指针漂移 / 未知取值）：走原「选工序 → 提交」两步路径。
+ */
+function enterReturnFlow(p: ScanPartRowSchema): void {
+  const state = narrowChainState(p.chain_state);
+  // 横幅每轮重算：只有 TAIL 才有，其余分支清空，避免上一件的送检提示留在本轮弹窗里。
+  const cur = p.chain_current_process_name;
+  processHint.value =
+    state === 'TAIL'
+      ? cur
+        ? `「${cur}」为最后一道工序，加工完成后请送检。`
+        : '当前为最后一道工序，加工完成后请送检。'
+      : '';
+  if (state === 'NEXT') {
+    openChainConfirm(p);
+    return;
+  }
+  showProcessDialog.value = true; // NONE：无链 / 漂移，现状不变
+}
+
+/** 后端认的三态；其余一律当 NONE（`schemas.ts::scanPartRowSchema.chain_state` 的
+ *  声明与降级理由见该字段注释）。 */
+type ChainState = 'NONE' | 'NEXT' | 'TAIL';
+
+// 未知取值 / 键缺失只 warn 一次：列表一次最多 200 行，逐行 warn 会刷屏把真正的报错
+// 埋掉。按页面实例去重（新进页面重新 warn 一次），足够定位到「哪个环境的后端返了
+// 第四种 chain_state」。
+let warnedUnknownChainState = false;
+
+/**
+ * 把行 VO 的 `chain_state` 窄化成三态。
+ *
+ * 声明成 `z.string().nullish()` 的代价就是这一步：合法 `NONE` 与「键缺失 / 未知字面量」
+ * 在类型上无法区分，所以未知取值一律降级成 `NONE`（旧路径，行为与工序链上线前逐字
+ * 一致，工人最多多点两下），并 `console.warn` 一次补回可诊断性 —— 与同页
+ * `scanListErrorText` 的「人话给工人，细节给 console」同一条原则。
+ */
+function narrowChainState(raw: string | null | undefined): ChainState {
+  if (raw === 'NONE' || raw === 'NEXT' || raw === 'TAIL') return raw;
+  if (!warnedUnknownChainState) {
+    warnedUnknownChainState = true;
+    console.warn(
+      '[scan] 行 VO 的 chain_state 不在 {NONE,NEXT,TAIL} 内（含键缺失），本次放回已按 NONE 降级：',
+      raw,
+    );
+  }
+  return 'NONE';
 }
 
 async function onScanToSelect(rawCode: string): Promise<void> {
   const code = rawCode.trim();
   if (!code) return;
-  if (submitting.value || showQtyDialog.value || showBatchPicker.value || showRefillTaken.value)
+  if (
+    submitting.value ||
+    showProcessDialog.value ||
+    showChainConfirm.value ||
+    showQtyDialog.value ||
+    showBatchPicker.value ||
+    showRefillTaken.value
+  )
     return;
   const matches = findAllByCode(parts.value, code);
   if (matches.length === 1) {
@@ -407,9 +555,13 @@ function onBatchPicked(p: PartItem): void {
   void applyScanSelection(p as unknown as ScanPartRowSchema);
 }
 
-// 全局扫码订阅：扫描直接触发 onScanToSelect
 const unsubScan = onScan((code) => {
   void onScanToSelect(code);
+});
+
+onBeforeMount(async () => {
+  if (!requireWorker(router)) return;
+  await refresh();
 });
 
 onBeforeUnmount(() => {
@@ -435,7 +587,7 @@ async function refresh(): Promise<void> {
   }
 }
 
-// --- 选件 → 扫码确认 → 提交 ---
+// --- 选件 → 工序 → 货架 → 提交 ---
 const selectedQty = ref<number | undefined>(undefined);
 
 /** 2026-07-29 批次化：行=批次，选中比较按 batch_id */
@@ -452,9 +604,14 @@ function onSelect(p: ScanPartRowSchema): void {
     cancelSelect();
     return;
   }
+  // 换件前先收掉上一件的确认框（理由见 closeChainConfirm 的注释）；cancelSelect 那条
+  // 分支已经自己复位，这里只管「换到另一件」。
+  closeChainConfirm();
   selectedPart.value = p;
   selectedQty.value = p.quantity;
-  awaitingScan.value = true;
+  selectedNextProcessId.value = '';
+  selectedNextProcessName.value = '';
+  enterReturnFlow(p);
 }
 
 // --- 预览 ---
@@ -516,60 +673,209 @@ async function downloadPreview(): Promise<void> {
   }
 }
 
-/** 实际提交：worker-scan（event_type=INSPECTED）。整批送检，不支持部分数量。 */
-async function submitInspect(): Promise<void> {
-  if (!selectedPart.value || !worker.value) {
+function onProcessPicked(process: Process): void {
+  selectedNextProcessId.value = process.id;
+  selectedNextProcessCode.value = process.code;
+  selectedNextProcessName.value = `${process.code} ${process.name}`;
+  showProcessDialog.value = false;
+  // 2026-10-10：选完工序直接提交（原先这里开货架 picker、再由它的 confirm 触发提交）。
+  void submitReturn();
+}
+
+function onProcessCancel(): void {
+  showProcessDialog.value = false;
+  cancelSelect();
+}
+
+// ============================================================
+// 2026-10-04 工序链已知分支：NEXT → 派生下一工序 → 单确认放回
+// ============================================================
+
+/**
+ * 清掉链派生的半截状态（派生出来的下一工序），**保留选中件本身**。
+ *
+ * 为什么不整段 `cancelSelect()`：落回手选工序时选中件必须留着，否则工人选完工序后
+ * `submitReturn` 会因 `!selectedPart` 直接 bail（弹一句「选择已重置」），整条手选路径
+ * 走不通。要清的是「链给出的答案」，不是「选中的件」。
+ *
+ * 工序三件套（id / code / name）一起清：漏一个就会让确认栏或成功提示引用到上一次的
+ * 标签，而 `selectedNextProcessId` 是 worker-scan 的必填入参，留着更危险。
+ */
+function clearChainDerived(): void {
+  selectedNextProcessId.value = '';
+  selectedNextProcessCode.value = '';
+  selectedNextProcessName.value = '';
+}
+
+/** 落回「手选工序」的统一出口：清掉链派生的答案后打开工序选择弹窗。 */
+function fallBackToManualProcess(): void {
+  clearChainDerived();
+  processHint.value = '';
+  showProcessDialog.value = true;
+}
+
+/**
+ * 链已知（`chain_state === 'NEXT'`）：下一道工序已由链给出，开单确认弹窗。
+ *
+ * 全程**同步**（读行 VO 上已带的链字段就赋值），没有请求往返窗口 ⇒ 不需要作废在途
+ * 响应的竞态令牌。
+ *
+ * 一条边界（落回手选工序，保证工人永远有出路）：`chain_next_process_id` 为空或 `'0'`
+ * —— NONE / TAIL 的兜底值，不是真 id，发过去必被拒，直接落回手选。
+ */
+function openChainConfirm(p: ScanPartRowSchema): void {
+  const nextProcessId = p.chain_next_process_id;
+  const nextProcessName = p.chain_next_process_name;
+  if (!nextProcessId || nextProcessId === '0' || !nextProcessName) {
+    ElMessage.warning('未找到下一道工序，请手动选择工序');
+    fallBackToManualProcess();
+    return;
+  }
+
+  selectedNextProcessId.value = nextProcessId;
+  // 链上派生的只有工序名（无 code），与手选路径的「code + name」标签形态对齐不了；
+  // 这里只显示名字，确认栏与成功提示都靠它。
+  selectedNextProcessName.value = nextProcessName;
+  showChainConfirm.value = true;
+}
+
+/** 「按链放回」：写死下一道工序后走提交路径。 */
+async function onChainConfirm(): Promise<void> {
+  showChainConfirm.value = false;
+  if (submitting.value) return;
+  if (!selectedNextProcessId.value) {
+    ElMessage.warning('选择已重置，请重新选择零件');
+    cancelSelect();
+    return;
+  }
+  await submitReturn();
+}
+
+/** 「换一道工序」：关掉确认框后走与「链字段解析不出」**同一个**落回出口。 */
+function onChainManual(): void {
+  showChainConfirm.value = false;
+  fallBackToManualProcess();
+}
+
+/** 「取消」：整次放回作废。 */
+function onChainCancel(): void {
+  showChainConfirm.value = false;
+  cancelSelect();
+}
+
+/**
+ * 关掉链确认框（如果开着），**不动选中态**。
+ *
+ * 点选与扫码这两个「换一件」入口都必须调它：它们直接改 `selectedPart`、不经
+ * `cancelSelect`，所以确认框不会被顺带复位。漏调的话，上一件的确认框会留在屏幕上、
+ * 正文摆着上一道的工序名，而选中件已经是新的 —— 工人点「按链放回」放回的是新件配旧工序。
+ * 今天不可达（`el-dialog` 的模态遮罩挡住卡片点击、扫码路径另有早退闸），但这属于
+ * 「状态分散在两处、其中一处漏复位」那一类，改动路由或遮罩就会现形，故显式收口。
+ */
+function closeChainConfirm(): void {
+  showChainConfirm.value = false;
+}
+
+/** 实际提交：worker-scan（event_type=RETURNED）。 */
+async function submitReturn(): Promise<void> {
+  if (!selectedPart.value || !selectedNextProcessId.value || !worker.value) {
     ElMessage.warning('选择已重置，请重新选择零件');
     return;
   }
+  // 成功提示与后面的 refresh / emitHeldChanged 都在 await 之后：先把要用的值取出来，
+  // 不再回头读 state（那时 state 可能已被 cancelSelect 清掉、或已被下一轮选件改写）。
+  const serialNo = selectedPart.value.serial_no ?? '';
+  const batchId = selectedPart.value.batch_id ?? null;
+  const nextProcessId = selectedNextProcessId.value;
+  const nextProcessName = selectedNextProcessName.value ?? '';
   submitting.value = true;
   try {
     const res = await workerScan({
-      serial_no: selectedPart.value.serial_no ?? '',
+      serial_no: serialNo,
       badge_code: worker.value.badge_code ?? '',
-      event_type: 'INSPECTED',
-      // 2026-10-10：**不发任何货架字段** —— 目标品检架由后端按负载自动选。
-      batch_id: selectedPart.value.batch_id ?? null,
+      event_type: 'RETURNED',
+      // 2026-10-10：**不发 shelf_id** —— 目标架由后端按负载自动选。
+      next_process_id: nextProcessId,
+      batch_id: batchId,
     });
-    // 成功文案在 await 后立即取值（见 cancelSelect 会把 selectedPart 清空）
-    const serialNo = selectedPart.value.serial_no;
     cancelSelect();
+    // ⚠️ **成功文案按响应的 `scan.event_type` 分支**：客户端发的是 RETURNED，但当该批次的
+    // 当前工序恰是工序链最后一道时，后端自动把这次放回改投品检、响应回来的是
+    // `WORKER_SCAN_INSPECTED`。照请求的 event_type 说「已放回 → 下一道工序」会让工人
+    // 以为工件还在待加工区，下一轮去放回时才发现它已经被送走了。
+    const leadText = returnSuccessText(serialNo, nextProcessName, res.scan.event_type);
     // 2026-10-05：worker-scan 同事务 refill 抢到批次时弹窗告知（空数组 = 池空 / 已持满，
     // 不弹）。放在 refresh() 之前：弹窗不依赖列表刷新的往返，工人立刻看到补了什么料。
+    // 成功文案并进弹窗（lead-text），不另发 ElMessage.success —— 后开的 dialog 遮罩会盖住
+    // 先发的 toast。
     const taken = refillTakenOf(res);
     if (taken.length) {
       refillTaken.value = taken;
-      refillLead.value = `已送检：${serialNo}`;
+      refillLead.value = leadText;
       showRefillTaken.value = true;
     } else {
-      ElMessage.success(`已送检：${serialNo}`);
+      ElMessage.success(leadText);
     }
     await refresh();
     emitHeldChanged();
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '送检失败');
+    ElMessage.error((e as Error).message ?? '放回失败');
   } finally {
     submitting.value = false;
   }
 }
 
 async function onQtyConfirm(qty: number): Promise<void> {
-  // worker-scan 不支持部分数量；保留 dialog 入口以兼容旧调试路径，
-  // 正常流程已由 applyScanSelection → submitInspect 跳过此步。
+  // 2026-09-15 Phase 5：worker-scan 不支持部分数量；保留 dialog 入口以兼容
+  // 旧调试路径，正常流程已由 openChainConfirm / onProcessPicked → submitReturn 跳过此步。
   showQtyDialog.value = false;
   if (submitting.value) return;
-  if (!selectedPart.value || !worker.value) {
+  if (!selectedPart.value || !selectedNextProcessId.value || !worker.value) {
     ElMessage.warning('选择已重置，请重新选择零件');
     return;
   }
   selectedQty.value = qty;
-  await submitInspect();
+  await submitReturn();
+}
+
+/**
+ * 放回成功文案。**判据是响应里的 `scan.event_type`，不是请求里的 `event_type`。**
+ *
+ * 后端在「当前工序是工序链最后一道」时会自动把这次放回改投品检，于是同一个
+ * `event_type: 'RETURNED'` 的请求可能回来 `WORKER_SCAN_INSPECTED`；此时说
+ * 「已放回 → 下一道工序」是错的（工件已被送走，「下一道」根本不存在）。
+ * 这两个字面量就是 WS 广播名（见 `api/parts/crud.ts::WorkerScanOut.scan`），逐字比。
+ * 未知取值走放回文案：宁可少说一句也不谎报已送检（后者会让工人白跑一趟品检）。
+ */
+function returnSuccessText(serialNo: string, nextProcessName: string, eventType: string): string {
+  return eventType === 'WORKER_SCAN_INSPECTED'
+    ? `已完工，已送检：${serialNo}`
+    : `已放回：${serialNo} → ${nextProcessName}`;
+}
+
+/**
+ * 确认栏 / 数量弹窗的「取消」入口：提交在途时**不**清选择。
+ *
+ * 清了会怎样：`submitReturn` 成功分支里的 `cancelSelect()` 之后还要 `refresh()` +
+ * `emitHeldChanged()`，若用户在途点了取消，选中态已空、确认栏消失，而那次放回其实
+ * 成功提交了 —— 工人看到的是「我明明取消了，怎么还放回去了」，下一次提交也可能带上
+ * 已被清空的批次锚点。`cancelSelect` 本身仍不做守卫：它也是提交成功路径的收口。
+ */
+function onCancelSelect(): void {
+  if (submitting.value) return;
+  cancelSelect();
 }
 
 function cancelSelect(): void {
   selectedPart.value = null;
   selectedQty.value = undefined;
-  awaitingScan.value = false;
+  selectedNextProcessId.value = '';
+  selectedNextProcessCode.value = '';
+  selectedNextProcessName.value = '';
+  processHint.value = '';
+  // 确认框一并复位：漏复位会让下一次选件（哪怕是 NEXT 链字段解析不出、根本不开框的
+  // 那一件）也被上一次的 true 顶出一个空确认框。
+  showChainConfirm.value = false;
 }
 
 function backToAction(): void {
@@ -585,7 +891,7 @@ function backToBadge(): void {
 </script>
 
 <style lang="scss" scoped>
-.scan-inspect {
+.scan-return {
   position: fixed;
   inset: 0;
   display: flex;
@@ -681,13 +987,10 @@ function backToBadge(): void {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
+  background: #f0f9eb;
+  border: 1px solid #e1f3d8;
   border-radius: 8px;
   margin-bottom: 16px;
-}
-/* 待扫码确认：琥珀底提示工人动作未完成（与放回页的绿底「已确认」区分） */
-.confirm-bar.pending-scan {
-  background: #fdf6ec;
-  border: 1px solid #faecd8;
 }
 .confirm-text {
   flex: 1;
@@ -695,9 +998,16 @@ function backToBadge(): void {
 }
 .confirm-text strong {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
-  color: #e6a23c;
+  color: #67c23a;
   font-size: 18px;
   margin: 0 4px;
+}
+/* 链已知确认框里那句「自动按负载放架 + 可以换一道工序」的补充说明 */
+.chain-confirm-hint {
+  margin: 12px 0 0;
+  color: #606266;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .parts-list {
@@ -724,7 +1034,7 @@ function backToBadge(): void {
     box-shadow 0.15s;
 }
 .part-row:hover {
-  box-shadow: 0 2px 12px rgba(103, 194, 58, 0.08);
+  box-shadow: 0 2px 12px rgba(230, 162, 60, 0.08);
 }
 
 /* 非加急选中 → 加深绿底 */

@@ -1,7 +1,7 @@
-// src/views/scan/chainAccent.ts
+// src/views/production/scan/chainAccent.ts
 //
-// 2026-10-09 新建：报工台（`views/scan/`）批次卡的**左边框**着色规则，供三页列表
-// （取件 / 放回 / 送检）与同域的 `BatchPickerDialog` 共用。
+// 2026-10-09 新建：报工台（`views/production/scan/`）批次卡的**左边框**着色规则，供三页列表
+// （取件 / 放回 / 送检）与共享的 `BatchPickerDialog` 共用。
 //
 // 左边框整条只表达「这条批次有制定工序链且链指针未漂移」这一个语义（语义与判据见
 // `src/types/batchCard.ts::BatchCardModel.has_process_chain`）。**流程区分不进边框** ——
@@ -19,8 +19,11 @@
 // 加急不用边框表达：红底（`.part-row.is-urgent`）+「加急」tag 已在位，边框让位给链。
 // 注意 `.is-urgent` 红底是**报工台行**的样式，`BatchCard`（队列看板 / 外协看板）没有。
 //
-// 四个消费方都在本目录 / 子目录下，同域自持；不是跨域工具（生产队列与外协看板的竖条
-// 着色在各自适配层 + `BatchCard.vue` 的 `accentVar` 里，机制也不同：那边是 v-bind 变量）。
+// 消费方：报工台三页在本目录内，共享的 `src/components/BatchPickerDialog.vue` 在目录外
+// （2026-10-10 上提）。本模块自身零域内依赖、判据只有一条 `=== true`，故留在域内不被
+// 上提成 utils —— 它回答的是「批次链语义」（`BatchCardModel.has_process_chain` 的口径），
+// 不是通用着色工具：生产队列与外协看板的竖条着色在各自适配层 + `BatchCard.vue` 的
+// `accentVar` 里，机制也不同（那边是 v-bind 变量）。
 
 /** 有链且指针未漂移时挂到行根上的类名：`.part-row.has-chain` / `.batch-row.has-chain`。 */
 export const CHAIN_ROW_CLASS = 'has-chain';
