@@ -570,8 +570,12 @@ export interface WorkerScanOut {
     worker_id: string;
     part_id: string;
     batch_id: string;
-    /** 实际取值是 WS 广播名（`WORKER_SCAN_RETURNED` / `WORKER_SCAN_INSPECTED`），
-     *  不是入参那两个 `RETURNED` / `INSPECTED` —— 前端当前不消费，宽松标注。 */
+    /** **实际取值是 WS 广播名**：`WORKER_SCAN_RETURNED` / `WORKER_SCAN_INSPECTED`，
+     *  不是入参那两个 `RETURNED` / `INSPECTED`。
+     *
+     *  2026-10-10 起前端真的消费它：客户端发 `RETURNED`、但当该批次当前工序是工序链
+     *  最后一道时后端自动改投品检、回来的是 `WORKER_SCAN_INSPECTED` ⇒ 放回页的成功
+     *  文案按这一位分支（「已放回 → 下一道」vs「已完工，已送检」）。 */
     event_type: string;
     /** 父装配件 id（仅当 INSPECTED 分支触发父 status 变更时 Some） */
     synced_assembly_id: string | null;

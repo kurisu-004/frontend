@@ -593,6 +593,80 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
 });
 
 // ============================================================================
+// 2026-10-10 新增：成功文案按**响应**的 `scan.event_type` 分支。
+//
+// 客户端发的是 `event_type: 'RETURNED'`，但当该批次的当前工序恰是工序链最后一道时，
+// 后端自动把这次放回改投品检、响应回来的是 `WORKER_SCAN_INSPECTED`。照请求的
+// event_type 说「已放回 → 下一道工序」会让工人以为工件还在待加工区。
+// ============================================================================
+describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
+  it('E1：响应 WORKER_SCAN_RETURNED → 「已放回：serial → 下一道工序」', async () => {
+    h.workerScan.mockResolvedValue(scanOut('WORKER_SCAN_RETURNED'));
+    const w = await mountPage([
+      row({
+        chain_state: 'NEXT',
+        chain_next_process_id: '190000000000131',
+        chain_next_process_name: 'CUT-01 下料',
+      }),
+    ]);
+    await clickFirstPart(w);
+    await flushPromises();
+
+    expect(h.ElMessage.success).toHaveBeenCalledWith('已放回：F2256 → CUT-01 下料');
+  });
+
+  it('E2：响应 WORKER_SCAN_INSPECTED（链尾自动送检）→ 「已完工，已送检」', async () => {
+    h.workerScan.mockResolvedValue(scanOut('WORKER_SCAN_INSPECTED'));
+    const w = await mountPage([
+      row({
+        chain_state: 'NEXT',
+        chain_next_process_id: '190000000000131',
+        chain_next_process_name: 'CUT-01 下料',
+      }),
+    ]);
+    await clickFirstPart(w);
+    await flushPromises();
+
+    expect(h.ElMessage.success).toHaveBeenCalledWith('已完工，已送检：F2256');
+    expect(h.ElMessage.success).not.toHaveBeenCalledWith(expect.stringContaining('已放回'));
+  });
+
+  // ⚠️ 「链尾自动送检」这条链路上 `refill.taken` 仍可能非空（送检同事务也跑 refill），
+  // 那时文案进补料弹窗的 lead-text 而不是 ElMessage.success。两种投递方式都要覆盖 ——
+  // 只测 ref 不测补料弹窗，会让「补料时文案错」这条路径零覆盖。
+  it('E3：自动送检 + 同事务补到料 → 文案进补料弹窗的 lead-text（同样是送检口径）', async () => {
+    h.workerScan.mockResolvedValue({
+      ...scanOut('WORKER_SCAN_INSPECTED'),
+      refill: {
+        taken: [
+          {
+            batch_id: '190000000000901',
+            serial_no: 'F9999',
+            name: '法兰盘',
+            quantity: 3,
+            system_delivery_date: null,
+          },
+        ],
+        released: 0,
+      },
+    });
+    const w = await mountPage([
+      row({
+        chain_state: 'NEXT',
+        chain_next_process_id: '190000000000131',
+        chain_next_process_name: 'CUT-01 下料',
+      }),
+    ]);
+    await clickFirstPart(w);
+    await flushPromises();
+
+    expect(w.find('.stub-refill-taken').exists()).toBe(true);
+    expect(w.find('.stub-refill-taken').attributes('data-lead')).toBe('已完工，已送检：F2256');
+    expect(h.ElMessage.success).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
 // 2026-10-09 新增：列表卡**左边框**的链语义着色（与上面的 `chain_state` 分流同源，
 // 但回答的是另一个问题 —— 这条批次有没有制定工序链）。
 //

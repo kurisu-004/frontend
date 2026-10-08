@@ -745,7 +745,11 @@ async function submitReturn(): Promise<void> {
       batch_id: batchId,
     });
     cancelSelect();
-    const leadText = `已放回：${serialNo} → ${nextProcessName}`;
+    // ⚠️ **成功文案按响应的 `scan.event_type` 分支**：客户端发的是 RETURNED，但当该批次的
+    // 当前工序恰是工序链最后一道时，后端自动把这次放回改投品检、响应回来的是
+    // `WORKER_SCAN_INSPECTED`。照请求的 event_type 说「已放回 → 下一道工序」会让工人
+    // 以为工件还在待加工区，下一轮去放回时才发现它已经被送走了。
+    const leadText = returnSuccessText(serialNo, nextProcessName, res.scan.event_type);
     // 2026-10-05：worker-scan 同事务 refill 抢到批次时弹窗告知（空数组 = 池空 / 已持满，
     // 不弹）。放在 refresh() 之前：弹窗不依赖列表刷新的往返，工人立刻看到补了什么料。
     // 成功文案并进弹窗（lead-text），不另发 ElMessage.success —— 后开的 dialog 遮罩会盖住
@@ -778,6 +782,21 @@ async function onQtyConfirm(qty: number): Promise<void> {
   }
   selectedQty.value = qty;
   await submitReturn();
+}
+
+/**
+ * 放回成功文案。**判据是响应里的 `scan.event_type`，不是请求里的 `event_type`。**
+ *
+ * 后端在「当前工序是工序链最后一道」时会自动把这次放回改投品检，于是同一个
+ * `event_type: 'RETURNED'` 的请求可能回来 `WORKER_SCAN_INSPECTED`；此时说
+ * 「已放回 → 下一道工序」是错的（工件已被送走，「下一道」根本不存在）。
+ * 这两个字面量就是 WS 广播名（见 `api/parts/crud.ts::WorkerScanOut.scan`），逐字比。
+ * 未知取值走放回文案：宁可少说一句也不谎报已送检（后者会让工人白跑一趟品检）。
+ */
+function returnSuccessText(serialNo: string, nextProcessName: string, eventType: string): string {
+  return eventType === 'WORKER_SCAN_INSPECTED'
+    ? `已完工，已送检：${serialNo}`
+    : `已放回：${serialNo} → ${nextProcessName}`;
 }
 
 /**
