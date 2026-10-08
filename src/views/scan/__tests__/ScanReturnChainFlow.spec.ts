@@ -140,6 +140,17 @@ function row(over: Partial<ScanPartRowSchema> = {}): ScanPartRowSchema {
   };
 }
 
+/** 一行 `chain_state='NEXT'` 的放回行：链给出了下一道工序 ⇒ 选它就会开链确认框。 */
+function nextRow(over: Partial<ScanPartRowSchema> = {}): ScanPartRowSchema {
+  return row({
+    chain_state: 'NEXT',
+    chain_next_process_id: '190000000000131',
+    chain_next_process_name: 'CUT-01 下料',
+    chain_current_process_name: 'SAW-02 锯切',
+    ...over,
+  });
+}
+
 /** 模拟「后端漏发链四件套」的行：真路径上 scanPartRowSchema 把四键补成默认值
  *  （chain_state 留 undefined / 另三个取后端兜底），这里把键整个删掉，验证页面读到
  *  undefined 时的降级行为。 */
@@ -201,13 +212,19 @@ function deferScan(): () => void {
 const stubs = {
   // el-dialog 渲染 default + footer 两个 slot，**只在 modelValue 为真时渲染**（否则
   // 确认框的「开没开」无法断言 —— 桩恒渲染时开与不开长得一模一样）。
+  // ⚠️ `showClose` 必须列进 props 并透出成 data-*：Element Plus 的 el-dialog 把它默认成
+  // true（node_modules/element-plus/.../dialog-content.mjs 的 `showClose: true`），
+  // 父组件不显式传 `:show-close="false"` 时右上角 × 会渲染 —— 而 × 只 emit
+  // `update:modelValue(false)`、不发业务事件，对本框就是「关掉了却没法提交」的死角。
+  // 桩若不接这个 prop，`String(undefined)` 恒为 'undefined'，断言就成了恒真。
   'el-dialog': {
     name: 'ElDialogStub',
-    props: ['modelValue', 'title', 'width'],
+    props: ['modelValue', 'title', 'width', 'showClose'],
     template: `<div
       v-if="modelValue"
       class="mock-dialog"
       :data-title="title"
+      :data-showclose="String(showClose)"
       data-open="true"
     >
       <div class="mock-confirm-bar"><slot /></div>
@@ -315,6 +332,39 @@ beforeEach(() => {
 });
 
 describe('ScanReturnParts / chain_state 三态分流', () => {
+  // 扫码入口的同一道收口：applyScanSelection 也直接改 selectedPart、不经 cancelSelect。
+  // 正常路径上 onScanToSelect 有一道 showChainConfirm 早退闸挡着，这里是第二道 —— 两处
+  // 都调 closeChainConfirm，任何一处被后人删掉都该红。
+  it('NEXT 框开着时扫码改选无链的另一件：旧确认框同样被收掉', async () => {
+    const w = await mountPage([
+      nextRow({ serial_no: 'F-A', id: '190000000000101', batch_id: '190000000000111' }),
+      row({
+        serial_no: 'F-B',
+        id: '190000000000102',
+        batch_id: '190000000000112',
+        chain_state: 'NONE',
+        chain_next_process_id: '0',
+      }),
+    ]);
+    await clickPartBySerial(w, 'F-A');
+    expect(chainConfirmOpen(w)).toBe(true);
+
+    const vm = w.vm as unknown as { applyScanSelection: (p: ScanPartRowSchema) => Promise<void> };
+    await vm.applyScanSelection(
+      row({
+        serial_no: 'F-B',
+        id: '190000000000102',
+        batch_id: '190000000000112',
+        chain_state: 'NONE',
+        chain_next_process_id: '0',
+      }),
+    );
+    await flushPromises();
+
+    expect(chainConfirmOpen(w)).toBe(false);
+    expect(w.find('.stub-process-picker').exists()).toBe(true);
+  });
+
   it('NEXT：不开工序选择弹窗，直接弹确认框，文案只讲下一道工序（不再有货架）', async () => {
     const w = await mountPage([
       row({
@@ -342,6 +392,65 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
   // ⛔ NEXT 分支唯一能到达 ProcessPickerDialog 的路。少了「换一道工序」，工人不同意
   // 管理员配的链（临时插单 / 改道）时就被困死：取消只清选中态，再点卡片还是同一个框。
   // 这条用例就是钉住那个出口不被当成冗余清掉。
+  // ⛔ MAJOR-1 守卫：右上角 × 必须不存在。
+  //
+  // 为什么这条要单独钉：本框是 NEXT 分支**唯一**的提交入口（`submitReturn` 的另外两个
+  // 调用点分别要先进程序选择框、另一个是调试入口）。× 只 emit update:modelValue(false)、
+  // 不发任何业务事件，一旦能点，关掉后页面就停在「卡片已选中 + 工序已填 + 无处可提交」
+  // 的死角，工人只能按「取消选择」再重选一遍。禁掉它之后，关闭权就只剩 footer 三键，
+  // 而那三条出口各自都会收尾（提交 / 落回手选 / 清选中态）。
+  it('NEXT：右上角 × 被关掉 —— 关闭权只在 footer 三键上', async () => {
+    const w = await mountPage([nextRow()]);
+    await clickFirstPart(w);
+
+    expect(chainConfirmOpen(w)).toBe(true);
+    expect(
+      w.find('.mock-dialog').attributes('data-showclose'),
+      'showClose 没显式关成 false ⇒ 右上角 × 会渲染出来（Element Plus 默认 true）',
+    ).toBe('false');
+  });
+
+  // MINOR-1 守卫：换一件时上一件的确认框必须被收掉。
+  //
+  // 关键在第二件选**无链**的行：无链分支走工序选择弹窗、**不会**自己重开确认框 ⇒
+  // 上一件的框若没被收掉，就会和工序选择弹窗同时开着（两个遮罩叠着，后开的那个把工人
+  // 锁在工序选择里，而旧的确认框还摆着上一件的工序名）。
+  //
+  // 变体对照：若第二件**也**是 NEXT，它自己会重开一个确认框，收没收掉旧框看不出差别 ——
+  // 所以这条用例必须用 NONE 行才咬得住。
+  // 今天靠模态遮罩挡着点击而不可达，但这是「状态分散、漏复位」那一类，靠遮罩兜不牢。
+  it('NEXT 框开着时改选无链的另一件：旧确认框被收掉，不会与工序选择弹窗叠着', async () => {
+    const w = await mountPage([
+      nextRow({ serial_no: 'F-A', id: '190000000000101', batch_id: '190000000000111' }),
+      row({
+        serial_no: 'F-B',
+        id: '190000000000102',
+        batch_id: '190000000000112',
+        chain_state: 'NONE',
+        chain_next_process_id: '0',
+      }),
+    ]);
+    await clickPartBySerial(w, 'F-A');
+    expect(chainConfirmOpen(w)).toBe(true);
+
+    // 直接调 onSelect 绕开遮罩（生产里点不到，但这条守的是状态收口本身）。
+    // 必须传**完整的行**：enterReturnFlow 按 chain_state 分流，给半个对象会被当未知值降级。
+    const vm = w.vm as unknown as { onSelect: (p: ScanPartRowSchema) => void };
+    vm.onSelect(
+      row({
+        serial_no: 'F-B',
+        id: '190000000000102',
+        batch_id: '190000000000112',
+        chain_state: 'NONE',
+        chain_next_process_id: '0',
+      }),
+    );
+    await flushPromises();
+
+    expect(chainConfirmOpen(w), '上一件的确认框没被收掉，与工序选择弹窗叠着了').toBe(false);
+    expect(w.find('.stub-process-picker').exists()).toBe(true);
+  });
+
   it('NEXT + 「换一道工序」：落回手选工序弹窗，且选中件必须留着（否则选完直接 bail）', async () => {
     const w = await mountPage([
       row({

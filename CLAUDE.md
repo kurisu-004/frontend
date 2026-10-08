@@ -6,16 +6,16 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 后端主仓在 `~/Code/hsh-erp/backend-rust`（Rust + axum + sqlx）。后端契约的载体是**代码注释**，`docs/api/` 只对少数几个域做了整域契约文档（2026-10-10 盘点，`ls backend-rust/docs/api/` 复核）：
 
-| 文档                        | 覆盖域                                                                        |
-| --------------------------- | ----------------------------------------------------------------------------- |
-| `docs/api/batch.md`         | `part` 批次域                                                                 |
-| `docs/api/dashboard.md`     | `dashboard` 大屏聚合（3 个只读 HTTP 端点 + `/ws/dashboard` 的 WS 首帧与增量） |
-| `docs/api/delivery_note.md` | `delivery_note` 送货单（列表 / 详情 / 扫码入单 / 移除批次 / 打印）            |
-| `docs/api/iam.md`           | `iam` 认证 + 账号 + 企业微信绑定                                              |
-| `docs/api/inspection.md`    | `prod::inspection` 待品检（队列列表 + 扫码三层树）                            |
-| `docs/api/outsource.md`     | 外协（报价 / 订单 / 收发货流转）                                              |
-| `docs/api/programming.md`   | `prod::programming` 待编程一览                                                |
-| `docs/api/queue.md`         | `prod` 生产看板队列域                                                         |
+| 文档 | 覆盖域 |
+|---|---|
+| `docs/api/batch.md` | `part` 批次域 |
+| `docs/api/dashboard.md` | `dashboard` 大屏聚合（3 个只读 HTTP 端点 + `/ws/dashboard` 的 WS 首帧与增量） |
+| `docs/api/delivery_note.md` | `delivery_note` 送货单（列表 / 详情 / 扫码入单 / 移除批次 / 打印） |
+| `docs/api/iam.md` | `iam` 认证 + 账号 + 企业微信绑定 |
+| `docs/api/inspection.md` | `prod::inspection` 待品检（队列列表 + 扫码三层树） |
+| `docs/api/outsource.md` | 外协（报价 / 订单 / 收发货流转） |
+| `docs/api/programming.md` | `prod::programming` 待编程一览 |
+| `docs/api/queue.md` | `prod` 生产看板队列域 |
 
 **其余域没有 `docs/api/` 文档**（`shelf` / `assembly` / `wx` / `statistics` / `files` / `cnc_program` …），契约载体是代码注释。查接口按这条路径走：
 
@@ -101,12 +101,12 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 **会话终止收口 `teardownSession()`**（store 内无 router 参数的私有函数）：清 token / refreshToken / user（经 `setUser(null)`）/ `isDummyAuthActive`、删 `auth_session`、派发 `auth:session-changed(token: null)`、`queryClient.clear()`。**所有会话终止路径必须汇到它，不得另起炉灶**：
 
-| 入口                            | 触发源                                                                                                     | 导航                       |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `logout()`                      | 用户点「退出」（先 `await apiLogout()`）                                                                   | 无（调用方负责）           |
-| `forceLogout(router)`           | `auth:session-lost` 且 reason 不是 `access token expired`（reason 契约见「dashboard WS 单例」小节）        | `router.replace('/login')` |
+| 入口 | 触发源 | 导航 |
+|---|---|---|
+| `logout()` | 用户点「退出」（先 `await apiLogout()`） | 无（调用方负责） |
+| `forceLogout(router)` | `auth:session-lost` 且 reason 不是 `access token expired`（reason 契约见「dashboard WS 单例」小节） | `router.replace('/login')` |
 | `refreshOrLogout(router)` catch | 路由守卫 `/iam/me` 校验失败，或 WS `4001` 且 reason 是 `access token expired`（尝试用 refresh token 续期） | 委托 `forceLogout(router)` |
-| `auth:logout` 事件订阅          | `src/api/http.ts`（40105 SESSION_REVOKED / refresh 失败）                                                  | 无                         |
+| `auth:logout` 事件订阅 | `src/api/http.ts`（40105 SESSION_REVOKED / refresh 失败） | 无 |
 
 `teardownSession()` = 纯收口；`forceLogout(router)` = 收口 + 追加一次导航；两者都**不联系后端**。`refreshOrLogout` 有两个消费方：路由守卫的「未登录但可能有 session」恢复路径，以及 WS `4001` 且 reason 为 `access token expired` 时的续期尝试（两种情形下它的 catch 都委托 `forceLogout`，所以「false」与「抛异常」都已经完成收口）。
 
@@ -118,10 +118,10 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 **auth ↔ WS 事件通道**（均为 `CustomEvent`，避免 `auth ↔ api` 循环依赖）：
 
-| 事件                   | 方向                                        | 语义                                                                                                                                                                                                                 |
-| ---------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth:session-changed` | auth → WS（`src/api/dashboard.ts`）         | `detail.token` 为 string = 重连，为 null = 断开                                                                                                                                                                      |
-| `auth:session-lost`    | WS → auth（接收方是 `src/router/index.ts`） | 后端 re-auth 失败（关闭码 `4001`），接收方按 `detail.reason` 分流：`access token expired` / `null` → `auth.refreshOrLogout(router)`（成功后再 `reconnectDashboard()` 恢复长连接），其余 → `auth.forceLogout(router)` |
+| 事件 | 方向 | 语义 |
+|---|---|---|
+| `auth:session-changed` | auth → WS（`src/api/dashboard.ts`） | `detail.token` 为 string = 重连，为 null = 断开 |
+| `auth:session-lost` | WS → auth（接收方是 `src/router/index.ts`） | 后端 re-auth 失败（关闭码 `4001`），接收方按 `detail.reason` 分流：`access token expired` / `null` → `auth.refreshOrLogout(router)`（成功后再 `reconnectDashboard()` 恢复长连接），其余 → `auth.forceLogout(router)` |
 
 `auth:session-changed` 的派发点共 3 处，必须覆盖全部 token 生命周期转换：`http.ts` 的 `persistTokens()`（刷新）、`loginMutation.onSuccess`（登录）、`teardownSession()`（终止）。**新增改变 token 生命周期的写点时必须同步补派发**，否则控制台会无限刷 WS 报错。`auth:tokens-refreshed` 是另一件事（管 store 自身 state 同步），两者不要混淆。
 
@@ -175,8 +175,11 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - **`receive-from-outsource` / `receive-from-outsource-to-inspection` 两个 wrapper 随之删除**（都是 404 路径）。外协回收生产的现行入口是 `views/outsource/` 的看板右键菜单，契约由 `useOutsourceQueueMove.spec.ts` 守。
 - **`api/parts/crud.ts::PartScanPayload` 是已知例外**：它打的是 v1(Python) 的 `POST /parts/scan`，v1 仍在维护、契约未变，故仍带 `shelf_id` / `target_inspection_shelf_id`，不属本口径范围。全仓巡检货架字段时不要把它当残留清掉。
 - **`place-on-shelf` / `release-from-programming` 前端零调用方、wrapper 保留**：端点仍在后端，body 已按新契约改对。要接回入口时注意 `place-on-shelf` 的 `version` 仍是可选形参，而后端必填（缺字段返 422 纯文本，不是业务信封）⇒ 新接线必须改成必填并从 `GET /parts/{id}/batches` 的批次项取 `t_part_batch.version`（`GET /parts/{id}` 本身不返批次锚点）。
+- **⚠️ 两条功能死角，是「删掉人工指定货架」的直接后果，不是 bug**，现场要知道：
+  - **未上架的批次无人能推进**：后端要求「`location IS NULL` 的 `PENDING` 批次先走 `place-on-shelf` 才能发外协」，而 `place-on-shelf` 的三个前端入口（零件一览下发 / 零件详情下发 / cnc 下发）已随本轮下线 ⇒ 这类批次当前**没有任何前端入口能让它上架**。出路要么是后端 / 产品补一个上架入口，要么确认这批数据由别的途径产生。`NOT_SHELVED_HINT` 因此只说「尚未上架，暂时不能发送到外协」，**刻意不给「请先下发」这个指路**（那个按钮已经不存在了）。
+  - **「外协回收 → 品检」无替代端点**：后端把 `OUTSOURCE_COMPANY → INSPECTION_SHELF` 这个方向整条下线了。替代路径是「先回收进生产 → 再走送检」（`to-inspection` 或 worker-scan 的 INSPECTED），代价是多一次工序推进 / 多一次扫码。品检架仍由后端自动选，所以替代路径的落架不受影响。
 - **worker-scan 的响应要读 `scan.event_type`**：客户端发 `RETURNED`，但当该批次当前工序是工序链最后一道时后端自动改投品检、回来的是 `WORKER_SCAN_INSPECTED`。放回页的成功文案必须按**响应**分支，照请求的 `event_type` 说「已放回 → 下一道工序」是错的。
-- **放回页 NEXT 分支的确认框必须留三个出口**：确认框是 `chain_state='NEXT'` 唯一能到达 `ProcessPickerDialog` 的路，只给「按链放回 / 取消」的话，工人一旦不同意管理员配的工序链（临时插单、改道）就被困死 —— 取消只清选中态，再点卡片还是同一个框。工序链是配置不是命令，「换一道工序」不是冗余出口。
+- **放回页 NEXT 分支的确认框：三个出口 + 禁右上角 ×**：确认框是 `chain_state='NEXT'` 唯一能到达 `ProcessPickerDialog` 的路，只给「按链放回 / 取消」的话，工人一旦不同意管理员配的工序链（临时插单、改道）就被困死 —— 取消只清选中态，再点卡片还是同一个框。工序链是配置不是命令，「换一道工序」不是冗余出口。**同时必须 `:show-close="false"`**：× 只 emit `update:modelValue(false)`、不发业务事件，而本框又是 NEXT 分支**唯一**的提交入口 ⇒ × 一关就留下「卡片已选中 + 工序已填 + 无处可提交」的死角。判据很简单：**一个弹窗若是某条路径的唯一出口，它的关闭权就必须收在自己手里**；同页另外三个弹窗关掉不致命（确认栏的「取消选择」就能恢复），所以它们不禁 ×。
 
 ### 拖拽投放（Sortable）
 

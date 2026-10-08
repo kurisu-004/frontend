@@ -216,7 +216,13 @@
          「按链放回」/「换一道工序」/「取消」。
          自绘 el-dialog 而不是 ElMessageBox：后者只有确认/取消两个键，而「换一道工序」
          是工人不同意管理员配的链时唯一的出路（工序链是配置、临时插单会改道）；HMI
-         触屏上三个并排大按钮也远好过塞在 message 正文里的小链接。 -->
+         触屏上三个并排大按钮也远好过塞在 message 正文里的小链接。
+         ⚠️ **`:show-close="false"` 不是可选的洁癖**：右上角 × 只 emit
+         `update:modelValue(false)`，不发任何业务事件，而本框是 NEXT 分支**唯一**的提交
+         入口（`submitReturn` 的另外两个调用点分别要先进工序选择框、另一个是调试入口）。
+         × 一关就留下「卡片已选中 + 工序已填 + 无处可提交」的死角，工人只能按
+         「取消选择」再重选一遍。同页另外三个弹窗关掉不致命（确认栏的「取消选择」就能
+         恢复），只有本框必须把关闭权收在 footer 三键上。 -->
     <el-dialog
       v-model="showChainConfirm"
       title="确认放回"
@@ -224,6 +230,7 @@
       :align-center="true"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
+      :show-close="false"
     >
       <el-alert
         type="warning"
@@ -448,6 +455,8 @@ async function scrollCardIntoView(batchKey: string): Promise<void> {
 
 /** 扫码命中：选中 + 滚动居中，再按 chain_state 分流放回流程 */
 async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
+  // 换件前先收掉上一件的确认框，理由见 closeChainConfirm 的注释。
+  closeChainConfirm();
   selectedPart.value = p;
   selectedQty.value = p.quantity;
   selectedNextProcessId.value = '';
@@ -595,6 +604,9 @@ function onSelect(p: ScanPartRowSchema): void {
     cancelSelect();
     return;
   }
+  // 换件前先收掉上一件的确认框（理由见 closeChainConfirm 的注释）；cancelSelect 那条
+  // 分支已经自己复位，这里只管「换到另一件」。
+  closeChainConfirm();
   selectedPart.value = p;
   selectedQty.value = p.quantity;
   selectedNextProcessId.value = '';
@@ -749,6 +761,19 @@ function onChainManual(): void {
 function onChainCancel(): void {
   showChainConfirm.value = false;
   cancelSelect();
+}
+
+/**
+ * 关掉链确认框（如果开着），**不动选中态**。
+ *
+ * 点选与扫码这两个「换一件」入口都必须调它：它们直接改 `selectedPart`、不经
+ * `cancelSelect`，所以确认框不会被顺带复位。漏调的话，上一件的确认框会留在屏幕上、
+ * 正文摆着上一道的工序名，而选中件已经是新的 —— 工人点「按链放回」放回的是新件配旧工序。
+ * 今天不可达（`el-dialog` 的模态遮罩挡住卡片点击、扫码路径另有早退闸），但这属于
+ * 「状态分散在两处、其中一处漏复位」那一类，改动路由或遮罩就会现形，故显式收口。
+ */
+function closeChainConfirm(): void {
+  showChainConfirm.value = false;
 }
 
 /** 实际提交：worker-scan（event_type=RETURNED）。 */

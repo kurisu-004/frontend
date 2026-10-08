@@ -968,61 +968,14 @@ export async function listPartsHeldByWorker(
 }
 
 // ============================================================
-// 外协流程（2026-07-15 新增；属单件 lifecycle，归 ./crud）
+// 外协流程
+//
+// 2026-10-10：`send-to-outsource` / `receive-from-outsource` /
+// `receive-from-outsource-to-inspection` 三个端点随外协三合一硬切下线，三合一为
+// `POST /api/v2/outsource-queue/move`（无 alias）。本文件原有的三个 wrapper 与它们的
+// payload 类型一并删除 —— 它们打的都是 404 路径，零生产调用方。
+//
+// 现行契约：`src/api/outsource.contract.ts::OutsourceMoveRequestDto`，
+// 调用侧 `views/outsource/composables/useOutsourceQueueMove.ts`，契约守卫
+// `views/outsource/composables/__tests__/useOutsourceQueueMove.spec.ts`。
 // ============================================================
-/** `POST /prod/batches/{batch_id}/send-to-outsource` 入参。
- *
- *  2026-10-03 登记的字段名要点：
- *  - body 键是 `process_id`（后端 DTO 原名如此，且**必填无默认值**；发成别的键名
- *    得到的是 422 纯文本，不是业务信封，别按业务错误码排查）。
- *  - 列表行字段是 `current_process_id` / `current_process_name`
- *    （`src/types/outsource.ts`，批次当前所属的外协工序）。
- *  两者刻意不同名：body 键跟后端 DTO，行字段描述批次本身的位置。
- *
- *  模式由 `quote_id` / `direct` 二选一表达，**两者都不传后端返 400**：
- *  - APPROVAL（需审批报价）：传 `quote_id`（来自 `OutsourceSendableItem.quote_id`）；
- *  - DIRECT（免审批直发）：传 `direct: true` + `quote_id: null`，后端自动建一条
- *    `price=0` 的 APPROVED 占位报价。DIRECT 行的 `outsource_company_id` 取自
- *    `company_options`，该工序未映射任何活跃公司时后端仍返回该行但数组为空
- *    ⇒ 前端必须先过 `canSend` 再入队/提交，否则空串会让后端 `i64` 反序列化失败。
- */
-export interface SendToOutsourcePayload {
-  /** 外协公司 id（雪花 ID 字符串） */
-  outsource_company_id: string;
-  /** 外协工序 id（雪花 ID 字符串；JS Number 会丢精度） */
-  process_id: string;
-  /**
-   * 乐观锁版本号；与目标批次 TPartBatch.version 必须一致，否则返 BIZ_VERSION_CONFLICT 409。
-   * 前端从 OutsourceSendableItem.version（批次级 version）取值后传入。
-   */
-  version: number;
-  /** APPROVAL 模式必传（来自 OutsourceSendableItem.quote_id）；DIRECT 传 null */
-  quote_id?: string | null;
-  /** DIRECT 模式传 true；APPROVAL 传 null */
-  direct?: boolean | null;
-  /**
-   * 部分发送数量；≤ 批次量，null 或 == batch_quantity = 整批。
-   * 部分发送后源批次留余量、仍可再次发送。
-   */
-  quantity?: number | null;
-  note?: string | null;
-}
-
-/**
- * PENDING / IN_PROCESS → OUTSOURCE：把零件发送给外协公司。
- * 后端会校验公司存在 + 启用 + 工序 OUTSOURCE + 公司映射了该工序。
- *
- * 2026-10-02 迁 prod 域：发送对象是批次，第一形参由 partId 改 batchId
- * （原 payload 的 `batch_id` 随之删除 —— 它已是路径参数，「缺省按活跃批次猜唯一者」
- * 的旧语义不再存在）。
- */
-export async function sendToOutsource(
-  batchId: string,
-  payload: SendToOutsourcePayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(
-    `/prod/batches/${encodeURIComponent(batchId)}/send-to-outsource`,
-    payload,
-  );
-  return resp.data;
-}

@@ -297,7 +297,15 @@ export type MoveFromLocationDto =
  *  声明成可选）：同一个 `POOL` 变体在两侧的必填性不同 —— `from` 侧的 `shelf_id` 是
  *  比对基准、缺了必得 422；`to` 侧压根没有这个键。共用一个可选形态会让
  *  `from: {kind:'POOL'}` 顺利通过类型检查、只在运行期炸（错误文案还是裸 422 纯文本，
- *  `ApiError` 拿不到 code）。拆开后「忘了传 from.shelf_id」是编译期错误。 */
+ *  `ApiError` 拿不到 code）。拆开后「忘了传 from.shelf_id」是编译期错误。
+ *
+ *  ⚠️ **部署顺序：后端必须先上。** 上面这个 `to` 形态依赖后端把 `to` 侧的 `shelf_id`
+ *  删掉、并把 from / to 拆成两个类型（`MoveFromLocation` / `MoveToLocation`）。后端旧
+ *  版本的 `Pool { shelf_id: i64 }` 没有 `#[serde(default)]` ⇒ 本仓发过去的
+ *  `to: {kind:'POOL'}` 会被 axum 的 `Json` extractor 在进 handler 前直接拒掉 ⇒
+ *  **HTTP 422 纯文本**（不是业务信封，`ApiError` 拿不到 code，操作员只看到一句
+ *  「Request failed with status code 422」）。⇒ **后端那个改动合入之前先发前端，
+ *  「撤回候选池」对所有角色都不可用**，且没有任何业务错误码可依。排障先看部署顺序。**/
 export type MoveToLocationDto = { kind: 'POOL' } | { kind: 'WORKER'; worker_id: string };
 
 /** `POST /api/v2/prod/queue/move` 请求（rust MoveRequest）。三个移动方向：

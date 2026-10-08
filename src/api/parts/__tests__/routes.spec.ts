@@ -77,7 +77,6 @@ import {
   repairDispatch,
   scanDeliverPart,
   scanInspect,
-  sendToOutsource,
   startPartRepair,
   toInspection,
   toProcess,
@@ -137,11 +136,6 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(await postedPath(() => completePartRepair(BATCH, { shelf_id: 's', version: 1 }))).toBe(
       `/prod/batches/${BATCH}/complete-repair`,
     );
-    expect(
-      await postedPath(() =>
-        sendToOutsource(BATCH, { outsource_company_id: 'c', process_id: 'p', version: 1 }),
-      ),
-    ).toBe(`/prod/batches/${BATCH}/send-to-outsource`);
     expect(await postedPath(() => repairDispatch(BATCH, { version: 1 }))).toBe(
       `/prod/batches/${BATCH}/repair-dispatch`,
     );
@@ -196,43 +190,13 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(Object.keys(startBody).sort()).toEqual(['note', 'reason', 'version']);
     expect(startBody).not.toHaveProperty('quantity');
   });
-  // 契约对齐：send-to-outsource 的 body 键是 `process_id`（**不是**
-  // `next_process_id`）—— 沿用旧名必然 422（后端 DTO 是 process_id，serde 未开
-  // deny_unknown_fields 时旧名被静默忽略、必填 process_id 落空 → 422）。
-  it('R2c：send-to-outsource 用 process_id，报价两条路径的键集合各自钉住', async () => {
-    httpPostMock.mockReset();
-    httpPostMock.mockResolvedValue({ data: {} });
-    await sendToOutsource(BATCH, {
-      outsource_company_id: 'c',
-      process_id: 'p',
-      version: 1,
-      quote_id: 'q',
-      direct: null,
-    });
-    const [, sendBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(sendBody.process_id).toBe('p');
-    expect(sendBody).not.toHaveProperty('next_process_id');
-    // APPROVAL 路径：带 quote_id，direct 显式为 null（api 层纯透传，不注入不兜底）
-    expect(sendBody.quote_id).toBe('q');
-    expect(sendBody.direct).toBeNull();
-
-    // DIRECT 路径：direct: true + quote_id: null
-    httpPostMock.mockReset();
-    httpPostMock.mockResolvedValue({ data: {} });
-    await sendToOutsource(BATCH, {
-      outsource_company_id: 'c',
-      process_id: 'p',
-      version: 1,
-      quote_id: null,
-      direct: true,
-      quantity: 3,
-    });
-    const [, directBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(directBody.direct).toBe(true);
-    expect(directBody.quote_id).toBeNull();
-    // 部分发送数量透传（后端拆批，源批次留余量）
-    expect(directBody.quantity).toBe(3);
-  });
+  // 2026-10-10：原 R2c（`send-to-outsource` 的 body 键契约）随该端点下线一并删除 ——
+  // 它已随外协三合一硬切到 `POST /outsource-queue/move`（无 alias），前端 wrapper
+  // `sendToOutsource` 与 payload 类型一并删除，打的是 404 路径、零生产调用方。
+  // 收发现行契约由 src/api/__tests__/outsource.contract.spec.ts 的
+  // `OutsourceMoveRequestDto` 组与 views/outsource/composables/__tests__/ 下的
+  // useOutsourceQueueMove.spec.ts 守。
+  // 编号 R2c 留空不复用，避免与下面的 R2d 混淆。
 
   // 2026-10-03：place-on-shelf / release-from-programming 两个后端 DTO 都把 `version`
   //（t_part_batch.version）列为必填且无 `#[serde(default)]`
@@ -243,7 +207,7 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
   // 召回（recall-to-pending）已不在本文件：2026-10-08 起它归 queue 域
   // （`POST /prod/queue/recall`，batch_id 改 body 字段），由
   // views/production/queue/composables/__tests__/useQueueRecall.spec.ts 覆盖。
-  // 编号 R2d：R2c 已被上面的 outsource 契约对齐占用。
+  // 编号 R2d：R2c 原为 outsource 契约对齐，该端点下线后已删除。
   it('R2d：三个 place-on-shelf 系端点的 body 透传 version', async () => {
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });

@@ -60,7 +60,12 @@ export interface UseQueueMoveReturn {
    *  @param version OCC 锚（同上，后端必填）
    *  目标货架由后端按批次当前工序下的候选架中负载最低者自动选 ⇒ 不再接受目标架入参。
    *  注意 `from` 侧仍带起点锚（POOL 侧的 `shelf_id` / WORKER 侧的 `worker_id`），
-   *  两侧形态不同，故 from / to 分用两个 DTO 类型。 */
+   *  两侧形态不同，故 from / to 分用两个 DTO 类型。
+   *
+   *  ⚠️ **部署顺序：后端必须先上**（详见 `api/productionQueue.contract.ts` 的
+   *  `MoveToLocationDto` 注释）。后端未落地 `to` 侧去架之前，这里发的
+   *  `to: {kind:'POOL'}` 会得 HTTP 422 纯文本 ⇒ 撤回候选池对所有角色都不可用，
+   *  且没有业务错误码可依。 */
   moveBatchToPool: (batchId: string, version: number, fromWorkerId: string) => Promise<boolean>;
   /** WORKER → WORKER：把一名工人手中的批次转交给另一名。落点列的 onDragAdd 在
    *  「拿不到候选池源」时走这条路径（从自己那一列拖回自己不构成移动，由调用方早退，
