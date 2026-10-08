@@ -13,7 +13,7 @@
 //   - P3：非 partial 变体数量列渲染纯数值
 //   - P4：二级客户为空 → 渲染 '—' 且对应 tooltip disabled
 //   - P5：系统交期只出 MM/DD 且不含倒计文案；逾期件带 overdue 类（overdue 桶的核心样式）
-//   - P6：三个 variant 的标题 / 空态文案（判据口径以标题 + 空态文案承载，副标题已移除）
+//   - P6：三个 variant 的标题 / 空态文案（判据口径以标题 + 空态文案承载）
 //   - P7：`.urgent` 红底行三个 variant 都有（加急语义独立于交期分桶）
 //   - P8：partial 数量列出「20 / 64」，已交部分单独成节点（走主题色的入口）
 //   - P9：partial 数量列 tooltip 单位随 row_type 分流（件 / 套）
@@ -35,10 +35,15 @@
 //     各包一层带类名的 div —— 单测才能把「行里渲染了什么」与「tooltip 渲染了什么」分开
 //     断言（P8 的数量列与 P9 的 tooltip 文案都要靠它）。真实 ElTooltip 经 ElOnlyChild
 //     直出子节点、不产生包裹层，故 stub 的**外层** div 即行内一个 grid 子项 ⇒ P1 仍能
-//     断言子元素恒为 6 个；同一条性质也让 header 里的 tooltip 不改变 `.list-header`
-//     的两个 flex 子项（.list-title + slot）。
+//     断言子元素恒为 6 个。同一条性质在真实 EP 下也让 header 的 tooltip 不改变
+//     .list-header 的两个 flex 子项（.list-title + slot）—— 但 stub 自带一层外壳、
+//     它在测试里恰恰是第三个子项，**这条断不了**，只作记录（真正要锁的是 P13 的
+//     「radio 在 .list-header 内」）。
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineComponent, h, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
 import SystemDeliveryOrdersPanel from '../SystemDeliveryOrdersPanel.vue';
@@ -187,6 +192,48 @@ function rowTooltips(wrapper: ReturnType<typeof mountPanel>) {
     .filter((tip) => tip.element.closest('.list-header') === null);
 }
 
+// ---- 样式级守卫用的源码工具（vitest 不处理 SFC <style>，CSS 只能读源码） ----
+
+/** 组件源码原文（仅供 P18 的样式契约断言用；渲染类断言一律走挂载）。
+ *  注意用 `import.meta.url` 字符串而不是 `new URL(...)`：本 spec 跑在 happy-dom 下，
+ *  裸 `new URL` 命中的是 happy-dom 的 URL 实现，node 的 fileURLToPath 认不出来
+ *  （同 BatchCard.spec.ts 的 B14）。 */
+const PANEL_SRC = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../SystemDeliveryOrdersPanel.vue'),
+  'utf8',
+);
+
+/** 把注释逐字符替换成空格（位置不变，只在真实代码上判定），避免注释里的字面量
+ *  让样式断言假通过（做法同 PurchaseOrderImportDeliveryPrefill.spec.ts）。 */
+function stripComments(src: string): string {
+  const blank = (m: string): string => m.replace(/[^\n]/g, ' ');
+  return src
+    .replace(/<!--[\s\S]*?-->/g, blank)
+    .replace(/\/\*[\s\S]*?\*\//g, blank)
+    .replace(/^[ \t]*\/\/[^\n]*$/gm, blank);
+}
+
+/** 只取 <style> 段，避免模板里的同名字符串被当成规则命中。 */
+const STYLE_SRC = /<style[^>]*>([\s\S]*?)<\/style>/.exec(stripComments(PANEL_SRC))?.[1] ?? '';
+
+/** 取 `selector { … }` 的块内容（**含**嵌套子规则），按花括号配平截取 —— 起始深度
+ *  从 1 起，否则嵌套子规则的收尾 } 会让整块提前截断。
+ *  取不到（选择器被改名/删除）返回空串，由用例断言负责报错。 */
+function ruleBody(src: string, selector: string): string {
+  const at = src.indexOf(`${selector} {`);
+  if (at < 0) return '';
+  const bodyStart = at + selector.length + 2;
+  let depth = 1;
+  for (let i = bodyStart; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(bodyStart, i);
+    }
+  }
+  return src.slice(bodyStart);
+}
+
 describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）', () => {
   it('P1：行内 6 个子元素，顺序为 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期', () => {
     const wrapper = mountPanel('upcoming', [makeOrder()]);
@@ -270,7 +317,7 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）',
 });
 
 describe('SystemDeliveryOrdersPanel — 变体文案与红底归属', () => {
-  it('P6a：upcoming 变体的标题 / 空态文案（副标题已移除，判据靠标题 + 空态文案）', () => {
+  it('P6a：upcoming 变体的标题 / 空态文案（判据口径由标题 + 空态文案承载）', () => {
     const filled = mountPanel('upcoming', [makeOrder()]);
     // 标题必须「含今天」：服务端 upcoming 桶判据是 sdd >= today，写「今天之后」会把
     // 今天到期（该桶最常见的一档）排除在标题之外。
@@ -290,8 +337,8 @@ describe('SystemDeliveryOrdersPanel — 变体文案与红底归属', () => {
     });
     expect(filled.find('.list-title').text()).toContain('已逾期未交');
     expect(filled.find('.list-subtitle').exists()).toBe(false);
-    // 副标题移除后 header 唯一的信息通道是标题 tooltip —— 口径信息在这里必须仍被覆盖
-    // （真实判据「一件都没交过」由标题 / 空态文案承载，行数口径由 tooltip 承载）。
+    // header 的口径信息通道是标题 tooltip：真实判据「一件都没交过」由标题 / 空态文案
+    // 承载，行数口径由 tooltip 承载，两处都不能掉。
     expect(headerTooltip(filled).props('content')).toBe('共 9 条，仅显示前 1 条');
     filled.unmount();
 
@@ -435,9 +482,9 @@ describe('SystemDeliveryOrdersPanel — header 单行（slot + total tooltip）'
     wrapper.unmount();
   });
 
-  // 第二行 header（.list-header-extra）已不存在：四种组合（有/无 slot × 截断/不截断）
-  // 都必须只有一行 —— 控件位置不再随 total 有没有超限而跳变。
-  it('P13b：`.list-header-extra` 在 DOM 中永不存在（有 slot、无 slot、截断、不截断）', () => {
+  // header 恒一行：四种组合（有/无 slot × 截断/不截断）都只有一个 .list-header，
+  // 控件位置不随 total 是否超限而变。
+  it('P13b：`.list-header-extra` 在四种组合下都不出现（header 恒一行）', () => {
     const items = [makeOrder({ id: 'p0' })];
     const combos = [
       { total: 99, slots: { 'header-extra': '<div class="mock-radio">档位切换</div>' } },
@@ -492,7 +539,7 @@ describe('SystemDeliveryOrdersPanel — header 单行（slot + total tooltip）'
     expect(headerTooltip(wrapper).props('content')).toBe('共 34 条，仅显示前 1 条');
     expect(headerTooltip(wrapper).props('disabled')).toBe(false);
     expect(wrapper.find('.list-header .mock-radio').exists()).toBe(true);
-    // radio 与标题同属一行（第二行 header 不存在）
+    // radio 与标题同属一行
     expect(wrapper.find('.list-header-extra').exists()).toBe(false);
     wrapper.unmount();
   });
@@ -603,5 +650,29 @@ describe('SystemDeliveryOrdersPanel — 空交期占位', () => {
     expect(due.classes()).not.toContain('overdue');
     expect(due.classes()).not.toContain('due-soon');
     wrapper.unmount();
+  });
+});
+
+// 样式级守卫：vitest 不处理 SFC 的 <style>（happy-dom 里 styleSheets 恒空），CSS 只能
+// 读源码断言。锁的是「标题窄档被挤窄时走省略号、不折行」——折行会把 flex-shrink: 0 的
+// .el-card__header 撑高、把下面的行挤少。
+describe('SystemDeliveryOrdersPanel — header 标题的 ellipsis 规则', () => {
+  const titleRule = ruleBody(STYLE_SRC, '.list-title');
+
+  it('P18a：ellipsis 落在 .list-title 的内层 span 上（flex 容器上 text-overflow 不生效）', () => {
+    // 选择器本身必须还在，否则下面的断言会因空串而假绿
+    expect(titleRule).not.toBe('');
+    const child = />\s*span\s*\{([\s\S]*)$/.exec(titleRule);
+    expect(child, '.list-title 下应有 `> span` 子规则承载 ellipsis').toBeTruthy();
+    expect(child![1]).toMatch(/overflow:\s*hidden/);
+    expect(child![1]).toMatch(/text-overflow:\s*ellipsis/);
+    expect(child![1]).toMatch(/white-space:\s*nowrap/);
+  });
+
+  it('P18b：.list-title 自身不挂 text-overflow（挂上去是死规则）', () => {
+    // 剥掉子规则块后剩下的才是 .list-title 自身的声明。
+    const own = titleRule.replace(/>\s*span\s*\{[\s\S]*$/, '');
+    expect(own).not.toMatch(/text-overflow/);
+    expect(own).toMatch(/min-width:\s*0/);
   });
 });

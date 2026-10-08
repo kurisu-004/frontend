@@ -17,9 +17,9 @@
   却 delivered_quantity === 0（每个子件都交了 40%、凑不满整一套），本组件不得据该值重分桶。
 
   桶值是 `{ items, total }` 信封：total 是匹配总行数、不受 30 条截断影响，**超限信息
-  走标题 tooltip**（「共 N 条，仅显示前 M 条」，不超限则 tooltip 禁用）—— upcoming 桶无
+  走标题 tooltip**（「共 N 条，仅显示前 M 条」，不超限时 tooltip 禁用）—— upcoming 桶无
   时间上界，几百条只显示前 30 条是常态，用户无从知道被砍了多少；tooltip 不占行高，
-  标题行恒为单行。副标题已移除（分桶判据由服务端定，标题 + 空态文案已够用）。
+  标题行恒为一行（超限信息不出第二行）。分桶判据由服务端定，标题 + 空态文案已承载。
 
   行内 6 列 —— 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期：
     - 名称与二级客户两列窄屏下 ellipsis 截断，tooltip 常显兜底（不做溢出检测：
@@ -177,21 +177,20 @@ const EMPTY_TEXT = {
 const titleText = computed(() => TITLE_TEXT[props.variant]);
 const emptyText = computed(() => EMPTY_TEXT[props.variant]);
 
-/** 未显示的行数。total 是服务端匹配总行数，items 最多 30 行（上限由服务端定）。
- *  total 缺省按 items.length 处理 —— 调用方拿不到 total 时不谎报「还有 N 条」。 */
-const overflowCount = computed(() =>
-  Math.max(0, (props.total ?? props.items.length) - props.items.length),
-);
+/** 该桶匹配的总行数：total 缺省按 items.length 处理 —— 调用方拿不到 total 时
+ *  不谎报「还有 N 条」。 */
+const matchedTotal = computed(() => props.total ?? props.items.length);
+
+/** 未显示的行数。total 是服务端匹配总行数，items 最多 30 行（上限由服务端定）。 */
+const overflowCount = computed(() => Math.max(0, matchedTotal.value - props.items.length));
 
 /** 标题 tooltip：告诉用户「被砍了多少」。upcoming 桶无时间上界，几百条只显示前 30 条
- *  是常态而非异常，但这句话不占行高（副标题已移除）。不超限时返回空串 ⇒ tooltip
- *  disabled、不弹空浮层。
- *  文案说「前 M 条」而不是「最早 M 条」：partial 桶无时间窗口、排序口径与另两档不同，
- *  「最早」在该桶是假口径。 */
+ *  是常态而非异常，这句话走浮层、不占行高。不超限时返回空串 ⇒ tooltip disabled、
+ *  不弹空浮层。
+ *  文案说「前 M 条」：三桶的排序都在服务端（sdd ASC NULLS LAST, id ASC），前端只拿到
+ *  截断后的前 M 条，不重排。 */
 const totalTooltip = computed(() =>
-  overflowCount.value === 0
-    ? ''
-    : `共 ${props.total ?? props.items.length} 条，仅显示前 ${props.items.length} 条`,
+  overflowCount.value === 0 ? '' : `共 ${matchedTotal.value} 条，仅显示前 ${props.items.length} 条`,
 );
 
 /** partial 数量列的 tooltip：显式标注单位与含义。**单位随 row_type 变** ——
@@ -235,7 +234,7 @@ function deliveredTooltip(item: SystemDeliveryOrderData): string {
 }
 // 2026-10-10：header 单行 = 标题（包 total tooltip）+ #header-extra slot。
 // space-between 把 slot 顶到最右端，三档结构一致：有 radio 的档右端恒是 radio，
-// 无控件的档右端留空 —— 位置不再随 total 有没有超限而跳变。
+// 无控件的档右端留空。控件位置只由「有没有 slot」决定，与 total 是否超限无关。
 // 宽度复核：右栏最窄档容器 340px 扣 header padding 28px 后可用 312px，标题最宽
 // 「🔔 今天及以后到期」≈118px + 两个 size=small radio ≈180px = 298px ≤ 312px。
 .list-header {
@@ -249,11 +248,20 @@ function deliveredTooltip(item: SystemDeliveryOrderData): string {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  // 窄档挤到放不下时收缩标题（其内文字可再走 ellipsis），而不是把 slot 挤出可视区。
+  // 窄档挤到放不下时允许标题盒子收缩，把余量让给右侧 slot，不让它被挤出可视区。
   min-width: 0;
   font-weight: 600;
   font-size: 14px;
   color: var(--text-primary);
+  // ellipsis 落在内层 span 上：text-overflow 对 flex 容器不生效（同 .row-qty--partial
+  // 登记的坑）；而 CJK 可在任意两字间断行、min-content 只有一个字宽，不兜住的话标题
+  // 会折成多行，把 flex-shrink: 0 的 .el-card__header 撑高、把下面的行挤少。
+  > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 .list-empty {
   padding: 40px 0;
