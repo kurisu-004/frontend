@@ -21,9 +21,11 @@
   2026-10-09：删掉组件内的列定义副本（本文件曾有第二份，与域根那份重复且已漂移）；
     勾选列对装配件父行也放开（INSPECTOR 能打印但不能改单，原来「装配件父行不可勾」会把
     它们挡在打印之外）；勾选列开 `reserve-selection`，打印后绿底重算不丢勾选。
-  2026-10-10：硬编码 `type="index"` 的「#」列换成「序号」列（`prop="seq"`，可排序）——
-    编号口径 = 加入送货单的先后顺序。**这一列刻意不进 `columnDefs`**（钉在首位的唯一办法，
-    理由见模板里那段注释）；defs 仍是那 12 列，不受本次改动影响。
+  2026-10-10：硬编码 `type="index"` 的「#」列换成「序号」列（取行上的 `seq`）—— 编号口径 =
+    加入送货单的先后顺序。`type` 仍是 `index`（**不是**普通数据列）：EP 的树箭头与缩进只落在
+    第一个 `type === 'default'` 的列上，改成普通列会把箭头搬进「序号」格（模板里有完整论证）。
+    **这一列刻意不进 `columnDefs`**（钉在首位的唯一办法，理由见模板里那段注释）；defs 仍是那
+    12 列，不受本次改动影响。
 -->
 <template>
   <el-card v-if="note" shadow="never" class="line-items-card">
@@ -88,7 +90,7 @@
       <!--
         2026-10-10：「序号」列（替换原先 `type="index"` 的 `#` 列）—— 按**加入送货单的先后
         顺序**编号，取值是行上的 `seq`（由 `buildPartTreeRows` 按 `min_seq` 稠密排名写好，
-        见 utils/deliveryNotePartRows.ts 的「序号」一节），可点表头正 / 反排。
+        见 utils/deliveryNotePartRows.ts 的「序号」一节）。
 
         ⚠️ **必须硬编码在 defs 的 v-for 之外、不能进 `columnDefs`**（这是钉在首位的唯一办法）：
         `useColumnDrag` 的 `restore()` 对**快照里缺失的 key 一律追加到末尾**（lenient 策略，
@@ -97,23 +99,37 @@
         拖不回来，只能点「重置列顺序」—— 那不是「钉在首位」想要的效果。
         不进 defs 也顺带与被替换掉的 `#` 列行为一致：**不进列显隐弹窗**（序号不可关）。
 
-        `width="80"` 的来由：列名「序号」28px + 排序箭头 24px + `.cell` 左右 padding 24px
-        = 76px，留 4px 余量（表头 nowrap 兜底；不足时 EP 的 `.cell` 会把箭头折到第二段）。
+        ⚠️ **`type` 必须是 `index`、不能是 `default`**（EP 的树列机制，见
+        node_modules/element-plus/es/components/table/src/table-body/render-helper.mjs 的
+        `firstDefaultColumnIndex`）：展开箭头与每级 16px 缩进只落在**第一个 `type === 'default'`
+        的列**上，`type` 不传时默认就是 `'default'`。写成 `prop="seq"` 的普通数据列，它就成了
+        第一个 default 列 ⇒ 箭头 + 缩进被搬进「序号」单元格，而本列改造前（`type="index"`）
+        箭头是在「序列号」列的 —— 那是一次没被计划登记的观感变更。`type="index"` 不参与该判定，
+        箭头留在「序列号」列。
+        两处配套事实（都是实测结论，不是推断）：
+        - 显式 `width` **压得住** `type="index"` 的强制 48px（`setColumnForcedProps` 先跑、
+          `setColumnWidth` 后跑，后者按 `width` prop 重算 `realWidth`）；
+        - 提供了 `#default` 插槽就用自己的内容，不再走 EP 注入的 `$index + 1`。
+        守卫：`components/__tests__/DeliveryPartTablesTreeColumn.spec.ts`（真 el-table 断
+        箭头落在哪一列）。
 
-        两层排序为什么不会打架（两层同向、结果一致）：
-        - composable 的 `sortedLineItems` 读的是 `line_items[i]['seq']` —— **行项上没有这个
-          字段**（它是行形上的字段，不是后端字段）⇒ 比较器恒返回 0 ⇒ `Array.prototype.sort`
-          稳定 ⇒ 保持后端序（后端按 `delivery_seq` 排，即入单序）；
-        - EP 自己的 `sortData` 再按行上的 `seq` 排（`orderBy`，见
-          node_modules/element-plus/es/components/table/src/util.mjs）⇒ 序号真正生效。
-        EP 三态点击第三下时 `sortOrder` 变 null，`orderBy` 里 `reverse` 解析成 1（= 升序），
-        恰好等于默认序，与第一层的「回到后端序」无冲突。
+        ⚠️ **不带 `sortable`（有意）**：EP 对 index 列强制 `sortable: false`
+        （table-column/config.mjs 的 `cellForced.index`，且 `registerNormalWatchers` 的
+        sortable watcher 只在 prop **变化**时才回写，本列 prop 恒定 ⇒ 挂 `sortable` 也是死的），
+        实测点表头无反应、th 上也没有 `is-sortable`。即「箭头归位」与「该列可排序」二者只能
+        取一：选箭头归位（保持本列改造前的树形观感），序号列纯展示。默认序本就是入单序，用户
+        要换维度排序走 defs 那 12 列。
+        ⇒ 排序不再可能从这一列触发，`onLineItemSort` 收到的 prop 恒不为 `'seq'`。
 
-        单元格内容走 `seqCell()`：装配件的**子件行留空** —— 它嵌在父行下、不是独立的一行，
-        编号由父行代表（排名只看顶层行，见 buildPartTreeRows::assignSeq）。
+        `width="80"` 的来由：表头只装列名「序号」28px + `.cell` 左右 padding 24px = 52px
+        （无排序箭头、无 caret，都不在这一列），80 里的余量留给 3~4 位数的编号。
+
+        单元格内容走 `seqCellText()`：装配件的**子件行留空** —— 它嵌在父行下、不是独立的一行，
+        编号由父行代表（排名只看顶层行，见 buildPartTreeRows::assignSeq）。判据是**域内单一
+        出口**而非组件私有，草稿卡片那张表也调它。
       -->
-      <el-table-column prop="seq" label="序号" width="80" align="center" sortable>
-        <template #default="{ row }">{{ seqCell(row as PartTreeRow) }}</template>
+      <el-table-column type="index" prop="seq" label="序号" width="80" align="center">
+        <template #default="{ row }">{{ seqCellText(row as PartTreeRow) }}</template>
       </el-table-column>
       <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
         <el-table-column
@@ -151,7 +167,7 @@ import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import { canPrint } from '@/utils/deliveryNotePermissions';
 import type { DeliveryNoteDetailData } from '../composables/deliveryNoteSchema';
 import type { DeliveryNoteRoleMap } from '../composables/useDeliveryNoteDetail';
-import type { PartTreeRow } from '../utils/deliveryNotePartRows';
+import { seqCellText, type PartTreeRow } from '../utils/deliveryNotePartRows';
 
 interface Props {
   note: DeliveryNoteDetailData | null;
@@ -238,18 +254,6 @@ function onSortChange(sort: {
   order: 'ascending' | 'descending' | null;
 }): void {
   emit('sortChange', sort);
-}
-
-/**
- * 「序号」列的单元格文本。
- *
- * 只有**顶层行**（散件行 + 装配件父行）有编号 —— 装配件子件行嵌在父行的 `children` 里，
- * 是那个编号所指的那一行的一部分，自己再显示一个号会读成「重复的一行」。故它们留空。
- * 判据用行结构（子件行 = 零件行且带 assembly_id），不用 `seq` 的值 —— 折叠阶段 `seq` 还是
- * 占位值，值判据在数据没排完时会说错话。
- */
-function seqCell(row: PartTreeRow): string {
-  return row.is_part_row && row.assembly_id ? '' : String(row.seq);
 }
 </script>
 

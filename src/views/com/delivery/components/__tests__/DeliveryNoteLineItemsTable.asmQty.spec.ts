@@ -223,7 +223,9 @@ describe('详情页「序号」列（加入送货单的先后顺序）', () => {
 
   it('装配件子件行留空（编号由父行代表，不重复显示）', () => {
     // 桩 el-table 只铺顶层行，所以直接把「子件行」的形状（零件行 + 带 assembly_id）作为
-    // 一行喂进去 —— 断的正是 `seqCell` 对它的判据（组件侧 deliveryNotePartRows 的排名的另一半）。
+    // 一行喂进去 —— 断的正是 `seqCellText` 对它的判据（组件侧 deliveryNotePartRows 的排名的
+    // 另一半）。真 el-table 下子件行会被 default-expand-all 铺出来并逐格渲染，另有守卫：
+    // DeliveryPartTablesTreeColumn.spec.ts。
     const child = mkRow({ id: 'P:ASM-1:PA', assembly_id: 'ASM-1', seq: 0 });
     const wrapper = mountTable([child]);
     expect(seqCell(wrapper, 'P:ASM-1:PA').text()).toBe('');

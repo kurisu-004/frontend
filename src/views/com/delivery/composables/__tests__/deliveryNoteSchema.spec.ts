@@ -410,7 +410,8 @@ const BACKEND_VO_NULLABLE_FIELDS: Record<string, readonly string[]> = {
     // 裸 `Option<i32>`（无 serde 属性）⇒ 恒发 null。
     'assembly_quantity',
     'shippable_sets',
-    // 2026-10-10 后端补的本单挂单序号（裸 `Option<i64>`，键恒在、值可能是 null）。
+    // 2026-10-10 后端补的本单挂单序号（裸 `Option<i32>`，键恒在、值可能是 null；DB 列是
+    // bigint，出 VO 那一层 `as i32` 收窄）。
     'delivery_seq',
     // 2026-10-08 后端补的 L2 叶子客户 `customer_id` 是裸 `i64`（恒有值），不在此表。
   ],
@@ -438,8 +439,9 @@ const SCHEMA_WIDER_THAN_VO: Record<string, string> = {
     '后端是裸 Option<i32>（无 skip_serializing_if，恒发 null）；.nullish() 是超集，行为不变。',
   'lineItem.delivery_seq':
     '2026-10-10 后端新增 delivery_seq 列，本仓与后端分批上线：后端未上线的那份响应里没有' +
-    '这个键，schema 先按 .nullish 过渡（序号列回落到默认显示序）。后端上线后本条即可删 ——' +
-    '上面「登记无陈旧」那条断言会先红。',
+    '这个键，schema 先按 .nullish 过渡（序号列回落到默认显示序）。收紧成 z.number() 后上面' +
+    '「登记无陈旧」那条断言会红；若只删本行而 .nullish 还在，红的是「未登记」那条 —— 届时' +
+    '删掉本行即可（不能留着不管）。',
 };
 
 /** schema 里「键必填」的字段（safeParse(undefined) 失败）。 */

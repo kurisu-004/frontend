@@ -190,8 +190,8 @@ describe('详情页零件列表排序：升 / 降序', () => {
     // 同零件两批，状态不同：按 status 升序排，第二批（READY_TO_SHIP）排前面 ⇒
     // 折叠行的「代表批次」展示值（状态 / 序列号）换成第二批那一笔，但行序仍是入单序。
     const detail = await detailOf([
-      li({ id: '10', part_id: 'P1', status: 'BLOCKED', serial_no: 'S-10' }),
-      li({ id: '11', part_id: 'P1', status: 'READY_TO_SHIP', serial_no: 'S-11' }),
+      mkItem({ id: '10', part_id: 'P1', status: 'BLOCKED', serial_no: 'S-10' }),
+      mkItem({ id: '11', part_id: 'P1', status: 'READY_TO_SHIP', serial_no: 'S-11' }),
     ]);
     detail.onLineItemSort({ prop: 'status', order: 'ascending' });
     const row = detail.treeLineItems.value[0]!;
@@ -210,11 +210,12 @@ describe('详情页零件列表排序：升 / 降序', () => {
 });
 
 describe('详情页零件列表排序 × 折叠（序号列）', () => {
-  it('折叠行上的 seq 不是后端字段 ⇒ 按它排不改变行序（EP 的 sortData 才真正生效）', async () => {
+  it('折叠行上的 seq 不是后端字段 ⇒ 按它排不改变行序', async () => {
     const detail = await detailOf(ITEMS);
     const before = detail.treeLineItems.value.map((r) => [r.part_id, r.seq]);
-    // 「序号」列的 sort-change 会带着 prop='seq' 上来：行项上没有该字段（它是行形上的），
-    // 比较器恒 0 + sort 稳定 ⇒ 行序不变，序号也不会被改写。
+    // 即便 prop='seq' 真的传上来：行项上没有该字段（它是行形上的），比较器恒 0 + sort 稳定
+    // ⇒ 行序不变，序号也不会被改写。（表格上「序号」列本身不可点：它是 `type="index"`，EP
+    // 对 index 列强制 sortable: false —— 这条只钉「万一传进来也是安全的」这一层。）
     detail.onLineItemSort({ prop: 'seq', order: 'ascending' });
     expect(detail.treeLineItems.value.map((r) => [r.part_id, r.seq])).toEqual(before);
     detail.onLineItemSort({ prop: 'seq', order: 'descending' });
@@ -238,8 +239,3 @@ describe('详情页零件列表排序 × 折叠（序号列）', () => {
     expect(detail.treeLineItems.value.map((r) => r.part_id)).toEqual(['P1', 'P2', 'P3']);
   });
 });
-
-/** 局部行项工厂（同目录其它 spec 的同名 helper，形状逐字一致）。 */
-function li(p: Partial<DeliveryNoteLineItemData> & { id: string; part_id: string }) {
-  return mkItem(p);
-}

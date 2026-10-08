@@ -300,8 +300,10 @@ export function buildPartTreeRows(
  * 排名依据是 `min_seq` 的**值**而不是行序，所以 `min_seq` 相同的两行（折叠掉的同批批次、
  * 或装配件父行与某个散件恰好同批入单）共享同一序号；用户按别的列排序也不会改动任何序号。
  *
- * `min_seq` 为 null 的行（历史数据 / 后端尚未上线该列）：排在所有有值行之后、按当前行序
- * 续号；**全表皆 null 时这条规则退化成数组下标 + 1**，即那时的默认显示序（后端返回的顺序）。
+ * `min_seq` 为 null 的行（历史数据 / 后端尚未上线该列）：**编号**排在所有有值行之后、按当前
+ * 行序续号（⚠️ 行本身**不移动** —— 续号只影响显示值；用户按别的列排序后 null 行的号会落在
+ * 中间，如 `[有值, null, 有值] → 1, 3, 2`，撞号不会发生，tail 从 `values.length` 起恒大于
+ * 任一名次）；**全表皆 null 时这条规则退化成数组下标 + 1**，即那时的默认显示序（后端返回的顺序）。
  *
  * 只对**顶层行**排名（散件行 + 装配件父行）：装配件的子件行嵌在父行的 `children` 里，
  * 它们在树里不是独立的一行，序号由父行代表。
@@ -318,6 +320,19 @@ function assignSeq(rows: readonly PartTreeRow[]): void {
     const rank = row.min_seq === null ? undefined : rankByValue.get(row.min_seq);
     row.seq = rank ?? ++tail;
   }
+}
+
+/**
+ * 「序号」列的单元格文本（**两张零件表共用的唯一出口**：详情页零件列表 / 草稿卡片预览表）。
+ *
+ * 只有**顶层行**（散件行 + 装配件父行）有编号 —— 装配件子件行嵌在父行的 `children` 里，
+ * 是那个编号所指的那一行的一部分，自己再显示一个号会被读成「重复的一行」，故留空。
+ *
+ * 判据用**行结构**（子件行 = 零件行且带 `assembly_id`）而不是 `seq` 的值：折叠 / 归组阶段
+ * `seq` 还是占位值 `0`，值判据在数据没排完时会把占位号当编号显示出去。
+ */
+export function seqCellText(row: PartTreeRow): string {
+  return row.is_part_row && row.assembly_id ? '' : String(row.seq);
 }
 
 /**

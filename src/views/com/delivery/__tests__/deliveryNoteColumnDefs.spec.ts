@@ -33,6 +33,14 @@ import {
 } from '../deliveryNotePrintColumnDefs';
 import type { DeliveryNoteItemData } from '../composables/deliveryNoteSchema';
 import type { PrintRow } from '../utils/deliveryNotePrintRows';
+import type { ColumnDef } from '@/composables/useColumnVisibility';
+
+/** 打印对话框的列定义（按 key 取，宽度守卫用）。 */
+function printCol(key: string): ColumnDef {
+  const col = buildDeliveryNotePrintColumnDefs().find((d) => d.key === key);
+  if (!col) throw new Error(`打印列定义里没有 key=${key}`);
+  return col;
+}
 
 describe('列 key 与顺序（改了就让老用户列设置失效）', () => {
   it('送货单一览 8 列，顺序与 2026-10-08 之前完全一致', () => {
@@ -94,6 +102,48 @@ describe('列 key 与顺序（改了就让老用户列设置失效）', () => {
   it('打印对话框的列顺序快照按分组后缀分片（每张分组表一条序列）', () => {
     expect(printColumnOrderListKey('g_7')).toBe('print_preview_dialog__g_7');
     expect(printColumnOrderListKey('c_13')).toBe('print_preview_dialog__c_13');
+  });
+});
+
+describe('打印表表头「不折行」的宽度预算（本次改动的价值就是这几个像素）', () => {
+  /**
+   * 预算公式（见 deliveryNotePrintColumnDefs.ts 文件头）：表头内容 = 列名 + 拖动手柄(16px)
+   * + 排序箭头(24px，仅 sortable 列有) + `.cell` 左右 padding(24px)，而 EP 的 `.cell` 是
+   * `white-space: normal` + `overflow-wrap: break-word` ⇒ 装不下就折成两段。
+   * 表头字号 14px，汉字约 1em = 14px/字。
+   */
+  const HANDLE = 16;
+  const SORT_ARROW = 24;
+  const CELL_PADDING = 24;
+  /** 一列「表头不折行」所需的最小宽度（px）。 */
+  function needed(col: ColumnDef): number {
+    return (
+      [...col.label].length * 14 + (col.sortable ? SORT_ARROW : 0) + HANDLE + CELL_PADDING
+    );
+  }
+
+  it('「申请人」≥ 106（100 装不下 —— 用户报的两条折行之一）', () => {
+    const col = printCol('applicant_name');
+    // 3 个汉字 = 42px；42 + 16 + 24 + 24 = 106
+    expect(needed(col)).toBe(106);
+    expect(col.minWidth).toBeGreaterThanOrEqual(106);
+  });
+
+  it('「预估交期」≥ 120（110 装不下 —— 用户报的两条折行之一）', () => {
+    const col = printCol('system_delivery_date');
+    // 4 个汉字 = 56px；56 + 16 + 24 + 24 = 120
+    expect(needed(col)).toBe(120);
+    expect(col.minWidth).toBeGreaterThanOrEqual(120);
+  });
+
+  it('打印表每一列都够「表头不折行」的预算（别只修被报出来的那两列）', () => {
+    for (const col of buildDeliveryNotePrintColumnDefs()) {
+      // 序号列是固定 `width`、其余是 `minWidth`，两者都参与 EP 的列宽计算。
+      const w = col.minWidth ?? col.width ?? 0;
+      expect(w, `「${col.label}」宽 ${w} < 预算 ${needed(col)}，表头会折行`).toBeGreaterThanOrEqual(
+        needed(col),
+      );
+    }
   });
 });
 
