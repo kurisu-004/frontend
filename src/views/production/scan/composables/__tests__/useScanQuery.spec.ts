@@ -251,8 +251,10 @@ describe('Q 组：useScanHeldQuery / useScanPickableQuery', () => {
     scope.stop();
   });
 
-  // 后端多发那 22 个已砍的键（灰度期新旧后端并存）必须被 strip 且不抛错。
-  it('Q5：后端多发 22 个已砍键 ⇒ parse 通过且结果仍是 17 个键（灰度期不炸）', async () => {
+  // 后端多发那 23 个已砍的键（灰度期新旧后端并存）必须被 strip 且不抛错。
+  // 键清单与 scanSchema.ts 的模块注释、contract spec 的 E8 同源；覆盖全部 23 个，
+  // 少列一个就让「23 个键被 strip」这条守卫在该键上失守。
+  it('Q5：后端多发 23 个已砍键 ⇒ parse 通过且结果仍是 17 个键（灰度期不炸）', async () => {
     const scope = effectScope();
     h.fetchScanHeld.mockReset().mockResolvedValue({
       items: [
@@ -280,6 +282,7 @@ describe('Q 组：useScanHeldQuery / useScanPickableQuery', () => {
           has_children: false,
           child_count: null,
           has_cnc_program: false,
+          delivered_quantity: 0,
         },
       ],
       total: 1,

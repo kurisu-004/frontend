@@ -21,7 +21,7 @@
 //     的；而本 composable 的键 1 / 3 读的是**响应里的值** —— 后端补上真实投影后两者
 //     才对得上，补上之前服务端排出来的那份顺序会被客户端**洗掉**，只剩键 4 生效。
 //   - `/prod/scan/held`：`ORDER BY b.id DESC`，只有批次 id 一个键（**降序**），没有加急 / 交期键。
-// 键 4 排的 `ScanSortablePart.id` 在报工台三页里是 `PartListItem.id` = **part id**
+// 键 4 排的 `ScanSortablePart.id` 在报工台三页里是 `ScanListItem.id` = **part id**
 // （`p.id`），与服务端末位的 `b.id`（批次 id）既不是同一列、方向也不同。
 // ⇒ 「新批次在前」是当前数据下的副产物，不是写下来的前端意图；且洗牌只发生在**已加载的
 //   这一页内**（三页与徽章都是一次 `limit: 200`）。

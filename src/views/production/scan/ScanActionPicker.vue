@@ -9,9 +9,10 @@
     * 绑了任意 INSPECTION 架 → INSPECT
     * 两种 zone 都绑了 → 三个按钮全显示
 
-  2026-09-15 Phase 5：RETURN / INSPECT 后端走 worker-scan（`POST /parts/worker-scan`，
-  event_type=RETURNED / INSPECTED）二合一；PICK_UP 仍走 `POST /parts/pick-up`
-  （B 方案手动 pick-up 兜底）。送货入口在送货单列表页的「送货」按钮，扫码台不再有
+  2026-10-10 硬切后：RETURN / INSPECT 走 worker-scan（`POST /prod/scan/worker-scan`，
+  event_type=RETURNED / INSPECTED）二合一；PICK_UP 走
+  `POST /prod/scan/batches/{batch_id}/pick-up`（批次锚定领取）。
+  送货入口在送货单列表页的「送货」按钮，扫码台不再有
   DELIVER 操作（`useScanSession` 的 DELIVER 枚举成员已于 2026-10-08 随之删除）。
 
   2026-10-10：**「当前作业货架」整条下线**（顶部横条 + `WorkingShelfDialog` + 点送检
@@ -162,9 +163,11 @@ onBeforeMount(() => {
 function selectAction(a: WorkAction): void {
   setAction(a);
   ElMessage.success(`已选择: ${ACTION_LABEL[a]}`);
-  // PICK_UP 走「按工种选件」新流程 → /scan/pick（不依赖作业架）
-  // RETURN 走「按工人列持有件 → 选件 → 选工序 → 选架」新流程 → /scan/return
-  // INSPECT 走「按工人列持有件 → 选件 → 扫码确认 → 选品检架」新流程 → /scan/inspect
+  // 三个动作各自只做「记下选择 + 跳页」，选件 / 选工序 / 选架等后续步骤都在目标页。
+  // PICK_UP → /scan/pick（按工种取可领件）
+  // RETURN → /scan/return（持有件 → 选批次 → NEXT 免填工序 / 手选工序）
+  // INSPECT → /scan/inspect（持有件 → 选批次 → 扫码确认）
+  // 目标货架一律由后端按负载自动选，本页与三个目标页都没有选架步骤。
   // 送货入口在送货单列表页的「送货」按钮（扫码台无 DELIVER 分支）。
   if (a === 'PICK_UP') {
     void router.push('/scan/pick');

@@ -239,8 +239,9 @@ export const partSchema = z.object({
    *  那边的读点是**按钮可用性判据**，缺键会静默让全表下发按钮恒 disabled，是真症状）。
    *
    *  报工台的 PICK_UP 数据源（`GET /prod/scan/pickable`）**不过本 schema**：它的行单位
-   *  是批次、由后端填了批次锚点，走本文件的 `scanPartRowSchema`（那边 `batch_id` 必填
-   *  非空、`batch_version` 必填可空）。本条注释只描述本 schema 的取值现状。 */
+   *  是批次、由后端填了批次锚点，走 `@/views/production/scan/composables/scanSchema.ts`
+   *  的 `scanPartRowSchema`（那边 `batch_id` 必填非空、`batch_version` 必填可空）。
+   *  本条注释只描述本 schema 的取值现状。 */
   batch_version: z.number().nullable().optional(),
   batch_no: z.number().nullable().optional(),
   batch_quantity: z.number().nullable().optional(),

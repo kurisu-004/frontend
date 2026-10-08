@@ -170,10 +170,11 @@ export interface PartListItem {
    *  语义是已送「套数」= MIN(子件已送件数 × 装配件套数 / 子件总量) —— PG 整数除法
    *  截断，子件总量为 0 者不参与，无子件为 0。
    *
-   *  **填充端点只有 `GET /com/union-list` 与 `GET /parts`**；复用同一 VO 的其余 5 个
-   *  端点（`GET /parts/pending-programming` / `GET /parts/by-work-type/{id}` /
-   *  `GET /prod/scan/held` / `GET /prod/scan/pickable/{id}` /
-   *  `POST /assemblies/{id}/children`）恒 null。故本字段必须 optional + 可空。 */
+   *  **填充端点只有 `GET /com/union-list` 与 `GET /parts`**；其余复用同一 VO 的端点
+   *  （`GET /parts/by-work-type/{id}` / `POST /assemblies/{id}/children`）恒 null。
+   *  报工台两条 list（`GET /prod/scan/pickable?work_type_id={id}` /
+   *  `GET /prod/scan/held`）**不返本 VO** —— 出参是 `ScanListItem`
+   *  （`@/api/productionScan.contract.ts`），故不在此列。本字段因此必须 optional + 可空。 */
   delivered_quantity?: number | null;
   note: string | null;
   customer_name: string | null;
@@ -208,23 +209,20 @@ export interface PartListItem {
    *  工序制定页「待制定 / 已制定」分组改由本字段驱动（替代原 step_count 懒加载派生）。 */
   process_chain_id?: string | null;
   /** 2026-07-29 PR-fix-0.2.0 批次化字段：活跃批次 id（雪花 ID 字符串）。
-   *  2026-10-03 订正：原注释写的 `/outsource-quotes/quotable-parts` 在 Rust 后端**根本
-   *  不存在**。当前真实情况：**报工台两个列表端点都填** ——
-   *  `GET /prod/scan/pickable`（扫码台 PICK_UP 列表）与
-   *  `GET /prod/scan/held`（放回 / 送检 / HeldPartsBadge）；这两个端点的
-   *  行本来就是批次行，后端取行 SQL 投影 `b.id` / `b.version` 并覆写 `PartListItem` 的
-   *  两个字段。`/com/union-list`、`GET /parts` 及其余复用该 VO 的端点**键在但恒为 null**
-   *  （无 `skip_serializing_if`，故不是 undefined）—— 后端刻意不填：part 级行的单位是
-   *  part，一个 part 的活跃批次可能不止一个，填任一都是错锚点。
-   *  故零件一览 / 工单合列表的批次锚点缺失是**后端有意决策**导致的既有状态，
-   *  调用方须显式报错，不可用 part_id 顶替。
+   *  **2026-10-10 起本 VO 恒为 null**：唯一填充路径（报工台两条 list 端点）已迁往
+   *  `prod::scan` 域、用独立 VO `ScanListItem`（`@/api/productionScan.contract.ts`），
+   *  那边的 `batch_id` 必填非空。字段保留 —— 其余复用本 VO 的端点响应形状不变，
+   *  删字段是破坏性 wire 变更。
+   *  恒 null 的理由：这些路径的行语义单位是 part，一个 part 的活跃批次可能不止一个，
+   *  填任一活跃批次都是错锚点。故零件一览 / 工单合列表的批次锚缺失是**后端有意决策**
+   *  导致的既有状态，调用方须显式报错，不可用 part_id 顶替。
    *
-   *  ⚠️ 本接口**不含**工序链派生四件套（`chain_state` 等）：那是报工台两页的行 VO 独有
-   *  字段，消费方走 `@/composables/queries/schemas.ts::ScanPartRowSchema`（本类型的
-   *  生产消费方 `/com/union-list`、`GET /parts` 用不到链字段）。 */
+   *  ⚠️ 本 VO **不含**工序链派生四件套（`chain_state` 等）：那是 `ScanListItem` 独有
+   *  字段，消费方走 `@/views/production/scan/composables/scanSchema.ts` 的
+   *  `scanPartRowSchema`（本类型的生产消费方 `/com/union-list`、`GET /parts` 用不到链字段）。 */
   batch_id?: string | null;
   /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与 batch_id 同源，
-   *  填充端点同上（报工台两个列表端点）。 */
+   *  填充口径同上（2026-10-10 起恒 null；报工台的批次 OCC 读 `ScanListItem.batch_version`）。 */
   batch_version?: number | null;
   /** 2026-07-29 PR-fix-0.2.0 批次化字段：批次号（per-part 递增） */
   batch_no?: number | null;

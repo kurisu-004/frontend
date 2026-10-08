@@ -162,9 +162,8 @@ function holderText(p: BatchPickerRow): string {
 }
 
 function onPick(row: BatchPickerRow): void {
-  // pick 出口仍是 `PartItem`，与三页 handler（`onBatchPicked` / `onPickerBatchPicked`）
-  // 的声明一致；报工台三页入口各做一次 `as unknown as ScanPartRowSchema` 把这一行
-  // 认回本域的行类型。
+  // pick 出口仍是 `PartItem`，与报工台三页 handler `onBatchPicked` 的声明一致；
+  // 三页入口各做一次 `as unknown as ScanPartRowSchema` 把这一行认回本域的行类型。
   // 改进方向：上 `<script setup generic="T extends BatchPickerRow">` + `pick: [row: T]`，
   // 让出口载荷跟随调用方的行类型（报工台三页的 cast 随之消失），而不是继续加 cast。
   emit('pick', row as unknown as PartItem);

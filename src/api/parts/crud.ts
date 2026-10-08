@@ -70,59 +70,49 @@ export interface PartItem {
    * 其它端点为 null。
    */
   last_inspection_fail_note?: string | null;
-  /** 2026-07-29 批次化；2026-10-04 订正填充口径：**报工台两个列表端点都填** ——
-   *  `GET /api/v2/prod/scan/pickable`（扫码台 PICK_UP 列表）与
-   *  `GET /api/v2/prod/scan/held`（放回 / 送检 / HeldPartsBadge）；其余复用
-   *  本 VO 的端点恒 null（后端刻意不填，理由见下面 `batch_version` 的注释）。
-   *  「品检待办」不走本 VO（它有自己的出参），故不再算作填充方。
-   * 2026-10-04 补：取件路径上这两个字段的**运行时守门**是
-   *  `@/views/production/scan/composables/scanSchema` 的 `scanPartRowSchema`
-   *  （报工台两个列表的 queryFn 出参都走它 `.parse()`）；改名义务集中登记在下面
+  /** 2026-07-29 批次化。**2026-10-10 起本 VO 无任何填充端点**：报工台两条 list
+   *  （`GET /prod/scan/pickable` / `GET /prod/scan/held`）已迁 `prod::scan` 域，出参是
+   *  17 字段的 `ScanListItem`（`@/api/productionScan.contract.ts`），**不复用本 VO** ——
+   *  批次锚一律读它的 `batch_id`。其余复用本 VO 的端点恒 null（后端刻意不填，理由见
+   *  下面 `batch_version` 的注释）。字段保留只为 wire 兼容。
+   *
+   *  取件路径的**运行时守门**是 `@/views/production/scan/composables/scanSchema` 的
+   *  `scanPartRowSchema`（报工台两个列表的 queryFn 出参都走它 `.parse()`，那边
+   *  `batch_id` / `batch_version` 声明成必填 + 可空）；改名义务集中登记在下面
    *  `batch_version` 段。 */
   batch_id?: string | null;
   batch_no?: number | null;
   batch_label?: string | null;
   /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与 batch_id 同源。
-   *  **填充口径：报工台两个列表端点都填** —— `GET /api/v2/prod/scan/pickable`
-   *  （扫码台 PICK_UP 列表）与 `GET /api/v2/prod/scan/held`
-   *  （放回 / 送检 / HeldPartsBadge）。这两个端点的行本来就是批次行 —— 后端取行 SQL
-   *  投影 `b.id` / `b.version` 并显式覆写 `PartListItem.batch_id` / `batch_version`。
-   *  取件端点的候选口径 = `b.status='IN_PROCESS' AND b.location='PRODUCTION_SHELF' AND
-   *  货架 active 且 zone='PRODUCTION'` 且落在该工种↔工序映射上。
-   *  ⚠️ **本 VO 的 `version` 字段不是批次版本**：它是 part 级 `t_part.version`，
-   *  而报工台两个取行 SQL 压根不投影 `p.version` ⇒ 该 VO 上**恒为 0**（后端
-   *  有意占位）。批次 OCC 只认本字段，**不要拿 `version` 当批次版本用**。
+   *  **2026-10-10 起本 VO 恒为 null**：唯一填充路径（报工台两条 list）已迁往
+   *  `prod::scan` 域，那里用独立 VO `ScanListItem`（`@/api/productionScan.contract.ts`），
+   *  它的 `batch_version` 必填可空、两条端点都填；取件
+   *  `POST /prod/scan/batches/{batch_id}/pick-up` 的 `version` 入参取的也是那一份。
+   *  本 VO 保留字段只为 wire 兼容，恒 null 的理由同 `batch_id`（part 级行填任一活跃
+   *  批次都是错锚点）。⚠️ **别把 outsource-* 端点算作填充方**：它们有自有 repo 自有
+   *  SQL（`OutsourceRepoTrait::quotable_list` / `sendable_list`），出参也是自有 VO
+   *  （`QuotablePartListOut` / `OutsourceSendableListOut` …），根本不经过本 VO。
    *
-   *  其余复用 `PartListItem` 的端点**恒为 null**（后端刻意不填：part 级行的单位是
-   *  part，一个 part 的活跃批次可能不止一个，填任意一个都是**错锚点**）。复用该 VO
-   *  的端点里恒 null 的逐个是：`GET /parts` / `GET /com/union-list` /
-   *  `GET /parts/by-work-type/{id}` / `POST /assemblies/{id}/children`（唯一一处单条
-   *  返回本 VO 的端点）。⚠️ **别把 outsource-* 算进来**：它们是自有 repo 的自有
-   *  SQL（`OutsourceRepoTrait::quotable_list` / `sendable_list`，入参形态也不同——
-   *  keyword_pat / customer_id / limit / offset），出参也是自有 VO
-   *  （`QuotablePartListOut` / `OutsourceSendableListOut` / …），既不复用
-   *  `PartListFilters` 也不经过本 VO。
-   *    `POST /prod/scan/batches/{batch_id}/pick-up` 的 `version` 入参即取自本字段，缺失时
-   *    扫码台走显式报错（不静默用 part_id 顶替）。
+   *  ⚠️ **本 VO 的 `version` 字段不是批次版本**：它是 part 级 `t_part.version`。
+   *  批次 OCC 只认本字段，**不要拿 `version` 当批次版本用**。
    *
-   *    ⚠️ **改名义务**（沿用本仓既有惯例）：后端换字段名（`batch_ids` 复数 / 嵌套结构）
-   *    时，**取件这条路径的运行时守门在
-   *    `views/production/scan/composables/scanSchema.ts` 的 `scanPartRowSchema`**
-   *    （本 VO 的 `batch_id` / `batch_version` 都声明成
-   *    必填 + 可空，不声明成 `.optional()`）—— 键消失会让 Zod parse 当场抛错，
-   *    而不是让字段以 undefined 流到视图层、只弹一句「批次锚点缺失」这种看不出
-   *    真因的提示。**后端换名时必须同步改：本注释所在的 `PartItem.batch_id` 与
-   *    `batch_version` 两行 + `scanPartRowSchema` 的同名字段 +
-   *    `ScanPickParts.vue` 的 `PICK_UP_NO_BATCH_HINT` 缺字段守卫。** */
+   *  ⚠️ **改名义务**（沿用本仓既有惯例）：后端换字段名（`batch_ids` 复数 / 嵌套结构）
+   *  时，**取件这条路径的运行时守门在
+   *  `views/production/scan/composables/scanSchema.ts` 的 `scanPartRowSchema`**
+   *  （`batch_id` / `batch_version` 都声明成必填 + 可空，不声明成 `.optional()`）——
+   *  键消失会让 Zod parse 当场抛错，而不是让字段以 undefined 流到视图层、只弹一句
+   *  「批次锚点缺失」这种看不出真因的提示。**后端换名时必须同步改：
+   *  `productionScan.contract.ts::ScanListItemDto` 与 `scanPartRowSchema` 的同名字段 +
+   *  `ScanPickParts.vue` 的 `PICK_UP_NO_BATCH_HINT` 缺字段守卫。** */
   batch_version?: number | null;
-  /** 2026-10-09 后端新增的派生列（批次级 boolean）：报工台两个列表端点（`/prod/scan/pickable` /
-   *  `/prod/scan/held`）都填真值，报工台三页的列表卡左边框按它着色（有链且指针未漂移 = 绿，
-   *  规则见 `@/views/production/scan/chainAccent`）；其余复用本 VO 的端点**恒为 false**（键恒在 ——
-   *  后端 `PartListItem.has_process_chain` 非 Option、无 `serde(default)`，`From` 里显式
-   *  赋值 ⇒ 漏赋值编译不过；part 级路径拿不到批次链位置，故 false）。
-   *  **声明成必填**：键恒在而类型层允许 undefined 只会让下游写出 `boolean | undefined` 的
-   *  防御代码，而运行时这个 undefined 永远不会出现（报工台路径的必填守门在
-   *  `scanPartRowSchema`，缺键即抛）。 */
+  /** 2026-10-09 后端新增的派生列（批次级 boolean）：**2026-10-10 起本 VO 恒为 false**，
+   *  唯一填充路径（报工台两条 list）已迁往 `prod::scan` 域的 `ScanListItem`
+   *  （同一个 `shared::batch::chain::HAS_PROCESS_CHAIN_EXPR` 常量）；报工台三页的
+   *  列表卡左边框读的是那一份（规则见 `@/views/production/scan/chainAccent`）。
+   *  键恒在（后端 `PartListItem.has_process_chain` 非 Option、无 `serde(default)`，
+   *  `From` 里显式赋值 ⇒ 漏赋值编译不过），part 级路径拿不到批次链位置故 false。
+   *  **声明成必填**：键恒在而类型层允许 undefined 只会让下游写出 `boolean | undefined`
+   *  的防御代码，而运行时这个 undefined 永远不会出现。 */
   has_process_chain: boolean;
 }
 
