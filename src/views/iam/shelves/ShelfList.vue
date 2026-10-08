@@ -374,7 +374,7 @@ const shelfRules = {
  * 仍是 INSPECTION ⇒ 20104（又半截保存）；生产架被切成品检 ⇒ 判说说「跳过」⇒ 静默留下陈旧
  * 映射，界面零提示。
  *
- * 所以编辑态一律以 `editingShelf.zone`（= `GET /shelves` 返回的 DB 值，表格行不过滤 zone）
+ * 所以编辑态一律以 `editingShelf.zone`（= `GET /iam/shelves` 返回的 DB 值，表格行不过滤 zone）
  * 为准。它只被 `editShelf`（赋表格行）与 `resetForm`（置 null）写，任何表单交互都不写它。
  * 新增态 `editingShelf` 为 null，`shelfForm.zone` 正是随 `createShelf` 写进 DB 的值，
  * 不可能分叉。

@@ -263,9 +263,17 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
+        // 2026-10-10：货架管理整域迁 iam 域（后端 `src/modules/shelf/` →
+        // `src/modules/iam/shelf/`，CRUD URL 前缀硬切到 `/api/v2/iam/shelves/*`，
+        // 无 alias），视图随之搬到 `views/iam/shelves/`。
+        //
+        // ⚠️ **`path` 刻意仍是 `shelves`**（前端路由 / 浏览器书签 URL），它同时也是
+        // 后端菜单表 `shelves_list` 节点的 `path` 字段 —— 改它会断掉用户已收藏的
+        // 链接与后端菜单数据。后端 URL 是另一层（`/api/v2/iam/shelves`），两层
+        // **不要求一致**：「前端 /shelves + 后端 /iam/shelves」不是漏改。
         path: 'shelves',
         name: 'ShelfList',
-        component: () => import('@/views/shelves/ShelfList.vue'),
+        component: () => import('@/views/iam/shelves/ShelfList.vue'),
         meta: {
           title: '货架管理',
           icon: 'Platform',

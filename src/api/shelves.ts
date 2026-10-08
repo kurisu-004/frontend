@@ -1,5 +1,25 @@
 // 货架 API（走 @/api/http 统一 axios 客户端）。
 //
+// 2026-10-10 新增：货架管理（CRUD）整域迁 iam 域
+//
+//   后端把 `src/modules/shelf/` 搬到 `src/modules/iam/shelf/`，4 条 CRUD 端点的
+//   URL 前缀**硬切**到 `/api/v2/iam/shelves/*`（**无 alias**，旧路径已删）：
+//     GET  /shelves                → GET  /iam/shelves
+//     POST /shelves                → POST /iam/shelves
+//     POST /shelves/{id}/update    → POST /iam/shelves/{id}/update
+//     POST /shelves/{id}/deactivate→ POST /iam/shelves/{id}/deactivate
+//   请求 / 响应契约**逐字不变**，本次只改 URL 字符串前缀。
+//
+//   ⚠️ **部署顺序：后端必须先上。** 新前端 + 旧后端 ⇒ `/iam/shelves` 落进旧后端的
+//   404 ⇒ 货架管理页空白、账号管理页的货架绑定下拉空（后者经
+//   `useProductionShelvesQuery` 共享基础数据层）。反向不成立：后端全仓零
+//   `deny_unknown_fields`，请求体 / 查询参数没变，老前端 + 新后端不受影响。
+//
+//   视图同步搬到 `src/views/iam/shelves/`（同属 iam 域的账号管理仍在
+//   `src/views/users/`，那是历史遗留，本仓不强制对齐）。
+//   **前端路由 path 仍是 `/shelves`**（书签 URL + 后端菜单表里的 `path` 字段，
+//   改它会断掉用户已收藏的链接），与后端 URL 分属两层、不要求一致。
+//
 // 2026-10-02 新增：货架↔工序映射 3 个端点已迁 prod 域，本文件的「为什么它们还在这」
 //
 //   后端把 `t_shelf_process` 从 `src/modules/shelf/process_mapping/` 搬到
@@ -52,7 +72,7 @@ export interface ListShelvesParams {
 }
 
 export async function listShelves(params: ListShelvesParams = {}): Promise<ShelfListResult> {
-  const resp = await api.get<ShelfListResult>('/shelves', {
+  const resp = await api.get<ShelfListResult>('/iam/shelves', {
     params: cleanParams(params),
   });
   return resp.data;
@@ -69,7 +89,7 @@ export interface CreateShelfPayload {
 }
 
 export async function createShelf(payload: CreateShelfPayload): Promise<Shelf> {
-  const resp = await api.post<Shelf>('/shelves', payload);
+  const resp = await api.post<Shelf>('/iam/shelves', payload);
   return resp.data;
 }
 
@@ -84,12 +104,12 @@ export interface UpdateShelfPayload {
 }
 
 export async function updateShelf(id: string, payload: UpdateShelfPayload): Promise<Shelf> {
-  const resp = await api.post<Shelf>(`/shelves/${id}/update`, payload);
+  const resp = await api.post<Shelf>(`/iam/shelves/${id}/update`, payload);
   return resp.data;
 }
 
 export async function deactivateShelf(id: string): Promise<Shelf> {
-  const resp = await api.post<Shelf>(`/shelves/${id}/deactivate`);
+  const resp = await api.post<Shelf>(`/iam/shelves/${id}/deactivate`);
   return resp.data;
 }
 

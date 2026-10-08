@@ -89,6 +89,8 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - **域内列定义**放 `src/views/<域>/<name>ColumnDefs.ts`（域根，与页面主组件同级），**不放 `src/utils/`** —— 单域专用文件不是通用工具：它 import 域内 composable 类型会让 `utils/` 反向依赖 `views/`（层次倒挂）。
 - **`src/utils/` 只放跨域通用工具**（举例，非全量清单：`fileExt` / `date` / `jwt` / `download` / `pdfjs` / `elTable` / `dndSourceTracker` / 各 `ExcelParser` / `permissions`）。判据是「零个域内依赖」+「多域复用」，不是「看起来像工具」。
 - **api 层引域内 schema 的口径**：默认用 `import type`（编译期擦除，照 `api/dashboard.ts` / `api/programming.ts` / `api/parts/batch.ts`）；运行时值引入只允许出现在**没有 queryFn 承载**的守门点 —— 典型是走 useMutation 的单次拉取（`api/inspection.ts` 的扫码树 `inspectionScanTreeSchema.parse`）。这与上面「`utils/` 不得反向依赖 `views/`」是两条不同的禁令：后者禁的是**通用工具**引**单域实现**；api 层引自己域的 schema（含守门 schema 归位后的唯一运行时边 `api → views/inspection`）是允许形态。
+- **货架管理（2026-10-10 迁入 iam 域）**：视图在 `src/views/iam/shelves/`，**api 仍在平铺的 `src/api/shelves.ts`** —— `src/api/` 是按前端实体扁平放置、不按后端模块分层（见 `api/shelves.ts` 文件头）。⚠️ **`views/iam/` 与 `views/users/` 的不对称是有意的、不是漏搬**：`users`（账号管理）自 v1 起就在根下，是历史遗留；货架管理是 2026-10-10 新迁的，只规定**新代码**按域进 `views/iam/`，不回头搬历史目录。看到 `views/users/` 仍平铺不必"顺手修正"。
+- **前端路由 `/shelves` 与后端 URL `/api/v2/iam/shelves` 不一致是有意的**：路由 path 是浏览器可见的书签 URL，同时是后端菜单表 `shelves_list` 节点的 `path` 字段（见 `src/composables/__fixtures__/adminMenus.ts`），改它会断掉用户已收藏的链接；后端 API URL 是另一层。两者不要求一致，看到「前端 /shelves、后端 /iam/shelves」不是漏改。
 
 ### auth / 会话
 
@@ -168,7 +170,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 **目标货架一律由后端选，前端不提供任何货架选择器。** 要恢复某个入口，必须同时确认后端对应端点是否仍接受 `shelf_id` —— 那 8 条写路径的货架入参已全部删除（worker-scan / place-on-shelf / release-from-programming / to-process / to-inspection / scan-inspect / repair-dispatch / outsource-queue/move 的 `to` 侧），`POST /prod/queue/move` 只删了 `to` 侧、`from` 侧仍必填。
 
 - **口径**：按目标的工序 / 品检找出所有符合条件的货架，再按 `current_load / capacity` **升序**取一个。`capacity` 为 `null` 或 `<= 0` = **不限**（排在有上限的架之后，不参与百分比比较）；**超载不拒**（> 100% 照样投放，只影响排序）。
-- **前端只负责展示负载**：`Shelf.capacity` / `Shelf.current_load` 只在 `src/views/shelves/ShelfList.vue` 消费（列表三列 + 新增/编辑弹窗的容量输入）。百分比由前端自己算 —— 后端**不返** `load_ratio`，避免同一个派生量两边各算一遍。`capacity` 是**必填键、值可空**：`z.number().nullable()`；`current_load` 是 `z.number()`。
+- **前端只负责展示负载**：`Shelf.capacity` / `Shelf.current_load` 只在 `src/views/iam/shelves/ShelfList.vue` 消费（列表三列 + 新增/编辑弹窗的容量输入）。百分比由前端自己算 —— 后端**不返** `load_ratio`，避免同一个派生量两边各算一遍。`capacity` 是**必填键、值可空**：`z.number().nullable()`；`current_load` 是 `z.number()`。
 - **⚠️ 部署顺序：后端必须先上。** `capacity` / `current_load` 是必填键，后端旧版本不返 ⇒ `shelfSchema.parse` 抛 ZodError ⇒ `useProductionShelvesQuery` 的数据恒空，而它的消费方里包含 `/scan/action` 的按钮显隐（扫工牌后能做的三件事）、账号管理的货架绑定、待品检页的工序弹窗。**表现是静默的**：扫码台三个动作按钮全没了且零文案（`noActionReason` 在「绑了架但一个 zone 都认不出来」这一支刻意返回 `null`），不是红色报错。排障时先怀疑部署顺序，别去查权限。
 - **已下线的端点**：`GET /shelves/for-return` 与 `GET /shelves/for-inspection`（404、无 alias），连同 `ShelfForReturn` / `ShelfForInspection` / `ShelfForInspectionResult` / `ShelfPickerItem` 类型与 `listShelvesForReturn` / `listShelvesForInspection` 两个 api 函数一并删除。`api/shelfPickers.spec.ts` 随它们删除 —— 那两个端点没有 alias，留着就是守一个不存在的契约。同批删除的还有 `views/scan/components/ShelfPickerDialog.vue` 与 `WorkingShelfDialog.vue`、`stores/scanShelf.ts`、`views/scan/composables/resolveWorkingShelf.ts`。
 - **`useShelfProcessFilter` 整文件删除**：它唯一剩下的消费方是零件详情页的「外协回收」弹窗，而那个弹窗打的 `POST /prod/batches/{id}/receive-from-outsource` **已被后端硬切下线**（三合一为 `POST /outsource-queue/move`，无 alias）⇒ 能点必 404。`useShelfProcessMappingsQuery` 随之零读点，但 `ShelfList.vue` 保存映射后仍调 `invalidateShelfProcessMappingsQuery(qc)`，故文件保留（写点与失效链成对留存）。

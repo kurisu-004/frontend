@@ -2,7 +2,7 @@
 // src/views/production/__tests__/ProcessWorkTypeMappingTab.spec.ts
 //
 // 2026-10-02 新增：工序映射 Tab 的**「静默清空整组映射」最后一道闸**回归守卫
-// （照搬 src/views/shelves/__tests__/ShelfList.processMapping.spec.ts 的 P1/P1b/
+// （照搬 src/views/iam/shelves/__tests__/ShelfList.processMapping.spec.ts 的 P1/P1b/
 // P2/P3/P4 五条 —— 那份是同一类缺陷在货架域的姊妹实现，形态、理由、断言粒度
 // 全部可对照；本域更危险：ShelfList 的失败态还能靠「关闭弹窗」自然恢复，本域是
 // 同屏常驻 Tab，失败态会一直摆在用户面前）。

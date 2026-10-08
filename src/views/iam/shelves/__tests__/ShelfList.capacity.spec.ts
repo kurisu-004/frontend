@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// src/views/shelves/__tests__/ShelfList.capacity.spec.ts
+// src/views/iam/shelves/__tests__/ShelfList.capacity.spec.ts
 //
 // 2026-10-10 新增：货架负载展示与容量配置的三组回归守卫。
 //

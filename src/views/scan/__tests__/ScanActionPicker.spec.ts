@@ -11,7 +11,7 @@
 // 哪几件事），不是货架选择的附属品。
 //
 // 判据链路（这三段必须一起看，中间任一段写错都只表现为「按钮少了一个」，没有报错）：
-//   auth.boundShelves（`/iam/me` 带回来的绑定集）∩ GET /shelves（拿到 zone）
+//   auth.boundShelves（`/iam/me` 带回来的绑定集）∩ GET /iam/shelves（拿到 zone）
 //     → boundZones → showPickUp / showReturn / showInspect
 // 所以「工位绑了哪些架」与「货架端点的 zone」两侧都要有 fixture，缺一侧断言就失真。
 //

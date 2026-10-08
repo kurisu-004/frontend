@@ -768,7 +768,7 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
 // 货架（shelves）schema 契约断言。
 //
 // 数据来源：
-//   - @/types/shelf.ts::Shelf 12 字段（货架列表 GET /api/v2/shelves，
+//   - @/types/shelf.ts::Shelf 12 字段（货架列表 GET /api/v2/iam/shelves，
 //     共享基础数据层 useProductionShelvesQuery 守门；2026-10-02 起
 //     account_count 随「用户决定货架列表页不再展示账号数」一并摘除，
 //     后端 ShelfOut 在同 PR 也已删该字段，属另一次独立决策；
