@@ -80,11 +80,13 @@ export const queueSnapshotSchema = z.object({
 
 export type QueueSnapshotSchema = z.infer<typeof queueSnapshotSchema>;
 
-/** `QueueWorker.held_batches[]` 元素（rust QueueHeldBatch）。17 字段全声明。
+/** `QueueWorker.held_batches[]` 元素（rust QueueHeldBatch）。18 字段全声明。
  *  与 queuePoolItemSchema 的差别：多 `planned_delivery_date`、多 `location`，
  *  **没有** shelf_id / shelf_code / shelf_name（批次在工人手里，没有货架位置）。
  *  `location` 恒 'WORKER'（后端按 held 态判定），仍按 `z.string()` 收，不锁字面量 ——
- *  将来出现新的 held 形态（例如外协公司持有）时不必改 schema。 */
+ *  将来出现新的 held 形态（例如外协公司持有）时不必改 schema。
+ *  `has_process_chain` 是后端派生列（2026-10-09 新增，语义见
+ *  `src/types/batchCard.ts::BatchCardModel.has_process_chain`），卡片左边框专用。 */
 export const queueHeldBatchSchema = z.object({
   batch_id: z.string(),
   part_id: z.string(),
@@ -96,6 +98,7 @@ export const queueHeldBatchSchema = z.object({
   system_delivery_date: z.string().nullable(),
   planned_delivery_date: z.string().nullable(),
   is_urgent: z.boolean(),
+  has_process_chain: z.boolean(),
   has_cnc_program: z.boolean(),
   customer_name: z.string().nullable(),
   parent_customer_name: z.string().nullable(),
@@ -129,14 +132,15 @@ export const queueWorkerSchema = z.object({
 
 export type QueueWorkerSchema = z.infer<typeof queueWorkerSchema>;
 
-/** `QueueBoard.items[]` 元素（rust QueuePoolItem）。18 字段全声明。
+/** `QueueBoard.items[]` 元素（rust QueuePoolItem）。19 字段全声明。
  *
  *  ⚠️ `shelf_id` 是承重字段：`POST /queue/move` 的 `from: {kind:'POOL', shelf_id}`
  *  必须等于批次真实所在货架（候选池跨所有货架，不能拿用户当前激活货架凑），填错后端
  *  返 20122。前端经卡片 `:data-shelf-id` → DOM dataset → `recordPoolSource` 把它
  *  带到落点请求里 ⇒ 漏声明这一项的表现是「请求体少字段 / move 恒 20122」。
  *  `location` 原始枚举（'PRODUCTION_SHELF'）**不在**本 schema：位置由
- *  shelf_code 表达，卡片的 location 行渲染货架 code，原始枚举前端零消费。 */
+ * shelf_code 表达，卡片的 location 行渲染货架 code，原始枚举前端零消费。
+ *  `has_process_chain` 是后端派生列（2026-10-09 新增），卡片左边框专用。 */
 export const queuePoolItemSchema = z.object({
   batch_id: z.string(),
   part_id: z.string(),
@@ -153,6 +157,7 @@ export const queuePoolItemSchema = z.object({
   shelf_code: z.string(),
   shelf_name: z.string(),
   is_urgent: z.boolean(),
+  has_process_chain: z.boolean(),
   has_cnc_program: z.boolean(),
   note: z.string().nullable(),
   version: z.number(),

@@ -827,7 +827,8 @@ describe('货架（shelves）schema 契约断言', () => {
 //
 // 服务对象：`GET /api/v2/parts/pickable-by-work-type/{work_type_id}` 与
 // `GET /api/v2/parts/by-worker/{worker_id}`，行 VO = backend-rust
-// `src/modules/part/vo/part.rs` 的 `PartListItem`（38 字段），外层是 `PartListOut`
+// `src/modules/part/vo/part.rs` 的 `PartListItem`（2026-10-09 起 39 字段），外层是
+// `PartListOut`
 // 分页信封。fixture 按两个 service 构造行的真实口径填（占位值 1970-01-01 /
 // is_urgent=false / applicant_name="" / customer_id="0" / status="IN_PROCESS" /
 // version=0 / location=null）。
@@ -845,6 +846,7 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     assembly_id: null,
     status: 'IN_PROCESS',
     is_urgent: false,
+    has_process_chain: true,
     order_no: null,
     system_delivery_date: null,
     note: null,
@@ -873,12 +875,16 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     batch_version: 4,
   };
 
-  it('S-SP1：接受 PartListItem 完整 38 字段（派生键恒 null、批次锚点与链四件套有值）', () => {
+  it('S-SP1：接受 PartListItem 完整 39 字段（派生键恒 null、批次锚点与链四件套有值）', () => {
     const parsed = scanPartRowSchema.parse(validScanRow);
     expect(parsed.id).toBe('190000000000001');
     expect(parsed.batch_id).toBe('190000000000009');
     expect(parsed.batch_version).toBe(4);
     expect(parsed.chain_state).toBe('NEXT');
+    // 2026-10-09 后端派生列：三页列表卡左边框只看它（真 / 假两态都收）
+    expect(parsed.has_process_chain).toBe(true);
+    expect(scanPartRowSchema.parse({ ...validScanRow, has_process_chain: false }).has_process_chain)
+      .toBe(false);
     // 后端刻意不返的键不在 schema 里 ⇒ parse 后不应凭空出现
     expect('next_process_id' in parsed).toBe(false);
     expect('shelf_code' in parsed).toBe(false);
@@ -909,6 +915,19 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     const { location: _loc3, ...rest3 } = validScanRow;
     void _loc3;
     expect(() => scanPartRowSchema.parse(rest3)).toThrow();
+  });
+
+  // 2026-10-09：has_process_chain 必填且**无默认值**（与同组 chain_state 四件套的
+  // 「带默认值降级」相反）。它直接决定卡片左边框色，缺键降级成灰色与「真无链」不可区分，
+  // 不如在 API 边界炸出来。
+  it('S-SP3b：缺 has_process_chain → 抛 ZodError（不给默认值降级）', () => {
+    const { has_process_chain: _dropped, ...rest } = validScanRow;
+    void _dropped;
+    expect(() => scanPartRowSchema.parse(rest)).toThrow();
+    // 形态错同样抛（布尔退化成 0 / 1 / 'true' 都是契约漂移）
+    for (const bad of [0, 1, 'true', null]) {
+      expect(() => scanPartRowSchema.parse({ ...validScanRow, has_process_chain: bad })).toThrow();
+    }
   });
 
   it('S-SP4：外层是分页信封 —— 裸数组被拒（本次线上故障的形态）', () => {

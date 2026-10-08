@@ -30,7 +30,7 @@ vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 
-/** 候选卡 fixture（APPROVAL 形态，25 字段）。 */
+/** 候选卡 fixture（APPROVAL 形态，26 字段）。 */
 const candidate = {
   version: 3,
   send_mode: 'APPROVAL',
@@ -43,6 +43,7 @@ const candidate = {
   batch_no: 1024,
   planned_delivery_date: '2026-10-20',
   is_urgent: false,
+  has_process_chain: true,
   customer_name: '某某零件厂',
   parent_customer_name: '某某集团',
   shelf_code: 'A-01',

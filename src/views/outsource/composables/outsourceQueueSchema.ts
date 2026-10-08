@@ -50,7 +50,7 @@
 import { z } from 'zod';
 import { outsourceCompanyOptionSchema } from './outsourceListSchema';
 
-/** 看板左列的一个候选批次卡片（后端 `OutsourceQueueCandidate`）—— 25 字段。
+/** 看板左列的一个候选批次卡片（后端 `OutsourceQueueCandidate`）—— 26 字段。
  *
  *  行粒度 = 「可发送候选批次 × 该外协工序」。发送侧需要的锚都在这里：
  *  `version`（OCC）、`send_mode`（APPROVAL / DIRECT）、`outsource_company_id` /
@@ -63,7 +63,10 @@ import { outsourceCompanyOptionSchema } from './outsourceListSchema';
  *    **空串**而不是 `null`；`shelf_code` 才是 nullable（它没有空串兜底，未上架为 null）；
  *  - `can_send` 是**后端派生**的可发送判据（APPROVAL，或 DIRECT 且 company_options
  *    非空），前端口径统一读它，不自己再算一遍；
- *  - `has_cnc_program` 与卡片 body 的「已编程」tag 同源。 */
+ *  - `has_cnc_program` 与卡片 body 的「已编程」tag 同源；
+ *  - `has_process_chain`（2026-10-09 后端新增）是批次卡片的**左边框**唯一语义源：
+ *    「有制定工序链且链指针未漂移」。在途行（`outsourceQueueHeldBatchSchema`）**没有**
+ *    这个字段 —— 外协收发阶段不判链，适配层给恒 false。 */
 export const outsourceQueueCandidateSchema = z.object({
   /** `t_part_batch.version`（批次级 OCC，发送时原样回传）。 */
   version: z.number(),
@@ -79,6 +82,7 @@ export const outsourceQueueCandidateSchema = z.object({
   batch_no: z.number(),
   planned_delivery_date: z.string().nullable(),
   is_urgent: z.boolean(),
+  has_process_chain: z.boolean(),
   customer_name: z.string().nullable(),
   parent_customer_name: z.string().nullable(),
   shelf_code: z.string().nullable(),

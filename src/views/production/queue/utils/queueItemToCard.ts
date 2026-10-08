@@ -39,6 +39,7 @@ export function poolItemToCard(it: QueuePoolItemDto): BatchCardModel {
     // 候选池行不带 planned_delivery_date（候选池只关心系统交期）
     planned_delivery_date: null,
     is_urgent: it.is_urgent,
+    has_process_chain: it.has_process_chain,
     has_cnc_program: it.has_cnc_program,
     customer_l1: it.parent_customer_name,
     customer_l2: it.customer_name,
@@ -65,6 +66,7 @@ export function heldToCard(it: QueueHeldBatchDto): BatchCardModel {
     system_delivery_date: it.system_delivery_date,
     planned_delivery_date: it.planned_delivery_date,
     is_urgent: it.is_urgent,
+    has_process_chain: it.has_process_chain,
     has_cnc_program: it.has_cnc_program,
     customer_l1: it.parent_customer_name,
     customer_l2: it.customer_name,
@@ -92,6 +94,14 @@ export function pendingBatchToCard(it: QueuePendingBatchDto): BatchCardModel {
     system_delivery_date: it.system_delivery_date,
     planned_delivery_date: it.planned_delivery_date,
     is_urgent: it.is_urgent,
+    // ⚠️ 本行**不走**后端派生列（`GET /prod/queue/pending` 的行 VO 没有
+    // `has_process_chain`），改为按「是否已制定工序链」推导，且**只有这一处**这么推导。
+    // 为什么不能照抄派生列口径：待下发批次按定义还没 dispatch 过，
+    // `current_process_step_id` 恒为 NULL ⇒ 派生列的「未定位」分支会去看链里有无未软删
+    // step，而 pending 端点的驱动 SQL 根本不 join 链，判出来只会恒 false。
+    // 这里的分界是「有没有制定链」：后端 `process_chain_id` 是非 Option i64 + unwrap_or(0)，
+    // 未制定时投影成字符串 `"0"`（不是 null / 缺键），故判据必须是 `!== '0'`。
+    has_process_chain: it.process_chain_id !== '0',
     // 待下发行不带 has_cnc_program：批次尚未下发到工序，谈不上编程；卡片上恒不渲染
     // 「已编程」tag（等价于 false，省掉一个分支）。
     has_cnc_program: false,

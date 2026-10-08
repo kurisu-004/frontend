@@ -14,7 +14,7 @@
 //     batch_quantity / customer_path）不被要求」。
 //
 // 覆盖（键集与字段数断言用 `Object.keys(fixture)` 双向比对，见每组末尾）：
-//   - OQ-C*：候选行（outsourceQueueCandidateSchema，25 字段）：APPROVAL / DIRECT 两形态、
+//   - OQ-C*：候选行（outsourceQueueCandidateSchema，26 字段）：APPROVAL / DIRECT 两形态、
 //     必填字段缺失必抛、雪花 ID 必须是字符串、已删的 4 个字段不再出现。
 //   - OQ-H*：在途批次行（outsourceQueueHeldBatchSchema，22 字段）：**sent_at / price 必须
 //     接受 null**（后端 Option + LEFT JOIN）、`receive_next_process_id` 非 nullable
@@ -49,6 +49,7 @@ const candidateFixture = {
   batch_no: 1024,
   planned_delivery_date: '2026-10-20',
   is_urgent: false,
+  has_process_chain: true,
   customer_name: '某某零件厂',
   parent_customer_name: '某某集团',
   shelf_code: 'A-01',
@@ -129,9 +130,9 @@ const detailFixture = {
 };
 
 describe('outsourceQueueSchema —— 外协看板候选行', () => {
-  it('OQ-C1：APPROVAL 形态逐字段解析通过，键集与 fixture 逐字段相等（25 字段）', () => {
+  it('OQ-C1：APPROVAL 形态逐字段解析通过，键集与 fixture 逐字段相等（26 字段）', () => {
     const parsed = outsourceQueueCandidateSchema.parse(candidateFixture);
-    expect(Object.keys(candidateFixture)).toHaveLength(25);
+    expect(Object.keys(candidateFixture)).toHaveLength(26);
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(candidateFixture).sort());
     expect(parsed.can_send).toBe(true);
     expect(parsed.version).toBe(3);
@@ -171,6 +172,7 @@ describe('outsourceQueueSchema —— 外协看板候选行', () => {
     ['version', '发送的 OCC 锚'],
     ['can_send', '可发送判据'],
     ['has_cnc_program', '卡片「已编程」tag'],
+    ['has_process_chain', '卡片左边框（有链 = 绿）'],
     ['shelf_id', '批次真实所在货架'],
     ['company_options', 'DIRECT 的公司下拉源'],
   ])('OQ-C3：缺 %s（%s）→ 抛 ZodError', (key) => {
@@ -259,6 +261,16 @@ describe('outsourceQueueSchema —— 外协看板在途批次行', () => {
     expect(() =>
       outsourceQueueHeldBatchSchema.parse({ ...heldBatchFixture, location: 'WORKER' }),
     ).toThrow();
+  });
+
+  // 在途行**没有** has_process_chain（外协收发阶段不判链，卡片左边框恒不亮）：
+  // 即便响应里多出这个键也必须被 strip 掉，否则消费侧会以为它有口径。
+  it('OQ-H5b：在途行不接受 has_process_chain（多出来的键被 strip）', () => {
+    const parsed = outsourceQueueHeldBatchSchema.parse({
+      ...heldBatchFixture,
+      has_process_chain: true,
+    });
+    expect(Object.keys(parsed)).not.toContain('has_process_chain');
   });
 
   it('OQ-H6：缺 version / chain_resolvable / has_cnc_program 任一 → 抛错', () => {

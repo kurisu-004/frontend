@@ -90,6 +90,7 @@ function makeWorker(workerId = '1900000000001') {
         system_delivery_date: '2026-10-20',
         planned_delivery_date: '2026-10-25',
         is_urgent: false,
+        has_process_chain: true,
         has_cnc_program: false,
         customer_name: null,
         parent_customer_name: null,

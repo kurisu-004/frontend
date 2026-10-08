@@ -31,8 +31,12 @@
    这解掉了「账号绑 ≥ 2 个架 ⇒ 作业架判不出 ⇒ 守卫 100% 拦死、取件一次都提交不出去」
    的死结：取件对账号绑了几个架不再有任何要求。送检（/scan/inspect）的 `shelf_id` 是
    真事实（落库 + scope 校验），仍走作业架 + 选架 UI。
-   - ⚠️ **部署顺序**：后端改成可选的那一支必须先上线；旧后端 + 不发 `shelf_id` = 裸
-     HTTP 422（axum Json extractor 拒，不是项目统一信封）。
+- ⚠️ **部署顺序**：后端改成可选的那一支必须先上线；旧后端 + 不发 `shelf_id` = 裸
+      HTTP 422（axum Json extractor 拒，不是项目统一信封）。
+
+    2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
+    （有链 = 绿，规则见 `@/views/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
+    加急由红底 + 「加急」tag 承担，两者都不进边框。
 -->
 
 
@@ -124,6 +128,7 @@
                 'is-urgent': p.is_urgent,
               },
             ]"
+            :style="{ borderLeftColor: chainBorderColor(p.has_process_chain) }"
             @click="onSelect(p)"
           >
             <div class="part-row-main">
@@ -285,6 +290,7 @@ import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
+import { chainBorderColor } from '@/views/scan/chainAccent';
 
 const router = useRouter();
 const { worker, requireWorker, reset: resetScanSession } = useScanSession();
@@ -687,7 +693,9 @@ function backToBadge(): void {
   align-items: stretch;
   padding: 14px 18px !important;
   border: 1px solid #e4e7ed;
-  border-left: 4px solid #409eff;
+  /* 左边框颜色由模板按行数据 inline 给出（has_process_chain → 绿）；这里只给中性底色，
+     保证 inline 那一层没绑上时（样式不进 DOM 的环境）竖条也不整条消失。 */
+  border-left: 4px solid #e4e7ed;
   border-radius: 8px;
   cursor: pointer;
   position: relative;
@@ -706,11 +714,10 @@ function backToBadge(): void {
   background: #e1f3d8;
   border-color: #67c23a;
 }
-/* 加急未选中 → 原红底 */
+/* 加急未选中 → 原红底（左边框不参与加急：它归链语义，加急由红底 + 「加急」tag 表达） */
 .part-row.is-urgent {
   background: #fef0f0;
   border-color: #f56c6c;
-  border-left-color: #f56c6c;
 }
 /* 加急选中 → 保持红底，绿色边框 + inset 阴影表示选中 */
 .part-row.is-urgent.is-selected {

@@ -192,7 +192,8 @@ describe('A 组：报工台两个读端点的 URL 与 query 逐字钉死', () =>
 // +「缺分页字段 / 类型错 / 裸数组时 parse 抛错」双向锁死。
 //
 // 下面 2 份 fixture 是后端 `PartListItem`（backend-rust
-// `src/modules/part/vo/part.rs::PartListItem`）的**完整 38 字段集**，逐字照抄 VO 结构。
+// `src/modules/part/vo/part.rs::PartListItem`）的**完整 39 字段集**（2026-10-09 起新增
+// 派生列 `has_process_chain`），逐字照抄 VO 结构。
 // 「fixture 写全」本身不构成守卫 —— 多出来的键会被 strip 静默吞掉、parse 不报错；
 // 真正把「schema 声明的字段集 == VO 字段集」钉死的是 E7 的键集断言。
 // ============================================================
@@ -223,6 +224,8 @@ const pickRowFixture = {
   assembly_id: null,
   status: 'IN_PROCESS',
   is_urgent: false,
+  // 2026-10-09 后端新增派生列：取件行有链且指针未漂移（列表卡左边框的唯一语义源）
+  has_process_chain: true,
   order_no: null,
   system_delivery_date: null,
   note: null,
@@ -251,7 +254,7 @@ const pickRowFixture = {
   batch_version: 3,
 };
 
-/** 放回 / 送检行 fixture（`GET /parts/by-worker/{worker_id}`）：与取件行同 VO，38 字段同集。
+/** 放回 / 送检行 fixture（`GET /parts/by-worker/{worker_id}`）：与取件行同 VO，39 字段同集。
  *  差别在两组派生字段的取值：批次锚点同样有值；链位置取 `TAIL`（当前工序是链内最后
  *  一道 ⇒ 下一道工序 id 落兜底值 `'0'`、下一道工序名为 null）。 */
 const heldRowFixture = {
@@ -316,6 +319,8 @@ const wirePickRow = {
   assembly_id: null,
   status: 'IN_PROCESS',
   is_urgent: false,
+  // 2026-10-09 后端新增派生列：取件行有链且指针未漂移（列表卡左边框的唯一语义源）
+  has_process_chain: true,
   order_no: null,
   system_delivery_date: null,
   note: null,
@@ -360,6 +365,10 @@ const wireHeldRow = {
   assembly_id: null,
   status: 'IN_PROCESS',
   is_urgent: false,
+  // ⚠️ 2026-10-09 **按契约手写**（这一列后端尚未上线，无法实测）：放回端点的存量数据
+  //  里链指针常常是 NULL ⇒ 本行取 false（列表卡灰边框），属预期而非渲染缺陷。
+  //  W1 的键集断言依赖本键存在。
+  has_process_chain: false,
   order_no: null,
   system_delivery_date: null,
   note: null,
@@ -389,7 +398,7 @@ const wireHeldRow = {
 };
 
 describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效性', () => {
-  it('E1：合法 fixture 组成完整信封 parse 通过（34 字段行 + 四个分页键）', () => {
+  it('E1：合法 fixture 组成完整信封 parse 通过（39 字段行 + 四个分页键）', () => {
     const parsed = scanPartListResultSchema.parse({
       items: [pickRowFixture],
       total: 1,
@@ -485,8 +494,8 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
   //   · schema 多声明一个 **optional** 字段 → 键集断言看不见（Zod 对输入中缺省的
   //     optional 键不写入输出）。该失败模式本身无害（不会误拒任何响应，也不会有字段
   //     被静默吞掉），故不为它额外设计断言。
-  it('E7：parse 后的行键集与后端 PartListItem 的 38 字段逐字段相等', () => {
-    expect(Object.keys(pickRowFixture).length, 'fixture 字段数（后端 VO 漂移也会红）').toBe(38);
+  it('E7：parse 后的行键集与后端 PartListItem 的 39 字段逐字段相等', () => {
+    expect(Object.keys(pickRowFixture).length, 'fixture 字段数（后端 VO 漂移也会红）').toBe(39);
     expect(Object.keys(scanPartRowSchema.parse(pickRowFixture)).sort()).toEqual(
       Object.keys(pickRowFixture).sort(),
     );
@@ -515,7 +524,7 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
       expect(Object.keys(parsed), `${key} 不得成为保留键`).not.toContain(key);
       expect(parsed, `${key} 不得被保留`).not.toHaveProperty(key);
     }
-    expect(Object.keys(parsed)).toHaveLength(38);
+    expect(Object.keys(parsed)).toHaveLength(39);
   });
 
   // 2026-10-04 工序链四件套的守门。放回页按 chain_state 三态分流（NEXT 免选工序
@@ -594,7 +603,7 @@ describe('W 组：wire 样本过守门（实测转录部分 + 按契约手写的
       ['放回 by-worker', wireHeldRow],
     ] as const) {
       const parsed = scanPartRowSchema.parse(row);
-      expect(Object.keys(row), `${label} 样本键数`).toHaveLength(38);
+      expect(Object.keys(row), `${label} 样本键数`).toHaveLength(39);
       expect(Object.keys(parsed).sort(), `${label} 键集`).toEqual(Object.keys(row).sort());
     }
   });
@@ -743,6 +752,25 @@ describe('W 组：wire 样本过守门（实测转录部分 + 按契约手写的
     expect(() => scanPartRowSchema.parse({ ...wireHeldRow, system_delivery_date: 20261231 })).toThrow(
       ZodError,
     );
+  });
+
+  // 2026-10-09 后端派生列 `has_process_chain`（列表卡左边框的唯一语义源）。必填且
+  // **无默认值**：缺键降级成灰边框与「真无链」不可区分，不如在边界炸出来。
+  it('W8：has_process_chain 真假两态过守门；缺键 / 坏形态抛 ZodError', () => {
+    expect(scanPartRowSchema.parse(wirePickRow).has_process_chain).toBe(true);
+    expect(scanPartRowSchema.parse(wireHeldRow).has_process_chain).toBe(false);
+    expect(
+      scanPartRowSchema.parse({ ...wirePickRow, has_process_chain: false }).has_process_chain,
+    ).toBe(false);
+
+    const { has_process_chain: _dropped, ...rest } = wirePickRow;
+    void _dropped;
+    expect(() => scanPartRowSchema.parse(rest)).toThrow(ZodError);
+    for (const bad of [0, 1, 'true', null]) {
+      expect(() => scanPartRowSchema.parse({ ...wirePickRow, has_process_chain: bad })).toThrow(
+        ZodError,
+      );
+    }
   });
 });
 

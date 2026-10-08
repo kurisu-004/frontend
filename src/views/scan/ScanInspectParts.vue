@@ -13,6 +13,10 @@
   6. 成功后自动 refresh（该件从列表消失）
 
   旧「扫一批条码」流程（ScanPartsWork.vue ?action=inspect）已随本页上线替换不保留。
+
+  2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
+  （有链 = 绿，规则见 `@/views/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
+  加急由红底 + 「加急」tag 承担，两者都不进边框。
 -->
 
 <template>
@@ -108,6 +112,7 @@
                 'is-urgent': p.is_urgent,
               },
             ]"
+            :style="{ borderLeftColor: chainBorderColor(p.has_process_chain) }"
             @click="onSelect(p)"
           >
             <div class="part-row-main">
@@ -296,6 +301,7 @@ import ShelfPickerDialog from '@/views/scan/components/ShelfPickerDialog.vue';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/scan/components/RefillTakenDialog.vue';
+import { chainBorderColor } from '@/views/scan/chainAccent';
 import type { TakenItemDto } from '@/api/productionQueue.contract';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 
@@ -779,7 +785,8 @@ function backToBadge(): void {
   align-items: stretch;
   padding: 14px 18px !important;
   border: 1px solid #e4e7ed;
-  border-left: 4px solid #67c23a; // 送检流程强调绿色（与放回橙、取件蓝区分）
+  /* 左边框颜色由模板按行数据 inline 给出（has_process_chain → 绿）；这里只给中性底色。 */
+  border-left: 4px solid #e4e7ed;
   border-radius: 8px;
   cursor: pointer;
   position: relative;
@@ -798,11 +805,10 @@ function backToBadge(): void {
   background: #e1f3d8;
   border-color: #67c23a;
 }
-/* 加急未选中 → 原红底 */
+/* 加急未选中 → 原红底（左边框不参与加急：它归链语义，加急由红底 + 「加急」tag 表达） */
 .part-row.is-urgent {
   background: #fef0f0;
   border-color: #f56c6c;
-  border-left-color: #f56c6c;
 }
 /* 加急选中 → 保持红底，绿色边框 + inset 阴影表示选中 */
 .part-row.is-urgent.is-selected {

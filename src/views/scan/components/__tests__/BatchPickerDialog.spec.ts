@@ -16,11 +16,15 @@
 //  一旦有人给它加上 holder 判据键，`tsc` 会因多余属性报错，逼着改用例而不是静默继续通过）。
 //
 // 判据是「键在不在」而不是「值是否 null」，理由与脆弱点见 BatchPickerDialog.holderText 注释。
+//
+// 2026-10-09：批次行左边框改为按 `has_process_chain` 着色（原先硬编码蓝）。本组件被三个域
+// 共用，只有报工台三域的行带这个键 ⇒ 另外两域落中性色（用窄 VO fixture 守这条）。
 
 import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
 import BatchPickerDialog from '../BatchPickerDialog.vue';
 import type { PartItem } from '@/api/parts';
+import { CHAIN_BORDER_COLOR, NO_CHAIN_BORDER_COLOR } from '@/views/scan/chainAccent';
 
 /** 前端 `PartItem` 宽形态（判据键显式全带上）的最小子集。
  *
@@ -221,5 +225,29 @@ describe('BatchPickerDialog / holder 文本与 meta 行', () => {
     ]);
     const tags = w.findAll('.mock-tag').map((t) => t.text());
     expect(tags).toEqual(['批次2', '批次9']);
+  });
+
+  // 2026-10-09：左边框只表达「有链且指针未漂移」。窄 VO（送货单 / 品检两域的行）没有这个键
+  // ⇒ 落中性色而不是崩溃或染绿 —— 共用组件最容易坏的就是「某域的行少一个键」这条路径。
+  it('批次行左边框：有链 = 绿、无链 / 无该键 = 中性（窄 VO 也照常渲染）', () => {
+    const w0 = render([
+      { ...NARROW_ROW, batch_id: 'B1', batch_no: 1, has_process_chain: true },
+      { ...NARROW_ROW, batch_id: 'B2', batch_no: 2, has_process_chain: false },
+      { ...NARROW_ROW, batch_id: 'B3', batch_no: 3 },
+    ]);
+
+    function borderLeftOf(index: number): string {
+      return (w0.findAll('.batch-row')[index]?.element as HTMLElement).style.borderLeftColor;
+    }
+    function normalizeColor(color: string): string {
+      const scratch = document.createElement('div');
+      scratch.style.borderLeftColor = color;
+      return scratch.style.borderLeftColor;
+    }
+
+    expect(borderLeftOf(0)).toBe(normalizeColor(CHAIN_BORDER_COLOR));
+    expect(borderLeftOf(1)).toBe(normalizeColor(NO_CHAIN_BORDER_COLOR));
+    // 键缺失（送货单 / 品检两域的行）= 无链，同落中性色
+    expect(borderLeftOf(2)).toBe(normalizeColor(NO_CHAIN_BORDER_COLOR));
   });
 });

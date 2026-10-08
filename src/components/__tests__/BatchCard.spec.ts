@@ -21,19 +21,22 @@
 //   - B10：根 div 恒渲染 data-batch-id（拖放链路读 batch_id 的锚点）；
 //   - B11：is-selected 类只在 selectable 场景成立（工序池 / 工人列的卡片没有勾选语义）；
 //   - B12：batch_no 为空 → tooltip 的批次号行不渲染（顺带覆盖 tooltip 的 v-if）。
-//   - B13：accentColor 三级优先级（显式值 > 加急橙 > 中性边框色；2026-10-04 起最末一级
-//         由 transparent 改为 var(--el-border-color-lighter)，否则 4px 左边框整条不可见）。
+//   - B13：**竖条两级**（2026-10-09）：`has_process_chain` 真 ⇒ 语义绿；假 ⇒ 中性边框色。
+//   - B13b：加急**不再参与**边框（加急只走 body 的「加急」tag）—— 加急 + 无链的卡片
+//         竖条必须与「非加急 + 无链」逐字一致。
 //   - B14：**源码契约**（读 BatchCard.vue 原文，不挂载组件）—— `.is-selected` 规则必须
 //         用 `border-color` 简写给四边统一上色，且不得出现 `border-top-color` /
 //         `border-right-color` / `border-bottom-color` 单边上色。左边框恒为 4px，只染
 //         其余三边时勾选态的左边框只剩 1px 外圈撑着，视觉上比其它三边细一圈。
 //         B11 只断言类名、抓不到这类样式回归，故单列一条源码契约（与
 //         src/styles/__tests__/elementPlusManualImportStyles.spec.ts 同款做法）。
+//   - B15：源码契约 —— `accentColor` prop 已删除（竖条语义收敛到链之后，全仓零调用方，
+//         留着就是一个能被误用的公开 API）。
 //
 // 环境限制（2026-10-02 记档）：vitest 下 Vue 的 useCssVars 是空实现 ⇒ 模板里
 // `v-bind(accentVar)` 产出的 CSS 变量不落 DOM，**样式层的左边框色不可断言**。
 // 但 script-setup 的 ref 在 dev 构建下留在 `wrapper.vm.$.setupState` 上，故
-// accentColor 的优先级改从 `setupState.accentVar` 断言（等价于模板拿到的那个值）。
+// 竖条色改从 `setupState.accentVar` 断言（等价于模板拿到的那个值）。
 //
 // 测试策略：
 //   - vue-test-utils mount + EP 组件 stub（el-tooltip / el-checkbox）；
@@ -129,6 +132,7 @@ function makeBatch(overrides: Partial<BatchCardModel> = {}): BatchCardModel {
     system_delivery_date: '2026-10-20',
     planned_delivery_date: null,
     is_urgent: false,
+    has_process_chain: false,
     has_cnc_program: false,
     customer_l1: '某某集团',
     customer_l2: '某某零件厂',
@@ -349,21 +353,27 @@ describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
     wrapper.unmount();
   });
 
-  it('B13：accentColor 三级优先级：显式值 > 加急橙 > 中性边框色', () => {
-    // 显式 accentColor 压过加急回落
-    const explicit = mountCard(makeBatch({ is_urgent: true }), { accentColor: '#1e4d8b' });
-    expect(accentVarOf(explicit)).toBe('#1e4d8b');
-    explicit.unmount();
+  it('B13：竖条只给「有链且指针未漂移」——真 ⇒ 语义绿，假 ⇒ 中性边框色', () => {
+    // 绿边框的唯一语义：有制定工序链且 current_process_step_id 指向的工序 == 当前工序
+    const chained = mountCard(makeBatch({ has_process_chain: true }));
+    expect(accentVarOf(chained)).toBe('var(--el-color-success)');
+    chained.unmount();
 
-    // 不传 → 回落加急橙（旧卡片的 #e6a23c = --el-color-warning）
-    const urgent = mountCard(makeBatch({ is_urgent: true }));
-    expect(accentVarOf(urgent)).toBe('var(--el-color-warning)');
+    // 无链 / 链指针漂移：落回与另外三边同色的中性边框色（不是透明，竖条恒可见）
+    const noChain = mountCard(makeBatch({ has_process_chain: false }));
+    expect(accentVarOf(noChain)).toBe('var(--el-border-color-lighter)');
+    noChain.unmount();
+  });
+
+  // 加急件与有链件高度重叠，两者抢同一条竖条时谁后渲染谁盖谁 —— 边框让位给链。
+  it('B13b：加急不再参与竖条（false + is_urgent 的竖条与普通无链卡逐字一致）', () => {
+    const urgent = mountCard(makeBatch({ has_process_chain: false, is_urgent: true }));
+    const plain = mountCard(makeBatch({ has_process_chain: false, is_urgent: false }));
+    expect(accentVarOf(urgent)).toBe(accentVarOf(plain));
+    expect(accentVarOf(urgent)).not.toBe('var(--el-color-success)');
+    // 加急的承载物仍是 body 上的 tag（删掉的只是边框这一层语义）
+    expect(urgent.find('.tag--urgent').exists()).toBe(true);
     urgent.unmount();
-
-    // 既不传也不加急 → 中性边框色（2026-10-04：原本是 transparent，4px 左边框整条
-    // 不可见，非加急卡片看起来「缺了一条左边框」）
-    const plain = mountCard(makeBatch({ is_urgent: false }));
-    expect(accentVarOf(plain)).toBe('var(--el-border-color-lighter)');
     plain.unmount();
   });
 
@@ -379,6 +389,14 @@ describe('BatchCard（2026-10-02 全看板唯一批次卡片）', () => {
     }
     // 加急语义的承载物（橙色 tag）仍在 body 里
     expect(BATCH_CARD_SRC).toContain('tag--urgent');
+  });
+
+  it('B15：源码契约 —— accentColor prop 已删除（竖条语义只剩链）', () => {
+    // 保留它就等于留一个能被误用的公开 API（传进来会盖掉链语义，而全仓零调用方）
+    expect(BATCH_CARD_SRC).not.toContain('accentColor');
+    expect(BATCH_CARD_SRC).not.toContain('accent-color');
+    // 竖条色仍然由 accentVar 驱动（CSS 侧 v-bind(accentVar)），别改成写死的字面量
+    expect(BATCH_CARD_SRC).toContain('border-left-color: v-bind(accentVar)');
   });
 
   // ===== 2026-10-03：共享化后的扩展字段（extra 扩展槽 / version OCC 锚） =====

@@ -240,6 +240,7 @@ function makeHeld(overrides: Partial<QueueHeldBatchDto> = {}): QueueHeldBatchDto
     system_delivery_date: '2026-10-20',
     planned_delivery_date: null,
     is_urgent: false,
+    has_process_chain: false,
     customer_name: '某某零件厂',
     parent_customer_name: '某某集团',
     applicant_name: '张三',

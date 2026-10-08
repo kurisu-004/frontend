@@ -18,6 +18,8 @@
   补该字段并在 schema 里声明，详见该 schema 头部的「不声明」清单。
   2026-10-03：行 VO 形态不同时（3 个判据键全不在的窄 VO）meta 行会整行隐藏而不是留一行
   空文案，详见 holderText 的注释（那里按调用方逐一列了 3 种形态）。
+  2026-10-09：批次行的左边框专供「有制定工序链且链指针未漂移」这一个语义（有链 = 绿，
+  规则见 `@/views/scan/chainAccent`）；另两个复用域的行 VO 没这个键，落中性色。
 -->
 
 <template>
@@ -36,13 +38,14 @@
     </div>
 
     <div v-else class="batch-list">
-      <el-card
-        v-for="b in sortedRows"
-        :key="b.batch_id || b.id"
-        shadow="hover"
-        class="batch-row"
-        @click="onPick(b)"
-      >
+<el-card
+          v-for="b in sortedRows"
+          :key="b.batch_id || b.id"
+          shadow="hover"
+          class="batch-row"
+          :style="{ borderLeftColor: chainBorderColor(b.has_process_chain) }"
+          @click="onPick(b)"
+        >
         <div class="batch-line">
           <span class="serial">{{ b.serial_no || b.drawing_no }}</span>
           <el-tag type="info" size="small" effect="plain"> 批次{{ b.batch_no ?? 1 }} </el-tag>
@@ -74,6 +77,7 @@
 import { computed } from 'vue';
 import { Box } from '@element-plus/icons-vue';
 import type { PartItem } from '@/api/parts';
+import { chainBorderColor } from '@/views/scan/chainAccent';
 
 /**
  * 2026-10-04：本组件被 3 个域复用，各域行的 VO 结构完全不同 —— 报工台三页是后端
@@ -103,6 +107,10 @@ export interface BatchPickerRow {
   current_holder_display?: string | null;
   location?: string | null;
   next_process_name?: string | null;
+  /** 2026-10-09 新增：报工台三域的行 VO 带它（后端 `PartListItem` 的派生列），卡片
+   *  左边框按它着色（有链 = 绿）。送货单 / 品检两个域的行 VO **没有**这个键 ⇒ 键不存在
+   *  （undefined）落中性色，行为与改动前一致。 */
+  has_process_chain?: boolean;
 }
 
 const props = defineProps<{
@@ -195,7 +203,9 @@ function onCancel(): void {
   gap: 8px;
   padding: 14px 18px !important;
   border: 1px solid #e4e7ed;
-  border-left: 4px solid #409eff;
+  /* 左边框颜色由模板按行数据 inline 给出（has_process_chain → 绿）；这里只给中性底色。
+     另两个复用域（送货单 / 品检）的行 VO 没有该字段 ⇒ 落中性色，行为与改动前同档。 */
+  border-left: 4px solid #e4e7ed;
   border-radius: 8px;
   cursor: pointer;
   background: #fff;

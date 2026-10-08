@@ -128,6 +128,7 @@ const approvalCandidate: OutsourceQueueCandidateData = {
   batch_no: 1024,
   planned_delivery_date: '2026-10-20',
   is_urgent: false,
+  has_process_chain: true,
   customer_name: '某某零件厂',
   parent_customer_name: '某某集团',
   shelf_code: 'A-01',

@@ -14,6 +14,10 @@
 //   - `version` 是 `t_part_batch` 的一列、跨域通用（任何写端点的 OCC 锚）⇒ 顶层字段；
 //   - `extra` 是**单域语义**的扩展槽（外协公司 / 外协工序 / 单价 / 发出时间 /
 //     接收可免填性）⇒ 只进 tooltip，不占卡片 body 的 4 行预算。
+//
+// 2026-10-09：卡片左侧 4px 竖条改成只看 `has_process_chain`（有链且指针未漂移），
+// 两侧取值来源不同：候选卡透传后端派生列；在途卡恒 false（在途 DTO 无该字段，且
+// 外协收发阶段本就不判链，详见 `heldBatchToCard` 内注释）。
 
 import type {
   OutsourceQueueCandidateDto,
@@ -47,6 +51,7 @@ export function poolCandidateToCard(
     system_delivery_date: dto.system_delivery_date,
     planned_delivery_date: dto.planned_delivery_date,
     is_urgent: dto.is_urgent,
+    has_process_chain: dto.has_process_chain,
     has_cnc_program: dto.has_cnc_program,
     customer_l1: dto.parent_customer_name,
     customer_l2: dto.customer_name,
@@ -95,6 +100,10 @@ export function heldBatchToCard(
     system_delivery_date: dto.system_delivery_date,
     planned_delivery_date: dto.planned_delivery_date,
     is_urgent: dto.is_urgent,
+    // 在途行的 wire DTO **没有** `has_process_chain`（后端本轮没加），且这里刻意**不推导**：
+    // 卡片已经在外协公司手上、链上位置不由本系统决定，判出来的值对收发决策毫无意义。
+    // 口径后果：在途卡的绿边框恒不亮 —— 这是口径决定的，不是漏填。
+    has_process_chain: false,
     has_cnc_program: dto.has_cnc_program,
     customer_l1: dto.parent_customer_name,
     customer_l2: dto.customer_name,

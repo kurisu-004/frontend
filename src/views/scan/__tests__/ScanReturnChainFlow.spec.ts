@@ -36,6 +36,10 @@
 //     提醒进了弹窗。ReturnConfirmDialog **用真组件**（它是本次分流的主角，文案与三个
 //     出口都要验）。
 //   - `PdfViewer` 桩掉：它 import pdfjs-dist，与放回分流无关，却会把单测拖进 pdf worker。
+//
+// 2026-10-09 追加：列表卡**左边框**的链语义着色（同一批数据、另一条独立语义 ——
+// 「有没有链」不是「链上还有没有下一道」）。放在本文件复用上面这套挂载脚手架，
+// 详见文件末尾那一组用例。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
@@ -82,6 +86,7 @@ vi.mock('@/components/PdfViewer.vue', () => ({
 import ScanReturnParts from '../ScanReturnParts.vue';
 import ReturnConfirmDialog from '../components/ReturnConfirmDialog.vue';
 import { SCAN_LIST_CONTRACT_DRIFT_TEXT } from '@/views/scan/composables/scanListErrorMessage';
+import { CHAIN_BORDER_COLOR, NO_CHAIN_BORDER_COLOR } from '@/views/scan/chainAccent';
 import { useScanSession } from '@/composables/useScanSession';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import { ZodError } from 'zod';
@@ -113,6 +118,7 @@ function row(over: Partial<ScanPartRowSchema> = {}): ScanPartRowSchema {
     assembly_id: null,
     status: 'IN_PROCESS',
     is_urgent: false,
+    has_process_chain: false,
     order_no: null,
     system_delivery_date: null,
     note: null,
@@ -765,5 +771,90 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     } finally {
       consoleWarn.mockRestore();
     }
+  });
+});
+
+// ============================================================
+// 2026-10-09 新增：列表卡**左边框**的链语义着色（与上面的 `chain_state` 分流同源，
+// 但回答的是另一个问题 —— 这条批次有没有制定工序链）。
+//
+// 放在本文件而不是新开一个 spec：挂载脚手架（`@/api/parts` / `@/api/shelves` /
+// `useBarcodeScanner` / 弹窗壳的整组 vi.mock + `mountPage` / `row()` fixture）在这里，
+// 为一条边框断言复制一份上百行的桩，漂移成本高于收益。
+//
+// 顺带守一条易踩的坑：三页此前各有一套硬编码左边框色（取件蓝 / 放回琥珀 / 送检绿）
+// 用来区分**流程**，而 `.part-row.is-urgent` 里还显式写了 `border-left-color: #f56c6c`
+// —— 那条规则一旦留着，加急行的绿边框会被加急红压掉。两条都从 CSS 里删掉了。
+// ============================================================
+describe('ScanReturnParts — 列表卡左边框按 has_process_chain 着色', () => {
+  /** 卡片的左边框色（模板 inline :style 给到 el-card，stub 落在根 div 上）。 */
+  function borderLeftOf(card: { element: Element }): string {
+    return (card.element as HTMLElement).style.borderLeftColor;
+  }
+
+  /** 把 CSS 颜色字面量归一到浏览器实际生效的形态（happy-dom 把 #rrggbb 转 rgb(...)）。 */
+  function normalizeColor(color: string): string {
+    const scratch = document.createElement('div');
+    scratch.style.borderLeftColor = color;
+    return scratch.style.borderLeftColor;
+  }
+
+  function cardBySerial(w: Awaited<ReturnType<typeof mountPage>>, serial: string) {
+    const card = w.findAll('.part-row').find((c) => c.text().includes(serial));
+    if (!card) throw new Error(`列表里没有序列号 ${serial} 的行`);
+    return card;
+  }
+
+  it('有链且指针未漂移 ⇒ 绿边框；无链 ⇒ 中性边框（两态色值不同）', async () => {
+    const w = await mountPage([
+      row({
+        serial_no: 'F-901',
+        id: '190000000000901',
+        batch_id: '190000000000901',
+        has_process_chain: true,
+      }),
+      row({
+        serial_no: 'F-902',
+        id: '190000000000902',
+        batch_id: '190000000000902',
+        has_process_chain: false,
+      }),
+    ]);
+
+    const chained = borderLeftOf(cardBySerial(w, 'F-901'));
+    const noChain = borderLeftOf(cardBySerial(w, 'F-902'));
+    expect(chained).toBe(normalizeColor(CHAIN_BORDER_COLOR));
+    expect(noChain).toBe(normalizeColor(NO_CHAIN_BORDER_COLOR));
+    expect(chained).not.toBe(noChain);
+  });
+
+  // 加急语义改由红底 + 「加急」tag 承担；边框让位给链。加急 + 有链的卡片必须是绿边框，
+  // 加急 + 无链的必须是中性边框 —— 两种加急都不该染成加急红。
+  it('加急不再染边框：红底 + 「加急」tag 保留，边框色仍只由链决定', async () => {
+    const w = await mountPage([
+      row({
+        serial_no: 'F-911',
+        id: '190000000000911',
+        batch_id: '190000000000911',
+        is_urgent: true,
+        has_process_chain: true,
+      }),
+      row({
+        serial_no: 'F-912',
+        id: '190000000000912',
+        batch_id: '190000000000912',
+        is_urgent: true,
+        has_process_chain: false,
+      }),
+    ]);
+
+    const urgentChained = cardBySerial(w, 'F-911');
+    expect(urgentChained.classes()).toContain('is-urgent');
+    expect(urgentChained.text()).toContain('加急');
+    expect(borderLeftOf(urgentChained)).toBe(normalizeColor(CHAIN_BORDER_COLOR));
+
+    const urgentNoChain = cardBySerial(w, 'F-912');
+    expect(urgentNoChain.text()).toContain('加急');
+    expect(borderLeftOf(urgentNoChain)).toBe(normalizeColor(NO_CHAIN_BORDER_COLOR));
   });
 });
