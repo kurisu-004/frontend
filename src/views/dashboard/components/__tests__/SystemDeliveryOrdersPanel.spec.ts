@@ -23,6 +23,9 @@
 //   - P13：#header-extra slot 渲染（供父组件插 upcoming / overdue 的 radio）
 //   - P14：total > items.length 时出「共 N 条，另有 M 条未显示」；相等 / 缺省时不出
 //   - P15：组件不按 delivered_quantity 过滤或重分桶（装配件落在 partial 且已交 0 仍出行）
+//   - P16：rowClickable —— 谓词判不可点的行不 emit、挂 row--locked（视觉可辨）、
+//         与加急红底并存、未传谓词时全可点（零配置回退）
+//   - P17：system_delivery_date 为 null → 交期列「—」占位（partial 桶无窗口会真遇到）
 //
 // 测试策略：
 //   - vitest.config.ts 只有 vue() 插件，没有 unplugin-vue-components ⇒ 所有 el-* 组件
@@ -148,10 +151,16 @@ function mountPanel(
   extra: {
     total?: number;
     slots?: Record<string, string>;
+    rowClickable?: (item: SystemDeliveryOrderData) => boolean;
   } = {},
 ) {
   return mount(SystemDeliveryOrdersPanel, {
-    props: { variant, items, ...(extra.total === undefined ? {} : { total: extra.total }) },
+    props: {
+      variant,
+      items,
+      ...(extra.total === undefined ? {} : { total: extra.total }),
+      ...(extra.rowClickable === undefined ? {} : { rowClickable: extra.rowClickable }),
+    },
     slots: extra.slots ?? {},
     global: globalConfig,
   });
@@ -242,14 +251,16 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）',
 describe('SystemDeliveryOrdersPanel — 变体文案与红底归属', () => {
   it('P6a：upcoming 变体的标题 / 副标题 / 空态文案', () => {
     const filled = mountPanel('upcoming', [makeOrder()]);
-    expect(filled.find('.list-title').text()).toContain('交期在今天之后');
+    // 标题必须「含今天」：服务端 upcoming 桶判据是 sdd >= today，写「今天之后」会把
+    // 今天到期（该桶最常见的一档）排除在标题之外。
+    expect(filled.find('.list-title').text()).toContain('今天及以后到期');
     // 副标题必须点破真实判据：「一件都没交过」与 is_urgent 加急无关
     expect(filled.find('.list-subtitle').text()).toBe('一件都没交过 · 按系统交期升序');
     filled.unmount();
 
     const empty = mountPanel('upcoming', []);
     expect(empty.findAll('.list-rows .row')).toHaveLength(0);
-    expect(empty.find('.mock-empty').text()).toBe('暂无交期在今天之后的未交工单');
+    expect(empty.find('.mock-empty').text()).toBe('暂无今天及以后到期的未交工单');
     empty.unmount();
   });
 
@@ -461,6 +472,86 @@ describe('SystemDeliveryOrdersPanel — 行点击', () => {
       id: 'asm-1',
       row_type: 'ASSEMBLY',
     });
+    wrapper.unmount();
+  });
+});
+
+describe('SystemDeliveryOrdersPanel — rowClickable（不可点行）', () => {
+  /** SHELF_ACCOUNT 场景的真实判据：零件行可点、装配件行不可点。 */
+  const shelfAccountRule = (item: SystemDeliveryOrderData) => item.row_type !== 'ASSEMBLY';
+
+  it('P16a：谓词判不可点的行 → 不 emit rowClick（不触发行点击副作用）', async () => {
+    const wrapper = mountPanel(
+      'partial',
+      [
+        makeOrder({ id: 'asm-1', row_type: 'ASSEMBLY', delivered_quantity: 1 }),
+        makeOrder({ id: 'p-1', row_type: 'PART', delivered_quantity: 1 }),
+      ],
+      { rowClickable: shelfAccountRule },
+    );
+
+    await wrapper.findAll('.list-rows .row')[0]!.trigger('click');
+    // 装配件行被谓词挡住 —— 一次都不该 emit
+    expect(wrapper.emitted('rowClick')).toBeFalsy();
+
+    // 同一份数据里零件行照常可点（不对称是被记录的取舍，不是整列锁死）
+    await wrapper.findAll('.list-rows .row')[1]!.trigger('click');
+    expect(wrapper.emitted('rowClick')?.[0]?.[0]).toMatchObject({ id: 'p-1', row_type: 'PART' });
+    wrapper.unmount();
+  });
+
+  it('P16b：谓词判不可点的行挂 row--locked 类（视觉可辨，不与可点行混淆）', () => {
+    const wrapper = mountPanel(
+      'partial',
+      [
+        makeOrder({ id: 'asm-1', row_type: 'ASSEMBLY' }),
+        makeOrder({ id: 'p-1', row_type: 'PART' }),
+      ],
+      { rowClickable: shelfAccountRule },
+    );
+
+    const rows = wrapper.findAll('.list-rows .row');
+    expect(rows[0]!.classes()).toContain('row--locked');
+    expect(rows[1]!.classes()).not.toContain('row--locked');
+    wrapper.unmount();
+  });
+
+  it('P16c：加急红底与不可点可并存 —— locked 只接管光标 / hover，不吞加急语义', () => {
+    const wrapper = mountPanel(
+      'partial',
+      [makeOrder({ id: 'asm-1', row_type: 'ASSEMBLY', is_urgent: true })],
+      { rowClickable: shelfAccountRule },
+    );
+
+    const row = wrapper.find('.list-rows .row');
+    expect(row.classes()).toContain('urgent');
+    expect(row.classes()).toContain('row--locked');
+    wrapper.unmount();
+  });
+
+  it('P16d：未传 rowClickable → 全部行可点、无 locked 类（零配置回退）', async () => {
+    const wrapper = mountPanel('partial', [makeOrder({ id: 'asm-1', row_type: 'ASSEMBLY' })]);
+
+    const row = wrapper.find('.list-rows .row');
+    expect(row.classes()).not.toContain('row--locked');
+    await row.trigger('click');
+    expect(wrapper.emitted('rowClick')?.[0]?.[0]).toMatchObject({ id: 'asm-1' });
+    wrapper.unmount();
+  });
+});
+
+describe('SystemDeliveryOrdersPanel — 空交期占位', () => {
+  it('P17：system_delivery_date 为 null → 交期列出「—」且不带紧迫类', () => {
+    // partial 桶无窗口、含该列为 NULL 的工单（排序 NULLS LAST）⇒ 这是真会遇到的行，
+    // 空白格看不出是「无交期」还是「缺列」，用破折号占位。
+    const wrapper = mountPanel('partial', [
+      makeOrder({ system_delivery_date: null, delivered_quantity: 1 }),
+    ]);
+
+    const due = wrapper.find('.row-due');
+    expect(due.text()).toBe('—');
+    expect(due.classes()).not.toContain('overdue');
+    expect(due.classes()).not.toContain('due-soon');
     wrapper.unmount();
   });
 });

@@ -3,12 +3,15 @@
 // 形态严格照 `src/composables/queries/usePartBatchesQuery.ts`（owner-keyed 列表 +
 // 二次守卫 + 失效 helper 双形态）：
 //   - reactive params：入参是装配件 id 的 MaybeRefOrGetter，null/空 → enabled=false +
-//     queryFn 二次守卫返回空数组，零网络请求（弹窗关闭时不发请求）；
+//     queryFn 二次守卫返回空数组，零网络请求。闸门只认 id、**不认弹窗开关**：父组件在
+//     弹窗关闭时把 assemblyId 置 null，闸门才跟着关；
 //   - queryKey 走 computed(toValue(id) ?? '')，queryFn 从 queryKey[2] 读最新 id，
 //     不 snapshot 闭包；
 //   - staleTime 20min / gcTime 30min（与 usePartBatchesQuery / usePartFilesListQuery
-//     同值 —— 子件是可变更的派生数据，不挂 Infinity）；staleTime 只决定「下次取数放不
-//     放行」、**不产生定时器**，弹窗开着期间的新鲜度靠 dashboard 的 WS 事件 invalidate。
+//     同值 —— 子件是可变更的派生数据，不挂 Infinity）。staleTime 只决定「下次取数放不
+//     放行」、**不产生定时器**，所以开着弹窗期间的新鲜度靠消费方注册的
+//     `useDashboardInvalidation(qk.assemblyPrefix)`（AssemblyChildrenDialog 里已注册），
+//     本 hook 自身不订阅 WS。
 //
 // 数据源：**零新增后端端点** —— `getAssembly(id)`（`GET /api/v2/assemblies/{id}`）已
 // 返回该装配件的全部子件，本 hook 只从 `detail.children` 裁出表格与预览需要的 6 个字段。
@@ -83,12 +86,15 @@ export function useAssemblyChildrenQuery(assemblyId: MaybeRefOrGetter<string | n
   return { query, children, isFetching, error: query.error };
 }
 
-/** 2026-10-10 新增：失效指定装配件的子件列表（写操作成功后由调用方调）。 */
+/** 2026-10-10 新增：失效指定装配件的子件列表（写操作成功后由调用方调）。
+ *  **当前无调用方**：装配件写操作在 assemblies 域自己的 composable 里走局部 fetch，
+ *  那边要失效时改调本 helper（沿 usePartBatchesQuery 的同名 helper 形态预置）。 */
 export function invalidateAssemblyDetailQuery(qc: QueryClient, id: string): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.assemblyDetail(id) }).then(() => undefined);
 }
 
-/** 2026-10-10 新增：失效整个 assembly 域（任意装配件 id 形态都命中）。 */
+/** 2026-10-10 新增：失效整个 assembly 域（任意装配件 id 形态都命中）。
+ *  **当前无调用方**：同上，与 invalidateAssemblyDetailQuery 成对预置。 */
 export function invalidateAssemblyDetailAll(qc: QueryClient): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.assemblyPrefix }).then(() => undefined);
 }

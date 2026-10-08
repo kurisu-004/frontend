@@ -13,8 +13,10 @@
 //   - C4：点行 → emit('childClick', child)，**不** emit update:modelValue（两级叠开）
 //   - C5：5 列表格基础列渲染（序列号 / 名称 / 数量 / 状态 / 系统交期），不含已交量
 //   - C6：append-to-body + width=1200（嵌套弹窗硬约束，不能回退）
-//   - C7：查询失败 → error 块 / ElMessage.error 桥接不抛
+//   - C7：查询失败 → **error 态**（不落空态）+ ElMessage.error 桥接不抛
 //   - C8：换 assemblyId → 重新取数并换一份子件（key 带 id，不串缓存）
+//   - C9：装配 qk.assemblyPrefix 的 dashboard WS 失效订阅（staleTime 20min 的新鲜度通道）
+//   - C10：system_delivery_date 为 null → 交期列「—」占位（t_part 该列可空）
 //
 // ElTable stub 照抄真实 Element Plus 的做法：按 :data 渲染 .mock-row，行内 provide 出
 // 当前行（MockTableRow），列 stub inject 后按该行喂自己的 scoped slot ⇒ 列断言真的绑定
@@ -106,7 +108,22 @@ vi.mock('@/api/assembly', () => ({
   getAssembly: (id: string) => getAssemblyMock(id),
 }));
 
+// useDashboardInvalidation 桩成「记录传入的键」：它是个注册副作用的 composable
+//（订阅 WS 事件集 + 挂 window 监听），桩掉既隔离了 api/dashboard 的 WS 单例，又让
+// C9 能直接断言「本弹窗注册的失效键是 qk.assemblyPrefix」—— 即 staleTime 20min 之下
+// 子件列表的新鲜度通道真的存在。用 vi.hoisted 因为 mock factory 早于本模块的
+// 顶层 const 求值（TDZ，见上面 element-plus 那条注释）。
+const { invalidationKeys } = vi.hoisted(() => ({ invalidationKeys: [] as unknown[] }));
+
+vi.mock('@/views/dashboard/composables/useDashboardInvalidation', () => ({
+  useDashboardInvalidation: (key: unknown) => {
+    invalidationKeys.push(key);
+    return undefined;
+  },
+}));
+
 import { ElMessage } from 'element-plus';
+import { qk } from '@/composables/queries/keys';
 import AssemblyChildrenDialog from '../AssemblyChildrenDialog.vue';
 
 /** 装配件子件（后端 AssemblyChildOut 18 字段，本测试只需 api mapper 会保留的那几个）。 */
@@ -141,6 +158,7 @@ describe('AssemblyChildrenDialog — 子件列表渲染', () => {
 
   beforeEach(() => {
     getAssemblyMock.mockReset();
+    invalidationKeys.length = 0;
     (ElMessage.error as ReturnType<typeof vi.fn>).mockClear();
     // queries.retry: 0 与生产 main.ts 的全局默认对齐，否则错误态用例要等 1s+2s+4s。
     testQueryClient = new QueryClient({
@@ -191,6 +209,10 @@ describe('AssemblyChildrenDialog — 子件列表渲染', () => {
             name: 'ElEmpty',
             props: ['imageSize', 'description'],
             template: '<div class="mock-empty">{{ description }}</div>',
+          },
+          'el-icon': {
+            name: 'ElIcon',
+            template: '<i class="mock-icon"><slot /></i>',
           },
         },
         directives: {
@@ -316,7 +338,7 @@ describe('AssemblyChildrenDialog — 子件列表渲染', () => {
     wrapper.unmount();
   });
 
-  it('C7：请求失败 → 不抛，error 走 ElMessage.error 桥接且表格无行', async () => {
+  it('C7：请求失败 → 出 error 态（不落空态）+ ElMessage.error 桥接不抛', async () => {
     getAssemblyMock.mockRejectedValue(new Error('装配件不存在'));
 
     const wrapper = mount(AssemblyChildrenDialog, makeMountOpts());
@@ -325,6 +347,32 @@ describe('AssemblyChildrenDialog — 子件列表渲染', () => {
 
     expect(ElMessage.error).toHaveBeenCalledWith('装配件不存在');
     expect(wrapper.findAll('.mock-row')).toHaveLength(0);
+    // 失败态与空态必须可区分：取不到 ≠ 没有子件，否则用户会以为该装配件真的没子件。
+    expect(wrapper.find('.dialog-error').exists()).toBe(true);
+    expect(wrapper.find('.dialog-error').text()).toContain('装配件不存在');
+    expect(wrapper.find('.mock-empty').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('C9：注册 qk.assemblyPrefix 的 dashboard WS 失效订阅（staleTime 20min 的新鲜度通道）', () => {
+    // 注册发生在组件 setup 顶层，与弹窗开关无关，所以不传任何前置条件就该有一笔。
+    // 少了这一行，子件列表在 20 分钟 staleTime 内不会因他人改动装配件而刷新。
+    const wrapper = mount(AssemblyChildrenDialog, makeMountOpts());
+
+    expect(invalidationKeys).toEqual([qk.assemblyPrefix]);
+    wrapper.unmount();
+  });
+
+  it('C10：system_delivery_date 为 null → 交期列「—」占位（t_part 该列可空）', async () => {
+    getAssemblyMock.mockResolvedValue(
+      makeDetail([makeChild({ id: 'c1', name: '前桥左半轴', system_delivery_date: null })]),
+    );
+
+    const wrapper = mount(AssemblyChildrenDialog, makeMountOpts());
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await nextTick();
+
+    expect(wrapper.find('.mock-row').text()).toContain('—');
     wrapper.unmount();
   });
 

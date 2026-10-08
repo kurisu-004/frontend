@@ -1,8 +1,8 @@
 <!--
   SystemDeliveryOrdersPanel.vue
   dashboard 右栏两块交期面板的共用展示壳（variant 三选一）：
-    - variant="upcoming" 「交期在今天之后」：服务端 system_delivery_date >= today 且
-      **一件都没交过**的工单（与 is_urgent 加急无关，加急只是行底色）
+    - variant="upcoming" 「今天及以后到期」：服务端 system_delivery_date >= today（含今天）
+      且**一件都没交过**的工单（与 is_urgent 加急无关，加急只是行底色）
     - variant="overdue"  「已逾期未交」：服务端 system_delivery_date < today 且**一件都
       没交过**的工单
     - variant="partial"  「部分已交」：服务端**无时间窗口限制**、已交过一部分的工单
@@ -24,15 +24,26 @@
     - 名称与二级客户两列窄屏下 ellipsis 截断，tooltip 常显兜底（不做溢出检测：
       行高会随内容抖动）。系统交期只出日期；临近橙 / 逾期红由 deliveryUrgencyClass
       驱动 —— overdue 桶天然产出 overdue 类，样式表必须有该分支，否则逾期行静默退成灰。
+      system_delivery_date 可空（partial 桶无窗口、明确含该列为 NULL 的工单，排序
+      NULLS LAST）⇒ 空日期渲染「—」占位，不留一个看不出是空还是缺列的空白格。
     - 数量列：upcoming / overdue 出纯总量；partial 出「已交 / 总量」，已交部分走主题色，
       并包 el-tooltip 显式标注单位与含义。
       partial 的两个数字不做静默截断 —— 轨宽按 4 位 ×2 留足，溢出会带省略号可见。
+
+  行可点性由 `rowClickable` 谓词下发（缺省全可点）：不可点的行去掉 pointer 光标、
+  不吃 hover 高亮、且不 emit rowClick —— 组件不知道「为什么」不可点（当前是角色闸门），
+  只负责把「不可点」呈现出来，避免出现「看着能点、点了没反应」的行。
 
   布局：行宽分三档，用容器查询而非视口媒体查询（见 .list-rows 的 container-type）。
   `.urgent` 红底**所有变体都有** —— 「加急」是工单自身的标记，与交期分桶无关。
 
   #header-extra slot：供父组件往 header 里插控件（当前是 upcoming / overdue 的 radio
   双档切换）。本组件只渲染、不持有分档状态，保持「只渲染、不判口径、不 slice」的职责边界。
+
+  ⚠️ **已知风险（未修，待观感调优轮）**：header 变成两行后每卡头部多占约 26px，而
+  `.el-card__header` 是 `flex-shrink: 0`、`.list-card` 的 `min-height` 仍是 160px ⇒
+  右栏内容硬地板比 .list-card 注释里记的「160×2 + 16 = 336px」实际更高，矮视口下
+  双列布局仍无滚动路径（超出部分被裁）。重算 min-height 预算需配合实测，本次只登记。
 -->
 <template>
   <el-card shadow="never" class="list-card">
@@ -58,8 +69,8 @@
       <div
         v-for="item in items"
         :key="item.id"
-        :class="['row', { urgent: item.is_urgent }]"
-        @click="emit('rowClick', item)"
+        :class="['row', { urgent: item.is_urgent, 'row--locked': !isRowClickable(item) }]"
+        @click="onRowClick(item)"
       >
         <span class="row-serial">{{ item.serial_no ?? '—' }}</span>
         <el-tooltip :content="item.name" placement="top" :show-after="200" :disabled="!item.name">
@@ -90,7 +101,7 @@
           {{ ORDER_STATUS_LABEL[item.status] }}
         </el-tag>
         <span :class="['row-due', deliveryUrgencyClass(item.system_delivery_date)]">
-          {{ formatDeliveryDate(item.system_delivery_date) }}
+          {{ formatDeliveryDate(item.system_delivery_date) || '—' }}
         </span>
       </div>
     </div>
@@ -98,7 +109,6 @@
 </template>
 
 <script setup lang="ts">
-// 2026-10-03 新增：dashboard 交期面板展示壳，urgent / partial 两个 variant 共用。
 // 2026-10-10：variant 拆 upcoming / overdue / partial 三档，行源改工单级（含装配件父行），
 // 桶值改 {items, total} 信封，header 出截断提示并开 #header-extra slot。
 // el-tooltip / el-tag / el-card / el-icon / el-empty 不 import：由 vite.config.ts 的
@@ -111,7 +121,7 @@ import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE } from '@/types/parts';
 import type { SystemDeliveryOrderData } from '@/views/dashboard/composables/dashboardSnapshotSchema';
 
 const props = defineProps<{
-  /** 变体：upcoming = 交期在今天之后且没交过；overdue = 已逾期且没交过；
+  /** 变体：upcoming = 今天及以后到期且没交过；overdue = 已逾期且没交过；
    *  partial = 已交过一部分（不限时间）。 */
   variant: 'upcoming' | 'overdue' | 'partial';
   /** 该桶匹配的行（`snapshot.system_delivery_orders.<variant>.items`）。
@@ -121,9 +131,22 @@ const props = defineProps<{
   /** 该桶匹配的总行数（不受 items 的 30 条截断影响）。缺省按 items.length 处理
    *  （调用方拿不到 total 时不谎报「还有 N 条」）。 */
   total?: number;
+  /** 行是否可点（缺省全可点）。用于「部分行因权限点不动」的场景：组件只呈现
+   *  不可点（去 pointer 光标 / 不吃 hover / 不 emit），不判「为什么」不可点。 */
+  rowClickable?: (item: SystemDeliveryOrderData) => boolean;
 }>();
 
 const emit = defineEmits<(e: 'rowClick', part: SystemDeliveryOrderData) => void>();
+
+/** 该行是否可点。未传谓词 → 全可点（保持单测与既有调用方的零配置行为）。 */
+function isRowClickable(item: SystemDeliveryOrderData): boolean {
+  return props.rowClickable ? props.rowClickable(item) : true;
+}
+
+function onRowClick(item: SystemDeliveryOrderData): void {
+  if (!isRowClickable(item)) return;
+  emit('rowClick', item);
+}
 
 const isPartialVariant = computed(() => props.variant === 'partial');
 
@@ -133,7 +156,9 @@ const titleIcon = computed(() => {
 });
 
 const TITLE_TEXT = {
-  upcoming: '交期在今天之后',
+  // 「含今天」是硬约束：服务端 upcoming 桶判据是 system_delivery_date >= today，
+  // 写「今天之后」会把今天到期（该桶最常见的一档）排除在标题之外。
+  upcoming: '今天及以后到期',
   overdue: '已逾期未交',
   partial: '部分已交工单',
 } as const;
@@ -147,7 +172,7 @@ const SUBTITLE_TEXT = {
 } as const;
 
 const EMPTY_TEXT = {
-  upcoming: '暂无交期在今天之后的未交工单',
+  upcoming: '暂无今天及以后到期的未交工单',
   overdue: '暂无已逾期未交货单',
   partial: '暂无部分已交工单',
 } as const;
@@ -212,16 +237,26 @@ function deliveredTooltip(item: SystemDeliveryOrderData): string {
 // 第二行：截断提示（左侧）+ 父组件注入的控件（右侧，如 upcoming / overdue 的 radio）。
 // 与 .list-header 分离成两行而不是挤进同一行：右栏容器最窄档实测 340px，
 // 标题 + 副标题 + radio 三者同排必然互相挤压到 ellipsis。
+//
+// 换行兜底：即便拆成两行，最窄档（容器 340px 扣 header padding 后可用 312px）仍装不下
+// 「截断提示 + 两个 size=small radio」同排（合计约 320px+）。upcoming 桶无时间上界 ⇒
+// 截断提示是常态而非边缘情况，故必须能换行；提示文字本身走单行 ellipsis（换行会把
+// header 撑高、把下面的行挤少），控件槽不许收缩（radio 按钮 nowrap，压缩即裁字）。
 .list-header-extra {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   margin-top: 6px;
 }
 .list-truncated {
   font-size: 11px;
   color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .list-title {
   display: inline-flex;
@@ -282,6 +317,19 @@ function deliveredTooltip(item: SystemDeliveryOrderData): string {
     background: #fde2e2;
     &:hover {
       background: #fbd7d7;
+    }
+  }
+  // 不可点的行：去 pointer 光标 + 不吃 hover 高亮 + 不 emit（见 rowClickable prop）。
+  // 加急红底**保留** —— 它表达的是「加急」语义，与能否点开无关；上面两条规则按源码
+  // 顺序排在 .urgent 之后，故需要同等特异性把它们压回红底。
+  &.row--locked {
+    cursor: default;
+    &:hover {
+      background: #fff;
+    }
+    &.urgent,
+    &.urgent:hover {
+      background: #fde2e2;
     }
   }
   &:last-child {

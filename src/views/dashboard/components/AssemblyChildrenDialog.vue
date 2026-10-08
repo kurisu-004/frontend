@@ -7,19 +7,29 @@
       960 宽一档 —— 本弹窗是 5 列表格，960 装不下；层级也比零件预览低一层）；
     - 表格 5 列：序列号 / 名称 / 数量 / 状态 / 系统交期（**基础列，不显示已交量** ——
       装配件的「部分已交」是套级口径，子件级已交量与之不同源也不同单位）；
-    - 空态 el-empty；点行 emit('childClick', child) 且**不关闭自己**（两级弹窗叠开，
-      用户要在子件列表上连续点多个子件对比）。
+    - 三态渲染：error（图标 + 错误文案）/ 空态 el-empty / v-loading 表格。**失败不能
+      退化成空态** —— 否则「装配件取不到」会被读成「该装配件没有子件」，与 PartPreviewDialog
+      的 filesError 分支同款处理；
+    - 系统交期可空（t_part 该列可空）：空值出「—」占位，不留看不出是空还是缺列的空格；
+    - 点行 emit('childClick', child) 且**不关闭自己**（两级弹窗叠开，用户要在子件列表上
+      连续点多个子件对比 —— 每次先关掉零件预览弹窗，子件列表原样留在下面）。
 
-  ⚠️ **必须 append-to-body**：`layouts/MainLayout.vue:275` 的
+  ⚠️ **必须 append-to-body**：`layouts/MainLayout.vue` 的
   `.main-content { position: relative; z-index: 1 }` 形成一个 stacking context，
   留在原位的弹窗其 z-index 被该上下文封顶，而从它里面点开的 PartPreviewDialog
   （已 append-to-body，teleport 到 body）在**根** stacking context 里参与排序 ⇒
   「后开的弹窗反而被先开的压住」。同 `views/inspection/InspectionPending.vue` 的
   嵌套弹窗硬约束。
 
-  数据源：useAssemblyChildrenQuery 传 props.assemblyId（GET /assemblies/{id}
+  数据流：useAssemblyChildrenQuery 传 props.assemblyId（GET /assemblies/{id}
   的 children[]，零新增后端端点）。排序沿服务端口径（serial_no ASC NULLS LAST,
   id ASC），前端不再排。
+
+  新鲜度：useAssemblyChildrenQuery 的 staleTime 20min 不产生定时器，靠本组件注册
+  `useDashboardInvalidation(qk.assemblyPrefix)` 订阅 dashboard 的 AFFECTS_DASHBOARD
+  事件集（已含 ASSEMBLY_UPDATED / DELETED / CANCELLED）即时失效 —— 与
+  PartPreviewDialog 对 part-batches 域做的是同一件事（同域 WS 失效管道，两个弹窗各订阅
+  自己的前缀，互不误伤）。
 
   Props / Events：
     - modelValue：boolean（v-model 双向绑定）；
@@ -38,7 +48,12 @@
     :append-to-body="true"
     @update:model-value="(v) => emit('update:modelValue', v)"
   >
-    <div v-if="showEmpty" class="dialog-empty">
+    <div v-if="errorText" class="dialog-error">
+      <el-icon color="#f56c6c"><WarningFilled /></el-icon>
+      <span>{{ errorText }}</span>
+    </div>
+
+    <div v-else-if="showEmpty" class="dialog-empty">
       <el-empty description="该装配件暂无子件" :image-size="60" />
     </div>
 
@@ -69,7 +84,7 @@
       <el-table-column label="系统交期" width="110" align="right">
         <template #default="{ row }">
           <span :class="['cell-due', deliveryUrgencyClass(row.system_delivery_date)]">
-            {{ formatDeliveryDate(row.system_delivery_date) }}
+            {{ formatDeliveryDate(row.system_delivery_date) || '—' }}
           </span>
         </template>
       </el-table-column>
@@ -83,9 +98,12 @@
 // 不写 retry：信任 main.ts 全局 queries.retry: 0。
 
 import { computed } from 'vue';
+import { WarningFilled } from '@element-plus/icons-vue';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { deliveryUrgencyClass, formatDeliveryDate } from '@/utils/deliveryDate';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE, type OrderStatus } from '@/types/parts';
+import { qk } from '@/composables/queries/keys';
+import { useDashboardInvalidation } from '@/views/dashboard/composables/useDashboardInvalidation';
 import { useAssemblyChildrenQuery } from '@/views/dashboard/composables/useAssemblyChildrenQuery';
 import type { AssemblyChildRowData } from '@/views/dashboard/composables/assemblyChildrenSchema';
 
@@ -102,11 +120,21 @@ const emit = defineEmits<{
 
 const dlg = useDialogSize({ desktopWidth: 1200 });
 
-const { children, isFetching } = useAssemblyChildrenQuery(() => props.assemblyId);
+const { children, isFetching, error } = useAssemblyChildrenQuery(() => props.assemblyId);
 
-/** 空态只在「已拿到数据且确实为空」时出：取数中仍渲染 v-loading 的表格骨架，
+// staleTime 20min 下，别人改了这个装配件的子件（增删子件 / 取消 / 更新）时靠 WS 事件
+// 即时失效，不等 20min 自然过期。传前缀键而非精确键：切了 assemblyId 之后新那条也会
+// 被覆盖（同 PartPreviewDialog 对 part-batches 域的做法）。
+useDashboardInvalidation(qk.assemblyPrefix);
+
+/** 错误文案（失败态与空态必须分开，见文件头「三态渲染」）。 */
+const errorText = computed<string | null>(() => error.value?.message ?? null);
+
+/** 空态只在「已拿到数据、没报错、确实为空」时出：取数中仍渲染 v-loading 的表格骨架，
  *  否则弹窗一开就闪一下「暂无子件」。 */
-const showEmpty = computed(() => !isFetching.value && children.value.length === 0);
+const showEmpty = computed(
+  () => !isFetching.value && errorText.value === null && children.value.length === 0,
+);
 
 /** 点行 → 抛给父组件开零件预览弹窗。**不关闭自己**：两级叠着，用户要能连续点多个子件。 */
 function onRowClick(row: AssemblyChildRowData): void {
@@ -120,6 +148,14 @@ function onRowClick(row: AssemblyChildRowData): void {
   align-items: center;
   justify-content: center;
   height: 240px;
+}
+.dialog-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 240px;
+  color: var(--el-color-danger);
 }
 .cell-due {
   color: var(--text-secondary);

@@ -74,7 +74,10 @@ export type SystemDeliveryOrderData = z.infer<typeof systemDeliveryOrderSchema>;
 /** 2026-10-10 新增：交期面板单桶（{ items, total }）。
  *  total 是该桶**匹配总行数**，不受 items 的 30 条截断影响 —— 面板头部据此渲染
  *  「共 N 条，另有 M 条未显示」，用 items.length 会在触顶时谎报（upcoming 桶无时间
- *  上界，几百条只显示最早 30 条是常态）。 */
+ *  上界，几百条只显示最早 30 条是常态）。
+ *
+ *  本类型目前没有消费方（面板收的是 items + total 两个 prop，见该组件），保留导出是
+ *  沿本文件「schema 与其 z.infer 类型同文件成对导出」的既有形态（同 UpcomingEntryData）。 */
 export const systemDeliveryOrderBucketSchema = z.object({
   items: z.array(systemDeliveryOrderSchema),
   total: z.number().int().nonnegative(),
@@ -91,9 +94,16 @@ export type SystemDeliveryOrderBucketData = z.infer<typeof systemDeliveryOrderBu
  *  2026-10-10 破坏性变更：`system_delivery_orders` 由 `{urgent, partial}` 改三桶
  *  `{upcoming, overdue, partial}`，桶值从裸数组改 `{items, total}` 信封，且行新增
  *  `row_type`。**不加兼容分支** —— 旧响应过不了守门会显式抛错（走既有 ElMessage 错误
- *  桥接暴露成故障），而不是被悄悄按新口径重解释。snapshot 的 query 用
- *  `gcTime: POSITIVE_INFINITY` 跨会话缓存，但旧缓存过不了 parse ⇒ 自动失效，
- *  无需手动清。 */
+ *  桥接暴露成故障），而不是被悄悄按新口径重解释。
+ *
+ *  守门点在 queryFn（`useDashboardSnapshot`），即**只在取数那一刻生效**；TanStack Query
+ *  对缓存命中不重新校验，所以跨前后端版本的失配不会自己「过期」，只会一直沿用那份旧
+ *  形状缓存直到下一次 refetch 抛错。可达的两条失配路径与各自的降级：
+ *   - 新前端 + 旧后端 / 后端未上线：本 schema 直接抛 → `data` 为 undefined → 消费侧
+ *     （DashboardView 右栏四路派生）走空值兜底渲染空面板，不会因读到旧桶键而抛
+ *     TypeError；
+ *   - 同页会话内后端被换掉：旧形状缓存先被原样返回并渲染，直到 staleTime（30s）过期
+ *     的那次 refetch 抛错把面板打成空态。窗口很短，且只影响未刷新的旧标签页。 */
 export const dashboardSnapshotSchema = z.object({
   overdue_count: z.number(),
   in_inspection_count: z.number(),
