@@ -103,11 +103,11 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 | 入口 | 触发源 | 导航 |
 |---|---|---|
 | `logout()` | 用户点「退出」（先 `await apiLogout()`） | 无（调用方负责） |
-| `forceLogout(router)` | `auth:session-lost` ← dashboard WS 关闭码 `4001` | `router.replace('/login')` |
-| `refreshOrLogout(router)` catch | 路由守卫 `/iam/me` 校验失败 | 委托 `forceLogout(router)` |
+| `forceLogout(router)` | `auth:session-lost` 且 reason 不是 `access token expired`（reason 契约见「dashboard WS 单例」小节） | `router.replace('/login')` |
+| `refreshOrLogout(router)` catch | 路由守卫 `/iam/me` 校验失败，或 WS `4001` 且 reason 是 `access token expired`（尝试用 refresh token 续期） | 委托 `forceLogout(router)` |
 | `auth:logout` 事件订阅 | `src/api/http.ts`（40105 SESSION_REVOKED / refresh 失败） | 无 |
 
-`teardownSession()` = 纯收口；`forceLogout(router)` = 收口 + 追加一次导航；两者都**不联系后端**。`refreshOrLogout` 只用于路由守卫的「未登录但可能有 session」恢复路径。
+`teardownSession()` = 纯收口；`forceLogout(router)` = 收口 + 追加一次导航；两者都**不联系后端**。`refreshOrLogout` 有两个消费方：路由守卫的「未登录但可能有 session」恢复路径，以及 WS `4001` 且 reason 为 `access token expired` 时的续期尝试（两种情形下它的 catch 都委托 `forceLogout`，所以「false」与「抛异常」都已经完成收口）。
 
 守卫侧拿到 `refreshOrLogout` 的 false 后必须 `next(false)` **取消**导航（不要 `next('/login')` 再跳一次）—— 守卫是 3 参签名，3 参守卫里「什么都不调」= 导航永久挂起。
 
@@ -120,9 +120,13 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 | 事件 | 方向 | 语义 |
 |---|---|---|
 | `auth:session-changed` | auth → WS（`src/api/dashboard.ts`） | `detail.token` 为 string = 重连，为 null = 断开 |
-| `auth:session-lost` | WS → auth（接收方是 `src/router/index.ts`） | 后端判定会话已死，接收方调 `auth.forceLogout(router)` |
+| `auth:session-lost` | WS → auth（接收方是 `src/router/index.ts`） | 后端 re-auth 失败（关闭码 `4001`），接收方按 `detail.reason` 分流：`access token expired` / `null` → `auth.refreshOrLogout(router)`（成功后再 `reconnectDashboard()` 恢复长连接），其余 → `auth.forceLogout(router)` |
 
 `auth:session-changed` 的派发点共 3 处，必须覆盖全部 token 生命周期转换：`http.ts` 的 `persistTokens()`（刷新）、`loginMutation.onSuccess`（登录）、`teardownSession()`（终止）。**新增改变 token 生命周期的写点时必须同步补派发**，否则控制台会无限刷 WS 报错。`auth:tokens-refreshed` 是另一件事（管 store 自身 state 同步），两者不要混淆。
+
+**token 刷新必须跨标签页互斥**（`api/http.ts` 的 `getOrCreateRefresh`，锁名 `hsh-erp:token-refresh`，Web Locks `exclusive`）：后端 refresh token **一次性轮转**，对已用过的 jti 做 reuse detection，命中就 `delete_all_user_sessions` ⇒ **该用户所有标签页 + 所有设备一起登出**。同一账号多标签页共享同一份 `localStorage.auth_session` 与同一个 exp，按 `exp − 提前量` 排期的保活定时器必然落在同一时刻，而标签页内的 `refreshPromise` 跨标签页不互斥 ⇒ 两处同时拿同一枚 refresh jti 去刷新是常规路径而非低概率竞态。所以「读 storage → 发 refresh → 写回」整段必须在锁内，且**锁内先现读 storage**：access token 剩余寿命仍大于提前量说明别的标签页刚轮转过，直接复用 storage 里那对新 token 返回、不发请求。互斥包在 `getOrCreateRefresh()` 这一层 ⇒ reactive 40102 / proactive / 保活定时器三条触发路径一并覆盖。**部署前提**：`navigator.locks` 只在安全上下文（https / localhost）可用，缺失时降级为直接执行（降级只是尽力，仍有并发窗口）—— `nginx.conf` 同时 `listen 80` 与 `listen 443 ssl`（443 需人工配证书），现场若以 `http://192.168.x.x:8080` 访问则本保护形同虚设，要生效必须走 https。**不要**用「起表时快照 token 指纹、触发前重读比对」或「随机抖动」代替互斥：同刻触发的两个标签页会同时比对通过 / 只是把两枚定时器错开。
+
+**access token 保活定时器**（`api/http.ts` 的 `ensureAccessTokenKeepalive`，模块级 `setTimeout` 链）：按 `localStorage` 里当前 access token 的 `exp` 自续期 —— 在「剩余寿命 ≤ 提前量(300s)」那一刻发 `/iam/refresh`（排期是 `剩余寿命 − 300s + 5s`，那 +5s 是**余量**，让定时器早到几毫秒时剩余寿命仍 ≤ 阈值、不至于空转一轮；见 `http.ts` 的 `KEEPALIVE_SLACK_SECONDS`），成功后按新 exp 重排。**它存在的唯一理由是覆盖零 HTTP 流量**：`maybeProactiveRefresh` 只在成功响应拦截器里被调，天然依赖流量，而 dashboard 的 3 个 query 都没有 `refetchInterval`（`staleTime` 只决定「下次取数放不放行」，不产生定时器）⇒ 空闲大屏 / HMI 屏零流量时 access token（TTL 900s）会静静过期，随后 WS 周期性 re-auth 拿到 TOKEN_EXPIRED。起表点共 **4** 个，判据是「token 从哪来」，**新增 token 落盘写路径时必须同步补起表**：`http.ts::persistTokens`（refresh 成功后）/ `stores/auth.ts::saveToStorage`（登录成功后 —— 登录**不经过** `persistTokens`，那条只在 `doRefresh` 里被调）/ `stores/auth.ts::loadFromStorage`（刷新浏览器恢复会话）/ `stores/auth.ts::teardownSession`（会话终止，兼**拆表点**，删盘后调用即 no-op）。`initDummyAuth` 只写内存、刻意不写 localStorage，没有起表对象。与互斥锁的关系：它**按 `exp − 提前量` 这个确定性时刻排期**，同账号多标签页共享同一份 storage 与同一个 exp ⇒ 定时器落在同一时刻，因此它正是上一条那个跨标签页竞态的主要来源，必须经 `getOrCreateRefresh()` 才能拿到互斥保护。失败兜底是**有界重试**（退避两档后放弃并打一行 warn）：一次网络抖动不该让保活链对本会话永久失效，而无限重排在后端持续不可用时会变成请求风暴；放弃后仍由 reactive 40102 / WS 4001 兜底。
 
 ### tagsView per-user 持久化
 
@@ -135,7 +139,9 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - **URL 用模块级 `shallowRef<string | undefined>` + 显式 `syncWsUrl()`，不用 `computed`**（computed 会缓存住旧 token，logout→重登后仍握吊销 token → `40105` 死循环）。
 - **`undefined` 是「无 token 不要连」的哨兵**。禁止无 token 时拿裸 URL 握手（后端必回 `40100`，是无意义重试刷屏的来源）。
 - **重试不封顶**（`retries: -1`，退避 1s→10s 封顶），失败日志前 3 次完整诊断、之后每 30 次一行。WS 是 dashboard 唯一更新通道，封顶重试会让页面静默停更。诊断输出：脱敏 URL（`token=***`）/ closeCode + reason / hadErrorEvent / tokenExpired。
-- **关闭码分流**（语义载体是后端代码注释，`docs/api/` 下没有关闭码语义表 —— `4001` 的判定收在 `src/modules/dashboard/handler.rs` 的纯函数 `reauth_close_code`（鉴权类错误码 → `4001 auth expired`，其余一律 `1011`），`1011` / `1012` / `4003` 见该文件内各 `close_with(&mut sender, <code>, …)` 发出点旁的注释；`docs/api/dashboard.md` 只覆盖 `4003 lagged` 一条，不是语义表）：`1000` / `1001` / `1006` / `1011` / `1012` → 继续无限重试；`4001`（会话在连接期间失效）→ **停重连 + 清 session + 走登出**；`4003`（慢消费方丢了 n 条事件）→ 继续重试 **+ 派发 `dashboard:full-refetch` 立即全量 invalidate**（该事件由 `views/dashboard/composables/useDashboardInvalidation.ts` 接收；必须走立即路径而非 500ms 防抖，且重连首帧 snapshot 在 `dispatch()` 里被 no-op 丢弃、Query 无轮询，丢的事件没有补偿通道）。
+- **关闭码分流**（逐行契约表在后端 `docs/api/dashboard.md` §7.1「关闭码表」：code × reason × 发出点 × 前端应做什么；`4001` 的判定收在 `src/modules/dashboard/handler.rs` 的纯函数 `reauth_close_code`（`TOKEN_EXPIRED` 40102 → `(4001, "access token expired")`；`UNAUTHORIZED` 40100 / `SESSION_REVOKED` 40105 → `(4001, "auth expired")`；其余 → `(1011, "re-auth unavailable")`），`1011` / `1012` / `4003` 见该文件内各 `close_with(&mut sender, <code>, …)` 发出点旁的注释）：`1000` / `1001` / `1006` / `1011` / `1012` → 继续无限重试；`4001`（连接期间 re-auth 失败）→ **停重连（URL 置 undefined）+ 不清 session**，只派发 `auth:session-lost` 交 app 层处置（清会话的职责在 app 层，`access token expired` 时本地 refresh token 仍然有效，WS 层删 localStorage 等于直接踢人）；`4003`（慢消费方丢了 n 条事件）→ 继续重试 **+ 派发 `dashboard:full-refetch` 立即全量 invalidate**（该事件由 `views/dashboard/composables/useDashboardInvalidation.ts` 接收；必须走立即路径而非 500ms 防抖，且重连首帧 snapshot 在 `dispatch()` 里被 no-op 丢弃、Query 无轮询，丢的事件没有补偿通道）。
+- **`4001` 的两段 reason 由 app 层（`src/router/index.ts` 的 `auth:session-lost` listener）分流**，字面量必须与后端 `handler.rs::reauth_close_code` 的产出逐字对齐（reason 拆分那次改动在后端仓，本仓只消费不解释）：`access token expired` = 只是这枚 access JWT 自然过期、`TOKEN_EXPIRED` 40102 ⇒ `auth.refreshOrLogout(router)`，成功后必须 `reconnectDashboard()` 恢复长连接（refreshOrLogout 走 `/iam/me`，成功响应不触发 40102，不一定发生 refresh，没人派发 `auth:session-changed`，漏掉这句 WS 会永远停在 `undefined`）；`auth expired` = 会话真被吊销、`UNAUTHORIZED` 40100 / `SESSION_REVOKED` 40105 ⇒ `auth.forceLogout(router)`；`null` 按「可能只是过期」走 refresh 分支，其它未知的非空 reason 保守 forceLogout。
+- **主动关闭的判定绑在 socket 实例上**：`useWebSocket` 的 `ws.onclose` 无条件调 `onDisconnected`（`explicitlyClosed` 只挡 `autoReconnect` 分支），所以 token 刷新换连接那次 `code 1000` 必须靠「待关闭的 socket 实例」这一等值比较剔除，不能按 code 吞。**`useWebSocket` 传 `autoConnect: false`**：它只关掉 VueUse 自己的 `watch(urlRef, open)`，`immediate` 首次建连不受影响；不关掉的话那条 watch 与本文件的 `watch(wsUrl, …)` 同 flush 且注册更早，会先跑 `open()` 把 wsRef 换成新 socket，导致取不到「即将关闭的旧实例」。因实例绑定，标记滞留也不会吞掉别的连接的失败（一个 WebSocket 只派发一次 close 事件）。
 - **分层禁令**：WS 层**禁止** import `stores/auth`、`vue-router`、`@tanstack/vue-query`，全部走 CustomEvent 解耦。
 - **`4001` 只在已建立的连接上有效**，握手阶段的鉴权失败只会表现为 `1006`（后端 upgrade 前直接回 HTTP `401`，浏览器 WS API 不暴露握手期 status）。所以会话真死的最终兜底是 HTTP 侧 `40105 → auth:logout`，不是 WS 侧的 `4001`；也**不要**加「握手失败几次就登出」的启发式，那会把代理 / 后端故障误判成会话失效。
 - **dev 环境必须有 `/ws` 反代**（`vite.config.ts` `server.proxy`）。Vite 8 的 dev upgrade 监听器只对匹配到的 proxy context 转发，缺了表现为「页面数据正常但控制台一直刷 WS 报错」。生产 / 预发由 nginx 的 `location ^~ /ws/` 负责。

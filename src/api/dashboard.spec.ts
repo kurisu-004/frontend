@@ -14,18 +14,26 @@
 //   - **失败握手 → 退避重连序列**（1s/2s/4s/8s/10s 封顶，不封顶次数）
 //   - **失败日志降噪**：前 3 次带完整诊断对象，之后每 30 次一行
 //
-// 2026-10-02 后端补完主动 Close 帧（此前全仓零发送，浏览器只见 1006）后新增覆盖：
-//   - **close 4001（会话失效）→ 停止重连**：进 60s 也不产生新 WebSocket 实例
+// 后端补完主动 Close 帧（此前全仓零发送，浏览器只见 1006）后新增覆盖：
+//   - **close 4001（re-auth 失败）→ 停止重连**：进 60s 也不产生新 WebSocket 实例
 //   - **close 1006 → 仍按退避重连**：防「把所有关闭码都停掉」这种过度处理回归
-//   - **close 4001 → 派发 'auth:session-lost'** + 清 localStorage 会话
+//   - **close 4001 → 派发 'auth:session-lost'**
 //   - **close 4003（慢消费方丢事件）→ 派发 'dashboard:full-refetch'** 且仍重连
-//     （review Major 2：后端规定动作是「重连 + 全量 HTTP 重取」，而重连后的首帧
-//     snapshot 在本层被 no-op 丢掉 ⇒ 补数据只能靠这个信号）
+//     （后端规定动作是「重连 + 全量 HTTP 重取」，而重连后的首帧 snapshot 在本层被
+//     no-op 丢掉 ⇒ 补数据只能靠这个信号）
 //
-// 关闭码 fixture 的 reason 字符串**必须与后端实际发送值一致**（4001 → 'auth expired'、
-// 4003 → 'lagged'，见后端 docs/api/websocket.md 关闭码表）。本 spec 是后人查关闭码表
-// 的第一现场，写一个后端从不发送的 reason 会诱导后来人去 match reason 文案。
-// 2026-10-02 修正：原 4001 用例写的是 'session invalid'（后端从不发这个值）。
+// 关闭码 fixture 的 reason 字符串**必须与后端实际发送值一致**（语义真源是后端
+// `src/modules/dashboard/handler.rs` 的 `reauth_close_code`，`docs/api/dashboard.md`
+// §7 只覆盖 4003 一条）。本 spec 是后人查关闭码的第一现场，写一个后端从不发送的
+// reason 会诱导后来人去 match reason 文案。4001 的两段 reason：
+//   - 'auth expired' —— UNAUTHORIZED(40100) / SESSION_REVOKED(40105)：会话真被吊销；
+//   - 'access token expired' —— TOKEN_EXPIRED(40102)：只是这枚 access JWT 过期。
+//
+// 2026-10-09 起新增覆盖：
+//   - **主动关闭不记失败**：token 刷新导致 URL 变化时 VueUse 自己 close 旧连接
+//     （code 1000），不得产生「第 N 次连接失败」告警、不得推进失败计数；
+//   - **4001 不删 localStorage**：reason 可能是「access JWT 过期」，refresh token
+//     仍然有效，删掉等于把用户踢去登录页（会话清理由 app 层按 reason 决定）。
 //
 // createGlobalState 惰性语义：模块顶层不创建 socket，仅注册 listener；首次调
 // 用 onDashboardEvent / onDashboardStatus / reconnectDashboard / closeDashboard
@@ -73,8 +81,15 @@ class FakeWebSocket {
     this.onclose?.(ev);
   }
 
+  /** 模拟**客户端主动关闭**。真实浏览器里 `ws.close(1000)` 的 onclose 带 code=1000，
+   *  这里保持一致 —— code 1000 的分流判定正是 2026-10-09 新增用例 A 的观察点。
+   *
+   *  2026-10-09 补齐浏览器语义：**readyState 已是 CLOSED 时不再派发 close 事件**。
+   *  旧桩无条件 `closeWith({code:1000})`，正好与真实浏览器相反，并把 dashboard.ts
+   *  「主动关闭标记必然滞留」这个缺陷藏了起来 —— 因为它凭空造出了一个本不该有的消费者。 */
   public close(): void {
-    this.closeWith({});
+    if (this.readyState === FakeWebSocket.CLOSED) return;
+    this.closeWith({ code: 1000, reason: '' });
   }
 
   /** 2026-10-01 新增：模拟**握手失败**。
@@ -442,7 +457,9 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
     const api = await import('./dashboard');
     await bootstrapSocket(api);
 
-    expect(FakeWebSocket.instances[0]?.url).toBe('ws://localhost:5173/ws/dashboard?token=old-token');
+    expect(FakeWebSocket.instances[0]?.url).toBe(
+      'ws://localhost:5173/ws/dashboard?token=old-token',
+    );
 
     // 拦截器刷新成功：localStorage 已是新 token + dispatch auth:session-changed
     stub.set('new-token');
@@ -452,7 +469,9 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
     await flushVue();
 
     expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
-    expect(FakeWebSocket.instances[1]?.url).toBe('ws://localhost:5173/ws/dashboard?token=new-token');
+    expect(FakeWebSocket.instances[1]?.url).toBe(
+      'ws://localhost:5173/ws/dashboard?token=new-token',
+    );
   });
 
   it('登出（detail.token = null）→ 关闭连接且不再重连', async () => {
@@ -471,9 +490,7 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
     expect(FakeWebSocket.instances).toHaveLength(1);
 
     stub.set(null);
-    window.dispatchEvent(
-      new CustomEvent('auth:session-changed', { detail: { token: null } }),
-    );
+    window.dispatchEvent(new CustomEvent('auth:session-changed', { detail: { token: null } }));
     await flushVue();
 
     // 老 socket 被 close
@@ -525,6 +542,100 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
     await flushVue();
 
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it('用例 A：token 刷新引发的主动 close（code 1000）不产生失败告警、不推进失败计数', async () => {
+    // VueUse 的 ws.onclose 无条件调 onDisconnected（explicitlyClosed 只挡 autoReconnect
+    // 分支），所以「我们自己 close 旧连接换新连接」会被误记成一次连接失败。叠加
+    // watch(wsUrl) 同 flush 内把 attempt 清零，控制台表现为「第 1 次连接失败」反复刷屏。
+    const stub = stubMutableToken('old-token');
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
+    const api = await import('./dashboard');
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    // 拦截器刷新成功：新 token 落盘 + 派发 auth:session-changed ⇒ URL 变化 ⇒
+    // VueUse watch(urlRef, open) 先 close(code 1000) 再开新连接
+    stub.set('new-token');
+    window.dispatchEvent(
+      new CustomEvent('auth:session-changed', { detail: { token: 'new-token' } }),
+    );
+    await flushVue();
+
+    expect(FakeWebSocket.instances[0]?.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(FakeWebSocket.instances.at(-1)?.url).toContain('token=new-token');
+    // 一条失败告警都不该有
+    expect(warn).not.toHaveBeenCalled();
+
+    // 计数没被主动 close 推进：紧接着的真实失败仍然从「第 1 次」开始打。
+    FakeWebSocket.instances.at(-1)!.failHandshake();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain('第 1 次连接失败');
+  });
+
+  it('用例 A 补充：服务端主动发 1000（无标记）仍照常记失败', async () => {
+    // 防「把 code === 1000 无条件吞掉」这种过度处理：code 1000 也可能由服务端 /
+    // 中间层主动发出，那是真实断开，必须留日志（判定依据是标记，不是 code）。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.closeWith({ code: 1000, reason: '' });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain('第 1 次连接失败');
+  });
+
+  it('用例 C：主动关闭标记绑在具体 socket 实例上，滞留也吞不掉后续真实失败', async () => {
+    // 钉住 2026-10-09 修掉的不变量。走 4001 停连路径：onDisconnected 把 URL 置
+    // undefined → 本层 watch 走 closeConnection() 主动关这条连接。此刻 dead 已经是
+    // CLOSED（closeWith 顺手置的），真实浏览器里 close() 打在它身上**不再派发 close
+    // 事件** ⇒ 标记没有消费者、必然滞留。布尔标记下这个滞留会吃掉下一次真实失败：
+    // 不打 warn、不推进 attempt，连 4003 的 dashboard:full-refetch 信号也一起跳过。
+    // 改成按实例同一性判定后，标记绑在这条死连接上，对**另一条**连接的失败毫无影响。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const stub = stubMutableToken('old-token');
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
+    const api = await import('./dashboard');
+    await bootstrapSocket(api);
+    const dead = FakeWebSocket.instances[0]!;
+    dead.open();
+    const closeSpy = vi.spyOn(dead, 'onclose', 'get');
+
+    // 4001（access token expired）→ 停连
+    dead.closeWith({ code: 4001, reason: 'access token expired' });
+    await flushVue();
+    expect(dead.readyState).toBe(FakeWebSocket.CLOSED);
+    // 主动关闭本身不记失败（4001 那条「会话失效」warn 先清掉，下面只看连接失败日志）
+    warn.mockClear();
+
+    // app 层 refresh 成功：新 token 落盘 + 派发 auth:session-changed ⇒ 换一条新连接
+    stub.set('new-token');
+    window.dispatchEvent(
+      new CustomEvent('auth:session-changed', { detail: { token: 'new-token' } }),
+    );
+    await flushVue();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances[1]?.url).toContain('token=new-token');
+
+    // 新连接真实握手失败（error + close 1006）→ 必须照常走 reportFailure
+    FakeWebSocket.instances[1]!.failHandshake();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain('第 1 次连接失败');
+    // 死连接自身没有再收到第二个 close 事件（浏览器语义：已 CLOSED 后 close() 不派发）
+    expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -688,21 +799,21 @@ describe('dashboard WS：连接失败的退避重连与诊断', () => {
 });
 
 // ============================================================================
-// 2026-10-02：后端补完主动 Close 帧后的关闭码分流
+// 后端补完主动 Close 帧后的关闭码分流
 //
 // 后端 ws_hub 从「零发送 Close 帧（所有断开都是裸 drop，浏览器只见 1006）」改成
-// 主动发 Close 帧，带上语义关闭码（关闭码表见后端 docs/api/websocket.md）：
+// 主动发 Close 帧，带上语义关闭码（码 ↔ reason 的映射真源是后端
+// `src/modules/dashboard/handler.rs` 的 `reauth_close_code`）：
 //   1011 内部错误 / 1012 服务重启 / 4003 慢消费方
 //     → 瞬时或可自愈，**必须继续无限重试**（WS 是 dashboard 唯一更新通道）；
-//   4001 会话在连接期间失效
+//   4001 re-auth 失败
 //     → 唯一终止性关闭码。再重试多少次都是 401，属于死路。
-//   1001 后端不主动发（写失败路径已改裸断），前端无分支，保留在码表里仅作对照。
+//   1006 是「原因未知」的兜底码（没收到 Close 帧）：网络 / 代理 / 休眠唤醒，一律重连。
 //
-// 没有这个分流时 4001 会退化成「无限重试 → 每次握手又被判 401 → 控制台刷屏」，
-// 即 2026-10-01 刚修掉的 logout 死循环 bug 的另一面。
+// 没有这个分流时 4001 会退化成「无限重试 → 每次握手又被判 401 → 控制台刷屏」。
 // ============================================================================
 
-describe('dashboard WS：关闭码 4001（会话失效）停止重连', () => {
+describe('dashboard WS：关闭码 4001（re-auth 失败）停止重连', () => {
   beforeEach(() => {
     // 同样只 fake 定时器：VueUse 的 watch(urlRef, open) 走 Vue scheduler（微任务），
     // 不会被 fake；重连的 setTimeout 链则完全被 fake 住，才能断言「60s 内不建连」。
@@ -723,7 +834,7 @@ describe('dashboard WS：关闭码 4001（会话失效）停止重连', () => {
     socket.open();
     expect(FakeWebSocket.instances).toHaveLength(1);
 
-    // 后端主动 Close 帧：会话在连接期间失效（注意不带 error 事件，真实浏览器行为）
+    // 后端主动 Close 帧：连接期间的周期性 re-auth 失败（注意不带 error 事件，真实浏览器行为）
     socket.closeWith({ code: 4001, reason: 'auth expired' });
 
     // 停重连的关键时序：VueUse 在 onDisconnected 返回后才 setTimeout(_init, 1s)，
@@ -760,7 +871,7 @@ describe('dashboard WS：关闭码 4001（会话失效）停止重连', () => {
     expect(FakeWebSocket.instances).toHaveLength(3);
   });
 
-  it('close 4001 → 派发 auth:session-lost（供 app 层 forceLogout 走登出）', async () => {
+  it('close 4001 → 派发 auth:session-lost，reason 原样透传（app 层按它分流）', async () => {
     const lost = vi.fn();
     // 经文件级 addEventListener spy 记账 → afterEach 统一 removeEventListener。
     window.addEventListener('auth:session-lost', lost);
@@ -776,16 +887,47 @@ describe('dashboard WS：关闭码 4001（会话失效）停止重连', () => {
     const detail = (lost.mock.calls[0]?.[0] as CustomEvent<{ code: number; reason: string | null }>)
       .detail;
     expect(detail).toEqual({ code: 4001, reason: 'auth expired' });
+  });
 
-    // 同时清掉 localStorage 会话：后端已判定失效，本地留着只会让下一次握手继续 401。
+  it('close 4001（access token expired）→ 派发的 reason 仍是后端原串', async () => {
+    // 跨仓契约守卫：前端**不解释** reason，只透传。app 层（router/index.ts）按
+    // 'access token expired' 走 refresh 分支、按 'auth expired' 走 forceLogout；
+    // 这里若哪天被改成归一化成统一文案，router 的分流会全部失配。
+    const lost = vi.fn();
+    window.addEventListener('auth:session-lost', lost);
+
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.closeWith({ code: 4001, reason: 'access token expired' });
+
+    const detail = (lost.mock.calls[0]?.[0] as CustomEvent<{ code: number; reason: string | null }>)
+      .detail;
+    expect(detail).toEqual({ code: 4001, reason: 'access token expired' });
+  });
+
+  it('close 4001 → **不删** localStorage 会话（refresh token 仍可能有效）', async () => {
+    // 4001 的两段 reason 里，`access token expired` 只说明这枚 access JWT 过期，
+    // refresh token（7d TTL）还是好的。WS 层删掉整个 auth_session 就等于把用户
+    // 踢去登录页，而 app 层的 refreshOrLogout 又因为没有 token 而必然失败。
+    // 会话清理由 app 层按 reason 决定（forceLogout → teardownSession 删）。
+    const api = await loadDashboardApi();
+    await bootstrapSocket(api);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.closeWith({ code: 4001, reason: 'access token expired' });
+
     const removeItem = localStorage.removeItem as unknown as ReturnType<typeof vi.fn>;
-    expect(removeItem).toHaveBeenCalledWith('auth_session');
+    expect(removeItem).not.toHaveBeenCalledWith('auth_session');
   });
 
   // ==========================================================================
-  // 2026-10-02 修复（review Major 2）：4003「慢消费方」丢事件 → 补一次全量重取
+  // 4003「慢消费方」丢事件 → 补一次全量重取
   //
-  // 后端 websocket.md 关闭码表 4003 行的规定动作是「重连 + 全量 HTTP 重取」，
+  // 后端 `docs/api/dashboard.md` §7 慢消费方条的规定动作是「重连 + 全量 HTTP 重取」，
   // 且成立前提写的是「重连时自然重新收到首帧 snapshot」。本仓 dashboard 域是
   // 「HTTP 全量首取 + WS 事件 invalidate 重取」，重连后的首帧 snapshot 被显式
   // no-op 丢弃（api/dashboard.ts 的 dispatch()）⇒ 该前提不成立，重连补不回来

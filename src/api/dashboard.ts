@@ -19,14 +19,14 @@
 //     刷新三条路径）。详见下方 wsUrl 注释。URL 为 undefined（无 token）时零连接尝试。
 //   - autoReconnect 指数退避 1s→10s 封顶，**不封顶重试次数**（WS 是 dashboard 唯一
 //     更新通道，放弃重连会让页面静默停止刷新）；失败日志做降频处理，见 reportFailure。
-//   - 2026-10-02：后端补完主动 Close 帧（此前所有断开都是裸 drop，浏览器只见 1006），
-//     关闭码有语义了。其中 **4001「会话在连接期间失效」是唯一的终止性关闭码**，本层
-//     停重连 + 清 session + 派发 'auth:session-lost' 交 app 层走登出；其余关闭码
-//     （1011 内部错误 / 1012 服务重启 / 4003 慢消费方 / 1006 裸 drop）仍按无限重试
-//     处理，其中 **4003 额外派发 'dashboard:full-refetch'** 要求上层立即全量 HTTP
-//     重取（丢的事件重连补不回来）。1001 后端**不主动发**（写失败路径已改裸断 → 实际
-//     落 1006），保留在码表里仅作对照。关闭码表见后端
-//     ~/Code/hsh-erp/backend-rust/docs/api/websocket.md（唯一权威来源）。
+//   - 后端补完主动 Close 帧，关闭码有语义了。**4001 是唯一的终止性关闭码**：本层停
+//     重连（wsUrl 置 undefined）+ 派发 'auth:session-lost' 交 app 层按 reason 分流；
+//     其余关闭码（1011 内部错误 / 1012 服务重启 / 4003 慢消费方 / 1006 裸 drop）仍按
+//     无限重试处理，其中 **4003 额外派发 'dashboard:full-refetch'** 要求上层立即全量
+//     HTTP 重取（丢的事件重连补不回来）。
+//     关闭码语义的权威来源：后端 `docs/api/dashboard.md` §7.1 关闭码表（前后端联合契约）
+//     + 后端 `src/modules/dashboard/handler.rs` 的纯函数 `reauth_close_code`（码 ↔ reason
+//     的映射真源）；`1006` 的成因、4001 的两段 reason 契约见下方各自常量注释。
 //   - 不再发送 subscribe/unsubscribe 控制帧 —— 后端 v2 ws_hub 不消费这俩文本帧
 //     （2026-09-25 注释 + 2026-09-28 决策删除），后端默认行为是按连接初始订阅集合
 //     推 snapshot + events，删控制帧后逻辑等价；
@@ -68,23 +68,33 @@ function reconnectDelay(retries: number): number {
 const FAIL_LOG_DETAIL_TIMES = 3;
 const FAIL_LOG_THROTTLE_EVERY = 30;
 
-/** 后端主动关闭码 4001 = 「会话在连接期间失效」（2026-10-02 起前端特殊处理）。
+/** 后端主动关闭码 4001 = 「连接期间的周期性 re-auth 失败」。
  *
- *  关闭码表的唯一权威来源是后端 `~/Code/hsh-erp/backend-rust/docs/api/websocket.md`：
- *    - 1011 内部错误（`snapshot build failed` / `send snapshot failed` /
- *      `re-auth unavailable` / `pong timeout`）/ 1012 服务重启 / 4003 慢消费方
+ *  语义真源是后端 `src/modules/dashboard/handler.rs` 的纯函数 `reauth_close_code`
+ *  （完整的前后端联合契约表见 `docs/api/dashboard.md` §7.1「关闭码表」，逐行给出
+ *  code × reason × 发出点 × 前端应做什么）：
+ *    - 1011 `re-auth unavailable` / 1011 `pong timeout` / 1012 服务重启 / 4003 慢消费方
  *      → 瞬时或可自愈，**必须继续无限重试**；
- *    - 4001 会话失效 → 重试再多次也一样是 401，属于必须终止的死路；
- *    - 1006 浏览器侧的「异常关闭」兜底码（没收到任何 Close 帧），原因未知，
- *      同样按无限重试处理；
- *    - 1001 保留行仅作对照：后端 2026-10-02 起**不主动发 1001**（写失败路径改为
- *      裸断，浏览器侧落 1006）。真收到也不需要特判，与 1006 同走无限重连。 */
+ *    - 4001 → 重试再多次也一样失败，属于必须终止的死路；
+ *    - 1006 浏览器侧的「异常关闭」兜底码（没收到任何 Close 帧），原因未知
+ *      （nginx 掐断 / 休眠唤醒 / 代理配置缺失），同样按无限重试处理。
+ *
+ *  **4001 带两段 reason，含义完全不同（2026-10-09 起）** —— 两段都由后端
+ *  `reauth_close_code` 产出（**不是前端自造**；字面量与该函数逐字节对齐，契约见
+ *  `docs/api/dashboard.md` §7.1 的 4001 两行）：
+ *    - `access token expired`（`code::TOKEN_EXPIRED` 40102）：钉在这条连接上的那枚
+ *      access JWT 自然过期。会话本身可能还活着，refresh token 仍是好的；
+ *    - `auth expired`（`code::UNAUTHORIZED` 40100 / `code::SESSION_REVOKED` 40105）：
+ *      真·会话被吊销（登出 / 改密 / 管理员停用 / refresh rotation reuse detection）。
+ *  本层**不解释**这两段的区别（WS 层不得 import stores/auth），把 reason 原样透传，
+ *  由 app 层（`src/router/index.ts` 的 'auth:session-lost' listener）分流：过期 →
+ *  refreshOrLogout + 重连；吊销 → forceLogout。*/
 const WS_CLOSE_SESSION_LOST = 4001;
 
 /** 后端主动关闭码 4003 = 「慢消费方（广播队列溢出，永久丢了 n 条事件）」。
  *
- *  与 4001 的处理**不同**：4001 是终止性的（会话没了，重试是死路），4003 必须
- *  「重连 + 全量 HTTP 重取」（后端 websocket.md 关闭码表 4003 行的规定动作）。
+ *  与 4001 的处理**不同**：4001 是终止性的（重连是死路），4003 必须
+ *  「重连 + 全量 HTTP 重取」（后端 `docs/api/dashboard.md` §7.1 慢消费方条的规定动作）。
  *  单纯重连是不够的 —— 本仓 dashboard 域是「HTTP 全量首取 + WS 事件 invalidate
  *  重取」，**重连后的首帧 snapshot 被本层显式 no-op 丢弃**（见 dispatch() 的
  *  `msg.type === 'snapshot'` 分支），且 TanStack Query 无轮询、staleTime 30s 只是
@@ -140,8 +150,22 @@ function readTokenFromStorage(): string | null {
   }
 }
 
+// 「紧随其后的 close 是我们自己触发的」标记为什么必须存在（实现见工厂内的
+// `expectedClosingWs` —— 标记本体是「待关闭的 socket 实例」而不是布尔量）：
+// VueUse 的 `useWebSocket` 在 `ws.onclose` 里**无条件**调 `onDisconnected(ws, ev)`，
+// `explicitlyClosed` 只挡紧随其后的 `autoReconnect` 分支 —— 也就是说 `close()` /
+// `open()` 触发的主动关闭（`code = 1000`）会照常流进 onDisconnected。主动关闭的典型
+// 来源是 token 被刷新：`persistTokens` 派发 'auth:session-changed' → syncWsUrl() 改
+// URL → 换连接。若不区分，控制台每次刷新都会多一条「第 N 次连接失败」的假告警，并让
+// attempt 计数虚增（叠加 watch(wsUrl) 同 flush 内把计数清零，表现为「第 1 次」刷不停）。
+//
+// **禁止退化成「无条件吞掉 code === 1000」**：code 1000 也可能由服务端 / 中间层主动
+// 发出，那属于真实断开，必须照常走 reportFailure。只有带本标记的才跳过记账。
+
 /** 按 localStorage 里的当前 token 重算 WS URL。
- *  值不变则不写入 —— 避免触发 VueUse `watch(urlRef, open)` 做无谓重连。 */
+ *  值不变则不写入 —— 避免触发本层的 `watch(wsUrl, …)` 做无谓重连。
+ *  **本函数只写 URL，不负责换连接**：换连接统一走工厂内的 `reopenConnection` /
+ *  `closeConnection`（那里才能保证「先捕获旧 socket 实例」）。 */
 function syncWsUrl(): void {
   const token = readTokenFromStorage();
   const next = token ? buildWsUrl(token) : undefined;
@@ -155,16 +179,8 @@ function redactWsUrl(url: string | undefined): string {
   return url.replace(/([?&]token=)[^&]*/, '$1***');
 }
 
-/** 清掉 localStorage 里的会话（仅 4001 分支用）。
- *  后端已判定会话失效，本地留着只会让下一次握手继续拿吊销 token 撞 401。 */
-function clearStoredSession(): void {
-  try {
-    localStorage.removeItem('auth_session');
-  } catch {
-    // localStorage 不可用（隐私模式 / 被策略禁用）时忽略：真正决定「不再重连」的是
-    // 把 wsUrl 置为 undefined，不是这行。
-  }
-}
+// 2026-10-09 移除 `clearStoredSession()`：4001 不再由本层删 localStorage。
+// 见 onDisconnected 的 4001 分支与 WS_CLOSE_SESSION_LOST 上方的 reason 契约注释。
 
 // createGlobalState 在模块顶层跑 effectScope(true)，useWebSocket 内部的
 // tryOnScopeDispose 注册到 detached scope，永不 dispose → 单例语义正确（组件
@@ -184,29 +200,77 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
    *  （nginx proxy_read_timeout 到期、休眠唤醒、backend 重启）。 */
   let pendingError = false;
 
-  /** 会话失效（4001）诊断（2026-10-02 新增）。
+  /** 「本次 close 是我们自己发的」的标记：**待关闭的 socket 实例**（不是布尔量）。
+   *
+   *  2026-10-09 变更缘由（布尔标记为什么必然滞留）：对照 VueUse 的实现 ——
+   *   - `onDisconnected` 是从 `ws.onclose` 里调的，此刻 socket 已经是 CLOSED，此时我们
+   *     再 `close()` 打在它身上，**真实浏览器不会再派发 close 事件**（桩里若无条件
+   *     派发反而制造了「标记一定会被消费」的假象）；
+   *   - `_init()` 首行因 URL 已是 undefined 直接 return，`onConnected` 也不会来；
+   *   ⇒ 标记留到下一次真实断开（1006 / 4003）时被消费掉：不打 warn、不推进 attempt，
+   *     `pendingError` 被清零，连 4003 的 `dashboard:full-refetch` 补数据信号也一起跳过。
+   *
+   *  改成按**实例同一性**判定后，滞留也无害：一个 WebSocket 只会派发一次 close 事件，
+   *  标记绑在具体实例上就**不可能**吞掉别的连接的失败 —— 这是结构性保证，不是概率性
+   *  改善。也是为什么 `onConnected` 里不再需要（也不应该）清它。
+   */
+  let expectedClosingWs: WebSocket | null = null;
+
+  /** 记录「接下来这次 close 由我们发出」，必须**紧挨着** close() / open() 调用。
+   *  顺序敏感：必须先取 `ws.value` —— `open()` 内部先 `close()` 再同步 `_init()`，
+   *  之后 `ws.value` 已经是**新** socket 了。 */
+  function armExpectedClose(): void {
+    expectedClosingWs = ws.value ?? null;
+  }
+
+  /** 主动停连（登出 / 4001 停重连）。 */
+  function closeConnection(): void {
+    armExpectedClose();
+    close();
+  }
+
+  /** 主动换连接（URL 变化 / 显式重连）：先关旧再开新。 */
+  function reopenConnection(): void {
+    armExpectedClose();
+    open();
+  }
+
+  /** URL 变化后的换连接；当前连接已经是这个 URL 就不重复换。
+   *
+   *  这道守卫不是省流量的小优化，而是正确性要求：VueUse 只在 `close()` 里清空
+   *  wsRef，真实断开（1006 / 4003）后 `ws.value` 仍指着那条死连接，此时若无条件换，
+   *  会与 autoReconnect 定时器（1s 后按**当前** URL 重建）撞出一条多余的连接抖动。
+   *  URL 为 undefined（无 token / 4001 停连）时守卫不放行 —— 正是要把连接关掉。 */
+  function reopenForUrlChange(): void {
+    const current = ws.value;
+    if (current !== undefined && wsUrl.value !== undefined && current.url === wsUrl.value) return;
+    reopenConnection();
+  }
+
+  /** 会话失效（4001）诊断。
    *
    *  与 reportFailure 分开走：4001 是**终止性**事件而不是一次可重试的失败，
    *  既不进 attempt 计数（否则会污染后续登录后的失败编号），也不走降频逻辑
-   *  （一个会话只该打一条）。 */
+   *  （一个会话只该打一条）。文案带 reason：两段 reason（access token expired /
+   *  auth expired）指向完全不同的 app 层处置，一眼可辨。 */
   function reportSessionLost(ev: CloseEvent): void {
-    console.warn(
-      '[dashboard WS] 收到后端关闭码 4001（会话在连接期间失效）：已停止重连并清除本地会话，请重新登录',
-      { closeCode: ev.code, closeReason: ev.reason || null },
-    );
+    console.warn('[dashboard WS] 收到后端关闭码 4001（连接期间 re-auth 失败）：已停止重连', {
+      closeCode: ev.code,
+      closeReason: ev.reason || null,
+      处置:
+        ev.reason === 'access token expired'
+          ? '仅 access JWT 过期：本地会话保持不变，由 app 层 refresh 后重连'
+          : '会话已吊销：本地会话清理由 app 层完成（teardownSession 会删 auth_session）',
+    });
   }
 
-  /** 连接失败诊断（2026-10-01 新增）。
-   *
-   *  为什么需要它：2026-10-01 之前后端所有断开都是**裸 drop**（全仓零
-   *  `sender.send(Message::Close(..))`），浏览器侧只能看到 code 1006 ——
-   *  401 / 502 / 代理没配长得一模一样，这正是当时控制台只刷「dashboard WS error」
-   *  而查不出原因的原因。
+  /** 连接失败诊断。
    *
    *  2026-10-02 起后端补完主动 Close 帧，close code 本身带语义（1011 内部错误 /
-   *  1012 服务重启 / 4001 会话失效 / 4003 慢消费方；1001 后端不主动发、仅作对照），
-   *  **关闭码表见后端 `~/Code/hsh-erp/backend-rust/docs/api/websocket.md`**：
-   *  排查应先按 closeCode 查表。**1006 仍是「原因未知」的兜底** —— 鉴权失败是
+   *  1012 服务重启 / 4001 re-auth 失败 / 4003 慢消费方；1006 是原因未知的兜底码），
+   *  **关闭码语义的后端权威来源是 `src/modules/dashboard/handler.rs` 的
+   *  `reauth_close_code`**（逐行契约表见 `docs/api/dashboard.md` §7.1「关闭码表」）：
+   *  排查应先按 closeCode 查这张表。**1006 仍是「原因未知」的兜底** —— 鉴权失败是
    *  upgrade 之前就回 HTTP 401（不是 WS Close 帧），浏览器 WS API 不暴露握手期
    *  HTTP status，只有落到 1006 时才需要再去 Network 面板 / 直连后端 curl 查真实
    *  status（4001 走的是 Close 帧，40100「缺少 token」这类根本到不了 close 侧）。
@@ -231,14 +295,21 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
         closeCode: ev?.code ?? null,
         closeReason: ev?.reason || null,
         hadErrorEvent,
-        tokenExpired: token ? (exp !== null && exp * 1000 <= Date.now()) : null,
+        tokenExpired: token ? exp !== null && exp * 1000 <= Date.now() : null,
         排查提示:
-          '先按 closeCode 查后端 docs/api/websocket.md 关闭码表（1011 内部错误 / 1012 服务重启 / 4001 会话失效 / 4003 慢消费方；1001 后端不主动发、仅作对照）；4003 已额外派发全量重取信号（丢的事件重连补不回来）；仅 1006 才需再查握手期 HTTP status（Network 面板 / 直连后端 curl）',
+          '先按 closeCode 查后端 handler.rs 的 reauth_close_code 关闭码表（1011 内部错误 / 1012 服务重启 / 4001 re-auth 失败 / 4003 慢消费方；1006 是原因未知的兜底码）；4003 已额外派发全量重取信号（丢的事件重连补不回来）；仅 1006 才需再查握手期 HTTP status（Network 面板 / 直连后端 curl）',
       },
     );
   }
 
-  const { status, close, open } = useWebSocket(wsUrl, {
+  const { status, close, open, ws } = useWebSocket(wsUrl, {
+    // 2026-10-09：关掉 VueUse 自己的 `watch(urlRef, open)`，改由本文件的
+    // `watch(wsUrl, …)` 走 `reopenForUrlChange`。`autoConnect: false` **只**影响那一句
+    // `watch`，`immediate` 的首次建连照旧（工厂里先 syncWsUrl() 再建实例）。
+    // 换掉的原因：VueUse 的 watch 注册更早、与本文件的 watch 落在同一个 flush，它会先跑
+    // `open()` —— 而 `open()` 里同步 `_init()` 把 wsRef 换成**新** socket，那时我们再想
+    // 「记下即将关闭的旧实例」已经取不到了。改成自己驱动后，顺序由我们说了算。
+    autoConnect: false,
     autoReconnect: {
       retries: -1,
       delay: reconnectDelay,
@@ -249,30 +320,50 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
     },
     onConnected() {
       attempt = 0;
+      // 这里**不**碰主动关闭标记（2026-10-09）：标记绑在具体 socket 实例上，滞留也无害。
+      // 而且旧实现的「onConnected 里清标记」本身是个反向乱序竞争 —— reconnectDashboard
+      // 的顺序是「置位 → open()」，真实浏览器里旧 socket 的 close 事件与新 socket 的
+      // open 事件**无顺序保证**：新连接握手更快时 onConnected 先跑 → 清掉标记 → 随后旧
+      // socket 的 close 到达，被记成一次真实失败。改成实例匹配后这个竞争自然消失。
       notifyStatus('open');
     },
     onDisconnected(_ws, ev) {
-      // 2026-10-02 新增：4001「会话在连接期间失效」是**唯一需要终止重连**的关闭码。
-      // 少了这个分支，autoReconnect.retries:-1 会拿着已死 token 无限重试 → 每次握手
-      // 都被后端判 401/4001 → 控制台永不停歇 —— 正是 2026-10-01 刚修掉的那类 bug
-      // （logout 后拿吊销 token 死循环）的另一面。
+      // 主动关闭判定必须放在最前面。判定依据是「**实例同一性**」，不是 code：code 1000
+      // 也可能由服务端 / 中间层主动发出，那是真实断开，必须照常走 reportFailure。
+      if (expectedClosingWs !== null && expectedClosingWs === _ws) {
+        expectedClosingWs = null;
+        pendingError = false;
+        notifyStatus('closed');
+        return;
+      }
+      // 4001「连接期间 re-auth 失败」是**唯一需要终止重连**的关闭码。少了这个分支，
+      // autoReconnect.retries:-1 会拿着已死 token 无限重试 → 每次握手都被后端判
+      // 401/4001 → 控制台永不停歇。
       if (ev.code === WS_CLOSE_SESSION_LOST) {
         pendingError = false;
         reportSessionLost(ev);
         // ① 停重连：URL 置 undefined，复用已有的「无 token 不连」哨兵。时序说明 ——
         //    VueUse 的 `ws.onclose` 是先调 onDisconnected（本函数）、返回后才
-        //    `setTimeout(_init, 1s)`；这里的写入触发 `watch(urlRef, open)` →
-        //    `close()` → `resetRetry()` 掐掉那个定时器（Vue scheduler 走微任务，
-        //    早于 1s 定时器）。就算没掐掉，`_init()` 首行的 undefined 守卫也不会
-        //    `new WebSocket(...)` —— 两道闸，缺一不成立。
+        //    `setTimeout(_init, 1s)`；这里的写入触发本文件的 `watch(wsUrl, …)` →
+        //    `closeConnection()` → `close()` → `resetRetry()` 掐掉那个定时器（Vue
+        //    scheduler 走微任务，早于 1s 定时器）。就算没掐掉，`_init()` 首行的
+        //    undefined 守卫也不会 `new WebSocket(...)` —— 两道闸，缺一不成立。
+        //    标记也在那里置位（统一入口负责「先捕获旧实例」），这次 close 不会被
+        //    记成「第 N 次连接失败」（那句文案「仍会持续重试」与已停重连的事实也矛盾）。
         wsUrl.value = undefined;
-        // ② 清 session：后端已判定失效，本地留着只会让下一次握手继续 401。
-        clearStoredSession();
-        // ③ 通知 app 层踢去登录页。本模块**不能**反向 import stores/auth（auth ↔ api
-        //    循环依赖），沿用 CLAUDE.md 既定 CustomEvent 解耦范式，接收方是
-        //    `src/router/index.ts`（持有 router 实例 + useAuthStore）→ forceLogout(router)。
-        //    注意与 'auth:session-changed' 的区别：那个是「token 变了，WS 重算 URL
-        //    并重连」，本事件是「后端判定会话已死，请上层终止会话」，方向相反。
+        // ② 通知 app 层按 reason 分流。本模块**不能**反向 import stores/auth / vue-router
+        //    （auth ↔ api 循环依赖 + WS 层分层禁令），沿用 CLAUDE.md 既定 CustomEvent
+        //    解耦范式，接收方是 `src/router/index.ts`（持有 router 实例 +
+        //    useAuthStore）。reason 两段语义见 WS_CLOSE_SESSION_LOST 上方注释。
+        //
+        //    **本层不删 localStorage**：4001 有两段 reason，而「删会话」这一步只能由
+        //    app 层按 reason 决定 —— `access token expired` 时 refresh token 仍然有效，
+        //    删掉等于把用户踢去登录页。真正需要清会话时 app 层走
+        //    `forceLogout` → `teardownSession()`，那里本来就会
+        //    `localStorage.removeItem('auth_session')`，不需要 WS 层抢跑。
+        //
+        //    与 'auth:session-changed' 的区别：那个是「token 变了，WS 重算 URL
+        //    并重连」，本事件是「后端 re-auth 失败了，请上层处置会话」，方向相反。
         window.dispatchEvent(
           new CustomEvent('auth:session-lost', {
             detail: { code: ev.code, reason: ev.reason || null },
@@ -282,18 +373,18 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
         return;
       }
       if (ev.code === WS_CLOSE_LAGGED) {
-        // 2026-10-02 修复（review Major 2）：慢消费方丢了 n 条事件，重连本身补不回来
-        // —— 新连接的订阅集合从此刻起算，错过的 n 条永久丢失，而 dashboard 域只认
-        // 「WS 事件 → invalidate → HTTP 重取」，没有别的补偿通道。所以这里补发一次
-        // 「全量重取」信号，由 views 层立即 invalidate 对应 query。
+        // 慢消费方丢了 n 条事件，重连本身补不回来 —— 新连接的订阅集合从此刻起算，
+        // 错过的 n 条永久丢失，而 dashboard 域只认「WS 事件 → invalidate → HTTP
+        // 重取」，没有别的补偿通道。所以这里补发一次「全量重取」信号，由 views 层
+        // 立即 invalidate 对应 query。
         //
         // 本层**不 import useQueryClient**：api 层引入 TanStack Query 依赖是分层倒置
         // （CLAUDE.md 的 api ↔ stores 解耦范式同源）。沿用既有 CustomEvent 解耦，
         // 接收方是 useDashboardInvalidation（已持有 qk + queryClient）→ 立即
         // （不防抖）invalidate。
         //
-        // 与 'auth:session-lost' 的区别：那个是「会话已死，终止会话」，这个是
-        // 「会话没死，但数据可能已经缺了，补一次全量重取」。
+        // 与 'auth:session-lost' 的区别：那个是「会话出问题，终止/恢复会话」，这个是
+        // 「会话没事，但数据可能已经缺了，补一次全量重取」。
         //
         // 注意：重连本身仍按通用路径走（下面 reportFailure + autoReconnect），4003
         // 只是额外挂一个补数据的信号。其余关闭码（1006/1011/1012）同样会因
@@ -316,10 +407,10 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
     },
     onMessage(_ws, e) {
       try {
-        // 2026-09-28 review 第 2 轮修复（N3）：WS 帧壳已在 types/dashboard.ts 用
-        // discriminated union（DashboardEvent | WsSnapshotMsg | WsHeartbeatMsg）
-        // 描述，无需 `as DashboardServerMessage` 强转；TS 在 dispatch 内的
-        // if/else if 分支能按 msg.type 字面量正确 narrow。
+        // WS 帧壳已在 types/dashboard.ts 用 discriminated union
+        // （DashboardEvent | WsSnapshotMsg | WsHeartbeatMsg）描述，无需
+        // `as DashboardServerMessage` 强转；TS 在 dispatch 内的 if/else if 分支
+        // 能按 msg.type 字面量正确 narrow。
         const msg: DashboardServerMessage = JSON.parse(e.data);
         dispatch(msg);
       } catch (err) {
@@ -340,19 +431,16 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
   }
 
   function dispatch(msg: DashboardServerMessage): void {
-    // 2026-09-28 review 第 2 轮修复（N3）：union 补全后这里用 discriminated union
-    // narrowing；msg.type 字面量在每个分支被精确收窄到对应 interface，
-    // TS 不再把 snapshot/heartbeat 帧硬塞到 DashboardEvent 类型里。
-    // 2026-09-28 review 第 1 轮修复：显式三分支（plan 3.10 字面要求），保留
-    // snapshot 与 heartbeat 的 no-op 行为不变（HTTP 全量首取已替代 snapshot；
-    // heartbeat 是后端 30s 保活 text 帧，前端无需消费）。
+    // union 补全后这里用 discriminated union narrowing；msg.type 字面量在每个分支被
+    // 精确收窄到对应 interface，TS 不再把 snapshot/heartbeat 帧硬塞到
+    // DashboardEvent 类型里。显式三分支，snapshot 与 heartbeat 的 no-op 行为保留
+    // （HTTP 全量首取已替代 snapshot；heartbeat 是后端 30s 保活 text 帧，前端无需消费）。
     if (msg.type === 'event') {
-      // 【B1 预留】未来形态：若日后落地真增量（DASHBOARD_ITEM_UPSERT / REMOVE 等），
-      // 在此分支内加二级分发（例：按 msg.event_type 走 query cache patcher，
-      // default 仍走事件 invalidate 兜底）。当前架构走「WS 事件 → HTTP 重取」，
-      // 二级分发只区分「影响 dashboard 大屏的事件集」一个维度
-      // （AFFECTS_DASHBOARD，详见 useDashboardSnapshot.ts），所以此分支
-      // 仅做 fan-out + 错误隔离，未来 B1 落地时再内嵌二级分发。
+      // 未来形态：若日后落地真增量（DASHBOARD_ITEM_UPSERT / REMOVE 等），在此分支内
+      // 加二级分发（例：按 msg.event_type 走 query cache patcher，default 仍走事件
+      // invalidate 兜底）。当前架构走「WS 事件 → HTTP 重取」，二级分发只区分
+      // 「影响 dashboard 大屏的事件集」一个维度（AFFECTS_DASHBOARD，详见
+      // useDashboardSnapshot.ts），所以此分支仅做 fan-out + 错误隔离。
       for (const h of eventSubs) {
         try {
           h(msg);
@@ -372,10 +460,8 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
 
   // 把 VueUse 'CONNECTING' / 'OPEN' / 'CLOSED' 翻译成 ConnectionStatus（保持
   // 现有 public 类型语义不变，外部 status handler 仍按 'connecting' | 'open' |
-  // 'closed' 写 switch）。
-  // 2026-09-28 review 第 1 轮修复：加 immediate: true，让模块首次实例化时
-  // 初始 CONNECTING 状态也能触发 status handler（原手写代码在 connect() 顶部
-  // 同步 notifyStatus('connecting')，语义对齐）。
+  // 'closed' 写 switch。immediate: true 让模块首次实例化时初始 CONNECTING 状态
+  // 也能触发 status handler。
   watch(
     status,
     (s) => {
@@ -384,18 +470,22 @@ const useDashboardWebSocketInternal = createGlobalState(() => {
     { immediate: true },
   );
 
-  // 2026-10-01 新增：token 变了就把失败计数清零，避免 logout→login 之后第一条失败
-  // 就因为继承了旧计数而被降频逻辑静默吞掉。
+  // token 变了就把失败计数清零，并按新 URL 换连接。
+  //
+  // 这是**唯一**驱动「URL 变化 → 重连」的地方（`useWebSocket` 的 `autoConnect: false`
+  // 关掉了它自己那条 `watch(urlRef, open)`），这样才能保证换连接时先捕获旧 socket
+  // 实例再 open，见 armExpectedClose / reopenForUrlChange 那组函数的注释。
   watch(wsUrl, () => {
     attempt = 0;
     pendingError = false;
+    reopenForUrlChange();
   });
 
   return {
     eventSubs,
     statusSubs,
-    close,
-    open,
+    closeConnection,
+    reopenConnection,
   };
 });
 
@@ -428,24 +518,29 @@ export function onDashboardStatus(h: StatusHandler): () => void {
 
 /** 显式关闭长连接（一般不调用，保留供登出 / 测试使用）。 */
 export function closeDashboard(): void {
-  const { close } = getSocket();
-  close();
+  // 走统一入口：主动关闭不记失败（VueUse 的 onclose 不看 explicitlyClosed，必须在
+  // 调 close 前把「即将关闭的那个 socket 实例」记下来）。
+  getSocket().closeConnection();
 }
 
 /**
  * 强制发起一次重连。
- * 常规路径不需要手动调用 —— `auth:session-changed` 监听器会自动 syncWsUrl()，
- * URL 变化时 VueUse `watch(urlRef, open)` 自己重连。此处保留供测试与
- * 「已知连接已死、想立刻重来一次」的手动兜底。
  *
- * 2026-10-02：4001（会话失效）之后调用它也**不会**建连 —— 那一分支已清掉
- * localStorage 会话并把 URL 置 undefined，syncWsUrl() 读不到 token，只能等用户
- * 重新登录（重新登录会派发 auth:session-changed 带新 token，URL 随之恢复）。
+ * 常规路径不需要手动调用 —— `auth:session-changed` 监听器会自动 syncWsUrl()，
+ * URL 变化时本层的 `watch(wsUrl, …)` 自己重连。此处保留供
+ * 「4001 的 reason 是 access token expired，app 层 refresh 成功后要立刻恢复长连接」
+ * 以及测试使用。
+ *
+ * URL 真的变了就交给那个 watcher（那时还没有按新 URL 建好的连接，不会重复换）；URL 没
+ * 变时必须显式换一次，否则长连接停在已关闭态。
+ *
+ * 无有效 token 时（storage 里没有 auth_session）`open()` 不会建连
+ * （`_init()` 首行的 undefined 守卫），保持静默。
  */
 export function reconnectDashboard(): void {
+  const prev = wsUrl.value;
   syncWsUrl();
-  const { open } = getSocket();
-  open();
+  if (wsUrl.value === prev) getSocket().reopenConnection();
 }
 
 // ============================================================
@@ -519,16 +614,15 @@ export async function fetchDeliveryOrders(
 // ============================================================
 // 'auth:session-changed' CustomEvent 监听 → syncWsUrl() → 自动重连 / 关闭
 // ============================================================
-// 2026-10-01：统一 auth 转换事件，取代原先只订阅 'auth:tokens-refreshed' 的做法。
+// 统一 auth 转换事件，取代原先只订阅 'auth:tokens-refreshed' 的做法。
 // 派发方共 3 处，覆盖全部 token 生命周期：
-//   - api/http.ts    persistTokens()：access token 被刷新（原本就 dispatch）
+//   - api/http.ts    persistTokens()：access token 被刷新
 //   - stores/auth.ts loginMutation.onSuccess：登录成功写入新 token
 //   - stores/auth.ts teardownSession()：会话终止，detail.token = null → WS 主动断开
-//     （2026-10-02 订正：本行原写 logout()，是事实错误 —— M-4 已把派发语句从
-//      logout() 移进 teardownSession()，logout / forceLogout / refreshOrLogout
-//      失败分支 / auth:logout 事件共 4 条终止路径全部汇入该函数（全文件唯一一处
-//      detail: { token: null } 派发）。上方「3 处」计数不变：3 个派发点 ⇒ 1 条
-//      派发语句，与 CLAUDE.md「auth:session-changed」表一致。）
+//     （logout / forceLogout / refreshOrLogout 失败分支 / auth:logout 事件共 4 条
+//      终止路径全部汇入 teardownSession，全文件唯一一处 detail: { token: null }
+//      派发。上方「3 处」计数 = 3 个派发点 ⇒ 1 条派发语句，与 CLAUDE.md
+//      「auth:session-changed」表一致。）
 // 沿用 CLAUDE.md 既定解耦：事件派发方不 import 本模块，本模块也不 import
 // stores/auth（避免 auth ↔ api 循环依赖）。
 // 仍然只保留 auth:tokens-refreshed 供 useAuthStore 同步自身 state —— 那是另一件事
@@ -541,26 +635,34 @@ if (typeof window !== 'undefined' && !sessionListenerBound) {
   sessionListenerBound = true;
   window.addEventListener('auth:session-changed', () => {
     // 现读 localStorage（登录 / 刷新后新 token 已就位；登出后 key 已删）。
-    // 值变化 → VueUse watch(urlRef, open) 触发重连；
-    // 变为 undefined → open() 内 close() 后 _init() 因 url undefined 直接返回，连接关闭。
+    // 值变化 → 本层 watch(wsUrl, …) 换连接；
+    // 变为 undefined → closeConnection() 内 close() 后 _init() 因 url undefined
+    // 直接返回，连接关闭。
     syncWsUrl();
   });
 }
 
 // ============================================================
-// 本层派发的两个 CustomEvent（2026-10-02 新增，方向与上面相反）
+// 本层派发的两个 CustomEvent（方向与上面相反）
 // ============================================================
 // 上面的 'auth:session-changed' 是「本层**听** auth 层说话」；下面两个是
 // 「本层**告诉**上层发生了什么」，派发点都在 onDisconnected，各自一处，无 HMR
 // 重复注册问题。之所以都绕开直接 import：
-//   - 'auth:session-lost' 不 import stores/auth（否则 auth ↔ api 循环依赖）；
+//   - 'auth:session-lost' 不 import stores/auth / vue-router（否则 auth ↔ api
+//     循环依赖，且 WS 层有分层禁令）；
 //   - 'dashboard:full-refetch' 不 import @tanstack/vue-query（api 层引入
 //     TanStack Query 依赖是分层倒置）。
 // 两者接收方与语义：
-//   1. 'auth:session-lost'（4001 会话失效，终止性）
+//   1. 'auth:session-lost'（4001 re-auth 失败，终止性 —— 本层不再自行删会话）
 //      `CustomEvent<{ code: number; reason: string | null }>`，接收方是
-//      `src/router/index.ts` → auth.forceLogout(router)（无条件终止会话 +
-//      router.replace('/login')）。语义：**会话没了，别再连**。
+//      `src/router/index.ts`，按 reason 三路分流（reason 契约见
+//      WS_CLOSE_SESSION_LOST 上方注释）：
+//        - `access token expired` → `auth.refreshOrLogout(router)`；成功则
+//          `reconnectDashboard()` 恢复长连接，失败则由 refreshOrLogout 内部
+//          forceLogout（session 真没了才会失败）；
+//        - `auth expired` → `auth.forceLogout(router)` 直接终止；
+//        - `null` / 未知 → null 按「可能只是 token 过期」走 refresh 分支，
+//          其它非空未知值保守 forceLogout。
 //   2. 'dashboard:full-refetch'（4003 慢消费方丢了 n 条事件，非终止性）
 //      `CustomEvent<{ code: number; reason: string | null }>`，接收方是
 //      `src/views/dashboard/composables/useDashboardInvalidation.ts` → 立即

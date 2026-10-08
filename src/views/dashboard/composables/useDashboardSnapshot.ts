@@ -24,13 +24,16 @@
 //     写法，后续若给快照再加维度（例如用户级收窄）不会静默漏失效。
 //   - staleTime: 30_000（30s 短时去重窗口）/ gcTime: POSITIVE_INFINITY（会话级缓存）。
 //     30s 而非无限，两条理由：
-//      1) 对齐 CLAUDE.md 2026-09-30「TanStack Query 降级为 30s 短时请求去重层」策略，
+//      1) 对齐 CLAUDE.md「TanStack Query 降级为 30s 短时请求去重层」策略，
 //        也与同域 useDashboardUpcoming 的取值一致；
-//      2) 更实际的原因是 staleTime 无限时**空闲的大屏不产生任何 HTTP 流量**，而
-//        http.ts 的 maybeProactiveRefresh 只在成功响应拦截器里触发 —— 于是 access
-//        token（默认 900s TTL）过期后没人去刷新，WS 只能永远握着一个过期 token 重连
-//        （后端 40102/40105）。30s staleTime 让大屏即便无操作也会周期性重取，
-//        从而带动 token 主动刷新这条链路。
+//      2) staleTime 只决定「下次取数时数据算不算 fresh」，**不产生任何定时器** ——
+//        空闲的大屏零 HTTP 流量。这条流量缺口由两处兜底，都不靠 staleTime：
+//        - access token 保活：api/http.ts 的 `ensureAccessTokenKeepalive()`
+//          （setTimeout 链，按 storage 里 token 的 exp 自续期）—— 保活不依赖流量，
+//          空闲页面也会刷新 token，所以 token 不会自然过期到让 WS 周期性 re-auth
+//          拿到 TOKEN_EXPIRED（关闭码 4001）；
+//        - dashboard 数据的新鲜度：靠 WS 事件 → invalidate 重取（见 useDashboardInvalidation）。
+//        两者都不需要查询自身产生定时器。
 //   - gcTime 的 POSITIVE_INFINITY 不可改：dashboard 域的会话级缓存是 CLAUDE.md
 //     认证一节「跨账号缓存隔离只靠 auth 的 queryClient.clear() 兜底」这条安全约束的
 //     一部分，改成有限值会掩盖该约束的前提。

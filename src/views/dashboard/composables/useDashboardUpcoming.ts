@@ -27,8 +27,12 @@
 //     会让它为 true，而那时图上数字是当前且正确的，提示层会播报一个假状态。
 //   - staleTime: 30_000 / gcTime: POSITIVE_INFINITY（CLAUDE.md 明列的 dashboard 域
 //     例外，靠 WS 事件失效、不靠 GC；跨账号泄漏窗口只靠会话终止时的
-//     queryClient.clear() 兜底）。30s staleTime 同时保证空闲大屏仍有 HTTP 流量带动
-//     http.ts 的 token 主动刷新，详见 useDashboardSnapshot.ts 同位置长注释。
+//     queryClient.clear() 兜底）。staleTime 只决定「下次取数时数据算不算 fresh」、
+//     **不产生任何定时器**，空闲期（零 HTTP 流量）的两处缺口都由外部机制兜底、
+//     都不靠 staleTime：token 续期靠 api/http.ts 的 `ensureAccessTokenKeepalive()`
+//     （setTimeout 链，按 storage 里 token 的 exp 自续期，空闲页面照跑）；本 query
+//     的数据新鲜度靠 WS 事件 → invalidate（见 useDashboardInvalidation）。
+//     详见 useDashboardSnapshot.ts 同位置长注释。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //   - 返回 { data, isPlaceholderData, fetchList, query }：fetchList 是 refetch 别名，
 //     供外部调用方与测试零改动驱动。
