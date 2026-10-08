@@ -46,7 +46,9 @@
               <span class="tab-label__code" :style="p.color ? { color: p.color } : undefined">{{
                 p.code
               }}</span>
-              <span class="tab-label__count">({{ sendableOf(p.id) }} / {{ inFlightOf(p.id) }})</span>
+              <span class="tab-label__count"
+                >({{ sendableOf(p.id) }} / {{ inFlightOf(p.id) }})</span
+              >
             </span>
           </template>
           <ProcessBoardTab :process-id="p.id" />
@@ -59,7 +61,6 @@
 
     <OutsourceReceiveDialog
       v-model="receiveVisible"
-      :mode="receiveMode"
       :company-name="receiveCtx?.companyName ?? ''"
       :batch="receiveCtx?.held ?? null"
       :submitting="receiving"
@@ -106,7 +107,6 @@ import {
   isCandidateDraggable,
   type OpenOutsourceBatchMenu,
   type OutsourceHeldCardContext,
-  type OutsourceReceiveMode,
   type OutsourceReceiveSubmit,
 } from './outsourceBoardTypes';
 
@@ -121,8 +121,7 @@ const procsQuery = useProcessesQuery({ category: 'OUTSOURCE', limit: 200 });
 const snapshotQuery = useOutsourceQueueSnapshotQuery();
 
 // 写操作 composable 在板级实例化一次（见文件头「板级持有三个跨容器的东西」）。
-const { error: moveError, canMove, sendToCompany, receiveToProduction, receiveToInspection } =
-  useOutsourceQueueMove();
+const { error: moveError, canMove, sendToCompany, receiveToProduction } = useOutsourceQueueMove();
 // 候选池右键「召回到待下发」复用生产队列域的召回 composable（跨域端点，本页不另写一份）。
 const recall = useQueueRecall();
 
@@ -223,7 +222,10 @@ watch(
 provide(SEND_TO_COMPANY, sendToCompany);
 // 扫码作用域闸门给的是 computed（不是 activeTab 本体）：候选池实例读它时不必知道
 // 板级的 ref 形态，且类型与 inject 侧的 ComputedRef<string> 对齐。
-provide<ComputedRef<string>>(ACTIVE_OUTSOURCE_PROCESS_ID, computed(() => activeTab.value));
+provide<ComputedRef<string>>(
+  ACTIVE_OUTSOURCE_PROCESS_ID,
+  computed(() => activeTab.value),
+);
 
 // ============================================================
 // 右键菜单（区域 × 角色 × 批次状态 × 报价路径 的派生在纯函数里，见 outsourceBatchMenuItems.ts）
@@ -305,12 +307,6 @@ provide<OpenOutsourceBatchMenu>(OPEN_OUTSOURCE_BATCH_MENU, (evt, batch, area, ct
     onSplit: () => openSplitDialog(batch),
     onReceiveProduction: () => {
       receiveCtx.value = held;
-      receiveMode.value = 'production';
-      receiveVisible.value = true;
-    },
-    onReceiveInspection: () => {
-      receiveCtx.value = held;
-      receiveMode.value = 'inspection';
       receiveVisible.value = true;
     },
   });
@@ -340,7 +336,6 @@ async function onSplitDone(): Promise<void> {
 // 回收对话框（右键触发，非拖拽）
 // ============================================================
 const receiveVisible = ref(false);
-const receiveMode = ref<OutsourceReceiveMode>('production');
 const receiveCtx = ref<OutsourceHeldCardContext | null>(null);
 const receiving = ref(false);
 
@@ -348,21 +343,13 @@ async function onReceiveConfirm(payload: OutsourceReceiveSubmit): Promise<void> 
   const ctx = receiveCtx.value;
   if (!ctx) return;
   receiving.value = true;
-  const ok =
-    receiveMode.value === 'production'
-      ? await receiveToProduction({
-          companyId: ctx.companyId,
-          batch: ctx.held,
-          toShelfId: payload.toShelfId,
-          nextProcessId: payload.nextProcessId ?? null,
-        })
-      : await receiveToInspection({
-          companyId: ctx.companyId,
-          batch: ctx.held,
-          toShelfId: payload.toShelfId,
-        });
+  const ok = await receiveToProduction({
+    companyId: ctx.companyId,
+    batch: ctx.held,
+    nextProcessId: payload.nextProcessId ?? null,
+  });
   receiving.value = false;
-  // 成功才关：失败保持打开、保留已选货架/工序，用户改一下就能重试。
+  // 成功才关：失败保持打开、保留已选工序，用户改一下就能重试。
   if (ok) receiveVisible.value = false;
 }
 

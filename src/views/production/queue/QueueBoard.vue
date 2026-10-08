@@ -130,7 +130,6 @@
 
 <script setup lang="ts">
 import { computed, provide, ref, watch } from 'vue';
-import type { ComputedRef } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useQueryClient } from '@tanstack/vue-query';
@@ -157,18 +156,12 @@ import PendingPoolsPanel from './components/PendingPoolsPanel.vue';
 import BatchSplitDialog from '@/components/BatchSplitDialog.vue';
 
 const auth = useAuthStore();
-// shelfId **只服务** PoolDrawer 的 WORKER→POOL 撤回目标货架（工人列与工序池都不再
-// 依赖它 —— 队列数据全部由后端按批次真实位置返回）。
-//
-// ⚠️ 该值取自 `auth.activeShelfId = boundShelves[0]`，而后端只给「SHELF_ACCOUNT +
+// 2026-10-10：`shelfId` computed 与它的 provide 一并删除。它原本**只服务**
+// PoolDrawer 的 WORKER→POOL 撤回目标货架，而该值取自
+// `auth.activeShelfId = boundShelves[0]` —— 后端只给「SHELF_ACCOUNT +
 // scope_type='shelf'」的角色行返 shelf_ids ⇒ 对 MANAGER / CLERK / INSPECTOR 恒为
-// null ⇒ shelfId 恒 `''`。后果：「把批次撤回候选池」对这三类角色结构性不可用 ——
-// PoolDrawer 落点校验会弹「请先选择目标货架」，用户无法完成撤回。
-// 之所以不能像只读端点那样把货架参数删掉：后端对 `to.shelf_id` 是**真实使用**的
-// —— 目标货架必须命中 t_shelf_process 映射，否则 20507 / HTTP 422，货架语义无法从
-// 请求里省掉。正解是补一个显式「当前货架」选择器，或一个
-// `/shelves/for-return?next_process_id=` picker（待做）。
-const shelfId = computed(() => auth.activeShelfId ?? '');
+// null，撤回对这三类角色结构性不可用。现在 `to.shelf_id` 后端已删，撤回的目标架改由
+// 后端按批次当前工序自动选，这条结构性限制随之消失。
 const queueMove = useQueueMove();
 const route = useRoute();
 const router = useRouter();
@@ -276,7 +269,9 @@ function dispatchTargets(): QueueMenuProcess[] {
 function currentBoardWorkers(): QueueWorkerSchema[] {
   const pid = activeTab.value;
   if (pid === PENDING_TAB) return [];
-  return qc.getQueryData<{ workers: QueueWorkerSchema[] }>(qk.productionQueueBoard(pid))?.workers ?? [];
+  return (
+    qc.getQueryData<{ workers: QueueWorkerSchema[] }>(qk.productionQueueBoard(pid))?.workers ?? []
+  );
 }
 
 /** 「派给工人 / 转交给工人」的目标集 —— 当前 tab 的工人列。
@@ -425,7 +420,6 @@ provide<typeof moveBatchToWorker>('moveBatchToWorker', moveBatchToWorker);
 provide<typeof moveBatchToPool>('moveBatchToPool', moveBatchToPool);
 // WorkerColumn 落点消费（把 A 手中的批次拖到 B 手中 = WORKER→WORKER）。
 provide<typeof moveBatchBetweenWorkers>('moveBatchBetweenWorkers', moveBatchBetweenWorkers);
-provide<ComputedRef<string>>('shelfId', shelfId);
 
 // 深链 ?tab=<某工序> 时 inhouseProcs 尚未从 procsQuery 解析完、无法校验 tab 合法性 ——
 // 解析后校正到第一个 INHOUSE 工序。

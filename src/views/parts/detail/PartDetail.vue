@@ -68,7 +68,6 @@
     <!-- 零件文件 tabs 卡（2026-09-17 PR-4：合并 4 张 FileListCard + PartCncCard） -->
     <PartFilesTabsCard
       :part-id="partId"
-      :part-status="part?.status ?? 'PENDING'"
       :drawings="drawings"
       :models3d="models3d"
       :cad-files="cadFiles"
@@ -81,8 +80,6 @@
       :cad-upload="cadUpload"
       :cnc-setup-groups="cncSetupGroups"
       :cnc-loading="cncLoading"
-      :production-shelves="productionShelves"
-      :processes="processes"
       :format-bytes="formatBytes"
       :file-list="fileList"
       :on-download-cnc="onDownloadCnc"
@@ -90,7 +87,6 @@
       @refresh="onFileTabRefresh"
       @fetch="fetchCncPrograms"
       @pairUpload="handlePairUpload"
-      @release="handleRelease"
     />
 
     <!--
@@ -243,7 +239,7 @@
     <!-- 指定工序对话框（PartDetail 用）—— 2026-07-21 改：先选下一道工序，再选目标生产货架；可选品检备注 -->
     <el-dialog
       v-model="failInspDialogVisible"
-      title="指定工序 — 选择下一道工序 + 目标生产货架"
+      title="指定工序 — 选择下一道工序"
       :width="failInspDlg.width"
       :top="failInspDlg.top"
       :fullscreen="failInspDlg.fullscreen"
@@ -260,7 +256,7 @@
             style="width: 100%"
           >
             <el-option
-              v-for="p in failInspFilteredProcesses"
+              v-for="p in processes"
               :key="p.id"
               :value="String(p.id)"
               :label="`${p.code} — ${p.name}`"
@@ -278,36 +274,6 @@
             </el-option>
           </el-select>
         </el-form-item>
-        <el-form-item label="目标生产货架" required>
-          <el-select
-            v-model="failInspShelfId"
-            placeholder="先选工序；货架候选按映射过滤"
-            filterable
-            clearable
-            style="width: 100%"
-            :disabled="!failInspProcessId"
-          >
-            <el-option
-              v-for="s in failInspFilteredShelves"
-              :key="s.id"
-              :value="String(s.id)"
-              :label="`${s.code} — ${s.name}`"
-              :disabled="!s.is_active"
-            >
-              {{ s.code }} — {{ s.name }}
-              <span v-if="!s.is_active" class="muted">（已停用）</span>
-            </el-option>
-            <template #empty>
-              <span class="muted">
-                {{
-                  failInspProcessId
-                    ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
-                    : '请先选择下一道工序'
-                }}
-              </span>
-            </template>
-          </el-select>
-        </el-form-item>
         <el-form-item label="品检备注">
           <el-input
             v-model="failInspNote"
@@ -321,7 +287,7 @@
         <el-alert
           type="info"
           :closable="false"
-          title="指定工序后零件回到「在生产货架上」状态，下一道工序与备注已写入事件历史；工人领取时可在卡片上看到备注。"
+          title="指定工序后零件回到「在生产货架上」状态（目标货架由系统按负载自动选择），下一道工序与备注已写入事件历史；工人领取时可在卡片上看到备注。"
           show-icon
         />
       </el-form>
@@ -330,7 +296,7 @@
         <el-button
           type="warning"
           :loading="failInspSubmitting"
-          :disabled="!failInspProcessId || !failInspShelfId"
+          :disabled="!failInspProcessId"
           @click="onFailInspectionConfirm"
           >确认指定工序</el-button
         >
@@ -518,7 +484,6 @@ const {
   onDownloadCnc,
   onDeleteCnc,
   onPairUpload,
-  onReleaseToShelf,
   // 2026-08-25 T10p5：上传 staging 助手（含 ElMessage.warning 兜底），通过函数 prop 注入 PartFilesTabsCard。
   fileList,
 } = cnc;
@@ -595,9 +560,7 @@ const processesQuery = useProcessesQuery({ limit: 200 });
 // 沿 usePendingProgrammingStore / usePartDispatch 同模式桥接；本页消费方
 // （ProcessChainCard 字典 / useShelfProcessFilter / el-option）只读 id / code /
 // name / category，对 optional 字段无依赖，零行为差异。
-const processes = computed<Process[]>(
-  () => (processesQuery.data.value?.items ?? []) as Process[],
-);
+const processes = computed<Process[]>(() => (processesQuery.data.value?.items ?? []) as Process[]);
 
 async function ensureShelvesProcesses(): Promise<void> {
   if (productionShelves.value.length === 0) {
@@ -631,54 +594,32 @@ const confirmDlg = useDialogSize({ desktopWidth: 420 });
 const { dangerous: confirmDangerous } = useConfirm();
 
 // 品检打回（指定工序）对话框
+// 2026-10-10：目标生产货架下拉与 useShelfProcessFilter 一并删除 —— 打回的目标架由后端
+// 按负载自动选（`to-process` 的 `shelf_id` 后端已删）。工序下拉直接用全量 processes。
 const failInspDialogVisible = ref(false);
 const failInspProcessId = ref<string>('');
-const failInspShelfId = ref<string>('');
 const failInspNote = ref<string>('');
 const failInspSubmitting = ref(false);
-const {
-  filteredShelves: failInspFilteredShelves,
-  filteredProcesses: failInspFilteredProcesses,
-} = useShelfProcessFilter(
-  computed(() => productionShelves.value),
-  computed(() => processes.value),
-  computed({
-    get: () => failInspShelfId.value || null,
-    set: (v) => {
-      failInspShelfId.value = v ?? '';
-    },
-  }),
-  computed({
-    get: () => failInspProcessId.value || null,
-    set: (v) => {
-      failInspProcessId.value = v ?? '';
-    },
-  }),
-);
 
 async function openFailInspDialog() {
   failInspProcessId.value = '';
-  failInspShelfId.value = '';
   failInspNote.value = '';
   await ensureShelvesProcesses();
   failInspDialogVisible.value = true;
-  // 映射（货架↔工序）由共享 query 跟随 productionShelves / processes 就绪自动开闸；
   // processes 已是共享 query 的响应式派生，弹窗打开即已就位。
 }
 function onFailInspDialogClosed() {
   failInspProcessId.value = '';
-  failInspShelfId.value = '';
   failInspNote.value = '';
 }
 async function onFailInspectionConfirm() {
-  if (!failInspProcessId.value || !failInspShelfId.value) return;
+  if (!failInspProcessId.value) return;
   failInspSubmitting.value = true;
   try {
     const ok = await onFailInspection({
       // 2026-10-02：to-process 以批次为锚，锚点用三卡联动已选中的批次 ——
       // 多批次 part 上比「找第一个 INSPECTION 批次」更准。
       batchId: selectedBatchId.value,
-      shelfId: failInspShelfId.value,
       processId: failInspProcessId.value,
       note: failInspNote.value.trim() || null,
     });
@@ -694,25 +635,23 @@ const receiveShelfId = ref<string>('');
 const receiveProcessId = ref<string>('');
 const receiveSubmitting = ref(false);
 const inhouseProcesses = computed(() => processes.value.filter((p) => p.category === 'INHOUSE'));
-const {
-  filteredShelves: receiveFilteredShelves,
-  filteredProcesses: receiveFilteredProcesses,
-} = useShelfProcessFilter(
-  computed(() => productionShelves.value),
-  inhouseProcesses,
-  computed({
-    get: () => receiveShelfId.value || null,
-    set: (v) => {
-      receiveShelfId.value = v ?? '';
-    },
-  }),
-  computed({
-    get: () => receiveProcessId.value || null,
-    set: (v) => {
-      receiveProcessId.value = v ?? '';
-    },
-  }),
-);
+const { filteredShelves: receiveFilteredShelves, filteredProcesses: receiveFilteredProcesses } =
+  useShelfProcessFilter(
+    computed(() => productionShelves.value),
+    inhouseProcesses,
+    computed({
+      get: () => receiveShelfId.value || null,
+      set: (v) => {
+        receiveShelfId.value = v ?? '';
+      },
+    }),
+    computed({
+      get: () => receiveProcessId.value || null,
+      set: (v) => {
+        receiveProcessId.value = v ?? '';
+      },
+    }),
+  );
 
 async function openReceiveOutsourceDialog() {
   receiveShelfId.value = '';
@@ -826,7 +765,8 @@ async function handleCancelBatch(batch: PartBatch) {
   void fetchBatches();
 }
 
-// ============ 配对上传 / 下发（PartFilesTabsCard → PartCncCard 触发）============
+// ============ 配对上传（PartFilesTabsCard → PartCncCard 触发）============
+// 2026-10-10：`handleRelease`（「下发到 CNC 货架」）随该功能下线一并删除。
 // 2026-08-25 T10p5：emit payload 改为 { gcodes, setup, resolve }，
 // shell 等 API 完成再调 resolve：成功才关 dialog + reset submitting。
 async function handlePairUpload(payload: {
@@ -837,24 +777,6 @@ async function handlePairUpload(payload: {
   const ok = await onPairUpload(payload.gcodes, payload.setup);
   payload.resolve(ok);
 }
-async function handleRelease(payload: {
-  shelfId: string;
-  processId: string;
-  resolve: (ok: boolean) => void;
-}) {
-  // 2026-10-02：端点迁 prod 域后以批次为锚，锚点用三卡联动已选中的批次。
-  const ok = await onReleaseToShelf(
-    selectedBatchId.value,
-    payload.shelfId,
-    payload.processId,
-  );
-  if (ok) {
-    await fetchPart();
-    void fetchEvents();
-  }
-  payload.resolve(ok);
-}
-
 // ============ 零件文件 tabs 刷新（PartFilesTabsCard 触发）============
 // 2026-09-29 迁移：usePartFilesListQuery 单调用后失效整 owner 列表即可，
 // active 消费者（PartFilesTabsCard 内部 tabs + DrawingPreviewPane）都会自动 refetch。

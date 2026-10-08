@@ -78,13 +78,11 @@ export const NOT_SHELVED_HINT = '该批次尚未上架，请先下发到生产�
  *  操作员会把「需要切 tab」误当成状态 / 报价问题，从错误方向排查。 */
 export const SCAN_MISS_HINT = '该批次不在当前工序的可发送候选中，请先切到对应工序';
 
-/** 回收对话框的两种模式。 */
-export type OutsourceReceiveMode = 'production' | 'inspection';
-
-/** 回收对话框的提交载荷。`nextProcessId` 只在回收生产时有值（品检流转不带工序）。 */
+/** 回收对话框的提交载荷。
+ *
+ *  2026-10-10：只有下一道工序一项 —— 目标货架改由后端按负载自动选；「回收品检」模式
+ *  （`kind='INSPECTION_SHELF'` 变体）随该端点一起下线，本载荷只剩一种形态。 */
 export interface OutsourceReceiveSubmit {
-  /** 目标货架 id（`to.shelf_id`）。 */
-  toShelfId: string;
-  /** 回收生产的下一道工序（`to.next_process_id`）；品检模式恒 null。 */
+  /** 回收生产的下一道工序（`to.next_process_id`）。 */
   nextProcessId?: string | null;
 }

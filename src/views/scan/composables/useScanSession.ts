@@ -1,4 +1,4 @@
-// composables/useScanSession.ts
+// views/scan/composables/useScanSession.ts
 //
 // 工位扫码台跨路由共享 session：
 //   - worker：扫工牌成功后存到这里，下一步页面共享。

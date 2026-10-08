@@ -276,19 +276,25 @@ export interface QueueRefillRequest {
   shelf_id: string;
 }
 
-/** `POST /api/v2/prod/queue/move` 的 `from` / `to` tagged enum
- *  （rust MoveLocation，`#[serde(tag = "kind", rename_all = "UPPERCASE")]`）：
+/**
+ * `POST /api/v2/prod/queue/move` 的 `from` / `to` tagged enum
+ * （rust MoveLocation，`#[serde(tag = "kind", rename_all = "UPPERCASE")]`）：
  *    {"kind":"POOL",   "shelf_id":"100"}
- *    {"kind":"WORKER", "worker_id":"50"} */
+ *    {"kind":"WORKER", "worker_id":"50"}
+ *
+ * 2026-10-10：`to.kind = 'POOL'` 上的 `shelf_id` **后端删除** —— 撤回候选池的目标货架
+ * 改由后端按批次 `current_process_id` 自动选（负载均衡），前端不再提供该字段。
+ * `from.kind = 'POOL'` 的 `shelf_id` **仍然必带**：它是撤回动作的**起点**校验
+ * （须等于批次真实所在货架，填错返 20122），与「放回哪个架」无关。
+ * ⇒ 同一个 `POOL` 变体在 from / to 两侧的必填性不同，只能声明成可选。 */
 export type MoveLocationDto =
-  | { kind: 'POOL'; shelf_id: string }
-  | { kind: 'WORKER'; worker_id: string };
+  { kind: 'POOL'; shelf_id?: string } | { kind: 'WORKER'; worker_id: string };
 
 /** `POST /api/v2/prod/queue/move` 请求（rust MoveRequest）。三个移动方向：
  *  | from    | to      | 说明                                        |
  *  |---------|---------|--------------------------------------------|
  *  | POOL    | WORKER  | 候选池 → 工人（派活）                       |
- *  | WORKER  | POOL    | 工人 → 候选池（撤回，落在目标货架）         |
+ *  | WORKER  | POOL    | 工人 → 候选池（撤回；目标架后端按负载自动选） |
  *  | WORKER  | WORKER  | 工人之间转交                               |
  *  | POOL    | POOL    | 非法 → 40001                               |
  *
@@ -298,7 +304,8 @@ export type MoveLocationDto =
  *  - `version` 必填（OCC 乐观锁，缺省 40001）—— 取卡片 model 的
  *    `t_part_batch.version`。⚠️ 后端 serde 无 `#[serde(default)]` ⇒ 缺字段返 HTTP 422
  *    **纯文本**，不是业务信封；
- *  - `to.kind = 'POOL'`：目标货架必须映射到批次当前工序，否则 **20507**（HTTP 422）；
+ *  - `to.kind = 'POOL'`：**不带** `shelf_id`（2026-10-10 起目标架由后端按
+ *    `current_process_id` 下的候选架中负载最低者自动选，见 CLAUDE.md「货架自动选择」）；
  *  - `to.kind = 'WORKER'`：工人须在岗、工种含批次当前工序、持有数 < max_held，
  *    否则 20202 / 20104 / 20204。
  *  move 不推进工序链（不写 `current_process_step_id`），目标工序由后端从批次当前

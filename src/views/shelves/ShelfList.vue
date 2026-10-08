@@ -129,7 +129,8 @@
         <!--
           2026-10-04 后端收紧 `POST /api/v2/prod/shelf-processes/{id}`：`items` 非空时会对
           非 PRODUCTION 区的货架返 20104（`items: []` 的清空路径已豁免）。读侧早就按
-          `zone='PRODUCTION'` 口径取候选（10 处 `useShelfProcessFilter`），写侧这里对齐 ——
+          `zone='PRODUCTION'` 口径取候选（唯一剩下的 1 处 `useShelfProcessFilter` 在
+          零件详情的外协回收弹窗），写侧这里对齐 ——
           品检架不该在这里配工序，界面上就不给入口。
           zone 的判据是 `effectiveZone` 而不是 `shelfForm.zone`，见该 computed 的注释。
         -->
@@ -512,7 +513,8 @@ async function saveShelf() {
     const processIdsToSave = effectiveZone.value === 'PRODUCTION' ? selectedProcessIds.value : [];
     await setShelfProcesses(shelfId, toShelfProcessesPayload(processIdsToSave));
     // 2026-10-02 review 第 1 轮 M-3：保存成功后失效共享映射缓存。本数据的写点全仓
-    // 只有这一个、读点有 10 处（useShelfProcessFilter），不适用 CLAUDE.md「跨页面写
+    // 只有这一个、读点只剩 1 处（零件详情的外协回收弹窗，2026-10-10 删掉其余 9 处），
+    // 不适用 CLAUDE.md「跨页面写
     // 操作不做穷举失效」策略（那条针对写点散落多域、补齐等于穷举的情形），补失效
     // 成本近乎零：把「改完映射重开对话框才可见」升级成「下一次读即见」。
     await invalidateShelfProcessMappingsQuery(qc);

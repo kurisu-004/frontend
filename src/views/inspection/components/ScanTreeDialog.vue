@@ -8,11 +8,13 @@
   操作列只对**批次行**渲染（装配件 / 零件行没有可写的对象），按钮矩阵由批次 `status`
     单点决定：
     - INSPECTION → 品检通过（to-ship）/ 指定工序（to-process）
-    - PENDING / PROGRAMMING → 送检（to-inspection，行内选品检架）
+    - PENDING / PROGRAMMING → 送检（to-inspection，行内只填数量）
     - IN_PROCESS → 送检，但还要过 location 闸门（必须在生产架上，见 canSendToInspection）
     - 其余（READY_TO_SHIP / DELIVERED / COMPLETED / CANCELLED / OUTSOURCE …）→ 不给按钮
   「品检通过」「指定工序」只 emit，由壳（InspectionPending.vue）复用它已有的两个对话框 ——
-  品检器在这里选数量、选工序 + 货架，没有理由重造一遍。
+  品检器在这里选数量、选工序，没有理由重造一遍。
+  2026-10-10：目标货架改由后端按负载自动选，行内送检面板的品检架下拉随之删除
+  （`inspectionShelves` prop 也一并退场，它唯一的用途就是那个下拉与写后回填架名）。
 
   高亮以**后端**的 `is_scanned` 为准：独立件树 = 该件全部批次亮；扫装配件子件 =
   只有被扫中那个子件的批次亮（兄弟子件不亮）；扫装配件条码 = 全部不亮。零件层后端
@@ -24,8 +26,7 @@
   本组件要换虚拟表格（并把展开态改成按需拉子节点）。
 
   本组件**不**首调 `useInspectionListStore()`（不变量 #1：首调在壳里；父组件 setup
-  先于子组件执行，这里的调用命中同一实例）。品检架候选也走 prop 传入，不在子组件里
-  读 store.options。
+  先于子组件执行，这里的调用命中同一实例）。
 -->
 <template>
   <el-dialog
@@ -140,22 +141,6 @@
               在当前作用域求值的表达式），那会顺带在渲染里写 reactive 状态。
             -->
             <div v-if="sendPanel(row.id)" class="send-panel">
-              <el-select
-                :model-value="sendPanel(row.id)?.shelfId ?? ''"
-                placeholder="选择品检架"
-                filterable
-                clearable
-                size="small"
-                style="width: 180px"
-                @update:model-value="(v: string) => setShelfId(row.id, v)"
-              >
-                <el-option
-                  v-for="s in inspectionShelves"
-                  :key="s.id"
-                  :value="String(s.id)"
-                  :label="`${s.code} — ${s.name}`"
-                />
-              </el-select>
               <el-input-number
                 :model-value="sendPanel(row.id)?.quantity"
                 :min="1"
@@ -170,7 +155,6 @@
                 size="small"
                 type="primary"
                 :loading="sendSubmittingId === row.id"
-                :disabled="!sendPanel(row.id)?.shelfId"
                 @click="onConfirmSend(row as ActionRow)"
                 >确认送检</el-button
               >
@@ -189,23 +173,18 @@
 import { computed, reactive, ref } from 'vue';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TAG_TYPE, type OrderStatus } from '@/types/parts';
 import type { ScanBatchOut, ScanPartOut, ScanTreeOut } from '@/api/inspection';
-import type { Shelf } from '@/types/shelf';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useInspectionListStore } from '../composables/useInspectionListStore';
 
-const props = defineProps<{
+defineProps<{
   modelValue: boolean;
-  /** 品检架候选（INSPECTION zone / active）。由壳从 `store.options.inspectionShelves`
-   *  传入 —— 子组件不读 store.options（store 的不变量 #1：首调只在壳里）。
-   *  送检提交时还要用它把品检架名回传给 store（写后本地回写「当前位置」列）。 */
-  inspectionShelves: Shelf[];
 }>();
 
 const emit = defineEmits<{
   'update:modelValue': [v: boolean];
   /** 「品检通过」：把该批次行抛给壳，由壳打开带数量输入的对话框。 */
   pass: [row: ScanBatchOut];
-  /** 「指定工序」：同上，壳打开「下一道工序 + 目标生产货架 + 备注」对话框。
+  /** 「指定工序」：同上，壳打开「下一道工序 + 备注」对话框。
    *  事件名 camelCase（仓库 lint 规则 vue/custom-event-name-casing：只有 update:*
    *  协议事件允许连字符）；父组件仍可写 `@assign-process`，模板编译会 camelize。 */
   assignProcess: [row: ScanBatchOut];
@@ -429,18 +408,13 @@ function canSendToInspection(row: SendGateRow): boolean {
 }
 
 // ============ 行内送检面板 ============
-/** 展开态与面板内选择按 batch_id 记：同一个批次反复送检不该重填品检架 / 数量。
+/** 展开态与面板内的数量按 batch_id 记：同一个批次反复送检不该重填数量。
  *  key 不存在 = 面板收起（渲染期只读，不在这里建对象）。 */
-const sendForms = reactive<Record<string, { shelfId: string; quantity: number | undefined }>>({});
+const sendForms = reactive<Record<string, { quantity: number | undefined }>>({});
 const sendSubmittingId = ref<string | null>(null);
 
-function sendPanel(batchId: string): { shelfId: string; quantity: number | undefined } | undefined {
+function sendPanel(batchId: string): { quantity: number | undefined } | undefined {
   return sendForms[batchId];
-}
-
-function setShelfId(batchId: string, value: string | undefined): void {
-  const form = sendForms[batchId];
-  if (form) form.shelfId = value ?? '';
 }
 
 function setQuantity(batchId: string, value: number | undefined): void {
@@ -453,30 +427,27 @@ function toggleSendPanel(row: ActionRow): void {
     delete sendForms[row.id];
     return;
   }
-  sendForms[row.id] = { shelfId: '', quantity: row.quantity };
+  sendForms[row.id] = { quantity: row.quantity };
 }
 
 async function onConfirmSend(row: ActionRow): Promise<void> {
   const batch = row.batch;
   const form = sendForms[row.id];
-  if (!batch || !form?.shelfId) return;
-  // 目标品检架名带进 vars：写成功后 store 要用它回写树里这一行的「当前位置」。
-  const shelfName = props.inspectionShelves.find((s) => String(s.id) === form.shelfId)?.name ?? '';
+  if (!batch || !form) return;
   sendSubmittingId.value = row.id;
   try {
     // OCC 锚用 **batch.version**（t_part_batch.version），不是零件行的 version
     // （t_part.version 是另一个计数器，混用必 409）。
+    // 2026-10-10：不再传目标品检架 —— 后端按负载自动选。
     await store.mutations.toInspectionMutation.mutateAsync({
       batchId: batch.id,
-      targetInspectionShelfId: form.shelfId,
       version: batch.version,
       quantity: form.quantity ?? null,
       label: batch.batch_no ? `批次 #${batch.batch_no}` : batch.id,
-      targetShelfName: shelfName,
     });
     delete sendForms[row.id];
   } catch {
-    // onError 已提示；保留面板让用户改品检架后重试。
+    // onError 已提示；保留面板让用户改数量后重试。
   } finally {
     sendSubmittingId.value = null;
   }
@@ -492,7 +463,7 @@ function onAssignProcess(row: ActionRow): void {
 }
 
 /** 关闭时把树清掉：不清的话下次扫码请求在飞时会先闪出上一次的树。
- *  行内送检面板的选择也一起清（展开态 + 已选品检架 + 数量 + 提交中锚）：它是**按
+ *  行内送检面板的选择也一起清（展开态 + 数量 + 提交中锚）：它是**按
  *  batch_id 记**的会话态，不清就会随扫过的批次单调增长，且下次扫别的码时旧条目
  *  还挂在内存里。「同一批次反复送检不重填」的意图靠「开着的时候不清」保住。 */
 function onClosed(): void {

@@ -115,18 +115,18 @@ beforeEach(() => {
 
 describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () => {
   it('R1：lifecycle 流转端点全部落在 /prod/batches/{batch_id}/<action>', async () => {
-    expect(
-      await postedPath(() => placeOnShelf(BATCH, { shelf_id: 's', next_process_id: 'p' })),
-    ).toBe(`/prod/batches/${BATCH}/place-on-shelf`);
-    expect(await postedPath(() => releaseFromProgramming(BATCH, 's', 'p'))).toBe(
+    expect(await postedPath(() => placeOnShelf(BATCH, { next_process_id: 'p' }))).toBe(
+      `/prod/batches/${BATCH}/place-on-shelf`,
+    );
+    expect(await postedPath(() => releaseFromProgramming(BATCH, 'p'))).toBe(
       `/prod/batches/${BATCH}/release-from-programming`,
     );
     expect(await postedPath(() => toShip(BATCH, { version: 1 }))).toBe(
       `/prod/batches/${BATCH}/to-ship`,
     );
-    expect(
-      await postedPath(() => toProcess(BATCH, { shelf_id: 's', next_process_id: 'p', version: 1 })),
-    ).toBe(`/prod/batches/${BATCH}/to-process`);
+    expect(await postedPath(() => toProcess(BATCH, { next_process_id: 'p', version: 1 }))).toBe(
+      `/prod/batches/${BATCH}/to-process`,
+    );
     expect(await postedPath(() => deliverPart(BATCH, { version: 1 }))).toBe(
       `/prod/batches/${BATCH}/deliver`,
     );
@@ -154,26 +154,24 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
         sendToOutsource(BATCH, { outsource_company_id: 'c', process_id: 'p', version: 1 }),
       ),
     ).toBe(`/prod/batches/${BATCH}/send-to-outsource`);
-    expect(await postedPath(() => repairDispatch(BATCH, { shelf_id: 's', version: 1 }))).toBe(
+    expect(await postedPath(() => repairDispatch(BATCH, { version: 1 }))).toBe(
       `/prod/batches/${BATCH}/repair-dispatch`,
     );
-    expect(
-      await postedPath(() =>
-        scanInspect(BATCH, { target_inspection_shelf_id: 's', pass: true, version: 1 }),
-      ),
-    ).toBe(`/prod/batches/${BATCH}/scan-inspect`);
+    expect(await postedPath(() => scanInspect(BATCH, { pass: true, version: 1 }))).toBe(
+      `/prod/batches/${BATCH}/scan-inspect`,
+    );
     expect(await postedPath(() => cancelPartBatch(BATCH, 1))).toBe(`/prod/batches/${BATCH}/cancel`);
     // 单件送检（本次新建的 URL）。别与 receiveFromOutsourceToInspection 混：
     // 那个是 /receive-from-outsource-to-inspection，外协回收直送品检。
-    expect(
-      await postedPath(() => toInspection(BATCH, { target_inspection_shelf_id: 's', version: 1 })),
-    ).toBe(`/prod/batches/${BATCH}/to-inspection`);
+    expect(await postedPath(() => toInspection(BATCH, { version: 1 }))).toBe(
+      `/prod/batches/${BATCH}/to-inspection`,
+    );
   });
 
   it('R2：批次锚定后 batch_id 不再进 body（它是路径参数）', async () => {
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
-    await repairDispatch(BATCH, { shelf_id: 's', version: 1, note: 'n' });
+    await repairDispatch(BATCH, { version: 1, note: 'n' });
     const [, body] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
     expect(body).not.toHaveProperty('batch_id');
     expect(body.version).toBe(1);
@@ -188,18 +186,17 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
     await repairDispatch(BATCH, {
-      shelf_id: 's',
       version: 1,
       next_process_id: 'p',
       reason: 'r',
       note: 'n',
     });
     const [, dispatchBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
+    // 2026-10-10：`shelf_id` 后端删除（目标架按负载自动选）⇒ 键集里不该再有它。
     expect(Object.keys(dispatchBody).sort()).toEqual([
       'next_process_id',
       'note',
       'reason',
-      'shelf_id',
       'version',
     ]);
     expect(dispatchBody).not.toHaveProperty('quantity');
@@ -278,21 +275,22 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
   it('R2d：三个 place-on-shelf 系端点的 body 透传 version', async () => {
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
-    await placeOnShelf(BATCH, { shelf_id: 's', next_process_id: 'p', version: 3 });
+    await placeOnShelf(BATCH, { next_process_id: 'p', version: 3 });
     const [, onShelfBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(Object.keys(onShelfBody).sort()).toEqual(['next_process_id', 'shelf_id', 'version']);
+    // 2026-10-10：`shelf_id` 后端删除（目标架按负载自动选）⇒ 键集里不该再有它。
+    // 这条「负向钉」比注释更硬：谁把货架字段加回 payload，本用例会红。
+    expect(Object.keys(onShelfBody).sort()).toEqual(['next_process_id', 'version']);
     expect(typeof onShelfBody.version).toBe('number');
     expect(onShelfBody.version).toBe(3);
     expect(onShelfBody).not.toHaveProperty('batch_id');
 
-
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
-    await releaseFromProgramming(BATCH, 's', 'p', 3);
+    await releaseFromProgramming(BATCH, 'p', 3);
     const [, releaseBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(Object.keys(releaseBody).sort()).toEqual(['next_process_id', 'shelf_id', 'version']);
+    expect(Object.keys(releaseBody).sort()).toEqual(['next_process_id', 'version']);
     expect(typeof releaseBody.version).toBe('number');
-    expect(releaseBody).toEqual({ shelf_id: 's', next_process_id: 'p', version: 3 });
+    expect(releaseBody).toEqual({ next_process_id: 'p', version: 3 });
     expect(releaseBody).not.toHaveProperty('batch_id');
   });
 });
@@ -301,12 +299,12 @@ describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () =
   it('R3：worker-scan / 批量送检 / 批量品检通过', async () => {
     expect(
       await postedPath(() =>
-        workerScan({ serial_no: 'S1', badge_code: 'B1', event_type: 'RETURNED', shelf_id: 's' }),
+        workerScan({ serial_no: 'S1', badge_code: 'B1', event_type: 'RETURNED' }),
       ),
     ).toBe('/prod/batches/worker-scan');
-    expect(
-      await postedPath(() => batchToInspection({ target_inspection_shelf_id: 's', items: [] })),
-    ).toBe('/prod/batches/to-inspection');
+    expect(await postedPath(() => batchToInspection({ items: [] }))).toBe(
+      '/prod/batches/to-inspection',
+    );
     expect(await postedPath(() => batchToShip({ items: [] }))).toBe('/prod/batches/to-ship');
   });
 

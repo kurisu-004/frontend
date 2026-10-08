@@ -106,12 +106,13 @@
       </template>
     </el-dialog>
 
-    <!-- 指定工序对话框：先选下一道工序，再选目标生产货架（按 shelf↔process 映射过滤）
+    <!-- 指定工序对话框：选下一道工序（+ 可选品检备注）。
+         2026-10-10：目标生产货架下拉删除 —— 打回的目标架由后端按负载自动选。
          2026-10-06 补 `append-to-body`，理由同上方「品检通过」弹窗的注释
          （由 ScanTreeDialog 打开，且须压过它）。 -->
     <el-dialog
       v-model="failDialogVisible"
-      title="指定工序 — 选择下一道工序 + 目标生产货架"
+      title="指定工序 — 选择下一道工序"
       :width="failDlg.width"
       :top="failDlg.top"
       :close-on-click-modal="false"
@@ -148,7 +149,7 @@
             style="width: 100%"
           >
             <el-option
-              v-for="p in filteredProcesses"
+              v-for="p in store.options.processes"
               :key="p.id"
               :value="String(p.id)"
               :label="`${p.code} — ${p.name}`"
@@ -167,37 +168,6 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="目标生产货架" required>
-          <el-select
-            v-model="failShelfId"
-            placeholder="先选工序；货架候选按映射过滤"
-            filterable
-            clearable
-            style="width: 100%"
-            :disabled="!failProcessId"
-          >
-            <el-option
-              v-for="s in filteredProductionShelves"
-              :key="s.id"
-              :value="String(s.id)"
-              :label="`${s.code} — ${s.name}`"
-              :disabled="!s.is_active"
-            >
-              {{ s.code }} — {{ s.name }}
-              <span v-if="!s.is_active" class="muted">（已停用）</span>
-            </el-option>
-            <template #empty>
-              <span class="muted">
-                {{
-                  failProcessId
-                    ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
-                    : '请先选择下一道工序'
-                }}
-              </span>
-            </template>
-          </el-select>
-        </el-form-item>
-
         <el-form-item label="品检备注">
           <el-input
             v-model="failNote"
@@ -212,7 +182,7 @@
         <el-alert
           type="info"
           :closable="false"
-          title="指定工序后零件回到「在生产货架上」状态，下一道工序与备注已写入事件历史；工人领取时可在卡片上看到备注。"
+          title="指定工序后零件回到「在生产货架上」状态（目标货架由系统按负载自动选择），下一道工序与备注已写入事件历史；工人领取时可在卡片上看到备注。"
           show-icon
         />
       </el-form>
@@ -222,19 +192,17 @@
         <el-button
           type="warning"
           :loading="failSubmitting"
-          :disabled="!failProcessId || !failShelfId"
+          :disabled="!failProcessId"
           @click="onFailConfirm"
           >确认指定工序</el-button
         >
       </template>
     </el-dialog>
 
-    <!-- 扫码命中的「装配件 → 子零件 → 批次」树（2026-10-05）。品检架候选由本页从
-         store.options 传入（子组件不读 store.options）；「品检通过」「指定工序」在树里
-         抛行给本页，弹上面那两个既有对话框，不在本组件里重造。 -->
+    <!-- 扫码命中的「装配件 → 子零件 → 批次」树（2026-10-05）。「品检通过」「指定工序」
+         在树里抛行给本页，弹上面那两个既有对话框，不在本组件里重造。 -->
     <ScanTreeDialog
       v-model="scanTreeOpen"
-      :inspection-shelves="store.options.inspectionShelves"
       @pass="onScanTreePass"
       @assign-process="onScanTreeAssignProcess"
     />
@@ -255,14 +223,13 @@
 //
 // 导航（详情 / 零件链接）留在壳内 —— store 不 import vue-router（不变量 #4）。
 
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { useConfirm } from '@/composables/useConfirm';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import type { InspectionQueueItem, ScanBatchOut } from '@/api/inspection';
 import { INSPECTION_SORT_KEY_TO_PROP } from '@/types/inspection';
 import InspectionTable from './components/InspectionTable.vue';
@@ -361,13 +328,13 @@ async function onPassConfirm(): Promise<void> {
 }
 
 // ============ 指定工序 ============
-// 2026-07-21 改：先选下一道工序，再选目标生产货架（按 shelf↔process 映射过滤）。
-// 同时支持可选「品检备注」，写入 t_part_event.note，事件历史与工人领取卡片均可见。
+// 2026-10-10：目标生产货架选择删除 —— 打回的目标架由后端按负载自动选
+// （`to-process` 的 `shelf_id` 后端已删）。只留下一道工序 + 可选「品检备注」
+// （写入 t_part_event.note，事件历史与工人领取卡片均可见）。
 const failDlg = useDialogSize({ desktopWidth: 520 });
 const failDialogVisible = ref(false);
 const failTarget = ref<InspectionBatchRow | null>(null);
 const failProcessId = ref<string>('');
-const failShelfId = ref<string>('');
 const failNote = ref<string>('');
 const failQty = ref<number | undefined>(undefined);
 const failSubmitting = ref(false);
@@ -376,67 +343,38 @@ const { dangerous: confirmDangerous } = useConfirm();
 
 // 指定工序默认走 INHOUSE 工序（外协工序走 send_to_outsource 路径）；
 // 不强制过滤 category，避免业务上「品检后直接外协返修」分支被锁死。
-// 2026-10-03：数据源从视图里的裸调 listShelves / listProcesses 换成 store.options
-// （共享 query），映射由 useShelfProcessFilter 内部自动跟随就绪开闸拉取。
+// 工序候选走共享 query（store.options）。
 //
-// ⚠️ 为什么要包一层 computed：Pinia store 是 reactive()，读嵌套 ref 时**自动解包**
-//   （`store.options.productionShelves` 拿到的是数组本身而不是 Ref）。而
-//   useShelfProcessFilter 需要 Ref —— 它内部 watch 依赖「源变更」来重算过滤。
-//   局部 computed 把响应式接回去（读 store 时会登记对内层 query data 的依赖）。
-const productionShelvesRef = computed(() => store.options.productionShelves);
-const processesRef = computed(() => store.options.processes);
-
-const { filteredShelves: filteredProductionShelves, filteredProcesses } = useShelfProcessFilter(
-  productionShelvesRef,
-  processesRef,
-  computed({
-    get: () => failShelfId.value || null,
-    set: (v) => {
-      failShelfId.value = v ?? '';
-    },
-  }),
-  computed({
-    get: () => failProcessId.value || null,
-    set: (v) => {
-      failProcessId.value = v ?? '';
-    },
-  }),
-);
+// 2026-10-10：**不再有货架候选** —— useShelfProcessFilter 的双向收窄（按
+// shelf↔process 映射互相过滤）随货架选择一起退场：没有货架可按时两个方向的收窄都退化成
+// 恒等变换，留着只是白拉一次映射 query。
 
 function openFailDialog(row: InspectionBatchRow): void {
   failTarget.value = row;
   failProcessId.value = '';
-  failShelfId.value = '';
   failNote.value = '';
   failQty.value = row.quantity;
   failDialogVisible.value = true;
-  // 货架 / 工序候选由共享 query（store.options）自动就绪，映射未到位前 filteredXxx
-  // 走兜底全量 —— 不再需要旧版那段「为空则 load()」的并发预热。
 }
 
 function onFailDialogClosed(): void {
   failTarget.value = null;
   failProcessId.value = '';
-  failShelfId.value = '';
   failNote.value = '';
   failQty.value = undefined;
 }
 
 async function onFailConfirm(): Promise<void> {
-  if (!failTarget.value || !failProcessId.value || !failShelfId.value) return;
+  if (!failTarget.value || !failProcessId.value) return;
   const row = failTarget.value;
-  // code 进提示文案、name 进扫码树写后本地回写（「当前位置」「工序」两列）—— 写端点
-  // 的响应只回 part 投影，批次行的展示字段前端自己最清楚。
-  const targetShelf = store.options.productionShelves.find(
-    (s) => String(s.id) === failShelfId.value,
-  );
+  // code 进提示文案、name 进扫码树写后本地回写（「工序」列）——
+  // 写端点的响应只回 part 投影，批次行的展示字段前端自己最清楚。
   const targetProcess = store.options.processes.find((p) => String(p.id) === failProcessId.value);
-  const shelfCode = targetShelf?.code ?? '';
   const processCode = targetProcess?.code ?? '';
   if (
     !(await confirmDangerous(
       '指定工序',
-      `确认指定工序「${row.name}」（${row.serial_no || row.drawing_no}）到生产货架 ${shelfCode}，下一道工序 ${processCode}？`,
+      `确认把「${row.name}」（${row.serial_no || row.drawing_no}）打回生产、下一道工序 ${processCode}？目标货架由系统按负载自动选择。`,
       { type: 'warning', confirmText: '确认指定工序', cancelText: '取消' },
     ))
   )
@@ -448,16 +386,13 @@ async function onFailConfirm(): Promise<void> {
     // 后端返 20118 返修守卫，mutation 的 onError 走通用提示弹后端原文。
     await store.mutations.toProcessMutation.mutateAsync({
       batchId: row.batch_id,
-      shelfId: failShelfId.value,
       nextProcessId: failProcessId.value,
       version: row.version,
       note: failNote.value.trim() || null,
       quantity: failQty.value ?? null,
       label: row.serial_no || row.drawing_no,
       processCode,
-      shelfCode,
       processName: targetProcess?.name ?? '',
-      shelfName: targetShelf?.name ?? '',
     });
     failDialogVisible.value = false;
   } finally {

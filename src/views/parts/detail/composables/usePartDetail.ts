@@ -122,7 +122,6 @@ export interface UsePartDetailReturn {
    *  不再支持「缺省按唯一 INSPECTION 批次解析」。 */
   onFailInspection: (payload: {
     batchId: string | null;
-    shelfId: string;
     processId: string;
     note: string | null;
   }) => Promise<boolean>;
@@ -401,9 +400,10 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   // 复用批次卡三卡联动锚的选中批次，多批次 part 上比「找第一个 INSPECTION 批次」更准；
   // version 取该批次的 t_part_batch.version（后端必填，缺 → 422）。
   // 锚点批次的状态由本函数自守（见下方守卫），不信任 shell 的按钮可见性判据。
+  // 2026-10-10：payload 的 `shelfId` 删除 —— `to-process` 的 `shelf_id` 后端已删
+  // （打回的目标生产架由后端按负载自动选）。
   async function onFailInspection(payload: {
     batchId: string | null;
-    shelfId: string;
     processId: string;
     note: string | null;
   }): Promise<boolean> {
@@ -428,7 +428,6 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     }
     try {
       await toProcess(batch.id, {
-        shelf_id: payload.shelfId,
         next_process_id: payload.processId,
         version: batch.version,
         note: payload.note,

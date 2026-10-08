@@ -256,7 +256,9 @@ describe('usePartsListStore', () => {
     const store = usePartsListStore();
     // 不调 registerTableGetter，直接调 onClearSelection —— getTable() 返 null 应安全降级
     expect(() => store.batch.onClearSelection()).not.toThrow();
-    expect(() => store.dispatch.onDispatch(makeRow('1'))).not.toThrow();
+    // 2026-10-10：`onDispatch`（单件下发）随「下发到货架」入口下线删除，这里改守
+    // 剩下的 force-complete 入口同样在「没注册 table」时不炸。
+    expect(() => store.dispatch.onForceComplete(makeRow('1'))).not.toThrow();
   });
 
   // 用例 5：fetchList 联动 —— items.length === 2 / total === 2；batchMode 下不炸

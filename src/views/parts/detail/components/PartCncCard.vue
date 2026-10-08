@@ -4,8 +4,10 @@
   CNC 文件卡（PartDetail 第 7 张卡）：
   - 配对列表：G 代码 + 设定单（来自 cncSetupGroups 计算值）
   - 配对上传对话框（partId + gcodeList + setupFile → emit pair-upload）
-  - 下发到 CNC 货架对话框（partId + shelfId + processId → emit release）
-  - 配对上传 / 下发对话框的 UI 状态（可见性、form refs）由本组件局部维护
+  - 配对上传对话框的 UI 状态（可见性、form refs）由本组件局部维护
+  - 2026-10-10：「下发到 CNC 货架」按钮与对话框整块删除（用户决定：下发功能已被
+    扫码台的工人放回 / 送检接管），随之删除 `release` / `releaseSuccess` 两个 emit
+    与 `productionShelves` prop —— 它们都只服务于那个对话框。
   - 下载 / 删除 / formatBytes 由父组件（usePartCncGroups）通过 props 传入
 
   2026-08-25 frontend-overall-refactor：从 PartDetail.vue 抽出。
@@ -91,14 +93,6 @@
       >
         <el-icon><Upload /></el-icon><span>配对上载 (G代码 + 设定单)</span>
       </el-button>
-      <el-button
-        v-if="canManageCncFiles && partStatus === 'PROGRAMMING'"
-        type="success"
-        :loading="releaseSubmitting"
-        @click="openRelease"
-      >
-        下发到 CNC 货架
-      </el-button>
     </div>
 
     <!-- 配对上传对话框 -->
@@ -152,98 +146,24 @@
         >
       </template>
     </el-dialog>
-
-    <!-- 下发到 CNC 货架对话框 -->
-    <el-dialog
-      v-model="releaseVisible"
-      title="下发到 CNC 货架"
-      :width="releaseDlg.width"
-      :top="releaseDlg.top"
-      :fullscreen="releaseDlg.fullscreen"
-      @closed="onReleaseClosed"
-    >
-      <el-form label-width="96px">
-        <el-form-item label="下一道工序" required>
-          <el-select
-            v-model="releaseNextProcessId"
-            placeholder="请先选择下一道工序"
-            style="width: 100%"
-            filterable
-            clearable
-          >
-            <el-option
-              v-for="p in releaseFilteredProcesses"
-              :key="p.id"
-              :label="`${p.code} / ${p.name}`"
-              :value="p.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="目标货架" required>
-          <el-select
-            v-model="releaseShelfId"
-            placeholder="先选工序；货架候选按映射过滤"
-            style="width: 100%"
-            filterable
-            clearable
-            :disabled="!releaseNextProcessId"
-          >
-            <el-option
-              v-for="s in releaseFilteredShelves"
-              :key="s.id"
-              :label="s.name"
-              :value="s.id"
-            />
-            <template #empty>
-              <span class="muted">
-                {{
-                  releaseNextProcessId
-                    ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
-                    : '请先选择下一道工序'
-                }}
-              </span>
-            </template>
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="releaseVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="releaseSubmitting"
-          :disabled="!releaseShelfId || !releaseNextProcessId"
-          @click="onReleaseConfirm"
-          >确认下发</el-button
-        >
-      </template>
-    </el-dialog>
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import type { UploadFile } from 'element-plus';
 import { Cpu, Upload } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/date';
-import { useDialogSize } from '@/composables/useDialogSize';
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import type { PartFileItem } from '@/types/part_file';
-import type { Process } from '@/types/process';
-import type { Shelf } from '@/types/shelf';
-import type { OrderStatus } from '@/types/parts';
 import type { CncSetupGroup } from '../composables/usePartCncGroups';
 
 const props = withDefaults(
   defineProps<{
     partId: string;
-    partStatus: OrderStatus;
     cncSetupGroups: CncSetupGroup[];
     cncLoading: boolean;
     canManageCncFiles: boolean;
     canManageSetupSheet: boolean;
-    /** 货架 ↔ 工序 共享缓存（shell 加载，PartCncCard 与 failInsp/receive 共用） */
-    productionShelves: Shelf[];
-    processes: Process[];
     // 2026-09-16：v2 file_size 为 string（i64 雪花序列化器），formatBytes 入参兼容 string | number
     formatBytes: (v: string | number) => string;
     // 2026-08-25 T10p5：上传文件 staging 助手，由 usePartCncGroups 注入；
@@ -258,7 +178,7 @@ const props = withDefaults(
     // 2026-09-16：v2 软删强制 OCC body { version }，删除需携带行内版本号
     onDeleteCnc: (id: string, version: number) => void;
     /**
-     * 2026-09-17 UI 调整：是否隐藏内层「配对上载 / 下发到 CNC 货架」按钮。
+     * 2026-09-17 UI 调整：是否隐藏内层「配对上载」按钮。
      * PartFilesTabsCard footer 已统一收纳这两类入口，传 true 让 body 只剩
      * 配对列表 + dialog，避免重复按钮。
      */
@@ -280,8 +200,6 @@ const emit = defineEmits<{
   // 2026-08-25 T10p5：dialog 关闭延迟到 API 成功之后（避免 API 失败但 dialog 已关）。
   // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
   pairUpload: [payload: { gcodes: File[]; setup: File; resolve: (ok: boolean) => void }];
-  release: [payload: { shelfId: string; processId: string; resolve: (ok: boolean) => void }];
-  releaseSuccess: [];
 }>();
 
 // ============ 配对上传对话框（局部 UI 状态）============
@@ -337,62 +255,17 @@ function onPairUploadConfirm(): void {
   });
 }
 
-// ============ 下发到 CNC 货架对话框（局部 UI 状态）============
-const releaseDlg = useDialogSize({ desktopWidth: 440 });
-const releaseVisible = ref(false);
-const releaseShelfId = ref<string | null>(null);
-const releaseNextProcessId = ref<string | null>(null);
-const releaseSubmitting = ref(false);
-
-const { filteredShelves: releaseFilteredShelves, filteredProcesses: releaseFilteredProcesses } =
-  useShelfProcessFilter(
-    computed(() => props.productionShelves),
-    computed(() => props.processes),
-    releaseShelfId,
-    releaseNextProcessId,
-  );
-
-function openRelease() {
-  releaseShelfId.value = null;
-  releaseNextProcessId.value = null;
-  releaseVisible.value = true;
-  // 2026-10-02：不再 await load() —— 映射由共享 query 跟随 props.productionShelves /
-  // props.processes 就绪自动开闸；未就绪期间 filteredXxx 走兜底全量（沿旧语义）。
-}
-
-function onReleaseClosed(): void {
-  releaseShelfId.value = null;
-  releaseNextProcessId.value = null;
-}
-
-function onReleaseConfirm(): void {
-  if (!releaseShelfId.value || !releaseNextProcessId.value) return;
-  releaseSubmitting.value = true;
-  // shell 调 resolve(ok)：成功才关 dialog + reset submitting。
-  emit('release', {
-    shelfId: releaseShelfId.value,
-    processId: releaseNextProcessId.value,
-    resolve: (ok: boolean) => {
-      releaseSubmitting.value = false;
-      if (ok) releaseVisible.value = false;
-    },
-  });
-}
-
 onMounted(() => emit('fetch'));
 watch(
   () => props.partId,
   () => emit('fetch'),
 );
 
-// 2026-09-17 UI 调整：暴露配对上传 / 下发对话框打开方法给父级
-// PartFilesTabsCard footer 按钮调用，把 CNC 操作的入口收敛到外层 footer。
-// 内部仍保留按钮（其它入口：装配件页暂无，复用 PartFilesTabsCard 入口即可）
-// —— PartCncCard 当前唯一调用方就是 PartFilesTabsCard，但保留内部按钮以防
-// 未来抽到独立路由。
+// 2026-09-17 UI 调整：暴露配对上传对话框打开方法给父级 PartFilesTabsCard footer
+// 按钮调用，把 CNC 操作的入口收敛到外层 footer。内部仍保留按钮（PartCncCard 当前
+// 唯一调用方就是 PartFilesTabsCard，但保留内部按钮以防未来抽到独立路由）。
 defineExpose({
   openPairUpload,
-  openRelease,
 });
 </script>
 
@@ -474,8 +347,5 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-.muted {
-  color: var(--text-secondary);
 }
 </style>

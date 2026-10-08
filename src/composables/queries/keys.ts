@@ -183,15 +183,16 @@ export const qk = {
   /** 2026-10-02 新增：货架↔工序映射全集键（GET /prod/shelf-processes，单条无 params）。
    *  后端 handler 不接 Query extractor，一次返全部 active 映射的**扁平行**（一行一个
    *  (货架, 工序) 对），故键退化为常量键（与 productionQueueSnapshot 同形），不随任何
-   *  候选源变化。10 处 useShelfProcessFilter 实例共用本键 ⇒ 30s 窗口内只发一次请求
+   *  候选源变化。useShelfProcessFilter 实例共用本键 ⇒ 30s 窗口内只发一次请求
    *  （该窗口有 Q6「卸载 → 立即重挂仍不重发」的用例实证；Q5 证的只是同 tick 并发
    *  挂载的在飞请求合并）。 */
   shelfProcessMappings: ['shelf-process-mappings'] as const,
   /** 2026-10-02 新增：货架↔工序映射域前缀 —— 与 shelfProcessMappings 同值（键已是
    *  常量，前缀即自身，沿 productionQueueSnapshotPrefix 同形）。唯一写点
    *  setShelfProcesses（ShelfList.vue）成功后调 invalidateShelfProcessMappingsQuery(qc)
-   *  —— 本域**不是**「跨页面写操作无法穷举」那种情形：全仓写点只有这一个，10 个读点
-   *  全是 useShelfProcessFilter，补失效的成本近乎零。 */
+   *  —— 本域**不是**「跨页面写操作无法穷举」那种情形：全仓写点只有这一个，读点只剩
+   *  零件详情外协回收弹窗那一处 useShelfProcessFilter（2026-10-10 前是 10 个），
+   *  补失效的成本近乎零。 */
   shelfProcessMappingsPrefix: ['shelf-process-mappings'] as const,
   // ============================================================
   // 2026-10-02 新增：work-types 域（工种 + 工种↔工序映射）queryKey 工厂。
@@ -275,8 +276,7 @@ export const qk = {
    *  **参数键**：端点按 process_id 分片返回，不带 id 切 tab 时会命中上一个工序的缓存。
    *  processId 空字符串 → 占位键（`enabled=false` 闸门 + queryFn 内二次守卫拦掉）。
    *  消费方 ProcessBoardTab（el-tab-pane `:lazy="true"` ⇒ 首次激活才 mount 才发）。 */
-  productionQueueBoard: (processId: string) =>
-    ['production-queue', 'board', processId] as const,
+  productionQueueBoard: (processId: string) => ['production-queue', 'board', processId] as const,
   /** production-queue board 域前缀 —— 写 mutation 完成后一把全失效（任意 processId
    *  形态都命中）。**前缀而非精确键**是唯一正确策略：move 的目标工序由后端从批次
    *  当前 step 推导、一次 auto-allocate 跨全部工人、一次 dispatch 可能同时改多个
@@ -350,8 +350,7 @@ export const qk = {
   outsourceQueueSnapshotPrefix: ['outsource-queue', 'snapshot'] as const,
   /** 单工序看板详情（左「可发送候选批次」+ 右「外协公司列」，在途批次内联在
    *  公司列上）。processId 空串 → 占位键（enabled=false 闸门 + queryFn 二次守卫拦掉）。 */
-  outsourceQueueProcess: (processId: string) =>
-    ['outsource-queue', 'process', processId] as const,
+  outsourceQueueProcess: (processId: string) => ['outsource-queue', 'process', processId] as const,
   /** outsource-queue process 域前缀 —— 任意 processId 形态一把全失效（发送的目标
    *  工序由 tab 决定、后端不自推，mutation 回调里可能拿不到 processId）。 */
   outsourceQueueProcessPrefix: ['outsource-queue', 'process'] as const,
@@ -400,8 +399,7 @@ export const qk = {
   /** 外协报价一览列表键。params = `statuses` / `drawing_no` / `name` /
    *  `outsource_company_id` / `customer_id` / `is_urgent` / `sort_by` / `sort_dir` /
    *  `limit` / `offset`。 */
-  outsourceQuotes: (params: ListOutsourceQuotesParams) =>
-    ['outsource', 'quotes', params] as const,
+  outsourceQuotes: (params: ListOutsourceQuotesParams) => ['outsource', 'quotes', params] as const,
   /** outsource quotes 域前缀 —— 报价写端点成功后一把全失效。 */
   outsourceQuotesPrefix: ['outsource', 'quotes'] as const,
   // ============================================================

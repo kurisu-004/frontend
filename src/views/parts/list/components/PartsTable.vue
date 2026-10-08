@@ -144,14 +144,6 @@
               @click="store.edit.startEdit(row as PartListItem)"
               >编辑</el-button
             >
-            <el-button
-              v-if="store.canEdit && row.status === 'PENDING' && row.row_type !== 'ASSEMBLY'"
-              link
-              type="success"
-              size="small"
-              @click="store.dispatch.onDispatch(row as PartListItem)"
-              >下发</el-button
-            >
             <!--
               2026-09-30 新增：MANAGER 专属「完成」按钮 —— 强推工单+所有非取消批次为 COMPLETED。
               守卫 canForceComplete 收口：isManager && 非 ASSEMBLY && 非 COMPLETED && 非 CANCELLED。

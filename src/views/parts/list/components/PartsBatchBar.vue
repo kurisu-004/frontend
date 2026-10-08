@@ -52,15 +52,6 @@
       <el-icon><Printer /></el-icon>
       <span>打印预览（{{ store.batch.selectedIds.size }} 件）</span>
     </el-button>
-    <el-button
-      v-else
-      type="primary"
-      :disabled="store.batch.selectedIds.size === 0"
-      @click="store.dispatch.onOpenBatchDispatch"
-    >
-      <el-icon><Promotion /></el-icon>
-      <span>批量下发（{{ store.batch.selectedIds.size }} 件）</span>
-    </el-button>
   </div>
 </template>
 
@@ -68,8 +59,8 @@
 // views/parts/list/components/PartsBatchBar.vue
 //
 // 2026-09-15 重构：状态全部来自 usePartsListStore（Pinia setup store）。
-// 计数 / 进度 / 操作按钮直接 store.batch.* / store.print.* / store.dispatch.* 访问。
-import { Printer, Promotion, WarningFilled } from '@element-plus/icons-vue';
+// 计数 / 进度 / 操作按钮直接 store.batch.* / store.print.* 访问。
+import { Printer, WarningFilled } from '@element-plus/icons-vue';
 import { usePartsListStore } from '../composables/usePartsListStore';
 
 const store = usePartsListStore();

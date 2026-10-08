@@ -1,9 +1,9 @@
 // 外协看板「发送 / 回收」写操作 composable（`POST /api/v2/outsource-queue/move`）。
 //
 // 角色：
-//   - 提供 3 个方向包装（sendToCompany / receiveToProduction / receiveToInspection），
-//     全部收口同一个 `moveMutation`，视图层（Sortable 落点 / 卡片右键菜单）只消费这三个
-//     函数、不直接 import 本文件；
+//   - 提供 2 个方向包装（sendToCompany / receiveToProduction），全部收口同一个
+//     `moveMutation`，视图层（Sortable 落点 / 卡片右键菜单）只消费这两个函数、
+//     不直接 import 本文件；
 //   - 收发合一的理由：`t_part_batch` 的 `location` / `current_holder_id` / `version`
 //     三列在三个方向上是同一组列，拆成三个端点只会把同一份事务边界写三遍；
 //   - 每个包装的入参都带 `version`（OCC 锚，取自卡片 model，经卡片
@@ -43,15 +43,15 @@
 //     回收方向两者都必须是 null。
 //   ③ **没有 `quantity` 字段**（旧端点的 `quantity: null` 表示整批）。move 是整批语义，
 //     部分收发要先拆批（`POST /batches/split`）。
+//
+// 2026-10-10：目标货架不再由前端指定 —— `to.shelf_id` 与 `kind='INSPECTION_SHELF'`
+// 变体后端一并删除，「回收品检」方向下线。`receiveToInspection` 与第三个包装随之删除。
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { moveOutsourceBatch } from '@/api/outsource';
-import type {
-  OutsourceMoveRequestDto,
-  OutsourceMoveResultDto,
-} from '@/api/outsource.contract';
+import type { OutsourceMoveRequestDto, OutsourceMoveResultDto } from '@/api/outsource.contract';
 import { useAuthStore } from '@/stores/auth';
 import type {
   OutsourceQueueCandidateData,
@@ -83,27 +83,17 @@ export interface SendToCompanyInput {
 /** 「回收到生产」入参。
  *
  *  `companyId` / `batch` **必须成对来自同一张公司列**：在途卡 DTO 上没有公司字段
- *  （公司 id 只挂在 `companies[]` 的列上），单独给 batch 会组不出 `from.company_id`。 */
+ *  （公司 id 只挂在 `companies[]` 的列上），单独给 batch 会组不出 `from.company_id`。
+ *
+ *  2026-10-10：目标货架由后端按负载自动选（`to.shelf_id` 已删），入参不再有货架。 */
 export interface ReceiveToProductionInput {
   /** 批次所在的外协公司（`from.company_id`）。 */
   companyId: string;
   /** 右列在途卡 DTO：`version` / `receive_next_process_id` / `chain_resolvable`。 */
   batch: OutsourceQueueHeldBatchData;
-  /** 目标生产货架（`to.shelf_id`，须映射到下一道工序）。 */
-  toShelfId: string;
   /** 用户手选的下一道工序。仅当 `receive_next_process_id === '0'`（工序链推不出）时
    *  才需要；留空时由后端从工序链推导，推不出返 20706。 */
   nextProcessId?: string | null;
-  note?: string | null;
-}
-
-/** 「回收到品检」入参。与上面的差别：目标不是货架+工序而是品检货架，**不需要**工序
- *  （品检流转不带 next_process）。 */
-export interface ReceiveToInspectionInput {
-  companyId: string;
-  batch: OutsourceQueueHeldBatchData;
-  /** 目标品检货架（`to.shelf_id`）。 */
-  toShelfId: string;
   note?: string | null;
 }
 
@@ -116,10 +106,8 @@ export interface UseOutsourceQueueMoveReturn {
   canMove: ComputedRef<boolean>;
   /** 候选卡 → 外协公司（发送）。APPROVAL 走 `quote_id`，DIRECT 走 `direct = true`。 */
   sendToCompany: (input: SendToCompanyInput) => Promise<boolean>;
-  /** 外协公司 → 生产货架（回收生产）。 */
+  /** 外协公司 → 生产货架（回收生产；目标货架由后端自动选）。 */
   receiveToProduction: (input: ReceiveToProductionInput) => Promise<boolean>;
-  /** 外协公司 → 品检货架（回收品检）。 */
-  receiveToInspection: (input: ReceiveToInspectionInput) => Promise<boolean>;
 }
 
 export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
@@ -156,8 +144,8 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
     }
   }
 
-  /** 成功 toast 文案按方向分（三向）。用 `to_kind` 判已经够用 —— 三向的 `to_kind`
-   *  两两不同（OUTSOURCE_COMPANY / PRODUCTION_SHELF / INSPECTION_SHELF），
+  /** 成功 toast 文案按方向分（两向）。用 `to_kind` 判已经够用 —— 两向的 `to_kind`
+   *  两两不同（OUTSOURCE_COMPANY / PRODUCTION_SHELF），
    *  从 SOURCE 那一侧判会与「发送 / 回收」的语气反着来。 */
   function moveSuccessText(res: OutsourceMoveResultDto): string {
     switch (res.to_kind) {
@@ -165,8 +153,6 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
         return '已发送到外协公司';
       case 'PRODUCTION_SHELF':
         return '已从外协公司回收至生产';
-      case 'INSPECTION_SHELF':
-        return '已从外协公司回收至品检';
     }
   }
 
@@ -183,7 +169,8 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
   const moveMutation = useMutation<OutsourceMoveResultDto, Error, OutsourceMoveRequestDto>({
     mutationKey: ['outsource-queue', 'move'],
     // 不写 retry（信任 main.ts 全局 mutations.retry: 0）。
-    mutationFn: async (payload) => outsourceMoveResultSchema.parse(await moveOutsourceBatch(payload)),
+    mutationFn: async (payload) =>
+      outsourceMoveResultSchema.parse(await moveOutsourceBatch(payload)),
     onSuccess: async (res) => {
       await invalidateMoveDomains();
       error.value = null;
@@ -215,22 +202,19 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
 
   /** 「发送」包装 —— 目标公司 id 为空早退（不发注定被 20104 拒的请求）。
    *
-   *  三条早退都走一次失效对账，且包 try/catch 防止未捕获 rejection：
+   *  两条早退都走一次失效对账，且包 try/catch 防止未捕获 rejection：
    *   1. version 缺失 / NaN（见 guardVersion）；
-   *   2. `shelf_id` 为空 —— `PENDING` 且未上架的批次**没有 holder**，DTO 给的是空串。
-   *      这种行的 `from.shelf_id` 必被后端 `from` 守卫拒收（UI 本该提前置灰，这里是
-   *      第二道防御）；
-   *   3. 目标公司与该行的 `send_mode` 不自洽（APPROVAL 传了别的公司 / DIRECT 选了不在
+   *   2. 目标公司与该行的 `send_mode` 不自洽（APPROVAL 传了别的公司 / DIRECT 选了不在
    *      `company_options` 里的公司 / DIRECT 的 `company_options` 为空）。三个子情形都
-   *      是「请求组装不出来」而不是「用户填错」—— 公司下拉的选项源就是 DTO 那两个字段。 */
+   *      是「请求组装不出来」而不是「用户填错」—— 公司下拉的选项源就是 DTO 那两个字段。
+   *
+   *  ⚠️ 2026-10-10：`from.shelf_id` 也已删除，所以「批次尚未上架」不再是发请求前的
+   *  早退项（它由后端在 `from` 守卫里按 `current_holder_id` 自己判）。UI 侧的
+   *  「未上架不给发送到」仍然保留（见 `candidateIsPending`）—— 那条是给用户看的
+   *  可执行性提示，不是请求组装约束。 */
   async function sendToCompany(input: SendToCompanyInput): Promise<boolean> {
     const { candidate, companyId } = input;
     if (!(await guardVersion(candidate.version))) return false;
-    if (!candidate.shelf_id) {
-      ElMessage.warning('批次尚未上架，无法发送');
-      await reconcileAfterEarlyReturn();
-      return false;
-    }
     if (!companyId) {
       ElMessage.warning('请先选择外协公司');
       await reconcileAfterEarlyReturn();
@@ -253,7 +237,7 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
       await moveMutation.mutateAsync({
         batch_id: candidate.batch_id,
         version: candidate.version,
-        from: { kind: 'PRODUCTION_SHELF', shelf_id: candidate.shelf_id },
+        from: { kind: 'PRODUCTION_SHELF' },
         to: { kind: 'OUTSOURCE_COMPANY', company_id: companyId },
         // 两条报价路径互斥：都不传或同时传 → 后端 20104
         quote_id: isApproval ? candidate.quote_id : null,
@@ -266,25 +250,19 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
     }
   }
 
-  /** 「回收生产」包装 —— 货架为空早退（目标货架须映射到下一道工序，缺了后端返 20507 /
-   *  40001）。
+  /** 「回收生产」包装 —— 只守 version 与下一道工序两项（目标货架 2026-10-10 起由后端
+   *  按负载自动选，前端不再指定）。
    *
    *  下一道工序的取值顺序：**用户手选优先**，否则用 DTO 上的
    *  `receive_next_process_id`（后端投影已按工序链算好）；两者都没有时后端也会尝试从
    *  工序链推导，但链推不出（`"0"`）就返 20706 —— 与其发一个注定被拒的请求，不如提示
    *  用户补选工序。 */
   async function receiveToProduction(input: ReceiveToProductionInput): Promise<boolean> {
-    const { companyId, batch, toShelfId } = input;
+    const { companyId, batch } = input;
     if (!(await guardVersion(batch.version))) return false;
-    if (!toShelfId) {
-      ElMessage.warning('请先选择目标货架');
-      await reconcileAfterEarlyReturn();
-      return false;
-    }
     const nextProcessId =
-      input.nextProcessId || (batch.receive_next_process_id !== NO_NEXT_PROCESS
-        ? batch.receive_next_process_id
-        : '');
+      input.nextProcessId ||
+      (batch.receive_next_process_id !== NO_NEXT_PROCESS ? batch.receive_next_process_id : '');
     if (!nextProcessId) {
       ElMessage.warning('该批次没有下一道工序，请先选择接收工序');
       await reconcileAfterEarlyReturn();
@@ -295,38 +273,8 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
         batch_id: batch.batch_id,
         version: batch.version,
         from: { kind: 'OUTSOURCE_COMPANY', company_id: companyId },
-        to: {
-          kind: 'PRODUCTION_SHELF',
-          shelf_id: toShelfId,
-          next_process_id: nextProcessId,
-        },
+        to: { kind: 'PRODUCTION_SHELF', next_process_id: nextProcessId },
         // 回收方向不涉及报价
-        quote_id: null,
-        direct: null,
-        ...(input.note != null ? { note: input.note } : {}),
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /** 「回收品检」包装 —— 只需 batch + version + 目标品检货架，故只守 version 与货架
-   *  两个必填项；品检流转不带下一道工序，不存在 20706 那条早退。 */
-  async function receiveToInspection(input: ReceiveToInspectionInput): Promise<boolean> {
-    const { companyId, batch, toShelfId } = input;
-    if (!(await guardVersion(batch.version))) return false;
-    if (!toShelfId) {
-      ElMessage.warning('请先选择目标品检货架');
-      await reconcileAfterEarlyReturn();
-      return false;
-    }
-    try {
-      await moveMutation.mutateAsync({
-        batch_id: batch.batch_id,
-        version: batch.version,
-        from: { kind: 'OUTSOURCE_COMPANY', company_id: companyId },
-        to: { kind: 'INSPECTION_SHELF', shelf_id: toShelfId },
         quote_id: null,
         direct: null,
         ...(input.note != null ? { note: input.note } : {}),
@@ -342,6 +290,5 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
     canMove,
     sendToCompany,
     receiveToProduction,
-    receiveToInspection,
   };
 }

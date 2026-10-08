@@ -1,39 +1,36 @@
 // @vitest-environment happy-dom
 // src/views/scan/__tests__/ScanActionPicker.spec.ts
 //
-// 2026-10-04 新增（review 第 1 轮补）：/scan/action「选当前作业货架 + 送检前置」这条接线
-// 的回归守卫。
+// /scan/action 的回归守卫：**按钮显隐按「账号绑定货架的 zone 并集」决定**，以及点了之后
+// 跳哪一页。
 //
-// 为什么值得单独立一个文件：这一段是报工台选架功能的**全部**接线都在的地方，而它此前
-// 零覆盖 —— `scanShelf.spec.ts` 只验「`selectShelf` 写不写 store」，`WorkingShelfDialog.spec.ts`
-// 只验「弹窗 emit 了什么」，中间那段（点送检是**先开弹窗**而不是直接跳页、confirm 之后才
-// `push`、cancel 中止）一条断言都没有。删掉 `selectAction` 里那个 `if (a === 'INSPECT' &&
-// needShelf.value)` 不会有任何测试变红，而多架账号的送检立刻回到「作业架判不出 ⇒ 一次都
-// 提交不出去」的死结。本仓对这个形态有前科：`stores/__tests__/scanShelf.spec.ts` 的文件头
-// 记着上一版（页面级 composable、跨路由被卸载）的同类 bug 正是因为零覆盖才活了下来。
+// 2026-10-10 改写：本文件原先守的是「选架接线 + 送检前置」（当前作业货架横条 +
+// WorkingShelfDialog + 弹窗 confirm 之后才 push）。那个功能随「目标货架改由后端按负载
+// 自动选择」整体下线，相关用例随之删除；留下来的判定规则（哪个按钮出现）改由本文件
+// 继续守 —— 它是**现场账号权限**的一部分（SHELF_ACCOUNT 绑了哪些架决定这个工位能做
+// 哪几件事），不是货架选择的附属品。
 //
-// 本文件同时钉住横条的判据（review 重要 1）：警示态的来源是「作业架**能不能提交**」
-// （复用送检页的 `workingShelfProblem`），不是「多架未选」。后者漏掉「只绑了品检架」的账号
-// —— 那种账号单架自动选中、判据为假，横条会显示「自动：SH-I02」，一个 worker-scan 必然
-// 20501 打回的架号，工人据此点进送检页才发现一次都提交不出去。
+// 判据链路（这三段必须一起看，中间任一段写错都只表现为「按钮少了一个」，没有报错）：
+//   auth.boundShelves（`/iam/me` 带回来的绑定集）∩ GET /shelves（拿到 zone）
+//     → boundZones → showPickUp / showReturn / showInspect
+// 所以「工位绑了哪些架」与「货架端点的 zone」两侧都要有 fixture，缺一侧断言就失真。
 //
-// 桩的取舍（沿 `ScanReturnChainFlow.spec.ts` 的同款理由）：
+// 桩的取舍：
 //   - `vue-router`：只桩 `useRouter`，把 `push` / `replace` 抓出来断言跳转。`useScanSession`
 //     是模块级 ref 单例、不需要注入，工人身份靠它自己的 setter 建立。
-//   - `@/api/shelves` 整模块桩掉：本页只经 store 调 `listShelves`。
-//   - `WorkingShelfDialog` 桩成带标记 class 的空壳并透出两个触发按钮：本文件要验的是
-//     **本页怎么用**弹窗的回执，不是弹窗自己怎么列候选（那是 `WorkingShelfDialog.spec.ts`
-//     的活）。空壳把 `modelValue` 透成 class，用例据此断言「弹窗开没开」。
+//   - `@/api/shelves` 整模块桩掉：按钮显隐走共享 query `useProductionShelvesQuery`，
+//     它的 queryFn 就是 `listShelves` + Zod 守门。
 //   - `element-plus` 桩成 `{ ElMessage: { ...vi.fn() } }`：按 CLAUDE.md 约定。
-//   - mount 必须装 pinia + VueQueryPlugin：store setup 里 `useAuthStore()`，而 auth store
-//     在 setup **第一行**调 `useQueryClient()`（Pinia 只给 setup 注入上下文）。登录态靠
-//     预置 `localStorage.auth_session` 建立（auth store 首次 useAuthStore() 时自执行
-//     loadFromStorage()）。
+//   - mount 必须装 pinia + VueQueryPlugin，且两者都经 `global.plugins` 挂在 VTU 挂载的
+//     那个 app 上（组件自己 `useProductionShelvesQuery` 读按钮显隐 ⇒ VueQueryPlugin 必须
+//     在场；组件读 `useAuthStore()` ⇒ pinia 必须在场）。挂在别的 `createApp` 上没有用
+//     —— VTU mount 自建 app，不继承外部 app 的插件。
+//     auth store 也在 setup 第一行调 `useQueryClient()`，登录态靠预置
+//     `localStorage.auth_session` 建立。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushPromises, mount } from '@vue/test-utils';
-import { createApp } from 'vue';
-import { createPinia, setActivePinia } from 'pinia';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { createPinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 // vi.mock 的工厂会被提升到文件顶部，不能引用后声明的 const ⇒ 桩函数集中放进 vi.hoisted。
@@ -41,8 +38,6 @@ const h = vi.hoisted(() => ({
   listShelves: vi.fn(),
   push: vi.fn(),
   replace: vi.fn(),
-  /** 空壳弹窗 confirm 时要 emit 的架 id：用例在点「完成」前写它，模拟「工人点了哪张卡」。 */
-  dialogConfirmId: '' as string,
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 
@@ -52,30 +47,8 @@ vi.mock('element-plus', () => ({ ElMessage: h.ElMessage }));
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: h.push, replace: h.replace }) }));
 
-// 空壳弹窗：把 modelValue 透成 class（验「开没开」），并给两个按钮触发 confirm / cancel。
-// confirm 的 id 从 `h.dialogConfirmId` 现取 —— 不能用 attr 传（`$attrs` 只读，改它还会
-// 触发 Vue warn），所以走 setup 返回一个取值函数，模板在点击那一刻才读。
-vi.mock('@/views/scan/components/WorkingShelfDialog.vue', () => ({
-  default: {
-    name: 'WorkingShelfDialogStub',
-    props: ['modelValue', 'options', 'currentShelfId', 'emptyText'],
-    setup() {
-      return { confirmId: () => h.dialogConfirmId };
-    },
-    template: `
-      <div class="stub-dialog" :class="{ 'is-open': modelValue }">
-        <span class="stub-current">{{ currentShelfId ?? '' }}</span>
-        <span class="stub-empty">{{ emptyText ?? '' }}</span>
-        <button class="stub-confirm" @click="$emit('confirm', confirmId())">confirm</button>
-        <button class="stub-cancel" @click="$emit('cancel')">cancel</button>
-      </div>
-    `,
-  },
-}));
-
 import ScanActionPicker from '@/views/scan/ScanActionPicker.vue';
-import { useScanShelfStore } from '@/stores/scanShelf';
-import { useScanSession } from '@/composables/useScanSession';
+import { useScanSession } from '@/views/scan/composables/useScanSession';
 import type { CurrentUser } from '@/types/user';
 import type { Shelf, ShelfListResult } from '@/types/shelf';
 import type { Worker } from '@/types/worker';
@@ -103,7 +76,7 @@ function seedSession(user: CurrentUser): void {
   );
 }
 
-/** listShelves 的桩响应：只保留消费侧真读的字段（`Shelf` 10 个字段恰好全覆盖）。 */
+/** listShelves 的桩响应：只保留消费侧真读的字段。 */
 function mockShelves(rows: Array<Pick<Shelf, 'id' | 'code' | 'zone'>>): void {
   const result: ShelfListResult = {
     items: rows.map((r) => ({
@@ -111,28 +84,22 @@ function mockShelves(rows: Array<Pick<Shelf, 'id' | 'code' | 'zone'>>): void {
       name: r.code,
       location: null,
       is_active: true,
+      capacity: null,
+      current_load: 0,
       display_order: 0,
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
       ...r,
     })),
     total: rows.length,
-    limit: 200,
+    limit: 500,
     offset: 0,
   };
   vi.mocked(h.listShelves).mockResolvedValue(result);
 }
 
-/** 装好 pinia + query plugin、注入登录态与工人身份，然后挂载本页。 */
-async function mountPicker(user: CurrentUser): Promise<ReturnType<typeof mount>> {
-  seedSession(user);
-  const app = createApp({});
-  app.use(createPinia());
-  app.use(VueQueryPlugin, {
-    queryClient: new QueryClient({ defaultOptions: { queries: { retry: 0 } } }),
-  });
-  setActivePinia(app.config.globalProperties.$pinia);
-  // 工人身份：`/scan/action` 的入口守卫 requireWorker 要求它存在，否则跳 /scan/badge。
+/** 工人身份：`/scan/action` 的入口守卫 requireWorker 要求它存在，否则跳 /scan/badge。 */
+function seedWorker(): void {
   const worker: Worker = {
     id: '190000000000009',
     version: 1,
@@ -144,16 +111,34 @@ async function mountPicker(user: CurrentUser): Promise<ReturnType<typeof mount>>
     updated_at: '2026-01-01T00:00:00Z',
   };
   useScanSession().setWorker(worker);
+}
 
+/** 装好 pinia + query plugin、注入登录态与工人身份，然后挂载本页。 */
+async function mountPicker(user: CurrentUser): Promise<VueWrapper> {
+  seedSession(user);
+  seedWorker();
   const w = mount(ScanActionPicker, {
     global: {
+      plugins: [
+        createPinia(),
+        [
+          VueQueryPlugin,
+          { queryClient: new QueryClient({ defaultOptions: { queries: { retry: 0 } } }) },
+        ],
+      ],
       stubs: {
         'el-icon': { template: '<i><slot /></i>' },
         'el-tag': { template: '<span class="mock-tag"><slot /></span>' },
         'el-divider': { template: '<span class="mock-divider" />' },
+        // `emits: ['click']` 不能少：少声明时父组件的 `@click` 会**同时**被 stub 的
+        // `$emit('click')` 接住、又作为 fallthrough 落到根 <button> 的原生监听器上，
+        // 一次点击触发两次 `selectAction`（⇒ router.push 两次）。旧版本没声明是因为
+        // 老用例只断言「跳到哪一页」不断言次数，这条隐藏的双发就是这么活下来的。
         'el-button': {
           props: ['type', 'size', 'plain'],
-          template: '<button :class="[\'mock-btn\', $attrs.class]" @click="$emit(\'click\')"><slot /></button>',
+          emits: ['click'],
+          template:
+            '<button :class="[\'mock-btn\', $attrs.class]" @click="$emit(\'click\')"><slot /></button>',
         },
       },
     },
@@ -162,267 +147,123 @@ async function mountPicker(user: CurrentUser): Promise<ReturnType<typeof mount>>
   return w;
 }
 
-/** 三个动作按钮：按 class 找（`.action-btn` 的 class 被 el-button 桩透在根元素上）。 */
-function actionButtons(w: ReturnType<typeof mount>): ReturnType<typeof w.findAll> {
-  return w.findAll('.action-grid .mock-btn');
+/** 三个动作按钮的标签（按 `.action-label` 取 —— 直接取按钮全文会混进 desc 句）。
+ *  `.action-label` / `.action-grid` 是模板里的 class，与桩无关，EP 组件被桩掉也还在。 */
+function actionLabels(w: VueWrapper): string[] {
+  return w.findAll('.action-grid .action-label').map((b) => b.text().replace(/\s+/g, ''));
 }
 
-async function clickAction(w: ReturnType<typeof mount>, label: string): Promise<void> {
-  const btn = actionButtons(w).find((b) => b.text().includes(label));
+async function clickAction(w: VueWrapper, label: string): Promise<void> {
+  const btn = w
+    .findAll('.action-grid .mock-btn')
+    .find(
+      (b) => b.find('.action-label').exists() && b.find('.action-label').text().includes(label),
+    );
   expect(btn, `找不到动作按钮「${label}」`).toBeTruthy();
   await btn!.trigger('click');
   await flushPromises();
 }
 
-describe('ScanActionPicker：选架接线 + 送检前置', () => {
+describe('ScanActionPicker：按钮显隐按绑定架 zone 并集', () => {
   beforeEach(() => {
-    sessionStorage.clear();
     localStorage.clear();
     h.push.mockReset();
     h.replace.mockReset();
     vi.mocked(h.listShelves).mockReset();
-    h.dialogConfirmId = '';
     h.ElMessage.success.mockReset();
-    h.ElMessage.error.mockReset();
-    h.ElMessage.warning.mockReset();
   });
 
-  // ── 重要 2 的四条：送检前置的那段接线 ──────────────────────────────────────
-
-  it('A1：多架未选时点送检 → 不跳页、先开选架弹窗（绝不直接 push 到送检页）', async () => {
-    mockShelves([SHELF_P1, SHELF_I1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_I1.id]));
-
-    expect(useScanShelfStore().showShelfSelector).toBe(true);
-    await clickAction(w, '送 检');
-
-    // 没跳页 —— 这一条是本文件存在的全部理由：跳过去就回���「作业架判不出 ⇒ 提交不出去」
-    expect(h.push).not.toHaveBeenCalled();
-    // 弹窗开了，且把当前候选与当前选中值传了进去
-    expect(w.find('.stub-dialog').classes()).toContain('is-open');
-    expect(w.find('.stub-current').text()).toBe('');
-  });
-
-  it('A2：弹窗 confirm 选中某个架 → 写进 store，并补上这次送检跳转', async () => {
-    mockShelves([SHELF_P1, SHELF_I1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_I1.id]));
-
-    await clickAction(w, '送 检');
-    // 模拟「工人在弹窗里点了 SH-P01 并按完成」
-    h.dialogConfirmId = SHELF_P1.id;
-    await w.find('.stub-confirm').trigger('click');
-    await flushPromises();
-
-    expect(useScanShelfStore().selectedShelfId).toBe(SHELF_P1.id);
-    expect(sessionStorage.getItem('active_shelf_selection:u1')).toBe(SHELF_P1.id);
-    // confirm 之后才跳页，且只跳这一次
-    expect(h.push).toHaveBeenCalledTimes(1);
-    expect(h.push).toHaveBeenCalledWith('/scan/inspect');
-    // 弹窗同步关闭
-    expect(w.find('.stub-dialog').classes()).not.toContain('is-open');
-  });
-
-  it('A3：弹窗 cancel → 不写 store、不跳页，工人停在 /scan/action（不是死路：横条仍在）', async () => {
-    mockShelves([SHELF_P1, SHELF_I1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_I1.id]));
-
-    await clickAction(w, '送 检');
-    await w.find('.stub-cancel').trigger('click');
-    await flushPromises();
-
-    expect(h.push).not.toHaveBeenCalled();
-    expect(useScanShelfStore().selectedShelfId).toBeNull();
-    // 横条仍在、警示态仍在、按钮仍在 ⇒ 工人能立刻重试，不是走进死胡同
-    expect(w.find('.working-shelf').exists()).toBe(true);
-    expect(w.find('.working-shelf').classes()).toContain('is-warn');
-  });
-
-  it('A4：多架但已选出作业架 → 点送检直接进页，不经弹窗', async () => {
-    // 必须绑一个 INSPECTION 架「送检」按钮才会出现（按钮显隐按绑定架 zone 并集，见组件头）
-    mockShelves([SHELF_P1, SHELF_P2, SHELF_I1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_P2.id, SHELF_I1.id]));
-    // 预置上一会话选过的架（store 的多架分支会从 sessionStorage 恢复）
-    sessionStorage.setItem('active_shelf_selection:u1', SHELF_P2.id);
-    await w.vm.$nextTick();
-    // 重新加载候选（换绑定 → 指纹变化，强制重载）
-    await useScanShelfStore().initShelves({ force: true });
-    await flushPromises();
-
-    expect(useScanShelfStore().selectedShelfId).toBe(SHELF_P2.id);
-    expect(useScanShelfStore().showShelfSelector).toBe(false);
-
-    await clickAction(w, '送 检');
-
-    expect(h.push).toHaveBeenCalledWith('/scan/inspect');
-    expect(w.find('.stub-dialog').classes()).not.toContain('is-open');
-  });
-
-  // ── 重要 1：横条的判据是「能不能提交」，不是「多架未选」 ────────────────────
-
-  it('B1：只绑了品检架的单架账号 → 横条转警示态并说明原因（不显示「自动：SH-I01」）', async () => {
-    mockShelves([SHELF_I1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_I1.id]));
-
-    const bar = w.find('.working-shelf');
-    // store 侧的 showShelfSelector 此时是 false（只有一个候选）—— 判据必须不是它
-    expect(useScanShelfStore().showShelfSelector).toBe(false);
-    expect(bar.exists()).toBe(true);
-    expect(bar.classes()).toContain('is-warn');
-    // 自解释：把守卫的原因摆出来，而不是一个会被后端 20501 打回的架号
-    expect(w.find('.working-shelf-value').text()).toBe(
-      '本账号当前绑定的货架在品检区，缺少生产区作业货架，请联系管理员为本账号绑定生产货架',
-    );
-    expect(w.find('.working-shelf-value').text()).not.toContain(SHELF_I1.code);
-    // 有候选就必须给选架入口，点了能看到空态说明（出路）
-    expect(w.find('.working-shelf .mock-btn').exists()).toBe(true);
-  });
-
-  it('B2：只绑了品检架时点送检 → 先开弹窗（而不是直接进一个必然被拦死的页）', async () => {
-    mockShelves([SHELF_I1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_I1.id]));
-
-    await clickAction(w, '送 检');
-
-    expect(h.push).not.toHaveBeenCalled();
-    expect(w.find('.stub-dialog').classes()).toContain('is-open');
-  });
-
-  it('B3：单架生产账号 → 横条是「自动：{code}」正常态（单架不进警示态）', async () => {
-    mockShelves([SHELF_P1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id]));
-
-    const bar = w.find('.working-shelf');
-    expect(bar.classes()).not.toContain('is-warn');
-    expect(w.find('.working-shelf-value').text()).toBe(`自动：${SHELF_P1.code}`);
-  });
-
-  it('B4：多架已选 → 横条是「当前：{code}」+ 更换按钮；且把当前选中值传进弹窗做预选', async () => {
+  it('B1：只绑生产架 → 取件 + 放回，没有送检', async () => {
     mockShelves([SHELF_P1, SHELF_P2]);
     const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_P2.id]));
-    sessionStorage.setItem('active_shelf_selection:u1', SHELF_P1.id);
-    await useScanShelfStore().initShelves({ force: true });
-    await flushPromises();
-
-    const bar = w.find('.working-shelf');
-    expect(bar.classes()).not.toContain('is-warn');
-    expect(w.find('.working-shelf-value').text()).toBe(`当前：${SHELF_P1.code}`);
-    expect(w.find('.working-shelf .mock-btn').text()).toBe('更换');
-    // 打开弹窗时把 store 的当前值传下去（WorkingShelfDialog 据此预选那张卡）
-    expect(w.find('.stub-current').text()).toBe(SHELF_P1.id);
+    expect(actionLabels(w).sort()).toEqual(['取件', '放回']);
   });
 
-  // ── 选架入口本身（不经过送检按钮） ─────────────────────────────────────────
-
-  it('C1：点「选择货架」开弹窗、confirm 选中即写入 store（不跳页：这次没点送检）', async () => {
-    mockShelves([SHELF_P1, SHELF_P2]);
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_P2.id]));
-
-    const shelfBtn = w.find('.working-shelf .mock-btn');
-    expect(shelfBtn.text()).toBe('选择货架');
-    await shelfBtn.trigger('click');
-    expect(w.find('.stub-dialog').classes()).toContain('is-open');
-
-    h.dialogConfirmId = SHELF_P2.id;
-    await w.find('.stub-confirm').trigger('click');
-    await flushPromises();
-
-    expect(useScanShelfStore().selectedShelfId).toBe(SHELF_P2.id);
-    // 关键：只选了架、没有点送检 ⇒ 不许把人带进送检页（pendingInspect 的作用范围）
-    expect(h.push).not.toHaveBeenCalled();
+  it('B2：只绑品检架 → 只有送检', async () => {
+    mockShelves([SHELF_I1]);
+    const w = await mountPicker(makeUser('u2', [SHELF_I1.id]));
+    expect(actionLabels(w)).toEqual(['送检']);
   });
 
-  it('C2：选架失败（越界 id）→ 报 error、不跳页，且不留下「待跳转」的残留', async () => {
-    mockShelves([SHELF_P1, SHELF_P2, SHELF_I1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_P2.id, SHELF_I1.id]));
-
-    await clickAction(w, '送 检');
-    // 模拟一个不在候选集内的 id（管理员刚解绑 / listShelves 没返到）
-    h.dialogConfirmId = '8800000000999';
-    await w.find('.stub-confirm').trigger('click');
-    await flushPromises();
-
-    expect(h.ElMessage.error).toHaveBeenCalledWith('该货架不在本账号的可用货架内，请重新选择');
-    expect(useScanShelfStore().selectedShelfId).toBeNull();
-    expect(h.push).not.toHaveBeenCalled();
-
-    // 残留检查：这次失败留下的「待跳转」标记必须已被清掉 —— 否则工人接着正常选一次架
-    // （比如点「更换」后随手 confirm）就会被意外带进送检页。
-    h.dialogConfirmId = SHELF_P1.id;
-    await w.find('.stub-confirm').trigger('click');
-    await flushPromises();
-
-    expect(useScanShelfStore().selectedShelfId).toBe(SHELF_P1.id);
-    expect(h.push).not.toHaveBeenCalled();
-  });
-
-  // ── 取件 / 放回：不得受作业架影响（F1 的回归护栏） ─────────────────────────
-
-  it('D1：多架未选时点取件 / 放回 → 直接进页，不被作业架拦住（取件已解绑）', async () => {
+  it('B3：两类都绑 → 三个按钮全在', async () => {
     mockShelves([SHELF_P1, SHELF_I1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_I1.id]));
-    expect(useScanShelfStore().showShelfSelector).toBe(true);
-
-    await clickAction(w, '取 件');
-    expect(h.push).toHaveBeenCalledWith('/scan/pick');
-    expect(w.find('.stub-dialog').classes()).not.toContain('is-open');
-
-    h.push.mockClear();
-    await clickAction(w, '放 回');
-    expect(h.push).toHaveBeenCalledWith('/scan/return');
-    expect(w.find('.stub-dialog').classes()).not.toContain('is-open');
+    const w = await mountPicker(makeUser('u3', [SHELF_P1.id, SHELF_I1.id]));
+    expect(actionLabels(w).sort()).toEqual(['取件', '放回', '送检']);
   });
 
-  // ── 2026-10-04 review 第 2 轮：空态文案由调用方给 + noActionReason 降噪 ────────
-
-  // 守卫的 `shelfProblem` 回答的是「为什么当前作业架不可提交」，空态要回答的是「为什么这里
-  // 列不出卡」。绑 ≥ 2 个非生产架时两者会分叉：守卫说「请先在「操作选择」页选择当前作业
-  // 货架」，而工人此刻就站在那一页、弹窗里一张卡都没有 —— 那是循环指引，且选择解决不了。
-  it('B5：绑 ≥2 个非生产架 → 空态文案不说「请去选择货架」（不制造循环指引）', async () => {
-    mockShelves([SHELF_I1, { id: '8800000000004', code: 'SH-I02', zone: 'INSPECTION' }]);
-    const w = await mountPicker(makeUser('u1', ['8800000000003', '8800000000004']));
-
-    expect(useScanShelfStore().selectedShelfId).toBeNull();
-    expect(useScanShelfStore().showShelfSelector).toBe(true);
-    await clickAction(w, '送 检');
-    expect(w.find('.stub-dialog').classes()).toContain('is-open');
-
-    const empty = w.find('.stub-empty').text();
-    expect(empty).toContain('没有生产区作业货架');
-    expect(empty).not.toContain('请先在「操作选择」页选择');
-    expect(empty).not.toContain('在品检区，缺少');
-  });
-
-  it('B6：候选里有生产架 → 不传空态文案（弹窗有卡可列，文案用不上）', async () => {
+  // 反向守卫：绑定集里**没有**的架（货架端点返了全量货架，按钮只认绑定集里的）不能点亮
+  // 按钮。少了这一条，「账号绑 A1 却看到 B2 的品检按钮」这类越权显示测不出来。
+  it('B4：绑定集之外的架不参与 zone 并集（端点返全量货架也不给按钮）', async () => {
     mockShelves([SHELF_P1, SHELF_I1]);
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_I1.id]));
-
-    expect(w.find('.stub-empty').text()).toBe('');
+    // 账号只绑了生产架
+    const w = await mountPicker(makeUser('u4', [SHELF_P1.id]));
+    expect(actionLabels(w)).not.toContain('送检');
   });
 
-  // 降噪：候选非空但 zone 一个都认不出来（listShelves 失败 ⇒ store 兜底填 UNKNOWN）时，
-  // noActionReason 不再与横条重复同一段话。wildcard 那支必须保持原样（横条不渲染）。
-  it('E1：zone 全 UNKNOWN → 横条自解释，noActionReason 不再重复（降噪）', async () => {
-    vi.mocked(h.listShelves).mockRejectedValue(new Error('boom'));
-    const w = await mountPicker(makeUser('u1', [SHELF_P1.id]));
+  // 2026-10-10：横条下线后「零按钮」只剩一种成因 —— 账号真的一个架都没绑（wildcard）。
+  // 端点挂掉 / 绑定集里有架但 zone 认不出来时**不给文案**：那时没有别处能摆这句，
+  // 而「点了才知道按钮不出现」比一句来路不明的解释更好排查。
+  it('B5：一个架都没绑 → 零按钮 + 「未绑定货架」提示', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    const w = await mountPicker(makeUser('u5', []));
+    expect(actionLabels(w)).toEqual([]);
+    expect(w.text()).toContain('本账号未绑定货架');
+  });
 
-    // 横条说了「无法识别」
-    expect(w.find('.working-shelf').classes()).toContain('is-warn');
-    expect(w.find('.working-shelf-value').text()).toBe(
-      '无法识别当前货架所属区域，不能作为作业货架，请联系管理员核对本账号的货架绑定',
-    );
-    // 三个动作按钮全隐藏（没有可认出的 zone），但**不再**额外渲染一段近义文案。
-    // 两条候选文案都断言「不在」：只钉住降噪前那一句的话，把降噪改成返回**另一句**错文案
-    // （例如误落到 wildcard 那一支）会漏过。
-    expect(actionButtons(w)).toHaveLength(0);
-    expect(w.text()).not.toContain('本账号绑定的货架所属区域无法识别');
+  it('B6：零按钮时不给「未绑定货架」文案（账号其实绑了架，只是货架端点挂了）', async () => {
+    vi.mocked(h.listShelves).mockRejectedValue(new Error('500 boom'));
+    const w = await mountPicker(makeUser('u6', [SHELF_P1.id]));
+    expect(actionLabels(w)).toEqual([]);
     expect(w.text()).not.toContain('本账号未绑定货架');
   });
+});
 
-  it('D2：候选为空（wildcard）→ 不渲染横条，走既有 noActionReason 文案', async () => {
-    vi.mocked(h.listShelves).mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
-    const w = await mountPicker(makeUser('u1', []));
+describe('ScanActionPicker：点了跳哪一页', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    h.push.mockReset();
+    h.replace.mockReset();
+    vi.mocked(h.listShelves).mockReset();
+    h.ElMessage.success.mockReset();
+  });
 
-    expect(w.find('.working-shelf').exists()).toBe(false);
-    expect(w.text()).toContain('本账号未绑定货架，请联系管理员在「账号管理」为本账号绑定货架');
+  // 2026-10-10：点送检**直接** push —— 原来有一段「作业架判不出就先开选架弹窗、
+  // confirm 之后才 push」的中转，功能下线后不再有任何前置闸门。
+  it('N1：点送检直接跳 /scan/inspect（不再有任何选架中转）', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_I1.id]));
+    await clickAction(w, '送 检');
+    expect(h.push.mock.calls).toEqual([['/scan/inspect']]);
+    expect(h.ElMessage.success).toHaveBeenCalledWith('已选择: 送检');
+  });
+
+  it('N2：取件 / 放回分别跳 /scan/pick 与 /scan/return', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    const w = await mountPicker(makeUser('u1', [SHELF_P1.id, SHELF_I1.id]));
+    await clickAction(w, '取 件');
+    expect(h.push).toHaveBeenLastCalledWith('/scan/pick');
+    await clickAction(w, '放 回');
+    expect(h.push).toHaveBeenLastCalledWith('/scan/return');
+  });
+
+  // 没有工人身份 ⇒ 入口守卫把页面弹回 /scan/badge，不该有任何动作按钮可用。
+  it('N3：worker 缺失 → 弹回 /scan/badge', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    useScanSession().setWorker(null);
+    seedSession(makeUser('u1', [SHELF_P1.id, SHELF_I1.id]));
+    mount(ScanActionPicker, {
+      global: {
+        plugins: [
+          createPinia(),
+          [
+            VueQueryPlugin,
+            { queryClient: new QueryClient({ defaultOptions: { queries: { retry: 0 } } }) },
+          ],
+        ],
+        stubs: { 'el-button': true },
+      },
+    });
+    await flushPromises();
+    expect(h.replace).toHaveBeenCalledWith('/scan/badge');
   });
 });

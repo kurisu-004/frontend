@@ -178,7 +178,8 @@ async function mountDialog(target: RepairBatchListItem) {
 /** mountDialog 是 async（等字典拉取），取它的 await 结果作为 wrapper 类型。 */
 type DialogWrapper = Awaited<ReturnType<typeof mountDialog>>;
 
-/** 三个下拉的 DOM 顺序：工序 / 生产货架 / 品检货架（两个 tab 的 pane 都渲染）。 */
+// 2026-10-10：两个 Tab 的目标货架下拉都删了（`repair-dispatch` 的 `shelf_id` 后端已删，
+// 目标架按负载自动选）⇒ 全页**只剩一个**下拉（下一道工序），且品检 Tab 连这个都没有。
 function selects(wrapper: DialogWrapper) {
   return wrapper.findAll('select');
 }
@@ -191,11 +192,9 @@ async function clickButton(wrapper: DialogWrapper, text: string): Promise<void> 
 }
 
 describe('RepairStartDialog 下发载荷（整批返修，不带 quantity）', () => {
-  it('D1：下发到生产架 —— body 恰为 shelf_id / version / next_process_id，无 quantity', async () => {
+  it('D1：下发到生产架 —— body 恰为 version / next_process_id，无 shelf_id 也无 quantity', async () => {
     const wrapper = await mountDialog(makeTarget());
-    const sels = selects(wrapper);
-    await sels[0]!.setValue('190000000000201'); // 下一道工序
-    await sels[1]!.setValue('190000000000301'); // 目标生产货架
+    await selects(wrapper)[0]!.setValue('190000000000201'); // 下一道工序
     await clickButton(wrapper, '完成 · 下发到生产架');
 
     expect(mocks.repairDispatch).toHaveBeenCalledTimes(1);
@@ -203,23 +202,20 @@ describe('RepairStartDialog 下发载荷（整批返修，不带 quantity）', (
     expect(batchId).toBe('190000000000123');
     expect(body).not.toHaveProperty('quantity');
     expect(body).toEqual({
-      shelf_id: '190000000000301',
       version: 3,
       next_process_id: '190000000000201',
     });
   });
 
-  it('D2：送检到品检架 —— 同样不带 quantity，且 next_process_id 为 null', async () => {
+  it('D2：送检到品检架 —— 零输入（目标架由后端选），next_process_id 为 null', async () => {
     const wrapper = await mountDialog(makeTarget());
     wrapper.findComponent(ElTabsStub).vm.$emit('update:modelValue', 'inspect');
     await flushPromises();
-    await selects(wrapper)[2]!.setValue('190000000000302'); // 品检货架
-    await clickButton(wrapper, '完成 · 送检到该架');
+    await clickButton(wrapper, '完成 · 送检');
 
     const [, body] = mocks.repairDispatch.mock.calls[0] as [string, Record<string, unknown>];
     expect(body).not.toHaveProperty('quantity');
     expect(body).toEqual({
-      shelf_id: '190000000000302',
       version: 3,
       next_process_id: null,
     });
@@ -227,12 +223,10 @@ describe('RepairStartDialog 下发载荷（整批返修，不带 quantity）', (
 
   it('D3：批次量 3 / 10 也不发数量 —— 端点是整批返修，无「部分返修」这条交互', async () => {
     const wrapper = await mountDialog(makeTarget({ quantity: 3 }));
-    const sels = selects(wrapper);
-    await sels[0]!.setValue('190000000000201');
-    await sels[1]!.setValue('190000000000301');
+    await selects(wrapper)[0]!.setValue('190000000000201');
     await clickButton(wrapper, '完成 · 下发到生产架');
 
     const [, body] = mocks.repairDispatch.mock.calls[0] as [string, Record<string, unknown>];
-    expect(Object.keys(body).sort()).toEqual(['next_process_id', 'shelf_id', 'version']);
+    expect(Object.keys(body).sort()).toEqual(['next_process_id', 'version']);
   });
 });

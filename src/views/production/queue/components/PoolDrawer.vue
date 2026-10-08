@@ -1,5 +1,5 @@
 <!-- 工序候选池抽屉（Sortable 的源与落点），消费方 ProcessBoardTab。
-     接收父级 provide 注入：moveBatchToPool / shelfId / openBatchContextMenu。
+     接收父级 provide 注入：moveBatchToPool / openBatchContextMenu。
 
      @start 把候选池源信息（含批次真实 shelf_id）写到 dndSourceTracker；@add 时调
      moveBatchToPool 撤回批次。徽标与跨域计数靠 move 的失效链与服务器对账（成功走
@@ -69,9 +69,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue';
-import type { ComputedRef } from 'vue';
-import { ElMessage } from 'element-plus';
+import { inject, ref } from 'vue';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
 import type { BatchMenuOpener } from '@/composables/useBatchContextMenu';
 import type { ProcessPoolView } from '@/types/productionQueue';
@@ -121,22 +119,9 @@ useLazyDraggable(containerRef, {
 // (batch_id, version, from_worker_id, to_shelf_id) —— version 是 OCC 锚（源批次
 // t_part_batch.version），撤回 move 必填。
 const moveBatchToPool =
-  inject<
-    (
-      batch_id: string,
-      version: number,
-      from_worker_id: string,
-      to_shelf_id: string,
-    ) => Promise<boolean>
-  >('moveBatchToPool')!;
-// shelfId 是 WORKER→POOL 的 `to.shelf_id`（撤回目标货架）。
-// 后端校验该货架必须映射到 batch 当前工序，否则 20507 BIZ_SHELF_PROCESS_NOT_MAPPED
-// （HTTP 422）—— 用当前激活货架是唯一合理默认（用户视角「放回我正在看的货架」）。
-const shelfId = inject<ComputedRef<string>>(
-  'shelfId',
-  computed(() => ''),
-);
-
+  inject<(batch_id: string, version: number, from_worker_id: string) => Promise<boolean>>(
+    'moveBatchToPool',
+  )!;
 /** 卡片右键 → 板级 opener（`showBatchContextMenu` 在板级调，菜单挂在 body 上，与本
  *  Sortable 容器零 DOM 关系）。opener 由 QueueBoard provide，本组件与板级之间隔着
  *  ProcessBoardTab 一层，走 inject 而非 prop 穿透。inject 缺省 noop 兜底
@@ -173,16 +158,11 @@ async function onDragAdd(evt: DraggableStartEvent) {
   if (!batchId) return;
   const fromWorkerId = consumeWorkerSource(batchId);
   if (!fromWorkerId) return;
-  // 撤回目标货架 = 当前激活货架。
-  const toShelfId = shelfId.value;
-  if (!toShelfId) {
-    ElMessage.warning('请先选择目标货架');
-    return;
-  }
+  // 撤回的目标货架由后端按批次当前工序自动选（负载最低的那一个），前端不传。
   // OCC 锚同 WorkerColumn：走卡片的 data-batch-version dataset（本抽屉不传事件第二参
   // 给 useQueueMove 之前先自查，守卫在包装里）。缺失时 NaN，由 useQueueMove 拦下。
   const version = Number.parseInt(evt.item.dataset.batchVersion ?? '', 10);
-  await moveBatchToPool(batchId, version, fromWorkerId, toShelfId);
+  await moveBatchToPool(batchId, version, fromWorkerId);
 }
 </script>
 

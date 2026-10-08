@@ -34,6 +34,11 @@
 //   - 2026-10-02（review 第 1 轮 I-2）：补 `watch(q.error)` 桥接（console.error +
 //     去重后的 ElMessage.error）。迁移前裸 load() 的 catch 里有 console.error，迁移后
 //     若不桥接，可诊断性反而更差 —— 守门成了「静默失败」。
+//   - 2026-10-10：目标货架改由后端按负载自动选，全仓 10 处「货架 ↔ 工序」下拉里
+//     9 处（扫码台放回 / 送检、外协回收、品检打回与送检、生产队列撤回、cnc /
+//     零件一览 / 零件详情的下发、返修下发）整体删除，本 composable 只剩**一个**消费方：
+//     零件详情页的「外协回收」弹窗（`receive-from-outsource` 的 `shelf_id` 后端未删，
+//     不在本轮口径内）。保留本文件而不整体删除，就是为这一处。
 
 import { computed, watch, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';

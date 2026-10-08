@@ -25,7 +25,7 @@ export interface OutsourceBatchMenuInput {
   area: OutsourceBatchArea;
   /** 被右键的那张卡（只读 `quantity` / `batch_id` / `version`）。 */
   batch: BatchCardModel;
-  /** 收发权限（MANAGER + CLERK + INSPECTOR）。只闸「回收生产 / 回收品检」。 */
+  /** 收发权限（MANAGER + CLERK + INSPECTOR）。只闸「回收生产」。 */
   canMove: boolean;
   /** 拆批权限（MANAGER + CLERK）。Inspector 能收发但**不能**拆批。 */
   canSplit: boolean;
@@ -50,8 +50,6 @@ export interface OutsourceBatchMenuInput {
   onSplit: () => void;
   /** 从外协公司回收至生产（打开回收对话框，提交走 `receiveToProduction`）。 */
   onReceiveProduction: () => void;
-  /** 从外协公司回收至品检（打开回收对话框，提交走 `receiveToInspection`）。 */
-  onReceiveInspection: () => void;
 }
 
 /** 该候选行可发送的公司 id 白名单。
@@ -103,7 +101,6 @@ export function buildOutsourceBatchMenuItems(input: OutsourceBatchMenuInput): Me
   if (area === 'outsource-company') {
     if (input.canMove) {
       items.push({ label: '回收生产', onClick: () => input.onReceiveProduction() });
-      items.push({ label: '回收品检', onClick: () => input.onReceiveInspection() });
     }
     if (input.canSplit && batch.quantity > 1) {
       items.push({ label: '拆分批次', onClick: () => input.onSplit() });

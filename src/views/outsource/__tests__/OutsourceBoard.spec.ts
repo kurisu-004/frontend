@@ -20,7 +20,8 @@
 //     两域（失效编排在板级，不在共享对话框内）。
 //   - B8：provide 三件套（sendToCompany / openOutsourceBatchMenu / activeOutsourceProcessId）
 //     真的提供了，且 sendToCompany 是写操作 composable 的那一个实例。
-//   - B9：回收对话框 submit 后走 receiveToProduction / receiveToInspection，成功才关。
+//   - B9：回收对话框 submit 后走 receiveToProduction，成功才关。2026-10-10 起没有
+//     「回收品检」模式（`kind='INSPECTION_SHELF'` 变体后端已删除），载荷里也没有货架。
 //   - B10：tab body 组件带 process-id 挂载（:lazy 的懒挂载语义由 EP 负责，本用例守 prop
 //     接线）。
 //
@@ -65,7 +66,6 @@ const snapshotMock = vi.hoisted(() => ({
 const moveMock = vi.hoisted(() => ({
   send: vi.fn(async () => true),
   receiveToProduction: vi.fn(async () => true),
-  receiveToInspection: vi.fn(async () => true),
 }));
 const authMock = vi.hoisted(() => ({ roles: ['MANAGER', 'CLERK', 'INSPECTOR'] as string[] }));
 /** el-tabs 桩的「切到某个 tab」驱动器（真实 el-tabs 靠点 tab 头 emit update:modelValue）。 */
@@ -105,7 +105,6 @@ vi.mock('@/views/outsource/composables/useOutsourceQueueMove', () => ({
     canMove: computed(() => authMock.roles.length > 0),
     sendToCompany: moveMock.send,
     receiveToProduction: moveMock.receiveToProduction,
-    receiveToInspection: moveMock.receiveToInspection,
   }),
 }));
 vi.mock('@/stores/auth', () => ({
@@ -221,7 +220,8 @@ const ElButtonStub = defineComponent({
   props: { loading: Boolean, type: String },
   emits: ['click'],
   setup(_, { slots, emit }) {
-    return () => h('button', { class: 'el-button-stub', onClick: () => emit('click') }, slots.default?.());
+    return () =>
+      h('button', { class: 'el-button-stub', onClick: () => emit('click') }, slots.default?.());
   },
 });
 
@@ -229,12 +229,14 @@ const ElButtonStub = defineComponent({
 const ProcessBoardTabStub = defineComponent({
   name: 'ProcessBoardTabStub',
   props: { processId: { type: String, required: true } },
-  setup: (props) => () => h('div', { class: 'process-board-tab-stub', 'data-pid': props.processId }),
+  setup: (props) => () =>
+    h('div', { class: 'process-board-tab-stub', 'data-pid': props.processId }),
 });
 interface ReceiveStubProps {
   modelValue?: boolean;
-  mode?: string;
   companyName?: string;
+  /** 2026-10-10 起回收对话框只有一种模式（`mode` prop 随「回收品检」下线删除），
+   *  这里断言它的存在与否就等于断言「板级没有再按模式分叉」。 */
 }
 const receiveStub = vi.hoisted(() => ({
   lastSubmit: null as unknown,
@@ -244,7 +246,6 @@ const ReceiveDialogStub = defineComponent({
   name: 'OutsourceReceiveDialogStub',
   props: {
     modelValue: Boolean,
-    mode: String,
     companyName: String,
     batch: Object,
     submitting: Boolean,
@@ -253,11 +254,12 @@ const ReceiveDialogStub = defineComponent({
   setup(props, { emit }) {
     receiveStub.lastProps = props;
     return () =>
-      h('div', { class: 'receive-dialog-stub', 'data-mode': props.mode }, [
+      h('div', { class: 'receive-dialog-stub' }, [
         h('button', {
           class: 'receive-dialog-stub__confirm',
           onClick: () => {
-            const payload = { toShelfId: '5000000000002', nextProcessId: '2000000000002' };
+            // 2026-10-10：载荷里只剩下一道工序（目标货架由后端按负载自动选）。
+            const payload = { nextProcessId: '2000000000002' };
             receiveStub.lastSubmit = payload;
             emit('confirm', payload);
           },
@@ -353,7 +355,6 @@ const globalConfig = {
     BatchSplitDialog: SplitDialogStub,
   },
 };
-
 
 function mountBoard(query: Record<string, unknown> = {}) {
   routeMock.query = query;
@@ -476,18 +477,18 @@ describe('OutsourceBoard（外协看板壳）', () => {
     wrapper.unmount();
   });
 
-  it('B6a：公司列卡的菜单 = 回收生产 + 回收品检 + 拆分批次（三角色都有权）', () => {
+  it('B6a：公司列卡的菜单 = 回收生产 + 拆分批次（三角色都有权；2026-10-10 起无「回收品检」）', () => {
     const wrapper = mountBoard();
     openHeld(wrapper);
-    expect(menuLabels()).toEqual(['回收生产', '回收品检', '拆分批次']);
+    expect(menuLabels()).toEqual(['回收生产', '拆分批次']);
     wrapper.unmount();
   });
 
-  it('B6b：Inspector 拿得到回收两项、拿不到拆批（逐项过滤，不是「一次性闸」）', () => {
+  it('B6b：Inspector 拿得到回收、拿不到拆批（逐项过滤，不是「一次性闸」）', () => {
     authMock.roles = ['INSPECTOR'];
     const wrapper = mountBoard();
     openHeld(wrapper);
-    expect(menuLabels()).toEqual(['回收生产', '回收品检']);
+    expect(menuLabels()).toEqual(['回收生产']);
     wrapper.unmount();
   });
 
@@ -599,40 +600,20 @@ describe('OutsourceBoard（外协看板壳）', () => {
     wrapper.unmount();
   });
 
-  it('B9a：回收生产 → receiveToProduction 被调，批次的 companyId 来自所在列', async () => {
+  it('B9a：回收生产 → receiveToProduction 被调，批次的 companyId 来自所在列、载荷无货架', async () => {
     const wrapper = mountBoard();
     const held = { batch_id: '3000000000002', version: 5, quantity: 8 };
     openHeld(wrapper, held);
     clickItem('回收生产');
     await wrapper.vm.$nextTick();
-    expect(wrapper.find('.receive-dialog-stub').attributes('data-mode')).toBe('production');
+    expect(wrapper.find('.receive-dialog-stub').exists()).toBe(true);
 
     await wrapper.find('.receive-dialog-stub__confirm').trigger('click');
     expect(moveMock.receiveToProduction).toHaveBeenCalledWith({
       companyId: COMPANY_ID,
       batch: held,
-      toShelfId: '5000000000002',
       nextProcessId: '2000000000002',
     });
-    expect(moveMock.receiveToInspection).not.toHaveBeenCalled();
-    wrapper.unmount();
-  });
-
-  it('B9b：回收品检 → receiveToInspection 被调（不带工序）', async () => {
-    const wrapper = mountBoard();
-    const held = { batch_id: '3000000000002', version: 5 };
-    openHeld(wrapper, held);
-    clickItem('回收品检');
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find('.receive-dialog-stub').attributes('data-mode')).toBe('inspection');
-
-    await wrapper.find('.receive-dialog-stub__confirm').trigger('click');
-    expect(moveMock.receiveToInspection).toHaveBeenCalledWith({
-      companyId: COMPANY_ID,
-      batch: held,
-      toShelfId: '5000000000002',
-    });
-    expect(moveMock.receiveToProduction).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -690,10 +671,9 @@ describe('OutsourceBoard（外协看板壳）', () => {
       { code: 'OP10', badge: '(0 / 0)' },
       { code: 'IP10', badge: '(0 / 3)' },
     ]);
-    expect(wrapper.findAll('.process-board-tab-stub').map((b) => b.attributes('data-pid'))).toEqual([
-      PROC_A,
-      PROC_INHOUSE,
-    ]);
+    expect(wrapper.findAll('.process-board-tab-stub').map((b) => b.attributes('data-pid'))).toEqual(
+      [PROC_A, PROC_INHOUSE],
+    );
     wrapper.unmount();
   });
 });
@@ -776,6 +756,5 @@ function clickItem(label: string): void {
 function clickChild(label: string, child: string): void {
   lastItems()
     .find((i) => i.label === label)!
-    .children!.find((c) => c.label === child)!
-    .onClick!();
+    .children!.find((c) => c.label === child)!.onClick!();
 }

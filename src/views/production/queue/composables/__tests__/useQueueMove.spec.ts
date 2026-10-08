@@ -222,35 +222,32 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     expect(ElMessage.error).toHaveBeenCalledWith('WORKER_CAPACITY_EXCEEDED');
   });
 
-  it('T4：moveBatchToPool 成功 → moveBatch 收到 WORKER→POOL 形态', async () => {
+  it('T4：moveBatchToPool 成功 → moveBatch 收到 WORKER→POOL 形态，to 不带 shelf_id', async () => {
+    // 2026-10-10：撤回候选池的目标货架改由后端按 `current_process_id` 自动选 ⇒
+    // `to` 只剩 kind。这条断言把「不再指定货架」钉死：谁把 shelf_id 加回来，本用例会红。
     const { useQueueMove } = await import('../useQueueMove');
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchToPool(
-      '3000000000001',
-      CARD_VERSION,
-      '1900000000002',
-      '5000000000001',
-    );
+    const ok = await q.moveBatchToPool('3000000000001', CARD_VERSION, '1900000000002');
     expect(ok).toBe(true);
     expect(realMoveBatch).toHaveBeenCalledWith({
       batch_id: '3000000000001',
       version: CARD_VERSION,
       from: { kind: 'WORKER', worker_id: '1900000000002' },
-      to: { kind: 'POOL', shelf_id: '5000000000001' },
+      to: { kind: 'POOL' },
     });
     expectQueueDomainInvalidated();
   });
 
-  it('T5：moveBatchToPool toShelfId 为空 → 早退 false + warning，零请求', async () => {
-    // 同 T2：撤回目标货架为空时 mutation 不发出，这次投放对服务器无影响，仍要失效
-    // 对账一次（且同样包 try/catch，见 T2b）。
+  // 2026-10-10：撤回**不再有任何入参早退**（原先「目标货架为空」那条随 toShelfId
+  // 一起消失）。留下这条是为了守住 version 守卫本身：NaN 仍必须早退、零请求。
+  it('T5：moveBatchToPool 的 version 为 NaN → 早退 false + warning，零请求', async () => {
     const { useQueueMove } = await import('../useQueueMove');
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useQueueMove());
-    const ok = await q.moveBatchToPool('3000000000001', CARD_VERSION, '1900000000002', '');
+    const ok = await q.moveBatchToPool('3000000000001', Number.NaN, '1900000000002');
     expect(ok).toBe(false);
     expect(realMoveBatch).not.toHaveBeenCalled();
-    expect(ElMessage.warning).toHaveBeenCalledWith('请先选择目标货架');
+    expect(ElMessage.warning).toHaveBeenCalledWith('批次版本信息缺失，无法移动');
     expectQueueDomainInvalidated();
   });
 
@@ -379,7 +376,7 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     const { useQueueMove } = await import('../useQueueMove');
     const q = testApp.runWithContext(() => useQueueMove());
     await q.moveBatchToWorker('3000000000001', CARD_VERSION, '1900000000002', '5000000000001');
-    await q.moveBatchToPool('3000000000001', CARD_VERSION, '1900000000002', '5000000000001');
+    await q.moveBatchToPool('3000000000001', CARD_VERSION, '1900000000002');
     await q.moveBatchBetweenWorkers(
       '3000000000001',
       CARD_VERSION,
@@ -402,7 +399,7 @@ describe('useQueueMove — queue 域的移动 / 自动分配写操作', () => {
     const q = testApp.runWithContext(() => useQueueMove());
 
     expect(await q.moveBatchToWorker('3', Number.NaN, 'w2', 's1')).toBe(false);
-    expect(await q.moveBatchToPool('3', Number.NaN, 'w1', 's1')).toBe(false);
+    expect(await q.moveBatchToPool('3', Number.NaN, 'w1')).toBe(false);
     expect(await q.moveBatchBetweenWorkers('3', Number.NaN, 'w1', 'w2')).toBe(false);
 
     expect(realMoveBatch).not.toHaveBeenCalled();

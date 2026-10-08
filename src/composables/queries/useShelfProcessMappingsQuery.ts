@@ -30,8 +30,9 @@
 //     真能随候选源就绪自动开合。传裸 ref 也支持，但 getter 形态在调用点更直白。
 //
 // 失效：映射表的写点全仓**只有 1 个** —— 「货架管理 → 工序映射」
-// （ShelfList.vue 的 setShelfProcesses），读点则有 10 处（全部是
-// useShelfProcessFilter），与写侧无一在写侧同屏。这**不适用** CLAUDE.md「跨页面写
+// （ShelfList.vue 的 setShelfProcesses），读点则只剩 1 处（2026-10-10 删掉其余 9 处
+// 之后，只剩零件详情的外协回收弹窗那一个 useShelfProcessFilter），与写侧无一在
+// 写侧同屏。这**不适用** CLAUDE.md「跨页面写
 // 操作不做穷举失效」策略 —— 该策略针对的是「写点散落多域、补齐等于穷举全仓」的情形
 // （送检 / worker-scan / 品检流转 / outsource 收发），本域不存在这个问题，成本近乎为零
 // （2026-10-02 review 第 1 轮 M-3）。故保存成功后调本文件底部的薄封装，把「改了映射
@@ -40,10 +41,7 @@
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { toValue, type MaybeRefOrGetter } from 'vue';
 import { getAllShelfProcessMappings } from '@/api/shelves';
-import {
-  shelfProcessMappingsResultSchema,
-  type ShelfProcessMappingsResultSchema,
-} from './schemas';
+import { shelfProcessMappingsResultSchema, type ShelfProcessMappingsResultSchema } from './schemas';
 import { qk } from './keys';
 
 /**

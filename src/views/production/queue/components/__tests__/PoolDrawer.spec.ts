@@ -14,8 +14,10 @@
 //   - D3：onRemove 把被拖节点放回 `from.children[oldIndex]`（DOM 下标）—— 与
 //     WorkerColumn 侧 W10 对称，两处缺一不可。
 //   - D4：撤回投放（onStart 记工人源 → onAdd 消费）调 moveBatchToPool（含 version）。
-//     to.shelf_id 取当前激活货架；无工人源时不发请求。
-//   - D5：目标货架为空 → ElMessage.warning 且不发请求。
+//     2026-10-10 起目标架由后端按负载自动选 ⇒ 少一个形参、板级不再 provide shelfId；
+//     无工人源时不发请求。
+//   - D5：无工人源 → 不发请求（撤回路径上仅剩的早退；原「目标货架为空 → warning」那条
+//     随 toShelfId 一起消失）。
 //   - D9（2026-10-06）：卡片上派发 contextmenu → 注入的 openBatchContextMenu 被调一次，
 //     参数是**被右键那张卡**的 BatchCardModel（含 recall 必需的 version）；用例渲染两张
 //     卡并右键第二张，否则「那张卡」与「唯一那张卡」不可区分。D9b：未提供 opener 时
@@ -33,7 +35,7 @@
 //     桩成 no-op。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, ref, toRaw, type ComputedRef } from 'vue';
+import { defineComponent, h, nextTick, toRaw } from 'vue';
 import { mount } from '@vue/test-utils';
 import type { BatchCardModel } from '@/types/batchCard';
 import type { ProcessPoolView } from '@/types/productionQueue';
@@ -141,7 +143,6 @@ function mountDrawer(
     global: {
       components: globalConfig.components,
       provide: {
-        shelfId: ref('5000000000009') as unknown as ComputedRef<string>,
         moveBatchToPool: vi.fn(async () => true),
         ...provided,
       },
@@ -265,7 +266,9 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     wrapper.unmount();
   });
 
-  it('D4：撤回投放（工人源）→ moveBatchToPool(batchId, version, 源工人, 当前激活货架)', async () => {
+  // 2026-10-10：撤回的**目标货架改由后端按负载自动选** ⇒ moveBatchToPool 少一个形参，
+  // 板级也不再 provide `shelfId`。这条断言把「前端不再指定货架」钉死。
+  it('D4：撤回投放（工人源）→ moveBatchToPool(batchId, version, 源工人)，无目标架入参', async () => {
     const moveBatchToPool = vi.fn(async () => true);
     const wrapper = mountDrawer(makePool(), { moveBatchToPool });
     const options = capturedOptions();
@@ -275,12 +278,7 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     await (options.onAdd as (e: unknown) => Promise<void>)(evt);
 
     expect(moveBatchToPool).toHaveBeenCalledTimes(1);
-    expect(moveBatchToPool).toHaveBeenCalledWith(
-      '3000000000009',
-      CARD_VERSION,
-      '1900000000001',
-      '5000000000009',
-    );
+    expect(moveBatchToPool).toHaveBeenCalledWith('3000000000009', CARD_VERSION, '1900000000001');
     wrapper.unmount();
   });
 
@@ -319,20 +317,20 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     wrapper.unmount();
   });
 
-  it('D5：目标货架为空 → ElMessage.warning 且不发请求', async () => {
+  // 2026-10-10：撤回**不再有任何前端早退**（原 D5「目标货架为空 → warning」随 toShelfId
+  // 一起消失）。D5 改成守「没有工人源就不发请求」—— 那是撤回路径上**唯一**还剩的早退。
+  it('D5：没有工人源 → 不发请求（撤回路径上仅剩的早退）', async () => {
     const { ElMessage } = await import('element-plus');
     const moveBatchToPool = vi.fn(async () => true);
-    const wrapper = mountDrawer(makePool(), {
-      moveBatchToPool,
-      shelfId: ref('') as unknown as ComputedRef<string>,
-    });
+    const wrapper = mountDrawer(makePool(), { moveBatchToPool });
     const options = capturedOptions();
 
-    const evt = workerDragEvent('3000000000009');
+    // 卡片没有 data-batch-id ⇒ recordPoolSource 记不上工人源
+    const evt = workerDragEvent('');
     await (options.onAdd as (e: unknown) => Promise<void>)(evt);
 
-    expect(ElMessage.warning).toHaveBeenCalledWith('请先选择目标货架');
     expect(moveBatchToPool).not.toHaveBeenCalled();
+    expect(ElMessage.warning).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -398,9 +396,9 @@ describe('PoolDrawer（2026-10-03 Sortable 接线）', () => {
     // 空 v-for 只剩 2 个 fragment 空文本锚点：一个元素子节点都没有，也**没有**注释
     expect(body.children).toHaveLength(0);
     expect(body.childNodes).toHaveLength(2);
-    expect(Array.from(body.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(
-      0,
-    );
+    expect(
+      Array.from(body.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE),
+    ).toHaveLength(0);
     wrapper.unmount();
   });
 
