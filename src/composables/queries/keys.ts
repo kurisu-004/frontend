@@ -526,4 +526,24 @@ export const qk = {
    *  账号分片返回，不带 id 切账号时会拿上一个账号的绑定冒充当前账号的。
    *  id 空串 → 占位键（`enabled=false` 闸门 + queryFn 内二次守卫拦掉）。 */
   userWxIdentity: (userId: string) => ['users', 'wx-identity', userId] as const,
+  // ============================================================
+  // 2026-10-10 新增：assembly 域 queryKey 工厂。此前全仓 62 个键里**零 assembly 键**
+  // —— assemblies 域的读走 `api/assembly.ts` 直接调函数（详情页 `useAssemblyDetail`
+  // 自己持 ref + loading），没有进入共享基础数据层。dashboard 的装配件子件弹窗需要
+  // 同一份数据，按 CLAUDE.md「主查询外提成 query hook」补上这条共享键。
+  //
+  // 根命名空间取 `assembly`（与页面路由段 / 菜单域、后端 `/assemblies/*` 对齐）。
+  // **不**挂 `partsPrefix` 下 —— 理由沿本文件 `inspection` / `process-design` 两段的
+  // 「根命名空间」取舍：键的根只要求「同根前缀匹配」才有意义，本域读端点与零件一览 /
+  // 批次列表没有共享写点，挂 parts 下会让全仓最热的 `qk.partsPrefix` 一把全刷把装配件
+  // 详情连带重拉。
+  // ============================================================
+  /** 装配件详情键（`GET /api/v2/assemblies/{id}`，响应含全部子件 `children[]`）。
+   *  **参数键**：端点按装配件 id 分片返回，不带 id 切装配件时会拿上一个的子件列表
+   *  冒充当前装配件的。id 空串 → 占位键（`enabled=false` 闸门 + queryFn 内二次守卫
+   *  拦掉，理由同 deliveryNoteDetail）。 */
+  assemblyDetail: (id: string) => ['assembly', 'detail', id] as const,
+  /** assembly 域前缀 —— 装配件 / 子件写操作（建单 / 更新 / 取消 / 软删 / 增删子件）
+   *  完成后一把全失效（任意 id 形态都命中）。 */
+  assemblyPrefix: ['assembly'] as const,
 } as const;

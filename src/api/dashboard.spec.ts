@@ -338,7 +338,11 @@ describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2
           overdue_count: 0,
           in_inspection_count: 0,
           in_process: [],
-          system_delivery_orders: { urgent: [], partial: [] },
+          system_delivery_orders: {
+            upcoming: { items: [], total: 0 },
+            overdue: { items: [], total: 0 },
+            partial: { items: [], total: 0 },
+          },
           ts: 'x',
         },
         ts: 'x',
@@ -355,7 +359,11 @@ describe('dashboard WebSocket 单例（VueUse useWebSocket + createGlobalState 2
       overdue_count: 12,
       in_inspection_count: 4,
       in_process: [],
-      system_delivery_orders: { urgent: [], partial: [] },
+      system_delivery_orders: {
+        upcoming: { items: [], total: 0 },
+        overdue: { items: [], total: 0 },
+        partial: { items: [], total: 0 },
+      },
       ts: '2026-10-07T14:30:00.123+08:00',
     };
     httpGetMock.mockResolvedValue({ data: sample });

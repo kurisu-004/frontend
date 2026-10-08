@@ -1,26 +1,28 @@
 // @vitest-environment happy-dom
 // src/views/dashboard/components/__tests__/SystemDeliveryOrdersPanel.spec.ts
 //
-// SystemDeliveryOrdersPanel.vue 两个 variant（urgent / partial）的渲染契约。组件零
-// 网络请求、零 useQuery（items 走 props 传入），故测试不需要 QueryClient /
-// VueQueryPlugin。items 类型是 dashboard 域窄 VO（SystemDeliveryOrderData，9 字段），
+// SystemDeliveryOrdersPanel.vue 三个 variant（upcoming / overdue / partial）的渲染契约。
+// 组件零网络请求、零 useQuery（items / total 走 props 传入），故测试不需要 QueryClient /
+// VueQueryPlugin。items 类型是 dashboard 域窄 VO（SystemDeliveryOrderData，10 字段），
 // 不是 PartListItem。
 //
 // 覆盖：
-//   - P1：urgent 变体 —— 行内 6 个子元素的顺序与文案（序列号 / 名称 / 数量 / 二级客户 /
+//   - P1：upcoming 变体 —— 行内 6 个子元素的顺序与文案（序列号 / 名称 / 数量 / 二级客户 /
 //         状态 / 系统交期）
 //   - P2：名称 tooltip 的 content 是完整 name（窄屏 ellipsis 的唯一兜底手段）
-//   - P3：urgent 数量列渲染纯数值
+//   - P3：非 partial 变体数量列渲染纯数值
 //   - P4：二级客户为空 → 渲染 '—' 且对应 tooltip disabled
-//   - P5：系统交期只出 MM/DD，且不含「天后到期」「已逾期」倒计文案；临近橙仍由
-//         deliveryUrgencyClass 驱动（逾期态不在本面板口径内，样式表无逾期分支）
-//   - P6：两个 variant 的标题 / 副标题 / 空态文案
-//   - P7：urgent 变体有 `.urgent` 红底行、partial 变体没有
+//   - P5：系统交期只出 MM/DD 且不含倒计文案；逾期件带 overdue 类（overdue 桶的核心样式）
+//   - P6：三个 variant 的标题 / 副标题 / 空态文案（副标题要点破「一件都没交过」）
+//   - P7：`.urgent` 红底行三个 variant 都有（加急语义独立于交期分桶）
 //   - P8：partial 数量列出「20 / 64」，已交部分单独成节点（走主题色的入口）
-//   - P9：partial 数量列 tooltip 单位恒「件」（行源 = t_part 全表行，无装配件父行）
+//   - P9：partial 数量列 tooltip 单位随 row_type 分流（件 / 套）
 //   - P10：组件不再 slice —— 服务端已按 30 条截断，标题不再带 Top N
-//   - P11：点行 → emit rowClick(item)
+//   - P11：点行 → emit rowClick(item)（原样透传，row_type 不在组件内分流）
 //   - P12：partial「已交 3 / 总 100」变体（delivered_quantity 是必填非 null 字段）
+//   - P13：#header-extra slot 渲染（供父组件插 upcoming / overdue 的 radio）
+//   - P14：total > items.length 时出「共 N 条，另有 M 条未显示」；相等 / 缺省时不出
+//   - P15：组件不按 delivered_quantity 过滤或重分桶（装配件落在 partial 且已交 0 仍出行）
 //
 // 测试策略：
 //   - vitest.config.ts 只有 vue() 插件，没有 unplugin-vue-components ⇒ 所有 el-* 组件
@@ -103,6 +105,8 @@ const globalConfig = {
   },
 };
 
+type Variant = 'upcoming' | 'overdue' | 'partial';
+
 /** 相对今天偏移 n 天的本地 ISO（'YYYY-MM-DD'）。 */
 function isoOffset(n: number): string {
   const d = new Date();
@@ -119,8 +123,9 @@ function mmdd(iso: string): string {
   return iso.slice(5).replace('-', '/');
 }
 
-/** 交期面板行（SystemDeliveryOrder VO，9 字段）。delivered_quantity 是必填非 null：
- *  语义是 0（没交过），partial 桶的判定就靠它。 */
+/** 交期面板行（SystemDeliveryOrder VO，10 字段）。delivered_quantity 是必填非 null：
+ *  展示值，0 合法（未交过 / 装配件凑不满整一套）；row_type 决定 quantity 与
+ *  delivered_quantity 的单位（件 / 套）与数量列 tooltip 文案。 */
 function makeOrder(overrides: Partial<SystemDeliveryOrderData> = {}): SystemDeliveryOrderData {
   return {
     id: '180000000000001',
@@ -132,20 +137,29 @@ function makeOrder(overrides: Partial<SystemDeliveryOrderData> = {}): SystemDeli
     customer_name: '南海路厂区',
     is_urgent: true,
     delivered_quantity: 0,
+    row_type: 'PART',
     ...overrides,
   };
 }
 
-function mountPanel(variant: 'urgent' | 'partial', items: SystemDeliveryOrderData[]) {
+function mountPanel(
+  variant: Variant,
+  items: SystemDeliveryOrderData[],
+  extra: {
+    total?: number;
+    slots?: Record<string, string>;
+  } = {},
+) {
   return mount(SystemDeliveryOrdersPanel, {
-    props: { variant, items },
+    props: { variant, items, ...(extra.total === undefined ? {} : { total: extra.total }) },
+    slots: extra.slots ?? {},
     global: globalConfig,
   });
 }
 
-describe('SystemDeliveryOrdersPanel — 6 列渲染契约（urgent 变体）', () => {
+describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）', () => {
   it('P1：行内 6 个子元素，顺序为 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期', () => {
-    const wrapper = mountPanel('urgent', [makeOrder()]);
+    const wrapper = mountPanel('upcoming', [makeOrder()]);
     const row = wrapper.find('.list-rows .row');
 
     expect(row.exists()).toBe(true);
@@ -171,7 +185,7 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（urgent 变体）', (
   });
 
   it('P2：名称 tooltip 的 content 是完整 name（6 列里名称列最宽也不够放 p90 名字）', () => {
-    const wrapper = mountPanel('urgent', [makeOrder({ name: '连杆总成左前支架焊接件A' })]);
+    const wrapper = mountPanel('upcoming', [makeOrder({ name: '连杆总成左前支架焊接件A' })]);
     const tooltips = wrapper.findAllComponents(ElTooltipStub);
 
     expect(tooltips).toHaveLength(2);
@@ -181,8 +195,8 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（urgent 变体）', (
     wrapper.unmount();
   });
 
-  it('P3：urgent 数量列渲染纯数值（不出现斜杠与已送色块）', () => {
-    const wrapper = mountPanel('urgent', [makeOrder({ quantity: 1 })]);
+  it('P3：非 partial 变体数量列渲染纯数值（不出现斜杠与已送色块）', () => {
+    const wrapper = mountPanel('upcoming', [makeOrder({ quantity: 1 })]);
     const qty = wrapper.find('.row-qty');
 
     expect(qty.text()).toBe('1');
@@ -192,7 +206,7 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（urgent 变体）', (
   });
 
   it('P4：二级客户为空 → 渲染 "—"，且该 tooltip disabled（不弹空浮层）', () => {
-    const wrapper = mountPanel('urgent', [makeOrder({ customer_name: null })]);
+    const wrapper = mountPanel('upcoming', [makeOrder({ customer_name: null })]);
     expect(wrapper.find('.row-customer').text()).toBe('—');
 
     const tooltips = wrapper.findAllComponents(ElTooltipStub);
@@ -201,60 +215,61 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（urgent 变体）', (
     wrapper.unmount();
   });
 
-  it('P5：系统交期只出 MM/DD，且不含倒计文案；临近橙保留，逾期态不在本面板口径内', () => {
+  it('P5：系统交期只出 MM/DD 且不含倒计文案；overdue 桶的行挂 overdue 类（逾期红）', () => {
     const due = isoOffset(2);
-    const wrapper = mountPanel('urgent', [makeOrder({ system_delivery_date: due })]);
-    const text = wrapper.find('.list-rows .row').text();
+    const soon = mountPanel('upcoming', [makeOrder({ system_delivery_date: due })]);
+    const text = soon.find('.list-rows .row').text();
 
     expect(text).toContain(mmdd(due));
     expect(text).not.toContain('天后到期');
     expect(text).not.toContain('已逾期');
     expect(text).not.toContain('今天到期');
-    // 2 天后 → due-soon（橙，本面板唯一的交期强调色）
-    expect(wrapper.find('.row-due').classes()).toContain('due-soon');
-    wrapper.unmount();
+    // 2 天后 → due-soon（橙）
+    expect(soon.find('.row-due').classes()).toContain('due-soon');
+    expect(soon.find('.row-due').classes()).not.toContain('overdue');
+    soon.unmount();
 
-    // 逾期件不在本面板口径内（服务端已过窗口下界），组件自己不判窗口：真数据流里
-    // 传不到逾期行，这里只钉「不额外加判据」—— 传进来时 deliveryUrgencyClass 的
-    // 返回值原样落到 class 上（该工具是共享的，本组件不改它）。
-    const overdue = mountPanel('urgent', [makeOrder({ system_delivery_date: isoOffset(-52) })]);
-    expect(overdue.find('.row-due').text()).toBe(mmdd(isoOffset(-52)));
+    // overdue 桶的行 system_delivery_date < today，deliveryUrgencyClass 恒返 'overdue'。
+    // 组件不自己判窗口（判据在服务端），但样式表必须有该分支，否则逾期交期静默退成灰。
+    const overdueDate = isoOffset(-52);
+    const overdue = mountPanel('overdue', [makeOrder({ system_delivery_date: overdueDate })]);
+    expect(overdue.find('.row-due').text()).toBe(mmdd(overdueDate));
     expect(overdue.find('.row-due').classes()).toContain('overdue');
     overdue.unmount();
-  });
-
-  it('P11：点行 → emit rowClick(item)', async () => {
-    const part = makeOrder();
-    const wrapper = mountPanel('urgent', [part]);
-
-    await wrapper.find('.list-rows .row').trigger('click');
-
-    const events = wrapper.emitted('rowClick');
-    expect(events).toBeTruthy();
-    expect(events?.[0]?.[0]).toMatchObject({ id: part.id, serial_no: 'F1016' });
-    wrapper.unmount();
   });
 });
 
 describe('SystemDeliveryOrdersPanel — 变体文案与红底归属', () => {
-  it('P6a：urgent 变体的标题 / 副标题 / 空态文案', () => {
-    const filled = mountPanel('urgent', [makeOrder()]);
-    expect(filled.find('.list-title').text()).toContain('最紧急工单');
-    expect(filled.find('.list-subtitle').text()).toBe('按系统交期升序 · 7 天内');
+  it('P6a：upcoming 变体的标题 / 副标题 / 空态文案', () => {
+    const filled = mountPanel('upcoming', [makeOrder()]);
+    expect(filled.find('.list-title').text()).toContain('交期在今天之后');
+    // 副标题必须点破真实判据：「一件都没交过」与 is_urgent 加急无关
+    expect(filled.find('.list-subtitle').text()).toBe('一件都没交过 · 按系统交期升序');
     filled.unmount();
 
-    const empty = mountPanel('urgent', []);
+    const empty = mountPanel('upcoming', []);
     expect(empty.findAll('.list-rows .row')).toHaveLength(0);
-    expect(empty.find('.mock-empty').text()).toBe('暂无 7 天内紧急工单');
+    expect(empty.find('.mock-empty').text()).toBe('暂无交期在今天之后的未交工单');
     empty.unmount();
   });
 
-  it('P6b：partial 变体的标题 / 副标题 / 空态文案', () => {
+  it('P6b：overdue 变体的标题 / 副标题 / 空态文案', () => {
+    const filled = mountPanel('overdue', [makeOrder({ system_delivery_date: isoOffset(-3) })]);
+    expect(filled.find('.list-title').text()).toContain('已逾期未交');
+    expect(filled.find('.list-subtitle').text()).toBe('一件都没交过 · 按系统交期升序');
+    filled.unmount();
+
+    const empty = mountPanel('overdue', []);
+    expect(empty.find('.mock-empty').text()).toBe('暂无已逾期未交货单');
+    empty.unmount();
+  });
+
+  it('P6c：partial 变体的标题 / 副标题 / 空态文案（副标题标明不限时间）', () => {
     const filled = mountPanel('partial', [
       makeOrder({ delivered_quantity: 20, quantity: 64 }),
     ]);
     expect(filled.find('.list-title').text()).toContain('部分已交');
-    expect(filled.find('.list-subtitle').text()).toBe('存在已交批次 · 7 天内');
+    expect(filled.find('.list-subtitle').text()).toBe('已交过一部分 · 不限时间');
     filled.unmount();
 
     const empty = mountPanel('partial', []);
@@ -263,16 +278,18 @@ describe('SystemDeliveryOrdersPanel — 变体文案与红底归属', () => {
     empty.unmount();
   });
 
-  it('P7：`.urgent` 红底行只属 urgent 变体（partial 的「已交过」不共表红底语义）', () => {
-    const urgent = mountPanel('urgent', [makeOrder({ is_urgent: true })]);
-    expect(urgent.find('.list-rows .row').classes()).toContain('urgent');
-    urgent.unmount();
+  it('P7：`.urgent` 红底行三个变体都有（加急是工单自身标记，与交期分桶无关）', () => {
+    for (const variant of ['upcoming', 'overdue', 'partial'] as Variant[]) {
+      const w = mountPanel(variant, [
+        makeOrder({ is_urgent: true, delivered_quantity: variant === 'partial' ? 20 : 0 }),
+      ]);
+      expect(w.find('.list-rows .row').classes(), variant).toContain('urgent');
+      w.unmount();
+    }
 
-    const partial = mountPanel('partial', [
-      makeOrder({ is_urgent: true, delivered_quantity: 20 }),
-    ]);
-    expect(partial.find('.list-rows .row').classes()).not.toContain('urgent');
-    partial.unmount();
+    const notUrgent = mountPanel('overdue', [makeOrder({ is_urgent: false })]);
+    expect(notUrgent.find('.list-rows .row').classes()).not.toContain('urgent');
+    notUrgent.unmount();
   });
 });
 
@@ -289,8 +306,8 @@ describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
     wrapper.unmount();
   });
 
-  // delivered_quantity 是必填非 null 字段：0 语义是「一件没交过」。
-  it('P8b：delivered_quantity = 0（未交过）时数量列出「0 / 总量」', () => {
+  // delivered_quantity 是必填非 null 字段：0 语义是「一件都没交过 / 装配件凑不满整一套」。
+  it('P8b：delivered_quantity = 0 时数量列出「0 / 总量」（不隐藏、不改文案）', () => {
     const wrapper = mountPanel('partial', [makeOrder({ delivered_quantity: 0, quantity: 64 })]);
     expect(wrapper.find('.row-qty').text()).toBe('0/64');
     wrapper.unmount();
@@ -313,38 +330,137 @@ describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
     wrapper.unmount();
   });
 
-  it('P9：数量列 tooltip 单位恒「件」（行源 = t_part 全表行，无装配件父行）', () => {
+  it('P9：数量列 tooltip 单位随 row_type 分流（PART=件 / ASSEMBLY=套）', () => {
+    // 工单级行源：装配件替换其子件行出现，其「已交」是**套数**，与零件行的件数不同单位。
     const part = mountPanel('partial', [
-      makeOrder({ delivered_quantity: 20, quantity: 64 }),
+      makeOrder({ row_type: 'PART', delivered_quantity: 20, quantity: 64 }),
     ]);
-    const other = mountPanel('partial', [
-      makeOrder({ delivered_quantity: 3, quantity: 8 }),
+    const assembly = mountPanel('partial', [
+      makeOrder({
+        row_type: 'ASSEMBLY',
+        delivered_quantity: 3,
+        quantity: 8,
+        name: '前桥总成',
+      }),
     ]);
 
     // 行内 3 个 tooltip：名称 / 数量 / 二级客户。
     expect(part.findAllComponents(ElTooltipStub)[1]?.props('content')).toBe(
       '已送 20 件 / 总量 64 件',
     );
-    expect(other.findAllComponents(ElTooltipStub)[1]?.props('content')).toBe(
-      '已送 3 件 / 总量 8 件',
+    expect(assembly.findAllComponents(ElTooltipStub)[1]?.props('content')).toBe(
+      '已送 3 套 / 总量 8 套',
     );
     // 浮层也被 stub 渲染进 DOM，text 可直接断言
     expect(part.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 20 件 / 总量 64 件');
-    expect(other.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 3 件 / 总量 8 件');
-    other.unmount();
+    expect(assembly.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 3 套 / 总量 8 套');
+    assembly.unmount();
     part.unmount();
   });
 
   it('P10：组件不再 slice —— 入参多少条就渲染多少条，标题不带 Top N', () => {
-    // 上限由服务端定（每桶 30 条）。组件再 slice 一次会让标题的 Top N 与实际行数
+    // 上限由服务端定（每桶 30 条）。组件再 slice 一次会让 header 的「共 N 条」与实际行数
     // 在服务端放宽上限时对不上，故这两条都必须成立。
     const items = Array.from({ length: 5 }, (_, i) =>
       makeOrder({ id: `p${i}`, serial_no: `P${i}`, delivered_quantity: 1 }),
     );
-    const wrapper = mountPanel('partial', items);
+    const wrapper = mountPanel('partial', items, { total: 5 });
 
     expect(wrapper.findAll('.list-rows .row')).toHaveLength(5);
     expect(wrapper.find('.list-title').text()).not.toContain('Top');
+    wrapper.unmount();
+  });
+
+  // 桶归属由服务端 EXISTS / NOT EXISTS 已交批次判定，与 delivered_quantity 无关：
+  // 装配件可能落在 partial 桶却 delivered_quantity === 0（装了 3 套、每个子件都交了
+  // 40%，凑不满整一套）。组件若按该值过滤，这行会凭空消失。
+  it('P15：partial 桶里的装配件行即便已交 0 也照常出行（不做按已交量的重分桶 / 过滤）', () => {
+    const items = [
+      makeOrder({ id: 'a1', row_type: 'ASSEMBLY', delivered_quantity: 0, quantity: 3 }),
+      makeOrder({ id: 'p1', row_type: 'PART', delivered_quantity: 12, quantity: 64 }),
+    ];
+    const wrapper = mountPanel('partial', items);
+
+    expect(wrapper.findAll('.list-rows .row')).toHaveLength(2);
+    expect(wrapper.findAll('.row-qty')[0]?.text()).toBe('0/3');
+    wrapper.unmount();
+  });
+});
+
+describe('SystemDeliveryOrdersPanel — header 扩展位（slot + 截断提示）', () => {
+  it('P13：#header-extra slot 渲染父组件注入的控件（分档 radio 由父组件持有）', () => {
+    const wrapper = mountPanel('upcoming', [makeOrder()], {
+      slots: { 'header-extra': '<div class="mock-radio">档位切换</div>' },
+    });
+
+    expect(wrapper.find('.list-header-extra .mock-radio').text()).toBe('档位切换');
+    wrapper.unmount();
+  });
+
+  it('P13b：无 slot 且无截断提示 → 不渲染第二行 header（不占高度）', () => {
+    const wrapper = mountPanel('partial', [makeOrder({ delivered_quantity: 1 })], { total: 1 });
+    expect(wrapper.find('.list-header-extra').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('P14：total(42) > items.length(2) → header 出「共 42 条，另有 40 条未显示」', () => {
+    // upcoming 桶无时间上界，几百条只显示最早 30 条是常态 —— 用户必须能知道被砍了多少。
+    const items = Array.from({ length: 2 }, (_, i) => makeOrder({ id: `p${i}` }));
+    const wrapper = mountPanel('upcoming', items, { total: 42 });
+
+    expect(wrapper.find('.list-truncated').text()).toBe('共 42 条，另有 40 条未显示');
+    wrapper.unmount();
+  });
+
+  it('P14b：total === items.length → 不出截断提示；缺省 total 按 items.length 处理', () => {
+    const items = Array.from({ length: 3 }, (_, i) => makeOrder({ id: `p${i}` }));
+
+    const equal = mountPanel('upcoming', items, { total: 3 });
+    expect(equal.find('.list-truncated').exists()).toBe(false);
+    equal.unmount();
+
+    const noTotal = mountPanel('upcoming', items);
+    expect(noTotal.find('.list-truncated').exists()).toBe(false);
+    noTotal.unmount();
+  });
+
+  it('P14c：截断提示与 #header-extra slot 共存于第二行 header', () => {
+    const wrapper = mountPanel('overdue', [makeOrder()], {
+      total: 34,
+      slots: { 'header-extra': '<div class="mock-radio">已逾期未交</div>' },
+    });
+
+    const extra = wrapper.find('.list-header-extra');
+    expect(extra.find('.list-truncated').text()).toBe('共 34 条，另有 33 条未显示');
+    expect(extra.find('.mock-radio').exists()).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+describe('SystemDeliveryOrdersPanel — 行点击', () => {
+  it('P11：点行 → emit rowClick(item)，row_type 原样透传（不在组件内分流）', async () => {
+    const part = makeOrder({ row_type: 'PART' });
+    const wrapper = mountPanel('upcoming', [part]);
+
+    await wrapper.find('.list-rows .row').trigger('click');
+
+    const events = wrapper.emitted('rowClick');
+    expect(events).toBeTruthy();
+    expect(events?.[0]?.[0]).toMatchObject({ id: part.id, serial_no: 'F1016', row_type: 'PART' });
+    wrapper.unmount();
+  });
+
+  it('P11b：装配件行的 rowClick 也原样带出 row_type=ASSEMBLY（分流在父组件做）', async () => {
+    const wrapper = mountPanel('partial', [
+      makeOrder({ id: 'asm-1', row_type: 'ASSEMBLY', delivered_quantity: 1, quantity: 3 }),
+    ]);
+
+    await wrapper.find('.list-rows .row').trigger('click');
+
+    expect(wrapper.emitted('rowClick')?.[0]?.[0]).toMatchObject({
+      id: 'asm-1',
+      row_type: 'ASSEMBLY',
+    });
     wrapper.unmount();
   });
 });

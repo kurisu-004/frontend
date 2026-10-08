@@ -126,9 +126,16 @@ export const DELIVERY_BASIS_LABEL: Record<DeliveryBasis, string> = {
 // SystemDeliveryOrderData / DeliveryOrderDetailData），但通用预览弹窗只读 4 个字段
 // （序列号 / 名称 / 状态 + 按 id 拉图纸与批次两个独立请求）。收成这个最小结构而不是
 // 让弹窗去认某个具体 VO：弹窗的契约就摆在这里，加字段时必须同步评估它的渲染面。
+//
+// 2026-10-10 加 `row_type`：交期面板的行是**工单级**的（装配件替换其子件行出现），
+// 父组件据此分流「点开预览」与「点开子件列表弹窗」。`PartPreviewDialog` 的渲染面
+// **不受影响** —— 它只读 id / serial_no / name / status 渲染 header，多出的
+// row_type 在该组件里没有任何读取点；真正消费它的是 DashboardView 的 onRowClick。
 export interface PartPreviewTarget {
   id: string;
   serial_no: string | null;
   name: string;
   status: OrderStatus;
+  /** 工单级行类型：PART = 零件行，ASSEMBLY = 装配件行（点开的是子件列表弹窗）。 */
+  row_type: 'PART' | 'ASSEMBLY';
 }
