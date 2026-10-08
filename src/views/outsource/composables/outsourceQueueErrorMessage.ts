@@ -1,7 +1,7 @@
 // views/outsource/composables/outsourceQueueErrorMessage.ts
 //
 // 外协看板加载失败时的**文案收口**，与报工台的
-// `views/scan/composables/scanListErrorMessage.ts`、生产队列的
+// `views/production/scan/composables/scanListErrorMessage.ts`、生产队列的
 // `views/production/queue/composables/queueListErrorMessage.ts` 同形：各域自持一份
 // （域内不出域，也避免一个「给 4 个域共用」的小工具把三个域的文案差异藏进参数表）。
 //

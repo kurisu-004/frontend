@@ -2,7 +2,7 @@
 //
 // 形态对齐 `src/utils/outsourceQuotePermissions.ts`。这里只放「状态 / 角色矩阵」的纯函数；
 // 视图层把 user.roles 传进来即可。**零域内依赖**（只 type-import `@/types/deliveryNote`
-// 的枚举）+ 多域复用（views/inspection、views/scan 也读 canView / hasManageNoteRole）。
+// 的枚举）+ 多域复用（views/inspection、views/production/scan 也读 canView / hasManageNoteRole）。
 //
 // 角色矩阵（与后端 rust 送货单白名单一致）：CLERK + MANAGER + INSPECTOR 覆盖全部端点。
 

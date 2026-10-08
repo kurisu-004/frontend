@@ -4,9 +4,9 @@
 //
 // 为什么放在 `src/utils/` 而不是某个域的 composables 目录：本模块的判据只有一个 ——
 // `e instanceof ZodError`，**零域内依赖**（唯一 import 是 `zod`），且已被两个域复用
-// （`views/scan` 的报工台列表、`views/users` 的账号管理与企微绑定）。
+// （`views/production/scan` 的报工台列表、`views/users` 的账号管理与企微绑定）。
 // 「多域复用 + 零域内依赖」正是 CLAUDE.md「目录归位」给 `src/utils/` 的判据；反过来把
-// `views/scan/composables/scanListErrorMessage.ts` 提到 `utils/` 再让 `views/users` 引它，
+// `views/production/scan/composables/scanListErrorMessage.ts` 提到 `utils/` 再让 `views/users` 引它，
 // 或者把收口整体留在某一域再让另一域引，都会构成「通用工具引单域实现」或跨域依赖，
 // 两条都被禁令挡着。本模块只依赖 `zod`，是这条禁令下唯一干净的落点。
 //

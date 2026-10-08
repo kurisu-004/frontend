@@ -48,6 +48,9 @@ import type { ListNotesParams } from '@/api/com/deliveryNote';
 // 2026-10-10：账号列表入参形态在 api/iam.ts 定义（沿 ListShelvesParams 等既有做法），
 // 本文件只引用。
 import type { ListUsersParams } from '@/api/iam';
+// 2026-10-10：报工台两条 list 的入参形态在 api/productionScan.ts 定义（api 层是 wire
+// 契约的唯一定义处，沿上面几个 List*Params 的既有做法），本文件只引用。
+import type { ScanHeldParams, ScanPickableParams } from '@/api/productionScan';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
  *  含 code_like / category / limit / offset 四字段；与 ListProcessesParams 同形，预留扩展分叉。 */
@@ -540,4 +543,43 @@ export const qk = {
   /** assembly 域前缀 —— 装配件 / 子件写操作（建单 / 更新 / 取消 / 软删 / 增删子件）
    *  完成后一把全失效（任意 id 形态都命中）。 */
   assemblyPrefix: ['assembly'] as const,
+  // ============================================================
+  // 2026-10-10 新增：报工台（工人扫码台）域 queryKey 工厂。
+  //
+  // 根命名空间取 `production-scan`（与页面路由段 / 后端 `prod::scan` 域一致）。
+  // **不**挂 `partsPrefix` 下 —— 理由沿本文件 `inspection` / `assembly` 两段的「根命名
+  // 空间」取舍：键的根只要求「同根前缀匹配」才有意义。报工台的两条 list 虽然行 VO 与
+  // 零件域字段同名（id / name / quantity …），但它**没有任何共享写点** —— 本域的写端点
+  // （worker-scan / pick-up）改的是批次归属与状态，不会改零件一览 / 批次列表的行集；挂在
+  // parts 下会让全仓最热的 `qk.partsPrefix` 一把全刷把报工台缓存连带清掉。
+  //
+  // 四条键：
+  //   - scanPickable(params) —— 取件列表（**参数键**）。params = `{ workTypeId, limit?,
+  //     offset? }`，后端把 `work_type_id` 从 path 改成必填 query（只吃 JSON 字符串），
+  //     且 `limit.unwrap_or(50).clamp(1, 200)` ⇒ 参数必须进键，否则切工人会拿上一个工种的
+  //     候选件冒充当前工种。
+  //   - scanHeld(params) —— 持有件列表（**参数键**）。params = `{ workerId, limit?, offset? }`。
+  //     ⚠️ **这条键是本轮去重的核心**：报工台三页 + `HeldPartsBadge` 徽章读的是同一个工人
+  //     的同一份持有件（同一组 params），共用一条键后同屏的 N 次同参请求被 TanStack 去重
+  //     成 1 次，跨页也有了 30s 的短时缓存。
+  //   - scanPickablePrefix / scanHeldPrefix —— 域前缀失效。取件（pick-up）与放回 / 送检
+  //     （worker-scan）**两条写路径都会同时改这两个列表的成员资格**：pick-up 把行从
+  //     pickable 移走、同时加进 held；worker-scan 把行从 held 移走（可能落回候选池或品检），
+  //     且同事务的 refill 还会给该工人抢进新批次 ⇒ 两个前缀都失效，**单失效一个会留下
+  //     半截陈旧列表**。
+  // ============================================================
+  /** 取件列表键（`GET /api/v2/prod/scan/pickable`，取件页的主查询）。
+   *  **参数键**：端点按工种分片返回且接 limit / offset，键不随 params 变化就会拿上一个
+   *  工种的候选件冒充当前工种。workTypeId 空串 → 占位键（调用方 `enabled` 闸门拦掉）。 */
+  scanPickable: (params: ScanPickableParams | null) =>
+    ['production-scan', 'pickable', params] as const,
+  /** 取件列表域前缀 —— pick-up 完成后失效（它把行从 pickable 移走）。 */
+  scanPickablePrefix: ['production-scan', 'pickable'] as const,
+  /** 持有件列表键（`GET /api/v2/prod/scan/held`，放回页 / 送检页 / `HeldPartsBadge` 徽章
+   *  **共用这一条**）。**参数键**：端点按工人分片返回；四个消费方对同一工人传的是同一组
+   *  params（`{ workerId, limit: 200 }`）⇒ 键相同 ⇒ 请求被去重成 1 次、缓存跨页复用。 */
+  scanHeld: (params: ScanHeldParams | null) => ['production-scan', 'held', params] as const,
+  /** 持有件列表域前缀 —— pick-up（新增持有）与 worker-scan（移除持有 / 补料新增持有）
+   *  两条写路径完成后都要失效它。 */
+  scanHeldPrefix: ['production-scan', 'held'] as const,
 } as const;

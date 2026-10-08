@@ -1,0 +1,131 @@
+// views/production/scan/composables/useScanSession.ts
+//
+// 工位扫码台跨路由共享 session：
+//   - worker：扫工牌成功后存到这里，下一步页面共享。
+//   - action：选了 PICK_UP / RETURN / INSPECT 后存到这里，下一步页面共享。
+// 任意步骤都可 reset() 清空（重新扫工牌 / 退至首页）。
+//
+// 2026-10-08：DELIVER 成员（及其 slug / 标签 / 标签色映射的 6 处）删除 ——
+// 「送货」是送货单列表页的按钮操作，不经扫码台；那组枚举自 2026-09-15 起就是不可达
+// 死码（ScanActionPicker 从不 setAction('DELIVER')），送货台下线后彻底孤立。
+//
+// 2026-10-10：`worker` 的类型从 `Worker`（`@/types/worker`，账号管理页那个 12 字段
+// `WorkerOut` 镜像）换成 **`ScanWorkerBriefDto`**（4 字段）。理由是 `POST /prod/scan/
+// verify-badge` 返回的是后端 `prod::scan` 域自己的 `ScanWorkerBrief`，与 `WorkerOut`
+// 是两个 VO —— 扫码链路一个字段都不用（要的是 id / badge_code / name / work_type_id），
+// 沿用宽 VO 只会让消费侧以为还有 version / is_active 可读。`WorkerOut` 后端未删，
+// 「工人一览」页继续用它。
+//
+// 设计要点：
+// - 模块级单例，跨组件共享（与 useBarcodeScanner 一致；useWorkerCache 已删，
+//   扫码定位工牌改为 api/productionScan.findWorkerByBadge 直打后端）。
+// - 用一个 requireXxx() 守卫把"未扫工牌就直接进操作选择/扫码页"挡掉。
+
+import { ref, type Ref } from 'vue';
+import type { Router } from 'vue-router';
+import type { ScanWorkerBriefDto } from '@/api/productionScan.contract';
+
+export type WorkAction = 'PICK_UP' | 'RETURN' | 'INSPECT';
+
+export const WORK_ACTION_VALUES: readonly WorkAction[] = ['PICK_UP', 'RETURN', 'INSPECT'] as const;
+
+/** 路由 query 里用的简写：?action=pickup|return|inspect */
+export type WorkActionSlug = 'pickup' | 'return' | 'inspect';
+
+export const ACTION_LABEL: Record<WorkAction, string> = {
+  PICK_UP: '取件',
+  RETURN: '放回',
+  INSPECT: '送检',
+};
+
+export const ACTION_TAG_TYPE: Record<WorkAction, 'primary' | 'warning' | 'success'> = {
+  PICK_UP: 'primary',
+  RETURN: 'warning',
+  INSPECT: 'success',
+};
+
+const SLUG_TO_ACTION: Record<WorkActionSlug, WorkAction> = {
+  pickup: 'PICK_UP',
+  return: 'RETURN',
+  inspect: 'INSPECT',
+};
+
+const ACTION_TO_SLUG: Record<WorkAction, WorkActionSlug> = {
+  PICK_UP: 'pickup',
+  RETURN: 'return',
+  INSPECT: 'inspect',
+};
+
+// ============ 单例状态 ============
+const worker = ref<ScanWorkerBriefDto | null>(null);
+const action = ref<WorkAction | null>(null);
+
+/** 2026-09-21 显式返回类型。 */
+export interface UseScanSessionReturn {
+  worker: Ref<ScanWorkerBriefDto | null>;
+  action: Ref<WorkAction | null>;
+  setWorker: (w: ScanWorkerBriefDto | null) => void;
+  setAction: (a: WorkAction | null) => void;
+  reset: () => void;
+  requireWorker: (router: Router) => boolean;
+  requireWorkerAndAction: (router: Router) => boolean;
+  slugToAction: (slug: unknown) => WorkAction | null;
+  actionToSlug: (a: WorkAction) => WorkActionSlug;
+}
+
+export function useScanSession(): UseScanSessionReturn {
+  function setWorker(w: ScanWorkerBriefDto | null): void {
+    worker.value = w;
+  }
+
+  function setAction(a: WorkAction | null): void {
+    action.value = a;
+  }
+
+  function reset(): void {
+    worker.value = null;
+    action.value = null;
+  }
+
+  /** 守卫：worker 缺失则跳回扫码入口；返回是否通过。 */
+  function requireWorker(router: Router): boolean {
+    if (worker.value) return true;
+    void router.replace('/scan/badge');
+    return false;
+  }
+
+  /** 守卫：worker + action 都齐；缺一个就跳回对应入口；返回是否通过。 */
+  function requireWorkerAndAction(router: Router): boolean {
+    if (!worker.value) {
+      void router.replace('/scan/badge');
+      return false;
+    }
+    if (!action.value) {
+      void router.replace('/scan/action');
+      return false;
+    }
+    return true;
+  }
+
+  /** slug ↔ action 互转，缺省返回 null 让调用方自己 redirect。 */
+  function slugToAction(slug: unknown): WorkAction | null {
+    if (typeof slug !== 'string') return null;
+    return SLUG_TO_ACTION[slug as WorkActionSlug] ?? null;
+  }
+
+  function actionToSlug(a: WorkAction): WorkActionSlug {
+    return ACTION_TO_SLUG[a];
+  }
+
+  return {
+    worker: worker as Ref<ScanWorkerBriefDto | null>,
+    action: action as Ref<WorkAction | null>,
+    setWorker,
+    setAction,
+    reset,
+    requireWorker,
+    requireWorkerAndAction,
+    slugToAction,
+    actionToSlug,
+  };
+}

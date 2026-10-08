@@ -324,6 +324,13 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   // 工位扫码台
+  //
+  // 2026-10-10：视图目录从 `views/scan/` 搬到 `views/production/scan/`（与后端
+  // `prod::scan` 域、生产队列域对齐），但**路由 path 与 menuCode 一律不动**：
+  // `path: 'scan/*'` 是浏览器可见的书签 URL、也是后端菜单表 `scan_badge` 节点的
+  // `path` 字段，改它会断掉用户已收藏的链接与菜单下发。它与后端 API URL
+  // （`/prod/scan/*`）是两层，本就不要求一致 —— 搬目录只改下面 `component` 的
+  // import 路径。
   {
     path: '/scan',
     meta: {
@@ -337,31 +344,31 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'badge',
         name: 'ScanBadge',
-        component: () => import('@/views/scan/ScanBadgeGate.vue'),
+        component: () => import('@/views/production/scan/ScanBadgeGate.vue'),
         meta: { title: '扫码台 · 工牌识别', menuCode: 'scan_badge' },
       },
       {
         path: 'action',
         name: 'ScanAction',
-        component: () => import('@/views/scan/ScanActionPicker.vue'),
+        component: () => import('@/views/production/scan/ScanActionPicker.vue'),
         meta: { title: '扫码台 · 操作选择', menuCode: 'scan_badge' },
       },
       {
         path: 'pick',
         name: 'ScanPick',
-        component: () => import('@/views/scan/ScanPickParts.vue'),
+        component: () => import('@/views/production/scan/ScanPickParts.vue'),
         meta: { title: '扫码台 · 选件领取', menuCode: 'scan_badge' },
       },
       {
         path: 'return',
         name: 'ScanReturn',
-        component: () => import('@/views/scan/ScanReturnParts.vue'),
+        component: () => import('@/views/production/scan/ScanReturnParts.vue'),
         meta: { title: '扫码台 · 选件放回', menuCode: 'scan_badge' },
       },
       {
         path: 'inspect',
         name: 'ScanInspect',
-        component: () => import('@/views/scan/ScanInspectParts.vue'),
+        component: () => import('@/views/production/scan/ScanInspectParts.vue'),
         meta: { title: '扫码台 · 选件送检', menuCode: 'scan_badge' },
       },
     ],

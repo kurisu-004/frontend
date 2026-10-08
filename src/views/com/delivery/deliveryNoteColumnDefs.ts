@@ -40,18 +40,6 @@ export type DeliveryNoteRow = DeliveryNoteItemData;
 //      作废，已回滚；key ≠ prop 是这里的刻意形态。
 // （2026-10-08：用 `//` 块而非 JSDoc —— 这段登记是模块级约定，不宿主于任何单个导出物；
 //  写成 `/** */` 会在 IDE 里成为悬空的孤立注释。）
-//
-// ⚠️ **本域组件搬家的遗留注释债（2026-10-08 登记；不随本次重构清理）**：
-// 本域从 `views/delivery` 搬到 `views/com/delivery`（并删掉了送货台一整套组件）之后，
-// 别的域有 3 处注释仍指向**本域已删的组件**，且都只是拿它当「写法参照」引用：
-//   · `src/views/inspection/__tests__/InspectionPending.spec.ts` 与
-//     `src/views/inspection/InspectionPending.vue` —— 引用
-//     `views/delivery/components/BatchInspectionConfirmDialog.vue`（旧目录 + 已删）
-//     的「嵌套弹窗 append-to-body 范式」；
-//   · `src/views/scan/components/BatchPickerDialog.vue` —— 引用
-//     `views/com/delivery/PartPickerDialog`（目录对、文件已删）作为「另一种行 DTO 形态」。
-// 三处都不影响行为（纯注释），而它们分属 **inspection / scan 两个域**（本域不越界改别人
-// 域的注释）⇒ **随那两个域各自的下次改动一并清理**，届时改引用或删掉整句。
 // ============================================================================
 
 export function buildDeliveryNoteColumnDefs(): ColumnDef[] {

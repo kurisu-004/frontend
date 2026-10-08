@@ -70,17 +70,11 @@
 //   - S23b（2026-10-02 新增 regression guard）：is_repairing = true 也能 parse
 //     （不得被人「先写 z.literal(false) 消警告」把真实返修数据挡掉），且缺
 //     is_repairing 必抛错（后端恒输出该键）。
-//   - S-SP1（2026-10-04 新增，报工台）：scanPartRowSchema 接受后端 `PartListItem`
-//     完整 34 字段（含 `location` / `holder_name` 等恒 null 的派生键与
-//     `batch_id` / `batch_version` 批次锚点），不抛错。
-//   - S-SP2：`planned_delivery_date` / `request_date` 的后端占位符 `'1970-01-01'`
-//     被 transform 归一成 `null`（否则报工台三页会显示「已逾期 2 万多天」红字），
-//     其它日期字符串原样透传。
-//   - S-SP3：缺 `batch_id` / `batch_version` / `location` 任一 → 抛 ZodError
-//     （M-1 guard 的核心：这三个键被 strip 掉的后果分别是取件报「批次锚点缺失」、
-//     报工台卡片少一行 holder 信息，且都不报错）。
-//   - S-SP4：scanPartListResultSchema 是**分页信封** —— 接受 items / total / limit /
-//     offset；把裸数组喂进去抛错（这正是本次线上故障的形态）。
+//
+// ⚠️ **报工台的 S-SP 组已于 2026-10-10 搬走** —— schema 本身同期从 `../schemas` 搬进
+// `src/views/production/scan/composables/scanSchema.ts`（它只服务报工台一个域），
+// 对应用例搬到 `src/views/production/scan/composables/__tests__/scanSchema.spec.ts`。
+// 本文件此后只覆盖**跨域共用的基础数据层** schema。
 //
 // 数据来源：
 //   - backend-rust/docs/api/customers.md:142-153（CustomerOut 8 字段）
@@ -103,8 +97,6 @@ import {
   repairBatchListResultSchema,
   shelfSchema,
   shelfListResultSchema,
-  scanPartRowSchema,
-  scanPartListResultSchema,
 } from '../schemas';
 
 describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () => {
@@ -844,168 +836,5 @@ describe('货架（shelves）schema 契约断言', () => {
       offset: 0,
     });
     expect(list.items[0]?.code).toBe('SH-P01');
-  });
-});
-
-// 2026-10-04 新增：报工台三页（取件 / 放回 / 送检）列表行 schema 契约断言。
-//
-// 服务对象：`GET /api/v2/parts/pickable-by-work-type/{work_type_id}` 与
-// `GET /api/v2/parts/by-worker/{worker_id}`，行 VO = backend-rust
-// `src/modules/part/vo/part.rs` 的 `PartListItem`（2026-10-09 起 39 字段），外层是
-// `PartListOut`
-// 分页信封。fixture 按两个 service 构造行的真实口径填（占位值 1970-01-01 /
-// is_urgent=false / applicant_name="" / customer_id="0" / status="IN_PROCESS" /
-// version=0 / location=null）。
-describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSchema 契约断言', () => {
-  const validScanRow = {
-    id: '190000000000001',
-    serial_no: 'SN-001',
-    name: 'DWG-A001',
-    drawing_no: 'DWG-A001',
-    applicant_name: '',
-    quantity: 5,
-    request_date: '1970-01-01',
-    planned_delivery_date: '1970-01-01',
-    customer_id: '0',
-    assembly_id: null,
-    status: 'IN_PROCESS',
-    is_urgent: false,
-    has_process_chain: true,
-    order_no: null,
-    system_delivery_date: null,
-    note: null,
-    unit_price: '0',
-    total_price: '0',
-    version: 0,
-    created_at: '1970-01-01T00:00:00',
-    created_by: null,
-    updated_at: '1970-01-01T00:00:00',
-    updated_by: null,
-    deleted_at: null,
-    process_chain_id: null,
-    chain_state: 'NEXT',
-    chain_next_process_id: '190000000000021',
-    chain_next_process_name: 'CUT-01 下料',
-    chain_current_process_name: 'SAW-02 锯切',
-    customer_name: null,
-    l1_customer_name: null,
-    location: null,
-    holder_name: null,
-    row_type: 'PART',
-    has_children: false,
-    child_count: null,
-    has_cnc_program: false,
-    batch_id: '190000000000009',
-    batch_version: 4,
-  };
-
-  it('S-SP1：接受 PartListItem 完整 39 字段（派生键恒 null、批次锚点与链四件套有值）', () => {
-    const parsed = scanPartRowSchema.parse(validScanRow);
-    expect(parsed.id).toBe('190000000000001');
-    expect(parsed.batch_id).toBe('190000000000009');
-    expect(parsed.batch_version).toBe(4);
-    expect(parsed.chain_state).toBe('NEXT');
-    // 2026-10-09 后端派生列：三页列表卡左边框只看它（真 / 假两态都收）
-    expect(parsed.has_process_chain).toBe(true);
-    expect(
-      scanPartRowSchema.parse({ ...validScanRow, has_process_chain: false }).has_process_chain,
-    ).toBe(false);
-    // 后端刻意不返的键不在 schema 里 ⇒ parse 后不应凭空出现
-    expect('next_process_id' in parsed).toBe(false);
-    expect('shelf_code' in parsed).toBe(false);
-  });
-
-  it('S-SP2：占位符 1970-01-01 归一成 null；真实日期原样透传', () => {
-    const parsed = scanPartRowSchema.parse(validScanRow);
-    expect(parsed.planned_delivery_date).toBeNull();
-    expect(parsed.request_date).toBeNull();
-    const real = scanPartRowSchema.parse({
-      ...validScanRow,
-      planned_delivery_date: '2026-10-20',
-      request_date: '2026-09-01',
-    });
-    expect(real.planned_delivery_date).toBe('2026-10-20');
-    expect(real.request_date).toBe('2026-09-01');
-  });
-
-  it('S-SP3：缺 batch_id / batch_version / location 各自抛 ZodError（M-1 guard）', () => {
-    const { batch_id: _b, batch_version: _bv, location: _loc, ...rest } = validScanRow;
-    void _b;
-    void _bv;
-    void _loc;
-    expect(() => scanPartRowSchema.parse(rest)).toThrow();
-    const { batch_id: _b2, ...rest2 } = validScanRow;
-    void _b2;
-    expect(() => scanPartRowSchema.parse(rest2)).toThrow();
-    const { location: _loc3, ...rest3 } = validScanRow;
-    void _loc3;
-    expect(() => scanPartRowSchema.parse(rest3)).toThrow();
-  });
-
-  // 2026-10-09：has_process_chain 必填且**无默认值**（与同组 chain_state 四件套的
-  // 「带默认值降级」相反）。它直接决定卡片左边框色，缺键降级成灰色与「真无链」不可区分，
-  // 不如在 API 边界炸出来。
-  it('S-SP3b：缺 has_process_chain → 抛 ZodError（不给默认值降级）', () => {
-    const { has_process_chain: _dropped, ...rest } = validScanRow;
-    void _dropped;
-    expect(() => scanPartRowSchema.parse(rest)).toThrow();
-    // 形态错同样抛（布尔退化成 0 / 1 / 'true' 都是契约漂移）
-    for (const bad of [0, 1, 'true', null]) {
-      expect(() => scanPartRowSchema.parse({ ...validScanRow, has_process_chain: bad })).toThrow();
-    }
-  });
-
-  it('S-SP4：外层是分页信封 —— 裸数组被拒（本次线上故障的形态）', () => {
-    const envelope = scanPartListResultSchema.parse({
-      items: [validScanRow],
-      total: 1,
-      limit: 200,
-      offset: 0,
-    });
-    expect(envelope.items).toHaveLength(1);
-    expect(envelope.total).toBe(1);
-    expect(() => scanPartListResultSchema.parse([validScanRow])).toThrow();
-    expect(() => scanPartListResultSchema.parse({ items: [validScanRow], total: 1 })).toThrow();
-  });
-
-  // 2026-10-04 工序链四件套按「带默认值的必输出键」声明（取舍理由见 schemas.ts
-  // scanPartRowSchema.chain_state 的注释）：**缺键降级、不抛**。这条断言守的就是那个
-  // 降级承诺 —— 后端没上线 / 漏发这四个键时，parse 必须通过（否则取件 / 放回 / 送检
-  // 三页列表全空，报工台停工），且落到的默认值必须正好是「没有下一道」的语义。
-  it('S-SP5：工序链四件套缺键 → 降级到「无链」语义而不是抛错', () => {
-    const { chain_state: _s, ...noState } = validScanRow;
-    void _s;
-    // chain_state 用 nullish（不是 .default('NONE')）：保留「键缺失 ⇒ undefined」这个
-    // 信号，消费侧据此 warn 一次；不锁枚举：后端加第四个取值也只是降级。
-    const noStateParsed = scanPartRowSchema.parse(noState);
-    expect(noStateParsed.chain_state).toBeUndefined();
-    // 后端将来新增第四个取值（纯后端单方面改动）不得让 parse 抛错
-    const unknownState = scanPartRowSchema.parse({ ...validScanRow, chain_state: 'SKIP' });
-    expect(unknownState.chain_state).toBe('SKIP');
-
-    // 另三个键的默认值对齐后端兜底口径：id 落 '0'（消费侧见到 '0' 必须短路，不提交
-    // worker-scan）、两个 name 落 null。
-    const bare: Record<string, unknown> = { ...validScanRow };
-    for (const key of [
-      'chain_state',
-      'chain_next_process_id',
-      'chain_next_process_name',
-      'chain_current_process_name',
-    ]) {
-      delete bare[key];
-    }
-    const bareParsed = scanPartRowSchema.parse(bare);
-    expect(bareParsed.chain_state).toBeUndefined();
-    expect(bareParsed.chain_next_process_id).toBe('0');
-    expect(bareParsed.chain_next_process_name).toBeNull();
-    expect(bareParsed.chain_current_process_name).toBeNull();
-
-    // 但键在、值形态错（雪花 id 退化成 number）仍要抛 —— 默认值只兜「缺键」，不兜「坏形态」
-    expect(() =>
-      scanPartRowSchema.parse({ ...validScanRow, chain_next_process_id: 190000000000021 }),
-    ).toThrow();
-    expect(() =>
-      scanPartRowSchema.parse({ ...validScanRow, chain_next_process_id: null }),
-    ).toThrow();
   });
 });

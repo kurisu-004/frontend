@@ -14,11 +14,7 @@
 // （api/programming.ts）。本文件不再 import partListResultSchema（随该函数一并移除）。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
-import {
-  repairBatchListResultSchema,
-  scanPartListResultSchema,
-  type ScanPartListResultSchema,
-} from '@/composables/queries/schemas';
+import { repairBatchListResultSchema } from '@/composables/queries/schemas';
 import type {
   LocationTreeNode,
   OrderStatus,
@@ -29,7 +25,6 @@ import type {
   SortDir,
 } from '@/types/parts';
 import type { RepairBatchListResult } from './batch';
-import type { QueueRefillResultDto } from '@/api/productionQueue.contract';
 
 export interface PartItem {
   id: string;
@@ -75,57 +70,49 @@ export interface PartItem {
    * 其它端点为 null。
    */
   last_inspection_fail_note?: string | null;
-  /** 2026-07-29 批次化；2026-10-04 订正填充口径：**报工台两个列表端点都填** ——
-   *  `GET /api/v2/parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）与
-   *  `GET /api/v2/parts/by-worker/{worker_id}`（放回 / 送检 / HeldPartsBadge）；其余复用
-   *  本 VO 的端点恒 null（后端刻意不填，理由见下面 `batch_version` 的注释）。
-   *  「品检待办」不走本 VO（它有自己的出参），故不再算作填充方。
-   *  2026-10-04 补：取件路径上这两个字段的**运行时守门**是
-   *  `src/composables/queries/schemas.ts` 的 `scanPartRowSchema`（两个报工台列表
-   *  函数的出参都走它 `.parse()`）；改名义务集中登记在下面 `batch_version` 段。 */
+  /** 2026-07-29 批次化。**2026-10-10 起本 VO 无任何填充端点**：报工台两条 list
+   *  （`GET /prod/scan/pickable` / `GET /prod/scan/held`）已迁 `prod::scan` 域，出参是
+   *  17 字段的 `ScanListItem`（`@/api/productionScan.contract.ts`），**不复用本 VO** ——
+   *  批次锚一律读它的 `batch_id`。其余复用本 VO 的端点恒 null（后端刻意不填，理由见
+   *  下面 `batch_version` 的注释）。字段保留只为 wire 兼容。
+   *
+   *  取件路径的**运行时守门**是 `@/views/production/scan/composables/scanSchema` 的
+   *  `scanPartRowSchema`（报工台两个列表的 queryFn 出参都走它 `.parse()`，那边
+   *  `batch_id` / `batch_version` 声明成必填 + 可空）；改名义务集中登记在下面
+   *  `batch_version` 段。 */
   batch_id?: string | null;
   batch_no?: number | null;
   batch_label?: string | null;
   /** 2026-10-03 后端新增：批次 OCC 版本（t_part_batch.version），与 batch_id 同源。
-   *  **填充口径：报工台两个列表端点都填** —— `GET /api/v2/parts/pickable-by-work-type/
-   *  {work_type_id}`（扫码台 PICK_UP 列表）与 `GET /api/v2/parts/by-worker/{worker_id}`
-   *  （放回 / 送检 / HeldPartsBadge）。这两个端点的行本来就是批次行 —— 后端取行 SQL
-   *  投影 `b.id` / `b.version` 并显式覆写 `PartListItem.batch_id` / `batch_version`。
-   *  取件端点的候选口径 = `b.status='IN_PROCESS' AND b.location='PRODUCTION_SHELF' AND
-   *  货架 active 且 zone='PRODUCTION'` 且落在该工种↔工序映射上。
-   *  ⚠️ **本 VO 的 `version` 字段不是批次版本**：它是 part 级 `t_part.version`，
-   *  而报工台两个取行 SQL 压根不投影 `p.version` ⇒ 该 VO 上**恒为 0**（后端
-   *  有意占位）。批次 OCC 只认本字段，**不要拿 `version` 当批次版本用**。
+   *  **2026-10-10 起本 VO 恒为 null**：唯一填充路径（报工台两条 list）已迁往
+   *  `prod::scan` 域，那里用独立 VO `ScanListItem`（`@/api/productionScan.contract.ts`），
+   *  它的 `batch_version` 必填可空、两条端点都填；取件
+   *  `POST /prod/scan/batches/{batch_id}/pick-up` 的 `version` 入参取的也是那一份。
+   *  本 VO 保留字段只为 wire 兼容，恒 null 的理由同 `batch_id`（part 级行填任一活跃
+   *  批次都是错锚点）。⚠️ **别把 outsource-* 端点算作填充方**：它们有自有 repo 自有
+   *  SQL（`OutsourceRepoTrait::quotable_list` / `sendable_list`），出参也是自有 VO
+   *  （`QuotablePartListOut` / `OutsourceSendableListOut` …），根本不经过本 VO。
    *
-   *  其余复用 `PartListItem` 的端点**恒为 null**（后端刻意不填：part 级行的单位是
-   *  part，一个 part 的活跃批次可能不止一个，填任意一个都是**错锚点**）。复用该 VO
-   *  的端点里恒 null 的逐个是：`GET /parts` / `GET /com/union-list` /
-   *  `GET /parts/by-work-type/{id}` / `POST /assemblies/{id}/children`（唯一一处单条
-   *  返回本 VO 的端点）。⚠️ **别把 outsource-* 算进来**：它们是自有 repo 的自有
-   *  SQL（`OutsourceRepoTrait::quotable_list` / `sendable_list`，入参形态也不同——
-   *  keyword_pat / customer_id / limit / offset），出参也是自有 VO
-   *  （`QuotablePartListOut` / `OutsourceSendableListOut` / …），既不复用
-   *  `PartListFilters` 也不经过本 VO。
-   *    `POST /prod/batches/{batch_id}/pick-up` 的 `version` 入参即取自本字段，缺失时
-   *    扫码台走显式报错（不静默用 part_id 顶替）。
+   *  ⚠️ **本 VO 的 `version` 字段不是批次版本**：它是 part 级 `t_part.version`。
+   *  批次 OCC 只认本字段，**不要拿 `version` 当批次版本用**。
    *
-   *    ⚠️ **改名义务**（沿用本仓既有惯例）：后端换字段名（`batch_ids` 复数 / 嵌套结构）
-   *    时，**取件这条路径的运行时守门在 `src/composables/queries/schemas.ts` 的
-   *    `scanPartRowSchema`**（本 VO 的 `batch_id` / `batch_version` 都声明成
-   *    必填 + 可空，不声明成 `.optional()`）—— 键消失会让 Zod parse 当场抛错，
-   *    而不是让字段以 undefined 流到视图层、只弹一句「批次锚点缺失」这种看不出
-   *    真因的提示。**后端换名时必须同步改：本注释所在的 `PartItem.batch_id` 与
-   *    `batch_version` 两行 + `scanPartRowSchema` 的同名字段 +
-   *    `ScanPickParts.vue` 的 `PICK_UP_NO_BATCH_HINT` 缺字段守卫。** */
+   *  ⚠️ **改名义务**（沿用本仓既有惯例）：后端换字段名（`batch_ids` 复数 / 嵌套结构）
+   *  时，**取件这条路径的运行时守门在
+   *  `views/production/scan/composables/scanSchema.ts` 的 `scanPartRowSchema`**
+   *  （`batch_id` / `batch_version` 都声明成必填 + 可空，不声明成 `.optional()`）——
+   *  键消失会让 Zod parse 当场抛错，而不是让字段以 undefined 流到视图层、只弹一句
+   *  「批次锚点缺失」这种看不出真因的提示。**后端换名时必须同步改：
+   *  `productionScan.contract.ts::ScanListItemDto` 与 `scanPartRowSchema` 的同名字段 +
+   *  `ScanPickParts.vue` 的 `PICK_UP_NO_BATCH_HINT` 缺字段守卫。** */
   batch_version?: number | null;
-  /** 2026-10-09 后端新增的派生列（批次级 boolean）：报工台两个列表端点（`pickable-by-work-type` /
-   *  `by-worker`）都填真值，报工台三页的列表卡左边框按它着色（有链且指针未漂移 = 绿，
-   *  规则见 `@/views/scan/chainAccent`）；其余复用本 VO 的端点**恒为 false**（键恒在 ——
-   *  后端 `PartListItem.has_process_chain` 非 Option、无 `serde(default)`，`From` 里显式
-   *  赋值 ⇒ 漏赋值编译不过；part 级路径拿不到批次链位置，故 false）。
-   *  **声明成必填**：键恒在而类型层允许 undefined 只会让下游写出 `boolean | undefined` 的
-   *  防御代码，而运行时这个 undefined 永远不会出现（报工台路径的必填守门在
-   *  `scanPartRowSchema`，缺键即抛）。 */
+  /** 2026-10-09 后端新增的派生列（批次级 boolean）：**2026-10-10 起本 VO 恒为 false**，
+   *  唯一填充路径（报工台两条 list）已迁往 `prod::scan` 域的 `ScanListItem`
+   *  （同一个 `shared::batch::chain::HAS_PROCESS_CHAIN_EXPR` 常量）；报工台三页的
+   *  列表卡左边框读的是那一份（规则见 `@/views/production/scan/chainAccent`）。
+   *  键恒在（后端 `PartListItem.has_process_chain` 非 Option、无 `serde(default)`，
+   *  `From` 里显式赋值 ⇒ 漏赋值编译不过），part 级路径拿不到批次链位置故 false。
+   *  **声明成必填**：键恒在而类型层允许 undefined 只会让下游写出 `boolean | undefined`
+   *  的防御代码，而运行时这个 undefined 永远不会出现。 */
   has_process_chain: boolean;
 }
 
@@ -279,30 +266,13 @@ export interface PartUpdatePayload {
   note?: string | null;
 }
 
-/** 2026-10-03 迁 prod 域：领取入参对齐后端 v2 `PickUpRequest`。与 v1 的
- *  `{ serial_no, shelf_id, badge_code, batch_id?, quantity? }` 不再同构 ——
- *  v1 是「扫序列号 + 工牌」，v2 是「按批次 + OCC + 工人」。
- *
- *  2026-10-04 去掉 `shelf_id`：后端把它从必填 `i64` 改成 `Option<i64>`，**缺省即不做
- *  任何校验**。该字段在 pick-up 里本来就只是「存在 + active + zone=PRODUCTION」的一
- *  道冗余断言 —— 既不落库、也不参与任何 WHERE，删掉它对端点行为没有影响，而取件页因此
- *  不再需要「当前作业架」，多架账号（`user.shelf_ids` ≥ 2）也能提交。 */
-export interface PartPickUpPayload {
-  /** 必填；t_part_batch.version（OCC），从列表项的 batch_version 取 */
-  version: number;
-  /** 必填；雪花 ID 字符串；不是工牌码 */
-  worker_id: string;
-  /** 2026-10-03 部分领取：缺省 = 整批。**必须发字符串**（后端 deserialize_i64_opt 只吃 JSON string，发 number 会 422） */
-  quantity?: string | null;
-  note?: string | null;
-}
-
 /**
  * ⚠️ **v1(Python) 遗留入参**，打的是 `POST /parts/scan`（不是 v2 的 worker-scan）。
  * v2 端点已删掉全部货架字段（见 CLAUDE.md「货架自动选择」），v1 仍在维护、契约未变，
  * 故这里**仍带** `shelf_id` / `target_inspection_shelf_id` —— 它们不属「不再指定货架」
- * 的口径范围。本 wrapper 在生产代码里零调用方；留着是为了将来真要接 v1 时不必重写，
- * 全仓巡检「还有没有 shelf_id」时**这一处是已知例外，不要当残留清掉**。
+ * 的口径范围。本 wrapper（`scanPart`）在生产代码里零调用方；留着是为了将来真要接 v1 时
+ * 不必重写，全仓巡检「还有没有 shelf_id」时**这一处是已知例外，不要当残留清掉**
+ * （连带提醒：别把 `scanPart` 当成没有入参出处的孤儿函数删掉）。
  */
 export interface PartScanPayload {
   serial_no: string;
@@ -478,104 +448,11 @@ export async function releaseFromProgramming(
   return resp.data;
 }
 
-/** 扫码台 PICK_UP：批次锚定领取。
- *  2026-10-03 由 v1 遗留的 `POST /parts/pick-up` 迁到 prod 域
- *  `POST /api/v2/prod/batches/{batch_id}/pick-up`：批次 id 升为路径参数（不再进 body），
- *  body 只剩 OCC 锚 + 领取人 + 数量。三个反直觉约束，调用方必须遵守：
- *  - `version` 是普通 number（后端 `i32`，无自定义 deserializer），**不要**转字符串；
- *  - `worker_id` 是**工人雪花 ID 字符串**，不是 v1 的 `badge_code` 工牌码（后端按 worker
- *    记录归属，不认工牌码）；
- *  - `quantity` **必须发 JSON 字符串**（后端 `deserialize_i64_opt` 的实现是先
- *    `Option::<String>::deserialize` 再 `parse::<i64>()`，发 number 会被 axum `Json`
- *    extractor 拒成 422）；缺省 / null = 整批，小于总量时后端自动拆批。
- *  - 不发 `shelf_id`（2026-10-04：后端改成 `Option<i64>`，缺省不做任何校验；该值在
- *    pick-up 里既不落库也不参与 WHERE，见 `PartPickUpPayload` 的说明）。
- *  响应仍是 part 级 `R<PartOut>`，调用方按整批刷新列表即可。
- *
- *  **有跨仓部署顺序依赖**（2026-10-04）：后端把 `shelf_id` 改成可选的那一支必须先上线，
- *  前端这个改动才能独立验证；反之旧后端 + 不发 `shelf_id` 会得到裸 HTTP 422。 */
-export async function pickUpPart(batchId: string, payload: PartPickUpPayload): Promise<PartItem> {
-  const resp = await api.post<PartItem>(
-    `/prod/batches/${encodeURIComponent(batchId)}/pick-up`,
-    payload,
-  );
-  return resp.data;
-}
-
+/** v1(Python) 的 `POST /parts/scan`，零调用方、保留待接（入参见 `PartScanPayload` 的
+ *  说明：它带货架字段，不属「不再指定货架」的口径范围）。新流程一律走
+ *  `POST /prod/batches/worker-scan`。 */
 export async function scanPart(payload: PartScanPayload): Promise<PartItem> {
   const resp = await api.post<PartItem>('/parts/scan', payload);
-  return resp.data;
-}
-
-/**
- * 扫码台 RETURN / INSPECT 二合一入口。
- *
- * 后端 `POST /api/v2/prod/batches/worker-scan`（rust prod 域 batch 域 worker_scan：
- * 2026-10-02 由 `POST /api/v2/parts/worker-scan` 迁来）：
- *  - event_type=RETURNED  → mark_returned（IN_PROCESS+WORKER → ON_SHELF/PROCESS）
- *  - event_type=INSPECTED → mark_inspected（INSPECTION → INSPECTED/INSPECTION_FAILED）
- *
- * 单一端点替代 v1 的 `POST /parts/scan?event_type=...`（v1 Python 仍在维护，旧 v1
- * `scanPart` 路径保留为兼容兜底；新前端流程推荐 worker-scan）。
- *
- * 2026-10-10：**不再有任何货架字段**（`shelf_id` 与 `target_inspection_shelf_id`
- * 后端一并删除）。目标货架改由后端按负载自动选择 —— 按目标工序 / 品检找出所有
- * 符合条件的架，再按 `current_load / capacity` 升序取一个（`capacity` 为 null 或
- * <= 0 即不限、不参与百分比比较；允许超载，不因负载拒收）。
- *
- * 入参：
- *  - serial_no: 序列号
- *  - badge_code: 工牌码
- *  - event_type: 'RETURNED' | 'INSPECTED'
- *  - next_process_id?: 仅 RETURNED 必填；下一道工序
- *  - batch_id?: 可选；多批次歧义时显式指定
- *
- * 失败抛 ApiError：
- *  - 20103 INVALID_TRANSITION：状态机迁移非法
- *  - 20202 WORKER_INACTIVE：工牌未识别 / 已停用
- *  - 40001 VALIDATION_ERROR：RETURNED 时 next_process_id 缺或非法
- *  - 20401 / 20403 等
- */
-export interface WorkerScanPayload {
-  serial_no: string;
-  badge_code: string;
-  event_type: 'RETURNED' | 'INSPECTED';
-  /** 仅 RETURNED 必填 */
-  next_process_id?: string | null;
-  /** 可选；多批次歧义时显式指定 */
-  batch_id?: string | null;
-}
-
-export interface WorkerScanOut {
-  /** worker_scan_event service 层最小投影（逐字对齐后端
-   *  `prod::batch::vo::WorkerScanCoreOut`；`work_type_id` / `badge_code` 是内部管道
-   *  字段，带 `#[serde(skip)]` 不出现在响应里）。 */
-  scan: {
-    worker_id: string;
-    part_id: string;
-    batch_id: string;
-    /** **实际取值是 WS 广播名**：`WORKER_SCAN_RETURNED` / `WORKER_SCAN_INSPECTED`，
-     *  不是入参那两个 `RETURNED` / `INSPECTED`。
-     *
-     *  2026-10-10 起前端真的消费它：客户端发 `RETURNED`、但当该批次当前工序是工序链
-     *  最后一道时后端自动改投品检、回来的是 `WORKER_SCAN_INSPECTED` ⇒ 放回页的成功
-     *  文案按这一位分支（「已放回 → 下一道」vs「已完工，已送检」）。 */
-    event_type: string;
-    /** 父装配件 id（仅当 INSPECTED 分支触发父 status 变更时 Some） */
-    synced_assembly_id: string | null;
-  };
-  /** 同事务 queue 域 refill 结果。与 `POST /prod/queue/refill` 的出参
-   *  **同一个** rust `RefillResult`，故直接复用 `QueueRefillResultDto`，
-   *  不另立一份会漂移的本地结构：
-   *  `taken[]` 是本次自动给该工人抢到的批次（扫检 / 放回后报工台据此弹窗提示）。 */
-  refill: QueueRefillResultDto;
-}
-
-export async function workerScan(payload: WorkerScanPayload): Promise<WorkerScanOut> {
-  // 2026-10-02 迁 prod 域：工人报工的对象是批次（一笔事务改 2 个批次），路径由
-  // `POST /parts/worker-scan` 改为 `POST /prod/batches/worker-scan`。**无 Path
-  // extractor**，body 逐字不变（`serial_no` 主键 + `batch_id` 可选消歧）。
-  const resp = await api.post<WorkerScanOut>('/prod/batches/worker-scan', payload);
   return resp.data;
 }
 
@@ -908,63 +785,6 @@ export async function cancelPart(id: string): Promise<PartItem> {
 export async function getPartBySerial(serialNo: string): Promise<PartItem> {
   const resp = await api.get<PartItem>(`/parts/by-serial/${encodeURIComponent(serialNo)}`);
   return resp.data;
-}
-
-/**
- * 共享 HMI PICK_UP 跨架列表（2026-07-10）。
- * `GET /parts/pickable-by-work-type/{work_type_id}`
- *
- * 2026-10-04 契约修正：返回的是**分页信封**（后端 `PartListOut`：items / total /
- * limit / offset），不是裸数组；行 VO 是 `PartListItem`（**不是** `PartDetailOut`）。
- * 调用方必须取 `.items`，否则 `useScanPartsSort` 的 `[...list]` 抛 TypeError，
- * 取件页整页渲染失败。
- *
- * 分页参数（后端 `PickableByWorkTypeQuery` = `ByWorkTypeQuery`）：
- *   - `limit`：后端 `unwrap_or(50).clamp(1, 200)` —— **不传默认只返 50 条**，
- *     当「全部」用会静默截断；要拿全就显式传 200（clamp 上限）。
- *   - `offset`：`unwrap_or(0).max(0)`。
- *
- * ⚠️ 行 VO 里有一批 service 层写死的占位值（`planned_delivery_date` / `request_date`
- * 写死 `1970-01-01`、`is_urgent` 写死 false、`applicant_name` 写死空串、
- * `system_delivery_date` 恒 null、`customer_id` 写死 0、`status` 写死 `IN_PROCESS`、
- * `version` 写死 0），两个日期占位符在 `scanPartRowSchema` 的 transform 里归一成
- * `null`。详见该 schema 的注释。
- */
-export async function listPartsByWorkTypeAllShelves(
-  workTypeId: string,
-  params: { limit?: number; offset?: number } = {},
-): Promise<ScanPartListResultSchema> {
-  const resp = await api.get<unknown>(
-    `/parts/pickable-by-work-type/${encodeURIComponent(workTypeId)}`,
-    { params: cleanParams(params) },
-  );
-  return scanPartListResultSchema.parse(
-    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
-  );
-}
-
-/**
- * 扫码台 RETURN / INSPECT 列表：列出某工人当前持有的所有零件。
- * `GET /parts/by-worker/{worker_id}`（入参 workerId 是雪花 ID 字符串）
- *
- * 2026-10-04 契约修正：同 `listPartsByWorkTypeAllShelves`，返回分页信封
- * `PartListOut`、行 VO 是 `PartListItem`；`limit` / `offset` 语义同上（后端
- * `ByWorkerQuery`，默认 50、上限 200）。该端点**也填**批次锚点（`batch_id` /
- * `batch_version`，与取件端点同口径，见上面 `PartItem` 处的填充口径登记）与工序链
- * 派生四件套（`chain_state` / `chain_next_process_id` / `chain_next_process_name` /
- * `chain_current_process_name`）—— 后两组的取值口径与 schema 侧的降级理由见
- * `src/composables/queries/schemas.ts::scanPartRowSchema`。
- */
-export async function listPartsHeldByWorker(
-  workerId: string,
-  params: { limit?: number; offset?: number } = {},
-): Promise<ScanPartListResultSchema> {
-  const resp = await api.get<unknown>(`/parts/by-worker/${encodeURIComponent(workerId)}`, {
-    params: cleanParams(params),
-  });
-  return scanPartListResultSchema.parse(
-    normalizeListResult(resp.data as Parameters<typeof normalizeListResult>[0]),
-  );
 }
 
 // ============================================================

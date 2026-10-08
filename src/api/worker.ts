@@ -1,6 +1,12 @@
 // 后端工人 API（走 @/api/http 统一 axios 客户端）。
+//
+// 本文件的 `Worker` 对齐后端 `WorkerOut`（账号管理页「工人一览」的列表 / 详情 / 建号 /
+//  编辑 / 停启用），字段较全（version / is_active / created_at / updated_at）。
+// 报工台的工牌扫码定位**不走本文件**：它随 2026-10-10 的 `prod::scan` 域搬迁迁到
+// `src/api/productionScan.ts::findWorkerByBadge`，出参是另一个 VO —— 4 字段的
+// `ScanWorkerBriefDto`（扫码 session 的最小投影）。后端 `WorkerOut` 未删，两者并存。
 
-import { ApiError, api, cleanParams, normalizeListResult } from '@/api/http';
+import { api, cleanParams, normalizeListResult } from '@/api/http';
 import type {
   Worker,
   WorkerCreatePayload,
@@ -49,42 +55,4 @@ export async function deactivateWorker(id: string): Promise<Worker> {
 export async function reactivateWorker(id: string): Promise<Worker> {
   const resp = await api.post<Worker>(`/prod/workers/${id}/reactivate`);
   return resp.data;
-}
-
-// ============ 工牌扫码定位 ============
-//
-// 旧实现：拉一次 GET /prod/workers?is_active=true&limit=500 → 客户端 Array.find。
-// 问题：(1) 整张工人表被无权用户拿走（信息泄露 / 越权）；
-//       (2) SHELF_ACCOUNT 根本无权调 GET /prod/workers（router 强制 MANAGER），原本就是 403 隐患；
-//       (3) 500 条硬上限导致工人 >500 时扫描误报；
-//       (4) 60s TTL 导致新增 / 停用延迟生效。
-// 新实现：POST /prod/workers/verify-badge 单点 query；权限 = require_auth()，
-//       MANAGER 与 SHELF_ACCOUNT 都能调。后端在 service 层做 is_active 校验。
-
-// 后端错误码：20201 = BIZ_WORKER_NOT_FOUND, 20202 = BIZ_WORKER_INACTIVE。
-// 这两种是扫描时的"未识别"业务态，前端按 null 处理；其他错误原样抛出。
-const WORKER_NOT_FOUND = 20201;
-const WORKER_INACTIVE = 20202;
-
-/**
- * 按工牌码精确匹配工人。
- * - 命中且在职 → 返回 Worker。
- * - 不存在 / 已停用 → 返回 null（不抛错，调用方按业务决定提示文案）。
- * - 网络 / 其他错误 → 原样抛 ApiError。
- */
-export async function findWorkerByBadge(badgeCode: string): Promise<Worker | null> {
-  const code = badgeCode.trim();
-  if (!code) return null;
-
-  try {
-    const resp = await api.post<Worker>('/prod/workers/verify-badge', {
-      badge_code: code,
-    });
-    return resp.data;
-  } catch (e) {
-    if (e instanceof ApiError && (e.code === WORKER_NOT_FOUND || e.code === WORKER_INACTIVE)) {
-      return null;
-    }
-    throw e;
-  }
 }

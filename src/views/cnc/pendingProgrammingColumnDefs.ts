@@ -38,7 +38,7 @@ export type PendingProgrammingRow = PendingProgrammingItemData;
 //   2. `src/views/cnc/composables/pendingProgrammingSchema.ts::pendingProgrammingItemSchema`
 //      的 `batch_id` / `batch_version` 声明（该侧也登记了本文件，双向登记）；
 //   3. 扫码台 PICK_UP 领取的同名锚点（`ScanPickParts` →
-//      `POST /prod/batches/{batch_id}/pick-up`，`version` 取 `batch_version`）——
+//      `POST /prod/scan/batches/{batch_id}/pick-up`，`version` 取 `batch_version`）——
 //      那条路径**不过任何 Zod schema**（裸 `api.get<PartItem[]>`），连 strip 保护
 //      都没有，后端换名时症状是扫码台弹「批次锚点缺失」而非本页按钮 disabled。
 //      它的锚点注释登记在 `src/api/parts/crud.ts` 的 `PartItem.batch_id` /
