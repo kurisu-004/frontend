@@ -8,14 +8,15 @@
 //   - CustomEvent 'auth:tokens-refreshed' 保留：http.ts 拦截器不 import store（避免循环
 //     依赖），拦截器刷新成功后 dispatch 事件，本 store 在 setup 回调里挂 listener 同步
 //     state。
-//   - 2026-10-02（M-4）新增订阅 'auth:logout'：40105 SESSION_REVOKED 与 refresh 失败
-//     （src/api/http.ts:428 / :455）只负责 dispatch，会话状态（清 token / user /
+//   - 订阅 'auth:logout'：40105 SESSION_REVOKED 与 refresh 失败（api/http.ts 的
+//     错误拦截器）只负责 dispatch，会话状态（清 token / user /
 //     localStorage / tagsView / query 缓存）由本 store 的 teardownSession() 单点收口。
 //   - loadFromStorage() 在 setup 回调末尾自执行（首次 useAuthStore() 时触发）；Listener
 //     在 setup 里挂；保证首次实例化就具备 localStorage 恢复 + 事件同步能力。
-//   - 2026-10-02 新增 forceLogout(router)：「后端已权威判定会话失效」时无条件终止本地
-//     会话（不联系后端），refreshOrLogout 的失败分支委托给它。详见函数注释。
-//   - 2026-10-02（M-4）新增会话终止唯一收口 teardownSession()：**无 router 参数**、
+//     它同时是 access token 保活定时器的起表点之一（见 ensureAccessTokenKeepalive）。
+//   - forceLogout(router)：「会话已没救」时无条件终止本地会话（不联系后端），
+//     refreshOrLogout 的失败分支委托给它。详见函数注释。
+//   - 会话终止唯一收口 teardownSession()：**无 router 参数**、
 //     只做状态 + 缓存收口；forceLogout(router) 在其之上追加一次导航。四条终止路径
 //     （logout() / forceLogout / refreshOrLogout 失败分支 / auth:logout 事件）全部汇到
 //     它，新增第 5 条时必须改走本函数。
@@ -31,6 +32,11 @@ import { defineStore } from 'pinia';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/iam';
 import type { ApiError } from '@/api/http';
+// 2026-10-09 新增：起 access token 保活定时器（api/http.ts 的 setTimeout 链）。
+// 「刷新浏览器恢复会话」这条路径只由本函数读 localStorage，不经过 http.ts 的
+// persistTokens()，若不在这里补一次起表，页面一加载就是零 HTTP 流量 → 定时器缺失 →
+// access token 静默过期。http.ts 不 import 本 store，依赖方向单向。
+import { ensureAccessTokenKeepalive } from '@/api/http';
 import type { CurrentUser } from '@/types/user';
 import type { MenuNode } from '@/types/menu';
 import { ADMIN_MENUS } from '@/composables/__fixtures__/adminMenus';
@@ -94,6 +100,9 @@ export const useAuthStore = defineStore('auth', () => {
       token.value = s.token;
       refreshTokenValue = s.refresh_token ?? null;
       setUser(s.user);
+      // 2026-10-09 新增：起 access token 保活定时器（本路径不经过 http.ts 的
+      // persistTokens，必须在此补一次；函数幂等，重复调用只是重排）。
+      ensureAccessTokenKeepalive();
       return true;
     } catch {
       return false;
@@ -145,41 +154,38 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   /**
-   * 会话终止的**唯一**收口（M-4 本体），**刻意不收 router 参数** —— 纯状态 + 缓存
+   * 会话终止的**唯一**收口，**刻意不收 router 参数** —— 纯状态 + 缓存
    * 收口，导航职责由调用方在其之上追加（目前只有 `forceLogout(router)`）。终止入口
    * 全部汇到它，共 4 条：
    *   1. `logout()` —— 用户点退出（以 `apiLogout()` 成功 resolve 为前提，见该函数注释）；
-   *   2. `forceLogout(router)` —— WS 关闭码 4001（`auth:session-lost` 事件，757c024
-   *      引入）；**或**被 `refreshOrLogout()` catch 委托调用（见第 3 条）；
-   *   3. `refreshOrLogout()` catch —— 路由守卫 /iam/me 校验失败，本身不直接调本函数，
+   *   2. `forceLogout(router)` —— 'auth:session-lost' 且 reason 为 `auth expired`
+   *      （会话真被吊销）；**或**被 `refreshOrLogout()` catch 委托调用（见第 3 条）；
+   *   3. `refreshOrLogout()` catch —— /iam/me 校验失败（路由守卫，或 WS 4001
+   *      `access token expired` 的恢复尝试），本身不直接调本函数，
    *      透传 router 给 `forceLogout(router)`，实际执行体在这里；
    *   4. `auth:logout` 事件 —— 40105 SESSION_REVOKED / refresh 失败
-   *      （`src/api/http.ts:428` / `:455` dispatch，listener 在本文件 setup 内挂）。
-   * 2 与 4 都是 757c024 之后 / M-4 之前就存在的入口，此前都**完全不清 query 缓存**
-   * —— 尤其 4（`src/main.ts` 只做导航，状态无人清理）是 M-4 暴露面最大的一条。
+   *      （api/http.ts 的错误拦截器 dispatch，listener 在本文件 setup 内挂）。
    * **新增第 5 条终止路径时，必须改走本函数。**
    */
   function teardownSession(): void {
-    // 幂等短路：auth:logout 可能被 dispatch 多次（并发请求同时命中 http.ts:428 的
-    // 40105 分支与 :455 的 refresh 失败分支），且测试里 listener 会跨 Pinia 实例
+    // 幂等短路：auth:logout 可能被 dispatch 多次（并发请求同时命中错误拦截器的
+    // 40105 分支与 refresh 失败分支），且测试里 listener 会跨 Pinia 实例
     // 累积。重复清理会重复 dispatch auth:session-changed → WS 侧多余 syncWsUrl()。
     if (!token.value && !user.value) return;
     token.value = null;
     refreshTokenValue = null;
     setUser(null);
-    // 2026-10-02 修缺陷 C：isDummyAuthActiveValue 此前只在 initDummyAuth() 置 true、
-    // 从无复位点 —— dev dummy 模式登出后路由守卫仍走 dummy 短路，等于永远登不出
-    // 「开发模式」。
+    // isDummyAuthActiveValue 只在 initDummyAuth() 置 true，复位点必须在本函数：
+    // dev dummy 模式登出后路由守卫仍走 dummy 短路，等于永远登不出「开发模式」。
     isDummyAuthActiveValue.value = false;
     localStorage.removeItem('auth_session');
-    // 2026-10-01 新增：登出后必须让 WS 层主动断开。detail.token = null →
-    // syncWsUrl() 把 URL 置为 undefined → VueUse open() 先 close() 再因
-    // `_init()` 见 url undefined 直接返回。少了这一步，WS 会拿着刚被吊销的
-    // session 持续重连直到页面关闭。
+    // 登出后必须让 WS 层主动断开。detail.token = null → syncWsUrl() 把 URL 置为
+    // undefined → VueUse open() 先 close() 再因 `_init()` 见 url undefined 直接返回。
+    // 少了这一步，WS 会拿着刚被吊销的 session 持续重连直到页面关闭。
     window.dispatchEvent(new CustomEvent('auth:session-changed', { detail: { token: null } }));
     // tagsView 归属已由上面的 setUser(null) 切到 null（清内存、不写盘）—— 不再重复
     // 调 switchOwner(null)，理由见 setUser 的不变量注释。
-    // M-4 核心：内存 query 缓存全清。全仓所有 queryKey（src/composables/queries/keys.ts
+    // 内存 query 缓存全清。全仓所有 queryKey（src/composables/queries/keys.ts
     // + 各视图内 query）均无 user 维度，登出 → 不刷新页面 → 换账号登录会把上一账号的
     // 数据零网络请求直喂新账号。clear() 自带 in-flight 取消且是 silent
     // （node_modules/@tanstack/query-core/build/modern/queryCache.js:109 `clear()` →
@@ -271,38 +277,32 @@ export const useAuthStore = defineStore('auth', () => {
     teardownSession();
   }
 
-  /** 2026-10-02 修复（review Major 1）：无条件终止本地会话 + 跳 /login，**不联系后端**。
+  /** 无条件终止本地会话 + 跳 /login，**不联系后端**。
    *
-   *  存在理由：dashboard WS 收到关闭码 4001（会话在连接期间失效）时，后端已经是
-   *  权威判定。此前 app 层（src/router/index.ts）收到 'auth:session-lost' 后走
-   *  `refreshOrLogout(router)` 复核 /iam/me，**那次复核在构造上必然失败**：
-   *    - WS 层在派发事件前已 `localStorage.removeItem('auth_session')`（dashboard.ts:245）；
-   *    - http.ts 请求拦截器只从 localStorage 取 token（`readToken()`），不读 store；
-   *    ⇒ `apiMe()` 发出的请求根本不带 Authorization，后端 middleware 直接返
-   *      `40100 UNAUTHORIZED`，`stillValid === true` 是不可达的死分支。
-   *  副作用还有两个：① 「UI 显示已登录、实际已登出」的窗口长达一次 RTT
-   *  （store 内存 token/user 未清，后端不可达时最长 30s axios timeout），期间任何
-   *  用户操作都会发出无 token 请求 → 40100 → 弹「操作失败」；② 多一次必然失败的
-   *  往返，白等一个 RTT 才跳登录页。4001 本身没有「HTTP 侧仍有效」这种边界情况 ——
-   *  真有的话后端会在 re-auth 阶段继续握手成功而不是发 Close 帧。
+   *  存在理由：会话确实没救了才调它，只有两种情形：
+   *    ① 'auth:session-lost' 的 reason 是 `auth expired` —— 后端已权威判定会话被吊销
+   *      （登出 / 改密 / 管理员停用 / reuse detection），refresh 不可能救回来；
+   *    ② `refreshOrLogout` 的 catch 分支 —— /iam/me 复核失败。
+   *  另一个 reason `access token expired`（只是这枚 access JWT 自然过期，refresh
+   *  token 仍有效）**不走这里**：router 层先试 refreshOrLogout —— WS 层已不再为它
+   *  删 localStorage，apiMe() 因此能带上有意义的 Authorization 发出这次往返。
    *
-   *  与 teardownSession 的分工（2026-10-02 M-4）：本函数**保留 router 参数**（签名是
-   *  app 层唯一的导航注入点，`src/router/index.spec.ts` R1 用例锁住「参数是 router
-   *  实例本身」），结构改为「teardownSession() 收口 + router.replace('/login') 追加
-   *  导航」。**router 参数刻意保留、不改成无参** —— 见上。
+   *  与 teardownSession 的分工：本函数**保留 router 参数**（签名是 app 层唯一的
+   *  导航注入点，`src/router/index.spec.ts` 有用例锁住「参数是 router 实例本身」），
+   *  结构改为「teardownSession() 收口 + router.replace('/login') 追加导航」。
+   *  **router 参数刻意保留、不改成无参**。
    *
-   *  幂等性：可重复调用（登出 → 登出、4001 与路由守卫并发）。teardownSession() 有
-   *  幂等短路（token/user 都空直接 return），`router.replace` 本身幂等 ⇒ 重复调用
-   *  仍会多次 replace，但不产生额外副作用。
+   *  幂等性：可重复调用（并发 4001 / 路由守卫 / 登出）。teardownSession() 有幂等短路
+   *  （token/user 都空直接 return），`router.replace` 本身幂等 ⇒ 重复调用不产生额外
+   *  副作用。
    *
    *  dummy-auth 不需要特判：`initDummyAuth` 只写内存不写 localStorage，
    *  `syncWsUrl()` 读不到 token → URL 恒为 undefined → 零连接尝试 ⇒ 收不到 4001。
    *
    *  router 通过参数注入（store 不 import vue-router，避免循环依赖，不变式）。 */
   function forceLogout(router: { replace: (p: string) => void }): void {
-    // 2026-10-02（M-4）：清 state / removeItem / 派发 / 清 tagsView / 清 query 缓存
-    // 全部由 teardownSession() 收口，本函数只追加导航。原来在这里内联的那段
-    // 「清 state + removeItem + dispatch + useTagsViewStore().reset()」已全部上移。
+    // 清 state / removeItem / 派发 / 清 tagsView / 清 query 缓存全部由
+    // teardownSession() 收口，本函数只追加导航。
     teardownSession();
     router.replace('/login');
   }
@@ -320,8 +320,8 @@ export const useAuthStore = defineStore('auth', () => {
       u.menus = u.menus ?? [];
       setUser(u);
       return true;
-      // 失败分支统一委托给 forceLogout(router)（2026-10-02 提取），避免两处
-      // 「清 state + removeItem + 派发 + 跳转」各写一份而漂移（review Major 1）。
+      // 失败分支统一委托给 forceLogout(router)，避免两处
+      // 「清 state + removeItem + 派发 + 跳转」各写一份而漂移。
     } catch {
       forceLogout(router);
       return false;
@@ -365,10 +365,9 @@ export const useAuthStore = defineStore('auth', () => {
       }
     }) as EventListener);
 
-    // 2026-10-02 新增（M-4 第 4 条会话终止路径）：40105 SESSION_REVOKED
-    // （src/api/http.ts:428）与 refresh 失败（:455）dispatch 的 'auth:logout'。
-    // 此前全仓唯一订阅方是 src/main.ts，只做一次导航跳转，会话状态（token / user /
-    // localStorage / tagsView / query 缓存）无人清理。
+    // 'auth:logout'（会话终止路径 4）：40105 SESSION_REVOKED 与 refresh 失败
+    // 由 api/http.ts 的错误拦截器 dispatch。src/main.ts 只负责导航，会话状态
+    // （token / user / localStorage / tagsView / query 缓存）由本 listener 收口。
     // 箭头函数包裹：显式忽略 Event 实参（拦截器 dispatch 时不带 detail，直传会 TS2345）。
     window.addEventListener('auth:logout', (() => {
       teardownSession();

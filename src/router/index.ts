@@ -9,6 +9,10 @@ import type { MenuNode } from '@/types/menu';
 // （'auth:session-lost' listener、全局前置守卫的 refreshOrLogout 失败分支）都依赖
 // 它顺带完成导航。
 import { useAuthStore } from '@/stores/auth';
+// 2026-10-09 新增：4001 且 reason 为 'access token expired' 时，refresh 成功后需要
+// 恢复长连接（WS 侧已在 4001 分支把 URL 置 undefined 停连）。api/dashboard.ts 不
+// import vue-router / stores/auth，依赖单向，不构成循环依赖。
+import { reconnectDashboard } from '@/api/dashboard';
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -358,38 +362,56 @@ const routes: RouteRecordRaw[] = [
 
 const router = createRouter({ history: createWebHistory(), routes });
 
-// 2026-10-02 新增：接 dashboard WS 的「会话已死」通知。
-// api/dashboard.ts 收到后端关闭码 4001（会话在连接期间失效）时会派发
-// window 事件 'auth:session-lost'，并已自行清掉 localStorage 会话 + 停掉重连。
-// 本层只做 app 层该做的事：终止会话（清 store 内存 state + tagsView + 跳 /login）。
+// 2026-10-02 新增：接 dashboard WS 的「连接期间 re-auth 失败」通知。
+// api/dashboard.ts 收到后端关闭码 4001 时会派发 window 事件 'auth:session-lost'
+// 并停掉重连（wsUrl 置 undefined）；**本层负责决定会话怎么处置**。
 //
 // 为什么接收方选 router 模块而不是 MainLayout.vue：
-//   ① 全局一次性注册。MainLayout 是组件（且挂在 requireAuth 子树下），
+//   ① 全局一次性注册。MainLayout 是组件（且挂在 requireAuth 子树上），
 //      /scan/* 这些 MainLayout 之外的全屏路由收不到；
 //   ② router 模块已持有 router 实例 + 已 import useAuthStore，本处零新增依赖；
 //   ③ store 仍不 import vue-router —— forceLogout(router) 按参数注入（不变式）。
 //
 // 与 'auth:session-changed' 的区别（别混淆）：后者由 auth 层派发、语义是
-// 「token 变了，WS 该重算 URL 重连」；本事件由 WS 层派发、语义是「后端已判定会话
-// 失效，请上层终止会话」，方向相反。二者互不覆盖。
+// 「token 变了，WS 该重算 URL 重连」；本事件由 WS 层派发、语义是「WS re-auth 失败，
+// 请上层处置会话」，方向相反。二者互不覆盖。
 //
-// 2026-10-02 修复（review Major 1）：动作从 `refreshOrLogout(router)` 复核 HTTP
-// 会话改为 `forceLogout(router)` 无条件终止。原实现的「复核」在构造上必然失败：
-// WS 层派发前已 removeItem('auth_session')，而 http.ts 拦截器只从 localStorage 取
-// token（不读 store）⇒ apiMe() 不带 Authorization ⇒ 后端必返 40100 ⇒ stillValid
-// 分支永不可达，还留下一个长达一次 RTT 的「UI 已登录、实际已登出」窗口。详见
-// src/stores/auth.ts forceLogout 注释。
+// 2026-10-09 起按 reason 三路分流（4001 带两段 reason，字面量与后端
+// `src/modules/dashboard/handler.rs` 的 `reauth_close_code` 严格对齐）：
+//   - `auth expired` → 会话真被吊销（登出 / 改密 / 管理员停用 / reuse detection）
+//     ⇒ forceLogout(router) 直接终止，不做注定失败的 refresh 往返；
+//   - `access token expired` → 只是这枚 access JWT 自然过期，refresh token 仍有效
+//     ⇒ refreshOrLogout(router)：成功则 reconnectDashboard() 恢复长连接，
+//     失败则由它内部 forceLogout（session 真的没了才会失败）；
+//   - `null` / 未知 → null 按「可能只是 token 过期」走 refresh 分支（乐观：刷新成功
+//     就留人，失败才登出）；其它非空未知 reason 保守 forceLogout。
 //
-// 不设防重入 flag（review Minor 1）：WS 层是 createGlobalState 单例，一个连接最多
-// fire 一次 close，且 4001 派发点只有 onDisconnected 一处 ⇒ 同一页面不会重复派发。
-// （此前「多个 WS 连接同时收到 4001」的说法与事实不符。）真正可能并发的是「4001」
-// 与路由守卫的 refreshOrLogout，但 forceLogout 幂等（每步都是置 null / removeItem /
-// reset / replace），重叠执行无害。
+// refresh 成功后**必须**显式 reconnectDashboard()：refreshOrLogout 内部走 apiMe()
+// 拉 /iam/me 复核，那是一次成功响应，不触发 40102；若客户端时钟偏移导致它判断
+// token 仍有效而不发生 refresh，就没有 persistTokens → 没人派发
+// 'auth:session-changed' → WS 会永远停在 undefined 上不再连（dashboard 静默停更）。
+//
+// 幂等性：forceLogout 可重复调用（每步都是置 null / removeItem / clear / replace），
+// refreshOrLogout 的成功分支只做 setUser，不清缓存；两条路径各自可重入，本层不加
+// 防重入 flag（WS 是 createGlobalState 单例，4001 派发点只有 onDisconnected 一处）。
+//
+// `import { reconnectDashboard } from '@/api/dashboard'` 不构成循环依赖：
+// api/dashboard.ts 不 import vue-router / stores/auth / @tanstack/vue-query
+// （WS 层分层禁令），依赖方向是 router → api 单向。
 if (typeof window !== 'undefined') {
-  window.addEventListener('auth:session-lost', () => {
+  window.addEventListener('auth:session-lost', ((ev: Event) => {
+    const detail = (ev as CustomEvent<{ code: number; reason: string | null }>).detail;
+    const reason = detail?.reason ?? null;
     const auth = useAuthStore();
+    if (reason === 'access token expired' || reason === null) {
+      void auth.refreshOrLogout(router).then((ok) => {
+        // ok === false 时 refreshOrLogout 内部已 forceLogout(router)，这里不再重复调。
+        if (ok) reconnectDashboard();
+      });
+      return;
+    }
     auth.forceLogout(router);
-  });
+  }) as EventListener);
 }
 
 /** DFS 在用户的菜单树中查找指定 code。 */

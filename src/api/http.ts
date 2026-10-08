@@ -8,7 +8,9 @@
 //    a) 解 `{code, message, data}` 信封 → 调用方拿到的是原始 data。
 //    b) token 自动刷新：
 //       - reactive：收到 40102（access 过期）→ 调 /iam/refresh 换新 token → 重试原请求；
-//       - proactive：每次成功响应都看一眼 exp，剩余 < 5min 就后台 fire-and-forget 刷新。
+//       - proactive：每次成功响应都看一眼 exp，剩余 < 5min 就后台 fire-and-forget 刷新；
+//       - keepalive（2026-10-09 新增）：模块级 setTimeout 链，按 storage 里 token 的
+//         exp 自续期，覆盖 proactive 覆盖不到的「零 HTTP 流量」场景（空闲大屏）。
 //    c) 雪崩防御：模块级 refreshPromise 队列，并发 40102 只触发一次 /iam/refresh。
 //    d) code !== 0 → 抛 `ApiError(code, message)`，调用方用 try/catch 即可拿到业务错误码。
 //    e) blob 错误体分支：`responseType: 'blob'` 的端点（4 个打印端点）错误 body 也是
@@ -224,14 +226,15 @@ function persistTokens(pair: LoginResponse): void {
   cur.user = pair.user;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(cur));
   window.dispatchEvent(new CustomEvent('auth:tokens-refreshed', { detail: pair }));
-  // 2026-10-01 新增：长连接层（api/dashboard.ts 的 WS 单例）的 auth 转换事件。
+  // 长连接层（api/dashboard.ts 的 WS 单例）的 auth 转换事件。
   // 刷新后 WS URL 里的 token 必须换成新的，否则下一次重连会拿刚被 refresh
   // rotation 拉黑的旧 jti 去握手 → 40105 死循环。
   // 与上面的 'auth:tokens-refreshed' 并存、职责不同：后者给 useAuthStore 同步自身
   // state（token / user / refreshToken），本事件只给 WS 层重算 URL。
-  window.dispatchEvent(
-    new CustomEvent('auth:session-changed', { detail: { token: pair.token } }),
-  );
+  window.dispatchEvent(new CustomEvent('auth:session-changed', { detail: { token: pair.token } }));
+  // 2026-10-09 新增：起 access token 保活定时器。**顺序敏感** —— 必须排在上面那句
+  // localStorage.setItem 之后，armKeepalive() 现读 storage 里的 exp 才拿得到新值。
+  ensureAccessTokenKeepalive();
 }
 
 // ===== token 自动刷新状态 =====
@@ -280,7 +283,9 @@ function getOrCreateRefresh(): Promise<LoginResponse> {
   return refreshPromise;
 }
 
-/** Proactive：每次成功响应后检查 exp，剩余 < 5min 就 fire-and-forget 刷新。 */
+/** Proactive：每次成功响应后检查 exp，剩余 < 5min 就 fire-and-forget 刷新。
+ *  **它只在成功响应拦截器里被调**，因此天然依赖 HTTP 流量 —— 空闲页面（大屏零轮询、
+ *  无操作无请求）一次都不会跑。access token 保活由下面的 armKeepalive 定时器兜。 */
 function maybeProactiveRefresh(): void {
   if (cachedAccessExp === null) {
     const t = readToken();
@@ -295,6 +300,103 @@ function maybeProactiveRefresh(): void {
   void getOrCreateRefresh().catch(() => {
     /* reactive 路径会兜底；这里只 fire-and-forget */
   });
+}
+
+// ===== access token 保活定时器（2026-10-09 新增）=====
+//
+// 为什么必须有它：`maybeProactiveRefresh()` 的唯一调用点是成功响应拦截器
+// （envelopeResponseInterceptor），也就是**只有 HTTP 流量才会续命**。而空闲的大屏
+// 零 HTTP 流量（3 个 dashboard query 都没有 refetchInterval；staleTime 只决定
+// 「下次取数是否放行」，不产生任何定时器），用户放在一边的 HMI 屏会静静看着 access
+// token（默认 TTL 900s）过期：随后 dashboard WS 的周期性 re-auth 用这枚旧 token
+// 重跑 verify_session_token 拿到 TOKEN_EXPIRED，被 reauth_close_code 映射成关闭码
+// 4001 ⇒ 曾被前端当成「会话被吊销」直接踢回登录页（4001 的 reason 细分已让它不再
+// 直接踢人，但 WS 仍会停连，正确做法是压根别让 token 过期）。
+//
+// 排期语义（每轮都现读 localStorage 的当前 token 的 exp）：
+//   - storage 无 token / exp 解不出 ⇒ **不排期**。登出后自然停摆，不留悬挂定时器。
+//   - 剩余寿命 ≤ REFRESH_AHEAD_SECONDS ⇒ 立刻 getOrCreateRefresh()；**仅成功**时按
+//     新 exp 重排（失败就停：同样的 exp 再排一轮会退化成毫秒级死循环，而失败本就由
+//     40102 reactive 路径 + 40105 → auth:logout 兜底）；已有 refresh 在飞则只重排。
+//   - 否则按「剩余寿命 − REFRESH_AHEAD_SECONDS + 余量」重排，在提前量边界上留一点
+//     缓冲，避免定时器早到几十毫秒、剩余寿命仍 > 阈值而空转一轮。
+//
+// 测试环境安全：本仓 vitest 默认 environment: 'node'，模块级 setTimeout 若不处理会
+// 让 `vitest run` 进程挂住不退出。排期后对句柄做可选 unref()（Node Timeout 有 unref，
+// 浏览器返回 number 没有，故用可选调用）+ 导出 resetKeepaliveForTest() 供 spec 拆表。
+
+/** 提前量之外的缓冲：定时器早到也不至于落在阈值内空转。 */
+const KEEPALIVE_SLACK_SECONDS = 5;
+/** 已有 refresh 在飞时的重排间隔：沿用 proactive 节流档，避免保活跟着抢跑。 */
+const KEEPALIVE_BUSY_RETRY_MS = 30_000;
+
+/** 当前挂着的保活定时器句柄；null = 没排期。 */
+let keepaliveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelKeepalive(): void {
+  if (keepaliveTimer === null) return;
+  clearTimeout(keepaliveTimer);
+  keepaliveTimer = null;
+}
+
+/** 挂一轮保活定时器；node 环境下顺带 unref（不阻塞 vitest 进程退出）。 */
+function scheduleKeepalive(delayMs: number): void {
+  keepaliveTimer = setTimeout(() => {
+    keepaliveTimer = null;
+    armKeepalive();
+  }, delayMs);
+  (keepaliveTimer as { unref?: () => void }).unref?.();
+}
+
+/** 排一轮保活；无有效 token 时什么都不做（自然停摆）。 */
+function armKeepalive(): void {
+  cancelKeepalive();
+  const token = readToken();
+  const exp = token === null ? null : (decodeJwt(token)?.exp ?? null);
+  if (token === null || exp === null) return;
+
+  const remainSec = exp - Math.floor(Date.now() / 1000);
+  if (remainSec <= REFRESH_AHEAD_SECONDS) {
+    // 已有 refresh 在飞（reactive 40102 或本保活自己触发的）就只重排、不抢跑。
+    // 必须挡这道：persistTokens 是在 doRefresh 内部被调的，它会重入本函数；若此处
+    // 再发一次 getOrCreateRefresh，在 refreshPromise 被清空前拿到的是同一条在飞的
+    // promise，链式排下去就是一段不产生网络请求的自旋。
+    if (refreshPromise !== null) {
+      scheduleKeepalive(KEEPALIVE_BUSY_RETRY_MS);
+      return;
+    }
+    void getOrCreateRefresh().then(
+      () => {
+        // 成功：persistTokens 已写入新 token 并重新起表，这里只需按新 exp 再排一轮
+        //（persistTokens 内部其实已经起过一次，本轮是幂等重排，多余的一次无害）。
+        armKeepalive();
+      },
+      () => {
+        /* 静默：fire-and-forget 语义；失败由 reactive 40102 / 40105 路径兜底 */
+      },
+    );
+    return;
+  }
+
+  // 提前量边界上留一点缓冲，避免定时器早到几十毫秒、剩余寿命仍 > 阈值而空转一轮。
+  scheduleKeepalive((remainSec - REFRESH_AHEAD_SECONDS + KEEPALIVE_SLACK_SECONDS) * 1000);
+}
+
+/**
+ * 确保 access token 保活定时器在跑（幂等：每次都先拆旧表再按当前 exp 重排）。
+ *
+ * 2026-10-09 起有两个起表点，覆盖全部「token 落到 localStorage」的写路径：
+ *   1. persistTokens()（登录 / refresh 成功后自动起表）；
+ *   2. stores/auth.ts 的 loadFromStorage()（刷新浏览器恢复会话 —— 这条路径不经过
+ *      persistTokens，只由 app 启动时读 storage 恢复 session）。
+ */
+export function ensureAccessTokenKeepalive(): void {
+  armKeepalive();
+}
+
+/** 测试专用：拆掉当前保活定时器（spec 在 afterEach 调用，避免跨用例泄漏）。 */
+export function resetKeepaliveForTest(): void {
+  cancelKeepalive();
 }
 
 // ===== 拦截器（具名）=====
