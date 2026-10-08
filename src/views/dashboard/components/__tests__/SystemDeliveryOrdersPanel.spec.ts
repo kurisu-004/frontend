@@ -13,15 +13,16 @@
 //   - P3：非 partial 变体数量列渲染纯数值
 //   - P4：二级客户为空 → 渲染 '—' 且对应 tooltip disabled
 //   - P5：系统交期只出 MM/DD 且不含倒计文案；逾期件带 overdue 类（overdue 桶的核心样式）
-//   - P6：三个 variant 的标题 / 副标题 / 空态文案（副标题要点破「一件都没交过」）
+//   - P6：三个 variant 的标题 / 空态文案（判据口径以标题 + 空态文案承载）
 //   - P7：`.urgent` 红底行三个 variant 都有（加急语义独立于交期分桶）
 //   - P8：partial 数量列出「20 / 64」，已交部分单独成节点（走主题色的入口）
 //   - P9：partial 数量列 tooltip 单位随 row_type 分流（件 / 套）
 //   - P10：组件不再 slice —— 服务端已按 30 条截断，标题不再带 Top N
 //   - P11：点行 → emit rowClick(item)（原样透传，row_type 不在组件内分流）
 //   - P12：partial「已交 3 / 总 100」变体（delivered_quantity 是必填非 null 字段）
-//   - P13：#header-extra slot 渲染（供父组件插 upcoming / overdue 的 radio）
-//   - P14：total > items.length 时出「共 N 条，另有 M 条未显示」；相等 / 缺省时不出
+//   - P13：#header-extra slot 渲染在标题行内（供父组件插 upcoming / overdue 的 radio）
+//   - P14：total > items.length 时标题 tooltip 出「共 N 条，仅显示前 M 条」；相等 /
+//         缺省时 tooltip disabled（浮层不启用）
 //   - P15：组件不按 delivered_quantity 过滤或重分桶（装配件落在 partial 且已交 0 仍出行）
 //   - P16：rowClickable —— 谓词判不可点的行不 emit、挂 row--locked（视觉可辨）、
 //         与加急红底并存、未传谓词时全可点（零配置回退）
@@ -34,9 +35,15 @@
 //     各包一层带类名的 div —— 单测才能把「行里渲染了什么」与「tooltip 渲染了什么」分开
 //     断言（P8 的数量列与 P9 的 tooltip 文案都要靠它）。真实 ElTooltip 经 ElOnlyChild
 //     直出子节点、不产生包裹层，故 stub 的**外层** div 即行内一个 grid 子项 ⇒ P1 仍能
-//     断言子元素恒为 6 个。
+//     断言子元素恒为 6 个。同一条性质在真实 EP 下也让 header 的 tooltip 不改变
+//     .list-header 的两个 flex 子项（.list-title + slot）—— 但 stub 自带一层外壳、
+//     它在测试里恰恰是第三个子项，**这条断不了**，只作记录（真正要锁的是 P13 的
+//     「radio 在 .list-header 内」）。
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineComponent, h, type PropType } from 'vue';
 import { mount } from '@vue/test-utils';
 import SystemDeliveryOrdersPanel from '../SystemDeliveryOrdersPanel.vue';
@@ -166,6 +173,67 @@ function mountPanel(
   });
 }
 
+/** header 标题上的那个 tooltip（total 信息的唯一通道）。行内另有 3 个 tooltip，按所在
+ *  位置区分（`.element.closest` 走到 .list-header 即为 header 的那个）。
+ *  缺它即说明 header 的 tooltip 被摘掉了。 */
+function headerTooltip(wrapper: ReturnType<typeof mountPanel>) {
+  const stub = wrapper
+    .findAllComponents(ElTooltipStub)
+    .find((tip) => tip.element.closest('.list-header') !== null);
+  if (!stub) throw new Error('header 标题上必须有 el-tooltip（total 信息的通道）');
+  return stub;
+}
+
+/** 行内的 tooltip（排除 header 标题上那个），顺序固定：名称 / 数量 / 二级客户。
+ *  按位置而非全局下标定位 —— header 加了 tooltip 会整体平移下标。 */
+function rowTooltips(wrapper: ReturnType<typeof mountPanel>) {
+  return wrapper
+    .findAllComponents(ElTooltipStub)
+    .filter((tip) => tip.element.closest('.list-header') === null);
+}
+
+// ---- 样式级守卫用的源码工具（vitest 不处理 SFC <style>，CSS 只能读源码） ----
+
+/** 组件源码原文（仅供 P18 的样式契约断言用；渲染类断言一律走挂载）。
+ *  注意用 `import.meta.url` 字符串而不是 `new URL(...)`：本 spec 跑在 happy-dom 下，
+ *  裸 `new URL` 命中的是 happy-dom 的 URL 实现，node 的 fileURLToPath 认不出来
+ *  （同 BatchCard.spec.ts 的 B14）。 */
+const PANEL_SRC = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../SystemDeliveryOrdersPanel.vue'),
+  'utf8',
+);
+
+/** 把注释逐字符替换成空格（位置不变，只在真实代码上判定），避免注释里的字面量
+ *  让样式断言假通过（做法同 PurchaseOrderImportDeliveryPrefill.spec.ts）。 */
+function stripComments(src: string): string {
+  const blank = (m: string): string => m.replace(/[^\n]/g, ' ');
+  return src
+    .replace(/<!--[\s\S]*?-->/g, blank)
+    .replace(/\/\*[\s\S]*?\*\//g, blank)
+    .replace(/^[ \t]*\/\/[^\n]*$/gm, blank);
+}
+
+/** 只取 <style> 段，避免模板里的同名字符串被当成规则命中。 */
+const STYLE_SRC = /<style[^>]*>([\s\S]*?)<\/style>/.exec(stripComments(PANEL_SRC))?.[1] ?? '';
+
+/** 取 `selector { … }` 的块内容（**含**嵌套子规则），按花括号配平截取 —— 起始深度
+ *  从 1 起，否则嵌套子规则的收尾 } 会让整块提前截断。
+ *  取不到（选择器被改名/删除）返回空串，由用例断言负责报错。 */
+function ruleBody(src: string, selector: string): string {
+  const at = src.indexOf(`${selector} {`);
+  if (at < 0) return '';
+  const bodyStart = at + selector.length + 2;
+  let depth = 1;
+  for (let i = bodyStart; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(bodyStart, i);
+    }
+  }
+  return src.slice(bodyStart);
+}
+
 describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）', () => {
   it('P1：行内 6 个子元素，顺序为 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期', () => {
     const wrapper = mountPanel('upcoming', [makeOrder()]);
@@ -195,7 +263,7 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）',
 
   it('P2：名称 tooltip 的 content 是完整 name（6 列里名称列最宽也不够放 p90 名字）', () => {
     const wrapper = mountPanel('upcoming', [makeOrder({ name: '连杆总成左前支架焊接件A' })]);
-    const tooltips = wrapper.findAllComponents(ElTooltipStub);
+    const tooltips = rowTooltips(wrapper);
 
     expect(tooltips).toHaveLength(2);
     expect(tooltips[0].props('content')).toBe('连杆总成左前支架焊接件A');
@@ -218,7 +286,7 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）',
     const wrapper = mountPanel('upcoming', [makeOrder({ customer_name: null })]);
     expect(wrapper.find('.row-customer').text()).toBe('—');
 
-    const tooltips = wrapper.findAllComponents(ElTooltipStub);
+    const tooltips = rowTooltips(wrapper);
     expect(tooltips[1].props('content')).toBe('');
     expect(tooltips[1].props('disabled')).toBe(true);
     wrapper.unmount();
@@ -249,13 +317,12 @@ describe('SystemDeliveryOrdersPanel — 6 列渲染契约（upcoming 变体）',
 });
 
 describe('SystemDeliveryOrdersPanel — 变体文案与红底归属', () => {
-  it('P6a：upcoming 变体的标题 / 副标题 / 空态文案', () => {
+  it('P6a：upcoming 变体的标题 / 空态文案（判据口径由标题 + 空态文案承载）', () => {
     const filled = mountPanel('upcoming', [makeOrder()]);
     // 标题必须「含今天」：服务端 upcoming 桶判据是 sdd >= today，写「今天之后」会把
     // 今天到期（该桶最常见的一档）排除在标题之外。
     expect(filled.find('.list-title').text()).toContain('今天及以后到期');
-    // 副标题必须点破真实判据：「一件都没交过」与 is_urgent 加急无关
-    expect(filled.find('.list-subtitle').text()).toBe('一件都没交过 · 按系统交期升序');
+    expect(filled.find('.list-subtitle').exists()).toBe(false);
     filled.unmount();
 
     const empty = mountPanel('upcoming', []);
@@ -264,23 +331,30 @@ describe('SystemDeliveryOrdersPanel — 变体文案与红底归属', () => {
     empty.unmount();
   });
 
-  it('P6b：overdue 变体的标题 / 副标题 / 空态文案', () => {
-    const filled = mountPanel('overdue', [makeOrder({ system_delivery_date: isoOffset(-3) })]);
+  it('P6b：overdue 变体的标题 / 空态文案（空态以「未交工单」收尾，点破真实判据）', () => {
+    const filled = mountPanel('overdue', [makeOrder({ system_delivery_date: isoOffset(-3) })], {
+      total: 9,
+    });
     expect(filled.find('.list-title').text()).toContain('已逾期未交');
-    expect(filled.find('.list-subtitle').text()).toBe('一件都没交过 · 按系统交期升序');
+    expect(filled.find('.list-subtitle').exists()).toBe(false);
+    // header 的口径信息通道是标题 tooltip：真实判据「一件都没交过」由标题 / 空态文案
+    // 承载，行数口径由 tooltip 承载，两处都不能掉。
+    expect(headerTooltip(filled).props('content')).toBe('共 9 条，仅显示前 1 条');
     filled.unmount();
 
     const empty = mountPanel('overdue', []);
-    expect(empty.find('.mock-empty').text()).toBe('暂无已逾期未交货单');
+    expect(empty.find('.mock-empty').text()).toBe('暂无已逾期未交工单');
     empty.unmount();
   });
 
-  it('P6c：partial 变体的标题 / 副标题 / 空态文案（副标题标明不限时间）', () => {
-    const filled = mountPanel('partial', [
-      makeOrder({ delivered_quantity: 20, quantity: 64 }),
-    ]);
+  it('P6c：partial 变体的标题 / 空态文案（不超限 → 标题 tooltip 禁用，不出浮层）', () => {
+    const filled = mountPanel('partial', [makeOrder({ delivered_quantity: 20, quantity: 64 })], {
+      total: 1,
+    });
     expect(filled.find('.list-title').text()).toContain('部分已交');
-    expect(filled.find('.list-subtitle').text()).toBe('已交过一部分 · 不限时间');
+    expect(filled.find('.list-subtitle').exists()).toBe(false);
+    expect(headerTooltip(filled).props('content')).toBe('');
+    expect(headerTooltip(filled).props('disabled')).toBe(true);
     filled.unmount();
 
     const empty = mountPanel('partial', []);
@@ -334,10 +408,10 @@ describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
     expect(qty.find('.row-qty-done').text()).toBe('3');
     expect(qty.find('.row-qty-sep').text()).toBe('/');
     // 行内 3 个 tooltip：名称 / 数量 / 二级客户。
-    expect(wrapper.findAllComponents(ElTooltipStub)[1]?.props('content')).toBe(
+    expect(rowTooltips(wrapper)[1]?.props('content')).toBe('已送 3 件 / 总量 100 件');
+    expect(wrapper.findAll('.list-rows .el-tooltip-stub__content')[1]?.text()).toBe(
       '已送 3 件 / 总量 100 件',
     );
-    expect(wrapper.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 3 件 / 总量 100 件');
     wrapper.unmount();
   });
 
@@ -356,15 +430,15 @@ describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
     ]);
 
     // 行内 3 个 tooltip：名称 / 数量 / 二级客户。
-    expect(part.findAllComponents(ElTooltipStub)[1]?.props('content')).toBe(
+    expect(rowTooltips(part)[1]?.props('content')).toBe('已送 20 件 / 总量 64 件');
+    expect(rowTooltips(assembly)[1]?.props('content')).toBe('已送 3 套 / 总量 8 套');
+    // 浮层也被 stub 渲染进 DOM，text 可直接断言
+    expect(part.findAll('.list-rows .el-tooltip-stub__content')[1]?.text()).toBe(
       '已送 20 件 / 总量 64 件',
     );
-    expect(assembly.findAllComponents(ElTooltipStub)[1]?.props('content')).toBe(
+    expect(assembly.findAll('.list-rows .el-tooltip-stub__content')[1]?.text()).toBe(
       '已送 3 套 / 总量 8 套',
     );
-    // 浮层也被 stub 渲染进 DOM，text 可直接断言
-    expect(part.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 20 件 / 总量 64 件');
-    expect(assembly.findAll('.el-tooltip-stub__content')[1]?.text()).toBe('已送 3 套 / 总量 8 套');
     assembly.unmount();
     part.unmount();
   });
@@ -398,52 +472,75 @@ describe('SystemDeliveryOrdersPanel — partial 变体数量列', () => {
   });
 });
 
-describe('SystemDeliveryOrdersPanel — header 扩展位（slot + 截断提示）', () => {
-  it('P13：#header-extra slot 渲染父组件注入的控件（分档 radio 由父组件持有）', () => {
+describe('SystemDeliveryOrdersPanel — header 单行（slot + total tooltip）', () => {
+  it('P13：#header-extra slot 渲染在标题行内（分档 radio 由父组件持有）', () => {
     const wrapper = mountPanel('upcoming', [makeOrder()], {
       slots: { 'header-extra': '<div class="mock-radio">档位切换</div>' },
     });
 
-    expect(wrapper.find('.list-header-extra .mock-radio').text()).toBe('档位切换');
+    expect(wrapper.find('.list-header .mock-radio').text()).toBe('档位切换');
     wrapper.unmount();
   });
 
-  it('P13b：无 slot 且无截断提示 → 不渲染第二行 header（不占高度）', () => {
-    const wrapper = mountPanel('partial', [makeOrder({ delivered_quantity: 1 })], { total: 1 });
-    expect(wrapper.find('.list-header-extra').exists()).toBe(false);
-    wrapper.unmount();
+  // header 恒一行：四种组合（有/无 slot × 截断/不截断）都只有一个 .list-header，
+  // 控件位置不随 total 是否超限而变。
+  it('P13b：`.list-header-extra` 在四种组合下都不出现（header 恒一行）', () => {
+    const items = [makeOrder({ id: 'p0' })];
+    const combos = [
+      { total: 99, slots: { 'header-extra': '<div class="mock-radio">档位切换</div>' } },
+      { total: 99 },
+      { total: 1, slots: { 'header-extra': '<div class="mock-radio">档位切换</div>' } },
+      { total: 1 },
+    ];
+    for (const combo of combos) {
+      const wrapper = mountPanel('upcoming', items, combo);
+      expect(wrapper.find('.list-header-extra').exists(), JSON.stringify(combo)).toBe(false);
+      expect(wrapper.find('.list-header').exists()).toBe(true);
+      wrapper.unmount();
+    }
   });
 
-  it('P14：total(42) > items.length(2) → header 出「共 42 条，另有 40 条未显示」', () => {
-    // upcoming 桶无时间上界，几百条只显示最早 30 条是常态 —— 用户必须能知道被砍了多少。
+  it('P14：total(42) > items.length(2) → 标题 tooltip 出「共 42 条，仅显示前 2 条」', () => {
+    // upcoming 桶无时间上界，几百条只显示前 30 条是常态 —— 用户必须能知道被砍了多少。
+    // 信息走 tooltip 而不占行高：标题行恒为单行（见 P13b）。
     const items = Array.from({ length: 2 }, (_, i) => makeOrder({ id: `p${i}` }));
     const wrapper = mountPanel('upcoming', items, { total: 42 });
 
-    expect(wrapper.find('.list-truncated').text()).toBe('共 42 条，另有 40 条未显示');
+    const tooltip = headerTooltip(wrapper);
+    expect(tooltip.props('content')).toBe('共 42 条，仅显示前 2 条');
+    expect(tooltip.props('disabled')).toBe(false);
+    // 浮层 DOM 侧同步可读（stub 把 content 渲染成 .el-tooltip-stub__content）
+    expect(wrapper.find('.list-header .el-tooltip-stub__content').text()).toBe(
+      '共 42 条，仅显示前 2 条',
+    );
     wrapper.unmount();
   });
 
-  it('P14b：total === items.length → 不出截断提示；缺省 total 按 items.length 处理', () => {
+  it('P14b：total === items.length / 缺省 → 标题 tooltip disabled（浮层不启用）', () => {
     const items = Array.from({ length: 3 }, (_, i) => makeOrder({ id: `p${i}` }));
 
     const equal = mountPanel('upcoming', items, { total: 3 });
-    expect(equal.find('.list-truncated').exists()).toBe(false);
+    expect(headerTooltip(equal).props('content')).toBe('');
+    expect(headerTooltip(equal).props('disabled')).toBe(true);
     equal.unmount();
 
     const noTotal = mountPanel('upcoming', items);
-    expect(noTotal.find('.list-truncated').exists()).toBe(false);
+    expect(headerTooltip(noTotal).props('content')).toBe('');
+    expect(headerTooltip(noTotal).props('disabled')).toBe(true);
     noTotal.unmount();
   });
 
-  it('P14c：截断提示与 #header-extra slot 共存于第二行 header', () => {
+  it('P14c：截断 tooltip 与 #header-extra slot 同行共存（radio 仍在 .list-header 内）', () => {
     const wrapper = mountPanel('overdue', [makeOrder()], {
       total: 34,
       slots: { 'header-extra': '<div class="mock-radio">已逾期未交</div>' },
     });
 
-    const extra = wrapper.find('.list-header-extra');
-    expect(extra.find('.list-truncated').text()).toBe('共 34 条，另有 33 条未显示');
-    expect(extra.find('.mock-radio').exists()).toBe(true);
+    expect(headerTooltip(wrapper).props('content')).toBe('共 34 条，仅显示前 1 条');
+    expect(headerTooltip(wrapper).props('disabled')).toBe(false);
+    expect(wrapper.find('.list-header .mock-radio').exists()).toBe(true);
+    // radio 与标题同属一行
+    expect(wrapper.find('.list-header-extra').exists()).toBe(false);
     wrapper.unmount();
   });
 });
@@ -553,5 +650,29 @@ describe('SystemDeliveryOrdersPanel — 空交期占位', () => {
     expect(due.classes()).not.toContain('overdue');
     expect(due.classes()).not.toContain('due-soon');
     wrapper.unmount();
+  });
+});
+
+// 样式级守卫：vitest 不处理 SFC 的 <style>（happy-dom 里 styleSheets 恒空），CSS 只能
+// 读源码断言。锁的是「标题窄档被挤窄时走省略号、不折行」——折行会把 flex-shrink: 0 的
+// .el-card__header 撑高、把下面的行挤少。
+describe('SystemDeliveryOrdersPanel — header 标题的 ellipsis 规则', () => {
+  const titleRule = ruleBody(STYLE_SRC, '.list-title');
+
+  it('P18a：ellipsis 落在 .list-title 的内层 span 上（flex 容器上 text-overflow 不生效）', () => {
+    // 选择器本身必须还在，否则下面的断言会因空串而假绿
+    expect(titleRule).not.toBe('');
+    const child = />\s*span\s*\{([\s\S]*)$/.exec(titleRule);
+    expect(child, '.list-title 下应有 `> span` 子规则承载 ellipsis').toBeTruthy();
+    expect(child![1]).toMatch(/overflow:\s*hidden/);
+    expect(child![1]).toMatch(/text-overflow:\s*ellipsis/);
+    expect(child![1]).toMatch(/white-space:\s*nowrap/);
+  });
+
+  it('P18b：.list-title 自身不挂 text-overflow（挂上去是死规则）', () => {
+    // 剥掉子规则块后剩下的才是 .list-title 自身的声明。
+    const own = titleRule.replace(/>\s*span\s*\{[\s\S]*$/, '');
+    expect(own).not.toMatch(/text-overflow/);
+    expect(own).toMatch(/min-width:\s*0/);
   });
 });

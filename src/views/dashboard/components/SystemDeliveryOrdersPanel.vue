@@ -16,9 +16,10 @@
   单位文案。**桶归属不由前端判**（服务端按有无已交批次分好）⇒ 装配件可能落在 partial 桶
   却 delivered_quantity === 0（每个子件都交了 40%、凑不满整一套），本组件不得据该值重分桶。
 
-  桶值是 `{ items, total }` 信封：total 是匹配总行数、不受 30 条截断影响，header 据此
-  出「共 N 条，另有 M 条未显示」—— upcoming 桶无时间上界，几百条只显示最早 30 条是常态，
-  用户无从知道被砍了多少。
+  桶值是 `{ items, total }` 信封：total 是匹配总行数、不受 30 条截断影响，**超限信息
+  走标题 tooltip**（「共 N 条，仅显示前 M 条」，不超限时 tooltip 禁用）—— upcoming 桶无
+  时间上界，几百条只显示前 30 条是常态，用户无从知道被砍了多少；tooltip 不占行高，
+  标题行恒为一行（超限信息不出第二行）。分桶判据由服务端定，标题 + 空态文案已承载。
 
   行内 6 列 —— 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期：
     - 名称与二级客户两列窄屏下 ellipsis 截断，tooltip 常显兜底（不做溢出检测：
@@ -38,25 +39,27 @@
   `.urgent` 红底**所有变体都有** —— 「加急」是工单自身的标记，与交期分桶无关。
 
   #header-extra slot：供父组件往 header 里插控件（当前是 upcoming / overdue 的 radio
-  双档切换）。本组件只渲染、不持有分档状态，保持「只渲染、不判口径、不 slice」的职责边界。
-
-  ⚠️ **已知风险（未修，待观感调优轮）**：header 变成两行后每卡头部多占约 26px，而
-  `.el-card__header` 是 `flex-shrink: 0`、`.list-card` 的 `min-height` 仍是 160px ⇒
-  右栏内容硬地板比 .list-card 注释里记的「160×2 + 16 = 336px」实际更高，矮视口下
-  双列布局仍无滚动路径（超出部分被裁）。重算 min-height 预算需配合实测，本次只登记。
+  双档切换）。slot 渲染在标题行的最右侧，与标题同一行 ⇒ 三档控件位置一致（有控件的
+  档右端恒是控件，无控件的档右端留空）。本组件只渲染、不持有分档状态，保持
+  「只渲染、不判口径、不 slice」的职责边界。
 -->
 <template>
   <el-card shadow="never" class="list-card">
     <template #header>
+      <!-- 2026-10-10：header 收成单行 —— 标题（包 total tooltip）+ #header-extra slot。
+           标题与 slot 同处一行 ⇒ 三档的 radio 恒落在最右端，无控件的档右端留空。 -->
       <div class="list-header">
-        <span class="list-title">
-          <el-icon><component :is="titleIcon" /></el-icon>
-          <span>{{ titleText }}</span>
-        </span>
-        <span class="list-subtitle">{{ subtitleText }}</span>
-      </div>
-      <div v-if="truncatedHint || $slots['header-extra']" class="list-header-extra">
-        <span v-if="truncatedHint" class="list-truncated">{{ truncatedHint }}</span>
+        <el-tooltip
+          :content="totalTooltip"
+          placement="top"
+          :show-after="200"
+          :disabled="!totalTooltip"
+        >
+          <span class="list-title">
+            <el-icon><component :is="titleIcon" /></el-icon>
+            <span>{{ titleText }}</span>
+          </span>
+        </el-tooltip>
         <slot name="header-extra" />
       </div>
     </template>
@@ -110,7 +113,7 @@
 
 <script setup lang="ts">
 // 2026-10-10：variant 拆 upcoming / overdue / partial 三档，行源改工单级（含装配件父行），
-// 桶值改 {items, total} 信封，header 出截断提示并开 #header-extra slot。
+// 桶值改 {items, total} 信封，header 出 total tooltip 并开 #header-extra slot。
 // el-tooltip / el-tag / el-card / el-icon / el-empty 不 import：由 vite.config.ts 的
 // unplugin-vue-components + ElementPlusResolver 自动注册（样式同理自动注入）。
 
@@ -163,31 +166,32 @@ const TITLE_TEXT = {
   partial: '部分已交工单',
 } as const;
 
-/** 副标题要点破真实判据：「没交过」是服务端按有无已交批次判的，与加急无关；
+/** 空态文案。口径要点破真实判据：「没交过」是服务端按有无已交批次判的，与加急无关；
  *  partial 不限时间窗口。 */
-const SUBTITLE_TEXT = {
-  upcoming: '一件都没交过 · 按系统交期升序',
-  overdue: '一件都没交过 · 按系统交期升序',
-  partial: '已交过一部分 · 不限时间',
-} as const;
-
 const EMPTY_TEXT = {
   upcoming: '暂无今天及以后到期的未交工单',
-  overdue: '暂无已逾期未交货单',
+  overdue: '暂无已逾期未交工单',
   partial: '暂无部分已交工单',
 } as const;
 
 const titleText = computed(() => TITLE_TEXT[props.variant]);
-const subtitleText = computed(() => SUBTITLE_TEXT[props.variant]);
 const emptyText = computed(() => EMPTY_TEXT[props.variant]);
 
-/** 截断提示：total 是服务端匹配总行数，items 最多 30 行。两者不等时告诉用户
- *  「被砍了多少」—— upcoming 桶没有时间上界，这是常态而非异常。 */
-const truncatedHint = computed(() => {
-  const total = props.total ?? props.items.length;
-  if (total <= props.items.length) return '';
-  return `共 ${total} 条，另有 ${total - props.items.length} 条未显示`;
-});
+/** 该桶匹配的总行数：total 缺省按 items.length 处理 —— 调用方拿不到 total 时
+ *  不谎报「还有 N 条」。 */
+const matchedTotal = computed(() => props.total ?? props.items.length);
+
+/** 未显示的行数。total 是服务端匹配总行数，items 最多 30 行（上限由服务端定）。 */
+const overflowCount = computed(() => Math.max(0, matchedTotal.value - props.items.length));
+
+/** 标题 tooltip：告诉用户「被砍了多少」。upcoming 桶无时间上界，几百条只显示前 30 条
+ *  是常态而非异常，这句话走浮层、不占行高。不超限时返回空串 ⇒ tooltip disabled、
+ *  不弹空浮层。
+ *  文案说「前 M 条」：三桶的排序都在服务端（sdd ASC NULLS LAST, id ASC），前端只拿到
+ *  截断后的前 M 条，不重排。 */
+const totalTooltip = computed(() =>
+  overflowCount.value === 0 ? '' : `共 ${matchedTotal.value} 条，仅显示前 ${props.items.length} 条`,
+);
 
 /** partial 数量列的 tooltip：显式标注单位与含义。**单位随 row_type 变** ——
  *  件级行（PART）说「件」，装配件行（ASSEMBLY）说「套」（装配件的部分已交按套计）。 */
@@ -228,49 +232,36 @@ function deliveredTooltip(item: SystemDeliveryOrderData): string {
     overflow-y: auto;
   }
 }
+// 2026-10-10：header 单行 = 标题（包 total tooltip）+ #header-extra slot。
+// space-between 把 slot 顶到最右端，三档结构一致：有 radio 的档右端恒是 radio，
+// 无控件的档右端留空。控件位置只由「有没有 slot」决定，与 total 是否超限无关。
+// 宽度复核：右栏最窄档容器 340px 扣 header padding 28px 后可用 312px，标题最宽
+// 「🔔 今天及以后到期」≈118px + 两个 size=small radio ≈180px = 298px ≤ 312px。
 .list-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   width: 100%;
-}
-// 第二行：截断提示（左侧）+ 父组件注入的控件（右侧，如 upcoming / overdue 的 radio）。
-// 与 .list-header 分离成两行而不是挤进同一行：右栏容器最窄档实测 340px，
-// 标题 + 副标题 + radio 三者同排必然互相挤压到 ellipsis。
-//
-// 换行兜底：即便拆成两行，最窄档（容器 340px 扣 header padding 后可用 312px）仍装不下
-// 「截断提示 + 两个 size=small radio」同排（合计约 320px+）。upcoming 桶无时间上界 ⇒
-// 截断提示是常态而非边缘情况，故必须能换行。之所以不会被压扁：`flex-wrap: wrap` 先按
-// hypothetical size 断行、只有断行后才分配负自由空间 ⇒ 放不下就换行，压缩分支根本
-// 不可达（放得下时也不存在负空间可分配）。提示文字另走单行 ellipsis，是为了处理
-// 「断行后仍略超」的窄档，免得换行把 header 撑高、把下面的行挤少。
-.list-header-extra {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: 6px 8px;
-  margin-top: 6px;
-}
-.list-truncated {
-  font-size: 11px;
-  color: var(--text-secondary);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .list-title {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  // 窄档挤到放不下时允许标题盒子收缩，把余量让给右侧 slot，不让它被挤出可视区。
+  min-width: 0;
   font-weight: 600;
   font-size: 14px;
   color: var(--text-primary);
-}
-.list-subtitle {
-  font-size: 12px;
-  color: var(--text-secondary);
+  // ellipsis 落在内层 span 上：text-overflow 对 flex 容器不生效（同 .row-qty--partial
+  // 登记的坑）；而 CJK 可在任意两字间断行、min-content 只有一个字宽，不兜住的话标题
+  // 会折成多行，把 flex-shrink: 0 的 .el-card__header 撑高、把下面的行挤少。
+  > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 .list-empty {
   padding: 40px 0;
