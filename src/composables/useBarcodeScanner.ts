@@ -31,7 +31,7 @@
 //   CandidatePool 同时存活，且全部以 `/outsource/send-receive` 为锚。这类「同 path 多实例」
 //   由订阅方自己的闸门收口（CandidatePool 用的就是板级 provide 的 `activeOutsourceProcessId`），
 //   本层不重复判第二遍。
-// - 不改成逐页 onActivated / onDeactivated：那要改全部 8 个订阅页并维护两套生命周期
+// - 不改成逐页 onActivated / onDeactivated：那要改全部 9 个订阅页并维护两套生命周期
 //   记账；闸门在 composable 内部一处即可，调用点零改动、公开 API 形状不变。
 
 import { getCurrentInstance, inject, onBeforeUnmount, ref, type Ref } from 'vue';
@@ -178,11 +178,15 @@ export function useBarcodeScanner(): UseBarcodeScannerReturn {
 
   // 2026-10-09：活跃路由闸门的锚。vue-router 以公开导出的 `routeLocationKey` 注入路由，
   // 这里带默认值取：`useRoute()` 是 `inject(routeLocationKey)` **不带默认值**，router 未安装
-  // 时 Vue 会打 `injection "Symbol(route location)" not found.` dev warning（仓内既有组件
-  // spec 大多没装 router，每次 mount 都刷）。带默认值后 inject 走静默返回 null 的分支。
-  // 非组件上下文没有 provides 可读，inject 直接返回默认值，同样是 null ⇒ 不设闸门、退化成
-  // 改动前的全量分发。
+  // 时 Vue 会打 `injection "Symbol(route location)" not found.` dev warning（仓内
+  // CandidatePool.spec.ts 走到真实 composable 且没装 router，每次 mount 都刷这一句）。
+  // 带默认值后 inject 走静默返回默认值 null 的分支。
+  // 非组件上下文（`getCurrentInstance()` 为假）时三元短路、`inject` 不会被调用 ⇒ route 恒为
+  // null ⇒ 不设闸门、退化成改动前的全量分发。
   const route = getCurrentInstance() ? inject(routeLocationKey, null) : null;
+  // ⚠️ `if (route)` 这个守卫是 fail-open 的另一半：不设自己的闸门 ≠ 把全局锚置空。
+  // 取不到路由的订阅若走无条件赋值，锚变 null ⇒ isGatedOut 里 activePath 为 undefined ⇒
+  // 全员放行，被缓存的非活跃页面又一起收到扫码，闸门静默失效。
   if (route) currentRoute = route;
 
   function onScan(handler: ScanHandler): Unsubscribe {

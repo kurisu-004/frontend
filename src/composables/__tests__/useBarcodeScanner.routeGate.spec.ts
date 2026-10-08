@@ -11,15 +11,16 @@
 //   4. 退订后彻底移除
 //   5. 被过滤时 lastScan / lastScanAt 仍更新（副作用先于过滤，见实现的 dispatch）
 //
-// fail-open 三条（闸门是增强项，取不到路由时必须**照旧分发**，绝不能让 handler 静默失效）：
+// fail-open 四条（闸门是增强项，取不到路由时必须**照旧分发**，绝不能让 handler 静默失效）：
 //   6. 非组件上下文订阅（单测直接调 composable）        → 收到
 //   7. 组件上下文但**没装 router**（仓内既有组件 spec 的挂载形态）→ 收到，且不打 Vue 警告
 //   8. 组件上下文、provider 存在但值是 undefined          → 收到
+//   9. 取不到 route 的订阅不擦掉此前已捕获的路由锚        → 已闸掉的订阅者仍被闸掉
 //
 // 另外两条钉住公开 API 的语义不变：
-//   9.  onMounted 里注册的订阅形态（真实调用点 DeliveryNoteScan / CandidatePool /
+//  10. onMounted 里注册的订阅形态（真实调用点 DeliveryNoteScan / CandidatePool /
 //       RepairReceive / ScanBadgeGate 都是这个形态，不是 setup 里直接 onScan）
-//  10. setEnabled(false) 后不分发 / clearBuffer() 清缓冲后同码可再次分发
+//  11. setEnabled(false) 后不分发 / clearBuffer() 清缓冲后同码可再次分发
 //
 // 隔离策略：模块状态是**模块级单例**，所以静态 import（只装一次 window.keydown 监听），
 // 靠 afterEach 逐条退订 + 卸载组件 + 复位 enabled / 缓冲来还原。刻意**不用**
@@ -58,8 +59,15 @@ interface Sub {
 let wrappers: VueWrapper[] = [];
 let subs: Sub[] = [];
 
-/** provide routeLocationKey 的最小插件（等价于 app.use(router) 提供的那个路由对象）。 */
-function routerPlugin(value: unknown = mockRoute): Plugin {
+/**
+ * provide routeLocationKey 的最小插件（等价于 app.use(router) 提供的那个路由对象）。
+ *
+ * ⚠️ 形参**不能**用 ES 默认参数（`value: unknown = mockRoute`）：实参为 `undefined` 时
+ * 默认值会生效 ⇒ 「provider 存在但值是 undefined」那条用例实际 provide 了一个有效 route，
+ * 测的是 `if (route)` 的真分支、只是重复了用例 1，钉不住 fail-open 守卫。
+ * 调用侧一律用 `'routeValue' in opts` 判存在（见 subscribe），undefined 才真的透传出去。
+ */
+function routerPlugin(value: unknown): Plugin {
   return {
     install(app) {
       app.provide(routeLocationKeyMock, value);
@@ -87,7 +95,13 @@ function subscribe(opts: { withRouter?: boolean; routeValue?: unknown; inMounted
     }),
     opts.withRouter === false
       ? {}
-      : { global: { plugins: [routerPlugin(opts.routeValue)] } },
+      : {
+          global: {
+            // 用 `in` 判存在而不是 `??` / 默认参数：'routeValue' 显式给 undefined 时
+            // 必须真的把 undefined provide 出去（否则测到的是有效 route 那条分支）。
+            plugins: [routerPlugin('routeValue' in opts ? opts.routeValue : mockRoute)],
+          },
+        },
   );
   const sub = collected[0]!;
   wrappers.push(wrapper);
@@ -228,6 +242,26 @@ describe('useBarcodeScanner 取不到路由时 fail-open（宁可不拦，也不
     expect(a.spy).toHaveBeenCalledWith('EF-302');
     const warned = (console.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(warned.flat().join(' ')).not.toContain('route location');
+  });
+
+  it('取不到 route 的订阅**不擦掉**此前已捕获的路由锚 → 已闸掉的订阅者仍被闸掉', () => {
+    // 钉住实现里 `if (route) currentRoute = route;` 那个 fail-open 守卫：**取不到路由的订阅
+    // 只能「不设自己的闸门」，不能把全局锚置空**。锚被置空 ⇒ isGatedOut 里 activePath 为
+    // undefined ⇒ 全员放行，之前被闸掉（非活跃标签）的订阅者又会收到扫码 —— 闸门静默失效。
+    //
+    // 顺序即语义：先让一个带有效锚的订阅者被闸掉，再用「拿不到 route」的订阅制造压力。
+    const gated = subscribe(); // 锚在 PENDING
+    mockRoute.path = SCAN_IN;
+    typeScan('EF-303');
+    expect(gated.spy).not.toHaveBeenCalled();
+
+    const noRoute = subscribe({ withRouter: false }); // route = null，不该改全局锚
+    typeScan('EF-304');
+
+    // 自己照旧收到（fail-open 那一半）
+    expect(noRoute.spy).toHaveBeenCalledWith('EF-304');
+    // 关键是这条：锚没被擦掉，被闸掉的那位仍然不收
+    expect(gated.spy).not.toHaveBeenCalledWith('EF-304');
   });
 });
 
