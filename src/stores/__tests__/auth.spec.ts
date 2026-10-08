@@ -7,6 +7,8 @@
 //   - loadFromStorage 自执行恢复（localStorage 有 session → state 填好 + tagsView hydrate）
 //   - login 成功写 state + saveToStorage
 //   - login 失败（40101 ApiError）通过 loginMutation.error 暴露
+//   - 2026-10-09：login 成功起 access token 保活定时器（saveToStorage 是登录路径的起表点，
+//     它不经过 http.ts 的 persistTokens —— 漏了就等于登录后零流量的标签页没有保活链）
 //   - logout 清 state + localStorage
 //   - forceLogout 4 条既有用例（757c024 引入，本次签名不变、全部保留）
 //   - refreshOrLogout 成功 / 失败两条路径
@@ -28,15 +30,23 @@ import { createApp, nextTick } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
-// mock @/api/iam 拿到稳定的 spy；不要让真实 axios 跑进用例
+// mock @/api/iam 拿到稳定的 spy；不要让真实 axios 跑进用例。
+// refreshTokens 必须一并 mock：真实 http.ts 会 import 它，而「登录后保活定时器」那条用例
+// 要真的走到 /iam/refresh（http.ts 是真模块，本 spec 只 mock api 层）。
 vi.mock('@/api/iam', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   me: vi.fn(),
+  refreshTokens: vi.fn(),
 }));
 
-import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/iam';
-import { ApiError } from '@/api/http';
+import {
+  login as apiLogin,
+  logout as apiLogout,
+  me as apiMe,
+  refreshTokens as apiRefresh,
+} from '@/api/iam';
+import { ApiError, resetKeepaliveForTest } from '@/api/http';
 import type { CurrentUser } from '@/types/user';
 import { useAuthStore } from '../auth';
 import { useTagsViewStore } from '../tagsView';
@@ -44,6 +54,27 @@ import { ADMIN_MENUS } from '@/composables/__fixtures__/adminMenus';
 
 /** 2026-10-02：提成具名变量供「会话终止后 query 缓存为空」的断言用。 */
 let testQueryClient: QueryClient;
+
+/** 造一个 payload 带指定 exp 的假 JWT（decodeJwt 只解 payload，不验签）。
+ *  登录路径的保活定时器要读 storage 里 token 的 exp，token 必须是能解出 exp 的 JWT。 */
+function makeJwtWithExp(expEpochSec: number): string {
+  const payload = btoa(
+    JSON.stringify({
+      sub: 'u1',
+      aud: 'hsh-erp-rust',
+      iat: expEpochSec - 900,
+      nbf: expEpochSec - 900,
+      exp: expEpochSec,
+      iss: 'hsh-erp-rust',
+      jti: 'test-jti',
+      typ: 'access',
+    }),
+  )
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  return `header.${payload}.signature`;
+}
 
 function makeUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
   return {
@@ -72,10 +103,21 @@ describe('useAuthStore', () => {
     vi.mocked(apiLogin).mockReset();
     vi.mocked(apiLogout).mockReset();
     vi.mocked(apiMe).mockReset();
+    vi.mocked(apiRefresh).mockReset();
+    // 默认：refresh 成功并 rotation 出新的一对 token（新 access token 剩余 900s）
+    vi.mocked(apiRefresh).mockResolvedValue({
+      token: makeJwtWithExp(Math.floor(Date.now() / 1000) + 900),
+      refresh_token: 'rotated-refresh',
+      user: makeUser(),
+    });
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    // http.ts 的保活定时器是**模块级**状态，本 spec 不 resetModules：用例跑完必须显式
+    // 拆表，否则一枚还挂着的假定时器句柄会跨用例泄漏（resetKeepaliveForTest 走
+    // clearTimeout，须在 vi.useRealTimers() 之前调，故放 afterEach 而非用例内）。
+    resetKeepaliveForTest();
   });
 
   // ===== loadFromStorage 自执行恢复 =====
@@ -236,6 +278,37 @@ describe('useAuthStore', () => {
       // 是 ApiError 值，不需要 .value。
       const err = auth.loginMutation.error as ApiError | null;
       expect(err?.code).toBe(40101);
+    });
+
+    // 2026-10-09：登录成功后保活定时器必须在跑。登录是**唯一**不走 http.ts
+    // persistTokens() 的 token 落盘路径（那条只在 doRefresh 里被调），起表点写在本 store
+    // 的 saveToStorage() 里。缺了它，登录后长期零 HTTP 流量的标签页（空闲大屏 / HMI 屏）
+    // 没有保活链 ⇒ access token 自然过期 ⇒ dashboard WS 的周期性 re-auth 拿 TOKEN_EXPIRED。
+    it('登录成功后起 access token 保活定时器（零 HTTP 流量下到点自续期）', async () => {
+      vi.useFakeTimers();
+      try {
+        // token 剩余寿命 700s > 提前量 300s ⇒ 登录后第一轮只排期、不立即刷新
+        vi.mocked(apiLogin).mockResolvedValue({
+          token: makeJwtWithExp(Math.floor(Date.now() / 1000) + 700),
+          refresh_token: 'login-refresh',
+          user: makeUser({ username: 'bob' }),
+        });
+        const auth = useAuthStore();
+        await auth.loginMutation.mutateAsync({ username: 'bob', password: 'pw' });
+        expect(auth.isAuthenticated).toBe(true);
+        expect(apiRefresh).not.toHaveBeenCalled();
+
+        // 推进到「剩余寿命 - 提前量 + 余量」= 700 - 300 + 5 = 405s：定时器到点，自己发
+        // /iam/refresh（用的是登录响应里那枚 refresh token）。
+        await vi.advanceTimersByTimeAsync(405_000);
+        expect(apiRefresh).toHaveBeenCalledTimes(1);
+        expect(apiRefresh).toHaveBeenCalledWith('login-refresh');
+        // 续期后的新 token 已写盘（storage 与 store 都同步到新值）
+        const persisted = JSON.parse(localStorage.getItem('auth_session')!);
+        expect(persisted.refresh_token).toBe('rotated-refresh');
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

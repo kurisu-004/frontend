@@ -16,7 +16,16 @@
 //   - E6 刷新失败后的**有界重试**（30s / 2min 各一次，用尽即停摆 + 打 warn）；
 //   - E7 **跨标签页互斥**：两个标签页同一刻要 refresh 时只有一个真的发请求，另一个在
 //     临界区内现读 storage 复用新 token（后端 refresh 一次性轮转 + reuse detection 会
-//     连带清掉该用户所有会话，这一步不能只缩小窗口）。
+//     连带清掉该用户所有会话，这一步不能只缩小窗口）；
+//   - E8 宿主没有 `navigator.locks` 时走降级分支：不抛错、refresh 照发（只是失去跨标签页
+//     互斥，保活链本身不断）。
+//
+// 为什么不依赖宿主的 Web Locks：E7 用 `vi.stubGlobal` 自建锁桩（见 stubWebLocks），
+// 本用例不依赖宿主是否实现 Web Locks —— 桩自带串行语义，跑在任何 Node 版本上结果一致。
+// 反向依赖宿主会有两种坏结果：CI runner 的 Node 版本一旦没有 Web Locks，E7 会红得
+// 响亮（降级后第二个标签页真会发出第二个 refresh 请求，断言报 `got 2`）；反之若桩写错，
+// 本机有 Web Locks 时会被宿主实现掩盖过去。`package.json` 的 engines 只钉 `>=20.19.0`，
+// 拿不到「宿主一定有 Web Locks」这个前提。
 //
 // mock @/api/iam 的 refreshTokens：真 axios 会在 node 环境下挂起/超时。
 // // @vitest-environment 保持默认 node —— E5 要验证的正是这个环境的进程退出行为。
@@ -81,6 +90,40 @@ function makeRefreshedPair(remainingSec: number): { token: string; refresh_token
     token: makeJwtWithExp(nowSec() + remainingSec),
     refresh_token: 'rotated-refresh-token',
   };
+}
+
+/**
+ * 最小 Web Locks 桩：同名请求串行、回调返回值（promise）透传。
+ *
+ * 只实现 E7 用到的那一条语义：`request(name, { mode: 'exclusive' }, cb)` 按 `name` 排队，
+ * 前一个回调 settle 之后才跑下一个（这正是浏览器跨 browsing context 提供的排他保证），
+ * 并把 `cb` 的返回值原样透传给调用方（http.ts 侧靠它 await 出临界区的结果）。
+ * 不同 name 互不阻塞 —— 本用例只用一个 name，保留这条是为了让桩不至于把「按名排队」
+ * 退化成「全局串行」而读不出语义。
+ *
+ * 队列尾部挂的是 `run.catch(() => undefined)` 而不是 `run` 本身：前一个临界区抛错时，
+ * 队尾必须仍然是 fulfilled 的，否则一次失败会把后面所有等待者一起卡死（真实 Web Locks
+ * 不会这样 —— 锁的释放与回调的成败无关）。
+ */
+function stubWebLocks(): void {
+  const tails = new Map<string, Promise<unknown>>();
+  vi.stubGlobal('navigator', {
+    locks: {
+      request<T>(
+        name: string,
+        _options: { mode?: string },
+        cb: (lock: unknown) => T | Promise<T>,
+      ): Promise<T> {
+        const prev = tails.get(name) ?? Promise.resolve();
+        const run = prev.then(() => cb(null));
+        tails.set(
+          name,
+          run.catch(() => undefined),
+        );
+        return run;
+      },
+    },
+  });
 }
 
 /** 每个用例都重新 import http.ts，拿到干净的模块级 keepalive 状态。 */
@@ -227,8 +270,11 @@ describe('access token 保活定时器（零 HTTP 流量下自续期）', () => 
   it('E7：跨标签页互斥 —— 两个标签页同时要 refresh 时只有一个发请求', async () => {
     // 后端 refresh token 一次性轮转，且对已用过的 jti 做 reuse detection ⇒ 命中就会
     // delete_all_user_sessions，把该用户**所有标签页 + 所有设备**一起登出。两个模块实例
-    // 就是两个标签页：它们共享同一份 localStorage 桩与同一个 navigator.locks，但各自的
+    // 就是两个标签页：它们共享同一份 localStorage 桩与同一个锁桩，但各自的
     // refreshPromise 互不相识 —— 这正是必须靠互斥（而不是标签页内雪崩队列）的原因。
+    //
+    // 锁桩自带串行语义（见 stubWebLocks），本用例因此不依赖宿主是否实现 Web Locks。
+    stubWebLocks();
     const httpA = await loadHttp();
     // refresh 请求挂住不返回，好让 B 卡在锁上
     let releaseA: (pair: { token: string; refresh_token: string }) => void = () => undefined;
@@ -258,6 +304,22 @@ describe('access token 保活定时器（零 HTTP 流量下自续期）', () => 
     await vi.advanceTimersByTimeAsync(0);
     await flushPromises();
     expect(refreshTokensMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('E8：宿主没有 navigator.locks 时走降级分支（不抛错，保活链不断）', async () => {
+    // navigator.locks 只在安全上下文（https / localhost）存在；纯 http 的局域网部署上
+    // 整条互斥保护退化为「尽力」。降级必须是**可用**的：这里锁住的是「不抛错 + 照常
+    // refresh」，不是「仍然互斥」—— 后者在没有锁的宿主上本来就做不到（见 http.ts 里
+    // withRefreshLock 上方注释的部署前提）。
+    vi.stubGlobal('navigator', {});
+    const http = await loadHttp();
+    storedSession = { token: makeJwtWithExp(nowSec() + 60), refresh_token: 'r0' };
+
+    expect(() => http.ensureAccessTokenKeepalive()).not.toThrow();
+    await flushPromises();
+
+    expect(refreshTokensMock).toHaveBeenCalledTimes(1);
+    expect(refreshTokensMock).toHaveBeenCalledWith('r0');
   });
 });
 

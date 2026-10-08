@@ -325,6 +325,11 @@ async function doRefresh(): Promise<LoginResponse> {
  *  基线浏览器都可依赖，但只在**安全上下文**（https / localhost）可用 —— 纯 http 的局域网
  *  部署上 `navigator.locks` 是 undefined，走下面的降级分支（直接执行，**降级只是尽力**，
  *  仍存在上面那个并发窗口，不要当成等价路径）。
+ *  **部署前提（给运维判断用）**：本保护在非安全上下文下形同虚设。`nginx.conf` 同时
+ *  `listen 80` 与 `listen 443 ssl`（443 需人工配证书），现场若以
+ *  `http://192.168.x.x:8080` 这类纯 http 地址访问，`navigator.locks` 为 undefined ⇒ 保护
+ *  退化为「尽力」，跨标签页并发 refresh 的窗口仍然存在（表现为偶发的「该用户所有设备
+ *  一起登出」）。要让保护真正生效，现场必须走 https（或 localhost）。
  *
  *  代价：拿到锁之前调用方要等（reactive 40102 路径会 await 这条 promise），最坏是别的标签页
  *  那一次 `/iam/refresh` 的 RTT。换来的是「不会把该用户所有设备一起踢下线」，划算。
@@ -334,7 +339,7 @@ const REFRESH_LOCK_NAME = 'hsh-erp:token-refresh';
 async function withRefreshLock<T>(fn: () => Promise<T>): Promise<T> {
   const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
   if (!locks?.request) {
-    // 降级：无跨标签页互斥（安全上下文之外 / 老浏览器，见上方注释）。
+    // 降级：无跨标签页互斥（安全上下文之外 / 老浏览器，见上方注释里的部署前提）。
     return fn();
   }
   // 类型参数显式给 `Promise<T>`：lib.dom 把 LockGrantedCallback<T> 的返回类型声明成
@@ -505,13 +510,19 @@ function armKeepalive(): void {
 /**
  * 确保 access token 保活定时器在跑（幂等：每次都先拆旧表再按当前 exp 重排）。
  *
- * 起表点覆盖全部「token 落到 localStorage」的写路径，以及会话终止：
- *   1. persistTokens()（登录 / refresh 成功后自动起表）；
- *   2. stores/auth.ts 的 loadFromStorage()（刷新浏览器恢复会话 —— 这条路径不经过
- *      persistTokens，只由 app 启动时读 storage 恢复 session）；
- *   3. stores/auth.ts 的 teardownSession()（会话终止后调它拆表：storage 里已无 token ⇒
- *      armKeepalive 走「不排期」分支，幂等且不留悬挂定时器；否则登出后最多还有一枚
- *      定时器挂着直到 TTL 结束，约 10 分钟）。
+ * 起表点共 **4** 个，判据是「本会话的 access token 从哪来」—— 每条把 token 落到
+ * localStorage（或把它作废）的路径都要覆盖，漏一条就有一种会话静默失去保活：
+ *   1. `persistTokens()`（本文件）—— refresh 成功后写盘，紧接着起表；
+ *   2. `stores/auth.ts` 的 `saveToStorage()` —— 登录成功写盘后起表。**登录不经过
+ *      persistTokens**（那条只在 doRefresh 里被调），故必须单列一个起表点；
+ *   3. `stores/auth.ts` 的 `loadFromStorage()` —— 刷新浏览器恢复会话。这条路径只读
+ *      storage、同样不经过 persistTokens，只由 app 启动时读 storage 恢复 session；
+ *   4. `stores/auth.ts` 的 `teardownSession()` —— 会话终止后调它**拆表**（storage 里
+ *      已无 token ⇒ armKeepalive 走「不排期」分支，幂等且不留悬挂定时器；否则登出后
+ *      最多还有一枚定时器挂着直到 TTL 结束，约 10 分钟）。
+ *
+ * `stores/auth.ts` 的 `initDummyAuth()` 不在此列：它只写内存、刻意不写 localStorage
+ * （避免下次非 dummy 启动时被 loadFromStorage 复活），没有 token 落盘就没有起表对象。
  *
  * 起表即视为「新一轮链」⇒ 重试计数归零；退避重试走的是 scheduleKeepalive，不经过
  * 本函数，故不会把重试序列自己清掉。

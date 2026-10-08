@@ -13,8 +13,9 @@
 //     localStorage / tagsView / query 缓存）由本 store 的 teardownSession() 单点收口。
 //   - loadFromStorage() 在 setup 回调末尾自执行（首次 useAuthStore() 时触发）；Listener
 //     在 setup 里挂；保证首次实例化就具备 localStorage 恢复 + 事件同步能力。
-//     它同时是 access token 保活定时器的起表点之一（见 ensureAccessTokenKeepalive）；
-//     teardownSession() 则是拆表点（会话终止后必须停掉，否则还挂着 10 分钟）。
+//     loadFromStorage / saveToStorage / teardownSession 三者分别是 access token 保活定时器
+//     的三个起表点（恢复会话 / 登录成功 / 会话终止后拆表），见 ensureAccessTokenKeepalive
+//     的注释。
 //   - forceLogout(router)：「会话已没救」时无条件终止本地会话（不联系后端），
 //     refreshOrLogout 的失败分支委托给它。详见函数注释。
 //   - 会话终止唯一收口 teardownSession()：**无 router 参数**、
@@ -33,10 +34,11 @@ import { defineStore } from 'pinia';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/iam';
 import type { ApiError } from '@/api/http';
-// 2026-10-09 新增：起 access token 保活定时器（api/http.ts 的 setTimeout 链）。
-// 「刷新浏览器恢复会话」这条路径只由本函数读 localStorage，不经过 http.ts 的
-// persistTokens()，若不在这里补一次起表，页面一加载就是零 HTTP 流量 → 定时器缺失 →
-// access token 静默过期。http.ts 不 import 本 store，依赖方向单向。
+// 2026-10-09 新增：起 access token 保活定时器（api/http.ts 的 setTimeout 链）。本文件有
+// 三条起表路径，都不经过 http.ts 的 persistTokens()，各自必须补一次：saveToStorage（登录）
+// / loadFromStorage（刷新浏览器恢复会话）/ teardownSession（会话终止后拆表）。漏掉哪条，
+// 对应会话就在零 HTTP 流量下静默失去保活（access token 自然过期到 WS 拿到 TOKEN_EXPIRED）。
+// http.ts 不 import 本 store，依赖方向单向。
 import { ensureAccessTokenKeepalive } from '@/api/http';
 import type { CurrentUser } from '@/types/user';
 import type { MenuNode } from '@/types/menu';
@@ -110,19 +112,34 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /** 登录成功的**唯一**写盘点：把内存里的 token / refresh token / user 落到 localStorage。
+   *
+   *  2026-10-09：这里是 access token 保活定时器的**登录路径起表点**。函数末尾无条件调
+   *  `ensureAccessTokenKeepalive()`，语义与 http.ts 的 `persistTokens()` 对齐 —— **凡是
+   *  token 落到 localStorage 的写路径都要起表**，漏一条就有一种会话静默失去保活：
+   *  登录成功后长期零 HTTP 流量的标签页（空闲大屏 / HMI 屏）没有别的续命入口，
+   *  access token 会自然过期到让 WS 周期性 re-auth 拿 TOKEN_EXPIRED。
+   *
+   *  **顺序敏感**：必须排在上面的 localStorage 写盘之后 —— `armKeepalive()` 现读 storage
+   *  里的 exp 才拿得到新值。无 token/user 的早退分支（storage 删空）同样调它，此时
+   *  `armKeepalive` 走「不排期」分支，等价于拆表。
+   *
+   *  起表点清单（4 个，含 http.ts 那个）见 `http.ts::ensureAccessTokenKeepalive` 的注释。
+   *  `initDummyAuth` 不写 localStorage（dev-only，见该函数注释），故不给它起表。 */
   function saveToStorage(): void {
     if (!token.value || !user.value) {
       localStorage.removeItem('auth_session');
-      return;
+    } else {
+      localStorage.setItem(
+        'auth_session',
+        JSON.stringify({
+          token: token.value,
+          refresh_token: refreshTokenValue,
+          user: user.value,
+        }),
+      );
     }
-    localStorage.setItem(
-      'auth_session',
-      JSON.stringify({
-        token: token.value,
-        refresh_token: refreshTokenValue,
-        user: user.value,
-      }),
-    );
+    ensureAccessTokenKeepalive();
   }
 
   // ===== dummy auth =====
@@ -258,6 +275,8 @@ export const useAuthStore = defineStore('auth', () => {
       refreshTokenValue = resp.refresh_token ?? null;
       // 必须在 saveToStorage() 之前：saveToStorage 读 user.value
       setUser(resp.user);
+      // 登录路径的保活起表点在 saveToStorage 内部（写盘后），不在 onSuccess ——
+      // 与 persistTokens 的写法一致：起表跟着写盘点走，新增 token 写路径时不会漏。
       saveToStorage();
       return resp.user;
     },
