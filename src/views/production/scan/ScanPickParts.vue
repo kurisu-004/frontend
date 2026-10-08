@@ -61,6 +61,7 @@
           v-if="worker?.id"
           :worker-id="String(worker.id)"
           :auto-open-on-change="true"
+          :auto-open-token="heldChangeToken"
         />
         <el-button type="info" plain @click="backToAction">
           <el-icon><Back /></el-icon>
@@ -280,38 +281,48 @@ import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useScanBus } from '@/views/production/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/production/scan/composables/useScanPartsSort';
-import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
 import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
-import { fetchScanPickable, pickUpBatch } from '@/api/productionScan';
-import { scanPartListResultSchema } from '@/views/production/scan/composables/scanSchema';
 import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 import BatchPickerDialog, { type BatchPickerRow } from '@/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
 import { chainRowClass } from '@/views/production/scan/chainAccent';
+import { useScanPickableQuery } from '@/views/production/scan/composables/useScanListQuery';
+import { useScanPickUpMutation } from '@/views/production/scan/composables/useScanWrite';
+
+const pickUpMutation = useScanPickUpMutation();
 
 const router = useRouter();
 const { worker, requireWorker, reset: resetScanSession } = useScanSession();
 const { onScan } = useBarcodeScanner();
-const { emitHeldChanged } = useScanBus();
-// 2026-10-04：跨架列表展示用 listPartsByWorkTypeAllShelves（后端按 user.shelf_ids 收口）。
-// 取件提交不再需要任何货架字段（pick-up 的 shelf_id 已改为可选，见文件头）—— 账号绑几个架
-// 都提交得出去。
+// 2026-10-10：取件列表改走 `GET /prod/scan/pickable` 的 query hook（后端按
+// user.shelf_ids 收口）。取件提交不再需要任何货架字段（目标架由后端按负载自动选）——
+// 账号绑几个架都提交得出去。
 
-const parts = ref<ScanPartRowSchema[]>([]);
-// 后端信封里的总条数（可能大于已加载的 parts.length —— 见 refresh 里的 limit 说明）
-const total = ref(0);
+// 列表：query 驱动。params 为 null（未扫工牌 / 无工种）时不发请求 —— 端点的
+// work_type_id 是必填 query 键且只吃 JSON 字符串，漏传会被后端 QueryRejection 拒成 400。
+const pickable = useScanPickableQuery(() => {
+  const workTypeId = worker.value?.work_type_id;
+  return workTypeId ? { workTypeId, limit: 200 } : null;
+});
+// limit=200 是后端 clamp 上限：不传时后端默认只返 50 条，列表会静默截断。
+const parts = computed<ScanPartRowSchema[]>(() => pickable.query.data.value?.items ?? []);
+// 后端信封里的总条数（可能大于已加载的 parts.length —— 见上面 limit 的说明）
+const total = computed(() => pickable.query.data.value?.total ?? 0);
+// `isPending`（还没有任何数据）而非 `isFetching`：后者在写后失效触发的后台 refetch 期间
+// 也为 true，用它会让整页在每次提交后闪一次 loading 块。
+const loadingList = computed(() => pickable.query.isPending.value);
+const submitting = computed(() => pickUpMutation.isPending.value);
+/** 写成功后自增，驱动徽章自动开抽屉（见 HeldPartsBadge 的 autoOpenToken 注释）。 */
+const heldChangeToken = ref(0);
 // 「系统交期」硬优先级 + 原 is_urgent / planned_delivery_date 排序；详见 composable 注释
 const sortedParts = useScanPartsSort(parts);
 
 const contentRef = ref<HTMLElement | null>(null);
-const loadingList = ref(false);
 const selectedPart = ref<ScanPartRowSchema | null>(null);
-const submitting = ref(false);
 const showQtyDialog = ref(false);
 
 // --- 多批次扫码命中弹窗状态 ---
@@ -344,34 +355,15 @@ function isHeic(t: string): boolean {
   return t.toUpperCase() === 'HEIC';
 }
 
-onBeforeMount(async () => {
-  if (!requireWorker(router)) return;
-  // 2026-10-04：取件页已不依赖任何货架状态（pick-up 的 shelf_id 可选，见文件头），
-  // 进页只加载零件列表。
-  await refresh();
+onBeforeMount(() => {
+  // 取件页不依赖任何货架状态（目标架由后端按负载自动选，见文件头）；列表由 query 在
+  // setup 时按 `enabled` 闸门自行发起。
+  requireWorker(router);
 });
 
-async function refresh(): Promise<void> {
-  if (!worker.value?.work_type_id) return;
-  loadingList.value = true;
-  try {
-    // 跨架列表（后端已按 user.shelf_ids 收口；scoped SHELF_ACCOUNT 只看到自己绑定的
-    // 架上的件）。2026-10-04：端点返回分页信封，取 `.items`；显式传 limit=200（后端
-    // clamp 上限）取全 —— 不传时后端默认只返 50 条，列表会静默截断。
-    const res = scanPartListResultSchema.parse(
-      await fetchScanPickable({ workTypeId: worker.value.work_type_id, limit: 200 }),
-    );
-    parts.value = res.items;
-    total.value = res.total;
-  } catch (e) {
-    ElMessage.error(scanListErrorText(e, '加载列表失败'));
-    // 2026-10-04 补：与另两页 / 徽章的 catch 对齐 —— 刷新失败时列表与计数一起归零，
-    // 否则「共 N 件」会停在上一次成功加载的 total 上、与已清空的列表对不上。
-    parts.value = [];
-    total.value = 0;
-  } finally {
-    loadingList.value = false;
-  }
+/** 页面「刷新」按钮 / 空态里的「刷新」：走 query 的 refetch。 */
+function refresh(): Promise<void> {
+  return pickable.fetchList();
 }
 
 const selectedQty = ref<number | undefined>(undefined);
@@ -540,24 +532,25 @@ async function onQtyConfirm(qty: number): Promise<void> {
     return;
   }
   selectedQty.value = qty;
-  submitting.value = true;
   try {
-    await pickUpBatch(batchId, {
+    await pickUpMutation.mutateAsync({
+      batchId,
       // 普通 number：后端 i32，无自定义 deserializer。
       version: batchVersion,
       // 工人雪花 ID 字符串（后端按 worker 记录归属，不认 badge_code）。
-      worker_id: String(worker.value.id),
+      workerId: String(worker.value.id),
       // 部分领取；必须发字符串（后端 deserialize_i64_opt 只解 JSON string）。
       quantity: String(qty),
     });
     ElMessage.success(`已领取: ${code} × ${qty}`);
     selectedPart.value = null;
-    await refresh();
-    emitHeldChanged();
+    // mutateAsync 返回时 mutation 的 onSuccess 失效链已经 settle（TanStack 会 await
+    // onSuccess 返回的 promise），列表与徽章都是刷新后的状态 ⇒ 此时自增 token 开抽屉。
+    heldChangeToken.value++;
   } catch (e) {
+    // 失败也走全套失效（mutation 的 onError）：40901 OCC 意味着这批已被别人领走，
+    // 本端副本已过期，不刷就会留下一条作废的候选件。
     ElMessage.error((e as Error).message ?? '领取失败');
-  } finally {
-    submitting.value = false;
   }
 }
 

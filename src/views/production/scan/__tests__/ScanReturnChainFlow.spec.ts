@@ -39,6 +39,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -257,9 +258,20 @@ const stubs = {
   },
 };
 
+// 2026-10-10：本页接入 TanStack Query（`useScanHeldQuery` + `useScanWorkerScanMutation`），
+// mount 必须挂 VueQueryPlugin 并给一个 QueryClient，否则 useQuery / useMutation 注入失败。
+// 每个用例一份新 QueryClient：缓存跨用例残留会让「列表内容」断言依赖执行顺序。
+function freshQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: 0 }, mutations: { retry: 0 } },
+  });
+}
+
 async function mountPage(items: ScanPartRowSchema[]): Promise<VueWrapper> {
   h.fetchScanHeld.mockResolvedValue({ items, total: items.length, limit: 200, offset: 0 });
-  const w = mount(ScanReturnParts, { global: { stubs } });
+  const w = mount(ScanReturnParts, {
+    global: { stubs, plugins: [[VueQueryPlugin, { queryClient: freshQueryClient() }]] },
+  });
   await flushPromises();
   return w;
 }

@@ -43,6 +43,7 @@
           v-if="worker?.id"
           :worker-id="String(worker.id)"
           :auto-open-on-change="true"
+          :auto-open-token="heldChangeToken"
         />
         <el-button type="info" plain @click="backToAction">
           <el-icon><Back /></el-icon>
@@ -276,40 +277,52 @@ import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useScanBus } from '@/views/production/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/production/scan/composables/useScanPartsSort';
-import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
 import { refillTakenOf } from '@/views/production/scan/composables/refillTaken';
 import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
-import { fetchScanHeld, scanWorker } from '@/api/productionScan';
-import { scanPartListResultSchema } from '@/views/production/scan/composables/scanSchema';
 import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
 import BatchPickerDialog, { type BatchPickerRow } from '@/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/production/scan/components/RefillTakenDialog.vue';
 import { chainRowClass } from '@/views/production/scan/chainAccent';
+import { useScanHeldQuery } from '@/views/production/scan/composables/useScanListQuery';
+import { useScanWorkerScanMutation } from '@/views/production/scan/composables/useScanWrite';
+
+const workerScanMutation = useScanWorkerScanMutation();
 import type { TakenItemDto } from '@/api/productionQueue.contract';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 
 const router = useRouter();
 const { worker, requireWorker, reset: resetScanSession } = useScanSession();
 const { onScan } = useBarcodeScanner();
-const { emitHeldChanged } = useScanBus();
 
-const parts = ref<ScanPartRowSchema[]>([]);
-// 后端信封里的总条数（可能大于已加载的 parts.length —— 见 refresh 里的 limit 说明）
-const total = ref(0);
+// 2026-10-10：持有件列表改走 `GET /prod/scan/held` 的 query hook，与放回页 /
+// `HeldPartsBadge` 徽章共用同一条 query key ⇒ 同屏对同一个工人只发一次请求，且写后
+// 由 mutation 的失效链同刷。
+const held = useScanHeldQuery(() => {
+  const workerId = worker.value?.id;
+  return workerId ? { workerId: String(workerId), limit: 200 } : null;
+});
+// limit=200 是后端 clamp 上限：不传时后端默认只返 50 条，持有件列表会静默截断。
+const parts = computed<ScanPartRowSchema[]>(() => held.query.data.value?.items ?? []);
+// 后端信封里的总条数（可能大于已加载的 parts.length —— 见上面 limit 的说明）
+const total = computed(() => held.query.data.value?.total ?? 0);
 // 「系统交期」硬优先级 + 原 is_urgent / planned_delivery_date 排序；详见 composable 注释
 const sortedParts = useScanPartsSort(parts);
-const loadingList = ref(false);
+// `isPending`（还没有任何数据）而非 `isFetching`：后者在写后失效触发的后台 refetch 期间
+// 也为 true，用它会让整页在每次提交后闪一次 loading 块。
+const loadingList = computed(() => held.query.isPending.value);
 const selectedPart = ref<ScanPartRowSchema | null>(null);
+const submitting = computed(() => workerScanMutation.isPending.value);
+/** 写成功后自增，驱动徽章自动开抽屉（见 HeldPartsBadge 的 autoOpenToken 注释）。 */
+const heldChangeToken = ref(0);
+
 // 点选卡片后进入「待扫码确认」状态；扫到匹配条码才提交送检
 const awaitingScan = ref(false);
 
 const contentRef = ref<HTMLElement | null>(null);
-const submitting = ref(false);
 
 // --- 预览状态 ---
 const showPreview = ref(false);
@@ -351,10 +364,14 @@ const showBatchPicker = ref(false);
 const batchPickerCode = ref('');
 const batchPickerRows = ref<ScanPartRowSchema[]>([]);
 
-onBeforeMount(async () => {
-  if (!requireWorker(router)) return;
-  await refresh();
+onBeforeMount(() => {
+  requireWorker(router);
 });
+
+/** 页面「刷新」按钮：走 query 的 refetch。 */
+function refresh(): Promise<void> {
+  return held.fetchList();
+}
 
 // --- 扫码：扫描直接选中 + 滚动居中 + 直接提交送检；不在列表则提示当前位置 ---
 
@@ -417,26 +434,6 @@ onBeforeUnmount(() => {
   unsubScan();
   if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
 });
-
-async function refresh(): Promise<void> {
-  if (!worker.value?.id) return;
-  loadingList.value = true;
-  try {
-    // 2026-10-04：端点返回分页信封，取 `.items`；显式传 limit=200（后端 clamp
-    // 上限）取全 —— 不传时后端默认只返 50 条，持有件列表会静默截断。
-    const res = scanPartListResultSchema.parse(
-      await fetchScanHeld({ workerId: String(worker.value.id), limit: 200 }),
-    );
-    parts.value = res.items;
-    total.value = res.total;
-  } catch (e) {
-    ElMessage.error(scanListErrorText(e, '加载持有零件列表失败'));
-    parts.value = [];
-    total.value = 0;
-  } finally {
-    loadingList.value = false;
-  }
-}
 
 // --- 选件 → 扫码确认 → 提交 ---
 const selectedQty = ref<number | undefined>(undefined);
@@ -525,9 +522,8 @@ async function submitInspect(): Promise<void> {
     ElMessage.warning('选择已重置，请重新选择零件');
     return;
   }
-  submitting.value = true;
   try {
-    const res = await scanWorker({
+    const res = await workerScanMutation.mutateAsync({
       serial_no: selectedPart.value.serial_no ?? '',
       badge_code: worker.value.badge_code ?? '',
       event_type: 'INSPECTED',
@@ -538,7 +534,7 @@ async function submitInspect(): Promise<void> {
     const serialNo = selectedPart.value.serial_no;
     cancelSelect();
     // 2026-10-05：worker-scan 同事务 refill 抢到批次时弹窗告知（空数组 = 池空 / 已持满，
-    // 不弹）。放在 refresh() 之前：弹窗不依赖列表刷新的往返，工人立刻看到补了什么料。
+    // 不弹）。弹窗不依赖列表刷新的往返，工人立刻看到补了什么料。
     const taken = refillTakenOf(res);
     if (taken.length) {
       refillTaken.value = taken;
@@ -547,12 +543,13 @@ async function submitInspect(): Promise<void> {
     } else {
       ElMessage.success(`已送检：${serialNo}`);
     }
-    await refresh();
-    emitHeldChanged();
+    // mutateAsync 返回时 onSuccess 的失效链已 settle（TanStack await onSuccess 返回的
+    // promise）⇒ 列表与徽章都是刷新后的状态，此时自增 token 开抽屉。
+    heldChangeToken.value++;
   } catch (e) {
+    // 失败也走全套失效（mutation 的 onError）：40901 OCC / 20103 状态非法都意味着
+    // 服务端那份数据已经变了，本端副本过期。
     ElMessage.error((e as Error).message ?? '送检失败');
-  } finally {
-    submitting.value = false;
   }
 }
 
