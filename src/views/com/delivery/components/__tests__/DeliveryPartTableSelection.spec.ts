@@ -22,7 +22,7 @@
 // MutationObserver，只会引入无关的爆炸半径。
 import { describe, expect, it, vi } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
-import { nextTick, ref } from 'vue';
+import { nextTick, ref, type Ref } from 'vue';
 import { createRouter, createMemoryHistory } from 'vue-router';
 import { ElButton, ElCard, ElIcon, ElTable, ElTableColumn, ElTag, ElTooltip } from 'element-plus';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
@@ -176,6 +176,19 @@ function tableOf(w: VueWrapper): { toggleRowSelection: (row: unknown, selected?:
   };
 }
 
+/** el-table 内部 store（EP 在 `insertColumn` 时把 selection 列的 `reserveSelection` 镜像进来）。 */
+function storeOf(w: VueWrapper): { states: { reserveSelection: Ref<boolean> } } {
+  return (w.findComponent({ name: 'ElTable' }).vm as unknown as { store: { states: { reserveSelection: Ref<boolean> } } })
+    .store;
+}
+
+/** 表里 type="selection" 的那个列实例。 */
+function selectionColumnOf(w: VueWrapper): VueWrapper | undefined {
+  return w
+    .findAllComponents({ name: 'ElTableColumn' })
+    .find((c) => c.props('type') === 'selection');
+}
+
 /**
  * 表体里哪些行的勾选框已勾上（DOM 侧的第二重断言，返回 DOM 顺序下的下标）。
  *
@@ -274,6 +287,30 @@ describe('卡片头计数 = 表体实际展示行数（不是批次条数）', (
   it('3 个批次 / 1 套 2 件 ⇒ 头部显示 4 行（父行 1 + 子件 2 + 散件 1）', () => {
     const w = mountLineItemsTable(treeRows());
     expect(w.text()).toContain('零件列表 (4)');
+    w.unmount();
+  });
+});
+
+describe('勾选列开 reserve-selection（打印后绿底刷新不丢勾选）', () => {
+  // 打印后会用已打印批次重算 `treeLineItems`（绿底刷新），行对象被整体替换。若勾选列没开
+  // `reserve-selection`，EP 在 setData 时走 `clearSelection()` 分支 → 用户刚勾好、点完打印
+  // 选区就空了，得重勾一遍。它是这条体验的**唯一**开关，删掉不会有任何报错，只能靠用例钉住。
+  const cases: [string, (rows: PartTreeRow[]) => VueWrapper][] = [
+    ['详情页表', mountLineItemsTable],
+    ['草稿卡片表', mountDraftCard],
+  ];
+
+  it.each(cases)('%s：selection 列的 reserveSelection 为 true（且已镜像进 store）', async (_name, mountFn) => {
+    const w = mountFn(treeRows());
+    await settle();
+
+    const col = selectionColumnOf(w);
+    expect(col, '没找到 type="selection" 的列').toBeTruthy();
+    // 列实例上的 prop 是声明源头；store 里的那份是 EP 在 insertColumn 时抄进去的运行时值，
+    // reserve 逻辑读的是后者 ⇒ 两处都断掉才算守住。
+    expect((col!.props() as Record<string, unknown>).reserveSelection).toBe(true);
+    expect(storeOf(w).states.reserveSelection.value).toBe(true);
+
     w.unmount();
   });
 });

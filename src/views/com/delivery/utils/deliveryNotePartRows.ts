@@ -61,6 +61,10 @@ export interface PartTreeRow {
    * - 零件行 = `batch_ids` 里**任一**批次已在 usePrintedLabels 登记为已打印；
    * - 装配件父行 = `batch_ids` **全部**批次都已打印。打印父行会把全部子件批次一起标记上，
    *   所以整套打完父行就该绿；只打了某一个子件时父行不该绿（子件行绿就够了）。
+   *
+   * ⚠️ **父行的 all 建立在子件行的 any 之上**（用户可见的自觉口径）：父行判据是
+   * `children.every(c => c.label_printed)`，而子件行自身是 any ⇒ 同一子件零件被拆成多个
+   * 批次时，只要其中一批打过标签，该子件行就算已打印；此时即使它还有另一批没打，父行也会绿。
    */
   label_printed: boolean;
   // —— 代表批次（装配件父行取 assembly_*，缺失时回落首个子件）的展示字段 ——

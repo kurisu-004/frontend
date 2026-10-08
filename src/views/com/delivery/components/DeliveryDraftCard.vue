@@ -189,6 +189,11 @@ drag.applyDrag(tableEl);
         EP 的该选项默认 false ⇒ 勾选在父子间级联：勾「装配件父行」（想出 1 张「N 套」
         标签）会把全部子件行一起勾上，同一批货出两轮标签；反向勾满全部子件也会把父行勾上。
         「一行 = 一张标签」只有不联动才成立。
+
+        2026-10-09：**表头全选框不受 `checkStrictly` 约束**，是刻意接受的口径、不改行为。
+        EP `store/watcher._toggleAllSelection` 另建了一份 treeProps 并把 `checkStrictly`
+        **写死为 false**，不看本表传的值 ⇒ 点表头全选时装配件父行 + 全部子件行会一起进
+        selection。本字段只约束**逐行点击**。
       -->
       <el-table
         :ref="(el) => handleTableRef(el as ComponentInstance<typeof ElTable> | null)"
