@@ -1,37 +1,49 @@
 // src/composables/__tests__/useBarcodeScanner.routeGate.spec.ts
 //
-// 2026-10-09 新增：覆盖「活跃路由闸门」—— 扫码分发只投递给「当前路由就是它」的
-// 订阅者。缺陷现象：顶部标签栏同时开着「待品检」和「扫码入单」时，扫码一次两个
-// 对话框一起弹（keep-alive 缓存的页面 onBeforeUnmount 不触发，退订永不执行）。
+// 2026-10-09 新增：覆盖「活跃路由闸门」—— 扫码分发只投递给「当前路由就是它」的订阅者。
+// 缺陷现象：顶部标签栏同时开着「待品检」和「扫码入单」时，扫码一次两个对话框一起弹
+// （keep-alive 缓存的页面 onBeforeUnmount 不触发，退订永不执行）。
 //
 // 用例矩阵（与实现里的 isGatedOut 一一对应）：
 //   1. 当前路由 == 订阅路径        → 收到
 //   2. 当前路由切走（模拟切标签）  → 不再收到
 //   3. 两个订阅者：命中的收、未命中的不收（过滤是逐条判定，不是一刀切）
-//   4. 订阅时取不到路由（非组件上下文）→ 照旧全量分发（退化语义，宁可不拦）
-//   5. 退订后彻底移除
-//   6. 被过滤时 lastScan / lastScanAt 仍更新（副作用先于过滤，见实现的 dispatch）
+//   4. 退订后彻底移除
+//   5. 被过滤时 lastScan / lastScanAt 仍更新（副作用先于过滤，见实现的 dispatch）
+//
+// fail-open 三条（闸门是增强项，取不到路由时必须**照旧分发**，绝不能让 handler 静默失效）：
+//   6. 非组件上下文订阅（单测直接调 composable）        → 收到
+//   7. 组件上下文但**没装 router**（仓内既有组件 spec 的挂载形态）→ 收到，且不打 Vue 警告
+//   8. 组件上下文、provider 存在但值是 undefined          → 收到
+//
+// 另外两条钉住公开 API 的语义不变：
+//   9.  onMounted 里注册的订阅形态（真实调用点 DeliveryNoteScan / CandidatePool /
+//       RepairReceive / ScanBadgeGate 都是这个形态，不是 setup 里直接 onScan）
+//  10. setEnabled(false) 后不分发 / clearBuffer() 清缓冲后同码可再次分发
 //
 // 隔离策略：模块状态是**模块级单例**，所以静态 import（只装一次 window.keydown 监听），
-// 靠 afterEach 逐条退订 + 卸载组件来复位。刻意**不用** vi.resetModules() —— 那会让
-// 每次 import 都往 window 上再挂一个永不移除的 keydown 监听，旧模块的缓冲与订阅表
-// 继续活着，反而更容易串味。enabled / 缓冲状态本文件不改动（每次扫码以 Enter 收尾，
-// 内部会 resetBuffer），无需额外复位。
+// 靠 afterEach 逐条退订 + 卸载组件 + 复位 enabled / 缓冲来还原。刻意**不用**
+// vi.resetModules() —— 那会让每次 import 都往 window 上再挂一个永不移除的 keydown 监听，
+// 旧模块的缓冲与订阅表继续活着，反而更容易串味。
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h } from 'vue';
+import { defineComponent, h, onMounted, type Plugin } from 'vue';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { useBarcodeScanner, type Unsubscribe } from '../useBarcodeScanner';
 
-// vi.mock 的工厂被提升到 import 之上，里面的 mockRoute 必须用 vi.hoisted 造，
+// vi.mock 的工厂被提升到 import 之上，里面的 mockRoute / key 必须用 vi.hoisted 造，
 // 否则引用未初始化的 const（TDZ）。
-const { mockRoute } = vi.hoisted(() => ({ mockRoute: { path: '/inspection/pending' } }));
+const { mockRoute, routeLocationKeyMock } = vi.hoisted(() => ({
+  mockRoute: { path: '/inspection/pending' as string },
+  routeLocationKeyMock: Symbol('route location'),
+}));
 
-// 整个 vue-router 换成一个可变 route 对象：改 mockRoute.path 即「切标签」。
-// useBarcodeScanner 只用到 useRoute，本文件不引真 router，桩掉整个模块是安全的。
+// 实现用的是 `inject(routeLocationKey, null)`（useRoute 是 inject(key) 不带默认值，
+// router 缺失时会打 `injection "Symbol(route location)" not found.` dev warning）。
+// 这里桩掉整个 vue-router 模块并给出同名 key：用例要么 provide 它、要么不 provide。
 vi.mock('vue-router', () => ({
-  useRoute: () => mockRoute,
+  routeLocationKey: routeLocationKeyMock,
 }));
 
 const PENDING = '/inspection/pending';
@@ -46,20 +58,36 @@ interface Sub {
 let wrappers: VueWrapper[] = [];
 let subs: Sub[] = [];
 
-/** 挂一个最小组件，在 setup() 里订阅（等价于业务页面 onMounted 里 onScan 的效果：
- *  订阅发生在「有组件上下文」的时刻，useRoute() 拿得到 route）。 */
-function subscribe(): Sub {
+/** provide routeLocationKey 的最小插件（等价于 app.use(router) 提供的那个路由对象）。 */
+function routerPlugin(value: unknown = mockRoute): Plugin {
+  return {
+    install(app) {
+      app.provide(routeLocationKeyMock, value);
+    },
+  };
+}
+
+/** 在组件里订阅并把 handler / 退订收走；`inMounted` 决定订阅发生在 setup 还是 onMounted。 */
+function subscribe(opts: { withRouter?: boolean; routeValue?: unknown; inMounted?: boolean } = {}): Sub {
   const spy = vi.fn();
   const collected: Sub[] = [];
   const wrapper = mount(
     defineComponent({
       setup() {
+        // composable 一律在 setup 里调（真实调用点也是如此），只是**注册**的时机分两种
         const scanner = useBarcodeScanner();
-        const unsubscribe = scanner.onScan(spy);
-        collected.push({ spy, scanner, unsubscribe });
+        const register = (): void => {
+          const unsubscribe = scanner.onScan(spy);
+          collected.push({ spy, scanner, unsubscribe });
+        };
+        if (opts.inMounted) onMounted(register);
+        else register();
         return () => h('div');
       },
     }),
+    opts.withRouter === false
+      ? {}
+      : { global: { plugins: [routerPlugin(opts.routeValue)] } },
   );
   const sub = collected[0]!;
   wrappers.push(wrapper);
@@ -75,6 +103,13 @@ function typeScan(code: string): void {
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
 }
 
+/** 只按普通键、不按 Enter（留半个扫码在缓冲里）。 */
+function typePartial(code: string): void {
+  for (const key of code) {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key }));
+  }
+}
+
 beforeEach(() => {
   mockRoute.path = PENDING;
   // dispatch 里的 console.log 是生产诊断输出，单测里静音
@@ -85,11 +120,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // 顺序要紧：先退订（清 handlers），再卸载组件。
+  // 顺序要紧：先退订（清 handlers），再卸载组件，最后复位 enabled / 缓冲（都是模块级单例）。
   for (const s of subs) s.unsubscribe();
   for (const w of wrappers) w.unmount();
   subs = [];
   wrappers = [];
+  useBarcodeScanner().setEnabled(true);
+  useBarcodeScanner().clearBuffer();
   vi.restoreAllMocks();
 });
 
@@ -132,19 +169,6 @@ describe('useBarcodeScanner 活跃路由闸门', () => {
     expect(inspection.spy).toHaveBeenCalledWith('CD-200');
   });
 
-  it('订阅时取不到路由（非组件上下文）→ 照旧全量分发', () => {
-    // 直接在测试体里调 composable：没有组件实例 ⇒ route 取不到 ⇒ 不设闸门。
-    // 退化方向只有一个：宁可不拦，也不能让所有 handler 静默失效。
-    const spy = vi.fn();
-    const scanner = useBarcodeScanner();
-    const unsubscribe = scanner.onScan(spy);
-
-    typeScan('EF-300');
-
-    expect(spy).toHaveBeenCalledWith('EF-300');
-    unsubscribe();
-  });
-
   it('退订后 handler 被彻底移除', () => {
     const a = subscribe();
     typeScan('GH-001');
@@ -168,5 +192,83 @@ describe('useBarcodeScanner 活跃路由闸门', () => {
     expect(a.spy).not.toHaveBeenCalled();
     expect(a.scanner.lastScan.value).toBe('IJ-001');
     expect(a.scanner.lastScanAt.value).toBeGreaterThan(0);
+  });
+});
+
+describe('useBarcodeScanner 取不到路由时 fail-open（宁可不拦，也不让 handler 静默失效）', () => {
+  it('非组件上下文订阅 → 照旧全量分发', () => {
+    // 直接在测试体里调 composable：没有组件实例 ⇒ inject 拿不到 ⇒ 不设闸门。
+    const spy = vi.fn();
+    const scanner = useBarcodeScanner();
+    const unsubscribe = scanner.onScan(spy);
+
+    typeScan('EF-300');
+
+    expect(spy).toHaveBeenCalledWith('EF-300');
+    unsubscribe();
+  });
+
+  it('组件上下文但没装 router → 仍收到扫码，且不打 Vue 的 inject 缺失警告', () => {
+    // 仓内既有组件 spec（CandidatePool / RepairReceive / DeliveryScanBar …）的挂载点
+    // 正是这种形态。闸门是增强项：这条路径必须照旧收到扫码。
+    const a = subscribe({ withRouter: false });
+    typeScan('EF-301');
+
+    expect(a.spy).toHaveBeenCalledWith('EF-301');
+    // 实现用 `inject(routeLocationKey, null)`（带默认值）而不是 useRoute()
+    // （= inject(key) 无默认值）—— 后者在没装 router 时每次 mount 都打这一句 dev warning。
+    const warned = (console.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(warned.flat().join(' ')).not.toContain('route location');
+  });
+
+  it('组件上下文、provider 存在但值是 undefined → 仍收到扫码（取不到 route 就不过滤）', () => {
+    const a = subscribe({ routeValue: undefined });
+    typeScan('EF-302');
+
+    expect(a.spy).toHaveBeenCalledWith('EF-302');
+    const warned = (console.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(warned.flat().join(' ')).not.toContain('route location');
+  });
+});
+
+describe('useBarcodeScanner 公开 API 语义不变', () => {
+  it('onMounted 里注册的订阅形态同样受闸门约束（真实调用点都是这个形态）', () => {
+    // DeliveryNoteScan / CandidatePool / RepairReceive / ScanBadgeGate 都在 onMounted 里
+    // onScan（等看板数据到位再订阅），而 useBarcodeScanner 本身在 setup 里调 ——
+    // Vue 的 injectHook 在调用钩子前会 setCurrentInstance，所以 onMounted 时刻
+    // getCurrentInstance() 仍为真、inject 仍拿得到路由，闸门不会退化成 fail-open。
+    const a = subscribe({ inMounted: true });
+    typeScan('KL-001');
+    expect(a.spy).toHaveBeenCalledWith('KL-001');
+
+    mockRoute.path = SCAN_IN;
+    typeScan('KL-002');
+    expect(a.spy).not.toHaveBeenCalledWith('KL-002');
+  });
+
+  it('setEnabled(false) → 整条链路静默（连缓冲区都不吃按键），恢复后照常分发', () => {
+    const a = subscribe();
+    a.scanner.setEnabled(false);
+    typeScan('MN-001');
+    expect(a.spy).not.toHaveBeenCalled();
+
+    a.scanner.setEnabled(true);
+    typeScan('MN-002');
+    expect(a.spy).toHaveBeenCalledTimes(1);
+    expect(a.spy).toHaveBeenCalledWith('MN-002');
+  });
+
+  it('clearBuffer() 清掉半截缓冲 → 同码可再次完整分发（不与上一次残留拼接）', () => {
+    const a = subscribe();
+    // 打了一半就停（没有 Enter）：什么都不该分发
+    typePartial('PQ-');
+    expect(a.spy).not.toHaveBeenCalled();
+
+    a.scanner.clearBuffer();
+    // 同一个码重新完整扫一遍
+    typeScan('PQ-001');
+    expect(a.spy).toHaveBeenCalledTimes(1);
+    // 拼接会得到 'PQ-PQ-001'，逐字对上即证明缓冲是真清空而不是追加
+    expect(a.spy).toHaveBeenCalledWith('PQ-001');
   });
 });

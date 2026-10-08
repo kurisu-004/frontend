@@ -22,15 +22,20 @@
 // - 做法：订阅时记下当时的 route.path（Map 的 value），分发时只投给 path 相同的
 //   订阅者。用 path 而非 fullPath —— query 变化不该让页面失去扫码能力。路径在
 //   订阅那一刻读一次并锁进 Map，分发时现读会让两个页面都读到当前路径、闸门失效。
-// - null 的含义：订阅时不在组件上下文（useRoute() 走 inject，拿不到）⇒ 不设闸门，
+// - null 的含义：订阅时取不到 route（非组件上下文 / 组件上下文但未装 router）⇒ 不设闸门，
 //   照旧全量分发。宁可不拦，也不能让所有 handler 静默失效。
-// - 已知边界：同一 path 同时存在两个订阅者时两个都会收到。路由层保证同一 path
-//   只有一个组件实例，故实践中不发生。
+// - 已知边界：**同一 path 的多个订阅者会同时收到**，闸门只按 path 判、不做「同一 path
+//   只留一个」。路由层并不保证同一 path 只有一个组件实例 —— `/outsource/send-receive`
+//   就是这种情形：OutsourceBoard 用 `el-tab-pane :lazy` + `v-for` 渲染每个工序一个 tab，
+//   EP 的 tab pane `loaded` 是粘性的（访问过就永不回落）⇒ 访问过 N 个工序 tab 后有 N 个
+//   CandidatePool 同时存活，且全部以 `/outsource/send-receive` 为锚。这类「同 path 多实例」
+//   由订阅方自己的闸门收口（CandidatePool 用的就是板级 provide 的 `activeOutsourceProcessId`），
+//   本层不重复判第二遍。
 // - 不改成逐页 onActivated / onDeactivated：那要改全部 8 个订阅页并维护两套生命周期
 //   记账；闸门在 composable 内部一处即可，调用点零改动、公开 API 形状不变。
 
-import { getCurrentInstance, onBeforeUnmount, ref, type Ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { getCurrentInstance, inject, onBeforeUnmount, ref, type Ref } from 'vue';
+import { routeLocationKey } from 'vue-router';
 
 export type ScanHandler = (code: string) => void;
 export type Unsubscribe = () => void;
@@ -46,9 +51,12 @@ const BUFFER_IDLE_MS = 500;
 // 2026-10-09：Set 改 Map。key 是 handler，value 是订阅那一刻的 route.path；
 // null = 订阅时取不到路由 ⇒ 不设闸门。
 const handlers = new Map<ScanHandler, string | null>();
-/** 2026-10-09：最近一次在组件上下文里 useRoute() 拿到的 route。vue-router 注入的
+/** 2026-10-09：最近一次在组件上下文里拿到的 route。vue-router 注入的
  *  是应用级同一个响应式对象，任意组件拿到的都是它 ⇒ dispatch 时读它的 .path 就是
- *  「当前路由」。保持 null 表示至今没有任何组件上下文订阅过（此时不过滤）。 */
+ *  「当前路由」。保持 null 表示至今没有任何组件上下文订阅过（此时不过滤）。
+ *
+ *  ⚠️ 组件上下文但**未装 router** 时同样不赋值：闸门是 fail-open 的增强项，宁可不设闸门，
+ *  也不能让所有 handler 静默失效。 */
 let currentRoute: { readonly path: string } | null = null;
 const enabled = ref(true);
 const lastScan = ref<string>('');
@@ -168,9 +176,13 @@ export interface UseBarcodeScannerReturn {
 export function useBarcodeScanner(): UseBarcodeScannerReturn {
   installListener();
 
-  // 2026-10-09：活跃路由闸门的锚。useRoute() 走 inject，只在组件上下文可用；
-  // 非组件上下文（单测直接调本 composable）⇒ null，退化成改动前的全量分发。
-  const route = getCurrentInstance() ? useRoute() : null;
+  // 2026-10-09：活跃路由闸门的锚。vue-router 以公开导出的 `routeLocationKey` 注入路由，
+  // 这里带默认值取：`useRoute()` 是 `inject(routeLocationKey)` **不带默认值**，router 未安装
+  // 时 Vue 会打 `injection "Symbol(route location)" not found.` dev warning（仓内既有组件
+  // spec 大多没装 router，每次 mount 都刷）。带默认值后 inject 走静默返回 null 的分支。
+  // 非组件上下文没有 provides 可读，inject 直接返回默认值，同样是 null ⇒ 不设闸门、退化成
+  // 改动前的全量分发。
+  const route = getCurrentInstance() ? inject(routeLocationKey, null) : null;
   if (route) currentRoute = route;
 
   function onScan(handler: ScanHandler): Unsubscribe {
