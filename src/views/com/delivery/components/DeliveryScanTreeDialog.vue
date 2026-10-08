@@ -18,8 +18,11 @@
   批次层的 `occupied_by_note_no` 非空 = 已被某张送货单占用（后端
   `LEFT JOIN t_delivery_note … dn.deleted_at IS NULL`）⇒ 标「已被 DN-xxx 占用」。
   ⚠️ 这只是**提示**：本表没有 `type="selection"` 列，占用不影响任何前端闸门 ——
-  入单单位是「零件 / 装配件」，批次由服务端 DP 分配，真撞上已占用的批次时后端返
-  21406 `BIZ_DELIVERY_NOTE_PART_ALREADY_ASSIGNED`。
+  入单单位是「零件 / 装配件」，批次由服务端 DP 分配，而 DP 候选集只取「可入单」批次
+  （SQL 已结构性排除被占用的）⇒ 占用批次永远选不中，不存在重复挂单。21406
+  `BIZ_DELIVERY_NOTE_PART_ALREADY_ASSIGNED` 只在**该零件凑不出本次要的量、且失败明细
+  里带占用批次**时才出现；同零件另有足量空闲批次时正常入单（判定域 = 本次分配实际
+  需要的量，2026-10-09）。
 
   ⚠️ 规模上限：扫码端点**无分页、不过滤状态**（含终态批次），这里 `default-expand-all`
   全展开且没有虚拟滚动。装配件 N 子件 × M 批次到上千行会卡；后端一旦在该端点加分页，
