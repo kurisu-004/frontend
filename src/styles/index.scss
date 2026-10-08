@@ -135,3 +135,12 @@ a {
      宽于视口的画布会因此多出一条用不上的横向滚动条。 */
   overflow: hidden auto;
 }
+
+/* 列拖动手柄 + 排序箭头都是表头 `.cell` 里的 inline 元素，而 EP 的 `.cell` 是
+   `white-space: normal` + `overflow-wrap: break-word` ⇒ 列宽不足时排序箭头会折行成
+   「标题 / ▲」两段。只命中接了列拖动的表（`col-draggable` 由 `useColumnDrag.dragLabelClass`
+   经 `label-class-name` 打到 `<th>` 上），不影响其它 el-table。列宽本身也已加宽，
+   这条是更窄窗口下的兜底。 */
+.el-table th.col-draggable > .cell {
+  white-space: nowrap;
+}
