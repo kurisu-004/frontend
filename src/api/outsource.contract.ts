@@ -134,7 +134,7 @@ export interface OutsourceQueueCandidateDto {
   parent_customer_name: string | null;
   /** `t_shelf.code`；批次未上架时 null。 */
   shelf_code: string | null;
-  /** `t_part_batch.current_holder_id`（批次所在货架 id）—— 发送 `from.shelf_id` 的数据源；
+  /** `t_part_batch.current_holder_id`（批次所在货架 id）—— 判「该行能否发送」的数据源；
    *  `PENDING` 且未上架的批次是**空串**（不是 null）。 */
   shelf_id: string;
   /** APPROVAL 单值；DIRECT 为 null（用 company_options）。 */
@@ -195,27 +195,28 @@ export interface OutsourceQueueHeldBatchDto {
 }
 
 /** `POST /api/v2/outsource-queue/move` 的 `from` / `to` tagged enum
- *  （rust OutsourceMoveLocation）。`kind` 的三个取值与后端 `t_part_batch.location` 枚举
+ *  （rust OutsourceMoveLocation）。`kind` 的取值与后端 `t_part_batch.location` 枚举
  *  **逐字对齐**，不要按前端习惯另起名：
- *    {"kind":"PRODUCTION_SHELF","shelf_id":"100","next_process_id":"200"}
+ *    {"kind":"PRODUCTION_SHELF","next_process_id":"200"}
  *    {"kind":"OUTSOURCE_COMPANY","company_id":"900"}
- *    {"kind":"INSPECTION_SHELF","shelf_id":"100"}
+ *
+ *  2026-10-10：`INSPECTION_SHELF`（回收品检）这个变体**整体消失**，「回收品检」功能
+ *  一并下线；`PRODUCTION_SHELF` 上的 `shelf_id` 也删除 —— 目标货架改由后端按负载
+ *  自动选择（见 CLAUDE.md「货架自动选择」）。
  *
  *  `next_process_id` 只在 `PRODUCTION_SHELF`（**回收生产**）分支上，且**可省略** ——
  *  省略时后端从工序链推导；链推不出（`receive_next_process_id === "0"` 且用户没选
  *  工序）返 20706。 */
 export type OutsourceMoveLocationDto =
-  | { kind: 'PRODUCTION_SHELF'; shelf_id: string; next_process_id?: string }
-  | { kind: 'OUTSOURCE_COMPANY'; company_id: string }
-  | { kind: 'INSPECTION_SHELF'; shelf_id: string };
+  | { kind: 'PRODUCTION_SHELF'; next_process_id?: string }
+  | { kind: 'OUTSOURCE_COMPANY'; company_id: string };
 
 /** `POST /api/v2/outsource-queue/move` 请求（rust OutsourceMoveRequest）。收发合一的
- *  单端点，三个方向：
+ *  单端点，两个方向（2026-10-10「回收品检」方向下线）：
  *  | from            | to                | 说明                          |
  *  |-----------------|-------------------|-------------------------------|
  *  | PRODUCTION_SHELF| OUTSOURCE_COMPANY | 发送（免审批直发 / 走已批报价）|
  *  | OUTSOURCE_COMPANY | PRODUCTION_SHELF| 回收生产                     |
- *  | OUTSOURCE_COMPANY | INSPECTION_SHELF | 回收品检                     |
  *
  *  不变量（前端必须遵守，否则 409 / 422）：
  *   - `version` **必填**（OCC 乐观锁锚，`t_part_batch.version`）：后端 serde 无
@@ -251,10 +252,10 @@ export interface OutsourceMoveResultDto {
   batch_id: string;
   part_id: string;
   /** 入参 `from.kind` 的字面回显。 */
-  from_kind: 'PRODUCTION_SHELF' | 'OUTSOURCE_COMPANY' | 'INSPECTION_SHELF';
+  from_kind: 'PRODUCTION_SHELF' | 'OUTSOURCE_COMPANY';
   /** 入参 `to.kind` 的字面回显。 */
-  to_kind: 'PRODUCTION_SHELF' | 'OUTSOURCE_COMPANY' | 'INSPECTION_SHELF';
-  /** 移动后 `batch.current_holder_id`（货架 id / 外协公司 id）。 */
+  to_kind: 'PRODUCTION_SHELF' | 'OUTSOURCE_COMPANY';
+  /** 移动后 `batch.current_holder_id`（外协公司 id；回收方向是后端自动选出的货架 id）。 */
   new_holder_id: string;
   /** 移动后 `batch.location` —— `t_part_batch.location` 的**完整枚举**，比 `to_kind`
    *  的三个取值宽（PENDING / WORKER 等也在这里），故声明为 `string` 而不是收窄的
@@ -264,6 +265,6 @@ export interface OutsourceMoveResultDto {
   version: number;
   /** 仅发送方向填：新建的 `t_outsource_shipment.id`；回收方向**整个键缺失**。 */
   shipment_id?: string | null;
-  /** 回收生产时后端实际推进到的工序 id；发送 / 回收品检方向**整个键缺失**。 */
+  /** 回收生产时后端实际推进到的工序 id；发送方向**整个键缺失**。 */
   new_process_id?: string | null;
 }

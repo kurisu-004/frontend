@@ -276,19 +276,43 @@ export interface QueueRefillRequest {
   shelf_id: string;
 }
 
-/** `POST /api/v2/prod/queue/move` 的 `from` / `to` tagged enum
- *  （rust MoveLocation，`#[serde(tag = "kind", rename_all = "UPPERCASE")]`）：
+/** `POST /api/v2/prod/queue/move` 的 **`from`** 侧 tagged enum（rust `MoveFromLocation`，
+ *  `#[serde(tag = "kind", rename_all = "UPPERCASE")]`）：
  *    {"kind":"POOL",   "shelf_id":"100"}
- *    {"kind":"WORKER", "worker_id":"50"} */
-export type MoveLocationDto =
-  | { kind: 'POOL'; shelf_id: string }
-  | { kind: 'WORKER'; worker_id: string };
+ *    {"kind":"WORKER", "worker_id":"50"}
+ *
+ *  `POOL` 分支的 `shelf_id` **必填**：它是动作的**起点**锚，后端拿它与
+ *  `t_part_batch.current_holder_id` 比对，不一致返 20122。 */
+export type MoveFromLocationDto =
+  { kind: 'POOL'; shelf_id: string } | { kind: 'WORKER'; worker_id: string };
+
+/** `POST /api/v2/prod/queue/move` 的 **`to`** 侧 tagged enum（rust `MoveToLocation`）：
+ *    {"kind":"POOL"}
+ *    {"kind":"WORKER", "worker_id":"50"}
+ *
+ *  2026-10-10：`POOL` 分支上的 `shelf_id` **已删除** —— 撤回候选池的目标货架改由后端
+ *  按批次 `current_process_id` 在候选架里按负载自动选，前端不再提供该字段。
+ *
+ *  **为什么必须与 `MoveFromLocationDto` 拆成两个类型**（而不是共用一个把 `shelf_id`
+ *  声明成可选）：同一个 `POOL` 变体在两侧的必填性不同 —— `from` 侧的 `shelf_id` 是
+ *  比对基准、缺了必得 422；`to` 侧压根没有这个键。共用一个可选形态会让
+ *  `from: {kind:'POOL'}` 顺利通过类型检查、只在运行期炸（错误文案还是裸 422 纯文本，
+ *  `ApiError` 拿不到 code）。拆开后「忘了传 from.shelf_id」是编译期错误。
+ *
+ *  ⚠️ **部署顺序：后端必须先上。** 上面这个 `to` 形态依赖后端把 `to` 侧的 `shelf_id`
+ *  删掉、并把 from / to 拆成两个类型（`MoveFromLocation` / `MoveToLocation`）。后端旧
+ *  版本的 `Pool { shelf_id: i64 }` 没有 `#[serde(default)]` ⇒ 本仓发过去的
+ *  `to: {kind:'POOL'}` 会被 axum 的 `Json` extractor 在进 handler 前直接拒掉 ⇒
+ *  **HTTP 422 纯文本**（不是业务信封，`ApiError` 拿不到 code，操作员只看到一句
+ *  「Request failed with status code 422」）。⇒ **后端那个改动合入之前先发前端，
+ *  「撤回候选池」对所有角色都不可用**，且没有任何业务错误码可依。排障先看部署顺序。 */
+export type MoveToLocationDto = { kind: 'POOL' } | { kind: 'WORKER'; worker_id: string };
 
 /** `POST /api/v2/prod/queue/move` 请求（rust MoveRequest）。三个移动方向：
  *  | from    | to      | 说明                                        |
  *  |---------|---------|--------------------------------------------|
  *  | POOL    | WORKER  | 候选池 → 工人（派活）                       |
- *  | WORKER  | POOL    | 工人 → 候选池（撤回，落在目标货架）         |
+ *  | WORKER  | POOL    | 工人 → 候选池（撤回；目标架后端按负载自动选） |
  *  | WORKER  | WORKER  | 工人之间转交                               |
  *  | POOL    | POOL    | 非法 → 40001                               |
  *
@@ -298,7 +322,10 @@ export type MoveLocationDto =
  *  - `version` 必填（OCC 乐观锁，缺省 40001）—— 取卡片 model 的
  *    `t_part_batch.version`。⚠️ 后端 serde 无 `#[serde(default)]` ⇒ 缺字段返 HTTP 422
  *    **纯文本**，不是业务信封；
- *  - `to.kind = 'POOL'`：目标货架必须映射到批次当前工序，否则 **20507**（HTTP 422）；
+ *  - `to.kind = 'POOL'`：**不带** `shelf_id`（目标架由后端按 `current_process_id`
+ *    下的候选架中负载最低者自动选，见 CLAUDE.md「货架自动选择」）。⚠️ 该形态与
+ *    `from` 侧不同步：`from` 侧的 `shelf_id` 仍必填（是比对基准），故 from / to
+ *    分用 `MoveFromLocationDto` / `MoveToLocationDto`；
  *  - `to.kind = 'WORKER'`：工人须在岗、工种含批次当前工序、持有数 < max_held，
  *    否则 20202 / 20104 / 20204。
  *  move 不推进工序链（不写 `current_process_step_id`），目标工序由后端从批次当前
@@ -308,8 +335,8 @@ export interface MoveRequest {
   /** OCC 锚：源批次 `t_part_batch.version`。移动会改 `current_holder_id` /
    *  `location`，属并发敏感写 ⇒ 与召回（RecallRequest）同款必填。 */
   version: number;
-  from: MoveLocationDto;
-  to: MoveLocationDto;
+  from: MoveFromLocationDto;
+  to: MoveToLocationDto;
   note?: string;
 }
 
@@ -363,8 +390,8 @@ export interface MoveResultDto {
   current_held?: number | null;
   /** 仅 to_kind=WORKER 时填：目标工种的 max_held_batches。 */
   max_held?: number | null;
-  /** 货架雪花 ID：POOL→WORKER 填 `from.shelf_id`、WORKER→POOL 填 `to.shelf_id`、
-   *  WORKER→WORKER 不填（字段整体省略）。 */
+  /** 涉及的候选池货架雪花 ID：POOL→WORKER 填 `from.shelf_id`（批次离开的架）、
+   *  WORKER→POOL 填**后端自动选出**的落回货架、WORKER→WORKER 不填（字段整体省略）。 */
   shelf_id?: string | null;
   /** 仅 POOL→WORKER 时填：从候选池取出的批次详情。 */
   taken?: TakenItemDto | null;

@@ -459,7 +459,7 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
     // 尚未上架的提示：容器外的 el-tooltip（包裹卡片会破坏 DnD 不变式）
     const tip = wrapper.find('.pool-toolbar .el-tooltip-stub');
     expect(tip.exists()).toBe(true);
-    expect(tip.attributes('data-content')).toBe('该批次尚未上架，请先下发到生产货架');
+    expect(tip.attributes('data-content')).toBe('该批次尚未上架，暂时不能发送到外协');
     expect(tip.element.closest('.pool-cards')).toBeNull();
     wrapper.unmount();
   });

@@ -1,14 +1,13 @@
 // views/parts/detail/composables/usePartCncGroups.ts
 //
 // 2026-08-25 frontend-overall-refactor：PartDetail 拆分的 usePartCncGroups。
-// 负责 CNC G 代码 + 设定单的拉取 / 下载 / 删除 / 配对上传 / 下发到 CNC 货架。
+// 负责 CNC G 代码 + 设定单的拉取 / 下载 / 删除 / 配对上传。
 //
-// composable 不持有 dialog 状态——配对上传 / 下发对话框的可见性 / 表单
+// composable 不持有 dialog 状态——配对上传对话框的可见性 / 表单
 // 状态由 PartCncCard 局部维护；提交时调用本 composable 暴露的纯函数。
 //
-// 2026-09-16 PR-3：releaseFromProgramming 后端新增前置校验 —— part.process_chain_id
-// 非空，否则 20706 BIZ_PROCESS_CHAIN_REQUIRED。onReleaseToShelf 接 handleProcessChainRequired：
-// 命中 → 弹「前往制定」确认框 → 跳 /production/process-design?part_id=XXX。
+// 2026-10-10：`onReleaseToShelf`（下发到 CNC 货架）与它依赖的
+// handleProcessChainRequired 一并删除 —— 该功能已由扫码台的工人放回 / 送检接管。
 //
 // 2026-09-29 修复：cncPrograms / setupSheets 改为从 usePartFilesListQuery 派生
 //（owner 全量按 kind 桶），砍 1 个冗余 RTT（原本 listPartCncPrograms +
@@ -18,14 +17,11 @@
 
 import { computed, type ComputedRef, type Ref } from 'vue';
 import { ElMessage, type UploadFile } from 'element-plus';
-import { useRouter } from 'vue-router';
 import { useQueryClient } from '@tanstack/vue-query';
 import { uploadCncPair } from '@/api/cnc';
 import { deletePartFile, getPartFileDownloadUrl } from '@/api/parts/file';
-import { releaseFromProgramming } from '@/api/parts';
 import type { PartFileItem } from '@/types/part_file';
 import { usePermissions } from '@/composables/usePermissions';
-import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
 import {
   usePartFilesListQuery,
   invalidatePartFilesListQuery,
@@ -50,12 +46,6 @@ export interface UsePartCncGroupsReturn {
   onDownloadCnc: (p: PartFileItem) => Promise<void>;
   onDeleteCnc: (id: string, version: number) => Promise<void>;
   onPairUpload: (rawGcodes: File[], setupFile: File) => Promise<boolean>;
-  /** 2026-10-02：端点迁 prod 域后以批次为锚，故第一形参是 batchId（可空 = 未选中批次）。 */
-  onReleaseToShelf: (
-    batchId: string | null,
-    shelfId: string,
-    processId: string,
-  ) => Promise<boolean>;
   fileList: (
     current: UploadFile[],
     file: UploadFile,
@@ -65,9 +55,6 @@ export interface UsePartCncGroupsReturn {
 }
 
 export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
-  // 2026-09-17 PR-3 修复：useRouter() 必须在 setup 顶部一次性拿闭包复用，禁止在 async 事件回调里调
-  // —— vue-router 4.6.4 + vue 3.5.38 下 inject() 在 lifecycle hook 之外返回 undefined。
-  const router = useRouter();
   const qc = useQueryClient();
 
   // 2026-09-29 修复：单 useQuery 拉 owner 全量（reactive params 沿
@@ -206,40 +193,6 @@ export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
     }
   }
 
-  /**
-   * 下发到 CNC 货架（PROGRAMMING → IN_PROCESS）。
-   * 由 PartCncCard 在 release dialog 内调用：
-   *   if (await onReleaseToShelf(shelfId, processId)) releaseVisible = false
-   *
-   * 2026-09-16 PR-3：releaseFromProgramming 后端新增 20706 校验；命中时
-   * 弹「前往制定」确认框并跳工艺制定页，不走普通 ElMessage.error 兜底。
-   *
-   * 2026-10-02：release-from-programming 迁 prod 域并以批次为锚
-   * （`POST /prod/batches/{batch_id}/release-from-programming`），batchId 由
-   * PartDetail 用三卡联动已选中的批次传入；未选中时直接失败，不用 part_id 顶替。
-   */
-  async function onReleaseToShelf(
-    batchId: string | null,
-    shelfId: string,
-    processId: string,
-  ): Promise<boolean> {
-    if (!batchId) {
-      ElMessage.error('请先在批次列表中选中要下发的批次');
-      return false;
-    }
-    try {
-      await releaseFromProgramming(batchId, shelfId, processId);
-      ElMessage.success('已下发到生产货架');
-      return true;
-    } catch (e) {
-      const handled = await handleProcessChainRequired(e, partId.value, router);
-      if (!handled) {
-        ElMessage.error((e as Error).message ?? '下发失败');
-      }
-      return false;
-    }
-  }
-
   return {
     cncPrograms,
     setupSheets,
@@ -252,7 +205,6 @@ export function usePartCncGroups(partId: Ref<string>): UsePartCncGroupsReturn {
     onDownloadCnc,
     onDeleteCnc,
     onPairUpload,
-    onReleaseToShelf,
     fileList,
   };
 }

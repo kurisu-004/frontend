@@ -88,7 +88,7 @@ const EXEMPT: Record<string, string[]> = {
   'views/parts/new/components/PartBatchManualTab.vue': ['el-button', 'el-tag'],
   'views/production/components/ProcessTab.vue': ['el-tag'],
   'views/repair/RepairReceive.vue': ['el-tag'],
-  'views/shelves/ShelfList.vue': ['el-tag', 'el-form'],
+  'views/iam/shelves/ShelfList.vue': ['el-tag', 'el-form'],
   'views/statistics/PickupSkipTab.vue': ['el-tag'],
   'views/statistics/WorkerDetailTab.vue': ['el-tag'],
   'views/statistics/WorkerStatsTab.vue': ['el-progress', 'el-tag'],

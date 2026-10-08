@@ -297,6 +297,13 @@ export interface PartPickUpPayload {
   note?: string | null;
 }
 
+/**
+ * ⚠️ **v1(Python) 遗留入参**，打的是 `POST /parts/scan`（不是 v2 的 worker-scan）。
+ * v2 端点已删掉全部货架字段（见 CLAUDE.md「货架自动选择」），v1 仍在维护、契约未变，
+ * 故这里**仍带** `shelf_id` / `target_inspection_shelf_id` —— 它们不属「不再指定货架」
+ * 的口径范围。本 wrapper 在生产代码里零调用方；留着是为了将来真要接 v1 时不必重写，
+ * 全仓巡检「还有没有 shelf_id」时**这一处是已知例外，不要当残留清掉**。
+ */
 export interface PartScanPayload {
   serial_no: string;
   event_type: PartEventType;
@@ -373,25 +380,28 @@ export async function createPart(payload: PartCreatePayload): Promise<PartItem> 
 // 统一迁到 prod 域 `POST /api/v2/prod/batches/{batch_id}/<action>`，故第一形参一律是
 // batchId，payload 里的 batch_id 一并删除（它已是路径参数）。part 域只留
 // 「多批次动作 + part 级动作」（cancel / force-complete / soft-delete / batches 读）。
+//
+// 2026-10-10：这几个端点的 `shelf_id` **后端一并删除** —— 目标货架改由后端按负载
+// 自动选择（见 CLAUDE.md「货架自动选择」）。`placeOnShelf` / `releaseFromProgramming`
+// 因此在生产代码里已无调用方（零件一览与零件详情的「下发」入口整体下线），但端点本身
+// 仍在后端存在，wrapper 保留 —— 留着零成本，将来有入口要接时不必重写 URL 与 body。
 
 export interface PlaceOnShelfPayload {
-  shelf_id: string;
   /** 下一道工序 id（必填） */
   next_process_id: string;
-  /** 批次 OCC：t_part_batch.version，取列表项的 `batch_version`；后端必填，缺失 422。
+  /** 批次 OCC：t_part_batch.version。后端 `PlaceOnShelfRequest.version: i32` 无
+   *  `#[serde(default)]` ⇒ 缺字段时 axum `Json` extractor 在进 handler 前直接拒 →
+   *  HTTP 422 纯文本（不是业务信封）。
    *
-   *  已知缺口（2026-10-03 登记，未修）：后端 `PlaceOnShelfRequest.version: i32`
-   *  **无 `#[serde(default)]`**，缺字段时 axum `Json` extractor 在进 handler 前直接拒
-   *  → HTTP 422。调用方是「零件一览」下发的 `usePartDispatch`（单件 + 批量两条
-   *  path），属本轮范围外的 `views/parts/list/**`，那里已用显式报错挡住（该文件
-   *  文件头登记了同源缺口：连 batch_id 都取不到），故这里先声明成可选让编译通过。
+   *  2026-10-10：零件一览 / 零件详情 / cnc 三处「下发」入口下线后本 wrapper 零生产
+   *  调用方，`version` 仍声明成可选 —— 新接线时**必须**改成必填，否则漏传只会在运行期
+   *  拿到一条工人看不懂的裸 422。
    *
-   *  ⚠️ **解阻塞需要后端改，前端接线解不开**：数据源 `GET /parts` 的行单位是 part，
-   *  后端**刻意不填**批次锚点（一个 part 的活跃批次可能不止一个，填任一都是错锚点）
-   *  ⇒ 必须后端为该端点（或另开「按 part 取活跃批次锚点」的只读端点）提供锚点，
-   *  且 `batch_id` 与 `batch_version` 需**同时**补 —— 只补 batch_id 仍是 422。
-   *  后端提供前保持可选；提供后**必须**改成必填并同步接线 `usePartDispatch`。
-   *  URL 由 `src/api/parts/__tests__/routes.spec.ts` 的 R1 钉住，body 透传由 R2c 钉住。 */
+   *  ⚠️ 接线前先确认批次锚点拿得到：数据源 `GET /parts` 的行单位是 part，后端**刻意
+   *  不填**批次锚点（一个 part 的活跃批次可能不止一个，填任一都是错锚点）⇒ 需要
+   *  `batch_id` 与 `batch_version` **同时**可得（`GET /parts/{id}/batches` 的每个
+   *  批次项都带 version），只补 batch_id 仍是 422。
+   *  URL 由 `src/api/parts/__tests__/routes.spec.ts` 的 R1 钉住。 */
   version?: number;
   note?: string | null;
 }
@@ -442,49 +452,25 @@ export async function forceCompletePart(
 /** 释放编程完成 batch 到生产架：PROGRAMMING → IN_PROCESS。
  *  PROGRAMMING 状态自 2026-09-29 起被标记为废弃（无新进入路径），但本端点保留
  *  供历史 PROGRAMMING 数据消化。
- *  调用方：
- *    1. usePendingProgrammingStore 的 release mutation（「待编程一览」页操作列
- *       「下发」按钮，仅历史 PROGRAMMING 数据可见）；
- *    2. usePartCncGroups.onReleaseToShelf（零件详情页 CNC 卡片，针对历史数据）。
  *
  *  2026-10-02 迁 prod 域：PROGRAMMING 是批次状态，锚点改 `{batch_id}`。
- *  2026-10-03：后端该端点复用 `PlaceOnShelfRequest`，其 `version` 同样必填（无
- *  `#[serde(default)]`，缺字段 422）⇒ 本函数补第 4 形参 `version` 并透传。
- *  后端同日给 `ProgrammingItemOut` 补上 `batch_id` / `batch_version`（取该 part 的
- *  PROGRAMMING 活跃批次，无则 null），调用方 1 据此完成接线。
+ *  2026-10-10：「待编程一览」页与零件详情页的「下发」入口下线（下发改由扫码台的
+ *  工人放回 / 送检接管），本 wrapper **零生产调用方**；端点仍在后端存在故保留。
  *
- *  已知缺口（2026-10-03 更新，**只剩调用方 2**：调用方 2 仍未传 `version`，
- *  该路径上的请求仍 422。`version` 声明为可选正是为它留位，调用方 2 接上后
- *  本形参**必须**改成必填）：
- *    - `usePartCncGroups.onReleaseToShelf`（零件详情页 CNC 卡片，
- *      `views/parts/detail/**`，2026-10-03 未动）。它**不是**被后端锚点卡住：
- *      - `GET /api/v2/parts/{id}`（`PartDetailOut`）确实**不**含 batch_id /
- *        batch_version，它唯一的批次字段 `current_batch_id` 语义是「当前
- *        **INSPECTION** 批次 id」（service `find_current_inspection_batch_id`，
- *        非品检态恒 null），对 PROGRAMMING 批次无效；
- *      - 但 `GET /api/v2/parts/{id}/batches`（`PartBatchListItemOut`）的**每个
- *        批次项都带 `version`**（t_part_batch.version），而该流程本来就是让用户在
- *        批次卡里**手选**批次再下发（`onReleaseToShelf` 的 batchId 形参由
- *        PartDetail.vue 传入），`usePartDetail` 已持有 batches 列表。两处同款先例
- *        都在同一个文件里：`onReceiveFromOutsourceFn`（按调用方给的 batchId 去
- *        batches 里取 version，形态与本处最贴近）、`onPassInspection`（按批次状态在
- *        batches 里找目标再取其 id + version，并有 40901 code 分流 → warning + 重取
- *        batches）。
- *      ⇒ 剩下的是**纯前端改动**（`onReleaseToShelf` 形参加 version + PartDetail 调用点
- *        从 batches 里按 selectedBatchId 取 version），落在 `views/parts/detail/**`，
- *        不在本轮范围。接线时顺带按上述先例处理批次被并发改动的情形（40901 提示刷新
- *        + 重取 batches）。 */
+ *  后端该端点复用 `PlaceOnShelfRequest`，其 `version` 必填（无
+ *  `#[serde(default)]`，缺字段返 422 纯文本）⇒ 本函数的 `version` 仍声明成可选，
+ *  新接线时**必须**改成必填，并从 `GET /parts/{id}/batches` 的批次项取
+ *  `t_part_batch.version`（`GET /parts/{id}` 本身不返批次锚点）。
+ *  URL 由 `src/api/parts/__tests__/routes.spec.ts` 的 R1 钉住。 */
 
 export async function releaseFromProgramming(
   batchId: string,
-  shelfId: string,
   nextProcessId: string,
   version?: number,
 ): Promise<PartItem> {
   const resp = await api.post<PartItem>(
     `/prod/batches/${encodeURIComponent(batchId)}/release-from-programming`,
     {
-      shelf_id: shelfId,
       next_process_id: nextProcessId,
       version,
     },
@@ -532,57 +518,48 @@ export async function scanPart(payload: PartScanPayload): Promise<PartItem> {
  * 单一端点替代 v1 的 `POST /parts/scan?event_type=...`（v1 Python 仍在维护，旧 v1
  * `scanPart` 路径保留为兼容兜底；新前端流程推荐 worker-scan）。
  *
+ * 2026-10-10：**不再有任何货架字段**（`shelf_id` 与 `target_inspection_shelf_id`
+ * 后端一并删除）。目标货架改由后端按负载自动选择 —— 按目标工序 / 品检找出所有
+ * 符合条件的架，再按 `current_load / capacity` 升序取一个（`capacity` 为 null 或
+ * <= 0 即不限、不参与百分比比较；允许超载，不因负载拒收）。
+ *
  * 入参：
  *  - serial_no: 序列号
  *  - badge_code: 工牌码
  *  - event_type: 'RETURNED' | 'INSPECTED'
- *  - shelf_id: **工人当前所在的补料生产架**（PRODUCTION 区），雪花 ID 字符串；
- *    两个 event_type 都用它 —— 后端 service 开头**无条件**做
- *    `get_by_id_zone(shelf_id, "PRODUCTION")`，与 event_type 无关（误填品检架得
- *    20501）。放回时它是「放回的目标架」，送检时它是「补料架」。
- *  - next_process_id?: 仅 RETURNED 必填；工人手动输入下一道工序
- *  - target_inspection_shelf_id?: 仅 INSPECTED 必填；**送检目标品检架**
- *    （INSPECTION 区，后端另有一道 `zone != INSPECTION` → 20511 守卫）
+ *  - next_process_id?: 仅 RETURNED 必填；下一道工序
  *  - batch_id?: 可选；多批次歧义时显式指定
  *
- * 失败抛 ApiError（契约依据 `docs/api/parts/inspection.md` 的 worker-scan 段）：
+ * 失败抛 ApiError：
  *  - 20103 INVALID_TRANSITION：状态机迁移非法
  *  - 20202 WORKER_INACTIVE：工牌未识别 / 已停用
- *  - 20501 BIZ_SHELF_NOT_FOUND：shelf_id 不存在 / 非 PRODUCTION 区
- *  - 20511 BIZ_SHELF_NOT_INSPECTION_ZONE：target_inspection_shelf_id 非 INSPECTION 区
- *  - 20507 BIZ_SHELF_PROCESS_NOT_MAPPED：RETURNED 时 shelf_id 未映射 next_process_id
- *  - 40001 VALIDATION_ERROR：next_process_id / target_inspection_shelf_id 缺或非法
- *  - 40301 SHELF_MISMATCH：shelf_id / target_inspection_shelf_id 不在本账号绑定集内
+ *  - 40001 VALIDATION_ERROR：RETURNED 时 next_process_id 缺或非法
  *  - 20401 / 20403 等
- *  - ⚠️ **shelf_id 缺省不走 40001**：`shelf_id` 是无 `#[serde(default)]` 的必填
- *    `i64`，缺字段由 axum `Json` extractor 在 service 之前直接拒 ⇒ **裸 HTTP 422、
- *    响应体不是项目统一 `R` 信封**（docs 明写「非项目统一信封」）⇒ 本仓 `ApiError`
- *    拿不到 code，拦截器的错误文案兜不到业务语义。省略它等于给工人一条看不懂的
- *    裸 422，故消费侧（`resolveWorkingShelfId`）在发请求前就拦住。
  */
 export interface WorkerScanPayload {
   serial_no: string;
   badge_code: string;
   event_type: 'RETURNED' | 'INSPECTED';
-  /** 雪花 ID 字符串（CLAUDE.md §3）；工人当前所在的补料生产架（PRODUCTION 区），
-   *  **两个 event_type 同义** —— 不要当成送检目标品检架（那是下面的字段）。 */
-  shelf_id: string;
   /** 仅 RETURNED 必填 */
   next_process_id?: string | null;
-  /** 仅 INSPECTED 必填；送检目标品检架（INSPECTION 区） */
-  target_inspection_shelf_id?: string | null;
   /** 可选；多批次歧义时显式指定 */
   batch_id?: string | null;
 }
 
 export interface WorkerScanOut {
-  /** worker_scan_event service 层最小投影 */
+  /** worker_scan_event service 层最小投影（逐字对齐后端
+   *  `prod::batch::vo::WorkerScanCoreOut`；`work_type_id` / `badge_code` 是内部管道
+   *  字段，带 `#[serde(skip)]` 不出现在响应里）。 */
   scan: {
     worker_id: string;
     part_id: string;
     batch_id: string;
-    /** 实际取值是 WS 广播名（`WORKER_SCAN_RETURNED` / `WORKER_SCAN_INSPECTED`），
-     *  不是入参那两个 `RETURNED` / `INSPECTED` —— 前端当前不消费，宽松标注。 */
+    /** **实际取值是 WS 广播名**：`WORKER_SCAN_RETURNED` / `WORKER_SCAN_INSPECTED`，
+     *  不是入参那两个 `RETURNED` / `INSPECTED`。
+     *
+     *  2026-10-10 起前端真的消费它：客户端发 `RETURNED`、但当该批次当前工序是工序链
+     *  最后一道时后端自动改投品检、回来的是 `WORKER_SCAN_INSPECTED` ⇒ 放回页的成功
+     *  文案按这一位分支（「已放回 → 下一道」vs「已完工，已送检」）。 */
     event_type: string;
     /** 父装配件 id（仅当 INSPECTED 分支触发父 status 变更时 Some） */
     synced_assembly_id: string | null;
@@ -631,18 +608,16 @@ export async function updatePart(id: string, payload: PartUpdatePayload): Promis
 /** 扫码快捷品检（PENDING/PROGRAMMING/IN_PROCESS+PRODUCTION_SHELF → INSPECTION）。
  * 事件类型 INSPECTED（pass=true）/ INSPECTION_FAILED（pass=false）。
  *
- * payload 与后端 v2 `ScanInspectRequest` 对齐：`pass` / `target_inspection_shelf_id` /
- * `version` 三者必填（后端无 `#[serde(default)]`，缺任一 → HTTP 422），`shelf_id` /
- * `next_process_id` 仅 pass=false 分支必填。 */
+ * payload 与后端 v2 `ScanInspectRequest` 对齐：`pass` / `version` 两者必填（后端无
+ * `#[serde(default)]`，缺任一 → HTTP 422），`next_process_id` 仅 pass=false 分支必填。
+ *
+ * 2026-10-10：`target_inspection_shelf_id` 与 `shelf_id` 后端**一并删除** —— 送检目标
+ * 品检架 / 打回目标生产架都改由后端按负载自动选（见 CLAUDE.md「货架自动选择」）。 */
 export interface ScanInspectPayload {
-  /** 必填；目标品检架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
-  target_inspection_shelf_id: string;
   /** 必填；true = 走 INSPECTED（品检通过）/ false = 走 INSPECTION_FAILED（打回）。 */
   pass: boolean;
   /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
   version: number;
-  /** 仅 pass=false 必填；打回的目标生产货架 id。 */
-  shelf_id?: string;
   /** 仅 pass=false 必填；下一道工序 id。 */
   next_process_id?: string;
   /** 可选；品检备注（≤ 500 字符）。 */
@@ -651,7 +626,11 @@ export interface ScanInspectPayload {
   quantity?: number | null;
 }
 
-/** ⚠️ 2026-10-05 起本封装在生产侧**零调用方**：待品检页的「快捷品检」已改成
+/**
+ * ⚠️ 2026-10-10：`target_inspection_shelf_id` 与 `shelf_id` 后端**一并删除**（目标架改
+ * 由后端按负载自动选），两个字段已从上面的 payload 移除。
+ *
+ * ⚠️ 2026-10-05 起本封装在生产侧**零调用方**：待品检页的「快捷品检」已改成
  *  `GET /prod/inspection/scan/{serial_no}` 取树 + `to-inspection`（送检）/
  *  `to-ship`（品检通过）/ `to-process`（指定工序）三个显式端点，快捷品检那套
  *  pass/pass=false 分流不再有调用点。后端 `scan-inspect` 端点仍在，签名照上注释
@@ -664,43 +643,15 @@ export async function scanInspect(batchId: string, payload: ScanInspectPayload):
   return resp.data;
 }
 
-/** 外协回收直送品检（OUTSOURCE → INSPECTION，外协接收 tab 的「品检」分支）。
- *
- * 2026-10-02 改名：原名 `toInspection` 打的是
- * `POST /parts/{id}/receive-from-outsource-to-inspection`，与「送检」端点
- * `POST /prod/batches/{batch_id}/to-inspection`（本文件下方 `toInspection`）是两个
- * 不同端点，同名极易误用，故按端点语义改名。schema 仍为 `shelf_id`（不是
- * `target_inspection_shelf_id`）。 */
-export interface ReceiveFromOutsourceToInspectionPayload {
-  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
-  shelf_id: string;
-  /** 必填；t_part_batch.version（OCC 锚）。 */
-  version: number;
-  /** 可选；回收后自动通过品检。 */
-  auto_pass_inspection?: boolean;
-  note?: string | null;
-}
-
-export async function receiveFromOutsourceToInspection(
-  batchId: string,
-  payload: ReceiveFromOutsourceToInspectionPayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(
-    `/prod/batches/${encodeURIComponent(batchId)}/receive-from-outsource-to-inspection`,
-    payload,
-  );
-  return resp.data;
-}
-
 /** 单件送检（多状态 → INSPECTION）。后端 `ToInspectionRequest`：
- *  `target_inspection_shelf_id` / `version` 必填，`quantity` / `note` 选填。
+ *  `version` 必填，`quantity` / `note` 选填。
+ *
+ *  2026-10-10：`target_inspection_shelf_id` 后端删除 —— 目标品检架由后端按负载自动选
+ *  （见 CLAUDE.md「货架自动选择」）。
  *  响应里的 `new_batch_id` 是拆批信号，语义与 toShip 完全一致（拆批时源批次原地减量、
  *  留下的 remainder 就是入参 batchId，被流转的那部分落在一个 id 不返回的新批次上，
- *  详见上方 `ToShipPayload` 的拆批说明）。
- *  ⚠️ 与上面的 `receiveFromOutsourceToInspection`（外协回收直送品检）不是同一端点。 */
+ *  详见上方 `ToShipPayload` 的拆批说明）。 */
 export interface ToInspectionPayload {
-  /** 必填；目标品检货架 id（雪花 ID 字符串，zone=INSPECTION active）。 */
-  target_inspection_shelf_id: string;
   /** 必填；t_part_batch.version（OCC 锚）。 */
   version: number;
   quantity?: number | null;
@@ -749,12 +700,12 @@ export async function toShip(
 }
 
 /** 品检打回 / 指定下一道工序（INSPECTION → IN_PROCESS）。事件类型 INSPECTION_FAILED。
- *  后端 `ToProcessRequest`：`shelf_id` / `next_process_id` / `version` 三者必填
- *  （缺任一 → HTTP 422），`quantity` / `note` 选填。
- *  返修中批次（`is_repairing = true`）后端返 20118 返修守卫，走通用 catch 弹原文。 */
+ *  后端 `ToProcessRequest`：`next_process_id` / `version` 两者必填（缺任一 → HTTP 422），
+ *  `quantity` / `note` 选填。
+ *  返修中批次（`is_repairing = true`）后端返 20118 返修守卫，走通用 catch 弹原文。
+ *
+ *  2026-10-10：`shelf_id` 后端删除 —— 打回的目标生产架由后端按负载自动选。 */
 export interface ToProcessPayload {
-  /** 必填；打回的目标生产货架 id。 */
-  shelf_id: string;
   /** 必填；下一道工序 id。 */
   next_process_id: string;
   /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
@@ -931,7 +882,6 @@ export async function listRepairingBatches(
  *  传任何数量都不会生效。返修部分数量只能先 `splitBatch`（`@/api/batch`）拆出子批次、
  *  再对子批次调本端点。 */
 export interface RepairDispatchPayload {
-  shelf_id: string;
   /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
   version: number;
   /** 下一道工序（可选；缺省沿用 REPAIRING 携带的下一工序，PRODUCTION 区会校验映射） */
@@ -1018,100 +968,14 @@ export async function listPartsHeldByWorker(
 }
 
 // ============================================================
-// 外协流程（2026-07-15 新增；属单件 lifecycle，归 ./crud）
+// 外协流程
+//
+// 2026-10-10：`send-to-outsource` / `receive-from-outsource` /
+// `receive-from-outsource-to-inspection` 三个端点随外协三合一硬切下线，三合一为
+// `POST /api/v2/outsource-queue/move`（无 alias）。本文件原有的三个 wrapper 与它们的
+// payload 类型一并删除 —— 它们打的都是 404 路径，零生产调用方。
+//
+// 现行契约：`src/api/outsource.contract.ts::OutsourceMoveRequestDto`，
+// 调用侧 `views/outsource/composables/useOutsourceQueueMove.ts`，契约守卫
+// `views/outsource/composables/__tests__/useOutsourceQueueMove.spec.ts`。
 // ============================================================
-/** `POST /prod/batches/{batch_id}/send-to-outsource` 入参。
- *
- *  2026-10-03 登记的字段名要点：
- *  - body 键是 `process_id`（后端 DTO 原名如此，且**必填无默认值**；发成别的键名
- *    得到的是 422 纯文本，不是业务信封，别按业务错误码排查）。
- *  - 列表行字段是 `current_process_id` / `current_process_name`
- *    （`src/types/outsource.ts`，批次当前所属的外协工序）。
- *  两者刻意不同名：body 键跟后端 DTO，行字段描述批次本身的位置。
- *
- *  模式由 `quote_id` / `direct` 二选一表达，**两者都不传后端返 400**：
- *  - APPROVAL（需审批报价）：传 `quote_id`（来自 `OutsourceSendableItem.quote_id`）；
- *  - DIRECT（免审批直发）：传 `direct: true` + `quote_id: null`，后端自动建一条
- *    `price=0` 的 APPROVED 占位报价。DIRECT 行的 `outsource_company_id` 取自
- *    `company_options`，该工序未映射任何活跃公司时后端仍返回该行但数组为空
- *    ⇒ 前端必须先过 `canSend` 再入队/提交，否则空串会让后端 `i64` 反序列化失败。
- */
-export interface SendToOutsourcePayload {
-  /** 外协公司 id（雪花 ID 字符串） */
-  outsource_company_id: string;
-  /** 外协工序 id（雪花 ID 字符串；JS Number 会丢精度） */
-  process_id: string;
-  /**
-   * 乐观锁版本号；与目标批次 TPartBatch.version 必须一致，否则返 BIZ_VERSION_CONFLICT 409。
-   * 前端从 OutsourceSendableItem.version（批次级 version）取值后传入。
-   */
-  version: number;
-  /** APPROVAL 模式必传（来自 OutsourceSendableItem.quote_id）；DIRECT 传 null */
-  quote_id?: string | null;
-  /** DIRECT 模式传 true；APPROVAL 传 null */
-  direct?: boolean | null;
-  /**
-   * 部分发送数量；≤ 批次量，null 或 == batch_quantity = 整批。
-   * 部分发送后源批次留余量、仍可再次发送。
-   */
-  quantity?: number | null;
-  note?: string | null;
-}
-
-/**
- * PENDING / IN_PROCESS → OUTSOURCE：把零件发送给外协公司。
- * 后端会校验公司存在 + 启用 + 工序 OUTSOURCE + 公司映射了该工序。
- *
- * 2026-10-02 迁 prod 域：发送对象是批次，第一形参由 partId 改 batchId
- * （原 payload 的 `batch_id` 随之删除 —— 它已是路径参数，「缺省按活跃批次猜唯一者」
- * 的旧语义不再存在）。
- */
-export async function sendToOutsource(
-  batchId: string,
-  payload: SendToOutsourcePayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(
-    `/prod/batches/${encodeURIComponent(batchId)}/send-to-outsource`,
-    payload,
-  );
-  return resp.data;
-}
-
-// 2026-10-03：`listOutsourceSendable` 迁至 `src/api/outsource.ts`（URL 同步从
-// `/parts/outsource-sendable` 迁到 outsource 域顶层 `/outsource-sendable`）。
-
-export interface ReceiveFromOutsourcePayload {
-  shelf_id: string;
-  /** 下一道工序 id（雪花 ID 字符串；JS Number 会丢精度）。
-   *  ⚠️ 这个键后端**没有**随 send-to-outsource 一起改名，仍是 `next_process_id`
-   *  （与 `SendToOutsourcePayload.process_id` 刻意不同名）。 */
-  next_process_id: string;
-  /** 必填；t_part_batch.version（OCC 锚），不匹配 → 40901。 */
-  version: number;
-  /**
-   * 部分接收数量；null 或 == 当前剩余待收量 = 整批。
-   * 2026-10-03 修正：后端此前静默忽略该字段（前端填了数量却整批回收），
-   * 现已真正实现。拆批后新子批次回生产架，源批次保留余量且**仍在外协厂**
-   * （开口 shipment 仍是 OUTSOURCING）—— 所以部分接收后「待接收」列表里仍会
-   *  出现那批余量，这是正确行为，前端不要做「部分接收后该行消失」的假设。
-   */
-  quantity?: number | null;
-  note?: string | null;
-}
-
-/**
- * OUTSOURCE → IN_PROCESS：从外协回收，下发到生产货架继续加工。
- *
- * 2026-10-02 迁 prod 域：批次锚定（第一形参 batchId），`batch_id` 从 body 删除。
- * 后端 `receive_from_outsource` 复用 `PlaceOnShelfRequest`，故 `version` 必填。
- */
-export async function receiveFromOutsource(
-  batchId: string,
-  payload: ReceiveFromOutsourcePayload,
-): Promise<PartItem> {
-  const resp = await api.post<PartItem>(
-    `/prod/batches/${encodeURIComponent(batchId)}/receive-from-outsource`,
-    payload,
-  );
-  return resp.data;
-}

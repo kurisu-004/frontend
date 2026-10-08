@@ -16,14 +16,16 @@
 //     company_options。
 //   - M3：APPROVAL 行传了报价锁定之外的公司 → 早退、不发请求。
 //   - M4：DIRECT 行 company_options 为空 → 早退、不发请求。
-//   - M5：shelf_id 为空串（PENDING 未上架）→ 早退、不发请求（必被 from 守卫拒收）。
+//   - M5：目标公司为空串 → 早退、不发请求（必被 20104 拒收）。2026-10-10 改：原先这条
+//     守的是「shelf_id 为空串（PENDING 未上架）」，而「未上架」现在只是后端 from
+//     守卫会拒的**事实**，不再是前端能判的请求组装约束。
 //   - M6：version 为 NaN（卡片没填）→ 早退、不发请求。
-//   - M7：回收到生产成功 → from.company_id / to.shelf_id + next_process_id 取 DTO 上的
+//   - M7：回收到生产成功 → from.company_id / next_process_id 取 DTO 上的
 //     `receive_next_process_id`，quote_id / direct 均为 null。
 //   - M8：`receive_next_process_id === '0'` 且用户没选工序 → 早退、不发请求（后端 20706）。
 //   - M9：`receive_next_process_id === '0'` 但用户选了工序 → 放行，next_process_id 用
 //     用户选的值。
-//   - M10：回收到品检成功 → to.kind = INSPECTION_SHELF，不带任何工序字段。
+//   - M10：（2026-10-10 随「回收品检」方向下线删除 —— INSPECTION_SHELF 变体后端已删除）
 //   - M11：mutationKey 是 ['outsource-queue', 'move']。
 //   - M12：失效的域集合 = 快照前缀 + 单工序看板前缀（顺序：先快照后看板）。
 //   - M13：失败（onError）也失效同两个域 —— 409 OCC 说明本端副本已过期，只能重拉对账。
@@ -32,7 +34,7 @@
 //   - M16：`shipment_id` / `new_process_id` 键整个缺失（skip_serializing_if）仍放行
 //     （schema 必须 .nullish()，用 .nullable() 会在真实响应上抛错）。
 //   - M17：早退路径裸 await 失效，invalidateQueries 抛错被吞、不冒未捕获 rejection。
-//   - M18：成功 toast 文案按 to_kind 三向分。
+//   - M18：成功 toast 文案按 to_kind 两向分。
 //   - M19（2026-10-09 契约抢救）：旧表格页 `useOutsourceSendableList.buildSendPayload`
 //     的三条硬要求随该文件一起删除后，逐条迁到本 spec 钉在新契约上。形态都变了，但
 //     「踩中就整页 400/422」的性质没变，故必须留下可执行断言而不是靠记忆：
@@ -57,10 +59,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from 'vue';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
-import type {
-  OutsourceMoveRequestDto,
-  OutsourceMoveResultDto,
-} from '@/api/outsource.contract';
+import type { OutsourceMoveRequestDto, OutsourceMoveResultDto } from '@/api/outsource.contract';
 import { ApiError } from '@/api/http';
 
 vi.mock('element-plus', () => ({
@@ -232,7 +231,7 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     expect(realMoveOutsourceBatch).toHaveBeenCalledWith({
       batch_id: '3000000000001',
       version: 3,
-      from: { kind: 'PRODUCTION_SHELF', shelf_id: '5000000000001' },
+      from: { kind: 'PRODUCTION_SHELF' },
       to: { kind: 'OUTSOURCE_COMPANY', company_id: '9000000000001' },
       quote_id: '7000000000001',
       direct: null,
@@ -278,18 +277,19 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     expect(realMoveOutsourceBatch).not.toHaveBeenCalled();
   });
 
-  it('M5：shelf_id 为空串（PENDING 未上架）→ 早退、零请求', async () => {
-    // 回归 guard：这类行没有 holder，`from.shelf_id` 必被后端 from 守卫拒收。
-    // UI 本该提前置灰，这里是数据层第二道防御。
+  it('M5：目标公司为空串 → 早退、零请求（后端 20104）', async () => {
+    // 2026-10-10：「PENDING 未上架」不再是发请求前的早退项（后端 from 守卫按
+    // location 判，这类行 location 是 null 必被拒）。剩下唯一必填的组装字段是
+    // 目标公司 —— 缺它后端必 20104，与其发一个注定被拒的请求不如早退。
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useOutsourceQueueMove());
     const ok = await q.sendToCompany({
-      candidate: { ...approvalCandidate, shelf_id: '', shelf_code: null },
-      companyId: '9000000000001',
+      candidate: approvalCandidate,
+      companyId: '',
     });
     expect(ok).toBe(false);
     expect(realMoveOutsourceBatch).not.toHaveBeenCalled();
-    expect(ElMessage.warning).toHaveBeenCalledWith('批次尚未上架，无法发送');
+    expect(ElMessage.warning).toHaveBeenCalledWith('请先选择外协公司');
     expectOutsourceDomainsInvalidated();
   });
 
@@ -314,7 +314,6 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     const ok = await q.receiveToProduction({
       companyId: '9000000000001',
       batch: heldBatch,
-      toShelfId: '5000000000002',
     });
     expect(ok).toBe(true);
     expect(realMoveOutsourceBatch).toHaveBeenCalledWith({
@@ -323,7 +322,6 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
       from: { kind: 'OUTSOURCE_COMPANY', company_id: '9000000000001' },
       to: {
         kind: 'PRODUCTION_SHELF',
-        shelf_id: '5000000000002',
         next_process_id: '2000000000002',
       },
       quote_id: null,
@@ -338,7 +336,6 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     const ok = await q.receiveToProduction({
       companyId: '9000000000001',
       batch: { ...heldBatch, receive_next_process_id: '0', chain_resolvable: false },
-      toShelfId: '5000000000002',
     });
     expect(ok).toBe(false);
     expect(realMoveOutsourceBatch).not.toHaveBeenCalled();
@@ -351,35 +348,14 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     const ok = await q.receiveToProduction({
       companyId: '9000000000001',
       batch: { ...heldBatch, receive_next_process_id: '0', chain_resolvable: false },
-      toShelfId: '5000000000002',
       nextProcessId: '2000000000009',
     });
     expect(ok).toBe(true);
     const sent = realMoveOutsourceBatch.mock.calls[0]?.[0] as OutsourceMoveRequestDto;
     expect(sent.to).toEqual({
       kind: 'PRODUCTION_SHELF',
-      shelf_id: '5000000000002',
       next_process_id: '2000000000009',
     });
-  });
-
-  it('M10：回收到品检成功 → to.kind = INSPECTION_SHELF，不带任何工序字段', async () => {
-    const q = testApp.runWithContext(() => useOutsourceQueueMove());
-    const ok = await q.receiveToInspection({
-      companyId: '9000000000001',
-      batch: heldBatch,
-      toShelfId: '6000000000001',
-    });
-    expect(ok).toBe(true);
-    expect(realMoveOutsourceBatch).toHaveBeenCalledWith({
-      batch_id: '3000000000002',
-      version: 5,
-      from: { kind: 'OUTSOURCE_COMPANY', company_id: '9000000000001' },
-      to: { kind: 'INSPECTION_SHELF', shelf_id: '6000000000001' },
-      quote_id: null,
-      direct: null,
-    });
-    expectOutsourceDomainsInvalidated();
   });
 
   it('M11：mutationKey 是 outsource-queue / move', async () => {
@@ -448,22 +424,21 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
   });
 
   it('M16：shipment_id / new_process_id 键整个缺失仍放行（.nullish() 而非 .nullable()）', async () => {
-    // rust 侧 skip_serializing_if ⇒ 回收品检方向两个键都从 JSON 消失（不是 null）。
+    // rust 侧 skip_serializing_if ⇒ 回收生产方向两个键都从 JSON 消失（不是 null）。
     // schema 写成 .nullable() 会在真实响应上抛错。
     realMoveOutsourceBatch.mockResolvedValueOnce({
       batch_id: '3000000000002',
       part_id: '4000000000002',
       from_kind: 'OUTSOURCE_COMPANY',
-      to_kind: 'INSPECTION_SHELF',
-      new_holder_id: '6000000000001',
-      new_location: 'INSPECTION_SHELF',
+      to_kind: 'PRODUCTION_SHELF',
+      new_holder_id: '5000000000002',
+      new_location: 'PRODUCTION_SHELF',
       version: 6,
     });
     const q = testApp.runWithContext(() => useOutsourceQueueMove());
-    const ok = await q.receiveToInspection({
+    const ok = await q.receiveToProduction({
       companyId: '9000000000001',
       batch: heldBatch,
-      toShelfId: '6000000000001',
     });
     expect(ok).toBe(true);
     expect(q.error.value).toBeNull();
@@ -477,35 +452,23 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
       new Error('invalidate boom'),
     );
     const q = testApp.runWithContext(() => useOutsourceQueueMove());
-    const ok = await q.receiveToInspection({
+    const ok = await q.receiveToProduction({
       companyId: '9000000000001',
-      batch: heldBatch,
-      toShelfId: '',
+      batch: { ...heldBatch, receive_next_process_id: '0', chain_resolvable: false },
     });
     expect(ok).toBe(false);
-    expect(ElMessage.warning).toHaveBeenCalledWith('请先选择目标品检货架');
+    expect(ElMessage.warning).toHaveBeenCalledWith('该批次没有下一道工序，请先选择接收工序');
   });
 
-  it('M18：成功 toast 文案按 to_kind 三向分', async () => {
+  it('M18：成功 toast 文案按 to_kind 两向分', async () => {
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useOutsourceQueueMove());
 
     await q.sendToCompany({ candidate: approvalCandidate, companyId: '9000000000001' });
     expect(ElMessage.success).toHaveBeenLastCalledWith('已发送到外协公司');
 
-    await q.receiveToProduction({
-      companyId: '9000000000001',
-      batch: heldBatch,
-      toShelfId: '5000000000002',
-    });
+    await q.receiveToProduction({ companyId: '9000000000001', batch: heldBatch });
     expect(ElMessage.success).toHaveBeenLastCalledWith('已从外协公司回收至生产');
-
-    await q.receiveToInspection({
-      companyId: '9000000000001',
-      batch: heldBatch,
-      toShelfId: '6000000000001',
-    });
-    expect(ElMessage.success).toHaveBeenLastCalledWith('已从外协公司回收至品检');
   });
 
   // 2026-10-09 契约抢救组：旧表格页 buildSendPayload 的三条硬要求迁到新契约上的可执行
@@ -518,16 +481,14 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     expect(Object.keys(sent)).not.toContain('current_process_id');
     expect(Object.keys(sent)).not.toContain('outsource_process_id');
     // `from` 只带批次真实所在货架，没有别的
-    expect(sent.from).toEqual({ kind: 'PRODUCTION_SHELF', shelf_id: '5000000000001' });
+    // 2026-10-10：`from` 只剩 kind —— 起点只校验批次 `location` 在不在生产架上，
+    // 不再比对货架 id。
+    expect(sent.from).toEqual({ kind: 'PRODUCTION_SHELF' });
   });
 
   it('M19b：回收方向 quote_id 与 direct 都是 null（两者都不传 / 同时传 → 20104）', async () => {
     const q = testApp.runWithContext(() => useOutsourceQueueMove());
-    await q.receiveToProduction({
-      companyId: '9000000000001',
-      batch: heldBatch,
-      toShelfId: '5000000000002',
-    });
+    await q.receiveToProduction({ companyId: '9000000000001', batch: heldBatch });
     const sent = realMoveOutsourceBatch.mock.calls[0]?.[0] as OutsourceMoveRequestDto;
     expect(sent.quote_id).toBeNull();
     expect(sent.direct).toBeNull();
@@ -538,12 +499,17 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     await q.sendToCompany({ candidate: approvalCandidate, companyId: '9000000000001' });
     const sent = realMoveOutsourceBatch.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
     expect(Object.keys(sent)).not.toContain('quantity');
-    await q.receiveToInspection({
-      companyId: '9000000000001',
-      batch: heldBatch,
-      toShelfId: '6000000000001',
-    });
+    await q.receiveToProduction({ companyId: '9000000000001', batch: heldBatch });
     const recv = realMoveOutsourceBatch.mock.calls[1]?.[0] as unknown as Record<string, unknown>;
     expect(Object.keys(recv)).not.toContain('quantity');
+  });
+
+  // ⛔ 直接钉住「不再指定货架」：回收生产的 to 只有 kind + next_process_id，没有
+  // shelf_id。谁把货架字段加回来，本用例即红。
+  it('M19d：回收生产的 to 只有 kind + next_process_id，无 shelf_id', async () => {
+    const q = testApp.runWithContext(() => useOutsourceQueueMove());
+    await q.receiveToProduction({ companyId: '9000000000001', batch: heldBatch });
+    const sent = realMoveOutsourceBatch.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    expect(Object.keys(sent.to as object).sort()).toEqual(['kind', 'next_process_id']);
   });
 });

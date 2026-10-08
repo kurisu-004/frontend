@@ -105,10 +105,31 @@
           <span class="field-hint">用于共享 HMI 卡片网格 picker 的物理顺序；0=未设置</span>
         </el-form-item>
         <!--
-          2026-10-04 后端收紧 `POST /api/v2/prod/shelf-processes/{id}`：`items` 非空时会对
-          非 PRODUCTION 区的货架返 20104（`items: []` 的清空路径已豁免）。读侧早就按
-          `zone='PRODUCTION'` 口径取候选（10 处 `useShelfProcessFilter`），写侧这里对齐 ——
-          品检架不该在这里配工序，界面上就不给入口。
+          2026-10-10 新增：容量（负载上限，件数）。目标货架改由后端按
+          `current_load / capacity` 升序自动选择，这个值就是那个分母。留空 = 不限
+          （`capacity: null`）—— 无上限架不参与百分比比较。
+          用 `undefined` 而非 `null` 表示「留空」，提交时显式转成 `null` 发出去：
+          `el-input-number` 清空得到的是 null，但区分不了「用户清空」与「初始就是空」
+          两种情况，直接把 null 塞进 payload 反而让 updateShelf 的「三态」失去意义
+          （不传 = 不改、传 null = 清空）。
+        -->
+        <el-form-item label="容量" prop="capacity">
+          <el-input-number
+            v-model="shelfForm.capacity"
+            :min="1"
+            :step="10"
+            :precision="0"
+            controls-position="right"
+            placeholder="留空 = 不限"
+          />
+          <span class="field-hint"
+            >负载上限（件数）；留空 = 不限。超载仍可继续投放，只影响选架排序</span
+          >
+        </el-form-item>
+        <!--
+          后端收紧 `POST /api/v2/prod/shelf-processes/{id}`：`items` 非空时会对
+          非 PRODUCTION 区的货架返 20104（`items: []` 的清空路径已豁免）⇒ 品检架不该在
+          这里配工序，界面上就不给入口。
           zone 的判据是 `effectiveZone` 而不是 `shelfForm.zone`，见该 computed 的注释。
         -->
         <el-form-item v-if="effectiveZone === 'PRODUCTION'" label="工序">
@@ -198,6 +219,48 @@ const columnDefs: ColumnDef[] = [
       ),
   },
   { key: 'location', label: '位置', prop: 'location', minWidth: 120, align: 'center' },
+  // 2026-10-10 新增三列（在架件数 / 容量 / 负载率）。目标货架已改为后端按
+  // `current_load / capacity` 升序自动选择，这三项是那个口径的输入与解释：
+  // 管理员在列表里就能看到「哪个架快满了、哪个架没设上限」。
+  //
+  // 三列都走 cellRender 而非 `formatter`：`formatter` 不在本模板的 v-for 绑定清单里
+  // （见上面的 el-table-column 逐属性绑定），放进 defs 只会静默不生效 —— 与同文件
+  // zone / display_order / is_active 三列一致。
+  {
+    key: 'current_load',
+    label: '在架',
+    prop: 'current_load',
+    minWidth: 90,
+    align: 'center',
+    sortable: true,
+    cellRender: ({ row }) => h('span', null, `${(row as Shelf).current_load ?? 0} 件`),
+  },
+  {
+    key: 'capacity',
+    label: '容量',
+    prop: 'capacity',
+    minWidth: 90,
+    align: 'center',
+    cellRender: ({ row }) => h('span', null, capacityText((row as Shelf).capacity)),
+  },
+  {
+    key: 'load_ratio',
+    label: '负载率',
+    minWidth: 100,
+    align: 'center',
+    cellRender: ({ row }) => {
+      const { capacity, current_load: load } = row as Shelf;
+      // 无容量 = 不限，没有百分比可言。**不显示 0%**（那会被读成「空架」，
+      // 而实际上是无上限架，可能是全场最满的）。
+      if (!hasCapacity(capacity)) return h('span', { class: 'muted' }, '—');
+      const ratio = load / (capacity as number);
+      return h(
+        ElTag,
+        { type: loadRatioTagType(ratio), size: 'small', effect: ratio >= 1 ? 'dark' : 'plain' },
+        () => `${(ratio * 100).toFixed(1)}%`,
+      );
+    },
+  },
   {
     key: 'display_order',
     label: '物理顺序',
@@ -231,6 +294,33 @@ const columnDefs: ColumnDef[] = [
       ),
   },
 ];
+/**
+ * 这个架有没有设容量上限。**判据与后端一致**：`null` 或 `<= 0` = 不限。
+ * 集中一处是因为列表「容量」列、负载率列、编辑弹窗回显三处都判它，三处各写一遍
+ * 迟早有一处漏掉 `<= 0`。
+ */
+function hasCapacity(capacity: number | null | undefined): capacity is number {
+  return typeof capacity === 'number' && capacity > 0;
+}
+
+/** 容量列文案：无上限显示「不限」（= 有意不限，是配置结论），不是 0。 */
+function capacityText(capacity: number | null | undefined): string {
+  return hasCapacity(capacity) ? String(capacity) : '不限';
+}
+
+/**
+ * 负载率的颜色档位。**超载（≥ 100%）必须醒目**：超载不是错误（后端不拒），但它是
+ * 「该给这个区扩货架 / 调 capacity」的信号，与「正常 80%」摆在同一个列表里若都
+ * 用同一种中性色就等于没有信息。
+ *
+ * 阈值刻意只分两档（≥1 危险 / 否则普通），不引入 80% 警告档：档位越多越容易出现
+ * 「某个架 79% 显示中性、80% 突然变黄」这种以阈值取整为转移点的跳变，而负载率本身
+ * 是个连续量、看不出趋势跳变的意义。
+ */
+function loadRatioTagType(ratio: number): 'danger' | 'info' {
+  return ratio >= 1 ? 'danger' : 'info';
+}
+
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'shelf_list' });
 const drag = useColumnDrag(columnDefs, { listKey: 'shelf_list' });
 
@@ -259,6 +349,8 @@ const shelfForm = reactive({
   zone: 'PRODUCTION' as string,
   location: '',
   display_order: 0,
+  /** 2026-10-10：负载上限（件数）。`undefined` = 留空 = 不限（见表单项注释）。 */
+  capacity: undefined as number | undefined,
 });
 const shelfRules = {
   code: [{ required: true, message: '必填' }],
@@ -282,7 +374,7 @@ const shelfRules = {
  * 仍是 INSPECTION ⇒ 20104（又半截保存）；生产架被切成品检 ⇒ 判说说「跳过」⇒ 静默留下陈旧
  * 映射，界面零提示。
  *
- * 所以编辑态一律以 `editingShelf.zone`（= `GET /shelves` 返回的 DB 值，表格行不过滤 zone）
+ * 所以编辑态一律以 `editingShelf.zone`（= `GET /iam/shelves` 返回的 DB 值，表格行不过滤 zone）
  * 为准。它只被 `editShelf`（赋表格行）与 `resetForm`（置 null）写，任何表单交互都不写它。
  * 新增态 `editingShelf` 为 null，`shelfForm.zone` 正是随 `createShelf` 写进 DB 的值，
  * 不可能分叉。
@@ -320,6 +412,9 @@ function resetForm() {
   shelfForm.zone = 'PRODUCTION';
   shelfForm.location = '';
   shelfForm.display_order = 0;
+  // 2026-10-10：漏复位会让「编辑一个有容量的架 → 关闭 → 新增」时把上一个架的
+  // capacity 带进新架。
+  shelfForm.capacity = undefined;
   selectedProcessIds.value = [];
   editingShelf.value = null;
   // 2026-10-02 review I-1：必须随 resetForm 一起复位。否则「编辑某架加载失败 →
@@ -335,6 +430,9 @@ async function editShelf(s: Shelf) {
   shelfForm.zone = s.zone;
   shelfForm.location = s.location ?? '';
   shelfForm.display_order = s.display_order ?? 0;
+  // 2026-10-10：`null` / `<= 0` 都要落成「留空」（不限），否则编辑一个无上限架时
+  // 输入框里会出现一个 0 —— 用户看不懂 0 是什么意思，提交回去还会被后端当有效容量。
+  shelfForm.capacity = hasCapacity(s.capacity) ? s.capacity : undefined;
   showCreate.value = true;
   // 每次进编辑都重新判定本次映射是否可信（不复用上一次的成功态）。
   processLoadFailed.value = false;
@@ -372,11 +470,16 @@ async function saveShelf() {
   saving.value = true;
   try {
     let shelfId: string;
+    // 2026-10-10：留空一律发 `null`（= 不限）而不是省略字段。编辑路径上省略会命中
+    // `updateShelf` 的「不传 = 不改」，用户明明清空了容量却什么都没改 —— 而 capacity
+    // 是选架口径的分母，留一个陈旧上限比留空更糟。
+    const capacity = shelfForm.capacity ?? null;
     if (editingShelf.value) {
       await updateShelf(String(editingShelf.value.id), {
         name: shelfForm.name,
         location: shelfForm.location || undefined,
         display_order: shelfForm.display_order,
+        capacity,
       });
       shelfId = String(editingShelf.value.id);
     } else {
@@ -386,6 +489,7 @@ async function saveShelf() {
         zone: shelfForm.zone,
         location: shelfForm.location || undefined,
         display_order: shelfForm.display_order,
+        capacity,
       });
       shelfId = String(created.id);
     }
@@ -404,11 +508,11 @@ async function saveShelf() {
     //     `uk_t_shelf_code`（`WHERE deleted_at IS NULL`）⇒ 20502 DUPLICATE_CODE 彻底卡死，
     //     而编辑弹窗里没有停用入口（停用按钮在表格行、且 `v-if="row.is_active"`）。
     // `{items: []}` 则清空动作真的发生，且后端对 `items` 为空已豁免、不报 20104。
-    const processIdsToSave =
-      effectiveZone.value === 'PRODUCTION' ? selectedProcessIds.value : [];
+    const processIdsToSave = effectiveZone.value === 'PRODUCTION' ? selectedProcessIds.value : [];
     await setShelfProcesses(shelfId, toShelfProcessesPayload(processIdsToSave));
     // 2026-10-02 review 第 1 轮 M-3：保存成功后失效共享映射缓存。本数据的写点全仓
-    // 只有这一个、读点有 10 处（useShelfProcessFilter），不适用 CLAUDE.md「跨页面写
+    // 只有这一个、读点只剩 1 处（零件详情的外协回收弹窗，2026-10-10 删掉其余 9 处），
+    // 不适用 CLAUDE.md「跨页面写
     // 操作不做穷举失效」策略（那条针对写点散落多域、补齐等于穷举的情形），补失效
     // 成本近乎零：把「改完映射重开对话框才可见」升级成「下一次读即见」。
     await invalidateShelfProcessMappingsQuery(qc);
@@ -464,5 +568,9 @@ onMounted(async () => {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 8px;
+}
+/* 负载率列「capacity 无效 → —」的占位色，与同列 ElTag 的普通档可读性对齐 */
+.muted {
+  color: #909399;
 }
 </style>

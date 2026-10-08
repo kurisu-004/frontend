@@ -46,7 +46,6 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 import type { ScanPartOut, ScanTreeOut } from '@/api/inspection';
-import type { Shelf } from '@/types/shelf';
 
 vi.mock('element-plus', () => ({
   ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() },
@@ -194,11 +193,6 @@ const TREE_ASSEMBLY_CHILD: ScanTreeOut = {
   assembly: ASSEMBLY,
   children: [PART_A, PART_B],
 };
-
-const SHELVES = [
-  { id: '9000000000501', code: 'SH-I01', name: '品检架 1', zone: 'INSPECTION', is_active: true },
-  { id: '9000000000502', code: 'SH-I02', name: '品检架 2', zone: 'INSPECTION', is_active: true },
-] as Shelf[];
 
 // ---------------------------------------------------------------- EP 桩
 // 行上下文：el-table 逐行 provide 当前行、el-table-column 从 inject 取（复刻 EP 的
@@ -418,7 +412,7 @@ async function mountDialog(tree: ScanTreeOut) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const wrapper = mount(ScanTreeDialog, {
-    props: { modelValue: true, inspectionShelves: SHELVES },
+    props: { modelValue: true },
     global: {
       ...globalConfig,
       plugins: [
@@ -726,43 +720,36 @@ describe('ScanTreeDialog', () => {
     wrapper.unmount();
   });
 
-  it('「送检」：行内面板选品检架 + 数量 → 调 toInspection（批次 id + 批次 version）', async () => {
+  // 2026-10-10：行内送检面板里**再也没有品检架下拉**（目标架由后端按负载自动选），
+  // 只剩数量输入。「确认送检」因此恒可点，不再有「先选架才可提交」这条闸门。
+  it('「送检」：行内面板只剩数量 → 确认即调 toInspection（批次 id + 批次 version，载荷无货架）', async () => {
     const { wrapper } = await mountDialog(TREE_ASSEMBLY);
     const pendingRow = rowBy(wrapper, 'BATCH_9000000000103');
     // 面板默认收起。
-    expect(pendingRow?.find('.mock-select').exists()).toBe(false);
+    expect(pendingRow?.find('.mock-input-number').exists()).toBe(false);
     await pendingRow?.find('button').trigger('click');
-    // 展开后：品检架候选来自 props（父组件从 store.options 传入），数量上限 = 批次数量。
-    expect(pendingRow?.findAll('.mock-select')).toHaveLength(1);
-    expect(pendingRow?.findAll('.mock-option').map((o) => o.attributes('data-value'))).toEqual([
-      '9000000000501',
-      '9000000000502',
-    ]);
+
+    // 面板里没有货架下拉，只有一个数量输入（上限 = 批次数量）。
+    expect(pendingRow?.findAll('.mock-select')).toHaveLength(0);
     const qty = pendingRow?.find('.mock-input-number');
     expect(qty?.attributes('data-model')).toBe('6');
     expect(qty?.attributes('data-max')).toBe('6');
 
-    // 没选品检架时「确认送检」禁用，也不发请求。
-    // ⚠️ 按文案定位按钮：行内 option 桩也是 <button>，按下标取会取错。
+    // ⚠️ 按文案定位按钮：按下标取会取错。
     const confirmBtn = () => pendingRow?.findAll('button').find((b) => b.text() === '确认送检');
-    expect(confirmBtn()?.attributes('disabled')).toBeDefined();
-    await confirmBtn()?.trigger('click');
-    expect(toInspectionMock).not.toHaveBeenCalled();
-
-    // 选品检架 2 → 可提交；payload 用批次 id + 批次 version（零件的 version 是 3）。
-    // 目标品检架名一并带进 vars（写成功后 store 要用它回写「当前位置」列）。
-    await pendingRow?.findAll('.mock-option')[1]?.trigger('click');
-    await flushPromises();
     expect(confirmBtn()?.attributes('disabled')).toBeUndefined();
     await confirmBtn()?.trigger('click');
     await flushPromises();
+
     expect(toInspectionMock).toHaveBeenCalledWith('9000000000103', {
-      target_inspection_shelf_id: '9000000000502',
       version: 1,
       quantity: 6,
     });
+    expect(Object.keys(toInspectionMock.mock.calls[0]![1] as object)).not.toContain(
+      'target_inspection_shelf_id',
+    );
     // 提交成功后面板收起。
-    expect(pendingRow?.find('.mock-select').exists()).toBe(false);
+    expect(pendingRow?.find('.mock-input-number').exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -771,10 +758,20 @@ describe('ScanTreeDialog', () => {
       part: { status: 'INSPECTION', version: 9 },
       new_batch_id: null,
     });
+    // 2026-10-10：目标架由后端自动选 ⇒ 写成功后 store 会**重拉扫码树**把真实
+    // holder 填回来（「当前位置」不再是前端知道的值）。桩的重拉结果 = 送检后的树。
+    const AFTER_SEND = structuredClone(TREE_ASSEMBLY) as ScanTreeOut;
+    const afterBatch = AFTER_SEND.children[1]!.children[0]!;
+    afterBatch.status = 'INSPECTION';
+    afterBatch.version = 2;
+    afterBatch.location = 'INSPECTION_SHELF';
+    afterBatch.current_holder_display = '品检架 2';
+    afterBatch.process_name = null;
+    scanInspectionMock.mockResolvedValue(AFTER_SEND);
+
     const { wrapper, store } = await mountDialog(TREE_ASSEMBLY);
     const pendingRow = rowBy(wrapper, 'BATCH_9000000000103');
     await pendingRow?.find('button').trigger('click');
-    await pendingRow?.findAll('.mock-option')[1]?.trigger('click');
     await pendingRow
       ?.findAll('button')
       .find((b) => b.text() === '确认送检')
@@ -806,9 +803,8 @@ describe('ScanTreeDialog', () => {
     const { wrapper, store } = await mountDialog(TREE_ASSEMBLY);
     const pendingRow = rowBy(wrapper, 'BATCH_9000000000103');
     await pendingRow?.find('button').trigger('click');
-    await pendingRow?.findAll('.mock-option')[0]?.trigger('click');
     await flushPromises();
-    expect(pendingRow?.find('.mock-select').exists()).toBe(true);
+    expect(pendingRow?.find('.mock-input-number').exists()).toBe(true);
 
     // el-dialog 的 closed 事件：清树 + 清面板态。
     wrapper.findComponent({ name: 'ElDialog' }).vm.$emit('closed');
@@ -818,7 +814,7 @@ describe('ScanTreeDialog', () => {
     // 同一个组件实例上模拟下一次扫码的结果：面板不该被上一次的展开态顶出来。
     store.mutations.scanTree = structuredClone(TREE_ASSEMBLY) as ScanTreeOut;
     await flushPromises();
-    expect(rowBy(wrapper, 'BATCH_9000000000103')?.find('.mock-select').exists()).toBe(false);
+    expect(rowBy(wrapper, 'BATCH_9000000000103')?.find('.mock-input-number').exists()).toBe(false);
     wrapper.unmount();
   });
 

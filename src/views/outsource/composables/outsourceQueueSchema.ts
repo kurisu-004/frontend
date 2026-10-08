@@ -58,7 +58,7 @@ import { outsourceCompanyOptionSchema } from './outsourceListSchema';
  *
  *  几处容易误判的字段：
  *  - `quantity` 是**可发送数量**（行 = 批次时恒等于批次量）；
- *  - `shelf_id` 是批次真实所在货架（发送 `from.shelf_id` 用），**非 nullable** ——
+ *  - `shelf_id` 是批次真实所在货架（判「能否发送」用），**非 nullable** ——
  *    `PENDING` 且未上架的批次没有 holder（`current_holder_id` 为 NULL），后端把它序列化成
  *    **空串**而不是 `null`；`shelf_code` 才是 nullable（它没有空串兜底，未上架为 null）；
  *  - `can_send` 是**后端派生**的可发送判据（APPROVAL，或 DIRECT 且 company_options
@@ -245,17 +245,18 @@ export type OutsourceQueueProcessDetailData = z.infer<typeof outsourceQueueProce
  *  带 `#[serde(skip_serializing_if = "Option::is_none")]`，方向不满足时**整个键从 JSON
  *  消失**（不是 `null`）。写成 `.nullable()` 会在真实响应上抛错。
  *
- *  `from_kind` / `to_kind` 锁成三个 `t_part_batch.location` 枚举字面量；`new_location`
- *  则声明成 `z.string()` —— 它是 location 枚举的**完整值域**（比这三个移动 kind 宽，
+ *  `from_kind` / `to_kind` 锁成两个 `t_part_batch.location` 枚举字面量（2026-10-10 起
+ *  `INSPECTION_SHELF` 随「回收品检」下线一并从请求 DTO 删除）；`new_location`
+ *  则声明成 `z.string()` —— 它是 location 枚举的**完整值域**（比这两个移动 kind 宽，
  *  还含 PENDING / WORKER 等），收窄成同款联合会让后端返任何非移动态时整条 move 炸在
  *  守门上（而这恰恰是「移动前」合法存在的状态）。 */
 export const outsourceMoveResultSchema = z.object({
   batch_id: z.string(),
   part_id: z.string(),
   /** 入参 `from.kind` 的字面回显。 */
-  from_kind: z.enum(['PRODUCTION_SHELF', 'OUTSOURCE_COMPANY', 'INSPECTION_SHELF']),
+  from_kind: z.enum(['PRODUCTION_SHELF', 'OUTSOURCE_COMPANY']),
   /** 入参 `to.kind` 的字面回显。 */
-  to_kind: z.enum(['PRODUCTION_SHELF', 'OUTSOURCE_COMPANY', 'INSPECTION_SHELF']),
+  to_kind: z.enum(['PRODUCTION_SHELF', 'OUTSOURCE_COMPANY']),
   /** 移动后 `batch.current_holder_id`（货架 id / 外协公司 id）。 */
   new_holder_id: z.string(),
   /** 移动后 `batch.location`（值域比上面两个 kind 宽，故不收窄）。 */

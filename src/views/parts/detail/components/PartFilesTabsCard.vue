@@ -24,7 +24,8 @@
   - 内层 FileListCard / PartCncCard 传 :hide-header-actions="true"，避免与外
     层 footer 重复按钮。
   - FileListCard 暴露 print / triggerUpload；PartCncCard 暴露
-    openPairUpload / openRelease —— 通过 ref 调，footer 统一收纳入口。
+    openPairUpload —— 通过 ref 调，footer 统一收纳入口（2026-10-10 起不再有
+    openRelease：「下发到 CNC 货架」功能下线）。
   - 内层 el-card 用 :deep() 去 border / shadow / background，看起来像普通
     body 区域而非嵌套卡片。
   2026-09-17 UI 调整：内层 card header 完全去掉，PartCncCard / FileListCard
@@ -108,13 +109,10 @@
       v-else
       ref="cncCardRef"
       :part-id="partId"
-      :part-status="partStatus"
       :cnc-setup-groups="cncSetupGroups"
       :cnc-loading="cncLoading"
       :can-manage-cnc-files="canManageCncFiles"
       :can-manage-setup-sheet="canManageSetupSheet"
-      :production-shelves="productionShelves"
-      :processes="processes"
       :format-bytes="formatBytes"
       :file-list="fileList"
       :on-download-cnc="onDownloadCnc"
@@ -123,7 +121,6 @@
       :bare-mode="true"
       @fetch="$emit('fetch')"
       @pairUpload="(payload) => $emit('pairUpload', payload)"
-      @release="(payload) => $emit('release', payload)"
     />
 
     <!-- 底部操作条：按 tab 区分按钮 + 选中态 -->
@@ -188,7 +185,7 @@
             </el-button>
           </template>
 
-          <!-- CNC_PAIR tab：配对上载 + 下发到 CNC 货架 -->
+          <!-- CNC_PAIR tab：配对上载（2026-10-10 起不再有「下发到 CNC 货架」） -->
           <template v-else>
             <el-button
               v-if="canManageCncFiles && canManageSetupSheet"
@@ -196,13 +193,6 @@
               @click="onOpenPairUpload"
             >
               <el-icon><Upload /></el-icon><span>配对上载 (G代码 + 设定单)</span>
-            </el-button>
-            <el-button
-              v-if="canManageCncFiles && partStatus === 'PROGRAMMING'"
-              type="success"
-              @click="onOpenRelease"
-            >
-              下发到 CNC 货架
             </el-button>
           </template>
 
@@ -232,16 +222,12 @@ import { usePermissions } from '@/composables/usePermissions';
 import { canPrintPartDrawing } from '@/utils/partsPermissions';
 import type { PartFileItem } from '@/types/part_file';
 import type { CncSetupGroup } from '../composables/usePartCncGroups';
-import type { Process } from '@/types/process';
-import type { Shelf } from '@/types/shelf';
-import type { OrderStatus } from '@/types/parts';
 import type { UploadFile } from 'element-plus';
 
 type TabKey = 'DRAWING' | '3D_MODEL' | 'CAD_2D' | 'CNC_PAIR';
 
 const props = defineProps<{
   partId: string;
-  partStatus: OrderStatus;
   // 2026-09-29 迁移：文件列表来自 PartDetail.vue 的 usePartFilesListQuery（替代
   // 原 usePartFiles 三并发），按 kind 在 setup 顶层 computed 桶。
   drawings: PartFileItem[];
@@ -259,8 +245,6 @@ const props = defineProps<{
   // CNC 相关（透传 PartCncCard）
   cncSetupGroups: CncSetupGroup[];
   cncLoading: boolean;
-  productionShelves: Shelf[];
-  processes: Process[];
   formatBytes: (v: string | number) => string;
   fileList: (
     current: UploadFile[],
@@ -275,9 +259,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   refresh: [kind: 'DRAWING' | '3D_MODEL' | 'CAD_2D'];
   fetch: [];
-  // 2026-09-17 新增：CNC 配对上传 / 下发透传（与 PartCncCard 内部 emit 同名）。
+  // 2026-09-17 新增：CNC 配对上传透传（与 PartCncCard 内部 emit 同名）。
+  // 2026-10-10：`release` 一并删除（「下发到 CNC 货架」功能下线）。
   pairUpload: [payload: { gcodes: File[]; setup: File; resolve: (ok: boolean) => void }];
-  release: [payload: { shelfId: string; processId: string; resolve: (ok: boolean) => void }];
 }>();
 
 const activeTab = ref<TabKey>('DRAWING');
@@ -384,10 +368,6 @@ function onOpenPairUpload(): void {
   cncCardRef.value?.openPairUpload?.();
 }
 
-function onOpenRelease(): void {
-  cncCardRef.value?.openRelease?.();
-}
-
 // 切换 partId 时清空选中 + 重置 tab
 watch(
   () => props.partId,
@@ -407,7 +387,7 @@ const footerHint = computed<string>(() => {
     case 'CAD_2D':
       return '支持 DWG / DXF 源文件';
     case 'CNC_PAIR':
-      return 'G 代码必须配设定单，下发到 PROGRAMMING 状态下的 CNC 货架';
+      return 'G 代码必须配设定单；配对完成后由工人放回 / 送检流转到目标货架';
     default:
       return '';
   }

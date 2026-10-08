@@ -35,7 +35,6 @@ import {
   type ScanTreeOut,
 } from '@/api/inspection';
 import { qk } from '@/composables/queries/keys';
-import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { useListFilterPersist } from '@/composables/useListFilterPersist';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
@@ -46,7 +45,6 @@ import {
   type InspectionSortKey,
 } from '@/types/inspection';
 import type { SortDir } from '@/types/parts';
-import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
 import { buildInspectionColumnDefs, type InspectionColumnActions } from '../inspectionColumnDefs';
 import {
@@ -65,32 +63,33 @@ export interface ToShipVars {
 }
 
 /** 2026-10-03：指定工序（`POST /prod/batches/{batch_id}/to-process`）的 mutation 入参。
- *  `processCode` / `shelfCode` 同样只进提示文案（它们由视图从 options 里查出来）；
- *  `processName` / `shelfName` 只进扫码树写后本地回写（「工序」「当前位置」两列）。 */
+ *  `processCode` 只进提示文案（由视图从 options 里查出来）；`processName` 只进扫码树
+ *  写后本地回写（「工序」列）。
+ *
+ *  2026-10-10：`shelf_id` 后端删除（目标架按负载自动选），`shelfId` / `shelfCode` /
+ *  `shelfName` 三项随之退场 —— 成功提示不再报架号，扫码树的「当前位置」列改由
+ *  写后重拉扫码树填（见 toProcessMutation.onSuccess）。 */
 export interface ToProcessVars {
   batchId: string;
-  shelfId: string;
   nextProcessId: string;
   version: number;
   note: string | null;
   quantity: number | null;
   label: string;
   processCode: string;
-  shelfCode: string;
   processName: string;
-  shelfName: string;
 }
 
 /** 2026-10-05：送检（`POST /prod/batches/{batch_id}/to-inspection`）的 mutation 入参。
- *  `targetInspectionShelfId` 是目标品检架；`label` 只进成功提示，
- *  `targetShelfName` 只用于扫码树写后本地回写的「当前位置」列。 */
+ *  `label` 只进成功提示。
+ *
+ *  2026-10-10：`target_inspection_shelf_id` 后端删除（目标品检架按负载自动选），
+ *  `targetInspectionShelfId` / `targetShelfName` 两项随之退场。 */
 export interface ToInspectionVars {
   batchId: string;
-  targetInspectionShelfId: string;
   version: number;
   quantity: number | null;
   label: string;
-  targetShelfName: string;
 }
 
 /** 流转后要写进扫码树批次节点的目标列。`undefined` = 保持原值（后端该列本就未变），
@@ -342,9 +341,8 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
 
   const toProcessMutation = useMutation({
     mutationKey: ['inspection', 'to-process'],
-    mutationFn: ({ batchId, shelfId, nextProcessId, version, note, quantity }: ToProcessVars) =>
+    mutationFn: ({ batchId, nextProcessId, version, note, quantity }: ToProcessVars) =>
       toProcess(batchId, {
-        shelf_id: shelfId,
         next_process_id: nextProcessId,
         version,
         note,
@@ -352,22 +350,23 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
       }),
     onSuccess: async (data, vars) => {
       await invalidateInspectionQuery();
-      // 指定工序 = 打回生产：location 落目标生产架、holder 换成该架、工序换成下一道。
+      // 指定工序 = 打回生产：location 落生产架、工序换成下一道。**holder 不知道** ——
+      // 目标架由后端按负载自动选，前端无从得知是哪一架 ⇒ 置空并强制重拉扫码树
+      // （树开着时 resyncScanTree 会把真实架名填回来；树没开时它零成本早退）。
       const applied = applyScanTreeTransition(
         vars.batchId,
         {
           status: 'IN_PROCESS',
           location: 'PRODUCTION_SHELF',
-          holderDisplay: vars.shelfName,
+          holderDisplay: null,
           processName: vars.processName,
         },
         data,
         vars.quantity,
       );
+      await resyncScanTree();
       if (scanTreeNeedsResync(data, applied)) await resyncScanTree();
-      ElMessage.success(
-        `零件 ${vars.label} 已指定下一道工序 ${vars.processCode}，放到生产货架 ${vars.shelfCode}`,
-      );
+      ElMessage.success(`零件 ${vars.label} 已指定下一道工序 ${vars.processCode}`);
     },
     onError: async (e: Error & { code?: number }) => {
       if (e?.code === 40901) {
@@ -380,26 +379,27 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
 
   const toInspectionMutation = useMutation({
     mutationKey: ['inspection', 'to-inspection'],
-    mutationFn: ({ batchId, targetInspectionShelfId, version, quantity }: ToInspectionVars) =>
+    mutationFn: ({ batchId, version, quantity }: ToInspectionVars) =>
       toInspection(batchId, {
-        target_inspection_shelf_id: targetInspectionShelfId,
         version,
         quantity,
       }),
     onSuccess: async (data, vars) => {
       await invalidateInspectionQuery();
-      // 送检 = 出池：location 落目标品检架、holder 换成该架、工序列被后端清空。
+      // 送检 = 出池：location 落品检架、工序列被后端清空。holder 同 to-process ——
+      // 目标品检架由后端按负载自动选，前端不知道，置空后强制重拉扫码树填真实值。
       const applied = applyScanTreeTransition(
         vars.batchId,
         {
           status: 'INSPECTION',
           location: 'INSPECTION_SHELF',
-          holderDisplay: vars.targetShelfName,
+          holderDisplay: null,
           processName: null,
         },
         data,
         vars.quantity,
       );
+      await resyncScanTree();
       if (scanTreeNeedsResync(data, applied)) await resyncScanTree();
       ElMessage.success(`零件 ${vars.label} 已送检${vars.quantity ? ` × ${vars.quantity}` : ''}`);
     },
@@ -534,41 +534,29 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   async function onOccConflict(): Promise<void> {
     const treeOpen = scanTree.value !== null;
     ElMessage.warning(
-      treeOpen ? '该批次已被他人修改，扫码树已刷新，请重新操作' : '该批次已被他人修改，请刷新后重试',
+      treeOpen
+        ? '该批次已被他人修改，扫码树已刷新，请重新操作'
+        : '该批次已被他人修改，请刷新后重试',
     );
     if (treeOpen) await resyncScanTree();
     await fetchList();
   }
 
   // ============ 切片：options（弹窗下拉的候选数据）============
-  // 2026-10-03：替代旧版视图里的 3 处裸调（listShelves ×2 + listProcesses）——
-  // 货架 / 工序是典型基础数据（跨页面共用），按 CLAUDE.md 两层架构归共享层 query。
-  // 两个 zone 各开一个 useProductionShelvesQuery：queryKey 带 params，天然分两份缓存。
-  const inspectionShelvesQuery = useProductionShelvesQuery({
-    zone: 'INSPECTION',
-    is_active: true,
-    limit: 200,
-  });
-  const productionShelvesQuery = useProductionShelvesQuery({
-    zone: 'PRODUCTION',
-    is_active: true,
-    limit: 200,
-  });
+  // 2026-10-03：替代旧版视图里的裸调 listProcesses，走共享层 query（跨页面共用）。
+  // 2026-10-10：两个 zone 的货架候选随「不再指定货架」一并删除 —— 品检架候选供扫码树
+  // 的行内送检面板选目标架、生产架候选供「指定工序」弹窗选目标架，两处消费方都已下线，
+  // 留着就是白开两个 200 条的货架请求。
   const processesQuery = useProcessesQuery({ limit: 200 });
-
-  const inspectionShelves = computed<Shelf[]>(() => inspectionShelvesQuery.data.value?.items ?? []);
-  const productionShelves = computed<Shelf[]>(() => productionShelvesQuery.data.value?.items ?? []);
   // processSchema 派生的 description / color 是 optional（后端 skip_serializing_if），
   // 而 `Process` 业务类型把这两个键声明成 required（值可为 undefined）⇒ 结构不匹配。
-  // 沿 usePartDispatch / ProcessTab.vue 同款 `as Process[]` 桥接，渲染层已有 nullish
+  // 沿 ProcessTab.vue 同款 `as Process[]` 桥接，渲染层已有 nullish
   // 兜底覆盖 null + undefined，零行为差异。
   const processes = computed<Process[]>(
     () => (processesQuery.data.value?.items ?? []) as Process[],
   );
 
   const options = {
-    inspectionShelves,
-    productionShelves,
     processes,
   };
 

@@ -6,11 +6,13 @@
 // api / store / DOM，所以矩阵可以整张铺开逐格断言。板级 spec 只守接线。
 //
 // 覆盖：
-//   - O1：公司列 = 回收生产 + 回收品检 + 拆分批次；**不给**召回与「发送到」；
+//   - O1：公司列 = 回收生产 + 拆分批次；**不给**召回与「发送到」。2026-10-10 起
+//     没有「回收品检」—— `kind='INSPECTION_SHELF'` 变体后端已删除（见
+//     api/outsource.contract.ts 的 OutsourceMoveLocationDto）。
 //   - O2：候选池 = 召回 + 拆分批次 + 发送到外协公司（二级菜单）；
-//   - O3：角色闸逐项生效（Inspector 拿得到回收两项、拿不到拆批 / 召回）；
+//   - O3：角色闸逐项生效（Inspector 拿得到回收、拿不到拆批 / 召回）；
 //   - O4：批次闸 —— 余量 ≤ 1 不给拆批；PENDING 未上架的行既不给召回、也不给「发送到」
-//     （后者的 from.shelf_id 守卫与拖拽置灰同源）；
+//     （后者的 from 守卫与拖拽置灰同源）；
 //   - O5：发送白名单 —— APPROVAL 只给报价锁定的一家；DIRECT 给 company_options 里的；
 //     白名单与当前 tab 的公司列求交（没被映射成列的公司不进列表）；
 //   - O6：`can_send=false`（后端派生的可发送判据）整个不给「发送到」；
@@ -127,7 +129,6 @@ function input(overrides: Partial<OutsourceBatchMenuInput> = {}): OutsourceBatch
     onRecall: vi.fn(),
     onSplit: vi.fn(),
     onReceiveProduction: vi.fn(),
-    onReceiveInspection: vi.fn(),
     ...overrides,
   };
 }
@@ -152,9 +153,9 @@ describe('sendableCompanyIds（可发送公司白名单）', () => {
 });
 
 describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () => {
-  it('O1：公司列 = 回收生产 + 回收品检 + 拆分批次（不给召回、不给发送）', () => {
+  it('O1：公司列 = 回收生产 + 拆分批次（不给召回、不给发送；2026-10-10 起无「回收品检」）', () => {
     const items = buildOutsourceBatchMenuItems(input());
-    expect(labels(items)).toEqual(['回收生产', '回收品检', '拆分批次']);
+    expect(labels(items)).toEqual(['回收生产', '拆分批次']);
   });
 
   it('O2：候选池 = 召回 + 拆分批次 + 发送到外协公司', () => {
@@ -162,9 +163,9 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
     expect(labels(items)).toEqual(['召回到待下发', '拆分批次', '发送到外协公司']);
   });
 
-  it('O3a：Inspector 拿得到回收两项、拿不到拆批', () => {
+  it('O3a：Inspector 拿得到回收、拿不到拆批（逐项过滤，不是「一次性闸」）', () => {
     const items = buildOutsourceBatchMenuItems(input({ canSplit: false }));
-    expect(labels(items)).toEqual(['回收生产', '回收品检']);
+    expect(labels(items)).toEqual(['回收生产']);
   });
 
   it('O3b：不能收发（canMove 假）→ 公司列只剩拆批', () => {
@@ -181,10 +182,7 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
 
   it('O4a：余量 ≤ 1 → 两个区都不给「拆分批次」', () => {
     const card = makeCard({ quantity: 1 });
-    expect(labels(buildOutsourceBatchMenuItems(input({ batch: card })))).toEqual([
-      '回收生产',
-      '回收品检',
-    ]);
+    expect(labels(buildOutsourceBatchMenuItems(input({ batch: card })))).toEqual(['回收生产']);
     expect(
       labels(buildOutsourceBatchMenuItems(input({ area: 'outsource-candidate', batch: card }))),
     ).toEqual(['召回到待下发', '发送到外协公司']);
@@ -197,8 +195,9 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
     expect(labels(items)).not.toContain('召回到待下发');
   });
 
-  it('O4c：PENDING 未上架（candidateIsPending）的候选行也不给「发送到」—— from.shelf_id 必被拒', () => {
-    // 未上架的行没有 holder，发送请求的 `from.shelf_id` 必被后端 `from` 守卫拒收。
+  it('O4c：PENDING 未上架（candidateIsPending）的候选行也不给「发送到」—— from 守卫必被拒', () => {
+    // 未上架的行 `location` 是 null，`from.kind=PRODUCTION_SHELF` 守卫要求它恒为
+    // 'PRODUCTION_SHELF'，必拒。
     // 拖拽路径正是据此把该行置灰 + 给 NOT_SHELVED_HINT（判据同源：isCandidateDraggable
     // 看的就是 `shelf_id` 为空串），菜单路径必须一起收窄，否则给一个点下去必失败的入口。
     // 注意这条与 `can_send` 无关：can_send=true 的未上架行走的是 company_options 白名单，
@@ -269,7 +268,6 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
     const onRecall = vi.fn();
     const onSplit = vi.fn();
     const onReceiveProduction = vi.fn();
-    const onReceiveInspection = vi.fn();
     const items = buildOutsourceBatchMenuItems(
       input({
         area: 'outsource-candidate',
@@ -286,13 +284,10 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
     expect(onRecall).toHaveBeenCalledWith();
     expect(onSplit).toHaveBeenCalledWith();
 
-    const heldItems = buildOutsourceBatchMenuItems(
-      input({ onReceiveProduction, onReceiveInspection }),
-    );
+    const heldItems = buildOutsourceBatchMenuItems(input({ onReceiveProduction }));
     heldItems[0]!.onClick!();
     heldItems[1]!.onClick!();
     expect(onReceiveProduction).toHaveBeenCalledWith();
-    expect(onReceiveInspection).toHaveBeenCalledWith();
   });
 
   it('O8：目标过多不自己截断（全部进二级菜单，靠菜单的 maxHeight 滚动）', () => {

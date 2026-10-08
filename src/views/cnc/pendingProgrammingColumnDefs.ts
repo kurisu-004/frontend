@@ -5,8 +5,8 @@
 // ColumnDef[]），避免页面 store 文件膨胀。
 //
 // 为什么单独成文件：列定义含 5 个 cellRender 闭包（序列号 / 名称 / CNC 程序 /
-// 客户 / 操作），而页面 store（usePendingProgrammingStore）已经同时持有
-// useQuery + useMutation + 列可见性 + 列拖动 + 下发对话框 5 块职责。
+// 客户 / 操作），而页面 store（usePendingProgrammingStore）还要同时持有 useQuery +
+// useMutation + 列可见性 + 列拖动。
 //
 // 行类型：2026-10-01 起是 prod 域 `GET /api/v2/prod/programming/pending` 的
 // ProgrammingItem（schema z.infer 派生），**不再**是 part 域 PartListItem。
@@ -15,7 +15,7 @@
 // 必须读 parent_customer_name，拿 PartListItem 的 cast 复用旧代码会渲染出「—」。
 
 import { h, type VNode } from 'vue';
-import { ElButton, ElTag, ElTooltip } from 'element-plus';
+import { ElButton, ElTag } from 'element-plus';
 import { RouterLink } from 'vue-router';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { PendingProgrammingItemData } from './composables/pendingProgrammingSchema';
@@ -47,47 +47,15 @@ export type PendingProgrammingRow = PendingProgrammingItemData;
 //  导出物；写成 `/** */` 会在 IDE 里成为悬空的孤立注释，挂在谁身上都是假宿主。）
 // ============================================================================
 
-/** 2026-10-03：**行无批次锚点 → 「下发」按钮 disabled 时的 tooltip 文案。
- *  行缺 `batch_id` 的真实含义是「该 part 没有 `status='PROGRAMMING'` 的活跃批次」
- *  （后端 ProgrammingItemOut::batch_id 的取值口径），而 release-from-programming
- *  硬要求源状态是 PROGRAMMING ⇒ 没有这个批次就下发不了。常量住本文件是因为
- *  store 也要用（见下面的 RELEASE_MISSING_BATCH_ANCHOR_HINT），放 store 里会与本模块
- *  构成循环 import。 */
-export const RELEASE_NO_BATCH_HINT = '该行没有处于「编程中」的批次，无法下发';
-
-/** 2026-10-03：**store 的 release mutation 缺批次锚点时的报错文案（ElMessage.error）。
- *  与上面那句 tooltip 分开是因为两者说的不是同一件事：tooltip 说的是「这个行没有
- *  PROGRAMMING 批次」（后端 batch_id = null，**符合契约**的常态），而这里是「点下
- *  提交时锚点仍不完整」（batch_id 或 batch_version 缺失）——后者在当前后端契约下
- *  不可达（两字段同生共死），属于防线层，不能拿前者的话术顶替，否则用户在按钮
- *  可点的行上看到「没有编程中批次」会被误导去查批次状态。 */
-export const RELEASE_MISSING_BATCH_ANCHOR_HINT =
-  '该行的批次锚点不完整（缺批次 id 或批次版本），无法下发';
-
-/** 该行能否下发：必须带批次 id。
- *  只看 `batch_id` 即可：后端保证 `batch_version` 与它**同生共死**
- *  （ProgrammingItemOut::batch_version 与 batch_id 同批下发），所以按钮的可用性
- *  判定不需要、也不应该再叠 batch_version —— 叠了会让「按钮可点」与「后端锚点完整」
- *  两件事的判定规则分叉。mutation 内另有防线（缺任一字段都拒绝发请求）。 */
-export function canReleaseRow(row: PendingProgrammingRow): boolean {
-  return Boolean(row.batch_id);
-}
-
 /** 工厂入参：全部由 store 内部函数注入（deps 形态 —— 闭包不直接持有 store，
  *  便于单测与复用；沿 partsListColumnDefs 的 deps 约定）。 */
 export interface PendingProgrammingColumnDeps {
-  /** 打开「下发到 CNC 货架」对话框（操作列「下发」按钮） */
-  openReleaseDialog: (row: PendingProgrammingRow) => void;
   /** 跳零件详情页 /parts/{id}（操作列「详情」按钮） */
   navigateToPart: (id: string) => void;
-  /** 该行是否正在下发中（操作列「下发」按钮 loading；
-   *  2026-10-01 起用 mutation 的 releaseSubmitting + releaseTarget 派生，
-   *  不再往 row 对象上挂 `_releasing` 私有字段） */
-  isReleasing: (id: string) => boolean;
 }
 
 export function buildPendingProgrammingColumnDefs(deps: PendingProgrammingColumnDeps): ColumnDef[] {
-  const { openReleaseDialog, navigateToPart, isReleasing } = deps;
+  const { navigateToPart } = deps;
 
   // ---------- 自定义单元格渲染 ----------
   // ColumnDef 接口里 row 是 unknown；cast 到 PendingProgrammingRow 以访问业务字段。
@@ -124,46 +92,21 @@ export function buildPendingProgrammingColumnDefs(deps: PendingProgrammingColumn
     );
   }
 
-  // 「下发」按钮仅对历史 PROGRAMMING 状态零件展示：PROGRAMMING 状态自 2026-09-29
-  // 起标记为废弃（无新进入路径），但 release-from-programming 端点保留供历史数据
-  // 消化；新流程下 chain 有 CNC 但 status ≠ PROGRAMMING 的零件无对应 API
-  // （已编程后由工人在「生产队列」直接领取走下发路径）。
+  // 2026-10-10：操作列的「下发」按钮删除（用户决定：下发功能已被扫码台的工人放回 /
+  // 送检接管，`release-from-programming` 的 `shelf_id` 后端也已删除）。本列现在只剩
+  // 一个「详情」按钮。
   function renderActions({ row }: { row: unknown }): VNode {
     const r = row as PendingProgrammingRow;
-    const showRelease = r.status === 'PROGRAMMING';
-    // 行缺批次锚点 ⇒ 端点拿不到锚点，此时 disabled + tooltip 把原因摆在点击前
-    // （否则用户要填完整表单才发现这条路走不通）。ElTooltip 不能直接以 disabled
-    // 元素作触发器（EP 官方 FAQ：disabled 表单元素不派发鼠标事件），故包一层 span。
-    const releaseButton = h(
+    return h(
       ElButton,
       {
         link: true,
-        type: 'success',
+        type: 'primary',
         size: 'small',
-        loading: isReleasing(r.id),
-        disabled: !canReleaseRow(r),
-        onClick: () => openReleaseDialog(r),
+        onClick: () => navigateToPart(r.id),
       },
-      () => '下发',
+      () => '详情',
     );
-    const releaseNode = canReleaseRow(r)
-      ? releaseButton
-      : h(ElTooltip, { content: RELEASE_NO_BATCH_HINT, placement: 'top' }, () =>
-          h('span', null, [releaseButton]),
-        );
-    return h('div', null, [
-      h(
-        ElButton,
-        {
-          link: true,
-          type: 'primary',
-          size: 'small',
-          onClick: () => navigateToPart(r.id),
-        },
-        () => '详情',
-      ),
-      showRelease ? releaseNode : null,
-    ]);
   }
 
   // ---------- 列定义 ----------

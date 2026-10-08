@@ -576,10 +576,11 @@ export type AssemblyCreateResultSchema = z.infer<typeof assemblyCreateResultSche
 // 2026-10-01 新增：货架实体 + 货架列表分页结果 schema（共享基础数据层
 // useProductionShelvesQuery 守门）。
 //
-// 字段对齐 @/types/shelf.ts::Shelf 的 10 字段：id / version / code / name / zone
+// 字段对齐 @/types/shelf.ts::Shelf 的 12 字段：id / version / code / name / zone
 // （PRODUCTION | INSPECTION，string 不锁 enum）/ location (nullable) / is_active /
-// display_order / created_at / updated_at。10 字段全声明
-// （沿 §M-4 strip 陷阱 guard）。入参形态见 @/api/shelves::ListShelvesParams。
+// capacity (nullable) / current_load / display_order / created_at / updated_at。
+// 12 字段全声明（沿 §M-4 strip 陷阱 guard）。入参形态见
+// @/api/shelves::ListShelvesParams。
 //
 // 2026-10-02 摘除 account_count：**用户决定货架列表页不再展示账号数**（决策理由
 // 与 @/types/shelf::Shelf 处的说明一致）。此前它是被显式声明的必填字段，后端一删
@@ -587,6 +588,12 @@ export type AssemblyCreateResultSchema = z.infer<typeof assemblyCreateResultSche
 // 「修一个崩一片」。
 // 注意因果方向：后端 ShelfOut 在同 PR 已删该字段，但那是另一次独立决策，不是
 // 「后端删了所以前端跟着删」；写成后者会让下一个读者误以为前端摘字段是被动响应。
+//
+// 2026-10-10 加 capacity / current_load：目标货架改由后端按负载自动选择，这两项是
+// 选架口径的输入，也是货架管理页展示负载的来源。**键恒在、值可空** ⇒ 两个都声明成
+// 必填键（`capacity` 用 `z.number().nullable()`，`current_load` 用 `z.number()`）：
+// 后端恒发这两个键，漏声明会被 strip 静默丢掉、把负载列渲染成「不限 / —」。
+// ⚠️ 不声明 `load_ratio`：百分比由前端 `current_load / capacity` 算，不让后端再派生一份。
 // ============================================================
 
 export const shelfSchema = z.object({
@@ -597,6 +604,10 @@ export const shelfSchema = z.object({
   zone: z.string(),
   location: z.string().nullable(),
   is_active: z.boolean(),
+  /** 负载上限（件数）。`null` 或 `<= 0` = 不限。 */
+  capacity: z.number().nullable(),
+  /** 在架件数（恒为 number，空架 = 0）。 */
+  current_load: z.number(),
   display_order: z.number(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -1061,19 +1072,18 @@ export const scanPartRowSchema = z.object({
    *     `'NONE'` = 无链 / 链已软删 / 当前工序不在链内（指针漂移）；
    *     `'NEXT'` = 当前工序在链内且**有下一道**；
    *     `'TAIL'` = 当前工序是链内**最后一道**。
-   *   放回页据此分流：`NEXT` 免去工序选择 + 货架点选（直接单确认），`TAIL` 在工序选择
-   *   弹窗内常驻提示「加工完成后请送检」再让工人手选，`NONE` 走原三步路径。
+   *   放回页据此分流：`NEXT` 免去工序选择、直接单确认放回，`TAIL` 在工序选择弹窗内
+   *   常驻提示「加工完成后请送检」再让工人手选，`NONE` 走手选工序路径。
    * - `chain_next_process_id`：**非可空字符串**（雪花 id 经 serialize_i64 → JSON
    *   string）。`'0'` 是 `NONE` / `TAIL` 的兜底值、**不是**真 id —— 消费侧见到 `'0'`
-   *   必须短路，不发给 `/shelves/for-return`（发过去必得空列表，白跑一趟）。
+   *   必须短路，不提交 worker-scan（后端按该 id 选架会选不出，报 20508）。
    * - `chain_next_process_name`：`NEXT` 时为下一道工序名，`NONE` / `TAIL` 恒 null。
    * - `chain_current_process_name`：当前工序名，解析不出时为 null（`TAIL` 分支用它
    *   点名「该去送检的是哪一道」，无值时退通用文案）。
    *
-   * ⚠️ **四件套一律声明成「带默认值的必输出键」，缺键降级而不抛**（本仓同题先例：
-   * `src/types/shelf.ts::ShelfForInspection.current_load` 处理「两仓并行、后端可能
-   * 尚未上线」用的就是这条路 —— 声明成可选 + 消费侧守卫，注释写明「后端补不补都不会
-   * 渲染出坏值」）。取舍理由是**失败模式的严重性不对称**：
+   * ⚠️ **四件套一律声明成「带默认值的必输出键」，缺键降级而不抛**（本仓既有先例：
+   * 声明成可选 + 消费侧守卫，注释写明「后端补不补都不会渲染出坏值」）。取舍理由是
+   * **失败模式的严重性不对称**：
    *   · 声明成必填（`z.enum` / 非空 `z.string`）时，后端先上线就是
    *     `scanPartListResultSchema.parse()` 在 API 边界抛错 ⇒ `listPartsHeldByWorker` /
    *     `listPartsByWorkTypeAllShelves` 全部 reject ⇒ 取件 / 放回 / 送检三页列表空 +

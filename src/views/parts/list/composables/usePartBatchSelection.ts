@@ -11,7 +11,12 @@
 import { computed, nextTick, reactive, ref, type ComputedRef, type Ref } from 'vue';
 import type { PartListItem } from '@/types/parts';
 
-export type BatchAction = 'print' | 'dispatch';
+/**
+ * 2026-10-10：只剩 `'print'` —— 「下发」模式随批量下发功能下线。
+ * 保留这个 type（而非直接删掉 `batchAction`）是因为它还挂着
+ * `isBatchSelectable` 的分派：批量打印允许勾所有顶层行，而其它模式曾只允许 PENDING。
+ */
+export type BatchAction = 'print';
 export type SelectedRowType = 'PART' | 'ASSEMBLY';
 
 interface TableRef {
@@ -37,7 +42,6 @@ export interface UsePartBatchSelectionReturn {
   isBatchSelectable: (row: PartListItem) => boolean;
   clearAllSelection: () => void;
   onEnterBatchMode: () => void;
-  onEnterBatchDispatchMode: () => void;
   onExitBatchMode: () => void;
   onSelectionChange: (rows: PartListItem[]) => void;
   onSelectAllPage: () => void;
@@ -89,7 +93,8 @@ export function usePartBatchSelection(
       // 单个子件打印走 PartDetail 详情页（FileListCard → printPartDrawing）。
       return !(row as { __is_child?: boolean }).__is_child;
     }
-    // 下发模式：仅未下发零件（PENDING）；保持原语义，装配件+子件都不能整批下发。
+    // 2026-10-10：「下发」模式已下线，`batchAction` 只可能是 'print' —— 保留这条
+    // 兜底分支而不是直接 return true，是为了将来真加第二种批量动作时，这里是它的落点。
     return row.status === 'PENDING' && row.row_type !== 'ASSEMBLY';
   }
 
@@ -103,11 +108,6 @@ export function usePartBatchSelection(
 
   function onEnterBatchMode(): void {
     batchAction.value = 'print';
-    batchMode.value = true;
-    clearAllSelection();
-  }
-  function onEnterBatchDispatchMode(): void {
-    batchAction.value = 'dispatch';
     batchMode.value = true;
     clearAllSelection();
   }
@@ -240,7 +240,6 @@ export function usePartBatchSelection(
     isBatchSelectable,
     clearAllSelection,
     onEnterBatchMode,
-    onEnterBatchDispatchMode,
     onExitBatchMode,
     onSelectionChange,
     onSelectAllPage,

@@ -62,7 +62,6 @@ import {
   submitOutsourceQuote,
   updateOutsourceCompany,
 } from '../outsource';
-import { receiveFromOutsource, sendToOutsource } from '@/api/parts';
 
 const COMPANY = '190000000000900';
 
@@ -160,105 +159,18 @@ describe('A 组：list 端点 URL 逐字钉死', () => {
   });
 });
 
-describe('B 组：prod/batches 外协收发端点的 body 键契约', () => {
-  it('B1：APPROVAL 行 → quote_id 有值、direct 为 null', async () => {
-    // payload 形态与 useOutsourceSendableList::buildSendPayload 的 APPROVAL 分支一致
-    // （那里恒显式写 direct: null；api 层是纯透传，不注入也不改名）。
-    const { path, body } = await posted(() =>
-      sendToOutsource('B1', {
-        outsource_company_id: 'C1',
-        process_id: 'P1',
-        version: 7,
-        quote_id: 'Q1',
-        direct: null,
-        quantity: null,
-      }),
-    );
-    expect(path).toBe('/prod/batches/B1/send-to-outsource');
-    expect(body.process_id).toBe('P1');
-    expect(body).not.toHaveProperty('next_process_id');
-    expect(body.quote_id).toBe('Q1');
-    expect(body.direct).toBeNull();
-  });
-
-  // api 层是纯透传：调用方漏传的键不会被补上（后端要求 quote_id / direct 必传其一，
-  // 两者都不传返 400）。这条锁住「api 层不会偷偷兜一个默认 direct / quote_id」——
-  // 那种兜底会把 DIRECT 行的语义弄丢。
-  it('B1b：api 层纯透传，漏传的键不补默认', async () => {
-    const { body } = await posted(() =>
-      sendToOutsource('B1', {
-        outsource_company_id: 'C1',
-        process_id: 'P1',
-        version: 7,
-        quote_id: 'Q1',
-      }),
-    );
-    expect(body).not.toHaveProperty('direct');
-    expect(body).not.toHaveProperty('quantity');
-    expect(Object.keys(body).sort()).toEqual([
-      'outsource_company_id',
-      'process_id',
-      'quote_id',
-      'version',
-    ]);
-  });
-
-  it('B2：DIRECT 行 → direct: true、quote_id 为 null', async () => {
-    const { body } = await posted(() =>
-      sendToOutsource('B2', {
-        outsource_company_id: 'C1',
-        process_id: 'P1',
-        version: 7,
-        quote_id: null,
-        direct: true,
-      }),
-    );
-    expect(body.direct).toBe(true);
-    expect(body.quote_id).toBeNull();
-  });
-
-  // 后端要求 quote_id / direct 必传其一，两者都不传返 400。前端两条路径都由
-  // buildSendPayload 统一组装，这条断言锁的是「组装函数不会退化」。
-  it('B3：quantity 语义 —— 部分发送带值、整批为 null', async () => {
-    const partial = await posted(() =>
-      sendToOutsource('B3', {
-        outsource_company_id: 'C',
-        process_id: 'P',
-        version: 1,
-        quote_id: 'Q',
-        quantity: 2,
-      }),
-    );
-    expect(partial.body.quantity).toBe(2);
-
-    const whole = await posted(() =>
-      sendToOutsource('B3', {
-        outsource_company_id: 'C',
-        process_id: 'P',
-        version: 1,
-        quote_id: 'Q',
-        quantity: null,
-      }),
-    );
-    expect(whole.body.quantity).toBeNull();
-  });
-
-  // 部分接收：键名仍是 next_process_id（后端没跟着 send 改），且 quantity 现在真被认。
-  it('B4：receive-from-outsource 键名未改 + quantity 透传', async () => {
-    const { path, body } = await posted(() =>
-      receiveFromOutsource('B4', {
-        shelf_id: 'S',
-        next_process_id: 'P',
-        version: 3,
-        quantity: 5,
-      }),
-    );
-    expect(path).toBe('/prod/batches/B4/receive-from-outsource');
-    expect(body.next_process_id).toBe('P');
-    expect(body).not.toHaveProperty('process_id');
-    expect(body.quantity).toBe(5);
-  });
-});
+// ============================================================================
+// 2026-10-10：原「B 组：prod/batches 外协收发端点的 body 键契约」整组删除。
+//
+// `send-to-outsource` / `receive-from-outsource` / `receive-from-outsource-to-inspection`
+// 三个端点已随外协三合一（`POST /outsource-queue/move`）硬切下线、无 alias，前端
+// 三个 wrapper 与 payload 类型一并删除。它们打的是 404 路径、零生产调用方，留着断言
+// 等于守一个不存在的契约。
+//
+// 收发两条现行路径的契约改由
+// `src/views/outsource/composables/__tests__/useOutsourceQueueMove.spec.ts` 守
+// （`to.kind` 两侧形态、quote_id / direct 互斥、键集合、失效域）。
+// ============================================================================
 
 // ============================================================
 // D 组（2026-10-09 第二轮契约收敛）：三条写端点的**必填 version** +
@@ -290,9 +202,7 @@ describe('D 组：必填 version 与已删端点的存在性反断言', () => {
   });
 
   it('D1：公司 soft-delete 的 body 必含 version', async () => {
-    const { path, body } = await posted(() =>
-      softDeleteOutsourceCompany(COMPANY, { version: 3 }),
-    );
+    const { path, body } = await posted(() => softDeleteOutsourceCompany(COMPANY, { version: 3 }));
     expect(path).toBe(`/outsource-companies/${COMPANY}/soft-delete`);
     expect(body).toEqual({ version: 3 });
   });
@@ -358,7 +268,13 @@ describe('D 组：必填 version 与已删端点的存在性反断言', () => {
           is_billed: false,
         }),
       ),
-    ).toEqual({ drawing_no: 'DWG', name: '连杆', customer_id: 'CU1', process_id: 'PR1', is_billed: false });
+    ).toEqual({
+      drawing_no: 'DWG',
+      name: '连杆',
+      customer_id: 'CU1',
+      process_id: 'PR1',
+      is_billed: false,
+    });
   });
 
   // 报价列表：statuses 数组照传（序列化成 CSV 单值由 http 层的 ARRAY_AS_CSV_KEYS 负责），
@@ -491,7 +407,9 @@ describe('E 组：item schema 的守门有效性', () => {
       }),
     ).toThrow();
     expect(() =>
-      outsourceSentPartListResultSchema.parse(omit(sentPartEnvelopeFixture, 'outsource_company_id')),
+      outsourceSentPartListResultSchema.parse(
+        omit(sentPartEnvelopeFixture, 'outsource_company_id'),
+      ),
     ).toThrow();
     expect(() =>
       outsourceQuotablePartListResultSchema.parse({
@@ -545,7 +463,9 @@ describe('E 组：item schema 的守门有效性', () => {
     // sent-parts 行：16 字段
     expect(Object.keys(sentPartFixture).length).toBe(16);
     expect(
-      Object.keys(outsourceSentPartListResultSchema.parse(sentPartEnvelopeFixture).items[0]!).sort(),
+      Object.keys(
+        outsourceSentPartListResultSchema.parse(sentPartEnvelopeFixture).items[0]!,
+      ).sort(),
     ).toEqual(Object.keys(sentPartFixture).sort());
 
     // sent-parts 信封：6 字段

@@ -28,9 +28,8 @@
 //     会把 queryFn 的 parse 一起短路，T5 变成在测 mock 自己。
 //   - vi.mock('@/api/parts')：releaseFromProgramming（@/api/parts 聚合导出，mock
 //     工厂只需给出用到的成员）；
-//   - vi.mock('@/api/process') / vi.mock('@/api/shelves')：store 内
-//     useProcessesQuery / useProductionShelvesQuery + useShelfProcessFilter 会拉
-//     基础数据，桩掉避免真实 axios；
+//   - vi.mock('@/api/process') / vi.mock('@/api/shelves')：桩掉基础数据端点，
+//     避免真实 axios（本 store 只在读路径上消费前者，2026-10-10 起不再消费后者）；
 //   - vi.mock('element-plus', () => ({ ElMessage: {...} }))：query hook 内
 //     watch(error) → ElMessage.error 在 vitest node env 会因 ElMessage 内部
 //     normalizeAppendTo 触发 ReferenceError: document is not defined，必须桩成 no-op。
@@ -46,7 +45,6 @@
 //   - vi.stubGlobal('localStorage', 内存版)：node 环境无 localStorage，装最小实现
 //     才能跑通 useListStatePersist 的落盘 / 恢复路径。
 
-import { ElMessage } from 'element-plus';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
@@ -119,19 +117,6 @@ vi.mock('@/api/http', async (importOriginal) => {
   return { ...actual, api: { ...actual.api, get: apiGetMock } };
 });
 
-// 2026-10-03：签名随接线同步成 4 参 —— release-from-programming 迁 prod 域后以批次
-// 为锚（batch_id 走 path），且后端 PlaceOnShelfRequest.version 是**必填** i32
-// （无 serde(default)，缺字段 422），第 4 参即批次 OCC 版本。写成必选是为了让
-// 「漏传 version」在测试里立刻炸（接线前的 3 参 mock 会让漏传静默通过）。
-const releaseFromProgrammingMock = vi.fn<
-  (id: string, shelfId: string, nextProcessId: string, version: number) => Promise<unknown>
->(async () => ({}));
-
-vi.mock('@/api/parts', () => ({
-  releaseFromProgramming: (id: string, shelfId: string, nextProcessId: string, version: number) =>
-    releaseFromProgrammingMock(id, shelfId, nextProcessId, version),
-}));
-
 vi.mock('@/api/process', () => ({
   listProcesses: vi.fn(async () => ({ items: [], total: 0, limit: 200, offset: 0 })),
 }));
@@ -142,10 +127,9 @@ vi.mock('@/api/shelves', () => ({
   //（backend-rust/src/modules/shelf/vo/process_mapping.rs）—— **扁平行**：
   // 一行一个 (货架, 工序) 对，同一 shelf_id 会重复出现，且 item 上是 process_id
   // 单值而非 process_ids 子集数组。
-  // 2026-10-02 之前这里是 `{items: []}`，恰好掩盖了 useShelfProcessFilter 的
+  // 2026-10-02 之前这里是 `{items: []}`，恰好掩盖了「扁平行被当子集数组读」的
   // 静默清空 bug（空数组下新旧实现都得到空 mapping，测试全绿）—— 契约 mock
-  // 复制产品代码的错误形态，等于给 bug 发免死金牌。回归守卫见
-  // src/composables/__tests__/useShelfProcessFilter.spec.ts。
+  // 复制产品代码的错误形态，等于给 bug 发免死金牌。
   getAllShelfProcessMappings: vi.fn(async () => ({
     items: [
       {
@@ -159,12 +143,7 @@ vi.mock('@/api/shelves', () => ({
 }));
 
 import { usePendingProgrammingStore } from '../usePendingProgrammingStore';
-import {
-  canReleaseRow,
-  RELEASE_MISSING_BATCH_ANCHOR_HINT,
-  type PendingProgrammingRow,
-} from '../../pendingProgrammingColumnDefs';
-import { qk } from '@/composables/queries/keys';
+import type { PendingProgrammingRow } from '../../pendingProgrammingColumnDefs';
 
 /** 造一行合法的 ProgrammingItem（15 字段齐全 —— 缺字段会被 Zod 守门拦掉）。
  *  ⚠️ 批次锚点（batch_id / batch_version）默认给 **null**（= 后端「无 PROGRAMMING
@@ -192,12 +171,6 @@ function makeItem(overrides: Partial<PendingProgrammingRow> = {}): PendingProgra
   };
 }
 
-/** 2026-10-03：可下发的批次锚点（后端 ProgrammingItemOut 的两个新增字段）。
- *  batch_version 刻意取 7 而非与行内 part 级 version 同值 1 —— 行级 `version` 是
- *  t_part.version，**与批次 OCC 无关**，两者取值相同会让「误传 part 级 version」的
- *  错误实现也能通过断言。 */
-const BATCH_ANCHOR = { batch_id: '190000000000123', batch_version: 7 } as const;
-
 /** 主查询已发出的请求次数（api.get 调用数）。 */
 function callCount(): number {
   return apiGetMock.mock.calls.length;
@@ -222,8 +195,6 @@ describe('usePendingProgrammingStore', () => {
     // mock.mockClear()），同时清掉 calls 与实现，再由 respondWith 重置默认响应。
     apiGetMock.mockReset();
     respondWith({ items: [], total: 0, limit: 20, offset: 0 });
-    releaseFromProgrammingMock.mockClear();
-    releaseFromProgrammingMock.mockResolvedValue({});
 
     testQueryClient = new QueryClient({
       defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
@@ -355,127 +326,6 @@ describe('usePendingProgrammingStore', () => {
     expect(store.query.items[0]?.parent_customer_name).toBe('客户A');
   });
 
-  // ============ T6：release 接上批次锚点端点（2026-10-03 接线后的行为）============
-  // 后端 ProgrammingItemOut 2026-10-03 补上 batch_id / batch_version，store 的
-  // mutationFn 从恒 throw 换成真调 releaseFromProgramming(batch_id, shelf_id,
-  // next_process_id, batch_version)。三条用例分别守「正常下发」「无可下发批次」
-  // 「端点报错」。
-  it('T6：批次锚点齐全 → 按 (batch_id, shelf, process, batch_version) 四参下发，成功后失效两域 + 关对话框', async () => {
-    respondWith({
-      items: [makeItem(BATCH_ANCHOR)],
-      total: 1,
-      limit: 20,
-      offset: 0,
-    });
-    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-
-    const store = usePendingProgrammingStore();
-    store.query.restoreState();
-    await store.query.fetchList();
-
-    const row = store.query.items[0];
-    expect(row).toBeDefined();
-    // 列表层守门：批次锚点原样透传到行（batch_id 是 JSON string 雪花 ID，
-    // batch_version 是 number —— 后端不把它序列化成长字符串）
-    expect(row?.batch_id).toBe(BATCH_ANCHOR.batch_id);
-    expect(row?.batch_version).toBe(BATCH_ANCHOR.batch_version);
-    // 锚点齐全 ⇒ 按钮可点（canReleaseRow 是操作列 disabled 的唯一判据）
-    expect(canReleaseRow(row!)).toBe(true);
-
-    store.release.target = row ?? null;
-    store.release.dialogVisible = true;
-    store.release.shelfId = '8800000000001';
-    store.release.processId = '7700000000001';
-    await store.release.confirm({ push: vi.fn() });
-
-    // 端点参数：批次 id 走 path（后端 POST /prod/batches/{batch_id}/…），
-    // 第 4 参是批次 OCC 版本（**不是**行级 part version）
-    expect(releaseFromProgrammingMock).toHaveBeenCalledTimes(1);
-    expect(releaseFromProgrammingMock).toHaveBeenCalledWith(
-      BATCH_ANCHOR.batch_id,
-      '8800000000001',
-      '7700000000001',
-      BATCH_ANCHOR.batch_version,
-    );
-    // 写后失效：本域（待编程列表）+ parts 域（下发改了 part 状态 / 货架归属）
-    const invalidatedKeys = invalidateSpy.mock.calls.map(
-      (c) => (c[0] as { queryKey?: unknown } | undefined)?.queryKey,
-    );
-    expect(invalidatedKeys).toContainEqual(qk.programmingPrefix);
-    expect(invalidatedKeys).toContainEqual(qk.partsPrefix);
-    expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('已下发到生产货架'));
-    // 成功才关对话框
-    expect(store.release.dialogVisible).toBe(false);
-    expect(store.release.submitting).toBe(false);
-  });
-
-  it('T6b：行无 PROGRAMMING 批次 → 按钮保持 disabled；即便绕过 UI 也只报错、不发请求', async () => {
-    respondWith({
-      items: [makeItem({ batch_id: null, batch_version: null })],
-      total: 1,
-      limit: 20,
-      offset: 0,
-    });
-    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-
-    const store = usePendingProgrammingStore();
-    store.query.restoreState();
-    await store.query.fetchList();
-
-    const row = store.query.items[0];
-    // 缺口对用户可见：操作列按钮 disabled（正常路径上根本点不到这里）
-    expect(canReleaseRow(row!)).toBe(false);
-    // store 内是第二层防线（防御对话框被复用 / 行数据过期）：不发请求、报明确原因。
-    // 不用 part_id 顶替 —— 那会打成后端「batch 不存在」，把真因盖掉。
-    store.release.target = row ?? null;
-    store.release.dialogVisible = true;
-    store.release.shelfId = '8800000000001';
-    store.release.processId = '7700000000001';
-    await store.release.confirm({ push: vi.fn() });
-
-    expect(releaseFromProgrammingMock).not.toHaveBeenCalled();
-    expect(ElMessage.error).toHaveBeenCalledWith(RELEASE_MISSING_BATCH_ANCHOR_HINT);
-    const invalidatedKeys = invalidateSpy.mock.calls.map(
-      (c) => (c[0] as { queryKey?: unknown } | undefined)?.queryKey,
-    );
-    expect(invalidatedKeys).not.toContainEqual(qk.programmingPrefix);
-    expect(invalidatedKeys).not.toContainEqual(qk.partsPrefix);
-    expect(store.release.dialogVisible).toBe(true);
-    expect(store.release.submitting).toBe(false);
-  });
-
-  it('T6c：端点报错 → ElMessage.error 透传后端 msg、对话框不关、不失效', async () => {
-    releaseFromProgrammingMock.mockRejectedValueOnce(new Error('批次版本冲突'));
-    respondWith({
-      items: [makeItem(BATCH_ANCHOR)],
-      total: 1,
-      limit: 20,
-      offset: 0,
-    });
-    const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
-
-    const store = usePendingProgrammingStore();
-    store.query.restoreState();
-    await store.query.fetchList();
-
-    store.release.target = store.query.items[0] ?? null;
-    store.release.dialogVisible = true;
-    store.release.shelfId = '8800000000001';
-    store.release.processId = '7700000000001';
-    await store.release.confirm({ push: vi.fn() });
-
-    expect(releaseFromProgrammingMock).toHaveBeenCalledTimes(1);
-    expect(ElMessage.error).toHaveBeenCalledWith('批次版本冲突');
-    // 失败不动缓存、不关对话框（用户改完选择可直接重试）
-    const invalidatedKeys = invalidateSpy.mock.calls.map(
-      (c) => (c[0] as { queryKey?: unknown } | undefined)?.queryKey,
-    );
-    expect(invalidatedKeys).not.toContainEqual(qk.programmingPrefix);
-    expect(invalidatedKeys).not.toContainEqual(qk.partsPrefix);
-    expect(store.release.dialogVisible).toBe(true);
-    expect(store.release.submitting).toBe(false);
-  });
-
   // ============ 自动刷新开关（轮询间隔本身在 node 环境不可断言）============
   // 2026-10-01：autoRefresh 语义回归 —— 勾选后由 useQuery 的 refetchInterval
   // 承担 5min 轮询（原视图的裸 setInterval 已删）。轮询定时器无法在 vitest node
@@ -508,15 +358,16 @@ describe('usePendingProgrammingStore', () => {
   });
 
   // ============ $dispose：重建后状态归零 ============
-  it('$dispose 重建 store → 私有状态归零（对话框态不泄漏到下次进入）', async () => {
+  // 2026-10-10：原用例用「release 对话框态」当泄漏探针，那个切片随下发功能下线
+  // 一起没了。改用分页 / Tab —— 它们同样住在 store 私有 ref 上，$dispose 后必须归零
+  // （不归零 = 「停在第 3 页 / 停在已编程 tab」泄漏到下次进入，正是不变量 #2）。
+  it('$dispose 重建 store → 私有状态归零（分页 / Tab 不泄漏到下次进入）', async () => {
     const store1 = usePendingProgrammingStore();
-    store1.release.openDialog(makeItem());
-    expect(store1.release.dialogVisible).toBe(true);
+    store1.query.page = 3;
+    store1.query.activeTab = 'programmed';
     store1.$dispose();
 
     const store2 = usePendingProgrammingStore();
-    expect(store2.release.dialogVisible).toBe(false);
-    expect(store2.release.target).toBeNull();
     expect(store2.query.page).toBe(1);
     expect(store2.query.activeTab).toBe('pending');
   });

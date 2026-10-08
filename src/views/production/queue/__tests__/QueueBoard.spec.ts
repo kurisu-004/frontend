@@ -16,6 +16,7 @@
 //   - T4：拖入高亮的跨面板接线（源面板 emit → 板级 ref → 工序池面板 prop）。
 //   - T5：provide 三个 move 包装（含 WORKER→WORKER 包装）—— 工人列落点与候选池
 //     抽屉的 @add 全靠 inject 拿包装，漏 provide 就退化为「不发请求」。
+//     2026-10-10：同时钉住「不再 provide shelfId」（撤回目标架改由后端自动选）。
 //   - T6：provide openBatchContextMenu + 区域参数 + 菜单项矩阵派生（无权角色得到一句
 //     warning 而不是静默无反馈 / 空白菜单）。
 //   - T7：菜单项 onClick → 复用现成 composable（useQueueRecall.recallBatch /
@@ -177,15 +178,13 @@ vi.mock('@/api/process', () => ({
 // 工序池右键「派给工人」消费）。
 // 走 vi.hoisted：vi.mock 工厂被提升到模块顶部求值，直接闭包引用下面模块体里的
 // const 会在工厂被提前求值时命中 TDZ（同文件里 realFetchQueueSnapshot 等同理）。
-const {
-  moveBatchBetweenWorkersMock,
-  moveBatchToWorkerMock,
-  invalidatePendingMock,
-} = vi.hoisted(() => ({
-  moveBatchBetweenWorkersMock: vi.fn(async () => true),
-  moveBatchToWorkerMock: vi.fn(async () => true),
-  invalidatePendingMock: vi.fn(async () => undefined),
-}));
+const { moveBatchBetweenWorkersMock, moveBatchToWorkerMock, invalidatePendingMock } = vi.hoisted(
+  () => ({
+    moveBatchBetweenWorkersMock: vi.fn(async () => true),
+    moveBatchToWorkerMock: vi.fn(async () => true),
+    invalidatePendingMock: vi.fn(async () => undefined),
+  }),
+);
 vi.mock('@/views/production/queue/composables/useQueueMove', () => ({
   useQueueMove: () => ({
     moveBatchToWorker: moveBatchToWorkerMock,
@@ -484,7 +483,9 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     expect(typeof provides.moveBatchToWorker).toBe('function');
     expect(typeof provides.moveBatchToPool).toBe('function');
     expect(provides.moveBatchBetweenWorkers).toBe(moveBatchBetweenWorkersMock);
-    expect(typeof provides.shelfId).toBe('object');
+    // 2026-10-10：`shelfId` 的 provide 随「撤回候选池的目标架改由后端自动选」删除。
+    // 钉住「不再 provide」比不写断言更硬：留着它会诱导后人以为还能用它选架。
+    expect(provides).not.toHaveProperty('shelfId');
     wrapper.unmount();
   });
 
@@ -520,11 +521,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     });
     await flushPromises();
     const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
-    const open = provides.openBatchContextMenu as (
-      e: MouseEvent,
-      b: unknown,
-      a: string,
-    ) => void;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
     expect(typeof open).toBe('function');
 
     const evt = new MouseEvent('contextmenu');
@@ -565,11 +562,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     });
     await flushPromises();
     const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
-    const open = provides.openBatchContextMenu as (
-      e: MouseEvent,
-      b: unknown,
-      a: string,
-    ) => void;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
     const card = {
       batch_id: '3000000000002',
       version: 3,
@@ -608,11 +601,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     });
     await flushPromises();
     const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
-    const open = provides.openBatchContextMenu as (
-      e: MouseEvent,
-      b: unknown,
-      a: string,
-    ) => void;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
 
     const card = {
       batch_id: '3000000000002',
@@ -672,11 +661,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     });
 
     const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
-    const open = provides.openBatchContextMenu as (
-      e: MouseEvent,
-      b: unknown,
-      a: string,
-    ) => void;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
     const card = {
       batch_id: '3000000000002',
       version: 3,
@@ -694,12 +679,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     expect(assign.children!.map((c) => c.label)).toEqual(['张三', '李四']);
 
     assign.children![1]!.onClick!();
-    expect(moveBatchToWorkerMock).toHaveBeenCalledWith(
-      '3000000000002',
-      3,
-      'W-2',
-      '5000000000009',
-    );
+    expect(moveBatchToWorkerMock).toHaveBeenCalledWith('3000000000002', 3, 'W-2', '5000000000009');
     wrapper.unmount();
   });
 
@@ -721,11 +701,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     });
 
     const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
-    const open = provides.openBatchContextMenu as (
-      e: MouseEvent,
-      b: unknown,
-      a: string,
-    ) => void;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
     const card = { batch_id: '3000000000002', version: 3, quantity: 6, shelf_id: null };
     open(new MouseEvent('contextmenu'), card, 'worker');
     const items = menuOpenCalls[menuOpenCalls.length - 1]![1] as {
@@ -736,12 +712,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     expect(transfer.children!.map((c) => c.label)).toEqual(['李四']);
 
     transfer.children![0]!.onClick!();
-    expect(moveBatchBetweenWorkersMock).toHaveBeenCalledWith(
-      '3000000000002',
-      3,
-      'W-1',
-      'W-2',
-    );
+    expect(moveBatchBetweenWorkersMock).toHaveBeenCalledWith('3000000000002', 3, 'W-1', 'W-2');
     wrapper.unmount();
   });
 
@@ -755,11 +726,7 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     });
     await flushPromises();
     const provides = (wrapper.vm.$ as unknown as { provides: Record<string, unknown> }).provides;
-    const open = provides.openBatchContextMenu as (
-      e: MouseEvent,
-      b: unknown,
-      a: string,
-    ) => void;
+    const open = provides.openBatchContextMenu as (e: MouseEvent, b: unknown, a: string) => void;
     open(new MouseEvent('contextmenu'), { batch_id: 'X', version: 1, quantity: 3 }, 'pending');
     const items = menuOpenCalls[menuOpenCalls.length - 1]![1] as { label: string }[];
     expect(items.map((i) => i.label)).toEqual(['拆分批次']);

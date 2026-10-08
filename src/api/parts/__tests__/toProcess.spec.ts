@@ -44,11 +44,10 @@ beforeEach(() => {
 });
 
 describe('2026-10-02：品检流转端点契约（parts/crud.ts）', () => {
-  it('C1：toProcess 打 prod 域批次路径，body 带齐三个必填字段且不含 batch_id', async () => {
+  it('C1：toProcess 打 prod 域批次路径，body 带齐必填字段且不含 batch_id / shelf_id', async () => {
     httpPostMock.mockResolvedValue({ data: { part: { id: '1' }, new_batch_id: null } });
 
     await toProcess('190000000000123', {
-      shelf_id: '8800000000001',
       next_process_id: '7700000000001',
       version: 7,
       note: '尺寸超差',
@@ -58,7 +57,8 @@ describe('2026-10-02：品检流转端点契约（parts/crud.ts）', () => {
     expect(httpPostMock).toHaveBeenCalledTimes(1);
     const [url, body] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
     expect(url).toBe('/prod/batches/190000000000123/to-process');
-    expect(body.shelf_id).toBe('8800000000001');
+    // 2026-10-10：`shelf_id` 后端删除（打回的目标生产架按负载自动选）⇒ body 里不得有它。
+    expect(body).not.toHaveProperty('shelf_id');
     expect(body.next_process_id).toBe('7700000000001');
     expect(body.version).toBe(7);
     expect(body.note).toBe('尺寸超差');
@@ -72,7 +72,6 @@ describe('2026-10-02：品检流转端点契约（parts/crud.ts）', () => {
     httpPostMock.mockResolvedValue({ data: payload });
 
     const out = await toProcess('190000000000123', {
-      shelf_id: '8800000000001',
       next_process_id: '7700000000001',
       version: 1,
     });
@@ -101,7 +100,6 @@ describe('2026-10-02：品检流转端点契约（parts/crud.ts）', () => {
     httpPostMock.mockResolvedValue({ data: { part: {}, new_batch_id: null } });
 
     await toProcess('a b/c', {
-      shelf_id: 's',
       next_process_id: 'p',
       version: 1,
     });

@@ -61,6 +61,7 @@ import type {
 import { heldBatchToCard } from '../composables/outsourceItemToCard';
 import type { SendToCompanyInput } from '../composables/useOutsourceQueueMove';
 import {
+  NOT_SHELVED_HINT,
   OPEN_OUTSOURCE_BATCH_MENU,
   SEND_TO_COMPANY,
   type OpenOutsourceBatchMenu,
@@ -193,13 +194,15 @@ async function onDragAdd(evt: DraggableStartEvent): Promise<void> {
       continue;
     }
     // ③ OCC 锚与货架位置：缺失（'0' / '' / NaN）时 move 必被后端拒（缺 version 返
-    // HTTP 422 纯文本，shelf_id 空则 `from` 守卫拒收）—— 不发注定失败的请求。
+    // HTTP 422 纯文本；批次未上架时 location IS NULL，`from.kind=PRODUCTION_SHELF`
+    // 守卫拒收）—— 不发注定失败的请求。
     if (!Number.isFinite(candidate.version) || candidate.version === 0) {
       rejected.push({ batch_id: id, reason: '批次版本信息缺失，无法移动' });
       continue;
     }
+    // 与候选池置灰提示共用同一个常量：两条路径判据同源，文案也必须同源。
     if (candidate.shelf_id === '') {
-      rejected.push({ batch_id: id, reason: '该批次尚未上架，请先下发到生产货架' });
+      rejected.push({ batch_id: id, reason: NOT_SHELVED_HINT });
       continue;
     }
     accepted.push(candidate);

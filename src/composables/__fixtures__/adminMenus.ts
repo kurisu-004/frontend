@@ -328,6 +328,10 @@ export const ADMIN_MENUS: MenuNode[] = [
       {
         // 2026-09-16 从 floor_group 迁入：业务上货架归属权限管理（与工人/账号同类）。
         // backend-rust 025 同步；dev dummy 与生产对齐。sort_order=30 接在 users_list=20 之后。
+        // 2026-10-10：货架管理后端整域迁 iam（CRUD URL 前缀改 `/api/v2/iam/shelves`），
+        // 但本节点的 `path` **刻意保持 `/shelves` 不变** —— 它是前端路由 / 浏览器
+        // 书签 URL，与后端菜单表里的 path 字段同源，改它会断掉用户已收藏的链接。
+        // 后端 API URL 与菜单 path 是两层，不要求一致。
         id: id(63),
         version: 0,
         parent_id: id(6),

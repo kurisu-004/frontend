@@ -436,7 +436,7 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
       dragEvent('3000000000001'),
     );
     expect(sendToCompany).not.toHaveBeenCalled();
-    expect(ElMessage.warning).toHaveBeenCalledWith('该批次尚未上架，请先下发到生产货架');
+    expect(ElMessage.warning).toHaveBeenCalledWith('该批次尚未上架，暂时不能发送到外协');
     wrapper.unmount();
   });
 

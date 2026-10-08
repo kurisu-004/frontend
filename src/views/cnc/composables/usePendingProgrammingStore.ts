@@ -12,55 +12,42 @@
 //
 // 不变量（改动前必读）：
 //   1. 必须在组件 setup 内首次调用 usePendingProgrammingStore()；
-//   2. 视图 onBeforeUnmount 必须 store.$dispose()（Pinia 单例，泄漏对话框态 /
-//    分页 / Tab 勾选到下次进入 —— 注意 $dispose 只 reset 本 store 自建的 ref，
-//    故对外状态必须走 query / release 两个 plain object slice，见 return 处的说明）；
-//   3. 消费侧禁止解构 store —— 一律 store.query.xxx / store.release.xxx
-//    （深代理自动解包嵌套 ref）；
+//   2. 视图 onBeforeUnmount 必须 store.$dispose()（Pinia 单例，泄漏分页 / Tab 勾选
+//    到下次进入 —— 注意 $dispose 只 reset 本 store 自建的 ref，故对外状态必须走
+//    query 这个 plain object slice，见 return 处的说明）；
+//   3. 消费侧禁止解构 store —— 一律 store.query.xxx（深代理自动解包嵌套 ref）；
 //   4. 不 import vue-router：路由跳转能力由视图通过 registerRouter 注入
 //    （沿 src/stores/auth.ts::refreshOrLogout(router) 与
 //    usePartsListStore::registerTableGetter 的先例）—— store 需在 node 单测里
 //    无 router 实例化。
 //
 // 沿 CLAUDE.md 硬约束：
-//   - 两层数据获取架构：本文件是**页面级 store**（私有状态 + 失效 + 列定义 + 下发
-//     对话框），主查询的 useQuery 段外提成同域 hook（usePendingProgrammingQuery），
-//     货架 / 工序下拉走**共享基础数据层**（useProductionShelvesQuery /
-//     useProcessesQuery）；
-//   - 本文件**不含 queryKey / queryFn**：queryKey 走 qk.xxx 工厂、queryFn 从
-//     queryKey 读最新 params（不闭包捕获 stale）、Zod 守门 parse、error → ElMessage
-//     桥接，四件事都在 usePendingProgrammingQuery 内；本文件用到 qk 的场合只有
-//     写后失效的前缀；
+//   - 两层数据获取架构：本文件是**页面级 store**（私有状态 + 列定义 + 列可见性），
+//     主查询的 useQuery 段外提成同域 hook（usePendingProgrammingQuery）；
+//   - 本文件**不含 queryKey / queryFn**：queryKey 走工厂、queryFn 从 queryKey 读
+//     最新 params（不闭包捕获 stale）、Zod 守门 parse、error → ElMessage 桥接，
+//     四件事都在 usePendingProgrammingQuery 内；
+//   - 2026-10-10：「下发到 CNC 货架」整块删除（下发改由扫码台的工人放回 / 送检接管）
+//     ⇒ 本 store 现在**没有任何写操作**，也不再需要 qc（QueryClient）、写后失效的
+//     域前缀、以及工序 / 货架两个基础数据 query。
 //   - enabled 闸门（restored）避免「默认参数首屏 + 持久化参数再屏」双 fetch；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0 / mutations.retry: 0；
 //   - 缓存时长：本页是页面级列表，走 main.ts 全局默认（不在共享层有限缓存
 //     staleTime/gcTime 约束范围内）。
 
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
-import { ElMessage } from 'element-plus';
-import { useMutation, useQueryClient } from '@tanstack/vue-query';
-import type { QueryClient } from '@tanstack/vue-query';
 
 import type { ListPendingProgrammingParams } from '@/api/programming';
-import { releaseFromProgramming } from '@/api/parts';
-import { qk } from '@/composables/queries/keys';
-import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
-import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
 import { useColumnDrag } from '@/composables/useColumnDrag';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
-import { handleProcessChainRequired } from '@/composables/useProcessChainRequiredHandler';
 import {
   buildPendingProgrammingColumnDefs,
-  RELEASE_MISSING_BATCH_ANCHOR_HINT,
   type PendingProgrammingRow,
 } from '../pendingProgrammingColumnDefs';
 import { usePendingProgrammingQuery } from './usePendingProgrammingQuery';
 import type { PendingProgrammingItemData } from './pendingProgrammingSchema';
-import type { Process } from '@/types/process';
-import type { Shelf } from '@/types/shelf';
 
 export type PendingProgrammingTab = 'pending' | 'programmed';
 
@@ -77,8 +64,6 @@ export interface PendingProgrammingRouter {
 export const PENDING_PROGRAMMING_LIST_KEY = 'pending_programming';
 
 export const usePendingProgrammingStore = defineStore('pending-programming', () => {
-  const qc = useQueryClient();
-
   // ============ 私有状态 ============
   /** 搜索**生效态**（进 queryKey ⇒ 进请求）。持久化到 `pending_programming_filter`。
    *  ⚠️ 只由 onSearch() / restoreState() 写，**不要**直接绑到视图输入框。 */
@@ -98,13 +83,6 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
   // 2026-10-01：enabled 闸门。store 实例化时 useQuery 不发请求，
   // restoreState() 末尾置 true 才开闸（避免默认参数 + 持久化参数双 fetch）。
   const restored = ref(false);
-
-  // 下发对话框态（全部私有于 store；视图只读 + 绑定 v-model）
-  const releaseDialogVisible = ref(false);
-  const releaseTarget = ref<PendingProgrammingRow | null>(null);
-  const releaseShelfId = ref<string | null>(null);
-  const releaseProcessId = ref<string | null>(null);
-  const releaseSubmitting = ref(false);
 
   // ============ buildParams ============
   function buildParams(): ListPendingProgrammingParams {
@@ -221,11 +199,9 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
 
   // ============ 列可见性 + 列顺序拖动 ============
   // 2026-10-01：列定义搬到独立文件（src/views/cnc/pendingProgrammingColumnDefs.ts），
-  // deps 注入本 store 的三个函数（不下发 / 跳详情 / 该行是否下发中）。
+  // deps 注入本 store 的跳转函数。2026-10-10：「下发」相关的两个 deps 随功能下线删除。
   const columnDefs = buildPendingProgrammingColumnDefs({
-    openReleaseDialog: (row) => openReleaseDialog(row),
     navigateToPart: (id) => navigateToPart(id),
-    isReleasing: (id) => releaseSubmitting.value && releaseTarget.value?.id === id,
   });
   const columnVisibility = useColumnVisibility(columnDefs, {
     listKey: PENDING_PROGRAMMING_LIST_KEY,
@@ -245,180 +221,8 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     void routerHolder.get?.()?.push(`/parts/${id}`);
   }
 
-  // ============ 下发对话框数据源（共享基础数据层 query）============
-  // 2026-10-01：裸调 listShelves / listProcesses 迁到共享 query
-  // （useProductionShelvesQuery 新增 / useProcessesQuery 现成）。两个 query 都在
-  // store setup 期间发起（30s staleTime + 跨页共享缓存 ⇒ 重复进本页不再重发；
-  // 代价是首屏多两个基础数据请求，取代原「弹窗打开才拉」的懒加载 —— 共享层
-  // 本就是短时请求去重层，见 CLAUDE.md 缓存时长策略）。
-  const processesQuery = useProcessesQuery({ limit: 200 });
-  const shelvesQuery = useProductionShelvesQuery({
-    zone: 'PRODUCTION',
-    is_active: true,
-    limit: 200,
-  });
-  // 2026-10-01 说明：processes 走 `as Process[]` 桥接 —— processSchema 派生的
-  // description / color 是 optional（对齐后端 skip_serializing_if），而 Process 业务类型
-  // 是 required，TS 结构不匹配。沿 usePartDispatch.ts 同模式桥接；渲染层
-  // （useShelfProcessFilter / el-option label）只读 id / code / name / category，
-  // 对 optional 字段无依赖，零行为差异。
-  const processes = computed<Process[]>(
-    () => (processesQuery.data.value?.items ?? []) as Process[],
-  );
-  // 2026-10-01：shelfSchema 的字段与 @/types/shelf::Shelf 结构完全一致，无需桥接。
-  // 2026-10-02：两侧同步摘除 account_count（用户决定货架列表页不再展示账号数；
-  // 后端 ShelfOut 在同 PR 也已删该字段，是另一次独立决策），仍 10 字段对齐。
-  const productionShelves = computed<Shelf[]>(() => shelvesQuery.data.value?.items ?? []);
-  // 2026-07-17：CNC 下发只允许 INHOUSE 工序（外协工序走 send_to_outsource）
-  const inhouseProcesses = computed(() => processes.value.filter((p) => p.category === 'INHOUSE'));
-  // 两个下拉的**首屏在途态**。数据源是共享 query（setup 期就发，不等弹窗打开），
-  // 弹窗可能空开，而空态文案「当前工序未映射到任何生产货架，请先在「货架管理 →
-  // 工序映射」配置」是**主动误导**的（用户会去改映射，其实只是数据还没到）。
-  // 取舍：选「弹窗照开 + 空态区分在途」而不是「settle 前不开弹窗」——
-  //   · 共享层本就是短时请求去重层，30s 内重复进本页命中缓存几乎零延迟，等它反而
-  //     让「点下发 → 弹窗」出现可感知的空档；
-  //   · 仓内其它 dialog（PartDetail / OutsourceSendReceive 等）也是「打开即渲染、
-  //     数据未到就空/骨架」，不额外引入一个 gate；
-  //   · 代价是冷缓存首访可能看到空态，已由下面两个 pending 派生挡住误导文案。
-  const processesPending = processesQuery.isPending;
-  const shelvesPending = shelvesQuery.isPending;
-  // **失败态**也要单独一层：isPending 在失败时是 false（query-core
-  // `queryObserver.js:346` 的 `isPending = status === 'pending'`，失败后 status 变
-  // 'error'）⇒ 只加 pending 分支不够，query 挂掉时空态会落回「未映射到任何生产
-  // 货架，请先配置映射」/「没有可用的工序」，用户会去改配置，其实只是接口挂了 ——
-  // 与上面要消灭的误导同一性质。错误本身有 ElMessage toast 兜底（见下方 watch），
-  // 但空态文案必须自己说真话。
-  const processesError = computed<string | null>(() => {
-    const e = processesQuery.error.value;
-    return e ? e.message : null;
-  });
-  const shelvesError = computed<string | null>(() => {
-    const e = shelvesQuery.error.value;
-    return e ? e.message : null;
-  });
-
-  // 2026-07-17：useShelfProcessFilter 双向收窄（货架↔工序映射过滤）。
-  // ⚠️ 该 composable 跨 3 页共用（cnc / outsource / inspection / parts-detail），
-  // 本次不动它，仅换数据源。
-  const {
-    filteredShelves: filteredProductionShelves,
-    filteredProcesses: filteredInhouseProcesses,
-  } = useShelfProcessFilter(productionShelves, inhouseProcesses, releaseShelfId, releaseProcessId);
-
-  // 旧视图在 openReleaseDialog 的 try/catch 里弹「加载失败：xxx」；数据源迁到
-  // useQuery 后错误不再抛到对话框打开逻辑，改由 watch 桥接（沿 CLAUDE.md
-  // TanStack Query 架构条目 #9「useQuery 的 error 不在 setup 抛错」）。
-  watch([processesQuery.error, shelvesQuery.error], ([procErr, shelfErr]) => {
-    const msg = (procErr ?? shelfErr)?.message;
-    if (msg) ElMessage.error(`加载失败：${msg}`);
-  });
-
-  function openReleaseDialog(row: PendingProgrammingRow): void {
-    releaseTarget.value = row;
-    releaseShelfId.value = null;
-    releaseProcessId.value = null;
-    releaseDialogVisible.value = true;
-    // 2026-10-02：不再显式 load() —— 映射改由共享 query 跟随上面两个基础数据 query
-    // 就绪自动开闸（productionShelves / inhouseProcesses 都非空时），实际比旧
-    // 「点下发才拉」更早到位。
-  }
-
-  function onReleaseDialogClosed(): void {
-    releaseTarget.value = null;
-    releaseShelfId.value = null;
-    releaseProcessId.value = null;
-  }
-
-  // ============ 下发 mutation（PROGRAMMING → IN_PROCESS）============
-  // 2026-10-03 接上真实端点：批次 id 走 URL path、OCC 版本走 body（后端
-  // `PlaceOnShelfRequest.version` 是**必填** i32，无 `#[serde(default)]`，缺则 422），
-  // 两个值都取自 releaseTarget 行上的 `batch_id` / `batch_version`
-  // （后端 `ProgrammingItemOut` 于 2026-10-03 补齐这两个字段）。
-  const releaseMutation = useMutation<
-    unknown,
-    Error,
-    {
-      partId: string;
-      batchId: string | null;
-      batchVersion: number | null;
-      shelfId: string;
-      nextProcessId: string;
-      router: PendingProgrammingRouter;
-    }
-  >({
-    mutationKey: ['programming', 'release-from-programming'],
-    // 锚点缺失时**不发请求**并报明确原因，不用 part_id 顶替（那会打成后端
-    // 「batch 不存在」，把真因盖掉）。范式沿 usePartDispatch::placeMutation 的
-    // `if (!batchId) throw new Error(*_NO_BATCH_HINT)`。
-    // 两个字段是同一层防线：batch_id 决定端点能不能寻址，batch_version 是 OCC 锚，
-    // 缺任一都会让请求必失败（后者是 422 / 版本冲突，不是可恢复的业务错误）。
-    mutationFn: ({ batchId, batchVersion, shelfId, nextProcessId }) => {
-      if (!batchId || batchVersion === null || batchVersion === undefined) {
-        throw new Error(RELEASE_MISSING_BATCH_ANCHOR_HINT);
-      }
-      return releaseFromProgramming(batchId, shelfId, nextProcessId, batchVersion);
-    },
-    onSuccess: async () => {
-      // 失效本域（待编程列表）+ parts 域（下发改了 part 的 status / 货架归属；
-      // union-list 与 GET /parts 复用同一根命名空间，qk.partsPrefix 一次覆盖）。
-      // ⚠️ 释放后批次落入 IN_PROCESS + PRODUCTION_SHELF，即**进入工人候选池**
-      // （后端候选池口径 status='IN_PROCESS' AND location='PRODUCTION_SHELF'），
-      // production-queue 域（qk.productionQueueSnapshotPrefix /
-      // productionQueueBoardPrefix）也因此变陈旧。此处**不**补挂该域失效：按
-      // CLAUDE.md「跨页面写操作不做穷举失效，30s 有限 staleTime + 显式刷新兜
-      // 新鲜度」的既定策略，生产队列页本就不靠本 mutation 的失效。
-      await invalidateProgrammingQuery(qc);
-      await qc.invalidateQueries({ queryKey: qk.partsPrefix });
-      ElMessage.success(releasedMessage());
-    },
-    onError: async (e, v) => {
-      // 20706 BIZ_PROCESS_CHAIN_REQUIRED 兜底 —— 弹「前往制定」框；命中后不再弹普通
-      // 错误提示（沿 PendingProgrammingList.vue 迁移前的语义）。
-      const handled = await handleProcessChainRequired(e, v.partId, v.router);
-      if (!handled) ElMessage.error(e.message ?? '下发失败');
-    },
-  });
-
-  /** 成功文案：带零件标识 + 目标货架 code（旧视图行为，2026-10-01 保留）；
-   *  目标行已被清空时回落到通用文案。 */
-  function releasedMessage(): string {
-    const row = releaseTarget.value;
-    if (!row) return '已下发到生产货架';
-    const shelfCode =
-      productionShelves.value.find((s) => s.id === releaseShelfId.value)?.code ?? '';
-    return shelfCode
-      ? `零件 ${row.serial_no || row.drawing_no} 已下发到生产货架 ${shelfCode}`
-      : '已下发到生产货架';
-  }
-
-  /** 视图「确认下发」按钮：校验选择 → 跑 mutation → 成功后关对话框。
-   *  router 由视图传入（store 不 import vue-router，不变量 #4）。
-   *  ⚠️ 批次锚点在这里（同步）从 releaseTarget 快照进 mutation 变量，而不是让
-   *  mutationFn 回头读 ref：mutateAsync 到 mutationFn 之间隔着微任务，期间的
-   *  任何对话框状态变化都会让它读到已被清空的值。 */
-  async function confirmRelease(router: PendingProgrammingRouter): Promise<void> {
-    const target = releaseTarget.value;
-    if (!target || !releaseShelfId.value || !releaseProcessId.value) return;
-    releaseSubmitting.value = true;
-    try {
-      await releaseMutation.mutateAsync({
-        partId: target.id,
-        batchId: target.batch_id ?? null,
-        batchVersion: target.batch_version ?? null,
-        shelfId: releaseShelfId.value,
-        nextProcessId: releaseProcessId.value,
-        router,
-      });
-      releaseDialogVisible.value = false;
-    } catch {
-      // onError 已提示（20706 兜底框 or 普通 ElMessage.error），这里只收尾
-    } finally {
-      releaseSubmitting.value = false;
-    }
-  }
-
   // ============ 对外切片 ============
-  // ⚠️ 为什么切 query / release 两个 slice，而不是把 15 个 ref 平铺在 store 顶层：
+  // ⚠️ 为什么切 query 这一个 slice，而不是把全部 ref 平铺在 store 顶层：
   // Pinia setup store 的 `$dispose()` 只做 `scope.stop()` + 清订阅 + 从 `pinia._s`
   // 摘除，**不删** `pinia.state.value[$id]`；下次 `useStore()` 时 Pinia 会把
   // 上次残留的 state **hydrate 回新建的 ref**（pinia.mjs createSetupStore 的
@@ -456,44 +260,14 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
       onSearch,
       restoreState,
     },
-    // 下发对话框切片
-    release: {
-      dialogVisible: releaseDialogVisible,
-      target: releaseTarget,
-      shelfId: releaseShelfId,
-      processId: releaseProcessId,
-      submitting: releaseSubmitting,
-      /** useShelfProcessFilter 双向收窄后的候选（数据源：共享 query，见上） */
-      filteredShelves: filteredProductionShelves,
-      filteredProcesses: filteredInhouseProcesses,
-      // 下拉空态要能区分「数据在途」与「真的没映射」
-      processesPending,
-      shelvesPending,
-      // 再区分「加载失败」—— isPending 在失败时为 false，没有这一层空态会落回
-      // 「未映射，请去配置映射」的误导文案
-      processesError,
-      shelvesError,
-      openDialog: openReleaseDialog,
-      onDialogClosed: onReleaseDialogClosed,
-      confirm: confirmRelease,
-      // **不再**对外暴露 releaseMutation。
-      // 行内「下发」按钮的 loading 由 submitting + target 派生即可
-      // （columnDefs 的 isReleasing 闭包），错误提示走 onError 的 ElMessage /
-      // 20706 兜底框，视图与测试都不需要读 mutation 对象 —— 暴露出去只是死 API。
-    },
-    // 列
+    // 列切片（列定义在 pendingProgrammingColumnDefs.ts，deps 注入 navigateToPart）
     columnDefs,
     columnVisibility,
     drag,
+    /** 视图注入真实 router（不变量 #4：store 不 import vue-router） */
     registerRouter,
   };
 });
-
-/** 失效整个 programming 域（写操作 release-from-programming 成功后调）。
- *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。 */
-export function invalidateProgrammingQuery(qc: QueryClient): Promise<void> {
-  return qc.invalidateQueries({ queryKey: qk.programmingPrefix }).then(() => undefined);
-}
 
 /** 行类型再导出（视图 cellRender / 测试用；与 domain schema 的 z.infer 同源）。 */
 export type { PendingProgrammingItemData, PendingProgrammingRow };

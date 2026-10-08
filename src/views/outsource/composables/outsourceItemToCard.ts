@@ -60,7 +60,7 @@ export function poolCandidateToCard(
     // 候选行的 location 语义是「批次所在货架 code」（与生产队列的工序池同款），不是
     // location 枚举 —— 在途侧才用枚举值。
     location: dto.shelf_code,
-    // 发送 `from.shelf_id` 的数据源（批次真实所在货架，候选池跨所有货架，不能拿用户
+    // 判「该行能否发送」的数据源（批次真实所在货架，候选池跨所有货架，不能拿用户
     // 当前激活货架凑）。⚠️ `PENDING` 且未上架的批次这里是**空串**（不是 null），这类行
     // 拖拽发送会被后端 `from` 守卫拒收 —— UI 据此置灰，不靠这里猜。
     shelf_id: dto.shelf_id,

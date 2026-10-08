@@ -4,13 +4,17 @@
   /scan/inspect —— 扫码台 INSPECT 流程（2026-07-19，2026-09-15 Phase 5 切 v2）
   1. onBeforeMount 调 GET /parts/by-worker/{worker_id} 列出当前 worker 持有件
   2. 工人点选一件 → 进入「待扫码确认」状态（confirm-bar 提示扫该件条码）
-  3. 扫码枪扫到与选中件 serial_no 匹配的条码 → 弹 ShelfPickerDialog(kind=inspection)
+  3. 扫码枪扫到与选中件 serial_no 匹配的条码 → 直接提交送检
      （与 ScanPickParts.vue 的「选中后扫码确认」同款防误触模式；不匹配 → ElMessage.error）
-  4. 送检只需指定品检货架，不需要下一道工序（后端 INSPECTED 忽略 next_process_id）
-  5. 2026-09-15 Phase 5：提交改走 POST /parts/worker-scan（event_type=INSPECTED），
-     worker-scan 走 service::mark_inspected → 写事件 + 同事务 WorkerPool refill。
-     旧 POST /parts/scan?event_type=INSPECTED 保留 v1 兼容。
+  4. 送检不需要下一道工序（后端 INSPECTED 忽略 next_process_id）
+  5. 提交走 POST /prod/batches/worker-scan（event_type=INSPECTED），service
+     ::mark_inspected → 写事件 + 同事务 WorkerPool refill。
   6. 成功后自动 refresh（该件从列表消失）
+
+  2026-10-10：**「作业货架」整条下线**。`shelf_id`（工人所在的补料生产架）与
+  `target_inspection_shelf_id`（送检目标品检架）两个字段后端一并删除 —— 目标架改由
+  后端按负载自动选择，`WorkingShelfDialog` / `useScanShelfStore` /
+  `resolveWorkingShelf` 随之删除。扫码确认后直接提交，不再有任何货架闸门。
 
   旧「扫一批条码」流程（ScanPartsWork.vue ?action=inspect）已随本页上线替换不保留。
 
@@ -183,17 +187,6 @@
       :lead-text="refillLead"
     />
 
-    <!-- 品检货架选择（送检只需选架，不需下一道工序） -->
-    <ShelfPickerDialog
-      v-if="showShelfPicker"
-      v-model="showShelfPicker"
-      kind="inspection"
-      empty-action-label="取消选择"
-      @confirm="onShelfConfirm"
-      @cancel="onShelfCancel"
-      @emptyAction="onShelfEmpty"
-    />
-
     <!-- 数量选择弹窗 -->
     <QuantityDialog
       v-if="showQtyDialog"
@@ -281,13 +274,8 @@ import { api } from '@/api/http';
 import PdfViewer from '@/components/PdfViewer.vue';
 import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 import type { PartFileItem } from '@/types/part_file';
-import { useScanSession } from '@/composables/useScanSession';
+import { useScanSession } from '@/views/scan/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
-import { useScanShelfStore } from '@/stores/scanShelf';
-import {
-  resolveWorkingShelfId,
-  workingShelfProblem,
-} from '@/views/scan/composables/resolveWorkingShelf';
 import { useScanBus } from '@/views/scan/composables/useScanBus';
 import { useScanPartsSort } from '@/views/scan/composables/useScanPartsSort';
 import { scanListErrorText } from '@/views/scan/composables/scanListErrorMessage';
@@ -297,7 +285,6 @@ import ScrollFabPair from '@/views/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/scan/components/QuantityDialog.vue';
 import { listPartsHeldByWorker, workerScan, type PartItem } from '@/api/parts';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
-import ShelfPickerDialog from '@/views/scan/components/ShelfPickerDialog.vue';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/scan/components/RefillTakenDialog.vue';
@@ -309,9 +296,6 @@ const router = useRouter();
 const { worker, requireWorker, reset: resetScanSession } = useScanSession();
 const { onScan } = useBarcodeScanner();
 const { emitHeldChanged } = useScanBus();
-// 2026-10-04：worker-scan 的 shelf_id 是「工人当前所在的补料生产架」，与「送检目标
-// 品检架」（pendingShelfId，来自 ShelfPickerDialog）是两个字段、两套语义。
-const scanShelf = useScanShelfStore();
 
 const parts = ref<ScanPartRowSchema[]>([]);
 // 后端信封里的总条数（可能大于已加载的 parts.length —— 见 refresh 里的 limit 说明）
@@ -320,7 +304,7 @@ const total = ref(0);
 const sortedParts = useScanPartsSort(parts);
 const loadingList = ref(false);
 const selectedPart = ref<ScanPartRowSchema | null>(null);
-// 点选卡片后进入「待扫码确认」状态；扫到匹配条码才弹送检货架 picker
+// 点选卡片后进入「待扫码确认」状态；扫到匹配条码才提交送检
 const awaitingScan = ref(false);
 
 const contentRef = ref<HTMLElement | null>(null);
@@ -351,10 +335,9 @@ function isHeic(t: string): boolean {
   return t.toUpperCase() === 'HEIC';
 }
 
-// 货架选择
-const showShelfPicker = ref(false);
+// 2026-10-10：货架选择整块下线（目标架由后端按负载自动选）。showQtyDialog 保留：
+// 正常路径已不走它，但它是 worker-scan 整批语义的旧调试入口。
 const showQtyDialog = ref(false);
-const pendingShelfId = ref<string>('');
 
 // --- 自动补料告知（worker-scan 同事务 refill；抢到批次才弹窗） ---
 const showRefillTaken = ref(false);
@@ -369,23 +352,10 @@ const batchPickerRows = ref<ScanPartRowSchema[]>([]);
 
 onBeforeMount(async () => {
   if (!requireWorker(router)) return;
-  // 2026-10-04：确保「当前作业架」已加载（深链 / 刷新直进本页时 store 尚无候选集）；
-  // 提交时才读值，见 submitInspect 的守卫。store 内部按账号幂等。
-  // 与 refresh() 并发：货架端点抖动时（api timeout 30s）持有件列表不必陪着一起等。
-  // 安全依据：作业架只在**用户交互之后**被读（下见 applyScanSelection 的提前拦截、
-  // 以及 submitInspect 的最终守卫），两者都在本 await 完成之后才可能被触发；
-  // 模板不读任何货架值。
-  await Promise.all([scanShelf.initShelves(), refresh()]);
-  // 2026-10-04 提前提示：作业架不可用时本页**一次都提交不出去**（每条提交路径都要过
-  // resolveWorkingShelfId），不必等工人走完「选件 → 扫码 → 选品检架」才被拦。
-  // 用 warning 而非 error：这里只是告知，不阻断本页的浏览与预览。
-  // 多架未选那条文案的出路在 `/scan/action` 顶部的「当前作业货架」区（选架入口在那儿，
-  // 本页没有）—— 工人退回操作选择页选一次即可，本页的深链兜底守卫只在刷新直入时触发。
-  const problem = workingShelfProblem();
-  if (problem) ElMessage.warning(`${problem}；本页的送检操作暂不可用`);
+  await refresh();
 });
 
-// --- 扫码：扫描直接选中 + 滚动居中 + 打开品检货架选择弹窗；不在列表则提示当前位置 ---
+// --- 扫码：扫描直接选中 + 滚动居中 + 直接提交送检；不在列表则提示当前位置 ---
 
 /** 选中后等一拍再滚动；元素不在容器内则静默返回 */
 async function scrollCardIntoView(batchKey: string): Promise<void> {
@@ -397,31 +367,25 @@ async function scrollCardIntoView(batchKey: string): Promise<void> {
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-/** INSPECT tail：选中 + 清 awaitingScan + 滚动 + 开品检货架选择弹窗 */
+/**
+ * INSPECT tail：选中 + 清 awaitingScan + 滚动 + 直接提交送检。
+ *
+ * 2026-10-10：原先这里开品检架 picker（选完架才提交），现改为**扫码确认即提交** ——
+ * 目标架由后端按负载自动选，工人不再指定。
+ */
 async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
-  // 2026-10-04 提前拦截：作业架不可用时开品检架弹窗纯属让工人白做一遍（选完还得被
-  // submitInspect 的守卫打回），所以在**改任何状态、开任何弹窗之前**就拦。
-  // 与 pendingShelfId 的时序无冲突：pendingShelfId 只在 onShelfConfirm 里赋值，
-  // 而本分支直接 return，弹窗根本不会开。
-  if (!resolveWorkingShelfId()) return;
   selectedPart.value = p;
   selectedQty.value = p.quantity;
   awaitingScan.value = false;
   const key = String(p.batch_id || p.id);
   await scrollCardIntoView(key);
-  showShelfPicker.value = true;
+  await submitInspect();
 }
 
 async function onScanToSelect(rawCode: string): Promise<void> {
   const code = rawCode.trim();
   if (!code) return;
-  if (
-    submitting.value ||
-    showShelfPicker.value ||
-    showQtyDialog.value ||
-    showBatchPicker.value ||
-    showRefillTaken.value
-  )
+  if (submitting.value || showQtyDialog.value || showBatchPicker.value || showRefillTaken.value)
     return;
   const matches = findAllByCode(parts.value, code);
   if (matches.length === 1) {
@@ -471,7 +435,7 @@ async function refresh(): Promise<void> {
   }
 }
 
-// --- 选件 → 扫码确认 → 选品检架 → 提交 ---
+// --- 选件 → 扫码确认 → 提交 ---
 const selectedQty = ref<number | undefined>(undefined);
 
 /** 2026-07-29 批次化：行=批次，选中比较按 batch_id */
@@ -552,46 +516,19 @@ async function downloadPreview(): Promise<void> {
   }
 }
 
-async function onShelfConfirm(shelfId: string): Promise<void> {
-  showShelfPicker.value = false;
-  if (!selectedPart.value || !worker.value) {
-    ElMessage.warning('选择已重置，请重新选择零件');
-    return;
-  }
-  pendingShelfId.value = shelfId;
-  // 2026-09-15 Phase 5：worker-scan（event_type=INSPECTED）整批送检，
-  // 不支持部分数量，跳过 QuantityDialog 直接提交。
-  await submitInspect();
-}
-
-/** 实际提交：worker-scan（event_type=INSPECTED）。
- *
- * 2026-10-04 修正两处货架语义（原实现把同一个品检架同时发给两个字段）：
- *   - shelf_id = 当前作业架（工人所在的补料生产架，PRODUCTION 区）
- *     —— 后端 worker_scan 开头无条件 `get_by_id_zone(shelf_id, "PRODUCTION")`，
- *     发品检架必得 20501「shelf ... 不存在或非 PRODUCTION 区」；
- *   - target_inspection_shelf_id = picker 选的品检架（INSPECTION 区）
- *     —— 后端另有一道 `target.zone != "INSPECTION"` → 20511 守卫。
- * 作业架缺失时**不发请求**：`shelf_id` 是无 default 的必填 i64，省略会被 axum
- * `Json` extractor 在 service 之前拒掉（裸 HTTP 422、响应体不是项目统一信封，本仓
- * `ApiError` 拿不到 code），填品检架则得 20501 —— 两个都是工人看不懂的烂错误，
- * 改为就地提示。
- */
+/** 实际提交：worker-scan（event_type=INSPECTED）。整批送检，不支持部分数量。 */
 async function submitInspect(): Promise<void> {
   if (!selectedPart.value || !worker.value) {
     ElMessage.warning('选择已重置，请重新选择零件');
     return;
   }
-  const workingShelfId = resolveWorkingShelfId();
-  if (!workingShelfId) return;
   submitting.value = true;
   try {
     const res = await workerScan({
       serial_no: selectedPart.value.serial_no ?? '',
       badge_code: worker.value.badge_code ?? '',
       event_type: 'INSPECTED',
-      shelf_id: workingShelfId,
-      target_inspection_shelf_id: pendingShelfId.value,
+      // 2026-10-10：**不发任何货架字段** —— 目标品检架由后端按负载自动选。
       batch_id: selectedPart.value.batch_id ?? null,
     });
     // 成功文案在 await 后立即取值（见 cancelSelect 会把 selectedPart 清空）
@@ -617,9 +554,10 @@ async function submitInspect(): Promise<void> {
 }
 
 async function onQtyConfirm(qty: number): Promise<void> {
-  // 2026-09-15 Phase 5：worker-scan 不支持部分数量；保留 dialog 入口以兼容
-  // 旧调试路径，正常流程已由 onShelfConfirm → submitInspect 跳过此步。
+  // worker-scan 不支持部分数量；保留 dialog 入口以兼容旧调试路径，
+  // 正常流程已由 applyScanSelection → submitInspect 跳过此步。
   showQtyDialog.value = false;
+  if (submitting.value) return;
   if (!selectedPart.value || !worker.value) {
     ElMessage.warning('选择已重置，请重新选择零件');
     return;
@@ -628,22 +566,10 @@ async function onQtyConfirm(qty: number): Promise<void> {
   await submitInspect();
 }
 
-function onShelfCancel(): void {
-  showShelfPicker.value = false;
-  cancelSelect();
-}
-
-/** 品检架 picker 空状态「取消选择」：关弹窗并清空选中，工人可重新点选。 */
-function onShelfEmpty(): void {
-  showShelfPicker.value = false;
-  cancelSelect();
-}
-
 function cancelSelect(): void {
   selectedPart.value = null;
   selectedQty.value = undefined;
   awaitingScan.value = false;
-  pendingShelfId.value = '';
 }
 
 function backToAction(): void {

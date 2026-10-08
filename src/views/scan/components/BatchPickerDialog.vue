@@ -2,7 +2,7 @@
   BatchPickerDialog.vue
 
   同一条码命中列表里多个批次时弹出（2026-08-02 接入）。
-  用法（与同目录 ShelfPickerDialog / ProcessPickerDialog 范式一致）：
+  用法（与同目录 ProcessPickerDialog 范式一致）：
     props:  modelValue: boolean
             code: string                    -- 扫到的条码（用于标题）
             rows: BatchPickerRow[]          -- 命中的多个批次（结构最小型，见下方定义）

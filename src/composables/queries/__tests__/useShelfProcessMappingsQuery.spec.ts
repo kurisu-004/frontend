@@ -1,6 +1,6 @@
 // src/composables/queries/__tests__/useShelfProcessMappingsQuery.spec.ts
 //
-// 2026-10-02 新增：货架↔工序映射全集共享 query 单测（Phase C 迁 useShelfProcessFilter
+// 2026-10-02 新增：货架↔工序映射全集共享 query 单测（从裸 async 迁到 useQuery 后
 // 的核心交付物 = 这层 Zod 守门）。
 //
 // 覆盖：
@@ -16,7 +16,7 @@
 //   - Q2：enabled 闸门关着时**零请求**（各调用点的下拉源还没就绪时不该白拉）。
 //   - Q3：闸门由 ref 开合后自动放行一次请求（getter 形态 enabled 的回归守卫）。
 //   - Q4：守门失败 → query 进 error 态（isError=true，error 里能看到缺哪个字段），
-//     data 保持 undefined —— 消费侧（useShelfProcessFilter）据此 loaded=false 走全量兜底。
+//     data 保持 undefined —— 消费侧据此 loaded=false 走全量兜底。
 //   - Q5：**同 tick 内并发挂载**两个实例（模拟 10 处调用点）共用同一 queryKey ⇒ 在飞
 //     请求合并，只发一次（精确表述：并发去重，**不含** staleTime 收益 —— 变异测试
 //     staleTime → 0 本例仍绿，staleTime 那部分由 Q6 证）。
@@ -158,7 +158,10 @@ describe('useShelfProcessMappingsQuery — 常量 queryKey + 闸门 + 守门（2
   it('Q1：queryKey 落库形态 = qk.shelfProcessMappings（常量、无 params 维度）', async () => {
     const q = mountQuery();
     await q.refetch();
-    const keys = testQueryClient.getQueryCache().getAll().map((one) => one.queryKey);
+    const keys = testQueryClient
+      .getQueryCache()
+      .getAll()
+      .map((one) => one.queryKey);
     expect(keys).toContainEqual(['shelf-process-mappings']);
     expect(qk.shelfProcessMappings).toEqual(['shelf-process-mappings']);
   });

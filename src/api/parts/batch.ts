@@ -439,8 +439,6 @@ export interface BatchToInspectionItem {
 }
 
 export interface BatchToInspectionRequest {
-  /** 共享品检架 id（雪花 ID 字符串；必填，zone=INSPECTION active）。 */
-  target_inspection_shelf_id: string;
   /** 1..=200 项；超出后端返回 40001 VALIDATION_ERROR。 */
   items: BatchToInspectionItem[];
 }

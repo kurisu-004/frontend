@@ -8,23 +8,23 @@
  * （2026-10-02 由 POST /parts/{part_id}/repair-dispatch 迁来：返修下发是批次动作。）
  *
  * UI 结构（el-tabs 双子 Tab）：
- * - 「下发到生产架」：先选工序，后选该工序映射的生产区货架
- * - 「送检到品检架」：直接选 INSPECTION 区货架
+ * - 「下发到生产架」：只选下一道工序
+ * - 「送检到品检架」：不需要任何输入（目标品检架由后端按负载自动选）
+ *
+ * 2026-10-10：两个 Tab 的目标货架下拉**全部删除** —— `repair-dispatch` 的 `shelf_id`
+ * 后端已删（目标架改按负载自动选）。品检 Tab 因此变成零输入的「一键送检」。
  *
  * 2026-10-03：本对话框只做**整批**返修下发。后端 `RepairDispatchRequest` 无
  * quantity 字段（serde 未开 deny_unknown_fields，多带数量会被静默忽略）⇒ 操作员
  * 填「3/10」也会整批 10 件下发。返修部分数量须先 `splitBatch`（`@/api/batch`）拆出子批次、
  * 再对子批次下发，故此处不提供数量控件。
  */
-import { computed, ref, watch } from 'vue';
+import { ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { CircleCheck, Select } from '@element-plus/icons-vue';
 import { repairDispatch } from '@/api/parts';
-import { listShelves } from '@/api/shelves';
 import { listProcesses } from '@/api/process';
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import type { RepairBatchListItem } from '@/api/parts';
-import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
 
 const props = defineProps<{
@@ -41,31 +41,10 @@ const emit = defineEmits<{
 
 const actionTab = ref<'dispatch' | 'inspect'>('dispatch');
 const processId = ref<string>('');
-const shelfId = ref<string>('');
-const inspShelfId = ref<string>('');
 const submittingDispatch = ref(false);
 const submittingInspect = ref(false);
 
-const productionShelves = ref<Shelf[]>([]);
-const inspectionShelves = ref<Shelf[]>([]);
 const processes = ref<Process[]>([]);
-
-const { filteredShelves: filteredProductionShelves, filteredProcesses } = useShelfProcessFilter(
-  productionShelves,
-  processes,
-  computed({
-    get: () => shelfId.value || null,
-    set: (v) => {
-      shelfId.value = v ?? '';
-    },
-  }),
-  computed({
-    get: () => processId.value || null,
-    set: (v) => {
-      processId.value = v ?? '';
-    },
-  }),
-);
 
 watch(
   // batch_id 是批次行的身份（批次列表项无 id 字段）。
@@ -74,8 +53,6 @@ watch(
     if (v) {
       actionTab.value = 'dispatch';
       processId.value = props.target?.next_process_id ?? '';
-      shelfId.value = '';
-      inspShelfId.value = '';
       await reloadOptions();
     }
   },
@@ -83,33 +60,27 @@ watch(
 );
 
 async function reloadOptions(): Promise<void> {
-  const [prod, insp, procs] = await Promise.all([
-    listShelves({ zone: 'PRODUCTION', is_active: true, limit: 200 }),
-    listShelves({ zone: 'INSPECTION', is_active: true, limit: 200 }),
-    listProcesses({ limit: 200 }),
-  ]);
-  productionShelves.value = prod.items;
-  inspectionShelves.value = insp.items;
-  processes.value = procs.items;
-  // 2026-10-02：不再显式 load() —— 「货架↔工序」映射改由共享 query 自动跟随
-  // productionShelves / processes 就绪（两个源非空即开闸，闸门推导见 useShelfProcessFilter）。
+  // 只剩工序一个候选源：货架下拉随「不再指定货架」删除。工序仍走裸调 listProcesses ——
+  // 这是本页唯一的字典依赖，且已有本地缓存（连续开弹窗不发第二次请求）。
+  try {
+    const procs = await listProcesses({ limit: 200 });
+    processes.value = procs.items;
+  } catch {
+    processes.value = [];
+  }
 }
 
 async function onSubmit(): Promise<void> {
   if (!props.target) return;
   const isInspect = actionTab.value === 'inspect';
-  if (isInspect) {
-    if (!inspShelfId.value) return;
-  } else {
-    if (!shelfId.value) return;
-  }
   const submitting = isInspect ? submittingInspect : submittingDispatch;
   submitting.value = true;
   try {
     // 2026-10-02：返修下发迁 prod 域并以批次为锚 —— `POST /prod/batches/{batch_id}/repair-dispatch`，
     // `batch_id` 从 body 删除（已是路径参数），`version` 必填（OCC 锚 t_part_batch）。
     // body 只带后端 RepairDispatchRequest 认识的字段：多带 quantity 会被 serde 静默
-    // 忽略（结果是整批返修），所以这里一个数量字段都不发。
+    // 忽略（结果是整批返修），所以这里一个数量字段都不发；`shelf_id` 自 2026-10-10
+    // 起后端已删，同样不发。
     if (!props.target.batch_id) {
       // 类型上 batch_id 必填，但返修两个端点的 wire-format 尚未单独验证（见
       // RepairReceive 的 cast 注），保留这层运行期兜底：空 id 打过去必 404。
@@ -117,7 +88,6 @@ async function onSubmit(): Promise<void> {
       return;
     }
     await repairDispatch(props.target.batch_id, {
-      shelf_id: isInspect ? inspShelfId.value : shelfId.value,
       version: props.target.version,
       next_process_id: !isInspect ? processId.value || null : null,
     });
@@ -154,7 +124,6 @@ function onCancel(): void {
         <strong>总数：</strong>{{ target.quantity }}
         <span class="muted">（整批返修，这批全部回返修）</span>
       </div>
-      <!-- 2026-09-16 PR-2：has_been_repaired 随 t_part 瘦身下线，「此前已返修」提示删除 -->
     </div>
 
     <el-tabs v-model="actionTab" style="margin-top: 8px">
@@ -164,11 +133,11 @@ function onCancel(): void {
             <el-select
               v-model="processId"
               clearable
-              placeholder="选工序后过滤货架"
+              placeholder="选择下一道工序"
               style="width: 100%"
             >
               <el-option
-                v-for="p in filteredProcesses"
+                v-for="p in processes"
                 :key="p.id"
                 :value="String(p.id)"
                 :label="`${p.code} — ${p.name}`"
@@ -178,36 +147,12 @@ function onCancel(): void {
               </template>
             </el-select>
           </el-form-item>
-          <el-form-item label="目标生产货架" required>
-            <el-select
-              v-model="shelfId"
-              clearable
-              placeholder="先选工序，自动按 shelf↔process 过滤"
-              :disabled="!processId"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="s in filteredProductionShelves"
-                :key="s.id"
-                :value="String(s.id)"
-                :label="`${s.code} — ${s.name}`"
-                :disabled="!s.is_active"
-              />
-              <template #empty>
-                <span class="muted">
-                  {{ processId ? '当前工序未映射任何生产货架' : '请先选择工序' }}
-                </span>
-              </template>
-            </el-select>
+          <el-form-item label="目标生产货架">
+            <span class="muted">由系统按负载自动选择，无需指定</span>
           </el-form-item>
         </el-form>
         <div class="actions">
-          <el-button
-            type="primary"
-            :loading="submittingDispatch"
-            :disabled="!shelfId"
-            @click="onSubmit"
-          >
+          <el-button type="primary" :loading="submittingDispatch" @click="onSubmit">
             <el-icon><Select /></el-icon>
             <span>完成 · 下发到生产架</span>
           </el-button>
@@ -216,35 +161,14 @@ function onCancel(): void {
 
       <el-tab-pane label="送检到品检架" name="inspect">
         <el-form label-width="96px">
-          <el-form-item label="品检货架" required>
-            <el-select
-              v-model="inspShelfId"
-              clearable
-              placeholder="选 INSPECTION 区 active 货架"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="s in inspectionShelves"
-                :key="s.id"
-                :value="String(s.id)"
-                :label="`${s.code} — ${s.name}`"
-                :disabled="!s.is_active"
-              />
-              <template #empty>
-                <span class="muted">无可用品检架</span>
-              </template>
-            </el-select>
+          <el-form-item label="目标品检货架">
+            <span class="muted">由系统按负载自动选择，无需指定</span>
           </el-form-item>
         </el-form>
         <div class="actions">
-          <el-button
-            type="warning"
-            :loading="submittingInspect"
-            :disabled="!inspShelfId"
-            @click="onSubmit"
-          >
+          <el-button type="warning" :loading="submittingInspect" @click="onSubmit">
             <el-icon><CircleCheck /></el-icon>
-            <span>完成 · 送检到该架</span>
+            <span>完成 · 送检</span>
           </el-button>
         </div>
       </el-tab-pane>

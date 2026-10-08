@@ -41,6 +41,9 @@
 //   - C5：prod 域拆分硬切后的 URL 回归守卫 —— 3 个映射端点的 URL 必须全部落在
 //         `/prod/shelf-processes*` 命名空间内，旧 `/shelves/*/processes` 路径一个
 //         都不许再出现（完整缘由见 C5 用例内注释）。
+//   - C5b：同日「货架 CRUD 迁 iam 域」之后，映射端点**不许跟着搬进 iam** ——
+//         两条迁移动作同日发生，抄 URL 时把 `prod` 写成 `iam` 是最自然的错。
+//         （CRUD 那 4 条的 URL 守卫在 `shelves.spec.ts`，本文件不覆盖。）
 //
 // mock 手法沿 dashboard.spec.ts 同款：整模块桩掉 `@/api/http`（不 importOriginal），
 // 只保留 `api.get` / `api.post` 两个可断言入口 + `cleanParams`（shelves.ts:3 实际
@@ -320,6 +323,10 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
     //   ② 没有一条残留旧 `/shelves/` 前缀（逻辑上是 ① 的蕴含，见下方断言处注释）
     // 不做成「遍历 shelves.ts 源码文本」的静态断言：那会绑死注释里的示例 URL，
     // 反而制造改注释即红的噪声；行为级断言（mock 收到的实际 URL）才是契约本身。
+    //
+    // ① 是**命名空间级**断言（不是逐字），所以它已经覆盖「映射端点被误抄成 `/iam`
+    // 前缀」这一类回归 —— 映射端点与货架 CRUD 是同日两次迁移，抄 URL 时把 `prod`
+    // 写成 `iam` 是最自然的一种错，落到这里必红。
     httpGetMock.mockResolvedValue({ data: { items: [] } });
     httpPostMock.mockResolvedValue({ data: null });
 

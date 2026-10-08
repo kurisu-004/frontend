@@ -3,17 +3,16 @@
 // 2026-10-02 新增：货架↔工序映射全集共享 query，共享基础数据层。
 //
 // 背景：`GET /api/v2/prod/shelf-processes`（一次返全部 active 映射，避免 N+1）此前
-// 只被 `src/composables/useShelfProcessFilter.ts` 当**裸 async** 用 —— 每次 `load()`
-// 各发一次请求，无 queryKey、无 staleTime、**无任何 Zod 守门**。10 处调用实例意味着
-// 「一次映射、最多 10 次请求」；更要命的是零守门：BUG-3（把后端扁平行当 v1(Python)
-// 的「一架子集一行」读 `item.process_ids` → `new Set(undefined)` = 空集 → 8 个页面的
-// 货架/工序下拉被静默清空）之所以能长期存在且测试全绿，根因就是没有任何一层会在
-// 契约漂移时喊一声。本次迁移的首要交付物就是这层 Zod 守门。
+// 只被一个收窄 composable 当**裸 async** 用 —— 每次 `load()` 各发一次请求，无
+// queryKey、无 staleTime、**无任何 Zod 守门**。更要命的是零守门：把后端扁平行当
+// v1(Python) 的「一架子集一行」读 `item.process_ids` → `new Set(undefined)` = 空集
+// → 货架/工序下拉被静默清空，这之所以能长期存在且测试全绿，根因就是没有任何一层会在
+// 契约漂移时喊一声。本文件的首要交付物就是这层 Zod 守门。
 //
 // 设计要点（沿 useProductionShelvesQuery / useWorkerPoolCountsQuery 同源范本）：
 //   - useQuery + **常量 queryKey**（qk.shelfProcessMappings，无 params 维度）——
-//     后端 handler 不接 Query extractor，一次全量；10 处实例共用同一 cache identity，
-//     30s 窗口内进不同页面 / 弹不同对话框都命中缓存，不再重复发请求；
+//     后端 handler 不接 Query extractor，一次全量；多个实例共用同一 cache identity，
+//     30s 窗口内命中缓存，不再重复发请求；
 //   - queryFn 走 shelfProcessMappingsResultSchema.parse 守门（4 字段全声明，理由见
 //     schemas.ts 同名 schema 顶部注释；守门只在这一处，别在 api 层也 parse ——
 //     Zod parse 是深拷贝，两处都做等于白拷一次）；
@@ -30,20 +29,14 @@
 //     真能随候选源就绪自动开合。传裸 ref 也支持，但 getter 形态在调用点更直白。
 //
 // 失效：映射表的写点全仓**只有 1 个** —— 「货架管理 → 工序映射」
-// （ShelfList.vue 的 setShelfProcesses），读点则有 10 处（全部是
-// useShelfProcessFilter），与写侧无一在写侧同屏。这**不适用** CLAUDE.md「跨页面写
-// 操作不做穷举失效」策略 —— 该策略针对的是「写点散落多域、补齐等于穷举全仓」的情形
-// （送检 / worker-scan / 品检流转 / outsource 收发），本域不存在这个问题，成本近乎为零
-// （2026-10-02 review 第 1 轮 M-3）。故保存成功后调本文件底部的薄封装，把「改了映射
-//  后重开对话框即可见」升级成「下一次读即见」。30s 有限 staleTime 仍是兜底，不变。
+// （ShelfList.vue 的 setShelfProcesses）。这**不适用** CLAUDE.md「跨页面写操作不做
+// 穷举失效」策略 —— 该策略针对的是「写点散落多域、补齐等于穷举全仓」的情形，本域不存在
+// 这个问题，补失效的成本近乎为零，故保存成功后调本文件底部的薄封装。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { toValue, type MaybeRefOrGetter } from 'vue';
 import { getAllShelfProcessMappings } from '@/api/shelves';
-import {
-  shelfProcessMappingsResultSchema,
-  type ShelfProcessMappingsResultSchema,
-} from './schemas';
+import { shelfProcessMappingsResultSchema, type ShelfProcessMappingsResultSchema } from './schemas';
 import { qk } from './keys';
 
 /**
@@ -55,9 +48,12 @@ import { qk } from './keys';
  *   const items = computed(() => q.data.value?.items ?? []);
  *   ```
  *
- * `enabled`（默认恒 true）用于**推迟到候选源就绪再发请求**：唯一的生产消费方
- * `useShelfProcessFilter` 自己会派生闸门（两个下拉源都非空才发），它内部再把
- * getter 透传给本函数。
+ * `enabled`（默认恒 true）用于**推迟到候选源就绪再发请求**。
+ *
+ * ⚠️ 2026-10-10 起本函数**零生产消费方**：所有「货架↔工序」双向收窄随人工指定货架的
+ * 入口一起下线。文件保留是因为 `ShelfList.vue` 保存映射后仍调底部的
+ * `invalidateShelfProcessMappingsQuery(qc)` —— 写点与失效链成对留存，接读点回来时失效
+ * 已就位，不必重建。当前该失效不改变任何缓存（无读方）。
  *
  * 返回：标准 TanStack Vue Query UseQueryReturnType<ShelfProcessMappingsResultSchema, Error>。
  */

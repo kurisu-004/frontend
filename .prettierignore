@@ -5,3 +5,9 @@ coverage
 src/auto-imports.d.ts
 src/components.d.ts
 package-lock.json
+# 2026-10-10：本文件不参与 prettier 校验。prettier 对 markdown 表格强制列对齐，会把
+# 本文件里三张宽表（docs/api 清单 / 会话终止入口 / auth↔WS 事件）重排成 100 列对齐形态 ——
+# 那是一次纯观感的全文改写，会让任何触及本文件的改动都带上几十行无关 churn。本文件是
+# 给人（和 agent）读的契约文档，紧凑表格更利于 diff 复核，故排除。
+# ⚠️ 只排 CLAUDE.md，不排 `*.md`：README.md 仍要过 prettier 校验。
+CLAUDE.md

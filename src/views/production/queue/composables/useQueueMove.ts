@@ -56,15 +56,17 @@ export interface UseQueueMoveReturn {
     toWorkerId: string,
     fromShelfId: string,
   ) => Promise<boolean>;
-  /** WORKER → POOL：把工人持有的批次撤回候选池货架。
-   *  @param version    OCC 锚（同上，后端必填）
-   *  @param toShelfId 目标货架（须映射到批次当前工序，否则 20507 / HTTP 422） */
-  moveBatchToPool: (
-    batchId: string,
-    version: number,
-    fromWorkerId: string,
-    toShelfId: string,
-  ) => Promise<boolean>;
+  /** WORKER → POOL：把工人持有的批次撤回候选池。
+   *  @param version OCC 锚（同上，后端必填）
+   *  目标货架由后端按批次当前工序下的候选架中负载最低者自动选 ⇒ 不再接受目标架入参。
+   *  注意 `from` 侧仍带起点锚（POOL 侧的 `shelf_id` / WORKER 侧的 `worker_id`），
+   *  两侧形态不同，故 from / to 分用两个 DTO 类型。
+   *
+   *  ⚠️ **部署顺序：后端必须先上**（详见 `api/productionQueue.contract.ts` 的
+   *  `MoveToLocationDto` 注释）。后端未落地 `to` 侧去架之前，这里发的
+   *  `to: {kind:'POOL'}` 会得 HTTP 422 纯文本 ⇒ 撤回候选池对所有角色都不可用，
+   *  且没有业务错误码可依。 */
+  moveBatchToPool: (batchId: string, version: number, fromWorkerId: string) => Promise<boolean>;
   /** WORKER → WORKER：把一名工人手中的批次转交给另一名。落点列的 onDragAdd 在
    *  「拿不到候选池源」时走这条路径（从自己那一列拖回自己不构成移动，由调用方早退，
    *  故本函数不校验 from ≠ to）。 */
@@ -213,35 +215,28 @@ export function useQueueMove(): UseQueueMoveReturn {
     }
   }
 
-  /** WORKER → POOL 包装 —— 保留 Promise<boolean> 签名以兼容 PoolDrawer.onDragAdd
-   *  调用点。目标货架为空早退时同样走一次失效对账 + try/catch（与 POOL→WORKER 同款）。
+  /** WORKER → POOL 包装 —— 撤回候选池。**目标货架由后端按批次当前工序下的候选架中
+   *  负载最低者自动选**，前端不再需要「当前货架」。
    *
-   *  结构性限制（暂无正解）：调用方传的 `toShelfId` 来自 QueueBoard provide 的
-   *  `auth.activeShelfId = boundShelves[0]`，而后端只给「SHELF_ACCOUNT +
-   *  scope_type='shelf'」的角色行返 shelf_ids ⇒ 对 MANAGER / CLERK / INSPECTOR
-   *  恒为 null ⇒ 三类角色走这条路必然命中 `!toShelfId` 早退分支弹「请先选择目标
-   *  货架」，撤回功能对它们结构性不可用。货架参数不能省：后端对 `to.shelf_id` 是
-   *  **真实使用**的（须命中 t_shelf_process 映射，否则 20507 / HTTP 422），与那种
-   *  「只填前端零消费字段」的 query 参数性质不同。待办：补显式「当前货架」选择器，
-   *  或 `/shelves/for-return?next_process_id=` picker。 */
+   *  `from` 侧的 `worker_id` 是起点锚（后端与批次 `current_holder_id` 比对）；
+   *  `to` 侧只有一个 `kind: 'POOL'`，不带任何货架字段。
+   *
+   *  这一改动同时解掉了旧实现那条结构性限制：目标架曾取自
+   *  `auth.activeShelfId = boundShelves[0]`，而该字段只对「SHELF_ACCOUNT +
+   *  scope_type='shelf'」的角色行有值 ⇒ MANAGER / CLERK / INSPECTOR 恒为 null，
+   * 撤回对这三类角色曾经结构性不可用。现在没有任何早退分支了。 */
   async function moveBatchToPool(
     batchId: string,
     version: number,
     fromWorkerId: string,
-    toShelfId: string,
   ): Promise<boolean> {
     if (!(await guardVersion(version))) return false;
-    if (!toShelfId) {
-      ElMessage.warning('请先选择目标货架');
-      await reconcileAfterEarlyReturn();
-      return false;
-    }
     try {
       await moveMutation.mutateAsync({
         batch_id: batchId,
         version,
         from: { kind: 'WORKER', worker_id: fromWorkerId },
-        to: { kind: 'POOL', shelf_id: toShelfId },
+        to: { kind: 'POOL' },
       });
       return true;
     } catch {

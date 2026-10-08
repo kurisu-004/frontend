@@ -2,7 +2,7 @@
   PartsList.vue
 
   2026-09-15 重构：壳仅保留 filter-card / PartsTable / PartsBatchBar / iframe /
-  分页 / 两个下发 dialog / 采购单导入 dialog；其余六切片装配、列定义、列可见性、
+  分页 / 采购单导入 dialog；其余六切片装配、列定义、列可见性、
   getTable 闭包、ctx 字面量装配、顶层解构块 / void 抑制全部迁入 `usePartsListStore`
 （Pinia setup store，详见 src/views/parts/list/composables/usePartsListStore.ts）。
 
@@ -63,16 +63,13 @@
             <span>解析系统交期和订单号</span>
           </el-button>
 
-          <!-- 批量打印 / 批量下发 toggle（2026-07-17 打印；2026-07-22 下发；INSPECTOR 不可见） -->
+          <!-- 批量打印 toggle（2026-07-17 打印；INSPECTOR 不可见）。
+               2026-10-10：同区块的「批量下发」按钮删除（下发功能已由扫码台接管）。 -->
           <template v-if="store.canEdit">
             <template v-if="!store.batch.batchMode">
               <el-button type="success" plain @click="store.batch.onEnterBatchMode">
                 <el-icon><Printer /></el-icon>
                 <span>批量打印图纸</span>
-              </el-button>
-              <el-button type="primary" plain @click="store.batch.onEnterBatchDispatchMode">
-                <el-icon><Promotion /></el-icon>
-                <span>批量下发</span>
               </el-button>
             </template>
             <el-button v-else type="warning" @click="store.batch.onExitBatchMode">
@@ -124,9 +121,6 @@
       />
     </div>
 
-    <PartsDispatchDialog />
-    <PartsBatchDispatchDialog />
-
     <!-- 2026-08-12：采购订单 Excel 导入对话框（解析系统交期和订单号） -->
     <PurchaseOrderImportDialog v-model="orderImportVisible" @success="store.query.fetchList" />
   </div>
@@ -136,7 +130,7 @@
 // views/parts/list/PartsList.vue
 //
 // 2026-09-15 重构壳：仅保留 filter-card / PartsTable / PartsBatchBar / iframe /
-// 分页 / 两个下发 dialog / 采购单导入 dialog；其余全部下沉到 usePartsListStore
+// 分页 / 采购单导入 dialog；其余全部下沉到 usePartsListStore
 // （Pinia setup store，详见 src/views/parts/list/composables/usePartsListStore.ts）。
 //
 // 不再 import 任何业务 composable 与 ColumnDef — 全部从 store 取。
@@ -152,11 +146,9 @@
 
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Close, Document, Printer, Promotion, RefreshLeft, Upload } from '@element-plus/icons-vue';
+import { Close, Document, Printer, RefreshLeft, Upload } from '@element-plus/icons-vue';
 import PartsTable from './components/PartsTable.vue';
 import PartsBatchBar from './components/PartsBatchBar.vue';
-import PartsDispatchDialog from './components/PartsDispatchDialog.vue';
-import PartsBatchDispatchDialog from './components/PartsBatchDispatchDialog.vue';
 import PurchaseOrderImportDialog from './components/PurchaseOrderImportDialog.vue';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { usePartsListStore } from './composables/usePartsListStore';

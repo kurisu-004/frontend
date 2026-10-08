@@ -768,13 +768,17 @@ describe('queries schemas — 后端契约对齐断言（M-1 2026-09-26）', () 
 // 货架（shelves）schema 契约断言。
 //
 // 数据来源：
-//   - @/types/shelf.ts::Shelf 10 字段（货架列表 GET /api/v2/shelves，
+//   - @/types/shelf.ts::Shelf 12 字段（货架列表 GET /api/v2/iam/shelves，
 //     共享基础数据层 useProductionShelvesQuery 守门；2026-10-02 起
 //     account_count 随「用户决定货架列表页不再展示账号数」一并摘除，
-//     后端 ShelfOut 在同 PR 也已删该字段，属另一次独立决策）。
+//     后端 ShelfOut 在同 PR 也已删该字段，属另一次独立决策；
+//     2026-10-10 起加 capacity / current_load —— 目标货架改由后端按负载自动选择，
+//     这两项是选架口径的输入与货架管理页的展示来源）。
 //
 // 覆盖：
-//   - S29：shelfSchema 接受完整 10 字段（zone=PRODUCTION / location=null）。
+//   - S29：shelfSchema 接受完整 12 字段（zone=PRODUCTION / location=null）。
+//   - S28：capacity / current_load 缺任一 → 抛 ZodError（键恒在、值可空，
+//     声明成 optional 就会静默 strip 掉真响应里的负载数据）。
 //   - S30：shelfSchema 缺 zone → 抛 ZodError（M-1 同形态 guard；2026-10-02 起
 //     guard 字段从 account_count 换成 zone —— 前者随「用户决定不再展示账号数」
 //     摘除，但「必填字段缺失必须报错」这个设计意图不变，不能跟着删用例）；
@@ -789,19 +793,39 @@ describe('货架（shelves）schema 契约断言', () => {
     zone: 'PRODUCTION',
     location: null,
     is_active: true,
-    // 2026-10-02 摘除 account_count（用户决定货架列表页不再展示账号数），本 fixture 已是 10 字段。
+    // 2026-10-10：目标货架改由后端按负载自动选择，capacity（分母）与 current_load
+    // （分子）成为选架口径的输入，两个键恒在、值可为 null。
+    capacity: 100,
+    current_load: 80,
+    // 2026-10-02 摘除 account_count（用户决定货架列表页不再展示账号数），本 fixture 已是 12 字段。
     display_order: 1,
     created_at: '2026-09-01 10:00:00',
     updated_at: '2026-09-30 11:00:00',
   };
 
-  it('S29：shelfSchema 接受完整 10 字段（zone=PRODUCTION / location=null）', () => {
+  it('S29：shelfSchema 接受完整 12 字段（zone=PRODUCTION / location=null）', () => {
     const parsed = shelfSchema.parse(validShelf);
     expect(parsed.id).toBe('8800000000001');
     expect(parsed.zone).toBe('PRODUCTION');
     expect(parsed.location).toBeNull();
     expect(parsed.is_active).toBe(true);
     expect(parsed.display_order).toBe(1);
+    expect(parsed.capacity).toBe(100);
+    expect(parsed.current_load).toBe(80);
+  });
+
+  // 2026-10-10：负载两字段都是**必填键**（键恒在、值可空）。声明成 `.optional()` 会让
+  // 后端漏发时 parse 静默通过 → 负载列渲染成「不限 / —」，而实际值是被悄悄丢掉的 ——
+  // 这正是 §M-4 strip 陷阱在「必填键 + 可空值」形态下的版本。
+  it('S28：capacity / current_load 缺任一 → 抛 ZodError（不静默 strip）', () => {
+    const { capacity: _c, ...noCapacity } = validShelf;
+    const { current_load: _l, ...noLoad } = validShelf;
+    void _c;
+    void _l;
+    expect(() => shelfSchema.parse(noCapacity)).toThrow();
+    expect(() => shelfSchema.parse(noLoad)).toThrow();
+    // capacity = null（不限）是合法值，不该被拒
+    expect(shelfSchema.parse({ ...validShelf, capacity: null }).capacity).toBeNull();
   });
 
   it('S30：shelfSchema 缺 zone → 抛 ZodError；shelfListResultSchema 缺 items → 抛 ZodError', () => {
@@ -959,8 +983,8 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     const unknownState = scanPartRowSchema.parse({ ...validScanRow, chain_state: 'SKIP' });
     expect(unknownState.chain_state).toBe('SKIP');
 
-    // 另三个键的默认值对齐后端兜底口径：id 落 '0'（消费侧见到 '0' 必须短路，不发
-    // for-return 请求）、两个 name 落 null。
+    // 另三个键的默认值对齐后端兜底口径：id 落 '0'（消费侧见到 '0' 必须短路，不提交
+    // worker-scan）、两个 name 落 null。
     const bare: Record<string, unknown> = { ...validScanRow };
     for (const key of [
       'chain_state',

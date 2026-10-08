@@ -579,19 +579,17 @@ describe('useInspectionListStore', () => {
 
     await store.mutations.toProcessMutation.mutateAsync({
       batchId: 'B1',
-      shelfId: 'S1',
       nextProcessId: 'P1',
       version: 7,
       note: '不合格',
       quantity: 2,
       label: 'SN-A',
       processCode: 'CUT',
-      shelfCode: 'SH-A',
       processName: '切割',
-      shelfName: '生产架 A',
     });
+    // 2026-10-10：两个 payload 里的货架键后端都已删除（目标架按负载自动选）⇒
+    // 这里逐字断言整个 body，谁把 shelf_id 加回来本用例即红。
     expect(toProcessMock).toHaveBeenCalledWith('B1', {
-      shelf_id: 'S1',
       next_process_id: 'P1',
       version: 7,
       note: '不合格',
@@ -600,14 +598,11 @@ describe('useInspectionListStore', () => {
 
     await store.mutations.toInspectionMutation.mutateAsync({
       batchId: 'B1',
-      targetInspectionShelfId: 'IS1',
       version: 7,
       quantity: 2,
       label: 'SN-A',
-      targetShelfName: '品检架 1',
     });
     expect(toInspectionMock).toHaveBeenCalledWith('B1', {
-      target_inspection_shelf_id: 'IS1',
       version: 7,
       quantity: 2,
     });
@@ -622,11 +617,9 @@ describe('useInspectionListStore', () => {
     await expect(
       store.mutations.toInspectionMutation.mutateAsync({
         batchId: 'B1',
-        targetInspectionShelfId: 'IS1',
         version: 7,
         quantity: null,
         label: 'SN-A',
-        targetShelfName: '品检架 1',
       }),
     ).rejects.toThrow('版本冲突');
 
@@ -687,7 +680,9 @@ describe('useInspectionListStore', () => {
               is_repairing: false,
               location: 'INSPECTION_SHELF',
               current_holder_display: '品检架 1',
-              process_name: null,
+              // 显式给 `string | null`：fixture 的初值是 null，但用例会把它改成工序名，
+              // 不给宽类型 TS 会把赋值判成「给 null 赋字符串」。
+              process_name: null as string | null,
               is_scanned: true,
             },
           ],
@@ -730,6 +725,12 @@ describe('useInspectionListStore', () => {
   it('送检成功：location / holder 落品检架、工序清空；指定工序成功：落生产架 + 下一道工序', async () => {
     const store = useInspectionListStore();
     store.mutations.scanTree = treeWithOneBatch();
+    // 2026-10-10：两个端点的目标架都由后端按负载自动选 ⇒ 前端不知道是哪一架，
+    // mutation 的 onSuccess 一律**重拉扫码树**把真实 holder 填回来（见 store 注释）。
+    // 本用例守的正是这条链：桩的重拉结果 = 写完后的真实树。
+    const AFTER_INSPECTION = treeWithOneBatch();
+    AFTER_INSPECTION.children[0]!.children[0]!.version = 8;
+    scanInspectionMock.mockResolvedValue(AFTER_INSPECTION);
     toInspectionMock.mockResolvedValue({
       part: { status: 'INSPECTION', version: 4 },
       new_batch_id: null,
@@ -737,40 +738,44 @@ describe('useInspectionListStore', () => {
 
     await store.mutations.toInspectionMutation.mutateAsync({
       batchId: 'B1',
-      targetInspectionShelfId: 'IS1',
       version: 7,
       quantity: null,
       label: 'F1006-01',
-      targetShelfName: '品检架 2',
     });
     let batch = store.mutations.scanTree?.children[0]?.children[0];
     expect(batch?.status).toBe('INSPECTION');
     expect(batch?.version).toBe(8);
     expect(batch?.location).toBe('INSPECTION_SHELF');
-    expect(batch?.current_holder_display).toBe('品检架 2');
+    // 「当前位置」来自重拉回来的树（本地回写把它置空，因为它不知道选了哪一架）。
+    expect(batch?.current_holder_display).toBe(
+      AFTER_INSPECTION.children[0]!.children[0]!.current_holder_display,
+    );
+    expect(scanInspectionMock).toHaveBeenCalledWith('F1006-01');
 
     store.mutations.scanTree = treeWithOneBatch();
+    const AFTER_PROCESS: ReturnType<typeof treeWithOneBatch> = treeWithOneBatch();
+    AFTER_PROCESS.children[0]!.children[0]!.version = 8;
+    AFTER_PROCESS.children[0]!.children[0]!.status = 'IN_PROCESS';
+    AFTER_PROCESS.children[0]!.children[0]!.location = 'PRODUCTION_SHELF';
+    AFTER_PROCESS.children[0]!.children[0]!.process_name = '切割';
+    scanInspectionMock.mockResolvedValue(AFTER_PROCESS);
     toProcessMock.mockResolvedValue({
       part: { status: 'IN_PROCESS', version: 4 },
       new_batch_id: null,
     });
     await store.mutations.toProcessMutation.mutateAsync({
       batchId: 'B1',
-      shelfId: 'S1',
       nextProcessId: 'P1',
       version: 7,
       note: null,
       quantity: null,
       label: 'F1006-01',
       processCode: 'CUT',
-      shelfCode: 'SH-A',
       processName: '切割',
-      shelfName: '生产架 A',
     });
     batch = store.mutations.scanTree?.children[0]?.children[0];
     expect(batch?.status).toBe('IN_PROCESS');
     expect(batch?.location).toBe('PRODUCTION_SHELF');
-    expect(batch?.current_holder_display).toBe('生产架 A');
     expect(batch?.process_name).toBe('切割');
   });
 
@@ -870,11 +875,9 @@ describe('useInspectionListStore', () => {
 
     await store.mutations.toInspectionMutation.mutateAsync({
       batchId: 'B1',
-      targetInspectionShelfId: 'IS1',
       version: 7,
       quantity: null,
       label: 'F1006-01',
-      targetShelfName: '品检架 2',
     });
 
     // 装配件根行的状态不在本地回写范围内（回写只覆盖零件 / 批次两层）⇒ 只能重拉。

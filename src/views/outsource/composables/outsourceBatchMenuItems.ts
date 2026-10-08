@@ -25,7 +25,7 @@ export interface OutsourceBatchMenuInput {
   area: OutsourceBatchArea;
   /** 被右键的那张卡（只读 `quantity` / `batch_id` / `version`）。 */
   batch: BatchCardModel;
-  /** 收发权限（MANAGER + CLERK + INSPECTOR）。只闸「回收生产 / 回收品检」。 */
+  /** 收发权限（MANAGER + CLERK + INSPECTOR）。只闸「回收生产」。 */
   canMove: boolean;
   /** 拆批权限（MANAGER + CLERK）。Inspector 能收发但**不能**拆批。 */
   canSplit: boolean;
@@ -39,8 +39,9 @@ export interface OutsourceBatchMenuInput {
   companies?: OutsourceMenuCompany[];
   /** area='outsource-candidate'：该行是否「`PENDING` 未上架」—— 判据就是候选行的
    *  `shelf_id` 为**空串**（见 outsourceBoardTypes.isCandidateDraggable，与拖拽落点的
-   *  置灰判据同源）。这种行本来就在待下发区，给召回是召回自己；且没有 holder，
-   *  发送请求的 `from.shelf_id` 必被后端 `from` 守卫拒收，所以「发送到」整块不给。 */
+   *  置灰判据同源）。这种行本来就在待下发区，给召回是召回自己；且 `location` 是 null
+   *  而非在某个生产架上，`from.kind=PRODUCTION_SHELF` 守卫必拒，所以「发送到」整块
+   *  不给。 */
   candidateIsPending?: boolean;
   /** 发送到指定外协公司（`sendToCompany`，自带报价路径 / 未上架 / 白名单三道早退）。 */
   onSend: (companyId: string) => void;
@@ -50,8 +51,6 @@ export interface OutsourceBatchMenuInput {
   onSplit: () => void;
   /** 从外协公司回收至生产（打开回收对话框，提交走 `receiveToProduction`）。 */
   onReceiveProduction: () => void;
-  /** 从外协公司回收至品检（打开回收对话框，提交走 `receiveToInspection`）。 */
-  onReceiveInspection: () => void;
 }
 
 /** 该候选行可发送的公司 id 白名单。
@@ -103,7 +102,6 @@ export function buildOutsourceBatchMenuItems(input: OutsourceBatchMenuInput): Me
   if (area === 'outsource-company') {
     if (input.canMove) {
       items.push({ label: '回收生产', onClick: () => input.onReceiveProduction() });
-      items.push({ label: '回收品检', onClick: () => input.onReceiveInspection() });
     }
     if (input.canSplit && batch.quantity > 1) {
       items.push({ label: '拆分批次', onClick: () => input.onSplit() });
@@ -122,7 +120,7 @@ export function buildOutsourceBatchMenuItems(input: OutsourceBatchMenuInput): Me
   const candidate = input.candidate;
   // 未上架的行**整块不给**（含「发送到」）：`candidateIsPending` 与拖拽路径的置灰判据
   // 同源（`outsourceBoardTypes.isCandidateDraggable`，即 `shelf_id` 为空串）。这种行
-  // 没有 holder，发送请求的 `from.shelf_id` 必被后端 `from` 守卫拒收 —— 拖拽路径正是
+  // `location` 是 null，`from.kind=PRODUCTION_SHELF` 守卫必拒 —— 拖拽路径正是
   // 据此置灰 + 给 NOT_SHELVED_HINT，菜单路径必须一起收窄，否则给一个点下去必失败的入口。
   if (candidate && !input.candidateIsPending) {
     // 与当前 tab 的公司列求交：白名单里的公司若没被映射进本工序，看板上根本没有那一列，

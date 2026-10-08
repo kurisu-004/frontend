@@ -11,23 +11,21 @@
     恒返空，前端 wrapper（listPendingProgramming）同期删除。
   - 两个 Tab：待编程（chain 有 CNC 但未上传 G 代码） / 已编程（G 代码已上传）。
     默认待编程；activeTab 持久化到 localStorage。
-  - 三个动作：
-    * 「详情」 → 跳 /parts/{id}（PartDetail 页内有图纸下载 / G 代码上传 / 设定单上传）
-    * 「下发到生产」 → 弹 el-dialog 同时选下一道工序 + 目标 PRODUCTION 货架，
-      调 POST /api/v2/prod/batches/{batch_id}/release-from-programming
-      （PROGRAMMING → IN_PROCESS；2026-10-02 由 part 域迁 prod 域并改为批次锚定，
-      批次 id + OCC 版本取列表项的 batch_id / batch_version）。
-      仅历史 PROGRAMMING 状态、且有 PROGRAMMING 活跃批次的行可见下发按钮；新流程下
-      chain 有 CNC 但 part.status ≠ PROGRAMMING 的零件不展示下发按钮（无 API 可调）。
+  - 操作列只有一个动作：「详情」 → 跳 /parts/{id}（PartDetail 页内有图纸下载 /
+    G 代码上传 / 设定单上传）。
+  - 2026-10-10：原「下发到生产」（弹窗选下一道工序 + 目标 PRODUCTION 货架，调
+    POST /api/v2/prod/batches/{batch_id}/release-from-programming）整体下线 ——
+    用户决定下发功能已由扫码台的工人放回 / 送检接管，后端也一并删掉了该端点的
+    `shelf_id`（目标架改按负载自动选）。本页因此只剩读路径。
   - 加急行整行红底 #fde2e2（与 PartsList / InspectionPending 同款）。
   - 自动刷新（5min）按需勾选。
 
   2026-10-01 架构改造：脱 ListShell + 手写 fetcher，全量走 TanStack Query
   ====================
-  - 状态 / 查询 / 写操作 / 列可见性 / 下发对话框态全部下沉到 Pinia setup store
+  - 状态 / 查询 / 列可见性全部下沉到 Pinia setup store
     `usePendingProgrammingStore`（views/cnc/composables/usePendingProgrammingStore.ts），
-    本文件只做「渲染壳」：Tab + filter 卡 + 表格 + 分页 + 下发对话框 UI。
-    消费侧一律 store.query.xxx / store.release.xxx（禁止解构，见 store 不变量 #3）。
+    本文件只做「渲染壳」：Tab + filter 卡 + 表格 + 分页。
+    消费侧一律 store.query.xxx（禁止解构，见 store 不变量 #3）。
   - **不再用 `<ListShell>`**：ListShell 的分页 / 页大小由内部 PagedTable 自持
     （src/components/ListShell.vue:89），与 TanStack Query 的 reactive params
     （page / pageSize 参与 queryKey）会形成**第二个分页状态源** —— 与
@@ -195,100 +193,6 @@
         size="small"
       />
     </div>
-
-    <!-- 下发到 CNC 货架 对话框（PROGRAMMING → IN_PROCESS） —— 与 PartDetail 同款 -->
-    <el-dialog
-      v-model="store.release.dialogVisible"
-      title="下发到 CNC 货架"
-      :width="releaseDlg.width"
-      :top="releaseDlg.top"
-      @closed="store.release.onDialogClosed"
-    >
-      <el-form label-width="96px">
-        <el-form-item label="下一道工序" required>
-          <el-select
-            v-model="store.release.processId"
-            placeholder="请先选择下一道工序"
-            style="width: 100%"
-            filterable
-            clearable
-          >
-            <el-option
-              v-for="p in store.release.filteredProcesses"
-              :key="p.id"
-              :label="`${p.code} / ${p.name}`"
-              :value="p.id"
-            />
-            <template #empty>
-              <span class="muted">
-                {{
-                  store.release.processesPending
-                    ? '正在加载工序…'
-                    : store.release.processesError
-                      ? '工序加载失败，请重试'
-                      : '没有可用的工序'
-                }}
-              </span>
-            </template>
-          </el-select>
-        </el-form-item>
-        <el-form-item label="目标生产货架" required>
-          <el-select
-            v-model="store.release.shelfId"
-            placeholder="先选工序；货架候选按映射过滤"
-            style="width: 100%"
-            filterable
-            clearable
-            :disabled="!store.release.processId"
-          >
-            <el-option
-              v-for="s in store.release.filteredShelves"
-              :key="s.id"
-              :label="`${s.code} — ${s.name}`"
-              :value="s.id"
-              :disabled="!s.is_active"
-            >
-              <span>{{ s.code }} — {{ s.name }}</span>
-              <span v-if="!s.is_active" class="muted">（已停用）</span>
-            </el-option>
-            <!--
-              2026-10-01 review 第 1 轮 M-1：数据源从「点下发才 await 拉完再开弹窗」
-              换成共享 query（setup 期就发）后，冷缓存首访可能空开。空态必须能区分
-              「数据还在路上」与「真的没配映射」—— 后者的文案会引导用户去「货架管理 →
-              工序映射」改配置，数据没到时显示它是主动误导。取舍说明见 store 内
-              processesPending / shelvesPending 的注。
-              2026-10-01 review 第 2 轮 N-1：再补一层「加载失败」—— isPending 在
-              失败时是 false（query-core queryObserver.js:346），不加这一层空态会在
-              接口挂掉时落回下面那句「未映射，请去配置映射」，把网络故障说成配置缺失。
-              失败优先级最高，其次在途，最后才是业务判断。
-            -->
-            <template #empty>
-              <span class="muted">
-                {{
-                  store.release.shelvesError
-                    ? '生产货架加载失败，请重试'
-                    : store.release.shelvesPending
-                      ? '正在加载生产货架…'
-                      : store.release.processId
-                        ? '当前工序未映射到任何生产货架，请先在「货架管理 → 工序映射」配置'
-                        : '请先选择下一道工序'
-                }}
-              </span>
-            </template>
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="store.release.dialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="store.release.submitting"
-          :disabled="!store.release.shelfId || !store.release.processId"
-          @click="onReleaseConfirm"
-          >确认下发</el-button
-        >
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -310,7 +214,6 @@ import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import { columnIdentifier } from '@/composables/useColumnDrag';
 import { resolveDraggable } from '@/composables/useColumnVisibility';
-import { useDialogSize } from '@/composables/useDialogSize';
 import {
   usePendingProgrammingStore,
   type PendingProgrammingRow,
@@ -339,12 +242,6 @@ onBeforeUnmount(() => {
 /** 加急行红底。 */
 function rowClassName({ row }: { row: PendingProgrammingRow; rowIndex: number }): string {
   return row.is_urgent ? 'row-urgent' : '';
-}
-
-const releaseDlg = useDialogSize({ desktopWidth: 440 });
-
-async function onReleaseConfirm(): Promise<void> {
-  await store.release.confirm(router);
 }
 </script>
 

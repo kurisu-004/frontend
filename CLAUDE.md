@@ -11,13 +11,13 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 | `docs/api/batch.md` | `part` 批次域 |
 | `docs/api/dashboard.md` | `dashboard` 大屏聚合（3 个只读 HTTP 端点 + `/ws/dashboard` 的 WS 首帧与增量） |
 | `docs/api/delivery_note.md` | `delivery_note` 送货单（列表 / 详情 / 扫码入单 / 移除批次 / 打印） |
-| `docs/api/iam.md` | `iam` 认证 + 账号 + 企业微信绑定 |
+| `docs/api/iam.md` | `iam` 认证 + 账号 + 企业微信绑定 + 货架（5 端点，§1.4） |
 | `docs/api/inspection.md` | `prod::inspection` 待品检（队列列表 + 扫码三层树） |
 | `docs/api/outsource.md` | 外协（报价 / 订单 / 收发货流转） |
 | `docs/api/programming.md` | `prod::programming` 待编程一览 |
 | `docs/api/queue.md` | `prod` 生产看板队列域 |
 
-**其余域没有 `docs/api/` 文档**（`shelf` / `assembly` / `wx` / `statistics` / `files` / `cnc_program` …），契约载体是代码注释。查接口按这条路径走：
+**其余域没有 `docs/api/` 文档**（`assembly` / `wx` / `statistics` / `files` / `cnc_program` …），契约载体是代码注释。查接口按这条路径走：
 
 1. **先查 `docs/api/` 清单**（`ls backend-rust/docs/api/`）有没有该域的文档 —— 有就直接 `Read`，它是整域契约（端点表 / 逐字段 / 口径表 / 错误码 / 前端配套清单）。
 2. **没有就去该域的 `mod.rs` 模块 doc**（`src/modules/<域>/mod.rs` 顶部的 `//!` 注释块）：域范围、端点分组、路由硬切与关键取舍都写在这里。`prod` 是容器域，子域要看 `src/modules/prod/<子模块>/mod.rs`（如 `prod/batch`、`prod/inspection`）。个别域的模块 doc 很薄（`iam` 只有一行），那就下钻该域的 `handler` / `service`。
@@ -89,6 +89,8 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - **域内列定义**放 `src/views/<域>/<name>ColumnDefs.ts`（域根，与页面主组件同级），**不放 `src/utils/`** —— 单域专用文件不是通用工具：它 import 域内 composable 类型会让 `utils/` 反向依赖 `views/`（层次倒挂）。
 - **`src/utils/` 只放跨域通用工具**（举例，非全量清单：`fileExt` / `date` / `jwt` / `download` / `pdfjs` / `elTable` / `dndSourceTracker` / 各 `ExcelParser` / `permissions`）。判据是「零个域内依赖」+「多域复用」，不是「看起来像工具」。
 - **api 层引域内 schema 的口径**：默认用 `import type`（编译期擦除，照 `api/dashboard.ts` / `api/programming.ts` / `api/parts/batch.ts`）；运行时值引入只允许出现在**没有 queryFn 承载**的守门点 —— 典型是走 useMutation 的单次拉取（`api/inspection.ts` 的扫码树 `inspectionScanTreeSchema.parse`）。这与上面「`utils/` 不得反向依赖 `views/`」是两条不同的禁令：后者禁的是**通用工具**引**单域实现**；api 层引自己域的 schema（含守门 schema 归位后的唯一运行时边 `api → views/inspection`）是允许形态。
+- **货架管理（2026-10-10 迁入 iam 域）**：视图在 `src/views/iam/shelves/`，**api 仍在平铺的 `src/api/shelves.ts`** —— `src/api/` 是按前端实体扁平放置、不按后端模块分层（见 `api/shelves.ts` 文件头）。⚠️ **`views/iam/` 与 `views/users/` 的不对称是有意的、不是漏搬**：`users`（账号管理）自 v1 起就在根下，是历史遗留；货架管理是 2026-10-10 新迁的，只规定**新代码**按域进 `views/iam/`，不回头搬历史目录。看到 `views/users/` 仍平铺不必"顺手修正"。
+- **前端路由 `/shelves` 与后端 URL `/api/v2/iam/shelves` 不一致是有意的**：路由 path 是浏览器可见的书签 URL，同时是后端菜单表 `shelves_list` 节点的 `path` 字段（见 `src/composables/__fixtures__/adminMenus.ts`），改它会断掉用户已收藏的链接；后端 API URL 是另一层。两者不要求一致，看到「前端 /shelves、后端 /iam/shelves」不是漏改。
 
 ### auth / 会话
 
@@ -162,6 +164,24 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - `has_process_chain` 只回答「有没有链且指针对得上」，**不回答「下一道工序能免填吗」** —— 后者是 `chain_state` / `chain_resolvable` 的事（放回页、外协接收各有消费点），两者不要互相推导。
 - 扫码台（`views/scan/`）三页的 `.part-row` 与 `BatchPickerDialog` 的 `.batch-row` 走同一条规则（`views/scan/chainAccent.ts`，**类绑定** `chainRowClass()` + 各文件 scoped CSS 里的 `.has-chain` 规则）：**流程区分不进边框**（由顶栏标题 + 路由承担），三个页面的 CSS 里不得再出现按流程硬编码的左边框色。**禁止**用模板 inline `:style` 承载这个语义色 —— inline 优先于任何非 `!important` 规则，会盖住 `.is-selected` / `.is-urgent` 的 `border-color` 简写，表现为选中态左边框退成中性色。扫码台的级联口径与 `BatchCard.vue` 相反：`.has-chain` 排在全部状态类**之后**（同档 0,2,0 靠源码顺序取胜），左边框恒归链语义（选中色与链色同为一个绿，肉眼无差，但口径只有一条）。
 - `PendingPoolCard.vue` 是**工序投放卡**（不是批次卡），只是盒模型与 BatchCard 对齐，刻意保持独立、不合并。
+
+### 货架自动选择（2026-10-10）
+
+**目标货架一律由后端选，前端不提供任何货架选择器。** 要恢复某个入口，必须同时确认后端对应端点是否仍接受 `shelf_id` —— 那 8 条写路径的货架入参已全部删除（worker-scan / place-on-shelf / release-from-programming / to-process / to-inspection / scan-inspect / repair-dispatch / outsource-queue/move 的 `to` 侧），`POST /prod/queue/move` 只删了 `to` 侧、`from` 侧仍必填。
+
+- **口径**：按目标的工序 / 品检找出所有符合条件的货架，再按 `current_load / capacity` **升序**取一个。`capacity` 为 `null` 或 `<= 0` = **不限**（排在有上限的架之后，不参与百分比比较）；**超载不拒**（> 100% 照样投放，只影响排序）。
+- **前端只负责展示负载**：`Shelf.capacity` / `Shelf.current_load` 只在 `src/views/iam/shelves/ShelfList.vue` 消费（列表三列 + 新增/编辑弹窗的容量输入）。百分比由前端自己算 —— 后端**不返** `load_ratio`，避免同一个派生量两边各算一遍。`capacity` 是**必填键、值可空**：`z.number().nullable()`；`current_load` 是 `z.number()`。
+- **⚠️ 部署顺序：后端必须先上。** `capacity` / `current_load` 是必填键，后端旧版本不返 ⇒ `shelfSchema.parse` 抛 ZodError ⇒ `useProductionShelvesQuery` 的数据恒空，而它的消费方里包含 `/scan/action` 的按钮显隐（扫工牌后能做的三件事）、账号管理的货架绑定、待品检页的工序弹窗。**表现是静默的**：扫码台三个动作按钮全没了且零文案（`noActionReason` 在「绑了架但一个 zone 都认不出来」这一支刻意返回 `null`），不是红色报错。排障时先怀疑部署顺序，别去查权限。
+- **已下线的端点**：`GET /shelves/for-return` 与 `GET /shelves/for-inspection`（404、无 alias），连同 `ShelfForReturn` / `ShelfForInspection` / `ShelfForInspectionResult` / `ShelfPickerItem` 类型与 `listShelvesForReturn` / `listShelvesForInspection` 两个 api 函数一并删除。`api/shelfPickers.spec.ts` 随它们删除 —— 那两个端点没有 alias，留着就是守一个不存在的契约。同批删除的还有 `views/scan/components/ShelfPickerDialog.vue` 与 `WorkingShelfDialog.vue`、`stores/scanShelf.ts`、`views/scan/composables/resolveWorkingShelf.ts`。
+- **`useShelfProcessFilter` 整文件删除**：它唯一剩下的消费方是零件详情页的「外协回收」弹窗，而那个弹窗打的 `POST /prod/batches/{id}/receive-from-outsource` **已被后端硬切下线**（三合一为 `POST /outsource-queue/move`，无 alias）⇒ 能点必 404。`useShelfProcessMappingsQuery` 随之零读点，但 `ShelfList.vue` 保存映射后仍调 `invalidateShelfProcessMappingsQuery(qc)`，故文件保留（写点与失效链成对留存）。
+- **`receive-from-outsource` / `receive-from-outsource-to-inspection` 两个 wrapper 随之删除**（都是 404 路径）。外协回收生产的现行入口是 `views/outsource/` 的看板右键菜单，契约由 `useOutsourceQueueMove.spec.ts` 守。
+- **`api/parts/crud.ts::PartScanPayload` 是已知例外**：它打的是 v1(Python) 的 `POST /parts/scan`，v1 仍在维护、契约未变，故仍带 `shelf_id` / `target_inspection_shelf_id`，不属本口径范围。全仓巡检货架字段时不要把它当残留清掉。
+- **`place-on-shelf` / `release-from-programming` 前端零调用方、wrapper 保留**：端点仍在后端，body 已按新契约改对。要接回入口时注意 `place-on-shelf` 的 `version` 仍是可选形参，而后端必填（缺字段返 422 纯文本，不是业务信封）⇒ 新接线必须改成必填并从 `GET /parts/{id}/batches` 的批次项取 `t_part_batch.version`（`GET /parts/{id}` 本身不返批次锚点）。
+- **⚠️ 两条功能死角，是「删掉人工指定货架」的直接后果，不是 bug**，现场要知道：
+  - **未上架的批次无人能推进**：后端要求「`location IS NULL` 的 `PENDING` 批次先走 `place-on-shelf` 才能发外协」，而 `place-on-shelf` 的三个前端入口（零件一览下发 / 零件详情下发 / cnc 下发）已随本轮下线 ⇒ 这类批次当前**没有任何前端入口能让它上架**。出路要么是后端 / 产品补一个上架入口，要么确认这批数据由别的途径产生。`NOT_SHELVED_HINT` 因此只说「尚未上架，暂时不能发送到外协」，**刻意不给「请先下发」这个指路**（那个按钮已经不存在了）。
+  - **「外协回收 → 品检」无替代端点**：后端把 `OUTSOURCE_COMPANY → INSPECTION_SHELF` 这个方向整条下线了。替代路径是「先回收进生产 → 再走送检」（`to-inspection` 或 worker-scan 的 INSPECTED），代价是多一次工序推进 / 多一次扫码。品检架仍由后端自动选，所以替代路径的落架不受影响。
+- **worker-scan 的响应要读 `scan.event_type`**：客户端发 `RETURNED`，但当该批次当前工序是工序链最后一道时后端自动改投品检、回来的是 `WORKER_SCAN_INSPECTED`。放回页的成功文案必须按**响应**分支，照请求的 `event_type` 说「已放回 → 下一道工序」是错的。
+- **放回页 NEXT 分支的确认框：三个出口 + 禁右上角 ×**：确认框是 `chain_state='NEXT'` 唯一能到达 `ProcessPickerDialog` 的路，只给「按链放回 / 取消」的话，工人一旦不同意管理员配的工序链（临时插单、改道）就被困死 —— 取消只清选中态，再点卡片还是同一个框。工序链是配置不是命令，「换一道工序」不是冗余出口。**同时必须 `:show-close="false"`**：× 只 emit `update:modelValue(false)`、不发业务事件，而本框又是 NEXT 分支**唯一**的提交入口 ⇒ × 一关就留下「卡片已选中 + 工序已填 + 无处可提交」的死角。判据很简单：**一个弹窗若是某条路径的唯一出口，它的关闭权就必须收在自己手里**；同页另外三个弹窗关掉不致命（确认栏的「取消选择」就能恢复），所以它们不禁 ×。
 
 ### 拖拽投放（Sortable）
 
