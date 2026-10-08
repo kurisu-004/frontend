@@ -13,8 +13,29 @@
 // - 输入框/可编辑区域不拦截：让用户在搜索、表单里正常打字，不会被误当成扫码。
 // - 扫码前缀后必须 preventDefault：避免 Enter 同时触发 form submit。
 // - 订阅者抛错要 try/catch：单个页面报错不应让全局监听崩。
+//
+// 2026-10-09 新增「活跃路由闸门」：分发只投递给当前路由下的订阅者。
+// - 症状：顶部标签栏同时开着「待品检」和「扫码入单」时，扫一次码两个对话框一起弹。
+// - 原因：MainLayout 用 <keep-alive :include="tags.cachedViewNames"> 缓存路由组件，
+//   切标签只走 onDeactivated、组件不卸载 ⇒ 页面在 onBeforeUnmount 里注册的退订
+//   永不触发，被缓存的非激活页面仍留在订阅表里，而分发是无条件的。
+// - 做法：订阅时记下当时的 route.path（Map 的 value），分发时只投给 path 相同的
+//   订阅者。用 path 而非 fullPath —— query 变化不该让页面失去扫码能力。路径在
+//   订阅那一刻读一次并锁进 Map，分发时现读会让两个页面都读到当前路径、闸门失效。
+// - null 的含义：订阅时取不到 route（非组件上下文 / 组件上下文但未装 router）⇒ 不设闸门，
+//   照旧全量分发。宁可不拦，也不能让所有 handler 静默失效。
+// - 已知边界：**同一 path 的多个订阅者会同时收到**，闸门只按 path 判、不做「同一 path
+//   只留一个」。路由层并不保证同一 path 只有一个组件实例 —— `/outsource/send-receive`
+//   就是这种情形：OutsourceBoard 用 `el-tab-pane :lazy` + `v-for` 渲染每个工序一个 tab，
+//   EP 的 tab pane `loaded` 是粘性的（访问过就永不回落）⇒ 访问过 N 个工序 tab 后有 N 个
+//   CandidatePool 同时存活，且全部以 `/outsource/send-receive` 为锚。这类「同 path 多实例」
+//   由订阅方自己的闸门收口（CandidatePool 用的就是板级 provide 的 `activeOutsourceProcessId`），
+//   本层不重复判第二遍。
+// - 不改成逐页 onActivated / onDeactivated：那要改全部 9 个订阅页并维护两套生命周期
+//   记账；闸门在 composable 内部一处即可，调用点零改动、公开 API 形状不变。
 
-import { onBeforeUnmount, ref, type Ref } from 'vue';
+import { getCurrentInstance, inject, onBeforeUnmount, ref, type Ref } from 'vue';
+import { routeLocationKey } from 'vue-router';
 
 export type ScanHandler = (code: string) => void;
 export type Unsubscribe = () => void;
@@ -27,7 +48,16 @@ const SCAN_MAX_LENGTH = 50;
 const BUFFER_IDLE_MS = 500;
 
 // ============ 单例状态（模块级） ============
-const handlers = new Set<ScanHandler>();
+// 2026-10-09：Set 改 Map。key 是 handler，value 是订阅那一刻的 route.path；
+// null = 订阅时取不到路由 ⇒ 不设闸门。
+const handlers = new Map<ScanHandler, string | null>();
+/** 2026-10-09：最近一次在组件上下文里拿到的 route。vue-router 注入的
+ *  是应用级同一个响应式对象，任意组件拿到的都是它 ⇒ dispatch 时读它的 .path 就是
+ *  「当前路由」。保持 null 表示至今没有任何组件上下文订阅过（此时不过滤）。
+ *
+ *  ⚠️ 组件上下文但**未装 router** 时同样不赋值：闸门是 fail-open 的增强项，宁可不设闸门，
+ *  也不能让所有 handler 静默失效。 */
+let currentRoute: { readonly path: string } | null = null;
 const enabled = ref(true);
 const lastScan = ref<string>('');
 const lastScanAt = ref<number>(0);
@@ -60,13 +90,25 @@ function scheduleIdleClear(): void {
   }, BUFFER_IDLE_MS);
 }
 
+/** 2026-10-09 活跃路由闸门：该订阅者此刻是否已不是当前路由。
+ *  订阅时取不到路由（value 为 null）或分发时取不到当前路由，一律不过滤。 */
+function isGatedOut(subscribePath: string | null): boolean {
+  if (subscribePath === null) return false;
+  const activePath = currentRoute?.path;
+  if (activePath === undefined) return false;
+  return subscribePath !== activePath;
+}
+
 function dispatch(code: string): void {
   if (!code) return;
+  // 2026-10-09：lastScan / lastScanAt 与 console.log 记的是「识别到一次完整扫码」，
+  // 刻意放在路由过滤之前 —— 过滤只决定「谁收到回调」，不改动全局扫码流水记录。
   lastScan.value = code;
   lastScanAt.value = Date.now();
 
   console.log(`[barcode] ${code}`);
-  for (const h of handlers) {
+  for (const [h, subscribePath] of handlers) {
+    if (isGatedOut(subscribePath)) continue;
     try {
       h(code);
     } catch (e) {
@@ -134,8 +176,22 @@ export interface UseBarcodeScannerReturn {
 export function useBarcodeScanner(): UseBarcodeScannerReturn {
   installListener();
 
+  // 2026-10-09：活跃路由闸门的锚。vue-router 以公开导出的 `routeLocationKey` 注入路由，
+  // 这里带默认值取：`useRoute()` 是 `inject(routeLocationKey)` **不带默认值**，router 未安装
+  // 时 Vue 会打 `injection "Symbol(route location)" not found.` dev warning（仓内
+  // CandidatePool.spec.ts 走到真实 composable 且没装 router，每次 mount 都刷这一句）。
+  // 带默认值后 inject 走静默返回默认值 null 的分支。
+  // 非组件上下文（`getCurrentInstance()` 为假）时三元短路、`inject` 不会被调用 ⇒ route 恒为
+  // null ⇒ 不设闸门、退化成改动前的全量分发。
+  const route = getCurrentInstance() ? inject(routeLocationKey, null) : null;
+  // ⚠️ `if (route)` 这个守卫是 fail-open 的另一半：不设自己的闸门 ≠ 把全局锚置空。
+  // 取不到路由的订阅若走无条件赋值，锚变 null ⇒ isGatedOut 里 activePath 为 undefined ⇒
+  // 全员放行，被缓存的非活跃页面又一起收到扫码，闸门静默失效。
+  if (route) currentRoute = route;
+
   function onScan(handler: ScanHandler): Unsubscribe {
-    handlers.add(handler);
+    // 路径在订阅那一刻读一次并锁进 Map
+    handlers.set(handler, route?.path ?? null);
     return () => {
       handlers.delete(handler);
     };
