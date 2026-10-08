@@ -17,7 +17,7 @@ export const SCAN_LIST_CONTRACT_DRIFT_TEXT = '列表数据格式异常，请截�
  * 把列表请求抛出的异常转成可直接展示的文案。
  *
  * **为什么需要这个收口**：报工台两个列表端点的出参走 `scanPartListResultSchema` 契约
- * 守门（见 `src/composables/queries/schemas.ts`），形状不符时 API 边界**故意**抛
+ * 守门（见 `./scanSchema.ts`），形状不符时在 queryFn **故意**抛
  * ZodError ——「响亮地炸」是设计意图，不能降级成静默兜底（空列表 / 假 0 件会把契约漂移
  * 藏起来）。但 `ZodError.message` 是 issues 的 JSON 数组文本，直接弹给产线工人就是一坨
  * 噪音，而真正的排障信息（哪个键、期望什么类型）在浏览器控制台里对开发才是有用的。

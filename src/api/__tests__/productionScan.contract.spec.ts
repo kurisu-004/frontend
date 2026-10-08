@@ -28,7 +28,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ZodError } from 'zod';
 
-import { scanPartListResultSchema, scanPartRowSchema } from '@/composables/queries/schemas';
+import {
+  scanPartListResultSchema,
+  scanPartRowSchema,
+} from '@/views/production/scan/composables/scanSchema';
 
 const httpGetMock = vi.fn();
 const httpPostMock = vi.fn();

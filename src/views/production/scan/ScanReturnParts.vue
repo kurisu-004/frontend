@@ -356,8 +356,8 @@ import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vu
 import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
 import { fetchScanHeld, scanWorker } from '@/api/productionScan';
-import { scanPartListResultSchema } from '@/composables/queries/schemas';
-import type { ScanPartRowSchema } from '@/composables/queries/schemas';
+import { scanPartListResultSchema } from '@/views/production/scan/composables/scanSchema';
+import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
 import ProcessPickerDialog from '@/views/production/scan/components/ProcessPickerDialog.vue';
 import BatchPickerDialog, { type BatchPickerRow } from '@/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
@@ -495,7 +495,7 @@ function enterReturnFlow(p: ScanPartRowSchema): void {
   showProcessDialog.value = true; // NONE：无链 / 漂移，现状不变
 }
 
-/** 后端认的三态；其余一律当 NONE（`schemas.ts::scanPartRowSchema.chain_state` 的
+/** 后端认的三态；其余一律当 NONE（`scanSchema.ts::scanPartRowSchema.chain_state` 的
  *  声明与降级理由见该字段注释）。 */
 type ChainState = 'NONE' | 'NEXT' | 'TAIL';
 

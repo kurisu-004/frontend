@@ -80,7 +80,7 @@ vi.mock('@/components/PdfViewer.vue', () => ({
 import ScanReturnParts from '../ScanReturnParts.vue';
 import { CHAIN_ROW_CLASS } from '@/views/production/scan/chainAccent';
 import { useScanSession } from '@/views/production/scan/composables/useScanSession';
-import type { ScanPartRowSchema } from '@/composables/queries/schemas';
+import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
 
 // 报工台 session 的 worker 是后端 `ScanWorkerBrief`（4 字段），不是账号管理页那个
 // 12 字段的 `WorkerOut`。

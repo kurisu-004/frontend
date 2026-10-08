@@ -287,8 +287,8 @@ import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vu
 import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
 import { fetchScanPickable, pickUpBatch } from '@/api/productionScan';
-import { scanPartListResultSchema } from '@/composables/queries/schemas';
-import type { ScanPartRowSchema } from '@/composables/queries/schemas';
+import { scanPartListResultSchema } from '@/views/production/scan/composables/scanSchema';
+import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 import BatchPickerDialog, { type BatchPickerRow } from '@/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
