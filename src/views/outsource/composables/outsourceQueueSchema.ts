@@ -66,7 +66,9 @@ import { outsourceCompanyOptionSchema } from './outsourceListSchema';
  *  - `has_cnc_program` 与卡片 body 的「已编程」tag 同源；
  *  - `has_process_chain`（2026-10-09 后端新增）是批次卡片的**左边框**唯一语义源：
  *    「有制定工序链且链指针未漂移」。在途行（`outsourceQueueHeldBatchSchema`）**没有**
- *    这个字段 —— 外协收发阶段不判链，适配层给恒 false。 */
+ *    这个字段 —— 外协收发阶段不判链，适配层给恒 false。
+ *    ⚠️ **部署顺序：后端必须先上线** —— 该键必填且无默认值，旧后端漏发会让整个单工序
+ *    看板（含公司列）parse 失败全空；契约漂移文案见 `outsourceQueueErrorMessage.ts`。 */
 export const outsourceQueueCandidateSchema = z.object({
   /** `t_part_batch.version`（批次级 OCC，发送时原样回传）。 */
   version: z.number(),

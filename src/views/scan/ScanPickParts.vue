@@ -31,14 +31,13 @@
    这解掉了「账号绑 ≥ 2 个架 ⇒ 作业架判不出 ⇒ 守卫 100% 拦死、取件一次都提交不出去」
    的死结：取件对账号绑了几个架不再有任何要求。送检（/scan/inspect）的 `shelf_id` 是
    真事实（落库 + scope 校验），仍走作业架 + 选架 UI。
-- ⚠️ **部署顺序**：后端改成可选的那一支必须先上线；旧后端 + 不发 `shelf_id` = 裸
-      HTTP 422（axum Json extractor 拒，不是项目统一信封）。
+   - ⚠️ **部署顺序**：后端改成可选的那一支必须先上线；旧后端 + 不发 `shelf_id` = 裸
+     HTTP 422（axum Json extractor 拒，不是项目统一信封）。
 
-    2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
-    （有链 = 绿，规则见 `@/views/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
-    加急由红底 + 「加急」tag 承担，两者都不进边框。
+   2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
+   （有链 = 绿，规则见 `@/views/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
+   加急由红底 + 「加急」tag 承担，两者都不进边框。
 -->
-
 
 <template>
   <div class="scan-pick">
@@ -127,8 +126,8 @@
                 'is-selected': sameBatch(selectedPart, p),
                 'is-urgent': p.is_urgent,
               },
+              chainRowClass(p.has_process_chain),
             ]"
-            :style="{ borderLeftColor: chainBorderColor(p.has_process_chain) }"
             @click="onSelect(p)"
           >
             <div class="part-row-main">
@@ -290,7 +289,7 @@ import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
-import { chainBorderColor } from '@/views/scan/chainAccent';
+import { chainRowClass } from '@/views/scan/chainAccent';
 
 const router = useRouter();
 const { worker, requireWorker, reset: resetScanSession } = useScanSession();
@@ -693,8 +692,8 @@ function backToBadge(): void {
   align-items: stretch;
   padding: 14px 18px !important;
   border: 1px solid #e4e7ed;
-  /* 左边框颜色由模板按行数据 inline 给出（has_process_chain → 绿）；这里只给中性底色，
-     保证 inline 那一层没绑上时（样式不进 DOM 的环境）竖条也不整条消失。 */
+  /* 左边框底色与另外三边同色；链语义绿由下面的 `.part-row.has-chain` 覆盖，
+     状态类（.is-selected / .is-urgent）不动左边框。 */
   border-left: 4px solid #e4e7ed;
   border-radius: 8px;
   cursor: pointer;
@@ -724,6 +723,12 @@ function backToBadge(): void {
   background: #fef0f0;
   border-color: #67c23a;
   box-shadow: 0 0 0 2px #67c23a inset;
+}
+/* 左边框 = 链语义（有制定工序链且链指针未漂移），EP 语义绿的字面值。
+   必须排在全部状态类之后：与它们同为 0,2,0，靠源码顺序取胜，这样
+   `border-color` 简写染过的四边里左边框仍归链语义。 */
+.part-row.has-chain {
+  border-left-color: #67c23a;
 }
 
 .part-row-main {

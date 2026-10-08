@@ -124,8 +124,8 @@
                 'is-selected': sameBatch(selectedPart, p),
                 'is-urgent': p.is_urgent,
               },
+              chainRowClass(p.has_process_chain),
             ]"
-            :style="{ borderLeftColor: chainBorderColor(p.has_process_chain) }"
             @click="onSelect(p)"
           >
             <div class="part-row-main">
@@ -342,7 +342,7 @@ import ReturnConfirmDialog from '@/views/scan/components/ReturnConfirmDialog.vue
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/scan/components/RefillTakenDialog.vue';
-import { chainBorderColor } from '@/views/scan/chainAccent';
+import { chainRowClass } from '@/views/scan/chainAccent';
 import type { TakenItemDto } from '@/api/productionQueue.contract';
 import type { Process } from '@/types/process';
 import type { ShelfForReturn } from '@/types/shelf';
@@ -1051,7 +1051,8 @@ function backToBadge(): void {
   align-items: stretch;
   padding: 14px 18px !important;
   border: 1px solid #e4e7ed;
-  /* 左边框颜色由模板按行数据 inline 给出（has_process_chain → 绿）；这里只给中性底色。 */
+  /* 左边框底色与另外三边同色；链语义绿由下面的 `.part-row.has-chain` 覆盖，
+     状态类（.is-selected / .is-urgent）不动左边框。 */
   border-left: 4px solid #e4e7ed;
   border-radius: 8px;
   cursor: pointer;
@@ -1081,6 +1082,12 @@ function backToBadge(): void {
   background: #fef0f0;
   border-color: #67c23a;
   box-shadow: 0 0 0 2px #67c23a inset;
+}
+/* 左边框 = 链语义（有制定工序链且链指针未漂移），EP 语义绿的字面值。
+   必须排在全部状态类之后：与它们同为 0,2,0，靠源码顺序取胜，这样
+   `border-color` 简写染过的四边里左边框仍归链语义。 */
+.part-row.has-chain {
+  border-left-color: #67c23a;
 }
 
 .part-row-main {

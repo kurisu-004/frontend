@@ -86,7 +86,11 @@ export type QueueSnapshotSchema = z.infer<typeof queueSnapshotSchema>;
  *  `location` 恒 'WORKER'（后端按 held 态判定），仍按 `z.string()` 收，不锁字面量 ——
  *  将来出现新的 held 形态（例如外协公司持有）时不必改 schema。
  *  `has_process_chain` 是后端派生列（2026-10-09 新增，语义见
- *  `src/types/batchCard.ts::BatchCardModel.has_process_chain`），卡片左边框专用。 */
+ *  `src/types/batchCard.ts::BatchCardModel.has_process_chain`），卡片左边框专用：
+ *  必填 + 无默认值，缺键即整份看板 parse 失败。
+ *  ⚠️ **部署顺序：后端必须先上线** —— 旧后端漏发该键 ⇒ 工序板（候选池 + 工人列）与
+ *  本页其它队列面全空。契约漂移文案见 `queueListErrorMessage.ts`。
+ *  本域的 `held_batches` 与快照 `items`（`queuePoolItemSchema`）两处都声明该键。 */
 export const queueHeldBatchSchema = z.object({
   batch_id: z.string(),
   part_id: z.string(),
@@ -140,7 +144,8 @@ export type QueueWorkerSchema = z.infer<typeof queueWorkerSchema>;
  *  带到落点请求里 ⇒ 漏声明这一项的表现是「请求体少字段 / move 恒 20122」。
  *  `location` 原始枚举（'PRODUCTION_SHELF'）**不在**本 schema：位置由
  * shelf_code 表达，卡片的 location 行渲染货架 code，原始枚举前端零消费。
- *  `has_process_chain` 是后端派生列（2026-10-09 新增），卡片左边框专用。 */
+ *  `has_process_chain` 是后端派生列（2026-10-09 新增），卡片左边框专用；必填 + 无
+ *  默认值，部署顺序要求见上面 `queueHeldBatchSchema` 的同名段。 */
 export const queuePoolItemSchema = z.object({
   batch_id: z.string(),
   part_id: z.string(),

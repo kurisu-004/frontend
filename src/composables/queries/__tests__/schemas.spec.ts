@@ -883,8 +883,9 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     expect(parsed.chain_state).toBe('NEXT');
     // 2026-10-09 后端派生列：三页列表卡左边框只看它（真 / 假两态都收）
     expect(parsed.has_process_chain).toBe(true);
-    expect(scanPartRowSchema.parse({ ...validScanRow, has_process_chain: false }).has_process_chain)
-      .toBe(false);
+    expect(
+      scanPartRowSchema.parse({ ...validScanRow, has_process_chain: false }).has_process_chain,
+    ).toBe(false);
     // 后端刻意不返的键不在 schema 里 ⇒ parse 后不应凭空出现
     expect('next_process_id' in parsed).toBe(false);
     expect('shelf_code' in parsed).toBe(false);

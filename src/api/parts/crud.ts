@@ -119,12 +119,14 @@ export interface PartItem {
    *    `ScanPickParts.vue` 的 `PICK_UP_NO_BATCH_HINT` 缺字段守卫。** */
   batch_version?: number | null;
   /** 2026-10-09 后端新增的派生列（批次级 boolean）：报工台两个列表端点（`pickable-by-work-type` /
-   *  `by-worker`）都填，报工台三页的列表卡左边框按它着色（有链且指针未漂移 = 绿，
-   *  规则见 `@/views/scan/chainAccent`）；其余复用本 VO 的端点不填该列。
-   *  声明成可选而非必填：`PartItem` 同时是 `BatchPickerDialog` 的 `pick` 出口载荷与
-   *  其它域的窄 VO 载体，必填会把那两处一起顶爆；**报工台路径的必填守门在
-   *  `scanPartRowSchema`**（该键声明成 `z.boolean()`，缺键即抛）。 */
-  has_process_chain?: boolean;
+   *  `by-worker`）都填真值，报工台三页的列表卡左边框按它着色（有链且指针未漂移 = 绿，
+   *  规则见 `@/views/scan/chainAccent`）；其余复用本 VO 的端点**恒为 false**（键恒在 ——
+   *  后端 `PartListItem.has_process_chain` 非 Option、无 `serde(default)`，`From` 里显式
+   *  赋值 ⇒ 漏赋值编译不过；part 级路径拿不到批次链位置，故 false）。
+   *  **声明成必填**：键恒在而类型层允许 undefined 只会让下游写出 `boolean | undefined` 的
+   *  防御代码，而运行时这个 undefined 永远不会出现（报工台路径的必填守门在
+   *  `scanPartRowSchema`，缺键即抛）。 */
+  has_process_chain: boolean;
 }
 
 export interface PartListResult {

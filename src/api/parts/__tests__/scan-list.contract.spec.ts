@@ -192,10 +192,10 @@ describe('A 组：报工台两个读端点的 URL 与 query 逐字钉死', () =>
 // +「缺分页字段 / 类型错 / 裸数组时 parse 抛错」双向锁死。
 //
 // 下面 2 份 fixture 是后端 `PartListItem`（backend-rust
-// `src/modules/part/vo/part.rs::PartListItem`）的**完整 39 字段集**（2026-10-09 起新增
-// 派生列 `has_process_chain`），逐字照抄 VO 结构。
+// `src/modules/part/vo/part.rs::PartListItem`）的**前端消费集 39 字段**（2026-10-09 起
+// 新增派生列 `has_process_chain`），逐字照抄 VO 结构。
 // 「fixture 写全」本身不构成守卫 —— 多出来的键会被 strip 静默吞掉、parse 不报错；
-// 真正把「schema 声明的字段集 == VO 字段集」钉死的是 E7 的键集断言。
+// 真正把「schema 声明的字段集 == 前端消费集」钉死的是 E7 的键集断言。
 // ============================================================
 
 /**
@@ -365,9 +365,8 @@ const wireHeldRow = {
   assembly_id: null,
   status: 'IN_PROCESS',
   is_urgent: false,
-  // ⚠️ 2026-10-09 **按契约手写**（这一列后端尚未上线，无法实测）：放回端点的存量数据
-  //  里链指针常常是 NULL ⇒ 本行取 false（列表卡灰边框），属预期而非渲染缺陷。
-  //  W1 的键集断言依赖本键存在。
+  // ⚠️ 2026-10-09 **按契约手写（未实测转录）**：放回端点的存量数据里链指针常常是
+  // NULL ⇒ 本行取 false（列表卡灰边框），属预期而非渲染缺陷。W1 的键集断言依赖本键存在。
   has_process_chain: false,
   order_no: null,
   system_delivery_date: null,
@@ -494,6 +493,11 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
   //   · schema 多声明一个 **optional** 字段 → 键集断言看不见（Zod 对输入中缺省的
   //     optional 键不写入输出）。该失败模式本身无害（不会误拒任何响应，也不会有字段
   //     被静默吞掉），故不为它额外设计断言。
+  //
+  // 记档（2026-10-09）：后端 `PartListItem` 还有一个 `delivered_quantity`，**本 schema
+  // 有意不收** —— 报工台三页零消费它（零件列表页那一列走 `partBatchSchema` 的同名字段，
+  // 见 `views/parts/list/partsListColumnDefs.ts`）。故「39 字段」是报工台的消费集，
+  // 不是 VO 全集。
   it('E7：parse 后的行键集与后端 PartListItem 的 39 字段逐字段相等', () => {
     expect(Object.keys(pickRowFixture).length, 'fixture 字段数（后端 VO 漂移也会红）').toBe(39);
     expect(Object.keys(scanPartRowSchema.parse(pickRowFixture)).sort()).toEqual(

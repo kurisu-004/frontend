@@ -55,8 +55,9 @@ export interface BatchCardModel {
   system_delivery_date: string | null;
   /** t_part.planned_delivery_date，ISO 'YYYY-MM-DD' —— 只进 tooltip（候选池 DTO 不带该字段，恒 null） */
   planned_delivery_date: string | null;
-  /** 加急标记：只驱动 body 的「加急」tag（卡片红底在各消费页的 `.is-urgent` 样式里），
-   *  **不再参与左侧竖条着色** —— 竖条整条让给 `has_process_chain`。 */
+  /** 加急标记：只驱动 body 的「加急」tag（批次卡片**没有**加急红底 —— `.is-urgent`
+   *  是扫码台 `.part-row` 的样式），**不再参与左侧竖条着色** —— 竖条整条让给
+   *  `has_process_chain`。 */
   is_urgent: boolean;
   /**
    * 2026-10-09 新增：这条批次**有制定工序链且链指针未漂移**，是左侧 4px 竖条唯一的语义色

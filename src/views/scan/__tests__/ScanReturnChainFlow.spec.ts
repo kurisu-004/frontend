@@ -43,6 +43,9 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // vi.mock 的工厂会被提升到文件顶部，不能引用后声明的 const ⇒ 所有桩函数集中放进
 // vi.hoisted 暴露的那一个对象里。
@@ -86,7 +89,7 @@ vi.mock('@/components/PdfViewer.vue', () => ({
 import ScanReturnParts from '../ScanReturnParts.vue';
 import ReturnConfirmDialog from '../components/ReturnConfirmDialog.vue';
 import { SCAN_LIST_CONTRACT_DRIFT_TEXT } from '@/views/scan/composables/scanListErrorMessage';
-import { CHAIN_BORDER_COLOR, NO_CHAIN_BORDER_COLOR } from '@/views/scan/chainAccent';
+import { CHAIN_ROW_CLASS } from '@/views/scan/chainAccent';
 import { useScanSession } from '@/composables/useScanSession';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import { ZodError } from 'zod';
@@ -782,21 +785,25 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
 // `useBarcodeScanner` / 弹窗壳的整组 vi.mock + `mountPage` / `row()` fixture）在这里，
 // 为一条边框断言复制一份上百行的桩，漂移成本高于收益。
 //
-// 顺带守一条易踩的坑：三页此前各有一套硬编码左边框色（取件蓝 / 放回琥珀 / 送检绿）
-// 用来区分**流程**，而 `.part-row.is-urgent` 里还显式写了 `border-left-color: #f56c6c`
-// —— 那条规则一旦留着，加急行的绿边框会被加急红压掉。两条都从 CSS 里删掉了。
+// 断言的是**类名**，不是渲染出来的色值 —— vitest 不处理 SFC 的 `<style>`（happy-dom 里
+// `document.styleSheets` 恒为空），样式层的颜色无从断言，类名就是那条规则的唯一载体。
+//
+// 顺带守两条易踩的坑：
+//   1. 三页此前各有一套硬编码左边框色（取件蓝 / 放回琥珀 / 送检绿）用来区分**流程**，
+//      而 `.part-row.is-urgent` 里还显式写了 `border-left-color: #f56c6c` —— 那条规则
+//      一旦留着，加急行的绿边框会被加急红压掉。两条都从 CSS 里删掉了；
+//   2. 左边框色**不得回到模板 inline `:style`**：inline 优先于任何非 `!important` 规则，
+//      `.is-selected` / `.is-urgent` 的 `border-color` 简写盖不住它，选中行会呈现
+//      「三边状态色 + 一条中性灰左边框」。类绑定与状态类同为 0,2,0，靠源码顺序取胜。
 // ============================================================
 describe('ScanReturnParts — 列表卡左边框按 has_process_chain 着色', () => {
-  /** 卡片的左边框色（模板 inline :style 给到 el-card，stub 落在根 div 上）。 */
-  function borderLeftOf(card: { element: Element }): string {
-    return (card.element as HTMLElement).style.borderLeftColor;
-  }
-
-  /** 把 CSS 颜色字面量归一到浏览器实际生效的形态（happy-dom 把 #rrggbb 转 rgb(...)）。 */
-  function normalizeColor(color: string): string {
-    const scratch = document.createElement('div');
-    scratch.style.borderLeftColor = color;
-    return scratch.style.borderLeftColor;
+  /** 取出 `selector { … }` 这条规则的花括号内原文（取不到返回空串，由用例报错）。 */
+  function cssRuleBody(src: string, selector: string): string {
+    const at = src.indexOf(`${selector} {`);
+    if (at < 0) return '';
+    const bodyStart = at + selector.length + 2;
+    const end = src.indexOf('}', bodyStart);
+    return src.slice(bodyStart, end < 0 ? src.length : end);
   }
 
   function cardBySerial(w: Awaited<ReturnType<typeof mountPage>>, serial: string) {
@@ -805,7 +812,12 @@ describe('ScanReturnParts — 列表卡左边框按 has_process_chain 着色', (
     return card;
   }
 
-  it('有链且指针未漂移 ⇒ 绿边框；无链 ⇒ 中性边框（两态色值不同）', async () => {
+  /** 行根上的 inline 左边框色：必须恒为空串（见文件头第 2 条坑）。 */
+  function inlineBorderLeftOf(card: { element: Element }): string {
+    return (card.element as HTMLElement).style.borderLeftColor;
+  }
+
+  it('有链挂 has-chain、无链不挂（两边框色的判据唯一来自链）', async () => {
     const w = await mountPage([
       row({
         serial_no: 'F-901',
@@ -821,16 +833,18 @@ describe('ScanReturnParts — 列表卡左边框按 has_process_chain 着色', (
       }),
     ]);
 
-    const chained = borderLeftOf(cardBySerial(w, 'F-901'));
-    const noChain = borderLeftOf(cardBySerial(w, 'F-902'));
-    expect(chained).toBe(normalizeColor(CHAIN_BORDER_COLOR));
-    expect(noChain).toBe(normalizeColor(NO_CHAIN_BORDER_COLOR));
-    expect(chained).not.toBe(noChain);
+    expect(cardBySerial(w, 'F-901').classes()).toContain(CHAIN_ROW_CLASS);
+    expect(cardBySerial(w, 'F-902').classes()).not.toContain(CHAIN_ROW_CLASS);
+    for (const serial of ['F-901', 'F-902']) {
+      expect(inlineBorderLeftOf(cardBySerial(w, serial)), `${serial} 不得有 inline 左边框色`).toBe(
+        '',
+      );
+    }
   });
 
-  // 加急语义改由红底 + 「加急」tag 承担；边框让位给链。加急 + 有链的卡片必须是绿边框，
-  // 加急 + 无链的必须是中性边框 —— 两种加急都不该染成加急红。
-  it('加急不再染边框：红底 + 「加急」tag 保留，边框色仍只由链决定', async () => {
+  // 加急语义改由红底 + 「加急」tag 承担；边框让位给链。加急 + 有链的卡片仍挂 has-chain，
+  // 加急 + 无链的不挂 —— 两种加急都不该染成加急红。
+  it('加急不再染边框：红底 + 「加急」tag 保留，边框判据仍只由链决定', async () => {
     const w = await mountPage([
       row({
         serial_no: 'F-911',
@@ -851,10 +865,74 @@ describe('ScanReturnParts — 列表卡左边框按 has_process_chain 着色', (
     const urgentChained = cardBySerial(w, 'F-911');
     expect(urgentChained.classes()).toContain('is-urgent');
     expect(urgentChained.text()).toContain('加急');
-    expect(borderLeftOf(urgentChained)).toBe(normalizeColor(CHAIN_BORDER_COLOR));
+    expect(urgentChained.classes()).toContain(CHAIN_ROW_CLASS);
+    expect(inlineBorderLeftOf(urgentChained)).toBe('');
 
     const urgentNoChain = cardBySerial(w, 'F-912');
     expect(urgentNoChain.text()).toContain('加急');
-    expect(borderLeftOf(urgentNoChain)).toBe(normalizeColor(NO_CHAIN_BORDER_COLOR));
+    expect(urgentNoChain.classes()).not.toContain(CHAIN_ROW_CLASS);
+    expect(inlineBorderLeftOf(urgentNoChain)).toBe('');
+  });
+
+  // 选中态此前零覆盖，正是「inline 压掉 `.is-selected`」那条回归能溜过测试的原因。
+  // 选中行的左边框由 `.is-selected`（无链）或 `.has-chain`（有链）决定，两者都在 CSS
+  // 里；这里钉住的是「选中不带 inline 左边框色」+「链类不被选中态吃掉」。
+  it('选中态：选中类与链类共存，且不产生 inline 左边框色', async () => {
+    const w = await mountPage([
+      row({
+        serial_no: 'F-921',
+        id: '190000000000921',
+        batch_id: '190000000000921',
+        has_process_chain: true,
+      }),
+      row({
+        serial_no: 'F-922',
+        id: '190000000000922',
+        batch_id: '190000000000922',
+        has_process_chain: false,
+      }),
+    ]);
+
+    await clickPartBySerial(w, 'F-921');
+
+    const selectedChained = cardBySerial(w, 'F-921');
+    expect(selectedChained.classes()).toContain('is-selected');
+    expect(selectedChained.classes()).toContain(CHAIN_ROW_CLASS);
+    expect(inlineBorderLeftOf(selectedChained), '选中态不得被 inline 左边框色压掉').toBe('');
+
+    // 未选中的无链行仍是中性左边框（有链类缺席 + 无 inline）
+    const unselectedNoChain = cardBySerial(w, 'F-922');
+    expect(unselectedNoChain.classes()).not.toContain('is-selected');
+    expect(unselectedNoChain.classes()).not.toContain(CHAIN_ROW_CLASS);
+    expect(inlineBorderLeftOf(unselectedNoChain)).toBe('');
+  });
+
+  // 级联契约（读源码）：类名对了还不够 —— `.has-chain` 与 `.is-selected` / `.is-urgent`
+  // 同为 0,2,0，谁生效全靠源码顺序；`.has-chain` 被挪到状态类之前，左边框就会重新
+  // 被 `border-color` 简写盖成状态色。这类回归在类名断言上完全不可见。
+  it('源码契约：三页的 .has-chain 规则排在全部状态类之后，且模板不再 inline 左边框色', () => {
+    for (const file of ['ScanReturnParts.vue', 'ScanPickParts.vue', 'ScanInspectParts.vue']) {
+      const src = readFileSync(
+        resolve(dirname(fileURLToPath(import.meta.url)), '..', file),
+        'utf8',
+      );
+      expect(src, `${file} 不得用 inline :style 承载左边框语义色`).not.toContain('borderLeftColor');
+      const chainAt = src.indexOf('.part-row.has-chain {');
+      expect(chainAt, `${file} 缺少 .part-row.has-chain 规则`).toBeGreaterThan(-1);
+      for (const selector of [
+        '.part-row.is-selected {',
+        '.part-row.is-urgent {',
+        '.part-row.is-urgent.is-selected {',
+      ]) {
+        expect(src.indexOf(selector), `${file} 缺少 ${selector}`).toBeGreaterThan(-1);
+        expect(chainAt, `${file} 的 .has-chain 必须排在 ${selector} 之后`).toBeGreaterThan(
+          src.indexOf(selector),
+        );
+      }
+      expect(
+        cssRuleBody(src, '.part-row.has-chain'),
+        `${file} 的 .has-chain 规则必须只染左边框`,
+      ).toContain('border-left-color');
+    }
   });
 });

@@ -14,7 +14,9 @@
 //   - staleTime 30_000 / gcTime 5 * 60 * 1000（同域快照：30s 短时去重 + 5min 缓存）。
 //     **不用 POSITIVE_INFINITY**（dashboard 域的例外，前提是该域有 WS 事件失效；本域
 //     零 WS 订阅，理由见 useOutsourceQueueSnapshotQuery.ts 文件头）；
-//   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
+//   - 不写 retry：信任 main.ts 全局 queries.retry: 0；
+//   - 错误文案经本域 `outsourceQueueErrorText` 收口：ZodError（契约漂移）只给现场
+//     一句人话，细节进 console。
 //
 // 懒加载：`el-tab-pane :lazy="true"` ⇒ tab body 首次激活才 mount，本 query 才发请求。
 
@@ -24,6 +26,7 @@ import { ElMessage } from 'element-plus';
 import { fetchOutsourceQueueProcess } from '@/api/outsource';
 import { qk } from '@/composables/queries/keys';
 import { outsourceQueueProcessDetailSchema } from './outsourceQueueSchema';
+import { outsourceQueueErrorText } from './outsourceQueueErrorMessage';
 
 /** 单工序外协看板 query（`GET /api/v2/outsource-queue/processes/{process_id}`）。
  *
@@ -49,9 +52,10 @@ export function useOutsourceQueueProcessQuery(
     gcTime: 5 * 60 * 1000,
   });
 
-  // 错误桥接：useQuery 的 error 不在 setup 抛错。
+  // 错误桥接：useQuery 的 error 不在 setup 抛错。ZodError 经本域收口成一句人话
+  // （细节只进 console），其余异常沿用原始 message。
   watch(query.error, (e) => {
-    if (e) ElMessage.error(e.message ?? '外协看板加载失败');
+    if (e) ElMessage.error(outsourceQueueErrorText(e, '外协看板加载失败'));
   });
 
   return query;

@@ -1018,6 +1018,10 @@ export const scanPartRowSchema = z.object({
    * `chain_state` 四件套的「带默认值降级」取舍相反 —— 那四个键可能被后端单方面新增 /
    * 漏发，缺了只是 UX 降级；本键直接决定边框着色，缺键时降级成灰色边框与「真无链」
    * 不可区分，不如在 API 边界炸出来。
+   * ⚠️ **部署顺序：后端必须先上线**。旧后端（漏发该键）+ 新前端 ⇒ 这一个键就足以让
+   * 报工台三页列表 + `HeldPartsBadge` 四个面全空（ZodError ⇒ 整份信封 parse 失败）。
+   * 契约漂移的文案由 `views/scan/composables/scanListErrorMessage.ts` 收口成一句人话，
+   * 细节只进 console。
    * ⚠️ 存量数据里 `by-worker`（放回 / 送检）的指针常常是 NULL ⇒ 短期内部分卡片灰边框
    * 属于预期，不是渲染缺陷。
    */

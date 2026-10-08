@@ -133,7 +133,8 @@ describe('queueItemToCard — 待下发批次：按 process_chain_id !== "0" 推
     // 「字符串 "0" 才是未制定」，防止将来有人把判据宽松成 falsy / nullish 后
     // 把 '0' 也当成有链。
     expect(pendingBatchToCard(makePending({ process_chain_id: '1' })).has_process_chain).toBe(true);
-    expect(pendingBatchToCard(makePending({ process_chain_id: '1234567890123' })).has_process_chain)
-      .toBe(true);
+    expect(
+      pendingBatchToCard(makePending({ process_chain_id: '1234567890123' })).has_process_chain,
+    ).toBe(true);
   });
 });

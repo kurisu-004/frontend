@@ -33,8 +33,9 @@
        （20×18px）不弹 tooltip。守卫：src/components/__tests__/BatchCardDndFootprint.spec.ts。
 
      2026-10-09：左侧 4px 竖条**只**表达「这条批次有制定工序链且链指针未漂移」
-     （语义绿，见 `accentVar`）。加急不进边框 —— 它由 body 的「加急」tag + 消费页的
-     `.is-urgent` 红底独立承载；两个语义抢同一条竖条时加急件会盖掉链信息。 -->
+     （语义绿，见 `accentVar`）。加急不进边框 —— 它只剩 body 的「加急」tag 一个通道
+     （`.is-urgent` 红底是扫码台 `.part-row` 的样式，批次卡片没有）；两个语义抢同一条
+     竖条时加急件会盖掉链信息。 -->
 <template>
   <div
     v-bind="$attrs"
@@ -174,8 +175,9 @@ const CHAIN_BORDER_COLOR = 'var(--el-color-success)';
 /** 左侧 4px 竖条**只**承载「这条批次有制定工序链且链指针未漂移」这一个语义（2026-10-09
  *  起）：有链走语义绿，无链落回与另外三边同色的中性边框色（不是透明 —— 左边框恒定
  *  可见，密集看板里整列才不发飘）。
- *  加急不进竖条：它由 body 的「加急」tag + 各消费页的 `.is-urgent` 红底表达，两者本来
- *  就在；两个语义叠在同一条竖条上时，加急件（常常正是有链件）会把链信息盖掉。
+ *  加急不进竖条：加急只剩 body 的「加急」tag 一个通道（批次卡片没有 `.is-urgent`
+ *  红底，那是扫码台 `.part-row` 的样式）；两个语义叠在同一条竖条上时，加急件（常常
+ *  正是有链件）会把链信息盖掉。
  *  需要按工序色着色的工序投放卡是另一个组件（PendingPoolCard，自己用 inline :style），
  *  不共用本机制。 */
 const accentVar = computed(() =>

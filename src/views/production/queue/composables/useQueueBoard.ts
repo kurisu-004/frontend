@@ -15,7 +15,9 @@
 //   - staleTime 30_000 / gcTime 5 * 60 * 1000（同域快照：30s 短时去重 + 5min 缓存）。
 //     **不用 POSITIVE_INFINITY**（dashboard 域的例外，前提是该域有 WS 事件失效；
 //     本轮队列页零 WS 订阅，理由见 useQueueSnapshot.ts 文件头）；
-//   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
+//   - 不写 retry：信任 main.ts 全局 queries.retry: 0；
+//   - 错误文案经本域 `queueListErrorText` 收口：ZodError（契约漂移）只给现场一句人话，
+//     细节进 console。
 //
 // 懒加载：`el-tab-pane :lazy="true"` ⇒ ProcessBoardTab 首次激活才 mount，本 query 才
 // 发请求；「待下发」首屏不发。
@@ -26,6 +28,7 @@ import { ElMessage } from 'element-plus';
 import { fetchQueueBoard } from '@/api/productionQueue';
 import { qk } from '@/composables/queries/keys';
 import { queueBoardSchema } from './productionQueueSchema';
+import { queueListErrorText } from './queueListErrorMessage';
 
 /** 单工序看板 query（`GET /api/v2/prod/queue/processes/{process_id}`）。
  *
@@ -49,9 +52,10 @@ export function useQueueBoard(processId: MaybeRefOrGetter<string | null | undefi
     gcTime: 5 * 60 * 1000,
   });
 
-  // 错误桥接：useQuery 的 error 不在 setup 抛错。
+  // 错误桥接：useQuery 的 error 不在 setup 抛错。ZodError 经本域收口成一句人话
+  // （细节只进 console），其余异常沿用原始 message。
   watch(query.error, (e) => {
-    if (e) ElMessage.error(e.message ?? '工序看板加载失败');
+    if (e) ElMessage.error(queueListErrorText(e, '工序看板加载失败'));
   });
 
   return query;

@@ -29,6 +29,7 @@ import { ElMessage } from 'element-plus';
 import { fetchOutsourceQueueSnapshot } from '@/api/outsource';
 import { qk } from '@/composables/queries/keys';
 import { outsourceQueueSnapshotSchema } from './outsourceQueueSchema';
+import { outsourceQueueErrorText } from './outsourceQueueErrorMessage';
 
 /** 外协看板快照 query（`GET /api/v2/outsource-queue/snapshot`）。
  *
@@ -50,8 +51,9 @@ export function useOutsourceQueueSnapshotQuery() {
   });
 
   // 错误桥接：useQuery 的 error 不在 setup 抛错（抛错会让整个页面 setup 失败）。
+  // ZodError 经本域收口成一句人话（细节只进 console），其余异常沿用原始 message。
   watch(query.error, (e) => {
-    if (e) ElMessage.error(e.message ?? '外协看板徽标加载失败');
+    if (e) ElMessage.error(outsourceQueueErrorText(e, '外协看板徽标加载失败'));
   });
 
   return query;
