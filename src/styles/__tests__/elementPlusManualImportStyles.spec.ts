@@ -92,7 +92,12 @@ const EXEMPT: Record<string, string[]> = {
   'views/statistics/PickupSkipTab.vue': ['el-tag'],
   'views/statistics/WorkerDetailTab.vue': ['el-tag'],
   'views/statistics/WorkerStatsTab.vue': ['el-progress', 'el-tag'],
-  'views/users/UserList.vue': ['el-tag', 'el-form'],
+  // ⚠️ 2026-10-10 账号管理页现代化重构：UserList.vue 退化为薄壳，列定义（ElTag / ElButton
+  //    / ElInput / ElPopconfirm 的 value-import）搬进域根 `views/users/usersColumnDefs.ts`，
+  //    el-form 只作为全局注册模板标签使用 ⇒ 本文件不再 value-import 任何 EP 组件，
+  //    这条登记随之删除。样式覆盖由宿主页表格里的 `<el-tag>` / `<el-button>` 等模板标签
+  //    经 resolver 顺带注入（与 deliveryNoteColumnDefs.ts 同款理由：`.ts` 文件不在本守卫
+  //    的扫描口径内）。
   'views/production/WorkerList.vue': ['el-tag', 'el-table'],
 };
 
