@@ -6,7 +6,7 @@
   布局：
     - KPI 横排（DashboardKpiTiles，5 tile：逾期未交 / 今日到期 / N 天到期 / 在加工 / 在检）
     - 双栏：左 UpcomingDeliveryChart + FactoryRealtimeStrip，右 SystemDeliveryOrdersPanel ×2
-      （variant=urgent 最紧急工单 / variant=partial 部分已交）
+      （上卡 upcoming / overdue 随 riskMode 二选一，下卡 partial）
     - 视口 ≤1100px 折叠成单列
 
   数据流（两个 HTTP 请求 + 一个共享 WS 事件订阅）：
@@ -21,7 +21,25 @@
       选择器、下钻抽屉的 basis 快照。切口径 / 切天数时 useDashboardUpcoming 换键占位
       （keepPreviousData），isPlaceholderData 经 `:stale` 下发给柱状图出「数字还不是
       当前口径」提示层，同时挡住柱子点击（拿旧日期 + 新口径去查会数据错位）。
-    - 行点击 → selectedPart + previewOpen 走 PartPreviewDialog（统一入口）
+      **交期面板不跟 basis 切**：面板恒为系统交期语义（服务端 row 只有
+      system_delivery_date），口径开关只作用于左栏柱状图与其派生 KPI。
+    - 行点击 → selectedPart + previewOpen 走 PartPreviewDialog（统一入口）；
+      装配件行 → selectedAssemblyId + assemblyDialogOpen 走 AssemblyChildrenDialog
+      （两级叠开，见下）。
+
+  2026-10-10 交期面板拆双档（riskMode）：服务端把交期面板拆成三个**工单级**桶 ——
+  `upcoming`（系统交期 >= today 且一件都没交过）/ `overdue`（< today 且一件都没交过）/
+  `partial`（已交过一部分、**不限时间**）。上卡用 radio 在前两档之间二选一，下卡恒为
+  partial。两个「没交过」桶的判据与 `is_urgent` 加急**无关**（加急只决定行底红），
+  故 radio 文案点的是「今天及以后 / 已逾期未交」（「含今天」—— upcoming 桶判据是
+  sdd >= today，面板标题与空态同理）。
+
+  2026-10-10 行点击分流：面板行是工单级，装配件**替换**其子件行出现，
+  故 `row_type === 'ASSEMBLY'` 时不打开零件预览而是打开子件列表弹窗；弹窗内点子件再进
+  PartPreviewDialog（子件列表保持开启，两级叠着 —— 两者都 append-to-body，Element Plus
+  的 popupManager 会把后开的置顶）。分流判据抽在 `rowClickRoute.ts`（纯函数 + 三条分支
+  断言），本页只负责执行结果；装配件行要不要让点由同一个闸门决定，并通过
+  `rowClickable` 下发给面板，让不可点的行在视觉上也可辨。
 
   2026-10-03 新增右栏第二块面板「部分已交」：.main-right 两卡均分高度
   （flex: 1 1 0 + min-height 兜底），面板头 flex-shrink: 0 防被压扁。
@@ -66,23 +84,55 @@
         />
       </div>
       <div class="main-right">
+        <!-- 上卡：upcoming / overdue 二选一。radio 走面板的 #header-extra slot ——
+             分档状态由本页持有，面板只渲染（保持「只渲染、不判口径、不 slice」）。
+             rowClickable 让无权点开的行（SHELF_ACCOUNT 的装配件行）在面板里也表现
+             为不可点，而不是只在本页静默吞掉点击。 -->
         <SystemDeliveryOrdersPanel
-          variant="urgent"
-          :items="deliveryBuckets.urgent"
+          :variant="riskMode"
+          :items="riskItems"
+          :total="riskTotal"
+          :row-clickable="isRowClickable"
           @row-click="onRowClick"
-        />
+        >
+          <template #header-extra>
+            <!-- el-radio-button 用 value 属性（EP ≥2.6）而非已废弃的 label 当值
+                 （照 UpcomingDeliveryChart 的既有写法）。「今天及以后」含今天 ——
+                 服务端 upcoming 桶判据是 sdd >= today。 -->
+            <el-radio-group
+              :model-value="riskMode"
+              size="small"
+              aria-label="交期分档"
+              @update:model-value="onRiskModeChange"
+            >
+              <el-radio-button value="upcoming">今天及以后</el-radio-button>
+              <el-radio-button value="overdue">已逾期未交</el-radio-button>
+            </el-radio-group>
+          </template>
+        </SystemDeliveryOrdersPanel>
+        <!-- 下卡恒为 partial（已交过一部分、不限时间）。它同样会出现装配件行 ⇒
+             也要下发 rowClickable，否则下卡的装配件行仍会「看着能点、点了没反应」。 -->
         <SystemDeliveryOrdersPanel
           variant="partial"
-          :items="deliveryBuckets.partial"
+          :items="partialItems"
+          :total="partialTotal"
+          :row-clickable="isRowClickable"
           @row-click="onRowClick"
         />
       </div>
     </section>
 
-    <!-- 通用图纸预览对话框（A4 横向预览 + 该工单所有批次 + 持有者）。dashboard 两条
-         路径（右栏两面板行点击 + UpcomingDeliveryListDrawer 行点击）都进
+    <!-- 通用图纸预览对话框（A4 横向预览 + 该工单所有批次 + 持有者）。dashboard 三条
+         路径（右栏面板行点击 / 子件弹窗行点击 / UpcomingDeliveryListDrawer 行点击）都进
          PartPreviewDialog。 -->
     <PartPreviewDialog v-model="previewOpen" :part="selectedPart" />
+
+    <!-- 装配件子件列表弹窗（装配件行点击的下钻；与 PartPreviewDialog 两级叠开） -->
+    <AssemblyChildrenDialog
+      v-model="assemblyDialogOpen"
+      :assembly-id="selectedAssemblyId"
+      @child-click="onChildClick"
+    />
 
     <!-- 抽屉：交期柱状图按层点击列表 -->
     <UpcomingDeliveryListDrawer
@@ -105,22 +155,30 @@
 // 不写 retry：信任 main.ts 全局 queries.retry: 0。
 //
 // 跨角色权限：
-//   - SHELF_ACCOUNT：isShelfAccount = true → canOpenPartDetail = false → chips 不可点。
+//   - SHELF_ACCOUNT：isShelfAccount = true → canOpenPartDetail = false → chips 不可点，
+//     交期面板的装配件行也不可点（点开子件列表同样会暴露零件数据）。
 //   - MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER：canOpenPartDetail = true。
 
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { usePermissions } from '@/composables/usePermissions';
 import type { OrderStatus } from '@/types/parts';
 import type { DeliveryBasis, PartPreviewTarget } from '@/types/dashboard';
+import type {
+  DeliveryOrderDetailData,
+  SystemDeliveryOrderData,
+} from '@/views/dashboard/composables/dashboardSnapshotSchema';
+import type { AssemblyChildRowData } from '@/views/dashboard/composables/assemblyChildrenSchema';
 import { useDashboardSnapshot } from '@/views/dashboard/composables/useDashboardSnapshot';
 import { useDashboardUpcoming } from '@/views/dashboard/composables/useDashboardUpcoming';
+import { routeRowClick } from './rowClickRoute';
 import DashboardKpiTiles from './components/DashboardKpiTiles.vue';
 import UpcomingDeliveryChart from './components/UpcomingDeliveryChart.vue';
 import UpcomingDeliveryListDrawer from './components/UpcomingDeliveryListDrawer.vue';
 import SystemDeliveryOrdersPanel from './components/SystemDeliveryOrdersPanel.vue';
 import FactoryRealtimeStrip from './components/FactoryRealtimeStrip.vue';
 import PartPreviewDialog from './components/PartPreviewDialog.vue';
+import AssemblyChildrenDialog from './components/AssemblyChildrenDialog.vue';
 
 const router = useRouter();
 const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
@@ -144,6 +202,16 @@ const deliveryBasis = ref<DeliveryBasis>('system');
 /** 柱状图窗口天数（后端 clamp 1..60）。列进 KPI 标签（`N 天到期`）与柱状图分桶。 */
 const deliveryDays = ref(14);
 
+// ============ 交期面板分档（2026-10-10）============
+// 上卡在 upcoming / overdue 两个「一件都没交过」的桶之间二选一。**与 is_urgent 无关**
+// （加急只决定行底红），真实判据是服务端按有无已交批次 + 系统交期与 today 的比较。
+// 不持久化：与 deliveryBasis 同理由，每次进页面回落 upcoming（更常用的那一档）。
+const riskMode = ref<'upcoming' | 'overdue'>('upcoming');
+
+function onRiskModeChange(v: unknown): void {
+  if (v === 'upcoming' || v === 'overdue') riskMode.value = v;
+}
+
 // ============ 数据 ============
 // upcomingStale = useDashboardUpcoming 的 isPlaceholderData，即「换键占位中，图上数字
 // 还是上一份（口径 / 天数）」。不用 isFetching：同键后台 refetch（WS 事件驱动的周期性
@@ -165,10 +233,24 @@ const upcomingBuckets = computed(() => upcoming.value?.buckets ?? []);
 /** 工人在手加工批次（来自 snapshot.in_process，chips 用）。 */
 const inProcessItems = computed(() => snapshot.value?.in_process ?? []);
 
-/** 右栏两块面板的分桶（服务端已按窗口 + 「有无已交」分好并各截断 30 行，零新增请求、
- *  零前端过滤）。交付动作发 PART_DELIVERED（已在本域 AFFECTS_DASHBOARD 事件集内）
- *  → 自动失效重取。 */
-const deliveryBuckets = computed(() => snapshot.value?.system_delivery_orders ?? { urgent: [], partial: [] });
+/** 右栏两块面板的三桶（服务端已按「有无已交批次 + 系统交期 vs today」分好、按交期
+ *  升序排好并各截断 30 行，零新增请求、零前端过滤）。交付动作发 PART_DELIVERED
+ *  （已在本域 AFFECTS_DASHBOARD 事件集内）→ 自动失效重取。
+ *
+ *  桶未落地时各派生走两层可选链 + 空值兜底，面板因此渲染空态而不是挂载报错：
+ *  外层 `snapshot.value` 为 undefined（首帧 / 新前端撞旧后端时 parse 抛错），
+ *  内层 `system_delivery_orders.<桶>` 缺失（缓存里是旧形状时）。两层都要兜 ——
+ *  可选链在 `.value` 上短路后，桶键缺失会落到 `undefined.items` 上抛 TypeError。 */
+const deliveryBuckets = computed(() => snapshot.value?.system_delivery_orders);
+
+const riskItems = computed<SystemDeliveryOrderData[]>(
+  () => deliveryBuckets.value?.[riskMode.value]?.items ?? [],
+);
+const riskTotal = computed<number>(() => deliveryBuckets.value?.[riskMode.value]?.total ?? 0);
+const partialItems = computed<SystemDeliveryOrderData[]>(
+  () => deliveryBuckets.value?.partial?.items ?? [],
+);
+const partialTotal = computed<number>(() => deliveryBuckets.value?.partial?.total ?? 0);
 
 // ============ KPI 派生 ============
 const overdueCount = computed<number>(() => snapshot.value?.overdue_count ?? 0);
@@ -190,17 +272,52 @@ const inProcessCount = computed<number>(() => snapshot.value?.in_process.length 
 const inInspectionCount = computed<number>(() => snapshot.value?.in_inspection_count ?? 0);
 
 // ============ 预览对话框 ============
-// 两条路径（右栏两面板行点击 + UpcomingDeliveryListDrawer 行点击）都进
-// PartPreviewDialog，行为统一：selectedPart.value = part; previewOpen.value = true。
-// PartPreviewDialog 只读 4 个字段（id / serial_no / name / status），故 selectedPart
-// 用 PartPreviewTarget 这个最小结构 —— 三条路径的行类型各不相同
-// （WorkerHeldBatchData / SystemDeliveryOrderData / DeliveryOrderDetailData），
-// 收成最小公共结构比让弹窗去认某个具体 VO 更稳。
+// 四条路径（右栏面板行点击 / 子件弹窗行点击 / UpcomingDeliveryListDrawer 行点击，
+// 以及面板零件行）都进 PartPreviewDialog，行为统一：selectedPart.value = 行对象;
+// previewOpen.value = true。PartPreviewDialog 只读 4 个字段（id / serial_no /
+// name / status），故 selectedPart 用 PartPreviewTarget 这个最小结构 —— 各条路径的
+// 行类型各不相同（SystemDeliveryOrderData / AssemblyChildRowData /
+// DeliveryOrderDetailData），收成最小公共结构比让弹窗去认某个具体 VO 更稳。
+// 行对象都比 PartPreviewTarget 多字段，但这里是**变量赋值**（非对象字面量），
+// TS 的多余属性检查不适用，故直接赋值合法、无需逐字段改写。
 const previewOpen = ref(false);
 const selectedPart = ref<PartPreviewTarget | null>(null);
 
-function onRowClick(part: PartPreviewTarget): void {
-  selectedPart.value = part;
+/** 装配件子件弹窗（装配件行点击的下钻）。selectedAssemblyId 为 null 时不取数
+ *  （query 的 enabled 闸门）。关闭时一并清空 —— 对话框语义上该在关掉时释放选中态，
+ *  且这样闸门才真正跟着弹窗开关走：不清空的话一旦点过任何装配件行，这条 query 在
+ *  dashboard 页存活期内恒 enabled。 */
+const assemblyDialogOpen = ref(false);
+const selectedAssemblyId = ref<string | null>(null);
+
+watch(assemblyDialogOpen, (open) => {
+  if (!open) selectedAssemblyId.value = null;
+});
+
+/** 该行是否可点（下发给面板，让不可点的行在视觉上也表现不可点）。判据与执行分流
+ *  同源，都是 routeRowClick —— 避免「面板按 A 判、点击按 B 判」两处口径漂移。 */
+function isRowClickable(item: SystemDeliveryOrderData): boolean {
+  return routeRowClick(item, canOpenPartDetail.value) !== 'blocked';
+}
+
+/** 面板行点击：按 routeRowClick 的结果执行（分流判据与理由见 rowClickRoute.ts）。 */
+function onRowClick(item: SystemDeliveryOrderData): void {
+  const route = routeRowClick(item, canOpenPartDetail.value);
+  if (route === 'blocked') return;
+  if (route === 'children') {
+    selectedAssemblyId.value = item.id;
+    assemblyDialogOpen.value = true;
+    return;
+  }
+  selectedPart.value = item;
+  previewOpen.value = true;
+}
+
+/** 子件行点击 → 进 PartPreviewDialog。子件就是零件行（schema 的 status 复用
+ *  OrderStatus、id 指向 t_part），结构上直接可作 PartPreviewTarget。**不关子件列表
+ *  弹窗**（两级叠开，连续对比多个子件时关掉它还得重开、重新等一次请求）。 */
+function onChildClick(child: AssemblyChildRowData): void {
+  selectedPart.value = child;
   previewOpen.value = true;
 }
 
@@ -241,7 +358,10 @@ function onBarLayerClick(payload: {
 // rowClick(part)，不感知 PartPreviewDialog 存在。drawer 不关闭 —— dialog
 // （append-to-body）覆盖在 drawer 之上，关掉 dialog 后 drawer 仍可见，方便连续预览。
 // 不重置 selectedLayer：下次用户再点柱状图时 upcomingDrawerOpen 按需重新打开。
-function onUpcomingRowClick(part: PartPreviewTarget): void {
+//
+// 下钻明细行就是零件行（后端该端点只查 t_part 全表、不含装配件），结构上可直接作
+// PartPreviewTarget，不需要逐字段改写。
+function onUpcomingRowClick(part: DeliveryOrderDetailData): void {
   selectedPart.value = part;
   previewOpen.value = true;
 }

@@ -126,6 +126,11 @@ export const DELIVERY_BASIS_LABEL: Record<DeliveryBasis, string> = {
 // SystemDeliveryOrderData / DeliveryOrderDetailData），但通用预览弹窗只读 4 个字段
 // （序列号 / 名称 / 状态 + 按 id 拉图纸与批次两个独立请求）。收成这个最小结构而不是
 // 让弹窗去认某个具体 VO：弹窗的契约就摆在这里，加字段时必须同步评估它的渲染面。
+//
+// ⚠️ **这里刻意只有 4 个字段**：交期面板的「装配件行点开子件列表、零件行点开预览」
+// 分流发生在 DashboardView 自己那层（读 SystemDeliveryOrderData 自带的 row_type），
+// 与本弹窗无关。分流所需字段不进本结构，否则会为了给一个弹窗不读的字段补值，把与
+// 装配件无关的调用点（柱状图下钻明细行、子件行）全改成显式构造最小结构。
 export interface PartPreviewTarget {
   id: string;
   serial_no: string | null;

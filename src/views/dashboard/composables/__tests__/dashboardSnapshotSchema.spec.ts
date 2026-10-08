@@ -4,13 +4,15 @@
 // （契约来源：backend-rust docs/api/dashboard.md；与 schemas.spec.ts S4 系列同形态）。
 //
 // 覆盖：
-//   - D1：完整 sample snapshot 通过（1 工人在手批次 + 2 交期面板行 + 1 分桶）；
+//   - D1：完整 sample snapshot 通过（1 工人在手批次 + 三桶交期面板 + 1 分桶）；
 //   - D2：缺必填字段拒绝（逐 schema 逐字段）；
 //   - D3：可空字段置 null 仍可 parse；
 //   - D4：DashboardSnapshot / WorkerHeldBatch / SystemDeliveryOrder /
 //     UpcomingDeliveryBuckets / DeliveryOrderDetailOut 全字段 guard —— Zod strip 模式
 //     会静默丢字段，光测缺失抛错不够，必须正向断言 parsed output keys 与后端 VO 字段
 //     一一对应。
+//   - B*（2026-10-10）：交期面板单桶 {items, total} 信封 —— total 与 items 解耦、必填、
+//     非负整数；以及三桶口径破坏性变更（老 {urgent, partial} 双桶 + 裸数组必须抛错）。
 //
 // 每个 schema 都补了「必填字段缺失 → throw」用例：Zod 默认 strip 让未声明字段被静默
 // 丢弃，而反向的「误删必填声明」也必须抛错，否则契约失守无人察觉。
@@ -20,6 +22,7 @@ import {
   dashboardSnapshotSchema,
   deliveryOrderDetailOutSchema,
   deliveryOrderDetailSchema,
+  systemDeliveryOrderBucketSchema,
   systemDeliveryOrderSchema,
   upcomingBucketsSchema,
   upcomingDeliveryBucketSchema,
@@ -51,6 +54,7 @@ function makeBaseSystemOrder(overrides: Record<string, unknown> = {}): Record<st
     customer_name: '南海路厂区',
     is_urgent: true,
     delivered_quantity: 3,
+    row_type: 'PART',
     ...overrides,
   };
 }
@@ -80,8 +84,12 @@ function makeBaseSnapshot(): Record<string, unknown> {
     in_inspection_count: 4,
     in_process: [makeBaseWorkerHeldBatch()],
     system_delivery_orders: {
-      urgent: [makeBaseSystemOrder({ delivered_quantity: 0 })],
-      partial: [makeBaseSystemOrder()],
+      upcoming: { items: [makeBaseSystemOrder({ delivered_quantity: 0 })], total: 12 },
+      overdue: {
+        items: [makeBaseSystemOrder({ id: '180000000000004', system_delivery_date: '2026-10-01' })],
+        total: 34,
+      },
+      partial: { items: [makeBaseSystemOrder()], total: 57 },
     },
     ts: '2026-10-07T14:30:00.123+08:00',
   };
@@ -159,15 +167,16 @@ describe('workerHeldBatchSchema（工人在手加工批次 7 字段）', () => {
   });
 });
 
-describe('systemDeliveryOrderSchema（交期面板行 9 字段）', () => {
-  it('D1：完整 9 字段 parse 通过', () => {
+describe('systemDeliveryOrderSchema（交期面板行 10 字段）', () => {
+  it('D1：完整 10 字段 parse 通过', () => {
     const parsed = systemDeliveryOrderSchema.parse(makeBaseSystemOrder());
     expect(parsed.id).toBe('180000000000002');
     expect(parsed.status).toBe('IN_PROCESS');
     expect(parsed.delivered_quantity).toBe(3);
+    expect(parsed.row_type).toBe('PART');
   });
 
-  it('D4：9 字段全在 parsed output 里（strip-mode regression guard）', () => {
+  it('D4：10 字段全在 parsed output 里（strip-mode regression guard）', () => {
     const parsed = systemDeliveryOrderSchema.parse(makeBaseSystemOrder());
     expect(Object.keys(parsed).sort()).toEqual(
       [
@@ -180,6 +189,7 @@ describe('systemDeliveryOrderSchema（交期面板行 9 字段）', () => {
         'customer_name',
         'is_urgent',
         'delivered_quantity',
+        'row_type',
       ].sort(),
     );
   });
@@ -192,16 +202,32 @@ describe('systemDeliveryOrderSchema（交期面板行 9 字段）', () => {
     expect(parsed.system_delivery_date).toBeNull();
   });
 
-  // delivered_quantity 语义是 0（没交过），绝不能 nullable：partial 桶的判定
-  // （已交过一部分）就靠它，缺失会被读成「有交过」。
-  it('delivered_quantity：0 合法（未交过），null / 缺失 → 抛 ZodError', () => {
-    expect(systemDeliveryOrderSchema.parse(makeBaseSystemOrder({ delivered_quantity: 0 })))
-      .toMatchObject({ delivered_quantity: 0 });
+  // 桶归属由服务端 EXISTS / NOT EXISTS 已交批次判定，与 delivered_quantity 无关 ⇒
+  // 装配件可能落在 partial 桶却 delivered_quantity === 0（每个子件都交 40%，凑不满一套）。
+  // 这条钉住「0 是合法展示值」：前端不得据此重分桶或过滤。
+  it('delivered_quantity：0 合法（未交过 / 凑不满整一套），null / 缺失 → 抛 ZodError', () => {
+    expect(
+      systemDeliveryOrderSchema.parse(makeBaseSystemOrder({ delivered_quantity: 0 })),
+    ).toMatchObject({ delivered_quantity: 0 });
     expect(() =>
       systemDeliveryOrderSchema.parse(makeBaseSystemOrder({ delivered_quantity: null })),
     ).toThrow();
     expect(() =>
       systemDeliveryOrderSchema.parse(omit(makeBaseSystemOrder(), 'delivered_quantity')),
+    ).toThrow();
+  });
+
+  // row_type 决定 quantity / delivered_quantity 的单位（件 vs 套），前端分流 tooltip 文案
+  // 与行点击去向；缺失必须抛错而不是被 strip 掉后静默按件渲染。
+  it('row_type：锁 PART / ASSEMBLY 两态，缺字段 / 非法字面量 → 抛 ZodError', () => {
+    expect(
+      systemDeliveryOrderSchema.parse(makeBaseSystemOrder({ row_type: 'ASSEMBLY' })).row_type,
+    ).toBe('ASSEMBLY');
+    expect(() =>
+      systemDeliveryOrderSchema.parse(omit(makeBaseSystemOrder(), 'row_type')),
+    ).toThrow();
+    expect(() =>
+      systemDeliveryOrderSchema.parse(makeBaseSystemOrder({ row_type: 'part' })),
     ).toThrow();
   });
 
@@ -217,36 +243,91 @@ describe('systemDeliveryOrderSchema（交期面板行 9 字段）', () => {
   });
 });
 
+describe('systemDeliveryOrderBucketSchema（交期面板单桶 { items, total }）', () => {
+  // total 是匹配总行数、不受 30 条截断影响；面板 header 据此出「共 N 条，另有 M 条未显示」。
+  // 用 items.length 会在 upcoming 桶（无时间上界、几百条）谎报被砍的条数。
+  it('B1：items 与 total 解耦（items 2 行 / total 42）', () => {
+    const parsed = systemDeliveryOrderBucketSchema.parse({
+      items: [makeBaseSystemOrder(), makeBaseSystemOrder({ id: '180000000000009' })],
+      total: 42,
+    });
+    expect(parsed.items).toHaveLength(2);
+    expect(parsed.total).toBe(42);
+  });
+
+  it('B2：空桶（items 空 + total 0）合法', () => {
+    const parsed = systemDeliveryOrderBucketSchema.parse({ items: [], total: 0 });
+    expect(parsed.items).toHaveLength(0);
+    expect(parsed.total).toBe(0);
+  });
+
+  it('B3：total 必填、必须是非负整数（缺字段 / 串型 / 负数 → 抛 ZodError）', () => {
+    expect(() => systemDeliveryOrderBucketSchema.parse({ items: [] })).toThrow();
+    expect(() => systemDeliveryOrderBucketSchema.parse({ items: [], total: '42' })).toThrow();
+    expect(() => systemDeliveryOrderBucketSchema.parse({ items: [], total: -1 })).toThrow();
+    expect(() => systemDeliveryOrderBucketSchema.parse({ total: 0 })).toThrow();
+  });
+
+  it('B4：items 里任一行缺必填字段 → 整桶抛错（行 schema 被复用守门）', () => {
+    expect(() =>
+      systemDeliveryOrderBucketSchema.parse({
+        items: [omit(makeBaseSystemOrder(), 'row_type')],
+        total: 1,
+      }),
+    ).toThrow();
+  });
+});
+
 describe('dashboardSnapshotSchema（快照 5 顶层字段）', () => {
-  it('D1：完整 sample snapshot 通过', () => {
+  it('D1：完整 sample snapshot 通过（三桶各自信封）', () => {
     const parsed = dashboardSnapshotSchema.parse(makeBaseSnapshot());
     expect(parsed.overdue_count).toBe(12);
     expect(parsed.in_inspection_count).toBe(4);
     expect(parsed.in_process).toHaveLength(1);
-    expect(parsed.system_delivery_orders.urgent).toHaveLength(1);
-    expect(parsed.system_delivery_orders.partial).toHaveLength(1);
-    expect(parsed.system_delivery_orders.urgent[0]?.delivered_quantity).toBe(0);
+    expect(parsed.system_delivery_orders.upcoming.items).toHaveLength(1);
+    expect(parsed.system_delivery_orders.overdue.total).toBe(34);
+    expect(parsed.system_delivery_orders.partial.items).toHaveLength(1);
+    expect(parsed.system_delivery_orders.upcoming.items[0]?.delivered_quantity).toBe(0);
   });
 
   // D7 全字段 guard：Zod strip 会静默丢未声明字段，正向断言 keys 才能兜住误删。
-  it('D4：5 顶层字段全在 parsed output 里（含 system_delivery_orders 的两桶）', () => {
+  it('D4：5 顶层字段全在 parsed output 里，system_delivery_orders 恒为三桶', () => {
     const parsed = dashboardSnapshotSchema.parse(makeBaseSnapshot());
     expect(Object.keys(parsed).sort()).toEqual(
       ['overdue_count', 'in_inspection_count', 'in_process', 'system_delivery_orders', 'ts'].sort(),
     );
-    expect(Object.keys(parsed.system_delivery_orders).sort()).toEqual(['partial', 'urgent']);
+    expect(Object.keys(parsed.system_delivery_orders).sort()).toEqual([
+      'overdue',
+      'partial',
+      'upcoming',
+    ]);
   });
 
-  it('D3：空数组 + 零计数也接受（无在制 / 无交期工单 / 无逾期）', () => {
+  // 破坏性变更：旧的 {urgent, partial} 双桶响应必须被显式拒绝（走 ElMessage 错误桥接暴露
+  // 成故障），而不是被悄悄按新口径重解释。
+  it('破坏性变更：旧双桶 { urgent, partial } 响应 → 抛 ZodError', () => {
+    expect(() =>
+      dashboardSnapshotSchema.parse({
+        ...omit(makeBaseSnapshot(), 'system_delivery_orders'),
+        system_delivery_orders: { urgent: [], partial: [] },
+      }),
+    ).toThrow();
+  });
+
+  it('D3：三桶全空 + 零计数也接受（无在制 / 无交期工单 / 无逾期）', () => {
     const parsed = dashboardSnapshotSchema.parse({
       overdue_count: 0,
       in_inspection_count: 0,
       in_process: [],
-      system_delivery_orders: { urgent: [], partial: [] },
+      system_delivery_orders: {
+        upcoming: { items: [], total: 0 },
+        overdue: { items: [], total: 0 },
+        partial: { items: [], total: 0 },
+      },
       ts: '2026-10-07T14:30:00.123+08:00',
     });
     expect(parsed.in_process).toHaveLength(0);
-    expect(parsed.system_delivery_orders.urgent).toHaveLength(0);
+    expect(parsed.system_delivery_orders.upcoming.items).toHaveLength(0);
   });
 
   it('必填：缺 ts / in_process / overdue_count / in_inspection_count 任一 → 抛 ZodError', () => {
@@ -262,9 +343,21 @@ describe('dashboardSnapshotSchema（快照 5 顶层字段）', () => {
 
     const oneBucket = {
       ...makeBaseSnapshot(),
-      system_delivery_orders: { urgent: [] },
+      system_delivery_orders: { upcoming: { items: [], total: 0 } },
     };
     expect(() => dashboardSnapshotSchema.parse(oneBucket)).toThrow();
+  });
+
+  it('必填：桶信封缺 total（老形态的裸数组）→ 抛 ZodError', () => {
+    const legacyBucket = {
+      ...makeBaseSnapshot(),
+      system_delivery_orders: {
+        upcoming: [makeBaseSystemOrder()],
+        overdue: { items: [], total: 0 },
+        partial: { items: [], total: 0 },
+      },
+    };
+    expect(() => dashboardSnapshotSchema.parse(legacyBucket)).toThrow();
   });
 });
 

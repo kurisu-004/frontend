@@ -105,21 +105,43 @@ function makeBaseSnapshot(): Record<string, unknown> {
         worker_name: '张三',
       },
     ],
+    // 2026-10-10：三桶 {items, total} 信封 + 行级 row_type（工单级行源，单位随之变）。
     system_delivery_orders: {
-      urgent: [
-        {
-          id: '180000000000002',
-          serial_no: 'F5678',
-          name: '连杆总成左前',
-          quantity: 100,
-          status: 'IN_PROCESS',
-          system_delivery_date: '2026-10-08',
-          customer_name: '南海路厂区',
-          is_urgent: true,
-          delivered_quantity: 0,
-        },
-      ],
-      partial: [],
+      upcoming: {
+        items: [
+          {
+            id: '180000000000002',
+            serial_no: 'F5678',
+            name: '连杆总成左前',
+            quantity: 100,
+            status: 'IN_PROCESS',
+            system_delivery_date: '2026-10-08',
+            customer_name: '南海路厂区',
+            is_urgent: true,
+            delivered_quantity: 0,
+            row_type: 'PART',
+          },
+        ],
+        total: 12,
+      },
+      overdue: {
+        items: [
+          {
+            id: '180000000000004',
+            serial_no: 'A0001',
+            name: '前桥总成',
+            quantity: 3,
+            status: 'PENDING',
+            system_delivery_date: '2026-10-01',
+            customer_name: '南海路厂区',
+            is_urgent: false,
+            delivered_quantity: 0,
+            row_type: 'ASSEMBLY',
+          },
+        ],
+        total: 34,
+      },
+      partial: { items: [], total: 57 },
     },
     ts: '2026-10-07T14:30:00.123+08:00',
   };
@@ -177,8 +199,14 @@ describe('useDashboardSnapshot — HTTP 全量 + WS 事件 invalidate', () => {
     expect(data?.in_inspection_count).toBe(4);
     expect(data?.in_process).toHaveLength(1);
     expect(data?.in_process[0]?.batch_id).toBe('190000000000001');
-    expect(data?.system_delivery_orders.urgent).toHaveLength(1);
-    expect(data?.system_delivery_orders.urgent[0]?.customer_name).toBe('南海路厂区');
+    expect(data?.system_delivery_orders.upcoming.items).toHaveLength(1);
+    expect(data?.system_delivery_orders.upcoming.total).toBe(12);
+    expect(data?.system_delivery_orders.upcoming.items[0]?.customer_name).toBe('南海路厂区');
+    expect(data?.system_delivery_orders.upcoming.items[0]?.row_type).toBe('PART');
+    // 装配件行落在 overdue 桶、单位是「套」，row_type 供前端分流点击去向
+    expect(data?.system_delivery_orders.overdue.total).toBe(34);
+    expect(data?.system_delivery_orders.overdue.items[0]?.row_type).toBe('ASSEMBLY');
+    expect(data?.system_delivery_orders.partial.total).toBe(57);
     scope.stop();
   });
 

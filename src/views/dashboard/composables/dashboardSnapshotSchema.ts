@@ -41,11 +41,20 @@ export const workerHeldBatchSchema = z.object({
 
 export type WorkerHeldBatchData = z.infer<typeof workerHeldBatchSchema>;
 
-/** 2026-10-07：右栏交期面板的行（SystemDeliveryOrder VO，9 字段）。
- *  `snapshot.system_delivery_orders.{urgent,partial}[]` 的行类型。
- *  两个桶由后端按 `delivered_quantity` 分好（urgent = 一件没交过，partial = 已交过
- *  一部分），窗口过滤与每桶截断也都在服务端，前端不再判口径。
- *  delivered_quantity 是**必填非 null**：语义是 0（没交过），缺失会被误读成「有交过」。 */
+/** 2026-10-10：右栏交期面板的行（SystemDeliveryOrder VO，10 字段）。
+ *  `snapshot.system_delivery_orders.{upcoming,overdue,partial}[].items[]` 的行类型。
+ *
+ *  口径三条（全部在服务端，前端零分桶零 slice）：
+ *   - **工单级**行源：t_part 排除子件 + t_assembly，装配件**替换**其子件行出现，
+ *     子件不再单独出行；
+ *   - `quantity` / `delivered_quantity` 的**单位随 row_type 变**：PART = 件、
+ *     ASSEMBLY = 套（装配件级 delivered 是已交套数）；
+ *   - 桶归属由服务端 EXISTS / NOT EXISTS 已交批次判定，**与 delivered_quantity 的值无关**
+ *     ⇒ 装配件可能落在 partial 桶却 delivered_quantity === 0（装了 3 套、每个子件都交
+ *     了 40%，凑不满整一套）。delivered_quantity 只是展示值，**前端不得据它重分桶 /
+ *     过滤**。
+ *
+ *  delivered_quantity 必填非 null：语义是 0（没交过 / 一套都没凑齐），缺失会被误读。 */
 export const systemDeliveryOrderSchema = z.object({
   id: z.string(),
   serial_no: z.string().nullable(),
@@ -56,22 +65,56 @@ export const systemDeliveryOrderSchema = z.object({
   customer_name: z.string().nullable(),
   is_urgent: z.boolean(),
   delivered_quantity: z.number(),
+  /** 工单级行类型：PART = t_part 行（件级），ASSEMBLY = t_assembly 行（套级）。 */
+  row_type: z.enum(['PART', 'ASSEMBLY']),
 });
 
 export type SystemDeliveryOrderData = z.infer<typeof systemDeliveryOrderSchema>;
+
+/** 2026-10-10 新增：交期面板单桶（{ items, total }）。
+ *  total 是该桶**匹配总行数**，不受 items 的 30 条截断影响 —— 面板头部据此渲染
+ *  「共 N 条，另有 M 条未显示」，用 items.length 会在触顶时谎报（upcoming 桶无时间
+ *  上界，几百条只显示最早 30 条是常态）。
+ *
+ *  本类型目前没有消费方（面板收的是 items + total 两个 prop，见该组件），保留导出是
+ *  沿本文件「schema 与其 z.infer 类型同文件成对导出」的既有形态（同 UpcomingEntryData）。 */
+export const systemDeliveryOrderBucketSchema = z.object({
+  items: z.array(systemDeliveryOrderSchema),
+  total: z.number().int().nonnegative(),
+});
+
+export type SystemDeliveryOrderBucketData = z.infer<typeof systemDeliveryOrderBucketSchema>;
 
 /** 2026-10-07：大屏快照顶层（DashboardSnapshot VO，5 顶层字段）。
  *  无口径概念（交期分桶已拆到 /dashboard/upcoming-delivery），也不接受任何 query 参数。
  *  overdue_count 是工单级计数（装配件算 1 条），与本 VO 里件级的
  *  in_process / system_delivery_orders 行单位不同 —— 两者时间窗口不重叠
- *  （逾期窗口 < today，面板 / 柱状图窗口 >= today），故不冲突。 */
+ *  （逾期窗口 < today，面板 / 柱状图窗口 >= today），故不冲突。
+ *
+ *  2026-10-10 破坏性变更：`system_delivery_orders` 由 `{urgent, partial}` 改三桶
+ *  `{upcoming, overdue, partial}`，桶值从裸数组改 `{items, total}` 信封，且行新增
+ *  `row_type`。**不加兼容分支** —— 旧响应过不了守门会显式抛错（走既有 ElMessage 错误
+ *  桥接暴露成故障），而不是被悄悄按新口径重解释。
+ *
+ *  守门点在 queryFn（`useDashboardSnapshot`），即**只在取数那一刻生效**；TanStack Query
+ *  对缓存命中不重新校验，所以跨前后端版本的失配不会自己「过期」，只会一直沿用那份旧
+ *  形状缓存直到下一次 refetch 抛错。可达的两条失配路径与各自的降级：
+ *   - 新前端 + 旧后端 / 后端未上线：本 schema 直接抛 → `data` 为 undefined → 消费侧
+ *     （DashboardView 右栏四路派生）走空值兜底渲染空面板，不会因读到旧桶键而抛
+ *     TypeError；
+ *   - 同页会话内后端被换掉：旧形状缓存先被原样返回并渲染，直到 staleTime（30s）过期
+ *     的那次 refetch 抛错把面板打成空态。窗口很短，且只影响未刷新的旧标签页。 */
 export const dashboardSnapshotSchema = z.object({
   overdue_count: z.number(),
   in_inspection_count: z.number(),
   in_process: z.array(workerHeldBatchSchema),
   system_delivery_orders: z.object({
-    urgent: z.array(systemDeliveryOrderSchema),
-    partial: z.array(systemDeliveryOrderSchema),
+    /** 系统交期 >= today 且**一件都没交过**（与 is_urgent 加急无关）。 */
+    upcoming: systemDeliveryOrderBucketSchema,
+    /** 系统交期 < today 且**一件都没交过**。 */
+    overdue: systemDeliveryOrderBucketSchema,
+    /** 无时间窗口限制、**已交过一部分**（按系统交期升序取前 30 条）。 */
+    partial: systemDeliveryOrderBucketSchema,
   }),
   ts: z.string(),
 });
