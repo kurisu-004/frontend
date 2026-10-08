@@ -12,6 +12,10 @@
 //   2. **表单校验**：`userFormSchema`（新增 / 编辑合一）、`wxBindFormSchema`（企微绑定
 //      单输入框）。替掉旧版 el-form 的内联校验规则。
 //
+// 本文件另有一处**非 Zod** 声明：`RoleOptionData`（角色下拉候选形状）。它服务的
+// `usersConstants.ts::ROLE_OPTIONS` 是源码字面量、没有 wire 边界，运行期 parse 无消费方，
+// 故只留类型、由常量用 `satisfies` 在编译期对齐。
+//
 // ⚠️ **必填字段必须显式声明**：Zod 默认 strip 会静默丢掉后端漏发的键，前端照样「通过」
 // 校验、那一列整列失效。所以下面每个键都显式写出，且行 / 信封层用 `.strict()`
 // （多一个键即抛 unrecognized_keys，后端加字段时会被这里挡住、需要同步决策）。
@@ -67,12 +71,12 @@ export const userOutSchema = z
 
 export type UserOutData = z.infer<typeof userOutSchema>;
 
-/** 分页计数：后端 i64 在 wire 上有**两种**形态（各域 VO 不统一，见
- *  `api/http.ts::normalizeListResult` 的登记表）—— 裸 i64 是 JSON number，走
- *  `serialize_i64` 的域是 JSON string。显式接受两态再统一转 number：写死 string 会让
- *  裸 i64 的域整页 parse 失败，写死 number 则相反。
+/** 分页计数（`total` / `limit` / `offset`）：后端 `UserListOut` 三个字段是**裸 `i64`**
+ *  ⇒ wire 上就是 JSON number（同一 VO 里挂 `serialize_i64` 的是雪花 ID 字段，不是这三个
+ *  计数）。归一点在 `api/iam.ts::listUsers` 的 `normalizeListResult`（无条件 `Number()`），
+ *  本 schema 只按 number 守门，不做第二次归一。
  *  ⚠️ 键必须显式声明（漏发即 parse 失败），不要用 `.optional()` 糊过去。 */
-const pageCountSchema = z.union([z.string(), z.number()]).transform(Number);
+const pageCountSchema = z.number();
 
 export const userListResultSchema = z
   .object({
@@ -83,7 +87,7 @@ export const userListResultSchema = z
   })
   .strict();
 
-/** 守门后的分页信封（三个计数已归一成 number，可直接塞进 el-pagination）。 */
+/** 分页信封（三个计数已是 number，可直接塞进 el-pagination）。 */
 export type UserListResultData = z.infer<typeof userListResultSchema>;
 
 // ============================================================
@@ -114,15 +118,15 @@ export type WxIdentityData = z.infer<typeof wxIdentitySchema>;
 /** 绑定查询的守门 schema：绑定态 = 对象，未绑定态 = `null`。 */
 export const wxIdentityOrNullSchema = wxIdentitySchema.nullable();
 
-/** 角色下拉候选（`usersConstants.ts::ROLE_OPTIONS` 的 Zod 视角形态）。 */
-export const roleOptionSchema = z
-  .object({
-    value: z.string(),
-    label: z.string(),
-  })
-  .strict();
-
-export type RoleOptionData = z.infer<typeof roleOptionSchema>;
+/** 角色下拉候选的形状（`usersConstants.ts::ROLE_OPTIONS` 用 `satisfies` 对齐它，
+ *  编译期即校验，不需要运行期守门）。
+ *  ⚠️ 刻意**不**用 Zod 表达：`ROLE_OPTIONS` 是源码里的字面量、没有 wire 边界，
+ *  `.parse()` 在生产路径上零调用 —— 挂一个只有单测在用的 schema 是死导出。 */
+export interface RoleOptionData {
+  /** 后端 `UserRole` 枚举原文。 */
+  value: string;
+  label: string;
+}
 
 // ============================================================
 // 表单 schema（替掉旧版 el-form 的内联校验规则）

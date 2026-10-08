@@ -1,14 +1,16 @@
 // @vitest-environment happy-dom
 // src/views/users/components/__tests__/WxBindDialog.spec.ts
 //
-// 2026-10-10 新增：企业微信绑定对话框的**渲染 / 交互契约**回归守卫。三组用例：
+// 2026-10-10 新增：企业微信绑定对话框的**渲染 / 交互契约**回归守卫。四组用例：
 //
 //  1. **未绑态**（`getWxIdentity` 返回 `null`）：正常渲染输入框 + 「绑定」按钮；空输入
 //     时按钮禁用；Zod 校验不过（只有空白）时报错且不发请求；填入 userid 后调
 //     `bindWxIdentity(id, { wx_user_id })`（payload 里**没有** corp_id）。
 //  2. **已绑态**：展示 corp_id / wx_user_id / 绑定时间，**不**渲染输入框；「解绑」按钮
 //     经二次确认后调 `unbindWxIdentity(id, { version })`（version 取绑定行的）。
-//  3. 状态说明区常驻（一个账号只能绑一个企微账号 + userid 需先存在于通讯录）。
+//  3. **加载失败态**：`getWxIdentity` 抛错时渲染显式错误块 + 「重试」，**不**渲染未绑态
+//     的输入框（否则用户会当未绑定继续填，填完提交才被后端拒且看不出真实原因）。
+//  4. 状态说明区常驻（一个账号只能绑一个企微账号 + userid 需先存在于通讯录）。
 //
 // 用 EP 模板桩而不是真 EP 组件：被测的是「本组件有没有把 store 的绑定态正确分成
 // 加载中 / 已绑 / 未绑三支、有没有把 version 正确带进解绑请求」，不复刻 el-dialog /
@@ -31,7 +33,7 @@ const bindWxIdentityMock = vi.fn();
 const unbindWxIdentityMock = vi.fn();
 
 vi.mock('@/api/iam', () => ({
-  listUsers: vi.fn(async () => ({ items: [], total: '0', limit: '20', offset: '0' })),
+  listUsers: vi.fn(async () => ({ items: [], total: 0, limit: 20, offset: 0 })),
   createUser: vi.fn(),
   updateUser: vi.fn(),
   deactivateUser: vi.fn(),
@@ -183,7 +185,8 @@ function tick(): Promise<void> {
 }
 
 /** 挂弹窗 + 打开对应账号的企微绑定（模拟操作列点「企微」）。
- *  `identity` 传 'pending' 时把 getWxIdentity 挂在不 resolve 的 promise 上（测加载态）。 */
+ *  `identity` 传 'pending' 时把 getWxIdentity 挂在不 resolve 的 promise 上（测加载态）；
+ *  传 'error' 时让它 reject（测加载失败态）。 */
 async function mountDialog(identity: unknown) {
   const pinia = createPinia();
   setActivePinia(pinia);
@@ -195,6 +198,8 @@ async function mountDialog(identity: unknown) {
           release.push(() => resolve(WX_IDENTITY));
         }),
     );
+  } else if (identity === 'error') {
+    getWxIdentityMock.mockRejectedValue(new Error('后端 20601'));
   } else {
     getWxIdentityMock.mockResolvedValue(identity);
   }
@@ -239,6 +244,34 @@ describe('WxBindDialog', () => {
     // 请求回来后直接进已绑态。
     expect(wrapper.find('.wx-loading').exists()).toBe(false);
     expect(wrapper.find('.wx-bound').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  // ============ 加载失败态 ============
+  it('加载失败：渲染显式错误块 + 重试，绝不渲染未绑态的输入框', async () => {
+    const { ElMessage } = await import('element-plus');
+    const { wrapper } = await mountDialog('error');
+    expect(wrapper.find('.wx-error-state').exists()).toBe(true);
+    expect(wrapper.find('.wx-error-state').text()).toContain('后端 20601');
+    // 关键断言：失败态下不出现「可提交」的绑定输入框。
+    expect(wrapper.find('.mock-input').exists()).toBe(false);
+    expect(buttonByText(wrapper, '绑定')).toBeUndefined();
+    expect(wrapper.find('.wx-bound').exists()).toBe(false);
+    // 错误也走 store 的 watch 桥接弹一次提示（与列表主查询同款）。
+    expect(ElMessage.error).toHaveBeenCalledWith('后端 20601');
+    wrapper.unmount();
+  });
+
+  it('加载失败：点「重试」重新拉一次，拉到绑定后进已绑态', async () => {
+    const { wrapper } = await mountDialog('error');
+    getWxIdentityMock.mockResolvedValue(WX_IDENTITY);
+
+    await buttonByText(wrapper, '重试')?.trigger('click');
+    await tick();
+
+    expect(getWxIdentityMock).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('.wx-bound').exists()).toBe(true);
+    expect(wrapper.find('.wx-error-state').exists()).toBe(false);
     wrapper.unmount();
   });
 

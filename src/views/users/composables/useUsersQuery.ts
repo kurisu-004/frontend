@@ -10,9 +10,9 @@
 //      条数 / 自动刷新开关，把它们经 buildParams() 汇成一份 params 传进来；
 //   2. 本 hook 只负责「params → queryKey → 请求 → 守门 → 数据」，**不持有任何私有状态**：
 //      两个开关（enabled / autoRefresh）由调用方以 MaybeRefOrGetter 传入；
-//   3. queryFn 走 `userListResultSchema.parse(...)` 守门。分页信封的三个计数在 wire 上
-//      有 string / number 两种形态（见 usersSchema.ts::pageCountSchema），schema 内已
-//      统一转 number，store 侧的 `Number()` 只是兜底。
+//   3. queryFn 走 `userListResultSchema.parse(...)` 守门。分页信封的三个计数在 wire 上是
+//      **number**（后端 `UserListOut` 是裸 `i64`，归一在 `api/iam.ts::listUsers` 的
+//      `normalizeListResult`），schema 与 store 都不再二次归一。
 //
 // 设计要点：
 //   - reactive params 范式：queryKey = computed(() => qk.usersList(toValue(params)))，

@@ -2,17 +2,17 @@
 //
 // 2026-10-10 新增：账号管理域的 Zod 守门 / 表单 schema 单测。三类回归守卫：
 //
-//  1. 分页信封的 `total` / `limit` / `offset`：后端 i64 在 wire 上有 **string**
-//     （serialize_i64）与 **number**（裸 i64）两种形态，两个都要能 parse 并**统一转成
-//     number**（分页组件要 number，字符串塞进 el-pagination 的 total 不生效）。
+//  1. 分页信封的 `total` / `limit` / `offset`：后端 `UserListOut` 三个字段是**裸 `i64`**
+//     ⇒ wire 上是 JSON number（同一 VO 里挂 `serialize_i64` 的是雪花 ID），schema 只按
+//     number 守门，**不**做 string → number 的二次归一。
 //  2. **缺字段必须 parse 失败**：Zod 默认 strip 会把后端漏发的键静默丢掉，前端照样
 //     「通过」校验、那一列整列失效 ⇒ 每个键都显式声明，且行 / 信封层 `.strict()`。
 //  3. `wxIdentitySchema` 对 `null` 的处理：未绑定时后端信封 `data` 是 **null**（不是
 //     `[]`），所以必须有另一个 `wxIdentityOrNullSchema` 接受两态。
 
 import { describe, expect, it } from 'vitest';
+import { ROLE_OPTIONS, SHELF_SCOPED_ROLE } from '../../usersConstants';
 import {
-  roleOptionSchema,
   toFieldErrors,
   userFormSchema,
   userListResultSchema,
@@ -58,12 +58,12 @@ const WX = {
 };
 
 describe('userListResultSchema', () => {
-  it('计数是 JSON string（serialize_i64）时能 parse，并统一转成 number', () => {
+  it('计数是 JSON number 时能 parse（后端 UserListOut 三个计数是裸 i64）', () => {
     const parsed = userListResultSchema.parse({
       items: [ROW],
-      total: '1',
-      limit: '20',
-      offset: '0',
+      total: 1,
+      limit: 20,
+      offset: 0,
     });
     expect(parsed.total).toBe(1);
     expect(parsed.limit).toBe(20);
@@ -73,25 +73,26 @@ describe('userListResultSchema', () => {
     expect(typeof parsed.items[0]?.id).toBe('string');
   });
 
-  it('计数是裸 number 时同样能 parse（两域形态不能各写一套 schema）', () => {
-    const parsed = userListResultSchema.parse({ items: [], total: 0, limit: 20, offset: 40 });
-    expect(parsed).toMatchObject({ total: 0, limit: 20, offset: 40 });
+  it('计数传 string 即失败（归一在 api 层 normalizeListResult，schema 不再兼容 string）', () => {
+    expect(() =>
+      userListResultSchema.parse({ items: [], total: '0', limit: 20, offset: 0 }),
+    ).toThrow();
   });
 
   it('缺任一键即 parse 失败（Zod strip 陷阱的回归守卫）', () => {
     // 缺 total：后端漏发计数 ⇒ 必须抛，而不是静默丢成 undefined 塞进分页组件。
-    expect(() => userListResultSchema.parse({ items: [], limit: '20', offset: '0' })).toThrow();
+    expect(() => userListResultSchema.parse({ items: [], limit: 20, offset: 0 })).toThrow();
     // 缺 items 同理。
-    expect(() => userListResultSchema.parse({ total: '0', limit: '20', offset: '0' })).toThrow();
+    expect(() => userListResultSchema.parse({ total: 0, limit: 20, offset: 0 })).toThrow();
     // 行内缺 roles（后端漏发）⇒ 抛。
     const { roles, ...rowWithoutRoles } = ROW;
     expect(roles).toHaveLength(1);
     expect(() =>
       userListResultSchema.parse({
         items: [rowWithoutRoles],
-        total: '1',
-        limit: '20',
-        offset: '0',
+        total: 1,
+        limit: 20,
+        offset: 0,
       }),
     ).toThrow();
   });
@@ -100,18 +101,18 @@ describe('userListResultSchema', () => {
     expect(() =>
       userListResultSchema.parse({
         items: [],
-        total: '0',
-        limit: '20',
-        offset: '0',
+        total: 0,
+        limit: 20,
+        offset: 0,
         extra: true,
       }),
     ).toThrow();
     expect(() =>
       userListResultSchema.parse({
         items: [{ ...ROW, nickname: '三儿' }],
-        total: '1',
-        limit: '20',
-        offset: '0',
+        total: 1,
+        limit: 20,
+        offset: 0,
       }),
     ).toThrow();
   });
@@ -119,9 +120,9 @@ describe('userListResultSchema', () => {
   it('可空字段接受 null（DB NULL → JSON null，不是键缺失）', () => {
     const parsed = userListResultSchema.parse({
       items: [{ ...ROW, phone: null, last_login_at: null, roles: [] }],
-      total: '1',
-      limit: '20',
-      offset: '0',
+      total: 1,
+      limit: 20,
+      offset: 0,
     });
     expect(parsed.items[0]?.last_login_at).toBeNull();
     expect(parsed.items[0]?.roles).toEqual([]);
@@ -205,14 +206,23 @@ describe('wxBindFormSchema', () => {
   });
 });
 
-describe('roleOptionSchema', () => {
-  it('角色下拉候选的形状是 {value,label}，多一个键即抛', () => {
-    expect(roleOptionSchema.parse({ value: 'MANAGER', label: '管理员' })).toEqual({
-      value: 'MANAGER',
-      label: '管理员',
-    });
-    expect(() =>
-      roleOptionSchema.parse({ value: 'MANAGER', label: '管理员', hint: 'x' }),
-    ).toThrow();
+describe('ROLE_OPTIONS', () => {
+  it('5 个候选的 value 互不重复，且含需绑货架的那个角色', () => {
+    expect(ROLE_OPTIONS.map((o) => o.value)).toEqual([
+      'MANAGER',
+      'CLERK',
+      'SHELF_ACCOUNT',
+      'INSPECTOR',
+      'CNC_PROGRAMMER',
+    ]);
+    expect(new Set(ROLE_OPTIONS.map((o) => o.value)).size).toBe(ROLE_OPTIONS.length);
+    // SHELF_SCOPED_ROLE 是「加的时候要选货架」的唯一角色，漏进候选 = 该账号加不上货架范围。
+    expect(ROLE_OPTIONS.some((o) => o.value === SHELF_SCOPED_ROLE)).toBe(true);
+  });
+
+  it('每个候选都有非空中文 label（label 空 = 下拉里一行空白）', () => {
+    for (const o of ROLE_OPTIONS) {
+      expect(o.label.length).toBeGreaterThan(0);
+    }
   });
 });

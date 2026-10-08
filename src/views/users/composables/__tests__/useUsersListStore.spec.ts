@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // src/views/users/composables/__tests__/useUsersListStore.spec.ts
 //
-// 2026-10-10 新增：账号管理页 store 单测。覆盖 5 类回归点：
+// 2026-10-10 新增：账号管理页 store 单测。覆盖 6 类回归点：
 //
 //  1. 4 不变量：首调一次（消费侧全走 store.切片.字段、不解构）、enabled 闸门在
 //     `restoreState()` 之前不触发自动 fetch、`$dispose` 重建后状态全新；
@@ -12,7 +12,10 @@
 //  4. **OCC 硬约束**：update / deactivate / removeRole / unbindWx 的 payload 必须带
 //     `version`，且 `removeRole` 传的是 `UserRoleOut.version`（不是 t_user.version）；
 //  5. **错误码分支表**：40901 走 warning + 重拉列表（不是通用 error）；企微三个撞车码
-//     （40108 / 40109 / 40110）各有专门文案；20602 把焦点送回 username 字段。
+//     （40108 / 40109 / 40110）各有专门文案；20602 把焦点送回 username 字段，且该标志
+//     在每次提交入口复位（弹窗开着重试时红字与焦点仍会出现）。
+//  6. **错误桥接**：列表主查询与企微绑定查询两条 query 的 error 都走 watch → ElMessage
+//     （企微那条少了就会静默渲染成「未绑态」），且绑定查询有 `reload` 重试入口。
 //
 // mock 策略：
 //   - `vi.mock('element-plus')`：桩掉 ElMessage / ElMessageBox（node env 下真实
@@ -81,7 +84,9 @@ import { useUsersListStore } from '../useUsersListStore';
 import { qk } from '@/composables/queries/keys';
 import { DEFAULT_PASSWORD } from '../../usersConstants';
 
-/** 后端真实 wire 形态：计数是 JSON **string**（serialize_i64），id 是雪花字符串。 */
+/** 后端真实 wire 形态：雪花 ID 是 JSON **string**（`serialize_i64`），行内计数/version
+ *  是 number；分页信封的 `total` / `limit` / `offset` 也是 number（后端 `UserListOut`
+ *  三个计数是**裸 `i64`**，归一在 `api/iam.ts::listUsers` 的 `normalizeListResult`）。 */
 const ROW: UserOutData = {
   id: '1900000000000000001',
   version: 3,
@@ -95,7 +100,7 @@ const ROW: UserOutData = {
   roles: [],
 };
 
-const LIST_RESULT = { items: [ROW], total: '1', limit: '20', offset: '0' };
+const LIST_RESULT = { items: [ROW], total: 1, limit: 20, offset: 0 };
 
 const WX_IDENTITY = {
   id: '1900000000000000010',
@@ -258,7 +263,7 @@ describe('useUsersListStore', () => {
   });
 
   // ============ 数据派生 ============
-  it('items / total 派生自 query 数据（计数是 JSON string ⇒ 边界转 number）', async () => {
+  it('items / total 派生自 query 数据（计数是 number，直接透传不做二次归一）', async () => {
     const store = useUsersListStore();
     await store.query.fetchList();
     expect(store.query.items).toHaveLength(1);
@@ -505,7 +510,7 @@ describe('useUsersListStore', () => {
     expect(store.wxIdentity.data).toBeNull();
   });
 
-  it('已绑态：绑定行进缓存；解绑带 version，成功后失效该账号的绑定键', async () => {
+  it('已绑态：绑定行进缓存；解绑带 version，成功后失效本域前缀（含该账号的绑定键）', async () => {
     const { ElMessage } = await import('element-plus');
     const store = useUsersListStore();
     getWxIdentityMock.mockResolvedValue(WX_IDENTITY);
@@ -522,8 +527,12 @@ describe('useUsersListStore', () => {
 
     expect(unbindWxIdentityMock).toHaveBeenCalledWith(ROW.id, { version: 2 });
     expect(ElMessage.success).toHaveBeenCalledWith('已解绑企业微信账号');
-    expect(spy).toHaveBeenCalledWith({ queryKey: qk.userWxIdentity(ROW.id) });
-    expect(spy).toHaveBeenCalledWith({ queryKey: qk.usersPrefix });
+    // 只失效一次，且是 users 前缀（`qk.userWxIdentity` 同在 `users` 前缀下，前缀一把覆盖）。
+    const prefixCalls = spy.mock.calls.filter((c) => {
+      const arg = c[0] as { queryKey?: unknown } | (() => unknown);
+      return typeof arg === 'object' && arg !== null && arg.queryKey === qk.usersPrefix;
+    });
+    expect(prefixCalls).toHaveLength(1);
   });
 
   it('绑定：payload 只有 wx_user_id（不传 corp_id）', async () => {
@@ -593,6 +602,31 @@ describe('useUsersListStore', () => {
     expect(ElMessage.error).toHaveBeenCalledWith('用户名已存在');
   });
 
+  it('提交入口复位 focusUsername：改完用户名二次提交又撞 20602 时标志仍会重新置位', async () => {
+    const store = useUsersListStore();
+    createUserMock.mockRejectedValue(Object.assign(new Error('用户名已存在'), { code: 20602 }));
+    store.dialogs.form.openCreate();
+
+    const p1 = store
+      .submitForm({ username: 'zhangsan', full_name: '张三', password: '' })
+      .catch(() => undefined);
+    // 同步段：`submitForm` 开头已复位（mutation 的 onError 要等微任务）。
+    expect(store.dialogs.form.focusUsername).toBe(false);
+    await p1;
+    await tick();
+    expect(store.dialogs.form.focusUsername).toBe(true);
+
+    // 二次提交：标志重新翻 true ⇒ 组件的 watch 这次会触发，字段红字与焦点重新出现。
+    const p2 = store
+      .submitForm({ username: 'zhangsan2', full_name: '张三', password: '' })
+      .catch(() => undefined);
+    expect(store.dialogs.form.focusUsername).toBe(false);
+    await p2;
+    expect(store.dialogs.form.focusUsername).toBe(true);
+    // 提交失败时弹窗保持开着，用户改完直接重试。
+    expect(store.dialogs.form.visible).toBe(true);
+  });
+
   it('其它业务码走通用 error：后端 message 进 UI', async () => {
     const { ElMessage } = await import('element-plus');
     const store = useUsersListStore();
@@ -619,6 +653,30 @@ describe('useUsersListStore', () => {
     expect(store.query.errorMsg).toBe('后端 500');
     expect(store.query.emptyText).toBe('后端 500');
     expect(ElMessage.error).toHaveBeenCalledWith('后端 500');
+  });
+
+  it('企微绑定查询失败走 watch → ElMessage.error（否则弹窗静默渲染成「未绑态」）', async () => {
+    const { ElMessage } = await import('element-plus');
+    getWxIdentityMock.mockRejectedValue(new Error('后端 20601'));
+    const store = useUsersListStore();
+    store.dialogs.wxBind.openWxBind(ROW);
+    await tick();
+
+    expect(store.wxIdentity.error?.message).toBe('后端 20601');
+    expect(ElMessage.error).toHaveBeenCalledWith('后端 20601');
+  });
+
+  it('wxIdentity.reload 重试：重开后拿到绑定数据', async () => {
+    const store = useUsersListStore();
+    getWxIdentityMock.mockRejectedValue(new Error('后端 20601'));
+    store.dialogs.wxBind.openWxBind(ROW);
+    await tick();
+    expect(store.wxIdentity.data).toBeUndefined();
+
+    getWxIdentityMock.mockResolvedValue(WX_IDENTITY);
+    await store.wxIdentity.reload();
+    await tick();
+    expect(store.wxIdentity.data?.wx_user_id).toBe('zhangsan');
   });
 
   // ============ 持久化恢复 ============

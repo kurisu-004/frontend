@@ -74,6 +74,16 @@ const dlg = useDialogSize({ desktopWidth: 420 });
 const errors = ref<UserFormFieldErrors>({});
 const usernameInputRef = ref<InputInstance | null>(null);
 
+// 开窗必清字段报错：`errors` 的生命周期跟着**组件**走（store 的 `resetForm()` 够不到它），
+// 不清就会把上一轮的红色报错带进下一张空表单 —— 用户要手动敲一下键盘才看得见变化。
+// watch 的是 `visible`：关窗时清没有意义（下次开窗这一条照样触发），开窗清一次就够。
+watch(
+  () => store.dialogs.form.visible,
+  (v) => {
+    if (v) errors.value = {};
+  },
+);
+
 function onSubmit(): void {
   const parsed = userFormSchema.safeParse({
     username: store.dialogs.form.form.username,

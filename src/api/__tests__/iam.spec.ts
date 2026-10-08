@@ -123,8 +123,10 @@ describe('iam 写端点的 URL / 方法 / body 契约', () => {
   });
 
   it('I4：列表的四个 query 参数落到 axios params', async () => {
+    // 后端 `UserListOut` 的 total / limit / offset 是裸 `i64` ⇒ wire 上是 number
+    // （归一在 listUsers 的 `normalizeListResult`，对 number 是恒等）。
     httpGetMock.mockResolvedValue({
-      data: { items: [], total: '0', limit: 20, offset: 40 },
+      data: { items: [], total: 0, limit: 20, offset: 40 },
     });
     await listUsers({ username_like: 'zhang', is_active: false, limit: 20, offset: 40 });
     expect(httpGetMock.mock.calls[0]?.[0]).toBe('/iam/users');

@@ -20,7 +20,7 @@
 // 三个对话框全在 store 里（表单 / 角色 / 企微绑定），列定义的动作回调由 store 持有 ——
 // 视图只负责「顶部工具条 + 表格 + 三个 dialog 组件」这层壳。
 
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { defineStore } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
@@ -134,8 +134,7 @@ export const useUsersListStore = defineStore('users-list', () => {
   const { fetchList } = listQuery;
 
   const items = computed<UserOutData[]>(() => listQuery.data.value?.items ?? []);
-  // 守门 schema 已把计数转成 number，这里的 Number() 是兜底（对 number 是恒等）。
-  const total = computed<number>(() => Number(listQuery.data.value?.total ?? 0));
+  const total = computed<number>(() => listQuery.data.value?.total ?? 0);
   const loading = listQuery.isFetching;
   const errorMsg = computed<string | null>(() => {
     const e = listQuery.error.value;
@@ -415,10 +414,18 @@ export const useUsersListStore = defineStore('users-list', () => {
     data: wxIdentityQuery.data,
     loading: wxIdentityQuery.isFetching,
     error: wxIdentityQuery.error,
+    /** 绑定查询失败后的重试入口（对话框错误态的「重试」按钮走它）。 */
     reload: async (): Promise<void> => {
       await wxIdentityQuery.refetch();
     },
   };
+
+  // 错误桥接：与 `useUsersQuery` 的主查询同款，query 的 error 不在 setup 抛错
+  // （CLAUDE.md 硬约束）。少了这条，`getWxIdentity` 真失败（20601 / 40101 / 网络）时弹窗会
+  // 静默渲染成「未绑态」输入框，用户无从分辨。
+  watch(wxIdentityQuery.error, (e) => {
+    if (e) ElMessage.error(e.message ?? '企业微信绑定状态加载失败');
+  });
 
   // ============ 切片：mutations（8 条写路径）============
   /** 写完立即失效本域（列表 + 企微绑定；「写完看到自己那笔」的优化，非一致性保证）。 */
@@ -543,10 +550,9 @@ export const useUsersListStore = defineStore('users-list', () => {
     mutationKey: ['users', 'bind-wx'],
     mutationFn: (vars: { userId: string; wxUserId: string }) =>
       bindWxIdentity(vars.userId, { wx_user_id: vars.wxUserId }),
-    onSuccess: async (_data, vars) => {
-      // 精确失效该账号的绑定键（usersPrefix 一把也覆盖得到，这里显式再点一次是为了让
-      // 「失效了哪条键」在代码里可读）。
-      await qc.invalidateQueries({ queryKey: qk.userWxIdentity(vars.userId) });
+    onSuccess: async () => {
+      // `qk.usersPrefix` 已覆盖 `qk.userWxIdentity`（后者同在 `users` 前缀下），不必再单独
+      // 失效一次 —— 两次调用会让「失效了哪条键」这件事在代码里出现两个答案。
       await invalidateUsersDomain();
       ElMessage.success('已绑定企业微信账号');
     },
@@ -557,8 +563,7 @@ export const useUsersListStore = defineStore('users-list', () => {
     mutationKey: ['users', 'unbind-wx'],
     mutationFn: (vars: { userId: string; version: number }) =>
       unbindWxIdentity(vars.userId, { version: vars.version }),
-    onSuccess: async (_data, vars) => {
-      await qc.invalidateQueries({ queryKey: qk.userWxIdentity(vars.userId) });
+    onSuccess: async () => {
       await invalidateUsersDomain();
       ElMessage.success('已解绑企业微信账号');
     },
@@ -584,6 +589,10 @@ export const useUsersListStore = defineStore('users-list', () => {
     full_name: string;
     password: string;
   }): Promise<void> {
+    // 复位 20602 的焦点标志：`handleWriteError` 置它 true、只在 `resetForm()` 里复位，
+    // 而提交失败时弹窗保持开着 ⇒ 不在这里复位的话，用户改完用户名二次提交又撞 20602，
+    // 组件的 watch 看到「true → true」不触发，字段红字与焦点都不再出现。
+    formFocusUsername.value = false;
     formSaving.value = true;
     const done =
       formEditingId.value !== null && formEditingVersion.value !== null

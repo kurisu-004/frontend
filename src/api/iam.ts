@@ -288,6 +288,11 @@ export async function removeUserRole(
  * ⚠️ **未绑定时信封 `data` 是 `null`，不是 `[]`** —— 消费侧（企微绑定对话框）必须能
  * 处理 null，不要直接 `.map` / `.length`。
  *
+ * 这个 `null` 来自后端 `R<Option<WxIdentityOut>>` 的**双 Option 嵌套**：`R.data` 自带的
+ * `skip_serializing_if` 只看**外层** Option，未绑定时外层是 `Some(None)`（不是 `None`）⇒
+ * 跳过条件不成立，wire 上真的有 `"data": null` 这个键。若哪天后端把外层也展平成
+ * `Option<Option<…>>` 的扁平信封，本函数会拿到 `undefined` 而不是 `null`。
+ *
  * 失败抛 `ApiError`：20601 账号不存在 / 40101 未登录。
  */
 export async function getWxIdentity(userId: string): Promise<WxIdentity | null> {

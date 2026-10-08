@@ -15,10 +15,12 @@
 // 「确定」才写进 search 并触发一次查询；直 v-model 会每敲一个字符发一次请求。
 //
 // ⚠️ **操作列不可隐藏**：它在 defs 里（为了用注入的 actions 渲染行内按钮），但
-// `UserTable.vue` 传给 `ColumnVisibilityPopover` 的 defs 列表**过滤掉了 actions** ——
+// `UserTable.vue` 传给 `ColumnVisibilityPopover` 的 defs 列表**过滤掉了恒可见列** ——
 // `useColumnVisibility.update()` 会剪掉不在新 map 里的键，而 `isVisible()` 对未知键返回
 // true ⇒ 操作列永远可见（与旧版把它写成字面量 `<el-table-column>` 的效果一致）。
-// `draggable: false` 另有一层：它 fixed='right'，不该被拖到数据列中间去。
+// 「恒可见」的判据见 `isAlwaysVisibleColumn`，**不要**改成硬编码列 key 名单：加了新的
+// fixed / 不可拖列时名单会静默漏掉它。跨文件不变量有守卫单测
+// （`__tests__/usersColumnVisibilityGuard.spec.ts`）。
 
 import { h } from 'vue';
 import { ElButton, ElInput, ElPopconfirm, ElTag } from 'element-plus';
@@ -26,6 +28,7 @@ import ColumnFilterPopover from '@/components/ColumnFilterPopover.vue';
 import type { ComputedRef, Ref } from 'vue';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { UserOutData } from './usersSchema';
+import { RESET_PASSWORD_CONFIRM_TEXT } from './usersConstants';
 
 /** 用户名表头筛选状态机（文本列，draft → confirm 两段式）。
  *  **由 store 构造**（refs 在 store 里，见 `composables/useUsersListStore.ts`），
@@ -76,6 +79,20 @@ export interface BuildUsersColumnDefsDeps {
   activeFilter: UsersActiveFilter;
   /** 操作列的行内动作。 */
   actions: UsersColumnActions;
+}
+
+/** 恒可见列的判据：**吸附列**（`fixed`）与**显式不可拖列**（`draggable: false`）。
+ *
+ *  这类列不该进列可见性开关的候选：`useColumnVisibility.update()` 会把不在新 map 里的
+ *  键剪掉，而 `isVisible()` 对未知键返回 true ⇒ 不列进候选 = 恒可见。
+ *
+ *  为什么用 `draggable` 而不是 `resolveDraggable`：后者还会在 `type: selection/index/expand`
+ * 上返回 false，而那些列同样不该隐藏 —— 判据放在本域内、只认自己声明的字段，语义更窄也更
+ * 明确。真正的拖拽行为判据仍是 `useColumnDrag` 侧的 `resolveDraggable`（`fixed: 'right'`
+ * 本身已让它返回 false）。
+ */
+export function isAlwaysVisibleColumn(def: ColumnDef): boolean {
+  return def.fixed !== undefined || def.draggable === false;
 }
 
 /** 后端 `last_login_at` 是 **naive** timestamp（无时区后缀，Asia/Shanghai 墙钟）。
@@ -221,6 +238,10 @@ export function buildUsersColumnDefs(deps: BuildUsersColumnDefsDeps): ColumnDef[
       minWidth: 300,
       fixed: 'right',
       align: 'center',
+      // 显式声明意图：操作列不该被拖到数据列中间。实际让它不可拖的是 `fixed: 'right'`
+      // —— `resolveDraggable` 对 fixed 列已返回 false，`useColumnDrag` 的
+      // `dragLabelClass` 也已 `&& !def.fixed` ⇒ 删掉这一行行为不变；留着是为了让
+      // 「本列不可拖」在本文件里自读得出来，同时它也是 `isAlwaysVisibleColumn` 的判据之一。
       draggable: false,
       cellRender: ({ row }) => {
         const u = row as UserOutData;
@@ -243,7 +264,7 @@ export function buildUsersColumnDefs(deps: BuildUsersColumnDefsDeps): ColumnDef[
           h(
             ElPopconfirm,
             {
-              title: '确认重置为默认密码 changeme？',
+              title: RESET_PASSWORD_CONFIRM_TEXT,
               width: 240,
               onConfirm: () => actions.resetPassword(u),
             },

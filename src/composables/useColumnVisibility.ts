@@ -113,7 +113,13 @@ export interface ColumnVisibilityApi {
   update: (next: Record<string, boolean>) => void;
   /** 全部显示 */
   showAll: () => void;
-  /** 全部隐藏(操作列等不应隐藏的 key 不放进 defs 即可) */
+  /** 全部隐藏(操作列等不应隐藏的 key 不放进 defs 即可)
+   *  ⚠️ 2026-10-10 补警示：这条前提**只在「恒可见列不在 defs 里」时成立**。
+   *  `views/users` 的操作列恰恰**在** defs 里（行内按钮由注入的 actions 渲染），它靠
+   *  `ColumnVisibilityPopover` 的候选列表剔除它来实现恒可见 ⇒ 一旦有人给那个 popover
+   *  接上 `hideAll`，`allKeys` 里的 `actions` 会被置 false，操作列就整列消失了。
+   *  今天是不可达路径（全仓零 `hideAll` 调用点），但 API 已在返回里。
+   *  **不要改 `hideAll` 的行为**（全域语义），要加「全不选」请在调用侧过滤候选列表。 */
   hideAll: () => void;
   /** 所有声明的 key 列表(只读) */
   allKeys: readonly string[];

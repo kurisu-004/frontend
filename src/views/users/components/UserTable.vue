@@ -13,10 +13,13 @@
   与状态（`is_active`，EP 原生 `:filters`）。`@filter-change` 只上报本次变更的那一列，
   由 store 翻译回 search。
 
-  ⚠️ 传给 `ColumnVisibilityPopover` 的 defs **过滤掉了操作列**：操作列在 defs 里（行内按钮
-  由注入的 actions 渲染），但它必须永远可见（沿旧版把它写成字面量 `<el-table-column>` 的
-  行为）。`useColumnVisibility.update()` 会剪掉不在新 map 里的键，而 `isVisible()` 对未知键
-  返回 true ⇒ 不把它列进开关就等于恒可见。
+  ⚠️ 传给 `ColumnVisibilityPopover` 的 defs **过滤掉了恒可见列**（操作列）：操作列在 defs 里
+  （行内按钮由注入的 actions 渲染），但它必须永远可见（沿旧版把它写成字面量
+  `<el-table-column>` 的行为）。`useColumnVisibility.update()` 会剪掉不在新 map 里的键，而
+  `isVisible()` 对未知键返回 true ⇒ 不把它列进开关就等于恒可见。
+  过滤判据是 `usersColumnDefs.ts::isAlwaysVisibleColumn`（fixed / draggable:false），
+  **不要**改回字面量 key 名单 —— 跨文件不变量有守卫单测
+  （`__tests__/usersColumnVisibilityGuard.spec.ts`）。
 -->
 <template>
   <div class="user-table-wrap">
@@ -97,13 +100,16 @@ import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import { resolveDraggable } from '@/composables/useColumnVisibility';
+import { isAlwaysVisibleColumn } from '../usersColumnDefs';
 import { useUsersListStore } from '../composables/useUsersListStore';
 
 // 不变量 #1：表格组件内首调 store（与壳 UserList.vue 是同一个 Pinia 单例）。
 const store = useUsersListStore();
 
-/** 列可见性开关的候选：**剔除操作列**，让它恒可见（见文件头说明）。 */
-const visibilityDefs = computed(() => store.columnDefs.filter((d) => d.key !== 'actions'));
+/** 列可见性开关的候选：**剔除恒可见列**（操作列），让它恒可见（见文件头说明）。
+ *  判据走 `isAlwaysVisibleColumn` 而不是硬编码 `'actions'`，新增吸附列 / 不可拖列时
+ *  自动跟着进这个名单。 */
+const visibilityDefs = computed(() => store.columnDefs.filter((d) => !isAlwaysVisibleColumn(d)));
 
 // ============ 列顺序拖动 ============
 // 与 store.columnVisibility 共享同一 columnDefs 数组；各自读自己的 localStorage key

@@ -12,8 +12,9 @@
   取数由 store 持有（`store.wxIdentity`，键走 `qk.userWxIdentity(userId)`，闸门 =
   弹窗开着且有账号 id）⇒ 本组件零 `api/*` 依赖。
 
-  ⚠️ `getWxIdentity` 未绑定时返回 **`null`**（不是 `[]`）：下面的三分支显式区分
-  「加载中 / 已绑 / 未绑」，不直接对返回值 `.map` / `.length`。
+  ⚠️ `getWxIdentity` 未绑定时返回 **`null`**（不是 `[]`）：下面的分支显式区分
+  「加载中 / 加载失败 / 已绑 / 未绑」四态，不直接对返回值 `.map` / `.length`。
+  「加载失败」必须与「未绑」分开渲染 —— 见模板里 `v-else-if` 的注释。
 -->
 <template>
   <el-dialog
@@ -46,6 +47,14 @@
          未绑态 —— 否则已绑账号会先闪一个输入框再跳到已绑态。 -->
     <div v-else-if="store.wxIdentity.loading" class="wx-loading">加载绑定状态…</div>
 
+    <!-- 加载失败：与「未绑定」必须分开渲染。两者在 data 上都是「没有对象」，共用一个分支
+         会让 20601 / 40101 / 网络抖动静默变成一个可提交的绑定输入框（用户填完提交才被后端
+         拒，且看不出真实原因）。这里给一个显式错误态 + 重试；重试走 store 的 reload。 -->
+    <div v-else-if="store.wxIdentity.error" class="wx-error-state">
+      <span>绑定状态加载失败：{{ store.wxIdentity.error.message }}</span>
+      <el-button :loading="store.wxIdentity.loading" @click="onRetry">重试</el-button>
+    </div>
+
     <!-- 未绑态：一个输入框 + 「绑定」按钮 -->
     <div v-else class="wx-unbound">
       <el-input
@@ -68,7 +77,7 @@
     </div>
 
     <p class="scope-hint">
-      一个系统账号只能绑一个企业微信账号；该 UserID 需先存在于本企业微信通讯录中，否则 绑定会失败。
+      一个系统账号只能绑一个企业微信账号；该 UserID 需先存在于本企业微信通讯录中，否则绑定会失败。
     </p>
   </el-dialog>
 </template>
@@ -94,6 +103,11 @@ const dlg = useDialogSize({ desktopWidth: 480 });
 
 /** 已绑定的绑定行；`undefined` = 还在加载，`null` = 后端确认未绑定。 */
 const identity = computed(() => store.wxIdentity.data ?? null);
+
+/** 加载失败后的重试（store 侧已把 error 桥接成 ElMessage，这里只补一个显式入口）。 */
+function onRetry(): void {
+  void store.wxIdentity.reload();
+}
 
 const wxUserIdDraft = ref('');
 const errors = ref<WxBindFormFieldErrors>({});
@@ -140,6 +154,21 @@ function onBind(): void {
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.8;
+}
+
+/* 加载失败态：与「未绑态」视觉上必须一眼可分（否则用户会当未绑态继续填）。 */
+.wx-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--el-color-danger-light-9);
+  border: 1px solid var(--el-color-danger-light-7);
+  border-radius: 6px;
+  color: var(--el-color-danger);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .wx-bind-btn {
