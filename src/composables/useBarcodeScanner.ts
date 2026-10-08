@@ -13,8 +13,24 @@
 // - 输入框/可编辑区域不拦截：让用户在搜索、表单里正常打字，不会被误当成扫码。
 // - 扫码前缀后必须 preventDefault：避免 Enter 同时触发 form submit。
 // - 订阅者抛错要 try/catch：单个页面报错不应让全局监听崩。
+//
+// 2026-10-09 新增「活跃路由闸门」：分发只投递给当前路由下的订阅者。
+// - 症状：顶部标签栏同时开着「待品检」和「扫码入单」时，扫一次码两个对话框一起弹。
+// - 原因：MainLayout 用 <keep-alive :include="tags.cachedViewNames"> 缓存路由组件，
+//   切标签只走 onDeactivated、组件不卸载 ⇒ 页面在 onBeforeUnmount 里注册的退订
+//   永不触发，被缓存的非激活页面仍留在订阅表里，而分发是无条件的。
+// - 做法：订阅时记下当时的 route.path（Map 的 value），分发时只投给 path 相同的
+//   订阅者。用 path 而非 fullPath —— query 变化不该让页面失去扫码能力。路径在
+//   订阅那一刻读一次并锁进 Map，分发时现读会让两个页面都读到当前路径、闸门失效。
+// - null 的含义：订阅时不在组件上下文（useRoute() 走 inject，拿不到）⇒ 不设闸门，
+//   照旧全量分发。宁可不拦，也不能让所有 handler 静默失效。
+// - 已知边界：同一 path 同时存在两个订阅者时两个都会收到。路由层保证同一 path
+//   只有一个组件实例，故实践中不发生。
+// - 不改成逐页 onActivated / onDeactivated：那要改全部 8 个订阅页并维护两套生命周期
+//   记账；闸门在 composable 内部一处即可，调用点零改动、公开 API 形状不变。
 
-import { onBeforeUnmount, ref, type Ref } from 'vue';
+import { getCurrentInstance, onBeforeUnmount, ref, type Ref } from 'vue';
+import { useRoute } from 'vue-router';
 
 export type ScanHandler = (code: string) => void;
 export type Unsubscribe = () => void;
@@ -27,7 +43,13 @@ const SCAN_MAX_LENGTH = 50;
 const BUFFER_IDLE_MS = 500;
 
 // ============ 单例状态（模块级） ============
-const handlers = new Set<ScanHandler>();
+// 2026-10-09：Set 改 Map。key 是 handler，value 是订阅那一刻的 route.path；
+// null = 订阅时取不到路由 ⇒ 不设闸门。
+const handlers = new Map<ScanHandler, string | null>();
+/** 2026-10-09：最近一次在组件上下文里 useRoute() 拿到的 route。vue-router 注入的
+ *  是应用级同一个响应式对象，任意组件拿到的都是它 ⇒ dispatch 时读它的 .path 就是
+ *  「当前路由」。保持 null 表示至今没有任何组件上下文订阅过（此时不过滤）。 */
+let currentRoute: { readonly path: string } | null = null;
 const enabled = ref(true);
 const lastScan = ref<string>('');
 const lastScanAt = ref<number>(0);
@@ -60,13 +82,25 @@ function scheduleIdleClear(): void {
   }, BUFFER_IDLE_MS);
 }
 
+/** 2026-10-09 活跃路由闸门：该订阅者此刻是否已不是当前路由。
+ *  订阅时取不到路由（value 为 null）或分发时取不到当前路由，一律不过滤。 */
+function isGatedOut(subscribePath: string | null): boolean {
+  if (subscribePath === null) return false;
+  const activePath = currentRoute?.path;
+  if (activePath === undefined) return false;
+  return subscribePath !== activePath;
+}
+
 function dispatch(code: string): void {
   if (!code) return;
+  // 2026-10-09：lastScan / lastScanAt 与 console.log 记的是「识别到一次完整扫码」，
+  // 刻意放在路由过滤之前 —— 过滤只决定「谁收到回调」，不改动全局扫码流水记录。
   lastScan.value = code;
   lastScanAt.value = Date.now();
 
   console.log(`[barcode] ${code}`);
-  for (const h of handlers) {
+  for (const [h, subscribePath] of handlers) {
+    if (isGatedOut(subscribePath)) continue;
     try {
       h(code);
     } catch (e) {
@@ -134,8 +168,14 @@ export interface UseBarcodeScannerReturn {
 export function useBarcodeScanner(): UseBarcodeScannerReturn {
   installListener();
 
+  // 2026-10-09：活跃路由闸门的锚。useRoute() 走 inject，只在组件上下文可用；
+  // 非组件上下文（单测直接调本 composable）⇒ null，退化成改动前的全量分发。
+  const route = getCurrentInstance() ? useRoute() : null;
+  if (route) currentRoute = route;
+
   function onScan(handler: ScanHandler): Unsubscribe {
-    handlers.add(handler);
+    // 路径在订阅那一刻读一次并锁进 Map
+    handlers.set(handler, route?.path ?? null);
     return () => {
       handlers.delete(handler);
     };
