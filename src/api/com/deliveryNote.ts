@@ -209,8 +209,13 @@ export async function softDeleteNote(
  *
  *  响应含拆批后的完整 `DeliveryNoteDetailOut` ⇒ 前端可就地替换草稿看板那张卡，
  *  不用重新扫码。校验闸门（21405 `BIZ_DELIVERY_NOTE_PART_NOT_READY`）：批次状态
- *  ≠ READY_TO_SHIP、DP 分配凑不出、sets > entry_max_sets；批次已挂在别的单上返
- *  21406，零件 L1 ≠ 单据 L1 返 21416，命中既有 DRAFT 而 `note_version` 不匹配返 40901。 */
+ *  ≠ READY_TO_SHIP、DP 分配凑不出、sets > entry_max_sets；零件 L1 ≠ 单据 L1 返 21416，
+ *  命中既有 DRAFT 而 `note_version` 不匹配返 40901。
+ *
+ *  ⚠️ 21405 与 21406 `..._PART_ALREADY_ASSIGNED`（409）是**同一次汇总里的二选一**，
+ *  两者都以「该零件凑不出本次要的量」为前提：失败零件里有占用明细（批次已挂在别的单
+ *  上）⇒ 21406，否则 ⇒ 21405。占用批次本身不可入单（可入单集合的 SQL 已排除它们），
+ *  所以同零件另有足量空闲批次时正常入单（判定域 = 本次分配实际需要的量，2026-10-09）。 */
 export async function submitDeliveryEntries(
   payload: DeliveryScanEntryRequest,
 ): Promise<DeliveryNoteDetailData> {
