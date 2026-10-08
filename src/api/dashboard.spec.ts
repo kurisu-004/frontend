@@ -82,8 +82,13 @@ class FakeWebSocket {
   }
 
   /** 模拟**客户端主动关闭**。真实浏览器里 `ws.close(1000)` 的 onclose 带 code=1000，
-   *  这里保持一致 —— code 1000 的分流判定正是 2026-10-09 新增用例 A 的观察点。 */
+   *  这里保持一致 —— code 1000 的分流判定正是 2026-10-09 新增用例 A 的观察点。
+   *
+   *  2026-10-09 补齐浏览器语义：**readyState 已是 CLOSED 时不再派发 close 事件**。
+   *  旧桩无条件 `closeWith({code:1000})`，正好与真实浏览器相反，并把 dashboard.ts
+   *  「主动关闭标记必然滞留」这个缺陷藏了起来 —— 因为它凭空造出了一个本不该有的消费者。 */
   public close(): void {
+    if (this.readyState === FakeWebSocket.CLOSED) return;
     this.closeWith({ code: 1000, reason: '' });
   }
 
@@ -587,6 +592,50 @@ describe('dashboard WS：auth:session-changed 驱动 token 生命周期', () => 
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain('第 1 次连接失败');
+  });
+
+  it('用例 C：主动关闭标记绑在具体 socket 实例上，滞留也吞不掉后续真实失败', async () => {
+    // 钉住 2026-10-09 修掉的不变量。走 4001 停连路径：onDisconnected 把 URL 置
+    // undefined → 本层 watch 走 closeConnection() 主动关这条连接。此刻 dead 已经是
+    // CLOSED（closeWith 顺手置的），真实浏览器里 close() 打在它身上**不再派发 close
+    // 事件** ⇒ 标记没有消费者、必然滞留。布尔标记下这个滞留会吃掉下一次真实失败：
+    // 不打 warn、不推进 attempt，连 4003 的 dashboard:full-refetch 信号也一起跳过。
+    // 改成按实例同一性判定后，标记绑在这条死连接上，对**另一条**连接的失败毫无影响。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const stub = stubMutableToken('old-token');
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('location', { protocol: 'http:', host: 'localhost:5173' });
+    const api = await import('./dashboard');
+    await bootstrapSocket(api);
+    const dead = FakeWebSocket.instances[0]!;
+    dead.open();
+    const closeSpy = vi.spyOn(dead, 'onclose', 'get');
+
+    // 4001（access token expired）→ 停连
+    dead.closeWith({ code: 4001, reason: 'access token expired' });
+    await flushVue();
+    expect(dead.readyState).toBe(FakeWebSocket.CLOSED);
+    // 主动关闭本身不记失败（4001 那条「会话失效」warn 先清掉，下面只看连接失败日志）
+    warn.mockClear();
+
+    // app 层 refresh 成功：新 token 落盘 + 派发 auth:session-changed ⇒ 换一条新连接
+    stub.set('new-token');
+    window.dispatchEvent(
+      new CustomEvent('auth:session-changed', { detail: { token: 'new-token' } }),
+    );
+    await flushVue();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances[1]?.url).toContain('token=new-token');
+
+    // 新连接真实握手失败（error + close 1006）→ 必须照常走 reportFailure
+    FakeWebSocket.instances[1]!.failHandshake();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain('第 1 次连接失败');
+    // 死连接自身没有再收到第二个 close 事件（浏览器语义：已 CLOSED 后 close() 不派发）
+    expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 });
 

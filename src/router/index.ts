@@ -404,10 +404,25 @@ if (typeof window !== 'undefined') {
     const reason = detail?.reason ?? null;
     const auth = useAuthStore();
     if (reason === 'access token expired' || reason === null) {
-      void auth.refreshOrLogout(router).then((ok) => {
-        // ok === false 时 refreshOrLogout 内部已 forceLogout(router)，这里不再重复调。
-        if (ok) reconnectDashboard();
-      });
+      void auth
+        .refreshOrLogout(router)
+        .then((ok) => {
+          // ok === false 时 refreshOrLogout 内部已 forceLogout(router)，这里不再重复调。
+          if (ok) reconnectDashboard();
+        })
+        // 兜底：refreshOrLogout 把 forceLogout 放在 catch 里，而 forceLogout 自身也可能抛
+        // （teardownSession 内的 storage 写入、queryClient.clear()、router.replace 各自都有
+        // 抛的可能）。异常一旦穿出 listener 的 promise 就是一条无人处理的 rejection ——
+        // 会话没清、没跳登录页、只在控制台留一条 unhandled rejection。此处宁可多登不可
+        // 不登：再调一次 forceLogout（幂等，见 auth store 的注释）。兜底路径自己再抛就
+        // 真的无处可兜了，只记一条日志。
+        .catch(() => {
+          try {
+            auth.forceLogout(router);
+          } catch (err) {
+            console.error('[auth] forceLogout 兜底失败', err);
+          }
+        });
       return;
     }
     auth.forceLogout(router);

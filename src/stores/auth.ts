@@ -13,7 +13,8 @@
 //     localStorage / tagsView / query 缓存）由本 store 的 teardownSession() 单点收口。
 //   - loadFromStorage() 在 setup 回调末尾自执行（首次 useAuthStore() 时触发）；Listener
 //     在 setup 里挂；保证首次实例化就具备 localStorage 恢复 + 事件同步能力。
-//     它同时是 access token 保活定时器的起表点之一（见 ensureAccessTokenKeepalive）。
+//     它同时是 access token 保活定时器的起表点之一（见 ensureAccessTokenKeepalive）；
+//     teardownSession() 则是拆表点（会话终止后必须停掉，否则还挂着 10 分钟）。
 //   - forceLogout(router)：「会话已没救」时无条件终止本地会话（不联系后端），
 //     refreshOrLogout 的失败分支委托给它。详见函数注释。
 //   - 会话终止唯一收口 teardownSession()：**无 router 参数**、
@@ -178,11 +179,23 @@ export const useAuthStore = defineStore('auth', () => {
     // isDummyAuthActiveValue 只在 initDummyAuth() 置 true，复位点必须在本函数：
     // dev dummy 模式登出后路由守卫仍走 dummy 短路，等于永远登不出「开发模式」。
     isDummyAuthActiveValue.value = false;
-    localStorage.removeItem('auth_session');
+    // 2026-10-09：删盘包 try/catch。隐私模式 / 存储被站点策略禁用时 removeItem 抛
+    // SecurityError，原来会把整个收口函数炸掉 —— 后面派发 auth:session-changed（WS 断开）
+    // 与 queryClient.clear()（跨账号缓存隔离的唯一手段）都还没执行 ⇒ 既不断连接也不清
+    // 缓存，只在控制台留一条异常。会话已在内存里清掉了，删盘失败不该阻断后续步骤。
+    try {
+      localStorage.removeItem('auth_session');
+    } catch {
+      /* 存储不可用：内存态已清，继续往下收口 */
+    }
     // 登出后必须让 WS 层主动断开。detail.token = null → syncWsUrl() 把 URL 置为
-    // undefined → VueUse open() 先 close() 再因 `_init()` 见 url undefined 直接返回。
+    // undefined → closeConnection() 先 close() 再因 `_init()` 见 url undefined 直接返回。
     // 少了这一步，WS 会拿着刚被吊销的 session 持续重连直到页面关闭。
     window.dispatchEvent(new CustomEvent('auth:session-changed', { detail: { token: null } }));
+    // 2026-10-09：拆掉 access token 保活定时器。storage 里已无 token ⇒ 该函数走「不排期」
+    // 分支（幂等，删表后即 no-op）。少了这一步，登出后最多还挂着一枚定时器直到 TTL 走完
+    // （约 10 分钟），到点还会发一次注定失败的 refresh。
+    ensureAccessTokenKeepalive();
     // tagsView 归属已由上面的 setUser(null) 切到 null（清内存、不写盘）—— 不再重复
     // 调 switchOwner(null)，理由见 setUser 的不变量注释。
     // 内存 query 缓存全清。全仓所有 queryKey（src/composables/queries/keys.ts

@@ -12,10 +12,14 @@
 //   - E2 auth_session 被删后停摆，不再 refresh（不留悬挂定时器）；
 //   - E3 无有效 token / exp 解不出时不排期；
 //   - E4 幂等：重复调用只是重排，不产生并发的 refresh；
-//   - E5 定时器句柄做了 unref → 不阻塞 node 环境的 vitest 进程退出。
+//   - E5 定时器句柄做了 unref → 不拖慢 / 不挂住 node 环境的 vitest 进程；
+//   - E6 刷新失败后的**有界重试**（30s / 2min 各一次，用尽即停摆 + 打 warn）；
+//   - E7 **跨标签页互斥**：两个标签页同一刻要 refresh 时只有一个真的发请求，另一个在
+//     临界区内现读 storage 复用新 token（后端 refresh 一次性轮转 + reuse detection 会
+//     连带清掉该用户所有会话，这一步不能只缩小窗口）。
 //
 // mock @/api/iam 的 refreshTokens：真 axios 会在 node 环境下挂起/超时。
-// // @vitest-environment 保持默认 node —— 这正是要验证的进程退出行为。
+// // @vitest-environment 保持默认 node —— E5 要验证的正是这个环境的进程退出行为。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -165,7 +169,7 @@ describe('access token 保活定时器（零 HTTP 流量下自续期）', () => 
     expect(refreshTokensMock).toHaveBeenCalledTimes(1);
   });
 
-  it('E5：定时器句柄做 unref（不阻塞 node 环境 vitest 进程退出）', async () => {
+  it('E5：定时器句柄做 unref（避免悬挂定时器拖慢 / 挂住 node 环境进程）', async () => {
     const http = await loadHttp();
     const realSetTimeout = globalThis.setTimeout;
     const unrefSpies: Array<ReturnType<typeof vi.fn>> = [];
@@ -185,10 +189,75 @@ describe('access token 保活定时器（零 HTTP 流量下自续期）', () => 
     storedSession = { token: makeJwtWithExp(nowSec() + 700), refresh_token: 'r0' };
     http.ensureAccessTokenKeepalive();
 
-    // 必须挂上 unref：node 环境的 vitest run 会被这个模块级 setTimeout 挂住不退出。
-    // （浏览器返回 number、没有 unref，实现侧用可选调用兼容两侧。）
+    // 浏览器 setTimeout 返回 number、没有 unref，故实现侧用可选调用兼容两侧。挂上它是为了
+    // 不让模块级长定时器把 node 侧的进程拖住（vitest run 要等定时器清空才退出）。
     expect(unrefSpies.length).toBeGreaterThanOrEqual(1);
     expect(unrefSpies[0]).toHaveBeenCalledTimes(1);
+  });
+
+  it('E6：刷新失败后有界重试（30s / 2min），用尽即停摆并打 warn', async () => {
+    // 一次网络抖动不该让整条保活链对本会话永久失效（空闲大屏没有 HTTP 流量可触发 reactive
+    // 刷新，而 /iam/refresh 走无拦截器的 refreshClient ⇒ 40105 也不会派发 auth:logout）。
+    // 也不该无限重排（后端持续不可用时会变成请求风暴）。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const http = await loadHttp();
+    storedSession = { token: makeJwtWithExp(nowSec() + 60), refresh_token: 'r0' };
+    refreshTokensMock.mockRejectedValue(new Error('network down'));
+
+    http.ensureAccessTokenKeepalive();
+    await flushPromises();
+    expect(refreshTokensMock).toHaveBeenCalledTimes(1);
+
+    // 退避档 1：30s
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refreshTokensMock).toHaveBeenCalledTimes(2);
+
+    // 退避档 2：2min
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(refreshTokensMock).toHaveBeenCalledTimes(3);
+
+    // 用尽即停摆：再推 10 分钟也不发请求（后续靠 reactive 40102 / WS 4001 兜底）
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(refreshTokensMock).toHaveBeenCalledTimes(3);
+    // 停摆时留一行 warn，让「保活链已死」在控制台可见而不是彻底静默
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain('保活');
+  });
+
+  it('E7：跨标签页互斥 —— 两个标签页同时要 refresh 时只有一个发请求', async () => {
+    // 后端 refresh token 一次性轮转，且对已用过的 jti 做 reuse detection ⇒ 命中就会
+    // delete_all_user_sessions，把该用户**所有标签页 + 所有设备**一起登出。两个模块实例
+    // 就是两个标签页：它们共享同一份 localStorage 桩与同一个 navigator.locks，但各自的
+    // refreshPromise 互不相识 —— 这正是必须靠互斥（而不是标签页内雪崩队列）的原因。
+    const httpA = await loadHttp();
+    // refresh 请求挂住不返回，好让 B 卡在锁上
+    let releaseA: (pair: { token: string; refresh_token: string }) => void = () => undefined;
+    refreshTokensMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseA = resolve;
+        }),
+    );
+
+    // 同一个 exp ⇒ 两个标签页的保活定时器落在同一时刻（这正是线上窗口的来源）
+    const expiring = makeJwtWithExp(nowSec() + 60);
+    storedSession = { token: expiring, refresh_token: 'r0' };
+    httpA.ensureAccessTokenKeepalive();
+    await flushPromises();
+    expect(refreshTokensMock).toHaveBeenCalledTimes(1);
+
+    // 第二个标签页在 A 还在飞的时候到点
+    const httpB = await loadHttp();
+    httpB.ensureAccessTokenKeepalive();
+    await flushPromises();
+    // B 必须**还卡在锁上**，此刻不能发第二个请求
+    expect(refreshTokensMock).toHaveBeenCalledTimes(1);
+
+    // A 拿到新的一对 token 写盘并释放锁 → B 拿到锁后现读 storage，直接复用、不发请求
+    releaseA(makeRefreshedPair(900));
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    expect(refreshTokensMock).toHaveBeenCalledTimes(1);
   });
 });
 

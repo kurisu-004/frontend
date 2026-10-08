@@ -16,6 +16,8 @@
 //   - R7 全局前置守卫的 refreshOrLogout resolve false 时导航必须 settle：
 //     本守卫是 3 参签名，从不调 next() 会让 prod 导航永久挂起、dev 抛
 //     "Invalid navigation guard"。
+//   - R8 连续两次事件 → 幂等：listener 不做去重，靠 forceLogout 自身可重入。
+//   - R9 refreshOrLogout 自身抛异常 → 兜底 forceLogout（不能吞成 unhandled rejection）。
 //
 // mock 掉整个 @/stores/auth（只关心「listener 调了 store 的哪个方法、传了什么参数」）
 // 与 @/api/dashboard（reconnectDashboard 会真的建 WebSocket 连接）。
@@ -134,6 +136,32 @@ describe("router 模块 'auth:session-lost' 监听器（dashboard WS 关闭码 4
 
     expect(refreshOrLogoutMock).not.toHaveBeenCalled();
     expect(forceLogoutMock).toHaveBeenCalledTimes(1);
+    expect(reconnectDashboardMock).not.toHaveBeenCalled();
+  });
+
+  it('R8：连续两次事件 → 幂等（forceLogout 自身可重入，listener 不做去重）', async () => {
+    dispatchSessionLost('auth expired');
+    dispatchSessionLost('auth expired');
+    await flushAsync();
+
+    // 不去重是刻意的：WS 层是 createGlobalState 单例，4001 派发点只有一处，
+    // 真出现两次也只会来自「测试/重放」；forceLogout 每步都是幂等赋值。
+    expect(forceLogoutMock).toHaveBeenCalledTimes(2);
+    expect(forceLogoutMock.mock.calls[1]?.[0]).toBe(router);
+  });
+
+  it('R9：refreshOrLogout 自身抛异常 → 兜底 forceLogout（不吞成 unhandled rejection）', async () => {
+    // refreshOrLogout 把 forceLogout 放在 catch 里，而 forceLogout 自身也可能抛
+    // （teardownSession 的 storage 写入 / queryClient.clear() / router.replace）。异常穿出
+    // listener 的 promise 就是一条无人处理的 rejection ⇒ 会话没清、没跳登录页。
+    refreshOrLogoutMock.mockRejectedValue(new Error('localStorage SecurityError'));
+
+    dispatchSessionLost('access token expired');
+    await flushAsync();
+
+    // 宁可多登不可不登
+    expect(forceLogoutMock).toHaveBeenCalledTimes(1);
+    expect(forceLogoutMock.mock.calls[0]?.[0]).toBe(router);
     expect(reconnectDashboardMock).not.toHaveBeenCalled();
   });
 });
