@@ -983,8 +983,8 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     const unknownState = scanPartRowSchema.parse({ ...validScanRow, chain_state: 'SKIP' });
     expect(unknownState.chain_state).toBe('SKIP');
 
-    // 另三个键的默认值对齐后端兜底口径：id 落 '0'（消费侧见到 '0' 必须短路，不发
-    // for-return 请求）、两个 name 落 null。
+    // 另三个键的默认值对齐后端兜底口径：id 落 '0'（消费侧见到 '0' 必须短路，不提交
+    // worker-scan）、两个 name 落 null。
     const bare: Record<string, unknown> = { ...validScanRow };
     for (const key of [
       'chain_state',

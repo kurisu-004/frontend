@@ -28,9 +28,8 @@
 //     会把 queryFn 的 parse 一起短路，T5 变成在测 mock 自己。
 //   - vi.mock('@/api/parts')：releaseFromProgramming（@/api/parts 聚合导出，mock
 //     工厂只需给出用到的成员）；
-//   - vi.mock('@/api/process') / vi.mock('@/api/shelves')：store 内
-//     useProcessesQuery / useProductionShelvesQuery + useShelfProcessFilter 会拉
-//     基础数据，桩掉避免真实 axios；
+//   - vi.mock('@/api/process') / vi.mock('@/api/shelves')：桩掉基础数据端点，
+//     避免真实 axios（本 store 只在读路径上消费前者，2026-10-10 起不再消费后者）；
 //   - vi.mock('element-plus', () => ({ ElMessage: {...} }))：query hook 内
 //     watch(error) → ElMessage.error 在 vitest node env 会因 ElMessage 内部
 //     normalizeAppendTo 触发 ReferenceError: document is not defined，必须桩成 no-op。
@@ -128,10 +127,9 @@ vi.mock('@/api/shelves', () => ({
   //（backend-rust/src/modules/shelf/vo/process_mapping.rs）—— **扁平行**：
   // 一行一个 (货架, 工序) 对，同一 shelf_id 会重复出现，且 item 上是 process_id
   // 单值而非 process_ids 子集数组。
-  // 2026-10-02 之前这里是 `{items: []}`，恰好掩盖了 useShelfProcessFilter 的
+  // 2026-10-02 之前这里是 `{items: []}`，恰好掩盖了「扁平行被当子集数组读」的
   // 静默清空 bug（空数组下新旧实现都得到空 mapping，测试全绿）—— 契约 mock
-  // 复制产品代码的错误形态，等于给 bug 发免死金牌。回归守卫见
-  // src/composables/__tests__/useShelfProcessFilter.spec.ts。
+  // 复制产品代码的错误形态，等于给 bug 发免死金牌。
   getAllShelfProcessMappings: vi.fn(async () => ({
     items: [
       {

@@ -73,10 +73,7 @@ vi.mock('element-plus', () => ({
 
 import CompanyColumn from '../CompanyColumn.vue';
 import { recordOutsourceSource } from '@/utils/dndSourceTracker';
-import {
-  OPEN_OUTSOURCE_BATCH_MENU,
-  SEND_TO_COMPANY,
-} from '../../outsourceBoardTypes';
+import { OPEN_OUTSOURCE_BATCH_MENU, SEND_TO_COMPANY } from '../../outsourceBoardTypes';
 
 const ElCardStub = defineComponent({
   name: 'ElCardStub',
@@ -109,7 +106,9 @@ const COMPANY_ID = '9000000000001';
 const OTHER_COMPANY_ID = '9000000000002';
 const SHELF_ID = '5000000000001';
 
-function makeHeld(overrides: Partial<OutsourceQueueHeldBatchData> = {}): OutsourceQueueHeldBatchData {
+function makeHeld(
+  overrides: Partial<OutsourceQueueHeldBatchData> = {},
+): OutsourceQueueHeldBatchData {
   return {
     batch_id: '3000000000002',
     part_id: '4000000000002',
@@ -300,22 +299,25 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
   });
 
   it('D6：既无候选池源 → 零请求', async () => {
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
-    const wrapper = mountColumn({}, { [SEND_TO_COMPANY]: sendToCompany });
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
     );
+    const wrapper = mountColumn({}, { [SEND_TO_COMPANY]: sendToCompany });
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
   it('D7a：APPROVAL 行落到报价锁定的公司列 → 发请求（候选行 + 本列 id）', async () => {
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
-    const wrapper = mountColumn({ candidates: [makeCandidate()] }, { [SEND_TO_COMPANY]: sendToCompany });
-    recordPoolDrag('3000000000001', COMPANY_ID);
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
     );
+    const wrapper = mountColumn(
+      { candidates: [makeCandidate()] },
+      { [SEND_TO_COMPANY]: sendToCompany },
+    );
+    recordPoolDrag('3000000000001', COMPANY_ID);
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).toHaveBeenCalledTimes(1);
     expect(sendToCompany.mock.calls[0]![0]).toMatchObject({
       companyId: COMPANY_ID,
@@ -326,24 +328,24 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
 
   it('D7b（守卫①）：APPROVAL 行落到别的公司列 → 早退、零请求 + 报价锁定提示', async () => {
     const { ElMessage } = await import('element-plus');
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn(
       { company: makeCompany([], { company_id: OTHER_COMPANY_ID, name: '外协厂乙' }) },
       { [SEND_TO_COMPANY]: sendToCompany },
     );
     recordPoolDrag('3000000000001', COMPANY_ID);
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
-    );
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).not.toHaveBeenCalled();
-    expect(ElMessage.warning).toHaveBeenCalledWith(
-      '该批次已由报价锁定外协公司，不能改投其它公司',
-    );
+    expect(ElMessage.warning).toHaveBeenCalledWith('该批次已由报价锁定外协公司，不能改投其它公司');
     wrapper.unmount();
   });
 
   it('D7c（守卫①）：DIRECT 行落到 company_options 内的公司 → 放行', async () => {
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn(
       {
         company: makeCompany([], { company_id: OTHER_COMPANY_ID, name: '外协厂乙' }),
@@ -352,9 +354,7 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
       { [SEND_TO_COMPANY]: sendToCompany },
     );
     recordPoolDrag('3000000000001', ''); // DIRECT 行记空串
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
-    );
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).toHaveBeenCalledTimes(1);
     expect(sendToCompany.mock.calls[0]![0]).toMatchObject({ companyId: OTHER_COMPANY_ID });
     wrapper.unmount();
@@ -362,15 +362,15 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
 
   it('D7d（守卫①）：DIRECT 行落到不在 company_options 内的公司 → 早退、零请求', async () => {
     const { ElMessage } = await import('element-plus');
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn(
       { candidates: [makeDirectCandidate()] },
       { [SEND_TO_COMPANY]: sendToCompany },
     );
     recordPoolDrag('3000000000001', '');
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
-    );
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('所选外协公司不在该批次的可发送范围内');
     wrapper.unmount();
@@ -378,76 +378,74 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
 
   it('D8（守卫②）：can_send === false 的行不接受投放', async () => {
     const { ElMessage } = await import('element-plus');
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn(
       { candidates: [makeCandidate({ can_send: false })] },
       { [SEND_TO_COMPANY]: sendToCompany },
     );
     recordPoolDrag('3000000000001', COMPANY_ID);
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
-    );
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).not.toHaveBeenCalled();
-    expect(ElMessage.warning).toHaveBeenCalledWith(
-      '该批次当前不可发送（无可用报价或外协公司）',
-    );
+    expect(ElMessage.warning).toHaveBeenCalledWith('该批次当前不可发送（无可用报价或外协公司）');
     wrapper.unmount();
   });
 
   it('D9a（守卫③）：version 为 0 → 早退、零请求', async () => {
     const { ElMessage } = await import('element-plus');
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn(
       { candidates: [makeCandidate({ version: 0 })] },
       { [SEND_TO_COMPANY]: sendToCompany },
     );
     recordPoolDrag('3000000000001', COMPANY_ID);
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
-    );
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('批次版本信息缺失，无法移动');
     wrapper.unmount();
   });
 
   it('D9b（守卫③）：version 为 NaN → 早退、零请求', async () => {
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn(
       { candidates: [makeCandidate({ version: Number.NaN })] },
       { [SEND_TO_COMPANY]: sendToCompany },
     );
     recordPoolDrag('3000000000001', COMPANY_ID);
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
-    );
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
   it('D9c（守卫③）：shelf_id 为空串（PENDING 未上架）→ 早退、零请求', async () => {
     const { ElMessage } = await import('element-plus');
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn(
       { candidates: [makeCandidate({ shelf_id: '', shelf_code: null })] },
       { [SEND_TO_COMPANY]: sendToCompany },
     );
     recordPoolDrag('3000000000001', COMPANY_ID);
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
-    );
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).not.toHaveBeenCalled();
-    expect(ElMessage.warning).toHaveBeenCalledWith('该批次尚未上架，请先下发到生产货架');
+    expect(ElMessage.warning).toHaveBeenCalledWith('该批次尚未上架，暂时不能发送到外协');
     wrapper.unmount();
   });
 
   it('D10：候选已不在当前工序的可发送集合 → 早退、零请求', async () => {
     const { ElMessage } = await import('element-plus');
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn({ candidates: [] }, { [SEND_TO_COMPANY]: sendToCompany });
     recordPoolDrag('3000000000001', COMPANY_ID);
-    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(
-      dragEvent('3000000000001'),
-    );
+    await (capturedOptions().onAdd as (e: unknown) => Promise<void>)(dragEvent('3000000000001'));
     expect(sendToCompany).not.toHaveBeenCalled();
     expect(ElMessage.warning).toHaveBeenCalledWith('已不在当前工序的可发送候选中');
     wrapper.unmount();
@@ -489,7 +487,9 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
   it('D11b：单张投放（勾选集 ≤ 1）只发那一张，且不上抛勾选', async () => {
     const a = makeCandidate();
     const b = makeCandidate({ batch_id: '3000000000003', batch_no: 3 });
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn(
       { candidates: [a, b], selectedIds: new Set<string>([a.batch_id]) },
       { [SEND_TO_COMPANY]: sendToCompany },
@@ -505,7 +505,9 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
   it('D11c：拖未勾选的卡 → 只发那一张（勾选集大于 1 也不扩范围）', async () => {
     const a = makeCandidate();
     const b = makeCandidate({ batch_id: '3000000000003', batch_no: 3 });
-    const sendToCompany = vi.fn(async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true);
+    const sendToCompany = vi.fn(
+      async (_input: { candidate: OutsourceQueueCandidateData; companyId: string }) => true,
+    );
     const wrapper = mountColumn(
       { candidates: [a, b], selectedIds: new Set<string>([b.batch_id]) },
       { [SEND_TO_COMPANY]: sendToCompany },
@@ -578,9 +580,9 @@ describe('CompanyColumn（外协公司列：投放落点分发）', () => {
     const wrapper = mountColumn({ company: makeCompany([]) });
     const col = wrapper.find('.col-body').element as HTMLElement;
     expect(col.children).toHaveLength(0);
-    expect(
-      Array.from(col.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE),
-    ).toHaveLength(0);
+    expect(Array.from(col.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(
+      0,
+    );
     const empty = wrapper.find('.col-empty');
     expect(empty.exists()).toBe(true);
     expect(empty.element.closest('.col-body')).toBeNull();

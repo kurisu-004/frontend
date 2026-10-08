@@ -110,7 +110,12 @@ const { worker, setAction, reset, requireWorker } = useScanSession();
 // 目标货架已由后端按负载自动选择，「当前作业架」这个概念连同选架入口整体下线。
 const shelvesQuery = useProductionShelvesQuery({ is_active: true, limit: 500 });
 // 未加载完成期间不判定按钮显隐：此时按「无货架」算会先闪一屏「未绑定货架」。
-const shelfLoading = computed<boolean>(() => shelvesQuery.isFetching.value);
+// ⚠️ 必须带 `isPending`：`isFetching` 只覆盖「已经在飞」，而首帧（observer effect
+// 跑之前）fetchStatus 还是 idle，两者皆假 ⇒ boundZones 算成空集 ⇒ 闪一屏零按钮
+// 零文案。`isPending || isFetching` 覆盖「还没拿到过数据」与「正在刷新」两种窗口。
+const shelfLoading = computed<boolean>(
+  () => shelvesQuery.isPending.value || shelvesQuery.isFetching.value,
+);
 
 // 2026-07-13：boundZones = 绑定架 zone 的并集，决定按钮显隐
 // - 含 PRODUCTION → PICK_UP + RETURN

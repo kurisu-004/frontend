@@ -24,31 +24,15 @@ import RepairStartDialog from '../RepairStartDialog.vue';
 
 const mocks = vi.hoisted(() => ({
   repairDispatch: vi.fn(),
-  listShelves: vi.fn(),
   listProcesses: vi.fn(),
-  /** 两台货架：生产 Tab 走 useShelfProcessFilter 的桩，品检 Tab 走 listShelves 的返回。 */
-  shelves: [
-    { id: '190000000000301', code: 'SH-A', name: '生产架 A', is_active: true },
-    { id: '190000000000302', code: 'SH-B', name: '生产架 B', is_active: true },
-  ],
   processes: [{ id: '190000000000201', code: 'P-10', name: '装配' }],
 }));
 
 vi.mock('@/api/parts', () => ({ repairDispatch: mocks.repairDispatch }));
-vi.mock('@/api/shelves', () => ({ listShelves: mocks.listShelves }));
 vi.mock('@/api/process', () => ({ listProcesses: mocks.listProcesses }));
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
-// 过滤 composable 内部走共享 query（需要 VueQueryPlugin），本测试不关心过滤逻辑，
-// 只关心最终打出的 payload ⇒ 桩成「原样返回两个列表」。
-vi.mock('@/composables/useShelfProcessFilter', () => ({
-  useShelfProcessFilter: () => ({
-    filteredShelves: mocks.shelves,
-    filteredProcesses: mocks.processes,
-  }),
-}));
-
 // —— EP 最小 stub：只渲染插槽，el-select/el-option 桩成原生元素以便 setValue ——
 
 const slotOnly = (name: string) =>
@@ -152,7 +136,6 @@ function makeTarget(over: Partial<RepairBatchListItem> = {}): RepairBatchListIte
 async function mountDialog(target: RepairBatchListItem) {
   mocks.repairDispatch.mockReset();
   mocks.repairDispatch.mockResolvedValue({});
-  mocks.listShelves.mockResolvedValue({ items: mocks.shelves });
   mocks.listProcesses.mockResolvedValue({ items: mocks.processes });
   const wrapper = mount(RepairStartDialog, {
     props: { modelValue: true, target },

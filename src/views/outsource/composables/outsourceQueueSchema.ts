@@ -58,7 +58,7 @@ import { outsourceCompanyOptionSchema } from './outsourceListSchema';
  *
  *  几处容易误判的字段：
  *  - `quantity` 是**可发送数量**（行 = 批次时恒等于批次量）；
- *  - `shelf_id` 是批次真实所在货架（发送 `from.shelf_id` 用），**非 nullable** ——
+ *  - `shelf_id` 是批次真实所在货架（判「能否发送」用），**非 nullable** ——
  *    `PENDING` 且未上架的批次没有 holder（`current_holder_id` 为 NULL），后端把它序列化成
  *    **空串**而不是 `null`；`shelf_code` 才是 nullable（它没有空串兜底，未上架为 null）；
  *  - `can_send` 是**后端派生**的可发送判据（APPROVAL，或 DIRECT 且 company_options

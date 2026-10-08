@@ -165,28 +165,18 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 ### 货架自动选择（2026-10-10）
 
-**目标货架一律由后端选，前端不再提供任何货架选择器。** 加这条是因为「人工指定货架」在
-本仓曾经有 12 处入口（扫码台放回 / 送检 / 作业架、外协接收、品检打回与送检、生产队列
-撤回候选池、cnc / 零件一览 / 零件详情的下发、返修下发），已被一次性删干净 —— 别再加回来。
+**目标货架一律由后端选，前端不提供任何货架选择器。** 要恢复某个入口，必须同时确认后端对应端点是否仍接受 `shelf_id` —— 那 8 条写路径的货架入参已全部删除（worker-scan / place-on-shelf / release-from-programming / to-process / to-inspection / scan-inspect / repair-dispatch / outsource-queue/move 的 `to` 侧），`POST /prod/queue/move` 只删了 `to` 侧、`from` 侧仍必填。
 
-- **口径**：按目标的工序 / 品检找出所有符合条件的货架，再按 `current_load / capacity`
-  **升序**取一个。`capacity` 为 `null` 或 `<= 0` = **不限**（不参与百分比比较）；
-  **超载不拒**（> 100% 照样投放，只影响排序）。
-- **唯一的前端职责**是把负载展示出来：`Shelf.capacity` / `Shelf.current_load` 两个字段
-  只在 `src/views/shelves/ShelfList.vue` 消费（列表三列 + 新增/编辑弹窗的容量输入）。
-  百分比由前端自己算 —— 后端**不返** `load_ratio`，避免同一个派生量两边各算一遍。
-  `capacity` 是**必填键、值可空**：`z.number().nullable()`；`current_load` 是 `z.number()`。
-- **已下线的端点**：`GET /shelves/for-return` 与 `GET /shelves/for-inspection`（404、无
-  alias），连同 `ShelfForReturn` / `ShelfForInspection` / `ShelfPickerItem` 类型与
-  `listShelvesForReturn` / `listShelvesForInspection` 两个 api 函数一并删除。
-  同批删除的还有 `views/scan/components/ShelfPickerDialog.vue` 与
-  `WorkingShelfDialog.vue`、`stores/scanShelf.ts`、`views/scan/composables/resolveWorkingShelf.ts`。
-- **唯一还留着的货架下拉**是零件详情页的「外协回收」弹窗（`receive-from-outsource` 的
-  `shelf_id` 后端**未**删，不在本轮口径内），也就是 `useShelfProcessFilter` 剩下的**唯一**
-  消费方。要删它得先让后端一起改那个端点。
-- **worker-scan 的响应要读 `scan.event_type`**：客户端发 `RETURNED`，但当该批次当前工序
-  是工序链最后一道时后端自动改投品检、回来的是 `WORKER_SCAN_INSPECTED`。放回页的成功
-  文案必须按**响应**分支，照请求的 `event_type` 说「已放回 → 下一道工序」是错的。
+- **口径**：按目标的工序 / 品检找出所有符合条件的货架，再按 `current_load / capacity` **升序**取一个。`capacity` 为 `null` 或 `<= 0` = **不限**（排在有上限的架之后，不参与百分比比较）；**超载不拒**（> 100% 照样投放，只影响排序）。
+- **前端只负责展示负载**：`Shelf.capacity` / `Shelf.current_load` 只在 `src/views/shelves/ShelfList.vue` 消费（列表三列 + 新增/编辑弹窗的容量输入）。百分比由前端自己算 —— 后端**不返** `load_ratio`，避免同一个派生量两边各算一遍。`capacity` 是**必填键、值可空**：`z.number().nullable()`；`current_load` 是 `z.number()`。
+- **⚠️ 部署顺序：后端必须先上。** `capacity` / `current_load` 是必填键，后端旧版本不返 ⇒ `shelfSchema.parse` 抛 ZodError ⇒ `useProductionShelvesQuery` 的数据恒空，而它的消费方里包含 `/scan/action` 的按钮显隐（扫工牌后能做的三件事）、账号管理的货架绑定、待品检页的工序弹窗。**表现是静默的**：扫码台三个动作按钮全没了且零文案（`noActionReason` 在「绑了架但一个 zone 都认不出来」这一支刻意返回 `null`），不是红色报错。排障时先怀疑部署顺序，别去查权限。
+- **已下线的端点**：`GET /shelves/for-return` 与 `GET /shelves/for-inspection`（404、无 alias），连同 `ShelfForReturn` / `ShelfForInspection` / `ShelfForInspectionResult` / `ShelfPickerItem` 类型与 `listShelvesForReturn` / `listShelvesForInspection` 两个 api 函数一并删除。`api/shelfPickers.spec.ts` 随它们删除 —— 那两个端点没有 alias，留着就是守一个不存在的契约。同批删除的还有 `views/scan/components/ShelfPickerDialog.vue` 与 `WorkingShelfDialog.vue`、`stores/scanShelf.ts`、`views/scan/composables/resolveWorkingShelf.ts`。
+- **`useShelfProcessFilter` 整文件删除**：它唯一剩下的消费方是零件详情页的「外协回收」弹窗，而那个弹窗打的 `POST /prod/batches/{id}/receive-from-outsource` **已被后端硬切下线**（三合一为 `POST /outsource-queue/move`，无 alias）⇒ 能点必 404。`useShelfProcessMappingsQuery` 随之零读点，但 `ShelfList.vue` 保存映射后仍调 `invalidateShelfProcessMappingsQuery(qc)`，故文件保留（写点与失效链成对留存）。
+- **`receive-from-outsource` / `receive-from-outsource-to-inspection` 两个 wrapper 随之删除**（都是 404 路径）。外协回收生产的现行入口是 `views/outsource/` 的看板右键菜单，契约由 `useOutsourceQueueMove.spec.ts` 守。
+- **`api/parts/crud.ts::PartScanPayload` 是已知例外**：它打的是 v1(Python) 的 `POST /parts/scan`，v1 仍在维护、契约未变，故仍带 `shelf_id` / `target_inspection_shelf_id`，不属本口径范围。全仓巡检货架字段时不要把它当残留清掉。
+- **`place-on-shelf` / `release-from-programming` 前端零调用方、wrapper 保留**：端点仍在后端，body 已按新契约改对。要接回入口时注意 `place-on-shelf` 的 `version` 仍是可选形参，而后端必填（缺字段返 422 纯文本，不是业务信封）⇒ 新接线必须改成必填并从 `GET /parts/{id}/batches` 的批次项取 `t_part_batch.version`（`GET /parts/{id}` 本身不返批次锚点）。
+- **worker-scan 的响应要读 `scan.event_type`**：客户端发 `RETURNED`，但当该批次当前工序是工序链最后一道时后端自动改投品检、回来的是 `WORKER_SCAN_INSPECTED`。放回页的成功文案必须按**响应**分支，照请求的 `event_type` 说「已放回 → 下一道工序」是错的。
+- **放回页 NEXT 分支的确认框必须留三个出口**：确认框是 `chain_state='NEXT'` 唯一能到达 `ProcessPickerDialog` 的路，只给「按链放回 / 取消」的话，工人一旦不同意管理员配的工序链（临时插单、改道）就被困死 —— 取消只清选中态，再点卡片还是同一个框。工序链是配置不是命令，「换一道工序」不是冗余出口。
 
 ### 拖拽投放（Sortable）
 

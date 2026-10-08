@@ -96,7 +96,7 @@
  * 不按工人 scope 过滤（用户决策：显示全部 + 后端 strict invariant 兜底）。
  * 工件 next_process_id 推荐态通过 currentProcessId prop 传入，预填选中并切到对应 category tab。
  *
- * 与 ShelfPickerDialog 同样基于 HmiPickerCard 视觉规范（kind=process），
+ * 与同目录其它 picker 一样基于 HmiPickerCard 视觉规范（kind=process），
  * 视觉一致性靠共享组件保证。
  */
 import { computed, ref, watch } from 'vue';

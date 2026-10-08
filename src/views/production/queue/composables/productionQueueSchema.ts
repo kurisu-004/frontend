@@ -304,8 +304,8 @@ export const moveResultSchema = z.object({
   current_held: z.number().nullish(),
   /** 仅 to_kind=WORKER 时填：目标工种 max_held_batches */
   max_held: z.number().nullish(),
-  /** 货架雪花 ID：POOL→WORKER 填 `from.shelf_id`、WORKER→POOL 填 `to.shelf_id`、
-   *  WORKER→WORKER 不填（字段整体省略）。 */
+  /** 涉及的候选池货架雪花 ID：POOL→WORKER 填 `from.shelf_id`（批次离开的架）、
+   *  WORKER→POOL 填**后端自动选出**的落回货架、WORKER→WORKER 不填（字段整体省略）。 */
   shelf_id: z.string().nullish(),
   /** 仅 POOL→WORKER 移动时填：从候选池取出的 batch 详情 */
   taken: takenItemSchema.nullish(),

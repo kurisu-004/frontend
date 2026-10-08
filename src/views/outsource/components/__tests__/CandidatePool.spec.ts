@@ -80,7 +80,6 @@ import {
 // 扫码枪用**真实实现**（模块级单例）：onScan 订阅 / 卸载退订这条链本身就是被测行为，
 // 桩掉等于把要守的东西一起桩掉。
 
-
 const ElTagStub = defineComponent({
   name: 'ElTagStub',
   props: { size: String, type: String },
@@ -234,10 +233,7 @@ function capturedOptions(): Record<string, unknown> {
  *  用 render 函数而不是 inline `template`：vitest 下 `vue` 解析到 runtime-only 构建，
  *  运行时模板编译不可用（仓内其它组件 spec 同样一律 h() / defineComponent，见
  *  WorkerColumn.spec.ts）。 */
-function mountedParent(
-  items: OutsourceQueueCandidateData[],
-  activeProcessId: string = PROCESS_ID,
-) {
+function mountedParent(items: OutsourceQueueCandidateData[], activeProcessId: string = PROCESS_ID) {
   const selectedIds = ref<Set<string>>(new Set());
   const wrapper = mount(
     {
@@ -442,9 +438,9 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
     const empty = mountPool([]);
     const col = empty.find('.pool-cards').element as HTMLElement;
     expect(col.children).toHaveLength(0);
-    expect(
-      Array.from(col.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE),
-    ).toHaveLength(0);
+    expect(Array.from(col.childNodes).filter((n) => n.nodeType === Node.COMMENT_NODE)).toHaveLength(
+      0,
+    );
     expect(empty.find('.pool-empty').exists()).toBe(true);
     expect(empty.find('.pool-empty').element.closest('.pool-cards')).toBeNull();
     empty.unmount();
@@ -455,11 +451,13 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
     // 卡片父节点就是 Sortable 容器：BatchCard 的 tooltip 在根**内部**，根上也不许有
     // 别的元素（守卫 BatchCardDndFootprint.spec.ts）。
     const card = wrapper.findAll('.pool-cards .batch-card')[0]!;
-    expect((card.element as HTMLElement).parentElement?.classList.contains('pool-cards')).toBe(true);
+    expect((card.element as HTMLElement).parentElement?.classList.contains('pool-cards')).toBe(
+      true,
+    );
     // 尚未上架的提示：容器外的 el-tooltip（包裹卡片会破坏 DnD 不变式）
     const tip = wrapper.find('.pool-toolbar .el-tooltip-stub');
     expect(tip.exists()).toBe(true);
-    expect(tip.attributes('data-content')).toBe('该批次尚未上架，请先下发到生产货架');
+    expect(tip.attributes('data-content')).toBe('该批次尚未上架，暂时不能发送到外协');
     expect(tip.element.closest('.pool-cards')).toBeNull();
     wrapper.unmount();
   });
@@ -513,7 +511,9 @@ describe('CandidatePool（外协候选池：拖拽源）', () => {
 
   it('C14b：未 provide opener 时右键不抛错（inject 缺省 noop）', async () => {
     const wrapper = mountPool([makeCandidate()]);
-    await expect(wrapper.find('.pool-cards .batch-card').trigger('contextmenu')).resolves.not.toThrow();
+    await expect(
+      wrapper.find('.pool-cards .batch-card').trigger('contextmenu'),
+    ).resolves.not.toThrow();
     wrapper.unmount();
   });
 });

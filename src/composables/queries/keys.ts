@@ -180,19 +180,15 @@ export const qk = {
     ['programming', 'list', params] as const,
   programmingPrefix: ['programming'] as const,
   shelvesList: (params: ListShelvesParams) => ['shelves', 'list', params] as const,
-  /** 2026-10-02 新增：货架↔工序映射全集键（GET /prod/shelf-processes，单条无 params）。
+  /** 货架↔工序映射全集键（GET /prod/shelf-processes，单条无 params）。
    *  后端 handler 不接 Query extractor，一次返全部 active 映射的**扁平行**（一行一个
    *  (货架, 工序) 对），故键退化为常量键（与 productionQueueSnapshot 同形），不随任何
-   *  候选源变化。useShelfProcessFilter 实例共用本键 ⇒ 30s 窗口内只发一次请求
-   *  （该窗口有 Q6「卸载 → 立即重挂仍不重发」的用例实证；Q5 证的只是同 tick 并发
-   *  挂载的在飞请求合并）。 */
+   *  候选源变化。 */
   shelfProcessMappings: ['shelf-process-mappings'] as const,
-  /** 2026-10-02 新增：货架↔工序映射域前缀 —— 与 shelfProcessMappings 同值（键已是
-   *  常量，前缀即自身，沿 productionQueueSnapshotPrefix 同形）。唯一写点
-   *  setShelfProcesses（ShelfList.vue）成功后调 invalidateShelfProcessMappingsQuery(qc)
-   *  —— 本域**不是**「跨页面写操作无法穷举」那种情形：全仓写点只有这一个，读点只剩
-   *  零件详情外协回收弹窗那一处 useShelfProcessFilter（2026-10-10 前是 10 个），
-   *  补失效的成本近乎零。 */
+  /** 货架↔工序映射域前缀 —— 与 shelfProcessMappings 同值（键已是常量，前缀即自身，
+   *  沿 productionQueueSnapshotPrefix 同形）。唯一写点 setShelfProcesses（ShelfList.vue）
+   *  成功后调 invalidateShelfProcessMappingsQuery(qc) ⇒ 读侧零消费方（全仓无读取方），
+   *  该失效当前不改变任何缓存；键与前缀一并保留，将来接读点时失效链已就位。 */
   shelfProcessMappingsPrefix: ['shelf-process-mappings'] as const,
   // ============================================================
   // 2026-10-02 新增：work-types 域（工种 + 工种↔工序映射）queryKey 工厂。

@@ -127,11 +127,9 @@
           >
         </el-form-item>
         <!--
-          2026-10-04 后端收紧 `POST /api/v2/prod/shelf-processes/{id}`：`items` 非空时会对
-          非 PRODUCTION 区的货架返 20104（`items: []` 的清空路径已豁免）。读侧早就按
-          `zone='PRODUCTION'` 口径取候选（唯一剩下的 1 处 `useShelfProcessFilter` 在
-          零件详情的外协回收弹窗），写侧这里对齐 ——
-          品检架不该在这里配工序，界面上就不给入口。
+          后端收紧 `POST /api/v2/prod/shelf-processes/{id}`：`items` 非空时会对
+          非 PRODUCTION 区的货架返 20104（`items: []` 的清空路径已豁免）⇒ 品检架不该在
+          这里配工序，界面上就不给入口。
           zone 的判据是 `effectiveZone` 而不是 `shelfForm.zone`，见该 computed 的注释。
         -->
         <el-form-item v-if="effectiveZone === 'PRODUCTION'" label="工序">

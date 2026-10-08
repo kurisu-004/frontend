@@ -208,10 +208,10 @@ export function useOutsourceQueueMove(): UseOutsourceQueueMoveReturn {
    *      `company_options` 里的公司 / DIRECT 的 `company_options` 为空）。三个子情形都
    *      是「请求组装不出来」而不是「用户填错」—— 公司下拉的选项源就是 DTO 那两个字段。
    *
-   *  ⚠️ 2026-10-10：`from.shelf_id` 也已删除，所以「批次尚未上架」不再是发请求前的
-   *  早退项（它由后端在 `from` 守卫里按 `current_holder_id` 自己判）。UI 侧的
-   *  「未上架不给发送到」仍然保留（见 `candidateIsPending`）—— 那条是给用户看的
-   *  可执行性提示，不是请求组装约束。 */
+   *  ⚠️ 2026-10-10：「批次尚未上架」不再是发请求前的早退项 —— 后端 `from` 守卫只查
+   *  `batch.location` 是否为 `PRODUCTION_SHELF`，这类行 location 是 null、必被拒，
+   *  但那是服务端判定。UI 侧的「未上架不给发送到」仍然保留（见 `candidateIsPending`
+   *  / `isCandidateDraggable`）—— 那条是给用户看的可执行性提示，不是请求组装约束。 */
   async function sendToCompany(input: SendToCompanyInput): Promise<boolean> {
     const { candidate, companyId } = input;
     if (!(await guardVersion(candidate.version))) return false;

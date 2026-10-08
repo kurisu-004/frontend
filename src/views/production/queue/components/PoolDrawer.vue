@@ -116,8 +116,8 @@ useLazyDraggable(containerRef, {
 });
 
 // page provide 必注入；moveBatchToPool 签名是
-// (batch_id, version, from_worker_id, to_shelf_id) —— version 是 OCC 锚（源批次
-// t_part_batch.version），撤回 move 必填。
+// (batch_id, version, from_worker_id) —— version 是 OCC 锚（源批次
+// t_part_batch.version），撤回 move 必填。撤回的目标架由后端自动选，故没有第四个参数。
 const moveBatchToPool =
   inject<(batch_id: string, version: number, from_worker_id: string) => Promise<boolean>>(
     'moveBatchToPool',

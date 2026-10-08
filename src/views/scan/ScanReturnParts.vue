@@ -4,24 +4,24 @@
   /scan/return —— 扫码台 RETURN 流程（2026-07-10 PR-E，2026-09-15 Phase 5 切 v2）
   1. onBeforeMount 调 GET /parts/by-worker/{worker_id} 列出当前 worker 持有件
   2. 工人点选一件 → 按行 VO 的 `chain_state` 分流（2026-10-04，工序链适配）：
-       - NEXT（链内有下一道）→ 下一道工序由链直接给出，走单确认弹窗确认即放回，
-         不再让工人选工序、更不用选货架
+       - NEXT（链内有下一道）→ 下一道工序由链直接给出，弹单确认框三选一：
+         「按链放回」/「换一道工序」（落回手选）/「取消」
        - TAIL（当前是链内最后一道）→ 工序选择弹窗内常驻提示「加工完成后请送检」，
          工人手选工序（提示不判死下一步的选择权）
-       - NONE（无链 / 链已软删 / 指针漂移）→ 原路径：弹「下一道工序」picker
+       - NONE（无链 / 链已软删 / 指针漂移）→ 手选「下一道工序」picker
   3. 2026-09-15 Phase 5：提交走 POST /prod/batches/worker-scan（event_type=RETURNED），
      service 层 mark_returned + 同事务 WorkerPool refill。
   4. 成功后自动 refresh（该件从列表消失）
 
   2026-10-10：**货架不再由工人指定** —— 目标货架改由后端按负载自动选择（按
   `current_load / capacity` 升序，capacity 为 null = 不限，超载不拒）。本页因此
-  删掉 `ShelfPickerDialog` 与「拉候选货架取推荐架」旁路（后者调的
-  `GET /shelves/for-return` 已随端点下线而 404）。
+  删掉货架选择弹窗与「拉候选货架取推荐架」旁路。
 
-  ⚠️ **单确认弹窗的主文案随之下半句**：原来靠 `listShelvesForReturn` 才能拿到
-  「放到哪个架」，现在前端没有货架信息可展示，只讲下一道工序。选中态里也只保留
-  工序段 —— 写一个后端不保证等于用户所想的架号，比不写更糟（超载被允许时后端完全
-  可能选另一个架）。
+  ⚠️ **单确认弹窗的主文案随之下半句**：原来要先拿到候选架才能说「放到哪个架」，
+  现在前端没有货架信息可展示，只讲下一道工序。选中态里也只保留工序段 —— 写一个
+  后端不保证等于用户所想的架号，比不写更糟（超载被允许时后端完全可能选另一个架）。
+  但「换一道工序」这个出口必须留着：确认框是 NEXT 分支唯一能到达 ProcessPickerDialog
+  的路，少了它工人一旦不同意管理员配的链就被困死（详见 showChainConfirm 处注释）。
 
   与 ScanPickParts.vue 范式对齐：
   - 选件 → （必要时选工序）→ 提交
@@ -199,8 +199,8 @@
          `chain_next_process_id` 是**下一道**的 id，填进「当前工序」槽位会让 dialog
          把下一道预填成选中项，工人直接点「下一步」就等于没得选；这两个绑定
          保持组件默认值（null / []）= 不预填、全部可选。
-         链已知分支（chain_state=NEXT）下本 dialog 根本不开，由单确认弹窗直接落下一道
-         工序；只有「手动选择工序」与 NONE / TAIL 分支才会进来。
+         链已知分支（chain_state=NEXT）下本 dialog 由「换一道工序」那个出口打开；
+         「按链放回」与「取消」两条出口不经它。
          `hint` 是链尾（TAIL）时段的常驻送检提醒 —— 做成弹窗内的横幅而不是 toast，
          因为后开的 el-dialog 遮罩必然盖住先发的 ElMessage。 -->
     <ProcessPickerDialog
@@ -211,6 +211,37 @@
       @confirm="onProcessPicked"
       @cancel="onProcessCancel"
     />
+
+    <!-- 链已知（chain_state=NEXT）单确认弹窗：下一道工序由链给出，工人三选一 ——
+         「按链放回」/「换一道工序」/「取消」。
+         自绘 el-dialog 而不是 ElMessageBox：后者只有确认/取消两个键，而「换一道工序」
+         是工人不同意管理员配的链时唯一的出路（工序链是配置、临时插单会改道）；HMI
+         触屏上三个并排大按钮也远好过塞在 message 正文里的小链接。 -->
+    <el-dialog
+      v-model="showChainConfirm"
+      title="确认放回"
+      width="min(95vw, 640px)"
+      :align-center="true"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="`「${selectedNextProcessName}」是这道工序的下一道。`"
+      />
+      <p class="chain-confirm-hint">
+        确认后工件自动按负载放到合适的货架。若这道工序不对，用「换一道工序」自己选。
+      </p>
+      <template #footer>
+        <el-button @click="onChainCancel">取消</el-button>
+        <el-button type="warning" @click="onChainManual">换一道工序</el-button>
+        <el-button type="primary" :loading="submitting" @click="onChainConfirm">
+          按链放回
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- 数量选择弹窗 -->
     <QuantityDialog
@@ -290,7 +321,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeMount, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import {
   Avatar,
   Back,
@@ -388,15 +419,15 @@ const refillTaken = ref<TakenItemDto[]>([]);
 /** 扫码动作自身的成功文案（补料弹窗打开时它取代 ElMessage.success，见组件注释） */
 const refillLead = ref('');
 
-// --- 2026-10-04 工序链已知分支：下一工序已由链派生，只差一次确认 ---
+// --- 工序链已知分支（chain_state=NEXT）：下一工序已由链派生，只差一次确认 ---
 //
-// 2026-10-10：目标货架不再是「这次提交要放哪」，后端按负载自选 ⇒ chainShelfId /
-// chainShelfCode 与竞态令牌 chainToken 随之删除（openChainConfirm 现在是**同步**的：
-// 读完行 VO 上已带的链字段就开确认框，请求往返那个窗口不复存在）。
-// 确认方式从专用的 `ReturnConfirmDialog` 换成 `ElMessageBox.confirm`：确认框现在
-// 只有「下一道工序」一句话要摆，为它养一个 150 行的组件不划算，而 ElMessageBox 的
-// 「确认 / 取消」两键正好对上「确认放回 / 放弃」两个出口（原来第三个出口
-// 「手动选择工序」由 NEXT 分支自己兜：链字段解析不出时直接落回手选，不进确认框）。
+// 目标货架不由前端决定（后端按负载自选），所以这个弹窗只有「下一道工序」一句话要摆。
+// 但它**必须有三个出口**：确认框打开时页面上没有任何别的路能进 `ProcessPickerDialog`，
+// 只给「按链放回 / 取消」的话，工人一旦不同意管理员配的链（临时插单、改道）就被困死
+// —— 取消只是清选中态，再点卡片还是同一个弹窗。
+// 故自绘 el-dialog 而不用 ElMessageBox：后者只有确认/取消两键，且塞在 message 正文里
+// 的小链接在 HMI 触屏上是个难点目标。
+const showChainConfirm = ref(false);
 
 // --- 多批次扫码命中弹窗 ---
 const showBatchPicker = ref(false);
@@ -448,7 +479,7 @@ function enterReturnFlow(p: ScanPartRowSchema): void {
         : '当前为最后一道工序，加工完成后请送检。'
       : '';
   if (state === 'NEXT') {
-    void openChainConfirm(p);
+    openChainConfirm(p);
     return;
   }
   showProcessDialog.value = true; // NONE：无链 / 漂移，现状不变
@@ -489,6 +520,7 @@ async function onScanToSelect(rawCode: string): Promise<void> {
   if (
     submitting.value ||
     showProcessDialog.value ||
+    showChainConfirm.value ||
     showQtyDialog.value ||
     showBatchPicker.value ||
     showRefillTaken.value
@@ -671,16 +703,15 @@ function fallBackToManualProcess(): void {
 }
 
 /**
- * 链已知（`chain_state === 'NEXT'`）：下一道工序已由链给出，弹一次确认框。
+ * 链已知（`chain_state === 'NEXT'`）：下一道工序已由链给出，开单确认弹窗。
  *
- * 用 `ElMessageBox.confirm` 而不是专用组件：确认框现在只有「下一道工序」一句话要摆，
- * 目标货架已由后端按负载自动选择、前端无从展示（也不该展示 —— 超载被允许时后端完全
- * 可能选另一个架，写死一个架号等于对工人说谎）。
+ * 全程**同步**（读行 VO 上已带的链字段就赋值），没有请求往返窗口 ⇒ 不需要作废在途
+ * 响应的竞态令牌。
  *
  * 一条边界（落回手选工序，保证工人永远有出路）：`chain_next_process_id` 为空或 `'0'`
  * —— NONE / TAIL 的兜底值，不是真 id，发过去必被拒，直接落回手选。
  */
-async function openChainConfirm(p: ScanPartRowSchema): Promise<void> {
+function openChainConfirm(p: ScanPartRowSchema): void {
   const nextProcessId = p.chain_next_process_id;
   const nextProcessName = p.chain_next_process_name;
   if (!nextProcessId || nextProcessId === '0' || !nextProcessName) {
@@ -693,33 +724,31 @@ async function openChainConfirm(p: ScanPartRowSchema): Promise<void> {
   // 链上派生的只有工序名（无 code），与手选路径的「code + name」标签形态对齐不了；
   // 这里只显示名字，确认栏与成功提示都靠它。
   selectedNextProcessName.value = nextProcessName;
+  showChainConfirm.value = true;
+}
 
-  // ElMessageBox.confirm 在 cancel / close 时 reject（action 分别是 'cancel' / 'close'），
-  // 不接住就是一条 unhandledrejection。catch 里只区分「主动放弃」与「真异常」：
-  // 前者静默（工人自己点的取消，不是错误），后者提示一句。
-  try {
-    await ElMessageBox.confirm(
-      `「${nextProcessName}」是这道工序的下一道。确认后工件自动按负载放到合适的货架。`,
-      '确认放回',
-      {
-        confirmButtonText: '确认放回',
-        cancelButtonText: '取消',
-        // HMI 触屏：禁点遮罩 / 禁 ESC，避免误触把这次放回提交出去。
-        closeOnClickModal: false,
-        closeOnPressEscape: false,
-        type: 'warning',
-      },
-    );
-  } catch (e) {
-    if (e === 'cancel' || e === 'close') {
-      cancelSelect();
-      return;
-    }
-    ElMessage.error(`确认放回失败：${(e as Error).message ?? '未知错误'}`);
+/** 「按链放回」：写死下一道工序后走提交路径。 */
+async function onChainConfirm(): Promise<void> {
+  showChainConfirm.value = false;
+  if (submitting.value) return;
+  if (!selectedNextProcessId.value) {
+    ElMessage.warning('选择已重置，请重新选择零件');
     cancelSelect();
     return;
   }
   await submitReturn();
+}
+
+/** 「换一道工序」：关掉确认框后走与「链字段解析不出」**同一个**落回出口。 */
+function onChainManual(): void {
+  showChainConfirm.value = false;
+  fallBackToManualProcess();
+}
+
+/** 「取消」：整次放回作废。 */
+function onChainCancel(): void {
+  showChainConfirm.value = false;
+  cancelSelect();
 }
 
 /** 实际提交：worker-scan（event_type=RETURNED）。 */
@@ -819,6 +848,9 @@ function cancelSelect(): void {
   selectedNextProcessCode.value = '';
   selectedNextProcessName.value = '';
   processHint.value = '';
+  // 确认框一并复位：漏复位会让下一次选件（哪怕是 NEXT 链字段解析不出、根本不开框的
+  // 那一件）也被上一次的 true 顶出一个空确认框。
+  showChainConfirm.value = false;
 }
 
 function backToAction(): void {
@@ -944,6 +976,13 @@ function backToBadge(): void {
   color: #67c23a;
   font-size: 18px;
   margin: 0 4px;
+}
+/* 链已知确认框里那句「自动按负载放架 + 可以换一道工序」的补充说明 */
+.chain-confirm-hint {
+  margin: 12px 0 0;
+  color: #606266;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .parts-list {

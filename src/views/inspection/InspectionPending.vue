@@ -345,9 +345,8 @@ const { dangerous: confirmDangerous } = useConfirm();
 // 不强制过滤 category，避免业务上「品检后直接外协返修」分支被锁死。
 // 工序候选走共享 query（store.options）。
 //
-// 2026-10-10：**不再有货架候选** —— useShelfProcessFilter 的双向收窄（按
-// shelf↔process 映射互相过滤）随货架选择一起退场：没有货架可按时两个方向的收窄都退化成
-// 恒等变换，留着只是白拉一次映射 query。
+// 2026-10-10：**不再有货架候选** —— 原本按 shelf↔process 映射做的双向收窄随货架选择
+// 一起退场：没有货架可按时两个方向的收窄都退化成恒等变换，留着只是白拉一次映射 query。
 
 function openFailDialog(row: InspectionBatchRow): void {
   failTarget.value = row;

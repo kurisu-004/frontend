@@ -12,7 +12,7 @@
 //   - O2：候选池 = 召回 + 拆分批次 + 发送到外协公司（二级菜单）；
 //   - O3：角色闸逐项生效（Inspector 拿得到回收、拿不到拆批 / 召回）；
 //   - O4：批次闸 —— 余量 ≤ 1 不给拆批；PENDING 未上架的行既不给召回、也不给「发送到」
-//     （后者的 from.shelf_id 守卫与拖拽置灰同源）；
+//     （后者的 from 守卫与拖拽置灰同源）；
 //   - O5：发送白名单 —— APPROVAL 只给报价锁定的一家；DIRECT 给 company_options 里的；
 //     白名单与当前 tab 的公司列求交（没被映射成列的公司不进列表）；
 //   - O6：`can_send=false`（后端派生的可发送判据）整个不给「发送到」；
@@ -195,8 +195,9 @@ describe('buildOutsourceBatchMenuItems（外协两区的菜单项派生）', () 
     expect(labels(items)).not.toContain('召回到待下发');
   });
 
-  it('O4c：PENDING 未上架（candidateIsPending）的候选行也不给「发送到」—— from.shelf_id 必被拒', () => {
-    // 未上架的行没有 holder，发送请求的 `from.shelf_id` 必被后端 `from` 守卫拒收。
+  it('O4c：PENDING 未上架（candidateIsPending）的候选行也不给「发送到」—— from 守卫必被拒', () => {
+    // 未上架的行 `location` 是 null，`from.kind=PRODUCTION_SHELF` 守卫要求它恒为
+    // 'PRODUCTION_SHELF'，必拒。
     // 拖拽路径正是据此把该行置灰 + 给 NOT_SHELVED_HINT（判据同源：isCandidateDraggable
     // 看的就是 `shelf_id` 为空串），菜单路径必须一起收窄，否则给一个点下去必失败的入口。
     // 注意这条与 `can_send` 无关：can_send=true 的未上架行走的是 company_options 白名单，

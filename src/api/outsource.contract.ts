@@ -134,7 +134,7 @@ export interface OutsourceQueueCandidateDto {
   parent_customer_name: string | null;
   /** `t_shelf.code`；批次未上架时 null。 */
   shelf_code: string | null;
-  /** `t_part_batch.current_holder_id`（批次所在货架 id）—— 发送 `from.shelf_id` 的数据源；
+  /** `t_part_batch.current_holder_id`（批次所在货架 id）—— 判「该行能否发送」的数据源；
    *  `PENDING` 且未上架的批次是**空串**（不是 null）。 */
   shelf_id: string;
   /** APPROVAL 单值；DIRECT 为 null（用 company_options）。 */

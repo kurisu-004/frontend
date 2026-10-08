@@ -6,16 +6,21 @@
 // 前端连「下发到哪个架」这个输入都没有了。
 //
 // 随之删除的东西（本文件曾经的全部内容）：`shelves` / `processes` / `reloadShelves`
-// 两个候选源、两个 `useShelfProcessFilter` 实例、`dispatchVisible` /
-// `batchDispatchVisible` 两组对话框态与两条 mutation、`PLACE_ON_SHELF_NO_BATCH_HINT`
-// 与 `handleProcessChainRequired` 兜底。
+// 两个候选源、两处货架↔工序双向收窄、`dispatchVisible` / `batchDispatchVisible`
+// 两组对话框态与两条 mutation、`PLACE_ON_SHELF_NO_BATCH_HINT` 与
+// `handleProcessChainRequired` 兜底。
 //
 // 留下的只有**强制完成**（MANAGER 专属）：它不走 place-on-shelf、不涉及货架，
-// 与本次「不再指定货架」的口径无关。函数名保持 `usePartDispatch` 是因为 store 的
-// `dispatch` 切片名与 `usePartsListStore` 的装配处都按它注册；改切片名要动
-// `usePartsListStore` + 两个视图组件的 `store.dispatch.*` 访问，收益为零、风险不小。
+// 与本次「不再指定货架」的口径无关。
+// 两处刻意不动的命名（都是「改了要牵一串、收益为零」）：
+//   · 函数名保持 `usePartDispatch` —— store 的 `dispatch` 切片名与
+//     `usePartsListStore` 的装配处都按它注册，改切片名要动 `usePartsListStore`
+//     + 两个视图组件的 `store.dispatch.*` 访问；
+//   · 不再接收 deps —— 原先传 selectedIds / selectedRows / selectedRowTypes /
+//     getTable 四个（批量下发成功后要把成功的行从三个状态源里摘掉），批量下发下线后
+//     四个都不再被读，留着会让调用点以为它们有用。
 
-import { reactive, type Ref } from 'vue';
+import { reactive } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useQueryClient, useMutation } from '@tanstack/vue-query';
 import { forceCompletePart } from '@/api/parts';
@@ -31,13 +36,7 @@ export interface UsePartDispatchReturn {
   onForceComplete: (row: PartListItem) => Promise<void>;
 }
 
-export function usePartDispatch(_deps: {
-  selectedIds: Set<string>;
-  selectedRows: Ref<PartListItem[]>;
-  selectedRowTypes: Map<string, string>;
-  getTable: () =>
-    { toggleRowSelection: (row: PartListItem, selected: boolean) => void } | null | undefined;
-}): UsePartDispatchReturn {
+export function usePartDispatch(): UsePartDispatchReturn {
   const qc = useQueryClient();
 
   // ============ 强制完成（2026-09-30）============

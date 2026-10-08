@@ -39,8 +39,6 @@ import { api, cleanParams } from '@/api/http';
 import type {
   AllShelfProcessMappingItem,
   Shelf,
-  ShelfForInspectionResult,
-  ShelfForReturnResult,
   ShelfListResult,
   ShelfProcessesResult,
   SetShelfProcessesPayload,
@@ -180,56 +178,6 @@ export async function setShelfProcesses(
 }
 
 /**
- * 共享 HMI RETURN 卡片网格 picker 数据源。
- * 后端 `GET /shelves/for-return?next_process_id=...`
- * 返回候选架列表（按 current_load 升序，同 load 时按 display_order ASC, id ASC）；
- * 「推荐架」不是独立字段，而是每条 item 上的 `is_recommended`（load 最小那条为 true）。
- *
- * 错误面（2026-10-02 回后端逐条核实）：本端点对 `next_process_id` 的任何取值都返 200，
- * **不会**抛 20506 BIZ_SHELF_NO_MATCH_FOR_PROCESS —— 后端已从 `list_for_return` 删掉
- * `next_process_id` 的存在性校验（那个校验的码是 20104 / 20801）。唯一错误是 40300
- * FORBIDDEN（角色不在 Manager / Clerk / ShelfAccount / CncProgrammer 之内）。没有候选架时
- * 返 200 + `items: []`，不是错误。「货架是否映射了该 process」的语义由 worker-scan 后端
- * 强校验（20507 BIZ_SHELF_PROCESS_NOT_MAPPED）承担，不由本 picker 端点负责。
- */
-export async function listShelvesForReturn(nextProcessId: string): Promise<ShelfForReturnResult> {
-  const resp = await api.get<ShelfForReturnResult>('/shelves/for-return', {
-    params: { next_process_id: nextProcessId },
-  });
-  return resp.data;
-}
-
-/**
- * 共享 HMI INSPECT 卡片网格 picker 数据源。
- * 后端 `GET /shelves/for-inspection` 返回 `zone='INSPECTION' AND is_active=true`
- * 的货架列表，**不过滤 SHELF_ACCOUNT scope**（品检架全员可见，见
- * `docs/api/shelves.md` 的 for-inspection 一节）。
- *
- * 三条要点（2026-10-02 逐条回后端核实）：
- *
- * 1. **排序**：本端点不做任何 load 维度排序 —— service 层
- *    `ShelfService::list_for_inspection` 复用 `list_with_filters` 且固定带
- *    `ORDER BY display_order ASC, id ASC`，即「物理顺序 + id 兜底」。推论：品检架
- *    **不保证**「最空的排最前」，前端不能依赖列表序做任何业务判断。
- * 2. **推荐架**：`ShelfForInspectionItem` 没有 `is_recommended` 字段，也没有
- *    `recommended_shelf_id`。本端点**不存在**任何推荐语义（推荐标记只属于
- *    for-return VO）。
- * 3. **错误码**：本端点**唯一**的错误是 `require_any_role` 失败 → 40300 FORBIDDEN
- *    （允许角色 5 个：Manager / Clerk / CncProgrammer / ShelfAccount / Inspector，
- *    比 for-return 多一个 Inspector——品检员自己要用它）。
- *    **没有品检架时返 200 + `items: []`，不是错误。**
- *
- * 返回类型是 `ShelfForInspectionResult`（独立类型，不是 for-return 那份 —— 两个后端
- * VO 不同，见 `@/types/shelf.ts` 的对照表）。品检架的 `current_load` 后端**计划**补
- * 聚合、当前 VO 仍无该字段，故声明为可选：老后端上跑时消费侧（`ShelfPickerDialog` →
- * `HmiPickerCard`）缺省就不渲染「在架 N 件」。
- */
-export async function listShelvesForInspection(): Promise<ShelfForInspectionResult> {
-  const resp = await api.get<ShelfForInspectionResult>('/shelves/for-inspection');
-  return resp.data;
-}
-
-/**
  * 2026-07-17 新增：批量取所有 active 货架的工序映射。
  * 后端 `GET /prod/shelf-processes`（2026-10-02 域拆分硬切，原
  * `GET /shelves/processes` —— 旧路径现在是 400 裸文本非 `R` 信封，见文件头）
@@ -241,11 +189,10 @@ export async function listShelvesForInspection(): Promise<ShelfForInspectionResu
  * `@/types/shelf::AllShelfProcessMappingItem`，注意它**不返** sort_order，排序由
  * service 层 ORDER BY 保证）。空映射的货架不出现在 items 中。
  *
- * 消费侧 `useShelfProcessFilter` 必须按 shelf_id regroup 扁平行，不能读
- * `item.process_ids`（恒 undefined ⇒ 空集 ⇒ 8 个页面的下拉被静默清空）。
+ * 消费侧必须按 shelf_id regroup 扁平行，不能读 `item.process_ids`
+ * （恒 undefined ⇒ 空集 ⇒ 下拉被静默清空）。
  *
- * 给 `useShelfProcessFilter` composable 一次性消费，避免弹窗打开时
- * N+1 次 `GET /prod/shelf-processes/{shelf_id}` 调用。
+ * 一次性消费全量，避免弹窗打开时 N+1 次 `GET /prod/shelf-processes/{shelf_id}`。
  */
 export interface ShelfProcessMappingsResult {
   items: AllShelfProcessMappingItem[];

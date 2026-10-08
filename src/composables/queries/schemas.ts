@@ -1072,19 +1072,18 @@ export const scanPartRowSchema = z.object({
    *     `'NONE'` = 无链 / 链已软删 / 当前工序不在链内（指针漂移）；
    *     `'NEXT'` = 当前工序在链内且**有下一道**；
    *     `'TAIL'` = 当前工序是链内**最后一道**。
-   *   放回页据此分流：`NEXT` 免去工序选择 + 货架点选（直接单确认），`TAIL` 在工序选择
-   *   弹窗内常驻提示「加工完成后请送检」再让工人手选，`NONE` 走原三步路径。
+   *   放回页据此分流：`NEXT` 免去工序选择、直接单确认放回，`TAIL` 在工序选择弹窗内
+   *   常驻提示「加工完成后请送检」再让工人手选，`NONE` 走手选工序路径。
    * - `chain_next_process_id`：**非可空字符串**（雪花 id 经 serialize_i64 → JSON
    *   string）。`'0'` 是 `NONE` / `TAIL` 的兜底值、**不是**真 id —— 消费侧见到 `'0'`
-   *   必须短路，不发给 `/shelves/for-return`（发过去必得空列表，白跑一趟）。
+   *   必须短路，不提交 worker-scan（后端按该 id 选架会选不出，报 20508）。
    * - `chain_next_process_name`：`NEXT` 时为下一道工序名，`NONE` / `TAIL` 恒 null。
    * - `chain_current_process_name`：当前工序名，解析不出时为 null（`TAIL` 分支用它
    *   点名「该去送检的是哪一道」，无值时退通用文案）。
    *
-   * ⚠️ **四件套一律声明成「带默认值的必输出键」，缺键降级而不抛**（本仓同题先例：
-   * `src/types/shelf.ts::ShelfForInspection.current_load` 处理「两仓并行、后端可能
-   * 尚未上线」用的就是这条路 —— 声明成可选 + 消费侧守卫，注释写明「后端补不补都不会
-   * 渲染出坏值」）。取舍理由是**失败模式的严重性不对称**：
+   * ⚠️ **四件套一律声明成「带默认值的必输出键」，缺键降级而不抛**（本仓既有先例：
+   * 声明成可选 + 消费侧守卫，注释写明「后端补不补都不会渲染出坏值」）。取舍理由是
+   * **失败模式的严重性不对称**：
    *   · 声明成必填（`z.enum` / 非空 `z.string`）时，后端先上线就是
    *     `scanPartListResultSchema.parse()` 在 API 边界抛错 ⇒ `listPartsHeldByWorker` /
    *     `listPartsByWorkTypeAllShelves` 全部 reject ⇒ 取件 / 放回 / 送检三页列表空 +

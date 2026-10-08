@@ -145,13 +145,6 @@
           >
           <el-button type="warning" @click="openFailInspDialog">指定工序</el-button>
         </template>
-        <!-- 外协回收：OUTSOURCE 状态可见（MANAGER + CLERK） -->
-        <el-button
-          v-if="canReceiveFromOutsource && part.status === 'OUTSOURCE'"
-          type="success"
-          @click="openReceiveOutsourceDialog"
-          >外协回收</el-button
-        >
         <el-button
           v-if="canCancelPart && part.status !== 'CANCELLED' && part.status !== 'COMPLETED'"
           type="warning"
@@ -162,81 +155,7 @@
       </div>
     </el-card>
 
-    <!-- 外协回收 对话框（2026-07-15 新增） -->
-    <el-dialog
-      v-model="receiveOutsourceDialogVisible"
-      title="外协回收 — 选择目标生产货架与下一道工序"
-      :width="receiveOutsourceDlg.width"
-      :top="receiveOutsourceDlg.top"
-      :fullscreen="receiveOutsourceDlg.fullscreen"
-      :close-on-click-modal="false"
-      @closed="onReceiveOutsourceDialogClosed"
-    >
-      <el-form label-width="110px">
-        <el-form-item label="目标生产货架" required for="">
-          <el-radio-group
-            v-model="receiveShelfId"
-            aria-label="目标生产货架"
-            style="
-              display: flex;
-              flex-direction: column;
-              gap: 6px;
-              max-height: 180px;
-              overflow-y: auto;
-            "
-          >
-            <el-radio
-              v-for="s in receiveFilteredShelves"
-              :key="s.id"
-              :value="String(s.id)"
-              :disabled="!s.is_active"
-            >
-              {{ s.code }} — {{ s.name }}
-              <span v-if="!s.is_active" class="muted">（已停用）</span>
-            </el-radio>
-            <span v-if="receiveFilteredShelves.length === 0" class="muted">没有可用生产货架</span>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="下一道工序" required for="">
-          <el-radio-group
-            v-model="receiveProcessId"
-            aria-label="下一道工序"
-            style="
-              display: flex;
-              flex-direction: column;
-              gap: 6px;
-              max-height: 180px;
-              overflow-y: auto;
-            "
-          >
-            <el-radio v-for="p in receiveFilteredProcesses" :key="p.id" :value="String(p.id)">
-              {{ p.code }} — {{ p.name }}
-            </el-radio>
-            <span v-if="receiveFilteredProcesses.length === 0" class="muted">
-              没有 INHOUSE 工序
-            </span>
-          </el-radio-group>
-        </el-form-item>
-        <el-alert
-          type="info"
-          :closable="false"
-          show-icon
-          title="回收后零件回到 IN_PROCESS / ON_SHELF 状态，可继续车间加工。"
-        />
-      </el-form>
-      <template #footer>
-        <el-button @click="receiveOutsourceDialogVisible = false">取消</el-button>
-        <el-button
-          type="success"
-          :loading="receiveSubmitting"
-          :disabled="!receiveShelfId || !receiveProcessId"
-          @click="onReceiveConfirm"
-          >确认回收</el-button
-        >
-      </template>
-    </el-dialog>
-
-    <!-- 指定工序对话框（PartDetail 用）—— 2026-07-21 改：先选下一道工序，再选目标生产货架；可选品检备注 -->
+    <!-- 指定工序对话框（PartDetail 用）—— 选下一道工序；可选品检备注 -->
     <el-dialog
       v-model="failInspDialogVisible"
       title="指定工序 — 选择下一道工序"
@@ -365,12 +284,9 @@ import PartFilesTabsCard from './components/PartFilesTabsCard.vue';
 import PartBatchMonitorCard from './components/PartBatchMonitorCard.vue';
 import ProcessChainCard from './components/ProcessChainCard.vue';
 import type { PartBatch } from '@/api/parts';
-import { listShelves } from '@/api/shelves';
-import type { Shelf } from '@/types/shelf';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import type { Process } from '@/types/process';
 import { useDialogSize } from '@/composables/useDialogSize';
-import { useShelfProcessFilter } from '@/composables/useShelfProcessFilter';
 import { useConfirm } from '@/composables/useConfirm';
 import { usePartFileUpload } from '@/composables/usePartFileUpload';
 // 2026-09-29 迁移：usePartFiles 三并发已迁到 usePartFilesListQuery 单调用，
@@ -430,7 +346,6 @@ const {
   canCancelPart,
   canDeletePart,
   canInspect,
-  canReceiveFromOutsource,
   canManageDrawings,
   canManage3DModels,
   canManageCncFiles,
@@ -443,7 +358,6 @@ const {
   onCancelEdit,
   onSave,
   onFailInspection,
-  onReceiveFromOutsource,
   onCancelOrder,
   onDeletePart,
   onSplitBatch,
@@ -542,40 +456,19 @@ watch(
 // 视图；再点一次该行（onBatchSelect(null)）可切回全量事件。
 useDefaultBatchSelection(batches, selectedBatchId);
 
-// ============ 共享 shelves / processes 缓存（release / failInsp / receive 共用）============
-// `productionShelves` 来自 listShelves({zone:'PRODUCTION'})（`/shelves`）；
-// `processes` 来自共享 query useProcessesQuery（`/prod/processes`）——
-// 两者都**不是** `/prod/shelf-processes`，那个 URL 是下面两处 useShelfProcessFilter
-// （failInsp / receive 两套过滤）背后的共享 query（useShelfProcessMappingsQuery）
-// 自己拉的映射表，缓存归属独立。
-const productionShelves = ref<Shelf[]>([]);
-// 2026-10-02：processes 从「弹窗打开时才拉的本地 ref」改为订阅共享 query。
-// 旧实现只在 openFailInspDialog / openReceiveOutsourceDialog 里调
-// ensureShelvesProcesses()，而 onMounted 不调 ⇒ 一进页面字典恒空 ⇒ 工序链时间轴
-// 只能回退渲染裸 process_id（用户报的第二个 UI 缺陷）。共享 query 在 setup 期即开闸，
-// 字典随 useQuery 到达自动就位。
+// ============ 共享 processes 缓存（failInsp 的工序下拉用它）============
+// `processes` 来自共享 query useProcessesQuery（`/prod/processes`）。
+// 2026-10-10：本页原先还并行维护一份 `productionShelves`（`listShelves({zone:'PRODUCTION'})`），
+// 唯一消费方是「外协回收」弹窗的货架单选 —— 该弹窗随死路径删除后，这份本地 ref 变成
+// 只写不读，一并删除；`/prod/shelf-processes` 的映射表（useShelfProcessMappingsQuery）
+// 也随之不再有本页读点。
 const processesQuery = useProcessesQuery({ limit: 200 });
 // `as Process[]` 桥接：processSchema 派生的 description / color 是 optional
 // （对齐后端 skip_serializing_if），而 Process 业务类型是 required，TS 结构不匹配。
 // 沿 usePendingProgrammingStore / usePartDispatch 同模式桥接；本页消费方
-// （ProcessChainCard 字典 / useShelfProcessFilter / el-option）只读 id / code /
+// （ProcessChainCard 字典 / el-option）只读 id / code /
 // name / category，对 optional 字段无依赖，零行为差异。
 const processes = computed<Process[]>(() => (processesQuery.data.value?.items ?? []) as Process[]);
-
-async function ensureShelvesProcesses(): Promise<void> {
-  if (productionShelves.value.length === 0) {
-    try {
-      const resp = await listShelves({ zone: 'PRODUCTION', is_active: true, limit: 200 });
-      productionShelves.value = resp.items;
-    } catch {
-      /* ignore */
-    }
-  }
-  // processes 走共享 query，无需在此拉取 —— 参数恒定（{ limit: 200 }）时 queryKey
-  // 命中同一份缓存，本页与 usePartDispatch / usePendingProgrammingStore 共用一次请求。
-  // 工序制定的各 Tab 不在内：它传的是带 code_like / category 的 reactive params，
-  // queryKey 不同，各发各的。
-}
 
 // 2026-09-17 PR-4：ProcessChainCard 需要 { process_id → { code, name } } 字典。
 // 这里派生 O(1) 查找表，避免在 ProcessChainCard 内 v-for .find。
@@ -589,22 +482,20 @@ const processesLookup = computed<Record<string, { code: string; name: string }>>
 
 // ============ 底部 dialog 状态（shell 局部维护）============
 const failInspDlg = useDialogSize({ desktopWidth: 480 });
-const receiveOutsourceDlg = useDialogSize({ desktopWidth: 560 });
 const confirmDlg = useDialogSize({ desktopWidth: 420 });
 const { dangerous: confirmDangerous } = useConfirm();
 
 // 品检打回（指定工序）对话框
-// 2026-10-10：目标生产货架下拉与 useShelfProcessFilter 一并删除 —— 打回的目标架由后端
-// 按负载自动选（`to-process` 的 `shelf_id` 后端已删）。工序下拉直接用全量 processes。
+// 2026-10-10：目标生产货架下拉删除 —— 打回的目标架由后端按负载自动选（`to-process`
+// 不再收货架字段）。工序下拉直接用全量 processes。
 const failInspDialogVisible = ref(false);
 const failInspProcessId = ref<string>('');
 const failInspNote = ref<string>('');
 const failInspSubmitting = ref(false);
 
-async function openFailInspDialog() {
+function openFailInspDialog() {
   failInspProcessId.value = '';
   failInspNote.value = '';
-  await ensureShelvesProcesses();
   failInspDialogVisible.value = true;
   // processes 已是共享 query 的响应式派生，弹窗打开即已就位。
 }
@@ -626,57 +517,6 @@ async function onFailInspectionConfirm() {
     if (ok) failInspDialogVisible.value = false;
   } finally {
     failInspSubmitting.value = false;
-  }
-}
-
-// 外协回收对话框
-const receiveOutsourceDialogVisible = ref(false);
-const receiveShelfId = ref<string>('');
-const receiveProcessId = ref<string>('');
-const receiveSubmitting = ref(false);
-const inhouseProcesses = computed(() => processes.value.filter((p) => p.category === 'INHOUSE'));
-const { filteredShelves: receiveFilteredShelves, filteredProcesses: receiveFilteredProcesses } =
-  useShelfProcessFilter(
-    computed(() => productionShelves.value),
-    inhouseProcesses,
-    computed({
-      get: () => receiveShelfId.value || null,
-      set: (v) => {
-        receiveShelfId.value = v ?? '';
-      },
-    }),
-    computed({
-      get: () => receiveProcessId.value || null,
-      set: (v) => {
-        receiveProcessId.value = v ?? '';
-      },
-    }),
-  );
-
-async function openReceiveOutsourceDialog() {
-  receiveShelfId.value = '';
-  receiveProcessId.value = '';
-  await ensureShelvesProcesses();
-  receiveOutsourceDialogVisible.value = true;
-  // 与 failInsp 共用同一份共享 query 缓存（同一常量 queryKey），先开过闸则直接命中。
-}
-function onReceiveOutsourceDialogClosed() {
-  receiveShelfId.value = '';
-  receiveProcessId.value = '';
-}
-async function onReceiveConfirm() {
-  if (!receiveShelfId.value || !receiveProcessId.value) return;
-  receiveSubmitting.value = true;
-  try {
-    const ok = await onReceiveFromOutsource({
-      // 2026-10-02：receive-from-outsource 迁 prod 域后以批次为锚。
-      batchId: selectedBatchId.value ?? '',
-      shelfId: receiveShelfId.value,
-      processId: receiveProcessId.value,
-    });
-    if (ok) receiveOutsourceDialogVisible.value = false;
-  } finally {
-    receiveSubmitting.value = false;
   }
 }
 

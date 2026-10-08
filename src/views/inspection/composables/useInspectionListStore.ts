@@ -35,7 +35,6 @@ import {
   type ScanTreeOut,
 } from '@/api/inspection';
 import { qk } from '@/composables/queries/keys';
-import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { useListFilterPersist } from '@/composables/useListFilterPersist';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
@@ -46,7 +45,6 @@ import {
   type InspectionSortKey,
 } from '@/types/inspection';
 import type { SortDir } from '@/types/parts';
-import type { Shelf } from '@/types/shelf';
 import type { Process } from '@/types/process';
 import { buildInspectionColumnDefs, type InspectionColumnActions } from '../inspectionColumnDefs';
 import {
@@ -545,34 +543,20 @@ export const useInspectionListStore = defineStore('inspection-list', () => {
   }
 
   // ============ 切片：options（弹窗下拉的候选数据）============
-  // 2026-10-03：替代旧版视图里的 3 处裸调（listShelves ×2 + listProcesses）——
-  // 货架 / 工序是典型基础数据（跨页面共用），按 CLAUDE.md 两层架构归共享层 query。
-  // 两个 zone 各开一个 useProductionShelvesQuery：queryKey 带 params，天然分两份缓存。
-  const inspectionShelvesQuery = useProductionShelvesQuery({
-    zone: 'INSPECTION',
-    is_active: true,
-    limit: 200,
-  });
-  const productionShelvesQuery = useProductionShelvesQuery({
-    zone: 'PRODUCTION',
-    is_active: true,
-    limit: 200,
-  });
+  // 2026-10-03：替代旧版视图里的裸调 listProcesses，走共享层 query（跨页面共用）。
+  // 2026-10-10：两个 zone 的货架候选随「不再指定货架」一并删除 —— 品检架候选供扫码树
+  // 的行内送检面板选目标架、生产架候选供「指定工序」弹窗选目标架，两处消费方都已下线，
+  // 留着就是白开两个 200 条的货架请求。
   const processesQuery = useProcessesQuery({ limit: 200 });
-
-  const inspectionShelves = computed<Shelf[]>(() => inspectionShelvesQuery.data.value?.items ?? []);
-  const productionShelves = computed<Shelf[]>(() => productionShelvesQuery.data.value?.items ?? []);
   // processSchema 派生的 description / color 是 optional（后端 skip_serializing_if），
   // 而 `Process` 业务类型把这两个键声明成 required（值可为 undefined）⇒ 结构不匹配。
-  // 沿 usePartDispatch / ProcessTab.vue 同款 `as Process[]` 桥接，渲染层已有 nullish
+  // 沿 ProcessTab.vue 同款 `as Process[]` 桥接，渲染层已有 nullish
   // 兜底覆盖 null + undefined，零行为差异。
   const processes = computed<Process[]>(
     () => (processesQuery.data.value?.items ?? []) as Process[],
   );
 
   const options = {
-    inspectionShelves,
-    productionShelves,
     processes,
   };
 

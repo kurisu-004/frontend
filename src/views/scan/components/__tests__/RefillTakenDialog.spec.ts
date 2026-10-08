@@ -19,7 +19,7 @@ import RefillTakenDialog from '../RefillTakenDialog.vue';
 import type { TakenItemDto } from '@/api/productionQueue.contract';
 
 /** el-dialog 壳 + footer slot、el-button 保留原生 click 透传，与同目录
- *  ReturnConfirmDialog.spec.ts / BatchPickerDialog.spec.ts 的桩手法一致。
+ *  BatchPickerDialog.spec.ts 的桩手法一致。
  *  el-tag / el-icon 只需占位（加急标与图标的有无靠 v-if 断言文本）。 */
 const stubs = {
   'el-dialog': {

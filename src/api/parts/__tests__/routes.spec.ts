@@ -73,8 +73,6 @@ import {
   listRepairingBatches,
   pickUpPart,
   placeOnShelf,
-  receiveFromOutsource,
-  receiveFromOutsourceToInspection,
   releaseFromProgramming,
   repairDispatch,
   scanDeliverPart,
@@ -141,16 +139,6 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     );
     expect(
       await postedPath(() =>
-        receiveFromOutsource(BATCH, { shelf_id: 's', next_process_id: 'p', version: 1 }),
-      ),
-    ).toBe(`/prod/batches/${BATCH}/receive-from-outsource`);
-    expect(
-      await postedPath(() =>
-        receiveFromOutsourceToInspection(BATCH, { shelf_id: 's', version: 1 }),
-      ),
-    ).toBe(`/prod/batches/${BATCH}/receive-from-outsource-to-inspection`);
-    expect(
-      await postedPath(() =>
         sendToOutsource(BATCH, { outsource_company_id: 'c', process_id: 'p', version: 1 }),
       ),
     ).toBe(`/prod/batches/${BATCH}/send-to-outsource`);
@@ -161,8 +149,8 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
       `/prod/batches/${BATCH}/scan-inspect`,
     );
     expect(await postedPath(() => cancelPartBatch(BATCH, 1))).toBe(`/prod/batches/${BATCH}/cancel`);
-    // 单件送检（本次新建的 URL）。别与 receiveFromOutsourceToInspection 混：
-    // 那个是 /receive-from-outsource-to-inspection，外协回收直送品检。
+    // 单件送检的 URL。别与外协三合一前的 `receive-from-outsource-to-inspection`
+    // （外协回收直送品检）混 —— 那条路径已随三合一下线，本文件不再断言它。
     expect(await postedPath(() => toInspection(BATCH, { version: 1 }))).toBe(
       `/prod/batches/${BATCH}/to-inspection`,
     );
@@ -208,12 +196,10 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(Object.keys(startBody).sort()).toEqual(['note', 'reason', 'version']);
     expect(startBody).not.toHaveProperty('quantity');
   });
-  // 2026-10-03 契约对齐：send-to-outsource 的 body 键是 `process_id`（**不是**
+  // 契约对齐：send-to-outsource 的 body 键是 `process_id`（**不是**
   // `next_process_id`）—— 沿用旧名必然 422（后端 DTO 是 process_id，serde 未开
   // deny_unknown_fields 时旧名被静默忽略、必填 process_id 落空 → 422）。
-  // 注意对比：receive-from-outsource 的键**仍是** `next_process_id`（后端没跟着改），
-  // 两个端点刻意不同名，这条断言同时把两者钉住防止「顺手统一」。
-  it('R2c：send-to-outsource 用 process_id，receive-from-outsource 仍用 next_process_id', async () => {
+  it('R2c：send-to-outsource 用 process_id，报价两条路径的键集合各自钉住', async () => {
     httpPostMock.mockReset();
     httpPostMock.mockResolvedValue({ data: {} });
     await sendToOutsource(BATCH, {
@@ -246,20 +232,6 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
     expect(directBody.quote_id).toBeNull();
     // 部分发送数量透传（后端拆批，源批次留余量）
     expect(directBody.quantity).toBe(3);
-
-    // 接收端点：键名未跟着 send 改，且部分接收的 quantity 现在后端真的认了
-    httpPostMock.mockReset();
-    httpPostMock.mockResolvedValue({ data: {} });
-    await receiveFromOutsource(BATCH, {
-      shelf_id: 's',
-      next_process_id: 'p',
-      version: 1,
-      quantity: 2,
-    });
-    const [, recvBody] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(recvBody.next_process_id).toBe('p');
-    expect(recvBody).not.toHaveProperty('process_id');
-    expect(recvBody.quantity).toBe(2);
   });
 
   // 2026-10-03：place-on-shelf / release-from-programming 两个后端 DTO 都把 `version`

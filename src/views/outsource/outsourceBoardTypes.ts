@@ -64,15 +64,21 @@ export const ACTIVE_OUTSOURCE_PROCESS_ID = 'activeOutsourceProcessId';
 /** 候选行是否可拖 / 可选。
  *
  * 判据只有 `shelf_id` 非空（**空串**是「`PENDING` 且未上架」的真实形态，不是 null）：
- * 这类行没有 holder，发送请求的 `from.shelf_id` 必被后端 `from` 守卫拒收。 */
+ * 这类行 `location IS NULL`，发送请求的 `from.kind=PRODUCTION_SHELF` 必被后端 from
+ * 守卫拒收（要求 `batch.location == 'PRODUCTION_SHELF'`）。 */
 export function isCandidateDraggable(candidate: OutsourceQueueCandidateData): boolean {
   return candidate.shelf_id !== '';
 }
 
 /** 置灰提示文案 —— 同时用于候选池工具条上的 el-tooltip。
  *  收在这里是因为「文案」与「判据」必须同处：改了判据忘了改文案，提示就会与实际
- *  拦截条件脱节。 */
-export const NOT_SHELVED_HINT = '该批次尚未上架，请先下发到生产货架';
+ *  拦截条件脱节。
+ *
+ *  ⚠️ 文案只说**事实**、不给「去下发」这个出路：零件一览 / 零件详情 / cnc 三处的
+ *  「下发」入口已下线，而把批次放上货架的后端端点（`place-on-shelf`）当前**前端零入口**
+ *  ⇒ 写「请先下发到生产货架」会让操作员去找一个不存在的按钮。出路要么是后端/产品补
+ *  一个上架入口，要么是这类行由别的途径产生；在那之前只如实说「尚未上架」。 */
+export const NOT_SHELVED_HINT = '该批次尚未上架，暂时不能发送到外协';
 
 /** 扫码未命中当前 tab 候选时的提示。⚠️ 必须写明「只在当前工序匹配」—— 不写清的话
  *  操作员会把「需要切 tab」误当成状态 / 报价问题，从错误方向排查。 */

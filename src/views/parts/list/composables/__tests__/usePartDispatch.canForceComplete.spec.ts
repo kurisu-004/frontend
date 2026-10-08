@@ -25,7 +25,7 @@
 // - @/api/parts / @/api/shelves / @/api/process 全部 mock，避免 axios 网络请求。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApp, ref, type App } from 'vue';
+import { createApp, type App } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
@@ -84,15 +84,6 @@ function makeRow(overrides: Partial<PartListItem> = {}): PartListItem {
 }
 
 /** usePartDispatch 的最小 deps（canForceComplete 不读这些，但函数签名要求给齐）。 */
-function makeDeps() {
-  return {
-    selectedIds: new Set<string>(),
-    selectedRows: ref<PartListItem[]>([]),
-    selectedRowTypes: new Map<string, 'PART' | 'ASSEMBLY'>(),
-    getTable: () => null,
-  };
-}
-
 /** 注入一个 MANAGER 测试用户到 auth store。 */
 function loginAsManager(): void {
   const auth = useAuthStore();
@@ -144,7 +135,7 @@ describe('usePartDispatch.canForceComplete', () => {
   // R1：MANAGER + PART + 非终态 → true
   it('returns true for MANAGER + PART + active status', () => {
     loginAsManager();
-    const dispatch = app.runWithContext(() => usePartDispatch(makeDeps()));
+    const dispatch = app.runWithContext(() => usePartDispatch());
     expect(dispatch.canForceComplete(makeRow({ status: 'IN_PROCESS' }))).toBe(true);
     expect(dispatch.canForceComplete(makeRow({ status: 'PENDING' }))).toBe(true);
     expect(dispatch.canForceComplete(makeRow({ status: 'INSPECTION' }))).toBe(true);
@@ -154,23 +145,23 @@ describe('usePartDispatch.canForceComplete', () => {
   // R2：非 MANAGER → false（即便行状态合法）
   it('returns false for non-MANAGER role', () => {
     loginAsClerk();
-    const dispatch = app.runWithContext(() => usePartDispatch(makeDeps()));
+    const dispatch = app.runWithContext(() => usePartDispatch());
     expect(dispatch.canForceComplete(makeRow({ status: 'IN_PROCESS' }))).toBe(false);
   });
 
   // R3：ASSEMBLY row_type → false
   it('returns false for ASSEMBLY row_type', () => {
     loginAsManager();
-    const dispatch = app.runWithContext(() => usePartDispatch(makeDeps()));
-    expect(
-      dispatch.canForceComplete(makeRow({ row_type: 'ASSEMBLY', status: 'IN_PROCESS' })),
-    ).toBe(false);
+    const dispatch = app.runWithContext(() => usePartDispatch());
+    expect(dispatch.canForceComplete(makeRow({ row_type: 'ASSEMBLY', status: 'IN_PROCESS' }))).toBe(
+      false,
+    );
   });
 
   // R4：COMPLETED / CANCELLED 终态 → false
   it('returns false for terminal COMPLETED / CANCELLED status', () => {
     loginAsManager();
-    const dispatch = app.runWithContext(() => usePartDispatch(makeDeps()));
+    const dispatch = app.runWithContext(() => usePartDispatch());
     expect(dispatch.canForceComplete(makeRow({ status: 'COMPLETED' }))).toBe(false);
     expect(dispatch.canForceComplete(makeRow({ status: 'CANCELLED' }))).toBe(false);
   });
@@ -178,7 +169,7 @@ describe('usePartDispatch.canForceComplete', () => {
   // 暴露字段契约：forceCompletingMap 是 Record<string, boolean>，初值空对象
   it('exposes forceCompletingMap as an empty reactive Record<string, boolean>', () => {
     loginAsManager();
-    const dispatch = app.runWithContext(() => usePartDispatch(makeDeps()));
+    const dispatch = app.runWithContext(() => usePartDispatch());
     expect(dispatch.forceCompletingMap).toBeDefined();
     expect(typeof dispatch.forceCompletingMap).toBe('object');
     expect(Object.keys(dispatch.forceCompletingMap)).toEqual([]);

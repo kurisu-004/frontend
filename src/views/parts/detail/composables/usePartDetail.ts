@@ -43,7 +43,6 @@ import { enrichAssemblyItem, getAssemblyForPart } from '@/api/assembly';
 import { splitBatch } from '@/api/batch';
 import type { BatchSplitDto } from '@/api/batch.contract';
 import type { AssemblyDetail } from '@/types/assembly';
-import { receiveFromOutsource } from '@/api/parts';
 import { usePermissions } from '@/composables/usePermissions';
 import { useConfirm } from '@/composables/useConfirm';
 // fetchAssembly 走客户 enrich（PartAssemblyLinkCard 客户列展示所需），数据源是
@@ -102,7 +101,6 @@ export interface UsePartDetailReturn {
   canCancelPart: ComputedRef<boolean>;
   canDeletePart: ComputedRef<boolean>;
   canInspect: ComputedRef<boolean>;
-  canReceiveFromOutsource: ComputedRef<boolean>;
   canManageDrawings: ComputedRef<boolean>;
   canManage3DModels: ComputedRef<boolean>;
   canManageCncFiles: ComputedRef<boolean>;
@@ -124,11 +122,6 @@ export interface UsePartDetailReturn {
     batchId: string | null;
     processId: string;
     note: string | null;
-  }) => Promise<boolean>;
-  onReceiveFromOutsource: (payload: {
-    batchId: string;
-    shelfId: string;
-    processId: string;
   }) => Promise<boolean>;
   /** 拆批。返回拆分结果（源批次余量 + 新批次 id）供调用方判成败；行数据靠调用方随后的
    *  `fetchBatches` 重拉，不在这里回显。 */
@@ -153,7 +146,6 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   const canCancelPart = computed(() => isManager.value || isClerk.value);
   const canDeletePart = computed(() => isManager.value);
   const canInspect = computed(() => isManager.value || isClerk.value || isInspector.value);
-  const canReceiveFromOutsource = computed(() => isManager.value || isClerk.value);
   /** 图纸 / 3D 模型：MANAGER + CLERK（文员日常操作） */
   const canManageDrawings = computed(() => isManager.value || isClerk.value);
   const canManage3DModels = computed(() => isManager.value || isClerk.value);
@@ -448,35 +440,6 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     }
   }
 
-  // ============ 外协回收（receive dialog 由 shell 持有 UI 状态）============
-  async function onReceiveFromOutsourceFn(payload: {
-    batchId: string;
-    shelfId: string;
-    processId: string;
-  }): Promise<boolean> {
-    // 2026-10-02：批次锚定 + version 必填（后端 receive_from_outsource 复用
-    // PlaceOnShelfRequest）。version 取调用方指定批次的 t_part_batch.version。
-    const batch = batches.value.find((b) => b.id === payload.batchId);
-    if (!batch) {
-      ElMessage.error('未找到要回收的批次，请刷新后重试');
-      return false;
-    }
-    try {
-      await receiveFromOutsource(batch.id, {
-        shelf_id: payload.shelfId,
-        next_process_id: payload.processId,
-        version: batch.version,
-      });
-      ElMessage.success('外协已回收');
-      await fetchPart();
-      void fetchEvents();
-      return true;
-    } catch (e) {
-      ElMessage.error(`外协回收失败：${(e as Error).message}`);
-      return false;
-    }
-  }
-
   // ============ 批次（PartBatchMonitorCard 渲染 + 拆分 / 取消）============
   const batches = ref<PartBatch[]>([]);
   const batchesLoading = ref(false);
@@ -580,7 +543,6 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     canCancelPart,
     canDeletePart,
     canInspect,
-    canReceiveFromOutsource,
     canManageDrawings,
     canManage3DModels,
     canManageCncFiles,
@@ -601,8 +563,6 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     // inspection
     onPassInspection,
     onFailInspection,
-    // outsource receive
-    onReceiveFromOutsource: onReceiveFromOutsourceFn,
     // batch split / cancel
     onSplitBatch,
     onCancelBatch,

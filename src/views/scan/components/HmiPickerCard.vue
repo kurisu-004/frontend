@@ -5,9 +5,8 @@
   视觉规范沿用 ShelfPickerCard：min-height 140px、3px 实线边框、12px 圆角、选中绿、
   active scale(0.98)、-webkit-tap-highlight-color: transparent。
 
-  用于：
-  - ProcessPickerDialog 的工序大按钮（kind='process'）
-  - ShelfPickerDialog 的货架大按钮（kind='shelf'，视觉代替原 ShelfPickerCard）
+  用于：ProcessPickerDialog 的工序大按钮（kind='process'）。
+  `kind='shelf'` 分支当前零调用方，见 `kind` prop 的注释。
 
   props:
     kind: 'process' | 'shelf'                       必填，决定卡内字段
@@ -64,11 +63,10 @@
         >
       </div>
       <!--
-        2026-10-02：这是本组件目前**零调用方**的分支 —— ShelfPickerDialog 不再传
-        mappedProcessCodes（前端已从 ShelfForReturn 摘除该字段，后端
-        ShelfForReturnItem 也从未返它），故本块 + .processes/.process-chip 样式
-        当前不可达。保留而不删：后端哪天给 picker 补上「该架可执行工序」字段，
-        这里直接就能复活，不用重写样式。等后端补字段复活，勿当死代码清理。
+        本组件目前**零调用方**的分支：`kind='shelf'` 的入参由已删除的货架选择弹窗提供，
+        该弹窗随「目标货架改由后端自动选」整体下线，故本块 + .processes/.process-chip
+        样式当前不可达。保留而不删：将来若恢复某种「按架展示可执行工序」的视图，
+        这里直接就能复活，不用重写样式。
       -->
       <div v-if="mappedProcessCodes && mappedProcessCodes.length" class="processes">
         <el-tag
@@ -121,12 +119,12 @@ const props = defineProps<{
 
   /** kind='shelf' */
   location?: string;
-  /** 在架件数。undefined = 该端点没下发在架数（如老后端的 for-inspection），
-   *  此时 `.load` 块整块不渲染（2026-10-04 加的守卫）。 */
+  /** 在架件数。undefined = 调用方没下发在架数，此时 `.load` 块整块不渲染。 */
   currentLoad?: number;
   /**
-   * 2026-10-02：目前无调用方（后端 ShelfForReturnItem 不返映射工序），保留 prop
-   * 与对应模板分支作为「后端补字段后复活」的落点，见模板处注释。
+   * 目前无调用方 —— `kind='shelf'` 的调用方（货架选择弹窗）已随「目标货架改由后端
+   * 自动选」下线。保留 prop 与对应模板分支作为「恢复按架展示视图」的落点，
+   * 见模板处注释。
    */
   mappedProcessCodes?: readonly string[];
 }>();

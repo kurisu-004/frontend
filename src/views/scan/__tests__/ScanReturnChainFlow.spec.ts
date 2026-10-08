@@ -4,8 +4,8 @@
 // 放回流程「按 chain_state 分流」三条分支的回归守卫。
 //
 // 报工台放回页按 chain_state 三态分流：
-//   NEXT（链内有下一道）→ 下一道工序由链直接给出，弹一次确认框，工人不选工序、
-//                          更不选货架（确认框走 ElMessageBox.confirm）；
+//   NEXT（链内有下一道）→ 下一道工序由链直接给出，弹一次确认框，工人三选一：
+//                          「按链放回」/「换一道工序」（落回手选）/「取消」；
 //   TAIL（链内最后一道）→ 工序选择弹窗内常驻提示「加工完成后请送检」，工人手选工序；
 //   NONE（无链 / 软删 / 指针漂移）→ 弹工序选择弹窗，选完直接提交。
 //
@@ -13,6 +13,9 @@
 //   1. 分流判据写错（拿 chain_state 之外的东西判 / 三态写串）—— 症状是链已知时仍弹
 //      工序选择，且**没有任何报错**；或 TAIL 被当成 NEXT 让工人「再放回一次」；
 //   2. 兜底出口被删掉 —— 链字段解析不出时工人被卡死，没有任何路可走；
+//   2b. NEXT 分支的「换一道工序」出口被删掉 —— 确认框是 NEXT 唯一能到达
+//      ProcessPickerDialog 的路，少了它工人一旦不同意管理员配的链就被困死
+//      （取消只清选中态，再点卡片还是同一个框）；
 //   3. 提交参数不是派生出来的值（工序 id 串了）—— 工件会落到没配该工序的架上；
 //   4. **提交载荷里绝不能再出现 shelf_id**：目标架已由后端按负载自动选
 //      （见 CLAUDE.md「货架自动选择」），前端发这个键等于把口径退回去。
@@ -20,16 +23,19 @@
 // 桩的取舍：
 //   - `@/api/parts` 整模块桩掉：本页与 api 层是「直接 await + 手写 ref」范式
 //     （报工台域不用 TanStack Query），不桩就真发请求。
-//   - `element-plus` 桩成 `{ ElMessage: {...}, ElMessageBox: { confirm } }`：本页所有
-//     提示走 ElMessage，NEXT 分支的确认框走 ElMessageBox.confirm（两者都要断言）。
+//   - `element-plus` 桩成 `{ ElMessage: {...} }`：本页所有提示走 ElMessage。
+//     NEXT 分支的确认框是本页自绘的 `el-dialog`（不走 ElMessageBox：它只有确认/取消
+//     两键，装不下「换一道工序」这个出口），所以确认框的断言直接打在
+//     `el-dialog` / `el-button` 两个桩渲染出来的 DOM 上。
 //   - `@/composables/useBarcodeScanner` 桩掉并把注册的 handler 抓出来：扫码是本页与
 //     点选并行的第二个入口（`applyScanSelection`），不桩就得模拟键盘时序。
 //   - `ProcessPickerDialog` 桩成带标记 class 的空壳（它自己要去打 listProcesses），
 //     空壳额外把 `hint` 透出成 data-*，用来验链尾送检提醒进了弹窗。
 //   - `PdfViewer` 桩掉：它 import pdfjs-dist，与放回分流无关，却会把单测拖进 pdf worker。
 //
-// 2026-10-10 改写：原先本文件守的「拉候选货架取推荐架 → `listShelvesForReturn`」那条
-// 链路随「目标货架改由后端自动选」整体下线（该端点已 404），相关用例删除。
+// 2026-10-10 改写：原先本文件守的「拉候选货架取推荐架」那条链路随「目标货架改由
+// 后端自动选」整体下线，相关用例删除；NEXT 分支的确认框从 ElMessageBox 换成自绘
+// el-dialog（补回「换一道工序」出口），由本页的 `el-dialog` / `el-button` 桩驱动。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
@@ -45,31 +51,14 @@ const h = vi.hoisted(() => ({
   replace: vi.fn(),
   scanHandlers: [] as ((code: string) => void)[],
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
-  /** ElMessageBox.confirm 的回执由用例写这里（'ok' = 确认；'cancel' / 'close' = 放弃）。 */
-  confirmAnswer: 'ok' as 'ok' | 'cancel' | 'close',
-  confirmMock: vi.fn(),
 }));
-
-/** 默认回执。⚠️ 必须放在 beforeEach 里重装（而不是只在模块顶层设一次）：`deferConfirm`
- *  用的是 `mockReturnValue`，它会**顶替** implementation 并一直留着 ⇒ 不重装的话，
- *  跑过 deferConfirm 的用例之后的用例全都拿到同一个永挂的 promise（表现为「单跑绿、
- *  一起跑红」）。 */
-function installConfirmDefault(): void {
-  h.confirmMock.mockImplementation(async () => {
-    if (h.confirmAnswer === 'ok') return 'confirm';
-    return Promise.reject(h.confirmAnswer);
-  });
-}
 
 vi.mock('@/api/parts', () => ({
   listPartsHeldByWorker: h.listPartsHeldByWorker,
   workerScan: h.workerScan,
 }));
 
-vi.mock('element-plus', () => ({
-  ElMessage: h.ElMessage,
-  ElMessageBox: { confirm: h.confirmMock },
-}));
+vi.mock('element-plus', () => ({ ElMessage: h.ElMessage }));
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ replace: h.replace }) }));
 
@@ -182,19 +171,20 @@ function scanOut(eventType: string) {
   };
 }
 
-/**
- * 挂起 `ElMessageBox.confirm`，产出「确认框开着、还没提交」那个窗口。
- * 用它断言的是**确认框弹出时**的界面状态（确认栏 / 弹窗顺序），而不是提交之后的状态 ——
- * 桩默认立刻 resolve 的话整条链路会在一个 tick 内跑完，提交后的状态把这些断言全冲掉。
- */
-function deferConfirm(): (v: 'ok' | 'cancel' | 'close') => void {
-  let settle: (v: 'ok' | 'cancel' | 'close') => void = () => {};
-  h.confirmMock.mockReturnValue(
-    new Promise<string>((res, rej) => {
-      settle = (v) => (v === 'ok' ? res('confirm') : rej(v));
-    }),
-  );
-  return settle;
+/** 确认框（本页自绘 el-dialog）里的三个出口按钮，按文案取。 */
+function chainConfirmButtons(w: VueWrapper): ReturnType<VueWrapper['findAll']> {
+  return w.findAll('.mock-dialog .mock-confirm-bar button');
+}
+
+function chainConfirmButton(w: VueWrapper, label: string) {
+  const btn = chainConfirmButtons(w).find((b) => b.text().replace(/\s+/g, '') === label);
+  expect(btn, `确认框里没有「${label}」按钮`).toBeDefined();
+  return btn!;
+}
+
+/** 确认框开着？NEXT 分支的开框判据全靠它。 */
+function chainConfirmOpen(w: VueWrapper): boolean {
+  return w.findAll('.mock-dialog').some((d) => d.attributes('data-open') === 'true');
 }
 
 /** 同上，挂起 workerScan（提交）—— 产出 `submitting === true` 那个窗口。 */
@@ -209,26 +199,45 @@ function deferScan(): () => void {
 }
 
 const stubs = {
-  // el-dialog 渲染 default + footer 两个 slot，el-button 的原生 click 由 attrs 透传到
-  // <button>（本页的按钮点击断言就靠它）。⚠️ `emits` 必须声明：少声明时父组件的
-  // `@click` 既被 `$emit` 接住又作为 fallthrough 落到根 <button>，一次点击触发两次
-  // 提交。
+  // el-dialog 渲染 default + footer 两个 slot，**只在 modelValue 为真时渲染**（否则
+  // 确认框的「开没开」无法断言 —— 桩恒渲染时开与不开长得一模一样）。
   'el-dialog': {
     name: 'ElDialogStub',
     props: ['modelValue', 'title', 'width'],
-    template: '<div class="mock-dialog" :data-title="title"><slot /><slot name="footer" /></div>',
+    template: `<div
+      v-if="modelValue"
+      class="mock-dialog"
+      :data-title="title"
+      data-open="true"
+    >
+      <div class="mock-confirm-bar"><slot /></div>
+      <div class="mock-confirm-bar"><slot name="footer" /></div>
+    </div>`,
   },
   'el-button': {
     name: 'ElButtonStub',
     props: { disabled: Boolean },
     emits: ['click'],
+    // ⚠️ 声明 `emits: ['click']` 后父组件的 `@click` **不会**进 $attrs，模板里必须
+    // 自己 `$emit`；否则这个桩是个不响的按钮，而 NEXT 分支的三个出口（按链放回 /
+    // 换一道工序 / 取消）全靠它驱动。
+    // 反过来少声明 emits 更糟：`@click` 既被 `$emit` 接住又作为 fallthrough 落到根
+    // <button> 的原生监听器上，一次点击触发两次提交。
     // disabled 显式声明成 prop 并透出成 data-*：留在 attrs 里时 Vue 会把它当 DOM prop
     // 落到根 <button>（el.disabled = x），attributes('disabled') 拿到的是 null，断言不到
     // 状态。
-    template: '<button :data-disabled="String(disabled)"><slot /></button>',
+    template:
+      '<button :data-disabled="String(disabled)" @click="$emit(\'click\')"><slot /></button>',
   },
   'el-card': { name: 'ElCardStub', template: '<div class="mock-card"><slot /></div>' },
   'el-tag': { name: 'ElTagStub', template: '<span class="mock-tag"><slot /></span>' },
+  // el-alert 的正文走 `title` prop（不是 slot）⇒ 桩要把 title 渲染成文本，否则
+  // 「确认框里写的是哪道工序」这条断言会落在一个永远不渲染的未知组件上。
+  'el-alert': {
+    name: 'ElAlertStub',
+    props: ['title'],
+    template: '<div class="mock-alert"><span class="mock-alert-title">{{ title }}</span></div>',
+  },
   'el-icon': { name: 'ElIconStub', template: '<i class="mock-icon"><slot /></i>' },
   'el-divider': { name: 'ElDividerStub', template: '<hr />' },
   'el-image': { name: 'ElImageStub', template: '<div />' },
@@ -295,9 +304,6 @@ beforeEach(() => {
   h.listPartsHeldByWorker.mockReset();
   h.workerScan.mockReset().mockResolvedValue(scanOut('WORKER_SCAN_RETURNED'));
   h.replace.mockReset();
-  h.confirmMock.mockReset();
-  installConfirmDefault();
-  h.confirmAnswer = 'ok';
   h.ElMessage.success.mockReset();
   h.ElMessage.error.mockReset();
   h.ElMessage.warning.mockReset();
@@ -310,7 +316,6 @@ beforeEach(() => {
 
 describe('ScanReturnParts / chain_state 三态分流', () => {
   it('NEXT：不开工序选择弹窗，直接弹确认框，文案只讲下一道工序（不再有货架）', async () => {
-    deferConfirm();
     const w = await mountPage([
       row({
         chain_state: 'NEXT',
@@ -325,13 +330,51 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     // 关键断言：工序选择弹窗不能开
     expect(w.find('.stub-process-picker').exists()).toBe(false);
     // 确认框开了，文案只摆下一道工序 + 「自动按负载放架」
-    expect(h.confirmMock).toHaveBeenCalledTimes(1);
-    const msg = h.confirmMock.mock.calls[0]![0] as string;
-    expect(msg).toContain('CUT-01 下料');
-    expect(msg).toContain('按负载');
+    expect(chainConfirmOpen(w)).toBe(true);
+    const box = w.findAll('.mock-dialog')[0]!.text();
+    expect(box).toContain('CUT-01 下料');
+    expect(box).toContain('按负载');
     // 确认栏也跟着显示派生的下一工序
     expect(w.find('.confirm-bar').text()).toContain('下一工序：CUT-01 下料');
     expect(h.workerScan).not.toHaveBeenCalled();
+  });
+
+  // ⛔ NEXT 分支唯一能到达 ProcessPickerDialog 的路。少了「换一道工序」，工人不同意
+  // 管理员配的链（临时插单 / 改道）时就被困死：取消只清选中态，再点卡片还是同一个框。
+  // 这条用例就是钉住那个出口不被当成冗余清掉。
+  it('NEXT + 「换一道工序」：落回手选工序弹窗，且选中件必须留着（否则选完直接 bail）', async () => {
+    const w = await mountPage([
+      row({
+        chain_state: 'NEXT',
+        chain_next_process_id: '190000000000131',
+        chain_next_process_name: 'CUT-01 下料',
+      }),
+    ]);
+    await clickFirstPart(w);
+    expect(chainConfirmOpen(w)).toBe(true);
+
+    await chainConfirmButton(w, '换一道工序').trigger('click');
+    await flushPromises();
+
+    // 确认框关掉、手选弹窗开
+    expect(chainConfirmOpen(w)).toBe(false);
+    expect(w.find('.stub-process-picker').exists()).toBe(true);
+    // 链派生的答案要清干净：确认栏回落成「未选」，且提交前不会误带链上的工序
+    expect(w.find('.confirm-bar').text()).toContain('下一工序：未选');
+    expect(h.workerScan).not.toHaveBeenCalled();
+
+    // 接着手选一道并提交 ⇒ 发出去的是**工人选的那道**，不是链上那道
+    const vm = w.vm as unknown as { onProcessPicked: (p: unknown) => void };
+    vm.onProcessPicked({ id: '190000000000141', code: 'WELD', name: '焊接' });
+    await flushPromises();
+
+    expect(h.workerScan).toHaveBeenCalledWith({
+      serial_no: 'F2256',
+      badge_code: 'W-001',
+      event_type: 'RETURNED',
+      next_process_id: '190000000000141',
+      batch_id: '190000000000111',
+    });
   });
 
   // ⛔ 这条直接钉住「不再指定货架」这个需求：载荷里**没有** shelf_id 这个键。
@@ -346,6 +389,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
       }),
     ]);
     await clickFirstPart(w);
+    await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
 
     expect(h.workerScan).toHaveBeenCalledTimes(1);
@@ -366,7 +410,6 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
   });
 
   it('NEXT + 确认框点「取消」：整次放回作废，不提交', async () => {
-    h.confirmAnswer = 'cancel';
     const w = await mountPage([
       row({
         chain_state: 'NEXT',
@@ -375,10 +418,12 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
       }),
     ]);
     await clickFirstPart(w);
+    await chainConfirmButton(w, '取消').trigger('click');
     await flushPromises();
 
     expect(h.workerScan).not.toHaveBeenCalled();
     expect(w.find('.confirm-bar').exists()).toBe(false);
+    expect(chainConfirmOpen(w)).toBe(false);
   });
 
   // 没有货架 picker 之后，NEXT 分支少了一类兜底（原「候选架为空 → 回退手选」）。
@@ -394,7 +439,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     ]);
     await clickFirstPart(w);
 
-    expect(h.confirmMock).not.toHaveBeenCalled();
+    expect(chainConfirmOpen(w)).toBe(false);
     expect(h.ElMessage.warning).toHaveBeenCalledWith('未找到下一道工序，请手动选择工序');
     expect(w.find('.stub-process-picker').exists()).toBe(true);
     expect(h.workerScan).not.toHaveBeenCalled();
@@ -416,7 +461,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     // ElMessage，工人在产线屏幕前看不到那句 3 秒后自动消失的提示。
     expect(processHint(w)).toBe('「CUT-01 下料」为最后一道工序，加工完成后请送检。');
     // TAIL 没有下一道 ⇒ 连确认框都不该弹
-    expect(h.confirmMock).not.toHaveBeenCalled();
+    expect(chainConfirmOpen(w)).toBe(false);
   });
 
   it('TAIL 且当前工序名解析不出：退到通用送检文案', async () => {
@@ -442,7 +487,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
 
     expect(w.find('.stub-process-picker').exists()).toBe(true);
     expect(processHint(w)).toBe('');
-    expect(h.confirmMock).not.toHaveBeenCalled();
+    expect(chainConfirmOpen(w)).toBe(false);
     expect(h.workerScan).not.toHaveBeenCalled();
     expect(w.find('.confirm-bar').text()).toContain('下一工序：未选');
 
@@ -488,8 +533,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     await scan(w, 'F-A');
 
     expect(w.find('.stub-process-picker').exists()).toBe(false);
-    expect(h.confirmMock).toHaveBeenCalledTimes(1);
-    expect(h.confirmMock.mock.calls[0]![0] as string).toContain('CUT-01 下料');
+    expect(chainConfirmOpen(w)).toBe(true);
   });
 
   // 后端新增第四个 chain_state 取值（纯后端单方面改动）也只能降级、不能停工：
@@ -519,7 +563,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
 
       expect(w.find('.stub-process-picker').exists()).toBe(true);
       expect(h.workerScan).not.toHaveBeenCalled();
-      expect(h.confirmMock).not.toHaveBeenCalled();
+      expect(chainConfirmOpen(w)).toBe(false);
       // 未知取值不做 NEXT 处理 ⇒ 连确认框都不弹
       expect(consoleWarn).toHaveBeenCalledTimes(1);
     } finally {
@@ -550,7 +594,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
 
       expect(w.find('.stub-process-picker').exists()).toBe(true);
       expect(processHint(w)).toBe('');
-      expect(h.confirmMock).not.toHaveBeenCalled();
+      expect(chainConfirmOpen(w)).toBe(false);
       // 列表一次最多 200 行，逐行 warn 会把真正的报错埋掉 ⇒ 两次窄化只报一次
       expect(consoleWarn).toHaveBeenCalledTimes(1);
       expect(consoleWarn.mock.calls[0]!.join(' ')).toContain('chain_state');
@@ -572,6 +616,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
       }),
     ]);
     await clickFirstPart(w);
+    await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
 
     const cancelBtn = w
@@ -610,6 +655,7 @@ describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
       }),
     ]);
     await clickFirstPart(w);
+    await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
 
     expect(h.ElMessage.success).toHaveBeenCalledWith('已放回：F2256 → CUT-01 下料');
@@ -625,6 +671,7 @@ describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
       }),
     ]);
     await clickFirstPart(w);
+    await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
 
     expect(h.ElMessage.success).toHaveBeenCalledWith('已完工，已送检：F2256');
@@ -658,6 +705,7 @@ describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
       }),
     ]);
     await clickFirstPart(w);
+    await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
 
     expect(w.find('.stub-refill-taken').exists()).toBe(true);

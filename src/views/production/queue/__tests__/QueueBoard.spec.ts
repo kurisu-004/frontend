@@ -483,9 +483,8 @@ describe('QueueBoard（生产队列看板接线 guard）', () => {
     expect(typeof provides.moveBatchToWorker).toBe('function');
     expect(typeof provides.moveBatchToPool).toBe('function');
     expect(provides.moveBatchBetweenWorkers).toBe(moveBatchBetweenWorkersMock);
-    // 2026-10-10：`shelfId` 的 provide 随「撤回候选池不再指定目标货架」删除
-    // （`to.shelf_id` 后端已删）。钉住「不再 provide」比不写断言更硬：留着它
-    // 会诱导后人以为还能用它选架。
+    // 2026-10-10：`shelfId` 的 provide 随「撤回候选池的目标架改由后端自动选」删除。
+    // 钉住「不再 provide」比不写断言更硬：留着它会诱导后人以为还能用它选架。
     expect(provides).not.toHaveProperty('shelfId');
     wrapper.unmount();
   });

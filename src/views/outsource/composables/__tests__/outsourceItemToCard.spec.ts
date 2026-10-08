@@ -131,7 +131,8 @@ describe('poolCandidateToCard — 左列候选卡 → BatchCardModel', () => {
   });
 
   it('IC7：PENDING 未上架候选（shelf_id 空串）原样透传，不被改写成 null', () => {
-    // UI 靠 shelf_id 空串把这类行置灰（拖拽发送会被后端 from 守卫拒收）；
+    // UI 靠 shelf_id 空串把这类行置灰（拖拽发送会被后端 from 守卫拒收：location 非
+    // PRODUCTION_SHELF）；
     // 适配层把它抹成 null 会让「空串 vs null」在卡片上不可区分。
     const card = poolCandidateToCard(
       { ...candidateFixture, shelf_id: '', shelf_code: null },

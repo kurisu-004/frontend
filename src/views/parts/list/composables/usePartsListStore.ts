@@ -74,12 +74,7 @@ export const usePartsListStore = defineStore('parts-list', () => {
     selectedIds: batch.selectedIds,
     selectedRowTypes: batch.selectedRowTypes,
   });
-  const dispatch = usePartDispatch({
-    selectedIds: batch.selectedIds,
-    selectedRows: batch.selectedRows,
-    selectedRowTypes: batch.selectedRowTypes,
-    getTable,
-  });
+  const dispatch = usePartDispatch();
   const edit = usePartInlineEdit({
     items: query.items,
     customerTree: filters.customerTree,

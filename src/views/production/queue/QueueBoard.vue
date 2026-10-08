@@ -160,8 +160,10 @@ const auth = useAuthStore();
 // PoolDrawer 的 WORKER→POOL 撤回目标货架，而该值取自
 // `auth.activeShelfId = boundShelves[0]` —— 后端只给「SHELF_ACCOUNT +
 // scope_type='shelf'」的角色行返 shelf_ids ⇒ 对 MANAGER / CLERK / INSPECTOR 恒为
-// null，撤回对这三类角色结构性不可用。现在 `to.shelf_id` 后端已删，撤回的目标架改由
-// 后端按批次当前工序自动选，这条结构性限制随之消失。
+// null，撤回对这三类角色结构性不可用。现在撤回的**目标架**改由后端按批次当前工序
+// 自动选（`to` 侧不再有货架字段），这条结构性限制随之消失。
+// ⚠️ 只删 `to` 侧：`from` 侧的 `shelf_id` 仍必填（它是「批次真实所在货架」的比对
+// 基准，POOL→WORKER 派活那条路径经由它）。
 const queueMove = useQueueMove();
 const route = useRoute();
 const router = useRouter();

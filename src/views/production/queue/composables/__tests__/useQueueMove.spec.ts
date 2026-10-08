@@ -16,8 +16,9 @@
 //     （避免打出必被后端 20122 拒的请求）。
 //   - T2b：早退路径裸 await 失效，invalidateQueries 抛错被吞、不冒未捕获 rejection。
 //   - T3：moveBatchToWorker 失败 → 返回 false + error.value 写入 + ElMessage.error。
-//   - T4：moveBatchToPool 成功 → moveBatch 收到 WORKER→POOL 形态（to.shelf_id = 目标货架）。
-//   - T5：moveBatchToPool toShelfId 为空 → 早退返回 false + warning，不发请求。
+//   - T4：moveBatchToPool 成功 → moveBatch 收到 WORKER→POOL 形态（`to` 只带 kind，
+//     目标架由后端自动选）。
+//   - T5：moveBatchToPool 的 version 为 NaN → 早退返回 false + warning，不发请求。
 //   - T6：runAutoAllocate 成功 → autoAllocate 被调 + queue 两域前缀失效。
 //   - T7：runAutoAllocate 失败 → onError 写入 error.value **且失效 queue 两域**。
 //   - T8：请求体**不含** process_id / next_process_id（目标工序由后端自推），且键集合

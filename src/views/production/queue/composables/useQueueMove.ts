@@ -58,8 +58,9 @@ export interface UseQueueMoveReturn {
   ) => Promise<boolean>;
   /** WORKER → POOL：把工人持有的批次撤回候选池。
    *  @param version OCC 锚（同上，后端必填）
-   *  目标货架由后端按批次当前工序下的候选架中负载最低者自动选（2026-10-10 起
-   *  `to.shelf_id` 已删）⇒ 不再接受目标架入参。 */
+   *  目标货架由后端按批次当前工序下的候选架中负载最低者自动选 ⇒ 不再接受目标架入参。
+   *  注意 `from` 侧仍带起点锚（POOL 侧的 `shelf_id` / WORKER 侧的 `worker_id`），
+   *  两侧形态不同，故 from / to 分用两个 DTO 类型。 */
   moveBatchToPool: (batchId: string, version: number, fromWorkerId: string) => Promise<boolean>;
   /** WORKER → WORKER：把一名工人手中的批次转交给另一名。落点列的 onDragAdd 在
    *  「拿不到候选池源」时走这条路径（从自己那一列拖回自己不构成移动，由调用方早退，
@@ -209,10 +210,13 @@ export function useQueueMove(): UseQueueMoveReturn {
     }
   }
 
-  /** WORKER → POOL 包装 —— 撤回候选池。目标货架由后端按批次当前工序下的候选架中
-   *  负载最低者自动选（2026-10-10 起 `to.shelf_id` 已删），前端不再需要「当前货架」。
+  /** WORKER → POOL 包装 —— 撤回候选池。**目标货架由后端按批次当前工序下的候选架中
+   *  负载最低者自动选**，前端不再需要「当前货架」。
    *
-   *  这一改动同时解掉了旧实现那条结构性限制：目标架取自
+   *  `from` 侧的 `worker_id` 是起点锚（后端与批次 `current_holder_id` 比对）；
+   *  `to` 侧只有一个 `kind: 'POOL'`，不带任何货架字段。
+   *
+   *  这一改动同时解掉了旧实现那条结构性限制：目标架曾取自
    *  `auth.activeShelfId = boundShelves[0]`，而该字段只对「SHELF_ACCOUNT +
    *  scope_type='shelf'」的角色行有值 ⇒ MANAGER / CLERK / INSPECTOR 恒为 null，
    * 撤回对这三类角色曾经结构性不可用。现在没有任何早退分支了。 */

@@ -17,8 +17,8 @@
 //   - M3：APPROVAL 行传了报价锁定之外的公司 → 早退、不发请求。
 //   - M4：DIRECT 行 company_options 为空 → 早退、不发请求。
 //   - M5：目标公司为空串 → 早退、不发请求（必被 20104 拒收）。2026-10-10 改：原先这条
-//     守的是「shelf_id 为空串（PENDING 未上架）」，而 `from.shelf_id` 后端已删、
-//     「未上架」不再是前端能判的组装约束。
+//     守的是「shelf_id 为空串（PENDING 未上架）」，而「未上架」现在只是后端 from
+//     守卫会拒的**事实**，不再是前端能判的请求组装约束。
 //   - M6：version 为 NaN（卡片没填）→ 早退、不发请求。
 //   - M7：回收到生产成功 → from.company_id / next_process_id 取 DTO 上的
 //     `receive_next_process_id`，quote_id / direct 均为 null。
@@ -278,9 +278,9 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
   });
 
   it('M5：目标公司为空串 → 早退、零请求（后端 20104）', async () => {
-    // 2026-10-10：`from.shelf_id` 后端删除后，「PENDING 未上架」不再是发请求前的
-    // 早退项（由后端在 from 守卫里按 current_holder_id 自比）。剩下唯一必填的
-    // 组装字段是目标公司 —— 缺它后端必 20104，与其发一个注定被拒的请求不如早退。
+    // 2026-10-10：「PENDING 未上架」不再是发请求前的早退项（后端 from 守卫按
+    // location 判，这类行 location 是 null 必被拒）。剩下唯一必填的组装字段是
+    // 目标公司 —— 缺它后端必 20104，与其发一个注定被拒的请求不如早退。
     const { ElMessage } = await import('element-plus');
     const q = testApp.runWithContext(() => useOutsourceQueueMove());
     const ok = await q.sendToCompany({
@@ -481,8 +481,8 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     expect(Object.keys(sent)).not.toContain('current_process_id');
     expect(Object.keys(sent)).not.toContain('outsource_process_id');
     // `from` 只带批次真实所在货架，没有别的
-    // 2026-10-10：`from.shelf_id` 后端也删了（起点不再校验货架，改由后端按批次真实
-    // holder 自比）⇒ from 只剩 kind。
+    // 2026-10-10：`from` 只剩 kind —— 起点只校验批次 `location` 在不在生产架上，
+    // 不再比对货架 id。
     expect(sent.from).toEqual({ kind: 'PRODUCTION_SHELF' });
   });
 

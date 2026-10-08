@@ -24,12 +24,12 @@
 // 沿 CLAUDE.md 硬约束：
 //   - 两层数据获取架构：本文件是**页面级 store**（私有状态 + 列定义 + 列可见性），
 //     主查询的 useQuery 段外提成同域 hook（usePendingProgrammingQuery）；
-//   - 本文件**不含 queryKey / queryFn**：queryKey 走 qk.xxx 工厂、queryFn 从
-//     queryKey 读最新 params（不闭包捕获 stale）、Zod 守门 parse、error → ElMessage
-//     桥接，四件事都在 usePendingProgrammingQuery 内；
-//   - 2026-10-10：「下发到 CNC 货架」整块删除（用户决定下发功能由扫码台接管，
-//     `release-from-programming` 的 `shelf_id` 后端也已删）⇒ 本 store 现在**没有
-//     任何写操作**，也不再需要 qc / qk / 工序与货架两个基础数据 query。
+//   - 本文件**不含 queryKey / queryFn**：queryKey 走工厂、queryFn 从 queryKey 读
+//     最新 params（不闭包捕获 stale）、Zod 守门 parse、error → ElMessage 桥接，
+//     四件事都在 usePendingProgrammingQuery 内；
+//   - 2026-10-10：「下发到 CNC 货架」整块删除（下发改由扫码台的工人放回 / 送检接管）
+//     ⇒ 本 store 现在**没有任何写操作**，也不再需要 qc（QueryClient）、写后失效的
+//     域前缀、以及工序 / 货架两个基础数据 query。
 //   - enabled 闸门（restored）避免「默认参数首屏 + 持久化参数再屏」双 fetch；
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0 / mutations.retry: 0；
 //   - 缓存时长：本页是页面级列表，走 main.ts 全局默认（不在共享层有限缓存
@@ -37,10 +37,8 @@
 
 import { computed, reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
-import type { QueryClient } from '@tanstack/vue-query';
 
 import type { ListPendingProgrammingParams } from '@/api/programming';
-import { qk } from '@/composables/queries/keys';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
 import { useColumnDrag } from '@/composables/useColumnDrag';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
@@ -270,12 +268,6 @@ export const usePendingProgrammingStore = defineStore('pending-programming', () 
     registerRouter,
   };
 });
-
-/** 失效整个 programming 域。返回 Promise<void> 让 caller 可以 await 失效完成再走
- *  后续逻辑。 */
-export function invalidateProgrammingQuery(qc: QueryClient): Promise<void> {
-  return qc.invalidateQueries({ queryKey: qk.programmingPrefix }).then(() => undefined);
-}
 
 /** 行类型再导出（视图 cellRender / 测试用；与 domain schema 的 z.infer 同源）。 */
 export type { PendingProgrammingItemData, PendingProgrammingRow };

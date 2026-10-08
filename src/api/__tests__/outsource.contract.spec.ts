@@ -62,7 +62,7 @@ import {
   submitOutsourceQuote,
   updateOutsourceCompany,
 } from '../outsource';
-import { receiveFromOutsource, sendToOutsource } from '@/api/parts';
+import { sendToOutsource } from '@/api/parts';
 
 const COMPANY = '190000000000900';
 
@@ -243,21 +243,11 @@ describe('B 组：prod/batches 外协收发端点的 body 键契约', () => {
     expect(whole.body.quantity).toBeNull();
   });
 
-  // 部分接收：键名仍是 next_process_id（后端没跟着 send 改），且 quantity 现在真被认。
-  it('B4：receive-from-outsource 键名未改 + quantity 透传', async () => {
-    const { path, body } = await posted(() =>
-      receiveFromOutsource('B4', {
-        shelf_id: 'S',
-        next_process_id: 'P',
-        version: 3,
-        quantity: 5,
-      }),
-    );
-    expect(path).toBe('/prod/batches/B4/receive-from-outsource');
-    expect(body.next_process_id).toBe('P');
-    expect(body).not.toHaveProperty('process_id');
-    expect(body.quantity).toBe(5);
-  });
+  // ⚠️ 2026-10-10：`receive-from-outsource` 与 `receive-from-outsource-to-inspection`
+  // 两个端点已随外协三合一（`POST /outsource-queue/move`）下线，前端 wrapper 与本组
+  // 对应用例一并删除 —— 它们打的是 404 路径，留着断言等于守一个不存在的契约。
+  // 「回收生产 / 回收品检」的现行契约由
+  // `views/outsource/composables/__tests__/useOutsourceQueueMove.spec.ts` 守。
 });
 
 // ============================================================
@@ -290,9 +280,7 @@ describe('D 组：必填 version 与已删端点的存在性反断言', () => {
   });
 
   it('D1：公司 soft-delete 的 body 必含 version', async () => {
-    const { path, body } = await posted(() =>
-      softDeleteOutsourceCompany(COMPANY, { version: 3 }),
-    );
+    const { path, body } = await posted(() => softDeleteOutsourceCompany(COMPANY, { version: 3 }));
     expect(path).toBe(`/outsource-companies/${COMPANY}/soft-delete`);
     expect(body).toEqual({ version: 3 });
   });
@@ -358,7 +346,13 @@ describe('D 组：必填 version 与已删端点的存在性反断言', () => {
           is_billed: false,
         }),
       ),
-    ).toEqual({ drawing_no: 'DWG', name: '连杆', customer_id: 'CU1', process_id: 'PR1', is_billed: false });
+    ).toEqual({
+      drawing_no: 'DWG',
+      name: '连杆',
+      customer_id: 'CU1',
+      process_id: 'PR1',
+      is_billed: false,
+    });
   });
 
   // 报价列表：statuses 数组照传（序列化成 CSV 单值由 http 层的 ARRAY_AS_CSV_KEYS 负责），
@@ -491,7 +485,9 @@ describe('E 组：item schema 的守门有效性', () => {
       }),
     ).toThrow();
     expect(() =>
-      outsourceSentPartListResultSchema.parse(omit(sentPartEnvelopeFixture, 'outsource_company_id')),
+      outsourceSentPartListResultSchema.parse(
+        omit(sentPartEnvelopeFixture, 'outsource_company_id'),
+      ),
     ).toThrow();
     expect(() =>
       outsourceQuotablePartListResultSchema.parse({
@@ -545,7 +541,9 @@ describe('E 组：item schema 的守门有效性', () => {
     // sent-parts 行：16 字段
     expect(Object.keys(sentPartFixture).length).toBe(16);
     expect(
-      Object.keys(outsourceSentPartListResultSchema.parse(sentPartEnvelopeFixture).items[0]!).sort(),
+      Object.keys(
+        outsourceSentPartListResultSchema.parse(sentPartEnvelopeFixture).items[0]!,
+      ).sort(),
     ).toEqual(Object.keys(sentPartFixture).sort());
 
     // sent-parts 信封：6 字段
