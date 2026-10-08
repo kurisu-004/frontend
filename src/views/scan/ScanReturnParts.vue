@@ -18,6 +18,12 @@
   与 ScanPickParts.vue 范式对齐：
   - 选件 → 选工序 → 选架 → 提交
   - 不需要扫码确认（点选即确认；旧流程「扫一批条码」已替换不保留）
+
+  2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
+  （有链 = 绿，规则见 `@/views/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
+  加急由红底 + 「加急」tag 承担，两者都不进边框。
+  ⚠️ 本页是放回流程，`by-worker` 存量数据里链指针常常是 NULL ⇒ 短期内部分卡片灰边框
+  属于预期，与下面 `chain_state` 分流是同一根因（指针未维护），不是渲染缺陷。
 -->
 
 <template>
@@ -118,6 +124,7 @@
                 'is-selected': sameBatch(selectedPart, p),
                 'is-urgent': p.is_urgent,
               },
+              chainRowClass(p.has_process_chain),
             ]"
             @click="onSelect(p)"
           >
@@ -335,6 +342,7 @@ import ReturnConfirmDialog from '@/views/scan/components/ReturnConfirmDialog.vue
 import BatchPickerDialog from '@/views/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/scan/components/RefillTakenDialog.vue';
+import { chainRowClass } from '@/views/scan/chainAccent';
 import type { TakenItemDto } from '@/api/productionQueue.contract';
 import type { Process } from '@/types/process';
 import type { ShelfForReturn } from '@/types/shelf';
@@ -1043,7 +1051,9 @@ function backToBadge(): void {
   align-items: stretch;
   padding: 14px 18px !important;
   border: 1px solid #e4e7ed;
-  border-left: 4px solid #e6a23c; // 放回流程强调橙黄（与取件蓝区分）
+  /* 左边框底色与另外三边同色；链语义绿由下面的 `.part-row.has-chain` 覆盖，
+     状态类（.is-selected / .is-urgent）不动左边框。 */
+  border-left: 4px solid #e4e7ed;
   border-radius: 8px;
   cursor: pointer;
   position: relative;
@@ -1062,17 +1072,22 @@ function backToBadge(): void {
   background: #e1f3d8;
   border-color: #67c23a;
 }
-/* 加急未选中 → 原红底 */
+/* 加急未选中 → 原红底（左边框不参与加急：它归链语义，加急由红底 + 「加急」tag 表达） */
 .part-row.is-urgent {
   background: #fef0f0;
   border-color: #f56c6c;
-  border-left-color: #f56c6c;
 }
 /* 加急选中 → 保持红底，绿色边框 + inset 阴影表示选中 */
 .part-row.is-urgent.is-selected {
   background: #fef0f0;
   border-color: #67c23a;
   box-shadow: 0 0 0 2px #67c23a inset;
+}
+/* 左边框 = 链语义（有制定工序链且链指针未漂移），EP 语义绿的字面值。
+   必须排在全部状态类之后：与它们同为 0,2,0，靠源码顺序取胜，这样
+   `border-color` 简写染过的四边里左边框仍归链语义。 */
+.part-row.has-chain {
+  border-left-color: #67c23a;
 }
 
 .part-row-main {

@@ -158,6 +158,9 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - **DTO 差异只能在适配层消化，组件零 `api/*` 依赖。** 三个 wire DTO 各自经 `views/production/queue/utils/queueItemToCard.ts`（`poolItemToCard` / `heldToCard` / `pendingBatchToCard`）或 `views/outsource/composables/outsourceItemToCard.ts` 转成本类型；**适配层各域自持，不要为了对称集中到共享目录**。
 - **改尺寸 / body 行数会同时影响全部消费方。** 200×96 是硬预算：body 恒 4 行 × 18px 行高（4×18 + 3×2 gap + 上下各 8 padding + 上下各 1px 边框 = 96px，无余量），长文本一律 ellipsis 不换行。**新信息只能进 tooltip，不得加第 5 行。**
 - `BatchCardModel` 的两类扩展字段性质不同：`version?: number` 是 `t_part_batch` 的一列、**非领域概念**故在顶层（外协收发的 OCC 锚）；`extra?: BatchCardExtra` 是**单域扩展槽**、只进 tooltip（外协公司 / 工序 / 单价 / 发出时间 / 接收可免填性）。新增域信息优先走 `extra`，别往顶层堆领域字段。
+- **左侧 4px 竖条只承载「这条批次有制定工序链且链指针未漂移」这一个语义**（`has_process_chain`，绿；无链落 `var(--el-border-color-lighter)`）。加急只剩 body 的「加急」tag 一个通道（`.is-urgent` 红底是扫码台 `.part-row` 的样式，批次卡片没有），**不进边框**；`.is-selected` 的主色描边照旧盖住竖条（交互反馈优先于语义色）。三个适配层里该字段来源不同：候选池 / 工人持有 / 外协候选透传后端派生列，待下发按 `process_chain_id !== '0'` 推导，外协在途恒 `false`（外协收发阶段不判链）。
+- `has_process_chain` 只回答「有没有链且指针对得上」，**不回答「下一道工序能免填吗」** —— 后者是 `chain_state` / `chain_resolvable` 的事（放回页、外协接收各有消费点），两者不要互相推导。
+- 扫码台（`views/scan/`）三页的 `.part-row` 与 `BatchPickerDialog` 的 `.batch-row` 走同一条规则（`views/scan/chainAccent.ts`，**类绑定** `chainRowClass()` + 各文件 scoped CSS 里的 `.has-chain` 规则）：**流程区分不进边框**（由顶栏标题 + 路由承担），三个页面的 CSS 里不得再出现按流程硬编码的左边框色。**禁止**用模板 inline `:style` 承载这个语义色 —— inline 优先于任何非 `!important` 规则，会盖住 `.is-selected` / `.is-urgent` 的 `border-color` 简写，表现为选中态左边框退成中性色。扫码台的级联口径与 `BatchCard.vue` 相反：`.has-chain` 排在全部状态类**之后**（同档 0,2,0 靠源码顺序取胜），左边框恒归链语义（选中色与链色同为一个绿，肉眼无差，但口径只有一条）。
 - `PendingPoolCard.vue` 是**工序投放卡**（不是批次卡），只是盒模型与 BatchCard 对齐，刻意保持独立、不合并。
 
 ### 拖拽投放（Sortable）

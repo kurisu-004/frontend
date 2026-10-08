@@ -20,6 +20,7 @@
 //   - Q-B3：worker 缺容量三字段任一 → 抛错（漏声明会让进度条恒 0）。
 //   - Q-B4：board 缺 items → 抛错。
 //   - Q-H1：queueHeldBatchSchema 接受完整行；缺 has_cnc_program → 抛错。
+//   - Q-H3：held / 候选池行缺 has_process_chain → 抛错（卡片左边框唯一语义源）。
 //   - Q-H2：held 缺 version → 抛错（召回 / move 的 OCC 锚）。
 //   - Q-I1：queuePoolItemSchema 缺 shelf_id → 抛错（move `from.shelf_id` 唯一来源）。
 //   - Q-PB1：queuePendingBatchSchema 的 planned_delivery_date 是**非 null 字符串**
@@ -62,8 +63,8 @@ import {
   takenItemSchema,
 } from '../productionQueueSchema';
 
-/** QueueHeldBatch 真实形态（17 字段全给齐）。 */
-function makeHeld(): Record<string, unknown> {
+/** QueueHeldBatch 真实形态（18 字段全给齐）。 */
+function makeHeld(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     batch_id: '2100000000001',
     part_id: '1800000000001',
@@ -75,6 +76,7 @@ function makeHeld(): Record<string, unknown> {
     system_delivery_date: '2026-09-30',
     planned_delivery_date: '2026-10-15',
     is_urgent: true,
+    has_process_chain: true,
     has_cnc_program: true,
     customer_name: '法拉电子',
     parent_customer_name: null,
@@ -82,6 +84,7 @@ function makeHeld(): Record<string, unknown> {
     location: 'WORKER',
     note: '加急',
     version: 3,
+    ...over,
   };
 }
 
@@ -99,8 +102,8 @@ function makeWorker(held: Record<string, unknown>[] = [makeHeld()]): Record<stri
   };
 }
 
-/** QueuePoolItem 真实形态（18 字段全给齐）。 */
-function makePoolItem(): Record<string, unknown> {
+/** QueuePoolItem 真实形态（19 字段全给齐）。 */
+function makePoolItem(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     batch_id: '3000000000001',
     part_id: '4000000000001',
@@ -117,9 +120,11 @@ function makePoolItem(): Record<string, unknown> {
     shelf_code: 'A-01',
     shelf_name: '生产架 A',
     is_urgent: false,
+    has_process_chain: true,
     has_cnc_program: true,
     note: null,
     version: 2,
+    ...over,
   };
 }
 
@@ -243,6 +248,28 @@ describe('productionQueueSchema — 持有批次 / 候选池行', () => {
     const { version: _dropped, ...rest } = makeHeld();
     void _dropped;
     expect(() => queueHeldBatchSchema.parse(rest)).toThrow();
+  });
+
+  // 2026-10-09 后端派生列：批次卡片左边框的唯一语义源。漏声明 ⇒ strip ⇒ 卡片恒灰边框，
+  // 而「这批有没有链」正是工人判读卡片的第一诉求（静默错色而不是报错）。
+  it('Q-H3：held / 候选池行缺 has_process_chain → 抛 ZodError（真值两态都收）', () => {
+    expect(queueHeldBatchSchema.parse(makeHeld()).has_process_chain).toBe(true);
+    expect(
+      queueHeldBatchSchema.parse(makeHeld({ has_process_chain: false })).has_process_chain,
+    ).toBe(false);
+    const noHeld: Record<string, unknown> = { ...makeHeld() };
+    delete noHeld.has_process_chain;
+    expect(() => queueHeldBatchSchema.parse(noHeld)).toThrow();
+
+    const noPool: Record<string, unknown> = { ...makePoolItem() };
+    delete noPool.has_process_chain;
+    expect(() => queuePoolItemSchema.parse(noPool)).toThrow();
+    expect(queuePoolItemSchema.parse(makePoolItem({ has_process_chain: false })).has_process_chain)
+      .toBe(false);
+    // 非布尔形态（后端漏 serialize 成 0 / 1 或字符串）必须被拒
+    expect(() =>
+      queuePoolItemSchema.parse({ ...makePoolItem(), has_process_chain: 'true' }),
+    ).toThrow();
   });
 
   it('Q-I1：queuePoolItemSchema 缺 shelf_id → 抛 ZodError（move from.shelf_id 唯一来源）', () => {

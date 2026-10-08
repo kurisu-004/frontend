@@ -18,6 +18,9 @@
   补该字段并在 schema 里声明，详见该 schema 头部的「不声明」清单。
   2026-10-03：行 VO 形态不同时（3 个判据键全不在的窄 VO）meta 行会整行隐藏而不是留一行
   空文案，详见 holderText 的注释（那里按调用方逐一列了 3 种形态）。
+  2026-10-09：批次行的左边框专供「有制定工序链且链指针未漂移」这一个语义（有链 = 绿，
+  规则见 `@/views/scan/chainAccent`）：3 个活体消费方都传 `ScanPartRowSchema`（该键
+  必填），行缺这个键时落中性色。
 -->
 
 <template>
@@ -40,7 +43,7 @@
         v-for="b in sortedRows"
         :key="b.batch_id || b.id"
         shadow="hover"
-        class="batch-row"
+        :class="['batch-row', chainRowClass(b.has_process_chain)]"
         @click="onPick(b)"
       >
         <div class="batch-line">
@@ -74,6 +77,7 @@
 import { computed } from 'vue';
 import { Box } from '@element-plus/icons-vue';
 import type { PartItem } from '@/api/parts';
+import { chainRowClass } from '@/views/scan/chainAccent';
 
 /**
  * 2026-10-04：本组件被 3 个域复用，各域行的 VO 结构完全不同 —— 报工台三页是后端
@@ -103,6 +107,10 @@ export interface BatchPickerRow {
   current_holder_display?: string | null;
   location?: string | null;
   next_process_name?: string | null;
+  /** 2026-10-09 新增：报工台三域的行 VO 带它（后端 `PartListItem` 的派生列），卡片
+   *  左边框按它着色（有链 = 绿）。声明成 optional 是为守住本接口「全字段 optional」
+   *  的既有约定（见上面 `BatchPickerRow` 的注释），不是后端可能不填。 */
+  has_process_chain?: boolean;
 }
 
 const props = defineProps<{
@@ -195,7 +203,10 @@ function onCancel(): void {
   gap: 8px;
   padding: 14px 18px !important;
   border: 1px solid #e4e7ed;
-  border-left: 4px solid #409eff;
+  /* 左边框底色与另外三边同色；链语义绿由下面的 `.batch-row.has-chain` 覆盖
+     （排在 `:hover` 之后：hover 的 `border-color` 与它同为 0,2,0，靠源码顺序取胜，
+     保证 hover 时左边框也不被染蓝）。 */
+  border-left: 4px solid #e4e7ed;
   border-radius: 8px;
   cursor: pointer;
   background: #fff;
@@ -207,6 +218,10 @@ function onCancel(): void {
 .batch-row:hover {
   box-shadow: 0 2px 12px rgba(64, 158, 255, 0.12);
   border-color: #409eff;
+}
+/* 左边框 = 链语义（有制定工序链且链指针未漂移），EP 语义绿的字面值 */
+.batch-row.has-chain {
+  border-left-color: #67c23a;
 }
 .batch-line {
   display: flex;

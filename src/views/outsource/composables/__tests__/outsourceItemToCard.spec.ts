@@ -19,6 +19,8 @@
 //   - IC7：`PENDING` 未上架的候选（shelf_id 空串）原样透传，不被适配层改写成 null
 //     （UI 靠它置灰；改成 null 会让「空串 vs null」两种状态在卡片上不可区分）。
 //   - IC8：version 直填（收发写端点的 OCC 锚）。
+//   - IC9：has_process_chain（卡片左边框）—— 候选卡透传后端派生列；在途卡恒 false
+//     （在途 DTO 无该字段，且外协收发阶段不判链）。
 //
 // 测试策略：纯函数，无 Vue / Query / api 依赖，直接 import 被测模块。
 
@@ -41,6 +43,7 @@ const candidateFixture: OutsourceQueueCandidateDto = {
   batch_no: 1024,
   planned_delivery_date: '2026-10-20',
   is_urgent: false,
+  has_process_chain: true,
   customer_name: '某某零件厂',
   parent_customer_name: '某某集团',
   shelf_code: 'A-01',
@@ -97,6 +100,7 @@ describe('poolCandidateToCard — 左列候选卡 → BatchCardModel', () => {
     expect(card.planned_delivery_date).toBe('2026-10-20');
     expect(card.is_urgent).toBe(false);
     expect(card.has_cnc_program).toBe(true);
+    expect(card.has_process_chain).toBe(true);
     // 客户两级：L1 = parent，L2 = leaf
     expect(card.customer_l1).toBe('某某集团');
     expect(card.customer_l2).toBe('某某零件厂');
@@ -142,6 +146,14 @@ describe('poolCandidateToCard — 左列候选卡 → BatchCardModel', () => {
     expect(card.version).toBe(3);
     expect(card.extra).not.toHaveProperty('version');
   });
+
+  it('IC9：has_process_chain 透传后端派生列（卡片左边框的真 / 假两态）', () => {
+    expect(poolCandidateToCard(candidateFixture, '外协-切割').has_process_chain).toBe(true);
+    expect(
+      poolCandidateToCard({ ...candidateFixture, has_process_chain: false }, '外协-切割')
+        .has_process_chain,
+    ).toBe(false);
+  });
 });
 
 describe('heldBatchToCard — 右列在途卡 → BatchCardModel', () => {
@@ -157,6 +169,8 @@ describe('heldBatchToCard — 右列在途卡 → BatchCardModel', () => {
     expect(card.planned_delivery_date).toBe('2026-10-25');
     expect(card.is_urgent).toBe(true);
     expect(card.has_cnc_program).toBe(false);
+    // 在途卡绿边框恒不亮：在途 DTO 无该字段，且适配层刻意不推导（见 IC9b）
+    expect(card.has_process_chain).toBe(false);
     expect(card.customer_l1).toBeNull();
     expect(card.customer_l2).toBe('某某零件厂');
     expect(card.version).toBe(5);
@@ -175,6 +189,18 @@ describe('heldBatchToCard — 右列在途卡 → BatchCardModel', () => {
       heldBatchToCard({ ...heldBatchFixture, chain_resolvable: false }, '外协厂甲').extra
         ?.can_auto_receive,
     ).toBe(false);
+  });
+
+  // 口径锁：在途卡的 has_process_chain 恒 false，**不因任何入参变化**。若将来后端给
+  // 在途行也加派生列，这里要改成透传并同步删掉 in-flight 卡片「绿边框不亮」的说明。
+  it('IC9b：在途卡恒 false（in-flight DTO 无该字段，且刻意不推导）', () => {
+    for (const dto of [
+      heldBatchFixture,
+      { ...heldBatchFixture, chain_resolvable: false },
+      { ...heldBatchFixture, chain_resolvable: true, receive_next_process_id: '0' },
+    ]) {
+      expect(heldBatchToCard(dto, '外协厂甲').has_process_chain).toBe(false);
+    }
   });
 
   it('IC6：两侧差异 —— 在途卡 location 取枚举值、shelf_id 恒 null', () => {

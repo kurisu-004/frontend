@@ -30,7 +30,12 @@
        容器里而卡片元素被搬走，投放后按原下标放回会落到锚点范围之外，卸载走
        `removeFragment()` 够不到卡片 ⇒ 每次投放残留一个幻影节点。el-tooltip 因此只包
        根内部的触发区 `.card-body`；已知取舍是鼠标停在左上角勾选框那一小块
-       （20×18px）不弹 tooltip。守卫：src/components/__tests__/BatchCardDndFootprint.spec.ts。 -->
+       （20×18px）不弹 tooltip。守卫：src/components/__tests__/BatchCardDndFootprint.spec.ts。
+
+     2026-10-09：左侧 4px 竖条**只**表达「这条批次有制定工序链且链指针未漂移」
+     （语义绿，见 `accentVar`）。加急不进边框 —— 它只剩 body 的「加急」tag 一个通道
+     （`.is-urgent` 红底是扫码台 `.part-row` 的样式，批次卡片没有）；两个语义抢同一条
+     竖条时加急件会盖掉链信息。 -->
 <template>
   <div
     v-bind="$attrs"
@@ -153,17 +158,10 @@ const props = withDefaults(
     selectable?: boolean;
     /** 勾选态（父级持有的已选集合决定，组件自身不存勾选状态）。 */
     selected?: boolean;
-    /** 左侧 4px 竖条颜色（CSS 颜色值，含 '#RRGGBBAA'）。null/undefined = 回落到
-     *  is_urgent 橙色；两者都不满足时回落到中性边框色（不是透明，见 accentVar）。
-     *  全仓暂无调用方传这个 prop，当前生效的只有「is_urgent 回落」这一级；带工序色
-     *  左边框的 PendingPoolCard 是另一个组件、自己用 inline :style 着色，两者不共用
-     *  机制。本 prop 保留作为统一卡片的公开 API。 */
-    accentColor?: string | null;
   }>(),
   {
     selectable: false,
     selected: false,
-    accentColor: null,
   },
 );
 
@@ -171,16 +169,19 @@ const emit = defineEmits<(e: 'toggleSelect') => void>();
 
 defineOptions({ name: 'BatchCard', inheritAttrs: false });
 
-/** 左侧竖条色：显式 accentColor 优先，其次加急橙色（沿用旧卡片的 #e6a23c，
- *  即 --el-color-warning），都不满足则回落到中性边框色。
- *  2026-10-04：这一级原本是 transparent —— 4px 左边框整条不可见，非加急卡片看上去
- *  「缺了一条左边框」（工序池 / 工人列的卡片全是这一档，整列都在发飘）。改用与另外
- *  三边同色的 --el-border-color-lighter：左边框恒定可见，语义色（工序色 / 加急橙）
- *  仍能盖在上面。 */
-const accentVar = computed(
-  () =>
-    props.accentColor ??
-    (props.batch.is_urgent ? 'var(--el-color-warning)' : 'var(--el-border-color-lighter)'),
+/** 有链且指针未漂移时的竖条色（Element Plus 语义绿，与扫码台送检页同色系）。 */
+const CHAIN_BORDER_COLOR = 'var(--el-color-success)';
+
+/** 左侧 4px 竖条**只**承载「这条批次有制定工序链且链指针未漂移」这一个语义（2026-10-09
+ *  起）：有链走语义绿，无链落回与另外三边同色的中性边框色（不是透明 —— 左边框恒定
+ *  可见，密集看板里整列才不发飘）。
+ *  加急不进竖条：加急只剩 body 的「加急」tag 一个通道（批次卡片没有 `.is-urgent`
+ *  红底，那是扫码台 `.part-row` 的样式）；两个语义叠在同一条竖条上时，加急件（常常
+ *  正是有链件）会把链信息盖掉。
+ *  需要按工序色着色的工序投放卡是另一个组件（PendingPoolCard，自己用 inline :style），
+ *  不共用本机制。 */
+const accentVar = computed(() =>
+  props.batch.has_process_chain ? CHAIN_BORDER_COLOR : 'var(--el-border-color-lighter)',
 );
 
 /** tooltip 是否有可展示的详情：body 只放 4 个字段，其余全靠 tooltip，
@@ -226,8 +227,8 @@ function onToggleSelect(): void {
   padding: 8px 10px;
   overflow: hidden;
   /* 200px 含 4px 左边框（border-box），四周圆角裁掉竖条与边框的直角。
-     左边框的底色与另外三边同色：v-bind(accentVar) 只负责把语义色（工序色 / 加急橙）
-     盖上去，即使那层 CSS 变量没绑上（样式不进 DOM 的环境）左边框也不会整条消失。 */
+     左边框的底色与另外三边同色：v-bind(accentVar) 只负责把「有链」语义绿盖上去，
+     即使那层 CSS 变量没绑上（样式不进 DOM 的环境）左边框也不会整条消失。 */
   border: 1px solid var(--el-border-color-lighter);
   border-left: 4px solid var(--el-border-color-lighter);
   border-radius: 8px;

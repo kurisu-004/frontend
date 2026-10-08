@@ -55,8 +55,30 @@ export interface BatchCardModel {
   system_delivery_date: string | null;
   /** t_part.planned_delivery_date，ISO 'YYYY-MM-DD' —— 只进 tooltip（候选池 DTO 不带该字段，恒 null） */
   planned_delivery_date: string | null;
-  /** 加急标记：决定左侧竖条默认色 + body「加急」tag */
+  /** 加急标记：只驱动 body 的「加急」tag（批次卡片**没有**加急红底 —— `.is-urgent`
+   *  是扫码台 `.part-row` 的样式），**不再参与左侧竖条着色** —— 竖条整条让给
+   *  `has_process_chain`。 */
   is_urgent: boolean;
+  /**
+   * 2026-10-09 新增：这条批次**有制定工序链且链指针未漂移**，是左侧 4px 竖条唯一的语义色
+   * 来源（绿；`BatchCard.vue` 的 `accentVar` 两级化后，竖条不再承载加急语义）。
+   *
+   * 判据由后端派生（前端不推导），两条互斥分支：
+   *  1. **已定位**：`t_part_batch.current_process_step_id` 指向的 step 的 `process_id`
+   *     恒等于批次的 `current_process_id`（当前所处的工序 = 链指针指向的工序）；
+   *  2. **未定位**（批次还是 PENDING / PROGRAMMING，指针为 NULL）：链内存在至少 1 条
+   *     未软删的 step 即可按下发。
+   *
+   * ⚠️ **别和「放回时可免填下一道工序」混为一谈**：那是 `chain_state` / `chain_resolvable`
+   * （放回页、外协接收各有一份）回答的问题 —— 绿边框只回答「有没有链且指针对得上」，
+   * 不保证下一道工序能自动带出。存量数据里指针常常是 NULL（后端在逐步让 dispatch /
+   * worker-scan 维护指针），短期内部分卡片是灰边框属于预期。
+   *
+   * 三个适配层各自的取值来源不同（见各适配层注释）：候选池 / 工人持有 / 外协候选直接透传
+   * 后端派生列；待下发批次按 `process_chain_id !== '0'` 推导；外协在途批次恒 `false`
+   * （外协收发阶段不判链）。
+   */
+  has_process_chain: boolean;
   /** 该批次对应 part 是否已上传 CNC 程序（G 代码，后端 EXISTS 派生）—— body「已编程」tag */
   has_cnc_program: boolean;
   /** L1 客户名（一级集团，t_customer L1.name） */

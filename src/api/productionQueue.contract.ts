@@ -118,7 +118,7 @@ export interface QueueWorkerDto {
   held_batches: QueueHeldBatchDto[];
 }
 
-/** `QueueWorkerDto.held_batches[]` 元素（rust QueueHeldBatch）。17 字段。
+/** `QueueWorkerDto.held_batches[]` 元素（rust QueueHeldBatch）。18 字段。
  *  字段集与 QueuePoolItemDto 的差别（都经 `views/production/queue/utils/queueItemToCard.ts`
  *  适配成同一个 BatchCardModel，组件零 DTO 依赖）：
  *   - 多了 `planned_delivery_date`（已下发的批次期望有计划交期）；
@@ -144,6 +144,11 @@ export interface QueueHeldBatchDto {
   /** `t_part.planned_delivery_date`（计划交期，ISO `YYYY-MM-DD`）。 */
   planned_delivery_date: string | null;
   is_urgent: boolean;
+  /** 2026-10-09 后端新增的派生列：这条批次**有制定工序链且链指针未漂移**（已定位时
+   *  `current_process_step_id` 指向的 step 的 process_id == `current_process_id`；
+   *  未定位时链内有 ≥1 条未软删 step）。批次卡片的左侧 4px 竖条只看它。
+   *  语义细节见 `src/types/batchCard.ts::BatchCardModel.has_process_chain`。 */
+  has_process_chain: boolean;
   /** 是否已上传 G 代码（`t_part_file` EXISTS 派生）；UI 据此渲染「已编程」tag。 */
   has_cnc_program: boolean;
   customer_name: string | null;
@@ -158,7 +163,7 @@ export interface QueueHeldBatchDto {
   version: number;
 }
 
-/** `QueueBoardDto.items[]` 元素（rust QueuePoolItem）。18 字段。
+/** `QueueBoardDto.items[]` 元素（rust QueuePoolItem）。19 字段。
  *  候选 = `IN_PROCESS` + `PRODUCTION_SHELF` + 未删除，按批次当前工序维度匹配。
  *
  *  `shelf_id` 保留的理由：`POST /queue/move` 的 `from: {kind:'POOL', shelf_id}`
@@ -185,6 +190,8 @@ export interface QueuePoolItemDto {
   /** `t_shelf.name`。 */
   shelf_name: string;
   is_urgent: boolean;
+  /** 2026-10-09 后端新增的派生列，语义同 `QueueHeldBatchDto.has_process_chain`。 */
+  has_process_chain: boolean;
   has_cnc_program: boolean;
   /** `t_part.note`。 */
   note: string | null;

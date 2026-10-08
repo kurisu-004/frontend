@@ -100,7 +100,7 @@ export interface OutsourceQueueCompanyDto {
 }
 
 /** `OutsourceQueueProcessDetailDto.items[]` 元素（rust OutsourceQueueCandidate）。
- *  25 字段。行粒度 = 「可发送候选批次 × 该外协工序」，发送侧需要的锚都在这里：`version`
+ *  26 字段。行粒度 = 「可发送候选批次 × 该外协工序」，发送侧需要的锚都在这里：`version`
  *  （OCC）、`send_mode`、`outsource_company_id` / `quote_id`（APPROVAL 路径）、
  *  `company_options`（DIRECT 路径的公司下拉源）。
  *
@@ -125,6 +125,10 @@ export interface OutsourceQueueCandidateDto {
   batch_no: number;
   planned_delivery_date: string | null;
   is_urgent: boolean;
+  /** 2026-10-09 后端新增的派生列：这条批次**有制定工序链且链指针未漂移**，批次卡片的
+   *  左侧 4px 竖条只看它（语义见 `src/types/batchCard.ts`）。右列在途行
+   *  （`OutsourceQueueHeldBatchDto`）**没有**对应字段：外协收发阶段不判链。 */
+  has_process_chain: boolean;
   /** `customer_name` = L2 客户名（叶子），`parent_customer_name` = L1 客户名（集团）。 */
   customer_name: string | null;
   parent_customer_name: string | null;

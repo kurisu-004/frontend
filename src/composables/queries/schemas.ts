@@ -965,7 +965,7 @@ export type OutsourceQuotablePartListResultSchema = z.infer<
 // ============================================================
 
 /**
- * 2026-10-04：报工台三页的列表行（后端 `PartListItem`，38 字段全声明）。
+ * 2026-10-04：报工台三页的列表行（后端 `PartListItem`，2026-10-09 起 39 字段全声明）。
  *
  * 它是**分页信封里的 items 元素**（外层见 `scanPartListResultSchema`），不是裸数组：
  * 把信封当数组消费时 `parts.length` 恒 undefined，`useScanPartsSort` 的 `[...list]`
@@ -1009,6 +1009,23 @@ export const scanPartRowSchema = z.object({
   status: z.string(),
   /** ⚠️ 两个 service 写死 false（取行 SQL 不投影该列）；保留字段，将来后端补投影即自动生效 */
   is_urgent: z.boolean(),
+  /**
+   * 2026-10-09 后端新增的派生列，报工台两个端点都填：该批次**有制定工序链且链指针
+   * 未漂移**（已定位 = step 指针的 process_id == 批次当前工序；未定位 = 链内有 ≥1 条
+   * 未软删 step）。三页列表卡的左边框专供这个语义（流程区分改由顶栏标题承担）。
+   *
+   * 必填 + **不给默认值**：后端恒发，缺键就是契约漂移，parse 该抛。这与同组
+   * `chain_state` 四件套的「带默认值降级」取舍相反 —— 那四个键可能被后端单方面新增 /
+   * 漏发，缺了只是 UX 降级；本键直接决定边框着色，缺键时降级成灰色边框与「真无链」
+   * 不可区分，不如在 API 边界炸出来。
+   * ⚠️ **部署顺序：后端必须先上线**。旧后端（漏发该键）+ 新前端 ⇒ 这一个键就足以让
+   * 报工台三页列表 + `HeldPartsBadge` 四个面全空（ZodError ⇒ 整份信封 parse 失败）。
+   * 契约漂移的文案由 `views/scan/composables/scanListErrorMessage.ts` 收口成一句人话，
+   * 细节只进 console。
+   * ⚠️ 存量数据里 `by-worker`（放回 / 送检）的指针常常是 NULL ⇒ 短期内部分卡片灰边框
+   * 属于预期，不是渲染缺陷。
+   */
+  has_process_chain: z.boolean(),
   order_no: z.string().nullable(),
   /** 两个 service 写死 None */
   system_delivery_date: z.string().nullable(),

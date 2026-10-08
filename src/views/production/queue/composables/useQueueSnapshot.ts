@@ -34,6 +34,7 @@ import { ElMessage } from 'element-plus';
 import { fetchQueueSnapshot } from '@/api/productionQueue';
 import { qk } from '@/composables/queries/keys';
 import { queueSnapshotSchema } from './productionQueueSchema';
+import { queueListErrorText } from './queueListErrorMessage';
 
 /** 队列快照 query（`GET /api/v2/prod/queue/snapshot`）。
  *
@@ -56,8 +57,9 @@ export function useQueueSnapshot() {
   });
 
   // 错误桥接：useQuery 的 error 不在 setup 抛错（抛错会让整个页面 setup 失败）。
+  // ZodError 经本域收口成一句人话（细节只进 console），其余异常沿用原始 message。
   watch(query.error, (e) => {
-    if (e) ElMessage.error(e.message ?? '队列快照加载失败');
+    if (e) ElMessage.error(queueListErrorText(e, '队列快照加载失败'));
   });
 
   return query;

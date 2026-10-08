@@ -85,6 +85,7 @@ function makeCard(overrides: Partial<BatchCardModel> = {}): BatchCardModel {
     system_delivery_date: '2026-10-20',
     planned_delivery_date: null,
     is_urgent: false,
+    has_process_chain: false,
     has_cnc_program: false,
     customer_l1: '某某集团',
     customer_l2: null,

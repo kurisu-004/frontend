@@ -206,6 +206,8 @@ const okPartItem: PartBatchResult['created'][number] = {
   location: null,
   next_process_id: null,
   next_process_name: null,
+  // 后端 `PartListItem` 该键恒在；新建 part 走 part 级路径，取值恒 false。
+  has_process_chain: false,
 };
 const okResult: PartBatchResult = { created: [okPartItem], failed: [], cleanup_tmp_keys: [] };
 const partialResult: PartBatchResult = { created: [], failed: [{ index: 0, message: 'invalid' }], cleanup_tmp_keys: [] };

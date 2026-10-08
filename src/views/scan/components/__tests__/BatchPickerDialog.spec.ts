@@ -16,11 +16,16 @@
 //  一旦有人给它加上 holder 判据键，`tsc` 会因多余属性报错，逼着改用例而不是静默继续通过）。
 //
 // 判据是「键在不在」而不是「值是否 null」，理由与脆弱点见 BatchPickerDialog.holderText 注释。
+//
+// 2026-10-09：批次行左边框改为按 `has_process_chain` 着色（原先硬编码蓝），走类绑定
+// `.has-chain`（规则见 `@/views/scan/chainAccent`）。只有报工台三域的行带这个键 ⇒
+// 另外两域不挂类落中性色（用窄 VO fixture 守这条）。
 
 import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
 import BatchPickerDialog from '../BatchPickerDialog.vue';
 import type { PartItem } from '@/api/parts';
+import { CHAIN_ROW_CLASS } from '@/views/scan/chainAccent';
 
 /** 前端 `PartItem` 宽形态（判据键显式全带上）的最小子集。
  *
@@ -53,6 +58,9 @@ function wideRow(over: Partial<PartItem> = {}): PartItem {
     location: 'PRODUCTION_SHELF',
     next_process_id: null,
     next_process_name: null,
+    // 后端 `PartListItem.has_process_chain` 键恒在；报工台两个端点给真值，其余复用本 VO
+    // 的端点恒 false（part 级行拿不到批次链位置）。
+    has_process_chain: false,
     ...over,
   };
   return row;
@@ -221,5 +229,29 @@ describe('BatchPickerDialog / holder 文本与 meta 行', () => {
     ]);
     const tags = w.findAll('.mock-tag').map((t) => t.text());
     expect(tags).toEqual(['批次2', '批次9']);
+  });
+
+  // 2026-10-09：左边框只表达「有链且指针未漂移」，走类绑定（`.batch-row.has-chain`）。
+  // 窄 VO（送货单 / 品检两域的行）没有这个键 ⇒ 不挂类、落中性色而不是崩溃或染绿 ——
+  // 共用组件最容易坏的就是「某域的行少一个键」这条路径。
+  // 断言类名而非色值：vitest 不处理 SFC 的 `<style>`（happy-dom 里 styleSheets 恒空），
+  // 渲染出来的边框色无从断言，类名就是那条规则的唯一载体。
+  it('批次行：有链挂 has-chain，无链 / 无该键都不挂（窄 VO 也照常渲染）', () => {
+    const w0 = render([
+      { ...NARROW_ROW, batch_id: 'B1', batch_no: 1, has_process_chain: true },
+      { ...NARROW_ROW, batch_id: 'B2', batch_no: 2, has_process_chain: false },
+      { ...NARROW_ROW, batch_id: 'B3', batch_no: 3 },
+    ]);
+
+    const rows = w0.findAll('.batch-row');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.classes()).toContain(CHAIN_ROW_CLASS);
+    expect(rows[1]!.classes()).not.toContain(CHAIN_ROW_CLASS);
+    // 键缺失（送货单 / 品检两域的行）= 无链，同样不挂类
+    expect(rows[2]!.classes()).not.toContain(CHAIN_ROW_CLASS);
+    // 三行都不得带 inline 左边框色（inline 会盖住任何非 !important 的状态规则）
+    for (const r of rows) {
+      expect((r.element as HTMLElement).style.borderLeftColor).toBe('');
+    }
   });
 });
