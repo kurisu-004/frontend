@@ -22,6 +22,10 @@
   标题行恒为一行（超限信息不出第二行）。分桶判据由服务端定，标题 + 空态文案已承载。
 
   行内 6 列 —— 序列号 / 名称 / 数量 / 二级客户 / 状态 / 系统交期：
+    - 名称列内对**装配件行**前置一个「装配件」tag（三档都标，见模板注释）：行源已是工单级、
+      装配件替换其子件行出现，不标就分不出「这套要整套交」与「这是散件」。该 tag 吃名称列的
+      宽（el-tag size=small 三字约 44~52px），最窄档（容器 ≤440px、名称列 clamp 下缘
+      ≈54px）会把名称压到 1 个字以内、靠名称 tooltip 兜底 —— 这是已知取舍。
     - 名称与二级客户两列窄屏下 ellipsis 截断，tooltip 常显兜底（不做溢出检测：
       行高会随内容抖动）。系统交期只出日期；临近橙 / 逾期红由 deliveryUrgencyClass
       驱动 —— overdue 桶天然产出 overdue 类，样式表必须有该分支，否则逾期行静默退成灰。
@@ -77,7 +81,22 @@
       >
         <span class="row-serial">{{ item.serial_no ?? '—' }}</span>
         <el-tooltip :content="item.name" placement="top" :show-after="200" :disabled="!item.name">
-          <span class="row-name">{{ item.name }}</span>
+          <span class="row-name">
+            <!-- 2026-10-11 装配件行标记：三档都标。行源已是工单级，装配件替换其子件行
+                 出现，与零件行同列同单位外只有 row_type 不同 —— 不标就分不出「这套货要
+                 整套交」与「这批是散件」。视觉形态照零件一览（partsListColumnDefs 的
+                 type=warning / size=small / effect=plain，文案「装配件」）。 -->
+            <el-tag
+              v-if="isAssemblyRow(item)"
+              type="warning"
+              size="small"
+              effect="plain"
+              class="row-name-tag"
+            >
+              装配件
+            </el-tag>
+            <span class="row-name-text">{{ item.name }}</span>
+          </span>
         </el-tooltip>
         <span v-if="!isPartialVariant" class="row-qty">{{ item.quantity }}</span>
         <el-tooltip
@@ -198,6 +217,11 @@ const totalTooltip = computed(() =>
 function deliveredTooltip(item: SystemDeliveryOrderData): string {
   const unit = item.row_type === 'ASSEMBLY' ? '套' : '件';
   return `已送 ${item.delivered_quantity} ${unit} / 总量 ${item.quantity} ${unit}`;
+}
+
+/** 该行是不是装配件（行源含装配件父行，子件已被 `assembly_id IS NULL` 排除）。 */
+function isAssemblyRow(item: SystemDeliveryOrderData): boolean {
+  return item.row_type === 'ASSEMBLY';
 }
 </script>
 
@@ -341,11 +365,27 @@ function deliveredTooltip(item: SystemDeliveryOrderData): string {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+// 2026-10-11：名称列内变成「装配件 tag + 名称文字」的横向组合，故 .row-name 从
+// 单行 ellipsis 的 span 改成 flex 容器。
+//
+// ellipsis **必须落在内层 .row-name-text 上** —— text-overflow 对 flex 容器不生效
+// （同 .row-qty--partial 登记的坑）。tag 写 flex-shrink: 0：窄列时优先牺牲名称文字
+// （它有 tooltip 兜），tag 本身恒完整可读 —— 标记被压扁就等于没标。
 .row-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
   color: var(--text-primary);
+  > .row-name-tag {
+    flex-shrink: 0;
+  }
+  > .row-name-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 .row-qty {
   color: var(--text-primary);

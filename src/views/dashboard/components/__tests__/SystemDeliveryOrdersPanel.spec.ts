@@ -676,3 +676,79 @@ describe('SystemDeliveryOrdersPanel — header 标题的 ellipsis 规则', () =>
     expect(own).toMatch(/min-width:\s*0/);
   });
 });
+
+describe('SystemDeliveryOrdersPanel — 装配件行标记', () => {
+  const VARIANTS: Variant[] = ['upcoming', 'overdue', 'partial'];
+
+  it('P19：三档都对装配件行渲染「装配件」tag，且排在名称文字之前', () => {
+    // 行源已是工单级、装配件替换子件行出现，三档都有装配件行；不标就分不出「整套交」与「散件」。
+    for (const variant of VARIANTS) {
+      const wrapper = mountPanel(variant, [
+        makeOrder({ row_type: 'ASSEMBLY', delivered_quantity: 2, quantity: 5 }),
+      ]);
+
+      const tag = wrapper.find('.row-name .mock-tag');
+      expect(tag.exists(), `${variant} 档的装配件行应有标记`).toBe(true);
+      expect(tag.text()).toBe('装配件');
+      // tag 在前、名称文字在后：标记被后面的文字挤走就等于没标
+      const nameKids = [...wrapper.find('.row-name').element.children];
+      expect(nameKids[0].className).toContain('mock-tag');
+      expect(nameKids[1].className).toContain('row-name-text');
+      expect(wrapper.find('.row-name .row-name-text').text()).toBe('连杆总成左前');
+      wrapper.unmount();
+    }
+  });
+
+  it('P19b：零件行不渲染该 tag（名称列只有状态 tag 一个 tag）', () => {
+    for (const variant of VARIANTS) {
+      const wrapper = mountPanel(variant, [makeOrder({ row_type: 'PART' })]);
+
+      // 名称列内无 tag；状态列的那个不在 .row-name 里，仍是行内唯一的 .mock-tag。
+      expect(wrapper.find('.row-name .mock-tag').exists()).toBe(false);
+      expect(wrapper.findAll('.mock-tag')).toHaveLength(1);
+      expect(wrapper.find('.mock-tag').text()).toBe('生产中');
+      wrapper.unmount();
+    }
+  });
+
+  it('P19c：装配件 tag 用 warning + small + plain（照零件一览 partsListColumnDefs 的形态）', () => {
+    const wrapper = mountPanel('partial', [makeOrder({ row_type: 'ASSEMBLY' })]);
+
+    // 取行内带 row-name-tag 的那个 ElTagStub，而不是状态列那个（两者同组件名）。
+    const marker = wrapper
+      .findAllComponents({ name: 'ElTagStub' })
+      .find((t) => t.element.className.includes('row-name-tag'));
+    expect(marker, '名称列的标记应是一个 ElTag').toBeTruthy();
+    expect(marker!.props('type')).toBe('warning');
+    expect(marker!.props('size')).toBe('small');
+    expect(marker!.props('effect')).toBe('plain');
+    wrapper.unmount();
+  });
+});
+
+// 样式级守卫：CSS 只能读源码断言（vitest 不处理 SFC 的 <style>）。锁的是
+// 「名称列被 tag 吃掉宽度时，优先牺牲名称文字、tag 恒完整」——标记被压扁等于没标。
+describe('SystemDeliveryOrdersPanel — 名称列 tag 与文字的收缩规则', () => {
+  const nameRule = ruleBody(STYLE_SRC, '.row-name');
+
+  it('P19d：ellipsis 落在内层 .row-name-text 上（flex 容器上 text-overflow 不生效）', () => {
+    expect(nameRule).not.toBe('');
+    const child = />\s*\.row-name-text\s*\{([\s\S]*)$/.exec(nameRule);
+    expect(child, '.row-name 下应有 `> .row-name-text` 子规则承载 ellipsis').toBeTruthy();
+    expect(child![1]).toMatch(/overflow:\s*hidden/);
+    expect(child![1]).toMatch(/text-overflow:\s*ellipsis/);
+    expect(child![1]).toMatch(/white-space:\s*nowrap/);
+    expect(child![1]).toMatch(/min-width:\s*0/);
+  });
+
+  it('P19e：.row-name-tag 写 flex-shrink: 0，.row-name 自身不挂 text-overflow（死规则）', () => {
+    const tagChild = />\s*\.row-name-tag\s*\{([\s\S]*?)\}/.exec(nameRule);
+    expect(tagChild, '.row-name 下应有 `> .row-name-tag` 子规则').toBeTruthy();
+    expect(tagChild![1]).toMatch(/flex-shrink:\s*0/);
+
+    const own = nameRule.replace(/>\s*\.[\w-]+\s*\{[\s\S]*$/, '');
+    expect(own).not.toMatch(/text-overflow/);
+    expect(own).toMatch(/display:\s*flex/);
+    expect(own).toMatch(/min-width:\s*0/);
+  });
+});
