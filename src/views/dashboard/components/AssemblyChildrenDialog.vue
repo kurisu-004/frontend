@@ -9,7 +9,9 @@
       装配件的「部分已交」是套级口径，子件级已交量与之不同源也不同单位）；
     - 三态渲染：error（图标 + 错误文案）/ 空态 el-empty / v-loading 表格。**失败不能
       退化成空态** —— 否则「装配件取不到」会被读成「该装配件没有子件」，与 PartPreviewDialog
-      的 filesError 分支同款处理；
+      的 filesError 分支同款处理。error 与空态两条占位都按 `modelValue` 门控：关闭时父
+      组件会清掉 assemblyId，queryKey 落到空串占位键、children 立刻变空，不门控的话
+      el-dialog 的 leave 动画途中会闪出占位文案，看着像数据被清掉；
     - 系统交期可空（t_part 该列可空）：空值出「—」占位，不留看不出是空还是缺列的空格；
     - 点行 emit('childClick', child) 且**不关闭自己**（两级弹窗叠开，用户要在子件列表上
       连续点多个子件对比 —— 每次先关掉零件预览弹窗，子件列表原样留在下面）。
@@ -48,7 +50,7 @@
     :append-to-body="true"
     @update:model-value="(v) => emit('update:modelValue', v)"
   >
-    <div v-if="errorText" class="dialog-error">
+    <div v-if="showError" class="dialog-error">
       <el-icon color="#f56c6c"><WarningFilled /></el-icon>
       <span>{{ errorText }}</span>
     </div>
@@ -130,10 +132,21 @@ useDashboardInvalidation(qk.assemblyPrefix);
 /** 错误文案（失败态与空态必须分开，见文件头「三态渲染」）。 */
 const errorText = computed<string | null>(() => error.value?.message ?? null);
 
-/** 空态只在「已拿到数据、没报错、确实为空」时出：取数中仍渲染 v-loading 的表格骨架，
- *  否则弹窗一开就闪一下「暂无子件」。 */
+/** 失败态：只在弹窗开着时出。关闭过渡期（el-dialog 的 leave 动画，约 300ms）里父组件
+ * 已把 assemblyId 置 null ⇒ queryKey 落到空串占位键、data 变 undefined，若不按
+ * modelValue 门控，关闭动画途中会闪一下「暂无子件」/ 错误文案 —— 看着像数据丢了。 */
+const showError = computed(() => props.modelValue && errorText.value !== null);
+
+/** 空态只在「弹窗开着 + 已拿到数据 + 没报错 + 确实为空」时出：取数中仍渲染
+ *  v-loading 的表格骨架，否则弹窗一开就闪一下「暂无子件」。关闭过渡期同理不出占位 ——
+ *  那一刻正文退回空表格（EP 的「暂无数据」），但**不出现**「该装配件暂无子件」这句
+ *  对本装配件的断言，避免关闭动画被读成数据被清掉。 */
 const showEmpty = computed(
-  () => !isFetching.value && errorText.value === null && children.value.length === 0,
+  () =>
+    props.modelValue &&
+    !isFetching.value &&
+    errorText.value === null &&
+    children.value.length === 0,
 );
 
 /** 点行 → 抛给父组件开零件预览弹窗。**不关闭自己**：两级叠着，用户要能连续点多个子件。 */

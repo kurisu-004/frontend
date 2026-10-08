@@ -17,6 +17,7 @@
 //   - C8：换 assemblyId → 重新取数并换一份子件（key 带 id，不串缓存）
 //   - C9：装配 qk.assemblyPrefix 的 dashboard WS 失效订阅（staleTime 20min 的新鲜度通道）
 //   - C10：system_delivery_date 为 null → 交期列「—」占位（t_part 该列可空）
+//   - C11：关闭过渡期（modelValue=false + assemblyId 已清）→ 不出空态 / 错误态占位
 //
 // ElTable stub 照抄真实 Element Plus 的做法：按 :data 渲染 .mock-row，行内 provide 出
 // 当前行（MockTableRow），列 stub inject 后按该行喂自己的 scoped slot ⇒ 列断言真的绑定
@@ -245,7 +246,7 @@ describe('AssemblyChildrenDialog — 子件列表渲染', () => {
     wrapper.unmount();
   });
 
-  it('C2：assemblyId=null → enabled 闸门拦掉请求、渲染空态', async () => {
+  it('C2：assemblyId=null（弹窗开着）→ enabled 闸门拦掉请求、渲染空态', async () => {
     getAssemblyMock.mockResolvedValue(makeDetail([makeChild()]));
 
     const wrapper = mount(AssemblyChildrenDialog, makeMountOpts({ assemblyId: null }));
@@ -268,6 +269,25 @@ describe('AssemblyChildrenDialog — 子件列表渲染', () => {
     expect(wrapper.findAll('.mock-row')).toHaveLength(0);
     expect(wrapper.find('.mock-empty').exists()).toBe(true);
     expect(wrapper.find('.mock-column').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('C11：关闭过渡期（modelValue=false + assemblyId 已清）→ 不出空态 / 错误态占位', async () => {
+    // 父组件在关闭时把 assemblyId 置 null（闸门随弹窗开关走），queryKey 落到空串占位键
+    // ⇒ children 立刻变空。若占位文案不按 modelValue 门控，el-dialog 的 leave 动画
+    // 途中会闪一句「该装配件暂无子件」，看着像数据被清掉了。
+    getAssemblyMock.mockResolvedValue(makeDetail([makeChild({ id: 'c1' })]));
+
+    const wrapper = mount(AssemblyChildrenDialog, makeMountOpts());
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await nextTick();
+    expect(wrapper.find('.mock-empty').exists()).toBe(false);
+
+    await wrapper.setProps({ modelValue: false, assemblyId: null });
+    await nextTick();
+
+    expect(wrapper.find('.dialog-empty').exists()).toBe(false);
+    expect(wrapper.find('.dialog-error').exists()).toBe(false);
     wrapper.unmount();
   });
 

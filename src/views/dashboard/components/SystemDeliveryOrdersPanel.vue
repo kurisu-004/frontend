@@ -240,8 +240,10 @@ function deliveredTooltip(item: SystemDeliveryOrderData): string {
 //
 // 换行兜底：即便拆成两行，最窄档（容器 340px 扣 header padding 后可用 312px）仍装不下
 // 「截断提示 + 两个 size=small radio」同排（合计约 320px+）。upcoming 桶无时间上界 ⇒
-// 截断提示是常态而非边缘情况，故必须能换行；提示文字本身走单行 ellipsis（换行会把
-// header 撑高、把下面的行挤少），控件槽不许收缩（radio 按钮 nowrap，压缩即裁字）。
+// 截断提示是常态而非边缘情况，故必须能换行。之所以不会被压扁：`flex-wrap: wrap` 先按
+// hypothetical size 断行、只有断行后才分配负自由空间 ⇒ 放不下就换行，压缩分支根本
+// 不可达（放得下时也不存在负空间可分配）。提示文字另走单行 ellipsis，是为了处理
+// 「断行后仍略超」的窄档，免得换行把 header 撑高、把下面的行挤少。
 .list-header-extra {
   display: flex;
   flex-wrap: wrap;
