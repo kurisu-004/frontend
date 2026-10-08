@@ -16,6 +16,15 @@
 // **数量列与「拆分」操作列不进 defs**：两者的渲染都带行内交互（拆分态展开多个数字
 // 输入、装配件父行的只读套数 + tooltip），走 cellRender 表达不了；同时它们不进列可见性
 // map（用户不能把「数量」关掉）。
+//
+// —— 2026-10-10 表头折行修复：各列 minWidth 的「不折行」预算 ——
+// 表头内容 = 列名 + 拖动手柄(16px) + 排序箭头(24px) + `.cell` 左右 padding(24px)，而 EP 的
+// `.cell` 是 `white-space: normal` + `overflow-wrap: break-word` ⇒ 装不下就折行（用户报的
+// 「申请人 / 预估交期 表头换行」）。按上式逐列核对：序号(28+16+24=68 / 实际 72)、
+// 订单号(42+16+24+24=106 / 120)、分厂(28+16+24+24=92 / 140)、申请人(42+16+24+24=106 → **由
+// 100 加宽到 120**)、编码(92 / 130)、名称(92 / 180)、预估交期(56+16+24+24=120 → **由 110
+// 加宽到 130**)、备注(28+16+24=68 / 140)。拖动手柄当前字号 12px（见
+// components/ColumnDragHandle.vue）；打印表的 nowrap 兜底见 components/PrintGroupTable.vue。
 
 import { h, type VNode } from 'vue';
 import { ElTag } from 'element-plus';
@@ -94,7 +103,10 @@ export function buildDeliveryNotePrintColumnDefs(): ColumnDef[] {
       key: 'applicant_name',
       label: '申请人',
       prop: 'applicant_name',
-      minWidth: 100,
+      // 2026-10-10：100 → 120（表头折行修复）。表头不折行所需 = 列名 42px（3 个汉字）
+      // + 拖动手柄 16px（字号 12px + margin-left 4px，见 components/ColumnDragHandle.vue）
+      // + 排序箭头 24px + .cell 左右 padding 24px = 106px，100 装不下。
+      minWidth: 120,
       sortable: true,
       align: 'center',
       cellRender: ({ row: r }) => h('span', null, row(r).applicant_name || '—'),
@@ -113,7 +125,9 @@ export function buildDeliveryNotePrintColumnDefs(): ColumnDef[] {
       key: 'system_delivery_date',
       label: '预估交期',
       prop: 'system_delivery_date',
-      minWidth: 110,
+      // 2026-10-10：110 → 130（同上）。4 个汉字列名 56px + 手柄 16px + 箭头 24px
+      // + padding 24px = 120px —— 110 装不下，120 起步仍只够 1 个字符的余量。
+      minWidth: 130,
       sortable: true,
       align: 'center',
       // 展示走 `M月D日`（与导出的送货单一致），排序仍读 `prop` 的 ISO 原值 ——

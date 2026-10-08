@@ -74,6 +74,8 @@ function partRow(id: string, batchIds: string[]): PartTreeRow {
     assembly_order_no: null,
     assembly_quantity: null,
     shippable_sets: null,
+    seq: 1,
+    min_seq: null,
   };
 }
 

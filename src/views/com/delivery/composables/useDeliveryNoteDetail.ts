@@ -135,7 +135,9 @@ export function useDeliveryNoteDetail(
     prop: string | null;
     order: 'ascending' | 'descending' | null;
   }): void {
-    // 三态点击（order=null = 清排序）回到「后端返回顺序」。
+    // 三态点击（order=null = 清排序）回到「后端返回顺序」。后端详情 SQL 按 `delivery_seq`
+    // （本单内挂单先后）返回，所以这个语义就是**按加入送货单的先后顺序**。注：「序号」列
+    // 自己也被 EP 排一次（读行上的 `seq`），两层同向、不冲突。
     if (!prop || !order) {
       sortBy.value = null;
       return;

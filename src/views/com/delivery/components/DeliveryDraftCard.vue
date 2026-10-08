@@ -209,6 +209,14 @@ drag.applyDrag(tableEl);
       >
         <!-- 勾选列不进 defs：列顺序拖动会把列拖到别处，勾选列必须恒在序列号之前。 -->
         <el-table-column type="selection" width="42" reserve-selection />
+        <!--
+          2026-10-10：「序号」列（与详情页零件列表同款硬编码列，取行上的 `seq`）。
+          数据是扫码入单后即时返回的详情，本身即入单序，所以这里不需要排序入口：
+          ⚠️ **刻意不加 `sortable`** —— 本表的 el-table 没有 `@sort-change`，且 defs 里
+          没有任何 `sortable: true`（列顺序拖动与列设置不影响排序）⇒ 该列纯展示。
+          用户要按别的维度整货，去详情页的零件列表排。
+        -->
+        <el-table-column prop="seq" label="序号" width="60" align="center" />
         <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
           <el-table-column
             v-if="columnVisibility.isVisible(d.key)"

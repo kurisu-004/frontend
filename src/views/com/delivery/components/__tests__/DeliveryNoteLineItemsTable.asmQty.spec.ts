@@ -109,6 +109,8 @@ function mkRow(p: Partial<PartTreeRow> & { id: string }): PartTreeRow {
     assembly_order_no: null,
     assembly_quantity: null,
     shippable_sets: null,
+    seq: 1,
+    min_seq: null,
     ...p,
   };
 }
@@ -185,8 +187,9 @@ describe('详情页列定义只有一份（组件吃父注入的 defs）', () =>
   it('列集合 = 域根那份 12 列，且不含批次列', () => {
     const w = mountTable([]);
     const labels = w.findAll('.mock-el-table-column').map((e) => e.attributes('data-col'));
-    // 组件内固定列：selection + index（不进 defs）
-    expect(labels.slice(0, 2)).toEqual(['', '#']);
+    // 组件内固定列：selection + 序号（2026-10-10 由 `type="index"` 的「#」列换来的，
+    // 两者都硬编码在 defs 的 v-for 之外，不进列定义）
+    expect(labels.slice(0, 2)).toEqual(['', '序号']);
     expect(labels.slice(2)).toEqual([
       '序列号',
       '图号',
@@ -202,6 +205,28 @@ describe('详情页列定义只有一份（组件吃父注入的 defs）', () =>
       '状态',
     ]);
     expect(labels).not.toContain('批次');
+  });
+});
+
+describe('详情页「序号」列（加入送货单的先后顺序）', () => {
+  /** 「序号」列某行的单元格。 */
+  function seqCell(wrapper: VueWrapper, rowId: string) {
+    return wrapper.find(`[data-col="序号"] [data-row-id="${rowId}"]`);
+  }
+
+  it('顶层行渲染行上的 seq（散件行与装配件父行都显示）', () => {
+    const parent = asmRow(3);
+    const wrapper = mountTable([mkRow({ id: '999', seq: 2 }), { ...parent, seq: 1 }]);
+    expect(seqCell(wrapper, 'ASM_ASM-1').text()).toBe('1');
+    expect(seqCell(wrapper, '999').text()).toBe('2');
+  });
+
+  it('装配件子件行留空（编号由父行代表，不重复显示）', () => {
+    // 桩 el-table 只铺顶层行，所以直接把「子件行」的形状（零件行 + 带 assembly_id）作为
+    // 一行喂进去 —— 断的正是 `seqCell` 对它的判据（组件侧 deliveryNotePartRows 的排名的另一半）。
+    const child = mkRow({ id: 'P:ASM-1:PA', assembly_id: 'ASM-1', seq: 0 });
+    const wrapper = mountTable([child]);
+    expect(seqCell(wrapper, 'P:ASM-1:PA').text()).toBe('');
   });
 });
 

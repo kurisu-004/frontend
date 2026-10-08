@@ -17,9 +17,19 @@
 // - **代表批次取首个**：展示字段（序列号 / 名称 / 图号 / 订单号 / 申请人 / 客户 / 日期 /
 //   状态）沿用草稿卡片折叠的既有口径取首个批次，只有系统交期取首个非空。
 //
+// —— 2026-10-10 新增「序号」：**唯一的例外字段，与「代表批次取首个」口径相反** ——
+// `seq`（显示值）与 `min_seq`（排名依据）都取**组内最小**的 `delivery_seq`，不是首个批次：
+//   · 折成一行的是**同一零件的多个批次**，它们各自的入单时刻不同，「这一行代表这个零件第几
+//     个入单」的自然答案是**最早**那一笔，与当前数组顺序无关；
+//   · 若沿用「代表批次取首个」，序号会随**当前的客户端排序**漂移（按状态排一次、按数量再排
+//     一次，同一行上的序号就变了），而序号必须是「加入送货单的先后顺序」这一稳定事实；
+//   · `min` 是**顺序无关**的聚合，用户怎么排序都不影响它。
+// 排名（稠密名次）与降级口径见 `buildPartTreeRows` 末尾的 `assignSeq`。
+//
 // ⚠️ 折叠带来的两个展示副作用（2026-10-09 明确记录，勿当 bug 修）：
 // - **客户端排序会改变同一折叠行的展示值**。折叠代表批次取**首个**，所以按状态 / 计划交期
-//   / 申请人排序会重排批次序列，进而改掉折叠行上显示的那个值；只有「数量」是例外（见下）。
+//   / 申请人排序会重排批次序列，进而改掉折叠行上显示的那个值；只有「数量」与「序号」是两处
+//   例外（数量 = 求和、序号 = 组内 min，都不随排序变）。
 // - **按数量排序比较的是批次值，展示的是求和值**。折叠行的数量 = 同零件各批次数量之和，
 //   而排序走的是单批次数量 ⇒ 排出来的名次与列上显示的数字不完全对应。
 
@@ -67,6 +77,24 @@ export interface PartTreeRow {
    * 批次时，只要其中一批打过标签，该子件行就算已打印；此时即使它还有另一批没打，父行也会绿。
    */
   label_printed: boolean;
+  // —— 「序号」列（2026-10-10 新增，按加入送货单的先后顺序）——
+  /**
+   * 「序号」列的显示值：**按 `min_seq` 升序去重后的稠密名次** 1..N，同一 `min_seq` 的多行
+   * 共享同一名次（装配件父行与它所属的散件 / 另一组零件都可能是同一个最早入单批次）。
+   *
+   * 写 `min_seq` 的原值是**不行的**：摘掉中间一行后原值会留下空洞（显示成 `1,2,4,5`），
+   * 名次则是恒为 `1..N` 的连续编号。
+   *
+   * 由 `buildPartTreeRows` 末尾统一写入 —— 折叠 / 归组阶段该字段是占位值 0，不是有效值。
+   */
+  seq: number;
+  /**
+   * 排名依据 = **本行代表的全部批次里最小的 `delivery_seq`**（装配件父行取子件的最小值）。
+   *
+   * `null` = 该行全部批次都没有 `delivery_seq`（历史数据未回填 / 后端尚未上线该列）。它**只
+   * 作为排名依据存在**，不直接显示；`seq` 由它在全体行里换算而来。
+   */
+  min_seq: number | null;
   // —— 代表批次（装配件父行取 assembly_*，缺失时回落首个子件）的展示字段 ——
   serial_no: string;
   drawing_no: string;
@@ -102,6 +130,16 @@ function partRowId(assemblyId: string | null, partId: string): string {
   return `P:${assemblyId ?? '-'}:${partId}`;
 }
 
+/**
+ * 两值取小，**null 当「没有值」而不是「最小值」**：已有值为 null 而新批次有值时必须取新值
+ * （混合态 = 部分批次已回填 / 后端刚上线）。
+ */
+function minSeq(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.min(a, b);
+}
+
 /** 同一 (assembly_id, part_id) 的多批次折叠为一条零件行。 */
 function foldPartRows(
   items: readonly DeliveryNoteLineItemData[],
@@ -124,6 +162,8 @@ function foldPartRows(
       if (!cur.system_delivery_date && li.system_delivery_date) {
         cur.system_delivery_date = li.system_delivery_date;
       }
+      // 序号取组内**最小** delivery_seq（不是代表批次那个）—— 顺序无关，用户怎么排序都不漂移。
+      cur.min_seq = minSeq(cur.min_seq, li.delivery_seq ?? null);
       continue;
     }
     folded.set(key, {
@@ -152,6 +192,10 @@ function foldPartRows(
       assembly_order_no: li.assembly_order_no,
       assembly_quantity: li.assembly_quantity ?? null,
       shippable_sets: li.shippable_sets ?? null,
+      min_seq: li.delivery_seq ?? null,
+      // 占位：`seq` 要等全体行折叠 / 归组完成后才能排名（`buildPartTreeRows` 末尾的
+      // `assignSeq` 覆写它）⇒ 行形内部在那一行之前**不得读** `seq`。
+      seq: 0,
       note: li.note ?? '',
     });
     order.push(key);
@@ -200,6 +244,10 @@ function buildAsmParentRow(assemblyId: string, children: PartTreeRow[]): PartTre
     assembly_order_no: first.assembly_order_no,
     assembly_quantity: first.assembly_quantity,
     shippable_sets: first.shippable_sets,
+    // 父行代表整套货 ⇒ 它的最早入单时刻 = 子件里最早的那笔（子件各自已 min 过）。
+    min_seq: children.reduce<number | null>((acc, c) => minSeq(acc, c.min_seq), null),
+    // 同上：占位，由 `assignSeq` 覆写。
+    seq: 0,
     note: '',
   };
 }
@@ -238,7 +286,38 @@ export function buildPartTreeRows(
     inserted.add(assemblyId);
     result.push(buildAsmParentRow(assemblyId, asmGroups.get(assemblyId) ?? []));
   }
+  assignSeq(result);
   return result;
+}
+
+/**
+ * 就地写每行的 `seq`（「序号」列显示值）：把 `min_seq` 升序去重后编成 **1..N 的稠密名次**。
+ *
+ * 为什么用**稠密名次**而不是直接显示原始 `delivery_seq`：`remove-batches` 摘掉中间一行后
+ * `delivery_seq` 会留下空洞，用户看到的是 `1,2,4,5` —— 那个 4 不是「第 4 行」，只是「第 4 个
+ * 入单的批次」。名次恒为 `1..N` 连续编号，与「这是本单第几行」这个用户认知一致。
+ *
+ * 排名依据是 `min_seq` 的**值**而不是行序，所以 `min_seq` 相同的两行（折叠掉的同批批次、
+ * 或装配件父行与某个散件恰好同批入单）共享同一序号；用户按别的列排序也不会改动任何序号。
+ *
+ * `min_seq` 为 null 的行（历史数据 / 后端尚未上线该列）：排在所有有值行之后、按当前行序
+ * 续号；**全表皆 null 时这条规则退化成数组下标 + 1**，即那时的默认显示序（后端返回的顺序）。
+ *
+ * 只对**顶层行**排名（散件行 + 装配件父行）：装配件的子件行嵌在父行的 `children` 里，
+ * 它们在树里不是独立的一行，序号由父行代表。
+ */
+function assignSeq(rows: readonly PartTreeRow[]): void {
+  const values = [...new Set(rows.flatMap((r) => (r.min_seq === null ? [] : [r.min_seq])))].sort(
+    (a, b) => a - b,
+  );
+  const rankByValue = new Map<number, number>();
+  for (const v of values) rankByValue.set(v, rankByValue.size + 1);
+
+  let tail = values.length;
+  for (const row of rows) {
+    const rank = row.min_seq === null ? undefined : rankByValue.get(row.min_seq);
+    row.seq = rank ?? ++tail;
+  }
 }
 
 /**

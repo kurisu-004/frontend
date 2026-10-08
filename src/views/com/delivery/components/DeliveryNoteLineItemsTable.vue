@@ -21,6 +21,9 @@
   2026-10-09：删掉组件内的列定义副本（本文件曾有第二份，与域根那份重复且已漂移）；
     勾选列对装配件父行也放开（INSPECTOR 能打印但不能改单，原来「装配件父行不可勾」会把
     它们挡在打印之外）；勾选列开 `reserve-selection`，打印后绿底重算不丢勾选。
+  2026-10-10：硬编码 `type="index"` 的「#」列换成「序号」列（`prop="seq"`，可排序）——
+    编号口径 = 加入送货单的先后顺序。**这一列刻意不进 `columnDefs`**（钉在首位的唯一办法，
+    理由见模板里那段注释）；defs 仍是那 12 列，不受本次改动影响。
 -->
 <template>
   <el-card v-if="note" shadow="never" class="line-items-card">
@@ -76,13 +79,42 @@
       @selection-change="onSelectionChange"
       @sort-change="onSortChange"
     >
-      <!-- selection / index 始终可见，不放 defs。
+      <!-- selection / 序号 始终可见，不放 defs。
            可见条件 = 可改单 **或** 可打印：INSPECTOR 能打印但不能改单，把勾选列只挂在
            canEdit 下会让他们看不到「打印标签」要用的勾选入口。装配件父行同样可勾 ——
            它代表整套货，标签就是按套出的。`reserve-selection` 让打印后绿底触发的行重算
            不丢勾选（连续打多批时体验）。 -->
       <el-table-column v-if="showSelection" type="selection" width="50" reserve-selection />
-      <el-table-column type="index" label="#" width="50" />
+      <!--
+        2026-10-10：「序号」列（替换原先 `type="index"` 的 `#` 列）—— 按**加入送货单的先后
+        顺序**编号，取值是行上的 `seq`（由 `buildPartTreeRows` 按 `min_seq` 稠密排名写好，
+        见 utils/deliveryNotePartRows.ts 的「序号」一节），可点表头正 / 反排。
+
+        ⚠️ **必须硬编码在 defs 的 v-for 之外、不能进 `columnDefs`**（这是钉在首位的唯一办法）：
+        `useColumnDrag` 的 `restore()` 对**快照里缺失的 key 一律追加到末尾**（lenient 策略，
+        见 composables/useColumnDrag.ts::restore）。若进 defs，localStorage 里已存过那 12 列
+        顺序的老用户首次看到它就会出现在**最右侧**；而它又是「不可拖动」的固定列，老用户根本
+        拖不回来，只能点「重置列顺序」—— 那不是「钉在首位」想要的效果。
+        不进 defs 也顺带与被替换掉的 `#` 列行为一致：**不进列显隐弹窗**（序号不可关）。
+
+        `width="80"` 的来由：列名「序号」28px + 排序箭头 24px + `.cell` 左右 padding 24px
+        = 76px，留 4px 余量（表头 nowrap 兜底；不足时 EP 的 `.cell` 会把箭头折到第二段）。
+
+        两层排序为什么不会打架（两层同向、结果一致）：
+        - composable 的 `sortedLineItems` 读的是 `line_items[i]['seq']` —— **行项上没有这个
+          字段**（它是行形上的字段，不是后端字段）⇒ 比较器恒返回 0 ⇒ `Array.prototype.sort`
+          稳定 ⇒ 保持后端序（后端按 `delivery_seq` 排，即入单序）；
+        - EP 自己的 `sortData` 再按行上的 `seq` 排（`orderBy`，见
+          node_modules/element-plus/es/components/table/src/util.mjs）⇒ 序号真正生效。
+        EP 三态点击第三下时 `sortOrder` 变 null，`orderBy` 里 `reverse` 解析成 1（= 升序），
+        恰好等于默认序，与第一层的「回到后端序」无冲突。
+
+        单元格内容走 `seqCell()`：装配件的**子件行留空** —— 它嵌在父行下、不是独立的一行，
+        编号由父行代表（排名只看顶层行，见 buildPartTreeRows::assignSeq）。
+      -->
+      <el-table-column prop="seq" label="序号" width="80" align="center" sortable>
+        <template #default="{ row }">{{ seqCell(row as PartTreeRow) }}</template>
+      </el-table-column>
       <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
         <el-table-column
           v-if="columnVisibility.isVisible(d.key)"
@@ -207,6 +239,18 @@ function onSortChange(sort: {
 }): void {
   emit('sortChange', sort);
 }
+
+/**
+ * 「序号」列的单元格文本。
+ *
+ * 只有**顶层行**（散件行 + 装配件父行）有编号 —— 装配件子件行嵌在父行的 `children` 里，
+ * 是那个编号所指的那一行的一部分，自己再显示一个号会读成「重复的一行」。故它们留空。
+ * 判据用行结构（子件行 = 零件行且带 assembly_id），不用 `seq` 的值 —— 折叠阶段 `seq` 还是
+ * 占位值，值判据在数据没排完时会说错话。
+ */
+function seqCell(row: PartTreeRow): string {
+  return row.is_part_row && row.assembly_id ? '' : String(row.seq);
+}
 </script>
 
 <style lang="scss" scoped>
@@ -235,7 +279,7 @@ function onSortChange(sort: {
 
 /* ============ 表头 nowrap ============ */
 /* 2026-10-09：本表表头统一不折行。
-   表头内容 = 列名 + 列拖动手柄(18px) + 排序箭头(24px) + .cell 左右 padding(24px)，
+   表头内容 = 列名 + 列拖动手柄(16px) + 排序箭头(24px) + .cell 左右 padding(24px)，
    min-width 不足时 EP 的 `.cell`（`white-space: normal` + `overflow-wrap: break-word`）
    会把排序箭头折成第二段。
    这条规则**刻意只作用于本表**（专属 class + scoped）：写在全局 `src/styles/index.scss`

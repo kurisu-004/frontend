@@ -10,6 +10,8 @@
 //     null 不兜 0（真 0 套照实透传）；
 //   - row-key 全表唯一，且零件行 key 不与批次 id 相撞（reserve-selection 的前提）；
 //   - `label_printed` 的**零件行 any / 装配件父行 all** 口径（两张表共用同一判据）；
+//   - 2026-10-10 新增：「序号」列 —— `min_seq` 取组内最小（不是代表批次那个）、按值稠密排名、
+//     排序不漂移、全 null 时回落数组下标、同值共享名次；
 //   - `partRowsToLabelRows`：单位（件 / 套）、数量口径、`member_ids` 是**整行** batch_ids
 //     （只登记代表批次会让该行其余批次永远不绿）、不写 `PrintRow.is_asm_row`（标签渲染层
 //     7 列全程不读它）。
@@ -282,6 +284,143 @@ describe('buildPartTreeRows：装配件父子结构', () => {
   it('子件行仍是「件」，与父行「套」区分', () => {
     const rows = buildPartTreeRows(asmItems, never);
     expect(rows[0]!.children!.map((c) => c.unit)).toEqual(['件', '件']);
+  });
+});
+
+describe('buildPartTreeRows：「序号」列（加入送货单的先后顺序）', () => {
+  it('折叠行取组内最小 delivery_seq，不取「代表批次（首个）」那个', () => {
+    // 代表批次（输入里排第一）的 delivery_seq 是 5，而同零件的另一批是 2 —— 若沿用
+    // 「取首个」口径，这行的序号会按 5 排，按状态排序一次还会再变。
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '10', part_id: 'P1', delivery_seq: 5 }),
+        li({ id: '11', part_id: 'P1', delivery_seq: 2 }),
+      ],
+      never,
+    );
+    expect(rows[0]!.min_seq).toBe(2);
+    // 唯一的行 ⇒ 无论 min 是 2 还是 5，名次都是 1；再排一行把差别显出来
+    const withTwo = buildPartTreeRows(
+      [
+        li({ id: '10', part_id: 'P1', delivery_seq: 5 }),
+        li({ id: '11', part_id: 'P1', delivery_seq: 2 }),
+        li({ id: '12', part_id: 'P2', delivery_seq: 3 }),
+      ],
+      never,
+    );
+    expect(withTwo.map((r) => [r.id, r.seq])).toEqual([
+      ['P:-:P1', 1],
+      ['P:-:P2', 2],
+    ]);
+  });
+
+  it('已有值为 null 而新批次有值时取新值（部分批次已回填的混合态）', () => {
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '10', part_id: 'P1', delivery_seq: null }),
+        li({ id: '11', part_id: 'P1', delivery_seq: 7 }),
+      ],
+      never,
+    );
+    expect(rows[0]!.min_seq).toBe(7);
+    expect(rows[0]!.seq).toBe(1);
+  });
+
+  it('装配件父行取子件里最小的那个（子件各自已 min 过）', () => {
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '13', part_id: 'PA', assembly_id: 'A1', delivery_seq: 9 }),
+        li({ id: '14', part_id: 'PB', assembly_id: 'A1', delivery_seq: 4 }),
+        // 散件入单更早 ⇒ 父行的名次在它之后
+        li({ id: '99', part_id: 'PLOOSE', delivery_seq: 1 }),
+      ],
+      never,
+    );
+    const parent = rows.find((r) => r.is_asm_row)!;
+    expect(parent.min_seq).toBe(4);
+    expect(parent.seq).toBe(2);
+    expect(rows.find((r) => r.part_id === 'PLOOSE')!.seq).toBe(1);
+  });
+
+  it('按其它列排序后 seq 不漂移（min 是顺序无关的聚合）', () => {
+    const items = [
+      li({ id: '10', part_id: 'P1', delivery_seq: 3, status: 'BLOCKED' }),
+      li({ id: '11', part_id: 'P2', delivery_seq: 1, status: 'READY_TO_SHIP' }),
+      li({ id: '12', part_id: 'P3', delivery_seq: 2, status: 'READY_TO_SHIP' }),
+    ];
+    // 详情页的客户端排序：先按 status 排一次，再按 delivery_seq 倒排一次
+    const byStatus = [...items].sort((a, b) => a.status.localeCompare(b.status));
+    const bySeqDesc = [...items].sort((a, b) => b.delivery_seq! - a.delivery_seq!);
+
+    const seqById = (rows: ReturnType<typeof buildPartTreeRows>) =>
+      Object.fromEntries(rows.map((r) => [r.part_id, r.seq]));
+    const stable = seqById(buildPartTreeRows(items, never));
+    expect(stable).toEqual({ P1: 3, P2: 1, P3: 2 });
+    expect(seqById(buildPartTreeRows(byStatus, never))).toEqual(stable);
+    expect(seqById(buildPartTreeRows(bySeqDesc, never))).toEqual(stable);
+  });
+
+  it('全部 delivery_seq 为 null（后端未上线 / 历史数据）→ 回落数组下标', () => {
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '1', part_id: 'PB' }),
+        li({ id: '2', part_id: 'PA', delivery_seq: null }),
+        li({ id: '3', part_id: 'PC' }),
+      ],
+      never,
+    );
+    expect(rows.map((r) => [r.part_id, r.seq])).toEqual([
+      ['PB', 1],
+      ['PA', 2],
+      ['PC', 3],
+    ]);
+    expect(rows.every((r) => r.min_seq === null)).toBe(true);
+  });
+
+  it('min_seq 相同的不同行共享同一序号（装配件父行与散件同批入单）', () => {
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '13', part_id: 'PA', assembly_id: 'A1', delivery_seq: 2 }),
+        li({ id: '99', part_id: 'PLOOSE', delivery_seq: 2 }),
+        li({ id: '98', part_id: 'PZ', delivery_seq: 6 }),
+      ],
+      never,
+    );
+    expect(rows.map((r) => [r.id, r.seq])).toEqual([
+      ['ASM_A1', 1],
+      ['P:-:PLOOSE', 1],
+      ['P:-:PZ', 2],
+    ]);
+  });
+
+  it('摘掉中间一行后序号连续（稠密名次，不留 1,2,4,5 的空洞）', () => {
+    // 摘单后后端仍是 1,2,4,5 四个 delivery_seq ⇒ 稠密排名给出 1,2,3
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '10', part_id: 'P1', delivery_seq: 1 }),
+        li({ id: '12', part_id: 'P3', delivery_seq: 4 }),
+        li({ id: '13', part_id: 'P4', delivery_seq: 5 }),
+      ],
+      never,
+    );
+    expect(rows.map((r) => r.seq)).toEqual([1, 2, 3]);
+  });
+
+  it('装配件子件行不参与排名（嵌在父行下，序号由父行代表）', () => {
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '13', part_id: 'PA', assembly_id: 'A1', delivery_seq: 2 }),
+        li({ id: '14', part_id: 'PB', assembly_id: 'A1', delivery_seq: 3 }),
+      ],
+      never,
+    );
+    expect(rows[0]!.seq).toBe(1);
+    // 子件行只带 min_seq（排名依据）；seq 是折叠阶段的占位值 0，由表格侧留空渲染
+    // （见 DeliveryNoteLineItemsTable.vue::seqCell）
+    expect(rows[0]!.children!.map((c) => [c.min_seq, c.seq])).toEqual([
+      [2, 0],
+      [3, 0],
+    ]);
   });
 });
 
