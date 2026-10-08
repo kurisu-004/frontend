@@ -41,6 +41,9 @@
 //   - C5：prod 域拆分硬切后的 URL 回归守卫 —— 3 个映射端点的 URL 必须全部落在
 //         `/prod/shelf-processes*` 命名空间内，旧 `/shelves/*/processes` 路径一个
 //         都不许再出现（完整缘由见 C5 用例内注释）。
+//   - C5b：同日「货架 CRUD 迁 iam 域」之后，映射端点**不许跟着搬进 iam** ——
+//         两条迁移动作同日发生，抄 URL 时把 `prod` 写成 `iam` 是最自然的错。
+//         （CRUD 那 4 条的 URL 守卫在 `shelves.spec.ts`，本文件不覆盖。）
 //
 // mock 手法沿 dashboard.spec.ts 同款：整模块桩掉 `@/api/http`（不 importOriginal），
 // 只保留 `api.get` / `api.post` 两个可断言入口 + `cleanParams`（shelves.ts:3 实际
@@ -346,6 +349,30 @@ describe('2026-10-02：货架↔工序映射端点契约（shelves.ts）', () =>
       // 旧路径的两种形态逐字排除：全集 `/shelves/processes` 与单架
       // `/shelves/{id}/processes`。
       expect(url).not.toMatch(/^\/shelves\/(processes|.*\/processes)$/);
+    }
+  });
+
+  it('C5b：映射端点不许跟着 CRUD 一起搬进 iam 命名空间', async () => {
+    // 2026-10-10 新增：同一天后端把货架管理 CRUD（4 条）搬进了
+    // `/api/v2/iam/shelves/*`，而这 3 条**留在 prod 域**（工序映射）。两条迁移动作
+    // 同日发生、前者晚 71 分钟，抄 URL 时把 `prod` 写成 `iam` 是最自然的一种错。
+    // 本用例挡住它：C1/C1b/C3/C4 的逐字断言已覆盖，但它挡不住「只改 3 条断言里的
+    // 一处」这种局部失误 —— 这里从行为侧兜底：三条映射端点的 URL 全部以
+    // `/prod/shelf-processes` 开头，没有一条落在 `/iam` 下。
+    httpGetMock.mockResolvedValue({ data: { items: [] } });
+    httpPostMock.mockResolvedValue({ data: null });
+
+    await getAllShelfProcessMappings();
+    await getShelfProcesses('8800000000001');
+    await setShelfProcesses('8800000000001', { items: [] });
+
+    const urls = [
+      ...httpGetMock.mock.calls.map((c) => c[0] as string),
+      ...httpPostMock.mock.calls.map((c) => c[0] as string),
+    ];
+    expect(urls).toHaveLength(3);
+    for (const url of urls) {
+      expect(url.startsWith('/iam/')).toBe(false);
     }
   });
 });
