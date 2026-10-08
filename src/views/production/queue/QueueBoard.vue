@@ -109,8 +109,8 @@
             </span>
           </template>
           <!-- 自产工序 Tab：ProcessBoardTab 是该 tab body 的唯一 query 持有者
-               （useQueueBoard），:lazy="true" 保证切到该 tab 才发请求。shelfId 由本组件
-               provide 注入给内嵌的 PoolDrawer 消费（WORKER→POOL 撤回目标货架）。 -->
+               （useQueueBoard），:lazy="true" 保证切到该 tab 才发请求。撤回候选池的
+               目标货架由后端自动选，故内嵌的 PoolDrawer 不再需要任何货架入参。 -->
           <ProcessBoardTab :process-id="p.id" />
         </el-tab-pane>
       </el-tabs>

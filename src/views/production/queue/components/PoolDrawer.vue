@@ -3,8 +3,7 @@
 
      @start 把候选池源信息（含批次真实 shelf_id）写到 dndSourceTracker；@add 时调
      moveBatchToPool 撤回批次。徽标与跨域计数靠 move 的失效链与服务器对账（成功走
-     onSuccess、失败走 onError、目标货架缺失的早退走包装内的显式失效，三条路都会失效
-     queue 域）。
+     onSuccess、失败走 onError，两条路都会失效 queue 域）。
 
      Sortable 走二参重载（不传 list），本容器退化为「纯投放信号源」—— 二参形态下内建
      onRemove 的 DOM 放回也随之消失（卡片节点归位靠它、不靠失效），由

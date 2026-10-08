@@ -27,10 +27,10 @@
      仍走 pickUpPart 这条手动领取路径。
 
    2026-10-04 解绑作业架：后端把 pick-up 的 `shelf_id` 改成可选（缺省不做任何校验），
-   该值本就既不落库也不参与任何 WHERE ⇒ 本页不再发它，也不再读 `useScanShelfStore`。
+   该值本就既不落库也不参与任何 WHERE ⇒ 本页提交不带任何货架字段。
    这解掉了「账号绑 ≥ 2 个架 ⇒ 作业架判不出 ⇒ 守卫 100% 拦死、取件一次都提交不出去」
-   的死结：取件对账号绑了几个架不再有任何要求。送检（/scan/inspect）的 `shelf_id` 是
-   真事实（落库 + scope 校验），仍走作业架 + 选架 UI。
+   的死结：取件对账号绑了几个架不再有任何要求。扫码台三页都不再有「作业货架」概念 ——
+   目标货架一律由后端按负载自动选（见 CLAUDE.md「货架自动选择」）。
    - ⚠️ **部署顺序**：后端改成可选的那一支必须先上线；旧后端 + 不发 `shelf_id` = 裸
      HTTP 422（axum Json extractor 拒，不是项目统一信封）。
 
@@ -296,8 +296,8 @@ const { worker, requireWorker, reset: resetScanSession } = useScanSession();
 const { onScan } = useBarcodeScanner();
 const { emitHeldChanged } = useScanBus();
 // 2026-10-04：跨架列表展示用 listPartsByWorkTypeAllShelves（后端按 user.shelf_ids 收口）。
-// 取件提交不再需要任何货架字段（pick-up 的 shelf_id 已改为可选，见文件头），本页因此不
-// 依赖 useScanShelfStore —— 账号绑几个架都提交得出去。
+// 取件提交不再需要任何货架字段（pick-up 的 shelf_id 已改为可选，见文件头）—— 账号绑几个架
+// 都提交得出去。
 
 const parts = ref<ScanPartRowSchema[]>([]);
 // 后端信封里的总条数（可能大于已加载的 parts.length —— 见 refresh 里的 limit 说明）

@@ -305,7 +305,7 @@ export type MoveFromLocationDto =
  *  `to: {kind:'POOL'}` 会被 axum 的 `Json` extractor 在进 handler 前直接拒掉 ⇒
  *  **HTTP 422 纯文本**（不是业务信封，`ApiError` 拿不到 code，操作员只看到一句
  *  「Request failed with status code 422」）。⇒ **后端那个改动合入之前先发前端，
- *  「撤回候选池」对所有角色都不可用**，且没有任何业务错误码可依。排障先看部署顺序。**/
+ *  「撤回候选池」对所有角色都不可用**，且没有任何业务错误码可依。排障先看部署顺序。 */
 export type MoveToLocationDto = { kind: 'POOL' } | { kind: 'WORKER'; worker_id: string };
 
 /** `POST /api/v2/prod/queue/move` 请求（rust MoveRequest）。三个移动方向：

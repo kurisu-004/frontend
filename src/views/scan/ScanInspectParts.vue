@@ -355,7 +355,7 @@ onBeforeMount(async () => {
   await refresh();
 });
 
-// --- 扫码：扫描直接选中 + 滚动居中 + 打开品检货架选择弹窗；不在列表则提示当前位置 ---
+// --- 扫码：扫描直接选中 + 滚动居中 + 直接提交送检；不在列表则提示当前位置 ---
 
 /** 选中后等一拍再滚动；元素不在容器内则静默返回 */
 async function scrollCardIntoView(batchKey: string): Promise<void> {
