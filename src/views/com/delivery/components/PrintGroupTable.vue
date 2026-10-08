@@ -220,6 +220,18 @@ function asmQtyTitle(r: PrintRow): string {
 </script>
 
 <style scoped>
+/* ============ 表头 nowrap ============ */
+/* 2026-10-10：打印预览的表头（用户报的「申请人 / 预估交期 换行」）加 nowrap 兜底。
+   表头内容 = 列名 + 列拖动手柄(16px) + 排序箭头(24px) + .cell 左右 padding(24px)，min-width
+   不足时 EP 的 `.cell`（`white-space: normal` + `overflow-wrap: break-word`）会把排序箭头
+   折成第二段 —— 各列 minWidth 已按上式加宽（见 deliveryNotePrintColumnDefs.ts 文件头），
+   这条是极窄窗口下的最后一道：宁可裁切也不折行。
+   刻意只作用于本表（专属 class + scoped）：写在全局 src/styles/index.scss 会命中全仓每
+   一张接了列拖动的表，而那些表的 .cell 是 overflow: hidden，效果是把「折行」换成「裁切」
+   —— 比折行更糟（表头文案直接看不全）。 */
+.print-group-table :deep(th.col-draggable > .cell) {
+  white-space: nowrap;
+}
 .asm-qty .unit {
   color: var(--el-text-color-secondary);
 }

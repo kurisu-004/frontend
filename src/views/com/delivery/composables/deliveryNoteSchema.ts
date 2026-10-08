@@ -111,6 +111,17 @@ export const deliveryNoteLineItemSchema = z.object({
   assembly_quantity: z.number().nullish(),
   /** 该装配件在本单可出货的套数（note 级聚合值，组内各行同值）。 */
   shippable_sets: z.number().nullish(),
+  /**
+   * 2026-10-10 新增：**本单内的挂单序号**（后端 `t_part_batch.delivery_seq`）。
+   *
+   * 后端口径是**per-note 计数**（挂单时按本单 `MAX + 1` 赋值、摘单时置 NULL），不是批次
+   * 全局序号 ⇒ 同一批次在不同送货单上的值不同；历史数据 / 尚未上线的后端为 `NULL`。
+   *
+   * 用 `.nullish()` 容忍后端尚未上线：**键整个不存在时不能 parse 抛**（那会让整个详情页 /
+   * 草稿看板空白）。消费侧的降级路径见 `utils/deliveryNotePartRows.ts` 的「序号」一节
+   * ——全表皆 null 时序号回落到当前默认显示序。
+   */
+  delivery_seq: z.number().nullish(),
 });
 
 /** `DeliveryNoteLineItem` 的派生类型。 */

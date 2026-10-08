@@ -16,10 +16,12 @@
 // - 图号 / 名称补 `showOverflowTooltip`（长图号按 `overflow-wrap: break-word` 折行，
 //   排版被拉成两段）；EP 只在该列开了 `show-overflow-tooltip` 时才给 `.cell` 加
 //   `el-tooltip` 类，那个类才是 `white-space: nowrap` + ellipsis。
-// - 申请人 / 数量 / 计划交期 / 系统交期四列加宽：表头「列名 + 列拖动手柄(18px) +
+// - 申请人 / 数量 / 计划交期 / 系统交期四列加宽：表头「列名 + 列拖动手柄(16px) +
 //   排序箭头(24px) + .cell 左右 padding(24px)」在原宽度下超过可用宽度，而 EP 的 `.cell`
-//   是 `white-space: normal` ⇒ 排序箭头折行。加宽让文案不挤；`nowrap` 兜底是
-//   `DeliveryNoteLineItemsTable` 自己 scoped 样式里的一条（只作用于本表，见该文件注释）。
+//   是 `white-space: normal` ⇒ 排序箭头折行。手柄占位 16px = 字号 12px + margin-left 4px，
+//   取值见 components/ColumnDragHandle.vue（全局共用组件，改它 = 改每张表的每个可拖列）。
+//   加宽让文案不挤；`nowrap` 兜底是 `DeliveryNoteLineItemsTable` 自己 scoped 样式里的一条
+//   （只作用于本表，见该文件注释）。
 
 import { h, type VNode } from 'vue';
 import { ElTag } from 'element-plus';

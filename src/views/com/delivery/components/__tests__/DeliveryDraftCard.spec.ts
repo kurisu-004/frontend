@@ -65,6 +65,8 @@ const ROWS: PartTreeRow[] = [
     assembly_order_no: null,
     assembly_quantity: null,
     shippable_sets: null,
+    seq: 1,
+    min_seq: null,
   },
 ];
 
@@ -233,8 +235,9 @@ describe('DeliveryDraftCard 勾选接线（打印标签的入参）', () => {
     const w = await mountCard();
     const cols = w.findAll('.mock-col');
     expect(cols[0]!.attributes('data-type')).toBe('selection');
-    // 末位 '' 是行内「移除」操作列（同样不进 defs）
+    // 「序号」与勾选列同理硬编码在 defs 之前（钉在次左），末位 '' 是行内「移除」操作列
     expect(cols.slice(1).map((c) => c.attributes('data-label'))).toEqual([
+      '序号',
       '序列号',
       '图号',
       '名称',

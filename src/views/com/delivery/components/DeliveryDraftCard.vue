@@ -39,7 +39,7 @@ import type { ComponentInstance } from 'vue';
 import { RouterLink } from 'vue-router';
 import { Delete, Printer, Tickets } from '@element-plus/icons-vue';
 import { ElTable, ElTag } from 'element-plus'; // 2026-09-21 T-B4：收紧 emits / ref / 函数参 any → ComponentInstance<typeof ElTable> | null
-import type { PartTreeRow } from '../utils/deliveryNotePartRows';
+import { seqCellText, type PartTreeRow } from '../utils/deliveryNotePartRows';
 import type { DeliveryNoteItemData } from '../composables/deliveryNoteSchema';
 import {
   resolveDraggable,
@@ -209,6 +209,31 @@ drag.applyDrag(tableEl);
       >
         <!-- 勾选列不进 defs：列顺序拖动会把列拖到别处，勾选列必须恒在序列号之前。 -->
         <el-table-column type="selection" width="42" reserve-selection />
+        <!--
+          2026-10-10：「序号」列（与详情页零件列表同款硬编码列，取行上的 `seq`）。数据是
+          扫码入单后即时返回的详情，本身即入单序，所以这里不需要排序入口：
+          ⚠️ **刻意不加 `sortable`** —— 本表的 el-table 没有 `@sort-change`，且 defs 里
+          没有任何 `sortable: true`（列顺序拖动与列设置不影响排序）⇒ 该列纯展示。
+          用户要按别的维度整货，去详情页的零件列表排。
+
+          ⚠️ **`type` 必须是 `index`、不能是 `default`**：EP 的展开箭头与每级 16px 缩进只
+          落在**第一个 `type === 'default'` 的列**上（table-body/render-helper.mjs 的
+          `firstDefaultColumnIndex`，`type` 不传时默认即 `'default'`）。写成普通 `prop="seq"`
+          数据列，它就成了第一个 default 列 ⇒ 箭头 + 缩进被搬进这个 60px 的窄格，序列号列
+          同时失去缩进层级。本表常驻 `default-expand-all`，子件行恒可见 ⇒ 箭头挤在窄格里是
+          每屏都在的观感问题。
+          配套事实（实测）：显式 `width` 压得住 `type="index"` 的强制 48px；给了 `#default`
+          插槽就用自己的内容、不走 EP 注入的 `$index + 1`。守卫见
+          components/__tests__/DeliveryPartTablesTreeColumn.spec.ts。
+          ⚠️ EP 对 index 列强制 `sortable: false`，本表又本就不排序，两件事在这里是一致的。
+
+          单元格内容走 `seqCellText()`（**域内单一出口**，详情页那张表也调它）：装配件的
+          **子件行留空** —— 它嵌在父行下、不是独立的一行，编号由父行代表，渲染占位值 `0`
+          会被读成「第 0 行入单」。本表常驻 `default-expand-all`，子件行是真的铺出来的。
+        -->
+        <el-table-column type="index" prop="seq" label="序号" width="60" align="center">
+          <template #default="{ row }">{{ seqCellText(row as PartTreeRow) }}</template>
+        </el-table-column>
         <template v-for="d in drag.orderedDefs.value" :key="columnIdentifier(d)">
           <el-table-column
             v-if="columnVisibility.isVisible(d.key)"
@@ -233,12 +258,7 @@ drag.applyDrag(tableEl);
         <!-- 操作列（每行一个移除按钮）不进 defs -->
         <el-table-column label="" width="56" align="center">
           <template #default="{ row }">
-            <el-button
-              link
-              size="small"
-              type="danger"
-              @click="emit('remove', row as PartTreeRow)"
-            >
+            <el-button link size="small" type="danger" @click="emit('remove', row as PartTreeRow)">
               移除
             </el-button>
           </template>
