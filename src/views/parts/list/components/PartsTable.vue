@@ -145,11 +145,14 @@
               >编辑</el-button
             >
             <!--
-              2026-09-30 新增：MANAGER 专属「完成」按钮 —— 强推工单+所有非取消批次为 COMPLETED。
-              守卫 canForceComplete 收口：isManager && 非 ASSEMBLY && 非 COMPLETED && 非 CANCELLED。
-              弹窗 useConfirm.dangerous（warning，含工单号/批次提示/不可撤销）；
+              2026-09-30 新增：MANAGER 专属「完成」按钮 —— 强推工单 + 所有非取消批次为 COMPLETED。
+              2026-10-11：装配件行同样可点（走 `POST /prod/assemblies/{id}/force-complete`），
+              装配件展开后的子件行由守卫（__is_child）隐藏，本按钮不用区分行类型。
+              守卫 canForceComplete 收口：isManager && 非子件行 && 非 COMPLETED && 非 CANCELLED。
+              弹窗 useConfirm.dangerous（warning，含工单号/子件数提示/不可撤销）；
               per-row loading 走 forceCompletingMap reactive。
-              后端 POST /api/v2/parts/{part_id}/force-complete（雪花 ID 严格 string，URL 拼接不经 Number()）。
+              零件端点 `POST /api/v2/parts/{part_id}/force-complete`，装配件端点
+              `POST /api/v2/prod/assemblies/{assembly_id}/force-complete`（雪花 ID 严格 string，URL 拼接不经 Number()）。
             -->
             <el-button
               v-if="store.dispatch.canForceComplete(row as PartListItem)"

@@ -3,15 +3,17 @@
 // 2026-09-30 新增：MANAGER 专属「完成」按钮守卫 canForceComplete 单测
 // （vitest node 环境）。
 //
-// 背景：零件一览操作列新增 MANAGER 专属「完成」按钮，点击后调
-// POST /api/v2/parts/{part_id}/force-complete 把工单+所有非取消批次强推为
-// COMPLETED。canForceComplete 收口可见性守卫 = isManager && 非 ASSEMBLY &&
-// 非 COMPLETED && 非 CANCELLED。本 spec 锁 4 条 regression：
+// 背景：零件一览操作列有 MANAGER 专属「完成」按钮，零件打
+// POST /api/v2/parts/{part_id}/force-complete、装配件打
+// POST /api/v2/prod/assemblies/{id}/force-complete，把工单 + 所有非取消批次强推为
+// COMPLETED。canForceComplete 收口可见性守卫 = isManager && 非子件行 &&
+// 非 COMPLETED && 非 CANCELLED。本 spec 锁 5 条 regression：
 //
 //   R1 MANAGER + PART + 非终态       → true
 //   R2 非 MANAGER（CLERK 等）         → false（即便行状态合法）
-//   R3 ASSEMBLY row_type             → false（装配件无独立批次完成语义）
+//   R3 ASSEMBLY row_type             → true（装配件走自己的 force-complete 端点）
 //   R4 COMPLETED / CANCELLED 终态    → false（避免重复强制 + 与 cancelPart 冲突）
+//   R5 __is_child 子件行              → false（装配件整体完成只走父行入口）
 //
 // 依赖处理：
 // - usePartDispatch 内部调 useRouter + useQueryClient，需要在 Vue setup 上下文中
@@ -44,6 +46,12 @@ vi.mock('element-plus', () => ({
 vi.mock('@/api/parts', () => ({
   placeOnShelf: vi.fn(),
   forceCompletePart: vi.fn(),
+}));
+
+// 2026-10-11：装配件行同一条「完成」按钮走 assembly 域端点，必须一并桩掉，
+// 否则 canForceComplete 以外的路径（mutationFn）会发出真实 axios 请求。
+vi.mock('@/api/assembly', () => ({
+  forceCompleteAssembly: vi.fn(),
 }));
 
 vi.mock('@/api/shelves', () => ({
@@ -149,12 +157,12 @@ describe('usePartDispatch.canForceComplete', () => {
     expect(dispatch.canForceComplete(makeRow({ status: 'IN_PROCESS' }))).toBe(false);
   });
 
-  // R3：ASSEMBLY row_type → false
-  it('returns false for ASSEMBLY row_type', () => {
+  // R3：ASSEMBLY row_type → true（装配件有自己的 force-complete 端点）
+  it('returns true for ASSEMBLY row_type', () => {
     loginAsManager();
     const dispatch = app.runWithContext(() => usePartDispatch());
     expect(dispatch.canForceComplete(makeRow({ row_type: 'ASSEMBLY', status: 'IN_PROCESS' }))).toBe(
-      false,
+      true,
     );
   });
 
@@ -164,6 +172,20 @@ describe('usePartDispatch.canForceComplete', () => {
     const dispatch = app.runWithContext(() => usePartDispatch());
     expect(dispatch.canForceComplete(makeRow({ status: 'COMPLETED' }))).toBe(false);
     expect(dispatch.canForceComplete(makeRow({ status: 'CANCELLED' }))).toBe(false);
+  });
+
+  // R5：__is_child 子件行 → false（PartListItem 顶层没有该字段，构造时需 cast；
+  // 子件行的 row_type 被 mapper 强制成 'PART'，只能靠 __is_child 区分）
+  it('returns false for __is_child rows', () => {
+    loginAsManager();
+    const dispatch = app.runWithContext(() => usePartDispatch());
+    const child = makeRow({ status: 'IN_PROCESS' }) as PartListItem & { __is_child: true };
+    child.__is_child = true;
+    expect(dispatch.canForceComplete(child)).toBe(false);
+    // 装配件父行同样可点 —— 两者不构成互斥的权限判断，只是入口去重
+    expect(dispatch.canForceComplete(makeRow({ row_type: 'ASSEMBLY', status: 'IN_PROCESS' }))).toBe(
+      true,
+    );
   });
 
   // 暴露字段契约：forceCompletingMap 是 Record<string, boolean>，初值空对象
