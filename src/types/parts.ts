@@ -172,7 +172,7 @@ export interface PartListItem {
    *
    *  **填充端点只有 `GET /com/union-list` 与 `GET /parts`**；复用同一 VO 的其余 5 个
    *  端点（`GET /parts/pending-programming` / `GET /parts/by-work-type/{id}` /
-   *  `GET /parts/by-worker/{id}` / `GET /parts/pickable-by-work-type/{id}` /
+   *  `GET /prod/scan/held` / `GET /prod/scan/pickable/{id}` /
    *  `POST /assemblies/{id}/children`）恒 null。故本字段必须 optional + 可空。 */
   delivered_quantity?: number | null;
   note: string | null;
@@ -210,8 +210,8 @@ export interface PartListItem {
   /** 2026-07-29 PR-fix-0.2.0 批次化字段：活跃批次 id（雪花 ID 字符串）。
    *  2026-10-03 订正：原注释写的 `/outsource-quotes/quotable-parts` 在 Rust 后端**根本
    *  不存在**。当前真实情况：**报工台两个列表端点都填** ——
-   *  `GET /parts/pickable-by-work-type/{work_type_id}`（扫码台 PICK_UP 列表）与
-   *  `GET /parts/by-worker/{worker_id}`（放回 / 送检 / HeldPartsBadge）；这两个端点的
+   *  `GET /prod/scan/pickable`（扫码台 PICK_UP 列表）与
+   *  `GET /prod/scan/held`（放回 / 送检 / HeldPartsBadge）；这两个端点的
    *  行本来就是批次行，后端取行 SQL 投影 `b.id` / `b.version` 并覆写 `PartListItem` 的
    *  两个字段。`/com/union-list`、`GET /parts` 及其余复用该 VO 的端点**键在但恒为 null**
    *  （无 `skip_serializing_if`，故不是 undefined）—— 后端刻意不填：part 级行的单位是

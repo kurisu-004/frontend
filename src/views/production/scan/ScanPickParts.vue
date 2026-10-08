@@ -5,22 +5,24 @@
 
   流程：
   1. 拉取 worker.work_type_id 映射下、该账号可及的全部货架上的零件列表
-     （listPartsByWorkTypeAllShelves，后端按 user.shelf_ids 收口）
+     （`GET /prod/scan/pickable`，后端按 user.shelf_ids 收口）
   2. 工人点选一个零件 → 进入「等待扫码」状态
   3. 扫码枪输入 serial_no；前端校验必须等于选中零件.serial_no；不等则拒绝
-  4. 通过则弹「数量」对话框；确认后调 POST /prod/batches/{batch_id}/pick-up
+  4. 通过则弹「数量」对话框；确认后调 POST /prod/scan/batches/{batch_id}/pick-up
 
-   2026-10-03 迁 v2 批次锚定端点（pickUpPart 由 v1 遗留的 /parts/pick-up 迁入 prod 域）：
+   2026-10-10 迁 `prod::scan` 域（列表 `GET /prod/scan/pickable` + 领取
+  `POST /prod/scan/batches/{batch_id}/pick-up`），URL 硬切无 alias。
+  2026-10-03 迁 v2 批次锚定端点（pick-up 由 v1 遗留的 /parts/pick-up 迁入 prod 域）：
    - 批次 id 走**路径参数**，body 只剩 `{ version, worker_id, quantity?, note? }`：
      `version` 取列表项 `batch_version`（t_part_batch.version，OCC 锚）、
      `worker_id` 是工人雪花 ID（**不是** badge_code）、`quantity` **必须发字符串**
      （后端只解 JSON string，发 number 直接 422）。
    - 数量对话框不再是死 UI：v2 端点支持部分领取，缺省 quantity 才 = 整批。
    - 本页依赖的两处后端能力均已合入 backend `master`（2026-10-03：部分领取 +
-     拆批、`pickable-by-work-type` 返 `batch_id` / `batch_version`），即流程可跑通。
+     拆批、`/prod/scan/pickable` 返 `batch_id` / `batch_version`），即流程可跑通。
    - 列表行缺 batch_id / batch_version 时走显式报错（`PICK_UP_NO_BATCH_HINT`），
      **不静默用 part_id 顶替**（那会打成后端「批次不存在」，掩盖真实原因）。
-     ⚠️ 这条守卫是**防线**而非常态：正常路径上 `GET /parts/pickable-by-work-type` 恒返
+     ⚠️ 这条守卫是**防线**而非常态：正常路径上 `GET /prod/scan/pickable` 恒返
      这两个字段（后端对 part 级行一律不填，只对这个「行单位就是批次」的端点填），所以
      弹这条提示基本等于「后端没给锚点」，值得当异常上报。
    - 本页 PICK_UP 不直接调 worker-scan（该端点服务 RETURNED / INSPECTED 事件），
@@ -284,10 +286,11 @@ import { scanListErrorText } from '@/views/production/scan/composables/scanListE
 import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
-import { listPartsByWorkTypeAllShelves, pickUpPart, type PartItem } from '@/api/parts';
+import { fetchScanPickable, pickUpBatch } from '@/api/productionScan';
+import { scanPartListResultSchema } from '@/composables/queries/schemas';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
-import BatchPickerDialog from '@/components/BatchPickerDialog.vue';
+import BatchPickerDialog, { type BatchPickerRow } from '@/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
 import { chainRowClass } from '@/views/production/scan/chainAccent';
 
@@ -355,7 +358,9 @@ async function refresh(): Promise<void> {
     // 跨架列表（后端已按 user.shelf_ids 收口；scoped SHELF_ACCOUNT 只看到自己绑定的
     // 架上的件）。2026-10-04：端点返回分页信封，取 `.items`；显式传 limit=200（后端
     // clamp 上限）取全 —— 不传时后端默认只返 50 条，列表会静默截断。
-    const res = await listPartsByWorkTypeAllShelves(worker.value.work_type_id, { limit: 200 });
+    const res = scanPartListResultSchema.parse(
+      await fetchScanPickable({ workTypeId: worker.value.work_type_id, limit: 200 }),
+    );
     parts.value = res.items;
     total.value = res.total;
   } catch (e) {
@@ -494,9 +499,9 @@ async function onScanToSelect(rawCode: string): Promise<void> {
   }
 }
 
-function onBatchPicked(p: PartItem): void {
-  // 2026-10-04：BatchPickerDialog 的 pick emit 载荷是跨 3 域共用的 PartItem 契约
-  // （本组件的 props 才是本域最小结构型 BatchPickerRow），本页实际传进去的行是
+function onBatchPicked(p: BatchPickerRow): void {
+  // 2026-10-04：BatchPickerDialog 的 pick emit 载荷是跨域共用的行契约（该组件的
+  // props 才是本域最小结构型 BatchPickerRow），本页实际传进去的行是
   // scanPartRowSchema ⇒ 入口做一次窄化转换。
   showBatchPicker.value = false;
   void applyScanSelection(p as unknown as ScanPartRowSchema);
@@ -513,7 +518,7 @@ onBeforeUnmount(() => {
 
 /** 2026-10-03：列表行缺批次锚点（batch_id / batch_version）时的统一提示。
  *  2026-10-03 订正文案：原文案尾部写「（列表接口未返回批次）」，而本页唯一数据源
- *  `GET /parts/pickable-by-work-type` 恰恰是**全仓唯一会填这两个字段的端点**（见文件
+ *  `GET /prod/scan/pickable` 恰恰是**全仓唯一会填这两个字段的端点**（见文件
  *  头），那句话对它是假的，且与同文件头「弹这条提示基本等于『后端没给锚点』」自相
  *  矛盾。改为只描述现象、不归因端点。
  *  仍与「零件一览」的 `PLACE_ON_SHELF_NO_BATCH_HINT` 同范式：显式报错让用户知道是
@@ -526,7 +531,7 @@ async function onQtyConfirm(qty: number): Promise<void> {
   if (!selectedPart.value || !worker.value) return;
   const code = selectedPart.value.serial_no || selectedPart.value.drawing_no || '';
   // 2026-10-03 迁 v2 批次锚定：batch_id 升为路径参数、version 为 OCC 锚，两者都取自
-  // 列表项（后端 2026-10-03 起在 pickable-by-work-type 补上）。缺任一即契约/数据缺口，
+  // 列表项（两条 list 端点都填）。缺任一即契约/数据缺口，
   // **不用 part_id 顶替**（顶替会打成后端「批次不存在」，把真因盖掉）。
   const batchId = selectedPart.value.batch_id;
   const batchVersion = selectedPart.value.batch_version;
@@ -537,7 +542,7 @@ async function onQtyConfirm(qty: number): Promise<void> {
   selectedQty.value = qty;
   submitting.value = true;
   try {
-    await pickUpPart(batchId, {
+    await pickUpBatch(batchId, {
       // 普通 number：后端 i32，无自定义 deserializer。
       version: batchVersion,
       // 工人雪花 ID 字符串（后端按 worker 记录归属，不认 badge_code）。

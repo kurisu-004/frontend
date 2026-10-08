@@ -21,8 +21,8 @@
 //      （见 CLAUDE.md「货架自动选择」），前端发这个键等于把口径退回去。
 //
 // 桩的取舍：
-//   - `@/api/parts` 整模块桩掉：本页与 api 层是「直接 await + 手写 ref」范式
-//     （报工台域不用 TanStack Query），不桩就真发请求。
+//   - `@/api/productionScan` 整模块桩掉：本页与 api 层是「直接 await + 手写 ref」范式
+//     （报工台域的 TanStack Query 接入是后续一步），不桩就真发请求。
 //   - `element-plus` 桩成 `{ ElMessage: {...} }`：本页所有提示走 ElMessage。
 //     NEXT 分支的确认框是本页自绘的 `el-dialog`（不走 ElMessageBox：它只有确认/取消
 //     两键，装不下「换一道工序」这个出口），所以确认框的断言直接打在
@@ -46,16 +46,16 @@ import { fileURLToPath } from 'node:url';
 // vi.mock 的工厂会被提升到文件顶部，不能引用后声明的 const ⇒ 所有桩函数集中放进
 // vi.hoisted 暴露的那一个对象里。
 const h = vi.hoisted(() => ({
-  listPartsHeldByWorker: vi.fn(),
-  workerScan: vi.fn(),
+  fetchScanHeld: vi.fn(),
+  scanWorker: vi.fn(),
   replace: vi.fn(),
   scanHandlers: [] as ((code: string) => void)[],
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 
-vi.mock('@/api/parts', () => ({
-  listPartsHeldByWorker: h.listPartsHeldByWorker,
-  workerScan: h.workerScan,
+vi.mock('@/api/productionScan', () => ({
+  fetchScanHeld: h.fetchScanHeld,
+  scanWorker: h.scanWorker,
 }));
 
 vi.mock('element-plus', () => ({ ElMessage: h.ElMessage }));
@@ -82,15 +82,13 @@ import { CHAIN_ROW_CLASS } from '@/views/production/scan/chainAccent';
 import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 
+// 报工台 session 的 worker 是后端 `ScanWorkerBrief`（4 字段），不是账号管理页那个
+// 12 字段的 `WorkerOut`。
 const WORKER = {
   id: '190000000000900',
-  version: 1,
   badge_code: 'W-001',
   name: '张三',
   work_type_id: '190000000000901',
-  is_active: true,
-  created_at: '1970-01-01T00:00:00',
-  updated_at: '1970-01-01T00:00:00',
 };
 
 /** 一行完整合法的 scanPartRowSchema（按 shape 造，值随用例覆盖）。
@@ -101,41 +99,21 @@ function row(over: Partial<ScanPartRowSchema> = {}): ScanPartRowSchema {
     serial_no: 'F2256',
     name: '法兰盘',
     drawing_no: 'DWG-1',
-    applicant_name: '',
     quantity: 2,
-    request_date: null,
-    planned_delivery_date: null,
-    customer_id: '0',
-    assembly_id: null,
-    status: 'IN_PROCESS',
     is_urgent: false,
-    has_process_chain: false,
-    order_no: null,
+    // 2026-10-10 起是真实投影值，不再是 1970-01-01 占位符（行 VO 也砍掉了
+    // request_date 整键与那个占位符归一 transform）
+    planned_delivery_date: '2026-10-20',
     system_delivery_date: null,
-    note: null,
-    unit_price: '0',
-    total_price: '0',
-    version: 0,
-    created_at: '1970-01-01T00:00:00',
-    created_by: null,
-    updated_at: '1970-01-01T00:00:00',
-    updated_by: null,
-    deleted_at: null,
     process_chain_id: null,
+    has_process_chain: false,
     chain_state: 'NONE',
     chain_next_process_id: '0',
     chain_next_process_name: null,
     chain_current_process_name: null,
-    customer_name: null,
-    l1_customer_name: null,
-    location: null,
-    holder_name: null,
-    row_type: 'PART',
-    has_children: false,
-    child_count: null,
-    has_cnc_program: false,
     batch_id: '190000000000111',
     batch_version: 6,
+    location: null,
     ...over,
   };
 }
@@ -201,7 +179,7 @@ function chainConfirmOpen(w: VueWrapper): boolean {
 /** 同上，挂起 workerScan（提交）—— 产出 `submitting === true` 那个窗口。 */
 function deferScan(): () => void {
   let settle: () => void = () => {};
-  h.workerScan.mockReturnValue(
+  h.scanWorker.mockReturnValue(
     new Promise<void>((res) => {
       settle = () => res(undefined);
     }),
@@ -280,7 +258,7 @@ const stubs = {
 };
 
 async function mountPage(items: ScanPartRowSchema[]): Promise<VueWrapper> {
-  h.listPartsHeldByWorker.mockResolvedValue({ items, total: items.length, limit: 200, offset: 0 });
+  h.fetchScanHeld.mockResolvedValue({ items, total: items.length, limit: 200, offset: 0 });
   const w = mount(ScanReturnParts, { global: { stubs } });
   await flushPromises();
   return w;
@@ -318,8 +296,8 @@ async function scan(w: VueWrapper, code: string): Promise<void> {
 }
 
 beforeEach(() => {
-  h.listPartsHeldByWorker.mockReset();
-  h.workerScan.mockReset().mockResolvedValue(scanOut('WORKER_SCAN_RETURNED'));
+  h.fetchScanHeld.mockReset();
+  h.scanWorker.mockReset().mockResolvedValue(scanOut('WORKER_SCAN_RETURNED'));
   h.replace.mockReset();
   h.ElMessage.success.mockReset();
   h.ElMessage.error.mockReset();
@@ -386,7 +364,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(box).toContain('按负载');
     // 确认栏也跟着显示派生的下一工序
     expect(w.find('.confirm-bar').text()).toContain('下一工序：CUT-01 下料');
-    expect(h.workerScan).not.toHaveBeenCalled();
+    expect(h.scanWorker).not.toHaveBeenCalled();
   });
 
   // ⛔ NEXT 分支唯一能到达 ProcessPickerDialog 的路。少了「换一道工序」，工人不同意
@@ -470,14 +448,14 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(w.find('.stub-process-picker').exists()).toBe(true);
     // 链派生的答案要清干净：确认栏回落成「未选」，且提交前不会误带链上的工序
     expect(w.find('.confirm-bar').text()).toContain('下一工序：未选');
-    expect(h.workerScan).not.toHaveBeenCalled();
+    expect(h.scanWorker).not.toHaveBeenCalled();
 
     // 接着手选一道并提交 ⇒ 发出去的是**工人选的那道**，不是链上那道
     const vm = w.vm as unknown as { onProcessPicked: (p: unknown) => void };
     vm.onProcessPicked({ id: '190000000000141', code: 'WELD', name: '焊接' });
     await flushPromises();
 
-    expect(h.workerScan).toHaveBeenCalledWith({
+    expect(h.scanWorker).toHaveBeenCalledWith({
       serial_no: 'F2256',
       badge_code: 'W-001',
       event_type: 'RETURNED',
@@ -501,21 +479,21 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
 
-    expect(h.workerScan).toHaveBeenCalledTimes(1);
-    expect(h.workerScan).toHaveBeenCalledWith({
+    expect(h.scanWorker).toHaveBeenCalledTimes(1);
+    expect(h.scanWorker).toHaveBeenCalledWith({
       serial_no: 'F2256',
       badge_code: 'W-001',
       event_type: 'RETURNED',
       next_process_id: '190000000000131',
       batch_id: '190000000000111',
     });
-    expect(Object.keys(h.workerScan.mock.calls[0]![0] as object)).not.toContain('shelf_id');
-    expect(Object.keys(h.workerScan.mock.calls[0]![0] as object)).not.toContain(
+    expect(Object.keys(h.scanWorker.mock.calls[0]![0] as object)).not.toContain('shelf_id');
+    expect(Object.keys(h.scanWorker.mock.calls[0]![0] as object)).not.toContain(
       'target_inspection_shelf_id',
     );
     expect(h.ElMessage.success).toHaveBeenCalledTimes(1);
     expect(w.find('.confirm-bar').exists()).toBe(false);
-    expect(h.listPartsHeldByWorker.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(h.fetchScanHeld.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('NEXT + 确认框点「取消」：整次放回作废，不提交', async () => {
@@ -530,7 +508,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     await chainConfirmButton(w, '取消').trigger('click');
     await flushPromises();
 
-    expect(h.workerScan).not.toHaveBeenCalled();
+    expect(h.scanWorker).not.toHaveBeenCalled();
     expect(w.find('.confirm-bar').exists()).toBe(false);
     expect(chainConfirmOpen(w)).toBe(false);
   });
@@ -551,7 +529,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(chainConfirmOpen(w)).toBe(false);
     expect(h.ElMessage.warning).toHaveBeenCalledWith('未找到下一道工序，请手动选择工序');
     expect(w.find('.stub-process-picker').exists()).toBe(true);
-    expect(h.workerScan).not.toHaveBeenCalled();
+    expect(h.scanWorker).not.toHaveBeenCalled();
   });
 
   it('TAIL：工序选择弹窗内常驻「加工完成后请送检」提示（点名当前工序）', async () => {
@@ -597,7 +575,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(w.find('.stub-process-picker').exists()).toBe(true);
     expect(processHint(w)).toBe('');
     expect(chainConfirmOpen(w)).toBe(false);
-    expect(h.workerScan).not.toHaveBeenCalled();
+    expect(h.scanWorker).not.toHaveBeenCalled();
     expect(w.find('.confirm-bar').text()).toContain('下一工序：未选');
 
     // ProcessPickerDialog 桩不发 confirm，这里直接调页面的 onProcessPicked 入口。
@@ -605,8 +583,8 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     vm.onProcessPicked({ id: '190000000000141', code: 'WELD', name: '焊接' });
     await flushPromises();
 
-    expect(h.workerScan).toHaveBeenCalledTimes(1);
-    expect(h.workerScan).toHaveBeenCalledWith({
+    expect(h.scanWorker).toHaveBeenCalledTimes(1);
+    expect(h.scanWorker).toHaveBeenCalledWith({
       serial_no: 'F2256',
       badge_code: 'W-001',
       event_type: 'RETURNED',
@@ -623,7 +601,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     vm.onProcessCancel();
     await flushPromises();
 
-    expect(h.workerScan).not.toHaveBeenCalled();
+    expect(h.scanWorker).not.toHaveBeenCalled();
     expect(w.find('.confirm-bar').exists()).toBe(false);
   });
 
@@ -671,7 +649,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
       await clickPartBySerial(w, 'F-302');
 
       expect(w.find('.stub-process-picker').exists()).toBe(true);
-      expect(h.workerScan).not.toHaveBeenCalled();
+      expect(h.scanWorker).not.toHaveBeenCalled();
       expect(chainConfirmOpen(w)).toBe(false);
       // 未知取值不做 NEXT 处理 ⇒ 连确认框都不弹
       expect(consoleWarn).toHaveBeenCalledTimes(1);
@@ -710,7 +688,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     } finally {
       consoleWarn.mockRestore();
     }
-    expect(h.workerScan).not.toHaveBeenCalled();
+    expect(h.scanWorker).not.toHaveBeenCalled();
   });
 
   // 提交在途时确认栏的「取消选择」置灰：放回请求已发出，此时清选中态会让工人看到
@@ -738,7 +716,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     await cancelBtn!.trigger('click');
     await flushPromises();
     expect(w.find('.confirm-bar').exists()).toBe(true);
-    expect(h.workerScan).toHaveBeenCalledTimes(1);
+    expect(h.scanWorker).toHaveBeenCalledTimes(1);
 
     settleScan();
     await flushPromises();
@@ -755,7 +733,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
 // ============================================================================
 describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
   it('E1：响应 WORKER_SCAN_RETURNED → 「已放回：serial → 下一道工序」', async () => {
-    h.workerScan.mockResolvedValue(scanOut('WORKER_SCAN_RETURNED'));
+    h.scanWorker.mockResolvedValue(scanOut('WORKER_SCAN_RETURNED'));
     const w = await mountPage([
       row({
         chain_state: 'NEXT',
@@ -771,7 +749,7 @@ describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
   });
 
   it('E2：响应 WORKER_SCAN_INSPECTED（链尾自动送检）→ 「已完工，已送检」', async () => {
-    h.workerScan.mockResolvedValue(scanOut('WORKER_SCAN_INSPECTED'));
+    h.scanWorker.mockResolvedValue(scanOut('WORKER_SCAN_INSPECTED'));
     const w = await mountPage([
       row({
         chain_state: 'NEXT',
@@ -791,7 +769,7 @@ describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
   // 那时文案进补料弹窗的 lead-text 而不是 ElMessage.success。两种投递方式都要覆盖 ——
   // 只测 ref 不测补料弹窗，会让「补料时文案错」这条路径零覆盖。
   it('E3：自动送检 + 同事务补到料 → 文案进补料弹窗的 lead-text（同样是送检口径）', async () => {
-    h.workerScan.mockResolvedValue({
+    h.scanWorker.mockResolvedValue({
       ...scanOut('WORKER_SCAN_INSPECTED'),
       refill: {
         taken: [

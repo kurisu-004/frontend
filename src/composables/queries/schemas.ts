@@ -238,11 +238,9 @@ export const partSchema = z.object({
    *  src/views/cnc/composables/pendingProgrammingSchema.ts::pendingProgrammingItemSchema：
    *  那边的读点是**按钮可用性判据**，缺键会静默让全表下发按钮恒 disabled，是真症状）。
    *
-   *  扫码台 PICK_UP 的数据源 `listPartsByWorkTypeAllShelves` **不过本 schema**：它的行
-   *  由后端填了批次锚点，走本文件末尾的 `scanPartRowSchema`（那边 `batch_id` /
-   *  `batch_version` 是必填 + 可空）。两条路径的改名义务都登记在
-   *  `src/api/parts/crud.ts` 的 `PartItem.batch_id` / `batch_version` 注释上，
-   *  本条注释只描述本 schema 的取值现状。 */
+   *  报工台的 PICK_UP 数据源（`GET /prod/scan/pickable`）**不过本 schema**：它的行单位
+   *  是批次、由后端填了批次锚点，走本文件的 `scanPartRowSchema`（那边 `batch_id` 必填
+   *  非空、`batch_version` 必填可空）。本条注释只描述本 schema 的取值现状。 */
   batch_version: z.number().nullable().optional(),
   batch_no: z.number().nullable().optional(),
   batch_quantity: z.number().nullable().optional(),
@@ -924,240 +922,147 @@ export type OutsourceQuotablePartListResultSchema = z.infer<
 >;
 
 // ============================================================
-// 2026-10-04 新增：报工台三页（取件 / 放回 / 送检）列表行的 Zod 守门 schema。
+// 报工台三页（取件 / 放回 / 送检）列表行的 Zod 守门 schema。
 //
-// 这两个端点返回的是**分页信封**（`items` / `total` / `limit` / `offset`），
-// **不是裸数组**：后端 handler 签名是 `Result<Json<R<PartListOut>>, AppError>`，
-// `PartListOut` 定义在 backend-rust `src/modules/part/vo/part.rs`。
-// 把信封当数组消费（`parts.value = await listX()` 然后 `parts.length`）会连锁炸三处：
+// 端点是 `GET /api/v2/prod/scan/pickable` 与 `GET /api/v2/prod/scan/held`（后端
+// `prod::scan` 域，wire 契约见 `src/api/productionScan.contract.ts`），返回的是
+// **分页信封**（`items` / `total` / `limit` / `offset`），**不是裸数组**。
+// 把信封当数组消费（`parts.value = await fetchX()` 然后 `parts.length`）会连锁炸三处：
 //   1. `parts.value` 变成对象，`{{ parts.length }}` 渲染成 undefined（计数恒空）；
-//   2. `src/views/production/scan/composables/useScanPartsSort.ts` 里的 `[...list].sort()` 抛
-//      `TypeError: list is not iterable` —— 抛点在 computed 内，模板
+//   2. `src/views/production/scan/composables/useScanPartsSort.ts` 里的 `[...list].sort()`
+//      抛 `TypeError: list is not iterable` —— 抛点在 computed 内，模板
 //      `v-for="p in sortedParts"` 随之渲染失败，**取件 / 放回 / 送检三页同时白屏**；
 //   3. `HeldPartsBadge.vue` 的 `v-for="p in parts"` 迭代对象值，同样坏。
 // 本 schema 存在的理由就是把这个形状钉死：形状不符立即抛 ZodError，而不是静默空屏。
 //
-// 行 VO = `PartListItem`（**不是** `PartDetailOut`）。字段清单逐条镜像
-// backend-rust `src/modules/part/vo/part.rs` 的 `pub struct PartListItem`：
-//   - 全部字段声明为**必填**，可空的一律 `.nullable()`：该 VO 的字段没有挂
-//     `skip_serializing_if`（`#[serde(default)]` 只影响反序列化），键恒在。写成
-//     `.optional()` 会让「后端漏发字段」静默通过（Zod 默认 strip 模式）——
-//     这正是 §M-4 strip 陷阱要求必填显式声明的原因。
+// 行 VO = `ScanListItem`（**不是** `PartItem` / `PartListItem`）：后端为报工台专设的
+// 窄投影，**17 字段**，行单位是批次。相对上一版（复用 `PartListItem` 的 39 字段）砍掉
+// 22 个键（`applicant_name` / `request_date` / `customer_id` / `assembly_id` / `status` /
+// `order_no` / `note` / `unit_price` / `total_price` / `version` / `created_at` /
+// `created_by` / `updated_at` / `updated_by` / `deleted_at` / `customer_name` /
+// `l1_customer_name` / `holder_name` / `row_type` / `has_children` / `child_count` /
+// `has_cnc_program`）—— 那两个端点的取行 SQL 从来不投影它们，取出来的是 service 层
+// 写死的占位值，留在契约里只会诱导消费方去读假值。
+//
+// 声明口径：
+//   - 除链四件套外全部**必填**，可空的一律 `.nullable()`。Zod 默认 strip 会静默丢弃
+//     未声明的键，所以必填字段必须显式声明，否则「后端漏发」会一路静默流到视图层。
+//   - 后端多发那 22 个已砍的键 ⇒ **被 strip 且不抛错**（灰度期新旧后端并存时这是
+//     想要的行为；反向断言见 `src/api/__tests__/productionScan.contract.spec.ts` 的 E8）。
 //   - 雪花 id 一律 `z.string()`（后端 `serialize_i64` / `serialize_i64_opt` → JSON
 //     string），禁止 `z.number()` / `Number()`（会丢精度）。
-//   - `unit_price` / `total_price` 是 `z.string()`：后端 `rust_decimal::Decimal` +
-//     `serde-with-str`，不锁字面量形态。
-//   - **不声明** `next_process_id`（后端列表刻意不给，见 VO 内该字段的注释）、
-//     `customer_path` / `shelf_code` / `next_process_name` / `last_inspection_fail_note` /
-//     `current_holder_*` / `worker_name` / `outsource_company_name` —— VO 里根本没有这些键。
-//   - **不声明** `batch_no` / `batch_label`（2026-10-04 补登记）：后端 `PartListItem`
-//     没有这两个键（2026-10-04 采集的报工台响应样本里同样没有；样本里哪部分是实测转录、
-//     哪部分是按契约手写，见 `src/api/parts/__tests__/scan-list.contract.spec.ts` 的 W 组
-//     说明），所以 `BatchPickerDialog` 模板的 `v-for="b in sortedRows"` 行内
-//     `批次{{ b.batch_no ?? 1 }}` 对报工台三域恒显「批次 1」、`sortedRows` 的批次号升序
-//     对这三域是恒等操作。
-//     ⚠️ 这**不是「后端 VO 一贯如此」**：另两域的行 VO 都有批次号
-//     （`DeliveryNoteCandidatePart.batch_no` / `InspectionQueueItem.batch_no`），
-//     报工台是唯一缺的。**要显示批次号必须后端先给 `PartListItem` 补字段**；补了之后
-//     本 schema 不改，键仍会被 strip 掉、UI 仍不显示 —— 这是「不声明」清单的登记意义。
-//   - `location` 必须显式声明（`z.string().nullable()`）：`BatchPickerDialog.holderText`
-//     的判据是「键在不在」(`'location' in p`)，Zod strip 会把未声明的键删掉 ⇒
-//     报工台卡片静默少掉 holder 那一行。
-//   - `planned_delivery_date` / `request_date` 用字段级 transform 把后端占位符
-//     `'1970-01-01'` 归一成 `null`（见下方两个字段的注释）。
-//   - `chain_state` / `chain_next_process_id` / `chain_next_process_name` /
-//     `chain_current_process_name` 是**工序链派生四件套**，报工台两个端点都填
-//     （见各字段处的注释）；放回页的放回分流只读它们。四件套按「带默认值的必输出键」
-//     声明（缺键降级而非抛错），理由见字段注释。
+//   - `total` / `limit` / `offset` 是裸 i64 ⇒ JSON **number**（与雪花 ID 字段方向相反）。
 //
-// ⚠️ 与同文件 `partSchema` 的分工：`partSchema` 服务 `GET /com/union-list` 等
-// part 级行（后端刻意不填批次锚点）；本 schema 服务报工台两个端点，两者的行单位都是
-// 批次、`batch_id` / `batch_version` 都有值。两者不可互换。
+// ⚠️ 与同文件 `partSchema` 的分工：`partSchema` 服务 `GET /com/union-list` 等 part 级行
+// （后端刻意不填批次锚点）；本 schema 服务报工台两条 list，两者的行单位都是批次、
+// `batch_id` / `batch_version` 都有值。两者不可互换。
 // ============================================================
 
 /**
- * 2026-10-04：报工台三页的列表行（后端 `PartListItem`，2026-10-09 起 39 字段全声明）。
+ * 报工台两条 list 的行（后端 `ScanListItem`，17 字段）。
  *
- * 它是**分页信封里的 items 元素**（外层见 `scanPartListResultSchema`），不是裸数组：
- * 把信封当数组消费时 `parts.length` 恒 undefined，`useScanPartsSort` 的 `[...list]`
- * 抛 `TypeError: list is not iterable`（抛点在 computed 内）⇒ 取件 / 放回 / 送检
- * 三页的 `v-for` 同时渲染失败。
+ * 它是**分页信封里的 items 元素**（外层见 `scanPartListResultSchema`），不是裸数组。
  */
 export const scanPartRowSchema = z.object({
+  /** part id（行单位是批次但本键仍指 part）。批次锚另走 `batch_id`。 */
   id: z.string(),
   serial_no: z.string().nullable(),
   name: z.string(),
   drawing_no: z.string(),
-  /** 报工台两个端点的 service 把该字段写死空串（取行 SQL 不投影申请人） */
-  applicant_name: z.string(),
   quantity: z.number(),
-  /**
-   * 2026-10-04：后端 service 构造行时把 `request_date` 硬编码成 `1970-01-01`
-   * （占位，取行 SQL 不投影该列）。归一成 `null`，避免这个哨兵值被下游当成
-   * 「1970 年下单」的真日期消费。只在**恰好等于** `'1970-01-01'` 时归一，
-   * 其它日期字符串原样透传（后端将来补上真投影就自动恢复）。
-   */
-  request_date: z
-    .string()
-    .transform((v) => (v === '1970-01-01' ? null : v))
-    .nullable(),
-  /**
-   * 2026-10-04：同上，`planned_delivery_date` 恒为占位符 `1970-01-01`。归一成
-   * `null` 的直接收益：报工台三页的 `DeliveryDateChip` 不再显示
-   * 「01/01 · 已逾期 2 万多天」的红色错值（`formatDeliveryDate` / `deliveryUrgencyClass`
-   * 拿到 null 后返空串 / 空 class）。2026-10-04 起 chip 在三页**恒渲染**、无值时日期位
-   * 显示 `-`，空外壳这件事由组件自己保证，不再由调用方加 `v-if`（见
-   * `views/production/scan/components/DeliveryDateChip.vue`）。
-   */
-  planned_delivery_date: z
-    .string()
-    .transform((v) => (v === '1970-01-01' ? null : v))
-    .nullable(),
-  /** ⚠️ 报工台两个 service 写死 0（占位）；声明成 string 是因为 wire 上是雪花 ID 字符串 */
-  customer_id: z.string(),
-  assembly_id: z.string().nullable(),
-  /** ⚠️ 两个 service 写死 `'IN_PROCESS'`；用 `z.string()` 不锁字面量（同 partBatchSchema 约定） */
-  status: z.string(),
-  /** ⚠️ 两个 service 写死 false（取行 SQL 不投影该列）；保留字段，将来后端补投影即自动生效 */
   is_urgent: z.boolean(),
   /**
-   * 2026-10-09 后端新增的派生列，报工台两个端点都填：该批次**有制定工序链且链指针
-   * 未漂移**（已定位 = step 指针的 process_id == 批次当前工序；未定位 = 链内有 ≥1 条
-   * 未软删 step）。三页列表卡的左边框专供这个语义（流程区分改由顶栏标题承担）。
+   * 2026-10-10 起是**真实投影值**（两条端点都投影 `t_part.planned_delivery_date`），
+   * 不再是 `1970-01-01` 占位符 ⇒ 声明成非 null string，且**不再做占位符归一**
+   * （归一逻辑随 `request_date` 整键删除时一并移除：键都不存在了，留着 transform
+   * 只会把真实日期误判成占位、把交期 chip 显示成「01/01」）。
+   *
+   * 前端只把它当 `useScanPartsSort` 的排序键，**不上屏**；上屏走 `system_delivery_date`。
+   */
+  planned_delivery_date: z.string(),
+  /** 系统推算交付日，nullable（未推算时 null）。`DeliveryDateChip` 的唯一数据源。 */
+  system_delivery_date: z.string().nullable(),
+  /** `t_part.process_chain_id`；未制定工序链时 null。**pickable 恒 null**（取件候选按
+   *  工种↔工序映射取，不按链），**held 填真值**。本字段只回答「这个件有没有链」，不回答
+   *  「链上的下一步是谁」—— 后者一律读下面四件套。 */
+  process_chain_id: z.string().nullable(),
+  /**
+   * 2026-10-09 后端新增的派生列：该批次**有制定工序链且链指针未漂移**。报工台三页列表卡
+   * 的左边框专供这个语义（规则见 `views/production/scan/chainAccent.ts`）。
    *
    * 必填 + **不给默认值**：后端恒发，缺键就是契约漂移，parse 该抛。这与同组
    * `chain_state` 四件套的「带默认值降级」取舍相反 —— 那四个键可能被后端单方面新增 /
    * 漏发，缺了只是 UX 降级；本键直接决定边框着色，缺键时降级成灰色边框与「真无链」
-   * 不可区分，不如在 API 边界炸出来。
-   * ⚠️ **部署顺序：后端必须先上线**。旧后端（漏发该键）+ 新前端 ⇒ 这一个键就足以让
-   * 报工台三页列表 + `HeldPartsBadge` 四个面全空（ZodError ⇒ 整份信封 parse 失败）。
-   * 契约漂移的文案由 `views/production/scan/composables/scanListErrorMessage.ts` 收口成一句人话，
-   * 细节只进 console。
-   * ⚠️ 存量数据里 `by-worker`（放回 / 送检）的指针常常是 NULL ⇒ 短期内部分卡片灰边框
-   * 属于预期，不是渲染缺陷。
+   * 不可区分，不如在边界炸出来。
    */
   has_process_chain: z.boolean(),
-  order_no: z.string().nullable(),
-  /** 两个 service 写死 None */
-  system_delivery_date: z.string().nullable(),
-  note: z.string().nullable(),
-  /** Decimal 字符串；报工台两个 service 写死 `"0"` */
-  unit_price: z.string(),
-  /** Decimal 字符串；同上 */
-  total_price: z.string(),
   /**
-   * ⚠️ **part 级** `t_part.version`，不是批次 OCC 版本；报工台两个 service 写死 0
-   * （取行 SQL 不投影 `p.version`）。批次乐观锁只认下面的 `batch_version`。
-   */
-  version: z.number(),
-  /** 两个 service 写死 epoch（`from_timestamp_opt(0, 0)`） */
-  created_at: z.string(),
-  created_by: z.string().nullable(),
-  updated_at: z.string(),
-  updated_by: z.string().nullable(),
-  deleted_at: z.string().nullable(),
-  /**
-   * 2026-10-04：取件端点（`pickable-by-work-type`）的取行 SQL 不投影该列，恒为 null；
-   * 放回端点（`by-worker`）会投影 `t_part.process_chain_id` —— 工序链四件套正是后端沿
-   * 它解析链后派生的，未制定工序时为 null。
-   * 行级的**链位置**语义一律读下面 `chain_state` 四件套，不要直接用本字段判「是不是最后
-   * 一道」：本字段只回答「这个件有没有链」，不回答「链上的下一步是谁」。
-   */
-  process_chain_id: z.string().nullable(),
-  /**
-   * 2026-10-04 工序链派生四件套（后端 service 沿 `t_part_process` 链解析后派生，
-   * **前端不推导链位置**，也不自己判「是不是最后一道」）：
+   * 工序链派生四件套，**pickable 恒为降级值**（`"NONE"` / `"0"` / null / null），
+   * **held 填真值**。放回页据此分流：`NEXT` 免去工序选择、直接单确认放回，`TAIL` 在工序
+   * 选择弹窗内常驻提示「加工完成后请送检」再让工人手选，`NONE` 走手选工序路径。
    *
-   * - `chain_state` 三值：
-   *     `'NONE'` = 无链 / 链已软删 / 当前工序不在链内（指针漂移）；
-   *     `'NEXT'` = 当前工序在链内且**有下一道**；
-   *     `'TAIL'` = 当前工序是链内**最后一道**。
-   *   放回页据此分流：`NEXT` 免去工序选择、直接单确认放回，`TAIL` 在工序选择弹窗内
-   *   常驻提示「加工完成后请送检」再让工人手选，`NONE` 走手选工序路径。
-   * - `chain_next_process_id`：**非可空字符串**（雪花 id 经 serialize_i64 → JSON
-   *   string）。`'0'` 是 `NONE` / `TAIL` 的兜底值、**不是**真 id —— 消费侧见到 `'0'`
-   *   必须短路，不提交 worker-scan（后端按该 id 选架会选不出，报 20508）。
-   * - `chain_next_process_name`：`NEXT` 时为下一道工序名，`NONE` / `TAIL` 恒 null。
-   * - `chain_current_process_name`：当前工序名，解析不出时为 null（`TAIL` 分支用它
-   *   点名「该去送检的是哪一道」，无值时退通用文案）。
-   *
-   * ⚠️ **四件套一律声明成「带默认值的必输出键」，缺键降级而不抛**（本仓既有先例：
-   * 声明成可选 + 消费侧守卫，注释写明「后端补不补都不会渲染出坏值」）。取舍理由是
+   * ⚠️ **四件套一律声明成「带默认值的必输出键」，缺键降级而不抛**。取舍理由是
    * **失败模式的严重性不对称**：
-   *   · 声明成必填（`z.enum` / 非空 `z.string`）时，后端先上线就是
-   *     `scanPartListResultSchema.parse()` 在 API 边界抛错 ⇒ `listPartsHeldByWorker` /
-   *     `listPartsByWorkTypeAllShelves` 全部 reject ⇒ 取件 / 放回 / 送检三页列表空 +
-   *     `HeldPartsBadge` 抽屉空 = **报工台整体停工**；而后端将来新增第四个 chain_state
-   *     取值（哪怕只是加个 `'SKIP'`）是**纯后端单方面改动**就能触发的同类事故。
-   *   · 降级后的失败只是「链提示不弹，工人多点两下选工序」—— NONE 旧路径依然正确，
-   *     仅 UX 降级。HMI 场景必须选后者。
+   *   · 声明成必填（`z.enum` / 非空 `z.string`）时，后端漏发就是
+   *     `scanPartListResultSchema.parse()` 抛错 ⇒ 两条 list 全部 reject ⇒ 取件 / 放回 /
+   *     送检三页列表空 + `HeldPartsBadge` 抽屉空 = **报工台整体停工**；而后端将来新增第四个
+   *     chain_state 取值是**纯后端单方面改动**就能触发的同类事故。
+   *   · 降级后的失败只是「链提示不弹，工人多点两下选工序」—— NONE 旧路径依然正确，仅 UX
+   *     降级。HMI 场景必须选后者。
    *
    * `chain_state` 声明成 `z.string().nullish()`（不是 `z.enum`、也不是 `.default('NONE')`）：
    *   · 不锁枚举 ⇒ 后端加取值只是降级，不会让报工台停工；
    *   · 不用 `.default('NONE')` ⇒ 保留「键缺失 ⇒ undefined」这个信号。若用 default，
-   *     「后端漏发」与「后端真返 NONE」被抹平成同一个值，缺可观测性（下面的一次性
+   *     「后端漏发」与「后端真返 NONE」被抹平成同一个值，缺可观测性（放回页一次性
    *     `console.warn` 就再也发不出来）。消费侧（放回页 `enterReturnFlow`）统一窄化：
    *     `'NEXT'` / `'TAIL'` 走链分支，其余（含 undefined / null / 未知字面量）一律按
    *     `'NONE'` 处理并 `console.warn` 一次。
-   * 另外三个键的默认值对齐后端的兜底口径（`'0'` / null），让消费侧的「不是真 id 就
-   * 短路」判据在漏发时同样成立。
+   * 另外三个键的默认值对齐后端的兜底口径（`'0'` / null），让消费侧的「不是真 id 就短路」
+   * 判据在漏发时同样成立。
    */
   chain_state: z.string().nullish(),
   chain_next_process_id: z.string().default('0'),
   chain_next_process_name: z.string().nullable().default(null),
   chain_current_process_name: z.string().nullable().default(null),
-  customer_name: z.string().nullable(),
-  l1_customer_name: z.string().nullable(),
   /**
-   * 必填 + 可空（不是 `.optional()`）：`PartListItem.location` 没挂
-   * `skip_serializing_if` ⇒ 键恒在。`BatchPickerDialog.holderText` 用
-   * `'location' in p` 判「这个 VO 有没有 holder 信息」，strip 掉该键会让报工台
-   * 卡片静默少一行。值仍恒为 null（这两个 service 不做 batch enrichment）。
-   */
-  location: z.string().nullable(),
-  /** 派生持有人名；这两个 service 不 enrich ⇒ 恒 null */
-  holder_name: z.string().nullable(),
-  /** `From<TPart>` 派生为 `Some("PART")`；显式声明避免被 strip 掉影响行类型判别 */
-  row_type: z.string().nullable(),
-  has_children: z.boolean(),
-  child_count: z.number().nullable(),
-  has_cnc_program: z.boolean(),
-  /**
-   * 批次雪花 id（`serialize_i64_opt` → JSON string）。**报工台两个端点都填**：
-   * `GET /parts/pickable-by-work-type/{work_type_id}` 用它发
-   * `POST /prod/batches/{batch_id}/pick-up` 的路径参数 + OCC 锚；
-   * `GET /parts/by-worker/{worker_id}` 用它做放回 / 送检的批次锚（worker-scan 的
-   * `batch_id` 入参，见 ScanReturnParts.submitReturn）。其余复用本 VO 的端点仍恒 null。
+   * 批次雪花 id（`serialize_i64_opt` → JSON string）。**两条端点都填**：
+   * 取件用它拼 `POST /prod/scan/batches/{batch_id}/pick-up` 的路径参数；
+   * 放回 / 送检用它做 worker-scan 的 `batch_id` 入参。
    *
-   * 声明成**必填 + 可空**（不是 `.optional()`）：该字段无 `skip_serializing_if`
-   * ⇒ 键恒在。写成 `.optional()` 会让「后端某天删掉这两个键」静默通过，取件时
-   * 才在 `ScanPickParts` 的批次锚点守卫上炸出一句与真因不匹配的提示。
+   * 声明成**必填 + 非空**：两条端点都填它，取件 / 放回 / 送检三条路径全靠它定位批次。
+   * 写成可空会让「锚点缺失」与「真值为空」混成同一个 undefined，掩盖数据缺口。
    */
-  batch_id: z.string().nullable(),
+  batch_id: z.string(),
   /**
    * 批次乐观锁版本号（`t_part_batch.version`），作 pick-up 的 `version` 入参。
-   * 报工台两个端点都填；必填理由与改名义务同 `batch_id`。
+   * **唯一**的批次 OCC 锚 —— 行 VO 上原来的 part 级 `version` 已随本次收敛删除，
+   * 且两条取行 SQL 从来不投影 `t_part.version`（恒 0），拿它当批次版本会 OCC 误判。
    */
   batch_version: z.number().nullable(),
+  /**
+   * 位置。**值恒为 null，但键必须在**（不是 `.optional()`）：`BatchPickerDialog.holderText`
+   * 用 `'location' in p` 判「这个 VO 带不带 holder 信息」，键被 strip 掉会让报工台卡片
+   * 静默少掉「未知位置」那一行，且仓内没有测试能提前发现（测试 fixture 自己显式带上了
+   * 该键）。写成 `.optional()` 同样会让上面那条 `in` 判据在漏发时翻面。
+   */
+  location: z.string().nullable(),
 });
 
 export type ScanPartRowSchema = z.infer<typeof scanPartRowSchema>;
 
 /**
- * 2026-10-04：报工台两个列表端点（`GET /parts/pickable-by-work-type/{work_type_id}`、
- * `GET /parts/by-worker/{worker_id}`）的出参 —— **分页信封，不是裸数组**（后端
- * `PartListOut`，`envelopeResponseInterceptor` 之后 `resp.data` 就是这个对象）。
+ * 报工台两条 list 的出参 —— **分页信封，不是裸数组**（`envelopeResponseInterceptor`
+ * 之后 `resp.data` 就是这个对象）。
  *
  * 消费形态：调用方必须取 `.items` 当数组用。把信封当数组用的症状是
  * `parts.length` 恒 undefined（计数恒空）+ `useScanPartsSort` 的 `[...list]` 抛
  * `TypeError: list is not iterable` ⇒ 报工台三页（取件 / 放回 / 送检）渲染全崩。
  *
- * ⚠️ `total` / `limit` / `offset` 是裸 i64 ⇒ JSON **number**（后端 2026-09-27
- * part 域对齐时改的，与 `repairBatchListResultSchema` 的 string 计数方向相反）。
+ * ⚠️ `total` / `limit` / `offset` 是裸 i64 ⇒ JSON **number**（字符串形态会被守门拒收）。
  *
- * 后端两个 service 都是 `limit.unwrap_or(50).clamp(1, 200)`：不传 limit 时**默认只返
- * 50 条**，而调用方若把它当「全部」就会静默截断。报工台三页 + HeldPartsBadge 统一
- * 显式传 `limit: 200`（clamp 上限）取全。
+ * 两个端点都是 `limit.unwrap_or(50).clamp(1, 200)`：不传 limit 时**默认只返 50 条**，
+ * 而调用方若把它当「全部」就会静默截断。报工台三页 + HeldPartsBadge 统一显式传
+ * `limit: 200`（clamp 上限）取全。
  */
 export const scanPartListResultSchema = z.object({
   items: z.array(scanPartRowSchema),

@@ -75,7 +75,7 @@
 
       <div v-else class="held-list" :style="{ maxHeight: maxListHeight }">
         <!-- 2026-10-04：key 用 `p.batch_id || p.id`（与报工台三页列表同口径）。
-             后端把 by-worker 端点的 `batch_id` 填上后，同一 part 的多个批次会在
+             后端把 held 端点的 `batch_id` 填上后，同一 part 的多个批次会在
              抽屉里撞 part id ⇒ Vue duplicate-key（整列表只渲染一行且控制台告警）。
              批次锚点缺失（老数据 / 后端回退）时退回 part id。 -->
         <div
@@ -111,8 +111,8 @@
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Box, Loading, Refresh, User, WarningFilled } from '@element-plus/icons-vue';
-import { listPartsHeldByWorker } from '@/api/parts';
-import type { ScanPartRowSchema } from '@/composables/queries/schemas';
+import { fetchScanHeld } from '@/api/productionScan';
+import { scanPartListResultSchema, type ScanPartRowSchema } from '@/composables/queries/schemas';
 import { useScanBus } from '@/views/production/scan/composables/useScanBus';
 import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
 
@@ -148,7 +148,9 @@ async function fetchHeld(): Promise<void> {
   try {
     // 2026-10-04：端点返回分页信封，取 `.items`；显式传 limit=200（后端 clamp
     // 上限）取全 —— 不传时后端默认只返 50 条，徽章计数会静默少报。
-    const res = await listPartsHeldByWorker(props.workerId, { limit: 200 });
+    const res = scanPartListResultSchema.parse(
+      await fetchScanHeld({ workerId: props.workerId, limit: 200 }),
+    );
     parts.value = res.items;
     total.value = res.total;
   } catch (e) {

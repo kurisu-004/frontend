@@ -9,14 +9,21 @@
 // 「送货」是送货单列表页的按钮操作，不经扫码台；那组枚举自 2026-09-15 起就是不可达
 // 死码（ScanActionPicker 从不 setAction('DELIVER')），送货台下线后彻底孤立。
 //
+// 2026-10-10：`worker` 的类型从 `Worker`（`@/types/worker`，账号管理页那个 12 字段
+// `WorkerOut` 镜像）换成 **`ScanWorkerBriefDto`**（4 字段）。理由是 `POST /prod/scan/
+// verify-badge` 返回的是后端 `prod::scan` 域自己的 `ScanWorkerBrief`，与 `WorkerOut`
+// 是两个 VO —— 扫码链路一个字段都不用（要的是 id / badge_code / name / work_type_id），
+// 沿用宽 VO 只会让消费侧以为还有 version / is_active 可读。`WorkerOut` 后端未删，
+// 「工人一览」页继续用它。
+//
 // 设计要点：
 // - 模块级单例，跨组件共享（与 useBarcodeScanner 一致；useWorkerCache 已删，
-//   扫码定位工牌改为 api/worker.findWorkerByBadge 直打后端）。
+//   扫码定位工牌改为 api/productionScan.findWorkerByBadge 直打后端）。
 // - 用一个 requireXxx() 守卫把"未扫工牌就直接进操作选择/扫码页"挡掉。
 
 import { ref, type Ref } from 'vue';
 import type { Router } from 'vue-router';
-import type { Worker } from '@/types/worker';
+import type { ScanWorkerBriefDto } from '@/api/productionScan.contract';
 
 export type WorkAction = 'PICK_UP' | 'RETURN' | 'INSPECT';
 
@@ -50,14 +57,14 @@ const ACTION_TO_SLUG: Record<WorkAction, WorkActionSlug> = {
 };
 
 // ============ 单例状态 ============
-const worker = ref<Worker | null>(null);
+const worker = ref<ScanWorkerBriefDto | null>(null);
 const action = ref<WorkAction | null>(null);
 
 /** 2026-09-21 显式返回类型。 */
 export interface UseScanSessionReturn {
-  worker: Ref<Worker | null>;
+  worker: Ref<ScanWorkerBriefDto | null>;
   action: Ref<WorkAction | null>;
-  setWorker: (w: Worker | null) => void;
+  setWorker: (w: ScanWorkerBriefDto | null) => void;
   setAction: (a: WorkAction | null) => void;
   reset: () => void;
   requireWorker: (router: Router) => boolean;
@@ -67,7 +74,7 @@ export interface UseScanSessionReturn {
 }
 
 export function useScanSession(): UseScanSessionReturn {
-  function setWorker(w: Worker | null): void {
+  function setWorker(w: ScanWorkerBriefDto | null): void {
     worker.value = w;
   }
 
@@ -111,7 +118,7 @@ export function useScanSession(): UseScanSessionReturn {
   }
 
   return {
-    worker: worker as Ref<Worker | null>,
+    worker: worker as Ref<ScanWorkerBriefDto | null>,
     action: action as Ref<WorkAction | null>,
     setWorker,
     setAction,

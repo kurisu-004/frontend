@@ -473,8 +473,8 @@ export function buildPartsListColumnDefs(deps: {
     // 时兜底，后端补齐后会自动回真数字。
     //
     // **`GET /parts` 已填，下面的兜底仍是必需的**：复用同一 VO 的其余 5 个端点
-    // （parts/pending-programming / parts/by-work-type/{id} / parts/by-worker/{id} /
-    // parts/pickable-by-work-type/{id} / assemblies/{id}/children）恒返 null。
+    // （parts/pending-programming / parts/by-work-type/{id} / prod/scan/held /
+    // prod/scan/pickable / assemblies/{id}/children）恒返 null。
     // ASSEMBLY '—' 短路同理是兜底而非已知现状：装配件行的已送数是「套数」、
     // 零件行按「件」计，单位不同不宜在同一列并排，故装配件走 '—'。
     {

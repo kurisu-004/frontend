@@ -17,7 +17,7 @@
 //     （`POST /parts/{id}/cancel` / `force-complete` / `soft-delete`、批次集合读
 //     `GET /parts/{id}/batches`）。本文件末尾有反断言守住这批「不该动」的路径。
 //
-// 2026-10-03 补：本文件**同时钉 body 形态** —— R2b / R2c / R4 / R4b 四条都断言 body
+// 2026-10-03 补：本文件**同时钉 body 形态** —— R2b / R2c / R4 三条都断言 body
 //   （原先只钉 URL，字段名与 number/string 之差的契约缺口正是这么漏出去的）。
 //   pick-up 迁出后，**批次锚定的写端点已全部离开 part 域**；part 域仍留 part 级 /
 //   多批次写端点（create / update / cancel / force-complete / soft-delete / scan），
@@ -61,7 +61,6 @@ vi.mock('@/composables/queries/schemas', () => ({
   //     by-worker），出参是分页信封而非裸数组，crud.ts 在模块顶层 import 它，
   //     mock 缺一个整份 spec 直接挂。
   repairBatchListResultSchema: { parse: (v: unknown) => v },
-  scanPartListResultSchema: { parse: (v: unknown) => v },
 }));
 
 import { batchToInspection, batchToShip, cancelPartBatch, listPartBatches } from '../batch';
@@ -71,7 +70,6 @@ import {
   deliverPart,
   listRepairBatches,
   listRepairingBatches,
-  pickUpPart,
   placeOnShelf,
   releaseFromProgramming,
   repairDispatch,
@@ -81,7 +79,6 @@ import {
   toInspection,
   toProcess,
   toShip,
-  workerScan,
 } from '../crud';
 
 const BATCH = '190000000000123';
@@ -231,13 +228,11 @@ describe('2026-10-02：批次写端点锚定 prod 域（19 条子资源）', () 
   });
 });
 
-describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () => {
-  it('R3：worker-scan / 批量送检 / 批量品检通过', async () => {
-    expect(
-      await postedPath(() =>
-        workerScan({ serial_no: 'S1', badge_code: 'B1', event_type: 'RETURNED' }),
-      ),
-    ).toBe('/prod/batches/worker-scan');
+describe('2026-10-02：静态批量 / 事件端点只改前缀（2 条）', () => {
+  // 2026-10-10：worker-scan 随报工台整体迁进后端 `prod::scan` 域
+  // （`POST /prod/scan/worker-scan`），URL / body 的守卫搬到
+  // `src/api/__tests__/productionScan.contract.spec.ts`（A10）。
+  it('R3：批量送检 / 批量品检通过', async () => {
     expect(await postedPath(() => batchToInspection({ items: [] }))).toBe(
       '/prod/batches/to-inspection',
     );
@@ -257,47 +252,9 @@ describe('2026-10-02：静态批量 / 事件端点只改前缀（3 条）', () =
     });
   });
 
-  // 2026-10-03：pickUpPart 由 v1 遗留的 `POST /parts/pick-up` 迁到 prod 域批次锚定
-  // （`POST /prod/batches/{batch_id}/pick-up`）—— v1 的「扫序列号 + 工牌」与 v2 的
-  // 「按批次 + OCC + 工人」不同构，此前是刻意保留的已知缺口，现在完成迁移。
-  // 本条同时钉 body 形态：后端 `PickUpRequest` 有两个 number/string 之差的坑，
-  // 只断言 URL 是抓不住的 ——
-  //   - `quantity` 必须发 JSON **字符串**（后端 deserialize_i64_opt 先解 String 再 parse
-  //     i64，发 number 直接 422）；
-  //   - `version` 必须是普通 number（i32，无自定义 deserializer）。
-  // 2026-10-04：`shelf_id` 不再进 body（后端改成 `Option<i64>`，缺省不做任何校验；
-  // 键集断言同步收紧 —— 少一个键是契约，多一个键会被后端静默忽略而前端以为自己有货架
-  // 语义，取件页因此彻底不依赖作业架）。
-  it('R4b：pickUpPart 打 /prod/batches/{batch_id}/pick-up，body 与 PickUpRequest 同构', async () => {
-    httpPostMock.mockReset();
-    httpPostMock.mockResolvedValue({ data: {} });
-    await pickUpPart(BATCH, {
-      version: 7,
-      worker_id: '190000000000001',
-      quantity: '4',
-    });
-    const [path, body] = httpPostMock.mock.calls[0] as [string, Record<string, unknown>];
-    expect(path).toBe(`/prod/batches/${BATCH}/pick-up`);
-    // ⚠️ 这条 `toEqual` 钉的是**本用例自己构造的 payload**（上面那 3 个键），不是真实调用点
-    // 的 body —— `pickUpPart` 是 `api.post(url, payload)` 原样透传、不重组，所以键集等于
-    // 调用点传了什么。调用点（`views/production/scan/ScanPickParts.vue` 的 `onQtyConfirm`）传
-    // `{ version, worker_id, quantity }`、不传 `note`，两者一致这件事由
-    // `api/parts/crud.ts` 的 `PartPickUpPayload` 类型 + 那个调用点保证，不在本用例的
-    // 守门范围内。真正独立有效的是下面那几条 `not.toHaveProperty`。
-    expect(Object.keys(body).sort()).toEqual(['quantity', 'version', 'worker_id']);
-    expect(typeof body.version).toBe('number');
-    expect(body.version).toBe(7);
-    // 字符串形态钉死（v1 的 number 形态就是 422 的根因）。
-    expect(typeof body.quantity).toBe('string');
-    expect(body.quantity).toBe('4');
-    // batch_id 是路径参数，不再进 body。
-    expect(body).not.toHaveProperty('batch_id');
-    // shelf_id 已从 v2 契约里退成可选且前端不再发（见上方注释）。
-    expect(body).not.toHaveProperty('shelf_id');
-    // v1 的两个字段随端点下线一并消失（worker_id ≠ badge_code，serial_no 不用了）。
-    expect(body).not.toHaveProperty('badge_code');
-    expect(body).not.toHaveProperty('serial_no');
-  });
+  // 2026-10-10：取件的 `pick-up` 随报工台整体迁进后端 `prod::scan` 域
+  // （`POST /prod/scan/batches/{batch_id}/pick-up`），URL / body 的守卫搬到
+  // `src/api/__tests__/productionScan.contract.spec.ts`（A11 / A12）。
 });
 
 describe('2026-10-02：集合读迁入 prod 域（2 条）', () => {

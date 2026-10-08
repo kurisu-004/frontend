@@ -2,14 +2,14 @@
   ScanReturnParts.vue
 
   /scan/return —— 扫码台 RETURN 流程（2026-07-10 PR-E，2026-09-15 Phase 5 切 v2）
-  1. onBeforeMount 调 GET /parts/by-worker/{worker_id} 列出当前 worker 持有件
+  1. onBeforeMount 调 GET /prod/scan/held 列出当前 worker 持有件
   2. 工人点选一件 → 按行 VO 的 `chain_state` 分流（2026-10-04，工序链适配）：
        - NEXT（链内有下一道）→ 下一道工序由链直接给出，弹单确认框三选一：
          「按链放回」/「换一道工序」（落回手选）/「取消」
        - TAIL（当前是链内最后一道）→ 工序选择弹窗内常驻提示「加工完成后请送检」，
          工人手选工序（提示不判死下一步的选择权）
        - NONE（无链 / 链已软删 / 指针漂移）→ 手选「下一道工序」picker
-  3. 2026-09-15 Phase 5：提交走 POST /prod/batches/worker-scan（event_type=RETURNED），
+  3. 2026-09-15 Phase 5：提交走 POST /prod/scan/worker-scan（event_type=RETURNED），
      service 层 mark_returned + 同事务 WorkerPool refill。
   4. 成功后自动 refresh（该件从列表消失）
 
@@ -30,7 +30,7 @@
   2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
   （有链 = 绿，规则见 `@/views/production/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
   加急由红底 + 「加急」tag 承担，两者都不进边框。
-  ⚠️ 本页是放回流程，`by-worker` 存量数据里链指针常常是 NULL ⇒ 短期内部分卡片灰边框
+  ⚠️ 本页是放回流程，`/prod/scan/held` 存量数据里链指针常常是 NULL ⇒ 短期内部分卡片灰边框
   属于预期，与下面 `chain_state` 分流是同一根因（指针未维护），不是渲染缺陷。
 -->
 
@@ -161,7 +161,7 @@
                   >加急</el-tag
                 >
                 <!-- 2026-10-04：chip 只显示系统交期，无值显示 '-'（恒渲染，不加 v-if）。
-                     计划交期只作排序键、不上屏。⚠️ 后端给 by-worker 的
+                     计划交期只作排序键、不上屏。⚠️ 后端给 held 的
                      system_delivery_date 恒 null（占位值 '1970-01-01' 已在
                      scanPartRowSchema 归一成 null）⇒ 后端补真实投影之前，本页这一位
                      全是 '-'，是发布顺序问题、不是渲染缺陷。 -->
@@ -355,10 +355,11 @@ import { refillTakenOf } from '@/views/production/scan/composables/refillTaken';
 import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
-import { listPartsHeldByWorker, workerScan, type PartItem } from '@/api/parts';
+import { fetchScanHeld, scanWorker } from '@/api/productionScan';
+import { scanPartListResultSchema } from '@/composables/queries/schemas';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
 import ProcessPickerDialog from '@/views/production/scan/components/ProcessPickerDialog.vue';
-import BatchPickerDialog from '@/components/BatchPickerDialog.vue';
+import BatchPickerDialog, { type BatchPickerRow } from '@/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/production/scan/components/RefillTakenDialog.vue';
 import { chainRowClass } from '@/views/production/scan/chainAccent';
@@ -547,9 +548,9 @@ async function onScanToSelect(rawCode: string): Promise<void> {
   }
 }
 
-function onBatchPicked(p: PartItem): void {
-  // 2026-10-04：BatchPickerDialog 的 pick emit 载荷是跨 3 域共用的 PartItem 契约
-  // （本组件的 props 才是本域最小结构型 BatchPickerRow），本页实际传进去的行是
+function onBatchPicked(p: BatchPickerRow): void {
+  // 2026-10-04：BatchPickerDialog 的 pick emit 载荷是跨域共用的行契约（该组件的
+  // props 才是本域最小结构型 BatchPickerRow），本页实际传进去的行是
   // scanPartRowSchema ⇒ 入口做一次窄化转换。
   showBatchPicker.value = false;
   void applyScanSelection(p as unknown as ScanPartRowSchema);
@@ -575,7 +576,9 @@ async function refresh(): Promise<void> {
   try {
     // 2026-10-04：端点返回分页信封，取 `.items`；显式传 limit=200（后端 clamp
     // 上限）取全 —— 不传时后端默认只返 50 条，持有件列表会静默截断。
-    const res = await listPartsHeldByWorker(String(worker.value.id), { limit: 200 });
+    const res = scanPartListResultSchema.parse(
+      await fetchScanHeld({ workerId: String(worker.value.id), limit: 200 }),
+    );
     parts.value = res.items;
     total.value = res.total;
   } catch (e) {
@@ -790,7 +793,7 @@ async function submitReturn(): Promise<void> {
   const nextProcessName = selectedNextProcessName.value ?? '';
   submitting.value = true;
   try {
-    const res = await workerScan({
+    const res = await scanWorker({
       serial_no: serialNo,
       badge_code: worker.value.badge_code ?? '',
       event_type: 'RETURNED',

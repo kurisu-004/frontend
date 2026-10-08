@@ -29,7 +29,7 @@ import { onBeforeUnmount, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Aim } from '@element-plus/icons-vue';
-import { findWorkerByBadge } from '@/api/worker';
+import { findWorkerByBadge } from '@/api/productionScan';
 // 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
 // 标量 getter 去掉括号：isAuthenticated() → isAuthenticated；user 自动解包为对象。
 import { useAuthStore } from '@/stores/auth';
@@ -46,7 +46,7 @@ onMounted(async () => {
     const ok = await auth.refreshOrLogout(router);
     if (!ok) return;
   }
-  // 不再预热 worker 缓存：findWorkerByBadge 改为后端单点 query（POST /workers/verify-badge）。
+  // 不再预热 worker 缓存：findWorkerByBadge 是后端单点 query（POST /prod/scan/verify-badge）。
   // 扫描时直接打到后端，结果强一致、无 500 条硬上限、无 TTL 失效问题。
 });
 

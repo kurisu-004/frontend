@@ -847,59 +847,33 @@ describe('货架（shelves）schema 契约断言', () => {
   });
 });
 
-// 2026-10-04 新增：报工台三页（取件 / 放回 / 送检）列表行 schema 契约断言。
+// 报工台三页（取件 / 放回 / 送检）列表行 schema 契约断言。
 //
-// 服务对象：`GET /api/v2/parts/pickable-by-work-type/{work_type_id}` 与
-// `GET /api/v2/parts/by-worker/{worker_id}`，行 VO = backend-rust
-// `src/modules/part/vo/part.rs` 的 `PartListItem`（2026-10-09 起 39 字段），外层是
-// `PartListOut`
-// 分页信封。fixture 按两个 service 构造行的真实口径填（占位值 1970-01-01 /
-// is_urgent=false / applicant_name="" / customer_id="0" / status="IN_PROCESS" /
-// version=0 / location=null）。
-describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSchema 契约断言', () => {
+// 服务对象：`GET /api/v2/prod/scan/pickable` 与 `GET /api/v2/prod/scan/held`，行 VO =
+// 后端 `prod::scan` 域的 `ScanListItem`（17 字段），外层是分页信封。
+describe('报工台 scanPartRowSchema / scanPartListResultSchema 契约断言', () => {
   const validScanRow = {
     id: '190000000000001',
     serial_no: 'SN-001',
-    name: 'DWG-A001',
+    name: '零件甲',
     drawing_no: 'DWG-A001',
-    applicant_name: '',
     quantity: 5,
-    request_date: '1970-01-01',
-    planned_delivery_date: '1970-01-01',
-    customer_id: '0',
-    assembly_id: null,
-    status: 'IN_PROCESS',
     is_urgent: false,
-    has_process_chain: true,
-    order_no: null,
+    // 2026-10-10 起是真实投影值，不再是 1970-01-01 占位符
+    planned_delivery_date: '2026-10-20',
     system_delivery_date: null,
-    note: null,
-    unit_price: '0',
-    total_price: '0',
-    version: 0,
-    created_at: '1970-01-01T00:00:00',
-    created_by: null,
-    updated_at: '1970-01-01T00:00:00',
-    updated_by: null,
-    deleted_at: null,
     process_chain_id: null,
+    has_process_chain: true,
     chain_state: 'NEXT',
     chain_next_process_id: '190000000000021',
     chain_next_process_name: 'CUT-01 下料',
     chain_current_process_name: 'SAW-02 锯切',
-    customer_name: null,
-    l1_customer_name: null,
-    location: null,
-    holder_name: null,
-    row_type: 'PART',
-    has_children: false,
-    child_count: null,
-    has_cnc_program: false,
     batch_id: '190000000000009',
     batch_version: 4,
+    location: null,
   };
 
-  it('S-SP1：接受 PartListItem 完整 39 字段（派生键恒 null、批次锚点与链四件套有值）', () => {
+  it('S-SP1：接受 ScanListItem 完整 17 字段（批次锚点与链四件套有值）', () => {
     const parsed = scanPartRowSchema.parse(validScanRow);
     expect(parsed.id).toBe('190000000000001');
     expect(parsed.batch_id).toBe('190000000000009');
@@ -913,19 +887,69 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     // 后端刻意不返的键不在 schema 里 ⇒ parse 后不应凭空出现
     expect('next_process_id' in parsed).toBe(false);
     expect('shelf_code' in parsed).toBe(false);
+    // 键集恰为 17（多一个少一个都是契约漂移）
+    expect(Object.keys(validScanRow)).toHaveLength(17);
+    expect(Object.keys(parsed).sort()).toEqual(Object.keys(validScanRow).sort());
   });
 
-  it('S-SP2：占位符 1970-01-01 归一成 null；真实日期原样透传', () => {
+  // 2026-10-10：`request_date` 整键被后端删除，随之**必须**删掉
+  // `planned_delivery_date` 上那个把 '1970-01-01' 归一成 null 的字段级 transform ——
+  // 键不再下发后，transform 留着只会把真实日期误判成占位符。
+  it('S-SP2：planned_delivery_date 是真实值原样透传；request_date 已随行 VO 收敛删除', () => {
     const parsed = scanPartRowSchema.parse(validScanRow);
-    expect(parsed.planned_delivery_date).toBeNull();
-    expect(parsed.request_date).toBeNull();
-    const real = scanPartRowSchema.parse({
-      ...validScanRow,
-      planned_delivery_date: '2026-10-20',
-      request_date: '2026-09-01',
-    });
-    expect(real.planned_delivery_date).toBe('2026-10-20');
-    expect(real.request_date).toBe('2026-09-01');
+    expect(parsed.planned_delivery_date).toBe('2026-10-20');
+    // 占位符不再被归一（transform 已删）
+    expect(
+      scanPartRowSchema.parse({ ...validScanRow, planned_delivery_date: '1970-01-01' })
+        .planned_delivery_date,
+    ).toBe('1970-01-01');
+    // request_date 不再下发 ⇒ 不作为保留键存在（后端若灰度期仍发，也被 strip）
+    expect('request_date' in parsed).toBe(false);
+    expect(
+      scanPartRowSchema.parse({ ...validScanRow, request_date: '2026-09-01' }),
+    ).not.toHaveProperty('request_date');
+    // planned_delivery_date 非 null 是必填：缺键 / null 都要抛
+    const { planned_delivery_date: _dropped, ...rest } = validScanRow;
+    void _dropped;
+    expect(() => scanPartRowSchema.parse(rest)).toThrow();
+    expect(() =>
+      scanPartRowSchema.parse({ ...validScanRow, planned_delivery_date: null }),
+    ).toThrow();
+  });
+
+  // ⚠️ 2026-10-10：被砍掉的 22 个恒占位值键在 schema 上彻底消失。后端灰度期若仍下发，
+  // Zod strip 掉、**不抛错**（否则新旧后端并存时报工台三页全空）。
+  it('S-SP2b：被砍的 22 个键被 strip 且不抛错', () => {
+    const legacyExtraKeys = {
+      applicant_name: '',
+      request_date: '1970-01-01',
+      customer_id: '0',
+      assembly_id: null,
+      status: 'IN_PROCESS',
+      order_no: null,
+      note: null,
+      unit_price: '0',
+      total_price: '0',
+      version: 0,
+      created_at: '1970-01-01T00:00:00',
+      created_by: null,
+      updated_at: '1970-01-01T00:00:00',
+      updated_by: null,
+      deleted_at: null,
+      customer_name: null,
+      l1_customer_name: null,
+      holder_name: null,
+      row_type: 'PART',
+      has_children: false,
+      child_count: null,
+      has_cnc_program: false,
+    };
+    expect(Object.keys(legacyExtraKeys)).toHaveLength(22);
+    const parsed = scanPartRowSchema.parse({ ...validScanRow, ...legacyExtraKeys });
+    for (const key of Object.keys(legacyExtraKeys)) {
+      expect(parsed, `${key} 不得成为保留键`).not.toHaveProperty(key);
+    }
+    expect(Object.keys(parsed).sort()).toEqual(Object.keys(validScanRow).sort());
   });
 
   it('S-SP3：缺 batch_id / batch_version / location 各自抛 ZodError（M-1 guard）', () => {
@@ -942,6 +966,18 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     expect(() => scanPartRowSchema.parse(rest3)).toThrow();
   });
 
+  // ⚠️ `location` 的值恒为 null，但**键必须声明**：`BatchPickerDialog.holderText` 用
+  // `'location' in p` 判「这个 VO 带不带 holder 信息」，strip 掉会让卡片静默少
+  // 「未知位置」那一行，且仓内没有测试能提前发现（fixture 自己带上了该键）。
+  it('S-SP3a：location 键恒在、值可 null（S-SP3 只守「缺键抛」，这条守「null 也保留」）', () => {
+    const parsed = scanPartRowSchema.parse(validScanRow);
+    expect('location' in parsed).toBe(true);
+    expect(parsed.location).toBeNull();
+    expect(scanPartRowSchema.parse({ ...validScanRow, location: '货架 A-01' }).location).toBe(
+      '货架 A-01',
+    );
+  });
+
   // 2026-10-09：has_process_chain 必填且**无默认值**（与同组 chain_state 四件套的
   // 「带默认值降级」相反）。它直接决定卡片左边框色，缺键降级成灰色与「真无链」不可区分，
   // 不如在 API 边界炸出来。
@@ -955,7 +991,7 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     }
   });
 
-  it('S-SP4：外层是分页信封 —— 裸数组被拒（本次线上故障的形态）', () => {
+  it('S-SP4：外层是分页信封 —— 裸数组被拒（历史线上故障的形态）', () => {
     const envelope = scanPartListResultSchema.parse({
       items: [validScanRow],
       total: 1,
@@ -966,9 +1002,18 @@ describe('2026-10-04 新增：报工台 scanPartRowSchema / scanPartListResultSc
     expect(envelope.total).toBe(1);
     expect(() => scanPartListResultSchema.parse([validScanRow])).toThrow();
     expect(() => scanPartListResultSchema.parse({ items: [validScanRow], total: 1 })).toThrow();
+    // 计数是裸 i64 → JSON number；字符串形态被拒（漂移可见，不被静默强转掩盖）
+    expect(() =>
+      scanPartListResultSchema.parse({
+        items: [validScanRow],
+        total: '1',
+        limit: 200,
+        offset: 0,
+      }),
+    ).toThrow();
   });
 
-  // 2026-10-04 工序链四件套按「带默认值的必输出键」声明（取舍理由见 schemas.ts
+  // 工序链四件套按「带默认值的必输出键」声明（取舍理由见 schemas.ts
   // scanPartRowSchema.chain_state 的注释）：**缺键降级、不抛**。这条断言守的就是那个
   // 降级承诺 —— 后端没上线 / 漏发这四个键时，parse 必须通过（否则取件 / 放回 / 送检
   // 三页列表全空，报工台停工），且落到的默认值必须正好是「没有下一道」的语义。

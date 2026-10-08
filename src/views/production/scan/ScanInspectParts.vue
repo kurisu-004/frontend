@@ -2,12 +2,12 @@
   ScanInspectParts.vue
 
   /scan/inspect —— 扫码台 INSPECT 流程（2026-07-19，2026-09-15 Phase 5 切 v2）
-  1. onBeforeMount 调 GET /parts/by-worker/{worker_id} 列出当前 worker 持有件
+  1. onBeforeMount 调 GET /prod/scan/held 列出当前 worker 持有件
   2. 工人点选一件 → 进入「待扫码确认」状态（confirm-bar 提示扫该件条码）
   3. 扫码枪扫到与选中件 serial_no 匹配的条码 → 直接提交送检
      （与 ScanPickParts.vue 的「选中后扫码确认」同款防误触模式；不匹配 → ElMessage.error）
   4. 送检不需要下一道工序（后端 INSPECTED 忽略 next_process_id）
-  5. 提交走 POST /prod/batches/worker-scan（event_type=INSPECTED），service
+  5. 提交走 POST /prod/scan/worker-scan（event_type=INSPECTED），service
      ::mark_inspected → 写事件 + 同事务 WorkerPool refill。
   6. 成功后自动 refresh（该件从列表消失）
 
@@ -283,9 +283,10 @@ import { refillTakenOf } from '@/views/production/scan/composables/refillTaken';
 import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
-import { listPartsHeldByWorker, workerScan, type PartItem } from '@/api/parts';
+import { fetchScanHeld, scanWorker } from '@/api/productionScan';
+import { scanPartListResultSchema } from '@/composables/queries/schemas';
 import type { ScanPartRowSchema } from '@/composables/queries/schemas';
-import BatchPickerDialog from '@/components/BatchPickerDialog.vue';
+import BatchPickerDialog, { type BatchPickerRow } from '@/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/production/scan/components/RefillTakenDialog.vue';
 import { chainRowClass } from '@/views/production/scan/chainAccent';
@@ -399,9 +400,9 @@ async function onScanToSelect(rawCode: string): Promise<void> {
   }
 }
 
-function onBatchPicked(p: PartItem): void {
-  // 2026-10-04：BatchPickerDialog 的 pick emit 载荷是跨 3 域共用的 PartItem 契约
-  // （本组件的 props 才是本域最小结构型 BatchPickerRow），本页实际传进去的行是
+function onBatchPicked(p: BatchPickerRow): void {
+  // 2026-10-04：BatchPickerDialog 的 pick emit 载荷是跨域共用的行契约（该组件的
+  // props 才是本域最小结构型 BatchPickerRow），本页实际传进去的行是
   // scanPartRowSchema ⇒ 入口做一次窄化转换。
   showBatchPicker.value = false;
   void applyScanSelection(p as unknown as ScanPartRowSchema);
@@ -423,7 +424,9 @@ async function refresh(): Promise<void> {
   try {
     // 2026-10-04：端点返回分页信封，取 `.items`；显式传 limit=200（后端 clamp
     // 上限）取全 —— 不传时后端默认只返 50 条，持有件列表会静默截断。
-    const res = await listPartsHeldByWorker(String(worker.value.id), { limit: 200 });
+    const res = scanPartListResultSchema.parse(
+      await fetchScanHeld({ workerId: String(worker.value.id), limit: 200 }),
+    );
     parts.value = res.items;
     total.value = res.total;
   } catch (e) {
@@ -524,7 +527,7 @@ async function submitInspect(): Promise<void> {
   }
   submitting.value = true;
   try {
-    const res = await workerScan({
+    const res = await scanWorker({
       serial_no: selectedPart.value.serial_no ?? '',
       badge_code: worker.value.badge_code ?? '',
       event_type: 'INSPECTED',

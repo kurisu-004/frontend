@@ -3,7 +3,7 @@
 
   报工台「送检 / 放回」提交成功后，告知工人系统已经**自动给他接了批**的弹窗。
 
-  为什么需要它：`POST /prod/batches/worker-scan` 与扫码写入**同事务**跑一次
+  为什么需要它：`POST /prod/scan/worker-scan` 与扫码写入**同事务**跑一次
   `WorkerPoolService::refill_for_worker`，抢到多少批不由工人决定（抢满工种
   `max_held_batches` 或池空为止）。若只在列表里体现，工人看到「刚放回的那件消失了、
   多了一件新的」根本分不清是自己刚加工完的活还是系统补的料 —— 现场最典型的后果是
