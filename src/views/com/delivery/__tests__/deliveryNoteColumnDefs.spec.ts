@@ -117,9 +117,7 @@ describe('打印表表头「不折行」的宽度预算（本次改动的价值�
   const CELL_PADDING = 24;
   /** 一列「表头不折行」所需的最小宽度（px）。 */
   function needed(col: ColumnDef): number {
-    return (
-      [...col.label].length * 14 + (col.sortable ? SORT_ARROW : 0) + HANDLE + CELL_PADDING
-    );
+    return [...col.label].length * 14 + (col.sortable ? SORT_ARROW : 0) + HANDLE + CELL_PADDING;
   }
 
   it('「申请人」≥ 106（100 装不下 —— 用户报的两条折行之一）', () => {

@@ -258,12 +258,7 @@ drag.applyDrag(tableEl);
         <!-- 操作列（每行一个移除按钮）不进 defs -->
         <el-table-column label="" width="56" align="center">
           <template #default="{ row }">
-            <el-button
-              link
-              size="small"
-              type="danger"
-              @click="emit('remove', row as PartTreeRow)"
-            >
+            <el-button link size="small" type="danger" @click="emit('remove', row as PartTreeRow)">
               移除
             </el-button>
           </template>

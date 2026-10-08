@@ -5,13 +5,16 @@
 // → `treeLineItems`）的守卫。此前 `sortedLineItems` / `onLineItemSort` 零覆盖。
 //
 // 三条要钉住的行为：
-//   - **三态点击**：点第三下（`order = null`）回到默认序 —— 后端详情 SQL 已按
-//     `delivery_seq`（本单内挂单先后）返回，所以「默认序」= 加入送货单的先后顺序；
+//   - **三态点击**：点第三下（`order = null`）回到默认序 —— 默认序 = 后端返回顺序。后端详情
+//     SQL 将按 `delivery_seq`（本单内挂单先后）返回，该列 2026-10-10 与本仓**同批上线**，
+//     **上线前**默认序是 `pb.id ASC`；本文件的用例数据是自造的 mock，能断言的只有「composable
+//     不重排」这一层，「默认序本身长什么样」由上面那条后端契约负责；
 //   - **排序在折叠之前发生**，所以排序走的是**批次字段**、折叠行的展示字段才跟着变
 //     （行序不变：折叠保输入序，见 utils/deliveryNotePartRows.ts 文件头）；
 //   - 与「序号」列的交互：序号由 `min_seq` 稠密排名写在**行**上，`seq` 也不是后端字段 ⇒
 //     折叠行上按 seq 排会全落在同一个值（比较器恒 0、稳定排序保原序），实际排序由 EP 自己
-//     的 `sortData` 承担。本用例钉住「两层排序同向、不互相打架」的前一半。
+//     的 `sortData` 承担。本用例钉住「两层排序同向、不互相打架」的前一半（两层关系的完整
+//     说明在 components/DeliveryNoteLineItemsTable.vue 的「序号」列注释里）。
 //
 // mock 方式沿用同目录 `useDeliveryNoteDetail.assemblyQty.spec.ts`：api 层 mock 下移到 axios
 // 层（`@/api/http` 的 `api.get`），**不**整个 mock 掉 `@/api/com/deliveryNote` —— 守门 parse
@@ -22,10 +25,7 @@ import { createApp, ref } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import type * as HttpModule from '@/api/http';
-import type {
-  DeliveryNoteDetailData,
-  DeliveryNoteLineItemData,
-} from '../deliveryNoteSchema';
+import type { DeliveryNoteDetailData, DeliveryNoteLineItemData } from '../deliveryNoteSchema';
 
 // node/happy-dom 下真实 ElMessage 会碰 `document is not defined` 一类输出，桩成 no-op。
 vi.mock('element-plus', () => ({
@@ -126,8 +126,8 @@ async function detailOf(lineItems: DeliveryNoteLineItemData[]) {
   return detail;
 }
 
-/** 默认序的三个零件（后端已按 delivery_seq 排好）：入单序 P1 → P2 → P3。名称用 ASCII，
- *  免得「中文名按码位比」的方向与直觉相反（甲 > 乙 > 丙），用例里读起来容易看错。 */
+/** 三个零件，数组顺序 = `delivery_seq` 1,2,3（即默认序所依据的后端序）：P1 → P2 → P3。名称用
+ *  ASCII，免得「中文名按码位比」的方向与直觉相反（甲 > 乙 > 丙），用例里读起来容易看错。 */
 const ITEMS: DeliveryNoteLineItemData[] = [
   mkItem({ id: '10', part_id: 'P1', name: 'N-C', delivery_seq: 1, status: 'BLOCKED' }),
   mkItem({ id: '11', part_id: 'P2', name: 'N-A', delivery_seq: 2, status: 'READY_TO_SHIP' }),
@@ -135,10 +135,10 @@ const ITEMS: DeliveryNoteLineItemData[] = [
 ];
 
 describe('详情页零件列表排序：三态点击', () => {
-  it('默认序 = 后端返回序（后端已按加入送货单的先后顺序排）', async () => {
+  it('默认序 = 后端返回序（composable 不重排）', async () => {
     const detail = await detailOf(ITEMS);
     expect(detail.treeLineItems.value.map((r) => r.part_id)).toEqual(['P1', 'P2', 'P3']);
-    // 「序号」列显示值同样是入单序
+    // 「序号」列显示值同样跟住数组顺序（seq 是 mock 里按 delivery_seq 写的排名依据）
     expect(detail.treeLineItems.value.map((r) => r.seq)).toEqual([1, 2, 3]);
   });
 

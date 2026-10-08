@@ -127,6 +127,18 @@
         单元格内容走 `seqCellText()`：装配件的**子件行留空** —— 它嵌在父行下、不是独立的一行，
         编号由父行代表（排名只看顶层行，见 buildPartTreeRows::assignSeq）。判据是**域内单一
         出口**而非组件私有，草稿卡片那张表也调它。
+
+        两层排序的配合：排序会经过两层，两层都在、且指向同一个目标序 ⇒ 不打架 ——
+        - 第一层是父 composable 排 `line_items`（按 `prop` 取**批次字段**）：`seq` 不在行项上
+          （它是行形上的显示值）⇒ 取值恒 undefined ⇒ 比较器返回 0 ⇒ `Array.prototype.sort` 稳定
+          ⇒ 这一层对 `seq` 是恒等变换，保住后端返回序；
+        - 第二层是 EP 的 `sortData`（store/watcher.mjs 的 `execSort` → `orderBy(data, sortProp, …)`，
+          同样稳定）按**行上的** `seq` 排顶层行，方向跟着点击的升 / 降序（子件行数组不在其内）；
+        - 三态第三下（`order = null`）两层同时回默认序：EP 在 `changeSortCondition` 里把
+          `sortingColumn` 置 null 并从 `_data` 重算（回 `:data` 给的顺序），composable 侧
+          清掉 `sortBy`（回后端序）。
+        ⚠️ 本列**当前不参与**任何一层的排序触发（`sortable` 见上）；即便将来有人给它加上
+        `sortable`，上述同向性依然成立，不会出现两层互相覆盖出一屏乱序。
       -->
       <el-table-column type="index" prop="seq" label="序号" width="80" align="center">
         <template #default="{ row }">{{ seqCellText(row as PartTreeRow) }}</template>

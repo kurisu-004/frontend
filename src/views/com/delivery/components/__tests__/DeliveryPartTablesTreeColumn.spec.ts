@@ -26,7 +26,10 @@ import { nextTick } from 'vue';
 import ElementPlus from 'element-plus';
 import { createRouter, createMemoryHistory } from 'vue-router';
 import type { PartTreeRow } from '../../utils/deliveryNotePartRows';
-import type { DeliveryNoteItemData, DeliveryNoteDetailData } from '../../composables/deliveryNoteSchema';
+import type {
+  DeliveryNoteItemData,
+  DeliveryNoteDetailData,
+} from '../../composables/deliveryNoteSchema';
 import { buildDeliveryNoteLineItemsColumnDefs } from '../../deliveryNoteLineItemsColumnDefs';
 import DeliveryNoteLineItemsTable from '../DeliveryNoteLineItemsTable.vue';
 import DeliveryDraftCard from '../DeliveryDraftCard.vue';
@@ -145,7 +148,11 @@ async function mountDetailTable(rows: PartTreeRow[]): Promise<VueWrapper> {
 async function mountDraftCard(rows: PartTreeRow[]): Promise<VueWrapper> {
   const w = mount(DeliveryDraftCard, {
     props: {
-      draft: { id: 'N1', delivery_note_no: 'DN-001', status: 'DRAFT' } as unknown as DeliveryNoteItemData,
+      draft: {
+        id: 'N1',
+        delivery_note_no: 'DN-001',
+        status: 'DRAFT',
+      } as unknown as DeliveryNoteItemData,
       rows,
       deleting: false,
       submitting: false,
@@ -186,27 +193,30 @@ function bodyRows(w: VueWrapper): HTMLTableRowElement[] {
   return Array.from(root(w).querySelectorAll<HTMLTableRowElement>('tbody tr'));
 }
 
-/** 某一行的每个 td：是否带 caret / 是否带缩进 / 文本。 */
+/** 某一行的每个 td：是否带 caret / 是否带缩进。 */
 interface CellInfo {
   caret: boolean;
   indent: boolean;
-  text: string;
 }
 function cellsOf(w: VueWrapper, rowText: string): CellInfo[] {
   const tr = bodyRows(w).find((r) => r.textContent?.includes(rowText));
-  // el-table 不把 row-key 写进 DOM，按行内唯一文本定位（用例数据里 序列号 列的值各不相同）
+  // el-table 不把 row-key 写进 DOM，按名称列的「总装」定位（父行是该名字唯一的行）
   if (!tr) throw new Error(`找不到含「${rowText}」的行`);
   return Array.from(tr.querySelectorAll<HTMLTableCellElement>('td')).map((td) => ({
     caret: !!td.querySelector('.el-table__expand-icon'),
     indent: !!td.querySelector('.el-table__indent'),
-    text: td.querySelector('.cell')?.textContent?.trim() ?? '',
   }));
 }
 
 /** 「序号」列某行的单元格文本。 */
 function seqCell(w: VueWrapper, tr: HTMLTableRowElement): string {
   const idx = headerLabels(w).indexOf('序号');
-  return tr.querySelectorAll<HTMLTableCellElement>('td')[idx]?.querySelector('.cell')?.textContent?.trim() ?? '';
+  return (
+    tr
+      .querySelectorAll<HTMLTableCellElement>('td')
+      [idx]?.querySelector('.cell')
+      ?.textContent?.trim() ?? ''
+  );
 }
 
 /** 序列号列下标（两张表都把它排在「序号」之后，列名唯一）。 */
@@ -219,7 +229,7 @@ beforeEach(() => {
 });
 
 describe('零件 / 装配件树的箭头与缩进落在「序列号」列（EP 树列机制）', () => {
-  it('详情页零件列表：父行 caret、子件行缩进都在「序列号」列，「序号」列两者都没有', async () => {
+  it('详情页零件列表：父行 caret 在「序列号」列，「序号」列既无 caret 也无缩进', async () => {
     const w = await mountDetailTable(TREE);
     const labels = headerLabels(w);
     // 前提：勾选列 + 序号列 + 12 列 defs，「序号」紧跟勾选列，「序列号」是第一个数据列
