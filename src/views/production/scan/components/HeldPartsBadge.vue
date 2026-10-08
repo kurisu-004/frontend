@@ -176,11 +176,12 @@ function onOpen(): void {
   if (held.query.isStale.value) void fetchHeld();
 }
 
-// 写成功后自增 ⇒ 自动开抽屉
+// 写成功后自增 ⇒ 自动开抽屉。`prev === undefined` 不可能发生（`withDefaults` 给了
+// `autoOpenToken: 0`，非 immediate watch 的首次触发 prev 恒为数字），故只挡「没变」。
 watch(
   () => props.autoOpenToken,
   (token, prev) => {
-    if (prev === undefined || token === prev) return;
+    if (token === prev) return;
     if (props.autoOpenOnChange) drawerVisible.value = true;
   },
 );

@@ -287,7 +287,9 @@ import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue'
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
 import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
 import { findAllByCode, findPartBySerialAndPrompt } from '@/utils/scanHelpers';
-import BatchPickerDialog, { type BatchPickerRow } from '@/components/BatchPickerDialog.vue';
+import BatchPickerDialog, {
+  type BatchPickerRow,
+} from '@/views/production/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
 import { chainRowClass } from '@/views/production/scan/chainAccent';
 import { useScanPickableQuery } from '@/views/production/scan/composables/useScanListQuery';

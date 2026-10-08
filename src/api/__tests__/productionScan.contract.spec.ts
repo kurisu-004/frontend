@@ -5,8 +5,8 @@
 //
 // 本文件的前身是 `src/api/parts/__tests__/scan-list.contract.spec.ts`（报工台当时挂在
 // part 域，URL 是 `/parts/pickable-by-work-type/{id}` 与 `/parts/by-worker/{id}`，行 VO
-// 是 39 字段的 `PartListItem`）。后端把这 5 条端点整体迁进新的 `prod::scan` 域并把行
-// VO 收敛成 17 字段的 `ScanListItem`（砍掉 22 个恒为占位值的键）⇒ URL 与守卫一起重写。
+// 是 40 字段的 `PartListItem`）。后端把这 5 条端点整体迁进新的 `prod::scan` 域并把行
+// VO 收敛成 17 字段的 `ScanListItem`（砍掉 23 个恒为占位值的键）⇒ URL 与守卫一起重写。
 // 旧的「helper 返回值必须过 Zod」那组断言（F 组）**不再成立**：按 CLAUDE.md 的分层
 // 取舍，api 层已不做守门，守门落在 queryFn / mutationFn（见 E 组与
 // `views/production/scan/composables/__tests__/scanSchema.spec.ts`）。
@@ -493,15 +493,15 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
     );
   });
 
-  // ⚠️ **本次收敛的核心**：22 个恒为占位值的键随行 VO 收敛一并删除。它们在 schema 上
+  // ⚠️ **本次收敛的核心**：23 个恒为占位值的键随行 VO 收敛一并删除。它们在 schema 上
   // 彻底消失 ⇒ 后端若仍下发（灰度期新旧后端并存、或后端没跟上），Zod strip 掉、**不抛错**。
   // 反向断言（它们不得成为保留键）守的是「哪天有人顺手把某个加回 schema 变成必填」——
   // 那会让灰度期的新后端响应整份 parse 失败、报工台三页全空。
   //
-  // ⚠️ `location` **不在**这 22 个之列：它的值恒为 null，但键必须声明（`holderText`
+  // ⚠️ `location` **不在**这 23 个之列：它的值恒为 null，但键必须声明（`holderText`
   // 用 `'location' in p` 判要不要渲染 holder 行）。strip 掉的后果是卡片静默少
   // 「未知位置」那一行，且仓内没有测试能提前发现 —— E9 单独钉这条。
-  it('E8：被砍掉的 22 个键被 strip 且不抛错（灰度期后端多发也不会炸）', () => {
+  it('E8：被砍掉的 23 个键被 strip 且不抛错（灰度期后端多发也不会炸）', () => {
     const legacyExtraKeys = {
       applicant_name: '',
       request_date: '1970-01-01',
@@ -525,10 +525,11 @@ describe('E 组：scanPartRowSchema / scanPartListResultSchema 的守门有效�
       has_children: false,
       child_count: null,
       has_cnc_program: false,
+      delivered_quantity: null,
     };
-    expect(Object.keys(legacyExtraKeys)).toHaveLength(22);
+    expect(Object.keys(legacyExtraKeys)).toHaveLength(23);
 
-    // 正向：后端多发这 22 个键，parse 通过且一个都不留在结果里。
+    // 正向：后端多发这 23 个键，parse 通过且一个都不留在结果里。
     const parsed = scanPartRowSchema.parse({ ...pickRowFixture, ...legacyExtraKeys });
     for (const key of Object.keys(legacyExtraKeys)) {
       expect(Object.keys(parsed), `${key} 不得成为保留键`).not.toContain(key);

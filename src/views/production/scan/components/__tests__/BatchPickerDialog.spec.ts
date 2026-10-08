@@ -1,25 +1,25 @@
 // @vitest-environment happy-dom
-// src/components/__tests__/BatchPickerDialog.spec.ts
+// src/views/production/scan/components/__tests__/BatchPickerDialog.spec.ts
 //
-// 2026-10-03 新增：holder 文本与 meta 行的渲染契约守卫。本组件是**跨域共享组件**
-// （views/production/scan/ 三页 + views/inspection/InspectionPending），
-// 2026-10-03 给它加了「3 个判据键一个都不在的窄 VO ⇒ holderText 返空 ⇒ meta 行整行隐藏」
-// 这条分支。两头都要钉住：
-//   - views/production/scan/ 三页（`PartListItem` 形态）行为**一字未变**，否则报工台卡片静默少一行信息；
+// 2026-10-03 新增：holder 文本与 meta 行的渲染契约守卫。本组件有「3 个判据键一个都不在
+// 的窄 VO ⇒ holderText 返空 ⇒ meta 行整行隐藏」这条分支（`BatchPickerRow` 全字段
+// optional 形态的兜底，无活体调用方）。两头都要钉住：
+//   - 报工台三页的行形态（`ScanListItem`，`location` 键恒在）行为**一字未变**，否则
+//     报工台卡片静默少一行信息；
 //   - 窄 VO（3 个 holder 判据键一个都不在）**确实变了**：meta 行整行不再渲染。
 //     它消掉的是恒显的「未知位置」无信息量文案，属一并接受的观感变化，用例把它钉死，
 //     免得后来人误判成回归又改回去。
 //
 // 2026-10-08：原先窄 VO fixture 用的是 `@/types/deliveryNote` 的 `DeliveryNoteCandidatePart`
 // （送货单候选入单，随 `GET /candidate-parts` 端点下线而删除）。窄 VO 形态本身仍可能出现在
-//  别的域，故 fixture 改为本文件内联的 `NarrowDeliveryRow`（显式类型标注依旧保留：
+// 别的域，故 fixture 改为本文件内联的 `NarrowDeliveryRow`（显式类型标注依旧保留：
 //  一旦有人给它加上 holder 判据键，`tsc` 会因多余属性报错，逼着改用例而不是静默继续通过）。
 //
 // 判据是「键在不在」而不是「值是否 null」，理由与脆弱点见 BatchPickerDialog.holderText 注释。
 //
 // 2026-10-09：批次行左边框改为按 `has_process_chain` 着色（原先硬编码蓝），走类绑定
-// `.has-chain`（规则见 `@/views/production/scan/chainAccent`）。只有报工台三域的行带这个键 ⇒
-// 另外两域不挂类落中性色（用窄 VO fixture 守这条）。
+// `.has-chain`（规则见 `chainAccent`）。报工台三页的行带这个键 ⇒ 窄 VO 行不挂类落中性色
+// （用窄 VO fixture 守这条）。
 
 import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';

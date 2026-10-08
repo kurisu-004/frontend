@@ -283,7 +283,9 @@ import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vu
 import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
 import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
-import BatchPickerDialog, { type BatchPickerRow } from '@/components/BatchPickerDialog.vue';
+import BatchPickerDialog, {
+  type BatchPickerRow,
+} from '@/views/production/scan/components/BatchPickerDialog.vue';
 import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/production/scan/components/RefillTakenDialog.vue';
 import { chainRowClass } from '@/views/production/scan/chainAccent';

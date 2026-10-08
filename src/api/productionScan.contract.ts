@@ -59,13 +59,14 @@ export interface ScanHeldParams {
 
 /** 两条 list 共用的行 VO。**17 字段**，行单位是**批次**。
  *
- *  相对上一版（39 字段 `PartListItem`）砍掉 22 个键（`applicant_name` / `request_date` /
- *  `customer_id` / `assembly_id` / `status` / `order_no` / `note` / `unit_price` /
- *  `total_price` / `version` / `created_at` / `created_by` / `updated_at` / `updated_by` /
- *  `deleted_at` / `customer_name` / `l1_customer_name` / `holder_name` / `row_type` /
- *  `has_children` / `child_count` / `has_cnc_program`）：那两个端点的取行 SQL 从来不投影
- *  它们，取出来的是 service 层写死的占位值（`'IN_PROCESS'` / `"0"` / `1970-01-01`），
- *  留在契约里只会诱导消费方去读假值。**后端多发这些键会被 Zod strip 掉**，不报错。
+ *  相对上一版（40 字段 `PartListItem`）砍掉 23 个键（`applicant_name` / `request_date` /
+ * `customer_id` / `assembly_id` / `status` / `order_no` / `note` / `unit_price` /
+ * `total_price` / `version` / `created_at` / `created_by` / `updated_at` / `updated_by` /
+ * `deleted_at` / `customer_name` / `l1_customer_name` / `holder_name` / `row_type` /
+ * `has_children` / `child_count` / `has_cnc_program` / `delivered_quantity`）：那两个端点的
+ * 取行 SQL 从来不投影它们，取出来的是 service 层写死的占位值（`'IN_PROCESS'` / `"0"` /
+ * `1970-01-01` / `None`），留在契约里只会诱导消费方去读假值。**后端多发这些键会被 Zod
+ * strip 掉**，不报错。
  *
  *  取件（pickable）与持有（held）两条端点**共用**本 VO，各字段取值差异见逐字段注释。 */
 export interface ScanListItemDto {

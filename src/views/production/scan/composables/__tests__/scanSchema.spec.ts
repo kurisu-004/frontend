@@ -86,9 +86,9 @@ describe('scanPartRowSchema / scanPartListResultSchema 契约断言', () => {
     ).toThrow();
   });
 
-  // ⚠️ 2026-10-10：被砍掉的 22 个恒占位值键在 schema 上彻底消失。后端灰度期若仍下发，
+  // ⚠️ 2026-10-10：被砍掉的 23 个恒占位值键在 schema 上彻底消失。后端灰度期若仍下发，
   // Zod strip 掉、**不抛错**（否则新旧后端并存时报工台三页全空）。
-  it('S-SP2b：被砍的 22 个键被 strip 且不抛错', () => {
+  it('S-SP2b：被砍的 23 个键被 strip 且不抛错', () => {
     const legacyExtraKeys = {
       applicant_name: '',
       request_date: '1970-01-01',
@@ -112,8 +112,9 @@ describe('scanPartRowSchema / scanPartListResultSchema 契约断言', () => {
       has_children: false,
       child_count: null,
       has_cnc_program: false,
+      delivered_quantity: null,
     };
-    expect(Object.keys(legacyExtraKeys)).toHaveLength(22);
+    expect(Object.keys(legacyExtraKeys)).toHaveLength(23);
     const parsed = scanPartRowSchema.parse({ ...validScanRow, ...legacyExtraKeys });
     for (const key of Object.keys(legacyExtraKeys)) {
       expect(parsed, `${key} 不得成为保留键`).not.toHaveProperty(key);

@@ -75,9 +75,10 @@ export interface PartItem {
    *  `GET /api/v2/prod/scan/held`（放回 / 送检 / HeldPartsBadge）；其余复用
    *  本 VO 的端点恒 null（后端刻意不填，理由见下面 `batch_version` 的注释）。
    *  「品检待办」不走本 VO（它有自己的出参），故不再算作填充方。
-   *  2026-10-04 补：取件路径上这两个字段的**运行时守门**是
-   *  `src/composables/queries/schemas.ts` 的 `scanPartRowSchema`（两个报工台列表
-   *  函数的出参都走它 `.parse()`）；改名义务集中登记在下面 `batch_version` 段。 */
+   * 2026-10-04 补：取件路径上这两个字段的**运行时守门**是
+   *  `@/views/production/scan/composables/scanSchema` 的 `scanPartRowSchema`
+   *  （报工台两个列表的 queryFn 出参都走它 `.parse()`）；改名义务集中登记在下面
+   *  `batch_version` 段。 */
   batch_id?: string | null;
   batch_no?: number | null;
   batch_label?: string | null;
@@ -105,8 +106,9 @@ export interface PartItem {
    *    扫码台走显式报错（不静默用 part_id 顶替）。
    *
    *    ⚠️ **改名义务**（沿用本仓既有惯例）：后端换字段名（`batch_ids` 复数 / 嵌套结构）
-   *    时，**取件这条路径的运行时守门在 `src/composables/queries/schemas.ts` 的
-   *    `scanPartRowSchema`**（本 VO 的 `batch_id` / `batch_version` 都声明成
+   *    时，**取件这条路径的运行时守门在
+   *    `views/production/scan/composables/scanSchema.ts` 的 `scanPartRowSchema`**
+   *    （本 VO 的 `batch_id` / `batch_version` 都声明成
    *    必填 + 可空，不声明成 `.optional()`）—— 键消失会让 Zod parse 当场抛错，
    *    而不是让字段以 undefined 流到视图层、只弹一句「批次锚点缺失」这种看不出
    *    真因的提示。**后端换名时必须同步改：本注释所在的 `PartItem.batch_id` 与
@@ -278,8 +280,9 @@ export interface PartUpdatePayload {
  * ⚠️ **v1(Python) 遗留入参**，打的是 `POST /parts/scan`（不是 v2 的 worker-scan）。
  * v2 端点已删掉全部货架字段（见 CLAUDE.md「货架自动选择」），v1 仍在维护、契约未变，
  * 故这里**仍带** `shelf_id` / `target_inspection_shelf_id` —— 它们不属「不再指定货架」
- * 的口径范围。本 wrapper 在生产代码里零调用方；留着是为了将来真要接 v1 时不必重写，
- * 全仓巡检「还有没有 shelf_id」时**这一处是已知例外，不要当残留清掉**。
+ * 的口径范围。本 wrapper（`scanPart`）在生产代码里零调用方；留着是为了将来真要接 v1 时
+ * 不必重写，全仓巡检「还有没有 shelf_id」时**这一处是已知例外，不要当残留清掉**
+ * （连带提醒：别把 `scanPart` 当成没有入参出处的孤儿函数删掉）。
  */
 export interface PartScanPayload {
   serial_no: string;
@@ -452,6 +455,14 @@ export async function releaseFromProgramming(
       version,
     },
   );
+  return resp.data;
+}
+
+/** v1(Python) 的 `POST /parts/scan`，零调用方、保留待接（入参见 `PartScanPayload` 的
+ *  说明：它带货架字段，不属「不再指定货架」的口径范围）。新流程一律走
+ *  `POST /prod/batches/worker-scan`。 */
+export async function scanPart(payload: PartScanPayload): Promise<PartItem> {
+  const resp = await api.post<PartItem>('/parts/scan', payload);
   return resp.data;
 }
 

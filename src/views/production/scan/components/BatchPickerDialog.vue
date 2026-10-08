@@ -9,22 +9,22 @@
     emits:  update:modelValue(v)
             pick(row)                       -- 工人点某行触发；调用方负责后续选中 / 滚动 / 打开下一弹窗
 
-  2026-10-10 从 `views/production/scan/components/` 上提到 `src/components/`：它被
-  报工台三域之外的送货单域消费，放在视图目录里会让 `views/` 反向依赖 `views/`。
-  形态照 `BatchCard.vue` —— **局部 import，不进 `main.ts` 全局注册**。
+  2026-10-10 留在本目录、不上提 `src/components/`：活体消费方**只有报工台三页**（取件 / 放回 /
+  送检），而 `src/components/` 的判据是「零个域内依赖 + 多域复用」（`BatchCard.vue` 6 个跨域
+  消费方才配得上）。本组件 import 了域内 `chainAccent`，上提反而造出一条
+  `components/ → views/` 的反向依赖。局部 import，不进 `main.ts` 全局注册。
 
   单行点选即关弹窗（不可改）。卡片按批次号升序展示；显示 batch_no / 数量 /
   当前 holder 文本 / 下一工序。点击 emit('pick')，调用方按业务需要驱动后续动作。
-  ⚠️ 「按批次号升序 / 显示 batch_no」**只对 `views/com/delivery` 与 `views/inspection`
-  两域成立**：它们的行 VO 带 `batch_no`。`views/production/scan/` 三域的行是后端 `PartListItem`
-  （无 `batch_no` 键，且经 `scanPartRowSchema` 后该键被 strip）⇒ 这三域的卡片恒显
-  「批次 1」、排序恒为恒等操作。要让报工台也显示批次号，须后端给 `PartListItem`
-  补该字段并在 schema 里声明，详见该 schema 头部的「不声明」清单。
+  ⚠️ 「按批次号升序 / 显示 batch_no」**对本域三页都不成立**：报工台行 VO 是后端
+  `ScanListItem`（17 字段，`scanPartRowSchema` 未声明 `batch_no`）
+  ⇒ 卡片恒显「批次 1」、排序恒为恒等操作。要让报工台也显示批次号，须后端给
+  `ScanListItem` 补该字段并在 schema 里声明。
   2026-10-03：行 VO 形态不同时（3 个判据键全不在的窄 VO）meta 行会整行隐藏而不是留一行
-  空文案，详见 holderText 的注释（那里按调用方逐一列了 3 种形态）。
+  空文案，详见 holderText 的注释。
   2026-10-09：批次行的左边框专供「有制定工序链且链指针未漂移」这一个语义（有链 = 绿，
-  规则见 `@/views/production/scan/chainAccent`）：3 个活体消费方都传 `ScanPartRowSchema`（该键
-  必填），行缺这个键时落中性色。
+  规则见 `chainAccent`）：3 个调用方都传 `ScanPartRowSchema`（该键必填），
+  行缺这个键时落中性色。
 -->
 
 <template>
@@ -84,14 +84,9 @@ import type { PartItem } from '@/api/parts';
 import { chainRowClass } from '@/views/production/scan/chainAccent';
 
 /**
- * 2026-10-04：本组件被 3 个域复用，各域行的 VO 结构完全不同 —— 报工台三页是后端
- * `PartListItem`（走 `scanPartRowSchema` 守门），`views/com/delivery` 是 15 字段的
- * `DeliveryNoteCandidatePart`，`views/inspection` 是 13 字段的 `InspectionQueueItem`。
- * props 写死任一域的 VO 都会让另外两域在调用点被迫 `as unknown as`。
- *
- * 收成「结构最小型」：**全部字段 optional**，只覆盖本组件模板 + `holderText`
- * 真正读到的键 ⇒ 3 个域的 VO 在结构上都满足它，调用点的 cast 不再是类型系统的
- * 必需品（保留也无害：`PartItem[]` / `InspectionQueueItem[]` 都可赋给本类型）。
+ * 2026-10-04：props 收成「结构最小型」——**全部字段 optional**，只覆盖本组件模板 +
+ * `holderText` 真正读到的键。取件 / 放回 / 送检三页传的行经 `scanPartRowSchema` 守门，
+ * 直接把 `ScanPartRowSchema[]` 赋给本类型即可，调用点不需要 `as unknown as`。
  * 运行时行为零变化：模板、排序、`holderText` 判据一律不动。
  */
 export interface BatchPickerRow {
@@ -103,7 +98,7 @@ export interface BatchPickerRow {
   drawing_no?: string;
   name?: string;
   quantity?: number;
-  /** 3 个 holder 判据键：`views/production/scan` 的行只有 `location`，另两个域一个都没有 */
+  /** 3 个 holder 判据键；报工台行只有 `location`（schema 显式声明、值恒 null） */
   current_holder_kind?: string | null;
   shelf_code?: string | null;
   worker_name?: string | null;
@@ -111,7 +106,7 @@ export interface BatchPickerRow {
   current_holder_display?: string | null;
   location?: string | null;
   next_process_name?: string | null;
-  /** 2026-10-09 新增：报工台三域的行 VO 带它（后端 `PartListItem` 的派生列），卡片
+  /** 2026-10-09 新增：报工台三页的行 VO 带它（后端 `ScanListItem` 的派生列），卡片
    *  左边框按它着色（有链 = 绿）。声明成 optional 是为守住本接口「全字段 optional」
    *  的既有约定（见上面 `BatchPickerRow` 的注释），不是后端可能不填。 */
   has_process_chain?: boolean;
@@ -139,21 +134,17 @@ const sortedRows = computed(() =>
 
 /** 显示卡片当前 holder：kind='shelf' 取货架码，'worker' 取工人名，'outsource_company' 取公司名。
  *
- *  本组件是跨域共享组件，5 个调用方实际传了 3 种 VO 形态：
- *  - `views/production/scan/` 三页（ScanReturnParts / ScanPickParts / ScanInspectParts）传后端
- *    `PartListItem`，行经 `scanPartRowSchema` 守门（该 schema 显式声明了 `location`
- *    ⇒ **键恒在**，只是值恒为 null：这两个 service 不做 batch enrichment，VO 的
- *    `holder_name` / `location` 恒 null）；
- *  - `views/com/delivery/PartPickerDialog` 传 15 字段的 `DeliveryNoteCandidatePart`，
- *    3 个判据键**一个都没有**；
- *  - `views/inspection/InspectionPending` 传 13 字段的 `InspectionQueueItem`，同样一个都没有。
+ *  3 个调用方（ScanReturnParts / ScanPickParts / ScanInspectParts）传的行都是后端
+ *  `ScanListItem`，经 `scanPartRowSchema` 守门 —— 该 schema 显式声明了 `location`
+ *  ⇒ **键恒在**，只是值恒为 null（报工台两个 service 不做 batch enrichment，
+ *  `location` 恒 null），判据走 default 分支显示「未知位置」。
+ *  3 个判据键一个都不在的行（窄 VO）⇒ 返回空串，模板把 meta 行整行隐藏；这是
+ *  `BatchPickerRow` 全字段 optional 形态的兜底分支，无活体调用方。
  *
- *  「一个都没有」⇒ 返回空串，模板把 meta 行整行隐藏。
  *  判据刻意用「键在不在」（`in`）而不是「值是否 null」：`location` 值可合法为 null
- *  （尚未上架的 PENDING 批次），那种场景必须继续显示「未知位置」，否则 views/production/scan/ 的既有
+ *  （尚未上架的 PENDING 批次），那种场景必须继续显示「未知位置」，否则报工台的既有
  *  卡片会少一行信息。代价是这个判据**依赖后端不给 `location` 加 `skip_serializing_if`
- *  以及前端 schema 不 strip 掉该键** —— 一旦破坏，报工台卡片静默少掉这一行，且仓内
- *  没有测试能提前发现（测试 fixture 自己显式带上了这些键）。 */
+ *  以及前端 schema 不 strip 掉该键** —— 一旦破坏，报工台卡片静默少掉这一行。 */
 function holderText(p: BatchPickerRow): string {
   switch (p.current_holder_kind) {
     case 'shelf':
@@ -171,14 +162,11 @@ function holderText(p: BatchPickerRow): string {
 }
 
 function onPick(row: BatchPickerRow): void {
-  // pick 出口仍是跨 3 域共用的 `PartItem`：另两个域的 handler（`onBatchPicked` /
-  // `onPickerBatchPicked`）按 `PartItem` 声明，改 emit 载荷会牵动它们的签名。
-  // 各域调用点自己负责把这一行认回本域的行类型（报工台三页入口各做一次
-  // `as unknown as ScanPartRowSchema`）。
-  // 2026-10-04 登记的改进方向：若将来「改 emit 载荷要连带改另两域 handler 签名」
-  // 这条约束解除，优先上 `<script setup generic="T extends BatchPickerRow">` +
-  // `pick: [row: T]`，让出口载荷跟随调用方的行类型（报工台三页的 cast 随之消失），
-  // 而不是继续在调用点加 cast。
+  // pick 出口仍是 `PartItem`，与三页 handler（`onBatchPicked` / `onPickerBatchPicked`）
+  // 的声明一致；报工台三页入口各做一次 `as unknown as ScanPartRowSchema` 把这一行
+  // 认回本域的行类型。
+  // 改进方向：上 `<script setup generic="T extends BatchPickerRow">` + `pick: [row: T]`，
+  // 让出口载荷跟随调用方的行类型（报工台三页的 cast 随之消失），而不是继续加 cast。
   emit('pick', row as unknown as PartItem);
   emit('update:modelValue', false);
 }

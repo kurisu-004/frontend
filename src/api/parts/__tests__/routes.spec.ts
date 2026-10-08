@@ -55,11 +55,9 @@ vi.mock('@/api/http', () => ({
 
 vi.mock('@/composables/queries/schemas', () => ({
   // 集合读端点本函数内会 Zod parse；URL 守卫不需要真实 schema，原样回传给调用方即可。
-  // 两个 VO 的键集合不同，桩混用会让真 schema 拒收，故各给各的桩：
-  //   - repairBatchListResultSchema 服务返修两条端点；
-  //   - scanPartListResultSchema 服务报工台两个列表端点（pickable-by-work-type /
-  //     by-worker），出参是分页信封而非裸数组，crud.ts 在模块顶层 import 它，
-  //     mock 缺一个整份 spec 直接挂。
+  // crud.ts 模块顶层只 import 返修 VO 的守门 schema（报工台两条 list 的守门 schema 已随
+  // 该域搬进 `views/production/scan/composables/scanSchema.ts`，api 层不再 import 它），
+  // mock 缺一个整份 spec 直接挂。
   repairBatchListResultSchema: { parse: (v: unknown) => v },
 }));
 

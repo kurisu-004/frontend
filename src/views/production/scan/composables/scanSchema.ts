@@ -30,18 +30,18 @@ import { z } from 'zod';
 // 本 schema 存在的理由就是把这个形状钉死：形状不符立即抛 ZodError，而不是静默空屏。
 //
 // 行 VO = `ScanListItem`（**不是** `PartItem` / `PartListItem`）：后端为报工台专设的
-// 窄投影，**17 字段**，行单位是批次。相对上一版（复用 `PartListItem` 的 39 字段）砍掉
-// 22 个键（`applicant_name` / `request_date` / `customer_id` / `assembly_id` / `status` /
+// 窄投影，**17 字段**，行单位是批次。相对上一版（复用 `PartListItem` 的 40 字段）砍掉
+// 23 个键（`applicant_name` / `request_date` / `customer_id` / `assembly_id` / `status` /
 // `order_no` / `note` / `unit_price` / `total_price` / `version` / `created_at` /
 // `created_by` / `updated_at` / `updated_by` / `deleted_at` / `customer_name` /
 // `l1_customer_name` / `holder_name` / `row_type` / `has_children` / `child_count` /
-// `has_cnc_program`）—— 那两个端点的取行 SQL 从来不投影它们，取出来的是 service 层
-// 写死的占位值，留在契约里只会诱导消费方去读假值。
+// `has_cnc_program` / `delivered_quantity`）—— 那两个端点的取行 SQL 从来不投影它们，
+// 取出来的是 service 层写死的占位值，留在契约里只会诱导消费方去读假值。
 //
 // 声明口径：
 //   - 除链四件套外全部**必填**，可空的一律 `.nullable()`。Zod 默认 strip 会静默丢弃
 //     未声明的键，所以必填字段必须显式声明，否则「后端漏发」会一路静默流到视图层。
-//   - 后端多发那 22 个已砍的键 ⇒ **被 strip 且不抛错**（灰度期新旧后端并存时这是
+//   - 后端多发那 23 个已砍的键 ⇒ **被 strip 且不抛错**（灰度期新旧后端并存时这是
 //     想要的行为；反向断言见 `src/api/__tests__/productionScan.contract.spec.ts` 的 E8）。
 //   - 雪花 id 一律 `z.string()`（后端 `serialize_i64` / `serialize_i64_opt` → JSON
 //     string），禁止 `z.number()` / `Number()`（会丢精度）。

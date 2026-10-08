@@ -102,14 +102,13 @@ beforeEach(() => {
 });
 
 describe('HeldPartsBadge / 数据源与计数', () => {
-  it('B1：徽章与页面共用一条 query key —— 两个徽章实例对同一工人只发 1 次请求', async () => {
+  it('B1：徽章按 `{ workerId, limit: 200 }` 这组 params 发请求 —— 与三页同参 ⇒ 必然同键', async () => {
     const a = await mountBadge({ workerId: WORKER });
     const b = await mountBadge({ workerId: WORKER });
     await nextTick();
-    // 各自一份 QueryClient（本用例的隔离手段），但**同一屏的实例共用一条 cache identity**
-    // 的收益由 useScanQuery.spec.ts 的 Q1 守（同一 QueryClient 下两个实例去重为 1 次）。
-    // 这里守的是「徽章确实按 `{ workerId, limit: 200 }` 这组 params 发请求」——
-    // 与三页完全一致，所以它们的键必然相同。
+    // 本用例**不守去重**：两个实例各挂一份 QueryClient（本用例的隔离手段），cache 本来就
+    // 不共享。「同一 QueryClient 下两个实例去重成 1 次请求」由 useScanQuery.spec.ts 的 Q1 守。
+    // 这里守的是「徽章发的 params 与三页完全一致」，即它们的 query key 必然相同。
     expect(h.fetchScanHeld).toHaveBeenCalled();
     expect(h.fetchScanHeld.mock.calls[0]![0]).toEqual({ workerId: WORKER, limit: 200 });
     a.unmount();
