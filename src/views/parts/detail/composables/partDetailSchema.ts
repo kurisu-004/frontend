@@ -43,6 +43,14 @@ import { ORDER_STATUSES } from '@/types/parts';
 // 价值在于「后端加字段 / 前端字段名写错」当场炸，而不是 Zod strip 把多出来的键静默
 // 丢掉、页面照常渲染、只是某一列永远是空的。
 //
+// ⚠️ **部署顺序：后端必须先上。** 后端给 `PartDetailOut` 加**任何一列** ⇒ 前端这条
+// schema 抛 `unrecognized_keys` ⇒ 本页详情 query 整条进 error（**主卡空白 + 一条
+// ElMessage.error**，其余卡照常渲染）。同步点就是**本 schema 一行**：后端加了列就过来
+// 补一个键 + 一行类型注解，不是「页面刷新一下就好」。这不是理论风险 —— `PartDetailOut`
+// 历史上加过 `process_chain_id`、金额两列（`unit_price` / `total_price`）与三个 service
+// 注入字段，每加一次就要动这里一次，是会反复发生的事。守卫留在这里正是为了让它炸得
+// 早、炸在开发机上。
+//
 // 契约要点：
 //   - 雪花 ID（id / customer_id / assembly_id / next_process_id / current_batch_id /
 //     process_chain_id / created_by / updated_by）走 `serialize_i64(_opt)` ⇒ JSON
@@ -175,6 +183,13 @@ export type PartEventListData = z.infer<typeof partEventListSchema>;
 
 // ============================================================
 // 3. 工序链（`GET /api/v2/prod/process-chains/{chain_id}` 的 `ProcessChainOut`）。
+//
+// ⚠️ **跨域归属**：本 schema 守的是 `prod::process_chain` 域的 VO，却住在
+// `views/parts/detail/composables/` —— 因为两个消费方之一（零件详情页的
+// `useProcessChain`）在这里，另一个（`views/production/` 的 `useProcessDesignStore`）
+// 不在这里。当前形态合规且无循环 import，但工序链域将来再加写端点 / 新守卫时，这里
+// 就是一个真的别扭点了：**工序链若独立成自己的守门模块，应迁到
+// `views/production/composables/`**。
 //
 // 由 `part.process_chain_id` 指过来，**一个 part 至多一条链**（后端
 // `uq_t_part_process_chain` 保证 1:1）。无链 / 链已软删时后端返 404 +

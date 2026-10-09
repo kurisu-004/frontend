@@ -13,7 +13,13 @@
 // 断言分两层：
 //   1. **类型层**（`expectTypeOf`）：由 `npm run typecheck`（vue-tsc，`tsconfig.json`
 //      的 include 覆盖 `src/**/*.ts`）真正执行。声明被改回 `PartDetailDto` 时这里
-//      编译失败。`vitest run` 下这些调用是运行时 no-op —— 所以配了第 2 层。
+//      编译失败。⚠️ **但这一层在 `vitest run` 下是 no-op** —— 只有人手跑 typecheck
+//      才会红。而**镜像构建绕开了它**：`Dockerfile` 的 builder 阶段只跑
+//      `npx vite build`（不打类型检查，类型检查被有意留给独立的 lint 任务），仓库
+//      也没有 `.github/workflows`。⇒ **这批「类型形状」断言默认没有牙齿**：改错声明
+//      时 `npm test` 全绿、镜像构建也全绿，只有显式跑 `npm run typecheck` 才拦得住。
+//      本地改这几个 wrapper 的返回类型时务必手动补跑 typecheck，别只跑 test。
+//      配了第 2 层就是为这个缺口兜底。
 //   2. **源码层**（正则扫函数签名）：让 `npm test` 单跑也能红，钉住「这些 wrapper
 //      的返回类型字面量」。同 `usePartDetailActions.spec.ts` 的 A9 静态守卫。
 //
