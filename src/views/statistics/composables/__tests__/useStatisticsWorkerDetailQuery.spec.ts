@@ -34,8 +34,7 @@ vi.mock('element-plus', () => ({
 const fetchWorkerDetailMock = vi.fn();
 
 vi.mock('@/api/statistics', () => ({
-  fetchWorkerDetail: (workerId: string, params: unknown) =>
-    fetchWorkerDetailMock(workerId, params),
+  fetchWorkerDetail: (workerId: string, params: unknown) => fetchWorkerDetailMock(workerId, params),
 }));
 
 import { useStatisticsWorkerDetailQuery } from '../useStatisticsWorkerDetailQuery';
@@ -73,7 +72,12 @@ function makeDetail(overrides: Record<string, unknown> = {}): Record<string, unk
     ],
     effective_minutes: 240,
     process_breakdown: [
-      { process_id: '1900000000000000010', process_name: '铣削', step_count: 5, effective_minutes: 200 },
+      {
+        process_id: '1900000000000000010',
+        process_name: '铣削',
+        step_count: 5,
+        effective_minutes: 200,
+      },
       { process_id: null, process_name: '(已删除)', step_count: 1, effective_minutes: 40 },
     ],
     ...overrides,
