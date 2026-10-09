@@ -74,6 +74,14 @@ export interface WorkerStatsItem {
   participated_part_count: number;
   /** 贡献度百分比 0-100；无工种或 0 总量 → null。 */
   contribution_pct: number | null;
+  /** 期内有效工时（**分钟整数**，非 string）。只认 RETURNED_TO_SHELF /
+   *  SENT_TO_INSPECTION 两种事件；链外工序计 0 而不是丢弃该行，数据覆盖受工序链
+   *  配置率限制（没配链的工单恒为 0 是口径的必然结果）。 */
+  effective_minutes: number;
+  /** 期内完成过的不同工序数（天然忽略 process_id IS NULL 的行）。 */
+  worked_process_count: number;
+  /** 期内作业过的不同批次数（天然忽略 batch_id IS NULL 的行）。 */
+  worked_batch_count: number;
 }
 
 export interface WorkerStatsListOut {
@@ -108,64 +116,38 @@ export interface WorkerPartItem {
   last_pickup_at: string;
 }
 
+/** 一行 = 一道工序在该工人区间内的作业汇总（`GET /workers/{id}` 的
+ *  `process_breakdown[]` 元素，服务端已排好序）。
+ *
+ *  ⚠️ **两种不同的「无名」，UI 占位文案不要混用**：`process_id === null` = 「这条作业
+ *  事件没记工序」（对工时总额贡献恒为 0）；`process_name === '(已删除)'` = 「记了工序
+ *  id 但工序行取不到」，是后端给的兜底字符串。 */
+export interface WorkerProcessBreakdown {
+  /** NULL = 该作业事件没记工序。雪花 ID 字符串化。 */
+  process_id: string | null;
+  /** 工序显示名；取不到时后端退 '(已删除)' 字符串。 */
+  process_name: string;
+  /** 该工序在该区间内被「完成」的次数（COUNT(*)，不是 distinct）。 */
+  step_count: number;
+  /** 该工序贡献的有效工时（分钟整数，非 string）。 */
+  effective_minutes: number;
+}
+
 export interface WorkerDetailOut {
   worker: WorkerBrief;
   pickup_count: number;
   pickup_quantity: number;
   participated_part_count: number;
-  /** 期内 RETURNED 事件数。 */
+  /** 期内 RETURNED_TO_SHELF 事件数（工人放回货架 = 做完一道工序）。 */
   return_count: number;
   /** 每日领取次数（零填充到 [date_from, date_to]）。 */
   daily_pickups: DayCount[];
   /** 该工人参与工单一览（按 last_pickup_at desc，仅未软删件）。 */
   parts: WorkerPartItem[];
-}
-
-// ============================================================
-// ============================================================
-// GET /statistics/pickup-skips
-// ============================================================
-
-/** tab4 单个工人的跳序取件汇总。 */
-export interface PickupSkipSummaryItem {
-  worker_id: string;
-  /** 工人姓名；工人被软删时回退 '(已删除)' 字符串 */
-  worker_name: string;
-  badge_code: string;
-  work_type_name: string | null;
-  /** 该工人累计跳序次数 */
-  skip_count: number;
-  /** 该工人最近一次跳序时间（ISO datetime；从未跳序则 null） */
-  last_skip_at: string | null;
-}
-
-export interface PickupSkipSummaryOut {
-  items: PickupSkipSummaryItem[];
-}
-
-// ============================================================
-// GET /statistics/pickup-skips/{worker_id}
-// ============================================================
-
-/** tab4 单条跳序事件明细。 */
-export interface PickupSkipDetailItem {
-  id: string;
-  part_id: string;
-  /** 流水号快照（可能为 null = 该工单已 release serial） */
-  serial_no: string | null;
-  part_name: string;
-  batch_no: number;
-  quantity: number;
-  part_planned_delivery_date: string | null;
-  skipped_earliest_date: string | null;
-  created_at: string;
-}
-
-export interface PickupSkipDetailOut {
-  items: PickupSkipDetailItem[];
-  total: number;
-  limit: number;
-  offset: number;
+  /** 期内有效工时总额（分钟整数，非 string），等于 process_breakdown 各行之和。 */
+  effective_minutes: number;
+  /** 按工序拆分（服务端已按 effective_minutes / step_count / process_id 排好序）。 */
+  process_breakdown: WorkerProcessBreakdown[];
 }
 
 // ============================================================
@@ -176,10 +158,4 @@ export interface PickupSkipDetailOut {
 export interface StatisticsQuery {
   date_from: string;
   date_to: string;
-}
-
-/** GET /statistics/pickup-skips/{worker_id} 的分页参数。 */
-export interface PickupSkipDetailQuery {
-  limit: number;
-  offset: number;
 }

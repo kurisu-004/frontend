@@ -51,6 +51,10 @@ import type { ListUsersParams } from '@/api/iam';
 // 2026-10-10：报工台两条 list 的入参形态在 api/productionScan.ts 定义（api 层是 wire
 // 契约的唯一定义处，沿上面几个 List*Params 的既有做法），本文件只引用。
 import type { ScanHeldParams, ScanPickableParams } from '@/api/productionScan';
+// 2026-10-12：statistics 域三个端点共用同一组日期范围入参（date_from / date_to 是后端
+// 必填的 NaiveDate），形态在 types/statistics.ts 定义（沿上面几个 List*Params 的既有
+// 做法，本文件只引用）。
+import type { StatisticsQuery } from '@/types/statistics';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
  *  含 code_like / category / limit / offset 四字段；与 ListProcessesParams 同形，预留扩展分叉。 */
@@ -627,4 +631,47 @@ export const qk = {
   partEvents: (partId: string) => ['part-events', partId] as const,
   /** 零件事件历史域前缀 —— 与 partDetail 同批失效（每次写端点都会追加事件行）。 */
   partEventsPrefix: ['part-events'] as const,
+  // ============================================================
+  // 2026-10-12 新增：statistics 域（生产统计三个 tab）queryKey 工厂。
+  //
+  // 根命名空间取 `statistics`（与页面路由段 / 菜单域、后端 URL 段 `/statistics/*`
+  // 逐段对齐，便于按 URL 反查键），**不**挂 `partsPrefix` 下 —— 理由沿本文件
+  // `inspection` / `assembly` / `production-queue` / `production-scan` 几段的
+  // 「根命名空间」取舍：键的根只要求「同根前缀匹配」才有意义，挂了才有共享写点。
+  // statistics 域是**纯只读域**（后端三个端点全是 `pool.acquire()`、不开事务、不发 WS
+  // 广播），与零件域**零共享写点** ⇒ 挂 parts 下只会让全仓最热的 `qk.partsPrefix`
+  // 一把全刷把三个 tab 的报表缓存全部连带重拉（报表查询本身不便宜，概览页一次就
+  // 返 4 段图表数据）。
+  //
+  // 三条读键，三个端点一一对应（都是**参数键**：`date_from` / `date_to` 是后端必填的
+  // `NaiveDate`，不进键则切日期会拿上一段区间的报表冒充当前区间）：
+  //   - statisticsOverview(params)                    —— GET /statistics/overview
+  //   - statisticsWorkers(params)                     —— GET /statistics/workers
+  //   - statisticsWorkerDetail(workerId, params)      —— GET /statistics/workers/{id}
+  //
+  // 失效编排点：**当前没有任何写点**（本域只有读）。三条失效路径都预留：将来该域出现
+  // 写操作时，走 `qk.statisticsPrefix` 一把全失效即可（详情键额外可被
+  // `statisticsWorkerDetailPrefix` 精确失效，但那属于将来写点的编排，届时补）。
+  // 与 CLAUDE.md「跨页面写操作不做穷举失效」一致，当前新鲜度完全靠 30s 有限
+  // staleTime + 页面自身的显式 refetch 兜底。
+  // ============================================================
+  /** 车间生产总览键（`GET /api/v2/statistics/overview`，tab1 的唯一数据源：
+   *  KPI + 4 段图表）。params = `{ date_from, date_to }`，两个键都是后端必填的
+   *  `NaiveDate`（漏传走 axum Query 提取器 → **HTTP 400 纯文本**，不进 `R<T>` 信封）。 */
+  statisticsOverview: (params: StatisticsQuery | null) =>
+    ['statistics', 'overview', params] as const,
+  /** 工人贡献度列表键（`GET /api/v2/statistics/workers`，tab2 工人表 + tab3 的工人
+   *  下拉共用这一条）。params 同上。端点**一次性返全部**（无分页信封），键里没有
+   *  limit / offset —— 前端自管筛选与分页。 */
+  statisticsWorkers: (params: StatisticsQuery | null) => ['statistics', 'workers', params] as const,
+  /** 单工人详情键（`GET /api/v2/statistics/workers/{worker_id}`，tab3 的唯一数据源）。
+   *  **workerId 走独立键位**而非塞进 params 对象：端点按工人分片返回，不带 id 切工人时
+   *  会拿上一个工人的详情冒充当前工人。workerId 空串 → 占位键（调用方 `enabled` 闸门
+   *  + queryFn 二次守卫拦掉，理由同 `deliveryNoteDetail` / `partDetail`）。 */
+  statisticsWorkerDetail: (workerId: string, params: StatisticsQuery | null) =>
+    ['statistics', 'worker-detail', workerId, params] as const,
+  /** statistics 域前缀 —— 域内将来出现写操作后一把全失效（任意 params / 任意
+   *  workerId 形态都命中）。当前域内零写点（后端三个端点全是只读），本键预留给
+   *  写点接入时使用，**不要**在调用点拼字面量数组。 */
+  statisticsPrefix: ['statistics'] as const,
 } as const;
