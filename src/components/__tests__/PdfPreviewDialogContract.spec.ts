@@ -7,7 +7,7 @@
 //   （.pdf-viewer{height:100%} → .canvas-wrap{flex:1} → .pdf-viewport{flex:1;overflow:hidden}），
 //   而 EP 的 .el-dialog__body 是 display:block + height:auto，直接子元素的 height:100%
 //   退化成 auto，链塌成 0，position:absolute 的 canvas 被 overflow:hidden 裁掉。
-//   全站 7 处 fullscreen 弹窗都照抄了「el-dialog body 有确定高度」这个错误假设，一起空白。
+//   全站几处弹窗都照抄了「el-dialog body 有确定高度」这个错误假设，一起空白。
 //
 // 为什么用源码断言而不是 mount 断言：
 //   这是**纯 CSS 塌陷**，jsdom 没有布局引擎（不实现 flex / definite height / 视口单位），
@@ -23,13 +23,13 @@
 //   3. 断言该开标签同时含 `pdf-preview-dialog` 与 `fullscreen`
 //      （缺 fullscreen 则 .is-fullscreen 选择器不命中，class 形同虚设）。
 //
-// 范围说明（有意只锁这 7 处，不做全仓扫描）：
-//   - 非 fullscreen 弹窗不走这条规则。OutsourceQuotePdfPreview.vue 是 900px 宽的
-//     非全屏预览，它在自己的 scoped 样式里给 .drawing-frame-wrap 定了确定高度。
+// 范围说明（有意只锁这几个文件，不做全仓扫描）：
+//   - 报工台三页的预览弹窗抽成 `PartDrawingPreviewDialog.vue` 后，表里是**一行**
+//     （原先三页各一行，指向三份逐字相同的弹窗）。
 //   - 宿主自带确定高度、无需该 class 的 2 处（不改、也不在本守卫内）：
 //     DrawingPreviewPane（.file-preview flex 链）、PartPreviewDialog（aspect-ratio 定宽定高）。
 //   上述「例外集合」是人工判定，再加一条全仓扫描只会把维护者绑在人工白名单上；
-//  本守卫的价值是锁死这 7 个已知调用点，新增 fullscreen 预览弹窗请一并加进下面的表。
+//  本守卫的价值是锁死这些已知调用点，新增直接承载 PdfViewer 的预览弹窗请一并加进下面的表。
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -38,13 +38,13 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
-/** 全部「el-dialog fullscreen 直接承载 PdfViewer」的调用点（相对仓库根，正斜杠）。 */
+/** 全部「el-dialog 直接承载 PdfViewer」的调用点（相对仓库根，正斜杠）。 */
 const FULLSCREEN_PDF_DIALOGS: { file: string; where: string }[] = [
   { file: 'src/components/FileListCard.vue', where: 'previewVisible 预览弹窗' },
   { file: 'src/views/assemblies/components/AssemblyChildrenTable.vue', where: '子件图纸预览' },
-  { file: 'src/views/production/scan/ScanPickParts.vue', where: '图纸预览' },
-  { file: 'src/views/production/scan/ScanInspectParts.vue', where: '图纸预览' },
-  { file: 'src/views/production/scan/ScanReturnParts.vue', where: '图纸预览' },
+  // 报工台三页（取件 / 放回 / 送检）的预览弹窗 2026-10-11 抽成同一个域内组件，
+  // 「三行」变「一行」—— 同一个弹窗原先是三份逐字复制，守卫表按文件列，故合并。
+  { file: 'src/views/production/scan/components/PartDrawingPreviewDialog.vue', where: '图纸预览' },
   { file: 'src/views/parts/new/components/PartBatchPdfTab.vue', where: 'PDF 文件名预览' },
   { file: 'src/views/parts/new/components/PartBatchManualTab.vue', where: '图纸预览' },
 ];
@@ -103,7 +103,7 @@ describe('el-dialog 承载 PdfViewer 的高度契约', () => {
     expect(
       scss.replace(/\s+/g, ' '),
       'src/styles/index.scss 里的 .pdf-preview-dialog 规则被删了：' +
-        '上面 7 处 class 会变成无样式的空标记，高度链照旧塌陷',
+        '上面这些调用点的 class 会变成无样式的空标记，高度链照旧塌陷',
     ).toContain('.pdf-preview-dialog.el-dialog.is-fullscreen');
   });
 });

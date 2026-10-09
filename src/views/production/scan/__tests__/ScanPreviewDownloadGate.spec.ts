@@ -234,11 +234,14 @@ describe.each(PAGES)('%s：预览弹窗的「下载文件」按钮闸门', (_nam
   it('D3：SHELF_ACCOUNT 点不到（函数体同守卫）⇒ 一次 /url 请求都不发', async () => {
     // 按钮已被 v-if 藏掉，这里直接拿实例上的处理函数模拟「任何仍能触达 downloadPreview
     // 的路径」：只藏按钮而不守函数体的话，这里会发一次必 403 的 getDownloadUrl。
+    // 2026-10-11：`downloadPreview` 随预览逻辑搬进 `PartDrawingPreviewDialog`，闸门
+    // 的函数体也在那里 ⇒ 从该子组件实例上取，不是从页面 vm 上取。
     seedSession(['SHELF_ACCOUNT']);
     const w = await mountPage(comp);
     await openStepPreview(w);
-    const vm = w.vm as unknown as { downloadPreview: () => Promise<void> };
-    await vm.downloadPreview();
+    const dlg = w.findComponent({ name: 'PartDrawingPreviewDialog' });
+    expect(dlg.exists(), '预览弹窗组件没渲染').toBe(true);
+    await (dlg.vm as unknown as { downloadPreview: () => Promise<void> }).downloadPreview();
     expect(h.getDownloadUrl).not.toHaveBeenCalled();
     w.unmount();
   });

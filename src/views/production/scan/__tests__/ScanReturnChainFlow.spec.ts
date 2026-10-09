@@ -42,7 +42,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { createPinia } from 'pinia';
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // vi.mock 的工厂会被提升到文件顶部，不能引用后声明的 const ⇒ 所有桩函数集中放进
@@ -83,6 +83,10 @@ import ScanReturnParts from '../ScanReturnParts.vue';
 import { CHAIN_ROW_CLASS } from '@/views/production/scan/chainAccent';
 import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
+
+// 源码契约用例要读 `components/PartRowCard.vue`（`.part-row*` 样式随卡片抽出）与三页
+// 自身的源文件：都在本文件的目录树上，锚定报工台目录即可。
+const SCAN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 // 报工台 session 的 worker 是后端 `ScanWorkerBrief`（4 字段），不是账号管理页那个
 // 12 字段的 `WorkerOut`。
@@ -948,29 +952,40 @@ describe('ScanReturnParts — 列表卡左边框按 has_process_chain 着色', (
 
   // 级联契约（读源码）：类名对了还不够 —— `.has-chain` 与 `.is-selected` / `.is-urgent`
   // 同为 0,2,0，谁生效全靠源码顺序。
-  it('源码契约：三页的 .has-chain 规则排在全部状态类之后，且模板不再 inline 左边框色', () => {
-    for (const file of ['ScanReturnParts.vue', 'ScanPickParts.vue', 'ScanInspectParts.vue']) {
-      const src = readFileSync(
-        resolve(dirname(fileURLToPath(import.meta.url)), '..', file),
-        'utf8',
+  //
+  // 2026-10-11：`.part-row*` 的样式随卡片抽出到 `components/PartRowCard.vue`
+  // （三页此前各抄一份），故源码断言的**对象换成了那个组件**：读三页已经读不到任何
+  // `.part-row` 规则了。三页仍各自断言一条「不得出现 borderLeftColor」—— 卡片变成
+  // 子组件后，边框色只可能由 `PartRowCard` 的 scoped CSS 决定，页面里若再出现
+  // inline 左边框色就说明有人在页面上又手写了一份行样式。
+  it('源码契约：PartRowCard 的 .has-chain 规则排在全部状态类之后，且模板不 inline 左边框色', () => {
+    const card = 'components/PartRowCard.vue';
+    const src = readFileSync(join(SCAN_DIR, card), 'utf8');
+    expect(src, `${card} 不得用 inline :style 承载左边框语义色`).not.toContain('borderLeftColor');
+    const chainAt = src.indexOf('.part-row.has-chain {');
+    expect(chainAt, `${card} 缺少 .part-row.has-chain 规则`).toBeGreaterThan(-1);
+    for (const selector of [
+      '.part-row.is-selected {',
+      '.part-row.is-urgent {',
+      '.part-row.is-urgent.is-selected {',
+    ]) {
+      expect(src.indexOf(selector), `${card} 缺少 ${selector}`).toBeGreaterThan(-1);
+      expect(chainAt, `${card} 的 .has-chain 必须排在 ${selector} 之后`).toBeGreaterThan(
+        src.indexOf(selector),
       );
-      expect(src, `${file} 不得用 inline :style 承载左边框语义色`).not.toContain('borderLeftColor');
-      const chainAt = src.indexOf('.part-row.has-chain {');
-      expect(chainAt, `${file} 缺少 .part-row.has-chain 规则`).toBeGreaterThan(-1);
-      for (const selector of [
-        '.part-row.is-selected {',
-        '.part-row.is-urgent {',
-        '.part-row.is-urgent.is-selected {',
-      ]) {
-        expect(src.indexOf(selector), `${file} 缺少 ${selector}`).toBeGreaterThan(-1);
-        expect(chainAt, `${file} 的 .has-chain 必须排在 ${selector} 之后`).toBeGreaterThan(
-          src.indexOf(selector),
-        );
-      }
-      expect(
-        cssRuleBody(src, '.part-row.has-chain'),
-        `${file} 的 .has-chain 规则必须只染左边框`,
-      ).toContain('border-left-color');
+    }
+    expect(
+      cssRuleBody(src, '.part-row.has-chain'),
+      `${card} 的 .has-chain 规则必须只染左边框`,
+    ).toContain('border-left-color');
+
+    // 三页只留「不得 inline 左边框色」这一条：卡片已是子组件，页面里若再出现行样式
+    // 就说明有人绕过 PartRowCard 又手写了一份 `.part-row`。
+    for (const page of ['ScanReturnParts.vue', 'ScanPickParts.vue', 'ScanInspectParts.vue']) {
+      const pageSrc = readFileSync(join(SCAN_DIR, page), 'utf8');
+      expect(pageSrc, `${page} 不得用 inline :style 承载左边框语义色`).not.toContain(
+        'borderLeftColor',
+      );
     }
   });
 });
