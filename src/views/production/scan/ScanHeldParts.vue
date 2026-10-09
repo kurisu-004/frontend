@@ -78,6 +78,7 @@
             v-for="p in sortedParts"
             :key="p.batch_id || p.id"
             :row="p"
+            readonly
             :previewing="previewDlg?.loading === true && previewPart?.id === p.id"
             @preview="openPreview"
           />

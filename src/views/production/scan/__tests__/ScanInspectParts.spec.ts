@@ -260,7 +260,13 @@ describe('ScanInspectParts / 送检数量', () => {
     w.unmount();
   });
 
-  it('S3：确认栏读的是本次送检数量（selectedQty），不是恒为批次全量', async () => {
+  // 「点选」这一档：只进入待扫码确认态，不提交。此时确认栏显示的是**批次全量**。
+  // ⚠️ 断言点是 `送检数量 6` 这个具体数（不是泛泛的「含 送检数量」），且这个状态点在
+  // 当前交互下**只有这一种可达时刻** —— `applyScanSelection` 一进来就把 `awaitingScan`
+  // 置 false、数量弹窗接上，`selectedQty` 在确认栏可见期间恒等于批次全量（见
+  // `ScanInspectParts.vue` 确认栏注释）。所以用例名不声称「读的是 selectedQty 而非全量」
+  // —— 那个断言点上两者都等于 6，改回模板照样会绿，是条误导性守卫。
+  it('S3：点选（未扫码）时确认栏显示批次全量，且停在待扫码态不提交', async () => {
     const w = await mountPage([row({ quantity: 6 })]);
     // 点选只进入「待扫码确认」，不提交
     await w.findAll('.part-row')[0]!.trigger('click');
@@ -271,6 +277,10 @@ describe('ScanInspectParts / 送检数量', () => {
 
     // 扫码 → 选数量 → 提交成功后确认栏收起
     await scan(w, 'F2256');
+    expect(qtyDialogOpen(w)).toBe(true);
+    // 数量弹窗一开，确认栏就收起（applyScanSelection 清了 awaitingScan）⇒ 工人不会
+    // 同时看到「送检数量 6」和弹窗里那个数而被绕进去
+    expect(w.find('.confirm-bar').exists()).toBe(false);
     await confirmQty(w, 4);
     expect(h.scanWorker.mock.calls[0]![0]).toMatchObject({ quantity: '4' });
     expect(w.find('.confirm-bar').exists()).toBe(false);

@@ -34,7 +34,7 @@
     dialog 是 auto 高度，必须由 **body 自己**声明确定高度）。只留 fullscreen 那一支时，
     窗口形态的弹窗会退回本段描述的塌陷。
 
-  2026-10-11 新增：**默认 fit 到容器**（全局开启）。
+  2026-10-11 新增：**默认 fit 到容器**（`fit` prop，默认 true，全仓生效）。
     此前 render() 恒用 `props.initialScale`（默认 1.0）渲染，完全不看容器尺寸，
     于是 A0/A1 图纸（scale 1 时 2384×3370px）只能看见左上角一小块，工人得先滚、
     再自己调比例才能找到要看的那一面。现在每次 render() 都按
@@ -52,6 +52,15 @@
     · 该 ResizeObserver 只在「上一次 fit 失败」时补渲染，不跟着每次尺寸变化重算 ——
       窗口拖拽缩放时反复重渲染会造成 canvas 重排抖动，与 2026-09-12 删掉
       scheduleReRender 的理由同款。
+    · **fit 只在用户没手动缩放过时生效**（`userZoomed` 标志）：+/- 改的就是 renderScale
+      本身，若 render() 随后无条件覆写成 fit 值，那一步就等于没做（点 +/- 视觉零变化）。
+      `resetView` / 切 url / 翻页三处清标志 ⇒ 复位与翻页都回到 fit（复位按钮的语义是
+      「回到整页塞进容器的大小」，不是「回到 1 倍」）。翻页清标志是**刻意**的：图纸
+      各页图幅不同（封面 A0、正图 A4 混排很常见），保留上一页的 zoom 会让下一张图要么
+      出容器要么小到看不清，而「翻页 = 重新适应」正是 fit 这件事的价值所在。
+    · `fit` prop 是 opt-out 口子（默认 true）：现在全仓 7 个承载点都要 fit，但组件本体
+      不该把「永远 fit」焊死 —— 将来某个页面要固定比例（比如逐页比对同一比例），
+      传 `:fit="false"` 即可，不必改组件本体。
   CLAUDE.md #6：仍走 @/utils/pdfjs，不直接 import pdfjs-dist。
 -->
 <template>
@@ -85,6 +94,7 @@
         <el-button @click="zoomOut"
           ><el-icon><ZoomOut /></el-icon
         ></el-button>
+        <!-- 复位 = 回到「整页塞进容器」的大小（fit 开启时），不是回到 1 倍 -->
         <el-button title="双击也可复位" @click="resetView">
           <el-icon><Refresh /></el-icon>
         </el-button>
@@ -134,10 +144,14 @@ interface Props {
   url: string;
   page?: number;
   initialScale?: number;
+  /** 是否每次渲染都按容器尺寸算「整页塞进容器」的比例（默认 true）。关掉则恒用
+   *  `initialScale` 起手、之后只由 +/- / 滚轮改 —— 供需要固定比例的承载点 opt-out。 */
+  fit?: boolean;
 }
 const props = withDefaults(defineProps<Props>(), {
   page: 1,
   initialScale: 1.0,
+  fit: true,
 });
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
@@ -162,6 +176,10 @@ const viewScale = ref(1); // CSS transform 乘数（连续，0.1-10）
 const tx = ref(0); // 平移 x（屏幕 px）
 const ty = ref(0); // 平移 y
 const totalScale = computed(() => renderScale.value * viewScale.value);
+// 2026-10-11：用户点过 +/-（改的就是 renderScale 本身）之后，render() 不得再无条件
+// 覆写成 fit 值 —— 那会把刚写进去的比例在同一次调用里抹掉，点 +/- 视觉零变化。
+// 置位点只有 zoomIn / zoomOut，清位点是 resetView / 切 url / 翻页（见文件头）。
+const userZoomed = ref(false);
 
 // stage 实际尺寸（按 renderScale 渲染出的画布像素 / devicePixelRatio），用于占位 div 宽度
 const stageWidth = ref(0);
@@ -232,13 +250,21 @@ async function render() {
   const p = await pdfDoc.getPage(page.value);
   // 2026-10-11：先把 renderScale 落到「整页塞进容器」的比例（写 renderScale 而非
   // viewScale：fit 要的是矢量清晰的成像，CSS 放大只会把图放大糊）。
-  const fit = fitScaleOf(p);
-  if (fit === null) {
-    // 容器尺寸为 0（宿主尚未布局）⇒ 回落 initialScale，并等 ResizeObserver 补一次。
-    renderScale.value = initialScale;
-    fitPending = true;
+  // 两个门都过才重算：`props.fit` 是 opt-out 口子；`userZoomed` 表示工人已经用 +/- /
+  // 滚轮表过态（滚轮只动 viewScale，但同样表达了「我要看多大」）。两种情况下都
+  // **不碰 renderScale** —— 那正是工人要的值，落到 initialScale 反而把选择抹了。
+  if (props.fit && !userZoomed.value) {
+    const fit = fitScaleOf(p);
+    if (fit === null) {
+      // 容器尺寸为 0（宿主尚未布局）⇒ 回落 initialScale（不产生 NaN），
+      // 并记一笔等 ResizeObserver 补一次。
+      renderScale.value = initialScale;
+      fitPending = true;
+    } else {
+      renderScale.value = fit;
+      fitPending = false;
+    }
   } else {
-    renderScale.value = fit;
     fitPending = false;
   }
   const viewport = p.getViewport({ scale: renderScale.value * (window.devicePixelRatio || 1) });
@@ -259,21 +285,28 @@ async function render() {
   });
 }
 
+// 翻页清 userZoomed：图纸各页图幅不同（封面 A0、正图 A4 混排很常见），保留上一页的
+// 缩放会让下一张图要么出容器、要么小到看不清，而「翻页 = 重新适应」正是 fit 的价值。
 function prevPage() {
   if (page.value > 1) {
     page.value -= 1;
+    userZoomed.value = false;
     void render();
   }
 }
 function nextPage() {
   if (page.value < totalPages.value) {
     page.value += 1;
+    userZoomed.value = false;
     void render();
   }
 }
 /**
  * 「整页塞进 `.pdf-viewport`」的比例；容器没量到尺寸（或页面本身尺寸为 0）时返回
  * `null`，由调用方回落 `initialScale`。每页各自算，翻页后自动重新适应。
+ *
+ * ⚠️ 只在 `props.fit && !userZoomed` 时被调用 —— 容器尺寸为 0 与「不打算 fit」是两件
+ * 不同的事，前者要回落 initialScale 并等 ResizeObserver，后者必须原样保留 renderScale。
  */
 function fitScaleOf(p: pdfjsLib.PDFPageProxy): number | null {
   const host = viewportRef.value;
@@ -286,12 +319,16 @@ function fitScaleOf(p: pdfjsLib.PDFPageProxy): number | null {
   return clamp(Math.min(w / base.width, h / base.height), FIT_MIN_SCALE, FIT_MAX_SCALE);
 }
 
+// +/- 改的是 renderScale 本身，必须先置位 userZoomed，否则随后的 render() 会把它
+// 覆写回 fit 值（点一下视觉零变化，唯一残留效果是 viewScale 被重置成 1）。
 function zoomIn() {
+  userZoomed.value = true;
   renderScale.value = Math.min(3, +(renderScale.value + 0.2).toFixed(1));
   viewScale.value = 1;
   void render();
 }
 function zoomOut() {
+  userZoomed.value = true;
   renderScale.value = Math.max(0.4, +(renderScale.value - 0.2).toFixed(1));
   viewScale.value = 1;
   void render();
@@ -370,18 +407,28 @@ function onMouseUp() {
 }
 
 // ============ 复位 ============
-// 2026-09-12 新增：双击 / 工具栏复位按钮
+// 2026-09-12 新增：双击 / 工具栏复位按钮。
+// 2026-10-11 改：同时清 userZoomed 并重渲一次 —— 语义是「回到整页塞进容器的大小」
+// （fit 开启时），不是「回到 1 倍」。只清 viewScale / 平移的话，工人按了复位却仍停在
+// 自己放大后的比例上，「复位」这个按钮名就落空了。
 function resetView() {
+  userZoomed.value = false;
   viewScale.value = 1;
   tx.value = 0;
   ty.value = 0;
+  // fit=false 时重渲一次只是把同一个 renderScale 再画一遍，无副作用；
+  // fit=true 时它才是「回到 fit」的那一步。
+  void render();
 }
 
 watch(
   () => props.url,
   () => {
-    // 切 url 时同时重置视图，避免新 PDF 继承上一次的平移
-    resetView();
+    // 切 url 时同时重置视图 + 清 userZoomed，避免新 PDF 继承上一次的缩放与平移
+    userZoomed.value = false;
+    viewScale.value = 1;
+    tx.value = 0;
+    ty.value = 0;
     void load();
   },
 );
@@ -389,6 +436,16 @@ watch(
   () => props.page,
   (v) => {
     page.value = v;
+    // 翻页重算 fit（每页图幅不同，保留上一页的缩放会让下一张图出容器）⇒ 清 userZoomed
+    userZoomed.value = false;
+    void render();
+  },
+);
+// `fit` 是 opt-out 口子，运行时切它要立刻生效：清 userZoomed 并重渲。
+watch(
+  () => props.fit,
+  () => {
+    userZoomed.value = false;
     void render();
   },
 );

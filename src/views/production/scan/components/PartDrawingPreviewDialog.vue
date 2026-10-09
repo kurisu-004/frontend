@@ -88,8 +88,10 @@ const props = defineProps<{
 
 const visible = defineModel<boolean>({ required: true });
 
-// 窗口形态的宽度走本仓既有范式 `useDialogSize`（desktopWidth 1100，弹窗在 1100px
-// 屏上留 80px 边距、1366px 屏上居中）。
+// 窗口形态的宽度走本仓既有范式 `useDialogSize`（只给 desktopWidth，EP 的 `.el-dialog`
+// 没有水平 margin、宽度是固定的 1100px）：1100px 视口上贴满屏宽（两侧 0 边距），
+// 1366px 及以上留 (视口 − 1100) / 2 的对称边距。想要真正窄屏可读就把这个数调小，
+// 但别指望它自带边距。
 const dialogSize = useDialogSize({ desktopWidth: 1100 });
 
 /**
@@ -113,7 +115,7 @@ let previewToken = 0;
 // 由调用方与它自己记下的 `part` 一起算出「哪一行在转圈」。
 defineExpose({ loading: computed(() => previewLoading.value) });
 
-// --- 类型判定（与 FileListCard.vue 295-302 同步） ---
+// --- 类型判定（图片集合与 `FileListCard.vue` 的 `IMAGE_TYPES` 同步） ---
 function isPdf(t: string): boolean {
   return t.toUpperCase() === 'PDF';
 }

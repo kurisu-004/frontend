@@ -29,8 +29,11 @@
 // 范围说明（有意只锁这几个文件，不做全仓扫描）：
 //   - 报工台三页的预览弹窗抽成 `PartDrawingPreviewDialog.vue` 后，表里是**一行**
 //     （原先三页各一行，指向三份逐字相同的弹窗）。
-//   - 宿主自带确定高度、无需该 class 的 2 处（不改、也不在本守卫内）：
-//     DrawingPreviewPane（.file-preview flex 链）、PartPreviewDialog（aspect-ratio 定宽定高）。
+//   - 宿主自带确定高度、无需该 class 的 **3 处**（不改、也不在本守卫内）：
+//     DrawingPreviewPane（.file-preview flex 链）、PartPreviewDialog（aspect-ratio 定宽定高）、
+//     OutsourceQuotePdfPreview（.drawing-frame-wrap 自己给 height:70vh + column）。
+//     三处都是「在 PdfViewer 与 body 之间插一个自带高度的包裹元素」，与「让 body 自己
+//     分高」是两种等价解法。
 //   上述「例外集合」是人工判定，再加一条全仓扫描只会把维护者绑在人工白名单上；
 //  本守卫的价值是锁死这些已知调用点，新增直接承载 PdfViewer 的预览弹窗请一并加进下面的表。
 

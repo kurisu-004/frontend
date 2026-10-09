@@ -623,6 +623,27 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(chainConfirmOpen(w)).toBe(false);
   });
 
+  // 2026-10-11：确认栏那个 `selectedQty ?? selectedPart.quantity` 只在**一种时刻**与
+  // 批次全量不同 —— 选了部分数量、提交失败之后（catch 分支不清选中态，确认栏仍在）。
+  // 那正是工人重试前盯着的那行字：显示批次全量的话，「刚才按了 2 件」会变成「5 件」，
+  // 重试就把 5 件发出去。这条用例把那个窗口钉住，改成恒读 `selectedPart.quantity`
+  // 就会红。
+  it('部分数量提交失败：确认栏仍显示工人刚选的那个数（不是批次全量）', async () => {
+    h.scanWorker.mockRejectedValueOnce(new Error('20111 数量非法'));
+    const w = await mountPage([nextRow({ quantity: 5 })]);
+    await clickFirstPart(w);
+    await chainConfirmButton(w, '按链放回').trigger('click');
+    await flushPromises();
+    await confirmQty(w, 2);
+
+    expect(h.ElMessage.error).toHaveBeenCalled();
+    // 选中态与确认栏都还在（失败不收尾），数量显示的是 2 而不是批次全量 5
+    const bar = w.find('.confirm-bar');
+    expect(bar.exists(), '提交失败不该把选中态清掉 —— 工人要能原样重试').toBe(true);
+    expect(bar.text()).toContain('归还数量 2');
+    expect(bar.text()).not.toContain('归还数量 5');
+  });
+
   // 没有货架 picker 之后，NEXT 分支少了一类兜底（原「候选架为空 → 回退手选」）。
   // 现在唯一还在的兜底是「链字段解析不出」⇒ 落回手选。
   it("NEXT + chain_next_process_id 为兜底值 '0'：不发提交，warning 后回退手选工序", async () => {
@@ -1073,8 +1094,13 @@ describe('ScanReturnParts — 列表卡左边框按 has_process_chain 着色', (
       `${card} 的 .has-chain 规则必须只染左边框`,
     ).toContain('border-left-color');
 
-    // 三页只留「不得 inline 左边框色」这一条：卡片已是子组件，页面里若再出现行样式
-    // 就说明有人绕过 PartRowCard 又手写了一份 `.part-row`。
+    // 三页只留「不得 inline 左边框色」这一条。⚠️ 本守卫的实际范围就到这里：**页面
+    // scoped CSS 里另写一份 `.parts-list .part-row { border-left-color: … }` 不会被拦**
+    // （Vue scoped 会命中子组件根元素，而本用例只查 `borderLeftColor` 这个 camelCase
+    // 的 inline 形态字面量）。真要连那条也拦，就得改成解析三页的 `<style>` 块并按
+    // 选择器匹配 —— 那是另一条「页面不得自带行样式」的契约，不在本用例的职责里。
+    // 当前的口径就是：页面里再出现行样式 ⇒ 卡片已经不是唯一实现，本条会因 inline 形态
+    // 而红；写成 class 形态则由 review 兜。
     for (const page of ['ScanReturnParts.vue', 'ScanPickParts.vue', 'ScanInspectParts.vue']) {
       const pageSrc = readFileSync(join(SCAN_DIR, page), 'utf8');
       expect(pageSrc, `${page} 不得用 inline :style 承载左边框语义色`).not.toContain(

@@ -210,6 +210,9 @@ describe('ScanHeldParts / 只读', () => {
   it('H6：点卡片只选中不了 / 不发任何写请求（页面上没有任何写路径）', async () => {
     const scanWorker = h.fetchScanHeld;
     const w = await mountPage();
+    // `readonly` 传下去 ⇒ 卡片去掉 pointer / hover（`.is-readonly`），因为整卡不可点。
+    // 光「点了没反应」不够：HMI 上摆着「能点」的全部视觉暗示，工人多半会反复点。
+    expect(w.findAll('.part-row')[0]!.classes()).toContain('is-readonly');
     await w.findAll('.part-row')[0]!.trigger('click');
     await flushPromises();
 

@@ -20,8 +20,13 @@
   等于它的 vnode footprint，多根（Fragment）会让「按位置搬运节点」的投放逻辑把卡片
   落在自己那对锚点之外（CLAUDE.md「拖拽投放」一节）。
 
-  2026-10-11 随抽取统一的两处色值：`:hover` 阴影色与 `.qty` 颜色此前按流程各给一份
-  （蓝 / 琥珀 / 琥珀）。流程区分归顶栏与路由，卡片上不再留第二套流程配色。
+  2026-10-11 随抽取统一的两处色值：`:hover` 阴影色此前按流程各给一份
+  （取件 `rgba(64,158,255,.08)` / 放回 `rgba(230,162,60,.08)` / 送检
+  `rgba(103,194,58,.08)`），`.qty` 颜色则是 蓝 `#409eff` / 琥珀 `#e6a23c` / 琥珀
+  `#e6a23c`。两处都统一成蓝色一套。流程区分归顶栏 `flowLabel` 与路由，
+  卡片上不再留第二套流程配色 —— **这是产品可见的变化**：放回页与送检页的卡片
+  从琥珀 / 绿变成蓝，若现场反馈「看不出这是哪个流程」，改的是顶栏与路由，不是把
+  边框色塞回卡片。
 
   纯展示：**不碰 query、不发请求**，数据由调用方从 `useScanXxxQuery` 传进来。
   「选中」与「预览中」由调用方算好传进来（选中态有三页各自的判定口径，预览中的
@@ -37,10 +42,11 @@
       {
         'is-selected': selected,
         'is-urgent': row.is_urgent,
+        'is-readonly': readonly,
       },
       chainRowClass(row.has_process_chain),
     ]"
-    @click="emit('select', row)"
+    @click="!readonly && emit('select', row)"
   >
     <div class="part-row-main">
       <!-- 预览按钮（`@click.stop` 阻止冒泡触发选中）。2026-10-11：原先是
@@ -102,8 +108,15 @@ withDefaults(
     selected?: boolean;
     /** 该行的图纸预览正在加载（按钮转圈）。 */
     previewing?: boolean;
+    /**
+     * 只读展示（`/scan/held` 查看持有页）：整卡不可点，`select` 事件不发出，
+     * CSS 去掉 `cursor: pointer` 与 `:hover` 阴影。
+     * 不做这件事的话，只读页的卡片点下去毫无反应，却摆着「能点」的全部视觉暗示 ——
+     * HMI 上工人多半会反复点。预览按钮不受影响（`:click.stop` 那一路仍可用）。
+     */
+    readonly?: boolean;
   }>(),
-  { selected: false, previewing: false },
+  { selected: false, previewing: false, readonly: false },
 );
 
 const emit = defineEmits<{
@@ -132,6 +145,15 @@ const emit = defineEmits<{
 }
 .part-row:hover {
   box-shadow: 0 2px 12px rgba(64, 158, 255, 0.08);
+}
+/* 只读展示（`/scan/held`）：整卡不可点 ⇒ 去掉「能点」的两处视觉暗示（指针 +
+   hover 阴影）。加急红底、链语义绿边框仍保留 —— 那些是「事实」不是「动作」，
+   只读页同样要看。 */
+.part-row.is-readonly {
+  cursor: default;
+}
+.part-row.is-readonly:hover {
+  box-shadow: none;
 }
 
 /* 非加急选中 → 加深绿底 */
@@ -163,9 +185,20 @@ const emit = defineEmits<{
   gap: 6px;
   width: 100%;
   min-width: 0;
+  /* 2026-10-11：给右侧预览按钮让位。按钮是 `position:absolute` 覆盖在卡片上，而本元素
+     `width:100%` 一直伸到内容盒右缘 ⇒ 三行文字会**压到按钮底下**（不是被省略号截断：
+     ellipsis 只在元素自身宽度不够时才触发，元素够宽就不截）。
+     推导（四个数都在本仓可查）：
+       按钮左缘 = 定位包含块（`.part-row` 的 padding box）右缘 − (right 14 + 宽 56) = −70px
+       本元素右缘 = padding box 右缘 − (`.part-row` padding-right 18 + `.el-card__body`
+                   的 padding 20，见 EP el-card.css 的 `--el-card-padding`) = −38px
+     ⇒ 重叠 32px，留 2px 缝取 34px。⚠️ 那个 20px 是 EP 默认值，改 `.el-card__body`
+     的 padding 必须回来重算这个数。 */
+  padding-right: 34px;
 }
-/* 2026-10-11：按钮改为 56×56 圆形纯图标、水平靠右 + 垂直居中（贴卡片正中），
-   不再与第一行文字抢位置 ⇒ `.part-line-top` 的 `padding-right: 64px` 让位删掉。
+/* 2026-10-11：按钮改为 56×56 圆形纯图标、水平靠右 + 垂直居中（贴卡片正中）。
+   垂直居中意味着它与三行文字的**重叠面积**比原先（只压第一行那一小块）更大，
+   所以让位放在容器 `.part-row-main` 上而不是某一行的 `padding-right`。
    `translateY(-50%)` 配 `top: 50%`：按钮是绝对定位的，卡片的 flex 对齐对它无效。
    ⚠️ `.preview-btn` 这个 class 是 `ScanPreviewDownloadGate.spec.ts` 的唯一定位器，
    不要改名。 */
@@ -188,7 +221,11 @@ const emit = defineEmits<{
 }
 /* 2026-10-11：卡片收窄到三列后，长序列号 / 长名称必须截断而不是折行 —— 折行会把一张
    卡撑成两行高，整列卡片高度参差，网格看着是坏的。`.part-line-top` 有 flex-wrap，
-   序列号那行一旦折行最先被顶开。`min-width: 0` 是 flex 子项能触发 ellipsis 的前提。 */
+   序列号那行一旦折行最先被顶开。`min-width: 0` 是 flex 子项能触发 ellipsis 的前提。
+   让位（`.part-row-main` 的 padding-right）之后这条仍成立：文本可用宽 = 432（网格列宽）
+   − 2（卡片边框）− 18×2（`.part-row` padding）− 20×2（`.el-card__body` padding）
+   − 34（按钮让位）≈ 320px，`.serial-no` / `.part-name` 各自的 `min-width:0` 让它们
+   在这个宽度里继续走 ellipsis 而不是撑破容器。 */
 .serial-no {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-size: 22px;

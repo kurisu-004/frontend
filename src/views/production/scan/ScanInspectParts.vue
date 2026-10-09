@@ -86,7 +86,15 @@
           <el-button :icon="Refresh" circle size="small" @click="refresh" />
         </div>
 
-        <!-- 待扫码确认栏 -->
+        <!-- 待扫码确认栏。
+             ⚠️ 这里读 `selectedQty` 而非恒读批次全量，但**本页两者恒等**：确认栏的显隐
+             条件是 `selectedPart && awaitingScan`，`awaitingScan` 只在「点选卡片」那一步
+             为 true，而那一刻 `selectedQty` 刚被写成 `p.quantity`；扫到条码走
+             `applyScanSelection` 时它立刻置 false（数量弹窗打开、确认栏收起），提交成功
+             则连 `selectedPart` 一起清空。⚠️ 与放回页不同：提交失败时本页**不**恢复
+             `awaitingScan`，确认栏不会重新可见，所以放回页那个「失败重试态」窗口在本页
+             并不存在。写 `?? selectedPart.quantity` 是防御性兜底 + 与放回页模板同形
+             （两页的确认栏逐字相似，抽成共用件时不必解释一处为什么少半句）。 -->
         <div v-if="selectedPart && awaitingScan" class="confirm-bar pending-scan">
           <el-icon :size="20" color="#e6a23c"><Aim /></el-icon>
           <span class="confirm-text">
@@ -339,7 +347,8 @@ function onSelect(p: ScanPartRowSchema): void {
   awaitingScan.value = true;
 }
 
-/** 实际提交：worker-scan（event_type=INSPECTED）。整批送检，不支持部分数量。 */
+/** 实际提交：worker-scan（event_type=INSPECTED），本次送检数量 = `selectedQty`
+ *  （2026-10-11 起由 `QuantityDialog` 选，缺省批次全量 = 整批送检）。 */
 async function submitInspect(): Promise<void> {
   if (!selectedPart.value || !worker.value) {
     ElMessage.warning('选择已重置，请重新选择零件');

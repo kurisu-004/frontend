@@ -98,7 +98,14 @@
           <el-button :icon="Refresh" circle size="small" @click="refresh" />
         </div>
 
-        <!-- 已选确认栏 -->
+        <!-- 已选确认栏。
+             ⚠️ `selectedQty ?? selectedPart.quantity` 这半句只在**一种时刻**与批次全量
+             不同：数量弹窗里选了部分数量、提交**失败**（`submitReturn` 的 catch 分支不
+             清选中态）后，确认栏重新可见，此时它显示的是工人刚选的那个数。
+             其余时刻（选中后、提交成功后）两者恒等 —— `selectedQty` 要么是 `p.quantity`，
+             要么随 `cancelSelect()` 一起清空。保留表达式而不是写死 `selectedPart.quantity`，
+             就是为了让上面那个失败窗口说得准：工人重试前看到的必须是上次选的那个数，
+             而不是批次全量（否则「按了 2 件却显示 5 件」，重试就会把 5 件发出去）。 -->
         <div v-if="selectedPart" class="confirm-bar">
           <el-icon :size="20" color="#67c23a"><CircleCheckFilled /></el-icon>
           <span class="confirm-text">
