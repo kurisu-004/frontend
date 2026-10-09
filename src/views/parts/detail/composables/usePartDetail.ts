@@ -1,51 +1,55 @@
 // views/parts/detail/composables/usePartDetail.ts
 //
-// 2026-08-25 frontend-overall-refactor：PartDetail 拆分的 usePartDetail。
-// 负责 /parts/:id 详情页的所有 page-level 业务：
-// - 零件主信息 fetchPart
-// - 行内编辑 editing / form / saving
-// - 取消订单 / 删除（confirm dialog 由 shell 持有 UI 状态）
-// - 品检通过 / 指定工序（failInsp dialog 由 shell 持有 UI 状态）
-// - 外协回收（receive dialog 由 shell 持有 UI 状态）
-// - 批次拆分 / 取消批次（split dialog 由 PartBatchMonitorCard 持有 UI 状态）
-// - 状态 / 事件标签 helpers
+// `/parts/:id` 详情页的**派生 + UI 态层**（2026-10-10 由「数据层 + 动作层混在一起」
+// 拆成三层：本文件 / `usePartDetailQuery.ts`+`usePartEventsQuery.ts` /
+// `usePartDetailActions.ts`）。
 //
-// composable 只持有纯业务数据 + 业务函数；dialog 可见性、form 数据 refs 由
-// 各自的子组件或 shell 持有，调用本 composable 的纯函数完成提交。
+// 本文件**只做**四件事，一件都不多：
+//   1. 投影：把三条 query hook 的 `data` / `isFetching` / `error` 投影成页面要用的
+//      `part` / `batches` / `events` / `infoLoading` / `eventsLoading` /
+//      `batchesLoading` / `errorMsg`，以及派生的 `inspectionBatch`；
+//   2. 权限矩阵：`canEditPart` / `canCancelPart` / `canDeletePart` / `canInspect` /
+//      `canManageDrawings` / `canManage3DModels` / `canManageCncFiles` /
+//      `canManageSetupSheet` / `canManageBatches`（逐条对齐后端角色集，见下）；
+//   3. 行内编辑态：`editing` / `form` / `buildUpdatePayload()`；
+//   4. 装配件详情（`assemblyDetail`）+ 状态 / 事件标签 helpers。
 //
-// 2026-09-28 契约修复（修「修改工单报 422 missing field `version`」）：
-//   - 后端 `PartUpdateRequest.version` / `PartSoftDeleteRequest.version` 均**无
-//     `#[serde(default)]`**，缺字段时 axum `Json` extractor 在 service 之前直接拒
-//     （HTTP 422，非项目统一信封）。onSave / onDeletePart 此前都不带 version →
-//     详情页保存与删除恒失败。
-//   - OCC 锚点取自 `PartDetailOut.version`；onSave 成功路径整体替换 part.value，
-//     新 version 天然回写。补 40901 分支：他人已改 → 提示 + fetchPart 拉最新值。
+// 本文件**不做**：① 任何零件主数据的取数（全部来自 query hook）；② 任何写操作
+// （7 个 mutation 在 `usePartDetailActions.ts`）；③ 导航（不 import vue-router，
+//   取消 / 删除后的跳转由 shell 决定）。
+//
+// **为什么不用 Pinia store**（与 `useDeliveryNoteDetail`（`/delivery-notes/:id`）同款
+// 取舍）：详情页没有跨路由的持久化筛选 / 分页 / 勾选态，Pinia 的四项契约（首调 +
+// `onBeforeUnmount` `$dispose` + 禁解构 + 不 import vue-router）里，只有「不 import
+// vue-router」这一条对本页有意义 —— 它在普通 composable 里同样成立。上 store 只会多出
+// 「同一时刻两个实例共享同一份编辑态 / 选中态」这一类本页根本不存在的耦合问题。
+//
+// **keep-alive 下何时重置**：本页被 keep-alive 缓存（路由名 `PartDetail` = 组件文件名，
+// MainLayout 的 `<keep-alive :include>` 按名字匹配）。切走只是 deactive，组件实例与
+// 局部状态都还在 ⇒ **deactivate 时绝不能清状态**（切回来还要看到刚才的数据，`reset()`
+// 挂在 `onDeactivated` 上会让用户每次切页回来都看到一张空表）。只有真正 unmount
+// （关标签页 / 组件被销毁）才需要 `reset()`，由 shell 在 `onUnmounted` 调一次。
+// ⚠️ 唯一在 deactive 期间必须**停手**的是「别再发请求」，那由 query hook 的 `isActive`
+// 闸门负责（见 `usePartDetailQuery.ts` 的文件头注释），与状态重置是两件事。
 
-import { computed, reactive, ref, watch, watchEffect, type ComputedRef, type Ref } from 'vue';
-import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
 import {
-  cancelPart,
-  cancelPartBatch,
-  getPart,
-  listPartBatches,
-  listPartEvents,
-  softDeletePart,
-  toProcess,
-  toShip,
-  updatePart,
-  type PartBatch,
-  type PartEvent,
-  type PartDetailDto,
-  type PartOutDto,
-  type PartUpdatePayload,
-} from '@/api/parts';
+  computed,
+  onMounted,
+  reactive,
+  ref,
+  toValue,
+  watch,
+  watchEffect,
+  type ComputedRef,
+  type MaybeRefOrGetter,
+  type Ref,
+} from 'vue';
+import { ElMessage } from 'element-plus';
 import { enrichAssemblyItem, getAssemblyForPart } from '@/api/assembly';
-import { splitBatch } from '@/api/batch';
-import type { BatchSplitDto } from '@/api/batch.contract';
+import type { PartBatch, PartEvent, PartUpdatePayload } from '@/api/parts';
 import type { AssemblyDetail } from '@/types/assembly';
 import { usePermissions } from '@/composables/usePermissions';
-import { useConfirm } from '@/composables/useConfirm';
+import { usePartBatchesQuery } from '@/composables/queries/usePartBatchesQuery';
 // fetchAssembly 走客户 enrich（PartAssemblyLinkCard 客户列展示所需），数据源是
 // useCustomersQuery 共享缓存（唯一 queryKey + 30s staleTime 去重窗口，多 subscriber
 // 不触发额外 fetch）。
@@ -58,6 +62,9 @@ import {
   type OrderStatus,
   type PartEventType,
 } from '@/types/parts';
+import { usePartDetailQuery } from './usePartDetailQuery';
+import { usePartEventsQuery } from './usePartEventsQuery';
+import type { PartDetailData } from './partDetailSchema';
 
 /** 行内编辑 form。
  *  2026-09-16 PR-2：actual_delivery_date 随 t_part 瘦身从表单 / 提交载荷一并删除。 */
@@ -85,19 +92,33 @@ function makeEmptyEditForm(): PartEditForm {
   };
 }
 
-/** 2026-09-21 显式返回类型。 */
 export interface UsePartDetailReturn {
-  part: Ref<PartDetailDto | null>;
+  // ---------- 投影（query 的只读视图，本文件不发任何请求除装配件外）----------
+  part: ComputedRef<PartDetailData | null>;
   infoLoading: Ref<boolean>;
-  events: Ref<PartEvent[] | null>;
+  /** 工单级错误文案（详情 query 失败时非空）。ElMessage 桥接在 query hook 内，这里
+   *  给的是页面内联的兜底展示位。 */
+  errorMsg: Ref<string>;
+  events: ComputedRef<PartEvent[]>;
   eventsLoading: Ref<boolean>;
-  editing: Ref<boolean>;
-  saving: Ref<boolean>;
-  form: PartEditForm;
-  assemblyDetail: Ref<AssemblyDetail | null>;
-  assemblyLoading: Ref<boolean>;
-  batches: Ref<PartBatch[]>;
+  batches: ComputedRef<PartBatch[]>;
   batchesLoading: Ref<boolean>;
+  /**
+   * 品检锚批次 = `batches.find(b => b.status === 'INSPECTION')`。
+   *
+   * ⚠️ **判据读批次、不读 `part.status`**：`t_part.status` 是 min-progress 派生列，
+   * 同工单只要还有任一批次进度更靠前，整单就派生成那个更早的状态 ⇒ 多批次工单上会
+   * 出现「批次是 INSPECTION、`t_part.status` 却是 IN_PROCESS / PENDING」⇒ 两个品检按钮
+   * 整排消失、那个批次永远动不了。后端 `prod/batch/service/transition_core.rs::to_ship_core`
+   * 对同一处有专门的长注释警告前端不要用派生列判这件事。
+   *
+   * 同时它也是两个品检动作（通过 / 打回）**唯一**的锚 —— 此前两者一个取
+   * `find(status==='INSPECTION')`、一个取 shell 传的 `selectedBatchId`，多批次工单上会
+   * 打不同的批次而用户看不出来。
+   */
+  inspectionBatch: ComputedRef<PartBatch | null>;
+
+  // ---------- 权限矩阵 ----------
   canEditPart: ComputedRef<boolean>;
   canCancelPart: ComputedRef<boolean>;
   canDeletePart: ComputedRef<boolean>;
@@ -107,103 +128,154 @@ export interface UsePartDetailReturn {
   canManageCncFiles: ComputedRef<boolean>;
   canManageSetupSheet: ComputedRef<boolean>;
   canManageBatches: ComputedRef<boolean>;
-  fetchPart: () => Promise<void>;
-  fetchEvents: () => Promise<void>;
-  fetchAssembly: () => Promise<void>;
-  fetchBatches: () => Promise<void>;
+
+  // ---------- 行内编辑 ----------
+  editing: Ref<boolean>;
+  form: PartEditForm;
   onStartEdit: () => void;
   onCancelEdit: () => void;
-  onSave: () => Promise<void>;
-  onCancelOrder: () => Promise<boolean>;
-  onDeletePart: () => Promise<boolean>;
-  onPassInspection: () => Promise<boolean>;
-  /** 品检打回（to-process）。`batchId` 为空时直接失败 —— v2 端点以批次为锚，
-   *  不再支持「缺省按唯一 INSPECTION 批次解析」。 */
-  onFailInspection: (payload: {
-    batchId: string | null;
-    processId: string;
-    note: string | null;
-  }) => Promise<boolean>;
-  /** 拆批。返回拆分结果（源批次余量 + 新批次 id）供调用方判成败；行数据靠调用方随后的
-   *  `fetchBatches` 重拉，不在这里回显。 */
-  onSplitBatch: (batch: PartBatch, quantity: number) => Promise<BatchSplitDto | null>;
+  /** 由当前 form 归一化出 `PartUpdatePayload`（不含 OCC 锚 —— version 由 actions 层
+   *  从 `part.version` 补，避免两处各取一次锚）。 */
+  buildUpdatePayload: () => Omit<PartUpdatePayload, 'version'>;
 
-  /** 取消批次。出参是 part 级窄投影 `PartOutDto`（后端返单个对象，不是批次数组），
-   *  列表行数据由调用方随后的 `fetchBatches` 重拉。 */
-  onCancelBatch: (batch: PartBatch) => Promise<PartOutDto | null>;
+  // ---------- 装配件 ----------
+  assemblyDetail: Ref<AssemblyDetail | null>;
+  assemblyLoading: Ref<boolean>;
+  fetchAssembly: () => Promise<void>;
+
+  // ---------- 刷新别名（shell 的刷新按钮 / 测试驱动）----------
+  //  只导出 `fetchBatches`：批次监控卡有一个「刷新」按钮（`@fetch`）。详情与事件没有
+  //  手动刷新按钮 —— 它们的重新取数由写后失效链 + 有限 staleTime 负责，导出零消费方的
+  // 别名只会让人误以为「不调它就少了一次刷新」（hook 内部本来就有 `fetchDetail` /
+  //  `fetchEvents`，需要时可直接调 hook）。
+  fetchBatches: () => Promise<void>;
+
+  // ---------- 标签 helpers ----------
   statusLabel: (s: OrderStatus) => string;
   statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
   statusLabelOf: (s: string | null | undefined) => string;
   eventLabel: (t: string) => string;
   eventTagType: (t: string) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
+
+  /**
+   * 卸载（关标签页）时清本 composable 自建的 UI 态。
+   *
+   * ⚠️ **只在 `onUnmounted` 调，不要挂 `onDeactivated`**：本页被 keep-alive 缓存，
+   * deactivate 只是切走、组件实例还在（切回来还要看到刚才的数据）。query 缓存由
+   * queryClient 统一管（有限 gcTime 5min），本函数不碰。
+   */
+  reset: () => void;
 }
 
-export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
-  const router = useRouter();
+export function usePartDetail(
+  partId: MaybeRefOrGetter<string | null | undefined>,
+  /**
+   * 本页是否仍是当前路由（keep-alive 缓存页必需，默认恒真）。透传给两条 query hook
+   * 的 `enabled` 闸门；判据由入口按 `route.name` 提供
+   * （见 `./partDetailActive.ts`，与 shell 的 route watcher 共用同一判据）。
+   */
+  isActive: MaybeRefOrGetter<boolean> = true,
+): UsePartDetailReturn {
   const { isManager, isClerk, isInspector, isCncProgrammer: isCnc } = usePermissions();
-  // 2026-08-25 T10p5：品检通过属于不可撤销操作，先用 useConfirm 二次确认。
-  const { dangerous: confirmDangerous } = useConfirm();
 
-  // ============ 权限 ============
+  // ============ 权限矩阵（逐条对齐后端角色集，见每条的注释）============
+  /** 行内编辑 / 取消订单：`POST /parts/{id}/update`、`/parts/{id}/cancel`
+   *  → 后端 `part/handler/crud.rs::CRUD_PART_ROLES = [Manager, Clerk]`、
+   *  `part/handler/lifecycle.rs::cancel` 的 `[Manager, Clerk]`。 */
   const canEditPart = computed(() => isManager.value || isClerk.value);
   const canCancelPart = computed(() => isManager.value || isClerk.value);
+  /** 软删：`POST /parts/{id}/soft-delete` → 后端 `require_role(Role::Manager)`（单角色）。 */
   const canDeletePart = computed(() => isManager.value);
-  const canInspect = computed(() => isManager.value || isClerk.value || isInspector.value);
-  /** 图纸 / 3D 模型：MANAGER + CLERK（文员日常操作） */
+  /**
+   * 品检流转（通过 / 打回）：**`[Manager, Inspector]`**。
+   *
+   * ⚠️ 2026-10-10 修：此前写成 `isManager || isClerk || isInspector`，多给了 CLERK ——
+   * 而后端 `prod/batch/handler/transition.rs::TO_XXX_ROLES = &[Role::Manager,
+   * Role::Inspector]`，`require_any_role` 在进 service 之前就拒 ⇒ **文员看得到两个品检
+   * 按钮，点下去必然 403**。
+   *
+   * ⚠️ **角色集必须与后端 `TO_XXX_ROLES` 逐字对齐**：这条同时覆盖
+   * `POST /prod/batches/{id}/to-ship`、`/to-process`、`/to-inspection` 与对应批量端点
+   * （同一个常量）。后端加 / 减角色时这里必须同步改，否则就是「看得到点不动」或
+   * 「能点但没人看得到」两种现场症状之一。
+   */
+  const canInspect = computed(() => isManager.value || isInspector.value);
+  /** 图纸 / 3D 模型 / CAD 2D：`POST /part-files`（kind = DRAWING / 3D_MODEL / CAD_2D）
+   *  → 后端 `part_file` 域 `[Manager, Clerk, CncProgrammer]`，软删按 kind 派生
+   *  `[Manager, Clerk]`。前端取 `[Manager, Clerk]` 是**更严**的一档（宁可不显示按钮，
+   * 也不要给一个必 403 的入口）。 */
   const canManageDrawings = computed(() => isManager.value || isClerk.value);
   const canManage3DModels = computed(() => isManager.value || isClerk.value);
-  /** G 代码 / 设定单：MANAGER + CNC_PROGRAMMER */
+  /** G 代码：`POST /part-files/parts/{id}/cnc-programs`（kind = G_CODE）→ 后端
+   *  `[Manager, CncProgrammer]`，与前端一致（逐字对齐）。 */
   const canManageCncFiles = computed(() => isManager.value || isCnc.value);
+  /** 设定单：`POST /part-files/parts/{id}/setup-sheets`（kind = SETUP_SHEET）→ 后端
+   *  `[Manager, CncProgrammer]`，与前端一致。⚠️ 同 kind 的**软删**后端却是
+   *  `[Manager, Clerk]`（`handler.rs` 的按-kind 派生表），后端两档不一致；前端按上传
+   * 那一档（更严）判，不会给 Clerk 一个后端其实允许、但现场口径也说不清的入口。 */
   const canManageSetupSheet = computed(() => isManager.value || isCnc.value);
-  /** 批次管理：MANAGER + CLERK */
+  /** 批次管理（拆批 / 取消批次）：`POST /batches/split` 与
+   *  `POST /prod/batches/{id}/cancel` → 后端
+   *  `prod/batch/service/batch_ops.rs` 两处 `require_any_role([Manager, Clerk])`，
+   *  逐字对齐。 */
   const canManageBatches = computed(() => isManager.value || isClerk.value);
 
-  // ============ 主数据 ============
-  const part = ref<PartDetailDto | null>(null);
-  const infoLoading = ref(false);
+  // ============ 主数据（三条 query hook，本文件只做投影）============
+  const detailQuery = usePartDetailQuery(partId, isActive);
+  const eventsQuery = usePartEventsQuery(partId, isActive);
+  // 批次列表**复用共享基础数据层的 `usePartBatchesQuery`**（键 `qk.partBatchesList`）：
+  // dashboard 的 PartPreviewDialog 是另一个消费方，同一条键才能同屏去重、失效链也只有
+  // 一条。它没有 `isActive` 闸门 —— 入参 partId 是 shell 的**局部 ref**，只由本页那个
+  // 带「本页是否活跃」守卫的 route watcher 改，全局路由变化不会传导过来。
+  const batchesQuery = usePartBatchesQuery(() => toValue(partId));
 
-  async function fetchPart(): Promise<void> {
-    infoLoading.value = true;
-    try {
-      part.value = await getPart(partId.value);
-    } catch (e) {
-      part.value = null;
-      ElMessage.error((e as Error).message ?? '加载零件失败');
-    } finally {
-      infoLoading.value = false;
-    }
-  }
+  const part = computed<PartDetailData | null>(() => detailQuery.data.value ?? null);
+  const events = computed<PartEvent[]>(() => eventsQuery.data.value ?? []);
+  const batches = computed<PartBatch[]>(() => batchesQuery.data.value?.items ?? []);
 
-  // ============ 历史 ============
-  const events = ref<PartEvent[] | null>(null);
-  const eventsLoading = ref(false);
-  async function fetchEvents(): Promise<void> {
-    eventsLoading.value = true;
-    try {
-      events.value = await listPartEvents(partId.value);
-    } catch (e) {
-      events.value = null;
-      ElMessage.error((e as Error).message ?? '加载历史记录失败');
-    } finally {
-      eventsLoading.value = false;
-    }
-  }
+  const errorMsg = computed<string>(() => {
+    const e = detailQuery.error.value ?? eventsQuery.error.value ?? batchesQuery.error.value;
+    return e ? (e.message ?? '加载零件失败') : '';
+  });
 
-  // ============ 行内编辑（PartInfoCard 读 editing/form/saving）============
+  /** 品检锚批次（判据与理由见返回类型的同名字段注释）。 */
+  const inspectionBatch = computed<PartBatch | null>(
+    () => batches.value.find((b) => b.status === 'INSPECTION') ?? null,
+  );
+
+  /**
+   * 进页面时对**暖缓存**的批次列表补一次 refetch。
+   *
+   * 起因：`usePartBatchesQuery` 是共享基础数据层，`staleTime` 20min（与
+   * `usePartFilesListQuery` 同值）⇒ 从 dashboard 的 PartPreviewDialog 预热过的缓存，
+   * 20 分钟内进本页 `shouldFetchOnMount` 为 false、不会自动重取 ⇒ 用户会看到最多 20 分钟
+   * 前的批次状态。批次行在本页不是只读的展示：它决定 `inspectionBatch`，也就是「品检
+   * 通过 / 指定工序」两个按钮的**可点性** —— 看到过期的 INSPECTION 会让人去点一个后端
+   * 已经用 20103 拒掉的流转。
+   *
+   * ⚠️ 只在 `data.value` 已存在（暖缓存）时补，**冷缓存那侧不插手**：observer 自己会发
+   * 首调，插手就成两次往返（refetch 默认 `cancelRefetch`，会把在飞的那次取消掉重发）。
+   * 这个条件也让本行永远不会与自动首调重叠。
+   */
+  onMounted(() => {
+    if (batchesQuery.data.value) void batchesQuery.refetch();
+  });
+
+  // ============ 行内编辑（PartInfoCard 读 editing/form）============
   const editing = ref(false);
-  const saving = ref(false);
   const form = reactive<PartEditForm>(makeEmptyEditForm());
 
   function onStartEdit(): void {
-    if (!part.value) return;
-    form.name = part.value.name;
-    form.drawing_no = part.value.drawing_no;
-    form.quantity = part.value.quantity;
-    form.is_urgent = part.value.is_urgent;
-    form.planned_delivery_date = part.value.planned_delivery_date;
-    form.order_no = part.value.order_no;
-    form.system_delivery_date = part.value.system_delivery_date;
-    form.note = part.value.note;
+    const p = part.value;
+    if (!p) return;
+    form.name = p.name;
+    form.drawing_no = p.drawing_no;
+    form.quantity = p.quantity;
+    form.is_urgent = p.is_urgent;
+    form.planned_delivery_date = p.planned_delivery_date;
+    form.order_no = p.order_no;
+    form.system_delivery_date = p.system_delivery_date;
+    form.note = p.note;
     editing.value = true;
   }
 
@@ -211,43 +283,22 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     editing.value = false;
   }
 
-  async function onSave(): Promise<void> {
-    // 2026-09-28 契约修复：后端 PartUpdateRequest.version 必填（无 serde(default)），
-    // 缺字段 → HTTP 422 missing field version。OCC 锚点取自 PartDetailOut.version。
-    if (!part.value) {
-      ElMessage.error('零件信息未加载完成');
-      return;
-    }
-    saving.value = true;
-    try {
-      const payload: PartUpdatePayload = {
-        version: part.value.version,
-        name: form.name.trim(),
-        drawing_no: form.drawing_no.trim(),
-        quantity: form.quantity,
-        is_urgent: form.is_urgent,
-        planned_delivery_date: form.planned_delivery_date,
-        order_no: form.order_no || null,
-        system_delivery_date: form.system_delivery_date || null,
-        note: form.note || null,
-      };
-      // 响应即最新 PartDetailOut（含 OCC 后的新 version），整体替换 part.value
-      // 天然完成 version 回写，下一次保存用新锚点。
-      part.value = await updatePart(partId.value, payload);
-      ElMessage.success('保存成功');
-      editing.value = false;
-    } catch (e) {
-      // 40901 VERSION_CONFLICT：他人已改过，本地 form 基于旧 version → 拉最新值
-      if ((e as { code?: number }).code === 40901) {
-        ElMessage.warning('该记录已被他人修改，已为你刷新');
-        editing.value = false;
-        await fetchPart();
-      } else {
-        ElMessage.error((e as Error).message ?? '保存失败');
-      }
-    } finally {
-      saving.value = false;
-    }
+  /**
+   * 由 form 归一化出提交载荷。链式 trim 与「空串 → null」在这里做一次（表单里
+   * `el-input` 的空串与「后端要 null」不是同一件事），actions 层只负责补 OCC 锚并发起
+   * 请求，不重复归一化。
+   */
+  function buildUpdatePayload(): Omit<PartUpdatePayload, 'version'> {
+    return {
+      name: form.name.trim(),
+      drawing_no: form.drawing_no.trim(),
+      quantity: form.quantity,
+      is_urgent: form.is_urgent,
+      planned_delivery_date: form.planned_delivery_date,
+      order_no: form.order_no || null,
+      system_delivery_date: form.system_delivery_date || null,
+      note: form.note || null,
+    };
   }
 
   // ============ 装配件详情（PartAssemblyLinkCard 用）============
@@ -259,18 +310,15 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   const assemblyDetail = ref<AssemblyDetail | null>(null);
   const assemblyLoading = ref(false);
   /**
-   * 2026-09-29 修复：补 JSDoc 防止「PartDetail 误调 /assemblies/{id}」的误判。
+   * 装配件详情**仍是单次手写拉取**，不走 query hook —— `GET /parts/{part_id}/assembly`
+   * 在「零件无所属装配件」时返回 `null`（不是 404），端点只被本页消费、且要串一道客户
+   * 名的 enrich 才给卡片用；为一个二选一（对象 / null）的响应单开 query hook 不划算。
+   * 全页唯一的例外调用，理由登记在此以免后人以为「漏迁」。
    *
-   * PartDetail **不**调 `GET /api/v2/assemblies/{part_id}`，而是调
-   * `GET /api/v2/parts/{part_id}/assembly`（`getAssemblyForPart`）。后者由后端
-   * part service 内部按 `part.assembly_id` 间接调 assembly service。
-   *
-   * Network 面板若在 PartDetail 上看到 `/assemblies/{asm_id}` 形式的请求 = 真 bug，
-   * 需立即排查。
-   *
-   * 错误 message 里的数字是 `part.assembly_id` 列值（part 的 indirection），
-   * 不是 URL path 里的 part_id —— 后端按 `assembly_id` 找装配件失败时报
-   * BIZ_ASSEMBLY_NOT_FOUND `assembly {asm_id} 不存在`。
+   * ⚠️ 端点不是 `GET /assemblies/{part_id}`：`assembly_id` 是 part 的 indirection，
+   * 后端 part service 内部按 `part.assembly_id` 找装配件；Network 面板里看到
+   * `/assemblies/{asm_id}` 形态的请求就是真 bug。错误 message 里的数字是
+   * `part.assembly_id` 列值、不是 URL 里的 part_id。
    */
   async function fetchAssembly(): Promise<void> {
     if (!part.value || part.value.assembly_id == null) {
@@ -288,10 +336,6 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
       assemblyDetail.value = fetched;
     } catch (e) {
       assemblyDetail.value = null;
-      // 2026-09-29 修复：错误信息加端点路径前缀，避免与
-      // `GET /api/v2/assemblies/{asm_id}`（不是这条！）混淆。
-      // 用户报告 [20301] message 里的 id 与 URL path id 不同时，本前缀让
-      // 排查者一眼看出「请求端点是 /parts/{id}/assembly 不是 /assemblies/{id}」。
       ElMessage.error(
         `所属装配件加载失败（端点 /api/v2/parts/${part.value.id}/assembly）：${(e as Error).message ?? '未知错误'}`,
       );
@@ -312,191 +356,6 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     assemblyDetail.value.assembly = enrichAssemblyItem(assemblyDetail.value.assembly, items);
   });
 
-  // ============ 取消订单 / 删除（confirm dialog 由 shell 持有 UI 状态）============
-  /**
-   * shell 收集到流水号后调用（流水号校验由 shell 负责）。
-   * 成功后 shell 关闭 confirm dialog 并刷新。
-   */
-  async function onCancelOrder(): Promise<boolean> {
-    try {
-      await cancelPart(partId.value);
-      ElMessage.success('已取消');
-      await fetchPart();
-      void fetchEvents();
-      return true;
-    } catch (e) {
-      ElMessage.error((e as Error).message ?? '操作失败');
-      return false;
-    }
-  }
-
-  async function onDeletePart(): Promise<boolean> {
-    // 2026-09-28 契约修复：后端 PartSoftDeleteRequest.version 必填（无
-    // serde(default)），此前不发 body → 必 422。
-    if (!part.value) return false;
-    try {
-      await softDeletePart(partId.value, part.value.version);
-      ElMessage.success('已删除');
-      router.push('/parts');
-      return true;
-    } catch (e) {
-      if ((e as { code?: number }).code === 40901) {
-        ElMessage.warning('该记录已被他人修改，请刷新后重试');
-        await fetchPart();
-        return false;
-      }
-      ElMessage.error((e as Error).message ?? '操作失败');
-      return false;
-    }
-  }
-
-  // ============ 品检通过 ============
-  // 走 `POST /prod/batches/{batch_id}/to-ship`（INSPECTION → READY_TO_SHIP，事件
-  // INSPECTED），二次确认沿用 confirmDangerous。OCC 锚 t_part_batch.version：
-  // 从 batches 找 INSPECTION 状态批次，取其 id + version；40901 提示用户刷新。
-  async function onPassInspection(): Promise<boolean> {
-    if (!part.value) return false;
-    const inspectionBatch = batches.value.find((b) => b.status === 'INSPECTION');
-    if (!inspectionBatch) {
-      ElMessage.error('未找到待过检批次');
-      return false;
-    }
-    const ok = await confirmDangerous('品检通过', '确认将此零件标记为品检通过？此操作不可撤销。', {
-      type: 'success',
-      confirmText: '确认通过',
-      cancelText: '取消',
-    });
-    if (!ok) return false;
-    try {
-      // 2026-10-02：批次锚定 `POST /prod/batches/{batch_id}/to-ship`（batch_id 已是路径）。
-      await toShip(inspectionBatch.id, {
-        version: inspectionBatch.version,
-        quantity: null,
-      });
-      ElMessage.success('品检通过');
-      await fetchPart();
-      void fetchEvents();
-      return true;
-    } catch (e) {
-      // 40901：批次 version 不匹配
-      if ((e as { code?: number }).code === 40901) {
-        ElMessage.warning('该批次已被他人修改，请刷新后重试');
-        void fetchBatches();
-      } else {
-        ElMessage.error(`品检通过失败：${(e as Error).message}`);
-      }
-      return false;
-    }
-  }
-
-  // ============ 指定工序（failInsp dialog 由 shell 持有 UI 状态）============
-  // 2026-10-02：打回改打 v2 `POST /prod/batches/{batch_id}/to-process`（INSPECTION →
-  // IN_PROCESS，事件 INSPECTION_FAILED）。batchId 由调用方（PartDetail）传入 ——
-  // 复用批次卡三卡联动锚的选中批次，多批次 part 上比「找第一个 INSPECTION 批次」更准；
-  // version 取该批次的 t_part_batch.version（后端必填，缺 → 422）。
-  // 锚点批次的状态由本函数自守（见下方守卫），不信任 shell 的按钮可见性判据。
-  // 2026-10-10：payload 的 `shelfId` 删除 —— `to-process` 的 `shelf_id` 后端已删
-  // （打回的目标生产架由后端按负载自动选）。
-  async function onFailInspection(payload: {
-    batchId: string | null;
-    processId: string;
-    note: string | null;
-  }): Promise<boolean> {
-    if (!payload.batchId) {
-      ElMessage.error('请先在批次列表中选中要打回的批次');
-      return false;
-    }
-    const batch = batches.value.find((b) => b.id === payload.batchId);
-    if (!batch) {
-      ElMessage.error('未找到选中的批次，请刷新后重试');
-      return false;
-    }
-    // 状态守卫：shell 的「指定工序」按钮按 **part 级** part.status === 'INSPECTION'
-    // 决定可见性，而 to-process 是 **batch 级** 状态机（INSPECTION → IN_PROCESS）。
-    // 多批次工单里 part.status 命中不代表选中批次也在品检中（最老批次可能还是
-    // PENDING），硬发只会被后端状态机拒，用户只看到一条原文错误、看不出用的哪个批次。
-    if (batch.status !== 'INSPECTION') {
-      ElMessage.warning(
-        `批次 ${batch.batch_label} 当前为 ${statusLabelOf(batch.status)}，不在品检中；请先在批次列表选中要打回的批次`,
-      );
-      return false;
-    }
-    try {
-      await toProcess(batch.id, {
-        next_process_id: payload.processId,
-        version: batch.version,
-        note: payload.note,
-      });
-      ElMessage.success('已指定下一道工序');
-      await fetchPart();
-      void fetchEvents();
-      return true;
-    } catch (e) {
-      // 40901：批次 version 不匹配（与 onPassInspection 同款兜底）
-      if ((e as { code?: number }).code === 40901) {
-        ElMessage.warning('该批次已被他人修改，请刷新后重试');
-        void fetchBatches();
-      } else {
-        ElMessage.error(`指定工序失败：${(e as Error).message}`);
-      }
-      return false;
-    }
-  }
-
-  // ============ 批次（PartBatchMonitorCard 渲染 + 拆分 / 取消）============
-  const batches = ref<PartBatch[]>([]);
-  const batchesLoading = ref(false);
-  async function fetchBatches(): Promise<void> {
-    batchesLoading.value = true;
-    try {
-      batches.value = await listPartBatches(partId.value);
-    } catch (e) {
-      batches.value = [];
-      ElMessage.error((e as Error).message ?? '加载批次失败');
-    } finally {
-      batchesLoading.value = false;
-    }
-  }
-
-  async function onSplitBatch(batch: PartBatch, quantity: number): Promise<BatchSplitDto | null> {
-    try {
-      // 2026-10-08：拆批搬到共用层 `POST /api/v2/batches/split`（`batch_id` 走 body，
-      // 不是路径参数）；version 取被拆批次的 t_part_batch.version（OCC 必填，缺了后端
-      // 返 HTTP 422 纯文本而非业务信封）。出参是拆分结果对象（**实际拆走量** + 新批次
-      // id + 源批次新 version），不是批次数组 —— 调用方只判成败，行数据由随后的
-      // fetchBatches 重拉。
-      const result = await splitBatch({
-        batch_id: batch.id,
-        quantity,
-        version: batch.version,
-      });
-      ElMessage.success('拆分成功');
-      await fetchPart();
-      void fetchEvents();
-      return result;
-    } catch (e) {
-      ElMessage.error(`拆分失败：${(e as Error).message}`);
-      return null;
-    }
-  }
-
-  async function onCancelBatch(batch: PartBatch): Promise<PartOutDto | null> {
-    try {
-      // 2026-10-02：批次锚定 `POST /prod/batches/{batch_id}/cancel`（part 域的
-      // `POST /parts/{id}/cancel` 是「取消该 part 全部活跃批次」，两者不要混）。
-      // 出参是 part 级窄投影 PartOutDto（后端 cancel_batch 返 `R<PartOut>` 单个对象），
-      // 本函数只判成败返回它给调用方判「操作成功」；批次行数据由 fetchBatches 重拉。
-      const cancelled = await cancelPartBatch(batch.id, batch.version);
-      ElMessage.success('批次已取消');
-      await fetchPart();
-      void fetchEvents();
-      return cancelled;
-    } catch (e) {
-      ElMessage.error(`取消批次失败：${(e as Error).message}`);
-      return null;
-    }
-  }
-
   // ============ 状态 / 事件标签 helpers ============
   function statusLabel(s: OrderStatus): string {
     return ORDER_STATUS_LABEL[s] ?? s;
@@ -515,12 +374,16 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     return PART_EVENT_TAG_TYPE[t as PartEventType] ?? 'info';
   }
 
-  // ============ 切 partId 时重置 ============
-  watch(partId, (next) => {
-    if (!next) return;
-    editing.value = false;
-    assemblyDetail.value = null;
-  });
+  // ============ 切 partId 时重置本 composable 的 UI 态 ============
+  // ⚠️ 不碰 query 缓存：切 id 时 queryKey 自己变了，旧 id 的缓存由有限 gcTime 自然回收。
+  watch(
+    () => toValue(partId),
+    (next) => {
+      if (!next) return;
+      editing.value = false;
+      assemblyDetail.value = null;
+    },
+  );
 
   // part 加载后，若有 assembly_id 拉装配件详情
   watch(
@@ -531,18 +394,15 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   );
 
   return {
-    // data
+    // 投影
     part,
-    infoLoading,
+    infoLoading: detailQuery.isFetching,
+    errorMsg,
     events,
-    eventsLoading,
-    editing,
-    saving,
-    form,
-    assemblyDetail,
-    assemblyLoading,
+    eventsLoading: eventsQuery.isFetching,
     batches,
-    batchesLoading,
+    batchesLoading: batchesQuery.isFetching,
+    inspectionBatch,
     // permissions
     canEditPart,
     canCancelPart,
@@ -553,29 +413,30 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     canManageCncFiles,
     canManageSetupSheet,
     canManageBatches,
-    // fetchers
-    fetchPart,
-    fetchEvents,
-    fetchAssembly,
-    fetchBatches,
-    // edit
+    // 行内编辑
+    editing,
+    form,
     onStartEdit,
     onCancelEdit,
-    onSave,
-    // cancel / delete
-    onCancelOrder,
-    onDeletePart,
-    // inspection
-    onPassInspection,
-    onFailInspection,
-    // batch split / cancel
-    onSplitBatch,
-    onCancelBatch,
-    // label helpers
+    buildUpdatePayload,
+    // 装配件
+    assemblyDetail,
+    assemblyLoading,
+    fetchAssembly,
+    // 刷新别名
+    fetchBatches: async () => {
+      await batchesQuery.refetch();
+    },
+    // 标签 helpers
     statusLabel,
     statusTagType,
     statusLabelOf,
     eventLabel,
     eventTagType,
+    // 卸载时重置
+    reset: () => {
+      editing.value = false;
+      assemblyDetail.value = null;
+    },
   };
 }
