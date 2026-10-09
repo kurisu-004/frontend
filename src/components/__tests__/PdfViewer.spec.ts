@@ -7,7 +7,7 @@
 // 容器尺寸覆写 `renderScale`，而 `zoomIn` / `zoomOut` 的实现恰恰是「改 renderScale →
 // 调 render()」—— 刚写进去的值在同一次调用里被抹掉，净效果是**点 +/- 视觉零变化**
 // （唯一残留效果是把 viewScale 重置为 1，观感上像「缩小回原样」）。这条回归不需要任何
-// 报错、不改任何 DOM 结构，202 个 spec / 2385 条用例全绿也拦不住它。
+// 报错、不改任何 DOM 结构，**全仓 spec 全绿也拦不住它**。
 //
 // 断言打在哪：**canvas 的 CSS 宽**（`renderScale * 页宽@scale1`，与 devicePixelRatio 无关
 // —— viewport 用 `scale * dpr` 出像素、再除 dpr 得 css 尺寸，两者正好抵消）。
@@ -172,6 +172,29 @@ function totalScaleOf(w: Wrapper): number {
   return Number.parseFloat(m![1] as string);
 }
 
+/**
+ * 视觉平移（stage 上的 CSS transform `translate(...)`）。与两个 scale 互不干涉：
+ * 只清 `viewScale` / `userZoomed` 对它**完全无效**，必须单独钉。
+ */
+function panOf(w: Wrapper): { tx: number; ty: number } {
+  const style = w.find('.pdf-canvas-stage').attributes('style') ?? '';
+  const m = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(style);
+  expect(m, `stage 上没有 translate()：${style}`).not.toBeNull();
+  return { tx: Number.parseFloat(m![1] as string), ty: Number.parseFloat(m![2] as string) };
+}
+
+/** 在 stage 上滚轮 `n` 档（onWheel 的 factor 是 1.1）+ 从 from 拖到 to，模拟真实手势。 */
+async function zoomAndPan(w: Wrapper, n: number): Promise<void> {
+  const vp = w.find('.pdf-viewport');
+  for (let i = 0; i < n; i++) {
+    await vp.trigger('wheel', { deltaY: -100, clientX: 200, clientY: 200 });
+  }
+  await vp.trigger('mousedown', { button: 0, clientX: 400, clientY: 400 });
+  await window.dispatchEvent(new window.MouseEvent('mousemove', { clientX: 700, clientY: 700 }));
+  await window.dispatchEvent(new window.MouseEvent('mouseup'));
+  await flushPromises();
+}
+
 /** 按图标 class 找到它所在的工具栏按钮（+ / − / 复位 / 翻页）。 */
 function buttonOf(w: Wrapper, iconClass: string) {
   const icon = w.find(`.mock-${iconClass}`);
@@ -191,7 +214,7 @@ beforeEach(() => {
 describe('PdfViewer / fit 到容器', () => {
   // P1：fit 值必须真的进 renderScale（否则整个「默认 fit」是空转的）。
   // 这条同时守住了 `fit` 的**默认值 = true**：用例不传 fit，断言却是 fit 值；
-  // 把 withDefaults 里的 fit 改成 false，P1 与 P9 一起红。
+  // 把 withDefaults 里的 fit 改成 false，P1 与 P10 一起红。
   it('P1：默认就 fit —— 不传 fit 时 fit 值算进 renderScale（800×800 容器装 1000×1000 页 ⇒ 0.8）', async () => {
     container.w = 800;
     container.h = 800;
@@ -307,11 +330,38 @@ describe('PdfViewer / fit 到容器', () => {
     w.unmount();
   });
 
+  // 「翻页 = 回到整页塞进容器的大小」要成立，平移也得归位：`tx`/`ty` 是 stage 上的
+  // CSS translate，与 renderScale / viewScale **互不干涉** —— 前两条用例把缩放类变量
+  // 全钉住了，翻页照样可以带着上一页的平移不放，工人翻过去看到的是新一页的一角。
+  it('P7：滚轮 + 拖动平移后翻页 —— tx/ty 归 0（整页真的塞回容器左上角）', async () => {
+    container.w = 800;
+    container.h = 800;
+    const w = await mountViewer({}, [
+      { w: PAGE_W, h: PAGE_H },
+      { w: PAGE_W, h: PAGE_H },
+    ]);
+
+    await zoomAndPan(w, 2);
+    const panned = panOf(w);
+    expect(
+      panned.tx > 1 || panned.ty > 1,
+      `前置：平移应当非零（实际 tx=${panned.tx} ty=${panned.ty}），否则这条断言是恒真`,
+    ).toBe(true);
+
+    await buttonOf(w, 'arrow-right').trigger('click');
+    await flushPromises();
+
+    expect(panOf(w), '翻页必须把平移一起归零').toEqual({ tx: 0, ty: 0 });
+    // 顺带确认缩放侧没被这次改动带坏
+    expect(totalScaleOf(w)).toBeCloseTo(0.8, 6);
+    w.unmount();
+  });
+
   // P6 只证明「翻页清 viewScale」；onWheel 自己置位 userZoomed 的效果体现在**另一条
   // render() 路径**上：容器尺寸为 0（fit 算不出来、记一笔 fitPending）→ 用户滚轮表态 →
   // 容器就绪、ResizeObserver 补渲一次。那一次 render() 若无视 userZoomed，就会把
   // renderScale 从 initialScale 覆写成 fit，正是「fit 覆掉用户选择」那条回归的同款。
-  it('P7：fit 还没算出来的窗口里滚轮表过态 ⇒ ResizeObserver 补渲不得覆写 renderScale', async () => {
+  it('P8：fit 还没算出来的窗口里滚轮表过态 ⇒ ResizeObserver 补渲不得覆写 renderScale', async () => {
     container.w = 0; // 宿主尚未布局：首次 render 算不出 fit，落回 initialScale 并记 fitPending
     container.h = 0;
     const w = await mountViewer({ initialScale: 1 });
@@ -326,8 +376,17 @@ describe('PdfViewer / fit 到容器', () => {
       roCallbacks.length,
       '组件没有挂上 ResizeObserver（fit 失败时的补渲通道）',
     ).toBeGreaterThan(0);
+    const before = renderedScales.length;
     for (const cb of roCallbacks) cb();
     await flushPromises();
+
+    // ⚠️ 先断言「补渲确实发生了」：否则下面两条会在**根本没有第二次渲染**的情况下
+    // 以「什么都没发生」的方式通过（`renderedScales.at(-1)` 仍是首次渲染的
+    // initialScale），把 `fitPending` 整段删掉都测不出来。
+    expect(
+      renderedScales.length,
+      'ResizeObserver 补渲没有发生 —— fit 失败时的补渲通道坏了，这条用例已失去意义',
+    ).toBeGreaterThan(before);
 
     // 用户已表态 ⇒ renderScale 保持 initialScale（1.0），不被 fit 的 0.8 覆写
     expect(renderedScales.at(-1), '补渲不得覆写用户已表过态的比例').toBeCloseTo(1.0, 6);
@@ -335,10 +394,33 @@ describe('PdfViewer / fit 到容器', () => {
     w.unmount();
   });
 
-  // `props.page` 是另一条换页通道（PartBatchPdfTab / PartBatchManualTab 传 `:page`），
-  // 它与工具栏翻页必须同口径：清 userZoomed 让 fit 重算 + viewScale 归 1。少归 1 的话，
-  // 滚轮用户在这里换页会带着自己的 CSS 缩放 —— 与 P6 是同一个缺陷的两条入口。
-  it('P8：外部改 page prop 后同样重算 fit 且 viewScale 归 1', async () => {
+  // P8 的另一半：`fitPending` 这道闸的**另一侧**。fit 已经算出来（没有欠账）时，
+  // ResizeObserver 回调必须**什么都不做** —— 跟着每次尺寸变化重渲会改
+  // canvas.width/height/style，产生 layout shift 抖动（见 PdfViewer.vue 的
+  // ensureResizeObserver 注释）。没有这条，把 `if (!fitPending) return` 整段删掉
+  // （观察者退化成「每次尺寸变化都重渲」）时全仓仍绿，而那正是被明令禁止的行为。
+  it('P11：fit 已算出来时 ResizeObserver 回调不动作（不许跟着每次尺寸变化重渲）', async () => {
+    container.w = 800; // 正常尺寸 ⇒ 首渲就算出 fit，没有欠账
+    container.h = 800;
+    const w = await mountViewer();
+    expect(roCallbacks.length, '组件没有挂上 ResizeObserver').toBeGreaterThan(0);
+    const before = renderedScales.length;
+    expect(before, '前置：首屏渲染应当已经发生').toBeGreaterThan(0);
+
+    for (const cb of roCallbacks) cb();
+    await flushPromises();
+
+    expect(
+      renderedScales.length,
+      '没有 fit 欠账却重渲了 —— `if (!fitPending) return` 这道闸被删了，会造成 layout shift 抖动',
+    ).toBe(before);
+    w.unmount();
+  });
+
+  // `props.page` 是另一条换页通道（PartBatchPdfTab 传 `:page`），它与工具栏翻页同口径：
+  // 都走 resetView。少归位任一项，滚轮用户在这里换页就会带着自己的 CSS 缩放 / 平移 ——
+  // 与 P6 / P7 是同一个缺陷的两条入口。
+  it('P9：外部改 page prop 后同样重算 fit 且 viewScale 归 1', async () => {
     container.w = 800;
     container.h = 800;
     const w = await mountViewer({ page: 1 }, [
@@ -361,7 +443,7 @@ describe('PdfViewer / fit 到容器', () => {
 
   // fit 是 opt-out 口子：将来某个承载点要固定比例时传 :fit="false" 即可，
   // 不必改组件本体。默认值为 true（全仓所有 <PdfViewer> 承载点都要 fit）。
-  it('P9：fit=false 时不套用 fit（按 initialScale 渲染，与容器尺寸无关）', async () => {
+  it('P10：fit=false 时不套用 fit（按 initialScale 渲染，与容器尺寸无关）', async () => {
     container.w = 800;
     container.h = 800;
     const w = await mountViewer({ fit: false, initialScale: 1 });
