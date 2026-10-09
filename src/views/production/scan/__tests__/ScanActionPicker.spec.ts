@@ -15,6 +15,14 @@
 //     → boundZones → showPickUp / showReturn / showInspect
 // 所以「工位绑了哪些架」与「货架端点的 zone」两侧都要有 fixture，缺一侧断言就失真。
 //
+// 2026-10-11 追加守「查看持有」：它是第四个入口、**不是**报工动作（不进 useScanSession、
+// 不跳页），显隐只看「扫到工人」，与三个动作按钮的 zone 判定完全无关。所以下面三处都改了：
+//   - `actionLabels` 必须把「查看」排除在动作按钮之外，否则 zone 判定的断言会被它污染；
+//   - 「查看持有」读的是**同一条** `qk.scanHeld`（params 与徽章 / 三页逐字一致），本 spec
+//     把 `@/api/productionScan` 一并桩掉，顺带钉住「本页不新增请求口径」；
+//   - `el-dialog` 等组件在 vitest 下没有自动注册（vitest.config.ts 不带
+//     unplugin-vue-components），必须显式 stub。
+//
 // 桩的取舍：
 //   - `vue-router`：只桩 `useRouter`，把 `push` / `replace` 抓出来断言跳转。`useScanSession`
 //     是模块级 ref 单例、不需要注入，工人身份靠它自己的 setter 建立。
@@ -36,12 +44,16 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 // vi.mock 的工厂会被提升到文件顶部，不能引用后声明的 const ⇒ 桩函数集中放进 vi.hoisted。
 const h = vi.hoisted(() => ({
   listShelves: vi.fn(),
+  fetchScanHeld: vi.fn(),
   push: vi.fn(),
   replace: vi.fn(),
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 
 vi.mock('@/api/shelves', () => ({ listShelves: h.listShelves }));
+
+// 「查看持有」的列表源（与徽章 / 放回页 / 送检页同一条 qk.scanHeld）。
+vi.mock('@/api/productionScan', () => ({ fetchScanHeld: h.fetchScanHeld }));
 
 vi.mock('element-plus', () => ({ ElMessage: h.ElMessage }));
 
@@ -52,6 +64,7 @@ import { useScanSession } from '@/views/production/scan/composables/useScanSessi
 import type { CurrentUser } from '@/types/user';
 import type { Shelf, ShelfListResult } from '@/types/shelf';
 import type { Worker } from '@/types/worker';
+import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
 
 const SHELF_P1 = { id: '8800000000001', code: 'SH-P01', zone: 'PRODUCTION' };
 const SHELF_P2 = { id: '8800000000002', code: 'SH-P02', zone: 'PRODUCTION' };
@@ -113,6 +126,39 @@ function seedWorker(): void {
   useScanSession().setWorker(worker);
 }
 
+/** 后端 `ScanListItem` 的合法 17 字段行（held VO 没有额外的必填/选填键）。 */
+function heldRow(id: string, over: Partial<ScanPartRowSchema> = {}): ScanPartRowSchema {
+  return {
+    id,
+    serial_no: `SN-${id}`,
+    name: '法兰盘',
+    drawing_no: 'DWG-1',
+    quantity: 3,
+    is_urgent: false,
+    planned_delivery_date: '2026-10-20',
+    system_delivery_date: null,
+    process_chain_id: null,
+    has_process_chain: false,
+    chain_state: 'NONE',
+    chain_next_process_id: '0',
+    chain_next_process_name: null,
+    chain_current_process_name: null,
+    batch_id: `1900000000000${id}`,
+    batch_version: 1,
+    location: null,
+    ...over,
+  };
+}
+
+function mockHeld(ids: string[]): void {
+  vi.mocked(h.fetchScanHeld).mockResolvedValue({
+    items: ids.map((id) => heldRow(id)),
+    total: ids.length,
+    limit: 200,
+    offset: 0,
+  });
+}
+
 /** 装好 pinia + query plugin、注入登录态与工人身份，然后挂载本页。 */
 async function mountPicker(user: CurrentUser): Promise<VueWrapper> {
   seedSession(user);
@@ -140,6 +186,13 @@ async function mountPicker(user: CurrentUser): Promise<VueWrapper> {
           template:
             '<button :class="[\'mock-btn\', $attrs.class]" @click="$emit(\'click\')"><slot /></button>',
         },
+        // 「查看持有」弹窗。`modelValue` 不声明成 prop 也能拿到 fallthrough attr，
+        // 但按仓内既有写法统一声明成 prop，渲染条件才写在模板里。
+        'el-dialog': {
+          name: 'ElDialogStub',
+          props: ['modelValue'],
+          template: '<div v-if="modelValue" class="mock-dialog"><slot /></div>',
+        },
       },
     },
   });
@@ -147,15 +200,34 @@ async function mountPicker(user: CurrentUser): Promise<VueWrapper> {
   return w;
 }
 
-/** 三个动作按钮的标签（按 `.action-label` 取 —— 直接取按钮全文会混进 desc 句）。
- *  `.action-label` / `.action-grid` 是模板里的 class，与桩无关，EP 组件被桩掉也还在。 */
+/**
+ * 三个**动作**按钮的标签（按 `.action-label` 取 —— 直接取按钮全文会混进 desc 句）。
+ *  `.action-label` / `.action-grid` 是模板里的 class，与桩无关，EP 组件被桩掉也还在。
+ *
+ * 必须排除「查看持有」按钮（2026-10-11 起它也在 `.action-grid` 里、也有 `.action-label`）：
+ * 它不是报工动作，显隐与 zone 无关，混进来会把这组 zone 断言全部污染成假失败。
+ */
 function actionLabels(w: VueWrapper): string[] {
-  return w.findAll('.action-grid .action-label').map((b) => b.text().replace(/\s+/g, ''));
+  return w
+    .findAll('.action-grid .mock-btn')
+    .filter((b) => b.attributes('data-testid') !== 'held-btn')
+    .map((b) => b.find('.action-label').text().replace(/\s+/g, ''));
+}
+
+/** 「查看持有」按钮（`data-testid="held-btn"`）是否存在。 */
+function hasHeldButton(w: VueWrapper): boolean {
+  return w.find('[data-testid="held-btn"]').exists();
+}
+
+/** 弹窗内的持有行数（`HeldPartsList` 的 `.held-row`）。 */
+function heldRowCount(w: VueWrapper): number {
+  return w.findAll('.mock-dialog .held-row').length;
 }
 
 async function clickAction(w: VueWrapper, label: string): Promise<void> {
   const btn = w
     .findAll('.action-grid .mock-btn')
+    .filter((b) => b.attributes('data-testid') !== 'held-btn')
     .find(
       (b) => b.find('.action-label').exists() && b.find('.action-label').text().includes(label),
     );
@@ -170,6 +242,12 @@ describe('ScanActionPicker：按钮显隐按绑定架 zone 并集', () => {
     h.push.mockReset();
     h.replace.mockReset();
     vi.mocked(h.listShelves).mockReset();
+    vi.mocked(h.fetchScanHeld).mockReset().mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 200,
+      offset: 0,
+    });
     h.ElMessage.success.mockReset();
   });
 
@@ -185,7 +263,7 @@ describe('ScanActionPicker：按钮显隐按绑定架 zone 并集', () => {
     expect(actionLabels(w)).toEqual(['送检']);
   });
 
-  it('B3：两类都绑 → 三个按钮全在', async () => {
+  it('B3：两类都绑 → 三个动作按钮全在', async () => {
     mockShelves([SHELF_P1, SHELF_I1]);
     const w = await mountPicker(makeUser('u3', [SHELF_P1.id, SHELF_I1.id]));
     expect(actionLabels(w).sort()).toEqual(['取件', '放回', '送检']);
@@ -213,7 +291,9 @@ describe('ScanActionPicker：按钮显隐按绑定架 zone 并集', () => {
   it('B6：零按钮时不给「未绑定货架」文案（账号其实绑了架，只是货架端点挂了）', async () => {
     vi.mocked(h.listShelves).mockRejectedValue(new Error('500 boom'));
     const w = await mountPicker(makeUser('u6', [SHELF_P1.id]));
+    // 「零按钮」说的是**动作**按钮；「查看持有」与 zone 无关，货架端点挂了它照样在
     expect(actionLabels(w)).toEqual([]);
+    expect(hasHeldButton(w)).toBe(true);
     expect(w.text()).not.toContain('本账号未绑定货架');
   });
 });
@@ -224,6 +304,12 @@ describe('ScanActionPicker：点了跳哪一页', () => {
     h.push.mockReset();
     h.replace.mockReset();
     vi.mocked(h.listShelves).mockReset();
+    vi.mocked(h.fetchScanHeld).mockReset().mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 200,
+      offset: 0,
+    });
     h.ElMessage.success.mockReset();
   });
 
@@ -265,5 +351,111 @@ describe('ScanActionPicker：点了跳哪一页', () => {
     });
     await flushPromises();
     expect(h.replace).toHaveBeenCalledWith('/scan/badge');
+  });
+});
+
+describe('ScanActionPicker：查看持有（2026-10-11 新增）', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    h.push.mockReset();
+    h.replace.mockReset();
+    vi.mocked(h.listShelves).mockReset();
+    vi.mocked(h.fetchScanHeld).mockReset().mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 200,
+      offset: 0,
+    });
+    h.ElMessage.success.mockReset();
+  });
+
+  it('H1：按钮恒在（只看扫到工人，与绑定架无关），角标按已加载件数', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    mockHeld(['101', '102', '103']);
+    const w = await mountPicker(makeUser('h1', [SHELF_P1.id, SHELF_I1.id]));
+    expect(hasHeldButton(w)).toBe(true);
+    // 角标写在描述行里：`items.length`（已加载件数），不是 total
+    expect(w.find('[data-testid="held-btn"]').text()).toContain('3 件');
+  });
+
+  it('H2：没扫到工人 ⇒ 按钮不显示（显隐条件只有一个：worker.id）', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    useScanSession().setWorker(null);
+    seedSession(makeUser('h2', [SHELF_P1.id, SHELF_I1.id]));
+    const w = mount(ScanActionPicker, {
+      global: {
+        plugins: [
+          createPinia(),
+          [
+            VueQueryPlugin,
+            { queryClient: new QueryClient({ defaultOptions: { queries: { retry: 0 } } }) },
+          ],
+        ],
+        stubs: { 'el-button': true, 'el-dialog': true },
+      },
+    });
+    await flushPromises();
+    expect(hasHeldButton(w)).toBe(false);
+  });
+
+  it('H3：点「查看持有」打开弹窗并渲染持有行，且不发跳转', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    mockHeld(['101', '102']);
+    const w = await mountPicker(makeUser('h3', [SHELF_P1.id, SHELF_I1.id]));
+
+    expect(w.find('.mock-dialog').exists(), '弹窗默认不该打开').toBe(false);
+    await w.find('[data-testid="held-btn"]').trigger('click');
+    await flushPromises();
+
+    expect(w.find('.mock-dialog').exists()).toBe(true);
+    expect(heldRowCount(w)).toBe(2);
+    // 展示字段取自现有 17 字段：序列号 / 图号 / 名称 / 数量
+    const text = w.find('.mock-dialog').text();
+    expect(text).toContain('SN-101');
+    expect(text).toContain('DWG-1');
+    expect(text).toContain('法兰盘');
+    expect(text).toContain('3 件');
+    // 「查看持有」不是报工动作：不跳页、不提示「已选择」
+    expect(h.push).not.toHaveBeenCalled();
+    expect(h.ElMessage.success).not.toHaveBeenCalled();
+  });
+
+  it('H4：params 与徽章 / 三页逐字一致（{ workerId, limit: 200 }）⇒ 必然同一条 qk.scanHeld', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    mockHeld([]);
+    await mountPicker(makeUser('h4', [SHELF_P1.id, SHELF_I1.id]));
+    expect(h.fetchScanHeld).toHaveBeenCalled();
+    expect(h.fetchScanHeld.mock.calls[0]![0]).toEqual({ workerId: '190000000000009', limit: 200 });
+  });
+
+  it('H5：加急 / 交期 / 工序各有值才渲染；没有工序链时工序整块不出现（不显示假占位）', async () => {
+    mockShelves([SHELF_P1, SHELF_I1]);
+    vi.mocked(h.fetchScanHeld).mockResolvedValue({
+      items: [
+        heldRow('201', { is_urgent: true, planned_delivery_date: '2026-11-01' }),
+        heldRow('202', {
+          is_urgent: false,
+          planned_delivery_date: '',
+          chain_current_process_name: '钻孔',
+          chain_next_process_name: null,
+        }),
+        heldRow('203', { is_urgent: false, planned_delivery_date: '' }),
+      ],
+      total: 3,
+      limit: 200,
+      offset: 0,
+    });
+    const w = await mountPicker(makeUser('h5', [SHELF_P1.id, SHELF_I1.id]));
+    await w.find('[data-testid="held-btn"]').trigger('click');
+    await flushPromises();
+
+    const rows = w.findAll('.mock-dialog .held-row');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.text()).toContain('加急');
+    expect(rows[0]!.text()).toContain('交期 2026-11-01');
+    expect(rows[1]!.text()).toContain('工序 钻孔');
+    // 交期空 + 无工序链 ⇒ 副信息整块不渲染（不是渲染一个空的 tag）
+    expect(rows[1]!.find('.held-row-sub').exists()).toBe(true);
+    expect(rows[2]!.find('.held-row-sub').exists()).toBe(false);
   });
 });

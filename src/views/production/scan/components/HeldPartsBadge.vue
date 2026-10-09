@@ -8,6 +8,9 @@
     2026-10-04：列表端点返回分页信封，N 取 `.items.length`（已加载），抽屉里另标
     「共 M 件」= 信封 total；两者不等即表示受后端 limit 截断（不再谎称是全部）。
   - 点击打开 el-drawer（右侧 rtl，size=400px），列出当前 worker 持有件
+  - 列表块（加载 / 错误 / 空 / 四态 + 行渲染）已整块搬进 `HeldPartsList.vue`，
+    与 `/scan/action` 的「查看持有」弹窗共用同一份渲染（2026-10-11）。本组件只留顶栏
+    按钮、抽屉壳、头部计数与「刷新」按钮
   - 数据源 = `useScanHeldQuery`，与放回页 / 送检页**共用同一条 query key** ⇒ 同屏只发
     一次请求，领取/放回/送检后由 mutation 的失效链自动同刷（2026-10-10 前这里是模块级
     `useScanBus` 信号 + 各自 fetchHeld，同一屏对同一个工人发 2 次同参请求且切页无缓存）
@@ -60,46 +63,14 @@
         </el-button>
       </div>
 
-      <div v-if="loading && parts.length === 0" class="held-loading">
-        <el-icon class="is-loading"><Loading /></el-icon>
-        <span>加载中…</span>
-      </div>
-
-      <div v-else-if="errorMsg" class="held-error">
-        <el-icon color="#f56c6c"><WarningFilled /></el-icon>
-        <span>{{ errorMsg }}</span>
-      </div>
-
-      <div v-else-if="parts.length === 0" class="held-empty">
-        <el-icon :size="48" color="#c0c4cc"><Box /></el-icon>
-        <p>暂未持有零件</p>
-        <p class="held-empty-hint">领取后会出现在这里</p>
-      </div>
-
-      <div v-else class="held-list" :style="{ maxHeight: maxListHeight }">
-        <!-- 2026-10-04：key 用 `p.batch_id || p.id`（与报工台三页列表同口径）。
-             后端把 held 端点的 `batch_id` 填上后，同一 part 的多个批次会在
-             抽屉里撞 part id ⇒ Vue duplicate-key（整列表只渲染一行且控制台告警）。
-             批次锚点缺失（老数据 / 后端回退）时退回 part id。 -->
-        <div
-          v-for="p in parts"
-          :key="p.batch_id || p.id"
-          :class="['held-row', { 'is-urgent': p.is_urgent }]"
-        >
-          <div class="held-row-main">
-            <span class="held-serial">{{ p.serial_no || '—' }}</span>
-            <span class="held-drawing">{{ p.drawing_no }}</span>
-          </div>
-          <div class="held-row-name">{{ p.name }}</div>
-          <!-- 2026-10-04：本行 VO 是后端 PartListItem，没有 next_process_name /
-               shelf_code 键（后端列表刻意不返 next_process_id，也没有货架码派生），
-               「下一工序 / 货架」两个 tag 恒不显示、「未选工序」恒显示，是假话 ⇒ 删除。
-               加急是本行唯一还有意义的副信息，没有它时整块不渲染。 -->
-          <div v-if="p.is_urgent" class="held-row-sub">
-            <span class="urgent-tag">加急</span>
-          </div>
-        </div>
-      </div>
+      <!-- 2026-10-11：列表块（含加载 / 错误 / 空三态）整块挪进 `HeldPartsList`，
+           与 `/scan/action` 的「查看持有」弹窗共用同一份渲染。 -->
+      <HeldPartsList
+        :items="parts"
+        :loading="loading"
+        :error-msg="errorMsg"
+        :max-list-height="maxListHeight"
+      />
     </div>
   </el-drawer>
 </template>
@@ -125,7 +96,8 @@
  *   所以抽屉打开时看到的已经是刷新后的列表。
  */
 import { computed, ref, watch } from 'vue';
-import { Box, Loading, Refresh, User, WarningFilled } from '@element-plus/icons-vue';
+import { Box, Refresh, User } from '@element-plus/icons-vue';
+import HeldPartsList from './HeldPartsList.vue';
 import { useScanHeldQuery } from '@/views/production/scan/composables/useScanListQuery';
 import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
 
@@ -214,79 +186,9 @@ watch(
   border-radius: 10px;
   font-weight: 600;
 }
-.held-loading,
-.held-error,
-.held-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 32px 8px;
-  color: #909399;
-  font-size: 13px;
-  text-align: center;
-}
-.held-error {
-  color: #f56c6c;
-}
-.held-empty-hint {
-  font-size: 12px;
-  color: #c0c4cc;
-  margin: 0;
-}
-.held-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-.held-row {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  padding: 10px 12px;
-  background: #fafafa;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.held-row.is-urgent {
-  background: #fdf6ec;
-  border-color: #f9d77e;
-}
-.held-row-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-}
-.held-serial {
-  font-weight: 600;
-  color: #303133;
-  min-width: 72px;
-}
-.held-drawing {
-  color: #606266;
-}
-.held-row-name {
-  font-size: 13px;
-  color: #303133;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.held-row-sub {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 12px;
-}
-.urgent-tag {
-  color: #e6a23c;
-  font-weight: 600;
-  font-size: 12px;
-}
+// 列表块的样式（.held-list / .held-row / 各个 tag）随 2026-10-11 的抽取一起搬进
+// `HeldPartsList.vue`：它们作用在子组件内部的元素上，留在本文件既作用不到（scoped）也
+// 会被第二处复制一份漂移。这里只留头部计数与按钮样式。
 .muted-inline {
   color: #909399;
   margin-left: 2px;
