@@ -327,6 +327,40 @@ export const useTagsViewStore = defineStore('tags-view', () => {
     } catch {
       // 坏数据当空处理，不抛
     }
+    remapLegacyRouteNames();
+  }
+
+  /**
+   * 2026-10-10：路由改名后的一次性 name 重映射（存档迁移）。
+   *
+   * `visitedViews[].name` 与 `cachedViewNames` 都按用户持久化在 localStorage 里，而
+   * keep-alive 的 `:include` 靠**名字**匹配组件（`getComponentName` 取
+   * `Component.name || Component.__name`，`<script setup>` 的 `__name` 由 vite-plugin-vue
+   * 从文件名推断）。路由名与文件名不一致时该页压根不会被缓存，本轮把两处改成一致：
+   *
+   *   - `PartsDetail` → `PartDetail`（零件详情页由「不缓存」变为「缓存」）
+   *   - `PartsNew` → `PartBatchNew`（新建零件页由「不缓存」变为「缓存」）
+   *
+   * 老用户 localStorage 里存的是旧名 ⇒ 匹配不上新 `include` ⇒ **缓存失效一次**
+   * （标签还在，页面状态会丢一次；下次访问该页就按新名进缓存）。这里把存档里的旧名
+   * 直接改成新名，让迁移只发生一次而不是每次 hydrate 都失效。
+   *
+   * ⚠️ **这是一次性迁移**：映射表里的旧名一旦在某次发布后确认全网不再产出，
+   * 即可连同本函数一起删除；删除前别忘了「旧名可能仍留在没进过该页面的用户存档里」
+   * 这一事实（最后一次上线前的存量用户）。
+   */
+  function remapLegacyRouteNames(): void {
+    const legacy: Record<string, string> = {
+      PartsDetail: 'PartDetail',
+      PartsNew: 'PartBatchNew',
+    };
+    const mapName = (n: string): string => legacy[n] ?? n;
+    for (const v of visitedViews.value) {
+      if (typeof v.name === 'string' && legacy[v.name]) {
+        v.name = legacy[v.name]!;
+      }
+    }
+    cachedViewNames.value = cachedViewNames.value.map(mapName);
   }
 
   /**

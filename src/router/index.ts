@@ -73,8 +73,13 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
+        // 2026-10-10：路由名 `PartsNew` → `PartBatchNew`（对齐组件文件名）。名字不匹配
+        // ⇒ MainLayout 的 `<keep-alive :include="tags.cachedViewNames">` 按名字匹配不上
+        // ⇒ 本页**根本没被缓存**：用户在新建零件页上传好文件、切到别的标签页再切回来，
+        // 组件被销毁重建，已上传文件与编辑好的字段全部消失。改名的唯一作用就是让它
+        // 进缓存（草稿 hydrate 是独立设计变更，本轮不做）。
         path: 'parts/new',
-        name: 'PartsNew',
+        name: 'PartBatchNew',
         component: () => import('@/views/parts/new/PartBatchNew.vue'),
         meta: {
           title: '新建零件',
@@ -82,8 +87,13 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
+        // 2026-10-10：路由名 `PartsDetail` → `PartDetail`（对齐组件文件名，与同层的
+        // `AssemblyDetail` / `DeliveryNoteDetail` 的「实体单数 + Detail」惯例一致）。
+        // 改名让本页**第一次真的被 keep-alive 缓存** —— 所以同批必须在
+        // `PartDetail.vue` 的 `route.params.id` watcher 上加好「本页是否活跃」守卫，
+        // 否则被缓存的后台页会拿别的页面的 id 打 `GET /parts/{id}`。
         path: 'parts/:id(\\d+)',
-        name: 'PartsDetail',
+        name: 'PartDetail',
         component: () => import('@/views/parts/detail/PartDetail.vue'),
         meta: {
           title: '零件详情',
