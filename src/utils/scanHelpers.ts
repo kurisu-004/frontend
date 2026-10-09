@@ -3,7 +3,7 @@
 
 import { h } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { getPartBySerial, type PartItem } from '@/api/parts';
+import { getPartBySerial, type PartDetailDto } from '@/api/parts';
 
 /**
  * 在给定的行列表里按 serial_no || drawing_no 找全部匹配。
@@ -12,8 +12,8 @@ import { getPartBySerial, type PartItem } from '@/api/parts';
  *
  * 泛型 `T extends { serial_no: string | null; drawing_no: string }`（与同文件
  * `findBySerialNo` 同款）：报工台三页的行类型是 `scanPartRowSchema`（后端
- * `PartListItem` + Zod 推断），返修页是 `PartItem`，两者都只用到这两个键，
- * 不该为了调一个纯 filter 就要求整行满足 `PartItem` 的必填字段集。
+ * `PartListItem` + Zod 推断），返修页是 `PartDetailDto`，两者都只用到这两个键，
+ * 不该为了调一个纯 filter 就要求整行满足 `PartDetailDto` 的必填字段集。
  */
 export function findAllByCode<T extends { serial_no: string | null; drawing_no: string }>(
   rows: T[],
@@ -30,7 +30,7 @@ export function findAllByCode<T extends { serial_no: string | null; drawing_no: 
  * INSPECTION / READY_TO_SHIP 过滤，扫码命中即代表「这个工单的某个批次在候选里」；
  * 0 命中直接调 `findPartBySerialAndPrompt` 显示当前位置。
  *
- * 泛型 `T extends { serial_no: string | null }`：兼容 `PartItem` 和
+ * 泛型 `T extends { serial_no: string | null }`：兼容 `PartDetailDto` 和
  * `DeliveryNoteCandidatePart`（后者也有 `serial_no` 字段）。
  */
 export function findBySerialNo<T extends { serial_no: string | null }>(
@@ -44,7 +44,7 @@ export function findBySerialNo<T extends { serial_no: string | null }>(
 
 /**
  * 调 `GET /parts/by-serial/{serial_no}`；成功时阻塞弹窗（`ElMessageBox.alert`）
- * 显示该零件的当前位置/持有人/状态，提示工人「可能不在本工序」；
+ * 显示该零件的条码 / 名称 / 状态 / 当前所在，提示工人「可能不在本工序」；
  * 找不到（404 等）→ `ElMessage.warning` 一行。
  *
  * 关键：message 传 VNode（不是拼好的 `lines.join('\n')`）—— Element Plus 对 plain
@@ -53,29 +53,34 @@ export function findBySerialNo<T extends { serial_no: string | null }>(
  * VNode 路径下每行一个 `<div>`，自然换行。
  *
  * `message: VNode` 类型 Element Plus 2.14.x 收口不严，`as any` 是已知 workaround。
+ *
+ * 2026-10-10：本弹窗原有 5 行，其中 3 行读的是 `getPartBySerial` **根本没返**的字段 ——
+ * 该端点返的就是 `PartDetailOut`（part 级 VO），不含批次锚点与持有人信息：
+ *   - 「批次」行读 `part.batch_no`：后端一个都不返 ⇒ 恒显示「—」，已删（工件可以有
+ *     多个活跃批次，part 级行给任一都是错锚点；真要看批次列表得进零件详情页）。
+ *   - 「当前所在」读 `part.current_holder_display ?? part.location`：两个都不返 ⇒ 恒显示
+ *     「未知位置」。持有人是**批次级**事实（`GET /parts/{id}/batches` 的行里有
+ *     `current_holder_display`），而这里是扫码即时反馈路径，为它多打一次往返会拖慢
+ *     反馈 ⇒ 改为如实说明「请到零件详情页查看」，不再显示一个编出来的位置。
  */
 export async function findPartBySerialAndPrompt(code: string): Promise<void> {
-  let part: PartItem;
+  let part: PartDetailDto;
   try {
     part = await getPartBySerial(code);
   } catch (e) {
     ElMessage.warning(`未找到条码 ${code} 对应的零件：${(e as Error).message ?? ''}`);
     return;
   }
-  const where = part.current_holder_display ?? part.location ?? '未知位置';
   const rows: { label: string; value: string }[] = [
     { label: '条码', value: part.serial_no ?? part.drawing_no ?? code },
     { label: '名称', value: part.name },
-    {
-      label: '批次',
-      value: part.batch_no == null ? '—' : String(part.batch_no),
-    },
     { label: '状态', value: part.status },
-    { label: '当前所在', value: where },
+    { label: '当前所在', value: '请到零件详情页查看' },
   ];
-  // PartListItem.next_process_id / next_process_name 字段随 /parts 列表响应下线（2026-09-27 字段对齐）
-  // 详情出参（PartDetailOut）仍保留 next_process_id（PartItem 保留该字段供 scan RETURN 等流程消费）；
-  // 本 helper 删除 next_process_name 显示行，「下一道工序」展示入口由 process_chain_id 派生。
+  // 2026-10-10：「下一道工序」展示行此前已被删除 —— `next_process_name` 随 /parts 列表
+  // 响应下线，而 `PartDetailOut` 只有 `next_process_id`（雪花 ID，无名字）；详情出参的
+  // `next_process_id` 保留供 scan RETURN 等流程消费。工序名的展示入口改由
+  // `process_chain_id` 派生的「工序链」承载。
   const messageVNode = h(
     'div',
     {
@@ -103,7 +108,7 @@ export async function findPartBySerialAndPrompt(code: string): Promise<void> {
           style:
             'margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e6a23c; color: #b88230;',
         },
-        `提示：该零件不在本工序，请到「${where}」继续流程。`,
+        '提示：该零件不在本工序；它的当前工序与所在位置请到零件详情页查看。',
       ),
     ],
   );

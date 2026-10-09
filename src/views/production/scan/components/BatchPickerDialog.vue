@@ -80,7 +80,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Box } from '@element-plus/icons-vue';
-import type { PartItem } from '@/api/parts';
 import { chainRowClass } from '@/views/production/scan/chainAccent';
 
 /**
@@ -120,7 +119,11 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [v: boolean];
-  pick: [row: PartItem];
+  /** 2026-10-10：载荷类型从 `PartItem` 改成 `BatchPickerRow`（= props.rows 的元素类型）。
+   *  `PartItem` 是前端按「part 级 VO」臆想的联合类型，报工台三页实际传进来的行是后端
+   *  `ScanListItem`（经 `scanPartRowSchema` 守门），两者对不上、出口类型从来没起到
+   *  约束作用 —— 三个 handler 早就各自按 `BatchPickerRow` 声明入参并做一次 cast。 */
+  pick: [row: BatchPickerRow];
 }>();
 
 /** 批次号升序展示；缺 batch_no 时按 1 处理 */
@@ -162,11 +165,7 @@ function holderText(p: BatchPickerRow): string {
 }
 
 function onPick(row: BatchPickerRow): void {
-  // pick 出口仍是 `PartItem`，与报工台三页 handler `onBatchPicked` 的声明一致；
-  // 三页入口各做一次 `as unknown as ScanPartRowSchema` 把这一行认回本域的行类型。
-  // 改进方向：上 `<script setup generic="T extends BatchPickerRow">` + `pick: [row: T]`，
-  // 让出口载荷跟随调用方的行类型（报工台三页的 cast 随之消失），而不是继续加 cast。
-  emit('pick', row as unknown as PartItem);
+  emit('pick', row);
   emit('update:modelValue', false);
 }
 

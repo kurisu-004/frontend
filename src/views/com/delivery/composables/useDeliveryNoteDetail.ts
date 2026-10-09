@@ -78,6 +78,16 @@ export interface UseDeliveryNoteDetailReturn {
 
 export function useDeliveryNoteDetail(
   noteId: MaybeRefOrGetter<string>,
+  /**
+   * 本页是否仍是当前路由（可选，默认恒真）。
+   *
+   * 2026-10-10 新增：本页被 keep-alive 缓存后，`noteId`（`route.params.id`）跟的是
+   * **全局** currentRoute —— 用户切去别的页面时它照样变，reactive queryKey 跟着变就会
+   * 自动去取「别的页面的送货单」。入口按 `route.name` 判定本页是否活跃传进来，透传给
+   * `useDeliveryNoteDetailQuery` 的 enabled 闸门（数据流是 computed → queryKey，
+   * 没有 watcher 可挂守卫，只能在 enabled 侧收）。
+   */
+  isActive: MaybeRefOrGetter<boolean> = true,
 ): UseDeliveryNoteDetailReturn {
   // 2026-09-26：消费侧禁止解构 store（沿 usePartsListStore 不变量 #3），统一 auth.xxx。
   const auth = useAuthStore();
@@ -90,7 +100,7 @@ export function useDeliveryNoteDetail(
   }));
 
   // ============ 主数据（useQuery + Zod 守门）============
-  const detailQuery = useDeliveryNoteDetailQuery(noteId);
+  const detailQuery = useDeliveryNoteDetailQuery(noteId, isActive);
   const note = computed<DeliveryNoteDetailData | null>(() => detailQuery.data.value ?? null);
   const loading = detailQuery.isFetching;
   const fetchDetail = detailQuery.fetchDetail;

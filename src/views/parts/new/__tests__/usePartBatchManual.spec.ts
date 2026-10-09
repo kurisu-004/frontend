@@ -179,35 +179,45 @@ const harnessMount = () =>
 
 // ============ fixtures ============
 
+// `created` 元素 = 后端 `PartDetailOut` + 前端补的 `sourceIndex`（请求 items 的全局
+// 下标）。Tab 1 不消费 sourceIndex，但类型上必填，fixture 需补。
+//
+// 2026-10-10：原先这份 fixture 带 9 个后端 `PartDetailOut` **一个都不返**的键
+// （parent_customer_name / customer_path / current_holder_kind / shelf_code /
+// worker_name / outsource_company_name / location / next_process_name /
+// has_process_chain）—— 它们是前端旧 `PartItem` 联合类型里的幽灵字段。现按
+// `PartDetailOut` 的 28 字段补齐，被测逻辑（onAddConfirm 的分组合并 / 失败行定位）
+// 不读这些字段。
 const okPartItem: PartBatchResult['created'][number] = {
-  id: 'p1',
-  // 2026-10-04：batchCreateParts 的 created 元素新增 sourceIndex（请求 items 的全局
-  // 下标）。Tab 1 不消费它，但类型上必填，fixture 需补。
   sourceIndex: 0,
-  version: 0,
+  id: 'p1',
   serial_no: 'P00001',
   name: 'x',
   drawing_no: 'd',
+  applicant_name: '申请人',
   quantity: 1,
+  request_date: '2026-09-25',
   planned_delivery_date: '2026-09-25',
-  is_urgent: false,
+  customer_id: 'c1',
+  assembly_id: null,
   status: 'PENDING',
+  is_urgent: false,
+  next_process_id: null,
   order_no: null,
   system_delivery_date: null,
   note: null,
+  unit_price: '0.00',
+  total_price: '0.00',
+  version: 0,
+  created_at: '2026-09-25 08:00:00',
+  created_by: null,
+  updated_at: '2026-09-25 08:00:00',
+  updated_by: null,
+  deleted_at: null,
+  process_chain_id: null,
   customer_name: '客户A',
-  parent_customer_name: null,
-  customer_path: null,
-  assembly_id: null,
-  current_holder_kind: null,
-  shelf_code: null,
-  worker_name: null,
-  outsource_company_name: null,
-  location: null,
-  next_process_id: null,
-  next_process_name: null,
-  // 后端 `PartListItem` 该键恒在；新建 part 走 part 级路径，取值恒 false。
-  has_process_chain: false,
+  l1_customer_name: '客户A-一级',
+  current_batch_id: null,
 };
 const okResult: PartBatchResult = { created: [okPartItem], failed: [], cleanup_tmp_keys: [] };
 const partialResult: PartBatchResult = { created: [], failed: [{ index: 0, message: 'invalid' }], cleanup_tmp_keys: [] };

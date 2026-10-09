@@ -114,10 +114,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch, watchEffect } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import FileListCard from '@/components/FileListCard.vue';
 import { useDialogSize } from '@/composables/useDialogSize';
+import { useTagsViewStore } from '@/stores/tagsView';
 import type { AssemblyUpdatePayload } from '@/types/assembly';
 import AssemblyInfoCard from './components/AssemblyInfoCard.vue';
 import AssemblyChildrenTable from './components/AssemblyChildrenTable.vue';
@@ -127,6 +128,7 @@ import type { AssemblyEditForm, AssemblyAddChildForm } from './composables/useAs
 
 const route = useRoute();
 const router = useRouter();
+const tags = useTagsViewStore();
 
 // ============ 路由 → assemblyId ============
 const assemblyId = computed<string>(() => {
@@ -225,12 +227,41 @@ async function onConfirmSubmit(): Promise<void> {
   }
 }
 
+// ============ 标签页标题动态化（2026-10-10）============
+// `meta.title` 是编译期常量（「装配件详情」），承载不了「按当前装配件显示序列号」这种
+// 数据到位后才有的值 ⇒ 由 `tags.setTitle` 覆盖那张已存在的 tab（静态 `meta.title`
+// 本身不动，它还是侧栏菜单等处的兜底来源）。回退链必需：后端 `serial_no` 可为 null。
+// 靠响应式派生（`route.path` + `detail`）驱动，切兄弟装配件与切回 tab 都会跟着更新；
+// `route.name` 守卫是硬需求 —— 本页被 keep-alive 缓存，切去别的页面时全局路由照样变，
+// 不守卫就会把别的 tab 刷成当前装配件的序列号。
+watchEffect(() => {
+  if (route.name !== 'AssemblyDetail') return;
+  const asm = detail.value?.assembly;
+  tags.setTitle({ path: route.path }, asm?.serial_no ?? asm?.drawing_no ?? '装配件详情');
+});
+
 // ============ 导航 ============
 function onBack(): void {
   router.push('/parts');
 }
 
-watch(() => route.params.id, fetchData);
+watch(
+  () => route.params.id,
+  () => {
+    // 2026-10-10 加「本页是否活跃」守卫。`useRoute()` 注入的是 vue-router 的**全局**
+    // 响应式 currentRoute，不是「本组件挂载那一刻的地址快照」；而 keep-alive 把本页切到
+    // 后台时 watcher 不会停（只有 onUnmounted 才停）⇒ 用户从装配件详情点子零件进
+    // /parts/{part_id} 时，全局路由变了、被缓存的本页 watcher 照样触发，
+    // fetchData 读到的 assemblyId 已是 part 的 id ⇒ GET /assemblies/{part_id} 必 404
+    // （t_assembly 里没有这个 id）并弹一句看不懂的 ElMessage.error。
+    //
+    // 但**不能删 watcher**：vue-router 对同一条路由记录只改 param（/assemblies/1 →
+    // /assemblies/2）时会复用组件实例、不触发 onMounted，删了的话页面会停在旧数据上。
+    // 所以守卫与 watcher 并存：路由不是本页就当没发生，是本页（换 id）就照常重取。
+    if (route.name !== 'AssemblyDetail') return;
+    void fetchData();
+  },
+);
 onMounted(fetchData);
 </script>
 

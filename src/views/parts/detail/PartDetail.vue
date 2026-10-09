@@ -1,31 +1,46 @@
 <!--
   PartDetail.vue
 
-  /parts/:id  零件详情页（装配壳）。
-  - 8 张卡：信息卡 / 历史记录卡 / 条形码卡 / 装配件卡 / 零件文件 tabs 卡 /
-    时间线卡（含批次监控 + 历史过滤 + 工序链）/ 底部操作 / dialog 区。
-  - 2026-09-17 PR-4 卡片化重构：
-    - 删除 PartQuoteCard / usePartQuote（外协报价下线，仅保留 /outsource/quote
-      入口；PartDetail 不再展示报价列表）。
-    - 4 张 FileListCard + PartCncCard 合并为 PartFilesTabsCard（el-tabs 切
-      DRAWING / 3D_MODEL / CAD_2D / CNC_PAIR 4 tab）。
-    - 新增「时间线」卡：3 列 flex 容器 → PartBatchMonitorCard（左，批次列表
-      + 拆分 / 取消 + 行选中联动） / PartHistoryCard（中，按选中批次过滤的
-      历史）/ ProcessChainCard（右，工艺链可视化）。
-  - 2026-09-17 UI 调整第 2 轮：
-    - 删除顶部独立的 PartHistoryCard（重复，搬到时间线卡内）。
-    - 时间线卡去 header；批次监控移到历史 + 工序链下方（同行撑满）。
-    - 零件文件卡 body 不再嵌套 card，按钮移到最外层 footer。
-  - 底部操作（品检 / 外协回收 / 取消 / 删除）留在 shell，因为它们跨多张卡
-    状态；dialog 状态由 shell 局部维护，业务函数调 usePartDetail。
-  - 2026-09-15 Phase 5：业务全切 v2（api 基址 `/api/v2`）。品检通过走
-    `POST /parts/{id}/to-ship`（v2 必填 batch_id + version），指定工序走
-    `POST /parts/{id}/fail-inspection`。
-  - 工艺链：part.process_chain_id 改走 useProcessChain 拉链（PR-3）。
+  `/parts/:id` 零件详情页（装配壳）。
+
+  壳只做两件事：**接线**（把数据层 / 动作层的返回值喂给卡片、处理对话框与导航的收尾）
+  与**本文件独有的局部态**（选中批次、两个对话框的可见性、三个提交中标记）。
+  取数在 `composables/usePartDetailQuery.ts` + `usePartEventsQuery.ts` + 共享的
+  `usePartBatchesQuery`；7 个写操作在 `composables/usePartDetailActions.ts`；权限矩阵 /
+  派生 / 行内编辑态在 `composables/usePartDetail.ts`。
+
+  卡片：信息卡 / 条形码卡 / 装配件卡 / 零件文件 tabs 卡 / 时间线卡（历史 + 工序链 +
+  批次监控）/ 底部操作卡 + 两个对话框。
+
+  边界取舍：
+    - 「底部操作」与「指定工序」已抽成 `PartActionBar.vue` / `PartFailInspectionDialog.vue`
+      —— 两个都是**纯展示 + 事件转发**，门控口径与各自边界写在它们的文件头。
+    - **取消 / 删除确认框刻意留在壳里**：它要求逐字输入 `part.serial_no` 才解锁，是那条
+      路径上**唯一**的提交出口，关掉权必须收在自己手里（CLAUDE.md「一个弹窗若是某条
+      路径的唯一出口，它的关闭权就必须收在自己手里」）。同理不给它加 `:show-close`。
+    - 软删后的跳转也在壳里 —— composable 不 import vue-router（CLAUDE.md 不变量）。
+
+  端点：详情 `GET /api/v2/parts/{id}`；品检流转 `POST /api/v2/prod/batches/{id}/to-ship`
+  （品检通过）与 `/to-process`（指定工序）；工艺链由 `part.process_chain_id` 指过去，
+  走 `useProcessChain` 拉 `GET /prod/process-chains/{chain_id}`。
 -->
 <template>
   <div v-loading="infoLoading" class="part-detail">
-    <!-- 信息卡 -->
+    <!--
+      三条读（详情 / 事件 / 批次列表）任一失败时的**页内兜底位**。
+      与 query hook 内的 `watch(error) → ElMessage.error` 是两层、不是重复：
+      ElMessage 是瞬时提示（几秒后消失、连点几次会互相顶掉），这里留一条常驻横幅，
+      让「这一屏的数据不完整」在页面上留得下痕迹。正常路径零 DOM。
+    -->
+    <el-alert
+      v-if="errorMsg"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="`部分数据加载失败：${errorMsg}`"
+      description="已加载的卡片仍可正常使用；若持续失败请刷新页面或检查网络。"
+    />
+
     <PartInfoCard
       :part="part"
       :editing="editing"
@@ -57,7 +72,6 @@
       </div>
     </el-card>
 
-    <!-- 所属装配件 -->
     <PartAssemblyLinkCard
       v-if="part && part.assembly_id !== null"
       :part="part"
@@ -65,7 +79,6 @@
       :assembly-loading="assemblyLoading"
     />
 
-    <!-- 零件文件 tabs 卡（2026-09-17 PR-4：合并 4 张 FileListCard + PartCncCard） -->
     <PartFilesTabsCard
       :part-id="partId"
       :drawings="drawings"
@@ -90,13 +103,10 @@
     />
 
     <!--
-      时间线卡（2026-09-17 PR-4）：批次列表 + 历史 + 工序链 三列联动。
-      - PartBatchMonitorCard 行选中 → onBatchSelect → 写入 selectedBatchId
-      - selectedBatchId 同步驱动：PartHistoryCard 过滤 / ProcessChainCard
-        高亮 current_process_step_id 对应步骤
-      - 无人点过时由 useDefaultBatchSelection 兜底选中（优先带工序链定位的批次）
-      - 2026-09-17 UI 调整第 2 轮：去掉外层 header；批次监控移到历史 +
-        工序链下方（同行撑满），避免两列等高造成批次表区域浪费。
+      时间线卡：批次列表 + 历史 + 工序链 三列联动。
+      `selectedBatchId` 是唯一的联动锚（批次行选中写入），同时驱动 PartHistoryCard 的
+      事件过滤与 ProcessChainCard 的步骤高亮；没人点过时由 `useDefaultBatchSelection`
+      兜底选中（优先带工序链定位的批次）。批次监控在本轮布局调整后移到下方同行撑满。
     -->
     <el-card shadow="never" class="timeline-card">
       <div class="timeline-top">
@@ -135,94 +145,30 @@
       </div>
     </el-card>
 
-    <!-- 底部操作：取消订单 / 删除 / 品检 / 外协回收（按角色门控） -->
-    <el-card v-if="part" shadow="never" class="bottom-actions">
-      <div class="action-row">
-        <!-- 品检相关：仅 INSPECTION 状态可见 -->
-        <template v-if="canInspect && part.status === 'INSPECTION'">
-          <el-button type="success" :loading="passSubmitting" @click="onPassInspection"
-            >品检通过</el-button
-          >
-          <el-button type="warning" @click="openFailInspDialog">指定工序</el-button>
-        </template>
-        <el-button
-          v-if="canCancelPart && part.status !== 'CANCELLED' && part.status !== 'COMPLETED'"
-          type="warning"
-          @click="openConfirmForCancel"
-          >取消订单</el-button
-        >
-        <el-button v-if="canDeletePart" type="danger" @click="openConfirmForDelete">删除</el-button>
-      </div>
-    </el-card>
+    <PartActionBar
+      :visible="!!part"
+      :status="part?.status ?? null"
+      :can-inspect="canInspect"
+      :can-cancel-part="canCancelPart"
+      :can-delete-part="canDeletePart"
+      :inspection-batch="inspectionBatch"
+      :pass-submitting="passSubmitting"
+      @pass="onPassInspection"
+      @openFailInsp="openFailInspDialog"
+      @cancelOrder="openConfirmForCancel"
+      @deletePart="openConfirmForDelete"
+    />
 
-    <!-- 指定工序对话框（PartDetail 用）—— 选下一道工序；可选品检备注 -->
-    <el-dialog
-      v-model="failInspDialogVisible"
-      title="指定工序 — 选择下一道工序"
-      :width="failInspDlg.width"
-      :top="failInspDlg.top"
-      :fullscreen="failInspDlg.fullscreen"
-      :close-on-click-modal="false"
-      @closed="onFailInspDialogClosed"
-    >
-      <el-form label-width="96px">
-        <el-form-item label="下一道工序" required>
-          <el-select
-            v-model="failInspProcessId"
-            placeholder="请先选择下一道工序"
-            filterable
-            clearable
-            style="width: 100%"
-          >
-            <el-option
-              v-for="p in processes"
-              :key="p.id"
-              :value="String(p.id)"
-              :label="`${p.code} — ${p.name}`"
-            >
-              {{ p.code }} — {{ p.name }}
-              <el-tag
-                v-if="p.category === 'OUTSOURCE'"
-                type="warning"
-                size="small"
-                effect="plain"
-                class="opt-tag"
-              >
-                外协
-              </el-tag>
-            </el-option>
-          </el-select>
-        </el-form-item>
-        <el-form-item label="品检备注">
-          <el-input
-            v-model="failInspNote"
-            type="textarea"
-            :rows="3"
-            :maxlength="500"
-            show-word-limit
-            placeholder="不合格原因 / 返修要点（写入事件历史，工人领取时可见）"
-          />
-        </el-form-item>
-        <el-alert
-          type="info"
-          :closable="false"
-          title="指定工序后零件回到「在生产货架上」状态（目标货架由系统按负载自动选择），下一道工序与备注已写入事件历史；工人领取时可在卡片上看到备注。"
-          show-icon
-        />
-      </el-form>
-      <template #footer>
-        <el-button @click="failInspDialogVisible = false">取消</el-button>
-        <el-button
-          type="warning"
-          :loading="failInspSubmitting"
-          :disabled="!failInspProcessId"
-          @click="onFailInspectionConfirm"
-          >确认指定工序</el-button
-        >
-      </template>
-    </el-dialog>
+    <PartFailInspectionDialog
+      v-model:model-value="failInspDialogVisible"
+      :inspection-batch="inspectionBatch"
+      :processes="processes"
+      :submitting="failInspSubmitting"
+      :status-label-of="statusLabelOf"
+      @confirm="onFailInspectionConfirm"
+    />
 
-    <!-- 取消 / 删除确认对话框 -->
+    <!-- 取消订单 / 删除确认对话框（唯一提交出口，关闭权在本框，见文件头） -->
     <el-dialog
       v-model="confirmVisible"
       :title="confirmTitle"
@@ -255,11 +201,9 @@
     </el-dialog>
 
     <!--
-      2026-09-29 修复：dev-only 调试面板（仅 import.meta.env.DEV 时渲染）。
-      用户报告「PartDetail 详情页有 /assemblies/{part_id} 可疑请求」，实际
-      URL 是 /parts/{part_id}/assembly（视觉混淆），调试面板把端点路径 +
-      当前 part.assembly_id + 装配件详情加载状态都列出来，QA 一眼对照。
-      生产构建 import.meta.env.DEV = false → 自动消失，无 CSS 体积代价。
+      dev-only 调试面板（`import.meta.env.DEV` 为假时自动消失，无生产 CSS 体积）。
+      端点路径 + 当前 part.assembly_id + 装配件详情加载状态 —— 用户报告「详情页有
+      /assemblies/{part_id} 可疑请求」时一眼可对照（实际是 /parts/{part_id}/assembly）。
     -->
     <el-card v-if="isDev" shadow="never" class="debug-card" style="margin-top: 12px">
       <template #header>调试面板（仅 dev）</template>
@@ -271,77 +215,71 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, onUnmounted, ref, watch, watchEffect } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { PriceTag } from '@element-plus/icons-vue';
-import { useQueryClient } from '@tanstack/vue-query';
+import type { PartBatch } from '@/api/parts';
+import { useTagsViewStore } from '@/stores/tagsView';
+import { useDialogSize } from '@/composables/useDialogSize';
+import { useConfirm } from '@/composables/useConfirm';
 import PartInfoCard from './components/PartInfoCard.vue';
 import BarcodeView from './components/BarcodeView.vue';
 import PartHistoryCard from './components/PartHistoryCard.vue';
 import PartAssemblyLinkCard from './components/PartAssemblyLinkCard.vue';
 import PartFilesTabsCard from './components/PartFilesTabsCard.vue';
 import PartBatchMonitorCard from './components/PartBatchMonitorCard.vue';
+import PartActionBar from './components/PartActionBar.vue';
+import PartFailInspectionDialog from './components/PartFailInspectionDialog.vue';
 import ProcessChainCard from './components/ProcessChainCard.vue';
-import type { PartBatch } from '@/api/parts';
-import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
-import type { Process } from '@/types/process';
-import { useDialogSize } from '@/composables/useDialogSize';
-import { useConfirm } from '@/composables/useConfirm';
-import { usePartFileUpload } from '@/composables/usePartFileUpload';
-// 2026-09-29 迁移：usePartFiles 三并发已迁到 usePartFilesListQuery 单调用，
-// usePartFiles.ts 同步删除。这里用 reactive params 自动驱动 useQuery，
-// 切 part / 上传 / 删除完成后调 invalidatePartFilesListQuery 失效缓存。
-import {
-  usePartFilesListQuery,
-  invalidatePartFilesListQuery,
-} from '@/composables/queries/usePartFilesListQuery';
 import { usePartDetail } from './composables/usePartDetail';
 import type { PartEditForm } from './composables/usePartDetail';
-import { usePartCncGroups } from './composables/usePartCncGroups';
-import { useProcessChain } from './composables/useProcessChain';
-import { useDefaultBatchSelection } from './composables/useDefaultBatchSelection';
+import { usePartDetailActions } from './composables/usePartDetailActions';
+import { isPartDetailActive } from './composables/partDetailActive';
+import { usePartFilesPanel } from './composables/usePartFilesPanel';
+import { usePartTimeline } from './composables/usePartTimeline';
 
-// 2026-09-29 修复：Vue SFC template expression 默认 sourceType=script，不接受
-// import.meta。dev 阶段定义 isDev 常量供模板 v-if 引用，避免
-// [plugin:vite:vue] Error parsing JavaScript expression: import.meta may appear
-// only with 'sourceType: "module"' (1:1) 报错。
+// 2026-09-29：Vue SFC template expression 默认 sourceType=script，不接受 import.meta。
+// 定义 isDev 常量供模板 v-if 引用，避免 [plugin:vite:vue] 的解析报错。
 const isDev = import.meta.env.DEV;
 
 const route = useRoute();
+const router = useRouter();
+const tags = useTagsViewStore();
 const partId = ref<string>(String(route.params.id ?? ''));
 
-// ============ composables ============
-// 2026-09-17 PR-4：删 usePartQuote（外协报价下线，仅保留 /outsource/quote 入口）。
-const detail = usePartDetail(partId);
-const cnc = usePartCncGroups(partId);
+/**
+ * 本页是否仍是当前路由（keep-alive 缓存页必需）。
+ *
+ * `useRoute()` 注入的是 vue-router 的**全局** currentRoute，不是本组件挂载那一刻的
+ * 地址快照；本页被 keep-alive 缓存（路由名 `PartDetail` = 组件文件名，MainLayout 的
+ * `<keep-alive :include="tags.cachedViewNames">` 按名字匹配）后，用户切到别的页面时
+ * 全局路由照样变。它同时喂给两处，必须共用同一个判据函数（`composables/partDetailActive.ts`，
+ * 别在两个地方各写一遍 `route.name !== ...`）：
+ *   ① 下面的 route watcher 与标签页标题的 watchEffect —— 否则 partId 被改成别的页面的
+ *      id，或把别的 tab 的标题刷成本工单的流水号；
+ *   ② 两条 query hook 的 `enabled` 闸门 —— 否则 reactive queryKey 跟着全局路由变，
+ *      自动去拉「别的页面的零件」（比 404 更坏：那个 id 若恰好有效，本页会静默渲染成
+ *      另一个工单）。
+ */
+const isActive = computed(() => isPartDetailActive(route.name));
 
-// 2026-09-29 迁移：usePartFilesListQuery 单调用替代原 usePartFiles 三并发。
-// reactive params 让 partId 变化自动 refetch；upload/delete 后由
-// invalidatePartFilesListQuery 精确失效。
-const qc = useQueryClient();
-const partFilesQuery = usePartFilesListQuery(() => partId.value);
-const partFiles = computed(() => partFilesQuery.data.value?.items ?? []);
-// 2026-09-29：drawings / models3d / cadFiles 改 computed（替代原 ref + 手写 fetch）。
-// computed 自动响应 partFiles 变化（partFiles 是 computed from useQuery.data，
-// 上传 / 删除后 invalidate → data 重算 → drawings/models3d/cadFiles 自动更新）。
-const drawings = computed(() => partFiles.value.filter((f) => f.kind === 'DRAWING'));
-const models3d = computed(() => partFiles.value.filter((f) => f.kind === '3D_MODEL'));
-const cadFiles = computed(() => partFiles.value.filter((f) => f.kind === 'CAD_2D'));
+// ============ 数据层 / 动作层 ============
+const detail = usePartDetail(partId, isActive);
 
-// 从 composables 解构出来（业务函数 + 状态）
+// 从数据层 composable 解构出来（只读投影 + 权限 + 行内编辑态 + helpers）
 const {
   part,
   infoLoading,
   events,
   eventsLoading,
   editing,
-  saving,
   form,
   assemblyDetail,
   assemblyLoading,
   batches,
   batchesLoading,
+  errorMsg,
   canEditPart,
   canCancelPart,
   canDeletePart,
@@ -351,17 +289,10 @@ const {
   canManageCncFiles,
   canManageSetupSheet,
   canManageBatches,
-  fetchPart,
-  fetchEvents,
   fetchBatches,
   onStartEdit,
   onCancelEdit,
-  onSave,
-  onFailInspection,
-  onCancelOrder,
-  onDeletePart,
-  onSplitBatch,
-  onCancelBatch,
+  buildUpdatePayload,
   statusLabel,
   statusTagType,
   statusLabelOf,
@@ -369,28 +300,44 @@ const {
   eventTagType,
 } = detail;
 
-// 2026-09-16 T3.5：三个 kind 各自的补传 composable（场景 B）。
-// 复用同一 partId（雪花 ID 字符串），kind 是字面量。
-// PartFilesTabsCard 期望 `apiUpload: (ownerId, file) => Promise<PartFileItem>` 签名，
-// 而 usePartFileUpload.upload 仅接 file（owner 已在 composable 闭包里）→ 这里
-// 适配成兼容签名。
-const drawingUploadComp = usePartFileUpload({
-  ownerPartId: partId,
-  kind: 'DRAWING',
-});
-const model3dUploadComp = usePartFileUpload({
-  ownerPartId: partId,
-  kind: '3D_MODEL',
-});
-const cadUploadComp = usePartFileUpload({
-  ownerPartId: partId,
-  kind: 'CAD_2D',
-});
-const drawingUpload = (_ownerId: string, file: File) => drawingUploadComp.upload(file);
-const model3dUpload = (_ownerId: string, file: File) => model3dUploadComp.upload(file);
-const cadUpload = (_ownerId: string, file: File) => cadUploadComp.upload(file);
-
+// ============ 选中批次（三卡联动的唯一锚）============
+// 时间线三卡（历史 / 工序链 / 批次监控）的联动锚与派生态都在 `usePartTimeline` 里；
+// 「品检锚批次」是其中之一，它同时喂 PartActionBar 的显隐、PartFailInspectionDialog
+// 的回显与 usePartDetailActions 的写锚 —— 三处读的是同一个值。
+const timeline = usePartTimeline(partId, part, batches);
 const {
+  selectedBatchId,
+  onBatchSelect,
+  inspectionBatch,
+  processChain,
+  currentStepId,
+  processes,
+  processesLookup,
+} = timeline;
+
+// 写操作层：7 个 mutation 在 `usePartDetailActions` 内。它不认识对话框、不 import
+// vue-router —— 每个 action 返回 Promise<boolean>，后续（关框 / 跳转）由本页决定。
+const actions = usePartDetailActions({ partId, part, inspectionBatch });
+const {
+  onSave: savePart,
+  onCancelOrder,
+  onDeletePart,
+  onPassInspection: passInspection,
+  onFailInspection: failInspection,
+  onSplitBatch,
+  onCancelBatch,
+  saving,
+} = actions;
+
+// ============ 零件文件面板（列表 + 三个 kind 的上传 + G 代码 / 设定单）============
+const {
+  drawings,
+  models3d,
+  cadFiles,
+  drawingUpload,
+  model3dUpload,
+  cadUpload,
+  onFileTabRefresh,
   cncSetupGroups,
   cncLoading,
   fetchCncPrograms,
@@ -398,129 +345,65 @@ const {
   onDownloadCnc,
   onDeleteCnc,
   onPairUpload,
-  // 2026-08-25 T10p5：上传 staging 助手（含 ElMessage.warning 兜底），通过函数 prop 注入 PartFilesTabsCard。
   fileList,
-} = cnc;
+} = usePartFilesPanel(partId);
 
-// PR-2 2026-09-13：PartInfoCard 用本地 reactive 副本做双向 v-model，
-// 父级把子组件 emit('update:form') 的最新值合并回 usePartDetail 持有的 form。
-// 这样 onSave() 读 form.x 拿到的就是子组件当前编辑的内容。
+// PartInfoCard 的 save 按钮 emit 无参，父级读 form 组载荷 —— 归一化（trim / 空串→null）
+// 在数据层的 `buildUpdatePayload` 里做一次，OCC 锚由 actions 从 `part.version` 补。
+async function onSave(): Promise<void> {
+  if (!(await savePart(buildUpdatePayload()))) return;
+  editing.value = false;
+}
+
+// PartInfoCard 用本地 reactive 副本做双向 v-model，父级把子组件 emit('update:form')
+// 的最新值合并回 usePartDetail 持有的 form ⇒ onSave() 读到的是子组件当前编辑内容。
 function onPartInfoFormChange(next: PartEditForm): void {
   Object.assign(form, next);
 }
 
-// ============ 选中批次（2026-09-17 PR-4：3 卡联动锚）============
-// PartBatchMonitorCard 行选中 → onBatchSelect → 写入 selectedBatchId；
-// PartHistoryCard 按 batch_id 过滤 / ProcessChainCard 高亮
-// current_process_step_id 对应步骤。
-const selectedBatchId = ref<string | null>(null);
-function onBatchSelect(b: PartBatch | null): void {
-  selectedBatchId.value = b?.id ?? null;
-}
-
-// ============ 工序链（2026-09-17 PR-4：useProcessChain 拉链）============
-// batches / part 来自 usePartDetail；selectedBatchId 同步驱动 currentStepId。
-const processChain = useProcessChain(
-  partId,
-  computed(() => part.value),
-  computed(() => batches.value),
-  selectedBatchId,
-);
-const currentStepId = computed<string | null>(() => processChain.currentStepId.value);
-
-// 2026-09-17 PR-4：part.process_chain_id 变化时拉链（首次 part 加载 + 后续
-// 工艺变更）。useProcessChain 内部已 watch partId 清空状态；这里只触发拉取。
-// chain 变化前先重置 selectedBatchId，避免旧批次 id 在 chain 未拉完前被
-// currentStepId 派生计算时引用到错误的 step。
-// ⚠️ 既有健壮性缺口（登记不改逻辑）：这里只置空 selectedBatchId，**不重取 batches**
-// ⇒ 若现有 batches 里没有「带 current_process_step_id」的批次，
-// useDefaultBatchSelection 的兜底也补不出选中项，工序链时间轴会继续整条全灰。
-// 当前不可达：PartDetail 内没有工序链编辑器，process_chain_id 变化只可能由切
-// partId 触发，而切 partId 的路由 watcher 会同步 `fetchBatches()`。
-// 将来本页加入链编辑能力时必须在这里同时补 refetch。
-watch(
-  () => part.value?.process_chain_id,
-  (id) => {
-    if (id) {
-      selectedBatchId.value = null;
-      void processChain.fetchProcessChain();
-    }
-  },
-);
-
-// 兜底选中：selectedBatchId 唯一写入来源是「点批次行」，没人点过就恒为 null ⇒
-// currentStepId 恒 null ⇒ 工序链时间轴整条全灰、「当前」徽标永不出现。
-// 判据（优先带 current_process_step_id 的批次，否则回落第一条）与「不覆盖用户
-// 已有选择」的语义住在 useDefaultBatchSelection 里（可单测，不埋在 .vue shell）。
-// 连带影响：PartHistoryCard 跟随 selectedBatchId 过滤，进页面即落到该批次的事件
-// 视图；再点一次该行（onBatchSelect(null)）可切回全量事件。
-useDefaultBatchSelection(batches, selectedBatchId);
-
-// ============ 共享 processes 缓存（failInsp 的工序下拉用它）============
-// `processes` 来自共享 query useProcessesQuery（`/prod/processes`）。
-// 2026-10-10：本页原先还并行维护一份 `productionShelves`（`listShelves({zone:'PRODUCTION'})`），
-// 唯一消费方是「外协回收」弹窗的货架单选 —— 该弹窗随死路径删除后，这份本地 ref 变成
-// 只写不读，一并删除；`/prod/shelf-processes` 的映射表（useShelfProcessMappingsQuery）
-// 也随之不再有本页读点。
-const processesQuery = useProcessesQuery({ limit: 200 });
-// `as Process[]` 桥接：processSchema 派生的 description / color 是 optional
-// （对齐后端 skip_serializing_if），而 Process 业务类型是 required，TS 结构不匹配。
-// 沿 usePendingProgrammingStore / usePartDispatch 同模式桥接；本页消费方
-// （ProcessChainCard 字典 / el-option）只读 id / code /
-// name / category，对 optional 字段无依赖，零行为差异。
-const processes = computed<Process[]>(() => (processesQuery.data.value?.items ?? []) as Process[]);
-
-// 2026-09-17 PR-4：ProcessChainCard 需要 { process_id → { code, name } } 字典。
-// 这里派生 O(1) 查找表，避免在 ProcessChainCard 内 v-for .find。
-const processesLookup = computed<Record<string, { code: string; name: string }>>(() => {
-  const map: Record<string, { code: string; name: string }> = {};
-  for (const p of processes.value) {
-    map[p.id] = { code: p.code, name: p.name };
-  }
-  return map;
-});
-
-// ============ 底部 dialog 状态（shell 局部维护）============
-const failInspDlg = useDialogSize({ desktopWidth: 480 });
-const confirmDlg = useDialogSize({ desktopWidth: 420 });
+// ============ 对话框 / 提交中标记（壳的局部态）============
 const { dangerous: confirmDangerous } = useConfirm();
 
-// 品检打回（指定工序）对话框
-// 2026-10-10：目标生产货架下拉删除 —— 打回的目标架由后端按负载自动选（`to-process`
-// 不再收货架字段）。工序下拉直接用全量 processes。
+// 「指定工序」对话框：可见性与提交态在壳，表单字段与开关时的清空在组件内。
+// 2026-10-10：目标生产货架下拉随打回端点删除 —— 目标架改由后端按负载自动选
+// （`to-process` 不再收货架字段）。
 const failInspDialogVisible = ref(false);
-const failInspProcessId = ref<string>('');
-const failInspNote = ref<string>('');
 const failInspSubmitting = ref(false);
-
-function openFailInspDialog() {
-  failInspProcessId.value = '';
-  failInspNote.value = '';
-  failInspDialogVisible.value = true;
+function openFailInspDialog(): void {
   // processes 已是共享 query 的响应式派生，弹窗打开即已就位。
+  failInspDialogVisible.value = true;
 }
-function onFailInspDialogClosed() {
-  failInspProcessId.value = '';
-  failInspNote.value = '';
-}
-async function onFailInspectionConfirm() {
-  if (!failInspProcessId.value) return;
+
+/**
+ * `PartFailInspectionDialog` 的 confirm（备注已 trim、空串归一为 null）。
+ *
+ * ⚠️ 不传 batchId：锚批次由 actions 从 `inspectionBatch` 派生（与「品检通过」同一条），
+ * 与三卡联动的 `selectedBatchId` 解耦 —— 后者是「用户在看哪个批次」的视图锚，拿它当写
+ * 锚就会让两个品检按钮在多批次工单上打不同的批次。
+ */
+async function onFailInspectionConfirm(payload: { processId: string; note: string | null }) {
   failInspSubmitting.value = true;
   try {
-    const ok = await onFailInspection({
-      // 2026-10-02：to-process 以批次为锚，锚点用三卡联动已选中的批次 ——
-      // 多批次 part 上比「找第一个 INSPECTION 批次」更准。
-      batchId: selectedBatchId.value,
-      processId: failInspProcessId.value,
-      note: failInspNote.value.trim() || null,
-    });
+    const ok = await failInspection(payload);
     if (ok) failInspDialogVisible.value = false;
   } finally {
     failInspSubmitting.value = false;
   }
 }
 
-// 取消订单 / 删除（共用 confirm dialog）
+// 「品检通过」按钮的 loading 由壳包一层（按钮与它的写操作不同层）。
+const passSubmitting = ref(false);
+async function onPassInspection(): Promise<void> {
+  passSubmitting.value = true;
+  try {
+    await passInspection();
+  } finally {
+    passSubmitting.value = false;
+  }
+}
+
+// 取消订单 / 删除共用一个 confirm dialog。
+const confirmDlg = useDialogSize({ desktopWidth: 420 });
 const confirmVisible = ref(false);
 const confirmAction = ref<'cancel' | 'delete'>('cancel');
 const confirmSerialNo = ref('');
@@ -534,17 +417,17 @@ const confirmHint = computed(() => {
   return `${base}\n请输入该零件的流水号以确认操作。`;
 });
 
-function openConfirmForCancel() {
+function openConfirmForCancel(): void {
   confirmAction.value = 'cancel';
   confirmSerialNo.value = '';
   confirmVisible.value = true;
 }
-function openConfirmForDelete() {
+function openConfirmForDelete(): void {
   confirmAction.value = 'delete';
   confirmSerialNo.value = '';
   confirmVisible.value = true;
 }
-async function onConfirmAction() {
+async function onConfirmAction(): Promise<void> {
   const expected = part.value?.serial_no;
   if (!expected) {
     ElMessage.error('该零件无流水号，无法执行此操作');
@@ -560,38 +443,43 @@ async function onConfirmAction() {
       const ok = await onCancelOrder();
       if (ok) confirmVisible.value = false;
     } else {
-      // delete 成功后 onDeletePart 内 router.push('/parts')，不再需要 close
-      await onDeletePart();
+      // 软删成功后目标资源已不存在（后端 `GET /parts/{id}` 带 `deleted_at IS NULL`），
+      // 跳转由壳负责 —— composable 不 import vue-router（CLAUDE.md 不变量）。
+      if (await onDeletePart()) {
+        confirmVisible.value = false;
+        // ⚠️ **必须连标签一起关掉**：本页进了 keep-alive 的 `<keep-alive :include>`
+        // （路由名 `PartDetail`），只 `router.push` 不关 tab 会把已删工单留在缓存里 ——
+        // 组件不卸载（`onUnmounted` 不跑、`reset()` 不触发），用户点回去看到的是一份
+        // 「还在」的旧工单，而它上面的任何写都会 404（软删后 `GET /parts/{id}` 带
+        // `deleted_at IS NULL` 过滤）。
+        // 用 `removeView` 而不是 `refreshSelectedView`：后者只临时摘缓存再挂回（换的是
+        // 组件实例，tab 还在），而这里是「这张 tab 不该再存在」。顺序沿
+        // `TagsView.vue::closeView`（先摘 tab、再导航）；本页的目标路由固定是 `/parts`，
+        // 所以不需要 store 返回的 fullPath 去挑邻居。
+        const selfTab = tags.visitedViews.find((v) => v.path === route.path);
+        if (selfTab) tags.removeView(selfTab);
+        await router.push('/parts');
+      }
     }
   } finally {
     confirmSubmitting.value = false;
   }
 }
 
-// ============ 品检通过（shell 包一层 passSubmitting loading）============
-const passSubmitting = ref(false);
-async function onPassInspection() {
-  passSubmitting.value = true;
-  try {
-    await detail.onPassInspection();
-  } finally {
-    passSubmitting.value = false;
-  }
-}
-
 // ============ 拆 / 取消 批次（PartBatchMonitorCard 触发）============
-// 2026-08-25 T10p5：emit payload 改为 { batch, quantity, resolve }，
-// shell 等 API 完成再调 resolve，把 dialog 关闭时机下沉到 API 成功之后。
+// emit payload 带 resolve：shell 等动作完成再调它，把 dialog 的关闭时机下沉到成功之后。
+// ⚠️ 成功后**不**手写 fetchBatches：actions 的 mutation `onSuccess` 已失效
+// `qk.partBatchesPrefix`（含本页消费的 `qk.partBatchesList(partId)`），活跃 observer
+// 在 mutateAsync resolve 前就已 refetch 完毕。
 async function handleSplitBatch(payload: {
   batch: PartBatch;
   quantity: number;
   resolve: (ok: boolean) => void;
-}) {
+}): Promise<void> {
   const result = await onSplitBatch(payload.batch, payload.quantity);
   payload.resolve(result !== null);
-  void fetchBatches();
 }
-async function handleCancelBatch(batch: PartBatch) {
+async function handleCancelBatch(batch: PartBatch): Promise<void> {
   if (
     !(await confirmDangerous(
       '取消批次',
@@ -602,59 +490,63 @@ async function handleCancelBatch(batch: PartBatch) {
   )
     return;
   await onCancelBatch(batch);
-  void fetchBatches();
 }
 
-// ============ 配对上传（PartFilesTabsCard → PartCncCard 触发）============
-// 2026-10-10：`handleRelease`（「下发到 CNC 货架」）随该功能下线一并删除。
-// 2026-08-25 T10p5：emit payload 改为 { gcodes, setup, resolve }，
-// shell 等 API 完成再调 resolve：成功才关 dialog + reset submitting。
+// 配对上传：同样等动作完成再 resolve，成功才关 dialog + reset submitting。
 async function handlePairUpload(payload: {
   gcodes: File[];
   setup: File;
   resolve: (ok: boolean) => void;
-}) {
+}): Promise<void> {
   const ok = await onPairUpload(payload.gcodes, payload.setup);
   payload.resolve(ok);
 }
-// ============ 零件文件 tabs 刷新（PartFilesTabsCard 触发）============
-// 2026-09-29 迁移：usePartFilesListQuery 单调用后失效整 owner 列表即可，
-// active 消费者（PartFilesTabsCard 内部 tabs + DrawingPreviewPane）都会自动 refetch。
-// 替代原 usePartFiles 三并发 + onFileTabRefresh 按 kind 转 fetch* 的模式。
-async function onFileTabRefresh(_kind: 'DRAWING' | '3D_MODEL' | 'CAD_2D'): Promise<void> {
-  // 2026-09-29：失效整 owner 的 part-files 列表，让 active 消费者（DrawingPreviewPane
-  // + 当前页 PartFilesTabsCard）都自动 refetch。usePartFilesListQuery 的 queryKey 是
-  // owner 维度，invalidate 一次覆盖三 kind。
-  await invalidatePartFilesListQuery(qc, partId.value);
-}
 
-// ============ 切换 partId 时重置 ============
+// ============ 标签页标题动态化 ============
+// tab 文案的唯一来源 `meta.title` 是**编译期常量**（「零件详情」），多开几个工单就分不
+// 清谁是谁；`tags.setTitle` 把已存在的那张 tab 刷成当前工单的流水号。回退链必需：后端
+// `PartDetailOut.serial_no` 是 `Option<String>`（可为 null），`drawing_no` 恒在。
+// `meta.title` 的静态值本身不动（它还是侧栏菜单与 `noTagsView` 判定等处的兜底来源），
+// 只在 tab 这一层覆盖。
+//
+// **靠响应式派生而不是手写同步**：`route.path` 与 `part` 任一变化都会重跑 ⇒ 切兄弟零件
+// 与切回 tab（缓存命中、`part` 没换对象，只换了 path）都跟着更新。
+// ⚠️ `isActive` 守卫是硬需求：本页被 keep-alive 缓存，切去别的页面时全局 `route.path`
+// 照样变，而 `part` 还是缓存里的旧工单 —— 不守卫就会把**别的 tab** 刷成这个零件的流水号。
+// `setTitle` 不新建 tab（尚未登记 / 已关闭时返回 false 且不做事），重复调用安全。
+watchEffect(() => {
+  if (!isActive.value) return;
+  const p = part.value;
+  tags.setTitle({ path: route.path }, p?.serial_no ?? p?.drawing_no ?? '零件详情');
+});
+
+// ============ 切 partId ============
+// **不能删这个 watcher**：vue-router 对同一条路由记录只改 param（/parts/1 → /parts/2）
+// 时会复用组件实例、不触发 onMounted，而本页内部就有这种导航（PartAssemblyLinkCard 的
+// 兄弟零件 chips）；删了的话从 A 件跳到兄弟件 B，页面会停在 A 件的数据上。
+// 守卫（`isPartDetailActive`）的根因见 `isActive` 的注释。
+//
+// 这里**不**手写任何 fetch：三条 query hook + 文件列表 + CNC 的 queryKey 都是 reactive
+// 的，partId 一变 key 就变 → observer 自动 refetch。留着就是每次切件打两遍。
 watch(
   () => route.params.id,
-  async (id) => {
+  (id) => {
+    if (!isActive.value) return;
     const s = String(id ?? '');
     if (!s) return;
     partId.value = s;
-    // 2026-09-17 PR-4：清空选中批次（useProcessChain 内部已 watch partId 清空
-    // selectedBatchId，但切 partId 时立刻置空让 PartHistoryCard 立刻恢复展示
-    // 全部事件，避免闪旧批次的过滤态）。
+    // 清空选中批次：让 PartHistoryCard 立刻恢复展示全部事件，避免闪旧批次的过滤态。
+    // （useProcessChain 内部也 watch partId 清空自己的状态。）
     selectedBatchId.value = null;
-    // 2026-09-29 迁移：drawings / models3d / cadFiles 改 computed from useQuery，
-    // 切 partId 自动驱动 useQuery 重取（ownerKey 变化），无需手写 fetchDrawings / fetch3DModels / fetchCadFiles。
-    await fetchPart();
-    void fetchEvents();
-    void fetchBatches();
-    // 2026-09-29 修复：usePartFilesListQuery reactive params 已自动驱动 refetch，
-    // 切 partId → ownerKey 变化 → useQuery 自动重取，无需手写 fetchCncPrograms。
   },
 );
 
-onMounted(() => {
-  void fetchPart();
-  void fetchEvents();
-  void fetchBatches();
-  // 2026-09-29 修复：usePartFilesListQuery reactive params 已自动驱动 refetch，
-  // 切 partId → ownerKey 变化 → useQuery 自动重取，无需手写 fetchCncPrograms。
+// 只在**真正卸载**（关标签页）时重置本 composable 的 UI 态，不挂 `onDeactivated` ——
+// 本页被 keep-alive 缓存，deactivate 只是切走、实例还在，切回来必须还能看到刚才的
+// 数据（行内编辑态 / 装配件详情不该每次切页都丢）。query 缓存由 queryClient 统一管
+// （有限 gcTime 5min），这里不碰。
+onUnmounted(() => {
+  detail.reset();
 });
 </script>
 
@@ -696,20 +588,6 @@ onMounted(() => {
 .mono {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
 }
-.muted {
-  color: var(--text-secondary);
-}
-.opt-tag {
-  margin-left: 6px;
-}
-
-.bottom-actions {
-  .action-row {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-  }
-}
 
 .confirm-body {
   .confirm-hint {
@@ -720,15 +598,12 @@ onMounted(() => {
   }
 }
 
-// 2026-09-17 PR-4 + 2026-09-17 UI 调整第 2 轮：时间线卡。
-// 第 2 轮改造：
-//   1. 去掉外层 card header；
-//   2. body 拆成两行：上方历史 + 工序链（flex 等高、滚动），下方批次监控
-//      （自然撑开、不限高度）。批次表本身就有行数自适应，外层 60vh 限制
-//      反而会让列拖动 / 拆分 dialog 弹出时撑爆区域。
-// 子卡自带 :deep(.el-card__body) padding，这里只约束容器 + 子卡视觉。
-// 子卡用 flex: 1 1 0 + min-width: 0 允许内部 el-table / el-timeline 自然收缩；
-// overflow-y: auto 避免批次多时整体撑爆页面。
+// 时间线卡：body 拆两行 —— 上方历史 + 工序链（flex 等高、可滚动），下方批次监控
+// （自然撑开、不限高度）。批次表本身行数自适应，外层 60vh 限制反而会让列拖动 /
+// 拆分 dialog 弹出时撑爆区域。
+// 子卡自带 :deep(.el-card__body) padding，这里只约束容器 + 子卡视觉；`flex: 1 1 0` +
+// min-width: 0 允许内部 el-table / el-timeline 自然收缩，`overflow-y: auto` 避免批次
+// 多时整体撑爆页面。
 .timeline-card {
   :deep(.el-card__body) {
     padding: 12px 16px;
@@ -738,7 +613,6 @@ onMounted(() => {
     gap: 12px;
     height: 60vh;
     overflow-y: auto;
-    // 历史 + 工序链两列等宽；min-width: 0 防 flex 子项最小内容宽度撑爆容器。
     :deep(.el-card) {
       flex: 1 1 0;
       min-width: 0;

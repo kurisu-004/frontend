@@ -79,11 +79,11 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router';
 import { ArrowRight, Connection } from '@element-plus/icons-vue';
-import type { PartItem } from '@/api/parts';
+import type { PartDetailDto } from '@/api/parts';
 import type { AssemblyDetail } from '@/types/assembly';
 
 const props = defineProps<{
-  part: PartItem;
+  part: PartDetailDto;
   assemblyDetail: AssemblyDetail | null;
   assemblyLoading: boolean;
 }>();

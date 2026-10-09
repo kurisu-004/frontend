@@ -39,10 +39,9 @@ export type PendingProgrammingRow = PendingProgrammingItemData;
 //      的 `batch_id` / `batch_version` 声明（该侧也登记了本文件，双向登记）；
 //   3. 扫码台 PICK_UP 领取的同名锚点（`ScanPickParts` →
 //      `POST /prod/scan/batches/{batch_id}/pick-up`，`version` 取 `batch_version`）——
-//      那条路径**不过任何 Zod schema**（裸 `api.get<PartItem[]>`），连 strip 保护
-//      都没有，后端换名时症状是扫码台弹「批次锚点缺失」而非本页按钮 disabled。
-//      它的锚点注释登记在 `src/api/parts/crud.ts` 的 `PartItem.batch_id` /
-//      `batch_version` 上。
+//      那条路径的锚点是本文件下方 `pendingProgrammingItemSchema` 里同名的
+//      `batch_id` / `batch_version` 声明，扫码台侧则是
+//      `views/production/scan/composables/scanSchema.ts::scanPartRowSchema`。
 // （2026-10-03：用 `//` 块而非 JSDoc —— 这段登记是模块级约定，不宿主于任何单个
 //  导出物；写成 `/** */` 会在 IDE 里成为悬空的孤立注释，挂在谁身上都是假宿主。）
 // ============================================================================

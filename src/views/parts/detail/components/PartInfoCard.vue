@@ -49,8 +49,7 @@
             <el-switch v-model="localForm.is_urgent" active-text="加急" />
           </el-descriptions-item>
           <el-descriptions-item label="客户">
-            <span v-if="part.customer_path">{{ part.customer_path }}</span>
-            <span v-else-if="part.customer_name">{{ part.customer_name }}</span>
+            <span v-if="customerDisplay">{{ customerDisplay }}</span>
             <span v-else class="muted">—</span>
           </el-descriptions-item>
 
@@ -112,8 +111,7 @@
             <span v-else class="muted">否</span>
           </el-descriptions-item>
           <el-descriptions-item label="客户">
-            <span v-if="part.customer_path">{{ part.customer_path }}</span>
-            <span v-else-if="part.customer_name">{{ part.customer_name }}</span>
+            <span v-if="customerDisplay">{{ customerDisplay }}</span>
             <span v-else class="muted">—</span>
           </el-descriptions-item>
 
@@ -147,13 +145,13 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, watch, toRaw } from 'vue';
-import type { PartItem } from '@/api/parts';
+import { computed, reactive, watch, toRaw } from 'vue';
+import type { PartDetailDto } from '@/api/parts';
 import type { OrderStatus } from '@/types/parts';
 import type { PartEditForm } from '../composables/usePartDetail';
 
 const props = defineProps<{
-  part: PartItem | null;
+  part: PartDetailDto | null;
   editing: boolean;
   saving: boolean;
   form: PartEditForm;
@@ -196,6 +194,28 @@ watch(
 );
 
 const descCol = 3;
+
+/**
+ * 「客户」行的展示文案：`一级 / 二级` 两级名（2026-10-10 新增）。
+ *
+ * 2026-10-10 订正：本行原先读 `part.customer_path`，而后端 `PartDetailOut` **从不返**
+ * `customer_path`（那是前端早期臆想的字段）⇒ `customer_path` 恒 undefined ⇒
+ * 「一级客户名」从来没在详情页显示过。现在改读后端真的注入的两个字段
+ * `l1_customer_name` / `customer_name`。
+ *
+ * 三种形态：
+ *   - 两级都有且不等 → `一级 / 二级`（客户自身是 L1 时后端返相等的两个值，落到第 2 支）；
+ *   - 只有一级（间接挂在别人下面的挂靠工单）→ 只显示一级；
+ *   - 都没有 → null，模板落「—」。
+ */
+const customerDisplay = computed<string>(() => {
+  const p = props.part;
+  if (!p) return '';
+  const l1 = p.l1_customer_name?.trim() ?? '';
+  const l2 = p.customer_name?.trim() ?? '';
+  if (l1 && l2) return l1 === l2 ? l1 : `${l1} / ${l2}`;
+  return l1 || l2;
+});
 </script>
 
 <style lang="scss" scoped>

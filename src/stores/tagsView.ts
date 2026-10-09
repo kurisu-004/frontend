@@ -13,6 +13,8 @@
 //     组件里，store 只收 plain values。
 //   - 消费侧禁止解构（auth store 不变量 #3）：const tags = useTagsViewStore(); tags.xxx。
 //   - 去重身份键：path（不含 query/hash）；导航目标用 fullPath 保留 query/hash。
+//   - 动态标题：`meta.title` 是编译期常量，承载不了「按当前工单显示流水号」这类只有
+//     数据到位后才有的值，故由 `setTitle()` 覆盖单个已存在的 tab（见该函数注释）。
 //   - affix 排序：插入时若 affix 为真则 unshift 到位置 0，关闭 / 关闭其他 /
 //     关闭全部都不碰 affix（vue-element-admin 行为）。
 //   - 缓存同步：cachedViewNames 跟随 visitedViews 增删；refreshSelectedView 临时
@@ -136,6 +138,35 @@ export const useTagsViewStore = defineStore('tags-view', () => {
         cachedViewNames.value.push(view.name);
       }
     }
+  }
+
+  /**
+   * 2026-10-10 新增：改**已存在** tab 的标题，找不到就不做事。返回是否命中。
+   *
+   * 为什么需要它：tab 标题的唯一来源是路由 `meta.title`，而它是**编译期常量字符串**
+   * —— 承载不了「按当前工单显示流水号」这种只有数据到位后才有的动态值。零件详情页
+   * 因此在每个工单上开出来的 tab 全都叫「零件详情」，多开几个工单就完全分不清谁是谁。
+   * 另有一个硬约束：`meta.title` 本身**不能改**（它同时是侧栏菜单文案与 `noTagsView`
+   * 判定等处的兜底来源），所以动态值只能走本 action 覆盖单个 tab。
+   *
+   * 三条设计取舍：
+   *   - **只改不建**：找不到就是找不到（该 tab 尚未登记 / 已被关掉 / 寻址写错），返回
+   *     `false` 且不动任何状态。凭空造一个 tab 会让「调用方寻址写错」这个真 bug 变成
+   *     一条看不懂的孤儿 tab。
+   *   - **支持 path / name 两种寻址**：`path` 是 visited 身份键（去重就靠它），`name`
+   *     供只知道路由名的调用方用。两个都给时 **path 优先**，找不中再退回 name。
+   *   - **命中即落盘**：`visitedViews` 按用户持久化在 localStorage 里，标题不进存档
+   *     的话刷新 / 重登就退回静态 `meta.title`。（数组深 watch 最终也会写，但它在微
+   *     任务里；本页紧接着还要判一次 tab 文案，同步落盘省掉一个时序差。）
+   */
+  function setTitle(target: { path?: string; name?: string }, title: string): boolean {
+    const byPath = target.path ? visitedViews.value.find((v) => v.path === target.path) : undefined;
+    const view =
+      byPath ?? (target.name ? visitedViews.value.find((v) => v.name === target.name) : undefined);
+    if (!view) return false;
+    view.title = title;
+    persistNow();
+    return true;
   }
 
   /**
@@ -327,6 +358,40 @@ export const useTagsViewStore = defineStore('tags-view', () => {
     } catch {
       // 坏数据当空处理，不抛
     }
+    remapLegacyRouteNames();
+  }
+
+  /**
+   * 2026-10-10：路由改名后的一次性 name 重映射（存档迁移）。
+   *
+   * `visitedViews[].name` 与 `cachedViewNames` 都按用户持久化在 localStorage 里，而
+   * keep-alive 的 `:include` 靠**名字**匹配组件（`getComponentName` 取
+   * `Component.name || Component.__name`，`<script setup>` 的 `__name` 由 vite-plugin-vue
+   * 从文件名推断）。路由名与文件名不一致时该页压根不会被缓存，本轮把两处改成一致：
+   *
+   *   - `PartsDetail` → `PartDetail`（零件详情页由「不缓存」变为「缓存」）
+   *   - `PartsNew` → `PartBatchNew`（新建零件页由「不缓存」变为「缓存」）
+   *
+   * 老用户 localStorage 里存的是旧名 ⇒ 匹配不上新 `include` ⇒ **缓存失效一次**
+   * （标签还在，页面状态会丢一次；下次访问该页就按新名进缓存）。这里把存档里的旧名
+   * 直接改成新名，让迁移只发生一次而不是每次 hydrate 都失效。
+   *
+   * ⚠️ **这是一次性迁移**：映射表里的旧名一旦在某次发布后确认全网不再产出，
+   * 即可连同本函数一起删除；删除前别忘了「旧名可能仍留在没进过该页面的用户存档里」
+   * 这一事实（最后一次上线前的存量用户）。
+   */
+  function remapLegacyRouteNames(): void {
+    const legacy: Record<string, string> = {
+      PartsDetail: 'PartDetail',
+      PartsNew: 'PartBatchNew',
+    };
+    const mapName = (n: string): string => legacy[n] ?? n;
+    for (const v of visitedViews.value) {
+      if (typeof v.name === 'string' && legacy[v.name]) {
+        v.name = legacy[v.name]!;
+      }
+    }
+    cachedViewNames.value = cachedViewNames.value.map(mapName);
   }
 
   /**
@@ -367,6 +432,7 @@ export const useTagsViewStore = defineStore('tags-view', () => {
     cachedViewNames,
     isAffix,
     addView,
+    setTitle, // 2026-10-10 新增：动态标题（meta.title 是编译期常量）
     removeView,
     removeOtherViews,
     removeAllViews,

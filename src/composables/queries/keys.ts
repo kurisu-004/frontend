@@ -582,4 +582,49 @@ export const qk = {
   /** 持有件列表域前缀 —— pick-up（新增持有）与 worker-scan（移除持有 / 补料新增持有）
    *  两条写路径完成后都要失效它。 */
   scanHeldPrefix: ['production-scan', 'held'] as const,
+  // ============================================================
+  // 2026-10-10 新增：零件详情页（`/parts/:id`）域 queryKey 工厂。
+  //
+  // 两条键对应详情页的两个只读端点。根命名空间取 `part-detail` / `part-events`，
+  // 与视图目录 `views/parts/detail/` 的读取面（详情主体 / 事件历史卡）同源。
+  //
+  // **不**挂 `partsPrefix` 下 —— 理由沿本文件 `inspection` / `assembly` /
+  // `production-queue` / `production-scan` 四段的「根命名空间」取舍：键的根只要求
+  // 「同根前缀匹配」才有意义，挂了才有共享写点。零件一览域的写点（下发 / 送检 /
+  // 召回 / 行内编辑 / 软删）改的是 `t_part.status` 等工单级列与批次成员资格，而本页
+  // 的两条读端点返回的是**单个工单的完整 detail VO 与事件流水**，二者的写点不重合；
+  // 反过来挂 parts 下会让全仓最热的 `qk.partsPrefix`（零件一览列表 + union-list）
+  // 一把全刷时把详情页缓存连带重拉 —— 列表页的写不该拖详情页一起往返。
+  //
+  // 批次列表**不**在这里新造：详情页的批次三卡消费的是既有的
+  // `qk.partBatchesList` / `qk.partBatchesPrefix`（共享基础数据层
+  // `usePartBatchesQuery`，dashboard 的 PartPreviewDialog 是另一个消费方），两条
+  // 消费方共用一条键才能同屏去重；新造 `part-detail-batches` 会让同一份数据在缓存里
+  // 存在两个身份、失效链也分裂成两条。
+  //
+  // 失效编排点：详情页的 7 个写端点（`views/parts/detail/composables/
+  // usePartDetailActions.ts`，update / cancel / soft-delete / to-ship / to-process /
+  // batches-split / batches-cancel）成功后**一律**失效 `partDetailPrefix` +
+  // `partEventsPrefix` + `qk.partBatchesPrefix` 三条前缀 —— 任意一个写端点都会同时改
+  // 工单本体（status / version）、批次集合（status / version / 数量）与事件流水，
+  // 少刷一条就留下一半陈旧数据（典型症状：品检通过后工单标签没翻，历史卡没有
+  // INSPECTED 事件，批次行还停在 INSPECTION）。onError 同样走全套失效：40901 OCC
+  // 恰恰意味着服务端副本已被别人改动。
+  // ============================================================
+  /** 零件详情键（`GET /api/v2/parts/{part_id}` 的 `PartDetailOut`，28 字段）。
+   *  **参数键**：端点按 part id 分片返回，不带 id 切零件时会拿上一个零件的详情冒充
+   *  当前零件的（比 404 更坏 —— 若那个 id 恰好有效，本页会静默渲染成另一个工单）。
+   *  partId 空串 → 占位键（`enabled` 闸门 + queryFn 内二次守卫拦掉，见
+   *  `views/parts/detail/composables/usePartDetailQuery.ts`）。 */
+  partDetail: (partId: string) => ['part-detail', partId] as const,
+  /** 零件详情域前缀 —— 详情页任一写端点完成后一把全失效（任意 partId 形态都命中）。 */
+  partDetailPrefix: ['part-detail'] as const,
+  /** 零件事件历史键（`GET /api/v2/parts/{part_id}/events` 的 `PartEventOut[]`，
+   *  **裸数组**无分页信封）。**参数键**：按 part id 分片，同 partDetail 的理由。
+   *  与详情键拆成两条独立根命名（而不是 `['part-detail', id, 'events']`）：事件是
+   *  「写操作必然追加」的高频写侧数据、详情是低频读侧数据，两者 staleTime 诉求不同，
+   *  分开才能各自失效而不牵连对方的缓存身份。 */
+  partEvents: (partId: string) => ['part-events', partId] as const,
+  /** 零件事件历史域前缀 —— 与 partDetail 同批失效（每次写端点都会追加事件行）。 */
+  partEventsPrefix: ['part-events'] as const,
 } as const;

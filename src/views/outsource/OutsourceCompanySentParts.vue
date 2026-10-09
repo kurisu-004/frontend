@@ -163,6 +163,15 @@ onMounted(() => {
 watch(
   () => route.params.id,
   (next) => {
+    // 2026-10-10 加「本页是否活跃」守卫。本页**是被缓存的**（路由名
+    // `OutsourceCompanySentParts` = 组件文件名，匹配上 MainLayout 的 keep-alive
+    // include），而 `useRoute()` 注入的是全局响应式 currentRoute：用户在这个 tab 还
+    // 开着时用侧栏切到任何别的页面，watcher 照样触发 ⇒ 「换公司就退回列表」这条规则
+    // 会在用户根本没换公司的场景下执行，把他从正在看的页面弹回外协公司列表。
+    //
+    // 只有「本页仍是 active 路由」且「新 id 不是本页锚定的那个公司」才处理；两者是
+    // 同一个语义：这不是本页的合法换页，是别的页面改了全局路由。
+    if (route.name !== 'OutsourceCompanySentParts') return;
     if (String(next ?? '') !== companyId) void router.replace('/outsource/companies');
   },
 );

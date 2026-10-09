@@ -16,7 +16,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, ref } from 'vue';
 
-import type { PartBatch, PartItem } from '@/api/parts';
+import type { PartBatch, PartDetailDto } from '@/api/parts';
 
 const getProcessChainByIdMock = vi.fn();
 
@@ -52,10 +52,10 @@ function makeBatch(over: Partial<PartBatch> = {}): PartBatch {
 }
 
 // 本组用例只关心 process_chain_id 一个字段，其余字段用 `unknown` 桥接占位
-// （PartItem 字段很多，逐个补齐会淹没被测的派生逻辑）。
-const PART_PARTIAL: PartItem = { id: '42' } as unknown as PartItem;
+// （PartDetailDto 字段很多，逐个补齐会淹没被测的派生逻辑）。
+const PART_PARTIAL: PartDetailDto = { id: '42' } as unknown as PartDetailDto;
 
-function makePart(chainId: string | null): PartItem {
+function makePart(chainId: string | null): PartDetailDto {
   return { ...PART_PARTIAL, process_chain_id: chainId };
 }
 
@@ -66,7 +66,7 @@ beforeEach(() => {
 describe('2026-10-02：useProcessChain currentStepId 派生', () => {
   it('S1：未选中批次 → null（调用方据此不高亮任何步骤）', () => {
     const partId = ref('42');
-    const part = ref<PartItem | null>(makePart('chain-1'));
+    const part = ref<PartDetailDto | null>(makePart('chain-1'));
     const batches = ref<PartBatch[]>([makeBatch()]);
     const selectedBatchId = ref<string | null>(null);
 
@@ -77,7 +77,7 @@ describe('2026-10-02：useProcessChain currentStepId 派生', () => {
 
   it('S2：选中批次 → 该批次的 current_process_step_id', () => {
     const partId = ref('42');
-    const part = ref<PartItem | null>(makePart('chain-1'));
+    const part = ref<PartDetailDto | null>(makePart('chain-1'));
     const batches = ref<PartBatch[]>([makeBatch({ id: 'b1' }), makeBatch({ id: 'b2', current_process_step_id: 'step-3' })]);
     const selectedBatchId = ref<string | null>(null);
 
@@ -90,7 +90,7 @@ describe('2026-10-02：useProcessChain currentStepId 派生', () => {
 
   it('S3：批次未绑定工序链步骤（字段缺 / null）→ null', () => {
     const partId = ref('42');
-    const part = ref<PartItem | null>(makePart('chain-1'));
+    const part = ref<PartDetailDto | null>(makePart('chain-1'));
     const batches = ref<PartBatch[]>([
       makeBatch({ id: 'b1', current_process_step_id: null }),
       makeBatch({ id: 'b2', current_process_step_id: undefined }),
@@ -106,7 +106,7 @@ describe('2026-10-02：useProcessChain currentStepId 派生', () => {
 
   it('S4：切 partId → selectedBatchId 被清空（不留上个 part 的批次 id）', async () => {
     const partId = ref('42');
-    const part = ref<PartItem | null>(makePart('chain-1'));
+    const part = ref<PartDetailDto | null>(makePart('chain-1'));
     const batches = ref<PartBatch[]>([makeBatch({ id: 'b1' })]);
     const selectedBatchId = ref<string | null>('b1');
 
@@ -139,7 +139,7 @@ describe('2026-10-02：useProcessChain currentStepId 派生', () => {
     });
 
     const partId = ref('42');
-    const part = ref<PartItem | null>(makePart('chain-1'));
+    const part = ref<PartDetailDto | null>(makePart('chain-1'));
     const batches = ref<PartBatch[]>([makeBatch({ id: 'b1', current_process_step_id: 'step-2' })]);
     const selectedBatchId = ref<string | null>('b1');
 
@@ -156,7 +156,7 @@ describe('2026-10-02：useProcessChain currentStepId 派生', () => {
     getProcessChainByIdMock.mockRejectedValue(new Error('20701 BIZ_PROCESS_CHAIN_NOT_FOUND'));
 
     const partId = ref('42');
-    const part = ref<PartItem | null>(makePart('chain-1'));
+    const part = ref<PartDetailDto | null>(makePart('chain-1'));
     const batches = ref<PartBatch[]>([]);
     const selectedBatchId = ref<string | null>(null);
 
@@ -184,7 +184,7 @@ describe('2026-10-02：useProcessChain currentStepId 派生', () => {
     });
 
     const partId = ref('42');
-    const part = ref<PartItem | null>(makePart('chain-1'));
+    const part = ref<PartDetailDto | null>(makePart('chain-1'));
     // 列表按 batch_no ASC：最老那条没绑步骤（初始批次 / 已取消批次恒 null）
     const batches = ref<PartBatch[]>([
       makeBatch({ id: 'b1', batch_no: 1, current_process_step_id: null }),

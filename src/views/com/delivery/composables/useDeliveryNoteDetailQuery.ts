@@ -11,6 +11,14 @@
 //     上一个单据的详情会让用户在切换瞬间看到错的单号 + 错的行项（比清空更危险）。
 //   - 闸门是「id 非空」而不是 store 的 restored 标志：详情页没有持久化筛选态，
 //     store 形态与列表页不同，这里是纯读 hook。
+//
+// 2026-10-10 新增 `isActive` 入参（可选，默认恒真）：本页被 keep-alive 缓存后，
+// `noteId` 喂的是 vue-router 的**全局** currentRoute，切到别的页面时它照样变
+// ⇒ reactive queryKey 跟着变 ⇒ 自动去 `GET /delivery-notes/{别的页面的 id}`。
+// 后果比 404 更坏：若那个 id 恰好是另一张有效送货单，本页会**静默渲染成另一张单**。
+// 传 `isActive`（入口按 `route.name` 判定）后，本页不活跃时 observer 的 enabled 转
+// false，key 变化不再触发请求 —— 这条数据流是 computed → queryKey，没有 watcher
+// 可挂守卫，只能在 `enabled` 侧收。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
@@ -19,7 +27,11 @@ import { getNote } from '@/api/com/deliveryNote';
 import { qk } from '@/composables/queries/keys';
 import { deliveryNoteDetailSchema } from './deliveryNoteSchema';
 
-export function useDeliveryNoteDetailQuery(noteId: MaybeRefOrGetter<string | null | undefined>) {
+export function useDeliveryNoteDetailQuery(
+  noteId: MaybeRefOrGetter<string | null | undefined>,
+  /** 本页是否仍是当前路由（keep-alive 缓存页必需，见文件头注释）。省略 = 恒真。 */
+  isActive: MaybeRefOrGetter<boolean> = true,
+) {
   const queryKey = computed(() => qk.deliveryNoteDetail(toValue(noteId) ?? ''));
 
   const query = useQuery({
@@ -32,7 +44,7 @@ export function useDeliveryNoteDetailQuery(noteId: MaybeRefOrGetter<string | nul
       if (!id) throw new Error('缺少送货单 id');
       return deliveryNoteDetailSchema.parse(await getNote(id));
     },
-    enabled: computed(() => Boolean(toValue(noteId))),
+    enabled: computed(() => Boolean(toValue(noteId)) && Boolean(toValue(isActive))),
   });
 
   /** fetchDetail 别名 = refetch 的 async 包装（详情页「刷新」与测试驱动）。 */

@@ -18,7 +18,18 @@
 //   响应里的 `id` 就是新链 id（前端 save 后据此迁移「已制定」分组）
 
 /** 单步工艺（rust ProcessChainStepOut + UpsertChainStep 共用形状）。
- *  `id` 仅 GET 响应携带（POST 提交时不需；service 软删旧 steps 后 INSERT 新行）。 */
+ *  `id` 仅 GET 响应携带（POST 提交时不需；service 软删旧 steps 后 INSERT 新行）。
+ *
+ *  ⚠️ **类型层欠精确（登记，不改）**：`id` / `version` 声明成可选，是因为同一个
+ *  interface 同时服务「读（GET 响应）」与「写（upsert 请求）」两种形态，把两者的差异
+ *  在**一个类型**里抹平了。运行时是安全的，两头各有兜底：
+ *    - 写面：`useProcessDesignStore.ts::stepToUpsert` 是**白名单**式构造（只挑
+ *      `sort_order` / `process_id` / `estimated_minutes` / `note` 四个字段），脏字段
+ *      不会被发出去；
+ *    - 读面：`views/parts/detail/composables/partDetailSchema.ts::processChainSchema`
+ *      把两者声明成必填并由 api 层 `.parse()` 守门。
+ *  代价是 TS 层面看不出「这里少了 id 就不是一条合法的响应行」⇒ 要拆成读 / 写两个
+ *  interface（或按方向收窄）时得同时改三处。 */
 export interface ProcessChainStepDto {
   id?: string;
   /** 0-based 顺序；后端按 sort_order ASC, id ASC 排序（process-chain.md §DTO） */
