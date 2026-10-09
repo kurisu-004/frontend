@@ -27,6 +27,7 @@
 //   20206 WORKER_NO_WORK_TYPE        工人无工种
 //   20507 SHELF_PROCESS_NOT_MAPPED   目标货架未映射该工序
 //   20508 SHELF_PROCESS_NOT_FOUND    该工序无可用货架（下发解析不到货架）
+//   20702 BIZ_PROCESS_CHAIN_STEP_NOT_FOUND 链内没有未软删 step（有链工单定位不到链首工序，HTTP 404）
 //   20704 AUTO_ALLOCATE_INVALID_RATIO fill_ratio ∉ [0,1]
 //   20705 AUTO_ALLOCATE_NO_WORKERS   范围内无可分配工人
 //   20801 PROCESS_NOT_FOUND          工序不存在
@@ -435,6 +436,10 @@ export interface WorkerFillItemDto {
 /** `POST /api/v2/prod/queue/dispatch` 单条 target（rust DispatchTarget）。 */
 export interface DispatchTarget {
   batch_id: string;
+  /** 目标工序。工单**有工序链**时后端按下发链首工序，本字段被忽略、只作无链工单的
+   *  回落值；仍必填（漏传 → 后端 serde 失败、HTTP 422 纯文本，不是业务信封）。
+   *  有链工单的实际落库值读出参 `DispatchSuccessItemDto.current_process_id`
+   *  （出参的 `target_process_id` 与它同值，**不是本字段的回声**）。 */
   target_process_id: string;
 }
 
@@ -443,8 +448,8 @@ export interface DispatchTarget {
  *  → service 抛 AppError、handler 的事务 drop 回滚全部 succeeded 写入。
  *  空 targets → 40001（HTTP 422）。
  *
- *  不带 shelf_id / version：货架由 service 按 `target_process_id` 在 `t_shelf_process`
- *  解析（sort_order ASC, id ASC LIMIT 1），0 结果 → 20508。 */
+ *  不带 shelf_id / version：目标货架由后端按**实际下发工序**（有链工单 = 链首工序，
+ *  无链工单 = 请求里的 `target_process_id`）自动选，0 结果 → 20508。 */
 export interface DispatchRequest {
   targets: DispatchTarget[];
   /** 可选，落到全部 `t_part_event.note`。 */
@@ -461,16 +466,24 @@ export interface DispatchResultDto {
   failed?: DispatchFailureItemDto[];
 }
 
-/** `DispatchResultDto.succeeded[]` 元素（rust DispatchSuccessItem）。6 字段。 */
+/** `DispatchResultDto.succeeded[]` 元素（rust DispatchSuccessItem）。6 字段。
+ *  下发口径：有工序链的工单落**链首 step**（工序 + step 指针），无工序链的工单落请求
+ *  里的 `target_process_id`（step 指针清空）；详见三个字段注释。 */
 export interface DispatchSuccessItemDto {
   batch_id: string;
-  /** dispatch 路径不解析工序链步骤 ⇒ Option 为 None ⇒ 后端返 null。 */
+  /** 下发后写入 `t_part_batch.current_process_step_id` 的值：有链工单 = 链首 step 的
+   *  id（雪花 ID 字符串，与本 interface 其它 id 字段同形），无链工单 = `null`。 */
   current_process_step_id: string | null;
-  /** 下发后写入 `t_part_batch.current_process_id` 的值，恒等于本次
-   *  `target_process_id`。后端保留 Option 形态（None → JSON `null`）。 */
+  /** 下发后写入 `t_part_batch.current_process_id` 的值：有链工单 = **链首 step 的
+   *  工序**（≠ 请求里的 `target_process_id`），无链工单才等于本次 `target_process_id`。
+   *  展示「实际下发到哪道工序」读本字段；有链工单下出参 `target_process_id` 与它同值
+   *  （见下一条注释）。后端保留 Option 形态（None → JSON `null`）。 */
   current_process_id: string | null;
+  /** 与 `current_process_id` **同值**：有链工单 = 链首 step 的工序（请求里的
+   *  `target_process_id` 已被覆盖，本字段不是它的回声），无链工单才等于请求值。 */
   target_process_id: string;
-  /** service 按 `target_process_id` 在 `t_shelf_process` 解析出的货架。 */
+  /** 落架：后端按**实际下发工序**（有链工单 = 链首工序，无链工单 = 请求里的
+   *  `target_process_id`）自动选出的货架。 */
   shelf_id: string;
   version: number;
 }

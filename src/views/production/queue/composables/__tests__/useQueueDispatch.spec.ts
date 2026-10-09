@@ -16,7 +16,8 @@
 //   - T1：dispatchMutation 成功 → 请求体 targets 形态 + 失效四域（无 refreshBoard）。
 //   - T2：dispatchMutation 成功 → 清空 selectedIds + 成功 toast。
 //   - T3：autoDispatch preview 全部可下发 → 弹确认框 → 确认后调 dispatchBatches
-//     （用 first_process_id 作 target_process_id）。
+//     （用 first_process_id 作 target_process_id），响应按**有链工单**真实形态
+//     （current_process_step_id 非空字符串）走完 mutation 全链。
 //   - T4：autoDispatch preview 含 skip 件 → 确认框文案含跳过原因 + 确认后只下发可下发项。
 //   - T5：autoDispatch preview 全部不可下发 → **不弹确认框** + ElMessage.warning。
 //   - T6：preview 多件 NO_PROCESS_CHAIN → **只弹一次** handleProcessChainRequired
@@ -206,12 +207,19 @@ function makePendingBatchItem(batchId: string, partId: string) {
 
 describe('useQueueDispatch — bulk-only dispatch + auto preview 两步', () => {
   beforeEach(async () => {
-    const { ElMessageBox } = await import('element-plus');
+    const { ElMessage, ElMessageBox } = await import('element-plus');
     realDispatchBatches.mockClear();
     realPreviewAutoDispatch.mockClear();
     realFetchPendingBatches.mockClear();
     fakeRouterPush.mockClear();
     vi.mocked(ElMessageBox.confirm).mockClear();
+    // ElMessage 的四个桩是 vi.mock 工厂里的**裸** vi.fn()：afterEach 的
+    // vi.restoreAllMocks() 只还原 vi.spyOn、不清它们的调用历史，不在这里清就会把
+    // 上一例的 toast 带进下一例的断言（对「不应报错」「已下发 N 件」这类断言是恒真陷阱）。
+    vi.mocked(ElMessage.success).mockClear();
+    vi.mocked(ElMessage.error).mockClear();
+    vi.mocked(ElMessage.warning).mockClear();
+    vi.mocked(ElMessage.info).mockClear();
     // 默认 = 用户点确认
     vi.mocked(ElMessageBox.confirm).mockResolvedValue(undefined as never);
     realFetchPendingBatches.mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 });
@@ -291,7 +299,25 @@ describe('useQueueDispatch — bulk-only dispatch + auto preview 两步', () => 
   });
 
   it('T3：autoDispatch preview 全部可下发 → 弹确认框 → 确认后调 dispatchBatches（用 first_process_id）', async () => {
-    const { ElMessageBox } = await import('element-plus');
+    const { ElMessage, ElMessageBox } = await import('element-plus');
+    // 这条路径打的正是**有链工单**（preview 的 first_process_id 取自链首 step），
+    // 后端回的 current_process_step_id 非空、current_process_id 是链首工序。
+    // mutationFn 走 dispatchResultSchema.parse ⇒ 这个形态必须整链通过；反之该字段
+    // 退回 number 形态时 parse 抛在 HTTP 200 之后，已提交的下发会被报成失败。本例是
+    // 该字段「必须是字符串」的端到端守卫，后端样本落在 Q-D5 的 schema 层负向守卫。
+    realDispatchBatches.mockResolvedValueOnce({
+      succeeded: [
+        {
+          batch_id: '3000000000001',
+          current_process_step_id: '1900000000000000001',
+          current_process_id: '2000000000001',
+          target_process_id: '2000000000001',
+          shelf_id: '5000000000001',
+          version: 2,
+        },
+      ],
+      failed: [],
+    });
     const d = testApp.runWithContext(() => useQueueDispatch());
 
     await d.autoDispatchMutation.mutateAsync({ batchIds: ['3000000000001'] });
@@ -302,6 +328,10 @@ describe('useQueueDispatch — bulk-only dispatch + auto preview 两步', () => 
     expect(realDispatchBatches).toHaveBeenCalledWith({
       targets: [{ batch_id: '3000000000001', target_process_id: '2000000000001' }],
     });
+    // 有链形态过 parse → onSuccess 照常报数；反过来 parse 抛错会走 onError，
+    // 而 onError 同样打四域 invalidate，故必须用「无报错 toast」把两条分支劈开。
+    expect(ElMessage.success).toHaveBeenCalledWith('已下发 1 件');
+    expect(ElMessage.error).not.toHaveBeenCalled();
     // 下发成功 → 四域失效
     expectFourDomainsInvalidated();
   });

@@ -178,8 +178,10 @@ export function useQueueDispatch(): UseQueueDispatchReturn {
       }
     },
     onError: async (e: Error) => {
-      // 后端 dispatch 端点不再抛「工序链缺失」业务错（统一走 auto-dispatch preview
-      // 的 skip_reason = NO_PROCESS_CHAIN 引导路径），故此处只报原始错误消息。
+      // 「工序链缺失」有两条通道：未制定工序链由 auto-dispatch preview 的
+      // skip_reason = NO_PROCESS_CHAIN 引导承担，而**已制定却定位不到可用 step**
+      // （锚链软删 / 链内无未软删 step）preview 判可下发、dispatch 才抛
+      // 20702 —— 该形态下报错只能原样透出，前端不额外分类。
       ElMessage.error(e.message ?? '下发失败');
       // 失败也要走**全套**失效链（与 onSuccess 同款），不是只刷待下发列表：dispatch
       // 最常见的失败恰恰是 40901 OCC 与 20120 状态不允许 —— 那意味着**别人已经把这批

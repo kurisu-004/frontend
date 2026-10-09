@@ -215,8 +215,8 @@ export const queuePendingBatchSchema = z.object({
   note: z.string().nullable(),
   version: z.number(),
   /** `t_part_batch.current_process_step_id`；DB 为 NULL 时后端返 `"0"` = 未挂 step。
-   *  待下发批次按定义还没挂 step，值恒 `"0"`；保留它是为了让「已挂 / 未挂」在列表
-   *  上可见（后续做「未挂 step 不可下发」之类的提示时不必再动契约）。 */
+   *  待下发批次按定义还没挂 step，正常情况下是 `"0"`；保留它是为了让「已挂 / 未挂」
+   *  在列表上可见（后续做「未挂 step 不可下发」之类的提示时不必再动契约）。 */
   current_process_step_id: z.string(),
   /** `t_part.process_chain_id`；未制定工序链时后端返 `"0"`。 */
   process_chain_id: z.string(),
@@ -330,17 +330,20 @@ export const dispatchRequestSchema = z.object({
 export type DispatchRequestSchema = z.infer<typeof dispatchRequestSchema>;
 
 /** `DispatchResult.succeeded[]` 单条（rust DispatchSuccessItem）。6 字段。
- *  `current_process_id` 是下发后写入 `t_part_batch.current_process_id` 的值，
- *  恒等于本次 `target_process_id`；后端留 Option 形态，故用 `.nullable()`。 */
+ *  下发口径：有工序链的工单落**链首 step**（工序 + step 指针），无工序链的工单落请求
+ *  里的 `target_process_id`、step 指针清空。⇒ **有链工单**的 `current_process_id`
+ *  不等于请求里的 `target_process_id`。 */
 export const dispatchSuccessItemSchema = z.object({
   batch_id: z.string(),
-  /** Option<i64>：dispatch 路径不解析工序链步骤 → None → JSON null。 */
+  /** 有链工单 = 链首 step 的 id（雪花 ID 字符串）；无链工单 = null。 */
   current_process_step_id: z.string().nullable(),
-  /** 下发后 batch 当前工序；当前恒等于 `target_process_id`。 */
+  /** 下发后 batch 当前工序：有链工单 = 链首 step 的工序，无链工单 = `target_process_id`；
+   *  后端留 Option 形态（None → JSON null），故 `.nullable()`。 */
   current_process_id: z.string().nullable(),
+  /** 与 `current_process_id` **同值**：有链工单 = 链首 step 的工序（请求里的
+   *  `target_process_id` 已被覆盖，本字段不是它的回声），无链工单才等于请求值。 */
   target_process_id: z.string(),
-  /** service 按 target_process_id 在 t_shelf_process 解析出的货架
-   *  （sort_order ASC, id ASC LIMIT 1）。 */
+  /** 后端按**实际下发工序**（有链工单 = 链首工序）自动选出的货架。 */
   shelf_id: z.string(),
   version: z.number(),
 });
