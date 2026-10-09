@@ -35,7 +35,7 @@
 // 返回类型，不是「历史上前端写成了什么」。
 // **无运行时影响**（这些返回值的消费方一律丢弃，只靠失效链重拉），但本文件此前的
 // 声明与同文件新建的 `BatchFlowOut` 自相矛盾，而它正是本次重构的立项靶子。
-// ⚠️ 例外两处**保持** `PartDetailDto`：`getPart` / `createPart` / `updatePart` /
+// ⚠️ 例外五处**保持** `PartDetailDto`：`getPart` / `createPart` / `updatePart` /
 // `getPartBySerial`（后端真返 `PartDetailOut`），以及 `scanPart`（打的是 v1(Python)
 // 的 `POST /parts/scan`，v2 无此路由，契约不属本次核对范围）。
 

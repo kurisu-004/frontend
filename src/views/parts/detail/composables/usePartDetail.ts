@@ -7,7 +7,7 @@
 // 本文件**只做**四件事，一件都不多：
 //   1. 投影：把三条 query hook 的 `data` / `isFetching` / `error` 投影成页面要用的
 //      `part` / `batches` / `events` / `infoLoading` / `eventsLoading` /
-//      `batchesLoading` / `errorMsg`，以及派生的 `inspectionBatch`；
+//      `batchesLoading` / `errorMsg`；
 //   2. 权限矩阵：`canEditPart` / `canCancelPart` / `canDeletePart` / `canInspect` /
 //      `canManageDrawings` / `canManage3DModels` / `canManageCncFiles` /
 //      `canManageSetupSheet` / `canManageBatches`（逐条对齐后端角色集，见下）；

@@ -69,9 +69,11 @@ export function usePartBatchesQuery(
    * （按 CLAUDE.md「缓存定位」，跨页面写不做精确失效补齐）⇒ 新鲜度只能靠 staleTime。
    * 共享档 20min 对详情页太长、对 dashboard 的 PartPreviewDialog（纯展示）无所谓。
    *
-   * ⚠️ 与共享键的关系：query-core 的 `Query#isStaleByTime` 取**各 observer staleTime 的
-   * 最小值**，所以详情页与预览弹窗同屏时该键按 30s 判新鲜度。这是**收敛到更严的一档**，
-   * 与「共享一条 queryKey 换同屏去重」的目标同向，不是缺陷。
+   * ⚠️ 与共享键的关系：共享一条 queryKey **不共享新鲜度判据** —— 每个 observer 各按
+   * 自己 options 里的 `staleTime` 判定（query-core 的 `Query#isStaleByTime(staleTime)`
+   * 只接一个参数，不做跨 observer 聚合）。所以详情页这个 observer 按 30s 判、dashboard
+   * 预览弹窗那个 observer 仍按 20min 判，同屏时互不影响。这是**各判各的**两档，不存在
+   * 「共享键自动取最小档」的耦合，也不需要去「修」它。
    */
   staleTimeMs?: number,
 ) {
