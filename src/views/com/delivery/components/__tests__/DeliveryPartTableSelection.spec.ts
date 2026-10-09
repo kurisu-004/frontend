@@ -2,10 +2,14 @@
 // src/views/com/delivery/components/__tests__/DeliveryPartTableSelection.spec.ts
 //
 // 2026-10-09 新增：两张零件 / 装配件树表的**勾选不联动**守卫（真 el-table）。
+// 2026-10-11 追加：装配件**子件行不可勾选**，且这一条同时兜住表头全选。
 //
-// 硬不变式：**一行勾选 = 一张标签**。装配件父行的标签是「N 套」一张，打完还会把全部子件
-// 批次标记上；子件行的标签是「M 件」各一张。EP 的 `treeProps.checkStrictly` 默认 `false`
-// ⇒ 勾父行会级联勾上全部子件（同一批货出两轮标签），勾满子件也会把父行反过来勾上。
+// 硬不变式：**一行勾选 = 一张标签，且标签按套出**。装配件父行的标签是「N 套」一张，打完
+// 还会把全部子件批次标记上；子件不是独立打印单元（标签贴在装配件箱上），所以它连
+// 单独勾选的资格都没有。
+// EP 的 `treeProps.checkStrictly` 默认 `false` ⇒ 勾父行会级联勾上全部子件（同一批货出两轮
+// 标签）；它又管不到表头全选（`_toggleAllSelection` 另建 treeProps 并写死 `checkStrictly:
+// false`）⇒ 全选那条路只能靠 selection 列上的 `:selectable` 拦。
 // 两者都是「勾一行、出了好几张纸」，且**没有任何报错**，所以只能靠用例钉住。
 //
 // 为什么必须挂**真** el-table（本仓先例：src/components/__tests__/BatchCardDndFootprint.spec.ts）：
@@ -17,6 +21,8 @@
 // 勾选用的是 el-table 公开的 `toggleRowSelection(row, true)`：EP 勾选框的 `onChange`
 // 就是 `store.commit('rowSelectedChanged', row)` → `store.toggleRowSelection(row)`，
 // 同一段代码路径（happy-dom 下点真实 checkbox 不会派发 change，用实例方法是等价且确定的）。
+// 表头全选用的是公开的 `toggleAllSelection()`，与用户点表头那个 checkbox 同一段代码
+// （`onSelectAll` → `store.commit('toggleAllSelection')`）。
 //
 // 列顺序拖动（useColumnDrag）与本不变式正交，桩掉：它要真实表头 DOM + sortablejs +
 // MutationObserver，只会引入无关的爆炸半径。
@@ -27,7 +33,10 @@ import { createRouter, createMemoryHistory } from 'vue-router';
 import { ElButton, ElCard, ElIcon, ElTable, ElTableColumn, ElTag, ElTooltip } from 'element-plus';
 import type { ColumnDef } from '@/composables/useColumnVisibility';
 import type { PartTreeRow } from '../../utils/deliveryNotePartRows';
-import type { DeliveryNoteDetailData, DeliveryNoteItemData } from '../../composables/deliveryNoteSchema';
+import type {
+  DeliveryNoteDetailData,
+  DeliveryNoteItemData,
+} from '../../composables/deliveryNoteSchema';
 import { buildDeliveryNoteLineItemsColumnDefs } from '../../deliveryNoteLineItemsColumnDefs';
 
 vi.mock('@/composables/useColumnDrag', () => ({
@@ -90,7 +99,13 @@ function partRow(id: string, over: Partial<PartTreeRow> = {}): PartTreeRow {
   };
 }
 
-/** 装配件父行 + 两个子件行 + 一个散件行（`buildPartTreeRows` 的真实形状）。 */
+/**
+ * 装配件父行 + 两个子件行 + 一个散件行（`buildPartTreeRows` 的真实形状）。
+ *
+ * 子件行必须带 `assembly_id`（`buildPartTreeRows` 由 `asmIdOf(li)` 写上）：那是
+ * `canSelectPartRow` / `seqCellText` 判「这是子件行」的唯一依据，fixture 漏了它，
+ * 两条判据都会把子件当散件放行。
+ */
 function treeRows(): PartTreeRow[] {
   return [
     partRow('ASM_A1', {
@@ -98,8 +113,8 @@ function treeRows(): PartTreeRow[] {
       is_asm_row: true,
       has_children: true,
       children: [
-        partRow('P:A1:PA', { batch_ids: ['13'] }),
-        partRow('P:A1:PB', { batch_ids: ['14'] }),
+        partRow('P:A1:PA', { batch_ids: ['13'], assembly_id: 'A1' }),
+        partRow('P:A1:PB', { batch_ids: ['14'], assembly_id: 'A1' }),
       ],
       batch_ids: ['13', '14'],
       assembly_id: 'A1',
@@ -172,16 +187,41 @@ function mountDraftCard(rows: PartTreeRow[]): VueWrapper {
 }
 
 /** 真 el-table 实例（EP 的 `name` 就是 `ElTable`）。 */
-function tableOf(w: VueWrapper): { toggleRowSelection: (row: unknown, selected?: boolean) => void } {
+function tableOf(w: VueWrapper): {
+  toggleRowSelection: (row: unknown, selected?: boolean) => void;
+  toggleAllSelection: () => void;
+} {
   return w.findComponent({ name: 'ElTable' }).vm as unknown as {
     toggleRowSelection: (row: unknown, selected?: boolean) => void;
+    toggleAllSelection: () => void;
   };
 }
 
-/** el-table 内部 store（EP 在 `insertColumn` 时把 selection 列的 `reserveSelection` 镜像进来）。 */
-function storeOf(w: VueWrapper): { states: { reserveSelection: Ref<boolean> } } {
-  return (w.findComponent({ name: 'ElTable' }).vm as unknown as { store: { states: { reserveSelection: Ref<boolean> } } })
-    .store;
+/** el-table 内部 store（EP 在 `insertColumn` 时把 selection 列的 `reserveSelection` / `selectable` 镜像进来）。 */
+function storeOf(w: VueWrapper): {
+  states: { reserveSelection: Ref<boolean> };
+  commit: (name: string, ...args: unknown[]) => void;
+} {
+  return (
+    w.findComponent({ name: 'ElTable' }).vm as unknown as {
+      store: {
+        states: { reserveSelection: Ref<boolean> };
+        commit: (name: string, ...args: unknown[]) => void;
+      };
+    }
+  ).store;
+}
+
+/**
+ * 走**勾选框那条**代码路径（EP 的 selection 单元格 `onChange` 就是
+ * `store.commit('rowSelectedChanged', row)`）。
+ *
+ * ⚠️ 不能用公开的 `table.toggleRowSelection(row, true)` 代替：它的第三参
+ * `ignoreSelectable` **默认 true**（table/utils-helper.mjs），会把 `selectable` 整个
+ * 绕过去 —— 拿它断言「子件行不可选」恒绿，守不住任何东西（EP 内部注释：修 #14075）。
+ */
+function clickRowCheckbox(w: VueWrapper, row: unknown): void {
+  storeOf(w).commit('rowSelectedChanged', row);
 }
 
 /** 表里 type="selection" 的那个列实例。 */
@@ -189,6 +229,17 @@ function selectionColumnOf(w: VueWrapper): VueWrapper | undefined {
   return w
     .findAllComponents({ name: 'ElTableColumn' })
     .find((c) => c.props('type') === 'selection');
+}
+
+/** 表体里哪些行的勾选框被禁用（EP 的 selection 单元格按 `column.selectable` 置 disabled）。 */
+function disabledRowIndexes(w: VueWrapper): number[] {
+  const hits: number[] = [];
+  const root = w.element as HTMLElement;
+  Array.from(root.querySelectorAll('tr.el-table__row')).forEach((tr, i) => {
+    const box = tr.querySelector('.el-checkbox');
+    if (box?.classList.contains('is-disabled')) hits.push(i);
+  });
+  return hits;
 }
 
 /**
@@ -208,81 +259,131 @@ function checkedRowIndexes(w: VueWrapper): number[] {
   return hits;
 }
 
-/** EP 的列布局 / 树展开要过几个 flush 才稳定。 */
-async function settle(): Promise<void> {
-  for (let i = 0; i < 4; i += 1) await nextTick();
+/** 表头全选框是否呈「已勾上」态（EP 的 `isAllSelected` state）。 */
+function isAllSelected(w: VueWrapper): boolean {
+  const vm = w.findComponent({ name: 'ElTable' }).vm as unknown as {
+    store: { states: { isAllSelected: Ref<boolean> } };
+  };
+  return vm.store.states.isAllSelected.value;
 }
 
-describe('零件 / 装配件树表：勾选不联动（checkStrictly）', () => {
-  it('详情页表：勾装配件父行 → 只产生 1 条 selection-change，子件不被连带', async () => {
-    const rows = treeRows();
-    const w = mountLineItemsTable(rows);
-    await settle();
+/**
+ * EP 的列布局 / 树展开要过几个 flush 才稳定。
+ *
+ * `waitDebounce` 真等一次定时器：EP 把 `store.toggleAllSelection` 包成
+ * `debounce(_toggleAllSelection, 10)`（store/helper.mjs），只 `nextTick` 的话全选那步
+ * 根本还没跑，断言会读到「什么都没发生」。
+ */
+async function settle(waitDebounce = false): Promise<void> {
+  for (let i = 0; i < 4; i += 1) await nextTick();
+  if (waitDebounce) await new Promise((r) => setTimeout(r, 20));
+  for (let i = 0; i < 2; i += 1) await nextTick();
+}
 
-    tableOf(w).toggleRowSelection(rows[0], true);
-    await settle();
+describe('零件 / 装配件树表：勾选不联动（checkStrictly）+ 子件行不可勾选', () => {
+  /** 两张表的挂载函数，跑同一批断言（表结构一致，差异只在 emit 名）。 */
+  const tables: [
+    string,
+    (rows: PartTreeRow[]) => VueWrapper,
+    { event: 'selectionChange' | 'update:selectedRows' },
+  ][] = [
+    ['详情页表', mountLineItemsTable, { event: 'selectionChange' }],
+    ['草稿卡片表', mountDraftCard, { event: 'update:selectedRows' }],
+  ];
 
-    const emitted = w.emitted('selectionChange');
-    expect(emitted).toHaveLength(1);
-    // 一行 = 一张标签：只有父行这一张「N 套」
-    expect((emitted![0]![0] as PartTreeRow[]).map((r) => r.id)).toEqual(['ASM_A1']);
-    // DOM 侧同样只有父行的勾选框亮
-    expect(checkedRowIndexes(w)).toEqual([0]);
+  it.each(tables)(
+    '%s：勾装配件父行 → 只产生 1 条勾选事件，子件不被连带',
+    async (_n, mountFn, ev) => {
+      const rows = treeRows();
+      const w = mountFn(rows);
+      await settle();
 
-    w.unmount();
-  });
+      tableOf(w).toggleRowSelection(rows[0], true);
+      await settle();
 
-  it('详情页表：勾满两个子件行 → 父行不会被反过来勾上', async () => {
-    const rows = treeRows();
-    const w = mountLineItemsTable(rows);
-    await settle();
+      const emitted = w.emitted(ev.event);
+      expect(emitted).toHaveLength(1);
+      // 一行 = 一张标签：只有父行这一张「N 套」
+      expect((emitted![0]![0] as PartTreeRow[]).map((r) => r.id)).toEqual(['ASM_A1']);
+      // DOM 侧同样只有父行的勾选框亮
+      expect(checkedRowIndexes(w)).toEqual([0]);
 
-    const table = tableOf(w);
-    table.toggleRowSelection(rows[0]!.children![0], true);
-    table.toggleRowSelection(rows[0]!.children![1], true);
-    await settle();
+      w.unmount();
+    },
+  );
 
-    const emitted = w.emitted('selectionChange');
-    const last = emitted![emitted!.length - 1]![0] as PartTreeRow[];
-    expect(last.map((r) => r.id).sort()).toEqual(['P:A1:PA', 'P:A1:PB']);
-    expect(checkedRowIndexes(w)).toEqual([1, 2]);
+  // 2026-10-11：`checkStrictly` 只管逐行点击，管不到表头全选（EP 的 `_toggleAllSelection`
+  // 另建 treeProps 并把 `checkStrictly` 写死 false）⇒ 勾上父行时子件被连带进 selection，
+  // 「默认只打装配件本身」这条产品口径在**全选**这条路上漏掉。selection 列的 `:selectable`
+  // 是唯一能同时兜住两端的地方（`util.toggleRowStatus` 递归时把同一个 selectable 一路下传）。
+  it.each(tables)(
+    '%s：表头全选 → 只勾顶层行（装配件父行 + 散件），子件一律不进',
+    async (_n, mountFn, ev) => {
+      const rows = treeRows();
+      const w = mountFn(rows);
+      await settle();
 
-    w.unmount();
-  });
+      tableOf(w).toggleAllSelection();
+      await settle(true);
 
-  it('草稿卡片表：勾装配件父行 → 只产生 1 条 update:selectedRows，子件不被连带', async () => {
-    const rows = treeRows();
-    const w = mountDraftCard(rows);
-    await settle();
+      const emitted = w.emitted(ev.event);
+      const last = emitted![emitted!.length - 1]![0] as PartTreeRow[];
+      expect(last.map((r) => r.id)).toEqual(['ASM_A1', 'P:-:PLOOSE']);
+      // DOM 侧：父行（0）与散件（3）的勾选框亮，两个子件行（1 / 2）不亮
+      expect(checkedRowIndexes(w)).toEqual([0, 3]);
 
-    tableOf(w).toggleRowSelection(rows[0], true);
-    await settle();
+      w.unmount();
+    },
+  );
 
-    const emitted = w.emitted('update:selectedRows');
-    expect(emitted).toHaveLength(1);
-    expect((emitted![0]![0] as PartTreeRow[]).map((r) => r.id)).toEqual(['ASM_A1']);
-    expect(checkedRowIndexes(w)).toEqual([0]);
+  it.each(tables)(
+    '%s：表头全选后表头勾选态仍显示「全选」（不可选行不参与计数）',
+    async (_n, mountFn, _ev) => {
+      const w = mountFn(treeRows());
+      await settle();
 
-    w.unmount();
-  });
+      tableOf(w).toggleAllSelection();
+      await settle(true);
 
-  it('草稿卡片表：勾满两个子件行 → 父行不会被反过来勾上', async () => {
-    const rows = treeRows();
-    const w = mountDraftCard(rows);
-    await settle();
+      // EP 的 `updateAllSelected` 对「未选中的不可选行」放行 ⇒ isAllSelected 应为 true
+      expect(isAllSelected(w)).toBe(true);
 
-    const table = tableOf(w);
-    table.toggleRowSelection(rows[0]!.children![0], true);
-    table.toggleRowSelection(rows[0]!.children![1], true);
-    await settle();
+      w.unmount();
+    },
+  );
 
-    const emitted = w.emitted('update:selectedRows');
-    const last = emitted![emitted!.length - 1]![0] as PartTreeRow[];
-    expect(last.map((r) => r.id).sort()).toEqual(['P:A1:PA', 'P:A1:PB']);
-    expect(checkedRowIndexes(w)).toEqual([1, 2]);
+  it.each(tables)(
+    '%s：子件行的勾选框是禁用态，且走 onChange 那条路也进不去',
+    async (_n, mountFn, ev) => {
+      const rows = treeRows();
+      const w = mountFn(rows);
+      await settle();
 
-    w.unmount();
-  });
+      // EP 的 selection 单元格按 `column.selectable(row, index)` 置 checkbox 的 disabled
+      // （table/config.mjs 的 selection.renderCell）⇒ 子件行（DOM 序 1 / 2）该亮 is-disabled，
+      // 父行（0）与散件（3）不该亮。
+      expect(disabledRowIndexes(w)).toEqual([1, 2]);
+
+      // 再走勾选框 onChange 的等价路径（commit 'rowSelectedChanged'）钉一次：它内部调的
+      // watcher.toggleRowSelection **默认 ignoreSelectable = false**，会读 selectable。
+      clickRowCheckbox(w, rows[0]!.children![0]);
+      clickRowCheckbox(w, rows[0]!.children![1]);
+      await settle();
+
+      expect(w.emitted(ev.event)).toBeFalsy();
+      expect(checkedRowIndexes(w)).toEqual([]);
+
+      // 散件行仍可逐行勾选（确认不是把整列 selectable 关掉了）
+      clickRowCheckbox(w, rows[1]);
+      await settle();
+      const emitted = w.emitted(ev.event);
+      expect((emitted![emitted!.length - 1]![0] as PartTreeRow[]).map((r) => r.id)).toEqual([
+        'P:-:PLOOSE',
+      ]);
+
+      w.unmount();
+    },
+  );
 });
 
 describe('卡片头计数 = 表体实际展示行数（不是批次条数）', () => {
@@ -302,17 +403,20 @@ describe('勾选列开 reserve-selection（打印后绿底刷新不丢勾选）'
     ['草稿卡片表', mountDraftCard],
   ];
 
-  it.each(cases)('%s：selection 列的 reserveSelection 为 true（且已镜像进 store）', async (_name, mountFn) => {
-    const w = mountFn(treeRows());
-    await settle();
+  it.each(cases)(
+    '%s：selection 列的 reserveSelection 为 true（且已镜像进 store）',
+    async (_name, mountFn) => {
+      const w = mountFn(treeRows());
+      await settle();
 
-    const col = selectionColumnOf(w);
-    expect(col, '没找到 type="selection" 的列').toBeTruthy();
-    // 列实例上的 prop 是声明源头；store 里的那份是 EP 在 insertColumn 时抄进去的运行时值，
-    // reserve 逻辑读的是后者 ⇒ 两处都断掉才算守住。
-    expect((col!.props() as Record<string, unknown>).reserveSelection).toBe(true);
-    expect(storeOf(w).states.reserveSelection.value).toBe(true);
+      const col = selectionColumnOf(w);
+      expect(col, '没找到 type="selection" 的列').toBeTruthy();
+      // 列实例上的 prop 是声明源头；store 里的那份是 EP 在 insertColumn 时抄进去的运行时值，
+      // reserve 逻辑读的是后者 ⇒ 两处都断掉才算守住。
+      expect((col!.props() as Record<string, unknown>).reserveSelection).toBe(true);
+      expect(storeOf(w).states.reserveSelection.value).toBe(true);
 
-    w.unmount();
-  });
+      w.unmount();
+    },
+  );
 });

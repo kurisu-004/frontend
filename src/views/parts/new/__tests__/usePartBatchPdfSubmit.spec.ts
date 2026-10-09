@@ -949,16 +949,17 @@ describe('建单「部分行成立」', () => {
     w.unmount();
   });
 
-  it('装配件：响应的子件顺序与请求不一致 ⇒ 整组不记账（否则子件 A 的图纸会挂到子件 B 上）', async () => {
+  it('装配件：响应的子件图号与请求不一致 ⇒ 整组不记账（否则子件 A 的图纸会挂到子件 B 上）', async () => {
     const w = mount(Harness);
     await flushPromises();
     const api = need();
     const asm = await mountAssembly(api);
     const nos = childNos(asm);
     expect(nos).toHaveLength(2);
-    expect(nos[0]).not.toBe(nos[1]);
-    // 长度对得上、只有顺序反了：后端把两个子件建出来了，但返回顺序与请求相反
-    mocks.createAssembly.mockResolvedValue(okAssembly('1', [...nos].reverse()));
+    // 2026-10-11：子件图号不再拼后缀 ⇒ 两个子件同图号，「把数组 reverse 造成错序」造不出
+    // 不一致了。能造出来的真实故障形态是**回显了别的值**（子件建串了 / 被截断 / 转义丢失）。
+    const mismatched = [nos[0]!, `${nos[1]}-B`];
+    mocks.createAssembly.mockResolvedValue(okAssembly('1', mismatched));
 
     await api.onSubmit();
 
@@ -1672,7 +1673,8 @@ describe('装配件逐页分发', () => {
     expect(api.effectiveChildren(asm)).toHaveLength(2);
     expect(api.totalAssemblyChildren.value).toBe(2);
     // 表格内容不因「被排除」而丢：切回来时用户填的图号还在
-    expect(asm.children.map((c) => c.drawing_no)).toEqual(['ASM-1', 'ASM-1-02']);
+    // 2026-10-11：子件图号不再拼 `-01 / -02` 后缀，全部与装配件一致
+    expect(asm.children.map((c) => c.drawing_no)).toEqual(['ASM-1', 'ASM-1']);
 
     // 选到子件表里不存在的页 ⇒ 不静默，按「无总装图」并提示
     mocks.warning.mockClear();

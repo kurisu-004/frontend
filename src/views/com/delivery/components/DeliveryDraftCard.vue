@@ -39,7 +39,7 @@ import type { ComponentInstance } from 'vue';
 import { RouterLink } from 'vue-router';
 import { Delete, Printer, Tickets } from '@element-plus/icons-vue';
 import { ElTable, ElTag } from 'element-plus'; // 2026-09-21 T-B4：收紧 emits / ref / 函数参 any → ComponentInstance<typeof ElTable> | null
-import { seqCellText, type PartTreeRow } from '../utils/deliveryNotePartRows';
+import { canSelectPartRow, seqCellText, type PartTreeRow } from '../utils/deliveryNotePartRows';
 import type { DeliveryNoteItemData } from '../composables/deliveryNoteSchema';
 import {
   resolveDraggable,
@@ -190,10 +190,15 @@ drag.applyDrag(tableEl);
         标签）会把全部子件行一起勾上，同一批货出两轮标签；反向勾满全部子件也会把父行勾上。
         「一行 = 一张标签」只有不联动才成立。
 
-        2026-10-09：**表头全选框不受 `checkStrictly` 约束**，是刻意接受的口径、不改行为。
-        EP `store/watcher._toggleAllSelection` 另建了一份 treeProps 并把 `checkStrictly`
-        **写死为 false**，不看本表传的值 ⇒ 点表头全选时装配件父行 + 全部子件行会一起进
-        selection。本字段只约束**逐行点击**。
+        2026-10-11：selection 列挂 `:selectable="canSelectPartRow"` —— **子件行不可勾选**
+        （打印标签按套出，子件不是独立打印单元；判据与注释见 utils 的 `canSelectPartRow`）。
+        这一挂同时补上了表头全选那条路：`treeProps.checkStrictly` 管不到它（EP
+        `store/watcher._toggleAllSelection` 另建 treeProps 并把 `checkStrictly` 写死 false），
+        但 `util.toggleRowStatus` 递归子节点时**同一个 `selectable` 一路下传** ⇒ 全选只勾
+        顶层行（装配件父行 + 散件），与逐行点击同一口径。
+        ⚠️ 已知代价：子件行不再能被单独勾选打印标签（产品已拍板）。移除批次 / 绿底 /
+        序号排名都不受影响 —— 它们走 `useDeliveryNoteActions.rowIdToBatchIds` 的树递归与
+        `assignSeq` 的顶层行排名，都不读勾选集。
       -->
       <el-table
         :ref="(el) => handleTableRef(el as ComponentInstance<typeof ElTable> | null)"
@@ -207,8 +212,14 @@ drag.applyDrag(tableEl);
         empty-text="暂无加入零件 — 扫码加入"
         @selection-change="handleSelectionChange"
       >
-        <!-- 勾选列不进 defs：列顺序拖动会把列拖到别处，勾选列必须恒在序列号之前。 -->
-        <el-table-column type="selection" width="42" reserve-selection />
+        <!-- 勾选列不进 defs：列顺序拖动会把列拖到别处，勾选列必须恒在序列号之前。
+             子件行由 `:selectable` 拦掉。 -->
+        <el-table-column
+          type="selection"
+          width="42"
+          reserve-selection
+          :selectable="canSelectPartRow"
+        />
         <!--
           2026-10-10：「序号」列（与详情页零件列表同款硬编码列，取行上的 `seq`）。数据是
           扫码入单后即时返回的详情，本身即入单序，所以这里不需要排序入口：

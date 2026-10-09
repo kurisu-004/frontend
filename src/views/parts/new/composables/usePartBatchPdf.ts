@@ -636,45 +636,43 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       }
     }
     for (const a of asms) {
-      // 2026-10-03：顶层命中源为**装配件自身图号** `a.drawing_no`。子件图号是前端按
-      // 「首页原图号 / 原图号-02」合成的（见 mergeSelectedAsAssembly /
-      // confirmManualAssembly），其中只有第 1 页那个恰好等于装配件自身图号，`-02 / -03`
-      // 这些在 Excel 的「物料编号」列里根本不存在 —— 顶层回填认自身图号才是稳的。
-      // 保留 child 命中作为回退：Excel 里「逐个子件各占一行」的历史数据，其子件图号就是
-      // 物料编号本身，仍应命中。
+      // 2026-10-11：顶层命中源为**装配件自身图号** `a.drawing_no`，且**不再有子件
+      // 回退** —— 子件图号 / 名称已统一取源值（两个建行入口都不再拼 `-01 / -02`
+      // 后缀），建行那一刻 `a.children[i].drawing_no` 与 `a.drawing_no` 恒等；本函数
+      // 只在建行的同一 tick 里跑一次，草稿又是只写不恢复的（无「先建后改子件图号
+      // 再回填」的时序），所以 `childHit` 分支已不可达，保留只会让人误以为子件图号
+      // 还能与顶层不同。
+      //
+      // ⚠️ 随之而来的**已知代价**：Excel 的「物料编号」列若是旧口径的「逐个子件各占一行」
+      // （那一行装的是子件自己的图号；那行的**单价**是子件价，而分厂 / 申请人 / 数量 /
+      // 计划交期在两种形态下都是整套口径），顶层图号在表里查不到 ⇒ 这一行**整行都不回填**：
+      // 分厂 / 申请人 / 计划交期 / 单价 / 总价保持建行时的空值（`makeAssemblyRow` 的
+      // 默认值）待手填，数量保持默认 1。不再是「只有价不回填、其余几列照填」。
+      // 子件图号与装配件一致是产品定的口径，不做前缀模糊匹配：错的数字比空值危险。
       const ownHit = excelMap.get(a.drawing_no);
-      const childHit = a.children
-        .map((c) => excelMap.get(c.drawing_no))
-        .find((m): m is BidRow => !!m);
-      const hit = ownHit ?? childHit;
-      if (hit) {
+      if (ownHit) {
         // 分厂 / 申请人由顶层统一持有（子件不再各自持有这两个字段）
         if (!a.customer_id) {
-          const l2Id = resolveL2CustomerId(hit.deptName);
+          const l2Id = resolveL2CustomerId(ownHit.deptName);
           if (l2Id) {
             a.customer_id = l2Id;
             const c = customers.value.find((x) => x.id === l2Id);
             a.customer_name = c?.name ?? '';
           }
         }
-        a.applicant_name = hit.applicantName || a.applicant_name;
+        a.applicant_name = ownHit.applicantName || a.applicant_name;
         // 数量 = **整套数量**（业务口径：Excel 的数量是整套的数量）
-        a.quantity = hit.quantity || a.quantity;
-        if (hit.plannedDeliveryDate) a.planned_delivery_date = hit.plannedDeliveryDate;
-      }
-      // 2026-10-05 口径定案：**整套价只从 `ownHit`（装配件自身图号那一行）回填**。
-      // `ownHit` 缺失而只命中 `childHit` 时不回填，保持 null 等用户手填 ——
-      // Excel 的「物料编号」列在逐子件成行的形态下是**子件**图号，它的价格是子件价；
-      // 写进顶层会与整套价差一个套数倍率，错的数字比空值更危险。
-      // （分厂 / 申请人 / 数量 / 交期的 `ownHit ?? childHit` 回退保持现状：Excel 那几列在
-      // 两种形态下都是整套口径，摊不摊得开都不影响语义。）
-      if (ownHit) {
+        a.quantity = ownHit.quantity || a.quantity;
+        if (ownHit.plannedDeliveryDate) a.planned_delivery_date = ownHit.plannedDeliveryDate;
         // `!= null` 只是类型防御：`BidRow.unitPrice` / `totalPrice` 声明为 `number`，
         // parser 已把空值 / 负数兜底成 0（`totalPrice` 缺列时是 `unitPrice * quantity`），
         // 永不为 null ⇒ 走不到短路，Excel 单元格为空时**照样**以 0 覆盖用户手填的单价。
         if (ownHit.unitPrice != null) a.unit_price = ownHit.unitPrice;
         if (ownHit.totalPrice != null) a.total_price = ownHit.totalPrice;
       }
+      // 未命中（`ownHit` 为 undefined）时顶层整套价保持 null 等用户手填：Excel 的
+      // 「物料编号」列装不进这个装配件的图号，硬套别的行的价格会与整套口径差一个套数
+      // 倍率，错的数字比空值更危险。
       // 2026-10-05 子件口径（业务口径：分厂 / 申请人 / 计划交期 / 单价是整套共享的，
       // 子件数量与单价需手填）：
       //   - 计划交期：顶层填完后同步给全部子件，保证「整套一个交期」。交期既可能来自
@@ -739,7 +737,14 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /** 把 3D 模型按文件名解析的 drawing_no 自动挂到独立零件 / 装配件子件行。
    *  - 文件名约定：图号_名称.ext（与 PDF 解析共用 `parseDrawingFilename`，先剥扩展名）。
    *  - 已挂过该图号的 → 跳过（不重复挂）。
-   *  - 找不到匹配行 → ElMessage.warning（不报错，整批仍可提交）。 */
+   *  - 找不到匹配行 → ElMessage.warning（不报错，整批仍可提交）。
+   *
+   *  2026-10-11 核实：子件图号不再拼后缀、拆分出的独立行也同图号，但**按图号 `find`
+   *  不会误挂** —— 唯一调用点是 `rebuildFromUploads`，它在本函数之前刚把
+   *  `standaloneParts` 整体替换成「单页 PDF 一行」的全新数组并 `assemblies.value = []`，
+   * 此刻表内没有任何合并 / 拆分产生的行，且一个图号最多一行；`mergeSelectedAsAssembly` /
+   *  `splitStandalonePart` 都在这一轮之后才跑，且**不再调用**本函数（它们建出的行
+   *  `three_d_index` 恒 null = 无 3D 模型，与改动前一致）。 */
   function linkThreeDModelsToRows(): void {
     if (threeDModelFiles.value.length === 0) return;
     const warns: string[] = [];
@@ -1234,24 +1239,18 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     } finally {
       pageSlicing = false;
     }
-    const children: AssemblyChildRow[] = pageIndices.map((pi, i) => {
-      const drawingNo = parsed.drawingNo
-        ? pi === 0
-          ? parsed.drawingNo
-          : `${parsed.drawingNo}-${String(pi + 1).padStart(2, '0')}`
-        : '';
-      const name = parsed.partName
-        ? pi === 0
-          ? parsed.partName
-          : `${parsed.partName}-${pi + 1}`
-        : '';
-      return makeAssemblyChild({
+    // 2026-10-11 口径变更：子件图号 / 名称**直接取源值**，不再按页码拼 `-02 / -03`
+    // 后缀 —— 合并为装配件后所有子件与装配件保持一致（后端对 children 是纯透传，
+    // `t_part.drawing_no` 也无唯一约束，`t_part.serial_no` 由 `{asm_serial}-{i:02d}`
+    // 独立保证，天然允许同图号多行）。
+    const children: AssemblyChildRow[] = pageIndices.map((pi, i) =>
+      makeAssemblyChild({
         pdfSourceUid: slices[i]!.uid,
         pageIndex: pi,
-        drawing_no: drawingNo,
-        name: name,
-      });
-    });
+        drawing_no: parsed.drawingNo || '',
+        name: parsed.partName || '',
+      }),
+    );
     const created = makeAssemblyRow({
       // 顶层 pdfSourceUid 仍是**原始** PDF：源文件区预览 / removePdf 级联清理依赖它
       pdfSourceUid: pdfUid,
@@ -1282,23 +1281,17 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     }
     // 按 pageIndex 排序，逐页创建独立行
     const sorted = [...row.mergedFrom].sort((a, b) => a.pageIndex - b.pageIndex);
-    for (const m of sorted) {
-      const parsed = parseDrawingFilename(src.filename);
-      const drawingNo = parsed.drawingNo
-        ? m.pageIndex === 0
-          ? parsed.drawingNo
-          : `${parsed.drawingNo}-${String(m.pageIndex + 1).padStart(2, '0')}`
-        : '';
-      const name = parsed.partName
-        ? m.pageIndex === 0
-          ? parsed.partName
-          : `${parsed.partName}-${m.pageIndex + 1}`
-        : '';
+    // 2026-10-11：拆出的多行**同图号同名称**（直接取源 PDF 文件名解析结果）。
+    // 拆开后的行本就是独立零件，与合成行同图号是必然结果 —— `t_part.drawing_no`
+    // 无唯一约束，唯一性由 `serial_no` 单独保证。
+    const parsed = parseDrawingFilename(src.filename);
+    // 每页一行：字段全部来自同一个源文件，逐页循环只是行数不同
+    for (const _page of sorted) {
       standaloneParts.value.push(
         makeStandaloneRow({
           pdfSourceUid: originUid,
-          drawing_no: drawingNo,
-          name: name,
+          drawing_no: parsed.drawingNo || '',
+          name: parsed.partName || '',
         }),
       );
     }
@@ -1585,32 +1578,32 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     } catch (e) {
       rollbackPushedSources([manualSource.uid, ...slices.map((s) => s.uid)]);
       ElMessage.error(
-        phase === 'pages' ? pageCountFailedMessage(manualSource, e) : sliceFailedMessage(manualSource, e),
+        phase === 'pages'
+          ? pageCountFailedMessage(manualSource, e)
+          : sliceFailedMessage(manualSource, e),
       );
       return;
     } finally {
       pageSlicing = false;
     }
+    // 2026-10-11 口径变更：每个子件**直接取手动输入框的值**，与页数无关 ——
+    // 不再拼 `-01 / -02` 后缀（与「合并为装配件」入口同口径，两条入口天然统一）。
+    const asmDrawingNo = manualAsmForm.drawing_no.trim();
+    const asmName = manualAsmForm.name.trim() || asmDrawingNo;
     const children: AssemblyChildRow[] = [];
     for (let p = 0; p < totalPages; p++) {
       children.push(
         makeAssemblyChild({
           pdfSourceUid: slices[p]!.uid,
           pageIndex: p,
-          drawing_no:
-            totalPages === 1
-              ? manualAsmForm.drawing_no.trim()
-              : `${manualAsmForm.drawing_no.trim()}-${String(p + 1).padStart(2, '0')}`,
-          name:
-            totalPages === 1
-              ? manualAsmForm.name.trim() || manualAsmForm.drawing_no.trim()
-              : `${manualAsmForm.name.trim() || manualAsmForm.drawing_no.trim()}-${p + 1}`,
+          drawing_no: asmDrawingNo,
+          name: asmName,
         }),
       );
     }
     const created = makeAssemblyRow({
       pdfSourceUid: pdfUid,
-      drawing_no: manualAsmForm.drawing_no.trim(),
+      drawing_no: asmDrawingNo,
       name: manualAsmForm.name.trim(),
       // 2026-10-05：默认「无总装图」，与「合并为装配件」一致。默认把第 1 页当总装图会
       // 让「有总装图 ⇒ 打印额外出总装图页 + 序列号背面」这条后端守卫在用户没要求时也被
@@ -2575,6 +2568,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
         // 最后弹「成功」。所以用后端回显的 drawing_no 逐个对账，不符即整组不记账。
         // 只容忍 null / 空白差异（空图号在库里是 NULL、回显也就 null），真实值不一致一律
         // 当错序处理。
+        //
+        // 2026-10-11 能力收窄：子件图号不再拼后缀，全部与装配件一致 ⇒ 本对账**只能查出
+        // 图号真的不同**（回显了别的装配件的子件、被截断、被转义），查不出「N 个子件之间
+        // 纯错序」—— 那 N 个子件在建单请求里除 page_index 外逐字段相同，而后端不回显
+        // page_index，前端手上没有任何可区分的锚点。这是「子件图号与装配件一致」这一产品
+        // 取意的必然结果，不是漏做。
         children.forEach((child, i) => {
           if (!child?.id) throw new Error(`响应第 ${i + 1} 个子件缺 id`);
           if ((child.drawing_no ?? '').trim() !== effChildren[i]!.drawing_no.trim()) {

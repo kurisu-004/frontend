@@ -20,6 +20,16 @@
   也就没有存在意义了。按钮显隐仍由「绑定架 zone 并集」决定，判据从
   `useScanShelfStore` 换成了共享 `useProductionShelvesQuery` × `auth.boundShelves`
   —— store 已随作业架一起删除，而显隐规则是现场账号权限的一部分，不能跟着一起没。
+
+  2026-10-11 新增第四个入口「查看持有」：工人在这一页还没领件时看不到任何持有信息
+  （徽章挂在报工台布局里，本页自己画顶栏），而工人在动手之前就该知道手上有什么。
+  它**不是报工动作**（不进 `useScanSession`、不跳页、不写任何状态），只是一个只读入口：
+    · 显隐只看「扫到工人」（`worker.id`），与三个动作按钮的 zone 判定完全无关 ——
+      没绑架的账号也能看自己持有什么；
+    · 角标与弹窗都读同一条 `qk.scanHeld`（params 与徽章 / 放回页 / 送检页逐字一致
+      ⇒ 同屏去重），本页不新增任何请求；
+    · 三个动作按钮的显隐逻辑与 `noActionReason` 口径**一字未动**。
+  网格因此从 3 列改为 2×2（理由见 `.action-grid` 的注释）。
 -->
 
 <template>
@@ -50,7 +60,7 @@
       <div v-else-if="noActionReason" style="text-align: center; padding: 40px 0; color: #909399">
         {{ noActionReason }}
       </div>
-      <div v-else :class="['action-grid', { 'action-grid--two': !showInspect }]">
+      <div v-else :class="['action-grid', { 'action-grid--row': !showInspect }]">
         <el-button
           v-if="showPickUp"
           type="primary"
@@ -84,22 +94,44 @@
           <span class="action-label">送 检</span>
           <span class="action-desc">全部工序完成，送到品检区</span>
         </el-button>
+        <!-- 2026-10-11 新增：第四个入口「查看持有」。它**不是**报工动作，只是让工人在
+             这一页就能看到手上有什么（角标是已加载件数）—— 徽章挂在报工台布局里，
+             本页自己画顶栏，拿不到。显隐只看「扫到工人」，与三个动作按钮的货架 zone 判定
+             **完全无关**：没绑架的账号也能看自己持有什么，那是只读信息。 -->
+        <el-button
+          v-if="showHeld"
+          type="info"
+          size="large"
+          class="action-btn"
+          data-testid="held-btn"
+          @click="heldDialogOpen = true"
+        >
+          <el-icon :size="48"><Tickets /></el-icon>
+          <span class="action-label">查 看</span>
+          <span class="action-desc">
+            查看当前持有的零件<template v-if="heldCount > 0">（{{ heldCount }} 件）</template>
+          </span>
+        </el-button>
       </div>
     </div>
+
+    <HeldPartsDialog v-model="heldDialogOpen" :worker-id="worker ? String(worker.id) : null" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeMount } from 'vue';
+import { computed, onBeforeMount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { Avatar, Back, Box, Check, Refresh } from '@element-plus/icons-vue';
+import { Avatar, Back, Box, Check, Refresh, Tickets } from '@element-plus/icons-vue';
 import {
   ACTION_LABEL,
   useScanSession,
   type WorkAction,
 } from '@/views/production/scan/composables/useScanSession';
 import { useProductionShelvesQuery } from '@/composables/queries/useProductionShelvesQuery';
+import { useScanHeldQuery } from '@/views/production/scan/composables/useScanListQuery';
+import HeldPartsDialog from '@/views/production/scan/components/HeldPartsDialog.vue';
 import { useAuthStore } from '@/stores/auth';
 
 const router = useRouter();
@@ -153,6 +185,19 @@ const noActionReason = computed<string | null>(() => {
   if (auth.boundShelves.length > 0) return null;
   return '本账号未绑定货架，请联系管理员在「账号管理」为本账号绑定货架';
 });
+
+// 2026-10-11：「查看持有」按钮 + 它的角标。数据源是同一条 `qk.scanHeld`
+// （params 与徽章 / 放回页 / 送检页逐字一致 ⇒ 同屏去重，本页不新增任何请求），
+// `silent: true` 的错误由 `HeldPartsDialog` 渲染进面板，不在这里弹 toast。
+// 只取 `items.length` 当角标：那是「已加载」的件数，后端 limit 截断时会小于 total，
+// 但角标位没有空间写「已加载 N（共 M）」，且这个数字只用于「要不要点进去看看」。
+const heldQuery = useScanHeldQuery(
+  () => (worker.value?.id ? { workerId: String(worker.value.id), limit: 200 } : null),
+  { silent: true },
+);
+const heldCount = computed(() => heldQuery.query.data.value?.items.length ?? 0);
+const showHeld = computed<boolean>(() => !!worker.value?.id);
+const heldDialogOpen = ref(false);
 
 onBeforeMount(() => {
   // 不 await 货架请求：按钮显隐由 boundZones 派生，拉取在飞时 shelfLoading 为 true、
@@ -251,9 +296,14 @@ function rescanBadge(): void {
   margin: 0 0 32px;
 }
 
+/**
+ * 2×2 而不是一行 4 列（2026-10-11 有意选择）：`content` 最大宽 1100px、按钮高 240px，
+ * 4 列时每列只有约 250px —— 放不下 48px 图标 + 28px 字距 4px 的标签 + 两行描述文案，
+ * 文案会被挤成两行甚至截断。2×2 每列约 520px，宽裕；HMI 触屏上 2×2 也是更好按的排布。
+ */
 .action-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 24px;
 }
 
@@ -282,7 +332,11 @@ function rescanBadge(): void {
   margin-top: 4px;
 }
 
-.action-grid--two {
-  grid-template-columns: repeat(2, 1fr);
+/**
+ * 只绑生产架时按钮是 3 个（取件 / 放回 / 查看持有），排成一行三列比塞进 2×2 留一个空洞
+ * 好看。按钮数只可能是 2 / 3 / 4（`showPickUp` 与 `showReturn` 恒同真同假）。
+ */
+.action-grid--row {
+  grid-template-columns: repeat(3, 1fr);
 }
 </style>

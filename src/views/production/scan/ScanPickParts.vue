@@ -159,10 +159,12 @@
                   >加急</el-tag
                 >
                 <!-- 2026-10-04：chip 只显示系统交期，无值显示 '-'（恒渲染，不加 v-if）。
-                     计划交期只作排序键、不上屏。⚠️ 后端在这两个端点上把
-                     planned_delivery_date 写死 '1970-01-01'、system_delivery_date 恒 null
-                     （已在 scanPartRowSchema 的 transform 里归一成 null）⇒ 后端补真实投影
-                     之前，全仓卡片这一位都会是 '-'，是发布顺序问题、不是渲染缺陷。 -->
+                     两个交期字段不是一回事：`planned_delivery_date` 是 `t_part` 上的真实
+                     计划交期，`system_delivery_date` 是后端系统推算的交付日、未推算时为
+                     null（两者口径见 composables/scanSchema.ts）。本页只用系统交期，
+                     取不到就显示 '-'，不拿计划交期顶替；计划交期上屏在持有件列表
+                     （components/HeldPartsList.vue），排序里用到本键的那一支见
+                     composables/useScanPartsSort.ts。 -->
                 <DeliveryDateChip :system-delivery-date="p.system_delivery_date" />
               </div>
 
@@ -223,34 +225,19 @@
 
       <div v-else-if="previewFile && isImage(previewFile.file_type)" class="image-preview-wrap">
         <el-image
-          v-if="!isHeic(previewFile.file_type)"
           :src="previewBlobUrl"
           :preview-src-list="[previewBlobUrl]"
           :initial-index="0"
           fit="contain"
           style="max-width: 100%; max-height: calc(100vh - 80px)"
         />
-        <div v-else class="non-pdf-preview">
-          <el-icon :size="48" color="#67c23a"><Picture /></el-icon>
-          <p class="non-pdf-name">{{ previewFile.original_filename }}</p>
-          <p class="non-pdf-hint">HEIC 格式浏览器不直接支持预览，请下载后查看。</p>
-          <el-button type="primary" @click="downloadPreview">
-            <el-icon><Download /></el-icon><span>下载文件</span>
-          </el-button>
-        </div>
       </div>
 
       <div v-else class="non-pdf-preview">
         <el-icon :size="48" color="#909399"><Files /></el-icon>
         <p class="non-pdf-name">{{ previewFile?.original_filename || '该零件暂无图纸' }}</p>
-        <p class="non-pdf-hint">
-          {{
-            previewFile
-              ? `${previewFile.file_type} 文件不支持浏览器内嵌预览，请下载后查看。`
-              : '请上传图纸后再预览。'
-          }}
-        </p>
-        <el-button v-if="previewFile" type="primary" @click="downloadPreview">
+        <p class="non-pdf-hint">{{ nonPdfHint }}</p>
+        <el-button v-if="previewFile && canDownload" type="primary" @click="downloadPreview">
           <el-icon><Download /></el-icon><span>下载文件</span>
         </el-button>
       </div>
@@ -270,7 +257,6 @@ import {
   Download,
   Files,
   Loading,
-  Picture,
   Refresh,
   View,
   Warning,
@@ -278,6 +264,12 @@ import {
 import { api } from '@/api/http';
 import PdfViewer from '@/components/PdfViewer.vue';
 import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
+// 2026-10-11：「下载文件」按钮的角色闸门。后端把 part_file 的列表 / content 对
+// SHELF_ACCOUNT 放开了（工控机预览图纸打的就是这两条），但 `/part-files/{id}/url`
+// **刻意没放开**（COS 预签直链可外传）⇒ 不挂闸门就是「可见但必 403」。判据在
+// utils/partsPermissions，与后端 require_any_role 白名单同集合。
+import { usePermissions } from '@/composables/usePermissions';
+import { canDownloadPartFile } from '@/utils/partsPermissions';
 import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
@@ -352,9 +344,6 @@ function isPdf(t: string): boolean {
 const IMAGE_TYPES = new Set(['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'TIF', 'TIFF', 'WEBP']);
 function isImage(t: string): boolean {
   return IMAGE_TYPES.has(t.toUpperCase());
-}
-function isHeic(t: string): boolean {
-  return t.toUpperCase() === 'HEIC';
 }
 
 onBeforeMount(() => {
@@ -438,8 +427,34 @@ function onPreviewClosed(): void {
   previewFile.value = null;
 }
 
+// 2026-10-11：下载入口闸门（判据见 utils/partsPermissions 与上面那段 import 注释）。
+const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
+const canDownload = computed<boolean>(() =>
+  canDownloadPartFile({
+    MANAGER: isManager.value,
+    CLERK: isClerk.value,
+    INSPECTOR: isInspector.value,
+    CNC_PROGRAMMER: isCncProgrammer.value,
+  }),
+);
+
+/**
+ * 非 PDF 图纸那张卡片的提示文案，与「下载文件」按钮**共用 `canDownload` 闸门**：
+ * 拿不到下载入口的角色不能读到一句「请下载后查看」—— 那是指向一个不在屏幕上的
+ * 按钮的死胡同。改口成「请联系管理员」是把已知取舍如实讲出来，不是报错兜底。
+ */
+const nonPdfHint = computed<string>(() => {
+  if (!previewFile.value) return '请上传图纸后再预览。';
+  return canDownload.value
+    ? `${previewFile.value.file_type} 文件不支持浏览器内嵌预览，请下载后查看。`
+    : `${previewFile.value.file_type} 文件不支持浏览器内嵌预览，当前账号不支持下载，请联系管理员获取。`;
+});
+
 async function downloadPreview(): Promise<void> {
   if (!previewFile.value) return;
+  // 与按钮的 v-if 同一道守卫：按钮是 DOM 闸门，函数体是行为闸门 —— 只藏按钮的话，
+  // 任何一个仍能触达本函数的地方（控制台、后续新增的快捷键）都会变成「点了必 403」。
+  if (!canDownload.value) return;
   try {
     const url = await getDownloadUrl(previewFile.value.id);
     const a = document.createElement('a');
