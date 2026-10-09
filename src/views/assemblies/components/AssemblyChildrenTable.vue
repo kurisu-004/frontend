@@ -167,7 +167,7 @@
       label-width="96px"
     >
       <el-form-item label="图号" prop="drawing_no">
-        <el-input v-model="localAddChildForm.drawing_no" placeholder="例如：E42FX1020107101-1" />
+        <el-input v-model="localAddChildForm.drawing_no" placeholder="例如：E42FX1020107101" />
       </el-form-item>
       <el-form-item label="名称" prop="name">
         <el-input v-model="localAddChildForm.name" placeholder="例如：基础板" />
