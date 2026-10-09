@@ -21,6 +21,10 @@
   2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
   （有链 = 绿，规则见 `@/views/production/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
   加急由红底 + 「加急」tag 承担，两者都不进边框。
+
+  2026-10-11：**支持指定送检数量**（后端 worker-scan 新增可选 `quantity`，缺省 = 整批）。
+  扫码确认后弹 `QuantityDialog` 选本次送检多少，确认后才提交；部分送检时余量留在工人
+  手上继续出现在「已持有」里，行数不变。
 -->
 
 <template>
@@ -87,7 +91,7 @@
           <el-icon :size="20" color="#e6a23c"><Aim /></el-icon>
           <span class="confirm-text">
             已选 <strong>{{ selectedPart.serial_no || selectedPart.drawing_no }}</strong> ·
-            {{ selectedPart.name }} · 送检数量 {{ selectedPart.quantity }}
+            {{ selectedPart.name }} · 送检数量 {{ selectedQty ?? selectedPart.quantity }}
             · 请<strong>扫描该零件条码</strong>确认送检
           </span>
           <el-button size="small" @click="cancelSelect">取消选择</el-button>
@@ -224,8 +228,10 @@ const previewTitle = computed<string>(
   () => `预览 — ${previewPart.value?.serial_no || previewPart.value?.drawing_no || ''}`,
 );
 
-// 2026-10-10：货架选择整块下线（目标架由后端按负载自动选）。showQtyDialog 保留：
-// 正常路径已不走它，但它是 worker-scan 整批语义的旧调试入口。
+// 2026-10-11：**数量步骤接进正常流程**（worker-scan 新增可选 `quantity`，见
+// `api/productionScan.contract.ts::ScanWorkerRequest.quantity`）。此前它是 worker-scan
+// 整批语义的旧调试入口、常为 false。现在它是提交前的最后一步：扫码命中选中之后、
+// `submitInspect` 之前。取消数量弹窗 = 整次送检作废。
 const showQtyDialog = ref(false);
 
 // --- 自动补料告知（worker-scan 同事务 refill；抢到批次才弹窗） ---
@@ -272,7 +278,9 @@ async function applyScanSelection(p: ScanPartRowSchema): Promise<void> {
   awaitingScan.value = false;
   const key = String(p.batch_id || p.id);
   await scrollCardIntoView(key);
-  await submitInspect();
+  // 2026-10-11：选数量（`onQtyConfirm` 才真正提交）。点选入口本身不提交 —— 送检必须
+  // 扫到条码才走到这里，数量弹窗是这条链上的最后一步。
+  openQtyDialog();
 }
 
 async function onScanToSelect(rawCode: string): Promise<void> {
@@ -337,6 +345,9 @@ async function submitInspect(): Promise<void> {
     ElMessage.warning('选择已重置，请重新选择零件');
     return;
   }
+  // 2026-10-11：数量在 await 之前取出来（cancelSelect 会把 selectedPart 清空）。
+  // 正常路径恒由 `onQtyConfirm` 写过 selectedQty，兜底取批次全量（= 整批送检）。
+  const quantity = selectedQty.value ?? selectedPart.value.quantity;
   try {
     const res = await workerScanMutation.mutateAsync({
       serial_no: selectedPart.value.serial_no ?? '',
@@ -344,6 +355,11 @@ async function submitInspect(): Promise<void> {
       event_type: 'INSPECTED',
       // 2026-10-10：**不发任何货架字段** —— 目标品检架由后端按负载自动选。
       batch_id: selectedPart.value.batch_id ?? null,
+      // 2026-10-11：**必须发 JSON 字符串**（后端 deserialize_i64_opt 只解 str，
+      // 发 number 是 422 纯文本）。< 总量时后端自动拆批，本次流转作用在新批次上，
+      // 余量留在工人手上继续出现在「已持有」里 ⇒ 前端不做任何本地删行假定，
+      // 列表刷新只依赖 mutation 的失效链（见 `useScanWrite.ts`）。
+      quantity: String(quantity),
     });
     // 成功文案在 await 后立即取值（见 cancelSelect 会把 selectedPart 清空）
     const serialNo = selectedPart.value.serial_no;
@@ -360,6 +376,8 @@ async function submitInspect(): Promise<void> {
     }
     // mutateAsync 返回时 onSuccess 的失效链已 settle（TanStack await onSuccess 返回的
     // promise）⇒ 列表与徽章都是刷新后的状态，此时自增 token 开抽屉。
+    // ⚠️ **部分送检时这一行仍在列表里**（余量留在工人手上，数量变小、行数不变）：
+    // 本页不据此做任何本地增删，全靠失效链重拉。
     heldChangeToken.value++;
   } catch (e) {
     // 失败也走全套失效（mutation 的 onError）：40901 OCC / 20103 状态非法都意味着
@@ -369,8 +387,6 @@ async function submitInspect(): Promise<void> {
 }
 
 async function onQtyConfirm(qty: number): Promise<void> {
-  // worker-scan 不支持部分数量；保留 dialog 入口以兼容旧调试路径，
-  // 正常流程已由 applyScanSelection → submitInspect 跳过此步。
   showQtyDialog.value = false;
   if (submitting.value) return;
   if (!selectedPart.value || !worker.value) {
@@ -379,6 +395,17 @@ async function onQtyConfirm(qty: number): Promise<void> {
   }
   selectedQty.value = qty;
   await submitInspect();
+}
+
+/**
+ * 提交前的最后一步：选本次送检的数量。
+ *
+ * 上限取 `selectedPart.quantity`（批次全量）—— 后端 `q > batch.quantity` 返 20111，
+ * 弹窗直接不让人选出界外的值。默认值也是全量（QuantityDialog 打开时取 max）。
+ */
+function openQtyDialog(): void {
+  if (!selectedPart.value) return;
+  showQtyDialog.value = true;
 }
 
 function cancelSelect(): void {

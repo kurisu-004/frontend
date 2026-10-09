@@ -27,6 +27,11 @@
   - 选件 → （必要时选工序）→ 提交
   - 不需要扫码确认（点选即确认；旧流程「扫一批条码」已替换不保留）
 
+  2026-10-11：**支持指定归还数量**（后端 worker-scan 新增可选 `quantity`，缺省 = 整批）。
+  工序定下之后（「按链放回」或手选工序）弹 `QuantityDialog` 选本次归还多少，确认后才提交；
+  部分放回时余量留在工人手上继续出现在「已持有」里，行数不变。这一步是**叠加**在 NEXT 分支
+  那个确认框之后的，不改它「三个出口 + 禁右上角 ×」的约束。
+
   2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
   （有链 = 绿，规则见 `@/views/production/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
   加急由红底 + 「加急」tag 承担，两者都不进边框。
@@ -98,9 +103,8 @@
           <el-icon :size="20" color="#67c23a"><CircleCheckFilled /></el-icon>
           <span class="confirm-text">
             已选 <strong>{{ selectedPart.serial_no || selectedPart.drawing_no }}</strong> ·
-            {{ selectedPart.name }} · 归还数量 {{ selectedPart.quantity }} · 下一工序：{{
-              selectedNextProcessName || '未选'
-            }}
+            {{ selectedPart.name }} · 归还数量 {{ selectedQty ?? selectedPart.quantity }} ·
+            下一工序：{{ selectedNextProcessName || '未选' }}
           </span>
           <!-- 2026-10-04：提交在途时置灰，不是不置灰也点不动（onCancelSelect 的守卫照旧
                拦着，只是把「按了没反应」变成「按不了」，HMI 上工人不会以为按钮坏了）。 -->
@@ -304,8 +308,11 @@ const contentRef = ref<HTMLElement | null>(null);
 const selectedNextProcessCode = ref<string>('');
 const selectedNextProcessName = ref<string>('');
 
-// 2026-10-10：货架选择整块下线（目标架由后端按负载自动选）。showQtyDialog 保留：
-// 正常路径已不走它，但它是 worker-scan 整批语义的旧调试入口。
+// 2026-10-11：**数量步骤接进正常流程**（worker-scan 新增可选 `quantity`，见
+// `api/productionScan.contract.ts::ScanWorkerRequest.quantity`）。此前它是 worker-scan
+// 整批语义的旧调试入口、常为 false。现在两条提交前的最后一步都经过它：
+// NEXT 分支「按链放回」与 TAIL / NONE 分支「选完工序」之后、`submitReturn` 之前。
+// 取消数量弹窗 = 整次放回作废（`@cancel` 接 `onCancelSelect`，与另外三个弹窗同一口径）。
 const showQtyDialog = ref(false);
 
 // --- 自动补料告知（worker-scan 同事务 refill；抢到批次才弹窗） ---
@@ -492,8 +499,9 @@ function onProcessPicked(process: Process): void {
   selectedNextProcessCode.value = process.code;
   selectedNextProcessName.value = `${process.code} ${process.name}`;
   showProcessDialog.value = false;
-  // 2026-10-10：选完工序直接提交（原先这里开货架 picker、再由它的 confirm 触发提交）。
-  void submitReturn();
+  // 2026-10-11：选完工序后先选数量（`onQtyConfirm` 才真正提交）。原先这里直接提交，
+  // 2026-10-10 之前还多一步货架 picker —— 目标架已由后端按负载自动选（见文件头）。
+  openQtyDialog();
 }
 
 function onProcessCancel(): void {
@@ -553,7 +561,12 @@ function openChainConfirm(p: ScanPartRowSchema): void {
   showChainConfirm.value = true;
 }
 
-/** 「按链放回」：写死下一道工序后走提交路径。 */
+/**
+ * 「按链放回」：下一道工序已由链定下，接下来是**选数量**（`onQtyConfirm` 才真正提交）。
+ *
+ * ⚠️ 本框是 NEXT 分支唯一的提交入口且 `:show-close="false"`（理由见模板注释）——
+ * 数量步骤是**叠加在它之后**的一步，不改本框的三个出口与关闭权。
+ */
 async function onChainConfirm(): Promise<void> {
   showChainConfirm.value = false;
   if (submitting.value) return;
@@ -562,13 +575,25 @@ async function onChainConfirm(): Promise<void> {
     cancelSelect();
     return;
   }
-  await submitReturn();
+  openQtyDialog();
 }
 
 /** 「换一道工序」：关掉确认框后走与「链字段解析不出」**同一个**落回出口。 */
 function onChainManual(): void {
   showChainConfirm.value = false;
   fallBackToManualProcess();
+}
+
+/**
+ * 提交前的最后一步：选本次放回的数量。
+ *
+ * 上限取 `selectedPart.quantity`（批次全量）—— 后端 `q > batch.quantity` 返 20111，
+ * 弹窗直接不让人选出界外的值。默认值也是全量（QuantityDialog 打开时取 max），
+ * 工人只想整批放回时点一下「最大化 / 确定」即可，不必动加减。
+ */
+function openQtyDialog(): void {
+  if (!selectedPart.value) return;
+  showQtyDialog.value = true;
 }
 
 /** 「取消」：整次放回作废。 */
@@ -602,6 +627,9 @@ async function submitReturn(): Promise<void> {
   const batchId = selectedPart.value.batch_id ?? null;
   const nextProcessId = selectedNextProcessId.value;
   const nextProcessName = selectedNextProcessName.value ?? '';
+  // 2026-10-11：数量在 await 之前取出来（同一批「不再回头读 state」的道理，见上）。
+  // 正常路径恒由 `onQtyConfirm` 写过 selectedQty，兜底取批次全量（= 整批放回）。
+  const quantity = selectedQty.value ?? selectedPart.value.quantity;
   try {
     const res = await workerScanMutation.mutateAsync({
       serial_no: serialNo,
@@ -610,6 +638,11 @@ async function submitReturn(): Promise<void> {
       // 2026-10-10：**不发 shelf_id** —— 目标架由后端按负载自动选。
       next_process_id: nextProcessId,
       batch_id: batchId,
+      // 2026-10-11：**必须发 JSON 字符串**（后端 deserialize_i64_opt 只解 str，
+      // 发 number 是 422 纯文本）。< 总量时后端自动拆批，本次流转作用在新批次上，
+      // 余量留在工人手上继续出现在「已持有」里 ⇒ 前端不做任何本地删行假定，
+      // 列表刷新只依赖 mutation 的失效链（见 `useScanWrite.ts`）。
+      quantity: String(quantity),
     });
     cancelSelect();
     // ⚠️ **成功文案按响应的 `scan.event_type` 分支**：客户端发的是 RETURNED，但当该批次的
@@ -631,6 +664,8 @@ async function submitReturn(): Promise<void> {
     }
     // mutateAsync 返回时 onSuccess 的失效链已 settle（TanStack await onSuccess 返回的
     // promise）⇒ 列表与徽章都是刷新后的状态，此时自增 token 开抽屉。
+    // ⚠️ **部分放回时这一行仍在列表里**（余量留在工人手上，数量变小、行数不变）：
+    // 本页不据此做任何本地增删，全靠失效链重拉。
     heldChangeToken.value++;
   } catch (e) {
     // 失败也走全套失效（mutation 的 onError）：40901 OCC / 20103 状态非法都意味着
@@ -640,8 +675,6 @@ async function submitReturn(): Promise<void> {
 }
 
 async function onQtyConfirm(qty: number): Promise<void> {
-  // 2026-09-15 Phase 5：worker-scan 不支持部分数量；保留 dialog 入口以兼容
-  // 旧调试路径，正常流程已由 openChainConfirm / onProcessPicked → submitReturn 跳过此步。
   showQtyDialog.value = false;
   if (submitting.value) return;
   if (!selectedPart.value || !selectedNextProcessId.value || !worker.value) {

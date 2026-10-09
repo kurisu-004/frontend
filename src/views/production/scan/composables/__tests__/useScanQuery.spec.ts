@@ -352,9 +352,15 @@ describe('W 组：写 mutation 的失效链', () => {
       event_type: 'RETURNED',
       next_process_id: '190000000000021',
       batch_id: '190000000000111',
+      // 2026-10-11：worker-scan 新增可选 quantity（放回 / 送检指定数量）。
+      // **必须发 JSON 字符串** —— 后端 deserialize_i64_opt 只解 str，发 number 是
+      // 422 纯文本；mutation 不做守门也不加工（原样透传给 api 层），所以这层
+      // 断言的是「payload 原样到达 api」。
+      quantity: '3',
     });
     // 响应原样交给调用方（放回页按 res.scan.event_type 分成功文案）
     expect(res.scan.event_type).toBe('WORKER_SCAN_RETURNED');
+    expect(h.scanWorker.mock.calls[0]![0]).toMatchObject({ quantity: '3' });
     expect(keys).toEqual([qk.scanPickablePrefix, qk.scanHeldPrefix]);
     spy.mockRestore();
     scope.stop();
