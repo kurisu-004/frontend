@@ -192,6 +192,16 @@ export const STUB_CHAINS: Record<
       process_id: string;
       estimated_minutes: number;
       note: string | null;
+      /**
+       * 2026-10-10 补：GET /prod/process-chains/{id} 的出参**恒带** step.version
+       * （后端 `ProcessChainStepOut.version: i32`，无 skip_serializing_if），而
+       * `POST /prod/process-chains/by-part/{part_id}` 的请求 DTO 里它是可选的 ——
+       * 两者共用 `ProcessChainStepDto` 才让这个差异被 fixture 抹平。工序链读端点自
+       * 2026-10-10 起在 api 层有 Zod 守门（`api/processChain.ts::getProcessChainById`
+       * 内的 `processChainSchema.parse`），少这个键 ⇒ 整条响应 parse 失败 ⇒ 制定工序页
+       * 的链加载失败、编辑器 steps 恒空。守门一上就当场炸出来的是 fixture，不是生产代码。
+       */
+      version: number;
     }>;
   }
 > = {
@@ -204,6 +214,7 @@ export const STUB_CHAINS: Record<
         process_id: '2000000000001',
         estimated_minutes: 45,
         note: '注意装夹方向',
+        version: 1,
       },
       {
         id: '6000000000002',
@@ -211,6 +222,7 @@ export const STUB_CHAINS: Record<
         process_id: '2000000000004',
         estimated_minutes: 90,
         note: null,
+        version: 1,
       },
       {
         id: '6000000000003',
@@ -218,6 +230,7 @@ export const STUB_CHAINS: Record<
         process_id: '2000000000003',
         estimated_minutes: 15,
         note: null,
+        version: 1,
       },
     ],
   },
@@ -230,6 +243,7 @@ export const STUB_CHAINS: Record<
         process_id: '2000000000001',
         estimated_minutes: 60,
         note: null,
+        version: 1,
       },
       {
         id: '6000000000011',
@@ -237,6 +251,7 @@ export const STUB_CHAINS: Record<
         process_id: '2000000000002',
         estimated_minutes: 80,
         note: '精加工公差 ±0.01',
+        version: 1,
       },
     ],
   },

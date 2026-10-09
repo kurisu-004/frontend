@@ -446,7 +446,9 @@ function onBatchSelect(b: PartBatch | null): void {
  * 口径见 `./composables/inspectionBatch.ts::resolveInspectionBatch`：选中的批次是品检
  * 中就用它，否则回落列表里第一个 INSPECTION 批次。
  */
-const inspectionBatch = computed(() => resolveInspectionBatch(batches.value, selectedBatchId.value));
+const inspectionBatch = computed(() =>
+  resolveInspectionBatch(batches.value, selectedBatchId.value),
+);
 
 // 写操作层：7 个 mutation 在 `usePartDetailActions` 内。它不认识对话框、不 import
 // vue-router —— 每个 action 返回 Promise<boolean>，后续（关框 / 跳转）由本页决定。

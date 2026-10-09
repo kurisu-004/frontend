@@ -626,10 +626,7 @@ export interface CompletePayload {
   note?: string | null;
 }
 
-export async function completePart(
-  batchId: string,
-  payload: CompletePayload,
-): Promise<PartOutDto> {
+export async function completePart(batchId: string, payload: CompletePayload): Promise<PartOutDto> {
   const resp = await api.post<PartOutDto>(
     `/prod/batches/${encodeURIComponent(batchId)}/complete`,
     payload,

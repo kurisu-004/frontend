@@ -13,10 +13,16 @@
 // 消费侧据此渲染出的界面恒为空或恒为兜底文案。这类「字段是假的」只能靠
 // 「以 VO 为准的 schema」当场炸出来，靠人工读类型看不出来。
 //
-// 守门点：2026-10-10 详情页取数迁 TanStack Query，本文件的前两个 schema 分别接在
-// `usePartDetailQuery.ts` / `usePartEventsQuery.ts` 的 **queryFn** 上（api 层仍只发
-// 请求 + `import type` 标注返回类型，不 parse —— CLAUDE.md「守门点随分层搬家」）。
-// 第三个（工序链）目前由 `useProcessChain.ts` 直接调 api，尚无 queryFn 承载。
+// 守门点（三个各不相同，照 CLAUDE.md「守门点随分层搬家」）：
+//   1. `partDetailSchema` → `usePartDetailQuery.ts` 的 **queryFn**；
+//   2. `partEventListSchema` → `usePartEventsQuery.ts` 的 **queryFn**；
+//   3. `processChainSchema` → **api 层** `api/processChain.ts::getProcessChainById`
+//      （2026-10-10 新增，review 第 1 轮）。工序链的两个消费方 —— 零件详情页的
+//      `useProcessChain` 与「制定工序」页的 `useProcessDesignStore` —— 各写各的
+//      fetch / queryFn，没有一个统一的 queryFn 可挂；而「api 层守门」正是 CLAUDE.md
+//      为「没有 queryFn 承载的调用」留的口子（同 `listRepairBatches`）。
+// 1 / 2 的 api 层函数（`getPart` / `listPartEvents`）只发请求 + `import type` 标注返回
+// 类型，不 parse —— parse 返回深拷贝，多一层等于每屏数据被校验并克隆两遍。
 
 import { z } from 'zod';
 import { ORDER_STATUSES } from '@/types/parts';
@@ -184,6 +190,9 @@ export type PartEventListData = z.infer<typeof partEventListSchema>;
 //
 // 本 schema 不接 `.strict()`：这条链的字段集不在本次重构的重点守卫范围内，
 // 多余键（后端将来加派生列）不应让零件详情页直接白屏。
+//
+// 守门点在 api 层（`getProcessChainById` 内 `.parse()`），消费侧零改动 —— 零件详情页
+// 的 `useProcessChain` 与「制定工序」页的 `useProcessDesignStore` 都不需要知道它。
 // ============================================================
 
 export const processChainStepSchema = z.object({

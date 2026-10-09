@@ -33,15 +33,32 @@ import {
   type ProcessDesignPartListResultSchema,
 } from '@/composables/queries/schemas';
 import type { ProcessChainByPartDto, UpsertProcessChainRequest } from './processChain.contract';
+import { processChainSchema } from '@/views/parts/detail/composables/partDetailSchema';
 
 /** GET /api/v2/prod/process-chains/{chain_id}
  *  按链 id 加载工艺链；响应 shape 与 by-part 一致（ProcessChainOut，已无 part_id）。
- *  无链 / 链已删 → 后端 20701 BIZ_PROCESS_CHAIN_NOT_FOUND（HTTP 404），前端按空链兜底。 */
+ *  无链 / 链已删 → 后端 20701 BIZ_PROCESS_CHAIN_NOT_FOUND（HTTP 404），前端按空链兜底。
+ *
+ *  2026-10-10 新增 Zod 守门（review 第 1 轮 次要 8）：`processChainSchema`（零件详情域
+ *  schema 文件里的第三条）此前只被自己的 spec 引用、生产零消费，是装饰品。守门点选在
+ *  **api 层**而不是新开 query hook，理由照 CLAUDE.md「守门点随分层搬家」：
+ *  「queryFn Zod 守门；**api 层只发请求 + 类型标注**，守门留在 api 层的是那些**没有
+ *  queryFn 承载**的调用」。本函数正好是后者 —— 两个消费方（零件详情页的
+ *  `useProcessChain`、`制定工序` 页的 `useProcessDesignStore`）各自手写 fetch / queryFn，
+ *  没有一个统一的 queryFn 可以挂。放到 api 层则两个消费方都自动受守门，且**只需一处**。
+ *  （`views/parts/detail/...` 是运行时 import 而非 type-only：守门点在本层，需要真值。）
+ *
+ *  零守门的代价照 `listRepairBatches` 的前例已踩过：`is_repairing` 那类「后端恒输出、
+ *  schema 没声明」的键会被**静默 strip**，页面照常渲染、只是某一列永远是空的。
+ *
+ *  ⚠️ 行为不变的部分：404 / 20701 在 HTTP 层就抛，根本走不到 `.parse()` ⇒ 两条消费侧
+ *  各自的「按空链兜底」语义原样保留。 */
 export async function getProcessChainById(chainId: string): Promise<ProcessChainByPartDto> {
-  const resp = await api.get<ProcessChainByPartDto>(
-    `/prod/process-chains/${encodeURIComponent(chainId)}`,
-  );
-  return resp.data;
+  const resp = await api.get<unknown>(`/prod/process-chains/${encodeURIComponent(chainId)}`);
+  // `processChainSchema` 的 `z.infer` 结构上就是 `ProcessChainByPartDto`（step 的
+  // id / version 在 schema 里是必填、在 DTO 里是可选 —— 必填满足可选，方向兼容），
+  // 因此不需要 `as` 强转。
+  return processChainSchema.parse(resp.data);
 }
 
 /** POST /api/v2/prod/process-chains/by-part/{part_id}

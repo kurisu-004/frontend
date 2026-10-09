@@ -105,10 +105,7 @@ export function usePartBatchesQuery(
  *  调用方：拆分 / 取消批次 mutation onSuccess；当前 dashboard PartPreviewDialog
  *  暂不触发（PartPreviewDialog 只展示），本 helper 留作未来 PartDetail.vue
  *  批次操作场景用。返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。 */
-export function invalidatePartBatchesListQuery(
-  qc: QueryClient,
-  partId: string,
-): Promise<void> {
+export function invalidatePartBatchesListQuery(qc: QueryClient, partId: string): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.partBatchesList(partId) }).then(() => undefined);
 }
 

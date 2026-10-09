@@ -6,6 +6,16 @@
     让 wrapCard=true（包 el-card + header）与 wrapCard=false（裸渲染）共用
     同一份 body，避免模板两份 v-if/v-else 重复整张表 + 拆分 dialog。
   - 所有 props 由父组件（PartBatchMonitorCard）注入，子组件不持有任何状态。
+
+  ⚠️ **待验证项（2026-10-10 登记，本轮无法验证）**：本页这一轮第一次进了
+  `<keep-alive :include>`（路由名 `PartDetail`），而本组件里的 `el-table` 是**列宽靠
+  DOM 实测**的 EP 组件。全仓 `onActivated` / `doLayout` 零出现 —— 别处没踩过不等于本
+  页也没事：别的表格页早已被缓存、且它们进 keep-alive 之前就没出现过问题，而本页是
+  **新变量**。切走再回来时值得留意两类症状：列宽塌陷（列头与单元格对不齐）、选中行高亮
+  残留（`rowClassName` 依赖的父级 `selectedBatchId` 与内部 table 状态脱节）。
+  本轮**不盲改**：真要补的话是 `onActivated` 里取 `tableRef` 调 `doLayout()`，但在没有
+  复现之前加上去是拿一个猜出来的修法换一条新的时序分支。回归时按上面两条症状对一遍，
+  真复现了再补。
 -->
 <template>
   <el-table
