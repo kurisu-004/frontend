@@ -123,8 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from 'vue';
-import { ElTag } from 'element-plus';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { PartBatch } from '@/api/parts';
 import { useDialogSize } from '@/composables/useDialogSize';
 import {
@@ -134,6 +133,7 @@ import {
 } from '@/composables/useColumnVisibility';
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import type { OrderStatus } from '@/types/parts';
+import { buildPartBatchColumnDefs } from '../partBatchColumnDefs';
 import BatchBody from './PartBatchMonitorBody.vue';
 
 const props = withDefaults(
@@ -202,55 +202,14 @@ function onRowClick(row: PartBatch): void {
 }
 
 // 2026-08-27 T22：列顺序拖动 + 可见性。
+// 5 列数据列的 ColumnDef 由工厂产出（`../partBatchColumnDefs.ts`，域根单域专用文件），
 // 「操作」列受 canManageBatches 控制 → 保留为字面量 <el-table-column v-if>，不进 defs。
-// 2026-08-27 修正：原生元素 children 不能传函数（Vue 3 会当 slots 处理 → 渲染为空），改为直接传值。
-const columnDefs: ColumnDef[] = [
-  {
-    key: 'batch_label',
-    label: '批次',
-    minWidth: 110,
-    align: 'center',
-    cellRender: ({ row }) =>
-      h('span', { class: 'batch-label' }, (row as PartBatch).batch_label ?? ''),
-  },
-  {
-    key: 'quantity',
-    label: '数量',
-    width: 80,
-    align: 'right',
-    cellRender: ({ row }) => h('span', null, (row as PartBatch).quantity),
-  },
-  {
-    key: 'status',
-    label: '状态',
-    minWidth: 110,
-    align: 'center',
-    cellRender: ({ row }) => {
-      const r = row as PartBatch;
-      return h(
-        ElTag,
-        { type: props.statusTagType(r.status as OrderStatus), size: 'small', effect: 'plain' },
-        () => props.statusLabelOf(r.status),
-      );
-    },
-  },
-  {
-    key: 'current_holder_display',
-    label: '所在位置',
-    minWidth: 130,
-    align: 'center',
-    showOverflowTooltip: true,
-    cellRender: ({ row }) => h('span', null, (row as PartBatch).current_holder_display || '—'),
-  },
-  {
-    key: 'delivery_note_no',
-    label: '送货单',
-    minWidth: 150,
-    align: 'center',
-    showOverflowTooltip: true,
-    cellRender: ({ row }) => h('span', null, (row as PartBatch).delivery_note_no || '—'),
-  },
-];
+// 传 wrapper 而非把 props 字段直接搬出来：cellRender 每次渲染才调用，直接在 root scope
+// 解构 `props.xxx` 会把值冻结在 setup 那一刻（父级换 helper 就再也不生效）。
+const columnDefs: ColumnDef[] = buildPartBatchColumnDefs({
+  statusTagType: (s) => props.statusTagType(s),
+  statusLabelOf: (s) => props.statusLabelOf(s),
+});
 const columnVisibility = useColumnVisibility(columnDefs, { listKey: 'part_batch_monitor' });
 const drag = useColumnDrag(columnDefs, { listKey: 'part_batch_monitor' });
 

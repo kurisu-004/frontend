@@ -69,10 +69,10 @@ interface Violation {
 //    deliveryNoteLineItemsColumnDefs.ts），那四个本地 render 函数连同它们 import 的
 //    ElTag / RouterLink 一起从本文件消失。
 const EXEMPT: Record<string, string[]> = {
-// ⚠️ 2026-10-09 合并 main（外协域重构）时一并裁掉 5 条 outsource 陈旧登记：
-//    OutsourceList / OutsourceReceivingTab / OutsourceSendableTab 等文件已被外协域
-//    重构改造或移除，对应样式已覆盖（或文件已不存在），登记留着会被「豁免表无陈旧
-//    登记」用例判红。与送货单域那几条是同一类问题。
+  // ⚠️ 2026-10-09 合并 main（外协域重构）时一并裁掉 5 条 outsource 陈旧登记：
+  //    OutsourceList / OutsourceReceivingTab / OutsourceSendableTab 等文件已被外协域
+  //    重构改造或移除，对应样式已覆盖（或文件已不存在），登记留着会被「豁免表无陈旧
+  //    登记」用例判红。与送货单域那几条是同一类问题。
   'components/FileListCard.vue': ['el-upload'],
   'components/UploadStatusCellView.vue': ['el-button', 'el-progress'],
   'views/assemblies/components/AssemblyChildrenTable.vue': ['el-link', 'el-tag'],
@@ -83,7 +83,11 @@ const EXEMPT: Record<string, string[]> = {
   //    （卡片只在扫码建单页里渲染），与 DeliveryNoteLineItemsTable.vue 的 el-tag 同款理由。
   'views/com/delivery/components/DeliveryDraftCard.vue': ['el-table', 'el-tag'],
   'views/com/delivery/components/DeliveryGroupEditor.vue': ['el-form'],
-  'views/parts/detail/components/PartBatchMonitorCard.vue': ['el-tag'],
+  // ⚠️ 2026-10-10 零件详情域拆壳：批次监控卡的 5 列定义（ElTag 的 value-import）搬进
+  //    域根 `views/parts/detail/partBatchColumnDefs.ts` ⇒ PartBatchMonitorCard.vue 不再
+  //    value-import 任何 EP 组件，这条登记随之删除。样式覆盖由宿主页模板里的
+  //    `<el-tag>` 等标签经 resolver 顺带注入（同 usersColumnDefs.ts / deliveryNoteColumnDefs.ts
+  //    同款理由：`.ts` 文件不在本守卫的扫描口径内）。
   'views/parts/list/components/PurchaseOrderImportDialog.vue': ['el-tag', 'el-tooltip'],
   'views/parts/new/components/PartBatchManualTab.vue': ['el-button', 'el-tag'],
   'views/production/components/ProcessTab.vue': ['el-tag'],
