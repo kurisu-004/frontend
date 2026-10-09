@@ -46,7 +46,6 @@
       show-icon
       :title="`部分数据加载失败：${errorMsg}`"
       description="已加载的卡片仍可正常使用；若持续失败请刷新页面或检查网络。"
-      class="load-error"
     />
 
     <!-- 信息卡 -->
