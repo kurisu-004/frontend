@@ -19,6 +19,13 @@
 //   · 不再接收 deps —— 原先传 selectedIds / selectedRows / selectedRowTypes /
 //     getTable 四个（批量下发成功后要把成功的行从三个状态源里摘掉），批量下发下线后
 //     四个都不再被读，留着会让调用点以为它们有用。
+//
+// 2026-10-11 接装配件强制完成。**残留**：常驻在另一个标签页的生产队列看板会残留已完成
+// 工单 —— 候选池判据是 `status='IN_PROCESS' AND location='PRODUCTION_SHELF'`
+// （backend-rust docs/api/queue.md），批次被强推成 COMPLETED 后应当离池，但队列域
+// 没有订阅 PART_FORCE_COMPLETED / ASSEMBLY_FORCE_COMPLETED，看板与徽标计数都要等
+// 用户手动刷新或重新挂载才更新。本页的 `invalidateQueries` 到不了那个 tab（QueryClient
+// 是每 JS context 一份），补前缀也没用。真通道是给队列域接 WS 订阅，本轮不在范围内。
 
 import { reactive } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -111,8 +118,9 @@ export function usePartDispatch(): UsePartDispatchReturn {
       // 2026-10-11：dashboard 三 query 的 gcTime 是 POSITIVE_INFINITY 且无 refetchInterval，
       // 常驻大屏（另一个标签页）收不到本 mutation 的成功回调 —— 只有这条 WS 失效是共屏
       // 的兜底通道。
-      // 注意：`useQueueSnapshot` 的键挂在 qk.productionQueueSnapshotPrefix 下且本轮零
-      // WS 订阅，不在本失效范围（它靠 30s staleTime 自愈）。
+      // 不补 qk.productionQueueSnapshotPrefix：`invalidateQueries` 只作用于本标签页的
+      // QueryClient，而生产队列看板永远不与零件一览页挂在同一个 tab，补进来是死代码。
+      // 跨屏的真通道是 WS（见 useDashboardInvalidation）。
       void qc.invalidateQueries({ queryKey: qk.dashboardPrefix });
     },
     onError: (e: Error) => ElMessage.error(e.message ?? '强制完成失败'),
