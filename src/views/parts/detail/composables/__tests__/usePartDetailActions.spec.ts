@@ -360,8 +360,9 @@ describe('usePartDetailActions — 7 个写端点', () => {
     ];
     const { inspectionBatch } = scope.run(() => mountActions({}, batches, 'B_PENDING'))!;
     // 静默回落是**正确**的：用户选中的不是品检批次，本来就不该把品检流转打到它身上；
-    // 按钮组与弹窗都显式展示「目标批次 X」（PartDetail.vue 的 .inspection-anchor /
-    // 「目标批次」表单项），所以这个回落在界面上是看得见的，不是暗改。
+    // 按钮组与弹窗都显式展示「目标批次 X」（`PartActionBar.vue` 的 .inspection-anchor /
+    // `PartFailInspectionDialog.vue` 的「目标批次」表单项），所以这个回落在界面上是
+    // 看得见的，不是暗改。
     expect(inspectionBatch.value?.id).toBe('B_INSPECT');
     scope.stop();
   });

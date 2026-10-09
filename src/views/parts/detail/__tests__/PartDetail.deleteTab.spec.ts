@@ -19,12 +19,12 @@ import { fileURLToPath } from 'node:url';
 
 const src = readFileSync(fileURLToPath(new URL('../PartDetail.vue', import.meta.url)), 'utf8');
 
-/** 软删分支（`onConfirmAction` 里 `confirmAction === 'delete'` 的 else 分支）。 */
+/** 软删分支（`onConfirmAction` 里 `confirmAction === 'delete'` 的 else 分支）。
+ *  切片到后面那条 section 注释为止 —— 用注释当边界是因为这个守卫本身是静态的，
+ *  真要跑起来得挂载整页（六条读 + 两个 pinia store + vue-query），见文件头。 */
 const deleteBranch = src.slice(
   src.indexOf('if (await onDeletePart()) {'),
-  src.indexOf('async function onConfirmAction()') === -1
-    ? src.length
-    : src.indexOf('// ============ 品检通过（shell 包一层 passSubmitting loading）============'),
+  src.indexOf('// ============ 拆 / 取消 批次'),
 );
 
 describe('D1：软删成功后的收尾（导航 + 关标签）', () => {
