@@ -632,6 +632,19 @@ async function onFileTabRefresh(_kind: 'DRAWING' | '3D_MODEL' | 'CAD_2D'): Promi
 watch(
   () => route.params.id,
   async (id) => {
+    // 2026-10-10 加「本页是否活跃」守卫（根因与 `AssemblyDetail.vue` 同款，这里只写后果）：
+    // `useRoute()` 注入的是 vue-router 的**全局**响应式 currentRoute，不是本组件挂载
+    // 那一刻的地址快照；本页被 keep-alive 缓存（路由名 `PartDetail` = 组件文件名，
+    // MainLayout 的 `<keep-alive :include="tags.cachedViewNames">` 按名字匹配）后，
+    // 用户切到别的页面时全局路由一变，本 watcher 仍在跑（只有 onUnmounted 才停），
+    // 于是 partId 会被改成**别的页面**的 id ⇒ GET /parts/{别的页面的 id} 404 并弹
+    // 一句看不懂的错误。
+    //
+    // **不能删 watcher**：vue-router 对同一条路由记录只改 param（/parts/1 → /parts/2）
+    // 时会复用组件实例、不触发 onMounted；本页内部就有这种导航
+    // （`PartAssemblyLinkCard` 的兄弟零件 chips）。删了的话，从 A 件跳到兄弟件 B，
+    // 页面会停在 A 件的数据上。
+    if (route.name !== 'PartDetail') return;
     const s = String(id ?? '');
     if (!s) return;
     partId.value = s;

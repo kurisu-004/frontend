@@ -230,7 +230,23 @@ function onBack(): void {
   router.push('/parts');
 }
 
-watch(() => route.params.id, fetchData);
+watch(
+  () => route.params.id,
+  () => {
+    // 2026-10-10 加「本页是否活跃」守卫。`useRoute()` 注入的是 vue-router 的**全局**
+    // 响应式 currentRoute，不是「本组件挂载那一刻的地址快照」；而 keep-alive 把本页切到
+    // 后台时 watcher 不会停（只有 onUnmounted 才停）⇒ 用户从装配件详情点子零件进
+    // /parts/{part_id} 时，全局路由变了、被缓存的本页 watcher 照样触发，
+    // fetchData 读到的 assemblyId 已是 part 的 id ⇒ GET /assemblies/{part_id} 必 404
+    // （t_assembly 里没有这个 id）并弹一句看不懂的 ElMessage.error。
+    //
+    // 但**不能删 watcher**：vue-router 对同一条路由记录只改 param（/assemblies/1 →
+    // /assemblies/2）时会复用组件实例、不触发 onMounted，删了的话页面会停在旧数据上。
+    // 所以守卫与 watcher 并存：路由不是本页就当没发生，是本页（换 id）就照常重取。
+    if (route.name !== 'AssemblyDetail') return;
+    void fetchData();
+  },
+);
 onMounted(fetchData);
 </script>
 

@@ -32,7 +32,24 @@ const router = useRouter();
 
 const noteId = computed<string>(() => String(route.params.id ?? ''));
 
-const detail = useDeliveryNoteDetail(noteId);
+/**
+ * 2026-10-10：keep-alive 下「切走就换页」的守卫。
+ *
+ * `useRoute()` 注入的是 vue-router 的**全局**响应式 currentRoute，不是本组件挂载那
+ * 一刻的地址快照；本页被 MainLayout 的 `<keep-alive :include="tags.cachedViewNames">`
+ * 缓存后（路由名 `DeliveryNoteDetail` = 组件文件名，匹配得上），切到任何别的页面时
+ * `route.params.id` 照样变 ⇒ 喂给 `useDeliveryNoteDetailQuery` 的 reactive queryKey
+ * 跟着变 ⇒ 自动去请求 `GET /delivery-notes/{别的页面的 id}`。
+ *
+ * 后果不止 404：那个 id 恰好是另一张有效送货单时，本页会**静默渲染成另一张单**，
+ * 用户看着一份完整的详情页，根本不会意识到自己看错了。
+ *
+ * 这条数据流是 computed → queryKey，挂不上 watcher，所以守卫收在 query 的 enabled
+ * 侧：`isActive` 为 false 时本页不取数（`useDeliveryNoteDetail` 只是把参数透传下去）。
+ */
+const isThisPage = computed(() => route.name === 'DeliveryNoteDetail');
+
+const detail = useDeliveryNoteDetail(noteId, isThisPage);
 
 /** 零件列表表的实例（移除勾选行后要调它的 clearSelection）。 */
 const lineItemsTableRef = ref<InstanceType<typeof DeliveryNoteLineItemsTable> | null>(null);
