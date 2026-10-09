@@ -43,17 +43,18 @@
     @click="emit('select', row)"
   >
     <div class="part-row-main">
-      <!-- 右上角预览按钮（@click.stop 阻止冒泡触发选中） -->
+      <!-- 预览按钮（`@click.stop` 阻止冒泡触发选中）。2026-10-11：原先是
+           「View 图标 + 预览」的小文字按钮，现在改成 56×56 圆形纯图标 ——
+           HMI 触屏上 56px 是能稳定点中的下限，去掉文字后也不再挤走序列号那行。 -->
       <el-button
-        text
-        size="small"
+        circle
         type="info"
         class="preview-btn"
         :loading="previewing"
+        :title="`预览图纸 ${row.serial_no || row.drawing_no}`"
         @click.stop="emit('preview', row)"
       >
         <el-icon><View /></el-icon>
-        <span>预览</span>
       </el-button>
 
       <!-- 1) 序列号 + 交期 高优行 -->
@@ -163,18 +164,26 @@ const emit = defineEmits<{
   width: 100%;
   min-width: 0;
 }
+/* 2026-10-11：按钮改为 56×56 圆形纯图标、水平靠右 + 垂直居中（贴卡片正中），
+   不再与第一行文字抢位置 ⇒ `.part-line-top` 的 `padding-right: 64px` 让位删掉。
+   `translateY(-50%)` 配 `top: 50%`：按钮是绝对定位的，卡片的 flex 对齐对它无效。
+   ⚠️ `.preview-btn` 这个 class 是 `ScanPreviewDownloadGate.spec.ts` 的唯一定位器，
+   不要改名。 */
 .preview-btn {
   position: absolute !important;
-  top: 8px;
-  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  right: 14px;
   z-index: 1;
+  width: 56px !important;
+  height: 56px !important;
+  font-size: 22px;
 }
 
 .part-line-top {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding-right: 64px;
   flex-wrap: wrap;
 }
 /* 2026-10-11：卡片收窄到三列后，长序列号 / 长名称必须截断而不是折行 —— 折行会把一张
