@@ -59,11 +59,15 @@
       （用户想出 1 张「N 套」标签）会把全部子件行一起勾上，同一批货出两轮标签；反向
       勾满全部子件也会把父行勾上。「一行 = 一张标签」只有不联动才成立。
 
-      2026-10-09：**表头全选框不受 `checkStrictly` 约束**，是刻意接受的口径、不改行为。
-      EP `store/watcher._toggleAllSelection` 另建了一份 treeProps 并把 `checkStrictly`
-      **写死为 false**，不看本表传的值 ⇒ 点表头全选时装配件父行 + 全部子件行会一起进
-      selection（即「打印全部行」，与改造前打印对话框 label 模式下列出父行与零件子件一致）。
-      本字段只约束**逐行点击**。
+      2026-10-11：selection 列挂 `:selectable="canSelectPartRow"` —— **子件行不可勾选**
+      （打印标签按套出，子件不是独立打印单元；判据与注释见 utils 的 `canSelectPartRow`）。
+      这一挂同时补上了表头全选那条路：`treeProps.checkStrictly` 管不到它（EP
+      `store/watcher._toggleAllSelection` 另建 treeProps 并把 `checkStrictly` 写死 false），
+      但 `util.toggleRowStatus` 递归子节点时**同一个 `selectable` 一路下传** ⇒ 全选只勾
+      顶层行（装配件父行 + 散件），与逐行点击同一口径。
+      ⚠️ 已知代价：子件行不再能被单独勾选打印标签（产品已拍板）。移除批次 / 绿底 /
+      序号排名都不受影响 —— 它们走 `useDeliveryNoteActions.rowIdToBatchIds` 的树递归与
+      `assignSeq` 的顶层行排名，都不读勾选集。
     -->
     <el-table
       ref="tableRef"
@@ -85,8 +89,14 @@
            可见条件 = 可改单 **或** 可打印：INSPECTOR 能打印但不能改单，把勾选列只挂在
            canEdit 下会让他们看不到「打印标签」要用的勾选入口。装配件父行同样可勾 ——
            它代表整套货，标签就是按套出的。`reserve-selection` 让打印后绿底触发的行重算
-           不丢勾选（连续打多批时体验）。 -->
-      <el-table-column v-if="showSelection" type="selection" width="50" reserve-selection />
+           不丢勾选（连续打多批时体验）。子件行由 `:selectable` 拦掉。 -->
+      <el-table-column
+        v-if="showSelection"
+        type="selection"
+        width="50"
+        reserve-selection
+        :selectable="canSelectPartRow"
+      />
       <!--
         2026-10-10：「序号」列（替换原先 `type="index"` 的 `#` 列）—— 按**加入送货单的先后
         顺序**编号，取值是行上的 `seq`（由 `buildPartTreeRows` 按 `min_seq` 稠密排名写好，
@@ -179,7 +189,7 @@ import { useColumnDrag, columnIdentifier } from '@/composables/useColumnDrag';
 import { canPrint } from '@/utils/deliveryNotePermissions';
 import type { DeliveryNoteDetailData } from '../composables/deliveryNoteSchema';
 import type { DeliveryNoteRoleMap } from '../composables/useDeliveryNoteDetail';
-import { seqCellText, type PartTreeRow } from '../utils/deliveryNotePartRows';
+import { canSelectPartRow, seqCellText, type PartTreeRow } from '../utils/deliveryNotePartRows';
 
 interface Props {
   note: DeliveryNoteDetailData | null;

@@ -336,6 +336,26 @@ export function seqCellText(row: PartTreeRow): string {
 }
 
 /**
+ * 勾选列 `:selectable` 的**域内单一出口**（两张零件表共用）：装配件的**子件行不可勾选**。
+ *
+ * 业务口径（2026-10-11）：打印标签时「装配件按套出 1 张整套标签」，子件是那一套里的
+ * 组成件、标签贴在装配件箱上，不该再各贴一张。子件行仍照常展示、仍可被逐行移除批次，
+ * 只是不再是一个独立的打印单元。
+ *
+ * 判据与 `seqCellText` 同款（**行结构**而非某个值）：子件行 = 零件行且带 `assembly_id`。
+ * 装配件父行（`is_asm_row`）与散件行（`assembly_id` 为 null）都可勾。
+ *
+ * ⚠️ 它是**表头全选**那一条路唯一的闸门：`el-table` 的 `treeProps.checkStrictly` 只约束
+ * 逐行点击（EP `store/watcher._toggleAllSelection` 另建了一份 treeProps 并把
+ * `checkStrictly` **写死为 false**，见两张表模板里的注释），全选时递归 `row[children]`
+ * 且**同一个 `selectable` 一路下传**（`util.toggleRowStatus`），所以挂上它即两端都拦住。
+ * 表头勾选态仍然正确：`store/watcher.updateAllSelected` 对「未选中的不可选行」放行。
+ */
+export function canSelectPartRow(row: PartTreeRow): boolean {
+  return !(row.is_part_row && row.assembly_id);
+}
+
+/**
  * 零件 / 装配件行 → 标签打印行（`PrintRow`）。
  *
  * 字段映射对两类行**同形**：展示值都已在 `buildPartTreeRows` 里归一（父行展示的是

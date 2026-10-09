@@ -14,10 +14,12 @@
 //     排序不漂移、全 null 时回落数组下标、同值共享名次；
 //   - `partRowsToLabelRows`：单位（件 / 套）、数量口径、`member_ids` 是**整行** batch_ids
 //     （只登记代表批次会让该行其余批次永远不绿）、不写 `PrintRow.is_asm_row`（标签渲染层
-//     7 列全程不读它）。
+//     7 列全程不读它）；
+//   - 2026-10-11 新增：`canSelectPartRow`（子件行不可勾选 —— 标签按套出，子件不是独立
+//     打印单元；两张表的 `:selectable` 单一出口）。
 
 import { describe, expect, it } from 'vitest';
-import { buildPartTreeRows, partRowsToLabelRows } from '../deliveryNotePartRows';
+import { buildPartTreeRows, canSelectPartRow, partRowsToLabelRows } from '../deliveryNotePartRows';
 import type { DeliveryNoteLineItemData } from '../../composables/deliveryNoteSchema';
 
 function li(p: Partial<DeliveryNoteLineItemData> & { id: string; part_id: string }) {
@@ -580,5 +582,26 @@ describe('partRowsToLabelRows', () => {
       never,
     );
     expect(partRowsToLabelRows(rows).map((r) => r.id)).toEqual(['P:-:PB', 'P:-:PA']);
+  });
+});
+
+// 2026-10-11 新增：`canSelectPartRow` —— 打印标签按套出，装配件**子件行不可勾选**。
+describe('canSelectPartRow（子件行不可勾选）', () => {
+  const never = () => false;
+
+  it('散件行 / 装配件父行可勾，子件行不可勾', () => {
+    const rows = buildPartTreeRows(
+      [
+        li({ id: '13', part_id: 'PA', assembly_id: 'A1', assembly_name: '总装' }),
+        li({ id: '14', part_id: 'PB', assembly_id: 'A1', assembly_name: '总装' }),
+        li({ id: '99', part_id: 'PLOOSE' }),
+      ],
+      never,
+    );
+    const parent = rows[0]!;
+    expect(parent.is_asm_row).toBe(true);
+    expect(canSelectPartRow(parent)).toBe(true);
+    for (const child of parent.children!) expect(canSelectPartRow(child)).toBe(false);
+    expect(canSelectPartRow(rows[1]!)).toBe(true);
   });
 });
