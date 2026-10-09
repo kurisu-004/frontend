@@ -10,10 +10,11 @@
      纳入外协工序（需求「右侧的工序卡片增加外协工序，但要用分割线上下分开」）。分组
      在客户端做 —— `category` 只出现在工序列表 DTO（`GET /api/v2/prod/processes`）上，
      本面板不新增请求、不置灰、不禁用：外协卡与自产卡完全同款（可点击、可拖入，走
-     同一个 dispatch 端点）。已知取舍：后端 dispatch 对 `target_process_id` 有守卫
+     同一个 dispatch 端点）。已知取舍：后端 dispatch 有货架守卫
      `20508 BIZ_SHELF_PROCESS_NOT_FOUND`（该工序在 t_shelf_process 无 active 货架映射
-     即拒），外协工序通常不配货架 ⇒ 这类下发失败由 `useQueueDispatch.dispatchMutation`
-     的 onError 弹 ElMessage.error 呈现，前端不额外拦截。布局是「纵向滚动列 + 组内
+     即拒），**无链工单**下发的外协工序通常不配货架 ⇒ 这类失败由
+     `useQueueDispatch.dispatchMutation` 的 onError 弹 ElMessage.error 呈现，前端不
+     额外拦截（有链工单按链首工序选架，不受该取舍影响）。布局是「纵向滚动列 + 组内
      flex-wrap」，让分割线能横贯整幅宽度；按需求不加任何文字标题。 -->
 <template>
   <div class="pending-pools-panel">

@@ -37,9 +37,10 @@
 //   - Q-D2：dispatchResultSchema 接受 `failed` 被整体省略（`.default([])`）。
 //   - Q-D3：succeeded[] 缺 current_process_id → 抛错；Option 字段的 null 也收。
 //   - Q-D4：有链工单的 current_process_step_id 是**非空字符串**（链首 step 的雪花 id），
-//           且 current_process_id 是链首工序、≠ 请求里的 target_process_id。
+//           且出参的 current_process_id 与 target_process_id **同为链首工序**（请求里的
+//           target_process_id 已被后端覆盖，不是回声）。
 //   - Q-D5：current_process_step_id 传 number → 抛 ZodError（钉住「后端不得退回 number
-//           形态」；雪花 id 超 MAX_SAFE_INTEGER，值本身也是错的）。
+//           形态」；样本取 19 位雪花 id，超 MAX_SAFE_INTEGER，值本身也是错的）。
 //   - Q-AD1：autoDispatchRequestSchema 空 batch_ids → 抛错。
 //   - Q-AD2：autoDispatchResultSchema 缺 items → 抛错。
 //   - Q-RC1：recallRequestSchema 的 batch_id 必须是字符串（后端 deserialize_i64
@@ -269,9 +270,8 @@ describe('productionQueueSchema — 持有批次 / 候选池行', () => {
     const noPool: Record<string, unknown> = { ...makePoolItem() };
     delete noPool.has_process_chain;
     expect(() => queuePoolItemSchema.parse(noPool)).toThrow();
-    expect(
-      queuePoolItemSchema.parse(makePoolItem({ has_process_chain: false })).has_process_chain,
-    ).toBe(false);
+    expect(queuePoolItemSchema.parse(makePoolItem({ has_process_chain: false })).has_process_chain)
+      .toBe(false);
     // 非布尔形态（后端漏 serialize 成 0 / 1 或字符串）必须被拒
     expect(() =>
       queuePoolItemSchema.parse({ ...makePoolItem(), has_process_chain: 'true' }),
@@ -443,38 +443,42 @@ describe('productionQueueSchema — dispatch / auto-dispatch', () => {
   });
 
   it('Q-D4：有链工单的 current_process_step_id 是非空字符串（链首 step 的雪花 id）', () => {
-    // 有工序链的工单（2026-10-10 起的下发口径）下发到**链首工序**、step 指针落
-    // **链首 step**，于是出参 current_process_step_id 有真值；current_process_id 同理
-    // 是链首工序，与请求里的 target_process_id 不同。本用例与 Q-D2 / Q-D3 的 null 形态
-    // 互补 —— 两态都必须能 parse。
+    // 有工序链的工单下发到**链首工序**、step 指针落**链首 step**，于是出参
+    // current_process_step_id 有真值。出参的 current_process_id 与 target_process_id
+    // 同为链首工序 —— 请求里的 target_process_id 已被后端用链首工序覆盖，出参不是它的
+    // 回声（只有无链工单才相等）。本用例与 Q-D2 / Q-D3 的 null 形态互补 —— 两态都必
+    // 须能 parse。
     const parsed = dispatchResultSchema.parse({
       succeeded: [
         {
           batch_id: '3000000000001',
-          current_process_step_id: '1000000000001',
+          current_process_step_id: '1900000000000000001',
           current_process_id: '2000000000001',
-          target_process_id: '2000000000009',
+          target_process_id: '2000000000001',
           shelf_id: '5000000000001',
           version: 1,
         },
       ],
     });
-    expect(parsed.succeeded[0]?.current_process_step_id).toBe('1000000000001');
+    expect(parsed.succeeded[0]?.current_process_step_id).toBe('1900000000000000001');
     expect(parsed.succeeded[0]?.current_process_id).toBe('2000000000001');
+    expect(parsed.succeeded[0]?.target_process_id).toBe('2000000000001');
   });
 
   it('Q-D5：current_process_step_id 不得退回 number 形态（雪花 id 超 MAX_SAFE_INTEGER）', () => {
-    // 负向守卫：后端漏加序列化器时该字段落成 JSON number，parse 抛在 HTTP 200 之后 ⇒
-    // 线上表现为「批次确实下发下去了，界面却报下发失败」。雪花 id 超出 JS
-    // Number.MAX_SAFE_INTEGER，所以 number 形态不只是类型不符，值本身也是错的。
+    // 负向守卫：后端漏加字符串化器时该字段落成 JSON number，parse 抛在 HTTP 200 之后 ⇒
+    // 线上表现为「批次确实下发下去了，界面却报下发失败」。样本取 19 位真实雪花 id：
+    // axios 侧解析即已丢精度（Number('1900000000000000001') === 1900000000000000000，
+    // 超 MAX_SAFE_INTEGER），所以 number 形态不只是类型不符，值本身也是错的。写成
+    // 字面量会被 no-loss-of-precision 拦下，故走 Number()。
     expect(() =>
       dispatchResultSchema.parse({
         succeeded: [
           {
             batch_id: '3000000000001',
-            current_process_step_id: 1000000000001,
+            current_process_step_id: Number('1900000000000000001'),
             current_process_id: '2000000000001',
-            target_process_id: '2000000000009',
+            target_process_id: '2000000000001',
             shelf_id: '5000000000001',
             version: 1,
           },

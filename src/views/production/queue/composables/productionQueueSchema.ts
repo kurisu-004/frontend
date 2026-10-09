@@ -331,8 +331,8 @@ export type DispatchRequestSchema = z.infer<typeof dispatchRequestSchema>;
 
 /** `DispatchResult.succeeded[]` 单条（rust DispatchSuccessItem）。6 字段。
  *  下发口径：有工序链的工单落**链首 step**（工序 + step 指针），无工序链的工单落请求
- *  里的 `target_process_id`、step 指针清空。⇒ `current_process_id` **不等于**请求里的
- *  `target_process_id`。 */
+ *  里的 `target_process_id`、step 指针清空。⇒ **有链工单**的 `current_process_id`
+ *  不等于请求里的 `target_process_id`。 */
 export const dispatchSuccessItemSchema = z.object({
   batch_id: z.string(),
   /** 有链工单 = 链首 step 的 id（雪花 ID 字符串）；无链工单 = null。 */
@@ -340,9 +340,10 @@ export const dispatchSuccessItemSchema = z.object({
   /** 下发后 batch 当前工序：有链工单 = 链首 step 的工序，无链工单 = `target_process_id`；
    *  后端留 Option 形态（None → JSON null），故 `.nullable()`。 */
   current_process_id: z.string().nullable(),
+  /** 与 `current_process_id` **同值**：有链工单 = 链首 step 的工序（请求里的
+   *  `target_process_id` 已被覆盖，本字段不是它的回声），无链工单才等于请求值。 */
   target_process_id: z.string(),
-  /** service 按**实际下发工序**（有链工单 = 链首工序）在 t_shelf_process 解析出的
-   *  货架（sort_order ASC, id ASC LIMIT 1）。 */
+  /** 后端按**实际下发工序**（有链工单 = 链首工序）自动选出的货架。 */
   shelf_id: z.string(),
   version: z.number(),
 });

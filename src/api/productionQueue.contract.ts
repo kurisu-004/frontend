@@ -437,7 +437,8 @@ export interface DispatchTarget {
   batch_id: string;
   /** 目标工序。工单**有工序链**时后端按下发链首工序，本字段被忽略、只作无链工单的
    *  回落值；仍必填（漏传 → 后端 serde 失败、HTTP 422 纯文本，不是业务信封）。
-   *  实际落库值读出参 `DispatchSuccessItemDto.current_process_id`。 */
+   *  有链工单的实际落库值读出参 `DispatchSuccessItemDto.current_process_id`
+   *  （出参的 `target_process_id` 与它同值，**不是本字段的回声**）。 */
   target_process_id: string;
 }
 
@@ -446,9 +447,8 @@ export interface DispatchTarget {
  *  → service 抛 AppError、handler 的事务 drop 回滚全部 succeeded 写入。
  *  空 targets → 40001（HTTP 422）。
  *
- *  不带 shelf_id / version：货架由 service 按**实际下发工序**（有链工单 = 链首工序，
- *  无链工单 = 请求里的 `target_process_id`）在 `t_shelf_process` 解析
- *  （sort_order ASC, id ASC LIMIT 1），0 结果 → 20508。 */
+ *  不带 shelf_id / version：目标货架由后端按**实际下发工序**（有链工单 = 链首工序，
+ *  无链工单 = 请求里的 `target_process_id`）自动选，0 结果 → 20508。 */
 export interface DispatchRequest {
   targets: DispatchTarget[];
   /** 可选，落到全部 `t_part_event.note`。 */
@@ -477,9 +477,11 @@ export interface DispatchSuccessItemDto {
    *  工序**（≠ 请求里的 `target_process_id`），无链工单才等于本次 `target_process_id`。
    *  展示「实际下发到哪道工序」必须读本字段。后端保留 Option 形态（None → JSON `null`）。 */
   current_process_id: string | null;
+  /** 与 `current_process_id` **同值**：有链工单 = 链首 step 的工序（请求里的
+   *  `target_process_id` 已被覆盖，本字段不是它的回声），无链工单才等于请求值。 */
   target_process_id: string;
-  /** 落架：service 按**实际下发工序**（有链工单 = 链首工序，无链工单 = 请求里的
-   *  `target_process_id`）在 `t_shelf_process` 解析出的货架。 */
+  /** 落架：后端按**实际下发工序**（有链工单 = 链首工序，无链工单 = 请求里的
+   *  `target_process_id`）自动选出的货架。 */
   shelf_id: string;
   version: number;
 }

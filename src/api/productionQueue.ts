@@ -83,9 +83,10 @@ export async function fetchPendingBatches(
 }
 
 /** POST /api/v2/prod/queue/dispatch —— 下发（bulk-only）。
- *  单条与批量共用：单条传 `targets.length === 1`。货架由后端按
- *  `target_process_id` 解析（20508 = 无可用货架）。
- *  业务错：20120（非 PENDING）/ 20121 / 20508 / 40901 / 40300 / 40001。 */
+ *  单条与批量共用：单条传 `targets.length === 1`。目标货架由后端按**实际下发工序**
+ *  （有链工单 = 链首工序，无链工单 = 请求里的 `target_process_id`）自动选，
+ *  20508 = 无可用货架。业务错：20120（非 PENDING）/ 20121 / 20508 / 20702 /
+ *  40901 / 40300 / 40001。 */
 export async function dispatchBatches(req: DispatchRequest): Promise<DispatchResultDto> {
   const resp = await api.post<DispatchResultDto>('/prod/queue/dispatch', req);
   return resp.data;
