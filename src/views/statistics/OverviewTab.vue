@@ -9,7 +9,14 @@
     - 饼图：delivery_performance（on_time / orange / red）
     - 饼图：status_distribution（当前各状态零件数）
 
-  日期范围变化时自动 reload；初次 mount 也拉一次。
+  ⚠️ 2026-10-12：**本 tab 的展示口径冻结、待整体重新设计**。生产总览的卡片口径与图表
+  取数都要推翻重做，本轮只把数据层从「本地 ref + 挂载钩子 + watch + 裸调 api」换成域内
+  query hook，9 张 KPI 卡与 3 张图表的渲染逻辑、取的字段**逐字未动** —— 看到下面的
+  卡片/图表写法别当成既定设计，它只是「还没被重做」的现状。
+
+  数据来源：`composables/useStatisticsOverviewQuery`（Zod 守门在 queryFn，错误经
+  ElMessage 桥接）。日期区间变化自动 refetch（区间进 queryKey），错误态与占位由 hook
+  的 isFetching / error 提供，组件不再自己 try/catch。
 -->
 
 <template>
@@ -139,12 +146,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { computed } from 'vue';
 import { Warning } from '@element-plus/icons-vue';
 import EChart from '@/components/EChart.vue';
-import { fetchOverview } from '@/api/statistics';
-import type { OverviewOut } from '@/types/statistics';
+import { useStatisticsOverviewQuery } from './composables/useStatisticsOverviewQuery';
 import type { OrderStatus } from '@/types/parts';
 import { STATUS_LABEL, STATUS_TAG_TYPE } from '@/constants/partStatus';
 
@@ -154,26 +159,13 @@ interface Props {
 }
 const props = defineProps<Props>();
 
-const loading = ref(false);
-const data = ref<OverviewOut | null>(null);
-
-async function reload(): Promise<void> {
-  if (!props.dateFrom || !props.dateTo) return;
-  loading.value = true;
-  try {
-    data.value = await fetchOverview({
-      date_from: props.dateFrom,
-      date_to: props.dateTo,
-    });
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载概览失败');
-  } finally {
-    loading.value = false;
-  }
-}
-
-onMounted(reload);
-watch(() => [props.dateFrom, props.dateTo], reload);
+// 2026-10-12 数据层迁 query hook（展示口径冻结待重新设计，见文件头注释）。
+// 日期区间拼进 queryKey：换日期自动 refetch；日期不齐时传 null ⇒ hook 内部
+// enabled=false，零网络请求（替代原来的 reload() 里的提前 return）。
+const { data, isFetching } = useStatisticsOverviewQuery(() =>
+  props.dateFrom && props.dateTo ? { date_from: props.dateFrom, date_to: props.dateTo } : null,
+);
+const loading = isFetching;
 
 // 期内总产值：后端 delivered_value 是 string（Decimal 序列化为字符串保精度），
 // el-statistic 接受 number；这里转 number。

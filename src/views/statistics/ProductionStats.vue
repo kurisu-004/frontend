@@ -9,10 +9,17 @@
     - worker-detail 单工人详情（折线 + 参与工单表）
 
   顶部筛选区为时间范围（快捷按钮 / 自定义日期对），传 dateFrom / dateTo
-  两个 ISO 'YYYY-MM-DD' 给子组件，子组件各自 watch 拉数。
+  两个 ISO 'YYYY-MM-DD' 给子组件。
 
-  activeTab 切换**不**重发请求——只有 dateFrom / dateTo 变化才推送给子组件。
-  选中工人后切到 worker-detail tab，并通过 ref 传 workerId。
+  2026-10-12：**三个 tab 各自调自己的 query hook**，父组件不持有任何 tab 的数据态
+  （也不要改成「父组件取数再向下传」）。理由：三个 tab 的数据集与生命周期彼此独立
+  （tab2 的工人列表同时是 tab3 工人下拉的候选集，共用同一条 queryKey 才能同屏去重、
+  跨 tab 命中 30s 缓存），由父组件持有会把三份状态耦合成一份，切 tab 时要么提前取数
+  （多打两条本不该发的请求）要么暴露 loading 给没在看的 tab。
+
+  换日期 / 换 tab 的取数时机由各自的 hook 决定：日期进 queryKey ⇒ 变了自动 refetch；
+  切 tab 是 el-tab-pane 的懒挂载 ⇒ 首次进入那个 tab 时才取，切走再切回命中 30s 缓存。
+  选中工人后切到 worker-detail tab，并通过 prop 传 workerId。
 -->
 
 <template>
@@ -154,8 +161,8 @@ function onCustomRangeChange(v: [string, string] | null): void {
   dateRange.value = [v[0], v[1]];
 }
 
-// 当 dateRange 直接被改（preset 切换 / 初始值），推送给子组件由 watch 触发。
-// 这里不额外写 watch，因为 dateFrom/dateTo 是 computed，子组件 watch 已能响应。
+// 2026-10-12：这里不再写「推送给子组件由 watch 触发」的 watch —— dateFrom / dateTo
+// 是 computed，子组件把它们拼进各自 hook 的 queryKey，变化时自动 refetch。
 
 const activeTab = ref<'overview' | 'workers' | 'worker-detail'>('overview');
 const selectedWorkerId = ref<string | null>(null);
