@@ -223,27 +223,12 @@
 
       <div v-else-if="previewFile && isImage(previewFile.file_type)" class="image-preview-wrap">
         <el-image
-          v-if="!isHeic(previewFile.file_type)"
           :src="previewBlobUrl"
           :preview-src-list="[previewBlobUrl]"
           :initial-index="0"
           fit="contain"
           style="max-width: 100%; max-height: calc(100vh - 80px)"
         />
-        <div v-else class="non-pdf-preview">
-          <el-icon :size="48" color="#67c23a"><Picture /></el-icon>
-          <p class="non-pdf-name">{{ previewFile.original_filename }}</p>
-          <p class="non-pdf-hint">
-            {{
-              canDownload
-                ? 'HEIC 格式浏览器不直接支持预览，请下载后查看。'
-                : 'HEIC 格式浏览器不直接支持预览，当前账号不支持下载，请联系管理员获取。'
-            }}
-          </p>
-          <el-button v-if="canDownload" type="primary" @click="downloadPreview">
-            <el-icon><Download /></el-icon><span>下载文件</span>
-          </el-button>
-        </div>
       </div>
 
       <div v-else class="non-pdf-preview">
@@ -270,7 +255,6 @@ import {
   Download,
   Files,
   Loading,
-  Picture,
   Refresh,
   View,
   Warning,
@@ -358,9 +342,6 @@ function isPdf(t: string): boolean {
 const IMAGE_TYPES = new Set(['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'TIF', 'TIFF', 'WEBP']);
 function isImage(t: string): boolean {
   return IMAGE_TYPES.has(t.toUpperCase());
-}
-function isHeic(t: string): boolean {
-  return t.toUpperCase() === 'HEIC';
 }
 
 onBeforeMount(() => {

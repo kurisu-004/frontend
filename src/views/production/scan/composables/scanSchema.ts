@@ -71,11 +71,11 @@ export const scanPartRowSchema = z.object({
    * （归一逻辑随 `request_date` 整键删除时一并移除：键都不存在了，留着 transform
    * 只会把真实日期误判成占位、把交期 chip 显示成「01/01」）。
    *
-   * 两个交期字段口径不同，别当成同一个：**本键 = 客户承诺的计划交期**（`t_part` 上的
-   * 真实投影），`system_delivery_date` = **后端按产能推算的系统交付日**。消费方各取所需、
-   * 刻意不合并成一个 chip：`useScanPartsSort` 只按本键排序；报工台三页的卡片上屏走
-   * `system_delivery_date`（`DeliveryDateChip`），持有件列表（`HeldPartsList`）上屏走本键
-   * —— 工人看自己手上这批货的交期，认的是承诺日而不是推算日。
+   * 两个交期字段口径不同，别当成同一个：**本键 = 计划交期**（`t_part` 上的真实投影），
+   * `system_delivery_date` = **后端按产能推算的系统交付日**。消费方各取所需、刻意不合
+   * 并成一个 chip：`useScanPartsSort` 只按本键排序；报工台三页的卡片上屏走
+   * `system_delivery_date`（`DeliveryDateChip`），持有件列表（`HeldPartsList`）上屏走
+   * 本键 —— 两处显示的是不同的日期，排查时别把它们当同一口径对齐。
    */
   planned_delivery_date: z.string(),
   /** 系统推算交付日，nullable（未推算时 null）。`DeliveryDateChip` 的唯一数据源。 */

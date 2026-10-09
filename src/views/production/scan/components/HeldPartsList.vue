@@ -14,16 +14,8 @@
   弹 toast —— 同一条 query key 上若两个消费方都弹，一次失败会弹两条一模一样的 toast）。
 
   ⚠️ 四种状态（加载 / 错误 / 空 / 列表）都在本组件内：调用方若各自渲染一遍就要复制三段
-  标记与样式，抽组件就白抽了。
-
-  根节点用 `display: contents`：它不生成盒子，四个状态块因此**直接成为调用方容器
-  （`.held-card`，列向 flex + gap: 12px）的 flex item**，`gap` 照旧生效，徽章抽出前后的
-  flex item 序列逐项相同 ⇒ 排布**逐像素一致**。两点如实说明：
-    - 该选择在本场景**并非必需**。父容器是列向 flex，普通块级根的渲染结果与此一致
-      （gap 照样落在「头部 ↔ 根」之间，根内只有一个状态块、无额外间距）。它换来的只是
-      「DOM 与抽取前逐字相同」这一条，不是一个更少盒子以外的好处。
-    - 少数旧内核（Chrome < 65 / Safari < 16）不认这个值，会退回块级根：多出一层盒子，
-      视觉上仍是同一块列表，不影响可用。
+  标记与样式，抽组件就白抽了。根是**普通块级根**：调用方只需关心本组件整体占位，
+  `.held-card` 的 gap 落在头部与本根之间；根内只有一个状态块，不产生额外间距。
 
   字段全部取自 `ScanPartRowSchema` 已有的 17 个键，**不新增任何后端字段**：held 的 VO 没有
   批次号也没有客户名；工序四件套（`chain_*`）在没有工序链时恒为 null，所以「工序」按
@@ -31,7 +23,7 @@
 -->
 
 <template>
-  <div class="held-list-root">
+  <div>
     <div v-if="loading && items.length === 0" class="held-loading">
       <el-icon class="is-loading"><Loading /></el-icon>
       <span>加载中…</span>
@@ -126,9 +118,6 @@ function processTextOf(p: ScanPartRowSchema): string | null {
 </script>
 
 <style scoped>
-.held-list-root {
-  display: contents;
-}
 .held-loading,
 .held-error,
 .held-empty {

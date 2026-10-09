@@ -98,7 +98,7 @@ function onOpen(): void {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  /* 与徽章抽屉同值：两处面板的行不贴边 */
+  /* 面板自身的 4px 内边距（叠在弹窗体自带的 padding 之上），与徽章抽屉同值 */
   padding: 0 4px;
 }
 </style>
