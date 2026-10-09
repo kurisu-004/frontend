@@ -465,9 +465,9 @@ describe('productionQueueSchema — dispatch / auto-dispatch', () => {
     expect(parsed.succeeded[0]?.target_process_id).toBe('2000000000001');
   });
 
-  it('Q-D5：current_process_step_id 不得退回 number 形态（雪花 id 超 MAX_SAFE_INTEGER）', () => {
+  it('Q-D5：current_process_step_id 不得退回 number 形态（形态守卫）', () => {
     // 负向守卫：后端漏加字符串化器时该字段落成 JSON number，parse 抛在 HTTP 200 之后 ⇒
-    // 线上表现为「批次确实下发下去了，界面却报下发失败」。样本取 19 位真实雪花 id：
+    // 线上表现为「批次确实下发下去了，界面却报下发失败」。样本取 19 位雪花 id 量级：
     // axios 侧解析即已丢精度（Number('1900000000000000001') === 1900000000000000000，
     // 超 MAX_SAFE_INTEGER），所以 number 形态不只是类型不符，值本身也是错的。写成
     // 字面量会被 no-loss-of-precision 拦下，故走 Number()。

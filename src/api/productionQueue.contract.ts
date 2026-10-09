@@ -27,6 +27,7 @@
 //   20206 WORKER_NO_WORK_TYPE        工人无工种
 //   20507 SHELF_PROCESS_NOT_MAPPED   目标货架未映射该工序
 //   20508 SHELF_PROCESS_NOT_FOUND    该工序无可用货架（下发解析不到货架）
+//   20702 BIZ_PROCESS_CHAIN_STEP_NOT_FOUND 链内没有未软删 step（有链工单定位不到链首工序，HTTP 404）
 //   20704 AUTO_ALLOCATE_INVALID_RATIO fill_ratio ∉ [0,1]
 //   20705 AUTO_ALLOCATE_NO_WORKERS   范围内无可分配工人
 //   20801 PROCESS_NOT_FOUND          工序不存在
@@ -475,7 +476,8 @@ export interface DispatchSuccessItemDto {
   current_process_step_id: string | null;
   /** 下发后写入 `t_part_batch.current_process_id` 的值：有链工单 = **链首 step 的
    *  工序**（≠ 请求里的 `target_process_id`），无链工单才等于本次 `target_process_id`。
-   *  展示「实际下发到哪道工序」必须读本字段。后端保留 Option 形态（None → JSON `null`）。 */
+   *  展示「实际下发到哪道工序」读本字段；有链工单下出参 `target_process_id` 与它同值
+   *  （见下一条注释）。后端保留 Option 形态（None → JSON `null`）。 */
   current_process_id: string | null;
   /** 与 `current_process_id` **同值**：有链工单 = 链首 step 的工序（请求里的
    *  `target_process_id` 已被覆盖，本字段不是它的回声），无链工单才等于请求值。 */

@@ -215,8 +215,8 @@ export const queuePendingBatchSchema = z.object({
   note: z.string().nullable(),
   version: z.number(),
   /** `t_part_batch.current_process_step_id`；DB 为 NULL 时后端返 `"0"` = 未挂 step。
-   *  待下发批次按定义还没挂 step，值恒 `"0"`；保留它是为了让「已挂 / 未挂」在列表
-   *  上可见（后续做「未挂 step 不可下发」之类的提示时不必再动契约）。 */
+   *  待下发批次按定义还没挂 step，正常情况下是 `"0"`；保留它是为了让「已挂 / 未挂」
+   *  在列表上可见（后续做「未挂 step 不可下发」之类的提示时不必再动契约）。 */
   current_process_step_id: z.string(),
   /** `t_part.process_chain_id`；未制定工序链时后端返 `"0"`。 */
   process_chain_id: z.string(),
