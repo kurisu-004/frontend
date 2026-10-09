@@ -392,13 +392,18 @@ function backToBadge(): void {
    （ScanTopbar / PartRowCard / PartDrawingPreviewDialog，2026-10-11 抽出），本页只留
    自己这一份的骨架与确认栏。 */
 
+/* 2026-10-11：容器从 1100px 放宽到 1560px，配合 `.parts-list` 的三列网格把一张 HMI
+   屏铺成三列（每卡约 430px）。左右各留 120px padding 是为了避开 `ScrollFabPair`
+   —— 它是 `position: fixed; right: 24px` 的 68px 圆形按钮对，占屏右 24~92px；用
+   **对称** padding 而不是单侧 margin，窄屏下也不会被压住、视觉不偏心。
+   1560 − 120 × 2 = 1320px 可用宽，三列 + 2 × 12px gap ⇒ 每卡 432px。 */
 .content {
   flex: 1;
   overflow: auto;
-  max-width: 1100px;
+  max-width: 1560px;
   width: 100%;
   margin: 0 auto;
-  padding: 24px;
+  padding: 24px 120px;
 }
 
 .loading-block,
@@ -459,10 +464,13 @@ function backToBadge(): void {
   margin: 0 4px;
 }
 
+/* 2026-10-11：三列网格（原先是单列 flex 纵向排布）。`.part-row` 本身的盒模型在
+   `PartRowCard.vue` 里，三页共用；这里只定「几列、列间距多少」。
+   零 @media / 零断点：报工台是 HMI 固定横屏，窗口尺寸不参与布局决策。 */
 .parts-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
 }
 
 .is-loading {

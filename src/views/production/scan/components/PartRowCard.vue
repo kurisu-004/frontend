@@ -58,7 +58,9 @@
 
       <!-- 1) 序列号 + 交期 高优行 -->
       <div class="part-line-top">
-        <span class="serial-no">{{ row.serial_no || row.drawing_no }}</span>
+        <span class="serial-no" :title="row.serial_no || row.drawing_no">
+          {{ row.serial_no || row.drawing_no }}
+        </span>
         <el-tag v-if="row.is_urgent" type="danger" size="small" effect="dark" class="urgent-pulse"
           >加急</el-tag
         >
@@ -74,7 +76,7 @@
 
       <!-- 2) 名称 -->
       <div class="part-line-name">
-        <span class="part-name">{{ row.name }}</span>
+        <span class="part-name" :title="row.name">{{ row.name }}</span>
       </div>
 
       <!-- 3) 数量（批次全量；本页实际流转的数量由 QuantityDialog 选） -->
@@ -175,12 +177,19 @@ const emit = defineEmits<{
   padding-right: 64px;
   flex-wrap: wrap;
 }
+/* 2026-10-11：卡片收窄到三列后，长序列号 / 长名称必须截断而不是折行 —— 折行会把一张
+   卡撑成两行高，整列卡片高度参差，网格看着是坏的。`.part-line-top` 有 flex-wrap，
+   序列号那行一旦折行最先被顶开。`min-width: 0` 是 flex 子项能触发 ellipsis 的前提。 */
 .serial-no {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-size: 22px;
   font-weight: 700;
   color: #303133;
   letter-spacing: 0.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .part-line-name {
@@ -189,10 +198,15 @@ const emit = defineEmits<{
   gap: 10px;
   font-size: 15px;
   color: #303133;
+  min-width: 0;
 }
 .part-name {
   font-weight: 500;
   color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .part-line-bottom {
