@@ -23,6 +23,8 @@
 //     函数 —— 它就是「有没有发 GET /assemblies/*」的等价物（真实发请求在该 composable
 //     内部）。mock 它也让本 spec 不必拉起 auth store / TanStack Query / element-plus。
 //   - 子组件全部 stub，`detail` 恒 null ⇒ 模板不进 `v-if` 分支，只跑 setup 里的路由逻辑。
+//   - 注册 pinia：本页 setup 里的 `useTagsViewStore()`（标签页标题动态化）要 active
+//     pinia。本 spec 不关心标题，只是不注册会在 setup 阶段直接抛。
 //
 // 同样形态的守卫也加在 `PartDetail.vue`（route.name = 'PartDetail'）、
 // `DeliveryNoteDetail.vue`（query 的 enabled 侧）、`OutsourceCompanySentParts.vue`；
@@ -32,6 +34,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computed, reactive, ref } from 'vue';
 import { mount } from '@vue/test-utils';
+import { createPinia } from 'pinia';
 import AssemblyDetail from '../AssemblyDetail.vue';
 
 // —— 假路由：一个普通 reactive 对象，测试直接改它模拟「全局路由变了」——
@@ -104,7 +107,11 @@ const stubs = {
 const mounted: ReturnType<typeof mount>[] = [];
 
 function mountPage() {
-  const w = mount(AssemblyDetail, { global: { stubs } });
+  // 2026-10-10：本页加了「标签页标题动态化」，setup 里有 `useTagsViewStore()`
+  // ⇒ mount 时必须注册 pinia（tagsView store 的 setup 路径不读 localStorage、
+  // 不碰 vue-query，所以只要一个 createPinia 即可）。
+  const pinia = createPinia();
+  const w = mount(AssemblyDetail, { global: { stubs, plugins: [pinia] } });
   mounted.push(w);
   return w;
 }

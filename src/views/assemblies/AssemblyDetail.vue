@@ -114,10 +114,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch, watchEffect } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import FileListCard from '@/components/FileListCard.vue';
 import { useDialogSize } from '@/composables/useDialogSize';
+import { useTagsViewStore } from '@/stores/tagsView';
 import type { AssemblyUpdatePayload } from '@/types/assembly';
 import AssemblyInfoCard from './components/AssemblyInfoCard.vue';
 import AssemblyChildrenTable from './components/AssemblyChildrenTable.vue';
@@ -127,6 +128,7 @@ import type { AssemblyEditForm, AssemblyAddChildForm } from './composables/useAs
 
 const route = useRoute();
 const router = useRouter();
+const tags = useTagsViewStore();
 
 // ============ 路由 → assemblyId ============
 const assemblyId = computed<string>(() => {
@@ -224,6 +226,19 @@ async function onConfirmSubmit(): Promise<void> {
     confirmSubmitting.value = false;
   }
 }
+
+// ============ 标签页标题动态化（2026-10-10）============
+// `meta.title` 是编译期常量（「装配件详情」），承载不了「按当前装配件显示序列号」这种
+// 数据到位后才有的值 ⇒ 由 `tags.setTitle` 覆盖那张已存在的 tab（静态 `meta.title`
+// 本身不动，它还是侧栏菜单等处的兜底来源）。回退链必需：后端 `serial_no` 可为 null。
+// 靠响应式派生（`route.path` + `detail`）驱动，切兄弟装配件与切回 tab 都会跟着更新；
+// `route.name` 守卫是硬需求 —— 本页被 keep-alive 缓存，切去别的页面时全局路由照样变，
+// 不守卫就会把别的 tab 刷成当前装配件的序列号。
+watchEffect(() => {
+  if (route.name !== 'AssemblyDetail') return;
+  const asm = detail.value?.assembly;
+  tags.setTitle({ path: route.path }, asm?.serial_no ?? asm?.drawing_no ?? '装配件详情');
+});
 
 // ============ 导航 ============
 function onBack(): void {
