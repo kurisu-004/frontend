@@ -12,12 +12,15 @@
 //     `invalidatePartDetailCaches`）。仍是有限 staleTime —— 别的域（生产队列 / 外协 /
 //     送货）也会写事件，本页不是这些写的调用方，穷举失效不可持续。
 //
-// 字段集以**后端 VO** 为准（`PartEventOut`，15 字段）：`batch_no` 是**工单内批次序号**
-// （i32 ⇒ JSON number，不是雪花 ID 字符串）、`worker_name` / `operator_name` /
-// `operator_username` 三个人名字段可空，事件卡（`PartHistoryCard`）的批次标签 /
-// 工人名 / 操作者三段展示全部读它们。⚠️ 本 schema **不接** `.strict()`（与详情键的
-// 28 字段 `.strict()` 不同）：事件行是追加流，后端加派生列不应让历史卡整块白屏，
-// 而「少一个必填键就炸」这一半已经由必填键声明兜住。
+// 字段集以**后端 VO** 为准（`PartEventOut`）：11 个核心字段 + 4 个由后端
+// `feat/part-detail-contract` 分支补的展示字段。`batch_no` 是**工单内批次序号**
+//（i32 ⇒ JSON number，不是雪花 ID 字符串）、`worker_name` / `operator_name` /
+// `operator_username` 三个人名字段可空且声明成 `.nullish()`（键在后端分支上，未进
+// master）—— 事件卡（`PartHistoryCard`）的批次标签 / 工人名 / 操作者三段展示全部读
+// 它们，键缺失时那三段 `v-if` 恒假、静默不渲染，而不是让整条响应 parse 失败。
+// ⚠️ 本 schema **不接** `.strict()`（与详情键的 28 字段 `.strict()` 不同）：事件行是
+// 追加流，后端加派生列不应让历史卡整块白屏，而「少一个必填键就炸」这一半已经由
+// 必填键声明兜住。
 //
 // 2026-10-10 新增：`isActive` 入参与详情键同款 —— keep-alive 下本页被缓存后
 // `route.params.id` 跟的是 vue-router 的**全局** currentRoute，切去别的页面时它照样

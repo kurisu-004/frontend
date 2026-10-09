@@ -460,18 +460,27 @@ export interface BatchToInspectionFailureFE {
 export interface BatchToInspectionOutFE {
   /** 成功项，与请求 items 同序（后端顺序处理）；失败项落在 failed[]，
    *  故 submitted.length = items.length - failed.length，**下标不与 items 对齐**。
-   *  注意后端 `ToXxxOut` 只序列化 `part` + `new_batch_id`，**不含 batch_id**
-   *  （2026-08-28 修正，见 inspection.md「ToXxxOut 字段」表）——响应 → 请求的反查
-   *  只能靠「位置 + 用 failed[].batch_id 扣除失败项」，不能指望 submitted[].batch_id。 */
+   *  注意后端 `ToXxxOut` 只序列化 `part` + `new_batch_id` + `synced_assembly_id`，
+   *  **不含 batch_id**（2026-08-28 修正，见 inspection.md「ToXxxOut 字段」表）——
+   *  响应 → 请求的反查只能靠「位置 + 用 failed[].batch_id 扣除失败项」，不能指望
+   *  submitted[].batch_id。
+   *
+   *  ⚠️ `part` 是 10 字段窄投影 `PartOut`（`api/parts/crud.ts::PartOutDto`），
+   *  **不是** 28 字段的详情 VO —— 后端 `BatchToXxxOut.submitted: Vec<ToXxxOut>`、
+   *  `ToXxxOut.part: PartOut`，单件版（`to-ship` / `to-process` / `to-inspection`）
+   *  与批量版共用同一个 VO 元素类型。 */
   submitted: Array<{
-    part: PartDetailDto;
+    part: PartOutDto;
     /** 拆批语义（后端 `_split_for_partial_op`）：
      *  - 整批操作（quantity 缺省 / >= 批次量）→ `null`，未拆批；
      *  - 部分操作（quantity < 批次量）→ `Some(remainder_id)`，而 remainder **就是入参
      *    batch_id 本身**：源批次原地减量、状态留在源状态、id 不变；被流转的那 quantity 件
      *    另立一个**新批次**（数量 = 操作量、状态翻到目标态），其 id 全程不返回。
-     *  前端拿到非 null 应刷新批次列表（会多出一行**数量 = 操作量**的新批次）。 */
+     *    前端拿到非 null 应刷新批次列表（会多出一行**数量 = 操作量**的新批次）。 */
     new_batch_id: string | null;
+    /** 父装配件 id；仅当本 part 的状态翻转触发父 status 同步时有值，否则 `null`。
+     *  消费侧目前只拿它发 WS 广播提示（后端 handler 内部消费），前端不读。 */
+    synced_assembly_id: string | null;
   }>;
   failed: BatchToInspectionFailureFE[];
 }
@@ -504,14 +513,18 @@ export interface BatchToShipFailureFE {
 }
 
 export interface BatchToShipOutFE {
-  /** 与 BatchToInspectionOutFE.submitted 同形同语义（后端 `ToXxxOut` 单 / 批端点共用）：
-   *  与请求 items 同序、**不含 batch_id**、失败项不占位。 */
+  /** 与 BatchToInspectionOutFE.submitted 同形同语义（后端 `ToXxxOut` 单 / 批端点共用同一个
+   *  元素类型，`BatchToXxxOut.submitted: Vec<ToXxxOut>`）：
+   *  与请求 items 同序、**不含 batch_id**、失败项不占位；`part` 是 10 字段窄投影
+   *  `PartOut`（不是详情 VO）。 */
   submitted: Array<{
-    part: PartDetailDto;
+    part: PartOutDto;
     /** 拆批语义与 `BatchToInspectionOutFE.submitted[].new_batch_id` 逐条一致
      *  （源批次原地减量、remainder 就是入参 batch_id、另立一个数量 = 操作量且 id
      *  不返回的新批次）。 */
     new_batch_id: string | null;
+    /** 父装配件 id；语义同 `BatchToInspectionOutFE`，前端不消费。 */
+    synced_assembly_id: string | null;
   }>;
   failed: BatchToShipFailureFE[];
 }

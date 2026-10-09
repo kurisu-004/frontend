@@ -105,16 +105,27 @@ export const partDetailSchema = z
 export type PartDetailData = z.infer<typeof partDetailSchema>;
 
 // ============================================================
-// 2. 零件事件历史（`GET /api/v2/parts/{part_id}/events` 的 `PartEventOut`，15 字段）。
+// 2. 零件事件历史（`GET /api/v2/parts/{part_id}/events` 的 `PartEventOut`，11 + 4 字段）。
 //
 // 端点**无分页、无 limit**，出参是**裸数组**（不是 `{items,total}` 信封），
 // api 层 `listPartEvents` 的返回类型就是 `PartEvent[]`。
 //
-// ⚠️ `batch_no` / `worker_name` / `operator_name` / `operator_username` 四个字段
-// 由后端随零件详情重构一并加入（2026-10-10）：`batch_no` 是**工单内批次序号**
-// （i32 ⇒ 裸 JSON **number**，不是雪花 ID 字符串，也不是字符串），另三个是人名
-// 字符串、可空。事件卡（`PartHistoryCard`）的批次标签 / 工人名 / 操作者三段
-// 展示全部读它们；后端不上这四个字段时那三段恒不渲染。
+// `PartEventOut` 的 11 个核心字段（后端 master 与 `feat/part-detail-contract` 分支
+// 共有）由 `.nullable()` 守门；下面四个字段由后端**随零件详情重构一并加入**
+// （2026-10-10）：`batch_no` 是**工单内批次序号**（i32 ⇒ 裸 JSON **number**，不是雪花
+// ID 字符串，也不是字符串），另三个是人名字符串、可空。
+//
+// ⚠️ **这四个键声明成 `.nullish()` 而不是 `.nullable()`**：它们只存在于后端分支
+// （commit `feat(part): events 出参补 batch_no / worker_name / operator_name 四字段`，
+// **未进 master**）的 `PartEventOut` 上。若声明成必填，后端未先行上线时
+// `GET /parts/{id}/events` **100% 失败**（ZodError，不是 4xx）⇒ 历史卡整块空白 +
+// 每次进页/回页一条 `ElMessage.error`，而详情 query 正常（其余卡不受影响，排障时
+// 容易误查权限 / 网络）。`.nullish()` 让两仓能各自独立上线与回滚：键缺失时
+// `PartHistoryCard` 的三处 `v-if` 恒假，那三段展示**静默不渲染**，这正是缺键时的
+// 正确降级。代价是这四个展示性字段失去「后端漏发就炸」的守门能力 —— 可接受。
+//
+// ⚠️ 部署顺序（与 CLAUDE.md「货架自动选择」一节同款警示）：本 schema **不挑版本**，
+// 两个版本都能解析；但要拿到批次标签 / 工人名 / 操作者三段展示，**后端必须先上**。
 //
 // 与前端旧 `PartEvent` 接口的差异（那份是按「t_part_event 表有这些列」臆想的，
 // 后端 VO 一个都没返）：删掉 `part_id` / `worker_id`。`part_id` 由 URL 路径参数
@@ -128,8 +139,10 @@ export const partEventSchema = z.object({
   to_status: z.string().nullable(),
   /** 事件归属批次；null = 工单级事件（如 CREATED）。 */
   batch_id: z.string().nullable(),
-  /** 工单内批次序号（i32 ⇒ JSON number），null = 工单级事件。 */
-  batch_no: z.number().nullable(),
+  /** 工单内批次序号（i32 ⇒ JSON number），null = 工单级事件。
+   *  ⚠️ `.nullish()`：键只存在于后端 `feat/part-detail-contract` 分支，未进 master，
+   *  声明必填会让「后端未先上」时整条 events 响应 parse 失败（见本节文件级警示）。 */
+  batch_no: z.number().nullish(),
   /** 本次事件涉及的数量。 */
   quantity: z.number().nullable(),
   drawing_code: z.string().nullable(),
@@ -137,12 +150,12 @@ export const partEventSchema = z.object({
   note: z.string().nullable(),
   created_at: z.string(),
   created_by: z.string().nullable(),
-  /** 工人姓名（扫码类事件）。 */
-  worker_name: z.string().nullable(),
-  /** 操作者姓名（display_name），事件卡默认用它展示。 */
-  operator_name: z.string().nullable(),
-  /** 操作者登录名，仅在 `operator_name` 为空时作 fallback。 */
-  operator_username: z.string().nullable(),
+  /** 工人姓名（扫码类事件）。⚠️ `.nullish()`，理由同 `batch_no`。 */
+  worker_name: z.string().nullish(),
+  /** 操作者姓名（display_name），事件卡默认用它展示。⚠️ `.nullish()`，理由同 `batch_no`。 */
+  operator_name: z.string().nullish(),
+  /** 操作者登录名，仅在 `operator_name` 为空时作 fallback。⚠️ `.nullish()`，理由同 `batch_no`。 */
+  operator_username: z.string().nullish(),
 });
 
 export type PartEventData = z.infer<typeof partEventSchema>;

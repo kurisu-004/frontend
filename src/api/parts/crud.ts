@@ -24,6 +24,20 @@
 //
 // 域内 schema 的派生类型用 `import type` 引入（编译期擦除）：本文件**不做 parse**，
 // 守门留在 queryFn / mutationFn（CLAUDE.md「Zod schema-first」）。
+//
+// 2026-10-10（review 第 1 轮）：11 个写端点的返回类型从 `PartDetailDto` 订正为
+// `PartOutDto` —— 后端 handler 一律返 `R<PartOut>`（10 字段窄投影），此前声明的
+// 28 字段详情 VO 后端一个都不返：`placeOnShelf` / `releaseFromProgramming` /
+// `forceCompletePart` / `scanInspect` / `deliverPart` / `scanDeliverPart` /
+// `completePart` / `startPartRepair` / `completePartRepair` / `repairDispatch`，
+// 以及 `api/parts/batch.ts` 两个批量版的 `submitted[].part` 与
+// `api/productionScan.contract.ts::ScanPickUpResultDto`。判据是后端 handler 的
+// 返回类型，不是「历史上前端写成了什么」。
+// **无运行时影响**（这些返回值的消费方一律丢弃，只靠失效链重拉），但本文件此前的
+// 声明与同文件新建的 `BatchFlowOut` 自相矛盾，而它正是本次重构的立项靶子。
+// ⚠️ 例外两处**保持** `PartDetailDto`：`getPart` / `createPart` / `updatePart` /
+// `getPartBySerial`（后端真返 `PartDetailOut`），以及 `scanPart`（打的是 v1(Python)
+// 的 `POST /parts/scan`，v2 无此路由，契约不属本次核对范围）。
 
 import { api, cleanParams, normalizeListResult } from '@/api/http';
 import { repairBatchListResultSchema } from '@/composables/queries/schemas';
@@ -54,15 +68,23 @@ import type { RepairBatchListResult } from './batch';
  *  **不是** `t_part_batch.version`。 */
 export type PartDetailDto = PartDetailData;
 
-/** 写端点出参里的 part 级窄投影（后端 `PartOut`，11 字段，投影自 `TPartInspected`）。
+/** 写端点出参里的 part 级窄投影（后端 `PartOut`，**10 字段**，投影自
+ *  `TPartInspected`）。
  *
- *  返它的端点：`POST /parts/{id}/cancel`、`POST /prod/batches/{batch_id}/cancel`、
- *  以及三个流转端点 `to-ship` / `to-process` / `to-inspection` 的 `ToXxxOut.part`
+ *  返它的端点：`POST /parts/{id}/cancel`、`POST /parts/{id}/force-complete`、
+ *  `POST /prod/batches/{batch_id}/cancel`、`/deliver`、`/complete`、`/start-repair`、
+ *  `/complete-repair`、`/repair-dispatch`、`/place-on-shelf`、
+ *  `/release-from-programming`、`/scan-inspect`、`/scan/deliver`，
+ *  以及三个流转端点 `to-ship` / `to-process` / `to-inspection` 的 `BatchFlowOut.part`
  *  与两个批量版的 `submitted[].part`。
  *
- *  比 `PartDetailDto` 少的 17 个字段（applicant_name / 价格 / 交期 / 工艺链 id …）是
- *  **后端刻意不返**（`TPartInspected` 就是 to_ship 流的最小投影），不是前端遗漏。
- *  消费侧若要展示详情，请改读 `GET /parts/{id}`。 */
+ *  比 `PartDetailDto` 少的 **18** 个字段（applicant_name / 价格 / 交期 / 工艺链 id …）
+ *  是**后端刻意不返**（`TPartInspected` 就是流转流的最小投影），不是前端遗漏。
+ *  消费侧若要展示详情，请改读 `GET /parts/{id}`。
+ *
+ *  判据是**后端 handler 的返回类型**（`Result<Json<R<PartOut>>, _>`），不是「历史上
+ *  前端写成了什么」—— 2026-10-10 订正前其中 11 个 wrapper 声明的是 28 字段的
+ *  `PartDetailDto`，后端一个都不返。 */
 export interface PartOutDto {
   id: string;
   serial_no: string | null;
@@ -326,8 +348,8 @@ export interface PlaceOnShelfPayload {
 export async function placeOnShelf(
   batchId: string,
   payload: PlaceOnShelfPayload,
-): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>(
+): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(
     `/prod/batches/${encodeURIComponent(batchId)}/place-on-shelf`,
     payload,
   );
@@ -361,8 +383,8 @@ export interface ForceCompletePayload {
 export async function forceCompletePart(
   id: number | string,
   payload?: ForceCompletePayload,
-): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>(`/parts/${id}/force-complete`, payload ?? {});
+): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(`/parts/${id}/force-complete`, payload ?? {});
   return resp.data;
 }
 
@@ -384,8 +406,8 @@ export async function releaseFromProgramming(
   batchId: string,
   nextProcessId: string,
   version?: number,
-): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>(
+): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(
     `/prod/batches/${encodeURIComponent(batchId)}/release-from-programming`,
     {
       next_process_id: nextProcessId,
@@ -462,8 +484,8 @@ export interface ScanInspectPayload {
 export async function scanInspect(
   batchId: string,
   payload: ScanInspectPayload,
-): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>(
+): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(
     `/prod/batches/${encodeURIComponent(batchId)}/scan-inspect`,
     payload,
   );
@@ -474,7 +496,7 @@ export async function scanInspect(
  *
  *  2026-10-10 订正：前端此前声明成 `{ part; new_batch_id }` 两字段，漏了第三个
  *  `synced_assembly_id`（后端 `prod/batch/vo.rs::ToXxxOut`，用于 handler 发
- *  `ASSEMBLY_UPDATED` WS 广播）；同时 `part` 是 11 字段窄投影 `PartOut` 而不是详情 VO。
+ *  `ASSEMBLY_UPDATED` WS 广播）；同时 `part` 是 10 字段窄投影 `PartOut` 而不是详情 VO。
  *
  *  - `part`：流转后的 part 级最新状态（窄投影，详见 `PartOutDto`）。
  *  - `new_batch_id`：拆批信号。整批操作（`quantity` 缺省 / >= 批次量）→ `null`；
@@ -573,11 +595,8 @@ export interface DeliverPayload {
   note?: string | null;
 }
 
-export async function deliverPart(
-  batchId: string,
-  payload: DeliverPayload,
-): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>(
+export async function deliverPart(batchId: string, payload: DeliverPayload): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(
     `/prod/batches/${encodeURIComponent(batchId)}/deliver`,
     payload,
   );
@@ -595,8 +614,8 @@ export interface ScanDeliverPartPayload {
   worker_badge_code: string;
 }
 
-export async function scanDeliverPart(payload: ScanDeliverPartPayload): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>('/prod/batches/scan/deliver', payload);
+export async function scanDeliverPart(payload: ScanDeliverPartPayload): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>('/prod/batches/scan/deliver', payload);
   return resp.data;
 }
 
@@ -610,8 +629,8 @@ export interface CompletePayload {
 export async function completePart(
   batchId: string,
   payload: CompletePayload,
-): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>(
+): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(
     `/prod/batches/${encodeURIComponent(batchId)}/complete`,
     payload,
   );
@@ -630,8 +649,8 @@ export interface StartRepairPayload {
 export async function startPartRepair(
   batchId: string,
   payload: StartRepairPayload,
-): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>(
+): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(
     `/prod/batches/${encodeURIComponent(batchId)}/start-repair`,
     payload,
   );
@@ -658,8 +677,8 @@ export interface CompleteRepairPayload {
 export async function completePartRepair(
   batchId: string,
   payload: CompleteRepairPayload,
-): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>(
+): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(
     `/prod/batches/${encodeURIComponent(batchId)}/complete-repair`,
     payload,
   );
@@ -737,8 +756,8 @@ export interface RepairDispatchPayload {
 export async function repairDispatch(
   batchId: string,
   payload: RepairDispatchPayload,
-): Promise<PartDetailDto> {
-  const resp = await api.post<PartDetailDto>(
+): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(
     `/prod/batches/${encodeURIComponent(batchId)}/repair-dispatch`,
     payload,
   );
@@ -746,7 +765,7 @@ export async function repairDispatch(
 }
 
 /** 取消工单（级联取消全部活跃批次 → part 翻 CANCELLED）。
- *  出参是 11 字段窄投影 `PartOut`（后端 `part/vo/part.rs::PartOut`），
+ *  出参是 10 字段窄投影 `PartOut`（后端 `part/vo/part.rs::PartOut`），
  *  **不是**详情 VO —— 调用方需要完整字段请另发 `GET /parts/{id}`。 */
 export async function cancelPart(id: string): Promise<PartOutDto> {
   const resp = await api.post<PartOutDto>(`/parts/${id}/cancel`);
