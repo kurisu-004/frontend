@@ -272,12 +272,13 @@ export interface PartScanPayload {
   quantity?: number | null;
 }
 
-/** `GET /parts/{id}/events` 的出参（后端 `PartEventOut`，15 字段，**裸数组**、无分页）。
+/** `GET /parts/{id}/events` 的出参（后端 `PartEventOut`，17 字段，**裸数组**、无分页）。
  *
  *  端点无 limit / offset，字段集与逐字段口径见
  *  `views/parts/detail/composables/partDetailSchema.ts::partEventSchema`
  *  （`batch_no` / `worker_name` / `operator_name` / `operator_username` 四个字段
- *  由后端随本次重构加入）。 */
+ *  由后端随零件详情重构加入；`process_id` / `process_name` 由 2026-10-12 的生产
+ *  统计重构加入。后六者都是**未进 master 的可选键**，schema 声明为 `.nullish()`）。 */
 export type PartEvent = PartEventData;
 
 // axios 会自动丢掉 undefined/null；但空串不会丢（会触发 LIKE '%%'）。

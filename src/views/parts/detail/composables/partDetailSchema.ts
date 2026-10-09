@@ -119,7 +119,7 @@ export const partDetailSchema = z
 export type PartDetailData = z.infer<typeof partDetailSchema>;
 
 // ============================================================
-// 2. 零件事件历史（`GET /api/v2/parts/{part_id}/events` 的 `PartEventOut`，11 + 4 字段）。
+// 2. 零件事件历史（`GET /api/v2/parts/{part_id}/events` 的 `PartEventOut`，11 + 6 字段）。
 //
 // 端点**无分页、无 limit**，出参是**裸数组**（不是 `{items,total}` 信封），
 // api 层 `listPartEvents` 的返回类型就是 `PartEvent[]`。
@@ -127,19 +127,23 @@ export type PartDetailData = z.infer<typeof partDetailSchema>;
 // `PartEventOut` 的 11 个核心字段（后端 master 与 `feat/part-detail-contract` 分支
 // 共有）由 `.nullable()` 守门；下面四个字段由后端**随零件详情重构一并加入**
 // （2026-10-10）：`batch_no` 是**工单内批次序号**（i32 ⇒ 裸 JSON **number**，不是雪花
-// ID 字符串，也不是字符串），另三个是人名字符串、可空。
+// ID 字符串，也不是字符串），另三个是人名字符串、可空；再下面两个是 2026-10-12 由
+// 生产统计重构加的 `process_id` / `process_name`（事件时刻批次所处的工序）。
 //
-// ⚠️ **这四个键声明成 `.nullish()` 而不是 `.nullable()`**：它们只存在于后端分支
-// （commit `feat(part): events 出参补 batch_no / worker_name / operator_name 四字段`，
-// **未进 master**）的 `PartEventOut` 上。若声明成必填，后端未先行上线时
+// ⚠️ **这六个键声明成 `.nullish()` 而不是 `.nullable()`**：它们只存在于后端分支
+// （`batch_no` / `worker_name` / `operator_name` / `operator_username` 来自
+// `feat(part): events 出参补 batch_no / worker_name / operator_name 四字段`；
+// `process_id` / `process_name` 来自 2026-10-12 的生产统计重构 commit，
+// **两者都未进 master**）的 `PartEventOut` 上。若声明成必填，后端未先行上线时
 // `GET /parts/{id}/events` **100% 失败**（ZodError，不是 4xx）⇒ 历史卡整块空白 +
 // 每次进页/回页一条 `ElMessage.error`，而详情 query 正常（其余卡不受影响，排障时
 // 容易误查权限 / 网络）。`.nullish()` 让两仓能各自独立上线与回滚：键缺失时
-// `PartHistoryCard` 的三处 `v-if` 恒假，那三段展示**静默不渲染**，这正是缺键时的
-// 正确降级。代价是这四个展示性字段失去「后端漏发就炸」的守门能力 —— 可接受。
+// `PartHistoryCard` 的各段展示 `v-if` 恒假，**静默不渲染**，这正是缺键时的
+// 正确降级。代价是这六个展示性字段失去「后端漏发就炸」的守门能力 —— 可接受。
 //
 // ⚠️ 部署顺序（与 CLAUDE.md「货架自动选择」一节同款警示）：本 schema **不挑版本**，
-// 两个版本都能解析；但要拿到批次标签 / 工人名 / 操作者三段展示，**后端必须先上**。
+// 两个版本都能解析；但要拿到批次标签 / 工人名 / 操作者 / **工序**这四段展示，
+// **后端必须先上**。
 //
 // 与前端旧 `PartEvent` 接口的差异（那份是按「t_part_event 表有这些列」臆想的，
 // 后端 VO 一个都没返）：删掉 `part_id` / `worker_id`。`part_id` 由 URL 路径参数
@@ -170,6 +174,28 @@ export const partEventSchema = z.object({
   operator_name: z.string().nullish(),
   /** 操作者登录名，仅在 `operator_name` 为空时作 fallback。⚠️ `.nullish()`，理由同 `batch_no`。 */
   operator_username: z.string().nullish(),
+  /** 2026-10-12 新增：事件发生时批次所处的工序（后端 `t_part_event.process_id`，
+   *  逻辑指向 `t_process.id`）。**雪花 ID ⇒ JSON string**，不是 number（后端走
+   *  `serialize_i64_opt`）。
+   *
+   *  ⚠️ `null` 与 `process_name` 的 `null` 是**两种不同的「无名」，不要混用同一句
+   *  占位文案**：
+   *   - 本字段 `null` = 「这条事件没记工序」—— 后端 2026-10-12 加列后**不回填**，
+   *     且只在 `prod::scan` 的 4 个构造点填它 ⇒ 历史事件与工单级 / 批次级流转事件
+   *     全是这个状态；
+   *   - `process_name` 为 `null` = 「记了工序 id，但 LEFT JOIN 取不到名」。
+   *
+   *  ⚠️ `.nullish()`，理由同 `batch_no`（键未进 master）。
+   *
+   *  ⚠️ 工序**软删不影响显名**（后端那条 JOIN 刻意不过滤 `t_process.deleted_at`）；
+   *  但**改名会显新名** —— 事件行只快照 `process_id`，不快照工序名。 */
+  process_id: z.string().nullish(),
+  /** 2026-10-12 新增：工序显示名（后端 `LEFT JOIN t_process pr` 取 `pr.name`）。
+   *
+   *  ⚠️ **没有 `(已删除)` 兜底**（那是 `statistics` 域 breakdown 那一支的形态，
+   *  两个域别互相抄）：本域取不到名就是 `null`，UI 按「工序行已不存在」渲染。
+   *  ⚠️ `.nullish()`，理由同 `batch_no`。 */
+  process_name: z.string().nullish(),
 });
 
 export type PartEventData = z.infer<typeof partEventSchema>;

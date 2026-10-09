@@ -93,7 +93,6 @@ const EXEMPT: Record<string, string[]> = {
   'views/production/components/ProcessTab.vue': ['el-tag'],
   'views/repair/RepairReceive.vue': ['el-tag'],
   'views/iam/shelves/ShelfList.vue': ['el-tag', 'el-form'],
-  'views/statistics/PickupSkipTab.vue': ['el-tag'],
   'views/statistics/WorkerDetailTab.vue': ['el-tag'],
   'views/statistics/WorkerStatsTab.vue': ['el-progress', 'el-tag'],
   // ⚠️ 2026-10-10 账号管理页现代化重构：UserList.vue 退化为薄壳，列定义（ElTag / ElButton

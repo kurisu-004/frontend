@@ -16,8 +16,9 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 | `docs/api/outsource.md` | 外协（报价 / 订单 / 收发货流转） |
 | `docs/api/programming.md` | `prod::programming` 待编程一览 |
 | `docs/api/queue.md` | `prod` 生产看板队列域 |
+| `docs/api/statistics.md` | `statistics` 生产统计域（车间总览 + 工人贡献度 + 单工人详情，含有效工时口径表） |
 
-**其余域没有 `docs/api/` 文档**（`assembly` / `wx` / `statistics` / `files` / `cnc_program` …），契约载体是代码注释。查接口按这条路径走：
+**其余域没有 `docs/api/` 文档**（`assembly` / `wx` / `files` / `cnc_program` …），契约载体是代码注释。查接口按这条路径走：
 
 1. **先查 `docs/api/` 清单**（`ls backend-rust/docs/api/`）有没有该域的文档 —— 有就直接 `Read`，它是整域契约（端点表 / 逐字段 / 口径表 / 错误码 / 前端配套清单）。
 2. **没有就去该域的 `mod.rs` 模块 doc**（`src/modules/<域>/mod.rs` 顶部的 `//!` 注释块）：域范围、端点分组、路由硬切与关键取舍都写在这里。`prod` 是容器域，子域要看 `src/modules/prod/<子模块>/mod.rs`（如 `prod/batch`、`prod/inspection`）。个别域的模块 doc 很薄（`iam` 只有一行），那就下钻该域的 `handler` / `service`。
@@ -45,6 +46,7 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 两层数据获取：
 
 - **报工台（`views/production/scan/`，2026-10-10 接入）**：`composables/useScanListQuery.ts` 的 `useScanPickableQuery` / `useScanHeldQuery` + `composables/useScanWrite.ts` 的 `useScanPickUpMutation` / `useScanWorkerScanMutation`。`staleTime: 30_000` / `gcTime: 5 * 60 * 1000`（**gcTime 保持有限值** —— `POSITIVE_INFINITY` 是 dashboard 域靠 WS 事件失效才成立的例外，本域没有失效通道，GC 设无限会让「切走 5 分钟回来」命中陈旧持有件）。三条 list 与两条写共享 `qk.scanPickable` / `qk.scanHeld` 两条参数键 + 两条域前缀键（**不挂 `partsPrefix` 下**：与零件域没有共享写点，挂 parts 下会让最热的 `qk.partsPrefix` 一把全刷捎带扫码缓存）。**params 允许 `null`** ⇒ 占位键 + `enabled` 闸门 + queryFn 二次守卫（必需：过滤键后端必填、漏传是 400 纯文本）。两条 mutation 的 `onSuccess` **与 `onError`** 都失效两条前缀 —— 40901 OCC 恰恰意味着别人已把这批处置了，本端副本过期（理由同 `useQueueDispatch`）。
+- **生产统计（`views/statistics/`，2026-10-12 接入）**：`composables/` 下三个 query hook —— `useStatisticsOverviewQuery.ts`（车间总览）/ `useStatisticsWorkersQuery.ts`（工人贡献度列表）/ `useStatisticsWorkerDetailQuery.ts`（单工人详情），守门 schema 与三者同居 `views/statistics/composables/statisticsSchema.ts`。键为 `qk.statisticsPrefix` 前缀键 + 三条参数键 `qk.statisticsOverview(params)` / `qk.statisticsWorkers(params)` / `qk.statisticsWorkerDetail(workerId, params)`，三条都以 `{ date_from, date_to }`（`StatisticsQuery`，`types/statistics.ts`）作尾部键位；`workerId` 走**独立键位**而不是塞进 params 对象 —— 端点按工人分片返回，不带 id 切工人会拿上一个工人的详情冒充当前工人。params 允许 `null` ⇒ 占位键 + `enabled` 闸门 + queryFn 二次守卫（后端两个日期是必填 `NaiveDate`，漏传是 HTTP 400 纯文本）。`qk.statisticsWorkers` **被两个 tab 共用**（工人表与单工人详情的工人下拉是同一份数据），同屏去重靠的就是这一条。**`qk.statisticsPrefix` 不挂 `partsPrefix` 下**：本域是纯只读域、零写点，挂上去只会在零件域任何一次写操作后把三张报表一把全刷，而统计口径与零件状态流转无关（有效工时只取决于工单锚链上配的 `estimated_minutes`，不随某张零件进出流程变）。同理本域当前**没有任何 invalidate 调用方**，将来出现写操作时走 `qk.statisticsPrefix` 一把全失效即可。
 - **`useScanBus` 已删（2026-10-10）**：它原本只服务「提交后通知徽章刷新」，而徽章与三页共用同一条 `qk.scanHeld` 后该信号冗余。剩下的「提交成功后自动开抽屉」是**写侧信息**（invalidate 只说「数据过期了」，不说「刚刚有人提交成功」），故由徽章上的 **`autoOpenToken` 计数器 prop** 承接，不用模块级单例 —— 退而用 `watch(query.dataUpdatedAt)` 之类的数据侧近似会在暖缓存进页面时失准（缓存新鲜 ⇒ 不发请求 ⇒ 提交后那一次要么被当成「首次更新」跳过，要么在任意一次后台 refetch 上误开抽屉）。自增点放在 `await mutateAsync()` 之后（TanStack 会 await `onSuccess` 返回的 promise，此时失效链的 refetch 已 settle，抽屉打开时看到的是刷新后的列表）。
 - **共享基础数据层** `src/composables/queries/`：`staleTime: 30_000` / `gcTime: 5 * 60 * 1000`（有限值，禁 `POSITIVE_INFINITY`）。
 - **页面级 store** `src/views/<域>/<页>/composables/useXxxStore.ts`：沿用 4 不变量（首调 / `onBeforeUnmount` `$dispose` / 禁解构 / 不 import vue-router），内部持有分页筛选勾选 + useQuery + useMutation。**useQuery 段可外提成同域独立 query hook**（见下）。
@@ -87,6 +89,8 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 **域 schema 与 query hook 同居**：主查询的守门 schema 放域内 query hook 旁边（`src/views/<域>/<页>/composables/<xxx>Schema.ts`，如 `pendingProgrammingSchema.ts` / `inspectionSchema.ts` / `scanSchema.ts`），导出 `xxxSchema` + `z.infer` 派生类型（`*Data` 后缀，api 层用它标注返回类型）。`src/composables/queries/schemas.ts` 只留**跨域共用**的基础数据层 schema，域 schema 迁出时在该文件留一段**指针注释**说明去向，且**不做 re-export**（再导一层没有消费方，只会让读代码的人多一个「该 import 哪个路径」的判断）。对应用例也一并搬到域内（`views/<域>/.../__tests__/<xxx>Schema.spec.ts`）。
 
 **守门点随分层搬家（2026-10-10，报工台先行）**：报工台原先把 `.parse()` 写在 api helper 里（`api/parts/crud.ts::listPartsHeldByWorker`），守门 schema 在全局 `composables/queries/schemas.ts`；接入 TanStack Query 后改成 **`api 层只发请求 + 类型标注（不 parse）、守门在 queryFn / mutationFn`** —— 与本文件「TanStack Query」一节的 `queryFn Zod 守门` 同款。搬家的连带收益是 api 模块不再 import 域内 schema（`api → views` 这条边只剩「无 queryFn 承载的单次拉取」一种，见下）。断言也要跟着搬：api 层那批「helper 必须在边界 reject 坏响应」的用例**不再成立**，改守「api 层不做 parse」（负向守卫，防止有人图省事把 parse 搬回去），而「parse 真的接在返回路径上」由 query hook 的 spec 守 —— 把 parse 整段删掉时 api 层 spec 全绿而线上崩。
+
+**statistics 域的 schema 归位（2026-10-12）**：`overviewOutSchema` / `workerStatsListOutSchema` / `workerDetailOutSchema` 三条守门 schema 都在 `src/views/statistics/composables/statisticsSchema.ts`，与三个 query hook 同居（`src/composables/queries/schemas.ts` 顶部留了一段**指针注释**说明去向）。**不做 re-export**：再导一层没有任何消费方 —— api 层只用 `import type` 取 `*Data` 派生类型标注返回类型，消费侧的组件直接从域内路径 import；多一个中转出口只会让读代码的人多一次「该 import 哪个路径」的判断，且迁进迁出时多一个要同步的地方。对应用例也一并搬到域内（`views/statistics/composables/__tests__/statisticsSchema.spec.ts`），api 层只留「不 parse」的负向守卫（`src/api/__tests__/statistics.spec.ts`）—— 这两条必须成对存在：缺 api 层那条，把 parse 搬回 api 层是零测试信号；缺 query hook 那条（`useStatisticsWorkersQuery.spec.ts` 的坏响应用例），把 parse 从 queryFn 删掉也是零测试信号。
 
 ### 目录归位
 

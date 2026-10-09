@@ -3,18 +3,27 @@
 
   生产统计总入口（/statistics），挂在 MainLayout 下。
 
-  四个 tab：
+  三个 tab：
     - overview      车间生产总览（KPI 卡 + 折线 + 饼图）
     - workers       工人报工总览（工种筛选 + 水平条形 + 工人表）
     - worker-detail 单工人详情（折线 + 参与工单表）
-    - pickup-skips  跳序取件统计（汇总表 + drawer 明细分页；2026-08-05）
 
   顶部筛选区为时间范围（快捷按钮 / 自定义日期对），传 dateFrom / dateTo
-  两个 ISO 'YYYY-MM-DD' 给子组件，子组件各自 watch 拉数。
+  两个 ISO 'YYYY-MM-DD' 给子组件。
 
-  activeTab 切换**不**重发请求——只有 dateFrom / dateTo 变化才推送给子组件。
-  选中工人后切到 worker-detail tab，并通过 ref 传 workerId。
-  pickup-skips tab 不消费 dateFrom / dateTo（append-only 历史流）。
+  2026-10-12：**三个 tab 各自调自己的 query hook**，父组件不持有任何 tab 的数据态
+  （也不要改成「父组件取数再向下传」）。理由：三个 tab 的数据集与生命周期彼此独立
+  （tab2 的工人列表同时是 tab3 工人下拉的候选集，共用同一条 queryKey 才能同屏去重、
+  跨 tab 命中 30s 缓存），由父组件持有会把三份状态耦合成一份，切 tab 时要么提前取数
+  （多打两条本不该发的请求）要么暴露 loading 给没在看的 tab。
+
+  换日期 / 换 tab 的取数时机由各自的 hook 决定：日期进 queryKey ⇒ 变了自动 refetch；
+  三个 el-tab-pane 都带 `lazy` ⇒ 首次进入那个 tab 时才挂载子组件、才发对应那条请求，
+  切走再切回命中 30s 缓存（不重新打）。
+  ⚠️ `lazy` 是这三个 pane 的必要属性，不是可选项：TabPane 不带 `lazy` 时三个 pane
+  首屏全部挂载，进页面就并发打 /statistics/overview 与 /statistics/workers
+  （worker-detail 那条虽有 enabled 闸门不发请求），与上面的意图正好相反。
+  选中工人后切到 worker-detail tab，并通过 prop 传 workerId。
 -->
 
 <template>
@@ -55,10 +64,14 @@
     </el-card>
 
     <el-tabs v-model="activeTab" type="border-card" class="stats-tabs">
-      <el-tab-pane label="车间生产总览" name="overview">
+      <!-- 2026-10-12 三个 pane 全部加 lazy：TabPane 无 lazy 时三个 pane 在首屏
+           就全部挂载 ⇒ 进页面立刻并发打 /statistics/overview 与 /statistics/workers
+           （外加 enabled 为假的 worker-detail 占位键），与「切 tab 才取数」的意图相反。
+           lazy 后首次进入某个 tab 才挂载该 pane 的子组件、取数时机随之对齐。 -->
+      <el-tab-pane label="车间生产总览" name="overview" lazy>
         <OverviewTab v-if="dateFrom" :date-from="dateFrom" :date-to="dateTo" />
       </el-tab-pane>
-      <el-tab-pane label="工人报工总览" name="workers">
+      <el-tab-pane label="工人报工总览" name="workers" lazy>
         <WorkerStatsTab
           v-if="dateFrom"
           :date-from="dateFrom"
@@ -66,16 +79,13 @@
           @selectWorker="onSelectWorker"
         />
       </el-tab-pane>
-      <el-tab-pane label="单工人详情" name="worker-detail">
+      <el-tab-pane label="单工人详情" name="worker-detail" lazy>
         <WorkerDetailTab
           v-if="dateFrom"
           :date-from="dateFrom"
           :date-to="dateTo"
           :worker-id="selectedWorkerId"
         />
-      </el-tab-pane>
-      <el-tab-pane label="跳序取件" name="pickup-skips">
-        <PickupSkipTab />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -88,7 +98,6 @@ import { DataAnalysis } from '@element-plus/icons-vue';
 import OverviewTab from './OverviewTab.vue';
 import WorkerStatsTab from './WorkerStatsTab.vue';
 import WorkerDetailTab from './WorkerDetailTab.vue';
-import PickupSkipTab from './PickupSkipTab.vue';
 
 type RangePreset = 'this-month' | 'last-month' | 'this-year' | 'custom';
 
@@ -160,10 +169,10 @@ function onCustomRangeChange(v: [string, string] | null): void {
   dateRange.value = [v[0], v[1]];
 }
 
-// 当 dateRange 直接被改（preset 切换 / 初始值），推送给子组件由 watch 触发。
-// 这里不额外写 watch，因为 dateFrom/dateTo 是 computed，子组件 watch 已能响应。
+// 2026-10-12：这里不再写「推送给子组件由 watch 触发」的 watch —— dateFrom / dateTo
+// 是 computed，子组件把它们拼进各自 hook 的 queryKey，变化时自动 refetch。
 
-const activeTab = ref<'overview' | 'workers' | 'worker-detail' | 'pickup-skips'>('overview');
+const activeTab = ref<'overview' | 'workers' | 'worker-detail'>('overview');
 const selectedWorkerId = ref<string | null>(null);
 
 function onSelectWorker(workerId: string): void {

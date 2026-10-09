@@ -11,6 +11,11 @@
   - 新增 selectedBatchId props：PartBatchMonitorCard 行选中时，本卡按
     `event.batch_id === selectedBatchId` 过滤；空态文案按「无选中 / 无事件」
     分支区分。selectedBatchId=null 时显示全部事件（向后兼容）。
+
+  2026-10-12：在 event-line-3 加「工序」段（照抄该行既有的 meta-label +
+  meta-value 渲染模式），读后端同批新增的 `process_id` / `process_name`
+  （`views/parts/detail/composables/partDetailSchema.ts::partEventSchema`）。
+  两条占位纪律写在 `PROCESS_MISSING_TEXT` 的注释里。
 -->
 <template>
   <el-card v-loading="eventsLoading" shadow="never" class="history-card">
@@ -64,7 +69,7 @@
                 {{ statusLabelOf(evt.to_status) }}
               </span>
             </div>
-            <div v-if="evt.drawing_code || evt.badge_code" class="event-line-3">
+            <div v-if="evt.drawing_code || evt.badge_code || evt.process_id" class="event-line-3">
               <span v-if="evt.drawing_code">
                 <span class="meta-label">图纸</span>
                 <span class="meta-value">{{ evt.drawing_code }}</span>
@@ -72,6 +77,17 @@
               <span v-if="evt.badge_code">
                 <span class="meta-label">工牌</span>
                 <span class="meta-value">{{ evt.badge_code }}</span>
+              </span>
+              <!-- 2026-10-12：事件时刻批次所处的工序（后端 2026-10-12 加的两列）。
+                   只在 process_id 有值时渲染这一段 —— 「这条事件没记工序」（历史事件与
+                   工单级 / 批次级流转事件）是常态，全量渲染会让整条时间线每张卡都挂一个
+                   空工序位。
+                   ⚠️ process_id 有值但 process_name 为空是**另一种无名**（记了 id 但
+                   工序行取不到），单独用一句占位，不与上面那种混用同一文案。
+                   ⚠️ 工序软删仍显原名（后端那条 JOIN 不过滤 deleted_at），改名会显新名。 -->
+              <span v-if="evt.process_id">
+                <span class="meta-label">工序</span>
+                <span class="meta-value">{{ evt.process_name || PROCESS_MISSING_TEXT }}</span>
               </span>
             </div>
             <div v-if="evt.note" class="event-note">备注：{{ evt.note }}</div>
@@ -109,6 +125,14 @@ const props = defineProps<{
    */
   selectedBatchId?: string | null;
 }>();
+
+/**
+ * 2026-10-12：事件带 `process_id`、但 `process_name` 取不到名时的占位文案。
+ * 刻意**不**与「这条事件没记工序」（`process_id === null`，那一支整段不渲染）共用
+ * 一句话 —— 两种「无名」的成因不同，混用会让排障时把「工序行查不到」误读成
+ * 「事件本来就没工序」。
+ */
+const PROCESS_MISSING_TEXT = '工序行已不存在';
 
 /**
  * 2026-09-17 新增：按 selectedBatchId 派生的事件列表。

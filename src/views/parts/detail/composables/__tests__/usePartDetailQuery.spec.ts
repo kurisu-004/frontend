@@ -89,7 +89,8 @@ function validDetail(id: string) {
   };
 }
 
-/** 一行合法的 `PartEventOut`（15 字段；`batch_no` 是**裸 number**）。 */
+/** 一行合法的 `PartEventOut`（17 字段；本 fixture 省掉两个 `.nullish()` 的
+ *  `process_id` / `process_name`；`batch_no` 是**裸 number**）。 */
 function validEvent(id: string) {
   return {
     id,

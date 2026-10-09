@@ -1,59 +1,20 @@
-/** 2026-09-29 新增：生产统计 overview 出参 schema（守门 backend-rust OverviewOut VO）。
- *
- * 字段对齐 src/types/statistics.ts::OverviewOut：
- *   - 顶层 date_from / date_to：日期范围 string（'YYYY-MM-DD'，来自 caller）。
- *   - 8 个基础统计 number：created_count / completed_count / in_process_count /
- *     delivered_count / late_orange_count / late_red_count /
- *     overdue_undelivered_count / repair_part_count。
- *   - delivered_value：rust_decimal::Decimal + serde-with-str → string，
- *     与 unit_price / total_price 同形态（不强制 .regex）。
- *   - 4 个图表：daily_created / daily_completed / delivery_performance /
- *     status_distribution 数组。
- *
- * 生产消费方：**仅生产统计页**（views/statistics/OverviewTab.vue）。dashboard 域
- * 已在 2026-10-07 改读 `GET /dashboard/snapshot` 的 `overdue_count`，不再消费本 schema。
- *
- * 所有非 Option 字段必填显式声明（见 CLAUDE.md「TanStack Query」的 Zod 守门条目；
- * `__tests__/schemas.spec.ts` 的 S4 系列用例是这条的回归保护），调用方通过
- * overviewOutSchema.parse(response) 在 api 边界守门。 */
-export const overviewOutSchema = z.object({
-  date_from: z.string(),
-  date_to: z.string(),
-  created_count: z.number(),
-  completed_count: z.number(),
-  in_process_count: z.number(),
-  delivered_count: z.number(),
-  delivered_value: z.string(),
-  late_orange_count: z.number(),
-  late_red_count: z.number(),
-  overdue_undelivered_count: z.number(),
-  repair_part_count: z.number(),
-  daily_created: z.array(
-    z.object({
-      date: z.string(),
-      count: z.number(),
-    }),
-  ),
-  daily_completed: z.array(
-    z.object({
-      date: z.string(),
-      count: z.number(),
-    }),
-  ),
-  delivery_performance: z.object({
-    on_time: z.number(),
-    orange: z.number(),
-    red: z.number(),
-  }),
-  status_distribution: z.array(
-    z.object({
-      status_value: z.string(),
-      count: z.number(),
-    }),
-  ),
-});
-
-export type OverviewOutSchema = z.infer<typeof overviewOutSchema>;
+// ============================================================
+// 生产统计（overview / workers / workers/{id}）的三个守门 schema **已迁出本文件**
+// （2026-10-12）→ `src/views/statistics/composables/statisticsSchema.ts`。
+//
+// 迁出的理由与 `inspection` / `process-design` / 报工台三处同款：本文件是**跨域共用的
+// 基础数据层** schema（货架 / 客户 / 工序 / 工种 / 零件 …），statistics 域只服务生产
+// 统计页的三个 tab，且三个守门点都跟着新接入的 query hook 走（域内 queryFn）。留在
+// 共享文件里既不归属，也让「域内文件反向依赖全局共享文件」成为常态。
+//
+// 消费方一律从新路径 import：`@/views/statistics/composables/statisticsSchema`。
+// 本文件**不再 re-export** —— 再导一层没有消费方，却让读代码的人多一个「该 import 哪个
+// 路径」的判断（与 `api/productionQueue.ts` 只透传 `ListQueuePendingParams` 的取舍一致）。
+//
+// ⚠️ 迁移前留在本文件的那份是**死代码**：全仓零 import、零 parse 调用点，它自己的 doc
+// 声称「调用方在 api 边界守门」并不属实。守门点随分层搬到 queryFn 后，api 层只剩
+// 「发请求 + 用 z.infer 派生类型标注返回类型」这一件事。
+// ============================================================
 
 // 2026-09-26 新增：基础数据查询返回值 Zod 校验。
 //

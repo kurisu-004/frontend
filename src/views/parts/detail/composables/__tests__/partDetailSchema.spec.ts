@@ -20,7 +20,11 @@
 //   - E1：`partEventSchema` 的 `batch_no` 是**裸 JSON number**（发 string 抛），
 //     三个新增人名字段可为 null；
 //   - E1b / E1c：不加 `.strict()` 时未知键被 strip、三个新增人名为 null；
-//   - E3：**缺那 4 个键（后端未上 `feat/part-detail-contract` 分支）仍能 parse 通过** ——
+//   - E1d / E1e：2026-10-12 补的 `process_id` / `process_name` 两键有值时 parse 后
+//     **仍在且取值一致**（`PartHistoryCard` 的工序段展示位依赖它们），发 number 抛
+//     （雪花 ID 是 string）、发 null 通过（`.nullish()`）；
+//   - E3：**缺那 6 个键仍能 parse 通过**（四个来自后端未上线的
+//     `feat/part-detail-contract` 分支、两个来自 2026-10-12 的生产统计重构）——
 //     这是两仓能独立上线的关键，声明必填时后端未先上会让历史卡整块空白 + 假错误；
 //   - E4：键存在时仍守类型（batch_no 发 string 抛、核心 id / batch_id 缺仍抛）；
 //   - E2：`created_at` / `event_type` / `id` 必填；
@@ -86,6 +90,8 @@ function makeEvent(overrides: Record<string, unknown> = {}): Record<string, unkn
     worker_name: '李四',
     operator_name: '王五',
     operator_username: 'wangwu',
+    process_id: '9000000000030',
+    process_name: '精加工',
     ...overrides,
   };
 }
@@ -209,10 +215,10 @@ describe('partDetailSchema — 零件详情（28 字段 .strict()）', () => {
   });
 });
 
-describe('partEventSchema — 零件事件（11 + 4 字段）', () => {
-  it('E1：完整 15 字段通过；batch_no 是裸 JSON number（发 string 抛错）', () => {
+describe('partEventSchema — 零件事件（11 + 6 字段）', () => {
+  it('E1：完整 17 字段通过；batch_no 是裸 JSON number（发 string 抛错）', () => {
     const evt = makeEvent();
-    expect(Object.keys(evt)).toHaveLength(15);
+    expect(Object.keys(evt)).toHaveLength(17);
     const parsed = partEventSchema.parse(evt);
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(evt).sort());
     expect(parsed.batch_no).toBe(3);
@@ -242,6 +248,28 @@ describe('partEventSchema — 零件事件（11 + 4 字段）', () => {
     expect(parsed.operator_username).toBeNull();
   });
 
+  // 2026-10-12 生产统计重构给 `PartEventOut` 加的两键（`PartHistoryCard` 的工序段
+  // 展示位唯一的数据来源）。它们此前**零测试信号**：把 schema 里那两行删掉，本文件
+  // 全绿而线上工序段静默不渲染 —— 与 CLAUDE.md 点名的「把 parse 整段删掉时 api 层
+  // spec 全绿而线上崩」同款失败模式，故补两条断言。
+  it('E1d：两键带值时 parse 后仍在且取值一致（键集合不得被 strip）', () => {
+    const parsed = partEventSchema.parse(makeEvent());
+    expect(Object.keys(parsed)).toContain('process_id');
+    expect(Object.keys(parsed)).toContain('process_name');
+    // process_id 是雪花 ID ⇒ JSON **string**（后端走 serialize_i64_opt）
+    expect(parsed.process_id).toBe('9000000000030');
+    expect(parsed.process_name).toBe('精加工');
+  });
+
+  it('E1e：两键发 number 必须抛错（雪花 ID 是 string）；发 null 通过（.nullish()）', () => {
+    expect(() => partEventSchema.parse(makeEvent({ process_id: 9000000000030 }))).toThrow();
+    expect(() => partEventSchema.parse(makeEvent({ process_name: 1 }))).toThrow();
+    // 两键都声明成 `.nullish()`：显式 null（没记工序 / 记了工序但 LEFT JOIN 取不到名）
+    const parsed = partEventSchema.parse(makeEvent({ process_id: null, process_name: null }));
+    expect(parsed.process_id).toBeNull();
+    expect(parsed.process_name).toBeNull();
+  });
+
   it('E2：created_at / event_type / id 必填，缺任一抛错', () => {
     for (const key of ['id', 'event_type', 'created_at'] as const) {
       const evt = makeEvent();
@@ -251,13 +279,22 @@ describe('partEventSchema — 零件事件（11 + 4 字段）', () => {
     expect(() => partEventSchema.parse(makeEvent({ id: 3 }))).toThrow();
   });
 
-  // 这四个键只存在于后端 `feat/part-detail-contract` 分支（未进 master）的
-  // `PartEventOut` 上。声明成必填时，后端未先行上线 ⇒ 整条 events 响应 100% parse
-  // 失败 ⇒ 历史卡整块空白 + 每次进页一条假错误，而详情 query 正常（排障易误查
-  // 权限 / 网络）。`.nullish()` 让两仓能各自独立上线与回滚。
-  it('E3：后端未上那四个字段时（键整个不存在）仍能 parse 通过（两仓可独立上线）', () => {
+  // 这六个键只存在于后端尚未上线 master 的 `PartEventOut` 上：`batch_no` /
+  // `worker_name` / `operator_name` / `operator_username` 来自
+  // `feat/part-detail-contract` 分支，`process_id` / `process_name` 来自 2026-10-12
+  // 的生产统计重构（两者都未进 master）。声明成必填时，后端未先行上线 ⇒ 整条 events
+  // 响应 100% parse 失败 ⇒ 历史卡整块空白 + 每次进页一条假错误，而详情 query 正常
+  // （排障易误查权限 / 网络）。`.nullish()` 让两仓能各自独立上线与回滚。
+  it('E3：后端未上那六个字段时（键整个不存在）仍能 parse 通过（两仓可独立上线）', () => {
     const evt = makeEvent();
-    for (const key of ['batch_no', 'worker_name', 'operator_name', 'operator_username']) {
+    for (const key of [
+      'batch_no',
+      'worker_name',
+      'operator_name',
+      'operator_username',
+      'process_id',
+      'process_name',
+    ]) {
       delete evt[key];
     }
     const parsed = partEventSchema.parse(evt);
@@ -265,9 +302,12 @@ describe('partEventSchema — 零件事件（11 + 4 字段）', () => {
     expect(parsed.worker_name).toBeUndefined();
     expect(parsed.operator_name).toBeUndefined();
     expect(parsed.operator_username).toBeUndefined();
-    // 展示位降级是「不渲染」而不是「报错」：PartHistoryCard 三处都是 v-if
+    expect(parsed.process_id).toBeUndefined();
+    expect(parsed.process_name).toBeUndefined();
+    // 展示位降级是「不渲染」而不是「报错」：PartHistoryCard 各处都是 v-if
     expect(Boolean(parsed.batch_no)).toBe(false);
-    // 核心 11 字段一个都不能少（守住「nullish 只降级那四个展示键」这条边界）
+    expect(Boolean(parsed.process_id)).toBe(false);
+    // 核心 11 字段一个都不能少（守住「nullish 只降级那六个展示键」这条边界）
     expect(parsed.id).toBe('3000000000001');
     expect(parsed.batch_id).toBe('3000000000002');
     expect(parsed.created_at).toBe('2026-10-03 11:00:00');
@@ -276,6 +316,7 @@ describe('partEventSchema — 零件事件（11 + 4 字段）', () => {
   it('E4：键存在时仍守类型 —— batch_no 发字符串抛、id 缺仍抛（没有一起降级成 any）', () => {
     expect(() => partEventSchema.parse(makeEvent({ batch_no: '3' }))).toThrow();
     expect(() => partEventSchema.parse(makeEvent({ worker_name: 4 }))).toThrow();
+    expect(() => partEventSchema.parse(makeEvent({ process_id: 9000000000030 }))).toThrow();
     const noId = makeEvent();
     delete noId.id;
     expect(() => partEventSchema.parse(noId)).toThrow();

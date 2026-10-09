@@ -3,17 +3,21 @@
 
   Tab 3 - 单工人详情。
 
-  顶部：工人选择器（filterable），优先从 tab2 缓存挑；未加载过 tab2 时提示用户
-  先到「工人报工总览」加载一次（不发新端点，与任务约束一致）。
+  顶部：工人选择器（filterable）。候选集来自域内 query hook `useStatisticsWorkersQuery`
+  （与 tab2 工人表共用同一条 queryKey，切到本 tab 时通常直接命中缓存，不另发请求）。
 
-  卡片行：领取次数 / 领取件数 / 参与工单数 / 归还次数（el-statistic）。
+  卡片行：领取次数 / 领取件数 / 参与工单数 / 归还次数 / 有效工时（el-statistic）。
 
   图：每日领取趋势折线图。
 
   表：参与工单一览（serial_no / 名称 / 图号 / 当前状态 / 我的领取次数 / 最近领取时间
      / 操作 → 跳零件详情）。
 
-  workerId 为 null → el-empty「请选择工人」。
+  表：按工序工时（工序 / 完成次数 / 有效工时（小时）），消费 process_breakdown。
+     ⚠️ 两种「无名」用不同文案：process_id 为 null = 这条作业事件没记工序 → 「未记工序」；
+     process_name 为 '(已删除)' = 记了工序 id 但工序行取不到 → 原样展示。
+
+  未选工人 → el-empty「请选择工人」。
 -->
 
 <template>
@@ -24,7 +28,7 @@
         <el-form-item label="选择工人">
           <el-select
             v-model="selectedWorkerId"
-            placeholder="请先在「工人报工总览」加载一次后，再在此选择工人"
+            placeholder="请选择工人"
             filterable
             clearable
             style="width: 320px"
@@ -38,15 +42,10 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="!hasCache">
-          <el-button type="primary" :loading="warmingCache" @click="warmCache">
-            加载工人列表
-          </el-button>
-        </el-form-item>
       </el-form>
     </el-card>
 
-    <template v-if="!workerId">
+    <template v-if="!selectedWorkerId">
       <el-empty description="请选择工人" />
     </template>
 
@@ -94,6 +93,16 @@
               <el-card shadow="never" class="kpi-card">
                 <el-statistic title="归还次数" :value="data.return_count">
                   <template #suffix>次</template>
+                </el-statistic>
+              </el-card>
+            </el-col>
+            <!-- 2026-10-12 新增：有效工时。后端给分钟整数，换算成小时、展示 1 位小数。
+                 口径要求工单配了工序链，没配链的工单恒为 0 —— 大面积 0 是口径的必然结果，
+                 不在 UI 上为它加特殊分支。 -->
+            <el-col :xs="12" :sm="12" :md="6">
+              <el-card shadow="never" class="kpi-card">
+                <el-statistic title="有效工时" :value="effectiveHours" :precision="1">
+                  <template #suffix>小时</template>
                 </el-statistic>
               </el-card>
             </el-col>
@@ -162,6 +171,56 @@
               </el-table-column>
             </el-table>
           </el-card>
+
+          <!-- 2026-10-12 新增：按工序工时表（消费 process_breakdown，服务端已排好序，前端不重排） -->
+          <el-card shadow="never">
+            <template #header>
+              <span class="chart-title">
+                按工序工时（共 {{ data.process_breakdown.length }} 道工序）
+              </span>
+            </template>
+            <div class="table-toolbar">
+              <ColumnVisibilityPopover
+                :defs="breakdownColumnDefs"
+                :model-value="breakdownColumnVisibility.currentMap"
+                @update:model-value="breakdownColumnVisibility.update"
+                @reset="breakdownColumnVisibility.showAll"
+                @resetOrder="breakdownDrag.reset"
+              />
+            </div>
+            <el-table
+              ref="breakdownTableRef"
+              :data="data.process_breakdown"
+              :row-key="breakdownRowKey"
+              stripe
+              border
+              size="default"
+              empty-text="该工人期内没有完成工序的作业记录"
+            >
+              <template v-for="d in breakdownDrag.orderedDefs.value" :key="columnIdentifier(d)">
+                <el-table-column
+                  v-if="breakdownColumnVisibility.isVisible(d.key)"
+                  :prop="d.prop ?? d.key"
+                  :label="d.label"
+                  :width="d.width"
+                  :min-width="d.minWidth"
+                  :align="d.align"
+                  :sortable="d.sortable"
+                  :show-overflow-tooltip="d.showOverflowTooltip"
+                  :column-key="d.columnKey ?? d.key"
+                  :label-class-name="breakdownDrag.dragLabelClass(d)"
+                >
+                  <template v-if="d.cellRender" #default="scope">
+                    <component :is="d.cellRender(scope)" />
+                  </template>
+                  <template v-if="resolveDraggable(d) && !d.type && !d.fixed" #header>
+                    <span>{{ d.label }}</span>
+                    <ColumnDragHandle :title="`拖动 ${d.label} 列`" />
+                  </template>
+                </el-table-column>
+              </template>
+            </el-table>
+          </el-card>
         </template>
       </div>
     </template>
@@ -169,12 +228,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from 'vue';
+import { computed, h, ref, watch } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
-import { ElMessage, ElTag } from 'element-plus';
+import { ElTag } from 'element-plus';
 import EChart from '@/components/EChart.vue';
-import { fetchWorkerDetail, fetchWorkerStats } from '@/api/statistics';
-import type { WorkerDetailOut, WorkerStatsItem } from '@/types/statistics';
+import { useStatisticsWorkersQuery } from './composables/useStatisticsWorkersQuery';
+import { useStatisticsWorkerDetailQuery } from './composables/useStatisticsWorkerDetailQuery';
+import type { WorkerDetailOutData, WorkerStatsListOutData } from './composables/statisticsSchema';
+import type { StatisticsQuery } from '@/types/statistics';
 import type { OrderStatus } from '@/types/parts';
 import { STATUS_LABEL, STATUS_TAG_TYPE } from '@/constants/partStatus';
 import {
@@ -186,7 +247,10 @@ import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import ColumnVisibilityPopover from '@/components/ColumnVisibilityPopover.vue';
 
-type WorkerPartRow = WorkerDetailOut['parts'][number];
+/** 行类型取自 Zod schema 的推导类型（与 query 的返回类型同源），不用手写镜像。 */
+type WorkerPartRow = WorkerDetailOutData['parts'][number];
+type ProcessBreakdownRow = WorkerDetailOutData['process_breakdown'][number];
+type WorkerOptionsRow = WorkerStatsListOutData['items'][number];
 
 interface Props {
   dateFrom: string;
@@ -200,11 +264,20 @@ const router = useRouter();
 // 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止在 setup 顶层读 props.x。
 // 包一层 IIFE 把 props.workerId 读取放进函数体。
 const selectedWorkerId = ref<string | null>((() => props.workerId)());
-const workerOptions = ref<WorkerStatsItem[]>([]);
-const hasCache = computed(() => workerOptions.value.length > 0);
-const warmingCache = ref(false);
-const loading = ref(false);
-const data = ref<WorkerDetailOut | null>(null);
+
+/** 日期区间 → 两条 query 的 params；日期不齐时传 null ⇒ hook 内 enabled=false。 */
+const statsParams = computed<StatisticsQuery | null>(() =>
+  props.dateFrom && props.dateTo ? { date_from: props.dateFrom, date_to: props.dateTo } : null,
+);
+
+// 2026-10-12：工人下拉的候选集改由 query hook 提供。它与 tab2 工人表共用同一条
+// qk.statisticsWorkers 键 ⇒ 同一个日期区间下切到本 tab 直接命中 tab2 那份缓存，
+// 不再需要原先「二次拉一次列表来预热下拉」的那个按钮。
+const workersQuery = useStatisticsWorkersQuery(statsParams);
+const workerOptions = computed<WorkerOptionsRow[]>(() => workersQuery.data.value?.items ?? []);
+
+const { data, isFetching } = useStatisticsWorkerDetailQuery(selectedWorkerId, statsParams);
+const loading = isFetching;
 
 // 2026-08-27 Task 9：列顺序拖动 + 可见性。
 // 2026-08-28 改造：表格在 `v-if="data"` 内（首次加载完成才渲染，workerId 清空后又销毁）
@@ -284,70 +357,92 @@ const drag = useColumnDrag(columnDefs, { listKey: 'worker_detail' });
 // 2026-08-28 改造：传 el-table 实例 ref，composable 内部 watch(ref) + MutationObserver 自愈。
 drag.applyDrag(tableRef);
 
+// ============== 有效工时：KPI 卡 + 按工序工时表（2026-10-12 新增） ==============
+
+/** 小时数值 → 1 位小数；值不可用时给占位符「—」（绝不吐 NaN / Infinity）。 */
+function formatHours(hours: unknown): string {
+  const v = Number(hours);
+  return Number.isFinite(v) ? v.toFixed(1) : '—';
+}
+
+/** 后端分钟整数 → 小时数值（换算在前端做，展示 1 位小数）。 */
+function minutesToHours(minutes: unknown): number {
+  return Number(minutes) / 60;
+}
+
+/** KPI 卡取值：el-statistic 只收 number，小数位交给 :precision。 */
+const effectiveHours = computed<number>(() => {
+  const hours = minutesToHours(data.value?.effective_minutes);
+  return Number.isFinite(hours) ? hours : 0;
+});
+
+/** process_id 可空 ⇒ row-key 不能直接用它，给「无工序」那一组一个稳定占位键。 */
+function breakdownRowKey(row: unknown): string {
+  const r = row as ProcessBreakdownRow;
+  return r?.process_id ?? '__no_process__';
+}
+
+const breakdownTableRef = ref();
+const breakdownColumnDefs: ColumnDef[] = [
+  {
+    key: 'process_name',
+    label: '工序',
+    prop: 'process_name',
+    minWidth: 180,
+    align: 'center',
+    cellRender: ({ row }) => {
+      const r = row as ProcessBreakdownRow;
+      // ⚠️ **两种「无名」的文案不能混用**：
+      //   process_id === null      = 这条作业事件没记工序（对工时总额贡献恒为 0）
+      //   process_name '(已删除)'  = 记了工序 id 但工序行取不到，后端给的兜底字符串
+      // 后者原样展示，只用一个中性 tag 标出它不是真名。
+      if (r?.process_id === null) {
+        return h('span', { style: 'color: #c0c4cc' }, '未记工序');
+      }
+      return r?.process_name === '(已删除)'
+        ? h(ElTag, { type: 'info', size: 'small', effect: 'plain' }, () => r.process_name)
+        : h('span', r?.process_name ?? '');
+    },
+  },
+  {
+    key: 'step_count',
+    label: '完成次数',
+    prop: 'step_count',
+    minWidth: 110,
+    align: 'center',
+    sortable: true,
+    // 硬约束 #11：EP 会用合成空行 { row: {} } 额外渲染一次 → 需空值守卫。
+    cellRender: ({ row }) => h('span', String((row as ProcessBreakdownRow)?.step_count ?? '—')),
+  },
+  {
+    key: 'effective_minutes',
+    label: '有效工时（小时）',
+    prop: 'effective_minutes',
+    minWidth: 130,
+    align: 'center',
+    sortable: true,
+    cellRender: ({ row }) =>
+      h('span', formatHours(minutesToHours((row as ProcessBreakdownRow)?.effective_minutes))),
+  },
+];
+const breakdownColumnVisibility = useColumnVisibility(breakdownColumnDefs, {
+  listKey: 'worker_detail_process',
+});
+const breakdownDrag = useColumnDrag(breakdownColumnDefs, { listKey: 'worker_detail_process' });
+breakdownDrag.applyDrag(breakdownTableRef);
+
 function onPickerChange(v: string | null): void {
   selectedWorkerId.value = v;
 }
 
-async function warmCache(): Promise<void> {
-  warmingCache.value = true;
-  try {
-    const res = await fetchWorkerStats({
-      date_from: props.dateFrom,
-      date_to: props.dateTo,
-    });
-    workerOptions.value = res.items;
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载工人列表失败');
-  } finally {
-    warmingCache.value = false;
-  }
-}
-
-async function reload(): Promise<void> {
-  if (!selectedWorkerId.value) {
-    data.value = null;
-    return;
-  }
-  if (!props.dateFrom || !props.dateTo) return;
-  loading.value = true;
-  try {
-    data.value = await fetchWorkerDetail(selectedWorkerId.value, {
-      date_from: props.dateFrom,
-      date_to: props.dateTo,
-    });
-    // 顺便把 worker 信息补到 options（即使 tab2 没加载过）
-    if (!workerOptions.value.some((w) => w.worker_id === data.value!.worker.id)) {
-      // 不强求；picker 只在已有 options 时才能选。
-    }
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '加载工人详情失败');
-  } finally {
-    loading.value = false;
-  }
-}
-
-// watch external workerId（来自父组件 emit），并 reload
+// 父组件切工人（tab2 点「详情」emit 上来）时同步选中态；取数由 queryKey 跟随
+// selectedWorkerId 自动发生，不需要再手动 reload。
 watch(
   () => props.workerId,
   (v) => {
-    if (v) {
-      selectedWorkerId.value = v;
-      void reload();
-    } else {
-      selectedWorkerId.value = null;
-      data.value = null;
-    }
+    selectedWorkerId.value = v || null;
   },
 );
-watch(() => [selectedWorkerId.value, props.dateFrom, props.dateTo], reload);
-
-onMounted(async () => {
-  // 如果 props.workerId 有（用户从 tab2 点过来），立即拉数；options 暂为空。
-  if (props.workerId) {
-    selectedWorkerId.value = props.workerId;
-    await reload();
-  }
-});
 
 function goPartDetail(partId: string): void {
   router.push(`/parts/${partId}`);
