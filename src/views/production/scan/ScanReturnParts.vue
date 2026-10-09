@@ -162,10 +162,12 @@
                   >加急</el-tag
                 >
                 <!-- 2026-10-04：chip 只显示系统交期，无值显示 '-'（恒渲染，不加 v-if）。
-                     计划交期只作排序键、不上屏。⚠️ 后端给 held 的
-                     system_delivery_date 恒 null（占位值 '1970-01-01' 已在
-                     scanPartRowSchema 归一成 null）⇒ 后端补真实投影之前，本页这一位
-                     全是 '-'，是发布顺序问题、不是渲染缺陷。 -->
+                     两个交期字段不是一回事：`planned_delivery_date` 是 `t_part` 上的真实
+                     计划交期，`system_delivery_date` 是后端系统推算的交付日、未推算时为
+                     null（两者口径见 composables/scanSchema.ts）。本页只用系统交期，
+                     取不到就显示 '-'，不拿计划交期顶替；计划交期上屏在持有件列表
+                     （components/HeldPartsList.vue），排序里用到本键的那一支见
+                     composables/useScanPartsSort.ts。 -->
                 <DeliveryDateChip :system-delivery-date="p.system_delivery_date" />
               </div>
 

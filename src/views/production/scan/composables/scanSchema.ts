@@ -72,10 +72,12 @@ export const scanPartRowSchema = z.object({
    * 只会把真实日期误判成占位、把交期 chip 显示成「01/01」）。
    *
    * 两个交期字段口径不同，别当成同一个：**本键 = 计划交期**（`t_part` 上的真实投影），
-   * `system_delivery_date` = **后端按产能推算的系统交付日**。消费方各取所需、刻意不合
-   * 并成一个 chip：`useScanPartsSort` 只按本键排序；报工台三页的卡片上屏走
-   * `system_delivery_date`（`DeliveryDateChip`），持有件列表（`HeldPartsList`）上屏走
-   * 本键 —— 两处显示的是不同的日期，排查时别把它们当同一口径对齐。
+   * `system_delivery_date` = **后端系统推算的交付日**（未推算时为 null，见下一行）。消费方
+   * 各取所需、刻意不合并成一个 chip：`useScanPartsSort` 以 `system_delivery_date` 非空为
+   * 硬优先级，同组内无系统交期时才回退到本键排序（本键在该处纯排序用、不上屏）；报工台
+   * 三页的卡片上屏走 `system_delivery_date`（`DeliveryDateChip`），持有件列表
+   * （`HeldPartsList`）上屏走本键 —— 两处显示的是不同的日期，排查时别把它们当同一口径
+   * 对齐。
    */
   planned_delivery_date: z.string(),
   /** 系统推算交付日，nullable（未推算时 null）。`DeliveryDateChip` 的唯一数据源。 */
