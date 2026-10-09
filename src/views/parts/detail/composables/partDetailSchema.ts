@@ -13,10 +13,10 @@
 // 消费侧据此渲染出的界面恒为空或恒为兜底文案。这类「字段是假的」只能靠
 // 「以 VO 为准的 schema」当场炸出来，靠人工读类型看不出来。
 //
-// 守门点：三个取数都还没有 queryFn 承载（`usePartDetail` 仍是手写 async fetch，
-// 迁 TanStack Query 是独立一轮），所以本文件当前只被
-// `src/views/parts/detail/composables/__tests__/partDetailSchema.spec.ts` 消费，
-// 同时由 api 层以 `import type` 引用派生类型标注返回类型（编译期擦除，api 层不 parse）。
+// 守门点：2026-10-10 详情页取数迁 TanStack Query，本文件的前两个 schema 分别接在
+// `usePartDetailQuery.ts` / `usePartEventsQuery.ts` 的 **queryFn** 上（api 层仍只发
+// 请求 + `import type` 标注返回类型，不 parse —— CLAUDE.md「守门点随分层搬家」）。
+// 第三个（工序链）目前由 `useProcessChain.ts` 直接调 api，尚无 queryFn 承载。
 
 import { z } from 'zod';
 import { ORDER_STATUSES } from '@/types/parts';
@@ -146,6 +146,13 @@ export const partEventSchema = z.object({
 });
 
 export type PartEventData = z.infer<typeof partEventSchema>;
+
+/** 2026-10-10 新增：事件列表的**裸数组**守门（端点无分页、无 limit/offset ⇒ 出参是
+ *  数组本身，不是 `{items,total}` 信封）。组合放在 schema 文件里而不是 query hook 里：
+ *  「这份响应是什么形状」是契约问题，与谁发请求无关；query hook 只负责把结果交给它。 */
+export const partEventListSchema = z.array(partEventSchema);
+
+export type PartEventListData = z.infer<typeof partEventListSchema>;
 
 // ============================================================
 // 3. 工序链（`GET /api/v2/prod/process-chains/{chain_id}` 的 `ProcessChainOut`）。
