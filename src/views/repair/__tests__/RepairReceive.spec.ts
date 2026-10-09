@@ -81,7 +81,15 @@ vi.mock('../RepairStartDialog.vue', () => ({
 
 import RepairReceive from '../RepairReceive.vue';
 
-/** 返修批次行：`status` 恒 IN_PROCESS，返修语义只在 is_repairing 上。 */
+/**
+ * 返修批次行：`status` 恒 IN_PROCESS，返修语义只在 is_repairing 上。
+ *
+ * 2026-10-10：原 fixture 带 `customer_path` / `current_holder_display` 两个后端
+ * `RepairBatchListItem` **不返**的键（它们是前端旧 `PartItem` 的幽灵字段，返修页
+ * 「客户」「所在位置」两列因此在现场恒显示「—」）。本 spec 只断言状态列与扫码命中，
+ * 不碰这两列，但 fixture 仍按返修 VO 的真实字段给（`customer_name` +
+ * `l1_customer_name` / `holder_name`）—— 留着幽灵键会让后来人以为后端真返。
+ */
 function makeBatch(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     batch_id: '191000000000001',
@@ -89,15 +97,17 @@ function makeBatch(overrides: Record<string, unknown> = {}): Record<string, unkn
     quantity: 10,
     status: 'IN_PROCESS',
     is_repairing: true,
+    part_id: '191000000000002',
     serial_no: 'F1016',
     drawing_no: 'DWG-001',
     name: '连杆总成左前',
-    customer_path: '南海集团 / 南海路厂区',
+    customer_name: '南海路厂区',
+    l1_customer_name: '南海集团',
     order_no: null,
     next_process_name: null,
     planned_delivery_date: '2026-10-10',
     is_urgent: false,
-    current_holder_display: '生产架 A',
+    holder_name: '生产架 A',
     ...overrides,
   };
 }
