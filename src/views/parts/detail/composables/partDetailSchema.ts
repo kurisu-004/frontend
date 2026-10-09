@@ -119,7 +119,7 @@ export const partDetailSchema = z
 export type PartDetailData = z.infer<typeof partDetailSchema>;
 
 // ============================================================
-// 2. 零件事件历史（`GET /api/v2/parts/{part_id}/events` 的 `PartEventOut`，11 + 4 字段）。
+// 2. 零件事件历史（`GET /api/v2/parts/{part_id}/events` 的 `PartEventOut`，11 + 6 字段）。
 //
 // 端点**无分页、无 limit**，出参是**裸数组**（不是 `{items,total}` 信封），
 // api 层 `listPartEvents` 的返回类型就是 `PartEvent[]`。
