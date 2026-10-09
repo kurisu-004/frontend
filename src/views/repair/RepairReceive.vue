@@ -15,12 +15,7 @@
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElTag } from 'element-plus';
 import { Filter, Tools } from '@element-plus/icons-vue';
-import {
-  listRepairBatches,
-  listRepairingBatches,
-  type RepairBatchListItem,
-  type PartItem,
-} from '@/api/parts';
+import { listRepairBatches, listRepairingBatches, type RepairBatchListItem } from '@/api/parts';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import {
@@ -42,7 +37,7 @@ type TabKey = 'delivered' | 'repairing';
 const activeTab = ref<TabKey>('delivered');
 
 // —— 列表状态 ——
-const rows = ref<PartItem[]>([]);
+const rows = ref<RepairBatchListItem[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const page = ref(1);
@@ -107,10 +102,14 @@ const columnDefs: ColumnDef[] = [
     label: '客户',
     minWidth: 180,
     cellRender: ({ row }) => {
-      const r = row as PartItem;
-      return r.customer_path
-        ? h('span', null, r.customer_path)
-        : h('span', { class: 'muted' }, '—');
+      const r = row as RepairBatchListItem;
+      const l1 = r.l1_customer_name?.trim() ?? '';
+      const l2 = r.customer_name?.trim() ?? '';
+      // 2026-10-10：本列原先读 `PartItem.customer_path`，那是后端从未返过的字段 ⇒
+      // 「客户」列在现场恒显示「—」。返修两个端点的行 VO（`RepairBatchListItem`）
+      // 真的带客户两级名，改按 `一级 / 二级` 组合展示（两者相等时只显示一个）。
+      const text = l1 && l2 ? (l1 === l2 ? l1 : `${l1} / ${l2}`) : l1 || l2;
+      return text ? h('span', null, text) : h('span', { class: 'muted' }, '—');
     },
   },
   { key: 'order_no', label: '订单号', prop: 'order_no', width: 120 },
@@ -136,7 +135,9 @@ const columnDefs: ColumnDef[] = [
     label: '下一工序',
     minWidth: 140,
     cellRender: ({ row }) => {
-      const r = row as PartItem;
+      // 2026-10-10：改读 `RepairBatchListItem.next_process_name`（该 VO 真的有这列，
+      // 且此前经 `row as PartItem` 强转读的是同名假字段，运行时恰好同值）。
+      const r = row as RepairBatchListItem;
       return r.next_process_name
         ? h('span', null, r.next_process_name)
         : h('span', { class: 'muted' }, '—');
@@ -155,7 +156,7 @@ const columnDefs: ColumnDef[] = [
     width: 64,
     align: 'center',
     cellRender: ({ row }) => {
-      const r = row as PartItem;
+      const r = row as RepairBatchListItem;
       // 2026-08-27 T16：cellRender 类型要求返回 VNode（非 null），用空 span 代替 null。
       return r.is_urgent
         ? h(ElTag, { type: 'danger', size: 'small' }, () => '急')
@@ -168,10 +169,11 @@ const columnDefs: ColumnDef[] = [
     label: '所在位置',
     minWidth: 160,
     cellRender: ({ row }) => {
-      const r = row as PartItem;
-      return r.current_holder_display
-        ? h('span', null, r.current_holder_display)
-        : h('span', { class: 'muted' }, '—');
+      // 2026-10-10：本列原先读 `PartItem.current_holder_display`（part 级 VO 的字段，
+      // 返修行 VO 没有）⇒ 现场恒显示「—」。返修行里对应的持有人名是 `holder_name`
+      // （由后端解析货架编码 / 工人工名后带出），改读它。
+      const r = row as RepairBatchListItem;
+      return r.holder_name ? h('span', null, r.holder_name) : h('span', { class: 'muted' }, '—');
     },
   },
 ];
@@ -197,16 +199,15 @@ async function loadList(): Promise<void> {
       activeTab.value === 'delivered'
         ? await listRepairBatches(params)
         : await listRepairingBatches(params);
-    // 2026-09-30 提示：返修 list 结果的 items 类型由 PartItem[] 收紧为
-    // RepairBatchListItem[]（list items 真实形态）。此处仍 cast 成 PartItem[] 是
-    // 「维持 RepairReceive 渲染层行为不变」的最小改动：2026-10-03 起待品检端点
-    // 已换成自己的 13 字段 VO，返修两个端点继续沿用原来的 28 字段 VO
-    // （见 @/api/parts/batch.ts 的 RepairBatchListItem 注释），
-    // 也就是说 customer_path / current_holder_display 等 PartItem 专属字段在返修端点
-    // 的返回数据上并不存在，渲染层沿用 PartItem 属于待收敛的历史遗留。
-    // 收口方案：rows 重新 typed 成 RepairBatchListItem[] 并逐列核对
-    // （含 row-key：批次列表项无 id，得改用 batch_id），本轮不动，单独排期。
-    rows.value = result.items as unknown as PartItem[];
+    // 2026-10-10 收口：rows 正式 typed 成 RepairBatchListItem[]（list items 的真实形态），
+    // 4 处 `row as PartItem` 强转与 row-key 一并改掉。此前之所以 cast 成 `PartItem[]`，
+    // 是因为「客户 / 所在位置 / 下一工序」三列读的是 `PartItem` 独有的字段
+    // （customer_path / current_holder_display / next_process_name），而这些字段返修
+    // 端点一个都不返 ⇒ 三列在现场恒空。返修行 VO 里真正对应的是
+    // `customer_name` + `l1_customer_name` / `holder_name` / `next_process_name`，
+    // 列渲染已改读它们。row-key 同理：批次行没有 `id`（详情锚是 `part_id`），
+    // 行标识用 `batch_id`。
+    rows.value = result.items;
     // 返修 list 结果的 total 后端用 serialize_i64 序列化为 JSON string，
     // total 是 Ref<number>，边界 Number() 转回 number 才能塞进 ref。
     total.value = Number(result.total);
@@ -266,8 +267,9 @@ function isRepairing(row: RepairBatchListItem): boolean {
 function onClickStartRepair(row: unknown): void {
   // 2026-10-03：dialog 的 target 收窄成 RepairBatchListItem —— 它的 `version`
   // 是**批次** version（repair-dispatch 的 OCC 锚）、`batch_id` 是端点路径参数。
-  // 渲染层 rows 仍是 PartItem[]（见 loadList 处的 cast 注），转换集中在这一个边界上。
-  startDialog.value = { open: true, target: row as unknown as RepairBatchListItem };
+  // 2026-10-10：rows 已正式 typed 成 RepairBatchListItem[]（见 loadList 处注释），
+  // 这里只是 el-table 模板回传 `unknown` 的边界 cast。
+  startDialog.value = { open: true, target: row as RepairBatchListItem };
 }
 async function onDialogConfirm(): Promise<void> {
   await loadList();
@@ -279,9 +281,7 @@ async function handleScan(code: string): Promise<void> {
   // 原 `status === 'REPAIRING'` 恒 false，扫中列表里的返修批次会直接掉进
   // findPartBySerialAndPrompt 兜底（弹「该零件位置」而不是认到当前 Tab 的行）。
   const found = findAllByCode(rows.value, code).filter((r) =>
-    activeTab.value === 'delivered'
-      ? r.status === 'DELIVERED'
-      : isRepairing(r as unknown as RepairBatchListItem),
+    activeTab.value === 'delivered' ? r.status === 'DELIVERED' : isRepairing(r),
   );
   if (found.length >= 1) {
     if (activeTab.value === 'delivered') {
@@ -308,7 +308,7 @@ onBeforeUnmount(() => {
 });
 
 // —— 行 className（加急红底） ——
-function rowClassName(opts: { row: PartItem }): string {
+function rowClassName(opts: { row: RepairBatchListItem }): string {
   const classes: string[] = [];
   if (opts.row.is_urgent) classes.push('row-urgent');
   return classes.join(' ');
@@ -407,7 +407,7 @@ function rowClassName(opts: { row: PartItem }): string {
       ref="tableRef"
       v-loading="loading"
       :data="rows"
-      :row-key="(row: PartItem) => row.id"
+      :row-key="(row: RepairBatchListItem) => row.batch_id"
       stripe
       border
       size="small"

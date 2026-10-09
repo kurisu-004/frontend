@@ -23,43 +23,41 @@
 
 import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
-import BatchPickerDialog from '../BatchPickerDialog.vue';
-import type { PartItem } from '@/api/parts';
+import BatchPickerDialog, { type BatchPickerRow } from '../BatchPickerDialog.vue';
 import { CHAIN_ROW_CLASS } from '@/views/production/scan/chainAccent';
 
-/** 前端 `PartItem` 宽形态（判据键显式全带上）的最小子集。
+/** 「判据键显式全带上」的宽形态行（= 组件 props 的元素类型 `BatchPickerRow`）。
  *
- *  2026-10-03 注意：这是**前端 TS 形态**的 fixture，不是运行时形态。后端 `PartListItem`
- *  的 3 个判据键里只有 `location` 存在（另两个键不在该 VO 内）⇒ 真实数据恒走 default 分支、
- *  holder 文本恒取 `location`。下面的三分支用例测的是 `PartItem` 声明的契约，不是当前
- *  生产数据会走的路径。 */
-function wideRow(over: Partial<PartItem> = {}): PartItem {
-  const row: PartItem = {
+ *  2026-10-10：本 fixture 原先标成前端 `PartItem`，因而带上了 9 个后端
+ *  `PartListItem` / `PartDetailOut` 一个都不返的幽灵键（parent_customer_name /
+ *  customer_path / shelf_code / outsource_company_name / next_process_name …）——
+ *  那些键是 `PartItem` 这个「三个后端 VO 的联合类型」的残留。`holderText` 真正读的
+ *  只有 3 个判据键 + `location` + `next_process_name`，它们都在 `BatchPickerRow` 里，
+ *  故 fixture 改成组件自己的 props 类型：**显式多写一个键就会 tsc 报错**，这正是本用例
+ *  想要的守门方向。
+ *
+ *  注意这仍是**前端 TS 形态**：后端报工台两个端点的行 VO 是 `ScanListItem`，3 个判据键
+ *  里只有 `location` 存在（值恒 null）⇒ 真实数据恒走 default 分支、holder 文本恒取
+ *  `location`。下面的三分支用例测的是 `holderText` 的键在不在，不是当前生产数据。 */
+function wideRow(over: BatchPickerRow = {}): BatchPickerRow {
+  const row: BatchPickerRow = {
     id: 'P1',
-    version: 1,
+    batch_id: 'B1',
+    batch_no: 1,
     serial_no: 'SN-1',
     name: '零件 1',
     drawing_no: 'DWG-1',
     quantity: 5,
-    planned_delivery_date: '2026-10-01',
     is_urgent: false,
-    status: 'IN_PROCESS',
-    order_no: null,
-    system_delivery_date: null,
-    note: null,
-    customer_name: null,
-    parent_customer_name: null,
-    customer_path: null,
-    assembly_id: null,
     current_holder_kind: null,
     shelf_code: null,
     worker_name: null,
     outsource_company_name: null,
+    current_holder_display: null,
     location: 'PRODUCTION_SHELF',
-    next_process_id: null,
     next_process_name: null,
-    // 后端 `PartListItem.has_process_chain` 键恒在；报工台两个端点给真值，其余复用本 VO
-    // 的端点恒 false（part 级行拿不到批次链位置）。
+    // 后端 `ScanListItem.has_process_chain` 键恒在（报工台两个端点都给真值）；
+    // 窄 VO 行不挂这个键 ⇒ 落中性色（见本文件末尾那条用例）。
     has_process_chain: false,
     ...over,
   };
@@ -138,7 +136,7 @@ const stubs = {
 
 function render(rows: unknown[]) {
   return mount(BatchPickerDialog, {
-    props: { modelValue: true, code: 'SN-1', rows: rows as PartItem[] },
+    props: { modelValue: true, code: 'SN-1', rows: rows as BatchPickerRow[] },
     global: { stubs },
   });
 }
@@ -172,9 +170,10 @@ describe('BatchPickerDialog / holder 文本与 meta 行', () => {
 
   it('宽 VO：holder 三个键全为 null 时仍显示兜底「未知位置」（报工台行为未变）', () => {
     // ⚠️ 本用例的断言对象是**运行时数据**，而 fixture 自己显式带上了 3 个键 ⇒ 它证明不了
-    // 「键真的在」。那条不变量完全依赖后端 `PartListItem.location` 不加
-    // `skip_serializing_if`：后端一旦加上，`'location' in p` 转 false、holderText 返空、
-    // 报工台卡片静默少掉这一行，而本用例仍绿。views/production/scan/ 三页零 spec，这个盲区是既存的。
+    // 「键真的在」。那条不变量完全依赖后端 `ScanListItem.location` 不加
+    // `skip_serializing_if`（且报工台的 `scanPartRowSchema` 显式声明该键、不被 Zod strip）：
+    // 任一侧破坏，`'location' in p` 转 false、holderText 返空、报工台卡片静默少掉这一行，
+    // 而本用例仍绿。views/production/scan/ 三页零 spec，这个盲区是既存的。
     const w = render([
       wideRow({ current_holder_display: null, location: null, current_holder_kind: null }),
     ]);
@@ -217,7 +216,7 @@ describe('BatchPickerDialog / holder 文本与 meta 行', () => {
   it('送货单候选 VO + 显式带上 location 键：判据立刻转 true、meta 行回来（守 `in` 而非值）', () => {
     // 守住判据本身是「键在不在」：只要运行时对象带上了 3 个判据键中的任意一个，
     // 就该走 default 分支显示兜底，而不是继续隐藏。
-    const w = render([{ ...DELIVERY_ROW, location: null } as unknown as PartItem]);
+    const w = render([{ ...DELIVERY_ROW, location: null } as unknown as BatchPickerRow]);
     expect(w.text()).toContain('未知位置');
     expect(w.find('.batch-meta').exists()).toBe(true);
   });
