@@ -135,3 +135,29 @@ a {
      宽于视口的画布会因此多出一条用不上的横向滚动条。 */
   overflow: hidden auto;
 }
+
+/* 2026-10-11：同一条高度契约的**窗口形态**分支（报工台的图纸预览弹窗）。
+   与 `.is-fullscreen` 那条的区别只有一处、也是关键的一处：fullscreen 时 is-fullscreen
+   已把 dialog 高度钉到视口，body 靠 `flex: 1` 分到确定高度；窗口形态下 dialog 自身是
+   **auto 高度**（由内容撑出来），body 拿不到任何 flex 余量 ⇒ `flex: 1 1 auto` 会解析成
+   「内容高度」，PdfViewer 的 height:100% 链又塌成 0（同一个 2026-10-03 缺陷）。
+   所以这一支由 **body 自己**声明确定高度（72vh），并转 column + min-height:0 +
+   overflow:hidden，让 PdfViewer / 图片 / 非 PDF / 加载中四个分支作为 flex item 填满它。
+   两侧规则只差 `.is-fullscreen` 与 `:not(.is-fullscreen)`，是同一个不变量的两种形态；
+   删掉任何一支，那一侧的调用点会退回「工具栏在、下面纯白」。守卫见
+   `src/components/__tests__/PdfPreviewDialogContract.spec.ts`。 */
+.pdf-preview-dialog.el-dialog:not(.is-fullscreen) {
+  display: flex;
+  flex-direction: column;
+}
+.pdf-preview-dialog.el-dialog:not(.is-fullscreen) > .el-dialog__header {
+  flex: 0 0 auto;
+}
+.pdf-preview-dialog.el-dialog:not(.is-fullscreen) > .el-dialog__body {
+  flex: 0 0 auto;
+  height: 72vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

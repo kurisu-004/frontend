@@ -27,7 +27,9 @@
     v-model="visible"
     class="pdf-preview-dialog"
     :title="title"
-    fullscreen
+    :width="dialogSize.width"
+    :top="DIALOG_TOP"
+    append-to-body
     :close-on-click-modal="false"
     destroy-on-close
     @closed="onClosed"
@@ -75,6 +77,7 @@ import { usePermissions } from '@/composables/usePermissions';
 import { canDownloadPartFile } from '@/utils/partsPermissions';
 import type { PartFileItem } from '@/types/part_file';
 import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
+import { useDialogSize } from '@/composables/useDialogSize';
 
 const props = defineProps<{
   /** 被预览的那一行列表行（图纸挂在 part 上，取 `row.id`）。 */
@@ -84,6 +87,21 @@ const props = defineProps<{
 }>();
 
 const visible = defineModel<boolean>({ required: true });
+
+// 窗口形态的宽度走本仓既有范式 `useDialogSize`（desktopWidth 1100，弹窗在 1100px
+// 屏上留 80px 边距、1366px 屏上居中）。
+const dialogSize = useDialogSize({ desktopWidth: 1100 });
+
+/**
+ * `top` 取 6vh 而不是 `useDialogSize` 的 15vh：窗口形态下 body 的高度是**写死**的
+ * （全局规则 `.pdf-preview-dialog.el-dialog:not(.is-fullscreen) > .el-dialog__body`
+ * 给 72vh），弹窗总高 ≈ 顶栏 54px + body 72vh + 上下 padding 约 30px
+ * = 0.78 × 视口高 + 84px。要让它视觉居中，取 top = (视口高 − 总高) / 2 ≈ 0.11 × 视口高 −
+ * 42px；这个式子在窄屏上会变负，改成固定 6vh：1080p 上留 65px / 下留 89px，
+ * 800px 屏上留 48px / 下留 44px，两种尺寸都在可接受范围。
+ * 15vh 是 body 高度由内容决定时的经验值，与本页写死高度的前提不同。
+ */
+const DIALOG_TOP = '6vh';
 
 const previewLoading = ref(false);
 const previewFile = ref<PartFileItem | null>(null);
@@ -221,29 +239,45 @@ async function downloadPreview(): Promise<void> {
   }
 }
 
+/* 2026-10-11：弹窗由全屏改窗口后，四个分支的高度一律跟随新 body（72vh，
+   由全局规则 `.pdf-preview-dialog.el-dialog:not(.is-fullscreen)` 给定），
+   不再各写一份 `calc(100vh - 80px)` / `60vh` —— 那种写法与 body 高度脱钩，
+   改窗口大小时必有一处忘了改。三个分支都是 body 的直接子元素（flex item），
+   `flex: 1 + min-height: 0` 才能填满并允许内部滚动。 */
 .preview-loading {
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  min-height: 60vh;
   color: #606266;
   font-size: 16px;
 }
 .image-preview-wrap {
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: calc(100vh - 80px);
+  overflow: hidden;
   padding: 24px;
   background: #1e1e1e;
 }
+.image-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+}
 .non-pdf-preview {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 12px;
-  padding: 80px 32px;
+  overflow-y: auto;
+  padding: 32px;
 }
 .non-pdf-name {
   margin: 0;

@@ -25,10 +25,33 @@
     EP 的 .el-dialog__body 只有 color / font-size / text-align，display:block + height:auto，
     直接子元素的 height:100% 会退化成 auto → 整条链塌成 0 → position:absolute 的 canvas
     被 .pdf-viewport 的 overflow:hidden 裁掉，表现为「工具栏在、下面纯白」。
-    承载契约：fullscreen 的 el-dialog 必须挂 .pdf-preview-dialog（全局规则见
+    承载契约：承载 PdfViewer 的 el-dialog 必须挂 .pdf-preview-dialog（全局规则见
     src/styles/index.scss，把 dialog 变成 column flex 并给 body flex:1 + min-height:0）；
     el-drawer 无需（.el-drawer__body 自带 flex:1）；自带确定高度的宿主（如
     DrawingPreviewPane 的 .file-preview flex 链）天然满足契约。
+    ⚠️ 2026-10-11：`.pdf-preview-dialog` 的全局规则现在有**两支** —— `.is-fullscreen`
+    （dialog 被钉到视口，body 靠 flex:1 分高）与 `:not(.is-fullscreen)`（窗口形态，
+    dialog 是 auto 高度，必须由 **body 自己**声明确定高度）。只留 fullscreen 那一支时，
+    窗口形态的弹窗会退回本段描述的塌陷。
+
+  2026-10-11 新增：**默认 fit 到容器**（全局开启）。
+    此前 render() 恒用 `props.initialScale`（默认 1.0）渲染，完全不看容器尺寸，
+    于是 A0/A1 图纸（scale 1 时 2384×3370px）只能看见左上角一小块，工人得先滚、
+    再自己调比例才能找到要看的那一面。现在每次 render() 都按
+    `min(容器可用宽 / 页宽@scale1, 容器可用高 / 页高@scale1)` 算 fit 并写进
+    **renderScale**（不是 viewScale —— 见下），翻页重算（每页各自适应）。
+    · **为什么写 renderScale 而不是 viewScale**：viewScale 是纯 CSS transform 乘数，
+      >1 时不会重渲染，矢量图会被 CSS 放大成糊的；fit 是一次性落到「看得清」的
+      比例，必须让 pdfjs 按该分辨率出像素。
+    · **为什么不复用 zoomIn / zoomOut 的 [0.4, 3] 夹逼**：那两条是用户主动 +/- 的步进
+      区间。fit 到 A1 在 1100px 弹窗里约需 0.2 上下，套上 0.4 的下限就把图纸撑出容器，
+      比不做 fit 更糟。fit 单独夹到 [FIT_MIN_SCALE, FIT_MAX_SCALE]。
+    · 容器尺寸为 0（宿主尚未布局，例如弹窗还在进场动画里、或宿主在 v-if 内刚挂上）
+      ⇒ fit 算不出来，此时**回落 props.initialScale**（不产生 NaN），并记一笔等容器
+      拿到尺寸后由 ResizeObserver 补一次 render。
+    · 该 ResizeObserver 只在「上一次 fit 失败」时补渲染，不跟着每次尺寸变化重算 ——
+      窗口拖拽缩放时反复重渲染会造成 canvas 重排抖动，与 2026-09-12 删掉
+      scheduleReRender 的理由同款。
   CLAUDE.md #6：仍走 @/utils/pdfjs，不直接 import pdfjs-dist。
 -->
 <template>
@@ -71,6 +94,7 @@
         </el-button>
       </div>
       <div
+        ref="viewportRef"
         class="pdf-viewport"
         @wheel.prevent="onWheel"
         @mousedown="onMouseDown"
@@ -117,6 +141,10 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+// 2026-10-11：滚轮缩放与 fit 都量这个元素。此前 onWheel 走
+// `document.querySelector('.pdf-viewport')` —— 页面上有第二个 PdfViewer 时，
+// 滚轮会作用到错误实例（querySelector 只返回第一个），且拿到的尺寸也不对。
+const viewportRef = ref<HTMLElement | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 // 2026-09-13 PR-2：vue/no-setup-props-destructure 禁止在 setup 顶层读 props.x。
@@ -126,7 +154,10 @@ const totalPages = ref(0);
 
 // ============ 双 scale 模型 ============
 // 2026-09-12 新增
-const renderScale = ref((() => props.initialScale)()); // pdfjs 渲染分辨率（snap 0.1，0.4-3.0）
+// 2026-10-11：initialSize 存一份原值：render() 每次都会按 fit 覆写 renderScale，
+// 「回落」时需要一个稳定的初值（不能读可能已被改写的 renderScale）。
+const initialScale = (() => props.initialScale)();
+const renderScale = ref(initialScale); // pdfjs 渲染分辨率（snap 0.1，0.4-3.0）
 const viewScale = ref(1); // CSS transform 乘数（连续，0.1-10）
 const tx = ref(0); // 平移 x（屏幕 px）
 const ty = ref(0); // 平移 y
@@ -136,8 +167,18 @@ const totalScale = computed(() => renderScale.value * viewScale.value);
 const stageWidth = ref(0);
 const stageHeight = ref(0);
 
+// 2026-10-11：fit 的夹逼区间。与 zoomIn / zoomOut 的 [0.4, 3] **刻意不同** —— 后者是
+// 用户主动 +/- 的步进范围，fit 是一次性「把整页塞进容器」的比例，A1 图纸在小窗口里
+// 需要 0.2 上下，套 0.4 的下限就放不下。上界 8 防超小页面被放成马赛克，下界 0.05
+// 防 fit 算出 0 / NaN（两者都会让 pdfjs 抛错或出全黑）。
+const FIT_MIN_SCALE = 0.05;
+const FIT_MAX_SCALE = 8;
+// 上一次 render 因容器尺寸为 0 而没能算出 fit ⇒ 等容器就绪后补一次渲染。
+let fitPending = false;
+
 let pdfDoc: pdfjsLib.PDFDocumentProxy | null = null;
 let renderTask: pdfjsLib.RenderTask | null = null;
+let resizeObserver: ResizeObserver | null = null;
 
 async function load() {
   if (!props.url) return;
@@ -158,7 +199,25 @@ async function load() {
   // 否则 render() 中 canvasRef.value 为 null，绘画被静默跳过。
   loading.value = false;
   await nextTick();
+  // `.pdf-viewport` 只在 loading 结束后才渲染（v-else 分支），所以观察者必须挂在这里，
+  // 挂在 onMounted 上时它还不存在。
+  ensureResizeObserver();
   await render();
+}
+
+/**
+ * 容器尺寸在首次 render 时还没量到（弹窗进场 / v-if 刚挂上）时，fit 会记一笔待补，
+ * 尺寸一到由观察者补渲染一次。只在「有欠账」时动作 —— 拖拽缩放窗口不跟着重渲染，
+ * 否则每次尺寸变化都改 canvas.width/height/style，产生 layout shift 抖动。
+ */
+function ensureResizeObserver(): void {
+  const host = viewportRef.value;
+  if (!host || resizeObserver || typeof ResizeObserver === 'undefined') return;
+  resizeObserver = new ResizeObserver(() => {
+    if (!fitPending) return;
+    void render();
+  });
+  resizeObserver.observe(host);
 }
 
 async function render() {
@@ -171,6 +230,17 @@ async function render() {
     }
   }
   const p = await pdfDoc.getPage(page.value);
+  // 2026-10-11：先把 renderScale 落到「整页塞进容器」的比例（写 renderScale 而非
+  // viewScale：fit 要的是矢量清晰的成像，CSS 放大只会把图放大糊）。
+  const fit = fitScaleOf(p);
+  if (fit === null) {
+    // 容器尺寸为 0（宿主尚未布局）⇒ 回落 initialScale，并等 ResizeObserver 补一次。
+    renderScale.value = initialScale;
+    fitPending = true;
+  } else {
+    renderScale.value = fit;
+    fitPending = false;
+  }
   const viewport = p.getViewport({ scale: renderScale.value * (window.devicePixelRatio || 1) });
   const canvas = canvasRef.value;
   canvas.width = viewport.width;
@@ -201,6 +271,21 @@ function nextPage() {
     void render();
   }
 }
+/**
+ * 「整页塞进 `.pdf-viewport`」的比例；容器没量到尺寸（或页面本身尺寸为 0）时返回
+ * `null`，由调用方回落 `initialScale`。每页各自算，翻页后自动重新适应。
+ */
+function fitScaleOf(p: pdfjsLib.PDFPageProxy): number | null {
+  const host = viewportRef.value;
+  if (!host) return null;
+  const w = host.clientWidth;
+  const h = host.clientHeight;
+  if (!(w > 0) || !(h > 0)) return null;
+  const base = p.getViewport({ scale: 1 });
+  if (!(base.width > 0) || !(base.height > 0)) return null;
+  return clamp(Math.min(w / base.width, h / base.height), FIT_MIN_SCALE, FIT_MAX_SCALE);
+}
+
 function zoomIn() {
   renderScale.value = Math.min(3, +(renderScale.value + 0.2).toFixed(1));
   viewScale.value = 1;
@@ -235,7 +320,7 @@ function clamp(v: number, min: number, max: number): number {
 }
 
 function onWheel(e: WheelEvent) {
-  const viewport = document.querySelector('.pdf-viewport') as HTMLElement | null;
+  const viewport = viewportRef.value;
   if (!viewport) return;
   const rect = viewport.getBoundingClientRect();
   const mouseX = e.clientX - rect.left;
@@ -310,6 +395,8 @@ watch(
 
 onMounted(load);
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  resizeObserver = null;
   window.removeEventListener('mousemove', onMouseMove);
   window.removeEventListener('mouseup', onMouseUp);
   if (renderTask) {
