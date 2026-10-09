@@ -40,6 +40,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
+import { createPinia } from 'pinia';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -261,6 +262,11 @@ const stubs = {
 // 2026-10-10：本页接入 TanStack Query（`useScanHeldQuery` + `useScanWorkerScanMutation`），
 // mount 必须挂 VueQueryPlugin 并给一个 QueryClient，否则 useQuery / useMutation 注入失败。
 // 每个用例一份新 QueryClient：缓存跨用例残留会让「列表内容」断言依赖执行顺序。
+//
+// 2026-10-11：还要挂 pinia —— 图纸预览弹窗的「下载文件」闸门走 `usePermissions()` →
+// `useAuthStore()`。不挂 pinia 时 `useStore()` 抛「no active Pinia」，整页 setup 直接
+// 失败（22 条用例一起红），而不是只缺一个按钮。本 spec 不预置登录态（角色全空 ⇒
+// 下载按钮恒不显示），该闸门的行为由 `utils/__tests__/partsPermissions.spec.ts` 守。
 function freshQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: { queries: { retry: 0 }, mutations: { retry: 0 } },
@@ -270,7 +276,10 @@ function freshQueryClient(): QueryClient {
 async function mountPage(items: ScanPartRowSchema[]): Promise<VueWrapper> {
   h.fetchScanHeld.mockResolvedValue({ items, total: items.length, limit: 200, offset: 0 });
   const w = mount(ScanReturnParts, {
-    global: { stubs, plugins: [[VueQueryPlugin, { queryClient: freshQueryClient() }]] },
+    global: {
+      stubs,
+      plugins: [createPinia(), [VueQueryPlugin, { queryClient: freshQueryClient() }]],
+    },
   });
   await flushPromises();
   return w;

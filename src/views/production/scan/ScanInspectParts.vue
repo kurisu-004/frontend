@@ -230,7 +230,7 @@
           <el-icon :size="48" color="#67c23a"><Picture /></el-icon>
           <p class="non-pdf-name">{{ previewFile.original_filename }}</p>
           <p class="non-pdf-hint">HEIC 格式浏览器不直接支持预览，请下载后查看。</p>
-          <el-button type="primary" @click="downloadPreview">
+          <el-button v-if="canDownload" type="primary" @click="downloadPreview">
             <el-icon><Download /></el-icon><span>下载文件</span>
           </el-button>
         </div>
@@ -246,7 +246,7 @@
               : '请上传图纸后再预览。'
           }}
         </p>
-        <el-button v-if="previewFile" type="primary" @click="downloadPreview">
+        <el-button v-if="previewFile && canDownload" type="primary" @click="downloadPreview">
           <el-icon><Download /></el-icon><span>下载文件</span>
         </el-button>
       </div>
@@ -274,6 +274,12 @@ import {
 import { api } from '@/api/http';
 import PdfViewer from '@/components/PdfViewer.vue';
 import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
+// 2026-10-11：「下载文件」按钮的角色闸门。后端把 part_file 的列表 / content 对
+// SHELF_ACCOUNT 放开了（工控机预览图纸打的就是这两条），但 `/part-files/{id}/url`
+// **刻意没放开**（COS 预签直链可外传）⇒ 不挂闸门就是「可见但必 403」。判据在
+// utils/partsPermissions，与后端 require_any_role 白名单同集合。
+import { usePermissions } from '@/composables/usePermissions';
+import { canDownloadPartFile } from '@/utils/partsPermissions';
 import type { PartFileItem } from '@/types/part_file';
 import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
@@ -501,8 +507,22 @@ function onPreviewClosed(): void {
   previewFile.value = null;
 }
 
+// 2026-10-11：下载入口闸门（判据见 utils/partsPermissions 与上面那段 import 注释）。
+const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
+const canDownload = computed<boolean>(() =>
+  canDownloadPartFile({
+    MANAGER: isManager.value,
+    CLERK: isClerk.value,
+    INSPECTOR: isInspector.value,
+    CNC_PROGRAMMER: isCncProgrammer.value,
+  }),
+);
+
 async function downloadPreview(): Promise<void> {
   if (!previewFile.value) return;
+  // 与按钮的 v-if 同一道守卫：按钮是 DOM 闸门，函数体是行为闸门 —— 只藏按钮的话，
+  // 任何一个仍能触达本函数的地方（控制台、后续新增的快捷键）都会变成「点了必 403」。
+  if (!canDownload.value) return;
   try {
     const url = await getDownloadUrl(previewFile.value.id);
     const a = document.createElement('a');
