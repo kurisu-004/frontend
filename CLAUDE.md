@@ -176,8 +176,8 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 
 PdfViewer 的缩放模型与承载高度契约（两条都容易被改版静默破坏，各有 spec 守着）。
 
-- **`PdfViewer` 默认 fit 到容器**（`fit` prop，默认 `true`，全仓 7 个承载点生效）。`render()` 在 `fit && !userZoomed` 时按 `min(容器宽 / 页宽@1, 容器高 / 页高@1)` 算比例写进 **`renderScale`**（不是 `viewScale` —— CSS transform 放大矢量图只会糊），夹逼区间 `[0.05, 8]` 与 +/- 的 `[0.4, 3]` **刻意不同**（A1 图纸在 1100px 弹窗里需 0.2 上下，套 0.4 下限会撑出容器）。三条要点：① 容器尺寸为 0（宿主尚未布局）时回落 `initialScale` 并由 `ResizeObserver` 补渲一次，该观察者**只在 fit 失败时动作**（跟着每次尺寸变化重渲会造成 canvas layout shift 抖动）；② `userZoomed` 由 `zoomIn` / `zoomOut` 置位，`resetView`（复位按钮 / 双击）、切 `url`、**翻页**清位 —— 置位的作用是 `render()` 不得再覆写工人选的比例（`zoomIn` 的实现正是「改 `renderScale` → `render()`」，无条件覆写等于 +/- 失效）；翻页清位是刻意的：各页图幅不同，保留上一页缩放会让下一张图出容器；③ **复位 = 回到 fit 后的大小**，不是回到 1 倍。`fit` 是 opt-out 口子：将来某个承载点要固定比例时传 `:fit="false"`，不要改组件本体。守卫：`src/components/__tests__/PdfViewer.spec.ts`。
-- **用 `el-dialog` 承载 `PdfViewer` 处必须挂 `.pdf-preview-dialog`**（高度契约 + 两支规则见 `src/styles/index.scss`）。三处**例外**（宿主自带确定高度、无需该 class）：`DrawingPreviewPane`（`.file-preview` flex 链）、`PartPreviewDialog`（aspect-ratio 定宽定高）、`OutsourceQuotePdfPreview`（`.drawing-frame-wrap` 自给 `height:70vh` + column）。守卫：`src/components/__tests__/PdfPreviewDialogContract.spec.ts`（白名单是人工判定的，新增承载点要一并加表）。
+- **`PdfViewer` 默认 fit 到容器**（`fit` prop，默认 `true`，全仓所有 `<PdfViewer>` 承载点生效；承载点清单以 `src/components/__tests__/PdfPreviewDialogContract.spec.ts` 的表 + 例外为准，不在本文件数）。`render()` 在 `fit && !userZoomed` 时按 `min(容器宽 / 页宽@1, 容器高 / 页高@1)` 算比例写进 **`renderScale`**（不是 `viewScale` —— CSS transform 放大矢量图只会糊），夹逼区间 `[0.05, 8]` 与 +/- 的 `[0.4, 3]` **刻意不同**（A1 图纸在 1100px 弹窗里需 0.2 上下，套 0.4 下限会撑出容器）。三条要点：① 容器尺寸为 0（宿主尚未布局）时回落 `initialScale` 并由 `ResizeObserver` 补渲一次，该观察者**只在 fit 失败时动作**（跟着每次尺寸变化重渲会造成 canvas layout shift 抖动）；② `userZoomed` 由 `zoomIn` / `zoomOut` / `onWheel` 三条**缩放入口**置位（滚轮只动 `viewScale`，但同样是「我要看多大」的表态），由 `resetView`（复位按钮 / 双击）、切 `url`、工具栏翻页、外部改 `page` prop、运行时改 `fit` 五条路径清位 —— 置位的作用是 `render()` 不得再覆写工人选的比例（`zoomIn` 的实现正是「改 `renderScale` → `render()`」，无条件覆写等于 +/- 失效）；③ **复位 = 翻页 = 回到 fit 后的大小**：清位一律**同时**把 `viewScale` 归 1（与 `zoomIn` / `zoomOut` 既有语义一致），两者缺一「翻页 = 重新适应整页」就不成立 —— 只清标志时滚轮用户翻页后 `renderScale` 回到 fit、`viewScale` 留着，下一页仍以「fit × 自己的缩放」呈现、出容器。翻页重置是刻意的：图纸各页图幅不同（封面 A0、正图 A4 混排），保留上一页缩放会让下一张图要么出容器、要么小到看不清。`fit` 是 opt-out 口子：将来某个承载点要固定比例时传 `:fit="false"`，不要改组件本体。守卫：`src/components/__tests__/PdfViewer.spec.ts`（含滚轮翻页与 ResizeObserver 补渲两条用例）。
+- **用 `el-dialog` 承载 `PdfViewer` 处必须挂 `.pdf-preview-dialog`**（高度契约 + 两支规则见 `src/styles/index.scss`）。**例外**是「宿主自带确定高度、无需该 class」的那些承载点（`DrawingPreviewPane` 的 `.file-preview` flex 链、`PartPreviewDialog` 的 aspect-ratio、`OutsourceQuotePdfPreview` 的 `.drawing-frame-wrap` 自给 `height:70vh` + column）—— 名单以 `src/components/__tests__/PdfPreviewDialogContract.spec.ts` 头注释的清单为准，不在本文件数。守卫同该 spec（白名单是人工判定的，新增承载点要一并加表）。
 
 ### 货架自动选择（2026-10-10）
 
@@ -203,7 +203,7 @@ PdfViewer 的缩放模型与承载高度契约（两条都容易被改版静默�
 `emit('update:modelValue', false)`、不发业务事件，而很多弹窗的收尾逻辑只挂在
 `@cancel` / `@confirm` 上。× 一关就留下「输入填好了、选中态留着、却无处可提交」的死角。
 
-- **`QuantityDialog` 禁右上角 ×**（`:show-close="false"`）。放回 / 送检两页的每条提交都从它过，它是那条路径唯一的提交闸门；× 只 emit `update:modelValue(false)`、不发 `cancel`，调用方的 `selectedPart` / `selectedNextProcessId` 全部留着（送检页那条路上确认栏还已经消失，工人既无弹窗也无确认栏可走）。同款理由见「货架自动选择」一节末尾的放回页确认框判据。**刻意不用 `@closed` 发 `cancel` 兜**：本弹窗的显隐由调用方程序化置 false（`onQtyConfirm` 第一行就置），那也触发 `@closed` ⇒ 提交在途时会把调用方的选中态抽走，而提交函数要在 await **之后**读 `selectedPart` 组装成功文案。
+- **`QuantityDialog` 禁右上角 ×**（`:show-close="false"`）。放回 / 送检两页的每条提交都从它过，它是那条路径唯一的提交闸门；× 只 emit `update:modelValue(false)`、不发 `cancel`，调用方的 `selectedPart` / `selectedNextProcessId` 全部留着（送检页那条路上确认栏还已经消失，工人既无弹窗也无确认栏可走）。同款理由见「货架自动选择」一节末尾的放回页确认框判据。**刻意不用 `@closed` 发 `cancel` 兜**：本弹窗的显隐由调用方程序化置 false（`onQtyConfirm` 第一行就置），那也触发 `@closed` ⇒ 提交在途时会把调用方的选中态抽走；**送检页** `submitInspect` 在 `await mutateAsync` 之后才读 `selectedPart.value.serial_no` 组装成功文案，选中态被抽走即空指针（放回页 / 取件页在 await 之前就取完值、或 `@cancel` 只置自己的显隐标志，不靠这层）。三页同口径比「只在出问题的那个页面加补丁」好维护。
 
 ### 拖拽投放（Sortable）
 

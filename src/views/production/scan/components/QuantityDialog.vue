@@ -16,10 +16,13 @@
   与「确定」两键各自都会收尾（cancel 发业务事件让调用方清干净 / confirm 后由调用方
   提交并复位），那才是关闭权该在的地方。
 
-  刻意**不**用 `@closed` 发 `cancel` 来兜住 ×：本弹窗的 modelValue 由调用方程序化
+  刻意**不**用 `@closed` 发 `cancel` 兜住 ×：本弹窗的 modelValue 由调用方程序化
   置 false（`onQtyConfirm` 第一行就置），那也会触发 `@closed` ⇒ 提交在途时 emit('cancel')
-  会把调用方的选中态抽走，而提交函数恰恰要在 await **之后**读 `selectedPart` 组装成功
-  文案 ⇒ 直接变成空指针。把关闭权收到 footer 上从根上避免这个耦合。
+  会把调用方的选中态抽走。送检页 `submitInspect` 在 `await mutateAsync` **之后**才读
+  `selectedPart.value.serial_no` 组装成功文案（见该函数），选中态被抽走即空指针。
+  （放回页与取件页不受此害：它们在 await 之前就把要用的值取出、或 `@cancel` 只置
+  自己的显隐标志；不靠那一层守卫。）把关闭权收到 footer 上对三页同口径，从根上避免
+  「同一个组件在不同调用方身上的收尾语义不同」这件事。
 -->
 <template>
   <el-dialog

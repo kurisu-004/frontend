@@ -19,7 +19,7 @@
 //   - getViewport({scale}) → 尺寸线性于 scale（真实 pdfjs 就是线性的）；
 //   - render() → 返回一个带 promise / cancel 的任务对象（不真的画像素）。
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import PdfViewer from '../PdfViewer.vue';
 
@@ -118,6 +118,28 @@ const stubs = {
 
 type Wrapper = ReturnType<typeof mount>;
 
+/**
+ * 捕获组件挂上的 ResizeObserver，好让用例手动触发它的回调。
+ *
+ * 为什么需要：容器尺寸为 0 时组件记一笔 `fitPending`，等容器拿到尺寸后**由这个观察者
+ * 补渲一次**（见 `PdfViewer.vue::ensureResizeObserver`）。happy-dom 虽然实现了
+ * ResizeObserver，但不会真的在元素尺寸变化时回调，桩掉才能驱动那条路径。
+ */
+let roCallbacks: (() => void)[] = [];
+
+class FakeResizeObserver {
+  public constructor(cb: () => void) {
+    roCallbacks.push(cb);
+  }
+  public observe(): void {}
+  public unobserve(): void {}
+  public disconnect(): void {}
+}
+
+beforeAll(() => {
+  globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
+});
+
 async function mountViewer(
   props: { url?: string; initialScale?: number; fit?: boolean; page?: number } = {},
   pages: { w: number; h: number }[] = [{ w: PAGE_W, h: PAGE_H }],
@@ -138,6 +160,18 @@ function canvasWidth(w: Wrapper): number {
   return Number.parseFloat(w.find('canvas').element.style.width);
 }
 
+/**
+ * 视觉总缩放（stage 上的 CSS transform `scale(...)`）= renderScale × viewScale。
+ * 只打 renderScale 侧（`renderedScales`）看不出 viewScale 有没有归位 —— 滚轮缩放
+ * 之后两者会分叉，这条 helper 就是给「两个量都要归位」那类断言用的。
+ */
+function totalScaleOf(w: Wrapper): number {
+  const style = w.find('.pdf-canvas-stage').attributes('style') ?? '';
+  const m = /scale\(([\d.]+)\)/.exec(style);
+  expect(m, `stage 上没有 scale()：${style}`).not.toBeNull();
+  return Number.parseFloat(m![1] as string);
+}
+
 /** 按图标 class 找到它所在的工具栏按钮（+ / − / 复位 / 翻页）。 */
 function buttonOf(w: Wrapper, iconClass: string) {
   const icon = w.find(`.mock-${iconClass}`);
@@ -149,13 +183,16 @@ beforeEach(() => {
   container.w = 0;
   container.h = 0;
   renderedScales.length = 0;
+  roCallbacks.length = 0;
   h.cleanup.mockReset();
   h.getDocument.mockReset();
 });
 
 describe('PdfViewer / fit 到容器', () => {
   // P1：fit 值必须真的进 renderScale（否则整个「默认 fit」是空转的）。
-  it('P1：fit 值算进 renderScale（800×800 容器装 1000×1000 页 ⇒ 0.8）', async () => {
+  // 这条同时守住了 `fit` 的**默认值 = true**：用例不传 fit，断言却是 fit 值；
+  // 把 withDefaults 里的 fit 改成 false，P1 与 P9 一起红。
+  it('P1：默认就 fit —— 不传 fit 时 fit 值算进 renderScale（800×800 容器装 1000×1000 页 ⇒ 0.8）', async () => {
     container.w = 800;
     container.h = 800;
     const w = await mountViewer();
@@ -237,9 +274,94 @@ describe('PdfViewer / fit 到容器', () => {
     w.unmount();
   });
 
+  // 滚轮与 +/- 同级：它只动 viewScale（CSS transform），但同样表达「我要看多大」，
+  // 所以 onWheel 也置位 userZoomed。翻页必须**同时**清 userZoomed 与把 viewScale 归 1 ——
+  // 只清前者的话 renderScale 回到 fit、viewScale 留着，下一页仍以「fit × 自己的缩放」
+  // 呈现、出容器（净效果 totalScale ≠ fit）。
+  // 断言同时打两个量：renderScale 侧的 `renderedScales`，viewScale 侧的 stage transform。
+  it('P6：滚轮放大后翻页 —— renderScale 回到 fit 且 viewScale 回到 1（净效果整页塞进容器）', async () => {
+    container.w = 800;
+    container.h = 800;
+    const w = await mountViewer({}, [
+      { w: PAGE_W, h: PAGE_H },
+      { w: PAGE_W, h: PAGE_H },
+    ]);
+
+    // 连滚两档（onWheel 的 factor 是 1.1）
+    const vp = w.find('.pdf-viewport');
+    await vp.trigger('wheel', { deltaY: -100 });
+    await vp.trigger('wheel', { deltaY: -100 });
+    expect(totalScaleOf(w), '前置：滚轮两档后 totalScale 应为 0.8 × 1.1²').toBeCloseTo(0.968, 3);
+    // 滚轮不动 renderScale ⇒ 画布仍是 fit 那一份（这是滚轮与 +/- 的区别）
+    expect(renderedScales.at(-1)).toBeCloseTo(0.8, 6);
+
+    await buttonOf(w, 'arrow-right').trigger('click');
+    await flushPromises();
+
+    // 两个量都要归位：fit 重算 + CSS 缩放归 1
+    expect(renderedScales.at(-1), '翻页后 renderScale 应重算 fit').toBeCloseTo(0.8, 6);
+    expect(totalScaleOf(w), '翻页后 viewScale 必须归 1，否则仍是 fit × 自己的缩放').toBeCloseTo(
+      0.8,
+      6,
+    );
+    w.unmount();
+  });
+
+  // P6 只证明「翻页清 viewScale」；onWheel 自己置位 userZoomed 的效果体现在**另一条
+  // render() 路径**上：容器尺寸为 0（fit 算不出来、记一笔 fitPending）→ 用户滚轮表态 →
+  // 容器就绪、ResizeObserver 补渲一次。那一次 render() 若无视 userZoomed，就会把
+  // renderScale 从 initialScale 覆写成 fit，正是「fit 覆掉用户选择」那条回归的同款。
+  it('P7：fit 还没算出来的窗口里滚轮表过态 ⇒ ResizeObserver 补渲不得覆写 renderScale', async () => {
+    container.w = 0; // 宿主尚未布局：首次 render 算不出 fit，落回 initialScale 并记 fitPending
+    container.h = 0;
+    const w = await mountViewer({ initialScale: 1 });
+    expect(canvasWidth(w), '前置：量不到容器时按 initialScale 渲染').toBe(1000);
+
+    await w.find('.pdf-viewport').trigger('wheel', { deltaY: -100 });
+
+    // 容器就绪 → 观察者回调触发补渲
+    container.w = 800;
+    container.h = 800;
+    expect(
+      roCallbacks.length,
+      '组件没有挂上 ResizeObserver（fit 失败时的补渲通道）',
+    ).toBeGreaterThan(0);
+    for (const cb of roCallbacks) cb();
+    await flushPromises();
+
+    // 用户已表态 ⇒ renderScale 保持 initialScale（1.0），不被 fit 的 0.8 覆写
+    expect(renderedScales.at(-1), '补渲不得覆写用户已表过态的比例').toBeCloseTo(1.0, 6);
+    expect(totalScaleOf(w), '净效果 = 保留的 1.0 × 滚轮的 1.1').toBeCloseTo(1.1, 6);
+    w.unmount();
+  });
+
+  // `props.page` 是另一条换页通道（PartBatchPdfTab / PartBatchManualTab 传 `:page`），
+  // 它与工具栏翻页必须同口径：清 userZoomed 让 fit 重算 + viewScale 归 1。少归 1 的话，
+  // 滚轮用户在这里换页会带着自己的 CSS 缩放 —— 与 P6 是同一个缺陷的两条入口。
+  it('P8：外部改 page prop 后同样重算 fit 且 viewScale 归 1', async () => {
+    container.w = 800;
+    container.h = 800;
+    const w = await mountViewer({ page: 1 }, [
+      { w: PAGE_W, h: PAGE_H },
+      { w: PAGE_W, h: PAGE_H },
+    ]);
+
+    const vp = w.find('.pdf-viewport');
+    await vp.trigger('wheel', { deltaY: -100 });
+    await vp.trigger('wheel', { deltaY: -100 });
+    expect(totalScaleOf(w), '前置：滚轮两档后 totalScale ≠ fit').toBeCloseTo(0.968, 3);
+
+    await w.setProps({ page: 2 });
+    await flushPromises();
+
+    expect(renderedScales.at(-1)).toBeCloseTo(0.8, 6);
+    expect(totalScaleOf(w), '外部换页与工具栏翻页同口径').toBeCloseTo(0.8, 6);
+    w.unmount();
+  });
+
   // fit 是 opt-out 口子：将来某个承载点要固定比例时传 :fit="false" 即可，
-  // 不必改组件本体。默认值为 true（全仓 7 个承载点都要 fit）。
-  it('P6：fit=false 时不套用 fit（按 initialScale 渲染，与容器尺寸无关）', async () => {
+  // 不必改组件本体。默认值为 true（全仓所有 <PdfViewer> 承载点都要 fit）。
+  it('P9：fit=false 时不套用 fit（按 initialScale 渲染，与容器尺寸无关）', async () => {
     container.w = 800;
     container.h = 800;
     const w = await mountViewer({ fit: false, initialScale: 1 });
@@ -249,14 +371,6 @@ describe('PdfViewer / fit 到容器', () => {
     await buttonOf(w, 'zoom-in').trigger('click');
     await flushPromises();
     expect(canvasWidth(w)).toBe(1200);
-    w.unmount();
-  });
-
-  it('P7：默认 fit 为 true（不传 fit 与显式传 true 同结果）', async () => {
-    container.w = 800;
-    container.h = 800;
-    const w = await mountViewer();
-    expect(canvasWidth(w)).toBe(800);
     w.unmount();
   });
 });

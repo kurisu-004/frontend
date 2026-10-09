@@ -54,12 +54,19 @@
       scheduleReRender 的理由同款。
     · **fit 只在用户没手动缩放过时生效**（`userZoomed` 标志）：+/- 改的就是 renderScale
       本身，若 render() 随后无条件覆写成 fit 值，那一步就等于没做（点 +/- 视觉零变化）。
-      `resetView` / 切 url / 翻页三处清标志 ⇒ 复位与翻页都回到 fit（复位按钮的语义是
-      「回到整页塞进容器的大小」，不是「回到 1 倍」）。翻页清标志是**刻意**的：图纸
-      各页图幅不同（封面 A0、正图 A4 混排很常见），保留上一页的 zoom 会让下一张图要么
-      出容器要么小到看不清，而「翻页 = 重新适应」正是 fit 这件事的价值所在。
-    · `fit` prop 是 opt-out 口子（默认 true）：现在全仓 7 个承载点都要 fit，但组件本体
-      不该把「永远 fit」焊死 —— 将来某个页面要固定比例（比如逐页比对同一比例），
+      置位点是三条缩放入口 —— `zoomIn` / `zoomOut`（改 renderScale）与 `onWheel`
+      （只改 viewScale，但同样是「我要看多大」的表态）。
+      清位点是 `resetView`（复位按钮 / 双击）、切 url、工具栏翻页、外部改 `page` prop、
+      运行时改 `fit` —— 每一条都**同时**把 `viewScale` 归 1（与 zoomIn / zoomOut
+      既有语义一致）。两者缺一，「翻页 = 重新适应整页」就不成立：只清标志时滚轮用户
+      翻页后 renderScale 回到 fit、viewScale 留着，下一页仍以「fit × 自己的缩放」
+      呈现、出容器；只清 viewScale 则 fit 根本不重算。
+      ⇒ 复位与翻页的语义统一为「回到整页塞进容器的大小」（复位按钮不是「回到 1 倍」）。
+      翻页重置是**刻意**的：图纸各页图幅不同（封面 A0、正图 A4 混排很常见），
+      保留上一页的缩放会让下一张图要么出容器、要么小到看不清。
+    · `fit` prop 是 opt-out 口子（默认 true）：全仓所有 `<PdfViewer>` 承载点都要 fit
+      （清单见 `src/components/__tests__/PdfPreviewDialogContract.spec.ts` 的表与例外），
+      但组件本体不该把「永远 fit」焊死 —— 将来某个页面要固定比例（比如逐页比对同一比例），
       传 `:fit="false"` 即可，不必改组件本体。
   CLAUDE.md #6：仍走 @/utils/pdfjs，不直接 import pdfjs-dist。
 -->
@@ -176,9 +183,10 @@ const viewScale = ref(1); // CSS transform 乘数（连续，0.1-10）
 const tx = ref(0); // 平移 x（屏幕 px）
 const ty = ref(0); // 平移 y
 const totalScale = computed(() => renderScale.value * viewScale.value);
-// 2026-10-11：用户点过 +/-（改的就是 renderScale 本身）之后，render() 不得再无条件
-// 覆写成 fit 值 —— 那会把刚写进去的比例在同一次调用里抹掉，点 +/- 视觉零变化。
-// 置位点只有 zoomIn / zoomOut，清位点是 resetView / 切 url / 翻页（见文件头）。
+// 2026-10-11：用户用缩放入口表过态（+/- 改 renderScale、滚轮改 viewScale）之后，
+// render() 不得再无条件覆写成 fit 值 —— 对 +/- 来说那会把刚写进去的比例在同一次调用里
+// 抹掉（点一下视觉零变化）。置位点 = zoomIn / zoomOut / onWheel，清位点统一走
+// `resetView()` 与切 url 分支（见文件头）。
 const userZoomed = ref(false);
 
 // stage 实际尺寸（按 renderScale 渲染出的画布像素 / devicePixelRatio），用于占位 div 宽度
@@ -250,9 +258,10 @@ async function render() {
   const p = await pdfDoc.getPage(page.value);
   // 2026-10-11：先把 renderScale 落到「整页塞进容器」的比例（写 renderScale 而非
   // viewScale：fit 要的是矢量清晰的成像，CSS 放大只会把图放大糊）。
-  // 两个门都过才重算：`props.fit` 是 opt-out 口子；`userZoomed` 表示工人已经用 +/- /
-  // 滚轮表过态（滚轮只动 viewScale，但同样表达了「我要看多大」）。两种情况下都
-  // **不碰 renderScale** —— 那正是工人要的值，落到 initialScale 反而把选择抹了。
+  // 两个门都过才重算：`props.fit` 是 opt-out 口子；`userZoomed` 表示工人已经用 +/− /
+  // 滚轮表过态（滚轮只动 viewScale，但它同样表达了「我要看多大」，故 onWheel 也置位）。
+  // 两种情况下都**不碰 renderScale** —— 那正是工人要的值，落到 initialScale 反而把
+  // 选择抹了。
   if (props.fit && !userZoomed.value) {
     const fit = fitScaleOf(p);
     if (fit === null) {
@@ -285,12 +294,17 @@ async function render() {
   });
 }
 
-// 翻页清 userZoomed：图纸各页图幅不同（封面 A0、正图 A4 混排很常见），保留上一页的
-// 缩放会让下一张图要么出容器、要么小到看不清，而「翻页 = 重新适应」正是 fit 的价值。
+// 翻页 = 重新适应整页：清 userZoomed（让 render() 重算 fit）**并**把 viewScale 归 1。
+// 两者缺一不可 —— 只清标志的话，滚轮用户（onWheel 也置位 userZoomed）翻页后
+// renderScale 回到 fit、viewScale 却留着，下一页仍以「fit × 自己的缩放」呈现、出容器；
+// 只清 viewScale 则 fit 根本不重算。归 1 与 zoomIn / zoomOut 既有语义一致。
+// 图纸各页图幅不同（封面 A0、正图 A4 混排很常见），保留上一页的缩放会让下一张图要么
+// 出容器、要么小到看不清，而「翻页 = 重新适应」正是 fit 这件事的价值所在。
 function prevPage() {
   if (page.value > 1) {
     page.value -= 1;
     userZoomed.value = false;
+    viewScale.value = 1;
     void render();
   }
 }
@@ -298,6 +312,7 @@ function nextPage() {
   if (page.value < totalPages.value) {
     page.value += 1;
     userZoomed.value = false;
+    viewScale.value = 1;
     void render();
   }
 }
@@ -378,6 +393,10 @@ function onWheel(e: WheelEvent) {
   ty.value = mouseY - (mouseY - ty.value) * ratio;
 
   viewScale.value = newViewScale;
+  // 滚轮与 +/- 同级：都是「我要看多大」的明确表态，故同样置位 userZoomed，供各条清位
+  // 路径（复位 / 切 url / 翻页）判断。它只动 viewScale、不动 renderScale（不重渲染），
+  // 但对「翻页要不要回到 fit」这个决定是一票。
+  userZoomed.value = true;
   // 不再调 scheduleReRender() —— 防止 canvas 内部尺寸变化引发抖动
 }
 
@@ -410,7 +429,8 @@ function onMouseUp() {
 // 2026-09-12 新增：双击 / 工具栏复位按钮。
 // 2026-10-11 改：同时清 userZoomed 并重渲一次 —— 语义是「回到整页塞进容器的大小」
 // （fit 开启时），不是「回到 1 倍」。只清 viewScale / 平移的话，工人按了复位却仍停在
-// 自己放大后的比例上，「复位」这个按钮名就落空了。
+// 自己放大后的比例上（renderScale 被 userZoomed 保护、不被 fit 覆写），「复位」这个
+// 按钮名就落空了。
 function resetView() {
   userZoomed.value = false;
   viewScale.value = 1;
@@ -436,16 +456,21 @@ watch(
   () => props.page,
   (v) => {
     page.value = v;
-    // 翻页重算 fit（每页图幅不同，保留上一页的缩放会让下一张图出容器）⇒ 清 userZoomed
+    // 外部改页码（PartBatchPdfTab / PartBatchManualTab 传 `:page`）与工具栏翻页同口径：
+    // 清 userZoomed 让 render() 重算 fit，并把 viewScale 归 1。缺后者的话，滚轮用户
+    // 在这里换页仍会带着自己的 CSS 缩放。
     userZoomed.value = false;
+    viewScale.value = 1;
     void render();
   },
 );
-// `fit` 是 opt-out 口子，运行时切它要立刻生效：清 userZoomed 并重渲。
+// `fit` 是 opt-out 口子，运行时切它要立刻生效：走与翻页 / 复位同口径的清位
+// （清 userZoomed 让 render() 按新的 fit 取值 + viewScale 归 1）。
 watch(
   () => props.fit,
   () => {
     userZoomed.value = false;
+    viewScale.value = 1;
     void render();
   },
 );
