@@ -45,7 +45,7 @@
 
 import { ElMessage } from 'element-plus';
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/vue-query';
-import { computed, toValue, type ComputedRef, type MaybeRefOrGetter, type Ref } from 'vue';
+import { toValue, type ComputedRef, type MaybeRefOrGetter, type Ref } from 'vue';
 import {
   cancelPart,
   cancelPartBatch,
@@ -104,15 +104,21 @@ export interface PartDetailActionBindings {
 /**
  * 失效详情页三条读键（写操作完成后调；返回 `Promise<void>` 让调用方可 await）。
  *
- * 顺序固定为「详情 → 事件 → 批次」—— 无关紧要，但固定下来让测试能逐字断言调用序。
+ * 三条并行发起（`Promise.all`）而非逐条 await：三者互不依赖，且都是本端点**必然**
+ * 变了的那几份数据（工单本体 / 批次集合 / 事件流水）——串行等于把一次写后刷新的
+ * 延迟从 1 个 RTT 叠成 3 个，拆批弹窗的 `resolve(true)`（shell 等 mutateAsync 才关框）
+ * 会被整串拖慢。`invalidateQueries` 自己会去重 / 合并在飞的请求，并行不会打重复往返。
+ *
  * 失效失败**不**把一次成功的写报成失败：失效是「让别的视图尽快看到」的优化，
- * 不是成败判据。
+ * 不是成败判据。三条共用一个 try/catch ⇒ 任一条 reject 都不外泄。
  */
-export async function invalidatePartDetailCaches(qc: QueryClient): Promise<void> {
+async function invalidatePartDetailCaches(qc: QueryClient): Promise<void> {
   try {
-    await qc.invalidateQueries({ queryKey: qk.partDetailPrefix });
-    await qc.invalidateQueries({ queryKey: qk.partEventsPrefix });
-    await qc.invalidateQueries({ queryKey: qk.partBatchesPrefix });
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: qk.partDetailPrefix }),
+      qc.invalidateQueries({ queryKey: qk.partEventsPrefix }),
+      qc.invalidateQueries({ queryKey: qk.partBatchesPrefix }),
+    ]);
   } catch {
     /* 失效只是「让别的视图尽快看到」，失败不该把一次成功的写报成失败。 */
   }
@@ -361,19 +367,13 @@ export function usePartDetailActions(bindings: PartDetailActionBindings) {
     onFailInspection,
     onSplitBatch,
     onCancelBatch,
-    /** 行内保存的 pending 态（PartInfoCard 的 save 按钮 `:loading`）。 */
+    /** 行内保存的 pending 态（PartInfoCard 的 save 按钮 `:loading`）。
+     *
+     *  ⚠️ **只导出这一个 pending 态**：其余 6 个写操作的 pending 由 shell 自己维护
+     * （`passSubmitting` / `confirmSubmitting` / `failInspSubmitting` 三个局部 ref）——
+     * 那些 loading 圈的是**对话框内的确认按钮**，必须在 shell 里跟对话框的开关同生共死
+     * （关框即复位）。导出第二个合成 pending 只会让读代码的人以为两个来源会打架。 */
     saving: saveMutation.isPending,
-    /** 其余 6 个写操作的 pending 合成态（底部操作 / 批次卡的 loading 锚）。 */
-    submitting: computed(() =>
-      [
-        cancelOrderMutation.isPending,
-        softDeleteMutation.isPending,
-        toShipMutation.isPending,
-        toProcessMutation.isPending,
-        splitMutation.isPending,
-        cancelBatchMutation.isPending,
-      ].some((p) => p.value),
-    ),
   };
 }
 
