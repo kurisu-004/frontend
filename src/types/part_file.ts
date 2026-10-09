@@ -226,9 +226,9 @@ export interface PartBatchCreateOut {
   cleanup_tmp_keys: string[];
 }
 
-/** `PartBatchCreateOut.created[]` 单元素形状——结构上与 PartItem 兼容但
- *  含 version / 等额外字段（PartDetailOut 超集）。vitest / TS 类型断言时
- *  用 `as unknown as PartItem` 即可。 */
+/** `PartBatchCreateOut.created[]` 单元素形状——结构上与 `@/api/parts` 的
+ *  `PartDetailDto` 兼容但含 version 等额外字段（PartDetailOut 超集）。vitest / TS
+ *  类型断言时用 `as unknown as PartDetailDto` 即可。 */
 export interface PartFileDetailOut {
   id: string;
   version: number;
