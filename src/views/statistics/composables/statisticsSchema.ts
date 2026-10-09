@@ -65,7 +65,7 @@ const statusCountSchema = z.object({
 /** 车间生产总览（后端 `statistics::vo::overview::OverviewOut`，
  *  契约文档 `backend-rust/docs/api/statistics.md` §2）。
  *
- *  20 字段全部必填：2 个回显日期 + 9 个基础统计（其中 `delivered_value` 是 Decimal
+ *  15 字段全部必填：2 个回显日期 + 9 个基础统计（其中 `delivered_value` 是 Decimal
  *  string）+ 4 个图表段。**跨域字段**：`status_distribution` 的行 VO 用的
  *  `status_value` 取自 `t_part.status`（part 域的 `PartStatus` 枚举字面量集合），
  *  `daily_created` / `daily_completed` 的计数也来自 part 域的 `t_part` /

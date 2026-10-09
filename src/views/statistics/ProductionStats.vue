@@ -18,7 +18,11 @@
   （多打两条本不该发的请求）要么暴露 loading 给没在看的 tab。
 
   换日期 / 换 tab 的取数时机由各自的 hook 决定：日期进 queryKey ⇒ 变了自动 refetch；
-  切 tab 是 el-tab-pane 的懒挂载 ⇒ 首次进入那个 tab 时才取，切走再切回命中 30s 缓存。
+  三个 el-tab-pane 都带 `lazy` ⇒ 首次进入那个 tab 时才挂载子组件、才发对应那条请求，
+  切走再切回命中 30s 缓存（不重新打）。
+  ⚠️ `lazy` 是这三个 pane 的必要属性，不是可选项：TabPane 不带 `lazy` 时三个 pane
+  首屏全部挂载，进页面就并发打 /statistics/overview 与 /statistics/workers
+  （worker-detail 那条虽有 enabled 闸门不发请求），与上面的意图正好相反。
   选中工人后切到 worker-detail tab，并通过 prop 传 workerId。
 -->
 
@@ -60,10 +64,14 @@
     </el-card>
 
     <el-tabs v-model="activeTab" type="border-card" class="stats-tabs">
-      <el-tab-pane label="车间生产总览" name="overview">
+      <!-- 2026-10-12 三个 pane 全部加 lazy：TabPane 无 lazy 时三个 pane 在首屏
+           就全部挂载 ⇒ 进页面立刻并发打 /statistics/overview 与 /statistics/workers
+           （外加 enabled 为假的 worker-detail 占位键），与「切 tab 才取数」的意图相反。
+           lazy 后首次进入某个 tab 才挂载该 pane 的子组件、取数时机随之对齐。 -->
+      <el-tab-pane label="车间生产总览" name="overview" lazy>
         <OverviewTab v-if="dateFrom" :date-from="dateFrom" :date-to="dateTo" />
       </el-tab-pane>
-      <el-tab-pane label="工人报工总览" name="workers">
+      <el-tab-pane label="工人报工总览" name="workers" lazy>
         <WorkerStatsTab
           v-if="dateFrom"
           :date-from="dateFrom"
@@ -71,7 +79,7 @@
           @selectWorker="onSelectWorker"
         />
       </el-tab-pane>
-      <el-tab-pane label="单工人详情" name="worker-detail">
+      <el-tab-pane label="单工人详情" name="worker-detail" lazy>
         <WorkerDetailTab
           v-if="dateFrom"
           :date-from="dateFrom"
