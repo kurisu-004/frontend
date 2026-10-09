@@ -22,6 +22,13 @@
     `POST /parts/{id}/to-ship`（v2 必填 batch_id + version），指定工序走
     `POST /parts/{id}/fail-inspection`。
   - 工艺链：part.process_chain_id 改走 useProcessChain 拉链（PR-3）。
+  - 2026-10-10 数据层分层：本页只做「shell 接线」，取数在
+    `composables/usePartDetailQuery.ts` + `usePartEventsQuery.ts`（+ 共享的
+    `usePartBatchesQuery`），7 个写操作在 `composables/usePartDetailActions.ts`，
+    权限 / 派生 / 行内编辑态在 `composables/usePartDetail.ts`。相应地
+    onMounted 与 route watcher 里不再手写 fetch（reactive queryKey 自己驱动，
+    手写会造成双 fetch），取消 / 删除后的跳转仍在本页（composable 不 import
+    vue-router）。
 -->
 <template>
   <div v-loading="infoLoading" class="part-detail">
@@ -135,11 +142,24 @@
       </div>
     </el-card>
 
-    <!-- 底部操作：取消订单 / 删除 / 品检 / 外协回收（按角色门控） -->
+    <!-- 底部操作：取消订单 / 删除 / 品检（按角色 + 批次状态门控） -->
     <el-card v-if="part" shadow="never" class="bottom-actions">
       <div class="action-row">
-        <!-- 品检相关：仅 INSPECTION 状态可见 -->
-        <template v-if="canInspect && part.status === 'INSPECTION'">
+        <!--
+          品检相关：⚠️ 判据是**批次**而非 `part.status`。
+          `t_part.status` 是 min-progress 派生列（后端 `rollup_part_derived`），同工单只要
+          还有任一批次进度更靠前，整单就派生成那个更早的状态 ⇒ 多批次工单上会出现
+          「批次确实是 INSPECTION、`part.status` 却是 IN_PROCESS / PENDING」，两个按钮
+          整排消失，那个批次永远动不了。后端
+          `prod/batch/service/transition_core.rs::to_ship_core` 对同一处有专门警告。
+          判据统一走派生出的 `inspectionBatch`，两个按钮也就必然打同一个批次。
+        -->
+        <template v-if="canInspect && inspectionBatch">
+          <span class="inspection-anchor">
+            目标批次
+            <span class="mono">{{ inspectionBatch.batch_label }}</span>
+            （{{ inspectionBatch.quantity }} 件）
+          </span>
           <el-button type="success" :loading="passSubmitting" @click="onPassInspection"
             >品检通过</el-button
           >
@@ -166,6 +186,14 @@
       @closed="onFailInspDialogClosed"
     >
       <el-form label-width="96px">
+        <el-form-item label="目标批次">
+          <span class="mono">{{ inspectionBatch?.batch_label ?? '—' }}</span>
+          <span v-if="inspectionBatch" class="muted">
+            （{{ inspectionBatch.quantity }} 件，当前状态：{{
+              statusLabelOf(inspectionBatch.status)
+            }}）
+          </span>
+        </el-form-item>
         <el-form-item label="下一道工序" required>
           <el-select
             v-model="failInspProcessId"
@@ -271,8 +299,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, onUnmounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { PriceTag } from '@element-plus/icons-vue';
 import { useQueryClient } from '@tanstack/vue-query';
@@ -298,6 +326,8 @@ import {
 } from '@/composables/queries/usePartFilesListQuery';
 import { usePartDetail } from './composables/usePartDetail';
 import type { PartEditForm } from './composables/usePartDetail';
+import { usePartDetailActions } from './composables/usePartDetailActions';
+import { isPartDetailActive } from './composables/partDetailActive';
 import { usePartCncGroups } from './composables/usePartCncGroups';
 import { useProcessChain } from './composables/useProcessChain';
 import { useDefaultBatchSelection } from './composables/useDefaultBatchSelection';
@@ -309,11 +339,27 @@ import { useDefaultBatchSelection } from './composables/useDefaultBatchSelection
 const isDev = import.meta.env.DEV;
 
 const route = useRoute();
+const router = useRouter();
 const partId = ref<string>(String(route.params.id ?? ''));
+
+/**
+ * 本页是否仍是当前路由（keep-alive 缓存页必需）。
+ *
+ * `useRoute()` 注入的是 vue-router 的**全局** currentRoute，不是本组件挂载那一刻的
+ * 地址快照；本页被 keep-alive 缓存后（路由名 `PartDetail` = 组件文件名，MainLayout 的
+ * `<keep-alive :include="tags.cachedViewNames">` 按名字匹配），用户切到别的页面时全局
+ * 路由照样变。它同时喂给两处，必须共用同一个判据函数
+ * （`composables/partDetailActive.ts`，别在两个地方各写一遍 `route.name !== ...`）：
+ *   ① 下面 route watcher 的守卫 —— 否则 partId 会被改成别的页面的 id；
+ *   ② 两条 query hook 的 `enabled` 闸门 —— 否则 reactive queryKey 跟着全局路由变，
+ *      自动去拉「别的页面的零件」（比 404 更坏：那个 id 若恰好有效，本页会静默渲染成
+ *      另一个工单）。
+ */
+const isActive = computed(() => isPartDetailActive(route.name));
 
 // ============ composables ============
 // 2026-09-17 PR-4：删 usePartQuote（外协报价下线，仅保留 /outsource/quote 入口）。
-const detail = usePartDetail(partId);
+const detail = usePartDetail(partId, isActive);
 const cnc = usePartCncGroups(partId);
 
 // 2026-09-29 迁移：usePartFilesListQuery 单调用替代原 usePartFiles 三并发。
@@ -329,19 +375,19 @@ const drawings = computed(() => partFiles.value.filter((f) => f.kind === 'DRAWIN
 const models3d = computed(() => partFiles.value.filter((f) => f.kind === '3D_MODEL'));
 const cadFiles = computed(() => partFiles.value.filter((f) => f.kind === 'CAD_2D'));
 
-// 从 composables 解构出来（业务函数 + 状态）
+// 从数据层 composable 解构出来（只读投影 + 权限 + 行内编辑态 + helpers）
 const {
   part,
   infoLoading,
   events,
   eventsLoading,
   editing,
-  saving,
   form,
   assemblyDetail,
   assemblyLoading,
   batches,
   batchesLoading,
+  inspectionBatch,
   canEditPart,
   canCancelPart,
   canDeletePart,
@@ -351,23 +397,37 @@ const {
   canManageCncFiles,
   canManageSetupSheet,
   canManageBatches,
-  fetchPart,
-  fetchEvents,
   fetchBatches,
   onStartEdit,
   onCancelEdit,
-  onSave,
-  onFailInspection,
-  onCancelOrder,
-  onDeletePart,
-  onSplitBatch,
-  onCancelBatch,
+  buildUpdatePayload,
   statusLabel,
   statusTagType,
   statusLabelOf,
   eventLabel,
   eventTagType,
 } = detail;
+
+// 写操作层：7 个 mutation 在 `usePartDetailActions` 内。它不认识对话框、不 import
+// vue-router —— 每个 action 返回 Promise<boolean>，后续（关框 / 跳转）由本页决定。
+const actions = usePartDetailActions({ partId, part, batches, inspectionBatch });
+const {
+  onSave: savePart,
+  onCancelOrder,
+  onDeletePart,
+  onPassInspection: passInspection,
+  onFailInspection: failInspection,
+  onSplitBatch,
+  onCancelBatch,
+  saving,
+} = actions;
+
+// PartInfoCard 的 save 按钮 emit 无参，父级读 form 组载荷 —— 归一化（trim / 空串→null）
+// 在数据层的 `buildUpdatePayload` 里做一次，OCC 锚由 actions 从 `part.version` 补。
+async function onSave(): Promise<void> {
+  if (!(await savePart(buildUpdatePayload()))) return;
+  editing.value = false;
+}
 
 // 2026-09-16 T3.5：三个 kind 各自的补传 composable（场景 B）。
 // 复用同一 partId（雪花 ID 字符串），kind 是字面量。
@@ -507,10 +567,10 @@ async function onFailInspectionConfirm() {
   if (!failInspProcessId.value) return;
   failInspSubmitting.value = true;
   try {
-    const ok = await onFailInspection({
-      // 2026-10-02：to-process 以批次为锚，锚点用三卡联动已选中的批次 ——
-      // 多批次 part 上比「找第一个 INSPECTION 批次」更准。
-      batchId: selectedBatchId.value,
+    // ⚠️ 不再传 batchId：锚批次由 actions 从 `inspectionBatch` 派生（与「品检通过」
+    // 同一条），与三卡联动的 `selectedBatchId` 解耦 —— 后者是「用户在看哪个批次」的
+    // 视图锚，拿它当写锚就会让两个品检按钮在多批次工单上打不同的批次。
+    const ok = await failInspection({
       processId: failInspProcessId.value,
       note: failInspNote.value.trim() || null,
     });
@@ -560,8 +620,12 @@ async function onConfirmAction() {
       const ok = await onCancelOrder();
       if (ok) confirmVisible.value = false;
     } else {
-      // delete 成功后 onDeletePart 内 router.push('/parts')，不再需要 close
-      await onDeletePart();
+      // 软删成功后目标资源已不存在（后端 `GET /parts/{id}` 带 `deleted_at IS NULL`），
+      // 跳转由 shell 负责 —— composable 不 import vue-router（CLAUDE.md 不变量）。
+      if (await onDeletePart()) {
+        confirmVisible.value = false;
+        await router.push('/parts');
+      }
     }
   } finally {
     confirmSubmitting.value = false;
@@ -573,7 +637,7 @@ const passSubmitting = ref(false);
 async function onPassInspection() {
   passSubmitting.value = true;
   try {
-    await detail.onPassInspection();
+    await passInspection();
   } finally {
     passSubmitting.value = false;
   }
@@ -587,9 +651,11 @@ async function handleSplitBatch(payload: {
   quantity: number;
   resolve: (ok: boolean) => void;
 }) {
+  // ⚠️ 成功后**不**再手写 fetchBatches：actions 的 mutation `onSuccess` 已失效
+  // `qk.partBatchesPrefix`（含本页消费的 `qk.partBatchesList(partId)`），活跃 observer
+  // 在 mutateAsync resolve 前就已 refetch 完毕。
   const result = await onSplitBatch(payload.batch, payload.quantity);
   payload.resolve(result !== null);
-  void fetchBatches();
 }
 async function handleCancelBatch(batch: PartBatch) {
   if (
@@ -602,7 +668,6 @@ async function handleCancelBatch(batch: PartBatch) {
   )
     return;
   await onCancelBatch(batch);
-  void fetchBatches();
 }
 
 // ============ 配对上传（PartFilesTabsCard → PartCncCard 触发）============
@@ -637,14 +702,15 @@ watch(
     // 那一刻的地址快照；本页被 keep-alive 缓存（路由名 `PartDetail` = 组件文件名，
     // MainLayout 的 `<keep-alive :include="tags.cachedViewNames">` 按名字匹配）后，
     // 用户切到别的页面时全局路由一变，本 watcher 仍在跑（只有 onUnmounted 才停），
-    // 于是 partId 会被改成**别的页面**的 id ⇒ GET /parts/{别的页面的 id} 404 并弹
-    // 一句看不懂的错误。
+    // 于是 partId 会被改成**别的页面**的 id。判据抽在
+    // `composables/partDetailActive.ts`（与两条 query hook 的 `enabled` 闸门共用同一份，
+    // 别在这里另写一遍 `route.name !== 'PartDetail'`）。
     //
     // **不能删 watcher**：vue-router 对同一条路由记录只改 param（/parts/1 → /parts/2）
     // 时会复用组件实例、不触发 onMounted；本页内部就有这种导航
     // （`PartAssemblyLinkCard` 的兄弟零件 chips）。删了的话，从 A 件跳到兄弟件 B，
     // 页面会停在 A 件的数据上。
-    if (route.name !== 'PartDetail') return;
+    if (!isPartDetailActive(route.name)) return;
     const s = String(id ?? '');
     if (!s) return;
     partId.value = s;
@@ -652,22 +718,24 @@ watch(
     // selectedBatchId，但切 partId 时立刻置空让 PartHistoryCard 立刻恢复展示
     // 全部事件，避免闪旧批次的过滤态）。
     selectedBatchId.value = null;
-    // 2026-09-29 迁移：drawings / models3d / cadFiles 改 computed from useQuery，
-    // 切 partId 自动驱动 useQuery 重取（ownerKey 变化），无需手写 fetchDrawings / fetch3DModels / fetchCadFiles。
-    await fetchPart();
-    void fetchEvents();
-    void fetchBatches();
-    // 2026-09-29 修复：usePartFilesListQuery reactive params 已自动驱动 refetch，
-    // 切 partId → ownerKey 变化 → useQuery 自动重取，无需手写 fetchCncPrograms。
+    // ⚠️ **这里不再手写 fetchPart / fetchEvents / fetchBatches**：三条 query hook 的
+    // queryKey 是 reactive 的，partId 一变 key 就变 → observer 自动 refetch。
+    // 留着这三行就是每次切件打两遍（hook 的自动 refetch + 这里的手写 refetch）。
+    // 零件文件同理（`usePartFilesListQuery` 的 ownerKey 也是 reactive）。
   },
 );
 
-onMounted(() => {
-  void fetchPart();
-  void fetchEvents();
-  void fetchBatches();
-  // 2026-09-29 修复：usePartFilesListQuery reactive params 已自动驱动 refetch，
-  // 切 partId → ownerKey 变化 → useQuery 自动重取，无需手写 fetchCncPrograms。
+// 2026-10-10：`onMounted` 里那三行 fetchPart / fetchEvents / fetchBatches 一并删除
+// —— 同上，首调由 useQuery 在 setup 阶段自动发起；再手写一遍就是首屏双请求。
+// `usePartCncGroups` / `usePartFilesListQuery` 本来就是 reactive params 自驱（且两者
+// 共用 `qk.partFilesList(partId)` 同一条键、按 queryKey 去重），不受影响。
+
+// 2026-10-10：只在**真正卸载**（关标签页）时重置本 composable 的 UI 态，不挂
+// `onDeactivated` —— 本页被 keep-alive 缓存，deactivate 只是切走、实例还在，切回来
+// 必须还能看到刚才的数据（行内编辑态 / 装配件详情不该每次切页都丢）。query 缓存由
+// queryClient 统一管（有限 gcTime 5min），这里不碰。
+onUnmounted(() => {
+  detail.reset();
 });
 </script>
 
@@ -720,7 +788,17 @@ onMounted(() => {
   .action-row {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
     gap: 10px;
+  }
+
+  // 2026-10-10：品检按钮组左侧的锚批次标识。必须可见 —— 两个品检动作打在**同一个**
+  // 派生的 `inspectionBatch` 上，用户要能在按下之前确认那是哪个批次（多批次工单上
+  // 「品检通过」与「指定工序」打的批次曾经是两个，且界面上看不出来）。
+  .inspection-anchor {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-right: 4px;
   }
 }
 
