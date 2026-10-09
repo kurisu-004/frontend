@@ -64,6 +64,10 @@ const AFFECTS_DASHBOARD: ReadonlySet<DashboardEventType> = new Set<DashboardEven
   'ASSEMBLY_DELETED',
   'ASSEMBLY_CANCELLED',
   'ASSEMBLY_UPDATED',
+  // 强制完成（2026-10-11）：零件 / 装配件各自的 force-complete 端点绕过状态机直写
+  // COMPLETED，常驻大屏收不到写操作方的 invalidate，只能靠这两个事件。
+  'PART_FORCE_COMPLETED',
+  'ASSEMBLY_FORCE_COMPLETED',
 ]);
 
 /** dashboard 域失效事件数量（与 useDashboardInvalidation.spec.ts 的 T1 用例对齐；

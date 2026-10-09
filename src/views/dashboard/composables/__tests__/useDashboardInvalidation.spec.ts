@@ -3,7 +3,7 @@
 // 2026-09-29 新增：useDashboardInvalidation WS 事件 → invalidate 回归保护。
 //
 // 覆盖：
-//   - I1：23 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
+//   - I1：25 个 AFFECTS_DASHBOARD 事件命中 → 触发 debounced invalidate
 //   - I2：连续 5 个 AFFECTS_DASHBOARD 事件 → debounce 500ms 内合并 → 1 次 invalidate
 //   - I3：maxWait 1500ms flush —— 持续超过 1500ms 必须强制 invalidate
 //   - I4：非 AFFECTS_DASHBOARD 事件（如 DELIVERY_NOTE_CREATED）不触发 invalidate
@@ -84,7 +84,7 @@ vi.mock('@/api/dashboard', () => ({
 import { useDashboardInvalidation, AFFECTS_DASHBOARD_SIZE } from '../useDashboardInvalidation';
 import { qk } from '@/composables/queries/keys';
 
-// 23 个 AFFECTS_DASHBOARD 事件类型白名单（与 useDashboardInvalidation.ts 同源）
+// 25 个 AFFECTS_DASHBOARD 事件类型白名单（与 useDashboardInvalidation.ts 同源）
 const AFFECTS_DASHBOARD_EVENTS: string[] = [
   'PART_TO_SHIP',
   'PART_TO_INSPECTION',
@@ -109,6 +109,8 @@ const AFFECTS_DASHBOARD_EVENTS: string[] = [
   'ASSEMBLY_DELETED',
   'ASSEMBLY_CANCELLED',
   'ASSEMBLY_UPDATED',
+  'PART_FORCE_COMPLETED',
+  'ASSEMBLY_FORCE_COMPLETED',
 ];
 
 let testApp: ReturnType<typeof createApp>;
@@ -153,9 +155,9 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     vi.useRealTimers();
   });
 
-  it('I1：AFFECTS_DASHBOARD 集合大小为 23（与 useDashboardInvalidation 同源）', () => {
-    expect(AFFECTS_DASHBOARD_SIZE).toBe(23);
-    expect(AFFECTS_DASHBOARD_EVENTS).toHaveLength(23);
+  it('I1：AFFECTS_DASHBOARD 集合大小为 25（与 useDashboardInvalidation 同源）', () => {
+    expect(AFFECTS_DASHBOARD_SIZE).toBe(25);
+    expect(AFFECTS_DASHBOARD_EVENTS).toHaveLength(25);
   });
 
   it('I2：AFFECTS_DASHBOARD 内事件触发 invalidate', async () => {
@@ -277,7 +279,7 @@ describe('useDashboardInvalidation — WS 事件 → debounce → invalidate（2
     scope.stop();
   });
 
-  it('I7：22 个 AFFECTS_DASHBOARD 事件全部触发 invalidate（白名单回归保护）', async () => {
+  it('I7：25 个 AFFECTS_DASHBOARD 事件全部触发 invalidate（白名单回归保护）', async () => {
     vi.useFakeTimers();
     for (const evType of AFFECTS_DASHBOARD_EVENTS) {
       const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');

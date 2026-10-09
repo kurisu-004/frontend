@@ -19,11 +19,19 @@
 //   · 不再接收 deps —— 原先传 selectedIds / selectedRows / selectedRowTypes /
 //     getTable 四个（批量下发成功后要把成功的行从三个状态源里摘掉），批量下发下线后
 //     四个都不再被读，留着会让调用点以为它们有用。
+//
+// 2026-10-11 接装配件强制完成。**残留**：常驻在另一个标签页的生产队列看板会残留已完成
+// 工单 —— 候选池判据是 `status='IN_PROCESS' AND location='PRODUCTION_SHELF'`
+// （backend-rust docs/api/queue.md），批次被强推成 COMPLETED 后应当离池，但队列域
+// 没有订阅 PART_FORCE_COMPLETED / ASSEMBLY_FORCE_COMPLETED，看板与徽标计数都要等
+// 用户手动刷新或重新挂载才更新。本页的 `invalidateQueries` 到不了那个 tab（QueryClient
+// 是每 JS context 一份），补前缀也没用。真通道是给队列域接 WS 订阅，本轮不在范围内。
 
 import { reactive } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useQueryClient, useMutation } from '@tanstack/vue-query';
 import { forceCompletePart } from '@/api/parts';
+import { forceCompleteAssembly } from '@/api/assembly';
 import type { PartListItem } from '@/types/parts';
 import { qk } from '@/composables/queries/keys';
 import { useConfirm } from '@/composables/useConfirm';
@@ -40,18 +48,33 @@ export function usePartDispatch(): UsePartDispatchReturn {
   const qc = useQueryClient();
 
   // ============ 强制完成（2026-09-30）============
-  // 系统管理员专属：绕过状态机把工单+所有非取消批次置为 COMPLETED。
-  // 守卫 canForceComplete 收口角色 + row_type + status 三个维度：
+  // 系统管理员专属：绕过状态机把工单 + 所有非取消批次置为 COMPLETED。
+  // 零件走 `POST /parts/{id}/force-complete`，装配件走
+  // `POST /prod/assemblies/{id}/force-complete`（后端只把这条写端点挂在 prod 前缀下）。
+  // 守卫 canForceComplete 收口三个维度：
   //   - isManager：仅 MANAGER 可见 / 可点；
-  //   - row.row_type !== 'ASSEMBLY'：装配件无独立批次完成语义（待与后端契约确认）；
+  //   - 非子件行（__is_child）：装配件整体完成走父行的入口，子件行不再提供第二个
+  //     按钮 —— 否则同一批子件能从父 / 子两条路各点一次；
   //   - 非 COMPLETED / 非 CANCELLED：终态不可二次强制完成，避免日志噪声 + 避免
-  //     与既有 cancelPart 路径冲突（取消件不强制回到已完成）。
+  //     与既有 cancelPart / cancelAssembly 路径冲突（取消件不强制回到已完成）。
   const confirm = useConfirm();
   const { isManager } = usePermissions();
 
+  /**
+   * 2026-10-11：子件行判定。
+   *
+   * `__is_child` 只声明在 `AssemblyChildItem`（literal `true`），`PartListItem`
+   * 顶层没有该字段 —— 树表把子件行塞进同一个 `PartListItem[]`（PartsTable 的
+   * `loadChildren`），故这里必须从宽取值。刻意**不给 `PartListItem` 补该字段**：
+   * 顶层行永远拿不到它，补了只会把「只有子件才有」的标记写成全员可空字段。
+   */
+  function isChildRow(row: PartListItem): boolean {
+    return (row as { __is_child?: unknown }).__is_child === true;
+  }
+
   function canForceComplete(row: PartListItem): boolean {
     if (!isManager.value) return false;
-    if (row.row_type === 'ASSEMBLY') return false;
+    if (isChildRow(row)) return false;
     if (row.status === 'COMPLETED') return false;
     if (row.status === 'CANCELLED') return false;
     return true;
@@ -63,22 +86,42 @@ export function usePartDispatch(): UsePartDispatchReturn {
   // 避免 map 累积 stale key（沿 DeliveryNoteList.vue 的清理范本）。
   const forceCompletingMap = reactive<Record<string, boolean>>({});
 
-  const forceCompleteMutation = useMutation<
-    unknown,
-    Error,
-    { partId: string; note: string | null }
-  >({
+  interface ForceCompleteVars {
+    /** 端点锚点 id：零件 id 或装配件 id（雪花 ID 字符串，全程 string，不经 Number()）。 */
+    id: string;
+    /** 行类型，决定打哪个 force-complete 端点。 */
+    rowType: 'PART' | 'ASSEMBLY';
+    note: string | null;
+  }
+
+  // 零件 / 装配件共用一个 mutation（per-row loading map、成功 / 失败文案、失效范围
+  // 全部共用），只在 mutationFn 内按 rowType 分发 —— 不新开第二个 mutation。
+  const forceCompleteMutation = useMutation<unknown, Error, ForceCompleteVars>({
     mutationKey: ['parts', 'dispatch', 'force-complete'],
-    mutationFn: ({ partId, note }) => forceCompletePart(partId, { note }),
-    onMutate: ({ partId }) => {
-      forceCompletingMap[partId] = true;
+    mutationFn: ({ id, rowType, note }) =>
+      rowType === 'ASSEMBLY'
+        ? forceCompleteAssembly(id, { note })
+        : forceCompletePart(id, { note }),
+    onMutate: ({ id }) => {
+      forceCompletingMap[id] = true;
     },
-    onSettled: (_d, _e, { partId }) => {
-      delete forceCompletingMap[partId];
+    onSettled: (_d, _e, { id }) => {
+      delete forceCompletingMap[id];
     },
-    onSuccess: () => {
-      ElMessage.success('已强制完成');
+    onSuccess: (_d, { rowType }) => {
+      ElMessage.success(
+        rowType === 'ASSEMBLY' ? '已强制完成装配件及其全部非取消批次' : '已强制完成',
+      );
       void qc.invalidateQueries({ queryKey: qk.partsPrefix });
+      // 2026-10-11：装配件完成同时改 t_part（子件）状态，需失效装配件域（详情 / 列表缓存）。
+      void qc.invalidateQueries({ queryKey: qk.assemblyPrefix });
+      // 2026-10-11：dashboard 三 query 的 gcTime 是 POSITIVE_INFINITY 且无 refetchInterval，
+      // 常驻大屏（另一个标签页）收不到本 mutation 的成功回调 —— 只有这条 WS 失效是共屏
+      // 的兜底通道。
+      // 不补 qk.productionQueueSnapshotPrefix：`invalidateQueries` 只作用于本标签页的
+      // QueryClient，而生产队列看板永远不与零件一览页挂在同一个 tab，补进来是死代码。
+      // 跨屏的真通道是 WS（见 useDashboardInvalidation）。
+      void qc.invalidateQueries({ queryKey: qk.dashboardPrefix });
     },
     onError: (e: Error) => ElMessage.error(e.message ?? '强制完成失败'),
   });
@@ -87,15 +130,29 @@ export function usePartDispatch(): UsePartDispatchReturn {
     // label fallback 用 serial_no || drawing_no || row.id，不引入 order_no ——
     // order_no 是「送货单号」，非工单号，不应出现在工单级确认文案里。
     const label = row.serial_no || row.drawing_no || row.id;
+    const isAssembly = row.row_type === 'ASSEMBLY';
+    // 2026-10-11：装配件额外提示子件会被一并完成。child_count 只在装配件行填且可能为
+    // null（复用同一 VO 的其余端点恒不填）—— 缺省时退成不带数字的整句，
+    // 既不显示数字也不会出现 NaN。零件路径不带这一句（文案逐字沿用旧形态）。
+    const childHint = isAssembly
+      ? typeof row.child_count === 'number' && row.child_count > 0
+        ? `该装配件的 ${row.child_count} 个子件将一并完成。\n`
+        : '该装配件的全部子件将一并完成。\n'
+      : '';
     const ok = await confirm.dangerous(
-      '强制完成工单',
-      `将强制把工单「${label}」及其所有非取消批次置为已完成。\n` +
+      isAssembly ? '强制完成装配件' : '强制完成工单',
+      `将强制把${isAssembly ? '装配件' : '工单'}「${label}」及其所有非取消批次置为已完成。\n` +
+        childHint +
         `此操作绕过状态机（仅排除已取消批次），要求非 COMPLETED / 非 CANCELLED 状态。\n` +
         `仅系统管理员可执行，且不可撤销。是否继续？`,
       { confirmText: '确认完成', cancelText: '取消', type: 'warning' },
     );
     if (!ok) return;
-    forceCompleteMutation.mutate({ partId: row.id, note: null });
+    forceCompleteMutation.mutate({
+      id: row.id,
+      rowType: isAssembly ? 'ASSEMBLY' : 'PART',
+      note: null,
+    });
   }
 
   return {

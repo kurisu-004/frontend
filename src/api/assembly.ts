@@ -317,6 +317,26 @@ export async function cancelAssembly(id: string): Promise<AssemblyItem> {
   return parseAssemblyOutToItem(resp.data, 0);
 }
 
+/**
+ * 2026-10-11 新增：装配件「强制完成」—— 系统管理员绕过状态机，把该装配件及其
+ * 所有非取消批次置为 COMPLETED（零件对应 `forceCompletePart`）。
+ *
+ * 端点是 `POST /api/v2/prod/assemblies/{id}/force-complete`，**带 `prod` 前缀**：
+ * 后端只把这条写端点挂在 prod 命名空间下，本文件其余装配件端点仍在
+ * `/api/v2/assemblies/*`。用 `/assemblies/{id}/force-complete` 会 404。
+ *
+ * `id` 一律按 string 处理（雪花 ID 超过 `Number.MAX_SAFE_INTEGER`，URL 拼接
+ * 严禁经 `Number()`）。响应体不消费 ⇒ 返 `void`，不对未知的出参形状做类型声明。
+ *
+ * ⚠️ **部署顺序：后端必须先上。** 零件一览的「完成」按钮对装配件行可见，而按钮
+ * 的守卫只看角色与行状态、不看端点是否存在 ⇒ 后端未部署本端点时，MANAGER 点
+ * 装配件行的「完成」就是一次 404（零件行不受影响，它打的是既有端点）。失败发生在
+ * 网络层：现场只看到一句 axios 错误，用户视角是「点了没反应」，不会退回去查部署。
+ */
+export async function forceCompleteAssembly(id: string, payload?: { note?: string | null }) {
+  await api.post(`/prod/assemblies/${id}/force-complete`, payload ?? {});
+}
+
 /** 编辑装配体元数据（MANAGER + CLERK；仅 PENDING 可编辑）。
  *  2026-09-29 review 第 1 轮 C1 修复：后端实际响应是 `R<AssemblyOut>`（19 字段平铺），
  *  不是 `R<AssemblyDetail>`。返 AssemblyItem，child_count 由 caller 提供。 */

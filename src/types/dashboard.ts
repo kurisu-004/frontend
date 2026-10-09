@@ -46,7 +46,12 @@ export type DashboardEventType =
   | 'WORKER_POOL_ADMIN_REMOVED'
   | 'WORKER_POOL_AUTO_ALLOCATE_DONE'
   | 'ASSEMBLY_CREATED'
-  | 'ASSEMBLY_UPDATED';
+  | 'ASSEMBLY_UPDATED'
+  // 2026-10-11：强制完成端点专用。零件侧 `POST /parts/{id}/force-complete`、装配件侧
+  // `POST /prod/assemblies/{id}/force-complete`，两者都绕过状态机直接写 COMPLETED，
+  // 必须各自发事件，否则常驻大屏上的该行不会消失。
+  | 'PART_FORCE_COMPLETED'
+  | 'ASSEMBLY_FORCE_COMPLETED';
 
 export interface DashboardEventPayload {
   // 零件事件携带的字段（ASSEMBLY_* 不带这些）
@@ -58,6 +63,9 @@ export interface DashboardEventPayload {
   planned_delivery_date?: string | null;
   worker_name?: string | null;
   shelf_code?: string | null;
+  /** PART_FORCE_COMPLETED 携带的被强推工单 id（雪花 ID 字符串）。该事件绕过状态机
+   *  直写 COMPLETED，不带任何展示字段 —— 消费方要按行定位只能靠这个 id。 */
+  part_id?: string | null;
   // 装配体事件携带的字段
   assembly_id?: string | null;
 }
