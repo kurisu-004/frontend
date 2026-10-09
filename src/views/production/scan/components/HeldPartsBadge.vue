@@ -8,12 +8,11 @@
     2026-10-04：列表端点返回分页信封，N 取 `.items.length`（已加载），抽屉里另标
     「共 M 件」= 信封 total；两者不等即表示受后端 limit 截断（不再谎称是全部）。
   - 点击打开 el-drawer（右侧 rtl，size=400px），列出当前 worker 持有件
-  - 抽屉里的头部（计数 / 刷新）与列表块（加载 / 错误 / 空 / 四态 + 行渲染）已分别搬进
-    `HeldPartsHeader.vue` / `HeldPartsList.vue`，与 `/scan/action` 的「查看持有」弹窗共用
-    同一份渲染（2026-10-11）。本组件只留顶栏按钮、抽屉壳与把两者串起来的 `.held-card`
+  - 抽屉里的头部（计数 / 刷新）与列表块（加载 / 错误 / 空 / 四态 + 行渲染）分别在
+    `HeldPartsHeader.vue` / `HeldPartsList.vue` 里，本组件只留顶栏按钮、抽屉壳与把两者
+    串起来的 `.held-card`
   - 数据源 = `useScanHeldQuery`，与放回页 / 送检页**共用同一条 query key** ⇒ 同屏只发
-    一次请求，领取/放回/送检后由 mutation 的失效链自动同刷（2026-10-10 前这里是模块级
-    `useScanBus` 信号 + 各自 fetchHeld，同一屏对同一个工人发 2 次同参请求且切页无缓存）
+    一次请求，领取/放回/送检后由 mutation 的失效链自动同刷
   - autoOpenToken 变化且 autoOpenOnChange=true 时：自动打开 drawer，让工人确认刚提交的结果
 
   入参：
@@ -47,8 +46,6 @@
     @open="onOpen"
   >
     <div class="held-card">
-      <!-- 2026-10-11：头部（计数 / 刷新）与下面的列表块（`HeldPartsList`）都收敛成
-           域内共用件，与 `/scan/action` 的「查看持有」弹窗共用同一份渲染。 -->
       <HeldPartsHeader
         :worker-id="workerId"
         :count="count"

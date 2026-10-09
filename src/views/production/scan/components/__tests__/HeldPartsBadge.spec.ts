@@ -191,3 +191,35 @@ describe('HeldPartsBadge / 错误呈现', () => {
     w.unmount();
   });
 });
+
+describe('HeldPartsBadge / HeldPartsList 的副信息渲染', () => {
+  it('B10：加急 / 交期 / 工序各有值才渲染；没有工序链时副信息整块不出现（不显示假占位）', async () => {
+    h.fetchScanHeld.mockResolvedValue({
+      items: [
+        { ...validRow('201'), is_urgent: true, planned_delivery_date: '2026-11-01' },
+        {
+          ...validRow('202'),
+          planned_delivery_date: '',
+          chain_current_process_name: '钻孔',
+          chain_next_process_name: null,
+        },
+        { ...validRow('203'), planned_delivery_date: '' },
+      ],
+      total: 3,
+      limit: 200,
+      offset: 0,
+    });
+    const w = await mountBadge({ workerId: WORKER });
+    await w.setProps({ autoOpenOnChange: true, autoOpenToken: 1 });
+
+    const rows = w.findAll('.mock-drawer .held-row');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.text()).toContain('加急');
+    expect(rows[0]!.text()).toContain('交期 2026-11-01');
+    expect(rows[1]!.text()).toContain('工序 钻孔');
+    // 交期空 + 无工序链 ⇒ 副信息整块不渲染（不是渲染一个空的 tag）
+    expect(rows[1]!.find('.held-row-sub').exists()).toBe(true);
+    expect(rows[2]!.find('.held-row-sub').exists()).toBe(false);
+    w.unmount();
+  });
+});

@@ -39,10 +39,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { defineComponent, ref, watch } from 'vue';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { createPinia } from 'pinia';
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // vi.mock 的工厂会被提升到文件顶部，不能引用后声明的 const ⇒ 所有桩函数集中放进
@@ -83,6 +84,10 @@ import ScanReturnParts from '../ScanReturnParts.vue';
 import { CHAIN_ROW_CLASS } from '@/views/production/scan/chainAccent';
 import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
+
+// 源码契约用例要读 `components/PartRowCard.vue`（`.part-row*` 样式随卡片抽出）与三页
+// 自身的源文件：都在本文件的目录树上，锚定报工台目录即可。
+const SCAN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 // 报工台 session 的 worker 是后端 `ScanWorkerBrief`（4 字段），不是账号管理页那个
 // 12 字段的 `WorkerOut`。
@@ -248,7 +253,42 @@ const stubs = {
   },
   HeldPartsBadge: { name: 'HeldPartsBadgeStub', template: '<div />' },
   ScrollFabPair: { name: 'ScrollFabPairStub', template: '<div />' },
-  QuantityDialog: { name: 'QuantityDialogStub', template: '<div />' },
+  // 2026-10-11：数量步骤接进正常流程后，QuantityDialog 不再是死桩 —— 它是
+  // 「按链放回 / 选完工序」之后、submitReturn 之前的必经一步。桩自带一个数量输入框与
+  // 「确定 / 取消」两个按钮，让用例能模拟「工人把数量调成 X 再确定」。
+  // 弹窗上界的断言看 `data-max`（= 批次全量）。
+  QuantityDialog: defineComponent({
+    name: 'QuantityDialogStub',
+    props: {
+      modelValue: { type: Boolean, default: false },
+      max: { type: Number, default: 0 },
+      actionLabel: { type: String, default: '' },
+    },
+    emits: ['confirm', 'cancel'],
+    setup(props) {
+      // 避开 `vue/no-setup-props-destructure`：在 setup 顶层读 props.max 会拿到失去
+      // 响应性的快照（这里只在 watch 里再读一次，所以不受影响）
+      const qty = ref((() => props.max)());
+      // 打开时取 max（整批），与真实 QuantityDialog 的 watch 同一口径
+      watch(
+        () => props.modelValue,
+        (v) => {
+          if (v) qty.value = props.max;
+        },
+      );
+      return { qty };
+    },
+    template: `<div
+      v-if="modelValue"
+      class="mock-qty-dialog"
+      :data-max="String(max)"
+      :data-action="actionLabel"
+    >
+      <input class="qty-input" v-model.number="qty" />
+      <button class="qty-confirm" @click="$emit('confirm', qty)">确定</button>
+      <button class="qty-cancel" @click="$emit('cancel')">取消</button>
+    </div>`,
+  }),
   BatchPickerDialog: { name: 'BatchPickerDialogStub', template: '<div />' },
   // lead-text 透出成 data-*：它就是补料弹窗打开时**唯一**的本次动作成功文案
   // （ElMessage.success 被刻意不发，见组件注释），不断言它等于这条路径零覆盖。
@@ -300,6 +340,22 @@ async function clickPartBySerial(w: VueWrapper, serial: string): Promise<void> {
     throw new Error(`列表里没有序列号 ${serial} 的行，实际：${seen.join(' / ')}`);
   }
   await card.trigger('click');
+  await flushPromises();
+}
+
+/** 数量弹窗开着？2026-10-11 起它是提交前的必经一步。 */
+function qtyDialogOpen(w: VueWrapper): boolean {
+  return w.find('.mock-qty-dialog').exists();
+}
+
+/**
+ * 在数量弹窗里确认本次放回的数量。`qty` 省略时按弹窗当前值（即默认的批次全量）确定。
+ */
+async function confirmQty(w: VueWrapper, qty?: number): Promise<void> {
+  const dlg = w.find('.mock-qty-dialog');
+  expect(dlg.exists(), '数量弹窗没有打开 —— 正常流程必须先选数量再提交').toBe(true);
+  if (qty !== undefined) await dlg.get('.qty-input').setValue(String(qty));
+  await dlg.get('.qty-confirm').trigger('click');
   await flushPromises();
 }
 
@@ -471,24 +527,30 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(w.find('.confirm-bar').text()).toContain('下一工序：未选');
     expect(h.scanWorker).not.toHaveBeenCalled();
 
-    // 接着手选一道并提交 ⇒ 发出去的是**工人选的那道**，不是链上那道
+    // 接着手选一道并确认数量 ⇒ 发出去的是**工人选的那道**，不是链上那道
     const vm = w.vm as unknown as { onProcessPicked: (p: unknown) => void };
     vm.onProcessPicked({ id: '190000000000141', code: 'WELD', name: '焊接' });
     await flushPromises();
+    // 手选工序后停在数量弹窗上，还没提交
+    expect(qtyDialogOpen(w)).toBe(true);
+    expect(h.scanWorker).not.toHaveBeenCalled();
 
+    await confirmQty(w);
     expect(h.scanWorker).toHaveBeenCalledWith({
       serial_no: 'F2256',
       badge_code: 'W-001',
       event_type: 'RETURNED',
       next_process_id: '190000000000141',
       batch_id: '190000000000111',
+      // 2026-10-11：整批（行 quantity=2）⇒ 发 JSON 字符串 '2'
+      quantity: '2',
     });
   });
 
   // ⛔ 这条直接钉住「不再指定货架」这个需求：载荷里**没有** shelf_id 这个键。
   // （用 toEqual 断言整个对象，而不是 toHaveBeenCalledWith 之外再补一条否定断言 ——
   //   否定断言漏写键名就等于没钉，而本仓已有过「payload 少一个键没人发现」的先例。）
-  it('NEXT + 确认放回：workerScan 只拿到 serial/badge/event/next_process/batch，载荷无 shelf_id', async () => {
+  it('NEXT + 确认放回：workerScan 只拿到 serial/badge/event/next_process/batch/quantity，载荷无 shelf_id', async () => {
     const w = await mountPage([
       row({
         chain_state: 'NEXT',
@@ -500,6 +562,13 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
 
+    // 「按链放回」之后先停在数量弹窗上：关掉确认框这一步**不**直接提交
+    expect(chainConfirmOpen(w)).toBe(false);
+    expect(qtyDialogOpen(w)).toBe(true);
+    expect(h.scanWorker).not.toHaveBeenCalled();
+
+    await confirmQty(w);
+
     expect(h.scanWorker).toHaveBeenCalledTimes(1);
     expect(h.scanWorker).toHaveBeenCalledWith({
       serial_no: 'F2256',
@@ -507,6 +576,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
       event_type: 'RETURNED',
       next_process_id: '190000000000131',
       batch_id: '190000000000111',
+      quantity: '2',
     });
     expect(Object.keys(h.scanWorker.mock.calls[0]![0] as object)).not.toContain('shelf_id');
     expect(Object.keys(h.scanWorker.mock.calls[0]![0] as object)).not.toContain(
@@ -515,6 +585,25 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(h.ElMessage.success).toHaveBeenCalledTimes(1);
     expect(w.find('.confirm-bar').exists()).toBe(false);
     expect(h.fetchScanHeld.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // 2026-10-11：部分放回 —— 后端自动拆批，本次流转作用在新批次上、余量留在工人手上。
+  // 前端侧能观测到的只有「发出去的 quantity 是工人选的那个数（字符串）」，以及
+  // **不在本地删那一行**（列表刷新只走失效链，行数不变）。
+  it('NEXT + 选部分数量：quantity 发工人选的那个数（字符串），且不在本地删行', async () => {
+    const w = await mountPage([nextRow({ quantity: 5 })]);
+    await clickFirstPart(w);
+    await chainConfirmButton(w, '按链放回').trigger('click');
+    await flushPromises();
+
+    // 数量弹窗上界 = 批次全量（后端 q > batch.quantity 返 20111，弹窗不让选）
+    expect(w.find('.mock-qty-dialog').attributes('data-max')).toBe('5');
+    await confirmQty(w, 2);
+
+    expect(h.scanWorker).toHaveBeenCalledTimes(1);
+    expect(h.scanWorker.mock.calls[0]![0]).toMatchObject({ quantity: '2' });
+    // 余量仍在工人手上 ⇒ 这一行仍应渲染在列表里（页面不做本地删行假定）
+    expect(w.findAll('.part-row')).toHaveLength(1);
   });
 
   it('NEXT + 确认框点「取消」：整次放回作废，不提交', async () => {
@@ -532,6 +621,27 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     expect(h.scanWorker).not.toHaveBeenCalled();
     expect(w.find('.confirm-bar').exists()).toBe(false);
     expect(chainConfirmOpen(w)).toBe(false);
+  });
+
+  // 2026-10-11：确认栏那个 `selectedQty ?? selectedPart.quantity` 只在**一种时刻**与
+  // 批次全量不同 —— 选了部分数量、提交失败之后（catch 分支不清选中态，确认栏仍在）。
+  // 那正是工人重试前盯着的那行字：显示批次全量的话，「刚才按了 2 件」会变成「5 件」，
+  // 重试就把 5 件发出去。这条用例把那个窗口钉住，改成恒读 `selectedPart.quantity`
+  // 就会红。
+  it('部分数量提交失败：确认栏仍显示工人刚选的那个数（不是批次全量）', async () => {
+    h.scanWorker.mockRejectedValueOnce(new Error('20111 数量非法'));
+    const w = await mountPage([nextRow({ quantity: 5 })]);
+    await clickFirstPart(w);
+    await chainConfirmButton(w, '按链放回').trigger('click');
+    await flushPromises();
+    await confirmQty(w, 2);
+
+    expect(h.ElMessage.error).toHaveBeenCalled();
+    // 选中态与确认栏都还在（失败不收尾），数量显示的是 2 而不是批次全量 5
+    const bar = w.find('.confirm-bar');
+    expect(bar.exists(), '提交失败不该把选中态清掉 —— 工人要能原样重试').toBe(true);
+    expect(bar.text()).toContain('归还数量 2');
+    expect(bar.text()).not.toContain('归还数量 5');
   });
 
   // 没有货架 picker 之后，NEXT 分支少了一类兜底（原「候选架为空 → 回退手选」）。
@@ -589,7 +699,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
 
   // NONE 路径上「选完工序 → 直接提交」，取代原来的「选完工序 → 弹货架 picker → 提交」。
   // 这条钉住的是那条新链路本身（含载荷无 shelf_id）。
-  it('NONE：弹工序选择弹窗；选完工序直接提交（不再经过任何货架步骤）', async () => {
+  it('NONE：弹工序选择弹窗；选完工序 → 选数量 → 提交（不再经过任何货架步骤）', async () => {
     const w = await mountPage([row({ chain_state: 'NONE', chain_next_process_id: '0' })]);
     await clickFirstPart(w);
 
@@ -603,6 +713,9 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     const vm = w.vm as unknown as { onProcessPicked: (p: unknown) => void };
     vm.onProcessPicked({ id: '190000000000141', code: 'WELD', name: '焊接' });
     await flushPromises();
+    expect(qtyDialogOpen(w), '选完工序后必须先选数量').toBe(true);
+
+    await confirmQty(w);
 
     expect(h.scanWorker).toHaveBeenCalledTimes(1);
     expect(h.scanWorker).toHaveBeenCalledWith({
@@ -611,6 +724,7 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
       event_type: 'RETURNED',
       next_process_id: '190000000000141',
       batch_id: '190000000000111',
+      quantity: '2',
     });
   });
 
@@ -726,6 +840,8 @@ describe('ScanReturnParts / chain_state 三态分流', () => {
     await clickFirstPart(w);
     await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
+    // 数量弹窗确认后才真正发请求（deferScan 挂起的正是这一步）
+    await confirmQty(w);
 
     const cancelBtn = w
       .find('.confirm-bar')
@@ -765,6 +881,7 @@ describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
     await clickFirstPart(w);
     await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
+    await confirmQty(w);
 
     expect(h.ElMessage.success).toHaveBeenCalledWith('已放回：F2256 → CUT-01 下料');
   });
@@ -781,6 +898,7 @@ describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
     await clickFirstPart(w);
     await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
+    await confirmQty(w);
 
     expect(h.ElMessage.success).toHaveBeenCalledWith('已完工，已送检：F2256');
     expect(h.ElMessage.success).not.toHaveBeenCalledWith(expect.stringContaining('已放回'));
@@ -815,6 +933,7 @@ describe('ScanReturnParts / 成功文案按响应 event_type 分支', () => {
     await clickFirstPart(w);
     await chainConfirmButton(w, '按链放回').trigger('click');
     await flushPromises();
+    await confirmQty(w);
 
     expect(w.find('.stub-refill-taken').exists()).toBe(true);
     expect(w.find('.stub-refill-taken').attributes('data-lead')).toBe('已完工，已送检：F2256');
@@ -948,29 +1067,45 @@ describe('ScanReturnParts — 列表卡左边框按 has_process_chain 着色', (
 
   // 级联契约（读源码）：类名对了还不够 —— `.has-chain` 与 `.is-selected` / `.is-urgent`
   // 同为 0,2,0，谁生效全靠源码顺序。
-  it('源码契约：三页的 .has-chain 规则排在全部状态类之后，且模板不再 inline 左边框色', () => {
-    for (const file of ['ScanReturnParts.vue', 'ScanPickParts.vue', 'ScanInspectParts.vue']) {
-      const src = readFileSync(
-        resolve(dirname(fileURLToPath(import.meta.url)), '..', file),
-        'utf8',
+  //
+  // 2026-10-11：`.part-row*` 的样式随卡片抽出到 `components/PartRowCard.vue`
+  // （三页此前各抄一份），故源码断言的**对象换成了那个组件**：读三页已经读不到任何
+  // `.part-row` 规则了。三页仍各自断言一条「不得出现 borderLeftColor」—— 卡片变成
+  // 子组件后，边框色只可能由 `PartRowCard` 的 scoped CSS 决定，页面里若再出现
+  // inline 左边框色就说明有人在页面上又手写了一份行样式。
+  it('源码契约：PartRowCard 的 .has-chain 规则排在全部状态类之后，且模板不 inline 左边框色', () => {
+    const card = 'components/PartRowCard.vue';
+    const src = readFileSync(join(SCAN_DIR, card), 'utf8');
+    expect(src, `${card} 不得用 inline :style 承载左边框语义色`).not.toContain('borderLeftColor');
+    const chainAt = src.indexOf('.part-row.has-chain {');
+    expect(chainAt, `${card} 缺少 .part-row.has-chain 规则`).toBeGreaterThan(-1);
+    for (const selector of [
+      '.part-row.is-selected {',
+      '.part-row.is-urgent {',
+      '.part-row.is-urgent.is-selected {',
+    ]) {
+      expect(src.indexOf(selector), `${card} 缺少 ${selector}`).toBeGreaterThan(-1);
+      expect(chainAt, `${card} 的 .has-chain 必须排在 ${selector} 之后`).toBeGreaterThan(
+        src.indexOf(selector),
       );
-      expect(src, `${file} 不得用 inline :style 承载左边框语义色`).not.toContain('borderLeftColor');
-      const chainAt = src.indexOf('.part-row.has-chain {');
-      expect(chainAt, `${file} 缺少 .part-row.has-chain 规则`).toBeGreaterThan(-1);
-      for (const selector of [
-        '.part-row.is-selected {',
-        '.part-row.is-urgent {',
-        '.part-row.is-urgent.is-selected {',
-      ]) {
-        expect(src.indexOf(selector), `${file} 缺少 ${selector}`).toBeGreaterThan(-1);
-        expect(chainAt, `${file} 的 .has-chain 必须排在 ${selector} 之后`).toBeGreaterThan(
-          src.indexOf(selector),
-        );
-      }
-      expect(
-        cssRuleBody(src, '.part-row.has-chain'),
-        `${file} 的 .has-chain 规则必须只染左边框`,
-      ).toContain('border-left-color');
+    }
+    expect(
+      cssRuleBody(src, '.part-row.has-chain'),
+      `${card} 的 .has-chain 规则必须只染左边框`,
+    ).toContain('border-left-color');
+
+    // 三页只留「不得 inline 左边框色」这一条。⚠️ 本守卫的实际范围就到这里：**页面
+    // scoped CSS 里另写一份 `.parts-list .part-row { border-left-color: … }` 不会被拦**
+    // （Vue scoped 会命中子组件根元素，而本用例只查 `borderLeftColor` 这个 camelCase
+    // 的 inline 形态字面量）。真要连那条也拦，就得改成解析三页的 `<style>` 块并按
+    // 选择器匹配 —— 那是另一条「页面不得自带行样式」的契约，不在本用例的职责里。
+    // 当前的口径就是：页面里再出现行样式 ⇒ 卡片已经不是唯一实现，本条会因 inline 形态
+    // 而红；写成 class 形态则由 review 兜。
+    for (const page of ['ScanReturnParts.vue', 'ScanPickParts.vue', 'ScanInspectParts.vue']) {
+      const pageSrc = readFileSync(join(SCAN_DIR, page), 'utf8');
+      expect(pageSrc, `${page} 不得用 inline :style 承载左边框语义色`).not.toContain(
+        'borderLeftColor',
+      );
     }
   });
 });

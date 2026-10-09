@@ -7,7 +7,7 @@
 //   （.pdf-viewer{height:100%} → .canvas-wrap{flex:1} → .pdf-viewport{flex:1;overflow:hidden}），
 //   而 EP 的 .el-dialog__body 是 display:block + height:auto，直接子元素的 height:100%
 //   退化成 auto，链塌成 0，position:absolute 的 canvas 被 overflow:hidden 裁掉。
-//   全站 7 处 fullscreen 弹窗都照抄了「el-dialog body 有确定高度」这个错误假设，一起空白。
+//   全站几处弹窗都照抄了「el-dialog body 有确定高度」这个错误假设，一起空白。
 //
 // 为什么用源码断言而不是 mount 断言：
 //   这是**纯 CSS 塌陷**，jsdom 没有布局引擎（不实现 flex / definite height / 视口单位），
@@ -20,16 +20,23 @@
 //   1. 先剥 HTML 注释（注释里出现的 el-dialog / PdfViewer 字面量不算结构）。
 //   2. 按出现顺序扫 `<el-dialog ...>` / `</el-dialog>`，用栈维护嵌套；
 //      每遇到一个 `<PdfViewer`，栈顶就是「拥有它的那一个 el-dialog」。
-//   3. 断言该开标签同时含 `pdf-preview-dialog` 与 `fullscreen`
-//      （缺 fullscreen 则 .is-fullscreen 选择器不命中，class 形同虚设）。
+//   3. 断言该开标签含 `pdf-preview-dialog`。**不断言 `fullscreen`**：承载契约的载体是
+//      那个 class，而全局规则对它分两支（`.is-fullscreen` / `:not(.is-fullscreen)`），
+//      2026-10-11 起窗口形态（报工台预览弹窗）就是靠 `:not(.is-fullscreen)` 那支撑高度的。
+//      要求「必须 fullscreen」会把窗口形态的承载点误判成缺陷，逼着人删掉 class 或
+//      改回全屏 —— 契约真正要守的东西由下面那条全局规则断言兜住。
 //
-// 范围说明（有意只锁这 7 处，不做全仓扫描）：
-//   - 非 fullscreen 弹窗不走这条规则。OutsourceQuotePdfPreview.vue 是 900px 宽的
-//     非全屏预览，它在自己的 scoped 样式里给 .drawing-frame-wrap 定了确定高度。
-//   - 宿主自带确定高度、无需该 class 的 2 处（不改、也不在本守卫内）：
-//     DrawingPreviewPane（.file-preview flex 链）、PartPreviewDialog（aspect-ratio 定宽定高）。
+// 范围说明（有意只锁这几个文件，不做全仓扫描）：
+//   - 报工台三页的预览弹窗抽成 `PartDrawingPreviewDialog.vue` 后，表里是**一行**
+//     （原先三页各一行，指向三份逐字相同的弹窗）。
+//   - 宿主自带确定高度、无需该 class 的**例外**（不改、也不在本守卫内，清单逐字列在
+//     这里、刻意不写个数 —— 个数一改就过期，且本守卫的价值在文件名不在条数）：
+//     DrawingPreviewPane（.file-preview flex 链）、PartPreviewDialog（aspect-ratio 定宽定高）、
+//     OutsourceQuotePdfPreview（.drawing-frame-wrap 自己给 height:70vh + column）。
+//     三者都是「在 PdfViewer 与 body 之间插一个自带高度的包裹元素」，与「让 body 自己
+//     分高」是两种等价解法。
 //   上述「例外集合」是人工判定，再加一条全仓扫描只会把维护者绑在人工白名单上；
-//  本守卫的价值是锁死这 7 个已知调用点，新增 fullscreen 预览弹窗请一并加进下面的表。
+//  本守卫的价值是锁死这些已知调用点，新增直接承载 PdfViewer 的预览弹窗请一并加进下面的表。
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -38,13 +45,13 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
-/** 全部「el-dialog fullscreen 直接承载 PdfViewer」的调用点（相对仓库根，正斜杠）。 */
+/** 全部「el-dialog 直接承载 PdfViewer」的调用点（相对仓库根，正斜杠）。 */
 const FULLSCREEN_PDF_DIALOGS: { file: string; where: string }[] = [
   { file: 'src/components/FileListCard.vue', where: 'previewVisible 预览弹窗' },
   { file: 'src/views/assemblies/components/AssemblyChildrenTable.vue', where: '子件图纸预览' },
-  { file: 'src/views/production/scan/ScanPickParts.vue', where: '图纸预览' },
-  { file: 'src/views/production/scan/ScanInspectParts.vue', where: '图纸预览' },
-  { file: 'src/views/production/scan/ScanReturnParts.vue', where: '图纸预览' },
+  // 报工台三页（取件 / 放回 / 送检）的预览弹窗 2026-10-11 抽成同一个域内组件，
+  // 「三行」变「一行」—— 同一个弹窗原先是三份逐字复制，守卫表按文件列，故合并。
+  { file: 'src/views/production/scan/components/PartDrawingPreviewDialog.vue', where: '图纸预览' },
   { file: 'src/views/parts/new/components/PartBatchPdfTab.vue', where: 'PDF 文件名预览' },
   { file: 'src/views/parts/new/components/PartBatchManualTab.vue', where: '图纸预览' },
 ];
@@ -89,21 +96,29 @@ describe('el-dialog 承载 PdfViewer 的高度契约', () => {
           `${file}（${where}）承载 PdfViewer 的 el-dialog 缺 class="pdf-preview-dialog"：` +
             'body 是 auto 高度，PdfViewer 的 flex 高度链会塌成 0，画面全白',
         ).toContain('pdf-preview-dialog');
-        expect(
-          oneline,
-          `${file}（${where}）的 el-dialog 缺 fullscreen，` +
-            '.pdf-preview-dialog 的 .is-fullscreen 选择器不命中，该 class 形同虚设',
-        ).toContain('fullscreen');
       }
     });
   }
 
-  it('.pdf-preview-dialog 的全局规则存在', () => {
-    const scss = stripComments(readFileSync(join(ROOT, 'src/styles/index.scss'), 'utf8'));
+  // 真正的不变量是**两支高度规则都在**：承载弹窗有全屏与窗口两种形态，
+  // `.is-fullscreen` 那支靠 flex:1 从被钉到视口的 dialog 里分高，
+  // `:not(.is-fullscreen)` 那支必须由 body 自己声明确定高度（窗口形态下 dialog 是
+  // auto 高度，flex:1 解析成内容高度，链照旧塌成 0）。少任何一支，那一侧的调用点都会
+  // 退回「工具栏在、下面纯白」——而两种症状一模一样，只看画面分不出是哪支没了。
+  it('.pdf-preview-dialog 的全局规则两种形态都在（fullscreen + 窗口）', () => {
+    const scss = stripComments(readFileSync(join(ROOT, 'src/styles/index.scss'), 'utf8')).replace(
+      /\s+/g,
+      ' ',
+    );
     expect(
-      scss.replace(/\s+/g, ' '),
-      'src/styles/index.scss 里的 .pdf-preview-dialog 规则被删了：' +
-        '上面 7 处 class 会变成无样式的空标记，高度链照旧塌陷',
+      scss,
+      'src/styles/index.scss 里的 .pdf-preview-dialog.el-dialog.is-fullscreen 规则被删了：' +
+        '全屏承载弹窗的 class 变成无样式的空标记，高度链照旧塌陷',
     ).toContain('.pdf-preview-dialog.el-dialog.is-fullscreen');
+    expect(
+      scss,
+      'src/styles/index.scss 里缺 .pdf-preview-dialog.el-dialog:not(.is-fullscreen) 高度规则：' +
+        '窗口形态的承载弹窗（dialog 是 auto 高度，body 拿不到 flex 余量）会退回塌陷',
+    ).toContain('.pdf-preview-dialog.el-dialog:not(.is-fullscreen)');
   });
 });

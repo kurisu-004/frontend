@@ -27,6 +27,11 @@
   - 选件 → （必要时选工序）→ 提交
   - 不需要扫码确认（点选即确认；旧流程「扫一批条码」已替换不保留）
 
+  2026-10-11：**支持指定归还数量**（后端 worker-scan 新增可选 `quantity`，缺省 = 整批）。
+  工序定下之后（「按链放回」或手选工序）弹 `QuantityDialog` 选本次归还多少，确认后才提交；
+  部分放回时余量留在工人手上继续出现在「已持有」里，行数不变。这一步是**叠加**在 NEXT 分支
+  那个确认框之后的，不改它「三个出口 + 禁右上角 ×」的约束。
+
   2026-10-09：列表卡的左边框专供「这条批次有制定工序链且链指针未漂移」这一个语义
   （有链 = 绿，规则见 `@/views/production/scan/chainAccent`）；流程区分由顶栏标题 + 路由承担，
   加急由红底 + 「加急」tag 承担，两者都不进边框。
@@ -36,20 +41,9 @@
 
 <template>
   <div class="scan-return">
-    <!-- 顶栏 -->
-    <div class="topbar">
-      <div class="topbar-left">
-        <el-icon :size="22" color="#fff"><Avatar /></el-icon>
-        <span class="title">报工台</span>
-        <el-divider direction="vertical" class="divider" />
-        <span class="worker-name">{{ worker?.name ?? '—' }}</span>
-        <el-tag size="default" type="info" effect="dark" class="badge-tag">
-          {{ worker?.badge_code ?? '' }}
-        </el-tag>
-        <el-divider direction="vertical" class="divider" />
-        <el-tag type="warning" effect="dark">放 回</el-tag>
-      </div>
-      <div class="topbar-right">
+    <!-- 顶栏（2026-10-11 抽成 components/ScanTopbar.vue） -->
+    <ScanTopbar :worker="worker" flow-label="放 回" flow-tag-type="warning">
+      <template #actions>
         <HeldPartsBadge
           v-if="worker?.id"
           :worker-id="String(worker.id)"
@@ -64,8 +58,8 @@
           <el-icon><Refresh /></el-icon>
           <span>重新扫工牌</span>
         </el-button>
-      </div>
-    </div>
+      </template>
+    </ScanTopbar>
 
     <div ref="contentRef" class="content">
       <!-- 加载 -->
@@ -104,14 +98,20 @@
           <el-button :icon="Refresh" circle size="small" @click="refresh" />
         </div>
 
-        <!-- 已选确认栏 -->
+        <!-- 已选确认栏。
+             ⚠️ `selectedQty ?? selectedPart.quantity` 这半句只在**一种时刻**与批次全量
+             不同：数量弹窗里选了部分数量、提交**失败**（`submitReturn` 的 catch 分支不
+             清选中态）后，确认栏重新可见，此时它显示的是工人刚选的那个数。
+             其余时刻（选中后、提交成功后）两者恒等 —— `selectedQty` 要么是 `p.quantity`，
+             要么随 `cancelSelect()` 一起清空。保留表达式而不是写死 `selectedPart.quantity`，
+             就是为了让上面那个失败窗口说得准：工人重试前看到的必须是上次选的那个数，
+             而不是批次全量（否则「按了 2 件却显示 5 件」，重试就会把 5 件发出去）。 -->
         <div v-if="selectedPart" class="confirm-bar">
           <el-icon :size="20" color="#67c23a"><CircleCheckFilled /></el-icon>
           <span class="confirm-text">
             已选 <strong>{{ selectedPart.serial_no || selectedPart.drawing_no }}</strong> ·
-            {{ selectedPart.name }} · 归还数量 {{ selectedPart.quantity }} · 下一工序：{{
-              selectedNextProcessName || '未选'
-            }}
+            {{ selectedPart.name }} · 归还数量 {{ selectedQty ?? selectedPart.quantity }} ·
+            下一工序：{{ selectedNextProcessName || '未选' }}
           </span>
           <!-- 2026-10-04：提交在途时置灰，不是不置灰也点不动（onCancelSelect 的守卫照旧
                拦着，只是把「按了没反应」变成「按不了」，HMI 上工人不会以为按钮坏了）。 -->
@@ -121,67 +121,15 @@
         </div>
 
         <div class="parts-list">
-          <el-card
+          <PartRowCard
             v-for="p in sortedParts"
             :key="p.batch_id || p.id"
-            :data-batch-id="String(p.batch_id || p.id)"
-            shadow="hover"
-            :class="[
-              'part-row',
-              {
-                'is-selected': sameBatch(selectedPart, p),
-                'is-urgent': p.is_urgent,
-              },
-              chainRowClass(p.has_process_chain),
-            ]"
-            @click="onSelect(p)"
-          >
-            <div class="part-row-main">
-              <!-- 右上角预览按钮（@click.stop 阻止冒泡触发选中） -->
-              <el-button
-                text
-                size="small"
-                type="info"
-                class="preview-btn"
-                :loading="previewLoading && previewPart?.id === p.id"
-                @click.stop="onPreview(p)"
-              >
-                <el-icon><View /></el-icon>
-                <span>预览</span>
-              </el-button>
-
-              <!-- 1) 序列号 + 交期 高优行 -->
-              <div class="part-line-top">
-                <span class="serial-no">{{ p.serial_no || p.drawing_no }}</span>
-                <el-tag
-                  v-if="p.is_urgent"
-                  type="danger"
-                  size="small"
-                  effect="dark"
-                  class="urgent-pulse"
-                  >加急</el-tag
-                >
-                <!-- 2026-10-04：chip 只显示系统交期，无值显示 '-'（恒渲染，不加 v-if）。
-                     两个交期字段不是一回事：`planned_delivery_date` 是 `t_part` 上的真实
-                     计划交期，`system_delivery_date` 是后端系统推算的交付日、未推算时为
-                     null（两者口径见 composables/scanSchema.ts）。本页只用系统交期，
-                     取不到就显示 '-'，不拿计划交期顶替；计划交期上屏在持有件列表
-                     （components/HeldPartsList.vue），排序里用到本键的那一支见
-                     composables/useScanPartsSort.ts。 -->
-                <DeliveryDateChip :system-delivery-date="p.system_delivery_date" />
-              </div>
-
-              <!-- 2) 名称 -->
-              <div class="part-line-name">
-                <span class="part-name">{{ p.name }}</span>
-              </div>
-
-              <!-- 3) 数量 -->
-              <div class="part-line-bottom">
-                <span class="qty">× {{ p.quantity }}</span>
-              </div>
-            </div>
-          </el-card>
+            :row="p"
+            :selected="sameBatch(selectedPart, p)"
+            :previewing="previewDlg?.loading === true && previewPart?.id === p.id"
+            @select="onSelect"
+            @preview="openPreview"
+          />
         </div>
       </div>
     </div>
@@ -274,42 +222,14 @@
       :lead-text="refillLead"
     />
 
-    <!-- 图纸 / 图片 全屏预览 -->
-    <el-dialog
+    <!-- 图纸 / 图片 预览（2026-10-11 抽成 components/PartDrawingPreviewDialog.vue：
+         四个分支 + 下载闸门 + blob 生命周期是一件事的完整口径，此前三页各抄一份） -->
+    <PartDrawingPreviewDialog
+      ref="previewDlg"
       v-model="showPreview"
-      class="pdf-preview-dialog"
+      :part="previewPart"
       :title="previewTitle"
-      fullscreen
-      :close-on-click-modal="false"
-      destroy-on-close
-      @closed="onPreviewClosed"
-    >
-      <div v-if="previewLoading" class="preview-loading">
-        <el-icon :size="32" class="is-loading"><Loading /></el-icon>
-        <span>加载图纸中…</span>
-      </div>
-
-      <PdfViewer v-else-if="previewFile && isPdf(previewFile.file_type)" :url="previewBlobUrl" />
-
-      <div v-else-if="previewFile && isImage(previewFile.file_type)" class="image-preview-wrap">
-        <el-image
-          :src="previewBlobUrl"
-          :preview-src-list="[previewBlobUrl]"
-          :initial-index="0"
-          fit="contain"
-          style="max-width: 100%; max-height: calc(100vh - 80px)"
-        />
-      </div>
-
-      <div v-else class="non-pdf-preview">
-        <el-icon :size="48" color="#909399"><Files /></el-icon>
-        <p class="non-pdf-name">{{ previewFile?.original_filename || '该零件暂无图纸' }}</p>
-        <p class="non-pdf-hint">{{ nonPdfHint }}</p>
-        <el-button v-if="previewFile && canDownload" type="primary" @click="downloadPreview">
-          <el-icon><Download /></el-icon><span>下载文件</span>
-        </el-button>
-      </div>
-    </el-dialog>
+    />
   </div>
 </template>
 
@@ -317,28 +237,7 @@
 import { computed, nextTick, onBeforeMount, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import {
-  Avatar,
-  Back,
-  Box,
-  CircleCheckFilled,
-  Download,
-  Files,
-  Loading,
-  Refresh,
-  View,
-  Warning,
-} from '@element-plus/icons-vue';
-import { api } from '@/api/http';
-import PdfViewer from '@/components/PdfViewer.vue';
-import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
-// 2026-10-11：「下载文件」按钮的角色闸门。后端把 part_file 的列表 / content 对
-// SHELF_ACCOUNT 放开了（工控机预览图纸打的就是这两条），但 `/part-files/{id}/url`
-// **刻意没放开**（COS 预签直链可外传）⇒ 不挂闸门就是「可见但必 403」。判据在
-// utils/partsPermissions，与后端 require_any_role 白名单同集合。
-import { usePermissions } from '@/composables/usePermissions';
-import { canDownloadPartFile } from '@/utils/partsPermissions';
-import type { PartFileItem } from '@/types/part_file';
+import { Back, Box, CircleCheckFilled, Loading, Refresh, Warning } from '@element-plus/icons-vue';
 import { useScanSession } from '@/views/production/scan/composables/useScanSession';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useScanPartsSort } from '@/views/production/scan/composables/useScanPartsSort';
@@ -346,14 +245,15 @@ import { refillTakenOf } from '@/views/production/scan/composables/refillTaken';
 import HeldPartsBadge from '@/views/production/scan/components/HeldPartsBadge.vue';
 import ScrollFabPair from '@/views/production/scan/components/ScrollFabPair.vue';
 import QuantityDialog from '@/views/production/scan/components/QuantityDialog.vue';
+import PartRowCard from '@/views/production/scan/components/PartRowCard.vue';
+import PartDrawingPreviewDialog from '@/views/production/scan/components/PartDrawingPreviewDialog.vue';
+import ScanTopbar from '@/views/production/scan/components/ScanTopbar.vue';
 import type { ScanPartRowSchema } from '@/views/production/scan/composables/scanSchema';
 import ProcessPickerDialog from '@/views/production/scan/components/ProcessPickerDialog.vue';
 import BatchPickerDialog, {
   type BatchPickerRow,
 } from '@/views/production/scan/components/BatchPickerDialog.vue';
-import DeliveryDateChip from '@/views/production/scan/components/DeliveryDateChip.vue';
 import RefillTakenDialog from '@/views/production/scan/components/RefillTakenDialog.vue';
-import { chainRowClass } from '@/views/production/scan/chainAccent';
 import { useScanHeldQuery } from '@/views/production/scan/composables/useScanListQuery';
 import { useScanWorkerScanMutation } from '@/views/production/scan/composables/useScanWrite';
 
@@ -387,27 +287,22 @@ const submitting = computed(() => workerScanMutation.isPending.value);
 /** 写成功后自增，驱动徽章自动开抽屉（见 HeldPartsBadge 的 autoOpenToken 注释）。 */
 const heldChangeToken = ref(0);
 
-// --- 预览状态 ---
+// --- 预览状态（2026-10-11：弹窗与取文件的逻辑搬进 PartDrawingPreviewDialog，
+//     本页只留「点哪张卡」与标题的拼装） ---
 const showPreview = ref(false);
-const previewLoading = ref(false);
 const previewPart = ref<ScanPartRowSchema | null>(null);
-const previewFile = ref<PartFileItem | null>(null);
-const previewBlobUrl = ref<string>('');
-// 防竞态：每次开预览自增，老请求响应直接丢弃
-let previewToken = 0;
+/** 「正在预览哪一行」由弹窗自己管（它才发那两次请求），本页只经这个 ref 读它的 loading。 */
+const previewDlg = ref<InstanceType<typeof PartDrawingPreviewDialog> | null>(null);
+
+/** 弹窗弹出的那一刻 loading 归弹窗管，本页只在 `previewPart` 里记下是哪一行。 */
+function openPreview(p: ScanPartRowSchema): void {
+  previewPart.value = p;
+  showPreview.value = true;
+}
 
 const previewTitle = computed<string>(
   () => `预览 — ${previewPart.value?.serial_no || previewPart.value?.drawing_no || ''}`,
 );
-
-// --- 类型判定（与 FileListCard.vue 295-302 同步） ---
-function isPdf(t: string): boolean {
-  return t.toUpperCase() === 'PDF';
-}
-const IMAGE_TYPES = new Set(['PNG', 'JPG', 'JPEG', 'GIF', 'BMP', 'TIF', 'TIFF', 'WEBP']);
-function isImage(t: string): boolean {
-  return IMAGE_TYPES.has(t.toUpperCase());
-}
 
 // 工序选择（2026-07-17：ProcessPickerDialog 自管加载与展示，这里只保留 select 后的状态）
 const showProcessDialog = ref(false);
@@ -420,8 +315,11 @@ const contentRef = ref<HTMLElement | null>(null);
 const selectedNextProcessCode = ref<string>('');
 const selectedNextProcessName = ref<string>('');
 
-// 2026-10-10：货架选择整块下线（目标架由后端按负载自动选）。showQtyDialog 保留：
-// 正常路径已不走它，但它是 worker-scan 整批语义的旧调试入口。
+// 2026-10-11：**数量步骤接进正常流程**（worker-scan 新增可选 `quantity`，见
+// `api/productionScan.contract.ts::ScanWorkerRequest.quantity`）。此前它是 worker-scan
+// 整批语义的旧调试入口、常为 false。现在两条提交前的最后一步都经过它：
+// NEXT 分支「按链放回」与 TAIL / NONE 分支「选完工序」之后、`submitReturn` 之前。
+// 取消数量弹窗 = 整次放回作废（`@cancel` 接 `onCancelSelect`，与另外三个弹窗同一口径）。
 const showQtyDialog = ref(false);
 
 // --- 自动补料告知（worker-scan 同事务 refill；抢到批次才弹窗） ---
@@ -574,7 +472,6 @@ function refresh(): Promise<void> {
 
 onBeforeUnmount(() => {
   unsubScan();
-  if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
 });
 
 // --- 选件 → 工序 → 货架 → 提交 ---
@@ -604,98 +501,14 @@ function onSelect(p: ScanPartRowSchema): void {
   enterReturnFlow(p);
 }
 
-// --- 预览 ---
-async function onPreview(p: ScanPartRowSchema): Promise<void> {
-  previewPart.value = p;
-  showPreview.value = true;
-  previewLoading.value = true;
-  const myToken = ++previewToken;
-  try {
-    // 2026-09-16 T3.5：列表端点切到 v2 /part-files?owner_id=...&kind=...（owner 多态）
-    const files = (await listPartFilesByOwner(String(p.id), 'DRAWING')).items;
-    if (myToken !== previewToken) return;
-    if (!files.length) {
-      ElMessage.warning('暂无图纸');
-      showPreview.value = false;
-      return;
-    }
-    const f = files[0];
-    previewFile.value = f;
-    if (isPdf(f.file_type) || isImage(f.file_type)) {
-      // 2026-09-16：v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
-      const resp = await api.get(`/part-files/${f.id}/content`, { responseType: 'blob' });
-      if (myToken !== previewToken) return;
-      if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
-      previewBlobUrl.value = URL.createObjectURL(resp.data);
-    }
-  } catch (e) {
-    if (myToken !== previewToken) return;
-    ElMessage.error((e as Error).message ?? '加载图纸失败');
-    showPreview.value = false;
-  } finally {
-    if (myToken === previewToken) previewLoading.value = false;
-  }
-}
-
-function onPreviewClosed(): void {
-  if (previewBlobUrl.value) {
-    URL.revokeObjectURL(previewBlobUrl.value);
-    previewBlobUrl.value = '';
-  }
-  previewPart.value = null;
-  previewFile.value = null;
-}
-
-// 2026-10-11：下载入口闸门（判据见 utils/partsPermissions 与上面那段 import 注释）。
-const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
-const canDownload = computed<boolean>(() =>
-  canDownloadPartFile({
-    MANAGER: isManager.value,
-    CLERK: isClerk.value,
-    INSPECTOR: isInspector.value,
-    CNC_PROGRAMMER: isCncProgrammer.value,
-  }),
-);
-
-/**
- * 非 PDF 图纸那张卡片的提示文案，与「下载文件」按钮**共用 `canDownload` 闸门**：
- * 拿不到下载入口的角色不能读到一句「请下载后查看」—— 那是指向一个不在屏幕上的
- * 按钮的死胡同。改口成「请联系管理员」是把已知取舍如实讲出来，不是报错兜底。
- */
-const nonPdfHint = computed<string>(() => {
-  if (!previewFile.value) return '请上传图纸后再预览。';
-  return canDownload.value
-    ? `${previewFile.value.file_type} 文件不支持浏览器内嵌预览，请下载后查看。`
-    : `${previewFile.value.file_type} 文件不支持浏览器内嵌预览，当前账号不支持下载，请联系管理员获取。`;
-});
-
-async function downloadPreview(): Promise<void> {
-  if (!previewFile.value) return;
-  // 与按钮的 v-if 同一道守卫：按钮是 DOM 闸门，函数体是行为闸门 —— 只藏按钮的话，
-  // 任何一个仍能触达本函数的地方（控制台、后续新增的快捷键）都会变成「点了必 403」。
-  if (!canDownload.value) return;
-  try {
-    const url = await getDownloadUrl(previewFile.value.id);
-    const a = document.createElement('a');
-    a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    a.download = '';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  } catch (e) {
-    ElMessage.error((e as Error).message ?? '下载失败');
-  }
-}
-
 function onProcessPicked(process: Process): void {
   selectedNextProcessId.value = process.id;
   selectedNextProcessCode.value = process.code;
   selectedNextProcessName.value = `${process.code} ${process.name}`;
   showProcessDialog.value = false;
-  // 2026-10-10：选完工序直接提交（原先这里开货架 picker、再由它的 confirm 触发提交）。
-  void submitReturn();
+  // 2026-10-11：选完工序后先选数量（`onQtyConfirm` 才真正提交）。原先这里直接提交，
+  // 2026-10-10 之前还多一步货架 picker —— 目标架已由后端按负载自动选（见文件头）。
+  openQtyDialog();
 }
 
 function onProcessCancel(): void {
@@ -755,7 +568,12 @@ function openChainConfirm(p: ScanPartRowSchema): void {
   showChainConfirm.value = true;
 }
 
-/** 「按链放回」：写死下一道工序后走提交路径。 */
+/**
+ * 「按链放回」：下一道工序已由链定下，接下来是**选数量**（`onQtyConfirm` 才真正提交）。
+ *
+ * ⚠️ 本框是 NEXT 分支唯一的提交入口且 `:show-close="false"`（理由见模板注释）——
+ * 数量步骤是**叠加在它之后**的一步，不改本框的三个出口与关闭权。
+ */
 async function onChainConfirm(): Promise<void> {
   showChainConfirm.value = false;
   if (submitting.value) return;
@@ -764,13 +582,25 @@ async function onChainConfirm(): Promise<void> {
     cancelSelect();
     return;
   }
-  await submitReturn();
+  openQtyDialog();
 }
 
 /** 「换一道工序」：关掉确认框后走与「链字段解析不出」**同一个**落回出口。 */
 function onChainManual(): void {
   showChainConfirm.value = false;
   fallBackToManualProcess();
+}
+
+/**
+ * 提交前的最后一步：选本次放回的数量。
+ *
+ * 上限取 `selectedPart.quantity`（批次全量）—— 后端 `q > batch.quantity` 返 20111，
+ * 弹窗直接不让人选出界外的值。默认值也是全量（QuantityDialog 打开时取 max），
+ * 工人只想整批放回时点一下「最大化 / 确定」即可，不必动加减。
+ */
+function openQtyDialog(): void {
+  if (!selectedPart.value) return;
+  showQtyDialog.value = true;
 }
 
 /** 「取消」：整次放回作废。 */
@@ -804,6 +634,9 @@ async function submitReturn(): Promise<void> {
   const batchId = selectedPart.value.batch_id ?? null;
   const nextProcessId = selectedNextProcessId.value;
   const nextProcessName = selectedNextProcessName.value ?? '';
+  // 2026-10-11：数量在 await 之前取出来（同一批「不再回头读 state」的道理，见上）。
+  // 正常路径恒由 `onQtyConfirm` 写过 selectedQty，兜底取批次全量（= 整批放回）。
+  const quantity = selectedQty.value ?? selectedPart.value.quantity;
   try {
     const res = await workerScanMutation.mutateAsync({
       serial_no: serialNo,
@@ -812,6 +645,11 @@ async function submitReturn(): Promise<void> {
       // 2026-10-10：**不发 shelf_id** —— 目标架由后端按负载自动选。
       next_process_id: nextProcessId,
       batch_id: batchId,
+      // 2026-10-11：**必须发 JSON 字符串**（后端 deserialize_i64_opt 只解 str，
+      // 发 number 是 422 纯文本）。< 总量时后端自动拆批，本次流转作用在新批次上，
+      // 余量留在工人手上继续出现在「已持有」里 ⇒ 前端不做任何本地删行假定，
+      // 列表刷新只依赖 mutation 的失效链（见 `useScanWrite.ts`）。
+      quantity: String(quantity),
     });
     cancelSelect();
     // ⚠️ **成功文案按响应的 `scan.event_type` 分支**：客户端发的是 RETURNED，但当该批次的
@@ -833,6 +671,8 @@ async function submitReturn(): Promise<void> {
     }
     // mutateAsync 返回时 onSuccess 的失效链已 settle（TanStack await onSuccess 返回的
     // promise）⇒ 列表与徽章都是刷新后的状态，此时自增 token 开抽屉。
+    // ⚠️ **部分放回时这一行仍在列表里**（余量留在工人手上，数量变小、行数不变）：
+    // 本页不据此做任何本地增删，全靠失效链重拉。
     heldChangeToken.value++;
   } catch (e) {
     // 失败也走全套失效（mutation 的 onError）：40901 OCC / 20103 状态非法都意味着
@@ -842,8 +682,6 @@ async function submitReturn(): Promise<void> {
 }
 
 async function onQtyConfirm(qty: number): Promise<void> {
-  // 2026-09-15 Phase 5：worker-scan 不支持部分数量；保留 dialog 入口以兼容
-  // 旧调试路径，正常流程已由 openChainConfirm / onProcessPicked → submitReturn 跳过此步。
   showQtyDialog.value = false;
   if (submitting.value) return;
   if (!selectedPart.value || !selectedNextProcessId.value || !worker.value) {
@@ -915,50 +753,22 @@ function backToBadge(): void {
   background: #f5f7fa;
 }
 
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: linear-gradient(90deg, #142d54 0%, var(--primary-color) 100%);
-  color: #fff;
-  padding: 12px 24px;
-  height: 60px;
-  flex-shrink: 0;
-}
-.topbar-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 16px;
-}
-.topbar-right {
-  display: flex;
-  gap: 8px;
-}
-.title {
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 2px;
-}
-.divider {
-  background: rgba(255, 255, 255, 0.3);
-  height: 20px;
-}
-.worker-name {
-  font-size: 18px;
-  font-weight: 600;
-}
-.badge-tag {
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-}
+/* `.topbar` / `.part-row*` / 预览弹窗四分支的样式都在 components/ 的三个共用件里
+   （ScanTopbar / PartRowCard / PartDrawingPreviewDialog，2026-10-11 抽出），本页只留
+   自己这一份的骨架、确认栏与链确认框。 */
 
+/* 2026-10-11：容器从 1100px 放宽到 1560px，配合 `.parts-list` 的三列网格把一张 HMI
+   屏铺成三列（每卡约 430px）。左右各留 120px padding 是为了避开 `ScrollFabPair`
+   —— 它是 `position: fixed; right: 24px` 的 68px 圆形按钮对，占屏右 24~92px；用
+   **对称** padding 而不是单侧 margin，窄屏下也不会被压住、视觉不偏心。
+   1560 − 120 × 2 = 1320px 可用宽，三列 + 2 × 12px gap ⇒ 每卡 432px。 */
 .content {
   flex: 1;
   overflow: auto;
-  max-width: 1100px;
+  max-width: 1560px;
   width: 100%;
   margin: 0 auto;
-  padding: 24px;
+  padding: 24px 120px;
 }
 
 .loading-block,
@@ -1026,110 +836,13 @@ function backToBadge(): void {
   line-height: 1.6;
 }
 
+/* 2026-10-11：三列网格（原先是单列 flex 纵向排布）。`.part-row` 本身的盒模型在
+   `PartRowCard.vue` 里，三页共用；这里只定「几列、列间距多少」。
+   零 @media / 零断点：报工台是 HMI 固定横屏，窗口尺寸不参与布局决策。 */
 .parts-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.part-row {
-  display: flex !important;
-  align-items: stretch;
-  padding: 14px 18px !important;
-  border: 1px solid #e4e7ed;
-  /* 左边框底色与另外三边同色；链语义绿由下面的 `.part-row.has-chain` 覆盖，
-     状态类（.is-selected / .is-urgent）不动左边框。 */
-  border-left: 4px solid #e4e7ed;
-  border-radius: 8px;
-  cursor: pointer;
-  position: relative;
-  background: #fff;
-  transition:
-    border-color 0.15s,
-    background 0.15s,
-    box-shadow 0.15s;
-}
-.part-row:hover {
-  box-shadow: 0 2px 12px rgba(230, 162, 60, 0.08);
-}
-
-/* 非加急选中 → 加深绿底 */
-.part-row.is-selected {
-  background: #e1f3d8;
-  border-color: #67c23a;
-}
-/* 加急未选中 → 原红底（左边框不参与加急：它归链语义，加急由红底 + 「加急」tag 表达） */
-.part-row.is-urgent {
-  background: #fef0f0;
-  border-color: #f56c6c;
-}
-/* 加急选中 → 保持红底，绿色边框 + inset 阴影表示选中 */
-.part-row.is-urgent.is-selected {
-  background: #fef0f0;
-  border-color: #67c23a;
-  box-shadow: 0 0 0 2px #67c23a inset;
-}
-/* 左边框 = 链语义（有制定工序链且链指针未漂移），EP 语义绿的字面值。
-   必须排在全部状态类之后：与它们同为 0,2,0，靠源码顺序取胜，这样
-   `border-color` 简写染过的四边里左边框仍归链语义。 */
-.part-row.has-chain {
-  border-left-color: #67c23a;
-}
-
-.part-row-main {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  min-width: 0;
-}
-.preview-btn {
-  position: absolute !important;
-  top: 8px;
-  right: 10px;
-  z-index: 1;
-}
-
-.part-line-top {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
-  padding-right: 64px;
-  flex-wrap: wrap;
-}
-.serial-no {
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 22px;
-  font-weight: 700;
-  color: #303133;
-  letter-spacing: 0.5px;
-}
-/* .delivery-date / .days-left / .overdue / .due-soon 已迁至 components/DeliveryDateChip.vue */
-
-.part-line-name {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 15px;
-  color: #303133;
-}
-.part-name {
-  font-weight: 500;
-  color: #303133;
-}
-
-.part-line-bottom {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  font-size: 14px;
-  color: #606266;
-  flex-wrap: wrap;
-}
-.qty {
-  color: #e6a23c;
-  font-weight: 700;
-  font-size: 15px;
 }
 
 .is-loading {
@@ -1142,54 +855,5 @@ function backToBadge(): void {
   to {
     transform: rotate(360deg);
   }
-}
-
-@keyframes urgentPulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.6;
-  }
-}
-.urgent-pulse {
-  animation: urgentPulse 1.2s ease-in-out infinite;
-}
-
-.preview-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  min-height: 60vh;
-  color: #606266;
-  font-size: 16px;
-}
-.image-preview-wrap {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: calc(100vh - 80px);
-  padding: 24px;
-  background: #1e1e1e;
-}
-.non-pdf-preview {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 80px 32px;
-}
-.non-pdf-name {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: #303133;
-}
-.non-pdf-hint {
-  margin: 0;
-  color: #606266;
-  font-size: 14px;
 }
 </style>

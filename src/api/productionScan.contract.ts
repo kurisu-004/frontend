@@ -151,6 +151,19 @@ export interface ScanWorkerRequest {
   next_process_id?: string | null;
   /** 多批次歧义时显式指定；不传时后端按 serial_no 解析。 */
   batch_id?: string | null;
+  /**
+   * 本次流转的数量（2026-10-11）。**必须发 JSON 字符串** —— 后端
+   * `deserialize_i64_opt` 只解 `str`，发 number 拿到的是 **HTTP 422 纯文本**
+   * （不进 `R<T>` 信封，响应里没有 `code` 字段），与同域 `ScanPickUpRequest.quantity`
+   * 同款。三种落法：缺省 / `null` / `>= batch.quantity` = 整批不拆；
+   * `0 < q < batch.quantity` = 后端**自动拆批**，本次流转作用在**新批次**上，
+   * 余量留在工人手上（`location='WORKER'` 不变，只扣数量 + `version+1`）；
+   * `<= 0` 或 `> batch.quantity` ⇒ 业务码 20111。
+   *
+   * ⚠️ **拆批场景下响应 `scan.batch_id` 是新批次**，不是请求里那个：前端绝不能再拿
+   * 请求里的 batch_id 回显或推后继动作。
+   */
+  quantity?: string | null;
 }
 
 /** `POST /api/v2/prod/scan/worker-scan` 出参。 */

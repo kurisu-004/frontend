@@ -5,6 +5,24 @@
   - 用于领取 / 放回 / 送检三个扫码流程的 quantity 确认
   - 默认数值 = max（最大化）
   - 按钮网格：-10 / -1 / +1 / +10 / 归零 / 最大化（左负右正）
+
+  ⚠️ **禁右上角 ×**（`:show-close="false"`，同款理由见 CLAUDE.md「放回页 NEXT 分支的
+  确认框」一节）：2026-10-11 起放回 / 送检两页的**每一条提交**都从本弹窗过，且它是那条
+  路径上唯一的提交闸门。× 只 emit `update:modelValue(false)`、不发 `cancel` ⇒ 调用方的
+  选中态一概留着：放回页是「卡片仍选中 + 工序仍填着 + 确认栏还在」（工人只能按「取消
+  选择」丢掉刚选的工序重来），送检页更糟 —— `applyScanSelection` 已把 `awaitingScan`
+  置 false，确认栏整条消失，只剩一张选中态卡片，既无弹窗也无确认栏可走。判据：
+  **一个弹窗若是某条路径的唯一出口，它的关闭权就必须收在自己手里**。footer 的「取消」
+  与「确定」两键各自都会收尾（cancel 发业务事件让调用方清干净 / confirm 后由调用方
+  提交并复位），那才是关闭权该在的地方。
+
+  刻意**不**用 `@closed` 发 `cancel` 兜住 ×：本弹窗的 modelValue 由调用方程序化
+  置 false（`onQtyConfirm` 第一行就置），那也会触发 `@closed` ⇒ 提交在途时 emit('cancel')
+  会把调用方的选中态抽走。送检页 `submitInspect` 在 `await mutateAsync` **之后**才读
+  `selectedPart.value.serial_no` 组装成功文案（见该函数），选中态被抽走即空指针。
+  （放回页与取件页不受此害：它们在 await 之前就把要用的值取出、或 `@cancel` 只置
+  自己的显隐标志；不靠那一层守卫。）把关闭权收到 footer 上对三页同口径，从根上避免
+  「同一个组件在不同调用方身上的收尾语义不同」这件事。
 -->
 <template>
   <el-dialog
@@ -14,6 +32,7 @@
     :align-center="true"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
+    :show-close="false"
     destroy-on-close
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >

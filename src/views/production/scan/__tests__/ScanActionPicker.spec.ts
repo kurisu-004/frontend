@@ -16,12 +16,17 @@
 // 所以「工位绑了哪些架」与「货架端点的 zone」两侧都要有 fixture，缺一侧断言就失真。
 //
 // 2026-10-11 追加守「查看持有」：它是第四个入口、**不是**报工动作（不进 useScanSession、
-// 不跳页），显隐只看「扫到工人」，与三个动作按钮的 zone 判定完全无关。所以下面三处都改了：
+// 不写状态、不提示「已选择」），显隐只看「扫到工人」，与三个动作按钮的 zone 判定完全无关。
+// 所以下面两处都改了：
 //   - `actionLabels` 必须把「查看」排除在动作按钮之外，否则 zone 判定的断言会被它污染；
-//   - 「查看持有」读的是**同一条** `qk.scanHeld`（params 与徽章 / 三页逐字一致），本 spec
-//     把 `@/api/productionScan` 一并桩掉，顺带钉住「本页不新增请求口径」；
-//   - `el-dialog` 等组件在 vitest 下没有自动注册（vitest.config.ts 不带
-//     unplugin-vue-components），必须显式 stub。
+//   - 「查看持有」读的是**同一条** `qk.scanHeld`（params 与徽章 / 三页 / 持有页逐字一致），
+//     本 spec 把 `@/api/productionScan` 一并桩掉，顺带钉住「本页不新增请求口径」。
+//
+// 同日「查看持有」由本页的对话框改为独立页 `/scan/held`（`ScanHeldParts.vue`）：
+// 点按钮跳页的断言在本文件（它是入口），持有列表的渲染、params 逐字一致、
+// 「加急 / 交期有值才渲染」三条迁到 `ScanHeldParts.spec.ts`；原 H5 里针对
+// `HeldPartsList`（副信息含「工序」）的断言归到 `HeldPartsBadge.spec.ts` ——
+// `HeldPartsList` 现在只有徽章抽屉一个消费方，持有页走的是 `PartRowCard`。
 //
 // 桩的取舍：
 //   - `vue-router`：只桩 `useRouter`，把 `push` / `replace` 抓出来断言跳转。`useScanSession`
@@ -219,11 +224,6 @@ function hasHeldButton(w: VueWrapper): boolean {
   return w.find('[data-testid="held-btn"]').exists();
 }
 
-/** 弹窗内的持有行数（`HeldPartsList` 的 `.held-row`）。 */
-function heldRowCount(w: VueWrapper): number {
-  return w.findAll('.mock-dialog .held-row').length;
-}
-
 async function clickAction(w: VueWrapper, label: string): Promise<void> {
   const btn = w
     .findAll('.action-grid .mock-btn')
@@ -398,68 +398,39 @@ describe('ScanActionPicker：查看持有（2026-10-11 新增）', () => {
     expect(hasHeldButton(w)).toBe(false);
   });
 
-  it('H3：点「查看持有」打开弹窗并渲染持有行，且不发跳转', async () => {
+  // 「查看持有」从对话框改成独立页（2026-10-11）：断言随之**反向** —— 原来守的是
+  // 「点按钮打开弹窗且不跳页」，那正是本次要改掉的行为。
+  it('H3：点「查看持有」跳 /scan/held，且不提示「已选择」（它不是报工动作）', async () => {
     mockShelves([SHELF_P1, SHELF_I1]);
     mockHeld(['101', '102']);
     const w = await mountPicker(makeUser('h3', [SHELF_P1.id, SHELF_I1.id]));
 
-    expect(w.find('.mock-dialog').exists(), '弹窗默认不该打开').toBe(false);
     await w.find('[data-testid="held-btn"]').trigger('click');
     await flushPromises();
 
-    expect(w.find('.mock-dialog').exists()).toBe(true);
-    expect(heldRowCount(w)).toBe(2);
-    // 展示字段取自现有 17 字段：序列号 / 图号 / 名称 / 数量
-    const text = w.find('.mock-dialog').text();
-    expect(text).toContain('SN-101');
-    expect(text).toContain('DWG-1');
-    expect(text).toContain('法兰盘');
-    expect(text).toContain('3 件');
-    // 「查看持有」不是报工动作：不跳页、不提示「已选择」
-    expect(h.push).not.toHaveBeenCalled();
+    expect(h.push.mock.calls).toEqual([['/scan/held']]);
+    // 不写动作状态、不发「已选择」：与另外三个按钮区分开，否则工机会以为已经选了一个动作。
+    // 显式种一个「本来就有的」动作再断言它没变 —— session 是模块级单例，前面的用例
+    // （N1 / N2 点过动作按钮）已经把 action 留在了某个值上，直接断 null 会假红。
+    useScanSession().setAction('PICK_UP');
+    await w.find('[data-testid="held-btn"]').trigger('click');
+    await flushPromises();
+    expect(h.push.mock.calls).toEqual([['/scan/held'], ['/scan/held']]);
+    expect(useScanSession().action.value).toBe('PICK_UP');
     expect(h.ElMessage.success).not.toHaveBeenCalled();
+    // 旧形态是对话框，页面里不该再有它
+    expect(w.find('.mock-dialog').exists()).toBe(false);
   });
 
-  it('H4：params 与徽章 / 三页逐字一致（{ workerId, limit: 200 }）⇒ 必然同一条 qk.scanHeld', async () => {
+  it('H4：params 与徽章 / 三页 / 持有页逐字一致（{ workerId, limit: 200 }）⇒ 必然同一条 qk.scanHeld', async () => {
     mockShelves([SHELF_P1, SHELF_I1]);
     mockHeld([]);
     await mountPicker(makeUser('h4', [SHELF_P1.id, SHELF_I1.id]));
     expect(h.fetchScanHeld).toHaveBeenCalled();
     expect(h.fetchScanHeld.mock.calls[0]![0]).toEqual({ workerId: '190000000000009', limit: 200 });
-    // 本页的按钮角标与弹窗各挂了一个 observer，同键 ⇒ 同屏只发**一次**请求。这是子任务
-    // 的核心验收点（「不新增任何请求」），只钉入参钉不住它 —— 有人把弹窗的 params 改成
-    // 另一个形状时键会分裂成两条、入参断言仍绿。
+    // 本页的按钮角标挂一个 observer；持有页搬走之前这里曾挂两个（角标 + 弹窗），
+    // 同键 ⇒ 同屏只发**一次**请求。仍守「不新增任何请求」：params 改成另一个形状时
+    // 键会分裂成两条，而入参断言本身仍绿。
     expect(h.fetchScanHeld).toHaveBeenCalledTimes(1);
-  });
-
-  it('H5：加急 / 交期 / 工序各有值才渲染；没有工序链时工序整块不出现（不显示假占位）', async () => {
-    mockShelves([SHELF_P1, SHELF_I1]);
-    vi.mocked(h.fetchScanHeld).mockResolvedValue({
-      items: [
-        heldRow('201', { is_urgent: true, planned_delivery_date: '2026-11-01' }),
-        heldRow('202', {
-          is_urgent: false,
-          planned_delivery_date: '',
-          chain_current_process_name: '钻孔',
-          chain_next_process_name: null,
-        }),
-        heldRow('203', { is_urgent: false, planned_delivery_date: '' }),
-      ],
-      total: 3,
-      limit: 200,
-      offset: 0,
-    });
-    const w = await mountPicker(makeUser('h5', [SHELF_P1.id, SHELF_I1.id]));
-    await w.find('[data-testid="held-btn"]').trigger('click');
-    await flushPromises();
-
-    const rows = w.findAll('.mock-dialog .held-row');
-    expect(rows).toHaveLength(3);
-    expect(rows[0]!.text()).toContain('加急');
-    expect(rows[0]!.text()).toContain('交期 2026-11-01');
-    expect(rows[1]!.text()).toContain('工序 钻孔');
-    // 交期空 + 无工序链 ⇒ 副信息整块不渲染（不是渲染一个空的 tag）
-    expect(rows[1]!.find('.held-row-sub').exists()).toBe(true);
-    expect(rows[2]!.find('.held-row-sub').exists()).toBe(false);
   });
 });

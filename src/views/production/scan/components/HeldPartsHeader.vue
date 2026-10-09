@@ -2,12 +2,14 @@
   HeldPartsHeader.vue
 
   持有件面板的**头部**（工人标识 + 「已加载 N 件（共 M 件）」计数 + 刷新按钮），
-  与 `HeldPartsList.vue` 同为 `HeldPartsBadge` / `HeldPartsDialog` 两处共用的展示件。
+  与 `HeldPartsList.vue` 同为 `HeldPartsBadge` 抽屉的展示件。当前消费方就是
+  `HeldPartsBadge` 一处；`/scan/held` 查看持有页有自己的 `.parts-header` + 计数 tag
+  （它渲染的是 `PartRowCard` 三列网格，与抽屉的紧凑行不是同一套口径）。
 
-  为什么头部也要抽而不是各写一份：「已加载 N 件」与信封 `total` 不等即表示列表被
-  后端 limit 截断（不再谎称是全部）—— 这个口径、以及「N 取已加载件数、不是 total」
-  的取法只要有两份就会漂移，徽章上写着 3 件、弹窗里写着 5 件这类不一致很难在排障时
-  联想到是两处各算的。同理，刷新按钮的入口位置与 loading 态也是同一个口径。
+  为什么头部要与列表块分开：「已加载 N 件」与信封 `total` 不等即表示列表被后端 limit
+  截断（不再谎称是全部）—— 这个口径、以及「N 取已加载件数、不是 total」的取法
+  只要有两份就会漂移，徽章上写着 3 件、弹窗里写着 5 件这类不一致很难在排障时联想到
+  是两处各算的。刷新按钮的入口位置与 loading 态同理。
 
   纯展示组件：**不碰 query、不发请求**。数据（`count` / `total` / `loading`）由调用方
   从 `useScanHeldQuery` 算好传进来，点击「刷新」只向上抛 `refresh` 事件，由调用方决定
