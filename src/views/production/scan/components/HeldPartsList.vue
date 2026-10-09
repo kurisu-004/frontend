@@ -1,13 +1,15 @@
 <!--
   HeldPartsList.vue
 
-  持有件列表的**唯一渲染实现**（2026-10-11 从 `HeldPartsBadge.vue` 抽出，域内两处共用）：
-    - `HeldPartsBadge`：顶栏徽章点开后的抽屉；
-    - `HeldPartsDialog`：扫码台 `/scan/action` 的「查看持有」弹窗。
+  持有件列表的**唯一渲染实现**（2026-10-11 从 `HeldPartsBadge.vue` 抽出）：
+    - `HeldPartsBadge`：顶栏徽章点开后的抽屉。
+  （同日 `/scan/action` 的「查看持有」由 `HeldPartsDialog` 改为独立页
+  `ScanHeldParts.vue`，改用与三页同款的 `PartRowCard`，不再消费本组件。）
 
-  抽出的原因不是「徽章太长」而是**要复用**：两处读的是同一条 `qk.scanHeld`、同一份
-  `ScanPartRowSchema`，展示口径必须逐字一致；复制一份就等于把「加急怎么标 / 工序怎么显示」
-  这类口径变成两份，迟早漂移。
+  抽出时是域内两处共用的（徽章抽屉 + 「查看持有」弹窗）；抽出原因不是「徽章太长」
+  而是**要复用**：两处读的是同一条 `qk.scanHeld`、同一份 `ScanPartRowSchema`，
+  展示口径必须逐字一致；复制一份就等于把「加急怎么标 / 工序怎么显示」这类口径
+  变成两份，迟早漂移。现在只剩徽章一处消费，但本组件仍是这段渲染的唯一实现。
 
   纯展示组件：**不碰 query、不碰 api、不发请求**，数据与错误文案都由调用方算好传进来
   （调用方用 `useScanHeldQuery` + `silent: true`，错误渲染进本组件的 `errorMsg` 行而不是

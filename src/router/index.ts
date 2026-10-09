@@ -381,6 +381,14 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/production/scan/ScanInspectParts.vue'),
         meta: { title: '扫码台 · 选件送检', menuCode: 'scan_badge' },
       },
+      // 2026-10-11：「查看持有」由操作选择页上的对话框改为独立页（与取件 / 放回 /
+      // 送检同形态）。menuCode 沿用 scan_badge ⇒ 菜单表与 adminMenus fixture 零改动。
+      {
+        path: 'held',
+        name: 'ScanHeld',
+        component: () => import('@/views/production/scan/ScanHeldParts.vue'),
+        meta: { title: '扫码台 · 我的持有', menuCode: 'scan_badge' },
+      },
     ],
   },
 ];
