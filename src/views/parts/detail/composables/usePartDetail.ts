@@ -34,7 +34,7 @@
 
 import {
   computed,
-  onMounted,
+  onActivated,
   reactive,
   ref,
   toValue,
@@ -103,20 +103,11 @@ export interface UsePartDetailReturn {
   eventsLoading: Ref<boolean>;
   batches: ComputedRef<PartBatch[]>;
   batchesLoading: Ref<boolean>;
-  /**
-   * 品检锚批次 = `batches.find(b => b.status === 'INSPECTION')`。
-   *
-   * ⚠️ **判据读批次、不读 `part.status`**：`t_part.status` 是 min-progress 派生列，
-   * 同工单只要还有任一批次进度更靠前，整单就派生成那个更早的状态 ⇒ 多批次工单上会
-   * 出现「批次是 INSPECTION、`t_part.status` 却是 IN_PROCESS / PENDING」⇒ 两个品检按钮
-   * 整排消失、那个批次永远动不了。后端 `prod/batch/service/transition_core.rs::to_ship_core`
-   * 对同一处有专门的长注释警告前端不要用派生列判这件事。
-   *
-   * 同时它也是两个品检动作（通过 / 打回）**唯一**的锚 —— 此前两者一个取
-   * `find(status==='INSPECTION')`、一个取 shell 传的 `selectedBatchId`，多批次工单上会
-   * 打不同的批次而用户看不出来。
-   */
-  inspectionBatch: ComputedRef<PartBatch | null>;
+  // ⚠️ 品检锚批次（`inspectionBatch`）**不在本返回值里**：它的口径要把「用户选中的批次」
+  // 算进去，而 `selectedBatchId` 是 shell 的局部态（批次表行选中）。派生函数
+  // `./inspectionBatch.ts::resolveInspectionBatch` 是纯函数，由 shell 调一次即可同时喂
+  // 按钮显隐 / 弹窗回显 / actions bindings 三处；在本文件再存一份只会多一个可能与
+  // shell 不同步的副本。
 
   // ---------- 权限矩阵 ----------
   canEditPart: ComputedRef<boolean>;
@@ -146,8 +137,10 @@ export interface UsePartDetailReturn {
   // ---------- 刷新别名（shell 的刷新按钮 / 测试驱动）----------
   //  只导出 `fetchBatches`：批次监控卡有一个「刷新」按钮（`@fetch`）。详情与事件没有
   //  手动刷新按钮 —— 它们的重新取数由写后失效链 + 有限 staleTime 负责，导出零消费方的
-  // 别名只会让人误以为「不调它就少了一次刷新」（hook 内部本来就有 `fetchDetail` /
-  //  `fetchEvents`，需要时可直接调 hook）。
+  //  别名只会让人误以为「不调它就少了一次刷新」。详情 / 事件的 `fetchDetail` /
+  //  `fetchEvents` 别名在各自 query hook（`usePartDetailQuery.ts` /
+  //  `usePartEventsQuery.ts`）上，本 composable **不**再转发：真要用就在调用方直接
+  //  import 那个 hook，不要把这里扩成一个四件套。
   fetchBatches: () => Promise<void>;
 
   // ---------- 标签 helpers ----------
@@ -227,7 +220,14 @@ export function usePartDetail(
   // dashboard 的 PartPreviewDialog 是另一个消费方，同一条键才能同屏去重、失效链也只有
   // 一条。它没有 `isActive` 闸门 —— 入参 partId 是 shell 的**局部 ref**，只由本页那个
   // 带「本页是否活跃」守卫的 route watcher 改，全局路由变化不会传导过来。
-  const batchesQuery = usePartBatchesQuery(() => toValue(partId));
+  //
+  // ⚠️ staleTime 覆盖成 30s（与本页详情 / 事件两条 query 同档），共享档仍是 20min。
+  // 批次行在本页不是只读的展示：行状态决定 `inspectionBatch`，也就是「品检通过 / 指定
+  // 工序」两个按钮的可点性 ⇒ 看到过期的 INSPECTION 会让人去点一个后端已经用 20103 拒掉
+  // 的流转。而其它域（送检 / 工人放回 / 扫码送检 / 外协回收）改的是批次成员资格，那些写
+  // 点只失效 `qk.partsPrefix`，**不会**碰 `qk.partBatchesPrefix`（CLAUDE.md「缓存定位」
+  // 明确不做跨页面精确失效补齐）⇒ 本页的新鲜度只能靠 staleTime，20min 太长。
+  const batchesQuery = usePartBatchesQuery(() => toValue(partId), 30_000);
 
   const part = computed<PartDetailData | null>(() => detailQuery.data.value ?? null);
   const events = computed<PartEvent[]>(() => eventsQuery.data.value ?? []);
@@ -238,27 +238,29 @@ export function usePartDetail(
     return e ? (e.message ?? '加载零件失败') : '';
   });
 
-  /** 品检锚批次（判据与理由见返回类型的同名字段注释）。 */
-  const inspectionBatch = computed<PartBatch | null>(
-    () => batches.value.find((b) => b.status === 'INSPECTION') ?? null,
-  );
-
   /**
-   * 进页面时对**暖缓存**的批次列表补一次 refetch。
+   * keep-alive **重新激活**时对已过期的批次列表补一次 refetch。
    *
-   * 起因：`usePartBatchesQuery` 是共享基础数据层，`staleTime` 20min（与
-   * `usePartFilesListQuery` 同值）⇒ 从 dashboard 的 PartPreviewDialog 预热过的缓存，
-   * 20 分钟内进本页 `shouldFetchOnMount` 为 false、不会自动重取 ⇒ 用户会看到最多 20 分钟
-   * 前的批次状态。批次行在本页不是只读的展示：它决定 `inspectionBatch`，也就是「品检
-   * 通过 / 指定工序」两个按钮的**可点性** —— 看到过期的 INSPECTION 会让人去点一个后端
-   * 已经用 20103 拒掉的流转。
+   * 为什么不挂 `onMounted`：本页被 keep-alive 缓存（路由名 `PartDetail`），第一次进来之后
+   * 每次切走再回来都只走 deactivate / activate，`onMounted` 不再跑 ⇒ 挂在它上面只覆盖得了
+   * 第一次。`onActivated` 才是 keep-alive 缓存页「每次回来」的钩子。
    *
-   * ⚠️ 只在 `data.value` 已存在（暖缓存）时补，**冷缓存那侧不插手**：observer 自己会发
-   * 首调，插手就成两次往返（refetch 默认 `cancelRefetch`，会把在飞的那次取消掉重发）。
-   * 这个条件也让本行永远不会与自动首调重叠。
+   * **首次激活刻意不补刷**：那一刻 observer 自己正在按 staleTime 判新鲜度（冷缓存 ⇒ 自动
+   * 首调；暖缓存且已过 30s ⇒ `shouldFetchOnMount` 为真同样自动重取），再补一次就是两次
+   * 往返（`refetch` 默认 `cancelRefetch`，会把在飞的那次取消掉重发）。所以第一次激活直接
+   * 放行，之后每次回来才按 `isStale` 补 —— 这一支与自动首调**不重叠**。
+   *
+   * 为什么需要它：keep-alive 下组件**不卸载** ⇒ observer 不重新订阅 ⇒ `shouldFetchOnMount`
+   * 那条路在回来时压根不会触发，全仓也没有轮询（`refetchInterval` 未设）。补刷挂在
+   * `onActivated` 上，是本页唯一的「回来即校验」通道。
    */
-  onMounted(() => {
-    if (batchesQuery.data.value) void batchesQuery.refetch();
+  let activatedOnce = false;
+  onActivated(() => {
+    if (!activatedOnce) {
+      activatedOnce = true;
+      return;
+    }
+    if (batchesQuery.isStale.value) void batchesQuery.refetch();
   });
 
   // ============ 行内编辑（PartInfoCard 读 editing/form）============
@@ -402,7 +404,6 @@ export function usePartDetail(
     eventsLoading: eventsQuery.isFetching,
     batches,
     batchesLoading: batchesQuery.isFetching,
-    inspectionBatch,
     // permissions
     canEditPart,
     canCancelPart,

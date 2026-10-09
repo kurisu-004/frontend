@@ -32,6 +32,23 @@
 -->
 <template>
   <div v-loading="infoLoading" class="part-detail">
+    <!--
+      三条读（详情 / 事件 / 批次列表）任一失败时的**页内兜底位**。
+      与 query hook 内的 `watch(error) → ElMessage.error` 是两层、不是重复：
+      ElMessage 是瞬时提示（几秒后自动消失、连点几次时互相顶掉、滚出屏幕就再也看不到），
+      这里留一条常驻横幅，让「这一屏的数据不完整」这件事在页面上留得下痕迹。
+      只在有文案时出现，正常路径零 DOM。
+    -->
+    <el-alert
+      v-if="errorMsg"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="`部分数据加载失败：${errorMsg}`"
+      description="已加载的卡片仍可正常使用；若持续失败请刷新页面或检查网络。"
+      class="load-error"
+    />
+
     <!-- 信息卡 -->
     <PartInfoCard
       :part="part"
@@ -314,6 +331,7 @@ import ProcessChainCard from './components/ProcessChainCard.vue';
 import type { PartBatch } from '@/api/parts';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import type { Process } from '@/types/process';
+import { useTagsViewStore } from '@/stores/tagsView';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useConfirm } from '@/composables/useConfirm';
 import { usePartFileUpload } from '@/composables/usePartFileUpload';
@@ -327,6 +345,7 @@ import {
 import { usePartDetail } from './composables/usePartDetail';
 import type { PartEditForm } from './composables/usePartDetail';
 import { usePartDetailActions } from './composables/usePartDetailActions';
+import { resolveInspectionBatch } from './composables/inspectionBatch';
 import { isPartDetailActive } from './composables/partDetailActive';
 import { usePartCncGroups } from './composables/usePartCncGroups';
 import { useProcessChain } from './composables/useProcessChain';
@@ -340,6 +359,7 @@ const isDev = import.meta.env.DEV;
 
 const route = useRoute();
 const router = useRouter();
+const tags = useTagsViewStore();
 const partId = ref<string>(String(route.params.id ?? ''));
 
 /**
@@ -387,7 +407,7 @@ const {
   assemblyLoading,
   batches,
   batchesLoading,
-  inspectionBatch,
+  errorMsg,
   canEditPart,
   canCancelPart,
   canDeletePart,
@@ -408,9 +428,29 @@ const {
   eventTagType,
 } = detail;
 
+// ============ 选中批次（2026-09-17 PR-4：3 卡联动锚）============
+// PartBatchMonitorCard 行选中 → onBatchSelect → 写入 selectedBatchId；
+// PartHistoryCard 按 batch_id 过滤 / ProcessChainCard 高亮
+// current_process_step_id 对应步骤。
+//
+// ⚠️ 声明位置在本文件靠前（actions 装配之前）：品检锚批次 `inspectionBatch` 的派生
+// 要读 `selectedBatchId`，而它要作为 bindings 传给 `usePartDetailActions` —— 派生
+// computed 的闭包虽不要求先声明，但把相关声明堆在一处比「谁先谁后」更好读。
+const selectedBatchId = ref<string | null>(null);
+function onBatchSelect(b: PartBatch | null): void {
+  selectedBatchId.value = b?.id ?? null;
+}
+
+/**
+ * 品检锚批次（品检通过 / 指定工序两个动作**唯一**的写锚 + 按钮显隐 + 弹窗回显）。
+ * 口径见 `./composables/inspectionBatch.ts::resolveInspectionBatch`：选中的批次是品检
+ * 中就用它，否则回落列表里第一个 INSPECTION 批次。
+ */
+const inspectionBatch = computed(() => resolveInspectionBatch(batches.value, selectedBatchId.value));
+
 // 写操作层：7 个 mutation 在 `usePartDetailActions` 内。它不认识对话框、不 import
 // vue-router —— 每个 action 返回 Promise<boolean>，后续（关框 / 跳转）由本页决定。
-const actions = usePartDetailActions({ partId, part, batches, inspectionBatch });
+const actions = usePartDetailActions({ partId, part, inspectionBatch });
 const {
   onSave: savePart,
   onCancelOrder,
@@ -469,15 +509,6 @@ function onPartInfoFormChange(next: PartEditForm): void {
   Object.assign(form, next);
 }
 
-// ============ 选中批次（2026-09-17 PR-4：3 卡联动锚）============
-// PartBatchMonitorCard 行选中 → onBatchSelect → 写入 selectedBatchId；
-// PartHistoryCard 按 batch_id 过滤 / ProcessChainCard 高亮
-// current_process_step_id 对应步骤。
-const selectedBatchId = ref<string | null>(null);
-function onBatchSelect(b: PartBatch | null): void {
-  selectedBatchId.value = b?.id ?? null;
-}
-
 // ============ 工序链（2026-09-17 PR-4：useProcessChain 拉链）============
 // batches / part 来自 usePartDetail；selectedBatchId 同步驱动 currentStepId。
 const processChain = useProcessChain(
@@ -496,7 +527,8 @@ const currentStepId = computed<string | null>(() => processChain.currentStepId.v
 // ⇒ 若现有 batches 里没有「带 current_process_step_id」的批次，
 // useDefaultBatchSelection 的兜底也补不出选中项，工序链时间轴会继续整条全灰。
 // 当前不可达：PartDetail 内没有工序链编辑器，process_chain_id 变化只可能由切
-// partId 触发，而切 partId 的路由 watcher 会同步 `fetchBatches()`。
+// partId 触发，而切 partId 会改 `usePartBatchesQuery` 的 ownerPartId ⇒ reactive
+// queryKey 自己驱动重取（本页那份 staleTime 已覆盖成 30s，见 usePartDetail.ts）。
 // 将来本页加入链编辑能力时必须在这里同时补 refetch。
 watch(
   () => part.value?.process_chain_id,
@@ -624,6 +656,17 @@ async function onConfirmAction() {
       // 跳转由 shell 负责 —— composable 不 import vue-router（CLAUDE.md 不变量）。
       if (await onDeletePart()) {
         confirmVisible.value = false;
+        // ⚠️ **必须连标签一起关掉**（2026-10-10 新增）：本页 2026-10-10 起第一次进了
+        // keep-alive 的 `<keep-alive :include>`（路由名 `PartDetail`），只 `router.push`
+        // 不关 tab 会把已删工单留在缓存里 —— 组件不卸载（`onUnmounted` 不跑、`reset()` 不
+        // 触发），用户点回去看到的是一份「还在」的旧工单，而它上面的任何写都会 404
+        // （软删后 `GET /parts/{id}` 带 `deleted_at IS NULL` 过滤）。
+        // 用 `removeView` 而不是 `refreshSelectedView`：后者只临时摘缓存再挂回（换的是
+        // 组件实例，tab 还在），而这里是「这张 tab 不该再存在」。
+        // 顺序沿 `TagsView.vue::closeView`（先摘 tab、再导航），本页的目标路由固定是
+        // `/parts`，所以不需要 store 返回的 fullPath 去挑邻居。
+        const selfTab = tags.visitedViews.find((v) => v.path === route.path);
+        if (selfTab) tags.removeView(selfTab);
         await router.push('/parts');
       }
     }

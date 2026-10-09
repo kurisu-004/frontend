@@ -3,8 +3,9 @@
 
   历史记录卡（PartDetail 第 2 张卡）：
   - el-timeline 渲染 events
-  - 加载逻辑由 usePartDetail.fetchEvents() 提供；本组件 fetch onMounted/watch partId
-  - 纯展示，无 dialog / form
+  - 纯展示，无 dialog / form；**不自己发请求** —— events 由 PartDetail 的
+    `usePartEventsQuery`（`GET /api/v2/parts/{id}/events`，queryFn 上有 Zod 守门）
+    取好后经 props 注入。刷新 = 父级的写后失效链，本卡没有刷新按钮。
 
   2026-09-17 PR-3 联动改造：
   - 新增 selectedBatchId props：PartBatchMonitorCard 行选中时，本卡按

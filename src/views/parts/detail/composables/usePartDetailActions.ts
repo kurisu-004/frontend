@@ -17,9 +17,10 @@
 //   - 本文件只管「发起写 + 提示 + 失效」，**不 import vue-router**、不知道对话框；
 //     每个 action 返回 `Promise<boolean>`，跳转 / 关框由 shell（`PartDetail.vue`）
 //     决定。这是 CLAUDE.md「store / composable 不 import vue-router」在详情页的落法。
-//   - 数据层通过 `PartDetailActionBindings` 显式解耦，**只拿本文件真正用到的四个面**
-//     （工单 id / 工单本体 / 批次列表 / 品检锚批次），不依赖整个 `usePartDetail`
-//     返回值 —— 否则数据层与动作层互相锁死，改一个字段就得看另一个文件。
+//   - 数据层通过 `PartDetailActionBindings` 显式解耦，**只拿本文件真正用到的三个面**
+//     （工单 id / 工单本体 / 品检锚批次），不依赖整个 `usePartDetail` 返回值 —— 否则
+//     数据层与动作层互相锁死，改一个字段就得看另一个文件。批次列表**不在**本层接口里：
+//     批次级 OCC 锚由各 action 的入参（`PartBatch`）自带，其余地方用不到整份列表。
 //
 // **失效链（onSuccess 与 onError 都走）**：`qk.partDetailPrefix` +
 // `qk.partEventsPrefix` + `qk.partBatchesPrefix` 三条前缀，逐条 `await`。
@@ -73,24 +74,29 @@ const OCC_CONFLICT = 40901;
 export interface PartDetailActionBindings {
   /** 当前零件 id（reactive：同路由只改 param 时 vue-router 会复用组件实例）。 */
   partId: MaybeRefOrGetter<string | null | undefined>;
-  /** 工单本体（part 级 OCC 锚 `version` 取自它）。 */
-  part: Ref<PartDetailData | null>;
-  /** 该工单的批次列表（批次级 OCC 锚 `version` 取自行数据）。 */
-  batches: ComputedRef<PartBatch[]>;
-  /**
-   * **品检锚批次** = `batches.find(b => b.status === 'INSPECTION')`，null = 当前没有待
-   * 品检批次。
+  /** 工单本体（part 级 OCC 锚 `version` 取自它）。
    *
-   * 2026-10-10 新增，两个品检动作（通过 / 打回）共用它。此前「品检通过」按
-   * `find(status === 'INSPECTION')` 取第一个、「指定工序」按 shell 的 `selectedBatchId`
-   * 取用户当前选中行，两者在多批次工单上会打**不同的批次**而用户看不出来（按钮上也没有
-   * 任何标识能分辨）。收敛成一条派生后两个动作必然同批，且 UI 侧能直接展示 batch_label。
+   *  只读不写：动作层是这批数据的**消费者**，改数据的活归 query 层。 */
+  part: Ref<PartDetailData | null>;
+  /**
+   * **品检锚批次**，两个品检动作（通过 / 打回）共用它。
+   *
+   * 由 shell 传进来（不是本层自己派生），因为口径要把「用户在批次表里选中了哪一行」
+   * 算进去 —— `selectedBatchId` 是 shell 的局部态。派生函数是纯函数
+   * `./inspectionBatch.ts::resolveInspectionBatch`，shell 调一次即可同时喂按钮显隐 /
+   * 弹窗回显 / 本 bindings 三处，三者必然同批。
+   *
+   * 2026-10-10 review 第 1 轮订正：口径从「只按 `find(status==='INSPECTION')` 取列表序
+   * 第一条」改为「选中的批次是 INSPECTION 就用它，否则回落 `find(INSPECTION)`」。前者
+   * 修好了「两个按钮锚不同批」，却把「尊重用户选择」修没了 —— 用户在批次表选中 B2、
+   * 点「指定工序」却打在 B1 上，与改之前同样看不出来（界面上只显示锚批次，而那时显示的
+   * 也不是他选的那条）。后端 `fix(batch): find_current_inspection_batch_id 遇多
+   * INSPECTION 批次改返 id 不返 500` 说明多 INSPECTION 批次是真实场景。
    *
    * 判据读**批次**而不是 `part.status`：`t_part.status` 是 min-progress 派生列，同工单
    * 只要还有任一批次进度更靠前，整单就派生成那个更早的状态 ⇒ 多批次工单上会出现
    * 「批次是 INSPECTION、`t_part.status` 却是 IN_PROCESS」而整排按钮消失、该批次永远
-   * 动不了。后端 `prod/batch/service/transition_core.rs::to_ship_core` 有同款警告，
-   * 前端的同款修法见 `PartDetail.vue` 的底部操作卡。
+   * 动不了。后端 `prod/batch/service/transition_core.rs::to_ship_core` 有同款警告。
    */
   inspectionBatch: ComputedRef<PartBatch | null>;
 }

@@ -59,6 +59,7 @@ vi.mock('element-plus', () => ({
 import { ApiError } from '@/api/http';
 import { qk } from '@/composables/queries/keys';
 import { usePartDetailActions } from '@/views/parts/detail/composables/usePartDetailActions';
+import { resolveInspectionBatch } from '@/views/parts/detail/composables/inspectionBatch';
 import type { PartBatch } from '@/api/parts';
 import type { PartDetailData } from '@/views/parts/detail/composables/partDetailSchema';
 
@@ -129,19 +130,26 @@ let keys: unknown[][];
 /** 把 invalidateQueries 的每次调用记进 `keys`，让断言能逐条比对调用序。 */
 let spy: ReturnType<typeof vi.spyOn>;
 
-/** 装配一份 bindings（默认：工单可写 + 有一条 INSPECTION 批次）。 */
-function mountActions(partOverrides: Record<string, unknown> = {}, batches: PartBatch[] = []) {
+/** 装配一份 bindings（默认：工单可写 + 有一条 INSPECTION 批次）。
+ *  `selectedBatchId` 可变，用来覆盖「用户选中了哪一行」这一支（见 A7 组）。 */
+function mountActions(
+  partOverrides: Record<string, unknown> = {},
+  batches: PartBatch[] = [],
+  selectedBatchId: string | null = null,
+) {
   const part = ref<PartDetailData | null>(makePart(partOverrides));
   const list = computed<PartBatch[]>(() =>
     batches.length ? batches : [makeBatch({ id: '3000000000002', batch_label: 'B3' })],
   );
-  const inspectionBatch = computed<PartBatch | null>(
-    () => list.value.find((b) => b.status === 'INSPECTION') ?? null,
+  const selected = ref<string | null>(selectedBatchId);
+  // 派生口径与 shell 完全同款（同一条纯函数），不在 spec 里复写一遍。
+  const inspectionBatch = computed<PartBatch | null>(() =>
+    resolveInspectionBatch(list.value, selected.value),
   );
   const actions = testApp.runWithContext(() =>
-    usePartDetailActions({ partId: () => PART_ID, part, batches: list, inspectionBatch }),
+    usePartDetailActions({ partId: () => PART_ID, part, inspectionBatch }),
   );
-  return { part, batches: list, inspectionBatch, actions };
+  return { part, batches: list, selected, inspectionBatch, actions };
 }
 
 beforeEach(() => {
@@ -293,7 +301,10 @@ describe('usePartDetailActions — 7 个写端点', () => {
 
   // 两个品检按钮此前一个锚 find(status==='INSPECTION')、一个锚 shell 传的
   // selectedBatchId ⇒ 多批次工单上「品检通过」打 A 批、「指定工序」打 B 批，用户看不出来。
-  it('A7：品检通过与指定工序打**同一个**锚批次（派生自批次状态，不吃 selectedBatchId）', async () => {
+  // 2026-10-10 review 第 1 轮：两条动作共用**一条**派生（`resolveInspectionBatch`），
+  // 口径是「选中的批次是品检中就用它，否则回落 find(INSPECTION)」—— 既保证同批，又不
+  // 忽略用户选择（review 指出「只按 find 取」是把「尊重选择」改成了「忽略选择」）。
+  it('A7：品检通过与指定工序打**同一个**锚批次（共用 resolveInspectionBatch 一条派生）', async () => {
     const scope = effectScope();
     const twoBatches: PartBatch[] = [
       makeBatch({ id: 'B_PENDING', batch_label: 'B1', status: 'PENDING' }),
@@ -316,6 +327,42 @@ describe('usePartDetailActions — 7 个写端点', () => {
     // 二次确认文案里带出了批次标识，用户能看见这次打的是哪一批
     // （ElMessageBox.confirm(message, title, opts) —— 批次标识在 message 里）
     expect(h.confirm.mock.calls[0]![0]).toContain('B2');
+    scope.stop();
+  });
+
+  // 三种派生：选中的是品检批次 / 选中的不是 / 没选中。后者两条都退回 find(INSPECTION)。
+  it('A7c：两条 INSPECTION 批次时锚「选中的那条」，不是列表序第一条', async () => {
+    const scope = effectScope();
+    const twoInspections: PartBatch[] = [
+      makeBatch({ id: 'B_A', batch_label: 'B1', status: 'INSPECTION', version: 11 }),
+      makeBatch({ id: 'B_B', batch_label: 'B2', status: 'INSPECTION', version: 22 }),
+    ];
+    // (1) 没选中 → find(INSPECTION) = 列表序第一条
+    const none = scope.run(() => mountActions({}, twoInspections))!;
+    expect(none.inspectionBatch.value?.id).toBe('B_A');
+    // (2) 选中第二条品检批次 → 尊重选择（此前会打在 B_A 上）
+    const second = scope.run(() => mountActions({}, twoInspections, 'B_B'))!;
+    expect(second.inspectionBatch.value?.id).toBe('B_B');
+    await second.actions.onPassInspection();
+    await second.actions.onFailInspection({ processId: 'p', note: null });
+    expect(h.toShip.mock.calls[0]![0]).toBe('B_B');
+    expect(h.toShip.mock.calls[0]![1]).toEqual({ version: 22, quantity: null });
+    expect(h.toProcess.mock.calls[0]![0]).toBe('B_B');
+    expect(h.toProcess.mock.calls[0]![1]).toMatchObject({ version: 22 });
+    scope.stop();
+  });
+
+  it('A7d：选中的是**非**品检批次时回落到 find(INSPECTION)，且按钮组显示的锚随之变化', () => {
+    const scope = effectScope();
+    const batches: PartBatch[] = [
+      makeBatch({ id: 'B_PENDING', batch_label: 'B1', status: 'PENDING' }),
+      makeBatch({ id: 'B_INSPECT', batch_label: 'B2', status: 'INSPECTION' }),
+    ];
+    const { inspectionBatch } = scope.run(() => mountActions({}, batches, 'B_PENDING'))!;
+    // 静默回落是**正确**的：用户选中的不是品检批次，本来就不该把品检流转打到它身上；
+    // 按钮组与弹窗都显式展示「目标批次 X」（PartDetail.vue 的 .inspection-anchor /
+    // 「目标批次」表单项），所以这个回落在界面上是看得见的，不是暗改。
+    expect(inspectionBatch.value?.id).toBe('B_INSPECT');
     scope.stop();
   });
 

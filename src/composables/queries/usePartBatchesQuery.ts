@@ -11,7 +11,8 @@
 //     与 part-files 都是可高频变更的派生视图域；用 20min 折中体验与性能，而非
 //     Infinity 让用户长时间看不到拆分 / 取消的批次变更）。写操作（拆分 / 取消）
 //     由 caller 调 invalidatePartBatchesListQuery 立即失效本 owner 的缓存，跳
-//     staleTime 等待。
+//     staleTime 等待。**消费方可以把 staleTime 降到自己那一档**（见 `staleTimeMs`
+//     形参，零件详情页传 30s 并说明理由），默认值不变。
 //   - reactive params：ownerPartId 是 MaybeRefOrGetter<string | null | undefined>。
 //     null/空 → enabled=false + queryFn 二次守卫返回空结果，避免发 ?partId= 请求
 //     （listPartBatches(partId) 是路径参数，所以空 ownerId 时 queryFn 也要拦截）。
@@ -57,6 +58,22 @@ const EMPTY_RESULT: PartBatchListResultSchema = {
  */
 export function usePartBatchesQuery(
   ownerPartId: MaybeRefOrGetter<string | null | undefined>,
+  /**
+   * 2026-10-10 新增（review 第 1 轮）：本 observer 的 `staleTime` 覆盖，默认仍是
+   * 共享档 20min。
+   *
+   * 零件详情页传 30s：它的批次行**不是只读展示**，行状态决定 `inspectionBatch`，也就是
+   * 「品检通过 / 指定工序」两个按钮的可点性 ⇒ 看到过期的 INSPECTION 会让人去点一个后端
+   * 已经用 20103 拒掉的流转。而其它域（送检 / 工人放回 / 扫码送检 / 外协回收）改的是
+   * 批次成员资格，那些写点只失效 `qk.partsPrefix`，**不会**碰 `qk.partBatchesPrefix`
+   * （按 CLAUDE.md「缓存定位」，跨页面写不做精确失效补齐）⇒ 新鲜度只能靠 staleTime。
+   * 共享档 20min 对详情页太长、对 dashboard 的 PartPreviewDialog（纯展示）无所谓。
+   *
+   * ⚠️ 与共享键的关系：query-core 的 `Query#isStaleByTime` 取**各 observer staleTime 的
+   * 最小值**，所以详情页与预览弹窗同屏时该键按 30s 判新鲜度。这是**收敛到更严的一档**，
+   * 与「共享一条 queryKey 换同屏去重」的目标同向，不是缺陷。
+   */
+  staleTimeMs?: number,
 ) {
   // 2026-09-30：queryKey 走 computed(toValue(ownerPartId) ?? '')，ownerPartId 可以是
   // Ref / ComputedRef / getter；queryFn 从 queryKey[2] 读最新 partId（不 snapshot），
@@ -78,7 +95,8 @@ export function usePartBatchesQuery(
     enabled: computed(() => !!toValue(ownerPartId)),
     // 2026-09-30：与 usePartFilesListQuery 同值（20min / 30min）—— part-batches 与
     // part-files 同属「可高频变更的派生视图域」，不挂 Infinity。
-    staleTime: 20 * 60 * 1000,
+    // 2026-10-10：允许调用方按消费侧形态覆盖（见 `staleTimeMs` 形参注释）。
+    staleTime: staleTimeMs ?? 20 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
   });
 }
