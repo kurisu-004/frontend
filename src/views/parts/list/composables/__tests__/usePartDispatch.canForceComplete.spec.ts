@@ -26,19 +26,18 @@
 //      + 确认框取消 ⇒ 两条端点都不打
 //
 // 依赖处理：
-// - usePartDispatch 内部调 useRouter + useQueryClient，需要在 Vue setup 上下文中
-//   执行 —— 用 createApp + app.runWithContext() 提供 inject context；
+// - usePartDispatch 内部调 useQueryClient，需要在 Vue setup 上下文中执行 —— 用
+//   createApp + app.runWithContext() 提供 inject context；
 // - useAuthStore（Pinia setup store）内含 useMutation → 需要注册 VueQueryPlugin +
 //   QueryClient；
-// - useProcessesQuery 跑前会触发 queryFn，mock listProcesses 返空数据让 query 快速
-//   resolve，避免 watch(errorMsg) 桥接 → ElMessage.error → node env document is
-//   not defined 污染输出；
 // - ElMessage / ElMessageBox 桩成 no-op；
 // - R6~R9 依赖桩件**必须保留可观测性**：`ElMessageBox.confirm` 既要让 dangerous()
 //   resolve true（它只把 reject 当「取消」，resolve undefined 即视为确认），又要能
 //   读到入参文案；两个 force-complete api 桩成 `vi.fn()` 后即可断言「调了哪个、
 //   没调哪个」；
-// - @/api/parts / @/api/shelves / @/api/process 全部 mock，避免 axios 网络请求。
+// - beforeEach 的 `vi.clearAllMocks()` 清上一条用例留下的调用记录，否则「没调某个
+//   api」这类负向断言会被上一条的残留调用污染；它只清记录不换实现，工厂式桩件的
+//   初值（`ElMessageBox.confirm` resolve undefined = 视为确认）因此保留。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, type App } from 'vue';
@@ -58,7 +57,6 @@ vi.mock('element-plus', () => ({
 }));
 
 vi.mock('@/api/parts', () => ({
-  placeOnShelf: vi.fn(),
   forceCompletePart: vi.fn(),
 }));
 
@@ -68,14 +66,7 @@ vi.mock('@/api/assembly', () => ({
   forceCompleteAssembly: vi.fn(),
 }));
 
-vi.mock('@/api/shelves', () => ({
-  listShelves: vi.fn(async () => ({ items: [], total: 0, limit: 0, offset: 0 })),
-}));
-
-vi.mock('@/api/process', () => ({
-  listProcesses: vi.fn(async () => ({ items: [], total: 0, limit: 200, offset: 0 })),
-}));
-
+// useAuthStore 从这里取 login / logout / me，不桩会发真实请求。
 vi.mock('@/api/iam', () => ({
   login: vi.fn(),
   logout: vi.fn(),
@@ -108,7 +99,6 @@ function makeRow(overrides: Partial<PartListItem> = {}): PartListItem {
   return row as PartListItem;
 }
 
-/** usePartDispatch 的最小 deps（canForceComplete 不读这些，但函数签名要求给齐）。 */
 /** 注入一个 MANAGER 测试用户到 auth store。 */
 function loginAsManager(): void {
   const auth = useAuthStore();
@@ -138,13 +128,17 @@ function loginAsClerk(): void {
   auth.user = user;
 }
 
-describe('usePartDispatch.canForceComplete', () => {
+describe('usePartDispatch — canForceComplete / onForceComplete', () => {
   let app: App;
 
   beforeEach(() => {
-    // setup context：useRouter / useQueryClient 需要在 app.runWithContext() 内调用，
-    // 因为它们依赖 Vue 的 inject 机制；createPinia + VueQueryPlugin 给 store + QueryClient
+    // setup context：useQueryClient 需要在 app.runWithContext() 内调用，因为它依赖
+    // Vue 的 inject 机制；createPinia + VueQueryPlugin 给 store + QueryClient
     // 上下文。setActivePinia 让后续 useAuthStore() 命中这里。
+    //
+    // clearAllMocks 只清调用记录、不换实现，工厂式桩件的初值（resolve undefined =
+    // 确认）因此保留，而「没调某个 api」这类负向断言不会被上一条用例污染。
+    vi.clearAllMocks();
     app = createApp({});
     app.use(createPinia());
     app.use(VueQueryPlugin, {
@@ -226,8 +220,6 @@ describe('usePartDispatch.canForceComplete', () => {
 
   it('R6：ASSEMBLY 行只打 forceCompleteAssembly（零件端点一次都不许碰）', async () => {
     loginAsManager();
-    vi.mocked(forceCompleteAssembly).mockClear();
-    vi.mocked(forceCompletePart).mockClear();
     const dispatch = app.runWithContext(() => usePartDispatch());
     const row = makeRow({ row_type: 'ASSEMBLY', child_count: 7 });
 
@@ -243,8 +235,6 @@ describe('usePartDispatch.canForceComplete', () => {
 
   it('R7：PART 行只打 forceCompletePart（装配件端点一次都不许碰）', async () => {
     loginAsManager();
-    vi.mocked(forceCompleteAssembly).mockClear();
-    vi.mocked(forceCompletePart).mockClear();
     const dispatch = app.runWithContext(() => usePartDispatch());
     const row = makeRow({ row_type: 'PART' });
 
@@ -259,7 +249,6 @@ describe('usePartDispatch.canForceComplete', () => {
 
   it('R8：装配件确认文案带上子件数；child_count 缺省时退成不带数字的整句', async () => {
     loginAsManager();
-    vi.mocked(ElMessageBox.confirm).mockClear();
     const dispatch = app.runWithContext(() => usePartDispatch());
 
     await dispatch.onForceComplete(makeRow({ row_type: 'ASSEMBLY', child_count: 7 }));
@@ -278,7 +267,6 @@ describe('usePartDispatch.canForceComplete', () => {
 
   it('R9：零件行的确认文案不含任何子件提示', async () => {
     loginAsManager();
-    vi.mocked(ElMessageBox.confirm).mockClear();
     const dispatch = app.runWithContext(() => usePartDispatch());
 
     await dispatch.onForceComplete(makeRow({ row_type: 'PART', child_count: 7 }));
@@ -292,8 +280,6 @@ describe('usePartDispatch.canForceComplete', () => {
   it('确认框取消 ⇒ 两条端点都不许被打', async () => {
     loginAsManager();
     vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce(new Error('cancel'));
-    vi.mocked(forceCompleteAssembly).mockClear();
-    vi.mocked(forceCompletePart).mockClear();
     const dispatch = app.runWithContext(() => usePartDispatch());
 
     await dispatch.onForceComplete(makeRow({ row_type: 'ASSEMBLY' }));

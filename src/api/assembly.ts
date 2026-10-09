@@ -327,6 +327,11 @@ export async function cancelAssembly(id: string): Promise<AssemblyItem> {
  *
  * `id` 一律按 string 处理（雪花 ID 超过 `Number.MAX_SAFE_INTEGER`，URL 拼接
  * 严禁经 `Number()`）。响应体不消费 ⇒ 返 `void`，不对未知的出参形状做类型声明。
+ *
+ * ⚠️ **部署顺序：后端必须先上。** 零件一览的「完成」按钮对装配件行可见，而按钮
+ * 的守卫只看角色与行状态、不看端点是否存在 ⇒ 后端未部署本端点时，MANAGER 点
+ * 装配件行的「完成」就是一次 404（零件行不受影响，它打的是既有端点）。失败发生在
+ * 网络层：现场只看到一句 axios 错误，用户视角是「点了没反应」，不会退回去查部署。
  */
 export async function forceCompleteAssembly(id: string, payload?: { note?: string | null }) {
   await api.post(`/prod/assemblies/${id}/force-complete`, payload ?? {});
