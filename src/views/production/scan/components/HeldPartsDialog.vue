@@ -11,7 +11,8 @@
       （`{ workerId, limit: 200 }`）⇒ 同一 workerId 落在同一条 `qk.scanHeld` 上 ⇒
       同屏去重成 1 次请求，写操作的失效链也一并同刷。本组件**不新增任何 query key、
       不新增任何请求**。
-    - 渲染：内部用 `HeldPartsList`（与徽章抽屉共用），见该组件文件头。
+    - 渲染：内部用 `HeldPartsHeader` + `HeldPartsList`（与徽章抽屉共用），见那两个组件
+      的文件头。
 
   入口形态（产品拍板）：正文第四个大按钮，不是顶栏徽章、不是独立路由页。
 -->
@@ -25,21 +26,13 @@
     @open="onOpen"
   >
     <div class="held-card">
-      <div class="held-header">
-        <span class="held-subtitle">
-          <el-icon><User /></el-icon>
-          <span>{{ workerId ? '当前工人' : '未识别' }}</span>
-          <span class="held-count-inline"
-            >已加载 {{ count }} 件<template v-if="total > count"
-              >（共 {{ total }} 件）</template
-            ></span
-          >
-        </span>
-        <el-button size="small" link :loading="loading" @click="refresh">
-          <el-icon><Refresh /></el-icon>
-          <span>刷新</span>
-        </el-button>
-      </div>
+      <HeldPartsHeader
+        :worker-id="workerId"
+        :count="count"
+        :total="total"
+        :loading="loading"
+        @refresh="refresh"
+      />
 
       <HeldPartsList
         :items="parts"
@@ -54,7 +47,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { Refresh, User } from '@element-plus/icons-vue';
+import HeldPartsHeader from './HeldPartsHeader.vue';
 import HeldPartsList from './HeldPartsList.vue';
 import { useScanHeldQuery } from '@/views/production/scan/composables/useScanListQuery';
 import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
@@ -97,29 +90,15 @@ function onOpen(): void {
 </script>
 
 <style scoped>
+/* 头部（.held-header / .held-subtitle / .held-count-inline）与列表块
+   （.held-list / .held-row / 各 tag）都在 `HeldPartsHeader.vue` / `HeldPartsList.vue`
+   里：它们作用在子组件内部的元素上，留在本文件既作用不到（scoped）也会被第二处复制
+   一份漂移。这里只留把两者串起来的容器。 */
 .held-card {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-.held-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.held-subtitle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #606266;
-  font-size: 13px;
-}
-.held-count-inline {
-  margin-left: 6px;
-  padding: 2px 8px;
-  background: #ecf5ff;
-  color: #409eff;
-  border-radius: 10px;
-  font-weight: 600;
+  /* 与徽章抽屉同值：两处面板的行不贴边 */
+  padding: 0 4px;
 }
 </style>

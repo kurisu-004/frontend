@@ -8,9 +8,9 @@
     2026-10-04：列表端点返回分页信封，N 取 `.items.length`（已加载），抽屉里另标
     「共 M 件」= 信封 total；两者不等即表示受后端 limit 截断（不再谎称是全部）。
   - 点击打开 el-drawer（右侧 rtl，size=400px），列出当前 worker 持有件
-  - 列表块（加载 / 错误 / 空 / 四态 + 行渲染）已整块搬进 `HeldPartsList.vue`，
-    与 `/scan/action` 的「查看持有」弹窗共用同一份渲染（2026-10-11）。本组件只留顶栏
-    按钮、抽屉壳、头部计数与「刷新」按钮
+  - 抽屉里的头部（计数 / 刷新）与列表块（加载 / 错误 / 空 / 四态 + 行渲染）已分别搬进
+    `HeldPartsHeader.vue` / `HeldPartsList.vue`，与 `/scan/action` 的「查看持有」弹窗共用
+    同一份渲染（2026-10-11）。本组件只留顶栏按钮、抽屉壳与把两者串起来的 `.held-card`
   - 数据源 = `useScanHeldQuery`，与放回页 / 送检页**共用同一条 query key** ⇒ 同屏只发
     一次请求，领取/放回/送检后由 mutation 的失效链自动同刷（2026-10-10 前这里是模块级
     `useScanBus` 信号 + 各自 fetchHeld，同一屏对同一个工人发 2 次同参请求且切页无缓存）
@@ -47,24 +47,16 @@
     @open="onOpen"
   >
     <div class="held-card">
-      <div class="held-header">
-        <span class="held-subtitle">
-          <el-icon><User /></el-icon>
-          <span>{{ workerId ? '当前工人' : '未识别' }}</span>
-          <span class="held-count-inline"
-            >已加载 {{ count }} 件<template v-if="total > count"
-              >（共 {{ total }} 件）</template
-            ></span
-          >
-        </span>
-        <el-button size="small" link :loading="loading" @click="fetchHeld">
-          <el-icon><Refresh /></el-icon>
-          <span>刷新</span>
-        </el-button>
-      </div>
+      <!-- 2026-10-11：头部（计数 / 刷新）与下面的列表块（`HeldPartsList`）都收敛成
+           域内共用件，与 `/scan/action` 的「查看持有」弹窗共用同一份渲染。 -->
+      <HeldPartsHeader
+        :worker-id="workerId"
+        :count="count"
+        :total="total"
+        :loading="loading"
+        @refresh="fetchHeld"
+      />
 
-      <!-- 2026-10-11：列表块（含加载 / 错误 / 空三态）整块挪进 `HeldPartsList`，
-           与 `/scan/action` 的「查看持有」弹窗共用同一份渲染。 -->
       <HeldPartsList
         :items="parts"
         :loading="loading"
@@ -96,7 +88,8 @@
  *   所以抽屉打开时看到的已经是刷新后的列表。
  */
 import { computed, ref, watch } from 'vue';
-import { Box, Refresh, User } from '@element-plus/icons-vue';
+import { Box } from '@element-plus/icons-vue';
+import HeldPartsHeader from './HeldPartsHeader.vue';
 import HeldPartsList from './HeldPartsList.vue';
 import { useScanHeldQuery } from '@/views/production/scan/composables/useScanListQuery';
 import { scanListErrorText } from '@/views/production/scan/composables/scanListErrorMessage';
@@ -164,31 +157,9 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* 面板自身的 4px 内边距（叠在抽屉体自带的 padding 之上），两处面板同值 */
   padding: 0 4px;
 }
-.held-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.held-subtitle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #606266;
-  font-size: 13px;
-}
-.held-count-inline {
-  margin-left: 6px;
-  padding: 2px 8px;
-  background: #ecf5ff;
-  color: #409eff;
-  border-radius: 10px;
-  font-weight: 600;
-}
-// 列表块的样式（.held-list / .held-row / 各个 tag）随 2026-10-11 的抽取一起搬进
-// `HeldPartsList.vue`：它们作用在子组件内部的元素上，留在本文件既作用不到（scoped）也
-// 会被第二处复制一份漂移。这里只留头部计数与按钮样式。
 .muted-inline {
   color: #909399;
   margin-left: 2px;

@@ -285,10 +285,10 @@ describe('零件 / 装配件树表：勾选不联动（checkStrictly）+ 子件�
   const tables: [
     string,
     (rows: PartTreeRow[]) => VueWrapper,
-    { mount: string; event: 'selectionChange' | 'update:selectedRows' },
+    { event: 'selectionChange' | 'update:selectedRows' },
   ][] = [
-    ['详情页表', mountLineItemsTable, { mount: '详情页', event: 'selectionChange' }],
-    ['草稿卡片表', mountDraftCard, { mount: '草稿卡片', event: 'update:selectedRows' }],
+    ['详情页表', mountLineItemsTable, { event: 'selectionChange' }],
+    ['草稿卡片表', mountDraftCard, { event: 'update:selectedRows' }],
   ];
 
   it.each(tables)(

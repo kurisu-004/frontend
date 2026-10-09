@@ -17,6 +17,9 @@
 // 场景取「非 PDF 图纸（STEP）」：PDF / 图片走 content 正常预览、根本没有下载按钮，
 // 只有非 PDF 才让「下载 vs 不可见」这条差异可断言。
 //
+// 同一条闸门还管着**提示文案**（`.non-pdf-hint`）：文案与按钮必须同进同出。只藏按钮
+// 不改文案，被拒的角色会读到一句「请下载后查看」—— 指向一个不在屏幕上的按钮。
+//
 // mount 的两个前提（缺一个就整页 setup 失败、不是只少一个按钮）：
 //   - pinia：`usePermissions()` → `useAuthStore()`；
 //   - VueQueryPlugin + QueryClient：auth store 在 setup 第一行就 `useQueryClient()`。
@@ -206,6 +209,11 @@ describe.each(PAGES)('%s：预览弹窗的「下载文件」按钮闸门', (_nam
     // 非 PDF 分支的下载按钮是「唯一直出路」的那一个
     expect(w.find('.mock-dialog').exists(), '预览弹窗未打开').toBe(true);
     expect(downloadButtons(w)).toHaveLength(0);
+    // 提示文案与按钮**共用同一道闸门**：拿不到下载入口就不能读到「请下载后查看」——
+    // 那是指向一个不在屏幕上的按钮的死胡同。只藏按钮不改文案，这里就会红。
+    const hint = w.find('.mock-dialog .non-pdf-hint').text();
+    expect(hint).toContain('请联系管理员');
+    expect(hint).not.toContain('请下载后查看');
     w.unmount();
   });
 
@@ -215,6 +223,8 @@ describe.each(PAGES)('%s：预览弹窗的「下载文件」按钮闸门', (_nam
     await openStepPreview(w);
     const btns = downloadButtons(w);
     expect(btns, '放行角色应看到下载按钮').toHaveLength(1);
+    // 放行角色的文案仍是「请下载后查看」（闸门是按角色切，不是把所有文案都改口）
+    expect(w.find('.mock-dialog .non-pdf-hint').text()).toContain('请下载后查看');
     await btns[0]!.trigger('click');
     await flushPromises();
     expect(h.getDownloadUrl).toHaveBeenCalledWith('9001');

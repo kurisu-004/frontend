@@ -106,7 +106,7 @@
           data-testid="held-btn"
           @click="heldDialogOpen = true"
         >
-          <el-icon :size="48"><Box /></el-icon>
+          <el-icon :size="48"><Tickets /></el-icon>
           <span class="action-label">查 看</span>
           <span class="action-desc">
             查看当前持有的零件<template v-if="heldCount > 0">（{{ heldCount }} 件）</template>
@@ -123,7 +123,7 @@
 import { computed, onBeforeMount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { Avatar, Back, Box, Check, Refresh } from '@element-plus/icons-vue';
+import { Avatar, Back, Box, Check, Refresh, Tickets } from '@element-plus/icons-vue';
 import {
   ACTION_LABEL,
   useScanSession,

@@ -426,6 +426,10 @@ describe('ScanActionPicker：查看持有（2026-10-11 新增）', () => {
     await mountPicker(makeUser('h4', [SHELF_P1.id, SHELF_I1.id]));
     expect(h.fetchScanHeld).toHaveBeenCalled();
     expect(h.fetchScanHeld.mock.calls[0]![0]).toEqual({ workerId: '190000000000009', limit: 200 });
+    // 本页的按钮角标与弹窗各挂了一个 observer，同键 ⇒ 同屏只发**一次**请求。这是子任务
+    // 的核心验收点（「不新增任何请求」），只钉入参钉不住它 —— 有人把弹窗的 params 改成
+    // 另一个形状时键会分裂成两条、入参断言仍绿。
+    expect(h.fetchScanHeld).toHaveBeenCalledTimes(1);
   });
 
   it('H5：加急 / 交期 / 工序各有值才渲染；没有工序链时工序整块不出现（不显示假占位）', async () => {

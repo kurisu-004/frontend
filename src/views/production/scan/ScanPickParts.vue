@@ -233,7 +233,13 @@
         <div v-else class="non-pdf-preview">
           <el-icon :size="48" color="#67c23a"><Picture /></el-icon>
           <p class="non-pdf-name">{{ previewFile.original_filename }}</p>
-          <p class="non-pdf-hint">HEIC 格式浏览器不直接支持预览，请下载后查看。</p>
+          <p class="non-pdf-hint">
+            {{
+              canDownload
+                ? 'HEIC 格式浏览器不直接支持预览，请下载后查看。'
+                : 'HEIC 格式浏览器不直接支持预览，当前账号不支持下载，请联系管理员获取。'
+            }}
+          </p>
           <el-button v-if="canDownload" type="primary" @click="downloadPreview">
             <el-icon><Download /></el-icon><span>下载文件</span>
           </el-button>
@@ -243,13 +249,7 @@
       <div v-else class="non-pdf-preview">
         <el-icon :size="48" color="#909399"><Files /></el-icon>
         <p class="non-pdf-name">{{ previewFile?.original_filename || '该零件暂无图纸' }}</p>
-        <p class="non-pdf-hint">
-          {{
-            previewFile
-              ? `${previewFile.file_type} 文件不支持浏览器内嵌预览，请下载后查看。`
-              : '请上传图纸后再预览。'
-          }}
-        </p>
+        <p class="non-pdf-hint">{{ nonPdfHint }}</p>
         <el-button v-if="previewFile && canDownload" type="primary" @click="downloadPreview">
           <el-icon><Download /></el-icon><span>下载文件</span>
         </el-button>
@@ -454,6 +454,18 @@ const canDownload = computed<boolean>(() =>
     CNC_PROGRAMMER: isCncProgrammer.value,
   }),
 );
+
+/**
+ * 非 PDF 图纸那张卡片的提示文案，与「下载文件」按钮**共用 `canDownload` 闸门**：
+ * 拿不到下载入口的角色不能读到一句「请下载后查看」—— 那是指向一个不在屏幕上的
+ * 按钮的死胡同。改口成「请联系管理员」是把已知取舍如实讲出来，不是报错兜底。
+ */
+const nonPdfHint = computed<string>(() => {
+  if (!previewFile.value) return '请上传图纸后再预览。';
+  return canDownload.value
+    ? `${previewFile.value.file_type} 文件不支持浏览器内嵌预览，请下载后查看。`
+    : `${previewFile.value.file_type} 文件不支持浏览器内嵌预览，当前账号不支持下载，请联系管理员获取。`;
+});
 
 async function downloadPreview(): Promise<void> {
   if (!previewFile.value) return;
