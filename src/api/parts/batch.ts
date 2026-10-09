@@ -8,13 +8,13 @@
 // 批次（t_part_batch），不是 part。批次集合读 `GET /parts/{part_id}/batches` 留在
 // part 域（操作对象是「某个 part 的批次集合」）。
 //
-// 跨子域类型引用：PartItem / PartCreatePayload 定义在 ./crud；本文件所有批量响应
+// 跨子域类型引用：PartDetailDto / PartCreatePayload 定义在 ./crud；本文件所有批量响应
 // （DTO / 失败明细）都涉及单件 DTO 与单件创建 payload，因此仅 type-only 导入，
 // 运行时不会产生 ESM 循环。
 
 import { api } from '@/api/http';
 import type { FileBinding } from '@/types/part_file';
-import type { PartCreatePayload, PartItem } from './crud';
+import type { PartCreatePayload, PartDetailDto, PartOutDto } from './crud';
 
 export interface PartBatchFailure {
   index: number;
@@ -29,7 +29,7 @@ export interface PartBatchFailure {
  * 失败项不占位，所以这个下标是「建出来的 part ↔ caller 的哪一行」的唯一可靠锚 ——
  * 不带它的话，调用方无法把 part 和本地行对应起来，也就无法做后置补传。
  */
-export type CreatedPartItem = PartItem & { sourceIndex: number };
+export type CreatedPartItem = PartDetailDto & { sourceIndex: number };
 
 export interface PartBatchResult {
   created: CreatedPartItem[];
@@ -116,7 +116,7 @@ interface PartBatchCreateFailureFE {
 }
 
 interface PartBatchCreateOutFE {
-  /** 后端 `Vec<PartDetailOut>`，结构上与 `PartItem` 兼容（`PartDetailOut` 是超集） */
+  /** 后端 `Vec<PartDetailOut>`，结构上与 `PartDetailDto` 兼容（`PartDetailOut` 是超集） */
   created: unknown[];
   failed: PartBatchCreateFailureFE[];
   /** 2026-09-16 M3：后端 commit 后自清理的失败 tmp 对象 key 列表，前端忽略。 */
@@ -243,7 +243,7 @@ function readCreatedInGroup(
     while (failedInGroup.has(groupCursor)) groupCursor += 1;
     const sourceIndex = groupItems[groupCursor]?.sourceIndex ?? groupCursor;
     groupCursor += 1;
-    return { ...(raw as PartItem), sourceIndex };
+    return { ...(raw as PartDetailDto), sourceIndex };
   });
 }
 
@@ -352,13 +352,18 @@ export async function listPartBatches(partId: string): Promise<PartBatch[]> {
   return resp.data;
 }
 
-/** 取消批次：后端 `CancelBatchRequest { version, reason? }`（batch_id 已是路径）。 */
+/** 取消批次：后端 `CancelBatchRequest { version, reason? }`（batch_id 已是路径）。
+ *
+ *  2026-10-10 订正：出参此前声明成 `PartBatch[]`，实际后端返的是**单个**
+ *  `R<PartOut>`（后端 `prod/batch/handler/lifecycle.rs::cancel_batch`）——
+ *  11 字段 part 级窄投影，**不是**批次数组、也不是批次的行 VO。行数据变化由调用方
+ *  随后的 `listPartBatches` 重拉。 */
 export async function cancelPartBatch(
   batchId: string,
   version: number,
   reason?: string | null,
-): Promise<PartBatch[]> {
-  const resp = await api.post<PartBatch[]>(`/prod/batches/${encodeURIComponent(batchId)}/cancel`, {
+): Promise<PartOutDto> {
+  const resp = await api.post<PartOutDto>(`/prod/batches/${encodeURIComponent(batchId)}/cancel`, {
     version,
     reason,
   });
@@ -459,7 +464,7 @@ export interface BatchToInspectionOutFE {
    *  （2026-08-28 修正，见 inspection.md「ToXxxOut 字段」表）——响应 → 请求的反查
    *  只能靠「位置 + 用 failed[].batch_id 扣除失败项」，不能指望 submitted[].batch_id。 */
   submitted: Array<{
-    part: PartItem;
+    part: PartDetailDto;
     /** 拆批语义（后端 `_split_for_partial_op`）：
      *  - 整批操作（quantity 缺省 / >= 批次量）→ `null`，未拆批；
      *  - 部分操作（quantity < 批次量）→ `Some(remainder_id)`，而 remainder **就是入参
@@ -502,7 +507,7 @@ export interface BatchToShipOutFE {
   /** 与 BatchToInspectionOutFE.submitted 同形同语义（后端 `ToXxxOut` 单 / 批端点共用）：
    *  与请求 items 同序、**不含 batch_id**、失败项不占位。 */
   submitted: Array<{
-    part: PartItem;
+    part: PartDetailDto;
     /** 拆批语义与 `BatchToInspectionOutFE.submitted[].new_batch_id` 逐条一致
      *  （源批次原地减量、remainder 就是入参 batch_id、另立一个数量 = 操作量且 id
      *  不返回的新批次）。 */

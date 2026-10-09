@@ -36,7 +36,8 @@ import {
   updatePart,
   type PartBatch,
   type PartEvent,
-  type PartItem,
+  type PartDetailDto,
+  type PartOutDto,
   type PartUpdatePayload,
 } from '@/api/parts';
 import { enrichAssemblyItem, getAssemblyForPart } from '@/api/assembly';
@@ -86,7 +87,7 @@ function makeEmptyEditForm(): PartEditForm {
 
 /** 2026-09-21 显式返回类型。 */
 export interface UsePartDetailReturn {
-  part: Ref<PartItem | null>;
+  part: Ref<PartDetailDto | null>;
   infoLoading: Ref<boolean>;
   events: Ref<PartEvent[] | null>;
   eventsLoading: Ref<boolean>;
@@ -127,7 +128,9 @@ export interface UsePartDetailReturn {
    *  `fetchBatches` 重拉，不在这里回显。 */
   onSplitBatch: (batch: PartBatch, quantity: number) => Promise<BatchSplitDto | null>;
 
-  onCancelBatch: (batch: PartBatch) => Promise<PartBatch[] | null>;
+  /** 取消批次。出参是 part 级窄投影 `PartOutDto`（后端返单个对象，不是批次数组），
+   *  列表行数据由调用方随后的 `fetchBatches` 重拉。 */
+  onCancelBatch: (batch: PartBatch) => Promise<PartOutDto | null>;
   statusLabel: (s: OrderStatus) => string;
   statusTagType: (s: OrderStatus) => 'primary' | 'success' | 'warning' | 'info' | 'danger';
   statusLabelOf: (s: string | null | undefined) => string;
@@ -156,7 +159,7 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
   const canManageBatches = computed(() => isManager.value || isClerk.value);
 
   // ============ 主数据 ============
-  const part = ref<PartItem | null>(null);
+  const part = ref<PartDetailDto | null>(null);
   const infoLoading = ref(false);
 
   async function fetchPart(): Promise<void> {
@@ -477,15 +480,17 @@ export function usePartDetail(partId: Ref<string>): UsePartDetailReturn {
     }
   }
 
-  async function onCancelBatch(batch: PartBatch): Promise<PartBatch[] | null> {
+  async function onCancelBatch(batch: PartBatch): Promise<PartOutDto | null> {
     try {
       // 2026-10-02：批次锚定 `POST /prod/batches/{batch_id}/cancel`（part 域的
       // `POST /parts/{id}/cancel` 是「取消该 part 全部活跃批次」，两者不要混）。
-      const newBatches = await cancelPartBatch(batch.id, batch.version);
+      // 出参是 part 级窄投影 PartOutDto（后端 cancel_batch 返 `R<PartOut>` 单个对象），
+      // 本函数只判成败返回它给调用方判「操作成功」；批次行数据由 fetchBatches 重拉。
+      const cancelled = await cancelPartBatch(batch.id, batch.version);
       ElMessage.success('批次已取消');
       await fetchPart();
       void fetchEvents();
-      return newBatches;
+      return cancelled;
     } catch (e) {
       ElMessage.error(`取消批次失败：${(e as Error).message}`);
       return null;

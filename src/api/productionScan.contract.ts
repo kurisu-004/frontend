@@ -35,7 +35,7 @@
 //     声明成非 null string，不要拿它判「无交期」。
 
 import type { QueueRefillResultDto } from './productionQueue.contract';
-import type { PartItem } from './parts/crud';
+import type { PartDetailDto } from './parts/crud';
 
 /** `GET /api/v2/prod/scan/pickable` 的 query 入参。
  *
@@ -192,7 +192,7 @@ export interface ScanPickUpRequest {
 /** `POST /api/v2/prod/scan/batches/{batch_id}/pick-up` 出参：part 级 `R<PartOut>`。
  *
  *  取件页只用「这次领取成功了」这一事实，行字段本身不消费（提交后走列表失效重拉），
- *  故这里直接复用 part 域的 `PartItem`（`GET /parts/{id}` 等端点返回的同一个 VO，
+ *  故这里直接复用 part 域的 `PartDetailDto`（`GET /parts/{id}` 等端点返回的同一个 VO，
  *  type-only 导入、编译期擦除）。**注意别与本文件的 `ScanListItemDto` 混用** ——
  *  后者是报工台两条 list 专用的 17 字段窄投影。 */
-export type ScanPickUpResultDto = PartItem;
+export type ScanPickUpResultDto = PartDetailDto;

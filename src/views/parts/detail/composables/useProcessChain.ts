@@ -13,7 +13,7 @@
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
 import { getProcessChainById } from '@/api/processChain';
 import type { ProcessChainByPartDto, ProcessChainStepDto } from '@/api/processChain.contract';
-import type { PartItem, PartBatch } from '@/api/parts';
+import type { PartDetailDto, PartBatch } from '@/api/parts';
 
 /** 2026-09-21 显式返回类型。 */
 export interface UseProcessChainReturn {
@@ -28,7 +28,7 @@ export interface UseProcessChainReturn {
 
 export function useProcessChain(
   partId: Ref<string>,
-  part: Ref<PartItem | null>,
+  part: Ref<PartDetailDto | null>,
   batches: Ref<PartBatch[]>,
   selectedBatchId: Ref<string | null>,
 ): UseProcessChainReturn {
