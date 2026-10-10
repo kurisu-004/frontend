@@ -101,9 +101,12 @@ describe('MailPreviewDialog — iframe 必须沙箱化（M-1 同源 XSS 防线�
 
   it('srcdoc 绑的是服务端返回的 html（绑定名写错时 Vue 只会静默不渲染该属性）', () => {
     const wrapper = mountDialog({});
+    // ⚠️ 断**属性**而不是 `wrapper.find('iframe').html()`：happy-dom 不给 iframe 建嵌套
+    // 浏览上下文，`html()` 返回的是 iframe 元素自身的外层 HTML（含 srcdoc 属性值），
+    // 拿它 `toContain('<script>')` 是**恒真** —— 上一版（review 第 2 轮 B-4）就是这样
+    // 「看着在守、其实没守」。真正想守的「正文原样进属性（不 escape、不 strip 标签，
+    // 隔离靠 sandbox 不靠清洗内容）」由上面那行 `toBe(RESULT.html)` 逐字钉死。
     expect(wrapper.find('iframe').attributes('srcdoc')).toBe(RESULT.html);
-    // 正文原样进属性（不 escape、不 strip 标签）—— 隔离靠 sandbox，不靠「清洗内容」。
-    expect(wrapper.find('iframe').html()).toContain('<script>');
     wrapper.unmount();
   });
 

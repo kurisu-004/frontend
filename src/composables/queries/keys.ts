@@ -703,9 +703,14 @@ export const qk = {
   //   - 40901（OCC 冲突）额外走一次强制重拉 —— 那是「别人已经改过」的信号，本端副本
   //     必然过期（理由同 `useUsersListStore` / `useQueueDispatch`）。
   // ⚠️ **跨页面 / 跨进程的写点不做穷举失效**：定时任务在**后端**按 cron 触发，不经过
-  // 本前端 ⇒ 每天准点发出的那封邮件对应的日志行，本页只会靠 30s 有限 staleTime 或
-  // 用户自己点「刷新」看到。这是既定策略（CLAUDE.md「跨页面写操作不做穷举失效」），
-  // 不是遗漏。
+  // 本前端 ⇒ 每天准点发出的那封邮件对应的日志行，本页只会靠**每次挂载重取**
+  // （本域三条 useQuery 一个 staleTime 都没设，见
+  // `views/mail/digest/composables/useMailDigestQuery.ts` 头注）或用户自己点「刷新」
+  // 看到。这是既定策略（CLAUDE.md「跨页面写操作不做穷举失效」），不是遗漏。
+  // ⚠️ 2026-10-14（review 第 2 轮 B-1）：上一句原写「30s 有限 staleTime」，与
+  // `useMailDigestQuery.ts` 头注「本域不设 staleTime、每次挂载重取」在同一分支内自相
+  // 矛盾（TanStack v5 默认 staleTime = 0，本域没覆盖它 ⇒ 不存在「等 30s 才生效」这回事）。
+  // 已订正为同口径。
   // ============================================================
   /** 定时配置键（`GET /api/v2/mail-digest/config`）。**常量键**：端点不接 Query
    *  extractor、返回全局单行（无行时返回全默认 + version 0），键里没有任何可变量。 */

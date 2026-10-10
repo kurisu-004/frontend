@@ -11,73 +11,96 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
   return out;
 }
 
+/**
+ * 菜单 code 的**穷尽登记清单**（2026-10-14 review 第 2 轮 B-2 由 31 条 `toContain` 收拢而成）。
+ *
+ * 为什么从 `toContain`（子集断言）改成「两数组排序后逐字相等」（穷尽断言）：
+ *   - `expect(codes).toContain('x')` 只断「x 在里面」。fixture 加了节点而清单没登记时，
+ *     **一个都不红** —— 而本用例存在的全部价值就是「新增菜单必须在这里登记」。
+ *     上一轮新增的「总数恰好 32」只是数节点、不校验登记，补不上这个洞（review 第 2 轮
+ *     实测：`process_work_type` 节点在 fixture 里、31 条 `toContain` 里没有，用例照样绿）。
+ *   - 穷尽比较同时盖住两个方向：**fixture 多出的 code** 与 **清单多写的 code** 都会红，
+ *     且重复项也盖住（重复会让排序后的长度对不上）。⇒ 下面那条 `has unique codes` 变成
+ *     纯「错误信息更清楚」的冗余守卫，不再是唯一防线。
+ *
+ * ⚠️ **新增 / 删除任何菜单节点时，必须同步维护这一份数组**（fixture 与数组逐字对应）。
+ * 漏维护的症状是用例红在 `covers all menuCodes exactly` 上 —— 那是本用例在正常工作。
+ *
+ * 数组顺序 = `flatten(ADMIN_MENUS)` 的 DFS 遍历序（父节点先于其 children，同层按数组
+ * 物理顺序），只为 diff 好读；比较前两侧都排序，故这里写错顺序不影响判定。
+ *
+ * 沿革（原用例头注释的计数史，保留只为读懂「为什么是这些 code」）：
+ *   - 2026-09-14：新增 template_management + print_templates_designer（模板管理分组 +
+ *     模板编辑子菜单）+ part_process_chain（menuCode 改名）。
+ *   - 2026-09-16：scan_badge 升顶级（floor_group → auth_group 货架移入 + 扫码台升级 +
+ *     车间软删）。
+ *   - 2026-09-24：template_management + print_templates_designer 随 x-data-spreadsheet
+ *     弃用而下线（用户决策不再做模板编辑器，路由 /print-templates 与 view
+ *     PrintTemplateDesigner 一并删除）。
+ *   - 2026-10-08：delivery_dispatch（送货司机扫码台 /delivery-dispatch）随送货单域重构
+ *     下线 —— 送货入口收进送货单列表页的「送货」按钮（见
+ *     views/com/delivery/DeliveryNoteList.vue），路由与 fixture 节点同步删除。
+ *   - 2026-10-13：mail_group（定时任务/邮件分组）+ mail_digest（交期汇总邮件，
+ *     path /mail/digest）随交期汇总邮件定时任务页新增。
+ *   - 2026-10-14（review 第 1 轮 N-2）：上面两个新 code 此前**只进了 fixture、没进本
+ *     用例**的登记。
+ *
+ * ⚠️ **不再维护「总数 N」这个数字**：自本轮起数量已由穷尽比较隐含（清单多一个、少一个
+ * 都会红），原先的 `has exactly 32 codes` 与注释里的 `30 → 32` 箭头一并删除 —— 再维护
+ * 一个会过期的数字只是多一处漏改的入口。
+ */
+const COVERED_CODES: readonly string[] = [
+  // 顶级
+  'home',
+  'production_stats',
+  'scan_badge',
+  // 分组 + 其子菜单
+  'customer_management',
+  'customers_list',
+  'applicants_list',
+  'order_group',
+  'parts_list',
+  'parts_new',
+  'delivery_notes_manage',
+  'repair_receive',
+  'production_group',
+  'process_work_type',
+  'part_process_chain',
+  'pending_programming',
+  // 2026-08-26 补回 / 2026-09-11 复查：router /production/worker-queue 无 allowRoles
+  // 短路 ⇒ dummy 模式必须保留此 code（少它会让该路由在 dummy 下进不去）。
+  'worker_queue',
+  'workers_list',
+  'inspection_pending',
+  'auth_group',
+  'users_list',
+  'shelves_list',
+  'outsource_list',
+  'outsource_companies_list',
+  'outsource_quotes_list',
+  'outsource_send_receive_list',
+  'floor_group',
+  'mail_group',
+  'mail_digest',
+  'settings_root',
+  'work_types_list',
+  'processes_list',
+  'work_type_processes_list',
+];
+
 describe('ADMIN_MENUS', () => {
-  // 2026-09-14：新增 template_management + print_templates_designer（模板管理分组 + 模板编辑子菜单）
-  // + part_process_chain（2026-09-14 menuCode 改名）。code 总数 27 → 30。
-  // 2026-09-16：scan_badge 升顶级（floor_group → auth_group 货架移入 + 扫码台升级 + 车间软删）。
-  // code 总数 27 → 30 → 33。
-  // 2026-09-24：template_management + print_templates_designer 随 x-data-spreadsheet 弃用而下线（用户决策
-  // 不再做模板编辑器，路由 /print-templates 与 view PrintTemplateDesigner 一并删除）。code 总数 33 → 31。
-  // 2026-10-08：delivery_dispatch（送货司机扫码台 /delivery-dispatch）随送货单域重构下线 ——
-  // 送货入口收进送货单列表页的「送货」按钮（见 views/com/delivery/DeliveryNoteList.vue），
-  // 路由与 fixture 节点同步删除。code 总数 31 → 30。
-  // 2026-10-13：mail_group（定时任务/邮件分组）+ mail_digest（交期汇总邮件，
-  // path /mail/digest）随交期汇总邮件定时任务页新增。code 总数 30 → 32。
-  // ⚠️ 2026-10-14（review 第 1 轮 N-2）：上面两个新 code 此前**只进了 fixture、没进本
-  // 用例**，`toContain` 是子集断言所以用例照样绿 —— 而本用例的价值正是「新增菜单必须
-  // 在这里登记」，漏登记等于该价值失效。计数 30 → 32 与 fixture 的 code 数逐字对齐。
-  it('covers all 32 menuCodes', () => {
-    const all = flatten(ADMIN_MENUS);
-    const codes = all.map((n) => n.code);
-    expect(codes).toContain('home');
-    expect(codes).toContain('parts_list');
-    expect(codes).toContain('parts_new');
-    expect(codes).toContain('inspection_pending');
-    expect(codes).toContain('repair_receive');
-    expect(codes).toContain('pending_programming');
-    expect(codes).toContain('outsource_companies_list');
-    expect(codes).toContain('outsource_quotes_list');
-    expect(codes).toContain('outsource_send_receive_list');
-    expect(codes).toContain('delivery_notes_manage');
-    expect(codes).toContain('workers_list');
-    expect(codes).toContain('users_list');
-    // 2026-08-26 补回：router /production/worker-queue 无 allowRoles 短路，dummy 模式必须有此 code
-    expect(codes).toContain('worker_queue');
-    // 2026-09-11：worker_queue 仍必须在菜单树中（router /production/worker-queue 无 allowRoles 短路）
-    expect(codes).toContain('shelves_list');
-    expect(codes).toContain('customers_list');
-    expect(codes).toContain('applicants_list');
-    expect(codes).toContain('work_types_list');
-    expect(codes).toContain('processes_list');
-    expect(codes).toContain('work_type_processes_list');
-    expect(codes).toContain('production_stats');
-    // 2026-08-26 新增：6 个分组 code 断言（生产 DB 暴露给 MANAGER 的分组节点）
-    expect(codes).toContain('customer_management');
-    expect(codes).toContain('order_group');
-    expect(codes).toContain('auth_group');
-    expect(codes).toContain('outsource_list');
-    expect(codes).toContain('floor_group');
-    expect(codes).toContain('settings_root');
-    // 2026-09-11 新增：生产管理分组 + 工序制定菜单 code
-    expect(codes).toContain('production_group');
-    // 2026-09-14 改名：process_design_list → part_process_chain（对齐后端 t_menu）
-    expect(codes).toContain('part_process_chain');
-    // 2026-09-16 新增：扫码台从 floor_group 升级为顶级菜单（sort_order=13）
-    expect(codes).toContain('scan_badge');
-    // 2026-10-13 新增：定时任务/邮件分组 + 其下交期汇总邮件（mail_digest 与
-    // router 的 path 'mail/digest'、后端 seeds/menu.sql 的 code 逐字一致）
-    expect(codes).toContain('mail_group');
-    expect(codes).toContain('mail_digest');
+  // 2026-10-14（review 第 2 轮 B-2）：穷尽登记闸门，见 COVERED_CODES 的 doc。
+  // 排序只为消除遍历顺序差异；两边都排 ⇒ fixture 侧顺序写错也不影响判定。
+  it('covers all menuCodes exactly (fixture 的 code 集合与登记清单逐字相等)', () => {
+    const codes = flatten(ADMIN_MENUS).map((n) => n.code);
+    // 非空兜底：过滤器写错会让比较空转。
+    expect(codes.length).toBeGreaterThan(0);
+    expect([...codes].sort()).toEqual([...COVERED_CODES].sort());
   });
 
-  // ⚠️ 2026-10-14（review 第 1 轮 N-2）：计数是**硬断言**而不是注释里的一句话 ——
-  // 上一轮「总数」只活在用例名与注释里（30），fixture 加了两个节点后没人改它，用例照样绿。
-  // 新增 / 删除菜单节点时这里必须同步改，否则新增的 code 会在下面那条 `toContain` 漏登记
-  // 的情况下悄悄通过。
-  it('has exactly 32 codes', () => {
-    expect(flatten(ADMIN_MENUS)).toHaveLength(32);
-  });
-
+  // ⚠️ 2026-10-14（review 第 2 轮 B-2）：自上面那条改成穷尽比较后，本条在逻辑上**已被
+  // 覆盖**（重复会让排序后长度对不上）—— 保留只为失败信息更直白（这里直接报「哪几个重复」
+  // 而不是抛一坨数组 diff），不是唯一防线。
   it('has unique codes (no dup)', () => {
     const all = flatten(ADMIN_MENUS);
     const codes = all.map((n) => n.code);
