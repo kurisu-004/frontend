@@ -253,11 +253,13 @@ export type UnionListResultSchema = PartListResultSchema;
  *  后端 `PartFileOut` 共 15 字段，本 schema **有意只建 12 个**：`owner_kind`
  *  （PART / ASSEMBLY）、`object_key`（CAS key，消费侧一律走
  *  `GET /files/objects/{id}/url` 拿临时 URL）、`created_by` 三个未建模。
- *  ⚠️ **`owner_kind` 的缺口是有登记的**：它是多态 owner 的判别键，而本 schema 会把
- *  它 strip 掉 ⇒ 列表项无法区分「零件的图纸」与「装配件的总装图」。当前零消费方
- *  （读侧一律已经知道自己在查哪个 owner：零件详情打 `owner_id=part.id`、装配件详情打
- *  `owner_id=assembly.id`，两者本来就分属不同页面），故维持不建模；一旦出现「拿一批
- *  混合 owner 的列表项再按 owner 分流」的消费方，必须同步加 `owner_kind` 字段。 */
+ *  ⚠️ 2026-10-13 订正：**`owner_kind` 的缺口是有登记的**：它是多态 owner 的判别键，
+ *  而本 schema 会把它 strip 掉 ⇒ 列表项无法区分「零件的图纸」与「装配件的总装图」。
+ *  本 schema 只服务 owner 维度列表端点（唯一解析处是 `usePartFilesListQuery` 的
+ *  queryFn），而该 query 的消费方查的全是零件（零件详情 / 制定工序页图纸预览 /
+ *  大屏零件预览）；装配件的文件列表走 `GET /assemblies/{id}` 详情响应的 `files[]`，
+ *  不经列表端点 ⇒ 当前不存在「拿一批混合 owner 的列表项再按 owner 分流」的消费方，
+ *  维持不建模；一旦出现这样的消费方，必须同步加 `owner_kind` 字段。 */
 export const partFileSchema = z.object({
   id: z.string(),
   version: z.number(),
