@@ -176,12 +176,22 @@ myERP 工厂管理系统前端：Vite 8 + Vue 3 + TypeScript + Element Plus。
 - **报工台列表行卡（`.part-row`）的模板 + CSS 只有一份**：`views/production/scan/components/PartRowCard.vue`，四页（取件 / 放回 / 送检 / 查看持有）都用它。`.has-chain` 规则因此**只落在那个组件的 scoped CSS 里**，页面 scoped CSS 里一份都不该有（Vue scoped 会命中子组件根元素，页面里另写一份会盖掉它）。同理 `.preview-btn` 是绝对定位覆盖在卡上，让位只能加在组件根内的 `.part-row-main` 上；`readonly` prop 供查看持有页去 pointer / hover（那页整卡不可点）。守卫：`__tests__/ScanReturnChainFlow.spec.ts` 的源码契约用例（⚠️ 它只拦页面里的 inline `borderLeftColor`，**不拦**页面 scoped CSS 里另写的 class 形态行样式）。
 - `PendingPoolCard.vue` 是**工序投放卡**（不是批次卡），只是盒模型与 BatchCard 对齐，刻意保持独立、不合并。
 
-### PDF 预览
+### 图纸预览
 
-PdfViewer 的缩放模型与承载高度契约（两条都容易被改版静默破坏，各有 spec 守着）。
+图纸预览有**两条**链路（2026-10-13）：首选 `GET /files/objects/{id}/preview` 的 **CI 转图直链**（`usePreviewPolling` 轮询 + `ImagePager` 渲染，浏览器不下载整份 PDF），`GET /files/objects/{id}/content` 的 blob 保留为**「查看原始 PDF」逃生口 + 转图不可用时的自动兜底 + 非图纸文件（3D / G 代码）内嵌预览的唯一形态**。两者不是替代关系 —— `fetchPartFileContent` 零调用点时不要当遗留清掉。
+
+- **每个承载弹窗会同时挂 `ImagePager`（图片模式，默认）与 `PdfViewer`（原始 PDF / 兜底）**，两条路径是同一个 `preview.degraded` + `showOriginalPdf` 的合流：一个提供「用户主动退回原始 PDF」，另一个提供「转图端点不支持 / CI 失败 / 等超时」的自动兜底，**合并成一条 watch**，不给降级单开代码路径。
+- **降级必须是有告知的**：`usePreviewPolling` 把每个降级原因填进 `degradedReason`，承载点渲染成一行 `.degrade-hint`。静默兜底会让 CI 挂了无人察觉（现场只看到「预览变慢了 / 变成 PDF 了」）。
+- **两条端点都吃 `items[].id`（文件对象 id），不吃 owner id**：装配件总装图（owner=ASSEMBLY）与零件图纸（owner=PART）走同一条端点，owner 语义由后端按文件行解析。
+- **轮询预算**（`usePreviewPolling` 内常量，注释里有量级理由）：次数上限 30、墙钟上限 120s、单次等待封顶 8s、指数退避倍率 1.6、建议间隔缺失时落 1s 下限。次数闸与墙钟闸各堵一个退化方向（后端建议间隔给太大 / 给 0），少一条就会出现「等五分钟」或「两分钟打上千次请求」。
+- **角色不区分预览路径**：后端 `/preview` 与 `/content` 对 5 个角色（含 `SHELF_ACCOUNT`）都放开，前端不按角色分流。`/files/objects/{id}/url`（下载）**刻意没放开**，前端闸门见 `utils/partsPermissions`。
+
+两个预览组件的缩放模型与承载高度契约（都容易被改版静默破坏，各有 spec 守着）。
+
+- **`ImagePager` 只有单 scale 模型**（`scale` + `tx`/`ty`），不是 `PdfViewer` 的双 scale：图片没有「按新分辨率重渲染」这一步（源图分辨率是 CI 出图时定死的），故 `renderScale`/`viewScale` 合并，`fitPending` + `ResizeObserver` 补算那套也不需要（`<img>` 的 `@load` 一次就给出 `naturalWidth/Height`）。**能力取舍**：图片模式**没有矢量缩放（放大看细节会糊）、没有文字选中**，因此逃生口是必须的而非可选优化 —— 每个承载点都要保留「查看原始 PDF」，组件本体刻意不内置该入口（它不持有 `fileId`、也不知道原始 PDF 在哪）。
 
 - **`PdfViewer` 默认 fit 到容器**（`fit` prop，默认 `true`，全仓所有 `<PdfViewer>` 承载点生效；承载点清单以 `src/components/__tests__/PdfPreviewDialogContract.spec.ts` 的表 + 例外为准，不在本文件数）。`render()` 在 `fit && !userZoomed` 时按 `min(容器宽 / 页宽@1, 容器高 / 页高@1)` 算比例写进 **`renderScale`**（不是 `viewScale` —— CSS transform 放大矢量图只会糊），夹逼区间 `[0.05, 8]` 与 +/- 的 `[0.4, 3]` **刻意不同**（A1 图纸在 1100px 弹窗里需 0.2 上下，套 0.4 下限会撑出容器）。三条要点：① 容器尺寸为 0（宿主尚未布局）时回落 `initialScale` 并由 `ResizeObserver` 补渲一次，该观察者**只在 fit 失败时动作**（跟着每次尺寸变化重渲会造成 canvas layout shift 抖动）；② `userZoomed` 由 `zoomIn` / `zoomOut` / `onWheel` 三条**缩放入口**置位（滚轮只动 `viewScale`，但同样是「我要看多大」的表态）—— 置位的作用是 `render()` 不得再覆写工人选的比例（`zoomIn` 的实现正是「改 `renderScale` → `render()`」，无条件覆写等于 +/- 失效）；③ **清位分两类，口径不同**：**用户动作类**（复位按钮 / 双击、工具栏翻页、外部改 `page` prop）统一调 `resetView()`，它把 `userZoomed`（让 fit 重算）、`viewScale = 1`、`tx = ty = 0` **三样一起**归位 ⇒ 语义是「回到整页塞进容器的大小」，不是「回到 1 倍」；三样缺一「翻页 = 重新适应整页」就不成立 —— 不清标志则滚轮用户下一页仍以「fit × 自己的缩放」呈现、出容器，**不清平移则翻页后看到的是新一页的一角**（`tx`/`ty` 是 stage 的 CSS translate，与两个 scale 互不干涉）。切 `url` 也归这一类（同样三样归位，只是不调 `resetView` 而是调 `load()`，避免重复渲染）。翻页/复位重置是刻意的：图纸各页图幅不同（封面 A0、正图 A4 混排），带着上一页的缩放或平移都会让下一张图看不到全貌。**宿主改配置类**只有 `props.fit` watch，它**只清 `userZoomed`、刻意不动 `viewScale` 与平移** —— 切 `fit` 是宿主行为而非用户对这份文件的动作，用户没表态就不替他丢掉已调好的缩放与位置（该 prop 目前零调用方，是留给将来承载点的 opt-out 口子）。`fit` 是 opt-out 口子：将来某个承载点要固定比例时传 `:fit="false"`，不要改组件本体。守卫：`src/components/__tests__/PdfViewer.spec.ts`（含滚轮翻页、拖动平移后翻页、ResizeObserver 补渲三条用例）。
-- **用 `el-dialog` 承载 `PdfViewer` 处必须挂 `.pdf-preview-dialog`**（高度契约 + 两支规则见 `src/styles/index.scss`）。**例外**是「宿主自带确定高度、无需该 class」的那些承载点（`DrawingPreviewPane` 的 `.file-preview` flex 链、`PartPreviewDialog` 的 aspect-ratio、`OutsourceQuotePdfPreview` 的 `.drawing-frame-wrap` 自给 `height:70vh` + column）—— 名单以 `src/components/__tests__/PdfPreviewDialogContract.spec.ts` 头注释的清单为准，不在本文件数。守卫同该 spec（白名单是人工判定的，新增承载点要一并加表）。
+- **用 `el-dialog` 承载预览组件处必须挂对应 class**：`.pdf-preview-dialog`（`PdfViewer`）/ `.img-preview-dialog`（`ImagePager`），两支高度规则在 `src/styles/index.scss` 里逐条并列。同一个弹窗承载两者时**两个 class 都要挂**。**例外**是「宿主自带确定高度、无需该 class」的那些承载点（`DrawingPreviewPane` 的 `.file-preview` flex 链、`PartPreviewDialog` 的 aspect-ratio、`OutsourceQuotePdfPreview` 的 `.drawing-frame-wrap` 自给 `height:70vh` + column）—— 名单以 `src/components/__tests__/PdfPreviewDialogContract.spec.ts` 头注释的清单为准，不在本文件数。守卫同该 spec（白名单是人工判定的，新增承载点要一并加表）。
 
 ### 货架自动选择（2026-10-10）
 

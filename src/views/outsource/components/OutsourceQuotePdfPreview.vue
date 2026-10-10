@@ -4,6 +4,14 @@
   纯受控组件：可见性 / url / title / isPdf / loading 全由外部传入。
   - 内部用 el-dialog + PdfViewer / el-image 渲染
   - 不持有 blob URL（caller 持有 blob URL 并在关闭时 revoke）
+
+  2026-10-13：PDF 走**两条**路径（props 三元化，见下）
+    - `pages` 非空 ⇒ 图片模式（caller 从 `GET /files/objects/{id}/preview` 拿到 CI 转好的
+      逐页图片直链）→ `<ImagePager>`，浏览器不下载整份 PDF；
+    - 否则 ⇒ 原始 PDF 模式，`url`（blob）喂 PdfViewer。两条触发：caller 的转图降级
+      自动兜底，或用户点「查看原始 PDF」（图片模式少矢量缩放与文字选中，看细节要能退回）。
+  `degradeHint` 是 caller 给的降级原因文案，在两条路里都渲染 —— 静默换渲染路径会让
+  CI 故障无人察觉。
 -->
 <template>
   <el-dialog
@@ -17,7 +25,15 @@
     @update:model-value="(v: boolean) => $emit('update:model-value', v)"
     @close="$emit('close')"
   >
-    <div v-if="url" class="drawing-frame-wrap">
+    <div v-if="degradeHint" class="degrade-hint">{{ degradeHint }}</div>
+    <div v-if="pages.length" class="drawing-image-mode">
+      <ImagePager :pages="pages" />
+      <el-button class="original-btn" plain @click="$emit('viewOriginal')">
+        <el-icon><Document /></el-icon>
+        <span>查看原始 PDF</span>
+      </el-button>
+    </div>
+    <div v-else-if="url" class="drawing-frame-wrap">
       <PdfViewer v-if="isPdf" :url="url" />
       <el-image v-else :src="url" :preview-src-list="[url]" fit="contain" class="drawing-image" />
     </div>
@@ -26,18 +42,36 @@
 </template>
 
 <script setup lang="ts">
+import { Document } from '@element-plus/icons-vue';
+import PdfViewer from '@/components/PdfViewer.vue';
+import ImagePager from '@/components/ImagePager.vue';
 import { useDialogSize } from '@/composables/useDialogSize';
 
-defineProps<{
-  modelValue: boolean;
-  url: string | null;
-  title: string;
-  isPdf: boolean;
-}>();
+withDefaults(
+  defineProps<{
+    modelValue: boolean;
+    /** 原始 PDF / 图片的 blob URL（图片模式下不传，由 caller 惰性拉）。 */
+    url: string | null;
+    title: string;
+    isPdf: boolean;
+    /** CI 转好的逐页图片直链；空数组 ⇒ 走原始 PDF 模式。 */
+    pages?: string[];
+    /** 转图降级原因（人类可读）；非空即渲染成一行提示。 */
+    degradeHint?: string | null;
+  }>(),
+  {
+    // 缺省给空数组而不是 optional：模板里 `pages.length` 就不必到处判空，
+    // 而「没传」与「传了空数组」在本组件的语义里是同一件事（走原始 PDF 模式）。
+    pages: () => [],
+    degradeHint: null,
+  },
+);
 
 defineEmits<{
   (e: 'update:model-value', value: boolean): void;
-  (e: 'close'): void;
+  /** `close`：弹窗关闭（caller 在此 revoke blob）。`viewOriginal`：图片模式下点
+   *  「查看原始 PDF」⇒ caller 拉 blob 并切回原始 PDF 模式。 */
+  (e: 'close' | 'viewOriginal'): void;
 }>();
 
 const dialogSize = useDialogSize({ desktopWidth: 900 });
@@ -78,5 +112,31 @@ const dialogSize = useDialogSize({ desktopWidth: 900 });
 }
 .muted {
   color: var(--text-secondary);
+}
+
+/* 2026-10-13：图片模式容器，与 .drawing-frame-wrap 同款（70vh + column），
+   高度来源同样是自己给而不是靠 dialog body。 */
+.drawing-image-mode {
+  width: 100%;
+  height: 70vh;
+  min-height: 280px;
+  overflow: hidden;
+  background: #f5f7fa;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  justify-content: center;
+}
+.original-btn {
+  align-self: center;
+  flex-shrink: 0;
+}
+/* 降级提示：有告知的兜底，不是静默换渲染路径。占位小、不抢画面。 */
+.degrade-hint {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #e6a23c;
+  text-align: center;
 }
 </style>

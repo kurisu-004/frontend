@@ -38,6 +38,14 @@
   - apiGetPreviewUrl?:   (fileId) => Promise<string> | string   预览 URL（默认走 v2 /files/objects/{id}/content）
   - apiGetDownloadUrl?:  (fileId) => Promise<string> | string   下载 URL（默认走 v2 /files/objects/{id}/url）
   - apiDelete?:          (fileId) => Promise<void>              删除（默认走 v2 /files/objects/{id}/delete）
+
+  2026-10-13 图纸预览切 CI 转图直链：
+  - PDF 的**首选**渲染路径变成 `GET /files/objects/{id}/preview` → `<ImagePager>`；
+    `/content` blob + PdfViewer 降级为「查看原始 PDF」逃生口 + 转图不可用时的自动兜底。
+  - 图片类文件（PNG/JPG…）**不参与转图**，仍是 blob → el-image；3D 模型走 StepViewer。
+  - 降级原因渲染成弹窗内一行提示（`.degrade-hint`）—— 静默换渲染路径会让 CI 故障无人察觉。
+  → 预览弹窗的 el-dialog 挂 `pdf-preview-dialog` + `img-preview-dialog` 两个 class：
+    两个预览组件的 flex 高度链同款，高度契约规则在 styles/index.scss 里逐条并列。
 -->
 <template>
   <el-card shadow="never" class="files-card">
@@ -145,23 +153,39 @@
       </div>
     </div>
 
-    <!-- 预览弹窗（全屏）：PDF 用 PdfViewer；图片用 el-image；3D 模型走 StepViewer；其它走下载提示 -->
+    <!-- 预览弹窗（全屏）：PDF 有两条路（CI 转图直链 / 原始 PDF 兜底）；图片走 el-image；
+         3D 模型走 StepViewer；其它走下载提示 -->
     <el-dialog
       v-model="previewVisible"
-      class="pdf-preview-dialog"
+      class="pdf-preview-dialog img-preview-dialog"
       :title="previewTitle"
       fullscreen
       :close-on-click-modal="false"
       destroy-on-close
       @closed="onPreviewClosed"
     >
-      <PdfViewer
-        v-if="previewFile && isPdf(previewFile.file_type)"
-        :url="previewBlobUrl"
-        :page="defaultPage"
-      />
+      <!-- 图片模式：CI 转好的逐页图片直链（默认路径，不下载整份 PDF）。 -->
+      <div v-if="showImageMode" class="pdf-image-mode">
+        <ImagePager :key="`img-${previewFile?.id}`" :pages="preview.pages.value" />
+        <el-button class="original-btn" plain @click="showOriginalPdf = true">
+          <el-icon><Document /></el-icon>
+          <span>查看原始 PDF</span>
+        </el-button>
+      </div>
+      <!-- 原始 PDF：用户点「查看原始 PDF」，或转图降级（端点不支持 / CI 失败 / 超时）。 -->
+      <div v-else-if="isPdfType(previewFile)" class="pdf-original-mode">
+        <div v-if="preview.degradedReason.value" class="degrade-hint">
+          {{ preview.degradedReason.value }}
+        </div>
+        <div v-if="!previewBlobUrl" class="preview-loading">
+          <el-icon :size="32" class="is-loading"><Loading /></el-icon>
+          <span>加载原始 PDF…</span>
+        </div>
+        <PdfViewer v-else :key="`pdf-${previewFile?.id}`" :url="previewBlobUrl" :page="defaultPage" />
+      </div>
       <div v-else-if="previewFile && isImage(previewFile.file_type)" class="image-preview-wrap">
-        <!-- 2026-07-14：HEIC 不被浏览器支持 → 走下载；其它图片走 el-image 全屏预览 -->
+        <!-- 2026-07-14：HEIC 不被浏览器支持 → 走下载；其它图片走 el-image 全屏预览。
+             2026-10-13：图片类文件不参与 CI 转图，仍是 blob → el-image。 -->
         <el-image
           v-if="!isHeic(previewFile.file_type)"
           :src="previewBlobUrl"
@@ -230,12 +254,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, ElUpload, type UploadInstance } from 'element-plus';
 import {
   Delete,
+  Document,
   DocumentRemove,
   Download,
+  Loading,
   Picture,
   Files,
   Printer,
@@ -243,10 +269,12 @@ import {
 } from '@element-plus/icons-vue';
 import type { UploadFile } from 'element-plus';
 import PdfViewer from './PdfViewer.vue';
+import ImagePager from './ImagePager.vue';
 // 2026-09-20 PR step-viewer-integration：3D 模型内嵌预览组件 + 文件类型判定
 import StepViewer from './cad-viewer/StepViewer.vue';
 import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
 import { deletePartFile, fetchPartFileContent, getPartFileDownloadUrl } from '@/api/files/objects';
+import { usePreviewPolling } from '@/composables/usePreviewPolling';
 import { printPartDrawing } from '@/api/parts';
 import type { PartFileItem, PartFileKind } from '@/types/part_file';
 
@@ -375,8 +403,40 @@ const previewVisible = ref(false);
 const previewFile = ref<PartFileItem | null>(null);
 const previewBlobUrl = ref<string>('');
 const files = computed<PartFileItem[]>(() => props.files);
+// 2026-10-13：用户在图片模式下点「查看原始 PDF」。PDF 模式少矢量缩放与文字选中，
+// 看细节时必须能退回原始 PDF —— 它与「转图降级自动兜底」合并成同一条 blob 路径。
+const showOriginalPdf = ref(false);
+
+/**
+ * PDF 图纸的 CI 转图轮询（2026-10-13）。
+ *   - fileId：只有 PDF 才有转图；图片 / 3D / G 代码传空串 ⇒ 零请求。
+ *   - enabled：预览弹窗关着时不轮询（否则关掉后还在后台转图占队列）。
+ */
+const preview = usePreviewPolling({
+  fileId: () =>
+    previewFile.value && isPdf(previewFile.value.file_type) ? previewFile.value.id : '',
+  enabled: () => previewVisible.value,
+});
+
+/**
+ * 当前该显示哪条路（2026-10-13）。
+ *
+ * ⚠️ `showImageMode` 必须同时看 `!wantsOriginalPdf`，不能只看 `preview.ready`：
+ * 转图 ready 之后 `ready` 就一直是 true，只用它做分支条件的话，「查看原始 PDF」按钮
+ * 会变成**空操作** —— 点击确实触发了 blob 拉取，但模板仍停在图片模式分支上，用户
+ * 看不到任何变化，逃生口形同虚设。
+ */
+const wantsOriginalPdf = computed<boolean>(() => showOriginalPdf.value || preview.degraded.value);
+const showImageMode = computed<boolean>(
+  () => isPdfType(previewFile.value) && preview.ready.value && !wantsOriginalPdf.value,
+);
 
 const previewTitle = computed<string>(() => `预览 — ${previewFile.value?.original_filename ?? ''}`);
+
+/** 当前选中的是不是一份 PDF（决定走「转图 / 原始 PDF」两条路还是其它分支）。 */
+function isPdfType(f: PartFileItem | null): boolean {
+  return f !== null && isPdf(f.file_type);
+}
 
 // 2026-09-20 PR step-viewer-integration：StepViewer fullscreen 高度。
 // el-dialog fullscreen 时 body padding ~16px + header ~56px → 大致留 calc(100vh - 80px)
@@ -473,6 +533,10 @@ async function onPick(uploadFile: UploadFile): Promise<void> {
 async function onPreview(f: PartFileItem): Promise<void> {
   previewFile.value = f;
   previewVisible.value = true;
+  showOriginalPdf.value = false;
+  // PDF 不在这里拉 blob —— 先走转图；用户点「查看原始 PDF」或转图降级时再拉
+  // （见下方 watch）。提前拉会让「图片模式省带宽」这件事当场作废。
+  if (isPdf(f.file_type)) return;
   try {
     // 2026-09-16 T3.5：v2 实际路径走 /files/objects/{id}/content；
     // 优先级 props.apiGetPreviewUrl > 默认 fetchPartFileContent。
@@ -485,6 +549,31 @@ async function onPreview(f: PartFileItem): Promise<void> {
     ElMessage.error((e as Error).message ?? '加载文件失败');
   }
 }
+
+/**
+ * PDF 的原始 PDF 路径有两条触发：用户点「查看原始 PDF」，或转图轮询降级。
+ * 二者合并成一条 watch —— 降级那一刻页面上的表现与用户主动切换完全一致，
+ * 不给降级单开一条代码路径，免得两条路径哪天改出行为差。
+ */
+watch(
+  [() => previewFile.value, wantsOriginalPdf],
+  async ([f, wantOriginal]) => {
+    if (!f || !isPdf(f.file_type)) return;
+    if (!wantOriginal) return;
+    try {
+      const blob = props.apiGetPreviewUrl
+        ? await fetchPreviewBlob(f.id, props.apiGetPreviewUrl)
+        : await fetchPartFileContent(f.id);
+      // 期间用户可能已经关掉弹窗或换文件 ⇒ 迟到的 blob 直接丢弃，不写进当前预览。
+      if (previewFile.value?.id !== f.id) return;
+      if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
+      previewBlobUrl.value = URL.createObjectURL(blob);
+    } catch (e) {
+      ElMessage.error((e as Error).message ?? '加载原始 PDF 失败');
+    }
+  },
+  { immediate: true },
+);
 
 /**
  * 把 caller 注入的 apiGetPreviewUrl 返回值（URL 字符串）走 `api` 实例 GET 拉 blob。
@@ -509,6 +598,8 @@ function onPreviewClosed(): void {
     URL.revokeObjectURL(previewBlobUrl.value);
     previewBlobUrl.value = '';
   }
+  showOriginalPdf.value = false;
+  preview.stop();
 }
 
 async function downloadCurrent(): Promise<void> {
@@ -726,5 +817,37 @@ defineExpose({
   margin: 0;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+/* 2026-10-13：PDF 预览拆成「图片模式 / 原始 PDF 模式」两个容器。两者都是弹窗 body 的
+   直接子元素（flex item），故各自 `flex: 1 + min-height: 0` 才能填满 body 的高度。 */
+.pdf-image-mode,
+.pdf-original-mode {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.original-btn {
+  align-self: center;
+  flex-shrink: 0;
+}
+/* 降级提示：有告知的兜底，不是静默换渲染路径。占位小、不抢画面。 */
+.degrade-hint {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #e6a23c;
+  text-align: center;
+}
+.preview-loading {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: 15px;
 }
 </style>

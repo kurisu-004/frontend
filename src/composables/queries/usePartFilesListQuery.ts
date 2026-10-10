@@ -14,6 +14,13 @@
 //   - reactive params：ownerPartId 是 MaybeRefOrGetter<string | null | undefined>。
 //     null/空 → enabled=false + queryFn 二次守卫返回空结果，避免发 ?owner_id= 请求。
 //   - 不写 retry：信任 main.ts 全局 queries.retry: 0。
+//
+// 2026-10-13 图纸预览切 CI 转图直链后，本 hook 的边界没有变，但要记两条容易踩的：
+//   - **两条预览端点都吃 `items[].id`（文件对象 id），不吃 `owner_id`**。`/preview`
+//     （CI 转图直链，首选）与 `/content`（原始 PDF 兜底）都只认文件对象 id，owner 语义
+//     由后端按文件行解析 —— 本 hook 的 queryKey 里是 owner id，传错一个层级就 404。
+//   - **转图轮询刻意不进本 hook**：`usePreviewPolling` 是单文件、单次的编排（带自己的
+//     退避预算），不是一个可按 owner 缓存的读。它走 `/preview` 单独发，承载点各自持有。
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';

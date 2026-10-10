@@ -7,7 +7,7 @@
 // - 权限矩阵（cancel / delete / edit-content / add-child / upload-pdf）
 // - 编辑元数据（updateAssembly）+ 取消 / 删除
 // - 添加子件 + 上传总装 PDF
-// - 子件图号点击 → 全屏 PDF 预览（Blob URL）
+// - 子件图号点击 → 图纸预览（2026-10-13：首选 CI 转图直链，/content blob 为兜底）
 // - 客户列表加载（编辑对话框用）+ 申请人搜索
 // - 状态标签 helpers
 //
@@ -138,7 +138,7 @@ export interface UseAssemblyDetailReturn {
   deleteAssembly: (serialInput: string) => Promise<boolean>;
   addChild: () => Promise<boolean>;
   uploadPdf: (file: UploadFile) => Promise<boolean>;
-  /** 子件图号点击 → 拉 PDF Blob，返回 blob URL（或抛错）。 */
+  /** 子件图号点击 → 拉原始 PDF Blob（**兜底路径**，首选是 `/preview` 转图直链）。 */
   fetchDrawingBlob: (drawing: PartFileItem) => Promise<string>;
   // helpers
   statusLabel: (s: AssemblyStatus | string) => string;
@@ -449,7 +449,19 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
   }
 
   /**
-   * 拉取 PDF Blob（子件图号点击 → 全屏预览用）。
+   * 拉 PDF Blob（子件图号点击 → 预览用）。
+   *
+   * ⚠️ **2026-10-13 起这是「原始 PDF」兜底路径，不是预览首选**：预览首选是
+   * `GET /files/objects/{id}/preview` 的 CI 转图直链（轮询编排见
+   * `composables/usePreviewPolling.ts`，在 `AssemblyChildrenTable.vue` 里接）。
+   * 本函数仍被两处调用：用户点「查看原始 PDF」，或转图降级（端点不支持 / CI 失败 /
+   * 超时）自动兜底。
+   *
+   * ⚠️ **入参是文件对象，不是装配件**：这里的 `files[]` 来自 `GET /assemblies/{id}`
+   * 详情响应，owner 是 PART（子件）或 ASSEMBLY（总装图），但预览端点与 `/content`
+   * 都只认**文件对象 id**，owner 语义由后端按文件行自己解析 —— 前端只管传 `drawing.id`，
+   * 装配件侧不需要另开一条预览链路。
+   *
    * 调用方负责 URL.revokeObjectURL 释放（onDrawingPreviewClosed）。
    */
   async function fetchDrawingBlob(drawing: PartFileItem): Promise<string> {

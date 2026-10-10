@@ -15,16 +15,23 @@
 //   - POST /files/objects/confirm       COS 直传后的确认绑定（场景 B，配 `api/files/sts.ts`）
 //   - GET  /files/objects               按 owner_id (+kind) 列文件
 //   - GET  /files/objects/{id}/url      临时下载 URL 签发
+//   - GET  /files/objects/{id}/preview  逐页图片预览直链（CI 转图，2026-10-13 新增）
 //   - POST /files/objects/{id}/delete   软删（OCC，body 必带 version）
-//   - GET  /files/objects/{id}/content  原始二进制（blob）
+//   - GET  /files/objects/{id}/content  原始二进制（blob）—— 降级为「查看原始 PDF」兜底
 //
 // 导出数与端点数不等：另有纯 URL 构造器 `getPartFileContentUrl`（不发请求，只拼
-//  `{id}/content` 的路径）与包着它的 `fetchPartFileContent`，两者不单列。
+// `{id}/content` 的路径）与包着它的 `fetchPartFileContent`，两者不单列。
+//
+// **预览链路的两条路**（2026-10-13）：图纸预览首选 `/preview` 拿 CI 转好的逐页图片直链
+// （`getPartFilePreview`），浏览器不再下载整份 PDF 交给 pdf.js；`/content` 保留为
+// 「查看原始 PDF」的逃生口 —— 图片模式没有矢量缩放与文字选中，用户要看细节时仍要能
+// 退回原始 PDF。端点不支持（`isPreviewUnsupportedError` 命中）时也自动走这条兜底。
 
 import { api } from '@/api/http';
 import type {
   ConfirmFileIn,
   FileOwnerKind,
+  FilePreviewResult,
   PartFileItem,
   PartFileListResult,
   PartFileUrlResult,
@@ -113,7 +120,7 @@ export async function confirmFileObject(payload: ConfirmFileIn): Promise<PartFil
 }
 
 // ============================================================
-// 文件对象的增删查（GET /files/objects、/{id}/url、/{id}/delete、/{id}/content）
+// 文件对象的增删查（GET /files/objects、/{id}/url、/{id}/preview、/{id}/delete、/{id}/content）
 // ============================================================
 
 /**
@@ -169,9 +176,47 @@ export async function deletePartFile(fileId: string, version: number): Promise<v
 }
 
 /**
+ * `GET /api/v2/files/objects/{id}/preview`：拿逐页图片预览直链（2026-10-13 新增）。
+ *
+ * 图纸预览的**首选**链路：服务端把 PDF 转成逐页图片，这里只回直链数组。收益是
+ * 浏览器不再下载整份 PDF 交给 pdf.js 解析（大图纸的解析与首帧渲染是秒级的），
+ * 直接把 CDN 图片挂进 `<img>` 即可。
+ *
+ * 三态返回（`state`）：`READY`（`pages` 齐）/ `PENDING`（还在转，看 `retry_after_ms`）/
+ * `FAILED`（`error` 有值）。**轮询与退避由调用侧负责**，本函数只发一次请求 ——
+ * 轮询编排见 `composables/usePreviewPolling.ts`。
+ *
+ * ⚠️ `fileId` 是**文件对象 id**，不是 part / assembly id。装配件总装图（owner=ASSEMBLY）
+ * 与零件图纸（owner=PART）走同一条端点，owner 语义由后端按文件行自己解析，前端只管传 id。
+ *
+ * 端点不支持（`isPreviewUnsupportedError` 命中，如非 PDF / CI 未开通）时消费侧应回落
+ * `/content` 原始 PDF 路径，不要当失败弹错。
+ *
+ * `signal` 供轮询侧中断在途请求（切文件 / 关弹窗时），单发调用可以不传。
+ */
+export async function getPartFilePreview(
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<FilePreviewResult> {
+  const resp = await api.get<FilePreviewResult>(
+    `/files/objects/${encodeURIComponent(fileId)}/preview`,
+    { signal },
+  );
+  return resp.data;
+}
+
+/**
  * `GET /api/v2/files/objects/{id}/content`：返回文件原始二进制（blob）。
  *
- * 用于内嵌预览（PDF / 图片走 el-image / PdfViewer）。URL 走相对路径，
+ * **降级定位（2026-10-13）**：图纸预览首选 `/preview` 的 CI 转图直链，本函数不再
+ * 是预览主力，而是三处仍要它：
+ *   1. 「查看原始 PDF」逃生口 —— 图片模式没有矢量缩放与文字选中，用户要看细节时
+ *      退回原始 PDF；
+ *   2. `/preview` 端点不支持 / 转码失败时的自动兜底（`isPreviewUnsupportedError`）；
+ *   3. 非图纸类文件（3D 模型 STEP/STL、CNC G 代码…）的内嵌预览 —— 它们不参与转图，
+ *      blob 路径是唯一形态。
+ *
+ * 用于内嵌预览（PDF 走 PdfViewer、图片走 el-image）。URL 走相对路径，
  * 与 `api` 实例 baseURL `/api/v2` 拼接，由调用方自行 `axios.get(url, { responseType: 'blob' })`
  * 拉取。这里**只返回 URL 字符串**，避免绑死请求实例 —— FileListCard 需要
  * 既支持 props 注入（外部 axios 实例），也支持默认走 `api`。
@@ -188,6 +233,9 @@ export function getPartFileContentUrl(fileId: string): string {
  *
  * 默认实现：走 `api` 实例 + responseType=blob。FileListCard 在 caller 未注入
  * `apiGetPreviewUrl` 时走这条默认路径。
+ *
+ * 预览链路的定位见 `getPartFileContentUrl` 的 doc（三处仍要它：原始 PDF 逃生口 /
+ * 转图不可用时的兜底 / 非图纸文件的唯一形态），**不要在图纸预览上再新增直调点**。
  */
 export async function fetchPartFileContent(fileId: string): Promise<Blob> {
   const resp = await api.get<Blob>(getPartFileContentUrl(fileId), {

@@ -19,7 +19,13 @@
 // 2026-10-13 后端 files 域重组：列表 / 下载 URL / 内容三条端点硬切
 // `/api/v2/part-files/*` → `/api/v2/files/objects/*`，配对上传硬切
 // `/api/v2/cnc-programs/pairs` → `/api/v2/files/cnc/pairs`。**旧路径 404、无 alias**。
-// 本文件是纯类型定义（无运行时 URL 字面量），故形状逐字未变、只改注释。
+//
+// 2026-10-13 图纸预览切 CI 转图直链：新增 `FilePreviewResult` / `FilePreviewState` 与
+// 降级码白名单 `PREVIEW_UNSUPPORTED_CODES`（见下方小节）。预览链路是**两条**：
+// `GET /files/objects/{id}/preview`（首选，回逐页图片直链，浏览器不下载整份 PDF）与
+// `GET /files/objects/{id}/content`（**保留**，是「查看原始 PDF」逃生口 + 转图不可用
+// 时的兜底 + 非图纸文件内嵌预览的唯一形态）。两者不是替代关系，不要因为切了预览路径
+// 就把 `/content` 当成遗留清掉。
 //
 // 2026-09-16 M3 新增：STS 直传 COS 契约（upload-intents / confirm / FileBinding）。
 // 所有 id 字段保持 string 雪花；file_size 为 string i64；content_sha256 为 64-char 小写 hex。
@@ -110,6 +116,71 @@ export interface PartFileUrlResult {
   /** COS 临时签名下载 URL；每次请求即时签发 */
   download_url: string;
   url_expires_in_seconds: number;
+}
+
+// ============================================================
+// 图纸预览（CI 转图直链）
+// ============================================================
+
+/**
+ * `GET /files/objects/{id}/preview` 的转码态（2026-10-13 新增）。
+ *
+ * - `READY`：转图完成，`pages` 是逐页图片直链（CDN / COS 签名 URL），长度 = `page_count`；
+ * - `PENDING`：CI 仍在转，`pages` 恒为空数组，`retry_after_ms` 是**建议**重试间隔；
+ * - `FAILED`：转码失败，`error` 有值。
+ */
+export type FilePreviewState = 'READY' | 'PENDING' | 'FAILED';
+
+/**
+ * `GET /api/v2/files/objects/{id}/preview` 出参（2026-10-13 新增）。
+ *
+ * 图纸预览的**首选**链路：服务端把 PDF 转成逐页图片，前端只拿直链，浏览器不再下载
+ * 整份 PDF 交给 pdf.js 解析。`/content` 保留为「查看原始 PDF」兜底入口，两者不是
+ * 替代关系（见 `ImagePager.vue` 文件头的能力取舍说明）。
+ *
+ * `retry_after_ms` 在 `READY` / `FAILED` 时**可能为 null**（后端不必给建议间隔），
+ * 故类型是 `number | null`，消费侧读它之前要判空。
+ */
+export interface FilePreviewResult {
+  state: FilePreviewState;
+  /** PDF 总页数；`PENDING` 时后端可能还不知道（0 或 1），消费侧只在 `READY` 时读它。 */
+  page_count: number;
+  /** 逐页图片直链；仅 `READY` 时非空。 */
+  pages: string[];
+  /** 建议重试间隔（毫秒）；仅 `PENDING` 时有意义。 */
+  retry_after_ms: number | null;
+  /** 失败原因；仅 `FAILED` 时有值。 */
+  error: string | null;
+}
+
+/**
+ * 2026-10-13：`/preview` 端点的**不支持**判定码。
+ *
+ * `21116` = 后端「该文件类型不支持转图」（如 3D 模型 / DWG）；`400` / `502` 分别是
+ * 参数不合法与上游 CI 网关失败。三者都**不是**「这张图暂时转不出来」，重试没有意义
+ * ⇒ 消费侧直接回落 `/content` 原始 PDF 路径，不进轮询。
+ *
+ * 与 `PART_FILE_DUPLICATE_CODES` 同款：这里是「哪些码触发降级」的常量白名单，配
+ * `isPreviewUnsupportedError` 判别器。**改动必须同步**两处。
+ */
+export const PREVIEW_UNSUPPORTED_CODES = [400, 502, 21116] as const;
+
+/** 触发「预览端点不可用、按 `/content` 原始 PDF 兜底」的 ApiError.code 取值类型。 */
+export type PreviewUnsupportedCode = (typeof PREVIEW_UNSUPPORTED_CODES)[number];
+
+/**
+ * 判断一个后端错误是否命中 `PREVIEW_UNSUPPORTED_CODES`（读 `ApiError.code`）。
+ *
+ * ⚠️ **只判这些码**，不要顺手把网络错误（`code === 0`）也吞进来：网络错误是「不知道
+ * 能不能转」，不是「不支持转」，静默降级会让现场看到「预览偶尔变成 PDF」却查不出
+ * 网关在抖。轮询上限到点后由 `usePreviewPolling` 显式置 `degraded`，那条路径是有告知的。
+ */
+export function isPreviewUnsupportedError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  return (
+    typeof code === 'number' &&
+    (PREVIEW_UNSUPPORTED_CODES as readonly number[]).includes(code)
+  );
 }
 
 /**

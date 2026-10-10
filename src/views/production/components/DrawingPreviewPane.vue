@@ -30,6 +30,15 @@
     - loadPreviewUrl / loadFirst3DModel 内部 currentFileId 短路，tab 来回切换
       同文件不重复 fetch
     - 切到非 active tab 时 revoke 已有 blob URL，释放内存
+  2026-10-13：图纸 Tab 的 PDF 走**两条**预览路径
+    - 图片模式（默认）：`usePreviewPolling` 打 `GET /files/objects/{id}/preview`，
+      等后端 CI 转出逐页图片直链 → `<ImagePager>`。浏览器不再下载整份 PDF。
+    - 原始 PDF：`/content` blob + PdfViewer。两条触发 —— 用户点「查看原始 PDF」
+      （图片模式少矢量缩放与文字选中，看细节要能退回）或轮询降级（端点不支持 /
+      CI 失败 / 超时）自动兜底。降级原因以一行提示渲染在预览区顶部，不静默换路径。
+    - 图片类文件不参与转图，仍走 blob → el-image（与 3D Tab 的 blob 生命周期同形）。
+    - 本组件的宿主是 `.file-preview`（自带 flex 高度链），不是 el-dialog ⇒
+      **不需要** .pdf-preview-dialog / .img-preview-dialog 那一套高度契约 class。
 -->
 <template>
   <el-card shadow="never" class="preview-card">
@@ -42,11 +51,11 @@
         <span class="preview-title">{{ part.drawing_no }} {{ part.name }}</span>
       </template>
 
-      <!-- 图纸 Tab：PDF / 图片内嵌预览 -->
+      <!-- 图纸 Tab：PDF 走转图直链 / 原始 PDF 两条路，图片走 el-image -->
       <el-tab-pane label="图纸" name="drawings">
         <div v-if="previewUrlLoading" class="preview-loading">
           <el-icon class="is-loading"><Loading /></el-icon>
-          <span>正在加载预览...</span>
+          <span>{{ drawingsBusyHint }}</span>
         </div>
         <div v-else-if="previewUrlError" class="preview-error">
           <el-empty :description="previewUrlError" :image-size="60" />
@@ -55,11 +64,32 @@
           <el-empty description="该零件暂无图纸" :image-size="60" />
         </div>
         <div v-else class="file-preview">
-          <PdfViewer
-            v-if="isPdf(selectedFile.file_type)"
-            :key="selectedFile.id"
-            :url="selectedPreviewBlob ?? ''"
-          />
+          <!-- 图片模式：CI 转好的逐页直链（PDF 专属，图片类文件不参与转图）。 -->
+          <div v-if="showImageMode" class="pdf-image-mode">
+            <ImagePager :key="selectedFile.id" :pages="preview.pages.value" />
+            <el-button class="original-btn" plain @click="showOriginalPdf = true">
+              <el-icon><Document /></el-icon>
+              <span>查看原始 PDF</span>
+            </el-button>
+          </div>
+          <!-- 原始 PDF：用户点「查看原始 PDF」，或转图降级。降级原因显式渲染成一行提示。 -->
+          <div v-else-if="isPdfSelected" class="pdf-original-mode">
+            <div v-if="preview.degradedReason.value" class="degrade-hint">
+              {{ preview.degradedReason.value }}
+            </div>
+            <PdfViewer
+              v-if="selectedPreviewBlob"
+              :key="`original-${selectedFile.id}`"
+              :url="selectedPreviewBlob"
+            />
+            <!-- 还没 blob 的两种情形文案必须分开：转图还在等（没打算要 blob）与
+                 「已决定看原始 PDF、正在拉 blob」。混成一句「加载原始 PDF…」会让仍在
+                 转图的 PDF 显示成「在拉原始 PDF」，而此刻压根没发过 /content 请求。 -->
+            <div v-else class="preview-loading">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <span>{{ wantsOriginalPdf ? '加载原始 PDF…' : '图纸转图中…' }}</span>
+            </div>
+          </div>
           <el-image
             v-else-if="isImage(selectedFile.file_type)"
             :src="selectedPreviewBlob ?? ''"
@@ -107,8 +137,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Loading, Tools } from '@element-plus/icons-vue';
+import { Document, Loading, Tools } from '@element-plus/icons-vue';
 import PdfViewer from '@/components/PdfViewer.vue';
+import ImagePager from '@/components/ImagePager.vue';
 import StepViewer from '@/components/cad-viewer/StepViewer.vue';
 import type { ProcessDesignPartSchema } from '@/composables/queries/schemas';
 import type { PartFileItem } from '@/types/part_file';
@@ -117,6 +148,8 @@ import type { PartFileItem } from '@/types/part_file';
 // useQuery 重取；切 part → ownerKey 变化 → 自动 refetch。
 import { usePartFilesListQuery } from '@/composables/queries/usePartFilesListQuery';
 import { fetchPartFileContent } from '@/api/files/objects';
+// 2026-10-13：图纸预览的 CI 转图轮询（首选路径），/content blob 降级为原始 PDF。
+import { usePreviewPolling } from '@/composables/usePreviewPolling';
 import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
 
 const props = defineProps<{
@@ -148,6 +181,9 @@ const selectedFile = computed<PartFileItem | null>(() => drawings.value[0] ?? nu
 // 2026-09-29 第二轮：图纸 Tab 接 fetchPartFileContent + URL.createObjectURL
 //（后端代理 blob,与 3D Tab 范本对称）。selectedFile 变化 → 触发 loadPreviewUrl
 // 拉新 part 的 blob URL；part 切走时 revokePreviewBlob 防内存泄漏。
+// 2026-10-13：**PDF 不再默认走 blob**。首选是 `preview`（CI 转图直链 → ImagePager），
+// blob 只在两条情况下拉：用户点「查看原始 PDF」，或转图降级（端点不支持 / CI 失败 /
+// 超时）自动兜底。图片类文件不在此列（不参与转图，blob + el-image 是唯一形态）。
 const selectedPreviewBlob = ref<string | null>(null);
 const previewUrlLoading = ref(false);
 const previewUrlError = ref<string | null>(null);
@@ -155,8 +191,48 @@ const previewUrlError = ref<string | null>(null);
 // tab 来回切换且同文件时 loadPreviewUrl/loadFirst3DModel 短路不重复拉
 const currentPreviewFileId = ref<string | null>(null);
 const current3DFileId = ref<string | null>(null);
+// 2026-10-13：用户在图片模式下点「查看原始 PDF」。
+const showOriginalPdf = ref(false);
+
+// 当前选中的是不是一份 PDF（决定走「转图 / 原始 PDF」两条路还是 el-image）。
+const isPdfSelected = computed<boolean>(
+  () => selectedFile.value !== null && isPdf(selectedFile.value.file_type),
+);
+
+/**
+ * PDF 图纸的 CI 转图轮询（2026-10-13）。
+ *   - fileId：只有 PDF 才有转图；图片类传空串 ⇒ 零请求。
+ *   - enabled：图纸 Tab 未激活时不轮询（切走还在后台转图会白占后端队列）。
+ */
+const preview = usePreviewPolling({
+  fileId: () => (isPdfSelected.value && selectedFile.value ? selectedFile.value.id : ''),
+  enabled: () => activeTab.value === 'drawings',
+});
+
+/**
+ * 当前该显示哪条路（2026-10-13）。
+ *
+ * `wantsOriginalPdf` = 用户点了「查看原始 PDF」**或**转图已降级，两条触发合并成一个
+ * 信号喂给下面的 blob watch —— 降级那一刻的表现与用户主动切换完全一致。
+ *
+ * ⚠️ `showImageMode` 必须同时看 `!wantsOriginalPdf`，不能只看 `preview.ready`：
+ * 转图 ready 之后 `ready` 就一直是 true，只用它做分支条件的话，「查看原始 PDF」按钮
+ * 会变成**空操作** —— 点击确实触发了 blob 拉取，但模板仍停在图片模式分支上，用户
+ * 看不到任何变化，逃生口形同虚设。
+ */
+const wantsOriginalPdf = computed<boolean>(() => showOriginalPdf.value || preview.degraded.value);
+const showImageMode = computed<boolean>(
+  () => isPdfSelected.value && preview.ready.value && !wantsOriginalPdf.value,
+);
+
+/** 转图等待期的文案。与「文件列表加载中」区分开，让用户知道是在等 CI 而不是卡了。 */
+const drawingsBusyHint = computed<string>(() =>
+  preview.loading.value ? '图纸转图中…' : '正在加载预览...',
+);
 
 async function loadPreviewUrl(file: PartFileItem): Promise<void> {
+  // 2026-10-13：PDF 走转图优先，不在这里拉 blob；图片类文件仍是 blob（与 3D Tab 同形）。
+  if (isPdf(file.file_type)) return;
   // 2026-09-29 改造：图纸 Tab 从预签 URL 切到 /content 后端代理 blob,
   // 复用 3D Tab 的 URL.createObjectURL 模式 + revoke 防内存泄漏。
   // 后端 Cache-Control: private, max-age=1200 让浏览器 HTTP 缓存接管
@@ -178,13 +254,44 @@ async function loadPreviewUrl(file: PartFileItem): Promise<void> {
   }
 }
 
+/**
+ * PDF 的原始 PDF 路径有两条触发：用户点「查看原始 PDF」，或转图轮询降级。
+ * 二者合并成一条 watch —— 降级那一刻的表现与用户主动切换完全一致，不给降级
+ * 单开一条代码路径，免得两条路径哪天改出行为差。
+ */
+watch(
+  [isPdfSelected, () => selectedFile.value, wantsOriginalPdf],
+  async ([isPdfSel, file, wantOriginal]) => {
+    if (!isPdfSel || !file) return;
+    if (!wantOriginal) return;
+    if (currentPreviewFileId.value === file.id) return; // 同文件短路（tab 来回切换）
+    revokePreviewBlob();
+    previewUrlLoading.value = true;
+    previewUrlError.value = null;
+    try {
+      const blob = await fetchPartFileContent(file.id);
+      if (selectedFile.value?.id !== file.id) return; // 期间切了零件 ⇒ 丢弃
+      selectedPreviewBlob.value = URL.createObjectURL(blob);
+      currentPreviewFileId.value = file.id;
+    } catch (e) {
+      previewUrlError.value = (e as Error).message ?? '加载原始 PDF 失败';
+    } finally {
+      previewUrlLoading.value = false;
+    }
+  },
+  { immediate: true },
+);
+
 // 2026-09-29 第三轮：图纸 Tab 按需懒加载。
 // 切 part → selectedFile 变 → 重新拉；切 tab → activeTab 非 drawings → 释放；
 // 切回 drawings 且同文件 → loadPreviewUrl 短路不重复拉。
+// 2026-10-13：切走图纸 Tab 时转图轮询也一并停 —— `usePreviewPolling` 的 `enabled`
+// 已按 activeTab 接线（切走即中断在途请求），这里不再重复调 `preview.stop()`。
 watch(
   [selectedFile, activeTab],
   async ([f, tab]) => {
     if (tab === 'drawings') {
+      showOriginalPdf.value = false;
       if (f) await loadPreviewUrl(f);
       else revokePreviewBlob();
     } else {
@@ -339,6 +446,27 @@ function isImage(t: string): boolean {
   border-radius: 4px;
   background: #fafbfc;
   padding: 8px;
+}
+/* 2026-10-13：PDF 预览拆成「图片模式 / 原始 PDF 模式」两个容器。本组件的宿主是
+   .file-preview（自带 flex 高度链），故这两个容器只需 `flex: 1` 填满它。 */
+.pdf-image-mode,
+.pdf-original-mode {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.original-btn {
+  align-self: center;
+  flex-shrink: 0;
+}
+/* 降级提示：有告知的兜底，不是静默换渲染路径。占位小、不抢画面。 */
+.degrade-hint {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #e6a23c;
+  text-align: center;
 }
 .image-preview {
   max-width: 100%;
