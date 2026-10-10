@@ -1,7 +1,7 @@
 // src/composables/__fixtures__/adminMenus.ts
 // 2026-10-14 同步 backend-rust seeds/menu.sql（RBAC 控制面板）：
 //   - auth_group 新增子菜单 roles_list「角色权限」，path /iam/roles（与 router 的
-//     `path: 'iam/roles'` 逐字一致）、sort_order 40、icon Key。
+//     `path: 'iam/roles'` 逐字一致）、sort_order 40、icon Lock（与生产 t_menu.icon 对齐）。
 //   - ⚠️ **数组物理位置插在 shelves_list(30) 之后**（见该节点的注释）：侧栏按物理
 //     顺序渲染、不按 sort_order 排，位置必须与后端 seed 一致。
 // 2026-10-13 同步 backend-rust seeds/menu.sql（交期汇总邮件定时任务）：
@@ -361,13 +361,15 @@ export const ADMIN_MENUS: MenuNode[] = [
         // 任一处失序，dummy 模式的侧栏顺序就 ≠ 生产。
         // 由 __tests__/adminMenus.spec.ts 的「menu tree is in ascending sort_order」
         // 与「covers all menuCodes exactly」两条用例同时守住。
+        // icon 用 `Lock`（与生产 t_menu.icon 一致，也与父节点 auth_group 的 `Key` 区分）：
+        // `Lock` 必须在 MenuTreeItem.vue 的 ICON_MAP 内，查不到会**静默不显示**、不报错。
         id: id(64),
         version: 0,
         parent_id: id(6),
         code: 'roles_list',
         title: '角色权限',
         path: '/iam/roles',
-        icon: 'Key',
+        icon: 'Lock',
         sort_order: 40,
         children: [],
       },

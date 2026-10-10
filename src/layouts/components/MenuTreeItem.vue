@@ -38,9 +38,8 @@ import {
   Van,
   Setting,
   Operation,
-  // 2026-08-26：新增 users_list 用的 List；其余 8 个旧图标（Lock / Money / CollectionTag /
-  // UserFilled / Postcard / Search / PriceTag / TakeawayBox）在更早 commit 已不在文件中，
-  // 本次仅实际移除 Avatar。
+  // 2026-08-26：新增 users_list 用的 List；其余旧图标（Money / CollectionTag /
+  // UserFilled / Postcard / Search / PriceTag / TakeawayBox）在更早 commit 已不在文件中。
   List,
   // 2026-09-11：工序制定（part_process_chain）用 SetUp
   SetUp,
@@ -48,6 +47,9 @@ import {
   // 查不到图标时模板里 v-if 静默隐藏（不报错），漏补这行 = 侧栏两个图标消失而无人报错。
   Clock,
   Message,
+  // 2026-10-14：RBAC 角色权限（roles_list）用 Lock，与生产 t_menu.icon 对齐
+  // （父节点 auth_group 是 Key，两者刻意区分）。
+  Lock,
 } from '@element-plus/icons-vue';
 import type { MenuNode } from '@/types/menu';
 
@@ -91,6 +93,8 @@ const ICON_MAP: Record<string, unknown> = {
   // 2026-10-13：定时任务/邮件分组（mail_group）与交期汇总邮件（mail_digest）
   Clock,
   Message,
+  // 2026-10-14：RBAC 角色权限（roles_list）
+  Lock,
 };
 
 // 按名字查图标；查不到返回 undefined → 模板里 v-if 隐藏图标（不报错）。

@@ -181,7 +181,8 @@ describe('菜单树 schema 的复用（不写第二份）', () => {
             code: 'roles_list',
             title: '角色权限',
             path: '/iam/roles',
-            icon: 'Key',
+            // 2026-10-14：与生产 t_menu.icon 对齐（权威值 Lock）。
+            icon: 'Lock',
             sort_order: 40,
             children: [],
           },

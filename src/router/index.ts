@@ -297,12 +297,16 @@ const routes: RouteRecordRaw[] = [
         // 它是浏览器可见的书签 URL，也是后端下发菜单时带的 path，改它会同时断掉用户已
         // 收藏的链接与菜单下发。后端 API URL 是另一层（`/api/v2/iam/roles`），两层不
         // 要求一致（沿 shelves 那条的既有做法）。
+        //
+        // `meta.icon` 用 `Lock`：与生产 t_menu.icon / adminMenus fixture 逐字一致（父节点
+        // auth_group 是 `Key`，两者刻意区分）。侧栏图标来自后端菜单树的同名 icon，而它
+        // 经 MenuTreeItem.vue 的 ICON_MAP 查表渲染 ⇒ `Lock` 必须在那张表内，否则静默不显示。
         path: 'iam/roles',
         name: 'IamRoles',
         component: () => import('@/views/iam/roles/RolesPage.vue'),
         meta: {
           title: '角色权限',
-          icon: 'Key',
+          icon: 'Lock',
           // 与 adminMenus fixture / 后端菜单表的 code 逐字一致；守卫按它判
           // 「这个账号的菜单树里有没有 roles_list」。
           menuCode: 'roles_list',

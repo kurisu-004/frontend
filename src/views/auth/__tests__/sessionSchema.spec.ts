@@ -26,7 +26,8 @@ function makeMenuNode(overrides: Record<string, unknown> = {}): Record<string, u
     code: 'roles_list',
     title: '角色权限',
     path: '/iam/roles',
-    icon: 'Key',
+    // 2026-10-14：与生产 t_menu.icon 对齐（权威值 Lock；父节点 auth_group 才是 Key）。
+    icon: 'Lock',
     sort_order: 40,
     children: [],
     ...overrides,

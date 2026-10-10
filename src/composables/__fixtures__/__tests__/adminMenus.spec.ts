@@ -167,8 +167,20 @@ describe('ADMIN_MENUS', () => {
         'SetUp',
         'Clock',
         'Message',
+        // 2026-10-14：roles_list 用 Lock（与生产 t_menu.icon 对齐）
+        'Lock',
       ]);
       expect(ICON_MAP.has(node.icon!)).toBe(true);
+    });
+
+    it('icon 是权威值 `Lock`（跨仓对齐：后端 seeds/menu.sql 的 t_menu.icon）', () => {
+      // 上面那条只保证「图标在白名单里、渲染得出来」；`Key` 也在白名单里，所以把它改回
+      // `Key` 或换成任意其它白名单图标都不会红。这条单独钉住**权威值**，让「dummy 模式
+      // 与生产图标不一致」这类漂移有测试信号。
+      const node = authGroup().children.find((c) => c.code === 'roles_list')!;
+      expect(node.icon).toBe('Lock');
+      // 父节点 auth_group 仍是 Key —— 两者刻意区分，别顺手改成一致。
+      expect(authGroup().icon).toBe('Key');
     });
 
     it('**数组物理位置**接在 shelves_list 之后（侧栏按数组顺序渲染、不排 sort_order）', () => {
