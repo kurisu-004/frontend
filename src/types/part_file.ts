@@ -4,8 +4,11 @@
 // 取代旧的 DrawingFileItem / CncProgramItem。Assembly master / 零件图纸 / 3D 模型 /
 // G 代码 / 设定单 / CAD 源文件 全部走这一个类型，用 `kind` 字段区分。
 //
-// 2026-07-14 扩展：DRAWING 同时接受 9 种图片格式（PNG/JPG/.../HEIC）；
-// 新增 CAD_2D kind（DWG/DXF）；所有 row 带可选 `content_sha256` 用于去重提示。
+// 2026-07-14 扩展：新增 CAD_2D kind（DWG/DXF）；所有 row 带可选 `content_sha256` 用于去重提示。
+// ⚠️ **DRAWING 当前只收 PDF**：后端 `part_file::policy::allowed_exts("DRAWING")` 就是
+//   `["pdf"]`，图片格式（PNG / JPG / HEIC …）未开放。要放开时同时改后端白名单与前端
+//   `api/files/objects.ts::normalizeUploadContentType` 的 content_type 映射（见那里的
+//   「新增扩展名必须同时改三处」）。
 //
 // 2026-09-16 Phase 5 切 v2 后 part-file 域契约错位修复：
 // - 列表端点 /parts/{id}/cnc-programs、/setup-sheets、/files 从裸数组改为
@@ -136,7 +139,7 @@ export type DrawingFileItem = PartFileItem;
 export type CncProgramItem = PartFileItem;
 
 // ============================================================
-// 2026-09-16 M3 新增：STS 直传 COS 契约（与 backend-rust part_file::dto 对齐）
+// 2026-09-16 M3 新增：STS 直传 COS 契约（与 backend-rust files::part_file::dto 对齐）
 // ============================================================
 
 /** STS 临时凭证（`POST /api/v2/part-files/upload-intents` 返回）。

@@ -26,7 +26,7 @@ import type {
   AssemblyItem,
   AssemblyUpdatePayload,
 } from '@/types/assembly';
-import type { DrawingFileItem, PartFileItem, PartFileListResult } from '@/types/part_file';
+import type { DrawingFileItem, PartFileItem } from '@/types/part_file';
 import type { PartListItem } from '@/types/parts';
 
 /**
@@ -274,8 +274,10 @@ export async function createAssembly(
  * 2026-10-13：随文件对象域端点合并，本函数改为包 `uploadFileObject`（零件图纸 /
  * 3D 模型 / 装配件总装图同端点，差别只在 owner + kind 两个字段）。响应随之由
  * `AssemblyFileRef[]`（`{id, original_filename, page_count}`）变为**单个
- * `PartFileItem`**（18 字段）：`page_count` 键消失，但上传路径本就恒为 `null`，
- * 无信息损失。
+ * `PartFileItem`**：`page_count` 键消失，但上传路径本就恒为 `null`，无信息损失。
+ * ⚠️ 返回类型是**前端的 `PartFileItem`**（12 字段），不是后端出参全貌：后端
+ * `PartFileOut` 有 15 字段，多出的 `owner_kind` / `object_key` / `created_by`
+ * 前端未建模。
  *
  * 保持 `uploadAssemblyPdf` 这个名字：调用方（装配件详情页补传总装图、零件批量建单
  * 的总装图补传）都是「上传一份总装图」这一个动作，端点合并不改变它们的意图。 */
@@ -344,19 +346,11 @@ export async function updateAssembly(
 
 // ---- 文件相关 ----
 
-// 装配件文件列表（`GET /assemblies/{id}/files`）。
-// 2026-09-16 Phase 5 切 v2 后：返回分页包装 { items, total }（PartFileListResult），
-// v2 默认 limit=50 会静默截断，clamp 上限 500，统一按上限取全量。
-// ⚠️ 2026-10-13 登记：rg 核实**零调用方**；owner 维度列表已由
-// `listPartFilesByOwner`（`@/api/files/objects`，打
-// `GET /files/objects?owner_kind=ASSEMBLY&owner_id=X`）承担，本函数等后端下线该端点
-// 后删除。
-export async function listAssemblyFiles(id: string): Promise<PartFileListResult> {
-  const resp = await api.get<PartFileListResult>(`/assemblies/${id}/files`, {
-    params: { limit: 500 },
-  });
-  return resp.data;
-}
+// 2026-10-13：删除 `listAssemblyFiles`。
+// 理由：它打的 `GET /api/v2/assemblies/{id}/files` 已随 files 域端点收编下线（后端
+// assembly router 整段移除该路由、无 alias），留着就是一个「以为还能用、实际必 404」
+// 且 export 在公共聚合口上的陷阱；rg 核实零调用方（`useAssemblyDetail` 的 `files[]`
+// 来自 `GET /assemblies/{id}` 详情响应，不打这个端点）。
 
 /**
  * `getPartFileDownloadUrl` 的 deprecation alias。

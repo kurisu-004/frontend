@@ -17,6 +17,9 @@
 //   - GET  /files/objects/{id}/url      临时下载 URL 签发
 //   - POST /files/objects/{id}/delete   软删（OCC，body 必带 version）
 //   - GET  /files/objects/{id}/content  原始二进制（blob）
+//
+// 导出数与端点数不等：另有纯 URL 构造器 `getPartFileContentUrl`（不发请求，只拼
+//  `{id}/content` 的路径）与包着它的 `fetchPartFileContent`，两者不单列。
 
 import { api } from '@/api/http';
 import type {
@@ -49,7 +52,16 @@ const BINARY_CONTENT_TYPE = 'application/octet-stream';
 /** 上传 `content_type` 归一：按**扩展名**分两档，与后端的白名单判据同源。
  *
  *  `.pdf` → `application/pdf`；其余扩展名（step / stp / iges / igs / stl / obj /
- *  3mf / dwg / dxf …）→ `application/octet-stream`。 */
+ *  3mf / dwg / dxf …）→ `application/octet-stream`。
+ *
+ *  ⚠️ **新增扩展名必须同时改三处，缺一即被后端拒**：本函数的两档映射、后端
+ *  `part_file::policy::allowed_exts`（kind → 允许的扩展名）、后端
+ *  `part_file::policy::expected_content_types_for_ext`（扩展名 → 允许的
+ *  content_type）。本函数是**按扩展名分两档**而不是逐个映射，所以图片类扩展名
+ *  （png / jpg / heic …）会落进 `application/octet-stream` 分支 —— 后端一旦放开
+ *  图片图纸（当前 `allowed_exts("DRAWING")` **只有 `["pdf"]`**）而没有同时在
+ *  `expected_content_types_for_ext` 里放行该扩展名的 `application/octet-stream`，
+ *  上传就会被 40001 挡回。 */
 function normalizeUploadContentType(file: File): string {
   return file.name.toLowerCase().endsWith('.pdf') ? PDF_CONTENT_TYPE : BINARY_CONTENT_TYPE;
 }
@@ -107,8 +119,14 @@ export async function confirmFileObject(payload: ConfirmFileIn): Promise<PartFil
 /**
  * owner 维度列出文件（`GET /api/v2/files/objects?owner_id=...&kind=...`）。
  *
- * owner_id 多态（零件 id 或装配件 id）；kind 缺省 = 不过滤。`limit` 上限 500
- * （后端 v2 默认 50 会静默截断）。
+ * `kind` 缺省 = 不过滤。`limit` 上限 500（后端 v2 默认 50 会静默截断）。
+ *
+ * ⚠️ **本函数不发 `owner_kind`，后端缺省按 `PART` 过滤**（`owner_kind` 缺省值就是
+ * `PART`）⇒ 传装配件 id 进来拿到的**不是**装配件的文件。查装配件文件前必须先补
+ * `owner_kind: 'ASSEMBLY'` 入参；本函数暂未提供该入参，因为当前三个调用方都是查零件
+ * 文件（零件详情 / 报工台图纸预览 / 外协报价图纸预览），补参数时记得连带核对这三处。
+ *
+ * 装配件侧的文件列表走 `GET /assemblies/{id}` 详情响应的 `files[]`，不经过本函数。
  */
 export async function listPartFilesByOwner(
   ownerId: string,

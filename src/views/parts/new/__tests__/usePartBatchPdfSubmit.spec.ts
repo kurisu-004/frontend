@@ -16,7 +16,8 @@
 //     行；每个子件只传自己那一页的单页切片（文件名带 `_pN`）；
 //   - 指定某页为总装图 → 该页从子件里排除，顶层只传那一个单页切片（打印页数不重不漏）；
 //   - 重试按 **job**（目标实体 × 文件）粒度：部分失败时只补传失败的那一个，
-//     已成功的绝不重传（重传会撞后端 uk_t_part_file_owner_kind_sha 报 21108）；
+//     已成功的绝不重传（同一 owner 同一 kind 撞唯一索引 `uk_t_part_file_single` 会报
+//     21108「相同文件已存在」）；
 //   - 建单之后任何抛错都不许把阶段退回 idle（否则再点一次 = 同一批工单建第二遍）；
 //   - job 列表没登记上时主按钮必须仍是可点的「重试上传」，出路是现场重建 job。
 //
@@ -39,9 +40,18 @@ const mocks = vi.hoisted(() => ({
   routerPush: vi.fn(),
   batchCreateParts: vi.fn(),
   createAssembly: vi.fn(),
-  /** 生产代码只调一个 `uploadFileObject`；下面三个是**按 (ownerKind, kind) 分片的
-   *  记录器**，由 uploadFileObject 的实现转发而来，使各条用例「哪个 owner 拿到了哪个
-   *  文件 / 哪条链路抛的错」的断言逐字保留。签名各自复原成旧的 `(ownerId, file)`。 */
+  /**
+   * 生产代码唯一的上传入口 `uploadFileObject`，**4 个实参逐字断言在这里与各条用例**。
+   *
+   * 下面三个是**按 (ownerKind, kind) 分片的记录器**：由 uploadFileObject 的实现转发
+   * 而来，使各条用例「哪个 owner 拿到了哪个文件 / 哪条链路抛的错」的断言逐字保留。
+   * 签名各自复原成旧的 `(ownerId, file)`。
+   *
+   * ⚠️ **转发层不得吞掉 kind**：`ownerKind === 'ASSEMBLY'` 分支就地断言 kind 必须是
+   * `ASSEMBLY_MASTER`（后端把请求里的 kind 原样写进 `t_part_file.kind`，传 `DRAWING`
+   * 会静默落成「装配件的零件图纸」行，装配件详情页按 `kind==='ASSEMBLY_MASTER'` 挑总装图
+   * 就挑不到）。这层断言对**所有**用例生效，不依赖哪条用例记得写。
+   */
   uploadFileObject: vi.fn(),
   uploadAssemblyPdf: vi.fn(),
   uploadPartDrawing: vi.fn(),
@@ -254,9 +264,14 @@ beforeEach(() => {
   mocks.uploadPartDrawing.mockReset();
   mocks.uploadPart3DModel.mockReset();
   // uploadFileObject → 三个分片记录器（入参复原成旧签名，下游断言无需改写）。
+  // ASSEMBLY 分支就地断言 kind：装配件顶层必须以 ASSEMBLY_MASTER 落库（见 mocks 处的
+  // 注释），任何一条用例漏断言都不会放过「传 DRAWING」这个静默写错库的形态。
   mocks.uploadFileObject.mockImplementation(
     (ownerKind: string, ownerId: string, kind: string, file: File) => {
-      if (ownerKind === 'ASSEMBLY') return mocks.uploadAssemblyPdf(ownerId, file);
+      if (ownerKind === 'ASSEMBLY') {
+        expect(kind).toBe('ASSEMBLY_MASTER');
+        return mocks.uploadAssemblyPdf(ownerId, file);
+      }
       return kind === 'DRAWING'
         ? mocks.uploadPartDrawing(ownerId, file)
         : mocks.uploadPart3DModel(ownerId, file);
@@ -452,13 +467,18 @@ describe('onSubmit', () => {
     expect(mocks.uploadPart3DModel).toHaveBeenCalledTimes(1);
     expect(mocks.uploadPart3DModel.mock.calls[0]![0]).toBe('A1-01');
     expect(mocks.uploadPart3DModel.mock.calls[0]![1].name).toBe('ASM-1_总装.step');
-    // 三条链路同端点：owner_kind / kind 由 target 与 entry.kind 决定（这里是子件）
+    // 三条链路同端点：直接断言生产代码发给 uploadFileObject 的 4 个实参
+    // （owner_kind / owner_id / kind / file），第 4 个用文件名代替 File 对象本身。
+    // owner_kind 与 kind 由 job.target 与 entry.kind 共同决定 —— 本例全是子件
+    // （t_part 行）⇒ owner_kind 全为 PART，kind 原样透传（DRAWING / 3D_MODEL）。
     expect(
-      mocks.uploadFileObject.mock.calls.map((c) => [c[0], c[1], c[2]]).sort(),
+      mocks.uploadFileObject.mock.calls
+        .map((c) => [c[0], c[1], c[2], (c[3] as File).name])
+        .sort(),
     ).toEqual([
-      ['PART', 'A1-01', '3D_MODEL'],
-      ['PART', 'A1-01', 'DRAWING'],
-      ['PART', 'A1-02', 'DRAWING'],
+      ['PART', 'A1-01', '3D_MODEL', 'ASM-1_总装.step'],
+      ['PART', 'A1-01', 'DRAWING', 'ASM-1_总装_p1.pdf'],
+      ['PART', 'A1-02', 'DRAWING', 'ASM-1_总装_p2.pdf'],
     ]);
     expect(mocks.alert).not.toHaveBeenCalled();
     expect(api.commitStage.value).toBe('done');
@@ -540,8 +560,9 @@ describe('上传重试（job 粒度）', () => {
     expect(firstAlert).toContain('第 A1-01 号零件');
     expect(api.assemblies.value).toHaveLength(1);
 
-    // 行内重试：若把已成功的子件 1 也重跑，后端 uk_t_part_file_owner_kind_sha 会回
-    // 21108「相同文件已存在」；这里让它们真的报错，验证重试压根没碰它们。
+    // 行内重试：若把已成功的子件 1 也重跑，后端同一 owner 同一 kind 撞唯一索引
+    // `uk_t_part_file_single` 会回 21108「相同文件已存在」；这里让它们真的报错，
+    // 验证重试压根没碰它们。
     mocks.uploadPartDrawing.mockReset();
     mocks.uploadPartDrawing.mockRejectedValue(new Error('相同文件已存在'));
     await api.retryUploadByCell(`pdf:${asm.children[0]!.pdfSourceUid}`);
@@ -571,17 +592,25 @@ describe('上传重试（job 粒度）', () => {
     await api.onSubmit();
 
     expect(mocks.createAssembly).toHaveBeenCalledTimes(1);
+    // 顶层（t_assembly 行）走 owner_kind=ASSEMBLY，kind 必须是 ASSEMBLY_MASTER（不是
+    // 它的原件类型 DRAWING —— 后端原样落库，传 DRAWING 会让装配件详情页查不到总装图）；
+    // 子件（t_part 行）走 PART + 原样透传的 DRAWING。4 个实参逐字断言，第 4 个用文件名。
+    // 刻意排在分片记录器的断言**之前**：kind 传错时转发层会当场抛断言，被 composable
+    // 记成上传失败，于是先炸在这里、报错直接是 kind 的差异（而不是「记录器没被调用」）。
+    expect(
+      mocks.uploadFileObject.mock.calls
+        .map((c) => [c[0], c[1], c[2], (c[3] as File).name])
+        .sort(),
+    ).toEqual([
+      ['ASSEMBLY', 'A1', 'ASSEMBLY_MASTER', 'ASM-1_总装_p1.pdf'],
+      ['PART', 'A1-01', 'DRAWING', 'ASM-1_总装_p2.pdf'],
+    ]);
     // 顶层只有那一个单页切片；子件只剩 P2
     expect(mocks.uploadAssemblyPdf).toHaveBeenCalledTimes(1);
     expect(mocks.uploadAssemblyPdf.mock.calls[0]![0]).toBe('A1');
     expect(mocks.uploadAssemblyPdf.mock.calls[0]![1].name).toBe('ASM-1_总装_p1.pdf');
     expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(1);
     expect(mocks.uploadPartDrawing.mock.calls[0]![0]).toBe('A1-01');
-    // 顶层走 owner_kind=ASSEMBLY（总装图的 kind 恒为 DRAWING），子件走 PART
-    expect(mocks.uploadFileObject.mock.calls.map((c) => [c[0], c[1], c[2]]).sort()).toEqual([
-      ['ASSEMBLY', 'A1', 'DRAWING'],
-      ['PART', 'A1-01', 'DRAWING'],
-    ]);
     expect(api.getRowPdfCell({ pdfSourceUid: asm.masterPdfSourceUid })?.status).toBe('error');
     expect(api.submitLabel.value).toBe('重试上传（1 项）');
     const firstAlert = mocks.alert.mock.calls[0]![0] as string;
@@ -1665,6 +1694,17 @@ describe('装配件逐页分发', () => {
     };
     expect(payload.children).toHaveLength(1);
     expect(payload.children[0]!.drawing_no).toBe(asm.children[1]!.drawing_no);
+    // 4 个实参逐字断言（顶层那一条的 kind 必须是 ASSEMBLY_MASTER），排在分片记录器
+    // 的断言之前：kind 传错时转发层会当场抛断言并被 composable 记成上传失败，先炸在
+    // 这里，报错直接是 kind 的差异。
+    expect(
+      mocks.uploadFileObject.mock.calls
+        .map((c) => [c[0], c[1], c[2], (c[3] as File).name])
+        .sort(),
+    ).toEqual([
+      ['ASSEMBLY', 'A1', 'ASSEMBLY_MASTER', 'ASM-1_总装_p1.pdf'],
+      ['PART', 'A1-01', 'DRAWING', 'ASM-1_总装_p2.pdf'],
+    ]);
     // 总装图 = 指定的那一页的切片，1 次
     expect(mocks.uploadAssemblyPdf).toHaveBeenCalledTimes(1);
     expect(mocks.uploadAssemblyPdf.mock.calls[0]![0]).toBe('A1');

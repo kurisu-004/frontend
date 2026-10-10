@@ -156,9 +156,10 @@ describe('partFileSchema / partFileListResultSchema（2026-09-29 新增）', () 
   describe('partFileListResultSchema', () => {
     it('S5：接受 backend-rust PartFileListOut 真契约 2 字段（items + total）', () => {
       // 2026-09-29 修复 review 第 1 轮 schema mismatch 的核心反向 guard。
-      // 后端 PartFileListOut 真契约（backend-rust src/modules/part_file/vo/part_file.rs:58-62）
-      // 只返 items + total 两个字段 —— 必须能用 2 字段 shape 通过 schema 校验，
-      // 否则就重现「线上 100% ZodError 崩溃」的 regression。
+      // 后端 PartFileListOut 真契约（backend-rust
+      // src/modules/files/part_file/vo/part_file.rs）只返 items + total 两个字段 —— 必须
+      // 能用 2 字段 shape 通过 schema 校验，否则就重现「线上 100% ZodError 崩溃」的
+      // regression。
       const r = partFileListResultSchema.parse({
         items: [
           {
