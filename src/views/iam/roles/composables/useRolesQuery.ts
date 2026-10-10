@@ -21,11 +21,7 @@ import { useQuery } from '@tanstack/vue-query';
 import { getRoleGrants, listMenus, listPermissions, listRoles } from '@/api/rbac';
 import { qk } from '@/composables/queries/keys';
 import { menuNodeSchema } from '@/views/auth/sessionSchema';
-import {
-  permissionGroupListSchema,
-  roleDefListSchema,
-  roleGrantsSchema,
-} from './rbacSchema';
+import { permissionGroupListSchema, roleDefListSchema, roleGrantsSchema } from './rbacSchema';
 
 /** 共享基础数据层的缓存时长：staleTime 30s / gcTime 5min。
  *

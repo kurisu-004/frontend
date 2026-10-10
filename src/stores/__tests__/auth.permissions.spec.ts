@@ -92,10 +92,9 @@ function setupEach(): void {
   localStorage.clear();
   const app = createApp({});
   app.use(createPinia());
-  app.use(
-    VueQueryPlugin,
-    { queryClient: new QueryClient({ defaultOptions: { mutations: { retry: 0 } } }) },
-  );
+  app.use(VueQueryPlugin, {
+    queryClient: new QueryClient({ defaultOptions: { mutations: { retry: 0 } } }),
+  });
   setActivePinia(app.config.globalProperties.$pinia);
   vi.mocked(apiLogin).mockReset();
   vi.mocked(apiMe).mockReset();
@@ -223,7 +222,11 @@ describe('refresh 响应守门：坏响应不写盘、不派发事件（2026-10-
   });
 
   it('C1：/iam/refresh 返回缺 permissions 的 user ⇒ 抛错，盘与事件都不受影响', async () => {
-    stubRefreshOk({ token: 'rotated-token', refresh_token: 'rotated-refresh', user: makeBadUser({ username: '坏响应' }) });
+    stubRefreshOk({
+      token: 'rotated-token',
+      refresh_token: 'rotated-refresh',
+      user: makeBadUser({ username: '坏响应' }),
+    });
 
     // 走真实的 refreshTokens（http.ts 的 persistTokens 是它下游的写盘点）。
     await expect(apiRefreshTokens('good-refresh')).rejects.toThrow();

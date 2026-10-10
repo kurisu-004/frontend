@@ -84,15 +84,11 @@ describe('menuNodeSchema', () => {
     // JS Number 下 1900000000000000001 与 1900000000000000000 是同一个值）。这里用
     // Number() 从字符串转，正好构造出「后端哪天把 serialize_i64 去掉」的那种坏响应。
     const numericSnowflake = Number('1900000000000000001');
-    expect(() => menuNodeSchema.parse(makeMenuNode({ id: numericSnowflake }))).toThrow(
-      ZodError,
-    );
+    expect(() => menuNodeSchema.parse(makeMenuNode({ id: numericSnowflake }))).toThrow(ZodError);
   });
 
   it('M5：path / icon / parent_id 可空但键必须存在', () => {
-    const parsed = menuNodeSchema.parse(
-      makeMenuNode({ path: null, icon: null, parent_id: 'g1' }),
-    );
+    const parsed = menuNodeSchema.parse(makeMenuNode({ path: null, icon: null, parent_id: 'g1' }));
     expect(parsed.path).toBeNull();
     expect(parsed.icon).toBeNull();
     expect(parsed.parent_id).toBe('g1');
@@ -156,14 +152,12 @@ describe('loginResponseSchema', () => {
 
   it('L2：user 段缺 permissions ⇒ 抛（refresh 响应用同一份 schema）', () => {
     const { permissions: _dropped, ...user } = makeUser();
-    expect(() =>
-      loginResponseSchema.parse({ token: 'a.b.c', refresh_token: 'r1', user }),
-    ).toThrow(ZodError);
+    expect(() => loginResponseSchema.parse({ token: 'a.b.c', refresh_token: 'r1', user })).toThrow(
+      ZodError,
+    );
   });
 
   it('L3：缺 refresh_token 抛错（少它会让 http.ts 的 readStoredSession 早退拿不到会话）', () => {
-    expect(() => loginResponseSchema.parse({ token: 'a.b.c', user: makeUser() })).toThrow(
-      ZodError,
-    );
+    expect(() => loginResponseSchema.parse({ token: 'a.b.c', user: makeUser() })).toThrow(ZodError);
   });
 });

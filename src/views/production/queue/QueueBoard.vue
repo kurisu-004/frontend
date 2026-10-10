@@ -397,8 +397,7 @@ provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
     // 本页的三个权限闸是 canRecall / canSplit / canDispatch（派活 / 转交 / 下发各一条），
     // 三个都 false 才能断定「空」是权限造成的。漏算 canDispatch 的症状是：只被授了
     // 「下发」权限点（或反之）的账号看到「当前角色没有可执行的操作」，而实际上他有。
-    const byPermission =
-      !recall.canRecall.value && !canSplit.value && !canDispatch.value;
+    const byPermission = !recall.canRecall.value && !canSplit.value && !canDispatch.value;
     ElMessage.warning(
       byPermission ? '当前角色对该批次没有可执行的操作' : '该批次当前没有可执行的操作',
     );

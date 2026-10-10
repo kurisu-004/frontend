@@ -37,11 +37,7 @@ import { useAuthStore } from '@/stores/auth';
 import type { CurrentUser } from '@/types/user';
 
 const ALL_STATUSES = ['DRAFT', 'SUBMITTED', 'PICKED_UP', 'ARCHIVED'] as const;
-const MANAGE_ROLES: RoleMapLike[] = [
-  { MANAGER: true },
-  { CLERK: true },
-  { INSPECTOR: true },
-];
+const MANAGE_ROLES: RoleMapLike[] = [{ MANAGER: true }, { CLERK: true }, { INSPECTOR: true }];
 /** `RoleMapLike` 的宽形态：验证「传进来的角色键一个都不认识」时不会误放行
  *  （`RoleMapLike` 三个键全可选，写死它的字面量类型连无关角色都写不进去）。 */
 type AnyRoleMap = RoleMapLike & Record<string, boolean | undefined>;
@@ -175,9 +171,9 @@ describe('canPrint 真值表', () => {
       for (const part_count of [0, 1, 99]) {
         expect(canPrint(note({ status, part_count }), {})).toBe(false);
         expect(canPrint(note({ status, part_count }), unrelatedRole)).toBe(false);
-        expect(
-          canPrint(note({ status, part_count }), { MANAGER: false, CLERK: false }),
-        ).toBe(false);
+        expect(canPrint(note({ status, part_count }), { MANAGER: false, CLERK: false })).toBe(
+          false,
+        );
       }
     }
   });

@@ -13,12 +13,7 @@
 // `/iam/me` 复核抛 ZodError，表现为全员被踢回登录页循环。
 
 import { api } from '@/api/http';
-import type {
-  MenuTreeNode,
-  PermissionGroupData,
-  RoleDef,
-  RoleGrants,
-} from '@/types/rbac';
+import type { MenuTreeNode, PermissionGroupData, RoleDef, RoleGrants } from '@/types/rbac';
 
 /** 角色列表的排序由**后端**负责（`is_system DESC` 置顶、其余 `code ASC`），
  *  前端不再二次排序。 */
