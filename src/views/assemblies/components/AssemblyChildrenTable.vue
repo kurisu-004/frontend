@@ -17,6 +17,9 @@
   - 降级原因渲染成弹窗内一行提示（`.degrade-hint`），不静默换渲染路径。
   - 预览弹窗的 el-dialog 挂 `pdf-preview-dialog` + `img-preview-dialog` 两个 class
     （两个预览组件的 flex 高度链同款，规则在 styles/index.scss 里逐条并列）。
+  - ⚠️ blob URL 的释放**只有一个入口** `setBlobUrl()`：本组件有两个写入点
+    （点行的非 PDF 图纸、PDF 原始 PDF 的 blob watch），任何一处绕过它直接赋值都会把
+    上一个 object URL 悬空 —— 详情页是「反复点子件图号」的用法，点一次泄漏一整份 PDF。
 
   本组件持有以下 UI 状态：
   - addChildVisible / addChildSubmitting / addChildFormRef
@@ -464,16 +467,34 @@ const showImageMode = computed<boolean>(
   () => isPdfDrawing.value && preview.ready.value && !wantsOriginalPdf.value,
 );
 
+/**
+ * 挂上新的 blob URL，并**先 revoke 前一个**。
+ *
+ * 为什么必须走这个函数而不是直接 `drawingPreviewBlobUrl.value = url`：本组件有**两个**
+ * 写入点（点行时的非 PDF 图纸、PDF 原始 PDF 的 blob watch），任何一处直接赋值都会把
+ * 上一个 object URL 悬空 —— 那份 PDF 的字节留在内存里直到页面卸载，而详情页是「反复
+ * 点子件图号」的用法 ⇒ 点一次泄漏一整份 PDF。revoke 只挂在 `onDrawingPreviewClosed`
+ * 上，它只能救「当前那一个」，救不了被覆盖掉的。
+ *
+ * 传空串等价于「释放当前那一个」（关弹窗走它）。
+ */
+function setBlobUrl(next: string): void {
+  if (drawingPreviewBlobUrl.value) {
+    URL.revokeObjectURL(drawingPreviewBlobUrl.value);
+  }
+  drawingPreviewBlobUrl.value = next;
+}
+
 async function onChildDrawingClick(_row: unknown, drawing: PartFileItem): Promise<void> {
   drawingPreviewFile.value = drawing;
   drawingPreviewVisible.value = true;
   drawingShowOriginal.value = false;
-  drawingPreviewBlobUrl.value = '';
+  setBlobUrl('');
   // PDF 不在这里拉 blob —— 先走转图；用户点「查看原始 PDF」或转图降级时再拉
   // （见下方 watch）。提前拉会让「图片模式省带宽」当场作废。
   if (isPdfType(drawing.file_type)) return;
   try {
-    drawingPreviewBlobUrl.value = await props.fetchDrawingBlob(drawing);
+    setBlobUrl(await props.fetchDrawingBlob(drawing));
   } catch (e) {
     ElMessage.error((e as Error).message ?? '加载图纸失败');
     drawingPreviewVisible.value = false;
@@ -491,9 +512,11 @@ watch(
     if (!wantOriginal) return;
     try {
       const url = await props.fetchDrawingBlob(drawing);
-      // 期间用户可能已关掉弹窗或点了别的子件 ⇒ 迟到的 blob 直接丢弃。
+      // 迟到守卫：期间用户可能已关掉弹窗（`onDrawingPreviewClosed` 会把
+      // `drawingPreviewFile` 置 null）或点了别的子件 ⇒ 迟到的 blob 直接丢弃。
+      // 只比 id 就够：换文件与关窗这两条路径都会让 `drawingPreviewFile` 变掉。
       if (drawingPreviewFile.value?.id !== drawing.id) return;
-      drawingPreviewBlobUrl.value = url;
+      setBlobUrl(url);
     } catch (e) {
       ElMessage.error((e as Error).message ?? '加载原始 PDF 失败');
     }
@@ -502,10 +525,7 @@ watch(
 );
 
 function onDrawingPreviewClosed(): void {
-  if (drawingPreviewBlobUrl.value) {
-    URL.revokeObjectURL(drawingPreviewBlobUrl.value);
-  }
-  drawingPreviewBlobUrl.value = '';
+  setBlobUrl('');
   drawingPreviewFile.value = null;
   drawingShowOriginal.value = false;
   preview.stop();

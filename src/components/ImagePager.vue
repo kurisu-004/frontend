@@ -25,9 +25,13 @@
 
   交互（与 PdfViewer 对齐，工人不用学两套）：
     - 滚轮缩放（鼠标点锚定）/ 双指缩放（触控屏，工控机与平板场景）/ 左键拖动平移；
+    - 键盘：← → / PageUp PageDown 翻页、Home End 跳首末页、+ - 缩放、0 复位
+      （`.img-viewport` 是本组件唯一的交互面，不给它 tabindex 等于对键盘用户不存在）；
     - 双击复位 = 回到「整页塞进容器」；
     - 工具栏 上一页 / 下一页 + `n / total`（页数 > 1 才显示，单页图藏按钮）；
-    - 缩放区间 [0.1, 10] 与 PdfViewer 的 [-] 区间一致。
+    - 缩放区间 [0.1, 10]：对应 PdfViewer 的 **`viewScale`（滚轮）**区间。本组件的
+      缩放只走 CSS transform、没有「按新分辨率重渲染」这一步，故不再有 PdfViewer 那条
+      [0.4, 3] 的 `renderScale` 步进区间。fit 的夹逼区间 [0.05, 8] 与 PdfViewer 同款。
 
   ── 承载契约（高度链，与 PdfViewer 同款）─────────────────────────────
   .image-pager{height:100%} → .canvas-wrap{flex:1} → .img-viewport{flex:1;overflow:hidden}
@@ -68,12 +72,16 @@
       <div
         ref="viewportRef"
         class="img-viewport"
+        tabindex="0"
+        role="group"
+        aria-label="图纸预览画面，方向键翻页、加减号缩放、0 键复位"
         @wheel.prevent="onWheel"
         @mousedown="onMouseDown"
         @dblclick="resetView"
         @touchstart="onTouchStart"
         @touchmove.prevent="onTouchMove"
         @touchend="onTouchEnd"
+        @keydown="onKeyDown"
       >
         <div
           class="img-stage"
@@ -296,6 +304,54 @@ function onMouseUp(): void {
   dragging.value = false;
   window.removeEventListener('mousemove', onMouseMove);
   window.removeEventListener('mouseup', onMouseUp);
+}
+
+// ============ 键盘操作 ============
+// 2026-10-13：滚轮 / 双指 / 拖动三条鼠标路径之外补一条纯键盘路径。`.img-viewport`
+// 是本组件唯一的交互面，不给它 tabindex 就等于整块画面对键盘用户不存在（不是残缺，
+// 是完全不可达）。
+// 键位沿工具栏与浏览器惯例：← / → 翻页（等价工具栏翻页，含复位）、+ / - 缩放
+// （等价工具栏 +/-）、0 复位、Home / End 跳首末页。键盘路径**不自己实现翻页/缩放**，
+// 只转调同一批函数 —— 否则两套语义会漂。
+function onKeyDown(e: KeyboardEvent): void {
+  switch (e.key) {
+    case 'ArrowLeft':
+    case 'PageUp':
+      prevPage();
+      break;
+    case 'ArrowRight':
+    case 'PageDown':
+      nextPage();
+      break;
+    case 'Home':
+      goToPage(1);
+      break;
+    case 'End':
+      goToPage(totalPages.value);
+      break;
+    case '+':
+    case '=':
+      zoomIn();
+      break;
+    case '-':
+    case '_':
+      zoomOut();
+      break;
+    case '0':
+      resetView();
+      break;
+    default:
+      return;
+  }
+  e.preventDefault();
+}
+
+/** 跳到第 n 页（1-based），越界夹逼。与工具栏翻页同口径：跳过去就重新适应整页。 */
+function goToPage(n: number): void {
+  const target = clamp(n, 1, Math.max(totalPages.value, 1));
+  if (target === page.value) return;
+  page.value = target;
+  resetView();
 }
 
 // ============ 入参变化 ============

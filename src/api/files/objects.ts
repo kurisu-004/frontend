@@ -182,9 +182,11 @@ export async function deletePartFile(fileId: string, version: number): Promise<v
  * 浏览器不再下载整份 PDF 交给 pdf.js 解析（大图纸的解析与首帧渲染是秒级的），
  * 直接把 CDN 图片挂进 `<img>` 即可。
  *
- * 三态返回（`state`）：`READY`（`pages` 齐）/ `PENDING`（还在转，看 `retry_after_ms`）/
- * `FAILED`（`error` 有值）。**轮询与退避由调用侧负责**，本函数只发一次请求 ——
- * 轮询编排见 `composables/usePreviewPolling.ts`。
+ * 两态返回（`state`）：`READY`（`pages` 齐）/ `PENDING`（还在转，看 `retry_after_ms`）。
+ * **转码失败不在 `state` 里** —— 后端一律返 5xx + 信封业务码（21117 终态失败 /
+ * 21118 转发失败），故失败分支按 `ApiError.code` 分流（`isPreviewUnsupportedError` /
+ * `isPreviewSelfHealError`，白名单在 `types/part_file.ts`）。**轮询与退避由调用侧负责**，
+ * 本函数只发一次请求 —— 轮询编排见 `composables/usePreviewPolling.ts`。
  *
  * ⚠️ `fileId` 是**文件对象 id**，不是 part / assembly id。装配件总装图（owner=ASSEMBLY）
  * 与零件图纸（owner=PART）走同一条端点，owner 语义由后端按文件行自己解析，前端只管传 id。

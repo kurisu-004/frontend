@@ -12,6 +12,10 @@
       自动兜底，或用户点「查看原始 PDF」（图片模式少矢量缩放与文字选中，看细节要能退回）。
   `degradeHint` 是 caller 给的降级原因文案，在两条路里都渲染 —— 静默换渲染路径会让
   CI 故障无人察觉。
+
+  ⚠️ 转图等待期不是「无可预览内容」：`pages` 空 + `url` 空 + caller 的转图/拉 blob 在
+  进行中（`busyHint`）时，文案必须是 caller 给的提示。落进 `v-else` 的「无可预览内容」
+  会让工人以为这张报价没有图纸，而转图那一档最长要等 2 分钟（转图轮询的墙钟上限）。
 -->
 <template>
   <el-dialog
@@ -37,6 +41,11 @@
       <PdfViewer v-if="isPdf" :url="url" />
       <el-image v-else :src="url" :preview-src-list="[url]" fit="contain" class="drawing-image" />
     </div>
+    <!-- 转图等待期 / 原始 PDF 拉取期：都还没有可渲染的东西，但那不是「没有可预览内容」。
+         高度与上面两条分支同款（70vh），避免文案在画面中央跳一下。 -->
+    <div v-else-if="busyHint" class="drawing-frame-wrap busy-frame">
+      <span class="busy-hint">{{ busyHint }}</span>
+    </div>
     <p v-else class="muted">无可预览内容</p>
   </el-dialog>
 </template>
@@ -58,12 +67,19 @@ withDefaults(
     pages?: string[];
     /** 转图降级原因（人类可读）；非空即渲染成一行提示。 */
     degradeHint?: string | null;
+    /**
+     * 「有东西在路上」的提示文案（如 `图纸转图中…` / `加载原始 PDF…`）；null ⇒ 真的
+     * 没有可预览内容。**由 caller 给**而不是这里自己推：本组件是纯受控的，它不知道
+     * caller 的轮询处于哪一档，把两个阶段的文案判据留在 caller 一处更好维护。
+     */
+    busyHint?: string | null;
   }>(),
   {
     // 缺省给空数组而不是 optional：模板里 `pages.length` 就不必到处判空，
     // 而「没传」与「传了空数组」在本组件的语义里是同一件事（走原始 PDF 模式）。
     pages: () => [],
     degradeHint: null,
+    busyHint: null,
   },
 );
 
@@ -126,7 +142,15 @@ const dialogSize = useDialogSize({ desktopWidth: 900 });
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
-  justify-content: center;
+}
+/* 转图等待期容器：与上面两条分支同尺寸，只放一行文案（沿用 .drawing-frame-wrap 的
+   column + center，ImagePager 那份的 justify-content 不适用这里）。 */
+.busy-frame {
+  align-items: center;
+}
+.busy-hint {
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 .original-btn {
   align-self: center;

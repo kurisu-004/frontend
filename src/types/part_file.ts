@@ -125,11 +125,14 @@ export interface PartFileUrlResult {
 /**
  * `GET /files/objects/{id}/preview` 的转码态（2026-10-13 新增）。
  *
+ * **只有这两个取值**：后端失败一律走「HTTP 5xx + 信封业务码」，不返终态字符串 ——
+ * `FAILED` 只存在于后端 `t_file_preview.state` 表列里、不出现在响应里。故消费侧拿到
+ * 本枚举之外的值（后端将来加了新状态）当「不认识」处理，不要当成功也不要当失败。
+ *
  * - `READY`：转图完成，`pages` 是逐页图片直链（CDN / COS 签名 URL），长度 = `page_count`；
- * - `PENDING`：CI 仍在转，`pages` 恒为空数组，`retry_after_ms` 是**建议**重试间隔；
- * - `FAILED`：转码失败，`error` 有值。
+ * - `PENDING`：CI 仍在转，`pages` 恒为空数组，`retry_after_ms` 是**建议**重试间隔。
  */
-export type FilePreviewState = 'READY' | 'PENDING' | 'FAILED';
+export type FilePreviewState = 'READY' | 'PENDING';
 
 /**
  * `GET /api/v2/files/objects/{id}/preview` 出参（2026-10-13 新增）。
@@ -138,35 +141,65 @@ export type FilePreviewState = 'READY' | 'PENDING' | 'FAILED';
  * 整份 PDF 交给 pdf.js 解析。`/content` 保留为「查看原始 PDF」兜底入口，两者不是
  * 替代关系（见 `ImagePager.vue` 文件头的能力取舍说明）。
  *
- * `retry_after_ms` 在 `READY` / `FAILED` 时**可能为 null**（后端不必给建议间隔），
- * 故类型是 `number | null`，消费侧读它之前要判空。
+ * `retry_after_ms` 后端是**非空** `u64`（`PENDING` 返距节流戳的毫秒数、`READY` 返 0），
+ * 这里仍放宽成 `number | null` 作防御：后端将来给一个可空的建议间隔时不必改前端类型。
  */
 export interface FilePreviewResult {
   state: FilePreviewState;
-  /** PDF 总页数；`PENDING` 时后端可能还不知道（0 或 1），消费侧只在 `READY` 时读它。 */
+  /** PDF 总页数；`PENDING` 时后端返 0，消费侧只在 `READY` 时读它。 */
   page_count: number;
   /** 逐页图片直链；仅 `READY` 时非空。 */
   pages: string[];
-  /** 建议重试间隔（毫秒）；仅 `PENDING` 时有意义。 */
+  /** 建议重试间隔（毫秒）；后端 `READY` 时返 0（不是 null）。 */
   retry_after_ms: number | null;
-  /** 失败原因；仅 `FAILED` 时有值。 */
+  /**
+   * 预留字段：**后端当前恒为 `null`**（转码失败走 5xx 信封，见 `FilePreviewState` 的
+   * 说明）。消费侧不要从它取失败原因 —— 失败原因在 `ApiError.message` 里。
+   */
   error: string | null;
 }
 
-/**
- * 2026-10-13：`/preview` 端点的**不支持**判定码。
- *
- * `21116` = 后端「该文件类型不支持转图」（如 3D 模型 / DWG）；`400` / `502` 分别是
- * 参数不合法与上游 CI 网关失败。三者都**不是**「这张图暂时转不出来」，重试没有意义
- * ⇒ 消费侧直接回落 `/content` 原始 PDF 路径，不进轮询。
- *
- * 与 `PART_FILE_DUPLICATE_CODES` 同款：这里是「哪些码触发降级」的常量白名单，配
- * `isPreviewUnsupportedError` 判别器。**改动必须同步**两处。
- */
-export const PREVIEW_UNSUPPORTED_CODES = [400, 502, 21116] as const;
+// ---------------------------------------------------------------------------
+// 转图失败的错误码分流
+// ---------------------------------------------------------------------------
+//
+// ⚠️ **这里判的是 `ApiError.code`，而 `ApiError.code` 在响应体是信封时等于信封里的
+// 业务码、不是 HTTP 状态码**（`api/http.ts` 的响应拦截器 `new ApiError(payload.code…)`）。
+// 后端 `AppError::into_response()` 对 21116 / 21117 / 21118 一律装信封，所以
+// 「21116 的 HTTP 400」在前端读到的 `code` 是 **21116**、不是 400。
+//
+// 400 / 502 两个 HTTP 状态码只兜**无信封**的代理层错误（nginx 直接返的纯文本 /
+// HTML 502）：那时响应体解析不出信封，拦截器退化成用 HTTP 状态码兜底。
+//
+// 与 `PART_FILE_DUPLICATE_CODES` 同款：这里是常量白名单，配下面的判别器。
+// **改动必须同步**两处。
 
-/** 触发「预览端点不可用、按 `/content` 原始 PDF 兜底」的 ApiError.code 取值类型。 */
-export type PreviewUnsupportedCode = (typeof PREVIEW_UNSUPPORTED_CODES)[number];
+/**
+ * 2026-10-13：`/preview` 端点**重试没有意义**的错误码 ⇒ 命中即降级到 `/content`。
+ *
+ * - `21116` 该文件不做转图（kind 非图纸类 / `file_type ≠ PDF`）：确定性判定，重试一万次
+ *   结果也一样；
+ * - `21118` 打 python / CI 转发失败（含后端 `NoopPyBackend` 占位）：转发链路本身不通，
+ *   轮询只是在等一个不会自己好起来的上游；
+ * - `400` / `502` 无信封的代理层错误：同一 origin 的 `/content` 兜底走的是同一条链路，
+ *   代理层不通时重试预览没有不同结果。
+ */
+export const PREVIEW_UNSUPPORTED_CODES = [400, 502, 21116, 21118] as const;
+
+/**
+ * 2026-10-13：转码失败但**允许有限自愈**的错误码 ⇒ 至多重试
+ * `PREVIEW_SELF_HEAL_MAX_RETRY` 次，之后降级。
+ *
+ * `21117` = CI job 终态失败（Failed / Cancel / Pause / NotExist）。后端对 FAILED 行做的是
+ * 「重置为 PENDING + 清 `ci_job_id` 后重走推进流程」= **重新提交一个 CI job**，而 CI 按页
+ * 计费 ⇒ 不设上限的话一次终局失败会被前端轮询驱动成十几次重新提交。
+ * 留 1 次重试是尊重后端「下一次调用自愈」的设计（python 侧偶发抖动能自愈），
+ * 同时把重复提交的次数钉在可接受的量级。
+ */
+export const PREVIEW_SELF_HEAL_CODES = [21117] as const;
+
+/** `PREVIEW_SELF_HEAL_CODES` 命中的错误最多自愈重试几次。 */
+export const PREVIEW_SELF_HEAL_MAX_RETRY = 1;
 
 /**
  * 判断一个后端错误是否命中 `PREVIEW_UNSUPPORTED_CODES`（读 `ApiError.code`）。
@@ -180,6 +213,14 @@ export function isPreviewUnsupportedError(e: unknown): boolean {
   return (
     typeof code === 'number' &&
     (PREVIEW_UNSUPPORTED_CODES as readonly number[]).includes(code)
+  );
+}
+
+/** 判断一个后端错误是否命中 `PREVIEW_SELF_HEAL_CODES`（读 `ApiError.code`）。 */
+export function isPreviewSelfHealError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  return (
+    typeof code === 'number' && (PREVIEW_SELF_HEAL_CODES as readonly number[]).includes(code)
   );
 }
 

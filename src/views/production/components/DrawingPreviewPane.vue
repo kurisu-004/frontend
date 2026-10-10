@@ -245,6 +245,11 @@ async function loadPreviewUrl(file: PartFileItem): Promise<void> {
   previewUrlError.value = null;
   try {
     const blob = await fetchPartFileContent(file.id);
+    // 迟到守卫：期间可能已切走图纸 Tab 或换了零件。切 Tab 不改 `selectedFile`，
+    // 只比文件 id 的话这道守卫恒成立 —— 而那一支会 `revokePreviewBlob()`，此后再落
+    // 进来的 blob 就是悬空的。
+    if (activeTab.value !== 'drawings') return;
+    if (selectedFile.value?.id !== file.id) return;
     selectedPreviewBlob.value = URL.createObjectURL(blob);
     currentPreviewFileId.value = file.id;
   } catch (e) {
@@ -270,7 +275,12 @@ watch(
     previewUrlError.value = null;
     try {
       const blob = await fetchPartFileContent(file.id);
-      if (selectedFile.value?.id !== file.id) return; // 期间切了零件 ⇒ 丢弃
+      // 迟到守卫：期间用户可能已切走图纸 Tab（那一支会 `revokePreviewBlob()`，此后再
+      // 落进来的 blob 就是悬空的）或换了零件 ⇒ 迟到的 blob 直接丢弃。
+      // ⚠️ 必须**同时**判「文件还是同一个」与「图纸 Tab 仍激活」：切 Tab 不改
+      // `selectedFile`，只比文件的话这道守卫恒成立。
+      if (activeTab.value !== 'drawings') return;
+      if (selectedFile.value?.id !== file.id) return;
       selectedPreviewBlob.value = URL.createObjectURL(blob);
       currentPreviewFileId.value = file.id;
     } catch (e) {

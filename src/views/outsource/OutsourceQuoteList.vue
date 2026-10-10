@@ -24,7 +24,7 @@
      - 降级原因以 `degradeHint` 传进弹窗渲染成一行提示，不静默换渲染路径。
 -->
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { RefreshLeft } from '@element-plus/icons-vue';
@@ -166,6 +166,19 @@ watch(
   { immediate: true },
 );
 
+/**
+ * 「有东西在路上」的文案，传给弹窗的 `busyHint`。
+ *
+ * 判据与弹窗那三条分支一一对应：**两条路都还没有可渲染的东西**时给提示，null 才表示
+ * 真的没有可预览内容。分两档是因为它们在说不同的事：转图在等 CI，「查看原始 PDF」
+ * 已点、blob 在路上 —— 混成一句会让工人以为点按钮没用。
+ */
+const drawingBusyHint = computed<string | null>(() => {
+  if (!drawingPreviewIsPdf.value) return null;
+  if (drawingShowOriginal.value) return drawingPreviewUrl.value ? null : '加载原始 PDF…';
+  return preview.loading.value ? '图纸转图中…' : null;
+});
+
 function closeDrawingPreview(): void {
   drawingPreviewVisible.value = false;
   if (drawingPreviewUrl.value) {
@@ -276,6 +289,7 @@ onBeforeUnmount(() => {
       :is-pdf="drawingPreviewIsPdf"
       :pages="drawingShowOriginal ? [] : preview.pages.value"
       :degrade-hint="preview.degradedReason.value"
+      :busy-hint="drawingBusyHint"
       @update:model-value="(v: boolean) => (drawingPreviewVisible = v)"
       @close="closeDrawingPreview"
       @viewOriginal="drawingShowOriginal = true"

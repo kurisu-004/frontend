@@ -271,6 +271,11 @@ watch(
 );
 
 function onClosed(): void {
+  // ⚠️ 自增 token：关窗时 `previewFile` 已被置 null，但**在途的 blob 请求**是另一个
+  // promise，它回来时比对的是自己出发那一刻的 token —— 不在这里自增的话，迟到响应仍会
+  // 通过比对并写进 `previewBlobUrl`，而 `releaseBlobUrl` 已经 revoke 过手上那一个 ⇒
+  // 没人再 revoke 它，一次泄漏。
+  previewToken += 1;
   releaseBlobUrl();
   previewFile.value = null;
   showOriginalPdf.value = false;

@@ -43,6 +43,12 @@
 //     定宽定高）、OutsourceQuotePdfPreview（.drawing-frame-wrap 自己给 height:70vh +
 //     column）。三者都是「在预览组件与 body 之间插一个自带高度的包裹元素」，与
 //     「让 body 自己分高」是两种等价解法。
+//   - **结构上接不进 `/preview` 链路、刻意不切**的承载点：PartBatchPdfTab /
+//     PartBatchManualTab。它们预览的是「上传前本地 File 的 object URL」—— 用户还没
+//     提交、后端还没有 `t_part_file` 行，**没有文件对象 id**，`/preview` 与 `/content`
+//     都无从谈起。这两行留在 PdfViewer 表里是因为它们确实要挂 `pdf-preview-dialog`
+//     （不是「忘了切」，是「切不了」）；将来若上传流程改成先落库再预览，这两条才可以
+//     从本清单里移进转图链路。
 //   上述「例外集合」是人工判定，再加一条全仓扫描只会把维护者绑在人工白名单上；
 //   本守卫的价值是锁死这些已知调用点，新增直接承载 PdfViewer / ImagePager 的预览弹窗
 //   请一并加进下面的表。
@@ -96,12 +102,30 @@ function stripComments(src: string): string {
   return src.replace(/<!--[\s\S]*?-->/g, blank).replace(/\/\*[\s\S]*?\*\//g, blank);
 }
 
-/** 返回每个 `<承载组件>` 所属 el-dialog 的开标签原文。 */
+/**
+ * 再剥掉 scss 的 `//` 行注释。
+ *
+ * 为什么只对 scss 用：`stripComments` 只认块注释与 HTML 注释，而 `index.scss` 顶部的
+ * 说明性文字全是 `//` 行注释（scss 允许；js 模板里 `//` 会出现在 `https://` 这种 URL 中，
+ * 一刀切会把模板截断）。不剥的话下面那条全局规则断言会在「规则被删、字面量留在注释里」
+ * 时假绿 —— 守卫静默失效比守卫不存在更糟。
+ */
+function stripScssLineComments(src: string): string {
+  return src.replace(/^[ \t]*\/\/.*$/gm, (m) => m.replace(/[^\n]/g, ' '));
+}
+
+/**
+ * 返回每个 `<承载组件>` 所属 el-dialog 的开标签原文。
+ *
+ * ⚠️ 标签里的属性值可能自带 `>`（如 `@update:model-value="(v: boolean) => emit(...)"`）。
+ * `[^>]*` 会在那个 `>` 处截断，开标签被切成半截 → `class` 恰好排在其后就查不到，
+ * `class` 一旦挪到后面就会假红。故这里按「引号内的 `>` 不算结束」来匹配。
+ */
 function owningDialogTags(src: string, viewer: PreviewViewer): string[] {
   const open: string[] = [];
   const owned: string[] = [];
   const pattern = new RegExp(
-    `<el-dialog\\b[^>]*>|<\\/el-dialog>|<${viewer}\\b`,
+    `<el-dialog\\b(?:[^>"']|"[^"]*"|'[^']*')*>|<\\/el-dialog>|<${viewer}\\b`,
     'g',
   );
   for (const m of src.matchAll(pattern)) {
@@ -154,10 +178,9 @@ describe('el-dialog 承载 PdfViewer / ImagePager 的高度契约', () => {
   // 2026-10-13：`.img-preview-dialog` 是 ImagePager 的同名契约，少写它那一侧
   // ImagePager 承载点会塌，而画面症状与 PdfViewer 侧一模一样 ⇒ 这里逐 class 断言。
   it('.pdf-preview-dialog / .img-preview-dialog 的全局规则两种形态都在（fullscreen + 窗口）', () => {
-    const scss = stripComments(readFileSync(join(ROOT, 'src/styles/index.scss'), 'utf8')).replace(
-      /\s+/g,
-      ' ',
-    );
+    const scss = stripScssLineComments(
+      stripComments(readFileSync(join(ROOT, 'src/styles/index.scss'), 'utf8')),
+    ).replace(/\s+/g, ' ');
     for (const cls of Object.values(HOST_CLASS)) {
       expect(
         scss,

@@ -2,26 +2,30 @@
 //
 // 图纸预览的「转图轮询」编排（2026-10-13 新增）。
 //
-// 后端 `GET /files/objects/{id}/preview` 把转码状态做成**显式三态**而不是让前端
-// 自己猜：`PENDING` 时给一个建议重试间隔 `retry_after_ms`。本 composable 是这个
-// 建议间隔的唯一执行者 —— api 层（`api/files/objects.ts::getPartFilePreview`）只发
-// 一次请求，不带任何定时器。
+// 后端 `GET /files/objects/{id}/preview` 把转码状态做成**显式两态**而不是让前端
+// 自己猜：`PENDING` 时给一个建议重试间隔 `retry_after_ms`。**失败不在 `state` 里**
+// —— 失败一律走 HTTP 5xx + 信封业务码（21117 / 21118），所以失败语义一律按
+// `ApiError.code` 分流，见 `types/part_file.ts` 的「转图失败的错误码分流」。
 //
-// 三态消费侧的互斥优先级：`loading` > `degraded` > `ready`。
+// 本 composable 是建议重试间隔的唯一执行者 —— api 层（`api/files/objects.ts::
+// getPartFilePreview`）只发一次请求，不带任何定时器。
+//
+// 状态互斥优先级：`loading` > `degraded` > `ready`。
 //   - `ready`    = 转图完成，`pages` 非空 → 承载点渲染 `<ImagePager :pages>`；
 //   - `loading`  = 首次请求在途 / PENDING 等待中（含退避间隔）→ 承载点转圈；
-//   - `degraded` = 端点不支持 / CI 明确失败 / 轮询预算耗尽 → 承载点**回落
-//                  `/content` 原始 PDF 路径**，并把 `degradedReason` 显式挂到 UI 上。
+//   - `degraded` = 端点不支持 / 转码失败 / 轮询预算耗尽 → 承载点**回落 `/content`
+//                  原始 PDF 路径**，并把 `degradedReason` 显式挂到 UI 上。
 //
 // ⚠️ **降级必须是有告知的**：`degraded` 不是静默兜底。每个降级原因都会填进
 // `degradedReason`，承载点必须把它渲染出来（一行提示即可）—— 否则 CI 挂了没人
 // 知道，现场只会看到「预览变慢了 / 变成 PDF 了」而查不出原因。
 //
 // ⚠️ **本文件不自己写一套错误分类**。错误一律是 `api/http.ts` 抛出的 `ApiError`
-// （信封 `{code, message}` + 网络错误 code 0），本层只做两件事：认
-// `isPreviewUnsupportedError` 那组「重试没有意义」的码（立即降级），其余原样带上
-// `message` 继续退避重试；预算耗尽时把**最后一次错误的 message** 写进
-// `degradedReason`。判定「该不该重试」的语义全在后端码表里，不在前端另立一套。
+// （信封 `{code, message}` + 网络错误 code 0），本层只做三件事：认
+// `isPreviewUnsupportedError` 那组「重试没有意义」的码（立即降级）、认
+// `isPreviewSelfHealError` 那组「允许有限自愈」的码（按次数上限后降级）、
+// 其余原样带上 `message` 继续退避重试；预算耗尽时把**最后一次错误的 message**
+// 写进 `degradedReason`。判定「该不该重试」的语义全在后端码表里，不在前端另立一套。
 //
 // 并发控制：竞态守卫沿 `PartDrawingPreviewDialog.vue` 的 `previewToken` 范式
 // （自增 token + 响应回来比对），并额外用 `AbortSignal` **真正中断在途请求** ——
@@ -30,7 +34,12 @@
 import { computed, onScopeDispose, ref, toValue, watch } from 'vue';
 import type { ComputedRef, MaybeRefOrGetter } from 'vue';
 import { getPartFilePreview } from '@/api/files/objects';
-import { isPreviewUnsupportedError, type FilePreviewResult } from '@/types/part_file';
+import {
+  isPreviewSelfHealError,
+  isPreviewUnsupportedError,
+  PREVIEW_SELF_HEAL_MAX_RETRY,
+  type FilePreviewResult,
+} from '@/types/part_file';
 
 // ============ 轮询预算 ============
 //
@@ -39,11 +48,12 @@ import { isPreviewUnsupportedError, type FilePreviewResult } from '@/types/part_
 // 降级，理由是「用户点开图纸愿意等的时长」有上限 —— 车间工控机上让人对着转圈等两
 // 分钟不可接受，不如退回原始 PDF 立即可看。
 //
-// 为什么同时要「次数上限」和「墙钟上限」两条，它们各堵一个退化方向：
-//   - 只看次数：后端把 `retry_after_ms` 调大（如 10s）时，30 次能撑 5 分钟，
-//     远超人能等的时长；
-//   - 只看墙钟：若后端持续返回 `retry_after_ms = 0`（未配建议间隔的降级实现），
-//     墙钟内能打出去上千次请求，把后端转码队列冲垮。
+// 为什么同时要「次数上限」和「墙钟上限」两条，它们各堵一个退化方向（下列量级都按
+// MIN / MAX_RETRY_DELAY_MS 的实参算出，不是估算）：
+//   - 只看次数：后端把 `retry_after_ms` 调大（如 8s，即本层封顶值）时，30 次能撑到
+//     ≈ 4 分钟，远超人能等的时长；
+//   - 只看墙钟：若后端持续不给建议间隔（退避落 MIN_RETRY_DELAY_MS = 1s），120s 墙钟
+//     内能打出去 120 次 —— 次数闸不管时这个量级足以把后端转码队列冲垮。
 /** 单次请求之间的最小等待：不给 0，防止后端未配 `retry_after_ms` 时变请求风暴。 */
 const MIN_RETRY_DELAY_MS = 1_000;
 /** 单次等待的硬上限：后端给了 60s 也只等这么多，否则一轮退避就能吃掉整个预算。 */
@@ -54,6 +64,18 @@ const MAX_ATTEMPTS = 30;
 const MAX_ELAPSED_MS = 120_000;
 /** 指数退避倍率：第 n 次等待 = min(建议值 × BACKOFF_FACTOR^(n-1), MAX_RETRY_DELAY_MS)。 */
 const BACKOFF_FACTOR = 1.6;
+
+/**
+ * 与后端节流的关系（两侧各有一道闸，**不打架**，改任一侧前先读这段）。
+ *
+ * 后端 `PreviewService` 用 `next_poll_at` 节流：`PENDING` 且未到期时直接返 PENDING，
+ * **一次外部 IO（python describe / COS）都不打**。本层的单次等待被夹在
+ * `[MIN_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS]`、后端当前固定 2s（上限常数 5s 未启用）
+ * ⇒ 本层第 1 次等待就是 2s，与后端节流齐平；之后指数退避只会让本层**比后端更慢**
+ * （2s → 3.2s → 5.1s → 8s），永远不会抢在节流戳前面把后端打成热路径。
+ * 反向也不构成浪费：本层若偶发抢快（错误重试路径固定 1s），后端也只是多返一次
+ * 「未到期 + 剩余 retry_after_ms」的零 IO 响应。⇒ 两侧是叠加的闸，不是竞争的重试。
+ */
 
 /** 消费侧拿到的预览状态。 */
 export type PreviewPollingState = 'IDLE' | 'PENDING' | 'READY' | 'DEGRADED';
@@ -180,6 +202,8 @@ export function usePreviewPolling(options: UsePreviewPollingOptions): UsePreview
     let attempt = 0;
     /** 末次错误文案：预算耗尽时用它说明「为什么退回」，让降级原因可追因。 */
     let lastErrMsg: string | null = null;
+    /** 已用掉的自愈重试次数：后端对 21117 的自愈 = 重新提交一个按页计费的 CI job，故封顶。 */
+    let selfHealLeft = PREVIEW_SELF_HEAL_MAX_RETRY;
 
     while (myToken === token) {
       if (attempt >= MAX_ATTEMPTS) {
@@ -220,10 +244,22 @@ export function usePreviewPolling(options: UsePreviewPollingOptions): UsePreview
 
       if (caught !== null) {
         lastErrMsg = (caught as Error)?.message || '网络异常';
-        // 端点不支持 / CI 网关失败 ⇒ 重试没有意义，立即降级。
+        // 重试没有意义的码（不支持转图 / 转发链路不通 / 无信封的代理层错误）⇒ 立即降级。
         if (isPreviewUnsupportedError(caught)) {
           degrade(`图纸转图预览不可用（${lastErrMsg}），已改用原始 PDF 预览`);
           return;
+        }
+        // 转码终态失败：后端下一次调用会把 FAILED 重置并**重新提交一个 CI job**，
+        // 而 CI 按页计费 ⇒ 只给 `PREVIEW_SELF_HEAL_MAX_RETRY` 次机会，用完即降级。
+        if (isPreviewSelfHealError(caught)) {
+          if (selfHealLeft <= 0) {
+            degrade(`图纸转码失败（${lastErrMsg}），已改用原始 PDF 预览`);
+            return;
+          }
+          selfHealLeft -= 1;
+          lastErrMsg = `${lastErrMsg}（转码失败，正在重试 ${PREVIEW_SELF_HEAL_MAX_RETRY - selfHealLeft}/${PREVIEW_SELF_HEAL_MAX_RETRY}）`;
+          if (!(await sleep(delayOf(attempt, null), myToken))) return;
+          continue;
         }
         // 其余（网络抖动、5xx）⇒ 记一笔，**按固定下限退避后**再重试；预算耗尽时自然
         // 落到 degrade，那时 lastErrMsg 会跟着进降级原因，不会静默吞掉。
@@ -233,19 +269,21 @@ export function usePreviewPolling(options: UsePreviewPollingOptions): UsePreview
         continue;
       }
 
-      if (result!.state === 'READY') {
+      // 后端 `state` 只可能是 READY / PENDING 两个取值（失败走 5xx 信封，不在 state 里）。
+      // 这里先按 `string` 取出来，好让「不认识的值」也能被显式处理而不是悄悄落进
+      // PENDING 分支空转到预算耗尽。
+      const wireState: string = result!.state;
+      if (wireState === 'READY') {
         pages.value = result!.pages;
         pageCount.value = result!.page_count;
         state.value = 'READY';
         inFlight.value = false;
         return;
       }
-      if (result!.state === 'FAILED') {
-        degrade(
-          result!.error
-            ? `图纸转图失败：${result!.error}。已改用原始 PDF 预览`
-            : '图纸转图失败，已改用原始 PDF 预览',
-        );
+      if (wireState !== 'PENDING') {
+        // 后端将来加了新的非终态值：按「不认识就降级」处理并把实际值带进原因，
+        // 让现场能一眼看出是后端加了状态而不是前端坏了。
+        degrade(`图纸转图返回了未知的转码状态（${wireState}），已改用原始 PDF 预览`);
         return;
       }
 

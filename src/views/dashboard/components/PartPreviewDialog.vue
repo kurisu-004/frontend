@@ -37,9 +37,12 @@
       `/content` blob + PdfViewer 保留为「查看原始 PDF」逃生口 + 转图降级兜底。
     - 图片类文件不参与转图，仍是 blob → el-image。
     - 降级原因渲染为 `.degrade-hint` 一行提示 —— 静默换渲染路径会让 CI 故障无人察觉。
-    - ⚠️ 本弹窗的宿主是 `.preview-frame`（aspect-ratio 自带确定高度，PDF 侧的高度契约
-      例外清单里就有它），不是 el-dialog ⇒ **不需要** .pdf-preview-dialog /
-      .img-preview-dialog。挂上 class 也不会出错，只是这份契约对本弹窗不适用。
+    - ⚠️ 本弹窗的宿主是 `.preview-frame`（aspect-ratio 自带确定高度），**刻意不挂**
+      `.pdf-preview-dialog` / `.img-preview-dialog`。挂上会**出错**而不是无害：
+      `src/styles/index.scss` 的 `.pdf-preview-dialog.el-dialog:not(.is-fullscreen) >
+      .el-dialog__body { height: 72vh }` 会把整个 body 钉成 72vh，而本弹窗的 body 里
+      除预览区外还有下方的批次表格区（见 `.batches-section`）⇒ 72vh 是给「纯预览」弹窗
+      定的预算，套到这里会把表格压到需要内部滚动。
 -->
 <template>
   <el-dialog
@@ -88,9 +91,11 @@
             :key="`original-${selectedFile?.id}`"
             :url="previewBlob"
           />
+          <!-- 还没 blob 的两种情形文案必须分开：转图还在等（没打算要 blob，此刻一个
+               /content 请求都没发过）与「已决定看原始 PDF、正在拉 blob」。 -->
           <div v-else class="preview-state">
             <el-icon class="is-loading"><Loading /></el-icon>
-            <span>加载原始 PDF…</span>
+            <span>{{ wantsOriginalPdf ? '加载原始 PDF…' : '图纸转图中…' }}</span>
           </div>
         </div>
         <el-image
@@ -253,6 +258,10 @@ async function loadPreviewUrl(file: PartFileSchema): Promise<void> {
   previewLoading.value = true;
   try {
     const blob = await fetchPartFileContent(file.id);
+    // 迟到守卫：期间可能已关弹窗或点了别的行。只比文件 id 挡不住「同一份文件、
+    // 只是把弹窗关了」—— 那条路径 id 没变，而 blob 确实会迟到。
+    if (!props.modelValue) return;
+    if (selectedFile.value?.id !== file.id) return;
     previewBlob.value = URL.createObjectURL(blob);
     currentPreviewFileId.value = file.id;
   } catch (e) {
@@ -276,7 +285,12 @@ watch(
     previewLoading.value = true;
     try {
       const blob = await fetchPartFileContent(file.id);
-      if (selectedFile.value?.id !== file.id) return; // 期间切了行 ⇒ 丢弃
+      // 迟到守卫：期间用户可能已关掉弹窗或点了别的行。
+      // ⚠️ 必须**同时**判「文件还是同一个」与「弹窗还开着」：只比文件的话，关窗后
+      // 到达的 blob 会被写进 `previewBlob`，而它没有任何一条后续路径会 revoke 它
+      // （revoke 只挂在换文件 / 卸载上）⇒ 一次泄漏。
+      if (!props.modelValue) return;
+      if (selectedFile.value?.id !== file.id) return;
       previewBlob.value = URL.createObjectURL(blob);
       currentPreviewFileId.value = file.id;
     } catch (e) {

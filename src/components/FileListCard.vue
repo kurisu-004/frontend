@@ -177,9 +177,12 @@
         <div v-if="preview.degradedReason.value" class="degrade-hint">
           {{ preview.degradedReason.value }}
         </div>
+        <!-- 还没 blob 的两种情形文案必须分开：转图还在等（没打算要 blob，此刻一个
+             /content 请求都没发过）与「已决定看原始 PDF、正在拉 blob」。混成一句
+             「加载原始 PDF…」会让仍在转图的 PDF 显示成「在拉原始 PDF」。 -->
         <div v-if="!previewBlobUrl" class="preview-loading">
           <el-icon :size="32" class="is-loading"><Loading /></el-icon>
-          <span>加载原始 PDF…</span>
+          <span>{{ wantsOriginalPdf ? '加载原始 PDF…' : '图纸转图中…' }}</span>
         </div>
         <PdfViewer v-else :key="`pdf-${previewFile?.id}`" :url="previewBlobUrl" :page="defaultPage" />
       </div>
@@ -543,6 +546,10 @@ async function onPreview(f: PartFileItem): Promise<void> {
     const blob = props.apiGetPreviewUrl
       ? await fetchPreviewBlob(f.id, props.apiGetPreviewUrl)
       : await fetchPartFileContent(f.id);
+    // 迟到守卫：期间用户可能已经关掉弹窗或换文件（图片 / 3D 这条路径同样要判，
+    // 否则关窗后到达的 blob 会顶掉 `onPreviewClosed` 已经清空的值，而它再没人 revoke）。
+    if (!previewVisible.value) return;
+    if (previewFile.value?.id !== f.id) return;
     if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
     previewBlobUrl.value = URL.createObjectURL(blob);
   } catch (e) {
@@ -564,7 +571,12 @@ watch(
       const blob = props.apiGetPreviewUrl
         ? await fetchPreviewBlob(f.id, props.apiGetPreviewUrl)
         : await fetchPartFileContent(f.id);
-      // 期间用户可能已经关掉弹窗或换文件 ⇒ 迟到的 blob 直接丢弃，不写进当前预览。
+      // 迟到守卫：期间用户可能已经关掉弹窗或换文件。
+      // ⚠️ 必须**同时**判「文件还是同一个」与「弹窗还开着」：本组件关窗时不清
+      // `previewFile`（列表还要靠它标高亮），只比 id 的话恒成立 —— 关窗后到达的
+      // blob 会被写进 `previewBlobUrl`，而 `onPreviewClosed` 已经 revoke 过手上那一个
+      // ⇒ 没人再 revoke 它，一次泄漏。
+      if (!previewVisible.value) return;
       if (previewFile.value?.id !== f.id) return;
       if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
       previewBlobUrl.value = URL.createObjectURL(blob);
