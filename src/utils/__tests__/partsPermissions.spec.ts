@@ -49,7 +49,7 @@ describe('canPrintPartDrawing', () => {
   });
 });
 
-// 2026-10-11 新增：图纸文件下载入口（`GET /part-files/{id}/url`）的角色闸门。
+// 2026-10-11 新增：图纸文件下载入口（`GET /files/objects/{id}/url`）的角色闸门。
 //
 // 与打印不同一条端点，闸门却**恰好同集合**：后端把 part_file 的列表 / content 对
 // SHELF_ACCOUNT 放开了（工控机预览打这两条），`/url` 刻意没放开（直链可外传）。

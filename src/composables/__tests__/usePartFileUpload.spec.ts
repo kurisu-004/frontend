@@ -14,7 +14,7 @@
 // - ownerPartId / kind 接受 Ref<string> / getter 两种形态；
 // - uploading / lastError 状态在生命周期内同步。
 //
-// 不发起真实 HTTP：mock @/api/files/sts、@/api/parts/file、@/utils/fileHash、
+// 不发起真实 HTTP：mock @/api/files/sts、@/api/files/objects、@/utils/fileHash、
 // cos-js-sdk-v5。fileHash 用 fake 实现（SHA-256 取文件名 hex），避免依赖
 // hash-wasm 在 vitest 的 wasm 加载。
 //
@@ -36,7 +36,7 @@ vi.mock('@/api/files/sts', () => ({
   grantStsTmpKey: (...args: unknown[]) => grantStsTmpKeyMock(...args),
 }));
 
-vi.mock('@/api/parts/file', () => ({
+vi.mock('@/api/files/objects', () => ({
   confirmPartFile: (...args: unknown[]) => confirmPartFileMock(...args),
 }));
 

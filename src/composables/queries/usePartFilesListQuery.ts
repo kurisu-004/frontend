@@ -7,7 +7,7 @@
 // 设计要点（沿 2026-09-26 TanStack Query 共享基础数据层约定 #5/#6/#7）：
 //   - 单调用 listPartFilesByOwner(partId) 拉 owner 全量，computed 按 kind 桶。
 //   - staleTime 20min（图纸/3D 几乎不变业务特性），gcTime 30min（切回不重复拉）。
-//     比 2026-09-26 的 Infinity 短 —— part-files 域可能频繁新增/删除文件，
+//     比 2026-09-26 的 Infinity 短 —— 文件对象域可能频繁新增/删除文件，
 //     旧值长期不失效会导致用户上传新文件后 20min 内看不到；20min 是体验与性能
 //     的折中。写操作（上传 / 删除）由 caller 调 invalidatePartFilesListQuery
 //     立即失效本 owner 的缓存，跳过 staleTime 等待。
@@ -73,7 +73,7 @@ export function usePartFilesListQuery(
   });
 }
 
-/** 2026-09-29 新增：失效指定 owner 的 part-files 列表。
+/** 2026-09-29 新增：失效指定 owner 的文件列表（queryKey 前缀 `part-files` 是缓存键不是 URL）。
  *  调用方：PartDetail.vue onFileTabRefresh / 上传 / 删除成功后。
  *  返回 Promise<void> 让 caller 可以 await 失效完成再走后续逻辑。 */
 export function invalidatePartFilesListQuery(
@@ -83,7 +83,7 @@ export function invalidatePartFilesListQuery(
   return qc.invalidateQueries({ queryKey: qk.partFilesList(ownerId) }).then(() => undefined);
 }
 
-/** 2026-09-29 新增：失效整个 part-files 域（任意 ownerId 形态）。
+/** 2026-09-29 新增：失效整个文件对象域（任意 ownerId 形态）。
  *  留作未来多 owner / 跨页面失效场景的兜底；当前调用点都按 owner 维度失效。 */
 export function invalidatePartFilesListAll(qc: QueryClient): Promise<void> {
   return qc.invalidateQueries({ queryKey: qk.partFilesPrefix }).then(() => undefined);

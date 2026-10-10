@@ -3,8 +3,8 @@
 //
 // 报工台三页图纸预览弹窗的「下载文件」按钮角色闸门（2026-10-11 新增）。
 //
-// 背景：后端把 part_file 的**列表** `GET /part-files` 与**内容** `GET /part-files/{id}/content`
-// 对 SHELF_ACCOUNT 放开了（工控机的图纸预览打的就是这两条），但 `GET /part-files/{id}/url`
+// 背景：后端把文件对象的**列表** `GET /files/objects` 与**内容** `GET /files/objects/{id}/content`
+// 对 SHELF_ACCOUNT 放开了（工控机的图纸预览打的就是这两条），但 `GET /files/objects/{id}/url`
 // **刻意没放开**（回的是 COS 预签直链，1 小时有效、可外传）。三页的预览弹窗里都有
 // 「下载文件」按钮走的就是 `/url` ⇒ 不挂闸门就是「可见但必 403」，正是
 // `utils/partsPermissions` 文件头警告的反模式。

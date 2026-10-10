@@ -12,7 +12,7 @@
   - 选图片 → <el-image :src="blobUrl">
   2026-09-20：3D Tab 接入 StepViewer，替换原"功能未实现"占位（PR step-viewer-integration）。
     - 切 part → 拉 models3d 列表 → 过滤 occt-wasm 支持的格式（STEP/STP/IGES/IGS/STL/BREP，
-      OBJ/3MF 当前 occt-wasm 不支持）→ 取第一个 → api.get(/part-files/{id}/content, blob)
+      OBJ/3MF 当前 occt-wasm 不支持）→ 取第一个 → api.get(/files/objects/{id}/content, blob)
       → createObjectURL → StepViewer.src
     - onBeforeUnmount 统一 revoke blob URL，防止内存泄漏
     - StepViewer 组件本身负责 SceneManager / CubeGizmo dispose
@@ -116,7 +116,7 @@ import type { PartFileItem } from '@/types/part_file';
 // （fetchDrawings + fetch3DModels + fetchCadFiles）。reactive params 自动驱动
 // useQuery 重取；切 part → ownerKey 变化 → 自动 refetch。
 import { usePartFilesListQuery } from '@/composables/queries/usePartFilesListQuery';
-import { fetchPartFileContent } from '@/api/parts/file';
+import { fetchPartFileContent } from '@/api/files/objects';
 import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
 
 const props = defineProps<{

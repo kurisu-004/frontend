@@ -36,7 +36,7 @@
 //    2026-10-08 的送货单域重构整体下线：打印改由前端本地渲染（见
 //    views/com/delivery/utils/deliveryNoteWorkbook.ts），后端不再经手。
 //    这 2 条路径在 rust 侧放宽了读超时（打印档 660s，批量拼接 PDF 耗时可达分钟级），
-//    前端批量端点的 axios timeout 必须严格大于它，理由见 api/parts/file.ts。
+//    前端批量端点的 axios timeout 必须严格大于它，理由见 api/files/objects.ts。
 
 import type { AxiosError } from 'axios';
 import axios, {

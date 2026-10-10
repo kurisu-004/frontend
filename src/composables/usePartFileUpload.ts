@@ -14,6 +14,13 @@
 // 为什么独立 composable：PartBatchPdfTab 是批量场景 A，确认端点不同
 //（batchCreateParts 而非 confirmPartFile），不适合套同一条 onSubmit 路径。
 //
+// 2026-10-13 后端 files 域重组：本文件的 `confirmPartFile` 端点
+// `POST /api/v2/parts/{part_id}/files/confirm` **本次不变**（仍是零件侧端点，
+// PR1a 后端只动 part_file + cnc_program 两条 URL）；但它的 api 实现自
+// `api/parts/file.ts` 迁至 `api/files/objects.ts`，import 路径随之改。
+// ⚠️ 本文件的 `vi.mock` 目标（usePartFileUpload.spec.ts）必须**同步**改到
+// `@/api/files/objects`，否则 mock 挂不上、测试会在真实 HTTP 上跑。
+//
 // 雪花 ID 全程 string（owner_partId = string；PartFileItem.id = string）。
 //
 // 2026-09-17 STS 端口迁移说明：
@@ -28,7 +35,7 @@
 import { ref, unref, type Ref } from 'vue';
 import { computeSha256 } from '@/utils/fileHash';
 import { parseFileExt } from '@/utils/fileExt';
-import { confirmPartFile } from '@/api/parts/file';
+import { confirmPartFile } from '@/api/files/objects';
 import { grantStsTmpKey } from '@/api/files/sts';
 import { useCosUpload, type CosUploadItem } from '@/composables/useCosUpload';
 import { PartFileKindToStsPurpose, type StsTmpKeysResponse } from '@/types/sts';
@@ -220,7 +227,9 @@ export function usePartFileUpload(opts: UsePartFileUploadOptions): UsePartFileUp
         throw new Error(uploaded?.error ?? 'COS 上传失败');
       }
 
-      // 步骤 4：confirmPartFile（场景 B 专用端点，让后端 head + copy + 插表）
+      // 步骤 4：confirmPartFile（场景 B 专用端点 `POST /parts/{id}/files/confirm`，
+      // 让后端 head + copy + 插表）。2026-10-13 起该端点 URL 不变，但实现迁到
+      // `api/files/objects.ts`（随 files 域重组的机械搬家）。
       // 2026-09-29 新增 ext 必传字段，与 rust ConfirmFileIn 对齐。
       const confirmed = await confirmPartFile(curOwnerId, {
         kind: curKind as PartFileKind,

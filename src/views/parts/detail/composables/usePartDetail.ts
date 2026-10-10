@@ -193,16 +193,18 @@ export function usePartDetail(
    * 「能点但没人看得到」两种现场症状之一。
    */
   const canInspect = computed(() => isManager.value || isInspector.value);
-  /** 图纸 / 3D 模型 / CAD 2D：`POST /part-files`（kind = DRAWING / 3D_MODEL / CAD_2D）
-   *  → 后端 `part_file` 域 `[Manager, Clerk, CncProgrammer]`，软删按 kind 派生
+  /** 图纸 / 3D 模型 / CAD 2D：文件对象上传（kind = DRAWING / 3D_MODEL / CAD_2D）
+   *  → 后端文件对象域 `[Manager, Clerk, CncProgrammer]`，软删按 kind 派生
    *  `[Manager, Clerk]`。前端取 `[Manager, Clerk]` 是**更严**的一档（宁可不显示按钮，
    * 也不要给一个必 403 的入口）。 */
   const canManageDrawings = computed(() => isManager.value || isClerk.value);
   const canManage3DModels = computed(() => isManager.value || isClerk.value);
-  /** G 代码：`POST /part-files/parts/{id}/cnc-programs`（kind = G_CODE）→ 后端
-   *  `[Manager, CncProgrammer]`，与前端一致（逐字对齐）。 */
+  /** G 代码：配对上传（kind = G_CODE）→ 后端
+   *  `[Manager, CncProgrammer]`，与前端一致（逐字对齐）。
+   *  ⚠️ 2026-10-13：原注释点名的 `POST /part-files/parts/{id}/cnc-programs` 窄路径
+   *  上传端点已被后端删除（旧路径 404）；G 代码现统一走 `POST /files/cnc/pairs`。 */
   const canManageCncFiles = computed(() => isManager.value || isCnc.value);
-  /** 设定单：`POST /part-files/parts/{id}/setup-sheets`（kind = SETUP_SHEET）→ 后端
+  /** 设定单：配对上传（kind = SETUP_SHEET）→ 后端
    *  `[Manager, CncProgrammer]`，与前端一致。⚠️ 同 kind 的**软删**后端却是
    *  `[Manager, Clerk]`（`handler.rs` 的按-kind 派生表），后端两档不一致；前端按上传
    * 那一档（更严）判，不会给 Clerk 一个后端其实允许、但现场口径也说不清的入口。 */

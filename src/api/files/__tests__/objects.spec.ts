@@ -1,11 +1,14 @@
-// src/api/parts/file.spec.ts（2026-09-16 frontend-overall-cos-direct-upload，
-// 2026-09-17 STS 端口迁移：删除原 createUploadIntents 测试，移到 usePartFileUpload.spec.ts）
+// src/api/files/__tests__/objects.spec.ts（原 src/api/parts/file.spec.ts，
+// 2026-10-13 随后端 files 域重组迁入本目录）。
+//
+// 2026-09-16 frontend-overall-cos-direct-upload，
+// 2026-09-17 STS 端口迁移：删除原 createUploadIntents 测试，移到 usePartFileUpload.spec.ts
 //
 // 验证：
 // - confirmPartFile POST /api/v2/parts/{id}/files/confirm；
-// - getPartFileDownloadUrl GET /api/v2/part-files/{id}/url，返回 download_url 字段；
-// - deletePartFile POST /api/v2/part-files/{id}/delete，body 强制 { version }（OCC）；
-// - getPartFileContentUrl 返回相对 URL `/part-files/{id}/content`（不含鉴权头，让
+// - getPartFileDownloadUrl GET /api/v2/files/objects/{id}/url，返回 download_url 字段；
+// - deletePartFile POST /api/v2/files/objects/{id}/delete，body 强制 { version }（OCC）；
+// - getPartFileContentUrl 返回相对 URL `/files/objects/{id}/content`（不含鉴权头，让
 //   调用方 axios 走拦截器注入 Bearer token）；
 // - printPartDrawing / printPartDrawingBatch 也走 api（路径与 rust v2 转发端点同名）。
 //
@@ -34,7 +37,7 @@ import {
   getPartFileDownloadUrl,
   printPartDrawing,
   printPartDrawingBatch,
-} from './file';
+} from '../objects';
 import type { ConfirmFileIn } from '@/types/part_file';
 
 beforeEach(() => {
@@ -131,7 +134,7 @@ describe('printPartDrawingBatch', () => {
 // 2026-09-16 T3.5：part-file 域辅助端点（删除 / 下载 / 内容预览）
 // ============================================================
 describe('getPartFileDownloadUrl', () => {
-  it('GET /api/v2/part-files/{id}/url，返回 download_url 字段（注意非 url）', async () => {
+  it('GET /api/v2/files/objects/{id}/url，返回 download_url 字段（注意非 url）', async () => {
     getCalls.mockResolvedValueOnce({
       data: {
         id: '190000000000777',
@@ -151,7 +154,7 @@ describe('getPartFileDownloadUrl', () => {
 
     expect(getCalls).toHaveBeenCalledTimes(1);
     const [calledUrl] = getCalls.mock.calls[0]!;
-    expect(calledUrl).toBe('/part-files/190000000000777/url');
+    expect(calledUrl).toBe('/files/objects/190000000000777/url');
     expect(url).toBe('https://bucket.cos.ap-shanghai.myqcloud.com/a.pdf?sign=xxx');
   });
 
@@ -174,19 +177,19 @@ describe('getPartFileDownloadUrl', () => {
     await getPartFileDownloadUrl('id/with/slash');
 
     const [calledUrl] = getCalls.mock.calls[0]!;
-    expect(calledUrl).toBe('/part-files/id%2Fwith%2Fslash/url');
+    expect(calledUrl).toBe('/files/objects/id%2Fwith%2Fslash/url');
   });
 });
 
 describe('deletePartFile', () => {
-  it('POST /api/v2/part-files/{id}/delete，body 强制 { version }（OCC）', async () => {
+  it('POST /api/v2/files/objects/{id}/delete，body 强制 { version }（OCC）', async () => {
     postCalls.mockResolvedValueOnce({ data: null });
 
     await deletePartFile('190000000000777', 7);
 
     expect(postCalls).toHaveBeenCalledTimes(1);
     const [calledUrl, body] = postCalls.mock.calls[0]!;
-    expect(calledUrl).toBe('/part-files/190000000000777/delete');
+    expect(calledUrl).toBe('/files/objects/190000000000777/delete');
     expect(body).toEqual({ version: 7 });
   });
 
@@ -201,20 +204,20 @@ describe('deletePartFile', () => {
 });
 
 describe('getPartFileContentUrl', () => {
-  it('返回相对路径 `/part-files/{id}/content`（不含 baseURL，由调用方 axios 拼接）', () => {
+  it('返回相对路径 `/files/objects/{id}/content`（不含 baseURL，由调用方 axios 拼接）', () => {
     const url = getPartFileContentUrl('190000000000777');
-    expect(url).toBe('/part-files/190000000000777/content');
+    expect(url).toBe('/files/objects/190000000000777/content');
     // 不能是绝对 URL —— 否则 `<img src>` / `<iframe src>` 会绕开 axios 拦截器丢 Bearer
     expect(url.startsWith('http')).toBe(false);
   });
 
   it('雪花 ID 走 encodeURIComponent', () => {
-    expect(getPartFileContentUrl('id/with/slash')).toBe('/part-files/id%2Fwith%2Fslash/content');
+    expect(getPartFileContentUrl('id/with/slash')).toBe('/files/objects/id%2Fwith%2Fslash/content');
   });
 });
 
 describe('fetchPartFileContent', () => {
-  it('GET /api/v2/part-files/{id}/content，responseType=blob', async () => {
+  it('GET /api/v2/files/objects/{id}/content，responseType=blob', async () => {
     const fakeBlob = new Blob(['pdf-bytes'], { type: 'application/pdf' });
     getCalls.mockResolvedValueOnce({ data: fakeBlob });
 
@@ -222,7 +225,7 @@ describe('fetchPartFileContent', () => {
 
     expect(getCalls).toHaveBeenCalledTimes(1);
     const [calledUrl, config] = getCalls.mock.calls[0]!;
-    expect(calledUrl).toBe('/part-files/190000000000777/content');
+    expect(calledUrl).toBe('/files/objects/190000000000777/content');
     expect((config as Record<string, unknown>).responseType).toBe('blob');
     expect(blob).toBe(fakeBlob);
   });

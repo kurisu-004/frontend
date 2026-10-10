@@ -5,7 +5,7 @@
 
   移植自 ~/Code/step-viewer 的 src/three/* + src/components/ViewerCanvas.vue 思路，
   重写为适配 hsh-erp frontend 的 Vue 3 + Element Plus 壳组件，consumer 用 props.src
-  传入 blob URL（由父组件调 api.get('/part-files/{id}/content', blob) → createObjectURL
+  传入 blob URL（由父组件调 api.get('/files/objects/{id}/content', blob) → createObjectURL
   得到），本组件负责 occt-wasm 解析 → three.js Group → 渲染 + 资源 dispose。
 
   设计要点：

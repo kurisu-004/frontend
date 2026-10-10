@@ -42,10 +42,27 @@
 //      塞进第 7 处，或引发搬这 6 个文件的巨量 diff。
 //   ② 现有 3 个子目录 `com/` / `files/` / `parts/` 则**全部镜像独占 URL 命名
 //      空间**（`com/unionList.ts` → `/com/union-list`、`files/sts.ts` →
-//      `/files/sts-tmp-keys`、`parts/*` → `/parts/*`）。注意 `files/` 只有 1 个文件、
-//      1 条端点路径，它成目录**不是因为端点多**；只有 `parts/`（`/parts/*` 端点数
-//      确实多到拆出 4 个实现文件 batch / bid / crud / file）才适用「端点多到需拆
-//      文件」。**没有** `prod/` 目录。
+//      `/files/sts-tmp-keys`、`parts/*` → `/parts/*`）。**没有** `prod/` 目录。
+//
+//      ⚠️ 2026-10-13 订正（files 域重组后本段的两处细节已过期）：
+//      - `files/` **不再是 1 个文件**。后端把 `part_file` + `cnc_program` 收编进
+//        files 域、URL 硬切到 `/api/v2/files/objects/*` 与 `/api/v2/files/cnc/*`
+//        （旧路径 `/api/v2/part-files/*`、`/api/v2/cnc-programs/*` **404、无 alias**），
+//        于是 `api/files/` 现有 3 个实现文件：`sts.ts` → `/files/sts-tmp-keys`、
+//        `objects.ts` → `/files/objects/*`、`cnc.ts` → `/files/cnc/pairs`，
+//        三者**逐个镜像 `/files` 下的一个子命名空间**，比原先更贴合「目录镜像命名空间」。
+//      - `parts/` 拆出的 4 个文件现在是 crud / batch / bid / **objects**——后者已
+//        自 `parts/` 迁到 `files/objects.ts`（它是 `/files/objects/*`，不再属于
+//        `/parts/*`）；`parts/index.ts` 为兼容 `@/api/parts` 聚合导入仍在 re-export 它。
+//        因此「端点多到需拆文件」只对 crud / batch / bid 成立，parts 侧剩 3 个纯
+//        `/parts/*` 实现文件。
+//      - **一处已知例外（刻意保留，不是脏数据）**：`files/objects.ts` 里仍寄住
+//        5 个打 `/parts/*` 的函数（`printPartDrawing` / `printPartDrawingBatch` /
+//        `confirmPartFile` / `uploadPartDrawing` / `uploadPart3DModel`）。它们是零件
+//        侧的打印与 multipart 后置上传端点，打印 BFF 后端刻意留在 part 域不搬；
+//        本 PR 只做机械搬家，未拆文件。后端 PR1b 会把这几条合并进
+//        `POST /files/objects`（含 confirm），届时本例外自然消失。**若届时仍在，
+//        就该把它们迁回 `parts/`** —— 见对象文件头注释的同款说明。
 //
 //   ⚠️ 旧路径现在的行为（改动理由，也是「不能留兼容层」的依据）：
 //     - `GET /shelves/processes` → **400，且响应体不是 `R` 信封**。它现在落到

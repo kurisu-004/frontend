@@ -14,8 +14,8 @@
 //
 // 图纸**下载**入口（`canDownloadPartFile`）的前端放行集合与打印**相同**（同 4 角色）——
 // 两者都只对应「回 COS 预签直链」那一条端点。不同的是**后端** part_file 的另外两条：
-// 列表 `GET /part-files` 与内容 `GET /part-files/{id}/content` 对 SHELF_ACCOUNT 放开了
-// （报工台工控机的图纸预览打的就是这两条），而 `/part-files/{id}/url` **刻意没放开**
+// 列表 `GET /files/objects` 与内容 `GET /files/objects/{id}/content` 对 SHELF_ACCOUNT 放开了
+// （报工台工控机的图纸预览打的就是这两条），而 `/files/objects/{id}/url` **刻意没放开**
 // —— 它回的是 COS 预签直链（1 小时有效），拿到即可脱离本后端直接访问、直链可外发；
 // 工控机看图纸走 content（后端代理、逐次过 RBAC）就够了。所以前端三页图纸预览弹窗的
 // 「下载文件」按钮必须对 SHELF_ACCOUNT 隐藏，否则就是「可见但必 403」。
@@ -37,7 +37,7 @@ export function canPrintPartDrawing(role: PartRoleMapLike): boolean {
 }
 
 /**
- * 图纸文件下载入口是否可见（`GET /part-files/{id}/url` 的前端闸门，2026-10-11 新增）。
+ * 图纸文件下载入口是否可见（`GET /files/objects/{id}/url` 的前端闸门，2026-10-11 新增）。
  *
  * 放行集合与 `canPrintPartDrawing` **逐字相同**（Manager / Clerk / Inspector /
  * CncProgrammer），与后端 `PartFileService::get_file_with_url` 的

@@ -217,7 +217,7 @@ import { ElMessage } from 'element-plus';
 import { FolderOpened, Printer, Upload } from '@element-plus/icons-vue';
 import FileListCard from '@/components/FileListCard.vue';
 import PartCncCard from './PartCncCard.vue';
-import { deletePartFile } from '@/api/parts/file';
+import { deletePartFile } from '@/api/files/objects';
 import { usePermissions } from '@/composables/usePermissions';
 import { canPrintPartDrawing } from '@/utils/partsPermissions';
 import type { PartFileItem } from '@/types/part_file';

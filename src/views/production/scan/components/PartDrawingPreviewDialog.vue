@@ -70,7 +70,7 @@ import { api } from '@/api/http';
 import PdfViewer from '@/components/PdfViewer.vue';
 import { getDownloadUrl, listPartFilesByOwner } from '@/api/assembly';
 // 2026-10-11：「下载文件」按钮的角色闸门。后端把 part_file 的列表 / content 对
-// SHELF_ACCOUNT 放开了（工控机预览图纸打的就是这两条），但 `/part-files/{id}/url`
+// SHELF_ACCOUNT 放开了（工控机预览图纸打的就是这两条），但 `/files/objects/{id}/url`
 // **刻意没放开**（COS 预签直链可外传）⇒ 不挂闸门就是「可见但必 403」。判据在
 // utils/partsPermissions，与后端 require_any_role 白名单同集合。
 import { usePermissions } from '@/composables/usePermissions';
@@ -142,7 +142,7 @@ async function loadPreview(): Promise<void> {
   previewLoading.value = true;
   const myToken = ++previewToken;
   try {
-    // 1. 取该零件的 DRAWING 文件列表（v2 /part-files?owner_id=...&kind=...，owner 多态）
+    // 1. 取该零件的 DRAWING 文件列表（v2 /files/objects?owner_id=...&kind=...，owner 多态）
     const files = (await listPartFilesByOwner(String(p.id), 'DRAWING')).items;
     if (myToken !== previewToken) return;
     if (!files.length) {
@@ -154,8 +154,8 @@ async function loadPreview(): Promise<void> {
     previewFile.value = f;
     // 2. PDF / 图片需要 blob URL；HEIC / STEP / DWG 等直接走下载按钮
     if (isPdf(f.file_type) || isImage(f.file_type)) {
-      // v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
-      const resp = await api.get(`/part-files/${f.id}/content`, { responseType: 'blob' });
+      // 文件内容走 v2 /files/objects/{id}/content（2026-10-13 files 域重组后）
+      const resp = await api.get(`/files/objects/${f.id}/content`, { responseType: 'blob' });
       if (myToken !== previewToken) return;
       if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value);
       previewBlobUrl.value = URL.createObjectURL(resp.data);

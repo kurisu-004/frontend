@@ -5,8 +5,9 @@
   2026-09-16 T3.5：场景 B 详情页补传改造。
   - apiUpload 不再限定必填；showUpload=true 但未注入时弹错误提示
   - 新增 apiGetPreviewUrl / apiGetDownloadUrl / apiDelete props，默认走
-    `api/parts/file.ts` 的新函数（v2 实际路径 /part-files/{id}/...）
-  - 删除旧的 `api.get('/part-files/${id}/content')` 硬编码 → 走 props 注入
+    `api/files/objects.ts` 的新函数（v2 实际路径 /files/objects/{id}/...；
+    2026-10-13 随后端 files 域重组由 /part-files 硬切而来，旧路径 404 无 alias）
+  - 删除旧的 `api.get('/files/objects/${id}/content')` 硬编码 → 走 props 注入
 
   用 kind 字段区分文件类型：
   - DRAWING           零件 / 子件 图纸
@@ -33,9 +34,9 @@
   - emptyText?:          string   默认按 kind 显示
   - uploadLabel?:        string   默认 '上传' / '替换'（按 files.length 自动）
   - apiUpload?:          (id, file) => Promise<PartFileItem>   自定义上传 endpoint
-  - apiGetPreviewUrl?:   (fileId) => Promise<string> | string   预览 URL（默认走 v2 /part-files/{id}/content）
-  - apiGetDownloadUrl?:  (fileId) => Promise<string> | string   下载 URL（默认走 v2 /part-files/{id}/url）
-  - apiDelete?:          (fileId) => Promise<void>              删除（默认走 v2 /part-files/{id}/delete）
+  - apiGetPreviewUrl?:   (fileId) => Promise<string> | string   预览 URL（默认走 v2 /files/objects/{id}/content）
+  - apiGetDownloadUrl?:  (fileId) => Promise<string> | string   下载 URL（默认走 v2 /files/objects/{id}/url）
+  - apiDelete?:          (fileId) => Promise<void>              删除（默认走 v2 /files/objects/{id}/delete）
 -->
 <template>
   <el-card shadow="never" class="files-card">
@@ -244,7 +245,7 @@ import PdfViewer from './PdfViewer.vue';
 // 2026-09-20 PR step-viewer-integration：3D 模型内嵌预览组件 + 文件类型判定
 import StepViewer from './cad-viewer/StepViewer.vue';
 import { fileTypeToOcctFormat, isOcctSupported } from '@/utils/stepViewerFile';
-import { deletePartFile, fetchPartFileContent, getPartFileDownloadUrl } from '@/api/parts/file';
+import { deletePartFile, fetchPartFileContent, getPartFileDownloadUrl } from '@/api/files/objects';
 import { printPartDrawing } from '@/api/parts';
 import type { PartFileItem, PartFileKind } from '@/types/part_file';
 
@@ -348,11 +349,11 @@ interface Props {
    */
   apiUpload?: (ownerId: string, file: File) => Promise<PartFileItem>;
   /**
-   * 预览 URL（相对路径 `/part-files/{id}/content`）。默认走 `fetchPartFileContent`
+   * 预览 URL（相对路径 `/files/objects/{id}/content`）。默认走 `fetchPartFileContent`
    * 拿 blob；可注入换签名 URL 链路（如私有桶）。
    */
   apiGetPreviewUrl?: (fileId: string) => Promise<string> | string;
-  /** 下载 URL（`GET /part-files/{id}/url` 返回 download_url）。 */
+  /** 下载 URL（`GET /files/objects/{id}/url` 返回 download_url）。 */
   apiGetDownloadUrl?: (fileId: string) => Promise<string> | string;
   /**
    * 自定义删除函数。默认走 `deletePartFile(fileId, version)`（v2 实际路径 +
@@ -472,7 +473,7 @@ async function onPreview(f: PartFileItem): Promise<void> {
   previewFile.value = f;
   previewVisible.value = true;
   try {
-    // 2026-09-16 T3.5：v2 实际路径走 /part-files/{id}/content；
+    // 2026-09-16 T3.5：v2 实际路径走 /files/objects/{id}/content；
     // 优先级 props.apiGetPreviewUrl > 默认 fetchPartFileContent。
     const blob = props.apiGetPreviewUrl
       ? await fetchPreviewBlob(f.id, props.apiGetPreviewUrl)
@@ -512,7 +513,7 @@ function onPreviewClosed(): void {
 async function downloadCurrent(): Promise<void> {
   if (!previewFile.value) return;
   try {
-    // 2026-09-16 T3.5：默认走 v2 /part-files/{id}/url，签名由 props 覆盖
+    // 2026-09-16 T3.5：默认走 v2 /files/objects/{id}/url，签名由 props 覆盖
     const url = props.apiGetDownloadUrl
       ? await props.apiGetDownloadUrl(previewFile.value.id)
       : await getPartFileDownloadUrl(previewFile.value.id);

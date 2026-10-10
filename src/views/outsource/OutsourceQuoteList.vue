@@ -83,7 +83,7 @@ function isPdfType(t: string): boolean {
 
 async function ensureDrawing(partId: string): Promise<PartFileItem | null> {
   if (drawingCache.has(partId)) return drawingCache.get(partId) ?? null;
-  // v2 /part-files?owner_id=…&kind=…（owner 多态）
+  // v2 /files/objects?owner_id=…&kind=…（owner 多态）
   const files = (await listPartFilesByOwner(partId, 'DRAWING')).items;
   const f = files[0] ?? null;
   drawingCache.set(partId, f);
@@ -98,8 +98,8 @@ async function previewDrawing(row: OutsourceQuoteSchema): Promise<void> {
       ElMessage.warning('该零件暂无图纸');
       return;
     }
-    // v2 无 /files/* 路由，文件内容走 /part-files/{id}/content
-    const resp = await api.get<Blob>(`/part-files/${encodeURIComponent(f.id)}/content`, {
+    // 文件内容走 v2 /files/objects/{id}/content（2026-10-13 files 域重组后）
+    const resp = await api.get<Blob>(`/files/objects/${encodeURIComponent(f.id)}/content`, {
       responseType: 'blob',
     });
     if (drawingPreviewUrl.value) URL.revokeObjectURL(drawingPreviewUrl.value);

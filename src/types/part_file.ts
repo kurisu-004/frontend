@@ -11,7 +11,12 @@
 // - 列表端点 /parts/{id}/cnc-programs、/setup-sheets、/files 从裸数组改为
 //   分页包装 PartFileListOut = { items, total }（无 limit/offset），新增 PartFileListResult；
 // - PartFileItem.file_size 由 number 改 string（v2 i64 雪花序列化器统一转 string）；
-// - 删除 download_url（v2 列表项不再即时签发下载 URL，改走 GET /part-files/{id}/url）。
+// - 删除 download_url（v2 列表项不再即时签发下载 URL，改走 GET /files/objects/{id}/url）。
+//
+// 2026-10-13 后端 files 域重组：列表 / 下载 URL / 内容三条端点硬切
+// `/api/v2/part-files/*` → `/api/v2/files/objects/*`，配对上传硬切
+// `/api/v2/cnc-programs/pairs` → `/api/v2/files/cnc/pairs`。**旧路径 404、无 alias**。
+// 本文件是纯类型定义（无运行时 URL 字面量），故形状逐字未变、只改注释。
 //
 // 2026-09-16 M3 新增：STS 直传 COS 契约（upload-intents / confirm / FileBinding）。
 // 所有 id 字段保持 string 雪花；file_size 为 string i64；content_sha256 为 64-char 小写 hex。
@@ -76,7 +81,8 @@ export interface PartFileListResult {
 }
 
 /**
- * GET /api/v2/part-files/{id}/url 响应（/cnc-programs/{id}/download-url 为其 alias，同形状）。
+ * GET /api/v2/files/objects/{id}/url 响应（2026-10-13 前为 /api/v2/part-files/{id}/url；
+ * 同形状的 /cnc-programs/{id}/download-url alias 端点已随 files 域重组删除，旧路径 404）。
  * 2026-09-16 新增：Phase 5 切 v2 后临时下载 URL 走该端点，字段名是 download_url（非 url）。
  */
 export interface PartFileUrlResult {
@@ -95,9 +101,10 @@ export interface PartFileUrlResult {
 }
 
 /**
- * 2026-09-29 修复：原 /api/v2/parts/{id}/cnc-pair 已移除兼容 nest，迁移到
- * POST /api/v2/cnc-programs/pairs（cnc_program 域 canonical）。
- * POST /api/v2/cnc-programs/pairs 响应中的单文件引用（v2 CncFileRef）。
+ * 2026-09-29 修复：原 /api/v2/parts/{id}/cnc-pair 已移除兼容 nest，迁移到配对上传端点。
+ * 2026-10-13：随 files 域重组硬切为 `POST /api/v2/files/cnc/pairs`
+ * （此前为 `POST /api/v2/cnc-programs/pairs`，旧路径 404、无 alias）。
+ * POST /api/v2/files/cnc/pairs 响应中的单文件引用（v2 CncFileRef）。
  * 2026-09-16 新增：Phase 5 切 v2 后该端点返回 { g_code, setup_sheet } 对象（非数组）。
  */
 export interface CncPairedFileRef {

@@ -142,7 +142,7 @@ import { Loading, WarningFilled } from '@element-plus/icons-vue';
 import { usePartFilesListQuery } from '@/composables/queries/usePartFilesListQuery';
 import { usePartBatchesQuery } from '@/composables/queries/usePartBatchesQuery';
 import { qk } from '@/composables/queries/keys';
-import { fetchPartFileContent } from '@/api/parts/file';
+import { fetchPartFileContent } from '@/api/files/objects';
 import PdfViewer from '@/components/PdfViewer.vue';
 import { useDialogSize } from '@/composables/useDialogSize';
 import { useDashboardInvalidation } from '@/views/dashboard/composables/useDashboardInvalidation';

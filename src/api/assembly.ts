@@ -249,27 +249,19 @@ export async function createAssembly(
   return assemblyCreateResultSchema.parse(resp.data);
 }
 
-/** 一次性创建：上传总装 PDF + 子件一并生成。
- *
- *  2026-10-05：multipart 的文件字段名由 `file` 改为 `files`。后端 `POST /assemblies`
- *  的 multipart 解析只认 `files`；传 `file` **不报错**，文件被静默丢弃（建出一个没有
- *  总装图的装配件），所以这个字段名必须与后端一致。
- *
- *  2026-10-05：**本函数零调用点** —— 零件批量建单走 `createAssembly`（不传 PDF）+
- *  `uploadAssemblyPdf` 补总装图这条两段式。保留它是因为它是「建单时一并带总装图」的
- *  现成封装，将来若要走那条路，字段名与「`files` 只处理首份做页数校验」的行为差异
- *  必须先对齐。
- */
-export async function createAssemblyWithFile(
-  payload: AssemblyCreatePayload,
-  pdfFile: File,
-): Promise<AssemblyCreateResult> {
-  const form = new FormData();
-  form.append('data', JSON.stringify(payload));
-  form.append('files', pdfFile);
-  const resp = await api.post<unknown>('/assemblies', form);
-  return assemblyCreateResultSchema.parse(resp.data);
-}
+// 2026-10-13：删除 `createAssemblyWithFile`（原 :252-272）。
+// 理由：2026-10-05 起即标注「零调用点」，零件批量建单走 `createAssembly`（不传 PDF）
+// + `uploadAssemblyPdf` 补总装图这条两段式；2026-10-13 rg 复核**仍为零调用方**
+// （全仓仅余 `types/assembly.ts:8` 一句注释里的名字提及）。且它与 `createAssembly`
+// 打同一个 `POST /assemblies`，差别只在 multipart 字段名（`files` vs 不传）——
+// 留着等于给「静默丢弃文件」那条 2026-10-05 陷阱留一个后门。
+//
+// 2026-10-13：删除 `listPartFiles`（原 :366-379）与 `deleteFile` alias（原 :406-410）。
+// 理由：两者 rg 核实均为**零调用方**。`listPartFiles` 早在 2026-09-16 T3.5 就被
+// `listPartFilesByOwner` 取代并标注 `@deprecated`（其自述「M3-C 完成时统一移除」
+// 至今未执行，本 PR 一并结清）；`deleteFile` alias 自 2026-09-16 T3.5 起就只是
+// 「兼容未迁移 import」而留，rg 核实全仓已无任何 import 方，兼容期早已结束。
+// `getDownloadUrl` alias 反之**仍有活调用方**，见下方。
 
 /** 装配件总装图上传（`POST /assemblies/{id}/files`，multipart field=`file`，只收 PDF）。
  *
@@ -364,56 +356,43 @@ export async function listAssemblyFiles(id: string): Promise<PartFileListResult>
 }
 
 /**
- * 列出某 part 关联的所有文件。
+ * 2026-09-16 M3 新增：owner 维度列出文件（`GET /api/v2/files/objects?owner_id=...&kind=...`）。
  *
- * @deprecated 2026-09-16 T3.5：v2 后端无 `/parts/{id}/files` 端点；保留此函数作为
- * `listPartFilesByOwner` 的 deprecation alias，转发到 `/part-files?owner_id=...`。
- * 下游调用点已在 T3.5 一次切换到 listPartFilesByOwner；M3-C 完成时统一移除。
- * 2026-09-25 显式补 `@deprecated` JSDoc tag。
- */
-export async function listPartFiles(
-  partId: string,
-  kind?: 'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D',
-): Promise<PartFileListResult> {
-  return listPartFilesByOwner(partId, kind);
-}
-
-/**
- * 2026-09-16 M3 新增：owner 维度列出文件（`GET /api/v2/part-files?owner_id=...&kind=...`）。
+ * 替代历史上 `/parts/{part_id}/files` 旧路径——v2 rust 后端已经把列表端点统一到
+ * files 域的对象存储列表（按 owner_id 多态查询）。kind 缺省 = 不过滤。
  *
- * 替代 `listPartFiles` 的 `/parts/{part_id}/files` 旧路径——v2 rust 后端已经
- *  把列表端点统一到 `/part-files`（按 owner_id 多态查询）。kind 缺省 = 不过滤。
+ * 2026-10-13 随 files 域重组硬切：`GET /api/v2/part-files` → `GET /api/v2/files/objects`，
+ * 请求 / 响应契约逐字不变。**旧路径 404、无 alias**。
  *
- *  与 `listPartFiles` 区别：
- *  - 路径：`/part-files?owner_id=...&kind=...`（owner 多态）
- *  - 参数：limit 上限 500（v2 默认 50 会静默截断）
- *
- *  旧函数保留为 deprecation alias，下游调用点改在 M3-C 一次到位。
+ *  路径参数约定：
+ *  - `owner_id` 多态（零件 id 或装配件 id）
+ *  - `limit` 上限 500（v2 默认 50 会静默截断）
  */
 export async function listPartFilesByOwner(
   partId: string,
   kind?: 'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D',
 ): Promise<PartFileListResult> {
-  const resp = await api.get<PartFileListResult>('/part-files', {
+  const resp = await api.get<PartFileListResult>('/files/objects', {
     params: kind ? { owner_id: partId, kind, limit: 500 } : { owner_id: partId, limit: 500 },
   });
   return resp.data;
 }
 
 // 2026-09-25 清理：uploadPartDrawing / uploadPart3DModel / uploadPartCadFile
-// 已迁回 `@/api/parts/file.ts`（更符合子域归属）；本文件不再 re-export。
+// 已迁回零件侧文件封装；本文件不再 re-export。
+// 2026-10-13：随 files 域重组，该封装迁至 `@/api/files/objects`（见该文件）。
 
 /**
- * @deprecated 2026-09-16 T3.5：合并到 `deletePartFile(fileId, version)`。
- * 保留为 alias 以兼容未迁移 import；新代码请用具名导出。
- */
-export { deletePartFile as deleteFile } from '@/api/parts/file';
-
-/**
+ * `getPartFileDownloadUrl` 的 deprecation alias。
+ *
  * @deprecated 2026-09-16 T3.5：合并到 `getPartFileDownloadUrl(fileId)`。
  * 保留为 alias 以兼容未迁移 import；新代码请用具名导出。
+ *
+ * ⚠️ **仍有一个活调用方**：`views/production/scan/components/PartDrawingPreviewDialog.vue`
+ * （报工台图纸预览的下载按钮）。2026-10-13 清理时 rg 核实过，**不可删** ——
+ * 相比之下同批的 `deleteFile` alias（0 调用方）已随之删除。
  */
-export { getPartFileDownloadUrl as getDownloadUrl } from '@/api/parts/file';
+export { getPartFileDownloadUrl as getDownloadUrl } from '@/api/files/objects';
 
 /** 类型守卫 */
 export function isAssemblyItem(v: unknown): v is AssemblyItem {

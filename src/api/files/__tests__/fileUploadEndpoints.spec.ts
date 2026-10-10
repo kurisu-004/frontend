@@ -11,7 +11,7 @@ vi.mock('@/api/http', () => ({
   api: { post: mocks.post, get: vi.fn() },
   cleanParams: (p: unknown) => p,
 }));
-import { uploadPart3DModel, uploadPartDrawing } from '../file';
+import { uploadPart3DModel, uploadPartDrawing } from '../objects';
 
 beforeEach(() => mocks.post.mockReset());
 
