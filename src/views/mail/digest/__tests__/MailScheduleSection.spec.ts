@@ -7,7 +7,7 @@
 //     「仅手动发送，不注册定时任务」的提示 —— 这条是需求里点名的行为；
 //  2. 其余三种频率各自只渲染自己那一组配套输入（DAILY 只有时刻 / WEEKLY 多星期 /
 //     MONTHLY 多月号），判据读 `frequencyOptions` 的三个 `needs_*`（meta 驱动，不是硬编码）；
-//  3. 切频率时把「当前频率用不到」的配套字段置 null（留着会构成后端 21504）；
+//  3. 切频率时把「当前频率用不到」的配套字段置 null（留着会构成后端 21704）；
 //  4. 字段红字与 focusField 高亮落到对应行上（字段聚焦的视觉层）。
 //
 // 用 EP 模板桩而不是真 EP 组件：被测的是「本组件有没有按 needs_* 正确分支」，不复刻
@@ -216,7 +216,7 @@ describe('MailScheduleSection — 切频率时清掉用不到的配套字段', (
     return (v: unknown) => vm.$emit('update:modelValue', v);
   }
 
-  it('WEEKLY → MANUAL_ONLY：weekday 与时刻一并置 null（留着会被后端 21504 拒）', () => {
+  it('WEEKLY → MANUAL_ONLY：weekday 与时刻一并置 null（留着会被后端 21704 拒）', () => {
     const { wrapper, latest } = mountSection(baseForm({ frequency: 'WEEKLY', weekday: 3 }));
     captureGroupEmit(wrapper)('MANUAL_ONLY');
     expect(latest().frequency).toBe('MANUAL_ONLY');

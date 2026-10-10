@@ -9,8 +9,11 @@
 //      走 useMutation、没有 queryFn 承载，**守门留在 api 层**（CLAUDE.md 为「没有
 //      queryFn 承载的调用」留的口子，同 `api/inspection.ts` 的扫码树）。
 //   2. **表单校验**：`makeMailDigestFormSchema(frequencyFlags)` —— 保存 / 预览 / 立即发送
-//      三个动作共用的前置校验，把后端 21503（邮箱非法）/ 21504（频率与配套字段组合非法）
+//      三个动作共用的前置校验，把后端 21703（邮箱非法）/ 21704（频率与配套字段组合非法）
 //      的拒绝提前到浏览器，并给出**聚焦到具体字段**的提示（页面据此给对应输入项标红）。
+//      2026-10-14：这两个码原写作 21503 / 21504，后端实查发现 215xx 已被 outsource 发货
+//      域占用、改用了 217xx 段，本文件随之对齐（码值单一来源见 `mailDigestErrorText.ts`
+//      的 `MAIL_DIGEST_ERROR_CODES`）。
 //
 // 两条 wire 序列化约定（照抄 statistics / users 两组 schema 的结论）：
 //   - **雪花 / 业务 ID 一律 JSON string**：`id` / `log_id` 是 `z.string()`，禁
@@ -234,7 +237,7 @@ export type MailDigestLogListData = z.infer<typeof mailDigestLogListSchema>;
 // ============================================================
 
 /** 频率的「配套字段」判据。值来自 `GET /meta` 的 `frequencies[]`，三个 needs_* 决定
- *  时间 / 星期 / 月号这三个输入项显不显示、以及缺不缺就拒（对应后端 21504）。 */
+ *  时间 / 星期 / 月号这三个输入项显不显示、以及缺不缺就拒（对应后端 21704）。 */
 export interface MailDigestFrequencyFlags {
   needs_time: boolean;
   needs_weekday: boolean;
@@ -331,7 +334,7 @@ const requiredInt = (min: number, max: number, message: string) =>
     z.coerce.number({ error: message }).int('必须是整数').min(min, message).max(max, message),
   );
 
-/** 邮箱基本格式（对齐后端 21503）。刻意不做 RFC 5322 全量校验：前端只负责把明显
+/** 邮箱基本格式（对齐后端 21703）。刻意不做 RFC 5322 全量校验：前端只负责把明显
  *  离谱的值拦下来给人话提示，最终判据在后端（多拦会误伤合法地址）。额外拦
  *  `\r\n` —— 那是邮件头注入的原料，后端也会拒，但前端拦一道能在提交前就说清。 */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -350,7 +353,7 @@ const emailItemSchema = z
  * @param frequencyFlags `GET /meta` 的 `frequencies[]` 转成的判据表；缺省用
  *   `DEFAULT_MAIL_DIGEST_FREQUENCY_FLAGS`（meta 未到达时的兜底）。
  *
- * 组合校验（对应后端 **21504**）在 `superRefine` 里做，报错 issue 的 `path` **指向具体
+ * 组合校验（对应后端 **21704**）在 `superRefine` 里做，报错 issue 的 `path` **指向具体
  * 输入项**（`send_time` / `weekday` / `day_of_month`）而不是笼统挂在频率上 —— 页面的
  * 字段聚焦与标红靠 `path[0]` 定位，笼统挂频率会让用户盯着一个「看不出该改哪」的报错。
  */
@@ -390,7 +393,7 @@ export function makeMailDigestFormSchema(
     if (flags.needs_day_of_month && v.day_of_month === null) {
       fail('day_of_month', '每月发送需指定几号（1..28）');
     }
-    // 配套字段「多填」也算非法（21504）：留着上一次切频率前的值会让后端调度按
+    // 配套字段「多填」也算非法（21704）：留着上一次切频率前的值会让后端调度按
     // 一个自相矛盾的组合注册，前端表单校验必须与它对齐。
     if (!flags.needs_time && (v.send_hour !== null || v.send_minute !== null)) {
       fail('send_time', '仅手动发送不需要触发时刻');

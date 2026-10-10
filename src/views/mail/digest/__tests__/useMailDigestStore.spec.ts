@@ -13,7 +13,11 @@
 //  3. **OCC 硬约束**：`POST /config` 的 payload 必带 `version`（取 `GET /config` 的
 //     version，无行时后端返 0）；标题模板留空转 `null`（不是空串）。
 //  4. **错误码分流**：40901 走 warning + **强制重拉配置**（不重拉的话用户拿着旧 version
-//     再点一次必然再冲突）；21503 / 21504 走字段聚焦（把 focusField 指向对应输入项）。
+//     再点一次必然再冲突）；21703 / 21704 走字段聚焦（把 focusField 指向对应输入项）。
+//     ⚠️ 2026-10-14：本文件所有 `apiError(…)` 的码实参一律引 `MAIL_DIGEST_ERROR_CODES`
+//     具名常量，不写裸数字 —— 本域码段刚从 215xx 迁到 217xx（215xx 已被后端 outsource
+//     发货域占用），裸字面量漏改一处就是**静默失配**（分流不命中、focusField 不置位，
+//     用例若照抄旧数字反而「照旧绿」，等于什么都没守）。
 //  5. **前端校验前置**：收件人空 / 邮箱非法 / 频率组合非法时**不发请求**，只标红字段。
 //  6. **失效编排**：保存成功失效本域前缀；立即发送**失败也失效**（服务端已记 FAILED 日志，
 //     只在成功分支失效会让「刚才那次为什么没发出去」凭空消失）。
@@ -49,6 +53,7 @@ vi.mock('@/api/mailDigest', () => ({
 
 import { ElMessage } from 'element-plus';
 import { useMailDigestStore } from '../composables/useMailDigestStore';
+import { MAIL_DIGEST_ERROR_CODES } from '../mailDigestErrorText';
 import type { MailDigestConfigData, MailDigestLogData } from '../mailDigestSchema';
 
 /** `GET /config` 的合法响应（守门 schema 全 18 键）。 */
@@ -349,7 +354,7 @@ describe('useMailDigestStore — 保存（OCC 硬约束）', () => {
     expect(ElMessage.warning).toHaveBeenCalledWith('请先修正表单中标红的字段');
   });
 
-  it('S4：邮箱非法被前端拦下（对齐后端 21503），不发请求', async () => {
+  it('S4：邮箱非法被前端拦下（对齐后端 21703），不发请求', async () => {
     const store = useMailDigestStore();
     store.query.openGate();
     await tick();
@@ -369,7 +374,9 @@ describe('useMailDigestStore — 错误码分流', () => {
     fetchMailDigestConfigMock.mockClear();
 
     store.query.form.recipients = ['edited@example.com'];
-    saveMailDigestConfigMock.mockRejectedValue(apiError(40901, 'OCC'));
+    saveMailDigestConfigMock.mockRejectedValue(
+      apiError(MAIL_DIGEST_ERROR_CODES.VERSION_CONFLICT, 'OCC'),
+    );
     fetchMailDigestConfigMock.mockResolvedValue({ ...CONFIG, version: 4, recipients: ['x@y.com'] });
     await store.actions.save();
     await tick();
@@ -382,12 +389,14 @@ describe('useMailDigestStore — 错误码分流', () => {
     expect(store.query.dirty).toBe(false);
   });
 
-  it('E2：21503 把焦点送回收件人字段（不是甩一句「操作失败」）', async () => {
+  it('E2：21703（INVALID_RECIPIENT）把焦点送回收件人字段（不是甩一句「操作失败」）', async () => {
     const store = useMailDigestStore();
     store.query.openGate();
     await tick();
 
-    saveMailDigestConfigMock.mockRejectedValue(apiError(21503, 'bad email'));
+    saveMailDigestConfigMock.mockRejectedValue(
+      apiError(MAIL_DIGEST_ERROR_CODES.INVALID_RECIPIENT, 'bad email'),
+    );
     await store.actions.save();
     await tick();
 
@@ -395,12 +404,14 @@ describe('useMailDigestStore — 错误码分流', () => {
     expect(ElMessage.error).toHaveBeenCalledWith('收件人邮箱格式不合法，请检查收件人列表');
   });
 
-  it('E3：21504 把焦点送回频率字段', async () => {
+  it('E3：21704（INVALID_FREQUENCY_COMBO）把焦点送回频率字段', async () => {
     const store = useMailDigestStore();
     store.query.openGate();
     await tick();
 
-    saveMailDigestConfigMock.mockRejectedValue(apiError(21504, 'bad combo'));
+    saveMailDigestConfigMock.mockRejectedValue(
+      apiError(MAIL_DIGEST_ERROR_CODES.INVALID_FREQUENCY_COMBO, 'bad combo'),
+    );
     await store.actions.save();
     await tick();
 
@@ -415,7 +426,9 @@ describe('useMailDigestStore — 错误码分流', () => {
     store.query.openGate();
     await tick();
 
-    saveMailDigestConfigMock.mockRejectedValue(apiError(21503, 'bad email'));
+    saveMailDigestConfigMock.mockRejectedValue(
+      apiError(MAIL_DIGEST_ERROR_CODES.INVALID_RECIPIENT, 'bad email'),
+    );
     await store.actions.save();
     expect(store.query.focusField).toBe('recipients');
 
@@ -462,7 +475,9 @@ describe('useMailDigestStore — 预览与立即发送', () => {
     store.query.openGate();
     await tick();
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    sendMailDigestNowMock.mockRejectedValue(apiError(21502, 'smtp down'));
+    sendMailDigestNowMock.mockRejectedValue(
+      apiError(MAIL_DIGEST_ERROR_CODES.SMTP_SEND_FAILED, 'smtp down'),
+    );
 
     await store.actions.sendNow();
     await tick();

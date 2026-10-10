@@ -16,21 +16,37 @@ import { contractDriftErrorText } from '@/utils/contractDriftError';
 /** 契约漂移时给管理员看的固定文案：不含 Zod 的 issues 结构，细节只进 console。 */
 export const MAIL_DIGEST_CONTRACT_DRIFT_TEXT = '服务端返回的数据格式不符合预期，请联系管理员';
 
-/** 2026-10-13 冻结的错误码（后端 mail_digest 域）。导出常量是为了让 store 的分流
- *  分支与单测都引用同一份字面量，不在各处复写数字。 */
+/** 2026-10-14 冻结的错误码（后端 mail_digest 域），**全仓前端唯一一处码值来源**。
+ *
+ *  ⚠️ **段号是 217xx，不是 215xx**。本域第一版实现时按「215 段往后排」猜成了 215xx，
+ *  后端实查后发现 **`215xx` 已被 outsource 发货域占用**
+ *  （`BIZ_OUTSOURCE_SHIPMENT_NOT_FOUND=21501` / `…INVALID_TRANSITION=21502` /
+ *  `…NO_OPEN=21503` / `…QUANTITY_EXCEEDS=21504`，后端 `src/shared/error.rs` 有单测钉死
+ *  `== 21501`，至今在用），于是改用了全新的 217xx 段。前端整体跟着迁过来。
+ *
+ *  **单一来源约定**（改后端码段时本仓只改这一处）：
+ *   - 映射表（下方 `MAIL_DIGEST_ERROR_TEXT`）用**具名键**索引，不用裸数字；
+ *   - store 的错误分流（`useMailDigestStore.ts::handleWriteError`）引常量；
+ *   - 单测的 `apiError(…)` 实参引常量；
+ *   - 其余注释 / JSDoc 里提到码值的地方一律写「对齐后端 217xx」并带上常量名 ——
+ *     裸数字只允许出现在本文件与 `mailDigestErrorText.spec.ts`（钉死映射表的回归用例，
+ *     它就是要让「码值变了」红起来的那一处）。
+ *
+ *  键名与后端常量名不是逐字对应（后端 `BIZ_MAIL_RECIPIENT_INVALID` ↔ 本表
+ *  `INVALID_RECIPIENT`），**语义一一对应即可**，键名是前端内部标识，不参与 wire 契约。 */
 export const MAIL_DIGEST_ERROR_CODES = {
-  /** OCC 版本冲突：配置已被他人改动。 */
+  /** OCC 版本冲突：配置已被他人改动。后端 `BIZ_VERSION_CONFLICT`，通用段非本域专有。 */
   VERSION_CONFLICT: 40901,
-  /** SMTP 未配置。 */
-  SMTP_NOT_CONFIGURED: 21501,
-  /** SMTP 发送失败。 */
-  SMTP_SEND_FAILED: 21502,
-  /** 收件人邮箱格式不合法。 */
-  INVALID_RECIPIENT: 21503,
-  /** 频率与配套字段组合非法。 */
-  INVALID_FREQUENCY_COMBO: 21504,
-  /** 配置不存在。 */
-  CONFIG_NOT_FOUND: 21505,
+  /** SMTP 未配置。后端 `BIZ_MAIL_NOT_CONFIGURED`。 */
+  SMTP_NOT_CONFIGURED: 21701,
+  /** SMTP 发送失败。后端 `BIZ_MAIL_SEND_FAILED`。 */
+  SMTP_SEND_FAILED: 21702,
+  /** 收件人邮箱格式不合法。后端 `BIZ_MAIL_RECIPIENT_INVALID`。 */
+  INVALID_RECIPIENT: 21703,
+  /** 频率与配套字段组合非法。后端 `BIZ_MAIL_CONFIG_INVALID`。 */
+  INVALID_FREQUENCY_COMBO: 21704,
+  /** 配置不存在。后端 `BIZ_MAIL_CONFIG_NOT_FOUND`。 */
+  CONFIG_NOT_FOUND: 21705,
 } as const;
 
 /** 业务码 → 人话。**逐条对应上表的六个码**（后端 message 是给日志看的，统一

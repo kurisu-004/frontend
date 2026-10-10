@@ -20,7 +20,12 @@
 -->
 <template>
   <div v-loading="store.query.configLoading" class="mail-digest-page">
-    <!-- SMTP 未配置：定时与手动发送都会返 21501，提前说清楚 + 禁用「立即发送」。
+    <!-- SMTP 未配置：定时与手动发送都会失败，提前说清楚 + 禁用「立即发送」。
+         ⚠️ 2026-10-14：**标题刻意不提错误码**（原先写的是「都会返回 21501」）。业务码
+         是前后端契约的实现细节，对运维/管理员没有可操作性 —— description 里已经写清了
+         该设哪几个环境变量；而码值一旦进 UI 文案，它就是第二个会漂移的来源（本轮就因
+         后端把 215xx 段换成 217xx 而变成错码）。真失败时弹的那句人话由
+         `mailDigestErrorText.ts` 按码查表给出，管理员需要码值时看控制台/后端日志即可。
          ⚠️ 判据是 store 的 `smtpMissing`（= `smtp.configured === false`）而不是
          「取不到」：meta 还没回来时它是 false，此时**不**弹这条，否则首屏会先闪一条
          假告警再消失。 -->
@@ -30,7 +35,7 @@
       type="warning"
       show-icon
       :closable="false"
-      title="SMTP 未配置，定时与手动发送都会返回 21501"
+      title="SMTP 未配置，定时与手动发送都会失败"
       description="需在服务端设置 MAIL_SMTP_USERNAME / MAIL_SMTP_PASSWORD / MAIL_FROM_ADDRESS（以及 MAIL_SMTP_HOST / MAIL_SMTP_PORT）后重启；本域其余配置仍可正常保存。"
     />
 

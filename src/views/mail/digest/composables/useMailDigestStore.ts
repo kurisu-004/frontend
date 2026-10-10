@@ -84,7 +84,7 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
 
   // ============ 切片：form（服务端配置 hydrate 出来的可编辑模型）============
   const form = reactive<MailDigestFormModel>(initialFormModel());
-  /** 字段级红字（Zod 校验失败，或后端 21503 / 21504 的映射）。键见 `MailDigestFormField`。 */
+  /** 字段级红字（Zod 校验失败，或后端 21703 / 21704 的映射）。键见 `MailDigestFormField`。 */
   const fieldErrors = ref<MailDigestFormFieldErrors>({});
   /** 需要高亮的字段（Zod 校验或后端错误码指出来的「该改这儿」）。壳把它传给各 section，
    *  section 据此给对应输入项加 `is-focus` 样式 —— 照 users 域「20602 →
@@ -321,8 +321,13 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
    * 40901 单独分支：它是 OCC 冲突（本端副本已被他人改动），提示与动作都与业务失败不同 ——
    * warning 而非 error，并**强制重拉配置**，否则用户拿着旧 version 再点一次必然再冲突。
    *
-   * 21503 / 21504 走字段聚焦：前端校验本该拦下，但服务端是最终判据（邮箱规则、频率组合
+   * 21703 / 21704 走字段聚焦：前端校验本该拦下，但服务端是最终判据（邮箱规则、频率组合
    * 都可能比前端严），被拒时必须告诉用户改哪一项，而不是甩一句「操作失败」。
+   *
+   * ⚠️ 2026-10-14：三处判据一律走 `MAIL_DIGEST_ERROR_CODES` 具名常量，不写裸数字 ——
+   * 本域的码段从 215xx 迁到 217xx（215xx 已被后端 outsource 发货域占用）时，漏改一处
+   * 裸字面量的后果是**静默失配**：分支不命中 ⇒ 用户拿到的仍是兜底文案、且 focusField
+   * 不置位，功能性断言反而测不出来。
    */
   async function handleWriteError(e: Error & { code?: number }, fallback: string): Promise<void> {
     const code = e?.code;
@@ -371,7 +376,7 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
       ElMessage.success('邮件已发送');
     },
     onError: async (e: Error & { code?: number }) => {
-      // ⚠️ **失败也刷日志**：后端对 21501 / 21502 已经记了一条 FAILED 日志，只在成功
+      // ⚠️ **失败也刷日志**：后端对 21701 / 21702 已经记了一条 FAILED 日志，只在成功
       // 分支失效的话，用户看到的仍是「发送前的历史」⇒ 刚失败的那次凭空消失，
       // 而「为什么没发出去」正是用户接下来要找的信息。
       await invalidateMailDigestDomain();
@@ -448,7 +453,7 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
     sendNow,
     /** 壳的「立即发送」按钮的禁用判据：正在发 / SMTP 明确未配置。
      *  `smtpConfigured === null`（meta 未回来）**不禁用** —— 那会让按钮在首屏无故灰着，
-     *  真发失败时后端会返 21501，页面照样弹人话提示。 */
+     *  真发失败时后端会返 21701，页面照样弹人话提示。 */
     sendDisabled: computed(() => sendMutation.isPending.value || smtpMissing.value),
   };
 

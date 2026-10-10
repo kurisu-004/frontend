@@ -4,8 +4,9 @@
 //
 //  1. **守门 schema**（config / meta / preview / send / logs）：雪花 ID 恒为 string、
 //     计数恒为 number、缺键即抛（Zod strip 陷阱）、多一个键即抛（`.strict()`）。
-//  2. **表单校验**：4 种频率 × 配套字段的全部组合（这组直接对应后端 21504 —— 前端提前
-//     拦的那一层，漏一条就变成「点了保存才知道不行」）；邮箱（对应 21503）；
+//  2. **表单校验**：4 种频率 × 配套字段的全部组合（这组直接对应后端 21704 =
+//     `MAIL_DIGEST_ERROR_CODES.INVALID_FREQUENCY_COMBO` —— 前端提前拦的那一层，漏一条
+//     就变成「点了保存才知道不行」）；邮箱（对应 21703 = `…INVALID_RECIPIENT`）；
 //     `upcoming_days` 的空值语义（`el-input-number` 清空 → 不回落成 0）。
 //  3. **字段聚焦**：校验 issue 的 `path[0]` 必须指向**具体输入项**（页面据此标红 /
 //     高亮），笼统挂在 `frequency` 上会让用户盯着一个看不出该改哪儿的报错。
@@ -287,7 +288,7 @@ function baseForm(over: Partial<MailDigestFormModel> = {}): MailDigestFormModel 
   };
 }
 
-describe('makeMailDigestFormSchema：频率 × 配套字段（对应后端 21504）', () => {
+describe('makeMailDigestFormSchema：频率 × 配套字段（对应后端 21704）', () => {
   it('DAILY：给了时刻即可过（weekday / day_of_month 必须为空）', () => {
     expect(schema.safeParse(baseForm()).success).toBe(true);
     // 留着上一次切频率前的星期 → 非法（否则后端注册出一个自相矛盾的调度）
@@ -363,7 +364,7 @@ describe('makeMailDigestFormSchema：频率 × 配套字段（对应后端 21504
   });
 });
 
-describe('makeMailDigestFormSchema：收件人（对应后端 21503）', () => {
+describe('makeMailDigestFormSchema：收件人（对应后端 21703）', () => {
   it('TO 至少 1 项（空数组 / 全是空串都拒）', () => {
     expect(schema.safeParse(baseForm({ recipients: [] })).success).toBe(false);
     expect(schema.safeParse(baseForm({ recipients: ['  '] })).success).toBe(false);

@@ -19,7 +19,7 @@
   两个下拉的值域固定（0..23 / 0..59），与 wire 逐字同形、零转换。
 
   切频率时把「当前频率用不到」的配套字段置 null（`onFrequencyChange`）：留着上一次切
-  频率前的值会构成「频率与配套字段组合非法」，被后端 21504 拒。
+  频率前的值会构成「频率与配套字段组合非法」，被后端 21704 拒。
 -->
 <template>
   <div class="mail-schedule">
@@ -146,7 +146,7 @@ const props = defineProps<{
   modelValue: MailDigestFormModel;
   /** 频率选项，取自 `GET /meta` 的 `frequencies[]`；meta 未到达时壳传兜底表。 */
   frequencyOptions: readonly MailDigestFrequencyOptionData[];
-  /** 字段红字（Zod / 后端 21503·21504）。 */
+  /** 字段红字（Zod / 后端 21703·21704）。 */
   errors?: MailDigestFormFieldErrors;
   /** 需要高亮的字段（store 的 `focusField`）。 */
   focusField?: MailDigestFormField | null;

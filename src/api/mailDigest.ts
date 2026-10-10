@@ -10,6 +10,12 @@
 //
 // 端点全部 MANAGER 独占（后端 handler 层统一 require_role）。
 //
+// ⚠️ **2026-10-14：错误码段是 217xx**。本域第一版按「215 段往后排」猜成了 215xx，后端
+// 实查发现 215xx 已被 outsource 发货域占用（`BIZ_OUTSOURCE_SHIPMENT_*=21501..21504`，
+// 至今在用），改用了全新的 217xx 段。本文件下方各端点 JSDoc 里提到的码值随之对齐，
+// 码值的**单一来源**是 `views/mail/digest/mailDigestErrorText.ts` 的
+// `MAIL_DIGEST_ERROR_CODES`（注释里写码值只为指路，真判据一律引常量）。
+//
 // 守门点分工（CLAUDE.md「Zod schema-first」）：
 //   - 三条**读**端点（config / meta / logs）的守门在 queryFn
 //     （`views/mail/digest/composables/useMailDigestQuery.ts`），本文件**不 parse** ——
@@ -43,7 +49,7 @@ import {
  * ⚠️ **不会 404**：表里无行时后端返回「全部默认值 + `version: 0` + `id: "0"`」，
  * 所以调用方永远拿到一个可用的配置对象，首次保存用 `version: 0` 建行。
  *
- * 失败抛 `ApiError`：40101 未登录 / 403 非 MANAGER / 21505 配置不存在。
+ * 失败抛 `ApiError`：40101 未登录 / 403 非 MANAGER / 21705 配置不存在。
  */
 export async function fetchMailDigestConfig(): Promise<MailDigestConfigData> {
   const resp = await api.get<MailDigestConfigData>('/mail-digest/config');
@@ -58,8 +64,8 @@ export async function fetchMailDigestConfig(): Promise<MailDigestConfigData> {
  *
  * 失败抛 `ApiError`：
  * - 40901 OCC 版本冲突（配置已被他人改动，UI 提示刷新后重试并重拉配置）；
- * - 21503 收件人邮箱格式不合法；
- * - 21504 频率与配套字段组合非法（缺时刻 / 缺星期 / 缺月号，或多填了不用的字段）。
+* - 21703 收件人邮箱格式不合法；
+* - 21704 频率与配套字段组合非法（缺时刻 / 缺星期 / 缺月号，或多填了不用的字段）。
  */
 export async function saveMailDigestConfig(
   payload: SaveMailDigestConfigPayload,
@@ -88,7 +94,7 @@ export async function fetchMailDigestMeta(): Promise<MailDigestMetaData> {
  * 请求体 = 配置部分（**不含 version**），全部键可选：空体 `{}` = 完全用服务端当前配置；
  * 传部分键 = 只覆盖那几项（其余仍取当前配置）。**不落库、不写日志、不发信**。
  *
- * 守门在本层（useMutation 没有 queryFn 承载）。失败抛 `ApiError`：21503 / 21504。
+ * 守门在本层（useMutation 没有 queryFn 承载）。失败抛 `ApiError`：21703 / 21704。
  */
 export async function previewMailDigest(
   payload: MailDigestRunPayload,
@@ -104,10 +110,10 @@ export async function previewMailDigest(
  * （`MailDigestSettings.vue` 的 `el-popconfirm`）。
  *
  * 守门在本层（同 preview）。失败抛 `ApiError`：
- * - 21501 SMTP 未配置（页面的 SMTP 状态条会提前禁用按钮，但服务端仍要拒）；
- * - 21502 SMTP 发送失败（**服务端已记一条 FAILED 日志**，所以 store 的 onError 也要
- *   失效日志列表，前端才能立刻看到那行失败记录）；
- * - 21503 / 21504 同 preview。
+* - 21701 SMTP 未配置（页面的 SMTP 状态条会提前禁用按钮，但服务端仍要拒）；
+* - 21702 SMTP 发送失败（**服务端已记一条 FAILED 日志**，所以 store 的 onError 也要
+*   失效日志列表，前端才能立刻看到那行失败记录）；
+* - 21703 / 21704 同 preview。
  */
 export async function sendMailDigestNow(
   payload: MailDigestRunPayload,
