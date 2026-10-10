@@ -21,7 +21,7 @@
 //   - T4：invalidatePartFilesListQuery(qc, ownerId) → 失效对应 queryKey。
 //
 // 测试策略：
-//   - vi.mock('@/api/assembly')：listPartFilesByOwner 替换为 vi.fn()，捕获入参。
+//   - vi.mock('@/api/files/objects')：listPartFilesByOwner 替换为 vi.fn()，捕获入参。
 //   - vi.mock('element-plus', () => ({ ElMessage: { ...vi.fn() } }))：防 vitest
 //     node env 中 ElMessage 内部 normalizeAppendTo 触发 ReferenceError。
 //   - beforeEach 安装 VueQueryPlugin + QueryClient（vue-query 5.x 需要 inject）。
@@ -51,8 +51,10 @@ const realListPartFilesByOwner = vi.fn<
   }>
 >(async () => ({ items: [], total: 0 }));
 
-vi.mock('@/api/assembly', () => ({
-  // 2026-09-29：listPartFilesByOwner 是 usePartFilesListQuery 的唯一外部依赖。
+vi.mock('@/api/files/objects', () => ({
+  // 2026-09-29：listPartFilesByOwner 是 usePartFilesListQuery 的唯一外部依赖；
+  // 2026-10-13：它自 api/assembly.ts 迁到 api/files/objects.ts（端点本就是
+  // GET /files/objects），mock 目标随之改。
   listPartFilesByOwner: (partId: string, kind?: string) =>
     realListPartFilesByOwner(partId, kind),
 }));

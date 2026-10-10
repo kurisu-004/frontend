@@ -9,7 +9,7 @@
 //   1. 合法的 `{assembly, created_children}` 原样通过；
 //   2. 子件缺 `id`（响应的每一项都会被按下标当作某个子件的 part id 用）⇒ 抛错；
 //   3. 子件键名回归（`children` 而非 `created_children`）⇒ 抛错（外层 .strict()）；
-//   4. multipart 只发 `data`、不带文件字段（总装图走 `/assemblies/{id}/files`）。
+//   4. multipart 只发 `data`、不带文件字段（总装图走 `POST /files/objects`）。
 //
 // mock 手法沿 outsource.contract.spec.ts：整模块桩掉 `@/api/http`（不 importOriginal），
 // 刻意**不**桩 `@/composables/queries/schemas` —— 桩掉它会让「parse 抛错」变成空断言。

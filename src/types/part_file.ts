@@ -26,6 +26,15 @@ export type PartFileKind =
   'DRAWING' | '3D_MODEL' | 'G_CODE' | 'SETUP_SHEET' | 'ASSEMBLY_MASTER' | 'CAD_2D';
 
 /**
+ * 文件对象的多态 owner 类型（对齐后端 `owner_kind`）。
+ *
+ * `t_part_file` 一张表同时存零件与装配件的文件（装配件总装图 = `owner_kind='ASSEMBLY'`
+ * + `kind='ASSEMBLY_MASTER'`），owner 维度从 path 段搬进了请求体，故上传 / 确认两个
+ * 端点的入参都必须显式带它。
+ */
+export type FileOwnerKind = 'PART' | 'ASSEMBLY';
+
+/**
  * 2026-10-04：后端 `BIZ_PART_FILE_DUPLICATE` —— 同一 `(part_id, kind)` 已有未删除文件。
  *
  * 唯一索引 `uk_t_part_file_single ON (part_id, kind) WHERE deleted_at IS NULL`，与文件
@@ -187,10 +196,14 @@ export interface UploadIntentsOut {
   items: UploadIntentItemOut[];
 }
 
-/** `POST /api/v2/parts/{id}/files/confirm` 入参（场景 B）。
+/** `POST /api/v2/files/objects/confirm` 入参（场景 B）。
  *  2026-09-29 新增：与 rust `ConfirmFileIn` 对齐，新增 `ext: string` 必填字段。
  *  caller 用 utils/fileExt.parseFileExt 从 original_filename 解析；后端据此做
- *  CAS path 派生 + 类型校验（与 grant 端口的 ext 共享同一白名单）。 */
+ *  CAS path 派生 + 类型校验（与 grant 端口的 ext 共享同一白名单）。
+ *
+ *  2026-10-13：owner 从 URL path 段搬进请求体（`POST /parts/{id}/files/confirm`
+ *  → `POST /files/objects/confirm`，旧路径 404、无 alias），故新增
+ *  `owner_kind` / `owner_id` 两个必填字段。 */
 export interface ConfirmFileIn {
   kind: PartFileKind;
   tmp_key: string;
@@ -200,6 +213,10 @@ export interface ConfirmFileIn {
   content_type: string;
   /** 2026-09-29 必填：文件扩展名小写字母数字 1-7 字符（utils/fileExt.parseFileExt 解析）。 */
   ext: string;
+  /** 多态 owner 类型：`PART` = t_part 行，`ASSEMBLY` = t_assembly 行。 */
+  owner_kind: FileOwnerKind;
+  /** 雪花 ID 字符串（t_part.id 或 t_assembly.id），**一律按 string 处理**。 */
+  owner_id: string;
 }
 
 /** 批量建单 item 的文件绑定（场景 A）。

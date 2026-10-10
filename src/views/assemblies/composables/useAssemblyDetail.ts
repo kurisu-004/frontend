@@ -426,13 +426,10 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
   }
 
-  /** 2026-09-29 review 第 1 轮 C2 修复：后端 uploadAssemblyPdf 响应是
-   *  `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。响应只携带
-   *  新建的 AssemblyFileRef 列表，detail / children 走 fetchData() 重拉。
-   *
-   *  2026-10-05：`created.length` 是**上传成功的总装 PDF 份数**（该端点只做 SHA-256
-   *  CAS + COS PUT + INSERT `t_part_file(kind='ASSEMBLY_MASTER')`，核实过它不建任何
-   *  子件），所以文案不能说成「自动创建 N 个子件」。 */
+  /** 上传一份总装 PDF（`uploadAssemblyPdf` → `POST /files/objects`，owner_kind=ASSEMBLY
+   *  + kind=ASSEMBLY_MASTER）。该端点是纯文件入库：只做 SHA-256 CAS + COS PUT +
+   *  INSERT `t_part_file`，**不建任何子件** ⇒ 成功文案只说总装图已保存，子件请另行
+   *  添加。响应是单个 `PartFileItem`（detail / children 走 fetchData() 重拉）。 */
   async function uploadPdfFn(file: UploadFile): Promise<boolean> {
     if (!file.raw) return false;
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -441,9 +438,9 @@ export function useAssemblyDetail(assemblyId: Ref<string>): UseAssemblyDetailRet
     }
     if (!assemblyId.value) return false;
     try {
-      const created = await uploadAssemblyPdf(assemblyId.value, file.raw);
+      await uploadAssemblyPdf(assemblyId.value, file.raw);
       await fetchData();
-      ElMessage.success(`上传成功：已上传 ${created.length} 份总装 PDF（子件请单独添加）`);
+      ElMessage.success('上传成功：总装 PDF 已保存（子件请单独添加）');
       return true;
     } catch (e) {
       ElMessage.error((e as Error).message ?? '上传总装 PDF 失败');

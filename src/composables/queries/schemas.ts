@@ -504,20 +504,20 @@ export const assemblyDetailFlatSchema = z
 
 export type AssemblyDetailFlatSchema = z.infer<typeof assemblyDetailFlatSchema>;
 
-/** 装配件文件出参数组。
+/** 装配件详情 `files[]` 的元素形状（`AssemblyFileRef`，3 字段）。
  *
- * 后端 uploadAssemblyPdf（POST /api/v2/assemblies/{id}/files）实际响应是
- * `R<Vec<AssemblyFileRef>>`（数组），不是 `R<AssemblyDetail>`。前端旧 bug
- * 走 parseAssemblyDetail 把数组塞进 z.object → ZodError。本 schema 锁死数组形态，
- * 让 mapper（api/assembly.ts::uploadAssemblyPdf）在 api 边界守门。 */
-export const assemblyFileRefSchemaArray = z.array(assemblyFileRefSchema);
+ * 唯一消费方是 `assemblyDetailFlatSchema` 的 files 段（`GET /assemblies/{id}` 的
+ * 详情响应）。⚠️ 它**不是**文件对象域的形状：上传端点 `POST /files/objects` 的响应是
+ * **单个 `PartFileItem`**（18 字段，见 `@/types/part_file.ts::PartFileItem`，由
+ * `api/assembly.ts::uploadAssemblyPdf` 包 `uploadFileObject` 发出），两者字段集不通用。
+ * `PartFileItem` 走列文件路径的 `partFileSchema` 守门（见下）。 */
 
 /** 装配件创建响应（`POST /api/v2/assemblies` 的 201 body）：顶层实体 + 刚建出的子件。
  *
  * 2026-10-05 补：此前 `createAssembly` 只做类型断言、无守门，而建单结果直接决定
  * 「哪些本地行算已建出」（`usePartBatchPdf` 的 createdTargets 记账）⇒ 响应形状不对时
- * 会在**没有任何报错**的情况下把子件挂错行 / 记不上账。守门与 `uploadAssemblyPdf` /
- * `getAssembly` 同款（api 边界 parse）。
+ * 会在**没有任何报错**的情况下把子件挂错行 / 记不上账。守门与 `getAssembly` 同款
+ * （api 边界 parse）。
  *
  * 外层 `.strict()`：本域已经吃过一次键名回归的亏（`AssemblyCreateResult` 的子件键是
  * `created_children`，而 `AssemblyDetail` 那边叫 `children`）。两个键名同时存在或被

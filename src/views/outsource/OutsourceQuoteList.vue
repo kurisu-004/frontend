@@ -23,7 +23,7 @@ import { ElMessage } from 'element-plus';
 import { RefreshLeft } from '@element-plus/icons-vue';
 import { listProcesses } from '@/api/process';
 import { listQuotableParts } from '@/api/outsource';
-import { listPartFilesByOwner } from '@/api/assembly';
+import { listPartFilesByOwner } from '@/api/files/objects';
 import { api } from '@/api/http';
 import { canCreate } from '@/utils/outsourceQuotePermissions';
 import { useOutsourceQuoteListStore } from './composables/useOutsourceQuoteListStore';

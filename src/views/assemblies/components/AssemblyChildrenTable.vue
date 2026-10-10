@@ -21,8 +21,9 @@
   禁止 props.addChildForm.x = v。本地 reactive 副本 + watch 同步 +
   emit('update:form')；父级 @update:form 合并即可。
 
-  2026-10-05：上传总装 PDF 的文案改为如实描述 —— 后端 `POST /assemblies/{id}/files`
-  只入库总装图文件（SHA-256 CAS + COS PUT + INSERT t_part_file(kind='ASSEMBLY_MASTER')），
+  上传总装 PDF 的文案如实描述端点行为 —— `POST /files/objects`
+  （owner_kind=ASSEMBLY）只入库总装图文件（SHA-256 CAS + COS PUT + INSERT
+  t_part_file(kind='ASSEMBLY_MASTER')），
   **不拆页、不建子件**，所以卡片文案如实写「上传不会按页拆分」，子件在下方单独添加。
 -->
 <template>

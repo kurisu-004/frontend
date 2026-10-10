@@ -51,20 +51,12 @@
 //        于是 `api/files/` 现有 3 个实现文件：`sts.ts` → `/files/sts-tmp-keys`、
 //        `objects.ts` → `/files/objects/*`、`cnc.ts` → `/files/cnc/pairs`，
 //        三者**逐个镜像 `/files` 下的一个子命名空间**，比原先更贴合「目录镜像命名空间」。
-//      - `parts/` 拆出的 4 个文件现在是 crud / batch / bid / **objects**——后者已
-//        自 `parts/` 迁到 `files/objects.ts`（它是 `/files/objects/*`，不再属于
-//        `/parts/*`）；`parts/index.ts` 为兼容 `@/api/parts` 聚合导入仍在 re-export 它。
-//        因此「端点多到需拆文件」只对 crud / batch / bid 成立，parts 侧剩 3 个纯
-//        `/parts/*` 实现文件。
-//      - **一处已知例外（刻意保留，不是脏数据）**：`files/objects.ts` 里仍寄住
-//        5 个打 `/parts/*` 的函数（`printPartDrawing` / `printPartDrawingBatch` /
-//        `confirmPartFile` / `uploadPartDrawing` / `uploadPart3DModel`）。它们是零件
-//        侧的打印与 multipart 后置上传端点，打印 BFF 后端刻意留在 part 域不搬；
-//        本 PR 只做机械搬家，未拆文件。⚠️ **该例外不会自己消失**：后端把
-//        upload-drawing / upload-3d-model / files/confirm 三条搬进 files 域后，
-//        print-drawing 与 print-drawing-batch 两条仍留在 part 域。届时应把
-//        `printPartDrawing` / `printPartDrawingBatch` 迁回 `api/parts/` ——
-//        见对象文件头注释的同款说明。
+//      - `parts/` 下的 4 个实现文件（crud / batch / bid / print）**逐个只打
+//        `/parts/*`**；文件对象域的 6 条 `/files/objects/*` 全在 `files/objects.ts`
+//        （含 `listPartFilesByOwner` —— 它虽被装配件报价页等按 owner 查询消费，
+//        但端点是 files 域的，跟实现文件走）。`parts/index.ts` 为兼容 `@/api/parts`
+//        聚合导入，仍 re-export 整个 `files/objects`。
+//        ⇒ **`files/objects.ts` 现为纯 files 域端点，无任何例外条目。**
 //
 //   ⚠️ 旧路径现在的行为（改动理由，也是「不能留兼容层」的依据）：
 //     - `GET /shelves/processes` → **400，且响应体不是 `R` 信封**。它现在落到

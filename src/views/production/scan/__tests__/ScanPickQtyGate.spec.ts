@@ -41,8 +41,11 @@ vi.mock('@/api/productionScan', () => ({
   pickUpBatch: h.pickUpBatch,
 }));
 vi.mock('@/api/assembly', () => ({
-  listPartFilesByOwner: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   getDownloadUrl: vi.fn(),
+}));
+// 2026-10-13：listPartFilesByOwner 自 api/assembly.ts 迁到 api/files/objects.ts。
+vi.mock('@/api/files/objects', () => ({
+  listPartFilesByOwner: vi.fn().mockResolvedValue({ items: [], total: 0 }),
 }));
 vi.mock('element-plus', () => ({ ElMessage: h.ElMessage }));
 vi.mock('vue-router', () => ({ useRouter: () => ({ replace: vi.fn(), push: vi.fn() }) }));

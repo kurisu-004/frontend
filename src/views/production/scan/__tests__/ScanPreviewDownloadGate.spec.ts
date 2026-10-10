@@ -43,8 +43,9 @@ vi.mock('@/api/productionScan', () => ({
   fetchScanPickable: h.fetchScanPickable,
   fetchScanHeld: h.fetchScanHeld,
 }));
-vi.mock('@/api/assembly', () => ({
-  getDownloadUrl: h.getDownloadUrl,
+vi.mock('@/api/assembly', () => ({ getDownloadUrl: h.getDownloadUrl }));
+// 2026-10-13：listPartFilesByOwner 自 api/assembly.ts 迁到 api/files/objects.ts。
+vi.mock('@/api/files/objects', () => ({
   listPartFilesByOwner: h.listPartFilesByOwner,
 }));
 vi.mock('element-plus', () => ({ ElMessage: h.ElMessage }));

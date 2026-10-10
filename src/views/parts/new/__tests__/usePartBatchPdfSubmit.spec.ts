@@ -6,8 +6,8 @@
 //   - item 不带 drawing_file / model3d_file（文件走后置上传）；
 //   - **装配件不再展平成独立 part**：顶层与子件由一次 `POST /assemblies` 建出，
 //     子件的 part id 来自响应的 `created_children[].id`；
-//   - 上传按目标端点分流：装配件顶层总装图 → `/assemblies/{id}/files`，子件图纸 /
-//     3D 与独立零件 → `/parts/{id}/upload-drawing` / `upload-3d-model`；
+//   - 上传同打 `POST /files/objects`，按目标分流 owner_kind：装配件顶层传
+//     `ASSEMBLY`，子件图纸 / 3D 与独立零件传 `PART`；
 //   - 服务端拒行 → 回 idle，**一个文件都不上传**；
 //   - 建单「部分行成立」→ 建成的行移出本地表格，再提交只发剩下的失败行；装配件组失败
 //     ⇒ 整组（顶层 + 全部子件）留在表里可重提，已成功的组不再重复建；
@@ -39,6 +39,10 @@ const mocks = vi.hoisted(() => ({
   routerPush: vi.fn(),
   batchCreateParts: vi.fn(),
   createAssembly: vi.fn(),
+  /** 生产代码只调一个 `uploadFileObject`；下面三个是**按 (ownerKind, kind) 分片的
+   *  记录器**，由 uploadFileObject 的实现转发而来，使各条用例「哪个 owner 拿到了哪个
+   *  文件 / 哪条链路抛的错」的断言逐字保留。签名各自复原成旧的 `(ownerId, file)`。 */
+  uploadFileObject: vi.fn(),
   uploadAssemblyPdf: vi.fn(),
   uploadPartDrawing: vi.fn(),
   uploadPart3DModel: vi.fn(),
@@ -73,14 +77,14 @@ vi.mock('@/utils/pdfjs', () => ({
 }));
 vi.mock('@/api/parts', () => ({
   batchCreateParts: mocks.batchCreateParts,
-  uploadPartDrawing: mocks.uploadPartDrawing,
-  uploadPart3DModel: mocks.uploadPart3DModel,
 }));
-// composable 现在还从 @/api/assembly 取两个封装（建装配件 + 传总装图），必须一并桩掉，
-// 否则会拉到真实 axios 实例。
+// composable 从 @/api/assembly 取建装配件封装，从 @/api/files/objects 取文件直传封装，
+// 必须一并桩掉，否则会拉到真实 axios 实例。
 vi.mock('@/api/assembly', () => ({
   createAssembly: mocks.createAssembly,
-  uploadAssemblyPdf: mocks.uploadAssemblyPdf,
+}));
+vi.mock('@/api/files/objects', () => ({
+  uploadFileObject: (...args: unknown[]) => mocks.uploadFileObject(...args),
 }));
 vi.mock('@/views/parts/new/composables/usePartsNewDraft', () => ({
   usePartsNewDraft: () => ({
@@ -245,9 +249,19 @@ beforeEach(() => {
   mocks.pageCount = 1;
   mocks.batchCreateParts.mockReset();
   mocks.createAssembly.mockReset();
+  mocks.uploadFileObject.mockReset();
   mocks.uploadAssemblyPdf.mockReset();
   mocks.uploadPartDrawing.mockReset();
   mocks.uploadPart3DModel.mockReset();
+  // uploadFileObject → 三个分片记录器（入参复原成旧签名，下游断言无需改写）。
+  mocks.uploadFileObject.mockImplementation(
+    (ownerKind: string, ownerId: string, kind: string, file: File) => {
+      if (ownerKind === 'ASSEMBLY') return mocks.uploadAssemblyPdf(ownerId, file);
+      return kind === 'DRAWING'
+        ? mocks.uploadPartDrawing(ownerId, file)
+        : mocks.uploadPart3DModel(ownerId, file);
+    },
+  );
   mocks.alert.mockReset();
   mocks.success.mockReset();
   mocks.warning.mockReset();
@@ -438,6 +452,14 @@ describe('onSubmit', () => {
     expect(mocks.uploadPart3DModel).toHaveBeenCalledTimes(1);
     expect(mocks.uploadPart3DModel.mock.calls[0]![0]).toBe('A1-01');
     expect(mocks.uploadPart3DModel.mock.calls[0]![1].name).toBe('ASM-1_总装.step');
+    // 三条链路同端点：owner_kind / kind 由 target 与 entry.kind 决定（这里是子件）
+    expect(
+      mocks.uploadFileObject.mock.calls.map((c) => [c[0], c[1], c[2]]).sort(),
+    ).toEqual([
+      ['PART', 'A1-01', '3D_MODEL'],
+      ['PART', 'A1-01', 'DRAWING'],
+      ['PART', 'A1-02', 'DRAWING'],
+    ]);
     expect(mocks.alert).not.toHaveBeenCalled();
     expect(api.commitStage.value).toBe('done');
     // 2026-10-05：子件挂上 assembly_id 后不进入零件一览 ⇒ 成功提示必须说清去哪看，
@@ -555,6 +577,11 @@ describe('上传重试（job 粒度）', () => {
     expect(mocks.uploadAssemblyPdf.mock.calls[0]![1].name).toBe('ASM-1_总装_p1.pdf');
     expect(mocks.uploadPartDrawing).toHaveBeenCalledTimes(1);
     expect(mocks.uploadPartDrawing.mock.calls[0]![0]).toBe('A1-01');
+    // 顶层走 owner_kind=ASSEMBLY（总装图的 kind 恒为 DRAWING），子件走 PART
+    expect(mocks.uploadFileObject.mock.calls.map((c) => [c[0], c[1], c[2]]).sort()).toEqual([
+      ['ASSEMBLY', 'A1', 'DRAWING'],
+      ['PART', 'A1-01', 'DRAWING'],
+    ]);
     expect(api.getRowPdfCell({ pdfSourceUid: asm.masterPdfSourceUid })?.status).toBe('error');
     expect(api.submitLabel.value).toBe('重试上传（1 项）');
     const firstAlert = mocks.alert.mock.calls[0]![0] as string;
@@ -1475,7 +1502,7 @@ describe('建单载荷：含税单价 / 总价', () => {
 // 2026-10-05：装配件建单载荷（`POST /api/v2/assemblies` 的 `data` JSON）。
 //
 // 关键约束：
-//   - **不传 PDF**（该端点不入库 PDF；总装图走 `/assemblies/{id}/files` 单独上传）；
+//   - **不传 PDF**（该端点不入库 PDF；总装图走 `POST /files/objects` 单独上传）；
 //   - 顶层字段逐个来自 AssemblyRow，`quantity` 是**套数**；
 //   - `children[]` 与表格里的子件行**一一对应、顺序一致**（响应的
 //     `created_children[i]` 靠这个顺序对回本地行），子件的价格是子件自己的价；

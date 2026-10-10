@@ -37,9 +37,10 @@ import {
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { useLazyDraggable } from '@/composables/useLazyDraggable';
-import { batchCreateParts, uploadPart3DModel, uploadPartDrawing } from '@/api/parts';
+import { batchCreateParts } from '@/api/parts';
 import type { PartBatchCreatePayload, PartBatchResult } from '@/api/parts';
-import { createAssembly, uploadAssemblyPdf } from '@/api/assembly';
+import { uploadFileObject } from '@/api/files/objects';
+import { createAssembly } from '@/api/assembly';
 import type { AssemblyCreatePayload } from '@/types/assembly';
 import {
   usePartsNewDraft,
@@ -1674,8 +1675,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 文件上传条目（统一容器）。
    * - key：UI cell / 后置上传 job 的键（`pdf:${srcUid}` / `3d:${fileUid}`）。
    * - rowRefs：哪些 row 引用了该文件。**落在哪个端点由 ref 的 rowKind 决定**（见
-   *   `buildUploadJobs`）：装配件顶层走 `POST /assemblies/{id}/files`，其余（独立零件 /
-   *   装配件子件）走 parts 的上传端点。
+   *   `buildUploadJobs`）：装配件顶层传 `owner_kind='ASSEMBLY'`，其余（独立零件 /
+   *   装配件子件）传 `owner_kind='PART'`。
    *
    * 2026-10-05：装配件侧每个子件、每个总装图都是各自独立的**单页切片**（uid 唯一），
    * 装配件顶层在「无总装图」时**不产生 entry** ⇒ 装配件的一份 entry 只对应一个目标
@@ -1814,9 +1815,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   const ASSEMBLY_CREATE_CONCURRENCY = 3;
 
   /**
-   * 后置上传的**目标实体**。2026-10-05 起上传端点按目标分流：装配件顶层（`t_assembly` 行）
-   * 的总装图走 `POST /assemblies/{id}/files`；独立零件与装配件子件（都是 `t_part` 行）走
-   * `POST /parts/{id}/upload-drawing` / `upload-3d-model`。
+   * 后置上传的**目标实体**：决定 `uploadFileObject` 的 `owner_kind` —— 装配件顶层
+   * （`t_assembly` 行）传 `ASSEMBLY`，独立零件与装配件子件（都是 `t_part` 行）传 `PART`。
    */
   type UploadTarget = 'part' | 'assembly';
 
@@ -1870,8 +1870,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 一行已建出的工单 = 目标实体（`t_part` 行 / `t_assembly` 行）+ 它的雪花 ID。
    *
    * 2026-10-05：`t_part` 与 `t_assembly` 两张表的 id 都在同一张 map 里，所以必须带
-   * `target` 区分 —— 只存一个裸 id 的话，后置上传分不清该打 `/parts/{id}/upload-drawing`
-   * 还是 `/assemblies/{id}/files`。
+   * `target` 区分 —— 只存一个裸 id 的话，后置上传分不清该传 `owner_kind='PART'`
+   * 还是 `owner_kind='ASSEMBLY'`（`t_part.id` 与 `t_assembly.id` 是两套雪花）。
    */
   interface CreatedTarget {
     target: UploadTarget;
@@ -2169,10 +2169,10 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    * 跑一批 job（受控并发）。成败记在 job 上（jobStates / failedJobs）再由 syncCells
    * 推导 cell 状态；单个 job 抛错只记失败、不影响其它 job，也不外抛。
    *
-   * 端点按 `job.target` 分流（2026-10-05）：装配件顶层的总装图打
-   * `POST /assemblies/{id}/files`（field=`file`，只收 PDF，存成 kind=ASSEMBLY_MASTER）；
-   * 独立零件 / 装配件子件（都是 `t_part` 行）打 `/parts/{id}/upload-drawing` /
-   * `upload-3d-model`。
+   * 三条链路（装配件顶层总装图 / 子件与独立零件的图纸 / 3D 模型）同打
+   * `POST /api/v2/files/objects`；owner 按 `job.target` 分流 —— 装配件顶层
+   * （`target='assembly'`）传 `owner_kind='ASSEMBLY'`，独立零件与装配件子件（都是
+   * `t_part` 行）传 `'PART'`，kind 一律取 `job.kind`。
    *
    * 已在途的 job 直接跳过（`runningJobIds`）：同一次上传请求重复发出去既浪费带宽，
    * 又会撞后端唯一索引。
@@ -2191,13 +2191,12 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
       jobStates.set(job.id, 'uploading');
       syncCells();
       try {
-        if (job.target === 'assembly') {
-          await uploadAssemblyPdf(job.ownerId, job.entry.file);
-        } else if (job.kind === 'DRAWING') {
-          await uploadPartDrawing(job.ownerId, job.entry.file);
-        } else {
-          await uploadPart3DModel(job.ownerId, job.entry.file);
-        }
+        await uploadFileObject(
+          job.target === 'assembly' ? 'ASSEMBLY' : 'PART',
+          job.ownerId,
+          job.kind,
+          job.entry.file,
+        );
         jobStates.set(job.id, 'done');
         failedJobs.delete(job.id);
       } catch (e) {
@@ -2466,7 +2465,7 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
    *
    * 一次请求建出 `t_assembly` 顶层 + 全部 `t_part` 子件（子件的 `assembly_id` 指向顶层）。
    * 后端该端点现在**无条件**派序列号、**无条件**建子件（2026-10-05 放开），所以不传
-   * PDF 也能建出完整的装配件；总装图走 `POST /assemblies/{id}/files` 单独上传
+   * PDF 也能建出完整的装配件；总装图走 `POST /api/v2/files/objects` 单独上传
    * （那个端点才真入库，存 kind=ASSEMBLY_MASTER）。
    *
    * 金额一律过 `toMoneyString`：`unit_price` / `total_price` 是 rust `rust_decimal` +
@@ -2624,8 +2623,8 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
   /**
    * 本次提交要上传的「目标实体 × 原件」对应关系（建单成功后调用一次）。
    *
-   * 端点分流在**行**这一级，不在 entry 这一级：同一份原件被多个 row 引用时（共享一个
-   * UI cell），顶层要打 `/assemblies/{id}/files`、子件要打 `/parts/{id}/upload-drawing`。
+   * owner_kind 分流在**行**这一级，不在 entry 这一级：同一份原件被多个 row 引用时
+   * （共享一个 UI cell），顶层传 `ASSEMBLY`、子件传 `PART`。
    */
   function buildUploadJobs(refs: CreatedTargetRef[]): UploadJob[] {
     const entries = collectFilesToUpload();
@@ -2640,9 +2639,9 @@ export function usePartBatchPdf(opts: UsePartBatchPdfOptions): UsePartBatchPdfRe
     const jobs: UploadJob[] = [];
     for (const ref of refs) {
       for (const entry of byRow.get(ref.rowUid) ?? []) {
-        // 总装图只存 PDF（`/assemblies/{id}/files` 只收 PDF）。顶层本来就不挂 3D
+        // 总装图槽位只收 PDF（kind 恒为 DRAWING）。顶层本来就不挂 3D
         // （`collectFilesToUpload` 只给 asmChild / standalone 挂），这一句是防线：万一
-        // 将来给顶层挂了 3D，绝不能把 3D 文件发到只收 PDF 的端点上去。
+        // 将来给顶层挂了 3D，绝不能把 3D 文件发到总装图槽位上去。
         if (ref.target === 'assembly' && entry.kind !== 'DRAWING') continue;
         jobs.push({
           id: `${entry.key}:${ref.target}:${ref.id}`,

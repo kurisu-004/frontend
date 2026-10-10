@@ -17,7 +17,7 @@
 
 import { useQuery, type QueryClient } from '@tanstack/vue-query';
 import { computed, toValue, type MaybeRefOrGetter } from 'vue';
-import { listPartFilesByOwner } from '@/api/assembly';
+import { listPartFilesByOwner } from '@/api/files/objects';
 import { partFileListResultSchema, type PartFileListResultSchema } from './schemas';
 import { qk } from './keys';
 

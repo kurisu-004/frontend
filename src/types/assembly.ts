@@ -177,7 +177,7 @@ export interface AssemblyCreatePayload {
  *
  *  2026-10-05 订正：后端返 `{ assembly, created_children }`（`AssemblyCreateResult
  *  { assembly: AssemblyOut, created_children: Vec<AssemblyChildOut> }`），既没有
- *  `children` 也没有 `files`（文件要另走 `/assemblies/{id}/files`）。
+ *  `children` 也没有 `files`（文件要另走 `POST /files/objects`）。
  *  字段集直接取 `AssemblyOut` / `AssemblyChildOut` 的 Zod infer。
  */
 export interface AssemblyCreateResult {
