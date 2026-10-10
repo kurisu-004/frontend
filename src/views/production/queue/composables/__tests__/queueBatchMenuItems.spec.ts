@@ -72,6 +72,9 @@ function input(overrides: Partial<QueueBatchMenuInput> = {}): QueueBatchMenuInpu
     batch: makeCard(),
     canRecall: true,
     canSplit: true,
+    // 2026-10-14 新增闸（RBAC 控制面板）：下发权限。默认 true，让既有断言聚焦在
+    // 自己关心的那一维；Q5 单独钉它的两种取值。
+    canDispatch: true,
     processes: PROCESSES,
     workers: WORKERS,
     selfWorkerId: 'W-1',
@@ -207,5 +210,43 @@ describe('buildQueueBatchMenuItems（生产队列三区的菜单项派生）', (
     const many = Array.from({ length: 100 }, (_, i) => ({ worker_id: `W-${i}`, name: `工人${i}` }));
     const items = buildQueueBatchMenuItems(input({ area: 'pool', workers: many }));
     expect(childrenOf(items, '派给工人')).toHaveLength(100);
+  });
+});
+
+// ============================================================================
+// 2026-10-14（RBAC 控制面板）：队列派发入口接 `queue.dispatch` 权限点
+//
+// ⚠️ 这一组是**行为变更**的守卫，不是纯回归：改之前「发送到工序」是**零闸门**
+// （任何登录用户右键都能看到入口，后端在提交时返 403）。所以下面两条必须钉死
+// 「false → 不给入口」「true → 给」—— 只钉后者的话，把闸删掉不会有任何测试信号。
+// ============================================================================
+describe('buildQueueBatchMenuItems —— 下发权限闸（2026-10-14）', () => {
+  it('Q10：canDispatch=false → 待下发池**不给**「发送到工序」', () => {
+    const items = buildQueueBatchMenuItems(input({ area: 'pending', canDispatch: false }));
+    expect(labels(items)).toEqual(['拆分批次']);
+    expect(childrenOf(items, '发送到工序')).toEqual([]);
+  });
+
+  it('Q11：canDispatch=true → 给「发送到工序」且二级菜单齐全', () => {
+    const items = buildQueueBatchMenuItems(input({ area: 'pending', canDispatch: true }));
+    expect(labels(items)).toEqual(['拆分批次', '发送到工序']);
+    expect(childrenOf(items, '发送到工序').map((c) => c.label)).toEqual([
+      'IP10 自产车削',
+      'OP10 外协粗车',
+    ]);
+  });
+
+  it('Q12：该闸**只**管下发一项，不牵连召回 / 拆批（逐项闸，不是「一次性闸」）', () => {
+    // 无下发权时，另外两项仍在 —— 否则一个只被授了「下发」权限点的账号会把召回/拆批
+    // 一起丢掉（反之亦然）。
+    const items = buildQueueBatchMenuItems(input({ area: 'pool', canDispatch: false }));
+    expect(labels(items)).toEqual(['召回到待下发', '拆分批次', '派给工人']);
+  });
+
+  it('Q13：无下发权 + 无拆批权 ⇒ 待下发池菜单为空（板级据此提示「没有可执行的操作」）', () => {
+    const items = buildQueueBatchMenuItems(
+      input({ area: 'pending', canDispatch: false, canSplit: false }),
+    );
+    expect(items).toEqual([]);
   });
 });

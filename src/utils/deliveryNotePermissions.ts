@@ -5,8 +5,25 @@
 // 的枚举）+ 多域复用（views/inspection、views/production/scan 也读 canView / hasManageNoteRole）。
 //
 // 角色矩阵（与后端 rust 送货单白名单一致）：CLERK + MANAGER + INSPECTOR 覆盖全部端点。
+//
+// ⚠️ **只有 `canPrint` 改了判据（2026-10-14，RBAC 控制面板）**：它从「管理角色」改成
+// 权限点 `delivery_note.print`。其余 helper（canSubmit / canRecall / canSoftDelete …）
+// **仍按角色判** —— 本轮只迁打印这一个入口，扩到其余入口是另一次改动，不要顺手带上。
+//
+// 为什么只迁打印：这个权限点是**前端-only** —— 后端的
+// `POST /com/delivery/note/{id}/print` 与 `/print-labels` 已于 2026-10-08 下线（打印改成
+// 前端本地生成 hucre），后端对这页的写入路径零改动。所以它现在纯粹由 RBAC 面板控制，
+// 前端读同一个码是最短路径，也不会有「前端比后端宽/窄」的偏差可发生。
+//
+// ⚠️ **本文件现在会访问 auth store**（`canPrint` 内部调 `useAuthStore()`）。单测必须
+// 先 `setActivePinia(...)` 并注册 VueQueryPlugin（store setup 首行要 QueryClient），
+// 见 `__tests__/deliveryNotePermissions.spec.ts`。
 
+import { useAuthStore } from '@/stores/auth';
 import type { DeliveryNoteStatus } from '@/types/deliveryNote';
+
+/** 放行送货单打印的权限点（与 RBAC 面板里的 `delivery_note.print` 逐字一致）。 */
+export const DELIVERY_NOTE_PRINT_PERMISSION = 'delivery_note.print';
 
 export interface RoleMapLike {
   MANAGER?: boolean;
@@ -53,7 +70,7 @@ export function canSoftDelete(status: string, role: RoleMapLike): boolean {
   return hasManageNoteRole(role) && status === 'DRAFT';
 }
 
-/** 打印送货单：管理角色 + 至少 1 个行项。
+/** 打印送货单：持有 `delivery_note.print` 权限点 + 至少 1 个行项。
  *
  *  **status 不设闸门**：已送货（PICKED_UP / ARCHIVED）的单允许补打 —— 收货方丢了这张单子
  *  时补打是真实场景，把它挡在门外没有收益。
@@ -62,9 +79,15 @@ export function canSoftDelete(status: string, role: RoleMapLike): boolean {
  *  下拉，而进那个对话框的唯一入口就是被 `canPrint` 挡住的按钮 ⇒ 把「已指定司机」写进
  *  本函数等于让按钮与下拉互相等待，谁也进不去。司机闸门只保留在**对话框内部**的
  *  「导出」按钮上（送货单页脚「送货人：{{driver_name}}」必须有值，`POST /{id}/pickup`
- * 也要从单据上读 `driver_worker_id`），那里能看到用户在选什么。 */
+ *  也要从单据上读 `driver_worker_id`），那里能看到用户在选什么。
+ *
+ *  ⚠️ 形参 `role` **保留但不再参与判定**（2026-10-14，签名不改 ⇒ 三个消费方
+ *  `DeliveryNoteLineItemsTable.vue` / `DeliveryNoteScan.vue` /
+ *  `DeliveryNoteDispatchControls.vue` 的 git diff 为空）。权限点取代角色成为判据，
+ * 理由见文件头。 */
 export function canPrint(note: PrintableNoteLike, role: RoleMapLike): boolean {
-  if (!hasManageNoteRole(role)) return false;
+  void role;
+  if (!useAuthStore().hasPermission(DELIVERY_NOTE_PRINT_PERMISSION)) return false;
   return note.part_count > 0;
 }
 

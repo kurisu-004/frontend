@@ -38,6 +38,17 @@ export interface QueueBatchMenuInput {
   /** 拆批权限（MANAGER + CLERK）。**只管角色**，批次自身的可拆性（余量 > 1）由派生
    *  函数叠加 —— 两道闸的来源不同，混在一个布尔里就看不出是权限问题还是批次问题。 */
   canSplit: boolean;
+  /** 下发权限（`queue.dispatch` 权限点，2026-10-14 新增）。
+   *
+   *  ⚠️ 这是**行为变更**、不是纯回归：改之前「发送到工序」是**零闸门**（任何登录用户
+   *  右键都能看到入口），而后端只放行 Manager / Clerk。改之后入口对未持有该权限点的
+   *  账号消失 —— 症状是「以前能点的现在点了没入口」，属于预期（那条路本来就是前端没
+   *  闸、后端在 403 兜底）。
+   *
+   *  与 `canRecall` / `canSplit` 分列而不是合并成一个布尔：三个是**三个端点各自独立的
+   *  RBAC 声明**（`POST /prod/queue/recall` / `POST /batches/split` /
+   *  `POST /prod/queue/dispatch`），将来任一端点放宽都会只动一处。 */
+  canDispatch: boolean;
   /** area='pending' 的下发目标（全量工序，INHOUSE + OUTSOURCE 都要）。 */
   processes?: QueueMenuProcess[];
   /** area='pool'（派活）/ 'worker'（转交）的目标工人（当前 tab 的工人列）。 */
@@ -72,7 +83,7 @@ function processLabel(p: QueueMenuProcess): string {
  *
  *  | 区域     | 召回到待下发 | 拆分批次 | 发送到（二级菜单） |
  *  |----------|--------------|----------|--------------------|
- *  | 待下发池 | 不给         | 给      | 各个工序            |
+ *  | 待下发池 | 不给         | 给      | 各个工序（`canDispatch`） |
  *  | 工序池   | 给           | 给      | 工人（派活）        |
  *  | 工人列   | 给           | 不给    | 其他工人（转交）    |
  *
@@ -108,7 +119,11 @@ export function buildQueueBatchMenuItems(input: QueueBatchMenuInput): MenuItem[]
     }));
     // 目标集为空（工序列表还在加载 / 真的一道工序都没有）时**不给**这一项：给一个点开是
     // 空白的二级菜单比不给更难解释。
-    if (children.length > 0) {
+    //
+    // ⚠️ `canDispatch` 闸与上面两条同类但**来源不同**：它判的是权限点（`queue.dispatch`
+    // 权限点），另两条判的是角色。少放一个角色 / 少一个权限点都会变成「入口可见、点下去
+    // 403」，所以这里必须挡在**给不给这一项**这一层，而不是靠提交时报错。
+    if (input.canDispatch && children.length > 0) {
       items.push({ label: '发送到工序', children });
     }
     return items;

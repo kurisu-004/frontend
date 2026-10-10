@@ -11,6 +11,11 @@
 
   「移除」传的 version 是 `UserRoleOut.version`（`t_user_role` 的计数器），不是
   `t_user.version` —— 两个是互不相关的数，混用必 40901。
+
+  2026-10-14（RBAC 控制面板）：「加角色」下拉的候选改由**后端角色表**动态供给
+  （`store.options.roleOptions` ← `GET /iam/roles`），不再是源码里的字面量表 ——
+  管理员自建的角色（如 `QC_LEAD`）必须能在这里被授予给账号，而写死的字面量表让它们
+  **静默消失**（界面上一切正常，只是永远选不到那个角色）。显示 `name`、提交 `code`。
 -->
 <template>
   <el-dialog
@@ -46,8 +51,19 @@
           placeholder="选角色"
           style="width: 180px"
           clearable
+          filterable
         >
-          <el-option v-for="o in ROLE_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+          <!--
+            候选来自 store.options.roleOptions（后端角色表，2026-10-14 起）。`filterable`
+            是同批加的：角色变多之后单靠滚动找不动，而用户往往按 code 找、下拉里显示的
+            却是中文 name。
+          -->
+          <el-option
+            v-for="o in store.options.roleOptions"
+            :key="o.value"
+            :label="o.label"
+            :value="o.value"
+          />
         </el-select>
       </div>
       <div v-if="store.dialogs.roles.selectedRole === SHELF_SCOPED_ROLE" class="role-form-row">
@@ -102,7 +118,7 @@
 // 零 `api/*` 依赖。
 
 import { useDialogSize } from '@/composables/useDialogSize';
-import { ROLE_OPTIONS, SHELF_SCOPED_ROLE } from '../usersConstants';
+import { SHELF_SCOPED_ROLE } from '../usersConstants';
 import { useUsersListStore } from '../composables/useUsersListStore';
 
 const store = useUsersListStore();

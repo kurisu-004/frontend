@@ -44,6 +44,7 @@ function flatten(nodes: MenuNode[]): MenuNode[] {
  *     path /mail/digest）随交期汇总邮件定时任务页新增。
  *   - 2026-10-14（review 第 1 轮 N-2）：上面两个新 code 此前**只进了 fixture、没进本
  *     用例**的登记。
+ *   - 2026-10-14（RBAC 控制面板）：auth_group 新增 roles_list（path /iam/roles）。
  *
  * ⚠️ **不再维护「总数 N」这个数字**：自本轮起数量已由穷尽比较隐含（清单多一个、少一个
  * 都会红），原先的 `has exactly 32 codes` 与注释里的 `30 → 32` 箭头一并删除 —— 再维护
@@ -75,6 +76,8 @@ const COVERED_CODES: readonly string[] = [
   'auth_group',
   'users_list',
   'shelves_list',
+  // 2026-10-14（RBAC 控制面板）：auth_group 新增 roles_list。
+  'roles_list',
   'outsource_list',
   'outsource_companies_list',
   'outsource_quotes_list',
@@ -124,6 +127,61 @@ describe('ADMIN_MENUS', () => {
       expect(typeof n.id).toBe('string');
       expect(n.id.length).toBeGreaterThanOrEqual(15);
     }
+  });
+
+  // 2026-10-14（RBAC 控制面板）：roles_list 的四条定位断言。它们是「新增一个菜单
+  // 节点」要满足的完整清单 —— 上面那条穷尽比较只管「code 集合」，管不到下面这些。
+  describe('roles_list 节点（RBAC 控制面板）', () => {
+    const authGroup = () => flatten(ADMIN_MENUS).find((n) => n.code === 'auth_group')!;
+
+    it('挂在 auth_group 下，path /iam/roles（与 router 的 path 逐字一致）', () => {
+      const node = authGroup().children.find((c) => c.code === 'roles_list');
+      expect(node).toBeDefined();
+      expect(node!.path).toBe('/iam/roles');
+      expect(node!.title).toBe('角色权限');
+    });
+
+    it('icon 在 MenuTreeItem 的 ICON_MAP 白名单内（查不到会静默不显示）', () => {
+      const node = authGroup().children.find((c) => c.code === 'roles_list')!;
+      // 与 MenuTreeItem.vue 的 ICON_MAP 保持同步；新增菜单图标必须同时改那边。
+      const ICON_MAP = new Set([
+        'House',
+        'Box',
+        'CircleCheck',
+        'Tools',
+        'Cpu',
+        'OfficeBuilding',
+        'Document',
+        'Promotion',
+        'User',
+        'Key',
+        'Platform',
+        'DataAnalysis',
+        'Connection',
+        'Tickets',
+        'Plus',
+        'Van',
+        'Setting',
+        'Operation',
+        'List',
+        'SetUp',
+        'Clock',
+        'Message',
+      ]);
+      expect(ICON_MAP.has(node.icon!)).toBe(true);
+    });
+
+    it('**数组物理位置**接在 shelves_list 之后（侧栏按数组顺序渲染、不排 sort_order）', () => {
+      const codes = authGroup().children.map((c) => c.code);
+      expect(codes.indexOf('roles_list')).toBe(codes.indexOf('shelves_list') + 1);
+    });
+
+    it('sort_order 落在 shelves_list(30) 之后', () => {
+      const children = authGroup().children;
+      const roles = children.find((c) => c.code === 'roles_list')!;
+      const shelves = children.find((c) => c.code === 'shelves_list')!;
+      expect(roles.sort_order).toBeGreaterThan(shelves.sort_order);
+    });
   });
 
   // 2026-10-04 新增：菜单树的**数组物理顺序**必须与 sort_order 升序一致，两层都查 ——

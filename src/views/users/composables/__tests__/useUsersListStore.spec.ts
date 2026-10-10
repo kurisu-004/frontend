@@ -80,7 +80,15 @@ vi.mock('@/api/shelves', () => ({
   listShelves: vi.fn(async () => ({ items: [], total: 0, limit: 200, offset: 0 })),
 }));
 
+// 2026-10-14（RBAC 控制面板）：角色下拉候选改走 `GET /iam/roles`，该端点在本 store 的
+// setup 里被拉起（不是点击时才拉），不桩会走真实 axios 触发未处理 rejection。
+const listRolesMock = vi.fn();
+vi.mock('@/api/rbac', () => ({
+  listRoles: (...args: unknown[]) => listRolesMock(...args),
+}));
+
 import { useUsersListStore } from '../useUsersListStore';
+import { ElMessage } from 'element-plus';
 import { qk } from '@/composables/queries/keys';
 import { DEFAULT_PASSWORD } from '../../usersConstants';
 
@@ -121,6 +129,51 @@ const ROLE_ROW = {
   shelf_name: '生产架 A01',
 };
 
+/** 后端角色表的一行（`GET /iam/roles` 的 wire 形态，雪花 ID 是字符串）。 */
+const ROLE_DEFS = [
+  {
+    id: '1900000000000000001',
+    code: 'ADMIN',
+    name: '系统管理员',
+    description: '元角色',
+    is_system: true,
+    is_active: true,
+    version: 1,
+    user_count: 2,
+  },
+  {
+    id: '1900000000000000002',
+    code: 'MANAGER',
+    name: '管理员',
+    description: null,
+    is_system: true,
+    is_active: true,
+    version: 1,
+    user_count: 3,
+  },
+  {
+    // 2026-10-14：**自定义角色**（管理员在 RBAC 面板自建），旧字面量候选表里不可能有它。
+    id: '1900000000000000101',
+    code: 'QC_LEAD',
+    name: '品检组长',
+    description: null,
+    is_system: false,
+    is_active: true,
+    version: 3,
+    user_count: 1,
+  },
+  {
+    id: '1900000000000000102',
+    code: 'RETIRED_ROLE',
+    name: '已停用角色',
+    description: null,
+    is_system: false,
+    is_active: false,
+    version: 4,
+    user_count: 0,
+  },
+];
+
 /** 返回本用例用的 QueryClient —— 失效调用点要 spy 它的 invalidateQueries。 */
 function setupApp(): QueryClient {
   const app = createApp({});
@@ -148,6 +201,7 @@ describe('useUsersListStore', () => {
     listUsersMock.mockResolvedValue(LIST_RESULT);
     getWxIdentityMock.mockResolvedValue(null);
     listUserRolesMock.mockResolvedValue([ROLE_ROW]);
+    listRolesMock.mockResolvedValue(ROLE_DEFS);
     try {
       localStorage.clear();
     } catch {
@@ -723,5 +777,128 @@ describe('useUsersListStore', () => {
     expect(store2.query.search.usernameLike).toBe('');
     expect(store2.query.page).toBe(1);
     expect(store2.dialogs.form.visible).toBe(false);
+  });
+});
+
+// ============================================================================
+// 2026-10-14（RBAC 控制面板）：角色候选动态化 + rolesMutation 守门
+// ============================================================================
+
+describe('useUsersListStore —— 角色下拉动态化（2026-10-14）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupApp();
+    listUsersMock.mockResolvedValue(LIST_RESULT);
+    getWxIdentityMock.mockResolvedValue(null);
+    listUserRolesMock.mockResolvedValue([ROLE_ROW]);
+    listRolesMock.mockResolvedValue(ROLE_DEFS);
+    try {
+      localStorage.clear();
+    } catch {
+      /* node 环境不可用时忽略 */
+    }
+  });
+
+  it('D1：角色下拉候选含**自定义角色 code**（QC_LEAD），显示 name、提交 code', async () => {
+    const store = useUsersListStore();
+    store.query.restoreState();
+    await tick();
+
+    const options = store.options.roleOptions;
+    // 自定义角色在下拉里（旧的字面量表里根本没有它 ⇒ 界面正常但永远选不到）。
+    expect(options.map((o) => o.value)).toContain('QC_LEAD');
+    // 显示名用 name（中文），提交值用 code（后端认的稳定键）。
+    const qcLead = options.find((o) => o.value === 'QC_LEAD')!;
+    expect(qcLead.label).toBe('品检组长');
+    // 已停用的角色不进候选（不能把新授权授给停用角色）。
+    expect(options.map((o) => o.value)).not.toContain('RETIRED_ROLE');
+  });
+
+  it('D2：选中自定义角色后提交 addUserRole，payload 走的是 code', async () => {
+    addUserRoleMock.mockResolvedValue({ id: 'r1', version: 1 });
+    const store = useUsersListStore();
+    store.query.restoreState();
+    await tick();
+
+    store.dialogs.roles.openRoles(ROW);
+    store.dialogs.roles.selectedRole = 'QC_LEAD';
+    await store.submitAddRole();
+
+    expect(addUserRoleMock).toHaveBeenCalledWith(ROW.id, {
+      role: 'QC_LEAD',
+      scope_type: null,
+      scope_id: null,
+    });
+  });
+
+  it('D3：角色列表坏响应（缺必填字段）⇒ roleOptions 为空数组，不渲染半份数据', async () => {
+    listRolesMock.mockResolvedValue([{ id: 'x', code: 'BROKEN' }]);
+    const store = useUsersListStore();
+    store.query.restoreState();
+    await tick();
+    expect(store.options.roleOptions).toEqual([]);
+  });
+});
+
+describe('useUsersListStore —— rolesMutation 守门（2026-10-14）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupApp();
+    listUsersMock.mockResolvedValue(LIST_RESULT);
+    getWxIdentityMock.mockResolvedValue(null);
+    listRolesMock.mockResolvedValue(ROLE_DEFS);
+    try {
+      localStorage.clear();
+    } catch {
+      /* node 环境不可用时忽略 */
+    }
+  });
+
+  it('E1：listUserRoles 返回非数组 ⇒ 报错且列表保持空，不把垃圾塞进渲染源', async () => {
+    // 改前是裸调 listUserRoles：非数组直接 `rolesList.value = data`，弹窗渲染 v-for 时
+    // 报错或空白，而「加载角色失败」提示永远不会出现（用户只看到打不开的对话框）。
+    listUserRolesMock.mockResolvedValue({ oops: true });
+
+    const store = useUsersListStore();
+    store.query.restoreState();
+    await tick();
+
+    // 走公开入口：openRoles 内部 fire-and-forget 调 fetchRoles（错误由 onError 提示）。
+    store.dialogs.roles.openRoles(ROW);
+    await tick();
+
+    expect(store.dialogs.roles.list).toEqual([]);
+    // 守门抛出的 ZodError 也必须走到 ElMessage.error，否则用户仍然只看到一个空弹窗。
+    expect(ElMessage.error).toHaveBeenCalled();
+  });
+
+  it('E2：元素缺必填字段也拒（复用 userRoleOutSchema，不新写一份 schema）', async () => {
+    // 少 scope_type / shelf_name 等键就是坏响应；守门用的是既有的 userRoleOutSchema。
+    listUserRolesMock.mockResolvedValue([{ id: 'r1', version: 1, role: 'SHELF_ACCOUNT' }]);
+
+    const store = useUsersListStore();
+    store.query.restoreState();
+    await tick();
+
+    store.dialogs.roles.openRoles(ROW);
+    await tick();
+
+    expect(store.dialogs.roles.list).toEqual([]);
+    expect(ElMessage.error).toHaveBeenCalled();
+  });
+
+  it('E3：合法响应 ⇒ 列表被灌上（守门不误伤正常路径）', async () => {
+    listUserRolesMock.mockResolvedValue([ROLE_ROW]);
+
+    const store = useUsersListStore();
+    store.query.restoreState();
+    await tick();
+
+    store.dialogs.roles.openRoles(ROW);
+    await tick();
+
+    expect(store.dialogs.roles.list).toHaveLength(1);
+    expect(store.dialogs.roles.list[0]!.role).toBe('SHELF_ACCOUNT');
+    expect(ElMessage.error).not.toHaveBeenCalled();
   });
 });

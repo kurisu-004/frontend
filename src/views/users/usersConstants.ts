@@ -3,26 +3,20 @@
 // 2026-10-10 新增：账号管理域的角色候选与口令常量。单域专用文件，与页面主组件
 // （UserList.vue）同层放域根 —— `src/utils/` 只放跨域通用工具。
 //
-// 为什么从 UserList.vue 提出来：旧版把 `ROLE_OPTIONS` 内联在 SFC 的 `<script setup>`
-// 里，角色下拉与「加完 SHELF_ACCOUNT 要重新登录才生效」的分支都读它。内联导致列定义 /
-// 角色对话框 / 单测三处各写一份字面量（改中文 label 要改三处）。
+// 2026-10-14（RBAC 控制面板）：**`ROLE_OPTIONS` 已删除**。角色下拉的候选改由
+// `GET /api/v2/iam/roles`（`qk.rolesList()`）动态供给 —— 角色不再封闭在后端 enum 里，
+// 管理员可以在面板自建任意 code（如 `QC_LEAD`）。写死字面量的症状不是「多了几个角色
+// 没显示」，而是**自定义角色根本无法授予给任何账号**，且界面上一片正常。
+// 消费方：`composables/useUsersListStore.ts` 的 `options.roleOptions`（共享
+// `useRolesQuery`，与 RBAC 面板左列表同一条 queryKey ⇒ 同屏去重）。
 //
-// `satisfies` 是这里的守卫：候选的形状由 `RoleOptionData` 单点定义，改字面量时形状漂移
-// 会在 `vue-tsc` 阶段报错（`vue-tsc --noEmit` 是本仓 gate 之一）。
+// 负向守卫见 `composables/__tests__/useUsersListStore.spec.ts`：断言本文件不再出现
+// 角色候选字面量（`ROLE_OPTIONS` 已被删除，任何「复活」都应改成走 API）。
 
-import type { RoleOptionData } from './usersSchema';
-
-/** 5 个角色的下拉候选（value = 后端 `UserRole` 枚举原文，label = 中文展示）。
- *  全量暴露：SHELF_ACCOUNT 之外的角色不绑货架，scope 必须为 null（见 RoleDialog）。 */
-export const ROLE_OPTIONS = [
-  { value: 'MANAGER', label: '管理员' },
-  { value: 'CLERK', label: '文员' },
-  { value: 'SHELF_ACCOUNT', label: '货架一体机账号' },
-  { value: 'INSPECTOR', label: '品检员' },
-  { value: 'CNC_PROGRAMMER', label: 'CNC 编程员' },
-] satisfies ReadonlyArray<RoleOptionData>;
-
-/** 需要绑货架范围的角色（其余角色加的时候 scope 恒为 null）。 */
+/** 需要绑货架范围的角色（其余角色加的时候 scope 恒为 null）。
+ *
+ *  ⚠️ 它是**业务分支判据**、不是角色候选清单：SHELF_ACCOUNT 之外的加法一律 scope=null，
+ *  且新增角色时前端要判断「这个角色要不要绑货架」。角色清单本身走 API。 */
 export const SHELF_SCOPED_ROLE = 'SHELF_ACCOUNT';
 
 /** 默认口令：新增时密码留空 = 用它；重置密码端点也重置成它（与后端同源）。 */

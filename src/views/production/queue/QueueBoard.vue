@@ -233,6 +233,15 @@ const { error, moveBatchToWorker, moveBatchToPool, moveBatchBetweenWorkers } = q
  *  故不复用同一个布尔。 */
 const canSplit = computed<boolean>(() => auth.hasRole('MANAGER') || auth.hasRole('CLERK'));
 
+/** 下发权限闸（2026-10-14 新增，RBAC 面板）—— 按**权限点**判，与上面两条按角色判的闸
+ *  是不同来源：`queue.dispatch` 是 RBAC 面板里可授予任意角色的权限点（含自建角色），
+ *  `canRecall` / `canSplit` 仍是后端写死的角色白名单。
+ *
+ *  ⚠️ 这是**行为变更**：改之前本页对「发送到工序」是零闸门（任何登录用户右键都能看到
+ *  入口，后端在提交时返 403）。现在未持有该权限点的账号看不到这一项。
+ *  ADMIN 元角色在 `hasPermission` 里有通配短路，所以管理员账号不受影响。 */
+const canDispatch = computed<boolean>(() => auth.hasPermission('queue.dispatch'));
+
 // activeTab 默认 = __pending__（首屏即待下发 tab，符合任务规约「待下发 Tab 在最前」）；
 // URL ?tab=XXX 可覆盖（深链到具体工序），覆盖优先级 > 默认。放在右键菜单那一段之前：
 // 「派给工人 / 转交给工人」的目标集要按当前 tab 去 board 缓存里取。
@@ -352,6 +361,7 @@ provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
     batch,
     canRecall: recall.canRecall.value,
     canSplit: canSplit.value,
+    canDispatch: canDispatch.value,
     processes: dispatchTargets(),
     workers: currentWorkers(),
     selfWorkerId: area === 'worker' ? (selfWorkerId ?? undefined) : undefined,
@@ -384,9 +394,11 @@ provide<BatchMenuOpener>('openBatchContextMenu', (evt, batch, area) => {
     },
   });
   if (items.length === 0) {
-    // 本页的两个权限闸就是 canRecall / canSplit（派活 / 转交 / 下发不另设角色闸），
-    // 两个都 false 才能断定「空」是权限造成的。
-    const byPermission = !recall.canRecall.value && !canSplit.value;
+    // 本页的三个权限闸是 canRecall / canSplit / canDispatch（派活 / 转交 / 下发各一条），
+    // 三个都 false 才能断定「空」是权限造成的。漏算 canDispatch 的症状是：只被授了
+    // 「下发」权限点（或反之）的账号看到「当前角色没有可执行的操作」，而实际上他有。
+    const byPermission =
+      !recall.canRecall.value && !canSplit.value && !canDispatch.value;
     ElMessage.warning(
       byPermission ? '当前角色对该批次没有可执行的操作' : '该批次当前没有可执行的操作',
     );
