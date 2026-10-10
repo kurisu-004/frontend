@@ -1,5 +1,10 @@
 // 2026-10-04 新增：图纸 / 3D 后置上传 wrapper 的 multipart 契约。
 //
+// ⚠️ **本 spec 测的是零件侧端点**（`POST /api/v2/parts/{part_id}/upload-drawing` 与
+// `/upload-3d-model`），实现文件虽然搬到了 `api/files/objects.ts`，**端点归属仍在
+// part 域** ⇒ 随实现文件位置而搬，不随端点归属而搬。看到本文件在 `api/files/`
+// 下就以为端点已进 files 域，是误读。
+//
 // 端点对 body 有两条硬约束，任一违反都是 40001：
 //   1. 只接受**一个**名为 `file` 的字段（多字段 / 缺字段 / 换字段名都拒）；
 //   2. `content_type` 必须匹配扩展名白名单 —— PDF 只收 application/pdf，3D 扩展名
@@ -15,7 +20,7 @@ import { uploadPart3DModel, uploadPartDrawing } from '../objects';
 
 beforeEach(() => mocks.post.mockReset());
 
-describe('file.ts 后置上传 wrapper', () => {
+describe('零件侧后置上传 wrapper（实现文件 objects.ts）', () => {
   it('图纸：URL + 单一 file 字段 + content_type 归一', async () => {
     mocks.post.mockResolvedValueOnce({ data: { id: 'f1' } });
     const raw = new File([new Uint8Array([1])], 'A-1.pdf', { type: '' });

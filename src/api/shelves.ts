@@ -60,9 +60,11 @@
 //        5 个打 `/parts/*` 的函数（`printPartDrawing` / `printPartDrawingBatch` /
 //        `confirmPartFile` / `uploadPartDrawing` / `uploadPart3DModel`）。它们是零件
 //        侧的打印与 multipart 后置上传端点，打印 BFF 后端刻意留在 part 域不搬；
-//        本 PR 只做机械搬家，未拆文件。后端 PR1b 会把这几条合并进
-//        `POST /files/objects`（含 confirm），届时本例外自然消失。**若届时仍在，
-//        就该把它们迁回 `parts/`** —— 见对象文件头注释的同款说明。
+//        本 PR 只做机械搬家，未拆文件。⚠️ **该例外不会自己消失**：后端把
+//        upload-drawing / upload-3d-model / files/confirm 三条搬进 files 域后，
+//        print-drawing 与 print-drawing-batch 两条仍留在 part 域。届时应把
+//        `printPartDrawing` / `printPartDrawingBatch` 迁回 `api/parts/` ——
+//        见对象文件头注释的同款说明。
 //
 //   ⚠️ 旧路径现在的行为（改动理由，也是「不能留兼容层」的依据）：
 //     - `GET /shelves/processes` → **400，且响应体不是 `R` 信封**。它现在落到

@@ -249,14 +249,14 @@ export async function createAssembly(
   return assemblyCreateResultSchema.parse(resp.data);
 }
 
-// 2026-10-13：删除 `createAssemblyWithFile`（原 :252-272）。
+// 2026-10-13：删除 `createAssemblyWithFile`。
 // 理由：2026-10-05 起即标注「零调用点」，零件批量建单走 `createAssembly`（不传 PDF）
 // + `uploadAssemblyPdf` 补总装图这条两段式；2026-10-13 rg 复核**仍为零调用方**
-// （全仓仅余 `types/assembly.ts:8` 一句注释里的名字提及）。且它与 `createAssembly`
-// 打同一个 `POST /assemblies`，差别只在 multipart 字段名（`files` vs 不传）——
-// 留着等于给「静默丢弃文件」那条 2026-10-05 陷阱留一个后门。
+// （唯一的名字提及只在 `types/assembly.ts` 的一句注释里，本轮一并清掉）。且它与
+// `createAssembly` 打同一个 `POST /assemblies`，差别只在 multipart 字段名（`files`
+// vs 不传）—— 留着等于给「静默丢弃文件」那条 2026-10-05 陷阱留一个后门。
 //
-// 2026-10-13：删除 `listPartFiles`（原 :366-379）与 `deleteFile` alias（原 :406-410）。
+// 2026-10-13：删除 `listPartFiles` 与 `deleteFile` alias。
 // 理由：两者 rg 核实均为**零调用方**。`listPartFiles` 早在 2026-09-16 T3.5 就被
 // `listPartFilesByOwner` 取代并标注 `@deprecated`（其自述「M3-C 完成时统一移除」
 // 至今未执行，本 PR 一并结清）；`deleteFile` alias 自 2026-09-16 T3.5 起就只是
@@ -378,9 +378,8 @@ export async function listPartFilesByOwner(
   return resp.data;
 }
 
-// 2026-09-25 清理：uploadPartDrawing / uploadPart3DModel / uploadPartCadFile
-// 已迁回零件侧文件封装；本文件不再 re-export。
-// 2026-10-13：随 files 域重组，该封装迁至 `@/api/files/objects`（见该文件）。
+// 零件侧文件上传封装（`uploadPartDrawing` / `uploadPart3DModel`）在 `@/api/files/objects`，
+// 本文件不再 re-export。
 
 /**
  * `getPartFileDownloadUrl` 的 deprecation alias。

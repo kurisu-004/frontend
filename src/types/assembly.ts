@@ -5,7 +5,7 @@
 import type { PartListItem } from '@/types/parts';
 import type { DrawingFileItem } from './file';
 // 2026-10-05：创建响应返的是**后端 wire 形态**（`AssemblyOut` / `AssemblyChildOut`），
-// `createAssembly` / `createAssemblyWithFile` 拿到 `resp.data` 后**不经过任何 mapper**
+// `createAssembly` 拿到 `resp.data` 后**不经过任何 mapper**
 // ⇒ 不能声明成 FE 展示型（`AssemblyItem.unit_price` 是 number、且多 4 个派生字段）。
 // 这里 type-only 引 Zod schema 的 infer，字段集由 schema 单点定义。
 import type { AssemblyChildOutSchema, AssemblyOutSchema } from '@/composables/queries/schemas';

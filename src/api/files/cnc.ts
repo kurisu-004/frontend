@@ -3,9 +3,8 @@
 // 2026-10-13 随后端 files 域重组：本文件自 `api/cnc.ts` 迁入 `api/files/cnc.ts`，
 // canonical 端点由 `POST /api/v2/cnc-programs/pairs` **硬切**为
 // `POST /api/v2/files/cnc/pairs`。⚠️ **旧路径 `/api/v2/cnc-programs/*` 已 404、无 alias**：
-// 后端删掉了 4 条 cnc_program 端点（`GET /cnc-programs/parts/{pid}`、
-// `GET /cnc-programs/{id}/download-url`、`GET /cnc-programs/{id}/content`、
-// `POST /cnc-programs/{id}/delete`）与 part_file 侧的 6 条窄路径上传端点。
+// 后端同批删掉了 12 条零调用方端点（cnc_program 4 条 + part_file 8 条，移除记录见
+// backend-rust `src/modules/files/part_file/handler.rs` 模块 doc）。
 // 迁入理由与 `objects.ts` 同款：`api/` 子目录镜像 URL 命名空间，`/files/cnc` 正好
 // 对应 `api/files/cnc.ts`（同目录另有 `sts.ts` → `/files/sts-tmp-keys`、
 // `objects.ts` → `/files/objects/*`）。
@@ -17,15 +16,13 @@
 //   - listPartCncPrograms / listPartSetupSheets —— 是文件对象域窄路径
 //     alias（handler 硬编码 kind=G_CODE/SETUP_SHEET + limit=500 不读 Query），
 //     前端 usePartFilesListQuery 已拉 owner 全量，按 kind filter 即可。
-//     ⚠️ 2026-10-13：这 2 条 alias 端点已随本轮重组**删除**（旧 404）。
+//     ⚠️ 这 2 条 alias 端点后端已下线（旧路径 404）。
 //   - uploadPartCncProgram / uploadPartSetupSheet —— 零调用方（2026-09-16
 //     M3 后 multipart 直传链路已被 COS 直传 + JSON 链路取代；前端不再发这
 //     两端点）。
-//   - getCncDownloadUrl / deleteCncProgram —— 走 cnc-programs alias 端点
-//     （/cnc-programs/{id}/download-url + /cnc-programs/{id}/delete），但
-//     实际是 /part-files/{id}/url + /part-files/{id}/delete 的 alias；前端
-//     改走 `api/files/objects` 的 native 端点更直接。
-//     ⚠️ 2026-10-13：这 2 条 alias 端点已随本轮重组**删除**（旧 404）。
+//   - getCncDownloadUrl / deleteCncProgram —— 走 cnc-programs alias 端点，
+//     但实际是文件对象域端点的 alias；前端改走 `api/files/objects` 的 native
+//     端点更直接。⚠️ 这 2 条 alias 端点后端已下线（旧路径 404）。
 //
 // 唯一保留 `uploadCncPair`：CNC G 代码 + 设定单的「配对上传」业务。canonical
 // 端点是 `POST /api/v2/files/cnc/pairs`（backend-rust

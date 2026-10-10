@@ -7,7 +7,8 @@
   - 新增 apiGetPreviewUrl / apiGetDownloadUrl / apiDelete props，默认走
     `api/files/objects.ts` 的新函数（v2 实际路径 /files/objects/{id}/...；
     2026-10-13 随后端 files 域重组由 /part-files 硬切而来，旧路径 404 无 alias）
-  - 删除旧的 `api.get('/files/objects/${id}/content')` 硬编码 → 走 props 注入
+  - 文件内容预览不再在组件内硬编码 URL，统一走 `apiGetPreviewUrl` props（未注入时
+    回落 `api/files/objects.ts` 的实现）
 
   用 kind 字段区分文件类型：
   - DRAWING           零件 / 子件 图纸

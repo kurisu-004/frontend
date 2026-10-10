@@ -81,8 +81,8 @@ export interface PartFileListResult {
 }
 
 /**
- * GET /api/v2/files/objects/{id}/url 响应（2026-10-13 前为 /api/v2/part-files/{id}/url；
- * 同形状的 /cnc-programs/{id}/download-url alias 端点已随 files 域重组删除，旧路径 404）。
+ * GET /api/v2/files/objects/{id}/url 响应（同形状的 /cnc-programs/{id}/download-url
+ * alias 端点后端已下线，旧路径 404）。
  * 2026-09-16 新增：Phase 5 切 v2 后临时下载 URL 走该端点，字段名是 download_url（非 url）。
  */
 export interface PartFileUrlResult {
@@ -102,8 +102,7 @@ export interface PartFileUrlResult {
 
 /**
  * 2026-09-29 修复：原 /api/v2/parts/{id}/cnc-pair 已移除兼容 nest，迁移到配对上传端点。
- * 2026-10-13：随 files 域重组硬切为 `POST /api/v2/files/cnc/pairs`
- * （此前为 `POST /api/v2/cnc-programs/pairs`，旧路径 404、无 alias）。
+ * 2026-10-13：随 files 域重组硬切为 `POST /api/v2/files/cnc/pairs`（旧路径 404、无 alias）。
  * POST /api/v2/files/cnc/pairs 响应中的单文件引用（v2 CncFileRef）。
  * 2026-09-16 新增：Phase 5 切 v2 后该端点返回 { g_code, setup_sheet } 对象（非数组）。
  */

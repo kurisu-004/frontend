@@ -201,8 +201,8 @@ export function usePartDetail(
   const canManage3DModels = computed(() => isManager.value || isClerk.value);
   /** G 代码：配对上传（kind = G_CODE）→ 后端
    *  `[Manager, CncProgrammer]`，与前端一致（逐字对齐）。
-   *  ⚠️ 2026-10-13：原注释点名的 `POST /part-files/parts/{id}/cnc-programs` 窄路径
-   *  上传端点已被后端删除（旧路径 404）；G 代码现统一走 `POST /files/cnc/pairs`。 */
+   * ⚠️ 零件维度的窄路径上传端点（`/part-files/parts/{id}/cnc-programs` 等）后端已
+   * 删除（旧路径 404）；G 代码现统一走 `POST /files/cnc/pairs`。 */
   const canManageCncFiles = computed(() => isManager.value || isCnc.value);
   /** 设定单：配对上传（kind = SETUP_SHEET）→ 后端
    *  `[Manager, CncProgrammer]`，与前端一致。⚠️ 同 kind 的**软删**后端却是

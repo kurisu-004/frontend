@@ -11,9 +11,11 @@
 // 命名空间，正好对应 `api/files/` 下的 `objects.ts` / `cnc.ts` / `sts.ts`。
 // ⚠️ **本文件仍寄住 5 个打 `/parts/*` 的零件侧函数**（printPartDrawing /
 // printPartDrawingBatch / confirmPartFile / uploadPartDrawing / uploadPart3DModel）：
-// 打印 BFF 后端刻意留在 part 域不搬，本次只做机械搬家不拆文件。后端 PR1b 会把
-// upload-drawing / upload-3d-model / confirm 三条合并进 `POST /files/objects`，
-// 届时应把这几个函数一并迁到本文件的 files 域实现下或退回 `parts/`。
+// 打印 BFF 后端刻意留在 part 域不搬，本次只做机械搬家不拆文件。
+// ⚠️ **这个例外不会自己消失**：后端把 upload-drawing / upload-3d-model /
+// files/confirm 三条搬进 files 域后，**print-drawing 与 print-drawing-batch 两条
+// 仍留在 part 域**（纯转发 BFF，不属文件对象域）。届时应把 `printPartDrawing` /
+// `printPartDrawingBatch` 迁回 `api/parts/`，本文件剩下的就全是 files 域实现了。
 //
 // 2026-09-29 修复：兼容 nest 已移除。
 // - 列出文件：listPartFilesByOwner + usePartFilesListQuery（composables/queries/）
@@ -94,11 +96,8 @@ export async function confirmPartFile(
 // 2026-09-16 T3.5：文件对象域 v2 实际路径的辅助端点（删除 / 下载 / 内容预览）
 // ============================================================
 //
-// 背景：原 `api/assembly.ts` 里的 `deleteFile / getDownloadUrl` 路径写的是
-// `POST /files/{id}/delete` / `GET /files/{id}/content`（v1 时代的端点），
-// v2 后端实际路径先是 `/part-files/{id}/...`、2026-10-13 起随 files 域重组
-// 硬切为 `/files/objects/{id}/...`。本组函数走 v2 实际路径 +
-// 对齐 PartFileUrlResult / PartFileListResult 契约。
+// 本组函数走文件对象域的 v2 实际路径 `/files/objects/{id}/...`，对齐
+// PartFileUrlResult / PartFileListResult 契约。
 
 /**
  * `GET /api/v2/files/objects/{id}/url`：临时下载 URL 签发。
@@ -213,9 +212,8 @@ export async function uploadPart3DModel(partId: string, file: File): Promise<Par
   return resp.data;
 }
 
-// 2026-10-13：删除 `uploadPartCadFile`（本文件原 :202-217）。
+// 2026-10-13：删除 `uploadPartCadFile`。
 // 理由：它打的 `POST /api/v2/parts/{id}/cad-files` 后端路由**早已不存在**（2026-09-16
 // M3 重构时 multipart 直传链路被 COS 直传 + JSON 链路取代），函数自身已于
-// 2026-09-16 标注 `@deprecated`，且 rg 核实**零调用方**（全仓仅余
-// `api/assembly.ts` 清理记录里的一句名字提及）。留着只会让人以为 CAD 2D 还能直传。
+// 2026-09-16 标注 `@deprecated`，且 rg 核实**零调用方**。留着只会让人以为 CAD 2D 还能直传。
 // CAD 源文件补传的正确入口是场景 B：`usePartFileUpload({ ownerPartId, kind: 'CAD_2D' })`。
