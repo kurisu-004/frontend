@@ -4,11 +4,19 @@
   2026-10-13 新建。**纯组件，零 store / 零 api 依赖**（结果由壳传进来）。
 
   为什么用 `<iframe :srcdoc="html">` 而不是 `v-html`：
-    - **安全**：`srcdoc` 内容在一个独立文档里跑，`innerHTML` 不会进父文档的 DOM；
-      且本仓没配 CSP 的 `script-src`，srcdoc 里的内联脚本不执行、正文里的
-      `<script>` / `onerror=` 之类也拿不到父页面的 `document` / `localStorage`。
-      预览的 HTML 来自服务端渲染，内容形态也会随列白名单变化，让它有机会带上
-      服务端模板里的任意标签 —— 不进父文档是这里最要紧的一条。
+    - **安全**：`srcdoc` 内容跑在**独立文档**里，`innerHTML` 不会进父文档的 DOM。
+      ⚠️ **但「独立文档」不等于「隔离」**（2026-10-14 review 第 1 轮 M-1 订正）：
+      **没有 `sandbox` 时 `about:srcdoc` iframe 继承父页 origin**，正文里的内联脚本 /
+      `<img onerror=…>` 会在**登录态、同源**上下文里执行，够得着
+      `parent.localStorage`（access + refresh token 都在里面）、`parent.document` 全量 DOM，
+      并能以当前身份 `fetch('/api/v2/*')`。
+      ⚠️ 而本仓**全仓没有 CSP**（`index.html` / nginx 配置都没有
+      `Content-Security-Policy`，`main.ts` 也不发 meta 标签）⇒ 内联脚本本来就会执行，
+      「没配 CSP」是**没有防线**、不是防线。要挡它得配 CSP 且 `script-src` 不含
+      `unsafe-inline`，本仓没配 ⇒ **隔离完全依赖模板里那个空 `sandbox`**。
+      触发面不是假想：邮件正文里的零件号 / 名称 / 客户名与配置里的 `subject_template`
+      都是任意用户可录入的自由文本，后端只要有一处漏转义就是一次同源 XSS，
+      而受害者必然是能进这页的 MANAGER。
     - **还原度**：邮件正文带自己的内联样式与 `<style>`，注入父文档会与本系统的
       Element Plus 全局样式打架（表格 / 按钮样式被覆写）。独立文档里它看到的是
       浏览器默认样式，正是收件人看到的样子。
@@ -40,7 +48,12 @@
           <span class="preview-columns">生效列 {{ result.columns.length }} 列</span>
         </div>
       </div>
-      <iframe class="preview-frame" :srcdoc="result.html" title="邮件正文预览" />
+      <!-- ⚠️ `sandbox` 是**空的**（最大限制）：不透明 origin + 禁 script / form /
+           top-navigation / popups / same-origin，邮件预览这三样一个都不需要。
+           ⚠️ **不要**改成 `sandbox="allow-same-origin"` —— 那等于把同源放开、等于没加；
+           也**不要**为了「能选中文字」加 `allow-scripts`（正文里本就没有脚本，
+           放开它只是多一条注入面）。属性由 `__tests__/MailPreviewDialog.spec.ts` 钉死。 -->
+      <iframe class="preview-frame" sandbox="" :srcdoc="result.html" title="邮件正文预览" />
     </template>
     <el-empty v-else description="尚无预览内容" />
     <template #footer>
@@ -118,8 +131,9 @@ const dlg = useDialogSize({ desktopWidth: '80%' });
   color: var(--text-secondary);
 }
 
-/* 邮件正文高度固定 600px：够看完一张汇总表，弹窗整体不超出视口（top 5vh + 600px
-   + 头尾仍在 1080p 内）。宽 100% 让它跟着弹窗自适应。 */
+/* 邮件正文高度固定 600px：够看完一张汇总表，弹窗整体不超出视口（top 取
+   `useDialogSize` 的 15vh —— 1080p 下 ≈162px，+ 600px + 头尾 ≈ 946px < 1080）。
+   宽 100% 让它跟着弹窗自适应。 */
 .preview-frame {
   width: 100%;
   height: 600px;

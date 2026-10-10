@@ -8,8 +8,9 @@
 //     `$dispose()` 后重建拿到全新表单态（Pinia 单例不 dispose 会把未保存改动泄漏到下次
 //     进入）；消费侧全走 `store.切片.字段` 不解构（嵌套 ref 自动解包 + 代理 set 可写回）。
 //  2. **hydrate + dirty**：配置到达后整份覆盖表单；用户改了字段后 dirty 变 true；
-//     再来一次后台 refetch **不覆盖**用户正在编辑的内容（否则 30s staleTime 到期就把
-//     用户填了一半的表单抹掉）；显式刷新 / 40901 才强制覆盖。
+//     再来一次后台 refetch **不覆盖**用户正在编辑的内容（⚠️ 2026-10-14 订正：本域不设
+//     staleTime，原先写的「30s staleTime 到期」是错的；这里守的是「任何一次 config 重新
+//     到达都不会抹掉用户填了一半的表单」）；显式刷新 / 40901 才强制覆盖。
 //  3. **OCC 硬约束**：`POST /config` 的 payload 必带 `version`（取 `GET /config` 的
 //     version，无行时后端返 0）；标题模板留空转 `null`（不是空串）。
 //  4. **错误码分流**：40901 走 warning + **强制重拉配置**（不重拉的话用户拿着旧 version
@@ -285,7 +286,7 @@ describe('useMailDigestStore — hydrate 与 dirty', () => {
     store.query.form.recipients = ['edited@example.com'];
     expect(store.query.dirty).toBe(true);
 
-    // 模拟 30s staleTime 到期触发的后台 refetch（数据变了，但用户有未保存改动）
+    // 模拟「配置重新到达」触发的后台 refetch（数据变了，但用户有未保存改动）。
     fetchMailDigestConfigMock.mockResolvedValue({ ...CONFIG, version: 4, recipients: ['x@y.com'] });
     await store.query.reloadConfig(false);
     await tick();
@@ -306,6 +307,105 @@ describe('useMailDigestStore — hydrate 与 dirty', () => {
 
     expect(store.query.form.recipients).toEqual(['x@y.com']);
     expect(store.query.dirty).toBe(false);
+  });
+});
+
+// ⚠️ 2026-10-14 新增（review 第 1 轮 M-2）。修的是一条**看不见的死路**：MANUAL_ONLY 下
+// 「多填时刻」被 schema 判非法，而那一整行输入（含红字）在该频率下不渲染 ⇒ 用户只看到
+// 一句「请先修正表单中标红的字段」、屏幕上一处红字都没有，save / preview / sendNow 全被
+// 拦死。修法：hydrate 时按频率判据归一（`applyConfigToForm`）。
+describe('useMailDigestStore — hydrate 时按频率判据归一（M-2 死路）', () => {
+  it('MANUAL_ONLY + 服务端返非空时刻/星期/月号 ⇒ 表单被归一成 null，且不脏', async () => {
+    fetchMailDigestConfigMock.mockResolvedValue({
+      ...CONFIG,
+      frequency: 'MANUAL_ONLY',
+      send_hour: 8,
+      send_minute: 30,
+      weekday: 3,
+      day_of_month: 5,
+    });
+    const store = useMailDigestStore();
+    store.query.openGate();
+    await tick();
+
+    expect(store.query.form.send_hour).toBeNull();
+    expect(store.query.form.send_minute).toBeNull();
+    expect(store.query.form.weekday).toBeNull();
+    expect(store.query.form.day_of_month).toBeNull();
+    // 归一后快照同步更新 ⇒ 不把服务端那行的脏组合算成「用户改了表单」
+    expect(store.query.dirty).toBe(false);
+  });
+
+  it('归一后三条动作都能过校验（原来 save 会被拦死且屏幕零红字）', async () => {
+    const MANUAL_CONFIG = { ...CONFIG, frequency: 'MANUAL_ONLY', send_hour: 8, send_minute: 30 };
+    fetchMailDigestConfigMock.mockResolvedValue(MANUAL_CONFIG);
+    // 后端保存后回的是**已归一**的那行（MANUAL_ONLY + 时刻为 null），与真实行为一致
+    saveMailDigestConfigMock.mockResolvedValue({
+      ...CONFIG,
+      frequency: 'MANUAL_ONLY',
+      send_hour: null,
+      send_minute: null,
+    });
+    const store = useMailDigestStore();
+    store.query.openGate();
+    await tick();
+
+    await store.actions.save();
+    expect(saveMailDigestConfigMock).toHaveBeenCalledTimes(1);
+    expect(store.query.fieldErrors).toEqual({});
+
+    await store.actions.preview();
+    expect(previewMailDigestMock).toHaveBeenCalledTimes(1);
+    // 发出去的时刻字段也必须是 null（不能把刚归一掉的脏值又拼回去）
+    expect(previewMailDigestMock.mock.calls[0]![0]).toMatchObject({
+      send_hour: null,
+      send_minute: null,
+    });
+  });
+
+  it('归一用 meta 的判据而不是写死的表：meta 先落地时，meta 说 DAILY 不要时刻 ⇒ 时刻被清掉', async () => {
+    // 让 meta 先到（立即 resolve）、config 延后（20ms 后）—— 两条 read 是并行的，归一读的
+    // 必须是**当时**的 `frequencyFlags`。若改成读写死的那张表，本例会红。
+    fetchMailDigestMetaMock.mockResolvedValue({
+      ...META,
+      frequencies: META.frequencies.map((f) =>
+        f.value === 'DAILY' ? { ...f, needs_time: false } : f,
+      ),
+    });
+    fetchMailDigestConfigMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ ...CONFIG, frequency: 'DAILY' }), 20);
+        }),
+    );
+    const store = useMailDigestStore();
+    store.query.openGate();
+    await tick(80);
+
+    expect(store.query.form.frequency).toBe('DAILY');
+    expect(store.query.form.send_hour).toBeNull();
+    expect(store.query.form.send_minute).toBeNull();
+  });
+});
+
+describe('useMailDigestStore — 天数范围跟 meta 走（N-1）', () => {
+  it('meta 把上限放宽到 90 时，表单里的 90 能过校验（旧版会被写死的 1..60 拒）', async () => {
+    fetchMailDigestMetaMock.mockResolvedValue({
+      ...META,
+      upcoming_days_range: { min: 1, max: 90 },
+    });
+    fetchMailDigestConfigMock.mockResolvedValue({ ...CONFIG, upcoming_days: 90 });
+    const store = useMailDigestStore();
+    store.query.openGate();
+    await tick();
+
+    expect(store.query.upcomingDaysRange).toEqual({ min: 1, max: 90 });
+    expect(store.query.form.upcoming_days).toBe(90);
+
+    await store.actions.save();
+    expect(saveMailDigestConfigMock).toHaveBeenCalledTimes(1);
+    expect(saveMailDigestConfigMock.mock.calls[0]![0]).toMatchObject({ upcoming_days: 90 });
+    expect(store.query.fieldErrors).toEqual({});
   });
 });
 

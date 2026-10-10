@@ -197,7 +197,8 @@ describe('mailDigest api 层守门点分工', () => {
       /import type \{[^}]*\} from '@\/views\/mail\/digest\/mailDigestSchema'/s,
     );
     expect(typeImports).not.toBeNull();
-    // 运行时 import 只允许恰好两条（preview / send 的 parse），不多不少。
+    // 运行时 import 恰好 **1 条语句**（内含 preview / send 两个 schema 的 parse），
+    // 不多不少 —— 原注释写「恰好两条」会被读成「两条 import 语句」，实际是一条。
     const runtimeImports = src.match(
       /import \{[^}]*\} from '@\/views\/mail\/digest\/mailDigestSchema'/g,
     );

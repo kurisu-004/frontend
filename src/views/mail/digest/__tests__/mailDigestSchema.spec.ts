@@ -403,6 +403,36 @@ describe('makeMailDigestFormSchema：数值与列白名单', () => {
     );
   });
 
+  // ⚠️ 2026-10-14（review 第 1 轮 N-1）：「未来 N 天」的范围**由 meta 下发**
+  // （`makeMailDigestFormSchema` 的第二个形参），不再在 schema 里写死 1..60 —— 后端把上限
+  // 放宽到 90 时，「UI 允许输 90（`:min/:max` 读 meta）、schema 却拒」会把用户挡在自己
+  // 系统的校验上且看不到原因。报错文案里的范围也跟着 meta 走。
+  it('upcoming_days 的范围取自 meta（形参），而不是写死的 1..60', () => {
+    const wide = makeMailDigestFormSchema(DEFAULT_MAIL_DIGEST_FREQUENCY_FLAGS, {
+      min: 1,
+      max: 90,
+    });
+    expect(wide.safeParse(baseForm({ upcoming_days: 90 })).success).toBe(true);
+    expect(wide.safeParse(baseForm({ upcoming_days: 91 })).success).toBe(false);
+    // 兜底那份仍是 1..60（证明确实是「按传入范围走」而不是恒真）
+    expect(schema.safeParse(baseForm({ upcoming_days: 90 })).success).toBe(false);
+
+    // 收窄方向同样跟随：后端说 3..30 时，1 被拒。
+    const narrow = makeMailDigestFormSchema(DEFAULT_MAIL_DIGEST_FREQUENCY_FLAGS, {
+      min: 3,
+      max: 30,
+    });
+    expect(narrow.safeParse(baseForm({ upcoming_days: 1 })).success).toBe(false);
+    expect(narrow.safeParse(baseForm({ upcoming_days: 7 })).success).toBe(true);
+    const errs = toMailDigestFieldErrors(
+      narrow.safeParse(baseForm({ upcoming_days: 1 })).error?.issues as unknown as Array<{
+        path: PropertyKey[];
+        message: string;
+      }>,
+    );
+    expect(errs.upcoming_days).toBe('未来天数需在 3..30 之间');
+  });
+
   it('visible_columns 非空', () => {
     expect(schema.safeParse(baseForm({ visible_columns: [] })).success).toBe(false);
   });

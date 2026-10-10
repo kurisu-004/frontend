@@ -347,18 +347,30 @@ const emailItemSchema = z
   .refine((v) => !/[\r\n]/.test(v), '邮箱不能包含换行')
   .refine((v) => EMAIL_RE.test(v), '邮箱格式不正确');
 
+/** 「未来 N 天」取值范围的兜底（meta 未到达时用）。与 `MailContentSection` 的 prop
+ *  默认值逐字一致 —— 两处都是「meta 还没回来」这一瞬的兜底，meta 到达后以 meta 为准。 */
+const DEFAULT_UPCOMING_DAYS_RANGE = { min: 1, max: 60 };
+
 /**
  * 构造表单校验 schema。
  *
  * @param frequencyFlags `GET /meta` 的 `frequencies[]` 转成的判据表；缺省用
  *   `DEFAULT_MAIL_DIGEST_FREQUENCY_FLAGS`（meta 未到达时的兜底）。
+ * @param upcomingDaysRange `GET /meta` 的 `upcoming_days_range`；缺省用
+ *   `DEFAULT_UPCOMING_DAYS_RANGE`。⚠️ 2026-10-14（review 第 1 轮 N-1）：**范围只有这
+ *   一处真源**——`MailContentSection` 的 `:min/:max` 本来就读它，这里曾把 `1..60` 写死，
+ *   于是后端把上限放宽到 90 时「UI 允许输 90、schema 却拒」，用户被前端自己的校验挡住
+ *   且看不到任何原因说明。
  *
- * 组合校验（对应后端 **21704**）在 `superRefine` 里做，报错 issue 的 `path` **指向具体
- * 输入项**（`send_time` / `weekday` / `day_of_month`）而不是笼统挂在频率上 —— 页面的
- * 字段聚焦与标红靠 `path[0]` 定位，笼统挂频率会让用户盯着一个「看不出该改哪」的报错。
+ * 组合校验在 `superRefine` 里做，报错 issue 的 `path` **指向具体输入项**（`send_time` /
+ * `weekday` / `day_of_month`）而不是笼统挂在频率上 —— 页面的字段聚焦与标红靠 `path[0]`
+ * 定位，笼统挂频率会让用户盯着一个「看不出该改哪」的报错。
+ * ⚠️ 「缺字段」那一支对应后端 **21704**；「多填」那一支后端是**清空 / 忽略**、不报 21704
+ * （详见 `superRefine` 内部注释）。
  */
 export function makeMailDigestFormSchema(
   frequencyFlags: MailDigestFrequencyFlagMap = DEFAULT_MAIL_DIGEST_FREQUENCY_FLAGS,
+  upcomingDaysRange: { min: number; max: number } = DEFAULT_UPCOMING_DAYS_RANGE,
 ) {
   const base = z.object({
     enabled: z.boolean(),
@@ -371,7 +383,11 @@ export function makeMailDigestFormSchema(
     cc_recipients: z.array(emailItemSchema),
     include_overdue: z.boolean(),
     include_upcoming: z.boolean(),
-    upcoming_days: requiredInt(1, 60, '未来天数需在 1..60 之间'),
+    upcoming_days: requiredInt(
+      upcomingDaysRange.min,
+      upcomingDaysRange.max,
+      `未来天数需在 ${upcomingDaysRange.min}..${upcomingDaysRange.max} 之间`,
+    ),
     visible_columns: z.array(z.string()).min(1, '至少选择一列'),
     // 留空合法（= 用后端默认标题），超长才拒。
     subject_template: z.string().trim().max(200, '标题模板长度不能超过 200 个字符'),
@@ -393,8 +409,14 @@ export function makeMailDigestFormSchema(
     if (flags.needs_day_of_month && v.day_of_month === null) {
       fail('day_of_month', '每月发送需指定几号（1..28）');
     }
-    // 配套字段「多填」也算非法（21704）：留着上一次切频率前的值会让后端调度按
-    // 一个自相矛盾的组合注册，前端表单校验必须与它对齐。
+    // 配套字段「多填」也算非法。⚠️ 2026-10-14（review 第 1 轮 M-2）订正口径：
+    // 后端**不是报 21704，而是清空 / 忽略** —— `validate_save_request` 在非专属频率下把
+    // `weekday` / `day_of_month` 清成 NULL，`MANUAL_ONLY` 的时刻字段则是既不清空也不校验
+    // （`validate_time` 在 `!needs_time` 时直接 Ok，原样存回）。前端比后端严本身没问题，
+    // 但这三条 issue 的 `path` 指向的输入框在对应频率下**整行不渲染**（见
+    // `MailScheduleSection.vue` 的 `v-if="flags.needs_*"`）⇒ 不可见的字段上挂红字等于
+    // 把三条动作全拦死却零提示。故两道入口（store 的 `applyConfigToForm` 与 section 的
+    // `onFrequencyChange`）都先按判据归一，这三条在这里只是**兜底**。
     if (!flags.needs_time && (v.send_hour !== null || v.send_minute !== null)) {
       fail('send_time', '仅手动发送不需要触发时刻');
     }

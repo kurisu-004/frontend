@@ -19,7 +19,14 @@
   两个下拉的值域固定（0..23 / 0..59），与 wire 逐字同形、零转换。
 
   切频率时把「当前频率用不到」的配套字段置 null（`onFrequencyChange`）：留着上一次切
-  频率前的值会构成「频率与配套字段组合非法」，被后端 21704 拒。
+  频率前的值会构成「频率与配套字段组合非法」。
+  ⚠️ 2026-10-14（review 第 1 轮 M-2）订正：**后端对「多填」不是报错而是清空 / 忽略**
+  —— `validate_save_request` 里 `weekday` / `day_of_month` 在非专属频率下被**清成 NULL**，
+  `MANUAL_ONLY` 的时刻字段则是**既不清空也不校验、原样存回**（`validate_time` 在
+  `!needs_time` 时直接 Ok）。前端在这里先归一是**为了让表单自洽 + 让校验红字落在可见
+  字段上**（多填的 issue 挂 `send_time` / `weekday` / `day_of_month`，而 MANUAL_ONLY 下
+  那一整行连同红字都不渲染 ⇒ 不归一就是一条看不见的死路）。store 的 `applyConfigToForm`
+  对服务端配置做同一套归一（`GET /config` 也会返 MANUAL_ONLY + 非空时刻的行）。
 -->
 <template>
   <div class="mail-schedule">

@@ -64,8 +64,11 @@ export async function fetchMailDigestConfig(): Promise<MailDigestConfigData> {
  *
  * 失败抛 `ApiError`：
  * - 40901 OCC 版本冲突（配置已被他人改动，UI 提示刷新后重试并重拉配置）；
-* - 21703 收件人邮箱格式不合法；
-* - 21704 频率与配套字段组合非法（缺时刻 / 缺星期 / 缺月号，或多填了不用的字段）。
+ * - 21703 收件人邮箱格式不合法；
+ * - 21704 频率与配套字段组合非法（**缺**时刻 / 缺星期 / 缺月号）。
+ *   ⚠️ 2026-10-14（review 第 1 轮 M-2）订正：「**多填**当前频率用不到的字段」后端**不报
+ *   21704**，而是清空（`weekday` / `day_of_month`）或原样忽略（`MANUAL_ONLY` 的时刻），
+ *   原先写在括号里的「或多填了不用的字段」是错的。
  */
 export async function saveMailDigestConfig(
   payload: SaveMailDigestConfigPayload,
@@ -110,10 +113,10 @@ export async function previewMailDigest(
  * （`MailDigestSettings.vue` 的 `el-popconfirm`）。
  *
  * 守门在本层（同 preview）。失败抛 `ApiError`：
-* - 21701 SMTP 未配置（页面的 SMTP 状态条会提前禁用按钮，但服务端仍要拒）；
-* - 21702 SMTP 发送失败（**服务端已记一条 FAILED 日志**，所以 store 的 onError 也要
-*   失效日志列表，前端才能立刻看到那行失败记录）；
-* - 21703 / 21704 同 preview。
+ * - 21701 SMTP 未配置（页面的 SMTP 状态条会提前禁用按钮，但服务端仍要拒）；
+ * - 21702 SMTP 发送失败（**服务端已记一条 FAILED 日志**，所以 store 的 onError 也要
+ *   失效日志列表，前端才能立刻看到那行失败记录）；
+ * - 21703 / 21704 同 preview。
  */
 export async function sendMailDigestNow(
   payload: MailDigestRunPayload,

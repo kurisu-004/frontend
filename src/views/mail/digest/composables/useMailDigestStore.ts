@@ -98,15 +98,37 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
   const dirty = computed(() => snapshot(form) !== savedSnapshot.value);
 
   /** 服务端配置 → 表单态。`Object.assign` 整体覆盖（不逐字段 merge）：配置行只有一个,
-   *  「服务端没这个字段」不存在。 */
+   *  「服务端没这个字段」不存在。
+   *
+   *  ⚠️ 2026-10-14（review 第 1 轮 M-2）：写入前**按频率判据归一**「当前频率用不到的
+   *  配套字段」—— `!needs_time ⇒ send_hour/send_minute = null`，weekday / day_of_month
+   *  同理。**为什么必须有这一步**（不是洁癖，是死路）：
+   *    - 这三项的输入框由 `MailScheduleSection` 按 `needs_*` 决定显隐，`MANUAL_ONLY`
+   *      下**整行连同红字一起不渲染**；
+   *    - 而表单里若留着非空的时刻，schema 的「多填即非法」issue 挂在 `send_time` 上 ⇒
+   *      屏幕上没有任何红字，`save()` / `preview()` / `sendNow()` 三条路全被
+   *      `validateForm()` 拦死，唯一的脱困路径是切到 DAILY 再切回来，UI 上没有任何提示
+   *      指向它；
+   *    - 而 `GET /config` 完全可能返这样一行：后端 `validate_time` 在 `!needs_time` 时
+   *      **直接 Ok、原样存回**（既不清空也不校验），默认行 / 非本页面写入的改动都会留下
+   *      这种组合。归一后 form 永远自洽。
+   *  归一用的是 `frequencyFlags`（meta 的判据优先，兜底表见
+   *  `DEFAULT_MAIL_DIGEST_FREQUENCY_FLAGS`）而不是写死的某一张表。两条 read 是并行的，
+   *  config 先落地时用的是兜底表 —— 与后端内置语义一致；真正不一致（meta 与前端兜底表
+   *  互相矛盾）时表单会在 `validateForm` 里被后到的判据再拦一次，那属于后端与前端默认
+   *  值打架，不是本页能单方面消解的。
+   *  ⚠️ 本函数声明在 `frequencyFlags` 之前但只在 store setup 跑完之后才被调用
+   *  （hydrate watcher 与 mutation 的 onSuccess），不存在 TDZ。
+   */
   function applyConfigToForm(config: MailDigestConfigData): void {
+    const flags = frequencyFlags.value[config.frequency];
     Object.assign(form, {
       enabled: config.enabled,
       frequency: config.frequency,
-      send_hour: config.send_hour,
-      send_minute: config.send_minute,
-      weekday: config.weekday,
-      day_of_month: config.day_of_month,
+      send_hour: flags.needs_time ? config.send_hour : null,
+      send_minute: flags.needs_time ? config.send_minute : null,
+      weekday: flags.needs_weekday ? config.weekday : null,
+      day_of_month: flags.needs_day_of_month ? config.day_of_month : null,
       // 数组一律拷贝：直接挂服务端对象上的数组会让「编辑后对比 savedSnapshot」之外
       // 还多一条隐患（响应对象被换掉时表单跟着跳）。
       recipients: [...config.recipients],
@@ -191,8 +213,10 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
   /**
    * 配置 hydrate。两条 options 都是必需的：
    *
-   * - `immediate: true`：**缓存命中时 watcher 不会触发**。第二次进页面（30s staleTime
-   *   内）时 `useQuery` 创建出来的 `data` 已经是缓存里那份，`watch` 只监听「之后的变化」，
+   * - `immediate: true`：**缓存命中时 watcher 不会触发**。第二次进页面时 `useQuery`
+   *   创建出来的 `data` 已经是缓存里那份（⚠️ 2026-10-14 订正：staleTime 走 main.ts 全局
+   *   默认 0 ⇒ 挂载即 stale 并后台重取，**同步先交出的是缓存那份**；原文写的「30s
+   *   staleTime 内」是错的，本域一个 staleTime 都没设），`watch` 只监听「之后的变化」，
    *   不带 immediate 的话表单永远停在初值 —— 表现为「第二次进页面配置全空，但刷新一下
    *   又好了」。带 immediate 后，store 创建那一刻就 hydrate 一次（此刻 `dirty` 为 false，
    *   不会吃掉用户改动）。
@@ -228,7 +252,12 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
     ready.value = true;
   }
 
-  /** 「刷新」按钮：三条读端点全刷，配置强制覆盖（用户主动要的就是服务端那份）。 */
+  /** 「刷新」按钮：三条读端点全刷，配置强制覆盖（用户主动要的就是服务端那份）。
+   *
+   *  ⚠️ 2026-10-14（review 第 1 轮 T-2，非缺陷、记一笔）：`dirty` 为真时点本按钮会
+   *  **无提示地丢弃未保存改动**（工具条上只有「有未保存的修改」这句提示，没有二次确认）。
+   *  刻意不加 `ElMessageBox.confirm`：刷新是低频的自我纠错动作，而这里每个动作都弹一次
+   *  确认会把它变成肌肉记忆式的「随手点掉」；真要防误触，入口级的 dirty 提示已经在了。 */
   async function refreshAll(): Promise<void> {
     await Promise.all([reloadConfig(true), metaQuery.fetchMeta(), logsQuery.fetchLogs()]);
   }
@@ -257,12 +286,12 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
   };
 
   // ============ 切片：preview（预览弹窗）============
+  // ⚠️ 2026-10-14（review 第 1 轮 N-4）：这里原先还有一个 `closePreview()` action
+  // 挂在 `dialogs.preview.close` 上，但壳（`MailDigestSettings.vue`）走 `v-model`
+  // 直接写 `store.dialogs.preview.visible` ⇒ 全仓零消费方，留着只会让人以为关弹窗有两条
+  // 路径。**已删**：关弹窗的唯一路径就是壳的 v-model。
   const previewVisible = ref(false);
   const previewResult = ref<MailDigestPreviewData | null>(null);
-
-  function closePreview(): void {
-    previewVisible.value = false;
-  }
 
   // ============ 切片：actions（保存 / 预览 / 立即发送）============
   /** 当前表单 → 三条动作共用的请求体（配置部分，**不含 version**）。
@@ -293,7 +322,12 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
    * @returns true = 可提交（并已把 trim 后的规范化值写回表单）；false = 已提示、已标红。
    */
   function validateForm(): boolean {
-    const parsed = makeMailDigestFormSchema(frequencyFlags.value).safeParse({ ...form });
+    // 两个形参都走 meta 派生的判据（frequencyFlags / upcomingDaysRange）：schema 与
+    // 输入项（`:min/:max`）共用同一份真源，后端改范围时前端不会一边放行一边拦。
+    const parsed = makeMailDigestFormSchema(
+      frequencyFlags.value,
+      upcomingDaysRange.value,
+    ).safeParse({ ...form });
     if (!parsed.success) {
       fieldErrors.value = toMailDigestFieldErrors(parsed.error.issues);
       // 聚焦到第一个出错的字段（数组序即 schema 的声明序，等价于「从上往下第一个问题」）。
@@ -440,7 +474,6 @@ export const useMailDigestStore = defineStore('mail-digest', () => {
       visible: previewVisible,
       result: previewResult,
       loading: previewMutation.isPending,
-      close: closePreview,
     },
   };
 

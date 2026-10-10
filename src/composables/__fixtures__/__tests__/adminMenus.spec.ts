@@ -21,7 +21,12 @@ describe('ADMIN_MENUS', () => {
   // 2026-10-08：delivery_dispatch（送货司机扫码台 /delivery-dispatch）随送货单域重构下线 ——
   // 送货入口收进送货单列表页的「送货」按钮（见 views/com/delivery/DeliveryNoteList.vue），
   // 路由与 fixture 节点同步删除。code 总数 31 → 30。
-  it('covers all 30 menuCodes', () => {
+  // 2026-10-13：mail_group（定时任务/邮件分组）+ mail_digest（交期汇总邮件，
+  // path /mail/digest）随交期汇总邮件定时任务页新增。code 总数 30 → 32。
+  // ⚠️ 2026-10-14（review 第 1 轮 N-2）：上面两个新 code 此前**只进了 fixture、没进本
+  // 用例**，`toContain` 是子集断言所以用例照样绿 —— 而本用例的价值正是「新增菜单必须
+  // 在这里登记」，漏登记等于该价值失效。计数 30 → 32 与 fixture 的 code 数逐字对齐。
+  it('covers all 32 menuCodes', () => {
     const all = flatten(ADMIN_MENUS);
     const codes = all.map((n) => n.code);
     expect(codes).toContain('home');
@@ -59,6 +64,18 @@ describe('ADMIN_MENUS', () => {
     expect(codes).toContain('part_process_chain');
     // 2026-09-16 新增：扫码台从 floor_group 升级为顶级菜单（sort_order=13）
     expect(codes).toContain('scan_badge');
+    // 2026-10-13 新增：定时任务/邮件分组 + 其下交期汇总邮件（mail_digest 与
+    // router 的 path 'mail/digest'、后端 seeds/menu.sql 的 code 逐字一致）
+    expect(codes).toContain('mail_group');
+    expect(codes).toContain('mail_digest');
+  });
+
+  // ⚠️ 2026-10-14（review 第 1 轮 N-2）：计数是**硬断言**而不是注释里的一句话 ——
+  // 上一轮「总数」只活在用例名与注释里（30），fixture 加了两个节点后没人改它，用例照样绿。
+  // 新增 / 删除菜单节点时这里必须同步改，否则新增的 code 会在下面那条 `toContain` 漏登记
+  // 的情况下悄悄通过。
+  it('has exactly 32 codes', () => {
+    expect(flatten(ADMIN_MENUS)).toHaveLength(32);
   });
 
   it('has unique codes (no dup)', () => {

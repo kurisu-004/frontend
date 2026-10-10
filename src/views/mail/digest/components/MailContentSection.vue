@@ -131,7 +131,9 @@ function onIncludeUpcomingChange(v: unknown): void {
 
 function onUpcomingDaysChange(v: unknown): void {
   // el-input-number 清空给出 undefined/null；原样传给表单态，由 schema 的
-  // requiredInt（空值 → NaN → 「未来天数需在 1..60 之间」）判错，不在这里兜成 0。
+  // requiredInt（空值 → NaN）判错，不在这里兜成 0。
+  // ⚠️ 2026-10-14（N-1）：报错文案里的范围取自 `upcomingDaysRange`（meta 驱动），
+  // 与本组件 `:min/:max` 同一个来源 —— 范围只有一处真源，见 `makeMailDigestFormSchema`。
   patch({ upcoming_days: v === '' ? undefined : (v as number | undefined) });
 }
 

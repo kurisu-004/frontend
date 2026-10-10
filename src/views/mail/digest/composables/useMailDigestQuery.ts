@@ -15,8 +15,13 @@
 //     `params` 允许 `null` ⇒ 占位键 + `enabled` 闸门 + queryFn 二次守卫。
 //
 // 三条都不设 `refetchInterval`：本域不是看板，没有任何「自己会变的读数」——配置与 meta
-// 只在有人写时变（日志例外，但那由后端 cron 触发，见 keys.ts 的说明，走 staleTime +
-// 手动刷新）。staleTime 30s / gcTime 5min，与仓内其它域一致。
+// 只在有人写时变（日志例外，但那由后端 cron 触发，见 keys.ts 的说明，靠页面自带的
+// 「刷新」按钮与写后失效）。
+// ⚠️ **也不设 `staleTime` / `gcTime`**，走 `main.ts` 的全局默认（`queries: { retry: 0,
+// refetchOnWindowFocus: false }`）—— 没有 staleTime ⇒ TanStack v5 默认 0 ⇒ 每次挂载都
+// 后台重取；`gcTime` 是 v5 默认 5min。「staleTime 30s / gcTime 5min，与仓内其它域一致」
+// 那句是错的（本域一个都没设；同 `views/com/delivery/composables/useDeliveryDriversQuery.ts`）。
+// 新鲜度靠「每次挂载重取 + 写后 invalidate + 显式刷新」，不靠有限 staleTime。
 // 不写 `retry`：信任 `main.ts` 全局 `queries.retry: 0`。
 
 import { computed, toValue, watch, type MaybeRefOrGetter } from 'vue';
