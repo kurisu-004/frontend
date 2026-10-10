@@ -165,6 +165,9 @@ const makeUser = (roles: string[]): CurrentUser => ({
   roles,
   shelf_ids: [],
   menus: [],
+  // 2026-10-14：CurrentUser 新增必填 permissions（RBAC 面板上线）；本 spec 断的是
+  // 登录后的角色跳转，不涉及权限点闸门。
+  permissions: [],
 });
 
 describe('LoginView', () => {

@@ -1,5 +1,10 @@
-/** 与后端 enum UserRole 对齐 */
-export type UserRole = 'MANAGER' | 'SHELF_ACCOUNT' | 'CLERK' | 'INSPECTOR' | 'CNC_PROGRAMMER';
+/** 角色 code。
+ *
+ *  2026-10-14 放宽为 `string`：角色不再封闭在后端 enum 里 —— 管理员可在 RBAC 面板自建
+ *  任意 code（如 `QC_LEAD`），`/iam/me` 的 `roles` 也会出现它们。写死联合类型会让新增
+ *  角色在编译期就报错（而运行时后端照发），编译期的"保护"反而是负担。
+ *  已知取值的消费方（`SHELF_SCOPED_ROLE` 这类需要按 code 分支的地方）改用常量字符串。 */
+export type UserRole = string;
 
 import type { MenuNode } from './menu';
 
@@ -92,9 +97,19 @@ export interface CurrentUser {
   username: string;
   full_name: string;
   is_active: boolean;
+  /** 角色 code 原始数组（**原始大写字符串**，自定义角色如 `QC_LEAD` 也会出现）。
+   *  ⚠️ 2026-10-14 起不再与前端 enum 对齐 —— 见文件头 `UserRole` 的放宽说明。 */
   roles: string[]; // 字符串数组，如 ["MANAGER"]
   shelf_ids: string[]; // SHELF_ACCOUNT 时非空
   menus: MenuNode[]; // 登录时拉回，渲染侧边栏 + 路由守卫用
+  /** 2026-10-14 新增：权限点 code 全集（后端按账号的角色授权展开后下发），前端闸门按它
+   *  判（`auth.hasPermission(code)`）。
+   *
+   *  ⚠️ **必填**：后端 `/iam/me` 与登录响应恒下发该键。守门 schema
+   *  （`@/views/auth/sessionSchema` 的 `currentUserSchema`）显式声明它 ⇒ 旧后端（不返该键）
+   *  会让每次 `/iam/me` 复核抛 ZodError ⇒ 全员被踢回登录页循环。**部署顺序：后端必须先上**
+   *  （后端多返字段旧前端无感；反序则是全站不可用）。 */
+  permissions: string[];
 }
 
 export interface UserListResult {

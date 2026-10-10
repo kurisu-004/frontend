@@ -85,6 +85,9 @@ function makeUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
     roles: ['MANAGER'],
     shelf_ids: [],
     menus: [],
+    // 2026-10-14：CurrentUser 新增必填 permissions（RBAC 面板上线）。默认空数组 ⇒
+    // 走「只按 permissions 判」的分支，ADMIN 通配的用例在 auth.permissions.spec.ts 里。
+    permissions: [],
     ...overrides,
   };
 }
