@@ -301,6 +301,27 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
+        // 2026-10-13 新增：交期汇总邮件定时任务管理页。后端 mail_digest 域，5 个端点
+        // 全部 MANAGER 独占（权限走菜单 code，不另加 allowRoles）。
+        //
+        // ⚠️ **一级分组菜单「定时任务/邮件」（code `mail_group`、path NULL）没有前端路由**
+        // —— 它由后端菜单树下发，渲染成 `el-sub-menu`（见 `MenuTreeItem.vue` 的分支判定：
+        // 「有 path 且无 children」才渲染成可点的 `el-menu-item`）。照 `order_group` /
+        // `auth_group` 等既有分组节点的既有做法。
+        //
+        // ⚠️ `menuCode` 必须与后端 `seeds/menu.sql` 的 `mail_digest` code **逐字一致**：
+        // 不一致时路由守卫第 3 条（menuCode 不在菜单树 → 重定向到菜单树里第一个有 path
+        // 的节点）会把用户踢出本页，且现象是「点菜单闪一下又回到别的页」。
+        path: 'mail/digest',
+        name: 'MailDigestSettings',
+        component: () => import('@/views/mail/digest/MailDigestSettings.vue'),
+        meta: {
+          title: '交期汇总邮件',
+          icon: 'Message',
+          menuCode: 'mail_digest',
+        },
+      },
+      {
         path: 'customers',
         name: 'CustomerList',
         component: () => import('@/views/customers/CustomerList.vue'),

@@ -55,6 +55,9 @@ import type { ScanHeldParams, ScanPickableParams } from '@/api/productionScan';
 // 必填的 NaiveDate），形态在 types/statistics.ts 定义（沿上面几个 List*Params 的既有
 // 做法，本文件只引用）。
 import type { StatisticsQuery } from '@/types/statistics';
+// 2026-10-13：mail-digest 域日志分页入参形态在 types/mailDigest.ts 定义（沿
+// ListUsersParams / StatisticsQuery 等既有做法），本文件只引用。
+import type { ListMailDigestLogsParams } from '@/types/mailDigest';
 
 /** 2026-09-26 新增：工序列表 / 下拉选项 query 入参形态（与 api/process.ts listProcesses 同步）。
  *  含 code_like / category / limit / offset 四字段；与 ListProcessesParams 同形，预留扩展分叉。 */
@@ -674,4 +677,48 @@ export const qk = {
    *  workerId 形态都命中）。当前域内零写点（后端三个端点全是只读），本键预留给
    *  写点接入时使用，**不要**在调用点拼字面量数组。 */
   statisticsPrefix: ['statistics'] as const,
+  // ============================================================
+  // 2026-10-13 新增：mail-digest 域（交期汇总邮件定时任务）queryKey 工厂。
+  //
+  // 根命名空间取 `mail-digest`（与页面路由段 `/mail/digest`、后端 URL 段
+  // `/mail-digest/*` 逐段对齐，便于按 URL 反查键），**不**挂 `partsPrefix` 下 ——
+  // 理由沿本文件 `inspection` / `process-design` / `statistics` 几段的「根命名空间」
+  // 取舍：键的根只要求「同根前缀匹配」才有意义，挂了才有共享写点。本域的写端点
+  // （`POST /mail-digest/config`）写的是本域自己的配置表，**一个字都不写
+  // `t_part` / `t_part_batch`** ⇒ 与零件域、生产队列、统计报表零共享写点；挂 parts
+  // 下只会让全仓最热的 `qk.partsPrefix` 一把全刷把本域配置 + 日志缓存连带重拉。
+  //
+  // 三条读键：
+  //   - mailDigestConfig()          —— GET /mail-digest/config（**常量键**：端点不接
+  //     Query extractor，全局单行配置，没有分页 / 筛选 / 维度可言）
+  //   - mailDigestMeta()            —— GET /mail-digest/meta（**常量键**：频率选项 /
+  //     列白名单 / 默认值 / 天数范围 / SMTP 状态，后端不接受任何入参）
+  //   - mailDigestLogs(params)      —— GET /mail-digest/logs（**参数键**：端点接
+  //     limit / offset，翻页必须换缓存身份）
+  //
+  // 失效编排点（消费方 `views/mail/digest/composables/useMailDigestStore.ts`）：
+  //   - 保存配置成功 → 失效本域前缀（配置行的 version / 各字段全变）；
+  //   - 立即发送成功 **与失败** 都失效本域前缀：失败时服务端仍记了一条 FAILED 日志，
+  //     只在成功分支失效会让用户看不到「刚才那次为什么没发出去」。
+  //   - 40901（OCC 冲突）额外走一次强制重拉 —— 那是「别人已经改过」的信号，本端副本
+  //     必然过期（理由同 `useUsersListStore` / `useQueueDispatch`）。
+  // ⚠️ **跨页面 / 跨进程的写点不做穷举失效**：定时任务在**后端**按 cron 触发，不经过
+  // 本前端 ⇒ 每天准点发出的那封邮件对应的日志行，本页只会靠 30s 有限 staleTime 或
+  // 用户自己点「刷新」看到。这是既定策略（CLAUDE.md「跨页面写操作不做穷举失效」），
+  // 不是遗漏。
+  // ============================================================
+  /** 定时配置键（`GET /api/v2/mail-digest/config`）。**常量键**：端点不接 Query
+   *  extractor、返回全局单行（无行时返回全默认 + version 0），键里没有任何可变量。 */
+  mailDigestConfig: () => ['mail-digest', 'config'] as const,
+  /** 本域元数据键（`GET /api/v2/mail-digest/meta`）。**常量键**：频率选项 / 列白名单 /
+   *  默认配置 / 天数范围 / SMTP 状态，后端不接受任何入参。 */
+  mailDigestMeta: () => ['mail-digest', 'meta'] as const,
+  /** 发送日志分页键（`GET /api/v2/mail-digest/logs`）。**参数键**：端点接 limit /
+   *  offset，键必须随 params 变化才能拿到不同 cache identity（与 partsList /
+   *  statisticsWorkers 同形）。 */
+  mailDigestLogs: (params: ListMailDigestLogsParams) => ['mail-digest', 'logs', params] as const,
+  /** mail-digest 域前缀 —— 保存配置 / 立即发送（含失败路径）后
+   *  `qc.invalidateQueries({ queryKey: qk.mailDigestPrefix })` 一把全失效
+   *  （三条读键都被覆盖，任意 limit / offset 形态都命中）。 */
+  mailDigestPrefix: ['mail-digest'] as const,
 } as const;
