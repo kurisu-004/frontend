@@ -1,8 +1,13 @@
 // 送货单权限 helper（`src/utils/deliveryNotePermissions.ts`）。
 //
-// 形态对齐 `src/utils/outsourceQuotePermissions.ts`。这里只放「状态 / 角色矩阵」的纯函数；
-// 视图层把 user.roles 传进来即可。**零域内依赖**（只 type-import `@/types/deliveryNote`
-// 的枚举）+ 多域复用（views/inspection、views/production/scan 也读 canView / hasManageNoteRole）。
+// 形态对齐 `src/utils/outsourceQuotePermissions.ts`：多数函数收一个角色矩阵
+// （RoleMapLike）+ 状态字符串做纯判定，角色矩阵由消费方（`auth.hasRole`）构造。
+// 消费方共 5 处，全在 `views/com/delivery/` 域内（列表 store / 详情 / 扫码台 / 行项表 /
+// 派发控件）。
+//
+// ⚠️ **`canPrint` 是例外**：它不再按角色判，改为在函数内部访问 auth store 读权限点
+// `delivery_note.print`（理由见下）。因此本文件不是「零依赖纯函数」集合 ——
+// 单测必须注入 pinia 与 VueQueryPlugin（auth store setup 首行要 QueryClient）。
 //
 // 角色矩阵（与后端 rust 送货单白名单一致）：CLERK + MANAGER + INSPECTOR 覆盖全部端点。
 //
@@ -14,10 +19,6 @@
 // `POST /com/delivery/note/{id}/print` 与 `/print-labels` 已于 2026-10-08 下线（打印改成
 // 前端本地生成 hucre），后端对这页的写入路径零改动。所以它现在纯粹由 RBAC 面板控制，
 // 前端读同一个码是最短路径，也不会有「前端比后端宽/窄」的偏差可发生。
-//
-// ⚠️ **本文件现在会访问 auth store**（`canPrint` 内部调 `useAuthStore()`）。单测必须
-// 先 `setActivePinia(...)` 并注册 VueQueryPlugin（store setup 首行要 QueryClient），
-// 见 `__tests__/deliveryNotePermissions.spec.ts`。
 
 import { useAuthStore } from '@/stores/auth';
 import type { DeliveryNoteStatus } from '@/types/deliveryNote';

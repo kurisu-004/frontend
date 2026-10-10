@@ -838,6 +838,17 @@ describe('useUsersListStore —— 角色下拉动态化（2026-10-14）', () =>
     await tick();
     expect(store.options.roleOptions).toEqual([]);
   });
+
+  // 2026-10-14（review 第 1 轮 N5）：`GET /iam/roles` 失败时补错误桥接 —— 否则对话框
+  // 正常打开、候选 0 项且零提示，用户只会以为「系统里没有角色」。
+  it('D4：listRoles 失败 ⇒ ElMessage.error 提示（不再静默空下拉）', async () => {
+    listRolesMock.mockRejectedValue(new Error('boom'));
+    const store = useUsersListStore();
+    store.query.restoreState();
+    await tick();
+    expect(store.options.roleOptions).toEqual([]);
+    expect(ElMessage.error).toHaveBeenCalled();
+  });
 });
 
 describe('useUsersListStore —— rolesMutation 守门（2026-10-14）', () => {

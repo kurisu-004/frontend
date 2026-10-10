@@ -10,7 +10,7 @@
 // 消费方：`composables/useUsersListStore.ts` 的 `options.roleOptions`（共享
 // `useRolesQuery`，与 RBAC 面板左列表同一条 queryKey ⇒ 同屏去重）。
 //
-// 负向守卫见 `composables/__tests__/useUsersListStore.spec.ts`：断言本文件不再出现
+// 负向守卫见 `composables/__tests__/usersSchema.spec.ts`：断言本文件不再出现
 // 角色候选字面量（`ROLE_OPTIONS` 已被删除，任何「复活」都应改成走 API）。
 
 /** 需要绑货架范围的角色（其余角色加的时候 scope 恒为 null）。

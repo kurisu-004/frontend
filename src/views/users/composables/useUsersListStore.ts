@@ -544,7 +544,10 @@ export const useUsersListStore = defineStore('users-list', () => {
     // 错误本身已由 mutation 的 onError 提示过（`handleWriteError`），这里只保证
     // 「弹窗保持打开、用户能重试」这个状态。2026-10-14 加 parse 守门后这条路径的
     // 失败概率从「网络抖动」扩大到「后端契约漂移」，不再靠运气。
-    return rolesMutation.mutateAsync(userId).then(() => undefined).catch(() => undefined);
+    return rolesMutation
+      .mutateAsync(userId)
+      .then(() => undefined)
+      .catch(() => undefined);
   }
 
   const addRoleMutation = useMutation({
@@ -762,6 +765,11 @@ export const useUsersListStore = defineStore('users-list', () => {
     enabled: restored,
     staleTime: 30_000,
     gcTime: 5 * 60_000,
+  });
+  /** 错误桥接：`GET /iam/roles` 失败时角色下拉会静默为空（对话框正常打开、候选 0 项），
+   *  不提示的话用户只会以为「系统里没有角色」。与 wxIdentityQuery 同款 watch 形态。 */
+  watch(roleOptionsQuery.error, (e) => {
+    if (e) ElMessage.error(usersErrorText(e, '角色候选加载失败'));
   });
   /** 下拉选项：显示 `name`（中文），提交 `code`（后端认的稳定键）。 */
   const roleOptions = computed(() =>

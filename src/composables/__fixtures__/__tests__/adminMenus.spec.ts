@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ADMIN_MENUS } from '../adminMenus';
+import { ICON_MAP } from '@/layouts/components/menuIcons';
 import type { MenuNode } from '@/types/menu';
 
 function flatten(nodes: MenuNode[]): MenuNode[] {
@@ -143,34 +144,10 @@ describe('ADMIN_MENUS', () => {
 
     it('icon 在 MenuTreeItem 的 ICON_MAP 白名单内（查不到会静默不显示）', () => {
       const node = authGroup().children.find((c) => c.code === 'roles_list')!;
-      // 与 MenuTreeItem.vue 的 ICON_MAP 保持同步；新增菜单图标必须同时改那边。
-      const ICON_MAP = new Set([
-        'House',
-        'Box',
-        'CircleCheck',
-        'Tools',
-        'Cpu',
-        'OfficeBuilding',
-        'Document',
-        'Promotion',
-        'User',
-        'Key',
-        'Platform',
-        'DataAnalysis',
-        'Connection',
-        'Tickets',
-        'Plus',
-        'Van',
-        'Setting',
-        'Operation',
-        'List',
-        'SetUp',
-        'Clock',
-        'Message',
-        // 2026-10-14：roles_list 用 Lock（与生产 t_menu.icon 对齐）
-        'Lock',
-      ]);
-      expect(ICON_MAP.has(node.icon!)).toBe(true);
+      // 直接查**真实**白名单（`layouts/components/menuIcons.ts`，MenuTreeItem.vue 消费
+      // 同一份）。之前这里抄了一份 ICON_MAP 副本，把组件里的 Lock 删掉用例照绿 ——
+      // 断言在验副本而不是在验实现。
+      expect(ICON_MAP[node.icon!]).toBeDefined();
     });
 
     it('icon 是权威值 `Lock`（跨仓对齐：后端 seeds/menu.sql 的 t_menu.icon）', () => {

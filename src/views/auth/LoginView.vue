@@ -107,7 +107,10 @@ const onSubmit = async () => {
     // 2026-09-26：mutateAsync 收 LoginCredentials 对象（{ username, password }）。
     const u = await auth.loginMutation.mutateAsync(result.data);
     // 按角色优先级自动跳转（视图关注点，留在 LoginView）。
-    if (u.roles.includes('MANAGER')) {
+    // ⚠️ **ADMIN 必须显式列在这里**：它是元角色（`stores/auth.ts` 的 hasRole /
+    // hasPermission 对含 ADMIN 的账号通配短路），`roles` 只有 ['ADMIN'] 的账号若只走
+    // 下面的枚举匹配会全部落空 ⇒ 停在登录页报「账号无任何可用角色」。ADMIN 优先进大屏。
+    if (u.roles.includes('ADMIN') || u.roles.includes('MANAGER')) {
       router.replace('/dashboard');
       return;
     }

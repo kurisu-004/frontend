@@ -84,15 +84,14 @@ watch(
   },
 );
 
-/** CurrentUser.roles → boolean map（canPrint 用）。 */
-const roleMap = computed<{ MANAGER?: boolean; CLERK?: boolean; INSPECTOR?: boolean }>(() => {
-  const r = auth.user?.roles ?? [];
-  return {
-    MANAGER: r.includes('MANAGER'),
-    CLERK: r.includes('CLERK'),
-    INSPECTOR: r.includes('INSPECTOR'),
-  };
-});
+/** CurrentUser.roles → boolean map（canPrint 的形参要它；判据本身在权限点）。
+ *  经 `auth.hasRole` 构造而不是直读 `auth.user.roles`：含 ADMIN 的账号在 hasRole 里
+ *  通配短路，直读枚举会让纯 ADMIN 账号在这里拿到的全是 false。 */
+const roleMap = computed<{ MANAGER?: boolean; CLERK?: boolean; INSPECTOR?: boolean }>(() => ({
+  MANAGER: auth.hasRole('MANAGER'),
+  CLERK: auth.hasRole('CLERK'),
+  INSPECTOR: auth.hasRole('INSPECTOR'),
+}));
 
 // ============ 分组态（useQuery；切 L1 自动换缓存身份）============
 const groupsQuery = useDeliveryGroupsQuery(scanState.l1CustomerId);

@@ -213,6 +213,21 @@ describe('LoginView', () => {
     expect(routerReplace).toHaveBeenCalledWith('/dashboard');
   });
 
+  // 2026-10-14（review 第 1 轮 B4）：ADMIN 是元角色，跳转判定必须显式认它 ——
+  // 只枚举 MANAGER / CLERK … 时 roles:['ADMIN'] 全部落空，账号卡在登录页报
+  // 「账号无任何可用角色」。
+  it('合法凭据 + 仅 ADMIN 角色：跳 /dashboard（元角色通配，不落「无可用角色」）', async () => {
+    loginMutateAsyncMock.mockResolvedValue(makeUser(['ADMIN']));
+    const wrapper = mount(LoginView, { global: globalConfig });
+    const inputs = wrapper.findAll('input');
+    await inputs[0].setValue('alice');
+    await inputs[1].setValue('password123');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(routerReplace).toHaveBeenCalledWith('/dashboard');
+    expect(wrapper.text()).not.toContain('账号无任何可用角色');
+  });
+
   it('ApiError 40101：errorMessage 显示账号或密码错误', async () => {
     loginMutateAsyncMock.mockRejectedValue(new ApiError(40101, 'invalid'));
     const wrapper = mount(LoginView, { global: globalConfig });

@@ -18,16 +18,14 @@
 //
 // ⚠️ **必填字段必须显式声明**：Zod 默认 strip 会静默丢掉后端漏发的键，前端照样「通过」
 // 校验、那一项整块失效（菜单树上少一个节点、权限点少一个码，且**没有任何报错**）。
+//
+// 菜单树守门 schema 用会话链路的 `views/auth/sessionSchema::menuNodeSchema`（**不是**
+// 本文件里的第二份，也**不在本文件 re-export**）：`GET /iam/menus` 与 `/iam/me` 的
+// menus 是同一个后端 VO、逐字段同形，两份 schema 各写一遍时字段漂移会让「能在面板里
+// 勾出来的菜单」与「侧栏实际认的菜单」分叉 —— 而后端只认后者。消费方（
+// `useRolesQuery` / `RoleGrantsPanel` / 测试）直接从会话路径 import。
 
 import { z } from 'zod';
-// 2026-10-14：菜单树守门 schema **复用会话链路那一份**，不写第二份
-// （`GET /iam/menus` 与 `/iam/me` 的 menus 是同一个后端 VO、逐字段同形）。
-// 两份 schema 各写一遍时，字段漂移会让「能在面板里勾出来的菜单」与「侧栏实际认的菜单」
-// 分叉 —— 而后端只认后者。
-import { menuNodeSchema } from '@/views/auth/sessionSchema';
-
-export { menuNodeSchema };
-export type { MenuNodeData } from '@/views/auth/sessionSchema';
 
 // ============================================================
 // 角色行（`GET /api/v2/iam/roles`）
@@ -119,21 +117,33 @@ export const permissionGroupListSchema = z.array(permissionGroupSchema);
  * 角色表单（新建 + 改名合一）。
  *
  * - `code`：**新建时必填、改名时留空表示不改**（后端 update 的 `code?` 省略即不改；
- *   留空即不传该键，不是传空串）。chain 上 trim 在 min 之前（仓内 Zod 硬约束：
- *   先 min(1) 的话「全空格」能绕过必填）；
+ *   留空即不传该键，不是传空串）。chain 上 trim 在 max / transform 之前（仓内 Zod
+ *   硬约束：先 min(1) 的话「全空格」能绕过必填）；trim 后统一大写再校字符集，与后端
+ *   `[A-Z0-9_]` + code 长度上限（≤ 20）的归一一致 —— 前端先收窄，不让管理员提交一个
+ *   必然被后端 400 拒绝的值。
  * - `name`：中英文名，长度上限 50 与后端列宽对齐。
  */
+export const ROLE_CODE_MAX_LEN = 20;
+
+/** 角色 code 的字符集：大写字母、数字、下划线（与后端约束逐字一致）。 */
+const ROLE_CODE_PATTERN = /^[A-Z0-9_]*$/;
+
 export const roleFormSchema = z.object({
-  code: z.string().trim().max(50, '角色代码长度不能超过 50 个字符'),
+  code: z
+    .string()
+    .trim()
+    .max(ROLE_CODE_MAX_LEN, `角色代码长度不能超过 ${ROLE_CODE_MAX_LEN} 个字符`)
+    .transform((v) => v.toUpperCase())
+    .refine(
+      (v) => ROLE_CODE_PATTERN.test(v),
+      '角色代码只能包含大写字母、数字和下划线（小写会自动转大写）',
+    ),
   name: z.string().trim().min(1, '请输入角色名称').max(50, '角色名称长度不能超过 50 个字符'),
   description: z.string().trim().max(200, '备注长度不能超过 200 个字符'),
 });
 
 export type RoleFormInput = z.infer<typeof roleFormSchema>;
 export type RoleFormFieldErrors = Partial<Record<keyof RoleFormInput, string>>;
-
-/** 新建态的 code 必填校验（与上面 schema 分开：改名态不校验 code）。 */
-export const roleCodeRequiredSchema = z.string().trim().min(1, '请输入角色代码').max(50);
 
 /** 把 ZodIssue 列表按字段聚合到字段错误表；同字段多 issue 只取第一条
  *  （沿 `views/users/usersSchema.ts` 的同款 helper）。 */

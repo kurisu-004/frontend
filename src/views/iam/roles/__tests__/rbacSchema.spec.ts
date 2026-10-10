@@ -11,8 +11,10 @@
 //     因为那里守门失败 = 全员登不进去。
 //
 // 另外覆盖两条接线约束：
-//   - 菜单树守门**复用** `views/auth/sessionSchema` 的 `menuNodeSchema`（不写第二份）；
-//   - 表单 schema 的 trim / min 链式顺序（全空格绕过必填）。
+//   - 菜单树守门**用** `views/auth/sessionSchema` 的 `menuNodeSchema`（不写第二份、
+//     本模块也不 re-export，消费方直接 import 会话那一份）；
+//   - 表单 schema 的 trim / transform 链式顺序与 code 字符集（小写会被归一成大写、
+//     非 `[A-Z0-9_]` 字符被拒）。
 
 import { describe, expect, it } from 'vitest';
 import { ZodError } from 'zod';
@@ -92,7 +94,9 @@ describe('roleDefSchema —— 面板是写侧，守门接 .strict()', () => {
   });
 
   it('R7：roleDefListSchema 是裸数组（端点无分页信封），每个元素各自守门', () => {
-    expect(roleDefListSchema.parse([makeRole(), makeRole({ code: 'ADMIN', is_system: true })])).toHaveLength(2);
+    expect(
+      roleDefListSchema.parse([makeRole(), makeRole({ code: 'ADMIN', is_system: true })]),
+    ).toHaveLength(2);
     expect(() => roleDefListSchema.parse([makeRole(), { bad: true }])).toThrow(ZodError);
     expect(() => roleDefListSchema.parse('不是数组')).toThrow(ZodError);
   });
@@ -118,7 +122,9 @@ describe('roleGrantsSchema —— 整包替换语义的授权包', () => {
   });
 
   it('G4：menu_codes / permission_codes 必须是数组（整包替换的载荷形态）', () => {
-    expect(() => roleGrantsSchema.parse(makeGrants({ menu_codes: 'users_list' }))).toThrow(ZodError);
+    expect(() => roleGrantsSchema.parse(makeGrants({ menu_codes: 'users_list' }))).toThrow(
+      ZodError,
+    );
     expect(() => roleGrantsSchema.parse(makeGrants({ permission_codes: null }))).toThrow(ZodError);
   });
 });
@@ -153,16 +159,17 @@ describe('permissionGroupSchema', () => {
   });
 });
 
-describe('菜单树 schema 的复用（不写第二份）', () => {
-  it('M1：面板消费的 menuNodeSchema 就是会话链路那一份（同一引用）', async () => {
-    // 复用必须是「同一个对象」而不是「长得一样的两份」：两份各写一遍时，字段漂移会让
-    // 「能在面板里勾出来的菜单」与「侧栏实际认的菜单」分叉，而后端只认后者。
-    const exported = await import('../composables/rbacSchema');
-    const session = await import('@/views/auth/sessionSchema');
-    expect(exported.menuNodeSchema).toBe(session.menuNodeSchema);
+describe('菜单树 schema 的去向（不写第二份、也不 re-export）', () => {
+  it('M1：rbacSchema 不导出 menuNodeSchema（消费方直接 import 会话那一份）', async () => {
+    // 本模块曾经 re-export 会话链路的 menuNodeSchema，但生产消费方（useRolesQuery /
+    // RoleGrantsPanel）全都直接 import `@/views/auth/sessionSchema`，re-export 零调用方
+    // 且与仓内「不做 re-export」口径相悖。负向断言守住「不要再长回来」——真的长出第二份
+    // schema 时，字段漂移会让「面板能勾的菜单」与「侧栏认的菜单」分叉且无人察觉。
+    const panel = await import('../composables/rbacSchema');
+    expect('menuNodeSchema' in panel).toBe(false);
   });
 
-  it('M2：它能解析面板用的菜单树数据源（GET /iam/menus）', () => {
+  it('M2：会话链路的 menuNodeSchema 能解析面板用的菜单树数据源（GET /iam/menus）', () => {
     const parsed = menuNodeSchema.array().parse([
       {
         id: 'g1',
@@ -194,22 +201,51 @@ describe('菜单树 schema 的复用（不写第二份）', () => {
 });
 
 describe('roleFormSchema —— 表单校验', () => {
-  it('F1：合法输入通过，trim 先于 min（全空格会被 min 拦下）', () => {
-    const parsed = roleFormSchema.parse({ code: '  QC_LEAD  ', name: '  品检组长 ', description: '' });
+  it('F1：合法输入通过，trim 在前，code 统一大写（小写被归一）', () => {
+    const parsed = roleFormSchema.parse({
+      code: '  qc_lead  ',
+      name: '  品检组长 ',
+      description: '',
+    });
     expect(parsed.code).toBe('QC_LEAD');
     expect(parsed.name).toBe('品检组长');
   });
 
   it('F2：全空格的 name 被必填拦下（链式顺序硬约束）', () => {
-    expect(() => roleFormSchema.parse({ code: 'X', name: '   ', description: '' })).toThrow(ZodError);
+    expect(() => roleFormSchema.parse({ code: 'X', name: '   ', description: '' })).toThrow(
+      ZodError,
+    );
   });
 
-  it('F3：超长字段被拦下', () => {
+  it('F3：code 超过 20 字符被拦下（与后端 CODE_MAX_LEN 对齐）', () => {
     expect(() =>
-      roleFormSchema.parse({ code: 'a'.repeat(51), name: 'ok', description: '' }),
+      roleFormSchema.parse({ code: 'A'.repeat(21), name: 'ok', description: '' }),
     ).toThrow(ZodError);
+    expect(roleFormSchema.parse({ code: 'A'.repeat(20), name: 'ok', description: '' }).code).toBe(
+      'A'.repeat(20),
+    );
+  });
+
+  it('F4：code 字符集与后端一致（`[A-Z0-9_]`，连字符 / 中文被拒）', () => {
+    expect(() => roleFormSchema.parse({ code: 'QC-LEAD', name: 'ok', description: '' })).toThrow(
+      ZodError,
+    );
+    expect(() => roleFormSchema.parse({ code: '品检', name: 'ok', description: '' })).toThrow(
+      ZodError,
+    );
+    // 下划线 + 数字合法。
+    expect(roleFormSchema.parse({ code: 'QC_LEAD_2', name: 'ok', description: '' }).code).toBe(
+      'QC_LEAD_2',
+    );
+  });
+
+  it('F5：code 留空通过（改名态省略 code = 不改；新建态的必填在 store 里判）', () => {
+    expect(roleFormSchema.parse({ code: '   ', name: 'ok', description: '' }).code).toBe('');
+  });
+
+  it('F6：description 超 200 字符被拦下', () => {
     expect(() =>
-      roleFormSchema.parse({ code: 'ok', name: 'b'.repeat(51), description: '' }),
+      roleFormSchema.parse({ code: 'X', name: 'ok', description: 'd'.repeat(201) }),
     ).toThrow(ZodError);
   });
 });

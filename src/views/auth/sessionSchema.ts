@@ -26,7 +26,6 @@
 // ⇒ **后端必须先上**（后端多返字段旧前端无感，反序则是全站不可用）。
 
 import { z } from 'zod';
-import type { ZodIssue } from 'zod';
 
 /** 菜单节点（与 `@/types/menu` 的 `MenuNode` **逐字段同形**，后端同一个 `MenuNodeOut` VO）。
  *
@@ -115,16 +114,3 @@ export const loginResponseSchema = z
   .strip();
 
 export type LoginResponseData = z.infer<typeof loginResponseSchema>;
-
-/** 把 ZodIssue 列表按字段聚合到字段错误表；同字段多 issue 只取第一条
- *  （沿 `views/auth/loginSchema.ts` 的同款 helper，供会话相关表单复用）。 */
-export function toFieldErrors<T extends Record<string, unknown>>(
-  issues: ZodIssue[],
-): Partial<Record<keyof T, string>> {
-  const out: Partial<Record<keyof T, string>> = {};
-  for (const issue of issues) {
-    const key = issue.path[0] as keyof T | undefined;
-    if (key && !out[key]) out[key] = issue.message;
-  }
-  return out;
-}

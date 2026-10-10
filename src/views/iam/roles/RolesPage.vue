@@ -1,7 +1,7 @@
 <!--
   RolesPage.vue — 角色权限（RBAC 控制面板）
 
-  2026-10-14 新建。**薄壳**：左角色列表 + 右授权面板 + 两个对话框，全部状态与动作
+  2026-10-14 新建。**薄壳**：左角色列表 + 右授权面板 + 新建/改名对话框，全部状态与动作
   在同域 store（`./composables/useRolesStore.ts`）里；本组件只做「骨架 + 事件接线」。
   形态照 `views/users/UserList.vue`（账号管理 —— 本页是它的姊妹页）。
 -->
@@ -37,13 +37,19 @@
             </template>
           </el-table-column>
           <!--
-            操作列：ADMIN（is_system）行**不渲染任何写按钮** —— 它是元角色、后端拒写，
-            给按钮再由后端报错不如不给（双端兜底的另外一半在右区的 readonly 渲染）。
+            操作列逐行判：ADMIN（元角色）无任何写按钮（后端 grants / deactivate 都拒）；
+            其它内置角色可改名 / 停用（不可删除）；自定义角色三项全开。口径与后端
+            update_role / deactivate_role 的实际限制一致（见 useRolesStore 文件头）。
           -->
-          <el-table-column v-if="!isSelectedSystemRole" label="操作" width="160" fixed="right">
+          <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
-              <template v-if="!row.is_system">
-                <el-button link type="primary" size="small" @click="store.dialogs.form.openEdit(row.id)">
+              <template v-if="row.code !== ADMIN_ROLE_CODE">
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  @click="store.dialogs.form.openEdit(row.id)"
+                >
                   改名
                 </el-button>
                 <el-button
@@ -51,14 +57,17 @@
                   link
                   type="warning"
                   size="small"
+                  :loading="store.dialogs.deactivate.saving"
                   @click="store.dialogs.deactivate.openDeactivate(row.id, false)"
                 >
                   停用
                 </el-button>
                 <el-button
+                  v-if="!row.is_system"
                   link
                   type="danger"
                   size="small"
+                  :loading="store.dialogs.deactivate.saving"
                   @click="store.dialogs.deactivate.openDeactivate(row.id, true)"
                 >
                   删除
@@ -81,6 +90,7 @@
           :checked-permission-codes="store.grants.checkedPermissionCodes"
           :loading="store.grants.loading"
           :saving="store.grants.saving"
+          :ready="store.grants.ready"
           @update:menu-codes="store.grants.setCheckedMenus"
           @update:permission-codes="store.grants.setCheckedPermissions"
           @submit="store.grants.submitGrants()"
@@ -103,7 +113,10 @@
             placeholder="如 QC_LEAD（大写）"
           />
           <div v-if="!store.dialogs.form.codeEditable" class="field-hint">
-            该角色已有账号持有，改 code 会让这些授权失去指向，故不可改。
+            <template v-if="store.dialogs.form.editingIsSystem">
+              内置角色的代码固定，不可修改。
+            </template>
+            <template v-else>该角色已有账号持有，改 code 会让这些授权失去指向，故不可改。</template>
           </div>
         </el-form-item>
         <el-form-item label="名称" prop="name">
@@ -137,7 +150,7 @@
 
 import { onBeforeUnmount, onMounted } from 'vue';
 import RoleGrantsPanel from './components/RoleGrantsPanel.vue';
-import { useRolesStore } from './composables/useRolesStore';
+import { useRolesStore, ADMIN_ROLE_CODE } from './composables/useRolesStore';
 import type { RoleDefData } from './composables/rbacSchema';
 
 // 不变量 #1：首调。
@@ -157,9 +170,6 @@ onBeforeUnmount(() => {
 function onCurrentChange(row: RoleDefData | null): void {
   store.query.selectRole(row ? row.id : '');
 }
-
-/** 选中的是系统内置角色（ADMIN）⇒ 左列表操作列整体不渲染。 */
-const isSelectedSystemRole = store.query.selectedRole?.is_system ?? false;
 
 function onSubmitForm(): void {
   void store.submitRoleForm({ ...store.dialogs.form.form });
