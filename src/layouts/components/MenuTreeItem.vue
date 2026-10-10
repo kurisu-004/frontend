@@ -44,6 +44,10 @@ import {
   List,
   // 2026-09-11：工序制定（part_process_chain）用 SetUp
   SetUp,
+  // 2026-10-13：新增「定时任务/邮件」分组（Clock）与「交期汇总邮件」子菜单（Message）。
+  // 查不到图标时模板里 v-if 静默隐藏（不报错），漏补这行 = 侧栏两个图标消失而无人报错。
+  Clock,
+  Message,
 } from '@element-plus/icons-vue';
 import type { MenuNode } from '@/types/menu';
 
@@ -84,6 +88,9 @@ const ICON_MAP: Record<string, unknown> = {
   List,
   // 2026-09-11：工序制定（part_process_chain）
   SetUp,
+  // 2026-10-13：定时任务/邮件分组（mail_group）与交期汇总邮件（mail_digest）
+  Clock,
+  Message,
 };
 
 // 按名字查图标；查不到返回 undefined → 模板里 v-if 隐藏图标（不报错）。

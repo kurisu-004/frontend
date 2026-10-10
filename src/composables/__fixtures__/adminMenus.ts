@@ -1,4 +1,9 @@
 // src/composables/__fixtures__/adminMenus.ts
+// 2026-10-13 同步 backend-rust seeds/menu.sql（交期汇总邮件定时任务）：
+//   - 新增一级分组 mail_group「定时任务/邮件」（path NULL → 渲染成 el-sub-menu，不需前端
+//     路由），sort_order 45，插在 floor_group(40) 与 settings_root(50) 之间；
+//   - 其下子菜单 mail_digest「交期汇总邮件」，path /mail/digest（与 router 的
+//     `path: 'mail/digest'` 逐字一致）、sort_order 10、icon Message（分组 icon Clock）。
 // 2026-10-04 同步 backend-rust seeds/menu.sql：
 //   - workers_list 从 auth_group children 迁入 production_group children，
 //     path /workers → /production/worker-list，sort_order 10 → 25；
@@ -405,7 +410,43 @@ export const ADMIN_MENUS: MenuNode[] = [
     sort_order: 40,
     children: [],
   },
-  // 10. settings_root — 设置（分组，3 children）
+  // 10. mail_group — 定时任务/邮件（分组，1 children）
+  // 2026-10-13 新增：交期汇总邮件定时任务管理页（后端 mail_digest 域，5 个端点全部
+  // MANAGER 独占）。分组节点 path=null（渲染成 el-sub-menu，**不需要**前端路由，照
+  // order_group / auth_group 等既有分组节点的既有做法）；子菜单 mail_digest 的 path
+  // 与 router 的 `path: 'mail/digest'` 逐字一致。
+  //
+  // ⚠️ **sort_order=45 的插入位是硬约束**：数组物理顺序必须与 sort_order 升序一致
+  // （MenuTreeItem / MainLayout 都是直接 v-for 数组、渲染链路上没有排序），所以本块
+  // 插在 floor_group(40) 与 settings_root(50) 之间 —— `__tests__/adminMenus.spec.ts`
+  // 的「menu tree is in ascending sort_order」用例会守住这个位置。
+  //
+  // ⚠️ 图标必须在 `MenuTreeItem.vue` 的 ICON_MAP 内（查不到会**静默不显示**，不报错）：
+  // mail_group → Clock、mail_digest → Message（2026-10-13 已补命名导入）。
+  {
+    id: id(13),
+    version: 0,
+    parent_id: null,
+    code: 'mail_group',
+    title: '定时任务/邮件',
+    path: null,
+    icon: 'Clock',
+    sort_order: 45,
+    children: [
+      {
+        id: id(131),
+        version: 0,
+        parent_id: id(13),
+        code: 'mail_digest',
+        title: '交期汇总邮件',
+        path: '/mail/digest',
+        icon: 'Message',
+        sort_order: 10,
+        children: [],
+      },
+    ],
+  },
+  // 11. settings_root — 设置（分组，3 children）
   {
     id: id(9),
     version: 0,
