@@ -332,6 +332,16 @@ watch(
   { immediate: true },
 );
 
+/**
+ * 拉第一个 occt 支持的 3D 模型并 createObjectURL。
+ *
+ * ⚠️ **已知漏点：在途 blob 没有迟到守卫**（连文件 id 都没比）。切走 3D Tab 或换零件时
+ * 外层 watch 会 `revokeStepBlob()`，此后若在途请求才回来，`stepBlobUrl` 会被重新挂上
+ * 一份没人 revoke 的 blob（换 tab 反复几次即每次漏一份 3D 模型）。
+ * 图纸预览链路上的同类写入点都带「宿主是否仍开着 + 文件是否还是同一个」两道判据
+ * （`PreviewCarriers.spec.ts` 守着），这里没有 —— 修的时候照那个形态补齐即可。
+ * 3D Tab 与图纸预览链路正交，未与那条链路一起改。
+ */
 async function loadFirst3DModel(modelList: PartFileItem[]): Promise<void> {
   // 2026-09-29 第三轮：先找 target 再 revoke —— 避免「当前已是同文件」时仍多走一次
   // revoke+重建 blob URL 的抖动；并支持同文件 tab 来回切换短路。

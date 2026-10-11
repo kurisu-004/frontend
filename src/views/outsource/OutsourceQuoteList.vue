@@ -172,10 +172,20 @@ watch(
  * 判据与弹窗那三条分支一一对应：**两条路都还没有可渲染的东西**时给提示，null 才表示
  * 真的没有可预览内容。分两档是因为它们在说不同的事：转图在等 CI，「查看原始 PDF」
  * 已点、blob 在路上 —— 混成一句会让工人以为点按钮没用。
+ *
+ * ⚠️ 「已决定看原始 PDF」这一档的判据必须**同时**看 `drawingShowOriginal` 与
+ * `preview.degraded`：降级那一刻 loading 已经落回 false，只认它的话会一路返回 null，
+ * 于是 `pages=[]` + `url=null` + `busyHint=null` 正好落进子组件的「无可预览内容」，
+ * 而它正上方的 `.degrade-hint` 写的是「已改用原始 PDF 预览」—— 两句话自相矛盾，
+ * 且 `/content` 失败时会永久停在这里。其余五处承载点靠
+ * `wantsOriginalPdf = showOriginalPdf || preview.degraded` 天然覆盖这一档，
+ * 只有这条受控 props 形态要在 caller 侧手写判据，手写就容易漏。
  */
 const drawingBusyHint = computed<string | null>(() => {
   if (!drawingPreviewIsPdf.value) return null;
-  if (drawingShowOriginal.value) return drawingPreviewUrl.value ? null : '加载原始 PDF…';
+  if (drawingShowOriginal.value || preview.degraded.value) {
+    return drawingPreviewUrl.value ? null : '加载原始 PDF…';
+  }
   return preview.loading.value ? '图纸转图中…' : null;
 });
 

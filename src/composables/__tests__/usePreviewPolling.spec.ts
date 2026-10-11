@@ -174,6 +174,30 @@ describe('usePreviewPolling', () => {
     scope.stop();
   });
 
+  // 真机上的序列不是「连着两个 21117」，而是
+  // `21117 → 200 PENDING（后端已把 FAILED 重置并重提 job）→ … → 21117`：
+  // 第一次 21117 触发前端那 1 次自愈重试，重试恰好落在后端刚重置完、job 还在跑的
+  // 窗口里，于是先读到 PENDING，再等到新 job 也终局失败。
+  // ⚠️ PENDING 分支**不消耗**自愈额度（额度只由 21117 自己扣），所以这条序列下前端
+  // 仍只在第 2 个 21117 时降级 —— 上面的用例没建模 PENDING 这一段，这里补上，
+  // 免得「自愈次数被 PENDING 悄悄吃掉」这种回归全绿。
+  it('21117 → PENDING → 21117（PENDING 不扣自愈额度）：第 2 个 21117 才降级', async () => {
+    getPartFilePreview
+      .mockRejectedValueOnce(apiError(21117, 'CI job 终态失败'))
+      .mockResolvedValueOnce(pending(2000))
+      .mockRejectedValue(apiError(21117, 'CI job 终态失败'));
+    const scope = effectScope();
+    const p = scope.run(() => usePreviewPolling({ fileId: () => 'f1' }))!;
+
+    await settle();
+
+    expect(p.degraded.value, '第 2 个 21117 时自愈额度已用完 ⇒ 降级').toBe(true);
+    expect(p.degradedReason.value).toContain('CI job 终态失败');
+    // 3 次请求：21117 / PENDING / 21117。PENDING 那次不算自愈。
+    expect(getPartFilePreview).toHaveBeenCalledTimes(3);
+    scope.stop();
+  });
+
   // 后端 `state` 只有 READY / PENDING 两个取值（失败走 5xx 信封，不在 state 里）。
   // 万一后端将来加了新状态，这里必须显式降级并把实际值带进原因，而不是落进 PENDING
   // 分支空转到 30 次预算耗尽 —— 那会让现场看到「等了 2 分钟」而查不出是后端变了。

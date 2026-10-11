@@ -58,16 +58,34 @@ function stripComments(src: string): string {
     .join('\n');
 }
 
-/** 第 `idx` 行所在的「外层函数块」：从它往上最近的一个函数/箭头函数头，到该行为止。 */
+/**
+ * 第 `idx` 行所在的「块」：从它往上最近的**块起点**到该行为止。
+ *
+ * 块起点 = 函数声明 **或箭头函数头**（`… => {`）。
+ *
+ * ⚠️ 箭头函数头必须算进来，否则会假绿：预览 blob 的写入点大多落在
+ * `watch([…], async (…) => { … })` 的回调里，只认 `function` 行的话会一路回退到同文件
+ * 上面的某个具名函数，把**那个函数里的 revoke 也圈进来** —— 于是「删掉本回调自己那次
+ * revoke」守卫全绿，而真机上是泄漏。反过来删掉具名函数那次也会假红。
+ *
+ * ⚠️ `try {` **不**算块起点：`revoke(); try { const b = await f(); x = … } catch {}`
+ * 是本仓承载点的主流写法（revoke 在 try 之前），把它算进去会把那次 revoke 切到窗口外。
+ */
 function enclosingBlock(lines: string[], idx: number): string {
   let start = 0;
   for (let i = idx - 1; i >= 0; i -= 1) {
-    if (/^\s*(export\s+)?(async\s+)?function\s+\w+/.test(lines[i] as string)) {
+    const l = lines[i] as string;
+    if (/^\s*(export\s+)?(async\s+)?function\s+\w+/.test(l) || /=>\s*\{\s*$/.test(l)) {
       start = i;
       break;
     }
   }
   return lines.slice(start, idx + 1).join('\n');
+}
+
+/** 把一段源码压成单行（空白折叠），让「同一物理行」的断言不受 prettier 折行影响。 */
+function oneLine(src: string): string {
+  return src.replace(/\s+/g, ' ');
 }
 
 // ============================================================
@@ -86,33 +104,33 @@ describe('转图等待期不能说成「加载原始 PDF…」', () => {
 
   for (const rel of MERGED) {
     it(`${rel}：「加载原始 PDF…」那一句与转图文案同处一个三元（判据是 wantsOriginalPdf）`, () => {
-      const tpl = stripComments(templateOf(rel));
-      const hit = tpl
-        .split('\n')
-        .filter((l) => l.includes('加载原始 PDF…'));
-      expect(hit.length, '找不到「加载原始 PDF…」那一句').toBe(1);
-      const line = hit[0] as string;
+      // 先把空白折叠成单行再判「同句」：三元一旦被 prettier 按 printWidth 折行，
+      // 判据与两个文案会落到不同物理行上，用行来判就会假红（当前 6 处都短，属侥幸）。
+      const tpl = oneLine(stripComments(templateOf(rel)));
       expect(
-        line,
+        tpl.split('加载原始 PDF…').length - 1,
+        '模板里「加载原始 PDF…」应当只出现一次（多出来的那次是漏了判据）',
+      ).toBe(1);
+      const at = tpl.indexOf('加载原始 PDF…');
+      const window = tpl.slice(Math.max(0, at - 120), at + 120);
+      expect(
+        window,
         `「加载原始 PDF…」必须是 \`wantsOriginalPdf ? '加载原始 PDF…' : '图纸转图中…'\`：` +
           '无条件说「加载原始 PDF」会让仍在转图的 PDF 显示成在拉原始 PDF（那一刻没发过 /content）',
       ).toContain('wantsOriginalPdf');
-      expect(line, '同一句里必须带上转图中的那一档').toContain('图纸转图中');
+      expect(window, '同一句里必须带上转图中的那一档').toContain('图纸转图中');
     });
   }
 
   // PartDrawingPreviewDialog 是「独立分支」形态：转图等待是一个 v-else-if，
   // 条件里显式排除 wantsOriginalPdf。按分支而非按三元核对。
   it('PartDrawingPreviewDialog.vue：转图等待是独立分支，且条件排除 wantsOriginalPdf', () => {
-    const tpl = stripComments(templateOf('src/views/production/scan/components/PartDrawingPreviewDialog.vue'));
-    const branch = tpl
-      .split('\n')
-      .find((l) => l.includes('v-else-if') && l.includes('!wantsOriginalPdf'));
-    expect(branch, '找不到「转图等待」那个 v-else-if 分支').toBeDefined();
-    // 分支之后三行内应当就是「图纸转图中…」
-    const lines = tpl.split('\n');
-    const idx = lines.indexOf(branch as string);
-    const window = lines.slice(idx, idx + 4).join('\n');
+    const tpl = oneLine(
+      stripComments(templateOf('src/views/production/scan/components/PartDrawingPreviewDialog.vue')),
+    );
+    const at = tpl.indexOf('!wantsOriginalPdf"');
+    expect(at, '找不到「转图等待」那个 v-else-if 分支').toBeGreaterThan(-1);
+    const window = tpl.slice(at, at + 220);
     expect(window, '转图等待分支里必须说「图纸转图中…」').toContain('图纸转图中');
     expect(window, '转图等待分支里不得出现「加载原始 PDF…」').not.toContain('加载原始 PDF');
   });
@@ -140,6 +158,23 @@ describe('转图等待期不能说成「加载原始 PDF…」', () => {
     expect(hint, '找不到 drawingBusyHint 的定义').not.toBe('');
     expect(hint).toContain('图纸转图中');
     expect(hint).toContain('加载原始 PDF');
+  });
+
+  // ⚠️ 「已决定看原始 PDF」这一档的判据必须同时看用户点击与**降级**。
+  // 降级那一刻 `preview.loading` 已经落回 false，只认它的话 busyHint 一路返回 null，
+  // 于是 pages=[] + url=null + busyHint=null 正好落进子组件的「无可预览内容」，而它
+  // 正上方的 .degrade-hint 写的是「已改用原始 PDF 预览」—— 两句自相矛盾，且
+  // /content 失败时会永久停在这里。其余五处靠
+  // `wantsOriginalPdf = showOriginalPdf || preview.degraded` 天然覆盖，只有这条
+  // 受控 props 形态要在 caller 侧手写判据。
+  it('OutsourceQuoteList.vue：busyHint 的「看原始 PDF」档也认降级（不只认用户点击）', () => {
+    const src = srcOf('src/views/outsource/OutsourceQuoteList.vue');
+    const hint = new RegExp('drawingBusyHint[\\s\\S]*?\\n\\}\\);').exec(src)?.[0] ?? '';
+    expect(hint, '找不到 drawingBusyHint 的定义').not.toBe('');
+    expect(
+      hint,
+      'drawingBusyHint 必须同时判 preview.degraded：降级时 loading 已为 false，只认它会漏掉降级档',
+    ).toContain('preview.degraded');
   });
 });
 
@@ -172,9 +207,13 @@ describe('blob URL 只经一个 revoke-then-assign 的入口', () => {
     }
   });
 
-  // 另外四个持有 blob 的承载点：同一个外层函数里，createObjectURL 之前必须有
-  // revoke —— 紧挨着上一行、或在 await 之前先 revoke 都算（后者同样能保证
-  // 「新 URL 挂上去时旧的已经死了」）。
+  // 另四个持有 blob 的承载点：同一个块里，createObjectURL 之前必须有 revoke ——
+  // 紧挨着上一行、或在 await 之前先 revoke 都算（后者同样能保证「新 URL 挂上去时旧的
+  // 已经死了」）。
+  //
+  // ⚠️ **blob ref 一律命名为 `xxxBlobUrl`**：本守卫（下面这一组与上面那一组）都按这个
+  // 后缀找写入点。新增一个不叫 `*BlobUrl` 的 blob ref 会静默绕过这两组断言 —— 守卫看不见
+  // 不等于没有泄漏。
   for (const [rel, field] of [
     ['src/components/FileListCard.vue', 'previewBlobUrl'],
     ['src/views/dashboard/components/PartPreviewDialog.vue', 'previewBlob'],
@@ -194,7 +233,7 @@ describe('blob URL 只经一个 revoke-then-assign 的入口', () => {
         const block = enclosingBlock(lines, i);
         expect(
           /URL\.revokeObjectURL|revoke\w*Blob\(|setBlobUrl\(/.test(block),
-          `${rel} 第 ${i + 1} 行所在的外层函数里没有 revoke：新 URL 挂上去时旧的还活着 ⇒ 泄漏`,
+          `${rel} 第 ${i + 1} 行所在的块里没有 revoke：新 URL 挂上去时旧的还活着 ⇒ 泄漏`,
         ).toBe(true);
       }
     });
