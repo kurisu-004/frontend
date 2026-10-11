@@ -266,11 +266,11 @@ const emit = defineEmits<{
 
 const activeTab = ref<TabKey>('DRAWING');
 
-// 2026-10-03：打印图纸入口的角色闸门与后端 rust v2 转发端点的白名单对齐——放行
-// MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER，排除 SHELF_ACCOUNT（判定纯函数在
-// utils/partsPermissions）。只用 `!isInspector` 判会让 INSPECTOR 看不到按钮、
-// SHELF_ACCOUNT 看得到却吃 403，两头都跟后端对不上。4 条腿的角色统一自取
-// usePermissions，不走 prop 注入，避免同一个 auth store 被两条路径读取后静默失真。
+// 2026-10-03：打印图纸入口的闸门判据与后端 rust v2 转发端点对齐 —— 权限点
+// `part.drawing.print`（默认矩阵放行 MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER，
+// 不含 SHELF_ACCOUNT；判定纯函数在 utils/partsPermissions）。下面 4 条腿的
+// `usePermissions` 取值只是沿用既有调用形态（形参不再参与判定），统一自取、不走 prop
+// 注入，避免同一个 auth store 被两条路径读取后静默失真。
 const { isManager, isClerk, isInspector, isCncProgrammer } = usePermissions();
 const canPrintDrawing = computed<boolean>(() =>
   canPrintPartDrawing({

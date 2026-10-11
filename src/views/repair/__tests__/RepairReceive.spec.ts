@@ -20,6 +20,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, type VNode } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 
 const mocks = vi.hoisted(() => ({
   listRepairBatches: vi.fn(),
@@ -80,6 +82,7 @@ vi.mock('../RepairStartDialog.vue', () => ({
 }));
 
 import RepairReceive from '../RepairReceive.vue';
+import { useAuthStore } from '@/stores/auth';
 
 /**
  * 返修批次行：`status` 恒 IN_PROCESS，返修语义只在 is_repairing 上。
@@ -194,8 +197,42 @@ function renderStatusCell(vnode: VNode): { type: string | undefined; text: strin
   return out;
 }
 
-async function mountReceive(): Promise<ReturnType<typeof mount>> {
-  const wrapper = mount(RepairReceive, { global: globalConfig });
+async function mountReceive(
+  options: { canRepair?: boolean } = {},
+): Promise<ReturnType<typeof mount>> {
+  const { canRepair = true } = options;
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  const wrapper = mount(RepairReceive, {
+    global: {
+      ...globalConfig,
+      plugins: [
+        pinia,
+        [
+          VueQueryPlugin,
+          {
+            queryClient: new QueryClient({
+              defaultOptions: { queries: { retry: 0 }, mutations: { retry: 0 } },
+            }),
+          },
+        ],
+      ],
+    },
+  });
+  await flushPromises();
+  // 2026-10-15：种入 batch.repair 权限点（真实 auth store；mount 后 pinia 才装到 app 上，
+  // auth store setup 首行 useQueryClient 需要注入上下文）。无权限场景传
+  // { canRepair: false }。
+  useAuthStore().user = {
+    id: 'u-repair-receive-test',
+    username: 'tester',
+    full_name: '测试账号',
+    is_active: true,
+    roles: [],
+    shelf_ids: [],
+    menus: [],
+    permissions: canRepair ? ['batch.repair'] : [],
+  };
   await flushPromises();
   return wrapper;
 }
@@ -233,11 +270,15 @@ describe('RepairReceive — 「返修中」判据必须读 is_repairing（2026-1
     const cellRender = statusCellRender(wrapper);
 
     expect(
-      renderStatusCell(cellRender({ row: makeBatch({ is_repairing: false, status: 'DELIVERED' }) })),
+      renderStatusCell(
+        cellRender({ row: makeBatch({ is_repairing: false, status: 'DELIVERED' }) }),
+      ),
     ).toEqual({ type: 'success', text: '已送货' });
     // 非返修、非已送货的普通在制行仍是 info，且标签回落到 ORDER_STATUS_LABEL。
     expect(
-      renderStatusCell(cellRender({ row: makeBatch({ is_repairing: false, status: 'IN_PROCESS' }) })),
+      renderStatusCell(
+        cellRender({ row: makeBatch({ is_repairing: false, status: 'IN_PROCESS' }) }),
+      ),
     ).toEqual({ type: 'info', text: '生产中' });
     wrapper.unmount();
   });
@@ -301,5 +342,18 @@ describe('RepairReceive — 「返修中」判据必须读 is_repairing（2026-1
     await flushPromises();
     expect(mocks.findPartBySerialAndPrompt).toHaveBeenCalledWith('F1016');
     wrapper.unmount();
+  });
+
+  it('R6：无 batch.repair 权限点 → 「返修」操作列不渲染（2026-10-15 权限闸）', async () => {
+    // 回归 guard：返修入口列按 `batch.repair` 权限点显隐；无权限时整列收掉，不留空列。
+    // 本 spec 的列拖动被 mock 成空 orderedDefs ⇒ 页面上唯一的 el-table-column 就是
+    // 这枚字面量操作列，列数即可判定。
+    const allowed = await mountReceive();
+    expect(allowed.findAll('.mock-column')).toHaveLength(1);
+    allowed.unmount();
+
+    const denied = await mountReceive({ canRepair: false });
+    expect(denied.findAll('.mock-column')).toHaveLength(0);
+    denied.unmount();
   });
 });

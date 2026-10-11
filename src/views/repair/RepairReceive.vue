@@ -16,6 +16,8 @@ import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'v
 import { ElMessage, ElTag } from 'element-plus';
 import { Filter, Tools } from '@element-plus/icons-vue';
 import { listRepairBatches, listRepairingBatches, type RepairBatchListItem } from '@/api/parts';
+import { useAuthStore } from '@/stores/auth';
+import { BATCH_REPAIR_PERMISSION } from '@/utils/productionPermissions';
 import { useBarcodeScanner } from '@/composables/useBarcodeScanner';
 import { useCustomerTree } from '@/composables/useCustomerTree';
 import {
@@ -32,6 +34,13 @@ import RepairStartDialog from './RepairStartDialog.vue';
 
 const { onScan } = useBarcodeScanner();
 const { tree: customerTree } = useCustomerTree();
+// 消费侧禁止解构 auth store（store proxy 已自动解包 ref）。
+const auth = useAuthStore();
+
+/** 返修下发权限闸（`batch.repair` 权限点，2026-10-15 新增）。
+ *  「已送货」Tab 的「返修」列入口按它显隐；提交侧的第二道闸在 RepairStartDialog.onSubmit。
+ *  无权限时整列收掉（不给一个点下去必然 403 的入口）。 */
+const canRepair = computed<boolean>(() => auth.hasPermission(BATCH_REPAIR_PERMISSION));
 
 type TabKey = 'delivered' | 'repairing';
 const activeTab = ref<TabKey>('delivered');
@@ -445,8 +454,14 @@ function rowClassName(opts: { row: RepairBatchListItem }): string {
         </el-table-column>
       </template>
 
-      <!-- 操作列：已送货 tab 显示「返修」按钮；返修中 tab 隐藏整列 -->
-      <el-table-column v-if="activeTab === 'delivered'" label="操作" width="100" fixed="right">
+      <!-- 操作列：已送货 tab + 持有 `batch.repair` 权限点才显示「返修」按钮；
+           返修中 tab 或无权账号整列不渲染（不留空列）。 -->
+      <el-table-column
+        v-if="activeTab === 'delivered' && canRepair"
+        label="操作"
+        width="100"
+        fixed="right"
+      >
         <template #default="{ row }">
           <el-button type="warning" size="small" @click="onClickStartRepair(row)">
             <el-icon><Tools /></el-icon>

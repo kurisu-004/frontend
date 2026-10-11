@@ -132,7 +132,8 @@
           :part-id="partId"
           :batches="batches"
           :batches-loading="batchesLoading"
-          :can-manage-batches="canManageBatches"
+          :can-split-batch="canSplitBatch"
+          :can-cancel-batch="canCancelBatch"
           :status-tag-type="statusTagType"
           :status-label-of="statusLabelOf"
           :selected-batch-id="selectedBatchId"
@@ -288,7 +289,8 @@ const {
   canManage3DModels,
   canManageCncFiles,
   canManageSetupSheet,
-  canManageBatches,
+  canSplitBatch,
+  canCancelBatch,
   fetchBatches,
   onStartEdit,
   onCancelEdit,

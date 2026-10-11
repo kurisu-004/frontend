@@ -5,6 +5,8 @@
 //   - 提供 3 个 move 包装（POOL→WORKER / WORKER→POOL / WORKER→WORKER），全部
 //     收口同一个 `moveMutation`，视图层（PoolDrawer / WorkerColumn）只 inject 这三个
 //     函数、不直接 import 本文件；
+//   - 权限（2026-10-15 新增）：三个包装与 runAutoAllocate 入口按 `queue.allocate`
+//     权限点早退（warning + 零请求，fail-closed）；改前本文件是零闸门、全由后端 403 兜底。
 //   - 三个包装的入参都带 `version`（源批次 `t_part_batch.version`，取自卡片 model，
 //     经卡片 `:data-batch-version` → DOM dataset 传递）：move 改的是 current_holder_id
 //     / location 属并发敏感写，后端必填 OCC 锚，缺失时返 HTTP 422 纯文本；
@@ -36,6 +38,8 @@ import type {
   MoveRequest,
   MoveResultDto,
 } from '@/api/productionQueue.contract';
+import { useAuthStore } from '@/stores/auth';
+import { QUEUE_ALLOCATE_PERMISSION } from '@/utils/productionPermissions';
 import { moveResultSchema } from './productionQueueSchema';
 import { invalidateQueueBoardAll } from './useQueueBoard';
 import { invalidateQueueSnapshot } from './useQueueSnapshot';
@@ -82,6 +86,8 @@ export interface UseQueueMoveReturn {
 
 export function useQueueMove(): UseQueueMoveReturn {
   const qc = useQueryClient();
+  // 消费侧禁止解构 auth store（store proxy 已自动解包 ref）。
+  const auth = useAuthStore();
   const error = ref<string | null>(null);
 
   /** 写操作完成后集中失效「工序看板 + 快照」两个域（全是前缀失效，理由见文件头）。
@@ -169,6 +175,21 @@ export function useQueueMove(): UseQueueMoveReturn {
       : '已撤回批次至候选池';
   }
 
+  /** 权限闸（2026-10-15 新增，RBAC 面板第二批）—— 与后端端点闸对齐的 `queue.allocate`
+   *  权限点。
+   *
+   *  ⚠️ 这是**行为变更**：改之前本文件的三个 move 包装是**零闸门**（任何登录用户都能
+   *  通过拖拽 / 右键触发，后端在提交时返 403）；改之后未持有该权限点的账号在包装入口
+   *  即早退（warning + 不发请求）。拖拽路径的落点回滚不变 —— 节点归位由**源侧**的
+   *  onRemove（restoreNodeToSource）负责，与本闸无关；早退仍走一次失效对账，与
+   *  version / 货架早退同款（见 reconcileAfterEarlyReturn）。 */
+  async function guardAllocatePermission(): Promise<boolean> {
+    if (auth.hasPermission(QUEUE_ALLOCATE_PERMISSION)) return true;
+    ElMessage.warning('没有移动批次的权限');
+    await reconcileAfterEarlyReturn();
+    return false;
+  }
+
   /** version 守卫（三个 move 包装共用）。
    *
    *  `POST /queue/move` 的 `version` 是必填的 OCC 锚（后端 serde 无
@@ -196,6 +217,7 @@ export function useQueueMove(): UseQueueMoveReturn {
     toWorkerId: string,
     fromShelfId: string,
   ): Promise<boolean> {
+    if (!(await guardAllocatePermission())) return false;
     if (!(await guardVersion(version))) return false;
     if (!fromShelfId) {
       ElMessage.warning('批次货架信息缺失，无法分配');
@@ -230,6 +252,7 @@ export function useQueueMove(): UseQueueMoveReturn {
     version: number,
     fromWorkerId: string,
   ): Promise<boolean> {
+    if (!(await guardAllocatePermission())) return false;
     if (!(await guardVersion(version))) return false;
     try {
       await moveMutation.mutateAsync({
@@ -255,6 +278,7 @@ export function useQueueMove(): UseQueueMoveReturn {
     fromWorkerId: string,
     toWorkerId: string,
   ): Promise<boolean> {
+    if (!(await guardAllocatePermission())) return false;
     if (!(await guardVersion(version))) return false;
     try {
       await moveMutation.mutateAsync({
@@ -269,8 +293,14 @@ export function useQueueMove(): UseQueueMoveReturn {
     }
   }
 
-  /** runAutoAllocate 包装 —— 保留 Promise<void> 签名。 */
+  /** runAutoAllocate 包装 —— 保留 Promise<void> 签名。权限闸与三个 move 包装同源
+   *  （`queue.allocate`）：无权限时 warning + 早退，不发请求；有权限则照旧直接走
+   *  mutation（成功 / 失败的失效链与 toast 一字不改）。 */
   async function runAutoAllocate(req: AutoAllocateRequest): Promise<void> {
+    if (!auth.hasPermission(QUEUE_ALLOCATE_PERMISSION)) {
+      ElMessage.warning('没有移动批次的权限');
+      return;
+    }
     await autoAllocateMutation.mutateAsync(req);
   }
 

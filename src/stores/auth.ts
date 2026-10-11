@@ -34,6 +34,11 @@ import { defineStore } from 'pinia';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { login as apiLogin, logout as apiLogout, me as apiMe } from '@/api/iam';
 import type { ApiError } from '@/api/http';
+// 2026-10-14 新增：会话守门 schema（`menuNodeSchema` / `loginResponseSchema` /
+// `currentUserSchema`）。api → views 的这条**运行时边是仓内允许的例外形态**，理由见
+// `loadFromStorage` 与 `refreshOrLogout` 的注释（这三处都是「没有 queryFn /
+// mutationFn 承载」的守门点：会话状态源是 store，不是任何一个 TanStack Query）。
+import { currentUserSchema, loginResponseSchema } from '@/views/auth/sessionSchema';
 // 2026-10-09 新增：起 access token 保活定时器（api/http.ts 的 setTimeout 链）。本文件有
 // 三条起表路径，都不经过 http.ts 的 persistTokens()，各自必须补一次：saveToStorage（登录）
 // / loadFromStorage（刷新浏览器恢复会话）/ teardownSession（会话终止后拆表）。漏掉哪条，
@@ -98,11 +103,33 @@ export const useAuthStore = defineStore('auth', () => {
       if (!raw) return false;
       const s: StoredSession = JSON.parse(raw);
       if (!s.token || !s.user) return false;
-      // 兼容旧版本 localStorage（没有 menus 字段）：补默认值，下次 /iam/me 会刷新。
-      s.user.menus = s.user.menus ?? [];
+      // ⚠️ 2026-10-14：**旧 localStorage 格式的迁移补丁**（RBAC 面板上线）。
+      // 升级前写盘的用户对象没有 `permissions` 这个键（后端 `/iam/me` 当时也不返），
+      // 直接守门会让**所有老用户的标签页刷新后集体登出**。补完缺省的键再 safeParse。
+      //
+      // 补的是「键缺失 / 为 null」，不是「值非法」—— 非数组的 permissions 仍会被下面
+      // 的守门当场拒掉（判无会话）。
+      //
+      // 这两个默认值**只服务 localStorage 这条迁移路径**，不是 wire 响应的兜底：wire 侧
+      // `/iam/me` 与登录响应的 `permissions` 是必填，由 `refreshOrLogout` 与
+      // `loginMutation` 的 `currentUserSchema.parse` 严格守着（漏发即抛）。
+      //
+      // 两个键走同一个循环而不是各写一行：它们是同一件事（迁移补缺省），写成两行时
+      // 后端再加一个同类派生字段就会漏掉第三行，而漏掉的后果与不补完全一样（老用户
+      // 集体登出）。
+      const MIGRATED_ARRAY_KEYS = ['menus', 'permissions'] as const;
+      const rawUser: Record<string, unknown> = { ...(s.user as unknown as object) };
+      for (const key of MIGRATED_ARRAY_KEYS) {
+        if (rawUser[key] === undefined || rawUser[key] === null) rawUser[key] = [];
+      }
+      // 补完默认后再守门：这里用 safeParse 而非 parse —— 老快照里万一还有别的字段
+      // 漂移，判**无会话**（返回 false，路由守卫走登录页）比 parse 抛错把整个 setup
+      // 炸掉好。认证链路的守门口径见 `views/auth/sessionSchema.ts` 文件头。
+      const parsed = currentUserSchema.safeParse(rawUser);
+      if (!parsed.success) return false;
       token.value = s.token;
       refreshTokenValue = s.refresh_token ?? null;
-      setUser(s.user);
+      setUser(parsed.data as CurrentUser);
       // 2026-10-09 新增：起 access token 保活定时器（本路径不经过 http.ts 的
       // persistTokens，必须在此补一次；函数幂等，重复调用只是重排）。
       ensureAccessTokenKeepalive();
@@ -230,6 +257,8 @@ export const useAuthStore = defineStore('auth', () => {
   // ===== getters（标量：computed 属性不带括号）=====
   const isAuthenticated = computed(() => !!token.value && !!user.value);
   const roles = computed<string[]>(() => user.value?.roles ?? []);
+  /** 权限点 code 全集（后端按账号角色展开后下发，RBAC 面板上线新增）。 */
+  const permissions = computed<string[]>(() => user.value?.permissions ?? []);
   const menus = computed<MenuNode[]>(() => user.value?.menus ?? []);
   const boundShelves = computed<string[]>(() => user.value?.shelf_ids ?? []);
   const activeShelfId = computed<string | null>(() => boundShelves.value[0] ?? null);
@@ -239,7 +268,22 @@ export const useAuthStore = defineStore('auth', () => {
   const isDummyAuthActive = computed(() => isDummyAuthActiveValue.value);
 
   // ===== getters（函数式：computed 返回函数，调用形态保留 auth.hasRole('X')）=====
-  const hasRole = computed(() => (role: string) => roles.value.includes(role));
+  //
+  // ⚠️⚠️ 2026-10-14 **ADMIN 通配短路 —— 本仓最高危的一处**。
+  //
+  // 后端把 ADMIN 定为元角色（对所有菜单 / 权限点 / 端点通配放行），而 `/iam/me` 的
+  // `roles` 里出现的是 `'ADMIN'` 这个字符串本身。**枚举精确匹配**的 `hasRole('MANAGER')`
+  // 对一个「只被授予了 ADMIN」的账号一律返回 false ⇒ 前端全站无入口：`isManager` /
+  // `canSplit` / 路由 `meta.allowRoles` / 菜单树全关。而**页面表现是空白页而不是报错** ——
+  // 首个被授予 ADMIN 的管理员当场撞上，且没有任何线索指向「权限判定漏了通配」。
+  // ⇒ `hasRole` 对 `roles` 含 `'ADMIN'` 的账号必须对**任意** x 返回 true。
+  const isAdmin = computed(() => roles.value.includes('ADMIN'));
+  const hasRole = computed(() => (role: string) => isAdmin.value || roles.value.includes(role));
+  /** 权限点闸门（RBAC 面板上线）。`roles` 含 ADMIN 时同样通配放行（理由同上）。
+   *  非 ADMIN 账号按后端下发的 `permissions` 全集精确判定。 */
+  const hasPermission = computed(
+    () => (code: string) => isAdmin.value || permissions.value.includes(code),
+  );
   const hasMenuCode = computed(() => (code: string) => {
     const stack: MenuNode[] = [...menus.value];
     while (stack.length > 0) {
@@ -270,7 +314,12 @@ export const useAuthStore = defineStore('auth', () => {
   const loginMutation = useMutation<CurrentUser, ApiError, LoginCredentials>({
     mutationKey: ['auth', 'login'],
     mutationFn: async (creds) => {
-      const resp = await apiLogin(creds.username, creds.password);
+      // 2026-10-14：接 `loginResponseSchema.parse` 守门（RBAC 面板上线）。登录响应里的
+      // user 是**全站第一个** CurrentUser —— 它决定侧栏、路由守卫与全部权限闸门，
+      // 缺 `permissions` 时后端这次没发就等于「权限点全集为空」⇒ 该账号全站无入口且
+      // 静默。这里是第一道闸，parse 失败会落到 onError（用户看到登录失败）而不是
+      // 带着半份 user 进系统。
+      const resp = loginResponseSchema.parse(await apiLogin(creds.username, creds.password));
       token.value = resp.token;
       refreshTokenValue = resp.refresh_token ?? null;
       // 必须在 saveToStorage() 之前：saveToStorage 读 user.value
@@ -347,10 +396,18 @@ export const useAuthStore = defineStore('auth', () => {
    *  全局前置守卫）。 */
   async function refreshOrLogout(router: { replace: (p: string) => void }): Promise<boolean> {
     try {
-      const u = await apiMe();
-      // 兼容老后端（没有 menus 字段）
-      u.menus = u.menus ?? [];
-      setUser(u);
+      // 2026-10-14：接 `currentUserSchema.parse` 守门，并**删除**原先那条给 `menus`
+      // 补默认值的行内手工补丁 —— 补丁只覆盖 menus 一个键，后端漏发 `permissions` 时
+      // 同样会静默变成「权限点全集为空」⇒ 该账号全站无入口且不报错。守门放进 schema
+      // 统一表达（menus / permissions 都显式声明为必填数组），补默认值的事只留给
+      // `loadFromStorage` 的旧快照迁移（那条路径读的是 localStorage，不是 wire）。
+      //
+      // ⚠️ 这是一处**允许的 api → views 运行时边**：会话状态源是 Pinia store，不经过
+      // 任何 TanStack Query ⇒ 没有 queryFn / mutationFn 可以承载守门点。失败走
+      // forceLogout（catch 分支），用户被送回登录页，与「token 失效」的表现一致 ——
+      // 对用户来说这两件事的处理动作本来就相同。
+      const u = currentUserSchema.parse(await apiMe());
+      setUser(u as CurrentUser);
       return true;
       // 失败分支统一委托给 forceLogout(router)，避免两处
       // 「清 state + removeItem + 派发 + 跳转」各写一份而漂移。
@@ -366,14 +423,19 @@ export const useAuthStore = defineStore('auth', () => {
   function initDummyAuth(): void {
     if (!isDummyAuthRequested()) return;
 
+    // 2026-10-14（RBAC 面板上线）：`roles` 加 `'ADMIN'` —— dummy 会话要能看全所有
+    // 入口（含新建的 /iam/roles 路由），而 ADMIN 在 hasRole / hasPermission 里是通配
+    // 短路。`permissions` 置空数组是刻意的：dummy 账号靠 ADMIN 通配拿到全部权限，
+    // 显式列一份权限点只会让「新增权限点后忘了改 fixture」变成静默缺闸。
     setUser({
       id: '1999999999001',
       username: 'dev-admin',
       full_name: '开发模式管理员',
       is_active: true,
-      roles: ['MANAGER', 'SHELF_ACCOUNT'],
+      roles: ['ADMIN', 'MANAGER', 'SHELF_ACCOUNT'],
       shelf_ids: [],
       menus: ADMIN_MENUS,
+      permissions: [],
     });
     token.value = 'dummy-dev-token';
     refreshTokenValue = 'dummy-dev-refresh';
@@ -414,12 +476,15 @@ export const useAuthStore = defineStore('auth', () => {
     token,
     isAuthenticated,
     roles,
+    permissions,
     menus,
     boundShelves,
     activeShelfId,
     isWildcardShelfAccount,
     isDummyAuthActive,
+    isAdmin,
     hasRole,
+    hasPermission,
     hasMenuCode,
     canOperateShelf,
     getAuthHeader,

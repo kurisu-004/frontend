@@ -8,8 +8,9 @@
 // `src/views/inspection/inspectionColumnDefs.ts`：工厂函数接依赖、返回 `ColumnDef[]`，
 // `cellRender` 闭包持传入的 helper（**函数形态**，不是值快照）。
 //
-// ⚠️ 「操作」列**不在**本工厂里：它受 `canManageBatches` 控制，且必须 `fixed="right"`，
-// 两种形态都不进 defs（见 `PartBatchMonitorBody.vue` 里的字面量 `<el-table-column>`）。
+// ⚠️ 「操作」列**不在**本工厂里：它受 `canSplitBatch` / `canCancelBatch` 控制（两个
+// 权限点各自 gate 对应按钮），且必须 `fixed="right"`，两种形态都不进 defs（见
+// `PartBatchMonitorBody.vue` 里的字面量 `<el-table-column>`）。
 //
 // ⚠️ `useColumnVisibility` / `useColumnDrag` 两侧的持久化键是 `part_batch_monitor`，
 // 列 `key` 集合不能随意改名 —— 两个 composable 都是 lenient 策略（未知 key 视为可见、

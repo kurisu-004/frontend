@@ -15,11 +15,13 @@
 //    两个访问面落同一批 ref，无双写分裂。
 // 4. 不 import vue-router：route/router 逻辑留壳（store 需在 node 单测无 router 实例化）。
 
+import { computed } from 'vue';
 import { defineStore } from 'pinia';
 // 2026-09-26：迁移到 Pinia store useAuthStore（替代原 useAuthSession 模块级单例）。
 // 函数式 getter 保留调用形态 auth.hasRole('X')，store proxy 自动解包嵌套 ref。
 import { useAuthStore } from '@/stores/auth';
 import { useColumnVisibility, type ColumnDef } from '@/composables/useColumnVisibility';
+import { PART_DRAWING_PRINT_PERMISSION } from '@/utils/partsPermissions';
 import { usePartsListQuery } from './usePartsListQuery';
 import { usePartsColumnFilters } from './usePartsColumnFilters';
 import { usePartBatchSelection } from './usePartBatchSelection';
@@ -45,9 +47,16 @@ export const usePartsListStore = defineStore('parts-list', () => {
   // 函数式 getter 保留调用形态：auth.hasRole('X') 仍带括号。
   const auth = useAuthStore();
   const isCncProgrammer = auth.hasRole('CNC_PROGRAMMER');
-  // PR-I 2026-07-20：INSPECTOR 看不到导入 / 批量打印 / 下发按钮
+  // PR-I 2026-07-20：INSPECTOR 看不到导入按钮
   // 行内编辑权限：与后端 POST /parts/{id}/update 一致（MANAGER / CLERK）
   const canEdit = auth.hasRole('MANAGER') || auth.hasRole('CLERK');
+  // 2026-10-14：批量打印入口（toggle + `PartsBatchBar`）的判据与后端
+  // `POST /parts/print-drawing-batch` 对齐 —— 它是权限点 `part.drawing.print`，不再跟
+  // 角色枚举走（权限可在 RBAC 面板收回 / 授予，角色判据会与后端分叉：可见却 403、
+  // 授权了却看不见）。默认矩阵下 MANAGER / CLERK 行为不变；INSPECTOR / CNC_PROGRAMMER
+  // 持有该点，现在也能看到入口 —— 这是与后端对齐的预期变化。
+  // 导入按钮与行内编辑仍走 canEdit，不受这里影响。
+  const canBatchPrint = computed(() => auth.hasPermission(PART_DRAWING_PRINT_PERMISSION));
 
   // ============ el-table getter：壳在 setup 里注册（PartsTable 组件 ref 在壳模板上）============
   let tableGetter: PartsListTableGetter = () => null;
@@ -94,6 +103,7 @@ export const usePartsListStore = defineStore('parts-list', () => {
     print,
     dispatch,
     canEdit,
+    canBatchPrint,
     isCncProgrammer,
     columnVisibility,
     columnDefs,

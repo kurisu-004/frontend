@@ -84,6 +84,9 @@ function makeUser(userId: string, shelfIds: string[]): CurrentUser {
     roles: ['SHELF_ACCOUNT'],
     shelf_ids: shelfIds,
     menus: [],
+    // 2026-10-14：CurrentUser 新增必填 permissions（RBAC 面板上线）。本 spec 断言的是
+    // 货架候选池，不涉及任何权限点闸门 ⇒ 空数组即可。
+    permissions: [],
   };
 }
 

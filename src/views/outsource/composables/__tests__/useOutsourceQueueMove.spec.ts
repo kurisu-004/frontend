@@ -29,7 +29,8 @@
 //   - M11：mutationKey 是 ['outsource-queue', 'move']。
 //   - M12：失效的域集合 = 快照前缀 + 单工序看板前缀（顺序：先快照后看板）。
 //   - M13：失败（onError）也失效同两个域 —— 409 OCC 说明本端副本已过期，只能重拉对账。
-//   - M14：canMove 与后端 require_any_role([Manager, Clerk, Inspector]) 对齐。
+//   - M14：canMove 由 `outsource.move` 权限点判定（2026-10-15 由角色集迁来）。
+//   - M20：无 `outsource.move` 权限点 → 发送 / 回收两个包装首部早退，零请求。
 //   - M15：出参缺 version → mutationFn 的 Zod 守门抛错（契约漂移不会静默通过）。
 //   - M16：`shipment_id` / `new_process_id` 键整个缺失（skip_serializing_if）仍放行
 //     （schema 必须 .nullish()，用 .nullable() 会在真实响应上抛错）。
@@ -51,7 +52,7 @@
 // 测试策略：
 //   - vi.mock('@/api/outsource') 桩掉 moveOutsourceBatch —— 只关心入参形态与调用次数；
 //   - vi.mock('element-plus')：ElMessage 桩成 no-op；
-//   - vi.mock('@/stores/auth')：只桩 useOutsourceQueueMove 消费的那一面（hasRole），
+//   - vi.mock('@/stores/auth')：只桩 useOutsourceQueueMove 消费的那一面（hasPermission），
 //     避免把整个 auth store 拉进本 spec；
 //   - app.use(VueQueryPlugin) + 传 QueryClient，并 vi.spyOn(qc, 'invalidateQueries')
 //     验证失效链的 queryKey 序列。
@@ -73,11 +74,12 @@ vi.mock('@/api/outsource', () => ({
   fetchOutsourceQueueProcess: vi.fn(),
 }));
 
-/** 角色桩：默认三角色都有权；用例内可改。 */
-const roles = vi.hoisted(() => ({ list: ['MANAGER', 'CLERK', 'INSPECTOR'] as string[] }));
+/** 权限点桩：默认 `outsource.move` 放行；用例内可改。
+ *  2026-10-15：canMove 与两个包装的入口闸由角色判定迁到 `outsource.move` 权限点。 */
+const permissions = vi.hoisted(() => ({ list: ['outsource.move'] as string[] }));
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
-    hasRole: (r: string) => roles.list.includes(r),
+    hasPermission: (code: string) => permissions.list.includes(code),
   }),
 }));
 
@@ -202,7 +204,7 @@ function expectOutsourceDomainsInvalidated(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  roles.list = ['MANAGER', 'CLERK', 'INSPECTOR'];
+  permissions.list = ['outsource.move'];
   testQueryClient = new QueryClient({
     defaultOptions: { mutations: { retry: 0 }, queries: { retry: 0 } },
   });
@@ -386,22 +388,53 @@ describe('useOutsourceQueueMove — 外协收发写操作', () => {
     expectOutsourceDomainsInvalidated();
   });
 
-  it('M14：canMove 与后端 require_any_role([Manager, Clerk, Inspector]) 对齐', async () => {
+  it('M14：canMove 由 `outsource.move` 权限点判定（2026-10-15 由角色集迁来）', async () => {
     const q = testApp.runWithContext(() => useOutsourceQueueMove());
     expect(q.canMove.value).toBe(true);
 
-    for (const role of ['MANAGER', 'CLERK', 'INSPECTOR']) {
-      roles.list = [role];
-      const q2 = testApp.runWithContext(() => useOutsourceQueueMove());
-      expect(q2.canMove.value).toBe(true);
-    }
-    // 少放一个角色 ⇒ 用户点了吃 40300，所以非授权角色必须为 false
-    roles.list = ['WORKER'];
+    // 权限点被收回 → false（角色不再参与判定）
+    permissions.list = [];
     const q3 = testApp.runWithContext(() => useOutsourceQueueMove());
     expect(q3.canMove.value).toBe(false);
-    roles.list = [];
+
+    // 别的权限点不管用
+    permissions.list = ['batch.split'];
     const q4 = testApp.runWithContext(() => useOutsourceQueueMove());
     expect(q4.canMove.value).toBe(false);
+  });
+
+  it('M20：无 outsource.move 权限点 → 发送 / 回收两个包装都在首部早退（零请求）', async () => {
+    // 2026-10-15 新增的行为变更：改前两个包装是零闸门（拖拽路径不设防；右键路径仅由看板
+    // 菜单侧的角色版 canMove 先闸「回收生产」，包装入口不设防），后端提交时以 403 兜底；
+    // 迁到权限点后无权账号在包装入口即早退（warning + 不发请求），早退仍走一次失效对账
+    // （与 version / 公司守卫同款）。
+    const { ElMessage } = await import('element-plus');
+    permissions.list = [];
+    const q = testApp.runWithContext(() => useOutsourceQueueMove());
+
+    const sent = await q.sendToCompany({
+      candidate: approvalCandidate,
+      companyId: '9000000000001',
+    });
+    const received = await q.receiveToProduction({
+      companyId: '9000000000001',
+      batch: heldBatch,
+    });
+
+    expect(sent).toBe(false);
+    expect(received).toBe(false);
+    expect(realMoveOutsourceBatch).not.toHaveBeenCalled();
+    expect(ElMessage.warning).toHaveBeenCalledWith('没有外协收发的权限');
+    // 两个包装各早退一次 → 两轮失效对账（各自快照 + 看板前缀）
+    const keys = vi
+      .mocked(testQueryClient.invalidateQueries)
+      .mock.calls.map((c) => (c[0] as { queryKey: readonly unknown[] }).queryKey);
+    expect(keys).toEqual([
+      ['outsource-queue', 'snapshot'],
+      ['outsource-queue', 'process'],
+      ['outsource-queue', 'snapshot'],
+      ['outsource-queue', 'process'],
+    ]);
   });
 
   it('M15：出参缺 version → mutationFn 的 Zod 守门抛错（契约漂移不会静默通过）', async () => {

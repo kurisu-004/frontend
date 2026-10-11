@@ -6,7 +6,7 @@
     -->
     <el-card shadow="never" class="filter-card">
       <div class="filter-row">
-        <el-button type="success" @click="onNew">
+        <el-button v-if="canManageCompanies" type="success" @click="onNew">
           <el-icon><Plus /></el-icon><span>新增外协公司</span>
         </el-button>
         <el-button @click="onResetFilters">
@@ -77,6 +77,7 @@
         <el-table-column label="操作" min-width="220" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
+              v-if="canManageCompanies"
               link
               type="primary"
               size="small"
@@ -91,6 +92,7 @@
               >对账</el-button
             >
             <el-button
+              v-if="canManageCompanies"
               link
               type="danger"
               size="small"
@@ -169,10 +171,7 @@
       </el-form>
       <template #footer>
         <el-button @click="store.dialogs.visible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="store.dialogs.saving"
-          @click="store.dialogs.onSave"
+        <el-button type="primary" :loading="store.dialogs.saving" @click="store.dialogs.onSave"
           >保存</el-button
         >
       </template>
@@ -190,7 +189,10 @@
 //   3. 编辑 / 新建合并为一个对话框，保存走 `POST /{id}/update`（**必传 `version`** 与
 //      `process_ids` 三态）—— 此前 onSave 漏传 version，后端本轮已把它设为必填，漏传
 //      恒 422，等于编辑功能 100% 失败（本次修掉的线上缺陷）。
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+//
+// 2026-10-15（RBAC 第二批）：「新增 / 编辑 / 删除」三个入口按 `outsource.company.manage`
+// 权限点 gate（无权限不渲染）；「对账」是只读跳转，不受闸。
+import { onBeforeUnmount, onMounted, ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import type { TableInstance } from 'element-plus';
 import { Plus, RefreshLeft } from '@element-plus/icons-vue';
@@ -199,6 +201,8 @@ import ColumnDragHandle from '@/components/ColumnDragHandle.vue';
 import { columnIdentifier, useColumnDrag } from '@/composables/useColumnDrag';
 import { resolveDraggable } from '@/composables/useColumnVisibility';
 import { useDialogSize } from '@/composables/useDialogSize';
+import { useAuthStore } from '@/stores/auth';
+import { OUTSOURCE_COMPANY_MANAGE_PERMISSION } from '@/utils/outsourcePermissions';
 import { useOutsourceCompanyListStore } from './composables/useOutsourceCompanyListStore';
 import type { OutsourceCompanySchema } from './composables/outsourceListSchema';
 // 2026-10-09：`outsourceCompanyColumnDefs.ts` 用 h() 直挂 ElTag 渲染「状态」列，而
@@ -209,6 +213,16 @@ import 'element-plus/es/components/tag/style/css';
 
 const router = useRouter();
 const companyDlg = useDialogSize({ desktopWidth: 520 });
+
+// 消费侧禁止解构 auth store（store proxy 已自动解包 ref）。
+const auth = useAuthStore();
+
+/** 外协公司管理权限闸（`outsource.company.manage` 权限点，2026-10-15 新增）——
+ *  「新增 / 编辑 / 删除」三个入口按它显隐；「对账」是只读跳转（去已发零件页），
+ *  不受本闸。无权限时不渲染入口，而不是渲染后禁用（不给点了必然 403 的按钮）。 */
+const canManageCompanies = computed<boolean>(() =>
+  auth.hasPermission(OUTSOURCE_COMPANY_MANAGE_PERMISSION),
+);
 
 // store 必须在本组件 setup 内首调（不变量 #1：切片链路上的 onMounted / onBeforeUnmount
 // 会绑到首个创建 store 的组件 = 本组件）。

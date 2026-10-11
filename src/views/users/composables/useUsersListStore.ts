@@ -24,6 +24,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { defineStore } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
+import { z } from 'zod';
 import {
   addUserRole,
   bindWxIdentity,
@@ -37,6 +38,10 @@ import {
   updateUser,
   type AddUserRolePayload,
 } from '@/api/iam';
+// 2026-10-14：角色下拉候选改走 RBAC 面板的角色列表端点（自定义角色如 QC_LEAD 无法写进
+// 字面量表）。守门复用面板域 schema，不在本域复制一份。
+import { listRoles } from '@/api/rbac';
+import { roleDefListSchema } from '@/views/iam/roles/composables/rbacSchema';
 import { qk } from '@/composables/queries/keys';
 import { useColumnVisibility } from '@/composables/useColumnVisibility';
 import { useListStatePersist } from '@/composables/useListFilterPersist';
@@ -46,7 +51,12 @@ import {
   type UsersColumnActions,
   type UsersTextFilter,
 } from '../usersColumnDefs';
-import { wxIdentityOrNullSchema, type UserOutData, type UserRoleOutData } from '../usersSchema';
+import {
+  userRoleOutSchema,
+  wxIdentityOrNullSchema,
+  type UserOutData,
+  type UserRoleOutData,
+} from '../usersSchema';
 import { usersErrorText } from '../usersErrorText';
 import { DEFAULT_PASSWORD, SHELF_SCOPED_ROLE } from '../usersConstants';
 import { useUsersQuery } from './useUsersQuery';
@@ -141,7 +151,13 @@ export const useUsersListStore = defineStore('users-list', () => {
     const e = listQuery.error.value;
     return e ? e.message : null;
   });
-  const emptyText = computed<string>(() => errorMsg.value ?? '暂无账号');
+  // 2026-10-14：Zod 守门失败时 `e.message` 是 issues 的 JSON 数组，直接渲进空态就是
+  // 把契约漂移暴露给管理员。经 `usersErrorText` 收口后，非 ZodError（ApiError / 网络错）
+  // 仍逐字透传 `e.message`，行为不变。
+  const emptyText = computed<string>(() => {
+    const e = listQuery.error.value;
+    return e ? usersErrorText(e, '暂无账号') : '暂无账号';
+  });
 
   /** 表头筛选 confirm 的统一入口（页码拨回 1）。改 search 不动 page 会停在「第 5 页但
    *  只有 1 页结果」的空态。 */
@@ -442,6 +458,9 @@ export const useUsersListStore = defineStore('users-list', () => {
    * 40901 单独分支：它是 OCC 冲突（数据被他人改过），提示与动作都与业务失败不同 ——
    * warning 而非 error，并**顺带重拉列表**，否则用户拿着列表里的旧 version 再点一次
    * 必然再次冲突。
+   *
+   * 其余一律经 `usersErrorText` 收口：Zod 守门失败时 `e.message` 是 issues 的 JSON
+   * 数组，不能直接甩给管理员（见 `../usersErrorText`）。
    */
   async function handleWriteError(e: Error & { code?: number }, fallback: string): Promise<void> {
     const code = e?.code;
@@ -455,10 +474,10 @@ export const useUsersListStore = defineStore('users-list', () => {
       formFocusUsername.value = true;
     }
     if (code === USER_NOT_FOUND_CODE) {
-      ElMessage.error(e.message ?? '账号不存在');
+      ElMessage.error(usersErrorText(e, '账号不存在'));
       return;
     }
-    ElMessage.error(WX_BIND_ERROR_TEXT[code as number] ?? e?.message ?? fallback);
+    ElMessage.error(WX_BIND_ERROR_TEXT[code as number] ?? usersErrorText(e, fallback));
   }
 
   const createMutation = useMutation({
@@ -510,10 +529,16 @@ export const useUsersListStore = defineStore('users-list', () => {
    * 用 useMutation 而不是 useQuery：它跟着「加完 / 移完」这两个用户动作走，缓存留着只会
    * 给出上一份角色列表。`mutationKey` 写字面量（全仓写 mutation 一律如此，无一处从 `qk`
    * 工厂取）—— 它不进任何 query 缓存，登记 queryKey 只会留下一个零消费者的死键。
+   *
+   * 2026-10-14：mutationFn 接 `z.array(userRoleOutSchema).parse(...)` 守门
+   * （**复用既有 schema，不新写一份**）。改前是裸调 `listUserRoles`：后端返回非数组时
+   * `rolesList.value = data` 把垃圾塞进渲染源，弹窗渲染成 `v-for` 报错或空白 —— 而
+   * 「加载角色失败」这条提示永远不会出现，用户看到的是一个打不开的对话框。
    */
   const rolesMutation = useMutation({
     mutationKey: ['users', 'list-roles'],
-    mutationFn: (userId: string) => listUserRoles(userId),
+    mutationFn: async (userId: string) =>
+      z.array(userRoleOutSchema).parse(await listUserRoles(userId)),
     onSuccess: (data) => {
       rolesList.value = data;
     },
@@ -523,7 +548,15 @@ export const useUsersListStore = defineStore('users-list', () => {
   function fetchRoles(): Promise<void> {
     const userId = rolesUserId.value;
     if (!userId) return Promise.resolve();
-    return rolesMutation.mutateAsync(userId).then(() => undefined);
+    // 末尾的 catch 吞掉 rejection：`openRoles` 是 `void fetchRoles()` 调用本函数
+    // （fire-and-forget），没有 await 接 ⇒ 一条 rejection 会变成 unhandledRejection。
+    // 错误本身已由 mutation 的 onError 提示过（`handleWriteError`），这里只保证
+    // 「弹窗保持打开、用户能重试」这个状态。2026-10-14 加 parse 守门后这条路径的
+    // 失败概率从「网络抖动」扩大到「后端契约漂移」，不再靠运气。
+    return rolesMutation
+      .mutateAsync(userId)
+      .then(() => undefined)
+      .catch(() => undefined);
   }
 
   const addRoleMutation = useMutation({
@@ -728,14 +761,39 @@ export const useUsersListStore = defineStore('users-list', () => {
     },
   };
 
-  // ============ 切片：options（角色对话框的货架候选）============
-  // 共享基础数据层（useProductionShelvesQuery）：货架是跨页面共用的基础数据，30s 内与
-  // 其它页复用同一份缓存。**不限 zone**（两种区的架都列出来，label 里标「生产 / 品检」），
-  // 沿用旧版角色对话框的候选口径。
+  // ============ 切片：options（角色对话框的两组候选）============
+  //
+  // 角色候选：2026-10-14 起走 `GET /iam/roles`（`qk.rolesList()`）动态供给，与 RBAC 面板
+  // 左列表**共用同一条 queryKey** ⇒ 同屏去重（TWO 消费方同一份数据）。
+  // 守门复用面板域的 `roleDefListSchema`（`.strict()`，面板是写侧）；这里只消费 items，
+  // 不复制 schema。已停用的角色不进下拉候选（不能把新授权授给一个停用角色），但仍
+  // 已在账号上的那几行照常显示/可移除 —— 移除走的是另一条端点，与候选表无关。
+  const roleOptionsQuery = useQuery({
+    queryKey: computed(() => qk.rolesList()),
+    queryFn: async () => roleDefListSchema.parse(await listRoles()),
+    enabled: restored,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+  });
+  /** 错误桥接：`GET /iam/roles` 失败时角色下拉会静默为空（对话框正常打开、候选 0 项），
+   *  不提示的话用户只会以为「系统里没有角色」。与 wxIdentityQuery 同款 watch 形态。 */
+  watch(roleOptionsQuery.error, (e) => {
+    if (e) ElMessage.error(usersErrorText(e, '角色候选加载失败'));
+  });
+  /** 下拉选项：显示 `name`（中文），提交 `code`（后端认的稳定键）。 */
+  const roleOptions = computed(() =>
+    (roleOptionsQuery.data.value ?? [])
+      .filter((r) => r.is_active)
+      .map((r) => ({ value: r.code, label: r.name })),
+  );
+
+  // 货架候选走共享基础数据层（useProductionShelvesQuery）：货架是跨页面共用的基础数据，
+  // 30s 内与其它页复用同一份缓存。**不限 zone**（两种区的架都列出来，label 里标「生产 /
+  // 品检」），沿用旧版角色对话框的候选口径。
   const shelvesQuery = useProductionShelvesQuery({ is_active: true, limit: 200 });
   const shelfOptions = computed(() => shelvesQuery.data.value?.items ?? []);
 
-  const options = { shelfOptions };
+  const options = { roleOptions, shelfOptions };
 
   // ============ 列定义 + 列可见性 ============
   const columnDefs = buildUsersColumnDefs({ usernameFilter, activeFilter, actions });

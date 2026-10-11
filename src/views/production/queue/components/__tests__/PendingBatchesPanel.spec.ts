@@ -16,6 +16,9 @@
 //   - H4b：onStart → emit hover-process(null)（防御性复位：拖拽开始即清零，覆盖 onEnd
 //     尚未触发的窗口；不是某条具体残留场景的回归守卫）。
 //   - H5：渲染 batch 列表（BatchCard）+ 全选 / 自动下发工具条基本接线。
+//   - H5d：canDispatch=false → 「自动下发」按钮收掉（2026-10-15 权限闸）。
+//   - H5e：canDispatch=false → 直调 onAutoDispatch 早退（零请求 + warning；按钮 v-if
+//     之外的第二道闸，2026-10-15 权限闸）。
 //   - H6：卡片右键 → 注入的 opener 被调一次，第三参区域标签为 'pending'。
 //
 // 测试策略：
@@ -36,6 +39,17 @@ import type { UseQueueDispatchReturn } from '../../composables/useQueueDispatch'
 const captured = vi.hoisted(() => ({
   calls: [] as { list: unknown; options: Record<string, unknown> }[],
 }));
+
+/** H5e 断言 warning 文案用（CLAUDE.md：真实 ElMessage 会碰 document / 内部
+ *  normalizeAppendTo，桩成 no-op 记断言）。 */
+const elMessage = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+  info: vi.fn(),
+}));
+
+vi.mock('element-plus', () => ({ ElMessage: elMessage }));
 
 vi.mock('vue-draggable-plus', () => ({
   // 必须自己复刻 vue-draggable-plus 的重载判定，否则二参重载的 options 会被误当 list。
@@ -175,6 +189,8 @@ function mountPanel(
     selected?: string[];
     setSelectedIds?: (ids: string[]) => void;
     autoDispatchMutate?: ReturnType<typeof vi.fn>;
+    /** 2026-10-15：下发权限点（板级派生后透传），默认 true 保持存量用例原语义。 */
+    canDispatch?: boolean;
     /** 覆盖 provide（本容器只消费 `openBatchContextMenu`，缺省 noop 是板级契约的兜底）。 */
     provided?: Record<string, unknown>;
   } = {},
@@ -190,6 +206,7 @@ function mountPanel(
         mutate: extra.autoDispatchMutate ?? vi.fn(),
         isPending: ref(false),
       } as unknown as UseQueueDispatchReturn['autoDispatchMutation'],
+      canDispatch: extra.canDispatch ?? true,
     },
     global: { ...globalConfig, provide: extra.provided ?? {} },
   });
@@ -204,6 +221,7 @@ function capturedOptions(): Record<string, unknown> {
 describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
   beforeEach(() => {
     captured.calls.length = 0;
+    elMessage.warning.mockClear();
   });
 
   it('H1：Sortable 配置挂在源容器上，且带 list（本面板是可拖源，工序卡侧是纯目标）', async () => {
@@ -339,6 +357,37 @@ describe('PendingBatchesPanel（2026-10-02 拖入高亮事件源）', () => {
     await selected.find('.el-button-stub').trigger('click');
     expect(autoDispatchMutate).toHaveBeenCalledWith({ batchIds: ['3000000000009'] });
     selected.unmount();
+  });
+
+  it('H5d：canDispatch=false → 「自动下发」按钮整只收掉（2026-10-15 权限闸）', async () => {
+    // 与 H5b 同场景（有选中），只差权限点：按钮 v-if 收掉，用户看不到一个点下去必然
+    // 提示无权限的入口。onAutoDispatch 内的早退是第二道兜底（防 v-if 被改成 disabled）。
+    const wrapper = mountPanel([makeDto()], {
+      autoDispatchMutate: vi.fn(),
+      selected: ['3000000000009'],
+      canDispatch: false,
+    });
+    await flushPromises();
+    expect(wrapper.find('.el-button-stub').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('H5e：canDispatch=false → 直调 onAutoDispatch 早退（零请求 + warning）', async () => {
+    // H5d 只钉「按钮消失」（第一道闸）；这里仿 ProcessWorkTypeMappingTab.spec P10 的直调
+    // 形态，绕过 DOM 直接调写函数钉第二道闸 —— 零请求 + 无权限文案。少了这条，把
+    // onAutoDispatch 首行的早退删掉、只留 v-if 不会有任何测试信号。
+    const autoDispatchMutate = vi.fn();
+    const wrapper = mountPanel([makeDto()], {
+      autoDispatchMutate,
+      selected: ['3000000000009'],
+      canDispatch: false,
+    });
+    await flushPromises();
+    const vm = wrapper.vm as unknown as { onAutoDispatch: () => void };
+    vm.onAutoDispatch();
+    expect(autoDispatchMutate).not.toHaveBeenCalled();
+    expect(elMessage.warning).toHaveBeenCalledWith('没有下发批次的权限');
+    wrapper.unmount();
   });
 
   it('H5c：batches 为空 → 渲染空态（且不挂 Sortable 列表容器）', async () => {

@@ -67,6 +67,11 @@
 // 拦截器内的刷新逻辑。
 
 import { api, refreshClient, ApiError, cleanParams, normalizeListResult } from '@/api/http';
+// 2026-10-14：RBAC 面板上线，`CurrentUser` 新增必填 `permissions`，会话链路的三个守门
+// 点（`refreshTokens` 的响应、`login` 在 store 的 mutationFn、`me()` 在
+// `refreshOrLogout`）需要共享同一份 schema。值导入只出现在 `refreshTokens` 一处
+// —— 它是仓内允许的「无 queryFn 承载」例外形态，理由见该函数注释。
+import { loginResponseSchema } from '@/views/auth/sessionSchema';
 import type { CurrentUser, UserOut, UserRoleOut, UserListResult } from '@/types/user';
 import type {
   BindWxIdentityPayload,
@@ -127,9 +132,20 @@ export async function changeMyPassword(payload: ChangePasswordPayload): Promise<
  * 用 refreshClient（无拦截器）调，避免响应拦截器里的"40102 → refresh"链路
  * 二次触发本函数造成递归。
  *
+ * 2026-10-14：响应接 `loginResponseSchema.parse` 守门（RBAC 面板上线）。
+ *
+ * ⚠️ **本函数是 api 层运行时引域内 schema 的允许例外形态**，理由：它覆盖
+ * `http.ts::persistTokens` 的写盘（localStorage）与 `auth:tokens-refreshed` 事件的
+ * 载荷 —— 这两个都**没有 queryFn / mutationFn 承载**（token 生命周期发生在 axios 拦截器
+ * 里，不在任何 TanStack Query 的返回路径上）。漏守的后果最重：一份缺 `permissions` 的
+ * user 被写进 localStorage、并派发给 store 同步 state ⇒ 用户的权限点全集静默变空、
+ * 全站无入口且没有任何报错，而且**下一次刷新浏览器还会再经历一遍**（写进盘了）。
+ * 默认形态（`import type` + queryFn 守门）在这里覆盖不到。
+ *
  * 失败抛 ApiError：
  * - code === 40103 (BIZ_AUTH_REFRESH_INVALID) → 刷新失败，客户端应清 session 跳登录；
- * - code === 0 / 其它 → 见后端 envelope 语义。
+ * - code === 0 / 其它 → 见后端 envelope 语义；
+ * - parse 失败（契约漂移）→ ZodError，同样冒泡到拦截器的错误分支派发 `auth:logout`。
  */
 export async function refreshTokens(refresh_token: string): Promise<LoginResponse> {
   const resp = await refreshClient.post<{
@@ -141,7 +157,11 @@ export async function refreshTokens(refresh_token: string): Promise<LoginRespons
   if (env.code !== 0 || !env.data) {
     throw new ApiError(env.code, env.message || 'refresh failed');
   }
-  return env.data;
+  // 守门在**返回路径上**（不是把 parse 塞进 send 之前）：信封判据（code === 0）先过，
+  // 再校验 data 的形状。返回 parse 的结果而不是 env.data，让下游（persistTokens 写盘、
+  // auth:tokens-refreshed 事件载荷、auth store 的 listener）拿到的都是**已守过门**的
+  // 对象 —— 否则那三条路径各拿一份未校验的 user 各用各的。
+  return loginResponseSchema.parse(env.data) as LoginResponse;
 }
 
 // ===== 账号管理（2026-09-19 合并自 src/api/users.ts） =====

@@ -54,7 +54,8 @@ import type { SortDir } from '@/types/parts';
  *
  *  出参是 `OutsourceCompanyListOut`：**7 字段**的公司行（无 `created_at` / `updated_at`，
  *  2026-10-09 删 —— 两列零消费方却是纯粹的缓存抖动）+ 分页信封四字段。
- *  业务错：40001（入参形状）/ 40103（未登录）/ 40300（角色无权，HTTP 403）。 */
+ *  业务错：40001（入参形状）/ 40103（未登录）/
+ *  40300（无 outsource.view 权限点，HTTP 403）。 */
 /** `GET /outsource-companies` 的入参形态（后端 `OutsourceCompanyListQuery`，4 字段）。
  *  导出供 `composables/queries/keys.ts` 的键工厂与 query hook 复用（api 层是 wire
  *  契约的唯一定义处，沿 `ListShelvesParams` 等既有做法）。 */
@@ -111,7 +112,8 @@ export async function listCompaniesByProcess(processId: string): Promise<Outsour
  *  2026-10-09 契约对齐：出参改 `R<()>`（`data: null`），前端建完一律重拉列表 ——
  *  返整份详情（含工序映射 + 工序元数据）多一次往返，而消费方一个字段都不用。
  *  业务错：40001（`name` 空白）/ 21202 或 21214（公司名重名）/ 21203（`process_ids` 里的
- *  工序不存在或不是 OUTSOURCE / INHOUSE 类别）/ 40300（角色无权）。 */
+ *  工序不存在或不是 OUTSOURCE / INHOUSE 类别）/ 40300（无 outsource.company.manage
+ *  权限点）。 */
 export async function createOutsourceCompany(payload: OutsourceCompanyCreatePayload): Promise<void> {
   await api.post('/outsource-companies', payload);
 }
@@ -218,8 +220,9 @@ export async function submitOutsourceQuote(
   return resp.data;
 }
 
-/** POST /api/v2/outsource-quotes/{id}/approve —— SUBMITTED → APPROVED（MANAGER-only）。
- *  业务错：21301 / 21302（状态不允许）/ 40901（OCC 冲突）/ 40300（非 MANAGER）。 */
+/** POST /api/v2/outsource-quotes/{id}/approve —— SUBMITTED → APPROVED
+ *  （`outsource.quote.approve` 权限点）。业务错：21301 / 21302（状态不允许）/
+ *  40901（OCC 冲突）/ 40300（无对应权限点）。 */
 export async function approveOutsourceQuote(
   id: string,
   payload: OutsourceQuoteApprovePayload,
@@ -231,8 +234,9 @@ export async function approveOutsourceQuote(
   return resp.data;
 }
 
-/** POST /api/v2/outsource-quotes/{id}/reject —— SUBMITTED → REJECTED（MANAGER-only，
- *  `review_note` 必填）。业务错：21301 / 21302 / 40901 / 40001（`review_note` 空白）/ 40300。 */
+/** POST /api/v2/outsource-quotes/{id}/reject —— SUBMITTED → REJECTED
+ *  （`outsource.quote.approve` 权限点，`review_note` 必填）。业务错：21301 / 21302 /
+ *  40901 / 40001（`review_note` 空白）/ 40300（无对应权限点）。 */
 export async function rejectOutsourceQuote(
   id: string,
   payload: OutsourceQuoteRejectPayload,
@@ -349,15 +353,15 @@ export async function reconcileUpdateShipment(
 // ============================================================
 // 外协看板 (OutsourceQueue) — 2026-10-08 新增
 // 端点前缀 `/outsource-queue/*`（**无 alias**），读写合一的三件套。
-// 角色：读 Manager + Clerk + Inspector；move `require_any_role([Manager, Clerk,
-// Inspector])`（前端闸门见 views/outsource/composables/useOutsourceQueueMove.ts）。
+// 权限（2026-10-15 起与后端端点闸对齐）：读 `outsource.view`；move `outsource.move`
+// （前端闸门见 views/outsource/composables/useOutsourceQueueMove.ts）。
 // ============================================================
 
 /** GET /api/v2/outsource-queue/snapshot —— 外协看板 tab 标题双徽标（可发 / 在途）的
  *  唯一数据源。裸对象（**无分页信封、无 `total` 字段**）。
  *  `processes[]` 只含 `sendable_count + in_flight_count > 0` 的工序 ⇒ tab 集合必须与
  *  全量 OUTSOURCE 工序列表 join，否则某工序收发清零时该 tab 会凭空消失。
- *  业务错：40300（角色无权，HTTP 403）。 */
+ *  业务错：40300（无对应权限点，HTTP 403）。 */
 export async function fetchOutsourceQueueSnapshot(): Promise<OutsourceQueueSnapshotDto> {
   const resp = await api.get<OutsourceQueueSnapshotDto>('/outsource-queue/snapshot');
   return resp.data;
@@ -384,7 +388,7 @@ export async function fetchOutsourceQueueProcess(
  *  业务信封 —— 调用方必须自己保证 version 非空。
  *  业务错：20104（报价路径 `quote_id` / `direct` 都不传或同时传）/ 20121（批次不存在）/
  *  20706（工序链推不出下一道工序且未指定）/ 40901（OCC 冲突，HTTP 409）/
- *  40300（角色无权，HTTP 403）。 */
+ *  40300（无对应权限点，HTTP 403）。 */
 export async function moveOutsourceBatch(
   payload: OutsourceMoveRequestDto,
 ): Promise<OutsourceMoveResultDto> {

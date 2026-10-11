@@ -34,6 +34,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
 import type { Directive } from 'vue';
 // 供 vi.mock 的 importOriginal 泛型使用（@typescript-eslint/consistent-type-imports
@@ -83,6 +84,7 @@ vi.mock('@/api/process', () => ({
 }));
 
 import ProcessWorkTypeMappingTab from '../components/ProcessWorkTypeMappingTab.vue';
+import { useAuthStore } from '@/stores/auth';
 
 // ---------------------------------------------------------------- v-loading 桩
 // 2026-10-02 修：本桩把模板里 `v-loading` 的**每次求值**写进宿主元素的 data-loading
@@ -181,10 +183,30 @@ const EXISTING = {
   ],
 };
 
-async function mountTab() {
+async function mountTab(options: { canConfig?: boolean } = {}) {
+  const { canConfig = true } = options;
+  const pinia = createPinia();
+  setActivePinia(pinia);
   const wrapper = mount(ProcessWorkTypeMappingTab, {
-    global: { ...globalConfig, plugins: [[VueQueryPlugin, { queryClient: testQueryClient }]] },
+    global: {
+      ...globalConfig,
+      plugins: [pinia, [VueQueryPlugin, { queryClient: testQueryClient }]],
+    },
   });
+  await flushPromises();
+  // 2026-10-15：种入 production.config 权限点（真实 auth store；mount 后 pinia 才装到
+  // app 上，auth store setup 首行 useQueryClient 需要注入上下文）。无权限场景传
+  // { canConfig: false } —— 保存按钮不渲染、onSave 首行早退。
+  useAuthStore().user = {
+    id: 'u-worktype-mapping-test',
+    username: 'tester',
+    full_name: '测试账号',
+    is_active: true,
+    roles: [],
+    shelf_ids: [],
+    menus: [],
+    permissions: canConfig ? ['production.config'] : [],
+  };
   await flushPromises();
   return wrapper;
 }
@@ -523,5 +545,42 @@ describe('2026-10-02：右侧勾选区的渲染守卫与遮罩判据（ProcessWo
     await refetching;
     await flushPromises();
     expect(group().attributes('data-loading')).toBe('false');
+  });
+});
+
+// 2026-10-15（RBAC 面板第二批）：保存映射的权限闸（`production.config` 权限点）。
+describe('2026-10-15：保存映射的 production.config 权限闸（ProcessWorkTypeMappingTab）', () => {
+  it('P10：无权限点 → 保存按钮不渲染，onSave 首行早退（零请求）', async () => {
+    // 回归 guard：按钮 v-if 与 onSave 各守一次。无权限时既看不到入口，直调写函数
+    // 也不发整组替换请求（那是会清空映射的写口，比一般写操作更危险）。
+    const wrapper = await mountTab({ canConfig: false });
+    const vm = wrapper.vm as unknown as TabVm;
+
+    vm.onSelectWT(WT);
+    await flushPromises();
+
+    // 按钮 v-if 收掉（已选工种也无按钮）
+    expect(wrapper.find('.mock-button').exists()).toBe(false);
+
+    // 直调 onSave 兜底分支 → 零请求 + warning，且**不**弹加载失败等其它文案
+    vm.selectedProcessIds = ['190000000000001'];
+    await vm.onSave();
+    await flushPromises();
+    expect(setWorkTypeProcessesMock).not.toHaveBeenCalled();
+    expect(elMessage.warning).toHaveBeenCalledWith('没有生产配置的权限');
+  });
+
+  it('P10b：有权限点 → 保存按钮照常渲染（闸门没有误伤全权账号）', async () => {
+    const wrapper = await mountTab();
+    const vm = wrapper.vm as unknown as TabVm;
+    vm.onSelectWT(WT);
+    await flushPromises();
+    vm.selectedProcessIds = ['190000000000001'];
+    await flushPromises();
+
+    expect(wrapper.find('.mock-button').exists()).toBe(true);
+    await vm.onSave();
+    await flushPromises();
+    expect(setWorkTypeProcessesMock).toHaveBeenCalledTimes(1);
   });
 });

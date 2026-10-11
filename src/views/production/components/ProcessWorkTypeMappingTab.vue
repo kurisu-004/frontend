@@ -26,7 +26,7 @@
           <div class="right-title">
             <span>{{ mappingTitle }}</span>
             <el-button
-              v-if="selectedWT"
+              v-if="selectedWT && canConfig"
               type="primary"
               size="small"
               :loading="saveMutation.isPending.value"
@@ -76,6 +76,8 @@
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
+import { useAuthStore } from '@/stores/auth';
+import { PRODUCTION_CONFIG_PERMISSION } from '@/utils/productionPermissions';
 import {
   setWorkTypeProcesses,
   toWorkTypeProcessIds,
@@ -93,6 +95,16 @@ import type { Process } from '@/types/process';
 import { PROCESS_CATEGORY_LABEL } from '@/types/process';
 
 const qc = useQueryClient();
+// 消费侧禁止解构 auth store（store proxy 已自动解包 ref）。
+const auth = useAuthStore();
+
+/** 生产配置权限闸（`production.config` 权限点，2026-10-15 新增）—— 「保存映射」是
+ *  工序映射的整组替换写口，按权限点显隐 + onSave 首行早退。
+ *
+ *  ⚠️ **ShelfList 的「保存货架」刻意不加本闸**（有意取舍）：那个入口把「货架基本字段
+ *  （后端 MANAGER 角色守卫）」与「工序映射（production.config）」耦合在一次保存里，
+ *  给它加 `production.config` 会让被撤点的 MANAGER 连基本字段都存不了。 */
+const canConfig = computed<boolean>(() => auth.hasPermission(PRODUCTION_CONFIG_PERMISSION));
 
 // 左表：工种。共享 query + Zod 守门（此前裸调 listWorkTypes，零守门）。
 const wtQuery = useWorkTypesQuery({ limit: 200 });
@@ -231,6 +243,13 @@ const saveMutation = useMutation<
  * 兜底，而文案必须说清是哪一种 —— 早先统一弹「加载失败…请重新选择该工种」，
  * 在「其实只是还在加载」时是假提示。 */
 async function onSave(): Promise<void> {
+  // 权限闸（`production.config`，2026-10-15 新增）：按钮已按同一权限点收掉，这里是
+  // 第二道（防按钮 v-if 被改成 disabled / 挪位）。放在**首行**：无权限时先于任何
+  // 数据态判断早退，不发请求。
+  if (!canConfig.value) {
+    ElMessage.warning('没有生产配置的权限');
+    return;
+  }
   if (!selectedWT.value) return;
   if (mappingQuery.isPending.value) {
     ElMessage.error('工序映射仍在加载中，未做任何保存：请稍候再试');

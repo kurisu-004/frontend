@@ -13,6 +13,9 @@ import { useAuthStore } from '@/stores/auth';
 // 恢复长连接（WS 侧已在 4001 分支把 URL 置 undefined 停连）。api/dashboard.ts 不
 // import vue-router / stores/auth，依赖单向，不构成循环依赖。
 import { reconnectDashboard } from '@/api/dashboard';
+// 2026-10-14：菜单树降级目标（一个有 path 的节点）抽到跨域工具，供本守卫与登录页
+// 共用（登录页对自定义角色账号做同款回退）。
+import { findFirstMenuPath } from '@/utils/menu';
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -291,6 +294,28 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
+        // 2026-10-14 新增：RBAC 控制面板（角色权限）。
+        //
+        // ⚠️ `path` 与后端菜单表 `roles_list` 节点的 `path` 字段逐字一致（/iam/roles）：
+        // 它是浏览器可见的书签 URL，也是后端下发菜单时带的 path，改它会同时断掉用户已
+        // 收藏的链接与菜单下发。后端 API URL 是另一层（`/api/v2/iam/roles`），两层不
+        // 要求一致（沿 shelves 那条的既有做法）。
+        //
+        // `meta.icon` 用 `Lock`：与生产 t_menu.icon / adminMenus fixture 逐字一致（父节点
+        // auth_group 是 `Key`，两者刻意区分）。侧栏图标来自后端菜单树的同名 icon，而它
+        // 经 MenuTreeItem.vue 的 ICON_MAP 查表渲染 ⇒ `Lock` 必须在那张表内，否则静默不显示。
+        path: 'iam/roles',
+        name: 'IamRoles',
+        component: () => import('@/views/iam/roles/RolesPage.vue'),
+        meta: {
+          title: '角色权限',
+          icon: 'Lock',
+          // 与 adminMenus fixture / 后端菜单表的 code 逐字一致；守卫按它判
+          // 「这个账号的菜单树里有没有 roles_list」。
+          menuCode: 'roles_list',
+        },
+      },
+      {
         path: 'statistics',
         name: 'ProductionStats',
         component: () => import('@/views/statistics/ProductionStats.vue'),
@@ -298,6 +323,27 @@ const routes: RouteRecordRaw[] = [
           title: '生产统计',
           icon: 'DataAnalysis',
           menuCode: 'production_stats',
+        },
+      },
+      {
+        // 2026-10-13 新增：交期汇总邮件定时任务管理页。后端 mail_digest 域，5 个端点
+        // 全部 MANAGER 独占（权限走菜单 code，不另加 allowRoles）。
+        //
+        // ⚠️ **一级分组菜单「定时任务/邮件」（code `mail_group`、path NULL）没有前端路由**
+        // —— 它由后端菜单树下发，渲染成 `el-sub-menu`（见 `MenuTreeItem.vue` 的分支判定：
+        // 「有 path 且无 children」才渲染成可点的 `el-menu-item`）。照 `order_group` /
+        // `auth_group` 等既有分组节点的既有做法。
+        //
+        // ⚠️ `menuCode` 必须与后端 `seeds/menu.sql` 的 `mail_digest` code **逐字一致**：
+        // 不一致时路由守卫第 3 条（menuCode 不在菜单树 → 重定向到菜单树里一个有 path
+        // 的节点）会把用户踢出本页，且现象是「点菜单闪一下又回到别的页」。
+        path: 'mail/digest',
+        name: 'MailDigestSettings',
+        component: () => import('@/views/mail/digest/MailDigestSettings.vue'),
+        meta: {
+          title: '交期汇总邮件',
+          icon: 'Message',
+          menuCode: 'mail_digest',
         },
       },
       {
@@ -473,17 +519,8 @@ function treeContainsCode(tree: MenuNode[], code: string): boolean {
   return false;
 }
 
-/** DFS 在用户的菜单树中找第一个有 path 的节点路径；找不到返回 null。
- *  用作 menuCode 校验失败时的降级目标：避免再次陷入相同的菜单校验循环。 */
-function findFirstMenuPath(tree: MenuNode[]): string | null {
-  const stack: MenuNode[] = [...tree];
-  while (stack.length > 0) {
-    const n = stack.pop()!;
-    if (n.path) return n.path;
-    if (n.children.length > 0) stack.push(...n.children);
-  }
-  return null;
-}
+// 降级目标（菜单树里一个有 path 的节点）走共享工具 `findFirstMenuPath`：登录页对
+// 自定义角色账号做同款回退（见 `views/auth/LoginView.vue`），两处口径必须同源。
 
 // 全局前置守卫
 router.beforeEach(async (to, _from, next) => {
@@ -522,7 +559,7 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   // 3) menuCode 校验：菜单树中存在对应 code 即放行。
-  //    单一权限源。降级目标：用户菜单树中第一个可达路径；
+  //    单一权限源。降级目标：用户菜单树中一个有 path 的节点；
   //    若菜单树为空（极端情况）→ /login。
   const code = to.meta.menuCode;
   if (code && !treeContainsCode(auth.menus, code)) {

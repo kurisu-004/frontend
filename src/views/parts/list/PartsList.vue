@@ -51,7 +51,8 @@
         <!-- 操作组 -->
         <div class="filter-group filter-group--actions">
           <!-- INSPECTOR 看不到导入按钮（PR-I 2026-07-20）；
-               2026-08-05：CNC 与 INSPECTOR 同样对待（看不到导入/批量/下发） -->
+               2026-08-05：CNC 与 INSPECTOR 同样对待（看不到导入）。
+               批量打印入口的判据已独立成权限点（见下），不再与导入同闸门。 -->
           <el-button v-if="store.canEdit" @click="router.push('/parts/new?tab=pdf')">
             <el-icon><Document /></el-icon>
             <span>从 PDF/Excel 批量导入</span>
@@ -63,9 +64,12 @@
             <span>解析系统交期和订单号</span>
           </el-button>
 
-          <!-- 批量打印 toggle（2026-07-17 打印；INSPECTOR 不可见）。
+          <!-- 批量打印 toggle（2026-07-17 打印）。
+               2026-10-14：判据与后端 `POST /parts/print-drawing-batch` 对齐 —— 权限点
+               `part.drawing.print`（默认矩阵 MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER，
+               可在 RBAC 面板收回 / 授予），不再挂 canEdit。
                2026-10-10：同区块的「批量下发」按钮删除（下发功能已由扫码台接管）。 -->
-          <template v-if="store.canEdit">
+          <template v-if="store.canBatchPrint">
             <template v-if="!store.batch.batchMode">
               <el-button type="success" plain @click="store.batch.onEnterBatchMode">
                 <el-icon><Printer /></el-icon>

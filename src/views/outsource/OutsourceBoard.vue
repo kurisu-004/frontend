@@ -84,6 +84,7 @@ import { useQueryClient } from '@tanstack/vue-query';
 import { useProcessesQuery } from '@/composables/queries/useProcessesQuery';
 import { qk } from '@/composables/queries/keys';
 import { useAuthStore } from '@/stores/auth';
+import { BATCH_SPLIT_PERMISSION } from '@/utils/productionPermissions';
 import { showBatchContextMenu } from '@/composables/useBatchContextMenu';
 import type { BatchCardModel } from '@/types/batchCard';
 import type { BatchSplitSource } from '@/types/batchSplit';
@@ -228,13 +229,14 @@ provide<ComputedRef<string>>(
 );
 
 // ============================================================
-// 右键菜单（区域 × 角色 × 批次状态 × 报价路径 的派生在纯函数里，见 outsourceBatchMenuItems.ts）
+// 右键菜单（区域 × 权限点 × 批次状态 × 报价路径 的派生在纯函数里，见 outsourceBatchMenuItems.ts）
 // ============================================================
 
-/** 拆批权限闸 —— 与后端 `POST /batches/split` 的 `require_any_role([Manager, Clerk])`
- *  逐字对齐（Inspector 能收发但**不能**拆批）。与 `recall.canRecall` 当前同组角色，但
- *  那是两个端点各自独立的 RBAC 声明，不复用同一个布尔。 */
-const canSplit = computed<boolean>(() => auth.hasRole('MANAGER') || auth.hasRole('CLERK'));
+/** 拆批权限闸（2026-10-15 由角色判定迁到权限点 `batch.split`）—— RBAC 面板给自建
+ *  角色单独授予 / 收回拆批后，前端读同一个码才不会与后端放行集合分叉。与
+ *  `recall.canRecall`（`queue.recall`）默认同组角色，但那是两个端点各自独立的 RBAC
+ *  声明，不复用同一个布尔。 */
+const canSplit = computed<boolean>(() => auth.hasPermission(BATCH_SPLIT_PERMISSION));
 
 /** 「发送到外协公司」的目标集上游 —— 当前 tab 的公司列。
  *
@@ -312,7 +314,7 @@ provide<OpenOutsourceBatchMenu>(OPEN_OUTSOURCE_BATCH_MENU, (evt, batch, area, ct
   });
   if (items.length === 0) {
     // 文案按**空的原因**分级：三个权限闸全 false 才能断定「空」是权限造成的。全权
-    // 角色同样会遇到「有权但这一行没得可做」—— 未上架（shelf_id 为空串）且不可召回、
+    // 账号同样会遇到「有权但这一行没得可做」—— 未上架（shelf_id 为空串）且不可召回、
     // 余量 ≤ 1 不可拆、DIRECT 但 company_options 为空、当前 tab 没画出可投的公司列。
     // 对他说「当前角色没有可执行的操作」是把批次 / 报价状态误报成权限问题。
     const byPermission = !canMove.value && !canSplit.value && !recall.canRecall.value;

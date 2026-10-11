@@ -15,8 +15,8 @@
   - el-table 在 el-card 内 v-if 控制（batches.length > 0 时挂载）→
     传 el-table 实例 ref 给 drag.applyDrag(tableRef)，composable 内部 watch +
     MutationObserver 自愈（覆盖 batches=0 → 加载后挂载的过渡）。
-  - 「操作」fixed="right" 列受 canManageBatches 控制：保留为字面量 <el-table-column v-if>，
-    不进 defs。
+  - 「操作」fixed="right" 列受 canSplitBatch / canCancelBatch 控制：保留为字面量
+    <el-table-column v-if>，不进 defs。
   - 拖点挂到表头 <tr>（列换序；绑 thead 会变成拖整行）。
 
   2026-09-17 PR-3 改造：
@@ -45,7 +45,8 @@
     <BatchBody
       ref="bodyRef"
       :batches="batches"
-      :can-manage-batches="canManageBatches"
+      :can-split-batch="canSplitBatch"
+      :can-cancel-batch="canCancelBatch"
       :status-tag-type="statusTagType"
       :status-label-of="statusLabelOf"
       :row-class-name="rowClassName"
@@ -65,7 +66,8 @@
     <BatchBody
       ref="bodyRef"
       :batches="batches"
-      :can-manage-batches="canManageBatches"
+      :can-split-batch="canSplitBatch"
+      :can-cancel-batch="canCancelBatch"
       :status-tag-type="statusTagType"
       :status-label-of="statusLabelOf"
       :row-class-name="rowClassName"
@@ -141,7 +143,10 @@ const props = withDefaults(
     partId: string;
     batches: PartBatch[];
     batchesLoading: boolean;
-    canManageBatches: boolean;
+    /** 拆批权限（`batch.split` 权限点，2026-10-15 由 canManageBatches 拆出）。 */
+    canSplitBatch: boolean;
+    /** 取消批次权限（`batch.cancel` 权限点，2026-10-15 由 canManageBatches 拆出）。 */
+    canCancelBatch: boolean;
     /**
      * 2026-09-17 新增：当前选中批次 id（受控）。
      * 同一行二次点击 / 切换到不同行都通过 @row-click → emit('select') 走。
@@ -203,7 +208,8 @@ function onRowClick(row: PartBatch): void {
 
 // 2026-08-27 T22：列顺序拖动 + 可见性。
 // 5 列数据列的 ColumnDef 由工厂产出（`../partBatchColumnDefs.ts`，域根单域专用文件），
-// 「操作」列受 canManageBatches 控制 → 保留为字面量 <el-table-column v-if>，不进 defs。
+// 「操作」列受 canSplitBatch / canCancelBatch 控制 → 保留为字面量 <el-table-column v-if>，
+// 不进 defs。
 // 传 wrapper 而非把 props 字段直接搬出来：cellRender 每次渲染才调用，直接在 root scope
 // 解构 `props.xxx` 会把值冻结在 setup 那一刻（父级换 helper 就再也不生效）。
 const columnDefs: ColumnDef[] = buildPartBatchColumnDefs({

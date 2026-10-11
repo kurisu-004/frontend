@@ -1,105 +1,139 @@
-// partsPermissions.ts 单元测试（2026-10-03 打印链路转发 v2）。
+// @vitest-environment happy-dom
+// src/utils/__tests__/partsPermissions.spec.ts
 //
-// 验证 utils/partsPermissions.canPrintPartDrawing：单件图纸打印入口的角色闸门
-// 必须与后端 rust v2 转发端点的 require_any_role 白名单逐角色对齐
-// （MANAGER / CLERK / INSPECTOR / CNC_PROGRAMMER 放行）。
+// 2026-10-14（RBAC 控制面板）：判据从「角色枚举」迁到**权限点** `part.drawing.print`。
 //
-// 用 it.each 覆盖每个角色的正负两侧：正向锁住白名单角色表，负向锁住「值为 false
-// 即不可见」。防止闸门被写成按单一角色排除的近似式（那会让 INSPECTOR 看不到按钮、
-// 货架账号点下去 403）。
+// 本 spec 的两条主线：
+//   1. **行为闸门**：按权限点判 —— 有该点 → 可见；没有 → 不可见。ADMIN 元角色靠
+//      `hasPermission` 的通配短路放行（那条通配本身在 stores/auth.ts 的 spec 里钉）。
+//   2. **签名兼容**：形参 `role` 一字未改（消费方零改动），且**不再参与判定** —— 钉住
+//      「同一个角色 map 换成别的角色值，结论不变」，把「判据真的搬走了」这件事写进用例。
+//      少了这条，把判定改回读 role map 不会有任何测试信号。
+//
+// ⚠️ **需要 pinia 注入**（本 spec 用例数从「纯函数」变成「读 store」）：`canPrintPartDrawing`
+// 内部调 `useAuthStore().hasPermission(...)`，而 auth store 的 setup 首行是
+// `useQueryClient()` —— 必须 `app.use(createPinia())` **早于**
+// `app.use(VueQueryPlugin, { queryClient })`，否则首次 useAuthStore() 直接抛
+// "vue-query hooks can only be used inside setup()"。
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { createApp } from 'vue';
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
+
 import {
   canDownloadPartFile,
   canPrintPartDrawing,
   type PartRoleMapLike,
 } from '../partsPermissions';
+import { useAuthStore } from '@/stores/auth';
+import type { CurrentUser } from '@/types/user';
 
-describe('canPrintPartDrawing', () => {
-  it.each<[string, PartRoleMapLike]>([
-    ['MANAGER', { MANAGER: true }],
-    ['CLERK', { CLERK: true }],
-    ['INSPECTOR', { INSPECTOR: true }],
-    ['CNC_PROGRAMMER', { CNC_PROGRAMMER: true }],
-  ])('%s 可见入口（后端放行）', (_role, map) => {
-    expect(canPrintPartDrawing(map)).toBe(true);
+function seedUser(user: Partial<CurrentUser>): void {
+  const base: CurrentUser = {
+    id: 'u1',
+    username: 'tester',
+    full_name: '测试',
+    is_active: true,
+    roles: [],
+    shelf_ids: [],
+    menus: [],
+    permissions: [],
+  };
+  Object.assign(base, user);
+  useAuthStore().user = base;
+}
+
+beforeEach(() => {
+  const app = createApp({});
+  app.use(createPinia());
+  app.use(VueQueryPlugin, { queryClient: new QueryClient() });
+  setActivePinia(app.config.globalProperties.$pinia);
+});
+
+describe('canPrintPartDrawing —— 按权限点判（2026-10-14）', () => {
+  it('持有 part.drawing.print ⇒ 可见', () => {
+    seedUser({ permissions: ['part.drawing.print'] });
+    expect(canPrintPartDrawing({})).toBe(true);
   });
 
-  // 负向逐角色：白名单里每个角色的值为 false 时不可见，锁住「读值不读键存在性」
-  // （写成 `'MANAGER' in role` 之类的存在性判断会让这些用例全红）。
-  it.each<[string, PartRoleMapLike]>([
-    ['MANAGER', { MANAGER: false }],
-    ['CLERK', { CLERK: false }],
-    ['INSPECTOR', { INSPECTOR: false }],
-    ['CNC_PROGRAMMER', { CNC_PROGRAMMER: false }],
-  ])('%s 为 false 时不可见', (_role, map) => {
-    expect(canPrintPartDrawing(map)).toBe(false);
+  it('不持有该权限点 ⇒ 不可见（哪怕角色是 MANAGER）', () => {
+    // 这是本次改动的核心：**角色不再是判据**。管理员可以在 RBAC 面板从 MANAGER 手里
+    // 收回图纸打印，前端必须跟着收 —— 继续按角色判的话入口还在、点下去吃 403。
+    seedUser({ roles: ['MANAGER'], permissions: [] });
+    expect(canPrintPartDrawing({ MANAGER: true })).toBe(false);
   });
 
-  it('空角色集（未登录 / 无角色）不可见', () => {
+  it('只有别的权限点 ⇒ 不可见（不按前缀/包含匹配）', () => {
+    seedUser({ permissions: ['queue.dispatch', 'other.part.drawing.print'] });
     expect(canPrintPartDrawing({})).toBe(false);
   });
 
-  it('多角色账号按「命中任一放行角色」放行（MANAGER + CLERK）', () => {
-    expect(canPrintPartDrawing({ MANAGER: true, CLERK: true })).toBe(true);
+  it('ADMIN 元角色通配放行（hasPermission 的短路，最高危那条的落点）', () => {
+    seedUser({ roles: ['ADMIN'], permissions: [] });
+    expect(canPrintPartDrawing({})).toBe(true);
   });
 
-  it('PART 域其它角色一律不可见（防止新增角色被默认放行）', () => {
-    expect(canPrintPartDrawing({ INSPECTOR: false, CLERK: false })).toBe(false);
+  it('未登录 / 无 user ⇒ 不可见', () => {
+    seedUser({ permissions: ['part.drawing.print'] });
+    useAuthStore().user = null;
+    expect(canPrintPartDrawing({})).toBe(false);
+  });
+
+  it('**角色形参不再参与判定**（签名兼容用例：同一权限点下改角色值，结论不变）', () => {
+    seedUser({ roles: ['MANAGER'], permissions: ['part.drawing.print'] });
+    const CASES: PartRoleMapLike[] = [
+      {},
+      { MANAGER: false },
+      { CLERK: true },
+      { INSPECTOR: true, CLERK: false },
+      { CNC_PROGRAMMER: true, MANAGER: true },
+    ];
+    // 有权限点 ⇒ 一律可见，与角色 map 长什么样无关。
+    for (const c of CASES) expect(canPrintPartDrawing(c)).toBe(true);
+
+    // 无权限点 ⇒ 一律不可见（ADMIN 通配那条已单列，这里是非 ADMIN 账号）。
+    seedUser({ roles: ['CLERK'], permissions: [] });
+    for (const c of CASES) expect(canPrintPartDrawing(c)).toBe(false);
   });
 });
 
-// 2026-10-11 新增：图纸文件下载入口（`GET /files/objects/{id}/url`）的角色闸门。
-//
-// 与打印不同一条端点，闸门却**恰好同集合**：后端把 part_file 的列表 / content 对
-// SHELF_ACCOUNT 放开了（工控机预览打这两条），`/url` 刻意没放开（直链可外传）。
-// 这里逐角色钉死白名单，并单独钉住「纯 SHELF_ACCOUNT 不可见」——
-// 那正是工控机账号（报工台路由守卫角色）的形状，漏了它就等于漏了本次改动本身。
-describe('canDownloadPartFile', () => {
-  const ALLOWED: [string, PartRoleMapLike][] = [
-    ['MANAGER', { MANAGER: true }],
-    ['CLERK', { CLERK: true }],
-    ['INSPECTOR', { INSPECTOR: true }],
-    ['CNC_PROGRAMMER', { CNC_PROGRAMMER: true }],
-  ];
-  const DENIED: [string, PartRoleMapLike][] = [
-    ['MANAGER', { MANAGER: false }],
-    ['CLERK', { CLERK: false }],
-    ['INSPECTOR', { INSPECTOR: false }],
-    ['CNC_PROGRAMMER', { CNC_PROGRAMMER: false }],
-  ];
-
-  it.each(ALLOWED)('%s 可见下载入口（后端放行）', (_role, map) => {
-    expect(canDownloadPartFile(map)).toBe(true);
+describe('canDownloadPartFile —— 与打印同判据（2026-10-14）', () => {
+  it('持有权限点 ⇒ 可见', () => {
+    seedUser({ permissions: ['part.drawing.print'] });
+    expect(canDownloadPartFile({})).toBe(true);
   });
 
-  // 负向逐角色：白名单里每个角色的值为 false 时不可见，锁住「读值不读键存在性」
-  // （写成 `'MANAGER' in role` 之类的存在性判断会让这些用例全红）。
-  it.each(DENIED)('%s 为 false 时不可见', (_role, map) => {
-    expect(canDownloadPartFile(map)).toBe(false);
-  });
-
-  // `PartRoleMapLike` 里**没有** SHELF_ACCOUNT 这个键，纯货架账号天然落在 false 分支
-  it('纯 SHELF_ACCOUNT（工控机）不可见下载入口', () => {
+  it('不持有 ⇒ 不可见', () => {
+    seedUser({ permissions: [] });
     expect(canDownloadPartFile({})).toBe(false);
   });
 
-  it('多角色账号（MANAGER + SHELF_ACCOUNT 形状的白名单腿）按命中任一放行', () => {
-    expect(canDownloadPartFile({ MANAGER: true })).toBe(true);
+  it('纯 SHELF_ACCOUNT（工控机）没有该权限点 ⇒ 不可见下载入口', () => {
+    // 这正是工控机账号的形状（报工台路由守卫角色）。后端对 `/files/objects/{id}/url`
+    // 刻意没放开（预签直链可外传），前端若在这里放行就是「可见但必 403」。
+    seedUser({ roles: ['SHELF_ACCOUNT'], permissions: [] });
+    expect(canDownloadPartFile({})).toBe(false);
   });
 
-  // 与打印闸门**同集合**：两条端点都只认那 4 个角色。哪天后端只改了其中一条，这条
-  // 用例会立刻红，提醒同步拆成两个判据而不是悄悄让两边分叉。
-  it('与 canPrintPartDrawing 同集合（逐角色同进同出）', () => {
-    const cases: PartRoleMapLike[] = [
-      {},
-      { MANAGER: true },
-      { CLERK: true },
-      { INSPECTOR: true },
-      { CNC_PROGRAMMER: true },
-      { MANAGER: true, CNC_PROGRAMMER: false },
-      { INSPECTOR: false, CLERK: false },
+  it('ADMIN 通配 ⇒ 可见', () => {
+    seedUser({ roles: ['ADMIN'], permissions: [] });
+    expect(canDownloadPartFile({})).toBe(true);
+  });
+
+  // 两条端点共用同一个权限点：哪天后端只改了其中一条，本用例立刻红，
+  // 提醒同步拆成两个判据而不是悄悄让两边分叉。
+  it('与 canPrintPartDrawing 逐场景同进同出（共用同一权限点）', () => {
+    const SCENARIOS: Array<Pick<CurrentUser, 'roles' | 'permissions'>> = [
+      { roles: [], permissions: [] },
+      { roles: ['MANAGER'], permissions: [] },
+      { roles: ['CLERK'], permissions: ['part.drawing.print'] },
+      { roles: ['ADMIN'], permissions: [] },
+      { roles: ['SHELF_ACCOUNT'], permissions: ['part.drawing.print'] },
     ];
-    for (const c of cases) expect(canDownloadPartFile(c)).toBe(canPrintPartDrawing(c));
+    for (const s of SCENARIOS) {
+      seedUser(s);
+      expect(canDownloadPartFile({}), JSON.stringify(s)).toBe(canPrintPartDrawing({}));
+    }
   });
 });
